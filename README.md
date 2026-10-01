@@ -437,6 +437,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | ファイル | 役割 |
 |---|---|
 | `web/src/App.svelte` | 画面全体の組み立て・選択の規則・キー処理 |
+| `web/src/{displaySettings,documentFiles,aiChat,measurement}.svelte.ts` | **`App.svelte` から切り出した状態の持ち主**（画角・原点ギズモ・断面／ファイル操作と一覧／AIとの会話／測定の結果）。必要なものを引数で受け取り、読み口と操作を返す。**選択・ピック・コマンドの確定には触らない**かたまりだけを置く |
 | `web/src/viewport.ts` | three.js の囲い（load / onPick / highlight / project …） |
 | `web/src/session.ts` | WebSocketクライアント。**WSのURLはサーバが `/duocad-config.json` で教える**（ポートを推測しない） |
 | `web/src/generated/protocol.ts` | **生成物**（コマンド名と分類・WebSocket の引数・`Applied`・状態のキー）。正は `duocad/catalog.py`。手で直さない |

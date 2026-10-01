@@ -439,7 +439,7 @@ export type BuildResult<Args = Record<string, unknown>> =
  * - `ui`      … サーバへ何も送らない道具(スケッチモードの「選ぶ」だけ)
  *
  * **ファイル操作(保存/開く/STEP入出力等)の多くはこの分類を経由しない**(`FilesPanel.svelte`
- * が `session.runVerb` を直接呼ぶ。`App.svelte` の `runFileOp`/`changesDocument` 参照)。
+ * からの操作は `documentFiles.svelte.ts` が `session.runVerb` へ直接送る)。
  * ただし `file` は現役の分類である —— `commands/files.ts` の `IMPORT_STEP` がこの分類を持ち、
  * `App.svelte` の送信経路(`CATEGORY_OF`)もこれを見て `CommandHost` の確定完了を判定する。
  *

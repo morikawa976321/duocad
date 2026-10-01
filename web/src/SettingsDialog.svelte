@@ -24,7 +24,7 @@
    * **レイアウトの大きさを持たないのは `position: absolute` による**(top-layer が理由ではない)ので、
    * 非モーダルでも `.viewport` の寸法＝カメラのアスペクトには触らない(styles.css の不変条件)。
    *
-   * **状態の正は `App.svelte`**。ここは値と口を受け取るだけの presentational な部品で、
+   * **状態の正は `displaySettings.svelte.ts`**。ここは値と口を受け取るだけの presentational な部品で、
    * 双方向束縛をコンポーネントの境界に持ち込まない。
    */
   import { FOV_DEFAULT, FOV_ORTHO } from './viewport'

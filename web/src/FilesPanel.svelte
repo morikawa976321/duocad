@@ -1,12 +1,3 @@
-<script module lang="ts">
-  /** KB 表示。`App.svelte` のファイル応答の文言も同じ式を使う(`Toast.svelte` と同じく module script で公開)。 */
-  export function formatSize(bytes: number): string {
-    const kb = bytes / 1024
-    const maximumFractionDigits = kb >= 1 ? 0 : 1
-    return `${kb.toLocaleString(undefined, { maximumFractionDigits })} KB`
-  }
-</script>
-
 <script lang="ts">
   /**
    * ファイルパネル — **保存先が固定フォルダになったことをUIに落とす場所**。
@@ -16,7 +7,7 @@
    * **`duocad/models/` の中身を一覧で見せて、クリック1つで開く**。`BrowserPanel.svelte`
    * と同じ作りで、**状態はコアが持つ**(`documents` はサーバの
    * `list_documents` が返した一覧の写しで、ここでは何も覚えない)。保存・開く・一覧はどれも
-   * `App.svelte` が `session.runVerb(...)` で直接送る(`CommandHost` は経由しない ——
+   * `documentFiles.svelte.ts` が `session.runVerb(...)` で直接送る(`CommandHost` は経由しない ——
    * 一覧からのクリックは「対象を選ぶ」そのものであって、引数収集の状態機械を通す理由が無い)。
    *
    * **ブラウザのネイティブファイルダイアログ(File System Access API)は使わない**。実際に
@@ -44,7 +35,7 @@
    * (押せない札より理由を言う)。
    *
    * **一覧の下に置くのは書き出しの2つだけ**(STEP書き出し・STL書き出し)。どちらも
-   * 保存/開くと同じ形で `App.svelte` が `session.runVerb(...)` を直接呼ぶ
+   * 保存/開くと同じ形で `documentFiles.svelte.ts` が `session.runVerb(...)` を直接呼ぶ
    * (`CommandHost` を経由しない)。**文書を変えないから**ここでよい ——
    * 操作ログに載らず、undoの対象でもなく、モデルは1ミリも動かない。
    *
@@ -58,6 +49,7 @@
    * ——「名前を変える」が消すのは1回きりの新しい名前だからで、性質が違う。
    */
   import { tick } from 'svelte'
+  import { formatSize } from './documentFiles.svelte'
   import { pathLike } from './commands/command'
   import type { DocumentInfo } from './session'
 
