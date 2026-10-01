@@ -114,7 +114,7 @@ def test_the_pages_duocad_serves_can_connect(origin: str):
 
 
 def test_a_client_without_an_origin_header_can_connect():
-    """**素のWSクライアントは今までどおり繋がる**(`smoke*.mjs` / `acceptance.mjs`)。
+    """**素のWSクライアントは今までどおり繋がる**(`smoke*.mjs`)。
 
     ここが落ちたら、検査スクリプト一式が道連れになる。
     """

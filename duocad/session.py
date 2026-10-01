@@ -14,6 +14,7 @@ verbの呼び出し・選択・パラメータ・操作ログ・保存/開くを
 from __future__ import annotations
 
 import functools
+import inspect
 import os
 import threading
 from pathlib import Path
@@ -24,43 +25,19 @@ from . import (
     io_step,
     kernel,
     kernel_sketch,
-    optimize,
     optimize_run,
-    parameters,
     query,
-    region,
     selection,
     sketch,
 )
 from .document import Document
+from .entry import entries, entry_for
 from .measure import measure_selection
 from .oplog import OpLog
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import speculative
-from .verbs.envelope_regions import envelope_pieces
-from .verbs import (
-    add_mesh_body as add_mesh_body_verb,
-    boolean_body as boolean_body_verb,
-    chamfer as chamfer_verb,
-    delete as delete_verb,
-    envelope_regions as envelope_regions_verb,
-    extrude as extrude_verb,
-    extrude_faces as extrude_faces_verb,
-    fillet as fillet_verb,
-    import_step as import_step_verb,
-    import_svg as import_svg_verb,
-    mirror_body as mirror_body_verb,
-    mirror_sketch_entities as mirror_sketch_entities_verb,
-    move_body as move_body_verb,
-    move_sketch_entities as move_sketch_entities_verb,
-    pattern_circular as pattern_circular_verb,
-    pattern_rectangular as pattern_rectangular_verb,
-    clear_loads as clear_loads_verb,
-    set_exclude_bodies as set_exclude_bodies_verb,
-    set_fixtures as set_fixtures_verb,
-    set_loads as set_loads_verb,
-    set_preserve_bodies as set_preserve_bodies_verb,
-)
+from .verbs import import_step as import_step_verb
+from .verbs.envelope_regions import envelope_pieces, selected_regions
 from .view import DocumentView
 
 #: Windowsの予約デバイス名(拡張子の有無に関わらず特別扱いされる)。
@@ -568,10 +545,24 @@ class Session:
         self._reset_selection_if_needed("redo")
         return self._emit({"verb": "redo", "seq": operation.seq, "redone": operation.verb})
 
-    # ---------------------------------------------------------------- F2: MCP / 全verbの口
-    #
-    # **新しいverbは作らない**。コアに既にあるものを `_emit` 経由で出すだけ。
-    # MCPもブラウザも同じ `Session` を叩くので、ここを通らないと開いている画面へ届かない。
+    # ---------------------------------------------------------------- verb の適用
+    def apply(self, verb: str, args: Optional[dict] = None) -> dict:
+        """verb を1つ適用し、変更イベントを発火して**そのイベント**を返す。
+
+        **verb を掛ける唯一の口**である。WebSocket(`net/ws.py`)・MCP とアプリ内 AI
+        (`mcp_server.DocumentTools`)・`session.fillet(2.0)` の形の呼び出し(末尾の `_verb_method`)が
+        全部ここを通るので、実行中の断り・選択のリセット・自動保存・配信はどの経路でも同じに効く。
+
+        実体は verb のモジュールに置いた入口(`duocad/entry.py`)。**引数の検査はしない** —— 何を必須と
+        するかは口ごとに違う(`catalog.Command.input_schema` / `ws_schema`)ので、呼ぶ側が済ませて来る。
+        """
+        function = entry_for(verb)
+        if self._optimizing:
+            raise DocumentBusy(
+                f"形状最適化の実行中は文書を変えられない({verb})。終わるか中断してから操作すること"
+            )
+        return self._after_logged_verb(function(self.document, **(args or {})))
+
     def _after_logged_verb(self, extra: Optional[dict] = None) -> dict:
         """直前にログへ積まれたverbについて変更イベントを発火する。"""
         operation = self.document.log.entries[-1]
@@ -582,343 +573,13 @@ class Session:
             payload.update(extra)
         return self._emit(payload)
 
-    @_edits_document
-    def sketch_create(self, base_plane: Optional[str] = None) -> dict:
-        """スケッチを作る。`base_plane`(XY/XZ/YZ)省略時は**確定選択の面**(ちょうど1枚)に貼る。
-
-        **面は引数で受けない**。2箇所に同じ解決を持つと、片方だけ直したときに「AIと人で
-        貼る先が違う」形で食い違う。
-
-        平面も選択も無ければエラーにする —— 既定でXYに貼ると、図形が静かに別の場所に出る。
-        2枚選んでいれば `SelectionAmbiguous`、AIの提案のままなら `SelectionNotCommitted` が
-        `require_confirmed` から上がり、そのままWS/MCPのエラーになる。
-        """
-        plane = self._plane_from_selection(base_plane)
-        sketch_id = sketch.sketch_create(self.document, plane)
-        return self._after_logged_verb({"sketch_id": sketch_id})
-
-    def _plane_from_selection(self, base_plane: Optional[str]) -> Any:
-        """`base_plane`(XY/XZ/YZ)があればそれ、無ければ**確定選択の面**(ちょうど1枚)を貼る先にする
-        (`sketch_create` と `sketch_create_offset` が同じ解決を使う。2箇所に持つと片方だけ直る)。"""
-        if base_plane is not None:
-            return str(base_plane)
-        face = selection.require_confirmed(self.document, "face", exactly_one=True)[0]
-        return sketch.face_plane(face["body"], face["index"])
-
-    @_edits_document
-    def sketch_create_offset(self, distance: float, base_plane: Optional[str] = None) -> dict:
-        """オフセット平面にスケッチを作る。基準は `sketch_create` と同じ
-        `base_plane`(XY/XZ/YZ)省略時は確定選択の面(ちょうど1枚)で、そこから法線方向へ
-        `distance` だけ離れた平面に貼る。
-
-        **解決は `sketch.offset_plane` に投げるだけ**(基準の解決は `_plane_from_selection`)。
-        verb名だけ `sketch_create_offset` にする理由は `sketch.sketch_create` の
-        docstring参照(Enter要否がverb名ごとに1つ固定されているため)。
-        """
-        plane = sketch.offset_plane(self._plane_from_selection(base_plane), distance)
-        sketch_id = sketch.sketch_create(
-            self.document, plane, verb=sketch.VERB_SKETCH_CREATE_OFFSET
-        )
-        return self._after_logged_verb({"sketch_id": sketch_id})
-
-    @_edits_document
-    def add_line(self, sketch_id: str, p0: Any, p1: Any) -> dict:
-        entity_id = sketch.add_line(self.document, sketch_id, p0, p1)
-        return self._after_logged_verb({"entity_id": entity_id})
-
-    @_edits_document
-    def add_circle(self, sketch_id: str, center: Any, radius: float) -> dict:
-        entity_id = sketch.add_circle(self.document, sketch_id, center, radius)
-        return self._after_logged_verb({"entity_id": entity_id})
-
-    @_edits_document
-    def add_rectangle(
-        self,
-        sketch_id: str,
-        corner: Any,
-        width: float,
-        height: float,
-        angle: float = 0.0,
-    ) -> dict:
-        entity_id = sketch.add_rectangle(
-            self.document, sketch_id, corner, width, height, angle
-        )
-        return self._after_logged_verb({"entity_id": entity_id})
-
-    @_edits_document
-    def add_arc(
-        self,
-        sketch_id: str,
-        center: Any,
-        radius: float,
-        start_deg: float,
-        end_deg: float,
-    ) -> dict:
-        entity_id = sketch.add_arc(
-            self.document, sketch_id, center, radius, start_deg, end_deg
-        )
-        return self._after_logged_verb({"entity_id": entity_id})
-
-    @_edits_document
-    def extrude(
-        self,
-        distance: float,
-        mode: str = "join",
-        body_id: Optional[str] = None,
-    ) -> dict:
-        """**確定選択の領域、または同一平面・同一ボディの面**を押し出す(`verbs.extrude`)。
-
-        押す対象は引数ではなく選択から取る(領域と面の混在は ValueError)。**`body_id` だけは
-        引数のまま** —— これは「どのBodyへ足す/から引くか」であって対象集合ではない(Bodyは選択集合の
-        項目ではない。MCPの `extrude` も同じ形)。面のときの既定はその面を持つBody。
-        `mode="new"` は行き先を持たないので `body_id` を渡すと ValueError(ブラウザからは元々送れない)。
-        """
-        kind, items = selection.require_extrude_targets(self.document)
-        if kind == "face":
-            operation = extrude_faces_verb(
-                self.document, items, float(distance), mode=mode, body_id=body_id
-            )
-        else:
-            refs = [region.RegionRef.from_dict(item) for item in items]
-            operation = extrude_verb(
-                self.document, refs, float(distance), mode=mode, body_id=body_id
-            )
-        changed_body_id = operation.args["body_id"]
-        return self._after_logged_verb({
-            "body_id": changed_body_id,
-            "distance": float(distance),
-            "mode": mode,
-            "changed_bodies": [changed_body_id],
-        })
-
-    @_edits_document
-    def fillet(self, radius: Any) -> dict:
-        """**確定選択の辺**を丸める。`radius` は数値か辺ごとのリスト。
-
-        辺と対象Bodyは `selection.require_edges` が選択順のまま返す。順序が効くのは
-        `edges` と `radius` を位置で対応させるため(並べ替えると半径の割り当てがずれる)。
-        """
-        return self._edge_verb(fillet_verb, radius)
-
-    @_edits_document
-    def chamfer(self, distance: Any) -> dict:
-        """**確定選択の辺**を面取りする(`fillet` と同じ規律)。"""
-        return self._edge_verb(chamfer_verb, distance)
-
-    def _edge_verb(self, verb_fn: Any, value: Any) -> dict:
-        """確定選択の辺に verb を掛ける(`fillet` / `chamfer`。違うのは呼ぶ verb 関数だけ)。"""
-        edges, body_id = selection.require_edges(self.document)
-        operation = verb_fn(self.document, edges, value, body_id=body_id)
-        changed_body_id = operation.args["body_id"]
-        return self._after_logged_verb({
-            "body_id": changed_body_id,
-            "changed_bodies": [changed_body_id],
-        })
-
-    @_edits_document
-    def boolean_body(self, target_ref: Any, mode: str) -> dict:
-        """**ターゲット(1つ・面参照)に確定選択のツールボディ群**を作用させる。
-
-        ターゲットは in-place で形だけ置き換え、ツールボディは消える。`target_ref` は
-        確定選択には入れない(`move_body.axis_edge` と同じ規律)。
-        """
-        tool_body_ids = selection.require_bodies(self.document)
-        operation = boolean_body_verb(
-            self.document, target_ref, tool_body_ids, mode=str(mode)
-        )
-        changed_body_id = operation.args["target_body_id"]
-        return self._after_logged_verb({
-            "target_body_id": changed_body_id,
-            "mode": operation.args["mode"],
-            "removed_bodies": list(operation.args["tool_bodies"]),
-            "changed_bodies": [changed_body_id],
-        })
-
-    @_edits_document
-    def pattern_rectangular(
-        self,
-        sketch_id: str,
-        entities: Any,
-        dx: float,
-        dy: float,
-        nx: int,
-        ny: int,
-    ) -> dict:
-        pattern_id = pattern_rectangular_verb(
-            self.document, sketch_id, entities, dx, dy, nx, ny
-        )
-        return self._after_logged_verb({"pattern_id": pattern_id})
-
-    @_edits_document
-    def pattern_circular(
-        self,
-        sketch_id: str,
-        entities: Any,
-        center: Any,
-        count: int,
-        total_angle: float = 360.0,
-        rotate_copies: bool = True,
-    ) -> dict:
-        pattern_id = pattern_circular_verb(
-            self.document,
-            sketch_id,
-            entities,
-            center,
-            count,
-            total_angle=total_angle,
-            rotate_copies=rotate_copies,
-        )
-        return self._after_logged_verb({"pattern_id": pattern_id})
-
-    @_edits_document
-    def move_sketch_entities(
-        self,
-        dx: Optional[float] = None,
-        dy: Optional[float] = None,
-        copy: bool = False,
-        mode: str = "translate",
-        angle: Optional[float] = None,
-        center: Any = None,
-        center_entity: Any = None,
-    ) -> dict:
-        """**確定選択のスケッチの点・辺**を動かす(`copy=True` は複製)。
-
-        対象は引数ではなく選択から取る(`selection.require_sketch_entities`)——
-        パラメータパネルを廃止して直接選択へ移した後の、位置の打ち直しの唯一の口である。
-        **ソリッドは追従しない**(verb側のdocstring。本人が許容済み)ので `changed_bodies` は空。
-
-        `mode="translate"` は (dx, dy)、`mode="rotate"` は `angle`[度] と中心を取る
-        (検査と既定はverb側)。**戻り値のキーはモードによらず同じ** —— 使わない側は `None`
-        にする(`web/src/session.ts` の `Applied` が形の変わる封筒を読めないため)。
-        """
-        targets = selection.require_sketch_entities(self.document)
-        sketch_ids = sorted({str(item["sketch"]) for item in targets})
-        operation = move_sketch_entities_verb(
-            self.document,
-            targets,
-            dx,
-            dy,
-            copy=bool(copy),
-            mode=str(mode),
-            angle=angle,
-            center=center,
-            center_entity=center_entity,
-        )
-        args = operation.args
-        return self._after_logged_verb({
-            "mode": args["mode"],
-            "dx": args.get("dx"),
-            "dy": args.get("dy"),
-            "angle": args.get("angle"),
-            "center": args.get("center"),
-            "copy": args["copy"],
-            "created": list(args["created"]),
-            "sketch_ids": sketch_ids,
-        })
-
-    @_edits_document
-    def move_body(
-        self,
-        dx: Optional[float] = None,
-        dy: Optional[float] = None,
-        dz: Optional[float] = None,
-        copy: bool = False,
-        mode: str = "translate",
-        angle: Optional[float] = None,
-        axis_edge: Any = None,
-        axis_point: Any = None,
-        axis_dir: Any = None,
-        center_vertex: Any = None,
-    ) -> dict:
-        """**確定選択の面/辺/頂点が属するボディ**を動かす(`copy=True` は複製)。
-
-        複数のボディにまたがる選択なら全部を同じ量だけ動かす(1呼び出し = 1 undo)。
-        `changed_bodies` には動いたボディと、複製で増えたボディの両方を載せる ——
-        画面はここを見て形を取り直すので、どちらかを落とすと片方が古い位置のまま残る。
-
-        `mode="translate"` は (dx, dy, dz)、`mode="rotate"` は軸と `angle`[度] を取る
-        (検査と既定はverb側)。**戻り値のキーはモードによらず同じ**で、使わない側は `None`。
-        `axis_point` / `axis_dir` は**解決後の数値**(辺で指しても数値で返る)。
-        """
-        body_ids = selection.require_bodies(self.document)
-        operation = move_body_verb(
-            self.document,
-            body_ids,
-            dx,
-            dy,
-            dz,
-            copy=bool(copy),
-            mode=str(mode),
-            angle=angle,
-            axis_edge=axis_edge,
-            axis_point=axis_point,
-            axis_dir=axis_dir,
-            center_vertex=center_vertex,
-        )
-        args = operation.args
-        created = list(args["created"])
-        return self._after_logged_verb({
-            "mode": args["mode"],
-            "dx": args.get("dx"),
-            "dy": args.get("dy"),
-            "dz": args.get("dz"),
-            "angle": args.get("angle"),
-            "axis_point": args.get("axis_point"),
-            "axis_dir": args.get("axis_dir"),
-            "copy": args["copy"],
-            "created": created,
-            "changed_bodies": list(args["bodies"]) + created,
-        })
-
-    @_edits_document
-    def mirror_sketch_entities(self, axis: Any) -> dict:
-        """**確定選択のスケッチ図形**を、既存の線分1本(`axis`)を軸に鏡映複製する(常に複製)。
-
-        対象は引数ではなく選択から取る(`selection.require_sketch_entities`)。軸は対象集合
-        とは別引数(`move_body.axis_edge` と同じ理由)。**ソリッドは追従しない**
-        (`move_sketch_entities` と同じ)。
-        """
-        targets = selection.require_sketch_entities(self.document)
-        sketch_ids = sorted({str(item["sketch"]) for item in targets})
-        operation = mirror_sketch_entities_verb(self.document, targets, axis)
-        args = operation.args
-        return self._after_logged_verb({
-            "axis_p0": args["axis_p0"],
-            "axis_dir": args["axis_dir"],
-            "created": list(args["created"]),
-            "sketch_ids": sketch_ids,
-        })
-
-    @_edits_document
-    def envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:
-        """**確定選択の領域**を包む単一の領域線を、同じスケッチへ足す(`verbs.envelope_regions`)。
-
-        対象は引数ではなく選択から取る。`radius` は追従半径(0以上)、`offset` は包んだ線の
-        オフセット(負で内へ)で、どちらも空は 0 mm。分裂・消失は ValueError(文面は verb 側)。
-        """
-        refs = [
-            region.RegionRef.from_dict(item)
-            for item in selection.require_confirmed(self.document, "region")
-        ]
-        operation = envelope_regions_verb(self.document, refs, float(radius), float(offset))
-        args = operation.args
-        return self._after_logged_verb({
-            "radius": args["radius"],
-            "offset": args["offset"],
-            "created": list(args["created"]),
-            "sketch_ids": [args["sketch_id"]],
-        })
-
     def preview_envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:
         """`envelope_regions` の確定前の姿。**文書を変えない**(`Session.preview` の経路)。
 
         分裂しても失敗にせず、全部の面の境界と面の数(`pieces`)を返す —— 分裂を知らせるのは
         確定時のトーストで、プレビューは線の色で見せる(本人決定)。消えたときは `pieces=0`。
         """
-        refs = [
-            region.RegionRef.from_dict(item)
-            for item in selection.require_confirmed(self.document, "region")
-        ]
+        refs = selected_regions(self.document)
         sketch_id, pieces = envelope_pieces(self.document, refs, float(radius), float(offset))
         plane = sketch.get_sketch(self.document, sketch_id).plane
         entities = [
@@ -927,108 +588,6 @@ class Session:
             for entity in kernel_sketch.face_boundary_entities(plane, piece)
         ]
         return {"sketch_ghost": {"sketch_id": sketch_id, "entities": entities, "pieces": len(pieces)}}
-
-    @_edits_document
-    def mirror_body(self, base_plane: Optional[str] = None, plane_face: Any = None) -> dict:
-        """**確定選択の面/辺/頂点が属するボディ**を、鏡映面に対して鏡映複製する(常に複製)。
-
-        鏡映面は `base_plane`(XY/XZ/YZ)か `plane_face`(既存の平面な面への参照)のどちらか
-        (`duocad/verbs/mirror_body.py` が検査)。対象は引数ではなく選択から取る
-        (`selection.require_bodies`)。**元は動かないので `changed_bodies` は複製だけ**
-        (`move_body` と違い、動いたボディを取り直す必要がない)。
-        """
-        body_ids = selection.require_bodies(self.document)
-        operation = mirror_body_verb(
-            self.document, body_ids, base_plane=base_plane, plane_face=plane_face
-        )
-        args = operation.args
-        created = list(args["created"])
-        return self._after_logged_verb({
-            "plane_point": args["plane_point"],
-            "plane_normal": args["plane_normal"],
-            "created": created,
-            "changed_bodies": created,
-        })
-
-    @_edits_document
-    def delete(self) -> dict:
-        """**確定選択のボディとスケッチ図形**をまとめて消す(1回のundoで全部戻る)。
-
-        対象は引数ではなく選択から取る(`selection.require_deletable`)。ボディ由来
-        (面/辺/頂点/ボディ)と図形が**混ざっていても1回の呼び出し**で処理する ——
-        `require_bodies` と `require_sketch_entities` を2つ呼ぶと、片方しか選ばれて
-        いないときに `SelectionKindMismatch` で壊れる(あちらは「1つも無ければ例外」で、
-        単一種別しか食わないverb用の口である)。
-
-        **`changed_bodies` は返さない** —— 消えたボディは配りものの `bodies` から丸ごと
-        居なくなる(形が変わったのではない)。画面が形を取り直す対象は1つも無い。
-        """
-        targets = selection.require_deletable(self.document)
-        operation = delete_verb(
-            self.document, targets.bodies, targets.entities
-        )
-        return self._after_logged_verb({
-            "bodies": list(operation.args["bodies"]),
-            "entities": [spec["entity_id"] for spec in operation.args["entities"]],
-            "sketch_ids": sorted(
-                {str(spec["sketch_id"]) for spec in operation.args["entities"]}
-            ),
-        })
-
-    # ---------------------------------------------------------------- 形状最適化の条件(第3のモード)
-    #
-    # **4つとも集合代入**で、対象は確定選択そのもの。**確定選択が空でもよい**
-    # (`selection.require_committed_*` のコメント) —— 空の代入が「その役割を全部外す」を
-    # 意味するので、解除専用のverbが要らない。
-    #
-    # `changed_bodies` は**返さない**。形は1つも変わらないので、画面が形を取り直す理由が
-    # 無い(役割の色は配信される `state.optimize` から描く)。
-    @_edits_document
-    def set_preserve_bodies(self) -> dict:
-        """**確定選択のボディ**を保持ソリッドの集合にする(集合代入)。"""
-        body_ids = selection.require_committed_bodies(self.document)
-        operation = set_preserve_bodies_verb(self.document, body_ids)
-        return self._after_logged_verb({"bodies": list(operation.args["bodies"])})
-
-    @_edits_document
-    def set_exclude_bodies(self) -> dict:
-        """**確定選択のボディ**を除外ソリッドの集合にする(集合代入)。"""
-        body_ids = selection.require_committed_bodies(self.document)
-        operation = set_exclude_bodies_verb(self.document, body_ids)
-        return self._after_logged_verb({"bodies": list(operation.args["bodies"])})
-
-    @_edits_document
-    def set_fixtures(self) -> dict:
-        """**確定選択の面**を拘束面の集合にする(集合代入)。"""
-        faces = selection.require_committed_faces(self.document)
-        operation = set_fixtures_verb(self.document, faces)
-        return self._after_logged_verb({"face_count": len(operation.args["faces"])})
-
-    @_edits_document
-    def set_loads(self, magnitude: Any, direction: Any) -> dict:
-        """**確定選択の面だけ**に大きさ[N]と向きを焼く(上書き代入。選択外の荷重面は残る)。
-
-        `face_count` は**確定後の荷重面の総数**であって、この操作で焼いた枚数ではない
-        (画面は「いま何枚に荷重が付いているか」を出すのでこちらが要る)。
-        """
-        faces = selection.require_committed_faces(self.document)
-        operation = set_loads_verb(self.document, faces, magnitude, direction)
-        mode, vector = optimize.normalize_direction(direction)
-        return self._after_logged_verb({
-            "face_count": len(operation.args["faces"]),
-            "applied_count": len(faces),
-            "magnitude": optimize.normalize_magnitude(magnitude),
-            "direction": mode,
-            "direction_vector": None if vector is None else list(vector),
-        })
-
-    @_edits_document
-    def clear_loads(self) -> dict:
-        """**確定選択の面**を荷重から外す(選択が空なら全部外す)。"""
-        faces = selection.require_committed_faces(self.document)
-        operation = clear_loads_verb(self.document, faces)
-        return self._after_logged_verb({"face_count": len(operation.args["faces"])})
-
     # ---------------------------------------------------------------- 形状最適化を走らせる
     # 条件を置く4 verb の**続き**(`duocad/optimize_run.py`)。ここにあるのは委譲と、
     # 「中断の旗」と「結果を1つのボディとして足したことの通知」だけである。
@@ -1176,91 +735,11 @@ class Session:
         )
         return dict(result, applied=applied)
 
-    @_edits_document
-    def set_parameter(self, name: str, value: float) -> dict:
-        before_shapes = {body.id: id(body.shape) for body in self.document.bodies}
-        operation = parameters.set_parameter(self.document, name, float(value))
-        changed_bodies = [
-            body.id
-            for body in self.document.bodies
-            if before_shapes.get(body.id) != id(body.shape)
-        ]
-        return self._after_logged_verb({
-            "name": operation.args["name"],
-            "value": operation.args["value"],
-            "previous": operation.args["previous"],
-            "changed_bodies": changed_bodies,
-        })
-
-    @_edits_document
-    def add_mesh_body(
-        self, positions: Any, indices: Any, name: Any = None
-    ) -> dict:
-        """三角形メッシュのボディを1つ足す(verb `add_mesh_body`)。
-
-        **WSのコマンドとしては開けていない**(`catalog` の `ws="none"`) —— 画面から
-        三角形を手で打つ操作は無く、入口はMCPと、形状最適化の結果を入れるコード側である。
-        """
-        body_id = add_mesh_body_verb(
-            self.document, positions, indices, None if name is None else str(name)
-        )
-        return self._after_logged_verb({"body_id": body_id})
-
-    @_edits_document
-    def import_step(self, path: Any) -> dict:
-        """STEPを読み、**編集可能なボディまで作る**(verb `import_step`)。
-
-        **STEPの読み込みはこれ1本** —— ソリッドごとに編集用ボディを作る
-        1回のverbで、何部品あってもログ1行・undo1回である。
-        **メソッド名・WSのコマンド名・ログのverb名を同じ綴りにしてある**(1コマンドを引数で
-        2つのverbに打ち分けると、コマンド名と積まれるverbが食い違う)。
-        """
-        body_ids = import_step_verb(self.document, str(self._resolve(path)))
-        return self._after_logged_verb({"body_ids": list(body_ids)})
-
-    @_edits_document
-    def import_svg(self, sketch_id: str, path: Any, scale: Any = None) -> dict:
-        """SVGの図形を**いま開いているスケッチ(`sketch_id`)へ**取り込む(verb `import_svg`)。
-
-        **貼る先は引数で選ばない** —— スケッチのverbなので、貼る先は
-        `sketch_id` が指すスケッチの平面で決まる(`add_line` と同じ形)。基準平面や面を
-        指す経路は無い。スケッチの外から使いたければ、先に `sketch_create` で作ってから
-        このverbを呼ぶ。
-
-        `scale` は解決後のmmへさらに掛ける倍率(省略時1.0)。UIには出しておらず
-        (`catalog` の `ws=False`)、単位を持たないSVGの寸法が合わないときだけAIが使う。
-        """
-        entity_ids = import_svg_verb(
-            self.document,
-            str(sketch_id),
-            str(self._resolve(path)),
-            scale=1.0 if scale is None else float(scale),
-        )
-        args = self.document.log.entries[-1].args
-        return self._after_logged_verb(
-            {
-                "sketch_id": str(sketch_id),
-                "entity_ids": list(entity_ids),
-                "source_name": args["source_name"],
-                "entity_count": len(args["entities"]),
-            }
-        )
-
     # ---------------------------------------------------------------- E: ファイル操作
     #
     # **保存形式は操作ログのJSON**(実装計画書§3.1)。形状はそこから導出されるので、
     # 開くたびに再生経路が検査されることになる —— 「保存したものが開けない」が
     # 起きるとしたら、それは再生が壊れているということであり、隠さない方がよい。
-    def _resolve(self, path: Any) -> Path:
-        """受け取ったパスを絶対パスにする(相対はサーバの作業ディレクトリ基準)。
-
-        **どこへ書いたかを必ず応答へ返す**ため、ここで1度だけ解決する。ブラウザからは
-        `model.json` のような相対パスが普通に来るので、解決を各所でやると
-        「保存したと言われたファイルが見つからない」が起きる。
-        """
-        resolved = Path(str(path)).expanduser()
-        return resolved if resolved.is_absolute() else (Path.cwd() / resolved).resolve()
-
     def _resolve_document_name(self, name: Any) -> Path:
         """**ファイル名だけ**を受け取り、`models_dir` 配下に閉じたパスへ解決する。
 
@@ -1689,3 +1168,28 @@ class Session:
         warnings = list(self.warnings)
         self.warnings.clear()
         return warnings
+
+
+def _verb_method(verb: str, function: Any) -> Any:
+    """`session.fillet(2.0)` の形で verb を呼べるメソッド。**中身は `Session.apply` だけ**。
+
+    位置引数・既定値は入口(`duocad/entry.py`)の引数の並びに従う。Python から文書を組み立てる側
+    (テスト・スクリプト)のための書き方で、WebSocket と MCP は `apply` を直接呼ぶ。
+    """
+    signature = inspect.signature(function)
+
+    def method(self: "Session", *args: Any, **kwargs: Any) -> dict:
+        bound = signature.bind(self.document, *args, **kwargs)
+        return self.apply(verb, dict(list(bound.arguments.items())[1:]))
+
+    method.__name__ = verb
+    method.__qualname__ = f"Session.{verb}"
+    method.__doc__ = function.__doc__
+    method.edits_document = True  # type: ignore[attr-defined]
+    return method
+
+
+for _verb, _function in entries().items():
+    if hasattr(Session, _verb):
+        raise RuntimeError(f"`Session.{_verb}` が verb の入口と同じ名前で既に定義されている")
+    setattr(Session, _verb, _verb_method(_verb, _function))

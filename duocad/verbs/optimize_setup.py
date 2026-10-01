@@ -59,6 +59,8 @@ from typing import Any, List, Sequence
 from .. import optimize
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
+from .. import selection
+from ..entry import entry
 
 VERB_SET_PRESERVE_BODIES = "set_preserve_bodies"
 VERB_SET_EXCLUDE_BODIES = "set_exclude_bodies"
@@ -387,3 +389,48 @@ register_verb(VERB_SET_LOADS, do=_do_loads, undo=_undo_loads)
 # **`clear_loads` は `set_loads` と同じ do/undo を使う** —— どちらも操作ログには
 # 「確定後の荷重集合そのもの」を書くので、再生も取り消しも集合の代入で足りる。
 register_verb(VERB_CLEAR_LOADS, do=_do_loads, undo=_undo_loads)
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+# **確定選択が空でもよい** —— 空の代入が「その役割を全部外す」を意味する。`changed_bodies` は
+# 返さない(形は1つも変わらない。役割の色は配信される `state.optimize` から描く)。
+@entry(VERB_SET_PRESERVE_BODIES)
+def _enter_set_preserve_bodies(document: Document) -> dict:
+    body_ids = selection.require_committed_bodies(document)
+    return {"bodies": list(set_preserve_bodies(document, body_ids).args["bodies"])}
+
+
+@entry(VERB_SET_EXCLUDE_BODIES)
+def _enter_set_exclude_bodies(document: Document) -> dict:
+    body_ids = selection.require_committed_bodies(document)
+    return {"bodies": list(set_exclude_bodies(document, body_ids).args["bodies"])}
+
+
+@entry(VERB_SET_FIXTURES)
+def _enter_set_fixtures(document: Document) -> dict:
+    faces = selection.require_committed_faces(document)
+    return {"face_count": len(set_fixtures(document, faces).args["faces"])}
+
+
+@entry(VERB_SET_LOADS)
+def _enter_set_loads(document: Document, magnitude: Any, direction: Any) -> dict:
+    """`face_count` は**確定後の荷重面の総数**であって、この操作で焼いた枚数(`applied_count`)ではない
+    (画面は「いま何枚に荷重が付いているか」を出すのでこちらが要る)。"""
+    faces = selection.require_committed_faces(document)
+    operation = set_loads(document, faces, magnitude, direction)
+    mode, vector = optimize.normalize_direction(direction)
+    return {
+        "face_count": len(operation.args["faces"]),
+        "applied_count": len(faces),
+        "magnitude": optimize.normalize_magnitude(magnitude),
+        "direction": mode,
+        "direction_vector": None if vector is None else list(vector),
+    }
+
+
+@entry(VERB_CLEAR_LOADS)
+def _enter_clear_loads(document: Document) -> dict:
+    faces = selection.require_committed_faces(document)
+    return {"face_count": len(clear_loads(document, faces).args["faces"])}

@@ -25,7 +25,7 @@
 import type { BuildResult, CommandDef } from './command'
 
 /** **対象はサーバへ送らない**(コアが確定選択から取る。`duocad-target-set-taken-only-from-selection`)。 */
-const sendNothing = (): BuildResult => ({ ok: true, args: {} })
+const sendNothing = (): BuildResult<Record<string, never>> => ({ ok: true, args: {} })
 
 /** 荷重の向きの選択肢。**`down` はUI専用の言い回し**で、送るのは `[0, 0, -1]`
  *  (`duocad/optimize.py` のdocstring「世界軸は vector で表す」に合わせ、
@@ -43,9 +43,8 @@ function directionArg(value: string): 'normal' | '-normal' | [number, number, nu
 }
 
 /** **保持ソリッド**を決める。確定選択のボディ(空でもよい)をそのまま集合にする。 */
-export const SET_PRESERVE_BODIES: CommandDef = {
+export const SET_PRESERVE_BODIES: CommandDef<'set_preserve_bodies'> = {
   id: 'set_preserve_bodies',
-  category: 'feature',
   label: '保持ソリッドを決める',
   buttonId: 'set-preserve-bodies',
   preview: 'none',
@@ -63,9 +62,8 @@ export const SET_PRESERVE_BODIES: CommandDef = {
 }
 
 /** **除外ソリッド**を決める。`SET_PRESERVE_BODIES` と対(役割が違うだけ)。 */
-export const SET_EXCLUDE_BODIES: CommandDef = {
+export const SET_EXCLUDE_BODIES: CommandDef<'set_exclude_bodies'> = {
   id: 'set_exclude_bodies',
-  category: 'feature',
   label: '除外ソリッドを決める',
   buttonId: 'set-exclude-bodies',
   preview: 'none',
@@ -83,9 +81,8 @@ export const SET_EXCLUDE_BODIES: CommandDef = {
 }
 
 /** **拘束面**を決める。howは無い(面を選ぶだけ)。 */
-export const SET_FIXTURES: CommandDef = {
+export const SET_FIXTURES: CommandDef<'set_fixtures'> = {
   id: 'set_fixtures',
-  category: 'feature',
   label: '拘束面を決める',
   buttonId: 'set-fixtures',
   preview: 'none',
@@ -111,9 +108,8 @@ export const SET_FIXTURES: CommandDef = {
  * **`min: 1` はその一部**: 0枚で決定できると「空で確定 = 全部外れる」を期待した人が、
  * 何も起きないまま次へ進む。外すのは `CLEAR_LOADS`。
  */
-export const SET_LOADS: CommandDef = {
+export const SET_LOADS: CommandDef<'set_loads'> = {
   id: 'set_loads',
-  category: 'feature',
   label: '荷重を置く',
   buttonId: 'set-loads',
   preview: 'none',
@@ -155,9 +151,8 @@ export const SET_LOADS: CommandDef = {
 }
 
 /** **荷重を外す**。選んだ面を荷重から落とす(空で決定すれば全部外れる)。howは無い。 */
-export const CLEAR_LOADS: CommandDef = {
+export const CLEAR_LOADS: CommandDef<'clear_loads'> = {
   id: 'clear_loads',
-  category: 'feature',
   label: '荷重を外す',
   buttonId: 'clear-loads',
   preview: 'none',

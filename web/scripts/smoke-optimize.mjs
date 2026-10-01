@@ -1,7 +1,7 @@
 /**
  * 実ブラウザでの形状最適化の**実行**検査(20260904-1705) —— 条件を置く → 走らせる → 結果が出る。
  *
- *   web> node scripts/smoke-optimize.mjs [--port 8905] [--http-port 8906]
+ *   web> node scripts/smoke-optimize.mjs
  *
  * `smoke-optimize-mode.mjs` は「条件を**置ける**」までを見る。ここはその続きで、
  * **本物のSIMPを端から端まで回して、結果のメッシュボディが画面に出るところまで**を見る。
@@ -266,6 +266,8 @@ runSmoke('smoke-optimize', { timeout: 60000, mcp: true }, async ({ options, work
     // 要素サイズ4mmの格子に1mm角の保持ソリッドを置くと、ボクセル化しても1要素も
     // 掴めない(`20260904-1704` の契約④の実測)。**SIMPを回さずに戻る**ので速い。
     console.log('\n[5b] 保持ソリッドがこの解像度で表現できていないと、消えない通知が出る')
+    const errorsBeforeRegion = await page.evaluate(() => [...window.__duocad.errors])
+    if (errorsBeforeRegion.length > 0) fail(`ここまでにエラーが出ている: ${errorsBeforeRegion.join(' | ')}`)
     const tiny = await addBox([24, 5.5], 1, 1)
     await mcp.callTool('propose_selection', {
       refs: [bodyA, bodyB, tiny].map((id) => ({ body: id, kind: 'body', index: null })),
@@ -309,6 +311,9 @@ runSmoke('smoke-optimize', { timeout: 60000, mcp: true }, async ({ options, work
       fail(`結果のボディが増えている(1mm角を足したぶんだけのはず): ${partsAfterRegion}`)
     }
     ok(`[5b] 消えない通知が出た(「${regionNotice.slice(0, 46)}…」)・結果は足されていない`)
+    // 同じ通知は警告の札としても出る(控えに残る)。わざと出させたものなので、最後の検査から除く。
+    const regionWarnings = await page.evaluate(() => [...window.__duocad.errors])
+    if (regionWarnings.length === 0) fail('表現できていないことが札(控え)に出ていない')
 
     // 1mm角を役割から外してから消す(役割に残したまま消すと「文書に無い」で走らなくなる)。
     await mcp.callTool('propose_selection', {
@@ -326,7 +331,13 @@ runSmoke('smoke-optimize', { timeout: 60000, mcp: true }, async ({ options, work
     )
 
     // ================================================================== 6. 走り切る
-    console.log('\n[6] もう一度、最後まで走らせる(既定の解像度。実測 約60秒)')
+    // **既定の段(いちばん粗い 12mm)では結果が出ない** —— 12mm の立方体が1要素にしかならず、
+    // 全材料でも剛体運動を拘束できないと判定されて断られる(5b と同じ「表現できていない」の通知が出る)。
+    // 画面の指示どおり解像度を1段上げる(実測: 12mm は結果なし、6mm は約8秒で結果が出る)。
+    console.log('\n[6] 解像度を1段上げて、最後まで走らせる')
+    await page.focus('#optimize-resolution')
+    await page.keyboard.press('ArrowRight')
+    await waitFor(() => window.__duocad.optimizeStepIndex === 1, 'スライダーを右へ動かしても段が変わらない')
     const started = Date.now()
     await page.click('#optimize-run')
     await waitFor(() => window.__duocad.optimizeRunning === true, '2回目が走り出さない')
@@ -433,6 +444,6 @@ runSmoke('smoke-optimize', { timeout: 60000, mcp: true }, async ({ options, work
     ok(`[9] 編集verbは確定できず、足りないものを言う(「${prompt.slice(0, 30)}…」)`)
 
     // ================================================================== 10. エラー
-    await assertNoAppErrors(page, consoleErrors)
+    await assertNoAppErrors(page, consoleErrors, { allow: regionWarnings })
   }
 })

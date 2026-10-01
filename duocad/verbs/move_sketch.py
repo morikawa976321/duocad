@@ -42,6 +42,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
+from .. import selection
+from ..entry import entry
 from ..sketch import (
     add_entities,
     entity_kind_ops,
@@ -493,3 +495,45 @@ register_verb(
     do=_do_move_sketch_entities,
     undo=_undo_move_sketch_entities,
 )
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_MOVE_SKETCH_ENTITIES)
+def _enter_move_sketch_entities(
+    document: Document,
+    dx: Optional[float] = None,
+    dy: Optional[float] = None,
+    copy: bool = False,
+    mode: str = "translate",
+    angle: Optional[float] = None,
+    center: Any = None,
+    center_entity: Any = None,
+) -> dict:
+    """**戻り値のキーはモードによらず同じ** —— 使わない側は `None` にする
+    (`web/src/session.ts` の `Applied` が形の変わる封筒を読めないため)。"""
+    targets = selection.require_sketch_entities(document)
+    sketch_ids = sorted({str(item["sketch"]) for item in targets})
+    operation = move_sketch_entities(
+        document,
+        targets,
+        dx,
+        dy,
+        copy=bool(copy),
+        mode=str(mode),
+        angle=angle,
+        center=center,
+        center_entity=center_entity,
+    )
+    args = operation.args
+    return {
+        "mode": args["mode"],
+        "dx": args.get("dx"),
+        "dy": args.get("dy"),
+        "angle": args.get("angle"),
+        "center": args.get("center"),
+        "copy": args["copy"],
+        "created": list(args["created"]),
+        "sketch_ids": sketch_ids,
+    }

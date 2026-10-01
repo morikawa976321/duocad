@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **ホバーで明るくなったものが、そのままクリックしたら選択されるものと一致する**。
  *
- *   node scripts/smoke-hover.mjs [--port 8975] [--http-port 8976]
+ *   node scripts/smoke-hover.mjs
  *
  * 「クリックすれば取れるものをホバーで先に見せる」機能の価値は
  * **予告と結果が一致していること**にしかない(食い違うなら、無いほうがましである)。
@@ -248,8 +248,7 @@ runSmoke('smoke-hover', { timeout: 60000, mcp: true }, async ({ mcp, browser, ur
      * **`params` はスプレッドで写す**(`{ ...item.params }`) —— Svelte 5の`$state`は
      * 入れ子までProxyにするので、そのまま返すとpuppeteerのCDPシリアライズで
      * 入れ子のオブジェクトだけ `{}` に落ちる(engine
-     * `puppeteer-evaluate-drops-nested-svelte5-proxy-fields`。`acceptance.mjs` の
-     * `target.params` と同じ手当て)。
+     * `puppeteer-evaluate-drops-nested-svelte5-proxy-fields`)。
      */
     async function activeSketchEntities() {
       return page.evaluate(() => {

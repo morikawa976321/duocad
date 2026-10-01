@@ -15,9 +15,8 @@
 import type { SelectionRef } from '../session'
 import type { CommandDef } from './command'
 
-export const MEASURE: CommandDef = {
+export const MEASURE: CommandDef<'measure'> = {
   id: 'measure',
-  category: 'query',
   label: '測定',
   buttonId: 'measure',
   preview: 'none',

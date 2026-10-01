@@ -13,7 +13,8 @@ from typing import Optional, Sequence, Union
 from .. import kernel
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
-from ._common import editable_body, normalize_values, reapply_shape, remember, undo_shape
+from ..entry import entry
+from ._common import edge_entry, editable_body, normalize_values, reapply_shape, remember, undo_shape
 
 VERB_CHAMFER = "chamfer"
 
@@ -54,3 +55,11 @@ def _do_chamfer(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_CHAMFER, do=_do_chamfer, undo=undo_shape)
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_CHAMFER)
+def _enter_chamfer(document: Document, distance: Union[float, Sequence[float]]) -> dict:
+    return edge_entry(document, chamfer, distance)

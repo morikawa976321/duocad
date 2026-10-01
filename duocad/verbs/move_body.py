@@ -36,6 +36,8 @@ from typing import Any, Callable, List, Optional, Sequence
 from .. import kernel
 from ..document import Body, BodyId, Document
 from ..oplog import Operation, register_verb
+from .. import selection
+from ..entry import entry
 from ._common import (
     MODE_ROTATE,
     MODE_TRANSLATE,
@@ -318,3 +320,57 @@ def _undo_move_body(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_MOVE_BODY, do=_do_move_body, undo=_undo_move_body)
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_MOVE_BODY)
+def _enter_move_body(
+    document: Document,
+    dx: Optional[float] = None,
+    dy: Optional[float] = None,
+    dz: Optional[float] = None,
+    copy: bool = False,
+    mode: str = "translate",
+    angle: Optional[float] = None,
+    axis_edge: Any = None,
+    axis_point: Any = None,
+    axis_dir: Any = None,
+    center_vertex: Any = None,
+) -> dict:
+    """`changed_bodies` には動いたボディと、複製で増えたボディの両方を載せる —— 画面はここを見て
+    形を取り直すので、どちらかを落とすと片方が古い位置のまま残る。
+
+    **戻り値のキーはモードによらず同じ**で、使わない側は `None`(`move_sketch_entities` と同じ理由)。
+    `axis_point` / `axis_dir` は解決後の数値(辺で指しても数値で返る)。
+    """
+    body_ids = selection.require_bodies(document)
+    operation = move_body(
+        document,
+        body_ids,
+        dx,
+        dy,
+        dz,
+        copy=bool(copy),
+        mode=str(mode),
+        angle=angle,
+        axis_edge=axis_edge,
+        axis_point=axis_point,
+        axis_dir=axis_dir,
+        center_vertex=center_vertex,
+    )
+    args = operation.args
+    created = list(args["created"])
+    return {
+        "mode": args["mode"],
+        "dx": args.get("dx"),
+        "dy": args.get("dy"),
+        "dz": args.get("dz"),
+        "angle": args.get("angle"),
+        "axis_point": args.get("axis_point"),
+        "axis_dir": args.get("axis_dir"),
+        "copy": args["copy"],
+        "created": created,
+        "changed_bodies": list(args["bodies"]) + created,
+    }

@@ -371,7 +371,7 @@ runSmoke('smoke-files', { attach: true, mcp: true, handshake: false }, async ({ 
     ok('明示の保存ボタンは無く、「未保存」の札も出ていない')
 
     // **一覧の操作数が今の文書に追いつくのを待つ**(自動保存が本当に書いたことの証拠。
-    // 一覧は文書が変わるたびに取り直される —— `App.svelte` の `scheduleDocumentRefresh`)。
+    // 一覧は文書が変わるたびに取り直される —— `documentFiles.svelte.ts` の `onState`)。
     const waitListMatchesDocument = (where, name) =>
       waitFor(
         (expected) => {
@@ -782,7 +782,7 @@ runSmoke('smoke-files', { attach: true, mcp: true, handshake: false }, async ({ 
     }
 
     // トーストに「書き出した個数」と「非表示で除外した個数」が出ることを実地で見る
-    // (`App.svelte` の `handleFile`。除外0件のときは文言そのものを出さないので、
+    // (`documentFiles.svelte.ts` の `onFile`。除外0件のときは文言そのものを出さないので、
     // ここでは除外がある場合の文言を固定する)。
     const visibleOnlyMessage = (await look()).messages[0] ?? ''
     if (!visibleOnlyMessage.includes('1個') || !visibleOnlyMessage.includes('除外')) {

@@ -52,12 +52,16 @@ export async function sketchPointAt(page, u, v, { sketchId = null, settle = fals
 /**
  * スケッチ平面の (u,v) を押す。**常に浮いているブラウザを畳んでから**押す —— (u,v) は画面の
  * 1画素しかなく、そこがパネルの下に来ると逃げ場が無い(`browser.mjs` の `withoutBrowserPanel`)。
+ *
+ * **射影の前に2フレーム待つのが既定**(`settle`)。直前のクリックで引数が1つ埋まるとツールバーの
+ * 行が増え、待たずに射影すると増える前の配置で画素を決めてしまう(実測: 円の中心を押した直後に
+ * 半径の点を押すと、4mm のはずの半径が 6mm になった。2回に1回)。
  */
 export async function clickSketchPoint(
   page,
   u,
   v,
-  { sketchId = null, modifier = null, settle = false } = {},
+  { sketchId = null, modifier = null, settle = true } = {},
 ) {
   return withoutBrowserPanel(page, async () => {
     const at = await sketchPointAt(page, u, v, { sketchId, settle })
@@ -249,6 +253,25 @@ export async function createSketchOnBasePlane(
     return created
   }
   return hidePanel ? withoutBrowserPanel(page, run) : run()
+}
+
+/**
+ * 編集中のスケッチの (u,v) が**押せる画素**になるまで、実際にホイールでズームアウトする。
+ *
+ * 空のスケッチへ入った直後のカメラは前の視点の距離を引き継ぐので、原点から離れた点は画面の外か、
+ * 右上のビューキューブの下に来ることがある(キューブの矩形は押下を引き取るので
+ * `projectSketchPoint` が null を返す)。スケッチの視点は原点を画面中央に置くので、引けば点は
+ * 中央へ寄ってキューブから外れる。
+ */
+export async function zoomOutUntilSketchPointClickable(page, u, v, { maxNotches = 40, delay = 40 } = {}) {
+  for (let i = 0; i < maxNotches; i += 1) {
+    if (await sketchPointAt(page, u, v, { settle: true })) return
+    const center = await viewportCenter(page)
+    await page.mouse.move(center.x, center.y)
+    await page.mouse.wheel({ deltaY: 120 }) // 正で引く(ズームアウト)
+    await sleep(delay)
+  }
+  fail(`スケッチ平面の点 (${u}, ${v}) が、ズームアウトしても押せる画素にならない`)
 }
 
 /**

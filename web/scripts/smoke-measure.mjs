@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **測定(issue #10)は verb ではなく、人は2つ指すだけ・AIは同じ答えを読む**。
  *
- *   node scripts/smoke-measure.mjs [--port 8975] [--http-port 8976]
+ *   node scripts/smoke-measure.mjs
  *
  * 見るもの:
  *

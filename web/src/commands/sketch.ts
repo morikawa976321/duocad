@@ -51,9 +51,8 @@ function typed(values: ArgValues, name: string): number | undefined {
  *
  * サーバへ送るのは `p0`/`p1` だけ(`add_line` の契約は変えない)。
  */
-export const ADD_LINE: CommandDef = {
+export const ADD_LINE: CommandDef<'add_line'> = {
   id: 'add_line',
-  category: 'sketch',
   label: '線分',
   buttonId: 'sketch-line',
   preview: 'local',
@@ -101,9 +100,8 @@ export const ADD_LINE: CommandDef = {
   },
 }
 
-export const ADD_CIRCLE: CommandDef = {
+export const ADD_CIRCLE: CommandDef<'add_circle'> = {
   id: 'add_circle',
-  category: 'sketch',
   label: '円',
   buttonId: 'sketch-circle',
   preview: 'local',
@@ -134,9 +132,8 @@ export const ADD_CIRCLE: CommandDef = {
  * 長方形。**角度の欄は無い** —— マウスで置く長方形は軸平行に限る(`add_rectangle` の
  * `angle` は省略され、コアの既定 0 が効く)。
  */
-export const ADD_RECTANGLE: CommandDef = {
+export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
   id: 'add_rectangle',
-  category: 'sketch',
   label: '長方形',
   buttonId: 'sketch-rectangle',
   preview: 'local',
@@ -177,9 +174,8 @@ export const ADD_RECTANGLE: CommandDef = {
  * クリックから決まる(角度の欄は持たない)。幾何と掃引の向きは `sketchGeometry.ts` の
  * `arcFromPoints` が閉じている。
  */
-export const ADD_ARC: CommandDef = {
+export const ADD_ARC: CommandDef<'add_arc'> = {
   id: 'add_arc',
-  category: 'sketch',
   label: '円弧',
   buttonId: 'sketch-arc',
   preview: 'local',
@@ -226,10 +222,9 @@ export const ADD_ARC: CommandDef = {
  * **倍率(`scale`)はここに出していない** —— 単位の合わないSVGを直すための逃げ道であって、
  * 普段は要らない。常に出すと「毎回1.0と打つ欄」が1つ増える(`catalog` の `ws=False`)。
  */
-export const IMPORT_SVG: CommandDef = {
+export const IMPORT_SVG: CommandDef<'import_svg'> = {
   // **id == サーバのコマンド名 == ログのverb名**。
   id: 'import_svg',
-  category: 'sketch',
   label: 'SVG読み込み',
   buttonId: 'sketch-import-svg',
   preview: 'none',
@@ -265,9 +260,8 @@ export const IMPORT_SVG: CommandDef = {
  * (`base_plane` を送らない)経路は対象集合を確定選択から取るので、サーバが走らせる直前に
  * 自動で確定する(`duocad/server.py` の `_commit_before_verb`)。
  */
-export const SKETCH_CREATE: CommandDef = {
+export const SKETCH_CREATE: CommandDef<'sketch_create'> = {
   id: 'sketch_create',
-  category: 'sketch',
   label: 'スケッチ',
   buttonId: 'sketch-create',
   preview: 'none',
@@ -291,9 +285,8 @@ export const SKETCH_CREATE: CommandDef = {
  * だが、`distance` という how を持つので Enter が要る —— 同じverb名に足すと
  * `sketch_create` 自体の即適用まで変わってしまうため、名前を分けてある。
  */
-export const SKETCH_CREATE_OFFSET: CommandDef = {
+export const SKETCH_CREATE_OFFSET: CommandDef<'sketch_create_offset'> = {
   id: 'sketch_create_offset',
-  category: 'sketch',
   label: 'スケッチ(オフセット平面)',
   buttonId: 'sketch-create-offset',
   preview: 'none',
@@ -358,9 +351,8 @@ export function runsOutsideSketch(verb: string): boolean {
  * (コア側の判断。`duocad/verbs/move_sketch.py`)。中心は省略でき、既定はコアが決める
  * (対象の代表点の平均)。
  */
-export const MOVE_SKETCH_ENTITIES: CommandDef = {
+export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
   id: 'move_sketch_entities',
-  category: 'sketch',
   label: '動かす',
   buttonId: 'sketch-move',
   // **ローカル方式**。`move_body` と同じ発想で、選んだ図形の今の座標を
@@ -423,9 +415,8 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
  *
  * **幽霊は無い**(`preview: 'none'`)。対象は何個でも選べるので確定はEnterである(`needsEnter`)。
  */
-export const MIRROR_SKETCH_ENTITIES: CommandDef = {
+export const MIRROR_SKETCH_ENTITIES: CommandDef<'mirror_sketch_entities'> = {
   id: 'mirror_sketch_entities',
-  category: 'sketch',
   label: '鏡映複製',
   buttonId: 'sketch-mirror',
   preview: 'none',
@@ -469,9 +460,8 @@ export const MIRROR_SKETCH_ENTITIES: CommandDef = {
  * 対象の領域は確定選択から取る(サーバが取るので引数に載せない)。どのスケッチかは選んだ領域が
  * 持っているので `sketch_id` は足さない(`runsWithoutSketchId`)。
  */
-export const ENVELOPE_REGIONS: CommandDef = {
+export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
   id: 'envelope_regions',
-  category: 'sketch',
   label: '包む',
   buttonId: 'sketch-envelope',
   preview: 'server',
@@ -541,7 +531,6 @@ export function runsWithoutSketchId(verb: string): boolean {
  */
 export const SELECT_IN_SKETCH: CommandDef = {
   id: 'select_in_sketch',
-  category: 'ui',
   label: '選ぶ',
   buttonId: 'sketch-select',
   // **ボタンは出さない**。領域を直接クリックして選べるので、

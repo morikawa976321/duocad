@@ -298,7 +298,9 @@
     z-index: 5;
     /* 幅は `styles.css` の `:root` が持つ(設定ダイアログの位置がこれを見るため)。 */
     width: var(--browser-panel-w);
-    max-height: calc(100% - 20px);
+    /* 下端は、同じ列の下に浮くパネル(`OptimizePanel.svelte` の `--browser-bottom-reserve`)の手前で
+       止める。上端は verb の引数行のぶん下がっているので、そのぶんも引く。 */
+    max-height: calc(100% - 20px - var(--toolbar-overlay-h, 0px) - var(--browser-bottom-reserve, 0px));
     display: flex;
     flex-direction: column;
     min-height: 0;

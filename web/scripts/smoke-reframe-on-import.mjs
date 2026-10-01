@@ -2,7 +2,7 @@
  * 実機での確認 — STEPインポート直後にビューポートがモデル全体へ合わせ直され、
  * かつ「初回フレーミングの一回きりの機会」が空振りで焼き切れない。
  *
- *   node scripts/smoke-reframe-on-import.mjs [--step <STEPのパス>] [--port 8975] [--http-port 8976]
+ *   node scripts/smoke-reframe-on-import.mjs [--step <STEPのパス>]
  *
  * 2つの完了条件を別々の姿勢で見る(A/Bは互いに独立した欠陥なので、片方の修正だけでは
  * もう片方の姿勢は緑にならない):
@@ -31,8 +31,7 @@
  * どちらも `window.__duocad.projectPoint(world)` で外接箱の8頂点を画面座標に投影し、
  * 全頂点がビューポートの矩形内にあるかを数値で確かめる。**`projectFace` は使わない** ——
  * 最初にピックできた三角形の重心を返すので、視点や画角を変えると同じ面でも数十px跳ぶ
- * (acceptance の
- * FOV検査を実際にこれで直している)。
+ * (`smoke-camera.mjs` の画角の検査も同じ理由で `projectPoint` を使う)。
  *
  * サーバはこのスクリプトが空の文書で起動し、板・STEP・立方体ともMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。

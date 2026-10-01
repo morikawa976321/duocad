@@ -22,6 +22,7 @@ from typing import Optional, Sequence
 
 from ..document import Body, BodyId, Document, MESH_KIND, make_mesh, new_body_id
 from ..oplog import Operation, register_verb
+from ..entry import entry
 
 VERB_ADD_MESH_BODY = "add_mesh_body"
 
@@ -87,3 +88,14 @@ register_verb(
     do=_do_add_mesh_body,
     undo=_undo_add_mesh_body,
 )
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_ADD_MESH_BODY)
+def _enter_add_mesh_body(
+    document: Document, positions: Sequence[float], indices: Sequence[int], name: Optional[str] = None
+) -> dict:
+    body_id = add_mesh_body(document, positions, indices, None if name is None else str(name))
+    return {"body_id": body_id}

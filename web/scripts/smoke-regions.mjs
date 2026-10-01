@@ -14,17 +14,12 @@
  *      確定した操作が「距離10の結合」である
  *   4. **修飾キーの規則が面と同じ** — 置換 / Shift追加 / Ctrl除去(編集中のスケッチの領域)
  *   5. **消えた領域は押し出せない** — 添字3の領域を選んだ状態で2つめの円の径を縮めると、
- *      コアが選択を空にし(a)、領域も3→2に減る。押し出しを起動しても文書は変わらない。
- *      あわせて `regionsStillExist`(b)のロジックも合成データで直接検算する
+ *      コアが選択を空にし、領域も3→2に減る。押し出しを起動しても文書は変わらない。
  *
  * 検証5は**添字3を先に選んでから**縮める順序で、選択が1件→0件になる瞬間を
- * 直接観測する((a)。`tests/test_server_selection_reset.py` に同じ筋のpytestがある)。
+ * 直接観測する(`tests/test_server_selection_reset.py` に同じ筋のpytestがある)。
  * 先に値を打ち直して領域を消すだけの形だと、選ぶものが最初から無いため
- * `resets_selection` も `regionsStillExist` も実行されない「骨抜き」の検査になる。
- * `regionsStillExist`(b)の分岐は**通常のUI操作では到達できない**ことが構造的に確定しており
- * (領域を変えうる全 `resets_selection` verbが例外なく `resets_selection=True` を持つため。
- * 宣言は `duocad/catalog.py`)、ロジック自体の正しさは `window.__duocad.regionsStillExist`
- * を直接呼んで検算する(詳細はApp.svelteの同名関数のdocstringとコード中のコメント)。
+ * `resets_selection` が実行されない「骨抜き」の検査になる。
  *
  * **順序に意味がある**: スケッチ2枚を**ソリッドが1つも無いうちに**作る。基準平面の画素は
  * 「部品に隠れていない所」を探して返すが、**部品の輪郭のすぐ外側**が返ることがあり、
@@ -322,20 +317,9 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     ok('**修飾キーは面と同じ**: 置換 / Shift追加 / Ctrl除去')
 
     // ============================================== 検証5: 消えた領域は押し出せない
-    // 「既存の防具(`regionsStillExist`)の対」。
-    //
-    // 先に消してから選べないことを見るだけの形だと、`resets_selection`(コア)も
-    // `regionsStillExist`(`App.svelte`)もどちらも実行されない(選ぶものが最初から
-    // 無いので防具の出番が無い「骨抜き」の検査になる)。ここでは両方を実地で踏む:
-    //
-    //   (a) `resets_selection` —— **先に添字3を選んでから**縮める。選択が
-    //       1件→0件になることを直接確認し、コアが実際に選択を空にしたことを見る
-    //       (`tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`
-    //       がpytest側でも同じ筋を固定している)。
-    //   (b) `regionsStillExist` —— **通常のUI操作では構造的に到達できない**(理由は
-    //       下記コメントと `App.svelte` の同名関数のdocstring)。ロジックそのものの
-    //       正しさは `window.__duocad.regionsStillExist(selection, sketches)` を
-    //       合成データで直接呼んで検算する。
+    // **先に添字3を選んでから**縮める。選択が1件→0件になることを直接確認し、コアが実際に
+    // 選択を空にしたことを見る(`resets_selection`。pytest 側は
+    // `tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`)。
 
     // 2つめの円のentity_idを引く(`refs.radius` が `radiusParam` と一致するもの)。
     const circleBEntityId = await page.evaluate(
@@ -349,7 +333,7 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     )
     if (!circleBEntityId) fail('2つめの円のentity_idを引けない')
 
-    // **(a-1) 先に添字3を選ぶ**(まだ実在する領域を、編集中のスケッチで本物のクリックで選ぶ)。
+    // **(1) 先に添字3を選ぶ**(まだ実在する領域を、編集中のスケッチで本物のクリックで選ぶ)。
     // **距離・種別はあえて打たない** —— 「押し出す」は `preview: 'server'` で、
     // 引数が揃うとデバウンス後にプレビュー要求を自動で投げる。直後に選択が空になると、
     // 飛んでいる途中のプレビュー要求が空の選択でサーバに届いて `SelectionEmpty` の
@@ -368,7 +352,7 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     )
     if (selectedBeforeShrink !== 1) fail(`縮める前の選択が1件でない: ${selectedBeforeShrink}`)
 
-    // **(a-2) 径を縮める**。**径の打ち直しはAI(MCP)の口だけである**。
+    // **(2) 径を縮める**。**径の打ち直しはAI(MCP)の口だけである**。
     // ここで見たいのは「選んだ領域が消える形の変更で `resets_selection` が効くか」で、
     // それは**どの経路から打っても同じコアの契約**である(MCPもWSも `Session` を通る)。
     const radiusName = await page.evaluate((id) => {
@@ -392,7 +376,7 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
       '2つめの円を縮めても領域が2つに戻らない(添字3が消えない)',
       discSketch,
     )
-    // **(a-3) resets_selection が実際に選択を空にしたことを見る**(1件→0件)。
+    // **(3) resets_selection が実際に選択を空にしたことを見る**(1件→0件)。
     const selectedAfterShrink = await page.evaluate(
       () => (window.__duocad.selection?.items ?? []).length,
     )
@@ -403,51 +387,10 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
       )
     }
     ok(
-      '**(a) resets_selection**: 添字3を選んだ状態で径を縮めたら、' +
+      '**resets_selection**: 添字3を選んだ状態で径を縮めたら、' +
         'コアが選択を1件→0件に空にした(領域は3→2、添字3は実在しなくなった)',
     )
 
-    // **(b) regionsStillExist のロジックを合成データで直接検査する。**
-    //
-    // なぜ通常のUI操作では到達できないか: 領域を変えうる全 `resets_selection` verb(`add_line` 等の作図・
-    // `set_parameter`・`pattern_rectangular`/`pattern_circular`・`undo`/`redo`)は
-    // `duocad/catalog.py` で例外なく `resets_selection=True` を持つ。したがって「選んだ領域が消える」操作が起きた瞬間、コアの選択は
-    // 必ず同時に空になる。`CommandHost` は生きた `selection` を見て確定を許すかどうかを
-    // 決めるので、選択が空になった時点で `runCommand` 自体が呼ばれなくなり、
-    // その内側にある `regionsStillExist` のfalse分岐へ**構造的に到達できない**
-    // (直上の(a)がまさにこれを実証している)。
-    //
-    // そこでロジック自体の正しさ(実在しない添字はfalse・実在する添字はtrueと判定するか)
-    // を、本物の関数 `App.svelte` の `regionsStillExist` を直接呼んで検算する
-    // (`window.__duocad.regionsStillExist`。再実装ではなく本体そのもの)。
-    const regionCheck = await page.evaluate((sketchId) => {
-      const sketches = window.__duocad.sketches
-      const target = sketches.find((item) => item.sketch_id === sketchId)
-      const liveIndex = target.regions[0]?.index ?? null
-      const missingIndex = Math.max(0, ...target.regions.map((r) => r.index)) + 100
-      const stale = { items: [{ sketch: sketchId, index: missingIndex }], origin: 'user', count: 1 }
-      const live = { items: [{ sketch: sketchId, index: liveIndex }], origin: 'user', count: 1 }
-      return {
-        liveIndex,
-        missingIndex,
-        staleResult: window.__duocad.regionsStillExist(stale, sketches),
-        liveResult: window.__duocad.regionsStillExist(live, sketches),
-      }
-    }, discSketch)
-    if (regionCheck.liveIndex === null) fail('discSketchに領域が1つも無い(検査の前提が崩れている)')
-    if (regionCheck.staleResult !== false) {
-      fail(
-        `regionsStillExist: 実在しない添字${regionCheck.missingIndex}をfalseと判定しない` +
-          '(ガードの実装そのものが壊れている)',
-      )
-    }
-    if (regionCheck.liveResult !== true) {
-      fail(`regionsStillExist: 実在する添字${regionCheck.liveIndex}をtrueと判定しない`)
-    }
-    ok(
-      '**(b) regionsStillExist**: 実在しない添字はfalse・実在する添字はtrueと、' +
-        '本体のロジックを直接呼んで確認した(通常操作では(a)が先回りするため到達しない分岐)',
-    )
 
     // ============================================== 仕上げ: 消えた領域は押し出せない
     const before = await look()

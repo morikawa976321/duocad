@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **ズームに応じて分割数が増減する**(可変解像度)。
  *
- *   node scripts/smoke-resolution.mjs [--port 8977] [--http-port 8978]
+ *   node scripts/smoke-resolution.mjs
  *
  * 「寄っても多角形の角が出ない」は目でしか判定できないので、**代わりに分割数と目標偏差を
  * 数値で見る**。見るのは3経路すべて(タスクの完了条件):

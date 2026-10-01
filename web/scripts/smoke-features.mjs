@@ -41,6 +41,7 @@ import {
   clickRegion as clickRegionOf,
   clickSketchPoint,
   createSketchOnBasePlane,
+  zoomOutUntilSketchPointClickable,
 } from './pick.mjs'
 
 
@@ -186,6 +187,9 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
       '2枚目のスケッチに入れない',
     )
     await page.click('#sketch-circle')
+    // 2枚目のスケッチは空なので視点は前の距離のまま原点を見ており、穴の中心は右上のビューキューブの
+    // 下に来る(実測: キューブ x 584..728 / y 59..203 に対し点は (640, 186))。引いてから押す。
+    await zoomOutUntilSketchPointClickable(page, HOLE.u, HOLE.v)
     await clickPlane(HOLE.u, HOLE.v)
     await typeInto('#sketch-radius', HOLE.radius)
     await page.keyboard.press('Enter')
