@@ -1325,9 +1325,12 @@
     // **見えているボディだけを対象にする**。AIが述語で提案した集合は
     // 隠したボディにまたがりうる。そこを対象にするとサーバが「隠れているものの辺は
     // 指せない」と断り、画面にはエラーだけが出て**見えている辺も出なくなる**。
-    // 選択のうち見えているものを先に見る。
+    // 選択のうち見えているものを先に見る。**メッシュボディも同じ理由で外す** —— 辺も頂点も
+    // 持たないので、頼むとサーバが「mesh body」と断ってエラーの札だけが出る。
     const visible = new Set(
-      (model?.bodies ?? []).filter((body) => body.visible).map((body) => body.body_id),
+      (model?.bodies ?? [])
+        .filter((body) => body.visible && body.kind !== 'mesh')
+        .map((body) => body.body_id),
     )
     const picked = (selection?.items ?? []).find(
       (item): item is ShapeRef => !('sketch' in item) && visible.has((item as ShapeRef).body),
