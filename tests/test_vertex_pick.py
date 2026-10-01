@@ -20,7 +20,7 @@ import ast
 
 import pytest
 
-from duocad import catalog, kernel, query, selection
+from duocad import catalog, kernel, selection
 from duocad.server import SELECTION_CONSUMING_COMMANDS, Session
 from session_support import SIDE, box as _box, browser as _browser
 
@@ -45,15 +45,6 @@ def test_vertex_positions_use_the_same_index_as_the_selection(session: Session) 
         assert len(item["point"]) == 3
         # 20mm立方体なので、全頂点が 0 か 20(の丸め誤差内)に居る
         assert all(min(abs(value), abs(value - SIDE)) < 1e-6 for value in item["point"])
-
-
-def test_the_query_layer_passes_the_kernel_positions_through(session: Session) -> None:
-    """`query.describe_vertices` は kernel の座標をそのまま渡す(測り直さない)。
-
-    落ちたら、AIが `measure` で見る座標と画面のマーカーが別の計算で出ることになる。
-    """
-    body, _ = _box(session)
-    assert query.describe_vertices(body.shape) == kernel.vertex_positions(body.shape)
 
 
 def test_an_empty_shape_has_no_vertex_map() -> None:

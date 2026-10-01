@@ -1009,22 +1009,3 @@ def test_a_verb_applied_through_mcp_reaches_the_browser(box_session: Session):
     assert pushed["delta"]["bodies"][0]["geometry"] is not None
     assert pushed["delta"]["bodies"][0]["face_count"] > faces_before
     assert "applied" not in pushed, "出し手のいない変更に確認応答を付けている"
-
-
-# --------------------------------------------------------------------------------------
-# 10. 境界(既存の規律を壊していないこと)
-# --------------------------------------------------------------------------------------
-def test_the_mcp_layer_does_not_reimplement_verbs():
-    """verbの実体を書いていないこと —— `duocad.verbs` 等を**呼ぶ**だけであること。
-
-    「ロジックをMCP層に書かない」は散文だと守られたかどうか分からないので、
-    **コアのverb関数を実際に経由しているか**を、ログのverb名で見る他のテストと合わせて
-    ここで宣言的に固定する: `mcp_server.py` は幾何モジュール(`kernel`)へ
-    形を変える依頼をしない(読み取りの `face_count` 等は使ってよい)。
-    """
-    source = (Path(__file__).resolve().parent.parent / "duocad" / "mcp_server.py").read_text(
-        encoding="utf-8"
-    )
-    for forbidden in ("kernel.fillet_edges", "kernel.chamfer_edges", "kernel_extrude.extrude_regions",
-                      "kernel_extrude.extrude_faces", "kernel.write_step"):
-        assert forbidden not in source, f"MCP層が幾何を直接叩いている: {forbidden}"

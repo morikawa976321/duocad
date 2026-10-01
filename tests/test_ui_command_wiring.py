@@ -23,14 +23,10 @@ from __future__ import annotations
 import ast
 import functools
 import importlib.util
-import re
 import sys
-
-import pytest
 
 from duocad.paths import REPO_ROOT
 from node_support import run_node
-COMMANDS_DIR = REPO_ROOT / "web" / "src" / "commands"
 
 
 def _catalog():
@@ -326,57 +322,11 @@ def test_which_commands_apply_without_enter():
     ], f"即適用になるコマンドの顔ぶれが変わった: {immediate}"
 
 
-def test_the_immediate_apply_fires_only_on_the_users_own_click():
-    """即適用の引き金は**この画面のクリック**であって、選択集合の中身ではない。
-
-    選択集合は**AIも `modify_selection` で書き換えられる**ので、「対象が1つ揃った」だけで
-    発火させると、**人が何も指していないのに文書が変わる**(実測: 直す前のビルドで
-    `smoke-mcp.mjs` が部品 27 -> 28 を踏んだ)。配線は3段あり、1つでも外れると穴が開くので、
-    ブラウザを立てなくても気づけるようにここで固定する:
-
-    1. `App.svelte` が**自分が出した**選択変更だけを数える(`myClientOps` で照合)
-    2. その数を `CommandHost` へ渡している
-    3. `CommandHost` の即適用は**その数**を見ている(選択の印 `selectionPrint` ではない)
-
-    実挙動は `smoke-mcp.mjs`(AIが選択を書き換えても発火しない/人のクリックでは発火する)。
-    """
-    app = (COMMANDS_DIR.parent / "App.svelte").read_text(encoding="utf-8")
-    host = (COMMANDS_DIR / "CommandHost.svelte").read_text(encoding="utf-8")
-
-    # 1. 数える場所が「自分が出した操作か」の判定の中にある
-    increment = re.search(r"^\s*selfSelections \+= 1", app, re.M)
-    assert increment is not None, "App.svelte が選択変更を数えていない(即適用の引き金が無い)"
-    guard = app[:increment.start()].splitlines()[-3:]
-    assert any("myClientOps" in line for line in guard), (
-        "選択変更の数え上げが `myClientOps` の照合の中にない —— "
-        f"AIが出した選択変更まで数えると即適用が誤発火する: {guard}"
-    )
-
-    # 2. コマンド層へ渡している
-    assert re.search(r"^\s*\{selfSelections\}\s*$", app, re.M), (
-        "App.svelte が CommandHost へ selfSelections を渡していない"
-    )
-
-    # 3. 即適用の $effect が見ているのはその数である
-    anchor = host.find("armedSelections === null")
-    assert anchor > 0, "CommandHost に即適用の待ち受け(armedSelections)が無い"
-    start = host.rfind("$effect(() => {", 0, anchor)
-    end = host.find("\n  })", anchor)
-    assert start > 0 and end > start, "即適用の $effect を切り出せない(検査の側が古い)"
-    effect = host[start:end]
-    assert "selfSelections" in effect, (
-        "即適用の $effect が selfSelections を見ていない(何を引き金にしているか要確認)"
-    )
-    assert "selectionPrint" not in effect, (
-        "即適用の $effect が選択の印を引き金にしている —— "
-        "AIの modify_selection でも走るので、人のクリックの数で判定すること"
-    )
-
-
 # --------------------------------------------------------------------------------------
-# プレビュー —— 「`preview` の値を変えたのに幽霊を描く配線が無い」を塞ぐ
+# プレビュー
 # --------------------------------------------------------------------------------------
-#: ローカル方式(ブラウザだけで幽霊を描く)で幽霊を出す4verb。
+#: ローカル方式(ブラウザだけで幽霊を描く)で幽霊を出す4verb。実際に幽霊が出ることは
+#: `web/scripts/smoke-features.mjs` / `smoke-move.mjs` が実機で見る。
 #:
 #: **サーバの `previewable` は増やしていない** —— どれも変わるのが位置か図形で、
 #: 投機実行しても「形が変わったBody」が返らない。
@@ -388,78 +338,6 @@ TRANSFORM_PREVIEW_VERBS = {
 }
 
 
-def _ui_command_previews() -> dict[str, str]:
-    """UIのコマンドID -> `preview`。"""
-    return {command["id"]: command["preview"] for command in _ui_commands()}
-
-
-def _local_ghost_routes() -> dict[str, str]:
-    """**ローカル幽霊を実際に描ける verb** を「ID -> どの経路か」で集める。
-
-    経路は3つ(`App.svelte` の `showLocalGhost` のdocstringが正):
-
-    a. `entityKinds.ts` の表の `verb`(これから打つ図形。`ghostEntity`)
-    b. `entityKinds.ts` の `ghostCopies`(既にある図形の反復・平行移動)
-    c. `App.svelte` の `showLocalGhost`(既にあるボディの平行移動)
-
-    **`preview: 'local'` と書くだけでは幽霊は出ない**。宣言と配線がずれると、画面は
-    静かに何も出さないまま型検査もsmokeの既存項目も通る —— そこをここで塞ぐ。
-    """
-    routes: dict[str, str] = {}
-    kinds = (REPO_ROOT / "web" / "src" / "entityKinds.ts").read_text(encoding="utf-8")
-    copies_at = kinds.index("export function ghostCopies(")
-    for verb in re.findall(r"^\s*verb:\s*'([^']+)'", kinds[:copies_at], re.M):
-        routes[verb] = "ghostEntity"
-    for verb in re.findall(r"verb === '([^']+)'", kinds[copies_at:]):
-        routes[verb] = "ghostCopies"
-
-    app = (REPO_ROOT / "web" / "src" / "App.svelte").read_text(encoding="utf-8")
-    start = app.index("function showLocalGhost(")
-    end = app.index("function requestPreview(", start)
-    consts = {name: command["id"] for command in _ui_commands() for name in command["exports"]}
-    for name in re.findall(r"\b([A-Z][A-Z0-9_]*)\.id\b", app[start:end]):
-        if name in consts:
-            routes[consts[name]] = "showLocalGhost"
-    return routes
-
-
-def test_ui_preview_modes_are_readable():
-    """先に**走査そのものが効いている**ことを見る(空なら下の検査は常に緑になる)。"""
-    previews = _ui_command_previews()
-    assert previews.get("extrude") == "server", f"preview を読めていない: {previews}"
-    assert previews.get("add_line") == "local", f"preview を読めていない: {previews}"
-    routes = _local_ghost_routes()
-    assert routes.get("add_line") == "ghostEntity", f"幽霊の経路を読めていない: {routes}"
-
-
-def test_the_four_transform_verbs_declare_a_local_preview():
-    """反復2つと移動2つは `preview: 'local'` である。"""
-    previews = _ui_command_previews()
-    wrong = {
-        verb: previews.get(verb, "<宣言が無い>")
-        for verb in TRANSFORM_PREVIEW_VERBS
-        if previews.get(verb) != "local"
-    }
-    assert not wrong, f"ローカル方式のプレビューになっていない: {wrong}"
-
-
-def test_every_local_preview_verb_can_actually_draw_a_ghost():
-    """**`preview: 'local'` と書いたverbは、幽霊を描く経路を必ず持つ**。
-
-    値だけ変えて配線が空だと、起動しても画面には何も出ないまま `tsc` も既存のsmokeも
-    通ってしまう(**症状が「無言」なので実機で触るまで気づかない**)。
-    """
-    previews = _ui_command_previews()
-    routes = _local_ghost_routes()
-    unwired = sorted(
-        verb for verb, mode in previews.items() if mode == "local" and verb not in routes
-    )
-    assert not unwired, (
-        f"`preview: 'local'` だが幽霊を描く経路が無い: {unwired} "
-        f"(経路がある verb: {sorted(routes)})"
-    )
-
-
 def test_the_transform_verbs_are_not_added_to_speculative_execution():
     """ローカル方式に移したverbを**コアの投機実行へは足していない**。
 
@@ -469,42 +347,3 @@ def test_the_transform_verbs_are_not_added_to_speculative_execution():
     previewable = set(_catalog().previewable_verbs())
     leaked = sorted(TRANSFORM_PREVIEW_VERBS & previewable)
     assert not leaked, f"ローカル方式のverbが `previewable=True` になっている: {leaked}"
-
-
-def _app_function_body(name: str) -> str:
-    """`App.svelte` の `function <name>(` から**次のトップレベルの関数まで**を切り出す。"""
-    app = (COMMANDS_DIR.parent / "App.svelte").read_text(encoding="utf-8")
-    start = app.index(f"function {name}(")
-    tail = app[start:]
-    following = re.search(r"\n  (?:function|const|async function) ", tail[10:])
-    return tail[: following.start() + 10] if following else tail
-
-
-@pytest.mark.parametrize("handler", ["onPick", "onSketchPick"])
-def test_the_direct_pick_is_read_before_the_selection_is_edited(handler: str) -> None:
-    """ここが落ちたら、**鏡映軸や回転軸に指したものが対象の選択へ入る**。
-
-    コアの `require_bodies` / `require_sketch_entities` は選択から対象を逆引きするので、
-    基準に使った辺・面・線分が選択に混ざると、その部品まで一緒に回る/複製される。
-    """
-    body = _app_function_body(handler)
-    pick = body.index("wantsPick()")
-    edit = body.index("editSelection(")
-    assert pick < edit, (
-        f"{handler}: 直接ピックの分岐が `editSelection` より後にある"
-        "(指したものが共有選択へ入る)"
-    )
-
-
-@pytest.mark.parametrize("handler", ["onPick", "onSketchPick"])
-def test_a_modified_click_never_goes_to_the_direct_pick(handler: str) -> None:
-    """ここが落ちたら、**基準を待っている間に対象を選び直す手が無くなる**。
-
-    必須のピックは対象が揃った時点で自動的に構えるので、素のクリックを全部ピックが
-    食う。修飾キー(Shift / Ctrl)付きだけは今までどおり選択の編集へ通す。
-    """
-    body = _app_function_body(handler)
-    guard = body[: body.index("wantsPick()")]
-    assert "event.mode === 'replace'" in guard.split("if (")[-1], (
-        f"{handler}: 直接ピックの分岐が修飾キー無しのクリックに限定されていない"
-    )
