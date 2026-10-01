@@ -129,7 +129,7 @@
   `dataclasses` が型注釈の解決に `sys.modules[cls.__module__]` を引くため
   `AttributeError: 'NoneType' object has no attribute '__dict__'` で落ちる(import 時なので
   そのモジュールを読む全テストが一斉に赤になる)。`duocad/catalog.py` を、OCP を読み込む
-  `duocad/__init__.py` を経由せずに検査する `tests/test_applied_type_sync.py` / `test_ui_command_wiring.py`
+  `duocad/__init__.py` を経由せずに読む `tools/generate_protocol_ts.py` / `tests/test_ui_command_wiring.py`
   がこの形。
 
 ## サーバとセッション

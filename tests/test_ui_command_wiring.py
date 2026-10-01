@@ -197,21 +197,6 @@ def test_every_hand_dispatched_command_has_a_branch():
     assert not missing, f"`_dispatch` に分岐が無い(宣言だけある): {missing}"
 
 
-def test_every_ui_command_declares_the_same_category_as_the_declaration():
-    """落ちたら、UIの `category`(送信経路。`App.svelte` の `runCommand`)がコアの宣言とずれ、
-    スケッチのverbがファイル操作として送られるような壊れ方をする。"""
-    declared = {command.name: command.category for command in _catalog().COMMANDS}
-    wrong: dict[str, str] = {}
-    for command in _ui_commands():
-        command_id, category = command["id"], command["category"]
-        if category == "ui":
-            if command_id not in EXEMPT_IDS:
-                wrong[command_id] = "`ui` はサーバへ送らない道具だけ"
-        elif command_id in declared and declared[command_id] != category:
-            wrong[command_id] = f"宣言は {declared[command_id]!r} / UIは {category!r}"
-    assert not wrong, f"UIの category が宣言と合っていない: {wrong}"
-
-
 def test_ui_command_ids_are_readable():
     ids = _ui_command_ids()
     assert len(ids) >= 10, f"UIのコマンド定義を読めていない: {sorted(ids)}"

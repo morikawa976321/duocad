@@ -1,6 +1,6 @@
 /**
  * `web/src/commands/*.ts` の `CommandDef` を**実際に読み込み**、`tests/test_ui_command_wiring.py` が
- * 突き合わせる値(id・category・`needsEnter` の結果)を JSON で標準出力へ書く。
+ * 突き合わせる値(id・`needsEnter` の結果)を JSON で標準出力へ書く。
  *
  * Node の型除去は拡張子の無い相対 import(`from './command'`)を解決しない(Vite は補う)ので、
  * 解決に失敗したときだけ `.ts` を補う resolve フックを先に登録する。
@@ -31,7 +31,7 @@ for (const file of readdirSync(directory).filter((name) => name.endsWith('.ts'))
     for (const def of Array.isArray(value) ? value : [value]) {
       if (def === null || typeof def !== 'object' || typeof def.id !== 'string' || !Array.isArray(def.args)) continue
       if (found.has(def.id)) continue
-      found.set(def.id, { id: def.id, file, category: def.category, needsEnter: needsEnter(def) })
+      found.set(def.id, { id: def.id, file, needsEnter: needsEnter(def) })
     }
   }
 }

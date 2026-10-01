@@ -18,9 +18,10 @@
  */
 /** 図形の種別。**唯一の正は `entityKinds.ts` の表**(ここは型を通すだけ)。 */
 import type { EntityKind } from './entityKinds'
+import type { Applied, ServerStateKey } from './generated/protocol'
 import type { GeometryPayload } from './viewport'
 
-export type { EntityKind }
+export type { Applied, EntityKind }
 
 /** 選べるものの種別。領域(region)は `RegionRef` 側で表す(`duocad/selection.py` §3.5)。 */
 export type ShapeKind = 'face' | 'edge' | 'vertex'
@@ -311,6 +312,13 @@ export interface ServerState {
  *
  * `files` は `list_documents` の応答にだけ乗る(`FilesPanel.svelte` が描く一覧)。
  */
+/**
+ * `ServerState` のキーが、サーバの宣言(`duocad/catalog.py` の `STATE_KEYS`)と一致することを
+ * 型検査に見させる。キーを足した・消したのに片方だけ直すと、ここが `never` になって落ちる。
+ */
+type SameKeys<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never
+true satisfies SameKeys<keyof ServerState, ServerStateKey>
+
 export interface FilePayload {
   action: string
   path: string
@@ -341,242 +349,25 @@ export interface DocumentInfo {
 }
 
 /**
- * 操作を出したクライアントへの確認応答。
+ * 操作を出したクライアントへの確認応答(`Applied`)は**生成物**である —— `generated/protocol.ts`。
+ * 正は `duocad/catalog.py` の `Command.returns`(verb が応答に載せる値)と `CHANGE_EVENTS`。
  *
- * **discriminated union**。全フィールドがoptionalなフラット構造だと、`verb` ごとに本来必須の
- * キー(例: `import_step` の `body_ids`)を宣言し忘れても型検査が止まらない
- * (実際、`.svelte` 側だけが `body_ids` を読んでいて宣言が無いまま素通りしていたことがある)。
- * `verb`(verbの適用)と `change`(`"selection"` = 選択の変更、`"document"` = ファイルを開いて
- * 文書ごと差し替わった。どちらも操作ログには載らない)をdiscriminantにしてあるので、
- * `applied.verb === "extrude"` で絞り込めば `body_id` / `distance` / `mode` が
+ * `verb`(verbの適用)と `change`(`"selection"` = 選択の変更、`"visibility"` = 可視性、
+ * `"document"` = ファイルを開いて文書ごと差し替わった。どれも操作ログには載らない)が
+ * discriminant で、`applied.verb === "extrude"` で絞り込めば `body_id` / `distance` / `mode` が
  * **必須**として見える(他のverbのキーは見えない)。
  *
- * `duocad/session.py` の `Session` が実際に組み立てている形と1:1。**新しいverbを足すときは
- * ここにも1メンバー足す**(`duocad/catalog.py` は応答の「形」までは持たないので、この対応は
- * 手で保つしかない)。**手で保つが、放置はされない** —— `tests/test_applied_type_sync.py` が
- * このunionをソースとして読み、catalogのverb名と、実際にverbを走らせた戻り値のキーの
- * 両方に突き合わせる(この検査を入れる前は `import_svg` が1つ欠けていた)。
+ * 読むときの注意(値の意味。形は生成物が持つ):
+ * - `move_sketch_entities` / `move_body` は `mode` で使う値が変わるが、**キーの顔ぶれは同じ**
+ *   (`'translate'` なら `dx`/`dy`(/`dz`) が入って `angle` と軸・中心が `null`、`'rotate'` はその逆)。
+ *   `axis_point` / `axis_dir` / `axis_p0` / `plane_point` / `plane_normal` は**解決後の数値**で、
+ *   指した辺・面・線分の参照は載らない
+ * - スケッチを動かす・鏡映する verb は `changed_bodies` を持たない(**ソリッドは追従しない**)。
+ *   `delete` も持たない(消えたボディは `bodies` から居なくなるだけで、取り直す形が無い)
+ * - `set_loads` の `face_count` は確定後の荷重面の総数、`applied_count` はこの操作で焼いた枚数。
+ *   `direction_vector` は単位化済みで、`direction` が `'normal'` / `'-normal'` のときは `null`
+ * - `change: 'document'` の `path` / `name` は、新規(`action: "new"`)のとき `null`
  */
-
-/**
- * verb適用に共通するフィールド。
- *
- * `change?: undefined` は**実行時には存在しないプレースホルダ**。discriminantが
- * `verb` と `change` の2つに分かれているので、`applied.change === "selection"` のように
- * どちらの分岐からも先に触ってよいようにするには、触る側のキーが**全メンバーに
- * (値が無くても)存在する**必要がある(無いメンバーが1つでもあると `Property 'change'
- * does not exist` でコンパイルが止まる)。値としては来ない。
- */
-interface AppliedVerbBase {
-  seq: number
-  client_op: number | null
-  change?: undefined
-}
-
-/** change系イベント(verbではない)に共通するフィールド。`verb`/`seq` 側の同じ理由。 */
-interface AppliedChangeBase {
-  client_op: number | null
-  verb?: undefined
-  seq?: undefined
-}
-
-export type Applied =
-  | (AppliedVerbBase & {
-      verb: 'extrude'
-      body_id: string
-      distance: number
-      mode: string
-      changed_bodies: string[]
-    })
-  | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
-  | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
-  | (AppliedVerbBase & {
-      verb: 'boolean_body'
-      target_body_id: string
-      mode: string
-      removed_bodies: string[]
-      changed_bodies: string[]
-    })
-  /**
-   * スケッチの点・辺の移動(平行移動 / 回転) / 複製。**ソリッドは追従しない**ので
-   * `changed_bodies` は無い(本人が許容済み。`duocad/verbs/move_sketch.py`)。
-   * `created` は `copy=true` のときだけ中身が入る(移動なら空配列)。
-   *
-   * **`mode` で使うフィールドが変わる。** `'translate'` なら `dx`/`dy` が入って
-   * `angle`/`center` が `null`、`'rotate'` ならその逆である —— キーの顔ぶれ自体は
-   * モードによらず同じ(封筒の形が値で変わると、読む側が両方の形を知る必要が出る)。
-   */
-  | (AppliedVerbBase & {
-      verb: 'move_sketch_entities'
-      mode: string
-      dx: number | null
-      dy: number | null
-      angle: number | null
-      center: number[] | null
-      copy: boolean
-      created: string[]
-      sketch_ids: string[]
-    })
-  /**
-   * ボディの移動(平行移動 / 回転) / 複製。`changed_bodies` には動いたボディと複製で
-   * 増えたボディの両方が載る(片方を落とすと、もう片方が古い位置のまま画面に残る)。
-   *
-   * `mode` の読み方は `move_sketch_entities` と同じ。`axis_point` / `axis_dir` は
-   * **解決後の数値**で、辺を指して回した場合もその辺から取った点と向きが入る。
-   */
-  | (AppliedVerbBase & {
-      verb: 'move_body'
-      mode: string
-      dx: number | null
-      dy: number | null
-      dz: number | null
-      angle: number | null
-      axis_point: number[] | null
-      axis_dir: number[] | null
-      copy: boolean
-      created: string[]
-      changed_bodies: string[]
-    })
-  /**
-   * スケッチ図形の鏡映複製(`mirror_sketch_entities`)。**常に複製を作る**ので `created` は
-   * 必ず中身を持つ。**ソリッドは追従しない**ので `changed_bodies` は無い
-   * (`move_sketch_entities` と同じ)。
-   *
-   * `axis_p0` / `axis_dir` は**解決後の数値**(スケッチ平面の [u, v])で、軸に指した線分の
-   * 参照は載らない —— 軸自身が対象に混ざっていた場合、複製後に参照を引き直すと別の線分に
-   * なるため(`duocad/verbs/mirror_sketch.py`)。
-   */
-  | (AppliedVerbBase & {
-      verb: 'mirror_sketch_entities'
-      axis_p0: number[]
-      axis_dir: number[]
-      created: string[]
-      sketch_ids: string[]
-    })
-  /**
-   * 領域の包み(`envelope_regions`)。選択領域を包んだ単一の領域線を**同じスケッチへ足す**
-   * (元の領域の線は残る)ので、`created` は足した線分・円弧・円のID、`sketch_ids` は
-   * そのスケッチ1つだけ。`radius` / `offset` は空欄が 0 に解決された後の値。
-   */
-  | (AppliedVerbBase & {
-      verb: 'envelope_regions'
-      radius: number
-      offset: number
-      created: string[]
-      sketch_ids: string[]
-    })
-  /**
-   * ボディの鏡映複製(`mirror_body`)。**常に複製を作る**(move_bodyと違い、動かす経路は
-   * 無い)。元は動かないので `changed_bodies` は複製で増えたボディだけ。
-   *
-   * 鏡映面が `base_plane`(XY/XZ/YZ)でも `plane_face`(既存の面)でも、載るのは解決後の
-   * `plane_point` / `plane_normal` だけである。
-   */
-  | (AppliedVerbBase & {
-      verb: 'mirror_body'
-      plane_point: number[]
-      plane_normal: number[]
-      created: string[]
-      changed_bodies: string[]
-    })
-  /**
-   * 削除(ボディ + スケッチ図形。混ざっていても1回・1 undo)。
-   *
-   * **`changed_bodies` は無い** —— 消えたボディは配りものの `bodies` から丸ごと居なくなる
-   * (形が変わったのではないので、取り直す対象が1つも無い)。`bodies` は消したボディのID、
-   * `entities` は消した図形のID、`sketch_ids` はそれが属していたスケッチ(重複なし・昇順)。
-   * どちらも空になりうる(ボディだけ / 図形だけの削除)が、両方空にはならない。
-   */
-  | (AppliedVerbBase & {
-      verb: 'delete'
-      bodies: string[]
-      entities: string[]
-      sketch_ids: string[]
-    })
-  /**
-   * 形状最適化の条件(集合代入)。**形は1つも変わらない**ので `changed_bodies` は無い ——
-   * 役割の色は配信される `state.optimize` から描く。
-   */
-  | (AppliedVerbBase & { verb: 'set_preserve_bodies' | 'set_exclude_bodies'; bodies: string[] })
-  | (AppliedVerbBase & { verb: 'set_fixtures'; face_count: number })
-  /**
-   * 荷重。`direction_vector` は**単位化済み**(打った値と長さが違うことがある)で、
-   * `direction` が `'normal'` / `'-normal'` のときは `null`。
-   *
-   * `face_count` は**確定後の荷重面の総数**、`applied_count` はこの操作で焼いた枚数
-   * (`set_loads` は上書き代入なので、選択外の荷重面は触られず総数に残る)。
-   */
-  | (AppliedVerbBase & {
-      verb: 'set_loads'
-      face_count: number
-      applied_count: number
-      magnitude: number
-      direction: string
-      direction_vector: number[] | null
-    })
-  | (AppliedVerbBase & { verb: 'clear_loads'; face_count: number })
-  | (AppliedVerbBase & { verb: 'pattern_rectangular'; pattern_id: string })
-  | (AppliedVerbBase & { verb: 'pattern_circular'; pattern_id: string })
-  | (AppliedVerbBase & {
-      verb: 'set_parameter'
-      name: string
-      value: number
-      previous: number
-      changed_bodies: string[]
-    })
-  /** C: `sketch_create` が返す新しいスケッチのID。`sketch_create_offset` も同じ形。 */
-  | (AppliedVerbBase & { verb: 'sketch_create' | 'sketch_create_offset'; sketch_id: string })
-  /** C: 図形追加verbが返す新しい図形のID(4つとも同じ形)。 */
-  | (AppliedVerbBase & { verb: 'add_line' | 'add_circle' | 'add_rectangle' | 'add_arc'; entity_id: string })
-  /**
-   * SVGから取り込んだ図形。**スケッチのverb**(貼る先の `sketch_id` を必須で取る)。
-   *
-   * `entity_ids` は**この1回が足した分だけ**で、貼った先のスケッチに元からあった図形は
-   * 含まない(undoもこの分だけを戻す)。`source_name` は読んだファイル名、`entity_count` は
-   * `entity_ids.length` と同じ数を操作ログ側から数えたもの。
-   */
-  | (AppliedVerbBase & {
-      verb: 'import_svg'
-      sketch_id: string
-      entity_ids: string[]
-      source_name: string
-      entity_count: number
-    })
-  /**
-   * STEP読み込みが作ったボディ。**読み込みは1 verbだけ**で、何部品あっても
-   * `body_ids` が1回の応答で返る。
-   */
-  | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[] })
-  | (AppliedVerbBase & { verb: 'undo'; undone: string })
-  | (AppliedVerbBase & { verb: 'redo'; redone: string })
-  /** 選択の変更イベント。verbではない(操作ログに載らない)。 */
-  | (AppliedChangeBase & { change: 'selection'; selection: SelectionState })
-  /**
-   * 可視性の変更イベント。**verbではない**(操作ログに載らず、Ctrl+Z / Ctrl+Y で戻らない)。
-   * 効果そのものは配信される `state.bodies[].visible` に載る。
-   */
-  | (AppliedChangeBase & {
-      change: 'visibility'
-      /** ボディ(`set_visible`)なら `body_id`、スケッチ(`set_sketch_visible`)なら `sketch_id`。 */
-      body_id?: string
-      sketch_id?: string
-      visible: boolean
-      previous: boolean
-      changed: boolean
-    })
-  /**
-   * 文書ごと差し替わった。verbではない(`Session.open_document` / `Session.new_document`)。
-   *
-   * **`path` / `name` は `null` になりうる** —— 新規(`action: "new"`)は開いたファイルが
-   * 無いので、どちらも `null` で来る(触っているファイルの表示は「(未保存)」へ戻る)。
-   */
-  | (AppliedChangeBase & {
-      change: 'document'
-      action: string
-      path: string | null
-      name: string | null
-      operations: number
-    })
 
 /**
  * プレビュー(投機的実行)の応答。**状態の配信ではない** —— 要求した接続にだけ届き、

@@ -96,6 +96,20 @@ class Param:
 
 
 @dataclass(frozen=True)
+class Result:
+    """verb が応答(変更イベント `applied`)に載せる値1つ。
+
+    `type` は **TypeScript の型の書き方そのまま**(`"string"` / `"number"` / `"boolean"` /
+    `"string[]"` / `"number[]"` と、その `" | null"` つき)。`web/src/generated/protocol.ts` の
+    `Applied` はここからの生成物で、実際の応答と一致することは `tests/test_protocol.py` が
+    verb を走らせて見る。
+    """
+
+    name: str
+    type: str
+
+
+@dataclass(frozen=True)
 class Command:
     """verb(またはコアへの口)1つの宣言。**追加はここ1箇所で済ませる。**"""
 
@@ -108,6 +122,9 @@ class Command:
     #: (説明文はAIがツールを選ぶ唯一の手がかり)。`mcp=False` のものは空でよい。
     description: str = ""
     params: tuple[Param, ...] = ()
+    #: verb が応答(`applied`)に載せる値。入口(`duocad/entry.py`)の戻り値のキーと一致させる
+    #: (`verb` / `seq` / `client_op` はどの verb にも付くので書かない)。verb でないものは空。
+    returns: tuple[Result, ...] = ()
     #: `Session` のメソッド名(WebSocket側の実体)。WSに開けていないものは None。
     #: **verb名と違ってよい**(`export_step` -> `export_step_file` のように、
     #: コア側の名前がverb名と一致しないことがある)。
@@ -464,6 +481,7 @@ COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- スケッチ
     Command(
         name="sketch_create",
+        returns=(Result("sketch_id", "string"),),
         resets_selection=False,
         category="sketch",
         description=(
@@ -487,6 +505,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="sketch_create_offset",
+        returns=(Result("sketch_id", "string"),),
         resets_selection=False,
         category="sketch",
         description=(
@@ -519,6 +538,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="add_line",
+        returns=(Result("entity_id", "string"),),
         category="sketch",
         description="スケッチに線分を足すときに呼ぶ(平面上の2点)。",
         params=(
@@ -531,6 +551,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="add_circle",
+        returns=(Result("entity_id", "string"),),
         category="sketch",
         description="スケッチに円を足すときに呼ぶ。",
         params=(
@@ -543,6 +564,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="add_rectangle",
+        returns=(Result("entity_id", "string"),),
         category="sketch",
         description="スケッチに長方形を足すときに呼ぶ。",
         params=(
@@ -564,6 +586,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="add_arc",
+        returns=(Result("entity_id", "string"),),
         category="sketch",
         description="スケッチに円弧を足すときに呼ぶ(中心・半径・開始角・終了角)。",
         params=(
@@ -579,6 +602,12 @@ COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- フィーチャ
     Command(
         name="extrude",
+        returns=(
+            Result("body_id", "string"),
+            Result("distance", "number"),
+            Result("mode", "string"),
+            Result("changed_bodies", "string[]"),
+        ),
         category="feature",
         description=(
             "確定選択の領域、または同一平面・同一ボディのソリッドの面(何枚でも)を押し出して、"
@@ -620,6 +649,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="fillet",
+        returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
         category="feature",
         description=(
             "確定選択の辺を丸めるときに呼ぶ。"
@@ -640,6 +670,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="chamfer",
+        returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
         category="feature",
         description=(
             "確定選択の辺を面取りするときに呼ぶ。"
@@ -660,6 +691,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="boolean_body",
+        returns=(
+            Result("target_body_id", "string"),
+            Result("mode", "string"),
+            Result("removed_bodies", "string[]"),
+            Result("changed_bodies", "string[]"),
+        ),
         category="feature",
         description=(
             "ターゲットボディ(1つ)にツールボディ(1つ以上)を作用させ、結合(union)・"
@@ -690,6 +727,16 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="move_sketch_entities",
+        returns=(
+            Result("mode", "string"),
+            Result("dx", "number | null"),
+            Result("dy", "number | null"),
+            Result("angle", "number | null"),
+            Result("center", "number[] | null"),
+            Result("copy", "boolean"),
+            Result("created", "string[]"),
+            Result("sketch_ids", "string[]"),
+        ),
         category="sketch",
         description=(
             "スケッチの図形の位置・向きを直すときに呼ぶ。確定選択のスケッチの点"
@@ -776,6 +823,18 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="move_body",
+        returns=(
+            Result("mode", "string"),
+            Result("dx", "number | null"),
+            Result("dy", "number | null"),
+            Result("dz", "number | null"),
+            Result("angle", "number | null"),
+            Result("axis_point", "number[] | null"),
+            Result("axis_dir", "number[] | null"),
+            Result("copy", "boolean"),
+            Result("created", "string[]"),
+            Result("changed_bodies", "string[]"),
+        ),
         category="feature",
         description=(
             "ボディの位置・向きを直すときに呼ぶ。確定選択の面/辺/頂点が**属するボディ**を、"
@@ -887,6 +946,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="mirror_sketch_entities",
+        returns=(
+            Result("axis_p0", "number[]"),
+            Result("axis_dir", "number[]"),
+            Result("created", "string[]"),
+            Result("sketch_ids", "string[]"),
+        ),
         category="sketch",
         description=(
             "確定選択のスケッチ図形を、既存の線分1本(axis)を軸に鏡映複製するときに呼ぶ。"
@@ -914,6 +979,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="envelope_regions",
+        returns=(
+            Result("radius", "number"),
+            Result("offset", "number"),
+            Result("created", "string[]"),
+            Result("sketch_ids", "string[]"),
+        ),
         category="sketch",
         description=(
             "確定選択の複数の領域を、へこみに沿って包む**単一の閉じた領域線**を、同じスケッチへ足すときに呼ぶ。"
@@ -955,6 +1026,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="mirror_body",
+        returns=(
+            Result("plane_point", "number[]"),
+            Result("plane_normal", "number[]"),
+            Result("created", "string[]"),
+            Result("changed_bodies", "string[]"),
+        ),
         category="feature",
         description=(
             "確定選択の面/辺/頂点が**属するボディ**を、鏡映面に対して鏡映複製するときに呼ぶ。"
@@ -994,6 +1071,11 @@ COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- 削除
     Command(
         name="delete",
+        returns=(
+            Result("bodies", "string[]"),
+            Result("entities", "string[]"),
+            Result("sketch_ids", "string[]"),
+        ),
         category="feature",
         description=(
             "間違えて作った / 要らなくなったものを消すときに呼ぶ。確定選択の**ボディ**"
@@ -1027,6 +1109,7 @@ COMMANDS: tuple[Command, ...] = (
     # WSの表・`_dispatch` の分岐・UIの送信経路がverbの中身と関係なく増える。
     Command(
         name="set_preserve_bodies",
+        returns=(Result("bodies", "string[]"),),
         resets_selection=False,
         category="feature",
         description=(
@@ -1044,6 +1127,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="set_exclude_bodies",
+        returns=(Result("bodies", "string[]"),),
         resets_selection=False,
         category="feature",
         description=(
@@ -1058,6 +1142,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="set_fixtures",
+        returns=(Result("face_count", "number"),),
         resets_selection=False,
         category="feature",
         description=(
@@ -1074,6 +1159,13 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="set_loads",
+        returns=(
+            Result("face_count", "number"),
+            Result("applied_count", "number"),
+            Result("magnitude", "number"),
+            Result("direction", "string"),
+            Result("direction_vector", "number[] | null"),
+        ),
         resets_selection=False,
         category="feature",
         description=(
@@ -1111,6 +1203,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="clear_loads",
+        returns=(Result("face_count", "number"),),
         resets_selection=False,
         category="feature",
         description=(
@@ -1128,6 +1221,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="pattern_rectangular",
+        returns=(Result("pattern_id", "string"),),
         category="feature",
         description="スケッチ上の図形を矩形に反復するときに呼ぶ。",
         params=(
@@ -1161,6 +1255,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="pattern_circular",
+        returns=(Result("pattern_id", "string"),),
         category="feature",
         description="スケッチ上の図形を円形に反復するときに呼ぶ。",
         params=(
@@ -1207,6 +1302,12 @@ COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- ファイル操作
     Command(
         name="set_parameter",
+        returns=(
+            Result("name", "string"),
+            Result("value", "number"),
+            Result("previous", "number"),
+            Result("changed_bodies", "string[]"),
+        ),
         category="sketch",
         description=(
             "名前つき寸法を書き換えて形を追随させるときに呼ぶ。"
@@ -1227,6 +1328,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="import_svg",
+        returns=(
+            Result("sketch_id", "string"),
+            Result("entity_ids", "string[]"),
+            Result("source_name", "string"),
+            Result("entity_count", "number"),
+        ),
         category="sketch",
         description=(
             "いま開いているスケッチへSVGの図形を足すときに呼ぶ。"
@@ -1261,6 +1368,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="add_mesh_body",
+        returns=(Result("body_id", "string"),),
         category="file",
         description=(
             "計算で作った三角形メッシュ(頂点＋三角形)をボディとして文書へ足すときに呼ぶ。"
@@ -1301,6 +1409,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="import_step",
+        returns=(Result("body_ids", "string[]"),),
         category="file",
         description=(
             "STEPを読み込むときに呼ぶ。**読んだ時点で編集できる** —— "
@@ -1472,6 +1581,7 @@ COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- 履歴
     Command(
         name="undo",
+        returns=(Result("undone", "string"),),
         category="history",
         description=(
             "直前の操作を取り消すときに呼ぶ。"
@@ -1483,6 +1593,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="redo",
+        returns=(Result("redone", "string"),),
         category="history",
         description="undo した操作をやり直すときに呼ぶ。UIと同じ履歴。",
         session="redo",
@@ -1658,6 +1769,48 @@ COMMANDS: tuple[Command, ...] = (
             "起動している間だけ画面に出る(常時出すと面のクリックが辺に取られる)"
         ),
     ),
+)
+
+#: verb ではない変更イベント(操作ログに載らない)。`change` の値 -> 載せる値。
+#: `Session` が `_emit` で配り、WebSocket は要求した画面へ `applied` として返す。
+#:
+#: - `selection`  … `modify_selection` / `commit_selection` / `clear_selection`
+#: - `visibility` … `set_visible`(`body_id`)/ `set_sketch_visible`(`sketch_id`)。どちらか片方が載る
+#: - `document`   … `open_document` / `new_document`(新規は開いたファイルが無いので `path` / `name` が null)
+CHANGE_EVENTS: dict = {
+    "selection": (Result("selection", "SelectionState"),),
+    "visibility": (
+        Result("body_id?", "string"),
+        Result("sketch_id?", "string"),
+        Result("visible", "boolean"),
+        Result("previous", "boolean"),
+        Result("changed", "boolean"),
+    ),
+    "document": (
+        Result("action", "string"),
+        Result("path", "string | null"),
+        Result("name", "string | null"),
+        Result("operations", "number"),
+    ),
+}
+
+#: 状態配信(`Session.state_meta()`)が持つキー。`web/src/session.ts` の `ServerState` と
+#: 一致することを型検査が見る(`web/src/generated/protocol.ts` の `ServerStateKey`)。
+STATE_KEYS: tuple[str, ...] = (
+    "bodies",
+    "sketches",
+    "parameters",
+    "selection",
+    "optimize",
+    "log",
+    "applied_count",
+    "redo_count",
+    "can_undo",
+    "can_redo",
+    "active_body_id",
+    "units",
+    "current_name",
+    "saved",
 )
 
 #: 名前 -> 宣言。

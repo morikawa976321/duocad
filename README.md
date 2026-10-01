@@ -308,7 +308,11 @@ MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `
   自動保存・配信はどの経路でも同じに効き、verbごとの配線は無い。届いた引数の検査（必須・未知・型）も
   宣言からの導出で、WebSocketとMCPに同じものが効く。frontendだけは別に持つ ——
   TS側が持つのは**引数の集め方**（どのクリックを待つか・入力欄のid）で、宣言には無い情報だから。
-  名前と分類が一致することは `tests/test_ui_command_wiring.py` が機械で見る。
+- **コアと画面の契約は生成物で持つ。** コマンド名・分類・WebSocket が受け取る引数・verb が応答に載せる値
+  （`Command.returns`）・状態配信のキーは `catalog.py` の宣言で、`web/src/generated/protocol.ts` はそこからの
+  生成物（`python tools/generate_protocol_ts.py`）。`commands/*.ts` の定義は `CommandDef<'fillet'>` のように
+  verb 名を付けて書き、`id` と `build` の引数が宣言どおりであることを型検査が見る。宣言と実際の応答の一致・
+  生成物の鮮度・型検査は `tests/test_protocol.py` が `pytest -q` の中で見る。
 - **verbの粒度の定義は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §2「verbの粒度」が起点。**
 
 ### ボディの種別 —— B-rep と 三角形メッシュ
@@ -435,6 +439,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | `web/src/App.svelte` | 画面全体の組み立て・選択の規則・キー処理 |
 | `web/src/viewport.ts` | three.js の囲い（load / onPick / highlight / project …） |
 | `web/src/session.ts` | WebSocketクライアント。**WSのURLはサーバが `/duocad-config.json` で教える**（ポートを推測しない） |
+| `web/src/generated/protocol.ts` | **生成物**（コマンド名と分類・WebSocket の引数・`Applied`・状態のキー）。正は `duocad/catalog.py`。手で直さない |
 | `web/src/commands/CommandHost.svelte` | **コマンド層の骨格**（起動→引数収集→プレビュー→Enter/Esc、**および即適用の発火**）。verbごとに作り直さない |
 | `web/src/commands/{command,sketch,features,files,moveMode}.ts` | 各コマンドの引数の集め方の定義だけ（**Enter要否はここから導出**＝`needsEnter`）。`command.ts` に共通の枠組み（`ArgSpec` の種別・`when` によるモード依存の必須判定） |
 | `web/src/{Browser,Files,Sketch,Parameters}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ）。**選択パネルは無い**（選択を直すのは3Dクリックだけ） |

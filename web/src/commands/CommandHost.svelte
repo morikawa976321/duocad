@@ -77,6 +77,7 @@
     argApplies,
     argKinds,
     argSatisfied,
+    buildArgs,
     commitsGhost,
     findCommand,
     firstMissingArg,
@@ -98,6 +99,7 @@
     type SelectionArgSpec,
     type TextArgSpec,
   } from './command'
+  import { categoryOf } from './category'
   import { evaluateExpression, isPlainNumber } from '../expression'
   import type { SelectionRef, SelectionState } from '../session'
 
@@ -317,7 +319,7 @@
 
   /** **無起動では確定できない**(`command === null` を明示的に含める。Enterが素通りしないため)。 */
   const ready = $derived(command !== null && missing === null && overflow === '')
-  const built = $derived(command !== null && ready ? command.build(values) : null)
+  const built = $derived(command !== null && ready ? buildArgs(command, values) : null)
 
   /**
    * 幽霊に使う引数。**待っている点をポインタの位置で仮に埋める**ので、線分なら
@@ -329,7 +331,7 @@
     if (command === null || missing?.kind !== 'point' || hover === null) return null
     const provisional = { ...values, [missing.name]: hover }
     if (firstMissingArg(command, provisional) !== null) return null
-    const result = command.build(provisional)
+    const result = buildArgs(command, provisional)
     return result.ok ? result : null
   })
 
@@ -709,7 +711,7 @@
     // (`needsEnter` のdocstring末尾の例外)。verb で同じことをすると「AIが選んだ面のまま
     // 押し出しを押した」だけで形が変わるが、測るだけなら取り返しのつかないものが無い ——
     // 2つ選んでから「測定」を押す手が、押し直しの2手にならない。
-    if (command !== null && command.category === 'query' && !needsEnter(command) && missing === null) {
+    if (command !== null && categoryOf(command) === 'query' && !needsEnter(command) && missing === null) {
       commit()
     }
   }

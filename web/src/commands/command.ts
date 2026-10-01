@@ -28,6 +28,7 @@ import type {
   ShapeRef,
   SketchEntityRef,
 } from '../session'
+import type { COMMAND_CATEGORY, CommandArguments, CommandName } from '../generated/protocol'
 
 /** 選択の種別。コアの `SELECTABLE_KINDS` と同じ顔ぶれ(`tests/test_optimize_setup.py` が照合)。 */
 export type SelectableKind = ShapeKind | 'body' | 'region' | 'sketch_entity'
@@ -424,8 +425,8 @@ export function pickedRefOf(value: unknown): SelectionRef | null {
 }
 
 /** `build` の結果。作れないときは理由を返す(黙って何も送らない、をしない)。 */
-export type BuildResult =
-  | { ok: true; args: Record<string, unknown> }
+export type BuildResult<Args = Record<string, unknown>> =
+  | { ok: true; args: Args }
   | { ok: false; reason: string }
 
 /**
@@ -442,15 +443,26 @@ export type BuildResult =
  * ただし `file` は現役の分類である —— `commands/files.ts` の `IMPORT_STEP` がこの分類を持ち、
  * `App.svelte` の送信経路(`CATEGORY_OF`)もこれを見て `CommandHost` の確定完了を判定する。
  *
- * **`ui` 以外はコアの宣言(`duocad/catalog.py`)の `category` と同じ値**である。
+ * **`ui` 以外はコアの宣言(`duocad/catalog.py`)の `category` そのもの**で、定義には書かない ——
+ * 生成物(`generated/protocol.ts` の `COMMAND_CATEGORY`)から `categoryOf`(`category.ts`)が引く。
  */
 export type CommandCategory = 'sketch' | 'feature' | 'file' | 'query' | 'ui'
 
-export interface CommandDef {
-  /** verb名。**プレビューと確定で同じものをサーバへ送る**(食い違うと嘘のプレビューになる)。 */
-  id: string
-  /** どの経路で送るか(`CommandCategory`)。**verbを足したら必ず書く。** */
-  category: CommandCategory
+/** コマンド層を通せるコマンド名(コアの宣言のうち、分類が `ui` 以外の `CommandCategory` に当たるもの)。 */
+export type HostCommandName = {
+  [N in CommandName]: (typeof COMMAND_CATEGORY)[N] extends CommandCategory ? N : never
+}[CommandName]
+
+/**
+ * その verb の `build` が作る引数(コアの宣言からの生成物)。**`sketch_id` は入らない** ——
+ * どのスケッチかは `App.svelte` が送信時に足す。
+ */
+export type BuildArgs<N extends CommandName> = Omit<CommandArguments[N], 'sketch_id'>
+
+/** サーバへ何も送らない道具の id(スケッチモードの「選ぶ」だけ)。 */
+type UiCommandId = 'select_in_sketch'
+
+interface CommandDefBase {
   label: string
   /** ツールバーのボタンの `id`(実機検査がここを叩く)。 */
   buttonId: string
@@ -471,8 +483,28 @@ export interface CommandDef {
    * - `none`   … 出さない
    */
   preview: 'server' | 'local' | 'none'
-  /** 集まった引数から、サーバへ渡すverbの引数を作る。 */
-  build(values: ArgValues): BuildResult
+}
+
+/**
+ * コマンドの定義。**`CommandDef<'fillet'>` のように verb 名を付けて書く** —— `id` がその名前で
+ * あること、`build` の引数がコアの宣言どおり(名前・型・必須)であることを型検査が見る。
+ * 付けずに `CommandDef` と書くのは、一覧(`CommandDef[]`)と、サーバへ送らない道具だけ。
+ */
+export type CommandDef<N extends HostCommandName = HostCommandName> =
+  | (CommandDefBase & {
+      /** verb名。**プレビューと確定で同じものをサーバへ送る**(食い違うと嘘のプレビューになる)。 */
+      id: N
+      /** 集まった引数から、サーバへ渡すverbの引数を作る。 */
+      build(values: ArgValues): BuildResult<BuildArgs<N>>
+    })
+  | (CommandDefBase & { id: UiCommandId; build(values: ArgValues): BuildResult })
+
+/**
+ * `build` を、どの verb の引数かを問わない形で呼ぶ。コマンド層の骨格(`CommandHost.svelte`)は
+ * 引数を名前で運ぶだけなので、verb ごとの型はここで落とす(型が要るのは定義を書く側)。
+ */
+export function buildArgs(command: CommandDef, values: ArgValues): BuildResult {
+  return command.build(values) as BuildResult
 }
 
 // --------------------------------------------------------------------------------------
@@ -489,7 +521,7 @@ export function pathLike(label: string): (value: string) => string | null {
 }
 
 /** パスだけを取るverb(`import_step` / `import_svg`)の引数を作る。 */
-export function buildPathArgs(values: ArgValues): BuildResult {
+export function buildPathArgs(values: ArgValues): BuildResult<{ path: string }> {
   const path = values.path
   if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
   return { ok: true, args: { path: path.trim() } }

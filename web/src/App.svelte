@@ -33,6 +33,7 @@
     type Point2,
     type SelectableKind,
   } from './commands/command'
+  import { categoryOf } from './commands/category'
   import {
     MOVE_BODY,
     SKETCH_FEATURE_COMMANDS,
@@ -150,7 +151,7 @@
       ...SKETCH_PENDING_COMMANDS,
       ...SKETCH_MODE_COMMANDS,
       ...OPTIMIZE_MODE_COMMANDS,
-    ].map((command) => [command.id, command.category]),
+    ].map((command) => [command.id, categoryOf(command)]),
   )
 
   let container: HTMLDivElement
@@ -1917,7 +1918,7 @@
 
   // ---------------------------------------------------------------- コマンド層との繋ぎ
   /**
-   * 揃った引数をサーバへ送る。**経路は `CommandDef.category` だけで決まる。**
+   * 揃った引数をサーバへ送る。**経路はコマンドの分類(`categoryOf`)だけで決まる。**
    *
    * **知らない名前はここで断る**(分類を書き忘れたverbが黙って別のverbになるのを防ぐ)。
    */
