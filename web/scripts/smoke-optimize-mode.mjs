@@ -221,6 +221,16 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
     console.log('\n[5] 荷重面 — 拘束面が青く残り、保持ソリッドの緑は他の面のまま')
     await page.click('#set-loads')
     await waitFor(() => window.__duocad.wantedKinds.includes('face'), '荷重面のverbで面粒度にならない')
+    // **粒度だけでは起動を待てない**(直前の拘束verbも面粒度なので、上の待ちは起動の前に通る)。
+    // 荷重はまだ1枚も無いので、起動すると選択は空の割り当てへ置き換わる —— 拘束面の選択が外れるまで待つ。
+    await waitFor(
+      (id, index) =>
+        !(window.__duocad.selection?.items ?? []).some(
+          (item) => item.kind === 'face' && item.body === id && item.index === index,
+        ),
+      '荷重verbを起動しても拘束面の選択が外れない',
+      [bodyA, faceA_fixture],
+    )
     const fixtureColor = await faceColor(bodyA, faceA_fixture)
     if (fixtureColor !== COLOR.fixture) {
       fail(`拘束面が青(${COLOR.fixture.toString(16)})で塗られていない: ${fixtureColor?.toString(16)}`)
@@ -375,29 +385,33 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
     // ====================================================================== 10. 空の確定で役割を外せる
     // 回帰穴: 「0件だから送らない」という最適化を入れると、
     // 役割を外す唯一の手段(空の確定選択)が機能しなくなる。
+    //
+    // **外すのは拘束面にする。** 保持ソリッドは、その面に条件面が残っているうちは外せない
+    // (コアが断る: 「条件面は保持ソリッドの面にしか置けない」)。拘束面には依存するものが無い。
     console.log('\n[10] 空の確定で役割を外せる(0件だから送らない、をしていないことの検査)')
-    await page.click('#set-preserve-bodies')
-    await waitFor(() => window.__duocad.wantedKinds.includes('body'), '保持ソリッドのverbへ再起動できない')
+    await page.click('#set-fixtures')
+    await waitFor(() => window.__duocad.wantedKinds.includes('face'), '拘束面のverbへ再起動できない')
     await waitFor(
-      (id) => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'body' && item.body === id),
-      '再起動時に既存の割り当て(A)がプリセレクトされない',
-      [bodyA],
+      (id, index) =>
+        (window.__duocad.selection?.items ?? []).some(
+          (item) => item.kind === 'face' && item.body === id && item.index === index,
+        ),
+      '再起動時に既存の割り当て(Aの拘束面)がプリセレクトされない',
+      [bodyA, faceA_fixture],
     )
     // 唯一選ばれているものを再クリック = 解除(`editSelection`の「置き換えで1件だけ選んで
     // いれば外す」規則。`App.svelte`の`editSelection`docstring)。
-    await clickFace(page, bodyA, faceA_preserve)
+    await clickFace(page, bodyA, faceA_fixture)
     await waitFor(
       () => (window.__duocad.selection?.items ?? []).length === 0,
       '再クリックしても選択が空にならない',
     )
     await page.keyboard.press('Enter')
     await waitFor(
-      (id) => !(window.__duocad.state.optimize.preserve_bodies ?? []).some((item) => item.body === id),
-      '空の確定でも state.optimize.preserve_bodies からAが消えない(0件だから送らない、の疑い)',
-      [bodyA],
+      () => (window.__duocad.state.optimize.fixtures ?? []).length === 0,
+      '空の確定でも state.optimize.fixtures が空にならない(0件だから送らない、の疑い)',
     )
-    ok('[10] 空の確定で保持ソリッドの役割を外せた(Aはもう保持ではない)')
-
+    ok('[10] 空の確定で拘束面の役割を外せた')
     // ====================================================================== 11. staleのcode変化は再通知される
     // 回帰穴: `seenStaleKeys`の鍵が`role:body:index`だけだと、`hidden`
     // (出さない側)として一度記録した対象が後で`fingerprint`(出す側)へ変わっても、
@@ -431,7 +445,12 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
     const [, , widthParam, heightParam] = newParamNames
     const faceC = await pickAnyFace(bodyC)
     // 拘束面として確定する(MCP経由。UIの検査は2節で既にやっている——ここはstaleの
-    // 再通知だけを見る)。
+    // 再通知だけを見る)。**条件面は保持ソリッドの面にしか置けない**ので、先にCを保持ソリッドへ足す。
+    await mcp.callTool('propose_selection', {
+      refs: [bodyA, bodyC].map((id) => ({ body: id, kind: 'body', index: null })),
+    })
+    await mcp.callTool('commit_selection')
+    await mcp.callTool('set_preserve_bodies')
     await mcp.callTool('propose_selection', { refs: [{ body: bodyC, kind: 'face', index: faceC }] })
     await mcp.callTool('commit_selection')
     await mcp.callTool('set_fixtures', {})
