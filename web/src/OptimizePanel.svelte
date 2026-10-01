@@ -123,6 +123,29 @@
     onMinWidth(value)
   }
 
+  /**
+   * パネルの実高さ(+ブラウザとの間隔10px)を `.stage` の `--browser-bottom-reserve` へ渡す。
+   *
+   * ブラウザ(`BrowserPanel.svelte`)は同じ列の上端に浮いており、こちらが重なり順で上にある。
+   * 高さを知らせないと、伸びたこちらがブラウザの下の行を覆って押せなくする(実測: 窓の高さ860pxで
+   * パネルが458pxになり、スケッチの行の中央に見出しが重なって、スケッチ名のクリックが吸われた)。
+   */
+  let panelEl = $state<HTMLDivElement | null>(null)
+  $effect(() => {
+    const el = panelEl
+    const stage = el?.parentElement
+    if (!el || !stage) return
+    const sync = () =>
+      stage.style.setProperty('--browser-bottom-reserve', `${Math.ceil(el.getBoundingClientRect().height) + 10}px`)
+    sync()
+    const observer = new ResizeObserver(sync)
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      stage.style.removeProperty('--browser-bottom-reserve')
+    }
+  })
+
   /** 段のボタンに並べる先頭の数(全段はサーバーが配る。残りは入力欄に打つか、切り上げ先の表示から辿る)。 */
   const STEP_BUTTONS = 4
   const problems = $derived(conditions?.problems ?? [])
@@ -132,7 +155,7 @@
   )
 </script>
 
-<div id="optimize-panel" class="floating-panel">
+<div id="optimize-panel" class="floating-panel" bind:this={panelEl}>
   <div class="head"><strong>形状最適化を走らせる</strong></div>
 
   <!-- **条件の点検はいちばん上**。走らせられない理由があるなら、入力欄を触る前に読ませる。

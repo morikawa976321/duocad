@@ -24,7 +24,6 @@ import type {
   OptimizeDebugPayload,
   OptimizeProgress,
   OptimizeResolutionPayload,
-  SelectionState,
   ServerState,
   ShapeRef,
   SketchState,
@@ -77,7 +76,6 @@ export interface TestHookContext {
   lastFile: () => FilePayload | null
   documentList: () => DocumentInfo[]
   currentDocumentName: () => string | null
-  regionsStillExist: (selection: SelectionState | null, sketches: SketchState[]) => boolean
 }
 
 export function installTestHooks(ctx: TestHookContext): void {
@@ -260,12 +258,6 @@ export function installTestHooks(ctx: TestHookContext): void {
       lastFile: ctx.lastFile(),
       documentList: ctx.documentList(),
       currentDocumentName: ctx.currentDocumentName(),
-      // **`regionsStillExist` を合成データで直接叩く穴**(2026-08-27)。通常のUI操作では
-      // `resets_selection` が先に選択を空にするため、この関数がfalseを返す分岐へ
-      // クリックの積み重ねでは到達できない(理由は関数自身のdocstring参照)。
-      // ロジックそのものの正しさは実機検査(`smoke-regions.mjs`)がここ経由で検算する。
-      regionsStillExist: (sel: SelectionState | null, sks: SketchState[]) =>
-        ctx.regionsStillExist(sel, sks),
     }
   })
 }

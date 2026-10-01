@@ -1,7 +1,7 @@
 /**
  * 実ブラウザでの検査 — 最小幅の段(m=2,3,…)が画面に出て、段のあいだの入力の切り上げ先が実行前に見える。
  *
- *   web> node scripts/smoke-optimize-min-width.mjs [--port 8915] [--http-port 8916]
+ *   web> node scripts/smoke-optimize-min-width.mjs
  *
  * 最適化は走らせない。サーバは自分で立てる(`--models-dir` は使い捨て)。
  */

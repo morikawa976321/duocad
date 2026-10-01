@@ -175,7 +175,7 @@ cd web; npm run dev                                 # 画面(5173)
 
 ## 3. 自動検査の走らせ方
 
-**読むとき**: 変更後に検査を選んで実行するとき(pytest・形状最適化受入・実ブラウザsmoke・一括受入チェックの4小節から該当するものだけ)。
+**読むとき**: 変更後に検査を選んで実行するとき(pytest・形状最適化受入・実ブラウザsmokeの3小節から該当するものだけ)。
 
 ### pytest（コア・MCPの契約）
 
@@ -264,26 +264,17 @@ Get-ChildItem scripts/smoke*.mjs | ForEach-Object {
 STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` / `HANGER_BAR_STEP` が指すパスを使う。
 
 **骨格は全本共通**（`web/scripts/harness.mjs` の `runSmoke`）: 使い捨ての `--models-dir` でサーバを立て、
-ブラウザを開き、終わったら止めて temp を消す。既定ポートは本ごとに一意（`SMOKE_PORTS` の表）なので
-複数本を並列に回してよい。`--port` / `--http-port` / `--timeout` は全本が読む。
+ブラウザを開き、終わったら止めて temp を消す。ポートは走らせるたびに OS へ空きを選ばせるので
+複数本を並列に回してよい。`--port` / `--http-port`（固定したいとき）と `--timeout` は全本が読む。
 
 既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
 （その場合スクリプトはサーバを立てず、止めもしない）。**対応しているのは `smoke.mjs` /
 `smoke-features` / `smoke-files` / `smoke-regions` / `smoke-svg` / `smoke-toast` だけ**で、
 MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `smoke-files` / `smoke-regions` でも失敗になる）。
 
-### 一括受入チェック（人間/AI ＋ 交互操作）
-
-```powershell
-node web\scripts\acceptance.mjs
-```
-
-MCPとWebSocketを1プロセスで持つサーバを自分で起動し、**人間側はブラウザの本物のクリックとキー、
-AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_parameter` の人間側だけは口が無いので空欄）。結果はJSONでstdout末尾に出る。
-**形状最適化の条件verbは `web/scripts/smoke-optimize-mode.mjs` が個別の実機smokeで見る**（到達表は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §0 参照）。
-
-**❌ が1つでもあれば終了コード1で終わる。** ただし**途中では止めない** ——
-全セクションを最後まで走らせて RESULT_JSON を出し切ってから、`failed[]` を見て終了コードだけを決める。
+**verbごとの「人間側/AI側の両方で動く」を1本で通す検査は持たない。** AI側（MCP）の契約は pytest
+（`tests/test_mcp_verbs.py` ほか）、人間側のUIは verb 別の smoke、交互操作（AIが提案 → 人が直す → AIが読む）は
+`smoke-mcp.mjs`、カメラ（画角・Z-up）は `smoke-camera.mjs` が持つ。
 
 ---
 
@@ -309,12 +300,19 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
   どちらもこの集合から取るので、「対象集合の指定方法」は1つしかない。
 - **verbのメタ情報は1箇所にしか書かない。** 名前・引数・カテゴリ・プレビュー可否・
   MCPのスキーマは `duocad/catalog.py` の `COMMANDS` が唯一の宣言で、WebSocketの許可リストも
-  MCPのツール定義も導出である。**verbを1つ足すときメタ情報を書くのは宣言1エントリだけ**。
-  **ただし実行の薄いラッパ2本
-  （`Session` と `DocumentTools`）は依然verbごとに要る** —— 手順の正は `catalog.py`
-  冒頭docstringの5ステップ。ここを1本化するには汎用ディスパッチャが要る（未着手）。frontendだけは別に持つ ——
+  MCPのツール定義も導出である。**verbを1つ足すときに書くのは、verbのモジュールと宣言1エントリの
+  2箇所だけ**（手順の正は `catalog.py` 冒頭docstring）。
+- **verbを掛ける経路は1本。** verbのモジュールは純関数（対象を引数で受ける）と**入口**
+  （`@entry`。対象を確定選択から取って純関数へ渡す）を持ち、`Session.apply(verb, args)` が入口を名前で
+  引いて呼ぶ。WebSocket・MCP・アプリ内AIはどれも `apply` を通るので、実行中の断り・選択のリセット・
+  自動保存・配信はどの経路でも同じに効き、verbごとの配線は無い。届いた引数の検査（必須・未知・型）も
+  宣言からの導出で、WebSocketとMCPに同じものが効く。frontendだけは別に持つ ——
   TS側が持つのは**引数の集め方**（どのクリックを待つか・入力欄のid）で、宣言には無い情報だから。
-  名前と分類が一致することは `tests/test_ui_command_wiring.py` が機械で見る。
+- **コアと画面の契約は生成物で持つ。** コマンド名・分類・WebSocket が受け取る引数・verb が応答に載せる値
+  （`Command.returns`）・状態配信のキーは `catalog.py` の宣言で、`web/src/generated/protocol.ts` はそこからの
+  生成物（`python tools/generate_protocol_ts.py`）。`commands/*.ts` の定義は `CommandDef<'fillet'>` のように
+  verb 名を付けて書き、`id` と `build` の引数が宣言どおりであることを型検査が見る。宣言と実際の応答の一致・
+  生成物の鮮度・型検査は `tests/test_protocol.py` が `pytest -q` の中で見る。
 - **verbの粒度の定義は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §2「verbの粒度」が起点。**
 
 ### ボディの種別 —— B-rep と 三角形メッシュ
@@ -402,7 +400,8 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/selection.py` | 選択集合（人のクリック側。可視性を含む「何が選べるか」） | ✗ | ✗ |
 | `duocad/predicates.py` | **述語による選択（AI側）**。構造化JSONでDSL文字列ではない | ✗ | ✗ |
 | `duocad/speculative.py` | プレビュー（確定前にverbを投機的に走らせて捨てる） | ✗ | ✗ |
-| `duocad/verbs/*.py` | verb層（1 verb 1モジュール・純関数） | ✗ | ✗ |
+| `duocad/verbs/*.py` | verb層（1 verb 1モジュール。純関数と、対象を確定選択から取る入口） | ✗ | ✗ |
+| `duocad/entry.py` | verbの入口の登録表（`@entry`）。`Session.apply` がここから名前で引く | ✗ | ✗ |
 | `duocad/catalog.py` | **verbの単一宣言**（名前・引数・カテゴリ・プレビュー可否・MCPスキーマ）。下の2つが持つ表はここからの導出 | ✗ | ✗ |
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
@@ -414,7 +413,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/kernel_meshing.py` | 同じカーネル層。OCCTの面分割を段階制御し、面分割の直前に境界折れ線の交差を検査して共有辺を再分割する(`tessellate` の実体) | **○** | ✗ |
 | `duocad/boundary_check.py` | 境界折れ線(pcurve の離散点列)の交差・接触・重なりの判定。固定εを使わず、確定しない組だけ整数演算 | ✗ | ✗ |
 | `duocad/mesh_intersections.py` | 三角形メッシュの自己交差(正当な共有辺・共有頂点の接触を除く)。最終成果物の検査 | ✗ | ✗ |
-| `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbの呼び出し・選択・保存/開く。**配りものは持たず `view` へ委譲**） | ✗ | ✗ |
+| `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbを掛ける唯一の口 `apply`・選択・保存/開く。**配りものは持たず `view` へ委譲**） | ✗ | ✗ |
 | `duocad/view.py` | `DocumentView`（**配りもの**＝状態配信・版・テセレーション/辺/頂点/体積/スケッチのキャッシュ。文書を変えない） | ✗ | ✗ |
 | `duocad/paths.py` | `REPO_ROOT` と、そこから出る既定の置き場（`web/dist` / `models`） | ✗ | ✗ |
 | `duocad/net/ws.py` | `Server`（WebSocketの配信と `_dispatch`）＋ソケットから踏めるコマンドの表 | ✗ | ✗ |
@@ -438,8 +437,10 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | ファイル | 役割 |
 |---|---|
 | `web/src/App.svelte` | 画面全体の組み立て・選択の規則・キー処理 |
+| `web/src/{displaySettings,documentFiles,aiChat,measurement}.svelte.ts` | **`App.svelte` から切り出した状態の持ち主**（画角・原点ギズモ・断面／ファイル操作と一覧／AIとの会話／測定の結果）。必要なものを引数で受け取り、読み口と操作を返す。**選択・ピック・コマンドの確定には触らない**かたまりだけを置く |
 | `web/src/viewport.ts` | three.js の囲い（load / onPick / highlight / project …） |
 | `web/src/session.ts` | WebSocketクライアント。**WSのURLはサーバが `/duocad-config.json` で教える**（ポートを推測しない） |
+| `web/src/generated/protocol.ts` | **生成物**（コマンド名と分類・WebSocket の引数・`Applied`・状態のキー）。正は `duocad/catalog.py`。手で直さない |
 | `web/src/commands/CommandHost.svelte` | **コマンド層の骨格**（起動→引数収集→プレビュー→Enter/Esc、**および即適用の発火**）。verbごとに作り直さない |
 | `web/src/commands/{command,sketch,features,files,moveMode}.ts` | 各コマンドの引数の集め方の定義だけ（**Enter要否はここから導出**＝`needsEnter`）。`command.ts` に共通の枠組み（`ArgSpec` の種別・`when` によるモード依存の必須判定） |
 | `web/src/{Browser,Files,Sketch,Parameters}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ）。**選択パネルは無い**（選択を直すのは3Dクリックだけ） |
@@ -545,7 +546,7 @@ duocad/
   tests/                 pytest。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
-    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）と撮影（screenshot.mjs:
+    scripts/             実ブラウザの検査（smoke*.mjs）と撮影（screenshot.mjs:
                          空の文書とモデルを読んだ画面を --tag 付きで撮る。見た目の前後比較用）。共有部品は
                          harness.mjs（骨格）／server.mjs（サーバの起動・停止）／browser.mjs（ブラウザ選択・起動）／
                          pick.mjs（指す手）／mcp-client.mjs（MCPクライアント）／args.mjs／models.mjs（STEPのパス）

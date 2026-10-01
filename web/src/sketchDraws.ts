@@ -59,8 +59,7 @@ export function buildSketchDraws(
  * false になる状況(選んだ領域が実際に消えている)は、領域を変えうる verb のすべてに
  * `resets_selection=True`(`duocad/catalog.py`)が掛かっているため、**通常の UI 操作では選択が先に空になり
  * 到達できない**(`tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`
- * が実測)。`web/scripts/smoke-regions.mjs` が `window.__duocad.regionsStillExist` へ合成データを渡して
- * false の分岐を直接検算するのはそのため(あちらの先頭コメント)。
+ * が実測)。
  */
 export function regionsStillExist(selection: SelectionState | null, sketches: readonly SketchState[]): boolean {
   const refs = refsOfKind(selection?.items ?? [], 'region')

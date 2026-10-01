@@ -331,7 +331,7 @@ def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:
 
     tools = DocumentTools(from_ai)
     _select(from_ai, _edges(ai_body, (1, 3)))
-    tools.fillet(RADIUS_THAT_WORKS)
+    tools.call("fillet", {"radius": RADIUS_THAT_WORKS})
 
     assert kernel.face_count(ui_body.shape) == kernel.face_count(ai_body.shape)
     assert query.volume(ui_body.shape) == pytest.approx(query.volume(ai_body.shape), rel=1e-12)

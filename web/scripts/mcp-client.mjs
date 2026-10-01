@@ -1,5 +1,5 @@
 /**
- * MCP(stdio・JSON-RPC 2.0)のクライアント(`smoke-mcp.mjs` / `acceptance.mjs` が共有する)。
+ * MCP(stdio・JSON-RPC 2.0)のクライアント(`smoke-mcp.mjs` ほか MCP を叩く smoke が共有する)。
  *
  * **stdoutに出てよいのはJSON-RPCの行だけ**という契約の検査点でもある。OCCTがC++から
  * 実fdへ吐く統計が混ざると接続が壊れるので、**JSONにならない行は捨てない**。

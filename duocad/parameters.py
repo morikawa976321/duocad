@@ -24,6 +24,7 @@ from typing import Any, Dict, Mapping, Optional
 
 from .document import Document, unknown_id_message
 from .oplog import Operation, register_verb, verb_handler
+from .entry import entry
 
 #: パラメータ名の接頭辞(Fusion360の d1/d2 と同じ流儀。改名機能は未実装)
 PARAMETER_PREFIX = "d"
@@ -275,3 +276,21 @@ def release_param_refs(document: Document, params: dict) -> None:
     for ref in params.values():
         if isinstance(ref, str):
             document.parameters.pop(ref, None)
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_SET_PARAMETER)
+def _enter_set_parameter(document: Document, name: str, value: float) -> dict:
+    before_shapes = {body.id: id(body.shape) for body in document.bodies}
+    operation = set_parameter(document, str(name), float(value))
+    changed_bodies = [
+        body.id for body in document.bodies if before_shapes.get(body.id) != id(body.shape)
+    ]
+    return {
+        "name": operation.args["name"],
+        "value": operation.args["value"],
+        "previous": operation.args["previous"],
+        "changed_bodies": changed_bodies,
+    }

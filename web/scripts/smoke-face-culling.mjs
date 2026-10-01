@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **face単位の視錐台+バックフェイスカリングが、深いズームを実際に軽くする**。
  *
- *   node scripts/smoke-face-culling.mjs [--step <STEPのパス>] [--port 8967] [--http-port 8968]
+ *   node scripts/smoke-face-culling.mjs [--step <STEPのパス>]
  *
  * `smoke-resolution.mjs`(円柱1個で「寄ったら細かくなる」を見る)の続きで、こちらは
  * **大きなアセンブリで「寄っても重くならない」**を見る。判定に使うのは
@@ -27,26 +27,13 @@ import { runSmoke } from './harness.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 
 const POLL_MS = 100
+/** 画面が新しい要求を出すまで待てる時間[ms]。**この検査の全ての手は要求を変える**ので、変わらなければ検査側の間違い。 */
+const REQUEST_MS = 20000
 /**
- * 状態配信が**この時間だけ止まったら**往復が終わったと見なす[ms]。
- *
- * **画面の値が変わらないこと」を落ち着きの条件にしてはいけない。** サーバは単一の
- * イベントループで、27部品の測り直しの間はWebSocketに何も流れない —— 「変わっていない」で
- * 切ると**要求が出ていく前の画面**を落ち着きと読み、入りと切りが同じ値に見える。
- * したがって見るのは `__duocad.stateEpoch`
- * (状態が1通届くたびに増える)であって、画面の値ではない。
+ * 「届いた形が要求と一致している」がこの時間続いたら収束と見なす[ms]。届いた形で面の見本が変わると
+ * 画面は次のフレームで `focus` を採り直すので、採り直しが起きるならこの間に要求が変わって不一致へ戻る。
  */
-const QUIET_MS = 2000
-/**
- * 状態が1通も来ないまま待てる時間[ms]。**この検査の全ての手は必ず1通を起こす**ので、
- * 来なければ検査側の間違いである(黙って0秒と記録しない)。
- *
- * **短くすると測りたいものだけを取り逃がす。** カリングを切った深いズームは、まさに
- * 「サーバが数十秒黙る」場合であり、6秒で打ち切ったときは**その静けさを『何も起きて
- * いない』と読んで往復0秒と記録した**(実測)。
- */
-const NO_CHANGE_MS = 120000
-
+const STABLE_MS = 1000
 runSmoke('smoke-face-culling', { timeout: 600000, mcp: true }, async ({ options, mcp, browser, url, timeout }) => {
   const stepPath = options.step ?? PC_CASE_STEP
   const expectedBodies = Number.parseInt(options['expect-bodies'] ?? String(PC_CASE_SOLIDS), 10)
@@ -67,65 +54,80 @@ runSmoke('smoke-face-culling', { timeout: 600000, mcp: true }, async ({ options,
     const center = await viewportCenter(page)
     await page.mouse.move(center.x, center.y)
 
-    /** いま画面が持っている形を丸ごと数える(**GPUに載っている量そのもの**)。 */
+    /**
+     * いま画面が持っている形を丸ごと数える(**GPUに載っている量そのもの**)。
+     *
+     * `mismatched` は「届いた形が、画面がいま出している要求と食い違うBodyの数」。要求は
+     * `viewResolution()` の `focus`(Bodyごとの細かく測る面。キーが無ければ全面)と目標偏差で、
+     * 届いた形は `fine_face_count` と `deviation`(その形の中で一番細かい偏差)を持つ。
+     */
     function probe() {
       return page.evaluate(() => {
         const hook = window.__duocad
         const resolution = hook.viewResolution?.() ?? null
+        const focus = resolution?.focus ?? null
         let triangles = 0
         let fineFaces = 0
         let faces = 0
         let culledBodies = 0
+        let mismatched = 0
         for (const part of hook.parts ?? []) {
           const geometry = hook.getGeometry(part.body_id)
           if (!geometry) continue
           for (const face of geometry.faces) triangles += face.indices.length / 3
+          const fine = geometry.fine_face_count ?? geometry.face_count
           faces += geometry.face_count
-          fineFaces += geometry.fine_face_count ?? geometry.face_count
-          if ((geometry.fine_face_count ?? geometry.face_count) === 0) culledBodies += 1
+          fineFaces += fine
+          if (fine === 0) culledBodies += 1
+          const wanted = focus === null ? null : (focus[part.body_id] ?? null)
+          const wantedFine = wanted === null ? geometry.face_count : wanted.length
+          const deviationOff =
+            resolution !== null &&
+            wantedFine > 0 &&
+            Math.abs(geometry.deviation - resolution.deviation) > resolution.deviation * 1e-6
+          if (fine !== wantedFine || deviationOff) mismatched += 1
         }
-        const focus = resolution?.focus ?? null
         return {
-          stateEpoch: hook.stateEpoch ?? 0,
+          request: JSON.stringify([resolution?.worldPerPixel ?? 0, resolution?.deviation ?? 0, focus]),
           worldPerPixel: resolution?.worldPerPixel ?? 0,
           deviation: resolution?.deviation ?? 0,
-          focusBodies: focus === null ? null : Object.keys(focus).length,
           triangles,
           faces,
           fineFaces,
           culledBodies,
+          mismatched,
         }
       })
     }
 
     /**
-     * **測り直しの往復が終わるまで**待ち、最後の状態配信までの経過[ms]を返す。
+     * **測り直しが収束するまで**待ち、届いた形が要求と一致するまでの経過[ms]を返す。
+     * `requestBefore` は手を打つ前の要求(`probe().request`)。
      *
-     * 落ち着きの判定は `stateEpoch`(状態が1通届くたびに増える)で行う。画面の値の
-     * 変化では判定しない —— 上の `QUIET_MS` のコメントの理由による。
+     * **「状態配信が一定時間止まったら終わり」では判定しない。** サーバは単一のイベントループで、
+     * 27部品の測り直しの間は WebSocket に何も流れない —— 静けさで切ると返事が届く前の画面を読む
+     * (実測: 2秒の静けさで切っていたとき、読み値が1手ずつずれて「入り 104,065 / 切り 192,033」に
+     * なった。一致で待つと「入り 192,033 / 切り 1,180,763」)。MCP の道具呼び出しを柵にしても
+     * 同じで、配信の途中でイベントループが空くと柵が先に返る。
      */
-    async function waitQuiet(label, startedAt) {
+    async function waitQuiet(label, startedAt, requestBefore) {
       const deadline = Date.now() + timeout
-      const first = await probe()
-      const baseEpoch = first.stateEpoch
-      let lastEpoch = baseEpoch
-      let lastChangeAt = startedAt
-      let seen = first
-      for (;;) {
+      let seen = await probe()
+      while (seen.worldPerPixel === 0 || seen.request === requestBefore) {
+        if (Date.now() - startedAt > REQUEST_MS) fail(`${label}: 画面の要求が変わらない(手が効いていない)`)
         await sleep(POLL_MS)
         seen = await probe()
-        if (seen.stateEpoch !== lastEpoch) {
-          lastEpoch = seen.stateEpoch
-          lastChangeAt = Date.now()
-        }
-        const quietFor = Date.now() - lastChangeAt
-        if (lastEpoch !== baseEpoch && quietFor >= QUIET_MS) break
-        if (lastEpoch === baseEpoch && Date.now() - startedAt >= NO_CHANGE_MS) {
-          fail(`${label}: 状態が1通も届かない(要求が出ていない可能性)`)
-        }
-        if (Date.now() > deadline) fail(`${label}: 落ち着かない(${JSON.stringify(seen)})`)
       }
-      const elapsed = lastChangeAt - startedAt
+      let matchedSince = null
+      for (;;) {
+        seen = await probe()
+        if (seen.mismatched > 0) matchedSince = null
+        else if (matchedSince === null) matchedSince = Date.now()
+        else if (Date.now() - matchedSince >= STABLE_MS) break
+        if (Date.now() > deadline) fail(`${label}: 収束しない(${JSON.stringify({ ...seen, request: undefined })})`)
+        await sleep(POLL_MS)
+      }
+      const elapsed = matchedSince - startedAt
       ok(
         `${label}: 1画素=${seen.worldPerPixel.toFixed(5)}mm / 目標偏差 ${seen.deviation.toFixed(5)}mm / ` +
           `三角形 ${seen.triangles.toLocaleString()} / 細かく測った面 ${seen.fineFaces}/${seen.faces} / ` +
@@ -133,7 +135,6 @@ runSmoke('smoke-face-culling', { timeout: 600000, mcp: true }, async ({ options,
       )
       return { ...seen, elapsed }
     }
-
     async function setCulling(enabled) {
       const startedAt = Date.now()
       await page.evaluate((value) => window.__duocad.setFaceCulling(value), enabled)
@@ -148,24 +149,21 @@ runSmoke('smoke-face-culling', { timeout: 600000, mcp: true }, async ({ options,
     }
 
     // ---------------------------------------------------------------- 全体表示
-    const farOn = await waitQuiet('全体表示・カリング入り', Date.now())
+    const farOn = await waitQuiet('全体表示・カリング入り', Date.now(), null)
     const farOffAt = await setCulling(false)
-    const farOff = await waitQuiet('全体表示・カリング切り', farOffAt)
-    await setCulling(true)
-    await waitQuiet('全体表示・カリング入りへ戻す', Date.now())
+    const farOff = await waitQuiet('全体表示・カリング切り', farOffAt, farOn.request)
+    const farBackAt = await setCulling(true)
+    const farBack = await waitQuiet('全体表示・カリング入りへ戻す', farBackAt, farOff.request)
 
     // ---------------------------------------------------------------- 深いズーム
-    let startedAt = Date.now()
     await wheel(-240, ZOOM_STEPS)
-    startedAt = Date.now()
-    const nearOn = await waitQuiet(`${ZOOM_STEPS}段ズーム・カリング入り`, startedAt)
+    const nearOn = await waitQuiet(`${ZOOM_STEPS}段ズーム・カリング入り`, Date.now(), farBack.request)
 
     const nearOffAt = await setCulling(false)
-    const nearOff = await waitQuiet(`${ZOOM_STEPS}段ズーム・カリング切り`, nearOffAt)
+    const nearOff = await waitQuiet(`${ZOOM_STEPS}段ズーム・カリング切り`, nearOffAt, nearOn.request)
 
     const backOnAt = await setCulling(true)
-    const nearOn2 = await waitQuiet(`${ZOOM_STEPS}段ズーム・カリング入りへ戻す`, backOnAt)
-
+    const nearOn2 = await waitQuiet(`${ZOOM_STEPS}段ズーム・カリング入りへ戻す`, backOnAt, nearOff.request)
     // ---------------------------------------------------------------- 判定
     console.log('')
     if (!(nearOn.worldPerPixel < farOn.worldPerPixel / 4)) {

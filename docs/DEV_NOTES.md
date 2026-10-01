@@ -109,13 +109,14 @@ PR #20 で 85 ファイル（+29,905 行）を追跡から外した。それま�
 
 ## タスクの切り方（無人 runner に渡すとき）
 
-- **verb を1つ足すと `web/src/session.ts` の型宣言（`Applied` union と `ServerState`）も直さないと
-  `tests/test_applied_type_sync.py` が赤になる。** 「画面には手を付けない」というバックエンドのタスクは自分では緑に
-  できない（4 verb と `state_meta` の新キーで7本赤）。**宣言・型・種別の表＝バックエンド／引数の集め方・描画＝フロント**で切る。
+- **verb を1つ足したら宣言（`Command.returns` まで）を書いて `python tools/generate_protocol_ts.py` を走らせる。**
+  画面の `Applied` はその生成物なので、バックエンドだけのタスクでも `tests/test_protocol.py` は自分で緑にできる。
+  `state_meta` にキーを足すときだけは `web/src/session.ts` の `ServerState` も直す（直さないと型検査が落ちる）。
+  **宣言・型・種別の表＝バックエンド／引数の集め方・描画＝フロント**で切る。
   `tests/test_ui_command_wiring.py` の即適用の顔ぶれは逆に画面側（`CommandDef` からの導出）。
   `commands/command.ts` の `SelectableKind` / `KIND_COUNTERS` はコアの `SELECTABLE_KINDS` の写しで、足し忘れると
   件数表示が `undefined` になる（`tsc` では出ない。`ref as ShapeRef` のキャストで書かれているため）。
-- **`ws="none"`（MCP 専用）の verb は `test_applied_type_sync.py` の対象外**（対象条件は `ws != "none" and changes_document`）。
+- **`ws="none"`（MCP 専用）の verb は画面の `Applied` に載らない**（生成の対象は `ws != "none"` で `returns` を持つもの）。
   `add_mesh_body` / `mirror_sketch_entities` のようにブラウザに開けていないのに操作ログに載る verb は、MCP 経由で呼ばれても
   全ブラウザへ状態配信されるが、`Applied` に型が無くても検査は緑。MCP 専用 verb を足すとき `Applied` を省略してよいかは
   この抜け穴を踏まえて都度判断し、省略するなら理由を宣言に書く。

@@ -21,9 +21,8 @@ import { buildPathArgs, pathLike, type CommandDef } from './command'
  * `id` / `inputId` / `buttonId` は実機検査(`smoke.mjs` ほか5本)が名前で掴んでいるので、
  * 押したときに起きること(パスを打ってSTEPを読む)を変えない限り変更しないこと。
  */
-export const IMPORT_STEP: CommandDef = {
+export const IMPORT_STEP: CommandDef<'import_step'> = {
   id: 'import_step',
-  category: 'file',
   label: 'STEP読み込み',
   buttonId: 'file-import-step',
   // プレビューは出さない。読んでみるまで何が入っているか分からないので、

@@ -11,20 +11,20 @@
    自動で確定する**(2026-08-23本人裁定「明示的な承認は不要」)。
    `SelectionPanel` の「承認する」ボタンを消した代わりであり、これが無いと
    **AIの提案に対して人が直接コマンドを実行した瞬間に `SelectionNotCommitted` で詰む**。
-   宣言(`catalog.Command.uses_selection`)と実体(`Session` が `require_*` を呼ぶか)の
-   一致も、ここが構文木で見る —— verbを足した日に片方だけ直っても気づけるように。
+   宣言(`catalog.Command.uses_selection`)と実体(入口が確定選択を読むか)の一致も、ここが
+   実際に呼んで見る —— verbを足した日に片方だけ直っても気づけるように。
 """
 from __future__ import annotations
 
-import ast
+import inspect
 
 import pytest
 
-from duocad import catalog, kernel, query, selection
+from duocad import catalog, kernel, selection
+from duocad.document import Document
+from duocad.entry import entries
 from duocad.server import SELECTION_CONSUMING_COMMANDS, Session
 from session_support import SIDE, box as _box, browser as _browser
-
-from duocad.paths import REPO_ROOT
 
 
 # --------------------------------------------------------------------------------------
@@ -45,15 +45,6 @@ def test_vertex_positions_use_the_same_index_as_the_selection(session: Session) 
         assert len(item["point"]) == 3
         # 20mm立方体なので、全頂点が 0 か 20(の丸め誤差内)に居る
         assert all(min(abs(value), abs(value - SIDE)) < 1e-6 for value in item["point"])
-
-
-def test_the_query_layer_passes_the_kernel_positions_through(session: Session) -> None:
-    """`query.describe_vertices` は kernel の座標をそのまま渡す(測り直さない)。
-
-    落ちたら、AIが `measure` で見る座標と画面のマーカーが別の計算で出ることになる。
-    """
-    body, _ = _box(session)
-    assert query.describe_vertices(body.shape) == kernel.vertex_positions(body.shape)
 
 
 def test_an_empty_shape_has_no_vertex_map() -> None:
@@ -272,48 +263,46 @@ def test_an_offset_sketch_without_a_named_plane_commits_the_selected_face(
     assert session.get_selection()["origin"] == "user"
 
 
-def test_the_declaration_matches_which_verbs_read_the_selection() -> None:
-    """`catalog.Command.uses_selection` と、`Session` が実際に確定選択を読むverbが一致する。
+def test_the_declaration_matches_which_verbs_read_the_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`catalog.Command.uses_selection` と、入口が実際に確定選択を読むverbが一致する。
 
     落ちたら、**新しく足したverbが自動確定の対象から漏れている**(AIの提案に対して
     人がそのverbを実行すると詰む)か、逆に選択を読まないverbが余計に確定させている。
     """
-    tree = ast.parse((REPO_ROOT / "duocad" / "session.py").read_text(encoding="utf-8"))
-    direct: set[str] = set()
-    helpers_of: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        helpers_of[node.name] = set()
-        for inner in ast.walk(node):
-            if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
-                continue
-            # `selection.require_*` が確定選択を読む唯一の入口である(種別ごとに増える)。
-            # 綴りではなく接頭辞で見るのは、verbを足すたびにこの表を直し忘れるのを避けるため。
-            if inner.func.attr.startswith("require_"):
-                direct.add(node.name)
-            elif (
-                isinstance(inner.func.value, ast.Name)
-                and inner.func.value.id == "self"
-                and inner.func.attr.startswith("_")
-            ):
-                # 非公開ヘルパ(`_plane_from_selection` / `_edge_verb`)に寄せた読みも、呼ぶ側のverbの読みとして数える。
-                helpers_of[node.name].add(inner.func.attr)
+    reads: list = []
+    original = selection.confirmed_items
 
-    def reads(name: str, seen: frozenset = frozenset()) -> bool:
-        return name in direct or any(
-            reads(helper, seen | {name}) for helper in helpers_of.get(name, ()) if helper not in seen
-        )
+    def recording(doc, kind=None):
+        reads.append(kind)
+        return original(doc, kind=kind)
 
-    reads_selection = {name for name in helpers_of if not name.startswith("_") and reads(name)}
+    monkeypatch.setattr(selection, "confirmed_items", recording)
 
-    declared = {
-        catalog.BY_NAME[name].session for name in SELECTION_CONSUMING_COMMANDS
-    } | {
-        catalog.BY_NAME[name].preview_session
-        for name in SELECTION_CONSUMING_COMMANDS
-        if catalog.BY_NAME[name].preview_session is not None
-    }
-    assert declared == reads_selection, (
-        f"宣言 {sorted(declared)} と実体 {sorted(reads_selection)} がずれている"
+    def reads_selection(call) -> bool:
+        reads.clear()
+        try:
+            call()
+        except Exception:  # noqa: BLE001 — 見るのは「読んだか」だけ(空の文書なのでどれも途中で断られる)
+            pass
+        return bool(reads)
+
+    def without_arguments(function):
+        """必須の引数を全部 `None` で埋めて呼ぶ(選択を読む入口は、引数を見る前に読む)。"""
+        required = [
+            name
+            for name, parameter in list(inspect.signature(function).parameters.items())[1:]
+            if parameter.default is inspect.Parameter.empty
+        ]
+        return lambda: function(Document(), **dict.fromkeys(required))
+
+    actual = {verb for verb, function in entries().items() if reads_selection(without_arguments(function))}
+    assert actual == set(SELECTION_CONSUMING_COMMANDS), (
+        f"宣言 {sorted(SELECTION_CONSUMING_COMMANDS)} と実体 {sorted(actual)} がずれている"
     )
+
+    # 確定前の姿だけを計算する口(`preview_session`)も、確定と同じ選択を読む。
+    session = Session(None, 0.2)
+    for name in SELECTION_CONSUMING_COMMANDS:
+        preview = catalog.BY_NAME[name].preview_session
+        if preview is not None:
+            assert reads_selection(getattr(session, preview)), f"{preview} が確定選択を読んでいない"

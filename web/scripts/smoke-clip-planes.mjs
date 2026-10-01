@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **near/farが初回フレーミングから切り離され、内容が変わるたびに追随する**。
  *
- *   node scripts/smoke-clip-planes.mjs [--step <STEPのパス>] [--port 8957] [--http-port 8958]
+ *   node scripts/smoke-clip-planes.mjs [--step <STEPのパス>]
  *
  * 2つの独立した回帰を見る(遠端=far側・近端=near側は互いに鏡像の欠陥なので、別々の
  * 姿勢でないと検査できない。片方の姿勢では他方が必ず「対象外」になる)。

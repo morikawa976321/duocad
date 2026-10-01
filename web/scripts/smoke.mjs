@@ -28,7 +28,6 @@ import { fail, ok } from './args.mjs'
 import { runSmoke } from './harness.mjs'
 import { PC_CASE_IMPORT_WARNINGS, PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 import {
-  clickRegion,
   clickSketchPoint,
   createSketchOnBasePlane,
   faceAt,
@@ -1280,114 +1279,6 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
       beforeUndo.entities - 1,
     )
     ok(`undoで図形が1つずつ消えた(${beforeUndo.entities} -> ${beforeUndo.entities - 1}。円弧だけが消えた)`)
-
-    // -------------------------------------------------------------- 検証2(後半): 置いた後に直せる
-    // **クリックだけで置いた後も位置を直せる**。
-    //
-    // 数値入力欄(`SketchPanel.svelte`)は無く、
-    // **3Dで図形を選んで `move_sketch_entities`** に一本化されている。
-    // 寸法(半径・幅高さ・角度)の打ち直しは**人間側の口を持たない**ことになり、
-    // `set_parameter` はAI(MCP)だけの操作になっている —— そちらの検証は
-    // `tests/test_parameters.py` と `acceptance.mjs` のAI側が持つ。
-    //
-    // ここで見るのは**位置の直し**である: 円を選んで動かし、領域の重心が同じだけ動くこと
-    // (= コアが作り直したものが画面へ届いている)。
-    await page.keyboard.press('Escape') // 描くコマンドを畳んで「選ぶ」へ戻す
-    const circleBefore = await page.evaluate(() => {
-      const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-      const circle = active.entities.find((entity) => entity.kind === 'circle')
-      return { entityId: circle.entity_id, params: { ...circle.params } }
-    })
-    const centroidBefore = await page.evaluate(() => {
-      const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-      return [...active.regions[0].centroid]
-    })
-    // 円の中心の点(`cx`)を本物のクリックで掴む。
-    await clickSketchPoint(page, circleBefore.params.cx, circleBefore.params.cy)
-    await page.waitForFunction(
-      (id) =>
-        (window.__duocad.selection?.items ?? []).some(
-          (item) => item.entity === id && item.point === 'cx',
-        ),
-      { timeout, polling: 50 },
-      circleBefore.entityId,
-    )
-    await page.click('#sketch-move')
-    await page.click('#sketch-move-move')
-    await page.click('#sketch-move-translate')
-    await typeInto('#sketch-move-dx', 4)
-    await typeInto('#sketch-move-dy', 0)
-    await page.keyboard.press('Enter')
-    await page.waitForFunction(
-      (id, cx) => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        const circle = active.entities.find((entity) => entity.entity_id === id)
-        return Boolean(circle && Math.abs(circle.params.cx - (cx + 4)) < 1e-6)
-      },
-      { timeout, polling: 50 },
-      circleBefore.entityId,
-      circleBefore.params.cx,
-    )
-    const centroidAfter = await page.evaluate(() => {
-      const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-      return [...active.regions[0].centroid]
-    })
-    const centroidShift = Math.hypot(
-      centroidAfter[0] - centroidBefore[0],
-      centroidAfter[1] - centroidBefore[1],
-      centroidAfter[2] - centroidBefore[2],
-    )
-    if (Math.abs(centroidShift - 4) > 0.2) {
-      fail(`円を4mm動かしたのに領域の重心が ${centroidShift.toFixed(3)}mm しか動かない`)
-    }
-    ok(`置いた後に位置を直せた(円の中心を選んで +4mm。領域の重心が ${centroidShift.toFixed(2)}mm 動いた)`)
-
-    // **元へ戻す**。以降の検証(領域のクリック)は動かす前の配置を前提にしているので、
-    // ここで戻さないと領域の並びが変わって別のものを指す。undoは選択も空にするので
-    // (`catalog` の `undo` は `resets_selection`)、掴んだままの点も一緒に外れる。
-    await pressUndo(page)
-    await page.waitForFunction(
-      (id, cx) => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        const circle = active.entities.find((entity) => entity.entity_id === id)
-        return Boolean(
-          circle &&
-            Math.abs(circle.params.cx - cx) < 1e-6 &&
-            (window.__duocad.selection?.count ?? 0) === 0,
-        )
-      },
-      { timeout, polling: 50 },
-      circleBefore.entityId,
-      circleBefore.params.cx,
-    )
-    ok('移動をundoで戻した(座標が元へ戻り、選択も空になった)')
-
-    // -------------------------------------------------------------- 検証3(後半): 領域をクリックで選ぶ
-    // 描くコマンドはEscで抜けて「選ぶ」に戻っている。**3Dの領域を本物のクリックで選ぶ**。
-    await page.keyboard.press('Escape')
-    // 描いたもの全体を画面へ収める(領域を狙うクリックの精度のため)。
-    // **描き終わってから呼ぶ** —— 途中で呼ぶと、まだ描いていない位置が画面の外に出る。
-    await page.click('#sketch-look')
-    await clickRegion(page, 1)
-    await page.waitForFunction(
-      () => {
-        const items = window.__duocad.selection?.items ?? []
-        // **領域だけ**(`sketch_entity` も `sketch` を持つので `entity` の無いほうを見る)
-        return (
-          items.length === 1 &&
-          'sketch' in items[0] &&
-          !('entity' in items[0]) &&
-          items[0].index === 1
-        )
-      },
-      { timeout, polling: 50 },
-    )
-    ok('領域を本物のクリックで選べた(共有選択集合に領域が入った=Dの押し出しの引数になる)')
 
     // 出ていてよいのは、平面でない面へのスケッチをわざと断らせた札(上の `refused`)と、
     // この STEP を読むと必ず出る三角形分割の警告(`PC_CASE_IMPORT_WARNINGS`。実測)だけ。

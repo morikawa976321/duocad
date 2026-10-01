@@ -24,6 +24,8 @@ from . import kernel_sketch
 from . import parameters
 from .document import BodyId, Document, unknown_id_message
 from .oplog import Operation, register_verb
+from . import selection
+from .entry import entry
 
 SketchId = str
 EntityId = str
@@ -910,3 +912,55 @@ for _verb in (VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_RECTANGLE, VERB_ADD_ARC):
     # (追加する図形の種別は args が持つ)。verb名を分けているのは操作ログとMCPの粒度のため。
     register_verb(_verb, do=_do_add_entity, undo=_undo_add_entity)
 del _verb
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+def plane_from_selection(document: Document, base_plane: Any) -> Any:
+    """貼る先の平面。`base_plane`(XY/XZ/YZ)があればそれ、無ければ**確定選択の面**(ちょうど1枚)。
+
+    平面も選択も無ければエラーにする —— 既定で XY に貼ると、図形が静かに別の場所に出る。2枚選んで
+    いれば `SelectionAmbiguous`、AI の提案のままなら `SelectionNotCommitted` が上がる。
+    """
+    if base_plane is not None:
+        return str(base_plane)
+    face = selection.require_confirmed(document, "face", exactly_one=True)[0]
+    return face_plane(face["body"], face["index"])
+
+
+@entry(VERB_SKETCH_CREATE)
+def _enter_sketch_create(document: Document, base_plane: Optional[str] = None) -> dict:
+    return {"sketch_id": sketch_create(document, plane_from_selection(document, base_plane))}
+
+
+@entry(VERB_SKETCH_CREATE_OFFSET)
+def _enter_sketch_create_offset(
+    document: Document, distance: float, base_plane: Optional[str] = None
+) -> dict:
+    plane = offset_plane(plane_from_selection(document, base_plane), distance)
+    return {"sketch_id": sketch_create(document, plane, verb=VERB_SKETCH_CREATE_OFFSET)}
+
+
+@entry(VERB_ADD_LINE)
+def _enter_add_line(document: Document, sketch_id: str, p0: Any, p1: Any) -> dict:
+    return {"entity_id": add_line(document, sketch_id, p0, p1)}
+
+
+@entry(VERB_ADD_CIRCLE)
+def _enter_add_circle(document: Document, sketch_id: str, center: Any, radius: float) -> dict:
+    return {"entity_id": add_circle(document, sketch_id, center, radius)}
+
+
+@entry(VERB_ADD_RECTANGLE)
+def _enter_add_rectangle(
+    document: Document, sketch_id: str, corner: Any, width: float, height: float, angle: float = 0.0
+) -> dict:
+    return {"entity_id": add_rectangle(document, sketch_id, corner, width, height, angle)}
+
+
+@entry(VERB_ADD_ARC)
+def _enter_add_arc(
+    document: Document, sketch_id: str, center: Any, radius: float, start_deg: float, end_deg: float
+) -> dict:
+    return {"entity_id": add_arc(document, sketch_id, center, radius, start_deg, end_deg)}

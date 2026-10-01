@@ -206,9 +206,19 @@ MCPにも無い**（人ができることとAIができることを一致させ�
 
 ## コード調査で「積まない」と決めたもの
 
-汎用ディスパッチャ（verb 追加手順の一本化）・`kernel.py` の分割・`_dispatch` の表駆動化は**積まない**。
-`server.py` の分割は2段構え（クラス境界→ `DocumentView` の切り出し）で実施済み。`Applied` 型の同期は
-**生成ではなく突合の機械検査**（`tests/test_applied_type_sync.py`）。
+`kernel.py` の分割は**積まない**。汎用ディスパッチャ（verb 追加手順の一本化）と `_dispatch` の verb の
+表駆動化は、当初は積まないと決めていたが、2026-10-01 に本人の指示で実施した（`Session.apply` と
+`duocad/entry.py`。verb ごとに `Session`・`DocumentTools`・`_dispatch` の3箇所へ書いていた配線が無くなった）。
+`server.py` の分割は2段構え（クラス境界→ `DocumentView` の切り出し）で実施済み。`Applied` 型の同期は、
+当初は生成ではなく突合の機械検査（TS のソースを正規表現で読むテスト）にしていたが、同じ 2026-10-01 に
+**宣言からの生成**へ変えた（`Command.returns` → `web/src/generated/protocol.ts`。突合は「宣言と実際の応答」の
+1箇所だけになり、TS 側は型検査が見る）。
+
+`web/src/App.svelte` は、同じ 2026-10-01 に**共有状態に触らないかたまりだけ**を切り出した（画角・原点ギズモ・断面＝
+`displaySettings.svelte.ts`、ファイル操作と一覧＝`documentFiles.svelte.ts`、AI との会話＝`aiChat.svelte.ts`、
+測定の結果＝`measurement.svelte.ts`。2,713行→2,382行）。**ピック→選択の翻訳・辺と頂点の取り寄せ・スケッチ・
+`runCommand` は切らない** —— 応答待ち（`pendingOp`）・モード・「いま何を指せるか」を互いに読み書きしており、
+1箇所で読めることが価値になっている。形状最適化の節は、このときの作業の対象外にしたので触っていない。
 
 ## テスト方針
 

@@ -67,7 +67,6 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
   const selectionLabel = isFace ? '押し出す面' : '押し出す領域'
   return {
     id: 'extrude',
-    category: 'feature',
     label: '押し出す',
     buttonId: 'extrude',
     preview: 'server',
@@ -120,9 +119,8 @@ export const EXTRUDE_FACES: CommandDef = makeExtrude('face')
  * 失敗し、しかも半径に対して単調でない(§7。r=10.0 失敗 / r=10.5 成功)。コアが例外へ
  * 変換し、サーバが理由を返し、`App.svelte` が**選択を保持したまま打った値を戻す**。
  */
-export const FILLET: CommandDef = {
+export const FILLET: CommandDef<'fillet'> = {
   id: 'fillet',
-  category: 'feature',
   label: '丸める',
   buttonId: 'fillet',
   preview: 'server',
@@ -147,9 +145,8 @@ export const FILLET: CommandDef = {
 }
 
 /** 面取り。フィレットと同じ集め方(まっすぐな辺は平面・円い辺は円錐になる)。 */
-export const CHAMFER: CommandDef = {
+export const CHAMFER: CommandDef<'chamfer'> = {
   id: 'chamfer',
-  category: 'feature',
   label: '面取り',
   buttonId: 'chamfer',
   preview: 'server',
@@ -180,9 +177,8 @@ export const CHAMFER: CommandDef = {
  * **ターゲットのピックはツール選択より前** —— `args` の並びが `firstMissingArg` の順序。
  * ターゲットを確定選択に入れると `require_bodies` がツール側とロールが混ざる。
  */
-export const BOOLEAN_BODY: CommandDef = {
+export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
   id: 'boolean_body',
-  category: 'feature',
   label: 'ブーリアン',
   buttonId: 'boolean-body',
   preview: 'server',
@@ -231,9 +227,8 @@ export const BOOLEAN_BODY: CommandDef = {
  * `sketch_id` はここでは付けない —— どのスケッチかは「今どのスケッチモードに居るか」で
  * あって、コマンドが集める引数ではない(`App.svelte` が送信時に足す)。
  */
-export const PATTERN_RECTANGULAR: CommandDef = {
+export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
   id: 'pattern_rectangular',
-  category: 'feature',
   label: '矩形反復',
   buttonId: 'pattern-rectangular',
   // **幽霊はブラウザが描く**。変わるのはスケッチの図形でソリッドではないので、
@@ -309,9 +304,8 @@ export const PATTERN_RECTANGULAR: CommandDef = {
  * 回転中心はスケッチ平面上のクリック(点引数)で取る。**中心と図形の中心が一致すると
  * コアが ValueError**(全複製が元と重なる)なので、その場合は理由が画面に出る。
  */
-export const PATTERN_CIRCULAR: CommandDef = {
+export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
   id: 'pattern_circular',
-  category: 'feature',
   label: '円形反復',
   buttonId: 'pattern-circular',
   // 矩形反復と同じローカル方式。**回転中心を置くクリックの前から幽霊が出る**
@@ -369,9 +363,8 @@ export const PATTERN_CIRCULAR: CommandDef = {
  * 順序、つまり「次に何を問うか」なので、回転を選んだ瞬間に辺が指せる ——
  * 逆順にすると、数値を打ってから3Dを触りに戻る動線になる。
  */
-export const MOVE_BODY: CommandDef = {
+export const MOVE_BODY: CommandDef<'move_body'> = {
   id: 'move_body',
-  category: 'feature',
   label: '動かす',
   buttonId: 'move-body',
   // **ローカル方式**。形は変わらず位置だけが変わるので、届いているメッシュを
@@ -446,9 +439,8 @@ export const MOVE_BODY: CommandDef = {
  * **面のピックが開くのは「面を選ぶ」を押した後だけ**である(`when`)。3択のどれかで
  * 済む人の画面には面のピックが現れず、選択のクリックが吸われることもない。
  */
-export const MIRROR_BODY: CommandDef = {
+export const MIRROR_BODY: CommandDef<'mirror_body'> = {
   id: 'mirror_body',
-  category: 'feature',
   label: '鏡映複製',
   buttonId: 'mirror-body',
   // **幽霊は無い**(`move_body` は持つ)。鏡映面を選んだ時点で複製の位置は一意に決まるので、
@@ -523,9 +515,8 @@ export const MIRROR_BODY: CommandDef = {
  * **howが無い**(引数は対象だけ)。`needsEnter` は `max: null` の側で真になるので、
  * 選び終わりは人がEnter(またはボタンの押し直し)で言う。
  */
-export const DELETE_SELECTION: CommandDef = {
+export const DELETE_SELECTION: CommandDef<'delete'> = {
   id: 'delete',
-  category: 'feature',
   label: '削除する',
   buttonId: 'delete',
   preview: 'none',

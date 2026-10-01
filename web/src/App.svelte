@@ -33,6 +33,7 @@
     type Point2,
     type SelectableKind,
   } from './commands/command'
+  import { categoryOf } from './commands/category'
   import {
     MOVE_BODY,
     SKETCH_FEATURE_COMMANDS,
@@ -40,10 +41,8 @@
     needsSketchId,
   } from './commands/features'
   import { ghostCopies, snapSketchPoint } from './entityKinds'
-  import { evaluateExpression } from './expression'
-  import { IMPORT_STEP, changesDocument } from './commands/files'
+  import { IMPORT_STEP } from './commands/files'
   import { MEASURE } from './commands/measure'
-  import { measureLabel, measureReadout } from './measureText'
   import type { MeasurePayload, OptimizeResolutionStep } from './session'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
@@ -66,21 +65,17 @@
     runsOutsideSketch,
     runsWithoutSketchId,
   } from './commands/sketch'
-  import FilesPanel, { formatSize } from './FilesPanel.svelte'
+  import FilesPanel from './FilesPanel.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
   import Toast, { showToast } from './Toast.svelte'
   import {
     createSession,
-    type AiStatus,
-    type AiTranscriptEntry,
     type Applied,
     type BasePlaneName,
     type BodyGeometry,
     type BodyRef,
     type ConnectionStatus,
-    type DocumentInfo,
     type EdgesPayload,
-    type FilePayload,
     type OptimizeConditionsReport,
     type OptimizeDebugPayload,
     type OptimizeProgress,
@@ -94,6 +89,7 @@
     type VerticesPayload,
   } from './session'
   import AiPanel from './AiPanel.svelte'
+  import { createAiChat } from './aiChat.svelte'
   import {
     anyDebugFlag,
     debugKindsFor,
@@ -101,12 +97,13 @@
     type DebugFlags,
   } from './debugFlags'
   import SettingsDialog from './SettingsDialog.svelte'
-  import { loadFov, loadOriginVisible, saveFov, saveOriginVisible } from './viewSettings'
+  import { createDisplaySettings } from './displaySettings.svelte'
+  import { createDocumentFiles } from './documentFiles.svelte'
+  import { createMeasurement } from './measurement.svelte'
   import {
     createViewport,
     type BoxSelectEvent,
     type PickEvent,
-    type SectionState,
     type SketchEntityHit,
     type VertexMarker,
     type Viewport,
@@ -150,7 +147,7 @@
       ...SKETCH_PENDING_COMMANDS,
       ...SKETCH_MODE_COMMANDS,
       ...OPTIMIZE_MODE_COMMANDS,
-    ].map((command) => [command.id, command.category]),
+    ].map((command) => [command.id, categoryOf(command)]),
   )
 
   let container: HTMLDivElement
@@ -307,41 +304,21 @@
   let verticesAsked = new Set<string>()
 
   // ---------------------------------------------------------------- E: ファイルと履歴
-  /** 直前に書いたファイル(画面の右上に出す。書き出しは他に痕跡が残らない)。 */
-  let lastFile = $state<FilePayload | null>(null)
-  /** 直前に出したファイル操作の `client_op`(応答が `file` で返ったときの待ちを解く)。 */
-  let lastFileOp: number | null = null
-  /**
-   * `duocad/models/` の中身(`list_documents` の写し。`FilesPanel.svelte` が描く)。
-   *
-   * **状態はコアが持つ**。ここはサーバの応答をそのまま置くだけで、
-   * 保存/開くのたびに `refreshDocuments()` を呼んで最新化する(サーバ側でファイルが
-   * 増減してもここが古いままにならないよう、開いたとき・保存/開くの直後に取り直す)。
-   */
-  let documentList = $state<DocumentInfo[]>([])
-  /**
-   * 直近に保存/開いたファイル名(画面に「今どれを触っているか」を出す)。
-   *
-   * **持つのは名前だけ**。保存状態はサーバが持つ(`state.saved`) —— 1操作ごとに自動保存
-   * される(issue #5、2026-09-16)ので、画面が履歴の位置を数えて「未保存」を導く理由が無い。
-   */
-  let currentDocumentName = $state<string | null>(null)
+  /** ファイル操作と `duocad/models/` の一覧。応答待ち(`pendingOp`)はこちらの持ち物なので貸す。 */
+  const files = createDocumentFiles({
+    runVerb: (verb, args, op) => session.runVerb(verb, args, op),
+    nextOp,
+    hold: (op) => (pendingOp = op),
+    release: releasePending,
+    note,
+    panelOpen: () => dataPanelOpen,
+  })
   /**
    * 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。**サーバの写し**
    * (`Session.saved`)。自動保存が書けなかったときだけ false になる —— 無題で何も変えていない
    * 文書は true(書くものが無い)で、最初の変更で `untitled-<n>.json` が自動で付く。
    */
   const saved = $derived(model?.saved ?? true)
-  /**
-   * 一覧を取り直す予約(`scheduleDocumentRefresh`)。自動保存のたびに一覧の操作数・サイズが
-   * 変わり、無題の文書は最初の変更で新しい行が要る —— ただし `list_documents` は全ファイルの
-   * ログを読むので、配信のたびに素で呼ばず**少し待ってまとめ、パネルを出しているときだけ**
-   * 取りに行く(畳んでいる間は「古い」印だけ立て、開いたときに1回取る)。
-   */
-  let documentRefreshTimer: ReturnType<typeof setTimeout> | null = null
-  let documentListStale = false
-  let lastSeenAppliedCount: number | null = null
-  let lastSeenLogLength: number | null = null
   /**
    * 左サイドバー(ファイル一覧)を出しているか。**見た目だけの状態**で、コアには送らない
    * (モデルの状態ではないので操作ログにも残さない)。
@@ -365,75 +342,8 @@
    * 見た目だけの状態で、コアにも操作ログにも行かない。
    */
   let settingsOpen = $state(false)
-  /**
-   * 起動時に読んだ画角。**下の2つの `$state` の初期値はここから作る** ——
-   * `$state` の初期化で別の `$state` を読むと「初期値しか見ていない」警告になる。
-   */
-  const savedFov = loadFov()
-  /**
-   * カメラの画角[度]。**画面の設定であって文書の状態ではない** ——
-   * コアに送らず(`session.*` を通らない)、操作ログにも残らず、undoの対象にもならない。
-   * 永続化はブラウザのlocalStorageだけ(`viewSettings.ts`)。`FOV_ORTHO`(0)は完全正投影。
-   */
-  let fov = $state(savedFov)
-
-  /**
-   * 設定からの変更。**その場で効かせて、そのまま覚える**(「適用」を挟まない)。
-   *
-   * **「戻る先の角度」を覚える仕組みは持たない**(2026-09-04本人決定でUIが2値になった
-   * ことで不要になった複雑さ)。正投影を外すと常に `FOV_DEFAULT` へ戻る —— コンソールから
-   * `window.__duocad.setFov(70)` のような内部APIで選べない値を入れていても、正投影を
-   * 入切すれば `FOV_DEFAULT` へ落ちる(覚え直す仕掛けを再発明しない)。
-   */
-  function applyFov(deg: number): void {
-    if (!Number.isFinite(deg)) return
-    fov = deg
-    saveFov(deg)
-  }
-
-  /** `fov` と同じ理由で画面設定(文書の状態ではない)。既定値は `loadOriginVisible` 側(表示)。 */
-  const savedOriginVisible = loadOriginVisible()
-  /** 常設の原点ギズモ(原点・3軸・3平面)を出しているか。ブラウザパネルの「原点」トグル
-   * (7項目まとめて1つ、本人指定)が読み書きする。 */
-  let originVisible = $state(savedOriginVisible)
-
-  /**
-   * 断面表示(issue #6)。**その場限りの画面状態**(文書にも localStorage にも載せない。
-   * 起動時と文書の差し替えで OFF)。位置は平面の法線軸上の座標[mm]。
-   */
-  let section = $state<SectionState>({ on: false, plane: 'XY', position: 0, inverted: false })
-
-  /** 内容の外接箱の中心の、その平面の法線軸成分(ON にした瞬間・平面を替えた瞬間の位置)。 */
-  function sectionCenter(plane: BasePlaneName): number {
-    const center = viewport?.contentCenter() ?? null
-    if (center === null) return 0
-    return plane === 'XY' ? center[2] : plane === 'XZ' ? center[1] : center[0]
-  }
-  function toggleSection(on: boolean): void {
-    section = on
-      ? { ...section, on: true, position: sectionCenter(section.plane) }
-      : { ...section, on: false }
-  }
-  function setSectionPlane(plane: BasePlaneName): void {
-    section = { ...section, plane, position: sectionCenter(plane) }
-  }
-  function setSectionPosition(text: string): boolean {
-    const evaluated = evaluateExpression(text)
-    if (!evaluated.ok) {
-      fail(`断面の位置: ${evaluated.reason}`)
-      return false
-    }
-    section = { ...section, position: evaluated.value }
-    return true
-  }
-  function setSectionInverted(inverted: boolean): void {
-    section = { ...section, inverted }
-  }
-
-  function applyOriginVisible(visible: boolean): void {
-    originVisible = visible
-    saveOriginVisible(visible)
-  }
+  /** 画角・原点ギズモ・断面(どれも文書の状態ではない)。 */
+  const display = createDisplaySettings({ fail })
   /**
    * この画面が出した `client_op` の控え。
    *
@@ -460,10 +370,7 @@
   let selfSelections = $state(0)
 
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
-  /** 今の設定(`session.aiGetStatus()` の返事・`ai_configure`/実行の開始終了で更新)。 */
-  let aiStatus = $state<AiStatus | null>(null)
-  /** 会話の時系列。**コアには無い**(`AiPanel.svelte` のdocstring参照)。 */
-  let aiTranscript = $state<AiTranscriptEntry[]>([])
+  const ai = createAiChat({ send: (text) => session.aiSend(text), fail })
 
   const session = createSession({
     onState: handleState,
@@ -494,7 +401,7 @@
       if (next === 'open') session.aiGetStatus()
       // (再)接続したら `models/` の一覧も取り直す(サーバの再起動・別セッションの
       // 保存で増減しうる。`FilesPanel.svelte` が空のまま固まらないようにする)。
-      if (next === 'open') refreshDocuments()
+      if (next === 'open') files.refresh()
       // 応答待ちの最中に接続が切れたら、その `client_op` はもう返ってこない。
       // 捨てないと再接続後も「直前の操作の応答待ち」が残り続け、Enterが永久に拒否される
       // (`onerror` を伴わない正常クローズで踏む)。
@@ -518,11 +425,11 @@
     onEdges: handleEdges,
     onVertices: handleVertices,
     onMeasure: handleMeasure,
-    onFile: handleFile,
-    onAiStatus: handleAiStatus,
-    onAiToolCall: (call) => (aiTranscript = [...aiTranscript, { kind: 'tool', call }]),
-    onAiResult: (result) => (aiTranscript = [...aiTranscript, { kind: 'result', result }]),
-    onAiError: handleAiError,
+    onFile: files.onFile,
+    onAiStatus: ai.onStatus,
+    onAiToolCall: ai.onToolCall,
+    onAiResult: ai.onResult,
+    onAiError: ai.onError,
     onOptimizeConditions: (report) => (optimizeConditions = report),
     onOptimizeResolution: (payload) => (optimizeResolution = payload),
     onOptimizeStatus: (running, cancelling) => {
@@ -775,23 +682,7 @@
     showToast(message)
   }
 
-  // ---------------------------------------------------------------- G: アプリ内AIエージェント
-  function handleAiStatus(next: AiStatus): void {
-    aiStatus = next
-    // **繋がらない理由を黙って捨てない**(`ai_configure` の拒否。タスクファイルの要件)。
-    if (next.error) fail(`AI設定: ${next.error}`)
-  }
-
-  function handleAiError(message: string): void {
-    aiTranscript = [...aiTranscript, { kind: 'error', message }]
-    fail(`AI ${message}`)
-  }
-
-  function sendAiMessage(text: string): void {
-    aiTranscript = [...aiTranscript, { kind: 'user', text }]
-    session.aiSend(text)
-  }
-
+  // ---------------------------------------------------------------- 操作の番号と応答待ち
   function nextOp(): number {
     opCounter += 1
     myClientOps.add(opCounter) // この番号で返ってきた操作は「自分」(上のdocstring)
@@ -800,7 +691,7 @@
 
   /**
    * 番号を取って応答待ち(`pendingOp`)にし、verb を送る(`runCommand` の sketch / feature / query)。
-   * ファイル操作は `runFileOp`(文書を変える verb のときだけ待つ)で、ここは通さない。
+   * ファイル操作は `files.run`(文書を変える verb のときだけ待つ)で、ここは通さない。
    */
   function sendTracked(verb: string, args: Record<string, unknown>): void {
     const op = nextOp()
@@ -818,22 +709,7 @@
   // ---------------------------------------------------------------- コアからの状態
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
     model = next
-    // **編集中のファイル名はサーバの写し**(2026-08-30)。`applied` や `file` の応答から
-    // 拾い直さない —— 正は `Session._current_name` 1つで、こちらは配信のたびに映すだけ。
-    // これでリロードしても名前が戻る(以前は文書だけサーバに残って名前が失われた)。
-    currentDocumentName = next.current_name
-    // **文書が変わったら一覧を取り直す**(自動保存の結果を一覧へ映す。issue #5)。verbと
-    // 開く/新規は `applied_count` を、undo/redo は操作数(`log.length`)を動かす —— 
-    // **`applied_count` は undo/redo で動かない**ので両方を見る。経路(WS/MCP/最適化)を
-    // 問わずここ1箇所で拾える。
-    if (
-      lastSeenAppliedCount !== null &&
-      (next.applied_count !== lastSeenAppliedCount || next.log.length !== lastSeenLogLength)
-    ) {
-      scheduleDocumentRefresh()
-    }
-    lastSeenAppliedCount = next.applied_count
-    lastSeenLogLength = next.log.length
+    files.onState(next)
     // **状態が1通届くたびに1つ増える番号**(実機検査のための穴。`__duocad.stateEpoch`)。
     // これが無いと「サーバの往復がまだ終わっていない」と「もう何も変わらない」を
     // 外から区別できず、**要求が出ていく前の画面を『落ち着いた』と読む**検査になる
@@ -898,7 +774,7 @@
       // **前の文書の最適化の表示を持ち越さない**(結果の通知・解像度の段・最小幅・`?voxel=1` で
       // 隠した結果ボディ)。段の添字は目盛りが文書ごとに違うので、既定(いちばん粗い)へ戻す。
       resetOptimizeView()
-      section = { ...section, on: false } // 断面はその場限り(文書が替わったら切らない状態へ)
+      display.closeSection() // 断面はその場限り(文書が替わったら切らない状態へ)
       // **開いた(`open_document`)ときだけ視点を合わせ直す。** 文書のスケールが不連続に
       // 変わるのは import_step と同じくここだけ(実測: 小さな部品→大きな板を保存し、開き直すと
       // 前の文書の視点のまま端が画面外に出た)。**新規(`new_document`)は空の文書**なので
@@ -916,7 +792,7 @@
       note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
       releasePending(applied.client_op)
       lastApplied = applied
-      refreshDocuments()
+      files.refresh()
       return
     }
     if (applied) {
@@ -982,198 +858,19 @@
   }
 
   // ---------------------------------------------------------------- 測定(verbではない)
-  /**
-   * 直近の測定の結果(無ければ null)。**測った選択が変わるまで残る**(下の `$effect`)。
-   * そのほかに消えるのは、次のコマンドの起動(`onCommandStart`)・Esc(`onWindowKeydown`)・
-   * モードの切り替え。読み札(`#measure-result`)と3Dの線(`viewport.showMeasurement`)は
-   * どちらもここから導く。
-   */
-  let measurement = $state<MeasurePayload | null>(null)
-  /** `measurement` を測ったときの選択の印(`refKey` の並び。origin は見ない)。 */
-  let measurementKey = ''
-
-  function selectionKey(): string {
-    return (selection?.items ?? []).map(refKey).join('|')
-  }
+  const measure = createMeasurement({
+    selection: () => selection?.items ?? [],
+    modeKind: () => mode.kind,
+    viewport: () => viewport,
+    fail,
+  })
 
   function handleMeasure(payload: MeasurePayload): void {
     if (releasePending(payload.client_op)) {
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }
-    if (payload.between_error) {
-      measurement = null
-      fail(payload.between_error)
-      return
-    }
-    if (payload.between === undefined || payload.between === null) {
-      measurement = null
-      return
-    }
-    measurement = payload
-    measurementKey = selectionKey()
-  }
-
-  /** 測った選択が変われば結果は嘘になるので消す(選び直し・undo・AIの提案のどれでも)。 */
-  $effect(() => {
-    if (measurement !== null && selectionKey() !== measurementKey) measurement = null
-  })
-  /** モードが変わったら消す(コマンド層を `{#key mode.kind}` で作り直すのと同じ理由)。 */
-  $effect(() => {
-    void mode.kind
-    measurement = null
-  })
-
-  const measurementText = $derived(measurement?.between ? measureReadout(measurement.between) : '')
-
-  $effect(() => {
-    // 先に読んでから渡す(`?.` の短絡で依存を失わない —— 基準平面の $effect と同じ理由)。
-    const between = measurement?.between ?? null
-    if (between === null || between.from === null || between.to === null) {
-      viewport?.showMeasurement(null)
-      return
-    }
-    viewport?.showMeasurement({ from: between.from, to: between.to, label: measureLabel(between) })
-  })
-
-  /**
-   * ファイルを書いた/一覧が届いた。**どこへ何バイト書いたかを必ず画面へ出す** ——
-   * 書き出しはブラウザの中に痕跡が残らない操作なので、通知が唯一の確認手段になる。
-   */
-  function handleFile(payload: FilePayload): void {
-    // **`list_documents` の応答はここで分岐して抜ける**。一覧の取得は保存/開くの
-    // たびに黙って裏で走る(`refreshDocuments` 参照)ので、他のファイル操作と同じ
-    // 「保存した/開いた」通知を出すと、一覧を取り直すたびに無意味な行が積まれる。
-    if (payload.action === 'list') {
-      documentList = payload.files ?? []
-      return
-    }
-    lastFile = payload
-    // **ここでファイル名を控えない**(2026-08-30) —— 編集中のファイルはサーバが持ち
-    // (`state.current_name`)、保存の直後にはサーバが状態も配り直す(`net/ws.py` の
-    // `save_document` 分岐)。応答から拾い直すと真実源が2つになる。
-    // **応答が `file` で返ったなら、その操作の待ちはここで解く**。
-    // 「文書を変えるか」の判定はブラウザとサーバで別々に持っているので、片方だけ
-    // 直したときに**状態配信を待ち続けて確定が永久に拒否される**経路ができる。
-    // 出した番号を控えてあるので、それと一致するときだけ解けばよい(取りすぎない)。
-    if (pendingOp !== null && pendingOp === lastFileOp) pendingOp = null
-    const size = formatSize(payload.bytes)
-    const extra = payload.operations !== undefined ? ` / 操作 ${payload.operations}件` : ''
-    // **export_step/export_stlのみ**body_idsが載る。書き出した個数と、非表示で除外した
-    // 個数(0件なら文言を出さない)を並べる —— 「隠したつもりが無いのに減っている」を
-    // 見えない驚きにしないため。
-    const exported = payload.body_ids !== undefined ? ` / ${payload.body_ids.length}個` : ''
-    const skippedCount = payload.skipped_hidden?.length ?? 0
-    const skipped = skippedCount > 0 ? ` ※非表示の${skippedCount}個は除外` : ''
-    note(`${payload.action}: ${payload.path}(${size}${extra}${exported}${skipped})`)
-    // **保存/改名/複製/削除の直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
-    // 改名では行の名前が、複製では行そのものが増え、削除では行が消える —— 応答をここで待たず、
-    // 次のWS往復に任せる。
-    if (['save', 'rename', 'copy', 'delete'].includes(payload.action)) refreshDocuments()
-  }
-
-  /** 一覧の取り直しを少し待ってまとめる(理由は `documentRefreshTimer` のdocstring)。 */
-  function scheduleDocumentRefresh(): void {
-    if (!dataPanelOpen) {
-      documentListStale = true
-      return
-    }
-    if (documentRefreshTimer !== null) clearTimeout(documentRefreshTimer)
-    documentRefreshTimer = setTimeout(() => {
-      documentRefreshTimer = null
-      refreshDocuments()
-    }, 300)
-  }
-
-  // パネルを畳んでいる間に文書が変わっていたら、開いたときに1回取り直す。
-  $effect(() => {
-    if (dataPanelOpen && documentListStale) {
-      documentListStale = false
-      refreshDocuments()
-    }
-  })
-
-  /**
-   * 一覧の行から**別名で複製**する / **ディスクから削除**する(issue #17)。どちらも文書を
-   * 変えないファイル操作で、保存と同じく `FilesPanel` から直接送る(`CommandHost` を通さず、
-   * `pendingOp` も立てない)。拒否(複製先が在る・編集中のファイルの削除)はサーバが言い、
-   * `onError` → `fail()` でトースト1枚になる。
-   */
-  function copyDocument(source: string, dest: string): void {
-    runFileOp('copy_document', { source, dest })
-  }
-
-  function deleteDocument(name: string): void {
-    runFileOp('delete_document', { name })
-  }
-
-  /** `duocad/models/` の一覧をサーバへ取り直しに行く(`FilesPanel.svelte` が描く)。 */
-  function refreshDocuments(): void {
-    session.runVerb('list_documents', {}, nextOp())
-  }
-
-  /**
-   * **いま編集しているファイルを改名する**(`FilesPanel` の名前欄だけが呼ぶ。issue #5)。
-   *
-   * 保存は1操作ごとに自動で走り、無題の文書は最初の変更で `untitled-<n>.json` が付くので、
-   * 人が決めるのは名前だけ。**既存名は送っても通らない** —— サーバが拒否してトースト1枚に
-   * なる(`Session.rename_document`)。ここで `documentList` を見た実在チェックは**足さない**:
-   * パス解釈の正を2箇所に持たないという既存の規律(`FilesPanel.nameProblem` のdocstring)。
-   *
-   * **`pendingOp` は立てない** —— `FilesPanel.svelte` は `CommandHost` の応答待ちの外にいる
-   * (一覧からのクリックは「対象を選ぶ」そのもので、引数収集の状態機械を通す理由が無い)。
-   */
-  function renameDocument(name: string): void {
-    runFileOp('rename_document', { name })
-  }
-
-  /**
-   * **今の文書を手で書き直す**(Ctrl+S)。保存は自動で済んでいるので普段は何も変わらない ——
-   * 残してあるのは、自動保存が書けなかった(`#save-state` が出ている)ときに人が押し直す
-   * ためと、Ctrl+S でブラウザの「ページを保存」を止めるため。引数を送らない(書き込み先を
-   * 決めるのはサーバの `Session._current_name`)。無題で何も変えていない文書は書くものが
-   * 無いので何も送らない。
-   */
-  function saveNow(): void {
-    if (currentDocumentName === null) return
-    runFileOp('save_document', {})
-  }
-
-  /** ファイル名を渡して開く。応答は `state`(`applied.change === 'document'`)で来る。 */
-  function openDocumentByName(name: string): void {
-    session.runVerb('open_document', { name }, nextOp())
-  }
-
-  /**
-   * 空の文書にする(「新規」)。応答は開くのと同じ `state`
-   * (`applied.change === 'document'` / `action: "new"`)で来る。
-   *
-   * **確認を挟まない**(`FilesPanel.svelte` の「開くのに確認ダイアログを挟まない」と同じ線)。
-   */
-  function newDocument(): void {
-    session.runVerb('new_document', {}, nextOp())
-  }
-
-  /**
-   * STEP/STL入出力(2026-08-27に`FilesPanel.svelte`へ移設。ツールバーの`CommandHost`を
-   * 経由していた頃の `runCommand` の `case 'file'` と**同じ挙動**にする —— 二重化しないよう
-   * `changesDocument` をそのまま呼ぶ(`import_step` だけが文書を変える)。
-   *
-   * **書き出しは`pendingOp`を立てない**(立てると`handleFile`が来るまでEnterが拒否される)。
-   */
-  function runFileOp(verb: string, args: Record<string, unknown>): void {
-    const op = nextOp()
-    lastFileOp = op
-    if (changesDocument(verb)) pendingOp = op
-    session.runVerb(verb, args, op)
-  }
-
-  function exportStep(path: string): void {
-    runFileOp('export_step', { path })
-  }
-
-  function exportStl(path: string): void {
-    runFileOp('export_stl', { path })
+    measure.onResult(payload)
   }
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
@@ -1325,9 +1022,12 @@
     // **見えているボディだけを対象にする**。AIが述語で提案した集合は
     // 隠したボディにまたがりうる。そこを対象にするとサーバが「隠れているものの辺は
     // 指せない」と断り、画面にはエラーだけが出て**見えている辺も出なくなる**。
-    // 選択のうち見えているものを先に見る。
+    // 選択のうち見えているものを先に見る。**メッシュボディも同じ理由で外す** —— 辺も頂点も
+    // 持たないので、頼むとサーバが「mesh body」と断ってエラーの札だけが出る。
     const visible = new Set(
-      (model?.bodies ?? []).filter((body) => body.visible).map((body) => body.body_id),
+      (model?.bodies ?? [])
+        .filter((body) => body.visible && body.kind !== 'mesh')
+        .map((body) => body.body_id),
     )
     const picked = (selection?.items ?? []).find(
       (item): item is ShapeRef => !('sketch' in item) && visible.has((item as ShapeRef).body),
@@ -1598,7 +1298,7 @@
    * 荷重の2つは**空にする**(`OPTIMIZE_EMPTY_START_VERBS`)。
    */
   function onCommandStart(verb: string): void {
-    measurement = null // 次の操作に入ったら、前の測定の札は用済み
+    measure.clear() // 次の操作に入ったら、前の測定の札は用済み
     // **`toggleOnlyClicks` は起動するverbが変わるたび毎回書き直す**(前のverbの
     // 値を持ち越さない)。`model === null` の早期returnより前に置く —— 起動そのものは
     // 文書が無くても起きるので、ここで止めると次のverbが集合代入でも判定が古いまま残る。
@@ -1914,7 +1614,7 @@
 
   // ---------------------------------------------------------------- コマンド層との繋ぎ
   /**
-   * 揃った引数をサーバへ送る。**経路は `CommandDef.category` だけで決まる。**
+   * 揃った引数をサーバへ送る。**経路はコマンドの分類(`categoryOf`)だけで決まる。**
    *
    * **知らない名前はここで断る**(分類を書き忘れたverbが黙って別のverbになるのを防ぐ)。
    */
@@ -1965,11 +1665,9 @@
       }
       // -------------------------------------------------------------- F: ファイル
       case 'file': {
-        // **`runFileOp` をそのまま呼ぶ**(2026-09-05)。`FilesPanel` から送っていた頃と
-        // 同じ関数で、`changesDocument` が `pendingOp` を立てるかどうかを決める。
-        // ここで二重化すると「ツールバー経由の import_step だけ応答待ちの解き方が違う」
-        // という差が生まれる。
-        runFileOp(verb, args)
+        // **`FilesPanel` からの操作と同じ口**(`files.run`)へ流す。ここで二重化すると
+        // 「ツールバー経由の import_step だけ応答待ちの解き方が違う」という差が生まれる。
+        files.run(verb, args)
         return
       }
       // -------------------------------------------------------------- 測定(読み取り専用)
@@ -2102,7 +1800,7 @@
   function onWindowKeydown(event: KeyboardEvent): void {
     // Esc は測定の札を消す(コマンドの中断は `CommandHost` が同じキーで別に見る)。
     if (event.key === 'Escape') {
-      measurement = null
+      measure.clear()
       return
     }
     if (!(event.ctrlKey || event.metaKey)) return
@@ -2119,7 +1817,7 @@
     const isTextEditingField =
       target?.tagName === 'TEXTAREA' ||
       (target?.tagName === 'INPUT' && !['checkbox', 'radio'].includes((target as HTMLInputElement).type))
-    // **Ctrl+S は今の文書を手で書き直す**(`saveNow`)。保存は自動で済んでいる(issue #5)ので
+    // **Ctrl+S は今の文書を手で書き直す**(`files.save`)。保存は自動で済んでいる(issue #5)ので
     // 普段は何も変わらないが、キーは残す —— 自動保存が書けなかったときの押し直しと、
     // ブラウザの「ページを保存」を止めるため。
     //
@@ -2134,7 +1832,7 @@
     // (判定式そのものは undo/redo と同じものを使い、意味の違いだけをここに書く)。
     if (key === 's') {
       event.preventDefault()
-      saveNow()
+      files.save()
       return
     }
     if (isTextEditingField) return
@@ -2203,12 +1901,7 @@
 
   onMount(() => {
     viewport = createViewport(container)
-    // **ここで1回明示的に呼ぶ**。`viewport` は `$state` ではないただの `let` なので、
-    // 下の `$effect(() => viewport?.setFov(fov))` は**この代入では再走しない** ——
-    // 初回のエフェクトは `viewport === null` のまま走り終わっており、保存されたFOVが
-    // 画面に出ないままになる(Svelte 5 runesの罠)。
-    viewport.setFov(fov)
-    viewport.setOriginVisible(originVisible)
+    display.attach(viewport)
     viewport.onPick(onPick)
     viewport.onBoxSelect(onBoxSelect)
     viewport.onPlaneMove((point, hit) => {
@@ -2217,10 +1910,6 @@
     // 可変解像度 —— ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域を
     // その粗さで測り直させる。**スケッチの折れ線はビューポート側が自分で折り直す**
     // (ブラウザ内で完結するので往復が要らない)。連打の抑制も向こうが持っている。
-    // 断面のハンドルをドラッグしたら位置だけを書き戻す(状態の正は `section`)
-    viewport.onSectionDrag((position) => {
-      section = { ...section, position }
-    })
     viewport.onResolutionChange(sendViewResolution)
     session.start()
     return () => {
@@ -2342,22 +2031,6 @@
     seenStaleKeys = next
   })
 
-  // 画角が変わったらビューポートへ流す。**初回の反映はここではなく `onMount` が行う**
-  // (`viewport` は `$state` ではないので、代入ではこのエフェクトが再走しない)。
-  $effect(() => {
-    viewport?.setFov(fov)
-  })
-
-  // 原点ギズモの表示切り替え。**初回の反映は `onMount`**(`fov` と同じ理由)。
-  $effect(() => {
-    viewport?.setOriginVisible(originVisible)
-  })
-
-  // 断面。初回は OFF なので `onMount` での反映は要らない。
-  $effect(() => {
-    viewport?.setSection({ ...section })
-  })
-
   /** 状態配信を受けた回数。**実機検査が往復の完了を知るための穴**(`handleState` が増やす)。 */
   let stateEpoch = $state(0)
 
@@ -2373,8 +2046,8 @@
     lastApplied: () => lastApplied,
     messages: () => messages,
     errorLog: () => errorLog,
-    fov: () => fov,
-    applyFov,
+    fov: () => display.fov,
+    applyFov: display.applyFov,
     stateEpoch: () => stateEpoch,
     optimizeMode: () => optimizeMode,
     modeKind: () => mode.kind,
@@ -2402,12 +2075,11 @@
     vertexCandidateBody: () => vertexCandidateBody,
     selectedEntities: () => selectedEntities,
     vertexMarkers: () => vertexMarkers,
-    measurement: () => measurement,
+    measurement: () => measure.current,
     wantedVertices: () => wantedVertices,
-    lastFile: () => lastFile,
-    documentList: () => documentList,
-    currentDocumentName: () => currentDocumentName,
-    regionsStillExist,
+    lastFile: () => files.lastFile,
+    documentList: () => files.list,
+    currentDocumentName: () => files.currentName,
   })
 </script>
 
@@ -2431,7 +2103,7 @@
     <!-- **現在開いているファイル名**(完了条件4)。**常に名前だけを出す**(2026-08-27) ——
          まだ保存も読み込みもしていない文書には名前が無いので「(無題)」と置く。
          書けているかどうかは隣の `#save-state` が言う。 -->
-    <span id="current-file" class="dim">{currentDocumentName ?? '(無題)'}</span>
+    <span id="current-file" class="dim">{files.currentName ?? '(無題)'}</span>
     <!-- **自動保存が書けなかったときだけ出る札**(`state.saved`。issue #5)。保存は1操作ごとに
          自動で走るので「保存済み」は黙っていてよく、人の手が要る「未保存」だけを出す
          (Ctrl+S で書き直せる)。**明示の保存ボタンは無い**(2026-09-16本人判断で撤去)。 -->
@@ -2602,16 +2274,16 @@
     {#if dataPanelOpen}
       <aside class="data-panel">
         <FilesPanel
-          documents={documentList}
-          currentName={currentDocumentName}
-          onRename={renameDocument}
+          documents={files.list}
+          currentName={files.currentName}
+          onRename={files.rename}
           locked={optimizeBusy}
-          onOpen={openDocumentByName}
-          onNew={newDocument}
-          onCopy={copyDocument}
-          onDelete={deleteDocument}
-          onExportStep={exportStep}
-          onExportStl={exportStl}
+          onOpen={files.open}
+          onNew={files.create}
+          onCopy={files.copy}
+          onDelete={files.remove}
+          onExportStep={files.exportStep}
+          onExportStl={files.exportStl}
         />
       </aside>
     {/if}
@@ -2626,16 +2298,16 @@
       <!-- 測定の読み札(issue #10)。**結果があるときだけ**浮く(常設の指標ではない —— docs/UI.md
            「常設の指標を置かない」)。`.stage` の中の position:absolute なので `.viewport` の
            寸法＝カメラのアスペクトには触らない(ブラウザ・設定ダイアログと同じ)。 -->
-      {#if measurementText !== ''}
-        <div id="measure-result" class="measure-readout">{measurementText}</div>
+      {#if measure.text !== ''}
+        <div id="measure-result" class="measure-readout">{measure.text}</div>
       {/if}
 
       <BrowserPanel
         bodies={partBodies}
         {sketches}
         activeSketchId={sketchId}
-        {originVisible}
-        {section}
+        originVisible={display.originVisible}
+        section={display.section}
         onToggle={setVisible}
         onShowAll={showAllParts}
         onHideAll={hideAllParts}
@@ -2643,11 +2315,11 @@
         onToggleSketch={setSketchVisible}
         onShowAllSketches={showAllSketches}
         onHideAllSketches={hideAllSketches}
-        onToggleOrigin={applyOriginVisible}
-        onSectionToggle={toggleSection}
-        onSectionPlane={setSectionPlane}
-        onSectionPosition={setSectionPosition}
-        onSectionInvert={setSectionInverted}
+        onToggleOrigin={display.applyOriginVisible}
+        onSectionToggle={display.toggleSection}
+        onSectionPlane={display.setSectionPlane}
+        onSectionPosition={display.setSectionPosition}
+        onSectionInvert={display.setSectionInverted}
       />
 
       <!-- 設定ダイアログ。**`.stage` の中に置くのは「ブラウザの右」に出すため**(2026-09-04
@@ -2679,8 +2351,8 @@
 
       <SettingsDialog
         open={settingsOpen}
-        {fov}
-        onFov={applyFov}
+        fov={display.fov}
+        onFov={display.applyFov}
         onClose={() => (settingsOpen = false)}
       />
     </div>
@@ -2693,9 +2365,9 @@
     {#if sidebarOpen}
       <aside class="sidebar">
         <AiPanel
-          status={aiStatus}
-          transcript={aiTranscript}
-          onSend={sendAiMessage}
+          status={ai.status}
+          transcript={ai.transcript}
+          onSend={ai.send}
           onCancel={() => session.aiCancel()}
           onConfigure={(providerKind, modelName, baseUrl) =>
             session.aiConfigure(providerKind, modelName, baseUrl)}

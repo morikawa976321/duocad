@@ -244,10 +244,10 @@ def test_the_conflict_is_an_invalid_argument_over_mcp(session: Session) -> None:
     body = _box(session)
     tools = DocumentTools(session)
     _select(session, _body_refs(body))
-    tools.set_preserve_bodies()
+    tools.call("set_preserve_bodies", {})
 
     with pytest.raises(optimize.RoleConflict) as caught:
-        tools.set_exclude_bodies()
+        tools.call("set_exclude_bodies", {})
     envelope = tools.error_envelope("set_exclude_bodies", caught.value)
     assert envelope["code"] == "invalid_argument", envelope
 
@@ -751,10 +751,9 @@ def test_every_verb_is_reachable_from_all_three_surfaces(verb: str) -> None:
 #:
 #: **4 verb 全部をWSとMCPの両方で実際に走らせる**ための表。宣言の照合(下の
 #: `test_every_verb_is_reachable_from_all_three_surfaces`)だけでは、
-#: **引数の受け渡しが繋がっているか**は分からない —— WSの表は
-#: `**{key: message[key] for key in keys}` で機械的に渡すので、宣言の引数名と
-#: `Session` のラッパの引数名が食い違えば `TypeError` になり、MCPのラッパは手書きなので
-#: 綴りを間違えれば同じく落ちる。どちらも**その経路を1回走らせるまで誰も気づかない**。
+#: **引数の受け渡しが繋がっているか**は分からない —— WSもMCPも、宣言の引数名のまま
+#: 入口(`duocad/entry.py`)へ渡すので、宣言と入口の引数名が食い違えば `TypeError` になる。
+#: **その経路を1回走らせるまで誰も気づかない**。
 #: 読み取りは**セッションに依らない値**へ均す(`body_id` は毎回振り直されるので、
 #: 「選んだボディか」に置き換えてから2経路を突き合わせる)。
 def _assigned_bodies(role):
@@ -809,7 +808,7 @@ def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
             answer = send_one(made, {"cmd": verb, **arguments})
             assert answer["type"] == "state", answer
         else:
-            getattr(DocumentTools(made), verb)(**arguments)
+            DocumentTools(made).call(verb, arguments)
         assert made.document.log.entries[-1].verb == verb, "操作ログに載っていない"
         return read(_optimize(made), body)
 

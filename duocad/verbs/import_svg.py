@@ -33,10 +33,12 @@ SketchPanelの図形一覧が埋まる。`parameters.resolve` は素の数値を
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from ..document import Document
 from ..oplog import Operation, register_verb
+from ..entry import entry
+from ..paths import resolve_user_path
 from ..sketch import Entity, EntityId, SketchId, get_sketch, new_entity_id, remove_entities, require_valid_params
 from ..svg_import import PathLike, read_svg_entities
 
@@ -118,3 +120,26 @@ def _undo_import_svg(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_IMPORT_SVG, do=_do_import_svg, undo=_undo_import_svg)
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_IMPORT_SVG)
+def _enter_import_svg(
+    document: Document, sketch_id: str, path: PathLike, scale: Optional[float] = None
+) -> dict:
+    """`scale` は解決後の mm へさらに掛ける倍率(省略時 1.0)。"""
+    entity_ids = import_svg(
+        document,
+        str(sketch_id),
+        str(resolve_user_path(path)),
+        scale=1.0 if scale is None else float(scale),
+    )
+    args = document.log.entries[-1].args
+    return {
+        "sketch_id": str(sketch_id),
+        "entity_ids": list(entity_ids),
+        "source_name": args["source_name"],
+        "entity_count": len(args["entities"]),
+    }

@@ -11,6 +11,8 @@ from typing import Any, Sequence
 from .. import kernel
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
+from .. import selection
+from ..entry import entry
 from ._common import detach_bodies, editable_body, reattach_bodies, recall, remember, resolve_shape_ref
 
 VERB_BOOLEAN_BODY = "boolean_body"
@@ -115,3 +117,23 @@ def _undo_boolean_body(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_BOOLEAN_BODY, do=_do_boolean_body, undo=_undo_boolean_body)
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_BOOLEAN_BODY)
+def _enter_boolean_body(document: Document, target_ref: Any, mode: str) -> dict:
+    """ターゲット(面参照・1つ)に、確定選択のツールボディ群を作用させる。
+
+    `target_ref` は確定選択には入れない(入れると、ターゲットまでツールに数えられる)。
+    """
+    tool_body_ids = selection.require_bodies(document)
+    operation = boolean_body(document, target_ref, tool_body_ids, mode=str(mode))
+    changed = operation.args["target_body_id"]
+    return {
+        "target_body_id": changed,
+        "mode": operation.args["mode"],
+        "removed_bodies": list(operation.args["tool_bodies"]),
+        "changed_bodies": [changed],
+    }

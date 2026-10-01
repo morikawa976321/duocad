@@ -26,6 +26,7 @@ from uuid import uuid4
 from .. import parameters
 from ..document import Document, unknown_id_message
 from ..oplog import Operation, register_verb
+from ..entry import entry
 from ..sketch import Entity, Pattern, entity_kind_ops, get_sketch
 
 VERB_PATTERN_RECTANGULAR = "pattern_rectangular"
@@ -284,3 +285,29 @@ register_verb(
     do=_do_pattern_rectangular,
     undo=_undo_pattern,
 )
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_PATTERN_RECTANGULAR)
+def _enter_pattern_rectangular(
+    document: Document, sketch_id: str, entities: Any, dx: float, dy: float, nx: int, ny: int
+) -> dict:
+    return {"pattern_id": pattern_rectangular(document, sketch_id, entities, dx, dy, nx, ny)}
+
+
+@entry(VERB_PATTERN_CIRCULAR)
+def _enter_pattern_circular(
+    document: Document,
+    sketch_id: str,
+    entities: Any,
+    center: Any,
+    count: int,
+    total_angle: float = 360.0,
+    rotate_copies: bool = True,
+) -> dict:
+    pattern_id = pattern_circular(
+        document, sketch_id, entities, center, count, total_angle=total_angle, rotate_copies=rotate_copies
+    )
+    return {"pattern_id": pattern_id}

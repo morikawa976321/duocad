@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **鏡映複製の基準(スケッチの線分 / ソリッドの面)をマウスだけで指せる**。
  *
- *   node scripts/smoke-mirror.mjs [--port 8977] [--http-port 8978]
+ *   node scripts/smoke-mirror.mjs
  *
  * `mirror_sketch_entities` の軸と `mirror_body` の `plane_face` は、対象の確定選択とは
  * 別チャンネル(`web/src/commands/command.ts` の `PickArgSpec`)で受け取る。pytestでは

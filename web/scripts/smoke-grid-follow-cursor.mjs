@@ -2,7 +2,7 @@
  * 実機での確認 — スケッチで実際に描画中、グリッドがマウスカーソルへ追従して広がること
  * (`20260910-1615-duocad-grid-follow-cursor`)。
  *
- *   node scripts/smoke-grid-follow-cursor.mjs [--port 8993] [--http-port 8994]
+ *   node scripts/smoke-grid-follow-cursor.mjs
  *
  * 完了条件を実機で見る:
  *
