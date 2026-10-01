@@ -133,11 +133,15 @@ runSmoke('smoke-optimize-debug', { timeout: 60000, mcp: true }, async ({ options
     await page.click('#optimize-enter')
     await waitFor(() => window.__duocad.optimizeMode === true, 'モードに入らない')
     await waitFor(() => window.__duocad.optimizeConditions?.ready === true, '条件がそろわない')
-    // いちばん粗い段(既定)のまま回す。
     await waitFor(
       () => Boolean(window.__duocad.optimizeResolution?.steps?.length),
       '解像度の目盛りが用意されない',
     )
+    // **既定の段(いちばん粗い 12mm)では結果が出ない** —— 12mm の立方体が1要素にしかならず、
+    // 全材料でも剛体運動を拘束できないと判定される(`smoke-optimize.mjs` の6節と同じ)。1段上げる。
+    await page.focus('#optimize-resolution')
+    await page.keyboard.press('ArrowRight')
+    await waitFor(() => window.__duocad.optimizeStepIndex === 1, 'スライダーを右へ動かしても段が変わらない')
 
     const partsBefore = await page.evaluate(() => window.__duocad.parts.length)
     await page.click('#optimize-run')
