@@ -18,7 +18,7 @@ import math
 from typing import Any, List, Optional, Sequence, Union
 from weakref import WeakKeyDictionary
 
-from .. import meshbody
+from .. import meshbody, selection
 from ..document import MESH_KIND, Body, BodyId, Document, new_body_id
 from ..oplog import Operation
 
@@ -329,3 +329,14 @@ def normalize_values(
         if not math.isfinite(item) or item <= 0.0:
             raise ValueError(f"{label} must be finite and > 0, got {item!r}")
     return values, stored
+
+
+def edge_entry(document: Document, verb: Any, value: Any) -> dict:
+    """確定選択の辺に `verb`(`fillet` / `chamfer`)を掛ける入口の共通部分。
+
+    辺と対象 Body は `selection.require_edges` が**選択順のまま**返す。順序が効くのは、辺と値
+    (半径・距離のリスト)を位置で対応させるため(並べ替えると値の割り当てがずれる)。
+    """
+    edges, body_id = selection.require_edges(document)
+    changed = verb(document, edges, value, body_id=body_id).args["body_id"]
+    return {"body_id": changed, "changed_bodies": [changed]}

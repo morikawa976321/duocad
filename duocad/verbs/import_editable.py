@@ -31,6 +31,8 @@ from .. import kernel
 from ..document import Body, BodyId, Document, new_body_id
 from ..io_step import read_step_source, solid_names
 from ..oplog import Operation, register_verb
+from ..entry import entry
+from ..paths import resolve_user_path
 
 PathLike = Union[str, Path]
 
@@ -94,3 +96,11 @@ register_verb(
     do=_do_import_step,
     undo=_undo_import_step,
 )
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_IMPORT_STEP)
+def _enter_import_step(document: Document, path: PathLike) -> dict:
+    return {"body_ids": list(import_step(document, str(resolve_user_path(path))))}

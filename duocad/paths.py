@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
@@ -19,3 +20,13 @@ DEFAULT_MODELS_DIR = REPO_ROOT / "models"
 #: テストは `Session(exports_dir=tmp_path)` か `conftest` の `DEFAULT_EXPORTS_DIR` 差し替えで
 #: 実フォルダを触らない。
 DEFAULT_EXPORTS_DIR = REPO_ROOT / "export"
+
+
+def resolve_user_path(path: Any) -> Path:
+    """受け取ったパスを絶対パスにする(相対はサーバの作業ディレクトリ基準)。
+
+    ブラウザからは `model.json` のような相対パスが普通に来る。解決を各所でやると「読んだ/書いたと
+    言われたファイルが見つからない」が起きるので、ここ1箇所で行う。
+    """
+    resolved = Path(str(path)).expanduser()
+    return resolved if resolved.is_absolute() else (Path.cwd() / resolved).resolve()

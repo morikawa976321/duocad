@@ -24,6 +24,8 @@ from typing import Any, List, Sequence
 from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
+from .. import selection
+from ..entry import entry
 from ..sketch import (
     add_entities,
     entity_kind_ops,
@@ -184,3 +186,19 @@ register_verb(
     do=_do_mirror_sketch_entities,
     undo=_undo_mirror_sketch_entities,
 )
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_MIRROR_SKETCH_ENTITIES)
+def _enter_mirror_sketch_entities(document: Document, axis: Any) -> dict:
+    targets = selection.require_sketch_entities(document)
+    sketch_ids = sorted({str(item["sketch"]) for item in targets})
+    args = mirror_sketch_entities(document, targets, axis).args
+    return {
+        "axis_p0": args["axis_p0"],
+        "axis_dir": args["axis_dir"],
+        "created": list(args["created"]),
+        "sketch_ids": sketch_ids,
+    }

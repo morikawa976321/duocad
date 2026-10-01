@@ -24,6 +24,8 @@ from typing import List, Sequence, Tuple
 from .. import kernel_sketch
 from ..document import Document
 from ..oplog import Operation, register_verb
+from .. import selection
+from ..entry import entry
 from ..region import RegionRef, _regions_detailed
 from ..sketch import (
     add_entities,
@@ -137,3 +139,22 @@ register_verb(
     do=_do_envelope_regions,
     undo=_undo_envelope_regions,
 )
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+def selected_regions(document: Document) -> List[RegionRef]:
+    """確定選択の領域(確定とプレビューが同じ取り方をする)。"""
+    return [RegionRef.from_dict(item) for item in selection.require_confirmed(document, "region")]
+
+
+@entry(VERB_ENVELOPE_REGIONS)
+def _enter_envelope_regions(document: Document, radius: float = 0.0, offset: float = 0.0) -> dict:
+    args = envelope_regions(document, selected_regions(document), float(radius), float(offset)).args
+    return {
+        "radius": args["radius"],
+        "offset": args["offset"],
+        "created": list(args["created"]),
+        "sketch_ids": [args["sketch_id"]],
+    }

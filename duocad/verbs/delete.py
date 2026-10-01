@@ -65,6 +65,8 @@ from typing import Any, Dict, List, Sequence
 from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
+from .. import selection
+from ..entry import entry
 from ..sketch import Entity, get_entity, get_sketch, remove_entities
 from ._common import deletable_body, detach_bodies, reattach_bodies, recall, remember
 
@@ -224,3 +226,23 @@ def _undo_delete(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_DELETE, do=_do_delete, undo=_undo_delete)
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_DELETE)
+def _enter_delete(document: Document) -> dict:
+    """ボディ由来(面/辺/頂点/ボディ)と図形が混ざっていても1回で処理する —— `require_bodies` と
+    `require_sketch_entities` を2つ呼ぶと、片方しか選ばれていないときに `SelectionKindMismatch` で壊れる。
+
+    **`changed_bodies` は返さない** —— 消えたボディは配りものの `bodies` から丸ごと居なくなる
+    (形が変わったのではない)。画面が形を取り直す対象は1つも無い。
+    """
+    targets = selection.require_deletable(document)
+    args = delete(document, targets.bodies, targets.entities).args
+    return {
+        "bodies": list(args["bodies"]),
+        "entities": [spec["entity_id"] for spec in args["entities"]],
+        "sketch_ids": sorted({str(spec["sketch_id"]) for spec in args["entities"]}),
+    }

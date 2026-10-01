@@ -39,6 +39,8 @@ from .. import kernel, kernel_sketch
 from .. import sketch
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
+from .. import selection
+from ..entry import entry
 from ._common import (
     add_transformed_copies,
     copy_ids,
@@ -124,3 +126,23 @@ def _undo_mirror_body(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_MIRROR_BODY, do=_do_mirror_body, undo=_undo_mirror_body)
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_MIRROR_BODY)
+def _enter_mirror_body(
+    document: Document, base_plane: Optional[str] = None, plane_face: Any = None
+) -> dict:
+    """**元は動かないので `changed_bodies` は複製だけ**(`move_body` と違い、動いたボディを
+    取り直す必要がない)。"""
+    body_ids = selection.require_bodies(document)
+    args = mirror_body(document, body_ids, base_plane=base_plane, plane_face=plane_face).args
+    created = list(args["created"])
+    return {
+        "plane_point": args["plane_point"],
+        "plane_normal": args["plane_normal"],
+        "created": created,
+        "changed_bodies": created,
+    }

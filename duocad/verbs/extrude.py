@@ -29,6 +29,8 @@ from typing import Any, List, Optional, Sequence
 from .. import kernel_extrude, kernel_sketch
 from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
+from .. import selection
+from ..entry import entry
 from ._common import editable_body, recall, remember, resolve_shape_ref
 from ..region import RegionRef, _regions_detailed
 from ..sketch import get_sketch
@@ -331,3 +333,30 @@ def _undo_extrude(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_EXTRUDE, do=_do_extrude, undo=_undo_extrude)
+
+
+# --------------------------------------------------------------------------------------
+# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# --------------------------------------------------------------------------------------
+@entry(VERB_EXTRUDE)
+def _enter_extrude(
+    document: Document, distance: float, mode: str = "join", body_id: Optional[BodyId] = None
+) -> dict:
+    """確定選択の領域、または同一平面・同一ボディの面を押し出す(混在は ValueError)。
+
+    `body_id` だけは引数のまま —— 「どの Body へ足す/から引くか」であって対象集合ではない
+    (Body は選択集合の項目ではない)。面のときの既定はその面を持つ Body。
+    """
+    kind, items = selection.require_extrude_targets(document)
+    if kind == "face":
+        operation = extrude_faces(document, items, float(distance), mode=str(mode), body_id=body_id)
+    else:
+        refs = [RegionRef.from_dict(item) for item in items]
+        operation = extrude(document, refs, float(distance), mode=str(mode), body_id=body_id)
+    changed = operation.args["body_id"]
+    return {
+        "body_id": changed,
+        "distance": float(distance),
+        "mode": str(mode),
+        "changed_bodies": [changed],
+    }
