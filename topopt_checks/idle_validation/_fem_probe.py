@@ -244,6 +244,70 @@ def zone_masks(
     )
 
 
+def zone_masks_with_load(
+    material: np.ndarray,
+    grid,
+    *,
+    fixed_world_boxes: list[tuple],
+    load_world_boxes: list[tuple],
+    distance_mm: float,
+) -> dict:
+    """`zone_masks`に荷重面近傍ゾーン`load`を足した4ゾーン版。`zone_masks`は3ゾーンのまま(02〜05が使う)。
+    荷重パッド接触端のピークは3ゾーンでは`general`へ希釈される(03A_REFERENCE_REPAIR.md 7-1節)。
+    優先順位はholding→load→joint→general(holdingと重なる小さい形状ではholdingが先)。
+    """
+    mat = np.asarray(material, dtype=bool)
+    xx, yy, zz = np.meshgrid(
+        grid.centers_1d(0), grid.centers_1d(1), grid.centers_1d(2), indexing="ij"
+    )
+    centers = np.stack([xx, yy, zz], axis=-1)
+    flat_centers = centers.reshape(-1, 3)
+
+    hold_dist = np.full(flat_centers.shape[0], np.inf)
+    for box in fixed_world_boxes:
+        hold_dist = np.minimum(hold_dist, _point_aabb_distance(flat_centers, box))
+    holding = (hold_dist <= distance_mm).reshape(mat.shape) & mat
+
+    load_dist = np.full(flat_centers.shape[0], np.inf)
+    for box in load_world_boxes:
+        load_dist = np.minimum(load_dist, _point_aabb_distance(flat_centers, box))
+    load_zone = (load_dist <= distance_mm).reshape(mat.shape) & mat & ~holding
+
+    segments: list[tuple[np.ndarray, np.ndarray]] = []
+    fixed_c = [_box_centroid(b) for b in fixed_world_boxes]
+    load_c = [_box_centroid(b) for b in load_world_boxes]
+    for fc in fixed_c:
+        if not load_c:
+            continue
+        dists = [np.linalg.norm(fc - lc) for lc in load_c]
+        segments.append((fc, load_c[int(np.argmin(dists))]))
+    for i in range(len(fixed_c)):
+        for j in range(i + 1, len(fixed_c)):
+            segments.append((fixed_c[i], fixed_c[j]))
+
+    joint_dist = np.full(flat_centers.shape[0], np.inf)
+    for a, b in segments:
+        joint_dist = np.minimum(joint_dist, _dist_points_to_segment(flat_centers, a, b))
+    joint = (joint_dist <= distance_mm).reshape(mat.shape) & mat & ~holding & ~load_zone
+    general = mat & ~holding & ~load_zone & ~joint
+
+    counts = dict(
+        holding=int(holding.sum()),
+        load=int(load_zone.sum()),
+        joint=int(joint.sum()),
+        general=int(general.sum()),
+        total=int(mat.sum()),
+    )
+    return dict(
+        holding=holding,
+        load=load_zone,
+        joint=joint,
+        general=general,
+        distance_mm=float(distance_mm),
+        counts=counts,
+    )
+
+
 def zone_stats(
     von_mises_mpa: np.ndarray,
     principal_mpa: np.ndarray,
