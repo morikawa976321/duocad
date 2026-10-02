@@ -154,20 +154,24 @@ class CandidateScore:
 
 def score_mask(mask: np.ndarray, ctx: SearchContext, *, m5b_tolerance_mpa_mm3: float = 0.0,
               m3_percentile: float = 99.5, ks_rho: float = 8.0,
-              zone_distance_mm: Optional[float] = None) -> Optional[CandidateScore]:
+              zone_distance_mm: Optional[float] = None,
+              probe: Optional[dict] = None) -> Optional[CandidateScore]:
     """`mask` を1回FEMで解き、M5b/M3/M7b(03bの評価器)・compliance・要素エネルギーまで一括で返す。
     FEM(残差検算含む)が失敗すれば `None`(呼び出し側は幾何は合格・物理が不明の候補として扱う)。
     `_fem_probe.evaluate_full` の返す `_model`/`_density`/`_displacement` から
     `model.compliance` を直接呼び、`acceptance.safety_check` と同じ式で要素エネルギーを取る
     (2回目のFEM解を避ける——層をまたぐ契約: `fem.Model.compliance` の `ce` は全要素ぶん返る仕様
     〈`fem.py` の docstring〉を前提にしている)。
+    `probe` は同じ `mask`・`ctx` で呼び出し側が既に `evaluate_full` を解いた結果(反力など採点外の量も
+    欲しい診断が、FEMを2回解かずに済ませるため)。渡さなければここで解く。
     """
     cond = ctx.cond
-    probe = _fem_probe.evaluate_full(
-        mask, ctx.grid, ctx.table, cond.fixed_faces, cond.load_faces, cond.forces,
-        allowable_mpa=cond.allowable_mpa, youngs_modulus_mpa=cond.youngs_modulus_mpa,
-        percentile=cond.percentile or stress.DEFAULT_PERCENTILE, solver=cond.solver,
-    )
+    if probe is None:
+        probe = _fem_probe.evaluate_full(
+            mask, ctx.grid, ctx.table, cond.fixed_faces, cond.load_faces, cond.forces,
+            allowable_mpa=cond.allowable_mpa, youngs_modulus_mpa=cond.youngs_modulus_mpa,
+            percentile=cond.percentile or stress.DEFAULT_PERCENTILE, solver=cond.solver,
+        )
     if probe["status"] != "ok":
         return None
     model, density, displacement = probe["_model"], probe["_density"], probe["_displacement"]
