@@ -69,7 +69,7 @@ const DISC = { u: -15, v: 15, radius: 5 }
  */
 const DISC_B = { u: -30, v: 15, radius: 13, shrunk: 1.5 }
 
-// **MCPの口**(`mcp`)は `set_parameter` の1手だけをMCP側から打つ(詳細は `smoke-files.mjs` 参照)。
+// **MCPの口**(`mcp`)は、領域が消える変更(`move_sketch_entities`)の1手だけをMCP側から打つ。
 // `--url` で外のサーバへ繋いだときは `null` になる。握手は使う節で打つ(`handshake: false`)。
 runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async ({ mcp, browser, url, timeout }) => {
   {
@@ -319,7 +319,7 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     // ============================================== 検証5: 消えた領域は押し出せない
     // **先に添字3を選んでから**縮める。選択が1件→0件になることを直接確認し、コアが実際に
     // 選択を空にしたことを見る(`resets_selection`。pytest 側は
-    // `tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`)。
+    // `tests/test_server_selection_reset.py`)。
 
     // 2つめの円のentity_idを引く(`refs.radius` が `radiusParam` と一致するもの)。
     const circleBEntityId = await page.evaluate(
@@ -352,18 +352,16 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     )
     if (selectedBeforeShrink !== 1) fail(`縮める前の選択が1件でない: ${selectedBeforeShrink}`)
 
-    // **(2) 径を縮める**。**径の打ち直しはAI(MCP)の口だけである**。
-    // ここで見たいのは「選んだ領域が消える形の変更で `resets_selection` が効くか」で、
-    // それは**どの経路から打っても同じコアの契約**である(MCPもWSも `Session` を通る)。
-    const radiusName = await page.evaluate((id) => {
-      const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-      return active.entities.find((entity) => entity.entity_id === id).refs.radius
-    }, circleBEntityId)
-    if (!radiusName) fail('2つめの円の半径に名前つきの値が付いていない')
-    if (mcp === null) fail('--attach では径を縮める操作を打てない(MCPの口が要る)')
+    // **(2) 重なっている円Bを動かして離す**。径の打ち直し(`set_parameter`)は公開面に無いので、
+    // 領域を消せる別の変更として `move_sketch_entities`(これも `resets_selection`)を使う。
+    // 領域3を選んだまま円Bの図形も選択へ足し(選択に領域と図形が混ざるのは通常のこと)、
+    // 領域3が実在しなくなる形の変更で選択が空になるかを見る。
+    if (mcp === null) fail('--attach では円Bを動かす操作を打てない(MCPの口が要る)')
     await mcp.handshake('duocad-smoke-regions')
-    await mcp.callTool('set_parameter', { name: radiusName, value: DISC_B.shrunk })
+    await mcp.callTool('modify_selection', {
+      add: [{ sketch: discSketch, entity: circleBEntityId, point: null }],
+    })
+    await mcp.callTool('move_sketch_entities', { dx: -(DISC_B.radius * 2 + 20), dy: 0 })
     await waitFor(
       (sketch) => {
         const target = window.__duocad.sketches.find((item) => item.sketch_id === sketch)
@@ -373,7 +371,7 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
             !target.regions.some((region) => region.index === 3),
         )
       },
-      '2つめの円を縮めても領域が2つに戻らない(添字3が消えない)',
+      '円Bを離しても領域が2つに戻らない(添字3が消えない)',
       discSketch,
     )
     // **(3) resets_selection が実際に選択を空にしたことを見る**(1件→0件)。
@@ -382,12 +380,12 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     )
     if (selectedAfterShrink !== 0) {
       fail(
-        `set_parameterの後も選択が残っている(resets_selectionが効いていない): ` +
+        `領域が消える変更の後も選択が残っている(resets_selectionが効いていない): ` +
           `${selectedAfterShrink}件`,
       )
     }
     ok(
-      '**resets_selection**: 添字3を選んだ状態で径を縮めたら、' +
+      '**resets_selection**: 添字3を選んだ状態で円Bを離したら、' +
         'コアが選択を1件→0件に空にした(領域は3→2、添字3は実在しなくなった)',
     )
 

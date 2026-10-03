@@ -364,7 +364,7 @@ class AgentLoop:
             # `_reset_selection_if_needed`(コア側)は形状を変えるverbの後で選択を
             # 全リセットするので、面・辺・領域を消費するverbは `selection_empty` で
             # 既に守られている —— ここは**それを経由しないverb**(`set_visible` /
-            # `set_parameter` / body_id で直接効くもの等)や、**選択が空にならない
+            # body_id で直接効くもの等)や、**選択が空にならない
             # 入れ替え**(辺Aを外して辺Bを選び直して確定する。件数も種別も変わらない
             # ので `selection_empty` は発火しない)を含めて一律に守る網である。
             #

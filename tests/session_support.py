@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from duocad import query
+from duocad import parameters, query
 from duocad.document import Body
 from duocad.server import Server, Session
 from document_support import BOX_X, BOX_Y, BOX_Z, box_shape
@@ -18,6 +18,12 @@ def session_with_box(dx: float = BOX_X, dy: float = BOX_Y, dz: float = BOX_Z, **
     session = Session(None, 0.2, **options)
     session.document.add_body(Body(id="box", name="box", kind="solid", shape=box_shape(dx, dy, dz)))
     return session
+
+
+def edit_parameter(session: Session, name: str, value: float) -> None:
+    """名前つき寸法を書き換える。**`set_parameter` は公開面に無い**ので、コアの関数を直接呼ぶ
+    (保存済みログの再生・再構築の検査用)。"""
+    parameters.set_parameter(session.document, name, value)
 
 
 def select(session: Session, refs: list) -> None:

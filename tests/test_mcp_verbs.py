@@ -113,8 +113,8 @@ def test_tool_names_match_the_verb_names_in_the_operation_log():
     """
     from duocad.oplog import registered_verbs
 
-    # `extrude_face` は古い保存ログの再生のためだけに登録が残る(公開ツールではない)
-    registered = set(registered_verbs()) - {"extrude_face"}
+    # `extrude_face` / `set_parameter` は保存済みログの再生のためだけに登録が残る(公開ツールではない)
+    registered = set(registered_verbs()) - {"extrude_face", "set_parameter"}
     expected = {
         command.name
         for command in COMMANDS
@@ -742,35 +742,21 @@ def test_fillet_accepts_a_radius_per_edge(server: McpServer, box_session: Sessio
     assert entry.args["edges"] == edges, "選択順が保たれていない(半径の対応がずれる)"
 
 
-def test_set_parameter_changes_the_shape_through_the_log(empty_session: Session):
-    """`set_parameter` で寸法を編集すると形が追随する(§1の横断機能)。
+def test_set_parameter_is_not_a_public_tool(empty_session: Session):
+    """`set_parameter` は公開面(カタログ・Session・MCP・WebSocket)から外してある。
 
-    **どのパラメータ名がどの寸法か**は `describe_document` から辿れなければならない
-    (下の `test_describe_document_lists_sketches_and_their_entities` が固定している)。
-    名前が引けないと、AIは `d1` `d2` … を総当たりするしかない。
+    人間側に値の打ち直し口ができたときに人とAIの両方へ同時に出す。実装と `register_verb` の登録は
+    保存済みログの再生のために残る(`tests/test_parameters.py` が再生を固定している)。
     """
+    from duocad import catalog
+
+    assert "set_parameter" not in catalog.BY_NAME
+    assert not hasattr(Session, "set_parameter")
+    assert not hasattr(DocumentTools, "set_parameter")
     server = McpServer(DocumentTools(empty_session))
-    sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
-    call(server, "add_circle", {"sketch_id": sketch_id, "center": [0, 0], "radius": 10.0})
-    select_refs(server, [{"sketch": sketch_id, "index": 1}])
-    call(server, "extrude", {"distance": 5.0})
-    volume_before = query.volume(empty_session.document.bodies[0].shape)
-
-    sketch = call(server, "describe_document")["sketches"][0]
-    name = sketch["entities"][0]["parameters"]["radius"]
-    payload = call(server, "set_parameter", {"name": name, "value": 20.0})
-
-    _assert_verb_envelope(payload, "set_parameter")
-    assert payload["name"] == name
-    assert payload["value"] == 20.0 and payload["previous"] == 10.0
-    assert payload["changed_bodies"] == [empty_session.document.bodies[0].id]
-    assert query.volume(empty_session.document.bodies[0].shape) > volume_before
-
-
-def test_set_parameter_reports_a_missing_name_as_not_found(empty_session: Session):
-    server = McpServer(DocumentTools(empty_session))
-    error = call_error(server, "set_parameter", {"name": "d99", "value": 1.0})
-    assert error["code"] == "not_found"
+    assert "set_parameter" not in [tool["name"] for tool in tool_list(server)]
+    error = request(server, "tools/call", {"name": "set_parameter", "arguments": {"name": "d1", "value": 1.0}})["error"]
+    assert "unknown tool" in error["message"]
 
 
 def test_import_step_reports_a_missing_file_as_not_found(empty_session: Session):

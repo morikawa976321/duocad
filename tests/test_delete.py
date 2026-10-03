@@ -19,7 +19,7 @@ from duocad import region, selection, sketch
 from duocad.oplog import OpLog
 from duocad.server import Session
 from duocad.verbs import delete as delete_verb
-from session_support import SIDE, box as _box, select as _select, send_one
+from session_support import SIDE, box as _box, edit_parameter, select as _select, send_one
 
 DEVIATION = 0.2
 
@@ -323,7 +323,7 @@ def test_a_parameter_edit_after_a_delete_replays_the_delete(session: Session) ->
     radius = next(
         name for name, value in session.document.parameters.items() if value == 2.0
     )
-    session.set_parameter(radius, 3.0)
+    edit_parameter(session, radius, 3.0)
 
     assert _body_ids(session) == []
     assert session.document.parameters[radius] == 3.0

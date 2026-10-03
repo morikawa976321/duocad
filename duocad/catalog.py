@@ -134,7 +134,7 @@ class Command:
     #: MCPのツールとして公開するか(`save_document` / `open_document` は人だけの操作)。
     mcp: bool = True
     #: `Session.preview` が投機実行してよいか。**巻き戻せることを確認したverbだけ**を true に
-    #: する —— `set_parameter` のような操作ログを頭から再生するverbは `speculative` では戻らない
+    #: する —— 操作ログを頭から再生するverb(`set_parameter`。公開面には無い)は `speculative` では戻らない
     #: (`speculative.py` の「戻さないもの」)。
     previewable: bool = False
     #: プレビューを投機実行でなく、**文書を変えずに結果だけ計算する** `Session` のメソッドで出すときの
@@ -301,7 +301,7 @@ COMMANDS: tuple[Command, ...] = (
         description=(
             "開いている文書のボディ一覧(body_id・名前・種別・可視性・面数・体積)と"
             "スケッチ・パラメータ一覧を返す。set_visible や describe_shape、"
-            "pattern_* や set_parameter を呼ぶ前に、どのボディ・図形・寸法名が"
+            "pattern_* を呼ぶ前に、どのボディ・図形・寸法名が"
             "存在するかを知るために最初に呼ぶ。"
         ),
         params=(
@@ -1270,32 +1270,6 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     # ---------------------------------------------------------------- ファイル操作
-    Command(
-        name="set_parameter",
-        returns=(
-            Result("name", "string"),
-            Result("value", "number"),
-            Result("previous", "number"),
-            Result("changed_bodies", "string[]"),
-        ),
-        category="sketch",
-        description=(
-            "名前つき寸法を書き換えて形を追随させるときに呼ぶ。"
-            "名前は describe_document の sketches[].entities[].parameters から辿る。"
-        ),
-        params=(
-            Param("name", "string", "パラメータ名(d1 等)"),
-            Param("value", "number", "新しい値", dimension=True),
-        ),
-        session="set_parameter",
-        resets_selection=True,
-        note=(
-            "**クリックで置いた図形の値を後から打ち直す**のがパラメトリック・プリミティブの"
-            "効く場面そのものなので、スケッチのコマンドとして開けている。"
-            "**プレビューには載せられない** —— 操作ログを頭から再生するverbで、"
-            "再生が過去のseqのundoスナップショットを書き換える(`speculative.py`)"
-        ),
-    ),
     Command(
         name="import_svg",
         returns=(

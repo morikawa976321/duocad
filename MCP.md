@@ -16,7 +16,7 @@
 | 選択 | `get_selection` / `set_selection` / `modify_selection` / `toggle_selection` / `clear_selection` —— 人（ブラウザ）が使う選択操作と同じ集合（`modify_selection` / `toggle_selection` / `clear_selection`）に、AIだけが述語を書ける `set_selection` を足したもの |
 | スケッチ | `sketch_create` / `sketch_create_offset` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` —— 最後の1つは選択の複数の領域を、へこみに沿って包む**単一の領域線**（線分と円弧だけ）を同じスケッチへ足す。`radius`（追従半径 R）と `offset`（d・負で内へ）は省略で 0。1つの領域にならないと失敗して何も変わらない |
 | フィーチャ | `extrude` / `fillet` / `chamfer` / `boolean_body` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `delete` |
-| 可視性・パラメータ | `set_visible` / `set_sketch_visible` / `set_parameter` —— 可視性の2つはボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない |
+| 可視性 | `set_visible` / `set_sketch_visible` —— ボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない。**名前つき寸法の打ち直し（`set_parameter`）は公開していない**（人間側に打ち直しの口が無いため。口ができたら人とAIの両方へ同時に出す。`describe_document` はパラメータ名と値を返す） |
 | 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` — 保持/除外ソリッド・拘束面・荷重面の条件を置く(ボディと拘束は集合代入。荷重だけは大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`) |
 | 入出力 | `import_step` / `export_step` / `export_stl` / `add_mesh_body` — 最後の1つは**計算で作った三角形メッシュ**をボディとして足す(表示とSTL書き出しだけ。編集verbは断られる) |
 | 履歴 | `undo` / `redo` |

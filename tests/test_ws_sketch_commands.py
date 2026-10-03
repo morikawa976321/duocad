@@ -56,8 +56,8 @@ def test_the_browser_can_draw_all_four_kinds(session: Session) -> None:
     assert clients[1].payloads[-1]["state"]["sketches"] == _sketches(clients[0]), "2本目の接続にも同じ図形が届く"
 
 
-def test_entities_carry_parameter_names_so_the_values_can_be_retyped(session: Session) -> None:
-    """図形は**パラメータ名つき**で届き、その名前で WS の `set_parameter` から値を打ち直せる。"""
+def test_entities_carry_parameter_names(session: Session) -> None:
+    """図形は**パラメータ名つき**で届く(`set_parameter` は公開面に無いので、WS の口は無い)。"""
 
     async def script(send):
         sketch_id = await _new_sketch(send)
@@ -65,14 +65,15 @@ def test_entities_carry_parameter_names_so_the_values_can_be_retyped(session: Se
             {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": RADIUS, "client_op": 2}
         )
         name = added["state"]["sketches"][0]["entities"][0]["refs"]["radius"]
-        retyped = await send({"cmd": "set_parameter", "name": name, "value": 7.5, "client_op": 3})
-        return name, retyped
+        refused = await send({"cmd": "set_parameter", "name": name, "value": 7.5, "client_op": 3})
+        return name, refused
 
-    (radius_name, retyped), clients = browser(session, script)
+    (radius_name, refused), clients = browser(session, script)
 
     assert isinstance(radius_name, str) and radius_name
-    assert retyped["applied"]["verb"] == "set_parameter" and retyped["applied"]["client_op"] == 3
-    assert math.isclose(_sketches(clients[0])[0]["entities"][0]["params"]["radius"], 7.5)
+    assert refused["type"] == "error" and "unknown command" in refused["message"]
+    radius = session.state_meta()["sketches"][0]["entities"][0]["params"]["radius"]
+    assert math.isclose(radius, RADIUS)
 
 
 def test_undo_removes_one_entity_at_a_time(session: Session) -> None:

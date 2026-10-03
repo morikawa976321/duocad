@@ -24,8 +24,7 @@
  *      表現できなくしているが、**検査は残す** —— 排他が型で保証されているかどうかは
  *      外から見えず、表現を戻したときに気づく口がここしか無い)。
  *   9. **空の選択で役割を外せる**(「0件だから送らない」最適化が入っていないこと)。
- *   10. `stale` の `code` が変わると再通知される(`hidden` として記録済みでも
- *      `fingerprint`/`missing` に変わればトーストが出る)。
+ *   10. `stale(hidden)` はトーストを出さず、表示へ戻すと消える。
  *
  * サーバはこのスクリプトが空の文書で起動し、2つの立方体をMCP経由で作る(離して置くので
  * 画面上で別々の画素になる)。**`--models-dir` に使い捨てディレクトリを渡す**
@@ -413,14 +412,9 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
       '空の確定でも state.optimize.fixtures が空にならない(0件だから送らない、の疑い)',
     )
     ok('[10] 空の確定で拘束面の役割を外せた')
-    // ====================================================================== 11. staleのcode変化は再通知される
-    // 回帰穴: `seenStaleKeys`の鍵が`role:body:index`だけだと、`hidden`
-    // (出さない側)として一度記録した対象が後で`fingerprint`(出す側)へ変わっても、
-    // 「もう見た」と誤判定されて二度と通知されない。専用の使い捨てボディ(C)で
-    // hidden → fingerprint と遷移させ、2回目のトーストが実際に出ることを見る
-    // (bodyA/Bは他の検査の対象なので、ここでは巻き込まない)。
-    console.log('\n[11] stale の code が変わると再通知される(hidden → fingerprint)')
-    const paramsBeforeC = await page.evaluate(() => Object.keys(window.__duocad.parameters))
+    // ====================================================================== 11. 隠した拘束面は stale(hidden) でトーストを出さない
+    // 専用の使い捨てボディ(C)で確かめる(bodyA/Bは他の検査の対象なので、ここでは巻き込まない)。
+    console.log('\n[11] 拘束面を隠すと stale(hidden) になり、トーストは出ない')
     const bodyC = await addBox([120, 0], 20, 20)
     await waitFor(
       (id) => (window.__duocad.parts ?? []).some((item) => item.body_id === id),
@@ -431,22 +425,9 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
     // 使える面を1つも見つけられない。
     await frameAll(page)
     await sleep(200)
-    // **`d#`は登録順の連番**(`duocad/parameters.py`)なので、Cの作成前後の差集合が
-    // Cの角(x, y)・幅・高さ・傾きの5パラメータ(この順。`duocad/sketch.py` の
-    // `add_rectangle`)になる。ハードコードしない —— 直前の検査がパラメータを
-    // いくつ使うかに依存させないため。
-    const paramsAfterC = await page.evaluate(() => Object.keys(window.__duocad.parameters))
-    const newParamNames = paramsAfterC.filter((name) => !paramsBeforeC.includes(name))
-    if (newParamNames.length !== 5) {
-      fail(
-        'ボディCの新規パラメータが5個ではない(角x/y・幅・高さ・傾きのはず): ' +
-          JSON.stringify(newParamNames),
-      )
-    }
-    const [, , widthParam, heightParam] = newParamNames
     const faceC = await pickAnyFace(bodyC)
-    // 拘束面として確定する(MCP経由。UIの検査は2節で既にやっている——ここはstaleの
-    // 再通知だけを見る)。**条件面は保持ソリッドの面にしか置けない**ので、先にCを保持ソリッドへ足す。
+    // 拘束面として確定する(MCP経由。UIの検査は2節で既にやっている——ここはstaleだけを見る)。
+    // **条件面は保持ソリッドの面にしか置けない**ので、先にCを保持ソリッドへ足す。
     await mcp.callTool('set_selection', {
       refs: [bodyA, bodyC].map((id) => ({ body: id, kind: 'body', index: null })),
     })
@@ -474,33 +455,18 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
       fail(`hidden で新しいトーストが出た(出さない側のはず): before=${errorsBeforeHidden} after=${errorsAfterHidden}`)
     }
     ok('[11] 拘束面を隠した直後は stale(hidden) — トーストは出ない(想定どおり)')
-    // **`set_parameter`は可視性を見ない**(`duocad/parameters.py`。verbではなく文書全体の
-    // 再計算)。隠したままでも幅・高さを変えられ、面の重心が動いてfingerprintがずれる ——
-    // 幅・高さ**両方**を変えるのは、指した面がどちらの軸にも依存する保証を持つため
-    // (片方だけだと、たまたま影響を受けない面を拾っていた場合に検査が空振りする)。
-    await mcp.callTool('set_parameter', { name: widthParam, value: 80 })
-    await mcp.callTool('set_parameter', { name: heightParam, value: 80 })
+    // 隠したものを表示へ戻すと、`hidden` の通知は消える(`hidden` → `fingerprint` の遷移は、
+    // 隠したまま形を変える手(`set_parameter`)が公開面に無いので、実機では作れない)。
     await mcp.callTool('set_visible', { body_id: bodyC, visible: true })
     await waitFor(
       (id, index) =>
-        (window.__duocad.state.optimize.stale ?? []).some(
-          (item) =>
-            item.role === 'fixtures' && item.body === id && item.index === index && item.code === 'fingerprint',
+        !(window.__duocad.state.optimize.stale ?? []).some(
+          (item) => item.role === 'fixtures' && item.body === id && item.index === index,
         ),
-      '拘束面の形を変えて表示に戻しても stale(fingerprint) が現れない',
+      '表示へ戻しても stale(hidden) が消えない',
       [bodyC, faceC],
     )
-    const errorsAfterFingerprint = await page.evaluate(() => window.__duocad.errors.length)
-    if (errorsAfterFingerprint <= errorsAfterHidden) {
-      fail(
-        'stale(hidden) → stale(fingerprint) への遷移でトースト通知が出ていない' +
-          `(再通知が握りつぶされている疑い): before=${errorsAfterHidden} after=${errorsAfterFingerprint}`,
-      )
-    }
-    ok(
-      `[11] hidden → fingerprint で再通知された(errors ${errorsAfterHidden} → ${errorsAfterFingerprint}。` +
-        '`hidden`として記録済みでも`code`が変われば別扱いになる)',
-    )
+    ok('[11] 表示へ戻すと stale(hidden) が消えた')
 
     // ====================================================================== 12. モードを抜けると装飾も役割色も消える
     console.log('\n[12] モードを抜けると装飾も役割色も消える')
@@ -517,9 +483,8 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
     ok('[12] モードを抜けると装飾が消え、ボディの色も素へ戻った')
 
     // ====================================================================== エラーが出ていないこと
-    // **「新しいエラーが1件も出ていない」ではない** —— 10節でわざと1件トーストを出させている
-    // (再通知の検査そのもの)。ここで見るのは`__duocad.errors`が想定外の追加をしていないこと
+    // **「新しいエラーが1件も出ていない」ではない** —— 10節でわざと1件トーストを出させている。ここで見るのは`__duocad.errors`が想定外の追加をしていないこと
     // (10節までの想定件数と一致すること)と、コンソールに素通ししたエラーが無いこと。
-    await assertNoAppErrors(page, consoleErrors, { expectCount: errorsAfterFingerprint })
+    await assertNoAppErrors(page, consoleErrors, { expectCount: errorsAfterHidden })
   }
 })

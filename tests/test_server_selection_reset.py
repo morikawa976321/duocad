@@ -70,17 +70,17 @@ def test_add_shape_verbs_clear_a_pre_existing_3d_selection(session: Session) -> 
     _assert_cleared(session)
 
 
-def test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish(
+def test_a_move_clears_a_selected_region_that_the_edit_makes_vanish(
     session: Session,
 ) -> None:
-    """落ちたら、打ち直しで消えた領域を選んだままになり、`App.svelte` の `regionsStillExist` の
-    分岐へ届く(`web/scripts/smoke-regions.mjs` 検証6と同じシナリオ)。"""
+    """落ちたら、図形を動かして消えた領域を選んだままになり、`App.svelte` の `regionsStillExist` の
+    分岐へ届く(`web/scripts/smoke-regions.mjs` 検証5と同じシナリオ)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 15.0)
     session.add_circle(sketch_id, [20.0, 0.0], 15.0)
     sketch_obj = session.document.sketches[-1]
     assert sketch_obj.id == sketch_id
-    radius_name = sketch_obj.entities[1].params["radius"]
+    second_circle = sketch_obj.entities[1].id
 
     from duocad.region import regions as list_regions
 
@@ -88,13 +88,13 @@ def test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish(
     assert before == {1, 2, 3}, f"想定した3領域(1,2,3)にならない: {before}"
 
     region_ref = selection.select_region(session.document, sketch_id, 3)
-    _select(session, [region_ref])
-    assert session.get_selection()["count"] == 1
+    _select(session, [region_ref, selection.select_sketch_entity(session.document, sketch_id, second_circle)])
+    assert session.get_selection()["count"] == 2
 
-    session.set_parameter(radius_name, 3.0)  # 重なりが解け、添字3が消える
+    session.move_sketch_entities(60.0, 0.0)  # 重なりが解け、添字3が消える
 
     after = {item.index for item in list_regions(session.document, sketch_id)}
-    assert 3 not in after, "半径を縮めても添字3の領域が消えない(検査の前提が崩れている)"
+    assert 3 not in after, "円を離しても添字3の領域が消えない(検査の前提が崩れている)"
     _assert_cleared(session)
 
 

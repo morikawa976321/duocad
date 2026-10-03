@@ -40,7 +40,7 @@ import pytest
 
 from duocad import io_step, kernel, query
 from duocad.server import Session
-from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, select as _select, send_one
+from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, edit_parameter, select as _select, send_one
 
 DEVIATION = 0.2
 
@@ -369,7 +369,7 @@ def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> 
     """
     _cylinder(session, 5.0, 10.0)
     radius = next(name for name, value in session.document.parameters.items() if value == 5.0)
-    session.set_parameter(radius, 7.0)
+    edit_parameter(session, radius, 7.0)
     volume = query.volume(session.document.bodies[-1].shape)
     session.save_document("with-parameters.json")
 
@@ -600,7 +600,7 @@ def test_copy_document_refuses_an_existing_destination_and_bad_names(session: Se
     """落ちたら: 複製で既存ファイルが上書きされる(1バイトでも変わる)、または models/ の外を指せる。"""
     _box(session)
     session.save_document("a.json")
-    session.set_parameter(next(iter(session.document.parameters)), 30.0)
+    session.sketch_create("XY")
     session.save_document("b.json")
     untouched = (session.models_dir / "b.json").read_bytes()
 
@@ -668,7 +668,7 @@ def test_list_documents_reports_name_mtime_size_and_operation_count(session: Ses
     session.new_document()  # a.json を編集中から外す(以後の自動保存が a.json へ行かないように)
     _box(session)
     session.save_document("b.json")
-    session.set_parameter(next(iter(session.document.parameters)), 30.0)  # 自動保存で b.json が伸びる
+    session.sketch_create("XY")  # 自動保存で b.json が伸びる
 
     async def script(send):
         return await send({"cmd": "list_documents"})
@@ -776,12 +776,8 @@ def test_named_values_are_published_and_drive_the_shape(session: Session) -> Non
         name for name, value in published.items() if value == pytest.approx(5.0)
     )
 
-    async def script(send):
-        return await send({"cmd": "set_parameter", "name": radius_name, "value": 8.0, "client_op": 1})
+    edit_parameter(session, radius_name, 8.0)
 
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["applied"]["verb"] == "set_parameter"
     assert session.state_meta()["parameters"][radius_name] == pytest.approx(8.0)
     assert query.volume(session.document.bodies[-1].shape) > volume_before
 

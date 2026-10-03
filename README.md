@@ -34,8 +34,7 @@ UIとAI操作の両方に共通する設計原則。verbを足す・直すとき
    how ではない**（`MCP.md`「AIはどこまで自分でやるか」と揃える。「名前はすべて対象」
    という言い方はしない — 新規ボディへの命名のような**省略できる付帯入力**は target でも
    how でもない第三分類である）。
-   **適用範囲はコマンド行を通るverbに限る**。値の打ち直し
-   (`set_parameter`)・可視性の切替(`set_visible`)・選択集合の編集は直接操作であり、
+   **適用範囲はコマンド行を通るverbに限る**。可視性の切替(`set_visible`)・選択集合の編集は直接操作であり、
    この型の対象外である。
 3. **省けるクリックは徹底的に省く。** Enterが要るのは次のいずれかに当てはまる操作だけで、
    どちらでもなければ最後のクリックで即適用される（正は `web/src/commands/command.ts`
@@ -396,7 +395,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/oplog.py` | `Operation` / `OpLog`（undo・再生・永続化。**verb名の分岐を書かない**＝レジストリ） | ✗ | ✗ |
 | `duocad/sketch.py` | `Sketch` / `Entity` / `Pattern` とスケッチのverb | ✗ | ✗ |
 | `duocad/region.py` | 閉領域の検出（`BRepAlgoAPI_Splitter`）。領域は**描くものではなく計算されるもの** | ✗ | ✗ |
-| `duocad/parameters.py` | 名前つきの寸法値・`set_parameter`・ログからの再生 | ✗ | ✗ |
+| `duocad/parameters.py` | 名前つきの寸法値・`set_parameter`(公開面には無い。ログからの再生用)・ログからの再生 | ✗ | ✗ |
 | `duocad/selection.py` | 選択集合（人のクリック側。可視性を含む「何が選べるか」） | ✗ | ✗ |
 | `duocad/predicates.py` | **述語による選択（AI側）**。構造化JSONでDSL文字列ではない | ✗ | ✗ |
 | `duocad/speculative.py` | プレビュー（確定前にverbを投機的に走らせて捨てる） | ✗ | ✗ |
@@ -490,7 +489,7 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
   （`DocumentTools.current_seq()`）を控え、応答が返ったとき版がずれていたら、そのツール呼び出しは
   実行せず「文書が変わったので選び直せ」と返す。形状を変えるverbの確定後は選択が全リセットされる
   （`Session._reset_selection_if_needed`）ので大半は元から `selection_empty` で止まっていたが、
-  `set_parameter` のように選択を経由しないverbはこの網に掛からず、楽観ロックがその穴を埋める
+  `set_visible` のように選択を経由しないverbはこの網に掛からず、楽観ロックがその穴を埋める
   （`fillet`/`chamfer`/`extrude` は対象ボディの可視性も実行時に見直す）。
   **版は「ログの本数・選択の指紋・可視性の指紋」の3つ組** —— 可視性は操作ログに
   載らないので、指紋を持たないと「AIが考えている間に人がボディを隠した」が版に出ない

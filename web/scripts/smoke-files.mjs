@@ -52,12 +52,9 @@ const HOLE = { u: 10, v: 10, radius: 2, dx: 15, count: 3 }
 
 
 // `--url` を渡したときだけ既に立っているサーバへ繋ぐ(既定は自分で立てる)。
-// **MCPの口**(`mcp`)は数値の打ち直し(`set_parameter`)の1手だけに使う —— 人間側のUIを持たない
-// ので同じプロセスのMCP側から打つ。`--url` で外のサーバへ繋いだときは `null` になり、使う直前に
-// 落とす(黙って飛ばさない)。握手は使う節で打つ(`handshake: false`)。
 // 保存/開くの置き場(`modelsDir`)は harness が渡す使い捨ての `workdir` で、STEP/STL の書き出しも
 // 同じディレクトリに置く(実在確認が楽になる)。
-runSmoke('smoke-files', { attach: true, mcp: true, handshake: false }, async ({ workdir, mcp, browser, url, timeout }) => {
+runSmoke('smoke-files', { attach: true }, async ({ workdir, browser, url, timeout }) => {
   {
     const { page, consoleErrors } = await openApp(browser, url, { timeout, height: 900 })
     /**
@@ -276,43 +273,16 @@ runSmoke('smoke-files', { attach: true, mcp: true, handshake: false }, async ({ 
     const withHoles = (await look()).bodies[0]
     ok(`反復した穴を3つまとめて開けた(体積 ${plateVolume} -> ${withHoles.volume.toFixed(2)})`)
 
-    // **SketchPanelで径を1箇所だけ打ち直す**(ParametersPanel廃止。図形は押し出しの後で
-    // スケッチの外に出ているので、「再開」でそのスケッチへ戻ってから図形の一覧を打つ)。
+    // 径の打ち直し(`set_parameter`)は公開面に無いので、ここでは再入場して抜けるだけ。
+    // 「1箇所直すと反復が追随する」はコアの検査(`tests/test_pattern.py`)が持つ。
     await page.click(`[data-sketch-id="${holeSketchId}"] .sketch-name`)
     await waitFor(
       (id) => window.__duocad.activeSketch === id,
       '穴のスケッチへ再入場できない',
       holeSketchId,
     )
-    // **径の打ち直しはAI(MCP)の口だけである**。
-    // 見たいのは「1箇所直すと反復した穴が全部追随する」で、それはverbの性質であって
-    // 入力欄の性質ではないので、同じ文書へMCPから打ち込んで確かめる。
-    const radiusName = await page.evaluate((id) => {
-      const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-      return active.entities.find((entity) => entity.entity_id === id).refs.radius
-    }, entityId)
-    if (!radiusName) fail('穴の半径に名前つきの値が付いていない')
-    if (mcp === null) fail('--attach では径の打ち直しを打てない(MCPの口が要る)')
-    await mcp.handshake('duocad-smoke-files')
-    await mcp.callTool('set_parameter', { name: radiusName, value: 3 })
-    const biggerHoles = Math.PI * 3 ** 2 * PLATE.thickness * HOLE.count
-    await waitFor(
-      (before, expected) => {
-        const body = window.__duocad.parts[0]
-        return Boolean(body && Math.abs(before - body.volume - expected) < expected * 1e-3)
-      },
-      '径を打ち直しても穴が太くならない(追随していない)',
-      plateVolume,
-      biggerHoles,
-    )
-    const afterResize = (await look()).bodies[0]
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, '穴のスケッチを抜けられない')
-    ok(
-      `**径を1箇所だけ打ち直したら、反復した穴が全部追随した**(打ち込みはMCP経由)` +
-        `(半径 ${HOLE.radius}→3 で体積 ${withHoles.volume.toFixed(2)} -> ${afterResize.volume.toFixed(2)})`,
-    )
 
     // ================================================================ 検証5: undo/redoで位置が動く
     const beforeUndo = await look()

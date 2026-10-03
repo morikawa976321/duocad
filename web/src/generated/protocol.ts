@@ -33,7 +33,6 @@ export const COMMAND_CATEGORY = {
   clear_loads: 'feature',
   pattern_rectangular: 'feature',
   pattern_circular: 'feature',
-  set_parameter: 'sketch',
   import_svg: 'sketch',
   import_step: 'file',
   export_step: 'file',
@@ -91,7 +90,6 @@ export interface CommandArguments {
   clear_loads: Record<string, never>
   pattern_rectangular: { sketch_id: string; entities: unknown[]; dx: number; dy: number; nx: number; ny: number }
   pattern_circular: { sketch_id: string; entities: unknown[]; center: unknown[]; count: number; total_angle: number }
-  set_parameter: { name: string; value: number }
   import_svg: { sketch_id: string; path: string }
   import_step: { path: string }
   export_step: { path: string }
@@ -158,7 +156,6 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'clear_loads'; face_count: number })
   | (AppliedVerbBase & { verb: 'pattern_rectangular'; pattern_id: string })
   | (AppliedVerbBase & { verb: 'pattern_circular'; pattern_id: string })
-  | (AppliedVerbBase & { verb: 'set_parameter'; name: string; value: number; previous: number; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'import_svg'; sketch_id: string; entity_ids: string[]; source_name: string; entity_count: number })
   | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[] })
   | (AppliedVerbBase & { verb: 'undo'; undone: string })

@@ -23,7 +23,7 @@ from duocad.speculative import speculative
 from duocad.verbs import add_mesh_body, chamfer, delete, extrude_faces, fillet, move_body
 from duocad.verbs.extrude import _resolve_target
 from document_support import replay_through_json
-from session_support import session_with_box
+from session_support import edit_parameter, session_with_box
 
 SIDE = 20.0
 DEVIATION = 0.2
@@ -157,7 +157,7 @@ def test_a_mesh_body_survives_a_parameter_rebuild():
     )
     added = tools.call("add_mesh_body", {"positions": TETRA_POSITIONS, "indices": TETRA_INDICES})
     name = next(iter(session.document.parameters))
-    tools.call("set_parameter", {"name": name, "value": 14.0})
+    edit_parameter(session, name, 14.0)
     body = session.document.get_body(added["body_id"])
     assert body.kind == MESH_KIND
     assert list(body.mesh.indices) == TETRA_INDICES
