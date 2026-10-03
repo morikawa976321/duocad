@@ -10,7 +10,7 @@
  *      足す・外す。何もない所を素でクリックしても選択は変わらない。Ctrl+クリックも同じトグル
  *   3. Esc で選択が空になり、コマンドは無起動へ戻る
  *   4. 先に選んでから起動 → 中断ボタン(`#command-abort`)でも空になる
- *   5. AIの提案が載っている間は素のクリックを置き換えのまま残す(本人判断待ち)
+ *   5. AIが選んだ集合にも同じクリックで足し引きできる。AIの `toggle_selection` も同じ集合を触る
  */
 import { frameAll, openApp, sleep, waitOrFail } from './browser.mjs'
 import { fail, ok } from './args.mjs'
@@ -121,21 +121,27 @@ runSmoke('smoke-command-selection', { timeout: 60000, mcp: true }, async ({ mcp,
     await waitFor(() => document.querySelector('#command-abort') === null, '中断ボタンで無起動へ戻らない')
     ok('先に選んで起動 → 中断ボタンで選択が空になった')
 
-    // ================================================================ 5. AIの提案が載っている間は置き換えのまま
-    await mcp.callTool('propose_selection', {
+    // ================================================================ 5. AIの選択に人が同じ操作で足し引きする
+    await mcp.callTool('set_selection', {
       refs: [
         { body: bodyId, kind: 'face', index: a },
         { body: bodyId, kind: 'face', index: b },
       ],
     })
-    await waitFor(() => window.__duocad.selection?.origin === 'proposed', 'AIの提案が届かない')
+    await waitForFaces([a, b], 'AIの選択が届かない')
     await page.click('#extrude')
     await waitFor(() => document.querySelector('#command-abort') !== null, '押し出しが起動しない(3回目)')
+    await waitForFaces([a, b], 'AIの選択が起動で消えた')
     await clickFace(page, bodyId, c, { hidePanel: true })
-    await waitForFaces([c], '提案の上の素のクリックが置き換えでなくなった')
-    const origin = await page.evaluate(() => window.__duocad.selection?.origin)
-    if (origin !== 'user') fail(`クリックしたのに提案のまま: ${origin}`)
-    ok('AIの提案が載っている間の素のクリックは従来どおり置き換えて確定する')
+    await waitForFaces([a, b, c], 'AIが選んだ上の素のクリックで面Cが足されない')
+    await clickFace(page, bodyId, a, { hidePanel: true })
+    await waitForFaces([b, c], 'AIが選んだ面Aを素のクリックで外せない')
+    ok('AIが選んだ集合に、人が素のクリックで足し引きできた')
+
+    // AI側の toggle_selection も同じ操作(人のクリックと同じ結果になる)
+    await mcp.callTool('toggle_selection', { refs: [{ body: bodyId, kind: 'face', index: b }] })
+    await waitForFaces([c], 'AIの toggle_selection が画面へ届かない')
+    ok('AIの toggle_selection も同じ集合を触り、画面へ届いた')
     await page.keyboard.press('Escape')
     await waitForEmpty('Escで選択が空にならない(3回目)')
 

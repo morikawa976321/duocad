@@ -7,7 +7,7 @@
 **保持/除外/拘束の3つは「集合代入」**である。「1つ足す」ではなく「この役割の集合を、いま
 確定している選択集合そのもので置き換える」。操作の流れがその裏返しになっている ——
 verbを起動すると**既にその役割が付いている対象が選択状態で現れ**、クリックで付け外しし、
-決定で確定する。**確定選択が空でもよい**のはこのためで、空の集合を代入する = その役割を
+決定で確定する。**選択が空でもよい**のはこのためで、空の集合を代入する = その役割を
 全部外す、である。
 
 **荷重だけは集合代入ではない(`set_loads` は上書き代入)**。大きさ[N]と向きを**面ごとに**
@@ -392,25 +392,25 @@ register_verb(VERB_CLEAR_LOADS, do=_do_loads, undo=_undo_loads)
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
-# **確定選択が空でもよい** —— 空の代入が「その役割を全部外す」を意味する。`changed_bodies` は
+# **選択が空でもよい** —— 空の代入が「その役割を全部外す」を意味する。`changed_bodies` は
 # 返さない(形は1つも変わらない。役割の色は配信される `state.optimize` から描く)。
 @entry(VERB_SET_PRESERVE_BODIES)
 def _enter_set_preserve_bodies(document: Document) -> dict:
-    body_ids = selection.require_committed_bodies(document)
+    body_ids = selection.require_selected_bodies(document)
     return {"bodies": list(set_preserve_bodies(document, body_ids).args["bodies"])}
 
 
 @entry(VERB_SET_EXCLUDE_BODIES)
 def _enter_set_exclude_bodies(document: Document) -> dict:
-    body_ids = selection.require_committed_bodies(document)
+    body_ids = selection.require_selected_bodies(document)
     return {"bodies": list(set_exclude_bodies(document, body_ids).args["bodies"])}
 
 
 @entry(VERB_SET_FIXTURES)
 def _enter_set_fixtures(document: Document) -> dict:
-    faces = selection.require_committed_faces(document)
+    faces = selection.require_selected_faces(document)
     return {"face_count": len(set_fixtures(document, faces).args["faces"])}
 
 
@@ -418,7 +418,7 @@ def _enter_set_fixtures(document: Document) -> dict:
 def _enter_set_loads(document: Document, magnitude: Any, direction: Any) -> dict:
     """`face_count` は**確定後の荷重面の総数**であって、この操作で焼いた枚数(`applied_count`)ではない
     (画面は「いま何枚に荷重が付いているか」を出すのでこちらが要る)。"""
-    faces = selection.require_committed_faces(document)
+    faces = selection.require_selected_faces(document)
     operation = set_loads(document, faces, magnitude, direction)
     mode, vector = optimize.normalize_direction(direction)
     return {
@@ -432,5 +432,5 @@ def _enter_set_loads(document: Document, magnitude: Any, direction: Any) -> dict
 
 @entry(VERB_CLEAR_LOADS)
 def _enter_clear_loads(document: Document) -> dict:
-    faces = selection.require_committed_faces(document)
+    faces = selection.require_selected_faces(document)
     return {"face_count": len(clear_loads(document, faces).args["faces"])}

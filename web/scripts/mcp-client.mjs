@@ -98,8 +98,8 @@ export class McpClient {
 }
 
 /**
- * MCP で矩形を押し出して箱を作る: `sketch_create` → `add_rectangle` → `propose_selection`(領域1)
- * → `commit_selection` → `extrude` →(`clear_selection`)。戻り値は `{ sketchId, bodyId }`。
+ * MCP で矩形を押し出して箱を作る: `sketch_create` → `add_rectangle` → `set_selection`(領域1)
+ * → `extrude` →(`clear_selection`)。戻り値は `{ sketchId, bodyId }`。
  *
  * `bodyId` は `extrude` の応答の `bodies[0].body_id`(版が変わった Body の一覧。空の文書での最初の
  * 押し出しなら `describe_document().bodies[0]` と同じ Body)。fixture の寸法は呼び手が持つ ——
@@ -125,8 +125,7 @@ export async function addExtrudedCircle(
 }
 
 async function extrudeFirstRegion(mcp, sketchId, { distance, mode, clear }) {
-  await mcp.callTool('propose_selection', { refs: [{ sketch: sketchId, index: 1 }] })
-  await mcp.callTool('commit_selection')
+  await mcp.callTool('set_selection', { refs: [{ sketch: sketchId, index: 1 }] })
   const extruded = await mcp.callTool('extrude', { distance, mode })
   if (clear) await mcp.callTool('clear_selection')
   return { sketchId, bodyId: extruded.bodies[0].body_id }

@@ -317,8 +317,8 @@ def test_a_zero_match_proposal_still_replaces_the_previous_selection(doc: Docume
     ここで「0件なら何もしない」にすると、外した述語のあとに古い選択が残り、
     人が承認したつもりで**別の集合**にverbがかかる。
     """
-    selection.propose_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
-    result = selection.propose_selection(
+    selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
+    result = selection.set_selection(
         doc, predicate={"kind": "edge", "where": [{"op": "length_gt", "value": 10_000}]}
     )
     assert result.items == []
@@ -355,7 +355,7 @@ def test_invalid_predicates_are_rejected(doc: Document, bad: dict, why: str):
 
 
 def test_an_invalid_predicate_leaves_the_selection_untouched(doc: Document):
-    """不正な述語で `propose_selection` が落ちても、**選択は変更されない**。
+    """不正な述語で `set_selection` が落ちても、**選択は変更されない**。
 
     ここが守られていないと、AIが述語を打ち間違えるたびに人の選択が消える。
     実装は「全条件を検査してから評価する」順序でこれを守ること
@@ -367,11 +367,10 @@ def test_an_invalid_predicate_leaves_the_selection_untouched(doc: Document):
     before = [dict(item) for item in selection.get_selection(doc).items]
 
     with pytest.raises(ValueError):
-        selection.propose_selection(doc, predicate={"kind": "edge", "where": [{"op": "nope"}]})
+        selection.set_selection(doc, predicate={"kind": "edge", "where": [{"op": "nope"}]})
 
     after = selection.get_selection(doc)
     assert [dict(item) for item in after.items] == before
-    assert after.origin == selection.ORIGIN_USER
 
 
 def test_a_predicate_that_fails_at_evaluation_also_leaves_the_selection_untouched(doc: Document):
@@ -387,11 +386,10 @@ def test_a_predicate_that_fails_at_evaluation_also_leaves_the_selection_untouche
     bad = {"kind": "edge", "where": [{"op": "on_boundary_of_face", "face": 99}]}
     predicates.validate(bad)  # 形式としては正しい(ここでは落ちない)
     with pytest.raises(ValueError):
-        selection.propose_selection(doc, predicate=bad)
+        selection.set_selection(doc, predicate=bad)
 
     after = selection.get_selection(doc)
     assert [dict(item) for item in after.items] == before
-    assert after.origin == selection.ORIGIN_USER
 
 
 def test_validate_returns_a_normalized_copy(doc: Document):

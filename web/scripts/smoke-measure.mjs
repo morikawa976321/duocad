@@ -8,7 +8,7 @@
  *   1. 「測定」を押すと対象ボディの頂点が候補として出て、**素のクリック2回**で頂点と頂点の
  *      距離が出る(2回目のクリックが1回目を置き換えない・Enterは要らない)。読み札と3Dの線が
  *      出て、コマンドは無起動へ戻る。文書は変わらない(undo できない)
- *   2. AIが面を2枚提案 → 人が「測定」を押すだけで**その場で**測れる(起動時に揃っていれば走る)。
+ *   2. AIが面を2枚選ぶ → 人が「測定」を押すだけで**その場で**測れる(起動時に揃っていれば走る)。
  *      平行な面は距離、平行でない面は角度(線は出ない)
  *   3. Esc で札が消える。選択が変われば札は消える
  *   4. 測れない組(円筒面と平面)はトーストで断られ、札は出ない。文書は1ビットも変わらない
@@ -124,20 +124,19 @@ runSmoke('smoke-measure', { timeout: 60000, mcp: true }, async ({ mcp, browser, 
     const logBefore = (await mcp.callTool('describe_document')).applied_count
     ok(`頂点と頂点: ${vertexResult.readout}(Enterなし・無起動へ戻った・3Dの線あり)`)
 
-    // ---------------------------------------------------------------- 2. AIが提案した面2枚を、押すだけで測る
-    await mcp.callTool('propose_selection', { predicate: { kind: 'face', where: [] } })
+    // ---------------------------------------------------------------- 2. AIが選んだ面2枚を、押すだけで測る
+    await mcp.callTool('set_selection', { predicate: { kind: 'face', where: [] } })
     const faces = (await mcp.callTool('measure')).items
     const top = faces.find((item) => item.normal[2] > 0.9)
     const bottom = faces.find((item) => item.normal[2] < -0.9)
     const side = faces.find((item) => item.normal[0] > 0.9)
     if (!top || !bottom || !side) fail(`面が見つからない: ${JSON.stringify(faces.map((f) => f.normal))}`)
-    const proposed = await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [
         { body: bodyId, kind: 'face', index: top.index },
         { body: bodyId, kind: 'face', index: bottom.index },
       ],
     })
-    if (proposed.selection.origin !== 'proposed') fail('提案なのに origin が proposed でない')
     await page.waitForFunction(
       () => window.__duocad.selection?.count === 2 && window.__duocad.measurement === null,
       { timeout, polling: 50 },
@@ -151,20 +150,18 @@ runSmoke('smoke-measure', { timeout: 60000, mcp: true }, async ({ mcp, browser, 
       between: window.__duocad.measurement.between,
       readout: document.querySelector('#measure-result')?.textContent ?? null,
       phase: document.querySelector('.command-host')?.dataset.phase ?? null,
-      origin: window.__duocad.selection?.origin,
     }))
     if (!near(planes.between.distance, HEIGHT)) fail(`平行な面の距離が違う: ${planes.between.distance}`)
     if (planes.between.parallel !== true) fail('平行と判定されていない')
     if (planes.phase !== 'idle') fail(`起動時に揃っていたのにその場で測っていない: ${planes.phase}`)
-    if (planes.origin !== 'proposed') fail(`測定が提案を確定してしまった: ${planes.origin}`)
     const aiSees = await mcp.callTool('measure')
     if (!near(aiSees.between.distance, planes.between.distance, 1e-9)) {
       fail(`AIが読む距離と画面の距離が違う: ${aiSees.between.distance} / ${planes.between.distance}`)
     }
-    ok(`平行な面: ${planes.readout}(提案のまま・AIも同じ ${aiSees.between.distance})`)
+    ok(`平行な面: ${planes.readout}(AIも同じ ${aiSees.between.distance})`)
 
     // 平行でない面 → 角度(線は出ない)
-    await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [
         { body: bodyId, kind: 'face', index: top.index },
         { body: bodyId, kind: 'face', index: side.index },
@@ -220,19 +217,18 @@ runSmoke('smoke-measure', { timeout: 60000, mcp: true }, async ({ mcp, browser, 
     // ---------------------------------------------------------------- 4. 測れない組(曲面)はトースト
     // ボディそのものは画面からは指せない(測定の対象種別は頂点・辺・面だけ)ので、
     // 画面で作れる「測れない組」は曲面か曲線 —— 縦の辺を1本丸めて円筒面を作る(AI側で)。
-    await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       predicate: { kind: 'edge', where: [{ op: 'parallel_to', axis: 'Z' }] },
     })
     const vertical = (await mcp.callTool('measure')).items[0]
-    await mcp.callTool('propose_selection', { refs: [{ body: bodyId, kind: 'edge', index: vertical.index }] })
-    await mcp.callTool('commit_selection')
+    await mcp.callTool('set_selection', { refs: [{ body: bodyId, kind: 'edge', index: vertical.index }] })
     await mcp.callTool('fillet', { radius: 3 })
-    await mcp.callTool('propose_selection', { predicate: { kind: 'face', where: [] } })
+    await mcp.callTool('set_selection', { predicate: { kind: 'face', where: [] } })
     const afterFillet = (await mcp.callTool('measure')).items
     const curved = afterFillet.find((item) => Math.abs(item.normal[0]) > 0.5 && Math.abs(item.normal[1]) > 0.5)
     const flatTop = afterFillet.find((item) => item.normal[2] > 0.9)
     if (!curved || !flatTop) fail(`円筒面が見つからない: ${JSON.stringify(afterFillet.map((f) => f.normal))}`)
-    await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [
         { body: bodyId, kind: 'face', index: curved.index },
         { body: bodyId, kind: 'face', index: flatTop.index },

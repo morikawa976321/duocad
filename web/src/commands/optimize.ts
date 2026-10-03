@@ -3,10 +3,10 @@
  *
  * コア側の契約は `duocad/optimize.py` の `state_payload` docstring、verbの実体は
  * `duocad/verbs/optimize_setup.py`。
- * **4つとも集合代入**である —— 「対象は確定選択そのもの」で、ここが送るのは
+ * **4つとも集合代入**である —— 「対象は選択そのもの」で、ここが送るのは
  * `set_loads` の大きさ・向きだけ(他の3つはサーバへ何も送らない)。
  *
- * **選択引数は `min: 0`**(既存のverbには無い形)。空の確定選択で確定する = その役割を
+ * **選択引数は `min: 0`**(既存のverbには無い形)。空の選択で確定する = その役割を
  * 全部外す、が唯一の解除手段なので、0件を「まだ選んでいない」として拒まない
  * (`missingSelection` を使わない理由)。
  *
@@ -24,7 +24,7 @@
  */
 import type { BuildResult, CommandDef } from './command'
 
-/** **対象はサーバへ送らない**(コアが確定選択から取る。`duocad-target-set-taken-only-from-selection`)。 */
+/** **対象はサーバへ送らない**(コアが選択から取る。`duocad-target-set-taken-only-from-selection`)。 */
 const sendNothing = (): BuildResult<Record<string, never>> => ({ ok: true, args: {} })
 
 /** 荷重の向きの選択肢。**`down` はUI専用の言い回し**で、送るのは `[0, 0, -1]`
@@ -42,7 +42,7 @@ function directionArg(value: string): 'normal' | '-normal' | [number, number, nu
   return value as 'normal' | '-normal'
 }
 
-/** **保持ソリッド**を決める。確定選択のボディ(空でもよい)をそのまま集合にする。 */
+/** **保持ソリッド**を決める。選択のボディ(空でもよい)をそのまま集合にする。 */
 export const SET_PRESERVE_BODIES: CommandDef<'set_preserve_bodies'> = {
   id: 'set_preserve_bodies',
   label: '保持ソリッドを決める',

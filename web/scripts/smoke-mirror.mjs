@@ -3,7 +3,7 @@
  *
  *   node scripts/smoke-mirror.mjs
  *
- * `mirror_sketch_entities` の軸と `mirror_body` の `plane_face` は、対象の確定選択とは
+ * `mirror_sketch_entities` の軸と `mirror_body` の `plane_face` は、対象の選択とは
  * 別チャンネル(`web/src/commands/command.ts` の `PickArgSpec`)で受け取る。pytestでは
  * 判定できないのは**その2つのチャンネルが画面上で混ざらないこと**なので、ここでは
  * 両方向を見る:

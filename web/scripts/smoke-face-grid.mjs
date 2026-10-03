@@ -227,15 +227,14 @@ runSmoke('smoke-face-grid', { timeout: 60000, mcp: true }, async ({ mcp, browser
     const bottomFace = facesB.slice().sort((a, b) => a.avgZ - b.avgZ)[0]
     if (!bottomFace) fail('[2] 底面が見つからない')
 
-    // **MCP経由で面参照を確定選択し、`sketch_create`(base_planeを省略)で貼る。**
+    // **MCP経由で面参照を選択し、`sketch_create`(base_planeを省略)で貼る。**
     // 通常のUIクリックだと、この面はXY基準平面と完全同一平面のため、フロント側の
     // ピック優先度(`resolveHit`)が基準平面グリッドに取ってしまう可能性がある
     // (それ自体は別の既知の落とし穴で本タスクの対象外)。MCP経由なら添字で直接指すので、
     // その競合を経ずに「`plane.kind==='face'` かつframeが基準平面と一致する」状態を
     // 確実に再現できる——これは実際にAIが同じ経路(選択→sketch_create)で日常的に
     // 作りうる状態でもある。
-    await mcp.callTool('propose_selection', { refs: [{ body: bodyIdB, kind: 'face', index: bottomFace.index }] })
-    await mcp.callTool('commit_selection')
+    await mcp.callTool('set_selection', { refs: [{ body: bodyIdB, kind: 'face', index: bottomFace.index }] })
     const sketchOnTrap = await mcp.callTool('sketch_create', {})
     ok(`[2] MCP経由で底面(面${bottomFace.index})にスケッチを作った(sketch_id=${sketchOnTrap.sketch_id})`)
 

@@ -336,13 +336,13 @@ register_verb(VERB_EXTRUDE, do=_do_extrude, undo=_undo_extrude)
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 @entry(VERB_EXTRUDE)
 def _enter_extrude(
     document: Document, distance: float, mode: str = "join", body_id: Optional[BodyId] = None
 ) -> dict:
-    """確定選択の領域、または同一平面・同一ボディの面を押し出す(混在は ValueError)。
+    """選択の領域、または同一平面・同一ボディの面を押し出す(混在は ValueError)。
 
     `body_id` だけは引数のまま —— 「どの Body へ足す/から引くか」であって対象集合ではない
     (Body は選択集合の項目ではない)。面のときの既定はその面を持つ Body。

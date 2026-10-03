@@ -254,11 +254,10 @@ export const IMPORT_SVG: CommandDef<'import_svg'> = {
  * 貼る経路だけがクリックになる(UI指針1「実物をクリックできるものにボタンを作らない」)。
  *
  * **面は送らない**: 面に貼るときの `build` は **`{}`** を返す。面の参照を引数に入れると
- * 「対象集合の指定方法」が再び2つになる(サーバは `require_confirmed(doc, "face",
- * exactly_one=True)` で確定選択から取る)。2枚選んでいれば `SelectionAmbiguous` が返り、
- * トーストで人に見える。**AIの提案のままでも止まらない** —— 面に貼る
- * (`base_plane` を送らない)経路は対象集合を確定選択から取るので、サーバが走らせる直前に
- * 自動で確定する(`duocad/server.py` の `_commit_before_verb`)。
+ * 「対象集合の指定方法」が再び2つになる(サーバは `require_selected(doc, "face",
+ * exactly_one=True)` で選択から取る)。2枚選んでいれば `SelectionAmbiguous` が返り、
+ * トーストで人に見える。面に貼る
+ * (`base_plane` を送らない)経路は対象集合を選択から取る。
  */
 export const SKETCH_CREATE: CommandDef<'sketch_create'> = {
   id: 'sketch_create',
@@ -271,7 +270,7 @@ export const SKETCH_CREATE: CommandDef<'sketch_create'> = {
   build(values) {
     const plane = values.target
     if (!isPlaneArgValue(plane)) return { ok: false, reason: '貼る先が決まっていない' }
-    // **面は送らない**(サーバがコアの確定選択から取る)。基準平面だけが引数になる。
+    // **面は送らない**(サーバがコアの選択から取る)。基準平面だけが引数になる。
     return { ok: true, args: plane === 'face' ? {} : { base_plane: plane } }
   },
 }
@@ -342,7 +341,7 @@ export function runsOutsideSketch(verb: string): boolean {
 /**
  * スケッチの点・辺の平行移動 / 回転 / 複製。
  *
- * 対象はコアの確定選択から取る(3Dで点や辺をクリック / 左ドラッグで囲む)。
+ * 対象はコアの選択から取る(3Dで点や辺をクリック / 左ドラッグで囲む)。
  * `sketch_id` を取らない唯一のスケッチverbで、どのスケッチかは**選んだ参照が持っている**
  * (下の `runsWithoutSketchId`)。
  *
@@ -356,7 +355,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
   label: '動かす',
   buttonId: 'sketch-move',
   // **ローカル方式**。`move_body` と同じ発想で、選んだ図形の今の座標を
-  // dx/dy だけずらした姿を描く。対象は引数に無い(サーバがコアの確定選択から取る)ので、
+  // dx/dy だけずらした姿を描く。対象は引数に無い(サーバがコアの選択から取る)ので、
   // 幽霊の対象も `App.svelte` が同じ選択集合から導く(`ghostSources`)。
   preview: 'local',
   args: [
@@ -404,7 +403,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
 /**
  * スケッチ図形の鏡映複製。**軸は既存の線分を1本クリックして指す。**
  *
- * 対象はコアの確定選択から取り、軸は**共有選択集合を経由しない別チャンネル**
+ * 対象はコアの選択から取り、軸は**共有選択集合を経由しない別チャンネル**
  * (`PickArgSpec`)で受ける。同じ集合に載せると `require_sketch_entities` が軸の線分まで
  * 対象に数える —— 軸は自分自身へ映るのでverb側は黙って外すが、画面が数えた対象の件数と
  * 結果が食い違う。
@@ -457,7 +456,7 @@ export const MIRROR_SKETCH_ENTITIES: CommandDef<'mirror_sketch_entities'> = {
  * コアが個数を添えて拒み、トーストで見える(確定時だけ)。入力中の幽霊はサーバが文書を変えずに
  * 計算し(`preview_envelope_regions`)、分裂している間は警告色で描く。
  *
- * 対象の領域は確定選択から取る(サーバが取るので引数に載せない)。どのスケッチかは選んだ領域が
+ * 対象の領域は選択から取る(サーバが取るので引数に載せない)。どのスケッチかは選んだ領域が
  * 持っているので `sketch_id` は足さない(`runsWithoutSketchId`)。
  */
 export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {

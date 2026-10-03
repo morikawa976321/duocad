@@ -244,7 +244,7 @@ export function installTestHooks(ctx: TestHookContext): void {
       measurement: measurement === null ? null : $state.snapshot(measurement),
       wantedVertices: ctx.wantedVertices(),
       measurementInfo: () => viewport()?.measurementInfo() ?? null,
-      // **提案(水色)と確定(橙)の区別は3Dの色だけ**になったので、色そのものを読める穴を出す。
+      // 選択の色そのものを読める穴。
       highlightColors: () => viewport()?.highlightColors() ?? null,
       // ホバー強調で今明るくしているもの。**「クリックすれば取れるもの」と実際に
       // クリックした結果が一致していること**を実機検査が確かめるための穴

@@ -17,7 +17,7 @@
 
 - **一致0件はエラーではない**。空のリストを返し、件数は呼び出し元が数えられる
   (`Selection.to_dict()` の `count`)。
-- **不正な述語は ValueError**(未知の `op`・型違い・`kind` に無い `op`)。`propose_selection` は
+- **不正な述語は ValueError**(未知の `op`・型違い・`kind` に無い `op`)。`set_selection` は
   これを捕まえず、**選択を変更しないまま**落とす。黙って空集合にすると2つが区別できなくなる。
 
 **不可視Bodyは走査しない**。`body` を明示して不可視Bodyを指した場合も ValueError

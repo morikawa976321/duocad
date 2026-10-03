@@ -70,7 +70,7 @@ register_verb(VERB_FILLET, do=_do_fillet, undo=undo_shape)
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 @entry(VERB_FILLET)
 def _enter_fillet(document: Document, radius: Union[float, Sequence[float]]) -> dict:

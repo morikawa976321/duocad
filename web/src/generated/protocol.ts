@@ -8,7 +8,7 @@ export const COMMAND_CATEGORY = {
   set_sketch_visible: 'selection',
   measure: 'query',
   modify_selection: 'selection',
-  commit_selection: 'selection',
+  toggle_selection: 'selection',
   clear_selection: 'selection',
   sketch_create: 'sketch',
   sketch_create_offset: 'sketch',
@@ -66,7 +66,7 @@ export interface CommandArguments {
   set_sketch_visible: { sketch_id: string; visible: boolean }
   measure: Record<string, never>
   modify_selection: { add?: unknown[]; remove?: unknown[] }
-  commit_selection: Record<string, never>
+  toggle_selection: { refs: unknown[] }
   clear_selection: Record<string, never>
   sketch_create: { base_plane?: string }
   sketch_create_offset: { base_plane?: string; distance: number }

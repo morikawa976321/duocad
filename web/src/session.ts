@@ -5,7 +5,7 @@
  * 文書・操作ログ・undo履歴・**可視性**はコア側にある
  * (§2「アプリ層が落ちて失われてよいのは、途中まで入力していたコマンドだけ」)。
  *
- * **選択も可視性もコアが正**。このファイルは `modify_selection` / `commit_selection` /
+ * **選択も可視性もコアが正**。このファイルは `modify_selection` / `toggle_selection` /
  * `clear_selection` / `set_visible` を送るだけで、どちらの状態も覚えない。
  *
  * **`state` は部品ごとの配列である。** `state.bodies` は軽量
@@ -84,17 +84,11 @@ export type SelectionRef = ShapeRef | BodyRef | RegionRef | SketchEntityRef
 /**
  * 共有される選択集合(`duocad/selection.py` の `Selection.to_dict()`)。
  *
- * **origin は集合単位**。`"proposed"` はAIが提案した状態で、そのままではverbに渡せない
- * (コアが `SelectionNotCommitted` で止める)。`"user"` になる道は2つ ——
- * 人がクリックで触る(`modify_selection`)か、**人が対象集合を食うコマンドを実行する**
- * (サーバが走らせる直前に確定する。`duocad/server.py` の `_commit_before_verb`)。
- *
- * **画面から確定を呼ぶ道は無い**(「承認する」ボタンごと廃止し、`commit_selection` の口も持たない)。
- * 提案と確定を人へ伝えるのは**3Dのハイライト色だけ**なので、この値は必ず配信で追随する。
+ * **出所を持たない**。人がクリックで選んだものもAIが選んだものも同じ集合で、そのまま
+ * verb の対象になる。人はAIの選択を見て、そのまま使うか、トグルで直す。
  */
 export interface SelectionState {
   items: SelectionRef[]
-  origin: 'user' | 'proposed'
   count: number
 }
 
@@ -481,7 +475,6 @@ export interface MeasureBetween {
 export interface MeasurePayload {
   client_op: number | null
   count: number
-  origin: 'user' | 'proposed'
   items: unknown[]
   /** **ちょうど2項目のときだけ**付く(`duocad/measure.py` の `measure_selection`)。 */
   between?: MeasureBetween | null
@@ -806,15 +799,10 @@ export interface Session {
   runVerb(verb: string, args: Record<string, unknown>, clientOp: number): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
   setSketchVisible(sketchId: string, visible: boolean, clientOp: number): void
-  /** 人が直す経路。差分編集で `origin` は `"user"` になる(触ること自体が承認)。 */
+  /** 差分編集(足す・外す)。 */
   modifySelection(add: SelectionRef[], remove: SelectionRef[], clientOp: number): void
-  /**
-   * AIの提案を中身を変えずに承認する。
-   *
-   * **今は画面から呼んでいない**(「承認する」ボタンを廃止し、verbの実行を
-   * 承認とみなすようサーバ側で自動化した)。確定の口 `commit_selection` はサーバ側
-   * (MCP と WS の表)にだけあり、画面からは持たない。
-   */
+  /** 参照ごとに、あれば外し無ければ足す(素のクリック。AI の `toggle_selection` と同じ操作)。 */
+  toggleSelection(refs: SelectionRef[], clientOp: number): void
   clearSelection(clientOp: number): void
   /**
    * verbを投機的に実行して形だけ測らせる。**文書は変わらない**(サーバが元へ戻す)。
@@ -1000,7 +988,6 @@ export function createSession(hooks: SessionHooks): Session {
       // ---------------------------------------------------------------- 測定
       client_op?: number | null
       count?: number
-      origin?: 'user' | 'proposed'
       items?: unknown[]
       between?: MeasureBetween | null
       between_error?: string | null
@@ -1036,7 +1023,6 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onMeasure({
         client_op: message.client_op ?? null,
         count: message.count ?? 0,
-        origin: message.origin ?? 'user',
         items: message.items ?? [],
         between: message.between,
         between_error: message.between_error,
@@ -1158,6 +1144,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     modifySelection(add, remove, clientOp) {
       send({ cmd: 'modify_selection', add, remove, client_op: clientOp })
+    },
+    toggleSelection(refs, clientOp) {
+      send({ cmd: 'toggle_selection', refs, client_op: clientOp })
     },
     clearSelection(clientOp) {
       send({ cmd: 'clear_selection', client_op: clientOp })

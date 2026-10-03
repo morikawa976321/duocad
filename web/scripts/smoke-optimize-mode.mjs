@@ -23,7 +23,7 @@
  *      独立変数のままだと両立しうる。`App.svelte` の `Mode`(タグ付きユニオン)がその状態を
  *      表現できなくしているが、**検査は残す** —— 排他が型で保証されているかどうかは
  *      外から見えず、表現を戻したときに気づく口がここしか無い)。
- *   9. **空の確定選択で役割を外せる**(「0件だから送らない」最適化が入っていないこと)。
+ *   9. **空の選択で役割を外せる**(「0件だから送らない」最適化が入っていないこと)。
  *   10. `stale` の `code` が変わると再通知される(`hidden` として記録済みでも
  *      `fingerprint`/`missing` に変わればトーストが出る)。
  *
@@ -385,7 +385,7 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
 
     // ====================================================================== 10. 空の確定で役割を外せる
     // 回帰穴: 「0件だから送らない」という最適化を入れると、
-    // 役割を外す唯一の手段(空の確定選択)が機能しなくなる。
+    // 役割を外す唯一の手段(空の選択)が機能しなくなる。
     //
     // **外すのは拘束面にする。** 保持ソリッドは、その面に条件面が残っているうちは外せない
     // (コアが断る: 「条件面は保持ソリッドの面にしか置けない」)。拘束面には依存するものが無い。
@@ -447,13 +447,11 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
     const faceC = await pickAnyFace(bodyC)
     // 拘束面として確定する(MCP経由。UIの検査は2節で既にやっている——ここはstaleの
     // 再通知だけを見る)。**条件面は保持ソリッドの面にしか置けない**ので、先にCを保持ソリッドへ足す。
-    await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [bodyA, bodyC].map((id) => ({ body: id, kind: 'body', index: null })),
     })
-    await mcp.callTool('commit_selection')
     await mcp.callTool('set_preserve_bodies')
-    await mcp.callTool('propose_selection', { refs: [{ body: bodyC, kind: 'face', index: faceC }] })
-    await mcp.callTool('commit_selection')
+    await mcp.callTool('set_selection', { refs: [{ body: bodyC, kind: 'face', index: faceC }] })
     await mcp.callTool('set_fixtures', {})
     await waitFor(
       (id, index) =>

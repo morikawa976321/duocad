@@ -91,7 +91,7 @@ runSmoke('smoke-browser-sketches', { mcp: true, handshake: false }, async ({ mcp
     if (!row.hidden || row.checked) fail(`隠した行の見た目が違う: ${JSON.stringify(row)}`)
     let refused = null
     try {
-      await mcp.callTool('propose_selection', { refs: [{ sketch: sketchA, index: 1 }] })
+      await mcp.callTool('set_selection', { refs: [{ sketch: sketchA, index: 1 }] })
     } catch (error) {
       refused = String(error)
     }

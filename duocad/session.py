@@ -387,12 +387,12 @@ class Session:
     #
     # 発火するイベントの形(verbの `applied` とはキーで区別する。選択はverbではない):
     #     {"change": "selection",
-    #      "selection": {"items": [...], "origin": "user"|"proposed", "count": int},
+    #      "selection": {"items": [...], "count": int},
     #      "client_op": int | None}
     #
     # **戻り値**: 変更する4つは `self._emit(...)` の戻り —— つまり**発火したイベントそのもの**
     # (`{"change","selection","client_op"}`)。`get_selection` だけは発火しないので
-    # `Selection.to_dict()`(`{"items","origin","count"}`)を返す。**この2つは形が違う**ので、
+    # `Selection.to_dict()`(`{"items","count"}`)を返す。**この2つは形が違う**ので、
     # 呼び出し側は `["selection"]` を挟むかどうかを取り違えないこと。
     def get_selection(self) -> dict:
         """現在の選択集合を素の値で返す(`Selection.to_dict()`)。発火はしない。"""
@@ -406,14 +406,14 @@ class Session:
         """
         return measure_selection(self)
 
-    def propose_selection(
+    def set_selection(
         self,
         refs: Optional[list] = None,
         predicate: Optional[dict] = None,
         client_op: Optional[int] = None,
     ) -> dict:
-        """AIの提案として選択を置き換え、変更イベントを発火して**そのイベント**を返す。"""
-        selection.propose_selection(self.document, refs=refs, predicate=predicate)
+        """選択を置き換え、変更イベントを発火して**そのイベント**を返す。"""
+        selection.set_selection(self.document, refs=refs, predicate=predicate)
         return self._emit(self._selection_event(client_op))
 
     def modify_selection(
@@ -422,7 +422,7 @@ class Session:
         remove: Optional[list] = None,
         client_op: Optional[int] = None,
     ) -> dict:
-        """人の差分編集。足し引きして確定にし、変更イベントを発火して**そのイベント**を返す。"""
+        """差分編集。足し引きして、変更イベントを発火して**そのイベント**を返す。"""
         selection.modify_selection(
             self.document,
             add=() if add is None else add,
@@ -430,9 +430,9 @@ class Session:
         )
         return self._emit(self._selection_event(client_op))
 
-    def commit_selection(self, client_op: Optional[int] = None) -> dict:
-        """提案を確定する(中身は変えない)。変更イベントを発火して**そのイベント**を返す。"""
-        selection.commit_selection(self.document)
+    def toggle_selection(self, refs: list, client_op: Optional[int] = None) -> dict:
+        """参照ごとにあれば外し無ければ足す。変更イベントを発火して**そのイベント**を返す。"""
+        selection.toggle_selection(self.document, refs)
         return self._emit(self._selection_event(client_op))
 
     def clear_selection(self, client_op: Optional[int] = None) -> dict:

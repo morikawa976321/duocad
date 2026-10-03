@@ -10,9 +10,9 @@ from duocad.session import DocumentBusy
 from session_support import browser
 
 #: 文書を変えるが、実行中も通してよいもの(操作ログに載らず、最適化が読む条件にも形にも触れない)。
-_ALLOWED_WHILE_RUNNING = {"set_visible", "set_sketch_visible", "modify_selection", "commit_selection",
+_ALLOWED_WHILE_RUNNING = {"set_visible", "set_sketch_visible", "modify_selection", "toggle_selection",
                           "clear_selection",
-                          "propose_selection"}
+                          "set_selection"}
 
 
 def _running_session_with_a_body() -> Session:

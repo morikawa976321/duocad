@@ -3,7 +3,7 @@
  *
  * verb→target の枠(`CommandHost`)にそのまま乗る: 起動 → 対象を2つ指す → その場で測る。
  * how が無く対象は**ちょうど2つ**なので Enter は要らない(`needsEnter` の「下限＝上限」)。
- * 対象は共有選択集合から取る(`SelectionArgSpec`)ので、AIが `propose_selection` で2つ
+ * 対象は共有選択集合から取る(`SelectionArgSpec`)ので、AIが `set_selection` で2つ
  * 置いたものをそのまま測れるし、AI側は同じ `measure` ツールで同じ答えを読める。
  *
  * 送るのは `{cmd:'measure'}` だけ(対象はコアの選択にある)。応答は状態配信ではなく

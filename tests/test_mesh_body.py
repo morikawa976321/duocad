@@ -301,7 +301,7 @@ def test_the_bulk_selection_path_refuses_a_mesh_body_too():
     """一括選択は数え上げを減らすために `select_face` を通らないので、断りも写してある。"""
     doc, body_id = _tetra_doc()
     with pytest.raises(ValueError, match="is a mesh body"):
-        selection.propose_selection(doc, refs=[{"body": body_id, "kind": "face", "index": 1}])
+        selection.set_selection(doc, refs=[{"body": body_id, "kind": "face", "index": 1}])
     assert selection.get_selection(doc).items == [], "断ったのに選択が変わった"
 
 
@@ -384,7 +384,7 @@ def test_measure_reports_a_mesh_body_selected_as_a_whole():
     tools = DocumentTools(session)
     added = tools.call("add_mesh_body", {"positions": TETRA_POSITIONS, "indices": TETRA_INDICES})
     tools.call(
-        "propose_selection",
+        "set_selection",
         {"refs": [{"body": added["body_id"], "kind": "body", "index": None}]},
     )
     measured = tools.call("measure", {})

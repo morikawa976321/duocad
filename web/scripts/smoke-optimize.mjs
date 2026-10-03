@@ -269,10 +269,9 @@ runSmoke('smoke-optimize', { timeout: 60000, mcp: true }, async ({ options, work
     const errorsBeforeRegion = await page.evaluate(() => [...window.__duocad.errors])
     if (errorsBeforeRegion.length > 0) fail(`ここまでにエラーが出ている: ${errorsBeforeRegion.join(' | ')}`)
     const tiny = await addBox([24, 5.5], 1, 1)
-    await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [bodyA, bodyB, tiny].map((id) => ({ body: id, kind: 'body', index: null })),
     })
-    await mcp.callTool('commit_selection')
     await mcp.callTool('set_preserve_bodies')
     await mcp.callTool('clear_selection')
     await waitFor(
@@ -316,13 +315,11 @@ runSmoke('smoke-optimize', { timeout: 60000, mcp: true }, async ({ options, work
     if (regionWarnings.length === 0) fail('表現できていないことが札(控え)に出ていない')
 
     // 1mm角を役割から外してから消す(役割に残したまま消すと「文書に無い」で走らなくなる)。
-    await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [bodyA, bodyB].map((id) => ({ body: id, kind: 'body', index: null })),
     })
-    await mcp.callTool('commit_selection')
     await mcp.callTool('set_preserve_bodies')
-    await mcp.callTool('propose_selection', { refs: [{ body: tiny, kind: 'body', index: null }] })
-    await mcp.callTool('commit_selection')
+    await mcp.callTool('set_selection', { refs: [{ body: tiny, kind: 'body', index: null }] })
     await mcp.callTool('delete')
     await mcp.callTool('clear_selection')
     await waitFor(

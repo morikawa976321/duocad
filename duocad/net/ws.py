@@ -31,12 +31,12 @@
 **入れない**し、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
 
 **verbコマンドは対象集合(面・辺・領域)を引数で受けない**。数値・名前・パスだけを送り、押す面も
-丸める辺も押し出す領域もverbの入口(`duocad/entry.py`)がコアの確定選択から取る
-(`selection.require_confirmed` / `require_edges`)。`body_id` が残っているのは対象集合ではない
+丸める辺も押し出す領域もverbの入口(`duocad/entry.py`)がコアの選択から取る
+(`selection.require_selected` / `require_edges`)。`body_id` が残っているのは対象集合ではない
 ものだけ(`set_visible` / `get_edges` の対象、`extrude` の行き先)。
 
-選択の口は3つ(`modify_selection` / `commit_selection` / `clear_selection`)。`propose_selection`
-は開けていない(AIが書く経路であり、人はポインティングで直す)。
+選択の口は3つ(`modify_selection` / `toggle_selection` / `clear_selection`)。`set_selection`
+(述語を取る置き換え)は開けていない(人はクリックで選ぶ)。
 
 `preview` だけは**状態を配信しない**。verbを投機的に実行して形だけ測り、文書は
 `duocad.speculative` が元へ戻す(確定した1回だけが操作ログに積まれる)。したがって
@@ -56,7 +56,7 @@
       "bodies": [{"body_id","name","kind","visible","revision",
                   "face_count","volume","geometry": <tessellate結果|None>}, ...],
       "log", "can_undo", "can_redo", "applied_count",
-      "selection": {"items": [...], "origin": "user"|"proposed", "count": int},
+      "selection": {"items": [...], "count": int},
     }
     delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
                                "unchanged": [BodyId, ...]}
@@ -116,11 +116,6 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: - **`rename_document` も表から外れている** —— 応答が `save_document` と同じ
 #:   「`file` の封筒 + 状態の配り直し」で、表の「封筒だけ」に合わないため。
 FILE_COMMANDS: dict = catalog.file_table()
-
-#: **対象集合をコアの確定選択から取るコマンド**(`catalog.Command.uses_selection`)。
-#: `_dispatch` はこれを受け取ったとき、選択が `origin="proposed"` のままなら
-#: **自動で `commit_selection` してから**verbを走らせる(下記 `_commit_before_verb`)。
-SELECTION_CONSUMING_COMMANDS: set = catalog.selection_consuming_commands()
 
 #: アプリ内AIが繋げるプロバイダ(`ai_configure` が受け付ける綴り・`ai_status.providers`)。
 #: Claudeへ繋ぐ道はMCP(サブスク認証のClaude Codeが `/mcp` へ来る)側に残っている。
@@ -301,8 +296,8 @@ class Server:
         """verb の応答に `client_op`(要求した画面が付けた通し番号)を載せて全接続へ配る。
 
         載せないものは載せない理由がそれぞれにある: 状態を配り直すだけのもの(`get_state` /
-        `set_view_resolution` / `save_document`)、`file` の封筒で返す書き出し、`_commit_before_verb` の
-        自動確定(docstring)。`change` 系(`set_visible` / 選択の3つ)は `Session` が `_emit` の中で載せる。
+        `set_view_resolution` / `save_document`)、`file` の封筒で返す書き出し。
+        `change` 系(`set_visible` / 選択の3つ)は `Session` が `_emit` の中で載せる。
         """
         applied["client_op"] = message.get("client_op")
         await self._push(connection, applied=applied)
@@ -316,7 +311,6 @@ class Server:
             return
 
         try:
-            await self._commit_before_verb(connection, command, message)
             if command == "get_state":
                 await self._push(connection, applied=None, only=connection)
             elif command in ("undo", "redo"):
@@ -340,7 +334,7 @@ class Server:
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
-            # -------------------------------------------------- B: 選択(人が直す経路)
+            # -------------------------------------------------- B: 選択
             # **コアの選択集合をそのまま叩く**(アプリ層に選択状態を持たせない)。
             # 発火したイベント(`{"change":"selection", ...}`)を `applied` として返し、
             # 状態は全接続へ配信する(`state.selection` に入っている)。
@@ -352,13 +346,15 @@ class Server:
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
-            elif command in ("commit_selection", "clear_selection"):
+            elif command == "toggle_selection":
                 applied = self._apply(
-                    self.session.commit_selection
-                    if command == "commit_selection"
-                    else self.session.clear_selection,
+                    self.session.toggle_selection,
+                    message.get("refs") or [],
                     message.get("client_op"),
                 )
+                await self._push(connection, applied=applied)
+            elif command == "clear_selection":
+                applied = self._apply(self.session.clear_selection, message.get("client_op"))
                 await self._push(connection, applied=applied)
             # -------------------------------------------------- C/D: スケッチとフィーチャの verb
             # 引数は宣言(`catalog.Command.ws_arguments`)に従って取り出し、検査してから
@@ -555,50 +551,6 @@ class Server:
                     "message": f"{type(error).__name__}: {error}",
                 },
             )
-
-    async def _commit_before_verb(self, connection: Any, command: Any, message: dict) -> None:
-        """**人がツールバーからコマンドを実行する行為そのものを承認とみなす**。
-
-        対象集合を確定選択から取るverb(`SELECTION_CONSUMING_COMMANDS`)がこのソケットへ
-        届いたとき、選択が `origin="proposed"`(AIの提案)のままなら、先に
-        `commit_selection` してから走らせる。**中身は変えない** —— 変わるのは origin だけで、
-        提案と確定の区別そのもの(`confirmed_items` の門)は残る。
-
-        **ここはブラウザ側の経路だけ**である。MCPは `mcp_server.py` を通るのでこの覆いを
-        受けず、AIは今までどおり自分の提案を `commit_selection` で明示的に確定する
-        (`duocad/selection.py` のモジュールdocstring)。
-
-        `preview` も対象にする —— 数値を打つと投機実行が飛ぶので、ここを外すと
-        「提案のまま押し出そうとした瞬間に `SelectionNotCommitted` の札だけが出る」が残る。
-        投機実行するverbは `message["verb"]` にある。
-
-        **確定したら必ずここで配信する**(`_push`)。後続のverbの配信に相乗りさせてはいけない
-        —— `preview` は「状態を配らない」コマンドなので、相乗りにすると
-        **サーバの origin だけが `user` になり、画面は `proposed` のまま残る**。
-        `SelectionPanel` を廃した今、origin を人へ伝えるのは3Dの色だけであり、
-        AI側が `get_selection` で読む値でもあるので、この食い違いは
-        「人が承認していないのに承認済みに見える」状態そのものになる(実測で再現)。
-
-        **`client_op` は載せない(`None`)**。これは人が出した選択編集ではなく、サーバが
-        自動で行う確定である。verbの `client_op` を載せると、アプリ層がこれを
-        「この画面が出した選択変更」と数え(`selfSelections` = 即適用の引き金)、
-        さらに `pendingOp` を verb の完了前に解いてしまう。
-        """
-        name = message.get("verb") if command == "preview" else command
-        if name not in SELECTION_CONSUMING_COMMANDS:
-            return
-        # **貼る先が引数で来ていたら選択は読まない** —— そのときは選択が使われない。
-        # 使われない集合を承認扱いにすると、「基準平面を指しただけなのにAIの提案が
-        # 確定していた」という静かな変化になる。**スケッチを作るverbは `sketch_create` と
-        # `sketch_create_offset` の2つ**(どちらも `base_plane` が来ていれば選択を読まない。
-        # `import_svg` は `sketch_id` を取る側なので対象集合を確定選択から取らず、
-        # `SELECTION_CONSUMING_COMMANDS` に入らないためこの関数の対象からも外れる)。
-        if name in ("sketch_create", "sketch_create_offset") and message.get("base_plane") is not None:
-            return
-        if not selection.get_selection(self.session.document).is_proposed():
-            return
-        applied = self._apply(self.session.commit_selection, None)
-        await self._push(connection, applied=applied)
 
     def _apply(self, call: Any, *args: Any, **kwargs: Any) -> dict:
         """WebSocket経由の変更を実行する。この間だけ `_dispatching` を立てる。

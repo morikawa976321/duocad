@@ -30,10 +30,8 @@ import { runSmoke } from './harness.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 import { clickSketchPoint, createSketchOnBasePlane, faceAt, screenOf } from './pick.mjs'
 
-/** 3Dハイライトの色(`viewport.ts` の `HIGHLIGHT_COLOR` / `PROPOSED_COLOR`)。
-    **選択パネルを廃した後、提案と確定を区別する唯一の手段**なので、値で検査する。 */
-const USER_HIGHLIGHT = 0xffb454
-const PROPOSED_HIGHLIGHT = 0x36d1ff
+/** 3Dの選択色(`viewport.ts` の `HIGHLIGHT_COLOR`)。人が選んでもAIが選んでも1色。 */
+const SELECTION_HIGHLIGHT = 0xffb454
 
 
 
@@ -199,7 +197,7 @@ runSmoke('smoke-mcp', { timeout: 180000, mcp: true, handshake: false }, async ({
     // 書き換えた時点で `phase="ready"`(引数が揃った状態)に到達できたので、「揃っているのに
     // 発火しない」まで示せた。`sketch_create` の貼る先は `App.svelte` の `onPick` からしか
     // 埋まらない(`useSelectedFaceAsPlane`)ため、AIの選択だけでは `ready` にならない。
-    // いま固定できるのは「**コアの確定選択が人のクリック後と同じ状態でも**、AI由来なら
+    // いま固定できるのは「**コアの選択が人のクリック後と同じ状態でも**、AI由来なら
     // 貼る先は埋まらず、コマンドは構えたまま何も起きない」までである。
     await mcp.callTool('clear_selection')
     await page.waitForFunction(() => (window.__duocad.selection?.items ?? []).length === 0, {
@@ -209,14 +207,13 @@ runSmoke('smoke-mcp', { timeout: 180000, mcp: true, handshake: false }, async ({
     const sketchesBeforeAi = await page.evaluate(() => window.__duocad.sketches.length)
     await page.click('#sketch-create') // 人が起動する(ここまでは人の1手)
     await mcp.callTool('modify_selection', {
-      // **AIが面を1つ選ぶ**。`origin` は "user" になる(MCPの `modify_selection` は
-      // 提案ではなく確定選択を直す経路)ので、選択の中身だけを見ていると人のクリックと区別が付かない。
+      // **AIが面を1つ選ぶ**。
       add: [{ body: target.body_id, kind: 'face', index: newlyPickable.index }],
     })
     await page.waitForFunction(
       () => {
         const selection = window.__duocad.selection
-        return Boolean(selection && selection.count === 1 && selection.origin === 'user')
+        return Boolean(selection && selection.count === 1)
       },
       { timeout, polling: 50 },
     )
@@ -398,35 +395,31 @@ runSmoke('smoke-mcp', { timeout: 180000, mcp: true, handshake: false }, async ({
     ok('全表示へ戻した')
 
     // ---------------------------------------------------------------- 検証5(B): 交互操作の一巡
-    // **AIが述語で辺を提案 → ブラウザに提案として出る → 人がクリックで1本外す →
+    // **AIが述語で辺を選ぶ → ブラウザに出る → 人がクリックで1本外す →
     //   AIが読むと外れている。** これが通れば、交互操作が人間側から見える形で成立している
     //   (タスクBの検証項番5)。ここまでの4つと違い、**人とAIが同じ集合を順に触る**。
     await mcp.callTool('clear_selection')
-    let proposed = await mcp.callTool('propose_selection', {
+    let proposed = await mcp.callTool('set_selection', {
       predicate: { kind: 'edge', body: target.body_id, where: [{ op: 'parallel_to', axis: 'Z' }] },
     })
     if (proposed.selection.count < 2) {
-      // Zに平行な辺が足りない部品なら、その部品の辺全部を提案に使う(件数だけが目的)
-      proposed = await mcp.callTool('propose_selection', {
+      // Zに平行な辺が足りない部品なら、その部品の辺全部を使う(件数だけが目的)
+      proposed = await mcp.callTool('set_selection', {
         predicate: { kind: 'edge', body: target.body_id, where: [] },
       })
     }
     const proposedCount = proposed.selection.count
-    if (proposedCount < 2) fail(`提案に使える辺が足りない: ${proposedCount} 本`)
-    if (proposed.selection.origin !== 'proposed') {
-      fail(`propose_selection の origin が proposed でない: ${proposed.selection.origin}`)
-    }
+    if (proposedCount < 2) fail(`選べる辺が足りない: ${proposedCount} 本`)
 
     await page.waitForFunction(
       (count) => {
         const selection = window.__duocad.selection
-        return selection?.count === count && selection.origin === 'proposed'
+        return selection?.count === count
       },
       { timeout, polling: 50 },
       proposedCount,
     )
-    // **提案は確定選択と違う色で出る。** 提案(水色)と確定(橙)の区別を人へ伝えるのは
-    // **3Dのハイライト色だけ**である —— その色そのものを
+    // **AIが選んだものも人が選んだものと同じ色で出る。** その色そのものを
     // 読んで確かめる(`viewport.highlightColors`)。辺が3Dに出るのは辺を要求している
     // コマンドを起動している間だけなので、人がやるとおり先にフィレットを起動する。
     await page.click('#fillet')
@@ -436,18 +429,15 @@ runSmoke('smoke-mcp', { timeout: 180000, mcp: true, handshake: false }, async ({
       { timeout, polling: 50 },
       target.body_id,
     )
-    const proposedColor = await page.evaluate(() => window.__duocad.highlightColors().edge)
-    if (proposedColor !== PROPOSED_HIGHLIGHT) {
-      fail(
-        `AIの提案が提案の色で出ていない: ${proposedColor?.toString(16)} ` +
-          `(期待 ${PROPOSED_HIGHLIGHT.toString(16)})`,
-      )
+    const aiColor = await page.evaluate(() => window.__duocad.highlightColors().edge)
+    if (aiColor !== SELECTION_HIGHLIGHT) {
+      fail(`AIが選んだ辺が選択色で出ていない: ${aiColor?.toString(16)} (期待 ${SELECTION_HIGHLIGHT.toString(16)})`)
     }
-    ok(`AIが述語で辺 ${proposedCount} 本を提案 → ブラウザに**提案の色(水色)で**出た`)
+    ok(`AIが述語で辺 ${proposedCount} 本を選んだ → ブラウザに選択色(橙)で出た`)
 
     // ---------------------------------------------------------------- 人が1本外す
     // **Ctrl+クリックで外す**(選択パネルの「外す」ボタンの代わり)。
-    // 裏に回っている辺は指せないので、提案のうち実際に指せる1本を順に試す。
+    // 裏に回っている辺は指せないので、選ばれたうち実際に指せる1本を順に試す。
     const proposedIndices = proposed.selection.items
       .filter((item) => item.body === target.body_id)
       .map((item) => item.index)
@@ -470,13 +460,8 @@ runSmoke('smoke-mcp', { timeout: 180000, mcp: true, handshake: false }, async ({
         // その辺は画面から指せなかった(裏に回っている)。次を試す
       }
     }
-    if (droppedIndex === null) fail('提案された辺を本物のクリックで1本も外せない')
-    // **触った瞬間に色が確定側(橙)へ変わる** —— 承認されたことが色で人に伝わる。
-    const userColor = await page.evaluate(() => window.__duocad.highlightColors().edge)
-    if (userColor !== USER_HIGHLIGHT) {
-      fail(`人が触ったのに確定の色へ変わらない: ${userColor?.toString(16)}`)
-    }
-    ok(`人がブラウザで辺 ${droppedIndex} をCtrl+クリックで外した(${proposedCount} -> ${proposedCount - 1} 本・色は橙へ)`)
+    if (droppedIndex === null) fail('AIが選んだ辺を本物のクリックで1本も外せない')
+    ok(`人がブラウザで辺 ${droppedIndex} をCtrl+クリックで外した(${proposedCount} -> ${proposedCount - 1} 本)`)
 
     // ---------------------------------------------------------------- AIが読むと外れている
     const afterHuman = await mcp.callTool('get_selection')
@@ -489,14 +474,8 @@ runSmoke('smoke-mcp', { timeout: 180000, mcp: true, handshake: false }, async ({
     if (afterHuman.selection.items.some((item) => item.index === droppedIndex)) {
       fail(`人が外した辺 ${droppedIndex} がAI側にまだ残っている`)
     }
-    if (afterHuman.selection.origin !== 'user') {
-      fail(`人が触ったのに origin が user でない: ${afterHuman.selection.origin}`)
-    }
-    ok(
-      `**AIが get_selection で読むと外れている**(${afterHuman.selection.count} 本 / ` +
-        `origin=user = 人が触ったことが承認になっている)`,
-    )
-    ok('→ 交互操作(AIが提案 → 人が過不足を直す → AIが読む)が一巡した')
+    ok(`**AIが get_selection で読むと外れている**(${afterHuman.selection.count} 本)`)
+    ok('→ 交互操作(AIが選ぶ → 人が過不足を直す → AIが読む)が一巡した')
     // フィレットは起動しただけ(形は変えない)。**AIが読んだ後で**中断する —— 中断すると選択は空になる。
     await page.keyboard.press('Escape')
     await page.waitForFunction(() => window.__duocad.selection?.count === 0, { timeout, polling: 50 })

@@ -47,13 +47,12 @@ runSmoke('smoke-extrude-faces', { timeout: 60000, mcp: true }, async ({ mcp, bro
       width: PILLAR.width,
       height: PILLAR.height,
     })
-    await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [
         { sketch: sketch.sketch_id, index: 1 },
         { sketch: sketch.sketch_id, index: 2 },
       ],
     })
-    await mcp.callTool('commit_selection')
     await mcp.callTool('extrude', { distance: PILLAR.top, mode: 'join' })
     await mcp.callTool('clear_selection')
     ok(`コの字を作った: ${bodyId}`)

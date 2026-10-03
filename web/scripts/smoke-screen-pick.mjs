@@ -79,8 +79,7 @@ runSmoke('smoke-screen-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
     const { page, consoleErrors } = await openApp(browser, url, { timeout })
 
     // ================================================ A. ソリッドの辺(`bufferPolyline` 経路)
-    await mcp.callTool('propose_selection', { refs: [{ kind: 'face', body: bodyId, index: 1 }] })
-    await mcp.callTool('commit_selection')
+    await mcp.callTool('set_selection', { refs: [{ kind: 'face', body: bodyId, index: 1 }] })
     await page.click('#fillet')
     await page.waitForFunction(
       () => Boolean(window.__duocad.wantsEdges && window.__duocad.edges?.edges.length > 0),

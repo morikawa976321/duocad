@@ -1,4 +1,4 @@
-"""verb `delete` — **確定選択のボディとスケッチ図形をまとめて消す**。
+"""verb `delete` — **選択のボディとスケッチ図形をまとめて消す**。
 
 **対象は1つのverbで2種類ある**:
 
@@ -129,7 +129,7 @@ def delete(
     if not body_ids and not entities:
         raise ValueError(
             "delete requires at least one body or sketch entity "
-            "(確定選択から対象を取る verb なので、呼ぶ前に選ぶこと)"
+            "(選択から対象を取る verb なので、呼ぶ前に選ぶこと)"
         )
     if len(set(body_ids)) != len(body_ids):
         raise ValueError(f"delete got duplicate body ids: {body_ids!r}")
@@ -229,7 +229,7 @@ register_verb(VERB_DELETE, do=_do_delete, undo=_undo_delete)
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 @entry(VERB_DELETE)
 def _enter_delete(document: Document) -> dict:

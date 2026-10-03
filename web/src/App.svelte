@@ -261,25 +261,15 @@
   /** 起動中のコマンドが選択から取る種別(`CommandHost` が知らせる)。 */
   let wantedKinds = $state<SelectableKind[]>([])
   /**
-   * 保持/除外ソリッド・拘束面(`OPTIMIZE_PRESET_ROLE` の3つ)が起動中か。
-   *
-   * **この3つだけ、修飾キー無しのクリックもトグルにする**(2026-09-11本人決定)。
-   * 起動した時点で既存の割り当てが選択状態に現れる集合代入なので、素のクリックが
-   * 「置き換え」だと1枚足すたびにCtrlが要り、他の割り当て済みの面を毎回避けて
-   * クリックする羽目になる。**他のverbも起動中は素のクリックがトグル**(`activeVerb`)だが、
-   * AIの提案が載っている間は置き換えのまま —— この3つ(と測定)だけは提案の上でもトグルにする。
-   *
-   * **測定(`measure`)も同じ**(2026-09-16)。対象は「ちょうど2つ」で、素のクリックが
-   * 置き換えのままだと2つ目のクリックが1つ目を消して永久に揃わない。
-   */
-  let toggleOnlyClicks = $state(false)
-  /**
    * 起動中のコマンド(無起動・スケッチの既定「選ぶ」は null)。`CommandHost` の
    * `onStart` / `onEnd` と `setMode` だけが書く。普通の変数でよい(描画に使わない)。
    *
    * **起動中は素のクリックが選択のトグルになり(`toggleOnlyMode`)、終わると選択を全解除する
    * (`onCommandEnd`)。** 起動していない間は従来どおり(素のクリックは置き換え)なので、
-   * 先に選んでからverbを起動する手・AIが提案した選択をそのまま使う手は変わらない。
+   * 先に選んでからverbを起動する手・AIが選んだ選択をそのまま使う手は変わらない。
+   *
+   * 保持/除外ソリッド・拘束面の集合 verb は起動した時点で既存の割り当てが選択状態で現れ、
+   * 測定は対象が「ちょうど2つ」なので、置き換えのままだと成り立たない(どちらも起動中のトグルで満たされる)。
    */
   let activeVerb: string | null = null
   /**
@@ -995,22 +985,12 @@
   })
 
   function drawHighlight(): void {
-    const origin = selection?.origin === 'proposed' ? 'proposed' : 'user'
-    viewport?.highlight(
-      selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
-      origin,
-    )
+    viewport?.highlight(selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
     // **選択が勝つ**(タスク仕様の色の規則)。ボディが選ばれているあいだは保持/除外の
     // 役割色より優先してハイライト色を出す(`viewport.applyFaceMaterials` が実体)。
-    viewport?.highlightBodies(
-      selectedBodies.map((item) => item.body),
-      origin,
-    )
-    viewport?.highlightEdges(
-      selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })),
-      origin,
-    )
-    viewport?.showVertices(vertexMarkers, origin)
+    viewport?.highlightBodies(selectedBodies.map((item) => item.body))
+    viewport?.highlightEdges(selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
+    viewport?.showVertices(vertexMarkers)
   }
 
   /**
@@ -1176,8 +1156,7 @@
     const current = selection?.items ?? []
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'toggle') {
-      if (already) modifySelection([], [ref])
-      else modifySelection([ref], [])
+      session.toggleSelection([ref], nextOp())
     } else if (already && current.length === 1) modifySelection([], [ref])
     else selectOnly(ref)
   }
@@ -1219,28 +1198,21 @@
    * 保持/除外ソリッド・拘束面の集合 verb は、起動した時点で既存の割り当てが選択状態で現れる
    * 集合代入なので、置き換えのままだと足すたびに他の割り当てを全部外してしまう。測定は対象が
    * 「ちょうど2つ」なので、2つ目の素のクリックが1つ目を消しては永久に揃わない。
-   * 立つのは `toggleOnlyClicks`(`onCommandStart`)が立っている間だけで、他のverbの
-   * 面ピック(押し出す面等)には効かない。
+   * 立つのはコマンド起動中(`activeVerb`)だけ。
    */
   function toggleOnlyMode(mode: PickEvent['mode']): PickEvent['mode'] {
-    if (toggleOnlyClicks) return 'toggle'
     return commandClickToggles() ? 'toggle' : mode
   }
 
-  /**
-   * コマンド起動中の素のクリックをトグルにするか(`activeVerb`)。
-   *
-   * **AIの提案(`origin:'proposed'`)が載っている間は適用しない**: 素のクリックで提案の1項目が
-   * 単独の確定になる既存の手(置き換え)と競合するため、その扱いは本人の判断待ち。
-   */
+  /** コマンド起動中の素のクリックをトグルにするか(`activeVerb`)。 */
   function commandClickToggles(): boolean {
-    return activeVerb !== null && selection?.origin !== 'proposed'
+    return activeVerb !== null
   }
 
   /**
    * **保持/除外ソリッドの間はボディ粒度**。`wantedKinds` に `'body'` が立つのは
    * `SET_PRESERVE_BODIES` / `SET_EXCLUDE_BODIES` だけ(`commands/optimize.ts` の宣言)。
-   * 面の参照を確定すると `require_committed_bodies` が面を無視し、**集合が黙って空になる**。
+   * 面の参照を確定すると `require_selected_bodies` が面を無視し、**集合が黙って空になる**。
    */
   function optimizeSetFaceRef(bodyId: string, faceIndex: number): SelectionRef {
     if (wantedKinds.includes('body')) return bodyRef(bodyId)
@@ -1321,13 +1293,10 @@
    */
   function onCommandStart(verb: string): void {
     measure.clear() // 次の操作に入ったら、前の測定の札は用済み
-    // **`toggleOnlyClicks` は起動するverbが変わるたび毎回書き直す**(前のverbの
-    // 値を持ち越さない)。`model === null` の早期returnより前に置く —— 起動そのものは
-    // 文書が無くても起きるので、ここで止めると次のverbが集合代入でも判定が古いまま残る。
-    toggleOnlyClicks = OPTIMIZE_PRESET_ROLE[verb] !== undefined || verb === MEASURE.id
     pendingOptimizePreset = null
     // **別のverbへ直接移ったら、前のverbの終わり**として選択を空にする(`onCommandEnd`)。
     // 同じverbの押し直し(構え直し)は終わりではない。
+    // `model === null` の早期returnより前に置く —— 起動そのものは文書が無くても起きる。
     const switched = activeVerb !== null && activeVerb !== verb
     activeVerb = verb === DEFAULT_SKETCH_COMMAND_ID ? null : verb
     if (model === null) return
@@ -1388,18 +1357,12 @@
   }
 
   /**
-   * `CommandHost` の `onWants`。**verbが無起動へ戻ったことを知る唯一の経路でもある**
-   * (`onStart` は起動したときしか呼ばれない)。無起動の `command.args` は常に `[]` なので
-   * `kinds` が空になった = 中断/確定成功/モード切替のどれかで降りた、とみなして
-   * `toggleOnlyClicks` を下ろす —— 下ろさないと、拘束面を確定した直後に
-   * フィレットへ移って辺を素クリックしたときトグルのまま残り、選択が置き換わらない。
+   * `CommandHost` の `onWants`。無起動の `command.args` は常に `[]` なので、`kinds` が空になった =
+   * 中断/確定成功/モード切替のどれかで降りた、とみなして集合 verb の並べ直し待ちを捨てる。
    */
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
-    if (kinds.length === 0) {
-      toggleOnlyClicks = false
-      pendingOptimizePreset = null
-    }
+    if (kinds.length === 0) pendingOptimizePreset = null
   }
 
   /**

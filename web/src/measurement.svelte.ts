@@ -28,14 +28,14 @@ export function createMeasurement(deps: {
   fail: (message: string) => void
 }): Measurement {
   let current = $state<MeasurePayload | null>(null)
-  /** `current` を測ったときの選択の印(`refKey` の並び。origin は見ない)。 */
+  /** `current` を測ったときの選択の印(`refKey` の並び)。 */
   let measuredKey = ''
 
   function selectionKey(): string {
     return deps.selection().map(refKey).join('|')
   }
 
-  // 測った選択が変われば結果は嘘になるので消す(選び直し・undo・AIの提案のどれでも)。
+  // 測った選択が変われば結果は嘘になるので消す(選び直し・undo・AIの選択のどれでも)。
   $effect(() => {
     if (current !== null && selectionKey() !== measuredKey) current = null
   })

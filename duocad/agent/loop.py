@@ -10,7 +10,7 @@
    渡すと思考が膨らみ、1リクエストが600秒返らなかった。伸びるのは文脈長ではなく思考の側
    なので、**上限と短いタイムアウトが要る**)。
 3. **ツールの実行時エラーでループを落とさない。** 構造化封筒(`not_found` /
-   `invalid_argument` / `selection_not_committed` / `selection_empty` /
+   `invalid_argument` / `selection_empty` /
    `selection_kind_mismatch` / `invalid_predicate` / `internal`)をそのままモデルへ返して
    自己修復させる(実測でこれは機能した)。
 4. **UIの知識を持たない。** 進捗は `progress(name, arguments, result, ok)` のコールバックへ
@@ -361,7 +361,7 @@ class AgentLoop:
                 return self._result(status, detail, turn, outcomes, usage, text=reply.text)
 
             # **文書(または選択)が変わっていたら実行しない(楽観ロック本体)。**
-            # `_reset_selection_if_needed`(コア側)は形状を変えるverbの後で確定選択を
+            # `_reset_selection_if_needed`(コア側)は形状を変えるverbの後で選択を
             # 全リセットするので、面・辺・領域を消費するverbは `selection_empty` で
             # 既に守られている —— ここは**それを経由しないverb**(`set_visible` /
             # `set_parameter` / body_id で直接効くもの等)や、**選択が空にならない
@@ -486,14 +486,13 @@ class AgentLoop:
         invented = self._dimensions_nobody_asked_for(call)
         if invented:
             # **人が言っていない寸法で形を変えない**。
-            # `agent_instructions()` は「曖昧・探索的な依頼なら propose_selection で止めて
-            # 尋ねる」「迷ったら止める側に倒す」と書いてあるが、**モデルはこれを守れない**
+            # **モデルは「寸法を自分で決めない」を文章だけでは守れない**
             # (実測: 「角が尖ってて危ないから、いい感じに処理しといて」に対して、
             # 止まらず R1.5mm を自分で決めて fillet まで適用した)。
             # 規律を文章で頼むのをやめて、ここで機械的に止める。
             #
             # **失敗として返す**(例外にしない) —— モデルはこの封筒を読んで、
-            # 提案を出して人に尋ねる側へ回れる。往復が1つ増えるだけで、
+            # 対象を選ぶところまでにして人に尋ねる側へ回れる。往復が1つ増えるだけで、
             # 適用してしまった形をundoで戻すより安い。
             # **`dimension_not_given` はアプリ内AIの経路だけの語**(MCP にはこのガードが無い。
             # 語彙の一覧は `MCP.md`「実装のメモ」、一致は `tests/test_doc_code_agreement.py`)。
@@ -504,7 +503,7 @@ class AgentLoop:
                     (
                         f"{', '.join(invented)} の値を人が指示していない。"
                         "寸法を自分で決めて形を変えてはいけない。"
-                        "propose_selection で対象だけ提案し、"
+                        "set_selection で対象だけ選び、"
                         "何を選んだかと、どの寸法が要るかを述べて尋ねること。"
                     ),
                     "DimensionNotGiven",

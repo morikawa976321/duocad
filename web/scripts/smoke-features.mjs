@@ -299,6 +299,8 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     const beforeAbort = await look()
     await typeInto('#fillet-radius', 2)
     await page.keyboard.press('Escape')
+    // 選択の正はコア: 空になる配信を待ってから読む
+    await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'Escで選択が空にならない')
     const afterAbort = await look()
     if (afterAbort.log !== beforeAbort.log || afterAbort.appliedCount !== beforeAbort.appliedCount) {
       fail(`Escで中断したのに操作が残った: log ${beforeAbort.log}->${afterAbort.log}`)
@@ -539,7 +541,9 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     if (afterEscape !== 1) fail(`Escで中断したのに図形が増えている: ${afterEscape}`)
     ok('矩形反復: 確定前に複製5個が幽霊で見え、Escで消えて文書は変わらない')
 
-    // 打ち直して今度は確定する(**幽霊と確定結果が同じ場所か**をこの後で突き合わせる)
+    // 打ち直して今度は確定する(**幽霊と確定結果が同じ場所か**をこの後で突き合わせる)。
+    // Escで選択は空になる。その配信が届いてから選び直す(届く前に「選択済み」と読むと選び直しを飛ばす)。
+    await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'Escで選択が空にならない(矩形反復)')
     await ensureEntityPicked(entityId)
     await page.click('#pattern-rectangular')
     await typeInto('#pattern-dx', 10)

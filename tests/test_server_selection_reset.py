@@ -32,7 +32,7 @@ def _face(index: int) -> dict:
 
 def _assert_cleared(session: Session) -> None:
     selection = session.get_selection()
-    assert selection == {"items": [], "origin": "user", "count": 0}
+    assert selection == {"items": [], "count": 0}
 
 
 # --------------------------------------------------------------------------------------
@@ -102,11 +102,10 @@ def test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish(
 # 2. 形を変えない操作は選択に触らない
 # --------------------------------------------------------------------------------------
 def test_selection_editing_itself_is_not_a_reset(session: Session) -> None:
-    """`modify_selection` / `commit_selection` / `clear_selection` は選択機構そのものであり、
+    """`modify_selection` / `toggle_selection` / `clear_selection` は選択機構そのものであり、
     「形を変えるverbの確定」ではない —— ここで自分自身を巻き込まない。
     """
-    session.propose_selection(refs=[_edge(1)])
-    session.commit_selection()
+    session.set_selection(refs=[_edge(1)])
     assert session.get_selection()["count"] == 1
     session.modify_selection([_edge(2)], [])
     assert session.get_selection()["count"] == 2

@@ -111,106 +111,25 @@ def test_the_system_prompt_is_the_same_text_the_mcp_server_hands_out():
     assert str(len(catalog.tool_names())) in shared
 
 
-def _autonomy_rule_zones(text: str) -> tuple[str, str, str, str]:
-    """プロンプトを「前置き / 第1段 / 第2段 / 後書き」の4区画に**漏れなく**割る。
-
-    **終端句より後ろも検査対象に入れる** —— 入れないと、末尾に「ただし、第1段の操作も必ず
-    提案で止める。」と1文足しても緑のままになる(実測)。連結が元の文に戻ることを確かめて、
-    **検査から外れる区画が残らない**ようにする。
-
-    切り出せないときは**緑にせず落とす**(空振り緑は、検査が効いていないことを「異常なし」と
-    報告するので、穴が開いていることに気づけない)。
-    """
-    marks = ("(1) ", "(2) ", "形を変える verb が確定すると")
-    for mark in marks:
-        assert mark in text, (
-            f"段の目印『{mark}』がプロンプトに無い。"
-            "切り出せないなら検査は成立しないので、緑にせずここで落とす"
-        )
-    first, second, tail = (text.index(mark) for mark in marks)
-    assert 0 < first < second < tail, f"2段の規則の並びが崩れている: {text}"
-    zones = (text[:first], text[first:second], text[second:tail], text[tail:])
-    assert "".join(zones) == text, "区画の割り方が壊れている(全文を覆えていない)"
-    return zones
+#: 固定の停止・進行の規則を置く言い回し。AI が依頼の文面から判断するので、プロンプトに置かない。
+FIXED_AUTONOMY_RULES = ("必ず止", "必ず進", "曖昧なら", "迷ったら", "承認を待", "許可を得", "(1) ", "(2) ")
 
 
-#: **止まれ**と読める指示。第2段の中にしか置いてはならない(下の検査の要)。
-STOP_DIRECTIVES = (
-    "止め",
-    "止ま",
-    "尋ね",
-    "承認を待",
-    "確認を待つ",
-    "人に確認",
-    "人へ確認",
-    "許可を得",
-    "指示を仰",
-)
+def test_the_system_prompt_leaves_stop_or_proceed_to_the_ai():
+    """**選択で止めるか verb まで進めるかは、人の指示から AI がその都度判断する**(本人決定)。
 
-#: 言い回しを問わず**第1段の許可を全称で打ち消す**語。プロンプト全体で禁じる。
-BLANKET_OVERRIDES = ("必ず", "第1段", "してはならない", "承認を得て", "許可を得")
-
-
-def test_the_system_prompt_carries_the_two_step_autonomy_rule():
-    """**AIが止まるか進むかの規則は、この文にしか無い**(本人決定)。
-
-    `commit_selection` は最初からMCPに公開されているので、人の承認を強制していたのは
-    プロンプトと文書だけだった。裏を返すと、**ここを旧規則(承認必須)へ戻してもコアは何も
-    止めない** —— 赤にならずに振る舞いだけが変わる。だから文で固定する。
-
-    即実行してよい側の条件は、手動UIのEnter要否(`web/src/commands/command.ts` の
-    `needsEnter`)と**同じ2条件**である(対象を何個でも取る / how の入力がある)。
-    **個々のverb名はこの文に書かない**(verbを足した日に古くなる)ので、ここでも見ない。
-
-    落とすのは4つ: **句の削除 / 条件の否定・肯定の取り違え / 分岐の入れ替え / 第1段の許可を
-    打ち消す停止指示の追記**。最後の1つが要点で、**矛盾の検出は区間の中ではなくプロンプト全文に
-    対して行う**(止まれと読める語は第2段の中にしか置けない、という不変条件にしてある)。
-
-    **落とせないもの**: 散文の意味は文字列検査では固定できないので、ここに挙げていない言い回しで
-    の矛盾は常に書き足せる。そこは検査の領域ではなく、**この文を書き換える人が
-    `agent_instructions()` のdocstringを読むことで守る**。
+    落ちたら、固定の規則(曖昧なら止める等)がプロンプトへ戻っている、または
+    「選択だけで止めたときは何を選んだかを述べる」「選択は人もAIも同じ操作で触る」が消えている。
     """
     shared = catalog.agent_instructions()
 
-    # 前提: 確定はAI自身が踏む(旧規則ならここが「人の承認を待つ」に戻る)
-    assert "人の承認は要らない" in shared, "旧規則(承認必須)へ戻っている"
-
-    head, first, second, tail = _autonomy_rule_zones(shared)
-
-    # --- 第1段: 2条件が**どちらも無い**とき、確認を待たず適用してよい ---
-    assert "対象を何個でも取る引数が無く" in first, "条件(1)が否定形で書かれていない"
-    assert "how(寸法・選択肢・パス)の入力も無い" in first, "条件(2)が否定形で書かれていない"
-    assert "確認を待たず" in first, "第1段の行動が『確認を待たない』でない"
-    assert "実行してよい" in first, "第1段が実行の許可になっていない"
-
-    # --- 第2段: 2条件の**いずれかがある**とき、AIが依頼から判断する ---
-    assert "対象を何個でも取る、または how の入力がある" in second, "条件が肯定形で書かれていない"
-    assert "自分で判断する" in second, "自律判断の規則が第2段に無い"
-    # 分岐の向き —— 具体的なら適用、曖昧なら停止。入れ替わったら順序が壊れて落ちる
-    concrete, applies = second.index("具体的な指示"), second.index("適用まで行き")
-    vague, stops = second.index("曖昧"), second.index("止めて")
-    assert concrete < applies < vague < stops, (
-        f"具体/曖昧と適用/停止の対応が入れ替わっている: {second}"
-    )
-    # 止めると決めたら verb を呼ばない(呼べばコアが SelectionNotCommitted で断る)
-    assert "止めたら verb は呼ばない" in second, "『止める』の中身が書かれていない"
-    assert "止める側に倒す" in second, "迷ったときに倒す向きが書かれていない"
-
-    # --- 全文: 第1段の許可を後段で打ち消していないこと ---
-    # **区間の外を見ていなかったのが前の版の穴**(末尾への1文追記が素通りした)。
-    # 止まれと読める語は第2段の中にしか置けない、という形にして全文を覆う。
-    for label, zone in (("前置き", head), ("第1段", first), ("後書き", tail)):
-        for word in STOP_DIRECTIVES:
-            assert word not in zone, (
-                f"{label}に停止指示『{word}』がある —— "
-                "止まれと読める語を置いてよいのは第2段の中だけである"
-                "(第1段の『確認を待たず適用してよい』を後段で打ち消す変更を落とすため)"
-            )
-    for word in BLANKET_OVERRIDES:
-        assert word not in shared, (
-            f"第1段の許可を全称で打ち消す言い回し『{word}』がプロンプトにある"
-        )
-    assert shared.count("(1) ") == 1, "段の見出し『(1) 』が増えている(後段で規則を上書きした疑い)"
+    assert "その都度判断" in shared
+    assert "何を選んだかを述べる" in shared
+    for tool in ("set_selection", "modify_selection", "toggle_selection", "clear_selection"):
+        assert tool in shared, f"{tool} がプロンプトに無い(人と同じ選択操作を AI に伝えていない)"
+    for phrase in FIXED_AUTONOMY_RULES:
+        assert phrase not in shared, f"固定の規則『{phrase}』がプロンプトにある"
+    assert "commit_selection" not in shared
 
 
 # --------------------------------------------------------------------------------------
@@ -497,8 +416,7 @@ def test_the_total_time_budget_cuts_the_loop_off_before_max_turns():
 def test_a_dimension_nobody_asked_for_is_refused_before_the_verb_runs():
     """**規律を文章で頼まず、ここで機械的に止める**。
 
-    `agent_instructions()` は「曖昧な依頼なら propose_selection で止めて尋ねる」
-    「迷ったら止める側に倒す」と書いてあるが、モデルはこれを守れなかった —— 実測で
+    モデルは「寸法を自分で決めない」を文章だけでは守れなかった —— 実測で
     「角が尖ってて危ないから、いい感じに処理しといて」に対し、止まらず R1.5mm を
     自分で決めて fillet まで適用した。適用してしまった形はundoでしか戻せない。
     """

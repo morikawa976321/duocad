@@ -194,10 +194,9 @@ async function checkNearSideRegression({ mcp, browser, url, timeout }) {
       width: SMALL_HALF * 2,
       height: SMALL_HALF * 2,
     })
-    await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [{ sketch: sketchSmall.sketch_id, index: 1 }],
     })
-    await mcp.callTool('commit_selection')
     const smallExtrude = await mcp.callTool('extrude', { distance: SMALL_HALF * 2, mode: 'new' })
     await mcp.callTool('clear_selection')
     const smallBodyId = smallExtrude.bodies[0].body_id
@@ -211,10 +210,9 @@ async function checkNearSideRegression({ mcp, browser, url, timeout }) {
       width: BIG_HALF * 2,
       height: BIG_HALF * 2,
     })
-    await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [{ sketch: sketchBig.sketch_id, index: 1 }],
     })
-    await mcp.callTool('commit_selection')
     const bigExtrude = await mcp.callTool('extrude', { distance: SMALL_HALF * 2, mode: 'new' })
     await mcp.callTool('clear_selection')
     const bigBodyId = bigExtrude.bodies[0].body_id

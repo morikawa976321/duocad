@@ -142,11 +142,11 @@ register_verb(
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 def selected_regions(document: Document) -> List[RegionRef]:
-    """確定選択の領域(確定とプレビューが同じ取り方をする)。"""
-    return [RegionRef.from_dict(item) for item in selection.require_confirmed(document, "region")]
+    """選択の領域(確定とプレビューが同じ取り方をする)。"""
+    return [RegionRef.from_dict(item) for item in selection.require_selected(document, "region")]
 
 
 @entry(VERB_ENVELOPE_REGIONS)

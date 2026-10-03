@@ -89,7 +89,7 @@ export function angleArg(prefix: string): Omit<NumberArgSpec, 'kind'> {
  * **`mode` を明示的に載せる** —— コア側の既定も `translate` だが、モードを人に選ばせた結果を送らないと、
  * 画面の「並進」ボタンが何も意味しないことになる。**全部0はコアも弾く**(移動なら何も起きず、複製なら元と
  * 完全に重なる)が、ここで先に断るのは理由を人の近くで出すため。対象そのものは送らない(サーバがコアの
- * 確定選択から取る)。
+ * 選択から取る)。
  */
 export function buildMove(
   values: ArgValues,

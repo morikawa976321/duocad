@@ -43,8 +43,7 @@ runSmoke('smoke-optimize-debug', { timeout: 60000, mcp: true }, async ({ options
       (await addExtrudedRect(mcp, { corner, width: size, height: size, distance })).bodyId
 
     async function selectFaces(refs) {
-      await mcp.callTool('propose_selection', { refs })
-      await mcp.callTool('commit_selection')
+      await mcp.callTool('set_selection', { refs })
     }
 
     // ================================================================== 題材(デモではない)

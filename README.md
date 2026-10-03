@@ -2,7 +2,7 @@
 
 **Fusion360と同等以上にモダンでシンプルなUIに、自分が実際に使う手動操作と強力なAI操作を載せ、
 両者が同じ選択集合を交互に触れるようにしたモデリングツール。**
-差別化はUIでも機能数でもなく **交互操作**（AIが集合を提案 → 人が過不足を直す → AIが操作を適用）にある。
+差別化はUIでも機能数でもなく **交互操作**（AIが集合を選ぶ → 人が過不足を直す → AIが操作を適用）にある。
 
 このREADMEは開発を再開するときの入口である。単位は mm 固定。
 
@@ -273,7 +273,7 @@ STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` / `HANGER_BA
 MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `smoke-files` / `smoke-regions` でも失敗になる）。
 
 **verbごとの「人間側/AI側の両方で動く」を1本で通す検査は持たない。** AI側（MCP）の契約は pytest
-（`tests/test_mcp_verbs.py` ほか）、人間側のUIは verb 別の smoke、交互操作（AIが提案 → 人が直す → AIが読む）は
+（`tests/test_mcp_verbs.py` ほか）、人間側のUIは verb 別の smoke、交互操作（AIが選ぶ → 人が直す → AIが読む）は
 `smoke-mcp.mjs`、カメラ（画角・Z-up）は `smoke-camera.mjs` が持つ。
 
 ---
@@ -295,7 +295,7 @@ MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `
 - **操作ログが唯一の正で、形状はそこから導出されるキャッシュ。** 保存形式はJSON（SQLiteは使わない）。
   開くときはログから再生する。undo・再生・AIの履歴読み・git差分が全部これに乗る。
 - **選択集合はアプリ層ではなくコアにある。** 永続／双方向（AIが書ける）／種別を保持／差分編集可能／
-  **提案（`proposed`）と確定（`user`）を区別**。ここをUIの状態にすると交互操作が原理的に不可能になる。
+  **出所（AIか人か）を区別しない1つの集合**で、人もAIも同じ操作（`modify_selection` / `toggle_selection` / `clear_selection`。AIだけ述語を書ける `set_selection`）で触る。ここをUIの状態にすると交互操作が原理的に不可能になる。
   **verbが食う面・辺・領域は、MCPからもWebSocketからも引数で渡さない**——
   どちらもこの集合から取るので、「対象集合の指定方法」は1つしかない。
 - **verbのメタ情報は1箇所にしか書かない。** 名前・引数・カテゴリ・プレビュー可否・
@@ -303,7 +303,7 @@ MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `
   MCPのツール定義も導出である。**verbを1つ足すときに書くのは、verbのモジュールと宣言1エントリの
   2箇所だけ**（手順の正は `catalog.py` 冒頭docstring）。
 - **verbを掛ける経路は1本。** verbのモジュールは純関数（対象を引数で受ける）と**入口**
-  （`@entry`。対象を確定選択から取って純関数へ渡す）を持ち、`Session.apply(verb, args)` が入口を名前で
+  （`@entry`。対象を選択から取って純関数へ渡す）を持ち、`Session.apply(verb, args)` が入口を名前で
   引いて呼ぶ。WebSocket・MCP・アプリ内AIはどれも `apply` を通るので、実行中の断り・選択のリセット・
   自動保存・配信はどの経路でも同じに効き、verbごとの配線は無い。届いた引数の検査（必須・未知・型）も
   宣言からの導出で、WebSocketとMCPに同じものが効く。frontendだけは別に持つ ——
@@ -400,7 +400,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/selection.py` | 選択集合（人のクリック側。可視性を含む「何が選べるか」） | ✗ | ✗ |
 | `duocad/predicates.py` | **述語による選択（AI側）**。構造化JSONでDSL文字列ではない | ✗ | ✗ |
 | `duocad/speculative.py` | プレビュー（確定前にverbを投機的に走らせて捨てる） | ✗ | ✗ |
-| `duocad/verbs/*.py` | verb層（1 verb 1モジュール。純関数と、対象を確定選択から取る入口） | ✗ | ✗ |
+| `duocad/verbs/*.py` | verb層（1 verb 1モジュール。純関数と、対象を選択から取る入口） | ✗ | ✗ |
 | `duocad/entry.py` | verbの入口の登録表（`@entry`）。`Session.apply` がここから名前で引く | ✗ | ✗ |
 | `duocad/catalog.py` | **verbの単一宣言**（名前・引数・カテゴリ・プレビュー可否・MCPスキーマ）。下の2つが持つ表はここからの導出 | ✗ | ✗ |
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
@@ -456,9 +456,9 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 
 設計として押さえるのはこの4点:
 
-- **面・辺・領域は引数で受けない。確定した選択から取る**（数値・名前・パスだけが引数）。
-  提案状態の選択はそのままverbに渡せず、先に `commit_selection` が要る。**WebSocketのコマンドも
-  同じ形**。`sketch_create` も MCPと同じく `base_plane` だけを取り、省略時は確定選択の面
+- **面・辺・領域は引数で受けない。選択から取る**（数値・名前・パスだけが引数）。
+  選択はそのままverbに渡せる（確定の手は無い）。**WebSocketのコマンドも
+  同じ形**。`sketch_create` も MCPと同じく `base_plane` だけを取り、省略時は選択の面
   （ちょうど1枚）に貼る
 - **ツール名 == WebSocketのコマンド名 == UIのコマンドID == 操作ログのverb名**。
   AIは `describe_document` のログを読んで次の一手を決めるので、綴りが違うと対応表を
@@ -488,7 +488,7 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
   打ち切った理由は構造化して返す（矛盾した指示を渡すと**思考**が膨らみ、1リクエストが600秒返らなかった実測がある）
 - **同時編集は楽観ロックで守る** —— モデルへの1往復を送る前に文書の版
   （`DocumentTools.current_seq()`）を控え、応答が返ったとき版がずれていたら、そのツール呼び出しは
-  実行せず「文書が変わったので選び直せ」と返す。形状を変えるverbの確定後は確定選択が全リセットされる
+  実行せず「文書が変わったので選び直せ」と返す。形状を変えるverbの確定後は選択が全リセットされる
   （`Session._reset_selection_if_needed`）ので大半は元から `selection_empty` で止まっていたが、
   `set_parameter` のように選択を経由しないverbはこの網に掛からず、楽観ロックがその穴を埋める
   （`fillet`/`chamfer`/`extrude` は対象ボディの可視性も実行時に見直す）。

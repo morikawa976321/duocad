@@ -223,7 +223,7 @@ class DocumentTools:
 
         - **ログの本数だけでは足りない**。選択の変更は操作ログに一切乗らないので、「人が辺Aの
           選択を外して辺Bを選び直して確定する」という**入れ替え**(件数も種別も変わらない)を
-          検出できない —— `fillet(radius)` は確定選択から対象を取るので、見逃すとAIは辺Aの
+          検出できない —— `fillet(radius)` は選択から対象を取るので、見逃すとAIは辺Aの
           つもりで辺Bを黙って丸める。
         - **選択の指紋だけでも足りない**(形状が変わっても選択の中身が同じままのことがある)。
 
@@ -444,9 +444,9 @@ class DocumentTools:
         ]
 
     def _selection_summary(self) -> dict:
-        """エラー封筒へ載せる選択の要約(`count` / `origin` だけ)。"""
+        """エラー封筒へ載せる選択の要約(`count` だけ)。"""
         current = selection.get_selection(self.session.document)
-        return {"count": len(current.items), "origin": current.origin}
+        return {"count": len(current.items)}
 
     def error_envelope(self, tool: str, error: Exception) -> dict:
         """例外を決定3の語彙へ畳む。MCPは先に弾かず、落ちたあとに名前を付ける。
@@ -481,14 +481,6 @@ class DocumentTools:
             }
         if isinstance(error, (KeyError, FileNotFoundError)):
             return {**base, "code": "not_found"}
-        # 提案のまま verb へ渡した拒否。文言ではなく型で判定する(決定3が禁じた潰し方を防ぐ)。
-        if isinstance(error, selection.SelectionNotCommitted):
-            return {
-                **base,
-                "code": "selection_not_committed",
-                "hint": "call commit_selection() before applying a verb that consumes the selection",
-                "selection": self._selection_summary(),
-            }
         # 選択由来の拒否は**コアが型で言ってくる**(`duocad/selection.py` の `require_*`)。
         # MCPは名前を付けて、次の一手を決める材料(`required_kind` / `selection`)を足すだけ。
         # 「1つだけ要るのに複数」は `invalid_argument` のまま —— AIが打つ次の手は
@@ -502,11 +494,11 @@ class DocumentTools:
                 **base,
                 "code": "selection_kind_mismatch",
                 "required_kind": error.kind,
-                # 実際に確定している種別と件数(`{"face": 3}`)。画面もモデルも数え直さない。
+                # 実際に選ばれている種別と件数(`{"face": 3}`)。画面もモデルも数え直さない。
                 "present_kinds": error.present,
                 "hint": (
-                    f"the confirmed selection is not empty but has no {error.kind}: "
-                    f"select {error.kind}(s) and commit before calling this verb"
+                    f"the selection is not empty but has no {error.kind}: "
+                    f"select {error.kind}(s) before calling this verb"
                 ),
                 "selection": self._selection_summary(),
             }
@@ -534,7 +526,7 @@ class DocumentTools:
     # 1. **形は選択から、数値は引数から。** 面・辺・領域を引数で受けるツールは1つも無い
     #    (`fillet(radius)` であって `fillet(edges, radius)` ではない)。Bodyだけは `body_id`
     #    引数で受ける —— Bodyは選択集合の項目ではない。選択から対象を取る実装は
-    #    `duocad/selection.py` の `require_confirmed` / `require_edges` の1組だけ。
+    #    `duocad/selection.py` の `require_selected` / `require_edges` の1組だけ。
     # 2. **成功は封筒に入れて返す。** ログに1行積むツールは
     #    `verb` / `seq` / `changed_bodies` / `bodies` / `can_undo` / `can_redo` を必ず持つ。
     #    **ログに載らない変更**(選択・`set_visible`)は `verb` / `seq` を持たず、代わりに
@@ -544,7 +536,7 @@ class DocumentTools:
     #    verbごとに「これはbodyを変える」と数え上げると、verbが増えたときに静かに漏れる。
     # 3. **失敗も封筒に入れて返す。** `{"error": {"code","message","tool","exception", ...}}`
     #    を `json.dumps` した本文 + `isError: true`。コードは次の語彙に限る
-    #    (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
+    #    (`not_found` / `invalid_argument` / `selection_empty` /
     #    `selection_kind_mismatch` / `invalid_predicate` / `busy` / `internal`)。**例外のテキストを
     #    素で返さない。** **`FileNotFoundError` を忘れない** —— パスの間違いは AI が直せる
     #    誤りなので、`internal` に落とすと諦める。
@@ -559,10 +551,9 @@ class DocumentTools:
     #
     # ## 拒否はコアがする。MCPは名前を付けるだけ
     #
-    # `selection_not_committed` を返すために `origin` を**先に見て弾いてはいけない**。拒否する
-    # のは `selection.confirmed_items` だけであり、MCPは**落ちたあとに**
-    # `isinstance(..., SelectionNotCommitted)` でコードを選ぶ。先に弾くと同じ規則が2箇所に
-    # 生まれ、片方だけ緩んだときに誰も気づかない。
+    # `selection_empty` / `selection_kind_mismatch` を返すために選択を**先に見て弾いてはいけない**。
+    # 拒否するのは `selection.require_*` だけであり、MCPは**落ちたあとに** `isinstance` で
+    # コードを選ぶ。先に弾くと同じ規則が2箇所に生まれ、片方だけ緩んだときに誰も気づかない。
     # ------------------------------------------------------------------ 選択(5 + 自己記述)
     def _as_selection_payload(self, selection: dict) -> dict:
         """選択5ツールの戻り値を `{"selection": {...}}` に揃える。"""
@@ -571,12 +562,12 @@ class DocumentTools:
     def get_selection(self) -> dict:
         """現在の選択を返す。**発火しない**(読むだけ)。
 
-        戻り値は `{"selection": {"items", "origin", "count"}}` で、**変更する4つと同じ形**。
+        戻り値は `{"selection": {"items", "count"}}` で、**変更する4つと同じ形**。
         """
         return self._as_selection_payload(self.session.get_selection())
 
-    def propose_selection(self, refs: Optional[list] = None, predicate: Optional[dict] = None) -> dict:
-        """**AIが書き込む経路**。`refs`(明示的な参照)か `predicate`(述語)のどちらか一方。
+    def set_selection(self, refs: Optional[list] = None, predicate: Optional[dict] = None) -> dict:
+        """選択を置き換える。`refs`(明示的な参照)か `predicate`(述語)のどちらか一方。
 
         §0のAI側の合格条件「引数を**述語**または明示的な参照で与えられ」がこの1つに載る。
         - 一致0件は**成功**(`count: 0`)。エラーにするとAIが述語の書式を疑い始める
@@ -596,17 +587,17 @@ class DocumentTools:
                     valid_ops=predicates.describe_ops(),
                     valid_kinds=list(predicates.PREDICATE_KINDS),
                 ) from error
-        event = self.session.propose_selection(refs=refs, predicate=predicate)
+        event = self.session.set_selection(refs=refs, predicate=predicate)
         return self._as_selection_payload(event["selection"])
 
     def modify_selection(self, add: Optional[list] = None, remove: Optional[list] = None) -> dict:
-        """**人が直す経路**(差分編集)。`origin` は "user" になる —— 人が触ること自体が承認。"""
+        """差分編集(足す・外す)。"""
         event = self.session.modify_selection(add=add, remove=remove)
         return self._as_selection_payload(event["selection"])
 
-    def commit_selection(self) -> dict:
-        """提案を確定する(中身は変えない)。AIが自分の提案を実行する前に踏む明示の1手。"""
-        event = self.session.commit_selection()
+    def toggle_selection(self, refs: list) -> dict:
+        """参照ごとに、あれば外し無ければ足す(画面のクリックと同じ操作)。"""
+        event = self.session.toggle_selection(refs)
         return self._as_selection_payload(event["selection"])
 
     def clear_selection(self) -> dict:
@@ -675,7 +666,7 @@ class DocumentTools:
         envelope["region_count"] = region_count
         envelope["hint"] = (
             f"領域が {region_count} 個ある。押し出す前に describe_document の "
-            "include_regions で面積を見て、対象を propose_selection で選ぶこと"
+            "include_regions で面積を見て、対象を set_selection で選ぶこと"
             "(文字の内側の穴も1つの領域として数える)"
         )
         return envelope

@@ -3,10 +3,9 @@
 **AIが文書を操作するための口。** ブラウザとMCPは同じ `Session` を叩く対等な
 クライアントで、MCPが変えた内容は開いている画面へ即座に届く。
 
-公開ツールの一覧は下表。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
-（数値・名前・パスだけが引数）。提案の選択はそのまま verb に渡せない — 先に
-`commit_selection` が要る。**この1手はAI自身が踏んでよい**（どこまで自分でやるかは
-下記「AIはどこまで自分でやるか」）。
+公開ツールの一覧は下表。面・辺・領域などの**形は引数で受けず、選択から取る**
+（数値・名前・パスだけが引数）。選択に出所の区別は無く、人もAIも同じ操作で触り、
+そのまま verb に渡せる（どこまで自分でやるかは下記「AIはどこまで自分でやるか」）。
 
 ## 公開ツール
 
@@ -14,8 +13,8 @@
 |---|---|
 | 問い合わせ | `describe_document` / `describe_shape` / `measure` —— 最後の1つは選択の各項目の寸法に加え、**ちょうど2項目なら** `between`（点・直線・平面のあいだの距離。平行でない線・面どうしは角度）を返す。画面の「測定」と同じ計算 |
 | 述語の自己記述 | `describe_predicates` |
-| 選択 | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
-| スケッチ | `sketch_create` / `sketch_create_offset` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` —— 最後の1つは確定選択の複数の領域を、へこみに沿って包む**単一の領域線**（線分と円弧だけ）を同じスケッチへ足す。`radius`（追従半径 R）と `offset`（d・負で内へ）は省略で 0。1つの領域にならないと失敗して何も変わらない |
+| 選択 | `get_selection` / `set_selection` / `modify_selection` / `toggle_selection` / `clear_selection` —— 人（ブラウザ）が使う選択操作と同じ集合（`modify_selection` / `toggle_selection` / `clear_selection`）に、AIだけが述語を書ける `set_selection` を足したもの |
+| スケッチ | `sketch_create` / `sketch_create_offset` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` —— 最後の1つは選択の複数の領域を、へこみに沿って包む**単一の領域線**（線分と円弧だけ）を同じスケッチへ足す。`radius`（追従半径 R）と `offset`（d・負で内へ）は省略で 0。1つの領域にならないと失敗して何も変わらない |
 | フィーチャ | `extrude` / `fillet` / `chamfer` / `boolean_body` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `delete` |
 | 可視性・パラメータ | `set_visible` / `set_sketch_visible` / `set_parameter` —— 可視性の2つはボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない |
 | 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` — 保持/除外ソリッド・拘束面・荷重面の条件を置く(ボディと拘束は集合代入。荷重だけは大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`) |
@@ -25,74 +24,36 @@
 **呼び方の型**（例）:
 
 1. `describe_document` で `body_id` / スケッチ / パラメータ名を知る
-2. `propose_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認 → `commit_selection`
+2. `set_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認
    - `measure` は**測るだけ**（verb ではない）。頂点・直線の辺・平らな面を2つ置くと `between.distance`
      （直線・平面は無限に延ばす）、平行でない線・面どうしは `between.angle_deg` が返る。測れない組
      （円い辺・曲面・ボディそのもの・スケッチの図形）は `between_error` に理由が入り、各項目の寸法は
      そのまま読める
-   （**AIが自分で踏む**。人に見せて止めるときだけ踏まない）
    - `sketch_create_offset(distance, base_plane=?)` は `sketch_create` の兄弟。
-     `base_plane` 省略時は確定選択の面（ちょうど1枚）を基準にし、その法線方向へ
+     `base_plane` 省略時は選択の面（ちょうど1枚）を基準にし、その法線方向へ
      `distance`（mm・正の向きが法線）だけ離れた平面にスケッチを貼る。基準の基準（offsetの
      offset）は作れない
 3. `fillet(radius=…)` / `extrude(distance=…)` など — **辺や領域は引数に書かない**
 4. `import_step` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
 5. `import_svg(sketch_id, path)` はSVGの図形を**いま開いているスケッチへ**足す
    （新しいスケッチは作らない —— 無ければ先に `sketch_create`）。戻り値は
-   足した `entity_ids` と `region_count`。そのまま `propose_selection` → `commit_selection`
+   足した `entity_ids` と `region_count`。そのまま `set_selection`
    → `extrude` へ進める。**領域は1枚のSVGに複数あるのが普通**（文字の内側の穴・離れた図形）
    なので、押し出す前に `describe_document(include_regions=True)` で面積を見て選ぶこと
 
 ## AIはどこまで自分でやるか
 
-**AIが確認を待つかどうかは、次の2段の規則で決まる。**
+**選択だけで止めるか verb まで進めるかは、人からの指示の文面から AI がその都度判断する**
+（本人の決定）。固定の規則（「曖昧なら止める」等）は置かない。
 
-### (1) 確認を待たず適用してよい操作
-
-次の**どちらにも当たらない**操作:
-
-- 対象を**何個でも取る**引数がある（何本の辺で終わりなのかは機械には決められない）
-- **how**（寸法・選択肢・パス）の入力がある（打ち終わり・選び終わりも機械には決められない）
-
-**how は「何をどうするか」＝操作の結果を決める値だけ**である（寸法・分岐の選択・出力先のパス）。
-`sketch_id` や `body_id` のような**既存の対象を指すID**・点の座標・スケッチを貼る先の平面名
-（`base_plane` の `XY`/`XZ`/`YZ`）は、文字列や列挙に見えても**対象（target）の側**であり
-how には数えない（手動UIでも `PlaneArgSpec` / `point` は how ではない）。
-
-**どちらでもない付帯入力もある。** 既存の対象を指してもいなければ結果も決めない引数
-（新しく作るものへの命名など）で、**省略でき、既定がある**ものである。打ち終わりを
-人に聞く必要がそもそも無いので how には数えず、手動UIにも出さない（`ws=False`）——
-この種の「省略可の付帯入力」は第1段の判定を変えない。
-
-どちらにも当たらなければ対象は1つに定まり、人に聞くことが残っていない。AIは
-`propose_selection` → `commit_selection` → verb を**一息に実行してよい**。
-
-**この基準は手動UIのEnter要否と同一のもの**である（人が押すEnterは「まだ足すのか・
-打ち終わったか」を人が言う手であり、AIが確認を待つ理由と同じ）。判定の実物は
-`web/src/commands/command.ts` の `needsEnter`、即適用になるverbの顔ぶれは
-`tests/test_ui_command_wiring.py` が実物を評価して機械で固定している。
-**顔ぶれをここに写さない** —— verbを足した日に古くなるうえ、基準さえ書けばツールの
-引数から導ける。
-
-### (2) それ以外の操作 — 止まるか進むかをAIが判断する
-
-提案で止めるか適用まで行くかを、**AIがユーザーのプロンプトから自律的に判断する**。目安:
-
-| 依頼 | AIの動き |
-|---|---|
-| 対象も数値も定まる具体的な指示（「上面の穴4つを半径2でフィレット」） | `commit_selection` して適用まで行く |
-| 曖昧・探索的（「角を丸めたい」「どこを削ればいい?」） | `propose_selection` で止め、何を選んだかを述べて確定してよいか尋ねる |
-
-**迷ったら止める側に倒す** —— 提案は人がクリックで直せるが、適用してしまった形は
-`undo` で戻すしかない。
-
-### 止める選択肢を成立させているもの
-
-提案のまま verb を呼ぶとコアが `selection_not_committed` で断る（`duocad/selection.py` の
-`confirmed_items`）。**この門があるから「止めた」が本当に止まる**ので、撤去していない。
+- 選択だけで止めたときは、**何を選んだかを述べる**。人は画面でその選択を見て、そのまま
+  採用するか、AIに直しを頼むか、自分でクリックしてトグルして直す。
+- 選択は出所を持たない1つの集合で、人もAIも同じ操作（`modify_selection` /
+  `toggle_selection` / `clear_selection`。AIだけ述語を書ける `set_selection` を持つ）で付け外しする。
+  `toggle_selection` は画面の素のクリックと同じ（あれば外し、無ければ足す）。
 
 > AIへ渡す文（MCPの `instructions` とアプリ内AIパネルのシステムプロンプト）は
-> `catalog.agent_instructions()` の1本で、この規則もそこに入っている（下記「実装のメモ」）。
+> `catalog.agent_instructions()` の1本で、この方針もそこに入っている（下記「実装のメモ」）。
 
 ## 何が起きるか（このサーバの位置づけ）
 
@@ -211,8 +172,8 @@ Claude Desktopのセッションに縛られる。1.2のHTTPのような後付�
 1. `describe_document` を呼ぶ → `body_id`・スケッチ・パラメータ名を得る
 2. 手前の部品を隠すなら `set_visible(body_id, false)`（**人間の画面からも消える**）。
    **可視性は操作ログに載らないので `undo` では戻らない** —— 戻すのは `set_visible(body_id, true)`
-3. 対象を `propose_selection` で選び、`commit_selection` してから fillet / extrude 等
-   —— **確定を人に頼まない**。提案で止めるかどうかの判断は上記「AIはどこまで自分でやるか」
+3. 対象を `set_selection` で選び、そのまま fillet / extrude 等
+   —— 止めるか進めるかの判断は上記「AIはどこまで自分でやるか」
 4. STEPを足すなら `import_step(path)` —— **これ1回で編集できるボディが揃う**
    （戻り値の `body_ids` がそれ）。**読み込みのツールはこれ1つだけ**
 5. 取り消すのは `undo`（UIと同じ履歴）。**戻せるのは形を変えた操作だけ**で、
@@ -240,12 +201,12 @@ Claude Desktopのセッションに縛られる。1.2のHTTPのような後付�
   アプリ内AIエージェント（`duocad/agent/`・README §4）と共有する。手順を2箇所に書くと
   片方だけ直った状態に気づけない。ツール数も宣言から数えるので、verbを足しても古くならない。
 - ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
-  （`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
+  （`not_found` / `invalid_argument` / `selection_empty` /
   `selection_kind_mismatch` / `invalid_predicate` / `busy` / `internal` / `dimension_not_given`）。
   `dimension_not_given` は**アプリ内AIの経路だけ**の語（`duocad/agent/loop.py` が、人が量を言っていない
   のにモデルが埋めた寸法を実行前に止めるときに返す。MCP にはこのガードが無い）。
   `busy` は形状最適化の実行中に文書を変えるツールを呼んだとき（選択・表示の切り替え・書き出しは通る）。
-  `selection_empty` は確定選択が**丸ごと空**のとき、`selection_kind_mismatch` は
-  **空ではないが要求した種別が無い**とき（例: フィレットを呼んだが面3枚が確定している）。
-  後者は実際に確定している種別と件数を `present_kinds` で返すので、選び直す先が引数なしで分かる。
+  `selection_empty` は選択が**丸ごと空**のとき、`selection_kind_mismatch` は
+  **空ではないが要求した種別が無い**とき（例: フィレットを呼んだが面3枚が選ばれている）。
+  後者は実際に選ばれている種別と件数を `present_kinds` で返すので、選び直す先が引数なしで分かる。
 - 契約は `tests/test_mcp.py` / `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py`。

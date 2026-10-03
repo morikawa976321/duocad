@@ -2,8 +2,8 @@
 
 固定するのは6つ。**どれも、外れても例外が出ないまま静かに間違う**種類のずれである:
 
-1. **集合代入** —— 「1つ足す」ではなく「その役割の集合を、確定選択そのものに置き換える」。
-   **空の確定選択も正当な入力**で、その役割を全部外すことを意味する(だから解除専用の
+1. **集合代入** —— 「1つ足す」ではなく「その役割の集合を、選択そのものに置き換える」。
+   **空の選択も正当な入力**で、その役割を全部外すことを意味する(だから解除専用の
    verbが要らない)。
 2. **排他は先勝ち** —— 既に相手の役割が付いている対象を割り当てようとしたら失敗し、
    **どれが衝突したかを名指しする**。失敗した側は文書にもログにも何も残さない。
@@ -17,7 +17,7 @@
    (宣言は `duocad/catalog.py` の1箇所が正)。
 
 **選択種別 `body` の新設**もここで押さえる —— ソリッドを丸ごと指す手段が無いと、
-保持/除外ソリッドの対象を確定選択から取れない。
+保持/除外ソリッドの対象を選択から取れない。
 """
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def test_a_body_can_be_selected_whole(session: Session) -> None:
     """**ソリッドを丸ごと指せる**(面を全部入れる案は採っていない)。
 
     落ちるのは「`kind='body'` の参照が選択機構を通らない」とき。保持/除外ソリッドは
-    確定選択から対象を取るので、通らなければverb自体が使えない。
+    選択から対象を取るので、通らなければverb自体が使えない。
     """
     body = _box(session)
     ref = selection.select_body(session.document, body.id)
@@ -96,7 +96,7 @@ def test_a_body_can_be_selected_whole(session: Session) -> None:
     items = session.get_selection()["items"]
     # **面が展開されて入っていない**(2835面のボディで選択集合が膨れる案を採らないこと)
     assert items == [ref], items
-    assert selection.require_committed_bodies(session.document) == [body.id]
+    assert selection.require_selected_bodies(session.document) == [body.id]
 
 
 def test_the_same_body_is_not_selected_twice(session: Session) -> None:
@@ -132,7 +132,7 @@ def test_assigning_bodies_replaces_the_whole_set(session: Session) -> None:
 
 
 def test_an_empty_selection_clears_the_role(session: Session) -> None:
-    """**空の確定選択で確定すると、その役割が空になる**(解除専用のverbを作らない根拠)。
+    """**空の選択で確定すると、その役割が空になる**(解除専用のverbを作らない根拠)。
 
     ここが `SelectionEmpty` で拒まれると、一度付けた役割を外す手段がどこにも無くなる。
     """
@@ -160,19 +160,13 @@ def test_assigning_faces_replaces_the_whole_set(session: Session) -> None:
     assert _indices(_optimize(session)["fixtures"]) == [3]
 
 
-def test_a_proposed_selection_is_committed_by_running_the_verb(session: Session) -> None:
-    """AIの提案のままでも、**人がverbを実行する行為そのものが承認**になる(WS経由)。
-
-    宣言(`uses_selection`)と実体(`require_*` を呼ぶ)が揃っていないと、この自動確定から
-    静かに漏れる —— 漏れると、AIが提案した状態で人がボタンを押したときだけ詰む。
-    """
+def test_a_selection_set_by_the_ai_feeds_the_verb_from_the_browser(session: Session) -> None:
+    """AIが選んだ集合を、人がブラウザからそのまま集合代入 verb に渡せる(WS経由)。"""
     body = _box(session)
-    session.propose_selection(refs=_body_refs(body))
-    assert session.get_selection()["origin"] == "proposed"
+    session.set_selection(refs=_body_refs(body))
 
     answer = send_one(session, {"cmd": "set_preserve_bodies"})
     assert answer["type"] == "state", answer
-    assert session.get_selection()["origin"] == "user"
     assert _ids(_optimize(session)["preserve_bodies"]) == [body.id]
 
 
@@ -741,7 +735,6 @@ def test_every_verb_is_reachable_from_all_three_surfaces(verb: str) -> None:
     from duocad.server import FEATURE_COMMANDS
 
     command = catalog.BY_NAME[verb]
-    assert command.uses_selection, f"{verb} が自動確定の対象から漏れている"
     assert not command.resets_selection, "形を変えるverbではないので選択をリセットしない"
     assert verb in FEATURE_COMMANDS, "WebSocketの表に無い"
     assert verb in catalog.tool_names(), "MCPのツールに無い"
@@ -815,7 +808,7 @@ def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
     over_ws = run(True)
     over_mcp = run(False)
     assert over_ws == over_mcp, {"WS": over_ws, "MCP": over_mcp}
-    assert over_ws, "対象を1つも割り当てていない(確定選択から取れていない)"
+    assert over_ws, "対象を1つも割り当てていない(選択から取れていない)"
     if verb == "set_loads":
         assert over_ws == (
             [1, 2],
@@ -826,7 +819,7 @@ def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
 
 
 def test_the_mcp_schema_takes_only_the_how(session: Session) -> None:
-    """MCPのスキーマに**対象集合が現れない**(面もボディも確定選択から取る)。"""
+    """MCPのスキーマに**対象集合が現れない**(面もボディも選択から取る)。"""
     server = McpServer(DocumentTools(session))
     tools = {
         tool["name"]: tool["inputSchema"]
@@ -857,8 +850,8 @@ def test_the_delivered_refs_can_be_fed_straight_back_into_the_selection(
     session.clear_selection()
     session.modify_selection(state["preserve_bodies"] + state["fixtures"], [])
     assert session.get_selection()["count"] == 3
-    assert selection.require_committed_bodies(session.document) == [body.id]
-    assert len(selection.require_committed_faces(session.document)) == 2
+    assert selection.require_selected_bodies(session.document) == [body.id]
+    assert len(selection.require_selected_faces(session.document)) == 2
 
 
 def test_the_state_is_not_rebuilt_on_every_broadcast(session: Session) -> None:

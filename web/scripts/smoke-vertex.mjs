@@ -1,16 +1,15 @@
 /**
- * 実機での確認 — **選択パネルを消した後も、人が選択を直せて、AIの提案をそのまま実行できる**。
+ * 実機での確認 — **選択パネルを消した後も、人が選択を直せて、AIが選んだものをそのまま実行できる**。
  *
  *   node scripts/smoke-vertex.mjs
  *
- * `SelectionPanel.svelte`(一覧・「外す」・「全解除」・「承認する」)は無い。
+ * `SelectionPanel.svelte`(一覧・「外す」・「全解除」)は無い。
  * その代替が本当に機能することを、**本物のMCPと本物のブラウザ**で見る:
  *
- *   1. AIが頂点を提案 → **選択に入っている頂点だけ**が3Dにマーカーで出る(提案の色=水色)。
+ *   1. AIが頂点を選ぶ → **選択に入っている頂点だけ**が3Dにマーカーで出る。
  *      頂点は3Dで指せない唯一の種別だったので、**ここが消えると人は頂点を外せなくなる**
- *   2. **本物のCtrl+クリックで1つ外せる**(origin が proposed → user・AI側も同じ集合を読む)
- *   3. AIが面を提案 → **人がツールバーから押し出すだけでverbが走る**
- *      (`duocad/server.py` の `_commit_before_verb`)
+ *   2. **本物のCtrl+クリックで1つ外せる**(AI側も同じ集合を読む)
+ *   3. AIが面を選ぶ → **人がツールバーから押し出すだけでverbが走る**
  *
  * サーバはこのスクリプトが空の文書で起動し、板はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
@@ -36,27 +35,22 @@ runSmoke('smoke-vertex', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
     await frameAll(page).catch(() => {})
 
     // ---------------------------------------------------------------- 1. 頂点マーカー
-    const proposed = await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [1, 2, 3, 4].map((index) => ({ body: bodyId, kind: 'vertex', index })),
     })
-    if (proposed.selection.origin !== 'proposed') fail('提案なのに origin が proposed でない')
     // 頂点の位置がAI側からも読めること(measure の頂点対応)
     const measured = await mcp.callTool('measure')
     if (!measured.items.every((item) => Array.isArray(item.point) && item.point.length === 3)) {
       fail(`measure が頂点の座標を返さない: ${JSON.stringify(measured.items)}`)
     }
-    ok(`AIが頂点4つを提案(measure も座標を返す: ${JSON.stringify(measured.items[0].point)})`)
+    ok(`AIが頂点4つを選んだ(measure も座標を返す: ${JSON.stringify(measured.items[0].point)})`)
 
     await page.waitForFunction(
       () => (window.__duocad.vertexMarkers ?? []).length === 4,
       { timeout, polling: 50 },
     )
-    const markerState = await page.evaluate(() => ({
-      markers: window.__duocad.vertexMarkers,
-      origin: window.__duocad.selection.origin,
-    }))
-    if (markerState.origin !== 'proposed') fail('画面側の origin が proposed でない')
-    ok(`ブラウザに頂点マーカー4個(origin=${markerState.origin} = 水色)`)
+    const markerState = await page.evaluate(() => ({ markers: window.__duocad.vertexMarkers }))
+    ok('ブラウザに頂点マーカー4個')
 
     // **引いても指せる**(当たり判定が画素基準であること)。
     // **見た目の大きさはここでは見ていない** —— マーカーは `sizeAttenuation: false` で
@@ -109,19 +103,17 @@ runSmoke('smoke-vertex', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
     if (picked === null) fail('頂点マーカーを1つも本物のクリックで外せない')
     const afterRemove = await page.evaluate(() => ({
       count: window.__duocad.selection.count,
-      origin: window.__duocad.selection.origin,
       markers: window.__duocad.vertexMarkers.length,
     }))
     if (afterRemove.count !== 3) fail(`外した後の件数が3でない: ${afterRemove.count}`)
-    if (afterRemove.origin !== 'user') fail(`触ったのに origin が user でない: ${afterRemove.origin}`)
     if (afterRemove.markers !== 3) fail(`マーカーが3個に減っていない: ${afterRemove.markers}`)
     const readBack = (await mcp.callTool('get_selection', {})).selection
     if (readBack.count !== 3) fail(`コア側の件数が3でない: ${readBack.count}`)
-    ok(`Ctrl+クリックで頂点 ${picked} を外した(4→3件・origin=user・AI側も同じ)`)
+    ok(`Ctrl+クリックで頂点 ${picked} を外した(4→3件・AI側も同じ)`)
 
-    // ---------------------------------------------------------------- 3. 自動commit
-    // AIが上面を提案 → **人はツールバーから押し出すだけ**(「承認する」ボタンは無い)
-    const all = await mcp.callTool('propose_selection', {
+    // ---------------------------------------------------------------- 3. AIが選んだ面をそのまま押し出す
+    // AIが上面を選ぶ → **人はツールバーから押し出すだけ**
+    const all = await mcp.callTool('set_selection', {
       predicate: { kind: 'face', where: [{ op: 'normal_dot_gt', axis: 'Z', value: 0.9 }] },
     })
     const faces = (await mcp.callTool('measure')).items.filter(
@@ -129,20 +121,17 @@ runSmoke('smoke-vertex', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
     )
     if (faces.length === 0) fail(`上向きの面が見つからない: ${JSON.stringify(all.selection.items)}`)
     const top = faces[0]
-    const again = await mcp.callTool('propose_selection', {
+    await mcp.callTool('set_selection', {
       refs: [{ body: bodyId, kind: 'face', index: top.index }],
     })
-    if (again.selection.origin !== 'proposed') fail('提案の origin が proposed でない')
     await page.waitForFunction(
-      () => window.__duocad.selection?.origin === 'proposed' && window.__duocad.selection.count === 1,
+      () => window.__duocad.selection?.count === 1,
       { timeout, polling: 50 },
     )
     const volumeBefore = (await mcp.callTool('describe_shape', { body_id: bodyId })).volume
-    ok(`AIが上面(面 ${top.index})を提案 → 画面は origin=proposed のまま(承認ボタンは無い)`)
+    ok(`AIが上面(面 ${top.index})を選んだ`)
 
     await page.click('#extrude')
-    const promptAfterStart = await page.$eval('#command-prompt', (el) => el.textContent.trim())
-    if (promptAfterStart.includes('承認')) fail(`起動しただけで承認を求められた: ${promptAfterStart}`)
     await page.click('#extrude-mode-join')
     await page.click('#distance')
     await page.type('#distance', '5')
@@ -158,12 +147,8 @@ runSmoke('smoke-vertex', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
     )
     const volumeAfter = (await mcp.callTool('describe_shape', { body_id: bodyId })).volume
     const errors = await page.evaluate(() => [...window.__duocad.errors])
-    const blocked = errors.filter((item) => String(item).includes('SelectionNotCommitted'))
-    if (blocked.length) fail(`承認されずに止まった: ${JSON.stringify(blocked)}`)
-    ok(
-      `提案のまま人が押し出せた(体積 ${volumeBefore.toFixed(1)} → ${volumeAfter.toFixed(1)}・` +
-        `SelectionNotCommitted は0件)`,
-    )
+    if (errors.length) fail(`エラーが出た: ${JSON.stringify(errors)}`)
+    ok(`AIが選んだ面を人がそのまま押し出せた(体積 ${volumeBefore.toFixed(1)} → ${volumeAfter.toFixed(1)})`)
 
     await assertNoAppErrors(page, consoleErrors)
   }

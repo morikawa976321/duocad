@@ -55,7 +55,6 @@ def _snapshot(doc: Document) -> dict:
         "parameters": copy.deepcopy(doc.parameters),
         "log": doc.log._snapshot(),
         "selection_items": list(doc.selection.items),
-        "selection_origin": doc.selection.origin,
     }
 
 
@@ -78,4 +77,3 @@ def _restore(doc: Document, snapshot: dict) -> None:
     doc.parameters.update(snapshot["parameters"])
     doc.log._restore(snapshot["log"])
     doc.selection.items = snapshot["selection_items"]
-    doc.selection.origin = snapshot["selection_origin"]

@@ -39,7 +39,7 @@ duocad で実際に踏んだ実例と共に書く。テスト方針（要否基�
   報告すると辺の節にも teeth があるように読める）。手順は `cp <file> 退避` → `git show HEAD:<path> > <file>` →
   ビルド＋検査 → 戻す（共有インデックスを通る `git stash` を使わない）。
 - **同じ規則がコアと UI の2箇所にあった。** `origin == "proposed"` の門は設計上 `selection.confirmed_items` 1箇所で
-  コメントも「唯一の場所」と書いていたが、当時の `CommandHost.svelte` の `needsCommit` が同じ判定を先回りで持っていた(その判定はいま `duocad/server.py` の `_commit_before_verb` にある)。
+  コメントも「唯一の場所」と書いていたが、当時の `CommandHost.svelte` の `needsCommit` が同じ判定を先回りで持っていた(のちに `origin` ごと廃止した)。
   サーバ側の自動 commit だけ入れて実機で叩いたら verb が1回も飛ばず、pytest も `npm run check` も緑。
   「唯一の場所」はその層の中でだけ真。規則を変えるときはその規則の文言（「承認」「proposed」）でリポジトリ全体を grep する。
   **層をまたぐ規則の変更は pytest と型検査では検出できない。**

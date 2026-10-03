@@ -8,10 +8,10 @@
  * **verbはここに載せるだけ**にして、状態機械は `CommandHost.svelte` の1つだけにする。
  * **Enterが要るかどうかも `args` から導出する** —— 規則は下の `needsEnter` に1つだけ置いてある。
  *
- * 引数収集は**まず共有選択集合を見る**。AIが `propose_selection` で辺の集合を提案 → 人が
- * 承認して verb を起動すると、その選択がそのまま verb の対象になる。空のときだけ人に問う。
+ * 引数収集は**まず共有選択集合を見る**。AIが `set_selection` で辺の集合を選ぶ → 人が
+ * verb を起動すると、その選択がそのまま verb の対象になる。空のときだけ人に問う。
  *
- * **ただし選択の中身をサーバへ送ることはしない**。対象集合(面・辺・領域)はコアが自分の確定
+ * **ただし選択の中身をサーバへ送ることはしない**。対象集合(面・辺・領域)はコアが自分の
  * 選択から取るので、`build` が作るのは数値・選択肢・パスだけである。ここで選択を読むのは
  * 「何を待っているか」を画面に出し、Enterを許すかを決めるためだけ。
  *
@@ -314,7 +314,7 @@ export interface TextArgSpec extends ArgSpecCommon {
  * *どちらか*であって、選択集合から導出できないため —— 選択が空でも基準平面なら揃う。
  *
  * `build` が送るのは基準平面のときの `{base_plane}` だけで、**面は送らない**
- * (面はサーバがコアの確定選択から取る)。
+ * (面はサーバがコアの選択から取る)。
  */
 export interface PlaneArgSpec extends ArgSpecCommon {
   kind: 'plane'
@@ -322,7 +322,7 @@ export interface PlaneArgSpec extends ArgSpecCommon {
 
 /**
  * `PlaneArgSpec` が取りうる値。基準平面3つ(`session.ts` の `BasePlaneName` と同じ綴り)と、
- * 「貼る先の面はコアの確定選択にある」を表す `'face'`。
+ * 「貼る先の面はコアの選択にある」を表す `'face'`。
  */
 export type PlaneArgValue = 'XY' | 'XZ' | 'YZ' | 'face'
 
@@ -351,7 +351,7 @@ export type PickTarget = 'edge' | 'vertex' | 'face' | 'sketchPoint' | 'sketchEnt
  * `SelectionArgSpec` と別物にしてある理由は、**同じ集合に入れると意味が混ざる**から
  * である —— `move_body` の回転軸に使う辺を共有選択へ入れると、コアの
  * `selection.require_bodies` がその辺のボディまで「動かす対象」に数えてしまう
- * (コア側が `commit_selection` を介さない参照で軸を受けているのはこのため)。
+ * (コア側が選択を介さない参照で軸を受けているのはこのため)。
  * `PointArgSpec`(スケッチ平面の自由クリック)とも別物で、こちらは**既にある実体**を指す。
  *
  * 値は参照1つ(`SelectionRef`)。種別ごとの形は:
@@ -565,7 +565,7 @@ export function itemsForArg(spec: SelectionArgSpec, selection: SelectionState | 
  * `max` を超えて選ばれている引数があれば理由を返す(無ければ空文字)。
  *
  * **黙って先頭だけ使わない**し、**送りもしない**。ここで先頭を選んで送ると、UIだけが
- * 「どれを押すか」を勝手に決めることになる(コア側の `require_confirmed(exactly_one=True)` は
+ * 「どれを押すか」を勝手に決めることになる(コア側の `require_selected(exactly_one=True)` は
  * 2枚以上を拒否する)。`CommandHost` はこれが空でない間 Enter を受け付けない。
  */
 export function overflowNote(

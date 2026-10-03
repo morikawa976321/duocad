@@ -293,12 +293,9 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
 
 
 def measure_selection(session: Any) -> dict:
-    """いまの選択(提案のままでよい)を測る。
+    """いまの選択を測る。
 
-    `confirmed_items` を通さないのは意図 —— AIが自分の提案を確かめてから確定する往復が
-    ここで閉じる。確定済みに限ると、AIは中身を見ずに commit する動機を持ってしまう。
-
-    戻り値は `{"count", "origin", "items", "total_area", "total_length"}`。**ちょうど2項目
+    戻り値は `{"count", "items", "total_area", "total_length"}`。**ちょうど2項目
     のときだけ** `between`(組の距離/角度。`between()`)と `between_error`(測れない理由。
     測れたなら None)が加わる —— 1項目や3項目のときに「2つではない」と言い続けるのは
     各項目の寸法を読みたい側には雑音でしかない。
@@ -319,7 +316,6 @@ def measure_selection(session: Any) -> dict:
             total_length += item["length"]
     result: dict = {
         "count": len(items),
-        "origin": current.origin,
         "items": items,
         "total_area": total_area,
         "total_length": total_length,
