@@ -171,6 +171,8 @@
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
   let pendingOp = $state<number | null>(null)
   let opCounter = 0
+  /** 送って配信待ちの `clear_selection` の `client_op`(`currentItems()`)。描画に使わない。 */
+  let clearingOp: number | null = null
 
   /** 投げたプレビューの番号(古い応答を捨てるため。0は「投げていない」)。 */
   let previewId = 0
@@ -408,6 +410,8 @@
         pendingOp = null
         clearPreview()
       }
+      // 全解除の配信も同じく返ってこない(残すと以後の差分が空の選択に対して組まれ続ける)。
+      if (next !== 'open') clearingOp = null
       // **投げ損ねた辺の要求を覚えたままにしない**。接続が切れて
       // いる間の要求は送られずに捨てられるが、`edgesAsked` には残る —— 再接続しても
       // 版が同じなら「もう頼んだ」と判断して二度と取りに行かず、**そのBodyの辺が
@@ -746,6 +750,7 @@
       if (applied.client_op !== null && myClientOps.has(applied.client_op)) {
         selfSelections += 1
       }
+      if (applied.client_op !== null && applied.client_op === clearingOp) clearingOp = null
       releasePending(applied.client_op)
       return
     }
@@ -1153,7 +1158,7 @@
    * 入れると足したそばから外れる(`duocad/selection.py` の契約)。
    */
   function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
-    const current = selection?.items ?? []
+    const current = currentItems()
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'toggle') {
       session.toggleSelection([ref], nextOp())
@@ -1229,7 +1234,7 @@
       ...event.regions.map((item) => regionRef(item.sketchId, item.index)),
       ...event.sketchEntities.map((item) => sketchEntityRef(item.sketchId, item.entityId, item.point)),
     ]
-    const current = selection?.items ?? []
+    const current = currentItems()
     const currentKeys = new Set(current.map(refKey))
     if (mode === 'toggle') {
       const already = picked.filter((ref) => currentKeys.has(refKey(ref)))
@@ -1238,7 +1243,7 @@
       return
     }
     if (picked.length === 0) {
-      if (current.length > 0) session.clearSelection(nextOp())
+      if (current.length > 0) clearSelection()
       return
     }
     const pickedKeys = new Set(picked.map(refKey))
@@ -1257,7 +1262,7 @@
    * `sketch_create` が「面が選ばれていない」で失敗する。ここでは「指した面に貼る」が常に成立する。
    */
   function selectOnly(ref: SelectionRef): void {
-    const current = selection?.items ?? []
+    const current = currentItems()
     modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
   }
 
@@ -1274,7 +1279,7 @@
 
   /** `selectOnly` の複数版 —— 選択集合を `refs` そのものに置き換える。 */
   function presetSelection(refs: SelectionRef[]): void {
-    const current = selection?.items ?? []
+    const current = currentItems()
     // `onBoxSelect` と同じ理由で `Set` 引き(保持/除外ソリッドは数百件になりうる)。
     const refKeys = new Set(refs.map(refKey))
     modifySelection(
@@ -1335,7 +1340,27 @@
   }
 
   function clearSelectionIfAny(): void {
-    if ((selection?.items.length ?? 0) > 0) session.clearSelection(nextOp())
+    if (currentItems().length > 0) clearSelection()
+  }
+
+  /** 選択を全解除する。配信が届くまでの判定は `currentItems()` が空として扱う。 */
+  function clearSelection(): void {
+    clearingOp = nextOp()
+    session.clearSelection(clearingOp)
+  }
+
+  /**
+   * **選択集合の差分を組むときに読む今の選択。** 送った `clear_selection` の配信が
+   * まだ届いていない間は空を返す。
+   *
+   * 配信前の `selection` を読むと、Esc直後(終了で全解除を送った直後)に「唯一選ばれていた
+   * 要素」をクリックしたとき `editSelection` が解除と判定し、コアでは「全解除 → その要素を外す」
+   * と順に効いて**選んだはずの要素が選ばれない**。サーバは1接続の要求を順に処理するので、
+   * 全解除の後に届く要求は空の集合に対して効く —— 判定もそれに合わせる。
+   * 表示(ハイライト・件数)は配信どおりの `selection` を使う。
+   */
+  function currentItems(): SelectionRef[] {
+    return clearingOp !== null ? [] : (selection?.items ?? [])
   }
 
   /**
@@ -1374,7 +1399,7 @@
       onSketchPick(event)
       return
     }
-    const current = selection?.items ?? []
+    const current = currentItems()
     // **スケッチを貼る先を待っているとき**。基準平面はその場で決まり(即適用が同期に走る)、
     // 面は「選択を置き換えたうえで `'face'` を入れる」——
     // 送るのは選択が確定して配信されてからで、その待ち受けは `CommandHost` が持つ。
@@ -1449,7 +1474,7 @@
       // 何もない所を素でクリック = 選択解除(修飾キー付きは空振りにする)。
       // **コマンド起動中は選択を変えない**(外したいものは足すのと同じクリックで外す)。
       if (commandClickToggles()) return
-      if (event.mode === 'replace' && current.length > 0) session.clearSelection(nextOp())
+      if (event.mode === 'replace' && current.length > 0) clearSelection()
       else if (event.mode === 'replace') note('面を外した')
       return
     }
@@ -1495,7 +1520,7 @@
     // `extrude` の投機実行の幽霊(本物を隠したまま)が画面に残り続ける。
     clearPreview()
     const nextSketch = next.kind === 'sketch' ? next.id : null
-    const unusable = (selection?.items ?? []).filter((item) => {
+    const unusable = currentItems().filter((item) => {
       const kind = refKind(item)
       if (kind === 'sketch_entity') return (item as SketchEntityRef).sketch !== nextSketch
       if (kind === 'body') return next.kind !== 'optimize'
@@ -1626,8 +1651,8 @@
       return
     }
     if (commandClickToggles()) return
-    if (event.mode === 'replace' && (selection?.items.length ?? 0) > 0) {
-      session.clearSelection(nextOp())
+    if (event.mode === 'replace' && currentItems().length > 0) {
+      clearSelection()
     }
   }
 

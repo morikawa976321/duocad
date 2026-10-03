@@ -11,12 +11,13 @@
  *   3. Esc で選択が空になり、コマンドは無起動へ戻る
  *   4. 先に選んでから起動 → 中断ボタン(`#command-abort`)でも空になる
  *   5. AIが選んだ集合にも同じクリックで足し引きできる。AIの `toggle_selection` も同じ集合を触る
+ *   6. Esc の全解除が画面へ届く前に、唯一選ばれていた面を素でクリックしても、その面が選ばれる
  */
-import { frameAll, openApp, sleep, waitOrFail } from './browser.mjs'
+import { frameAll, openApp, sleep, waitOrFail, withoutBrowserPanel } from './browser.mjs'
 import { fail, ok } from './args.mjs'
 import { runSmoke } from './harness.mjs'
 import { addExtrudedRect } from './mcp-client.mjs'
-import { clickAt, clickFace } from './pick.mjs'
+import { clickAt, clickFace, faceAt } from './pick.mjs'
 
 runSmoke('smoke-command-selection', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
   {
@@ -144,6 +145,47 @@ runSmoke('smoke-command-selection', { timeout: 60000, mcp: true }, async ({ mcp,
     ok('AIの toggle_selection も同じ集合を触り、画面へ届いた')
     await page.keyboard.press('Escape')
     await waitForEmpty('Escで選択が空にならない(3回目)')
+
+    // ================================================================ 6. 全解除の配信前のクリック
+    // 本物の入力では WS の往復に勝てないので、Esc と押下・離しを**ページの1タスクの中で**続けて
+    // 起こす(配信はその間に割り込めない)。コアでは「全解除 → クリック」の順に効くので、
+    // 配信前の選択([A])を見て「唯一選ばれている面の再クリック = 解除」と判定すると空になる。
+    await clickFace(page, bodyId, a, { hidePanel: true })
+    await waitForFaces([a], '無起動で面Aを選べない(4回目)')
+    await page.click('#extrude')
+    await waitFor(() => document.querySelector('#command-abort') !== null, '押し出しが起動しない(4回目)')
+    const epochBefore = await withoutBrowserPanel(page, async () => {
+      const at = await faceAt(page, bodyId, a)
+      if (!at) fail(`ボディ ${bodyId} の面 ${a} が画面の中に無い`)
+      return page.evaluate((point) => {
+        const epoch = window.__duocad.stateEpoch
+        const target = document.elementFromPoint(point.x, point.y)
+        if (target?.tagName !== 'CANVAS') return { error: target?.tagName ?? null }
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        const init = {
+          clientX: point.x,
+          clientY: point.y,
+          button: 0,
+          pointerId: 1,
+          pointerType: 'mouse',
+          isPrimary: true,
+          bubbles: true,
+        }
+        target.dispatchEvent(new PointerEvent('pointerdown', init))
+        target.dispatchEvent(new PointerEvent('pointerup', init))
+        return { epoch }
+      }, at)
+    })
+    if (epochBefore.error !== undefined) fail(`面Aの画素がキャンバスでない: ${epochBefore.error}`)
+    // 全解除とクリックの2通が届くまで待つ(届く前の選択は元の [A] のままで、見ても区別できない)
+    await waitFor(
+      (epoch) => window.__duocad.stateEpoch >= epoch + 2,
+      '全解除とクリックの配信が届かない',
+      epochBefore.epoch,
+    )
+    await waitFor(() => document.querySelector('#command-abort') === null, 'Escで無起動へ戻らない(4回目)')
+    await waitForFaces([a], '全解除の配信前に面Aを素でクリックしたのに選ばれていない(配信前の選択で解除と判定した)')
+    ok('全解除の配信前に、唯一選ばれていた面を素でクリックしても、その面が選ばれた')
 
     if (consoleErrors.length > 0) fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
     ok('ブラウザのコンソールにエラーは出なかった')
