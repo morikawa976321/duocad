@@ -306,11 +306,32 @@
           </button>
           <button class="files-row-cancel" onclick={cancelRowActions}>やめる</button>
         {:else}
-          <button class="files-copy row-action" onclick={() => startCopy(file.name)} title="別名で複製">
-            複製
+          <button
+            class="files-copy row-action"
+            onclick={() => startCopy(file.name)}
+            title="別名で複製"
+            aria-label="{file.name} を別名で複製"
+          >
+            <svg class="row-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="5" y="5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M3 11V3h8" fill="none" stroke="currentColor" stroke-width="1.5" />
+            </svg>
           </button>
-          <button class="files-delete row-action" onclick={() => startDelete(file.name)} title="ディスクから削除">
-            削除
+          <button
+            class="files-delete row-action"
+            onclick={() => startDelete(file.name)}
+            title="ディスクから削除"
+            aria-label="{file.name} をディスクから削除"
+          >
+            <svg class="row-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.5 6.5v5M9.5 6.5v5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linejoin="round"
+              />
+            </svg>
           </button>
         {/if}
       </div>
@@ -463,6 +484,19 @@
   .row-action:hover,
   .files-row-cancel:hover {
     color: var(--text);
+  }
+
+  .row-action {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 3px;
+  }
+
+  .row-icon {
+    display: block;
+    width: 14px;
+    height: 14px;
+    pointer-events: none;
   }
 
   /* 2段目の「本当に削除」だけは目立たせる(戻せない操作なので)。 */
