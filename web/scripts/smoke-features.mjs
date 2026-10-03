@@ -96,7 +96,7 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
             toasts: Array.from(document.querySelectorAll('#toasts .toast-text')).map((node) =>
               node.textContent.trim(),
             ),
-            // 消えた後も残る控え(`App.svelte` の `errorLog`)。走行中に出たエラーの履歴。
+            // 消えた後も残る控え(`Toast.svelte` の `errorLog`)。走行中に出たエラーの履歴。
             errors: hook.errors,
           })
         }),

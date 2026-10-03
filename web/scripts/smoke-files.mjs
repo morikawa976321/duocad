@@ -98,7 +98,7 @@ runSmoke('smoke-files', { attach: true }, async ({ workdir, browser, url, timeou
             currentDocumentName: hook.currentDocumentName,
             log: hook.state.log.length,
             messages: hook.messages,
-            // 走行中に出たエラーの控え(`App.svelte` の `errorLog`)。**トーストは8秒で消える**ので、
+            // 走行中に出たエラーの控え(`Toast.svelte` の `errorLog`)。**トーストは8秒で消える**ので、
             // 最後に一度だけ見る下の検査は、画面のDOMではなくこちらを見る必要がある。
             errors: hook.errors,
             toasts: Array.from(document.querySelectorAll('#toasts .toast-text')).map((node) =>

@@ -428,7 +428,7 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
 
     // ============================================== 走行中にエラーが出ていないこと
     // **札(DOM)ではなく控えを見る** —— トーストは8秒で消えるので、最後に画面を見ると
-    // 途中で出て消えたエラーを取りこぼす(`App.svelte` の `errorLog`)。
+    // 途中で出て消えたエラーを取りこぼす(`Toast.svelte` の `errorLog`)。
     await assertNoAppErrors(page, consoleErrors)
   }
 })

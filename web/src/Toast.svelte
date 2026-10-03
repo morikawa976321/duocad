@@ -9,18 +9,22 @@
    * ## 呼び方(これが公開APIの全部)
    *
    * ```ts
-   * import Toast, { showToast } from './Toast.svelte'
-   * showToast('エラー[fillet] 半径が大きすぎる')
+   * import Toast, { fail, errorLog } from './Toast.svelte'
+   * fail('エラー[fillet] 半径が大きすぎる')
    * ```
    *
    * **文字列を1つ渡すだけ**にしてある(種別・寿命・位置の引数を持たせない)。後から
    * 「これは警告だから薄く」を足し始めると、呼ぶ側がその都度分類を判断することになり、
    * **エラー経路を1本にした意味が消える** —— ここへ来た時点でエラーである。
    *
+   * **札を出す関数は `fail` しか公開しない。** `fail` は「控え(`errorLog`)に積む」と
+   * 「札を出す」を1回の呼び出しで両方やるので、札だけ出して控えを飛ばす書き方が存在しない
+   * (控えを飛ばすと、`__duocad.errors` を見る実機検査から**そのエラーだけ見えなくなる**)。
+   *
    * インスタンスではなくモジュールに状態を置いてあるので、`bind:this` を配り歩かずに
-   * どこからでも呼べる。**ただし呼んでよい場所は決まっている**: WSの応答を1箇所で受ける層
-   * (`App.svelte` の `fail()`)から出す。各パネルが個別に叩き始めると、同じ失敗が
-   * 2枚出たり、パネルを外すとエラーが消えたりする。
+   * どこからでも呼べる。表示済みの札も控えもパネルの寿命に依らず、同じ文言は下の規則3で
+   * まとまるので、呼ぶ層は縛らない。**縛れないのは検出の置き場所**: エラーの検出を
+   * パネルの `$effect` に置くと、そのパネルを畳んだ時に検出ごと止まる。
    *
    * ## 見た目より先に決めた3つ
    *
@@ -57,6 +61,21 @@
   let items = $state<ToastItem[]>([])
   let lastId = 0
 
+  /** 控えに残す件数。 */
+  const LOG_SIZE = 20
+  let log = $state<string[]>([])
+
+  /**
+   * これまでに `fail` へ来たエラー(新しい順)。**表示には使わない** —— 札は時間で消えるので、
+   * 消えた後も見られる場所である。`smoke-files.mjs` などは最後に一度だけ「走行中にエラーが
+   * 出ていないか」を見ており、札を最後に見ても途中で出て消えたエラーは拾えない。
+   * **`$state`のまま返す**: `testHooks` の `$effect` がこれを読むので、新しいエラーが来たら
+   * `window.__duocad.errors` が作り直される(非リアクティブにすると古い写しのまま止まる)。
+   */
+  export function errorLog(): string[] {
+    return log
+  }
+
   /** 自動消滅の予約を取り消す(二重に消さないよう `null` に戻す)。 */
   function stop(item: ToastItem): void {
     if (item.timer === null) return
@@ -87,10 +106,8 @@
     }
   }
 
-  /** エラーを1件、画面へ出す。**これが公開APIの全部**(上のdocstring参照)。 */
-  export function showToast(message: string): void {
-    const text = message.trim()
-    if (text === '') return // 空文字で空の札を出さない(`note()` と同じ扱い)
+  /** 札を1枚出す(同じ文言が出ていれば数えるだけ)。**公開しない** —— 公開するのは `fail` だけ。 */
+  function show(text: string): void {
     // **出ている札の全部を見る**(直近の1枚だけでは足りない)。WSが切れている間は
     // 「WebSocketのエラー」と「接続が切れた」が交互に届くので、直近だけを見ると
     // A,B,A,B… と積み上がって画面が2種類のエラーで埋まる。
@@ -114,6 +131,17 @@
     // **`created` ではなく `items[0]` に予約を書く。** `$state` に入れた時点で中身は
     // プロキシに包まれており、素のオブジェクトを触ると「同じものに見えて別の口」になる。
     restart(items[0])
+  }
+
+  /**
+   * エラーを1件、控えに積んで札に出す(拒まれた・失敗した・繋がらない)。
+   * **これが公開APIの全部**(上のdocstring参照)。
+   */
+  export function fail(message: string): void {
+    const text = message.trim()
+    if (text === '') return // 空文字で空の札を出さない(`note()` と同じ扱い)
+    log = [text, ...log].slice(0, LOG_SIZE)
+    show(text)
   }
 </script>
 

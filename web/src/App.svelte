@@ -67,7 +67,7 @@
   } from './commands/sketch'
   import FilesPanel from './FilesPanel.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
-  import Toast, { showToast } from './Toast.svelte'
+  import Toast, { fail, errorLog } from './Toast.svelte'
   import {
     createSession,
     type Applied,
@@ -156,16 +156,6 @@
   let status = $state<ConnectionStatus>('connecting')
   let model = $state<ServerState | null>(null)
   let messages = $state<string[]>([])
-  /**
-   * 画面へ出したエラーの控え。**表示には使わない** —— 出すのはトースト(消える)で、
-   * ここは「消えた後も見られる場所」である。
-   *
-   * トーストにしたことで実機検査から検出力が落ちる経路が1つある: `smoke-files.mjs` は
-   * 最後に一度だけ「画面にエラーが出ていないか」を見ており、**通知欄は消えないから**
-   * その1回で走行全体を覆えていた。時間で消える札を最後に見ても、途中で出て消えたエラーは
-   * 拾えない。控えを残して `__duocad.errors` から読ませることで、その検査を弱めずに済む。
-   */
-  let errorLog = $state<string[]>([])
   let lastApplied = $state<Applied | null>(null)
 
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
@@ -527,7 +517,7 @@
   ): void {
     const verdict = judgeMinWidth(value, step)
     const invalidNow = isOutOfRange(verdict)
-    if (invalidNow && !optimizeMinWidthWasInvalid) showToast(message(minWidthProblem(verdict, step!) ?? ''))
+    if (invalidNow && !optimizeMinWidthWasInvalid) fail(message(minWidthProblem(verdict, step!) ?? ''))
     optimizeMinWidthWasInvalid = invalidNow
   }
 
@@ -672,19 +662,6 @@
     if (!message) return
     messages = [message, ...messages].slice(0, 4)
   }
-  /**
-   * **エラー**を1件、トーストで出す(拒まれた・失敗した・繋がらない)。
-   *
-   * **エラーが画面に出る経路はこの関数1本だけ**にしてある。各パネルが個別に
-   * `showToast` を叩き始めると、同じ失敗が2枚出たり、パネルを畳むとエラーが消えたりする
-   * (WSの応答を受けるのはこの層だけ、という形をそのまま使う)。
-   */
-  function fail(message: string): void {
-    if (!message) return
-    errorLog = [message, ...errorLog].slice(0, 20)
-    showToast(message)
-  }
-
   // ---------------------------------------------------------------- 操作の番号と応答待ち
   function nextOp(): number {
     opCounter += 1
@@ -2091,7 +2068,7 @@
     showLocalGhost,
     lastApplied: () => lastApplied,
     messages: () => messages,
-    errorLog: () => errorLog,
+    errorLog,
     fov: () => display.fov,
     applyFov: display.applyFov,
     stateEpoch: () => stateEpoch,

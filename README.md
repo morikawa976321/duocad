@@ -443,7 +443,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | `web/src/commands/CommandHost.svelte` | **コマンド層の骨格**（起動→引数収集→プレビュー→Enter/Esc、**および即適用の発火**）。verbごとに作り直さない |
 | `web/src/commands/{command,sketch,features,files,moveMode}.ts` | 各コマンドの引数の集め方の定義だけ（**Enter要否はここから導出**＝`needsEnter`）。`command.ts` に共通の枠組み（`ArgSpec` の種別・`when` によるモード依存の必須判定） |
 | `web/src/{Browser,Files,Sketch,Parameters}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ）。**選択パネルは無い**（選択を直すのは3Dクリックだけ） |
-| `web/src/Toast.svelte` | **エラーの札**。`showToast(message)` の1本だけを公開し、出すのは `App.svelte` の `fail()` から |
+| `web/src/Toast.svelte` | **エラーの札**。`fail(message)` の1本だけで「控え(`errorLog`)に積む」と「札を出す」を両方やる。札だけ出す口は公開しない |
 | `web/src/AiPanel.svelte` | **AIパネル**。プロバイダ選択・対話・ツール呼び出しの進捗・中断。文書は描かない。**`#ai-collapse`(`BrowserPanel.svelte`と同じ形)で畳める** |
 | `web/src/SettingsDialog.svelte` | **設定ダイアログ**。native `<dialog>`（非モーダル、`show()`）。**一度決めたら触らない設定だけ**（いまは正投影のチェックボックス1つ。画角は正投影/透視30度の2値で、スライダーは無い）。ビューポートを覆わず暗くもしない |
 | `web/src/viewSettings.ts` | **画面設定のlocalStorage**。入れてよいのはクライアント側だけの設定で、**文書の状態は入れない**。読み書きとも例外を投げない |
