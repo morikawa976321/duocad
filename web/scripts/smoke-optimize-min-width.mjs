@@ -115,8 +115,11 @@ runSmoke('smoke-optimize-min-width', { timeout: 60000, mcp: true }, async ({ mcp
     ok('[4] 下限割れ: 文が出て、実行は押せない')
 
     // 下限割れの通知(札)はこの本がわざと出させている。控え(`errors`)には入力途中の値の分も積まれる
-    // (「29.999」を打つ途中の「2」も下限割れ)ので、文言ではなく「下限」で拾って許可する。
-    const belowFloor = await page.evaluate(() => [...window.__duocad.errors].filter((item) => String(item).includes('下限')))
+    // (「29.999」を打つ途中の「2」も下限割れ)ので、打った値は固定せず「最小幅 …: …下限…」の形で許可する。
+    // **許可の幅はその形まで**: 下限に触れない別のエラー、「最小幅」で始まらない下限の話は赤のまま。
+    const belowFloor = await page.evaluate(() =>
+      [...window.__duocad.errors].filter((item) => String(item).startsWith('最小幅 ') && String(item).includes('下限')),
+    )
     if (!belowFloor.some((item) => item.startsWith('最小幅 1mm'))) {
       fail(`[4] 下限割れの通知が控えに積まれていない: ${JSON.stringify(belowFloor)}`)
     }

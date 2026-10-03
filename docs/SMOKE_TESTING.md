@@ -187,6 +187,9 @@
 - **`window.__duocad.errors` も `$state` のプロキシで、`page.evaluate` の戻り値では `{}` になる。** `?? []` で読んで
   `length > 0` を見ていた本は、`{}` が届いて永久に偽のまま緑だった（2026-09-25 に8本で実測）。`assertNoAppErrors` は
   ページの中で配列かどうかを見てから素の配列にして返す。
+- **最小幅の欄(`#optimize-min-width`)を `typeInto` で1文字ずつ打つと、途中の値(「29.999」の「2」)が下限割れになり、
+  通知が `errors` に積まれる。** `allow` なしの `assertNoAppErrors` で締めると赤くなる(`smoke-optimize-min-width.mjs`
+  は `最小幅 N mm: …下限…` を `allow` で受けている)。
 - **ビューポートの寸法を変える変更（サイドバー・パネル・ボタンの増減・ツールバーの行数）は実機検査を全部回す。**
   掴むものが黙って入れ替わり、落ちるのは数手あとの `cut did not change the shape` のような無関係な文言
   （履歴パネルを外しただけで基準平面が手前の板の面に化けた実例がある）。`npm run check` も pytest もこの壊れ方を見ない。

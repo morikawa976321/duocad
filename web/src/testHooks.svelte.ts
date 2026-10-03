@@ -2,7 +2,7 @@
  * 自動テスト(scripts/smoke*.mjs)がブラウザの中を見るための穴 `window.__duocad`。
  * ローカル専用ツールなので常に生やしてある(「動くはず」で納品しないための道具であり、隠すと使えない)。
  *
- * **キー名は1つも変えない**(`web/scripts/*.mjs` が読む)。`ctx` は App の状態を読む getter の束で、
+ * **キー名は1つも変えない**(`web/scripts/*.mjs` が読む)。`ctx` は画面の状態を読む getter の束で、
  * 下の `$effect` がそれを読むので、読んだ値が変わるたびに `window.__duocad` を組み直す。
  *
  * **`installTestHooks` は App の `<script>` の最上位(コンポーネントの初期化中)で呼ぶ。**
