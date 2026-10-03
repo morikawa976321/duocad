@@ -266,13 +266,22 @@
    * **この3つだけ、修飾キー無しのクリックもトグルにする**(2026-09-11本人決定)。
    * 起動した時点で既存の割り当てが選択状態に現れる集合代入なので、素のクリックが
    * 「置き換え」だと1枚足すたびにCtrlが要り、他の割り当て済みの面を毎回避けて
-   * クリックする羽目になる。他のverb(フィレットの辺・押し出す面等)は素のクリック=
-   * 置き換えのままでよい —— 起動時に選択が空で始まるので置き換えと足すが一致する。
+   * クリックする羽目になる。**他のverbも起動中は素のクリックがトグル**(`activeVerb`)だが、
+   * AIの提案が載っている間は置き換えのまま —— この3つ(と測定)だけは提案の上でもトグルにする。
    *
    * **測定(`measure`)も同じ**(2026-09-16)。対象は「ちょうど2つ」で、素のクリックが
    * 置き換えのままだと2つ目のクリックが1つ目を消して永久に揃わない。
    */
   let toggleOnlyClicks = $state(false)
+  /**
+   * 起動中のコマンド(無起動・スケッチの既定「選ぶ」は null)。`CommandHost` の
+   * `onStart` / `onEnd` と `setMode` だけが書く。普通の変数でよい(描画に使わない)。
+   *
+   * **起動中は素のクリックが選択のトグルになり(`toggleOnlyMode`)、終わると選択を全解除する
+   * (`onCommandEnd`)。** 起動していない間は従来どおり(素のクリックは置き換え)なので、
+   * 先に選んでからverbを起動する手・AIが提案した選択をそのまま使う手は変わらない。
+   */
+  let activeVerb: string | null = null
   /**
    * 集合 verb の起動時に表示へ戻した非表示ボディの `set_visible` の応答待ち。**全部戻ってから**
    * 既存の割り当てを選択に並べる(`onCommandStart`)。描画には使わないので普通の変数でよい。
@@ -866,11 +875,13 @@
   })
 
   function handleMeasure(payload: MeasurePayload): void {
+    // 結果を先に入れる —— `commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で
+    // 選択を残すかを決める。
+    measure.onResult(payload)
     if (releasePending(payload.client_op)) {
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }
-    measure.onResult(payload)
   }
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
@@ -1212,7 +1223,18 @@
    * 面ピック(押し出す面等)には効かない。
    */
   function toggleOnlyMode(mode: PickEvent['mode']): PickEvent['mode'] {
-    return toggleOnlyClicks ? 'toggle' : mode
+    if (toggleOnlyClicks) return 'toggle'
+    return commandClickToggles() ? 'toggle' : mode
+  }
+
+  /**
+   * コマンド起動中の素のクリックをトグルにするか(`activeVerb`)。
+   *
+   * **AIの提案(`origin:'proposed'`)が載っている間は適用しない**: 素のクリックで提案の1項目が
+   * 単独の確定になる既存の手(置き換え)と競合するため、その扱いは本人の判断待ち。
+   */
+  function commandClickToggles(): boolean {
+    return activeVerb !== null && selection?.origin !== 'proposed'
   }
 
   /**
@@ -1304,6 +1326,10 @@
     // 文書が無くても起きるので、ここで止めると次のverbが集合代入でも判定が古いまま残る。
     toggleOnlyClicks = OPTIMIZE_PRESET_ROLE[verb] !== undefined || verb === MEASURE.id
     pendingOptimizePreset = null
+    // **別のverbへ直接移ったら、前のverbの終わり**として選択を空にする(`onCommandEnd`)。
+    // 同じverbの押し直し(構え直し)は終わりではない。
+    const switched = activeVerb !== null && activeVerb !== verb
+    activeVerb = verb === DEFAULT_SKETCH_COMMAND_ID ? null : verb
     if (model === null) return
     // 荷重の2つは**空から始める**(`OPTIMIZE_EMPTY_START_VERBS` の理由を参照)。
     // 「何もしない」ではなく「空を代入する」でなければ、前のverbの選択が残る。
@@ -1312,7 +1338,11 @@
       return
     }
     const role = OPTIMIZE_PRESET_ROLE[verb]
-    if (role === undefined) return
+    if (role === undefined) {
+      // 集合代入の3つは下の `presetSelection` が置き換えるので、ここへ来るのはそれ以外だけ。
+      if (switched) clearSelectionIfAny()
+      return
+    }
     // **非表示のボディに付いた割り当ては選択に並ばない**(`state.optimize` の配列は指せるものだけ)。
     // 集合 verb は集合全体を置き換えるので、並ばなかった割り当ては確定で黙って消える —— 先に
     // そのボディを表示へ戻し、戻った状態の配列を並べる(2026-09-24 本人判断。issue #33)。
@@ -1333,6 +1363,28 @@
     }
     pendingOptimizePreset = { role, ops }
     note(`非表示だった${OPTIMIZE_ROLE_LABEL[role]}のボディ ${hidden.length} 個を表示した(割り当てを選択に並べるため)`)
+  }
+
+  function clearSelectionIfAny(): void {
+    if ((selection?.items.length ?? 0) > 0) session.clearSelection(nextOp())
+  }
+
+  /**
+   * コマンドが終わった(`CommandHost.onEnd`: Esc・中断ボタン・確定成功)。**選択を全解除する。**
+   *
+   * 形を変えるverbの確定ではコアが先に空にしているので何も起きない。ここで効くのは中断と、
+   * 形を変えない確定(集合代入・測定の失敗等)である。
+   *
+   * **測定の成功だけは残す** —— 読み札と3Dの線は「測った選択が変わるまで」残る
+   * (`measurement.svelte.ts`)ので、空にすると結果が出た瞬間に消える。
+   * `activeVerb === null` は、モード遷移(`setMode`)が先に起動を畳んだ後の遅れて届いた通知
+   * (スケッチ作成の成功等)で、選択に触らない。
+   */
+  function onCommandEnd(verb: string): void {
+    if (activeVerb === null) return
+    activeVerb = null
+    if (verb === MEASURE.id && measure.current !== null) return
+    clearSelectionIfAny()
   }
 
   /**
@@ -1431,7 +1483,9 @@
       return
     }
     if (event.hit === null) {
-      // 何もない所を素でクリック = 選択解除(修飾キー付きは空振りにする)
+      // 何もない所を素でクリック = 選択解除(修飾キー付きは空振りにする)。
+      // **コマンド起動中は選択を変えない**(外したいものは足すのと同じクリックで外す)。
+      if (commandClickToggles()) return
       if (event.mode === 'replace' && current.length > 0) session.clearSelection(nextOp())
       else if (event.mode === 'replace') note('面を外した')
       return
@@ -1486,6 +1540,8 @@
     })
     if (unusable.length > 0) modifySelection([], unusable)
     mode = next
+    // `CommandHost` が作り直されるので、起動中だったコマンドは終わりの通知なしに消える。
+    activeVerb = null
     hoverPoint = null
     viewport?.setActiveSketch(nextSketch)
     // **どの遷移でも描き直す**(`$effect` に任せない)。入る側は直後の `lookAtSketch` が
@@ -1590,6 +1646,7 @@
     }
     // **図形は領域より先**(点・辺は領域の縁に乗っているので、領域が勝つと端点を掴めない)。
     // 描くコマンドが起動している間は上の `addPoint` が先に食うので、ここへは来ない。
+    const pickMode = commandClickToggles() ? 'toggle' : event.mode
     if (event.sketchEntity) {
       editSelection(
         sketchEntityRef(
@@ -1597,14 +1654,15 @@
           event.sketchEntity.entityId,
           event.sketchEntity.point,
         ),
-        event.mode,
+        pickMode,
       )
       return
     }
     if (event.region) {
-      editSelection(regionRef(event.region.sketchId, event.region.index), event.mode)
+      editSelection(regionRef(event.region.sketchId, event.region.index), pickMode)
       return
     }
+    if (commandClickToggles()) return
     if (event.mode === 'replace' && (selection?.items.length ?? 0) > 0) {
       session.clearSelection(nextOp())
     }
@@ -2258,6 +2316,7 @@
         onCancelPreview={clearPreview}
         onNote={note}
         onStart={onCommandStart}
+        onEnd={onCommandEnd}
         onWants={onWantsKinds}
         onWantsPlane={(wants) => (wantedPlane = wants)}
         onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}

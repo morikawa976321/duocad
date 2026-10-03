@@ -940,11 +940,22 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
       fail(`Escで中断したのに文書が変わった: ${volumeBefore} → ${volumeAfterEscape}`)
     }
     ok('move_body: 確定前に移動先の幽霊が出て、Escで消えて文書は変わらない')
+    // Escで選択も空になったので、次の節のために面を選び直す。
+    await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'Escで選択が空にならない')
+    await clickFace(page, bodyId, faceIndex)
+    await waitFor(
+      (id, index) =>
+        (window.__duocad.selection?.items ?? []).some(
+          (item) => item.body === id && item.kind === 'face' && item.index === index,
+        ),
+      'Esc後に面を選び直せない',
+      [bodyId, faceIndex],
+    )
 
     // ---------------------------------------------------------------- 回転の幽霊(ボディ)
     // **`mode="rotate"` の引数はまだUIが組めない**(軸の指し方が未決。`catalog.py` の note)。
     // 6c と同じく `__duocad.showLocalGhost` の穴から直接叩いて、幽霊の側だけを確かめる。
-    // 面の選択は Esc では消えないので、ここでは同じボディが対象になる。
+    // 直前に選び直した面があるので、ここでは同じボディが対象になる。
     {
       // **軸は原点を通さない**(`[10, 0, 0]`)。原点を通す軸だと `T(p)·R·T(-p)` の
       // 平行移動2項が恒等になり、**軸の位置を落とした実装でも通ってしまう**。
@@ -1063,7 +1074,7 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
       )
     }
 
-    // 打ち直して今度は確定する(面の選択は Esc では消えない)
+    // 打ち直して今度は確定する(面は上で選び直してある)
     await page.click('#move-body')
     await page.click('#move-body-move')
     await page.click('#move-body-translate')

@@ -303,13 +303,18 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     if (afterAbort.log !== beforeAbort.log || afterAbort.appliedCount !== beforeAbort.appliedCount) {
       fail(`Escで中断したのに操作が残った: log ${beforeAbort.log}->${afterAbort.log}`)
     }
-    if (afterAbort.selection.count !== 2) fail('Escで選択まで消えた(選び直しになる)')
-    ok('Escで中断: 操作ログは伸びず、**選択は残った**(選び直しにならない)')
+    if (afterAbort.selection.count !== 0) fail(`Escで選択が空にならない: ${afterAbort.selection.count}`)
+    ok('Escで中断: 操作ログは伸びず、**選択は空になった**(コマンドが終わったら全解除)')
 
     // -------------------------------------------------------------- 失敗する半径
     // §7: OCCTのフィレットは例外を投げずに `IsDone()=False` で失敗し、半径に対して単調でない。
     // **握りつぶさず理由を出し、選択を保持したまま戻す**ことがタスクDの要件。
     await page.click('#fillet')
+    await waitForEdges('フィレットを起動し直しても辺が届かない')
+    // 起動中は**素のクリックで足せる**(Escで空になったので2本とも素のクリック)。
+    for (const index of picked) {
+      if (!(await clickEdge(bodyId, index))) fail(`起動中の素のクリックで辺 ${index} を選べない`)
+    }
     await typeInto('#fillet-radius', 1000)
     await page.keyboard.press('Enter')
     // **理由はトーストで出る**(ステータスバーの1行では拒否に気づけない)。

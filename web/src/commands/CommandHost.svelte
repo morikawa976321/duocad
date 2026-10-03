@@ -113,6 +113,7 @@
     hover = null,
     entities = [],
     onStart = () => {},
+    onEnd = () => {},
     onRun,
     onPreview,
     onCancelPreview,
@@ -177,6 +178,12 @@
      * ここでは何が起きるかを知らない(verb名を渡すだけ)。
      */
     onStart?: (verb: string) => void
+    /**
+     * **起動中のコマンドが終わった**(Esc・中断ボタン・確定成功)ときに呼ばれる。
+     * 起動していなかった(無起動・スケッチの既定「選ぶ」)ときのEscでは呼ばない。
+     * アプリ層が選択を全解除するための知らせで、ここでは選択に触らない。
+     */
+    onEnd?: (verb: string) => void
     onRun: (verb: string, args: Record<string, unknown>) => void
     /** `mode` は `CommandDef.preview`。`local` はブラウザだけで描く(サーバへ投げない)。 */
     onPreview: (verb: string, args: Record<string, unknown>, mode: 'server' | 'local') => void
@@ -611,7 +618,9 @@
    * 人の入力中のコマンドを畳んではならない。
    */
   export function commandSucceeded(): void {
+    const ended = commandActive ? commandId : null
     returnToIdle()
+    if (ended !== null) onEnd(ended)
   }
 
   /**
@@ -644,9 +653,7 @@
    * 中断。**文書は一切変わらない** —— プレビューは投機的実行なのでサーバ側に何も
    * 残っておらず、ここで消すのは画面の幽霊と打ちかけの数値だけ。
    *
-   * **選択は消さない**。選ぶことは文書の変更ではなく、選び直しのたびに
-   * 選択が飛ぶと「Escで打ち直す」ができなくなる(選択を空にしたいときは
-   * 選択パネルの「全解除」)。
+   * **選択はここでは消さない**(`onEnd` でアプリ層が全解除する)。
    *
    * **戻り先は`defaultCommandId ?? null`**(通常モードは無起動・スケッチモードは
    * 「選ぶ」)。**確定が実際に成功したとき(`commandSucceeded()`)も同じ
@@ -660,8 +667,10 @@
       Object.keys(planes).length > 0 ||
       Object.keys(picks).length > 0 ||
       ready
+    const ended = commandActive ? commandId : null
     reset()
     returnToIdle()
+    if (ended !== null) onEnd(ended)
     if (wasArmed) onNote('中断した(文書は変わっていない)')
   }
 

@@ -680,8 +680,20 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     ok('Escで中断: 操作ログ・体積とも変化なし、無起動へ戻った(プレビューは1行も残さない)')
 
     // -------------------------------------------------------------- 確定(Enter)
-    // **Escで無起動へ戻ったので、もう一度「押し出し」を起動し直す**。
-    // 面は選択済みのまま(Escは選択を消さない)なので、起動するだけで#distanceが戻る。
+    // **Escで無起動へ戻り、選択も空になった**ので、面を選び直してから「押し出し」を起動し直す。
+    await page.waitForFunction(() => window.__duocad.selection?.count === 0, { timeout, polling: 50 })
+    const reselectAfterEscape = await locateFace(extrudeTarget.body_id, target.index)
+    if (!reselectAfterEscape) fail(`面 ${target.index} の位置が取れない(Esc後の選び直し)`)
+    await page.mouse.click(reselectAfterEscape.x, reselectAfterEscape.y)
+    await page.waitForFunction(
+      (bodyId, index) => {
+        const selection = window.__duocad.selection
+        return selection?.count === 1 && selection.items[0].body === bodyId && selection.items[0].index === index
+      },
+      { timeout, polling: 50 },
+      extrudeTarget.body_id,
+      target.index,
+    )
     await page.click('#extrude')
     await page.waitForSelector('#distance')
     await page.click('#extrude-mode-join')

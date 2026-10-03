@@ -476,7 +476,6 @@ runSmoke('smoke-mcp', { timeout: 180000, mcp: true, handshake: false }, async ({
     if (userColor !== USER_HIGHLIGHT) {
       fail(`人が触ったのに確定の色へ変わらない: ${userColor?.toString(16)}`)
     }
-    await page.keyboard.press('Escape') // フィレットは起動しただけ(形は変えない)
     ok(`人がブラウザで辺 ${droppedIndex} をCtrl+クリックで外した(${proposedCount} -> ${proposedCount - 1} 本・色は橙へ)`)
 
     // ---------------------------------------------------------------- AIが読むと外れている
@@ -498,6 +497,9 @@ runSmoke('smoke-mcp', { timeout: 180000, mcp: true, handshake: false }, async ({
         `origin=user = 人が触ったことが承認になっている)`,
     )
     ok('→ 交互操作(AIが提案 → 人が過不足を直す → AIが読む)が一巡した')
+    // フィレットは起動しただけ(形は変えない)。**AIが読んだ後で**中断する —— 中断すると選択は空になる。
+    await page.keyboard.press('Escape')
+    await page.waitForFunction(() => window.__duocad.selection?.count === 0, { timeout, polling: 50 })
 
     await mcp.callTool('clear_selection')
 

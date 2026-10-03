@@ -127,7 +127,7 @@ runSmoke('smoke-extrude-faces', { timeout: 60000, mcp: true }, async ({ mcp, bro
     ok(`平面の違う面を混ぜた押し出しは、トーストに「${after.toasts[0]}」と出て文書は不変だった`)
     await page.evaluate(() => document.activeElement?.blur?.())
     await page.keyboard.press('Escape')
-    // Escは選択を消さない。素のクリックで置き換えて、次の節を1枚目から選び直す。
+    // Escで選択は空になる。次の節を1枚目から選び直す。
 
     // ================================================================ 2. 同一平面の2枚を結合で押す
     await clickFace(page, bodyId, tops[0].index, { hidePanel: true })

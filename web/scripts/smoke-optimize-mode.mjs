@@ -145,11 +145,12 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
       [bodyA],
     )
     ok('[2] Enterで確定 → state.optimize.preserve_bodies に載った')
-    const stillHighlighted = await faceColor(bodyA, faceA_preserve)
-    if (stillHighlighted !== COLOR.highlight) {
-      fail(`確定後も選択は残るはずだが色が変わった: ${stillHighlighted?.toString(16)}`)
+    await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '確定してもコマンド終了で選択が空にならない')
+    const afterConfirm = await faceColor(bodyA, faceA_preserve)
+    if (afterConfirm !== COLOR.preserve) {
+      fail(`確定後は選択が空になり保持の緑(${COLOR.preserve.toString(16)})のはずが: ${afterConfirm?.toString(16)}`)
     }
-    ok('[2] 確定後もコマンドは構えたまま(選択が残り、まだハイライト色)')
+    ok('[2] 確定でコマンドが終わり、選択は空になって役割色(緑)が見える')
 
     // ====================================================================== 3. 除外ソリッド(ボディ粒度)
     console.log('\n[3] 除外ソリッド — 起動するとAの選択が外れ、保持の役割色(緑)が現れる')
