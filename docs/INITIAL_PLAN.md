@@ -67,14 +67,15 @@ AI: 述語で候補集合を作る  →  ユーザー: 過不足をクリック�
 | **交互操作** | AIが選択を付け外しする → **UIに選択として表示される** → 人がクリックで直す → AIが読み直して適用できる |
 
 **実装済みの全verbが両方の合格条件を満たしている**（verbの一覧は [../MCP.md](../MCP.md) が正）。
-例外が2つ:
+例外が1つ:
 
 - **形状最適化の4つ**（`set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads`）は
   `preview: 'none'` —— 集合代入するだけで形は1つも変わらないので投機実行の対象が無い。確定は即座に
   効き、undoで戻る。
-- **`set_parameter` はAI(MCP)だけの操作。** 位置の打ち直しは**3Dの直接選択 + `move_sketch_entities` /
-  `move_body`** に統一し、半径・幅高さ・角度のような**寸法**の編集口は作らない（押し出し済みソリッド
-  の再計算が絡むため）。この欄はAIだけが持つ。
+
+**`set_parameter`（寸法の打ち直し）は人にもAIにも出していない**（コアと再生用の登録だけ残す）。位置の打ち直しは
+**3Dの直接選択 + `move_sketch_entities` / `move_body`** に統一している。理由は
+[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)「図形（スケッチ）の表現」。
 
 **選択に出所（AIの提案／人の確定）の区別は持たない**（2026-10-03 本人決定。理由は
 [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)「隠したボディ・選択・可視性」）。
