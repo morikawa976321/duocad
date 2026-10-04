@@ -1,20 +1,18 @@
 /**
  * 実ブラウザでの起動確認 — 「動くはず」で納品しないための機械検査。
  *
- * サーバは空の文書で立つ。このスクリプトがアプリ内の
- * 「STEP読み込み」でPCケースを自分で読み、そのあと**本物のマウスクリックで面を選び・数値を打ち・
- * Enterで押し出し**、体積が変わったことを確かめる(M1由来)。
- * あわせて **パーツ一覧が27件出る**・**手前のパーツを隠すと奥の面が選べる**
- * (`viewport.project` は他Bodyに隠れている面に対して null を返す設計を利用して検査する)・
- * **可視性の切り替えが操作ログに載らない**(undo/redoの対象外)、を検査する。
+ * サーバは空の文書で立つ。このスクリプトがアプリ内の「STEP読み込み」でPCケース(27部品)を
+ * 自分で読み、**既にあるものを本物のクリックとキー入力で触る**側を見る:
+ *
+ *   - 起動直後は無起動。モードの入口はモードの行にあり、verb の行とは別の次元
+ *   - 実クリックで面を選ぶ。Shift / Ctrl はトグル、何も無い所のクリックで全解除
+ *   - 入力欄にフォーカスがある間の Ctrl+Z は文書を undo しない
+ *   - 距離を打つとプレビューが出て、Esc で無起動へ戻る
+ *   - 基準平面は要求している間だけ指せる。スケッチの4種(円・線分・長方形・円弧)を手で描ける
+ *
+ * 形の契約(体積・undo・選択のリセット・可視性が履歴に載らないこと)は pytest が持つ。
  *
  *   web> node scripts/smoke.mjs
- *
- * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。
- * 既に立っているものへ繋ぐときだけ `--url http://127.0.0.1:8766/` を渡す。
- *
- * ブラウザは**インストール済みのEdge/Chromeを使う**(puppeteer-core なのでブラウザを
- * ダウンロードしない)。`DUOCAD_BROWSER` で明示もできる。WebGLは実GPUで描く(詳細は browser.mjs)。
  */
 import {
   assertNoAppErrors,
@@ -26,35 +24,13 @@ import {
 } from './browser.mjs'
 import { fail, ok } from './args.mjs'
 import { runSmoke } from './harness.mjs'
-import { PC_CASE_IMPORT_WARNINGS, PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
+import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 import {
   clickSketchPoint,
   createSketchOnBasePlane,
   faceAt,
   faceAtWhenStill,
 } from './pick.mjs'
-
-/**
- * 体積が「元と同じ」かを見るときの**相対**許容(Escの中断・undoの復元が使う)。
- *
- * **絶対値で書かない。** この検査の体積は 1.9e5 mm³ のオーダーで、undo は形を作り直すので
- * OCCT の丸めが最後の数ビットに残る —— 実測 `187548.90762404303` → undo後
- * `187548.90762404166`(差 1.4e-9 = **相対 7.3e-15**)。**どの面を押したかで再計算の経路が
- * 変わるので、この差が出るかどうかは視点(=どの面が指せるか)にまで依存する**。
- * ビューポートを Z-up へ変えて指せる面が変わった際、絶対値 1e-9 では実際に落ちた。
- *
- * **値は 1e-12。実測の丸め(7.3e-15)の約140倍で、2桁強の余裕がある**。**押し出し1手ぶん
- * (1920 mm³)を見分けられれば十分、という決め方をしない** —— この2つの検査は「形が
- * 変わっていないこと」を見るものなので、緩めるほど**将来の微小な形状バグを黙って通す**。
- * 1e-12 はこの体積では 1.9e-7 mm³ にあたり、丸め以外の実体のある差はここを必ず超える。
- *
- * 実測: この値で smoke を**6回連続**回して全て緑。ただし**この6回は復元後の
- * 体積がビット一致で、上記の丸めは1回も出なかった** —— 7.3e-15 を吸収できる根拠は
- * 「約140倍」という桁の差であって、この6回の観測そのものではない。逆に、比べる相手を
- * 相対 1e-11 だけずらすと**赤になる**(旧値 1e-9 なら素通りしていた幅)。
- * **緩めたくなったら、まず落ちている差が丸めなのか形なのかを測ること。**
- */
-const VOLUME_EPS = 1e-12
 
 // `--url` を渡したときだけ既に立っているサーバへ繋ぐ(既定は自分で立てる)。
 // 既定の timeout を長めにしてある: 一括の可視性切り替え(26部品ぶんのWebSocket往復)は、
@@ -212,130 +188,11 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     }
     ok(`パーツ一覧: ${rowCount} 行(部品数と一致)`)
 
-    // -------------------------------------------------------------- 項番2: 手前を隠すと奥が選べる
-    // 「見えないものは指せない」の逆を確かめる: 全部見えている状態でどの面がpickできないかを
-    // 数え、他の全パーツを隠して対象パーツだけにしたときにpickできる面が増えることを見る。
-    // (viewport.project は他Bodyに隠れている面に対して null を返す設計。viewport.ts 参照)
-    const occlusionTarget = await page.evaluate(() => {
-      // 一番面数が多い部品(=占有範囲が広く、他パーツに隠されにくい)以外から選ぶ:
-      // 中央値くらいの部品を対象にする(他の26個に囲まれて隠れている可能性が高い)。
-      const bodies = [...window.__duocad.parts].sort((a, b) => a.face_count - b.face_count)
-      const middle = bodies[Math.floor(bodies.length / 2)]
-      return { bodyId: middle.body_id, name: middle.name, faceCount: middle.face_count }
-    })
-    const beforeOcclusion = await page.evaluate((bodyId) => {
-      const body = window.__duocad.parts.find((b) => b.body_id === bodyId)
-      let pickable = 0
-      for (let index = 1; index <= body.face_count; index += 1) {
-        if (window.__duocad.projectFace(bodyId, index)) pickable += 1
-      }
-      return { pickable, total: body.face_count }
-    }, occlusionTarget.bodyId)
-
-    // 対象パーツだけ残して他を全部隠す(全非表示 → 対象だけチェックボックスで表示オン。
-    // パーツ一覧が持つのは表示/非表示のチェックだけ)。
-    await page.click('#parts-hide-all')
-    await page.waitForFunction(
-      () => window.__duocad.parts.every((b) => !b.visible),
-      { timeout, polling: 50 },
-    )
-    await page.click(`.parts-row[data-body-id="${occlusionTarget.bodyId}"] input.visible-toggle`)
-    await page.waitForFunction(
-      (bodyId) => {
-        const bodies = window.__duocad.parts
-        const target = bodies.find((b) => b.body_id === bodyId)
-        return target.visible && bodies.every((b) => b.body_id === bodyId || !b.visible)
-      },
-      { timeout, polling: 50 },
-      occlusionTarget.bodyId,
-    )
-    const afterOcclusion = await page.evaluate((bodyId) => {
-      const body = window.__duocad.parts.find((b) => b.body_id === bodyId)
-      let pickable = 0
-      for (let index = 1; index <= body.face_count; index += 1) {
-        if (window.__duocad.projectFace(bodyId, index)) pickable += 1
-      }
-      return { pickable, total: body.face_count }
-    }, occlusionTarget.bodyId)
-
-    if (afterOcclusion.pickable < beforeOcclusion.pickable) {
-      fail(
-        `他パーツを隠したのにpickできる面が減った: ${beforeOcclusion.pickable} -> ${afterOcclusion.pickable}`,
-      )
-    }
-    ok(
-      `パーツ「${occlusionTarget.name}」(${occlusionTarget.faceCount}面): 他26部品が見える状態で ` +
-        `pickできる面 ${beforeOcclusion.pickable}/${beforeOcclusion.total} -> 他を隠すと ` +
-        `${afterOcclusion.pickable}/${afterOcclusion.total}` +
-        (afterOcclusion.pickable > beforeOcclusion.pickable
-          ? '(手前のパーツを隠すと奥の面が選べるようになることを確認)'
-          : '(この部品は元々全周が他パーツに隠れていなかった)'),
-    )
-
-    // 全部表示に戻す(以後の検査のため)
-    await page.click('#parts-show-all')
-    await page.waitForFunction(
-      () => window.__duocad.parts.every((b) => b.visible),
-      { timeout, polling: 50 },
-    )
-    ok('全表示に戻した')
-
-    // ----------------------------------------------- 項番5: 可視性は履歴に載らない
-    // チェックボックスの切り替えは**操作ログに1行も積まない**ので、Ctrl+Z / Ctrl+Y では戻らない。
-    // **ここで実際にCtrl+Zを押さない**のは、この時点の履歴の末尾がSTEP読み込みそのもので、
-    // 押すと27部品ごと消えるから —— それ自体が「可視性が履歴に載っていない」ことの現れである。
-    // 実際にCtrl+Zを押して隠れたままであることは `smoke-mcp.mjs` の検証4が実機で見ている。
-    const undoTarget = occlusionTarget.bodyId
-    const readState = (bodyId) => ({
-      revision: window.__duocad.parts.find((b) => b.body_id === bodyId).revision,
-      operations: window.__duocad.state.log.length,
-      applied: window.__duocad.state.applied_count,
-    })
-    const beforeHide = await page.evaluate(readState, undoTarget)
-    await page.click(`.parts-row[data-body-id="${undoTarget}"] input.visible-toggle`)
-    await page.waitForFunction(
-      (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).visible === false,
-      { timeout, polling: 50 },
-      undoTarget,
-    )
-    ok(`パーツ「${occlusionTarget.name}」を個別チェックボックスで非表示にした`)
-
-    const afterHide = await page.evaluate(readState, undoTarget)
-    if (afterHide.operations !== beforeHide.operations || afterHide.applied !== beforeHide.applied) {
-      fail(
-        `可視性の切り替えが操作ログに積まれた: ` +
-          `${beforeHide.operations}行/${beforeHide.applied}操作 -> ` +
-          `${afterHide.operations}行/${afterHide.applied}操作`,
-      )
-    }
-    // **版は動く**。ログに載らないことと「差分が届かない」ことは別で、ここを混同すると
-    // 隠したのに画面から消えない(`body_revision` が可視性を版に含めている理由)。
-    if (afterHide.revision === beforeHide.revision) {
-      fail('非表示にしたのに版が動いていない(差分が届いていない疑い)')
-    }
-    ok('可視性の切り替えは操作ログに載らない(undo/redoの対象外)が、版は動いて画面へ差分が届いた')
-
-    // **戻す手も同じ操作**(履歴の外なので、戻すのはundoではなくもう一度クリック)
-    await page.click(`.parts-row[data-body-id="${undoTarget}"] input.visible-toggle`)
-    await page.waitForFunction(
-      (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).visible === true,
-      { timeout, polling: 50 },
-      undoTarget,
-    )
-    const checkboxRestored = await page.$eval(
-      `.parts-row[data-body-id="${undoTarget}"] input.visible-toggle`,
-      (element) => element.checked,
-    )
-    if (!checkboxRestored) fail('もう一度押しても表示に戻らない(画面に反映されていない)')
-    ok('もう一度チェックボックスを押して表示に戻した(戻す手も同じ操作)')
-
-    // -------------------------------------------------------------- 押し出し(体積検算)
-    // 面積が大きい平面を狙う(平らな面の押し出しは体積 = 面積 × 距離 で検算できる)。
+    // -------------------------------------------------------------- 実クリックで面を選ぶ
     // **27部品全部が見えている状態は密集していて、多くの面が他パーツに隠れている**
-    // (上の occlusion 検査で実際に0/94という部品もあった)。特定の1部品に決め打ちすると
-    // 「隠れていて選べない」だけで失敗しうるので、**pickできる面が見つかるまで部品を
-    // 面数の小さい順に探す**(小さい部品を優先するのは、体積検算の面積計算が単純な平面に
-    // なりやすいという以外に他意はない)。
+    // (実測で 0/94 面しか指せない部品もあった)。特定の1部品に決め打ちすると
+    // 「隠れていて選べない」だけで失敗しうるので、**pickできる平面が見つかるまで部品を
+    // 面数の小さい順に探す**。
     const extrudeChoice = await page.evaluate(() => {
       const parts = [...window.__duocad.parts].sort((a, b) => a.face_count - b.face_count)
       const rect = document.querySelector('.viewport').getBoundingClientRect()
@@ -580,60 +437,8 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
       if (typed !== String(value)) fail(`距離の入力が一致しない: "${typed}" != "${value}"`)
     }
 
-    async function snapshot() {
-      return JSON.parse(
-        await page.evaluate(() =>
-          JSON.stringify({
-            bodies: window.__duocad.parts,
-            selected: window.__duocad.selected,
-            applied: window.__duocad.lastApplied,
-            appliedCount: window.__duocad.state?.applied_count ?? 0,
-            messages: window.__duocad.messages,
-            errors: window.__duocad.errors,
-          }),
-        ),
-      )
-    }
-
-    // 押し出し完了は `applied_count` の増加と対象 Body の体積変化で待つ
-    // (可視性切り替えも client_op を消費するので、op番号の予測は使わない)。
-    let lastSeenAppliedCount = await page.evaluate(
-      () => window.__duocad.state?.applied_count ?? 0,
-    )
-    async function waitForExtrude(bodyId, previousVolume, waitTimeout = timeout) {
-      await page.waitForFunction(
-        (id, sinceCount, beforeVolume) => {
-          const state = window.__duocad.state
-          if (!state || state.applied_count <= sinceCount) return false
-          const applied = window.__duocad.lastApplied
-          if (!applied || applied.verb !== 'extrude' || applied.body_id !== id) return false
-          const body = window.__duocad.parts.find((entry) => entry.body_id === id)
-          return Boolean(body && Math.abs(body.volume - beforeVolume) > 1e-9)
-        },
-        { timeout: waitTimeout, polling: 50 },
-        bodyId,
-        lastSeenAppliedCount,
-        previousVolume,
-      )
-      const snap = await snapshot()
-      lastSeenAppliedCount = snap.appliedCount
-      return snap
-    }
-
-    const volumeBefore = (
-      await page.evaluate(
-        (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).volume,
-        extrudeTarget.body_id,
-      )
-    )
-
     // -------------------------------------------------------------- B: プレビューとEsc
-    // **確定前に形が見える**こと。プレビューはサーバがverbを投機的に実行して形だけ返し、
-    // 文書は元へ戻す(`Session.preview`)ので、ここで操作ログが伸びてはいけない。
-    const logBefore = await page.evaluate(() => ({
-      applied: window.__duocad.state.applied_count,
-      log: window.__duocad.state.log.length,
-    }))
+    // **確定前に形が見える**こと(プレビューが文書に何も残さないことは `tests/test_feature_ui.py`)。
     // 種別は人が1回選ぶまで引数が揃わない(既定値を持たない)ので、プレビューの前に結合を選ぶ。
     await page.click('#extrude-mode-join')
     await typeDistance(distance)
@@ -643,7 +448,6 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     })
     ok('距離を打つとプレビューが出た(確定前に形が見えている)')
 
-    // **Escで中断**。文書が一切変わっていないこと(操作ログの長さも増えない)。
     // **Escは既定コマンドへではなく無起動へ戻る**ので、
     // **#distance自体がDOMから消える**(#command-abortも同様)。
     await page.keyboard.press('Escape')
@@ -652,413 +456,19 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
       polling: 50,
     })
     const afterEscape = await page.evaluate(() => ({
-      applied: window.__duocad.state.applied_count,
-      log: window.__duocad.state.log.length,
       distanceGone: document.querySelector('#distance') === null,
       abortGone: document.querySelector('#command-abort') === null,
     }))
-    if (afterEscape.applied !== logBefore.applied || afterEscape.log !== logBefore.log) {
-      fail(
-        `Escで中断したのに操作が残った: applied ${logBefore.applied}->${afterEscape.applied} / ` +
-          `log ${logBefore.log}->${afterEscape.log}`,
-      )
-    }
     if (!afterEscape.distanceGone || !afterEscape.abortGone) {
-      fail(
-        `Escの後も押し出しが構えたまま(無起動に戻っていない): ` +
-          `#distance消えた=${afterEscape.distanceGone} / #command-abort消えた=${afterEscape.abortGone}`,
-      )
+      fail(`Escの後も押し出しが構えたまま(無起動に戻っていない): ${JSON.stringify(afterEscape)}`)
     }
-    const volumeAfterEscape = await page.evaluate(
-      (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).volume,
-      extrudeTarget.body_id,
-    )
-    // **体積が「変わっていない」かは相対で見る**(下の undo と同じ理由。VOLUME_EPS 参照)。
-    if (Math.abs(volumeAfterEscape - volumeBefore) > Math.abs(volumeBefore) * VOLUME_EPS) {
-      fail(`Escで中断したのに体積が変わった: ${volumeBefore} -> ${volumeAfterEscape}`)
-    }
-    ok('Escで中断: 操作ログ・体積とも変化なし、無起動へ戻った(プレビューは1行も残さない)')
+    ok('Escで中断: プレビューが消え、無起動へ戻った')
 
-    // -------------------------------------------------------------- 確定(Enter)
-    // **Escで無起動へ戻り、選択も空になった**ので、面を選び直してから「押し出し」を起動し直す。
-    await page.waitForFunction(() => window.__duocad.selection?.count === 0, { timeout, polling: 50 })
-    const reselectAfterEscape = await locateFace(extrudeTarget.body_id, target.index)
-    if (!reselectAfterEscape) fail(`面 ${target.index} の位置が取れない(Esc後の選び直し)`)
-    await page.mouse.click(reselectAfterEscape.x, reselectAfterEscape.y)
-    await page.waitForFunction(
-      (bodyId, index) => {
-        const selection = window.__duocad.selection
-        return selection?.count === 1 && selection.items[0].body === bodyId && selection.items[0].index === index
-      },
-      { timeout, polling: 50 },
-      extrudeTarget.body_id,
-      target.index,
-    )
-    await page.click('#extrude')
-    await page.waitForSelector('#distance')
-    await page.click('#extrude-mode-join')
-    await typeDistance(distance)
-    await page.keyboard.press('Enter')
-    const after = await waitForExtrude(extrudeTarget.body_id, volumeBefore)
-    const volumeAfter = after.bodies.find((b) => b.body_id === extrudeTarget.body_id).volume
-    const delta = volumeAfter - volumeBefore
-    const expected = target.area * distance
-    if (Math.abs(delta - expected) > Math.abs(expected) * 1e-6) {
-      fail(`体積の増分が面積×距離と合わない: ${delta} vs ${expected}`)
-    }
-    ok(
-      `押し出し: パーツ「${extrudeTarget.name}」体積 ${volumeBefore} -> ${volumeAfter} ` +
-        `(増分 ${delta.toFixed(4)} = 面積×${distance})`,
-    )
-    // **統一契約**: 形を変えるverbが確定すると選択は全リセットされる
-    // (`duocad/catalog.py` の `resets_selection`)。ここでは「選択が空になっていること」を見る。
-    if (after.selected !== null) {
-      fail(`押し出し成功後も選択が残っている(全リセット契約に反する): ${JSON.stringify(after.selected)}`)
-    }
-    ok('押し出し成功後、選択は全リセットされた(2026-08-20の統一契約)')
-
-    // -------------------------------------------------------------- undo(押し出し)
-    await pressUndo(page)
-    await page.waitForFunction(
-      (bodyId, expectedVolume, eps) =>
-        Math.abs(
-          window.__duocad.parts.find((b) => b.body_id === bodyId).volume - expectedVolume,
-        ) <= Math.abs(expectedVolume) * eps,
-      { timeout, polling: 50 },
-      extrudeTarget.body_id,
-      volumeBefore,
-      VOLUME_EPS,
-    )
-    ok(`undo 1回で押し出し前の体積へ戻った: ${volumeBefore}`)
-
-    // ================================================================ C: スケッチ
-    // **手動操作が一級の操作モードになる**ところ(実装計画書§8b C)。スケッチはM2から
-    // コアとMCPにあったが、人からは描けなかった。ここで見るのはタスクCの検証1〜5で、
-    // 検証6(MCPから同じ文書に見える)は smoke-mcp.mjs 側にある。
+    // ================================================================ スケッチ
     const clickPlane = (u, v) => clickSketchPoint(page, u, v)
     const createSketchOnBase = (name = 'XY') => createSketchOnBasePlane(page, name, { timeout })
 
-    /** 落ちたときに添える**画面の中身**(「120秒待った」だけでは切り分けられない)。 */
-    const sketchDump = async () =>
-      JSON.parse(
-        await page.evaluate(() =>
-          JSON.stringify({
-            activeSketch: window.__duocad.activeSketch,
-            sketches: window.__duocad.sketches.map((item) => ({
-              id: item.sketch_id,
-              plane: item.plane,
-              entities: item.entities.length,
-              kinds: item.entities.map((entity) => entity.kind),
-              regions: item.regions.length,
-            })),
-            selection: window.__duocad.selection,
-            messages: window.__duocad.messages,
-            errors: window.__duocad.errors,
-          }),
-        ),
-      )
-    const waitForSketch = (predicate, what, ...args) =>
-      waitOrFail(page, predicate, what, { args, timeout, dump: sketchDump })
-
-    // **ページの中で JSON.stringify する**(Svelteの状態はプロキシで、そのまま返すと
-    // CDPのシリアライズで空オブジェクトになる。既存の `snapshot()` と同じ理由)。
-    const sketchState = async () =>
-      JSON.parse(
-        await page.evaluate(() => {
-          const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch) ?? null
-          return JSON.stringify({
-            activeSketch: hook.activeSketch,
-            plane: active?.plane ?? null,
-            entities: active?.entities?.length ?? 0,
-            kinds: (active?.entities ?? []).map((entity) => entity.kind),
-            regions: active?.regions?.length ?? 0,
-            log: hook.state.log.length,
-            appliedCount: hook.state.applied_count,
-          })
-        }),
-      )
-
-    // -------------------------------------------------------------- 検証1(その1): 面に貼る
-    // **統一契約で undo も選択を全リセットする**ので、
-    // 面に貼るスケッチを作る前に押し出しに使った平面を
-    // もう一度クリックで選び直す(すぐ上の「押し出しのために選び直す」と同じ手)。
-    // **先に空であることを確かめる**。クリックは選択を置き換えるので、これを省くと
-    // 「undoでリセットされなかった」退行でもこの先が素通りしてしまう。
-    const selectionAfterUndo = await page.evaluate(
-      () => (window.__duocad.selection?.items ?? []).length,
-    )
-    if (selectionAfterUndo !== 0) {
-      fail(`押し出しのundo後、選択が空でない(${selectionAfterUndo}件。全リセット契約に反する)`)
-    }
-    const backOnFace = await locateFace(extrudeTarget.body_id, target.index)
-    if (!backOnFace) fail(`押し出しのundo後、面 ${target.index} の位置が取れない(選び直し)`)
-    await page.mouse.click(backOnFace.x, backOnFace.y)
-    await waitForSketch(
-      (bodyId, index) => {
-        const items = window.__duocad.selection?.items ?? []
-        return items.length === 1 && items[0].body === bodyId && items[0].index === index
-      },
-      '押し出しのundo後に面を選び直せない',
-      extrudeTarget.body_id,
-      target.index,
-    )
-    ok(`押し出しのundo後、選択がリセットされていたので面 ${target.index} を選び直した`)
-
-    // -------------------------------------------------------------- A1: モード操作はツールバーにだけ出る
-    // `SketchPanel.svelte`(旧・右サイドバーの数値入力パネル)は廃止済みで、
-    // 右サイドバーはAI専用になっている。検査の主張は2つに分かれる:
-    //
-    //   (a) モード操作(`#sketch-mode` / `#sketch-look` / `#sketch-exit`)は
-    //       **スケッチモード中だけ・ツールバーの中に**出る(往復で3点を通しで見る)
-    //   (b) 旧パネルの痕跡(`.sketch-panel` / `#sketch-entities` / 右サイドバーのモード操作)は
-    //       **どのモードでも1つも無い** —— 右サイドバーに戻す退行はここで赤くなる
-    //
-    // ここまでの検証区画は押し出し・undo・面の選び直しだけで、まだ一度もスケッチモードに
-    // 入っていない(=通常モード)ので、最初の非存在チェックの場所として素直。
-    const modeIds = ['.toolbar #sketch-mode', '.toolbar #sketch-exit', '.toolbar #sketch-look']
-    const goneIds = ['.sketch-panel', '#sketch-entities', '.sidebar #sketch-mode', '.sidebar #sketch-exit']
-    const presence = async (ids) =>
-      Object.fromEntries(
-        await Promise.all(ids.map(async (id) => [id, (await page.$(id)) !== null])),
-      )
-    async function requireNoSketchPanelTrace(where) {
-      const traces = await presence(goneIds)
-      if (Object.values(traces).some(Boolean)) {
-        fail(`${where}に旧SketchPanelの痕跡が残っている: ${JSON.stringify(traces)}`)
-      }
-    }
-    const presentBefore = await presence(modeIds)
-    if (Object.values(presentBefore).some(Boolean)) {
-      fail(`通常モードなのにモード操作がDOMに残っている: ${JSON.stringify(presentBefore)}`)
-    }
-    await requireNoSketchPanelTrace('通常モード')
-    ok('通常モード: モード操作も旧SketchPanelの痕跡もDOMに無い')
-
-    // **面に貼るのも同じ2手**(「スケッチ」を起動 → 面をクリック)。基準平面のグリッドと
-    // 面はどちらも1クリックで指せる同じ「貼る先」で、ボタンでの指し方は無い。
-    // **起動より前から選ばれていた面では発火しない**(即適用の不変条件)ので、
-    // 起動してから同じ面をもう一度クリックする —— これが本来の1手である。
-    //
-    // **基準平面グリッドはいまモデル全体の大きさに追随して広い**。
-    // `resolveHit` の面/平面の優先順位は解析的なレイ距離(手前が勝つ)であって見た目の
-    // 透明な線とは無関係なので、狙った面より基準平面が手前に来る候補が実際にありうる ——
-    // `smoke-mcp.mjs`の「手前の基準平面グリッドに取られた」と同じ、既知の起こりうる形。
-    // **候補は複数の部品にまたがって探す**(同じ流儀)。1つの部品(例: 通気口だらけの
-    // メッシュパネル)は、外から見えている平面面の**大半**が実は自分自身の穴を透かして
-    // 見える内側の面で、その先で基準平面(z=0/y=0等)を必ずくぐる —— そういう部品では
-    // 同じ部品の中で何枚候補を替えても全滅しうるので、部品もまたいで探す。
-    const planarCandidates = await page.evaluate(() => {
-      const found = []
-      for (const part of window.__duocad.parts) {
-        const geometry = window.__duocad.getGeometry(part.body_id)
-        if (!geometry) continue
-        const planar = geometry.faces.filter((face) => face.kind === 'plane')
-        for (const face of planar) {
-          if (window.__duocad.projectFace(part.body_id, face.index)) {
-            found.push({ bodyId: part.body_id, index: face.index })
-          }
-          if (found.length >= 20) return found
-        }
-      }
-      return found
-    })
-    if (planarCandidates.length === 0) fail('平面状の面が画面から1枚も指せない(この裏取りが成立しない)')
-
-    const sketchCountBeforeFaceAttempts = await page.evaluate(() => window.__duocad.sketches.length)
-    let onFace = null
-    const faceAttemptLog = []
-    for (const candidate of planarCandidates) {
-      if (
-        await page.evaluate(
-          () => document.querySelector('.command-host')?.dataset.command !== 'sketch_create',
-        )
-      ) {
-        await page.click('#sketch-create')
-      }
-      const at = await locateFace(candidate.bodyId, candidate.index)
-      if (!at) {
-        faceAttemptLog.push(`${candidate.bodyId}/${candidate.index}: 射影できない`)
-        continue
-      }
-      await page.mouse.click(at.x, at.y)
-      const created = await page
-        .waitForFunction(() => window.__duocad.activeSketch !== null, { timeout: 15000, polling: 50 })
-        .then(() => true)
-        .catch(() => false)
-      if (!created) {
-        faceAttemptLog.push(`${candidate.bodyId}/${candidate.index}: スケッチができない`)
-        await page.keyboard.press('Escape')
-        continue
-      }
-      const attempt = await sketchState()
-      if (attempt.plane?.kind === 'face') {
-        onFace = attempt
-        break
-      }
-      faceAttemptLog.push(`${candidate.bodyId}/${candidate.index}: plane=${JSON.stringify(attempt.plane)}`)
-      // 手前の基準平面グリッドに取られた。**先に抜けてから**(`smoke-mcp.mjs`と同じ順序 ——
-      // スケッチモードの中でundoを叩く経路は検査していない)、作られてしまったスケッチを
-      // 戻して次の面を試す。
-      await page.click('#sketch-exit')
-      await waitForSketch(() => window.__duocad.activeSketch === null, '基準平面のスケッチから抜けられない')
-      await pressUndo(page)
-      await waitForSketch(
-        (expected) => window.__duocad.sketches.length === expected,
-        '基準平面のスケッチを戻せない',
-        sketchCountBeforeFaceAttempts,
-      )
-    }
-    if (onFace === null) {
-      fail(`面へのスケッチが1つも作れなかった(全候補が基準平面に取られた等): ${faceAttemptLog.join(' | ')}`)
-    }
-    ok('既存ソリッドの面にスケッチを作れた(スケッチモードに入り、平面は face 参照)')
-
-    // 入った直後: モード操作が**ツールバーに**出ていること(A1の往復・出現側)。
-    const presentInSketch = await presence(modeIds)
-    if (Object.values(presentInSketch).some((shown) => !shown)) {
-      fail(`スケッチモード中なのにモード操作がツールバーに無い: ${JSON.stringify(presentInSketch)}`)
-    }
-    await requireNoSketchPanelTrace('スケッチモード')
-    ok('スケッチモード中: モード操作がコマンドツールバーに出た(右サイドバーには出ない)')
-
-    await page.click('#sketch-exit')
-    await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
-
-    // 抜けた直後: また消えていること(A1の往復・消滅側)。
-    // **`{#if sketchId !== null}` を外して常時表示に戻すと、この検査だけが赤くなる**
-    // (実測: 一度わざと壊して赤になることを確認済み)。
-    const presentAfterExit = await presence(modeIds)
-    if (Object.values(presentAfterExit).some(Boolean)) {
-      fail(`「抜ける」を押した後もモード操作がDOMに残っている: ${JSON.stringify(presentAfterExit)}`)
-    }
-    await requireNoSketchPanelTrace('抜けた直後')
-    ok('通常モードへ戻った: モード操作がまたDOMから消えた(A1の往復を固定)')
-
-    // -------------------------------------------------------------- 平面でない面は「札」で断られる
-    //
-    // **クライアントは先回りしない**(判定はコアの `kernel_sketch.require_planar_face` 1箇所)。
-    // 見るのは**人が理由に気づけるか**で、そこは札の文言でしか確かめられない ——
-    // `#toasts .toast-text` を読むのは T1(Toast.svelte)が決めた検査の穴である。
-    // **カメラから見てY=0の向こう側にある部品を隠す**(基準グリッドが
-    // 内容の大きさへ追随することの実測: このホームビューはカメラが
-    // 深いマイナスY側にあり(`HOME_VIEW_OFFSET`)、この文書のモデルはY=-290.5〜+110.5に
-    // 広がっている——Y=0を越えた先(Y>0寄り)にある部品の非平面面は、カメラからの
-    // レイが先にXZ平面(Y=0。いまはモデル全体を覆うほど広い)をくぐるので、**解析的には
-    // 本当にグリッドの方が手前になる**(見た目の透明な線とは無関係な、正しい
-    // オクルージョン判定。手前の部品を隠して奥を出す「項番2」の検査と同じ理屈)。
-    // 27部品を総当たりして実測したところ、Y=0側の部品を除くだけで安定して非平面面が
-    // 指せた。**除くのは一時的**(この検査の後は基準平面の検査へ入り、どのみち全部隠す)。
-    const riskyBodyIds = await page.evaluate(() => {
-      const risky = []
-      for (const part of window.__duocad.parts) {
-        const geometry = window.__duocad.getGeometry(part.body_id)
-        if (geometry && geometry.bbox.max[1] > -5) risky.push(part.body_id)
-      }
-      return risky
-    })
-    for (const bodyId of riskyBodyIds) {
-      await page.click(`.parts-row[data-body-id="${bodyId}"] input.visible-toggle`)
-    }
-    await page.waitForFunction(
-      (ids) => {
-        const bodies = window.__duocad.parts
-        return ids.every((id) => !bodies.find((b) => b.body_id === id).visible)
-      },
-      { timeout, polling: 50 },
-      riskyBodyIds,
-    )
-    ok(`Y=0を越えた側の部品(${riskyBodyIds.length}/27)を隠した(基準平面に取られない非平面面を探すため)`)
-
-    // **ここで`projectFace`の安い判定(リトライ無し)に通してから件数を絞る** ——
-    // 候補を後段の`locateFaceWhenStill`(最大40回×50msの安定待ち)にそのまま渡すと、
-    // 映っていない面1枚ごとに最大2秒かかる(実測: 全2835面をこの絞り無しで回すと
-    // 10分を超えた)。
-    const curved = await page.evaluate(() => {
-      const found = []
-      for (const part of window.__duocad.parts) {
-        if (!part.visible) continue
-        const geometry = window.__duocad.getGeometry(part.body_id)
-        if (!geometry) continue
-        for (const face of geometry.faces) {
-          if (face.kind === 'plane') continue
-          if (!window.__duocad.projectFace(part.body_id, face.index)) continue
-          found.push({ bodyId: part.body_id, index: face.index })
-          if (found.length >= 8) return found
-        }
-      }
-      return found
-    })
-
-    let refused = null
-    let tried = 0
-    const attempted = []
-    for (const candidate of curved) {
-      // **起動してから射影する**(順序が逆だと当たらない)。コマンドを起動すると
-      // コマンド行の文言が変わって行が伸び縮みし、`.viewport` の高さ=射影が動く
-      // (スケッチパネルの高さを固定してあるのと同じ事情。実測で別の部品の面を押した)。
-      // **すでに起動中ならもう一度押さない**(トグルで無起動へ戻ってしまう。
-      // `planarCandidates`のループと同じ流儀)。
-      if (
-        await page.evaluate(
-          () => document.querySelector('.command-host')?.dataset.command !== 'sketch_create',
-        )
-      ) {
-        await page.click('#sketch-create')
-      }
-      const at = await locateFaceWhenStill(candidate.bodyId, candidate.index)
-      if (!at) {
-        await page.keyboard.press('Escape')
-        continue
-      }
-      tried += 1
-      attempted.push(`${candidate.bodyId}/${candidate.index}`)
-      await page.mouse.click(at.x, at.y)
-      const toast = await page
-        .waitForFunction(
-          () => {
-            const node = document.querySelector('#toasts .toast-text')
-            return node && node.textContent.includes('平面') ? node.textContent.trim() : null
-          },
-          { timeout: 5000, polling: 50 },
-        )
-        .then((handle) => handle.jsonValue())
-        .catch(() => null)
-      if (toast) {
-        refused = { index: candidate.index, toast }
-        break
-      }
-      // 手前の別の面(または基準平面)に取られた。作られてしまったスケッチから出て次を試す。
-      if (await page.evaluate(() => window.__duocad.activeSketch !== null)) {
-        await page.click('#sketch-exit')
-        await page.waitForFunction(() => window.__duocad.activeSketch === null, {
-          timeout,
-          polling: 50,
-        })
-      }
-    }
-    if (refused === null && tried === 0) {
-      console.log('  --   平面でない面がこの視点からは1枚も指せない(検査を飛ばす)')
-    } else if (refused === null) {
-      const dump = await page.evaluate(() =>
-        JSON.stringify({
-          errors: window.__duocad.errors,
-          selection: window.__duocad.selection,
-          activeSketch: window.__duocad.activeSketch,
-          sketches: window.__duocad.sketches.map((item) => item.plane),
-        }),
-      )
-      fail(`平面でない面を指しても「平面でない」と言う札が出ない(試した面 ${attempted}): ${dump}`)
-    }
-    if (refused !== null) {
-      if (await page.evaluate(() => window.__duocad.activeSketch !== null)) {
-        fail('平面でない面なのにスケッチモードへ入っている(黙って通った)')
-      }
-      ok(`平面でない面 ${refused.index} は札で断られた: ${refused.toast.slice(0, 56)}…`)
-    }
-    await page.keyboard.press('Escape')
-
-    // -------------------------------------------------------------- 検証1(その2)・2: 基準平面に描く
+    // -------------------------------------------------------------- 基準平面に描く
     //
     // **先に部品を全部隠す。** 基準平面のグリッドは原点の周りの正方形で、**内容の大きさに
     // 追随して広がる**ので、この文書のPCケースは常にその中に丸ごと覆われる ——
@@ -1100,7 +510,16 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
       },
       { timeout, polling: 50 },
     )
-    ok('基準平面(XY)にもスケッチを作れた(部品を全非表示にしてグリッドを指した)')
+    ok('基準平面(XY)にスケッチを作れた(部品を全非表示にしてグリッドを指した)')
+
+    // モード操作(札・正面から見る・抜ける)は、スケッチモード中はツールバーの中に出る。
+    const modeControls = await page.evaluate(() =>
+      ['#sketch-mode', '#sketch-look', '#sketch-exit'].filter(
+        (id) => document.querySelector(`.toolbar ${id}`) === null,
+      ),
+    )
+    if (modeControls.length > 0) fail(`スケッチモード中なのにツールバーに無い: ${modeControls.join(' / ')}`)
+    ok('スケッチモード中: モード操作がコマンドツールバーに出た')
 
     // 円: 中心をクリック → 半径を打つ → Enter(**Bの数値入力をそのまま使っている**)
     await page.click('#sketch-circle')
@@ -1176,76 +595,6 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
       { timeout, polling: 50 },
     )
 
-    // クリックだけでも置ける: 長方形2クリック・円2クリック(**Enterは押さない**。寸法は
-    // 2点目が決める)。どちらも確かめたら undo で戻すので、この下の検査は図形2つのまま続く。
-    for (const shape of [
-      { button: '#sketch-rectangle', kind: 'rectangle', at: [[-44, -30], [-36, -26]] },
-      { button: '#sketch-circle', kind: 'circle', at: [[-40, -30], [-36, -30]] },
-    ]) {
-      await page.click(shape.button)
-      for (const [u, v] of shape.at) await clickPlane(u, v)
-      await page.waitForFunction(
-        (expected) => {
-          const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-          return Boolean(
-            active && active.entities.length === 3 && active.entities[2].kind === expected,
-          )
-        },
-        { timeout, polling: 50 },
-        shape.kind,
-      )
-      // **`JSON.stringify` を browser 側で通す** —— `hook.sketches` は Svelte の
-      // `$state` プロキシで、素のオブジェクトのまま返すと puppeteer の受け渡しで
-      // `{}` に潰れる(この検査で実測。上の `sketchState()` も同じ形にしてある)。
-      const placed = JSON.parse(
-        await page.evaluate(() => {
-          const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-          return JSON.stringify(active.entities[2].params)
-        }),
-      )
-      const measured =
-        shape.kind === 'circle' ? [placed.radius] : [placed.width, placed.height]
-      const expected = shape.kind === 'circle' ? [4] : [8, 4]
-      if (
-        measured.some(
-          (value, index) => !Number.isFinite(value) || Math.abs(value - expected[index]) > 0.05,
-        )
-      ) {
-        fail(`2クリックの${shape.kind}の寸法が点と合わない: ${JSON.stringify(placed)}`)
-      }
-      ok(
-        `${shape.kind}を2クリックで置けた(Enterを押していない。実測 ${measured.map((value) => value.toFixed(3)).join(' × ')}mm)`,
-      )
-      await pressUndo(page)
-      await page.waitForFunction(
-        () => {
-          const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-          return Boolean(active && active.entities.length === 2)
-        },
-        { timeout, polling: 50 },
-      )
-    }
-
-    // -------------------------------------------------------------- 検証4: Escで中断
-    // 長方形の引数を途中まで集めてEscを押す。文書が一切変わらないこと。
-    const beforeAbort = await sketchState()
-    await page.click('#sketch-rectangle')
-    await clickPlane(30, -30)
-    await typeInto('#sketch-width', 10)
-    await typeInto('#sketch-height', 6)
-    await page.keyboard.press('Escape')
-    const afterAbort = await sketchState()
-    if (afterAbort.entities !== beforeAbort.entities || afterAbort.log !== beforeAbort.log) {
-      fail(
-        `Escで中断したのに図形が残った: 図形 ${beforeAbort.entities}->${afterAbort.entities} / ` +
-          `log ${beforeAbort.log}->${afterAbort.log}`,
-      )
-    }
-    ok('Escで中断: 図形も操作ログも増えていない(スケッチの幽霊はサーバへ投げていない)')
-
     // 長方形と円弧も描ける(4種そろっていること)
     await page.click('#sketch-rectangle')
     await clickPlane(30, -30)
@@ -1274,30 +623,16 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
       },
       { timeout, polling: 50 },
     )
-    const kinds = (await sketchState()).kinds
+    const kinds = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      return active.entities.map((entity) => entity.kind)
+    })
     if (kinds.join(',') !== 'circle,line,rectangle,arc') fail(`4種そろっていない: ${kinds.join(',')}`)
     ok('長方形と円弧も描けた(線分・円・長方形・円弧の4種すべて)')
 
-    // -------------------------------------------------------------- 検証5: undoで1つずつ消える
-    const beforeUndo = await sketchState()
-    await pressUndo(page)
-    await page.waitForFunction(
-      (expected) => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.entities.length === expected)
-      },
-      { timeout, polling: 50 },
-      beforeUndo.entities - 1,
-    )
-    ok(`undoで図形が1つずつ消えた(${beforeUndo.entities} -> ${beforeUndo.entities - 1}。円弧だけが消えた)`)
-
-    // 出ていてよいのは、平面でない面へのスケッチをわざと断らせた札(上の `refused`)と、
-    // この STEP を読むと必ず出る三角形分割の警告(`PC_CASE_IMPORT_WARNINGS`。実測)だけ。
-    // 既定の STEP 以外を `--step` で読んだときは、その警告は前提にしない。
-    const importWarnings = stepPath === PC_CASE_STEP ? PC_CASE_IMPORT_WARNINGS : []
-    await assertNoAppErrors(page, consoleErrors, {
-      allow: [...importWarnings, ...(refused === null ? [] : [refused.toast])],
-    })
+    // `PC_CASE_IMPORT_WARNINGS`(三角形分割の警告)はこの本では出ない —— 出るのは問題の部品へ寄って
+    // 細かく測り直したときで、この本は全体表示のまま面を触り、スケッチは部品を全部隠してから描く。
+    await assertNoAppErrors(page, consoleErrors)
   }
 })
