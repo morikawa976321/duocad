@@ -98,7 +98,7 @@ const REFRESH_DELAY_MS = 300
  * 文書が変わってからサムネイルを撮るまでの待ち[ms]。続けて操作している間は撮らず、
  * 手が止まったら1回撮る(撮るたびにPNGを1枚送るので、1操作ごとには撮らない)。
  */
-const CAPTURE_DELAY_MS = 1500
+const CAPTURE_DELAY_MS = 500
 
 const PNG_DATA_URL = 'data:image/png;base64,'
 
