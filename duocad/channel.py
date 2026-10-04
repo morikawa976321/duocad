@@ -142,10 +142,13 @@ class StableUpdater:
             remote = f"origin/{self.branch}"
             ancestor = _git("merge-base", "--is-ancestor", "HEAD", remote, cwd=self.repo_root)
             if ancestor.returncode != 0:
-                ahead = _git("merge-base", "--is-ancestor", remote, "HEAD", cwd=self.repo_root)
-                if ahead.returncode == 0:
-                    # mainより先のdevelopのコミットから導入した場合(install.ps1 -Commit)。
-                    # mainがそのコミットを取り込む(マージコミット)まで、取り込むものは無い。
+                # developのコミットから導入した場合(install.ps1 -Commit)。mainにだけあるのが
+                # PRのマージコミットだけなら取り込むものは無い。次に develop → main がマージされると
+                # HEAD がmainの祖先になり、早送りで取り込めるようになる。
+                only_main = _git(
+                    "rev-list", "--count", "--no-merges", f"HEAD..{remote}", cwd=self.repo_root
+                )
+                if only_main.returncode == 0 and only_main.stdout.strip() == "0":
                     return {**base, "state": "current"}
                 return {**base, "state": "blocked", "reason": f"HEAD と {remote} が分岐している(早送りできない)"}
             log = _git(

@@ -202,6 +202,17 @@ def test_updater_treats_a_clone_ahead_of_main_as_current(tmp_path):
     )
     assert updater.status(force=True)["state"] == "current"
 
+    # mainがPRを取り込んだマージコミットだけを持っている(developには無い)状態は「最新」。
+    _git(origin, "checkout", "-q", "-b", "feature")
+    (origin / "c.txt").write_text("feature", encoding="utf-8")
+    _git(origin, "add", "c.txt")
+    _git(origin, "commit", "-q", "-m", "feature")
+    _git(origin, "checkout", "-q", "main")
+    _git(origin, "merge", "-q", "--no-ff", "-m", "merge PR", "feature")
+    _git(clone, "fetch", "-q", "origin", "feature")
+    _git(clone, "merge", "-q", "--no-ff", "-m", "develop takes feature", "FETCH_HEAD")
+    assert updater.status(force=True)["state"] == "current"
+
     (origin / "a.txt").write_text("2", encoding="utf-8")
     _git(origin, "commit", "-q", "-am", "diverging")
     assert updater.status(force=True)["state"] == "blocked"
