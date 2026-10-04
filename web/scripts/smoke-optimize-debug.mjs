@@ -30,7 +30,7 @@ import path from 'node:path'
 import { fail, ok } from './args.mjs'
 import { assertNoAppErrors, frameAll, openApp, waitOrFail } from './browser.mjs'
 import { runSmoke } from './harness.mjs'
-import { addExtrudedRect } from './mcp-client.mjs'
+import { addBoxPair, placeConditions } from './optimize-fixture.mjs'
 
 runSmoke('smoke-optimize-debug', { timeout: 60000, mcp: true }, async ({ options, workdir, mcp, browser, url, timeout }) => {
   /** 最適化1回ぶんの待ち(`smoke-optimize.mjs` と同じ理由で既定の60秒では足りない)。 */
@@ -38,24 +38,8 @@ runSmoke('smoke-optimize-debug', { timeout: 60000, mcp: true }, async ({ options
   /** 目で見るための控え(`/screenshots/` は `.gitignore` 対象)。**合否には使わない**し、消さない。 */
   const shotDir = options.shots ?? path.join(path.dirname(workdir), 'duocad-debug-shots')
   {
-    /** 一辺 `size` の立方体。**離して置く**ので、あいだを繋ぐ材料を最適化が起こす。 */
-    const addBox = async (corner, size, distance) =>
-      (await addExtrudedRect(mcp, { corner, width: size, height: size, distance })).bodyId
-
-    async function selectFaces(refs) {
-      await mcp.callTool('set_selection', { refs })
-    }
-
     // ================================================================== 題材(デモではない)
-    let fixtureFaceIndex = null
-    let loadFaceIndex = null
-    const bodyA = await addBox([0, 0], 12, 12)
-    const bodyB = await addBox([48, 0], 12, 12)
-    ok(`12mm立方体を2つ、48mm離して押し出した(A=${bodyA} / B=${bodyB})`)
-
-    await selectFaces([bodyA, bodyB].map((id) => ({ body: id, kind: 'body', index: null })))
-    await mcp.callTool('set_preserve_bodies')
-    await mcp.callTool('clear_selection')
+    const bodies = await addBoxPair(mcp)
 
     /** ページを1枚開いて、共通の穴が立つまで待つ(`query` はデバッグ表示のフラグ)。 */
     async function openPage(query) {
@@ -81,42 +65,12 @@ runSmoke('smoke-optimize-debug', { timeout: 60000, mcp: true }, async ({ options
       }
       if (counts.hiddenBodyId !== null) fail('フラグ無しなのにボディを隠している')
       await assertNoAppErrors(page, consoleErrors)
-
-      // ついでに、拘束面・荷重面をここで決める(面の添字は押し出しの結果で決まるので、
-      // **画面が持っている実際の面**から選ぶ —— 添字を決め打ちしない)。
-      const faceOf = async (bodyId, axis, wantMax) =>
-        page.evaluate(
-          (id, a, mx) => {
-            const geometry = window.__duocad.getGeometry(id)
-            if (!geometry) return null
-            let best = null
-            for (const face of geometry.faces) {
-              if (face.indices.length === 0) continue
-              if (best === null) { best = face; continue }
-              const better = mx ? face.centroid[a] > best.centroid[a] : face.centroid[a] < best.centroid[a]
-              if (better) best = face
-            }
-            return best === null ? null : best.index
-          },
-          bodyId,
-          axis,
-          wantMax,
-        )
-      fixtureFaceIndex = await faceOf(bodyA, 0, false) // A の x 最小面(いちばん外側)
-      loadFaceIndex = await faceOf(bodyB, 2, true) // B の上面
-      if (fixtureFaceIndex === null || loadFaceIndex === null) fail('条件に使う面が見つからない')
-
-      await page.close()
       ok('[1] `debugFlags` は全部 false・描かれているものは0・隠しているボディも無い')
-    }
 
-    await selectFaces([{ body: bodyA, kind: 'face', index: fixtureFaceIndex }])
-    await mcp.callTool('set_fixtures')
-    await mcp.callTool('clear_selection')
-    await selectFaces([{ body: bodyB, kind: 'face', index: loadFaceIndex }])
-    await mcp.callTool('set_loads', { magnitude: 200, direction: [0, 0, -1] })
-    await mcp.callTool('clear_selection')
-    ok(`4条件を置いた(拘束=A面${fixtureFaceIndex} / 荷重=B面${loadFaceIndex} 200N -Z)`)
+      // 面を名指すのに画面が持っている形が要るので、この頁が開いているうちに4条件を置く。
+      await placeConditions(mcp, page, bodies)
+      await page.close()
+    }
 
     // ================================================================== 2〜4. 3つとも立てる
     console.log('\n[2-4] `?debug=space,anchors&voxel=1` で走らせる(本物のSIMP。60〜120秒)')

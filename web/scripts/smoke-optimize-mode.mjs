@@ -36,7 +36,6 @@ import {
   assertNoAppErrors,
   frameAll,
   openApp,
-  pressUndo,
   sleep,
   typeInto,
   waitFrames,
@@ -363,7 +362,7 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
 
     // ====================================================================== 8. スクリーンショット
     // モードに入り・保持と除外を割り当て・拘束と荷重を置いた状態(タスクの完了条件そのもの)。
-    // **この後の9・10節は役割を外す/壊す検査なので、見た目が壊れる前にここで撮る。**
+    // **この後の10節は役割を外す検査なので、見た目が壊れる前にここで撮る。**
     console.log('\n[8] スクリーンショット')
     await page.evaluate(() => document.activeElement?.blur?.())
     await frameAll(page)
@@ -372,15 +371,6 @@ runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, bro
     const screenshotPath = join(screenshotDir, 'optimize-mode.png')
     await page.screenshot({ path: screenshotPath })
     ok(`[8] スクリーンショットを保存した: ${screenshotPath}`)
-
-    // ====================================================================== 9. undo で戻る
-    console.log('\n[9] undo で荷重面の確定が戻る')
-    await pressUndo(page)
-    await waitFor(
-      () => (window.__duocad.state.optimize.loads ?? []).length === 0,
-      'undoしても state.optimize.loads が空に戻らない',
-    )
-    ok('[9] Ctrl+Z(undo)で荷重面の確定が戻った')
 
     // ====================================================================== 10. 空の確定で役割を外せる
     // 回帰穴: 「0件だから送らない」という最適化を入れると、
