@@ -435,12 +435,6 @@
       // **中断中の印は「走っている間」だけ**。走り終わったら畳む —— 畳まないと、
       // 次に実行を押した瞬間に中断表示から始まって見える。
       optimizeCancelling = running && cancelling ? true : running ? optimizeCancelling : false
-      // `running` は「**いま開いている文書で**走っているか」(サーバの `optimization_status`)。
-      // 走らせたまま別の文書へ移ると偽になるので、その文書に進捗の行を残さない。
-      if (!running) optimizeProgress = null
-      // 走らせている文書へ戻ってきたら、実行中の表示(進捗・中断ボタン)が見えるモードへ入る。
-      // 普通のモードのままだと、編集が断られる理由が画面に無い。
-      else if (mode.kind === 'idle') setMode({ kind: 'optimize' })
     },
     onOptimizeProgress: (event) => (optimizeProgress = event),
     onOptimizeDebug: handleOptimizeDebug,
@@ -2312,6 +2306,7 @@
           documents={files.list}
           currentName={files.currentName}
           onRename={files.rename}
+          locked={optimizeBusy}
           onOpen={files.open}
           onNew={files.create}
           onCopy={files.copy}
