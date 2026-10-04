@@ -54,28 +54,16 @@ async def _wait_until(predicate, *, timeout: float = 3.0, interval: float = 0.01
         await asyncio.sleep(interval)
 
 
-async def _drain() -> None:
-    """`call_soon_threadsafe` で作られた配信タスクを最後まで走らせきる。
+async def _settle(server: Server) -> None:
+    """走っているAIの実行と、その知らせを運ぶ配信タスクが終わるのを待つ。
 
-    `_wait_until` の条件が真になった時点では、**そのイベントを運ぶタスクが作られた**
-    ことしか保証されない(タスクの本体がそのループ反復で最後まで走るとは限らない)。
-    `scenario()` がここで抜けて `asyncio.run` がループを閉じると、作っただけで
-    走らせていないタスクが「Task was destroyed but it is pending」の警告付きで
-    捨てられる(実害は無いテスト専用の後始末)。**`sleep(0)` だけでは足りないことがある**
-    (実行器スレッドからの `call_soon_threadsafe` はOSのスケジューラをまたぐので、
-    1回のループ反復に収まる保証が無い)ので、実時間のスリープも混ぜる。
-
-    **それでも稀に(数%)「coroutine 'Server._broadcast' was never awaited」が出ることがある**
-    ——実行器スレッド発のスケジューリングとasyncioのready queueの相対順序は、この
-    テストハーネス(1回の `asyncio.run` が数十ms で閉じる)の外では起きない競合であり、
-    製品コード(イベントループが閉じない実サーバ)側の不具合ではない。`pyproject.toml` は
-    `filterwarnings` を設定していないので、通常の `pytest -q` ではこの警告で赤くならない
-    (`-W error::RuntimeWarning` を明示したときだけ目に入る)。
+    **実行の途中で `scenario()` を抜けない。** `asyncio.run` はループを閉じる前に実行器スレッドの
+    終了を待つので、実行はそこで終わり、結果の配信タスクがそこで作られる。ループはその直後に
+    止まるので、タスクは走らないまま捨てられ「coroutine 'Server._broadcast' was never awaited」が
+    出る(警告はGCの時点で出るので、**原因のテストではなく後ろのテストの名前で報告される**)。
     """
-    for _ in range(20):
-        await asyncio.sleep(0)
-    await asyncio.sleep(0.05)
-    for _ in range(20):
+    while server._pending_ai_runs or server._pending_pushes:
+        await asyncio.gather(*server._pending_ai_runs, *server._pending_pushes, return_exceptions=True)
         await asyncio.sleep(0)
 
 
@@ -174,9 +162,10 @@ def test_ai_send_returns_before_the_run_finishes(monkeypatch, box_session: Sessi
         started = time.monotonic()
         await server._dispatch(connection, json.dumps({"cmd": "ai_send", "message": "hi"}))
         elapsed = time.monotonic() - started
-        return elapsed, server
+        await _settle(server)
+        return elapsed
 
-    elapsed, server = asyncio.run(scenario())
+    elapsed = asyncio.run(scenario())
     assert elapsed < 0.3, f"_dispatch がモデルの応答を待ってしまっている({elapsed:.3f}s)"
 
 
@@ -202,7 +191,7 @@ def test_ai_send_streams_tool_progress_and_a_final_result(monkeypatch, box_sessi
             and watcher.of_type("ai_result")
             and any(s["running"] is False for s in watcher.of_type("ai_status"))
         )
-        await _drain()
+        await _settle(server)
         return watcher
 
     watcher = asyncio.run(scenario())
@@ -236,7 +225,7 @@ def test_ai_send_hands_the_model_the_document_it_is_about_to_work_on(monkeypatch
             lambda: watcher.of_type("ai_result")
             and any(s["running"] is False for s in watcher.of_type("ai_status"))
         )
-        await _drain()
+        await _settle(server)
 
     asyncio.run(scenario())
     asked, looked, found = provider.requests[0]["turns"]
@@ -257,6 +246,7 @@ def test_ai_send_rejects_a_second_message_while_running(monkeypatch, box_session
         await server._dispatch(first, json.dumps({"cmd": "ai_send", "message": "1"}))
         assert server._ai_running is True
         await server._dispatch(second, json.dumps({"cmd": "ai_send", "message": "2"}))
+        await _settle(server)
         return second
 
     second = asyncio.run(scenario())
@@ -308,7 +298,7 @@ def test_a_tool_call_that_mutates_the_document_reaches_the_browser(
             and browser.of_type("ai_result")
             and any(s["running"] is False for s in browser.of_type("ai_status"))
         )
-        await _drain()
+        await _settle(server)
         return browser, box_session
 
     browser, session = asyncio.run(scenario())
@@ -348,7 +338,7 @@ def test_ai_cancel_stops_the_run_and_keeps_what_happened_so_far(monkeypatch, box
             lambda: watcher.of_type("ai_result")
             and any(s["running"] is False for s in watcher.of_type("ai_status"))
         )
-        await _drain()
+        await _settle(server)
         return watcher
 
     watcher = asyncio.run(scenario())
@@ -500,7 +490,7 @@ def test_ai_prepare_warms_each_conversation_once_and_only_when_asked(monkeypatch
         await server._dispatch(connection, json.dumps({"cmd": "ai_configure", "model": "other"}))
         await server._dispatch(connection, json.dumps({"cmd": "ai_prepare"}))
         await _wait_until(lambda: provider.order.count("prepare-end") == 2)
-        await _drain()
+        await _settle(server)
         return after_status, after_prepare, connection
 
     after_status, after_prepare, connection = asyncio.run(scenario())
@@ -530,7 +520,7 @@ def test_ai_send_waits_for_a_warm_up_that_is_still_running(monkeypatch, box_sess
             lambda: watcher.of_type("ai_result")
             and any(s["running"] is False for s in watcher.of_type("ai_status"))
         )
-        await _drain()
+        await _settle(server)
         return during, watcher
 
     during, watcher = asyncio.run(scenario())
