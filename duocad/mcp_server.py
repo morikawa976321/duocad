@@ -77,6 +77,7 @@ from . import (
     selection,
     sketch,
 )
+from .channel import CHANNELS, StableUpdater, describe
 from .entry import entry_for
 from .session import DocumentBusy
 from .server import (
@@ -983,8 +984,19 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
     # `McpServer` は握手の状態を控えないが、控えるようになっても混ざらない形にしておく。
     # 道具は `ToolsOnLoop` で包む(HTTPはワーカースレッドで走るため。下記 `start_http_server`)。
     http_mcp = McpServer(ToolsOnLoop(tools, asyncio.get_running_loop()))
+    loop = asyncio.get_running_loop()
+    #: 安定版の更新が始まったら立つ。`--no-stdio` の待ちがこれで解けてプロセスが終わる。
+    stop = asyncio.Event()
+    updater = _stable_updater(session, server, args, loop, stop)
     try:
-        start_http_server(args.web_dist, args.http_port, ws_url, mcp=http_mcp)
+        start_http_server(
+            args.web_dist,
+            args.http_port,
+            ws_url,
+            mcp=http_mcp,
+            config=describe(args.channel, updater),
+            updater=updater,
+        )
         served = True
     except (FileNotFoundError, OSError) as error:
         # ブラウザへ配れなくてもstdioのMCPは動く。**黙って落とさず**理由を残して続ける。
@@ -1007,11 +1019,63 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
             if args.open:
                 webbrowser.open(page_url)
         _log(f"  bodies={len(session.document.bodies)}")
+        if args.no_stdio:
+            await stop.wait()
+            _log("duocad MCP server: stopping for update, bye")
+            return
         await serve_stdio(McpServer(tools))
     _log("duocad MCP server: stdin closed, bye")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def _stable_updater(
+    session: Session,
+    server: Server,
+    args: argparse.Namespace,
+    loop: asyncio.AbstractEventLoop,
+    stop: asyncio.Event,
+) -> Optional[StableUpdater]:
+    """安定版(`--channel stable --no-stdio`)だけ更新の口を開く(`duocad/channel.py`)。
+
+    **`--no-stdio` を条件にする**のは、stdioで動いている間は終わり方が無いため ——
+    `serve_stdio` の `readline` は実行器スレッドで塞がっており、`asyncio.run` の後始末が
+    そのスレッドを待って止まる。安定版は `duocad.launcher` が必ず `--no-stdio` で立てる。
+    """
+    if args.channel != "stable" or not args.no_stdio or args.data_dir is None:
+        return None
+
+    async def blocker() -> Optional[str]:
+        # 形状最適化とAIの実行は既定の実行器で走る。`asyncio.run` の後始末はそれを時間制限なしで
+        # 待つので、走っている間に止めるとプロセスが終わらず、update.ps1 が強制終了して結果を捨てる。
+        if session.optimizing:
+            return "形状最適化が走っている。終わるか中断してから更新すること"
+        if getattr(server, "_ai_running", False):
+            return "AIが実行中。終わるか止めてから更新すること"
+        if not session.saved:
+            return "自動保存が書けていない文書がある。Ctrl+S で保存してから更新すること"
+        return None
+
+    def update_blocker() -> Optional[str]:
+        # `Session` を触るのはイベントループのスレッドだけ(`ToolsOnLoop` と同じ不変条件)。
+        return asyncio.run_coroutine_threadsafe(blocker(), loop).result(timeout=5)
+
+    def on_started() -> None:
+        # HTTPの応答(202)を書き終える猶予を置いてから止める。
+        loop.call_soon_threadsafe(loop.call_later, 0.5, stop.set)
+
+    return StableUpdater(
+        log_dir=args.data_dir / "logs",
+        relaunch={
+            "channel": args.channel,
+            "port": args.port,
+            "http_port": args.http_port,
+            "data_dir": args.data_dir,
+        },
+        update_blocker=update_blocker,
+        on_started=on_started,
+    )
+
+
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="duocad MCPサーバ(stdio) + WebSocket + web/dist の静的配信"
     )
@@ -1034,11 +1098,57 @@ def main(argv: Optional[list[str]] = None) -> int:
             "通常の起動では指定しない"
         ),
     )
+    parser.add_argument(
+        "--exports-dir",
+        type=Path,
+        default=None,
+        help="STEP/STL書き出しの置き場(既定はリポジトリ直下の export/)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help=(
+            "制作データの置き場。models/ と export/ をこの下に取る(個別の --models-dir / "
+            "--exports-dir が優先)。安定版はリポジトリの外を指す(docs/STABLE.md)"
+        ),
+    )
+    parser.add_argument(
+        "--channel",
+        choices=CHANNELS,
+        default="dev",
+        help=(
+            "dev(既定) / stable。画面のヘッダーに「開発版」の札が出るかと、安定版の更新ボタンが"
+            "出るかを決める。**既定を dev にしてある** —— 付け忘れたときに札が出ない側へ倒れると、"
+            "開発版を安定版と取り違えたまま制作してしまう"
+        ),
+    )
+    parser.add_argument(
+        "--no-stdio",
+        action="store_true",
+        help=(
+            "標準入力でMCPを喋らない(窓の無い pythonw から立てる安定版用。stdinが無いと"
+            "stdioのMCPは即EOFで終わり、サーバごと落ちる)"
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.data_dir is not None:
+        args.data_dir = args.data_dir.expanduser().resolve()
+        if args.models_dir is None:
+            args.models_dir = args.data_dir / "models"
+        if args.exports_dir is None:
+            args.exports_dir = args.data_dir / "export"
+    return args
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    args = parse_args(argv)
 
     # **常に空の文書で起動する**。
     # STEPはツール `import_step`(編集可能なボディまで作る)から読む。
-    session = Session(None, args.deviation, models_dir=args.models_dir)
+    session = Session(
+        None, args.deviation, models_dir=args.models_dir, exports_dir=args.exports_dir
+    )
     try:
         asyncio.run(_run(session, args))
     except KeyboardInterrupt:

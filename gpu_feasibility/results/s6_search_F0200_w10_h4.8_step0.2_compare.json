@@ -1,0 +1,28 @@
+{
+  "tag": "F0200_w10_h4.8_step0.2",
+  "history_identical": true,
+  "history_length": [
+    80,
+    80
+  ],
+  "best_mask_identical": true,
+  "cg_iterations_each_identical": true,
+  "evaluations": [
+    80,
+    80
+  ],
+  "termination": [
+    "converged",
+    "converged"
+  ],
+  "wall_seconds": {
+    "cpu_contended": 224.16711979999673,
+    "cpu_threads": 4,
+    "gpu": 176.44427650002763
+  },
+  "solve_seconds": {
+    "cpu_contended": 55.89718110021204,
+    "gpu": 14.143658299231902
+  },
+  "gpu_fallbacks_to_cpu": 0
+}

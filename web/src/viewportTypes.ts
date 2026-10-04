@@ -913,5 +913,10 @@ export interface Viewport {
    * 検査が決め打ちの座標を使わずここから読めるようにする。
    */
   viewCubeRect(): { x: number; y: number; w: number; h: number }
+  /**
+   * 見えている立体だけを撮ったファイル一覧のサムネイル(PNGのbase64。`thumbnail.ts`)。
+   * **見えている立体が無ければ空文字**。画面の視点・選択・断面には左右されない。
+   */
+  captureThumbnail(): string
   dispose(): void
 }

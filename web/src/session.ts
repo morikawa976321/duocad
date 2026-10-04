@@ -324,6 +324,14 @@ export interface FilePayload {
   /** 書き出し候補のうち非表示(visible=false)で除外されたBodyのID(export_step/export_stlのみ)。 */
   skipped_hidden?: string[]
   files?: DocumentInfo[]
+  /** 改名前のファイル名(`rename_document` のみ。無題からの改名は null)。 */
+  previous?: string | null
+  /** サムネイルのPNG(base64。`get_thumbnail` のみ。無ければ null)。 */
+  png?: string | null
+  /** サムネイルの版(`save_thumbnail` / `get_thumbnail`。無ければ null)。 */
+  thumb?: number | null
+  /** サムネイルを書いたか(`save_thumbnail` のみ。文書のファイルが無ければ false)。 */
+  saved?: boolean
 }
 
 /**
@@ -335,6 +343,10 @@ export interface FilePayload {
 export interface DocumentInfo {
   name: string
   mtime: number
+  /** 作成日時(UNIX秒。文書のJSONの `created`)。持たない既存ファイルは null。 */
+  created: number | null
+  /** サムネイルの版(付随ファイルの更新日時)。撮っていなければ null。画像は `get_thumbnail` で取る。 */
+  thumb: number | null
 }
 
 /**
@@ -962,6 +974,10 @@ export function createSession(hooks: SessionHooks): Session {
       body_ids?: string[]
       skipped_hidden?: string[]
       files?: DocumentInfo[]
+      previous?: string | null
+      png?: string | null
+      thumb?: number | null
+      saved?: boolean
       // ---------------------------------------------------------------- G
       provider?: AiProviderKind
       model?: string | null
@@ -1038,6 +1054,10 @@ export function createSession(hooks: SessionHooks): Session {
         body_ids: message.body_ids,
         skipped_hidden: message.skipped_hidden,
         files: message.files,
+        previous: message.previous,
+        png: message.png,
+        thumb: message.thumb,
+        saved: message.saved,
       })
     } else if (message.type === 'error') {
       hooks.onError(message.message ?? '(理由なし)', message.where ?? '?')

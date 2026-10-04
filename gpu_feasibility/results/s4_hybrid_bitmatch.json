@@ -1,0 +1,210 @@
+{
+  "F0200_thin5mm_h2.4_step20_d0": {
+    "name": "F0200_thin5mm_h2.4_step20_d0",
+    "free_dofs": 32574,
+    "nnz": 1870992,
+    "measured_at": "2026-10-04T22:35:40+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 0.2176705002784729,
+    "hybrid": {
+      "iterations": 5821,
+      "info": 0,
+      "seconds": [
+        3.524646700010635,
+        3.5181332000065595
+      ],
+      "ms_per_iteration": 0.6043863940914893,
+      "sha": "f284632709688653",
+      "repeat_bit_identical": true,
+      "relative_residual": 1.0587083492425288e-09
+    },
+    "cpu_1thread": {
+      "iterations": 5821,
+      "info": 0,
+      "seconds_contended": 20.735589299933054,
+      "ms_per_iteration_contended": 3.5622039683788103,
+      "sha": "f284632709688653"
+    },
+    "solution_bit_identical": true
+  },
+  "F0500_thin5mm_h2.4_step20_d0": {
+    "name": "F0500_thin5mm_h2.4_step20_d0",
+    "free_dofs": 53496,
+    "nnz": 3264102,
+    "measured_at": "2026-10-04T22:35:48+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 0.34961549972649664,
+    "hybrid": {
+      "iterations": 4663,
+      "info": 0,
+      "seconds": [
+        3.811604000045918,
+        4.110354600008577
+      ],
+      "ms_per_iteration": 0.8174145400055582,
+      "sha": "9490162226dcd37f",
+      "repeat_bit_identical": true,
+      "relative_residual": 9.54590199444141e-10
+    },
+    "cpu_1thread": {
+      "iterations": 4663,
+      "info": 0,
+      "seconds_contended": 27.912747099995613,
+      "ms_per_iteration_contended": 5.986006240616687,
+      "sha": "9490162226dcd37f"
+    },
+    "solution_bit_identical": true
+  },
+  "F0500_thin5mm_h2_step20_d0": {
+    "name": "F0500_thin5mm_h2_step20_d0",
+    "free_dofs": 105033,
+    "nnz": 6640839,
+    "measured_at": "2026-10-04T22:35:56+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 0.7107235002331436,
+    "hybrid": {
+      "iterations": 6510,
+      "info": 0,
+      "seconds": [
+        10.287928899982944,
+        9.937444100040011
+      ],
+      "ms_per_iteration": 1.5264891090691262,
+      "sha": "6c74e70ca80b1094",
+      "repeat_bit_identical": true,
+      "relative_residual": 1.0084450404581534e-09
+    },
+    "cpu_1thread": {
+      "iterations": 6510,
+      "info": 0,
+      "seconds_contended": 74.69239930005278,
+      "ms_per_iteration_contended": 11.47348683564559,
+      "sha": "6c74e70ca80b1094"
+    },
+    "solution_bit_identical": true
+  },
+  "F0500_thin5mm_h2_step20_d2": {
+    "name": "F0500_thin5mm_h2_step20_d2",
+    "free_dofs": 202359,
+    "nnz": 13818141,
+    "measured_at": "2026-10-04T22:36:17+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 1.2398425000719726,
+    "hybrid": {
+      "iterations": 5000,
+      "info": 0,
+      "seconds": [
+        18.774074700078927,
+        19.10479959996883
+      ],
+      "ms_per_iteration": 3.7548149400157853,
+      "sha": "a590034eacc31b3d",
+      "repeat_bit_identical": true,
+      "relative_residual": 9.637470887504667e-10
+    },
+    "cpu_1thread": {
+      "iterations": 5000,
+      "info": 0,
+      "seconds_contended": 127.1301624000771,
+      "ms_per_iteration_contended": 25.426032480015422,
+      "sha": "a590034eacc31b3d"
+    },
+    "solution_bit_identical": true
+  },
+  "F1000_thick10mm_h2_step20_d0": {
+    "name": "F1000_thick10mm_h2_step20_d0",
+    "free_dofs": 226758,
+    "nnz": 16130358,
+    "measured_at": "2026-10-04T22:36:55+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 1.562528500217013,
+    "hybrid": {
+      "iterations": 3775,
+      "info": 0,
+      "seconds": [
+        16.340332999941893,
+        16.62986029998865
+      ],
+      "ms_per_iteration": 4.32856503309719,
+      "sha": "a8a3cacbfe5ac7aa",
+      "repeat_bit_identical": true,
+      "relative_residual": 9.407536463436355e-10
+    },
+    "cpu_1thread": {
+      "iterations": 3775,
+      "info": 0,
+      "seconds_contended": 107.06965369998943,
+      "ms_per_iteration_contended": 28.362822172182632,
+      "sha": "a8a3cacbfe5ac7aa"
+    },
+    "solution_bit_identical": true
+  },
+  "F2000_thin5mm_h2_step20_d0": {
+    "name": "F2000_thin5mm_h2_step20_d0",
+    "free_dofs": 359751,
+    "nnz": 25704621,
+    "measured_at": "2026-10-04T22:37:29+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 2.529633499798365,
+    "hybrid": {
+      "iterations": 3551,
+      "info": 0,
+      "seconds": [
+        24.81243130005896,
+        24.23788470006548
+      ],
+      "ms_per_iteration": 6.8256504365152,
+      "sha": "3e3da11f049df2fc",
+      "repeat_bit_identical": true,
+      "relative_residual": 1.0012411811652498e-09
+    },
+    "cpu_1thread": {
+      "iterations": 3551,
+      "info": 0,
+      "seconds_contended": 179.23413789994083,
+      "ms_per_iteration_contended": 50.47427144464682,
+      "sha": "3e3da11f049df2fc"
+    },
+    "solution_bit_identical": true
+  },
+  "F2000_thick10mm_h2_step20_d0": {
+    "name": "F2000_thick10mm_h2_step20_d0",
+    "free_dofs": 411867,
+    "nnz": 30519801,
+    "measured_at": "2026-10-04T23:04:47+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 2.5713194999843836,
+    "hybrid": {
+      "iterations": 3017,
+      "info": 0,
+      "seconds": [
+        22.340671199955977,
+        22.29584760009311
+      ],
+      "ms_per_iteration": 7.3900721246579755,
+      "sha": "275c577c5c71dd30",
+      "repeat_bit_identical": true,
+      "relative_residual": 9.650501777760706e-10
+    }
+  },
+  "F2000_thin5mm_h1.8_step20_d0": {
+    "name": "F2000_thin5mm_h1.8_step20_d0",
+    "free_dofs": 489483,
+    "nnz": 35620677,
+    "measured_at": "2026-10-04T23:05:33+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 3.132791999960318,
+    "hybrid": {
+      "iterations": 3609,
+      "info": 0,
+      "seconds": [
+        33.45336749998387,
+        33.35655430005863
+      ],
+      "ms_per_iteration": 9.242603020243456,
+      "sha": "0344e535d5259b11",
+      "repeat_bit_identical": true,
+      "relative_residual": 9.7053403266981e-10
+    }
+  }
+}

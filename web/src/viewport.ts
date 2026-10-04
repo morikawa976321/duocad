@@ -47,6 +47,7 @@ import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
 import { createVertexMarkers } from './vertexMarkers'
 import { createMeasureAnnotation } from './measureAnnotation'
+import { createThumbnailer } from './thumbnail'
 import type { BasePlaneName, EdgeGeometry } from './session'
 import {
   type BodyGeometryUpdate, type BodyGhostRotation, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
@@ -348,6 +349,7 @@ export function createViewport(container: HTMLElement): Viewport {
   const raycaster = new THREE.Raycaster()
   /** body_id -> そのBodyが画面に持つメッシュ。非表示・未読込のBodyはキーごと無い。 */
   const bodies = new Map<string, BodyMeshes>()
+  const thumbnailer = createThumbnailer(renderer)
   /**
    * body_id -> サーバから届いた生の `GeometryPayload`。
    *
@@ -2890,10 +2892,17 @@ export function createViewport(container: HTMLElement): Viewport {
     projectBasePlane,
     projectRegion,
     viewCubeRect: cube.rect,
+    captureThumbnail() {
+      // **`object.visible` は見ない** —— 文書で非表示の立体は `bodies` にキーごと無く、
+      // `visible=false` はプレビュー中に本物を一時的に隠しているだけ(`setBodyVisible`)。
+      // 見て撮ると、プレビュー中に撮った絵から立体が欠ける。
+      return thumbnailer.capture([...bodies.values()].flatMap((entry) => entry.sceneObjects))
+    },
     dispose() {
       alive = false
       cancelAnimationFrame(frameHandle)
       observer.disconnect()
+      thumbnailer.dispose()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
       renderer.domElement.removeEventListener('pointermove', onPointerMove)

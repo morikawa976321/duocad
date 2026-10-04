@@ -1,0 +1,938 @@
+{
+  "F0200_thin5mm_h2.4_step20_d0": {
+    "name": "F0200_thin5mm_h2.4_step20_d0",
+    "free_dofs": 32574,
+    "nnz": 1870992,
+    "rtol": 1e-09,
+    "measured_at": "2026-10-04T22:20:14+09:00",
+    "host_ram_available_gb": 5.834938049316406,
+    "vram_free_mib_before": 15172.0,
+    "transfer_to_gpu_seconds": 0.41294860001653433,
+    "spmv": {
+      "cusparse": {
+        "ms": 0.09200949978549033,
+        "ns_per_nnz": 0.0491768536613146,
+        "max_rel_diff_vs_cpu": 4.137598898076172e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw": {
+        "ms": 0.06217749963980168,
+        "ns_per_nnz": 0.033232370656743414,
+        "max_rel_diff_vs_cpu": 3.103199173557129e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw_nofma": {
+        "ms": 0.07925899990368634,
+        "ns_per_nnz": 0.04236201966854286,
+        "max_rel_diff_vs_cpu": 0.0,
+        "bit_identical_to_cpu": true
+      }
+    },
+    "cg": {
+      "cupyx": {
+        "info": 0,
+        "iterations": 5792,
+        "seconds": 1.6353503999998793,
+        "ms_per_iteration": 0.28234640883975815,
+        "transfer_back_seconds": 8.029991295188665e-05,
+        "relative_residual_host": 1.0013530377982098e-09,
+        "cpu_seconds_converted": [
+          4.44308212224,
+          5.20165711872
+        ],
+        "speedup_converted_excl_transfer": [
+          2.716899156437867,
+          3.1807599880248194
+        ],
+        "speedup_converted_incl_transfer": [
+          2.169071969431253,
+          2.539401330065857
+        ]
+      },
+      "own_cusparse": {
+        "info": 0,
+        "iterations": 5801,
+        "seconds": 1.996595500037074,
+        "ms_per_iteration": 0.3441812618577959,
+        "transfer_back_seconds": 0.0001666999887675047,
+        "relative_residual_host": 1.0217547040775634e-09,
+        "cpu_seconds_converted": [
+          4.44998608272,
+          5.20973980416
+        ],
+        "speedup_converted_excl_transfer": [
+          2.228786993979186,
+          2.6093116027073395
+        ],
+        "speedup_converted_incl_transfer": [
+          1.8466888568710174,
+          2.1619771982880205
+        ]
+      },
+      "own_raw": {
+        "info": 0,
+        "iterations": 5789,
+        "seconds": 1.441520299995318,
+        "ms_per_iteration": 0.24901024356457388,
+        "transfer_back_seconds": 0.00012310000602155924,
+        "relative_residual_host": 1.0534722322558536e-09,
+        "cpu_seconds_converted": [
+          4.44078080208,
+          5.19896289024
+        ],
+        "speedup_converted_excl_transfer": [
+          3.0806231463368383,
+          3.6065831957114205
+        ],
+        "speedup_converted_incl_transfer": [
+          2.3944785710480803,
+          2.8032919856172644
+        ]
+      },
+      "own_raw_nofma": {
+        "info": 0,
+        "iterations": 5809,
+        "seconds": 1.5256412000162527,
+        "ms_per_iteration": 0.26263405061391853,
+        "transfer_back_seconds": 8.430005982518196e-05,
+        "relative_residual_host": 1.053305082410723e-09,
+        "cpu_seconds_converted": [
+          4.45612293648,
+          5.216924413439999
+        ],
+        "speedup_converted_excl_transfer": [
+          2.920819742173015,
+          3.4194962835196265
+        ],
+        "speedup_converted_incl_transfer": [
+          2.298541532208599,
+          2.690975452341774
+        ]
+      }
+    },
+    "solution_max_rel_diff_vs_own_raw_nofma": {
+      "cusparse": 1.2350419266985832e-11,
+      "raw": 1.040144980508877e-11
+    },
+    "vram_pool_total_mib": 24.5517578125
+  },
+  "F0500_thin5mm_h2.4_step20_d0": {
+    "name": "F0500_thin5mm_h2.4_step20_d0",
+    "free_dofs": 53496,
+    "nnz": 3264102,
+    "rtol": 1e-09,
+    "measured_at": "2026-10-04T22:20:22+09:00",
+    "host_ram_available_gb": 5.627677917480469,
+    "vram_free_mib_before": 15078.0,
+    "transfer_to_gpu_seconds": 0.010019500041380525,
+    "spmv": {
+      "cusparse": {
+        "ms": 0.13494449958670884,
+        "ns_per_nnz": 0.04134199837710612,
+        "max_rel_diff_vs_cpu": 4.513553320834482e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw": {
+        "ms": 0.15778950008098036,
+        "ns_per_nnz": 0.04834086069644281,
+        "max_rel_diff_vs_cpu": 1.8054213283337926e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw_nofma": {
+        "ms": 0.14856150024570525,
+        "ns_per_nnz": 0.045513743211978444,
+        "max_rel_diff_vs_cpu": 0.0,
+        "bit_identical_to_cpu": true
+      }
+    },
+    "cg": {
+      "cupyx": {
+        "info": 0,
+        "iterations": 4681,
+        "seconds": 1.6082045000512153,
+        "ms_per_iteration": 0.34356002991908036,
+        "transfer_back_seconds": 0.00010800000745803118,
+        "relative_residual_host": 9.500434441055854e-10,
+        "cpu_seconds_converted": [
+          6.26449719942,
+          7.3340455017599995
+        ],
+        "speedup_converted_excl_transfer": [
+          3.895336195875897,
+          4.5603935951717816
+        ],
+        "speedup_converted_incl_transfer": [
+          3.8709592339721985,
+          4.531854712943061
+        ]
+      },
+      "own_cusparse": {
+        "info": 0,
+        "iterations": 4680,
+        "seconds": 1.6976720000384375,
+        "ms_per_iteration": 0.3627504273586405,
+        "transfer_back_seconds": 0.00012879993300884962,
+        "relative_residual_host": 9.411447336282788e-10,
+        "cpu_seconds_converted": [
+          6.2631589176,
+          7.332478732799999
+        ],
+        "speedup_converted_excl_transfer": [
+          3.689263248412057,
+          4.319137461555579
+        ],
+        "speedup_converted_incl_transfer": [
+          3.667340713512399,
+          4.293472054843784
+        ]
+      },
+      "own_raw": {
+        "info": 0,
+        "iterations": 4662,
+        "seconds": 1.7336991999763995,
+        "ms_per_iteration": 0.371878850273788,
+        "transfer_back_seconds": 0.00012800004333257675,
+        "relative_residual_host": 9.642713755868183e-10,
+        "cpu_seconds_converted": [
+          6.2390698448399995,
+          7.30427689152
+        ],
+        "speedup_converted_excl_transfer": [
+          3.5987037687535013,
+          4.213116607321172
+        ],
+        "speedup_converted_incl_transfer": [
+          3.5777627956754188,
+          4.188600346156588
+        ]
+      },
+      "own_raw_nofma": {
+        "info": 0,
+        "iterations": 4680,
+        "seconds": 1.6773452999768779,
+        "ms_per_iteration": 0.3584071153796748,
+        "transfer_back_seconds": 0.0001412000274285674,
+        "relative_residual_host": 1.003259893801148e-09,
+        "cpu_seconds_converted": [
+          6.2631589176,
+          7.332478732799999
+        ],
+        "speedup_converted_excl_transfer": [
+          3.7339711254959473,
+          4.371478390824524
+        ],
+        "speedup_converted_incl_transfer": [
+          3.711488384296372,
+          4.3451571328347764
+        ]
+      }
+    },
+    "solution_max_rel_diff_vs_own_raw_nofma": {
+      "cusparse": 3.3601234044325398e-12,
+      "raw": 4.14071619504882e-12
+    },
+    "vram_pool_total_mib": 46.9375
+  },
+  "F0500_thin5mm_h2_step20_d0": {
+    "name": "F0500_thin5mm_h2_step20_d0",
+    "free_dofs": 105033,
+    "nnz": 6640839,
+    "rtol": 1e-09,
+    "measured_at": "2026-10-04T22:20:37+09:00",
+    "host_ram_available_gb": 5.861591339111328,
+    "vram_free_mib_before": 15172.0,
+    "transfer_to_gpu_seconds": 0.11691290000453591,
+    "spmv": {
+      "cusparse": {
+        "ms": 0.2405745000578463,
+        "ns_per_nnz": 0.036226521988840014,
+        "max_rel_diff_vs_cpu": 5.25300106242819e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw": {
+        "ms": 0.4567424999549985,
+        "ns_per_nnz": 0.0687778306257686,
+        "max_rel_diff_vs_cpu": 2.626500531214095e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw_nofma": {
+        "ms": 0.42718600016087294,
+        "ns_per_nnz": 0.06432711290860582,
+        "max_rel_diff_vs_cpu": 0.0,
+        "bit_identical_to_cpu": true
+      }
+    },
+    "cg": {
+      "cupyx": {
+        "info": 0,
+        "iterations": 6511,
+        "seconds": 2.777419300051406,
+        "ms_per_iteration": 0.4265733835127332,
+        "transfer_back_seconds": 0.0003342999843880534,
+        "relative_residual_host": 9.673769066337442e-10,
+        "cpu_seconds_converted": [
+          17.727786118890002,
+          20.75448130992
+        ],
+        "speedup_converted_excl_transfer": [
+          6.38282671923605,
+          7.4725776225202525
+        ],
+        "speedup_converted_incl_transfer": [
+          6.124293115853937,
+          7.1699041356338755
+        ]
+      },
+      "own_cusparse": {
+        "info": 0,
+        "iterations": 6511,
+        "seconds": 2.859595499932766,
+        "ms_per_iteration": 0.4391945169609532,
+        "transfer_back_seconds": 0.000188700039871037,
+        "relative_residual_host": 9.895351075134291e-10,
+        "cpu_seconds_converted": [
+          17.727786118890002,
+          20.75448130992
+        ],
+        "speedup_converted_excl_transfer": [
+          6.199403418877535,
+          7.257838148929795
+        ],
+        "speedup_converted_incl_transfer": [
+          5.955522353626759,
+          6.972318853026449
+        ]
+      },
+      "own_raw": {
+        "info": 0,
+        "iterations": 6507,
+        "seconds": 4.1087649000110105,
+        "ms_per_iteration": 0.6314376671294007,
+        "transfer_back_seconds": 0.00019890000112354755,
+        "relative_residual_host": 1.020386710762405e-09,
+        "cpu_seconds_converted": [
+          17.71689514293,
+          20.74173089904
+        ],
+        "speedup_converted_excl_transfer": [
+          4.311975879389576,
+          5.048166883187796
+        ],
+        "speedup_converted_incl_transfer": [
+          4.192478011216019,
+          4.908266939960217
+        ]
+      },
+      "own_raw_nofma": {
+        "info": 0,
+        "iterations": 6502,
+        "seconds": 3.8125604999950156,
+        "ms_per_iteration": 0.5863673485073847,
+        "transfer_back_seconds": 0.00015279999934136868,
+        "relative_residual_host": 1.0110268038775853e-09,
+        "cpu_seconds_converted": [
+          17.70328142298,
+          20.72579288544
+        ],
+        "speedup_converted_excl_transfer": [
+          4.643409966347589,
+          5.436187277675225
+        ],
+        "speedup_converted_incl_transfer": [
+          4.505080260047378,
+          5.27424030444571
+        ]
+      }
+    },
+    "solution_max_rel_diff_vs_own_raw_nofma": {
+      "cusparse": 8.770829117939251e-12,
+      "raw": 2.30292296130345e-12
+    },
+    "vram_pool_total_mib": 86.1240234375
+  },
+  "F0500_thin5mm_h2_step20_d2": {
+    "name": "F0500_thin5mm_h2_step20_d2",
+    "free_dofs": 202359,
+    "nnz": 13818141,
+    "rtol": 1e-09,
+    "measured_at": "2026-10-04T22:20:51+09:00",
+    "host_ram_available_gb": 5.300662994384766,
+    "vram_free_mib_before": 15024.0,
+    "transfer_to_gpu_seconds": 0.03393929998856038,
+    "spmv": {
+      "cusparse": {
+        "ms": 0.46515049994923174,
+        "ns_per_nnz": 0.03366230666985029,
+        "max_rel_diff_vs_cpu": 5.342926415676067e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw": {
+        "ms": 0.9848200000124052,
+        "ns_per_nnz": 0.07127007895001254,
+        "max_rel_diff_vs_cpu": 2.6714632078380335e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw_nofma": {
+        "ms": 0.8936335000908002,
+        "ns_per_nnz": 0.06467103643614582,
+        "max_rel_diff_vs_cpu": 0.0,
+        "bit_identical_to_cpu": true
+      }
+    },
+    "cg": {
+      "cupyx": {
+        "info": 0,
+        "iterations": 5000,
+        "seconds": 3.2609962000278756,
+        "ms_per_iteration": 0.652199240005575,
+        "transfer_back_seconds": 0.0005747999530285597,
+        "relative_residual_host": 9.433327409295489e-10,
+        "cpu_seconds_converted": [
+          28.32718905,
+          33.1635384
+        ],
+        "speedup_converted_excl_transfer": [
+          8.686667298096776,
+          10.169756836796227
+        ],
+        "speedup_converted_incl_transfer": [
+          8.5956912500812,
+          10.063248292777992
+        ]
+      },
+      "own_cusparse": {
+        "info": 0,
+        "iterations": 5000,
+        "seconds": 3.3175866999663413,
+        "ms_per_iteration": 0.6635173399932682,
+        "transfer_back_seconds": 0.0005333999870344996,
+        "relative_residual_host": 9.417999357658497e-10,
+        "cpu_seconds_converted": [
+          28.32718905,
+          33.1635384
+        ],
+        "speedup_converted_excl_transfer": [
+          8.538492468120696,
+          9.996283865116913
+        ],
+        "speedup_converted_incl_transfer": [
+          8.450682303091252,
+          9.893481720692197
+        ]
+      },
+      "own_raw": {
+        "info": 0,
+        "iterations": 5000,
+        "seconds": 5.877617500023916,
+        "ms_per_iteration": 1.1755235000047832,
+        "transfer_back_seconds": 0.0005264999344944954,
+        "relative_residual_host": 9.814677269021068e-10,
+        "cpu_seconds_converted": [
+          28.32718905,
+          33.1635384
+        ],
+        "speedup_converted_excl_transfer": [
+          4.81950195804418,
+          5.64234375575904
+        ],
+        "speedup_converted_incl_transfer": [
+          4.791405603208277,
+          5.609450462292617
+        ]
+      },
+      "own_raw_nofma": {
+        "info": 0,
+        "iterations": 5000,
+        "seconds": 5.421943999943323,
+        "ms_per_iteration": 1.0843887999886646,
+        "transfer_back_seconds": 0.000529400072991848,
+        "relative_residual_host": 9.721622654127879e-10,
+        "cpu_seconds_converted": [
+          28.32718905,
+          33.1635384
+        ],
+        "speedup_converted_excl_transfer": [
+          5.224544748211363,
+          6.116540193027937
+        ],
+        "speedup_converted_incl_transfer": [
+          5.19154078099237,
+          6.077901402137409
+        ]
+      }
+    },
+    "solution_max_rel_diff_vs_own_raw_nofma": {
+      "cusparse": 3.132272058530803e-12,
+      "raw": 2.741573142311501e-13
+    },
+    "vram_pool_total_mib": 236.14013671875
+  },
+  "F1000_thick10mm_h2_step20_d0": {
+    "name": "F1000_thick10mm_h2_step20_d0",
+    "free_dofs": 226758,
+    "nnz": 16130358,
+    "rtol": 1e-09,
+    "measured_at": "2026-10-04T22:21:10+09:00",
+    "host_ram_available_gb": 5.298664093017578,
+    "vram_free_mib_before": 14916.0,
+    "transfer_to_gpu_seconds": 0.01869230007287115,
+    "spmv": {
+      "cusparse": {
+        "ms": 0.5351270001847297,
+        "ns_per_nnz": 0.03317514714705834,
+        "max_rel_diff_vs_cpu": 6.619193436507351e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw": {
+        "ms": 1.172468499862589,
+        "ns_per_nnz": 0.07268707240487712,
+        "max_rel_diff_vs_cpu": 3.7823962494327723e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw_nofma": {
+        "ms": 1.0672109998995438,
+        "ns_per_nnz": 0.0661616437713003,
+        "max_rel_diff_vs_cpu": 0.0,
+        "bit_identical_to_cpu": true
+      }
+    },
+    "cg": {
+      "cupyx": {
+        "info": 0,
+        "iterations": 3774,
+        "seconds": 2.749453500029631,
+        "ms_per_iteration": 0.7285250397534793,
+        "transfer_back_seconds": 0.0005487999878823757,
+        "relative_residual_host": 9.731787342449514e-10,
+        "cpu_seconds_converted": [
+          24.95914814772,
+          29.22046612416
+        ],
+        "speedup_converted_excl_transfer": [
+          9.077857889741002,
+          10.627736066038247
+        ],
+        "speedup_converted_incl_transfer": [
+          9.014771129652654,
+          10.553878395690914
+        ]
+      },
+      "own_cusparse": {
+        "info": 0,
+        "iterations": 3775,
+        "seconds": 2.7772865999722853,
+        "ms_per_iteration": 0.7357050595953073,
+        "transfer_back_seconds": 0.0005926999729126692,
+        "relative_residual_host": 9.605737512917623e-10,
+        "cpu_seconds_converted": [
+          24.965761594499998,
+          29.228208696
+        ],
+        "speedup_converted_excl_transfer": [
+          8.989263691672704,
+          10.524016029275362
+        ],
+        "speedup_converted_incl_transfer": [
+          8.9272742361893,
+          10.45144300822162
+        ]
+      },
+      "own_raw": {
+        "info": 0,
+        "iterations": 3774,
+        "seconds": 5.261968599981628,
+        "ms_per_iteration": 1.3942683094810886,
+        "transfer_back_seconds": 0.0006221000803634524,
+        "relative_residual_host": 1.0052514294490545e-09,
+        "cpu_seconds_converted": [
+          24.95914814772,
+          29.22046612416
+        ],
+        "speedup_converted_excl_transfer": [
+          4.743309974865138,
+          5.553143385207966
+        ],
+        "speedup_converted_incl_transfer": [
+          4.725963018282233,
+          5.532834753110906
+        ]
+      },
+      "own_raw_nofma": {
+        "info": 0,
+        "iterations": 3775,
+        "seconds": 4.852221900015138,
+        "ms_per_iteration": 1.2853567947059967,
+        "transfer_back_seconds": 0.0006747000152245164,
+        "relative_residual_host": 9.38619806426851e-10,
+        "cpu_seconds_converted": [
+          24.965761594499998,
+          29.228208696
+        ],
+        "speedup_converted_excl_transfer": [
+          5.145222561734473,
+          6.023675194225724
+        ],
+        "speedup_converted_incl_transfer": [
+          5.124767731113549,
+          5.999728075450009
+        ]
+      }
+    },
+    "solution_max_rel_diff_vs_own_raw_nofma": {
+      "cusparse": 1.643451422398665e-12,
+      "raw": 4.539275022368738e-13
+    },
+    "vram_pool_total_mib": 307.33642578125
+  },
+  "F2000_thin5mm_h2_step20_d0": {
+    "name": "F2000_thin5mm_h2_step20_d0",
+    "free_dofs": 359751,
+    "nnz": 25704621,
+    "rtol": 1e-09,
+    "measured_at": "2026-10-04T22:21:26+09:00",
+    "host_ram_available_gb": 5.180912017822266,
+    "vram_free_mib_before": 14848.0,
+    "transfer_to_gpu_seconds": 0.06889029999729246,
+    "spmv": {
+      "cusparse": {
+        "ms": 0.8349739998811856,
+        "ns_per_nnz": 0.03248341999989751,
+        "max_rel_diff_vs_cpu": 7.046843675372002e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw": {
+        "ms": 1.904260499868542,
+        "ns_per_nnz": 0.0740824188720208,
+        "max_rel_diff_vs_cpu": 2.6425663782645006e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw_nofma": {
+        "ms": 1.7207844997756183,
+        "ns_per_nnz": 0.066944558325743,
+        "max_rel_diff_vs_cpu": 0.0,
+        "bit_identical_to_cpu": true
+      }
+    },
+    "cg": {
+      "cupyx": {
+        "info": 0,
+        "iterations": 3551,
+        "seconds": 3.652005400042981,
+        "ms_per_iteration": 1.028444212909879,
+        "transfer_back_seconds": 0.0009130999678745866,
+        "relative_residual_host": 9.982035297153894e-10,
+        "cpu_seconds_converted": [
+          37.42361476011,
+          43.81301240208
+        ],
+        "speedup_converted_excl_transfer": [
+          10.247414957182034,
+          11.996973608408235
+        ],
+        "speedup_converted_incl_transfer": [
+          10.055222277949385,
+          11.771967544916354
+        ]
+      },
+      "own_cusparse": {
+        "info": 0,
+        "iterations": 3552,
+        "seconds": 3.7120338999666274,
+        "ms_per_iteration": 1.0450545889545686,
+        "transfer_back_seconds": 0.0008835999760776758,
+        "relative_residual_host": 9.761723594203219e-10,
+        "cpu_seconds_converted": [
+          37.43415365472,
+          43.825350620159995
+        ],
+        "speedup_converted_excl_transfer": [
+          10.08453981388924,
+          11.806290513821548
+        ],
+        "speedup_converted_incl_transfer": [
+          9.898481264783983,
+          11.588465870966614
+        ]
+      },
+      "own_raw": {
+        "info": 0,
+        "iterations": 3552,
+        "seconds": 7.616419899975881,
+        "ms_per_iteration": 2.1442623592274437,
+        "transfer_back_seconds": 0.000826600007712841,
+        "relative_residual_host": 9.73406772553137e-10,
+        "cpu_seconds_converted": [
+          37.43415365472,
+          43.825350620159995
+        ],
+        "speedup_converted_excl_transfer": [
+          4.914927767419774,
+          5.754061776491443
+        ],
+        "speedup_converted_incl_transfer": [
+          4.8703470454511155,
+          5.701869711747647
+        ]
+      },
+      "own_raw_nofma": {
+        "info": 0,
+        "iterations": 3551,
+        "seconds": 6.963096500025131,
+        "ms_per_iteration": 1.960883272324734,
+        "transfer_back_seconds": 0.0008903000270947814,
+        "relative_residual_host": 9.990994500331114e-10,
+        "cpu_seconds_converted": [
+          37.42361476011,
+          43.81301240208
+        ],
+        "speedup_converted_excl_transfer": [
+          5.374565002793647,
+          6.292173661807196
+        ],
+        "speedup_converted_incl_transfer": [
+          5.321238268168585,
+          6.229742362733953
+        ]
+      }
+    },
+    "solution_max_rel_diff_vs_own_raw_nofma": {
+      "cusparse": 8.09546903651003e-13,
+      "raw": 8.561480694632885e-13
+    },
+    "vram_pool_total_mib": 449.93310546875
+  },
+  "F2000_thick10mm_h2_step20_d0": {
+    "name": "F2000_thick10mm_h2_step20_d0",
+    "free_dofs": 411867,
+    "nnz": 30519801,
+    "rtol": 1e-09,
+    "measured_at": "2026-10-04T23:03:47+09:00",
+    "host_ram_available_gb": 5.830078125,
+    "vram_free_mib_before": 15172.0,
+    "transfer_to_gpu_seconds": 0.1605328000150621,
+    "spmv": {
+      "cusparse": {
+        "ms": 1.0292370000388473,
+        "ns_per_nnz": 0.033723581619645795,
+        "max_rel_diff_vs_cpu": 6.547009291536219e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw": {
+        "ms": 2.353387500043027,
+        "ns_per_nnz": 0.07711018495969311,
+        "max_rel_diff_vs_cpu": 3.741148166592125e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw_nofma": {
+        "ms": 2.1146009996300563,
+        "ns_per_nnz": 0.06928619880680272,
+        "max_rel_diff_vs_cpu": 0.0,
+        "bit_identical_to_cpu": true
+      }
+    },
+    "cg": {
+      "cupyx": {
+        "info": 0,
+        "iterations": 3016,
+        "seconds": 3.8440810000756755,
+        "ms_per_iteration": 1.2745626658075848,
+        "transfer_back_seconds": 0.0010737000266090035,
+        "relative_residual_host": 9.944361765361728e-10,
+        "cpu_seconds_converted": [
+          37.739565124559995,
+          44.182905511680005
+        ],
+        "speedup_converted_excl_transfer": [
+          9.817578017689286,
+          11.493749874367946
+        ],
+        "speedup_converted_incl_transfer": [
+          9.421495092528914,
+          11.030043035155805
+        ]
+      },
+      "own_cusparse": {
+        "info": 0,
+        "iterations": 3016,
+        "seconds": 3.9833671000087634,
+        "ms_per_iteration": 1.3207450596846033,
+        "transfer_back_seconds": 0.0010151000460609794,
+        "relative_residual_host": 9.968911293010557e-10,
+        "cpu_seconds_converted": [
+          37.739565124559995,
+          44.182905511680005
+        ],
+        "speedup_converted_excl_transfer": [
+          9.474287500260012,
+          11.09184878079221
+        ],
+        "speedup_converted_incl_transfer": [
+          9.105027515382988,
+          10.659544408253257
+        ]
+      },
+      "own_raw": {
+        "info": 0,
+        "iterations": 3017,
+        "seconds": 8.051455199951306,
+        "ms_per_iteration": 2.6686957905042443,
+        "transfer_back_seconds": 0.0010452000424265862,
+        "relative_residual_host": 9.64160627708499e-10,
+        "cpu_seconds_converted": [
+          37.75207824297,
+          44.19755501616
+        ],
+        "speedup_converted_excl_transfer": [
+          4.688851556076263,
+          5.489387187601479
+        ],
+        "speedup_converted_incl_transfer": [
+          4.5966060678933545,
+          5.381392469728805
+        ]
+      },
+      "own_raw_nofma": {
+        "info": 0,
+        "iterations": 3016,
+        "seconds": 7.296454299939796,
+        "ms_per_iteration": 2.4192487731895875,
+        "transfer_back_seconds": 0.0009925999911502004,
+        "relative_residual_host": 1.0014096287673865e-09,
+        "cpu_seconds_converted": [
+          37.739565124559995,
+          44.182905511680005
+        ],
+        "speedup_converted_excl_transfer": [
+          5.172315699266614,
+          6.055393989385305
+        ],
+        "speedup_converted_incl_transfer": [
+          5.060293355965182,
+          5.924245880154362
+        ]
+      }
+    },
+    "solution_max_rel_diff_vs_own_raw_nofma": {
+      "cusparse": 3.9085149552056844e-13,
+      "raw": 7.63034762193115e-13
+    },
+    "vram_pool_total_mib": 388.95361328125
+  },
+  "F2000_thin5mm_h1.8_step20_d0": {
+    "name": "F2000_thin5mm_h1.8_step20_d0",
+    "free_dofs": 489483,
+    "nnz": 35620677,
+    "rtol": 1e-09,
+    "measured_at": "2026-10-04T23:04:12+09:00",
+    "host_ram_available_gb": 12.78493881225586,
+    "vram_free_mib_before": 14742.0,
+    "transfer_to_gpu_seconds": 0.10547079995740205,
+    "spmv": {
+      "cusparse": {
+        "ms": 1.1705815000459552,
+        "ns_per_nnz": 0.03286241583914745,
+        "max_rel_diff_vs_cpu": 5.966604560001709e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw": {
+        "ms": 2.672950499691069,
+        "ns_per_nnz": 0.0750392952860236,
+        "max_rel_diff_vs_cpu": 2.5571162400007327e-16,
+        "bit_identical_to_cpu": false
+      },
+      "raw_nofma": {
+        "ms": 2.413001999957487,
+        "ns_per_nnz": 0.06774160973856526,
+        "max_rel_diff_vs_cpu": 0.0,
+        "bit_identical_to_cpu": true
+      }
+    },
+    "cg": {
+      "cupyx": {
+        "info": 0,
+        "iterations": 3608,
+        "seconds": 5.175142499967478,
+        "ms_per_iteration": 1.4343521341373275,
+        "transfer_back_seconds": 0.0016563000390306115,
+        "relative_residual_host": 9.968570697695675e-10,
+        "cpu_seconds_converted": [
+          52.69295507256,
+          61.68931325568
+        ],
+        "speedup_converted_excl_transfer": [
+          10.181933168582534,
+          11.920312002242966
+        ],
+        "speedup_converted_incl_transfer": [
+          9.975438412480878,
+          11.678562043880053
+        ]
+      },
+      "own_cusparse": {
+        "info": 0,
+        "iterations": 3608,
+        "seconds": 5.287776899989694,
+        "ms_per_iteration": 1.465570094232177,
+        "transfer_back_seconds": 0.0011418999638408422,
+        "relative_residual_host": 9.985292670276736e-10,
+        "cpu_seconds_converted": [
+          52.69295507256,
+          61.68931325568
+        ],
+        "speedup_converted_excl_transfer": [
+          9.965048841728306,
+          11.666398643974603
+        ],
+        "speedup_converted_incl_transfer": [
+          9.768103340817277,
+          11.435828301444616
+        ]
+      },
+      "own_raw": {
+        "info": 0,
+        "iterations": 3608,
+        "seconds": 10.925558499991894,
+        "ms_per_iteration": 3.0281481430132744,
+        "transfer_back_seconds": 0.0011631000088527799,
+        "relative_residual_host": 9.994908651675604e-10,
+        "cpu_seconds_converted": [
+          52.69295507256,
+          61.68931325568
+        ],
+        "speedup_converted_excl_transfer": [
+          4.822907229190992,
+          5.646330414662625
+        ],
+        "speedup_converted_incl_transfer": [
+          4.776290438223312,
+          5.59175465938339
+        ]
+      },
+      "own_raw_nofma": {
+        "info": 0,
+        "iterations": 3608,
+        "seconds": 10.017646300024353,
+        "ms_per_iteration": 2.776509506658634,
+        "transfer_back_seconds": 0.0011395999463275075,
+        "relative_residual_host": 9.985964125490096e-10,
+        "cpu_seconds_converted": [
+          52.69295507256,
+          61.68931325568
+        ],
+        "speedup_converted_excl_transfer": [
+          5.260013529568507,
+          6.158064619982643
+        ],
+        "speedup_converted_incl_transfer": [
+          5.204624560036521,
+          6.093218997115927
+        ]
+      }
+    },
+    "solution_max_rel_diff_vs_own_raw_nofma": {
+      "cusparse": 4.3124582790311594e-13,
+      "raw": 2.109331799925341e-13
+    },
+    "vram_pool_total_mib": 628.892578125
+  }
+}

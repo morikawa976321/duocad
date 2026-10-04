@@ -27,12 +27,18 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
   ファイル名だけの制約は保存/開くだけの契約)
 - STLは**偏差を指定できる**(細かくすると必ずファイルが大きくなる)
 - `state.parameters` に名前つきの値が出て、`set_parameter` で形が追随する
-- **`list_documents` が `models_dir` の中身(名前/更新日時)を返す**。件数・サイズは返さない
+- **`list_documents` が `models_dir` の中身(名前/更新日時/作成日時/サムネイルの版)を返す**。
+  件数・サイズ・画像は返さない
 - **`copy_document` / `delete_document`** は一覧の行からの複製・削除(issue #17)。どちらも
   verbではなく文書を変えない。複製先が在れば拒否、編集中のファイルの削除は拒否。AIには開けない
+- **作成日時は文書のJSONが持つ**(`created`)。上書き・改名・開き直しで変わらず、複製は新しい
+  時刻になる。持たない既存ファイルは None のまま(更新日時で埋めない)
+- **サムネイルは `models/.thumbnails/` の付随ファイル**で、改名・複製・削除に付いていく。
+  受け取るのはPNGだけ。AIには開けない
 """
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -586,7 +592,10 @@ def test_copy_document_duplicates_the_file_and_leaves_the_document_alone(session
 
     assert answer["type"] == "file" and answer["action"] == "copy"
     assert answer["name"] == "b.json" and answer["source"] == "a.json"
-    assert (session.models_dir / "b.json").read_bytes() == (session.models_dir / "a.json").read_bytes()
+    copied = json.loads((session.models_dir / "b.json").read_text(encoding="utf-8"))
+    original = json.loads((session.models_dir / "a.json").read_text(encoding="utf-8"))
+    assert copied["operations"] == original["operations"]
+    assert copied["created"] >= original["created"], "複製は新しいファイル(作成日時は複製した時刻)"
     assert session.state_meta()["current_name"] == "mine.json", "複製で編集中のファイルが動いた"
     assert len(session.document.log.entries) == log_before, "複製がverbとしてログに載った"
     assert clients[1].payloads == [], "複製は状態配信ではない(要求した接続にだけ返る)"
@@ -660,8 +669,9 @@ def test_copy_and_delete_are_not_exposed_to_ai(session: Session) -> None:
 # --------------------------------------------------------------------------------------
 # 一覧(要件3: 名前/更新日時)
 # --------------------------------------------------------------------------------------
-def test_list_documents_reports_name_and_mtime_only(session: Session) -> None:
-    """`list_documents` が `models_dir` の中身を名前と更新日時だけで返す(件数・サイズは返さない)。"""
+def test_list_documents_reports_names_and_dates_only(session: Session) -> None:
+    """`list_documents` が `models_dir` の中身を名前・更新日時・作成日時・サムネイルの版で返す
+    (件数・サイズ・画像そのものは返さない)。"""
     _box(session)
     session.save_document("a.json")
     session.new_document()  # a.json を編集中から外す(以後の自動保存が a.json へ行かないように)
@@ -677,8 +687,10 @@ def test_list_documents_reports_name_and_mtime_only(session: Session) -> None:
     by_name = {item["name"]: item for item in answer["files"]}
     # 無題の文書が最初の変更で自動保存した `untitled-<n>.json` も一覧に居る(意図どおり)。
     assert set(by_name) == {"a.json", "b.json", "untitled-1.json", "untitled-2.json"}
-    assert set(by_name["a.json"]) == {"name", "mtime"}
+    assert set(by_name["a.json"]) == {"name", "mtime", "created", "thumb"}
     assert by_name["a.json"]["mtime"] > 0
+    assert by_name["a.json"]["created"] > 0
+    assert by_name["a.json"]["thumb"] is None, "撮っていない文書にサムネイルの版がある"
     assert clients[1].payloads == [], "一覧も状態配信ではない(要求した接続にだけ返る)"
 
 
@@ -699,6 +711,205 @@ def test_list_documents_creates_the_folder_and_skips_unreadable_files(session: S
 
     (answer, _clients) = _browser(session, script)
     assert [item["name"] for item in answer["files"]] == ["good.json", "untitled-1.json"]
+
+
+# --------------------------------------------------------------------------------------
+# 作成日時(文書のJSONの `created`)
+# --------------------------------------------------------------------------------------
+def _created(session: Session, name: str):
+    return json.loads((session.models_dir / name).read_text(encoding="utf-8")).get("created")
+
+
+def test_created_is_stamped_once_and_survives_autosave_rename_and_reopen(session: Session) -> None:
+    """落ちたら: 作成日時が保存のたびに書き換わる(=更新日時と同じになる)、または改名・開き直しで消える。"""
+    _box(session)
+    session.save_document("a.json")
+    stamped = _created(session, "a.json")
+    assert stamped is not None and stamped > 0
+
+    session.sketch_create("XY")  # 自動保存(上書き)
+    assert _created(session, "a.json") == stamped
+    session.rename_document("b.json")
+    assert _created(session, "b.json") == stamped
+    session.new_document()
+    session.open_document("b.json")
+    session.sketch_create("XY")
+    assert _created(session, "b.json") == stamped
+    assert {item["name"]: item["created"] for item in session.list_documents()["files"]}["b.json"] == stamped
+
+
+def test_an_untitled_document_is_stamped_by_its_first_autosave(session: Session) -> None:
+    _box(session)
+    assert session.current_name == "untitled-1.json"
+    assert _created(session, "untitled-1.json") is not None
+
+
+def test_a_file_without_created_keeps_none_instead_of_borrowing_the_mtime(session: Session) -> None:
+    """落ちたら: 作成日時を持たない既存ファイルに、開いて保存しただけで作り物の作成日時が入る。"""
+    _box(session)
+    session.save_document("old.json")
+    payload = json.loads((session.models_dir / "old.json").read_text(encoding="utf-8"))
+    del payload["created"]
+    (session.models_dir / "old.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    session.new_document()
+    session.open_document("old.json")
+    session.sketch_create("XY")  # 自動保存(上書き)
+    assert _created(session, "old.json") is None
+    by_name = {item["name"]: item for item in session.list_documents()["files"]}
+    assert by_name["old.json"]["created"] is None
+
+
+def test_a_copy_gets_its_own_created_instead_of_the_source_one(session: Session) -> None:
+    """落ちたら: 複製が元のバイト列をそのまま写していて、作成日時が元の文書のままになる。"""
+    _box(session)
+    session.save_document("a.json")
+    payload = json.loads((session.models_dir / "a.json").read_text(encoding="utf-8"))
+    payload["created"] = 1.0  # 1970年 —— 今の時刻とは取り違えようがない
+    (session.models_dir / "a.json").write_text(json.dumps(payload), encoding="utf-8")
+    session.new_document()
+
+    session.copy_document("a.json", "b.json")
+    assert _created(session, "b.json") > 1.0
+    assert _created(session, "a.json") == 1.0, "複製が元の作成日時を書き換えた"
+
+
+# --------------------------------------------------------------------------------------
+# サムネイル(`models/.thumbnails/` の付随ファイル)
+# --------------------------------------------------------------------------------------
+_PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32).decode("ascii")
+
+
+def _thumbnail(session: Session, name: str) -> Path:
+    return session.models_dir / ".thumbnails" / f"{name}.png"
+
+
+def test_a_thumbnail_round_trips_and_is_listed_by_version_only(session: Session) -> None:
+    """落ちたら: 預けた絵が返らない、一覧に版が出ない、または付随ファイルが一覧に文書として混ざる。"""
+    _box(session)
+    session.save_document("a.json")
+    log_before = len(session.document.log.entries)
+
+    async def script(send):
+        await send({"cmd": "save_thumbnail", "name": "a.json", "png": _PNG})
+        return await send({"cmd": "get_thumbnail", "name": "a.json"})
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "file" and answer["action"] == "thumbnail"
+    assert answer["png"] == _PNG and answer["thumb"] > 0
+    saved = clients[0].payloads[0]
+    assert saved["action"] == "save_thumbnail" and saved["saved"] is True
+    assert saved["thumb"] == answer["thumb"]
+    assert clients[1].payloads == [], "サムネイルは状態配信ではない"
+    by_name = {item["name"]: item for item in session.list_documents()["files"]}
+    # 無題の文書が最初の変更で自動保存した `untitled-1.json` も居る(意図どおり)。
+    assert set(by_name) == {"a.json", "untitled-1.json"}
+    assert by_name["a.json"]["thumb"] == answer["thumb"]
+    assert len(session.document.log.entries) == log_before, "サムネイルがverbとしてログに載った"
+
+
+def test_an_empty_png_removes_the_thumbnail(session: Session) -> None:
+    _box(session)
+    session.save_document("a.json")
+    session.save_thumbnail("a.json", _PNG)
+    assert session.save_thumbnail("a.json", "")["thumb"] is None
+    assert not _thumbnail(session, "a.json").exists()
+    assert session.get_thumbnail("a.json")["png"] is None
+
+
+def test_a_thumbnail_must_be_a_small_png_inside_models_dir(session: Session) -> None:
+    """落ちたら: PNG以外・巨大なデータ・models/ の外を指す名前がディスクへ書かれる。"""
+    _box(session)
+    session.save_document("a.json")
+    with pytest.raises(ValueError):
+        session.save_thumbnail("a.json", base64.b64encode(b"GIF89a....").decode("ascii"))
+    with pytest.raises(ValueError):
+        session.save_thumbnail("a.json", "not base64 !!")
+    with pytest.raises(ValueError):
+        huge = b"\x89PNG\r\n\x1a\n" + b"\x00" * (300 * 1024)
+        session.save_thumbnail("a.json", base64.b64encode(huge).decode("ascii"))
+    with pytest.raises(ValueError):
+        session.save_thumbnail("../a.json", _PNG)
+    assert not (session.models_dir / ".thumbnails").exists()
+
+
+def test_a_thumbnail_for_a_missing_document_is_skipped_not_refused(session: Session) -> None:
+    """落ちたら: 撮ってから送るまでに改名が挟まっただけで、人に通知が出る(または孤児の絵が残る)。"""
+    answer = session.save_thumbnail("gone.json", _PNG)
+    assert answer["saved"] is False
+    assert not _thumbnail(session, "gone.json").exists()
+
+
+def test_thumbnails_follow_rename_copy_and_delete(session: Session) -> None:
+    """落ちたら: 改名・複製・削除の後に、絵が別の文書に付いたまま・消えたまま・残ったままになる。"""
+    _box(session)
+    session.save_document("a.json")
+    session.save_thumbnail("a.json", _PNG)
+    version = session.get_thumbnail("a.json")["thumb"]
+
+    session.rename_document("b.json")
+    assert not _thumbnail(session, "a.json").exists()
+    assert session.get_thumbnail("b.json")["png"] == _PNG
+
+    session.copy_document("b.json", "c.json")
+    copied = session.get_thumbnail("c.json")
+    assert copied["png"] == _PNG
+    assert copied["thumb"] == version, "複製で版が変わると、画面が同じ絵を取り直す"
+
+    session.delete_document("c.json")
+    assert not _thumbnail(session, "c.json").exists()
+
+
+def test_a_new_file_does_not_inherit_a_stale_thumbnail_of_the_same_name(session: Session) -> None:
+    """落ちたら: 外で消された文書の絵が、同じ名前で新しく作った文書の絵として出る。"""
+    _box(session)
+    session.save_document("a.json")
+    session.save_thumbnail("a.json", _PNG)
+    session.new_document()
+    (session.models_dir / "a.json").unlink()  # 外で消された(付随ファイルは残る)
+    _box(session)
+    session.rename_document("a.json")
+    assert session.get_thumbnail("a.json")["png"] is None
+
+
+def test_renaming_onto_a_stale_thumbnail_drops_it(session: Session) -> None:
+    """落ちたら: 外で消された文書の絵が、別の文書をその名前へ改名したときに引き継がれる。"""
+    _box(session)
+    session.save_document("gone.json")
+    session.save_thumbnail("gone.json", _PNG)
+    session.new_document()
+    (session.models_dir / "gone.json").unlink()  # 外で消された(付随ファイルは残る)
+    _box(session)
+    session.save_document("mine.json")  # 改名元のファイルがある経路
+    session.rename_document("gone.json")
+    assert session.get_thumbnail("gone.json")["png"] is None
+
+
+def test_a_thumbnail_that_cannot_be_written_is_reported_not_raised(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """落ちたら: 付随ファイルを書けないだけで、人が何もしていないのにエラーの通知が出る。"""
+    import duocad.session as session_module
+
+    _box(session)
+    session.save_document("a.json")
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError("別のプログラムが開いている")
+
+    monkeypatch.setattr(session_module.os, "replace", refuse)
+    answer = session.save_thumbnail("a.json", _PNG)
+    assert answer["saved"] is False and answer["thumb"] is None
+    assert any("サムネイル" in warning for warning in session.warnings)
+
+
+def test_thumbnails_are_not_exposed_to_ai(session: Session) -> None:
+    from duocad import catalog
+
+    for name in ("save_thumbnail", "get_thumbnail"):
+        assert name not in catalog.tool_names()
+        assert name in catalog.websocket_command_names()
 
 
 def test_relative_export_paths_go_under_exports_dir(session: Session) -> None:

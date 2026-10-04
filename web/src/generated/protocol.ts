@@ -44,6 +44,8 @@ export const COMMAND_CATEGORY = {
   list_documents: 'file',
   copy_document: 'file',
   delete_document: 'file',
+  save_thumbnail: 'file',
+  get_thumbnail: 'file',
   undo: 'history',
   redo: 'history',
   get_state: 'protocol',
@@ -101,6 +103,8 @@ export interface CommandArguments {
   list_documents: Record<string, never>
   copy_document: { source: string; dest: string }
   delete_document: { name: string }
+  save_thumbnail: { name: string; png: string }
+  get_thumbnail: { name: string }
   undo: Record<string, never>
   redo: Record<string, never>
   get_state: Record<string, never>

@@ -1,0 +1,173 @@
+{
+  "numpy": "2.4.6",
+  "openblas_threads": 14,
+  "lengths": [
+    17,
+    1000,
+    9999,
+    10000,
+    10001,
+    10016,
+    32574,
+    53496,
+    105033,
+    202359,
+    226758,
+    359751,
+    1200007,
+    2437998
+  ],
+  "variants": [
+    {
+      "fma_main": true,
+      "fma_tail": true,
+      "reduce_by_register": true,
+      "failed_lengths": [
+        1000,
+        10001,
+        10016,
+        53496,
+        105033,
+        202359
+      ],
+      "all_match": false
+    },
+    {
+      "fma_main": true,
+      "fma_tail": true,
+      "reduce_by_register": false,
+      "failed_lengths": [
+        17,
+        1000,
+        9999,
+        10000,
+        10001,
+        10016,
+        32574,
+        53496,
+        105033,
+        202359,
+        226758,
+        359751,
+        1200007,
+        2437998
+      ],
+      "all_match": false
+    },
+    {
+      "fma_main": true,
+      "fma_tail": false,
+      "reduce_by_register": true,
+      "failed_lengths": [],
+      "all_match": true
+    },
+    {
+      "fma_main": true,
+      "fma_tail": false,
+      "reduce_by_register": false,
+      "failed_lengths": [
+        17,
+        1000,
+        9999,
+        10000,
+        10001,
+        10016,
+        32574,
+        53496,
+        105033,
+        202359,
+        226758,
+        359751,
+        1200007,
+        2437998
+      ],
+      "all_match": false
+    },
+    {
+      "fma_main": false,
+      "fma_tail": true,
+      "reduce_by_register": true,
+      "failed_lengths": [
+        1000,
+        9999,
+        10000,
+        10001,
+        10016,
+        32574,
+        53496,
+        105033,
+        202359,
+        226758,
+        359751,
+        1200007,
+        2437998
+      ],
+      "all_match": false
+    },
+    {
+      "fma_main": false,
+      "fma_tail": true,
+      "reduce_by_register": false,
+      "failed_lengths": [
+        17,
+        1000,
+        9999,
+        10000,
+        10001,
+        10016,
+        32574,
+        53496,
+        105033,
+        202359,
+        226758,
+        359751,
+        1200007,
+        2437998
+      ],
+      "all_match": false
+    },
+    {
+      "fma_main": false,
+      "fma_tail": false,
+      "reduce_by_register": true,
+      "failed_lengths": [
+        1000,
+        9999,
+        10000,
+        10001,
+        10016,
+        32574,
+        53496,
+        105033,
+        202359,
+        226758,
+        359751,
+        1200007,
+        2437998
+      ],
+      "all_match": false
+    },
+    {
+      "fma_main": false,
+      "fma_tail": false,
+      "reduce_by_register": false,
+      "failed_lengths": [
+        17,
+        1000,
+        9999,
+        10000,
+        10001,
+        10016,
+        32574,
+        53496,
+        105033,
+        202359,
+        226758,
+        359751,
+        1200007,
+        2437998
+      ],
+      "all_match": false
+    }
+  ]
+}

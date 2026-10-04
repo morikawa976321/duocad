@@ -65,6 +65,7 @@
     runsOutsideSketch,
     runsWithoutSketchId,
   } from './commands/sketch'
+  import ChannelBadge from './ChannelBadge.svelte'
   import FilesPanel from './FilesPanel.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
   import Toast, { fail, errorLog } from './Toast.svelte'
@@ -303,6 +304,8 @@
     release: releasePending,
     note,
     panelOpen: () => dataPanelOpen,
+    captureThumbnail: () => viewport?.captureThumbnail() ?? null,
+    connected: () => status === 'open',
   })
   /**
    * 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。**サーバの写し**
@@ -366,6 +369,13 @@
   const session = createSession({
     onState: handleState,
     onError: (message, where) => {
+      // **サムネイルは裏の要求**(`documentFiles.svelte.ts`)。人が出した操作の応答待ち
+      // (`pendingOp`)を解かない —— 解くと、待っていた操作の確定より先に次の Enter が通る。
+      if (where === 'save_thumbnail' || where === 'get_thumbnail') {
+        files.dropThumbnailRequests()
+        fail(`エラー[${where}] ${message}`)
+        return
+      }
       // `where` はどのverbで失敗したかを言う印だが、**`send` はverbではない**
       // (「繋がっていないので送れなかった」。2026-08-27にヘッダの常設ステータスを外して以来、
       // 繋がっていないことに気づく唯一の札になった)。内部の語を頭に付けると、
@@ -411,6 +421,7 @@
       if (next !== 'open') {
         edgesAsked.clear()
         verticesAsked.clear()
+        files.dropThumbnailRequests()
         // 実行の押下への返事(`optimize_status` / `optimize_error`)はもう来ない。走っているかは
         // 繋ぎ直したときにサーバが最初に送る `optimize_status` で取り直す。
         optimizeStarting = false
@@ -428,17 +439,42 @@
     onOptimizeConditions: (report) => (optimizeConditions = report),
     onOptimizeResolution: (payload) => (optimizeResolution = payload),
     onOptimizeStatus: (running, cancelling) => {
+      // **控えを確定するのはサーバが受け付けてから**(押した瞬間に控えると、「別の文書で既に走っている」と
+      // 断られた押下が、走っている実行の控えを上書きする)。
+      if (running && optimizeStarting && optimizeStartingSettings !== null) optimizeRunSettings = optimizeStartingSettings
+      optimizeStartingSettings = null
       optimizeRunning = running
       optimizeStarting = false
       // **中断中の印は「走っている間」だけ**。走り終わったら畳む —— 畳まないと、
       // 次に実行を押した瞬間に中断表示から始まって見える。
       optimizeCancelling = running && cancelling ? true : running ? optimizeCancelling : false
+      // `running` は「**いま開いている文書で**走っているか」(サーバの `optimization_status`)。
+      // 走らせたまま別の文書へ移ると偽になるので、その文書に進捗の行を残さない。
+      if (!running) {
+        optimizeProgress = null
+        return
+      }
+      if (optimizeRunSettings !== null && optimizeRunSettings.name === files.currentName) {
+        optimizeStepIndex = optimizeRunSettings.stepIndex
+        optimizeMinWidthMm = optimizeRunSettings.minWidthMm
+      }
+      // 戻ってきた直後は、文書の差し替えで欄が空になっている(`resetOptimizeView`)。取り直しの
+      // `$effect` は実行中には問い合わせないので、ここで1回だけ頼む —— 頼まないと、普通のモードから
+      // 戻ったときに条件と解像度が実行の終わりまで「確認している…」のままになる。
+      if (optimizeConditions === null || optimizeResolution === null) {
+        session.optimizeConditions()
+        session.optimizeResolution()
+      }
+      // 走らせている文書へ戻ってきたら、実行中の表示(進捗・中断ボタン)が見えるモードへ入る。
+      // 普通のモードのままだと、編集が断られる理由が画面に無い。
+      if (mode.kind === 'idle') setMode({ kind: 'optimize' })
     },
     onOptimizeProgress: (event) => (optimizeProgress = event),
     onOptimizeDebug: handleOptimizeDebug,
     onOptimizeResult: handleOptimizeResult,
     onOptimizeError: (message, problems, cancelled, alreadyRunning) => {
       optimizeStarting = false
+      optimizeStartingSettings = null
       // **別の実行が走っているという断りは、その実行の表示を消さない**(進捗の行も通知も
       // その実行のもの)。トーストで知らせるだけにする。
       if (alreadyRunning) {
@@ -484,8 +520,14 @@
   const optimizeBusy = $derived(optimizeRunning || optimizeStarting)
   let optimizeCancelling = $state(false)
   let optimizeProgress = $state<OptimizeProgress | null>(null)
+  type OptimizeRunSettings = { name: string | null; stepIndex: number; minWidthMm: number | null }
   /** **次に走らせるまで消えない通知**(トーストは時間で消えるので、結果の信用度はこちら)。 */
   let optimizeNotice = $state<OptimizeNotice | null>(null)
+  /** 走らせたときの設定と文書。別の文書へ移ると欄は既定へ戻る(`resetOptimizeView`)ので、走らせた文書へ
+   *  戻ってきたときにここから戻す —— 戻さないと、実行中なのに走っていない設定が欄に出る。 */
+  let optimizeRunSettings: OptimizeRunSettings | null = null
+  /** 実行を押してからサーバが受け付けるまでの控え(`onOptimizeStatus` が `optimizeRunSettings` へ確定する)。 */
+  let optimizeStartingSettings: OptimizeRunSettings | null = null
 
   /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す(`stepAt`。OptimizePanel と同じ丸め)。 */
   const optimizeStep = $derived(stepAt(optimizeResolution?.steps ?? [], optimizeStepIndex))
@@ -498,6 +540,7 @@
     // **前の実行のデバッグ表示を捨ててから走らせる。** 残すと、新しい条件を解いている
     // あいだ古い塊が重なって見え、切り分けの道具が切り分けを妨げる。
     clearOptimizeDebug()
+    optimizeStartingSettings = { name: files.currentName, stepIndex: optimizeStepIndex, minWidthMm: optimizeMinWidthMm }
     session.runOptimization({
       elementSizeMm: optimizeStep?.element_size_mm ?? null,
       minWidthMm: optimizeMinWidthMm,
@@ -2111,6 +2154,8 @@
 
 <div class="app">
   <header>
+    <!-- 開発版の札 / 安定版の更新ボタン(`ChannelBadge.svelte`)。左端に置く —— 窓を取り違えたら最初に目に入る位置。 -->
+    <ChannelBadge />
     <!-- 左サイドバー(ファイル一覧)の開閉。**実物をクリックできない対象なのでボタンを置く**
          (UI指針1「実物クリックできるものにボタンを作らない」の裏返し —— パネルそのものは
          畳むと画面から消えるので、外に手を出す場所が要る)。 -->
@@ -2302,13 +2347,14 @@
           documents={files.list}
           currentName={files.currentName}
           onRename={files.rename}
-          locked={optimizeBusy}
           onOpen={files.open}
           onNew={files.create}
           onCopy={files.copy}
           onDelete={files.remove}
           onExportStep={files.exportStep}
           onExportStl={files.exportStl}
+          thumbnailUrl={files.thumbnailUrl}
+          onNeedThumbnail={files.wantThumbnail}
         />
       </aside>
     {/if}

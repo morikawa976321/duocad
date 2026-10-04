@@ -15,8 +15,13 @@ from __future__ import annotations
 
 import functools
 import inspect
+import base64
+import binascii
+import json
 import os
+import shutil
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
@@ -52,16 +57,31 @@ _RESERVED_WINDOWS_NAMES = frozenset({
 # から読む(読み込みのverbは1本だけ)。読み込むSTEPのパスを既定として持つ場所は無いので、smokeスクリプトが使う
 # PCケースのパスは `web/scripts/models.mjs` が持つ。
 class DocumentBusy(RuntimeError):
-    """形状最適化の実行中に、文書を変える操作が来た(`Session._edits_document`)。
+    """形状最適化を走らせている文書に、文書を変える操作が来た(`Session._edits_document`)。
 
     最適化は別スレッドで**開始時の文書を持ったまま**数分〜数時間走り、終わりにその文書へ結果を足して
-    保持・除外の形を読み直す。その間に文書を変える・差し替えると、結果が別の文書へ入る・古い条件の形が
-    足される・Undo した条件のまま結果が入る(issue #26)。選択・表示の切り替え・保存・書き出しは通す。
+    保持・除外の形を読み直す。その間にその文書を変えると、古い条件の形が足される・Undo した条件のまま
+    結果が入る(issue #26)。選択・表示の切り替え・保存・書き出しは通す。**別のファイルを開いて編集する
+    のは通す** —— 結果は走らせた文書のファイルへ届く(`deliver_optimization_result`)。
     """
 
 
+#: サムネイルの置き場(`models_dir` の下。一覧は `models_dir/*.json` しか見ないので混ざらない)。
+THUMBNAIL_DIR = ".thumbnails"
+#: 受け取るPNGの上限[バイト]。画面が撮るのは128px四方で、RGBAを圧縮せず持っても64KiB。
+THUMBNAIL_MAX_BYTES = 256 * 1024
+_PNG_SIGNATURE = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A])
+
+
+def _mtime_or_none(path: Path) -> Optional[float]:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
 def _edits_document(method: Any) -> Any:
-    """文書を変える `Session` のメソッドに付ける。**形状最適化の実行中は `DocumentBusy` で断る**。
+    """文書を変える `Session` のメソッドに付ける。**形状最適化を走らせている文書なら `DocumentBusy` で断る**。
 
     ブラウザ・MCP・アプリ内AIのどの経路も `Session` のメソッドを通るので、ここ1箇所で全部が止まる
     (画面の灰色化だけでは別タブ・AI・キーボードを止められない)。
@@ -69,7 +89,7 @@ def _edits_document(method: Any) -> Any:
 
     @functools.wraps(method)
     def guarded(self: "Session", *args: Any, **kwargs: Any) -> Any:
-        if self._optimizing:
+        if self._document_locked():
             raise DocumentBusy(
                 f"形状最適化の実行中は文書を変えられない({method.__name__})。"
                 "終わるか中断してから操作すること"
@@ -116,14 +136,18 @@ class Session:
         #: **書き換えるのは3箇所だけ**: `save_document(name)` の成功・`open_document` の成功・
         #: `_replace_document`(開く/新規の共通部分。引数で必ず決めさせる)。
         self._current_name: Optional[str] = None
+        #: 編集中の文書のファイルを最初に書いた時刻(UNIX秒。`OpLog.to_json` の `created`)。
+        #: 新しい名前で書いたときに決まり、開けばファイルから読む。**`created` を持たない
+        #: 既存ファイルは None のまま上書きされ続ける**(理由は docs/UI.md のファイル一覧の項)。
+        self._created: Optional[float] = None
         self._applied_count = 0
         #: **自動保存で書けなかった変更があるか**(issue #5、本人判断 2026-09-16)。文書が
         #: 変わるたび `_emit` が `autosave()` を走らせるので、通常は常に False。True になるのは
         #: 書き込みが失敗したとき(ディスク・権限)だけで、`state()["saved"]` が画面へ運ぶ。
         self._unsaved = False
-        #: 保存の書き込みを直列にする。形状最適化の結果は**ワーカースレッドから**
-        #: `_after_logged_verb` → `_emit` → 自動保存へ来るので、イベントループ側の操作の
-        #: 保存と同じ一時ファイルへ同時に書く経路がある。
+        #: 保存の書き込みを直列にする。アプリ内AIの道具は**ワーカースレッドで**動き
+        #: (`net/ws.py` の `_ai_start` の `run_in_executor`)、`apply` → `_emit` → 自動保存へ来るので、
+        #: イベントループ側の操作の保存と同じ一時ファイルへ同時に書く経路がある。
         self._save_lock = threading.Lock()
         #: 配りもの(状態・版・キャッシュ)。**文書を差し替えたら `view.reset()` を呼ぶ**
         #: (`_replace_document`)——古い文書について測ったものを握ったままにしないため。
@@ -135,8 +159,21 @@ class Session:
         #: `cancel_optimization` はイベントループのスレッド)ので `Event` にしてある。
         self._optimize_cancel = threading.Event()
         #: 形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。立っている間は
-        #: 文書を変える操作を断る(`_edits_document`)。**イベントループのスレッドだけが書く**。
+        #: **走らせている文書だけ**を変える操作を断る(`_edits_document` / `_document_locked`)。
+        #: 別のファイルを開いて編集するのは通す。**イベントループのスレッドだけが書く**。
         self._optimizing = False
+        #: 走らせている文書(開始時の `self.document`)とそのファイル名・作成日時。**別の文書へ
+        #: 切り替えても実行はこの `Document` を持ったまま走り続け**、結果はここへ足されてから
+        #: `deliver_optimization_result` がファイルへ届ける。
+        self._optimize_document: Optional[Document] = None
+        self._optimize_name: Optional[str] = None
+        self._optimize_created: Optional[float] = None
+        #: ファイルへ書けなかった結果(ファイル名 -> (文書, 作成日時))。次にその名前を開いたとき、
+        #: ディスクではなくこちらを開く —— 書けなかったからといって数時間の結果を捨てない。
+        self._undelivered: dict[str, tuple[Document, Optional[float]]] = {}
+        #: 別の文書を開いている間に終わった実行の、画面へまだ見せていない結果/失敗の封筒(ファイル名 -> 封筒)。
+        #: 中身を作って配るのは `net/ws.py`。ここに置くのは、削除で一緒に捨てるため(`delete_document`)。
+        self.unseen_optimize_results: dict[str, dict] = {}
         if step_path is not None:
             self.load_step(step_path)
 
@@ -557,7 +594,7 @@ class Session:
         するかは口ごとに違う(`catalog.Command.input_schema` / `ws_schema`)ので、呼ぶ側が済ませて来る。
         """
         function = entry_for(verb)
-        if self._optimizing:
+        if self._document_locked():
             raise DocumentBusy(
                 f"形状最適化の実行中は文書を変えられない({verb})。終わるか中断してから操作すること"
             )
@@ -622,22 +659,50 @@ class Session:
 
     @property
     def optimizing(self) -> bool:
-        """形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。"""
+        """形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。**どの文書でか**は問わない
+        —— 同時に走らせられるのは1本だけ(理由は docs/TOPOPT.md)。"""
         return self._optimizing
+
+    @property
+    def optimizing_name(self) -> Optional[str]:
+        """走らせている文書のファイル名(走っていない・無題なら None)。"""
+        return self._optimize_name if self._optimizing else None
+
+    @property
+    def optimization_visible(self) -> bool:
+        """**いま開いている文書が**最適化を走らせている文書か。進捗・中断・実行中の表示はこれが真のときだけ出す。"""
+        return self._document_locked()
+
+    def _document_locked(self) -> bool:
+        """今の文書が、走っている最適化の対象か(=文書を変える操作を断るか)。
+
+        **同じオブジェクトか、同じファイル名か**の2通りで判定する。実行中に同じファイルを開き直すと、
+        ディスクから再生した別の `Document` になる —— 名前で見ないとそちらは編集でき、終わった結果が
+        その編集を上書きする。
+        """
+        if not self._optimizing:
+            return False
+        if self.document is self._optimize_document:
+            return True
+        return self._optimize_name is not None and self._current_name == self._optimize_name
 
     def optimization_status(self) -> dict:
         """走っているか・中断を頼まれているか(`net/ws.py` の `optimize_status` の中身)。
 
+        **`running` は「いま開いている文書で走っているか」**(`optimization_visible`)。別の文書を
+        開いている間は走っていない扱いにして、その文書の画面に実行中の表示を一切出さない。
+
         `cancelling` は**走っている間だけ**載せる —— 旗は次の開始まで立ったままなので、
         走っていないのに「中断中」と出すと次の実行が中断表示から始まって見える。
         """
-        status: dict = {"running": self._optimizing}
-        if self._optimizing and self._optimize_cancel.is_set():
+        visible = self.optimization_visible
+        status: dict = {"running": visible}
+        if visible and self._optimize_cancel.is_set():
             status["cancelling"] = True
         return status
 
     def begin_optimization(self) -> None:
-        """走らせる前に**イベントループのスレッドで**呼ぶ。中断の旗を畳み、文書を変える操作を断り始める。
+        """走らせる前に**イベントループのスレッドで**呼ぶ。中断の旗を畳み、今の文書を対象として控える。
 
         **旗はワーカースレッドの中で畳まない** —— 実行を別スレッドへ投げてから走り出すまでの間に届いた
         中断が、走り出した実行に消されて結果が足される(issue #35)。
@@ -645,11 +710,82 @@ class Session:
         if self._optimizing:
             raise ValueError("最適化が既に走っている(中断してから)")
         self._optimize_cancel.clear()
+        self._optimize_document = self.document
+        self._optimize_name = self._current_name
+        self._optimize_created = self._created
         self._optimizing = True
 
     def end_optimization(self) -> None:
         """`begin_optimization` の対。文書を変える操作をまた受け付ける。"""
         self._optimizing = False
+        self._optimize_document = None
+        self._optimize_name = None
+        self._optimize_created = None
+
+    def deliver_optimization_result(self, result: dict) -> dict:
+        """足し終えた結果を、走らせた文書のファイルへ届ける。**`end_optimization` より前に、イベントループの
+        スレッドで**呼ぶ(人の操作と同じスレッドで文書を差し替えるため。ワーカースレッドで差し替えると、
+        同時に届いた「開く」と入れ違う)。
+
+        結果は実行が持っていた `Document` にもう足されている(`optimize_run.run`)。届け先は3通り:
+
+        - **その文書を開いたまま** … 今までどおり変更イベントを発火し、自動保存する。
+        - **同じファイルを開き直していた** … 開き直した写し(結果が無い)を実行の文書へ差し替える。
+          写しは編集を断られていたので、捨てて失うものは無い。
+        - **別の文書を開いている** … 実行の文書をそのファイルへ書くだけ(今の文書には触れない)。
+          戻り値に `"elsewhere": True` を付ける —— 画面へは配らず、次に開いたときに見せる(`net/ws.py`)。
+
+        **結果の警告(`warning`)を `Session.warnings`(=今の画面のトースト)へ積むのは、その文書を開いている
+        ときだけ** —— 別の文書の画面には何も出さない。離れている間の警告と書けなかったことは結果の
+        `warning` に載せ、戻ってきたときにパネルの通知で読ませる(`net/ws.py` が控えて配る)。
+
+        `state != "done"` のときは文書を変えていないので、警告の行き先を決めるだけ。
+        """
+        document = self._optimize_document
+        name = self._optimize_name
+        here = document is None or self.document is document or (
+            name is not None and self._current_name == name
+        )
+        if here and result.get("warning"):
+            self.warnings.append(result["warning"])
+        if result.get("state") != "done":
+            return result if here else dict(result, elsewhere=True)
+        if here:
+            if document is not None and self.document is not document:
+                self._replace_document(document, current_name=name, created=self._optimize_created)
+            applied = None
+            if "body_id" in result:
+                applied = self._after_logged_verb(
+                    {
+                        "body_id": result["body_id"],
+                        "name": result["name"],
+                        "triangle_count": result["triangle_count"],
+                    }
+                )
+            # **配る前にディスクへ書く**(2026-09-13実測: 数時間がかりの実行が、結果を見る前に
+            # サーバプロセスごと消えた)。`_after_logged_verb` の自動保存と重なるが、変更イベントを
+            # 発火しない経路(結果にボディが無い)でも書く。
+            self.autosave()
+            return result if applied is None else dict(result, applied=applied)
+        label = name
+        try:
+            if label is None:
+                label = self._unused_untitled_name()
+            target = self._resolve_document_name(label)
+            with self._save_lock:
+                self._write_document_file(target, document.log.to_json(created=self._optimize_created))
+            label = target.name
+            # 一覧の絵は結果の無い形のまま。消しておけば次に開いたときに撮り直される。
+            self._drop_thumbnail(target)
+        except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ知らせる(`autosave` と同じ)
+            label = label or "untitled.json"
+            self._undelivered[label] = (document, self._optimize_created)
+            note = (
+                f"最適化の結果を {label} へ書けなかった(次に {label} を開くと結果入りで開く): "
+                f"{type(error).__name__}: {error}"
+            )
+            result = dict(result, warning=f"{result['warning']}\n{note}" if result.get("warning") else note)
+        return dict(result, elsewhere=True, file=label)
 
     def run_optimization(
         self,
@@ -681,11 +817,12 @@ class Session:
         `TypeError`(引数名を知らない)ではなく`OptimizeInputError`(意味を説明した文)で
         断るため —— 呼び出し側(`net/ws.py`)が転送さえすれば、ここが一箇所で断る。
 
-        戻り値は `optimize_run.run()` のものに、成功時だけ `"applied"`(変更イベントの封筒)を
-        足したもの。**`state != "done"` のときは文書を1ビットも変えていない**。
+        **`state != "done"` のときは文書を1ビットも変えていない**。
 
-        **呼び出し側が `begin_optimization` を済ませていなければ、ここで開始と終了を囲む**(テスト・
-        スクリプトの直呼び)。`net/ws.py` は別スレッドへ投げる前に開始しておく(issue #35)。
+        **呼び出し側が `begin_optimization` を済ませていなければ、ここで開始・届け・終了まで囲む**(テスト・
+        スクリプトの直呼び。戻り値は成功時に `"applied"` 付き)。`net/ws.py` は別スレッドへ投げる前に
+        開始しておき(issue #35)、**届け(`deliver_optimization_result`)はイベントループへ戻ってから
+        自分で呼ぶ** —— ここ(ワーカースレッド)は結果を実行の文書へ足すところまでしかしない。
         """
         unsupported = {
             "rmin_mm": rmin_mm,
@@ -710,30 +847,21 @@ class Session:
         if owned:
             self.begin_optimization()
         try:
+            # **今の文書ではなく、開始時に控えた文書を解く**(途中で別の文書へ切り替えてもよい)。
             result = optimize_run.run(
-                self.document,
+                self._optimize_document,
                 options,
                 progress=progress,
                 should_cancel=self._optimize_cancel.is_set,
                 debug=debug,
                 debug_kinds=debug_kinds,
             )
+            if owned:
+                result = self.deliver_optimization_result(result)
         finally:
             if owned:
                 self.end_optimization()
-        if result.get("warning"):
-            # 既存の警告の口へ載せる(新しい運び方を作らない)。
-            self.warnings.append(result["warning"])
-        if result["state"] != "done":
-            return result
-        applied = self._after_logged_verb(
-            {
-                "body_id": result["body_id"],
-                "name": result["name"],
-                "triangle_count": result["triangle_count"],
-            }
-        )
-        return dict(result, applied=applied)
+        return result
 
     # ---------------------------------------------------------------- E: ファイル操作
     #
@@ -799,6 +927,17 @@ class Session:
             raise ValueError(f"models/の外を指している: {text!r} -> {resolved}")
         return resolved
 
+    @staticmethod
+    def _write_document_file(target: Path, payload: str) -> None:
+        """**一時ファイルへ書いてから差し替える**(呼び手が `_save_lock` を持つ)。素の上書きは既存の
+        中身を先に切り詰めるので、途中で落ちると**唯一の永続形式である前回の保存が
+        半端なJSONで潰れる**(形状は導出物なので、これを失うと復旧の手立てが無い)。
+        `os.replace` は同じディレクトリ内なら不可分に差し替わる。
+        """
+        staging = target.with_name(target.name + ".writing")
+        staging.write_text(payload, encoding="utf-8")
+        os.replace(staging, target)
+
     def save_document(self, name: Any = None) -> dict:
         """操作ログをJSONで書き出す。**verbではない**(文書を変えないのでログに載らない)。
 
@@ -846,19 +985,24 @@ class Session:
                     if target.name == self._current_name
                     else f"{target.name} は編集中ではない(先に開けば上書きできる)"
                 )
-        payload = self.document.log.to_json()
+        if name is not None and self._document_locked():
+            # 名前を変えて書くと、編集を断っている写しが別名で編集できる文書になり、結果は
+            # 元の名前へ届く(写しには入らない)。
+            raise ValueError(
+                f"形状最適化の実行中は別名で保存できない({self._optimize_name} の実行が終わるか中断してから)"
+            )
+        created = self._created if name is None else time.time()
+        payload = self.document.log.to_json(created=created)
         with self._save_lock:
-            # **一時ファイルへ書いてから差し替える**。素の上書きは既存の
-            # 中身を先に切り詰めるので、途中で落ちると**唯一の永続形式である前回の保存が
-            # 半端なJSONで潰れる**(形状は導出物なので、これを失うと復旧の手立てが無い)。
-            # `os.replace` は同じディレクトリ内なら不可分に差し替わる。
-            staging = target.with_name(target.name + ".writing")
-            staging.write_text(payload, encoding="utf-8")
-            os.replace(staging, target)
+            self._write_document_file(target, payload)
+            if name is not None:
+                # 同じ名前の古い文書(外で消された)の絵が残っていれば、それはこの文書の絵ではない。
+                self._drop_thumbnail(target)
             # **書けてから現在ファイルにする**。先に控えると、書き込みが落ちたときに
             # 「存在しないファイルを編集中」という状態が残り、次の引数なし保存が
             # 黙って新しいファイルを作る(拒否されるべき経路が通ってしまう)。
             self._current_name = target.name
+            self._created = created
             self._unsaved = False
         return {
             "action": "save",
@@ -920,6 +1064,11 @@ class Session:
         無ければ作るだけ)。
         """
         target = self._resolve_document_name(name)
+        if self._document_locked():
+            # 移すと、終わった結果が元の名前で新しいファイルとして書かれる。
+            raise ValueError(
+                f"形状最適化の実行中は名前を変えられない({self._optimize_name} の実行が終わるか中断してから)"
+            )
         if target.exists():
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
         if self._current_name is None:
@@ -931,7 +1080,9 @@ class Session:
                 os.replace(source, target)
             else:
                 # 編集中のファイルが外で消されていた。中身は文書が持っているので書き直す。
-                target.write_text(self.document.log.to_json(), encoding="utf-8")
+                target.write_text(self.document.log.to_json(created=self._created), encoding="utf-8")
+            self._drop_thumbnail(target)
+            self._carry_thumbnail(source, target, move=True)
             self._current_name = target.name
             self._unsaved = False
         return {
@@ -941,7 +1092,6 @@ class Session:
             "previous": previous,
         }
 
-    @_edits_document
     def open_document(self, name: Any) -> dict:
         """保存した操作ログを読み、**再生して**文書を差し替える(§3.1「これが正」)。
 
@@ -950,13 +1100,20 @@ class Session:
         **失敗しても今の文書を壊さない**。新しい `Document` の上で再生し切ってから
         差し替えるので、途中で落ちたら例外が上がるだけで画面はそのまま残る。
 
+        **形状最適化の実行中も断らない**(`new_document` も同じ)。実行は開始時の文書を持ったまま
+        走り続け、結果はそのファイルへ届く(`deliver_optimization_result`)。走らせている
+        ファイル自身を開き直した写しは、終わるまで編集を断る(`_document_locked`)。
+
         差し替えの後始末(キャッシュ・版・土台の下限)は `_replace_document` が持つ
         (`new_document` と共通)。
         """
         source = self._resolve_document_name(name)
+        if source.name in self._undelivered:
+            return self._open_undelivered(source.name)
         if not source.exists():
             raise FileNotFoundError(f"開けるファイルが無い: {source}")
-        log = OpLog.from_json(source.read_text(encoding="utf-8"))
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        log = OpLog.from_payload(payload)
         document = Document()
         # **束ねてから再生する**(順序が逆だと `set_parameter` を含むログで落ちる)。
         # パラメータの再生は「その操作までを作り直す」ために `document.log` を頭から
@@ -967,7 +1124,9 @@ class Session:
 
         # **開けたものが編集中のファイルになる**(以後、引数なしの `save_document()` は
         # ここへ書く)。再生が落ちたときはこの行まで来ないので、現在名も差し替わらない。
-        self._replace_document(document, current_name=source.name)
+        self._replace_document(
+            document, current_name=source.name, created=OpLog.created_of(payload)
+        )
         return self._emit({
             "change": "document",
             "action": "open",
@@ -975,7 +1134,22 @@ class Session:
             "name": source.name,
         })
 
-    @_edits_document
+    def _open_undelivered(self, name: str) -> dict:
+        """ファイルへ書けなかった最適化の結果入りの文書を開き、もう一度書く。
+
+        開いた時点で今の文書になるので手放す —— 以後は普通の文書と同じく、書けなければ
+        `saved=False` の札と1操作ごとの書き直しが受け持つ。
+        """
+        document, created = self._undelivered.pop(name)
+        self._replace_document(document, current_name=name, created=created)
+        self.autosave()
+        return self._emit({
+            "change": "document",
+            "action": "open",
+            "path": str(self._resolve_document_name(name)),
+            "name": name,
+        })
+
     def new_document(self) -> dict:
         """空の文書へ差し替える(「新規」)。**verbではない**(ログに載らない)。
 
@@ -990,7 +1164,7 @@ class Session:
         おらず、次に文書を変えた瞬間に自動保存が `untitled-<n>.json` を作る(それまで
         引数なしの `save_document()` は拒否される)。
         """
-        self._replace_document(Document(), current_name=None)
+        self._replace_document(Document(), current_name=None, created=None)
         return self._emit({
             "change": "document",
             "action": "new",
@@ -1001,7 +1175,9 @@ class Session:
             "name": None,
         })
 
-    def _replace_document(self, document: Document, *, current_name: Optional[str]) -> None:
+    def _replace_document(
+        self, document: Document, *, current_name: Optional[str], created: Optional[float]
+    ) -> None:
         """今の文書を `document` へ差し替える(`open_document` / `new_document` の共通部分)。
 
         **`current_name` は既定値を持たない**(キーワード必須)。文書を差し替える経路は
@@ -1018,6 +1194,7 @@ class Session:
         """
         self.document = document
         self._current_name = current_name
+        self._created = created
         self._unsaved = False  # 開いた/空にした文書に、書けなかった変更は無い
         # キャッシュの破棄は**`view` の1呼び出し**(何を捨てて何を残すかは `DocumentView.reset`
         # が持つ。とくに版の数え上げを消さない理由はそちらのdocstring)。
@@ -1028,35 +1205,48 @@ class Session:
         self._applied_count += 1
 
     def list_documents(self) -> dict:
-        """`models_dir` の中身を一覧にする(名前/更新日時)。**verbではない**。
+        """`models_dir` の中身を一覧にする(名前/更新日時/作成日時/サムネイルの版)。**verbではない**。
 
-        読めるファイルだけを載せる判定は、`OpLog.from_json` のパースだけで行う —— 形状の再生
+        読めるファイルだけを載せる判定は、`OpLog.from_payload` のパースだけで行う —— 形状の再生
         (`log.replay`)まではしない。STEP本文がログに入って1ファイルが4.8MB級になったが、実測で
         ファイルあたり約30ms(PCケースの4.8MBを3件で0.09s)なので、この作りのままにしてある。
 
         壊れたファイル(手で触られた・書き込み途中の `.writing` 等)は一覧からは省く
         (一覧が原因不明の例外で丸ごと落ちるより、読める分だけ見せる方が実用に沿う)。
-        **旧形式(version 1)のファイルもここでは黙って省かれる** —— `from_json` が ValueError
+        **旧形式(version 1)のファイルもここでは黙って省かれる** —— `from_payload` が ValueError
         にするため。次に版を上げるときは「一覧に出ないだけで理由が分からない」になることに注意。
+
+        `created` は入れ物の作成日時(無いファイルは None)。`thumb` はサムネイルの更新日時で、
+        **画像そのものは載せない** —— 一覧は自動保存のたびに取り直されるので、載せると全件の
+        画像を毎回送ることになる。画像は `get_thumbnail` で1件ずつ取る。
         """
         self.models_dir.mkdir(parents=True, exist_ok=True)
         files = []
         for path in sorted(self.models_dir.glob("*.json")):
             try:
                 mtime = path.stat().st_mtime
-                OpLog.from_json(path.read_text(encoding="utf-8"))
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                OpLog.from_payload(payload)
             except (OSError, ValueError, KeyError, TypeError):
                 continue
-            files.append({"name": path.name, "mtime": mtime})
+            files.append({
+                "name": path.name,
+                "mtime": mtime,
+                "created": OpLog.created_of(payload),
+                "thumb": _mtime_or_none(self._thumbnail_path(path)),
+            })
         return {"action": "list", "path": str(self.models_dir), "files": files}
 
     def copy_document(self, source: Any, dest: Any) -> dict:
         """`models_dir` の `source` を `dest` へ複製する。**verbではない**(文書を変えない)。
 
-        ディスク上のJSONを写すだけで、**いま編集している文書も `current_name` も変わらない**
+        **いま編集している文書も `current_name` も変わらない**
         (`open_document` とは別の操作。複製元を開いていなくてもよい)。`dest` が既に在れば
         拒否する —— 上書きの口は持たない(`save_document(name)` と同じ線。issue #17)。
         どちらの名前も `_resolve_document_name` を通す(`models_dir` の外は指せない)。
+
+        **複製は新しいファイルなので作成日時を今にする** —— バイト列を写さず、読んで書き直す
+        (操作は `from_json`/`to_json` の往復で一致する)。サムネイルは写す。
         """
         origin = self._resolve_document_name(source)
         target = self._resolve_document_name(dest)
@@ -1064,11 +1254,14 @@ class Session:
             raise FileNotFoundError(f"複製元が無い: {origin.name}")
         if target.exists():
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
+        log = OpLog.from_json(origin.read_text(encoding="utf-8"))
         # `save_document` と同じく一時ファイル経由で差し替える(途中で落ちても半端な
         # ファイルが一覧に出ない。`list_documents` は `.writing` を省く)。
         staging = target.with_name(target.name + ".writing")
-        staging.write_bytes(origin.read_bytes())
+        staging.write_text(log.to_json(created=time.time()), encoding="utf-8")
         os.replace(staging, target)
+        self._drop_thumbnail(target)
+        self._carry_thumbnail(origin, target, move=False)
         return {
             "action": "copy",
             "path": str(target),
@@ -1082,17 +1275,108 @@ class Session:
         **いま編集しているファイルは拒否する**(拒否の文はどうすればできるかまで言う) ——
         消した直後の自動保存/上書きが「無いファイルへ書く」になり、消したはずのものが
         黙って復活する。無ければ FileNotFoundError。確認は挟まない(画面側が行内で聞く。
-        `FilesPanel.svelte`)。`models/.trash` への退避はしない(issue #17)。
+        `FilesPanel.svelte`)。`models/.trash` への退避はしない(issue #17)。サムネイルも消す。
         """
         target = self._resolve_document_name(name)
         if target.name == self._current_name:
             raise ValueError(
                 f"{target.name} は編集中(別のファイルを開くか「新規」にしてから削除する)"
             )
+        if self._optimizing and target.name == self._optimize_name:
+            # 消しても、終わった結果が同じ名前で書き戻されて黙って復活する。
+            raise ValueError(
+                f"{target.name} は形状最適化の実行中(終わるか、開いて中断してから削除する)"
+            )
         if not target.exists():
             raise FileNotFoundError(f"削除するファイルが無い: {target.name}")
         target.unlink()
+        # 書けなかった結果も一緒に捨てる(残すと、同じ名前で作り直したファイルを開いたときに出てくる)。
+        self._undelivered.pop(target.name, None)
+        self.unseen_optimize_results.pop(target.name, None)
+        self._drop_thumbnail(target)
         return {"action": "delete", "path": str(target), "name": target.name}
+
+    # ---------------------------------------------------------------- サムネイル
+    # **一覧の絵は画面(three.js)が撮ってここへ預ける**(`web/src/thumbnail.ts`)。サーバに
+    # 描画の仕組みは無い。置き場は `models/.thumbnails/<文書のファイル名>.png` の付随ファイルで、
+    # 文書のJSONには入れない —— 描き直せる写しであって文書の正ではなく、無くなっても
+    # 次に開いたときに撮り直される。だから付随ファイルの失敗は元の操作を失敗にしない。
+    def _thumbnail_path(self, document: Path) -> Path:
+        """文書のファイル(`models_dir` 直下)に付くサムネイルのパス。"""
+        return document.parent / THUMBNAIL_DIR / f"{document.name}.png"
+
+    def _drop_thumbnail(self, document: Path) -> None:
+        try:
+            self._thumbnail_path(document).unlink(missing_ok=True)
+        except OSError as error:
+            self.warnings.append(f"サムネイルを消せなかった: {error}")
+
+    def _carry_thumbnail(self, source: Path, target: Path, *, move: bool) -> None:
+        """改名(`move`)・複製でサムネイルも付いていかせる。複製は更新日時ごと写す
+        (画面は版で取り直しを決めるので、同じ絵を取り直させない)。"""
+        origin = self._thumbnail_path(source)
+        if not origin.exists():
+            return
+        try:
+            if move:
+                os.replace(origin, self._thumbnail_path(target))
+            else:
+                shutil.copy2(origin, self._thumbnail_path(target))
+        except OSError as error:
+            self.warnings.append(f"サムネイルを{'移せ' if move else '写せ'}なかった: {error}")
+
+    def save_thumbnail(self, name: Any, png: Any) -> dict:
+        """画面が撮ったPNG(base64)を `name` のサムネイルとして書く。**verbではない**。
+
+        `png` が空文字なら消す(見えている立体が1つも無い文書。古い絵を残さない)。
+        **文書のファイルが無い・書けない(OSError)ときも断らず `saved: False` を返す** —— 画面は
+        撮ってから送るまでに改名が挟まりうるし、Windows では別のプログラムが開いているだけで
+        `os.replace` が落ちる(`autosave` と同じ)。断ると人が何もしていないのに通知が出る。
+        断るのは中身が壊れているとき(画面側の不具合)だけ。
+        """
+        target = self._resolve_document_name(name)
+        thumbnail = self._thumbnail_path(target)
+        reply = {"action": "save_thumbnail", "path": str(thumbnail), "name": target.name}
+        text = str(png)
+        if text == "":
+            try:
+                thumbnail.unlink(missing_ok=True)
+            except OSError as error:
+                self.warnings.append(f"サムネイルを消せなかった: {error}")
+                return {**reply, "saved": False, "thumb": None}
+            return {**reply, "saved": True, "thumb": None}
+        try:
+            data = base64.b64decode(text, validate=True)
+        except binascii.Error as error:
+            raise ValueError(f"サムネイルがbase64ではない: {error}") from None
+        if not data.startswith(_PNG_SIGNATURE):
+            raise ValueError("サムネイルがPNGではない")
+        if len(data) > THUMBNAIL_MAX_BYTES:
+            raise ValueError(f"サムネイルが大きすぎる({len(data)} > {THUMBNAIL_MAX_BYTES}バイト)")
+        if not target.exists():
+            return {**reply, "saved": False, "thumb": None}
+        try:
+            thumbnail.parent.mkdir(exist_ok=True)
+            staging = thumbnail.with_name(thumbnail.name + ".writing")
+            staging.write_bytes(data)
+            os.replace(staging, thumbnail)
+            thumb = thumbnail.stat().st_mtime
+        except OSError as error:
+            self.warnings.append(f"サムネイルを書けなかった: {error}")
+            return {**reply, "saved": False, "thumb": None}
+        return {**reply, "saved": True, "thumb": thumb}
+
+    def get_thumbnail(self, name: Any) -> dict:
+        """`name` のサムネイルをbase64で返す(無い・読めなければ `png: None`)。**verbではない**。"""
+        target = self._resolve_document_name(name)
+        thumbnail = self._thumbnail_path(target)
+        reply = {"action": "thumbnail", "path": str(thumbnail), "name": target.name}
+        try:
+            thumb = thumbnail.stat().st_mtime
+            data = thumbnail.read_bytes()
+        except OSError:
+            return {**reply, "png": None, "thumb": None}
+        return {**reply, "png": base64.b64encode(data).decode("ascii"), "thumb": thumb}
 
     def export_step_file(self, path: Any) -> dict:
         """STEPを書き出す。**ログに載らない**(文書を変えないのでverbではない)。
