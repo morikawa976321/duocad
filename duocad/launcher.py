@@ -163,7 +163,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     data_dir = args.data_dir.expanduser().resolve()
     url = f"http://127.0.0.1:{args.http_port}/"
 
-    if server_config(args.http_port) is None:
+    running = server_config(args.http_port)
+    if running is not None and running.get("channel") != args.channel:
+        # 開発セッションが同じポートで別のduocadを立てている。そちらを安定版として開かない。
+        _alert(
+            f"ポート {args.http_port} で別の duocad(channel={running.get('channel')})が動いている。
+"
+            "それを止めてからもう一度起動すること。"
+        )
+        return 1
+    if running is None:
         spawn_server(args.channel, args.port, args.http_port, data_dir)
         if not wait_for_server(args.http_port):
             _alert(

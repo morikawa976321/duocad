@@ -1,19 +1,8 @@
-"""開発版/安定版の区別と、安定版の自己更新(`/api/update`)。
+"""開発版/安定版の区別と、安定版の自己更新(`/api/update`)。配置・手順・判断は `docs/STABLE.md`。
 
-**なぜ2つあるか**: 同じPCで開発(develop)と実制作の両方をする。実制作が開発の途中の状態に
-巻き込まれないよう、**実制作は別clone(mainに固定)の安定版で行う**。手順と配置は
-`docs/STABLE.md`。
-
-- **開発版**(`--channel dev`、既定): リポジトリ直下のチェックアウトで動く。ヘッダーに
-  「開発版」の札が出る(`web/src/ChannelBadge.svelte`)。
-- **安定版**(`--channel stable`): `duocad.launcher` が立てる。更新は画面のボタン1つで、
-  サーバが `tools/stable/update.ps1` を切り離して起動し、自分は終了する ——
-  **Windowsでは動いている `.venv` の python.exe を置き換えられない**ので、更新は
-  サーバの外でしかできない。スクリプトがmainを取り込み・ビルドし、`duocad.launcher` で
-  立て直す。失敗したら元のコミットへ戻して立て直す。
-
-更新元は `origin/main` そのもの(タグは打たない)。mainはPR経由でしか入らない
-「動作確認済み」の枝なので(`CLAUDE.md`)、ここでもう1段の関門を足さない。
+安定版の更新はサーバの外で行う: サーバが `tools/stable/update.ps1` を切り離して起動して終了し、
+スクリプトが取り込み・ビルドして `duocad.launcher` で立て直す。**Windowsでは動いている
+`.venv` の python.exe を置き換えられない**ため。
 """
 from __future__ import annotations
 

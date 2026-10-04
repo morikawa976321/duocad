@@ -25,6 +25,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# 外部コマンド(vite等)のUTF-8出力をログで化けさせない(既定はコンソールのcp932で読む)。
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 # 窓が無いので、認証やホスト鍵を聞かれたら答えられない。聞かずに失敗させる。
 $env:GIT_TERMINAL_PROMPT = '0'
 if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -o BatchMode=yes' }
