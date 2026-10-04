@@ -243,6 +243,10 @@ cd web; npm run dev                                 # 画面(5173)
 
 ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すればそれが最優先）。
 
+**smoke が見るのは、人が使っていても気づけない壊れ方だけ**（見た目が同じまま値だけ違う・黙って別のものが
+変わる・タイミングでしか出ない競合・性能と粗さ）。ボタンが出ない・クリックがずれる・強調が出ないといった、
+使えばすぐ気づく壊れ方は守らない（[docs/SMOKE_TESTING.md](docs/SMOKE_TESTING.md)「何を smoke に書くか」）。
+
 **一覧の正は `web/scripts/smoke*.mjs` のファイル名**（各ファイル先頭のコメントが何を見るかの正）。
 番号付きの固定リストは持たない —— 増減のたびにREADMEが古くなるため。
 
@@ -259,21 +263,17 @@ Get-ChildItem scripts/smoke*.mjs | ForEach-Object {
 }
 ```
 
-形状最適化まわりは `smoke-optimize.mjs` / `smoke-optimize-mode.mjs` / `smoke-optimize-debug.mjs`。
-STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` / `HANGER_BAR_STEP` が指すパスを使う。
+STEPを読む smoke（`smoke-face-culling.mjs`）は `web/scripts/models.mjs` の `PC_CASE_STEP` が指すパスを使う。
 
 **骨格は全本共通**（`web/scripts/harness.mjs` の `runSmoke`）: 使い捨ての `--models-dir` でサーバを立て、
 ブラウザを開き、終わったら止めて temp を消す。ポートは走らせるたびに OS へ空きを選ばせるので
 複数本を並列に回してよい。`--port` / `--http-port`（固定したいとき）と `--timeout` は全本が読む。
 
-既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
-（その場合スクリプトはサーバを立てず、止めもしない）。**対応しているのは `smoke.mjs` /
-`smoke-features` / `smoke-files` / `smoke-regions` / `smoke-svg` / `smoke-toast` だけ**で、
-MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `smoke-files` / `smoke-regions` でも失敗になる）。
+既に立てているサーバへ繋ぐ `--url` は、`runSmoke` に `attach: true` を渡した本だけが受ける
+（その場合スクリプトはサーバを立てず、止めもしない）。いまの本はどれも対応していない。
 
-**verbごとの「人間側/AI側の両方で動く」を1本で通す検査は持たない。** AI側（MCP）の契約は pytest
-（`tests/test_mcp_verbs.py` ほか）、人間側のUIは verb 別の smoke、交互操作（AIが選ぶ → 人が直す → AIが読む）は
-`smoke-mcp.mjs`、カメラ（画角・Z-up）は `smoke-camera.mjs` が持つ。
+**verb ごとの画面の検査は持たない。** AI側（MCP）とコアの契約は pytest（`tests/test_mcp_verbs.py` ほか）、
+TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致は `tests/test_ghost_agreement.py` が持つ。
 
 ---
 
@@ -372,7 +372,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 - **MCPには同期の `run_optimization` を開けていない**（進捗・中断を運べない）。画面は WebSocket の
   protocol 口（`OptimizePanel.svelte` → `optimize_conditions` / `optimize_resolution` / …）
 - **メッシュボディは保持・除外に指定できない**（上「ボディの種別」の名指しの線）
-- **受入検査**は §3 の `topopt_checks/`。**実機smoke**は §3 の `smoke-optimize*.mjs`
+- **受入検査**は §3 の `topopt_checks/`。画面からの実行を通す実機 smoke は持たない（壊れれば使ってすぐ気づく）
 
 ### 前提にしないこと
 
