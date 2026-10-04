@@ -40,6 +40,9 @@ from .selection import selectable_bodies
 #: 述語が対象にできる種別(領域の述語はスケッチ側の話なので持たない)
 PREDICATE_KINDS = ("face", "edge")
 
+#: 述語に書けるキー
+PREDICATE_KEYS = ("kind", "body", "where")
+
 #: 面の述語で使える `op`
 FACE_OPS = ("normal_dot_gt", "area_gt", "kind_is")
 
@@ -72,6 +75,11 @@ def validate(predicate: dict) -> dict:
     """
     if not isinstance(predicate, dict):
         raise ValueError(f"predicate must be a dict, got {type(predicate).__name__}")
+    # 知らないキーを黙って捨てない。`body_id` と書かれた絞り込みを無視すると、全ボディの辺が
+    # 選ばれたまま成功を返し、次の verb が「複数ボディにまたがる」で落ちて初めて気づく。
+    unknown = sorted(set(predicate) - set(PREDICATE_KEYS))
+    if unknown:
+        raise ValueError(f"unknown predicate key(s): {unknown} (allowed: {', '.join(PREDICATE_KEYS)})")
     if "kind" not in predicate:
         raise ValueError("predicate is missing 'kind'")
     kind = predicate["kind"]

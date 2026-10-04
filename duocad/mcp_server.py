@@ -622,6 +622,7 @@ class DocumentTools:
         }
         return {
             "kinds": list(predicates.PREDICATE_KINDS),
+            "body": "省略可。1つのボディだけを対象にするときの body_id(省略時は見えているボディ全部)",
             "ops": predicates.describe_ops(),
             "where_is": "and",
             "example": example,

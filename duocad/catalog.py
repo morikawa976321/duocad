@@ -293,6 +293,25 @@ def _value_matches_json_type(value: Any, expected: str) -> bool:
 #: スケッチのverbが共通に受ける `sketch_id`(`Param` は frozen なので共有してよい)。
 _SKETCH_ID = Param("sketch_id", "string", "対象スケッチのID")
 
+#: `set_selection` の述語の書き方。**説明に載せておく** —— 書き方を知らずに呼ぶと失敗して語彙が返り、
+#: 知るために `describe_predicates` を呼んでも1往復かかるので、どちらにせよ選択のたびに
+#: 1往復を払っていた。語彙の正は `predicates.describe_ops()` で、ここに無い op が増えたら
+#: `tests/test_mcp_selection.py` が落ちる(このモジュールは `predicates` を import しない)。
+PREDICATE_HELP = (
+    '述語。{"kind": "face"|"edge", "body": body_id, "where": [条件, ...]} の形。'
+    "body は省略でき、省略すると見えているボディ全部が対象になる"
+    "(1つのボディだけに掛けたいときは必ず付ける。fillet / chamfer は1つのボディの辺しか受けない)。"
+    "where は全条件のAND(空の配列はその種別の全部。ORは無い)。"
+    '面の条件: {"op": "normal_dot_gt", "axis": "X"|"Y"|"Z"|[x,y,z], "value": 数}'
+    "(外向き法線と軸の内積が value より大きい。上面なら axis Z・value 0.9) / "
+    '{"op": "area_gt", "value": 数} / '
+    '{"op": "kind_is", "value": "plane"|"cylinder_full"|"cylinder_partial"|"torus"|"cone"|"bspline"|"other"}。'
+    '辺の条件: {"op": "parallel_to", "axis": 軸} / {"op": "length_gt", "value": 数} / '
+    '{"op": "length_lt", "value": 数} / {"op": "kind_is", "value": "line"|"circle"|"other"} / '
+    '{"op": "on_boundary_of_face", "face": 面の番号}(その面の外周の辺。body が要る)。'
+    "refs とは同時に渡せない"
+)
+
 COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- 問い合わせ
     Command(
@@ -374,8 +393,8 @@ COMMANDS: tuple[Command, ...] = (
         name="describe_predicates",
         category="query",
         description=(
-            "set_selection の predicate= に書ける述語の語彙(op・引数・種別)を"
-            "知るときに呼ぶ。使える op を推測せず、ここに出た一覧だけを使う。"
+            "set_selection の predicate= に書ける述語の語彙(op・引数・種別)を返す。"
+            "同じ内容が set_selection の説明にあるので、それを読めば呼ばなくてよい。"
         ),
         ws="none",
     ),
@@ -419,14 +438,17 @@ COMMANDS: tuple[Command, ...] = (
             Param(
                 "refs",
                 "array",
-                "面・辺・頂点・領域への明示参照の配列。predicate とは同時に渡せない",
+                "明示参照の配列。面・辺・頂点は "
+                '{"body": body_id, "kind": "face"|"edge"|"vertex", "index": 番号}、'
+                'スケッチの領域は {"sketch": sketch_id, "index": 番号}(番号は1始まり)。'
+                "predicate とは同時に渡せない",
                 required=False,
                 ws=False,
             ),
             Param(
                 "predicate",
                 "object",
-                "述語(describe_predicates の語彙)。refs とは同時に渡せない",
+                PREDICATE_HELP,
                 required=False,
                 ws=False,
             ),
@@ -1854,6 +1876,7 @@ def agent_instructions() -> str:
         "選択だけで止めたときは、何を選んだかを述べる"
         "（人は画面で見て、そのまま採用するか、直すよう頼むか、自分でトグルして直す）。"
         "形を変える verb が確定すると選択は空になるので、次の対象は選び直す。"
+        "作業の報告は1文で足りる。"
         "set_visible の結果は人間が開いているブラウザの画面にも即座に反映される"
         "(undo では戻らないので、戻すには visible=true で呼び直す)。"
     )

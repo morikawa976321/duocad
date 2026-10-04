@@ -324,7 +324,7 @@ def edge_indices(doc: Document, body_id: Optional[BodyId] = None) -> List[int]:
         if len(bodies) > 1:
             raise ValueError(
                 f"edge selection spans multiple bodies {sorted(bodies)!r}: "
-                "pass body_id explicitly"
+                'select the edges of one body (add "body" to the predicate)'
             )
     return [int(item["index"]) for item in edges]
 

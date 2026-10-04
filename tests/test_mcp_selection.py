@@ -146,6 +146,37 @@ def test_describe_predicates_tells_the_ai_how_to_write_one(server: McpServer):
     assert predicates.validate(payload["example"])
 
 
+def test_the_predicate_format_is_in_the_tool_description_itself(server: McpServer):
+    """述語の書き方が `set_selection` の説明にあること。落ちたら、AIは選択のたびに語彙を取りに
+    1往復を払う(`describe_predicates` を呼ぶか、書式を外して失敗するか)状態に戻っている。
+
+    **語彙の正は `predicates.describe_ops()`**。op・引数を足したら説明にも書く。
+    """
+    tools = {tool["name"]: tool for tool in catalog.tool_descriptors()}
+    written = tools["set_selection"]["inputSchema"]["properties"]["predicate"]["description"]
+
+    for key in predicates.PREDICATE_KEYS:
+        assert f'"{key}"' in written, f"述語のキー {key} が説明に無い"
+    for kind, ops in predicates.describe_ops().items():
+        assert f'"{kind}"' in written
+        for op in ops:
+            assert f'"{op["op"]}"' in written, f"{kind} の op {op['op']} が説明に無い"
+            for argument in op["args"]:
+                assert f'"{argument}"' in written, f"{op['op']} の引数 {argument} が説明に無い"
+    assert call(server, "describe_predicates")["body"], "ボディの絞り方が自己記述に無い"
+
+
+def test_an_unknown_predicate_key_is_refused_instead_of_ignored(server: McpServer, session: Session):
+    """`body` を `body_id` と書いた絞り込みを黙って捨てない(全ボディが選ばれたまま成功を返さない)。"""
+    box = box_of(session)
+    error = call_error(
+        server, "set_selection", {"predicate": {"kind": "edge", "body_id": box.id, "where": []}}
+    )
+    assert error["code"] == "invalid_predicate"
+    assert "body_id" in error["message"] and "body" in error["message"]
+    assert selection_of(server)["count"] == 0
+
+
 def test_describe_predicates_changes_nothing(server: McpServer, session: Session):
     """自己記述は読み取り(選択もログも動かさない)。"""
     before = len(session.document.log.entries)
