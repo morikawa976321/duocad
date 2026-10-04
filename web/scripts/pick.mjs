@@ -71,6 +71,36 @@ export async function clickSketchPoint(
   })
 }
 
+/**
+ * 平らな面を**法線の向きで名指す**(戻り値は面の添字。形が届くまで待ち、無ければ失敗)。
+ * `at` を渡すと、重心の `at.axis` 成分(0/1/2)が `at.value` の面に絞る。同じ向きの面が複数
+ * あるときは面積が最大のもの。
+ */
+export async function planarFace(page, bodyId, normal, { at = null, timeout = 30000 } = {}) {
+  try {
+    const handle = await page.waitForFunction(
+      (id, direction, where) => {
+        const faces = window.__duocad.getGeometry(id)?.faces ?? []
+        const matches = faces.filter(
+          (face) =>
+            face.kind === 'plane' &&
+            face.normal[0] * direction[0] + face.normal[1] * direction[1] + face.normal[2] * direction[2] > 0.9 &&
+            (where === null || Math.abs(face.centroid[where.axis] - where.value) < 1e-6),
+        )
+        if (matches.length === 0) return null
+        return matches.reduce((best, face) => (face.area > best.area ? face : best)).index
+      },
+      { timeout, polling: 50 },
+      bodyId,
+      normal,
+      at,
+    )
+    return await handle.jsonValue()
+  } catch {
+    fail(`ボディ ${bodyId} に法線 ${JSON.stringify(normal)} の平らな面が無い`)
+  }
+}
+
 /** 面の画面座標(射影できなければ null)。 */
 export async function faceAt(page, bodyId, index) {
   return screenOf(page, 'projectFace', bodyId, index)
