@@ -495,6 +495,10 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
   復元で済ませる（`OpenAICompatProvider.prepare`）
 - **読む側と書く側の時間を結果に載せる** —— llama-server の `timings` を往復ぶん足して `ai_result.usage` へ入れ、
   パネルに1行出す
+- **文書と選択は先に見ておく** —— モデルが依頼のたびに最初に呼ぶ `describe_document` / `get_selection` を、
+  ループが代わりに呼んで「呼んで結果が返った」形で履歴へ置く（`AgentLoop._look_first`。人の発話には何も足さない）。
+  往復の実測と、発話に添える方式を採らなかった理由は [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md)「往復回数の実測」。
+  測り直すときは `python tools/llm_tasks.py`
 - **同時編集は楽観ロックで守る** —— モデルへの1往復を送る前に文書の版
   （`DocumentTools.current_seq()`）を控え、応答が返ったとき版がずれていたら、そのツール呼び出しは
   実行せず「文書が変わったので選び直せ」と返す。形状を変えるverbの確定後は選択が全リセットされる
