@@ -440,6 +440,10 @@ class Server:
                 else:
                     applied = self._apply(getattr(self.session, method), **arguments)
                     await _send(connection, {"type": "file", **applied})
+                    # 開いている文書を消すと閉じる(`Session.delete_document`)。文書が替わったので
+                    # 全接続へ配る —— 封筒だけだと、他のタブは消えた文書を出したまま編集を断られ続ける。
+                    if applied.get("closed"):
+                        await self._push(connection, applied=None)
             # **保存は表に載らない** —— `name` が任意引数になったため。
             # 表(`FILE_COMMANDS`)は載せた引数を全部必須にする規律なので、省略を許す
             # コマンドはここで個別に捌く(`catalog.Param.ws` のdocstring)。
@@ -487,6 +491,10 @@ class Server:
             # **新規も文書ごと差し替える**ので開くと同じ扱い(全接続へ配る)。引数は無い。
             elif command == "new_document":
                 applied = self._apply(self.session.new_document)
+                await self._push_applied(connection, applied, message)
+                await self._announce_optimization()
+            elif command == "close_document":
+                applied = self._apply(self.session.close_document)
                 await self._push_applied(connection, applied, message)
                 await self._announce_optimization()
             # -------------------------------------------------- B: プレビュー(投機的実行)

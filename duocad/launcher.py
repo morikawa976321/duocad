@@ -28,7 +28,7 @@ from .paths import REPO_ROOT
 
 STABLE_PORT = 8775
 STABLE_HTTP_PORT = 8776
-DEFAULT_DATA_DIR = Path.home() / "duocad-data"
+DEFAULT_DATA_DIR = Path.home() / "mf" / "duocad-data"
 
 #: サーバが応答するまで待つ上限(秒)。OCCTの読み込みで初回は十数秒かかる。
 START_TIMEOUT_SECONDS = 120.0

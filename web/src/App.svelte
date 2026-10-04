@@ -67,6 +67,7 @@
   } from './commands/sketch'
   import ChannelBadge from './ChannelBadge.svelte'
   import FilesPanel from './FilesPanel.svelte'
+  import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
   import Toast, { fail, errorLog } from './Toast.svelte'
   import {
@@ -303,7 +304,8 @@
     hold: (op) => (pendingOp = op),
     release: releasePending,
     note,
-    panelOpen: () => dataPanelOpen,
+    // トップ画面も一覧を見せているので、そちらが出ている間も取り直す。
+    panelOpen: () => dataPanelOpen || showStart,
     captureThumbnail: () => viewport?.captureThumbnail() ?? null,
     connected: () => status === 'open',
   })
@@ -313,6 +315,15 @@
    * 文書は true(書くものが無い)で、最初の変更で `untitled-<n>.json` が自動で付く。
    */
   const saved = $derived(model?.saved ?? true)
+  /**
+   * 文書を開いているか(`state.document_open`)。**最初の状態が届くまでは false** —— 届く前に
+   * ツールバーを出すと、閉じて起動したサーバでは一瞬だけ出て消える。
+   */
+  const documentOpen = $derived(model?.document_open ?? false)
+  /** トップ画面を出すか。状態が届いて、閉じていると分かったときだけ。 */
+  const showStart = $derived(model !== null && !model.document_open)
+  /** 直前の状態で開いていたか(閉じた瞬間だけ後片付けをするため。`handleState`)。 */
+  let wasDocumentOpen = false
   /**
    * 左サイドバー(ファイル一覧)を出しているか。**見た目だけの状態**で、コアには送らない
    * (モデルの状態ではないので操作ログにも残さない)。
@@ -761,6 +772,15 @@
     if (sketchId !== null && !sketches.some((item) => item.sketch_id === sketchId)) {
       exitSketch() // undoでスケッチごと消えた
     }
+    // 閉じた(別のタブが閉じた・開いている文書が消された、も含む)。前の文書のモード・最適化の表示・
+    // 断面・測定を持ち越さない —— 次に開いたときに、別の文書の上へ前の文書の続きが出る。
+    if (wasDocumentOpen && !next.document_open) {
+      setMode({ kind: 'idle' })
+      resetOptimizeView()
+      display.closeSection()
+      measure.clear()
+    }
+    wasDocumentOpen = next.document_open
     // **消えた図形のIDを持ち続ける心配は無くなった**(2026-08-30) —— 反復の対象は
     // 共有選択集合から導くようになり、選択の掃除はコア側の責務になった。
 
@@ -809,12 +829,16 @@
       // **新規のときは基準グリッドだけ縮める。** カメラは動かさないが、前の文書で広がった
       // グリッド(基準平面グリッドはモデルの大きさに追随する)は空の文書に戻ったので
       // `BASE_EXTENT` へ縮めてよい(`viewport.resetGrid` のヒステリシス許可。2026-08-30)。
-      if (applied.name !== null) {
+      if (applied.action === 'close') {
+        note('文書を閉じた')
+      } else if (applied.name !== null) {
         viewport?.frameAll()
       } else {
         viewport?.resetGrid()
       }
-      note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
+      if (applied.action !== 'close') {
+        note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
+      }
       releasePending(applied.client_op)
       lastApplied = applied
       files.refresh()
@@ -1902,6 +1926,7 @@
       files.save()
       return
     }
+    if (!documentOpen) return
     if (isTextEditingField) return
     // **実行中は送らない**(サーバも `DocumentBusy` で断る)。Undo した条件のまま結果が足される。
     if (optimizeBusy) {
@@ -2172,11 +2197,13 @@
     <!-- **現在開いているファイル名**(完了条件4)。**常に名前だけを出す**(2026-08-27) ——
          まだ保存も読み込みもしていない文書には名前が無いので「(無題)」と置く。
          書けているかどうかは隣の `#save-state` が言う。 -->
-    <span id="current-file" class="dim">{files.currentName ?? '(無題)'}</span>
+    {#if documentOpen}
+      <span id="current-file" class="dim">{files.currentName ?? '(無題)'}</span>
+    {/if}
     <!-- **自動保存が書けなかったときだけ出る札**(`state.saved`。issue #5)。保存は1操作ごとに
          自動で走るので「保存済み」は黙っていてよく、人の手が要る「未保存」だけを出す
          (Ctrl+S で書き直せる)。**明示の保存ボタンは無い**(2026-09-16本人判断で撤去)。 -->
-    {#if !saved}
+    {#if documentOpen && !saved}
       <span id="save-state" class="tag on" title="自動保存が書けなかった(Ctrl+Sで書き直す)">未保存</span>
     {/if}
     <!-- **常設の指標はこれで全部**(2026-08-27に本人裁定で4つ外した)。外したものと行き先:
@@ -2221,121 +2248,124 @@
   <!-- コマンドのツールバー。モードが変わったらコマンド層を作り直す(集めかけの引数を持ち越さない)。
        `FilesPanel` はここには載らない —— 2026-08-23にいったんここへ統合したが、
        2026-08-26に本人が左サイドバーへの復元を決定した(下の `.main` 直下の `.data-panel` 参照)。 -->
-  <section class="toolbar">
-    <!-- **モードの行**(`.mode-row`)。**ここがverbより1つ上の次元**(2026-09-03) ——
-         入口・札・「抜ける」がここに揃い、verbは下の `CommandHost` にだけ並ぶ。
-         **常設の表示は増えていない**: 通常モードに出るのは入口ボタン2つで、
-         そのうち「スケッチ」は下のverbの行から**移設**したもの、「形状最適化」は
-         元からこの位置にいた(「画面に何かを足して
-         既定に据えるのではない」に触れない)。 -->
-    {#if mode.kind === 'idle'}
-      <div class="mode-row">
-        <!-- **行の見出し**(2026-09-05)。下の `CommandHost` の「コマンド」と同じ
-             `.label` の列に揃える —— 揃っていなかった間、モードの2つとverbの6つは
-             ラベル列の有無だけがずれた**同じ形のボタンの帯**が2本並んでいるように見え、
-             その「1つ上の次元」が画面から
-             読み取れなかった。スケッチ中/形状最適化中の行はすでにモード名を同じ列に
-             置いており(下の `{#if}`)、通常モードだけが欠けていた。 -->
-        <span class="label">モード</span>
-        <!-- **スケッチの入口**(2026-09-03にverbの行から移設)。idは `sketch_create` の
-             コマンドボタンと同じ `sketch-create` のまま —— 押したときに起きること
-             (スケッチモードへ入り、貼る先のクリックを待つ)は変わっておらず、
-             実機検査が叩く口を変える理由が無い。**両方が同時にDOMへ出ることはない**
-             (この行は通常モードだけ、コマンドボタンは貼る先待ちのときだけ)。 -->
-        <button
-          id="sketch-create"
-          class="tag"
-          onclick={startSketchMode}
-          title="スケッチモードに入る(このあと貼る先の基準平面か面をクリックする)"
-        >
-          スケッチ
-        </button>
-        <!-- **形状最適化(第3のモード)への入口**(2026-08-31)。対応する文書実体が無く
-             viewport上に「これをクリックすれば入れる」実物が存在しないので、UI指針1の
-             裏返しとしてボタンを置く(スケッチと同じ「モードに入るボタン」の作法)。 -->
-        <button
-          id="optimize-enter"
-          class="tag"
-          onclick={enterOptimizeMode}
-          title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
-        >
-          形状最適化
-        </button>
-      </div>
-    {/if}
-    <!-- **スケッチモードだが、まだどのスケッチも開いていない**(貼る先のクリック待ち)。
-         下の `CommandHost` には `sketch_create` が1つだけ、**起動済みで**出ている。 -->
-    {#if mode.kind === 'sketch-pending'}
-      <div class="mode-row">
-        <span class="label">スケッチ</span>
-        <span id="sketch-mode" class="tag on">貼る先をクリック(基準平面 XY/XZ/YZ か、ソリッドの面)</span>
-        <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
-      </div>
-    {/if}
-    <!-- **スケッチモードの札とモード操作**(2026-08-30に `SketchPanel.svelte` から移設)。
-         右サイドバーをAI専用にするため、モード表示・「正面から見る」・「抜ける」は
-         モードに応じて作り直されるこのツールバー側へ移した(本人決定)。
-         idは移設前と同じにしてある —— 実機検査が叩く口を変える理由が無い。 -->
-    {#if mode.kind === 'sketch' && activeSketch}
-      <div class="mode-row">
-        <span class="label">スケッチ</span>
-        <span id="sketch-mode" class="tag on">
-          編集中 {planeLabel(activeSketch.plane, '面に貼ったスケッチ')}
-          ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
-        </span>
-        <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId)}>
-          正面から見る
-        </button>
-        <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
-      </div>
-    {/if}
-    {#if mode.kind === 'optimize'}
-      <div class="mode-row">
-        <span class="label">形状最適化</span>
-        <span id="optimize-mode" class="tag on">
-          保持 {optimize?.preserve_bodies.length ?? 0} ・除外 {optimize?.exclude_bodies.length ?? 0}
-          ・拘束 {optimize?.fixtures.length ?? 0} ・荷重 {optimize?.loads.length ?? 0}
-        </span>
-        <!-- **走っている間は抜けさせない。** 抜けるとパネルごと消えて中断ボタンが
-             画面から無くなる(止める手段がゼロになる)。 -->
-        <button id="optimize-exit" disabled={optimizeBusy} onclick={exitOptimizeMode}>
-          抜ける
-        </button>
-      </div>
-    {/if}
-    <!-- **verbの行。** モードが変わったらコマンド層ごと作り直す(集めかけの引数を持ち越さない)。
-         鍵はモードのタグそのもの —— スケッチAからBへ移るときは作り直さない(今までどおり)。 -->
-    {#key mode.kind}
-      <CommandHost
-        bind:this={host}
-        {selection}
-        busy={pendingOp !== null || optimizeBusy}
-        {selfSelections}
-        commands={mode.kind === 'sketch'
-          ? SKETCH_MODE_COMMANDS
-          : mode.kind === 'sketch-pending'
-            ? SKETCH_PENDING_COMMANDS
-            : mode.kind === 'optimize'
-              ? OPTIMIZE_MODE_COMMANDS
-              : SOLID_COMMANDS}
-        defaultCommandId={mode.kind === 'sketch' ? DEFAULT_SKETCH_COMMAND_ID : undefined}
-        startCommandId={mode.kind === 'sketch-pending' ? SKETCH_CREATE.id : undefined}
-        hover={hoverPoint}
-        entities={selectedEntities}
-        onRun={runCommand}
-        onPreview={requestPreview}
-        onCancelPreview={clearPreview}
-        onNote={note}
-        onStart={onCommandStart}
-        onEnd={onCommandEnd}
-        onWants={onWantsKinds}
-        onWantsPlane={(wants) => (wantedPlane = wants)}
-        onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
-        onWantsPick={(target) => (wantedPick = target)}
-        onWantsVertices={(wants) => (wantedVertices = wants)}
-      />
-    {/key}
-  </section>
+  <!-- 閉じている(トップ画面)間はツールバーごと出さない —— 灰色の道具が並ぶと「何か開いているが使えない」に見える。 -->
+  {#if documentOpen}
+    <section class="toolbar">
+      <!-- **モードの行**(`.mode-row`)。**ここがverbより1つ上の次元**(2026-09-03) ——
+           入口・札・「抜ける」がここに揃い、verbは下の `CommandHost` にだけ並ぶ。
+           **常設の表示は増えていない**: 通常モードに出るのは入口ボタン2つで、
+           そのうち「スケッチ」は下のverbの行から**移設**したもの、「形状最適化」は
+           元からこの位置にいた(「画面に何かを足して
+           既定に据えるのではない」に触れない)。 -->
+      {#if mode.kind === 'idle'}
+        <div class="mode-row">
+          <!-- **行の見出し**(2026-09-05)。下の `CommandHost` の「コマンド」と同じ
+               `.label` の列に揃える —— 揃っていなかった間、モードの2つとverbの6つは
+               ラベル列の有無だけがずれた**同じ形のボタンの帯**が2本並んでいるように見え、
+               その「1つ上の次元」が画面から
+               読み取れなかった。スケッチ中/形状最適化中の行はすでにモード名を同じ列に
+               置いており(下の `{#if}`)、通常モードだけが欠けていた。 -->
+          <span class="label">モード</span>
+          <!-- **スケッチの入口**(2026-09-03にverbの行から移設)。idは `sketch_create` の
+               コマンドボタンと同じ `sketch-create` のまま —— 押したときに起きること
+               (スケッチモードへ入り、貼る先のクリックを待つ)は変わっておらず、
+               実機検査が叩く口を変える理由が無い。**両方が同時にDOMへ出ることはない**
+               (この行は通常モードだけ、コマンドボタンは貼る先待ちのときだけ)。 -->
+          <button
+            id="sketch-create"
+            class="tag"
+            onclick={startSketchMode}
+            title="スケッチモードに入る(このあと貼る先の基準平面か面をクリックする)"
+          >
+            スケッチ
+          </button>
+          <!-- **形状最適化(第3のモード)への入口**(2026-08-31)。対応する文書実体が無く
+               viewport上に「これをクリックすれば入れる」実物が存在しないので、UI指針1の
+               裏返しとしてボタンを置く(スケッチと同じ「モードに入るボタン」の作法)。 -->
+          <button
+            id="optimize-enter"
+            class="tag"
+            onclick={enterOptimizeMode}
+            title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
+          >
+            形状最適化
+          </button>
+        </div>
+      {/if}
+      <!-- **スケッチモードだが、まだどのスケッチも開いていない**(貼る先のクリック待ち)。
+           下の `CommandHost` には `sketch_create` が1つだけ、**起動済みで**出ている。 -->
+      {#if mode.kind === 'sketch-pending'}
+        <div class="mode-row">
+          <span class="label">スケッチ</span>
+          <span id="sketch-mode" class="tag on">貼る先をクリック(基準平面 XY/XZ/YZ か、ソリッドの面)</span>
+          <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
+        </div>
+      {/if}
+      <!-- **スケッチモードの札とモード操作**(2026-08-30に `SketchPanel.svelte` から移設)。
+           右サイドバーをAI専用にするため、モード表示・「正面から見る」・「抜ける」は
+           モードに応じて作り直されるこのツールバー側へ移した(本人決定)。
+           idは移設前と同じにしてある —— 実機検査が叩く口を変える理由が無い。 -->
+      {#if mode.kind === 'sketch' && activeSketch}
+        <div class="mode-row">
+          <span class="label">スケッチ</span>
+          <span id="sketch-mode" class="tag on">
+            編集中 {planeLabel(activeSketch.plane, '面に貼ったスケッチ')}
+            ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
+          </span>
+          <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId)}>
+            正面から見る
+          </button>
+          <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
+        </div>
+      {/if}
+      {#if mode.kind === 'optimize'}
+        <div class="mode-row">
+          <span class="label">形状最適化</span>
+          <span id="optimize-mode" class="tag on">
+            保持 {optimize?.preserve_bodies.length ?? 0} ・除外 {optimize?.exclude_bodies.length ?? 0}
+            ・拘束 {optimize?.fixtures.length ?? 0} ・荷重 {optimize?.loads.length ?? 0}
+          </span>
+          <!-- **走っている間は抜けさせない。** 抜けるとパネルごと消えて中断ボタンが
+               画面から無くなる(止める手段がゼロになる)。 -->
+          <button id="optimize-exit" disabled={optimizeBusy} onclick={exitOptimizeMode}>
+            抜ける
+          </button>
+        </div>
+      {/if}
+      <!-- **verbの行。** モードが変わったらコマンド層ごと作り直す(集めかけの引数を持ち越さない)。
+           鍵はモードのタグそのもの —— スケッチAからBへ移るときは作り直さない(今までどおり)。 -->
+      {#key mode.kind}
+        <CommandHost
+          bind:this={host}
+          {selection}
+          busy={pendingOp !== null || optimizeBusy}
+          {selfSelections}
+          commands={mode.kind === 'sketch'
+            ? SKETCH_MODE_COMMANDS
+            : mode.kind === 'sketch-pending'
+              ? SKETCH_PENDING_COMMANDS
+              : mode.kind === 'optimize'
+                ? OPTIMIZE_MODE_COMMANDS
+                : SOLID_COMMANDS}
+          defaultCommandId={mode.kind === 'sketch' ? DEFAULT_SKETCH_COMMAND_ID : undefined}
+          startCommandId={mode.kind === 'sketch-pending' ? SKETCH_CREATE.id : undefined}
+          hover={hoverPoint}
+          entities={selectedEntities}
+          onRun={runCommand}
+          onPreview={requestPreview}
+          onCancelPreview={clearPreview}
+          onNote={note}
+          onStart={onCommandStart}
+          onEnd={onCommandEnd}
+          onWants={onWantsKinds}
+          onWantsPlane={(wants) => (wantedPlane = wants)}
+          onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
+          onWantsPick={(target) => (wantedPick = target)}
+          onWantsVertices={(wants) => (wantedVertices = wants)}
+        />
+      {/key}
+    </section>
+  {/if}
 
   <div class="main">
     <!-- 左サイドバー: 保存済みファイルの一覧(Fusion 360のデータパネルに対応)。
@@ -2346,9 +2376,11 @@
         <FilesPanel
           documents={files.list}
           currentName={files.currentName}
+          {documentOpen}
           onRename={files.rename}
           onOpen={files.open}
           onNew={files.create}
+          onClose={files.close}
           onCopy={files.copy}
           onDelete={files.remove}
           onExportStep={files.exportStep}
@@ -2369,29 +2401,45 @@
       <!-- 測定の読み札(issue #10)。**結果があるときだけ**浮く(常設の指標ではない —— docs/UI.md
            「常設の指標を置かない」)。`.stage` の中の position:absolute なので `.viewport` の
            寸法＝カメラのアスペクトには触らない(ブラウザ・設定ダイアログと同じ)。 -->
+      <!-- 最初の状態が届く前も覆う(届く前は開いているか分からず、出すとグリッドが一瞬見えてから消える)。 -->
+      {#if !documentOpen}
+        <StartScreen
+          waiting={!showStart}
+          documents={files.list}
+          filesPanelOpen={dataPanelOpen}
+          onOpen={files.open}
+          onNew={files.create}
+          onShowFiles={() => (dataPanelOpen = true)}
+          thumbnailUrl={files.thumbnailUrl}
+          onNeedThumbnail={files.wantThumbnail}
+        />
+      {/if}
+
       {#if measure.text !== ''}
         <div id="measure-result" class="measure-readout">{measure.text}</div>
       {/if}
 
-      <BrowserPanel
-        bodies={partBodies}
-        {sketches}
-        activeSketchId={sketchId}
-        originVisible={display.originVisible}
-        section={display.section}
-        onToggle={setVisible}
-        onShowAll={showAllParts}
-        onHideAll={hideAllParts}
-        onEnterSketch={enterSketchFromBrowser}
-        onToggleSketch={setSketchVisible}
-        onShowAllSketches={showAllSketches}
-        onHideAllSketches={hideAllSketches}
-        onToggleOrigin={display.applyOriginVisible}
-        onSectionToggle={display.toggleSection}
-        onSectionPlane={display.setSectionPlane}
-        onSectionPosition={display.setSectionPosition}
-        onSectionInvert={display.setSectionInverted}
-      />
+      {#if documentOpen}
+        <BrowserPanel
+          bodies={partBodies}
+          {sketches}
+          activeSketchId={sketchId}
+          originVisible={display.originVisible}
+          section={display.section}
+          onToggle={setVisible}
+          onShowAll={showAllParts}
+          onHideAll={hideAllParts}
+          onEnterSketch={enterSketchFromBrowser}
+          onToggleSketch={setSketchVisible}
+          onShowAllSketches={showAllSketches}
+          onHideAllSketches={hideAllSketches}
+          onToggleOrigin={display.applyOriginVisible}
+          onSectionToggle={display.toggleSection}
+          onSectionPlane={display.setSectionPlane}
+          onSectionPosition={display.setSectionPosition}
+          onSectionInvert={display.setSectionInverted}
+        />
+      {/if}
 
       <!-- 設定ダイアログ。**`.stage` の中に置くのは「ブラウザの右」に出すため**(2026-09-04
            本人指示) —— 位置の基準が `.stage` になるので、左右のサイドバーを開閉しても

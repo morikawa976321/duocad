@@ -18,6 +18,8 @@
 | [DEV_NOTES.md](DEV_NOTES.md) | 開発環境と運用（venv・行末・一括編集の道具・減量・測定記録の書き方・タスクの切り方） |
 | [STABLE.md](STABLE.md) | 安定版と開発版の分離（配置・ポート・導入・画面からの更新・巻き戻し・制作データの扱い） |
 | [TOPOPT.md](TOPOPT.md) ほか `TOPOPT_*.md` | 形状最適化（実測・設計と画面・受入検査・探索の時間短縮） |
+| [TOPOPT_IDLE_SOLUTIONS_2026-09-28.md](TOPOPT_IDLE_SOLUTIONS_2026-09-28.md) | 不要材料の2原因への解決策比較。保存場の追加集計、応力評価・可逆探索・検証計画の提案 |
+| [TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md](TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md) | 第8章の検証を実行するtaskboxの11タスク。小型題材の作成・認定、依存関係、共通条件、成果物、十分性の基準 |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
 | [TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) | 島除去後・平滑化前の6条件と探索履歴の検査 |
 | [TOPOPT_MESH_BOOLEAN_STUDY.md](TOPOPT_MESH_BOOLEAN_STUDY.md) | メッシュ集合演算による最終処理の試作評価（合否・保存精度・寸法差） |

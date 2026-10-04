@@ -180,10 +180,16 @@ export function watchErrors(page, { watchHttp = true } = {}) {
  *
  * `height` は 860 が既定(900 の本もある)。**高さが変わると掴む画素が変わる**ので本ごとの値は
  * 揃えない。`until` は ready の後に待つ述語(`page.waitForFunction` に渡す。部品が届いたこと等)。
+ * `newDocument`(既定 true)は、トップ画面が出ていれば「新規」を押して空の文書にしてから返す
+ * (トップ画面そのものを見る本だけ false にする)。
  * **`frameAll` はここでは呼ばない** —— 初回フレーミングそのものを見る本と、near/far を作り直すと
  * 再現条件が壊れる本(`smoke-clip-planes.mjs`)がある。
  */
-export async function openApp(browser, url, { timeout, height = 860, watchHttp = true, until = null } = {}) {
+export async function openApp(
+  browser,
+  url,
+  { timeout, height = 860, watchHttp = true, until = null, newDocument = true } = {},
+) {
   const page = await browser.newPage()
   await page.setViewport({ width: 1280, height })
   const consoleErrors = watchErrors(page, { watchHttp })
@@ -192,6 +198,18 @@ export async function openApp(browser, url, { timeout, height = 860, watchHttp =
     timeout,
     polling: 100,
   })
+  // サーバは何も開いていない状態(トップ画面)で起動し、その間は文書を変える操作が断られる。
+  // 本はどれも空の文書から始める前提なので、トップ画面が出ていれば「新規」を押してツールバーを待つ。
+  if (newDocument) {
+    await page.waitForFunction(
+      () => document.querySelector('#start-new') !== null || document.querySelector('#sketch-create') !== null,
+      { timeout, polling: 100 },
+    )
+    if ((await page.$('#start-new')) !== null) {
+      await page.click('#start-new')
+      await page.waitForSelector('#sketch-create', { timeout })
+    }
+  }
   if (until !== null) await page.waitForFunction(until, { timeout, polling: 100 })
   return { page, consoleErrors }
 }

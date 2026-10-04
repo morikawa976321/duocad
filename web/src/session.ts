@@ -286,6 +286,8 @@ export interface ServerState {
    * ときだけ false**(issue #5)。無題で何も変えていない文書は true(書くものが無い)。
    */
   saved: boolean
+  /** 文書を開いているか(`Session.document_open`)。false ならトップ画面を出し、編集の口を全部隠す。 */
+  document_open: boolean
   /**
    * 形状最適化の条件(第3のモード)。**verb起動時のプリセレクトと役割の色はここが正**で、
    * ブラウザは自前に溜めない(選択集合と同じ扱い)。

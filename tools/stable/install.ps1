@@ -16,8 +16,8 @@
 # **このファイルはUTF-8(BOM付き)で保つ**(update.ps1 と同じ理由)。
 
 param(
-    [string]$StableRoot = (Join-Path $env:USERPROFILE 'duocad-stable'),
-    [string]$DataDir = (Join-Path $env:USERPROFILE 'duocad-data'),
+    [string]$StableRoot = (Join-Path $env:USERPROFILE 'mf\duocad-stable'),
+    [string]$DataDir = (Join-Path $env:USERPROFILE 'mf\duocad-data'),
     [string]$Remote = '',
     [string]$Branch = 'main',
     [string]$ImportModelsFrom = '',

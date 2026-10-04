@@ -35,12 +35,15 @@ export const SCREENSHOTS_DIR = resolve(REPO_ROOT, 'screenshots')
  * どの検査もそこへファイルを増やす。保存/開くを検査するスクリプトは、実在確認のために
  * 自分の workdir を明示して渡す。
  *
+ * `newDocument`(既定 true)は、立ち上がった後に「新規」を送って文書を開いた状態にする
+ * (トップ画面そのものを見る検査だけ false にする)。
+ *
  * @param {{wsPort: number|string, httpPort: number|string, timeout?: number,
- *          modelsDir?: string}} options
+ *          modelsDir?: string, newDocument?: boolean}} options
  * @returns {Promise<{url: string, child: import('node:child_process').ChildProcess,
  *                    stop: () => Promise<void>, log: () => string}>}
  */
-export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir }) {
+export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir, newDocument = true }) {
   if (!existsSync(PYTHON)) throw new Error(`venvのpythonが無い: ${PYTHON}`)
 
   const args = ['-m', 'duocad.mcp_server', '--port', String(wsPort), '--http-port', String(httpPort)]
@@ -74,6 +77,9 @@ export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir
     }
     await new Promise((done) => setTimeout(done, 200))
   }
+  // サーバは何も開いていない状態(トップ画面)で起動し、その間は MCP からの操作も断られる。
+  // 本はどれも空の文書から始める前提なので、画面を開く前に「新規」を送っておく。
+  if (newDocument) await sendNewDocument(wsPort, timeout)
 
   const stop = async () => {
     if (exited !== null) return
@@ -92,4 +98,31 @@ export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir
   }
 
   return { url, child, stop, log }
+}
+
+/** WebSocket で `new_document` を送り、開いた状態が配られるまで待つ。 */
+async function sendNewDocument(wsPort, timeout) {
+  const socket = new WebSocket(`ws://127.0.0.1:${wsPort}`)
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`new_document の応答が ${timeout}ms 以内に来なかった`)), timeout)
+      socket.addEventListener('error', () => {
+        clearTimeout(timer)
+        reject(new Error(`WebSocket(ws://127.0.0.1:${wsPort})に繋がらなかった`))
+      })
+      socket.addEventListener('open', () => socket.send(JSON.stringify({ cmd: 'new_document', client_op: 1 })))
+      socket.addEventListener('message', (event) => {
+        const message = JSON.parse(String(event.data))
+        if (message.type === 'error' && message.where !== 'initial_state') {
+          clearTimeout(timer)
+          reject(new Error(`new_document が断られた: ${message.message}`))
+        } else if (message.type === 'state' && message.state?.document_open) {
+          clearTimeout(timer)
+          resolve()
+        }
+      })
+    })
+  } finally {
+    socket.close()
+  }
 }

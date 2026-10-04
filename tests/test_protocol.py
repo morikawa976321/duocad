@@ -398,6 +398,12 @@ def _run_new_document(session: Session, tmp_path: Path) -> dict:
     return session.new_document()
 
 
+@_runner("close_document")
+def _run_close_document(session: Session, tmp_path: Path) -> dict:
+    _box(session)
+    return session.close_document()
+
+
 @_runner("open_document")
 def _run_open_document(session: Session, tmp_path: Path) -> dict:
     session.add_circle(_sketch(session), [0.0, 0.0], 5.0)

@@ -8,10 +8,10 @@ duocad は2つあります。**作品を作るときは「制作用」、duocad 
 | | 制作用(安定版) | 開発用(開発版) |
 |---|---|---|
 | 使うとき | 作品を作る | duocad を直す・機能を足す |
-| 場所 | `C:\Users\tm976\duocad-stable` | `C:\Users\tm976\mf\duocad` |
+| 場所 | `C:\Users\tm976\mf\duocad-stable` | `C:\Users\tm976\mf\duocad` |
 | 起動 | Win キー → `duocad` → Enter | 今までどおり(README 1章) |
 | 画面 | 独立した窓(タブやアドレスバーが無い) | ブラウザのタブ。**左上にピンクの「開発版」** |
-| ファイルの置き場 | `C:\Users\tm976\duocad-data\models`(書き出しは `export`) | `mf\duocad\models`(書き出しは `export`) |
+| ファイルの置き場 | `C:\Users\tm976\mf\duocad-data\models`(書き出しは `export`) | `mf\duocad\models`(書き出しは `export`) |
 | アドレス | `http://127.0.0.1:8776/` | `http://127.0.0.1:8766/` |
 
 **見分け方は「開発版」の札だけ覚えれば足ります。** 札が出ている窓では制作しないでください。
@@ -19,12 +19,14 @@ duocad は2つあります。**作品を作るときは「制作用」、duocad 
 ## 制作する
 
 1. **Win キー → `duocad` → Enter** で起動します。初めの1回はサーバの準備に十数秒かかります。
+   起動直後は何も開いていない画面(最近の文書のカードと「新規」)が出るので、そこから選びます。
+   作業中の文書はファイル一覧の「閉じる」でこの画面へ戻せます。開いている文書を削除しても戻ります。
 2. 保存は自動です(操作のたびに書かれます)。ファイル一覧には `duocad-data\models` の中身だけが出ます。
 3. 終わったら**窓を閉じるだけ**でかまいません。裏でサーバが残るので、次はすぐ開きます。
 
 **AI に操作させるとき**
 - 画面右の AI パネルはそのまま使えます。
-- Claude Code から操作させるときは、**`C:\Users\tm976\duocad-stable` フォルダで Claude Code を開きます**。
+- Claude Code から操作させるときは、**`C:\Users\tm976\mf\duocad-stable` フォルダで Claude Code を開きます**。
   このフォルダで開いたときだけ制作用につながります(`mf\duocad` で開くと開発用につながります)。
 
 ## 更新する
@@ -73,7 +75,7 @@ Get-CimInstance Win32_Process | Where-Object CommandLine -like '*--channel stabl
 数十秒かかることがあります。止まって見えても待ってください):
 
 ```powershell
-& "$env:USERPROFILE\duocad-stable\tools\stable\update.ps1" -RepoRoot "$env:USERPROFILE\duocad-stable" -LogDir "$env:USERPROFILE\duocad-data\logs" -DataDir "$env:USERPROFILE\duocad-data" -Rollback
+& "$env:USERPROFILE\mf\duocad-stable\tools\stable\update.ps1" -RepoRoot "$env:USERPROFILE\mf\duocad-stable" -LogDir "$env:USERPROFILE\mf\duocad-data\logs" -DataDir "$env:USERPROFILE\mf\duocad-data" -Rollback
 ```
 
 ## 気をつけること

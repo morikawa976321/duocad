@@ -46,6 +46,7 @@ import pytest
 
 from duocad import io_step, kernel, query
 from duocad.server import Session
+from duocad.session import NoDocument
 from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, edit_parameter, select as _select, send_one
 
 DEVIATION = 0.2
@@ -627,21 +628,14 @@ def test_copy_document_refuses_an_existing_destination_and_bad_names(session: Se
         session.copy_document("a.json", "a.json")  # 同じ名前 = 既にある
 
 
-def test_delete_document_removes_the_file_but_never_the_current_one(session: Session) -> None:
-    """落ちたら: 編集中のファイルが消せてしまう(次の保存が無いファイルへ書く)、または
-    削除で編集中の文書が動く。"""
+def test_delete_document_of_another_file_leaves_the_current_one_alone(session: Session) -> None:
+    """落ちたら: 編集中でないファイルの削除で、編集中の文書が動くか閉じる。"""
     _box(session)
     session.save_document("old.json")
     session.new_document()
     _box(session)
     session.save_document("mine.json")
     log_before = len(session.document.log.entries)
-
-    with pytest.raises(ValueError) as refusal:
-        session.delete_document("mine.json")
-    assert "mine.json" in str(refusal.value) and "編集中" in str(refusal.value)
-    assert "開く" in str(refusal.value) or "新規" in str(refusal.value), "どうすればできるかを言わない"
-    assert (session.models_dir / "mine.json").exists()
 
     async def script(send):
         return await send({"cmd": "delete_document", "name": "old.json"})
@@ -655,6 +649,56 @@ def test_delete_document_removes_the_file_but_never_the_current_one(session: Ses
     assert clients[1].payloads == []
     with pytest.raises(FileNotFoundError):
         session.delete_document("old.json")
+
+
+def test_deleting_the_open_document_closes_it_everywhere(session: Session) -> None:
+    """落ちたら: 開いている文書を消しても中身が残り、次の操作の自動保存が消したはずの中身を
+    `untitled-<n>.json` として復活させる。または他のタブが消えた文書を出したままになる。"""
+    _box(session)
+    session.rename_document("mine.json")
+
+    async def script(send):
+        return await send({"cmd": "delete_document", "name": "mine.json"})
+
+    (_, clients) = _browser(session, script)
+
+    envelope = next(payload for payload in clients[0].payloads if payload["type"] == "file")
+    assert envelope["action"] == "delete" and envelope["closed"] is True
+    assert not (session.models_dir / "mine.json").exists()
+    assert session.document_open is False
+    assert session.document.bodies == [] and session.document.log.entries == []
+    for client in clients:
+        pushed = [payload for payload in client.payloads if payload["type"] == "state"]
+        assert pushed and pushed[-1]["state"]["document_open"] is False
+
+    with pytest.raises(NoDocument):
+        _box(session)
+    assert list(session.models_dir.glob("*.json")) == []
+
+
+def test_closed_document_refuses_edits_and_writes_nothing(session: Session) -> None:
+    """落ちたら: トップ画面のまま操作が通り、「何も開いていない」が黙って無題の文書になる
+    (verb・undo・名前を付ける、のどの口からでも)。"""
+    _box(session)
+    session.rename_document("mine.json")
+    closed = session.close_document()
+
+    assert closed["change"] == "document" and closed["action"] == "close"
+    assert session.state_meta()["document_open"] is False
+    assert session.current_name is None
+    for edit in (
+        lambda: _box(session),
+        session.undo,
+        lambda: session.rename_document("named.json"),
+        lambda: session.save_document("named.json"),
+    ):
+        with pytest.raises(NoDocument):
+            edit()
+    assert sorted(path.name for path in session.models_dir.glob("*.json")) == ["mine.json"]
+
+    session.new_document()
+    assert session.document_open is True
+    _box(session)
 
 
 def test_copy_and_delete_are_not_exposed_to_ai(session: Session) -> None:
