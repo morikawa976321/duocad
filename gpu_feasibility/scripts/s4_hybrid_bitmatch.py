@@ -51,7 +51,7 @@ def solve(a_op, rhs: np.ndarray, diag: np.ndarray) -> tuple[np.ndarray, int, int
     return u, iterations, int(info), time.perf_counter() - t0
 
 
-def run(name: str) -> dict:
+def run(name: str, with_cpu: bool, previous: dict | None) -> dict:
     z = np.load(DATA / f"{name}.npz")
     data, indices, indptr, shape, rhs = z["data"], z["indices"], z["indptr"], z["shape"], z["rhs"]
     k_host = sp.csr_matrix((data, indices, indptr), shape=tuple(shape))
@@ -78,31 +78,41 @@ def run(name: str) -> dict:
                      "repeat_bit_identical": bool(np.array_equal(u_h, u_h2)),
                      "relative_residual": float(np.linalg.norm(k_host @ u_h - rhs) / np.linalg.norm(rhs))}
 
-    u_c, it_c, info_c, sec_c = solve(k_host, rhs, diag)
-    rec["cpu_1thread"] = {"iterations": it_c, "info": info_c, "seconds_contended": sec_c,
-                          "ms_per_iteration_contended": sec_c / it_c * 1e3, "sha": digest(u_c)}
-    rec["solution_bit_identical"] = bool(np.array_equal(u_h, u_c))
-    rec["max_abs_diff"] = float(np.max(np.abs(u_h - u_c)))
+    np.save(DATA / f"{name}_u.npy", u_h)
+    if with_cpu:
+        u_c, it_c, info_c, sec_c = solve(k_host, rhs, diag)
+        rec["cpu_1thread"] = {"iterations": it_c, "info": info_c, "seconds_contended": sec_c,
+                              "ms_per_iteration_contended": sec_c / it_c * 1e3, "sha": digest(u_c)}
+        rec["solution_bit_identical"] = bool(np.array_equal(u_h, u_c))
+        rec["max_abs_diff"] = float(np.max(np.abs(u_h - u_c)))
+    elif previous and "cpu_1thread" in previous:
+        # CPU の参照解は解き直さず、前回の記録のハッシュと突き合わせる。
+        rec["cpu_1thread"] = previous["cpu_1thread"]
+        rec["solution_bit_identical"] = rec["hybrid"]["sha"] == previous["cpu_1thread"]["sha"]
     del system, hybrid
     cp.get_default_memory_pool().free_all_blocks()
     return rec
 
 
 def main() -> None:
-    names = sys.argv[1:] or sorted(p.stem for p in DATA.glob("*.npz"))
+    args = sys.argv[1:]
+    with_cpu = "--no-cpu" not in args
+    names = [a for a in args if not a.startswith("--")] or sorted(
+        p.stem for p in DATA.glob("*.npz"))
     start = dt.datetime.now().astimezone()
     RESULTS.mkdir(parents=True, exist_ok=True)
     out_path = RESULTS / "s4_hybrid_bitmatch.json"
     out = json.loads(out_path.read_text(encoding="utf-8")) if out_path.exists() else {}
     for name in names:
-        rec = run(name)
+        rec = run(name, with_cpu, out.get(name))
         out[name] = rec
         out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+        cpu = rec.get("cpu_1thread", {})
         print(f"{name}: dofs={rec['free_dofs']} spmvBit={rec['spmv_bit_identical']} "
               f"hybrid={min(rec['hybrid']['seconds']):.2f}s/{rec['hybrid']['iterations']}it "
-              f"cpu1={rec['cpu_1thread']['seconds_contended']:.2f}s/{rec['cpu_1thread']['iterations']}it "
-              f"bitIdentical={rec['solution_bit_identical']} maxAbsDiff={rec['max_abs_diff']:.3e}")
-    _winmem.log_load_window(RESULTS, start, "s4_hybrid_bitmatch " + " ".join(names), cpu_threads=1)
+              f"cpu1={cpu.get('seconds_contended', float('nan')):.2f}s/{cpu.get('iterations')}it "
+              f"bitIdentical={rec.get('solution_bit_identical')}")
+    _winmem.log_load_window(RESULTS, start, "s4_hybrid_bitmatch " + " ".join(args), cpu_threads=1 if with_cpu else 0)
 
 
 if __name__ == "__main__":

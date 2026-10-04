@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import os
 import json
 import sys
 from pathlib import Path
@@ -28,7 +29,7 @@ import _gpucg  # noqa: E402
 DATA = ROOT / "data"
 RESULTS = ROOT / "results"
 RTOL = 1e-9
-REPEATS = 10
+REPEATS = int(os.environ.get("S4_REPEATS", "10"))
 
 
 def digest(u) -> str:
