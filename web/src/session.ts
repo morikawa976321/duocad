@@ -843,8 +843,10 @@ export interface Session {
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   /** 今の設定(応答は `onAiStatus`)。 */
   aiGetStatus(): void
-  /** プロバイダ・モデル・エンドポイントを差し替える。**キーは渡さない**(渡す経路が無い)。 */
-  aiConfigure(provider: AiProviderKind, model?: string, baseUrl?: string): void
+  /** プロバイダ・エンドポイントを差し替える。**キーは渡さない**(渡す経路が無い)。
+   * モデルは送らない —— llama-server は1モデルで起動すると `model` を無視するので、
+   * サーバ側の既定値に任せる(`ai_configure` 自体は `model` を受け付けたまま)。 */
+  aiConfigure(provider: AiProviderKind, baseUrl?: string): void
   /** 1つの発話でエージェントを起こす。**待たずに返る** —— 進捗は `onAiToolCall`、
    * 最終応答は `onAiResult` へ届く(`duocad/server.py` の `_ai_start` のdocstring)。 */
   aiSend(message: string): void
@@ -1181,8 +1183,8 @@ export function createSession(hooks: SessionHooks): Session {
     aiGetStatus() {
       send({ cmd: 'ai_get_status' })
     },
-    aiConfigure(provider, model, baseUrl) {
-      send({ cmd: 'ai_configure', provider, model: model ?? null, base_url: baseUrl ?? null })
+    aiConfigure(provider, baseUrl) {
+      send({ cmd: 'ai_configure', provider, base_url: baseUrl ?? null })
     },
     aiSend(message) {
       send({ cmd: 'ai_send', message })

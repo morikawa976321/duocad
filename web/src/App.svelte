@@ -2393,8 +2393,7 @@
           transcript={ai.transcript}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}
-          onConfigure={(providerKind, modelName, baseUrl) =>
-            session.aiConfigure(providerKind, modelName, baseUrl)}
+          onConfigure={(providerKind, baseUrl) => session.aiConfigure(providerKind, baseUrl)}
         />
       </aside>
     {/if}
