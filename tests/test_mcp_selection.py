@@ -1,24 +1,23 @@
 """**選択と述語をMCPへ出す**契約。
 
 `tests/test_mcp_verbs.py` が操作(verb)の側を持ち、こちらが**交互操作の中心**——AIが選択を
-提案し、人が過不足を直し、AIが読み直して適用する——の側を持つ。`duocad/selection.py` と
+し、人が過不足を直し、AIが読み直して適用する——の側を持つ。`duocad/selection.py` と
 `duocad/predicates.py` にあるコアAPIをそのままMCPツールとして出す。**ここに新しい選択の
 ロジックを書かない** —— MCPはコアのもう一人のクライアントである。
 
 ## このファイルが固定する5つ
 
-1. **選択5ツールが届く** — `get_selection` / `propose_selection`(`refs=` と `predicate=` の
-   両方)/ `modify_selection` / `commit_selection` / `clear_selection`。
+1. **選択5ツールが届く** — `get_selection` / `set_selection`(`refs=` と `predicate=` の
+   両方)/ `modify_selection` / `toggle_selection` / `clear_selection`。
 2. **述語の語彙をAIが自己記述で知れる** — `describe_predicates` が
    `predicates.describe_ops()` を**そのまま**返す。
 3. **0件と不正は別物** — 0件は成功して `count: 0`、不正な述語は `invalid_predicate` で
    **有効なopの一覧つき**。AIが自力で直せることが条件。
-4. **提案のままでは verb に渡せない** — MCP経由でも同じ。ただし `commit_selection` を
-   明示すれば通る(禁止ではなく「黙って通さない」)。
+4. **選択はそのまま verb に渡せる** — 出所の区別は無く、人もAIも同じ操作で触る。
 5. **AI起点の選択変更が画面へ届く** — イベントとして発火し、かつ `state_meta()["selection"]`
    に載る。
 
-**MCP層は5つとも `{"selection": {"items","origin","count"}, ...}` に揃える**。`Session` 側は
+**MCP層は5つとも `{"selection": {"items","count"}, ...}` に揃える**。`Session` 側は
 変更する4メソッドが発火したイベントそのものを返し、`get_selection` だけが
 `Selection.to_dict()` を返すが、その差はコアの都合であってAIに見せる理由が無い ——
 揃えないと、AIは `["selection"]` を挟むかどうかをツールごとに覚えることになる。
@@ -31,7 +30,7 @@ from pathlib import Path
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import kernel, predicates, query
+from duocad import catalog, kernel, predicates, query
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
@@ -89,35 +88,33 @@ def top_face_index(shape) -> int:
 def _assert_selection_payload(payload: dict) -> dict:
     """選択ツールの戻り値の形(モジュールdocstring「なぜ統一するのか」)。"""
     selection = payload["selection"]
-    assert set(selection) == {"items", "origin", "count"}
+    assert set(selection) == {"items", "count"}
     assert selection["count"] == len(selection["items"])
-    assert selection["origin"] in {"user", "proposed"}
     return selection
 
 
-def test_propose_selection_accepts_explicit_references(server: McpServer, session: Session):
-    """`refs=` の経路(§0の「明示的な参照」)。**提案**として入る。"""
+def test_set_selection_accepts_explicit_references(server: McpServer, session: Session):
+    """`refs=` の経路(§0の「明示的な参照」)。"""
     box = box_of(session)
     selection = _assert_selection_payload(
-        call(server, "propose_selection", {"refs": [edge_ref(box.id, 1), edge_ref(box.id, 2)]})
+        call(server, "set_selection", {"refs": [edge_ref(box.id, 1), edge_ref(box.id, 2)]})
     )
     assert selection["count"] == 2
-    assert selection["origin"] == "proposed"
     assert [item["index"] for item in selection["items"]] == [1, 2]
     assert all(item["kind"] == "edge" for item in selection["items"])
 
 
-def test_propose_selection_needs_exactly_one_of_them(server: McpServer, session: Session):
+def test_set_selection_needs_exactly_one_of_them(server: McpServer, session: Session):
     """`refs` と `predicate` の**両方**も**どちらも無し**も拒む(コアの契約と同じ)。
 
     両方通すと「どちらが効いたのか」がAIから見て分からない集合ができる。
     """
     box = box_of(session)
     both = call_error(
-        server, "propose_selection", {"refs": [edge_ref(box.id, 1)], "predicate": VERTICAL_EDGES}
+        server, "set_selection", {"refs": [edge_ref(box.id, 1)], "predicate": VERTICAL_EDGES}
     )
     assert both["code"] == "invalid_argument"
-    neither = call_error(server, "propose_selection", {})
+    neither = call_error(server, "set_selection", {})
     assert neither["code"] == "invalid_argument"
 
 
@@ -149,6 +146,58 @@ def test_describe_predicates_tells_the_ai_how_to_write_one(server: McpServer):
     assert predicates.validate(payload["example"])
 
 
+def test_the_predicate_format_is_in_the_tool_description_itself(server: McpServer):
+    """述語の書き方が `set_selection` の説明にあること。落ちたら、AIは選択のたびに語彙を取りに
+    1往復を払う(`describe_predicates` を呼ぶか、書式を外して失敗するか)状態に戻っている。
+
+    **語彙の正は `predicates.describe_ops()`**。op・引数を足したら説明にも書く。
+    """
+    tools = {tool["name"]: tool for tool in catalog.tool_descriptors()}
+    written = tools["set_selection"]["inputSchema"]["properties"]["predicate"]["description"]
+
+    for key in predicates.PREDICATE_KEYS:
+        assert f'"{key}"' in written, f"述語のキー {key} が説明に無い"
+    for kind, ops in predicates.describe_ops().items():
+        assert f'"{kind}"' in written
+        for op in ops:
+            assert f'"{op["op"]}"' in written, f"{kind} の op {op['op']} が説明に無い"
+            for argument in op["args"]:
+                assert f'"{argument}"' in written, f"{op['op']} の引数 {argument} が説明に無い"
+    assert call(server, "describe_predicates")["body"], "ボディの絞り方が自己記述に無い"
+
+
+def test_an_unknown_predicate_key_is_refused_instead_of_ignored(server: McpServer, session: Session):
+    """`body` を `body_id` と書いた絞り込みを黙って捨てない(全ボディが選ばれたまま成功を返さない)。"""
+    box = box_of(session)
+    error = call_error(
+        server, "set_selection", {"predicate": {"kind": "edge", "body_id": box.id, "where": []}}
+    )
+    assert error["code"] == "invalid_predicate"
+    assert "body_id" in error["message"] and "body" in error["message"]
+    assert selection_of(server)["count"] == 0
+
+
+def test_a_predicate_without_where_is_told_how_to_ask_for_everything(server: McpServer, session: Session):
+    """「全部の辺」を `where` を省いて書く(実測で繰り返し出る)。断るときに直し方を返す。"""
+    error = call_error(server, "set_selection", {"predicate": {"kind": "edge", "body": box_of(session).id}})
+    assert error["code"] == "invalid_predicate"
+    assert '"where": []' in error["message"]
+
+
+def test_asking_for_a_region_by_predicate_says_how_regions_are_selected(server: McpServer):
+    """領域は述語で選べない。断るだけだと `kind: "region"` を繰り返すので、選び方を返す。"""
+    error = call_error(server, "set_selection", {"predicate": {"kind": "region", "where": []}})
+    assert error["code"] == "invalid_predicate"
+    assert '"sketch"' in error["message"] and "refs" in error["message"]
+
+
+def test_a_verb_refused_for_an_empty_selection_says_how_to_select(server: McpServer):
+    """何を選べばよいか(`required_kind`)だけでなく、選び方まで返す。"""
+    error = call_error(server, "extrude", {"distance": 5})
+    assert error["code"] == "selection_empty"
+    assert "set_selection" in error["hint"]
+
+
 def test_describe_predicates_changes_nothing(server: McpServer, session: Session):
     """自己記述は読み取り(選択もログも動かさない)。"""
     before = len(session.document.log.entries)
@@ -167,16 +216,16 @@ def test_zero_matches_is_a_success_that_says_zero(server: McpServer):
     実際に直すべきは条件の値である。逆に黙って古い選択を残すと、人が承認したつもりで
     **別の集合に verb がかかる**。
     """
-    selection = _assert_selection_payload(call(server, "propose_selection", {"predicate": NO_MATCH}))
+    selection = _assert_selection_payload(call(server, "set_selection", {"predicate": NO_MATCH}))
     assert selection["count"] == 0
     assert selection["items"] == []
 
 
 def test_zero_matches_still_replaces_the_previous_selection(server: McpServer, session: Session):
-    """0件でも**置き換えは起きる**(A1の `propose_selection` の契約)。"""
+    """0件でも**置き換えは起きる**(A1の `set_selection` の契約)。"""
     box = box_of(session)
-    call(server, "propose_selection", {"refs": [edge_ref(box.id, 1)]})
-    call(server, "propose_selection", {"predicate": NO_MATCH})
+    call(server, "set_selection", {"refs": [edge_ref(box.id, 1)]})
+    call(server, "set_selection", {"predicate": NO_MATCH})
     assert selection_of(server)["count"] == 0
 
 
@@ -188,7 +237,7 @@ def test_an_unknown_op_comes_back_with_the_valid_ones(server: McpServer):
     """
     error = call_error(
         server,
-        "propose_selection",
+        "set_selection",
         {"predicate": {"kind": "edge", "where": [{"op": "longer_than", "value": 20}]}},
     )
     assert error["code"] == "invalid_predicate"
@@ -202,11 +251,10 @@ def test_an_invalid_predicate_leaves_the_selection_untouched(server: McpServer, 
     黙って空集合にすると「0件だった」と区別が付かなくなる。
     """
     box = box_of(session)
-    call(server, "propose_selection", {"refs": [edge_ref(box.id, 1)]})
-    call(server, "commit_selection")
+    call(server, "set_selection", {"refs": [edge_ref(box.id, 1)]})
     before = selection_of(server)
 
-    call_error(server, "propose_selection", {"predicate": {"kind": "edge", "where": [{"op": "nope"}]}})
+    call_error(server, "set_selection", {"predicate": {"kind": "edge", "where": [{"op": "nope"}]}})
 
     assert selection_of(server) == before
 
@@ -220,12 +268,12 @@ def test_a_malformed_reference_is_refused_without_touching_the_selection(
     存在しないBodyなら KeyError。MCPはそれを `invalid_argument` / `not_found` に写す。
     """
     box = box_of(session)
-    call(server, "propose_selection", {"refs": [edge_ref(box.id, 1)]})
+    call(server, "set_selection", {"refs": [edge_ref(box.id, 1)]})
     before = selection_of(server)
 
-    shapeless = call_error(server, "propose_selection", {"refs": [{"kind": "edge", "index": 1}]})
+    shapeless = call_error(server, "set_selection", {"refs": [{"kind": "edge", "index": 1}]})
     assert shapeless["code"] == "invalid_argument"
-    ghost = call_error(server, "propose_selection", {"refs": [edge_ref("ghost", 1)]})
+    ghost = call_error(server, "set_selection", {"refs": [edge_ref("ghost", 1)]})
     assert ghost["code"] == "not_found"
     out_of_range = call_error(server, "modify_selection", {"add": [edge_ref(box.id, 999)]})
     assert out_of_range["code"] == "invalid_argument"
@@ -240,16 +288,14 @@ def test_a_hidden_body_is_not_scanned_and_saying_so_is_an_error(server: McpServe
     """
     box = box_of(session)
     session.set_visible(box.id, False)
-    assert call(server, "propose_selection", {"predicate": VERTICAL_EDGES})["selection"]["count"] == 0
+    assert call(server, "set_selection", {"predicate": VERTICAL_EDGES})["selection"]["count"] == 0
     error = call_error(
-        server, "propose_selection", {"predicate": {**VERTICAL_EDGES, "body": box.id}}
+        server, "set_selection", {"predicate": {**VERTICAL_EDGES, "body": box.id}}
     )
     assert error["code"] == "invalid_argument"
 
 
-#: 形を選択から取るツールの代表(辺・面の2種別)と、それぞれが提案のまま呼ばれたときの引数。
-#: 全部を並べてはいない —— 宣言(`uses_selection`)と実体が `require_*` を呼ぶことの一致は
-#: `tests/test_vertex_pick.py` が見ており、門は `selection.confirmed_items` の1か所にある。
+#: 形を選択から取るツールの代表(辺・面の2種別)と、それぞれの引数。
 SELECTION_CONSUMING_TOOLS = [
     ("fillet", {"radius": 2.0}, "edge"),
     ("chamfer", {"distance": 2.0}, "edge"),
@@ -259,113 +305,47 @@ SELECTION_CONSUMING_TOOLS = [
 
 
 @pytest.mark.parametrize("tool,arguments,kind", SELECTION_CONSUMING_TOOLS)
-def test_no_selection_consuming_tool_accepts_a_proposal(
+def test_a_selection_set_by_the_ai_feeds_a_verb_directly(
     server: McpServer, session: Session, tool: str, arguments: dict, kind: str
 ):
-    """**`fillet` だけの話ではない。** 形を選択から取るツールは全部この門を通る。
-
-    1つでも `get_selection()["items"]` を素で読む実装があると、そのツールだけ
-    A1の決定4(提案のままでは verb に渡せない)が効かなくなる —— しかも
-    `fillet` のテストは緑のままなので気づけない。
-    """
-    box = box_of(session)
-    predicate = VERTICAL_EDGES if kind == "edge" else {
-        "kind": "face",
-        "where": [{"op": "normal_dot_gt", "axis": "Z", "value": 0.9}],
-    }
-    call(server, "propose_selection", {"predicate": predicate})
-    shape_before = box.shape
-
-    error = call_error(server, tool, arguments)
-
-    assert error["code"] == "selection_not_committed", f"{tool} が提案を素通しした"
-    assert "commit_selection" in error["hint"]
-    assert box.shape is shape_before
-    assert session.document.log.entries == []
-
-
-def test_extrude_also_refuses_a_proposed_region(server: McpServer, tmp_path: Path):
-    """領域を食う `extrude` にも同じ門がかかる(形が `ShapeRef` ではない側の対照)。"""
-    from duocad.sketch import add_rectangle, sketch_create
-
-    empty = Session(None, 0.2)
-    sketch_id = sketch_create(empty.document, "XY")
-    add_rectangle(empty.document, sketch_id, (0.0, 0.0), 30.0, 30.0)
-    mcp = McpServer(DocumentTools(empty))
-    call(mcp, "propose_selection", {"refs": [{"sketch": sketch_id, "index": 1}]})
-
-    error = call_error(mcp, "extrude", {"distance": 10.0})
-
-    assert error["code"] == "selection_not_committed"
-    assert "commit_selection" in error["hint"]
-    assert empty.document.bodies == [], "拒否したのにボディができた"
-
-
-def _open_the_core_gate(monkeypatch) -> None:
-    """`selection.confirmed_items` を `origin` を見ない版へ差し替える(絞り込みは同じ)。
-
-    これで通るかどうかが「門がコアに1つだけか」の判定になる(下の2本が使う)。
-    """
-    from duocad import selection as selection_module
-
-    def permissive(doc, kind=None):
-        items = list(selection_module.get_selection(doc).items)
-        if kind is None:
-            return items
-        return [item for item in items if selection_module.ref_kind(item) == kind]
-
-    monkeypatch.setattr(selection_module, "confirmed_items", permissive)
-
-
-@pytest.mark.parametrize("tool,arguments,kind", SELECTION_CONSUMING_TOOLS)
-def test_the_gate_lives_in_the_core_not_in_the_mcp_layer(
-    server: McpServer, session: Session, monkeypatch, tool: str, arguments: dict, kind: str
-):
-    """**MCPは自分では弾かない**(Fの決定3)。拒否するのはコアの `confirmed_items` だけ。
-
-    コア側の門を一時的に外すと、MCPは**そのまま通す**はずである ——
-    通らなければ、MCP層にもう1つ門があるということで、同じ規則が2箇所に生まれている。
-    片方だけ緩んだときに誰も気づかない状態を、ここで作らせない。
-
-    `test_no_selection_consuming_tool_accepts_a_proposal` だけでは**この向きは検査できない**
-    (MCPが先に弾いても観察結果は同じ)ので、対で必要になる。**対の両方を同じ
-    `SELECTION_CONSUMING_TOOLS` で回す** —— 片方だけ全ツール、片方は `fillet` だけ、という
-    非対称にすると、残りのツールは「MCPが先読みして弾き、確定後は `get_selection()` を
-    素読み」でも全部緑になる。
-    """
-    _open_the_core_gate(monkeypatch)
-
-    box = box_of(session)
+    """`set_selection` の直後に、確定のための手を挟まず verb が通る。"""
     predicate = VERTICAL_EDGES if kind == "edge" else {
         "kind": "face",
         "where": [{"op": "normal_dot_gt", "axis": "Z", "value": 0.9}],
     }
     log_before = len(session.document.log.entries)
-    call(server, "propose_selection", {"predicate": predicate})  # commit しない
+    call(server, "set_selection", {"predicate": predicate})
 
     payload = call(server, tool, arguments)
 
-    assert payload["verb"] == tool, f"{tool} がMCP層で弾いている(門が2箇所ある)"
+    assert payload["verb"] == tool
     assert len(session.document.log.entries) == log_before + 1
-    assert box is box_of(session)
 
 
-def test_the_core_gate_is_the_only_one_for_regions_too(tmp_path: Path, monkeypatch):
-    """領域を食う `extrude` にも同じ向きの検査をかける(`ShapeRef` ではない側の対照)。"""
-    from duocad.sketch import add_rectangle, sketch_create
+def test_toggle_selection_adds_and_removes_like_a_click(server: McpServer, session: Session):
+    """`toggle_selection` は画面の素のクリックと同じ: あれば外し無ければ足す。"""
+    box = box_of(session)
+    call(server, "set_selection", {"refs": [edge_ref(box.id, 1)]})
+    toggled = _assert_selection_payload(
+        call(server, "toggle_selection", {"refs": [edge_ref(box.id, 1), edge_ref(box.id, 2)]})
+    )
+    assert [item["index"] for item in toggled["items"]] == [2]
+    assert selection_of(server) == toggled
 
-    _open_the_core_gate(monkeypatch)
 
-    empty = Session(None, 0.2)
-    sketch_id = sketch_create(empty.document, "XY")
-    add_rectangle(empty.document, sketch_id, (0.0, 0.0), 30.0, 30.0)
-    mcp = McpServer(DocumentTools(empty))
-    call(mcp, "propose_selection", {"refs": [{"sketch": sketch_id, "index": 1}]})
+def test_human_and_ai_have_the_same_selection_operations():
+    """**人(WebSocket)とAI(MCP)で選択操作の集合を揃える**(本人の原則)。
 
-    payload = call(mcp, "extrude", {"distance": 10.0})
-
-    assert payload["verb"] == "extrude", "extrude がMCP層で弾いている(門が2箇所ある)"
-    assert len(empty.document.bodies) == 1
+    落ちたら、片方にだけ選択操作が増えている。AIだけが持ってよいのは述語を取る
+    `set_selection` だけで、人は述語を書かずクリックで選ぶ。
+    """
+    edits = ("set_selection", "modify_selection", "toggle_selection", "clear_selection")
+    for name in edits:
+        assert catalog.BY_NAME[name].mcp, f"{name} がMCPに無い"
+    on_websocket = {name for name in edits if catalog.BY_NAME[name].ws != "none"}
+    assert on_websocket == {"modify_selection", "toggle_selection", "clear_selection"}
+    for name in on_websocket:
+        assert hasattr(Session, catalog.BY_NAME[name].session)
 
 
 @pytest.mark.parametrize("tool,arguments", [("fillet", {"radius": 2.0}), ("chamfer", {"distance": 2.0})])
@@ -392,8 +372,7 @@ def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, 
     target_faces = kernel.face_count(target.shape)
     other_faces = kernel.face_count(other.shape)
 
-    call(server, "propose_selection", {"predicate": {**VERTICAL_EDGES, "body": "target"}})
-    call(server, "commit_selection")
+    call(server, "set_selection", {"predicate": {**VERTICAL_EDGES, "body": "target"}})
     payload = call(server, tool, arguments)
 
     assert payload["changed_bodies"] == ["target"], "選択と違うBodyに当たっている"
@@ -401,16 +380,11 @@ def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, 
     assert kernel.face_count(other.shape) == other_faces, "無関係なBodyが変わった"
 
 
-def test_measure_works_on_a_proposal(server: McpServer):
-    """**測るのは verb ではない**ので、提案のままでも通る。
-
-    AIが自分の提案を確かめてから確定する——という往復がここで閉じる。
-    ここを `confirmed_items` 経由にすると、AIは中身を見ずに commit する動機ができる
-    (提案と確定の区別を実際に弱める)。
-    """
-    call(server, "propose_selection", {"predicate": VERTICAL_EDGES})
+def test_measure_reads_the_current_selection(server: McpServer):
+    """**測るのは verb ではない**ので、選んだ直後に測れる。"""
+    call(server, "set_selection", {"predicate": VERTICAL_EDGES})
     payload = call(server, "measure")
-    assert payload["origin"] == "proposed"
+    assert "origin" not in payload
     assert payload["count"] == 4
 
 
@@ -424,7 +398,7 @@ def test_measure_reports_lengths_for_edges(server: McpServer, session: Session):
     述語が使う `describe_edges` と別の値になりうる。
     """
     box = box_of(session)
-    call(server, "propose_selection", {"predicate": VERTICAL_EDGES})
+    call(server, "set_selection", {"predicate": VERTICAL_EDGES})
     payload = call(server, "measure")
 
     lengths = {edge["index"]: edge["length"] for edge in query.describe_edges(box.shape)}
@@ -439,7 +413,7 @@ def test_measure_reports_area_normal_and_center_for_faces(server: McpServer, ses
     """面は面積・法線・中心(§5)。"""
     box = box_of(session)
     index = top_face_index(box.shape)
-    call(server, "propose_selection", {"refs": [{"body": box.id, "kind": "face", "index": index}]})
+    call(server, "set_selection", {"refs": [{"body": box.id, "kind": "face", "index": index}]})
 
     item = call(server, "measure")["items"][0]
 
@@ -468,7 +442,7 @@ def test_measure_reports_the_area_of_a_region(tmp_path: Path):
     sketch_id = sketch_create(empty.document, "XY")
     add_circle(empty.document, sketch_id, (0.0, 0.0), 10.0)
     mcp = McpServer(DocumentTools(empty))
-    call(mcp, "propose_selection", {"refs": [{"sketch": sketch_id, "index": 1}]})
+    call(mcp, "set_selection", {"refs": [{"sketch": sketch_id, "index": 1}]})
 
     item = call(mcp, "measure")["items"][0]
 
@@ -486,7 +460,7 @@ def test_measure_returns_the_position_of_a_vertex(server: McpServer, session: Se
     from duocad import kernel
 
     box = box_of(session)
-    call(server, "propose_selection", {"refs": [{"body": box.id, "kind": "vertex", "index": 1}]})
+    call(server, "set_selection", {"refs": [{"body": box.id, "kind": "vertex", "index": 1}]})
     item = call(server, "measure")["items"][0]
     assert item["kind"] == "vertex"
     assert item["point"] == kernel.vertex_positions(box.shape)[0]["point"]
@@ -498,8 +472,8 @@ def test_measure_returns_the_position_of_a_vertex(server: McpServer, session: Se
 def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, session: Session):
     """**このファイルで最も重要な1本**。
 
-    述語で辺を提案 → `get_selection` で読む → `modify_selection` で1本足して1本引く →
-    `commit_selection` → `fillet` を適用 → 体積と面数が変わる。
+    述語で辺を選ぶ → `get_selection` で読む → `modify_selection` で1本足して1本引く →
+    `fillet` を適用 → 体積と面数が変わる。
     A2 が素のPythonで通した一巡を、
     **MCPのツールだけで**もう一度通す。ここが通れば §0 の交互操作の条件はAI側から満たせている。
     """
@@ -507,9 +481,9 @@ def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, ses
     faces_before = kernel.face_count(box.shape)
     volume_before = query.volume(box.shape)
 
-    # 1. AIが述語で提案する
-    proposed = call(server, "propose_selection", {"predicate": VERTICAL_EDGES})["selection"]
-    assert proposed["count"] == 4 and proposed["origin"] == "proposed"
+    # 1. AIが述語で選ぶ
+    proposed = call(server, "set_selection", {"predicate": VERTICAL_EDGES})["selection"]
+    assert proposed["count"] == 4
 
     # 2. 人(と、それを代行するAI)が読み直す
     read_back = selection_of(server)
@@ -529,10 +503,8 @@ def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, ses
         "順序は選択順(追加順)であること —— fillet は edges と radius を位置で対応させるので、"
         "並べ替えると半径の割り当てが黙ってずれる"
     )
-    assert modified["origin"] == "user", "人が触ること自体が承認(A1の決定3)"
 
-    # 4. 確定して適用する
-    call(server, "commit_selection")
+    # 4. そのまま適用する
     payload = call(server, "fillet", {"radius": 2.0})
 
     # 5. 体積と面数が変わる
@@ -544,7 +516,7 @@ def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, ses
     # 6. **形を変えたので選択は全リセットされる**(統一契約。
     # `duocad/catalog.py` の `resets_selection`)。丸めた辺の添字は形状変更で別の辺を
     # 指しうるので、後継を当てにいくのではなく空にする —— 次の一手はAIが選び直す。
-    assert selection_of(server) == {"items": [], "origin": "user", "count": 0}
+    assert selection_of(server) == {"items": [], "count": 0}
 
 
 # --------------------------------------------------------------------------------------
@@ -555,7 +527,7 @@ def test_a_selection_change_from_mcp_fires_exactly_one_event(server: McpServer, 
     seen: list = []
     session.add_listener(seen.append)
     try:
-        call(server, "propose_selection", {"predicate": VERTICAL_EDGES})
+        call(server, "set_selection", {"predicate": VERTICAL_EDGES})
     finally:
         session.remove_listener(seen.append)
 
@@ -563,7 +535,6 @@ def test_a_selection_change_from_mcp_fires_exactly_one_event(server: McpServer, 
     event = seen[0]
     assert event["change"] == "selection", "verbの applied とはキーで区別する(選択はverbではない)"
     assert event["selection"]["count"] == 4
-    assert event["selection"]["origin"] == "proposed"
     assert "verb" not in event
 
 
@@ -575,11 +546,11 @@ def test_a_selection_change_from_mcp_reaches_the_browser(session: Session):
     イベントだけ実装して状態に載せないと、人→AIは動くのでテストが無ければ気づけない。
     """
     mcp = McpServer(DocumentTools(session))
-    payloads = pushed_by_mcp(session, lambda: call(mcp, "propose_selection", {"predicate": VERTICAL_EDGES}))
+    payloads = pushed_by_mcp(session, lambda: call(mcp, "set_selection", {"predicate": VERTICAL_EDGES}))
     assert len(payloads) > 1, "AIが選択を書き換えたのにブラウザへ配信されていない"
     pushed = payloads[-1]
     assert pushed["type"] == "state"
-    assert pushed["state"]["selection"]["origin"] == "proposed"
+    assert "origin" not in pushed["state"]["selection"]
     assert pushed["state"]["selection"]["count"] == 4
     assert "applied" not in pushed
 

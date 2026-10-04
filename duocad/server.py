@@ -56,7 +56,6 @@ from .net.ws import (  # noqa: F401
     AI_PROVIDERS,
     FEATURE_COMMANDS,
     FILE_COMMANDS,
-    SELECTION_CONSUMING_COMMANDS,
     SKETCH_COMMANDS,
     Server,
     _send,  # noqa: F401

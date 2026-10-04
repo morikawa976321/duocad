@@ -23,7 +23,7 @@ from duocad.oplog import verb_handler
 from duocad.server import Session
 from duocad.verbs import move_sketch_entities as move_sketch_entities_verb
 from document_support import replay_through_json
-from session_support import SIDE, box as _box, select as _select, send_one
+from session_support import SIDE, box as _box, edit_parameter, select as _select, send_one
 
 DEVIATION = 0.2
 
@@ -439,10 +439,10 @@ def test_a_later_set_parameter_does_not_erase_the_move(session: Session) -> None
     x0_name = entity.params["x0"]
     y1_name = entity.params["y1"]
 
-    session.set_parameter(x0_name, 1.0)          # 先に x0 を打ち直す
+    edit_parameter(session, x0_name, 1.0)        # 先に x0 を打ち直す
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x0"}])
     session.move_sketch_entities(2.0, 0.0)       # その x0 を move で動かす
-    session.set_parameter(y1_name, 5.0)          # 別の値を打ち直す -> rebuild が走る
+    edit_parameter(session, y1_name, 5.0)        # 別の値を打ち直す -> rebuild が走る
 
     moved = _params(session, sketch_id, entity_id)
     assert moved["x0"] == pytest.approx(3.0), "move が rebuild で消えている"
@@ -457,7 +457,7 @@ def test_set_parameter_still_wins_when_it_comes_last(session: Session) -> None:
 
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x0"}])
     session.move_sketch_entities(2.0, 0.0)
-    session.set_parameter(x0_name, 7.0)
+    edit_parameter(session, x0_name, 7.0)
 
     assert _params(session, sketch_id, entity_id)["x0"] == pytest.approx(7.0)
 

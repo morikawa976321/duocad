@@ -56,8 +56,8 @@ def test_the_browser_can_draw_all_four_kinds(session: Session) -> None:
     assert clients[1].payloads[-1]["state"]["sketches"] == _sketches(clients[0]), "2本目の接続にも同じ図形が届く"
 
 
-def test_entities_carry_parameter_names_so_the_values_can_be_retyped(session: Session) -> None:
-    """図形は**パラメータ名つき**で届き、その名前で WS の `set_parameter` から値を打ち直せる。"""
+def test_entities_carry_parameter_names(session: Session) -> None:
+    """図形は**パラメータ名つき**で届く(`set_parameter` は公開面に無いので、WS の口は無い)。"""
 
     async def script(send):
         sketch_id = await _new_sketch(send)
@@ -65,14 +65,15 @@ def test_entities_carry_parameter_names_so_the_values_can_be_retyped(session: Se
             {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": RADIUS, "client_op": 2}
         )
         name = added["state"]["sketches"][0]["entities"][0]["refs"]["radius"]
-        retyped = await send({"cmd": "set_parameter", "name": name, "value": 7.5, "client_op": 3})
-        return name, retyped
+        refused = await send({"cmd": "set_parameter", "name": name, "value": 7.5, "client_op": 3})
+        return name, refused
 
-    (radius_name, retyped), clients = browser(session, script)
+    (radius_name, refused), clients = browser(session, script)
 
     assert isinstance(radius_name, str) and radius_name
-    assert retyped["applied"]["verb"] == "set_parameter" and retyped["applied"]["client_op"] == 3
-    assert math.isclose(_sketches(clients[0])[0]["entities"][0]["params"]["radius"], 7.5)
+    assert refused["type"] == "error" and "unknown command" in refused["message"]
+    radius = session.state_meta()["sketches"][0]["entities"][0]["params"]["radius"]
+    assert math.isclose(radius, RADIUS)
 
 
 def test_undo_removes_one_entity_at_a_time(session: Session) -> None:
@@ -123,7 +124,7 @@ def test_a_line_splits_the_circle_into_two_drawable_regions(session: Session) ->
 
 
 def test_mirror_sketch_entities_is_reachable_from_the_socket(session: Session) -> None:
-    """`mirror_sketch_entities` も表の口を通る: 確定選択の図形を軸の線分で映した複製が届く。"""
+    """`mirror_sketch_entities` も表の口を通る: 選択の図形を軸の線分で映した複製が届く。"""
 
     async def script(send):
         sketch_id = await _new_sketch(send)
@@ -131,7 +132,6 @@ def test_mirror_sketch_entities_is_reachable_from_the_socket(session: Session) -
         await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [15.0, 0.0], "radius": 5.0, "client_op": 3})
         axis_id, circle_id = [entity.id for entity in session.document.sketches[0].entities]
         await send({"cmd": "modify_selection", "add": [{"sketch": sketch_id, "entity": circle_id}], "remove": []})
-        await send({"cmd": "commit_selection"})
         return await send(
             {"cmd": "mirror_sketch_entities", "axis": {"sketch": sketch_id, "entity": axis_id}, "client_op": 4}
         )
@@ -153,7 +153,6 @@ def test_envelope_regions_is_reachable_from_the_socket_and_a_split_result_is_ref
                 {"cmd": "add_rectangle", "sketch_id": sketch_id, "corner": [x, 0.0], "width": 10.0, "height": 10.0, "client_op": client_op}
             )
         await send({"cmd": "modify_selection", "add": [{"sketch": sketch_id, "index": 1}, {"sketch": sketch_id, "index": 2}], "remove": []})
-        await send({"cmd": "commit_selection"})
         refused = await send({"cmd": "envelope_regions", "radius": 2.0, "offset": 0.0, "client_op": 4})
         count_after_refusal = len(session.document.sketches[0].entities)
         done = await send({"cmd": "envelope_regions", "radius": 3.0, "offset": 0.0, "client_op": 5})

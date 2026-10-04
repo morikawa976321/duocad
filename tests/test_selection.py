@@ -144,16 +144,16 @@ def test_regions_go_into_the_selection_like_any_other_kind(sketch_doc, doc: Docu
     result = selection.modify_selection(document, add=[region, dict(region)])
     assert len(result.items) == 1, "同じ領域を2回addしても重複しない"
     assert selection.ref_kind(result.items[0]) == selection.REGION_KIND
-    assert selection.confirmed_items(document, kind=selection.REGION_KIND) == [region]
+    assert selection.selected_items(document, kind=selection.REGION_KIND) == [region]
 
     assert selection.modify_selection(document, remove=[dict(region)]).items == []
 
 
-def test_confirmed_items_rejects_an_unknown_kind(doc: Document):
+def test_selected_items_rejects_an_unknown_kind(doc: Document):
     """`kind` の綴り間違いは ValueError(0件として返すとverbが黙って何もしない)。"""
     selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
     with pytest.raises(ValueError):
-        selection.confirmed_items(doc, kind="edges")
+        selection.selected_items(doc, kind="edges")
 
 
 def test_selecting_from_a_missing_body_raises(doc: Document):
@@ -250,9 +250,9 @@ def test_changing_the_selection_does_not_touch_the_operation_log(doc: Document):
     (下のテスト)。
     """
     before = len(doc.log.entries)
-    selection.propose_selection(doc, refs=[selection.select_face(doc, "box", 1)])
+    selection.set_selection(doc, refs=[selection.select_face(doc, "box", 1)])
     selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
-    selection.commit_selection(doc)
+    selection.toggle_selection(doc, [selection.select_edge(doc, "box", 2)])
     selection.clear_selection(doc)
     assert len(doc.log.entries) == before
 
@@ -283,7 +283,7 @@ def test_selection_is_not_saved(doc: Document):
     """
     sketch_create(doc, "XY")  # ログに1行積んでおく(空のログを再生しても何も検査できない)
     selected = selection.select_face(doc, "box", 1)
-    selection.propose_selection(doc, refs=[selected])
+    selection.set_selection(doc, refs=[selected])
     saved = doc.log.to_json()
 
     # **保存されたJSONがそもそも選択を運んでいない**。ここが本体の検査で、
@@ -299,19 +299,18 @@ def test_selection_is_not_saved(doc: Document):
     assert restored.selection.items == []
 
 
+# 人とAIが同じ集合を同じ操作で触る
 # --------------------------------------------------------------------------------------
-# 出所(提案と確定)
-# --------------------------------------------------------------------------------------
-def test_the_ai_proposes_the_human_fixes_and_the_ai_reads_it_back(doc: Document):
+def test_the_ai_selects_the_human_fixes_and_the_ai_reads_it_back(doc: Document):
     """**交互操作そのもの。このファイルの核心の1本**。
 
-    AIが提案 → 人が過不足を直す → **AIが直した結果を読み直せる**。
+    AIが選ぶ → 人が過不足を直す → **AIが直した結果を読み直せる**。
     3つが同じ1つのオブジェクトを触っていなければ、この往復は閉じない。
     """
-    proposed = selection.propose_selection(
+    chosen = selection.set_selection(
         doc, refs=[selection.select_edge(doc, "box", index) for index in (1, 2, 3)]
     )
-    assert [item["index"] for item in proposed.items] == [1, 2, 3]
+    assert [item["index"] for item in chosen.items] == [1, 2, 3]
 
     # 人が過不足を直す(1本足して1本引く)
     selection.modify_selection(
@@ -320,60 +319,42 @@ def test_the_ai_proposes_the_human_fixes_and_the_ai_reads_it_back(doc: Document)
         remove=[selection.select_edge(doc, "box", 2)],
     )
 
-    # AIが読み直す。**人の編集が見えており、かつ確定になっている**
+    # AIが読み直す。**人の編集が見えている**
     read_back = selection.get_selection(doc)
     assert [item["index"] for item in read_back.items] == [1, 3, 4]
-    assert read_back.origin == selection.ORIGIN_USER
 
 
-def test_commit_selection_confirms_without_changing_the_items(doc: Document):
-    """`commit_selection` は確定に変えるだけで**中身は変えない**。
-
-    人が「そのままでよい」と承認する経路。中身が変わってしまうと、
-    承認したものと実行されるものが食い違う。
-    """
-    refs = [selection.select_edge(doc, "box", index) for index in (1, 2)]
-    selection.propose_selection(doc, refs=refs)
-    committed = selection.commit_selection(doc)
-    assert committed.origin == selection.ORIGIN_USER
-    assert [item["index"] for item in committed.items] == [1, 2]
+def test_toggle_selection_adds_what_is_absent_and_removes_what_is_present(doc: Document):
+    """`toggle_selection` は参照ごとにあれば外し無ければ足す(UIの素のクリックと同じ)。"""
+    selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
+    selection.toggle_selection(
+        doc, [selection.select_edge(doc, "box", 1), selection.select_edge(doc, "box", 2)]
+    )
+    assert [item["index"] for item in selection.get_selection(doc).items] == [2]
 
 
-def test_human_editing_a_proposal_confirms_it(doc: Document):
-    """**決めた遷移規則**: 人が `modify_selection` で触ったら確定になる。
-
-    人が中身を見て直すこと自体が承認だからである。ここを "proposed" のままにすると、
-    人が直した集合を実行するのに**もう1回「承認」ボタンを押させる**ことになり、
-    「AIが提案 → 人が直す → AIが適用」の往復に無意味な1手が増える。
-    """
-    selection.propose_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
-    result = selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 2)])
-    assert result.origin == selection.ORIGIN_USER
-
-
-def test_a_proposal_cannot_be_fed_to_a_verb(doc: Document):
-    """**決めた遷移規則**: `origin="proposed"` のままでは verb に渡せない。
-
-    「AIが自分の提案を人の確認なしに実行してよいか」への答え。**禁止ではなく
-    「黙って通さない」**(§6予防6)——AIは `commit_selection()` を明示的に呼べば実行できる。
-    1手を明示させることで、提案のまま適用された操作が後から区別できなくなる事故を防ぐ。
-    """
-    selection.propose_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
+def test_toggle_selection_refuses_a_malformed_ref_without_touching_the_selection(doc: Document):
+    keep = [selection.select_edge(doc, "box", 1)]
+    selection.set_selection(doc, refs=keep)
     with pytest.raises(ValueError):
-        selection.confirmed_items(doc)
-
-    selection.commit_selection(doc)
-    assert len(selection.confirmed_items(doc)) == 1
+        selection.toggle_selection(doc, [{"body": "box", "kind": "nope", "index": 1}])
+    assert [item["index"] for item in selection.get_selection(doc).items] == [1]
 
 
-def test_confirmed_items_can_be_filtered_by_kind(doc: Document):
-    """`confirmed_items(kind=...)` で種別を絞れる(verbは自分が食える種別だけ要る)。"""
+def test_the_selection_can_be_fed_to_a_verb_as_it_is(doc: Document):
+    """選択に出所は無く、どの操作で作った集合もそのまま verb に渡せる。"""
+    selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
+    assert len(selection.selected_items(doc)) == 1
+
+
+def test_selected_items_can_be_filtered_by_kind(doc: Document):
+    """`selected_items(kind=...)` で種別を絞れる(verbは自分が食える種別だけ要る)。"""
     selection.modify_selection(
         doc,
         add=[selection.select_face(doc, "box", 1), selection.select_edge(doc, "box", 1)],
     )
-    assert len(selection.confirmed_items(doc, kind="edge")) == 1
-    assert len(selection.confirmed_items(doc, kind="face")) == 1
+    assert len(selection.selected_items(doc, kind="edge")) == 1
+    assert len(selection.selected_items(doc, kind="face")) == 1
 
 
 def test_edge_indices_feed_fillet_directly(doc: Document):
@@ -402,13 +383,13 @@ def test_edge_indices_refuses_to_guess_across_bodies(two_bodies: Document):
 
 
 def test_proposing_again_replaces_the_previous_selection(doc: Document):
-    """`propose_selection` は**置き換え**(差分は `modify_selection` の仕事)。
+    """`set_selection` は**置き換え**(差分は `modify_selection` の仕事)。
 
     ここが追加になっていると、AIが述語を外して提案し直すたびに古い候補が残り、
     人が消す作業を押し付けられる。
     """
-    selection.propose_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
-    result = selection.propose_selection(doc, refs=[selection.select_edge(doc, "box", 2)])
+    selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
+    result = selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 2)])
     assert [item["index"] for item in result.items] == [2]
 
 
@@ -436,19 +417,18 @@ def test_a_malformed_ref_is_refused_without_touching_the_selection(
     selection.modify_selection(doc, add=keep)
 
     with pytest.raises(expected):
-        selection.propose_selection(doc, refs=[bad])
+        selection.set_selection(doc, refs=[bad])
 
     after = selection.get_selection(doc)
     assert [item["index"] for item in after.items] == [1]
-    assert after.origin == selection.ORIGIN_USER
 
 
-def test_propose_selection_needs_exactly_one_source(doc: Document):
+def test_set_selection_needs_exactly_one_source(doc: Document):
     """`refs` と `predicate` は**どちらか一方**。両方・どちらも無しは ValueError。"""
     with pytest.raises(ValueError):
-        selection.propose_selection(doc)
+        selection.set_selection(doc)
     with pytest.raises(ValueError):
-        selection.propose_selection(
+        selection.set_selection(
             doc,
             refs=[selection.select_edge(doc, "box", 1)],
             predicate={"kind": "edge", "where": []},
@@ -469,11 +449,11 @@ def test_every_selection_api_fires_exactly_one_event(session: Session):
     session.add_listener(events.append)
     ref = selection.select_edge(session.document, "box", 1)
 
-    session.propose_selection(refs=[ref])
+    session.set_selection(refs=[ref])
     assert len(events) == 1
     session.modify_selection(add=[selection.select_edge(session.document, "box", 2)])
     assert len(events) == 2
-    session.commit_selection()
+    session.toggle_selection([selection.select_edge(session.document, "box", 2)])
     assert len(events) == 3
     session.clear_selection()
     assert len(events) == 4
@@ -485,16 +465,14 @@ def test_every_selection_api_fires_exactly_one_event(session: Session):
 def test_the_event_carries_enough_to_redraw(session: Session):
     """イベントは**UIが描き直すのに足る情報**を持つ。
 
-    「何が選択されたか」と「提案か確定か」の両方。片方だけだと、
-    AIの提案を人の確定と同じ見た目で描いてしまう(承認操作が意味を失う)。
+    「何が選択されたか」。
     """
     events = []
     session.add_listener(events.append)
-    session.propose_selection(refs=[selection.select_edge(session.document, "box", 1)])
+    session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
 
     payload = events[0]
     assert payload["change"] == "selection"
-    assert payload["selection"]["origin"] == selection.ORIGIN_PROPOSED
     assert [item["index"] for item in payload["selection"]["items"]] == [1]
     assert payload["selection"]["count"] == 1
 
@@ -509,7 +487,7 @@ def test_the_event_carries_the_client_op_back(session: Session):
     session.add_listener(events.append)
     ref = selection.select_edge(session.document, "box", 1)
 
-    assert session.propose_selection(refs=[ref], client_op=7)["client_op"] == 7
+    assert session.set_selection(refs=[ref], client_op=7)["client_op"] == 7
     assert events[0]["client_op"] == 7
     # 出し手のいない変更(MCP等)では None
     assert session.clear_selection()["client_op"] is None
@@ -529,11 +507,11 @@ def test_selection_events_ride_the_same_up_path_as_set_visible(session: Session)
     session.set_visible("box", True)
     assert len(events) == 2
 
-    session.propose_selection(refs=[selection.select_edge(session.document, "box", 1)])
+    session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
     assert len(events) == 3
 
     session.remove_listener(events.append)
-    session.commit_selection()
+    session.clear_selection()
     assert len(events) == 3, "購読をやめた後も届くなら、選択は別の経路で配られている"
 
 
@@ -548,9 +526,9 @@ def test_selection_is_part_of_the_pushed_state(session: Session):
     イベントだけ実装して状態に載せないと、**AI→人の方向だけが黙って死ぬ**
     (人→AIは動くのでテストが無ければ気づけない)。
     """
-    session.propose_selection(refs=[selection.select_edge(session.document, "box", 1)])
+    session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
     state = session.state_meta()
-    assert state["selection"]["origin"] == selection.ORIGIN_PROPOSED
+    assert "origin" not in state["selection"]
     assert state["selection"]["count"] == 1
 
 
@@ -564,7 +542,7 @@ def test_a_failing_listener_does_not_undo_the_selection(session: Session):
         raise RuntimeError("購読者が落ちた")
 
     session.add_listener(broken)
-    session.propose_selection(refs=[selection.select_edge(session.document, "box", 1)])
+    session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
 
     assert session.get_selection()["count"] == 1
     assert any("配信に失敗" in warning for warning in session.warnings)

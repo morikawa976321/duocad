@@ -19,7 +19,7 @@ from duocad import region, selection, sketch
 from duocad.oplog import OpLog
 from duocad.server import Session
 from duocad.verbs import delete as delete_verb
-from session_support import SIDE, box as _box, select as _select, send_one
+from session_support import SIDE, box as _box, edit_parameter, select as _select, send_one
 
 DEVIATION = 0.2
 
@@ -89,14 +89,6 @@ def test_an_empty_confirmed_selection_is_selection_empty(session: Session) -> No
     assert not isinstance(raised.value, selection.SelectionKindMismatch)
 
 
-def test_a_proposed_selection_is_not_deletable(session: Session) -> None:
-    """提案のままでは消えない(`confirmed_items` の門番がここでも効く)。"""
-    body, _ = _box(session)
-    session.propose_selection([{"body": body.id, "kind": "face", "index": 1}])
-    with pytest.raises(selection.SelectionNotCommitted):
-        selection.require_deletable(session.document)
-
-
 def test_a_region_in_the_selection_is_ignored_and_the_rest_is_deleted(session: Session) -> None:
     """領域が選択に混ざっていても、残りは問題なく消える(領域は黙って無視)。
 
@@ -141,7 +133,7 @@ def test_a_selection_of_only_regions_is_refused(session: Session) -> None:
 # 2〜3. 削除の粒度と undo / redo
 # --------------------------------------------------------------------------------------
 def test_deleting_a_body_and_an_entity_is_one_operation_and_one_undo(session: Session) -> None:
-    """**混在した確定選択でも1回のverb呼び出し・1行のログ・1回のundo**。"""
+    """**混在した選択でも1回のverb呼び出し・1行のログ・1回のundo**。"""
     body, sketch_id = _box(session)
     base = _entity_ids(session, sketch_id)  # `_box` が引いた長方形
     kept = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
@@ -162,7 +154,7 @@ def test_deleting_a_body_and_an_entity_is_one_operation_and_one_undo(session: Se
     assert body.id not in _body_ids(session)
     assert _entity_ids(session, sketch_id) == base + [kept]
     # 形を変えるverbなので選択は空になる
-    assert session.get_selection() == {"items": [], "origin": "user", "count": 0}
+    assert session.get_selection() == {"items": [], "count": 0}
 
     session.undo()  # **1回で両方戻る**
     assert body.id in _body_ids(session)
@@ -331,7 +323,7 @@ def test_a_parameter_edit_after_a_delete_replays_the_delete(session: Session) ->
     radius = next(
         name for name, value in session.document.parameters.items() if value == 2.0
     )
-    session.set_parameter(radius, 3.0)
+    edit_parameter(session, radius, 3.0)
 
     assert _body_ids(session) == []
     assert session.document.parameters[radius] == 3.0
@@ -374,16 +366,16 @@ def test_deleting_a_body_leaves_a_sketch_pasted_on_its_face_alone(session: Sessi
 
 
 # --------------------------------------------------------------------------------------
-# WebSocket 経由(**提案は自動で確定してから走る**)
+# WebSocket 経由
 # --------------------------------------------------------------------------------------
-def test_the_browser_can_delete_and_an_ai_proposal_is_committed_first(session: Session) -> None:
-    """`uses_selection=True` なので、提案のままでもブラウザからの実行は通る。
+def test_the_browser_can_delete_what_the_ai_selected(session: Session) -> None:
+    """AIが選んだ集合を、ブラウザからそのまま消せる。
 
     `previewable=False` との組み合わせ(プレビューせず即実行)がWSの表で捌けることも
     ここで一緒に見る。
     """
     body, _ = _box(session)
-    session.propose_selection([{"body": body.id, "kind": "face", "index": 1}])
+    session.set_selection([{"body": body.id, "kind": "face", "index": 1}])
 
     answer = send_one(session, {"cmd": "delete", "client_op": 7})
     assert answer["type"] == "state", answer

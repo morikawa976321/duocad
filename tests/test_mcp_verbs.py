@@ -72,9 +72,8 @@ def tool_list(server: McpServer) -> list:
 
 
 def select_refs(server: McpServer, refs: list) -> None:
-    """明示的な参照で選択を置き、**確定させる**(verbへ渡せる状態にする)。"""
-    call(server, "propose_selection", {"refs": refs})
-    call(server, "commit_selection")
+    """明示的な参照で選択を置く(そのまま verb へ渡せる)。"""
+    call(server, "set_selection", {"refs": refs})
 
 
 def face_ref(body_id: str, index: int) -> dict:
@@ -114,8 +113,8 @@ def test_tool_names_match_the_verb_names_in_the_operation_log():
     """
     from duocad.oplog import registered_verbs
 
-    # `extrude_face` は古い保存ログの再生のためだけに登録が残る(公開ツールではない)
-    registered = set(registered_verbs()) - {"extrude_face"}
+    # `extrude_face` / `set_parameter` は保存済みログの再生のためだけに登録が残る(公開ツールではない)
+    registered = set(registered_verbs()) - {"extrude_face", "set_parameter"}
     expected = {
         command.name
         for command in COMMANDS
@@ -467,7 +466,7 @@ def test_applying_a_verb_with_nothing_selected_says_so(server: McpServer):
     error = call_error(server, "fillet", {"radius": 2.0})
     assert error["code"] == "selection_empty"
     assert error["required_kind"] == "edge"
-    assert error["selection"] == {"count": 0, "origin": "user"}
+    assert error["selection"] == {"count": 0}
     assert "present_kinds" not in error, "空の選択を種別違いと名乗っている"
 
 
@@ -498,7 +497,7 @@ def test_a_solid_can_be_built_from_scratch_through_mcp(empty_session: Session):
     """**空の文書からMCPだけで箱が作れる**(スケッチ4verb + `extrude` の到達性の実証)。
 
     領域は「描くもの」ではなく計算されるもの(§3.3)なので、AIは
-    `propose_selection(refs=[{"sketch":.., "index":..}])` で領域を選んでから押し出す。
+    `set_selection(refs=[{"sketch":.., "index":..}])` で領域を選んでから押し出す。
     """
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
@@ -594,7 +593,7 @@ def test_extrude_refuses_faces_that_are_not_coplanar(server: McpServer, box_sess
 
 
 def test_sketch_create_can_sit_on_a_selected_face(server: McpServer, box_session: Session):
-    """`base_plane` を省いたら、**確定選択の面**にスケッチを貼る(§1 `sketch_create` の2つ目の引数形)。"""
+    """`base_plane` を省いたら、**選択の面**にスケッチを貼る(§1 `sketch_create` の2つ目の引数形)。"""
     box = box_session.document.bodies[0]
     select_refs(server, [face_ref(box.id, top_face_index(box.shape))])
     payload = call(server, "sketch_create")
@@ -613,7 +612,7 @@ def test_sketch_create_without_a_plane_or_a_selection_is_an_error(server: McpSer
 def test_sketch_create_offset_with_a_named_base_plane(
     server: McpServer, box_session: Session
 ):
-    """`base_plane` + `distance` だけで、確定選択が無くても作れる(issue #3)。"""
+    """`base_plane` + `distance` だけで、選択が無くても作れる(issue #3)。"""
     payload = call(server, "sketch_create_offset", {"base_plane": "XY", "distance": 7.5})
     _assert_verb_envelope(payload, "sketch_create_offset")
     sketch = box_session.document.sketches[-1]
@@ -626,7 +625,7 @@ def test_sketch_create_offset_with_a_named_base_plane(
 def test_sketch_create_offset_can_sit_on_a_selected_face(
     server: McpServer, box_session: Session
 ):
-    """`base_plane` を省いたら、`sketch_create` と同じく**確定選択の面**を基準にする。"""
+    """`base_plane` を省いたら、`sketch_create` と同じく**選択の面**を基準にする。"""
     box = box_session.document.bodies[0]
     face_index = top_face_index(box.shape)
     select_refs(server, [face_ref(box.id, face_index)])
@@ -696,7 +695,7 @@ def test_move_body_refuses_a_mixed_mode_through_mcp(server: McpServer, box_sessi
 
 
 def test_move_sketch_entities_can_rotate_through_mcp(empty_session: Session):
-    """スケッチ側の `mode="rotate"` もMCPの口から届く(対象は確定選択)。"""
+    """スケッチ側の `mode="rotate"` もMCPの口から届く(対象は選択)。"""
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     entity_id = call(
@@ -743,35 +742,21 @@ def test_fillet_accepts_a_radius_per_edge(server: McpServer, box_session: Sessio
     assert entry.args["edges"] == edges, "選択順が保たれていない(半径の対応がずれる)"
 
 
-def test_set_parameter_changes_the_shape_through_the_log(empty_session: Session):
-    """`set_parameter` で寸法を編集すると形が追随する(§1の横断機能)。
+def test_set_parameter_is_not_a_public_tool(empty_session: Session):
+    """`set_parameter` は公開面(カタログ・Session・MCP・WebSocket)から外してある。
 
-    **どのパラメータ名がどの寸法か**は `describe_document` から辿れなければならない
-    (下の `test_describe_document_lists_sketches_and_their_entities` が固定している)。
-    名前が引けないと、AIは `d1` `d2` … を総当たりするしかない。
+    人間側に値の打ち直し口ができたときに人とAIの両方へ同時に出す。実装と `register_verb` の登録は
+    保存済みログの再生のために残る(`tests/test_parameters.py` が再生を固定している)。
     """
+    from duocad import catalog
+
+    assert "set_parameter" not in catalog.BY_NAME
+    assert not hasattr(Session, "set_parameter")
+    assert not hasattr(DocumentTools, "set_parameter")
     server = McpServer(DocumentTools(empty_session))
-    sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
-    call(server, "add_circle", {"sketch_id": sketch_id, "center": [0, 0], "radius": 10.0})
-    select_refs(server, [{"sketch": sketch_id, "index": 1}])
-    call(server, "extrude", {"distance": 5.0})
-    volume_before = query.volume(empty_session.document.bodies[0].shape)
-
-    sketch = call(server, "describe_document")["sketches"][0]
-    name = sketch["entities"][0]["parameters"]["radius"]
-    payload = call(server, "set_parameter", {"name": name, "value": 20.0})
-
-    _assert_verb_envelope(payload, "set_parameter")
-    assert payload["name"] == name
-    assert payload["value"] == 20.0 and payload["previous"] == 10.0
-    assert payload["changed_bodies"] == [empty_session.document.bodies[0].id]
-    assert query.volume(empty_session.document.bodies[0].shape) > volume_before
-
-
-def test_set_parameter_reports_a_missing_name_as_not_found(empty_session: Session):
-    server = McpServer(DocumentTools(empty_session))
-    error = call_error(server, "set_parameter", {"name": "d99", "value": 1.0})
-    assert error["code"] == "not_found"
+    assert "set_parameter" not in [tool["name"] for tool in tool_list(server)]
+    error = request(server, "tools/call", {"name": "set_parameter", "arguments": {"name": "d1", "value": 1.0}})["error"]
+    assert "unknown tool" in error["message"]
 
 
 def test_import_step_reports_a_missing_file_as_not_found(empty_session: Session):
@@ -789,18 +774,20 @@ def test_import_step_reports_a_missing_file_as_not_found(empty_session: Session)
 def test_export_writes_a_file_and_reports_where(server: McpServer, tmp_path: Path):
     """書き出しは**ログに載らない**(文書を変えないので verb ではない)。
 
-    そのぶん「どこへ何バイト書いたか」を返す —— AIが自分で `ls` できない以上、
-    戻り値が唯一の確認手段である。
+    そのぶん「どこへ書いたか」を返す —— AIが自分で `ls` できない以上、
+    戻り値が唯一の確認手段である。サイズは返さない。
     """
     step_path = tmp_path / "out.step"
     payload = call(server, "export_step", {"path": str(step_path)})
     assert Path(payload["path"]) == step_path
-    assert payload["bytes"] == step_path.stat().st_size > 0
+    assert "bytes" not in payload
+    assert step_path.stat().st_size > 0
 
     stl_path = tmp_path / "out.stl"
     payload = call(server, "export_stl", {"path": str(stl_path)})
     assert Path(payload["path"]) == stl_path
-    assert payload["bytes"] == stl_path.stat().st_size > 0
+    assert "bytes" not in payload
+    assert stl_path.stat().st_size > 0
 
 
 def test_export_reports_skipped_hidden_bodies_and_no_body_ids_argument(
@@ -948,12 +935,12 @@ def test_every_mutating_tool_fires_exactly_one_event(empty_session: Session):
         assert len(seen) == 1, "sketch_create が発火していない/二重に発火した"
         call(server, "add_rectangle", {"sketch_id": sketch_id, "corner": [0, 0], "width": 30, "height": 30})
         assert len(seen) == 2
-        select_refs(server, [{"sketch": sketch_id, "index": 1}])  # 選択も発火する(2回)
-        assert len(seen) == 4
+        select_refs(server, [{"sketch": sketch_id, "index": 1}])  # 選択も発火する
+        assert len(seen) == 3
         call(server, "extrude", {"distance": 10.0})
-        assert len(seen) == 5
+        assert len(seen) == 4
         call(server, "undo")
-        assert len(seen) == 6
+        assert len(seen) == 5
     finally:
         empty_session.remove_listener(seen.append)
 

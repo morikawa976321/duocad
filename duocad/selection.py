@@ -9,17 +9,16 @@
 (保存の実体は操作ログのJSONなので、開き直した文書は全ボディが可視で始まる)。ただし
 **イベントは発火する** —— AIが選択や可視性を書き換えたら画面は描き直される。
 
-`origin` は**集合単位**で持つ(項目ごとではない):
+選択は**出所を持たない1つの集合**で、人(UI)もAI(MCP)も同じ操作で触る:
 
-    propose_selection(...)   -> origin="proposed"   AIが書き込む経路
-    modify_selection(...)    -> origin="user"       人が差分編集する経路(触ること自体が承認)
-    commit_selection()       -> origin="user"       中身を変えずに承認する経路
+    set_selection(...)       置き換え(参照の明示か述語)
+    modify_selection(...)    差分編集(add / remove)
+    toggle_selection(...)    あれば外し、無ければ足す
+    clear_selection()        全解除
 
-**verbの対象集合は `require_confirmed` / `require_edges` からしか取れない**。MCPもWebSocketも
+**verbの対象集合は `require_selected` / `require_edges` からしか取れない**。MCPもWebSocketも
 対象集合を引数で受ける口を持たず、verbの入口(`duocad/entry.py`)がこの2つを呼ぶ ——**AIの経路と人の
-経路が同じ規則を通る**のはここで担保されている。**`origin="proposed"` のままでは verb に
-渡せない**(`confirmed_items` が `SelectionNotCommitted`)。禁止ではなく**黙って通さない**で、
-AIは `commit_selection()` を明示的に呼べば自分の提案を実行できる。
+経路が同じ規則を通る**のはここで担保されている。
 
 **可視性は選択機構の一部**で、`visible=False` のBodyは選択の対象にならない
 (`selectable_bodies`。`duocad.predicates` も不可視Bodyを走査しない)。実機でPCケース
@@ -46,15 +45,8 @@ from . import kernel, meshbody  # noqa: F401  face_count / count_subshapes を�
 from .document import BodyId, Document
 
 
-class SelectionNotCommitted(ValueError):
-    """提案のまま verb へ渡そうとしたときに `confirmed_items` が送出する。
-
-    `ValueError` の派生。MCPはメッセージ文字列ではなく `isinstance` で判定する。
-    """
-
-
 class SelectionEmpty(ValueError):
-    """verbが食う種別の項目が確定選択に1つも無い(`require_*` が送出する)。
+    """verbが食う種別の項目が選択に1つも無い(`require_*` が送出する)。
 
     `kind` に「何が要るか」を持つ。MCPは `isinstance` でこの型を見て `selection_empty` +
     `required_kind` を付ける(文言では判定しない)。アプリ層は文言をそのまま画面へ返す。
@@ -66,7 +58,7 @@ class SelectionEmpty(ValueError):
 
 
 class SelectionKindMismatch(SelectionEmpty):
-    """確定選択は**空ではない**が、verbが食う種別が1つも入っていない。
+    """選択は**空ではない**が、verbが食う種別が1つも入っていない。
 
     例: フィレット(辺を食う)を呼んだのに、確定しているのは面3枚。
 
@@ -82,7 +74,7 @@ class SelectionKindMismatch(SelectionEmpty):
 
 
 class SelectionAmbiguous(ValueError):
-    """1つだけ食うverbに複数選ばれている(`require_confirmed(exactly_one=True)`)。
+    """1つだけ食うverbに複数選ばれている(`require_selected(exactly_one=True)`)。
 
     **黙って先頭を選ばない**ための型。`SelectionEmpty` と別なのは、次に打つ手が違うため
     (選び直す vs 減らす)。
@@ -116,13 +108,13 @@ BODY_BEARING_KINDS = SHAPE_KINDS + (BODY_KIND,)
 #: `{sketch, index, provenance}` と定めている)ので、`"sketch"` キーの有無から導く。
 REGION_KIND = "region"
 
-#: `confirmed_items(kind=...)` に渡せる名前の全体
+#: `selected_items(kind=...)` に渡せる名前の全体
 #: スケッチの図形そのものを指す種別(`move_sketch_entities` の対象)。
 #:
 #: 参照の形は `{"sketch": SketchId, "entity": EntityId, "point": str|None, "provenance": None}`。
 #: **`point` が None なら「辺」= 図形1つ全体**、文字列ならその点(`sketch.entity_point_keys` の
 #: xキー)を指す。点と辺で種別を分けないのは、`move_sketch_entities` が両方を1回の呼び出しで
-#: 食うからである —— 分けると `require_confirmed` を2回呼んで自前で混ぜることになり、
+#: 食うからである —— 分けると `require_selected` を2回呼んで自前で混ぜることになり、
 #: 「対象集合は1つの種別で取る」という他のverbの形と揃わない。
 #:
 #: **ShapeRef(面・辺・頂点)とは別構造**にしてある。あちらはBodyの上のOCCT部分形状で、
@@ -130,39 +122,28 @@ REGION_KIND = "region"
 #: 図形を足しても平行移動しても指す先が変わらない。
 SKETCH_ENTITY_KIND = "sketch_entity"
 
-#: `confirmed_items(kind=...)` に渡せる名前の全体
+#: `selected_items(kind=...)` に渡せる名前の全体
 SELECTABLE_KINDS = BODY_BEARING_KINDS + (REGION_KIND, SKETCH_ENTITY_KIND)
-
-#: 出所(§3.5 `origin`)。"user"=人が確定した / "proposed"=AIの提案
-ORIGIN_USER = "user"
-ORIGIN_PROPOSED = "proposed"
-
 
 @dataclass
 class Selection:
     """選択集合。`Document.selection` が1つだけ持つ(文書と同じ寿命・保存はされない)。
 
-    items  : [ShapeRef | RegionRef]  順序は追加順を保つ(UIの一覧がちらつかないため)
-    origin : "user" | "proposed"     集合単位。空集合の origin は常に "user"
+    items : [ShapeRef | RegionRef]  順序は追加順を保つ(UIの一覧がちらつかないため)
     """
 
     items: List[dict] = field(default_factory=list)
-    origin: str = ORIGIN_USER
 
     def to_dict(self) -> dict:
-        """アプリ層・MCPへ渡す素の値 `{"items": [...], "origin": str, "count": int}`。
+        """アプリ層・MCPへ渡す素の値 `{"items": [...], "count": int}`。
 
         `count` を明示的に持たせるのは、**述語が0件だったことを呼び出し元が知れる**ように
         するため(AIが述語を外したことに気づけないと、交互操作は黙って止まる)。
         """
         return {
             "items": list(self.items),
-            "origin": self.origin,
             "count": len(self.items),
         }
-
-    def is_proposed(self) -> bool:
-        return self.origin == ORIGIN_PROPOSED
 
 
 def get_selection(doc: Document) -> Selection:
@@ -175,26 +156,26 @@ def fingerprint(doc: Document) -> str:
 
     **選択の変更は操作ログに乗らない**ので、`len(doc.log.entries)` だけを版番号にすると、
     AIが考えている間に人が「辺Aを外して辺Bを選び直して確定する」ような**入れ替え**
-    (件数も種別も変わらない)を見逃す —— `fillet(radius)` は確定選択から対象を取るので、
+    (件数も種別も変わらない)を見逃す —— `fillet(radius)` は選択から対象を取るので、
     版が動いたと誤認しなければAIは辺Aのつもりで辺Bを黙って丸める。
 
-    `origin` と `items` を**順序を保ったまま**JSON化する。順序を保つのは `fillet`/`chamfer` が
+    `items` を**順序を保ったまま**JSON化する。順序を保つのは `fillet`/`chamfer` が
     選択順と半径・距離のリストを対応させるため(並べ替えも実質的な変更として検出したい)。
     """
     selection = get_selection(doc)
     return json.dumps(
-        {"origin": selection.origin, "items": selection.items},
+        {"items": selection.items},
         sort_keys=True,
         default=str,
     )
 
 
-def propose_selection(
+def set_selection(
     doc: Document,
     refs: Optional[Sequence[dict]] = None,
     predicate: Optional[dict] = None,
 ) -> Selection:
-    """**AIが書き込む経路**。選択を丸ごと置き換え、`origin="proposed"` にする。
+    """選択を丸ごと置き換える。
 
     `refs`(参照の明示)か `predicate`(述語)のどちらか一方を渡す。両方 / どちらも無しは ValueError。
 
@@ -207,7 +188,7 @@ def propose_selection(
     外した述語の後に古い候補が残ると、人が承認したつもりで別の集合にverbがかかる。
     """
     if (refs is None) == (predicate is None):
-        raise ValueError("propose_selection needs exactly one of refs or predicate")
+        raise ValueError("set_selection needs exactly one of refs or predicate")
 
     if refs is not None:
         items = _coerce_refs(doc, refs)
@@ -218,7 +199,6 @@ def propose_selection(
 
     selection = get_selection(doc)
     selection.items = list(items)
-    selection.origin = ORIGIN_PROPOSED
     return selection
 
 
@@ -227,7 +207,7 @@ def modify_selection(
     add: Iterable[dict] = (),
     remove: Iterable[dict] = (),
 ) -> Selection:
-    """**人が直す経路**。差分編集(作り直しではない)を行い、`origin="user"` にする。
+    """差分編集(作り直しではない)を行う。
 
     - 同じ参照を2回 `add` しても重複しない。等価判定は参照の中身(`body`/`kind`/`index`、
       領域は `sketch`/`index`)で行い、`provenance` は見ない。
@@ -239,7 +219,7 @@ def modify_selection(
     等価判定は `ref_key`(= `same_ref` の実体)で行い、**集合引き**で重複を落とす ——
     件数に対して線形。総当たりだと画面全体を囲むドラッグ(実測2835面)でここだけ約0.8秒かかる。
 
-    失敗の契約は `propose_selection` と同じ —— **不正な参照は落ちて、選択を変更しない**。
+    失敗の契約は `set_selection` と同じ —— **不正な参照は落ちて、選択を変更しない**。
     """
     add_list = list(add)
     remove_list = list(remove)
@@ -266,39 +246,41 @@ def modify_selection(
         items = [existing for existing in items if ref_key(existing) not in dropped]
 
     selection.items = items
-    selection.origin = ORIGIN_USER
     return selection
 
 
-def commit_selection(doc: Document) -> Selection:
-    """提案を確定する(`origin="user"`)。**中身は変えない**。既に "user" でも失敗しない(冪等)。"""
-    selection = get_selection(doc)
-    selection.origin = ORIGIN_USER
-    return selection
+def toggle_selection(doc: Document, refs: Iterable[dict]) -> Selection:
+    """参照ごとに、選択にあれば外し無ければ足す。UIの素のクリックと同じ操作。
+
+    - 同じ参照が `refs` に2回あれば、足してから外すので結果は変わらない(1回ずつ順に適用する)。
+    - 並びの規則・失敗の契約(不正な参照は落ちて選択を変更しない)は `modify_selection` と同じ。
+    """
+    ref_list = _coerce_refs(doc, list(refs))
+    items = list(get_selection(doc).items)
+    for ref in ref_list:
+        key = ref_key(ref)
+        if any(ref_key(existing) == key for existing in items):
+            items = [existing for existing in items if ref_key(existing) != key]
+        else:
+            items.append(ref)
+    get_selection(doc).items = items
+    return get_selection(doc)
 
 
 def clear_selection(doc: Document) -> Selection:
-    """選択を空にする。空集合の `origin` は常に "user" に戻す。"""
+    """選択を空にする。"""
     selection = get_selection(doc)
     selection.items = []
-    selection.origin = ORIGIN_USER
     return selection
 
 
-def confirmed_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
-    """**verbへ渡してよい**項目を返す。`kind` を指定するとその種別だけに絞る。
-
-    `origin == "proposed"` のときは `SelectionNotCommitted`。ここが、提案と確定の区別を
-    **実際に効かせている唯一の場所**である。
+def selected_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
+    """選択の項目を返す。`kind` を指定するとその種別だけに絞る。
 
     `kind` に渡せるのは `SELECTABLE_KINDS`。未知の名前は ValueError(綴り間違いが「0件」として
     返ると、verbが黙って何もしない経路になる)。
     """
     selection = get_selection(doc)
-    if selection.is_proposed():
-        raise SelectionNotCommitted(
-            "selection is still proposed: commit_selection() first"
-        )
     if kind is not None and kind not in SELECTABLE_KINDS:
         raise ValueError(f"unknown selectable kind: {kind!r}")
     items = list(selection.items)
@@ -313,7 +295,7 @@ def ref_kind(ref: dict) -> str:
     **RegionRef も SketchEntityRef も `kind` キーを持たない**ので、`"sketch"` キーがあれば
     スケッチ側の2種で、そのうち `"entity"` を持つものが `SKETCH_ENTITY_KIND`、
     持たないものが `REGION_KIND`(領域は計算されるものなので添字しか持たない)。
-    種別の判定をこの1箇所に集めるのは、`confirmed_items` の絞り込みと `same_ref` の等価判定が
+    種別の判定をこの1箇所に集めるのは、`selected_items` の絞り込みと `same_ref` の等価判定が
     別々の規則を持ち始めるのを防ぐため。どちらでもない形の辞書は ValueError。
     """
     if not isinstance(ref, dict):
@@ -334,7 +316,7 @@ def edge_indices(doc: Document, body_id: Optional[BodyId] = None) -> List[int]:
     `body_id` を省略した場合、選択に複数Bodyの辺が混ざっていれば ValueError
     (verbは1つのBodyしか丸められないので、どれのつもりかを黙って決めない)。
     """
-    edges = confirmed_items(doc, kind="edge")
+    edges = selected_items(doc, kind="edge")
     if body_id is not None:
         edges = [item for item in edges if item["body"] == body_id]
     else:
@@ -342,7 +324,7 @@ def edge_indices(doc: Document, body_id: Optional[BodyId] = None) -> List[int]:
         if len(bodies) > 1:
             raise ValueError(
                 f"edge selection spans multiple bodies {sorted(bodies)!r}: "
-                "pass body_id explicitly"
+                'select the edges of one body (add "body" to the predicate)'
             )
     return [int(item["index"]) for item in edges]
 
@@ -350,18 +332,18 @@ def edge_indices(doc: Document, body_id: Optional[BodyId] = None) -> List[int]:
 # --------------------------------------------------------------------------------------
 # 選択 → verbの対象集合(**AIの経路も人の経路もここを通る**)
 # --------------------------------------------------------------------------------------
-# 例外はコアの語彙(`SelectionEmpty` / `SelectionAmbiguous` / `SelectionNotCommitted`)で
+# 例外はコアの語彙(`SelectionEmpty` / `SelectionAmbiguous`)で
 # 投げる。MCPは型を見てエラーコードを付け、WebSocketは文言を画面へ返す ——
 # **拒否の規則はここ1箇所**で、呼び出し側は名前を付けるだけ。
-def require_confirmed(
+def require_selected(
     doc: Document, kind: str, *, exactly_one: bool = False
 ) -> List[dict]:
-    """確定選択から種別 `kind` の項目を取る。0件は `SelectionEmpty`。
+    """選択から種別 `kind` の項目を取る。0件は `SelectionEmpty`。
 
     `exactly_one` のとき2件以上は `SelectionAmbiguous`(黙って先頭を選ばない ——
     指示と結果がずれる唯一の経路になる)。
     """
-    items = confirmed_items(doc, kind=kind)
+    items = selected_items(doc, kind=kind)
     if not items:
         _raise_missing(doc, kind)
     if exactly_one and len(items) != 1:
@@ -372,13 +354,13 @@ def require_confirmed(
 
 
 def require_extrude_targets(doc: Document) -> tuple[str, List[dict]]:
-    """確定選択から押し出す対象を取る: `("region", 領域の参照)` か `("face", 面の参照)`。
+    """選択から押し出す対象を取る: `("region", 領域の参照)` か `("face", 面の参照)`。
 
     領域と面が**両方**確定していたら ValueError(どちらを押すつもりか黙って決めない)。どちらも
-    無ければ領域を代表にして `require_confirmed` の拒否(`SelectionEmpty` / `SelectionKindMismatch`)。
+    無ければ領域を代表にして `require_selected` の拒否(`SelectionEmpty` / `SelectionKindMismatch`)。
     """
-    regions = confirmed_items(doc, kind=REGION_KIND)
-    faces = confirmed_items(doc, kind="face")
+    regions = selected_items(doc, kind=REGION_KIND)
+    faces = selected_items(doc, kind="face")
     if regions and faces:
         raise ValueError(
             f"extrude needs regions or faces, not both (selection has {len(regions)} region(s) "
@@ -386,11 +368,11 @@ def require_extrude_targets(doc: Document) -> tuple[str, List[dict]]:
         )
     if faces:
         return "face", faces
-    return REGION_KIND, require_confirmed(doc, REGION_KIND)
+    return REGION_KIND, require_selected(doc, REGION_KIND)
 
 
 def require_edges(doc: Document) -> tuple[List[int], BodyId]:
-    """確定選択の辺の添字と対象Bodyを**選択順のまま**返す(`fillet` / `chamfer` 用)。
+    """選択の辺の添字と対象Bodyを**選択順のまま**返す(`fillet` / `chamfer` 用)。
 
     順序が効く: verbは `edges` と半径(長さ)を位置で対応させるので、並べ替えると割り当てが
     黙ってずれる。複数Bodyにまたがる選択は `edge_indices` が ValueError。
@@ -402,32 +384,32 @@ def require_edges(doc: Document) -> tuple[List[int], BodyId]:
     edges = edge_indices(doc)
     if not edges:
         _raise_missing(doc, "edge")
-    refs = confirmed_items(doc, kind="edge")
+    refs = selected_items(doc, kind="edge")
     return edges, refs[0]["body"]
 
 
 def require_sketch_entities(doc: Document) -> List[dict]:
-    """確定選択のスケッチ図形(点・辺)を**選択順のまま**返す(`move_sketch_entities` 用)。
+    """選択のスケッチ図形(点・辺)を**選択順のまま**返す(`move_sketch_entities` 用)。
 
-    0件は `SelectionEmpty` / `SelectionKindMismatch`(`require_confirmed` と同じ拒否)。
+    0件は `SelectionEmpty` / `SelectionKindMismatch`(`require_selected` と同じ拒否)。
     種別は1つ(`SKETCH_ENTITY_KIND`)なので、点と辺が同じ呼び出しでまとめて返る。
     """
-    return require_confirmed(doc, SKETCH_ENTITY_KIND)
+    return require_selected(doc, SKETCH_ENTITY_KIND)
 
 
 def require_bodies(doc: Document) -> List[BodyId]:
-    """確定選択の**面・辺・頂点が属するBody**を、最初に現れた順で重複なく返す(`move_body` 用)。
+    """選択の**面・辺・頂点が属するBody**を、最初に現れた順で重複なく返す(`move_body` 用)。
 
     **「ボディ選択」という新しい概念は作らない** —— ShapeRef が既に
     `body` を持つので、そこから逆引きすれば足りる。同じBodyの面と辺が両方選ばれていれば
     1つに畳む(同じボディを2回動かさない)。
 
     面・辺・頂点が1つも確定していなければ `SelectionEmpty` / `SelectionKindMismatch`。
-    3種のどれでもよいので `require_confirmed` を種別ごとに呼べない —— 先に3種を集めて、
+    3種のどれでもよいので `require_selected` を種別ごとに呼べない —— 先に3種を集めて、
     全部空のときだけ `face` を代表にして拒否を組み立てる。
     """
     ordered: List[BodyId] = []
-    for item in confirmed_items(doc):
+    for item in selected_items(doc):
         # **`kind="body"` の参照もここへ入る**。Bodyを直に指す種別を作った以上、
         # 逆引きの側がそれを見ないと「ボディを選んだのに move_body が対象を見つけない」
         # という、指し方によって結果が変わる穴が開く。
@@ -463,15 +445,15 @@ class DeleteTargets:
 
 
 def require_deletable(doc: Document) -> DeleteTargets:
-    """確定選択を**削除できる対象の内訳**へ畳む(verb `delete` 用)。
+    """選択を**削除できる対象の内訳**へ畳む(verb `delete` 用)。
 
-    - 確定選択が**丸ごと空** → `SelectionEmpty`(`_raise_missing` と同じ形)
+    - 選択が**丸ごと空** → `SelectionEmpty`(`_raise_missing` と同じ形)
     - **領域は無視する**。
       領域は描くものではなく図形の配置から計算されるだけの見た目で、それ自体を消す
       操作は無い —— 領域を作っている図形を消せば領域も自然に消える。スケッチで範囲を
       選ぶと境界の図形と一緒に領域も選択へ入りがちで、そのたびに実害の無い拒否を
       挟むより、無視して図形側だけ消すほうが安い。
-    - ボディにも図形にも**解決できない項目が残った**(=確定選択が領域だけだった) →
+    - ボディにも図形にも**解決できない項目が残った**(=選択が領域だけだった) →
       `SelectionEmpty` / `SelectionKindMismatch`(`_raise_missing` と同じ形)。
       **この場合は黙って何もしない、ではなく拒否する** —— 削除できる対象が実際に
       1つも無いのに verb だけ成功して見えるのは避ける。
@@ -480,10 +462,10 @@ def require_deletable(doc: Document) -> DeleteTargets:
 
     **名前が `require_` で始まる必要がある** —— `catalog.Command.uses_selection` の宣言と
     実体の一致を `tests/test_vertex_pick.py` が接頭辞で照合しており、別名にすると
-    この verb だけが WebSocket の自動 commit から静かに漏れる(`require_committed_bodies` の
+    この verb だけが宣言の照合から静かに漏れる(`require_selected_bodies` の
     コメントと同じ事情)。
     """
-    items = confirmed_items(doc)  # 提案のままなら SelectionNotCommitted
+    items = selected_items(doc)
     if not items:
         _raise_missing(doc, BODY_KIND)
 
@@ -505,42 +487,40 @@ def require_deletable(doc: Document) -> DeleteTargets:
         # SELECTABLE_KINDS はこの3分岐(ボディ由来・図形・領域)で尽きる。
 
     if not bodies and not entities:
-        # 確定選択はあったが、中身が領域だけだった。
+        # 選択はあったが、中身が領域だけだった。
         _raise_missing(doc, BODY_KIND)
     return DeleteTargets(bodies=bodies, entities=entities)
 
 
 # --------------------------------------------------------------------------------------
-# 集合代入のverbのための口 —— **要求するのは「確定していること」だけ**
+# 集合代入のverbのための口 —— **空の選択も正当な入力**
 # --------------------------------------------------------------------------------------
-# 形状最適化の4 verb は**集合代入**である(「1つ足す」ではなく「この役割の集合を、いま確定
-# している選択集合そのものに置き換える」)。したがって**空の確定選択も正当な入力**で、
+# 形状最適化の4 verb は**集合代入**である(「1つ足す」ではなく「この役割の集合を、いま
+# 選ばれている集合そのものに置き換える」)。したがって**空の選択も正当な入力**で、
 # 「その役割を全部外す」を意味する —— ここで 0 件を拒むと、役割を空にする手段が
 # どこにも無くなる(解除専用のverbは作らない、と決めてある)。
 #
-# それでも名前が `require_` で始まるのは**嘘ではない**。要求しているのは
-# 「`origin="proposed"` のままではないこと」であり、そこは `confirmed_items` が
-# `SelectionNotCommitted` で守る。名前を揃えているのは、`catalog.Command.uses_selection`
-# の宣言と実体の一致を `tests/test_vertex_pick.py` が `require_` の接頭辞で照合するためで、
-# ここを別名にすると**この4 verb だけ自動 commit の対象から静かに漏れる**。
-def require_committed_bodies(doc: Document) -> List[BodyId]:
-    """確定選択の**`kind="body"` の参照**を、最初に現れた順で重複なく返す(**空でもよい**)。
+# 名前が `require_` で始まるのは、`catalog.Command.uses_selection` の宣言と実体の一致を
+# `tests/test_vertex_pick.py` が `require_` の接頭辞で照合するため。ここを別名にすると
+# この4 verb だけ宣言の照合から静かに漏れる。
+def require_selected_bodies(doc: Document) -> List[BodyId]:
+    """選択の**`kind="body"` の参照**を、最初に現れた順で重複なく返す(**空でもよい**)。
 
     面・辺・頂点からの逆引き(`require_bodies`)は**しない** —— 集合代入は「いま選ばれて
     いるものがそのまま新しい集合になる」ので、拘束面を選んだついでにそのボディが保持へ
     入る、のような取り違えが起きてはいけない。
     """
     ordered: List[BodyId] = []
-    for item in confirmed_items(doc, kind=BODY_KIND):
+    for item in selected_items(doc, kind=BODY_KIND):
         body_id = item["body"]
         if body_id not in ordered:
             ordered.append(body_id)
     return ordered
 
 
-def require_committed_faces(doc: Document) -> List[dict]:
-    """確定選択の**面の参照**を選択順のまま返す(**空でもよい**。上のコメントが理由)。"""
-    return confirmed_items(doc, kind="face")
+def require_selected_faces(doc: Document) -> List[dict]:
+    """選択の**面の参照**を選択順のまま返す(**空でもよい**。上のコメントが理由)。"""
+    return selected_items(doc, kind="face")
 
 
 def _kind_counts(items: Iterable[dict]) -> dict:
@@ -557,9 +537,9 @@ def _kind_counts(items: Iterable[dict]) -> dict:
 
 
 def _raise_missing(doc: Document, kind: str) -> NoReturn:
-    """種別 `kind` が確定選択に無いときの拒否を**1箇所で**組み立てる。
+    """種別 `kind` が選択に無いときの拒否を**1箇所で**組み立てる。
 
-    - 確定選択が**丸ごと空** → `SelectionEmpty` → MCPは `selection_empty`
+    - 選択が**丸ごと空** → `SelectionEmpty` → MCPは `selection_empty`
     - 空ではないが `kind` が**1つも無い** → `SelectionKindMismatch` → `selection_kind_mismatch`
 
     後者の文面は**実際に確定しているものを名指しする**。矛盾した指示(例: 面が確定して
@@ -567,7 +547,7 @@ def _raise_missing(doc: Document, kind: str) -> NoReturn:
     様子見する暴走が起きる(2026-08-20実測・600秒応答なし)。**1回目のverb呼び出しの
     返り値だけで自己修復できる**ようにするのが狙い。
     """
-    others = confirmed_items(doc)
+    others = selected_items(doc)
     if not others:
         raise SelectionEmpty(f"no {kind} in the confirmed selection", kind)
     counts = _kind_counts(others)
@@ -876,12 +856,12 @@ def _coerce_refs(
     `modify_selection` は `add`/`remove` の2回この関数を呼ぶが、同じ文書に対する
     1回の呼び出しの中で同じ `(body_id, kind)` を2回数えないよう、呼び出し元が
     1つの辞書を両方の呼び出しへ渡す。省略時(`None`)は呼び出し1回限りの空辞書を
-    自分で作る(単発呼び出しの `propose_selection` はこちらでよい)。
+    自分で作る(単発呼び出しの `set_selection` はこちらでよい)。
 
     `kernel.py` にはキャッシュを持たない(寿命の受け皿が無い上、`_face_map` の戻り値は
     可変の `TopTools_IndexedMapOfShape` で17箇所が共有すると壊れる) —— キャッシュの
     寿命は常に**呼び出し元が明示的に持ち回る辞書**の寿命(=1回の `modify_selection`/
-    `propose_selection` 呼び出し)に閉じる。
+    `set_selection` 呼び出し)に閉じる。
 
     region / sketch_entity / body 種別・壊れた参照は数え上げの重複が無い経路なので、
     `_coerce_ref` 単発へそのまま流す。

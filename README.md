@@ -2,7 +2,7 @@
 
 **Fusion360と同等以上にモダンでシンプルなUIに、自分が実際に使う手動操作と強力なAI操作を載せ、
 両者が同じ選択集合を交互に触れるようにしたモデリングツール。**
-差別化はUIでも機能数でもなく **交互操作**（AIが集合を提案 → 人が過不足を直す → AIが操作を適用）にある。
+差別化はUIでも機能数でもなく **交互操作**（AIが集合を選ぶ → 人が過不足を直す → AIが操作を適用）にある。
 
 このREADMEは開発を再開するときの入口である。単位は mm 固定。
 
@@ -34,8 +34,7 @@ UIとAI操作の両方に共通する設計原則。verbを足す・直すとき
    how ではない**（`MCP.md`「AIはどこまで自分でやるか」と揃える。「名前はすべて対象」
    という言い方はしない — 新規ボディへの命名のような**省略できる付帯入力**は target でも
    how でもない第三分類である）。
-   **適用範囲はコマンド行を通るverbに限る**。値の打ち直し
-   (`set_parameter`)・可視性の切替(`set_visible`)・選択集合の編集は直接操作であり、
+   **適用範囲はコマンド行を通るverbに限る**。可視性の切替(`set_visible`)・選択集合の編集は直接操作であり、
    この型の対象外である。
 3. **省けるクリックは徹底的に省く。** Enterが要るのは次のいずれかに当てはまる操作だけで、
    どちらでもなければ最後のクリックで即適用される（正は `web/src/commands/command.ts`
@@ -244,6 +243,10 @@ cd web; npm run dev                                 # 画面(5173)
 
 ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すればそれが最優先）。
 
+**smoke が見るのは、人が使っていても気づけない壊れ方だけ**（見た目が同じまま値だけ違う・黙って別のものが
+変わる・タイミングでしか出ない競合・性能と粗さ）。ボタンが出ない・クリックがずれる・強調が出ないといった、
+使えばすぐ気づく壊れ方は守らない（[docs/SMOKE_TESTING.md](docs/SMOKE_TESTING.md)「何を smoke に書くか」）。
+
 **一覧の正は `web/scripts/smoke*.mjs` のファイル名**（各ファイル先頭のコメントが何を見るかの正）。
 番号付きの固定リストは持たない —— 増減のたびにREADMEが古くなるため。
 
@@ -260,21 +263,17 @@ Get-ChildItem scripts/smoke*.mjs | ForEach-Object {
 }
 ```
 
-形状最適化まわりは `smoke-optimize.mjs` / `smoke-optimize-mode.mjs` / `smoke-optimize-debug.mjs`。
-STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` / `HANGER_BAR_STEP` が指すパスを使う。
+STEPを読む smoke（`smoke-face-culling.mjs`）は `web/scripts/models.mjs` の `PC_CASE_STEP` が指すパスを使う。
 
 **骨格は全本共通**（`web/scripts/harness.mjs` の `runSmoke`）: 使い捨ての `--models-dir` でサーバを立て、
 ブラウザを開き、終わったら止めて temp を消す。ポートは走らせるたびに OS へ空きを選ばせるので
 複数本を並列に回してよい。`--port` / `--http-port`（固定したいとき）と `--timeout` は全本が読む。
 
-既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
-（その場合スクリプトはサーバを立てず、止めもしない）。**対応しているのは `smoke.mjs` /
-`smoke-features` / `smoke-files` / `smoke-regions` / `smoke-svg` / `smoke-toast` だけ**で、
-MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `smoke-files` / `smoke-regions` でも失敗になる）。
+既に立てているサーバへ繋ぐ `--url` は、`runSmoke` に `attach: true` を渡した本だけが受ける
+（その場合スクリプトはサーバを立てず、止めもしない）。いまの本はどれも対応していない。
 
-**verbごとの「人間側/AI側の両方で動く」を1本で通す検査は持たない。** AI側（MCP）の契約は pytest
-（`tests/test_mcp_verbs.py` ほか）、人間側のUIは verb 別の smoke、交互操作（AIが提案 → 人が直す → AIが読む）は
-`smoke-mcp.mjs`、カメラ（画角・Z-up）は `smoke-camera.mjs` が持つ。
+**verb ごとの画面の検査は持たない。** AI側（MCP）とコアの契約は pytest（`tests/test_mcp_verbs.py` ほか）、
+TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致は `tests/test_ghost_agreement.py` が持つ。
 
 ---
 
@@ -295,7 +294,7 @@ MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `
 - **操作ログが唯一の正で、形状はそこから導出されるキャッシュ。** 保存形式はJSON（SQLiteは使わない）。
   開くときはログから再生する。undo・再生・AIの履歴読み・git差分が全部これに乗る。
 - **選択集合はアプリ層ではなくコアにある。** 永続／双方向（AIが書ける）／種別を保持／差分編集可能／
-  **提案（`proposed`）と確定（`user`）を区別**。ここをUIの状態にすると交互操作が原理的に不可能になる。
+  **出所（AIか人か）を区別しない1つの集合**で、人もAIも同じ操作（`modify_selection` / `toggle_selection` / `clear_selection`。AIだけ述語を書ける `set_selection`）で触る。ここをUIの状態にすると交互操作が原理的に不可能になる。
   **verbが食う面・辺・領域は、MCPからもWebSocketからも引数で渡さない**——
   どちらもこの集合から取るので、「対象集合の指定方法」は1つしかない。
 - **verbのメタ情報は1箇所にしか書かない。** 名前・引数・カテゴリ・プレビュー可否・
@@ -303,7 +302,7 @@ MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `
   MCPのツール定義も導出である。**verbを1つ足すときに書くのは、verbのモジュールと宣言1エントリの
   2箇所だけ**（手順の正は `catalog.py` 冒頭docstring）。
 - **verbを掛ける経路は1本。** verbのモジュールは純関数（対象を引数で受ける）と**入口**
-  （`@entry`。対象を確定選択から取って純関数へ渡す）を持ち、`Session.apply(verb, args)` が入口を名前で
+  （`@entry`。対象を選択から取って純関数へ渡す）を持ち、`Session.apply(verb, args)` が入口を名前で
   引いて呼ぶ。WebSocket・MCP・アプリ内AIはどれも `apply` を通るので、実行中の断り・選択のリセット・
   自動保存・配信はどの経路でも同じに効き、verbごとの配線は無い。届いた引数の検査（必須・未知・型）も
   宣言からの導出で、WebSocketとMCPに同じものが効く。frontendだけは別に持つ ——
@@ -373,7 +372,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 - **MCPには同期の `run_optimization` を開けていない**（進捗・中断を運べない）。画面は WebSocket の
   protocol 口（`OptimizePanel.svelte` → `optimize_conditions` / `optimize_resolution` / …）
 - **メッシュボディは保持・除外に指定できない**（上「ボディの種別」の名指しの線）
-- **受入検査**は §3 の `topopt_checks/`。**実機smoke**は §3 の `smoke-optimize*.mjs`
+- **受入検査**は §3 の `topopt_checks/`。画面からの実行を通す実機 smoke は持たない（壊れれば使ってすぐ気づく）
 
 ### 前提にしないこと
 
@@ -396,11 +395,11 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/oplog.py` | `Operation` / `OpLog`（undo・再生・永続化。**verb名の分岐を書かない**＝レジストリ） | ✗ | ✗ |
 | `duocad/sketch.py` | `Sketch` / `Entity` / `Pattern` とスケッチのverb | ✗ | ✗ |
 | `duocad/region.py` | 閉領域の検出（`BRepAlgoAPI_Splitter`）。領域は**描くものではなく計算されるもの** | ✗ | ✗ |
-| `duocad/parameters.py` | 名前つきの寸法値・`set_parameter`・ログからの再生 | ✗ | ✗ |
+| `duocad/parameters.py` | 名前つきの寸法値・`set_parameter`(公開面には無い。ログからの再生用)・ログからの再生 | ✗ | ✗ |
 | `duocad/selection.py` | 選択集合（人のクリック側。可視性を含む「何が選べるか」） | ✗ | ✗ |
 | `duocad/predicates.py` | **述語による選択（AI側）**。構造化JSONでDSL文字列ではない | ✗ | ✗ |
 | `duocad/speculative.py` | プレビュー（確定前にverbを投機的に走らせて捨てる） | ✗ | ✗ |
-| `duocad/verbs/*.py` | verb層（1 verb 1モジュール。純関数と、対象を確定選択から取る入口） | ✗ | ✗ |
+| `duocad/verbs/*.py` | verb層（1 verb 1モジュール。純関数と、対象を選択から取る入口） | ✗ | ✗ |
 | `duocad/entry.py` | verbの入口の登録表（`@entry`）。`Session.apply` がここから名前で引く | ✗ | ✗ |
 | `duocad/catalog.py` | **verbの単一宣言**（名前・引数・カテゴリ・プレビュー可否・MCPスキーマ）。下の2つが持つ表はここからの導出 | ✗ | ✗ |
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
@@ -444,7 +443,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | `web/src/commands/CommandHost.svelte` | **コマンド層の骨格**（起動→引数収集→プレビュー→Enter/Esc、**および即適用の発火**）。verbごとに作り直さない |
 | `web/src/commands/{command,sketch,features,files,moveMode}.ts` | 各コマンドの引数の集め方の定義だけ（**Enter要否はここから導出**＝`needsEnter`）。`command.ts` に共通の枠組み（`ArgSpec` の種別・`when` によるモード依存の必須判定） |
 | `web/src/{Browser,Files,Sketch,Parameters}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ）。**選択パネルは無い**（選択を直すのは3Dクリックだけ） |
-| `web/src/Toast.svelte` | **エラーの札**。`showToast(message)` の1本だけを公開し、出すのは `App.svelte` の `fail()` から |
+| `web/src/Toast.svelte` | **エラーの札**。`fail(message)` の1本だけで「控え(`errorLog`)に積む」と「札を出す」を両方やる。札だけ出す口は公開しない |
 | `web/src/AiPanel.svelte` | **AIパネル**。プロバイダ選択・対話・ツール呼び出しの進捗・中断。文書は描かない。**`#ai-collapse`(`BrowserPanel.svelte`と同じ形)で畳める** |
 | `web/src/SettingsDialog.svelte` | **設定ダイアログ**。native `<dialog>`（非モーダル、`show()`）。**一度決めたら触らない設定だけ**（いまは正投影のチェックボックス1つ。画角は正投影/透視30度の2値で、スライダーは無い）。ビューポートを覆わず暗くもしない |
 | `web/src/viewSettings.ts` | **画面設定のlocalStorage**。入れてよいのはクライアント側だけの設定で、**文書の状態は入れない**。読み書きとも例外を投げない |
@@ -456,9 +455,9 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 
 設計として押さえるのはこの4点:
 
-- **面・辺・領域は引数で受けない。確定した選択から取る**（数値・名前・パスだけが引数）。
-  提案状態の選択はそのままverbに渡せず、先に `commit_selection` が要る。**WebSocketのコマンドも
-  同じ形**。`sketch_create` も MCPと同じく `base_plane` だけを取り、省略時は確定選択の面
+- **面・辺・領域は引数で受けない。選択から取る**（数値・名前・パスだけが引数）。
+  選択はそのままverbに渡せる（確定の手は無い）。**WebSocketのコマンドも
+  同じ形**。`sketch_create` も MCPと同じく `base_plane` だけを取り、省略時は選択の面
   （ちょうど1枚）に貼る
 - **ツール名 == WebSocketのコマンド名 == UIのコマンドID == 操作ログのverb名**。
   AIは `describe_document` のログを読んで次の一手を決めるので、綴りが違うと対応表を
@@ -485,25 +484,41 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
 - **システムプロンプトも二重に持たない** —— `catalog.agent_instructions()` の1本をMCPの
   `instructions` とエージェントの両方が読む（ツール数も宣言から数える）
 - **暴走は必ず打ち切る** —— `max_turns` / `max_tokens` / 1リクエストのタイムアウト / 外から立てる中断フラグ。
-  打ち切った理由は構造化して返す（矛盾した指示を渡すと**思考**が膨らみ、1リクエストが600秒返らなかった実測がある）
+  打ち切った理由は構造化して返す（矛盾した指示を渡すと**思考**が膨らみ、1リクエストが600秒返らなかった実測がある）。
+  **待ち時間切れと中断は接続を閉じる** —— 応答はストリーミングで受ける。llama-server は非streamingの
+  リクエストを、閉じても最後まで生成し続けるからである（`StreamingTransport`）
+- **済んだ依頼は「人の発話 + AIの最終返答」だけを残す** —— ツールの往復は次の依頼の頭で捨てる（量の大半を
+  占め、文書が変わったあとは古い）。相手の文脈長に当たったら古い依頼を半分まとめて捨ててやり直す
+  （`AgentLoop._settle_history` / `_drop_oldest_half`）
+- **ツール定義は先に読ませておく** —— 画面が繋がった時点で `ai_prepare` が届き、system + tools を相手の
+  キャッシュへ載せる。llama-server を `--slot-save-path <dir>` 付きで立てていれば、その状態を保存して次回は
+  復元で済ませる（`OpenAICompatProvider.prepare`）
+- **読む側と書く側の時間を結果に載せる** —— llama-server の `timings` を往復ぶん足して `ai_result.usage` へ入れ、
+  パネルに1行出す
+- **文書と選択は先に見ておく** —— モデルが依頼のたびに最初に呼ぶ `describe_document` / `get_selection` を、
+  ループが代わりに呼んで「呼んで結果が返った」形で履歴へ置く（`AgentLoop._look_first`。人の発話には何も足さない）。
+  往復の実測と、発話に添える方式を採らなかった理由は [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md)「往復回数の実測」。
+  測り直すときは `python tools/llm_tasks.py`
 - **同時編集は楽観ロックで守る** —— モデルへの1往復を送る前に文書の版
   （`DocumentTools.current_seq()`）を控え、応答が返ったとき版がずれていたら、そのツール呼び出しは
-  実行せず「文書が変わったので選び直せ」と返す。形状を変えるverbの確定後は確定選択が全リセットされる
+  実行せず「文書が変わったので選び直せ」と返す。形状を変えるverbの確定後は選択が全リセットされる
   （`Session._reset_selection_if_needed`）ので大半は元から `selection_empty` で止まっていたが、
-  `set_parameter` のように選択を経由しないverbはこの網に掛からず、楽観ロックがその穴を埋める
+  `set_visible` のように選択を経由しないverbはこの網に掛からず、楽観ロックがその穴を埋める
   （`fillet`/`chamfer`/`extrude` は対象ボディの可視性も実行時に見直す）。
   **版は「ログの本数・選択の指紋・可視性の指紋」の3つ組** —— 可視性は操作ログに
   載らないので、指紋を持たないと「AIが考えている間に人がボディを隠した」が版に出ない
 - **鍵を持つ層ではない。** `build_provider` はプロバイダへ
   鍵を渡さないので、`base_url` をどこへ向けても飛ぶのはキーの無いリクエストだけになる。
   **鍵を要るプロバイダを足すなら、`Server._ai_configure` に `base_url` の拒否を書き戻すこと**
-- 依存は増やしていない（公式SDKを入れず `urllib` で素のHTTP）
+- 依存は増やしていない（公式SDKを入れず標準ライブラリで素のHTTP）
 
-契約は `tests/test_agent_loop.py`（偽プロバイダで決定的に検査）。実機は
+契約は `tests/test_agent_loop.py`（偽プロバイダで決定的に検査）と、`tests/test_agent_streaming.py`（受け方と
+打ち切り）・`tests/test_agent_prepare.py`（ウォームアップ）・`tests/test_agent_history.py`（履歴）。実機は
 `tests/test_agent_llama_server.py` の1本だけで、**8080にllama-serverが居なければskipする**。
+実測と数値は [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md)。
 
-**WebSocketへの配線。** `duocad/net/ws.py` が `ai_get_status` / `ai_configure` /
-`ai_send` / `ai_cancel` の4つを持ち、画面右サイドバーの `web/src/AiPanel.svelte` から叩く。
+**WebSocketへの配線。** `duocad/net/ws.py` が `ai_get_status` / `ai_configure` / `ai_prepare` /
+`ai_send` / `ai_cancel` の5つを持ち、画面右サイドバーの `web/src/AiPanel.svelte` から叩く。
 
 - **`ai_*` はverbではない**。文書を直接は変えない(操作ログに載らずundoの単位でもない)ので
   `duocad/catalog.py` の `COMMANDS`(「MCPツール名==WSコマンド名==UIコマンドID==verb名」の

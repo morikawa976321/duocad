@@ -44,7 +44,7 @@
     transcript: AiTranscriptEntry[]
     onSend: (message: string) => void
     onCancel: () => void
-    onConfigure: (provider: AiProviderKind, model?: string, baseUrl?: string) => void
+    onConfigure: (provider: AiProviderKind, baseUrl?: string) => void
   } = $props()
 
   let draft = $state('')
@@ -55,7 +55,6 @@
   let open = $state(true)
   /** 設定フォームの打ちかけ(開いた時点の `status` で初期化する)。 */
   let providerDraft = $state<AiProviderKind>('openai_compat')
-  let modelDraft = $state('')
   let baseUrlDraft = $state('')
 
   const running = $derived(status?.running ?? false)
@@ -70,7 +69,6 @@
 
   function openSettings(): void {
     providerDraft = status?.provider ?? 'openai_compat'
-    modelDraft = status?.model ?? ''
     baseUrlDraft = status?.baseUrl ?? ''
     settingsOpen = true
     // **畳んだまま設定を開いても見えない**ので、設定を押したら本体ごと開く。
@@ -78,13 +76,11 @@
   }
 
   /**
-   * プロバイダを切り替えたら **モデルとエンドポイントの打ちかけを捨てる**。
+   * プロバイダを切り替えたら **エンドポイントの打ちかけを捨てる**。
    *
-   * **打ちかけはプロバイダに属する** —— モデル名は綴りが各プロバイダ固有なので、他所のもの
-   * (`local` 等)が残ると設定は通ったうえで送信時に落ちる。エンドポイントはもっと悪く、
-   * 欄が隠れても `baseUrlDraft` は生きているので、隠れたまま `ai_configure` に乗って
-   * 「指定した覚えのないURL」で繋ぎに行く。空にすればどちらも `undefined` になり、
-   * サーバ側の既定値が使われる。
+   * **打ちかけはプロバイダに属する** —— 欄が隠れても `baseUrlDraft` は生きているので、
+   * 隠れたまま `ai_configure` に乗って「指定した覚えのないURL」で繋ぎに行く。
+   * 空にすれば `undefined` になり、サーバ側の既定値が使われる。
    *
    * 今はプロバイダが1つなのでこの関数は動かない(選択UI自体が出ない)。**2つ目を足したら
    * ここが効き始める** —— `duocad/server.py` の `AI_PROVIDERS` に足すだけで選択UIが出る。
@@ -92,12 +88,11 @@
   function selectProvider(next: AiProviderKind): void {
     if (next === providerDraft) return
     providerDraft = next
-    modelDraft = ''
     baseUrlDraft = ''
   }
 
   function applySettings(): void {
-    onConfigure(providerDraft, modelDraft.trim() || undefined, baseUrlDraft.trim() || undefined)
+    onConfigure(providerDraft, baseUrlDraft.trim() || undefined)
     settingsOpen = false
   }
 
@@ -121,7 +116,20 @@
     max_tokens: '出力の上限に達した(このターンのツールは実行していない。もう一度どうぞ)',
     refusal: 'AIが断った',
     provider_error: '接続に失敗した',
+    timeout: '時間切れで止めた(ここまでの操作は残っている)',
+    context_overflow: 'この依頼だけでAIの文脈長を超えた(依頼を分けるか、llama-server の -c を増やす)',
     stopped: '止まった(理由不明)',
+  }
+
+  /** 読む側と書く側のどちらに時間を使ったか(llama-server の `timings` を往復ぶん足した値)。
+   * `timings` を返さないサーバでは空文字(行ごと出さない)。 */
+  function usageLine(usage: Record<string, number> | undefined): string {
+    if (usage?.prompt_n === undefined || usage.predicted_n === undefined) return ''
+    const seconds = (ms: number | undefined): string => ((ms ?? 0) / 1000).toFixed(1)
+    return (
+      `読み ${usage.prompt_n}(再利用 ${usage.cache_n ?? 0})トークン ${seconds(usage.prompt_ms)}秒` +
+      ` ／ 書き ${usage.predicted_n} トークン ${seconds(usage.predicted_ms)}秒`
+    )
   }
 </script>
 
@@ -141,7 +149,6 @@
     {#if status}
       <span class="value" data-provider={status.provider}>
         {PROVIDER_LABEL[status.provider] ?? status.provider}
-        {status.model ? `(${status.model})` : ''}
       </span>
       {#if running}
         <span class="badge running">応答中</span>
@@ -176,10 +183,6 @@
             </select>
           </label>
         {/if}
-        <label class="field-row">
-          モデル
-          <input id="ai-model" type="text" placeholder="既定値" bind:value={modelDraft} />
-        </label>
         <!-- **エンドポイントは常に出す** —— 今あるプロバイダは鍵を持たないので、
              どこを指しても飛ぶのはキーの無いリクエストだけである。鍵を持つプロバイダを
              足すときは、ここと `Server._ai_configure` の両方に制限を書き戻すこと。 -->
@@ -212,6 +215,9 @@
           <p class="line result" data-status={entry.result.status}>
             {entry.result.text || STATUS_LABEL[entry.result.status] || entry.result.status}
           </p>
+          {#if usageLine(entry.result.usage)}
+            <p class="hint dim" data-ai-usage>{usageLine(entry.result.usage)}</p>
+          {/if}
         {:else}
           <p class="line error">{entry.message}</p>
         {/if}

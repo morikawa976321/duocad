@@ -5,7 +5,9 @@
 (undoで消えた名前は再利用される)。この決定性が無いと、保存したログを再生したときに
 `set_parameter` が記録した名前が別の値を指す。
 
-`set_parameter` の契約:
+`set_parameter` の契約(**公開面(カタログ・Session・MCP・WebSocket)からは外してある**。
+UIに値の打ち直し口ができたときに人とAIの両方へ同時に出す。ここに残っているのは保存済みログの再生と
+再公開のための実装と `register_verb` の登録):
 
 - 存在しない名前は `KeyError`。文書にもログにも変更を残さない。
 - 成功したら `args={"name":.., "value":.., "previous":..}` を積む(`previous` は undo 用)。
@@ -24,7 +26,6 @@ from typing import Any, Dict, Mapping, Optional
 
 from .document import Document, unknown_id_message
 from .oplog import Operation, register_verb, verb_handler
-from .entry import entry
 
 #: パラメータ名の接頭辞(Fusion360の d1/d2 と同じ流儀。改名機能は未実装)
 PARAMETER_PREFIX = "d"
@@ -276,21 +277,3 @@ def release_param_refs(document: Document, params: dict) -> None:
     for ref in params.values():
         if isinstance(ref, str):
             document.parameters.pop(ref, None)
-
-
-# --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 上の verb を掛け、応答に載せるものを返す
-# --------------------------------------------------------------------------------------
-@entry(VERB_SET_PARAMETER)
-def _enter_set_parameter(document: Document, name: str, value: float) -> dict:
-    before_shapes = {body.id: id(body.shape) for body in document.bodies}
-    operation = set_parameter(document, str(name), float(value))
-    changed_bodies = [
-        body.id for body in document.bodies if before_shapes.get(body.id) != id(body.shape)
-    ]
-    return {
-        "name": operation.args["name"],
-        "value": operation.args["value"],
-        "previous": operation.args["previous"],
-        "changed_bodies": changed_bodies,
-    }

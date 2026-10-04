@@ -13,9 +13,8 @@
 import * as THREE from 'three'
 
 import { createBatch } from './sceneBatch'
-import { variantCache } from './viewportMaterials'
 
-import { HIGHLIGHT_COLOR, LAYER, PROPOSED_COLOR, VERTEX_PIXELS } from './viewportConstants'
+import { HIGHLIGHT_COLOR, LAYER, VERTEX_PIXELS } from './viewportConstants'
 import type { VertexMarker, VertexRef } from './viewportTypes'
 
 /** 本編(`viewport.ts`)から借りるもの。 */
@@ -49,7 +48,7 @@ export interface VertexMarkers {
   object: THREE.Group
   /** 今出しているマーカー(ウィンドウ選択が中身を見る)。 */
   meshes(): THREE.Points[]
-  show(markers: VertexMarker[], origin: 'user' | 'proposed'): void
+  show(markers: VertexMarker[]): void
   clear(): void
   /** その画素で取れる頂点(無ければ null)。 */
   at(offsetX: number, offsetY: number): VertexRef | null
@@ -63,19 +62,15 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
 
   const vertexRoot = new THREE.Group()
 
-  /** マーカーの材質は選択の出所(user / proposed)ごと(`variantCache`)。辺と同じく**深度検査をしない**
+  /** マーカーの材質。辺と同じく**深度検査をしない**
    *  (奥のマーカーも見え、奥のマーカーも指せる。見た目だけ隠すと「見えない頂点が外れる」になる)。 */
-  const vertexMaterials = variantCache(
-    (origin: 'user' | 'proposed') => origin,
-    (origin) =>
-      new THREE.PointsMaterial({
-        color: origin === 'proposed' ? PROPOSED_COLOR : HIGHLIGHT_COLOR,
-        size: VERTEX_PIXELS * 2,
-        sizeAttenuation: false,
-        depthTest: false,
-        clippingPlanes: clipPlanes,
-      }),
-  )
+  const vertexMaterial = new THREE.PointsMaterial({
+    color: HIGHLIGHT_COLOR,
+    size: VERTEX_PIXELS * 2,
+    sizeAttenuation: false,
+    depthTest: false,
+    clippingPlanes: clipPlanes,
+  })
 
   /** 今出している頂点マーカー。空なら選択に頂点が入っていない。 */
   let vertexMeshes: THREE.Points[] = []
@@ -89,18 +84,17 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
     vertexKey = ''
   }
 
-  function showVertices(markers: VertexMarker[], origin: 'user' | 'proposed'): void {
-    const key = `${origin}|${markers
+  function showVertices(markers: VertexMarker[]): void {
+    const key = markers
       .map((marker) => `${marker.bodyId}|${marker.vertexIndex}|${marker.point.join(',')}`)
-      .join(';')}`
+      .join(';')
     // 呼び出し側(App.svelte)は選択が変わるたびに呼び直すので、毎回作り直すと
     // ジオメトリを捨てて作り直し続けることになる(`showEdges` と同じ番人)。
     if (key === vertexKey) return
     clearVertices()
     vertexKey = key
     pickChanged() // 頂点マーカーは面より先に取られるので、増減で「指せるもの」が変わる
-    const material = vertexMaterials.get(origin)
-    highlightColor.vertex = markers.length === 0 ? null : material.color.getHex()
+    highlightColor.vertex = markers.length === 0 ? null : vertexMaterial.color.getHex()
     if (markers.length === 0) return
     for (const marker of markers) {
       if (marker.point.length < 3) continue
@@ -112,7 +106,7 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
         new THREE.BufferAttribute(new Float32Array(marker.point.slice(0, 3)), 3),
       )
       geometry.computeBoundingSphere()
-      const mesh = new THREE.Points(geometry, material)
+      const mesh = new THREE.Points(geometry, vertexMaterial)
       mesh.renderOrder = LAYER.region // 深度を書かないぶん、描く順序で辺より手前に出す
       mesh.userData.bodyId = marker.bodyId
       mesh.userData.vertexIndex = marker.vertexIndex
@@ -163,7 +157,7 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
     project: projectVertex,
     dispose() {
       clearVertices()
-      vertexMaterials.dispose()
+      vertexMaterial.dispose()
     },
   }
 }

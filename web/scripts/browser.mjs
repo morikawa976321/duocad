@@ -122,13 +122,6 @@ export async function pressUndo(page) {
   await page.keyboard.up('Control')
 }
 
-export async function pressRedo(page) {
-  await blurTextField(page)
-  await page.keyboard.down('Control')
-  await page.keyboard.press('KeyY')
-  await page.keyboard.up('Control')
-}
-
 /**
  * 視点をシーン全体へ戻す。画面にボタン(`#view-fit`)は無いので、
  * 実機検査だけが使う穴(`window.__duocad.frameAll`)を直接呼ぶ。

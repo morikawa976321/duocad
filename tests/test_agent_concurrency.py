@@ -35,17 +35,15 @@ from agent_support import spoke, tool_use
 
 
 def commit_edge(session: Session, body_id: str = "box", index: int = 1) -> None:
-    selection.propose_selection(session.document, refs=[{"body": body_id, "kind": "edge", "index": index}])
-    selection.commit_selection(session.document)
+    selection.set_selection(session.document, refs=[{"body": body_id, "kind": "edge", "index": index}])
 
 
 def commit_face(session: Session, body_id: str = "box", index: int = 1) -> None:
-    selection.propose_selection(session.document, refs=[{"body": body_id, "kind": "face", "index": index}])
-    selection.commit_selection(session.document)
+    selection.set_selection(session.document, refs=[{"body": body_id, "kind": "face", "index": index}])
 
 
 # ========================================================================================
-# A. 契約の確認: 形を変えるverbの後、確定選択は全リセットされる(タスクC・実機で既に成立)
+# A. 契約の確認: 形を変えるverbの後、選択は全リセットされる(タスクC・実機で既に成立)
 # ========================================================================================
 def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_verb_fails_loud(
     box_session: Session,
@@ -54,7 +52,7 @@ def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_
     AIの次のverb呼び出しは対象を黙って変えず `SelectionEmpty` で止まる。
 
     `extrude` は `resets_selection=True`(`duocad/catalog.py`)なので、確定した
-    面を1つ押し出すだけで確定選択が全リセットされる —— AIが辺を選んでいたことは
+    面を1つ押し出すだけで選択が全リセットされる —— AIが辺を選んでいたことは
     もう関係なくなる。
     """
     commit_edge(box_session)
@@ -73,7 +71,7 @@ def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_
 # B. 埋めた穴: 選択は生きているが、対象ボディが人に隠された(resets_selectionが届かない経路)
 # ========================================================================================
 def test_fillet_refuses_a_body_hidden_after_the_selection_was_confirmed(box_session: Session):
-    """人が確定選択を消費させる**前に**そのボディを隠すと、`fillet` は静かに丸めない。
+    """人が選択を消費させる**前に**そのボディを隠すと、`fillet` は静かに丸めない。
 
     実測: `require_visible` を課す前はこの手順で `fillet` が成功していた。
     """
@@ -95,8 +93,7 @@ def test_extrude_refuses_the_active_body_when_it_was_hidden_meanwhile(
     box_session.document.set_active_body("box")
     sketch_id = box_session.sketch_create("XY")["sketch_id"]
     box_session.add_rectangle(sketch_id, [0, 0], 5, 5)
-    selection.propose_selection(box_session.document, refs=[{"sketch": sketch_id, "index": 1}])
-    selection.commit_selection(box_session.document)
+    selection.set_selection(box_session.document, refs=[{"sketch": sketch_id, "index": 1}])
 
     box_session.set_visible("box", False)  # 人が対象ボディを隠す
 
@@ -105,7 +102,7 @@ def test_extrude_refuses_the_active_body_when_it_was_hidden_meanwhile(
 
 
 # ========================================================================================
-# C. 予防: 確定選択の種別とverbが要求する種別の食い違いを、モデルに考えさせる前に返す
+# C. 予防: 選択の種別とverbが要求する種別の食い違いを、モデルに考えさせる前に返す
 # ========================================================================================
 def test_a_kind_mismatch_names_what_is_actually_confirmed(box_session: Session):
     """面が3枚確定しているのに `fillet`(辺が要る)を呼ぶと、理由に**両方**が入る。
@@ -113,7 +110,7 @@ def test_a_kind_mismatch_names_what_is_actually_confirmed(box_session: Session):
     1回の呼び出しの返り値だけで「フィレットは辺を要求するが、確定しているのは面」と
     分かるようにする(モデルが確認ツールを繰り返して止まるのを防ぐ)。
     """
-    selection.propose_selection(
+    selection.set_selection(
         box_session.document,
         refs=[
             {"body": "box", "kind": "face", "index": 1},
@@ -121,7 +118,6 @@ def test_a_kind_mismatch_names_what_is_actually_confirmed(box_session: Session):
             {"body": "box", "kind": "face", "index": 3},
         ],
     )
-    selection.commit_selection(box_session.document)
 
     with pytest.raises(selection.SelectionEmpty) as excinfo:
         box_session.fillet(1.0)
@@ -252,7 +248,7 @@ def test_reselecting_the_same_kind_between_commit_and_the_verb_call_is_detected(
 ):
     """ログの本数だけでは「選択の入れ替え」を見逃す。
 
-    `propose_selection` / `commit_selection` は操作ログに一切乗らないので、人が**辺1の選択を
+    `set_selection` は操作ログに一切乗らないので、人が**辺1の選択を
     外して同じ種別(辺)の辺5へ選び直して確定する**手順は件数も種別も変わらず、
     `resets_selection` も `selection_empty` も発火しない。`current_seq()` に選択の指紋を
     混ぜたことでこの入れ替えも「版が動いた」として検出されることを固定する。
@@ -263,10 +259,9 @@ def test_reselecting_the_same_kind_between_commit_and_the_verb_call_is_detected(
     def swap_the_confirmed_edge() -> None:
         # 人が辺1の確定を外し、同じ種別(辺)の辺5へ選び直して確定する。
         # ログの本数はこの手順の前後で変わらない。
-        selection.propose_selection(
+        selection.set_selection(
             box_session.document, refs=[{"body": "box", "kind": "edge", "index": 5}]
         )
-        selection.commit_selection(box_session.document)
 
     provider = ConcurrentEditProvider(
         [

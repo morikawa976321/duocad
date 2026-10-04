@@ -467,15 +467,13 @@ export interface Viewport {
   /**
    * 選択中の面を強調する(空配列で解除)。
    *
-   * **複数選択と出所(origin)に対応している**。`origin` が `"proposed"`(AIの提案)なら
-   * 確定した選択と**明確に違う色**で描く —— これが「交互操作が人間側から見える」唯一の
-   * 場所である(実装計画書§8b)。
+   * **複数選択に対応している**。選択の色は人が選んでもAIが選んでも1つ(橙)。
    *
    * **領域は3Dでは色分けしない**(スケッチ側で強調する)。**辺と頂点は同じ規律に
    * 揃えてある** —— 辺は `showEdges` で折れ線を渡してある間だけ `highlightEdges` が、
-   * 頂点は `showVertices` が、どちらも user=橙 / proposed=水色で色を変える。
+   * 頂点は `showVertices` が、同じ橙で描く。
    */
-  highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void
+  highlight(refs: FaceRef[]): void
   /**
    * 選択中の**ボディ**を強調する(`highlight` のボディ版。空配列で解除)。
    *
@@ -483,7 +481,7 @@ export interface Viewport {
    * その他のverbはボディを選択できない(`App.svelte` の `wantedKinds`)。**選択は役割色
    * (`setOptimizeState` の緑/赤)に勝つ**——そのボディの全面がハイライト色になる。
    */
-  highlightBodies(bodyIds: string[], origin: 'user' | 'proposed'): void
+  highlightBodies(bodyIds: string[]): void
   /**
    * 形状最適化(第3のモード)の見た目 —— 保持/除外ソリッドの色、拘束面の色分けと
    * 固定記号、荷重の矢印+ラベル。**`null` はモードを抜けたとき**(何も描かない・
@@ -582,7 +580,7 @@ export interface Viewport {
    */
   pickRegions(on: boolean): void
   /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
-  highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void
+  highlightEdges(refs: EdgeRef[]): void
   // ------------------------------------------------------------------ 頂点(選択中のものだけ)
   /**
    * **選択に入っている頂点だけ**を点(画面上で一定の大きさ)で出す(空配列で消える)。
@@ -592,12 +590,11 @@ export interface Viewport {
    * 候補を全部見せて選ばせる場面が存在しない。目的は「AIが選んだ頂点が今どれかを人が見て、
    * クリックで外せる」ことだけ。
    *
-   * 色は面・辺と同じ規律(user=橙 / proposed=水色)。**領域の単色方式は採らない** ——
-   * `SelectionPanel` を廃した後、提案と確定の区別を人へ伝える手段は3Dの色だけになる。
+   * 色は面・辺と同じ橙。
    *
    * **奥のマーカーも見え、奥のマーカーも指せる**(辺と同じく深度検査をしない)。
    */
-  showVertices(markers: VertexMarker[], origin: 'user' | 'proposed'): void
+  showVertices(markers: VertexMarker[]): void
   // ------------------------------------------------------------------ 測定(issue #10)
   /**
    * 測った2点を結ぶ線・両端の点・数値の札を出す(`null` で消す)。**指せない**(装飾。
@@ -610,9 +607,8 @@ export interface Viewport {
   /**
    * 今そのハイライトに使っている色(16進)。出していない種別は null。
    *
-   * **実機検査フック専用**。`SelectionPanel` を廃した後、AIの提案(水色)と確定(橙)の
-   * 区別を人へ伝えるのは**3Dの色だけ**になったので、その色が実際に変わっていることを
-   * 機械で見られるようにする(`getGeometry` と同じ species の穴)。
+   * **実機検査フック専用**。選択の色が実際に出ていることを機械で見られるようにする
+   * (`getGeometry` と同じ species の穴)。
    */
   highlightColors(): { face: number | null; edge: number | null; vertex: number | null }
   /**

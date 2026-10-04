@@ -915,17 +915,17 @@ del _verb
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 def plane_from_selection(document: Document, base_plane: Any) -> Any:
-    """貼る先の平面。`base_plane`(XY/XZ/YZ)があればそれ、無ければ**確定選択の面**(ちょうど1枚)。
+    """貼る先の平面。`base_plane`(XY/XZ/YZ)があればそれ、無ければ**選択の面**(ちょうど1枚)。
 
     平面も選択も無ければエラーにする —— 既定で XY に貼ると、図形が静かに別の場所に出る。2枚選んで
-    いれば `SelectionAmbiguous`、AI の提案のままなら `SelectionNotCommitted` が上がる。
+    いれば `SelectionAmbiguous` が上がる。
     """
     if base_plane is not None:
         return str(base_plane)
-    face = selection.require_confirmed(document, "face", exactly_one=True)[0]
+    face = selection.require_selected(document, "face", exactly_one=True)[0]
     return face_plane(face["body"], face["index"])
 
 

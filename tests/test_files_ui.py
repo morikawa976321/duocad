@@ -27,7 +27,7 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
   ファイル名だけの制約は保存/開くだけの契約)
 - STLは**偏差を指定できる**(細かくすると必ずファイルが大きくなる)
 - `state.parameters` に名前つきの値が出て、`set_parameter` で形が追随する
-- **`list_documents` が `models_dir` の中身(名前/更新日時/サイズ/操作数)を返す**
+- **`list_documents` が `models_dir` の中身(名前/更新日時)を返す**。件数・サイズは返さない
 - **`copy_document` / `delete_document`** は一覧の行からの複製・削除(issue #17)。どちらも
   verbではなく文書を変えない。複製先が在れば拒否、編集中のファイルの削除は拒否。AIには開けない
 """
@@ -40,7 +40,7 @@ import pytest
 
 from duocad import io_step, kernel, query
 from duocad.server import Session
-from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, select as _select, send_one
+from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, edit_parameter, select as _select, send_one
 
 DEVIATION = 0.2
 
@@ -70,9 +70,9 @@ def test_saving_writes_the_operation_log_and_is_not_a_verb(session: Session, tmp
     assert answer["type"] == "file" and answer["action"] == "save"
     assert Path(answer["path"]) == target
     assert answer["name"] == "model.json"
-    assert answer["operations"] == log_before
+    assert "bytes" not in answer and "operations" not in answer, "ファイルのサイズ・操作数は返さない"
     assert len(session.document.log.entries) == log_before
-    assert json.loads(target.read_text(encoding="utf-8"))["operations"], "空のログを書いた"
+    assert len(json.loads(target.read_text(encoding="utf-8"))["operations"]) == log_before, "ログ全体を書いていない"
     # **状態の配り直しに `applied` は載らない**(保存はverbではないので、画面の
     # `lastApplied` を動かしてはいけない)。載る値は現在ファイル名だけが変わる。
     state = clients[0].last("state")
@@ -369,7 +369,7 @@ def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> 
     """
     _cylinder(session, 5.0, 10.0)
     radius = next(name for name, value in session.document.parameters.items() if value == 5.0)
-    session.set_parameter(radius, 7.0)
+    edit_parameter(session, radius, 7.0)
     volume = query.volume(session.document.bodies[-1].shape)
     session.save_document("with-parameters.json")
 
@@ -600,7 +600,7 @@ def test_copy_document_refuses_an_existing_destination_and_bad_names(session: Se
     """落ちたら: 複製で既存ファイルが上書きされる(1バイトでも変わる)、または models/ の外を指せる。"""
     _box(session)
     session.save_document("a.json")
-    session.set_parameter(next(iter(session.document.parameters)), 30.0)
+    session.sketch_create("XY")
     session.save_document("b.json")
     untouched = (session.models_dir / "b.json").read_bytes()
 
@@ -658,17 +658,15 @@ def test_copy_and_delete_are_not_exposed_to_ai(session: Session) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 一覧(要件3: 名前/更新日時/サイズ/操作数)
+# 一覧(要件3: 名前/更新日時)
 # --------------------------------------------------------------------------------------
-def test_list_documents_reports_name_mtime_size_and_operation_count(session: Session) -> None:
-    """`list_documents` が `models_dir` の中身を返す(名前/更新日時/サイズ/操作数)。"""
+def test_list_documents_reports_name_and_mtime_only(session: Session) -> None:
+    """`list_documents` が `models_dir` の中身を名前と更新日時だけで返す(件数・サイズは返さない)。"""
     _box(session)
-    log_before = len(session.document.log.entries)
     session.save_document("a.json")
     session.new_document()  # a.json を編集中から外す(以後の自動保存が a.json へ行かないように)
     _box(session)
     session.save_document("b.json")
-    session.set_parameter(next(iter(session.document.parameters)), 30.0)  # 自動保存で b.json が伸びる
 
     async def script(send):
         return await send({"cmd": "list_documents"})
@@ -679,9 +677,7 @@ def test_list_documents_reports_name_mtime_size_and_operation_count(session: Ses
     by_name = {item["name"]: item for item in answer["files"]}
     # 無題の文書が最初の変更で自動保存した `untitled-<n>.json` も一覧に居る(意図どおり)。
     assert set(by_name) == {"a.json", "b.json", "untitled-1.json", "untitled-2.json"}
-    assert by_name["a.json"]["operations"] == log_before
-    assert by_name["b.json"]["operations"] == log_before + 1
-    assert by_name["a.json"]["size"] == (session.models_dir / "a.json").stat().st_size
+    assert set(by_name["a.json"]) == {"name", "mtime"}
     assert by_name["a.json"]["mtime"] > 0
     assert clients[1].payloads == [], "一覧も状態配信ではない(要求した接続にだけ返る)"
 
@@ -776,12 +772,8 @@ def test_named_values_are_published_and_drive_the_shape(session: Session) -> Non
         name for name, value in published.items() if value == pytest.approx(5.0)
     )
 
-    async def script(send):
-        return await send({"cmd": "set_parameter", "name": radius_name, "value": 8.0, "client_op": 1})
+    edit_parameter(session, radius_name, 8.0)
 
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["applied"]["verb"] == "set_parameter"
     assert session.state_meta()["parameters"][radius_name] == pytest.approx(8.0)
     assert query.volume(session.document.bodies[-1].shape) > volume_before
 

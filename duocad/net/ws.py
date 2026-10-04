@@ -17,7 +17,7 @@
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
         {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
         {"type": "edges", "body_id": str, "revision": int, "edges": [...]}
-        {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path", "bytes"}
+        {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "running", "providers"}
@@ -25,18 +25,19 @@
         {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}
         {"type": "ai_error", "message": str}
 
-**`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_send` / `ai_cancel` は文書を
+**`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_prepare` / `ai_send` /
+`ai_cancel` は文書を
 直接は変えない(操作ログに載らず、undoの単位でもない) —— 文書を変えるのはエージェントが呼ぶ
 既存ツールの側で、それは通常のverb配信としてこの後に届く。したがって `catalog.COMMANDS` には
 **入れない**し、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
 
 **verbコマンドは対象集合(面・辺・領域)を引数で受けない**。数値・名前・パスだけを送り、押す面も
-丸める辺も押し出す領域もverbの入口(`duocad/entry.py`)がコアの確定選択から取る
-(`selection.require_confirmed` / `require_edges`)。`body_id` が残っているのは対象集合ではない
+丸める辺も押し出す領域もverbの入口(`duocad/entry.py`)がコアの選択から取る
+(`selection.require_selected` / `require_edges`)。`body_id` が残っているのは対象集合ではない
 ものだけ(`set_visible` / `get_edges` の対象、`extrude` の行き先)。
 
-選択の口は3つ(`modify_selection` / `commit_selection` / `clear_selection`)。`propose_selection`
-は開けていない(AIが書く経路であり、人はポインティングで直す)。
+選択の口は3つ(`modify_selection` / `toggle_selection` / `clear_selection`)。`set_selection`
+(述語を取る置き換え)は開けていない(人はクリックで選ぶ)。
 
 `preview` だけは**状態を配信しない**。verbを投機的に実行して形だけ測り、文書は
 `duocad.speculative` が元へ戻す(確定した1回だけが操作ログに積まれる)。したがって
@@ -56,7 +57,7 @@
       "bodies": [{"body_id","name","kind","visible","revision",
                   "face_count","volume","geometry": <tessellate結果|None>}, ...],
       "log", "can_undo", "can_redo", "applied_count",
-      "selection": {"items": [...], "origin": "user"|"proposed", "count": int},
+      "selection": {"items": [...], "count": int},
     }
     delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
                                "unchanged": [BodyId, ...]}
@@ -75,10 +76,12 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import threading
 from typing import Any, Optional  # Any: listeners / 接続
 
 from .. import catalog, optimize_run, selection
 from ..agent import AgentLoop, Cancellation, ProviderError
+from ..agent.loop import FIRST_LOOK
 from ..agent.providers import DEFAULT_OPENAI_COMPAT_BASE_URL
 from ..session import Session
 from .tools_on_loop import ToolsOnLoop
@@ -107,7 +110,7 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: - `import_step` … 文書を変える(ログに載る)。応答は状態配信(`import_svg` はスケッチの
 #:   コマンドなので、この表には無い —— `SKETCH_COMMANDS` 側にいる)
 #: - `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
-#:   パスとバイト数だけ(要求した接続にだけ返る。`preview` と同じ扱い)
+#:   パスだけ(要求した接続にだけ返る。`preview` と同じ扱い)
 #: - `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
 #:   表からは外して `_dispatch` で個別に扱う。
 #: - **`save_document` も表から外れている** —— `name` が任意引数になり、
@@ -116,11 +119,6 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: - **`rename_document` も表から外れている** —— 応答が `save_document` と同じ
 #:   「`file` の封筒 + 状態の配り直し」で、表の「封筒だけ」に合わないため。
 FILE_COMMANDS: dict = catalog.file_table()
-
-#: **対象集合をコアの確定選択から取るコマンド**(`catalog.Command.uses_selection`)。
-#: `_dispatch` はこれを受け取ったとき、選択が `origin="proposed"` のままなら
-#: **自動で `commit_selection` してから**verbを走らせる(下記 `_commit_before_verb`)。
-SELECTION_CONSUMING_COMMANDS: set = catalog.selection_consuming_commands()
 
 #: アプリ内AIが繋げるプロバイダ(`ai_configure` が受け付ける綴り・`ai_status.providers`)。
 #: Claudeへ繋ぐ道はMCP(サブスク認証のClaude Codeが `/mcp` へ来る)側に残っている。
@@ -176,6 +174,9 @@ class Server:
         self._ai_loop: Optional[AgentLoop] = None
         self._ai_cancellation = Cancellation()
         self._ai_running = False
+        #: ウォームアップを始めた会話と、その終わりを待つための印(`_ai_prepare`)。
+        self._ai_prepared_loop: Optional[AgentLoop] = None
+        self._ai_prepare_done: Optional[threading.Event] = None
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
         self._pending_ai_runs: set = set()
         # -------------------------------------------------- H: 形状最適化を走らせる
@@ -301,8 +302,8 @@ class Server:
         """verb の応答に `client_op`(要求した画面が付けた通し番号)を載せて全接続へ配る。
 
         載せないものは載せない理由がそれぞれにある: 状態を配り直すだけのもの(`get_state` /
-        `set_view_resolution` / `save_document`)、`file` の封筒で返す書き出し、`_commit_before_verb` の
-        自動確定(docstring)。`change` 系(`set_visible` / 選択の3つ)は `Session` が `_emit` の中で載せる。
+        `set_view_resolution` / `save_document`)、`file` の封筒で返す書き出し。
+        `change` 系(`set_visible` / 選択の3つ)は `Session` が `_emit` の中で載せる。
         """
         applied["client_op"] = message.get("client_op")
         await self._push(connection, applied=applied)
@@ -316,7 +317,6 @@ class Server:
             return
 
         try:
-            await self._commit_before_verb(connection, command, message)
             if command == "get_state":
                 await self._push(connection, applied=None, only=connection)
             elif command in ("undo", "redo"):
@@ -340,7 +340,7 @@ class Server:
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
-            # -------------------------------------------------- B: 選択(人が直す経路)
+            # -------------------------------------------------- B: 選択
             # **コアの選択集合をそのまま叩く**(アプリ層に選択状態を持たせない)。
             # 発火したイベント(`{"change":"selection", ...}`)を `applied` として返し、
             # 状態は全接続へ配信する(`state.selection` に入っている)。
@@ -352,13 +352,15 @@ class Server:
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
-            elif command in ("commit_selection", "clear_selection"):
+            elif command == "toggle_selection":
                 applied = self._apply(
-                    self.session.commit_selection
-                    if command == "commit_selection"
-                    else self.session.clear_selection,
+                    self.session.toggle_selection,
+                    message.get("refs") or [],
                     message.get("client_op"),
                 )
+                await self._push(connection, applied=applied)
+            elif command == "clear_selection":
+                applied = self._apply(self.session.clear_selection, message.get("client_op"))
                 await self._push(connection, applied=applied)
             # -------------------------------------------------- C/D: スケッチとフィーチャの verb
             # 引数は宣言(`catalog.Command.ws_arguments`)に従って取り出し、検査してから
@@ -513,6 +515,8 @@ class Server:
                 # (待たずに関数を抜けると、テストのようにここで `asyncio.run` が閉じる
                 # 呼び方では配信タスクが実行される前に握りつぶされる)。
                 await self._broadcast({"type": "ai_status", **status})
+            elif command == "ai_prepare":
+                self._ai_prepare()
             elif command == "ai_send":
                 await self._ai_start(connection, str(message.get("message") or ""))
             elif command == "ai_cancel":
@@ -555,50 +559,6 @@ class Server:
                     "message": f"{type(error).__name__}: {error}",
                 },
             )
-
-    async def _commit_before_verb(self, connection: Any, command: Any, message: dict) -> None:
-        """**人がツールバーからコマンドを実行する行為そのものを承認とみなす**。
-
-        対象集合を確定選択から取るverb(`SELECTION_CONSUMING_COMMANDS`)がこのソケットへ
-        届いたとき、選択が `origin="proposed"`(AIの提案)のままなら、先に
-        `commit_selection` してから走らせる。**中身は変えない** —— 変わるのは origin だけで、
-        提案と確定の区別そのもの(`confirmed_items` の門)は残る。
-
-        **ここはブラウザ側の経路だけ**である。MCPは `mcp_server.py` を通るのでこの覆いを
-        受けず、AIは今までどおり自分の提案を `commit_selection` で明示的に確定する
-        (`duocad/selection.py` のモジュールdocstring)。
-
-        `preview` も対象にする —— 数値を打つと投機実行が飛ぶので、ここを外すと
-        「提案のまま押し出そうとした瞬間に `SelectionNotCommitted` の札だけが出る」が残る。
-        投機実行するverbは `message["verb"]` にある。
-
-        **確定したら必ずここで配信する**(`_push`)。後続のverbの配信に相乗りさせてはいけない
-        —— `preview` は「状態を配らない」コマンドなので、相乗りにすると
-        **サーバの origin だけが `user` になり、画面は `proposed` のまま残る**。
-        `SelectionPanel` を廃した今、origin を人へ伝えるのは3Dの色だけであり、
-        AI側が `get_selection` で読む値でもあるので、この食い違いは
-        「人が承認していないのに承認済みに見える」状態そのものになる(実測で再現)。
-
-        **`client_op` は載せない(`None`)**。これは人が出した選択編集ではなく、サーバが
-        自動で行う確定である。verbの `client_op` を載せると、アプリ層がこれを
-        「この画面が出した選択変更」と数え(`selfSelections` = 即適用の引き金)、
-        さらに `pendingOp` を verb の完了前に解いてしまう。
-        """
-        name = message.get("verb") if command == "preview" else command
-        if name not in SELECTION_CONSUMING_COMMANDS:
-            return
-        # **貼る先が引数で来ていたら選択は読まない** —— そのときは選択が使われない。
-        # 使われない集合を承認扱いにすると、「基準平面を指しただけなのにAIの提案が
-        # 確定していた」という静かな変化になる。**スケッチを作るverbは `sketch_create` と
-        # `sketch_create_offset` の2つ**(どちらも `base_plane` が来ていれば選択を読まない。
-        # `import_svg` は `sketch_id` を取る側なので対象集合を確定選択から取らず、
-        # `SELECTION_CONSUMING_COMMANDS` に入らないためこの関数の対象からも外れる)。
-        if name in ("sketch_create", "sketch_create_offset") and message.get("base_plane") is not None:
-            return
-        if not selection.get_selection(self.session.document).is_proposed():
-            return
-        applied = self._apply(self.session.commit_selection, None)
-        await self._push(connection, applied=applied)
 
     def _apply(self, call: Any, *args: Any, **kwargs: Any) -> dict:
         """WebSocket経由の変更を実行する。この間だけ `_dispatching` を立てる。
@@ -655,6 +615,8 @@ class Server:
             self._ai_provider_kind = provider
         self._ai_model = model or None
         self._ai_base_url = base_url or None
+        # 古い設定で走っているウォームアップの接続を閉じる(捨てる会話のために相手を占有しない)。
+        self._ai_cancellation.cancel()
         # 次に使うときに作り直す(古いプロバイダ・古い会話の履歴を持ち越さない)。
         self._ai_loop = None
         self._ai_cancellation = Cancellation()
@@ -683,7 +645,11 @@ class Server:
         )
         marshaled = ToolsOnLoop(self._ai_tools, self._loop)
         self._ai_loop = AgentLoop(
-            marshaled, provider, cancellation=self._ai_cancellation, progress=self._ai_progress
+            marshaled,
+            provider,
+            cancellation=self._ai_cancellation,
+            progress=self._ai_progress,
+            first_look=FIRST_LOOK,
         )
         return self._ai_loop
 
@@ -700,6 +666,44 @@ class Server:
                 "ok": bool(ok),
             }
         )
+
+    def _ai_prepare(self) -> None:
+        """固定プレフィックス(system + tools)を先に読ませておく。**1つの会話につき1回**。
+
+        画面が繋がった時点と設定を変えた直後に届く。cold の読み込みは遅い機種で分単位かかるので、
+        人が最初の依頼を打っている間に済ませる(実測: 最初の依頼の処理量が 6,686 → 16 トークン)。
+
+        **何も返さない** —— 相手がまだ居ないのは事故ではなく、最初の依頼がそれを言う。
+        `ai_get_status` に相乗りさせないのは、あちらが状態を読むだけの口だからである
+        (読んだだけで外へHTTPが飛ぶと、検査や監視が相手のスロットを書き換える)。
+        """
+        if self._ai_running:
+            return
+        try:
+            loop_obj = self._ensure_ai_loop()
+        except ProviderError:
+            return
+        if loop_obj is self._ai_prepared_loop:
+            return
+        self._ai_prepared_loop = loop_obj
+        done = threading.Event()
+        self._ai_prepare_done = done
+
+        def work() -> dict:
+            try:
+                return loop_obj.prepare()
+            finally:
+                done.set()
+
+        future = asyncio.get_running_loop().run_in_executor(None, work)
+        self._pending_ai_runs.add(future)
+
+        def finished(fut: "asyncio.Future") -> None:
+            self._pending_ai_runs.discard(fut)
+            if not fut.cancelled() and fut.exception() is not None:
+                self.session.warnings.append(f"AIのウォームアップに失敗: {fut.exception()}")
+
+        future.add_done_callback(finished)
 
     async def _ai_start(self, connection: Any, prompt: str) -> None:
         """1つの発話でエージェントを起こす。**`AgentLoop.run()` を待たずに返る** ——
@@ -731,8 +735,17 @@ class Server:
         self._ai_cancellation.clear()
         await self._broadcast({"type": "ai_status", **self._ai_status()})
 
+        # **ウォームアップが走っていれば、終わってから始める。** 並べて投げても相手の側で後ろに
+        # 並ぶだけで、その待ちが `run()` の合計時間の予算を食って時間切れになる。
+        warming = self._ai_prepare_done if loop_obj is self._ai_prepared_loop else None
+
+        def work():
+            if warming is not None:
+                warming.wait()
+            return loop_obj.run(prompt)
+
         running_loop = asyncio.get_running_loop()
-        future = running_loop.run_in_executor(None, loop_obj.run, prompt)
+        future = running_loop.run_in_executor(None, work)
         self._pending_ai_runs.add(future)
 
         def finished(fut: "asyncio.Future") -> None:
@@ -752,8 +765,8 @@ class Server:
 
     def _ai_cancel(self) -> None:
         """中断フラグを立てる。**ループはモデルへ投げる前とツール1件ごとに見る**
-        (`duocad/agent/loop.py` の `Cancellation` docstring) —— 走っているHTTP
-        リクエスト自体は切れないので、反映は次のチェックポイントまで遅れうる。
+        (`duocad/agent/loop.py` の `Cancellation` docstring)。走っているHTTPリクエストは
+        プロバイダが接続を閉じて止める。
         """
         self._ai_cancellation.cancel()
 

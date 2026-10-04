@@ -10,9 +10,9 @@ from duocad.session import DocumentBusy
 from session_support import browser
 
 #: 文書を変えるが、実行中も通してよいもの(操作ログに載らず、最適化が読む条件にも形にも触れない)。
-_ALLOWED_WHILE_RUNNING = {"set_visible", "set_sketch_visible", "modify_selection", "commit_selection",
+_ALLOWED_WHILE_RUNNING = {"set_visible", "set_sketch_visible", "modify_selection", "toggle_selection",
                           "clear_selection",
-                          "propose_selection"}
+                          "set_selection"}
 
 
 def _running_session_with_a_body() -> Session:
@@ -40,9 +40,8 @@ def test_every_method_that_changes_the_document_is_guarded() -> None:
     lambda s: s.new_document(),
     lambda s: s.open_document("other.json"),
     lambda s: s.sketch_create("XY"),
-    lambda s: s.set_parameter("w", 3.0),
     lambda s: s.preview("sketch_create", {"base_plane": "XY"}),
-], ids=["undo", "new_document", "open_document", "verb", "set_parameter", "preview"])
+], ids=["undo", "new_document", "open_document", "verb", "preview"])
 def test_document_changes_are_refused_while_running(call) -> None:
     """落ちたら、実行中に Undo・新規・開く・verb・プレビューが通り、終わった結果が別の文書や古い条件の上に足される。"""
     session = _running_session_with_a_body()

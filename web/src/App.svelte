@@ -67,7 +67,7 @@
   } from './commands/sketch'
   import FilesPanel from './FilesPanel.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
-  import Toast, { showToast } from './Toast.svelte'
+  import Toast, { fail, errorLog } from './Toast.svelte'
   import {
     createSession,
     type Applied,
@@ -156,21 +156,13 @@
   let status = $state<ConnectionStatus>('connecting')
   let model = $state<ServerState | null>(null)
   let messages = $state<string[]>([])
-  /**
-   * 画面へ出したエラーの控え。**表示には使わない** —— 出すのはトースト(消える)で、
-   * ここは「消えた後も見られる場所」である。
-   *
-   * トーストにしたことで実機検査から検出力が落ちる経路が1つある: `smoke-files.mjs` は
-   * 最後に一度だけ「画面にエラーが出ていないか」を見ており、**通知欄は消えないから**
-   * その1回で走行全体を覆えていた。時間で消える札を最後に見ても、途中で出て消えたエラーは
-   * 拾えない。控えを残して `__duocad.errors` から読ませることで、その検査を弱めずに済む。
-   */
-  let errorLog = $state<string[]>([])
   let lastApplied = $state<Applied | null>(null)
 
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
   let pendingOp = $state<number | null>(null)
   let opCounter = 0
+  /** 送って配信待ちの `clear_selection` の `client_op`(`currentItems()`)。描画に使わない。 */
+  let clearingOp: number | null = null
 
   /** 投げたプレビューの番号(古い応答を捨てるため。0は「投げていない」)。 */
   let previewId = 0
@@ -261,18 +253,17 @@
   /** 起動中のコマンドが選択から取る種別(`CommandHost` が知らせる)。 */
   let wantedKinds = $state<SelectableKind[]>([])
   /**
-   * 保持/除外ソリッド・拘束面(`OPTIMIZE_PRESET_ROLE` の3つ)が起動中か。
+   * 起動中のコマンド(無起動・スケッチの既定「選ぶ」は null)。`CommandHost` の
+   * `onStart` / `onEnd` と `setMode` だけが書く。普通の変数でよい(描画に使わない)。
    *
-   * **この3つだけ、修飾キー無しのクリックもトグルにする**(2026-09-11本人決定)。
-   * 起動した時点で既存の割り当てが選択状態に現れる集合代入なので、素のクリックが
-   * 「置き換え」だと1枚足すたびにCtrlが要り、他の割り当て済みの面を毎回避けて
-   * クリックする羽目になる。他のverb(フィレットの辺・押し出す面等)は素のクリック=
-   * 置き換えのままでよい —— 起動時に選択が空で始まるので置き換えと足すが一致する。
+   * **起動中は素のクリックが選択のトグルになり(`toggleOnlyMode`)、終わると選択を全解除する
+   * (`onCommandEnd`)。** 起動していない間は従来どおり(素のクリックは置き換え)なので、
+   * 先に選んでからverbを起動する手・AIが選んだ選択をそのまま使う手は変わらない。
    *
-   * **測定(`measure`)も同じ**(2026-09-16)。対象は「ちょうど2つ」で、素のクリックが
-   * 置き換えのままだと2つ目のクリックが1つ目を消して永久に揃わない。
+   * 保持/除外ソリッド・拘束面の集合 verb は起動した時点で既存の割り当てが選択状態で現れ、
+   * 測定は対象が「ちょうど2つ」なので、置き換えのままだと成り立たない(どちらも起動中のトグルで満たされる)。
    */
-  let toggleOnlyClicks = $state(false)
+  let activeVerb: string | null = null
   /**
    * 集合 verb の起動時に表示へ戻した非表示ボディの `set_visible` の応答待ち。**全部戻ってから**
    * 既存の割り当てを選択に並べる(`onCommandStart`)。描画には使わないので普通の変数でよい。
@@ -399,6 +390,8 @@
       // (再)接続したら今のAI設定を取り直す(サーバは再起動していなくても、
       // 前回の接続が切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
+      // 人が最初の依頼を打っている間に、AIへツール定義を読ませておく(遅い機種で分単位かかる)。
+      if (next === 'open') session.aiPrepare()
       // (再)接続したら `models/` の一覧も取り直す(サーバの再起動・別セッションの
       // 保存で増減しうる。`FilesPanel.svelte` が空のまま固まらないようにする)。
       if (next === 'open') files.refresh()
@@ -409,6 +402,8 @@
         pendingOp = null
         clearPreview()
       }
+      // 全解除の配信も同じく返ってこない(残すと以後の差分が空の選択に対して組まれ続ける)。
+      if (next !== 'open') clearingOp = null
       // **投げ損ねた辺の要求を覚えたままにしない**。接続が切れて
       // いる間の要求は送られずに捨てられるが、`edgesAsked` には残る —— 再接続しても
       // 版が同じなら「もう頼んだ」と判断して二度と取りに行かず、**そのBodyの辺が
@@ -524,7 +519,7 @@
   ): void {
     const verdict = judgeMinWidth(value, step)
     const invalidNow = isOutOfRange(verdict)
-    if (invalidNow && !optimizeMinWidthWasInvalid) showToast(message(minWidthProblem(verdict, step!) ?? ''))
+    if (invalidNow && !optimizeMinWidthWasInvalid) fail(message(minWidthProblem(verdict, step!) ?? ''))
     optimizeMinWidthWasInvalid = invalidNow
   }
 
@@ -669,19 +664,6 @@
     if (!message) return
     messages = [message, ...messages].slice(0, 4)
   }
-  /**
-   * **エラー**を1件、トーストで出す(拒まれた・失敗した・繋がらない)。
-   *
-   * **エラーが画面に出る経路はこの関数1本だけ**にしてある。各パネルが個別に
-   * `showToast` を叩き始めると、同じ失敗が2枚出たり、パネルを畳むとエラーが消えたりする
-   * (WSの応答を受けるのはこの層だけ、という形をそのまま使う)。
-   */
-  function fail(message: string): void {
-    if (!message) return
-    errorLog = [message, ...errorLog].slice(0, 20)
-    showToast(message)
-  }
-
   // ---------------------------------------------------------------- 操作の番号と応答待ち
   function nextOp(): number {
     opCounter += 1
@@ -747,6 +729,7 @@
       if (applied.client_op !== null && myClientOps.has(applied.client_op)) {
         selfSelections += 1
       }
+      if (applied.client_op !== null && applied.client_op === clearingOp) clearingOp = null
       releasePending(applied.client_op)
       return
     }
@@ -766,8 +749,7 @@
     }
     if (applied && applied.change === 'document') {
       // **開いた**(`open_document`)か**新規にした**(`new_document`)。保存と同じく、ここで
-      // ファイル名を追い、一覧も取り直す(開いた版が一覧の「操作数」に含まれるのはこの
-      // ファイル自身なので変わらないが、他の操作で増減している可能性は保存と同じく
+      // ファイル名を追い、一覧も取り直す(他の操作でファイルが増減している可能性は保存と同じく
       // 否定できない)。**新規は `name` が `null`** で来るので、触っているファイルの表示は
       // 「(無題)」へ戻る —— ただし表示そのものを更新するのは上の `next.current_name` で、
       // ここが見るのは「開いたのか新規にしたのか」の区別だけである。
@@ -866,11 +848,13 @@
   })
 
   function handleMeasure(payload: MeasurePayload): void {
+    // 結果を先に入れる —— `commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で
+    // 選択を残すかを決める。
+    measure.onResult(payload)
     if (releasePending(payload.client_op)) {
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }
-    measure.onResult(payload)
   }
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
@@ -984,22 +968,12 @@
   })
 
   function drawHighlight(): void {
-    const origin = selection?.origin === 'proposed' ? 'proposed' : 'user'
-    viewport?.highlight(
-      selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
-      origin,
-    )
+    viewport?.highlight(selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
     // **選択が勝つ**(タスク仕様の色の規則)。ボディが選ばれているあいだは保持/除外の
     // 役割色より優先してハイライト色を出す(`viewport.applyFaceMaterials` が実体)。
-    viewport?.highlightBodies(
-      selectedBodies.map((item) => item.body),
-      origin,
-    )
-    viewport?.highlightEdges(
-      selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })),
-      origin,
-    )
-    viewport?.showVertices(vertexMarkers, origin)
+    viewport?.highlightBodies(selectedBodies.map((item) => item.body))
+    viewport?.highlightEdges(selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
+    viewport?.showVertices(vertexMarkers)
   }
 
   /**
@@ -1162,11 +1136,10 @@
    * 入れると足したそばから外れる(`duocad/selection.py` の契約)。
    */
   function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
-    const current = selection?.items ?? []
+    const current = currentItems()
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'toggle') {
-      if (already) modifySelection([], [ref])
-      else modifySelection([ref], [])
+      session.toggleSelection([ref], nextOp())
     } else if (already && current.length === 1) modifySelection([], [ref])
     else selectOnly(ref)
   }
@@ -1208,17 +1181,21 @@
    * 保持/除外ソリッド・拘束面の集合 verb は、起動した時点で既存の割り当てが選択状態で現れる
    * 集合代入なので、置き換えのままだと足すたびに他の割り当てを全部外してしまう。測定は対象が
    * 「ちょうど2つ」なので、2つ目の素のクリックが1つ目を消しては永久に揃わない。
-   * 立つのは `toggleOnlyClicks`(`onCommandStart`)が立っている間だけで、他のverbの
-   * 面ピック(押し出す面等)には効かない。
+   * 立つのはコマンド起動中(`activeVerb`)だけ。
    */
   function toggleOnlyMode(mode: PickEvent['mode']): PickEvent['mode'] {
-    return toggleOnlyClicks ? 'toggle' : mode
+    return commandClickToggles() ? 'toggle' : mode
+  }
+
+  /** コマンド起動中の素のクリックをトグルにするか(`activeVerb`)。 */
+  function commandClickToggles(): boolean {
+    return activeVerb !== null
   }
 
   /**
    * **保持/除外ソリッドの間はボディ粒度**。`wantedKinds` に `'body'` が立つのは
    * `SET_PRESERVE_BODIES` / `SET_EXCLUDE_BODIES` だけ(`commands/optimize.ts` の宣言)。
-   * 面の参照を確定すると `require_committed_bodies` が面を無視し、**集合が黙って空になる**。
+   * 面の参照を確定すると `require_selected_bodies` が面を無視し、**集合が黙って空になる**。
    */
   function optimizeSetFaceRef(bodyId: string, faceIndex: number): SelectionRef {
     if (wantedKinds.includes('body')) return bodyRef(bodyId)
@@ -1235,7 +1212,7 @@
       ...event.regions.map((item) => regionRef(item.sketchId, item.index)),
       ...event.sketchEntities.map((item) => sketchEntityRef(item.sketchId, item.entityId, item.point)),
     ]
-    const current = selection?.items ?? []
+    const current = currentItems()
     const currentKeys = new Set(current.map(refKey))
     if (mode === 'toggle') {
       const already = picked.filter((ref) => currentKeys.has(refKey(ref)))
@@ -1244,7 +1221,7 @@
       return
     }
     if (picked.length === 0) {
-      if (current.length > 0) session.clearSelection(nextOp())
+      if (current.length > 0) clearSelection()
       return
     }
     const pickedKeys = new Set(picked.map(refKey))
@@ -1263,7 +1240,7 @@
    * `sketch_create` が「面が選ばれていない」で失敗する。ここでは「指した面に貼る」が常に成立する。
    */
   function selectOnly(ref: SelectionRef): void {
-    const current = selection?.items ?? []
+    const current = currentItems()
     modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
   }
 
@@ -1280,7 +1257,7 @@
 
   /** `selectOnly` の複数版 —— 選択集合を `refs` そのものに置き換える。 */
   function presetSelection(refs: SelectionRef[]): void {
-    const current = selection?.items ?? []
+    const current = currentItems()
     // `onBoxSelect` と同じ理由で `Set` 引き(保持/除外ソリッドは数百件になりうる)。
     const refKeys = new Set(refs.map(refKey))
     modifySelection(
@@ -1299,11 +1276,12 @@
    */
   function onCommandStart(verb: string): void {
     measure.clear() // 次の操作に入ったら、前の測定の札は用済み
-    // **`toggleOnlyClicks` は起動するverbが変わるたび毎回書き直す**(前のverbの
-    // 値を持ち越さない)。`model === null` の早期returnより前に置く —— 起動そのものは
-    // 文書が無くても起きるので、ここで止めると次のverbが集合代入でも判定が古いまま残る。
-    toggleOnlyClicks = OPTIMIZE_PRESET_ROLE[verb] !== undefined || verb === MEASURE.id
     pendingOptimizePreset = null
+    // **別のverbへ直接移ったら、前のverbの終わり**として選択を空にする(`onCommandEnd`)。
+    // 同じverbの押し直し(構え直し)は終わりではない。
+    // `model === null` の早期returnより前に置く —— 起動そのものは文書が無くても起きる。
+    const switched = activeVerb !== null && activeVerb !== verb
+    activeVerb = verb === DEFAULT_SKETCH_COMMAND_ID ? null : verb
     if (model === null) return
     // 荷重の2つは**空から始める**(`OPTIMIZE_EMPTY_START_VERBS` の理由を参照)。
     // 「何もしない」ではなく「空を代入する」でなければ、前のverbの選択が残る。
@@ -1312,7 +1290,11 @@
       return
     }
     const role = OPTIMIZE_PRESET_ROLE[verb]
-    if (role === undefined) return
+    if (role === undefined) {
+      // 集合代入の3つは下の `presetSelection` が置き換えるので、ここへ来るのはそれ以外だけ。
+      if (switched) clearSelectionIfAny()
+      return
+    }
     // **非表示のボディに付いた割り当ては選択に並ばない**(`state.optimize` の配列は指せるものだけ)。
     // 集合 verb は集合全体を置き換えるので、並ばなかった割り当ては確定で黙って消える —— 先に
     // そのボディを表示へ戻し、戻った状態の配列を並べる(2026-09-24 本人判断。issue #33)。
@@ -1335,19 +1317,55 @@
     note(`非表示だった${OPTIMIZE_ROLE_LABEL[role]}のボディ ${hidden.length} 個を表示した(割り当てを選択に並べるため)`)
   }
 
+  function clearSelectionIfAny(): void {
+    if (currentItems().length > 0) clearSelection()
+  }
+
+  /** 選択を全解除する。配信が届くまでの判定は `currentItems()` が空として扱う。 */
+  function clearSelection(): void {
+    clearingOp = nextOp()
+    session.clearSelection(clearingOp)
+  }
+
   /**
-   * `CommandHost` の `onWants`。**verbが無起動へ戻ったことを知る唯一の経路でもある**
-   * (`onStart` は起動したときしか呼ばれない)。無起動の `command.args` は常に `[]` なので
-   * `kinds` が空になった = 中断/確定成功/モード切替のどれかで降りた、とみなして
-   * `toggleOnlyClicks` を下ろす —— 下ろさないと、拘束面を確定した直後に
-   * フィレットへ移って辺を素クリックしたときトグルのまま残り、選択が置き換わらない。
+   * **選択集合の差分を組むときに読む今の選択。** 送った `clear_selection` の配信が
+   * まだ届いていない間は空を返す。
+   *
+   * 配信前の `selection` を読むと、Esc直後(終了で全解除を送った直後)に「唯一選ばれていた
+   * 要素」をクリックしたとき `editSelection` が解除と判定し、コアでは「全解除 → その要素を外す」
+   * と順に効いて**選んだはずの要素が選ばれない**。サーバは1接続の要求を順に処理するので、
+   * 全解除の後に届く要求は空の集合に対して効く —— 判定もそれに合わせる。
+   * 表示(ハイライト・件数)は配信どおりの `selection` を使う。
+   */
+  function currentItems(): SelectionRef[] {
+    return clearingOp !== null ? [] : (selection?.items ?? [])
+  }
+
+  /**
+   * コマンドが終わった(`CommandHost.onEnd`: Esc・中断ボタン・確定成功)。**選択を全解除する。**
+   *
+   * 形を変えるverbの確定ではコアが先に空にしているので何も起きない。ここで効くのは中断と、
+   * 形を変えない確定(集合代入・測定の失敗等)である。
+   *
+   * **測定の成功だけは残す** —— 読み札と3Dの線は「測った選択が変わるまで」残る
+   * (`measurement.svelte.ts`)ので、空にすると結果が出た瞬間に消える。
+   * `activeVerb === null` は、モード遷移(`setMode`)が先に起動を畳んだ後の遅れて届いた通知
+   * (スケッチ作成の成功等)で、選択に触らない。
+   */
+  function onCommandEnd(verb: string): void {
+    if (activeVerb === null) return
+    activeVerb = null
+    if (verb === MEASURE.id && measure.current !== null) return
+    clearSelectionIfAny()
+  }
+
+  /**
+   * `CommandHost` の `onWants`。無起動の `command.args` は常に `[]` なので、`kinds` が空になった =
+   * 中断/確定成功/モード切替のどれかで降りた、とみなして集合 verb の並べ直し待ちを捨てる。
    */
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
-    if (kinds.length === 0) {
-      toggleOnlyClicks = false
-      pendingOptimizePreset = null
-    }
+    if (kinds.length === 0) pendingOptimizePreset = null
   }
 
   /**
@@ -1359,7 +1377,7 @@
       onSketchPick(event)
       return
     }
-    const current = selection?.items ?? []
+    const current = currentItems()
     // **スケッチを貼る先を待っているとき**。基準平面はその場で決まり(即適用が同期に走る)、
     // 面は「選択を置き換えたうえで `'face'` を入れる」——
     // 送るのは選択が確定して配信されてからで、その待ち受けは `CommandHost` が持つ。
@@ -1431,8 +1449,10 @@
       return
     }
     if (event.hit === null) {
-      // 何もない所を素でクリック = 選択解除(修飾キー付きは空振りにする)
-      if (event.mode === 'replace' && current.length > 0) session.clearSelection(nextOp())
+      // 何もない所を素でクリック = 選択解除(修飾キー付きは空振りにする)。
+      // **コマンド起動中は選択を変えない**(外したいものは足すのと同じクリックで外す)。
+      if (commandClickToggles()) return
+      if (event.mode === 'replace' && current.length > 0) clearSelection()
       else if (event.mode === 'replace') note('面を外した')
       return
     }
@@ -1478,7 +1498,7 @@
     // `extrude` の投機実行の幽霊(本物を隠したまま)が画面に残り続ける。
     clearPreview()
     const nextSketch = next.kind === 'sketch' ? next.id : null
-    const unusable = (selection?.items ?? []).filter((item) => {
+    const unusable = currentItems().filter((item) => {
       const kind = refKind(item)
       if (kind === 'sketch_entity') return (item as SketchEntityRef).sketch !== nextSketch
       if (kind === 'body') return next.kind !== 'optimize'
@@ -1486,6 +1506,8 @@
     })
     if (unusable.length > 0) modifySelection([], unusable)
     mode = next
+    // `CommandHost` が作り直されるので、起動中だったコマンドは終わりの通知なしに消える。
+    activeVerb = null
     hoverPoint = null
     viewport?.setActiveSketch(nextSketch)
     // **どの遷移でも描き直す**(`$effect` に任せない)。入る側は直後の `lookAtSketch` が
@@ -1590,6 +1612,7 @@
     }
     // **図形は領域より先**(点・辺は領域の縁に乗っているので、領域が勝つと端点を掴めない)。
     // 描くコマンドが起動している間は上の `addPoint` が先に食うので、ここへは来ない。
+    const pickMode = commandClickToggles() ? 'toggle' : event.mode
     if (event.sketchEntity) {
       editSelection(
         sketchEntityRef(
@@ -1597,16 +1620,17 @@
           event.sketchEntity.entityId,
           event.sketchEntity.point,
         ),
-        event.mode,
+        pickMode,
       )
       return
     }
     if (event.region) {
-      editSelection(regionRef(event.region.sketchId, event.region.index), event.mode)
+      editSelection(regionRef(event.region.sketchId, event.region.index), pickMode)
       return
     }
-    if (event.mode === 'replace' && (selection?.items.length ?? 0) > 0) {
-      session.clearSelection(nextOp())
+    if (commandClickToggles()) return
+    if (event.mode === 'replace' && currentItems().length > 0) {
+      clearSelection()
     }
   }
 
@@ -2045,7 +2069,7 @@
     showLocalGhost,
     lastApplied: () => lastApplied,
     messages: () => messages,
-    errorLog: () => errorLog,
+    errorLog,
     fov: () => display.fov,
     applyFov: display.applyFov,
     stateEpoch: () => stateEpoch,
@@ -2115,7 +2139,7 @@
            (`session.ts` の `send`)。見ても何もしなくてよい間ずっと視線を取るのをやめた。
            再接続が開けないときの通知(`session.ts` の `onError` / `socket`)だけ残る。
          - **部品数 / 操作数** → 数そのものは人の判断に使わない。何があるかはブラウザ
-           (`BrowserPanel.svelte`)を見れば分かり、操作数は保存したファイルの一覧に出る。
+           (`BrowserPanel.svelte`)を見れば分かる。操作数はファイルの一覧にも出さない。
          - **プレビュー中の印** → **印が要らない見え方を目指す**方針(本人)。幽霊が
            出ていることは幽霊自身が示すべきで、札で補うのは見え方が弱い証拠になる。
            状態(`previewing`)は実機検査が見るので残してある。 -->
@@ -2258,6 +2282,7 @@
         onCancelPreview={clearPreview}
         onNote={note}
         onStart={onCommandStart}
+        onEnd={onCommandEnd}
         onWants={onWantsKinds}
         onWantsPlane={(wants) => (wantedPlane = wants)}
         onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
@@ -2369,8 +2394,11 @@
           transcript={ai.transcript}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}
-          onConfigure={(providerKind, modelName, baseUrl) =>
-            session.aiConfigure(providerKind, modelName, baseUrl)}
+          onConfigure={(providerKind, baseUrl) => {
+            session.aiConfigure(providerKind, baseUrl)
+            // 設定を変えると会話が作り直されるので、新しい相手にも読ませておく。
+            session.aiPrepare()
+          }}
         />
       </aside>
     {/if}

@@ -58,7 +58,7 @@ register_verb(VERB_CHAMFER, do=_do_chamfer, undo=undo_shape)
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 @entry(VERB_CHAMFER)
 def _enter_chamfer(document: Document, distance: Union[float, Sequence[float]]) -> dict:

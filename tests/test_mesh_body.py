@@ -23,7 +23,7 @@ from duocad.speculative import speculative
 from duocad.verbs import add_mesh_body, chamfer, delete, extrude_faces, fillet, move_body
 from duocad.verbs.extrude import _resolve_target
 from document_support import replay_through_json
-from session_support import session_with_box
+from session_support import edit_parameter, session_with_box
 
 SIDE = 20.0
 DEVIATION = 0.2
@@ -157,7 +157,7 @@ def test_a_mesh_body_survives_a_parameter_rebuild():
     )
     added = tools.call("add_mesh_body", {"positions": TETRA_POSITIONS, "indices": TETRA_INDICES})
     name = next(iter(session.document.parameters))
-    tools.call("set_parameter", {"name": name, "value": 14.0})
+    edit_parameter(session, name, 14.0)
     body = session.document.get_body(added["body_id"])
     assert body.kind == MESH_KIND
     assert list(body.mesh.indices) == TETRA_INDICES
@@ -301,7 +301,7 @@ def test_the_bulk_selection_path_refuses_a_mesh_body_too():
     """一括選択は数え上げを減らすために `select_face` を通らないので、断りも写してある。"""
     doc, body_id = _tetra_doc()
     with pytest.raises(ValueError, match="is a mesh body"):
-        selection.propose_selection(doc, refs=[{"body": body_id, "kind": "face", "index": 1}])
+        selection.set_selection(doc, refs=[{"body": body_id, "kind": "face", "index": 1}])
     assert selection.get_selection(doc).items == [], "断ったのに選択が変わった"
 
 
@@ -384,7 +384,7 @@ def test_measure_reports_a_mesh_body_selected_as_a_whole():
     tools = DocumentTools(session)
     added = tools.call("add_mesh_body", {"positions": TETRA_POSITIONS, "indices": TETRA_INDICES})
     tools.call(
-        "propose_selection",
+        "set_selection",
         {"refs": [{"body": added["body_id"], "kind": "body", "index": None}]},
     )
     measured = tools.call("measure", {})

@@ -15,7 +15,7 @@
 (どのクリックを待つか・入力欄のid・ボタンのid)であって宣言には無い情報だからで、名前の
 一致だけをここで機械的に固定する。
 
-**対象集合はどの層でも引数ではない** —— 面・辺・領域はコアの確定選択から取るので、WSの
+**対象集合はどの層でも引数ではない** —— 面・辺・領域はコアの選択から取るので、WSの
 コマンドに残る引数は数値・名前・パスだけである(`test_no_websocket_command_takes_a_target_set`)。
 """
 from __future__ import annotations
@@ -58,7 +58,7 @@ EXEMPT_IDS = {"select_in_sketch"}
 
 #: **WebSocketのコマンドが受け取ってはいけない引数名**(対象集合)。
 #:
-#: 面・辺・領域はコアの確定選択から取る。ここに載る名前が表へ戻ってきたら、
+#: 面・辺・領域はコアの選択から取る。ここに載る名前が表へ戻ってきたら、
 #: 「対象集合の指定方法」が再び2つに増えたということである。
 TARGET_SET_ARGS = {
     "edges",
@@ -270,13 +270,13 @@ def test_ai_commands_are_not_verbs():
     """`ai_*`(G・アプリ内AIエージェントの配線)はWebSocketから踏めるが、
     「MCPツール名==WSコマンド名==UIコマンドID==verb名」の一致規律の対象集合には入らない。
 
-    `ai_get_status` / `ai_configure` / `ai_send` / `ai_cancel` は文書を直接は変えない
+    `ai_get_status` / `ai_configure` / `ai_prepare` / `ai_send` / `ai_cancel` は文書を直接は変えない
     (操作ログに載らずundoの単位でもない)。**この検査はその除外を明示的に固定する**
     (`_server_command_names()` はソースを機械的に読むだけなので、宣言に無い名前が
     無言で増減しても他の検査は気づかない)。
     """
     ai_names = {name for name in _server_command_names() if name.startswith("ai_")}
-    assert ai_names == {"ai_get_status", "ai_configure", "ai_send", "ai_cancel"}, (
+    assert ai_names == {"ai_get_status", "ai_configure", "ai_prepare", "ai_send", "ai_cancel"}, (
         f"ai_* の顔ぶれが変わった(このテストを更新すること): {sorted(ai_names)}"
     )
     declared = {command.name for command in _catalog().COMMANDS}

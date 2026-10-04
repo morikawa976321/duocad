@@ -2,7 +2,7 @@
  * 自動テスト(scripts/smoke*.mjs)がブラウザの中を見るための穴 `window.__duocad`。
  * ローカル専用ツールなので常に生やしてある(「動くはず」で納品しないための道具であり、隠すと使えない)。
  *
- * **キー名は1つも変えない**(`web/scripts/*.mjs` が読む)。`ctx` は App の状態を読む getter の束で、
+ * **キー名は1つも変えない**(`web/scripts/*.mjs` が読む)。`ctx` は画面の状態を読む getter の束で、
  * 下の `$effect` がそれを読むので、読んだ値が変わるたびに `window.__duocad` を組み直す。
  *
  * **`installTestHooks` は App の `<script>` の最上位(コンポーネントの初期化中)で呼ぶ。**
@@ -202,6 +202,8 @@ export function installTestHooks(ctx: TestHookContext): void {
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches: ctx.sketches(),
       activeSketch: ctx.sketchId(),
+      // 今編集しているスケッチ(無ければ null)。実機検査が各本で `sketches` から引き直さないための口。
+      sketch: ctx.sketches().find((item) => item.sketch_id === ctx.sketchId()) ?? null,
       hoverPoint: ctx.hoverPoint(),
       // **第2の呼び方**: スケッチを指定すると通常モードでも射影できる(領域の
       // `projectRegion` と同じ形)。**同じ世界座標の点を、画面の寸法が変わった後でも
@@ -244,7 +246,7 @@ export function installTestHooks(ctx: TestHookContext): void {
       measurement: measurement === null ? null : $state.snapshot(measurement),
       wantedVertices: ctx.wantedVertices(),
       measurementInfo: () => viewport()?.measurementInfo() ?? null,
-      // **提案(水色)と確定(橙)の区別は3Dの色だけ**になったので、色そのものを読める穴を出す。
+      // 選択の色そのものを読める穴。
       highlightColors: () => viewport()?.highlightColors() ?? null,
       // ホバー強調で今明るくしているもの。**「クリックすれば取れるもの」と実際に
       // クリックした結果が一致していること**を実機検査が確かめるための穴

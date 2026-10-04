@@ -34,7 +34,7 @@ export const HIGHLIGHT_COLOR = 0xffb454
 /** スケッチの線・確定前の線・領域。ソリッドの色と混ざらない色にする。 */
 export const SKETCH_COLOR = 0xe8eef6
 export const SKETCH_GHOST_COLOR = 0x7ee081
-/** 確定すると拒まれる形の幽霊(`envelope_regions` の分裂)。選択の橙・提案の水色と色相で離す。 */
+/** 確定すると拒まれる形の幽霊(`envelope_regions` の分裂)。選択の橙と色相で離す。 */
 export const SKETCH_GHOST_WARN_COLOR = 0xff5c5c
 //: スケッチの点マーカー(未選択)。線(`SKETCH_COLOR`)より暗くして線を主役に保つ。
 export const SKETCH_HANDLE_COLOR = 0x9fb3c8
@@ -42,13 +42,11 @@ export const SKETCH_HANDLE_COLOR = 0x9fb3c8
 export const SKETCH_SELECTED_COLOR = HIGHLIGHT_COLOR
 export const REGION_COLOR = 0x4d7ea8
 export const REGION_SELECTED_COLOR = 0xffb454
-/** AIの提案(`origin === "proposed"`)。確定(橙)と**色相で**離す。 */
-export const PROPOSED_COLOR = 0x36d1ff
 /** 確定前の形。半透明で「まだ無いもの」に見せる。 */
 export const PREVIEW_COLOR = 0x7ee081
 /**
  * 形状最適化(第3のモード)の役割色。**選択が勝つ**(本人決定) —— 選ばれているあいだは
- * `HIGHLIGHT_COLOR` / `PROPOSED_COLOR` になり、役割色は一時的に見えなくなる
+ * `HIGHLIGHT_COLOR` になり、役割色は一時的に見えなくなる
  * (`applyFaceMaterials` が実体。役割は `state !== 'plain'` のとき無視する)。
  */
 export const OPTIMIZE_PRESERVE_COLOR = 0x3f9b58
@@ -58,7 +56,7 @@ export const OPTIMIZE_FIXTURE_COLOR = 0x3f7fc2
 /** 拘束の固定記号(四角錐)と、荷重の矢印・ラベルの色。面の塗りとは別に見分ける。 */
 export const OPTIMIZE_FIXTURE_MARK_COLOR = 0x1c3550
 export const OPTIMIZE_LOAD_COLOR = 0xffc857
-/** 測定(issue #10)の線・端点・札。選択(橙)・提案(水色)・幽霊(緑)・荷重(黄)のどれとも
+/** 測定(issue #10)の線・端点・札。選択(橙)・幽霊(緑)・荷重(黄)のどれとも
     見分けがつく色にしてある(同時に画面に出うる)。 */
 export const MEASURE_COLOR = 0xff6ad5
 export const MEASURE_TEXT_COLOR = '#ff8ae0'
@@ -350,7 +348,7 @@ export const CLICK_TIME_LIMIT_MS = 500
 
 /**
  * ホバー強調で上げる明度(HSLのL)。**3色目は足さない** ——
- * 色相が「誰の選択か」(user=橙 / proposed=水色)、明度が「今カーソルの下にあるか」を
+ * 色相が「選択されているか」(橙)、明度が「今カーソルの下にあるか」を
  * 表す2軸にする。未選択にも選択済みにも同じ幅で掛けるので、規則は
  * 「カーソルの下にあるものは明るい」の1行で済む。
  */

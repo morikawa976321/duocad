@@ -1,4 +1,4 @@
-"""verb `extrude` が確定選択の**面群**(同一平面・同一ボディ)を押し出せること(join / cut / new)。
+"""verb `extrude` が選択の**面群**(同一平面・同一ボディ)を押し出せること(join / cut / new)。
 
 領域の押し出しは `test_extrude.py`。1面の結果は、保存済みの `extrude_face` のログ(`test_extrude_face_replay.py`)と体積・面数が一致する。
 """
@@ -272,8 +272,7 @@ def test_mcp_extrude_takes_a_face_selection():
     top = _top(session.document.get_body("box").shape)
     before = kernel.volume(session.document.get_body("box").shape)
     server = McpServer(DocumentTools(session))
-    call(server, "propose_selection", {"refs": _refs("box", [top])})
-    call(server, "commit_selection")
+    call(server, "set_selection", {"refs": _refs("box", [top])})
 
     payload = call(server, "extrude", {"distance": 5.0, "mode": "join"})
 

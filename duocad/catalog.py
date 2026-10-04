@@ -20,8 +20,8 @@ verbを1つ足すとき:
 WebSocket・MCP・アプリ内AIはどれも `Session.apply` を通って入口を呼ぶので、verbごとに書く
 配線は無い。
 
-**対象集合は引数ではない** —— 面・辺・領域はどの層でも引数で受けず、コアの確定選択から取る
-(`selection.require_confirmed` / `require_edges`)。したがってここに並ぶ引数は**数値・名前・
+**対象集合は引数ではない** —— 面・辺・領域はどの層でも引数で受けず、コアの選択から取る
+(`selection.require_selected` / `require_edges`)。したがってここに並ぶ引数は**数値・名前・
 パスだけ**である。`body_id` が残っているのは「どのBodyへ足す/から引くか」のような**名前**で
 あって対象集合ではないため(Bodyは選択集合の項目ではない)。
 
@@ -55,7 +55,7 @@ SHAPE_CATEGORIES = ("sketch", "feature", "history")
 #: - `special` … WebSocketから踏めるが `_dispatch` が個別に捌く。**verb ではないもの**
 #:               (選択・可視性・履歴・状態の要求)と、応答の形が他と違うファイル操作
 #:               (`open_document` / `save_document`)がここへ来る
-#: - `none`    … WebSocketには開けていない(`propose_selection` はAIが書く経路)
+#: - `none`    … WebSocketには開けていない(読み取り・述語の語彙など、画面が使わないもの)
 WS_SURFACES = ("table", "special", "none")
 
 
@@ -134,7 +134,7 @@ class Command:
     #: MCPのツールとして公開するか(`save_document` / `open_document` は人だけの操作)。
     mcp: bool = True
     #: `Session.preview` が投機実行してよいか。**巻き戻せることを確認したverbだけ**を true に
-    #: する —— `set_parameter` のような操作ログを頭から再生するverbは `speculative` では戻らない
+    #: する —— 操作ログを頭から再生するverb(`set_parameter`。公開面には無い)は `speculative` では戻らない
     #: (`speculative.py` の「戻さないもの」)。
     previewable: bool = False
     #: プレビューを投機実行でなく、**文書を変えずに結果だけ計算する** `Session` のメソッドで出すときの
@@ -142,7 +142,7 @@ class Command:
     #: 形(`envelope_regions` の分裂)も見せたい verb はこちら。
     preview_session: Optional[str] = None
     #: 文書を変えるか(= 操作ログに載り、応答が状態配信になるか)。保存・書き出しは文書を
-    #: 変えないので、応答は書いた先のパスとバイト数だけを要求した接続へ返す。
+    #: 変えないので、応答は書いた先のパスだけを要求した接続へ返す。
     changes_document: bool = True
     #: 確定後に選択集合を全リセットするか。**面・辺・領域の添字は形状変更で壊れる**
     #: (kernel.pyの既知の地雷)ので、形を変えるverbの確定後は選択を空にする。
@@ -152,15 +152,6 @@ class Command:
     #: 場合分けしない単純な規則を優先する)。**`SHAPE_CATEGORIES` の verb は書くこと**(`None` のままなら
     #: `__post_init__` が落とす)。それ以外は省略すると false。
     resets_selection: Optional[bool] = None
-    #: **対象集合をコアの確定選択から取るか**。`Session` の実体が
-    #: `selection.require_confirmed` / `require_edges` を呼ぶverbだけが true。
-    #:
-    #: WebSocketの `_dispatch` は、ここが true のコマンドを受け取ったとき、選択が
-    #: `origin="proposed"` のままなら**自動で `commit_selection` してから**verbを走らせる
-    #: (**人がツールバーからコマンドを実行する行為そのものを承認とみなす**。
-    #: MCP側は素通しで、AIは今までどおり `commit_selection` を明示的に呼ぶ)。宣言と実体の
-    #: 一致は `tests/test_vertex_pick.py` が構文木で照合する。
-    uses_selection: bool = False
     #: 設計上の注記(なぜこの形か)。コードの読み手向けで、AIには渡さない。
     note: str = ""
 
@@ -302,6 +293,25 @@ def _value_matches_json_type(value: Any, expected: str) -> bool:
 #: スケッチのverbが共通に受ける `sketch_id`(`Param` は frozen なので共有してよい)。
 _SKETCH_ID = Param("sketch_id", "string", "対象スケッチのID")
 
+#: `set_selection` の述語の書き方。**説明に載せておく** —— 書き方を知らずに呼ぶと失敗して語彙が返り、
+#: 知るために `describe_predicates` を呼んでも1往復かかるので、どちらにせよ選択のたびに
+#: 1往復を払っていた。語彙の正は `predicates.describe_ops()` で、ここに無い op が増えたら
+#: `tests/test_mcp_selection.py` が落ちる(このモジュールは `predicates` を import しない)。
+PREDICATE_HELP = (
+    '述語。{"kind": "face"|"edge", "body": body_id, "where": [条件, ...]} の形。'
+    "body は省略でき、省略すると見えているボディ全部が対象になる"
+    "(1つのボディだけに掛けたいときは必ず付ける。fillet / chamfer は1つのボディの辺しか受けない)。"
+    'where は全条件のAND。省略はできず、条件なし(その種別の全部)は "where": [] と書く。ORは無い。'
+    '面の条件: {"op": "normal_dot_gt", "axis": "X"|"Y"|"Z"|[x,y,z], "value": 数}'
+    "(外向き法線と軸の内積が value より大きい。上面なら axis Z・value 0.9) / "
+    '{"op": "area_gt", "value": 数} / '
+    '{"op": "kind_is", "value": "plane"|"cylinder_full"|"cylinder_partial"|"torus"|"cone"|"bspline"|"other"}。'
+    '辺の条件: {"op": "parallel_to", "axis": 軸} / {"op": "length_gt", "value": 数} / '
+    '{"op": "length_lt", "value": 数} / {"op": "kind_is", "value": "line"|"circle"|"other"} / '
+    '{"op": "on_boundary_of_face", "face": 面の番号}(その面の外周の辺。body が要る)。'
+    "refs とは同時に渡せない"
+)
+
 COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- 問い合わせ
     Command(
@@ -310,7 +320,7 @@ COMMANDS: tuple[Command, ...] = (
         description=(
             "開いている文書のボディ一覧(body_id・名前・種別・可視性・面数・体積)と"
             "スケッチ・パラメータ一覧を返す。set_visible や describe_shape、"
-            "pattern_* や set_parameter を呼ぶ前に、どのボディ・図形・寸法名が"
+            "pattern_* を呼ぶ前に、どのボディ・図形・寸法名が"
             "存在するかを知るために最初に呼ぶ。"
         ),
         params=(
@@ -383,8 +393,8 @@ COMMANDS: tuple[Command, ...] = (
         name="describe_predicates",
         category="query",
         description=(
-            "propose_selection の predicate= に書ける述語の語彙(op・引数・種別)を"
-            "知るときに呼ぶ。使える op を推測せず、ここに出た一覧だけを使う。"
+            "set_selection の predicate= に書ける述語の語彙(op・引数・種別)を返す。"
+            "同じ内容が set_selection の説明にあるので、それを読めば呼ばなくてよい。"
         ),
         ws="none",
     ),
@@ -392,10 +402,10 @@ COMMANDS: tuple[Command, ...] = (
         name="measure",
         category="query",
         description=(
-            "いまの選択(提案のままでよい)の長さ・面積・法線などを測るときに呼ぶ。"
+            "いまの選択の長さ・面積・法線などを測るときに呼ぶ。"
             "ちょうど2項目(頂点・直線の辺・平らな面)なら、そのあいだの距離が `between` に"
             "返る(直線・平面は無限に延ばして測る。平行でない線・面どうしは距離の代わりに"
-            "角度)。verb ではないので commit 前に提案を確かめる往復に使う。"
+            "角度)。verb ではないので、選んだ対象を確かめる往復に使う。"
         ),
         session="measure",
         ws="special",
@@ -410,47 +420,47 @@ COMMANDS: tuple[Command, ...] = (
         name="get_selection",
         category="selection",
         description=(
-            "いまの選択(項目・origin・件数)を読むときに呼ぶ。"
-            "提案した直後や人が直したあとに、次の一手の対象を確認する。"
+            "いまの選択(項目・件数)を読むときに呼ぶ。"
+            "選んだ直後や人が直したあとに、次の一手の対象を確認する。"
         ),
         ws="none",
     ),
     Command(
-        name="propose_selection",
+        name="set_selection",
         category="selection",
         description=(
-            "AIが選択を書き込むときに呼ぶ。refs(明示参照)か predicate(述語)の"
-            "どちらか一方。結果は提案(origin=proposed)なので、verb の前に"
-            "commit_selection が要る。"
-            "人の承認を待つ義務は無く、自分で commit して verb まで行ってよい。"
-            "ここで止めて人に見せるかを考えるのは、対象を何個でも取るか"
-            "how の入力がある操作のときだけでよい(判断の基準は instructions)。"
+            "選択を丸ごと置き換えるときに呼ぶ。refs(明示参照)か predicate(述語)の"
+            "どちらか一方。そのまま verb に渡せる。"
+            "選択だけで止めるか verb まで進めるかは、人の指示の文面から判断する"
+            "(判断の基準は instructions)。"
         ),
         params=(
             Param(
                 "refs",
                 "array",
-                "面・辺・頂点・領域への明示参照の配列。predicate とは同時に渡せない",
+                "明示参照の配列。面・辺・頂点は "
+                '{"body": body_id, "kind": "face"|"edge"|"vertex", "index": 番号}、'
+                'スケッチの領域は {"sketch": sketch_id, "index": 番号}(番号は1始まり)。'
+                "predicate とは同時に渡せない",
                 required=False,
                 ws=False,
             ),
             Param(
                 "predicate",
                 "object",
-                "述語(describe_predicates の語彙)。refs とは同時に渡せない",
+                PREDICATE_HELP,
                 required=False,
                 ws=False,
             ),
         ),
         ws="none",
-        note="**AIが書く経路なのでブラウザには開けない**(人はポインティングで直す)",
+        note="述語はAIが書く語彙なのでブラウザには開けない(人はクリックで選ぶ・直す)",
     ),
     Command(
         name="modify_selection",
         category="selection",
         description=(
-            "選択の過不足を差分で直すときに呼ぶ(人が直す経路)。"
-            "触ると origin は user になり、そのままで verb に渡せる。"
+            "選択の過不足を差分で直すときに呼ぶ。"
         ),
         params=(
             Param("add", "array", "選択に足す参照の配列", required=False),
@@ -461,15 +471,16 @@ COMMANDS: tuple[Command, ...] = (
         note="WSでは省略を空配列に落として `client_op` を添えるので個別に捌く",
     ),
     Command(
-        name="commit_selection",
+        name="toggle_selection",
         category="selection",
         description=(
-            "提案を確定するときに呼ぶ(中身は変えない)。"
-            "AIが自分の提案を fillet 等へ渡す直前の明示の1手で、"
-            "AIが自分で呼んでよい(人が画面で承認するのと同じ手)。"
+            "選択の参照ごとに、あれば外し無ければ足すときに呼ぶ"
+            "(画面でクリックして付け外しするのと同じ操作)。"
         ),
-        session="commit_selection",
+        params=(Param("refs", "array", "付け外しする参照の配列"),),
+        session="toggle_selection",
         ws="special",
+        note="WSでは `client_op` を添えるので個別に捌く",
     ),
     Command(
         name="clear_selection",
@@ -486,21 +497,20 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description=(
             "新しいスケッチを作るときに呼ぶ。"
-            "base_plane(XY/XZ/YZ)を渡すか、確定選択の平面(ちょうど1枚)に貼る。"
+            "base_plane(XY/XZ/YZ)を渡すか、選択の平面(ちょうど1枚)に貼る。"
         ),
         params=(
             Param(
                 "base_plane",
                 "string",
-                "基準平面名 XY / XZ / YZ。省略時は確定選択の面",
+                "基準平面名 XY / XZ / YZ。省略時は選択の面",
                 required=False,
             ),
         ),
-        uses_selection=True,
         session="sketch_create",
         note=(
             "**MCPとWSで引数が同じ**。どちらも `base_plane` だけを取り、省略時は"
-            "コアの確定選択の面(ちょうど1枚)に貼る"
+            "コアの選択の面(ちょうど1枚)に貼る"
         ),
     ),
     Command(
@@ -510,14 +520,14 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description=(
             "オフセット平面に新しいスケッチを作るときに呼ぶ。"
-            "base_plane(XY/XZ/YZ)を渡すか確定選択の平面(ちょうど1枚)を基準にし、"
+            "base_plane(XY/XZ/YZ)を渡すか選択の平面(ちょうど1枚)を基準にし、"
             "その法線方向へdistanceだけ離れた平面に貼る。"
         ),
         params=(
             Param(
                 "base_plane",
                 "string",
-                "基準平面名 XY / XZ / YZ。省略時は確定選択の面",
+                "基準平面名 XY / XZ / YZ。省略時は選択の面",
                 required=False,
             ),
             Param(
@@ -527,11 +537,10 @@ COMMANDS: tuple[Command, ...] = (
                 dimension=True,
             ),
         ),
-        uses_selection=True,
         session="sketch_create_offset",
         note=(
             "**`sketch_create` とは別verb**(`sketch.sketch_create` のdocstring参照)。"
-            "貼る先(target)は同じ2状態(基準平面名 / 確定選択の面)だが、`distance` という"
+            "貼る先(target)は同じ2状態(基準平面名 / 選択の面)だが、`distance` という"
             "howを持つのでEnterが要る —— 同じverb名に足すと `sketch_create` 自体の"
             "即適用(Enter不要)まで変わってしまうため、名前を分けてある。"
         ),
@@ -610,9 +619,11 @@ COMMANDS: tuple[Command, ...] = (
         ),
         category="feature",
         description=(
-            "確定選択の領域、または同一平面・同一ボディのソリッドの面(何枚でも)を押し出して、"
+            "選択の領域、または同一平面・同一ボディのソリッドの面(何枚でも)を押し出して、"
             "ソリッドを足す/切る/新しいボディにするときに呼ぶ。"
             "対象は選択から取る(引数では受けない)。領域と面の混在は不可。"
+            'スケッチの領域は set_selection(refs=[{"sketch": sketch_id, "index": 番号}]) で先に選ぶ'
+            "(領域は述語では選べない。図形を1つ描いたスケッチなら番号は1)。"
         ),
         params=(
             Param(
@@ -637,7 +648,6 @@ COMMANDS: tuple[Command, ...] = (
                 ws=False,
             ),
         ),
-        uses_selection=True,
         session="extrude",
         previewable=True,
         resets_selection=True,
@@ -652,7 +662,7 @@ COMMANDS: tuple[Command, ...] = (
         returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
         category="feature",
         description=(
-            "確定選択の辺を丸めるときに呼ぶ。"
+            "選択の辺を丸めるときに呼ぶ。"
             "半径は1つの数値か、選択順に対応する配列。"
         ),
         params=(
@@ -663,7 +673,6 @@ COMMANDS: tuple[Command, ...] = (
                 dimension=True,
             ),
         ),
-        uses_selection=True,
         session="fillet",
         previewable=True,
         resets_selection=True,
@@ -673,7 +682,7 @@ COMMANDS: tuple[Command, ...] = (
         returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
         category="feature",
         description=(
-            "確定選択の辺を面取りするときに呼ぶ。"
+            "選択の辺を面取りするときに呼ぶ。"
             "距離は1つの数値か、選択順に対応する配列。"
         ),
         params=(
@@ -684,7 +693,6 @@ COMMANDS: tuple[Command, ...] = (
                 dimension=True,
             ),
         ),
-        uses_selection=True,
         session="chamfer",
         previewable=True,
         resets_selection=True,
@@ -701,7 +709,7 @@ COMMANDS: tuple[Command, ...] = (
         description=(
             "ターゲットボディ(1つ)にツールボディ(1つ以上)を作用させ、結合(union)・"
             "切り取り(cut)・交差(intersect)するときに呼ぶ。ターゲットは `target_ref` で"
-            "1枚の面から指す(確定選択には入れない)。ツールは確定選択から取る"
+            "1枚の面から指す(選択には入れない)。ツールは選択から取る"
             "(面/辺/頂点で指せばよい)。演算後ターゲットの形だけが残り、ツールボディは消える。"
             "intersect でツールが複数のとき target ∩ (tool1 ∪ tool2 ∪ ...)。"
         ),
@@ -712,7 +720,7 @@ COMMANDS: tuple[Command, ...] = (
                 "ターゲットボディを指す面への参照 "
                 '{"body": body_id, "index": 面の1始まりの添字}。'
                 "get_selection が返す面の参照をそのまま渡せる。"
-                "確定選択には入れない",
+                "選択には入れない",
             ),
             Param(
                 "mode",
@@ -720,7 +728,6 @@ COMMANDS: tuple[Command, ...] = (
                 "union(結合) / cut(切り取り) / intersect(交差)",
             ),
         ),
-        uses_selection=True,
         session="boolean_body",
         previewable=True,
         resets_selection=True,
@@ -739,7 +746,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         category="sketch",
         description=(
-            "スケッチの図形の位置・向きを直すときに呼ぶ。確定選択のスケッチの点"
+            "スケッチの図形の位置・向きを直すときに呼ぶ。選択のスケッチの点"
             "(線の端点・円/弧の中心・長方形の基準の角・ベジエの制御点)または辺"
             "(図形1つ全体)を、mode='translate'(既定)なら dx, dy だけ動かし、"
             "mode='rotate' ならスケッチ平面の法線まわりに angle 度だけ回す。"
@@ -798,7 +805,6 @@ COMMANDS: tuple[Command, ...] = (
                 required=False,
             ),
         ),
-        uses_selection=True,
         session="move_sketch_entities",
         resets_selection=True,
         note=(
@@ -837,7 +843,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         category="feature",
         description=(
-            "ボディの位置・向きを直すときに呼ぶ。確定選択の面/辺/頂点が**属するボディ**を、"
+            "ボディの位置・向きを直すときに呼ぶ。選択の面/辺/頂点が**属するボディ**を、"
             "mode='translate'(既定)なら dx, dy, dz だけ動かし、mode='rotate' なら軸まわりに"
             " angle 度だけ回す(複数のボディにまたがる選択なら全部を同じだけ動かす/回す)。"
             "copy=true なら元を残して複製する。対象は選択から取る(引数では受けない) ——"
@@ -915,7 +921,6 @@ COMMANDS: tuple[Command, ...] = (
                 required=False,
             ),
         ),
-        uses_selection=True,
         session="move_body",
         resets_selection=True,
         note=(
@@ -939,7 +944,7 @@ COMMANDS: tuple[Command, ...] = (
             "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
             "`PickArgSpec`)である。載せてしまうと `require_bodies` が軸の辺のボディまで"
             "「動かす対象」に数え、軸に使った部品まで一緒に回る(だからコア側も"
-            "`commit_selection` を介さない参照で受けている)。"
+            "選択を介さない参照で受けている)。"
             "**参照のまま送る**のは、辺が乗る直線を厳密に出せるのがコアだけだからで、"
             "まっすぐでない辺の拒否も `kernel.edge_axis` の既存の規則がそのまま効く"
         ),
@@ -954,7 +959,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         category="sketch",
         description=(
-            "確定選択のスケッチ図形を、既存の線分1本(axis)を軸に鏡映複製するときに呼ぶ。"
+            "選択のスケッチ図形を、既存の線分1本(axis)を軸に鏡映複製するときに呼ぶ。"
             "常に複製する(in-place反転は無い)。対象は選択から取る(引数では受けない)。"
         ),
         params=(
@@ -965,7 +970,6 @@ COMMANDS: tuple[Command, ...] = (
                 '{"sketch": sketch_id, "entity": entity_id}(kindはlineであること)',
             ),
         ),
-        uses_selection=True,
         session="mirror_sketch_entities",
         resets_selection=True,
         note=(
@@ -987,7 +991,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         category="sketch",
         description=(
-            "確定選択の複数の領域を、へこみに沿って包む**単一の閉じた領域線**を、同じスケッチへ足すときに呼ぶ。"
+            "選択の複数の領域を、へこみに沿って包む**単一の閉じた領域線**を、同じスケッチへ足すときに呼ぶ。"
             "元の領域の線は残る。結果は線分と円弧だけ。結果が1つの領域にならない(何個かに分かれる・"
             "オフセットで消える)と失敗して何も変わらない。対象は選択から取る(引数では受けない)。"
             "選択が複数のスケッチにまたがるのも失敗する。"
@@ -1011,7 +1015,6 @@ COMMANDS: tuple[Command, ...] = (
                 dimension=True,
             ),
         ),
-        uses_selection=True,
         session="envelope_regions",
         previewable=True,
         preview_session="preview_envelope_regions",
@@ -1034,7 +1037,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         category="feature",
         description=(
-            "確定選択の面/辺/頂点が**属するボディ**を、鏡映面に対して鏡映複製するときに呼ぶ。"
+            "選択の面/辺/頂点が**属するボディ**を、鏡映面に対して鏡映複製するときに呼ぶ。"
             "常に複製する(in-place反転は無い。複数のボディにまたがる選択なら全部を同じ"
             "鏡映面で複製する)。鏡映面は base_plane(XY/XZ/YZ)か plane_face(既存の平面な"
             "面への参照)のどちらか一方。対象は選択から取る(引数では受けない)。"
@@ -1055,7 +1058,6 @@ COMMANDS: tuple[Command, ...] = (
                 required=False,
             ),
         ),
-        uses_selection=True,
         session="mirror_body",
         resets_selection=True,
         note=(
@@ -1078,21 +1080,18 @@ COMMANDS: tuple[Command, ...] = (
         ),
         category="feature",
         description=(
-            "間違えて作った / 要らなくなったものを消すときに呼ぶ。確定選択の**ボディ**"
+            "間違えて作った / 要らなくなったものを消すときに呼ぶ。選択の**ボディ**"
             "(面/辺/頂点/ボディのどれで指してもよい)と**スケッチの図形**を、混ざっていても"
             "1回でまとめて削除する(1回のundoで全部戻る)。対象は選択から取る"
             "(引数では受けない)。**領域(region)は削除できない** —— 領域は図形の配置から"
             "計算されるものなので、選択に混ざっているとエラーになる(その領域を作っている"
             "図形を選び直すこと)。スケッチを丸ごと消す口は無い。"
         ),
-        uses_selection=True,
         session="delete",
         resets_selection=True,
         note=(
             "**`previewable=False`** —— 消える前の姿を見せる幽霊が作れない(プレビューは"
             "「増えた形」を配る仕組みで、`Session.preview` が返すのは形の変わったBodyだけ)。"
-            "`uses_selection=True` かつ `previewable=False` の組み合わせは形状最適化の4 verb"
-            "が先例で、WSの自動 commit(`selection_consuming_commands`)だけが効く。"
             "**howが無い**ので引数は1つも取らない —— 消し方に選択肢は無い"
         ),
     ),
@@ -1114,12 +1113,11 @@ COMMANDS: tuple[Command, ...] = (
         category="feature",
         description=(
             "形状最適化で**削ってはいけないソリッド**を決めるときに呼ぶ。"
-            "確定選択のボディ(kind='body' の参照)**そのもの**を保持ソリッドの集合にする"
+            "選択のボディ(kind='body' の参照)**そのもの**を保持ソリッドの集合にする"
             "(足すのではなく置き換える。空の選択で確定すれば全部外れる)。"
             "既に除外ソリッドに割り当てられているボディがあると失敗する(先勝ち)。"
         ),
         session="set_preserve_bodies",
-        uses_selection=True,
         note=(
             "対象は引数で受けない。"
             "**howも無い** —— 役割を付けるだけなので数値も選択肢も要らない"
@@ -1132,12 +1130,11 @@ COMMANDS: tuple[Command, ...] = (
         category="feature",
         description=(
             "形状最適化で**材料を置いてはいけないソリッド**(逃げ・干渉物)を決めるときに呼ぶ。"
-            "確定選択のボディ(kind='body' の参照)**そのもの**を除外ソリッドの集合にする"
+            "選択のボディ(kind='body' の参照)**そのもの**を除外ソリッドの集合にする"
             "(足すのではなく置き換える。空の選択で確定すれば全部外れる)。"
             "既に保持ソリッドに割り当てられているボディがあると失敗する(先勝ち)。"
         ),
         session="set_exclude_bodies",
-        uses_selection=True,
         note="`set_preserve_bodies` と対。設計空間のverbは作らない",
     ),
     Command(
@@ -1146,12 +1143,11 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=False,
         category="feature",
         description=(
-            "形状最適化で**固定される面**(拘束)を決めるときに呼ぶ。確定選択の面**そのもの**を"
+            "形状最適化で**固定される面**(拘束)を決めるときに呼ぶ。選択の面**そのもの**を"
             "拘束面の集合にする(足すのではなく置き換える。空の選択で確定すれば全部外れる)。"
             "既に荷重面に割り当てられている面があると失敗する(先勝ち)。"
         ),
         session="set_fixtures",
-        uses_selection=True,
         note=(
             "面の参照は添字だけでなく重心・法線・面積の**指紋**も一緒に操作ログへ書く"
             "(添字は形が変われば別の面を指すため。照合は `duocad/optimize.py`)"
@@ -1169,7 +1165,7 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=False,
         category="feature",
         description=(
-            "形状最適化で**力がかかる面**(荷重)を決めるときに呼ぶ。確定選択の面**だけ**に"
+            "形状最適化で**力がかかる面**(荷重)を決めるときに呼ぶ。選択の面**だけ**に"
             "大きさと向きを焼く(**上書き代入**。選択に入っていない荷重面はそのまま残る)。"
             "既に拘束面に割り当てられている面があると失敗する(先勝ち)。"
             "**大きさと向きは面ごとに違ってよい** —— 面Aへ50Nの鉛直下向き、面Bへ20Nの法線方向、"
@@ -1194,7 +1190,6 @@ COMMANDS: tuple[Command, ...] = (
             ),
         ),
         session="set_loads",
-        uses_selection=True,
         note=(
             "`magnitude` に `dimension` の印を付けてある —— **AIが勝手に決めてよい数ではない**。"
             "向きに世界軸の名前(`-Z` 等)を足さないのは、同じ向きの綴りが2系統になるため"
@@ -1207,13 +1202,12 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=False,
         category="feature",
         description=(
-            "形状最適化で**荷重を外す**ときに呼ぶ。確定選択の面を荷重面から落とす"
+            "形状最適化で**荷重を外す**ときに呼ぶ。選択の面を荷重面から落とす"
             "(**面を1枚も選ばずに呼ぶと全部外れる**)。"
             "荷重が付いていない面が混ざっていても失敗しない。"
             "`set_loads` が上書き代入(選んだ面にだけ焼く)なので、外す操作はこちらにある。"
         ),
         session="clear_loads",
-        uses_selection=True,
         note=(
             "**保持/除外/拘束の3つには解除専用verbが無い**(集合代入なので空で確定すれば外れる)。"
             "荷重だけ例外なのは、大きさ・向きを面ごとに持つために集合代入をやめたためである"
@@ -1301,32 +1295,6 @@ COMMANDS: tuple[Command, ...] = (
     ),
     # ---------------------------------------------------------------- ファイル操作
     Command(
-        name="set_parameter",
-        returns=(
-            Result("name", "string"),
-            Result("value", "number"),
-            Result("previous", "number"),
-            Result("changed_bodies", "string[]"),
-        ),
-        category="sketch",
-        description=(
-            "名前つき寸法を書き換えて形を追随させるときに呼ぶ。"
-            "名前は describe_document の sketches[].entities[].parameters から辿る。"
-        ),
-        params=(
-            Param("name", "string", "パラメータ名(d1 等)"),
-            Param("value", "number", "新しい値", dimension=True),
-        ),
-        session="set_parameter",
-        resets_selection=True,
-        note=(
-            "**クリックで置いた図形の値を後から打ち直す**のがパラメトリック・プリミティブの"
-            "効く場面そのものなので、スケッチのコマンドとして開けている。"
-            "**プレビューには載せられない** —— 操作ログを頭から再生するverbで、"
-            "再生が過去のseqのundoスナップショットを書き換える(`speculative.py`)"
-        ),
-    ),
-    Command(
         name="import_svg",
         returns=(
             Result("sketch_id", "string"),
@@ -1360,8 +1328,8 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=True,
         note=(
             "**開いているスケッチへ足す**。貼る先を選ぶ引数は無い —— スケッチの外から使いたければ"
-            "先に `sketch_create` で作ってから呼ぶ。**対象集合はもう選択から取らない**"
-            "(`uses_selection` を外した) —— `sketch_id` を明示的に取る `add_line` と同じ形。"
+            "先に `sketch_create` で作ってから呼ぶ。**対象集合は選択から取らない** —— "
+            "`sketch_id` を明示的に取る `add_line` と同じ形。"
             "取り込んだ曲線は `bezier` 種別で入るが、**`add_bezier` というverbは無い**"
             "(人もAIもベジエを1本ずつは足せない。2026-08-26本人裁定)。"
         ),
@@ -1426,8 +1394,8 @@ COMMANDS: tuple[Command, ...] = (
         description=(
             "いま表示中(visible)のボディをSTEPファイルへ書き出す。対象を選ぶ引数は無い —— "
             "含めたくないものがあれば、先に set_visible(visible=false) で隠してから呼ぶこと。"
-            "文書は変えないのでログには載らない。戻り値でパス・バイト数・"
-            "非表示で除外した件数(skipped_hidden)を確認する。"
+            "文書は変えないのでログには載らない。戻り値でパス・"
+            "非表示で除外したボディ(skipped_hidden)を確認する。"
         ),
         params=(Param("path", "string", "書き出し先パス(相対ならリポジトリ直下の export/ 基準)"),),
         session="export_step_file",
@@ -1440,7 +1408,7 @@ COMMANDS: tuple[Command, ...] = (
             "いま表示中(visible)のボディをSTLへ書き出す。対象を選ぶ引数は無い —— "
             "含めたくないものがあれば、先に set_visible(visible=false) で隠してから呼ぶこと。"
             "メッシュの粗さは固定で選べない(人の画面にも入力欄は無い)。文書は変えない。"
-            "戻り値の skipped_hidden で非表示で除外した件数を確認できる。"
+            "戻り値の skipped_hidden で非表示で除外したボディを確認できる。"
         ),
         params=(Param("path", "string", "書き出し先パス(相対ならリポジトリ直下の export/ 基準)"),),
         session="export_stl_file",
@@ -1540,7 +1508,7 @@ COMMANDS: tuple[Command, ...] = (
         mcp=False,
         changes_document=False,
         note=(
-            "**`models_dir` の中身を一覧にする**(名前/更新日時/サイズ/操作数)。"
+            "**`models_dir` の中身を一覧にする**(名前/更新日時)。"
             "保存/開くをファイル名の一覧から選べるようにするための穴で、"
             "2026-08-22まではディレクトリ列挙のコードがリポジトリに1つも無かった。"
             "`save_document`/`open_document` と同じく人だけの操作(`mcp=False`)。"
@@ -1774,7 +1742,7 @@ COMMANDS: tuple[Command, ...] = (
 #: verb ではない変更イベント(操作ログに載らない)。`change` の値 -> 載せる値。
 #: `Session` が `_emit` で配り、WebSocket は要求した画面へ `applied` として返す。
 #:
-#: - `selection`  … `modify_selection` / `commit_selection` / `clear_selection`
+#: - `selection`  … `set_selection` / `modify_selection` / `toggle_selection` / `clear_selection`
 #: - `visibility` … `set_visible`(`body_id`)/ `set_sketch_visible`(`sketch_id`)。どちらか片方が載る
 #: - `document`   … `open_document` / `new_document`(新規は開いたファイルが無いので `path` / `name` が null)
 CHANGE_EVENTS: dict = {
@@ -1790,7 +1758,6 @@ CHANGE_EVENTS: dict = {
         Result("action", "string"),
         Result("path", "string | null"),
         Result("name", "string | null"),
-        Result("operations", "number"),
     ),
 }
 
@@ -1850,14 +1817,6 @@ def file_table() -> dict:
     }
 
 
-def selection_consuming_commands() -> set:
-    """**対象集合をコアの確定選択から取る**コマンド名(`Command.uses_selection`)。
-
-    `server._dispatch` の自動 `commit_selection` がこれを見る。
-    """
-    return {command.name for command in COMMANDS if command.uses_selection}
-
-
 def websocket_command_names() -> set:
     """WebSocketから踏めるコマンド名の全部(表に載るものも個別に捌くものも)。"""
     return {command.name for command in COMMANDS if command.ws != "none"}
@@ -1891,50 +1850,34 @@ def agent_instructions() -> str:
     システムプロンプトは同じものを読む)。
 
     AIから文書を触る道は2本ある —— Claude Codeなどが起動するMCPサーバ(`duocad/mcp_server.py`)と、
-    アプリ内から呼ぶエージェント(`duocad/agent/`)。**手順(propose→commit→verb)は同じ**なので、
-    2箇所に書くと片方だけ直った状態に気づけない。ツール数も宣言から数える —— 手で書いた「29」は
+    アプリ内から呼ぶエージェント(`duocad/agent/`)。**手順は同じ**なので、2箇所に書くと
+    片方だけ直った状態に気づけない。ツール数も宣言から数える —— 手で書いた「29」は
     verbを足した日に古くなる。
 
-    **どこまで自分でやるかもここに書く**。規則は2段:
+    **どこまで自分でやるかの規則は置かない**(本人の決定):
+    「選択だけにするか verb までするかは人間からの指示から AI がその都度判断する」。
+    固定の規則(曖昧なら止める等)を足すと、依頼の文面から読める判断を機械的な線引きが
+    塗りつぶす。選択だけで止めたときに何を選んだかを述べることだけを求める。
+    人は画面で選択を見て、そのまま採用するか、AIへ直しを頼むか、自分でトグルして直す。
 
-    - **確認を待たず適用してよい操作** … 対象を何個でも取る引数が無く、how(寸法・選択肢・
-      パス)の入力も無いもの。人に聞くことが残っていないので、提案で止める意味が無い。
-      **判定基準は手動UIのEnter要否と同一**(`web/src/commands/command.ts` の `needsEnter`)。個々のverb名をこの文に書かない —— verbを
-      足した日に古くなるうえ、基準さえ書けばツール定義の引数から導ける。
-    - **止まるか進むかをAIが決める操作** … 上以外。依頼の具体性から判断する。
-
-    `SelectionNotCommitted` の門(`duocad/selection.py`)は**残してある** —— これが無いと
-    「提案で止める」が単なる無操作になり、選択肢として成立しない。
-
-    **この文を書き換える人へ**: 後段で第1段の許可を打ち消さないこと(「ただし対象が1つの
-    操作でも提案で止める」の類)。第1段を骨抜きにする変更は、コアが何も止めないので
-    **実行時には何の異常も出ない**。`tests/test_agent_loop.py` が代表的な言い回しは落とすが、
-    散文の矛盾を文字列検査で全部は捕まえられない —— 最後の防波堤はこの注意書きである。
+    **この文を書き換える人へ**: 「必ず止める」「必ず進める」の類を足さないこと。
+    `tests/test_agent_loop.py` が代表的な言い回しは落とすが、散文の矛盾を文字列検査で
+    全部は捕まえられない —— 最後の防波堤はこの注意書きである。
     """
     return (
         f"duocad(自作3DCAD)の開いている文書を操作する。公開ツールは{len(tool_names())}個。"
-        "面・辺・領域などの形は引数で受けず、確定した選択から取る"
+        "面・辺・領域などの形は引数で受けず、選択から取る"
         "（数値・名前・パスだけが引数）。"
         "手順: describe_document で概要を知る → "
-        "propose_selection(predicate または refs) → commit_selection → "
+        "set_selection(predicate または refs) → "
         "fillet / extrude などの verb。"
-        "提案のままでは verb に渡せない。"
-        "ただし commit_selection はAI自身が呼んでよい —— 人の承認は要らない。"
-        "どこまで自分で進めるかは次の2段で決める。"
-        "(1) 対象を何個でも取る引数が無く、how(寸法・選択肢・パス)の入力も無い操作は、"
-        "確認を待たず propose_selection → commit_selection → verb を一息に実行してよい"
-        "（人に聞くことが残っていない。手動UIでEnterが要らない操作と同じ基準。"
-        "how は操作の結果を決める値のことで、既存の対象を指すID・点の座標・"
-        "貼る先の平面名は、文字列や列挙に見えても how ではなく対象である。"
-        "新しく作るものへの命名のような省略できる付帯入力も how に数えない）。"
-        "(2) それ以外(対象を何個でも取る、または how の入力がある操作)は、"
-        "提案で止めるか適用まで行くかを依頼の文面から自分で判断する: "
-        "対象も数値も定まる具体的な指示なら適用まで行き、"
-        "曖昧・探索的な依頼なら propose_selection で止めて何を選んだかを述べ、"
-        "確定してよいかを尋ねる（止めたら verb は呼ばない）。"
-        "迷ったら (2) では止める側に倒す —— 提案は人が直せるが、"
-        "適用してしまった形は undo で戻すしかない。"
+        "選択は人もAIも同じ操作(set_selection / modify_selection / toggle_selection / "
+        "clear_selection)で触り、そのまま verb に渡せる。"
+        "選択だけで止めるか verb まで進めるかは、人の指示の文面からその都度判断する。"
+        "選択だけで止めたときは、何を選んだかを述べる"
+        "（人は画面で見て、そのまま採用するか、直すよう頼むか、自分でトグルして直す）。"
         "形を変える verb が確定すると選択は空になるので、次の対象は選び直す。"
+        "作業の報告は1文で足りる。"
         "set_visible の結果は人間が開いているブラウザの画面にも即座に反映される"
         "(undo では戻らないので、戻すには visible=true で呼び直す)。"
     )

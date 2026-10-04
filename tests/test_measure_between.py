@@ -278,12 +278,11 @@ def test_the_mcp_tool_returns_the_same_between_as_the_session(session: Session):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "propose_selection", "arguments": {"refs": [ref("face", top), ref("face", bottom)]}},
+            "params": {"name": "set_selection", "arguments": {"refs": [ref("face", top), ref("face", bottom)]}},
         }
     )
     response = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "measure"}})
     payload = json.loads(response["result"]["content"][0]["text"])
-    assert payload["origin"] == "proposed"  # 提案のままで測れる
     assert payload["between"] == session.measure()["between"]
     assert payload["between"]["distance"] == pytest.approx(BOX_Z)
 

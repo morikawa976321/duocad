@@ -56,7 +56,7 @@ import {
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
   EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET, HOVER_LIGHTEN, LAYER,
-  OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_EDGE_COLOR, PREVIEW_COLOR, PROPOSED_COLOR,
+  OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_EDGE_COLOR, PREVIEW_COLOR,
   REGION_COLOR, REGION_SELECTED_COLOR, SKETCH_COLOR, SKETCH_FIT_MARGIN, SKETCH_GHOST_COLOR, SKETCH_GHOST_WARN_COLOR, SKETCH_HANDLE_COLOR,
   SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, WORLD_UP, isSelectableFov, lighten, type BodyMeshes,
 } from './viewportConstants'
@@ -292,16 +292,15 @@ export function createViewport(container: HTMLElement): Viewport {
    * 面の材質は **(役割 × 選択状態 × ホバー × 陰影)** をキーにした遅延生成のキャッシュから取る。
    *
    * 役割は形状最適化(第3のモード)の保持/除外/拘束で、素の面(`'none'`)を含めて4種。
-   * 選択状態は3種(未選択 `'plain'` / 確定 `'user'` / AI提案 `'proposed'`)、ホバーは2種、
-   * 陰影は2種(平滑 / メッシュボディのフラット)。組み合わせは最大48だが、**使った組だけ**を
-   * この中で作る(全部を手で書き下さない) —— 役割が無かった頃の6個(base/highlight/proposed
-   * × 通常/ホバー)から増える軸を、静的な定数ではなく関数1つに閉じるための形。
+   * 選択状態は2種(未選択 `'plain'` / 選択 `'user'`)、ホバーは2種、
+   * 陰影は2種(平滑 / メッシュボディのフラット)。組み合わせは最大32だが、**使った組だけ**を
+   * この中で作る(全部を手で書き下さない) —— 増える軸を、静的な定数ではなく関数1つに閉じるための形。
    *
    * **選択は役割に勝つ**。`state !== 'plain'` のときは役割を見ない ——
    * 保持ソリッド(緑)を選ぶとハイライト色になり、緑は一時的に見えなくなる。
    */
   type OptimizeFaceRole = 'none' | 'preserve' | 'exclude' | 'fixture'
-  type FaceMaterialState = 'plain' | 'user' | 'proposed'
+  type FaceMaterialState = 'plain' | 'user'
 
   function roleBaseColor(role: OptimizeFaceRole): number {
     if (role === 'preserve') return OPTIMIZE_PRESERVE_COLOR
@@ -318,12 +317,7 @@ export function createViewport(container: HTMLElement): Viewport {
     (role: OptimizeFaceRole, state: FaceMaterialState, hovered: boolean, flat: boolean) =>
       `${state === 'plain' ? role : 'none'}:${state}:${hovered ? 1 : 0}:${flat ? 1 : 0}`,
     (role, state, hovered, flat) => {
-      const base =
-        state === 'user'
-          ? HIGHLIGHT_COLOR
-          : state === 'proposed'
-            ? PROPOSED_COLOR
-            : roleBaseColor(state === 'plain' ? role : 'none')
+      const base = state === 'user' ? HIGHLIGHT_COLOR : roleBaseColor(role)
       return new THREE.MeshLambertMaterial({
         color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
         side: THREE.DoubleSide,
@@ -871,10 +865,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 今の選択(`highlight` が受け取ったもの)。**材質を決めるのは下の1箇所だけ**。 */
   let selectedFaceKeys = new Set<string>()
-  let faceOrigin: 'user' | 'proposed' = 'user'
   /** ボディ単位の選択(`highlightBodies`。保持/除外を決めているあいだだけ埋まる)。 */
   let selectedBodyIds = new Set<string>()
-  let bodyOrigin: 'user' | 'proposed' = 'user'
 
   /**
    * 形状最適化(第3のモード)の役割。**モードを抜けたら空にする**(`setOptimizeState(null)`)
@@ -894,13 +886,13 @@ export function createViewport(container: HTMLElement): Viewport {
     highlightColor.face =
       selectedFaceKeys.size === 0 && selectedBodyIds.size === 0
         ? null
-        : faceMaterialFor('none', selectedFaceKeys.size > 0 ? faceOrigin : bodyOrigin, false).color.getHex()
+        : faceMaterialFor('none', 'user', false).color.getHex()
     for (const mesh of allFaceMeshes) {
       const bodyId = mesh.userData.bodyId as string
       const faceIndex = mesh.userData.faceIndex as number
       const hitAsFace = selectedFaceKeys.has(refKey(bodyId, faceIndex))
       const hitAsBody = selectedBodyIds.has(bodyId)
-      const state: FaceMaterialState = hitAsFace ? faceOrigin : hitAsBody ? bodyOrigin : 'plain'
+      const state: FaceMaterialState = hitAsFace || hitAsBody ? 'user' : 'plain'
       const role: OptimizeFaceRole = fixtureFaceKeys.has(refKey(bodyId, faceIndex))
         ? 'fixture'
         : (bodyRoles.get(bodyId) ?? 'none')
@@ -910,8 +902,7 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
-  function highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void {
-    faceOrigin = origin
+  function highlight(refs: FaceRef[]): void {
     selectedFaceKeys = new Set(refs.map((ref) => refKey(ref.bodyId, ref.faceIndex)))
     applyFaceMaterials()
   }
@@ -921,8 +912,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * あいだだけ非空になる —— **選択が役割色に勝つ**ので、ここに載ったボディは
    * `applyFaceMaterials()` が全面をハイライト色で塗る。
    */
-  function highlightBodies(bodyIds: string[], origin: 'user' | 'proposed'): void {
-    bodyOrigin = origin
+  function highlightBodies(bodyIds: string[]): void {
     selectedBodyIds = new Set(bodyIds)
     applyFaceMaterials()
   }
@@ -1131,13 +1121,13 @@ export function createViewport(container: HTMLElement): Viewport {
   const edgeRoot = new THREE.Group()
   scene.add(edgeRoot)
 
-  type EdgeMaterialState = 'plain' | 'user' | 'proposed'
+  type EdgeMaterialState = 'plain' | 'user'
   /** 辺の材質は (状態 × ホバー) のキャッシュから取る。ホバーは面と同じで明度を足すだけ。深度検査はしない
    *  (奥の辺も見え、指せる)。 */
   const edgeMaterials = variantCache(
     (state: EdgeMaterialState, hovered: boolean) => `${state}:${hovered ? 1 : 0}`,
     (state, hovered) => {
-      const base = state === 'user' ? HIGHLIGHT_COLOR : state === 'proposed' ? PROPOSED_COLOR : PICK_EDGE_COLOR
+      const base = state === 'user' ? HIGHLIGHT_COLOR : PICK_EDGE_COLOR
       return new THREE.LineBasicMaterial({
         color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
         depthTest: false,
@@ -1192,12 +1182,11 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 今出している辺のうち選択に入っているもの(面の `selectedFaceKeys` と同じ役目)。 */
   let selectedEdgeIndices = new Set<number>()
-  let edgeOrigin: 'user' | 'proposed' = 'user'
 
   /** 辺の材質を決める。**選択とホバーの両方を見る唯一の場所**(面と同じ規律)。 */
   function applyEdgeMaterials(): void {
     // 色は材質から読み戻す(`highlightColors()` の検査がこの値を読む)。
-    highlightColor.edge = selectedEdgeIndices.size === 0 ? null : edgeMaterials.get(edgeOrigin, false).color.getHex()
+    highlightColor.edge = selectedEdgeIndices.size === 0 ? null : edgeMaterials.get('user', false).color.getHex()
     for (const line of edgeLines) {
       const edgeIndex = line.userData.edgeIndex as number
       const isHit = selectedEdgeIndices.has(edgeIndex)
@@ -1205,12 +1194,11 @@ export function createViewport(container: HTMLElement): Viewport {
         hoverEdge !== null &&
         hoverEdge.bodyId === (line.userData.bodyId as string) &&
         hoverEdge.edgeIndex === edgeIndex
-      line.material = edgeMaterials.get(isHit ? edgeOrigin : 'plain', isHovered)
+      line.material = edgeMaterials.get(isHit ? 'user' : 'plain', isHovered)
     }
   }
 
-  function highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void {
-    edgeOrigin = origin
+  function highlightEdges(refs: EdgeRef[]): void {
     selectedEdgeIndices = new Set(
       refs.filter((ref) => ref.bodyId === edgeBodyId).map((ref) => ref.edgeIndex),
     )

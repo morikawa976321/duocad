@@ -17,7 +17,7 @@
 
 - **一致0件はエラーではない**。空のリストを返し、件数は呼び出し元が数えられる
   (`Selection.to_dict()` の `count`)。
-- **不正な述語は ValueError**(未知の `op`・型違い・`kind` に無い `op`)。`propose_selection` は
+- **不正な述語は ValueError**(未知の `op`・型違い・`kind` に無い `op`)。`set_selection` は
   これを捕まえず、**選択を変更しないまま**落とす。黙って空集合にすると2つが区別できなくなる。
 
 **不可視Bodyは走査しない**。`body` を明示して不可視Bodyを指した場合も ValueError
@@ -39,6 +39,9 @@ from .selection import selectable_bodies
 
 #: 述語が対象にできる種別(領域の述語はスケッチ側の話なので持たない)
 PREDICATE_KINDS = ("face", "edge")
+
+#: 述語に書けるキー
+PREDICATE_KEYS = ("kind", "body", "where")
 
 #: 面の述語で使える `op`
 FACE_OPS = ("normal_dot_gt", "area_gt", "kind_is")
@@ -72,13 +75,23 @@ def validate(predicate: dict) -> dict:
     """
     if not isinstance(predicate, dict):
         raise ValueError(f"predicate must be a dict, got {type(predicate).__name__}")
+    # 知らないキーを黙って捨てない。`body_id` と書かれた絞り込みを無視すると、全ボディの辺が
+    # 選ばれたまま成功を返し、次の verb が「複数ボディにまたがる」で落ちて初めて気づく。
+    unknown = sorted(set(predicate) - set(PREDICATE_KEYS))
+    if unknown:
+        raise ValueError(f"unknown predicate key(s): {unknown} (allowed: {', '.join(PREDICATE_KEYS)})")
     if "kind" not in predicate:
         raise ValueError("predicate is missing 'kind'")
     kind = predicate["kind"]
     if kind not in PREDICATE_KINDS:
-        raise ValueError(f"unknown predicate kind: {kind!r}")
+        # 実測で、スケッチの領域を述語で選ぼうとして `kind: "region"` を繰り返す。選び方を返す。
+        raise ValueError(
+            f"unknown predicate kind: {kind!r} (a predicate selects {' or '.join(PREDICATE_KINDS)}; "
+            'a sketch region is selected with refs=[{"sketch": sketch_id, "index": 1}])'
+        )
     if "where" not in predicate:
-        raise ValueError("predicate is missing 'where'")
+        # 実測で、「全部の辺」を選ぶときに `where` を省く書き方が繰り返し出る。直し方を返す。
+        raise ValueError(f'predicate is missing \'where\' (use "where": [] to select every {kind})')
     where = predicate["where"]
     if not isinstance(where, list):
         raise ValueError(f"'where' must be a list, got {type(where).__name__}")

@@ -8,7 +8,7 @@
 スケッチ平面の法線で、**パラメータにしない**(スケッチは2Dなので軸の自由度が無い。
 本人判断)。角度の符号は `pattern_circular` の `total_angle` と同じ u->v の反時計回りが正。
 
-対象は**確定選択のスケッチ図形**(`selection.SKETCH_ENTITY_KIND`)で、参照が持つ `point` が
+対象は**選択のスケッチ図形**(`selection.SKETCH_ENTITY_KIND`)で、参照が持つ `point` が
 
     None       … その図形1つ全体(= 辺)。全部の点を同じ量だけ動かす **= 形は変えない**
     "x0" 等    … その1点だけ(線の端点・円/弧の中心・長方形の左下・ベジエの制御点)
@@ -405,7 +405,7 @@ def move_sketch_entities(
     center: Any = None,
     center_entity: Any = None,
 ) -> Operation:
-    """確定選択のスケッチの点・辺を動かす(`copy=True` なら複製する)。
+    """選択のスケッチの点・辺を動かす(`copy=True` なら複製する)。
 
     - `mode="translate"`(既定) … (dx, dy) だけ平行移動する。`dx` と `dy` が**両方0は
       ValueError**(`copy=False` では何も起きない操作が undo を1手消費し、`copy=True` では
@@ -498,7 +498,7 @@ register_verb(
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 @entry(VERB_MOVE_SKETCH_ENTITIES)
 def _enter_move_sketch_entities(

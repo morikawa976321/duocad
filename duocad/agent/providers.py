@@ -15,17 +15,23 @@
 `openai_compat` はキーを要求するサーバのために `api_key` を受けられるが、`build_provider`
 は渡さない(画面から鍵を受け取る経路を作らないため)。外へ出る文字列は `_redact()` を通す。
 
-公式SDK(`openai`)は入れず、`urllib.request` で素のHTTPを書く。**非streaming**。
+公式SDK(`openai`)は入れず、標準ライブラリで素のHTTPを書く。応答は**ストリーミングで受けて
+組み立てる**(`StreamingTransport`。理由は表示ではなく打ち切り)。
 
 **OCP / build123d をimportしない**。
 """
 from __future__ import annotations
 
+import http.client
 import json
+import socket
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Sequence
+from time import monotonic
+from typing import Any, Callable, Iterator, Optional, Sequence
 
 #: llama-server の既定(`llama-server -c 16384 --port 8080` を想定)。
 DEFAULT_OPENAI_COMPAT_BASE_URL = "http://127.0.0.1:8080/v1"
@@ -33,7 +39,23 @@ DEFAULT_OPENAI_COMPAT_BASE_URL = "http://127.0.0.1:8080/v1"
 #: 失敗の本文をこの長さで切る(モデルへ返す文が無限に伸びないように)。
 MAX_ERROR_CHARS = 400
 
-#: HTTPの実体。テストは差し替える(外部を叩かないため)。
+#: llama-server が応答に付ける `timings` のうち、`usage` へ写す欄。**往復をまたいで足して意味が
+#: 残るものだけ**(`*_per_second` のような率は足せない)。`cache_n` はキャッシュから使い回した
+#: トークン数、`prompt_n` は新しく読んだ数、`predicted_n` は書いた数。
+TIMING_KEYS = ("cache_n", "prompt_n", "prompt_ms", "predicted_n", "predicted_ms")
+
+#: 固定プレフィックスを保存するスロットファイル(llama-server の `--slot-save-path` の下)。
+#: **1つを上書きし続ける** —— 名前を内容ごとに変えると、ツール定義を変えるたびに古いファイルが
+#: 相手のディスクに残り、こちらからは消せない。
+SLOT_FILE = "duocad-prefix.bin"
+#: スロットの保存・復元1回の待ち上限(秒)。ハングの保険として自分で置いた値(実測は0.1秒)。
+SLOT_TIMEOUT = 60.0
+#: ウォームアップで読んだトークン数がこれ以下なら「戻したスロットが今の定義と同じだった」と見る。
+#: 実測: 同じ本文の再送で読むのは1トークン。8 は版による数トークンの差を許すために自分で置いた余裕。
+WARM_HIT_MAX_TOKENS = 8
+
+#: HTTPの実体(`(url, 本文, ヘッダ, 応答全体の待ち上限) -> 非streamingと同じ形の応答`)。
+#: テストは差し替える(外部を叩かないため)。
 Transport = Callable[[str, dict, dict, float], dict]
 
 
@@ -56,6 +78,23 @@ class ProviderTimeout(ProviderError):
     読み替える。型が同じだと、本物の障害まで `timeout` と名乗ることになり、
     直す場所を見誤らせる。`ProviderError` を捕まえている既存の経路はそのまま効く。
     """
+
+
+class ProviderContextOverflow(ProviderError):
+    """依頼が相手の文脈長に収まらなかった(相手は処理を始めずに断る)。
+
+    障害と同じ型にしない —— 呼び出し側は古い履歴を捨てて同じ往復をやり直せる。
+    """
+
+
+#: 文脈あふれを名乗る本文の目印(llama-server の `exceed_context_size_error`、OpenAI の
+#: `context_length_exceeded`)。
+CONTEXT_OVERFLOW_MARKS = ("exceed_context_size", "context_length_exceeded")
+
+
+def _failure(message: str, body: str, status: Optional[int] = None) -> ProviderError:
+    kind = ProviderContextOverflow if any(mark in body for mark in CONTEXT_OVERFLOW_MARKS) else ProviderError
+    return kind(f"{message}: {body[:MAX_ERROR_CHARS]}", status=status)
 
 
 # --------------------------------------------------------------------------------------
@@ -137,24 +176,189 @@ def _redact(text: str, secret: Optional[str]) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# HTTP(素のurllib。streamingは非対応)
+# HTTP
 # --------------------------------------------------------------------------------------
 def _origin(url: str) -> str:
     """エラーメッセージに載せてよい程度に短くしたURL(クエリを落とす)。"""
     return url.split("?", 1)[0]
 
 
-def post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
-    """JSONをPOSTしてJSONを受け取る。失敗は `ProviderError`。
+def _json_object(body: str, url: str) -> dict:
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        raise ProviderError(
+            f"{_origin(url)} の応答がJSONではない: {body[:MAX_ERROR_CHARS]}"
+        ) from None
+    if not isinstance(parsed, dict):
+        raise ProviderError(f"{_origin(url)} の応答がJSONオブジェクトではない")
+    return parsed
 
-    **タイムアウトは必ず効かせる**(矛盾した指示でモデルが600秒返ってこなかった実測がある)。
+
+def _assemble(chunks: Iterator[dict], url: str) -> dict:
+    """ストリーミングの断片を、非streamingの応答と同じ形の辞書へ畳む(`parse_reply` が読む形)。
+
+    ツール呼び出しの引数は**文字列の断片で届く**ので、`index` ごとに連結する。`usage` と
+    `timings` は最後の断片に載る(llama-server。`stream_options.include_usage` が要る)。
     """
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    content: list[str] = []
+    calls: dict[int, dict] = {}
+    finish_reason = ""
+    usage: dict = {}
+    timings: dict = {}
+    for chunk in chunks:
+        if "error" in chunk:
+            raise _failure(
+                f"{_origin(url)} が途中で失敗した", json.dumps(chunk["error"], ensure_ascii=False)
+            )
+        if isinstance(chunk.get("usage"), dict):
+            usage = chunk["usage"]
+        if isinstance(chunk.get("timings"), dict):
+            timings = chunk["timings"]
+        choices = chunk.get("choices")
+        for choice in choices if isinstance(choices, list) else []:
+            delta = choice.get("delta") if isinstance(choice, dict) else None
+            delta = delta if isinstance(delta, dict) else {}
+            if isinstance(delta.get("content"), str):
+                content.append(delta["content"])
+            raw_calls = delta.get("tool_calls")
+            for raw in raw_calls if isinstance(raw_calls, list) else []:
+                slot = calls.setdefault(
+                    raw.get("index", len(calls)), {"id": "", "name": "", "arguments": ""}
+                )
+                function = raw.get("function") if isinstance(raw.get("function"), dict) else {}
+                slot["id"] = raw.get("id") or slot["id"]
+                slot["name"] += function.get("name") or ""
+                if isinstance(function.get("arguments"), str):
+                    slot["arguments"] += function["arguments"]
+            if choice.get("finish_reason"):
+                finish_reason = str(choice["finish_reason"])
+    message: dict = {"role": "assistant", "content": "".join(content) or None}
+    if calls:
+        message["tool_calls"] = [
+            {
+                "id": calls[index]["id"],
+                "type": "function",
+                "function": {"name": calls[index]["name"], "arguments": calls[index]["arguments"]},
+            }
+            for index in sorted(calls)
+        ]
+    return {
+        "choices": [{"message": message, "finish_reason": finish_reason}],
+        "usage": usage,
+        "timings": timings,
+    }
+
+
+class StreamingTransport:
+    """`POST /chat/completions` をストリーミングで受け、非streamingと同じ形の辞書にして返す。
+
+    **ストリーミングで受ける理由は表示ではなく打ち切りである。** llama-server は非streamingの
+    リクエストを、クライアントが接続を閉じても最後まで生成し続ける(実測: 1,500トークンの生成を
+    3秒で閉じても残り27秒ぶんを書き切り、その間スロットを塞いだ。ストリーミングは閉じて0.2秒で
+    止まる)。だから待ち時間切れと中断は、どちらも**接続を閉じる**ことで効かせる。
+
+    `timeout` は**応答全体**の待ち上限である。ストリーミングは断片が届くたびにソケットの待ちが
+    仕切り直されるので、締切を自前で数えて残り時間をソケットへ渡す。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sock: Optional[socket.socket] = None
+        self._aborted = False
+
+    def abort(self) -> None:
+        """走っている往復の接続を閉じる(**別スレッドから呼んでよい**)。走っていなければ何もしない。"""
+        with self._lock:
+            self._aborted = True
+            sock = self._sock
+        if sock is not None:
+            # `close()` では、別スレッドで読み取りを待っている側が起きない(Linux)。
+            # `shutdown` は待っている読み取りをEOFで返させる。
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def __call__(self, url: str, payload: dict, headers: dict, timeout: float) -> dict:
+        deadline = monotonic() + timeout
+        parts = urllib.parse.urlsplit(url)
+        factory = (
+            http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+        )
+        connection = factory(parts.hostname or "", parts.port, timeout=timeout)
+        with self._lock:
+            self._aborted = False
+        try:
+            connection.request(
+                "POST",
+                parts.path + (f"?{parts.query}" if parts.query else ""),
+                body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={**headers, "content-type": "application/json"},
+            )
+            # **ソケットはここで控える。** サーバが接続を閉じる応答(`Connection: close`)だと
+            # `getresponse()` が `connection.sock` を `None` にするので、後からは取れない。
+            with self._lock:
+                self._sock = connection.sock
+                if self._aborted:
+                    raise ProviderError("中断したので接続を閉じた")
+            response = connection.getresponse()
+            if response.status != 200:
+                raise _failure(
+                    f"HTTP {response.status} from {_origin(url)}",
+                    response.read().decode("utf-8", "replace"),
+                    response.status,
+                )
+            if "text/event-stream" not in (response.getheader("content-type") or ""):
+                # ストリーミングに応じないサーバは本文を1つ返す。
+                return _json_object(response.read().decode("utf-8", "replace"), url)
+            return _assemble(self._events(response, deadline, url), url)
+        except ProviderError:
+            raise
+        except TimeoutError:
+            raise ProviderTimeout(f"{_origin(url)} が {timeout:g}s で返らなかった") from None
+        except (OSError, http.client.HTTPException) as error:
+            if self._aborted:
+                raise ProviderError("中断したので接続を閉じた") from None
+            raise ProviderError(f"{_origin(url)} へ接続できない: {error}") from None
+        finally:
+            with self._lock:
+                self._sock = None
+            connection.close()
+
+    def _events(self, response: http.client.HTTPResponse, deadline: float, url: str) -> Iterator[dict]:
+        while True:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            sock = self._sock
+            if sock is not None:
+                sock.settimeout(remaining)
+            line = response.readline()
+            if not line:
+                if self._aborted:
+                    raise ProviderError("中断したので接続を閉じた")
+                raise ProviderError(f"{_origin(url)} の応答が途中で切れた")
+            text = line.decode("utf-8", "replace").strip()
+            if not text.startswith("data:"):
+                continue
+            data = text[5:].strip()
+            if data == "[DONE]":
+                return
+            chunk = _json_object(data, url)
+            yield chunk
+
+
+def post_json(url: str, payload: Optional[dict], headers: dict, timeout: float) -> dict:
+    """JSONを送ってJSONを受け取る(本文が1つで返る口のため。対話は `StreamingTransport`)。
+    `payload` が `None` なら GET。失敗は `ProviderError`。
+    """
+    data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=data,
         headers={**headers, "content-type": "application/json"},
-        method="POST",
+        method="GET" if payload is None else "POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -176,26 +380,24 @@ def post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
         raise ProviderError(f"{_origin(url)} へ接続できない: {error.reason}") from None
     except TimeoutError:
         raise ProviderTimeout(f"{_origin(url)} が {timeout:g}s で返らなかった") from None
-
-    try:
-        parsed = json.loads(body)
-    except json.JSONDecodeError:
-        raise ProviderError(
-            f"{_origin(url)} の応答がJSONではない: {body[:MAX_ERROR_CHARS]}"
-        ) from None
-    if not isinstance(parsed, dict):
-        raise ProviderError(f"{_origin(url)} の応答がJSONオブジェクトではない")
-    return parsed
+    return _json_object(body, url)
 
 
 # --------------------------------------------------------------------------------------
 # アダプタ
 # --------------------------------------------------------------------------------------
 class Provider:
-    """プロバイダ1つ。**ループはこの3つしか使わない**(`name` / `model` / `complete`)。"""
+    """プロバイダ1つ。**ループが使うのは `name` / `model` / `complete` / `abort` だけ**。"""
 
     #: `openai_compat`(増えたらここに足す)
     name = "provider"
+
+    def abort(self) -> None:
+        """走っている往復を捨てる(中断フラグが立ったとき**別スレッドから**呼ばれる)。既定は何もしない。"""
+
+    def prepare(self, *, system: str, tools: Sequence[dict], timeout: float) -> dict:
+        """固定プレフィックス(system + tools)を相手のキャッシュへ載せておく。既定は何もしない。"""
+        return {}
 
     def complete(
         self,
@@ -209,8 +411,12 @@ class Provider:
         raise NotImplementedError
 
 
+#: 「まだ読んでいない」の印(`None` は「読んだが分からなかった」に使う)。
+_UNREAD = object()
+
+
 class OpenAICompatProvider(Provider):
-    """OpenAI互換(`POST /v1/chat/completions`・非streaming)。llama-server がこれ。
+    """OpenAI互換(`POST /v1/chat/completions`・ストリーミング)。llama-server がこれ。
 
     詰め替えは3つだけ:
 
@@ -231,15 +437,22 @@ class OpenAICompatProvider(Provider):
         model: str = "local",
         base_url: str = DEFAULT_OPENAI_COMPAT_BASE_URL,
         api_key: Optional[str] = None,
-        transport: Transport = post_json,
+        transport: Optional[Transport] = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self._api_key = api_key or None
-        self._transport = transport
+        #: 既定の実体は**プロバイダごとに1つ**(走っている接続を覚えていて `abort` で閉じるため)。
+        self._transport: Transport = StreamingTransport() if transport is None else transport
+        self._n_ctx: Any = _UNREAD
 
     def __repr__(self) -> str:  # pragma: no cover - 表示だけ
         return f"OpenAICompatProvider(model={self.model!r}, base_url={self.base_url!r})"
+
+    def abort(self) -> None:
+        abort = getattr(self._transport, "abort", None)
+        if callable(abort):
+            abort()
 
     # ------------------------------------------------------------------ 整形
     def render_tools(self, tools: Sequence[dict]) -> list[dict]:
@@ -305,7 +518,9 @@ class OpenAICompatProvider(Provider):
             "model": self.model,
             "max_tokens": int(max_tokens),
             "messages": self.render_messages(system, turns),
-            "stream": False,
+            "stream": True,
+            # 無いと最後の断片に `usage` が載らない(OpenAI互換の約束)。
+            "stream_options": {"include_usage": True},
         }
         if tools:
             payload["tools"] = self.render_tools(tools)
@@ -354,12 +569,18 @@ class OpenAICompatProvider(Provider):
 
         content = message.get("content")
         finish_reason = str(choice.get("finish_reason") or "")
+        usage = dict(response["usage"]) if isinstance(response.get("usage"), dict) else {}
+        timings = response.get("timings")
+        if isinstance(timings, dict):
+            usage.update(
+                {key: timings[key] for key in TIMING_KEYS if isinstance(timings.get(key), (int, float))}
+            )
         return ProviderReply(
             text=(content or "").strip() if isinstance(content, str) else "",
             tool_calls=tuple(calls),
             stop_reason=finish_reason,
             stop=_neutral_stop(finish_reason, bool(calls), {"length"}),
-            usage=response.get("usage") if isinstance(response.get("usage"), dict) else {},
+            usage=usage,
             raw_message=message,
         )
 
@@ -376,13 +597,63 @@ class OpenAICompatProvider(Provider):
         payload = self.build_payload(
             system=system, turns=turns, tools=tools, max_tokens=max_tokens
         )
-        headers = {}
-        if self._api_key:
-            headers["authorization"] = f"Bearer {self._api_key}"
         response = self._call(
-            f"{self.base_url}/chat/completions", payload, headers, timeout
+            f"{self.base_url}/chat/completions", payload, self._headers(), timeout
         )
         return self.parse_reply(response)
+
+    def _headers(self) -> dict:
+        return {"authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+
+    # ------------------------------------------------------------------ ウォームアップ
+    def prepare(self, *, system: str, tools: Sequence[dict], timeout: float) -> dict:
+        """固定プレフィックスをサーバのキャッシュへ載せておく(会話には何も足さない)。
+
+        1. 保存済みのスロットがあれば戻す(`--slot-save-path` 付きの llama-server)。
+        2. system + tools + `"."` で1トークンだけ生成させる。戻したものが今の定義と同じなら
+           読むのは1トークンで済み、違えば食い違った所から読み直す。**古いスロットを戻しても
+           結果は狂わない** —— キャッシュはトークン列の前方一致でしか使われない。
+        3. 読み直しが起きていたら保存し直す。
+
+        スロットの口が無いサーバ(`--slot-save-path` 無し・他のOpenAI互換)では2だけが効く。
+        """
+        restored = self._slot("restore")
+        payload = self.build_payload(system=system, turns=[UserTurn(".")], tools=tools, max_tokens=1)
+        reply = self.parse_reply(
+            self._call(f"{self.base_url}/chat/completions", payload, self._headers(), timeout)
+        )
+        read = reply.usage.get("prompt_n")
+        saved = (read is None or read > WARM_HIT_MAX_TOKENS) and self._slot("save")
+        return {"restored": restored, "read": read, "reused": reply.usage.get("cache_n"), "saved": saved}
+
+    def _slot(self, action: str) -> bool:
+        """スロット0を保存/復元する(llama-server 固有の口)。**口が無ければ黙って `False`**。"""
+        try:
+            post_json(
+                f"{self._root()}/slots/0?action={action}",
+                {"filename": SLOT_FILE},
+                self._headers(),
+                SLOT_TIMEOUT,
+            )
+        except ProviderError:
+            return False
+        return True
+
+    def _root(self) -> str:
+        """llama-server 固有の口(`/slots`・`/props`)が生える根(`/v1` の外)。"""
+        return self.base_url[: -len("/v1")] if self.base_url.endswith("/v1") else self.base_url
+
+    def context_size(self) -> Optional[int]:
+        """相手の文脈長(トークン)。llama-server の `/props` から1度だけ読む。分からなければ `None`。"""
+        if self._n_ctx is _UNREAD:
+            try:
+                props = post_json(f"{self._root()}/props", None, self._headers(), SLOT_TIMEOUT)
+                settings = props.get("default_generation_settings")
+                n_ctx = settings.get("n_ctx") if isinstance(settings, dict) else None
+            except ProviderError:
+                n_ctx = None
+            self._n_ctx = n_ctx if isinstance(n_ctx, int) and n_ctx > 0 else None
+        return self._n_ctx
 
     def _call(self, url: str, payload: dict, headers: dict, timeout: float) -> dict:
         try:
@@ -425,7 +696,7 @@ def build_provider(
     *,
     model: Optional[str] = None,
     base_url: Optional[str] = None,
-    transport: Transport = post_json,
+    transport: Optional[Transport] = None,
 ) -> Provider:
     """名前からプロバイダを1つ作る(アプリ内UIが選ぶ入口)。
 

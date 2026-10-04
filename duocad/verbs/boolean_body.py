@@ -38,7 +38,7 @@ def _validate_participants(
     if not tool_body_ids:
         raise ValueError(
             "boolean_body requires at least one tool body "
-            "(確定選択からツールを取る verb なので、呼ぶ前に選ぶこと)"
+            "(選択からツールを取る verb なので、呼ぶ前に選ぶこと)"
         )
     tool_ids = [str(body_id) for body_id in tool_body_ids]
     if len(set(tool_ids)) != len(tool_ids):
@@ -120,13 +120,13 @@ register_verb(VERB_BOOLEAN_BODY, do=_do_boolean_body, undo=_undo_boolean_body)
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 @entry(VERB_BOOLEAN_BODY)
 def _enter_boolean_body(document: Document, target_ref: Any, mode: str) -> dict:
-    """ターゲット(面参照・1つ)に、確定選択のツールボディ群を作用させる。
+    """ターゲット(面参照・1つ)に、選択のツールボディ群を作用させる。
 
-    `target_ref` は確定選択には入れない(入れると、ターゲットまでツールに数えられる)。
+    `target_ref` は選択には入れない(入れると、ターゲットまでツールに数えられる)。
     """
     tool_body_ids = selection.require_bodies(document)
     operation = boolean_body(document, target_ref, tool_body_ids, mode=str(mode))

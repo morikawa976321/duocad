@@ -377,9 +377,10 @@ def _run_modify_selection(session: Session, tmp_path: Path) -> dict:
     return session.modify_selection([{"body": body.id, "kind": "face", "index": 1}], [])
 
 
-@_runner("commit_selection")
-def _run_commit_selection(session: Session, tmp_path: Path) -> dict:
-    return session.commit_selection()
+@_runner("toggle_selection")
+def _run_toggle_selection(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    return session.toggle_selection([{"body": body.id, "kind": "face", "index": 1}])
 
 
 @_runner("clear_selection")

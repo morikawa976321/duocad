@@ -10,7 +10,7 @@
    渡すと思考が膨らみ、1リクエストが600秒返らなかった。伸びるのは文脈長ではなく思考の側
    なので、**上限と短いタイムアウトが要る**)。
 3. **ツールの実行時エラーでループを落とさない。** 構造化封筒(`not_found` /
-   `invalid_argument` / `selection_not_committed` / `selection_empty` /
+   `invalid_argument` / `selection_empty` /
    `selection_kind_mismatch` / `invalid_predicate` / `internal`)をそのままモデルへ返して
    自己修復させる(実測でこれは機能した)。
 4. **UIの知識を持たない。** 進捗は `progress(name, arguments, result, ok)` のコールバックへ
@@ -22,6 +22,8 @@
     run.status   # "completed" / "max_turns" / "cancelled" / "provider_error" / ...
 
 会話は `AgentLoop` に積み上がる(`run()` を続けて呼べば続きになる)。`reset()` で捨てる。
+**済んだ依頼は「人の発話 + AIの最終返答」だけを残す**(ツールの往復は次の `run()` の頭で捨てる)。
+相手の文脈長に近づいたら、古い依頼を半分まとめて捨てる。
 
 **OCP / build123d をimportしない**。
 """
@@ -40,6 +42,7 @@ from .. import catalog
 from .providers import (
     AssistantTurn,
     Provider,
+    ProviderContextOverflow,
     ProviderError,
     ProviderTimeout,
     ToolCall,
@@ -108,6 +111,19 @@ DEFAULT_REQUEST_TIMEOUT = DEFAULT_MAX_TOKENS / MIN_TOKENS_PER_SEC + REQUEST_OVER
 #: 往復数の問題である(`describe_document` のようにアプリが既に知っている情報の往復を消す)。
 DEFAULT_MAX_TOTAL_SECONDS = 30.0
 
+#: ウォームアップ(`AgentLoop.prepare`)の待ち上限(秒)。cold の読み込みは遅い機種で分単位に
+#: なるので、通常の往復の上限とは別に取る。**ハングの保険として自分で置いた値**であって、
+#: 実測から導いた待ち時間ではない。
+PREPARE_TIMEOUT = 1800.0
+
+#: 依頼のたびに、モデルの代わりに先に呼んでおく問い合わせ(`AgentLoop(first_look=FIRST_LOOK)`)。
+#: 実測で、モデルはこの2つを依頼のたびに最初に呼ぶ。
+FIRST_LOOK = ("describe_document", "get_selection")
+
+#: 先に呼んだ結果がこれより大きいときは、一覧を件数に畳む(文字)。**自分で置いた値**
+#: (実測: 2ボディ+2スケッチで約1,300文字、40ボディ+8スケッチで約7,800文字)。
+FIRST_LOOK_MAX_CHARS = 4000
+
 #: 進捗の口。`(ツール名, 引数, 結果, 成否)`。Gがこれを購読して画面に出す。
 ProgressCallback = Callable[[str, dict, Any, bool], None]
 
@@ -140,14 +156,25 @@ class Cancellation:
     """外から立てる中断フラグ(スレッドをまたいで立ててよい)。
 
     ループは**モデルへ投げる前**と**ツールを1つ実行するたび**に見る。走っている
-    HTTPリクエスト自体は切らない(切るのはタイムアウトの仕事)。
+    HTTPリクエストは、`on_cancel` で繋いだプロバイダの `abort` が接続を閉じて止める
+    (閉じないと、サーバは誰も読まない応答を最後まで生成し続ける)。
     """
 
     def __init__(self) -> None:
         self._event = threading.Event()
+        self._listeners: list[Callable[[], None]] = []
+
+    def on_cancel(self, listener: Callable[[], None]) -> None:
+        """中断が立った瞬間に呼ぶものを足す(`cancel()` を呼んだスレッドで走る)。"""
+        self._listeners.append(listener)
 
     def cancel(self) -> None:
         self._event.set()
+        for listener in list(self._listeners):
+            try:
+                listener()
+            except Exception:
+                _logger.warning("cancel listener failed", exc_info=True)
 
     def clear(self) -> None:
         self._event.clear()
@@ -199,6 +226,7 @@ class AgentRun:
                          可能性があるため(`run()` の該当箇所に理由)
     - `refusal`        … プロバイダが安全上の理由で断った
     - `provider_error` … HTTP・接続・応答の形(`detail` に理由。**APIキーは含まれない**)
+    - `context_overflow` … 今の依頼だけで相手の文脈長を超えた(古い依頼は捨て尽くした)
     - `stopped`        … 上のどれでもない停止理由(`detail` に生値)
     """
 
@@ -240,14 +268,20 @@ class AgentLoop:
         limits: Limits = Limits(),
         progress: Optional[ProgressCallback] = None,
         cancellation: Optional[Cancellation] = None,
+        first_look: Sequence[str] = (),
     ) -> None:
         self.tools = tools
         self.provider = provider
+        #: 依頼のたびに先に呼んでおく、引数なしの問い合わせの名前(`_look_first`)。
+        self.first_look = tuple(first_look)
         #: **MCPの `instructions` と同じ文**(catalog.py の1本から読む)。
         self.system = catalog.agent_instructions() if system is None else system
         self.limits = limits
         self.progress = progress
         self.cancellation = cancellation or Cancellation()
+        abort = getattr(provider, "abort", None)
+        if callable(abort):
+            self.cancellation.on_cancel(abort)
         self.turns: list[Turn] = []
 
     # ------------------------------------------------------------------ 会話
@@ -255,9 +289,26 @@ class AgentLoop:
         """会話を捨てる(文書は触らない)。"""
         self.turns = []
 
+    def prepare(self) -> dict:
+        """system + tools を先に読ませておく(会話には何も足さない)。
+
+        **`run()` と同じ文・同じツール定義を渡す** —— 1文字でも違うと、相手のキャッシュは
+        食い違った所から先を使えない。失敗は握って返す(サーバがまだ居ないのは事故ではなく、
+        最初の依頼がそれを言う)。
+        """
+        prepare = getattr(self.provider, "prepare", None)
+        if not callable(prepare):
+            return {}
+        try:
+            return prepare(system=self.system, tools=self.tools.descriptors(), timeout=PREPARE_TIMEOUT)
+        except ProviderError as error:
+            return {"error": str(error)}
+
     def run(self, prompt: str) -> AgentRun:
         """1つの指示を投げて、モデルがツールを呼ばなくなるまで回す。"""
+        self._settle_history()
         self.turns.append(UserTurn(prompt))
+        self._look_first()
         descriptors = self.tools.descriptors()
         outcomes: list[ToolOutcome] = []
         usage: dict = {}
@@ -311,7 +362,17 @@ class AgentLoop:
                     # はみ出しは接続を畳む分だけになる。
                     timeout=min(self.limits.request_timeout, budget_left),
                 )
+            except ProviderContextOverflow as error:
+                # 相手は処理を始めずに断るので、やり直しは安い。捨てるものが尽きたら
+                # (今の依頼だけで収まらない)そのことを返す。
+                if self._drop_oldest_half():
+                    turn -= 1
+                    continue
+                return self._result("context_overflow", str(error), turn, outcomes, usage)
             except ProviderError as error:
+                # 中断が接続を閉じた結果の失敗は、障害ではなく中断である。
+                if self.cancellation.cancelled:
+                    return self._result("cancelled", "中断フラグが立った", turn, outcomes, usage)
                 # **合計時間で頭を押さえた結果の失敗は `timeout` と名乗る**。
                 # 上で `timeout=` を残り時間まで縮めているので、予算切れは接続の
                 # タイムアウト = `ProviderError` として現れる。ここを分けないと、
@@ -322,6 +383,15 @@ class AgentLoop:
                 return self._result("provider_error", str(error), turn, outcomes, usage)
 
             usage = _merge_usage(usage, reply.usage)
+            # **次の往復に出力1回ぶんの余地が残らないなら、先に古い依頼を捨てる。**
+            # 余地が無いまま続けると、収まりはするが書く途中で文脈が尽きて切れる。
+            # 見るのは続きがあるとき(ツールを呼んだ)と、既に切れたときだけ —— 終わった依頼の
+            # ツール往復は次の `run()` が畳むので、そこで捨てるのは早すぎる。
+            if (reply.tool_calls or reply.stop == "max_tokens") and self._short_of_room(reply.usage):
+                if self._drop_oldest_half() and reply.stop == "max_tokens":
+                    # 切れた原因は出力上限ではなく文脈の残り。空けたのでこの往復をやり直す。
+                    turn -= 1
+                    continue
             self.turns.append(
                 AssistantTurn(
                     text=reply.text, tool_calls=reply.tool_calls, raw=reply.raw_message
@@ -361,10 +431,10 @@ class AgentLoop:
                 return self._result(status, detail, turn, outcomes, usage, text=reply.text)
 
             # **文書(または選択)が変わっていたら実行しない(楽観ロック本体)。**
-            # `_reset_selection_if_needed`(コア側)は形状を変えるverbの後で確定選択を
+            # `_reset_selection_if_needed`(コア側)は形状を変えるverbの後で選択を
             # 全リセットするので、面・辺・領域を消費するverbは `selection_empty` で
             # 既に守られている —— ここは**それを経由しないverb**(`set_visible` /
-            # `set_parameter` / body_id で直接効くもの等)や、**選択が空にならない
+            # body_id で直接効くもの等)や、**選択が空にならない
             # 入れ替え**(辺Aを外して辺Bを選び直して確定する。件数も種別も変わらない
             # ので `selection_empty` は発火しない)を含めて一律に守る網である。
             #
@@ -435,6 +505,81 @@ class AgentLoop:
 
             self.turns.append(ToolResultTurn(tuple(results)))
 
+    # ------------------------------------------------------------------ 履歴
+    def _look_first(self) -> None:
+        """モデルが依頼のたびに最初に呼ぶ問い合わせを、代わりに呼んで履歴へ置く(その往復を消す)。
+
+        **「モデルが呼んで結果が返った」形で置く**(発話に書き足さない)。実測(Gemma 4 12B)で、
+        同じ内容を発話の末尾へ添えると往復は減るが、最初の返事の思考が伸びて書く量が約1.5倍に
+        なり、全体では遅くなった。発話とも分かれるので、寸法のガードが結果の数字を
+        「人が言った数量」と読むこともない。
+
+        進捗(`progress`)と結果(`AgentRun.tool_calls`)には載せない —— モデルの判断ではないので、
+        画面の時系列に「AIが呼んだ」と出さない。取れなければ置かずに進む(モデルは自分で呼べる)。
+        """
+        if not self.first_look:
+            return
+        calls: list[ToolCall] = []
+        results: list[ToolResult] = []
+        try:
+            for index, name in enumerate(self.first_look):
+                content = json.dumps(_condensed(self.tools.call(name, {})), ensure_ascii=False)
+                calls.append(ToolCall(id=f"{FIRST_LOOK_ID}{index}", name=name, arguments={}))
+                results.append(ToolResult(call_id=calls[-1].id, name=name, content=content, ok=True))
+        except Exception:
+            _logger.warning("first look failed", exc_info=True)
+            return
+        self.turns.append(AssistantTurn(text="", tool_calls=tuple(calls)))
+        self.turns.append(ToolResultTurn(tuple(results)))
+
+    def _settle_history(self) -> None:
+        """済んだ依頼を「人の発話 + AIの最終返答」の2つへ畳む(ツールの往復は捨てる)。
+
+        ツールの結果は量の大半を占めるうえ、文書が変わったあとは**古い**(残すとモデルが
+        今は無い状態を信じる)。人の発話は残す —— 「反対側も同じように」は前の依頼を指すし、
+        寸法のガード(`_dimensions_nobody_asked_for`)は過去の発話から数量を探す。
+
+        最後まで進まなかった依頼には、返答の代わりに1行の注記を置く。発話が2つ続く履歴を
+        作らないため(役割の交互を要求するチャットテンプレートがある)。
+        """
+        settled: list[Turn] = []
+        for request in _requests(self.turns):
+            if not isinstance(request[0], UserTurn):
+                continue
+            last = request[-1]
+            answered = isinstance(last, AssistantTurn) and not last.tool_calls and last.text
+            settled.append(request[0])
+            settled.append(AssistantTurn(text=last.text if answered else _unfinished_note(request)))
+        self.turns = settled
+
+    def _drop_oldest_half(self) -> bool:
+        """済んだ依頼の古い側半分を捨てる。捨てるものが無ければ `False`。
+
+        **1依頼ずつではなく、まとめて捨てる。** 先頭を削ると相手のキャッシュはそこから後ろを
+        全部読み直すので、毎回削ると毎回読み直す(実測: 18依頼で総処理量が約2倍。半分ずつなら
+        約1.2倍)。今の依頼(最後の発話から後ろ)には触らない。
+        """
+        current = max(
+            (index for index, turn in enumerate(self.turns) if isinstance(turn, UserTurn)), default=0
+        )
+        settled = current // 2
+        if settled == 0:
+            return False
+        del self.turns[: 2 * ((settled + 1) // 2)]
+        return True
+
+    def _short_of_room(self, usage: dict) -> bool:
+        """いまの往復の続きに、出力1回ぶん(`max_tokens`)の余地が残っていないか。
+
+        相手の文脈長と、この往復の実測トークン数が分かるときだけ判定する(推定はしない)。
+        """
+        used = (usage.get("prompt_tokens"), usage.get("completion_tokens"))
+        if not all(isinstance(value, (int, float)) for value in used):
+            return False
+        context_size = getattr(self.provider, "context_size", None)
+        n_ctx = context_size() if callable(context_size) else None
+        return bool(n_ctx) and used[0] + used[1] + self.limits.max_tokens > n_ctx
+
     # ------------------------------------------------------------------ ツール
     def _dimensions_nobody_asked_for(self, call: ToolCall) -> tuple[str, ...]:
         """人が量を言っていないのにモデルが埋めた寸法引数の名前(空なら問題なし)。
@@ -486,14 +631,13 @@ class AgentLoop:
         invented = self._dimensions_nobody_asked_for(call)
         if invented:
             # **人が言っていない寸法で形を変えない**。
-            # `agent_instructions()` は「曖昧・探索的な依頼なら propose_selection で止めて
-            # 尋ねる」「迷ったら止める側に倒す」と書いてあるが、**モデルはこれを守れない**
+            # **モデルは「寸法を自分で決めない」を文章だけでは守れない**
             # (実測: 「角が尖ってて危ないから、いい感じに処理しといて」に対して、
             # 止まらず R1.5mm を自分で決めて fillet まで適用した)。
             # 規律を文章で頼むのをやめて、ここで機械的に止める。
             #
             # **失敗として返す**(例外にしない) —— モデルはこの封筒を読んで、
-            # 提案を出して人に尋ねる側へ回れる。往復が1つ増えるだけで、
+            # 対象を選ぶところまでにして人に尋ねる側へ回れる。往復が1つ増えるだけで、
             # 適用してしまった形をundoで戻すより安い。
             # **`dimension_not_given` はアプリ内AIの経路だけの語**(MCP にはこのガードが無い。
             # 語彙の一覧は `MCP.md`「実装のメモ」、一致は `tests/test_doc_code_agreement.py`)。
@@ -504,7 +648,7 @@ class AgentLoop:
                     (
                         f"{', '.join(invented)} の値を人が指示していない。"
                         "寸法を自分で決めて形を変えてはいけない。"
-                        "propose_selection で対象だけ提案し、"
+                        "set_selection で対象だけ選び、"
                         "何を選んだかと、どの寸法が要るかを述べて尋ねること。"
                     ),
                     "DimensionNotGiven",
@@ -559,6 +703,51 @@ class AgentLoop:
             tool_calls=tuple(outcomes),
             usage=usage,
         )
+
+
+#: 先に呼んだ問い合わせの呼び出しIDの頭(モデルが呼んだものと見分けるため)。
+FIRST_LOOK_ID = "first_look_"
+
+
+def _condensed(payload: Any) -> Any:
+    """先に呼んだ結果が大きすぎるとき、一覧を件数に畳む。
+
+    一覧を依頼のたびに読ませるより、要るときにモデルが同じツールを呼び直すほうが安い。
+    """
+    if len(json.dumps(payload, ensure_ascii=False)) <= FIRST_LOOK_MAX_CHARS:
+        return payload
+
+    def counted(value: Any) -> Any:
+        if isinstance(value, list):
+            return f"({len(value)}件。大きいので省いた。要るときはこのツールを呼び直す)"
+        if isinstance(value, dict):
+            return {key: counted(item) for key, item in value.items()}
+        return value
+
+    return counted(payload)
+
+
+def _requests(turns: Sequence[Turn]) -> list[list[Turn]]:
+    """履歴を依頼ごとに切る(人の発話から次の発話の手前まで)。"""
+    requests: list[list[Turn]] = []
+    for turn in turns:
+        if isinstance(turn, UserTurn) or not requests:
+            requests.append([])
+        requests[-1].append(turn)
+    return requests
+
+
+def _unfinished_note(request: Sequence[Turn]) -> str:
+    """最後まで進まなかった依頼の代わりに残す1行(何を実行済みかだけを言う)。"""
+    ran = [
+        result.name
+        for turn in request
+        if isinstance(turn, ToolResultTurn)
+        for result in turn.results
+        if result.ok and not result.call_id.startswith(FIRST_LOOK_ID)
+    ]
+    done = f"実行したツール: {', '.join(ran)}" if ran else "ツールは実行していない"
+    return f"(この依頼は最後まで進まなかった。{done})"
 
 
 def _failure(tool: str, code: str, message: str, exception: str) -> dict:

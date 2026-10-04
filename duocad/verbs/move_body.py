@@ -22,7 +22,7 @@ ValueError で、黙って一方だけ適用したり両方適用したりしな
 持つ、が既存の全経路と整合する。
 
 **添字は変わらない**(`kernel.translate_shape` / `kernel.rotate_shape` のdocstring。回転も
-`TopoDS_Shape.Moved` で位置だけを差し替える)が、確定選択は他の形状変更verbと同じ既定どおり
+`TopoDS_Shape.Moved` で位置だけを差し替える)が、選択は他の形状変更verbと同じ既定どおり
 リセットする(`catalog.py` の `resets_selection=True`)。添字が失効しないことを理由に例外に
 していたが、本人が非として却下した。
 
@@ -323,7 +323,7 @@ register_verb(VERB_MOVE_BODY, do=_do_move_body, undo=_undo_move_body)
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 @entry(VERB_MOVE_BODY)
 def _enter_move_body(

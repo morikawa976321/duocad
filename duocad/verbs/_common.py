@@ -87,7 +87,7 @@ def editable_body(
     「押し出しの対象にする」と言う)。
 
     **選ぶ時点の門番(`selection._visible_body`)だけでは足りない**。アプリ内AIが人と本当に
-    並行して動くと、**確定選択した後・verbを呼ぶ前に人がそのボディを隠す**という順序が
+    並行して動くと、**選択した後・verbを呼ぶ前に人がそのボディを隠す**という順序が
     起きうる —— 選択に入った時点では可視でも、使う時点では不可視というずれが生じ、選択側の
     門番はもう働かない。実測(`tests/test_agent_concurrency.py`)で `fillet`/`chamfer` が
     この順序で隠したボディを黙って丸めることを確認したため、**面・辺どちらを取るverbも
@@ -123,7 +123,7 @@ def deletable_body(doc: Document, body_id: BodyId) -> Body:
     `editable_body` と分けてあるのは、**削除だけは種別に関係なく通す**から ——
     「編集できないから消せもしない」ボディがあると、間違えて入れた形を取り除けなくなる。
     可視性の門番(`require_visible` 相当)は `editable_body` と同じ理由で課す:
-    確定選択した後・verbを呼ぶ前に人がそのボディを隠す順序が実際に起きる。
+    選択した後・verbを呼ぶ前に人がそのボディを隠す順序が実際に起きる。
     """
     body = doc.get_body(body_id)  # 存在しないIDは KeyError(document側の契約)
     if not body.visible:
@@ -147,7 +147,7 @@ def editable_bodies(doc: Document, body_ids: Sequence[BodyId], *, verb: str, wha
 def resolve_shape_ref(doc: Document, ref: Any, *, kind: str, what: str, mesh_hint: str) -> tuple:
     """`{"body": BodyId, "index": int}`(選択の ShapeRef と同じ形)を (Body, 添字) にする。
 
-    **`commit_selection` を経由しない**。呼ぶ verb の確定選択は「対象」の解決に既に使われているので、
+    **選択を経由しない**。呼ぶ verb の選択は「対象」の解決に既に使われているので、
     軸・中心・鏡映面・ターゲットを同じ経路へ載せると対象なのかそれ以外なのか区別が付かなくなる。
     `kind` キーは省略できる(付いていれば要求した種別と一致すること) —— `get_selection` が返す参照を
     そのまま貼れることと、手で `{"body":.., "index":..}` と書けることの両立。`mesh_hint` はメッシュ
@@ -332,7 +332,7 @@ def normalize_values(
 
 
 def edge_entry(document: Document, verb: Any, value: Any) -> dict:
-    """確定選択の辺に `verb`(`fillet` / `chamfer`)を掛ける入口の共通部分。
+    """選択の辺に `verb`(`fillet` / `chamfer`)を掛ける入口の共通部分。
 
     辺と対象 Body は `selection.require_edges` が**選択順のまま**返す。順序が効くのは、辺と値
     (半径・距離のリスト)を位置で対応させるため(並べ替えると値の割り当てがずれる)。

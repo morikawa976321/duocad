@@ -5,7 +5,7 @@
  * 文書・操作ログ・undo履歴・**可視性**はコア側にある
  * (§2「アプリ層が落ちて失われてよいのは、途中まで入力していたコマンドだけ」)。
  *
- * **選択も可視性もコアが正**。このファイルは `modify_selection` / `commit_selection` /
+ * **選択も可視性もコアが正**。このファイルは `modify_selection` / `toggle_selection` /
  * `clear_selection` / `set_visible` を送るだけで、どちらの状態も覚えない。
  *
  * **`state` は部品ごとの配列である。** `state.bodies` は軽量
@@ -84,17 +84,11 @@ export type SelectionRef = ShapeRef | BodyRef | RegionRef | SketchEntityRef
 /**
  * 共有される選択集合(`duocad/selection.py` の `Selection.to_dict()`)。
  *
- * **origin は集合単位**。`"proposed"` はAIが提案した状態で、そのままではverbに渡せない
- * (コアが `SelectionNotCommitted` で止める)。`"user"` になる道は2つ ——
- * 人がクリックで触る(`modify_selection`)か、**人が対象集合を食うコマンドを実行する**
- * (サーバが走らせる直前に確定する。`duocad/server.py` の `_commit_before_verb`)。
- *
- * **画面から確定を呼ぶ道は無い**(「承認する」ボタンごと廃止し、`commit_selection` の口も持たない)。
- * 提案と確定を人へ伝えるのは**3Dのハイライト色だけ**なので、この値は必ず配信で追随する。
+ * **出所を持たない**。人がクリックで選んだものもAIが選んだものも同じ集合で、そのまま
+ * verb の対象になる。人はAIの選択を見て、そのまま使うか、トグルで直す。
  */
 export interface SelectionState {
   items: SelectionRef[]
-  origin: 'user' | 'proposed'
   count: number
 }
 
@@ -301,7 +295,7 @@ export interface ServerState {
 
 /**
  * ファイル操作の応答。**状態の配信ではない** —— 保存・書き出しは文書を変えないので、
- * 要求した接続にだけ「どこへ何バイト書いたか」が返る(`PreviewPayload` と同じ扱い)。
+ * 要求した接続にだけ「どこへ書いたか」が返る(`PreviewPayload` と同じ扱い)。
  *
  * `path` は**サーバが解決した絶対パス**。相対パスの基準はサーバの作業ディレクトリで、
  * ブラウザ側では解決できない(2箇所で別々に解釈すると必ずずれる)。
@@ -322,11 +316,9 @@ true satisfies SameKeys<keyof ServerState, ServerStateKey>
 export interface FilePayload {
   action: string
   path: string
-  bytes: number
   name?: string
   /** 複製元のファイル名(`copy_document` のみ)。 */
   source?: string
-  operations?: number
   deviation?: number
   body_ids?: string[]
   /** 書き出し候補のうち非表示(visible=false)で除外されたBodyのID(export_step/export_stlのみ)。 */
@@ -337,15 +329,12 @@ export interface FilePayload {
 /**
  * `models_dir` に置かれた1ファイルの一覧情報(`list_documents` の1件)。
  *
- * **壊れて操作数が数えられないファイルはサーバの一覧に出てこない**
- * (`Session.list_documents` が読めるものだけを返す)ので、ここに現れる時点で
- * `operations` は必ず読めている。
+ * **壊れて読めないファイルはサーバの一覧に出てこない**(`Session.list_documents` が
+ * 読めるものだけを返す)。
  */
 export interface DocumentInfo {
   name: string
   mtime: number
-  size: number
-  operations: number
 }
 
 /**
@@ -481,7 +470,6 @@ export interface MeasureBetween {
 export interface MeasurePayload {
   client_op: number | null
   count: number
-  origin: 'user' | 'proposed'
   items: unknown[]
   /** **ちょうど2項目のときだけ**付く(`duocad/measure.py` の `measure_selection`)。 */
   between?: MeasureBetween | null
@@ -520,6 +508,8 @@ export interface AiToolCall {
  *                  (切れた引数のままでは危険なので、実行せず止める設計)
  * - `refusal`    … プロバイダが安全上の理由で断った
  * - `provider_error` … HTTP・接続の失敗(`detail` に理由。APIキーは含まれない)
+ * - `timeout`    … 合計時間の上限で打ち切った。実行済みのツールは `tool_calls` に残る
+ * - `context_overflow` … 今の依頼だけで相手の文脈長を超えた
  * - `stopped`    … 上のどれでもない停止理由(`detail` に生値)
  */
 export type AiRunStatus =
@@ -529,6 +519,8 @@ export type AiRunStatus =
   | 'max_tokens'
   | 'refusal'
   | 'provider_error'
+  | 'timeout'
+  | 'context_overflow'
   | 'stopped'
 
 export interface AiRunResult {
@@ -806,15 +798,10 @@ export interface Session {
   runVerb(verb: string, args: Record<string, unknown>, clientOp: number): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
   setSketchVisible(sketchId: string, visible: boolean, clientOp: number): void
-  /** 人が直す経路。差分編集で `origin` は `"user"` になる(触ること自体が承認)。 */
+  /** 差分編集(足す・外す)。 */
   modifySelection(add: SelectionRef[], remove: SelectionRef[], clientOp: number): void
-  /**
-   * AIの提案を中身を変えずに承認する。
-   *
-   * **今は画面から呼んでいない**(「承認する」ボタンを廃止し、verbの実行を
-   * 承認とみなすようサーバ側で自動化した)。確定の口 `commit_selection` はサーバ側
-   * (MCP と WS の表)にだけあり、画面からは持たない。
-   */
+  /** 参照ごとに、あれば外し無ければ足す(素のクリック。AI の `toggle_selection` と同じ操作)。 */
+  toggleSelection(refs: SelectionRef[], clientOp: number): void
   clearSelection(clientOp: number): void
   /**
    * verbを投機的に実行して形だけ測らせる。**文書は変わらない**(サーバが元へ戻す)。
@@ -855,8 +842,12 @@ export interface Session {
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   /** 今の設定(応答は `onAiStatus`)。 */
   aiGetStatus(): void
-  /** プロバイダ・モデル・エンドポイントを差し替える。**キーは渡さない**(渡す経路が無い)。 */
-  aiConfigure(provider: AiProviderKind, model?: string, baseUrl?: string): void
+  /** プロバイダ・エンドポイントを差し替える。**キーは渡さない**(渡す経路が無い)。
+   * モデルは送らない —— llama-server は1モデルで起動すると `model` を無視するので、
+   * サーバ側の既定値に任せる(`ai_configure` 自体は `model` を受け付けたまま)。 */
+  aiConfigure(provider: AiProviderKind, baseUrl?: string): void
+  /** ツール定義を先に読ませておく(返事は無い。1つの会話につき1回だけ効く)。 */
+  aiPrepare(): void
   /** 1つの発話でエージェントを起こす。**待たずに返る** —— 進捗は `onAiToolCall`、
    * 最終応答は `onAiResult` へ届く(`duocad/server.py` の `_ai_start` のdocstring)。 */
   aiSend(message: string): void
@@ -967,8 +958,6 @@ export function createSession(hooks: SessionHooks): Session {
       action?: string
       path?: string
       source?: string
-      bytes?: number
-      operations?: number
       deviation?: number
       body_ids?: string[]
       skipped_hidden?: string[]
@@ -1000,7 +989,6 @@ export function createSession(hooks: SessionHooks): Session {
       // ---------------------------------------------------------------- 測定
       client_op?: number | null
       count?: number
-      origin?: 'user' | 'proposed'
       items?: unknown[]
       between?: MeasureBetween | null
       between_error?: string | null
@@ -1036,7 +1024,6 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onMeasure({
         client_op: message.client_op ?? null,
         count: message.count ?? 0,
-        origin: message.origin ?? 'user',
         items: message.items ?? [],
         between: message.between,
         between_error: message.between_error,
@@ -1045,10 +1032,8 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onFile({
         action: message.action ?? '',
         path: message.path ?? '',
-        bytes: message.bytes ?? 0,
         name: message.name,
         source: message.source,
-        operations: message.operations,
         deviation: message.deviation,
         body_ids: message.body_ids,
         skipped_hidden: message.skipped_hidden,
@@ -1159,6 +1144,9 @@ export function createSession(hooks: SessionHooks): Session {
     modifySelection(add, remove, clientOp) {
       send({ cmd: 'modify_selection', add, remove, client_op: clientOp })
     },
+    toggleSelection(refs, clientOp) {
+      send({ cmd: 'toggle_selection', refs, client_op: clientOp })
+    },
     clearSelection(clientOp) {
       send({ cmd: 'clear_selection', client_op: clientOp })
     },
@@ -1192,8 +1180,11 @@ export function createSession(hooks: SessionHooks): Session {
     aiGetStatus() {
       send({ cmd: 'ai_get_status' })
     },
-    aiConfigure(provider, model, baseUrl) {
-      send({ cmd: 'ai_configure', provider, model: model ?? null, base_url: baseUrl ?? null })
+    aiConfigure(provider, baseUrl) {
+      send({ cmd: 'ai_configure', provider, base_url: baseUrl ?? null })
+    },
+    aiPrepare() {
+      send({ cmd: 'ai_prepare' })
     },
     aiSend(message) {
       send({ cmd: 'ai_send', message })

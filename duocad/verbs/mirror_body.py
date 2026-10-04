@@ -1,4 +1,4 @@
-"""verb `mirror_body` — 確定選択の面/辺/頂点が属するボディを、鏡映面に対して鏡映複製する。
+"""verb `mirror_body` — 選択の面/辺/頂点が属するボディを、鏡映面に対して鏡映複製する。
 
 **常に複製を作る**(`move_body` と違い in-place反転の口は無い —— 本人の依頼は「鏡像反転
 コピーを作る」の1点だけ)。対象は `move_body` と同じ解決(`_common.editable_bodies`。選択中の
@@ -10,7 +10,7 @@
   (`sketch.base_plane` + `kernel_sketch.sketch_plane_frame`)。別々に定義すると同じ"XY"の意味が
   食い違う。
 - `plane_face` … 既存ソリッドの平面な面への参照 `{"body": body_id, "index": 面の1始まりの
-  添字}`。**対象の確定選択とは別引数で受ける**(`move_body.axis_edge` と同じ理由 ——
+  添字}`。**対象の選択とは別引数で受ける**(`move_body.axis_edge` と同じ理由 ——
   対象集合に混ぜると、それが鏡映される側か基準かをコアが区別できない)。この面自身が
   対象ボディに属していてもよい。非平面の面は `kernel_sketch.face_frame`(内部で
   `require_planar_face` を通す)が ValueError にする。
@@ -83,7 +83,7 @@ def mirror_body(
     plane_face: Any = None,
     created_ids: Optional[Sequence[BodyId]] = None,
 ) -> Operation:
-    """確定選択の面/辺/頂点が属するボディを、鏡映面に対して鏡映複製する(常に複製)。
+    """選択の面/辺/頂点が属するボディを、鏡映面に対して鏡映複製する(常に複製)。
 
     `created_ids` は**再生用**(省略すると新しいIDを振る)。失敗したときは文書にもログにも
     何も残さない。
@@ -129,7 +129,7 @@ register_verb(VERB_MIRROR_BODY, do=_do_mirror_body, undo=_undo_mirror_body)
 
 
 # --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 対象を確定選択から取り、上の verb を掛け、応答に載せるものを返す
+# 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 @entry(VERB_MIRROR_BODY)
 def _enter_mirror_body(

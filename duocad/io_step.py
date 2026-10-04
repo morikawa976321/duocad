@@ -141,11 +141,11 @@ EXPORTERS = {"step": export_step, "stl": export_stl}
 
 
 def export(doc: Document, path: Path, fmt: str) -> dict:
-    """`fmt`("step" | "stl")で `path` へ書き、`{"path", "bytes", "body_ids", "skipped_hidden"}` を返す
+    """`fmt`("step" | "stl")で `path` へ書き、`{"path", "body_ids", "skipped_hidden"}` を返す
     (Session と MCP の書き出しが共有する応答の芯。パスの解決・親ディレクトリの検査は呼び出し側)。
 
     **対象の ID を先に取ってから書く**: 「書き出すものが無い」「全部非表示」の ValueError はファイルを
-    作る前に出す。`bytes` は書いた後の `stat()`。
+    作る前に出す。
     """
     write = EXPORTERS[fmt]
     body_ids = export_body_ids(doc)
@@ -153,7 +153,6 @@ def export(doc: Document, path: Path, fmt: str) -> dict:
     write(doc, path)
     return {
         "path": str(path),
-        "bytes": path.stat().st_size,
         "body_ids": list(body_ids),
         "skipped_hidden": list(skipped),
     }
