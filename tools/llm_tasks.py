@@ -145,6 +145,13 @@ def run_task(task: Task, provider: OpenAICompatProvider) -> dict:
         "statuses": [run.status for run in runs],
         "round_trips": sum(run.turns for run in runs),
         "tools": [("" if outcome.ok else "✗") + outcome.name for run in runs for outcome in run.tool_calls],
+        "failures": [
+            f"{outcome.name} {json.dumps(outcome.arguments, ensure_ascii=False)[:120]} -> "
+            f"{outcome.result['error'].get('code')}: {str(outcome.result['error'].get('message'))[:160]}"
+            for run in runs
+            for outcome in run.tool_calls
+            if not outcome.ok
+        ],
         "read": usage.get("prompt_n"),
         "reused": usage.get("cache_n"),
         "written": usage.get("predicted_n", usage.get("completion_tokens")),
