@@ -158,28 +158,48 @@ class OpLog:
         self._entries[:] = entries
         self._cursor = cursor
 
-    def to_json(self) -> str:
+    def to_json(self, created: Optional[float] = None) -> str:
         """現在有効なエントリ全部をJSON文字列へシリアライズする。
 
         **前提**: `args` / `provenance` はJSON化できる値であること。
         `kernel.normalize_provenance()` の戻り(TopoDS_Shape を含むメモリ上の形)をそのまま
         入れるとここで TypeError になるので、永続化用の射影を挟むこと。
         黙って落とすと由来が静かに失われるため、変換の失敗は例外のまま上げる。
+
+        `created` は文書のファイルを最初に書いた時刻(UNIX秒。`Session` が持つ)。操作では
+        ないので `operations` の外に置き、None なら載せない。**ファイルシステムの作成時刻では
+        代わりにならない** —— 保存は一時ファイルを `os.replace` で差し替えるので、作成時刻が
+        毎回「最後に保存した時刻」になる(Windows 11 / NTFS で実測、2026-10-04)。
+        **版は上げていない**: 読む側(`from_payload`)は入れ物の未知のキーを読まない。
         """
-        payload = {
-            "version": self.FORMAT_VERSION,
-            "operations": [asdict(operation) for operation in self.entries],
-        }
+        payload: dict = {"version": self.FORMAT_VERSION}
+        if created is not None:
+            payload["created"] = created
+        payload["operations"] = [asdict(operation) for operation in self.entries]
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
     @classmethod
     def from_json(cls, data: str) -> "OpLog":
-        """to_json()の出力からOpLogを復元する。往復でエントリが完全一致すること。
+        """to_json()の出力からOpLogを復元する。往復でエントリが完全一致すること。"""
+        return cls.from_payload(json.loads(data))
+
+    @staticmethod
+    def created_of(payload: Any) -> Optional[float]:
+        """入れ物の `created`(`to_json` 参照)。無い・数でない・素のリスト形式なら None。"""
+        if not isinstance(payload, dict):
+            return None
+        created = payload.get("created")
+        if isinstance(created, bool) or not isinstance(created, (int, float)):
+            return None
+        return float(created)
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "OpLog":
+        """`json.loads` 済みの入れ物から復元する(`from_json` の本体)。
 
         **版の検査が先** — 現在の `FORMAT_VERSION` と違えば、操作を1件も読まずに ValueError。
         **未知のキーは無視する**(過去の `Operation` が持っていた余分なキーがあっても壊れない)。
         """
-        payload = json.loads(data)
         raw_operations = cls._extract_operations(payload)
 
         log = cls()

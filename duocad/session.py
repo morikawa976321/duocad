@@ -15,8 +15,13 @@ from __future__ import annotations
 
 import functools
 import inspect
+import base64
+import binascii
+import json
 import os
+import shutil
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
@@ -58,6 +63,20 @@ class DocumentBusy(RuntimeError):
     保持・除外の形を読み直す。その間に文書を変える・差し替えると、結果が別の文書へ入る・古い条件の形が
     足される・Undo した条件のまま結果が入る(issue #26)。選択・表示の切り替え・保存・書き出しは通す。
     """
+
+
+#: サムネイルの置き場(`models_dir` の下。一覧は `models_dir/*.json` しか見ないので混ざらない)。
+THUMBNAIL_DIR = ".thumbnails"
+#: 受け取るPNGの上限[バイト]。画面が撮るのは128px四方で、RGBAを圧縮せず持っても64KiB。
+THUMBNAIL_MAX_BYTES = 256 * 1024
+_PNG_SIGNATURE = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A])
+
+
+def _mtime_or_none(path: Path) -> Optional[float]:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 def _edits_document(method: Any) -> Any:
@@ -116,6 +135,11 @@ class Session:
         #: **書き換えるのは3箇所だけ**: `save_document(name)` の成功・`open_document` の成功・
         #: `_replace_document`(開く/新規の共通部分。引数で必ず決めさせる)。
         self._current_name: Optional[str] = None
+        #: 編集中の文書のファイルを最初に書いた時刻(UNIX秒。`OpLog.to_json` の `created`)。
+        #: 新しい名前で書いたときに決まり、開けばファイルから読む。**`created` を持たない
+        #: 既存ファイルは None のまま上書きされ続ける**(本当の作成日はもう残っていないので、
+        #: 更新日で埋めない)。
+        self._created: Optional[float] = None
         self._applied_count = 0
         #: **自動保存で書けなかった変更があるか**(issue #5、本人判断 2026-09-16)。文書が
         #: 変わるたび `_emit` が `autosave()` を走らせるので、通常は常に False。True になるのは
@@ -846,7 +870,8 @@ class Session:
                     if target.name == self._current_name
                     else f"{target.name} は編集中ではない(先に開けば上書きできる)"
                 )
-        payload = self.document.log.to_json()
+        created = self._created if name is None else time.time()
+        payload = self.document.log.to_json(created=created)
         with self._save_lock:
             # **一時ファイルへ書いてから差し替える**。素の上書きは既存の
             # 中身を先に切り詰めるので、途中で落ちると**唯一の永続形式である前回の保存が
@@ -855,10 +880,14 @@ class Session:
             staging = target.with_name(target.name + ".writing")
             staging.write_text(payload, encoding="utf-8")
             os.replace(staging, target)
+            if name is not None:
+                # 同じ名前の古い文書(外で消された)の絵が残っていれば、それはこの文書の絵ではない。
+                self._drop_thumbnail(target)
             # **書けてから現在ファイルにする**。先に控えると、書き込みが落ちたときに
             # 「存在しないファイルを編集中」という状態が残り、次の引数なし保存が
             # 黙って新しいファイルを作る(拒否されるべき経路が通ってしまう)。
             self._current_name = target.name
+            self._created = created
             self._unsaved = False
         return {
             "action": "save",
@@ -931,7 +960,9 @@ class Session:
                 os.replace(source, target)
             else:
                 # 編集中のファイルが外で消されていた。中身は文書が持っているので書き直す。
-                target.write_text(self.document.log.to_json(), encoding="utf-8")
+                target.write_text(self.document.log.to_json(created=self._created), encoding="utf-8")
+            self._drop_thumbnail(target)
+            self._carry_thumbnail(source, target, move=True)
             self._current_name = target.name
             self._unsaved = False
         return {
@@ -956,7 +987,8 @@ class Session:
         source = self._resolve_document_name(name)
         if not source.exists():
             raise FileNotFoundError(f"開けるファイルが無い: {source}")
-        log = OpLog.from_json(source.read_text(encoding="utf-8"))
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        log = OpLog.from_payload(payload)
         document = Document()
         # **束ねてから再生する**(順序が逆だと `set_parameter` を含むログで落ちる)。
         # パラメータの再生は「その操作までを作り直す」ために `document.log` を頭から
@@ -967,7 +999,9 @@ class Session:
 
         # **開けたものが編集中のファイルになる**(以後、引数なしの `save_document()` は
         # ここへ書く)。再生が落ちたときはこの行まで来ないので、現在名も差し替わらない。
-        self._replace_document(document, current_name=source.name)
+        self._replace_document(
+            document, current_name=source.name, created=OpLog.created_of(payload)
+        )
         return self._emit({
             "change": "document",
             "action": "open",
@@ -990,7 +1024,7 @@ class Session:
         おらず、次に文書を変えた瞬間に自動保存が `untitled-<n>.json` を作る(それまで
         引数なしの `save_document()` は拒否される)。
         """
-        self._replace_document(Document(), current_name=None)
+        self._replace_document(Document(), current_name=None, created=None)
         return self._emit({
             "change": "document",
             "action": "new",
@@ -1001,7 +1035,9 @@ class Session:
             "name": None,
         })
 
-    def _replace_document(self, document: Document, *, current_name: Optional[str]) -> None:
+    def _replace_document(
+        self, document: Document, *, current_name: Optional[str], created: Optional[float]
+    ) -> None:
         """今の文書を `document` へ差し替える(`open_document` / `new_document` の共通部分)。
 
         **`current_name` は既定値を持たない**(キーワード必須)。文書を差し替える経路は
@@ -1018,6 +1054,7 @@ class Session:
         """
         self.document = document
         self._current_name = current_name
+        self._created = created
         self._unsaved = False  # 開いた/空にした文書に、書けなかった変更は無い
         # キャッシュの破棄は**`view` の1呼び出し**(何を捨てて何を残すかは `DocumentView.reset`
         # が持つ。とくに版の数え上げを消さない理由はそちらのdocstring)。
@@ -1028,35 +1065,48 @@ class Session:
         self._applied_count += 1
 
     def list_documents(self) -> dict:
-        """`models_dir` の中身を一覧にする(名前/更新日時)。**verbではない**。
+        """`models_dir` の中身を一覧にする(名前/更新日時/作成日時/サムネイルの版)。**verbではない**。
 
-        読めるファイルだけを載せる判定は、`OpLog.from_json` のパースだけで行う —— 形状の再生
+        読めるファイルだけを載せる判定は、`OpLog.from_payload` のパースだけで行う —— 形状の再生
         (`log.replay`)まではしない。STEP本文がログに入って1ファイルが4.8MB級になったが、実測で
         ファイルあたり約30ms(PCケースの4.8MBを3件で0.09s)なので、この作りのままにしてある。
 
         壊れたファイル(手で触られた・書き込み途中の `.writing` 等)は一覧からは省く
         (一覧が原因不明の例外で丸ごと落ちるより、読める分だけ見せる方が実用に沿う)。
-        **旧形式(version 1)のファイルもここでは黙って省かれる** —— `from_json` が ValueError
+        **旧形式(version 1)のファイルもここでは黙って省かれる** —— `from_payload` が ValueError
         にするため。次に版を上げるときは「一覧に出ないだけで理由が分からない」になることに注意。
+
+        `created` は入れ物の作成日時(無いファイルは None)。`thumb` はサムネイルの更新日時で、
+        **画像そのものは載せない** —— 一覧は自動保存のたびに取り直されるので、載せると全件の
+        画像を毎回送ることになる。画像は `get_thumbnail` で1件ずつ取る。
         """
         self.models_dir.mkdir(parents=True, exist_ok=True)
         files = []
         for path in sorted(self.models_dir.glob("*.json")):
             try:
                 mtime = path.stat().st_mtime
-                OpLog.from_json(path.read_text(encoding="utf-8"))
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                OpLog.from_payload(payload)
             except (OSError, ValueError, KeyError, TypeError):
                 continue
-            files.append({"name": path.name, "mtime": mtime})
+            files.append({
+                "name": path.name,
+                "mtime": mtime,
+                "created": OpLog.created_of(payload),
+                "thumb": _mtime_or_none(self._thumbnail_path(path)),
+            })
         return {"action": "list", "path": str(self.models_dir), "files": files}
 
     def copy_document(self, source: Any, dest: Any) -> dict:
         """`models_dir` の `source` を `dest` へ複製する。**verbではない**(文書を変えない)。
 
-        ディスク上のJSONを写すだけで、**いま編集している文書も `current_name` も変わらない**
+        **いま編集している文書も `current_name` も変わらない**
         (`open_document` とは別の操作。複製元を開いていなくてもよい)。`dest` が既に在れば
         拒否する —— 上書きの口は持たない(`save_document(name)` と同じ線。issue #17)。
         どちらの名前も `_resolve_document_name` を通す(`models_dir` の外は指せない)。
+
+        **複製は新しいファイルなので作成日時を今にする** —— バイト列を写さず、読んで書き直す
+        (操作は `from_json`/`to_json` の往復で一致する)。サムネイルは写す。
         """
         origin = self._resolve_document_name(source)
         target = self._resolve_document_name(dest)
@@ -1064,11 +1114,14 @@ class Session:
             raise FileNotFoundError(f"複製元が無い: {origin.name}")
         if target.exists():
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
+        log = OpLog.from_json(origin.read_text(encoding="utf-8"))
         # `save_document` と同じく一時ファイル経由で差し替える(途中で落ちても半端な
         # ファイルが一覧に出ない。`list_documents` は `.writing` を省く)。
         staging = target.with_name(target.name + ".writing")
-        staging.write_bytes(origin.read_bytes())
+        staging.write_text(log.to_json(created=time.time()), encoding="utf-8")
         os.replace(staging, target)
+        self._drop_thumbnail(target)
+        self._carry_thumbnail(origin, target, move=False)
         return {
             "action": "copy",
             "path": str(target),
@@ -1082,7 +1135,7 @@ class Session:
         **いま編集しているファイルは拒否する**(拒否の文はどうすればできるかまで言う) ——
         消した直後の自動保存/上書きが「無いファイルへ書く」になり、消したはずのものが
         黙って復活する。無ければ FileNotFoundError。確認は挟まない(画面側が行内で聞く。
-        `FilesPanel.svelte`)。`models/.trash` への退避はしない(issue #17)。
+        `FilesPanel.svelte`)。`models/.trash` への退避はしない(issue #17)。サムネイルも消す。
         """
         target = self._resolve_document_name(name)
         if target.name == self._current_name:
@@ -1092,7 +1145,79 @@ class Session:
         if not target.exists():
             raise FileNotFoundError(f"削除するファイルが無い: {target.name}")
         target.unlink()
+        self._drop_thumbnail(target)
         return {"action": "delete", "path": str(target), "name": target.name}
+
+    # ---------------------------------------------------------------- サムネイル
+    # **一覧の絵は画面(three.js)が撮ってここへ預ける**(`web/src/thumbnail.ts`)。サーバに
+    # 描画の仕組みは無い。置き場は `models/.thumbnails/<文書のファイル名>.png` の付随ファイルで、
+    # 文書のJSONには入れない —— 描き直せる写しであって文書の正ではなく、無くなっても
+    # 次に開いたときに撮り直される。だから付随ファイルの失敗は元の操作を失敗にしない。
+    def _thumbnail_path(self, document: Path) -> Path:
+        """文書のファイル(`models_dir` 直下)に付くサムネイルのパス。"""
+        return document.parent / THUMBNAIL_DIR / f"{document.name}.png"
+
+    def _drop_thumbnail(self, document: Path) -> None:
+        try:
+            self._thumbnail_path(document).unlink(missing_ok=True)
+        except OSError as error:
+            self.warnings.append(f"サムネイルを消せなかった: {error}")
+
+    def _carry_thumbnail(self, source: Path, target: Path, *, move: bool) -> None:
+        """改名(`move`)・複製でサムネイルも付いていかせる。複製は更新日時ごと写す
+        (画面は版で取り直しを決めるので、同じ絵を取り直させない)。"""
+        origin = self._thumbnail_path(source)
+        if not origin.exists():
+            return
+        try:
+            if move:
+                os.replace(origin, self._thumbnail_path(target))
+            else:
+                shutil.copy2(origin, self._thumbnail_path(target))
+        except OSError as error:
+            self.warnings.append(f"サムネイルを{'移せ' if move else '写せ'}なかった: {error}")
+
+    def save_thumbnail(self, name: Any, png: Any) -> dict:
+        """画面が撮ったPNG(base64)を `name` のサムネイルとして書く。**verbではない**。
+
+        `png` が空文字なら消す(見えている立体が1つも無い文書。古い絵を残さない)。
+        **文書のファイルが無ければ書かずに `saved: False` を返す**(断らない) —— 画面は
+        撮ってから送るまでに改名が挟まりうるので、断ると人が何もしていないのに通知が出る。
+        """
+        target = self._resolve_document_name(name)
+        thumbnail = self._thumbnail_path(target)
+        reply = {"action": "save_thumbnail", "path": str(thumbnail), "name": target.name}
+        text = str(png)
+        if text == "":
+            thumbnail.unlink(missing_ok=True)
+            return {**reply, "saved": True, "thumb": None}
+        try:
+            data = base64.b64decode(text, validate=True)
+        except binascii.Error as error:
+            raise ValueError(f"サムネイルがbase64ではない: {error}") from None
+        if not data.startswith(_PNG_SIGNATURE):
+            raise ValueError("サムネイルがPNGではない")
+        if len(data) > THUMBNAIL_MAX_BYTES:
+            raise ValueError(f"サムネイルが大きすぎる({len(data)} > {THUMBNAIL_MAX_BYTES}バイト)")
+        if not target.exists():
+            return {**reply, "saved": False, "thumb": None}
+        thumbnail.parent.mkdir(exist_ok=True)
+        staging = thumbnail.with_name(thumbnail.name + ".writing")
+        staging.write_bytes(data)
+        os.replace(staging, thumbnail)
+        return {**reply, "saved": True, "thumb": thumbnail.stat().st_mtime}
+
+    def get_thumbnail(self, name: Any) -> dict:
+        """`name` のサムネイルをbase64で返す(無ければ `png: None`)。**verbではない**。"""
+        target = self._resolve_document_name(name)
+        thumbnail = self._thumbnail_path(target)
+        reply = {"action": "thumbnail", "path": str(thumbnail), "name": target.name}
+        try:
+            thumb = thumbnail.stat().st_mtime
+            data = thumbnail.read_bytes()
+        except FileNotFoundError:
+            return {**reply, "png": None, "thumb": None}
+        return {**reply, "png": base64.b64encode(data).decode("ascii"), "thumb": thumb}
 
     def export_step_file(self, path: Any) -> dict:
         """STEPを書き出す。**ログに載らない**(文書を変えないのでverbではない)。

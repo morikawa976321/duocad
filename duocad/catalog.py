@@ -1508,7 +1508,7 @@ COMMANDS: tuple[Command, ...] = (
         mcp=False,
         changes_document=False,
         note=(
-            "**`models_dir` の中身を一覧にする**(名前/更新日時)。"
+            "**`models_dir` の中身を一覧にする**(名前/更新日時/作成日時/サムネイルの版)。"
             "保存/開くをファイル名の一覧から選べるようにするための穴で、"
             "2026-08-22まではディレクトリ列挙のコードがリポジトリに1つも無かった。"
             "`save_document`/`open_document` と同じく人だけの操作(`mcp=False`)。"
@@ -1544,6 +1544,35 @@ COMMANDS: tuple[Command, ...] = (
             "**一覧の行からディスク上のファイルを削除する**(issue #17)。編集中のファイルは"
             "拒否(どうすればできるかを言う)。確認は画面側が行内の2段階で聞く。"
             "不可逆な操作なので人だけ(`mcp=False`)"
+        ),
+    ),
+    Command(
+        name="save_thumbnail",
+        category="file",
+        description="",
+        params=(
+            Param("name", "string", "サムネイルを付ける文書のファイル名(models/ 配下)"),
+            Param("png", "string", "PNGのbase64。空文字なら消す"),
+        ),
+        session="save_thumbnail",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**一覧のサムネイルを預ける**。撮るのは画面(`web/src/thumbnail.ts`)で、サーバは"
+            "`models/.thumbnails/` へ書くだけ。文書は変えない。画面の都合の口なので人の側だけ"
+        ),
+    ),
+    Command(
+        name="get_thumbnail",
+        category="file",
+        description="",
+        params=(Param("name", "string", "文書のファイル名(models/ 配下)"),),
+        session="get_thumbnail",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**一覧のサムネイルを1件返す**(base64)。`list_documents` は版(`thumb`)だけを"
+            "載せ、画像は行が見えたときにこれで取る"
         ),
     ),
     # ---------------------------------------------------------------- 履歴
