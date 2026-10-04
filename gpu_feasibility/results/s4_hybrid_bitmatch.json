@@ -166,5 +166,45 @@
       "sha": "3e3da11f049df2fc"
     },
     "solution_bit_identical": true
+  },
+  "F2000_thick10mm_h2_step20_d0": {
+    "name": "F2000_thick10mm_h2_step20_d0",
+    "free_dofs": 411867,
+    "nnz": 30519801,
+    "measured_at": "2026-10-04T23:04:47+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 2.5713194999843836,
+    "hybrid": {
+      "iterations": 3017,
+      "info": 0,
+      "seconds": [
+        22.340671199955977,
+        22.29584760009311
+      ],
+      "ms_per_iteration": 7.3900721246579755,
+      "sha": "275c577c5c71dd30",
+      "repeat_bit_identical": true,
+      "relative_residual": 9.650501777760706e-10
+    }
+  },
+  "F2000_thin5mm_h1.8_step20_d0": {
+    "name": "F2000_thin5mm_h1.8_step20_d0",
+    "free_dofs": 489483,
+    "nnz": 35620677,
+    "measured_at": "2026-10-04T23:05:33+09:00",
+    "spmv_bit_identical": true,
+    "hybrid_matvec_ms": 3.132791999960318,
+    "hybrid": {
+      "iterations": 3609,
+      "info": 0,
+      "seconds": [
+        33.45336749998387,
+        33.35655430005863
+      ],
+      "ms_per_iteration": 9.242603020243456,
+      "sha": "0344e535d5259b11",
+      "repeat_bit_identical": true,
+      "relative_residual": 9.7053403266981e-10
+    }
   }
 }

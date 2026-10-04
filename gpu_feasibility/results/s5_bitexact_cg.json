@@ -310,5 +310,109 @@
     },
     "ell_width": 81,
     "vram_pool_total_mib": 1638.39453125
+  },
+  "F2000_thick10mm_h2_step20_d0": {
+    "name": "F2000_thick10mm_h2_step20_d0",
+    "free_dofs": 411867,
+    "nnz": 30519801,
+    "openblas_threads": 14,
+    "measured_at": "2026-10-04T23:06:42+09:00",
+    "reference": "hybrid_solution_file",
+    "dot_self_test": true,
+    "setup_seconds_ell": 0.3273144999984652,
+    "variants": {
+      "raw_nofma": {
+        "spmv_bit_identical_to_cpu": true,
+        "iterations": 3017,
+        "info": 0,
+        "seconds": 8.16241899994202,
+        "ms_per_iteration": 2.7054753065767385,
+        "sha": "275c577c5c71dd30",
+        "solution_bit_identical_to_cpu": true,
+        "iterations_match_cpu": null,
+        "relative_residual_host": 9.650501777760706e-10,
+        "cpu_seconds_converted": [
+          37.75207824297,
+          44.19755501616
+        ],
+        "speedup_converted": [
+          4.625109081417919,
+          5.4147618514161
+        ]
+      },
+      "ell_nofma": {
+        "spmv_bit_identical_to_cpu": true,
+        "iterations": 3017,
+        "info": 0,
+        "seconds": 4.580436600022949,
+        "ms_per_iteration": 1.5182090155859957,
+        "sha": "275c577c5c71dd30",
+        "solution_bit_identical_to_cpu": true,
+        "iterations_match_cpu": null,
+        "relative_residual_host": 9.650501777760706e-10,
+        "cpu_seconds_converted": [
+          37.75207824297,
+          44.19755501616
+        ],
+        "speedup_converted": [
+          8.24202615156399,
+          9.649201348172477
+        ]
+      }
+    },
+    "ell_width": 81,
+    "vram_pool_total_mib": 1554.04541015625
+  },
+  "F2000_thin5mm_h1.8_step20_d0": {
+    "name": "F2000_thin5mm_h1.8_step20_d0",
+    "free_dofs": 489483,
+    "nnz": 35620677,
+    "openblas_threads": 14,
+    "measured_at": "2026-10-04T23:06:56+09:00",
+    "reference": "hybrid_solution_file",
+    "dot_self_test": true,
+    "setup_seconds_ell": 0.13801409990992397,
+    "variants": {
+      "raw_nofma": {
+        "spmv_bit_identical_to_cpu": true,
+        "iterations": 3609,
+        "info": 0,
+        "seconds": 11.715937200002372,
+        "ms_per_iteration": 3.2463112219457946,
+        "sha": "0344e535d5259b11",
+        "solution_bit_identical_to_cpu": true,
+        "iterations_match_cpu": null,
+        "relative_residual_host": 9.7053403266981e-10,
+        "cpu_seconds_converted": [
+          52.70755955013,
+          61.70641118064
+        ],
+        "speedup_converted": [
+          4.498791573423535,
+          5.266877939617798
+        ]
+      },
+      "ell_nofma": {
+        "spmv_bit_identical_to_cpu": true,
+        "iterations": 3609,
+        "info": 0,
+        "seconds": 6.382760199951008,
+        "ms_per_iteration": 1.7685675256167936,
+        "sha": "0344e535d5259b11",
+        "solution_bit_identical_to_cpu": true,
+        "iterations_match_cpu": null,
+        "relative_residual_host": 9.7053403266981e-10,
+        "cpu_seconds_converted": [
+          52.70755955013,
+          61.70641118064
+        ],
+        "speedup_converted": [
+          8.257800371465398,
+          9.667668727569248
+        ]
+      }
+    },
+    "ell_width": 81,
+    "vram_pool_total_mib": 2507.38916015625
   }
 }

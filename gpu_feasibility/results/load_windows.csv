@@ -18,3 +18,7 @@ start,end,cpu_threads,what
 2026-10-04T22:51:36+09:00,2026-10-04T22:53:09+09:00,4,s6_search_identity cpu F1000_w10_h4.8_step0.2
 2026-10-04T22:53:24+09:00,2026-10-04T22:56:23+09:00,1,s6_search_identity gpu F0200_w10_h4.8_step0.2
 2026-10-04T22:56:31+09:00,2026-10-04T23:00:17+09:00,4,s6_search_identity cpu F0200_w10_h4.8_step0.2
+2026-10-04T23:02:48+09:00,2026-10-04T23:03:01+09:00,1,s2_build_matrices F2000_thick10mm_h2_step20:0
+2026-10-04T23:03:05+09:00,2026-10-04T23:03:21+09:00,1,s2_build_matrices F2000_thin5mm_h1.8_step20:0
+2026-10-04T23:03:25+09:00,2026-10-04T23:03:38+09:00,1,s2_build_matrices F2000_thick10mm_h1.8_step20:0
+2026-10-04T23:04:47+09:00,2026-10-04T23:06:41+09:00,0,s4_hybrid_bitmatch --no-cpu F2000_thick10mm_h2_step20_d0 F2000_thin5mm_h1.8_step20_d0

@@ -185,7 +185,7 @@
     "dilate_layers": 0,
     "load_n": 2000.0,
     "size_mm": 2.0,
-    "context_seconds": 10.263682499993593,
+    "context_seconds": 9.70631180005148,
     "cells": 119961,
     "design_cells": 640306,
     "grid_shape": [
@@ -194,10 +194,20 @@
       120
     ],
     "spacing_mm": 1.9973909351859274,
-    "ram_available_gb_before": 3.6797866821289062,
+    "ram_available_gb_before": 6.254276275634766,
     "ram_estimate_gb": 3.088900566101074,
-    "status": "skipped_ram",
-    "built_at": "2026-10-04T22:46:23+09:00"
+    "status": "ok",
+    "free_dofs": 411867,
+    "nnz": 30519801,
+    "nnz_per_dof": 74.10110788191334,
+    "ndof_full": 4700124,
+    "auto_solver": "cg",
+    "assemble_seconds": 1.3376478999853134,
+    "slice_seconds": 0.3067302000708878,
+    "index_dtype": "int32",
+    "file_mb": 358.5833396911621,
+    "peak_working_set_gb": 2.8583602905273438,
+    "built_at": "2026-10-04T23:03:01+09:00"
   },
   "F2000_thin5mm_h1.8_step20_d0": {
     "name": "F2000_thin5mm_h1.8_step20_d0",
@@ -205,7 +215,7 @@
     "dilate_layers": 0,
     "load_n": 2000.0,
     "size_mm": 1.8,
-    "context_seconds": 13.663358799996786,
+    "context_seconds": 12.339681799989194,
     "cells": 138532,
     "design_cells": 882233,
     "grid_shape": [
@@ -214,9 +224,39 @@
       133
     ],
     "spacing_mm": 1.7976518416673346,
-    "ram_available_gb_before": 4.147041320800781,
+    "ram_available_gb_before": 6.114036560058594,
     "ram_estimate_gb": 3.567089080810547,
+    "status": "ok",
+    "free_dofs": 489483,
+    "nnz": 35620677,
+    "nnz_per_dof": 72.77204111276592,
+    "ndof_full": 6398232,
+    "auto_solver": "cg",
+    "assemble_seconds": 1.515340399928391,
+    "slice_seconds": 0.3526581000769511,
+    "index_dtype": "int32",
+    "file_mb": 418.96937561035156,
+    "peak_working_set_gb": 3.3010597229003906,
+    "built_at": "2026-10-04T23:03:21+09:00"
+  },
+  "F2000_thick10mm_h1.8_step20_d0": {
+    "name": "F2000_thick10mm_h1.8_step20_d0",
+    "mask": "F2000_thick10mm_h1.8_step20",
+    "dilate_layers": 0,
+    "load_n": 2000.0,
+    "size_mm": 1.8,
+    "context_seconds": 12.623719900031574,
+    "cells": 163139,
+    "design_cells": 882233,
+    "grid_shape": [
+      91,
+      172,
+      133
+    ],
+    "spacing_mm": 1.7976518416673346,
+    "ram_available_gb_before": 6.138221740722656,
+    "ram_estimate_gb": 4.200699806213379,
     "status": "skipped_ram",
-    "built_at": "2026-10-04T22:46:41+09:00"
+    "built_at": "2026-10-04T23:03:38+09:00"
   }
 }
