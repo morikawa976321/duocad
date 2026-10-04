@@ -36,8 +36,8 @@
    * 既にあればサーバが拒否する)。**削除は2段階**(「削除」→ 行の直下に「本当に削除」が出る。
    * モーダルは出さない) —— 「開くのに確認を挟まない」の根拠は「消えるのは未保存の
    * 編集だから」であり、ディスクの保存済みファイルには当たらない(本人判断 2026-09-16)。
-   * 編集中のファイルの削除ボタンは**押せなくしない** —— 押せばサーバが理由つきで断る
-   * (押せない札より理由を言う)。
+   * **編集中のファイルも削除できる**。消すと文書は閉じてトップ画面へ戻る(`Session.delete_document`)
+   * ので、確認の文言でそれを言う。
    *
    * **一覧の下に置くのは書き出しの2つだけ**(STEP書き出し・STL書き出し)。どちらも
    * 保存/開くと同じ形で `documentFiles.svelte.ts` が `session.runVerb(...)` を直接呼ぶ
@@ -60,9 +60,11 @@
   let {
     documents,
     currentName,
+    documentOpen,
     onRename,
     onOpen,
     onNew,
+    onClose,
     onCopy,
     onDelete,
     onExportStep,
@@ -82,6 +84,8 @@
      * `BrowserPanel.svelte` が編集中のスケッチを `.sketch-row.active` で示すのと同じ形。
      */
     currentName: string | null
+    /** 文書を開いているか。閉じている(トップ画面)間は、今の文書に向けた口(閉じる・改名・書き出し)を出さない。 */
+    documentOpen: boolean
     /**
      * **いま編集しているファイルを改名する**(名前欄。無題なら「名前を付ける」)。
      *
@@ -93,9 +97,11 @@
     onOpen: (name: string) => void
     /** 空の文書にする(引数なし。ファイルはまだ1つも決まっていない)。 */
     onNew: () => void
+    /** 文書を閉じてトップ画面へ戻る(保存は自動で済んでいる)。 */
+    onClose: () => void
     /** `source` を `dest` へ別名で複製する(ディスクのJSONを写すだけ。文書は変わらない)。 */
     onCopy: (source: string, dest: string) => void
-    /** ディスクから削除する(編集中のファイルはサーバが拒否する)。 */
+    /** ディスクから削除する(編集中のファイルなら、消した後で文書が閉じる)。 */
     onDelete: (name: string) => void
     /** 書き出し先のパスを渡してSTEPへ書き出す(文書は変えない)。 */
     onExportStep: (path: string) => void
@@ -288,26 +294,33 @@
     >
       新規
     </button>
+    {#if documentOpen}
+      <button id="file-close" onclick={onClose} title="文書を閉じてトップ画面へ戻る(保存は済んでいる)">
+        閉じる
+      </button>
+    {/if}
   </div>
 
-  <!-- 名前欄 = **いま編集しているファイルの改名**(冒頭のdocstring)。無題なら「名前を付ける」。
-       置き場所の欄は空のまま、いまの名前を薄く見せる。 -->
-  <div class="new-row">
-    <input
-      id="file-name-input"
-      type="text"
-      autocomplete="off"
-      placeholder={currentName ?? 'model.json'}
-      value={draftName}
-      oninput={(event) => (draftName = (event.target as HTMLInputElement).value)}
-      onkeydown={(event) => onRowEnter(event, submitDraft)}
-    />
-    <button id="file-rename" onclick={submitDraft} disabled={draftProblem !== null}>
-      {currentName === null ? '名前を付ける' : '名前を変える'}
-    </button>
-  </div>
-  {#if draftName !== '' && draftProblem !== null}
-    <span class="hint">{draftProblem}</span>
+  {#if documentOpen}
+    <!-- 名前欄 = **いま編集しているファイルの改名**(冒頭のdocstring)。無題なら「名前を付ける」。
+         置き場所の欄は空のまま、いまの名前を薄く見せる。 -->
+    <div class="new-row">
+      <input
+        id="file-name-input"
+        type="text"
+        autocomplete="off"
+        placeholder={currentName ?? 'model.json'}
+        value={draftName}
+        oninput={(event) => (draftName = (event.target as HTMLInputElement).value)}
+        onkeydown={(event) => onRowEnter(event, submitDraft)}
+      />
+      <button id="file-rename" onclick={submitDraft} disabled={draftProblem !== null}>
+        {currentName === null ? '名前を付ける' : '名前を変える'}
+      </button>
+    </div>
+    {#if draftName !== '' && draftProblem !== null}
+      <span class="hint">{draftProblem}</span>
+    {/if}
   {/if}
 
   <div class="list" id="files-list">
@@ -387,7 +400,10 @@
       {#if deletingName === file.name}
         <!-- 削除の2段目。行の直下で聞く(モーダルは出さない。冒頭のdocstring)。 -->
         <div class="new-row confirm-row" data-delete-of={file.name}>
-          <span class="confirm-text">消すと戻せない</span>
+          <!-- 幅240pxの行に収まる長さにしてある(長いと末尾が切れて「戻せない」が読めない)。 -->
+          <span class="confirm-text" title={file.name === currentName ? '開いている文書。消すと閉じて戻せない' : undefined}>
+            {file.name === currentName ? '閉じて消す' : '消すと戻せない'}
+          </span>
           <button class="files-delete-confirm" onclick={confirmDelete} title="ディスクから消す(戻せない)">
             本当に削除
           </button>
@@ -425,45 +441,47 @@
 
   <!-- STEP/STLの**書き出し**。一覧の下に区切りを置いて積む(読み込みは含まない ——
        冒頭のdocstring)。「入力欄+ボタン」の見た目は上の名前欄の行と揃えてある。 -->
-  <div class="io-section">
-    <div class="new-row">
-      <input
-        id="file-export-step-path"
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-        placeholder="part.step"
-        value={exportStepPath}
-        oninput={(event) => (exportStepPath = (event.target as HTMLInputElement).value)}
-        onkeydown={(event) => onRowEnter(event, submitExportStep)}
-      />
-      <button id="file-export-step" onclick={submitExportStep} disabled={exportStepProblem !== null}>
-        STEP書き出し
-      </button>
-    </div>
-    {#if exportStepPath !== '' && exportStepProblem !== null}
-      <span class="hint">{exportStepProblem}</span>
-    {/if}
+  {#if documentOpen}
+    <div class="io-section">
+      <div class="new-row">
+        <input
+          id="file-export-step-path"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="part.step"
+          value={exportStepPath}
+          oninput={(event) => (exportStepPath = (event.target as HTMLInputElement).value)}
+          onkeydown={(event) => onRowEnter(event, submitExportStep)}
+        />
+        <button id="file-export-step" onclick={submitExportStep} disabled={exportStepProblem !== null}>
+          STEP書き出し
+        </button>
+      </div>
+      {#if exportStepPath !== '' && exportStepProblem !== null}
+        <span class="hint">{exportStepProblem}</span>
+      {/if}
 
-    <div class="new-row">
-      <input
-        id="file-export-stl-path"
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-        placeholder="part.stl"
-        value={exportStlPath}
-        oninput={(event) => (exportStlPath = (event.target as HTMLInputElement).value)}
-        onkeydown={(event) => onRowEnter(event, submitExportStl)}
-      />
-      <button id="file-export-stl" onclick={submitExportStl} disabled={exportStlProblem !== null}>
-        STL書き出し
-      </button>
+      <div class="new-row">
+        <input
+          id="file-export-stl-path"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="part.stl"
+          value={exportStlPath}
+          oninput={(event) => (exportStlPath = (event.target as HTMLInputElement).value)}
+          onkeydown={(event) => onRowEnter(event, submitExportStl)}
+        />
+        <button id="file-export-stl" onclick={submitExportStl} disabled={exportStlProblem !== null}>
+          STL書き出し
+        </button>
+      </div>
+      {#if exportStlPath !== '' && exportStlProblem !== null}
+        <span class="hint">{exportStlProblem}</span>
+      {/if}
     </div>
-    {#if exportStlPath !== '' && exportStlProblem !== null}
-      <span class="hint">{exportStlProblem}</span>
-    {/if}
-  </div>
+  {/if}
 </section>
 
 <style>

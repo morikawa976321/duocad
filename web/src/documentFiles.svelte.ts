@@ -76,6 +76,8 @@ export interface DocumentFiles {
   open(name: string): void
   /** 空の文書にする。応答は開くのと同じ形(`action: "new"`)。**確認を挟まない。** */
   create(): void
+  /** 文書を閉じてトップ画面へ戻る。応答は開くのと同じ形(`action: "close"`)。 */
+  close(): void
   exportStep(path: string): void
   exportStl(path: string): void
   /** そのファイルのサムネイルの `data:` URL(手元に無ければ null)。 */
@@ -313,6 +315,11 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
       run('copy_document', { source, dest })
     },
     remove(name) {
+      // 開いている文書を消すと閉じる。撮る予定が残っていても、消すファイルの絵は要らない。
+      if (name === currentName && captureTimer !== null) {
+        clearTimeout(captureTimer)
+        captureTimer = null
+      }
       run('delete_document', { name })
     },
     open(name) {
@@ -322,6 +329,10 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     create() {
       flushCapture()
       deps.runVerb('new_document', {}, deps.nextOp())
+    },
+    close() {
+      flushCapture()
+      deps.runVerb('close_document', {}, deps.nextOp())
     },
     exportStep(path) {
       run('export_step', { path })

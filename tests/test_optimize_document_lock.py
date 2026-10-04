@@ -20,7 +20,7 @@ _ALLOWED_WHILE_RUNNING = {"set_visible", "set_sketch_visible", "modify_selection
                           "clear_selection",
                           "set_selection"}
 #: 文書を差し替えるもの。実行中も通す —— 実行は開始時の文書を持ったまま走り続ける。
-_SWITCHES_DOCUMENT = {"open_document", "new_document"}
+_SWITCHES_DOCUMENT = {"open_document", "new_document", "close_document"}
 
 
 def _box(session: Session) -> None:

@@ -322,6 +322,8 @@ COMMANDS: tuple[Command, ...] = (
             "スケッチ・パラメータ一覧を返す。set_visible や describe_shape、"
             "pattern_* を呼ぶ前に、どのボディ・図形・寸法名が"
             "存在するかを知るために最初に呼ぶ。"
+            "document_open が false なら人が文書を開いていない(トップ画面)ので、"
+            "形を変えるツールは断られる。人に画面で新規か既存の文書を開いてもらうこと。"
         ),
         params=(
             Param(
@@ -1429,6 +1431,19 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="close_document",
+        category="file",
+        description="",
+        session="close_document",
+        ws="special",
+        mcp=False,
+        note=(
+            "**文書を閉じてトップ画面(何も開いていない状態)へ戻す**。`new_document` と同じく"
+            "文書ごと差し替える(全接続へ配る)ので `_dispatch` で個別に扱う。閉じている間は"
+            "文書を変える操作が `NoDocument` で断られる。**AIには開けていない**(`mcp=False`)"
+        ),
+    ),
+    Command(
         name="save_document",
         category="file",
         description="",
@@ -1536,13 +1551,14 @@ COMMANDS: tuple[Command, ...] = (
         name="delete_document",
         category="file",
         description="",
-        params=(Param("name", "string", "削除するファイル名(models/ 配下。編集中のファイルは拒否)"),),
+        params=(Param("name", "string", "削除するファイル名(models/ 配下。編集中なら消してから閉じる)"),),
         session="delete_document",
         mcp=False,
         changes_document=False,
         note=(
-            "**一覧の行からディスク上のファイルを削除する**(issue #17)。編集中のファイルは"
-            "拒否(どうすればできるかを言う)。確認は画面側が行内の2段階で聞く。"
+            "**一覧の行からディスク上のファイルを削除する**(issue #17)。編集中のファイルなら"
+            "消してから文書を閉じ(`close_document`)、応答に `closed: true` が載る。そのときは"
+            "`net/ws.py` が状態も全接続へ配り直す。確認は画面側が行内の2段階で聞く。"
             "不可逆な操作なので人だけ(`mcp=False`)"
         ),
     ),
@@ -1773,7 +1789,7 @@ COMMANDS: tuple[Command, ...] = (
 #:
 #: - `selection`  … `set_selection` / `modify_selection` / `toggle_selection` / `clear_selection`
 #: - `visibility` … `set_visible`(`body_id`)/ `set_sketch_visible`(`sketch_id`)。どちらか片方が載る
-#: - `document`   … `open_document` / `new_document`(新規は開いたファイルが無いので `path` / `name` が null)
+#: - `document`   … `open_document` / `new_document` / `close_document`(新規と閉じるは開いたファイルが無いので `path` / `name` が null)
 CHANGE_EVENTS: dict = {
     "selection": (Result("selection", "SelectionState"),),
     "visibility": (
@@ -1807,6 +1823,7 @@ STATE_KEYS: tuple[str, ...] = (
     "units",
     "current_name",
     "saved",
+    "document_open",
 )
 
 #: 名前 -> 宣言。

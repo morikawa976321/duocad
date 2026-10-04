@@ -307,6 +307,9 @@ class DocumentTools:
 
         active = document.active_body()
         return {
+            # AI は文書を開けない(`open_document` / `new_document` は `mcp=False`)。False なら
+            # 空の文書を相手に操作せず、人に開いてもらうよう伝える。
+            "document_open": self.session.document_open,
             "units": document.units,
             "active_body_id": active.id if active is not None else None,
             "body_count": len(bodies),
@@ -1144,10 +1147,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
 
-    # **常に空の文書で起動する**。
-    # STEPはツール `import_step`(編集可能なボディまで作る)から読む。
+    # **何も開いていない状態(トップ画面)で起動する**。人が画面で「新規」か既存の文書を選ぶまで、
+    # 文書を変える操作は断られる(`Session.NoDocument`)。
     session = Session(
-        None, args.deviation, models_dir=args.models_dir, exports_dir=args.exports_dir
+        None,
+        args.deviation,
+        models_dir=args.models_dir,
+        exports_dir=args.exports_dir,
+        opened=False,
     )
     try:
         asyncio.run(_run(session, args))

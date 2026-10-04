@@ -53,7 +53,7 @@ _RESERVED_WINDOWS_NAMES = frozenset({
     "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 })
 
-# サーバは常に空の文書で立ち上がり、STEPはアプリ内の「STEP読み込み」かMCPの `import_step`
+# サーバは何も開いていない状態(トップ画面)で立ち上がり、STEPは文書を開いてからアプリ内の「STEP読み込み」かMCPの `import_step`
 # から読む(読み込みのverbは1本だけ)。読み込むSTEPのパスを既定として持つ場所は無いので、smokeスクリプトが使う
 # PCケースのパスは `web/scripts/models.mjs` が持つ。
 class DocumentBusy(RuntimeError):
@@ -63,6 +63,14 @@ class DocumentBusy(RuntimeError):
     保持・除外の形を読み直す。その間にその文書を変えると、古い条件の形が足される・Undo した条件のまま
     結果が入る(issue #26)。選択・表示の切り替え・保存・書き出しは通す。**別のファイルを開いて編集する
     のは通す** —— 結果は走らせた文書のファイルへ届く(`deliver_optimization_result`)。
+    """
+
+
+class NoDocument(ValueError):
+    """文書を開いていない(トップ画面)のに、文書を変える操作が来た(`Session._edits_document`)。
+
+    閉じている間の `Session.document` は空の `Document` で、これを素通しすると最初の変更で
+    自動保存が `untitled-<n>.json` を作り、「何も開いていない」が黙って「無題の文書」に変わる。
     """
 
 
@@ -89,6 +97,7 @@ def _edits_document(method: Any) -> Any:
 
     @functools.wraps(method)
     def guarded(self: "Session", *args: Any, **kwargs: Any) -> Any:
+        self._require_open()
         if self._document_locked():
             raise DocumentBusy(
                 f"形状最適化の実行中は文書を変えられない({method.__name__})。"
@@ -114,8 +123,14 @@ class Session:
         deviation: float,
         models_dir: Optional[Path] = None,
         exports_dir: Optional[Path] = None,
+        opened: bool = True,
     ) -> None:
         self.document = Document()
+        #: 文書を開いているか。**False がトップ画面**(何も開いていない)で、`self.document` は
+        #: 空のまま持ち、文書を変える操作は `NoDocument` で断る(`_require_open`)。サーバは閉じて
+        #: 起動し(`mcp_server.main`)、Python から組み立てる側(テスト・スクリプト)は開いて始まる。
+        #: **書き換えるのは `_replace_document`(開く/新規で True)と `close_document` だけ**。
+        self._open = bool(opened)
         self.deviation = float(deviation)
         #: 保存/開く/一覧の唯一の置き場。既定は `DEFAULT_MODELS_DIR`
         #: (リポジトリ直下の `models/`)。テストが実フォルダを汚さないよう差し替えられる。
@@ -231,6 +246,17 @@ class Session:
         """
         return self._current_name
 
+    @property
+    def document_open(self) -> bool:
+        """文書を開いているか(False = トップ画面)。`state()["document_open"]` と同じ値。"""
+        return self._open
+
+    def _require_open(self) -> None:
+        if not self._open:
+            raise NoDocument(
+                "文書を開いていない(トップ画面で「新規」か既存の文書を選んでから操作する)"
+            )
+
     def _emit(self, applied: dict) -> dict:
         """購読者へ変更を知らせて `applied` をそのまま返す(呼び出し側は `return self._emit(...)`)。
 
@@ -307,7 +333,7 @@ class Session:
         return self._with_current_name(self.view.state_meta(**self._view_inputs()))
 
     def _with_current_name(self, state: dict) -> dict:
-        """配りものに**いま編集しているファイル名**と**保存状態**(`saved`)を足す(`view` の持ち物ではない)。
+        """配りものに**いま編集しているファイル名**・**保存状態**(`saved`)・**開いているか**を足す(`view` の持ち物ではない)。
 
         **`view.state_meta()` へ足さない** —— `DocumentView` が持つのは文書から測れるもの
         (形・版・スケッチ)だけで、どのファイルを開いているかは `Session` の持ち物である。
@@ -320,6 +346,7 @@ class Session:
         """
         state["current_name"] = self._current_name
         state["saved"] = self.saved
+        state["document_open"] = self._open
         return state
 
     def delta(self, known_revisions: dict) -> dict:
@@ -594,6 +621,7 @@ class Session:
         するかは口ごとに違う(`catalog.Command.input_schema` / `ws_schema`)ので、呼ぶ側が済ませて来る。
         """
         function = entry_for(verb)
+        self._require_open()
         if self._document_locked():
             raise DocumentBusy(
                 f"形状最適化の実行中は文書を変えられない({verb})。終わるか中断してから操作すること"
@@ -977,6 +1005,7 @@ class Session:
             target = self._resolve_document_name(self._current_name)
         else:
             target = self._resolve_document_name(name)
+            self._require_open()  # 閉じている間の空の文書を、新しい名前のファイルにしない
             if target.exists():
                 # **どちらの枝も拒否する**。分かれるのは「次に何をすればよいか」の文言だけで、
                 # 「現在のファイルなら通す」という抜け道はここに無い(上記docstring)。
@@ -1064,6 +1093,8 @@ class Session:
         無ければ作るだけ)。
         """
         target = self._resolve_document_name(name)
+        # 閉じている間に通すと、空の文書がその名前で書かれる(トップ画面のまま新規ファイルが増える)。
+        self._require_open()
         if self._document_locked():
             # 移すと、終わった結果が元の名前で新しいファイルとして書かれる。
             raise ValueError(
@@ -1175,6 +1206,22 @@ class Session:
             "name": None,
         })
 
+    def close_document(self) -> dict:
+        """文書を閉じてトップ画面(何も開いていない状態)へ戻す。**verbではない**。
+
+        保存はしない(1操作ごとに自動保存されている)。中身は空の `Document` に差し替えて
+        undo の山ごと捨てる —— 中身を残したまま閉じた扱いにすると、開き直さずに編集できる
+        経路が1つでも残った瞬間に、前の文書の続きが `untitled-<n>.json` として書かれる。
+        """
+        self._replace_document(Document(), current_name=None, created=None)
+        self._open = False
+        return self._emit({
+            "change": "document",
+            "action": "close",
+            "path": None,
+            "name": None,
+        })
+
     def _replace_document(
         self, document: Document, *, current_name: Optional[str], created: Optional[float]
     ) -> None:
@@ -1193,6 +1240,7 @@ class Session:
         新しい文書の空の選択になっている。
         """
         self.document = document
+        self._open = True  # 閉じる側(`close_document`)は差し替えの後で False に戻す
         self._current_name = current_name
         self._created = created
         self._unsaved = False  # 開いた/空にした文書に、書けなかった変更は無い
@@ -1270,18 +1318,15 @@ class Session:
         }
 
     def delete_document(self, name: Any) -> dict:
-        """`models_dir` の `name` をディスクから削除する。**verbではない**(文書を変えない)。
+        """`models_dir` の `name` をディスクから削除する。**verbではない**。
 
-        **いま編集しているファイルは拒否する**(拒否の文はどうすればできるかまで言う) ——
-        消した直後の自動保存/上書きが「無いファイルへ書く」になり、消したはずのものが
-        黙って復活する。無ければ FileNotFoundError。確認は挟まない(画面側が行内で聞く。
+        **いま編集しているファイルなら、消してから文書を閉じる**(トップ画面へ戻る。応答に
+        `closed: True`)。閉じずに中身を持ったままにすると、次の操作の自動保存が消したはずの
+        中身を `untitled-<n>.json` として黙って復活させる。ファイルを消せなかったら閉じない。
+        無ければ FileNotFoundError。確認は挟まない(画面側が行内で聞く。
         `FilesPanel.svelte`)。`models/.trash` への退避はしない(issue #17)。サムネイルも消す。
         """
         target = self._resolve_document_name(name)
-        if target.name == self._current_name:
-            raise ValueError(
-                f"{target.name} は編集中(別のファイルを開くか「新規」にしてから削除する)"
-            )
         if self._optimizing and target.name == self._optimize_name:
             # 消しても、終わった結果が同じ名前で書き戻されて黙って復活する。
             raise ValueError(
@@ -1294,7 +1339,11 @@ class Session:
         self._undelivered.pop(target.name, None)
         self.unseen_optimize_results.pop(target.name, None)
         self._drop_thumbnail(target)
-        return {"action": "delete", "path": str(target), "name": target.name}
+        deleted = {"action": "delete", "path": str(target), "name": target.name}
+        if target.name == self._current_name:
+            self.close_document()
+            deleted["closed"] = True
+        return deleted
 
     # ---------------------------------------------------------------- サムネイル
     # **一覧の絵は画面(three.js)が撮ってここへ預ける**(`web/src/thumbnail.ts`)。サーバに

@@ -38,6 +38,7 @@ export const COMMAND_CATEGORY = {
   export_step: 'file',
   export_stl: 'file',
   new_document: 'file',
+  close_document: 'file',
   save_document: 'file',
   rename_document: 'file',
   open_document: 'file',
@@ -97,6 +98,7 @@ export interface CommandArguments {
   export_step: { path: string }
   export_stl: { path: string }
   new_document: Record<string, never>
+  close_document: Record<string, never>
   save_document: { name?: string }
   rename_document: { name: string }
   open_document: { name: string }
@@ -184,3 +186,4 @@ export type ServerStateKey =
   | 'units'
   | 'current_name'
   | 'saved'
+  | 'document_open'
