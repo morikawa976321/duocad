@@ -439,6 +439,10 @@
     onOptimizeConditions: (report) => (optimizeConditions = report),
     onOptimizeResolution: (payload) => (optimizeResolution = payload),
     onOptimizeStatus: (running, cancelling) => {
+      // **控えを確定するのはサーバが受け付けてから**(押した瞬間に控えると、「別の文書で既に走っている」と
+      // 断られた押下が、走っている実行の控えを上書きする)。
+      if (running && optimizeStarting && optimizeStartingSettings !== null) optimizeRunSettings = optimizeStartingSettings
+      optimizeStartingSettings = null
       optimizeRunning = running
       optimizeStarting = false
       // **中断中の印は「走っている間」だけ**。走り終わったら畳む —— 畳まないと、
@@ -454,6 +458,13 @@
         optimizeStepIndex = optimizeRunSettings.stepIndex
         optimizeMinWidthMm = optimizeRunSettings.minWidthMm
       }
+      // 戻ってきた直後は、文書の差し替えで欄が空になっている(`resetOptimizeView`)。取り直しの
+      // `$effect` は実行中には問い合わせないので、ここで1回だけ頼む —— 頼まないと、普通のモードから
+      // 戻ったときに条件と解像度が実行の終わりまで「確認している…」のままになる。
+      if (optimizeConditions === null || optimizeResolution === null) {
+        session.optimizeConditions()
+        session.optimizeResolution()
+      }
       // 走らせている文書へ戻ってきたら、実行中の表示(進捗・中断ボタン)が見えるモードへ入る。
       // 普通のモードのままだと、編集が断られる理由が画面に無い。
       if (mode.kind === 'idle') setMode({ kind: 'optimize' })
@@ -463,6 +474,7 @@
     onOptimizeResult: handleOptimizeResult,
     onOptimizeError: (message, problems, cancelled, alreadyRunning) => {
       optimizeStarting = false
+      optimizeStartingSettings = null
       // **別の実行が走っているという断りは、その実行の表示を消さない**(進捗の行も通知も
       // その実行のもの)。トーストで知らせるだけにする。
       if (alreadyRunning) {
@@ -508,11 +520,14 @@
   const optimizeBusy = $derived(optimizeRunning || optimizeStarting)
   let optimizeCancelling = $state(false)
   let optimizeProgress = $state<OptimizeProgress | null>(null)
+  type OptimizeRunSettings = { name: string | null; stepIndex: number; minWidthMm: number | null }
   /** **次に走らせるまで消えない通知**(トーストは時間で消えるので、結果の信用度はこちら)。 */
   let optimizeNotice = $state<OptimizeNotice | null>(null)
   /** 走らせたときの設定と文書。別の文書へ移ると欄は既定へ戻る(`resetOptimizeView`)ので、走らせた文書へ
    *  戻ってきたときにここから戻す —— 戻さないと、実行中なのに走っていない設定が欄に出る。 */
-  let optimizeRunSettings: { name: string | null; stepIndex: number; minWidthMm: number | null } | null = null
+  let optimizeRunSettings: OptimizeRunSettings | null = null
+  /** 実行を押してからサーバが受け付けるまでの控え(`onOptimizeStatus` が `optimizeRunSettings` へ確定する)。 */
+  let optimizeStartingSettings: OptimizeRunSettings | null = null
 
   /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す(`stepAt`。OptimizePanel と同じ丸め)。 */
   const optimizeStep = $derived(stepAt(optimizeResolution?.steps ?? [], optimizeStepIndex))
@@ -525,7 +540,7 @@
     // **前の実行のデバッグ表示を捨ててから走らせる。** 残すと、新しい条件を解いている
     // あいだ古い塊が重なって見え、切り分けの道具が切り分けを妨げる。
     clearOptimizeDebug()
-    optimizeRunSettings = { name: files.currentName, stepIndex: optimizeStepIndex, minWidthMm: optimizeMinWidthMm }
+    optimizeStartingSettings = { name: files.currentName, stepIndex: optimizeStepIndex, minWidthMm: optimizeMinWidthMm }
     session.runOptimization({
       elementSizeMm: optimizeStep?.element_size_mm ?? null,
       minWidthMm: optimizeMinWidthMm,

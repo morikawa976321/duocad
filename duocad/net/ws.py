@@ -185,10 +185,9 @@ class Server:
         #: 実行中の最適化タスク(`_pending_ai_runs` と同じ理由で参照を保持する)。
         self._pending_optimize_runs: set = set()
         #: **進捗・結果は走らせている文書を開いている間だけ配る**(`Session.optimization_visible`)。
-        #: 別の文書を開いている間に出た最後の進捗と、終わったときの結果/失敗(ファイル名ごと)を
-        #: 控えておき、その文書へ戻ってきたときに見せる(`_announce_optimization`)。
+        #: 別の文書を開いている間に出た最後の進捗はここに、終わったときの結果/失敗は
+        #: `Session.unseen_optimize_results` に控え、その文書へ戻ってきたときに見せる(`_announce_optimization`)。
         self._optimize_last_progress: Optional[dict] = None
-        self._optimize_unseen: dict[str, dict] = {}
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """配信に使うイベントループを覚える(`run()` と `mcp_server` が起動時に呼ぶ)。
@@ -784,6 +783,17 @@ class Server:
         """画面が実行ボタンと中断ボタンの出し分けに使う最小限(`Session.optimization_status`)。"""
         return self.session.optimization_status()
 
+    async def _broadcast_optimize_status(self) -> None:
+        """`optimize_status` を全接続へ配る。**中身は接続ごとに送る直前に取り直す** —— `_broadcast` は
+        接続を1つずつ await するので、作り置きの1通を配る間に実行が終わると、後ろの接続には
+        「走っている」が終了の通知より後に届き、実行中の表示のまま固まる。
+        """
+        for target in list(self.clients):
+            try:
+                await _send(target, {"type": "optimize_status", **self._optimize_status()})
+            except Exception:
+                self.clients.discard(target)
+
     async def _optimize_start(self, connection: Any, message: dict) -> None:
         """最適化を1回走らせる。**`run_optimization()` を待たずに返る**(`_ai_start` と同じ形)。
 
@@ -849,7 +859,7 @@ class Server:
         # スレッドの中で畳むと、走り出すまでに届いた中断が消える(issue #35)。
         self.session.begin_optimization()
         self._optimize_last_progress = None
-        await self._broadcast({"type": "optimize_status", **self._optimize_status()})
+        await self._broadcast_optimize_status()
         task = asyncio.get_running_loop().create_task(self._optimize_run(kwargs))
         self._pending_optimize_runs.add(task)
 
@@ -914,9 +924,9 @@ class Server:
             if visible:
                 await self._broadcast(payload)
             elif name is not None:
-                self._optimize_unseen[name] = payload
+                self.session.unseen_optimize_results[name] = payload
         finally:
-            await self._broadcast({"type": "optimize_status", **self._optimize_status()})
+            await self._broadcast_optimize_status()
             await self._push(None, applied=None)
 
     def _optimize_progress(self, event: dict) -> None:
@@ -964,14 +974,14 @@ class Server:
         """
         if self.session.optimizing:
             # 走っていなければ、画面は終わったときの `optimize_status` で既に「走っていない」を知っている。
-            await self._broadcast({"type": "optimize_status", **self._optimize_status()})
+            await self._broadcast_optimize_status()
         if self.session.optimization_visible:
             if self._optimize_last_progress is not None:
                 await self._broadcast(self._optimize_last_progress)
             return
         name = self.session.current_name
-        if name is not None and name in self._optimize_unseen:
-            await self._broadcast(self._optimize_unseen.pop(name))
+        if name is not None and name in self.session.unseen_optimize_results:
+            await self._broadcast(self.session.unseen_optimize_results.pop(name))
 
     async def _optimize_cancel(self, connection: Any) -> None:
         """中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**(進捗を出さない短い処理の途中では止まらない)。
@@ -984,7 +994,7 @@ class Server:
             await _send(connection, {"type": "optimize_status", **self._optimize_status()})
             return
         self.session.cancel_optimization()
-        await self._broadcast({"type": "optimize_status", **self._optimize_status()})
+        await self._broadcast_optimize_status()
 
     def _emit_event(self, payload: dict) -> None:
         """状態配信ではないイベント(AI・形状最適化)を全接続へ配る配信を、

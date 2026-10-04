@@ -42,12 +42,13 @@ def running(session: Session) -> Session:
     return session
 
 
-def _fake_run_that_adds_a_mesh(monkeypatch) -> None:
+def _fake_run_that_adds_a_mesh(monkeypatch, warning: str | None = None) -> None:
     """探索を回さず、渡された文書に三角形1枚のボディを足して「終わった」と返す(`optimize_run.run` の代役)。"""
 
     def fake_run(document, options, **kwargs):
         body_id = add_mesh_body(document, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [0, 1, 2], name="結果")
-        return {"state": "done", "body_id": body_id, "name": "結果", "triangle_count": 1}
+        result = {"state": "done", "body_id": body_id, "name": "結果", "triangle_count": 1}
+        return result if warning is None else dict(result, warning=warning)
 
     monkeypatch.setattr(optimize_run, "run", fake_run)
 
@@ -157,9 +158,10 @@ def test_a_result_that_could_not_be_written_opens_from_memory(running: Session, 
         raise PermissionError("別のプログラムが開いている")
 
     monkeypatch.setattr(Session, "_write_document_file", staticmethod(refuse))
-    running.deliver_optimization_result(running.run_optimization())
+    result = running.deliver_optimization_result(running.run_optimization())
     running.end_optimization()
-    assert any("a.json へ書けなかった" in warning for warning in running.take_warnings())
+    assert "a.json へ書けなかった" in result["warning"]
+    assert running.take_warnings() == [], "別の文書の画面へ警告を出した"
 
     monkeypatch.setattr(Session, "_write_document_file", staticmethod(real_write))
     running.open_document("a.json")
@@ -180,3 +182,78 @@ def test_the_ai_gets_a_busy_code_instead_of_an_invalid_argument(running: Session
     with pytest.raises(DocumentBusy) as caught:
         tools.call("undo", {})
     assert tools.error_envelope("undo", caught.value)["code"] == "busy"
+
+
+def test_a_result_whose_file_name_cannot_be_resolved_is_kept_in_memory(running: Session, monkeypatch) -> None:
+    """落ちたら、届け先の名前を決める所の例外(models/ が作れない等)で、数時間の結果がメモリにも残らない。"""
+    _fake_run_that_adds_a_mesh(monkeypatch)
+    running.open_document("b.json")
+    real_resolve = Session._resolve_document_name
+
+    def broken(self, name):
+        raise OSError("models/ を作れない")
+
+    monkeypatch.setattr(Session, "_resolve_document_name", broken)
+    result = running.deliver_optimization_result(running.run_optimization())
+    running.end_optimization()
+    monkeypatch.setattr(Session, "_resolve_document_name", real_resolve)
+
+    assert result["file"] == "a.json" and "書けなかった" in result["warning"]
+    running.open_document("a.json")
+    assert [body.name for body in running.document.bodies][-1] == "結果"
+
+
+def test_two_results_that_could_not_be_written_are_both_kept(running: Session, monkeypatch) -> None:
+    """落ちたら、書けなかった結果を開かないうちに次の実行も書けなかったとき、先の結果が黙って消える。"""
+    _fake_run_that_adds_a_mesh(monkeypatch)
+    monkeypatch.setattr(Session, "_write_document_file", staticmethod(lambda target, payload: 1 / 0))
+    running.open_document("b.json")
+    running.deliver_optimization_result(running.run_optimization())
+    running.end_optimization()
+    running.begin_optimization()  # b.json で2本目
+    running.new_document()
+    running.deliver_optimization_result(running.run_optimization())
+    running.end_optimization()
+    monkeypatch.undo()
+
+    for name in ("a.json", "b.json"):
+        running.open_document(name)
+        assert [body.name for body in running.document.bodies][-1] == "結果", name
+
+
+def test_deleting_a_file_drops_its_kept_result_and_unseen_notice(running: Session, monkeypatch) -> None:
+    """落ちたら、消して同じ名前で作り直したファイルを開くと、消す前の実行の結果や通知が出てくる。"""
+    _fake_run_that_adds_a_mesh(monkeypatch)
+    monkeypatch.setattr(Session, "_write_document_file", staticmethod(lambda target, payload: 1 / 0))
+    running.open_document("b.json")
+    running.deliver_optimization_result(running.run_optimization())
+    running.end_optimization()
+    monkeypatch.undo()
+    running.unseen_optimize_results["a.json"] = {"type": "optimize_result", "state": "done"}
+
+    running.delete_document("a.json")
+    running.new_document()
+    running.sketch_create("XY")
+    running.rename_document("a.json")
+    running.open_document("b.json")
+    running.open_document("a.json")
+    assert [body.name for body in running.document.bodies] == []
+    assert "a.json" not in running.unseen_optimize_results
+
+
+def test_a_warning_from_a_run_finished_elsewhere_stays_off_the_other_screen(running: Session, monkeypatch) -> None:
+    """落ちたら、別の文書を開いている間に終わった実行の警告が、その別の文書の画面にトーストで出る。"""
+    _fake_run_that_adds_a_mesh(monkeypatch, warning="条件面が空")
+    running.open_document("b.json")
+    result = running.deliver_optimization_result(running.run_optimization())
+    running.end_optimization()
+    assert running.take_warnings() == [] and result["warning"] == "条件面が空"
+
+
+def test_the_ai_is_refused_on_a_reopened_copy(running: Session) -> None:
+    """落ちたら、実行中に開き直した写しへ MCP・アプリ内AI の verb が通り、終わった結果がその編集を上書きする。"""
+    running.open_document("b.json")
+    running.open_document("a.json")
+    tools = DocumentTools(running)
+    with pytest.raises(DocumentBusy):
+        tools.call("sketch_create", {"base_plane": "XY"})

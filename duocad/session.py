@@ -145,9 +145,9 @@ class Session:
         #: 変わるたび `_emit` が `autosave()` を走らせるので、通常は常に False。True になるのは
         #: 書き込みが失敗したとき(ディスク・権限)だけで、`state()["saved"]` が画面へ運ぶ。
         self._unsaved = False
-        #: 保存の書き込みを直列にする。形状最適化の結果は**ワーカースレッドから**
-        #: `_after_logged_verb` → `_emit` → 自動保存へ来るので、イベントループ側の操作の
-        #: 保存と同じ一時ファイルへ同時に書く経路がある。
+        #: 保存の書き込みを直列にする。アプリ内AIの道具は**ワーカースレッドで**動き
+        #: (`net/ws.py` の `_ai_start` の `run_in_executor`)、`apply` → `_emit` → 自動保存へ来るので、
+        #: イベントループ側の操作の保存と同じ一時ファイルへ同時に書く経路がある。
         self._save_lock = threading.Lock()
         #: 配りもの(状態・版・キャッシュ)。**文書を差し替えたら `view.reset()` を呼ぶ**
         #: (`_replace_document`)——古い文書について測ったものを握ったままにしないため。
@@ -168,9 +168,12 @@ class Session:
         self._optimize_document: Optional[Document] = None
         self._optimize_name: Optional[str] = None
         self._optimize_created: Optional[float] = None
-        #: ファイルへ書けなかった結果(名前, 文書, 作成日時)。次にその名前を開いたとき、
+        #: ファイルへ書けなかった結果(ファイル名 -> (文書, 作成日時))。次にその名前を開いたとき、
         #: ディスクではなくこちらを開く —— 書けなかったからといって数時間の結果を捨てない。
-        self._undelivered: Optional[tuple[str, Document, Optional[float]]] = None
+        self._undelivered: dict[str, tuple[Document, Optional[float]]] = {}
+        #: 別の文書を開いている間に終わった実行の、画面へまだ見せていない結果/失敗の封筒(ファイル名 -> 封筒)。
+        #: 中身を作って配るのは `net/ws.py`。ここに置くのは、削除で一緒に捨てるため(`delete_document`)。
+        self.unseen_optimize_results: dict[str, dict] = {}
         if step_path is not None:
             self.load_step(step_path)
 
@@ -657,7 +660,7 @@ class Session:
     @property
     def optimizing(self) -> bool:
         """形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。**どの文書でか**は問わない
-        —— 同時に走らせられるのは1本だけ(1.6 mm の実行はピーク24.2 GBで、2本はメモリに収まらない)。"""
+        —— 同時に走らせられるのは1本だけ(理由は docs/TOPOPT.md)。"""
         return self._optimizing
 
     @property
@@ -732,15 +735,22 @@ class Session:
         - **別の文書を開いている** … 実行の文書をそのファイルへ書くだけ(今の文書には触れない)。
           戻り値に `"elsewhere": True` を付ける —— 画面へは配らず、次に開いたときに見せる(`net/ws.py`)。
 
-        `state != "done"` のときは文書を変えていないので何もしない。
+        **結果の警告(`warning`)を `Session.warnings`(=今の画面のトースト)へ積むのは、その文書を開いている
+        ときだけ** —— 別の文書の画面には何も出さない。離れている間の警告と書けなかったことは結果の
+        `warning` に載せ、戻ってきたときにパネルの通知で読ませる(`net/ws.py` が控えて配る)。
+
+        `state != "done"` のときは文書を変えていないので、警告の行き先を決めるだけ。
         """
-        if result.get("state") != "done":
-            return result
         document = self._optimize_document
         name = self._optimize_name
-        if document is None or self.document is document or (
+        here = document is None or self.document is document or (
             name is not None and self._current_name == name
-        ):
+        )
+        if here and result.get("warning"):
+            self.warnings.append(result["warning"])
+        if result.get("state") != "done":
+            return result if here else dict(result, elsewhere=True)
+        if here:
             if document is not None and self.document is not document:
                 self._replace_document(document, current_name=name, created=self._optimize_created)
             applied = None
@@ -757,17 +767,25 @@ class Session:
             # 発火しない経路(結果にボディが無い)でも書く。
             self.autosave()
             return result if applied is None else dict(result, applied=applied)
-        target = self._resolve_document_name(name if name is not None else self._unused_untitled_name())
+        label = name
         try:
+            if label is None:
+                label = self._unused_untitled_name()
+            target = self._resolve_document_name(label)
             with self._save_lock:
                 self._write_document_file(target, document.log.to_json(created=self._optimize_created))
-        except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ画面へ出す(`autosave` と同じ)
-            self._undelivered = (target.name, document, self._optimize_created)
-            self.warnings.append(
-                f"最適化の結果を {target.name} へ書けなかった(次に {target.name} を開くと結果入りで開く): "
+            label = target.name
+            # 一覧の絵は結果の無い形のまま。消しておけば次に開いたときに撮り直される。
+            self._drop_thumbnail(target)
+        except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ知らせる(`autosave` と同じ)
+            label = label or "untitled.json"
+            self._undelivered[label] = (document, self._optimize_created)
+            note = (
+                f"最適化の結果を {label} へ書けなかった(次に {label} を開くと結果入りで開く): "
                 f"{type(error).__name__}: {error}"
             )
-        return dict(result, elsewhere=True, file=target.name)
+            result = dict(result, warning=f"{result['warning']}\n{note}" if result.get("warning") else note)
+        return dict(result, elsewhere=True, file=label)
 
     def run_optimization(
         self,
@@ -838,9 +856,6 @@ class Session:
                 debug=debug,
                 debug_kinds=debug_kinds,
             )
-            if result.get("warning"):
-                # 既存の警告の口へ載せる(新しい運び方を作らない)。
-                self.warnings.append(result["warning"])
             if owned:
                 result = self.deliver_optimization_result(result)
         finally:
@@ -1093,8 +1108,8 @@ class Session:
         (`new_document` と共通)。
         """
         source = self._resolve_document_name(name)
-        if self._undelivered is not None and self._undelivered[0] == source.name:
-            return self._open_undelivered()
+        if source.name in self._undelivered:
+            return self._open_undelivered(source.name)
         if not source.exists():
             raise FileNotFoundError(f"開けるファイルが無い: {source}")
         payload = json.loads(source.read_text(encoding="utf-8"))
@@ -1119,14 +1134,13 @@ class Session:
             "name": source.name,
         })
 
-    def _open_undelivered(self) -> dict:
+    def _open_undelivered(self, name: str) -> dict:
         """ファイルへ書けなかった最適化の結果入りの文書を開き、もう一度書く。
 
         開いた時点で今の文書になるので手放す —— 以後は普通の文書と同じく、書けなければ
         `saved=False` の札と1操作ごとの書き直しが受け持つ。
         """
-        name, document, created = self._undelivered  # type: ignore[misc]
-        self._undelivered = None
+        document, created = self._undelivered.pop(name)
         self._replace_document(document, current_name=name, created=created)
         self.autosave()
         return self._emit({
@@ -1276,6 +1290,9 @@ class Session:
         if not target.exists():
             raise FileNotFoundError(f"削除するファイルが無い: {target.name}")
         target.unlink()
+        # 書けなかった結果も一緒に捨てる(残すと、同じ名前で作り直したファイルを開いたときに出てくる)。
+        self._undelivered.pop(target.name, None)
+        self.unseen_optimize_results.pop(target.name, None)
         self._drop_thumbnail(target)
         return {"action": "delete", "path": str(target), "name": target.name}
 

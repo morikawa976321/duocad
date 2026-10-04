@@ -451,3 +451,34 @@ def test_a_second_run_from_another_document_names_the_running_file(session: Sess
     connection = _dispatch(session, {"cmd": "run_optimization"})
     [error] = connection.of_type("optimize_error")
     assert "a.json で最適化が既に走っている" in error["message"] and error["already_running"] is True
+
+
+def test_a_failure_while_on_another_document_is_shown_on_return(session: Session, monkeypatch) -> None:
+    """落ちたら、別の文書を開いている間に失敗した実行の理由が、走らせた文書へ戻っても出ない(黙って消える)。"""
+    four_conditions(session)
+    session.rename_document("a.json")
+    session.copy_document("a.json", "b.json")
+    gate = threading.Event()
+
+    def fake_run(document, options, **kwargs):
+        gate.wait(10)
+        raise optimize_run.OptimizeInputError("形が見つからない")
+
+    monkeypatch.setattr(optimize_run, "run", fake_run)
+
+    async def scenario() -> FakeConnection:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(connection, json.dumps({"cmd": "run_optimization"}))
+        await server._dispatch(connection, json.dumps({"cmd": "open_document", "name": "b.json"}))
+        connection.payloads.clear()
+        gate.set()
+        await asyncio.gather(*server._pending_optimize_runs)
+        assert connection.of_type("optimize_error") == [], "別の文書の画面に失敗を配った"
+        await server._dispatch(connection, json.dumps({"cmd": "open_document", "name": "a.json"}))
+        return connection
+
+    connection = asyncio.run(scenario())
+    assert "形が見つからない" in connection.last("optimize_error")["message"]
