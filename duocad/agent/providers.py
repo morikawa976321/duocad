@@ -127,6 +127,10 @@ class ToolResult:
 @dataclass(frozen=True)
 class UserTurn:
     text: str
+    #: 依頼に添える判断材料(いまの文書と選択)。**人の言葉ではない**ので `text` と分けて持つ ——
+    #: 寸法のガードは「人が数量を言ったか」を `text` から読むので、状態の数字を混ぜると素通りする。
+    #: 送るときは `text` の後ろへ付ける(前や system へ置くと、相手のキャッシュがそこから外れる)。
+    context: str = ""
 
 
 @dataclass(frozen=True)
@@ -474,7 +478,8 @@ class OpenAICompatProvider(Provider):
             messages.append({"role": "system", "content": system})
         for turn in turns:
             if isinstance(turn, UserTurn):
-                messages.append({"role": "user", "content": turn.text})
+                content = f"{turn.text}\n\n{turn.context}" if turn.context else turn.text
+                messages.append({"role": "user", "content": content})
             elif isinstance(turn, AssistantTurn):
                 # **生のメッセージは戻さず組み直す**(サーバごとに増える
                 # `reasoning_content` のような欄を送り返すと弾く実装がある)。

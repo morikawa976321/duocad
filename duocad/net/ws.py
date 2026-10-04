@@ -81,6 +81,7 @@ from typing import Any, Optional  # Any: listeners / 接続
 
 from .. import catalog, optimize_run, selection
 from ..agent import AgentLoop, Cancellation, ProviderError
+from ..agent.loop import document_brief
 from ..agent.providers import DEFAULT_OPENAI_COMPAT_BASE_URL
 from ..session import Session
 from .tools_on_loop import ToolsOnLoop
@@ -644,7 +645,11 @@ class Server:
         )
         marshaled = ToolsOnLoop(self._ai_tools, self._loop)
         self._ai_loop = AgentLoop(
-            marshaled, provider, cancellation=self._ai_cancellation, progress=self._ai_progress
+            marshaled,
+            provider,
+            cancellation=self._ai_cancellation,
+            progress=self._ai_progress,
+            brief=lambda: document_brief(marshaled),
         )
         return self._ai_loop
 

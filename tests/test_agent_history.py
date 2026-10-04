@@ -7,7 +7,8 @@
 """
 from __future__ import annotations
 
-from duocad.agent import AgentLoop, Limits, ProviderError
+from duocad.agent import AgentLoop, Limits, OpenAICompatProvider, ProviderError
+from duocad.agent.loop import document_brief
 from duocad.agent.providers import ProviderContextOverflow, ProviderReply, ToolCall, UserTurn
 from duocad.mcp_server import DocumentTools
 from duocad.server import Session
@@ -84,6 +85,70 @@ def test_the_dimension_guard_still_hears_what_an_earlier_request_said():
 
     codes = [outcome.result["error"]["code"] for outcome in run.tool_calls if not outcome.ok]
     assert "dimension_not_given" not in codes
+
+
+# --------------------------------------------------------------------------------------
+# 依頼に添える状態(いまの文書と選択)
+# --------------------------------------------------------------------------------------
+def test_the_document_state_rides_along_after_what_the_person_said():
+    """落ちたら、依頼のたびに `describe_document` の1往復を払う状態に戻っている。"""
+    surface = tools()
+    provider = RecordedProvider([spoke("はい")])
+    AgentLoop(surface, provider, brief=lambda: document_brief(surface)).run("調べて")
+
+    turn = provider.requests[0]["turns"][-1]
+    assert turn.text == "調べて"
+    assert '"body_count": 0' in turn.context and '"selection"' in turn.context
+    sent = OpenAICompatProvider(transport=lambda *_: {}).render_messages("", [turn])[0]["content"]
+    # 人の言葉が先、状態は後ろ(前に置くと、状態が変わるたびに相手のキャッシュが発話ごと外れる)
+    assert sent.startswith("調べて") and sent.endswith(turn.context)
+
+
+def test_the_state_of_a_settled_request_is_dropped():
+    """その時点の文書であって、いまの文書ではない。"""
+    surface = tools()
+    provider = RecordedProvider([spoke("a"), spoke("b")])
+    loop = AgentLoop(surface, provider, brief=lambda: document_brief(surface))
+    loop.run("依頼0")
+    loop.run("依頼1")
+
+    earlier, _answer, current = provider.requests[1]["turns"]
+    assert earlier.context == "" and current.context
+
+
+def test_numbers_in_the_state_are_not_a_quantity_the_person_said():
+    """状態は数字だらけ(体積・面数・ID)。人の発話と混ぜると寸法のガードが素通りする。"""
+    provider = RecordedProvider([tool_use("fillet", {"radius": 2}), spoke("半径を教えてください")])
+    loop = AgentLoop(tools(), provider, brief=lambda: "[いまの文書と選択] 体積 12000 面 6")
+    run = loop.run("角をいい感じに丸めて")
+
+    assert [outcome.result["error"]["code"] for outcome in run.tool_calls] == ["dimension_not_given"]
+
+
+def test_a_brief_that_cannot_be_made_does_not_stop_the_request():
+    def broken() -> str:
+        raise RuntimeError("文書が読めない")
+
+    run = AgentLoop(tools(), RecordedProvider([spoke("はい")]), brief=broken).run("調べて")
+
+    assert run.status == "completed"
+
+
+def test_a_large_document_is_briefed_by_its_counts_only():
+    """一覧を毎回読ませない(要るときに `describe_document` を呼ばせるほうが安い)。"""
+
+    class Large:
+        def call(self, name: str, arguments: dict) -> dict:
+            if name == "get_selection":
+                return {"selection": {"items": [], "count": 0}}
+            bodies = [{"body_id": f"body-{index:04d}", "name": "solid", "volume": 1.0} for index in range(200)]
+            return {"units": "mm", "active_body_id": "body-0000", "body_count": 200, "visible_count": 200,
+                    "bodies": bodies, "sketches": []}
+
+    text = document_brief(Large())
+
+    assert len(text) < 400
+    assert '"body_count": 200' in text and "describe_document" in text and "body-0199" not in text
 
 
 # --------------------------------------------------------------------------------------

@@ -222,6 +222,28 @@ def test_ai_send_streams_tool_progress_and_a_final_result(monkeypatch, box_sessi
     assert statuses[-1] is False
 
 
+def test_ai_send_hands_the_model_the_document_it_is_about_to_work_on(monkeypatch, box_session: Session):
+    """アプリは文書を既に知っている。先に渡さないと、依頼のたびに `describe_document` の1往復を払う。"""
+    provider = RecordedProvider([spoke("ボディが1つあります")])
+    monkeypatch.setattr("duocad.server.build_provider", lambda *a, **k: provider)
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        watcher = FakeConnection()
+        server.clients.add(watcher)
+        await server._dispatch(watcher, json.dumps({"cmd": "ai_send", "message": "教えて"}))
+        await _wait_until(
+            lambda: watcher.of_type("ai_result")
+            and any(s["running"] is False for s in watcher.of_type("ai_status"))
+        )
+        await _drain()
+
+    asyncio.run(scenario())
+    asked = provider.requests[0]["turns"][-1]
+    assert asked.text == "教えて"
+    assert '"body_id": "box"' in asked.context and '"selection"' in asked.context
+
+
 def test_ai_send_rejects_a_second_message_while_running(monkeypatch, box_session: Session):
     monkeypatch.setattr(
         "duocad.server.build_provider",

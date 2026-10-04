@@ -116,6 +116,10 @@ DEFAULT_MAX_TOTAL_SECONDS = 30.0
 #: 実測から導いた待ち時間ではない。
 PREPARE_TIMEOUT = 1800.0
 
+#: 依頼に添える文書の状態の上限(文字)。超える文書では件数だけを添える。**自分で置いた値**
+#: (実測: 2ボディ+2スケッチで約1,300文字、40ボディ+8スケッチで約7,800文字)。
+BRIEF_MAX_CHARS = 4000
+
 #: 進捗の口。`(ツール名, 引数, 結果, 成否)`。Gがこれを購読して画面に出す。
 ProgressCallback = Callable[[str, dict, Any, bool], None]
 
@@ -260,9 +264,12 @@ class AgentLoop:
         limits: Limits = Limits(),
         progress: Optional[ProgressCallback] = None,
         cancellation: Optional[Cancellation] = None,
+        brief: Optional[Callable[[], str]] = None,
     ) -> None:
         self.tools = tools
         self.provider = provider
+        #: 依頼のたびに呼んで、その依頼に添える状態を得る(`document_brief`)。無ければ添えない。
+        self.brief = brief
         #: **MCPの `instructions` と同じ文**(catalog.py の1本から読む)。
         self.system = catalog.agent_instructions() if system is None else system
         self.limits = limits
@@ -296,7 +303,7 @@ class AgentLoop:
     def run(self, prompt: str) -> AgentRun:
         """1つの指示を投げて、モデルがツールを呼ばなくなるまで回す。"""
         self._settle_history()
-        self.turns.append(UserTurn(prompt))
+        self.turns.append(UserTurn(prompt, self._brief()))
         descriptors = self.tools.descriptors()
         outcomes: list[ToolOutcome] = []
         usage: dict = {}
@@ -494,6 +501,16 @@ class AgentLoop:
             self.turns.append(ToolResultTurn(tuple(results)))
 
     # ------------------------------------------------------------------ 履歴
+    def _brief(self) -> str:
+        """今の依頼に添える状態。取れなければ添えずに進む(モデルは自分で調べられる)。"""
+        if self.brief is None:
+            return ""
+        try:
+            return self.brief()
+        except Exception:
+            _logger.warning("brief failed", exc_info=True)
+            return ""
+
     def _settle_history(self) -> None:
         """済んだ依頼を「人の発話 + AIの最終返答」の2つへ畳む(ツールの往復は捨てる)。
 
@@ -502,7 +519,8 @@ class AgentLoop:
         寸法のガード(`_dimensions_nobody_asked_for`)は過去の発話から数量を探す。
 
         最後まで進まなかった依頼には、返答の代わりに1行の注記を置く。発話が2つ続く履歴を
-        作らないため(役割の交互を要求するチャットテンプレートがある)。
+        作らないため(役割の交互を要求するチャットテンプレートがある)。発話に添えた状態も
+        同じ理由で外す(その時点の文書であって、いまの文書ではない)。
         """
         settled: list[Turn] = []
         for request in _requests(self.turns):
@@ -510,7 +528,7 @@ class AgentLoop:
                 continue
             last = request[-1]
             answered = isinstance(last, AssistantTurn) and not last.tool_calls and last.text
-            settled.append(request[0])
+            settled.append(UserTurn(request[0].text))
             settled.append(AssistantTurn(text=last.text if answered else _unfinished_note(request)))
         self.turns = settled
 
@@ -665,6 +683,27 @@ class AgentLoop:
             tool_calls=tuple(outcomes),
             usage=usage,
         )
+
+
+def document_brief(tools: ToolSurface) -> str:
+    """依頼に添える「いまの文書と選択」(`describe_document` と `get_selection` の結果そのもの)。
+
+    モデルはこの2つを依頼のたびに最初に呼ぶので、先に渡してその往復を消す。大きい文書では
+    件数だけにする —— 一覧を毎回読ませるより、要るときに `describe_document` を呼ばせるほうが安い。
+    """
+    document = tools.call("describe_document", {})
+    selection = tools.call("get_selection", {}).get("selection", {})
+    body = json.dumps({"document": document, "selection": selection}, ensure_ascii=False)
+    if len(body) > BRIEF_MAX_CHARS:
+        counts = {
+            key: document.get(key)
+            for key in ("units", "active_body_id", "body_count", "visible_count")
+        }
+        counts["sketch_count"] = len(document.get("sketches") or [])
+        body = json.dumps(
+            {"document": counts, "selection": {"count": selection.get("count")}}, ensure_ascii=False
+        ) + "(大きい文書なので一覧は省いた。describe_document / get_selection で取れる)"
+    return f"[いまの文書と選択: describe_document と get_selection の結果]\n{body}"
 
 
 def _requests(turns: Sequence[Turn]) -> list[list[Turn]]:
