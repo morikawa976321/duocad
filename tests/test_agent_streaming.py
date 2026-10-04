@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from duocad.agent import AgentLoop, Cancellation, OpenAICompatProvider, ProviderError, ProviderTimeout
-from duocad.agent.providers import Provider, UserTurn
+from duocad.agent.providers import Provider, ProviderContextOverflow, UserTurn
 from duocad.mcp_server import DocumentTools
 from duocad.server import Session
 
@@ -164,6 +164,18 @@ def test_an_http_failure_keeps_its_status():
         with pytest.raises(ProviderError) as caught:
             ask(provider_for(server), 5.0)
     assert caught.value.status == 503 and "overloaded" in str(caught.value)
+
+
+def test_a_request_too_long_for_the_context_is_its_own_kind_of_failure():
+    """llama-server が実際に返す本文(2026-10-04)。障害と区別できないと、履歴を捨ててやり直せない。"""
+    body = (
+        b'{"error":{"code":400,"message":"request (10389 tokens) exceeds the available context size '
+        b'(10240 tokens), try increasing it","type":"exceed_context_size_error",'
+        b'"n_prompt_tokens":10389,"n_ctx":10240}}'
+    )
+    with serving([body], status=400, content_type="application/json") as server:
+        with pytest.raises(ProviderContextOverflow):
+            ask(provider_for(server), 5.0)
 
 
 class BlockingProvider(Provider):

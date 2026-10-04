@@ -80,6 +80,23 @@ class ProviderTimeout(ProviderError):
     """
 
 
+class ProviderContextOverflow(ProviderError):
+    """依頼が相手の文脈長に収まらなかった(相手は処理を始めずに断る)。
+
+    障害と同じ型にしない —— 呼び出し側は古い履歴を捨てて同じ往復をやり直せる。
+    """
+
+
+#: 文脈あふれを名乗る本文の目印(llama-server の `exceed_context_size_error`、OpenAI の
+#: `context_length_exceeded`)。
+CONTEXT_OVERFLOW_MARKS = ("exceed_context_size", "context_length_exceeded")
+
+
+def _failure(message: str, body: str, status: Optional[int] = None) -> ProviderError:
+    kind = ProviderContextOverflow if any(mark in body for mark in CONTEXT_OVERFLOW_MARKS) else ProviderError
+    return kind(f"{message}: {body[:MAX_ERROR_CHARS]}", status=status)
+
+
 # --------------------------------------------------------------------------------------
 # 中立の往復型(ループとアダプタの間の言葉)
 # --------------------------------------------------------------------------------------
@@ -191,8 +208,9 @@ def _assemble(chunks: Iterator[dict], url: str) -> dict:
     timings: dict = {}
     for chunk in chunks:
         if "error" in chunk:
-            detail = json.dumps(chunk["error"], ensure_ascii=False)[:MAX_ERROR_CHARS]
-            raise ProviderError(f"{_origin(url)} が途中で失敗した: {detail}")
+            raise _failure(
+                f"{_origin(url)} が途中で失敗した", json.dumps(chunk["error"], ensure_ascii=False)
+            )
         if isinstance(chunk.get("usage"), dict):
             usage = chunk["usage"]
         if isinstance(chunk.get("timings"), dict):
@@ -286,9 +304,10 @@ class StreamingTransport:
                     raise ProviderError("中断したので接続を閉じた")
             response = connection.getresponse()
             if response.status != 200:
-                detail = response.read().decode("utf-8", "replace")[:MAX_ERROR_CHARS]
-                raise ProviderError(
-                    f"HTTP {response.status} from {_origin(url)}: {detail}", status=response.status
+                raise _failure(
+                    f"HTTP {response.status} from {_origin(url)}",
+                    response.read().decode("utf-8", "replace"),
+                    response.status,
                 )
             if "text/event-stream" not in (response.getheader("content-type") or ""):
                 # ストリーミングに応じないサーバは本文を1つ返す。
@@ -330,16 +349,16 @@ class StreamingTransport:
             yield chunk
 
 
-def post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
-    """JSONをPOSTしてJSONを受け取る(本文が1つで返る口のため。対話は `StreamingTransport`)。
-    失敗は `ProviderError`。
+def post_json(url: str, payload: Optional[dict], headers: dict, timeout: float) -> dict:
+    """JSONを送ってJSONを受け取る(本文が1つで返る口のため。対話は `StreamingTransport`)。
+    `payload` が `None` なら GET。失敗は `ProviderError`。
     """
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=data,
         headers={**headers, "content-type": "application/json"},
-        method="POST",
+        method="GET" if payload is None else "POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -392,6 +411,10 @@ class Provider:
         raise NotImplementedError
 
 
+#: 「まだ読んでいない」の印(`None` は「読んだが分からなかった」に使う)。
+_UNREAD = object()
+
+
 class OpenAICompatProvider(Provider):
     """OpenAI互換(`POST /v1/chat/completions`・ストリーミング)。llama-server がこれ。
 
@@ -421,6 +444,7 @@ class OpenAICompatProvider(Provider):
         self._api_key = api_key or None
         #: 既定の実体は**プロバイダごとに1つ**(走っている接続を覚えていて `abort` で閉じるため)。
         self._transport: Transport = StreamingTransport() if transport is None else transport
+        self._n_ctx: Any = _UNREAD
 
     def __repr__(self) -> str:  # pragma: no cover - 表示だけ
         return f"OpenAICompatProvider(model={self.model!r}, base_url={self.base_url!r})"
@@ -604,14 +628,32 @@ class OpenAICompatProvider(Provider):
 
     def _slot(self, action: str) -> bool:
         """スロット0を保存/復元する(llama-server 固有の口)。**口が無ければ黙って `False`**。"""
-        root = self.base_url[: -len("/v1")] if self.base_url.endswith("/v1") else self.base_url
         try:
             post_json(
-                f"{root}/slots/0?action={action}", {"filename": SLOT_FILE}, self._headers(), SLOT_TIMEOUT
+                f"{self._root()}/slots/0?action={action}",
+                {"filename": SLOT_FILE},
+                self._headers(),
+                SLOT_TIMEOUT,
             )
         except ProviderError:
             return False
         return True
+
+    def _root(self) -> str:
+        """llama-server 固有の口(`/slots`・`/props`)が生える根(`/v1` の外)。"""
+        return self.base_url[: -len("/v1")] if self.base_url.endswith("/v1") else self.base_url
+
+    def context_size(self) -> Optional[int]:
+        """相手の文脈長(トークン)。llama-server の `/props` から1度だけ読む。分からなければ `None`。"""
+        if self._n_ctx is _UNREAD:
+            try:
+                props = post_json(f"{self._root()}/props", None, self._headers(), SLOT_TIMEOUT)
+                settings = props.get("default_generation_settings")
+                n_ctx = settings.get("n_ctx") if isinstance(settings, dict) else None
+            except ProviderError:
+                n_ctx = None
+            self._n_ctx = n_ctx if isinstance(n_ctx, int) and n_ctx > 0 else None
+        return self._n_ctx
 
     def _call(self, url: str, payload: dict, headers: dict, timeout: float) -> dict:
         try:

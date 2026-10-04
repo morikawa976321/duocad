@@ -22,6 +22,8 @@
     run.status   # "completed" / "max_turns" / "cancelled" / "provider_error" / ...
 
 会話は `AgentLoop` に積み上がる(`run()` を続けて呼べば続きになる)。`reset()` で捨てる。
+**済んだ依頼は「人の発話 + AIの最終返答」だけを残す**(ツールの往復は次の `run()` の頭で捨てる)。
+相手の文脈長に近づいたら、古い依頼を半分まとめて捨てる。
 
 **OCP / build123d をimportしない**。
 """
@@ -40,6 +42,7 @@ from .. import catalog
 from .providers import (
     AssistantTurn,
     Provider,
+    ProviderContextOverflow,
     ProviderError,
     ProviderTimeout,
     ToolCall,
@@ -215,6 +218,7 @@ class AgentRun:
                          可能性があるため(`run()` の該当箇所に理由)
     - `refusal`        … プロバイダが安全上の理由で断った
     - `provider_error` … HTTP・接続・応答の形(`detail` に理由。**APIキーは含まれない**)
+    - `context_overflow` … 今の依頼だけで相手の文脈長を超えた(古い依頼は捨て尽くした)
     - `stopped`        … 上のどれでもない停止理由(`detail` に生値)
     """
 
@@ -291,6 +295,7 @@ class AgentLoop:
 
     def run(self, prompt: str) -> AgentRun:
         """1つの指示を投げて、モデルがツールを呼ばなくなるまで回す。"""
+        self._settle_history()
         self.turns.append(UserTurn(prompt))
         descriptors = self.tools.descriptors()
         outcomes: list[ToolOutcome] = []
@@ -345,6 +350,13 @@ class AgentLoop:
                     # はみ出しは接続を畳む分だけになる。
                     timeout=min(self.limits.request_timeout, budget_left),
                 )
+            except ProviderContextOverflow as error:
+                # 相手は処理を始めずに断るので、やり直しは安い。捨てるものが尽きたら
+                # (今の依頼だけで収まらない)そのことを返す。
+                if self._drop_oldest_half():
+                    turn -= 1
+                    continue
+                return self._result("context_overflow", str(error), turn, outcomes, usage)
             except ProviderError as error:
                 # 中断が接続を閉じた結果の失敗は、障害ではなく中断である。
                 if self.cancellation.cancelled:
@@ -359,6 +371,15 @@ class AgentLoop:
                 return self._result("provider_error", str(error), turn, outcomes, usage)
 
             usage = _merge_usage(usage, reply.usage)
+            # **次の往復に出力1回ぶんの余地が残らないなら、先に古い依頼を捨てる。**
+            # 余地が無いまま続けると、収まりはするが書く途中で文脈が尽きて切れる。
+            # 見るのは続きがあるとき(ツールを呼んだ)と、既に切れたときだけ —— 終わった依頼の
+            # ツール往復は次の `run()` が畳むので、そこで捨てるのは早すぎる。
+            if (reply.tool_calls or reply.stop == "max_tokens") and self._short_of_room(reply.usage):
+                if self._drop_oldest_half() and reply.stop == "max_tokens":
+                    # 切れた原因は出力上限ではなく文脈の残り。空けたのでこの往復をやり直す。
+                    turn -= 1
+                    continue
             self.turns.append(
                 AssistantTurn(
                     text=reply.text, tool_calls=reply.tool_calls, raw=reply.raw_message
@@ -471,6 +492,55 @@ class AgentLoop:
                 continue
 
             self.turns.append(ToolResultTurn(tuple(results)))
+
+    # ------------------------------------------------------------------ 履歴
+    def _settle_history(self) -> None:
+        """済んだ依頼を「人の発話 + AIの最終返答」の2つへ畳む(ツールの往復は捨てる)。
+
+        ツールの結果は量の大半を占めるうえ、文書が変わったあとは**古い**(残すとモデルが
+        今は無い状態を信じる)。人の発話は残す —— 「反対側も同じように」は前の依頼を指すし、
+        寸法のガード(`_dimensions_nobody_asked_for`)は過去の発話から数量を探す。
+
+        最後まで進まなかった依頼には、返答の代わりに1行の注記を置く。発話が2つ続く履歴を
+        作らないため(役割の交互を要求するチャットテンプレートがある)。
+        """
+        settled: list[Turn] = []
+        for request in _requests(self.turns):
+            if not isinstance(request[0], UserTurn):
+                continue
+            last = request[-1]
+            answered = isinstance(last, AssistantTurn) and not last.tool_calls and last.text
+            settled.append(request[0])
+            settled.append(AssistantTurn(text=last.text if answered else _unfinished_note(request)))
+        self.turns = settled
+
+    def _drop_oldest_half(self) -> bool:
+        """済んだ依頼の古い側半分を捨てる。捨てるものが無ければ `False`。
+
+        **1依頼ずつではなく、まとめて捨てる。** 先頭を削ると相手のキャッシュはそこから後ろを
+        全部読み直すので、毎回削ると毎回読み直す(実測: 18依頼で総処理量が約2倍。半分ずつなら
+        約1.2倍)。今の依頼(最後の発話から後ろ)には触らない。
+        """
+        current = max(
+            (index for index, turn in enumerate(self.turns) if isinstance(turn, UserTurn)), default=0
+        )
+        settled = current // 2
+        if settled == 0:
+            return False
+        del self.turns[: 2 * ((settled + 1) // 2)]
+        return True
+
+    def _short_of_room(self, usage: dict) -> bool:
+        """いまの往復の続きに、出力1回ぶん(`max_tokens`)の余地が残っていないか。
+
+        相手の文脈長と、この往復の実測トークン数が分かるときだけ判定する(推定はしない)。
+        """
+        used = (usage.get("prompt_tokens"), usage.get("completion_tokens"))
+        if not all(isinstance(value, (int, float)) for value in used):
+            return False
+        context_size = getattr(self.provider, "context_size", None)
+        n_ctx = context_size() if callable(context_size) else None
+        return bool(n_ctx) and used[0] + used[1] + self.limits.max_tokens > n_ctx
 
     # ------------------------------------------------------------------ ツール
     def _dimensions_nobody_asked_for(self, call: ToolCall) -> tuple[str, ...]:
@@ -595,6 +665,29 @@ class AgentLoop:
             tool_calls=tuple(outcomes),
             usage=usage,
         )
+
+
+def _requests(turns: Sequence[Turn]) -> list[list[Turn]]:
+    """履歴を依頼ごとに切る(人の発話から次の発話の手前まで)。"""
+    requests: list[list[Turn]] = []
+    for turn in turns:
+        if isinstance(turn, UserTurn) or not requests:
+            requests.append([])
+        requests[-1].append(turn)
+    return requests
+
+
+def _unfinished_note(request: Sequence[Turn]) -> str:
+    """最後まで進まなかった依頼の代わりに残す1行(何を実行済みかだけを言う)。"""
+    ran = [
+        result.name
+        for turn in request
+        if isinstance(turn, ToolResultTurn)
+        for result in turn.results
+        if result.ok
+    ]
+    done = f"実行したツール: {', '.join(ran)}" if ran else "ツールは実行していない"
+    return f"(この依頼は最後まで進まなかった。{done})"
 
 
 def _failure(tool: str, code: str, message: str, exception: str) -> dict:

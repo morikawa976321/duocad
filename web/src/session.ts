@@ -513,6 +513,8 @@ export interface AiToolCall {
  *                  (切れた引数のままでは危険なので、実行せず止める設計)
  * - `refusal`    … プロバイダが安全上の理由で断った
  * - `provider_error` … HTTP・接続の失敗(`detail` に理由。APIキーは含まれない)
+ * - `timeout`    … 合計時間の上限で打ち切った。実行済みのツールは `tool_calls` に残る
+ * - `context_overflow` … 今の依頼だけで相手の文脈長を超えた
  * - `stopped`    … 上のどれでもない停止理由(`detail` に生値)
  */
 export type AiRunStatus =
@@ -522,6 +524,8 @@ export type AiRunStatus =
   | 'max_tokens'
   | 'refusal'
   | 'provider_error'
+  | 'timeout'
+  | 'context_overflow'
   | 'stopped'
 
 export interface AiRunResult {

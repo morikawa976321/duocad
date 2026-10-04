@@ -116,6 +116,8 @@
     max_tokens: '出力の上限に達した(このターンのツールは実行していない。もう一度どうぞ)',
     refusal: 'AIが断った',
     provider_error: '接続に失敗した',
+    timeout: '時間切れで止めた(ここまでの操作は残っている)',
+    context_overflow: 'この依頼だけでAIの文脈長を超えた(依頼を分けるか、llama-server の -c を増やす)',
     stopped: '止まった(理由不明)',
   }
 

@@ -484,7 +484,17 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
 - **システムプロンプトも二重に持たない** —— `catalog.agent_instructions()` の1本をMCPの
   `instructions` とエージェントの両方が読む（ツール数も宣言から数える）
 - **暴走は必ず打ち切る** —— `max_turns` / `max_tokens` / 1リクエストのタイムアウト / 外から立てる中断フラグ。
-  打ち切った理由は構造化して返す（矛盾した指示を渡すと**思考**が膨らみ、1リクエストが600秒返らなかった実測がある）
+  打ち切った理由は構造化して返す（矛盾した指示を渡すと**思考**が膨らみ、1リクエストが600秒返らなかった実測がある）。
+  **待ち時間切れと中断は接続を閉じる** —— 応答はストリーミングで受ける。llama-server は非streamingの
+  リクエストを、閉じても最後まで生成し続けるからである（`StreamingTransport`）
+- **済んだ依頼は「人の発話 + AIの最終返答」だけを残す** —— ツールの往復は次の依頼の頭で捨てる（量の大半を
+  占め、文書が変わったあとは古い）。相手の文脈長に当たったら古い依頼を半分まとめて捨ててやり直す
+  （`AgentLoop._settle_history` / `_drop_oldest_half`）
+- **ツール定義は先に読ませておく** —— 画面が繋がった時点で `ai_prepare` が届き、system + tools を相手の
+  キャッシュへ載せる。llama-server を `--slot-save-path <dir>` 付きで立てていれば、その状態を保存して次回は
+  復元で済ませる（`OpenAICompatProvider.prepare`）
+- **読む側と書く側の時間を結果に載せる** —— llama-server の `timings` を往復ぶん足して `ai_result.usage` へ入れ、
+  パネルに1行出す
 - **同時編集は楽観ロックで守る** —— モデルへの1往復を送る前に文書の版
   （`DocumentTools.current_seq()`）を控え、応答が返ったとき版がずれていたら、そのツール呼び出しは
   実行せず「文書が変わったので選び直せ」と返す。形状を変えるverbの確定後は選択が全リセットされる
@@ -496,13 +506,15 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
 - **鍵を持つ層ではない。** `build_provider` はプロバイダへ
   鍵を渡さないので、`base_url` をどこへ向けても飛ぶのはキーの無いリクエストだけになる。
   **鍵を要るプロバイダを足すなら、`Server._ai_configure` に `base_url` の拒否を書き戻すこと**
-- 依存は増やしていない（公式SDKを入れず `urllib` で素のHTTP）
+- 依存は増やしていない（公式SDKを入れず標準ライブラリで素のHTTP）
 
-契約は `tests/test_agent_loop.py`（偽プロバイダで決定的に検査）。実機は
+契約は `tests/test_agent_loop.py`（偽プロバイダで決定的に検査）と、`tests/test_agent_streaming.py`（受け方と
+打ち切り）・`tests/test_agent_prepare.py`（ウォームアップ）・`tests/test_agent_history.py`（履歴）。実機は
 `tests/test_agent_llama_server.py` の1本だけで、**8080にllama-serverが居なければskipする**。
+実測と数値は [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md)。
 
-**WebSocketへの配線。** `duocad/net/ws.py` が `ai_get_status` / `ai_configure` /
-`ai_send` / `ai_cancel` の4つを持ち、画面右サイドバーの `web/src/AiPanel.svelte` から叩く。
+**WebSocketへの配線。** `duocad/net/ws.py` が `ai_get_status` / `ai_configure` / `ai_prepare` /
+`ai_send` / `ai_cancel` の5つを持ち、画面右サイドバーの `web/src/AiPanel.svelte` から叩く。
 
 - **`ai_*` はverbではない**。文書を直接は変えない(操作ログに載らずundoの単位でもない)ので
   `duocad/catalog.py` の `COMMANDS`(「MCPツール名==WSコマンド名==UIコマンドID==verb名」の

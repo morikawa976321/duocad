@@ -34,6 +34,10 @@ def llama_server(*, restore_ok: bool, read: int, slot_endpoints: bool = True):
             self.end_headers()
             self.wfile.write(body)
 
+        def do_GET(self) -> None:
+            calls.append(f"GET {self.path}")
+            self._reply(200, b'{"default_generation_settings": {"n_ctx": 10240}, "total_slots": 1}')
+
         def do_POST(self) -> None:
             body = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}")
             parts = urlsplit(self.path)
@@ -112,6 +116,21 @@ def test_a_server_without_slot_endpoints_is_still_warmed():
 
     assert "chat" in server.calls
     assert result["restored"] is False and result["saved"] is False
+
+
+def test_the_context_size_is_read_from_the_server_once():
+    """履歴を捨てる判定に使う文脈長。往復のたびに聞き直さない。"""
+    with llama_server(restore_ok=True, read=1) as server:
+        provider = OpenAICompatProvider(base_url=f"http://127.0.0.1:{server.server_address[1]}/v1")
+        sizes = [provider.context_size(), provider.context_size()]
+
+    assert sizes == [10240, 10240]
+    assert server.calls == ["GET /props"]
+
+
+def test_an_unknown_context_size_is_none_not_a_failure():
+    """`/props` を持たない相手(他のOpenAI互換・居ないサーバ)では、分からないと答えるだけ。"""
+    assert OpenAICompatProvider(base_url="http://127.0.0.1:9/v1").context_size() is None
 
 
 class NotedProvider(Provider):
