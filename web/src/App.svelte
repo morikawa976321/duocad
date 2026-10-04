@@ -435,6 +435,19 @@
       // **中断中の印は「走っている間」だけ**。走り終わったら畳む —— 畳まないと、
       // 次に実行を押した瞬間に中断表示から始まって見える。
       optimizeCancelling = running && cancelling ? true : running ? optimizeCancelling : false
+      // `running` は「**いま開いている文書で**走っているか」(サーバの `optimization_status`)。
+      // 走らせたまま別の文書へ移ると偽になるので、その文書に進捗の行を残さない。
+      if (!running) {
+        optimizeProgress = null
+        return
+      }
+      if (optimizeRunSettings !== null && optimizeRunSettings.name === files.currentName) {
+        optimizeStepIndex = optimizeRunSettings.stepIndex
+        optimizeMinWidthMm = optimizeRunSettings.minWidthMm
+      }
+      // 走らせている文書へ戻ってきたら、実行中の表示(進捗・中断ボタン)が見えるモードへ入る。
+      // 普通のモードのままだと、編集が断られる理由が画面に無い。
+      if (mode.kind === 'idle') setMode({ kind: 'optimize' })
     },
     onOptimizeProgress: (event) => (optimizeProgress = event),
     onOptimizeDebug: handleOptimizeDebug,
@@ -488,6 +501,9 @@
   let optimizeProgress = $state<OptimizeProgress | null>(null)
   /** **次に走らせるまで消えない通知**(トーストは時間で消えるので、結果の信用度はこちら)。 */
   let optimizeNotice = $state<OptimizeNotice | null>(null)
+  /** 走らせたときの設定と文書。別の文書へ移ると欄は既定へ戻る(`resetOptimizeView`)ので、走らせた文書へ
+   *  戻ってきたときにここから戻す —— 戻さないと、実行中なのに走っていない設定が欄に出る。 */
+  let optimizeRunSettings: { name: string | null; stepIndex: number; minWidthMm: number | null } | null = null
 
   /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す(`stepAt`。OptimizePanel と同じ丸め)。 */
   const optimizeStep = $derived(stepAt(optimizeResolution?.steps ?? [], optimizeStepIndex))
@@ -500,6 +516,7 @@
     // **前の実行のデバッグ表示を捨ててから走らせる。** 残すと、新しい条件を解いている
     // あいだ古い塊が重なって見え、切り分けの道具が切り分けを妨げる。
     clearOptimizeDebug()
+    optimizeRunSettings = { name: files.currentName, stepIndex: optimizeStepIndex, minWidthMm: optimizeMinWidthMm }
     session.runOptimization({
       elementSizeMm: optimizeStep?.element_size_mm ?? null,
       minWidthMm: optimizeMinWidthMm,
@@ -2306,7 +2323,6 @@
           documents={files.list}
           currentName={files.currentName}
           onRename={files.rename}
-          locked={optimizeBusy}
           onOpen={files.open}
           onNew={files.create}
           onCopy={files.copy}

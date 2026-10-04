@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 
 import pytest
 
 from duocad import optimize_run
 from duocad.server import Server, Session
+from duocad.verbs.add_mesh import add_mesh_body
 from session_support import FakeConnection, browser, four_conditions
 
 
@@ -370,3 +372,82 @@ def test_a_new_connection_is_told_whether_an_optimization_is_running(session: Se
     connection = asyncio.run(scenario())
     [status] = connection.of_type("optimize_status")
     assert status["running"] is running and status.get("cancelling", False) is running
+
+
+# --------------------------------------------------------------------------------------
+# 6. 走らせたまま別の文書へ移る(進捗はその文書を開いている間だけ・結果は戻ってきたら見える)
+# --------------------------------------------------------------------------------------
+def test_a_run_keeps_going_on_another_document_and_shows_up_on_return(session: Session, monkeypatch) -> None:
+    """落ちたら、別の文書の画面に進捗・結果が出る、または走らせた文書へ戻っても実行中/完了が見えない。"""
+    four_conditions(session)
+    session.rename_document("a.json")
+    session.copy_document("a.json", "b.json")
+    gates = [threading.Event(), threading.Event()]
+
+    def fake_run(document, options, *, progress, **kwargs):
+        progress({"phase": "search", "message": "1", "evaluation": 1})
+        gates[0].wait(10)
+        progress({"phase": "search", "message": "2", "evaluation": 2})
+        gates[1].wait(10)
+        body_id = add_mesh_body(document, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [0, 1, 2], name="結果")
+        return {"state": "done", "body_id": body_id, "name": "結果", "triangle_count": 1}
+
+    monkeypatch.setattr(optimize_run, "run", fake_run)
+
+    async def until(condition) -> None:
+        for _ in range(500):
+            if condition():
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("待っても起きなかった")
+
+    async def scenario() -> None:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+
+        async def send(command: dict) -> None:
+            await server._dispatch(connection, json.dumps(command))
+
+        await send({"cmd": "run_optimization"})
+        await until(lambda: connection.of_type("optimize_progress"))
+        await send({"cmd": "open_document", "name": "b.json"})
+        assert connection.last("optimize_status")["running"] is False
+
+        connection.payloads.clear()
+        gates[0].set()
+        await until(lambda: (server._optimize_last_progress or {}).get("evaluation") == 2)
+        await asyncio.sleep(0.05)
+        assert connection.of_type("optimize_progress") == [], "別の文書の画面に進捗を配った"
+
+        await send({"cmd": "open_document", "name": "a.json"})
+        assert connection.last("optimize_status")["running"] is True
+        assert connection.last("optimize_progress")["evaluation"] == 2
+
+        await send({"cmd": "open_document", "name": "b.json"})
+        connection.payloads.clear()
+        gates[1].set()
+        await asyncio.gather(*server._pending_optimize_runs)
+        assert connection.of_type("optimize_result") == [], "別の文書の画面に結果を配った"
+        assert session.current_name == "b.json"
+
+        await send({"cmd": "open_document", "name": "a.json"})
+        assert connection.last("optimize_result")["state"] == "done"
+        assert connection.last("optimize_status")["running"] is False
+        assert [body.name for body in session.document.bodies][-1] == "結果"
+
+    asyncio.run(scenario())
+
+
+def test_a_second_run_from_another_document_names_the_running_file(session: Session) -> None:
+    """落ちたら、別の文書から2本目を押したときの断りが、どこで走っているかを言わない。"""
+    session.save_document("b.json")
+    session.new_document()
+    four_conditions(session)
+    session.rename_document("a.json")
+    session.begin_optimization()
+    session.open_document("b.json")
+    connection = _dispatch(session, {"cmd": "run_optimization"})
+    [error] = connection.of_type("optimize_error")
+    assert "a.json で最適化が既に走っている" in error["message"] and error["already_running"] is True

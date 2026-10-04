@@ -184,6 +184,11 @@ class Server:
         # 中断の旗は `Session` が持つ(`Session.begin_optimization` / `optimization_status`)。
         #: 実行中の最適化タスク(`_pending_ai_runs` と同じ理由で参照を保持する)。
         self._pending_optimize_runs: set = set()
+        #: **進捗・結果は走らせている文書を開いている間だけ配る**(`Session.optimization_visible`)。
+        #: 別の文書を開いている間に出た最後の進捗と、終わったときの結果/失敗(ファイル名ごと)を
+        #: 控えておき、その文書へ戻ってきたときに見せる(`_announce_optimization`)。
+        self._optimize_last_progress: Optional[dict] = None
+        self._optimize_unseen: dict[str, dict] = {}
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """配信に使うイベントループを覚える(`run()` と `mcp_server` が起動時に呼ぶ)。
@@ -263,6 +268,8 @@ class Server:
                 # **最適化が走っているかも最初に知らせる。** 開始・終了・中断のときにしか配らないので、
                 # 再読み込みした画面は中断ボタンを失い、終わる瞬間に切れていた画面は実行中のまま固まる。
                 await _send(connection, {"type": "optimize_status", **self._optimize_status()})
+                if self.session.optimization_visible and self._optimize_last_progress is not None:
+                    await _send(connection, self._optimize_last_progress)
             except Exception as error:
                 # 文書が空(起動直後)等で状態が作れなくても、接続ごと落とさず理由を画面へ返す
                 await _send(
@@ -477,10 +484,12 @@ class Server:
                     )
                 applied = self._apply(self.session.open_document, name)
                 await self._push_applied(connection, applied, message)
+                await self._announce_optimization()
             # **新規も文書ごと差し替える**ので開くと同じ扱い(全接続へ配る)。引数は無い。
             elif command == "new_document":
                 applied = self._apply(self.session.new_document)
                 await self._push_applied(connection, applied, message)
+                await self._announce_optimization()
             # -------------------------------------------------- B: プレビュー(投機的実行)
             # **配信しない**。文書は変わらない(`Session.preview` が元へ戻す)ので、状態を配る
             # 理由が無く、他のクライアントに見せる中間状態も存在しない。要求した接続にだけ返す。
@@ -787,11 +796,17 @@ class Server:
         (`conditions_report` の `problems`)である。
         """
         if self.session.optimizing:
+            running_name = self.session.optimizing_name
             await _send(
                 connection,
                 {
                     "type": "optimize_error",
-                    "message": "最適化が既に走っている(中断してから)",
+                    "message": (
+                        "最適化が既に走っている(中断してから)"
+                        if self.session.optimization_visible
+                        else f"{running_name or '別の文書'} で最適化が既に走っている"
+                        "(終わるのを待つか、そのファイルを開いて中断してから)"
+                    ),
                     # 画面はこの印を見て、走っている実行の進捗・通知を消さない。
                     "already_running": True,
                 },
@@ -833,6 +848,7 @@ class Server:
         # **中断の旗を畳むのも文書を閉じるのもここ(イベントループのスレッド)で済ませる。** ワーカー
         # スレッドの中で畳むと、走り出すまでに届いた中断が消える(issue #35)。
         self.session.begin_optimization()
+        self._optimize_last_progress = None
         await self._broadcast({"type": "optimize_status", **self._optimize_status()})
         task = asyncio.get_running_loop().create_task(self._optimize_run(kwargs))
         self._pending_optimize_runs.add(task)
@@ -860,10 +876,15 @@ class Server:
         実行が、結果を見る前にサーバプロセスごと消えた)。結果は文書のRAMにしか無いので、
         ここを抜けたあと画面が0枚でもサーバごと落ちても、書けてさえいれば残る。**結果を足さなかった
         実行では書かない** —— 文書が変わっておらず、1操作ごとの自動保存が既に書いてある(issue #36)。
-        書くのは `Session.autosave` なので、無題の文書には `untitled-<n>.json` が自動で付き、
-        書けなかったときは例外ではなく警告と `saved=False` になる(issue #5)。
+        書くのは `Session.deliver_optimization_result` で、**イベントループへ戻ってから**呼ぶ
+        (人の「開く」と同じスレッドで、届け先の判定と文書の差し替えを済ませるため)。
+
+        **別の文書を開いている間に終わったら、結果も失敗も配らずに控える**(ファイル名ごと)。
+        その文書の画面には何も出さず、走らせた文書へ戻ってきたときに見せる(`_announce_optimization`)。
         """
         payload: dict
+        name = self.session.optimizing_name
+        visible = True
         try:
             try:
                 if "debug_kinds" in kwargs:
@@ -873,6 +894,9 @@ class Server:
                         self.session.run_optimization, progress=self._optimize_progress, **kwargs
                     )
                 )
+                result = self.session.deliver_optimization_result(result)
+                # 無題の文書の結果を別の文書を開いている間に届けたら、届け先は新しく名前を付けたファイル。
+                name = result.get("file", name)
                 payload = {"type": "optimize_result", **result}
             except Exception as error:  # noqa: BLE001 - 文面をそのまま画面へ出す
                 payload = {
@@ -882,15 +906,15 @@ class Server:
                     # 画面はこの印を見て、通知の色とトーストの有無を変える。
                     "cancelled": isinstance(error, optimize_run.OptimizeCancelled),
                 }
-            else:
-                # **結果を足した実行だけ書く**(足さなかった実行は文書が変わっておらず、
-                # 1操作ごとの自動保存が既に書いてある。issue #36)。
-                if result.get("state") == "done":
-                    self.session.autosave()
+            visible = self.session.optimization_visible
         finally:
             self.session.end_optimization()
+            self._optimize_last_progress = None
         try:
-            await self._broadcast(payload)
+            if visible:
+                await self._broadcast(payload)
+            elif name is not None:
+                self._optimize_unseen[name] = payload
         finally:
             await self._broadcast({"type": "optimize_status", **self._optimize_status()})
             await self._push(None, applied=None)
@@ -901,7 +925,7 @@ class Server:
         中身は `{"phase", "message", "evaluation"}` + phase ごとの追加(`20260904-1704`
         の契約①)。**素の値だけでできている**のでそのまま載せてよい。
         """
-        self._emit_event({"type": "optimize_progress", **event})
+        self._emit_optimize_event({"type": "optimize_progress", **event})
 
     def _optimize_debug(self, event: dict) -> None:
         """開発用の可視化(塊・面アンカーの節点・平滑化前の密度場)。**進捗とは別の口**。
@@ -911,7 +935,43 @@ class Server:
         (`run_optimization` の `debug` に種類を並べる)。中身の形は
         `optimize_run._DebugSink` を見ること。
         """
-        self._emit_event({"type": "optimize_debug", **event})
+        self._emit_optimize_event({"type": "optimize_debug", **event})
+
+    def _emit_optimize_event(self, payload: dict) -> None:
+        """最適化の進捗・可視化を、イベントループへ乗せてから配るか決める(**どのスレッドからでも呼べる**)。
+
+        配るか否かは**イベントループのスレッドで**決める —— 今どの文書を開いているかを書き換えるのは
+        そちらのスレッドなので、ワーカースレッドで判定すると切り替えと入れ違う。
+        """
+        loop = self._loop
+        if loop is None:
+            return
+        loop.call_soon_threadsafe(self._relay_optimize_event, payload)
+
+    def _relay_optimize_event(self, payload: dict) -> None:
+        """走らせている文書を開いている間だけ配る。最後の進捗は控えて、戻ってきた画面へ見せる。"""
+        if payload["type"] == "optimize_progress":
+            self._optimize_last_progress = payload
+        if self.session.optimization_visible:
+            self._spawn_broadcast(payload)
+
+    async def _announce_optimization(self) -> None:
+        """文書を差し替えた後、その文書から見た最適化の状態を配り直す。
+
+        走らせている文書へ戻ってきたら「実行中」と最後の進捗を、離れたら「走っていない」を配る
+        (画面の実行中表示・中断ボタン・編集の封鎖はこれで切り替わる)。別の文書を開いている間に
+        終わった実行の結果/失敗は、その文書を開いたときに1度だけ配る。
+        """
+        if self.session.optimizing:
+            # 走っていなければ、画面は終わったときの `optimize_status` で既に「走っていない」を知っている。
+            await self._broadcast({"type": "optimize_status", **self._optimize_status()})
+        if self.session.optimization_visible:
+            if self._optimize_last_progress is not None:
+                await self._broadcast(self._optimize_last_progress)
+            return
+        name = self.session.current_name
+        if name is not None and name in self._optimize_unseen:
+            await self._broadcast(self._optimize_unseen.pop(name))
 
     async def _optimize_cancel(self, connection: Any) -> None:
         """中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**(進捗を出さない短い処理の途中では止まらない)。
@@ -920,7 +980,7 @@ class Server:
         旗を畳むのは次の開始(`Session.begin_optimization`)なので実害は無いが、走っていないのに
         「中断中」と画面へ出すと、次の実行が始まった瞬間に中断表示から始まって見える。
         """
-        if not self.session.optimizing:
+        if not self.session.optimization_visible:
             await _send(connection, {"type": "optimize_status", **self._optimize_status()})
             return
         self.session.cancel_optimization()

@@ -60,7 +60,6 @@
   let {
     documents,
     currentName,
-    locked,
     onRename,
     onOpen,
     onNew,
@@ -83,12 +82,6 @@
      * `BrowserPanel.svelte` が編集中のスケッチを `.sketch-row.active` で示すのと同じ形。
      */
     currentName: string | null
-    /**
-     * **文書を差し替える口(開く・新規)を止める**(形状最適化の実行中)。走っている最適化は
-     * 開始時の文書へ結果を足すので、差し替えると結果が別の文書へ入る(サーバも断る)。
-     * 改名・書き出しは文書を変えないので止めない。
-     */
-    locked: boolean
     /**
      * **いま編集しているファイルを改名する**(名前欄。無題なら「名前を付ける」)。
      *
@@ -288,10 +281,7 @@
     <button
       id="file-new"
       onclick={onNew}
-      disabled={locked}
-      title={locked
-        ? '形状最適化の実行中は文書を差し替えられない'
-        : '今の文書を捨てて空から始める(保存していない編集は消える)'}
+      title="今の文書を捨てて空から始める(保存していない編集は消える)"
     >
       新規
     </button>
@@ -335,8 +325,7 @@
         <button
           class="files-open"
           onclick={() => onOpen(file.name)}
-          disabled={locked}
-          title={locked ? '形状最適化の実行中は文書を差し替えられない' : `${file.name} を開く`}
+          title={`${file.name} を開く`}
         >
           <span class="files-thumb" class:empty-thumb={url === null}>
             {#if url !== null}
