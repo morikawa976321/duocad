@@ -177,6 +177,27 @@ def test_an_unknown_predicate_key_is_refused_instead_of_ignored(server: McpServe
     assert selection_of(server)["count"] == 0
 
 
+def test_a_predicate_without_where_is_told_how_to_ask_for_everything(server: McpServer, session: Session):
+    """「全部の辺」を `where` を省いて書く(実測で繰り返し出る)。断るときに直し方を返す。"""
+    error = call_error(server, "set_selection", {"predicate": {"kind": "edge", "body": box_of(session).id}})
+    assert error["code"] == "invalid_predicate"
+    assert '"where": []' in error["message"]
+
+
+def test_asking_for_a_region_by_predicate_says_how_regions_are_selected(server: McpServer):
+    """領域は述語で選べない。断るだけだと `kind: "region"` を繰り返すので、選び方を返す。"""
+    error = call_error(server, "set_selection", {"predicate": {"kind": "region", "where": []}})
+    assert error["code"] == "invalid_predicate"
+    assert '"sketch"' in error["message"] and "refs" in error["message"]
+
+
+def test_a_verb_refused_for_an_empty_selection_says_how_to_select(server: McpServer):
+    """何を選べばよいか(`required_kind`)だけでなく、選び方まで返す。"""
+    error = call_error(server, "extrude", {"distance": 5})
+    assert error["code"] == "selection_empty"
+    assert "set_selection" in error["hint"]
+
+
 def test_describe_predicates_changes_nothing(server: McpServer, session: Session):
     """自己記述は読み取り(選択もログも動かさない)。"""
     before = len(session.document.log.entries)

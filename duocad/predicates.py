@@ -84,9 +84,14 @@ def validate(predicate: dict) -> dict:
         raise ValueError("predicate is missing 'kind'")
     kind = predicate["kind"]
     if kind not in PREDICATE_KINDS:
-        raise ValueError(f"unknown predicate kind: {kind!r}")
+        # 実測で、スケッチの領域を述語で選ぼうとして `kind: "region"` を繰り返す。選び方を返す。
+        raise ValueError(
+            f"unknown predicate kind: {kind!r} (a predicate selects {' or '.join(PREDICATE_KINDS)}; "
+            'a sketch region is selected with refs=[{"sketch": sketch_id, "index": 1}])'
+        )
     if "where" not in predicate:
-        raise ValueError("predicate is missing 'where'")
+        # 実測で、「全部の辺」を選ぶときに `where` を省く書き方が繰り返し出る。直し方を返す。
+        raise ValueError(f'predicate is missing \'where\' (use "where": [] to select every {kind})')
     where = predicate["where"]
     if not isinstance(where, list):
         raise ValueError(f"'where' must be a list, got {type(where).__name__}")

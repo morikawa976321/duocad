@@ -115,6 +115,15 @@ INTERNAL_ERROR = -32603
 # --------------------------------------------------------------------------------------
 # ツール(コアへの入口)
 # --------------------------------------------------------------------------------------
+#: `selection_empty` に添える「その種別の選び方」。実測で、領域を選ばずに `extrude` を呼び、
+#: 断られたあとも選び方(領域は述語では選べない)が分からず数往復を使っていた。
+_HOW_TO_SELECT = {
+    "region": 'select the sketch region first: set_selection(refs=[{"sketch": sketch_id, "index": 1}])',
+    "edge": 'select edges first: set_selection(predicate={"kind": "edge", "body": body_id, "where": [...]})',
+    "face": 'select faces first: set_selection(predicate={"kind": "face", "body": body_id, "where": [...]})',
+}
+
+
 class ToolError(Exception):
     """ツール実行の構造化失敗(`isError` の封筒へ畳む)。プロトコル層の誤りには使わない。"""
 
@@ -501,12 +510,15 @@ class DocumentTools:
                 "selection": self._selection_summary(),
             }
         if isinstance(error, selection.SelectionEmpty):
-            return {
+            payload = {
                 **base,
                 "code": "selection_empty",
                 "required_kind": error.kind,
                 "selection": self._selection_summary(),
             }
+            if error.kind in _HOW_TO_SELECT:
+                payload["hint"] = _HOW_TO_SELECT[error.kind]
+            return payload
         if isinstance(error, selection.SelectionAmbiguous):
             return {
                 **base,
