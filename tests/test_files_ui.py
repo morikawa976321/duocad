@@ -760,6 +760,20 @@ def test_a_file_without_created_keeps_none_instead_of_borrowing_the_mtime(sessio
     assert by_name["old.json"]["created"] is None
 
 
+def test_a_copy_gets_its_own_created_instead_of_the_source_one(session: Session) -> None:
+    """落ちたら: 複製が元のバイト列をそのまま写していて、作成日時が元の文書のままになる。"""
+    _box(session)
+    session.save_document("a.json")
+    payload = json.loads((session.models_dir / "a.json").read_text(encoding="utf-8"))
+    payload["created"] = 1.0  # 1970年 —— 今の時刻とは取り違えようがない
+    (session.models_dir / "a.json").write_text(json.dumps(payload), encoding="utf-8")
+    session.new_document()
+
+    session.copy_document("a.json", "b.json")
+    assert _created(session, "b.json") > 1.0
+    assert _created(session, "a.json") == 1.0, "複製が元の作成日時を書き換えた"
+
+
 # --------------------------------------------------------------------------------------
 # サムネイル(`models/.thumbnails/` の付随ファイル)
 # --------------------------------------------------------------------------------------
@@ -857,6 +871,37 @@ def test_a_new_file_does_not_inherit_a_stale_thumbnail_of_the_same_name(session:
     _box(session)
     session.rename_document("a.json")
     assert session.get_thumbnail("a.json")["png"] is None
+
+
+def test_renaming_onto_a_stale_thumbnail_drops_it(session: Session) -> None:
+    """落ちたら: 外で消された文書の絵が、別の文書をその名前へ改名したときに引き継がれる。"""
+    _box(session)
+    session.save_document("gone.json")
+    session.save_thumbnail("gone.json", _PNG)
+    session.new_document()
+    (session.models_dir / "gone.json").unlink()  # 外で消された(付随ファイルは残る)
+    _box(session)
+    session.save_document("mine.json")  # 改名元のファイルがある経路
+    session.rename_document("gone.json")
+    assert session.get_thumbnail("gone.json")["png"] is None
+
+
+def test_a_thumbnail_that_cannot_be_written_is_reported_not_raised(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """落ちたら: 付随ファイルを書けないだけで、人が何もしていないのにエラーの通知が出る。"""
+    import duocad.session as session_module
+
+    _box(session)
+    session.save_document("a.json")
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError("別のプログラムが開いている")
+
+    monkeypatch.setattr(session_module.os, "replace", refuse)
+    answer = session.save_thumbnail("a.json", _PNG)
+    assert answer["saved"] is False and answer["thumb"] is None
+    assert any("サムネイル" in warning for warning in session.warnings)
 
 
 def test_thumbnails_are_not_exposed_to_ai(session: Session) -> None:

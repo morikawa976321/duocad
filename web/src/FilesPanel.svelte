@@ -28,7 +28,7 @@
    * **一覧の1行は、正方形のサムネイル・ファイル名・作成日時・更新日時**(本人指示 2026-10-04)。
    * サムネイルから日時までが1つの「開く」ボタンで、右端に複製・削除が縦に並ぶ。サムネイルは
    * 行が見えたときに `onNeedThumbnail` で取りに行かせる(319件を一度に取らない)。撮るのは
-   * `documentFiles.svelte.ts`。作成日時を持たない既存ファイルは「—」(作り物の日付で埋めない)。
+   * `documentFiles.svelte.ts`。作成日時を持たない既存ファイルは「—」(docs/UI.md)。
    *
    * **一覧の行からは、開く・別名で複製・削除ができる**(issue #17)。複製と削除はディスク上の
    * ファイルの整理であって、いま編集している文書は変わらない(`open_document` とは別の操作)。
@@ -155,25 +155,28 @@
   const sorted = $derived([...documents].sort((a, b) => b.mtime - a.mtime))
 
   /**
-   * 行が一覧の見える範囲(+少し先)に入っている間、`notify` を呼ぶ。行がすでに見えている
-   * ときに一覧が取り直されてサムネイルの版が上がった場合も呼ぶ(`update`) ——
-   * 見え始めの1回だけだと、開いたまま撮り直した絵が届かない。
+   * 行が一覧の見える範囲(+少し先)に入ったら、その行のサムネイルを求める。見えている間に
+   * 一覧が取り直されて版が上がったときも求め直す(`update`)。
+   *
+   * **引数は値(`{ name, thumb }`)で受ける。** 関数を渡すと、Svelte は関数を作るだけで中の
+   * `file.thumb` を読まないので、版が上がっても `update` が呼ばれない(svelte 5.56 のコンパイル
+   * 結果で確認)。
    */
-  function whenVisible(node: HTMLElement, notify: () => void) {
+  function whenVisible(node: HTMLElement, wanted: { name: string; thumb: number | null }) {
     let visible = false
-    let current = notify
+    let current = wanted
     const observer = new IntersectionObserver(
       (entries) => {
         visible = entries.some((entry) => entry.isIntersecting)
-        if (visible) current()
+        if (visible) onNeedThumbnail(current.name, current.thumb)
       },
       { root: node.closest('.list'), rootMargin: '200px 0px' },
     )
     observer.observe(node)
     return {
-      update(next: () => void) {
+      update(next: { name: string; thumb: number | null }) {
         current = next
-        if (visible) current()
+        if (visible) onNeedThumbnail(current.name, current.thumb)
       },
       destroy() {
         observer.disconnect()
@@ -320,7 +323,7 @@
         class:active={file.name === currentName}
         class:row-active={file.name === currentName}
         data-name={file.name}
-        use:whenVisible={() => onNeedThumbnail(file.name, file.thumb)}
+        use:whenVisible={{ name: file.name, thumb: file.thumb }}
       >
         <button
           class="files-open"

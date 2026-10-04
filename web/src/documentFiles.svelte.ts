@@ -25,6 +25,11 @@ export interface DocumentFilesDeps {
    * 無ければ空文字、ビューポートがまだ無ければ null(撮らない)。
    */
   captureThumbnail(): string | null
+  /**
+   * サーバに繋がっているか。サムネイルは人が出していない裏の要求なので、繋がっていなければ
+   * 送らない(送ると「繋がっていないので送れなかった」の通知が出る)。
+   */
+  connected(): boolean
 }
 
 /** 手元に持っているサムネイル。`url` が null なら「その版では絵が無い」と分かっている。 */
@@ -80,6 +85,11 @@ export interface DocumentFiles {
    * (何度呼んでもよい)。
    */
   wantThumbnail(name: string, version: number | null): void
+  /**
+   * サムネイルの応答待ちを全部捨てる。**接続が切れたとき**と、**サムネイルの要求が
+   * エラーで返ったとき**(エラーの封筒はどのファイルかを言わない)に App が呼ぶ。
+   */
+  dropThumbnailRequests(): void
 }
 
 /** 一覧の取り直しをまとめる待ち[ms]。 */
@@ -108,11 +118,21 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
 
   // ---------------------------------------------------------------- サムネイル
   const thumbnails = $state<Record<string, CachedThumbnail>>({})
-  /** 取りに行って応答を待っているファイル名(同じ行が何度見えても1回だけ取る)。 */
+  /**
+   * 取りに行って応答を待っているファイル名(同じ行が何度見えても1回だけ取る)。
+   * **接続が切れたら空にする**(`dropThumbnailRequests`) —— 応答はもう来ないので、残すと
+   * 再接続後もその行を二度と取りに行かない。
+   */
   const fetching = new Set<string>()
-  /** 送ったが応答をまだ受けていない絵(応答の版と組にして手元へ置く。取り直さないため)。 */
-  const uploading = new Map<string, string>()
+  /**
+   * 送ったが応答をまだ受けていない絵(応答の版と組にして手元へ置く。取り直さないため)。
+   * 同じ名前で続けて送ることがあるので、名前ごとに送った順の列で持つ(応答は同じ接続を
+   * 送った順に返る)。
+   */
+  const uploading = new Map<string, string[]>()
   let captureTimer: ReturnType<typeof setTimeout> | null = null
+  /** 繋がっていなくて撮れなかった。次の状態配信(再接続の直後に必ず来る)で撮り直す。 */
+  let captureMissed = false
 
   function scheduleCapture(): void {
     if (captureTimer !== null) clearTimeout(captureTimer)
@@ -128,9 +148,15 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     if (captureTimer !== null) clearTimeout(captureTimer)
     captureTimer = null
     if (currentName === null) return
+    if (!deps.connected()) {
+      captureMissed = true
+      return
+    }
     const png = deps.captureThumbnail()
     if (png === null) return
-    uploading.set(currentName, png)
+    const queue = uploading.get(currentName) ?? []
+    queue.push(png)
+    uploading.set(currentName, queue)
     deps.runVerb('save_thumbnail', { name: currentName, png }, deps.nextOp())
   }
 
@@ -143,8 +169,9 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     const name = payload.name
     if (name === undefined) return
     if (payload.action === 'save_thumbnail') {
-      const png = uploading.get(name)
-      uploading.delete(name)
+      const queue = uploading.get(name)
+      const png = queue?.shift()
+      if (queue !== undefined && queue.length === 0) uploading.delete(name)
       if (!payload.saved) return
       // 消した(空文字を送った)ときは版が無い。手元の版は今にして、一覧に残っている
       // 古い版で取りに行かせない。
@@ -266,9 +293,10 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
       ) {
         scheduleRefresh()
         scheduleCapture()
-      } else if (firstState) {
+      } else if (firstState || captureMissed) {
         scheduleCapture()
       }
+      captureMissed = false
       seenAppliedCount = next.applied_count
       seenLogLength = next.log.length
     },
@@ -305,11 +333,15 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
       return thumbnails[name]?.url ?? null
     },
     wantThumbnail(name, version) {
-      if (version === null || fetching.has(name)) return
+      if (version === null || fetching.has(name) || !deps.connected()) return
       const cached = thumbnails[name]
       if (cached !== undefined && cached.version >= version) return
       fetching.add(name)
       deps.runVerb('get_thumbnail', { name }, deps.nextOp())
+    },
+    dropThumbnailRequests() {
+      fetching.clear()
+      uploading.clear()
     },
   }
 }

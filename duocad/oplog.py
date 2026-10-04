@@ -168,8 +168,7 @@ class OpLog:
 
         `created` は文書のファイルを最初に書いた時刻(UNIX秒。`Session` が持つ)。操作では
         ないので `operations` の外に置き、None なら載せない。**ファイルシステムの作成時刻では
-        代わりにならない** —— 保存は一時ファイルを `os.replace` で差し替えるので、作成時刻が
-        毎回「最後に保存した時刻」になる(Windows 11 / NTFS で実測、2026-10-04)。
+        代わりにならない**(保存のたびに上書きされる。実測は docs/UI.md のファイル一覧の項)。
         **版は上げていない**: 読む側(`from_payload`)は入れ物の未知のキーを読まない。
         """
         payload: dict = {"version": self.FORMAT_VERSION}

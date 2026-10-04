@@ -138,8 +138,7 @@ class Session:
         self._current_name: Optional[str] = None
         #: 編集中の文書のファイルを最初に書いた時刻(UNIX秒。`OpLog.to_json` の `created`)。
         #: 新しい名前で書いたときに決まり、開けばファイルから読む。**`created` を持たない
-        #: 既存ファイルは None のまま上書きされ続ける**(本当の作成日はもう残っていないので、
-        #: 更新日で埋めない)。
+        #: 既存ファイルは None のまま上書きされ続ける**(理由は docs/UI.md のファイル一覧の項)。
         self._created: Optional[float] = None
         self._applied_count = 0
         #: **自動保存で書けなかった変更があるか**(issue #5、本人判断 2026-09-16)。文書が
@@ -1313,15 +1312,21 @@ class Session:
         """画面が撮ったPNG(base64)を `name` のサムネイルとして書く。**verbではない**。
 
         `png` が空文字なら消す(見えている立体が1つも無い文書。古い絵を残さない)。
-        **文書のファイルが無ければ書かずに `saved: False` を返す**(断らない) —— 画面は
-        撮ってから送るまでに改名が挟まりうるので、断ると人が何もしていないのに通知が出る。
+        **文書のファイルが無い・書けない(OSError)ときも断らず `saved: False` を返す** —— 画面は
+        撮ってから送るまでに改名が挟まりうるし、Windows では別のプログラムが開いているだけで
+        `os.replace` が落ちる(`autosave` と同じ)。断ると人が何もしていないのに通知が出る。
+        断るのは中身が壊れているとき(画面側の不具合)だけ。
         """
         target = self._resolve_document_name(name)
         thumbnail = self._thumbnail_path(target)
         reply = {"action": "save_thumbnail", "path": str(thumbnail), "name": target.name}
         text = str(png)
         if text == "":
-            thumbnail.unlink(missing_ok=True)
+            try:
+                thumbnail.unlink(missing_ok=True)
+            except OSError as error:
+                self.warnings.append(f"サムネイルを消せなかった: {error}")
+                return {**reply, "saved": False, "thumb": None}
             return {**reply, "saved": True, "thumb": None}
         try:
             data = base64.b64decode(text, validate=True)
@@ -1333,21 +1338,26 @@ class Session:
             raise ValueError(f"サムネイルが大きすぎる({len(data)} > {THUMBNAIL_MAX_BYTES}バイト)")
         if not target.exists():
             return {**reply, "saved": False, "thumb": None}
-        thumbnail.parent.mkdir(exist_ok=True)
-        staging = thumbnail.with_name(thumbnail.name + ".writing")
-        staging.write_bytes(data)
-        os.replace(staging, thumbnail)
-        return {**reply, "saved": True, "thumb": thumbnail.stat().st_mtime}
+        try:
+            thumbnail.parent.mkdir(exist_ok=True)
+            staging = thumbnail.with_name(thumbnail.name + ".writing")
+            staging.write_bytes(data)
+            os.replace(staging, thumbnail)
+            thumb = thumbnail.stat().st_mtime
+        except OSError as error:
+            self.warnings.append(f"サムネイルを書けなかった: {error}")
+            return {**reply, "saved": False, "thumb": None}
+        return {**reply, "saved": True, "thumb": thumb}
 
     def get_thumbnail(self, name: Any) -> dict:
-        """`name` のサムネイルをbase64で返す(無ければ `png: None`)。**verbではない**。"""
+        """`name` のサムネイルをbase64で返す(無い・読めなければ `png: None`)。**verbではない**。"""
         target = self._resolve_document_name(name)
         thumbnail = self._thumbnail_path(target)
         reply = {"action": "thumbnail", "path": str(thumbnail), "name": target.name}
         try:
             thumb = thumbnail.stat().st_mtime
             data = thumbnail.read_bytes()
-        except FileNotFoundError:
+        except OSError:
             return {**reply, "png": None, "thumb": None}
         return {**reply, "png": base64.b64encode(data).decode("ascii"), "thumb": thumb}
 

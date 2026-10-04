@@ -305,6 +305,7 @@
     note,
     panelOpen: () => dataPanelOpen,
     captureThumbnail: () => viewport?.captureThumbnail() ?? null,
+    connected: () => status === 'open',
   })
   /**
    * 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。**サーバの写し**
@@ -368,6 +369,13 @@
   const session = createSession({
     onState: handleState,
     onError: (message, where) => {
+      // **サムネイルは裏の要求**(`documentFiles.svelte.ts`)。人が出した操作の応答待ち
+      // (`pendingOp`)を解かない —— 解くと、待っていた操作の確定より先に次の Enter が通る。
+      if (where === 'save_thumbnail' || where === 'get_thumbnail') {
+        files.dropThumbnailRequests()
+        fail(`エラー[${where}] ${message}`)
+        return
+      }
       // `where` はどのverbで失敗したかを言う印だが、**`send` はverbではない**
       // (「繋がっていないので送れなかった」。2026-08-27にヘッダの常設ステータスを外して以来、
       // 繋がっていないことに気づく唯一の札になった)。内部の語を頭に付けると、
@@ -413,6 +421,7 @@
       if (next !== 'open') {
         edgesAsked.clear()
         verticesAsked.clear()
+        files.dropThumbnailRequests()
         // 実行の押下への返事(`optimize_status` / `optimize_error`)はもう来ない。走っているかは
         // 繋ぎ直したときにサーバが最初に送る `optimize_status` で取り直す。
         optimizeStarting = false
