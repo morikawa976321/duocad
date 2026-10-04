@@ -270,13 +270,13 @@ def test_ai_commands_are_not_verbs():
     """`ai_*`(G・アプリ内AIエージェントの配線)はWebSocketから踏めるが、
     「MCPツール名==WSコマンド名==UIコマンドID==verb名」の一致規律の対象集合には入らない。
 
-    `ai_get_status` / `ai_configure` / `ai_send` / `ai_cancel` は文書を直接は変えない
+    `ai_get_status` / `ai_configure` / `ai_prepare` / `ai_send` / `ai_cancel` は文書を直接は変えない
     (操作ログに載らずundoの単位でもない)。**この検査はその除外を明示的に固定する**
     (`_server_command_names()` はソースを機械的に読むだけなので、宣言に無い名前が
     無言で増減しても他の検査は気づかない)。
     """
     ai_names = {name for name in _server_command_names() if name.startswith("ai_")}
-    assert ai_names == {"ai_get_status", "ai_configure", "ai_send", "ai_cancel"}, (
+    assert ai_names == {"ai_get_status", "ai_configure", "ai_prepare", "ai_send", "ai_cancel"}, (
         f"ai_* の顔ぶれが変わった(このテストを更新すること): {sorted(ai_names)}"
     )
     declared = {command.name for command in _catalog().COMMANDS}

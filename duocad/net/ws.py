@@ -25,7 +25,8 @@
         {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}
         {"type": "ai_error", "message": str}
 
-**`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_send` / `ai_cancel` は文書を
+**`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_prepare` / `ai_send` /
+`ai_cancel` は文書を
 直接は変えない(操作ログに載らず、undoの単位でもない) —— 文書を変えるのはエージェントが呼ぶ
 既存ツールの側で、それは通常のverb配信としてこの後に届く。したがって `catalog.COMMANDS` には
 **入れない**し、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
@@ -75,6 +76,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import threading
 from typing import Any, Optional  # Any: listeners / 接続
 
 from .. import catalog, optimize_run, selection
@@ -171,6 +173,9 @@ class Server:
         self._ai_loop: Optional[AgentLoop] = None
         self._ai_cancellation = Cancellation()
         self._ai_running = False
+        #: ウォームアップを始めた会話と、その終わりを待つための印(`_ai_prepare`)。
+        self._ai_prepared_loop: Optional[AgentLoop] = None
+        self._ai_prepare_done: Optional[threading.Event] = None
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
         self._pending_ai_runs: set = set()
         # -------------------------------------------------- H: 形状最適化を走らせる
@@ -509,6 +514,8 @@ class Server:
                 # (待たずに関数を抜けると、テストのようにここで `asyncio.run` が閉じる
                 # 呼び方では配信タスクが実行される前に握りつぶされる)。
                 await self._broadcast({"type": "ai_status", **status})
+            elif command == "ai_prepare":
+                self._ai_prepare()
             elif command == "ai_send":
                 await self._ai_start(connection, str(message.get("message") or ""))
             elif command == "ai_cancel":
@@ -607,6 +614,8 @@ class Server:
             self._ai_provider_kind = provider
         self._ai_model = model or None
         self._ai_base_url = base_url or None
+        # 古い設定で走っているウォームアップの接続を閉じる(捨てる会話のために相手を占有しない)。
+        self._ai_cancellation.cancel()
         # 次に使うときに作り直す(古いプロバイダ・古い会話の履歴を持ち越さない)。
         self._ai_loop = None
         self._ai_cancellation = Cancellation()
@@ -653,6 +662,44 @@ class Server:
             }
         )
 
+    def _ai_prepare(self) -> None:
+        """固定プレフィックス(system + tools)を先に読ませておく。**1つの会話につき1回**。
+
+        画面が繋がった時点と設定を変えた直後に届く。cold の読み込みは遅い機種で分単位かかるので、
+        人が最初の依頼を打っている間に済ませる(実測: 最初の依頼の処理量が 6,686 → 16 トークン)。
+
+        **何も返さない** —— 相手がまだ居ないのは事故ではなく、最初の依頼がそれを言う。
+        `ai_get_status` に相乗りさせないのは、あちらが状態を読むだけの口だからである
+        (読んだだけで外へHTTPが飛ぶと、検査や監視が相手のスロットを書き換える)。
+        """
+        if self._ai_running:
+            return
+        try:
+            loop_obj = self._ensure_ai_loop()
+        except ProviderError:
+            return
+        if loop_obj is self._ai_prepared_loop:
+            return
+        self._ai_prepared_loop = loop_obj
+        done = threading.Event()
+        self._ai_prepare_done = done
+
+        def work() -> dict:
+            try:
+                return loop_obj.prepare()
+            finally:
+                done.set()
+
+        future = asyncio.get_running_loop().run_in_executor(None, work)
+        self._pending_ai_runs.add(future)
+
+        def finished(fut: "asyncio.Future") -> None:
+            self._pending_ai_runs.discard(fut)
+            if not fut.cancelled() and fut.exception() is not None:
+                self.session.warnings.append(f"AIのウォームアップに失敗: {fut.exception()}")
+
+        future.add_done_callback(finished)
+
     async def _ai_start(self, connection: Any, prompt: str) -> None:
         """1つの発話でエージェントを起こす。**`AgentLoop.run()` を待たずに返る** ——
 
@@ -683,8 +730,17 @@ class Server:
         self._ai_cancellation.clear()
         await self._broadcast({"type": "ai_status", **self._ai_status()})
 
+        # **ウォームアップが走っていれば、終わってから始める。** 並べて投げても相手の側で後ろに
+        # 並ぶだけで、その待ちが `run()` の合計時間の予算を食って時間切れになる。
+        warming = self._ai_prepare_done if loop_obj is self._ai_prepared_loop else None
+
+        def work():
+            if warming is not None:
+                warming.wait()
+            return loop_obj.run(prompt)
+
         running_loop = asyncio.get_running_loop()
-        future = running_loop.run_in_executor(None, loop_obj.run, prompt)
+        future = running_loop.run_in_executor(None, work)
         self._pending_ai_runs.add(future)
 
         def finished(fut: "asyncio.Future") -> None:

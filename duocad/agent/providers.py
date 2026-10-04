@@ -44,6 +44,16 @@ MAX_ERROR_CHARS = 400
 #: トークン数、`prompt_n` は新しく読んだ数、`predicted_n` は書いた数。
 TIMING_KEYS = ("cache_n", "prompt_n", "prompt_ms", "predicted_n", "predicted_ms")
 
+#: 固定プレフィックスを保存するスロットファイル(llama-server の `--slot-save-path` の下)。
+#: **1つを上書きし続ける** —— 名前を内容ごとに変えると、ツール定義を変えるたびに古いファイルが
+#: 相手のディスクに残り、こちらからは消せない。
+SLOT_FILE = "duocad-prefix.bin"
+#: スロットの保存・復元1回の待ち上限(秒)。ハングの保険として自分で置いた値(実測は0.1秒)。
+SLOT_TIMEOUT = 60.0
+#: ウォームアップで読んだトークン数がこれ以下なら「戻したスロットが今の定義と同じだった」と見る。
+#: 実測: 同じ本文の再送で読むのは1トークン。8 は版による数トークンの差を許すために自分で置いた余裕。
+WARM_HIT_MAX_TOKENS = 8
+
 #: HTTPの実体(`(url, 本文, ヘッダ, 応答全体の待ち上限) -> 非streamingと同じ形の応答`)。
 #: テストは差し替える(外部を叩かないため)。
 Transport = Callable[[str, dict, dict, float], dict]
@@ -366,6 +376,10 @@ class Provider:
     def abort(self) -> None:
         """走っている往復を捨てる(中断フラグが立ったとき**別スレッドから**呼ばれる)。既定は何もしない。"""
 
+    def prepare(self, *, system: str, tools: Sequence[dict], timeout: float) -> dict:
+        """固定プレフィックス(system + tools)を相手のキャッシュへ載せておく。既定は何もしない。"""
+        return {}
+
     def complete(
         self,
         *,
@@ -559,13 +573,45 @@ class OpenAICompatProvider(Provider):
         payload = self.build_payload(
             system=system, turns=turns, tools=tools, max_tokens=max_tokens
         )
-        headers = {}
-        if self._api_key:
-            headers["authorization"] = f"Bearer {self._api_key}"
         response = self._call(
-            f"{self.base_url}/chat/completions", payload, headers, timeout
+            f"{self.base_url}/chat/completions", payload, self._headers(), timeout
         )
         return self.parse_reply(response)
+
+    def _headers(self) -> dict:
+        return {"authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+
+    # ------------------------------------------------------------------ ウォームアップ
+    def prepare(self, *, system: str, tools: Sequence[dict], timeout: float) -> dict:
+        """固定プレフィックスをサーバのキャッシュへ載せておく(会話には何も足さない)。
+
+        1. 保存済みのスロットがあれば戻す(`--slot-save-path` 付きの llama-server)。
+        2. system + tools + `"."` で1トークンだけ生成させる。戻したものが今の定義と同じなら
+           読むのは1トークンで済み、違えば食い違った所から読み直す。**古いスロットを戻しても
+           結果は狂わない** —— キャッシュはトークン列の前方一致でしか使われない。
+        3. 読み直しが起きていたら保存し直す。
+
+        スロットの口が無いサーバ(`--slot-save-path` 無し・他のOpenAI互換)では2だけが効く。
+        """
+        restored = self._slot("restore")
+        payload = self.build_payload(system=system, turns=[UserTurn(".")], tools=tools, max_tokens=1)
+        reply = self.parse_reply(
+            self._call(f"{self.base_url}/chat/completions", payload, self._headers(), timeout)
+        )
+        read = reply.usage.get("prompt_n")
+        saved = (read is None or read > WARM_HIT_MAX_TOKENS) and self._slot("save")
+        return {"restored": restored, "read": read, "reused": reply.usage.get("cache_n"), "saved": saved}
+
+    def _slot(self, action: str) -> bool:
+        """スロット0を保存/復元する(llama-server 固有の口)。**口が無ければ黙って `False`**。"""
+        root = self.base_url[: -len("/v1")] if self.base_url.endswith("/v1") else self.base_url
+        try:
+            post_json(
+                f"{root}/slots/0?action={action}", {"filename": SLOT_FILE}, self._headers(), SLOT_TIMEOUT
+            )
+        except ProviderError:
+            return False
+        return True
 
     def _call(self, url: str, payload: dict, headers: dict, timeout: float) -> dict:
         try:

@@ -108,6 +108,11 @@ DEFAULT_REQUEST_TIMEOUT = DEFAULT_MAX_TOKENS / MIN_TOKENS_PER_SEC + REQUEST_OVER
 #: 往復数の問題である(`describe_document` のようにアプリが既に知っている情報の往復を消す)。
 DEFAULT_MAX_TOTAL_SECONDS = 30.0
 
+#: ウォームアップ(`AgentLoop.prepare`)の待ち上限(秒)。cold の読み込みは遅い機種で分単位に
+#: なるので、通常の往復の上限とは別に取る。**ハングの保険として自分で置いた値**であって、
+#: 実測から導いた待ち時間ではない。
+PREPARE_TIMEOUT = 1800.0
+
 #: 進捗の口。`(ツール名, 引数, 結果, 成否)`。Gがこれを購読して画面に出す。
 ProgressCallback = Callable[[str, dict, Any, bool], None]
 
@@ -268,6 +273,21 @@ class AgentLoop:
     def reset(self) -> None:
         """会話を捨てる(文書は触らない)。"""
         self.turns = []
+
+    def prepare(self) -> dict:
+        """system + tools を先に読ませておく(会話には何も足さない)。
+
+        **`run()` と同じ文・同じツール定義を渡す** —— 1文字でも違うと、相手のキャッシュは
+        食い違った所から先を使えない。失敗は握って返す(サーバがまだ居ないのは事故ではなく、
+        最初の依頼がそれを言う)。
+        """
+        prepare = getattr(self.provider, "prepare", None)
+        if not callable(prepare):
+            return {}
+        try:
+            return prepare(system=self.system, tools=self.tools.descriptors(), timeout=PREPARE_TIMEOUT)
+        except ProviderError as error:
+            return {"error": str(error)}
 
     def run(self, prompt: str) -> AgentRun:
         """1つの指示を投げて、モデルがツールを呼ばなくなるまで回す。"""

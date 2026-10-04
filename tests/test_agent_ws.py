@@ -4,7 +4,7 @@
 `duocad/catalog.py` の `COMMANDS` には入れない。除外そのものは
 `test_ui_command_wiring.py::test_ai_commands_are_not_verbs` が固定する。
 
-固定する6つ:
+固定する7つ:
 
 1. **`ai_status` に鍵の類は載らない**。`api_key_configured` という欄自体が無い
    (Claudeへ繋ぐ道はMCP経路に残っている)。
@@ -18,6 +18,7 @@
    出していなくても外部へ送られるのと同じである)。
 6. **最後の1接続が切れたらAIの実行を中断する**。誰も見ていないまま文書が変わり続けるのを防ぐ
    (他の接続が残っていれば続ける)。
+7. **ウォームアップ(`ai_prepare`)は頼まれたときだけ、1会話に1回走る**。依頼はその終わりを待つ。
 
 実キーは使わない(`RecordedProvider` で `duocad.server.build_provider` を差し替える。
 5だけは「差し替えを素通りしても鍵が漏れないこと」自体を検査したいので、
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 
 from duocad.mcp_server import DocumentTools
@@ -428,5 +430,103 @@ def test_last_client_disconnecting_cancels_a_running_ai_run(monkeypatch, box_ses
 
     server = asyncio.run(scenario())
     assert server._ai_running is False
+
+
+# --------------------------------------------------------------------------------------
+# 7. ウォームアップ(`ai_prepare`)は1会話に1回で、依頼はその終わりを待つ
+# --------------------------------------------------------------------------------------
+class WarmingProvider(RecordedProvider):
+    """`prepare` を数え、`gate` が開くまでその中で待つ(ウォームアップの最中を作る)。"""
+
+    def __init__(self, replies, *, gate: threading.Event | None = None) -> None:
+        super().__init__(replies)
+        self.gate = gate
+        self.order: list[str] = []
+
+    def prepare(self, *, system, tools, timeout) -> dict:
+        self.order.append("prepare-start")
+        if self.gate is not None:
+            assert self.gate.wait(5.0)
+        self.order.append("prepare-end")
+        return {}
+
+    def complete(self, **request):
+        self.order.append("complete")
+        return super().complete(**request)
+
+
+def test_ai_prepare_warms_each_conversation_once_and_only_when_asked(monkeypatch, box_session: Session):
+    """読むだけの `ai_get_status` では走らず、`ai_prepare` を重ねても1回、設定を変えたらもう1回。"""
+    provider = WarmingProvider([])
+    monkeypatch.setattr("duocad.server.build_provider", lambda *a, **k: provider)
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(connection, json.dumps({"cmd": "ai_get_status"}))
+        await asyncio.sleep(0.05)
+        after_status = list(provider.order)
+
+        for _ in range(2):
+            await server._dispatch(connection, json.dumps({"cmd": "ai_prepare"}))
+        await _wait_until(lambda: provider.order[-1:] == ["prepare-end"])
+        await asyncio.sleep(0.05)
+        after_prepare = list(provider.order)
+
+        await server._dispatch(connection, json.dumps({"cmd": "ai_configure", "model": "other"}))
+        await server._dispatch(connection, json.dumps({"cmd": "ai_prepare"}))
+        await _wait_until(lambda: provider.order.count("prepare-end") == 2)
+        await _drain()
+        return after_status, after_prepare, connection
+
+    after_status, after_prepare, connection = asyncio.run(scenario())
+    assert after_status == [], "状態を読んだだけでウォームアップが走っている"
+    assert after_prepare == ["prepare-start", "prepare-end"]
+    assert provider.order.count("prepare-start") == 2
+    assert not connection.of_type("ai_error"), "ウォームアップは何も返さない"
+
+
+def test_ai_send_waits_for_a_warm_up_that_is_still_running(monkeypatch, box_session: Session):
+    """並べて投げると相手の側で後ろに並び、その待ちが合計時間の予算を食う。終わってから始める。"""
+    gate = threading.Event()
+    provider = WarmingProvider([spoke("done")], gate=gate)
+    monkeypatch.setattr("duocad.server.build_provider", lambda *a, **k: provider)
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        watcher = FakeConnection()
+        server.clients.add(watcher)
+        await server._dispatch(watcher, json.dumps({"cmd": "ai_prepare"}))
+        await _wait_until(lambda: provider.order == ["prepare-start"])
+        await server._dispatch(watcher, json.dumps({"cmd": "ai_send", "message": "hi"}))
+        await asyncio.sleep(0.1)
+        during = list(provider.order)
+        gate.set()
+        await _wait_until(
+            lambda: watcher.of_type("ai_result")
+            and any(s["running"] is False for s in watcher.of_type("ai_status"))
+        )
+        await _drain()
+        return during, watcher
+
+    during, watcher = asyncio.run(scenario())
+    assert during == ["prepare-start"], "ウォームアップの最中に依頼を投げている"
+    assert provider.order == ["prepare-start", "prepare-end", "complete"]
+    assert watcher.of_type("ai_result")[-1]["status"] == "completed"
+
+
+def test_ai_prepare_does_nothing_while_a_run_is_in_flight(monkeypatch, box_session: Session):
+    provider = WarmingProvider([spoke("done")])
+    monkeypatch.setattr("duocad.server.build_provider", lambda *a, **k: provider)
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        server._ai_running = True
+        await server._dispatch(FakeConnection(), json.dumps({"cmd": "ai_prepare"}))
+        await asyncio.sleep(0.05)
+
+    asyncio.run(scenario())
+    assert provider.order == []
 
 

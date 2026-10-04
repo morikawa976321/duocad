@@ -390,6 +390,8 @@
       // (再)接続したら今のAI設定を取り直す(サーバは再起動していなくても、
       // 前回の接続が切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
+      // 人が最初の依頼を打っている間に、AIへツール定義を読ませておく(遅い機種で分単位かかる)。
+      if (next === 'open') session.aiPrepare()
       // (再)接続したら `models/` の一覧も取り直す(サーバの再起動・別セッションの
       // 保存で増減しうる。`FilesPanel.svelte` が空のまま固まらないようにする)。
       if (next === 'open') files.refresh()
@@ -2393,7 +2395,11 @@
           transcript={ai.transcript}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}
-          onConfigure={(providerKind, baseUrl) => session.aiConfigure(providerKind, baseUrl)}
+          onConfigure={(providerKind, baseUrl) => {
+            session.aiConfigure(providerKind, baseUrl)
+            // 設定を変えると会話が作り直されるので、新しい相手にも読ませておく。
+            session.aiPrepare()
+          }}
         />
       </aside>
     {/if}
