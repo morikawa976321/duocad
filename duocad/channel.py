@@ -142,7 +142,12 @@ class StableUpdater:
             remote = f"origin/{self.branch}"
             ancestor = _git("merge-base", "--is-ancestor", "HEAD", remote, cwd=self.repo_root)
             if ancestor.returncode != 0:
-                return {**base, "state": "blocked", "reason": f"HEAD が {remote} の祖先でない(早送りできない)"}
+                ahead = _git("merge-base", "--is-ancestor", remote, "HEAD", cwd=self.repo_root)
+                if ahead.returncode == 0:
+                    # mainより先のdevelopのコミットから導入した場合(install.ps1 -Commit)。
+                    # mainがそのコミットを取り込む(マージコミット)まで、取り込むものは無い。
+                    return {**base, "state": "current"}
+                return {**base, "state": "blocked", "reason": f"HEAD と {remote} が分岐している(早送りできない)"}
             log = _git(
                 "log", f"--max-count={MAX_LISTED_COMMITS}", "--format=%s", f"HEAD..{remote}",
                 cwd=self.repo_root,

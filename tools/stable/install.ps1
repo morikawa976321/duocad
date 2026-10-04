@@ -1,8 +1,11 @@
 ﻿# 安定版の導入(やり直しても壊れない)。docs/STABLE.md
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\stable\install.ps1 [-ImportModelsFrom <dir>]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\stable\install.ps1 [-ImportModelsFrom <dir>] [-Commit <sha>]
 #
-# 1. 安定版のcloneを作る(既にあれば触らない。更新は画面のボタンか update.ps1)
+# 1. 安定版のcloneを作る(既にあれば触らない。更新は画面のボタンか update.ps1)。
+#    -Commit を渡すと、mainではなくこの開発用チェックアウトにあるそのコミットから始める
+#    (pushもPRもせずに導入するとき)。ローカルの main をそのコミットに置き、追跡先は origin/main のまま。
+#    mainがそのコミットを取り込むまで更新ボタンは出ない(docs/STABLE.md)
 # 2. uv sync --frozen / npm ci / npm run build
 # 3. 制作データの置き場(models/ export/ logs/)を作る。-ImportModelsFrom の *.json を写す(上書きしない)
 # 4. スタートメニューに「duocad」を登録する(Win -> duocad -> Enter で起動)
@@ -16,6 +19,7 @@ param(
     [string]$Remote = '',
     [string]$Branch = 'main',
     [string]$ImportModelsFrom = '',
+    [string]$Commit = '',
     [int]$Port = 8775,
     [int]$HttpPort = 8776
 )
@@ -38,6 +42,11 @@ if (Test-Path (Join-Path $StableRoot '.git')) {
     Write-Host "安定版のcloneは既にある: $StableRoot"
 } else {
     Run 'git' @('clone', '--branch', $Branch, $Remote, $StableRoot) $env:USERPROFILE
+    if ($Commit) {
+        Run 'git' @('fetch', $devRoot, $Commit) $StableRoot
+        Run 'git' @('checkout', '-B', $Branch, 'FETCH_HEAD') $StableRoot
+        Run 'git' @('branch', "--set-upstream-to=origin/$Branch", $Branch) $StableRoot
+    }
 }
 
 # ---- 2. 依存とビルド ----

@@ -176,3 +176,32 @@ def test_updater_refuses_outside_the_update_branch(tmp_path):
     assert updater.status(force=True)["state"] == "blocked"
     status, _body = updater.start()
     assert status == 409 and not started
+
+
+def test_updater_treats_a_clone_ahead_of_main_as_current(tmp_path):
+    """落ちたら: developのコミットから導入した安定版に「更新できない」の札が出続ける。"""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "user.email", "t@example.com")
+    _git(origin, "config", "user.name", "t")
+    (origin / "a.txt").write_text("1", encoding="utf-8")
+    _git(origin, "add", "a.txt")
+    _git(origin, "commit", "-q", "-m", "first")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    _git(clone, "config", "user.email", "t@example.com")
+    _git(clone, "config", "user.name", "t")
+    (clone / "b.txt").write_text("ahead", encoding="utf-8")
+    _git(clone, "add", "b.txt")
+    _git(clone, "commit", "-q", "-m", "develop commit")
+
+    updater = StableUpdater(
+        log_dir=tmp_path / "logs", relaunch={}, is_saved=lambda: True, on_started=lambda: None,
+        repo_root=clone,
+    )
+    assert updater.status(force=True)["state"] == "current"
+
+    (origin / "a.txt").write_text("2", encoding="utf-8")
+    _git(origin, "commit", "-q", "-am", "diverging")
+    assert updater.status(force=True)["state"] == "blocked"

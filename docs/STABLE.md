@@ -29,6 +29,11 @@ develop の変更が main に入ってから、開発用のチェックアウト
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\stable\install.ps1 -ImportModelsFrom models
 ```
 
+**pushもPRもせずに今のdevelopから始めるとき**は `-Commit (git rev-parse HEAD)` を足す。開発用のチェックアウトから
+そのコミットを取り込み、安定版のローカルの `main` をそこに置く(追跡先は `origin/main` のまま)。mainより先にいる間は
+「取り込むものが無い」扱いで、次に develop → main がマージされた時点(マージコミットでそのコミットがmainの祖先になる)から
+更新ボタンが出る。**mainへのマージをスカッシュにすると祖先にならず、「更新できない」のままになる**(その場合は導入し直す)。
+
 clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成・`models/*.json` の写し(上書きしない)・
 スタートメニュー登録・MCPの local スコープ登録までを行う。やり直しても壊れない(cloneが既にあれば触らない)。
 
