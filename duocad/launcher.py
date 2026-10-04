@@ -142,6 +142,84 @@ def open_app_window(url: str) -> None:
     )
 
 
+#: 安定版のアプリウィンドウのタイトル。Edgeの `--app` 窓はページの `<title>` だけをタイトルにする
+#: (普通のタブの窓は「… - Microsoft Edge」になる)ので、完全一致で安定版の窓だけを拾える。
+#: **`web/index.html` の `<title>` と揃える**(開発版は `ChannelBadge.svelte` が `[開発版] ` を前に付けるので一致しない)。
+APP_WINDOW_TITLE = "duocad"
+
+
+def find_app_window() -> Optional[int]:
+    """開いている安定版のアプリウィンドウ(msedge.exe の、タイトルが `APP_WINDOW_TITLE` の窓)。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        return None
+    if not hasattr(ctypes, "windll"):
+        return None
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    found: list[int] = []
+
+    def process_name(pid: int) -> str:
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ""
+        try:
+            size = wintypes.DWORD(1024)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return ""
+            return Path(buffer.value).name.lower()
+        finally:
+            kernel32.CloseHandle(handle)
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length != len(APP_WINDOW_TITLE):
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        if buffer.value != APP_WINDOW_TITLE:
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if process_name(pid.value) == "msedge.exe":
+            found.append(int(hwnd))
+            return False
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return found[0] if found else None
+
+
+def bring_to_front(hwnd: int) -> None:
+    """最小化されていれば戻し、前面に出す。"""
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    if user32.SetForegroundWindow(hwnd):
+        return
+    # Windowsは、いま前面にいない処理からの SetForegroundWindow を断ることがある(フォアグラウンドのロック)。
+    # 前面の窓のスレッドに入力を一時的につなぐと通る(広く使われている回避策)。
+    foreground = user32.GetForegroundWindow()
+    theirs = user32.GetWindowThreadProcessId(foreground, None)
+    ours = kernel32.GetCurrentThreadId()
+    attached = theirs and theirs != ours and user32.AttachThreadInput(ours, theirs, True)
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(ours, theirs, False)
+
+
 def _alert(message: str) -> None:
     """pythonw には標準出力が無いので、失敗はメッセージボックスで言う。"""
     try:
@@ -180,7 +258,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             return 1
     if not args.no_window:
-        open_app_window(url)
+        # 既に開いていれば新しい窓を作らずにそれを前に出す。2つ開くと、今の文書を開き直す操作が
+        # 「別のタブで開いている」で断られる(`duocad/net/ws.py` の `open_document`)。
+        existing = find_app_window()
+        if existing is not None:
+            bring_to_front(existing)
+        else:
+            open_app_window(url)
     return 0
 
 
