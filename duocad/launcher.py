@@ -167,8 +167,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if running is not None and running.get("channel") != args.channel:
         # 開発セッションが同じポートで別のduocadを立てている。そちらを安定版として開かない。
         _alert(
-            f"ポート {args.http_port} で別の duocad(channel={running.get('channel')})が動いている。
-"
+            f"ポート {args.http_port} で別の duocad(channel={running.get('channel')})が動いている。\n"
             "それを止めてからもう一度起動すること。"
         )
         return 1
