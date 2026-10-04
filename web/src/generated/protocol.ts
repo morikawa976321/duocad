@@ -162,7 +162,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'redo'; redone: string })
   | (AppliedChangeBase & { change: 'selection'; selection: SelectionState })
   | (AppliedChangeBase & { change: 'visibility'; body_id?: string; sketch_id?: string; visible: boolean; previous: boolean; changed: boolean })
-  | (AppliedChangeBase & { change: 'document'; action: string; path: string | null; name: string | null; operations: number })
+  | (AppliedChangeBase & { change: 'document'; action: string; path: string | null; name: string | null })
 
 /** 状態配信(`ServerState`)が持つキー。 */
 export type ServerStateKey =

@@ -687,7 +687,7 @@ class DocumentTools:
         """STEPを書き出す。**ログに載らない**(文書を変えないので verb ではない)。
 
         対象は**いま表示中のBodyだけ**(引数で選べない)。そのぶん
-        `{"path", "bytes", "body_ids", "skipped_hidden"}` を返す —— AIは自分でファイルを
+        `{"path", "body_ids", "skipped_hidden"}` を返す —— AIは自分でファイルを
         確かめられないので、戻り値が唯一の確認手段である。
         """
         return self._export_file_response(self.session.export_step_file(path))

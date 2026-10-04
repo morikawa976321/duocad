@@ -774,18 +774,20 @@ def test_import_step_reports_a_missing_file_as_not_found(empty_session: Session)
 def test_export_writes_a_file_and_reports_where(server: McpServer, tmp_path: Path):
     """書き出しは**ログに載らない**(文書を変えないので verb ではない)。
 
-    そのぶん「どこへ何バイト書いたか」を返す —— AIが自分で `ls` できない以上、
-    戻り値が唯一の確認手段である。
+    そのぶん「どこへ書いたか」を返す —— AIが自分で `ls` できない以上、
+    戻り値が唯一の確認手段である。サイズは返さない。
     """
     step_path = tmp_path / "out.step"
     payload = call(server, "export_step", {"path": str(step_path)})
     assert Path(payload["path"]) == step_path
-    assert payload["bytes"] == step_path.stat().st_size > 0
+    assert "bytes" not in payload
+    assert step_path.stat().st_size > 0
 
     stl_path = tmp_path / "out.stl"
     payload = call(server, "export_stl", {"path": str(stl_path)})
     assert Path(payload["path"]) == stl_path
-    assert payload["bytes"] == stl_path.stat().st_size > 0
+    assert "bytes" not in payload
+    assert stl_path.stat().st_size > 0
 
 
 def test_export_reports_skipped_hidden_bodies_and_no_body_ids_argument(

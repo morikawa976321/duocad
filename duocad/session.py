@@ -864,8 +864,6 @@ class Session:
             "action": "save",
             "path": str(target),
             "name": target.name,
-            "bytes": target.stat().st_size,
-            "operations": len(self.document.log.entries),
         }
 
     @property
@@ -941,8 +939,6 @@ class Session:
             "path": str(target),
             "name": target.name,
             "previous": previous,
-            "bytes": target.stat().st_size,
-            "operations": len(self.document.log.entries),
         }
 
     @_edits_document
@@ -977,7 +973,6 @@ class Session:
             "action": "open",
             "path": str(source),
             "name": source.name,
-            "operations": len(log.entries),
         })
 
     @_edits_document
@@ -1004,7 +999,6 @@ class Session:
             # 保存状態も「未保存」へ戻す(どこにも書かれていない文書になるため)。
             "path": None,
             "name": None,
-            "operations": 0,
         })
 
     def _replace_document(self, document: Document, *, current_name: Optional[str]) -> None:
@@ -1034,11 +1028,12 @@ class Session:
         self._applied_count += 1
 
     def list_documents(self) -> dict:
-        """`models_dir` の中身を一覧にする(名前/更新日時/サイズ/操作数)。**verbではない**。
+        """`models_dir` の中身を一覧にする(名前/更新日時)。**verbではない**。
 
-        操作数は `OpLog.from_json` で数える —— 形状の再生(`log.replay`)まではせず、パースだけ。
-        STEP本文がログに入って1ファイルが4.8MB級になったが、実測でファイルあたり約30ms
-        (PCケースの4.8MBを3件で0.09s)なので、この作りのままにしてある。
+        **件数やサイズは返さない**(2026-10-04 本人指示。画面にも出さない)。
+        読めるファイルだけを載せる判定は、`OpLog.from_json` のパースだけで行う —— 形状の再生
+        (`log.replay`)まではしない。STEP本文がログに入って1ファイルが4.8MB級になったが、実測で
+        ファイルあたり約30ms(PCケースの4.8MBを3件で0.09s)なので、この作りのままにしてある。
 
         壊れたファイル(手で触られた・書き込み途中の `.writing` 等)は一覧からは省く
         (一覧が原因不明の例外で丸ごと落ちるより、読める分だけ見せる方が実用に沿う)。
@@ -1049,17 +1044,12 @@ class Session:
         files = []
         for path in sorted(self.models_dir.glob("*.json")):
             try:
-                stat = path.stat()
-                operations = len(OpLog.from_json(path.read_text(encoding="utf-8")).entries)
+                mtime = path.stat().st_mtime
+                OpLog.from_json(path.read_text(encoding="utf-8"))
             except (OSError, ValueError, KeyError, TypeError):
                 continue
-            files.append({
-                "name": path.name,
-                "mtime": stat.st_mtime,
-                "size": stat.st_size,
-                "operations": operations,
-            })
-        return {"action": "list", "path": str(self.models_dir), "bytes": 0, "files": files}
+            files.append({"name": path.name, "mtime": mtime})
+        return {"action": "list", "path": str(self.models_dir), "files": files}
 
     def copy_document(self, source: Any, dest: Any) -> dict:
         """`models_dir` の `source` を `dest` へ複製する。**verbではない**(文書を変えない)。
@@ -1085,7 +1075,6 @@ class Session:
             "path": str(target),
             "name": target.name,
             "source": origin.name,
-            "bytes": target.stat().st_size,
         }
 
     def delete_document(self, name: Any) -> dict:
@@ -1104,7 +1093,7 @@ class Session:
         if not target.exists():
             raise FileNotFoundError(f"削除するファイルが無い: {target.name}")
         target.unlink()
-        return {"action": "delete", "path": str(target), "name": target.name, "bytes": 0}
+        return {"action": "delete", "path": str(target), "name": target.name}
 
     def export_step_file(self, path: Any) -> dict:
         """STEPを書き出す。**ログに載らない**(文書を変えないのでverbではない)。
@@ -1148,11 +1137,9 @@ class Session:
         **書いた粗さの記録**であって入力ではない。
         """
         exported = io_step.export(self.document, self._resolve_export_path(path), "stl")
-        # `deviation` は `bytes` の次(末尾に回すと画面やログの見た目が変わる)。
         return {
             "action": "export_stl",
             "path": exported["path"],
-            "bytes": exported["bytes"],
             "deviation": io_step.STL_DEVIATION,
             "body_ids": exported["body_ids"],
             "skipped_hidden": exported["skipped_hidden"],

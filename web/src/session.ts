@@ -316,11 +316,9 @@ true satisfies SameKeys<keyof ServerState, ServerStateKey>
 export interface FilePayload {
   action: string
   path: string
-  bytes: number
   name?: string
   /** 複製元のファイル名(`copy_document` のみ)。 */
   source?: string
-  operations?: number
   deviation?: number
   body_ids?: string[]
   /** 書き出し候補のうち非表示(visible=false)で除外されたBodyのID(export_step/export_stlのみ)。 */
@@ -331,15 +329,12 @@ export interface FilePayload {
 /**
  * `models_dir` に置かれた1ファイルの一覧情報(`list_documents` の1件)。
  *
- * **壊れて操作数が数えられないファイルはサーバの一覧に出てこない**
- * (`Session.list_documents` が読めるものだけを返す)ので、ここに現れる時点で
- * `operations` は必ず読めている。
+ * **壊れて読めないファイルはサーバの一覧に出てこない**(`Session.list_documents` が
+ * 読めるものだけを返す)。件数・サイズは持たない(2026-10-04 本人指示)。
  */
 export interface DocumentInfo {
   name: string
   mtime: number
-  size: number
-  operations: number
 }
 
 /**
@@ -963,8 +958,6 @@ export function createSession(hooks: SessionHooks): Session {
       action?: string
       path?: string
       source?: string
-      bytes?: number
-      operations?: number
       deviation?: number
       body_ids?: string[]
       skipped_hidden?: string[]
@@ -1039,10 +1032,8 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onFile({
         action: message.action ?? '',
         path: message.path ?? '',
-        bytes: message.bytes ?? 0,
         name: message.name,
         source: message.source,
-        operations: message.operations,
         deviation: message.deviation,
         body_ids: message.body_ids,
         skipped_hidden: message.skipped_hidden,

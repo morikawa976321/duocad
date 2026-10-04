@@ -17,7 +17,7 @@
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
         {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
         {"type": "edges", "body_id": str, "revision": int, "edges": [...]}
-        {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path", "bytes"}
+        {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "running", "providers"}
@@ -110,7 +110,7 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: - `import_step` … 文書を変える(ログに載る)。応答は状態配信(`import_svg` はスケッチの
 #:   コマンドなので、この表には無い —— `SKETCH_COMMANDS` 側にいる)
 #: - `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
-#:   パスとバイト数だけ(要求した接続にだけ返る。`preview` と同じ扱い)
+#:   パスだけ(要求した接続にだけ返る。`preview` と同じ扱い)
 #: - `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
 #:   表からは外して `_dispatch` で個別に扱う。
 #: - **`save_document` も表から外れている** —— `name` が任意引数になり、

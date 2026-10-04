@@ -142,7 +142,7 @@ class Command:
     #: 形(`envelope_regions` の分裂)も見せたい verb はこちら。
     preview_session: Optional[str] = None
     #: 文書を変えるか(= 操作ログに載り、応答が状態配信になるか)。保存・書き出しは文書を
-    #: 変えないので、応答は書いた先のパスとバイト数だけを要求した接続へ返す。
+    #: 変えないので、応答は書いた先のパスだけを要求した接続へ返す。
     changes_document: bool = True
     #: 確定後に選択集合を全リセットするか。**面・辺・領域の添字は形状変更で壊れる**
     #: (kernel.pyの既知の地雷)ので、形を変えるverbの確定後は選択を空にする。
@@ -1394,8 +1394,8 @@ COMMANDS: tuple[Command, ...] = (
         description=(
             "いま表示中(visible)のボディをSTEPファイルへ書き出す。対象を選ぶ引数は無い —— "
             "含めたくないものがあれば、先に set_visible(visible=false) で隠してから呼ぶこと。"
-            "文書は変えないのでログには載らない。戻り値でパス・バイト数・"
-            "非表示で除外した件数(skipped_hidden)を確認する。"
+            "文書は変えないのでログには載らない。戻り値でパス・"
+            "非表示で除外したボディ(skipped_hidden)を確認する。"
         ),
         params=(Param("path", "string", "書き出し先パス(相対ならリポジトリ直下の export/ 基準)"),),
         session="export_step_file",
@@ -1508,7 +1508,7 @@ COMMANDS: tuple[Command, ...] = (
         mcp=False,
         changes_document=False,
         note=(
-            "**`models_dir` の中身を一覧にする**(名前/更新日時/サイズ/操作数)。"
+            "**`models_dir` の中身を一覧にする**(名前/更新日時)。"
             "保存/開くをファイル名の一覧から選べるようにするための穴で、"
             "2026-08-22まではディレクトリ列挙のコードがリポジトリに1つも無かった。"
             "`save_document`/`open_document` と同じく人だけの操作(`mcp=False`)。"
@@ -1758,7 +1758,6 @@ CHANGE_EVENTS: dict = {
         Result("action", "string"),
         Result("path", "string | null"),
         Result("name", "string | null"),
-        Result("operations", "number"),
     ),
 }
 
