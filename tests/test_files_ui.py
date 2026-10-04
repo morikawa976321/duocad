@@ -72,7 +72,7 @@ def test_saving_writes_the_operation_log_and_is_not_a_verb(session: Session, tmp
     assert answer["name"] == "model.json"
     assert "bytes" not in answer and "operations" not in answer, "ファイルのサイズ・操作数は返さない"
     assert len(session.document.log.entries) == log_before
-    assert json.loads(target.read_text(encoding="utf-8"))["operations"], "空のログを書いた"
+    assert len(json.loads(target.read_text(encoding="utf-8"))["operations"]) == log_before, "ログ全体を書いていない"
     # **状態の配り直しに `applied` は載らない**(保存はverbではないので、画面の
     # `lastApplied` を動かしてはいけない)。載る値は現在ファイル名だけが変わる。
     state = clients[0].last("state")

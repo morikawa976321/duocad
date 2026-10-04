@@ -145,7 +145,7 @@ def export(doc: Document, path: Path, fmt: str) -> dict:
     (Session と MCP の書き出しが共有する応答の芯。パスの解決・親ディレクトリの検査は呼び出し側)。
 
     **対象の ID を先に取ってから書く**: 「書き出すものが無い」「全部非表示」の ValueError はファイルを
-    作る前に出す。**ファイルサイズは返さない**(2026-10-04 本人指示)。
+    作る前に出す。
     """
     write = EXPORTERS[fmt]
     body_ids = export_body_ids(doc)

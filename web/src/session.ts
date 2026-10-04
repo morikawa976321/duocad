@@ -295,7 +295,7 @@ export interface ServerState {
 
 /**
  * ファイル操作の応答。**状態の配信ではない** —— 保存・書き出しは文書を変えないので、
- * 要求した接続にだけ「どこへ何バイト書いたか」が返る(`PreviewPayload` と同じ扱い)。
+ * 要求した接続にだけ「どこへ書いたか」が返る(`PreviewPayload` と同じ扱い)。
  *
  * `path` は**サーバが解決した絶対パス**。相対パスの基準はサーバの作業ディレクトリで、
  * ブラウザ側では解決できない(2箇所で別々に解釈すると必ずずれる)。
@@ -330,7 +330,7 @@ export interface FilePayload {
  * `models_dir` に置かれた1ファイルの一覧情報(`list_documents` の1件)。
  *
  * **壊れて読めないファイルはサーバの一覧に出てこない**(`Session.list_documents` が
- * 読めるものだけを返す)。件数・サイズは持たない(2026-10-04 本人指示)。
+ * 読めるものだけを返す)。
  */
 export interface DocumentInfo {
   name: string

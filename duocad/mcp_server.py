@@ -688,7 +688,8 @@ class DocumentTools:
 
         対象は**いま表示中のBodyだけ**(引数で選べない)。そのぶん
         `{"path", "body_ids", "skipped_hidden"}` を返す —— AIは自分でファイルを
-        確かめられないので、戻り値が唯一の確認手段である。
+        確かめられないので、**書けなかったときは必ず例外になる**(半端なファイルも0バイトの
+        成果物も残さない。`kernel.write_step` / `meshbody.write_stl`)。
         """
         return self._export_file_response(self.session.export_step_file(path))
 

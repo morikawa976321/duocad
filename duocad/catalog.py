@@ -1408,7 +1408,7 @@ COMMANDS: tuple[Command, ...] = (
             "いま表示中(visible)のボディをSTLへ書き出す。対象を選ぶ引数は無い —— "
             "含めたくないものがあれば、先に set_visible(visible=false) で隠してから呼ぶこと。"
             "メッシュの粗さは固定で選べない(人の画面にも入力欄は無い)。文書は変えない。"
-            "戻り値の skipped_hidden で非表示で除外した件数を確認できる。"
+            "戻り値の skipped_hidden で非表示で除外したボディを確認できる。"
         ),
         params=(Param("path", "string", "書き出し先パス(相対ならリポジトリ直下の export/ 基準)"),),
         session="export_stl_file",
