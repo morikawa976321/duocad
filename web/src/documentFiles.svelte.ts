@@ -64,13 +64,6 @@ export interface DocumentFiles {
   exportStl(path: string): void
 }
 
-/** KB 表示。一覧の行(`FilesPanel.svelte`)とファイル応答の通知が同じ式を使う。 */
-export function formatSize(bytes: number): string {
-  const kb = bytes / 1024
-  const maximumFractionDigits = kb >= 1 ? 0 : 1
-  return `${kb.toLocaleString(undefined, { maximumFractionDigits })} KB`
-}
-
 /** 一覧の取り直しをまとめる待ち[ms]。 */
 const REFRESH_DELAY_MS = 300
 
@@ -80,7 +73,7 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
   let currentName = $state<string | null>(null)
   /** 直前に出したファイル操作の番号(応答が `file` で返ったときの待ちを解く)。 */
   let lastOp: number | null = null
-  // 自動保存のたびに一覧の操作数・サイズが変わり、無題の文書は最初の変更で新しい行が要る。
+  // 自動保存のたびに一覧の更新日時(並び順)が変わり、無題の文書は最初の変更で新しい行が要る。
   // ただし `list_documents` は全ファイルのログを読むので、配信のたびに素で呼ばず**少し待って
   // まとめ、パネルを出しているときだけ**取りに行く(畳んでいる間は「古い」印だけ立てる)。
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
@@ -141,17 +134,16 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
       // ブラウザとサーバで別々に持っているので、片方だけ直したときに状態配信を待ち続けて
       // 確定が永久に拒否される経路ができる。出した番号と一致するときだけ解く(取りすぎない)。
       deps.release(lastOp)
-      // **どこへ何バイト書いたかを必ず画面へ出す** —— 書き出しはブラウザの中に痕跡が残らない
+      // **どこへ書いたかを必ず画面へ出す** —— 書き出しはブラウザの中に痕跡が残らない
       // 操作なので、通知が唯一の確認手段になる。
-      const size = formatSize(payload.bytes)
-      const extra = payload.operations !== undefined ? ` / 操作 ${payload.operations}件` : ''
       // `body_ids` が載るのは export_step / export_stl だけ。非表示で除外した個数は、0件なら
       // 言わない —— 「隠したつもりが無いのに減っている」を見えない驚きにしないための行。
-      const exported = payload.body_ids !== undefined ? ` / ${payload.body_ids.length}個` : ''
+      const exported = payload.body_ids !== undefined ? `${payload.body_ids.length}個` : ''
       const skippedCount = payload.skipped_hidden?.length ?? 0
-      const skipped = skippedCount > 0 ? ` ※非表示の${skippedCount}個は除外` : ''
-      deps.note(`${payload.action}: ${payload.path}(${size}${extra}${exported}${skipped})`)
-      // 上書きで更新日時・サイズ・操作数が変わり、改名では行の名前が、複製では行そのものが増え、
+      const skipped = skippedCount > 0 ? `※非表示の${skippedCount}個は除外` : ''
+      const detail = [exported, skipped].filter((part) => part !== '').join(' ')
+      deps.note(`${payload.action}: ${payload.path}${detail !== '' ? `(${detail})` : ''}`)
+      // 上書きで更新日時(並び順)が変わり、改名では行の名前が、複製では行そのものが増え、
       // 削除では行が消える。
       if (['save', 'rename', 'copy', 'delete'].includes(payload.action)) refresh()
     },

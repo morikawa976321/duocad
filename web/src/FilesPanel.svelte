@@ -49,7 +49,6 @@
    * ——「名前を変える」が消すのは1回きりの新しい名前だからで、性質が違う。
    */
   import { tick } from 'svelte'
-  import { formatSize } from './documentFiles.svelte'
   import { pathLike } from './commands/command'
   import type { DocumentInfo } from './session'
 
@@ -290,13 +289,12 @@
           class="files-open row-button"
           onclick={() => onOpen(file.name)}
           disabled={locked}
-          title={locked ? '形状最適化の実行中は文書を差し替えられない' : 'クリックで開く'}
+          title={locked
+            ? '形状最適化の実行中は文書を差し替えられない'
+            : `クリックで開く(更新: ${formatTime(file.mtime)})`}
         >
           {file.name}
         </button>
-        <span class="meta dim" title={formatTime(file.mtime)}>
-          {file.operations ?? '?'}件 / {formatSize(file.size)}
-        </span>
         <!-- **行に「上書き」ボタンは無い**(冒頭のdocstring)。上書きの口はどこにも無く、
              保存は自動で走る。 -->
         {#if deletingName === file.name}
@@ -507,10 +505,6 @@
 
   .copy-row {
     padding-left: 12px;
-  }
-
-  .meta {
-    flex: 0 0 auto;
   }
 
   /* `.list`は伸縮する(flex:1)のでスクロールを持つ。この区切りから下は
