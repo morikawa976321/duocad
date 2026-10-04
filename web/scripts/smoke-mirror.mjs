@@ -12,8 +12,8 @@
  *      ボディまで鏡映される)
  *   2. **基準を待っている間も対象を選び直せる**(Shift/Ctrl+クリックはピックへ行かない)
  *   3. スケッチ: 図形を選ぶ → 鏡映複製 → 既存の線分をクリック → 複製が軸の向こう側に出る
- *   4. ソリッド: 面でボディを選ぶ → 鏡映複製 → 「面を選ぶ」→ 平らな面をクリック →
- *      その面の平面で鏡映した複製が出る(XY/XZ/YZ の3択も壊れていない)
+ *   4. ソリッド: 面でボディを選ぶ → 鏡映複製 → 「面を選ぶ」→ 平らな面をクリック → 複製が出る
+ *      (どの平面で映るか・XY/XZ/YZ の3択は `tests/test_mirror_verbs.py`)
  *
  * サーバはこのスクリプトが空の文書で起動し、**形は全部UIから作る**。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
@@ -411,70 +411,8 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
     }
     ok(`mirror_body: 鏡映面に面 ${planeFace.index} を指しても対象の選択は変わらない(別チャンネル)`)
 
-    const centerBefore = await page.evaluate(
-      (id) => window.__duocad.getGeometry(id).bbox.center,
-      bodyId,
-    )
     await page.keyboard.press('Enter')
     await waitFor(() => (window.__duocad.parts ?? []).length === 2, '面を鏡映面にしてもボディが増えない')
-    const copyId = await page.evaluate(
-      (id) => window.__duocad.parts.map((item) => item.body_id).find((item) => item !== id),
-      bodyId,
-    )
-    await waitFor((id) => window.__duocad.getGeometry(id) !== null, '複製の形が届かない', [copyId])
-    const centerCopy = await page.evaluate(
-      (id) => window.__duocad.getGeometry(id).bbox.center,
-      copyId,
-    )
-    // 指した面の平面(点=重心 / 法線)で元の中心を映した位置に、複製の中心があること。
-    const want = mirrorPoint(centerBefore, planeFace.centroid, planeFace.normal)
-    const gap = distance(want, centerCopy)
-    if (gap > 0.05) {
-      fail(
-        `複製が指した面の平面で映っていない(ずれ ${gap.toFixed(3)}mm)。` +
-          `期待 ${JSON.stringify(want)} / 実際 ${JSON.stringify(centerCopy)}`,
-      )
-    }
-    ok(`mirror_body: クリックした面の平面でボディが鏡映複製された(中心のずれ ${gap.toFixed(4)}mm)`)
-
-    // **XY/XZ/YZ の3択が壊れていない**(既存経路の回帰): 同じ選択のまま YZ で1つ増やす。
-    await page.evaluate(() => document.activeElement?.blur?.())
-    await page.keyboard.press('Escape')
-    await clickFace(page, bodyId, targetFace.index, { hidePanel: true })
-    await waitFor(
-      (id) =>
-        (window.__duocad.selection?.items ?? []).some(
-          (item) => item.body === id && item.kind === 'face',
-        ),
-      '基準平面の検査のために面を選び直せない',
-      [bodyId],
-    )
-    await page.click('#mirror-body')
-    await page.click('#mirror-body-yz')
-    const pickWhileBasePlane = await page.evaluate(() => ({
-      wantedPick: window.__duocad.wantedPick,
-      pick: Boolean(document.querySelector('#mirror-body-plane-face')),
-    }))
-    if (pickWhileBasePlane.wantedPick !== null || pickWhileBasePlane.pick) {
-      fail(`YZ平面を選んだのに面のピックが出ている: ${JSON.stringify(pickWhileBasePlane)}`)
-    }
-    await page.keyboard.press('Enter')
-    await waitFor(() => (window.__duocad.parts ?? []).length === 3, 'YZ平面での鏡映が壊れている')
-    ok('mirror_body: 基準平面(YZ)の経路は今までどおり動く(回帰無し)')
-
     await assertNoAppErrors(page, consoleErrors)
   }
 })
-
-function distance(a, b) {
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
-}
-
-/** 点 `p` を、`origin` を通り `normal` を法線とする平面で映した点。 */
-function mirrorPoint(p, origin, normal) {
-  const length = Math.hypot(normal[0], normal[1], normal[2])
-  const unit = normal.map((value) => value / length)
-  const gap =
-    (p[0] - origin[0]) * unit[0] + (p[1] - origin[1]) * unit[1] + (p[2] - origin[2]) * unit[2]
-  return p.map((value, index) => value - 2 * gap * unit[index])
-}

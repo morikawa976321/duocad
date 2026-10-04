@@ -1,18 +1,14 @@
 /**
- * 実機での確認 — グリッドの3段(1/10/100mm)が固定で、線間隔pxで連続にフェードし、
- * 表示する平面が状態で決まり、**ピック範囲だけ**が内容の大きさへ追随する。
+ * 実機での確認 — グリッドの3段(1/10/100mm)が内容の大きさで変わらず、**ピック範囲だけ**が
+ * 内容の大きさへ追随する。
  *
  *   node scripts/smoke-grid-scale.mjs
  *
- * 完了条件を6つの姿勢で見る(A〜Fは互いに独立):
+ * 段の不透明度の規則(線間隔pxでの連続フェード)は `tests/eval_grid_scale.mjs`、スケッチの外では
+ * XY平面+Z軸が出ることは `smoke-face-grid.mjs` が持つ。
  *
  *   A. **刻みは3段固定**。内容を25倍にしても `gridTiers().tiers` の刻みは 1/10/100mm の
  *      まま。段ごとの不透明度は常に [0,1] で、**粗い段ほど濃い**(細い段から順に消える)。
- *
- *   B. **連続的なフェード**。寄り切って1mm段が完全に濃い状態から少しずつ引くと、不透明度は
- *      単調に下がり、**0でも1でもない中間値を何度も通ってから**0になる。ON/OFFの瞬間切替
- *      だとここが取れない(閾値を跨ぐたびの点滅は、この中間値があることで原理的に起きない)。
- *      同時に10mm段が濃いままであること(3段が一斉に消えたりしないこと)も見る。
  *
  *   C. **ピック範囲は内容から導かれ、丸い数字に載る**(`gridScale().extent`)。描画は無限に
  *      なったが、**指せる範囲まで無限にはしていない**ことの裏取り。
@@ -25,8 +21,7 @@
  *      `frameAll` と**新規文書**でだけ縮む。内容を全部消した後の `frameAll` でも縮む
  *      (姿勢=カメラは動かないままであることも見る)。
  *
- *   F. **表示する平面は状態で決まる**。通常はXY平面+Z軸、基準平面へのスケッチ中はその平面+
- *      それに直交する軸(XZへ貼れば XZ + Y軸)。
+ *   F. **基準平面へのスケッチ中は、その平面と直交する軸だけが出る**(XZへ貼れば XZ + Y軸)。
  *
  * サーバはこのスクリプトが空の文書で起動し、形はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
@@ -99,60 +94,6 @@ runSmoke('smoke-grid-scale', { timeout: 60000, mcp: true }, async ({ mcp, browse
       fail(`[A] 内容を大きくしたら刻みが動いた: ${JSON.stringify(afterBig.tiers)}`)
     }
     ok('[A] 内容を25倍(半幅252mm)にしても刻みは 1/10/100mm のまま(内容に追随しない)')
-
-    // ====================================================================== B. 連続的なフェード
-    console.log('\n[B] 段は線間隔pxで連続にフェードする(ON/OFFの瞬間切替ではない)')
-    await page.evaluate(() => window.__duocad.frameAll())
-    await sleep(200)
-    await centerCursor()
-
-    // まず1mm段が完全に濃くなるまで寄る。
-    let zoomedIn = false
-    for (let i = 0; i < 120; i += 1) {
-      const tiers = await tiersNow()
-      if (tiers.tiers[0].alpha >= 1) {
-        zoomedIn = true
-        break
-      }
-      await page.mouse.wheel({ deltaY: -240 })
-      await sleep(30)
-    }
-    if (!zoomedIn) fail('寄り切っても1mm段の不透明度が1にならない')
-    ok('[B] 寄ると1mm段が完全に濃くなる')
-
-    // そこから少しずつ引いて、不透明度の列を採る。
-    const fineAlphas = []
-    const midAlphas = []
-    for (let i = 0; i < 200; i += 1) {
-      await waitFrames(page, 4)
-      const tiers = await tiersNow()
-      assertTierShape(tiers, `[B] 引きの途中(${i})`)
-      fineAlphas.push(tiers.tiers[0].alpha)
-      midAlphas.push(tiers.tiers[1].alpha)
-      if (tiers.tiers[0].alpha <= 0) break
-      await page.mouse.wheel({ deltaY: 120 })
-      await sleep(25)
-    }
-    if (fineAlphas[fineAlphas.length - 1] > 0) {
-      fail(`引き続けても1mm段が消えない: ${JSON.stringify(fineAlphas.slice(-5))}`)
-    }
-    for (let i = 1; i < fineAlphas.length; i += 1) {
-      if (fineAlphas[i] > fineAlphas[i - 1] + 1e-6) {
-        fail(`引いたのに1mm段が濃くなった(単調性が壊れている): ${JSON.stringify(fineAlphas)}`)
-      }
-    }
-    const partial = fineAlphas.filter((alpha) => alpha > 0.05 && alpha < 0.95)
-    if (partial.length < 3) {
-      fail(
-        `1mm段が0と1しか取らない(＝ON/OFFの瞬間切替になっている。閾値を跨ぐたびに点滅する): ` +
-          JSON.stringify(fineAlphas),
-      )
-    }
-    ok(`[B] 1mm段が1→0へ単調に、中間値を${partial.length}回通って連続に消えた`)
-    if (midAlphas[midAlphas.length - 1] < 0.5) {
-      fail(`1mm段が消えるところで10mm段まで薄くなっている(段が一斉に消えている): ${midAlphas.at(-1)}`)
-    }
-    ok('[B] 1mm段が消えた時点でも10mm段は濃いまま(段は順に消える)')
 
     // ====================================================================== C. ピック範囲は内容から
     console.log('\n[C] ピック範囲(gridScale().extent)は内容から導かれ、丸い数字に載る')
@@ -332,18 +273,8 @@ runSmoke('smoke-grid-scale', { timeout: 60000, mcp: true }, async ({ mcp, browse
     }
     ok('[E] 新規文書でピック範囲を縮めても、カメラの姿勢は一切動いていない')
 
-    // ====================================================================== F. 表示する平面は状態で決まる
-    console.log('\n[F] 表示する平面: 通常=XY+Z軸 / 基準平面へのスケッチ中=その平面+直交する軸')
-    await waitFrames(page, 4)
-    const plain = await tiersNow()
-    if (JSON.stringify(plain.planes) !== JSON.stringify(['XY']) || plain.axis !== 'Z') {
-      fail(`[F] 通常はXY平面+Z軸のはず: ${JSON.stringify({ planes: plain.planes, axis: plain.axis })}`)
-    }
-    ok('[F] スケッチ外ではXY平面+Z軸だけが出ている')
-
-    // **スケッチを作る2手**: 「スケッチ」を起動 → 貼る先(XZ平面)をクリック
-    // (`smoke.mjs` の `createSketchOnBase` と同じ流儀。MCPから作っても画面側は
-    // スケッチモードへ入らないので、人と同じ経路で入る)。
+    // ====================================================================== F. 基準平面へのスケッチ中
+    console.log('\n[F] 基準平面へのスケッチ中は、その平面と直交する軸だけが出る')
     await createSketchOnBasePlane(page, 'XZ', { timeout })
     await page.waitForFunction(
       () => {
@@ -353,20 +284,8 @@ runSmoke('smoke-grid-scale', { timeout: 60000, mcp: true }, async ({ mcp, browse
       { timeout, polling: 50 },
     )
     const onXz = await tiersNow()
-    if (onXz.axis !== 'Y') {
-      fail(`[F] XZへのスケッチ中は直交するY軸を描くはず: ${JSON.stringify(onXz)}`)
-    }
-    assertTierShape(onXz, '[F] XZへのスケッチ中')
-    ok('[F] XZへのスケッチ中はXZ平面+Y軸だけが出ている(3段の規則はそのまま)')
-
-    await page.click('#sketch-exit')
-    await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
-    await waitFrames(page, 4)
-    const backToPlain = await tiersNow()
-    if (JSON.stringify(backToPlain.planes) !== JSON.stringify(['XY']) || backToPlain.axis !== 'Z') {
-      fail(`[F] スケッチを抜けたら通常(XY+Z軸)へ戻るはず: ${JSON.stringify(backToPlain)}`)
-    }
-    ok('[F] スケッチを抜けると通常(XY平面+Z軸)へ戻る')
+    if (onXz.axis !== 'Y') fail(`[F] XZへのスケッチ中は直交するY軸を描くはず: ${JSON.stringify(onXz)}`)
+    ok('[F] XZへのスケッチ中はXZ平面+Y軸だけが出ている')
 
     await assertNoAppErrors(page, consoleErrors)
   }

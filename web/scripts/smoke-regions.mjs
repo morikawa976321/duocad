@@ -6,20 +6,13 @@
  *
  *   web> node scripts/smoke-regions.mjs
  *
- * 見るのは5つ:
+ * 見るのは4つ(領域が消える変更で選択が空になることは `tests/test_server_selection_reset.py`):
  *
  *   1. **通常モードで領域は指せない** — 領域に当たる画素が1つも無い
  *   2. **通常モードの「押し出す」も領域を要求しない** — 起動しても領域に当たる画素はできない
  *   3. **スケッチ編集中は一巡して形が変わる** — 領域クリック → 距離 → 結合 → Enter で板が生まれ、
  *      確定した操作が「距離10の結合」である
  *   4. **修飾キーの規則が面と同じ** — 置換 / Shift追加 / Ctrl除去(編集中のスケッチの領域)
- *   5. **消えた領域は押し出せない** — 添字3の領域を選んだ状態で2つめの円の径を縮めると、
- *      コアが選択を空にし、領域も3→2に減る。押し出しを起動しても文書は変わらない。
- *
- * 検証5は**添字3を先に選んでから**縮める順序で、選択が1件→0件になる瞬間を
- * 直接観測する(`tests/test_server_selection_reset.py` に同じ筋のpytestがある)。
- * 先に値を打ち直して領域を消すだけの形だと、選ぶものが最初から無いため
- * `resets_selection` が実行されない「骨抜き」の検査になる。
  *
  * **順序に意味がある**: スケッチ2枚を**ソリッドが1つも無いうちに**作る。基準平面の画素は
  * 「部品に隠れていない所」を探して返すが、**部品の輪郭のすぐ外側**が返ることがあり、
@@ -33,7 +26,6 @@
 import {
   assertNoAppErrors,
   openApp,
-  sleep,
   typeInto as typeIntoField,
   waitFrames,
   waitOrFail,
@@ -69,9 +61,7 @@ const DISC = { u: -15, v: 15, radius: 5 }
  */
 const DISC_B = { u: -30, v: 15, radius: 13, shrunk: 1.5 }
 
-// **MCPの口**(`mcp`)は、領域が消える変更(`move_sketch_entities`)の1手だけをMCP側から打つ。
-// `--url` で外のサーバへ繋いだときは `null` になる。握手は使う節で打つ(`handshake: false`)。
-runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async ({ mcp, browser, url, timeout }) => {
+runSmoke('smoke-regions', { attach: true }, async ({ browser, url, timeout }) => {
   {
     const { page, consoleErrors } = await openApp(browser, url, { timeout, height: 900 })
     if ((await page.evaluate(() => window.__duocad.parts.length)) !== 0) {
@@ -111,13 +101,6 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
      * 狙いと違う場所を押すので、射影の前に必ず挟む(`pick.mjs` の `settle: true` が同じ2フレーム)。
      */
     const settleLayout = () => waitFrames(page, 2)
-
-    /**
-     * **起きないことを見る前の猶予**。適用が走るなら「キー入力 → WS往復 → 状態配信」で
-     * 済む時間を過ぎてから数える —— 待たずに数えると、走っていても
-     * 「まだ返ってきていないだけ」を緑と読んでしまう(`smoke-files` と同じ道具)。
-     */
-    const graceForNothingToHappen = () => sleep(1000)
 
     // 指す手は `pick.mjs`(射影は押す直前・レイアウトの2フレーム待ち・パネルは畳む・貼れた
     // 平面の検算)。この本の呼び方(`sketchId` を先に渡す等)に合わせた薄い皮。
@@ -182,7 +165,6 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
 
     // 2つめの円(1つめと重ねる)。**パラメータの名前は打った値から引く** ——
     // `d?` の採番はそれまでの図形の数で決まるので、決め打ちにすると図形を1つ足すたびに壊れる。
-    const beforeParams = await page.evaluate(() => Object.keys(window.__duocad.parameters))
     await page.click('#sketch-circle')
     await clickPlane(DISC_B.u, DISC_B.v)
     await typeInto('#sketch-radius', DISC_B.radius)
@@ -195,22 +177,11 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
       },
       '2つの円が重なって領域が3つにならない',
     )
-    const radiusParam = await page.evaluate(
-      (known, radius) => {
-        const parameters = window.__duocad.parameters
-        const added = Object.keys(parameters).filter((name) => !known.includes(name))
-        const found = added.filter((name) => Math.abs(parameters[name] - radius) < 1e-9)
-        return found.length === 1 ? found[0] : null
-      },
-      beforeParams,
-      DISC_B.radius,
-    )
-    if (!radiusParam) fail('2つめの円の半径のパラメータ名を一意に引けない')
     await page.keyboard.press('Escape')
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, 'スケッチモードを抜けられない')
     if (plateSketch === discSketch) fail('スケッチが2枚に分かれていない')
-    ok(`XY平面にスケッチを2枚(長方形・重なる円2つ=領域3つ)置き、通常モードへ戻った(半径は ${radiusParam})`)
+    ok('XY平面にスケッチを2枚(長方形・重なる円2つ=領域3つ)置き、通常モードへ戻った')
 
     // ============================================== 検証1: 要求していない間は領域を指せない
     if ((await look()).wantsRegions !== false) {
@@ -316,113 +287,6 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     }
     ok('**修飾キーは面と同じ**: 置換 / Shift追加 / Ctrl除去')
 
-    // ============================================== 検証5: 消えた領域は押し出せない
-    // **先に添字3を選んでから**縮める。選択が1件→0件になることを直接確認し、コアが実際に
-    // 選択を空にしたことを見る(`resets_selection`。pytest 側は
-    // `tests/test_server_selection_reset.py`)。
-
-    // 2つめの円のentity_idを引く(`refs.radius` が `radiusParam` と一致するもの)。
-    const circleBEntityId = await page.evaluate(
-      (sketchId, name) => {
-        const sketch = window.__duocad.sketches.find((item) => item.sketch_id === sketchId)
-        const entity = sketch.entities.find((item) => item.refs.radius === name)
-        return entity ? entity.entity_id : null
-      },
-      discSketch,
-      radiusParam,
-    )
-    if (!circleBEntityId) fail('2つめの円のentity_idを引けない')
-
-    // **(1) 先に添字3を選ぶ**(まだ実在する領域を、編集中のスケッチで本物のクリックで選ぶ)。
-    // **距離・種別はあえて打たない** —— 「押し出す」は `preview: 'server'` で、
-    // 引数が揃うとデバウンス後にプレビュー要求を自動で投げる。直後に選択が空になると、
-    // 飛んでいる途中のプレビュー要求が空の選択でサーバに届いて `SelectionEmpty` の
-    // 警告トーストを出す(実測)。ここで見たいのは「選択が1件→0件になること」だけ。
-    await clickRegion(discSketch, 3)
-    await waitFor(
-      (sketch) => {
-        const items = window.__duocad.selection?.items ?? []
-        return items.length === 1 && items[0].sketch === sketch && items[0].index === 3
-      },
-      'これから消える領域(添字3)を選べない',
-      discSketch,
-    )
-    const selectedBeforeShrink = await page.evaluate(
-      () => (window.__duocad.selection?.items ?? []).length,
-    )
-    if (selectedBeforeShrink !== 1) fail(`縮める前の選択が1件でない: ${selectedBeforeShrink}`)
-
-    // **(2) 重なっている円Bを動かして離す**。径の打ち直し(`set_parameter`)は公開面に無いので、
-    // 領域を消せる別の変更として `move_sketch_entities`(これも `resets_selection`)を使う。
-    // 領域3を選んだまま円Bの図形も選択へ足し(選択に領域と図形が混ざるのは通常のこと)、
-    // 領域3が実在しなくなる形の変更で選択が空になるかを見る。
-    if (mcp === null) fail('--attach では円Bを動かす操作を打てない(MCPの口が要る)')
-    await mcp.handshake('duocad-smoke-regions')
-    await mcp.callTool('modify_selection', {
-      add: [{ sketch: discSketch, entity: circleBEntityId, point: null }],
-    })
-    await mcp.callTool('move_sketch_entities', { dx: -(DISC_B.radius * 2 + 20), dy: 0 })
-    await waitFor(
-      (sketch) => {
-        const target = window.__duocad.sketches.find((item) => item.sketch_id === sketch)
-        return Boolean(
-          target &&
-            target.regions.length === 2 &&
-            !target.regions.some((region) => region.index === 3),
-        )
-      },
-      '円Bを離しても領域が2つに戻らない(添字3が消えない)',
-      discSketch,
-    )
-    // **(3) resets_selection が実際に選択を空にしたことを見る**(1件→0件)。
-    const selectedAfterShrink = await page.evaluate(
-      () => (window.__duocad.selection?.items ?? []).length,
-    )
-    if (selectedAfterShrink !== 0) {
-      fail(
-        `領域が消える変更の後も選択が残っている(resets_selectionが効いていない): ` +
-          `${selectedAfterShrink}件`,
-      )
-    }
-    ok(
-      '**resets_selection**: 添字3を選んだ状態で円Bを離したら、' +
-        'コアが選択を1件→0件に空にした(領域は3→2、添字3は実在しなくなった)',
-    )
-
-
-    // ============================================== 仕上げ: 消えた領域は押し出せない
-    const before = await look()
-    const beforeVolume = before.bodies.reduce((sum, body) => sum + body.volume, 0)
-    const beforeOps = await page.evaluate(() => window.__duocad.state.log.length)
-
-    await page.click('#extrude')
-    await settleLayout()
-    if ((await regionPixel(3, discSketch)) !== null) {
-      fail('消えたはずの添字3の領域にまだ画素が当たる')
-    }
-    // **入力欄からフォーカスを外してから押す** —— 欄の中のEnterはコマンドではなく
-    // その欄が受ける(`CommandHost.onKeydown` は INPUT を除く)ので、外さないと
-    // 「押したのに何も起きなかった」を検査したことにならない。選ぶものが無いので
-    // そもそも引数は揃わない(=消えた領域を押し出す道が無い)。
-    // **押す先はヘッダの中の押しても何も起きない字**(常にあるファイル名の札)。
-    // ボタンを押すとその操作が始まってしまう。
-    await page.click('#current-file')
-    await page.keyboard.press('Enter')
-    await graceForNothingToHappen()
-
-    const after = await look()
-    const afterVolume = after.bodies.reduce((sum, body) => sum + body.volume, 0)
-    const afterOps = await page.evaluate(() => window.__duocad.state.log.length)
-    if (afterOps !== beforeOps || Math.abs(afterVolume - beforeVolume) > 1e-6) {
-      fail(
-        `消えた領域なのに押し出しが通った: 操作 ${beforeOps} -> ${afterOps} / ` +
-          `体積 ${beforeVolume} -> ${afterVolume}`,
-      )
-    }
-    ok(
-      '**消えた領域は押し出せない**: 添字3が消えた後はその領域へ当たる画素が無く、' +
-        '押し出しを起動しても文書は不変だった',
-    )
     await page.keyboard.press('Escape')
     await page.click('#sketch-exit')
 
