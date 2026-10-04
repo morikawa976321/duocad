@@ -25,7 +25,7 @@ from typing import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from duocad.agent import AgentLoop, Limits, OpenAICompatProvider
-from duocad.agent.loop import document_brief
+from duocad.agent.loop import FIRST_LOOK
 from duocad.mcp_server import DocumentTools
 from duocad.server import Session
 
@@ -127,7 +127,7 @@ TASKS = (
 
 def run_task(task: Task, provider: OpenAICompatProvider) -> dict:
     world = build_world()
-    loop = AgentLoop(world.tools, provider, limits=LIMITS, brief=lambda: document_brief(world.tools))
+    loop = AgentLoop(world.tools, provider, limits=LIMITS, first_look=FIRST_LOOK)
     started = monotonic()
     runs = [loop.run(prompt) for prompt in task.prompts]
     usage: dict = {}

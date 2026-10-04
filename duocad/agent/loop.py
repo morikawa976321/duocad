@@ -116,9 +116,13 @@ DEFAULT_MAX_TOTAL_SECONDS = 30.0
 #: 実測から導いた待ち時間ではない。
 PREPARE_TIMEOUT = 1800.0
 
-#: 依頼に添える文書の状態の上限(文字)。超える文書では件数だけを添える。**自分で置いた値**
+#: 依頼のたびに、モデルの代わりに先に呼んでおく問い合わせ(`AgentLoop(first_look=FIRST_LOOK)`)。
+#: 実測で、モデルはこの2つを依頼のたびに最初に呼ぶ。
+FIRST_LOOK = ("describe_document", "get_selection")
+
+#: 先に呼んだ結果がこれより大きいときは、一覧を件数に畳む(文字)。**自分で置いた値**
 #: (実測: 2ボディ+2スケッチで約1,300文字、40ボディ+8スケッチで約7,800文字)。
-BRIEF_MAX_CHARS = 4000
+FIRST_LOOK_MAX_CHARS = 4000
 
 #: 進捗の口。`(ツール名, 引数, 結果, 成否)`。Gがこれを購読して画面に出す。
 ProgressCallback = Callable[[str, dict, Any, bool], None]
@@ -264,12 +268,12 @@ class AgentLoop:
         limits: Limits = Limits(),
         progress: Optional[ProgressCallback] = None,
         cancellation: Optional[Cancellation] = None,
-        brief: Optional[Callable[[], str]] = None,
+        first_look: Sequence[str] = (),
     ) -> None:
         self.tools = tools
         self.provider = provider
-        #: 依頼のたびに呼んで、その依頼に添える状態を得る(`document_brief`)。無ければ添えない。
-        self.brief = brief
+        #: 依頼のたびに先に呼んでおく、引数なしの問い合わせの名前(`_look_first`)。
+        self.first_look = tuple(first_look)
         #: **MCPの `instructions` と同じ文**(catalog.py の1本から読む)。
         self.system = catalog.agent_instructions() if system is None else system
         self.limits = limits
@@ -303,7 +307,8 @@ class AgentLoop:
     def run(self, prompt: str) -> AgentRun:
         """1つの指示を投げて、モデルがツールを呼ばなくなるまで回す。"""
         self._settle_history()
-        self.turns.append(UserTurn(prompt, self._brief()))
+        self.turns.append(UserTurn(prompt))
+        self._look_first()
         descriptors = self.tools.descriptors()
         outcomes: list[ToolOutcome] = []
         usage: dict = {}
@@ -501,15 +506,31 @@ class AgentLoop:
             self.turns.append(ToolResultTurn(tuple(results)))
 
     # ------------------------------------------------------------------ 履歴
-    def _brief(self) -> str:
-        """今の依頼に添える状態。取れなければ添えずに進む(モデルは自分で調べられる)。"""
-        if self.brief is None:
-            return ""
+    def _look_first(self) -> None:
+        """モデルが依頼のたびに最初に呼ぶ問い合わせを、代わりに呼んで履歴へ置く(その往復を消す)。
+
+        **「モデルが呼んで結果が返った」形で置く**(発話に書き足さない)。実測(Gemma 4 12B)で、
+        同じ内容を発話の末尾へ添えると往復は減るが、最初の返事の思考が伸びて書く量が約1.5倍に
+        なり、全体では遅くなった。発話とも分かれるので、寸法のガードが結果の数字を
+        「人が言った数量」と読むこともない。
+
+        進捗(`progress`)と結果(`AgentRun.tool_calls`)には載せない —— モデルの判断ではないので、
+        画面の時系列に「AIが呼んだ」と出さない。取れなければ置かずに進む(モデルは自分で呼べる)。
+        """
+        if not self.first_look:
+            return
+        calls: list[ToolCall] = []
+        results: list[ToolResult] = []
         try:
-            return self.brief()
+            for index, name in enumerate(self.first_look):
+                content = json.dumps(_condensed(self.tools.call(name, {})), ensure_ascii=False)
+                calls.append(ToolCall(id=f"{FIRST_LOOK_ID}{index}", name=name, arguments={}))
+                results.append(ToolResult(call_id=calls[-1].id, name=name, content=content, ok=True))
         except Exception:
-            _logger.warning("brief failed", exc_info=True)
-            return ""
+            _logger.warning("first look failed", exc_info=True)
+            return
+        self.turns.append(AssistantTurn(text="", tool_calls=tuple(calls)))
+        self.turns.append(ToolResultTurn(tuple(results)))
 
     def _settle_history(self) -> None:
         """済んだ依頼を「人の発話 + AIの最終返答」の2つへ畳む(ツールの往復は捨てる)。
@@ -519,8 +540,7 @@ class AgentLoop:
         寸法のガード(`_dimensions_nobody_asked_for`)は過去の発話から数量を探す。
 
         最後まで進まなかった依頼には、返答の代わりに1行の注記を置く。発話が2つ続く履歴を
-        作らないため(役割の交互を要求するチャットテンプレートがある)。発話に添えた状態も
-        同じ理由で外す(その時点の文書であって、いまの文書ではない)。
+        作らないため(役割の交互を要求するチャットテンプレートがある)。
         """
         settled: list[Turn] = []
         for request in _requests(self.turns):
@@ -528,7 +548,7 @@ class AgentLoop:
                 continue
             last = request[-1]
             answered = isinstance(last, AssistantTurn) and not last.tool_calls and last.text
-            settled.append(UserTurn(request[0].text))
+            settled.append(request[0])
             settled.append(AssistantTurn(text=last.text if answered else _unfinished_note(request)))
         self.turns = settled
 
@@ -685,25 +705,26 @@ class AgentLoop:
         )
 
 
-def document_brief(tools: ToolSurface) -> str:
-    """依頼に添える「いまの文書と選択」(`describe_document` と `get_selection` の結果そのもの)。
+#: 先に呼んだ問い合わせの呼び出しIDの頭(モデルが呼んだものと見分けるため)。
+FIRST_LOOK_ID = "first_look_"
 
-    モデルはこの2つを依頼のたびに最初に呼ぶので、先に渡してその往復を消す。大きい文書では
-    件数だけにする —— 一覧を毎回読ませるより、要るときに `describe_document` を呼ばせるほうが安い。
+
+def _condensed(payload: Any) -> Any:
+    """先に呼んだ結果が大きすぎるとき、一覧を件数に畳む。
+
+    一覧を依頼のたびに読ませるより、要るときにモデルが同じツールを呼び直すほうが安い。
     """
-    document = tools.call("describe_document", {})
-    selection = tools.call("get_selection", {}).get("selection", {})
-    body = json.dumps({"document": document, "selection": selection}, ensure_ascii=False)
-    if len(body) > BRIEF_MAX_CHARS:
-        counts = {
-            key: document.get(key)
-            for key in ("units", "active_body_id", "body_count", "visible_count")
-        }
-        counts["sketch_count"] = len(document.get("sketches") or [])
-        body = json.dumps(
-            {"document": counts, "selection": {"count": selection.get("count")}}, ensure_ascii=False
-        ) + "(大きい文書なので一覧は省いた。describe_document / get_selection で取れる)"
-    return f"[いまの文書と選択: describe_document と get_selection の結果]\n{body}"
+    if len(json.dumps(payload, ensure_ascii=False)) <= FIRST_LOOK_MAX_CHARS:
+        return payload
+
+    def counted(value: Any) -> Any:
+        if isinstance(value, list):
+            return f"({len(value)}件。大きいので省いた。要るときはこのツールを呼び直す)"
+        if isinstance(value, dict):
+            return {key: counted(item) for key, item in value.items()}
+        return value
+
+    return counted(payload)
 
 
 def _requests(turns: Sequence[Turn]) -> list[list[Turn]]:
@@ -723,7 +744,7 @@ def _unfinished_note(request: Sequence[Turn]) -> str:
         for turn in request
         if isinstance(turn, ToolResultTurn)
         for result in turn.results
-        if result.ok
+        if result.ok and not result.call_id.startswith(FIRST_LOOK_ID)
     ]
     done = f"実行したツール: {', '.join(ran)}" if ran else "ツールは実行していない"
     return f"(この依頼は最後まで進まなかった。{done})"

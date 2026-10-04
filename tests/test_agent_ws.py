@@ -239,9 +239,10 @@ def test_ai_send_hands_the_model_the_document_it_is_about_to_work_on(monkeypatch
         await _drain()
 
     asyncio.run(scenario())
-    asked = provider.requests[0]["turns"][-1]
+    asked, looked, found = provider.requests[0]["turns"]
     assert asked.text == "教えて"
-    assert '"body_id": "box"' in asked.context and '"selection"' in asked.context
+    assert [call.name for call in looked.tool_calls] == ["describe_document", "get_selection"]
+    assert '"body_id": "box"' in found.results[0].content
 
 
 def test_ai_send_rejects_a_second_message_while_running(monkeypatch, box_session: Session):

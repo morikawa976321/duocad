@@ -81,7 +81,7 @@ from typing import Any, Optional  # Any: listeners / 接続
 
 from .. import catalog, optimize_run, selection
 from ..agent import AgentLoop, Cancellation, ProviderError
-from ..agent.loop import document_brief
+from ..agent.loop import FIRST_LOOK
 from ..agent.providers import DEFAULT_OPENAI_COMPAT_BASE_URL
 from ..session import Session
 from .tools_on_loop import ToolsOnLoop
@@ -649,7 +649,7 @@ class Server:
             provider,
             cancellation=self._ai_cancellation,
             progress=self._ai_progress,
-            brief=lambda: document_brief(marshaled),
+            first_look=FIRST_LOOK,
         )
         return self._ai_loop
 
