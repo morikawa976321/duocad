@@ -154,11 +154,7 @@ runSmoke('smoke-files', { attach: true }, async ({ workdir, browser, url, timeou
   await typeInto('#sketch-height', PLATE.height)
   await page.keyboard.press('Enter')
   await waitFor(
-    () => {
-      const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-      return Boolean(active && active.regions.length === 1)
-    },
+    () => window.__duocad.sketch?.regions.length === 1,
     '板の領域ができない',
   )
   await page.keyboard.press('Escape')
@@ -415,7 +411,7 @@ runSmoke('smoke-files', { attach: true }, async ({ workdir, browser, url, timeou
     JSON.parse(
       await page.evaluate(() => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = hook.sketch
         return JSON.stringify(active?.plane ?? null)
       }),
     )?.kind

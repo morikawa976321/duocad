@@ -252,7 +252,7 @@ runSmoke('smoke-hover', { timeout: 60000, mcp: true }, async ({ mcp, browser, ur
     async function activeSketchEntities() {
       return page.evaluate(() => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = hook.sketch
         return (active?.entities ?? []).map((item) => ({
           entityId: item.entity_id,
           kind: item.kind,
@@ -368,7 +368,7 @@ runSmoke('smoke-hover', { timeout: 60000, mcp: true }, async ({ mcp, browser, ur
     await page.waitForFunction(
       (before) => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = hook.sketch
         return (active?.entities.length ?? 0) === before + 1
       },
       { timeout, polling: 50 },
@@ -376,7 +376,7 @@ runSmoke('smoke-hover', { timeout: 60000, mcp: true }, async ({ mcp, browser, ur
     )
     const snappedToGrid = await page.evaluate(() => {
       const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const active = hook.sketch
       return { ...active.entities.filter((item) => item.kind === 'line').at(-1).params }
     })
     for (const key of ['x0', 'y0', 'x1', 'y1']) {
@@ -411,7 +411,7 @@ runSmoke('smoke-hover', { timeout: 60000, mcp: true }, async ({ mcp, browser, ur
     await page.waitForFunction(
       (before) => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = hook.sketch
         return (active?.entities.length ?? 0) === before + 2
       },
       { timeout, polling: 50 },
@@ -419,7 +419,7 @@ runSmoke('smoke-hover', { timeout: 60000, mcp: true }, async ({ mcp, browser, ur
     )
     const snappedToPoint = await page.evaluate(() => {
       const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const active = hook.sketch
       // **スプレッドで写す**(Svelte 5 proxy対策。`activeSketchEntities` と同じ理由)。
       return { ...active.entities.filter((item) => item.kind === 'line').at(-1).params }
     })

@@ -87,7 +87,7 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
     async function sketchNow() {
       return page.evaluate(() => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch) ?? null
+        const active = hook.sketch
         return JSON.parse(
           JSON.stringify({
             activeSketch: hook.activeSketch,
@@ -153,11 +153,7 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
     await typeInto(page, '#sketch-height', PLATE.height)
     await page.keyboard.press('Enter')
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.regions.length === 1)
-      },
+      () => window.__duocad.sketch?.regions.length === 1,
       '長方形の領域ができない',
     )
 
@@ -165,11 +161,7 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
     await clickPlane(LINE.x0, LINE.y0)
     await clickPlane(LINE.x1, LINE.y1)
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.entities.some((item) => item.kind === 'line'))
-      },
+      () => window.__duocad.sketch?.entities.some((item) => item.kind === 'line'),
       '線分を描けない',
     )
     await page.keyboard.press('Escape') // 「選ぶ」へ戻す(描くコマンドが点を食わないように)
@@ -246,7 +238,7 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
     await waitFor(
       (id, y1) => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = hook.sketch
         const entity = active?.entities.find((item) => item.entity_id === id)
         return Boolean(entity && Math.abs(entity.params.y1 - (y1 + 10)) < 1e-6)
       },
@@ -371,7 +363,7 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
       await waitFor(
         (id, x1, y1) => {
           const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const active = hook.sketch
           const entity = active?.entities.find((item) => item.entity_id === id)
           return Boolean(
             entity &&
@@ -401,7 +393,7 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
       await waitFor(
         (id, x1, y1) => {
           const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const active = hook.sketch
           const entity = active?.entities.find((item) => item.entity_id === id)
           return Boolean(
             entity &&

@@ -138,11 +138,7 @@ runSmoke('smoke-regions', { attach: true }, async ({ browser, url, timeout }) =>
     await typeInto('#sketch-height', PLATE.height)
     await page.keyboard.press('Enter')
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.regions.length === 1)
-      },
+      () => window.__duocad.sketch?.regions.length === 1,
       '板の領域ができない',
     )
     await page.keyboard.press('Escape')
@@ -154,11 +150,7 @@ runSmoke('smoke-regions', { attach: true }, async ({ browser, url, timeout }) =>
     await typeInto('#sketch-radius', DISC.radius)
     await page.keyboard.press('Enter')
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.regions.length === 1)
-      },
+      () => window.__duocad.sketch?.regions.length === 1,
       '円の領域ができない',
     )
     await page.keyboard.press('Escape')
@@ -170,11 +162,7 @@ runSmoke('smoke-regions', { attach: true }, async ({ browser, url, timeout }) =>
     await typeInto('#sketch-radius', DISC_B.radius)
     await page.keyboard.press('Enter')
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.regions.length === 3)
-      },
+      () => window.__duocad.sketch?.regions.length === 3,
       '2つの円が重なって領域が3つにならない',
     )
     await page.keyboard.press('Escape')

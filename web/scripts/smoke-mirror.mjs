@@ -51,7 +51,7 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
     async function sketchNow() {
       return page.evaluate(() => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch) ?? null
+        const active = hook.sketch
         return JSON.parse(
           JSON.stringify({
             activeSketch: hook.activeSketch,
@@ -94,7 +94,7 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
       return page.waitForFunction(
         (x, y, radius) => {
           const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const active = hook.sketch
           return Boolean(
             active &&
               active.entities.some(
@@ -124,11 +124,7 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
     await awaitPrompt('終点', '線分の始点のクリックが届いていない')
     await clickPlane(AXIS.x, AXIS.y1)
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.entities.some((item) => item.kind === 'line'))
-      },
+      () => window.__duocad.sketch?.entities.some((item) => item.kind === 'line'),
       '軸にする線分を描けない',
     )
 
@@ -145,7 +141,7 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
         // 座標がずれたのかが後から分からない(クリックの取りこぼしと吸い付きの区別)。
         const state = await page.evaluate(() => {
           const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const active = hook.sketch
           return JSON.parse(
             JSON.stringify({
               entities: (active?.entities ?? []).map((item) => ({
@@ -169,11 +165,7 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
     await typeInto(page, '#sketch-height', PLATE.height)
     await page.keyboard.press('Enter')
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.entities.some((item) => item.kind === 'rectangle'))
-      },
+      () => window.__duocad.sketch?.entities.some((item) => item.kind === 'rectangle'),
       '長方形を描けない',
     )
     await page.keyboard.press('Escape') // 「選ぶ」へ戻す(描くコマンドが点を食わないように)

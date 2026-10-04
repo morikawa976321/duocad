@@ -126,7 +126,7 @@ runSmoke('smoke-grid-follow-cursor', { timeout: 60000, mcp: true }, async ({ mcp
     await waitFrames(page, 4)
     const planeInBase = await page.evaluate(() => {
       const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const active = hook.sketch
       return JSON.stringify(active?.plane ?? null)
     })
     if (JSON.parse(planeInBase)?.kind !== 'base') {
@@ -220,7 +220,7 @@ runSmoke('smoke-grid-follow-cursor', { timeout: 60000, mcp: true }, async ({ mcp
       await waitFrames(page, 4)
       const planeRaw = await page.evaluate(() => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = hook.sketch
         return JSON.stringify(active?.plane ?? null)
       })
       const plane = JSON.parse(planeRaw)

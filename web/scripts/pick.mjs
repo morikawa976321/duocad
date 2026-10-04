@@ -169,7 +169,7 @@ export async function clickEntityHandle(page, entityId) {
   return withoutBrowserPanel(page, async () => {
     const at = await page.evaluate((id) => {
       const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const active = hook.sketch
       const entity = active?.entities.find((item) => item.entity_id === id)
       if (!entity) return null
       const p = entity.params

@@ -111,7 +111,7 @@ runSmoke('smoke-face-grid', { timeout: 60000, mcp: true }, async ({ mcp, browser
     async function sketchPlane() {
       const raw = await page.evaluate(() => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch) ?? null
+        const active = hook.sketch
         return JSON.stringify(active?.plane ?? null)
       })
       return JSON.parse(raw)

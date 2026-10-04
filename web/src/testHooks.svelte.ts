@@ -202,6 +202,8 @@ export function installTestHooks(ctx: TestHookContext): void {
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches: ctx.sketches(),
       activeSketch: ctx.sketchId(),
+      // 今編集しているスケッチ(無ければ null)。実機検査が各本で `sketches` から引き直さないための口。
+      sketch: ctx.sketches().find((item) => item.sketch_id === ctx.sketchId()) ?? null,
       hoverPoint: ctx.hoverPoint(),
       // **第2の呼び方**: スケッチを指定すると通常モードでも射影できる(領域の
       // `projectRegion` と同じ形)。**同じ世界座標の点を、画面の寸法が変わった後でも

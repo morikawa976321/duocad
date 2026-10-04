@@ -504,8 +504,7 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     await createSketchOnBase('XY')
     await page.waitForFunction(
       () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = window.__duocad.sketch
         return Boolean(active && active.plane.kind === 'base' && active.frame)
       },
       { timeout, polling: 50 },
@@ -528,8 +527,7 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     await page.keyboard.press('Enter')
     await page.waitForFunction(
       () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = window.__duocad.sketch
         return Boolean(active && active.entities.length === 1 && active.regions.length === 1)
       },
       { timeout, polling: 50 },
@@ -547,8 +545,7 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     await clickPlane(30, 5)
     await page.waitForFunction(
       () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = window.__duocad.sketch
         return Boolean(active && active.entities.length === 2 && active.regions.length === 2)
       },
       { timeout, polling: 50 },
@@ -565,15 +562,14 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     await page.keyboard.press('Enter')
     await page.waitForFunction(
       () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = window.__duocad.sketch
         return Boolean(active && active.entities.length === 3 && active.regions.length === 2)
       },
       { timeout, polling: 50 },
     )
     const keyed = await page.evaluate(() => {
       const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const active = hook.sketch
       const line = active.entities.filter((entity) => entity.kind === 'line').at(-1)
       const p = line.params
       return {
@@ -587,11 +583,7 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     ok(`線分を打鍵だけで引けた(始点をクリック → 長さ20・角度30を打つ → Enter。実測 ${keyed.length.toFixed(3)}mm / ${keyed.angle.toFixed(3)}度)`)
     await pressUndo(page)
     await page.waitForFunction(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.entities.length === 2)
-      },
+      () => window.__duocad.sketch?.entities.length === 2,
       { timeout, polling: 50 },
     )
 
@@ -602,11 +594,7 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     await typeInto('#sketch-height', 6)
     await page.keyboard.press('Enter')
     await page.waitForFunction(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.entities.length === 3)
-      },
+      () => window.__duocad.sketch?.entities.length === 3,
       { timeout, polling: 50 },
     )
     await page.click('#sketch-arc')
@@ -616,16 +604,12 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     await clickPlane(-36, -30)
     await clickPlane(-40, -26)
     await page.waitForFunction(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.entities.length === 4)
-      },
+      () => window.__duocad.sketch?.entities.length === 4,
       { timeout, polling: 50 },
     )
     const kinds = await page.evaluate(() => {
       const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const active = hook.sketch
       return active.entities.map((entity) => entity.kind)
     })
     if (kinds.join(',') !== 'circle,line,rectangle,arc') fail(`4種そろっていない: ${kinds.join(',')}`)

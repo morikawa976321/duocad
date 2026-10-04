@@ -60,7 +60,7 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
       JSON.parse(
         await page.evaluate(() => {
           const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch) ?? null
+          const active = hook.sketch
           return JSON.stringify({
             bodies: hook.parts.map((body) => ({
               id: body.body_id,
@@ -129,11 +129,7 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     await typeInto('#sketch-height', PLATE.height)
     await page.keyboard.press('Enter')
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.regions.length === 1)
-      },
+      () => window.__duocad.sketch?.regions.length === 1,
       '長方形を描いても領域が1つにならない',
     )
     ok(`長方形を手で描いた(${PLATE.width}×${PLATE.height})`)
@@ -285,11 +281,7 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     await typeInto('#sketch-radius', 2)
     await page.keyboard.press('Enter')
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.entities.length === 1)
-      },
+      () => window.__duocad.sketch?.entities.length === 1,
       '反復する図形が置けない',
     )
     await page.keyboard.press('Escape')
@@ -298,7 +290,7 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     // `sketch_entity` から導かれる。
     const entityId = await page.evaluate(() => {
       const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const active = hook.sketch
       return active.entities[0].entity_id
     })
     /** 図形が反復の対象に入っている状態にする(既に入っていれば何もしない)。 */
@@ -338,7 +330,7 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     )
     const afterEscape = await page.evaluate(() => {
       const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const active = hook.sketch
       return active.drawn.length
     })
     if (afterEscape !== 1) fail(`Escで中断したのに図形が増えている: ${afterEscape}`)
@@ -359,22 +351,14 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     )
     await page.keyboard.press('Enter')
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.drawn.length === 6)
-      },
+      () => window.__duocad.sketch?.drawn.length === 6,
       '矩形反復が 3×2 = 6 にならない',
     )
     ok('矩形反復: 3×2 で図形が6個になった(元を含めた個数)')
 
     await pressUndo(page)
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.drawn.length === 1)
-      },
+      () => window.__duocad.sketch?.drawn.length === 1,
       'undoで反復が戻らない',
     )
 
@@ -391,11 +375,7 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     )
     await page.keyboard.press('Enter')
     await waitFor(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.drawn.length === 8)
-      },
+      () => window.__duocad.sketch?.drawn.length === 8,
       '円形反復が8個にならない',
     )
     ok('円形反復: 中心を点で指し、幽霊7個が出て、確定で8個になった')

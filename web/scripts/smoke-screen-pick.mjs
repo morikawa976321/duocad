@@ -189,7 +189,7 @@ runSmoke('smoke-screen-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
 
     const entities = await page.evaluate(() => {
       const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const active = hook.sketch
       return (active?.entities ?? []).map((item) => ({
         entityId: item.entity_id,
         kind: item.kind,

@@ -72,7 +72,7 @@ runSmoke('smoke-svg', { attach: true }, async ({ workdir, browser, url, timeout 
       JSON.parse(
         await page.evaluate(() => {
           const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch) ?? null
+          const active = hook.sketch
           return JSON.stringify({
             sketches: hook.sketches.length,
             activeSketch: hook.activeSketch,
@@ -114,7 +114,7 @@ runSmoke('smoke-svg', { attach: true }, async ({ workdir, browser, url, timeout 
     await waitFor(
       (expected) => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = hook.sketch
         return Boolean(active) && active.entities.length === expected
       },
       `取り込んだ図形が ${EXPECTED.entities} 個にならない`,
@@ -234,7 +234,7 @@ runSmoke('smoke-svg', { attach: true }, async ({ workdir, browser, url, timeout 
     await waitFor(
       () => {
         const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const active = hook.sketch
         return Boolean(active) && active.entities.length === 0
       },
       'Ctrl+Z 1回で取り込みが消えない(ログがverbごとに分かれている)',
