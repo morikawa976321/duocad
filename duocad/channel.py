@@ -78,7 +78,7 @@ class StableUpdater:
     """安定版の更新状態を答え、更新を始める。`WebHandler`(`/api/update`)から呼ばれる。
 
     `status()` も `start()` も HTTP のワーカースレッドで走る。`Session` には触らず、
-    保存状態だけを `is_saved`(イベントループへ投げ返す呼び出し)で聞く。
+    今止めてよいかを `update_blocker`(イベントループへ投げ返す呼び出し。止められない理由か None)で聞く。
     """
 
     def __init__(
@@ -86,7 +86,7 @@ class StableUpdater:
         *,
         log_dir: Path,
         relaunch: dict,
-        is_saved: Callable[[], bool],
+        update_blocker: Callable[[], Optional[str]],
         on_started: Callable[[], None],
         repo_root: Path = REPO_ROOT,
         branch: str = UPDATE_BRANCH,
@@ -94,7 +94,7 @@ class StableUpdater:
         self.log_dir = Path(log_dir)
         #: 立て直すときに `duocad.launcher` へ渡すもの(`channel` / `port` / `http_port` / `data_dir`)。
         self.relaunch = relaunch
-        self.is_saved = is_saved
+        self.update_blocker = update_blocker
         self.on_started = on_started
         self.repo_root = Path(repo_root)
         self.branch = branch
@@ -183,8 +183,12 @@ class StableUpdater:
             self._cached, self._cached_at = state, time.monotonic()
             if state["state"] != "available":
                 return 409, {"error": state.get("reason") or "取り込む変更が無い"}
-            if not self.is_saved():
-                return 409, {"error": "自動保存が書けていない文書がある。Ctrl+S で保存してから更新すること"}
+            try:
+                reason = self.update_blocker()
+            except Exception as error:  # noqa: BLE001  (イベントループが塞がっている等。HTTPスレッドへ漏らさない)
+                return 503, {"error": f"サーバの状態を確かめられなかった: {error!r}"}
+            if reason is not None:
+                return 409, {"error": reason}
             script = self.repo_root / "tools" / "stable" / "update.ps1"
             if not script.exists():
                 return 500, {"error": f"{script} が無い"}

@@ -88,9 +88,9 @@ function Relaunch {
     )
 }
 
-function Write-Result([bool]$ok, [string]$from, [string]$to, [string]$message) {
+function Write-Result([bool]$ok, [bool]$restored, [string]$from, [string]$to, [string]$message) {
     $result = [ordered]@{
-        ok = $ok; rollback = [bool]$Rollback; from = $from; to = $to
+        ok = $ok; restored = $restored; rollback = [bool]$Rollback; from = $from; to = $to
         message = $message; log = $log; at = (Get-Date).ToString('o')
     }
     $result | ConvertTo-Json | Set-Content -Path (Join-Path $LogDir 'last-update-result.json') -Encoding UTF8
@@ -100,62 +100,76 @@ Log "start: repo=$RepoRoot branch=$Branch rollback=$Rollback"
 
 # ---- サーバの終了を待つ ----
 if ($ServerPid -eq 0) {
+    # 手で呼ばれた(-Rollback 等)。サーバに止まるよう頼む口は無いので、すぐ止める。
+    # 文書は操作のたびに自動保存されているので、失うのは走っている最適化・AIの途中だけ。
     $listening = Get-NetTCPConnection -LocalPort $HttpPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($listening) { $ServerPid = $listening.OwningProcess }
-}
-if ($ServerPid -ne 0) {
+    if ($listening) {
+        Log "stopping server pid $($listening.OwningProcess) on port $HttpPort"
+        Stop-Process -Id $listening.OwningProcess -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+} else {
     Log "waiting for server pid $ServerPid"
     Wait-Process -Id $ServerPid -Timeout 60 -ErrorAction SilentlyContinue
     if (Get-Process -Id $ServerPid -ErrorAction SilentlyContinue) {
         Log "server did not exit; stopping it"
-        Stop-Process -Id $ServerPid -Force
+        Stop-Process -Id $ServerPid -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
     }
 }
 
-$uv = Resolve-Tool 'uv' @("$env:USERPROFILE\.local\bin\uv.exe", "$env:USERPROFILE\.cargo\bin\uv.exe")
-$npm = Resolve-Tool 'npm.cmd' @("$env:ProgramFiles\nodejs\npm.cmd")
-
 $previousFile = Join-Path $RepoRoot '.git\duocad-previous'
-$from = (& git -C $RepoRoot rev-parse HEAD).Trim()
-$to = $from
+$from = ''
 
+# **ここから先で何が起きても、最後に必ず立て直す**(サーバはもう止まっている)。
 try {
-    # 安定版のcloneを手で書き換えた形跡があれば、潰さずに止める。
-    $current = (& git -C $RepoRoot rev-parse --abbrev-ref HEAD).Trim()
-    if ($current -ne $Branch) { throw "$Branch 以外の枝($current)にいる。開発用のチェックアウトでは走らせない" }
-    $dirty = & git -C $RepoRoot status --porcelain --untracked-files=no
-    if ($dirty) { throw "安定版のフォルダに未コミットの変更がある: $dirty" }
-
-    if ($Rollback) {
-        if (-not (Test-Path $previousFile)) { throw '戻り先(.git\duocad-previous)が無い' }
-        $target = (Get-Content $previousFile -Raw).Trim()
-        Run 'git reset' 'git' @('reset', '--hard', $target)
-    } else {
-        Run 'git fetch' 'git' @('fetch', 'origin', $Branch)
-        Run 'git merge' 'git' @('merge', '--ff-only', "origin/$Branch")
-    }
-    $to = (& git -C $RepoRoot rev-parse HEAD).Trim()
-    if ($to -ne $from) { Set-Content -Path $previousFile -Value $from -Encoding ASCII }
-    Build $from
-    Log "ok: $from -> $to"
-    Write-Result $true $from $to ''
-} catch {
-    $message = $_.Exception.Message
-    Log "FAILED: $message"
     try {
-        $now = (& git -C $RepoRoot rev-parse HEAD).Trim()
-        if ($now -ne $from) {
-            Log "restoring $from"
-            Run 'git reset (restore)' 'git' @('reset', '--hard', $from)
-            Build $now
-        }
-    } catch {
-        Log "RESTORE FAILED: $($_.Exception.Message)"
-        $message = "$message / 復元にも失敗: $($_.Exception.Message)"
-    }
-    Write-Result $false $from $from $message
-}
+        $uv = Resolve-Tool 'uv' @("$env:USERPROFILE\.local\bin\uv.exe", "$env:USERPROFILE\.cargo\bin\uv.exe")
+        $npm = Resolve-Tool 'npm.cmd' @("$env:ProgramFiles\nodejs\npm.cmd")
+        $from = (& git -C $RepoRoot rev-parse HEAD).Trim()
+        if (-not $from) { throw 'git rev-parse HEAD に失敗' }
 
-Relaunch
-Log 'done'
+        $current = (& git -C $RepoRoot rev-parse --abbrev-ref HEAD).Trim()
+        if ($current -ne $Branch) { throw "$Branch 以外の枝($current)にいる。開発用のチェックアウトでは走らせない" }
+        # 安定版のcloneを手で書き換えた形跡があれば、潰さずに止める。
+        $dirty = & git -C $RepoRoot status --porcelain --untracked-files=no
+        if ($dirty) { throw "安定版のフォルダに未コミットの変更がある: $dirty" }
+
+        if ($Rollback) {
+            if (-not (Test-Path $previousFile)) { throw '戻り先(.git\duocad-previous)が無い' }
+            $target = (Get-Content $previousFile -Raw).Trim()
+            Run 'git reset' 'git' @('reset', '--hard', $target)
+        } else {
+            Run 'git fetch' 'git' @('fetch', 'origin', $Branch)
+            Run 'git merge' 'git' @('merge', '--ff-only', "origin/$Branch")
+        }
+        $to = (& git -C $RepoRoot rev-parse HEAD).Trim()
+        Build $from
+        # 戻り先は**成功したときだけ**書き換える(失敗して戻した後も、前回の成功の手前を指し続ける)。
+        if ($to -ne $from) { Set-Content -Path $previousFile -Value $from -Encoding ASCII }
+        Log "ok: $from -> $to"
+        Write-Result $true $true $from $to ''
+    } catch {
+        $message = $_.Exception.Message
+        Log "FAILED: $message"
+        $restored = $true
+        try {
+            if ($from) {
+                $now = (& git -C $RepoRoot rev-parse HEAD).Trim()
+                if ($now -ne $from) {
+                    Log "restoring $from"
+                    Run 'git reset (restore)' 'git' @('reset', '--hard', $from)
+                    Build $now
+                }
+            }
+        } catch {
+            $restored = $false
+            Log "RESTORE FAILED: $($_.Exception.Message)"
+            $message = "$message / 元の版への復元にも失敗: $($_.Exception.Message)"
+        }
+        Write-Result $false $restored $from $from $message
+    }
+} finally {
+    Relaunch
+    Log 'done'
+}

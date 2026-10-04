@@ -138,7 +138,7 @@ def test_updater_status_counts_commits_behind_origin(tmp_path):
     updater = StableUpdater(
         log_dir=tmp_path / "logs",
         relaunch={},
-        is_saved=lambda: True,
+        update_blocker=lambda: None,
         on_started=lambda: None,
         repo_root=clone,
     )
@@ -169,7 +169,7 @@ def test_updater_refuses_outside_the_update_branch(tmp_path):
     updater = StableUpdater(
         log_dir=tmp_path / "logs",
         relaunch={},
-        is_saved=lambda: True,
+        update_blocker=lambda: None,
         on_started=lambda: started.append(1),
         repo_root=repo,
     )
@@ -197,7 +197,7 @@ def test_updater_treats_a_clone_ahead_of_main_as_current(tmp_path):
     _git(clone, "commit", "-q", "-m", "develop commit")
 
     updater = StableUpdater(
-        log_dir=tmp_path / "logs", relaunch={}, is_saved=lambda: True, on_started=lambda: None,
+        log_dir=tmp_path / "logs", relaunch={}, update_blocker=lambda: None, on_started=lambda: None,
         repo_root=clone,
     )
     assert updater.status(force=True)["state"] == "current"
@@ -205,3 +205,44 @@ def test_updater_treats_a_clone_ahead_of_main_as_current(tmp_path):
     (origin / "a.txt").write_text("2", encoding="utf-8")
     _git(origin, "commit", "-q", "-am", "diverging")
     assert updater.status(force=True)["state"] == "blocked"
+
+
+def test_update_status_rejects_cross_site_embeds_and_foreign_hosts(serve):
+    """落ちたら: よそのページの埋め込みやDNSリバインディングで、安定版に git fetch を連打させられる。"""
+    port = serve("stable", _FakeUpdater())
+    assert _request(port, "GET", "/api/update", {"Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert _request(port, "GET", "/api/update", {"Host": "evil.example:80"})[0] == 403
+    assert _request(port, "GET", "/api/update", {"Sec-Fetch-Site": "same-origin"})[0] == 200
+
+
+def test_update_is_refused_while_the_server_cannot_stop_cleanly(tmp_path):
+    """落ちたら: 形状最適化・AIの実行中や状態不明のまま更新が始まり、強制終了で結果が消える。"""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "user.email", "t@example.com")
+    _git(origin, "config", "user.name", "t")
+    (origin / "a.txt").write_text("1", encoding="utf-8")
+    _git(origin, "add", "a.txt")
+    _git(origin, "commit", "-q", "-m", "first")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    (origin / "a.txt").write_text("2", encoding="utf-8")
+    _git(origin, "commit", "-q", "-am", "second")
+
+    started = []
+
+    def make(blocker):
+        return StableUpdater(
+            log_dir=tmp_path / "logs", relaunch={}, update_blocker=blocker,
+            on_started=lambda: started.append(1), repo_root=clone,
+        )
+
+    status, body = make(lambda: "形状最適化が走っている").start()
+    assert status == 409 and "形状最適化" in body["error"]
+
+    def broken():
+        raise TimeoutError
+
+    assert make(broken).start()[0] == 503
+    assert not started

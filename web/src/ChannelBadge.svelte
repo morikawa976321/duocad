@@ -2,8 +2,9 @@
   /**
    * ヘッダー左端の、開発版の札と安定版の更新ボタン(`duocad/channel.py`・`docs/STABLE.md`)。
    *
-   * - 開発版(`channel: 'dev'`): 常に「開発版」の札を出し、窓のタイトルにも付ける ——
-   *   安定版と並べて開いたとき、見た目が同じ2つの窓を取り違えないため。
+   * - 開発版: 常に「開発版」の札を出し、窓のタイトルにも付ける —— 安定版と並べて開いたとき、
+   *   見た目が同じ2つの窓を取り違えないため。**サーバが `channel: 'stable'` と答えたときだけ札を消す**
+   *   (設定が取れない Vite の dev サーバ等も開発版として扱う。付け忘れ・取り損ねで札が消える側へ倒さない)。
    * - 安定版: mainに新しいコミットがあるときだけ「更新」ボタンが出る。押すとサーバが
    *   更新スクリプトを起こして終了し、立ち直ったら画面を読み直す。
    */
@@ -12,7 +13,15 @@
 
   type Version = { commit?: string; date?: string }
   type Config = { channel?: 'dev' | 'stable'; version?: Version; update_supported?: boolean }
-  type LastResult = { ok: boolean; rollback: boolean; from: string; to: string; message: string; log: string }
+  type LastResult = {
+    ok: boolean
+    restored?: boolean
+    rollback: boolean
+    from: string
+    to: string
+    message: string
+    log: string
+  }
   type UpdateStatus = {
     state: 'current' | 'available' | 'blocked' | 'unknown'
     behind: number
@@ -30,6 +39,9 @@
   const RESTART_TIMEOUT_MS = 15 * 60 * 1000
 
   let config = $state<Config | null>(null)
+  /** 設定を取りに行き終えたか。取りに行く前に札を出すと、安定版でも一瞬「開発版」が光る。 */
+  let loaded = $state(false)
+  const isDev = $derived(loaded && config?.channel !== 'stable')
   let status = $state<UpdateStatus | null>(null)
   let updating = $state(false)
 
@@ -56,6 +68,8 @@
     const short = (commit: string) => commit.slice(0, 7)
     if (result.ok) {
       inform(result.from === result.to ? '更新済み(変更なし)' : `更新した(${short(result.from)} → ${short(result.to)})`)
+    } else if (result.restored === false) {
+      fail(`更新に失敗し、元の版にも戻せなかった: ${result.message}(ログ: ${result.log})`)
     } else {
       fail(`更新に失敗したので元の版に戻した: ${result.message}(ログ: ${result.log})`)
     }
@@ -112,7 +126,8 @@
     let timer: ReturnType<typeof setInterval> | null = null
     void (async () => {
       config = await fetchJson<Config>('duocad-config.json')
-      if (config?.channel === 'dev') {
+      loaded = true
+      if (config?.channel !== 'stable') {
         document.title = `[開発版] ${document.title}`
         return
       }
@@ -134,7 +149,7 @@
   })
 </script>
 
-{#if config?.channel === 'dev'}
+{#if isDev}
   <span id="channel-badge" class="channel-dev" title={`開発版のサーバに繋がっている ${versionText}`}>開発版</span>
 {:else if status?.state === 'available'}
   <button

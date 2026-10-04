@@ -171,6 +171,14 @@ class WebHandler(SimpleHTTPRequestHandler):
             if self.updater is None:
                 self.send_error(404)
                 return
+            # 読むだけの口でも `git fetch` を走らせる。よその名前で解決して来たもの(DNSリバインディング)と、
+            # よそのページの `<img src=...?force=1>` 等の埋め込み(ブラウザが `Sec-Fetch-Site: cross-site`
+            # を付け、ページからは偽装できない)を落とす。ヘッダの無い非ブラウザのクライアントは通す。
+            host = (self.headers.get("Host") or "").strip().lower()
+            site = self.headers.get("Sec-Fetch-Site")
+            if host not in self.mcp_hosts or site not in (None, "same-origin", "none"):
+                self.send_error(403)
+                return
             force = "force=1" in self.path.split("?", 1)[-1]
             self._send_json(200, self.updater.status(force=force))
             return

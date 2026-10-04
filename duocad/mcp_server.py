@@ -987,7 +987,7 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
     loop = asyncio.get_running_loop()
     #: 安定版の更新が始まったら立つ。`--no-stdio` の待ちがこれで解けてプロセスが終わる。
     stop = asyncio.Event()
-    updater = _stable_updater(session, args, loop, stop)
+    updater = _stable_updater(session, server, args, loop, stop)
     try:
         start_http_server(
             args.web_dist,
@@ -1028,7 +1028,11 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
 
 
 def _stable_updater(
-    session: Session, args: argparse.Namespace, loop: asyncio.AbstractEventLoop, stop: asyncio.Event
+    session: Session,
+    server: Server,
+    args: argparse.Namespace,
+    loop: asyncio.AbstractEventLoop,
+    stop: asyncio.Event,
 ) -> Optional[StableUpdater]:
     """安定版(`--channel stable --no-stdio`)だけ更新の口を開く(`duocad/channel.py`)。
 
@@ -1039,12 +1043,20 @@ def _stable_updater(
     if args.channel != "stable" or not args.no_stdio or args.data_dir is None:
         return None
 
-    async def saved() -> bool:
-        return session.saved
+    async def blocker() -> Optional[str]:
+        # 形状最適化とAIの実行は既定の実行器で走る。`asyncio.run` の後始末はそれを時間制限なしで
+        # 待つので、走っている間に止めるとプロセスが終わらず、update.ps1 が強制終了して結果を捨てる。
+        if session.optimizing:
+            return "形状最適化が走っている。終わるか中断してから更新すること"
+        if getattr(server, "_ai_running", False):
+            return "AIが実行中。終わるか止めてから更新すること"
+        if not session.saved:
+            return "自動保存が書けていない文書がある。Ctrl+S で保存してから更新すること"
+        return None
 
-    def is_saved() -> bool:
+    def update_blocker() -> Optional[str]:
         # `Session` を触るのはイベントループのスレッドだけ(`ToolsOnLoop` と同じ不変条件)。
-        return asyncio.run_coroutine_threadsafe(saved(), loop).result(timeout=5)
+        return asyncio.run_coroutine_threadsafe(blocker(), loop).result(timeout=5)
 
     def on_started() -> None:
         # HTTPの応答(202)を書き終える猶予を置いてから止める。
@@ -1058,7 +1070,7 @@ def _stable_updater(
             "http_port": args.http_port,
             "data_dir": args.data_dir,
         },
-        is_saved=is_saved,
+        update_blocker=update_blocker,
         on_started=on_started,
     )
 

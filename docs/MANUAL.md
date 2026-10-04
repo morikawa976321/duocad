@@ -36,6 +36,8 @@ duocad は2つあります。**作品を作るときは「制作用」、duocad 
 2. 下に「更新した」と出れば完了です。開いていたファイルはそのまま残っています。
 3. 失敗したときは**自動で元の版に戻ります**。下に理由が出るので、開発側で直します。
 
+形状最適化やAIの実行が走っている間は更新できません(押すと理由が出ます)。終わるか止めてから押してください。
+
 - 更新が届くのは **main に入った変更だけ**です。開発用で直しただけでは届きません(下の「開発する」)。
 - 今の制作用は main ではなく **2026-10-04 時点の develop** から始めてあります。そのため**次に develop を main へマージするまで更新ボタンは出ません**。
 - 「更新できない」という札が出たら、制作用のフォルダが書き換えられています。カーソルを載せると理由が出ます。
@@ -56,16 +58,18 @@ duocad は2つあります。**作品を作るときは「制作用」、duocad 
 | 「ポート 8776 で別の duocad が動いている」と出る | 開発用のサーバが制作用の番号で動いています。それを止めてから起動し直します |
 | 「サーバが立たなかった」と出る | `duocad-data\logs\server.log` の最後を見ます |
 | 更新に失敗した | 下に出たログ(`duocad-data\logs\update-日時.log`)を見ます。制作用は元の版のまま使えます |
+| 「元の版にも戻せなかった」と出た | 制作用が動かないことがあります。ログを開発側のセッションに渡して直してもらいます |
 | 更新前の版に戻したい | 下の「前の版に戻す」 |
 | 制作用のサーバを完全に止めたい | 下の「サーバを止める」 |
 
 **サーバを止める**(PowerShell):
 
 ```powershell
-Get-CimInstance Win32_Process | Where-Object CommandLine -like '*--channel stable*' | ForEach-Object { Stop-Process -Id $_.ProcessId }
+Get-CimInstance Win32_Process | Where-Object CommandLine -like '*--channel stable*' | ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
 ```
 
-**前の版に戻す**(PowerShell。直前の更新の前に戻り、自動で起動し直します):
+**前の版に戻す**(PowerShell。動いている制作用をすぐ止め、直前の更新の前に戻して起動し直します。
+数十秒かかることがあります。止まって見えても待ってください):
 
 ```powershell
 & "$env:USERPROFILE\duocad-stable\tools\stable\update.ps1" -RepoRoot "$env:USERPROFILE\duocad-stable" -LogDir "$env:USERPROFILE\duocad-data\logs" -DataDir "$env:USERPROFILE\duocad-data" -Rollback
@@ -75,6 +79,6 @@ Get-CimInstance Win32_Process | Where-Object CommandLine -like '*--channel stabl
 
 - **`duocad-stable` の中のファイルを手で書き換えないでください。** 更新が止まります(「更新できない」の札)。
 - **作品は `duocad-data` にあります。** リポジトリの外なのでバックアップは別に取ってください。
-- 開発用の `models` にあった `untitled-*.json`(310個)は制作用へ写していません。必要なものがあれば `duocad-data\models` へコピーしてください。
+- セットアップでは、開発用の `models` から**名前を付けたファイルだけ**を制作用へ写しました。`untitled-*.json`(自動で付く名前のもの)は写していません。必要なものがあれば `duocad-data\models` へコピーしてください。
 
 仕組みと再セットアップの手順は [STABLE.md](STABLE.md) にあります。

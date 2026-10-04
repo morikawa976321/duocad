@@ -11,11 +11,12 @@
 
 ## 安定版に触らない（2026-10-04 本人指示）
 
-実制作は別cloneの**安定版**で行っている（[docs/STABLE.md](docs/STABLE.md)）。開発中のエージェントは:
+実制作は別cloneの**安定版**で行っている（[docs/STABLE.md](docs/STABLE.md)）。**開発用チェックアウト（`mf\duocad`）で作業するエージェントは**:
 
 - **`%USERPROFILE%\duocad-stable` と `%USERPROFILE%\duocad-data` を読み書きしない**（制作データと制作用のコード）。
 - **ポート 8775 / 8776 でサーバを立てない・繋がない**（安定版のもの）。開発版は既定の 8765 / 8766 か空きポート。
 - 安定版に変更を届けるのは **develop → main のPR だけ**。届いた変更は本人が画面の更新ボタンで取り込む。
+- 安定版のフォルダで開いたセッションには、そのフォルダの `CLAUDE.local.md`（`tools/stable/install.ps1` が置く）が別の指示を出す。
 
 ## コメント
 
