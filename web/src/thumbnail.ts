@@ -11,7 +11,7 @@
 import * as THREE from 'three'
 import { BASE_COLOR, EDGE_COLOR, HOME_VIEW_OFFSET } from './viewportConstants'
 
-/** 書き出すPNGの一辺[px]。一覧では56px四方に出す(高DPIで2倍まで粗くならない大きさ)。 */
+/** 書き出すPNGの一辺[px]。一覧では67px四方に出す(高DPIで2倍まで粗くならない大きさ)。 */
 export const THUMBNAIL_SIZE = 128
 /** 縮小前に描く倍率。描画先はMSAAを持たないので、大きく描いて縮めて縁のギザギザを消す。 */
 const SUPERSAMPLE = 2

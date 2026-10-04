@@ -565,8 +565,8 @@
 
   .files-thumb {
     flex: 0 0 auto;
-    width: 56px;
-    height: 56px;
+    width: 67px;
+    height: 67px;
     display: grid;
     place-items: center;
     background: var(--bg);
