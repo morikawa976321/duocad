@@ -198,7 +198,9 @@ def test_openai_compat_request_shape():
     assert payload["messages"][0] == {"role": "system", "content": "つかいかた"}
     assert payload["messages"][1] == {"role": "user", "content": "やって"}
     assert payload["tool_choice"] == "auto"
-    assert payload["stream"] is False
+    # ストリーミングで受ける(打ち切りで接続を閉じれば生成が止まる)。usage は明示しないと載らない
+    assert payload["stream"] is True
+    assert payload["stream_options"] == {"include_usage": True}
     function = payload["tools"][0]["function"]
     assert payload["tools"][0]["type"] == "function"
     assert function["name"] == surface.descriptors()[0]["name"]

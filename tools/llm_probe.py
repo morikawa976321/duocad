@@ -39,11 +39,11 @@ from duocad.agent import AgentLoop, Limits, OpenAICompatProvider
 from duocad.agent.providers import (
     AssistantTurn,
     ProviderError,
+    StreamingTransport,
     ToolCall,
     ToolResult,
     ToolResultTurn,
     UserTurn,
-    post_json,
 )
 
 SYSTEM = catalog.agent_instructions()
@@ -232,7 +232,9 @@ class Probe:
             tools=TOOLS if tools is None else tools,
             max_tokens=max_tokens,
         )
-        return {**body, **self.extra}
+        # 台本のリクエストは本文1つで受ける(`timings` はどちらの受け方でも同じ値が載る)。
+        body.pop("stream_options", None)
+        return {**body, "stream": False, **self.extra}
 
     # ------------------------------------------------------------------ シナリオ
     def facts(self) -> list:
@@ -273,11 +275,12 @@ class Probe:
     def agent(self) -> list:
         records: list = []
         position = {"run": 0, "turn": 0}
+        real = StreamingTransport()
 
         def transport(url, body, headers, timeout):
             position["turn"] += 1
             started = monotonic()
-            response = post_json(url, {**body, **self.extra}, headers, timeout)
+            response = real(url, {**body, **self.extra}, headers, timeout)
             label = f"依頼{position['run']}・往復{position['turn']}"
             records.append(record(label, response, monotonic() - started))
             return response
@@ -416,12 +419,14 @@ class Probe:
 
         server.forget()
         try:
-            post_json(f"{server.base}/v1/chat/completions", body, {}, hold)
+            self.provider.complete(
+                system="", turns=[UserTurn(LONG_TASK)], tools=[], max_tokens=1500, timeout=hold
+            )
         except ProviderError as error:
             outcome = type(error).__name__
         else:
             outcome = "返ってきた"
-        item = measured("製品の経路: post_json が待ち時間切れ", server.busy())
+        item = measured("製品の経路: OpenAICompatProvider が待ち時間切れ", server.busy())
         item["outcome"] = outcome
         records.append(item)
         return records

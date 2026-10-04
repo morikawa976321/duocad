@@ -704,8 +704,8 @@ class Server:
 
     def _ai_cancel(self) -> None:
         """中断フラグを立てる。**ループはモデルへ投げる前とツール1件ごとに見る**
-        (`duocad/agent/loop.py` の `Cancellation` docstring) —— 走っているHTTP
-        リクエスト自体は切れないので、反映は次のチェックポイントまで遅れうる。
+        (`duocad/agent/loop.py` の `Cancellation` docstring)。走っているHTTPリクエストは
+        プロバイダが接続を閉じて止める。
         """
         self._ai_cancellation.cancel()
 

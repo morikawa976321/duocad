@@ -140,14 +140,25 @@ class Cancellation:
     """外から立てる中断フラグ(スレッドをまたいで立ててよい)。
 
     ループは**モデルへ投げる前**と**ツールを1つ実行するたび**に見る。走っている
-    HTTPリクエスト自体は切らない(切るのはタイムアウトの仕事)。
+    HTTPリクエストは、`on_cancel` で繋いだプロバイダの `abort` が接続を閉じて止める
+    (閉じないと、サーバは誰も読まない応答を最後まで生成し続ける)。
     """
 
     def __init__(self) -> None:
         self._event = threading.Event()
+        self._listeners: list[Callable[[], None]] = []
+
+    def on_cancel(self, listener: Callable[[], None]) -> None:
+        """中断が立った瞬間に呼ぶものを足す(`cancel()` を呼んだスレッドで走る)。"""
+        self._listeners.append(listener)
 
     def cancel(self) -> None:
         self._event.set()
+        for listener in list(self._listeners):
+            try:
+                listener()
+            except Exception:
+                _logger.warning("cancel listener failed", exc_info=True)
 
     def clear(self) -> None:
         self._event.clear()
@@ -248,6 +259,9 @@ class AgentLoop:
         self.limits = limits
         self.progress = progress
         self.cancellation = cancellation or Cancellation()
+        abort = getattr(provider, "abort", None)
+        if callable(abort):
+            self.cancellation.on_cancel(abort)
         self.turns: list[Turn] = []
 
     # ------------------------------------------------------------------ 会話
@@ -312,6 +326,9 @@ class AgentLoop:
                     timeout=min(self.limits.request_timeout, budget_left),
                 )
             except ProviderError as error:
+                # 中断が接続を閉じた結果の失敗は、障害ではなく中断である。
+                if self.cancellation.cancelled:
+                    return self._result("cancelled", "中断フラグが立った", turn, outcomes, usage)
                 # **合計時間で頭を押さえた結果の失敗は `timeout` と名乗る**。
                 # 上で `timeout=` を残り時間まで縮めているので、予算切れは接続の
                 # タイムアウト = `ProviderError` として現れる。ここを分けないと、
