@@ -33,6 +33,11 @@ DEFAULT_OPENAI_COMPAT_BASE_URL = "http://127.0.0.1:8080/v1"
 #: 失敗の本文をこの長さで切る(モデルへ返す文が無限に伸びないように)。
 MAX_ERROR_CHARS = 400
 
+#: llama-server が応答に付ける `timings` のうち、`usage` へ写す欄。**往復をまたいで足して意味が
+#: 残るものだけ**(`*_per_second` のような率は足せない)。`cache_n` はキャッシュから使い回した
+#: トークン数、`prompt_n` は新しく読んだ数、`predicted_n` は書いた数。
+TIMING_KEYS = ("cache_n", "prompt_n", "prompt_ms", "predicted_n", "predicted_ms")
+
 #: HTTPの実体。テストは差し替える(外部を叩かないため)。
 Transport = Callable[[str, dict, dict, float], dict]
 
@@ -354,12 +359,18 @@ class OpenAICompatProvider(Provider):
 
         content = message.get("content")
         finish_reason = str(choice.get("finish_reason") or "")
+        usage = dict(response["usage"]) if isinstance(response.get("usage"), dict) else {}
+        timings = response.get("timings")
+        if isinstance(timings, dict):
+            usage.update(
+                {key: timings[key] for key in TIMING_KEYS if isinstance(timings.get(key), (int, float))}
+            )
         return ProviderReply(
             text=(content or "").strip() if isinstance(content, str) else "",
             tool_calls=tuple(calls),
             stop_reason=finish_reason,
             stop=_neutral_stop(finish_reason, bool(calls), {"length"}),
-            usage=response.get("usage") if isinstance(response.get("usage"), dict) else {},
+            usage=usage,
             raw_message=message,
         )
 

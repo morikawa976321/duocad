@@ -234,6 +234,28 @@ def test_openai_compat_reply_parsing_and_tool_result_messages():
     }
 
 
+def test_the_servers_timings_reach_the_run_summed_over_its_requests():
+    """落ちたら、読む側と書く側のどちらが遅いかを画面から読めなくなっている。"""
+    timed = {
+        **OPENAI_TOOL_CALL,
+        "timings": {"cache_n": 6000, "prompt_n": 40, "prompt_ms": 120.5, "predicted_n": 9,
+                    "predicted_ms": 300.0, "predicted_per_second": 30.0},
+    }
+    reply = OpenAICompatProvider(transport=FakeTransport([])).parse_reply(timed)
+    assert reply.usage["prompt_n"] == 40 and reply.usage["cache_n"] == 6000
+    assert "predicted_per_second" not in reply.usage, "率は往復をまたいで足せない"
+
+    final = ProviderReply(text="終わり", stop_reason="stop", stop="end_turn",
+                          usage={"prompt_n": 10, "predicted_n": 5, "predicted_ms": 100.0})
+    run = AgentLoop(tools(), RecordedProvider([
+        ProviderReply(tool_calls=reply.tool_calls, stop_reason="tool_calls", stop="tool_use", usage=reply.usage),
+        final,
+    ])).run("調べて")
+    assert run.usage["prompt_n"] == 50
+    assert run.usage["predicted_n"] == 14
+    assert run.usage["predicted_ms"] == 400.0
+
+
 def test_openai_compat_marks_broken_json_arguments_instead_of_guessing():
     provider = OpenAICompatProvider(transport=FakeTransport([]))
     reply = provider.parse_reply(
