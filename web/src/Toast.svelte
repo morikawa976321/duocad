@@ -1,21 +1,23 @@
 <script module lang="ts">
   /**
-   * トースト — **エラーを人間に気づかせる唯一の場所**。
+   * トースト — **エラーを人間に気づかせる唯一の場所**と、見落とされると困る知らせの札。
    *
    * クリック即適用のUIでは、**操作が拒まれたことがステータスバーの1行では気づけない**。
-   * 情報(状態の説明・成功の報告)はステータスバーに残し、**「拒まれた・失敗した・
-   * 繋がらない」だけ**をここへ出す。
+   * **「拒まれた・失敗した・繋がらない」**は `fail` で琥珀の札に出す。失敗ではないが
+   * 気づかせたい知らせは `inform` で無彩色の札に出す(状態の説明・ありふれた成功の報告は
+   * これまでどおりステータスバー)。
    *
-   * ## 呼び方(公開APIは `fail` と `errorLog` だけ)
+   * ## 呼び方(公開APIは `fail` と `inform` と `errorLog` だけ)
    *
    * ```ts
-   * import Toast, { fail, errorLog } from './Toast.svelte'
+   * import Toast, { fail, inform, errorLog } from './Toast.svelte'
    * fail('エラー[fillet] 半径が大きすぎる')
+   * inform('STEPを書き出した')
    * ```
    *
-   * **文字列を1つ渡すだけ**にしてある(種別・寿命・位置の引数を持たせない)。後から
-   * 「これは警告だから薄く」を足し始めると、呼ぶ側がその都度分類を判断することになり、
-   * **エラー経路を1本にした意味が消える** —— ここへ来た時点でエラーである。
+   * **種別は関数名で分け、引数は文字列1つだけ**にしてある(種別・寿命・位置の引数を持たせない)。
+   * `fail(msg, 'warn')` のような口を開けると、呼ぶ側がその都度分類を判断することになり、
+   * **エラー経路を1本にした意味が消える** —— `fail` へ来た時点でエラーである。
    *
    * **札を出す口は `fail` しか公開しない。** `fail` は「控え(`errorLog`)に積む」と
    * 「札を出す」を1回の呼び出しで両方やるので、札だけ出して控えを飛ばす書き方が存在しない
@@ -40,9 +42,12 @@
    *    素直に積むと画面がその1種類で埋まる。
    */
 
+  type ToastKind = 'error' | 'info'
+
   /** 1枚。`timer` は自動消滅の予約(手で閉じたら取り消す)。 */
   type ToastItem = {
     id: number
+    kind: ToastKind
     message: string
     /** この札が出ている間に同じ文言が来た回数。2以上のときだけ画面に出す。 */
     count: number
@@ -108,12 +113,12 @@
     }
   }
 
-  /** 札を1枚出す(同じ文言が出ていれば数えるだけ)。**公開しない** —— 札を出す口として公開するのは `fail` だけ。 */
-  function show(text: string): void {
+  /** 札を1枚出す(同じ種別・同じ文言が出ていれば数えるだけ)。**公開しない** —— 口は `fail` と `inform`。 */
+  function show(kind: ToastKind, text: string): void {
     // **出ている札の全部を見る**(直近の1枚だけでは足りない)。WSが切れている間は
     // 「WebSocketのエラー」と「接続が切れた」が交互に届くので、直近だけを見ると
     // A,B,A,B… と積み上がって画面が2種類のエラーで埋まる。
-    const same = items.find((item) => item.message === text)
+    const same = items.find((item) => item.kind === kind && item.message === text)
     if (same !== undefined) {
       same.count += 1
       restart(same) // まだ起きている事象なので寿命を数え直す
@@ -121,6 +126,7 @@
     }
     const created: ToastItem = {
       id: (lastId += 1),
+      kind,
       message: text,
       count: 1,
       copied: false,
@@ -140,16 +146,25 @@
     const text = message.trim()
     if (text === '') return // 空文字で空の札を出さない(`note()` と同じ扱い)
     log = [text, ...log].slice(0, LOG_SIZE)
-    show(text)
+    show('error', text)
+  }
+
+  /** 失敗ではない知らせを1件、札に出す。**控え(`errorLog`)には積まない** —— 控えはエラーの記録である。 */
+  export function inform(message: string): void {
+    const text = message.trim()
+    if (text === '') return
+    show('info', text)
   }
 </script>
 
-<!-- `id="toasts"` は実機検査が文言を読むための穴(`.toast-text` が1枚ぶんの本文)。
-     **中身が空でも枠は出す** —— 検査が「今は0件」を querySelectorAll で素直に書ける。 -->
+<!-- `id="toasts"` は実機検査が文言を読むための穴(`.toast-text` が**エラー**1枚ぶんの本文)。
+     **中身が空でも枠は出す** —— 検査が「今は0件」を querySelectorAll で素直に書ける。
+     知らせの札の本文は `.toast-info-text` に分けてある —— smoke 群は `#toasts .toast-text` を
+     「エラーが出た」と読むので、同じクラスにすると知らせの札で検査が赤くなる。 -->
 <div id="toasts" class="toasts" role="log" aria-live="assertive" aria-relevant="additions">
   {#each items as item (item.id)}
-    <div class="toast" data-toast-id={item.id}>
-      <span class="toast-text">{item.message}</span>
+    <div class="toast" class:info={item.kind === 'info'} data-toast-id={item.id} data-toast-kind={item.kind}>
+      <span class={item.kind === 'info' ? 'toast-info-text' : 'toast-text'}>{item.message}</span>
       {#if item.count > 1}
         <span class="toast-count">{item.count}回</span>
       {/if}
@@ -158,7 +173,7 @@
           type="button"
           class="toast-copy"
           class:copied={item.copied}
-          aria-label={item.copied ? 'コピーしました' : 'エラー文をコピー'}
+          aria-label={item.copied ? 'コピーしました' : item.kind === 'info' ? '文をコピー' : 'エラー文をコピー'}
           onclick={() => copyMessage(item)}
         >
           {#if item.copied}
@@ -220,7 +235,17 @@
     pointer-events: none;
   }
 
-  .toast-text {
+  /* 知らせは無彩色の帯。有彩色は琥珀(人の手が要る)と --bad(失敗)だけなので、
+     3つ目の色相を足さずに「エラーではない」を言う。 */
+  .toast.info {
+    border-color: var(--line);
+    box-shadow:
+      inset 3px 0 0 var(--dim),
+      0 2px 10px oklch(0% 0 0 / 0.45);
+  }
+
+  .toast-text,
+  .toast-info-text {
     flex: 1 1 auto;
     /* **折り返す。** エラーは末尾に理由が書いてあることが多く、`text-overflow: ellipsis`
        (ステータスバーの `.value` の作り)だと肝心の部分が消える。 */
