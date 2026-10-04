@@ -631,8 +631,8 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     if (kinds.join(',') !== 'circle,line,rectangle,arc') fail(`4種そろっていない: ${kinds.join(',')}`)
     ok('長方形と円弧も描けた(線分・円・長方形・円弧の4種すべて)')
 
-    // `PC_CASE_IMPORT_WARNINGS`(三角形分割の警告)はこの本では出ない —— 出るのは問題の部品へ寄って
-    // 細かく測り直したときで、この本は全体表示のまま面を触り、スケッチは部品を全部隠してから描く。
+    // 部品 `PC_case_20251122_20` の6面は三角形分割できず警告の札が出ることがある(面へスケッチを貼る節が
+    // あった頃は毎回出ていた)。いまの手順では出ない(実測 5/5)ので、許可には積んでいない。
     await assertNoAppErrors(page, consoleErrors)
   }
 })
