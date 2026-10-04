@@ -25,11 +25,16 @@
    * クリック1つで別の文書へ移れるのに、空の文書へ移るときだけ確認を挟むと挙動が割れる。
    * 名前つきの文書は自動保存されていて失うものが無く、無題の文書も最初の変更で名前が付く。
    *
+   * **一覧の1行は、正方形のサムネイル・ファイル名・作成日時・更新日時**(本人指示 2026-10-04)。
+   * サムネイルから日時までが1つの「開く」ボタンで、右端に複製・削除が縦に並ぶ。サムネイルは
+   * 行が見えたときに `onNeedThumbnail` で取りに行かせる(319件を一度に取らない)。撮るのは
+   * `documentFiles.svelte.ts`。作成日時を持たない既存ファイルは「—」(作り物の日付で埋めない)。
+   *
    * **一覧の行からは、開く・別名で複製・削除ができる**(issue #17)。複製と削除はディスク上の
    * ファイルの整理であって、いま編集している文書は変わらない(`open_document` とは別の操作)。
-   * 複製先の名前は行内の欄に `<元の名前>-copy.json` を先埋めして Enter で確定する(打ち直せる。
-   * 既にあればサーバが拒否する)。**削除は行内の2段階**(「削除」→ 同じ行が「本当に削除」に
-   * 変わる。モーダルは出さない) —— 「開くのに確認を挟まない」の根拠は「消えるのは未保存の
+   * 複製先の名前は行の直下の欄に `<元の名前>-copy.json` を先埋めして Enter で確定する(打ち直せる。
+   * 既にあればサーバが拒否する)。**削除は2段階**(「削除」→ 行の直下に「本当に削除」が出る。
+   * モーダルは出さない) —— 「開くのに確認を挟まない」の根拠は「消えるのは未保存の
    * 編集だから」であり、ディスクの保存済みファイルには当たらない(本人判断 2026-09-16)。
    * 編集中のファイルの削除ボタンは**押せなくしない** —— 押せばサーバが理由つきで断る
    * (押せない札より理由を言う)。
@@ -63,6 +68,8 @@
     onDelete,
     onExportStep,
     onExportStl,
+    thumbnailUrl,
+    onNeedThumbnail,
   }: {
     /** `duocad/models/` の中身(サーバの `list_documents` の写し)。 */
     documents: DocumentInfo[]
@@ -101,6 +108,10 @@
     onExportStep: (path: string) => void
     /** 書き出し先のパスを渡してSTLへ書き出す(文書は変えない)。**粗さは固定**で選べない。 */
     onExportStl: (path: string) => void
+    /** 手元にあるサムネイルの `data:` URL(無ければ null。仮の絵を出す)。 */
+    thumbnailUrl: (name: string) => string | null
+    /** 行が見えた。`version` は一覧の `thumb`(手元より新しければ取りに行く)。 */
+    onNeedThumbnail: (name: string, version: number | null) => void
   } = $props()
 
   /** 打ちかけの新しい名前(改名)。送ったら空に戻す(パネルは打ちかけ以外の状態を覚えない)。 */
@@ -137,11 +148,45 @@
     draftName = ''
   }
 
-  function formatTime(epochSeconds: number): string {
-    return new Date(epochSeconds * 1000).toLocaleString()
+  /** `2026-10-04 20:16`(手元の時刻)。作成日時を持たないファイルは「—」。 */
+  function formatStamp(epochSeconds: number | null): string {
+    if (epochSeconds === null) return '—'
+    const date = new Date(epochSeconds * 1000)
+    const pad = (value: number) => String(value).padStart(2, '0')
+    return (
+      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+      `${pad(date.getHours())}:${pad(date.getMinutes())}`
+    )
   }
 
   const sorted = $derived([...documents].sort((a, b) => b.mtime - a.mtime))
+
+  /**
+   * 行が一覧の見える範囲(+少し先)に入っている間、`notify` を呼ぶ。行がすでに見えている
+   * ときに一覧が取り直されてサムネイルの版が上がった場合も呼ぶ(`update`) ——
+   * 見え始めの1回だけだと、開いたまま撮り直した絵が届かない。
+   */
+  function whenVisible(node: HTMLElement, notify: () => void) {
+    let visible = false
+    let current = notify
+    const observer = new IntersectionObserver(
+      (entries) => {
+        visible = entries.some((entry) => entry.isIntersecting)
+        if (visible) current()
+      },
+      { root: node.closest('.list'), rootMargin: '200px 0px' },
+    )
+    observer.observe(node)
+    return {
+      update(next: () => void) {
+        current = next
+        if (visible) current()
+      },
+      destroy() {
+        observer.disconnect()
+      },
+    }
+  }
 
   // ---------------------------------------------------------------- 複製・削除(行内)
   /** 複製の名前を打っている元の行(無ければ null)。削除の確認中の行と同時には立たない。 */
@@ -279,31 +324,45 @@
     {#each sorted as file (file.name)}
       <!-- **編集中の1行を光らせる**(`BrowserPanel` の `.sketch-row.active` と同じ形)。 -->
       <!-- `active` は実機検査が行の印として読む。見た目は `row-active`(styles.css)。 -->
+      {@const url = thumbnailUrl(file.name)}
       <div
         class="files-row"
         class:active={file.name === currentName}
         class:row-active={file.name === currentName}
         data-name={file.name}
+        use:whenVisible={() => onNeedThumbnail(file.name, file.thumb)}
       >
         <button
-          class="files-open row-button"
+          class="files-open"
           onclick={() => onOpen(file.name)}
           disabled={locked}
-          title={locked
-            ? '形状最適化の実行中は文書を差し替えられない'
-            : `クリックで開く(更新: ${formatTime(file.mtime)})`}
+          title={locked ? '形状最適化の実行中は文書を差し替えられない' : `${file.name} を開く`}
         >
-          {file.name}
+          <span class="files-thumb" class:empty-thumb={url === null}>
+            {#if url !== null}
+              <img src={url} alt="" draggable="false" />
+            {:else}
+              <!-- 撮ったことの無い文書(開けば撮られる)・立体の無い文書。 -->
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4 7.5l8 4.5 8-4.5M12 12v9"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            {/if}
+          </span>
+          <span class="files-text">
+            <span class="files-name">{file.name}</span>
+            <span class="files-date">作成 {formatStamp(file.created)}</span>
+            <span class="files-date">更新 {formatStamp(file.mtime)}</span>
+          </span>
         </button>
         <!-- **行に「上書き」ボタンは無い**(冒頭のdocstring)。上書きの口はどこにも無く、
              保存は自動で走る。 -->
-        {#if deletingName === file.name}
-          <!-- 削除の2段目。同じ行の中で聞く(モーダルは出さない。冒頭のdocstring)。 -->
-          <button class="files-delete-confirm" onclick={confirmDelete} title="ディスクから消す(戻せない)">
-            本当に削除
-          </button>
-          <button class="files-row-cancel" onclick={cancelRowActions}>やめる</button>
-        {:else}
+        <span class="files-actions">
           <button
             class="files-copy row-action"
             onclick={() => startCopy(file.name)}
@@ -331,8 +390,18 @@
               />
             </svg>
           </button>
-        {/if}
+        </span>
       </div>
+      {#if deletingName === file.name}
+        <!-- 削除の2段目。行の直下で聞く(モーダルは出さない。冒頭のdocstring)。 -->
+        <div class="new-row confirm-row" data-delete-of={file.name}>
+          <span class="confirm-text">消すと戻せない</span>
+          <button class="files-delete-confirm" onclick={confirmDelete} title="ディスクから消す(戻せない)">
+            本当に削除
+          </button>
+          <button class="files-row-cancel" onclick={cancelRowActions}>やめる</button>
+        </div>
+      {/if}
       {#if copyingFrom === file.name}
         <!-- 複製先の名前。先埋めしてあるので Enter だけで通る(打ち直してもよい)。 -->
         <div class="new-row copy-row" data-copy-of={file.name}>
@@ -463,8 +532,77 @@
 
   .files-row {
     display: flex;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  /* サムネイル・名前・日時をまとめた「開く」。行の幅は240pxのサイドバーで決まるので、
+     日時(`2026-10-04 20:16` に「更新 」を足した幅)が名前の欄に収まるよう、操作子は縦に積む。 */
+  .files-open {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+    padding: 3px 4px;
+    text-align: left;
+    background: none;
+  }
+
+  button.files-open:not(:disabled):hover {
+    background: var(--control-bg);
+  }
+
+  .files-thumb {
+    flex: 0 0 auto;
+    width: 56px;
+    height: 56px;
+    display: grid;
+    place-items: center;
+    background: var(--bg);
+    border: 1px solid var(--line-soft);
+  }
+
+  .files-thumb img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .files-thumb svg {
+    width: 24px;
+    height: 24px;
+    color: var(--dim-2);
+  }
+
+  .files-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .files-name,
+  .files-date {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .files-date {
+    font-size: var(--fs-meta);
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .files-actions {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
   }
 
   /* 行内の操作子(複製・削除・やめる)。面は持たず、大きさは添え物(`--fs-meta`)に揃える。 */
@@ -503,8 +641,23 @@
     border-color: var(--accent);
   }
 
-  .copy-row {
+  .copy-row,
+  .confirm-row {
     padding-left: 12px;
+  }
+
+  .confirm-row {
+    align-items: center;
+  }
+
+  .confirm-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-meta);
+    color: var(--dim);
   }
 
   /* `.list`は伸縮する(flex:1)のでスクロールを持つ。この区切りから下は

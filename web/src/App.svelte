@@ -303,6 +303,7 @@
     release: releasePending,
     note,
     panelOpen: () => dataPanelOpen,
+    captureThumbnail: () => viewport?.captureThumbnail() ?? null,
   })
   /**
    * 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。**サーバの写し**
@@ -2309,6 +2310,8 @@
           onDelete={files.remove}
           onExportStep={files.exportStep}
           onExportStl={files.exportStl}
+          thumbnailUrl={files.thumbnailUrl}
+          onNeedThumbnail={files.wantThumbnail}
         />
       </aside>
     {/if}
