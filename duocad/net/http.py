@@ -10,11 +10,14 @@ import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 #: MCPのHTTPトランスポートの口。ブラウザが開くページと同じ8766に生やす
 #: —— 人もClaude Codeも覚えるURLが1つで済む。
 MCP_HTTP_PATH = "/mcp"
+
+#: 安定版の更新の口(`duocad/channel.py`)。GETで状態、POSTで開始。
+UPDATE_HTTP_PATH = "/api/update"
 
 #: `/mcp` が受け取るリクエストボディの上限。WebSocketの `max_size` と揃える。
 MCP_HTTP_MAX_BODY = 8 * 1024 * 1024
@@ -33,12 +36,16 @@ class WebHandler(SimpleHTTPRequestHandler):
     mcp_server: Any = None
     #: `Host` ヘッダとして許す綴り(DNSリバインディング対策。下記 `_mcp_forbidden`)。
     mcp_hosts: frozenset = frozenset()
+    #: `/api/update` を答える `StableUpdater`(`duocad/channel.py`)。開発版では None で、口は 404。
+    updater: Any = None
+    #: `/api/update` へのPOSTで許す `Origin`(= duocad自身が配るページ)。
+    page_origins: frozenset = frozenset()
     #: `McpServer` の状態(`initialized` 等)を2スレッドで同時に触らせない。
     #: `ThreadingHTTPServer` は接続ごとにスレッドを立てるので、直列化はここで作る。
     mcp_lock = threading.Lock()
 
     def do_POST(self) -> None:  # noqa: N802  (BaseHTTPRequestHandlerの命名に従う)
-        """MCPのHTTPトランスポート。**`/mcp` 以外にPOSTの口は無い**。"""
+        """MCPのHTTPトランスポートと、安定版の更新の開始。POSTの口はこの2つだけ。"""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -56,7 +63,11 @@ class WebHandler(SimpleHTTPRequestHandler):
         # 2回目で赤)。上限で頭打ちにしてあるので読み切って安全である。
         raw = self.rfile.read(length) if length > 0 else b""
 
-        if self.path.split("?")[0] != MCP_HTTP_PATH or self.mcp_server is None:
+        path = self.path.split("?")[0]
+        if path == UPDATE_HTTP_PATH and self.updater is not None:
+            self._post_update()
+            return
+        if path != MCP_HTTP_PATH or self.mcp_server is None:
             self.send_error(404)
             return
         if self._mcp_forbidden():
@@ -112,6 +123,24 @@ class WebHandler(SimpleHTTPRequestHandler):
             return True
         return False
 
+    def _post_update(self) -> None:
+        """更新の開始。**duocad自身のページからだけ受ける**。
+
+        `/mcp` と逆で、こちらはページの `fetch` から叩かれるので `Origin` が必ず付く。
+        よそのページからの単純リクエストは `Origin` がよそのオリジンになるので、
+        許可リストとの一致で落とせる(`Origin` 無しも落とす —— 叩くのは画面のボタンだけ)。
+        MCPのツールにはしない(AIに再起動させる理由が無い)。
+        """
+        if self.headers.get("Origin") not in self.page_origins:
+            self.send_error(403)
+            return
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host not in self.mcp_hosts:
+            self.send_error(403)
+            return
+        status, payload = self.updater.start()
+        self._send_json(status, payload)
+
     def _send_json(self, status: int, payload: Any) -> None:
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -138,6 +167,13 @@ class WebHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == UPDATE_HTTP_PATH:
+            if self.updater is None:
+                self.send_error(404)
+                return
+            force = "force=1" in self.path.split("?", 1)[-1]
+            self._send_json(200, self.updater.status(force=force))
+            return
         if path == "/duocad-config.json":
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -162,7 +198,12 @@ def mcp_http_hosts(port: int) -> frozenset:
 
 
 def start_http_server(
-    dist_dir: Path, port: int, ws_url: str, mcp: Any = None
+    dist_dir: Path,
+    port: int,
+    ws_url: str,
+    mcp: Any = None,
+    config: Optional[dict] = None,
+    updater: Any = None,
 ) -> ThreadingHTTPServer:
     """静的配信をデーモンスレッドで立てる。`web/dist` が無ければ何も立てずに例外。
 
@@ -170,13 +211,18 @@ def start_http_server(
     イベントループのスレッドだけ**という不変条件があるので、渡す `McpServer` の道具は
     `ToolsOnLoop` で包んであること —— 包まないと `ThreadingHTTPServer` のワーカースレッドが
     直に文書を書き換える。
+
+    `config` は `/duocad-config.json` に `ws_url` と並べて載せるもの(チャンネル・版。
+    `duocad/channel.py` の `describe`)。`updater` を渡すと `/api/update` が開く(安定版だけ)。
     """
     if not (dist_dir / "index.html").exists():
         raise FileNotFoundError(
             f"{dist_dir} に index.html が無い。先に web をビルドすること:\n"
             f"    cd {dist_dir.parent}\n    npm install\n    npm run build"
         )
-    WebHandler.config_payload = json.dumps({"ws_url": ws_url}).encode("utf-8")
+    WebHandler.config_payload = json.dumps({"ws_url": ws_url, **(config or {})}).encode("utf-8")
+    WebHandler.updater = updater
+    WebHandler.page_origins = frozenset(f"http://{host}:{port}" for host in ("127.0.0.1", "localhost"))
     WebHandler.mcp_server = mcp
     WebHandler.mcp_hosts = mcp_http_hosts(port)
     handler = partial(WebHandler, directory=str(dist_dir))

@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import argparse
 import asyncio
 import socket
 
@@ -148,8 +147,8 @@ def test_the_running_server_applies_the_allowlist(monkeypatch, tmp_path):
                 outcomes[origin] = False
 
     monkeypatch.setattr(mcp_server, "serve_stdio", try_handshakes)
-    args = argparse.Namespace(
-        port=port, http_port=_free_port(), web_dist=tmp_path / "no-dist", open=False
+    args = mcp_server.parse_args(
+        ["--port", str(port), "--http-port", str(_free_port()), "--web-dist", str(tmp_path / "no-dist")]
     )
     asyncio.run(mcp_server._run(Session(None, 0.2), args))
 
