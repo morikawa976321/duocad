@@ -22,9 +22,9 @@
  *
  * ## 深度(B群)
  *
- * **深度検査あり・`depthWrite: false` ＋ 世界空間の深度バイアス。** 全画面三角形なので
+ * **深度検査あり・`depthWrite: false` ＋ 視線方向の深度バイアス。** 全画面三角形なので
  * `gl_Position` は使えず、交点から自分で `gl_FragDepth` を書く —— `hit` を視線方向へ
- * `uDepthBias`(mm、単位の意味は `viewportConstants.ts` の `DEPTH_BIAS_UNIT`)だけ
+ * `uDepthBias`(画面の高さに対する比、単位の意味は `viewportConstants.ts` の `DEPTH_BIAS_UNIT`)ぶん
  * 手前へ寄せた**深度専用のコピー**を射影し直して深度だけ取り出す。**色・UV・範囲判定に
  * 使う `hit` 自体は1mmも動かさない**ので、描画のズレがレイ検査(`basePlaneAt` の解析交差)
  * に漏れない。
@@ -177,10 +177,16 @@ void main() {
 
   if (acc.a <= 0.0) discard;
 
-  // 深度: hit を視線方向へ uDepthBias[mm] だけ手前に寄せた深度専用コピーを射影する
-  // (色・UV・範囲判定に使った hit 自体はここまで一度も書き換えていない)。
+  // 深度: hit を視線方向へ「uDepthBias × hit の奥行きでの画面の高さ」だけ手前に寄せた
+  // 深度専用コピーを射影する(色・UV・範囲判定に使った hit 自体はここまで一度も書き換えて
+  // いない)。画面の高さはNDCの縦2単位なので、hit からNDCで縦へ 2·uDepthBias 動かした点
+  // までの距離がそのまま寄せる量になる(透視・正投影を分けずに済む)。
   vec3 viewDir = normalize(rayDelta);
-  vec4 clip = uViewProjection * vec4(hit - viewDir * uDepthBias, 1.0);
+  vec4 hitClip = uViewProjection * vec4(hit, 1.0);
+  vec3 hitNdc = hitClip.xyz / hitClip.w;
+  vec4 shiftedH = uInverseViewProjection * vec4(hitNdc.x, hitNdc.y + 2.0 * uDepthBias, hitNdc.z, 1.0);
+  float depthBiasMm = distance(shiftedH.xyz / shiftedH.w, hit);
+  vec4 clip = uViewProjection * vec4(hit - viewDir * depthBiasMm, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
 
   gl_FragColor = acc;
@@ -209,7 +215,7 @@ export interface PlaneGrid {
   setTierAlphas(alphas: readonly [number, number, number]): void
   /** カメラ行列(毎フレーム)。 */
   setCamera(viewProjection: THREE.Matrix4, inverseViewProjection: THREE.Matrix4): void
-  /** 深度バイアス(世界空間mm。層番号 × `DEPTH_BIAS_UNIT`)。 */
+  /** 深度バイアス(画面の高さに対する比。層番号 × `DEPTH_BIAS_UNIT`)。 */
   setDepthBias(bias: number): void
   /**
    * 描く正方形(frame上の中心と半径[mm])。`null` で無限。
