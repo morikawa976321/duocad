@@ -380,6 +380,12 @@ export interface BodyMeshes {
  * B群(装飾。ピック対象でない)の深度バイアスを材質へ仕込む —— 視点空間(`mvPosition`。
  * 射影より前)で `層番号 × DEPTH_BIAS_UNIT` mmだけカメラ側へ寄せてから射影し直す
  * (理由は `DEPTH_BIAS_UNIT` のdocを参照)。
+ *
+ * **透視では視点の z 軸ではなく、カメラへ向かう視線そのものに沿って寄せる** —— z だけ
+ * 減らすと画面中心から外れた頂点は外側へ写り(倍率 d/(d−bias))、寄って見るほど線が
+ * シェーダーで描くグリッドの軸から横へずれる。視線沿いなら画面上の位置は変わらない
+ * (`planeGrid.ts` の `hit - viewDir * uDepthBias` と同じ寄せ方)。正投影は視線が z 軸と
+ * 平行なので z を減らすのと同じ。
  * **`transformed`(ローカル座標)自体は動かさない**ので、描画のズレがレイ検査
  * (`basePlaneAt` の解析交差・面のピック)へ漏れない。
  *
@@ -398,7 +404,11 @@ export function withDepthBias<T extends THREE.Material>(material: T, layer: numb
     shader.vertexShader = shader.vertexShader.replace(
       marker,
       `${marker}
-	mvPosition.z += ${bias};
+	if (isPerspectiveMatrix(projectionMatrix)) {
+		mvPosition.xyz *= max(1.0 - ${bias} / length(mvPosition.xyz), 0.0);
+	} else {
+		mvPosition.z += ${bias};
+	}
 	gl_Position = projectionMatrix * mvPosition;`,
     )
   }
