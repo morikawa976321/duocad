@@ -414,11 +414,19 @@ class AdaptiveConfig:
     max_evaluations: int = 2000
     stagnation_patience: int = 6  # best_ever が改善しない連続手数
     prediction_error_multiplier: float = 2.5
+    #: 実ジャンプ(M3最悪ゾーンの一手あたり相対変化)がこの値以下なら、予測との比が倍率を超えても
+    #: `prediction_error` で拒否しない。0.0=旧挙動(比だけで拒否)。予測値(分母)が小さいと実ジャンプが
+    #: 微小でも比が倍率を超えて拒否が続くため(05_SYNTHETIC.md 4-1節・08_ROBUSTNESS.md)。
+    prediction_error_floor: float = 0.0
     sudden_jump_relative_drop: float = 0.15  # safety_factor_product の一手あたり許容低下率
     #: compliance C・最大変位の一手あたり許容増加率(急変検知にこの2つも使う。QA指摘対応:
     #: 記録するだけで受理判定に使っていなかったため、sudden_jump の判定条件へ追加した)。
     sudden_compliance_relative_increase: float = 0.5
     sudden_displacement_relative_increase: float = 0.5
+    #: True なら、開始形(全材料など)が受理ゲートを満たさないとき、探索せず `stop_reason="start_fails_gate"` で戻る。
+    #: False=旧挙動(全候補が `safety_gate` で拒否され続け、開始形を返す。hanger 2000N太い幅で
+    #: 実測18.5〜19.1時間、07_HANGER_LOADS.md)。`resume_from` 付きの再開では見ない。
+    stop_if_start_fails_gate: bool = False
     finish_window_tolerance: float = 0.02  # 目標 × (1+これ) 以下で仕上げ探索へ
     finish_max_evaluations: int = 200
     finish_patience: int = 8  # 仕上げ局面でbest_ever不変が何連続で続いたら打ち切るか
@@ -496,6 +504,11 @@ class ReallocationConfig:
     grow_cycles: int = 3
     grow_fraction_of_removed: float = 0.5  # 直近の削減量に対する仮追加の割合(「同体積付近」の運用値)
     grow_min_cells: int = 4
+    #: 追加1回で足してよい量の上限(=直近までの削除セル数に対する割合)。None=旧挙動(上限なし。最長の連結成分を
+    #: まるごと足すため、単純な形状では設計空間の残り全体=ほぼ全材料へ戻る)。値を入れると、上限を超える
+    #: 連結成分は候補から外し、候補が尽きたときの局所表面追加も上限セル数に抑え、超過応力の目標換算
+    #: しきい値(許容/目標安全率)を超えるセルの近くから足す。
+    grow_max_fraction_of_removed: Optional[float] = None
     external_candidate_masks: tuple = ()  # 粗い解像度の探索結果・移植トラス等(呼び出し側が投影済みで渡す)
     external_candidate_labels: tuple = ()  # 上と同じ長さ。出所を記録に残す(「未認定」フラグなど)
     seed: Optional[int] = 0
@@ -586,6 +599,11 @@ def run_reallocation(ctx: SearchContext, config: ReallocationConfig = Reallocati
         removed_cumulative = int(reduce_record.initial_material_mm3 / ctx.grid.element_volume) - int(working.sum()) \
             if reduce_record.initial_material_mm3 else int(working.sum())
         grow_target = max(config.grow_min_cells, int(config.grow_fraction_of_removed * max(removed_cumulative, 1)))
+        grow_cap_cells = None
+        if config.grow_max_fraction_of_removed is not None:
+            grow_cap_cells = max(config.grow_min_cells,
+                                 int(config.grow_max_fraction_of_removed * max(removed_cumulative, 1)))
+            grow_target = min(grow_target, grow_cap_cells)
 
         remnants: list[tuple[str, np.ndarray, int]] = []
         for label, ref in reference_pools:
@@ -602,6 +620,8 @@ def run_reallocation(ctx: SearchContext, config: ReallocationConfig = Reallocati
             # 成分は「失った部材の単位」なのでまるごと足す(セル数上限で途中を切ると、ravel順の
             # 部分集合は部材自身と非連結になりやすく、幾何検査でほぼ必ず落ちる)。`grow_target` は
             # このサイクルで足す規模の目安(reporting用)であって、部材を分割する上限ではない。
+            if grow_cap_cells is not None and length > grow_cap_cells:
+                continue
             take = comp
             candidate_grown = working | take
             key = acceptance.material_sha256(candidate_grown)
@@ -628,7 +648,9 @@ def run_reallocation(ctx: SearchContext, config: ReallocationConfig = Reallocati
             break
 
         if grown is None:
-            hot = best_score.von_mises_mpa > ctx.cond.allowable_mpa if best_score is not None else None
+            hot_threshold = ctx.cond.allowable_mpa / (float(ctx.cond.target_safety_factor)
+                                                      if grow_cap_cells is not None else 1.0)
+            hot = best_score.von_mises_mpa > hot_threshold if best_score is not None else None
             pool_idx = _surface_growth_pool(working, design_space, hot)
             if pool_idx.size == 0:
                 mechanism_events.append(dict(type="grow_no_candidate", cycle=cycle))
@@ -697,6 +719,7 @@ def run_reallocation(ctx: SearchContext, config: ReallocationConfig = Reallocati
         mechanism_events=mechanism_events, config=dict(grow_cycles=config.grow_cycles,
                                                        grow_fraction_of_removed=config.grow_fraction_of_removed,
                                                        grow_min_cells=config.grow_min_cells,
+                                                       grow_max_fraction_of_removed=config.grow_max_fraction_of_removed,
                                                        external_candidate_labels=list(config.external_candidate_labels),
                                                        adaptive=dataclasses.asdict(config.adaptive)),
     )
@@ -810,6 +833,15 @@ def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
                 order[start:start + window] = chunk
         return order[~np.isin(order, list(poison))] if poison else order
 
+    if (config.stop_if_start_fails_gate and resume_from is None and working_score is not None
+            and not _gate_pass(working_score)):
+        return MethodRecord(
+            method="adaptive", status="no_feasible_found", stop_reason="start_fails_gate", evaluations=0,
+            fem_solves=fem_solves, wall_seconds=time.perf_counter() - t0, seed=config.seed, best_ever_mask=None,
+            best_ever_score=working_score.to_json(), working_mask=None, initial_material_mm3=initial_material_mm3,
+            steps=[], mechanism_events=[dict(type="start_fails_gate", gate=config.gate)],
+            config=dataclasses.asdict(config))
+
     order = order_for(working, energy, 0)
     stop_reason = "loop_exit"
 
@@ -907,7 +939,8 @@ def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
         step.compliance_relative_increase = compliance_jump
         step.displacement_relative_increase = displacement_jump
         prediction_error = (calibrated_k is not None and predicted_jump > 1e-12
-                            and actual_jump > predicted_jump * config.prediction_error_multiplier)
+                            and actual_jump > max(predicted_jump * config.prediction_error_multiplier,
+                                                  config.prediction_error_floor))
         sudden_jump = (sudden_drop > config.sudden_jump_relative_drop
                       or compliance_jump > config.sudden_compliance_relative_increase
                       or displacement_jump > config.sudden_displacement_relative_increase)
