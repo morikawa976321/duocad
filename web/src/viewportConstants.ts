@@ -254,8 +254,9 @@ export const LAYER = {
 } as const
 
 /**
- * **B群の深度バイアスの単位量**(世界空間mm。視線方向へ「層番号 × これ」だけカメラ側へ
- * 寄せた深度専用コピーを射影し直す。色・UV・ピック判定に使うジオメトリ自体は動かさない)。
+ * **B群の深度バイアスの単位量**(**その点の奥行きでの画面の高さ**に対する比。視線方向へ
+ * 「層番号 × これ × 画面の高さ[mm]」だけカメラ側へ寄せた深度専用コピーを射影し直す。
+ * 色・UV・ピック判定に使うジオメトリ自体は動かさない)。
  *
  * **クリップ空間の z を直接ずらす方式(`gl_Position.z -= bias * w`)は選ばない** ——
  * その一定バイアスが表す世界空間の距離は、パースの非線形写像により視線距離の2乗に
@@ -263,11 +264,17 @@ export const LAYER = {
  * 膨らみ、手前にあるべきソリッドをグリッドが追い越して見える。正投影は元々この写像が
  * 線形なので暴れず、症状は非正投影のときにだけ出る。
  *
- * 0.5mmは「共平面の面より確実に手前」かつ「1mm程度の段差なら順序が入れ替わらない」
- * 大きさとして選んだ(near=0.1・far=数千mmの視錐台での実測レンジ。世界空間の値なので
- * 正投影・パースのどちらでもこの意味のまま一定)。
+ * **世界空間の一定量(mm)にもしない** —— 寄って見ると一定量が画面上で何十画素にもなり、
+ * 床に立つソリッドの手前の縁から、奥にあって隠れるはずの格子線が「寄せた量」の分だけ
+ * はみ出して見える。画面の高さに比例させれば、はみ出しはどの距離でも
+ * 「層番号 × これ × 画面の画素数」の半分以下に収まる。
+ *
+ * 0.001(画面の高さの1/1000 ≒ 1画素)の見積もり: 深度の分解能(24bit)は注視点距離 D で
+ * 約 D²/(near·2²⁴)、near=D/1000(`viewport.ts` の近接面)なら 6e-5·D。画角30度の画面の
+ * 高さの1/1000は 5.4e-4·D で約9倍の余裕があり、共平面の面には確実に勝つ。
+ * 1層あたりの世界空間の量は、画角30度・奥行き1000mmで約0.5mm。
  */
-export const DEPTH_BIAS_UNIT = 0.5
+export const DEPTH_BIAS_UNIT = 0.001
 
 /**
  * B群の層番号(大きいほどカメラ側)。**`sketchFaceGrid` は別枠** ——
@@ -378,8 +385,15 @@ export interface BodyMeshes {
 
 /**
  * B群(装飾。ピック対象でない)の深度バイアスを材質へ仕込む —— 視点空間(`mvPosition`。
- * 射影より前)で `層番号 × DEPTH_BIAS_UNIT` mmだけカメラ側へ寄せてから射影し直す
- * (理由は `DEPTH_BIAS_UNIT` のdocを参照)。
+ * 射影より前)で `層番号 × DEPTH_BIAS_UNIT × その奥行きでの画面の高さ` だけカメラ側へ
+ * 寄せてから射影し直す(理由は `DEPTH_BIAS_UNIT` のdocを参照)。画面の高さは
+ * 透視なら `2·奥行き / projectionMatrix[1][1]`、正投影なら `2 / projectionMatrix[1][1]`。
+ *
+ * **透視では視点の z 軸ではなく、カメラへ向かう視線そのものに沿って寄せる** —— z だけ
+ * 減らすと画面中心から外れた頂点は外側へ写り(倍率 d/(d−bias))、寄って見るほど線が
+ * シェーダーで描くグリッドの軸から横へずれる。視線沿いなら画面上の位置は変わらない
+ * (`planeGrid.ts` の `hit - viewDir * uDepthBias` と同じ寄せ方)。正投影は視線が z 軸と
+ * 平行なので z を減らすのと同じ。
  * **`transformed`(ローカル座標)自体は動かさない**ので、描画のズレがレイ検査
  * (`basePlaneAt` の解析交差・面のピック)へ漏れない。
  *
@@ -398,7 +412,13 @@ export function withDepthBias<T extends THREE.Material>(material: T, layer: numb
     shader.vertexShader = shader.vertexShader.replace(
       marker,
       `${marker}
-	mvPosition.z += ${bias};
+	float depthBiasMm = ${bias} * 2.0 / projectionMatrix[1][1];
+	if (isPerspectiveMatrix(projectionMatrix)) {
+		depthBiasMm *= -mvPosition.z;
+		mvPosition.xyz *= max(1.0 - depthBiasMm / length(mvPosition.xyz), 0.0);
+	} else {
+		mvPosition.z += depthBiasMm;
+	}
 	gl_Position = projectionMatrix * mvPosition;`,
     )
   }
