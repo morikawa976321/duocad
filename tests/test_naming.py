@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from duocad.server import Session
 from session_support import pad, select
 
@@ -89,3 +91,20 @@ def test_a_log_without_numbers_replays_with_the_old_names(session: Session, tmp_
     assert _sketch_names(session) == [None]
     pad(session, 10.0, 10.0, 5.0, corner=(20.0, 0.0))
     assert _body_names(session) == ["solid", "ボディ1"]
+
+
+def test_a_failed_copy_does_not_consume_a_number(session: Session, monkeypatch) -> None:
+    from duocad import kernel
+
+    body = pad(session, 10.0, 10.0, 5.0)
+    select(session, [{"body": body.id, "kind": "body", "index": None}])
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("kernel failure")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(kernel, "translate_shape", broken)
+        with pytest.raises(RuntimeError):
+            session.move_body(0.0, 0.0, 30.0, copy=True)
+    session.move_body(0.0, 0.0, 30.0, copy=True)
+    assert _body_names(session) == ["ボディ1", "ボディ2"]

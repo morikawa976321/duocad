@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 if TYPE_CHECKING:  # pragma: no cover - 型注釈のためだけ
     from .document import Document
 
-#: 結果ボディの名前の頭。同じ文書で2回走らせると `optimized-2` になる
-#: (改名のverbがどの種別にも無いため。`done/20260904-1703` の契約③)。
+#: 結果ボディの名前の頭。同じ文書で2回走らせると `optimized-2` になる(作るときに一意にする。
+#: 後から変えるのは `rename`)。
 RESULT_NAME = "optimized"
 
 #: **設計空間の要素数(塊。空要素は `simp.Model(active_mask=...)` で外れる)の上限**(= 要素サイズの下限を決める)。
@@ -1682,8 +1682,7 @@ def _check_mesh_placement(positions: List[float], grid) -> None:
 
 
 def _unique_result_name(doc: "Document") -> str:
-    """`optimized` / `optimized-2` / ... 。**名前は作るときにしか決められない**
-    (どの種別のボディにも改名のverbが無い。`done/20260904-1703` の契約③)。"""
+    """`optimized` / `optimized-2` / ... (作るときに一意にする。後から変えるのは `rename`)。"""
     taken = {body.name for body in doc.bodies}
     if RESULT_NAME not in taken:
         return RESULT_NAME

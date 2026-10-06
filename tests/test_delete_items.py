@@ -106,3 +106,16 @@ def test_duplicate_ids_are_refused(session: Session) -> None:
     with pytest.raises(ValueError, match="duplicate"):
         delete_items(session.document, [], [sketch_id, sketch_id])
     assert _sketch_ids(session) == [sketch_id]
+
+
+def test_a_hidden_body_can_be_deleted_and_redone(session: Session) -> None:
+    """ID で名指しするので可視性の門は無い(ブラウザの隠した行の ✕)。redo でも同じ。"""
+    body, _ = box(session)
+    session.set_visible(body.id, False)
+    session.delete_items(bodies=[body.id])
+    assert _body_ids(session) == []
+
+    session.undo()
+    assert _body_ids(session) == [body.id]
+    session.redo()
+    assert _body_ids(session) == []

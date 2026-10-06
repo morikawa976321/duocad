@@ -117,16 +117,17 @@ def editable_body(
     return body
 
 
-def deletable_body(doc: Document, body_id: BodyId) -> Body:
+def deletable_body(doc: Document, body_id: BodyId, *, require_visible: bool = True) -> Body:
     """削除の対象になるボディ。**編集できるかは問わない**(メッシュボディも消せる)。
 
     `editable_body` と分けてあるのは、**削除だけは種別に関係なく通す**から ——
     「編集できないから消せもしない」ボディがあると、間違えて入れた形を取り除けなくなる。
-    可視性の門番(`require_visible` 相当)は `editable_body` と同じ理由で課す:
-    選択した後・verbを呼ぶ前に人がそのボディを隠す順序が実際に起きる。
+    可視性の門番は**選択から取る `delete` だけ**に課す(`editable_body` と同じ理由: 選択した後・
+    verbを呼ぶ前に人がそのボディを隠す順序が実際に起きる)。ID で名指しする `delete_items` は
+    その順序の問題を持たないので `require_visible=False` —— ブラウザでは隠したボディの行も ✕ で消せる。
     """
     body = doc.get_body(body_id)  # 存在しないIDは KeyError(document側の契約)
-    if not body.visible:
+    if require_visible and not body.visible:
         raise ValueError(
             f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
         )
@@ -186,35 +187,36 @@ def copy_ids(count: int, recorded: Optional[Sequence[BodyId]], *, verb: str) -> 
     return new_ids
 
 
-def number_copies(doc: Document, count: int) -> List[int]:
-    """複製に振る通し番号(作成時。ログの `numbers` に記録する)。"""
-    return [naming.allocate(doc, naming.BODY) for _ in range(count)]
-
-
 def add_transformed_copies(
     doc: Document,
     bodies: Sequence[Body],
     transform: Any,
     new_ids: Sequence[BodyId],
-    numbers: Optional[Sequence[int]],
-) -> None:
-    """変換した複製を足す(元は動かさない)。名前は `numbers` の通し番号で、番号の記録が無い
-    古いログ(`None`)だけ元の名前を引き継ぐ。
+    numbers: Optional[Sequence[int]] = None,
+    *,
+    allocate: bool = False,
+) -> Optional[List[int]]:
+    """変換した複製を足し(元は動かさない)、名前に使った通し番号を返す(ログの `numbers` に記録する)。
 
-    **全部の形状を作ってから足す** —— 途中で落ちても1体目だけ足された文書が残らない。
+    名前は、作成時(`allocate=True`)は新しく振った番号、redo / 再生では記録した `numbers`。
+    番号の記録が無い古いログ(`None`)だけ元の名前を引き継ぐ。
+
+    **全部の形状を作ってから番号を振って足す** —— 途中で落ちても1体目だけ足された文書が残らず、
+    番号も飛ばない。
     """
+    shapes = [transform(body.shape) for body in bodies]
+    if allocate:
+        numbers = [naming.allocate(doc, naming.BODY) for _ in bodies]
     if numbers is None:
         names = [body.name for body in bodies]
     else:
         names = [naming.recorded(doc, naming.BODY, number, None) for number in numbers]
     if len(names) != len(bodies):
         raise ValueError(f"{len(bodies)} bodies but {len(names)} numbers recorded")
-    prepared = [
-        Body(id=new_id, name=name, kind=body.kind, shape=transform(body.shape), visible=body.visible)
-        for body, new_id, name in zip(bodies, new_ids, names)
-    ]
-    for body in prepared:
-        doc.add_body(body)  # 同じIDが既にあれば ValueError(黙って重複させない)
+    for body, new_id, name, shape in zip(bodies, new_ids, names, shapes):
+        # 同じIDが既にあれば ValueError(黙って重複させない)
+        doc.add_body(Body(id=new_id, name=name, kind=body.kind, shape=shape, visible=body.visible))
+    return None if numbers is None else list(numbers)
 
 
 def remove_created_bodies(doc: Document, body_ids: Sequence[BodyId]) -> None:

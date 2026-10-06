@@ -42,7 +42,6 @@ from ._common import (
     MODE_ROTATE,
     MODE_TRANSLATE,
     add_transformed_copies,
-    number_copies,
     copy_ids,
     editable_bodies,
     finite_numbers,
@@ -250,8 +249,9 @@ def move_body(
     numbered: dict = {}
     if copy:
         new_ids = copy_ids(len(bodies), created_ids, verb="move_body")
-        numbers = number_copies(doc, len(bodies))
-        add_transformed_copies(doc, bodies, lambda shape: transform(shape, True), new_ids, numbers)
+        numbers = add_transformed_copies(
+            doc, bodies, lambda shape: transform(shape, True), new_ids, allocate=True
+        )
         numbered = {"numbers": numbers}
     else:
         new_ids = []

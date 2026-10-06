@@ -242,7 +242,7 @@ def delete_items(
     if len(set(sketch_ids)) != len(sketch_ids):
         raise ValueError(f"delete_items got duplicate sketch ids: {sketch_ids!r}")
     for body_id in body_ids:
-        deletable_body(doc, body_id)
+        deletable_body(doc, body_id, require_visible=False)
     sketch_specs = _sketch_snapshots(doc, sketch_ids)
 
     removed = _remove(doc, body_ids, [], sketch_ids)
@@ -294,7 +294,7 @@ def _do_delete(document: Document, operation: Operation) -> None:
     entity_specs = [dict(spec) for spec in args["entities"]]
     sketch_ids = [str(spec["sketch_id"]) for spec in args.get("sketches") or ()]
     for body_id in body_ids:
-        deletable_body(document, body_id)
+        deletable_body(document, body_id, require_visible=operation.verb == VERB_DELETE)
     removed = _remove(document, body_ids, entity_specs, sketch_ids)
     if body_ids:
         remember(document, _SNAPSHOT_KEY, operation.seq, removed)
@@ -399,7 +399,8 @@ def _enter_delete(document: Document) -> dict:
 def _enter_delete_items(
     document: Document, bodies: Sequence[str] = (), sketches: Sequence[str] = ()
 ) -> dict:
-    """対象は選択ではなく引数の ID(ブラウザの一覧の行・AI)。**選択には触らない**。"""
+    """対象は選択ではなく引数の ID(ブラウザの一覧の行・AI)。選択は読まない(確定後の選択の
+    リセットは他の verb と同じ。`catalog` の `resets_selection`)。"""
     args = delete_items(document, list(bodies), list(sketches)).args
     return {
         "bodies": list(args["bodies"]),

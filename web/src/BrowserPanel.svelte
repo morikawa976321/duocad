@@ -135,9 +135,14 @@
     onRename(id, draft)
   }
 
+  /** **Esc は窓まで届かせない** —— `CommandHost` の窓の keydown が入力欄の Esc も拾って、
+   *  起動中のコマンドまで中断する。 */
   function renameKey(event: KeyboardEvent, id: string, current: string): void {
     if (event.key === 'Enter') commitRename(id, current)
-    else if (event.key === 'Escape') renamingId = null
+    else if (event.key === 'Escape') {
+      event.stopPropagation()
+      renamingId = null
+    }
   }
 
   /** 開いた欄へ入力を移す(Svelte の action)。 */
