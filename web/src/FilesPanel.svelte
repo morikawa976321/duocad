@@ -139,6 +139,7 @@
     if (trimmed.includes('/') || trimmed.includes('\\')) return '区切り文字は使えない(ファイル名だけ)'
     if (trimmed.includes(':')) return "':' は使えない(ドライブ指定・代替ストリームの入口になる)"
     if (trimmed === '.' || trimmed === '..') return '使えないファイル名'
+    if (withoutSuffix(trimmed, '.json') === '') return 'ファイル名を打つ(例: model)'
     return null
   }
 
@@ -253,13 +254,21 @@
 
   // ---------------------------------------------------------------- STEP/STL(入出力)
   /**
-   * 空だけを弾く(**ファイル名の検査`nameProblem`は掛けない**)。相対パスはサーバが
+   * 空と、ファイル名の無いパス(`sub/` は拡張子を付けると `sub/.step` になる)だけを弾く
+   * (**ファイル名の検査`nameProblem`は掛けない**)。相対パスはサーバが
    * `export/` 基準に解決する(保存の `models/` とは別の置き場)。
    */
   const pathProblem = pathLike('パス')
 
+  function exportPathProblem(text: string, suffix: string): string | null {
+    const empty = pathProblem(text)
+    if (empty !== null) return empty
+    const fileName = withoutSuffix(text.trim(), suffix).split(/[\\/]/).pop() ?? ''
+    return fileName === '' ? 'ファイル名まで打つ' : null
+  }
+
   let exportStepPath = $state('')
-  const exportStepProblem = $derived(pathProblem(exportStepPath))
+  const exportStepProblem = $derived(exportPathProblem(exportStepPath, '.step'))
 
   function submitExportStep(): void {
     if (exportStepProblem !== null) return
@@ -267,7 +276,7 @@
   }
 
   let exportStlPath = $state('')
-  const exportStlProblem = $derived(pathProblem(exportStlPath))
+  const exportStlProblem = $derived(exportPathProblem(exportStlPath, '.stl'))
 
   function submitExportStl(): void {
     if (exportStlProblem !== null) return

@@ -21,6 +21,10 @@
   /**
    * 拡張子を**欄の外に固定で出す**入力欄。打つのは名前だけで、拡張子は打つことも消すこともない
    * (本人指示 2026-10-07)。送るときに `withSuffix` で付けるのは呼ぶ側。
+   *
+   * 貼り付けたときと欄を離れたときは、打った側の同じ拡張子を落とす(欄に `model.json.json` と
+   * 見えたまま `model.json` を送る食い違いを残さない)。打っている途中では落とさない ——
+   * `a.jso` に `n` を足した瞬間に `a` へ戻ると、打った文字が消えたように見える。
    */
   let {
     id,
@@ -35,11 +39,27 @@
     placeholder?: string
     onkeydown?: (event: KeyboardEvent) => void
   } = $props()
+
+  function dropTypedSuffix(): void {
+    value = withoutSuffix(value, suffix)
+  }
 </script>
 
 <!-- 枠と凹んだ面は外側が持つ(styles.css の `input` と同じ見た目)。拡張子まで含めて1つの欄に見せる。 -->
 <label class="suffix-field">
-  <input {id} type="text" autocomplete="off" spellcheck="false" {placeholder} bind:value {onkeydown} />
+  <input
+    {id}
+    type="text"
+    autocomplete="off"
+    spellcheck="false"
+    {placeholder}
+    bind:value
+    {onkeydown}
+    oninput={(event) => {
+      if (event instanceof InputEvent && event.inputType === 'insertFromPaste') dropTypedSuffix()
+    }}
+    onblur={dropTypedSuffix}
+  />
   <span class="suffix" aria-hidden="true">{suffix}</span>
 </label>
 
@@ -62,6 +82,7 @@
     flex: 1 1 auto;
     width: auto;
     min-width: 0;
+    text-align: right;
     padding-right: 0;
     background: none;
     border: none;
