@@ -1,29 +1,74 @@
 # 最終形状の合格条件
 
 現在の合格条件は、`models/hanger_bar_attachment.json` の最終出力の **水密性（自己干渉なし）・単一ソリッド** の2つ。
-保持・除外は既定の合否判定から外し、平滑化後のCADブーリアン演算で反映する。
+保持・除外は既定の合否判定から外し、平滑化後のメッシュ集合演算で反映する。
 
-製品経路は `密度 → 島除去 → 表面生成 → Taubin平滑化 → CAD化 → (メッシュ－保持－除外)をまとめてcut → 保持ごとに除外とのcut → 除外済み保持をfuse → 水密・単一ソリッド検査 → 文書保存`。
-重複領域は除外が優先する。演算のエラー・警告、空の結果、自己干渉、分断を成功扱いにしない。
-結果はCADソリッドとしてB-rep本文を操作ログに保存し、再読込・undo/redoは外部ファイルに依存しない。
-表示とSTLはそのCADの三角形近似。安全率は処理前の密度の解析値で、最終CADの再解析値ではない。
+製品経路は `密度 → 島除去 → 表面生成 → Taubin平滑化 → 平滑化後の表面の検査(接続6項目・向き・自己交差) →
+保持・除外を線形偏差0.01 mm(`STL_DEVIATION` と同じ値)・角度偏差0.35 radで三角形分割して同じ検査 →
+(表面 + 保持) − 除外(manifold3d、倍精度) → 入力面の由来を捨てて 1e-5 mm で簡略化 →
+float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
+最終メッシュの検査(接続6項目・単一ソリッド・float32の縮退と頂点一致・自己交差) → 文書保存`
+(`duocad/topopt/finalize.py`)。重複領域は除外が優先する。入力の不合格、空の結果、分断、自己交差を
+成功扱いにしない。**小さいから通す判定は無い** —— 平滑化後の表面に自己交差があれば、それが4組でも
+最終処理は入力検査で止まる(平滑化側の合格条件。[TOPOPT_SMOOTHING_INTERSECTIONS.md](TOPOPT_SMOOTHING_INTERSECTIONS.md))。
+結果はメッシュボディとして三角形を操作ログに保存し、表示とSTLはその三角形をそのまま使う。
+安全率は処理前の密度の解析値で、最終メッシュの再解析値ではない。
+入力・最終メッシュとも、閉殻の包含深さと面の向きを照合する。交差のない閉殻に対して代表頂点からの
+立体角で包含を判定し、深さが偶数なら外向き、奇数なら内向きを要求する。外に離れた内向きの閉殻を
+空洞として数えない。空洞内の材料は別ソリッドなので最終の単一ソリッド検査で不合格になる。
+保持・除外の形は内接する三角形で近似される: 円柱では半径によらず約0.005 mmだけ除外の中に材料が残る
+([TOPOPT_MESH_BOOLEAN_STUDY.md](TOPOPT_MESH_BOOLEAN_STUDY.md)「円柱の除外へのめり込み」。BSpline・トーラス面では
+指定偏差を超えた標本がある)。
 
 ```powershell
 .venv/Scripts/python.exe topopt_checks/check_final_shape.py --mesh result.stl --out output/acceptance.json
-.venv/Scripts/python.exe topopt_checks/check_final_shape.py --model result.json --solid-body <body-id> --out output/solid_acceptance.json
+.venv/Scripts/python.exe topopt_checks/check_final_shape.py --model-dir output/optimization_runs/<run-id> --model document_after.json --mesh-body <body-id> --out output/acceptance.json
 .venv/Scripts/python.exe topopt_checks/replay_finalization.py output/optimization_runs/<run-id>
 ```
 
-判定器は既定で2条件だけを出力する。旧保持・除外比較は調査用の `--check-constraints` で明示的に有効化する。
-診断記録のCADは `--model-dir output/optimization_runs/<run-id> --model document_after.json` で指定できる。
-`replay_finalization.py` はSIMPを再実行せず、保存済み平滑化後表面を製品と同じ後処理に通し、
-`output/finalization_checks/` に各段階のB-rep、診断、成功時の文書/STLを保存する。
+判定器(`check_final_shape.py`)は既定で2条件だけを出力する。メッシュをOCCTのソリッドに縫合して
+`BRepCheck`・自己干渉で判定する(hangerの最終メッシュで約89秒)。**製品経路はこの判定を呼ばず**、
+`finalize.final_mesh_checks`(接続6項目・単一ソリッド・float32・自己交差。OCP非依存)で合否を決める
+(2026-10-06。判定器はOCCTで独立に裏を取る道として残す)。旧保持・除外比較は調査用の `--check-constraints`。
+`--solid-body` は2026-09-23より前の記録(`add_solid_body` で B-rep が入る)用。
+`replay_finalization.py` はSIMPを再実行せず、保存済み平滑化後表面を製品と同じ最終処理に通し、
+`output/finalization_checks/` に各段階の検査(`smoothed-mesh-checks` / `cad-meshes` / `mesh-boolean` /
+`final-mesh-checks`)と、成功時の文書(メッシュボディ)/STLを保存する。
 元の実行が finalize 失敗で mesh-world snapshot を残していない場合は finalize-input から
-読み直すフォールバックになり、その回はgridが無いため成功しても最終STL(`final.stl`)は保存しない
-（文書と各段階のB-repは保存する）。
+読み直すフォールバックになり、その回はgridが無いため成功しても最終STL(`final.stl`)は保存しない。
 
 検証は `tests/test_finalization.py`、`tests/test_final_shape.py`、`tests/test_optimization_trace.py` と
 `topopt_checks/check_trace.py`。後者は小型モデルで製品経路・文書再生・最終STLを確認する。
+
+## メッシュ集合演算での実測(2026-10-06)
+
+- **#93 の保存済み実行 `20260925T035538`**(hanger、平滑化後 51,836 三角形): `replay_finalization.py` は
+  平滑化後の表面の検査で止まる(`self_intersections` cross 4組。接続6項目は全て0)。6秒。これは設計どおりで、
+  4組の交差は平滑化側の問題([TOPOPT_SMOOTHING_INTERSECTIONS.md](TOPOPT_SMOOTHING_INTERSECTIONS.md))。
+  #93 の他の3実行と 2026-09-21 の実行 `20260921T185659-b6799e00457d` はローカルにも `D:\` にも無く、再生していない。
+- **検証材料64条件**(`topopt_checks/finalize_smoothing_corpus.py --suffix _mesh`。結果は
+  `output/smoothing_corpus/final_records_mesh/`): 下の「検証材料64条件での最終処理の合格率」に B-rep 経路と並べた。
+- **簡略化の許容値の掃引**(入力検査に通る60条件で、同じ集合演算の結果に許容値を変えて簡略化し `final_mesh_checks` にかけた):
+
+  | 許容値 mm | 不合格 | 体積変化の最大(簡略化前比) | 三角形の残存(最小/中央値) |
+  |---:|---|---:|---|
+  | 1e-5 | 1(F1000_h2.0_w4: float32 で潰れる三角形1枚と、その隣接12組の接触) | 1.7e-9 | 0.991 / 0.997 |
+  | 1e-4 | 1(同じ条件・同じ三角形) | 3.1e-8 | 0.979 / 0.988 |
+  | 1e-3 | 1(F1000_h2.0_w5: 簡略化自身が float64 でも縮退した三角形と接触を作る) | 2.5e-6 | 0.895 / 0.917 |
+  | 1e-2 | 6(簡略化自身が縮退・自己交差を作る) | 1.3e-4 | 0.622 / 0.708 |
+
+  単一の許容値で60条件を全部通す値は無い。1e-5 の残り1枚は辺長 3.9e-6 mm のスライバー(座標 ~200 mm での float32 の
+  分解能 1.5e-5 mm 未満)で、manifold3d の `simplify` は許容値未満でも潰さないことがある。許容値は体積変化・三角形保持とも
+  最良の 1e-5 のままにし、float32 で潰れる三角形の最短辺が 1e-5 mm 未満なら潰す段(`finalize.collapse_float32_slivers`)を
+  簡略化の後に置いた。潰す操作で面はその辺の長さまでしか動かず、最終検査は同じ条件で通す。この段は他の59条件では何もしない
+  (`collapsed_edges` 0)。
+
+## B-rep ブーリアン経路の記録(2026-10-06 まで)
+
+以下「除外cutの警告の原因」から「検証材料64条件での最終処理の合格率」までは、2026-10-06 に #95 で
+メッシュ集合演算へ置き換える前の最終処理(縫合 → `BOPAlgo_BOP` の cut / fuse → `inspect_solid` →
+`solid_mesh` の三角形分割 0.2 mm)についての調査記録。失敗の原因と回避策の実測は、置き換えの根拠として残す。
+当時の `replay_finalization.py`(B-rep 版)・`final-solid` スナップショット・`check_final_shape.py --solid-snapshot` は無い。
 
 ## 除外cutの警告の原因（hanger）
 
@@ -235,6 +280,26 @@ material-cut を直しても最後の `inspect_solid` で `self_intersections=4`
 合格したのは F0200_h2.2_w2・F0200_h2.4_w2・F0200_h2.4_w4・F0500_h2.2_w5・F1000_h2.2_w5・F2000_h2.2_w4・F2000_h2.4_w5。
 平滑化の自己交差がある4条件はすべて不合格だが、不合格の大半(53条件)は平滑化の交差が無い条件で、B-rep のブーリアンと
 その後の分割で落ちている。各条件の失敗の全文は `output/smoothing_corpus/final_records/<条件名>.json`。
+
+### メッシュ集合演算での同じ64条件(2026-10-06 実測)
+
+同じ64条件に置き換え後の `finalize` をかけた(`finalize_smoothing_corpus.py --suffix _mesh --min-free-gb 3`。記録は
+`output/smoothing_corpus/final_records_mesh/<条件名>.json` で、各段階の検査の内訳は `stages`)。**合格は 60/64**。
+不合格4条件はすべて平滑化後の表面の自己交差(F1000_h1.8_w5 10組・F1000_h2.4_w2 4組・F2000_h2.0_w2 4組・F2000_h2.0_w3 3組。
+[TOPOPT_SMOOTHING_INTERSECTIONS.md](TOPOPT_SMOOTHING_INTERSECTIONS.md) の全数集計と一致)で、入力検査で止まった。
+入力検査に通った60条件は集合演算・簡略化・最終検査をすべて通過した(空洞 0。float32 で潰れる三角形のために潰した辺は
+F1000_h2.0_w4 の1本だけで、他の59条件は 0)。
+
+| 項目 | B-rep 経路(2026-09-26) | メッシュ集合演算(2026-10-06) |
+|---|---:|---:|
+| 合格 | 7/64 | 60/64 |
+| 1条件の時間 | 131〜1,300 秒 | 1.7 / 9.6 / 15.8 秒(最小/中央値/最大) |
+| 子プロセスのピーク常駐メモリ | 未計測(OOM で PC が落ちた) | 0.54 / 1.15 / 1.35 GB |
+| 集合演算そのもの | 約3分(material-cut + preserve-fuse) | ≤ 0.032 秒(簡略化 ≤ 0.052 秒) |
+| 三角形数(平滑化後 → 最終、中央値) | — | 38,824 → 87,120 |
+
+時間の大半は自己交差検査(平滑化後の表面と最終メッシュの2回、`mesh_intersections`)。三角形が増えるのは保持・除外の
+分割偏差が 0.01 mm だから(hanger の12ボディで約5万枚)。
 
 ## ビューア表示とSTLエクスポートの同一性（解決）
 

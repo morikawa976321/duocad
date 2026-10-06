@@ -45,22 +45,21 @@ def verify_archive(path):
     final=records('final-mesh-world')[0]
     saved=open_session(path/'document_after.json')
     body=saved.document.get_body(result['body_id'])
-    # 結果は `solid_mesh` が合格させた三角形のメッシュボディ(docs/TOPOPT.md「結果は編集可能ソリッドとして持たない」)。
-    # 文書の三角形と記録の final-mesh-world が一致し、ブーリアン後の B-rep は final-solid スナップショットが持つ。
-    from duocad.kernel_brep import inspect_solid, decode_brep
+    # 結果は `finalize` が合格させた三角形のメッシュボディ(docs/TOPOPT.md「結果は編集可能ソリッドとして持たない」)。
+    # 文書の三角形と記録の final-mesh-world が一致し、最終処理の各段階の検査は finalize 段階の snapshot が持つ。
     assert body.kind=='mesh' and body.mesh is not None
     vertices=np.asarray(body.mesh.positions).reshape(-1,3)
     faces=np.asarray(body.mesh.indices).reshape(-1,3)
     assert np.array_equal(vertices,final['vertices'])
     assert np.array_equal(faces,final['faces'])
-    assert records('preserve-fuse') and records('final-solid')
-    solid=decode_brep(records('final-solid')[0]['brep'])
-    assert inspect_solid(solid)['watertight']
-    assert inspect_solid(solid)['single_solid']
+    assert records('smoothed-mesh-checks')[-1]['failed']==[]
+    assert records('cad-meshes') and records('mesh-boolean')
+    final_checks=records('final-mesh-checks')[-1]
+    assert final_checks['failed']==[] and final_checks['solids']==1
     v,f=read_stl(path/'final.stl')
     assert np.array_equal(v[f],final['vertices'][final['faces']])
     assert (path/'source.zip').is_file() and list((path/'cad').glob('*.step'))
-    print('PASS: full product archive, single derivation shared by every candidate, single final meshing, surface replay, final document/STL equality')
+    print('PASS: full product archive, single derivation shared by every candidate, single final meshing, surface replay, finalize checks, final document/STL equality')
     print('Archive:',path)
 
 

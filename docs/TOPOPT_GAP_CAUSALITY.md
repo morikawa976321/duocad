@@ -230,8 +230,8 @@ OCCT本体は改造していない。形状・フィレット・隙間・boolean
   停止条件は解消・上限12巡・点列の無変化・状態の循環・点数予算。解消できない面は Failure にして
   分割せず、`tessellate` の `untriangulated` と `boundary["unresolved"]` に残す。
 - `duocad/mesh_intersections.py`（OCP非依存）: 三角形メッシュの自己交差を、正当な共有辺・共有頂点の
-  接触を除いて向き判定だけで検出する。`finalize.solid_mesh` は接続6項目に加えてこれと、float32 に
-  丸めた座標での頂点一致・縮退を検査し、不合格なら例外にする。`meshbody.write_stl` は書く前に
+  接触を除いて向き判定だけで検出する。`finalize.final_mesh_checks` は接続6項目に加えてこれと、float32 に
+  丸めた座標での頂点一致・縮退を検査し、`finalize` は不合格なら例外にする。`meshbody.write_stl` は書く前に
   float32 の縮退・非有限を検査し、既存ファイルに触れずに止める。
 
 ### 実測
@@ -300,7 +300,7 @@ OCCT本体は改造していない。形状・フィレット・隙間・boolean
 - 三角形の自己交差検査は float32 に丸めた座標でだけ行う（画面もSTLも float32 で消費するため）。
   float64 側は接続6項目のみ。
 - 球の極では標準の OCCT が縮退三角形を出す（`test_kernel_meshing` の球で標準と一致するが接続検査は0でない）。
-  汎用の `tessellate` は従来どおり通し、厳格な `solid_mesh` は不合格にする。
+  汎用の `tessellate` は従来どおり通し、`finalize` の入力検査(`input_mesh_checks`。縮退三角形は接続6項目の1つ)は不合格にする。
 - 112k 面の形状では `tessellate` が約11秒遅くなり、画面のズームで再分割する経路も同じだけ遅くなる。
   取り出し 5.9 秒は pcurve 点ごとの OCP 呼び出しで、この版の OCP に一括取得の口は無い。
 

@@ -22,7 +22,7 @@
 | `final.stl` | **採用した最終形状**のワールド座標mm。ASCIIの17桁で座標を保存 |
 | `document_after.json` / `result` の記録 | 結果ボディを含む文書、採用材料量、安全率、探索履歴、ボディID |
 
-現在の製品経路は、finalize段階(後述)のブーリアン処理を経て水密・単一ソリッド検査に通ってから `done` となる。
+現在の製品経路は、finalize段階(後述)のメッシュ集合演算とその検査に通ってから `done` となる。
 過去の記録の `done` は、この検査を行った意味ではない。
 失敗は `failed`、中断は `cancelled`。条件不足の早期終了も専用の状態を残す。
 プロセス強制終了時は `running` のまま残ることがある。プロセスIDと実際の稼働状態を確認する。
@@ -91,15 +91,19 @@ surface = build_surface_from_mask(**record)
 
 最新候補のscratch STLではなく、**採用結果の `final.stl`** を使う。
 
-ブーリアン処理は `finalize` 段階に記録する。`before-boolean`、`material-cut`(メッシュから保持＋除外を
-まとめて引く)、`preserve-<i>-cut`(保持ボディ`i`ごとに除外との差集合)、`preserve-fuse`(除外済み保持を
-足し戻す)、`final-solid` はB-rep本文を保存する。警告・エラー時は `*-diagnostics` と、
-取得できれば `*-rejected` も保存する。
-新しい記録の `pre-boolean-mesh-world` が平滑化前後の頂点、`final-mesh-world` が
-ブーリアン後CADの三角形分割。両者の面接続は同じとは限らない。
+最終処理は `finalize` 段階に記録する。`smoothed-mesh-checks`(平滑化後の表面の接続6項目・向き・自己交差)、
+`cad-meshes`(保持・除外ごとの三角形分割の偏差・三角形数・境界交差検査の要約と、同じ検査)、
+`mesh-boolean`(集合演算と簡略化の秒数、簡略化前後の三角形数と体積、float32 で潰れる三角形のために潰した辺の数
+`collapsed_edges`)、`final-mesh-checks`(最終メッシュの
+接続6項目・単一ソリッド(材料の成分数 `solids` と空洞数 `cavities`)・float32・自己交差)。不合格の段階で
+例外になり、その段階までの snapshot が残る。B-rep はどの段階にも無い。
+`pre-boolean-mesh-world` が平滑化前後の頂点、`final-mesh-world` が集合演算後の最終メッシュ。両者の面接続は
+同じとは限らない。
 結果は `document_after.json` に `add_mesh_body` 操作(合格した三角形)として入る(2026-09-23 から。
-それ以前の記録は `add_solid_body` で B-rep が入っている)。ブーリアン後の B-rep は `final-solid` スナップショットで、
-`check_final_shape.py --solid-snapshot <NNNNNN-final-solid.json>` で直接検査できる(古い記録は `--solid-body <body-id>`)。
+それ以前の記録は `add_solid_body` で B-rep が入っていて、`check_final_shape.py --solid-body <body-id>` で検査できる)。
+2026-10-06 より前の記録には B-rep ブーリアンの段階(`before-boolean`・`material-cut`・`preserve-<i>-cut`・
+`preserve-fuse`・`final-solid`、警告・エラー時の `*-diagnostics` / `*-rejected`)があり、`final-solid` の
+B-rep は `check_boundary_meshing.py --brep-json` で読める。
 
 ## 費用と障害
 

@@ -1,4 +1,4 @@
-"""段階9: 製品の最終形(`finalize`)が `material-cut` で不成立になった形の切り分け(新規のFEM・最適化なし)。
+"""段階9: #95 以前の B-rep 最終処理が `material-cut` で不成立になった形の切り分け。
 
 `finalize` の手順のうち、平滑化メッシュ→ソリッド化→「保持+除外をまとめて引く」までを再現し、結果の部品数・体積・妥当性を記録する。
 さらに「除外だけ引く」「保持だけ引く」を別々に試して、どちらのツールで不成立になるかを分ける。
@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 import time
@@ -22,16 +23,40 @@ import _bootstrap  # noqa: E402,F401
 
 import numpy as np  # noqa: E402
 from OCP.BRepGProp import BRepGProp  # noqa: E402
+from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Operation  # noqa: E402
+from OCP.BRepCheck import BRepCheck_Analyzer  # noqa: E402
 from OCP.GProp import GProp_GProps  # noqa: E402
 from OCP.TopAbs import TopAbs_SOLID  # noqa: E402
 
 import _common  # noqa: E402
 import final_shapes_09 as fs  # noqa: E402
 from duocad import kernel, optimize_run  # noqa: E402
-from duocad.kernel_brep import boolean, is_valid  # noqa: E402
 from duocad.mesh_geometry import make_material, subshapes, topology  # noqa: E402
 from duocad.topopt import acceptance  # noqa: E402
 from duocad.topopt import mesh as topo_mesh  # noqa: E402
+
+
+def boolean(shape, tools, operation):
+    """旧経路の診断用。製品のメッシュ集合演算とは独立に OCCT の警告も記録する。"""
+    builder = BOPAlgo_BOP()
+    builder.SetNonDestructive(True)
+    builder.SetFuzzyValue(0.0)
+    builder.AddArgument(shape)
+    for tool in tools:
+        builder.AddTool(tool)
+    builder.SetOperation({'cut': BOPAlgo_Operation.BOPAlgo_CUT,
+                          'fuse': BOPAlgo_Operation.BOPAlgo_FUSE}[operation])
+    builder.Perform()
+    errors, warnings = io.BytesIO(), io.BytesIO()
+    builder.DumpErrors(errors)
+    builder.DumpWarnings(warnings)
+    return builder.Shape(), dict(has_errors=builder.HasErrors(), has_warnings=builder.HasWarnings(),
+                                 errors=errors.getvalue().decode('utf-8', errors='replace'),
+                                 warnings=warnings.getvalue().decode('utf-8', errors='replace'))
+
+
+def is_valid(shape):
+    return shape is not None and not shape.IsNull() and BRepCheck_Analyzer(shape).IsValid()
 
 
 def volume(shape) -> float:

@@ -7,6 +7,11 @@
 
 ## 結論(先に要約)
 
+**#95 後の再実行について(2026-10-07)**: 以下の数値は旧 B-rep 経路での記録。
+現在の `final_shapes_09.py convert` は製品のメッシュ集合演算を使い、検査結果を `final.mesh_checks` に保存する。
+`diagnose_cut_09.py` は旧 B-rep の失敗を再現する専用ツールとして OCCT 演算を自身に持つ。
+再現は `run_09_final_shapes.py --job cutdiag:<shape>`。`convert` と `cutdiag` は異なる経路を検証する。
+
 数値の出所は各節の表と `output/idle_validation_20260928/09_*.json`(`09_final_shapes.json` が機械可読まとめ)。「製品SF」は製品のパーセンタイル安全率(目標4.8。0.5%以内を達成とみなす)、
 「M5b raw」は許容40 MPa超過の体積積分、「M5b目標」は許容/4.8=8.33 MPa超過の同積分、「KS」はM7bの集約値。
 

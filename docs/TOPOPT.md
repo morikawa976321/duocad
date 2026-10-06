@@ -71,17 +71,25 @@ T-spline変換のうち、③④⑤は作らない。**出力はメッシュ止�
 B-rep化・`ShapeUpgrade_UnifySameDomain`・`geomdl`の曲面フィッティングはいずれも非構造三角メッシュ
 に使えない)。
 
-**結果は編集可能ソリッドとして持たない**(2026-09-23 本人判断)。最終処理はこれまでどおり
-B-rep(縫合→保持・除外のブーリアン→`inspect_solid`)で行うが、文書に入るのは`solid_mesh`が
-合格させた三角形のメッシュボディで、ブーリアン後のB-repは記録の`final-solid`スナップショットに
-だけ残す。理由は費用: 112k面の結果を`add_solid_body`で入れると操作ログに128MBのB-repテキストが
-載り、開く・再生のたびにBRepCheckが走り、画面は面ごとのMeshと境界線を22万個作ってカメラが回らなく
-なっていた。失うのは結果のSTEP書き出しと面単位の選択・問い合わせ。
+**結果は編集可能ソリッドとして持たない**(2026-09-23 本人判断)。文書に入るのは`finalize`が
+合格させた三角形のメッシュボディで、画面・STLはそれをそのまま使う。理由は費用: 112k面の結果を
+`add_solid_body`で入れると操作ログに128MBのB-repテキストが載り、開く・再生のたびにBRepCheckが走り、
+画面は面ごとのMeshと境界線を22万個作ってカメラが回らなくなっていた。失うのは結果のSTEP書き出しと
+面単位の選択・問い合わせ。
 
-**最終処理そのものをメッシュ集合演算へ置き換える判断基準**(2026-09-23本人判断): 「OCCTブーリアン
-の失敗が頻発するなら最終処理をメッシュに置き換える」。置き換え先の案と実測は
-[TOPOPT_MESH_BOOLEAN_STUDY.md](TOPOPT_MESH_BOOLEAN_STUDY.md)(未採用)。失敗の頻度は記録の
-`material-cut-diagnostics`/`preserve-fuse-diagnostics`で見る。
+**最終処理はメッシュ集合演算**(2026-09-25 本人判断、#95。`finalize.py`): 平滑化後の表面に、
+線形偏差0.01 mm(STL書き出しの`STL_DEVIATION`と同じ値)・角度偏差0.35 radで三角形分割した保持を足し、
+除外を引く(manifold3d、倍精度)。結果は入力面の由来を捨てて(`as_original()`)1e-5 mmで簡略化し、
+それでも残る「float32で潰れる三角形」(消費側は文書・画面・STLともfloat32)は許容値未満の最短辺を潰して消し、
+接続6項目・単一ソリッド・float32の縮退と頂点一致・自己交差で検査する。B-repはどの段階にも無い。
+入力(平滑化後の表面、分割した保持・除外)にも接続6項目・向き・自己交差の検査をかける——manifold3dは
+交差のある入力を直さず結果に残すので、入力で止める(小さいから通す判定は無い)。
+置き換えの根拠は、hangerでOCCTブーリアン由来の失敗が3種続いたこと(除外cutの警告、三角形分割できない
+極小面、保持と除外の一致面による不正な形。[TOPOPT_ACCEPTANCE.md](TOPOPT_ACCEPTANCE.md))が、
+判断基準「OCCTブーリアンの失敗が頻発するなら最終処理をメッシュに置き換える」(2026-09-23本人判断)に
+当たったため。置き換え先の実測(hangerを含む3例での合格、偏差ごとの体積差、円柱の除外へのめり込み)は
+[TOPOPT_MESH_BOOLEAN_STUDY.md](TOPOPT_MESH_BOOLEAN_STUDY.md)。保持・除外の形は内接する三角形で
+近似されるので、除外の穴の内面は円柱で約0.005 mm(半径によらない)だけ除外の中に残る。
 
 ## 塊(設計空間)をB-repから起こす(voxelize.py)
 
@@ -640,9 +648,9 @@ optimize_run.run
        │    └─ _reduce_volume                 エネルギーの低い材料を安全率の余裕に応じて削る(段階4)
        │         └─ 各候補: 支えを残して選ぶ → 水密の修復 → 島処理 → 6条件(FEM。要素エネルギーも返す)
        ├─ mesh.build_surface_from_mask        最終確定マスク(best_feasible)だけをメッシュ化
-       ├─ finalize.finalize                   平滑化後に保持union・除外cut、水密・単一ソリッド検査
-       ├─ finalize.solid_mesh                 最終B-repを1回だけ三角形分割し、接続6項目・float32・自己交差で検査
-       └─ add_mesh_body                       合格した三角形をメッシュボディとして文書へ追加(B-repは記録にだけ残る)
+       ├─ finalize.finalize                   平滑化後の表面を検査 → 0.01 mmで分割した保持を足し除外を引く(manifold3d)
+       │                                      → 簡略化 → 接続6項目・単一ソリッド・float32・自己交差で検査
+       └─ add_mesh_body                       合格した三角形をメッシュボディとして文書へ追加
 ```
 
 **候補中はメッシュ化を呼ばない**——後段へ渡るのは`binary_search.find_best_feasible`が返す最終
@@ -1091,7 +1099,7 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
 | `duocad/topopt/acceptance.py` | **島除去後・平滑化前の6条件判定**。詳細は[TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) |
 | `duocad/topopt/binary_search.py` | **bool体積削減探索**。`find_initial_feasible`(段階3)→`find_best_feasible`(段階4) |
 | `duocad/topopt/mesh.py` | パディング→marching cubes→Taubin平滑化→表面生成。入口は`build_surface_from_mask`。**CLIは持たない** |
-| `duocad/topopt/finalize.py` | 最終確定マスクの表面→保持union・除外cutのCADブーリアン→水密・単一ソリッド検査 |
+| `duocad/topopt/finalize.py` | 最終確定マスクの表面→保持・除外のメッシュ集合演算(manifold3d)→接続6項目・単一ソリッド・float32・自己交差の検査 |
 | `duocad/topopt/trace.py` | 実行ごとの途中記録(`stage`/`snapshot`)。詳細は[TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) |
 | `duocad/topopt/__init__.py` | パッケージの入口。**サブモジュールをimportしない**。`OUTPUT_DIR`だけを公開する |
 | `topopt_checks/check_fem.py` | **受入検査**。FEM側(要素剛性・組立・CG/direct・残差検算)。上「受入検査が見ているもの」 |

@@ -182,9 +182,10 @@ MCPにも無い**（人ができることとAIができることを一致させ�
 （[VIEWPORT.md](VIEWPORT.md)「可変解像度と面カリング」の実測）＝ 約59MBのSTLになる。書き出しは表示中の
 ボディだけを書くので、**印刷する部品だけ表示して書き出す**のが前提である。
 
-**トポロジー最適化の成果物には効かない**: 最終形は `topopt/finalize.py` の `solid_mesh` が偏差0.2mmで
-三角形にしてメッシュボディとして文書へ入るので、STL書き出しはその三角形を素通しする。最適化した部品の
-印刷品質を決めているのは書き出し側ではなく finalize 側である（[TOPOPT_ACCEPTANCE.md](TOPOPT_ACCEPTANCE.md)）。
+**トポロジー最適化の成果物は書き出し時に分割しない**: 最終形は `topopt/finalize.py` が、同じ `STL_DEVIATION`
+(0.01mm)で三角形分割した保持・除外と平滑化後の表面との集合演算で作り、メッシュボディとして文書へ入るので、
+STL書き出しはその三角形を素通しする。最適化した部品の穴・保持面の粗さを決めているのは finalize 側の
+`CAD_DEVIATION_MM`(= `STL_DEVIATION` を読む)である（[TOPOPT_ACCEPTANCE.md](TOPOPT_ACCEPTANCE.md)）。
 
 ## 隠したボディ・選択・可視性
 

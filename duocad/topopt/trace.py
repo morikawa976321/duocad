@@ -331,7 +331,7 @@ def final_mesh(raw, smooth, faces, grid, *, final_vertices, final_faces):
     recorder.snapshot('pre-boolean-mesh-world',dict(raw_vertices=raw,vertices=smooth,faces=faces,grid=grid))
     smooth, faces = np.asarray(final_vertices), np.asarray(final_faces)
     recorder.snapshot('final-mesh-world',dict(vertices=smooth,faces=faces,grid=grid,
-                                            source='boolean CAD tessellation'))
+                                            source='mesh boolean (manifold3d)'))
     def write(stream):
         stream.write(b'solid optimized\n')
         for triangle in smooth[np.asarray(faces)]:

@@ -191,7 +191,7 @@ cd web; npm run dev                                 # 画面(5173)
 
 製品の最適化は途中データを自動保存する。[保存範囲・場所・読み方](docs/TOPOPT_RECORDING.md)。
 
-最終形状の水密・単一ソリッドの2条件と、平滑化後の保持・除外ブーリアン処理は
+最終形状の水密・単一ソリッドの2条件と、平滑化後の保持・除外のメッシュ集合演算は
 [最終形状の合格条件](docs/TOPOPT_ACCEPTANCE.md)に従って `topopt_checks/check_final_shape.py` で判定する。
 この判定器自体の小形状による回帰検査は `tests/test_final_shape.py` にある。
 
@@ -408,7 +408,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
 | `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
-| `duocad/kernel_brep.py` | 同じカーネル層。生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査と、箱・格子との共通体積(形状最適化の受入検査) | **○** | ✗ |
+| `duocad/kernel_brep.py` | 同じカーネル層。生成CADのBRep保存・ソリッドの幾何検査(`inspect_solid`。受入検査の判定器が使う)と、箱・格子との共通体積(形状最適化の受入検査) | **○** | ✗ |
 | `duocad/mesh_geometry.py` | 同じカーネル層。三角形境界の接続検査と、向き・空洞を保ったCADソリッド化。位相の列挙と compound の定型(`subshapes` / `indexed_map` / `compound`)もここ | **○** | ✗ |
 | `duocad/kernel_sketch.py` | 同じカーネル層。スケッチ平面の枠(`face_frame` / `sketch_plane_frame` / `offset_plane_frame`)、図形種別ごとの辺と2D bbox(`_KERNEL_ENTITY_KIND_TABLE`)、閉領域の検出(`sketch_regions`)。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_extrude.py` | 同じカーネル層。押し出しの幾何(`extrude_faces` = 既存ソリッドの同一平面の面群を join/cut/new、`extrude_regions` = スケッチ領域を join/cut/new)。kernel を読むだけの一方向 | **○** | ✗ |

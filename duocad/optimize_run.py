@@ -1192,15 +1192,14 @@ def _run(
     trace.snapshot('selected-result', status=search_result.status, termination=search_result.termination,
                    material_mm3=best.material_mm3, safety_factor=best.safety_factor)
     import numpy as np
-    from .topopt.finalize import finalize, solid_mesh
+    from .topopt.finalize import finalize
 
-    shape = finalize(
+    final_vertices, final_faces = finalize(
         np.asarray(positions).reshape(-1, 3), surface.faces,
         [doc.get_body(bid).shape for bid in bundle.keep_body_ids],
         [doc.get_body(bid).shape for bid in bundle.exclude_body_ids],
         progress=lambda message: pump.emit(phase="finalize", message=message),
     )
-    final_vertices, final_faces = solid_mesh(shape)
     positions = final_vertices.ravel().tolist()
     indices = final_faces.ravel().tolist()
     trace.final_mesh(surface.verts_raw, surface.verts_smooth, surface.faces, space.grid,
@@ -1210,11 +1209,8 @@ def _run(
     pump.emit(phase="insert", message="保持・除外を反映した結果をメッシュボディとして足す")
     from .verbs import add_mesh_body
 
-    # 結果は編集可能ソリッドとして持たない(2026-09-23 本人判断)。文書に入るのは `solid_mesh` が
-    # 合格させた三角形で、画面・STL はそれをそのまま使う(再テセレーションも B-rep の保存も無い)。
-    # ブーリアン後の B-rep 自体は記録の `final-solid` スナップショットにだけ残る(finalize._save_shape)。
-    # 112k 面の B-rep を `add_solid_body` で入れると、操作ログに 128 MB のテキストが載り、開くたびに
-    # BRepCheck が走り、画面は面ごとの Mesh を 22 万個作っていた。
+    # 結果は編集可能ソリッドとして持たない(2026-09-23 本人判断)。文書に入るのは `finalize` が
+    # 合格させた三角形で、画面・STL はそれをそのまま使う(再テセレーションは無い)。
     body_id = add_mesh_body(doc, positions, indices, name=name)
 
     return dict(

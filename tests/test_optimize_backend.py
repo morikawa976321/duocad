@@ -860,7 +860,7 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
     assert result["termination"] == "converged"
     assert result["evaluations"] == 3
     # 結果は編集可能ソリッドではなくメッシュボディで入る(2026-09-23 本人判断。docs/TOPOPT.md)。
-    # 三角形は `solid_mesh` が合格させたものそのもので、画面・STL はこれをそのまま使う。
+    # 三角形は `finalize` が合格させたものそのもので、画面・STL はこれをそのまま使う。
     body = session.document.get_body(result["body_id"])
     assert body.kind == "mesh" and body.mesh is not None and body.shape is None
     assert body.mesh.triangle_count == result["triangle_count"]

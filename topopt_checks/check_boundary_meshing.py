@@ -1,4 +1,4 @@
-"""保存済みの最終ソリッド(B-rep)を製品と同じ経路で三角形分割し、境界交差の修復と成果物検査を実測する。
+"""保存済みのソリッド(B-rep)を `kernel.tessellate` で三角形分割し、境界交差の修復と成果物検査を実測する。
 
 使い方(リポジトリ直下で):
 
@@ -6,7 +6,9 @@
         --brep-json output/finalization_checks/<run>/000021-final-solid.json \
         --out output/gap_causality_20260923/robust_meshing_final.json
 
-`--brep` で生の BREP ファイルも受ける。`--deviation` の既定は製品の `solid_mesh` と同じ 0.2。
+`--brep-json` は `{"brep": ...}` の JSON(2026-10-06 より前の記録の `final-solid` スナップショット。製品の最終処理が
+メッシュ集合演算になってからは最終 B-rep が無いので、新しい記録には無い)。`--brep` で生の BREP ファイルも受ける。
+`--deviation` の既定 0.2 は当時の最終処理の分割偏差(保持・除外の分割は `finalize.CAD_DEVIATION_MM`)。
 標準の一括メッシャー(`BRepMesh_IncrementalMesh`)との比較(`--compare`)も同じ JSON に書く。
 """
 from __future__ import annotations
