@@ -1345,12 +1345,15 @@ def test_a_full_material_shortfall_names_the_search_target_and_the_factor_not_a_
 # 9. 探索後の 1×1 の空隙埋め(thin_voids)と6条件の取り直し
 # --------------------------------------------------------------------------------------
 def _replayed_search(monkeypatch, safety_factor: float = 9.9) -> None:
-    # 探索を差し替え、設計空間いっぱいの確定マスクを返す(評価3回・収束)。
+    # 探索を差し替え、最小幅を満たして保持セルを残した確定マスクを返す(評価3回・収束)。
     import numpy as np
-    from duocad.topopt import binary_search
+    from duocad.topopt import binary_search, min_width
 
     def fake_find(design_space_mask, conditions, **kwargs):
         mask = np.asarray(design_space_mask, dtype=bool)
+        mask = min_width.cube_opening(mask, kwargs.get("min_width_cells", 1))
+        if conditions.keep_cells is not None:
+            mask |= conditions.keep_cells
         report = dict(material_sha256="f" * 64,
                       volumes=dict(material_mm3=float(mask.sum()) * conditions.grid.element_volume),
                       checks=dict(safety=dict(safety_factor=safety_factor)))
@@ -1435,4 +1438,30 @@ def test_tube_fill_failure_is_reported_without_touching_the_document(session: Se
     assert result["state"] == "fill_infeasible" and result["body_id"] is None
     assert result["safety_factor"] is None and result["material_mm3"] is None
     assert "1 セル" in result["warning"] and "safety" in result["warning"] and "1.5" in result["warning"]
+    assert [body.id for body in session.document.bodies] == before
+
+
+def test_tube_fill_checks_min_width_even_when_six_checks_pass(session: Session, monkeypatch) -> None:
+    import numpy as np
+    from duocad.topopt import acceptance, binary_search, thin_voids
+
+    four_conditions(session)
+    before = [body.id for body in session.document.bodies]
+    _replayed_search(monkeypatch)
+    monkeypatch.setattr(thin_voids, "fill_tubes",
+                        lambda mask, allowed: (mask.copy(), dict(cells=1, rounds=[1])))
+    monkeypatch.setattr(acceptance, "inspect", lambda *args, **kwargs: dict(
+        status="pass", volumes=dict(material_mm3=1.0), checks=dict(safety=dict(status="pass", safety_factor=9.9))))
+    seen = []
+
+    def width_check(mask, cells, exempt):
+        seen.append((mask, cells, exempt))
+        return False
+
+    monkeypatch.setattr(binary_search, "_mask_satisfies_min_width", width_check)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "fill_infeasible" and result["body_id"] is None
+    assert "min_width" in result["warning"]
+    assert len(seen) == 1 and seen[0][1] == 2
+    assert seen[0][2] is not None and np.asarray(seen[0][2]).shape == seen[0][0].shape
     assert [body.id for body in session.document.bodies] == before

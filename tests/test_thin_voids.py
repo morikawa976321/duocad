@@ -75,3 +75,17 @@ def test_fill_tubes_refuses_to_stop_with_tubes_left(monkeypatch):
     with pytest.raises(RuntimeError, match='埋めても残る'):
         fill_tubes(mask, np.ones_like(mask))
     assert MAX_ROUNDS >= 3  # 64条件の実測(最大3回)より大きいこと
+
+
+def test_filling_a_tube_can_break_min_width_and_needs_reinspection():
+    from duocad.topopt.binary_search import _mask_satisfies_min_width
+
+    mask = np.zeros((12, 12, 12), dtype=bool)
+    for x, y, z in [(2, 6, 0), (7, 1, 2), (0, 3, 6), (2, 4, 4), (7, 2, 8), (9, 3, 2),
+                    (7, 6, 3), (2, 0, 3), (1, 2, 2), (9, 4, 6), (4, 3, 0)]:
+        mask[x:x+3, y:y+3, z:z+3] = True
+    assert _mask_satisfies_min_width(mask, 3)
+    filled, info = fill_tubes(mask, np.ones_like(mask))
+    assert info['cells'] > 0
+    assert not _mask_satisfies_min_width(filled, 3)
+    assert _mask_satisfies_min_width(filled, 3, exempt=filled & ~mask)

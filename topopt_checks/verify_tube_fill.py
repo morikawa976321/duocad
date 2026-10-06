@@ -41,6 +41,20 @@ def _spec(name: str) -> dict:
     return dict(name=name, load_n=int(load[1:]), element_size_mm=float(size[1:]), cells=int(width[1:]))
 
 
+def _inspect_saved_mask(mask, conditions, captured):
+    from duocad.topopt import acceptance, binary_search
+
+    started = time.perf_counter()
+    report = acceptance.inspect(mask, mask, conditions.grid, **conditions.inspect_kwargs())
+    captured["search_inspect_seconds"] = time.perf_counter() - started
+    captured["search_report"] = report
+    passed = report["status"] == "pass"
+    best = binary_search.FeasibleModel(mask=mask, before_mask=mask, report=report, trial_index=0) if passed else None
+    return binary_search.SearchResult(status="feasible" if passed else "no_feasible_found",
+                                      termination="replayed" if passed else "replayed_input_infeasible",
+                                      best_feasible=best, history=[], evaluations=1, conditions_identifier="replayed")
+
+
 def run_one(name: str) -> int:
     import numpy as np
     from unittest.mock import patch
@@ -49,7 +63,7 @@ def run_one(name: str) -> int:
     from _documents import open_session
     from sweep_smoothing_corpus import _set_load
     from duocad import optimize_run
-    from duocad.topopt import acceptance, binary_search, trace
+    from duocad.topopt import binary_search, trace
 
     spec = _spec(name)
     record: dict = dict(name=name, **{k: v for k, v in spec.items() if k != "name"})
@@ -63,13 +77,7 @@ def run_one(name: str) -> int:
             raise RuntimeError(f"保存済みマスクと設計空間の形が違う: {saved_mask.shape} / {design_space_mask.shape}")
         if (saved_mask & ~np.asarray(design_space_mask, dtype=bool)).any():
             raise RuntimeError("保存済みマスクが設計空間の外に材料を持つ")
-        t0 = time.perf_counter()
-        report = acceptance.inspect(saved_mask, saved_mask, conditions.grid, **conditions.inspect_kwargs())
-        captured["search_inspect_seconds"] = time.perf_counter() - t0
-        captured["search_report"] = report
-        best = binary_search.FeasibleModel(mask=saved_mask, before_mask=saved_mask, report=report, trial_index=0)
-        return binary_search.SearchResult(status="feasible", termination="replayed", best_feasible=best,
-                                          history=[], evaluations=1, conditions_identifier="replayed")
+        return _inspect_saved_mask(saved_mask, conditions, captured)
 
     try:
         with tempfile.TemporaryDirectory(prefix="tube-fill-trace-") as trace_root, \
@@ -88,7 +96,8 @@ def run_one(name: str) -> int:
             search = captured.get("search_report", {})
             record.update(
                 status="ok" if result["state"] == "done" else "not_done", state=result["state"], warning=result.get("warning"),
-                search_status=search.get("status"), search_safety_factor=result.get("search_safety_factor"),
+                search_status=search.get("status"),
+                search_safety_factor=search.get("checks", {}).get("safety", {}).get("safety_factor"),
                 safety_factor=result.get("safety_factor"), search_target=result.get("search_target_safety_factor"),
                 filled_cells=result.get("filled_cells"), fill_rounds=None if fill is None else fill.get("rounds"),
                 fill_report_status=None if fill is None or "report" not in fill else fill["report"]["status"],

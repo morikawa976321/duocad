@@ -926,7 +926,7 @@ def _run(
         {"state": "done" | "empty_condition_faces" | "unrepresented_regions"
                   | "boundary_mapping_failed"
                   | "no_feasible_found" | "input_contradiction" | "resolution_insufficient"
-                  | "fill_infeasible",                       # 空隙を埋めた形が6条件に不合格
+                  | "fill_infeasible",                       # 空隙を埋めた形が6条件または最小幅に不合格
          "search_safety_factor": float|None, "filled_cells": int|None,
          "body_id": BodyId | None, "name": str | None,
          "warning": str | None,
@@ -1187,6 +1187,10 @@ def _run(
     if fill["cells"]:
         pump.emit(phase="fill", message=f"{fill['cells']} セルを埋めたので6条件を取り直す")
         report = acceptance.inspect(mask, mask, space.grid, **conditions.inspect_kwargs())
+        width_ok = binary_search._mask_satisfies_min_width(mask, min_width["cells"], conditions.keep_cells)
+        report["checks"]["min_width"] = dict(status="pass" if width_ok else "fail", cells=min_width["cells"])
+        if not width_ok:
+            report.update(status="fail", exit_code=1)
         trace.snapshot('tube-fill', **fill, search_safety_factor=safety_factor, report=report)
         if report["status"] != "pass":
             failed = [key for key, check in report["checks"].items() if check["status"] != "pass"]
@@ -1196,7 +1200,7 @@ def _run(
                 started,
                 keep_room_warning,
                 state="fill_infeasible",
-                warning=(f"平滑化で潰れる 1×1 の空隙 {fill['cells']} セルを埋めた形が6条件に不合格({', '.join(failed)})。"
+                warning=(f"平滑化で潰れる 1×1 の空隙 {fill['cells']} セルを埋めた形が受入条件に不合格({', '.join(failed)})。"
                          f"探索の安全率 {safety_factor:.4g}、埋めた後 {safety.get('safety_factor', float('nan')):.4g}"
                          f"(探索の目標 {search_target:.4g})"),
                 unrepresented_regions=unrepresented,

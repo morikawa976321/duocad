@@ -655,7 +655,7 @@ export interface OptimizeResultPayload {
     | 'no_feasible_found'
     | 'input_contradiction'
     | 'resolution_insufficient'
-    /** 探索後に平滑化で潰れる 1×1 の空隙を埋めた形が6条件に不合格(`optimize_run` の `thin_voids`)。 */
+    /** 探索後に平滑化で潰れる 1×1 の空隙を埋めた形が6条件または最小幅に不合格。 */
     | 'fill_infeasible'
   warning: string | null
   body_id: string | null
