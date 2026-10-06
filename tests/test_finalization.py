@@ -69,6 +69,55 @@ def test_cut_cannot_silently_leave_two_solids():
         finalize(v, f, [], [box((1, -1, -1), (2, 3, 3))])
 
 
+@pytest.mark.parametrize('offset', [0, 10000])
+def test_detached_inward_shell_is_not_a_cavity(offset):
+    from duocad.topopt.finalize import input_mesh_checks
+    v, f = mesh_of(box((0, 0, 0), (4, 4, 4)))
+    u, g = mesh_of(box((6, 0, 0), (7, 1, 1)))
+    vertices = np.vstack([v, u]) + offset
+    faces = np.vstack([f, g[:, ::-1] + len(v)])
+    assert input_mesh_checks(vertices, faces)['failed'] == ['invalid_shell_orientation']
+    assert final_mesh_checks(vertices, faces)['failed'] == ['invalid_shell_orientation']
+    with pytest.raises(ValueError, match='invalid_shell_orientation'):
+        finalize(vertices, faces, [], [])
+
+
+@pytest.mark.parametrize('inner_outward', [False, True])
+def test_nested_shell_orientation_matches_containment(inner_outward):
+    from duocad.topopt.finalize import input_mesh_checks
+    v, f = mesh_of(box((0, 0, 0), (4, 4, 4)))
+    u, g = mesh_of(box((1, 1, 1), (3, 3, 3)))
+    vertices = np.vstack([v, u])
+    faces = np.vstack([f, (g if inner_outward else g[:, ::-1]) + len(v)])
+    checks = input_mesh_checks(vertices, faces)
+    if inner_outward:
+        assert checks['failed'] == ['invalid_shell_orientation']
+    else:
+        assert checks['failed'] == []
+        rv, rf = finalize(vertices, faces, [], [])
+        assert final_mesh_checks(rv, rf)['cavities'] == 1
+
+
+def test_material_inside_a_cavity_is_a_second_solid():
+    from duocad.topopt.finalize import input_mesh_checks
+    vertices, faces = [], []
+    for lo, hi, outward in [(0, 6, True), (1, 5, False), (2, 4, True)]:
+        v, f = mesh_of(box((lo, lo, lo), (hi, hi, hi)))
+        faces.append((f if outward else f[:, ::-1]) + sum(len(x) for x in vertices))
+        vertices.append(v)
+    vertices, faces = np.vstack(vertices), np.vstack(faces)
+    assert input_mesh_checks(vertices, faces)['failed'] == []
+    checks = final_mesh_checks(vertices, faces)
+    assert checks['failed'] == ['single_solid'] and checks['solids'] == 2
+
+
+def test_shell_inside_bounding_box_but_outside_material_is_not_a_cavity():
+    v, f = mesh_of(BRepPrimAPI_MakeCylinder(3, 4).Shape())
+    u, g = mesh_of(box((2.5, 2.5, 1), (2.6, 2.6, 2)))
+    checks = final_mesh_checks(np.vstack([v, u]), np.vstack([f, g[:, ::-1] + len(v)]))
+    assert checks['failed'] == ['invalid_shell_orientation']
+
+
 def test_disconnected_preserve_cannot_be_dropped():
     v, f = mesh_of(box((0, 0, 0), (1, 1, 1)))
     with pytest.raises(ValueError, match='単一ソリッド'):

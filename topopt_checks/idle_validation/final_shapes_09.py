@@ -3,7 +3,7 @@
 結果と解釈は `docs/topopt_idle_validation/09_FINAL_SHAPES.md`。製品コード(`duocad.topopt.*`)は変更しない。新規の最適化はしない。
 1形状 = 1子プロセス(`run_09_final_shapes.py` がwall timeoutを掛ける)。
 
-    convert:  マスクの前検査 → 平滑化(`build_surface_from_mask`) → 製品の `finalize`(保持・除外のブーリアン)→ `solid_mesh`
+    convert:  マスクの前検査 → 平滑化(`build_surface_from_mask`) → 製品の `finalize`(保持・除外のメッシュ集合演算)
               → 最終メッシュを同じ格子と半分の格子へ占有化 → 最小幅を半格子で測る。FEMなし。
     resolve:  最終メッシュ(ブーリアン不成立なら平滑化メッシュ。smoothed_keep はそれに保持セルを足した、最終ブーリアンの
               保持のfuseの近似)を同じ格子へ占有化したマスクを1回FEMで解く。条件(荷重・拘束の節点被覆)が通らなければFEMへ進まない。
@@ -182,8 +182,7 @@ def _diff(a: np.ndarray, b: np.ndarray) -> dict:
 
 def convert(shape_id: str) -> dict:
     from duocad.mesh_geometry import TOPOLOGY_DEFECTS, topology
-    from duocad.kernel_brep import inspect_solid
-    from duocad.topopt.finalize import final_mesh_checks, finalize, solid_mesh
+    from duocad.topopt.finalize import final_mesh_checks, finalize
 
     t0 = time.perf_counter()
     ld = load_shape(shape_id)
@@ -217,19 +216,17 @@ def convert(shape_id: str) -> dict:
 
     t1 = time.perf_counter()
     try:
-        solid = finalize(world, surface.faces,
+        fv, ff = finalize(world, surface.faces,
                          [doc.get_body(b).shape for b in bundle.keep_body_ids],
                          [doc.get_body(b).shape for b in bundle.exclude_body_ids])
         rec["finalize_seconds"] = time.perf_counter() - t1
-        inspected = inspect_solid(solid)
-        fv, ff = solid_mesh(solid)
         checks = final_mesh_checks(fv, ff)
         final_mask, _ = _occupancy(fv, ff, grid)
         np.savez_compressed(WORK / f"{shape_id}_final_mask.npz", mask=final_mask)
         np.savez_compressed(WORK / f"{shape_id}_final_mesh.npz", vertices=fv.astype(np.float32), faces=ff.astype(np.int32))
         rec["final"] = dict(
             status="ok", triangles=int(len(ff)), volume_mm3=float(topo_mesh.mesh_volume(fv, ff)),
-            solid=inspected, mesh_checks_failed=checks["failed"],
+            mesh_checks=checks, mesh_checks_failed=checks["failed"],
             stats=_mask_stats(final_mask, ctx), vs_voxel=_diff(mask, final_mask),
             conditions=_conditions(final_mask, ctx), fine_width=_fine_width_report(fv, ff, ctx, mask))
     except Exception as error:

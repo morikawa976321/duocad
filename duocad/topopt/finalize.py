@@ -58,12 +58,39 @@ def signed_volumes(vertices, faces, components):
     return volumes
 
 
+def invalid_shell_orientation(vertices, faces, components):
+    """交差のない閉殻の包含深さと向きを照合する。接続・自己交差検査に合格した入力専用。"""
+    triangles = [vertices[faces[component]] for component in components]
+    bounds = [(tri.min(axis=(0, 1)), tri.max(axis=(0, 1))) for tri in triangles]
+    volumes = signed_volumes(vertices, faces, components)
+    for i, tri in enumerate(triangles):
+        point = tri[0, 0]
+        depth = 0
+        for j, outer in enumerate(triangles):
+            if i == j or np.any(point < bounds[j][0]) or np.any(point > bounds[j][1]):
+                continue
+            # 閉殻全体の立体角は内部で ±4π、外部で0。交差が無いので代表頂点1つで包含を判定できる。
+            rays = outer - point
+            rays /= np.linalg.norm(rays, axis=2)[..., None]
+            a, b, c = rays[:, 0], rays[:, 1], rays[:, 2]
+            numerator = np.einsum('ij,ij->i', a, np.cross(b, c))
+            denominator = (1 + np.einsum('ij,ij->i', a, b) + np.einsum('ij,ij->i', b, c)
+                           + np.einsum('ij,ij->i', c, a))
+            winding = np.arctan2(numerator, denominator).sum() / (2 * np.pi)
+            if not np.isfinite(winding):
+                return True
+            depth += abs(winding) > 0.5
+        if volumes[i] == 0 or (volumes[i] > 0) != (depth % 2 == 0):
+            return True
+    return False
+
+
 def input_mesh_checks(vertices, faces):
     """集合演算へ渡すメッシュ(平滑化後の表面・三角形化した保持・除外)の合否。
 
     manifold3d は閉じて向きが揃い交差の無い入力を前提にし、交差があっても止まらず結果に交差を残す
     (docs/TOPOPT_MESH_BOOLEAN_STUDY.md「集合演算のみの結果」の偏差 0.002 mm)。接続6項目・向き
-    (符号付き体積の和が正)・自己交差を見る。戻り値は JSON 化できる辞書で、`failed` に不合格の項目名を並べる。
+    (包含深さと閉殻の向きの一致)・自己交差を見る。戻り値は JSON 化できる辞書で、`failed` に不合格の項目名を並べる。
     """
     stats, components = topology(vertices, faces)
     failed = [key for key in TOPOLOGY_DEFECTS if stats[key]]
@@ -73,6 +100,8 @@ def input_mesh_checks(vertices, faces):
     intersections = triangle_intersections(vertices, faces)
     if intersections['pairs']:
         failed.append('self_intersections')
+    if not failed and invalid_shell_orientation(vertices, faces, components):
+        failed.append('invalid_shell_orientation')
     return dict(failed=failed, topology=stats, volumes=volumes,
                 self_intersections=dict(counts=intersections['counts'], candidates=intersections['candidates'],
                                         pairs=intersections['pairs'][:50]))
@@ -83,7 +112,7 @@ def final_mesh_checks(vertices, faces):
 
     - 接続6項目(`topology`)は float64 の頂点で見る(現行の契約)。
     - 単一ソリッド: 接続成分のうち符号付き体積が正のもの(材料)がちょうど1つ。負のもの(空洞)は数えて残し、
-      0 のものは不合格。
+      0 のもの、および包含深さに対して向きが不正なものは不合格。
     - **float32 に丸めた座標**でも見る: STL(`meshbody.write_stl`)も画面(three.js の Float32Array)も
       float32 で消費するので、成果物の自己交差・縮退・頂点の一致は丸めた座標について判定する。
       float64 で正常でも丸めで別の頂点が同じ座標になったり三角形が潰れたりしうる。
@@ -107,6 +136,8 @@ def final_mesh_checks(vertices, faces):
     intersections = triangle_intersections(rounded, faces)
     if intersections['pairs']:
         failed.append('self_intersections')
+    if not failed and invalid_shell_orientation(rounded, faces, components):
+        failed.append('invalid_shell_orientation')
     return dict(failed=failed, topology=stats, solids=solids, cavities=cavities, volume_mm3=float(sum(volumes)),
                 float32=dict(merged_vertices=merged, degenerate_triangles=degenerate),
                 self_intersections=dict(counts=intersections['counts'], candidates=intersections['candidates'],
