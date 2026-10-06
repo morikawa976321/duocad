@@ -7,7 +7,7 @@
    * **`duocad/models/` の中身を一覧で見せて、クリック1つで開く**。`BrowserPanel.svelte`
    * と同じ作りで、**状態はコアが持つ**(`documents` はサーバの
    * `list_documents` が返した一覧の写しで、ここでは何も覚えない)。保存・開く・一覧はどれも
-   * `documentFiles.svelte.ts` が `session.runVerb(...)` で直接送る(`CommandHost` は経由しない ——
+   * `documentFiles.svelte.ts` が `session.sendCommand(...)` で直接送る(`CommandHost` は経由しない ——
    * 一覧からのクリックは「対象を選ぶ」そのものであって、引数収集の状態機械を通す理由が無い)。
    *
    * **ブラウザのネイティブファイルダイアログ(File System Access API)は使わない**。実際に
@@ -40,7 +40,7 @@
    * ので、確認の文言でそれを言う。
    *
    * **一覧の下に置くのは書き出しの2つだけ**(STEP書き出し・STL書き出し)。どちらも
-   * 保存/開くと同じ形で `documentFiles.svelte.ts` が `session.runVerb(...)` を直接呼ぶ
+   * 保存/開くと同じ形で `documentFiles.svelte.ts` が `session.sendCommand(...)` を直接呼ぶ
    * (`CommandHost` を経由しない)。**文書を変えないから**ここでよい ——
    * 操作ログに載らず、undoの対象でもなく、モデルは1ミリも動かない。
    *

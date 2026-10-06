@@ -10,7 +10,7 @@ import { changesDocument } from './commands/files'
 import type { DocumentInfo, FilePayload, ServerState } from './session'
 
 export interface DocumentFilesDeps {
-  runVerb(verb: string, args: Record<string, unknown>, op: number): void
+  sendCommand(cmd: string, args: Record<string, unknown>, op: number): void
   /** この画面が出した操作の番号を1つ取る。 */
   nextOp(): number
   /** その番号の応答が来るまで、次の確定を止める。 */
@@ -159,7 +159,7 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     const queue = uploading.get(currentName) ?? []
     queue.push(png)
     uploading.set(currentName, queue)
-    deps.runVerb('save_thumbnail', { name: currentName, png }, deps.nextOp())
+    deps.sendCommand('save_thumbnail', { name: currentName, png }, deps.nextOp())
   }
 
   /** 撮る予定が残っていれば今撮る(開く・新規で文書が差し替わる前に呼ぶ)。 */
@@ -208,7 +208,7 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
   }
 
   function refresh(): void {
-    deps.runVerb('list_documents', {}, deps.nextOp())
+    deps.sendCommand('list_documents', {}, deps.nextOp())
   }
 
   function scheduleRefresh(): void {
@@ -231,11 +231,11 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     }
   })
 
-  function run(verb: string, args: Record<string, unknown>): void {
+  function run(cmd: string, args: Record<string, unknown>): void {
     const op = deps.nextOp()
     lastOp = op
-    if (changesDocument(verb)) deps.hold(op)
-    deps.runVerb(verb, args, op)
+    if (changesDocument(cmd)) deps.hold(op)
+    deps.sendCommand(cmd, args, op)
   }
 
   return {
@@ -324,15 +324,15 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     },
     open(name) {
       flushCapture()
-      deps.runVerb('open_document', { name }, deps.nextOp())
+      deps.sendCommand('open_document', { name }, deps.nextOp())
     },
     create() {
       flushCapture()
-      deps.runVerb('new_document', {}, deps.nextOp())
+      deps.sendCommand('new_document', {}, deps.nextOp())
     },
     close() {
       flushCapture()
-      deps.runVerb('close_document', {}, deps.nextOp())
+      deps.sendCommand('close_document', {}, deps.nextOp())
     },
     exportStep(path) {
       run('export_step', { path })
@@ -348,7 +348,7 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
       const cached = thumbnails[name]
       if (cached !== undefined && cached.version >= version) return
       fetching.add(name)
-      deps.runVerb('get_thumbnail', { name }, deps.nextOp())
+      deps.sendCommand('get_thumbnail', { name }, deps.nextOp())
     },
     dropThumbnailRequests() {
       fetching.clear()

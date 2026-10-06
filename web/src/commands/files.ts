@@ -2,7 +2,7 @@
  * ファイル操作 —— **`CommandDef` はここに1つだけある**(`import_step`)。
  *
  * 保存/開く/新規/一覧/STEP書き出し/STL書き出しは `FilesPanel.svelte`(左サイドバー)が
- * 担当し、`session.runVerb(...)` を直接呼ぶ(`CommandHost` を経由しない)。
+ * 担当し、`session.sendCommand(...)` を直接呼ぶ(`CommandHost` を経由しない)。
  *
  * **STEP読み込みだけはverbの行(`CommandHost`)に並ぶ。** 書き出しと違って、これは
  * 文書を変えるverbである(`changesDocument` が下で `import_step` だけを真にしているのと
