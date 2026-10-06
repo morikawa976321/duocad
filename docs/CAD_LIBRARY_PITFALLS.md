@@ -101,7 +101,14 @@
   穴の内壁もピンの外側も同じ「全周円筒」になる。ソリッド数 → 1部品かアセンブリか、体積を既知の式
   (π·r²·h)と突き合わせる、の順が安い。他人の配布データが混在するフォルダで面の統計から
   「本人の設計」を推定するのは危うい。
-
+- **duocad 自身の STEP 書き出し(`io_step.py export_step` → `kernel.write_step`、`STEPControl_Writer` を AsIs で使用)は
+  `Interface_Static` を触っていないので OCCT 既定の AP214・mm で出る。部品名は載らない。** 実測(2026-10-06、
+  穴あき直方体 50×30×10・φ6 と 20×20×10 ×2): OCP/build123d で再読込して体積 14717.26 / 8000、面 7、
+  `BRepCheck_Analyzer` と `is_valid` とも True。ヘッダは `FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'))`、
+  `SI_UNIT(.MILLI.,.METRE.)`、`PRODUCT('Open CASCADE STEP translator 7.9 1',…)`。Body 名は出力に反映されず
+  (XDE 未使用)、複数ボディは `NEXT_ASSEMBLY_USAGE_OCCURRENCE` でアセンブリ構造になる。非表示ボディは黙って除外
+  (応答の `skipped_hidden` に載る)、メッシュボディは例外で拒否(`io_step.py` L78-84)。Fusion/FreeCAD/SolidWorks での
+  実読は未検証。部品名を付けるなら XDE(`STEPCAFControl_Writer`)への切替か、build123d で label を付けて再書き出し(未試験)。
 ## Python 実行環境(`.venv` / pytest)
 
 - **PATH の `python` で `python -m pytest` を回すと、OCP を import する全モジュールが
