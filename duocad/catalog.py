@@ -1369,8 +1369,8 @@ COMMANDS: tuple[Command, ...] = (
         mcp=False,
         note=(
             "**コードからだけ呼ぶverb**(実体は `duocad/verbs/add_solid.py`)。製品は呼ばない(形状最適化の"
-            "結果は `add_mesh_body` のメッシュボディで入る)。この verb を含む保存済み文書の再生と"
-            "`topopt_checks/replay_finalization.py` のために残す。人にもAIにも開けていない —— 引数はB-repの"
+            "結果は `add_mesh_body` のメッシュボディで入る)。この verb を含む保存済み文書の再生と、"
+            "`check_final_shape.py --solid-body` の検査対象を作るテストのために残す。人にもAIにも開けていない —— 引数はB-repの"
             "本文そのもので手で書くものではなく、CADを持ち込む口は `import_step` である。"
             "**それでもここに宣言するのは**、操作ログに載るverbとツールの顔ぶれを突き合わせる"
             "検査(`tests/test_mcp_verbs.py`)が、`mcp=False` かつ `ws=\"none\"` という宣言を"
