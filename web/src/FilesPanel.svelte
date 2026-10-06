@@ -32,7 +32,7 @@
    *
    * **一覧の行からは、開く・別名で複製・削除ができる**(issue #17)。複製と削除はディスク上の
    * ファイルの整理であって、いま編集している文書は変わらない(`open_document` とは別の操作)。
-   * 複製先の名前は行の直下の欄に `<元の名前>-copy.json` を先埋めして Enter で確定する(打ち直せる。
+   * 複製先の名前は行の直下の欄に `<元の名前>-copy` を先埋めして Enter で確定する(打ち直せる。
    * 既にあればサーバが拒否する)。**削除は2段階**(「削除」→ 行の直下に「本当に削除」が出る。
    * モーダルは出さない) —— 「開くのに確認を挟まない」の根拠は「消えるのは未保存の
    * 編集だから」であり、ディスクの保存済みファイルには当たらない(本人判断 2026-09-16)。
@@ -49,6 +49,9 @@
    * なくモデリングの1手である。**SVG読み込み(`import_svg`)も同じ理由でここには無い**
    * (`commands/sketch.ts` の `IMPORT_SVG` を見よ)。
    *
+   * **名前とパスの欄は拡張子を打たせない**(`SuffixField.svelte`)。`.json` / `.step` / `.stl` は
+   * 欄の右に固定で出ていて、送るときに付ける(本人指示 2026-10-07)。
+   *
    * **送信後もパス欄は消さない**(ファイル名欄=`draftName`とは逆の規律)。STEP/STLのパスは
    * 同じ値へ書き出し直す・同じファイルを読み直すことが多く、毎回打ち直させると手間になる
    * ——「名前を変える」が消すのは1回きりの新しい名前だからで、性質が違う。
@@ -56,6 +59,7 @@
   import { tick } from 'svelte'
   import { pathLike } from './commands/command'
   import type { DocumentInfo } from './session'
+  import SuffixField, { withSuffix, withoutSuffix } from './SuffixField.svelte'
 
   let {
     documents,
@@ -117,7 +121,7 @@
   let draftName = $state('')
 
   /**
-   * 打った名前が使える形か(空・区切り文字・`.`/`..`・コロン・前後の空白・`.json` 必須)。
+   * 打った名前(拡張子 `.json` は欄の外で付く)が使える形か(空・区切り文字・`.`/`..`・コロン・前後の空白)。
    *
    * **最終判定はサーバ**(`Session._resolve_document_name` の `is_relative_to` 検査)。
    * ここでの検査は明らかに拒まれる形を早く言うための入力補助でしかなく、実在チェックはしない
@@ -130,12 +134,11 @@
    */
   function nameProblem(text: string): string | null {
     const trimmed = text.trim()
-    if (trimmed === '') return 'ファイル名を打つ(例: model.json)'
+    if (trimmed === '') return 'ファイル名を打つ(例: model)'
     if (trimmed !== text) return '前後の空白は使えない'
     if (trimmed.includes('/') || trimmed.includes('\\')) return '区切り文字は使えない(ファイル名だけ)'
     if (trimmed.includes(':')) return "':' は使えない(ドライブ指定・代替ストリームの入口になる)"
     if (trimmed === '.' || trimmed === '..') return '使えないファイル名'
-    if (!trimmed.toLowerCase().endsWith('.json')) return '拡張子は.json(一覧はmodels/の*.jsonだけを見る)'
     return null
   }
 
@@ -143,7 +146,7 @@
 
   function submitDraft(): void {
     if (draftProblem !== null) return
-    onRename(draftName.trim())
+    onRename(withSuffix(draftName, '.json'))
     draftName = ''
   }
 
@@ -198,14 +201,14 @@
   let deletingName = $state<string | null>(null)
 
   /**
-   * 複製先の先埋め: `<元の名前>-copy.json`。既にあれば `-copy2` `-copy3` …
+   * 複製先の先埋め: `<元の名前>-copy`(拡張子は欄の外)。既にあれば `-copy2` `-copy3` …
    * (手元の一覧で見るだけ。**存在の正はサーバ**で、打ち直して衝突すれば拒否される)。
    */
   function suggestCopyName(source: string): string {
-    const stem = source.toLowerCase().endsWith('.json') ? source.slice(0, -5) : source
+    const stem = withoutSuffix(source, '.json')
     const taken = new Set(documents.map((file) => file.name))
-    let candidate = `${stem}-copy.json`
-    for (let n = 2; taken.has(candidate); n += 1) candidate = `${stem}-copy${n}.json`
+    let candidate = `${stem}-copy`
+    for (let n = 2; taken.has(`${candidate}.json`); n += 1) candidate = `${stem}-copy${n}`
     return candidate
   }
 
@@ -225,7 +228,7 @@
 
   function submitCopy(): void {
     if (copyingFrom === null || copyProblem !== null) return
-    onCopy(copyingFrom, copyName.trim())
+    onCopy(copyingFrom, withSuffix(copyName, '.json'))
     copyingFrom = null
     copyName = ''
   }
@@ -260,7 +263,7 @@
 
   function submitExportStep(): void {
     if (exportStepProblem !== null) return
-    onExportStep(exportStepPath.trim())
+    onExportStep(withSuffix(exportStepPath, '.step'))
   }
 
   let exportStlPath = $state('')
@@ -268,7 +271,7 @@
 
   function submitExportStl(): void {
     if (exportStlProblem !== null) return
-    onExportStl(exportStlPath.trim())
+    onExportStl(withSuffix(exportStlPath, '.stl'))
   }
 
   /** Enterで、その行のボタンと同じことをする。 */
@@ -305,13 +308,11 @@
     <!-- 名前欄 = **いま編集しているファイルの改名**(冒頭のdocstring)。無題なら「名前を付ける」。
          置き場所の欄は空のまま、いまの名前を薄く見せる。 -->
     <div class="new-row">
-      <input
+      <SuffixField
         id="file-name-input"
-        type="text"
-        autocomplete="off"
-        placeholder={currentName ?? 'model.json'}
-        value={draftName}
-        oninput={(event) => (draftName = (event.target as HTMLInputElement).value)}
+        suffix=".json"
+        placeholder={currentName === null ? 'model' : withoutSuffix(currentName, '.json')}
+        bind:value={draftName}
         onkeydown={(event) => onRowEnter(event, submitDraft)}
       />
       <button id="file-rename" onclick={submitDraft} disabled={draftProblem !== null}>
@@ -413,13 +414,10 @@
       {#if copyingFrom === file.name}
         <!-- 複製先の名前。先埋めしてあるので Enter だけで通る(打ち直してもよい)。 -->
         <div class="new-row copy-row" data-copy-of={file.name}>
-          <input
+          <SuffixField
             id="file-copy-name"
-            type="text"
-            autocomplete="off"
-            spellcheck="false"
-            value={copyName}
-            oninput={(event) => (copyName = (event.target as HTMLInputElement).value)}
+            suffix=".json"
+            bind:value={copyName}
             onkeydown={(event) => {
               if (event.key === 'Escape') {
                 event.preventDefault()
@@ -444,14 +442,11 @@
   {#if documentOpen}
     <div class="io-section">
       <div class="new-row">
-        <input
+        <SuffixField
           id="file-export-step-path"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="part.step"
-          value={exportStepPath}
-          oninput={(event) => (exportStepPath = (event.target as HTMLInputElement).value)}
+          suffix=".step"
+          placeholder="part"
+          bind:value={exportStepPath}
           onkeydown={(event) => onRowEnter(event, submitExportStep)}
         />
         <button id="file-export-step" onclick={submitExportStep} disabled={exportStepProblem !== null}>
@@ -463,14 +458,11 @@
       {/if}
 
       <div class="new-row">
-        <input
+        <SuffixField
           id="file-export-stl-path"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="part.stl"
-          value={exportStlPath}
-          oninput={(event) => (exportStlPath = (event.target as HTMLInputElement).value)}
+          suffix=".stl"
+          placeholder="part"
+          bind:value={exportStlPath}
           onkeydown={(event) => onRowEnter(event, submitExportStl)}
         />
         <button id="file-export-stl" onclick={submitExportStl} disabled={exportStlProblem !== null}>
@@ -514,11 +506,6 @@
     display: flex;
     gap: 4px;
     flex: 0 0 auto;
-  }
-
-  .new-row input {
-    flex: 1 1 auto;
-    min-width: 0;
   }
 
   .new-row button {
