@@ -43,6 +43,7 @@ from .. import selection
 from ..entry import entry
 from ._common import (
     add_transformed_copies,
+    number_copies,
     copy_ids,
     editable_bodies,
     remove_created_bodies,
@@ -94,8 +95,9 @@ def mirror_body(
     normal = plane_args["plane_normal"]
 
     new_ids = copy_ids(len(bodies), created_ids, verb="mirror_body")
+    numbers = number_copies(doc, len(bodies))
     add_transformed_copies(
-        doc, bodies, lambda shape: kernel.mirror_shape(shape, point, normal, copy=True), new_ids
+        doc, bodies, lambda shape: kernel.mirror_shape(shape, point, normal, copy=True), new_ids, numbers
     )
 
     return doc.log.append(
@@ -104,6 +106,7 @@ def mirror_body(
             "bodies": [body.id for body in bodies],
             **plane_args,
             "created": list(new_ids),
+            "numbers": numbers,
         },
     )
 
@@ -116,7 +119,11 @@ def _do_mirror_body(document: Document, operation: Operation) -> None:
     normal = [float(value) for value in args["plane_normal"]]
     new_ids = copy_ids(len(bodies), list(args.get("created") or []), verb="mirror_body")
     add_transformed_copies(
-        document, bodies, lambda shape: kernel.mirror_shape(shape, point, normal, copy=True), new_ids
+        document,
+        bodies,
+        lambda shape: kernel.mirror_shape(shape, point, normal, copy=True),
+        new_ids,
+        args.get("numbers"),
     )
 
 

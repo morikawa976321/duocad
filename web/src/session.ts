@@ -176,6 +176,8 @@ export interface SketchPattern {
 
 export interface SketchState {
   sketch_id: string
+  /** 表示名(作成時の通し番号か `rename` で付けた名前)。番号の記録が無い古い文書のスケッチだけ null。 */
+  name: string | null
   plane: PlaneRef
   /** 表示/非表示(`BodyMeta.visible` と同じくコアのセッション状態。保存されない)。 */
   visible: boolean

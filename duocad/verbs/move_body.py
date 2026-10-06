@@ -42,6 +42,7 @@ from ._common import (
     MODE_ROTATE,
     MODE_TRANSLATE,
     add_transformed_copies,
+    number_copies,
     copy_ids,
     editable_bodies,
     finite_numbers,
@@ -246,9 +247,12 @@ def move_body(
     args = {"bodies": [body.id for body in bodies], "mode": mode, **shaped, "copy": bool(copy)}
     transform = _shape_transform(args)
 
+    numbered: dict = {}
     if copy:
         new_ids = copy_ids(len(bodies), created_ids, verb="move_body")
-        add_transformed_copies(doc, bodies, lambda shape: transform(shape, True), new_ids)
+        numbers = number_copies(doc, len(bodies))
+        add_transformed_copies(doc, bodies, lambda shape: transform(shape, True), new_ids, numbers)
+        numbered = {"numbers": numbers}
     else:
         new_ids = []
         _do_move(bodies, transform)
@@ -259,6 +263,7 @@ def move_body(
             **args,
             # **作ったIDはログが持つ**(再生で同じIDになる。`extrude` の `body_id` と同じ流儀)
             "created": list(new_ids),
+            **numbered,
         },
     )
 
@@ -294,7 +299,9 @@ def _do_move_body(document: Document, operation: Operation) -> None:
     transform = _shape_transform(args)
     if args.get("copy"):
         new_ids = copy_ids(len(bodies), list(args.get("created") or []), verb="move_body")
-        add_transformed_copies(document, bodies, lambda shape: transform(shape, True), new_ids)
+        add_transformed_copies(
+            document, bodies, lambda shape: transform(shape, True), new_ids, args.get("numbers")
+        )
     else:
         _do_move(bodies, transform)
 

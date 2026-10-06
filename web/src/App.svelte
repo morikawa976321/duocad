@@ -1984,6 +1984,22 @@
     for (const item of sketches) if (!item.visible) setSketchVisible(item.sketch_id, true)
   }
 
+  /** ブラウザの行の名前(コアの `rename`。ボディもスケッチも同じ口)。 */
+  function renameItem(target: string, name: string): void {
+    sendTracked('rename', { target, name })
+  }
+
+  /** ブラウザの行の ✕(コアの `delete_items`)。選択は使わない。 */
+  function deleteBody(id: string): void {
+    sendTracked('delete_items', { bodies: [id] })
+  }
+
+  /** 編集中のスケッチを消すときは先に抜ける(消えた後の配信でも抜けるが、待たずに描くのをやめる)。 */
+  function deleteSketch(id: string): void {
+    if (id === sketchId) exitSketch()
+    sendTracked('delete_items', { sketches: [id] })
+  }
+
   /** 編集中のスケッチは残す(行のトグルが無効なのと同じ線。`BrowserPanel.svelte`)。 */
   function hideAllSketches(): void {
     for (const item of sketches) {
@@ -2434,6 +2450,9 @@
           onShowAllSketches={showAllSketches}
           onHideAllSketches={hideAllSketches}
           onToggleOrigin={display.applyOriginVisible}
+          onRename={renameItem}
+          onDeleteBody={deleteBody}
+          onDeleteSketch={deleteSketch}
           onSectionToggle={display.toggleSection}
           onSectionPlane={display.setSectionPlane}
           onSectionPosition={display.setSectionPosition}

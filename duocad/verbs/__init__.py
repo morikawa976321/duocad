@@ -9,7 +9,7 @@ from .add_mesh import add_mesh_body  # noqa: F401
 from .add_solid import add_solid_body  # noqa: F401
 from .boolean_body import boolean_body  # noqa: F401
 from .chamfer import chamfer  # noqa: F401
-from .delete import delete  # noqa: F401
+from .delete import delete, delete_items  # noqa: F401
 from .envelope_regions import envelope_regions  # noqa: F401
 from .extrude import extrude, extrude_faces  # noqa: F401
 from . import extrude_face as _extrude_face_replay  # noqa: F401  再生専用verbの登録
@@ -28,6 +28,7 @@ from .optimize_setup import (  # noqa: F401
     set_preserve_bodies,
 )
 from .pattern import pattern_circular, pattern_rectangular  # noqa: F401
+from .rename import rename  # noqa: F401
 
 __all__ = [
     "add_mesh_body",
@@ -35,6 +36,7 @@ __all__ = [
     "boolean_body",
     "chamfer",
     "delete",
+    "delete_items",
     "envelope_regions",
     "extrude",
     "extrude_faces",
@@ -52,4 +54,5 @@ __all__ = [
     "set_preserve_bodies",
     "pattern_circular",
     "pattern_rectangular",
+    "rename",
 ]

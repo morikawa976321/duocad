@@ -292,6 +292,19 @@ def _run_delete(session: Session, tmp_path: Path) -> dict:
     return session.delete()
 
 
+@_runner("delete_items")
+def _run_delete_items(session: Session, tmp_path: Path) -> dict:
+    """ボディとスケッチを混ぜて走らせる(`delete` と同じ理由)。"""
+    body, sketch_id = _box(session)
+    return session.delete_items(bodies=[body.id], sketches=[sketch_id])
+
+
+@_runner("rename")
+def _run_rename(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    return session.rename(body.id, "台座")
+
+
 def _preserve(session: Session, body) -> None:
     """条件面は**保持ソリッドの面にしか置けない**(2026-09-18〜)ので、面を指す前に保持にする。"""
     _select(session, [{"body": body.id, "kind": "body"}])

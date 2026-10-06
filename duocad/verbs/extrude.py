@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
 
-from .. import kernel_extrude, kernel_sketch
+from .. import kernel_extrude, kernel_sketch, naming
 from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from .. import selection
@@ -68,9 +68,10 @@ def extrude(
 
     created_new = False
     previous_shape: Any = None
+    numbered: dict = {}
     if target_body is None:
         resolved_body_id = new_body_id()
-        _add_new_body(doc, resolved_body_id, result["shape"])
+        numbered = _add_numbered_body(doc, resolved_body_id, result["shape"])
         created_new = True
     else:
         previous_shape = target_body.shape
@@ -83,6 +84,7 @@ def extrude(
             "distance": distance,
             "mode": mode,
             "body_id": resolved_body_id,
+            **numbered,
         },
     )
     remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
@@ -117,9 +119,10 @@ def extrude_faces(
     )
 
     previous_shape: Any = None
+    numbered: dict = {}
     if target_body is None:
         resolved_body_id = new_body_id()
-        _add_new_body(doc, resolved_body_id, result["shape"])
+        numbered = _add_numbered_body(doc, resolved_body_id, result["shape"])
     else:
         previous_shape = target_body.shape
         target_body.shape = result["shape"]
@@ -131,6 +134,7 @@ def extrude_faces(
             "distance": distance,
             "mode": mode,
             "body_id": resolved_body_id,
+            **numbered,
         },
     )
     operation.provenance = result["provenance"]
@@ -211,9 +215,21 @@ def _editable_target(doc: Document, body_id: BodyId) -> Body:
     return editable_body(doc, body_id, what="extrude", require_visible=True, reject_as="押し出しの対象にする")
 
 
-def _add_new_body(doc: Document, body_id: BodyId, shape: Any) -> None:
+def _add_numbered_body(doc: Document, body_id: BodyId, shape: Any) -> dict:
+    """押し出した形を新しいソリッドとして、通し番号の名前で足す。戻り値はログの args へ足すもの。"""
+    number = naming.allocate(doc, naming.BODY)
+    _add_new_body(doc, body_id, shape, naming.label(naming.BODY, number))
+    return {"number": number}
+
+
+def _add_new_body(doc: Document, body_id: BodyId, shape: Any, name: str) -> None:
     """押し出した形を新しいソリッドとして足す(`join` で対象が無いとき・`new`・その再生)。"""
-    doc.add_body(Body(id=body_id, name="solid", kind="solid", shape=shape))
+    doc.add_body(Body(id=body_id, name=name, kind="solid", shape=shape))
+
+
+def _recorded_name(document: Document, args: dict) -> str:
+    """redo / 再生で作り直すボディの名前(番号の記録が無い古いログは "solid")。"""
+    return naming.recorded(document, naming.BODY, args.get("number"), "solid")
 
 
 def _resolve_faces_and_normal(
@@ -285,7 +301,7 @@ def _do_extrude(document: Document, operation: Operation) -> None:
         raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
     if mode == "new" or existing is None:
         result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=None)
-        _add_new_body(document, body_id, result["shape"])
+        _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
         remember(document, body_id, operation.seq, None)
         return
 
@@ -306,7 +322,7 @@ def _redo_faces(
         if existing is not None:
             raise ValueError(f"cannot replay new: body {body_id!r} already exists")
         result = kernel_extrude.extrude_faces(source.shape, indices, distance, mode)
-        _add_new_body(document, body_id, result["shape"])
+        _add_new_body(document, body_id, result["shape"], _recorded_name(document, operation.args))
         remember(document, body_id, operation.seq, None)
     else:
         if existing is None:

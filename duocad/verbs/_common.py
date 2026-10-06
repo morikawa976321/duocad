@@ -18,7 +18,7 @@ import math
 from typing import Any, List, Optional, Sequence, Union
 from weakref import WeakKeyDictionary
 
-from .. import meshbody, selection
+from .. import meshbody, naming, selection
 from ..document import MESH_KIND, Body, BodyId, Document, new_body_id
 from ..oplog import Operation
 
@@ -186,14 +186,32 @@ def copy_ids(count: int, recorded: Optional[Sequence[BodyId]], *, verb: str) -> 
     return new_ids
 
 
-def add_transformed_copies(doc: Document, bodies: Sequence[Body], transform: Any, new_ids: Sequence[BodyId]) -> None:
-    """変換した複製を足す(元は動かさない)。名前は元と同じ(`Body.name` は "solid" 固定の運用)。
+def number_copies(doc: Document, count: int) -> List[int]:
+    """複製に振る通し番号(作成時。ログの `numbers` に記録する)。"""
+    return [naming.allocate(doc, naming.BODY) for _ in range(count)]
+
+
+def add_transformed_copies(
+    doc: Document,
+    bodies: Sequence[Body],
+    transform: Any,
+    new_ids: Sequence[BodyId],
+    numbers: Optional[Sequence[int]],
+) -> None:
+    """変換した複製を足す(元は動かさない)。名前は `numbers` の通し番号で、番号の記録が無い
+    古いログ(`None`)だけ元の名前を引き継ぐ。
 
     **全部の形状を作ってから足す** —— 途中で落ちても1体目だけ足された文書が残らない。
     """
+    if numbers is None:
+        names = [body.name for body in bodies]
+    else:
+        names = [naming.recorded(doc, naming.BODY, number, None) for number in numbers]
+    if len(names) != len(bodies):
+        raise ValueError(f"{len(bodies)} bodies but {len(names)} numbers recorded")
     prepared = [
-        Body(id=new_id, name=body.name, kind=body.kind, shape=transform(body.shape), visible=body.visible)
-        for body, new_id in zip(bodies, new_ids)
+        Body(id=new_id, name=name, kind=body.kind, shape=transform(body.shape), visible=body.visible)
+        for body, new_id, name in zip(bodies, new_ids, names)
     ]
     for body in prepared:
         doc.add_body(body)  # 同じIDが既にあれば ValueError(黙って重複させない)

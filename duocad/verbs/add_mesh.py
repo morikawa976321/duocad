@@ -21,14 +21,11 @@ from __future__ import annotations
 from typing import Optional, Sequence
 
 from ..document import Body, BodyId, Document, MESH_KIND, make_mesh, new_body_id
+from .. import naming
 from ..oplog import Operation, register_verb
 from ..entry import entry
 
 VERB_ADD_MESH_BODY = "add_mesh_body"
-
-#: 名前を省いたときの既定。`Body.name` は "solid" 固定の運用(`move_body` のdocstring)に倣い、
-#: 種別がそのまま名前になる。
-DEFAULT_NAME = "mesh"
 
 
 def add_mesh_body(
@@ -37,7 +34,7 @@ def add_mesh_body(
     indices: Sequence[int],
     name: Optional[str] = None,
 ) -> BodyId:
-    """三角形メッシュのボディを足して、そのIDを返す。
+    """三角形メッシュのボディを足して、そのIDを返す。`name` を省くと通し番号の名前(`duocad/naming.py`)。
 
     `positions` は x,y,z を平らに並べた頂点座標[mm]、`indices` は**0始まり**の頂点添字を
     3つずつ並べた三角形。検査(3の倍数・添字の範囲・三角形0枚)は `Mesh.__post_init__`。
@@ -46,13 +43,20 @@ def add_mesh_body(
     """
     mesh = make_mesh(positions, indices)
     body_id = new_body_id()
-    body_name = DEFAULT_NAME if name is None else str(name)
+    numbered: dict = {}
+    if name is None:
+        number = naming.allocate(document, naming.BODY)
+        body_name = naming.label(naming.BODY, number)
+        numbered = {"number": number}
+    else:
+        body_name = str(name)
     _apply(document, body_id, body_name, mesh)
     document.log.append(
         VERB_ADD_MESH_BODY,
         {
             "body_id": body_id,
             "name": body_name,
+            **numbered,
             # **タプルではなくリストで積む**(JSONに載る形をログの時点でそろえる)。
             "positions": list(mesh.positions),
             "indices": list(mesh.indices),
@@ -71,6 +75,8 @@ def _do_add_mesh_body(document: Document, operation: Operation) -> None:
     公開APIの `add_mesh_body` を呼び直してはいけない(ログに二重記録される)。
     """
     args = operation.args
+    if args.get("number") is not None:
+        document.log.note_number(naming.BODY, int(args["number"]))
     _apply(
         document,
         str(args["body_id"]),
