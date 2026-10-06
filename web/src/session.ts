@@ -801,7 +801,8 @@ export interface SessionHooks {
 export interface Session {
   start(): void
   /**
-   * verbを1つ送る。**引数のdictをそのまま流す**(`cmd` と `client_op` を足すだけ)。
+   * コマンドを1つ送る。**文書を変える verb に限らない**(保存・改名・一覧などファイル操作も
+   * ここを通る)。**引数のdictをそのまま流す**(`cmd` と `client_op` を足すだけ)。
    *
    * 引数を作るのは `CommandDef.build` の仕事で、ここは運ぶだけ —— verbごとにメソッドを
    * 書き写すと、キー名を1文字打ち間違えた経路が**そのverbでだけ**静かに壊れる。
@@ -809,7 +810,7 @@ export interface Session {
    * そこに無い文字列は `unknown command` で返る
    * (任意のメソッドを呼べる作りにしない、はサーバ側で担保する)。
    */
-  runVerb(verb: string, args: Record<string, unknown>, clientOp: number): void
+  sendCommand(cmd: string, args: Record<string, unknown>, clientOp: number): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
   setSketchVisible(sketchId: string, visible: boolean, clientOp: number): void
   /** 差分編集(足す・外す)。 */
@@ -1154,8 +1155,8 @@ export function createSession(hooks: SessionHooks): Session {
     start() {
       void connect()
     },
-    runVerb(verb, args, clientOp) {
-      send({ cmd: verb, ...args, client_op: clientOp })
+    sendCommand(cmd, args, clientOp) {
+      send({ cmd, ...args, client_op: clientOp })
     },
     setVisible(bodyId, visible, clientOp) {
       send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp })

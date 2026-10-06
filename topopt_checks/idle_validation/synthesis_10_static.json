@@ -1,0 +1,330 @@
+{
+  "conclusion": "現時点では製品既定(探索方式・合否判定)の変更を採用しない。縮小範囲の統合で、元の全検証の完了でも製品安全の保証でもない。",
+  "three_decisions": {
+    "judgement_method": {
+      "recommendation": "合否ゲート(パーセンタイル安全率)は現行のまま置換しない。合否は変えず、結果に局所超過の警告(部位別最悪値と許容の比・M5b raw超過量・ピークの固定面距離)と、全材料が許容超過のときの入口警告を足す。ゲート化は固定面近傍の扱いを決め最終形の細格子で確認できてから。",
+      "evidence": [
+        "derived.h2_5000N",
+        "derived.hanger_gates"
+      ],
+      "not_decided_by_validation": "93.2 MPaが実際に危険かは実取付条件(剛固定か)と荷重の想定に依存し、検証では決められない(外部入力不明)"
+    },
+    "node_ownership": {
+      "recommendation": "実装しない(現状維持)。",
+      "evidence": "検証の全ケースで確定表・条件面の入口検査が通過。TOPOPT.mdの既存実測でhangerは100%がボディ由来で、制限を入れても判定が変わらない。",
+      "not_measured_by_validation": "所有権の割合そのものは本検証で測っていない(小型2題材は未測定)"
+    },
+    "design_core_groups": {
+      "recommendation": "入口で断る(割れ目の位置とdesign_core_groupsをエラー文に出す)。最大の塊だけ残す案は採らない。",
+      "evidence": "derived.design_core_groups: hanger9条件+小型10条件の19条件すべて芯1つ(割れは未発生)。推奨の根拠はコードとテスト(割れた設計空間は no_feasible_found で返る)で、検証データが選んだものではない。"
+    }
+  },
+  "recommendations": [
+    {
+      "class": "recommended",
+      "item": "局所超過の警告表示(探索・合否は変えない)",
+      "basis": "H2の93.2 MPaが合格のまま見えない。追加FEM不要の見込み(製品からの応力場の取り出しは未測定)"
+    },
+    {
+      "class": "recommended",
+      "item": "全材料が許容超過のときの入口警告",
+      "basis": "07で全材料が出発点でゲートを満たさない2000Nの3本が18.5〜19.1時間(再配置4.0時間)を出発点を返すだけで使った"
+    },
+    {
+      "class": "conditional",
+      "item": "M5b rawの非保持部位ゲート",
+      "basis": "保存92形で該当1形。荷重パッド端が特異点でないと確認できてから"
+    },
+    {
+      "class": "conditional",
+      "item": "適応歩幅+予測誤差の下限(floor=0.01)",
+      "basis": "08: 小型3条件。m5b_rawで製品SF目標を割る(4.039・4.028)。percentile同条件でstep20より+6.0%重い"
+    },
+    {
+      "class": "conditional",
+      "item": "出発点不成立の早期停止",
+      "basis": "08: 動作確認のみ(FEM1回・2秒)。研究用の安全弁"
+    },
+    {
+      "class": "rejected",
+      "item": "再配置(cap付きでも)",
+      "basis": "08: 同条件の適応より+11.6%重い・予測誤差拒否78件再発。追加は全件全材料復帰(59件)"
+    },
+    {
+      "class": "rejected",
+      "item": "m5b_raw単独の受理ゲート",
+      "basis": "50実行中27実行が製品SF目標未達(最小3.85)"
+    },
+    {
+      "class": "rejected",
+      "item": "全材料開始の適応・再配置のhanger適用",
+      "basis": "06・07: 出発点から動かない。2000Nは出発点を返しただけ"
+    },
+    {
+      "class": "rejected_not_superior",
+      "item": "5%歩幅",
+      "basis": "小型-3.9%〜+6.0%、hangerで+14%重く時間3.0倍"
+    },
+    {
+      "class": "hold",
+      "item": "04aの手作業構成(移植+局所成長+仕上げ削減)",
+      "basis": "3000N・2.0mm・パーセンタイル限定で-5.7%。m5b目標で優劣未決着。自動化・他格子・原点は未検証"
+    }
+  ],
+  "audit": [
+    {
+      "id": "R-A",
+      "finding": "原因2の再現未達",
+      "class": "scope_limited",
+      "evidence": "04aで認定(2.0mm・3000N・パーセンタイル)。m5b目標では優劣未決着。他格子・原点・自動化は未検証"
+    },
+    {
+      "id": "R-B",
+      "finding": "raw_maxと材料内maxの混同",
+      "class": "resolved",
+      "evidence": "03a"
+    },
+    {
+      "id": "R-C",
+      "finding": "曲げ採点位置",
+      "class": "resolved",
+      "evidence": "03a。10で位置補正後の誤差を再計算(12.13/3.37/0.877/0.230%)"
+    },
+    {
+      "id": "R-D",
+      "finding": "細分形状の同一性",
+      "class": "resolved",
+      "evidence": "03a/03b。真因は design_space.derive の外枠再計算"
+    },
+    {
+      "id": "R-E",
+      "finding": "後続契約が要求を狭めた",
+      "class": "resolved",
+      "evidence": "TASKS訂正と06/07/09の実行"
+    },
+    {
+      "id": "R-X1",
+      "finding": "全材料SFの荷重スイープの誤記",
+      "class": "resolved",
+      "evidence": "03a。10で SF×荷重の相対ばらつき7e-14を再確認"
+    },
+    {
+      "id": "R-X2",
+      "finding": "00の時間・メモリ表とJSONの差",
+      "class": "resolved",
+      "evidence": "03b(2.7〜10%)"
+    },
+    {
+      "id": "R-X3",
+      "finding": "2.4係数・独立参照が校正途上",
+      "class": "external_input_pending",
+      "evidence": "独立ソルバ(gmsh等)・破壊実データが無い"
+    },
+    {
+      "id": "L-1",
+      "finding": "dilution level4の等比検定",
+      "class": "deferred_by_user_deadline",
+      "evidence": "約126万要素のFEM。断定は避けている"
+    },
+    {
+      "id": "L-2",
+      "finding": "荷重ゾーンの仮説(H1以外)",
+      "class": "resolved",
+      "evidence": "06の9診断・07の92形のゾーン最大"
+    },
+    {
+      "id": "L-3",
+      "finding": "48.72 MPaの形と離散化の寄与の分離",
+      "class": "deferred_by_user_deadline",
+      "evidence": "保存形の細分格子での再解析が未実施"
+    },
+    {
+      "id": "03b-lim",
+      "finding": "R2再採点1条件・level5以降・keep寄与1件",
+      "class": "scope_limited",
+      "evidence": "条件の範囲を明記して引用"
+    },
+    {
+      "id": "04-lim",
+      "finding": "hanger規模の再配置・外部候補未使用・m5b_raw対m5b_targetの決着",
+      "class": "scope_limited",
+      "evidence": "どちらも単独ゲートにしない(本書)。複合ゲートの探索は延期"
+    },
+    {
+      "id": "04a-lim",
+      "finding": "原点・他格子・2700N/3300Nの因果検査",
+      "class": "deferred_by_user_deadline",
+      "evidence": "優越形の一般性は主張しない"
+    },
+    {
+      "id": "05-synth",
+      "finding": "合成5題材の未構築",
+      "class": "deferred_by_user_deadline",
+      "evidence": "小型2題材の15条件で代替"
+    },
+    {
+      "id": "05-lim",
+      "finding": "再配置warm-start・percentile×広い予算・較正の修正",
+      "class": "deferred_by_user_deadline",
+      "evidence": "08でfloorのみ小型実施"
+    },
+    {
+      "id": "06-lim",
+      "finding": "凍結パラメータ変更・別seed・原点フル・6セル形の軌跡",
+      "class": "deferred_by_user_deadline",
+      "evidence": "結論は凍結パラメータの範囲"
+    },
+    {
+      "id": "06-origin",
+      "finding": "全軸+0.5原点で製品step20が全材料へ戻った原因",
+      "class": "scope_limited",
+      "evidence": "製品step20の失敗モードとして記録。原因未分離"
+    },
+    {
+      "id": "07-lim",
+      "finding": "methods残り19・origin15・init8・lost 2000N細い幅",
+      "class": "deferred_by_user_deadline",
+      "evidence": "欠損は合格として扱わない"
+    },
+    {
+      "id": "07-input",
+      "finding": "荷重500〜2000N・固定が実機を表すか",
+      "class": "external_input_pending",
+      "evidence": "結論への影響は本書の判定方式の節に限定"
+    },
+    {
+      "id": "08-lim",
+      "finding": "percentile floor対照・再配置cap+floor・再較正・複合ゲート・早期停止の修正前対照・floor感度",
+      "class": "deferred_by_user_deadline",
+      "evidence": "08の採否は小型3条件の範囲"
+    },
+    {
+      "id": "09-lim",
+      "finding": "最終CAD細格子FEM・hanger最終ブーリアン修正・F0500/F1000_h2.2_w5の最終形",
+      "class": "deferred_by_user_deadline",
+      "evidence": "完成形の確認は小型2形のみ"
+    },
+    {
+      "id": "09-cut",
+      "finding": "S3のcut体積不整合の原因",
+      "class": "scope_limited",
+      "evidence": "原因を断定しない"
+    }
+  ],
+  "text_discrepancies": [
+    "05結論1: 250Nは適応-24.2%・再配置-11.8%でSF未達(横ばい〜重いのは200Nのみ)",
+    "05結論6: 位相が変わったのは基準以外の7条件",
+    "05: 同一条件の適応の体積が節で違うのは評価予算・seedの違い(57,768/58,088/78,648 mm3)",
+    "08結論1: d3の予測誤差拒否は32件から54件に増え、別理由が加わった。減ったのはp15(8から0)",
+    "09結論4: 保持の欠けはhangerの2形のみ",
+    "09: 再占有化後の材料変化は+0.09〜+0.33%",
+    "07: 製品SF合格は片側基準。92形のうち64形が目標+0.5%超",
+    "09: S2・S3の再占有化形は最小幅のopening判定が不合格"
+  ],
+  "coverage": [
+    {
+      "item": "母数希釈を解消する評価式・保持/接続部の危険の隠蔽",
+      "status": "answered",
+      "evidence": "03・03b。M5b本体、M3診断、M7b補助。M1は隠す。単独ゲート化は保留"
+    },
+    {
+      "item": "4探索方式の材料・性能・費用・悪化条件",
+      "status": "answered_reduced_scope",
+      "evidence": "05(小型15条件x4方式)・06(hanger H1)・07(保存92形)。5合成題材は延期"
+    },
+    {
+      "item": "削除した長い部材の復元と寄与の切り分け",
+      "status": "answered",
+      "evidence": "復元は確認できず。歩幅・復帰・再配置・停止条件のいずれでも戻らない"
+    },
+    {
+      "item": "荷重・幅・解像度・原点・初期形状への頑健性",
+      "status": "answered_reduced_scope",
+      "evidence": "保たれない。07の高荷重方式比較・原点・初期形の全行列は延期"
+    },
+    {
+      "item": "独立解析・完成形での成立",
+      "status": "answered_reduced_scope",
+      "evidence": "小型2形のみ成立。hangerは最終形不成立。独立ソルバ・細格子は未実施"
+    },
+    {
+      "item": "推奨する製品改修と有効範囲・未確定入力",
+      "status": "answered",
+      "evidence": "既定の変更は推奨しない。警告表示と入口警告のみ"
+    }
+  ],
+  "deferred_by_user_deadline": [
+    "07: methods残り19件・origin残り15件・init 8件・shift_all(中断)",
+    "08: percentile floor対照・再配置cap+floor併用・calibrated_k再較正・複合ゲート・早期停止の修正前対照・floor値の感度",
+    "09: 最終CADの細格子FEM・hanger最終ブーリアン修正と再検証・F0500_h2.2_w5/F1000_h2.2_w5の最終形・小型の複数条件追試",
+    "05: 合成5題材・再配置warm-start・percentile×広い予算",
+    "06: 凍結パラメータ変更・別seed・原点フル・6セル形の軌跡",
+    "03a: dilution level4の等比検定・48.72 MPaの形と離散化の分離",
+    "04a: 原点・他格子・2700N/3300Nの因果検査",
+    "10: 固定面近傍のピークを収束する量に置き換える検討・実取付条件の確認(研究案。自動ではqueueへ積まない)"
+  ],
+  "limitations": [
+    "縮小範囲の統合で、元の全検証の完了でも製品安全の保証でもない。",
+    "08の監査件数と07の再採点の再現は各台帳の値を採用した(10は個別チェックポイントから再集計していない)。",
+    "芯の数え上げは設計空間だけの確認で、割れた入力の頻度は分からない。",
+    "判定方式の推奨は固定面の剛固定・荷重の想定という外部入力を仮定せず、「見えるようにする」までに限った。",
+    "新方式の比較は各条件1実行・seed固定。別seedでの再現は未検証。"
+  ],
+  "cases": [
+    {
+      "stage": "00",
+      "status": "完了",
+      "source": "00_compact_models.json"
+    },
+    {
+      "stage": "01",
+      "status": "完了",
+      "source": "01_protocol.json"
+    },
+    {
+      "stage": "02/03a",
+      "status": "完了(独立ソルバは外部制約で未実装)",
+      "source": "02_reference.json,03a_reference_repair.json"
+    },
+    {
+      "stage": "03/03b",
+      "status": "完了",
+      "source": "03_metrics.json,03b_metrics_recheck.json"
+    },
+    {
+      "stage": "04/04a",
+      "status": "完了(04aは範囲限定)",
+      "source": "04_searches.json,04a_path_qualification.json"
+    },
+    {
+      "stage": "05",
+      "status": "縮小(小型15条件x4方式。合成5題材は延期)",
+      "source": "05_synthetic.json"
+    },
+    {
+      "stage": "06",
+      "status": "完了(新規最適化は代表条件)",
+      "source": "06_hanger_low.json"
+    },
+    {
+      "stage": "07",
+      "status": "縮小(保存台帳の集計+固定形状診断)",
+      "source": "07_hanger_loads.json"
+    },
+    {
+      "stage": "08",
+      "status": "縮小(小型8実行)",
+      "source": "08_robustness.json"
+    },
+    {
+      "stage": "09",
+      "status": "縮小(保存形3形+対照1形。hangerは最終形不成立)",
+      "source": "09_final_shapes.json"
+    },
+    {
+      "stage": "10",
+      "status": "完了(本書)",
+      "source": "10_synthesis.json"
+    }
+  ]
+}

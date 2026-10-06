@@ -299,7 +299,7 @@
   // ---------------------------------------------------------------- E: ファイルと履歴
   /** ファイル操作と `duocad/models/` の一覧。応答待ち(`pendingOp`)はこちらの持ち物なので貸す。 */
   const files = createDocumentFiles({
-    runVerb: (verb, args, op) => session.runVerb(verb, args, op),
+    sendCommand: (cmd, args, op) => session.sendCommand(cmd, args, op),
     nextOp,
     hold: (op) => (pendingOp = op),
     release: releasePending,
@@ -732,7 +732,7 @@
   function sendTracked(verb: string, args: Record<string, unknown>): void {
     const op = nextOp()
     pendingOp = op
-    session.runVerb(verb, args, op)
+    session.sendCommand(verb, args, op)
   }
 
   /** 自分が出して待っている操作の応答なら待ちを解く(解いたら true)。 */
