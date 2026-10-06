@@ -489,6 +489,26 @@ SIMP時代の連続密度の系ではCG反復/solveが0.07〜0.20倍だったが
 **30反復-0.003%**(45反復では+0.29%と増えに転じる)。費用はメッシュ化全体で10〜20msなので
 無視できる。
 
+### 1×1 の空隙を探索後に埋める(thin_voids.py。2026-10-07 本人判断)
+
+Taubin 30回は1セル幅の構造を消すフィルタとして働くので、四方が材料で閉じた 1×1 の空セル(平滑化の文書でいう
+「管」: 2軸以上で両隣が材料の空セル。板を貫く 1×1 の穴・止まり穴・1セルの窪み)は壁の間隔が 0.1 要素未満まで潰れ、
+まれに壁どうしが交差する([TOPOPT_SMOOTHING_INTERSECTIONS.md](TOPOPT_SMOOTHING_INTERSECTIONS.md)。64条件で交差4箇所は
+すべて管の中)。交差した入力は最終処理(`finalize`)が止めるので、**探索が確定したマスクの管を、メッシュ化の前に埋める**
+(`thin_voids.fill_tubes`。設計空間の中だけ。除外ソリッド由来の空隙は埋めない)。1軸だけ挟まれた溝は実測で 0.12 要素以上
+残り交差しないので埋めない(空側の opening(2) で埋めると溝1万セル超も埋まり、形の変化が1〜2桁大きい)。
+
+- **埋めた形は探索が合格させた形と違う**ので、埋めたセルがあれば `acceptance.inspect` で6条件(FEM 1回)を取り直し、
+  納品するのは最後に検査に通った形にする。結果の `safety_factor` は取り直した値、探索時の値は `search_safety_factor`、
+  埋めたセル数は `filled_cells`。不合格なら `state="fill_infeasible"` で文書は変えない。埋めるセルが無ければ検査は増えない。
+- 置き場所を探索後の1回(E1)にしたのは本人判断(2026-10-07)。候補評価ごとに埋める案(E2。追加の FEM は無いが、探索が
+  掘った管を毎回埋め戻すので探索の挙動が変わる)と、探索規則に空側の幅の規則を入れる案(`peel` は平面の真ん中の1セル
+  から抜くので、空側の規則には材料側の `casualties` の双対が要る)は採らなかった。平滑化側で頂点の移動を抑える案は、
+  部品の内部に 0.1 要素のスリットを残すので採らない(空隙は残すのではなく無くす)。
+- 実測(64条件、製品コード未変更の時点): 平滑化後の交差 21組 → 0、埋めたセル数は条件あたり 最小 0・中央値 7・最大 80
+  (材料の 0.03%、最大 0.1%)、平滑化後の体積変化 −0.02%〜+0.06%、埋める反復は最大3回。埋めた後の安全率の変化は
+  `topopt_checks/verify_tube_fill.py`(保存済みマスクを実際の荷重条件で製品経路に通す)で測る。
+
 **密度場側のガウシアン平滑化は既定を切り(2026-09-05)、実装ごと削除した(2026-09-14)。**
 marching cubes出力に残る中周波のうねりをTaubinが落とせない帯域があり、ぼかしで隠していたが、
 密度フィルタ半径を上げると筋そのものが消え、σを上げると薄板で体積乖離が15%を超えたため、
@@ -647,7 +667,9 @@ optimize_run.run
        │    │    └─ 候補ごとに: 幾何検査(境界・単一成分・保持/除外/荷重欠落) → fem.Model.solve → stress.evaluate
        │    └─ _reduce_volume                 エネルギーの低い材料を安全率の余裕に応じて削る(段階4)
        │         └─ 各候補: 支えを残して選ぶ → 水密の修復 → 島処理 → 6条件(FEM。要素エネルギーも返す)
-       ├─ mesh.build_surface_from_mask        最終確定マスク(best_feasible)だけをメッシュ化
+       ├─ thin_voids.fill_tubes               平滑化で潰れる 1×1 の空隙(四方が材料で閉じた空セル)を埋める
+       │    └─ acceptance.inspect             埋めたセルがあれば6条件(FEM)を取り直す(不合格なら fill_infeasible)
+       ├─ mesh.build_surface_from_mask        埋めた後の確定マスクだけをメッシュ化
        ├─ finalize.finalize                   平滑化後の表面を検査 → 0.01 mmで分割した保持を足し除外を引く(manifold3d)
        │                                      → 簡略化 → 接続6項目・単一ソリッド・float32・自己交差で検査
        └─ add_mesh_body                       合格した三角形をメッシュボディとして文書へ追加
@@ -1098,6 +1120,7 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
 | `duocad/topopt/material.py` | **材料定数**(`PETG_YIELD_MPA`/`PRINT_DERATE`/`DEFAULT_ALLOWABLE_MPA`/`DEFAULT_YOUNGS_MODULUS_MPA`) |
 | `duocad/topopt/acceptance.py` | **島除去後・平滑化前の6条件判定**。詳細は[TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) |
 | `duocad/topopt/binary_search.py` | **bool体積削減探索**。`find_initial_feasible`(段階3)→`find_best_feasible`(段階4) |
+| `duocad/topopt/thin_voids.py` | 探索後に、平滑化で潰れる 1×1 の空隙(2軸以上で両隣が材料の空セル)を設計空間の中で埋める。下「1×1 の空隙を探索後に埋める」 |
 | `duocad/topopt/mesh.py` | パディング→marching cubes→Taubin平滑化→表面生成。入口は`build_surface_from_mask`。**CLIは持たない** |
 | `duocad/topopt/finalize.py` | 最終確定マスクの表面→保持・除外のメッシュ集合演算(manifold3d)→接続6項目・単一ソリッド・float32・自己交差の検査 |
 | `duocad/topopt/trace.py` | 実行ごとの途中記録(`stage`/`snapshot`)。詳細は[TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) |

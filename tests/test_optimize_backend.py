@@ -1339,3 +1339,100 @@ def test_a_full_material_shortfall_names_the_search_target_and_the_factor_not_a_
     assert "安全率 3.1 が探索の格子で必要な安全率 4.8(= 目標 2 × 係数 2.4)に届かない" in warning
     assert "が目標 4.8 に" not in warning
     assert "安全率 3.1 が目標 4.8 に届かない" in optimize_run._search_failure_warning(failed)
+
+
+# --------------------------------------------------------------------------------------
+# 9. 探索後の 1×1 の空隙埋め(thin_voids)と6条件の取り直し
+# --------------------------------------------------------------------------------------
+def _replayed_search(monkeypatch, safety_factor: float = 9.9) -> None:
+    # 探索を差し替え、設計空間いっぱいの確定マスクを返す(評価3回・収束)。
+    import numpy as np
+    from duocad.topopt import binary_search
+
+    def fake_find(design_space_mask, conditions, **kwargs):
+        mask = np.asarray(design_space_mask, dtype=bool)
+        report = dict(material_sha256="f" * 64,
+                      volumes=dict(material_mm3=float(mask.sum()) * conditions.grid.element_volume),
+                      checks=dict(safety=dict(safety_factor=safety_factor)))
+        best = binary_search.FeasibleModel(mask=mask, before_mask=mask, report=report, trial_index=0)
+        return binary_search.SearchResult(status="feasible", termination="converged", best_feasible=best,
+                                          history=[], evaluations=3, conditions_identifier="test")
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+
+
+def test_tube_fill_skips_reinspection_when_nothing_to_fill(session: Session, monkeypatch) -> None:
+    # 設計空間いっぱいの確定マスクには管が無い。検査は増えず、探索時の安全率がそのまま結果になる。
+    import numpy as np
+    from duocad.topopt import acceptance, thin_voids
+
+    four_conditions(session)
+    _replayed_search(monkeypatch)
+    seen: list = []
+    original = thin_voids.fill_tubes
+
+    def spy(mask, allowed):
+        seen.append((np.array(mask, copy=True), np.array(allowed, copy=True)))
+        return original(mask, allowed)
+
+    def never(*args, **kwargs):
+        raise AssertionError("埋めるセルが無いのに acceptance.inspect が呼ばれた")
+
+    monkeypatch.setattr(thin_voids, "fill_tubes", spy)
+    monkeypatch.setattr(acceptance, "inspect", never)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "done", result["warning"]
+    assert result["filled_cells"] == 0
+    assert result["search_safety_factor"] == 9.9 and result["safety_factor"] == 9.9
+    assert len(seen) == 1 and seen[0][0].shape == seen[0][1].shape and seen[0][0].dtype == bool
+
+
+def test_tube_fill_reinspects_and_reports_both_safety_factors(session: Session, monkeypatch) -> None:
+    # 埋めたセルがあれば6条件を取り直す。結果の安全率は取り直した値で、探索時の値は別欄に残る。
+    import numpy as np
+    from duocad.topopt import acceptance, thin_voids
+
+    four_conditions(session)
+    _replayed_search(monkeypatch)
+    monkeypatch.setattr(thin_voids, "fill_tubes",
+                        lambda mask, allowed: (np.array(mask, copy=True), dict(cells=3, rounds=[2, 1])))
+    calls: list = []
+    original = acceptance.inspect
+
+    def spy(material, before, grid, **kwargs):
+        calls.append(np.array(material, copy=True))
+        return original(material, before, grid, **kwargs)
+
+    monkeypatch.setattr(acceptance, "inspect", spy)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "done", result["warning"]
+    assert len(calls) == 1 and calls[0].dtype == bool
+    assert result["filled_cells"] == 3 and result["search_safety_factor"] == 9.9
+    assert result["safety_factor"] != 9.9 and np.isfinite(result["safety_factor"])
+    assert result["safety_factor"] >= result["search_target_safety_factor"]
+    assert result["material_mm3"] == float(calls[0].sum()) * result["grid"]["spacing"] ** 3
+
+
+def test_tube_fill_failure_is_reported_without_touching_the_document(session: Session, monkeypatch) -> None:
+    # 埋めた形が6条件に落ちたら `fill_infeasible`。文書は1ビットも変わらない。
+    import numpy as np
+    from duocad.topopt import acceptance, thin_voids
+
+    four_conditions(session)
+    before = [body.id for body in session.document.bodies]
+    _replayed_search(monkeypatch)
+    monkeypatch.setattr(thin_voids, "fill_tubes",
+                        lambda mask, allowed: (np.array(mask, copy=True), dict(cells=1, rounds=[1])))
+
+    def failing(material, before_mask, grid, **kwargs):
+        passing = dict(status="pass")
+        return dict(status="fail", volumes=dict(material_mm3=1.0),
+                    checks=dict(watertight=passing, single_solid=passing, preserve=passing, exclude=passing,
+                                conditions=passing, safety=dict(status="fail", safety_factor=1.5)))
+
+    monkeypatch.setattr(acceptance, "inspect", failing)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "fill_infeasible" and result["body_id"] is None
+    assert result["safety_factor"] is None and result["material_mm3"] is None
+    assert "1 セル" in result["warning"] and "safety" in result["warning"] and "1.5" in result["warning"]
+    assert [body.id for body in session.document.bodies] == before

@@ -3,7 +3,8 @@
 現在の合格条件は、`models/hanger_bar_attachment.json` の最終出力の **水密性（自己干渉なし）・単一ソリッド** の2つ。
 保持・除外は既定の合否判定から外し、平滑化後のメッシュ集合演算で反映する。
 
-製品経路は `密度 → 島除去 → 表面生成 → Taubin平滑化 → 平滑化後の表面の検査(接続6項目・向き・自己交差) →
+製品経路は `密度 → 島除去 → 1×1 の空隙(四方が材料で閉じた空セル)を埋めて6条件を取り直す(thin_voids) →
+表面生成 → Taubin平滑化 → 平滑化後の表面の検査(接続6項目・向き・自己交差) →
 保持・除外を線形偏差0.01 mm(`STL_DEVIATION` と同じ値)・角度偏差0.35 radで三角形分割して同じ検査 →
 (表面 + 保持) − 除外(manifold3d、倍精度) → 入力面の由来を捨てて 1e-5 mm で簡略化 →
 float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
@@ -45,6 +46,10 @@ float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
 - **#93 の保存済み実行 `20260925T035538`**(hanger、平滑化後 51,836 三角形): `replay_finalization.py` は
   平滑化後の表面の検査で止まる(`self_intersections` cross 4組。接続6項目は全て0)。6秒。これは設計どおりで、
   4組の交差は平滑化側の問題([TOPOPT_SMOOTHING_INTERSECTIONS.md](TOPOPT_SMOOTHING_INTERSECTIONS.md))。
+  この実行の確定マスク(記録の `surface-from-mask-input`)には管が 9 セルあり、`thin_voids.fill_tubes` で埋めると
+  平滑化後の交差は 4組 → 0(三角形 51,836 → 51,764、平滑化後の体積 41,754.7 → 41,754.0 mm³。2026-10-07)。
+  埋めた後の FEM の取り直しは、この要素サイズの hanger で数 GB の空きメモリが要るので未実施
+  (`topopt_checks/verify_tube_fill.py` で測る)。
   #93 の他の3実行と 2026-09-21 の実行 `20260921T185659-b6799e00457d` はローカルにも `D:\` にも無く、再生していない。
 - **検証材料64条件**(`topopt_checks/finalize_smoothing_corpus.py --suffix _mesh`。結果は
   `output/smoothing_corpus/final_records_mesh/`): 下の「検証材料64条件での最終処理の合格率」に B-rep 経路と並べた。
