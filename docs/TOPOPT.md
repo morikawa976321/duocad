@@ -11,6 +11,7 @@
 | **走らせ方**(受入検査・所要) | `README.md` §3 |
 | **形状探索の時間短縮**(内訳・候補評価の費用) | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) |
 | **最小幅保証の実測**(節I〜N) | [TOPOPT_THICKNESS.md](TOPOPT_THICKNESS.md) |
+| **完成形の最小幅と強度の原因解析**(#117、表面生成・平滑化・集合演算の切り分けとFEM比較) | [TOPOPT_FINAL_WIDTH_117.md](TOPOPT_FINAL_WIDTH_117.md) |
 | **探索目標係数2.4の根拠** | [TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md) |
 | **段階4の打ち切り(issue #22)の判断材料**(終盤の力学の実測・候補規則の後付け試算) | [TOPOPT_STOP_RULE.md](TOPOPT_STOP_RULE.md) |
 | **仕事をしていない材料が残る原因**(代表応力の母数と保持リング・大きな一歩による局所解) | [TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md) |
