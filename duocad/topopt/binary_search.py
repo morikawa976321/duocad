@@ -25,7 +25,7 @@ from scipy import ndimage
 
 from duocad import kernel
 
-from . import acceptance, anchor, min_width, voxelize
+from . import acceptance, anchor, min_width, neck, voxelize
 from .acceptance import NEIGHBOURHOOD_STRUCTURE
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 
@@ -608,9 +608,11 @@ _WINDOW_CENTRE_VERTICES = (slice(1, 3),) * 3
 class PeelStats:
     """`peel` の実績。`picked` は順位から選んで抜いた手の数(一口が複数セルでも1手)、`casualties` は手のたびに
     一緒に抜いた巻き添え(m=1 では常に0)、`islands` は切り離されて一緒に消したセル。実際に減ったセル数は
-    `picked + casualties + islands`。`skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・連結性・芯の連結の順に判定し、
+    `picked + casualties + islands`。`skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・連結性・くびれ・芯の連結の順に判定し、
     最初に落ちた理由で数える。m>1 の手は巻き添えを含む一口に対して判定する)。
     `skipped_thickness` は厚みを理由に手を却下しなくなったので常に0。
+    `skipped_neck` は、手がくびれを作る(`neck.NeckJudge`。材料の前線をつなぎ直す最小の窓で芯の前線がつなぎ直されない)として飛ばした数、
+    `neck_rejected_6_only` はそのうち26連結の芯なら通っていた数、`neck_full_grid` は材料が格子全体まで広げないとつながらなかった判定の数(m=1 は常に0)。
     `skipped_core` は、手を抜くと侵食した芯のつながり(`min_width.CoreConnectivity`)が切れるとして飛ばした数(m=1 は常に0)。
     保護セル(`peel` の `protected`)を含む成分を島として切り離す手は `skipped_connectivity` に数える。"""
 
@@ -622,6 +624,7 @@ class PeelStats:
     skipped_manifold: int = 0
     skipped_thickness: int = 0
     skipped_connectivity: int = 0
+    skipped_neck: int = 0
     skipped_core: int = 0
     already_removed: int = 0
     global_checks: int = 0
@@ -629,6 +632,8 @@ class PeelStats:
     core_window_true: int = 0
     core_window_false: int = 0
     core_global: int = 0
+    neck_rejected_6_only: int = 0
+    neck_full_grid: int = 0
     seconds: float = 0.0
     #: 順位から選んだセル(手の先頭。巻き添えは含まない)の平坦添字(記録には出さない)。
     picked_cells: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64), repr=False)
@@ -723,6 +728,8 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
       接しない(下記コメント)ので、`exempt` が無いか m=2 なら、両方を跨ぐ m 立方の材料だけのブロックは無く、島の除去は厚みの
       不変条件を壊さない。`exempt` を材料に数える m≥3 では mask に無い `exempt` セルを挟んで跨ぎうるので、島を消した形を
       大域で確かめ、崩れる手は却下する(`skipped_connectivity`)。
+    - くびれ(m>1): 一口を抜くと、材料の前線をつなぎ直す最小の窓の中で芯の前線がつなぎ直されない手は抜かない(`skipped_neck`。
+      `neck.NeckJudge`、docs/TOPOPT_NECK_RULE_120.md §2)。S(m) は芯が大域でつながるかしか見ないので、輪の中のくびれを通す(#120)。
     - 芯の連結(m>1): 一口(と島)を抜くと侵食した芯が割れる手は抜かない(`skipped_core`)。R(m) は m 立方の共有1セルの斜めのつなぎ目を許すので、
       厚みの不変条件(上)を保つだけでは芯は割れうる。判定は一口の周りの窓で言えれば通し、言えなければ大域で数え直す(島を消すときは常に大域)。
     - 表面: x が空の6近傍(格子の外を含む)を持たなければ抜かない(内部に空洞を作らない。中空構造を許容しない製品制約)。
@@ -754,6 +761,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     inner = work[1:-1, 1:-1, 1:-1]
     stats = PeelStats()
     core = min_width.CoreConnectivity(min_width_cells, exempt) if min_width_cells > 1 else None
+    necks = None if core is None else neck.NeckJudge(core)
     picked: list[int] = []
     for cell in order.tolist():
         if stats.picked + stats.casualties + stats.islands >= count:
@@ -835,6 +843,12 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
             # 島は条件節点に接するセルを持たないので、支え数はそのままでよい。島と保持成分は辺・頂点でも接しない
             # (接していれば、切り離した一口の頂点の正則判定で落ちている)ので、島を消しても頂点は正則のまま。
             inner[islands] = False
+        if necks is not None and necks.creates_neck(inner, np.array([[i, j, k]]) if bite is None else bite):
+            inner[cleared] = True
+            if island_cells:
+                inner[islands] = True
+            stats.skipped_neck += 1
+            continue
         if core is not None and not core.after_bite(inner, (i, j, k) if bite is None else bite, island_cells):
             inner[cleared] = True
             if island_cells:
@@ -853,6 +867,8 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
         stats.core_window_true = int(core.stats['window_true'])
         stats.core_window_false = int(core.stats['window_false'])
         stats.core_global = int(core.stats['global_count'])
+        stats.neck_rejected_6_only = int(necks.stats['rejected_6_only'])
+        stats.neck_full_grid = int(necks.stats['full_grid'])
     stats.seconds = time.perf_counter() - started
     return np.ascontiguousarray(inner), stats
 
@@ -1012,10 +1028,16 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                      evaluation_error_patience=evaluation_error_patience, evaluation_errors=0,
                      safety_excluded_cells=0, adopted_after_exclusion=0, poison_cells=0, poison_released=0,
                      geometry_rejections=[], stop_reason=None, steps=steps)
+    # 形のくびれの静的診断(探索の判定ではない。docs/TOPOPT_NECK_RULE_120.md §2)。開始形と結果形で取り、増えた組は個別に見る。
+    static_core = min_width.CoreConnectivity(min_width_cells, exempt) if min_width_cells > 1 else None
+    if static_core is not None:
+        reduction['static_necks'] = dict(start=neck.static_necks(best.mask, static_core))
 
     def result(termination: str) -> SearchResult:
         final, verdict = _recheck_regions_without_precompute(best, initial.best_feasible, conditions)
         reduction['final_region_recheck'] = verdict
+        if static_core is not None:
+            reduction['static_necks']['result'] = neck.static_necks(final.mask, static_core)
         reduction['poison_cells'] = len(poison)
         if verdict.startswith('failed'):
             termination = 'evaluation_error'
