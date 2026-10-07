@@ -6,6 +6,8 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
     "build123d==0.11.1",
     "cadquery-ocp-novtk==7.9.3.1.1",
+    # duocad/topopt/neck_persistence.py の完成形のくびれ検査(立方複体の持続ホモロジー)
+    "gudhi==3.13.0",
     # duocad/topopt/finalize.py のメッシュ集合演算(保持を足し除外を引く)。Windows 用 wheel がある版
     "manifold3d==3.5.3",
     # topopt_checks/render_*.py の画像出力。pillow と scikit-image はこの版で topopt のテストが通る(2026-09-18 実測)
