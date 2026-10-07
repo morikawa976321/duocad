@@ -911,19 +911,23 @@ def _run(
     debug: Optional[Callable[[dict], None]] = None,
     debug_kinds: Optional[Any] = None,
 ) -> dict:
-    """入力条件 → 固定設計空間の導出(1回) → 全材料の評価とエネルギー順の削減 → 最終確定マスクの
-    メッシュ化 → 保持・除外ブーリアン → CADとして文書へ(計画書§3の単一経路)。
+    """入力条件 → 固定設計空間の導出(1回) → 全材料の評価とエネルギー順の削減 → 1×1 の空隙を埋めて6条件を取り直す
+    (`thin_voids`)→ 最終確定マスクのメッシュ化 → 保持・除外のメッシュ集合演算 → メッシュボディとして文書へ
+    (計画書§3の単一経路)。
 
     **元のボディは1つも消さない・変えない。** 足すのは1つだけで、その `body_id` を返す。
     **探索候補の評価中はメッシュ化・STL出力を呼ばない**(計画書§3) —— 後段
     (`duocad.topopt.mesh.build_surface_from_mask` 以降)へ渡るのは
-    `binary_search.find_best_feasible` が返す最終確定マスク(`best_feasible`)だけである。
+    `binary_search.find_best_feasible` が返す最終確定マスク(`best_feasible`)に、平滑化で潰れる 1×1 の空隙を
+    埋めたものだけである(埋めたときは6条件を取り直し、`safety_factor` はその値。探索時の値は `search_safety_factor`)。
 
     戻り値(`state` で分岐すること。`"done"` 以外では `body_id` は `None`):
 
         {"state": "done" | "empty_condition_faces" | "unrepresented_regions"
                   | "boundary_mapping_failed"
-                  | "no_feasible_found" | "input_contradiction" | "resolution_insufficient",
+                  | "no_feasible_found" | "input_contradiction" | "resolution_insufficient"
+                  | "fill_infeasible",                       # 空隙を埋めた形が6条件に不合格
+         "search_safety_factor": float|None, "filled_cells": int|None,
          "body_id": BodyId | None, "name": str | None,
          "warning": str | None,
          "empty_condition_faces": [診断, ...],     # `20260904-1556` と同じ形
@@ -1173,9 +1177,57 @@ def _run(
         )
 
     best = search_result.best_feasible
+    from .topopt import acceptance, thin_voids
+
+    # 平滑化で潰れる 1×1 の空隙(管)を埋める(2026-10-07 本人判断: 探索後に1回、E1)。埋めた形は探索が合格させた形と
+    # 違うので、6条件(FEM)を取り直し、納品するのは最後に検査に通った形にする。埋めるセルが無ければ検査は増えない。
+    pump.emit(phase="fill", message="平滑化で潰れる 1×1 の空隙を埋める")
+    mask, fill = thin_voids.fill_tubes(best.mask, space.mask)
+    safety_factor, material_mm3 = float(best.safety_factor), float(best.material_mm3)
+    fill_warning = ""
+    if fill["cells"]:
+        pump.emit(phase="fill", message=f"{fill['cells']} セルを埋めたので6条件を取り直す")
+        report = acceptance.inspect(mask, mask, space.grid, **conditions.inspect_kwargs())
+        # 最小幅の規則(m 立方の被覆)は6条件に無い。埋めたセルは2軸以上で両隣が材料なので m より細い材料の筋は作らないが、
+        # 対角が空の配置(十字の中心など)では m 立方に覆われない(実測 2026-10-07: 探索の確定マスクは保持セルを対象外にして
+        # 規則を満たし、埋めると F2000_h2.4_w2 で 53 セル中 5、F2000_h2.2_w2 で 63 中 2、F1000_h2.4_w3 で 20 中 2 が
+        # 覆われない。どれも保持セルに接しない)。覆われることを求めて止めると実データの多くが落ちるので、保持セルと同じく
+        # 対象外として扱い、数を記録して warning に出す(`keep_cells_without_room` と同じ扱い)。
+        uncovered = 0
+        if min_width["cells"] > 1:
+            from .topopt import min_width as min_width_rules
+            exempt = mask if conditions.keep_cells is None else (mask | conditions.keep_cells)
+            covered = min_width_rules.cube_opening(exempt, int(min_width["cells"]))
+            uncovered = int((mask & ~best.mask & ~covered).sum())
+        trace.snapshot('tube-fill', **fill, search_safety_factor=safety_factor, report=report,
+                       min_width=dict(cells=int(min_width["cells"]), uncovered_filled_cells=uncovered))
+        if report["status"] != "pass":
+            failed = [key for key, check in report["checks"].items() if check["status"] != "pass"]
+            safety = report["checks"]["safety"]
+            return _not_done(
+                common,
+                started,
+                keep_room_warning,
+                state="fill_infeasible",
+                warning=(f"平滑化で潰れる 1×1 の空隙 {fill['cells']} セルを埋めた形が6条件に不合格({', '.join(failed)})。"
+                         f"探索の安全率 {safety_factor:.4g}、埋めた後 {safety.get('safety_factor', float('nan')):.4g}"
+                         f"(探索の目標 {search_target:.4g})"),
+                unrepresented_regions=unrepresented,
+                boundary_mapping=mapping,
+                evaluations=int(search_result.evaluations),
+                termination=search_result.termination,
+            )
+        safety_factor = float(report["checks"]["safety"]["safety_factor"])
+        material_mm3 = float(report["volumes"]["material_mm3"])
+        if uncovered:
+            fill_warning = (f"埋めた 1×1 の空隙 {fill['cells']} セルのうち {uncovered} セルは最小幅 "
+                            f"{float(min_width['guaranteed_mm']):.4g} mm({int(min_width['cells'])}セル)の立方に覆われない"
+                            f"(2軸以上で両隣が材料なので、保持セルと同じく最小幅の規則の対象外として扱った)")
+    else:
+        trace.snapshot('tube-fill', **fill)
     # 最終確定マスク(値は0/1のbool)。`_DebugSink.rho` の閾値0.5はboolに対しても
     # 形式的に成り立つ(True > 0.5 / False > 0.5)ので、二値専用の配信経路を新設していない。
-    dbg.rho("final", space.grid, best.mask)
+    dbg.rho("final", space.grid, mask)
 
     from .topopt import mesh as topo_mesh
 
@@ -1186,11 +1238,11 @@ def _run(
     # `_mesh_to_world`(`grid.origin + verts * grid.spacing`)が一括して行う契約
     # (モジュール docstring)——ここでも実 spacing を渡すと二重に掛かってメッシュが
     # 格子の外へ大きく外れる。
-    surface = topo_mesh.build_surface_from_mask(best.mask)
+    surface = topo_mesh.build_surface_from_mask(mask)
     positions = _mesh_to_world(surface.verts_smooth, space.grid)
     _check_mesh_placement(positions, space.grid)
     trace.snapshot('selected-result', status=search_result.status, termination=search_result.termination,
-                   material_mm3=best.material_mm3, safety_factor=best.safety_factor)
+                   material_mm3=material_mm3, safety_factor=safety_factor, filled_cells=fill["cells"])
     import numpy as np
     from .topopt.finalize import finalize
 
@@ -1219,12 +1271,14 @@ def _run(
         body_id=body_id,
         name=name,
         warning=_join_warnings(
-            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning) or None,
+            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning, fill_warning) or None,
         empty_condition_faces=[],
         unrepresented_regions=unrepresented,
         boundary_mapping=mapping,
-        safety_factor=float(best.safety_factor),
-        material_mm3=float(best.material_mm3),
+        safety_factor=safety_factor,
+        search_safety_factor=float(best.safety_factor),
+        filled_cells=int(fill["cells"]),
+        material_mm3=material_mm3,
         evaluations=int(search_result.evaluations),
         termination=search_result.termination,
         triangle_count=len(indices) // 3,

@@ -91,6 +91,10 @@ surface = build_surface_from_mask(**record)
 
 最新候補のscratch STLではなく、**採用結果の `final.stl`** を使う。
 
+探索後の 1×1 の空隙埋め(`thin_voids`。進捗の段は `fill`)は `tube-fill` snapshot に残る: `cells`(埋めた総数)・`rounds`
+(各回の数)と、埋めたときは `search_safety_factor`(探索時)、取り直した6条件の `report`、`min_width`(`cells` と、
+m 立方に覆われない埋めセルの数 `uncovered_filled_cells`。止めずに `warning` に出す)。`selected-result` の
+`safety_factor` / `material_mm3` は埋めた後の値。
 最終処理は `finalize` 段階に記録する。`smoothed-mesh-checks`(平滑化後の表面の接続6項目・向き・自己交差)、
 `cad-meshes`(保持・除外ごとの三角形分割の偏差・三角形数・境界交差検査の要約と、同じ検査)、
 `mesh-boolean`(集合演算と簡略化の秒数、簡略化前後の三角形数と体積、float32 で潰れる三角形のために潰した辺の数

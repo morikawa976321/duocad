@@ -655,12 +655,18 @@ export interface OptimizeResultPayload {
     | 'no_feasible_found'
     | 'input_contradiction'
     | 'resolution_insufficient'
+    /** 探索後に平滑化で潰れる 1×1 の空隙を埋めた形が6条件に不合格(`optimize_run` の `thin_voids`)。 */
+    | 'fill_infeasible'
   warning: string | null
   body_id: string | null
   name: string | null
   triangle_count: number | null
   vertex_count: number | null
   safety_factor: number | null
+  /** 探索が合格させた形の安全率(空隙を埋める前)。埋めなかったときは `safety_factor` と同じ。 */
+  search_safety_factor?: number | null
+  /** 探索後に埋めた 1×1 の空隙のセル数。 */
+  filled_cells?: number | null
   /** 利用者が指定した実際の目標。 */
   target_safety_factor: number
   /** 探索に渡した目標(= `target_safety_factor` × `search_target_factor`)。`safety_factor` はこれに対する探索の格子での値。 */
