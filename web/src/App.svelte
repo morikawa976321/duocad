@@ -170,6 +170,14 @@
   let previewId = 0
   /** 画面に幽霊が出ているか(テスト用フックが見る)。 */
   let previewing = $state(false)
+  /**
+   * いま構えているサーバ投機実行(`clearPreview` で null)。**無関係な再配信のあと投げ直すため**に
+   * 控える —— `viewport.update()` は届いた本物で幽霊を落とすが、`CommandHost` は引数が
+   * 変わらない限り再発火しない(`previewedKey`)ので、投げ直さないと消えたまま戻らない。
+   */
+  let serverPreview: { verb: string; args: Record<string, unknown> } | null = null
+  let refireTimer: ReturnType<typeof setTimeout> | null = null
+  const PREVIEW_REFIRE_MS = 250
 
   // ---------------------------------------------------------------- モード(verbより1つ上の次元)
   /**
@@ -762,7 +770,19 @@
     // `viewport.update()` がそれを落とすので、待っている印もここで降ろす。
     // **ローカル幽霊(`showBodyGhosts`)はここに含めない** —— あちらは同じ `update()` の中で
     // 届いた形から組み直されて出続ける(`viewportTypes.ts` の `update` の項)。
-    if (changed.length > 0) previewing = false
+    if (changed.length > 0) {
+      previewing = false
+      // 自分の確定ならここは null(`commit()` が先に `onCancelPreview` を呼ぶ)。残っているのは
+      // 他の操作やカメラ(可変解像度の測り直し)による再配信なので、同じ引数で投げ直す。
+      // 再配信はドラッグ中に続けて来るので、落ち着くまで待つ(`CommandHost` のデバウンスと同じ理由)。
+      if (serverPreview !== null) {
+        if (refireTimer) clearTimeout(refireTimer)
+        refireTimer = setTimeout(() => {
+          refireTimer = null
+          if (serverPreview !== null) requestPreview(serverPreview.verb, serverPreview.args, 'server')
+        }, PREVIEW_REFIRE_MS)
+      }
+    }
 
     drawHighlight()
     // スケッチも「コアが持ち、ここは描き直すだけ」(可視性・選択と同じ形)。
@@ -1875,6 +1895,9 @@
       showLocalGhost(verb, resolvePicksForGhost(ghostContext(), verb, args))
       return
     }
+    if (refireTimer) clearTimeout(refireTimer)
+    refireTimer = null
+    serverPreview = { verb, args }
     previewId += 1
     session.preview(verb, args, previewId)
   }
@@ -1882,6 +1905,9 @@
   function clearPreview(): void {
     previewId += 1 // 投げてある応答を無効にする(戻ってきても番号が合わない)
     previewing = false
+    serverPreview = null
+    if (refireTimer) clearTimeout(refireTimer)
+    refireTimer = null
     viewport?.clearPreview()
     // 空配列なら宛先のスケッチによらず消える。サーバの幽霊は選んだ領域のスケッチに出るので、
     // 開いているスケッチ(`sketchId`)が無いときも消す。
