@@ -1,14 +1,13 @@
 /**
  * 実ブラウザでの検査 — **人が使っていても気づけない壊れ方**だけを見る(何を smoke に書くかは
- * `docs/SMOKE_TESTING.md` の冒頭)。題材は MCP で作る板1枚。
+ * `docs/SMOKE_TESTING.md` の冒頭)。題材は MCP で作る板2枚(原点の角の板と、原点の向こう側 x<0 の板)。
  *
  *   web> node scripts/smoke.mjs
  *
  *   1. 何も起動していない間は辺を要求しない(要求すると、使わない辺の折れ線が毎回サーバから届く)
  *   2. 全解除の配信が届く前のクリックを、配信前の選択で判定しない(タイミングでしか出ない)
  *   3. AI が選択を書き換えても、人が起動した即適用のコマンドは走らない(人が指したときだけ走る)
- *   4. 基準平面を指せる間も、原点をはさんでカメラの反対側にある面が取れる(レイが先に
- *      座標平面をくぐるので、距離で競わせると見えている面が指せない)
+ *   4. 基準平面を指せる間も、原点をはさんでカメラの反対側にある面が取れる(#109)
  *   5. 入力欄にフォーカスがある間の Ctrl+Z は、文書を undo しない
  */
 import { fail, ok } from './args.mjs'
@@ -135,10 +134,8 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   await clearSelection()
 
   // ================================================================ 4. 原点の向こう側の面
-  // 基準平面の当たり範囲はモデルを覆うので、原点をはさんでカメラの反対側にある面へのレイは
-  // 必ず先に座標平面をくぐる。面と平面をレイ距離で競わせると、面は見えているのに平面が取られる
-  // (#109)。面に当たる画素では面が勝つこと —— 平面と同一平面の面(手前の壁と XZ)の同着も
-  // この規則で決着する。
+  // 面と基準平面をレイ距離で競わせる実装に戻ると、上面は YZ 平面に、手前の壁は同着で XZ 平面に
+  // 取られて赤になる(理由は docs/VIEWPORT.md「ピック」)。
   const farTop = await planarFace(page, far.bodyId, [0, 0, 1])
   const cameraX = await page.evaluate(() => window.__duocad.cameraPose().position[0])
   if (!(cameraX > 0)) fail(`この検査の前提が崩れた: カメラが x>0 に無い(x=${cameraX})`)
@@ -149,6 +146,10 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
     await page.click('#sketch-create')
     await waitFor(() => window.__duocad.wantsBasePlanes === true, '「スケッチ」で基準平面が指せる状態にならない')
     await waitFrames(page, 2) // 起動でツールバーの行が変わる。射影は押す直前
+    // 基準平面が本当に当たる状態でなければ、どの実装でも面が取れて空振りする
+    if ((await page.evaluate(() => window.__duocad.projectBasePlane('XY'))) === null) {
+      fail('この検査の前提が崩れた: 「スケッチ」の起動中なのに基準平面 XY を指せる画素が無い')
+    }
     // x<0 の板は画面の左寄りに出て、ブラウザパネルに覆われうる
     await withoutBrowserPanel(page, async () => {
       const at = await faceAt(page, target, index)

@@ -1032,7 +1032,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 基準3平面のうち当たった1枚と、そのレイ距離(当たらなければ null)。
+   * 基準3平面のうち当たった1枚(当たらなければ null)。
    *
    * **描いているグリッドは判定に使わない**(格子はシェーダーが無限に描くので、そもそも
    * 当たれるジオメトリが無い)。`planePointAt` と同じ解析交差を3枚ぶん回し、**ピック範囲**
@@ -1045,7 +1045,7 @@ export function createViewport(container: HTMLElement): Viewport {
   function basePlaneAt(
     offsetX: number,
     offsetY: number,
-  ): { name: BasePlaneName; distance: number } | null {
+  ): BasePlaneName | null {
     if (!grid.armed()) return null
     const ray = rayAt(offsetX, offsetY)
     const extent = grid.extent()
@@ -1060,7 +1060,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const distance = ray.origin.distanceTo(hit)
       if (best === null || distance < best.distance) best = { name: spec.name, distance }
     }
-    return best
+    return best?.name ?? null
   }
 
   function projectBasePlane(name: BasePlaneName): { x: number; y: number } | null {
@@ -1069,10 +1069,9 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const [u, v] of BASE_PLANE_PROBES) {
       const screen = toScreen(planePoint(null, spec.u, spec.v, u, v))
       if (screen === null) continue
-      // **本当にその平面が取れる画素か**を確かめてから返す(面の `project` と同じ流儀)。
-      const plane = basePlaneAt(screen.x, screen.y)
-      if (plane === null || plane.name !== name) continue
-      if (faceHitAt(screen.x, screen.y) !== null) continue // 部品の上の画素は面が取る
+      // **クリックしたら本当にその平面が取れる画素か**を、クリックと同じ `resolveHit` で
+      // 確かめてから返す(優先順位をここに書き写さない)。
+      if (resolveHit(screen.x, screen.y).plane !== name) continue
       return screen
     }
     return null
@@ -2539,15 +2538,13 @@ export function createViewport(container: HTMLElement): Viewport {
     // `vertexAt` が即 null を返すので、面のピックはそのまま動く。
     const vertex = vertexMarkers.at(offsetX, offsetY)
     if (vertex !== null) return { ...nothing, vertex }
-    // **面に当たる画素では面が勝ち、基準平面は面の無い画素でだけ取れる**(#109、本人判断
-    // 2026-10-07)。レイ距離で競わせると、原点をはさんでカメラの反対側にある面は、見えて
-    // いるのに指せない —— 平面の当たり範囲はモデルを覆うので、そこへのレイは必ず先に
-    // 座標平面をくぐる。代わりに、部品のシルエットに重なる部分の基準平面は指せない。
+    // **面に当たる画素では面が勝ち、基準平面は面の無い画素でだけ取れる** —— レイ距離では
+    // 競わせない。わざとであり、部品のシルエットに重なる部分の基準平面は指せない
+    // (#109、本人判断 2026-10-07。理由は docs/VIEWPORT.md「ピック」)。
     // 基準平面は `showBasePlanes(true)` の間しか当たらない。
     const face = faceHitAt(offsetX, offsetY)
     if (face !== null) return { ...nothing, hit: face.ref }
-    const basePlane = basePlaneAt(offsetX, offsetY)
-    return { ...nothing, plane: basePlane?.name ?? null }
+    return { ...nothing, plane: basePlaneAt(offsetX, offsetY) }
   }
 
   function onPointerMove(event: PointerEvent): void {
