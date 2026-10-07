@@ -148,7 +148,7 @@ export async function clickEntityHandle(page, entityId) {
  * 対象1つ・how の入力なし → 即適用)。戻り値は作られた sketch_id。
  *
  * 起動してから、その平面を指せる画素が出るまで待つ(`projectBasePlane` は「その画素からのレイが
- * 本当にその平面に当たり、手前に面が無い」ことを確かめてから返す)。`settle` は起動の反映を待って
+ * 本当にその平面に当たり、その画素に面が無い」ことを確かめてから返す)。`settle` は起動の反映を待って
  * 2フレーム置いてから射影する(`smoke-regions.mjs` の作法)。
  * **貼れた先が本当にその基準平面かを毎回検算する**(`verifyFrame`) —— `projectBasePlane` が
  * 返す画素は部品の輪郭のすぐ外側になることがあり、1画素ずれると側面に貼られ、後続のアサーションは

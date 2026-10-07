@@ -306,8 +306,8 @@ export interface PickEvent {
    * 当たった基準平面(XY/XZ/YZ)。**`showBasePlanes(true)` の間だけ** null 以外になる
    * (辺と同じ「要求しているコマンドを起動している間だけ指せる」規律)。
    *
-   * 面と平面の両方に当たったときは**レイ距離が近い方**だけが返る(通常のオクルージョン)
-   * ので、`plane` が非nullなら `hit` は null である。
+   * **面に当たる画素では面だけが返り、平面は面の無い画素でだけ返る**(どちらが手前かは
+   * 比べない)ので、`plane` が非nullなら `hit` は null である。
    */
   plane: BasePlaneName | null
 }

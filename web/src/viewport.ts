@@ -958,11 +958,10 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 面のピック。**レイ距離も返す** —— 基準平面と面のどちらが手前かを比べるのに要る
-   * (`onPointerUp`)。`pickAt` はこれの薄い覆いで、距離を要らない呼び出し側のためにある。
+   * 面のピック。`pickAt` はこれの薄い覆いで、切り口を区別しない呼び出し側のためにある。
    *
-   * **`ref` が null の当たりは断面の切り口** —— 指せないが奥のものを隠す実体なので、
-   * 距離だけ返す(基準平面との勝負に使う)。
+   * **`ref` が null の当たりは断面の切り口** —— 指せないが実体なので、その画素の基準平面を
+   * 塞ぐ(`resolveHit`)。
    *
    * 断面が ON のとき、レイキャストはクリップ平面を見ないので、平面をよぎる位置(`section.cut`)
    * を境に当たりを捨てる。切られた側からレイが入る場合は、よぎる点が中身かどうかを「同じ
@@ -972,7 +971,7 @@ export function createViewport(container: HTMLElement): Viewport {
   function faceHitAt(
     offsetX: number,
     offsetY: number,
-  ): { ref: FaceRef | null; distance: number } | null {
+  ): { ref: FaceRef | null } | null {
     const ray = rayAt(offsetX, offsetY)
     // **隠しているメッシュは指せない**(プレビュー中の本物。three.js の Raycaster は
     // `visible` を見ないので、ここで明示的に外す)。
@@ -984,14 +983,14 @@ export function createViewport(container: HTMLElement): Viewport {
     if (cut === 'cut') return null
     if (cut === 'kept') {
       const ref = hits.length === 0 ? null : faceRefOf(hits[0])
-      return ref === null ? null : { ref, distance: hits[0].distance }
+      return ref === null ? null : { ref }
     }
     if (cut.originKept) {
       // 残る側から切られた側へ向かうレイ: 平面の手前までしか見えない(切り口は裏から見えない)
       const first = hits[0]
       if (!first || first.distance >= cut.t) return null
       const ref = faceRefOf(first)
-      return ref === null ? null : { ref, distance: first.distance }
+      return ref === null ? null : { ref }
     }
     const crossings = new Map<string, number>()
     let first: THREE.Intersection | null = null
@@ -1004,11 +1003,11 @@ export function createViewport(container: HTMLElement): Viewport {
       if (typeof bodyId === 'string') crossings.set(bodyId, (crossings.get(bodyId) ?? 0) + 1)
     }
     for (const count of crossings.values()) {
-      if (count % 2 === 1) return { ref: null, distance: cut.t }
+      if (count % 2 === 1) return { ref: null }
     }
     if (first === null) return null
     const ref = faceRefOf(first)
-    return ref === null ? null : { ref, distance: first.distance }
+    return ref === null ? null : { ref }
   }
 
   function pickAt(offsetX: number, offsetY: number): FaceRef | null {
@@ -1033,7 +1032,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 基準3平面のうち当たった1枚と、そのレイ距離(当たらなければ null)。
+   * 基準3平面のうち当たった1枚(当たらなければ null)。
    *
    * **描いているグリッドは判定に使わない**(格子はシェーダーが無限に描くので、そもそも
    * 当たれるジオメトリが無い)。`planePointAt` と同じ解析交差を3枚ぶん回し、**ピック範囲**
@@ -1046,7 +1045,7 @@ export function createViewport(container: HTMLElement): Viewport {
   function basePlaneAt(
     offsetX: number,
     offsetY: number,
-  ): { name: BasePlaneName; distance: number } | null {
+  ): BasePlaneName | null {
     if (!grid.armed()) return null
     const ray = rayAt(offsetX, offsetY)
     const extent = grid.extent()
@@ -1061,7 +1060,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const distance = ray.origin.distanceTo(hit)
       if (best === null || distance < best.distance) best = { name: spec.name, distance }
     }
-    return best
+    return best?.name ?? null
   }
 
   function projectBasePlane(name: BasePlaneName): { x: number; y: number } | null {
@@ -1070,11 +1069,9 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const [u, v] of BASE_PLANE_PROBES) {
       const screen = toScreen(planePoint(null, spec.u, spec.v, u, v))
       if (screen === null) continue
-      // **本当にその平面が取れる画素か**を確かめてから返す(面の `project` と同じ流儀)。
-      const plane = basePlaneAt(screen.x, screen.y)
-      if (plane === null || plane.name !== name) continue
-      const face = faceHitAt(screen.x, screen.y)
-      if (face !== null && face.distance < plane.distance) continue // 部品に隠れている
+      // **クリックしたら本当にその平面が取れる画素か**を、クリックと同じ `resolveHit` で
+      // 確かめてから返す(優先順位をここに書き写さない)。
+      if (resolveHit(screen.x, screen.y).plane !== name) continue
       return screen
     }
     return null
@@ -2541,26 +2538,13 @@ export function createViewport(container: HTMLElement): Viewport {
     // `vertexAt` が即 null を返すので、面のピックはそのまま動く。
     const vertex = vertexMarkers.at(offsetX, offsetY)
     if (vertex !== null) return { ...nothing, vertex }
-    // **面と基準平面は、レイ距離が近い方**(通常のオクルージョン。辺のような優先順位は
-    // 付けない —— 平面は部品と同じ空間に居るので、手前に見えているものが取れるのが自然)。
+    // **面に当たる画素では面が勝ち、基準平面は面の無い画素でだけ取れる** —— レイ距離では
+    // 競わせない。わざとであり、部品のシルエットに重なる部分の基準平面は指せない
+    // (#109、本人判断 2026-10-07。理由は docs/VIEWPORT.md「ピック」)。
     // 基準平面は `showBasePlanes(true)` の間しか当たらない。
-    //
-    // **ただし同着は面が勝つ。** 基準平面に描いて押し出すと、その面は平面とぴったり重なり、
-    // 2つのレイ距離が同着になる —— 素の `<` では**どちらが手前かが浮動小数の最後の桁で
-    // 決まり**、見た目が同じなのに指すたび結果が変わる(無関係な式の書き換えでカメラが
-    // 7e-14 動いただけで面→XZ平面へ反転したことが実際にあった)。そこで**画面で1画素にも満たない差を
-    // 「手前」と見なさない** —— 見分けが付かないなら、実体のある面のほうが狙いである。
-    // しきい値はシーンの寸法に依らないよう `worldPerPixel()`(注視点で1画素ぶんの世界長さ)
-    // から作る。この不変は `smoke-files.mjs` の(d)が画角を振って固定している。
     const face = faceHitAt(offsetX, offsetY)
-    const basePlane = basePlaneAt(offsetX, offsetY)
-    if (
-      basePlane !== null &&
-      (face === null || basePlane.distance < face.distance - worldPerPixel())
-    ) {
-      return { ...nothing, plane: basePlane.name }
-    }
-    return { ...nothing, hit: face?.ref ?? null }
+    if (face !== null) return { ...nothing, hit: face.ref }
+    return { ...nothing, plane: basePlaneAt(offsetX, offsetY) }
   }
 
   function onPointerMove(event: PointerEvent): void {
