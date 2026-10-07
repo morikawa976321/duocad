@@ -7,8 +7,8 @@
  *   1. 何も起動していない間は辺を要求しない(要求すると、使わない辺の折れ線が毎回サーバから届く)
  *   2. 全解除の配信が届く前のクリックを、配信前の選択で判定しない(タイミングでしか出ない)
  *   3. AI が選択を書き換えても、人が起動した即適用のコマンドは走らない(人が指したときだけ走る)
- *   4. 基準平面とぴったり重なる面は、カメラがどこにあっても面が取れる(見た目は同じまま、
- *      スケッチの貼り先だけが基準平面に化ける)
+ *   4. 基準平面を指せる間も、原点をはさんでカメラの反対側にある面が取れる(レイが先に
+ *      座標平面をくぐるので、距離で競わせると見えている面が指せない)
  *   5. 入力欄にフォーカスがある間の Ctrl+Z は、文書を undo しない
  */
 import { fail, ok } from './args.mjs'
@@ -29,9 +29,11 @@ import { clickFace, faceAt, planarFace } from './pick.mjs'
 runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
   // 原点の角から描くので、手前の壁(法線 −Y)は XZ 基準平面と、底面は XY 基準平面とぴったり重なる。
   const { bodyId } = await addExtrudedRect(mcp, { corner: [0, 0], width: 60, height: 20, distance: 5 })
+  // 原点の向こう側(x<0)の板。ホームビューのカメラは x>0 にあるので、上面へのレイは YZ 基準平面を先に通る。
+  const far = await addExtrudedRect(mcp, { corner: [-40, 0], width: 20, height: 20, distance: 5 })
   const { page, consoleErrors } = await openApp(browser, url, {
     timeout,
-    until: () => (window.__duocad?.parts ?? []).length >= 1,
+    until: () => (window.__duocad?.parts ?? []).length >= 2,
   })
   await frameAll(page)
 
@@ -132,42 +134,43 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   await waitFor(() => window.__duocad.mode === 'idle', '貼る先待ちのモードを抜けられない')
   await clearSelection()
 
-  // ================================================================ 4. 同一平面の同着
-  // `resolveHit` は面と基準平面を「レイ距離が近い方」で決めるので、重なった2つは同着になり、
-  // 素の `<` では**勝敗が浮動小数の最後の桁で決まる**。実際、`fitDistance` を数学的に同値な式へ
-  // 書き換えただけ(カメラ位置の差 7e-14)で、面ではなく XZ 基準平面に貼られた —— 見た目も
-  // `projectFace` が返す画素も同じままで、である。
-  //
-  // **1回通すだけでは検出力が無い**(同着はどちらに転んでもおかしくない)。画角を振ってカメラを
-  // 視線上で動かし、丸め方の違う位置を何通りも作って、そのすべてで面が勝つことを見る。
-  // **実測(2026-10-04)**: 同着に決着を付けない実装(`basePlane.distance < face.distance` だけ)では、
-  // 35〜75度の41通りのうち 9〜11 通りが基準平面を取り、**どの画角が転ぶかは走行ごとに変わった**。
-  // 6通りでは全部面になって緑のまま通った走行があったので、16通りにしてある。**本数を減らさないこと。**
-  const tieAngles = Array.from({ length: 16 }, (_, i) => 40 + 2 * i)
-  const tieResults = []
-  for (const angle of tieAngles) {
-    await page.evaluate((deg) => window.__duocad.setFov(deg), angle)
-    await waitFor((deg) => window.__duocad.fov === deg, '画角が変わらない', [angle])
+  // ================================================================ 4. 原点の向こう側の面
+  // 基準平面の当たり範囲はモデルを覆うので、原点をはさんでカメラの反対側にある面へのレイは
+  // 必ず先に座標平面をくぐる。面と平面をレイ距離で競わせると、面は見えているのに平面が取られる
+  // (#109)。面に当たる画素では面が勝つこと —— 平面と同一平面の面(手前の壁と XZ)の同着も
+  // この規則で決着する。
+  const farTop = await planarFace(page, far.bodyId, [0, 0, 1])
+  const cameraX = await page.evaluate(() => window.__duocad.cameraPose().position[0])
+  if (!(cameraX > 0)) fail(`この検査の前提が崩れた: カメラが x>0 に無い(x=${cameraX})`)
+  for (const [target, index, what] of [
+    [far.bodyId, farTop, '原点の向こう側の板の上面'],
+    [bodyId, wall, 'XZ 基準平面と重なる手前の壁'],
+  ]) {
     await page.click('#sketch-create')
+    await waitFor(() => window.__duocad.wantsBasePlanes === true, '「スケッチ」で基準平面が指せる状態にならない')
     await waitFrames(page, 2) // 起動でツールバーの行が変わる。射影は押す直前
-    const at = await faceAt(page, bodyId, wall)
-    if (at === null) fail(`画角${angle}で手前の壁が画面から指せない`)
-    await page.mouse.click(at.x, at.y)
+    // x<0 の板は画面の左寄りに出て、ブラウザパネルに覆われうる
+    await withoutBrowserPanel(page, async () => {
+      const at = await faceAt(page, target, index)
+      if (at === null) fail(`${what}が画面から指せない`)
+      await page.mouse.click(at.x, at.y)
+    })
     // 即適用は貼ると同時にそのスケッチへ入るので、`sketch` が立つことが手が届いた証拠になる
-    await waitFor(() => window.__duocad.sketch !== null, `画角${angle}で面クリックが届かない`)
-    tieResults.push(`${angle}:${await page.evaluate(() => window.__duocad.sketch.plane.kind)}`)
+    await waitFor(() => window.__duocad.sketch !== null, `${what}のクリックでスケッチが貼られない`)
+    const plane = await page.evaluate(() => {
+      const { kind, body, index } = window.__duocad.sketch.plane
+      return { kind, body, index }
+    })
+    if (plane.kind !== 'face' || plane.body !== target || plane.index !== index) {
+      fail(`基準平面を指せる間に${what}をクリックしたのに、貼り先が ${JSON.stringify(plane)} になった`)
+    }
     await page.click('#sketch-exit')
-    await waitFor(() => window.__duocad.activeSketch === null, `画角${angle}で抜けられない`)
-    await pressUndo(page) // 1本ずつ戻す
+    await waitFor(() => window.__duocad.activeSketch === null, 'スケッチを抜けられない')
+    await pressUndo(page)
     await waitFor((expected) => window.__duocad.sketches.length === expected, 'スケッチをundoで戻せない', [sketchesBefore])
     await clearSelection()
   }
-  await page.evaluate(() => window.__duocad.setFov(45))
-  const tieBad = tieResults.filter((entry) => !entry.endsWith(':face'))
-  if (tieBad.length > 0) {
-    fail(`基準平面と同一平面の面が、画角によっては平面に取られる: ${tieResults.join(' / ')}`)
-  }
-  ok(`[4] 基準平面と重なった面は、カメラを動かしても面が取れる(画角 ${tieAngles[0]}〜${tieAngles.at(-1)} の ${tieAngles.length} 通り)`)
+  ok('[4] 基準平面を指せる間も、原点の向こう側の面と、基準平面と重なる面が面として取れる')
 
   // ================================================================ 5. 入力欄の Ctrl+Z
   // フォーカスが入力欄にあるとき、Ctrl+Z はブラウザ標準のテキスト取り消しに任せ、文書の undo を
