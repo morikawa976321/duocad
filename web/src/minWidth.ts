@@ -122,6 +122,6 @@ export function roundUpNotice(verdict: MinWidthVerdict, valueMm: number | null):
   if (verdict.kind !== 'ok' || verdict.roundedUpBy === null || valueMm === null) return null
   return (
     `入力 ${valueMm}mm は段のあいだにあり、m=${verdict.cells} へ切り上がって ` +
-    `${shownGuaranteedMm(verdict)}mm が保証される(要求より ${(verdict.roundedUpBy * 100).toFixed(1)}% 太い部品が出る)`
+    `${shownGuaranteedMm(verdict)}mm の立方で探索する(要求より ${(verdict.roundedUpBy * 100).toFixed(1)}% 太い立方)`
   )
 }
