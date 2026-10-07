@@ -87,6 +87,10 @@ class OpLog:
     def __init__(self) -> None:
         self._entries: list[Operation] = []
         self._cursor = 0  # 有効なエントリ数。0 <= cursor <= len(_entries)
+        #: 自動で振った名前の通し番号の、種類(`naming.BODY` 等)ごとの最大値。**一度振った番号は
+        #: 再利用しない**(本人指定 2026-10-07)ので undo でも戻さず、保存にも載せる —— 載せないと、
+        #: 取り消して捨てた操作が振った番号を、開き直した文書がもう一度振る。
+        self._numbering: Dict[str, int] = {}
 
     @property
     def entries(self) -> list[Operation]:
@@ -145,18 +149,32 @@ class OpLog:
         self._cursor += 1
         return operation
 
+    # ------------------------------------------------------------------ 名前の通し番号
+    def allocate_number(self, kind: str) -> int:
+        """`kind` の次の番号を振る(振った時点で使用済み)。"""
+        number = self._numbering.get(kind, 0) + 1
+        self._numbering[kind] = number
+        return number
+
+    def note_number(self, kind: str, number: int) -> None:
+        """ログに記録済みの番号を使用済みにする(redo / 再生の側。振り直さない)。"""
+        self._numbering[kind] = max(self._numbering.get(kind, 0), int(number))
+
     # ------------------------------------------------------------------ 投機的実行の巻き戻し
     # `duocad.speculative` だけが使う非公開の口。`_entries` / `_cursor` の不変条件
     # (「cursorは常に 0..len(entries)」「undo済みの末尾は次のappendで捨てる」)を
     # 知らない場所を増やさないために、外から直に触らせずここに置く。
     def _snapshot(self) -> tuple:
-        return (list(self._entries), self._cursor)
+        # **通し番号も戻す** —— 押し出しのプレビューが振った番号が残ると、確定した
+        # ボディの番号が1つ飛ぶ。
+        return (list(self._entries), self._cursor, dict(self._numbering))
 
     def _restore(self, snapshot: tuple) -> None:
         """`_snapshot()` で控えた状態へ戻す。**リストは中身を入れ替える**。"""
-        entries, cursor = snapshot
+        entries, cursor, numbering = snapshot
         self._entries[:] = entries
         self._cursor = cursor
+        self._numbering = dict(numbering)
 
     def to_json(self, created: Optional[float] = None) -> str:
         """現在有効なエントリ全部をJSON文字列へシリアライズする。
@@ -174,6 +192,8 @@ class OpLog:
         payload: dict = {"version": self.FORMAT_VERSION}
         if created is not None:
             payload["created"] = created
+        if self._numbering:
+            payload["numbering"] = dict(self._numbering)
         payload["operations"] = [asdict(operation) for operation in self.entries]
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
@@ -214,7 +234,20 @@ class OpLog:
                 )
             )
         log._cursor = len(log._entries)
+        log._numbering = cls._numbering_of(payload)
         return log
+
+    @staticmethod
+    def _numbering_of(payload: Any) -> Dict[str, int]:
+        """入れ物の `numbering`。無ければ空(番号は再生した操作の側からも拾われる)。"""
+        raw = payload.get("numbering") if isinstance(payload, dict) else None
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(kind): int(number)
+            for kind, number in raw.items()
+            if isinstance(number, int) and not isinstance(number, bool)
+        }
 
     @classmethod
     def _extract_operations(cls, payload: Any) -> list:

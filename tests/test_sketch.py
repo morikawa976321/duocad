@@ -199,7 +199,7 @@ def test_sketch_and_entities_are_logged_and_undoable():
     assert [operation.verb for operation in entries] == [
         "sketch_create", "add_circle", "add_line", "add_rectangle",
     ]
-    assert entries[0].args == {"sketch_id": sketch_id, "plane": base_plane("XY")}
+    assert entries[0].args == {"sketch_id": sketch_id, "plane": base_plane("XY"), "number": 1}
     assert entries[1].args == {
         "sketch_id": sketch_id,
         "entity_id": circle_id,

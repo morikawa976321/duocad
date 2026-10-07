@@ -297,6 +297,7 @@ class DocumentTools:
             ]
             sketch_entry: dict[str, Any] = {
                 "sketch_id": sk.id,
+                "name": sk.name,
                 "plane": dict(sk.plane),
                 "visible": sk.visible,
                 "entities": entities_out,

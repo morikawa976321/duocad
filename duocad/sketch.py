@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
 from . import kernel_sketch
+from . import naming
 from . import parameters
 from .document import BodyId, Document, unknown_id_message
 from .oplog import Operation, register_verb
@@ -566,6 +567,9 @@ class Sketch:
     #: 保存もされず undo でも戻らない**(切り替えは `duocad.selection.set_sketch_visible`)。
     #: 開き直した文書は全スケッチが可視で始まる。
     visible: bool = True
+    #: 表示名。作成時に通し番号(`duocad/naming.py`)、変えるのは `rename`。番号の記録が無い
+    #: 古いログのスケッチは None(画面は平面の名前で呼ぶ)。
+    name: Optional[str] = None
 
 
 def get_sketch(doc: Document, sketch_id: SketchId) -> Sketch:
@@ -596,13 +600,16 @@ def sketch_create(doc: Document, plane: Any, *, verb: str = VERB_SKETCH_CREATE) 
     """
     plane_ref = resolve_plane(doc, plane)
     sketch_id = f"sketch-{uuid4().hex[:12]}"
+    number = naming.allocate(doc, naming.SKETCH)
     # モデルとログには別のdictを渡す(共有すると、貼った面の由来スロットを後から埋めた
     # 瞬間に、唯一の正であるログが黙って書き換わる)。**モデルは解決済みの姿勢つき、
     # ログは素の参照だけ**(`plane_log_args`)。
-    doc.sketches.append(Sketch(id=sketch_id, plane=dict(plane_ref)))
+    doc.sketches.append(
+        Sketch(id=sketch_id, plane=dict(plane_ref), name=naming.label(naming.SKETCH, number))
+    )
     doc.log.append(
         verb,
-        {"sketch_id": sketch_id, "plane": plane_log_args(plane_ref)},
+        {"sketch_id": sketch_id, "plane": plane_log_args(plane_ref), "number": number},
     )
     return sketch_id
 
@@ -831,7 +838,8 @@ def _do_sketch_create(document: Document, operation: Operation) -> None:
     if any(sketch.id == sketch_id for sketch in document.sketches):
         raise ValueError(f"sketch id already exists: {sketch_id!r}")
     plane_ref = resolve_plane(document, args["plane"])
-    document.sketches.append(Sketch(id=sketch_id, plane=dict(plane_ref)))
+    name = naming.recorded(document, naming.SKETCH, args.get("number"), None)
+    document.sketches.append(Sketch(id=sketch_id, plane=dict(plane_ref), name=name))
 
 
 def _undo_sketch_create(document: Document, operation: Operation) -> None:

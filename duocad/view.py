@@ -385,7 +385,7 @@ class DocumentView:
         """全スケッチを**アプリ層が描ける形**で返す。
 
         1件ぶん:
-            {"sketch_id", "plane": <PlaneRef>,
+            {"sketch_id", "name": <str|None>, "plane": <PlaneRef>,
              "frame": {"origin","u","v","normal"},          # (u,v) と3Dの往復の規則
              "entities": [{"entity_id","kind","params","refs"}],   # 打ち直し用(名前つき)
              "patterns": [{"pattern_id","kind","sources","params","refs","options"}],  # 反復の打ち直し用
@@ -446,6 +446,7 @@ class DocumentView:
         payload["sketch_id"] = item.id
         payload["plane"] = item.plane
         payload["visible"] = item.visible
+        payload["name"] = item.name
         # 図形そのものは軽いのでキャッシュしない(打ち直しの反映が1手遅れるのを避ける)。
         # **ここも try で包む** —— 上の `drawn` だけを守っても、同じパラメータ解決を
         # するこちらが素通りすると `state_meta()` ごと落ち、以後の配信が全部止まる。
