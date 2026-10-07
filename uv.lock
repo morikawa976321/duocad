@@ -137,6 +137,7 @@ source = { editable = "." }
 dependencies = [
     { name = "build123d" },
     { name = "cadquery-ocp-novtk" },
+    { name = "gudhi" },
     { name = "manifold3d" },
     { name = "pillow" },
     { name = "pytest" },
@@ -148,6 +149,7 @@ dependencies = [
 requires-dist = [
     { name = "build123d", specifier = "==0.11.1" },
     { name = "cadquery-ocp-novtk", specifier = "==7.9.3.1.1" },
+    { name = "gudhi", specifier = "==3.13.0" },
     { name = "manifold3d", specifier = "==3.5.3" },
     { name = "pillow", specifier = "==12.3.0" },
     { name = "pytest", specifier = ">=8.0" },
@@ -202,6 +204,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a8/99/253e4056e1f0e67b9390125a154b73b5eb73ad521bece95c004858fdeec2/fonttools-4.63.0-cp311-cp311-win32.whl", hash = "sha256:afefc1ed0a59785a7fb06ea7e1678e849c193e1e387db783579bc7b3056fcfcb", size = 2304473, upload-time = "2026-05-14T12:03:09.271Z" },
     { url = "https://files.pythonhosted.org/packages/08/60/defa5e69641db890a63be281f41345f4c33b157824eaf0b9fad3e08b0dcb/fonttools-4.63.0-cp311-cp311-win_amd64.whl", hash = "sha256:063e08bd17bd5a90127a14123de0d6a952dbc847695fd98b63c043d58057f90c", size = 2356389, upload-time = "2026-05-14T12:03:11.53Z" },
     { url = "https://files.pythonhosted.org/packages/2c/47/c99d5268f354002ce80f8d029cd9d7d872969da1de8b93d32de4dc56d6f4/fonttools-4.63.0-py3-none-any.whl", hash = "sha256:445af2eab030a16b9171ea8bdda7ebf7d96bda2df88ee182a464252f6e05e20d", size = 1164562, upload-time = "2026-05-14T12:04:29.092Z" },
+]
+
+[[package]]
+name = "gudhi"
+version = "3.13.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3c/b8/7d2b0a22a07ab5b34b5d5d404721adbcdf0ab32cecc37e0bd920df42417a/gudhi-3.13.0-cp311-cp311-macosx_14_0_universal2.whl", hash = "sha256:800ad3798718ca344a084fa538d7ceb5ab2c4f91ff1e9b35024208a1703803ca", size = 8636728, upload-time = "2026-07-03T08:00:42.671Z" },
+    { url = "https://files.pythonhosted.org/packages/66/3c/372f9e8acea6cf013913b5fdfd3dd44e67d3de9838a2b789723a334c8f1b/gudhi-3.13.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:312f411388bbfdaaf0034455dfe84190b1fcbcb222584694b8c7cf97e02a92f0", size = 4488330, upload-time = "2026-07-02T09:11:17.781Z" },
+    { url = "https://files.pythonhosted.org/packages/72/bd/fd3c2943b25192038d2d09288bea07e8ae860f0e14996b20ea9adda8963d/gudhi-3.13.0-cp311-cp311-win_amd64.whl", hash = "sha256:e70c5dbe1c43935afa465f70131362c754fc67ecc5179fb6b860fa6dcefe0982", size = 3921107, upload-time = "2026-07-02T09:23:44.636Z" },
 ]
 
 [[package]]

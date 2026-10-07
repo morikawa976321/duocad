@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import subprocess
 import sys
@@ -1482,3 +1483,46 @@ def test_tube_fill_reports_uncovered_filled_cells_as_a_warning_not_a_failure(ses
     result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
     assert result["state"] == "done" and result["filled_cells"] == 1, result["warning"]
     assert "1 セルのうち 1 セルは最小幅" in result["warning"] and "覆われない" in result["warning"]
+
+
+def test_the_finished_shape_is_solved_again_and_its_safety_factor_and_neck_diagnosis_are_returned(session: Session, monkeypatch) -> None:
+    # 落ちたら、完成形(平滑化・集合演算の後)を解き直さずに探索時の安全率だけを返している(#117)。
+    four_conditions(session)
+    _replayed_search(monkeypatch)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "done", result["warning"]
+    checked = result["final_check"]
+    assert result["final_safety_factor"] == checked["safety_factor"] and checked["safety_factor"] > 0
+    assert checked["neck"]["status"] in ("suspect", "undetermined", "not_observed")
+    json.dumps(result)  # 結果メッセージにそのまま載る
+
+
+def test_a_finished_shape_below_the_real_target_is_a_failure_without_touching_the_document(session: Session, monkeypatch) -> None:
+    # 落ちたら、完成形が本来の目標安全率を割っても結果を足している(2026-10-07 本人決定)。
+    from duocad.topopt import final_check
+
+    four_conditions(session)
+    before = [body.id for body in session.document.bodies]
+    _replayed_search(monkeypatch)
+    monkeypatch.setattr(final_check, "inspect", lambda *a, **k: dict(
+        safety_factor=1.2, safety=dict(status="fail", safety_factor=1.2), conditions=dict(status="pass"),
+        material_cells=1, neck=dict(status="not_observed", events=[], required_mm=16.0)))
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "final_unsafe" and result["body_id"] is None
+    assert result["final_safety_factor"] == 1.2 and "1.2" in result["warning"] and "目標" in result["warning"]
+    assert [body.id for body in session.document.bodies] == before
+
+
+def test_a_suspected_thin_joint_is_a_warning_not_a_silent_success(session: Session, monkeypatch) -> None:
+    # 落ちたら、つなぎ目の幅不足の疑いを成功として黙って返している(#117 の完了条件)。
+    from duocad.topopt import final_check
+
+    four_conditions(session)
+    _replayed_search(monkeypatch)
+    event = dict(kind="loop_neck", diameter_mm=[0.0, 6.9], lifetime_mm=None, verdict="suspect", reason=None,
+                 position_mm=[1.0, 2.0, 3.0])
+    monkeypatch.setattr(final_check, "inspect", lambda *a, **k: dict(
+        safety_factor=5.0, safety=dict(status="pass", safety_factor=5.0), conditions=dict(status="pass"),
+        material_cells=1, neck=dict(status="suspect", events=[event], required_mm=16.0)))
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "done" and "つなぎ目: 幅不足の疑い 1 か所" in result["warning"]

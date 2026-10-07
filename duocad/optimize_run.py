@@ -463,6 +463,8 @@ def _not_done(
         termination=termination,
         triangle_count=None,
         vertex_count=None,
+        final_safety_factor=None,
+        final_check=None,
         seconds=time.perf_counter() - started,
     )
 
@@ -926,7 +928,8 @@ def _run(
         {"state": "done" | "empty_condition_faces" | "unrepresented_regions"
                   | "boundary_mapping_failed"
                   | "no_feasible_found" | "input_contradiction" | "resolution_insufficient"
-                  | "fill_infeasible",                       # 空隙を埋めた形が6条件に不合格
+                  | "fill_infeasible"                        # 空隙を埋めた形が6条件に不合格
+                  | "final_unsafe",                          # 完成形を探索格子で再解析した安全率が本来の目標を割る
          "search_safety_factor": float|None, "filled_cells": int|None,
          "body_id": BodyId | None, "name": str | None,
          "warning": str | None,
@@ -944,11 +947,14 @@ def _run(
          "material_mm3": float|None, "evaluations": int, "termination": str|None,
          "anchor_check": {"limit_mm","fixed_mm","load_mm"} | None,
          "triangle_count": int|None, "vertex_count": int|None,
+         "final_safety_factor": float|None,      # 完成形(平滑化・集合演算の後)を探索格子で再解析した安全率
+         "final_check": topopt.final_check.inspect の戻り | None,   # 強度と、つなぎ目の幅の診断(3値。適合は出さない)
          "seconds": float}
 
     `target_safety_factor` は利用者が指定した実際の目標、`search_target_safety_factor` は探索(と6条件の
     `safety`)に渡した目標(= 実際の目標 × `search_target_factor`)。**`safety_factor` は探索の格子での値**で、
-    探索時の目標に対する合否であって、実際の目標に対する安全率の実測ではない。
+    探索時の目標に対する合否であって、実際の目標に対する安全率の実測ではない。**`final_safety_factor` は完成形を同じ格子で解き直した値**で、
+    実際の目標を割れば `state="final_unsafe"` で結果を足さない(2026-10-07 本人決定。`topopt.final_check`)。
 
     `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも
     m 立方が入らず保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
@@ -1252,6 +1258,31 @@ def _run(
         [doc.get_body(bid).shape for bid in bundle.exclude_body_ids],
         progress=lambda message: pump.emit(phase="finalize", message=message),
     )
+    from .topopt import final_check
+
+    pump.emit(phase="final_check", message="完成形を探索の格子で解き直し、つなぎ目の幅を調べる")
+    pump.check()
+    checked = final_check.inspect(final_vertices, final_faces, grid=space.grid, conditions=conditions, mask=mask,
+                                  min_width=min_width, target_safety_factor=float(opts.target_safety_factor),
+                                  keep_cells=conditions.keep_cells)
+    trace.snapshot('final-check', **checked)
+    final_sf = checked["safety_factor"]
+    if checked["safety"] is not None and checked["safety"].get("status") == "fail":
+        return dict(_not_done(
+            common,
+            started,
+            keep_room_warning,
+            state="final_unsafe",
+            warning=(f"完成形(平滑化・保持/除外の後)を探索の格子で解き直した安全率 {final_sf:.4g} が目標 "
+                     f"{opts.target_safety_factor:.4g} を下回る(探索時の値 {safety_factor:.4g})"),
+            unrepresented_regions=unrepresented,
+            boundary_mapping=mapping,
+            evaluations=int(search_result.evaluations),
+            termination=search_result.termination,
+        ), final_safety_factor=final_sf, final_check=checked)
+    final_warning = final_check.neck_warning(checked["neck"])
+    if final_sf is None:
+        final_warning = _join_warnings(final_warning, "完成形の安全率を測れなかった(拘束・荷重の節点が完成形に載らないか、解けなかった)")
     positions = final_vertices.ravel().tolist()
     indices = final_faces.ravel().tolist()
     trace.final_mesh(surface.verts_raw, surface.verts_smooth, surface.faces, space.grid,
@@ -1271,12 +1302,15 @@ def _run(
         body_id=body_id,
         name=name,
         warning=_join_warnings(
-            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning, fill_warning) or None,
+            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning, fill_warning,
+            final_warning) or None,
         empty_condition_faces=[],
         unrepresented_regions=unrepresented,
         boundary_mapping=mapping,
         safety_factor=safety_factor,
         search_safety_factor=float(best.safety_factor),
+        final_safety_factor=final_sf,
+        final_check=checked,
         filled_cells=int(fill["cells"]),
         material_mm3=material_mm3,
         evaluations=int(search_result.evaluations),

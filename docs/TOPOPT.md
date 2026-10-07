@@ -11,6 +11,8 @@
 | **走らせ方**(受入検査・所要) | `README.md` §3 |
 | **形状探索の時間短縮**(内訳・候補評価の費用) | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) |
 | **最小幅保証の実測**(節I〜N) | [TOPOPT_THICKNESS.md](TOPOPT_THICKNESS.md) |
+| **完成形の最小幅と強度の原因解析**(#117、表面生成・平滑化・集合演算の切り分けとFEM比較) | [TOPOPT_FINAL_WIDTH_117.md](TOPOPT_FINAL_WIDTH_117.md) |
+| **くびれの探索規則と完成形の幅検査の方式**(#120・#117、3者合意・未実装) | [TOPOPT_NECK_RULE_120.md](TOPOPT_NECK_RULE_120.md) |
 | **探索目標係数2.4の根拠** | [TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md) |
 | **段階4の打ち切り(issue #22)の判断材料**(終盤の力学の実測・候補規則の後付け試算) | [TOPOPT_STOP_RULE.md](TOPOPT_STOP_RULE.md) |
 | **仕事をしていない材料が残る原因**(代表応力の母数と保持リング・大きな一歩による局所解) | [TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md) |
@@ -606,9 +608,13 @@ matrix-freeの2案はブランチ`topopt-assembly-comparison`にだけ残る(採
 材料だけのm×m×mのブロックのどれかに属する。**S(m)**(2026-09-21。`min_width.CoreConnectivity`)
 侵食した芯(m立方が全部材料であるセルの集合)の6連結成分が、保持セルを介したつながりまで含めて
 1つにまとまる。**R(m)だけでは、m立方が斜めにずれて1セルだけ重なるつなぎ目(首)を許してしまう**
-(詳細は[TOPOPT_THICKNESS.md](TOPOPT_THICKNESS.md)節J3)。S(m)は保持セルを介さない首の断面が
-面でm×(m-1)セル以上あることを要求する(保持セルを介した結びは保持ソリッドが規則の対象外なので
-細い橋でも通す)。
+(詳細は[TOPOPT_THICKNESS.md](TOPOPT_THICKNESS.md)節J3)。S(m)は芯が**全体で**つながるかを見るので、
+首が芯のつながりの唯一の経路(橋)のときだけ、その断面が面でm×(m-1)セル以上あることを要求する
+(保持セルを介した結びは保持ソリッドが規則の対象外なので細い橋でも通す)。
+**輪の中の首は、両側の芯が輪の別の経路でつながるのでR(m)・S(m)を通る**(#120。未解決)——
+hanger S2(m=6)の採用形では2つの塊が1セル幅の面だけで接する所が5か所あった。
+**したがって、表示している最小幅は「全セルがm立方に属する」という意味でしか保証されておらず、
+部材の太さとしては保証されていない。**
 
 `m = ceil(最小幅[mm] / 実spacing)`(切り上げ)。**指定なしの既定は`max(2 × 実spacing, 1.0mm)`**
 (2026-09-22本人決定)——m=1(制約なし)ではなく常にm≥2を有効にする。**保持ソリッド由来のセルは

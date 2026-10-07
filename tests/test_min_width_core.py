@@ -188,7 +188,8 @@ def test_peel_refuses_the_moves_that_would_split_the_core_and_every_result_keeps
         for _ in range(12):
             after, stats = bs.peel(mask, rng.permutation(mask.size), max(1, int(mask.sum()) // 4), anchors, min_width_cells=m)
             assert_min_width_invariants(after, m)
-            refused += stats.skipped_core
+            # 芯を割る手は、材料が窓内でつながったままならくびれの判定(`skipped_neck`)が先に断る。
+            refused += stats.skipped_core + stats.skipped_neck
             core = min_width.CoreConnectivity(m)
             for cell in np.argwhere(mask)[rng.permutation(int(mask.sum()))[:20]]:
                 without = mask.copy()

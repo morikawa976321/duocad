@@ -243,7 +243,7 @@
     <!-- ボタンは丸めない値を入れる(`minWidth.ts` の `shownStepMm`)。 -->
     {#if step !== null && step.min_width_steps_mm.length > 0}
       <p id="optimize-min-width-steps" class="hint dim">
-        保証できる幅は段になる(要素サイズ × m):
+        探索が守る立方の幅は段になる(要素サイズ × m。全セルがこの幅の立方に属するという規則で、部材の太さの保証ではない):
         {#each step.min_width_steps_mm.slice(0, STEP_BUTTONS) as value, index}
           <button
             type="button"
@@ -288,7 +288,7 @@
       </p>
     {:else if minWidthGuaranteedText !== null}
       <p id="optimize-min-width-note" class="hint dim">
-        実際に保証される幅: {minWidthGuaranteedText}mm(探索する形の幅で、書き出す形は平滑化で変わる)
+        探索が守る立方の幅: {minWidthGuaranteedText}mm(探索する形の規則で、完成形のつなぎ目の幅は実行後に診断する)
       </p>
     {/if}
   {/if}

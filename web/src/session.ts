@@ -659,6 +659,8 @@ export interface OptimizeResultPayload {
     | 'resolution_insufficient'
     /** 探索後に平滑化で潰れる 1×1 の空隙を埋めた形が6条件に不合格(`optimize_run` の `thin_voids`)。 */
     | 'fill_infeasible'
+    /** 完成形(平滑化・保持/除外の後)を探索の格子で解き直した安全率が、本来の目標を割る(`topopt.final_check`)。 */
+    | 'final_unsafe'
   warning: string | null
   body_id: string | null
   name: string | null
@@ -669,6 +671,10 @@ export interface OptimizeResultPayload {
   search_safety_factor?: number | null
   /** 探索後に埋めた 1×1 の空隙のセル数。 */
   filled_cells?: number | null
+  /** 完成形(平滑化・保持/除外の後)を探索の格子で解き直した安全率。測れなかったときと、完成形まで進まなかったときは `null`。 */
+  final_safety_factor?: number | null
+  /** 完成形の検査(`topopt.final_check.inspect`)。完成形まで進まなかったときは `null`。 */
+  final_check?: FinalCheck | null
   /** 利用者が指定した実際の目標。 */
   target_safety_factor: number
   /** 探索に渡した目標(= `target_safety_factor` × `search_target_factor`)。`safety_factor` はこれに対する探索の格子での値。 */
@@ -695,6 +701,33 @@ export interface OptimizeResultPayload {
   unrepresented_regions?: Array<Record<string, unknown>>
   /** 確定表の検証(`anchor.condition_mapping`)。確定表を作る前に返った状態では `null`。 */
   boundary_mapping?: Record<string, unknown> | null
+}
+
+/** 完成形の検査(`duocad/topopt/final_check.py`)。つなぎ目は診断であって保証ではない(適合は出さない)。 */
+export interface FinalCheck {
+  safety_factor: number | null
+  neck: NeckDiagnosis
+}
+
+/** つなぎ目の幅の診断(`duocad/topopt/neck_persistence.py`、docs/TOPOPT_NECK_RULE_120.md §3)。 */
+export interface NeckDiagnosis {
+  status: 'suspect' | 'undetermined' | 'not_observed'
+  required_mm: number
+  sampling_mm: number
+  epsilon_mm: number
+  events: Array<{
+    kind: 'loop_neck' | 'tree_neck'
+    diameter_mm: [number, number]
+    lifetime_mm: number | null
+    verdict: 'suspect' | 'undetermined'
+    reason: string | null
+    position_mm: [number, number, number]
+  }>
+  micro_pieces: number
+  thinning_reference: Array<{ diameter_mm: number; position_mm: number[] }>
+  /** 端の参考値(探針の最小の直径)。探針ゼロなら `null`。 */
+  end_probe_mm: number | null
+  reason: string | null
 }
 
 /** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
