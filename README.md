@@ -326,7 +326,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | kind | 形 | できること |
 |---|---|---|
 | `"solid"` | `Body.shape`（`TopoDS_Shape`） | 全部 |
-| `"mesh"` | `Body.mesh`（`Mesh` = 頂点＋三角形。不変） | **表示 / STL書き出し / 削除 / 表示の切り替えだけ** |
+| `"mesh"` | `Body.mesh`（`Mesh` = 頂点＋三角形。不変） | **表示 / STL書き出し / 削除 / 表示の切り替え / 名前の変更だけ** |
 
 **メッシュボディに編集verbを効かせない**（理由は `duocad/meshbody.py` のモジュールdocstring）。
 

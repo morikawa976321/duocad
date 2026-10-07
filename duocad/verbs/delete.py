@@ -1,4 +1,12 @@
 """verb `delete` — **選択のボディとスケッチ図形をまとめて消す**。
+verb `delete_items` — **IDで指したボディとスケッチ(入れ物ごと)をまとめて消す**。
+
+2つは**対象の指し方だけが違い、do / undo は同じ関数**である(args は
+`{bodies, entities, sketches}` の上位集合で、片方が使わない鍵は空)。`delete_items` が別の
+verb なのは、入口(`@entry`)が verb 名ごとに1つだから —— 「選択から取る」と「引数で指す」を
+1つの入口に混ぜると、引数の有無で意味が変わる。スケッチという入れ物は選択集合の種別に無い
+(`selection.SELECTABLE_KINDS`)ので、`import_svg` と同じく ID を引数で受ける(対象を指す ID は
+target であって how ではない)。ブラウザの一覧の行から消す口がこれを使う。
 
 **対象は1つのverbで2種類ある**:
 
@@ -25,6 +33,12 @@ undo の仕組みが対象によって別物になる(**ここがこのモジュ
   形状を退避しているのと同じ表・同じ規律で、違うのは退避するのが「前の形」ではなく
   「ボディまるごと」であることだけ。**並び順と active も一緒に控える** —— 末尾へ足し直す
   だけだと、undoしたのにパーツ一覧の順序だけが変わる(形が同じなので誰も落とせない差)。
+- **スケッチ(入れ物ごと)** … 平面(焼き付けた姿勢ごと)・図形・反復・名前つきの値・名前を
+  args に全部控え、undo は args だけで作り直す。**平面は `resolve_plane` で解き直さない** ——
+  貼った面がその後の面取り・フィレットで添字を変えていると、別の面へ貼り直す/失敗する。
+  **名前つきの値は名前ごと直に戻す** —— 図形の側(下)のように「作った順に `register_value` し直す」
+  ことはできない(1つのスケッチの中で図形と反復の登録順が時間軸で混ざる)。undo は削除の直後へ
+  戻るので控えた名前は必ず空いており、空いていなければバグなので例外にする。
 - **スケッチ図形** … `kind` と**解決済みの生の数値**を args へ積めば足りる(スナップショットは
   要らない)。`sketch._do_add_entity` / `_undo_add_entity` が**ちょうど鏡像**になっており、
   **削除の do は「追加の undo」・削除の undo は「追加の do」**である。
@@ -41,8 +55,10 @@ undo の仕組みが対象によって別物になる(**ここがこのモジュ
 やらないこと(意図的な線引き)
 --------------------------------------------------------------------------------------
 
-- **スケッチを丸ごと消す口は無い**。「スケッチという入れ物そのもの」を指す選択の種別が
-  無い(`selection.SELECTABLE_KINDS`)ので、作っても呼びようが無い。
+- **スケッチを消しても、そこから押し出したボディには触らない**(下の「ボディを消しても
+  スケッチ側は何もしない」の鏡。形は導出物でありボディは既に独立した実体である)。
+- **確認は挟まない**(1回の undo で全部戻る)。**可視性は控えない** —— セッション状態なので、
+  undo で戻ったスケッチは可視で始まる(開き直した文書と同じ)。
 - **領域(`region`)は消せない**。領域は描くものではなく図形の配置から毎回計算されるもの
   (`duocad/region.py`)で、永続化された実体が無い。選択に混ざっていたら
   `require_deletable` が**黙って無視する** —— 領域を作っている図形自体を
@@ -60,6 +76,7 @@ undo の仕組みが対象によって別物になる(**ここがこのモジュ
 """
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, List, Sequence
 
 from .. import parameters
@@ -67,10 +84,11 @@ from ..document import Document
 from ..oplog import Operation, register_verb
 from .. import selection
 from ..entry import entry
-from ..sketch import Entity, get_entity, get_sketch, remove_entities
+from ..sketch import Entity, Pattern, Sketch, get_entity, get_sketch, remove_entities
 from ._common import deletable_body, detach_bodies, reattach_bodies, recall, remember
 
 VERB_DELETE = "delete"
+VERB_DELETE_ITEMS = "delete_items"
 
 #: `_common.SNAPSHOTS` は `(body_id, seq)` を鍵にするが、この verb が控えるのは
 #: 「この操作で消したボディ全部 + 並び順 + active」という**操作1回ぶんの1つの塊**である。
@@ -112,6 +130,55 @@ def _entity_snapshots(doc: Document, entities: Sequence[dict]) -> List[dict]:
     return specs
 
 
+def _sketch_snapshots(doc: Document, sketch_ids: Sequence[str]) -> List[dict]:
+    """消すスケッチを**JSON安全な値だけ**で記録する(undo はこの記録だけから作り直す)。
+
+    存在しないスケッチは KeyError(**文書は何も変わらない**)。
+    """
+    specs: List[dict] = []
+    for sketch_id in sketch_ids:
+        target = get_sketch(doc, sketch_id)
+        values: Dict[str, float] = {}
+
+        def refs_of(params: Dict[str, Any]) -> Dict[str, Any]:
+            refs: Dict[str, Any] = {}
+            for key, ref in params.items():
+                if isinstance(ref, str):
+                    values[ref] = float(doc.parameters[ref])
+                    refs[key] = ref
+                else:
+                    refs[key] = float(ref)
+            return refs
+
+        entities = [
+            {"entity_id": entity.id, "kind": entity.kind, "refs": refs_of(entity.params)}
+            for entity in target.entities
+        ]
+        patterns = [
+            {
+                "pattern_id": pattern.id,
+                "kind": pattern.kind,
+                "sources": list(pattern.sources),
+                "refs": refs_of(pattern.params),
+                "options": copy.deepcopy(pattern.options),
+            }
+            for pattern in target.patterns
+        ]
+        specs.append(
+            {
+                "sketch_id": target.id,
+                "name": target.name,
+                # 並びの位置。undo で**元の位置へ差し戻す**(ブラウザの一覧の順序が変わらないため)。
+                "index": doc.sketches.index(target),
+                "plane": copy.deepcopy(target.plane),
+                "entities": entities,
+                "patterns": patterns,
+                "values": values,
+            }
+        )
+    return specs
+
+
 def delete(
     doc: Document,
     bodies: Sequence[str] = (),
@@ -148,7 +215,7 @@ def delete(
         deletable_body(doc, body_id)
     entity_specs = _entity_snapshots(doc, entities)
 
-    removed = _remove(doc, body_ids, entity_specs)
+    removed = _remove(doc, body_ids, entity_specs, [])
     operation = doc.log.append(
         VERB_DELETE, {"bodies": body_ids, "entities": entity_specs}
     )
@@ -157,16 +224,58 @@ def delete(
     return operation
 
 
+def delete_items(
+    doc: Document,
+    bodies: Sequence[str] = (),
+    sketches: Sequence[str] = (),
+) -> Operation:
+    """IDで指したボディとスケッチ(入れ物ごと)をまとめて消す。**片方だけでもよいが、両方空は ValueError**。
+
+    検査の規律は `delete` と同じ(全部検査してから1つも消さない・重複は断る)。
+    """
+    body_ids = [str(body_id) for body_id in bodies]
+    sketch_ids = [str(sketch_id) for sketch_id in sketches]
+    if not body_ids and not sketch_ids:
+        raise ValueError("delete_items requires at least one body or sketch id")
+    if len(set(body_ids)) != len(body_ids):
+        raise ValueError(f"delete_items got duplicate body ids: {body_ids!r}")
+    if len(set(sketch_ids)) != len(sketch_ids):
+        raise ValueError(f"delete_items got duplicate sketch ids: {sketch_ids!r}")
+    for body_id in body_ids:
+        deletable_body(doc, body_id, require_visible=False)
+    sketch_specs = _sketch_snapshots(doc, sketch_ids)
+
+    removed = _remove(doc, body_ids, [], sketch_ids)
+    operation = doc.log.append(
+        VERB_DELETE_ITEMS, {"bodies": body_ids, "entities": [], "sketches": sketch_specs}
+    )
+    if body_ids:
+        remember(doc, _SNAPSHOT_KEY, operation.seq, removed)
+    return operation
+
+
 def _remove(
-    document: Document, body_ids: Sequence[str], entity_specs: Sequence[dict]
+    document: Document,
+    body_ids: Sequence[str],
+    entity_specs: Sequence[dict],
+    sketch_ids: Sequence[str],
 ) -> Dict[str, Any]:
     """実際に消す(**ログには触らない**)。戻り値がボディのundo用の退避。
 
-    ボディを先に消しても図形を先に消しても結果は同じ(互いを参照しない)。
+    ボディ・図形・スケッチのどれを先に消しても結果は同じ(互いを参照しない)。スケッチは
+    **名前つきの値を手放してから**外す(`sketch._undo_sketch_create` と同じ。手放し忘れると
+    `d1 d2 …` の連番が飛ぶ)。
     """
     removed = detach_bodies(document, list(body_ids))
     for spec in entity_specs:
         remove_entities(document, [spec["entity_id"]], sketch_id=spec["sketch_id"])
+    for sketch_id in sketch_ids:
+        target = get_sketch(document, sketch_id)
+        for entity in target.entities:
+            parameters.release_param_refs(document, entity.params)
+        for pattern in target.patterns:
+            parameters.release_param_refs(document, pattern.params)
+        document.sketches.remove(target)
     return removed
 
 
@@ -183,9 +292,10 @@ def _do_delete(document: Document, operation: Operation) -> None:
     args = operation.args
     body_ids = [str(body_id) for body_id in args["bodies"]]
     entity_specs = [dict(spec) for spec in args["entities"]]
+    sketch_ids = [str(spec["sketch_id"]) for spec in args.get("sketches") or ()]
     for body_id in body_ids:
-        deletable_body(document, body_id)
-    removed = _remove(document, body_ids, entity_specs)
+        deletable_body(document, body_id, require_visible=operation.verb == VERB_DELETE)
+    removed = _remove(document, body_ids, entity_specs, sketch_ids)
     if body_ids:
         remember(document, _SNAPSHOT_KEY, operation.seq, removed)
 
@@ -198,6 +308,10 @@ def _undo_delete(document: Document, operation: Operation) -> None:
     `recall` が KeyError で止まる(黙って空振りさせない)。
     """
     args = operation.args
+    # 0. スケッチを入れ物ごと作り直す。元の添字の昇順に差し込むと元の並びが再現する。
+    for spec in sorted(args.get("sketches") or (), key=lambda item: int(item["index"])):
+        _restore_sketch(document, spec)
+
     # 1. 図形を作り直す —— **削除のundoは「追加のdo」**(`sketch._do_add_entity` の写し)。
     #    元の添字の昇順に差し込むと元の並びが再現し、`register_value` を呼ぶ順序も
     #    作ったときと同じになるので**同じ名前**が振り直される。
@@ -225,7 +339,40 @@ def _undo_delete(document: Document, operation: Operation) -> None:
     reattach_bodies(document, recall(document, _SNAPSHOT_KEY, operation.seq))
 
 
+def _restore_sketch(document: Document, spec: dict) -> None:
+    """undo: `_sketch_snapshots` の1件から、名前つきの値・図形・反復・平面・名前をそのまま戻す。"""
+    sketch_id = spec["sketch_id"]
+    if any(item.id == sketch_id for item in document.sketches):
+        raise ValueError(f"sketch id already exists: {sketch_id!r}")
+    taken = [name for name in spec["values"] if name in document.parameters]
+    if taken:
+        raise ValueError(f"parameter names still in use when restoring sketch {sketch_id!r}: {taken!r}")
+    for name, value in spec["values"].items():
+        document.parameters[name] = float(value)
+    restored = Sketch(
+        id=sketch_id,
+        plane=copy.deepcopy(spec["plane"]),
+        entities=[
+            Entity(id=item["entity_id"], kind=item["kind"], params=dict(item["refs"]))
+            for item in spec["entities"]
+        ],
+        patterns=[
+            Pattern(
+                id=item["pattern_id"],
+                sources=list(item["sources"]),
+                params=dict(item["refs"]),
+                kind=item["kind"],
+                options=copy.deepcopy(item.get("options") or {}),
+            )
+            for item in spec["patterns"]
+        ],
+        name=spec.get("name"),
+    )
+    document.sketches.insert(min(int(spec["index"]), len(document.sketches)), restored)
+
+
 register_verb(VERB_DELETE, do=_do_delete, undo=_undo_delete)
+register_verb(VERB_DELETE_ITEMS, do=_do_delete, undo=_undo_delete)
 
 
 # --------------------------------------------------------------------------------------
@@ -245,4 +392,17 @@ def _enter_delete(document: Document) -> dict:
         "bodies": list(args["bodies"]),
         "entities": [spec["entity_id"] for spec in args["entities"]],
         "sketch_ids": sorted({str(spec["sketch_id"]) for spec in args["entities"]}),
+    }
+
+
+@entry(VERB_DELETE_ITEMS)
+def _enter_delete_items(
+    document: Document, bodies: Sequence[str] = (), sketches: Sequence[str] = ()
+) -> dict:
+    """対象は選択ではなく引数の ID(ブラウザの一覧の行・AI)。選択は読まない(確定後の選択の
+    リセットは他の verb と同じ。`catalog` の `resets_selection`)。"""
+    args = delete_items(document, list(bodies), list(sketches)).args
+    return {
+        "bodies": list(args["bodies"]),
+        "sketches": [spec["sketch_id"] for spec in args["sketches"]],
     }

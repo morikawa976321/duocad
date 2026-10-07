@@ -245,6 +245,7 @@ def test_extrude_is_logged_and_undoable():
         "distance": 10.0,
         "mode": "join",
         "body_id": body.id,
+        "number": 1,
     }
     json.loads(document.log.to_json())
 

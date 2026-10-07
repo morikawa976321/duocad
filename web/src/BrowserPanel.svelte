@@ -44,6 +44,9 @@
     onShowAllSketches,
     onHideAllSketches,
     onToggleOrigin,
+    onRename,
+    onDeleteBody,
+    onDeleteSketch,
     onSectionToggle,
     onSectionPlane,
     onSectionPosition,
@@ -69,6 +72,11 @@
     onHideAllSketches: () => void
     /** 原点ギズモの表示/非表示(7項目まとめて1つのトグル。本人指定)。 */
     onToggleOrigin: (visible: boolean) => void
+    /** 行の名前の確定(コアの `rename`。ボディもスケッチも同じ口)。 */
+    onRename: (target: string, name: string) => void
+    /** 行の ✕(コアの `delete_items`)。**確認は挟まない** —— 1回の Ctrl+Z で戻る。 */
+    onDeleteBody: (bodyId: string) => void
+    onDeleteSketch: (sketchId: string) => void
     /** 断面表示(issue #6)。原点と同じく画面側の状態で、App が持つ。 */
     section: SectionState
     onSectionToggle: (on: boolean) => void
@@ -103,6 +111,49 @@
 
   /** パネル全体の折りたたみ。ビューポートに重なるので、畳めないと形が隠れる。 */
   let open = $state(true)
+
+  /** 名前を書き換えている行の ID(無ければ null)。一度に1行だけ。**下書きは別の状態に持つ** ——
+   *  `{id, draft}` を1つにして `bind:value={draft}` にすると、欄を閉じた瞬間に
+   *  消えかけの欄の束縛が null を読んで TypeError を投げる(実機で確認)。 */
+  let renamingId = $state<string | null>(null)
+  let draft = $state('')
+
+  function startRename(id: string, current: string): void {
+    draft = current
+    renamingId = id
+  }
+
+  /** 確定。**空・今と同じなら送らずに閉じる**(何も変えない行をログに積まない)。それ以外の
+   *  不正(前後の空白・改行)はコアが断り、エラーの札に出る。
+   *
+   *  **`id` で自分の行かを確かめる** —— Enter で閉じた欄の blur は DOM から外れるときに遅れて届き、
+   *  その間に別の行の ✎ が押されていると、相手の行の下書きを自分の名前で確定してしまう。 */
+  function commitRename(id: string, current: string): void {
+    if (renamingId !== id) return
+    renamingId = null
+    if (draft.trim() === '' || draft === current) return
+    onRename(id, draft)
+  }
+
+  /** **Esc は窓まで届かせない** —— `CommandHost` の窓の keydown が入力欄の Esc も拾って、
+   *  起動中のコマンドまで中断する。 */
+  function renameKey(event: KeyboardEvent, id: string, current: string): void {
+    if (event.key === 'Enter') commitRename(id, current)
+    else if (event.key === 'Escape') {
+      event.stopPropagation()
+      renamingId = null
+    }
+  }
+
+  /** 開いた欄へ入力を移す(Svelte の action)。 */
+  function focusSelect(input: HTMLInputElement): void {
+    input.focus()
+    input.select()
+  }
+
+  function sketchLabel(sketch: SketchState): string {
+    return sketch.name ?? `スケッチ(${planeLabel(sketch.plane)})`
+  }
 
   const visibleCount = $derived(bodies.filter((body) => body.visible).length)
   const visibleSketchCount = $derived(sketches.filter((sketch) => sketch.visible).length)
@@ -212,17 +263,38 @@
           {/if}
           {#each bodies as body (body.body_id)}
             <li class="parts-row" class:hidden-row={!body.visible} data-body-id={body.body_id}>
-              <label class="parts-name">
+              {#if renamingId === body.body_id}
                 <input
-                  type="checkbox"
-                  class="visible-toggle"
-                  checked={body.visible}
-                  onchange={(event) =>
-                    onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
+                  class="rename-input"
+                  type="text"
+                  bind:value={draft}
+                  use:focusSelect
+                  onkeydown={(event) => renameKey(event, body.body_id, body.name)}
+                  onblur={() => commitRename(body.body_id, body.name)}
                 />
-                {body.name}
-              </label>
-              <span class="dim parts-count">{body.face_count}面</span>
+              {:else}
+                <label class="parts-name">
+                  <input
+                    type="checkbox"
+                    class="visible-toggle"
+                    checked={body.visible}
+                    onchange={(event) =>
+                      onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
+                  />
+                  {body.name}
+                </label>
+                <span class="dim parts-count">{body.face_count}面</span>
+                <button
+                  class="row-action rename-button"
+                  onclick={() => startRename(body.body_id, body.name)}
+                  title="名前を変える">✎</button
+                >
+                <button
+                  class="row-action delete-button"
+                  onclick={() => onDeleteBody(body.body_id)}
+                  title="このボディを消す(Ctrl+Zで戻る)">✕</button
+                >
+              {/if}
             </li>
           {/each}
         </ul>
@@ -266,19 +338,41 @@
                     ? 'このスケッチを隠す'
                     : 'このスケッチを表示'}
               />
-              <button
-                class="sketch-name row-button"
-                onclick={() => onEnterSketch(sketch.sketch_id)}
-                title={sketch.visible
-                  ? 'クリックでこのスケッチに入る'
-                  : 'クリックで表示に戻してこのスケッチに入る'}
-              >
-                スケッチ({planeLabel(sketch.plane)})
-              </button>
-              {#if sketch.sketch_id === activeSketchId}
-                <span class="tag on">編集中</span>
+              {#if renamingId === sketch.sketch_id}
+                <input
+                  class="rename-input"
+                  type="text"
+                  bind:value={draft}
+                  use:focusSelect
+                  onkeydown={(event) => renameKey(event, sketch.sketch_id, sketchLabel(sketch))}
+                  onblur={() => commitRename(sketch.sketch_id, sketchLabel(sketch))}
+                />
               {:else}
-                <span class="dim sketch-count">図形{sketch.entities.length}</span>
+                <button
+                  class="sketch-name row-button"
+                  onclick={() => onEnterSketch(sketch.sketch_id)}
+                  title={`${planeLabel(sketch.plane)} — ` +
+                    (sketch.visible
+                      ? 'クリックでこのスケッチに入る'
+                      : 'クリックで表示に戻してこのスケッチに入る')}
+                >
+                  {sketchLabel(sketch)}
+                </button>
+                {#if sketch.sketch_id === activeSketchId}
+                  <span class="tag on">編集中</span>
+                {:else}
+                  <span class="dim sketch-count">図形{sketch.entities.length}</span>
+                {/if}
+                <button
+                  class="row-action rename-button"
+                  onclick={() => startRename(sketch.sketch_id, sketch.name ?? sketchLabel(sketch))}
+                  title="名前を変える">✎</button
+                >
+                <button
+                  class="row-action delete-button"
+                  onclick={() => onDeleteSketch(sketch.sketch_id)}
+                  title="このスケッチを図形ごと消す(押し出したボディは残る。Ctrl+Zで戻る)">✕</button
+                >
               {/if}
             </li>
           {/each}
@@ -444,6 +538,25 @@
   .sketch-count {
     flex: 0 0 auto;
     font-size: var(--fs-meta);
+  }
+
+  /* 行の ✎ / ✕ は**指したときだけ出す**(常に出すと名前の幅が削られ、27部品の一覧が読みにくい)。
+     `visibility` で隠すので幅は常に取っておく —— 出し入れで名前が左右に揺れない。 */
+  .row-action {
+    flex: 0 0 auto;
+    padding: 0 4px;
+    visibility: hidden;
+  }
+
+  .parts-row:hover .row-action,
+  .sketch-row:hover .row-action,
+  .row-action:focus-visible {
+    visibility: visible;
+  }
+
+  .rename-input {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   /* 大きさは styles.css の `.empty` が持つ(--fs-meta)。 */

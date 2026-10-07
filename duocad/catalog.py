@@ -1087,7 +1087,7 @@ COMMANDS: tuple[Command, ...] = (
             "1回でまとめて削除する(1回のundoで全部戻る)。対象は選択から取る"
             "(引数では受けない)。**領域(region)は削除できない** —— 領域は図形の配置から"
             "計算されるものなので、選択に混ざっているとエラーになる(その領域を作っている"
-            "図形を選び直すこと)。スケッチを丸ごと消す口は無い。"
+            "図形を選び直すこと)。スケッチを丸ごと消すのは delete_items。"
         ),
         session="delete",
         resets_selection=True,
@@ -1095,6 +1095,49 @@ COMMANDS: tuple[Command, ...] = (
             "**`previewable=False`** —— 消える前の姿を見せる幽霊が作れない(プレビューは"
             "「増えた形」を配る仕組みで、`Session.preview` が返すのは形の変わったBodyだけ)。"
             "**howが無い**ので引数は1つも取らない —— 消し方に選択肢は無い"
+        ),
+    ),
+    Command(
+        name="delete_items",
+        returns=(Result("bodies", "string[]"), Result("sketches", "string[]")),
+        category="feature",
+        description=(
+            "ボディやスケッチを**IDで指して**丸ごと消すときに呼ぶ(スケッチは図形・反復ごと"
+            "入れ物を消す)。選択は使わない(確定後は他の verb と同じく選択が空になる)。"
+            "隠したボディも消せる。ボディとスケッチが混ざっていても"
+            "1回でまとめて削除する(1回のundoで全部戻る)。スケッチを消しても、そこから"
+            "押し出したボディは残る。面・辺や図形を選んで消すなら delete。"
+        ),
+        params=(
+            Param("bodies", "array", "消すボディのIDの配列", required=False),
+            Param("sketches", "array", "消すスケッチのIDの配列", required=False),
+        ),
+        session="delete_items",
+        resets_selection=True,
+        note=(
+            "**`delete` と do / undo を共有する別 verb**(`duocad/verbs/delete.py` の docstring)。"
+            "引数は対象を指す ID であって how ではない。`previewable=False` は `delete` と同じ理由。"
+            "`resets_selection=True` —— 消したボディ・スケッチを指す選択が残るため"
+        ),
+    ),
+    Command(
+        name="rename",
+        returns=(Result("target", "string"), Result("kind", "string"), Result("name", "string")),
+        category="feature",
+        description=(
+            "ボディかスケッチの名前を変えるときに呼ぶ(ソリッド・メッシュ・スケッチのどれでも)。"
+            "target は body_id か sketch_id。同じ名前が並んでもよい。空・前後の空白・改行は不可。"
+            "名前は保存され、undo で戻る。"
+        ),
+        params=(
+            Param("target", "string", "名前を変えるボディかスケッチのID"),
+            Param("name", "string", "新しい名前"),
+        ),
+        session="rename",
+        resets_selection=False,
+        note=(
+            "**ログに載せる**(保存はログだけなので、可視性のようにログの外に置くと開き直しで"
+            "消える)。`resets_selection=False` —— 形も添字も変わらない"
         ),
     ),
     # ---------------------------------------------------------------- 形状最適化の条件(第3のモード)
@@ -1343,13 +1386,13 @@ COMMANDS: tuple[Command, ...] = (
         description=(
             "計算で作った三角形メッシュ(頂点＋三角形)をボディとして文書へ足すときに呼ぶ。"
             "**足したメッシュは編集できない** —— 表示 / STLへの書き出し / 削除 / "
-            "表示の切り替えだけができる。押し出し・フィレット・面取りは断られる。"
+            "表示の切り替え / 名前の変更(rename)だけができる。押し出し・フィレット・面取りは断られる。"
             "三角形をそのまま操作ログへ積むので、手で並べるための口ではない。"
         ),
         params=(
             Param("positions", "array", "頂点座標[mm]を x,y,z の順に平らに並べた配列"),
             Param("indices", "array", "三角形を作る頂点添字(**0始まり**)を3つずつ並べた配列"),
-            Param("name", "string", "ボディの名前(省略時 \"mesh\")", required=False, ws=False),
+            Param("name", "string", "ボディの名前(省略時は通し番号の「ボディN」)", required=False, ws=False),
         ),
         session="add_mesh_body",
         # **WSには開けない**。画面から三角形を手で打つ操作は無く、入口は

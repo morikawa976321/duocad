@@ -26,6 +26,8 @@ export const COMMAND_CATEGORY = {
   envelope_regions: 'sketch',
   mirror_body: 'feature',
   delete: 'feature',
+  delete_items: 'feature',
+  rename: 'feature',
   set_preserve_bodies: 'feature',
   set_exclude_bodies: 'feature',
   set_fixtures: 'feature',
@@ -86,6 +88,8 @@ export interface CommandArguments {
   envelope_regions: { radius: number; offset: number }
   mirror_body: { base_plane?: string; plane_face?: object }
   delete: Record<string, never>
+  delete_items: { bodies?: unknown[]; sketches?: unknown[] }
+  rename: { target: string; name: string }
   set_preserve_bodies: Record<string, never>
   set_exclude_bodies: Record<string, never>
   set_fixtures: Record<string, never>
@@ -155,6 +159,8 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'envelope_regions'; radius: number; offset: number; created: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'mirror_body'; plane_point: number[]; plane_normal: number[]; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'delete'; bodies: string[]; entities: string[]; sketch_ids: string[] })
+  | (AppliedVerbBase & { verb: 'delete_items'; bodies: string[]; sketches: string[] })
+  | (AppliedVerbBase & { verb: 'rename'; target: string; kind: string; name: string })
   | (AppliedVerbBase & { verb: 'set_preserve_bodies'; bodies: string[] })
   | (AppliedVerbBase & { verb: 'set_exclude_bodies'; bodies: string[] })
   | (AppliedVerbBase & { verb: 'set_fixtures'; face_count: number })
