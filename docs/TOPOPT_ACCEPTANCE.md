@@ -48,8 +48,9 @@ float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
   4組の交差は平滑化側の問題([TOPOPT_SMOOTHING_INTERSECTIONS.md](TOPOPT_SMOOTHING_INTERSECTIONS.md))。
   この実行の確定マスク(記録の `surface-from-mask-input`)には管が 9 セルあり、`thin_voids.fill_tubes` で埋めると
   平滑化後の交差は 4組 → 0(三角形 51,836 → 51,764、平滑化後の体積 41,754.7 → 41,754.0 mm³。2026-10-07)。
-  埋めた後の FEM の取り直しは、この要素サイズの hanger で数 GB の空きメモリが要るので未実施
-  (`topopt_checks/verify_tube_fill.py` で測る)。
+  埋めた後の FEM の取り直しは、この実行そのものでは未実施。同じ hanger の検証材料(要素 2.4 mm の16条件)を製品経路に
+  通した結果は [TOPOPT.md](TOPOPT.md)「1×1 の空隙を探索後に埋める」の実測(16/16 `done`、安全率は全条件で下がらず
+  +0.001%〜+0.904%、ピーク常駐 1.0〜1.9 GB)。
   #93 の他の3実行と 2026-09-21 の実行 `20260921T185659-b6799e00457d` はローカルにも `D:\` にも無く、再生していない。
 - **検証材料64条件**(`topopt_checks/finalize_smoothing_corpus.py --suffix _mesh`。結果は
   `output/smoothing_corpus/final_records_mesh/`): 下の「検証材料64条件での最終処理の合格率」に B-rep 経路と並べた。
