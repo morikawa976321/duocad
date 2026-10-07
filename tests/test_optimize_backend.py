@@ -1441,27 +1441,44 @@ def test_tube_fill_failure_is_reported_without_touching_the_document(session: Se
     assert [body.id for body in session.document.bodies] == before
 
 
-def test_tube_fill_checks_min_width_even_when_six_checks_pass(session: Session, monkeypatch) -> None:
+def test_tube_fill_reports_uncovered_filled_cells_as_a_warning_not_a_failure(session: Session, monkeypatch) -> None:
+    # 埋めたセルが最小幅の m 立方に覆われなくても止めない(保持セルと同じ対象外)。数を warning に出し、結果は done。
+    # 幾何(埋めたセルが覆われない配置)は tests/test_thin_voids.py が持つので、ここは配線だけを見る: 被覆の判定を差し替え、
+    # 埋めたセルが1つも覆われない状況を作る。
     import numpy as np
-    from duocad.topopt import acceptance, binary_search, thin_voids
+    from duocad.topopt import acceptance, min_width, thin_voids
 
     four_conditions(session)
-    before = [body.id for body in session.document.bodies]
     _replayed_search(monkeypatch)
-    monkeypatch.setattr(thin_voids, "fill_tubes",
-                        lambda mask, allowed: (mask.copy(), dict(cells=1, rounds=[1])))
+    added: dict = {}
+    real_opening = min_width.cube_opening
+
+    def opening_that_never_covers_the_added_cell(material, m):
+        # 差し替えた探索(`_replayed_search`)も opening を呼ぶので、本物を返したうえで、埋めたセルだけを「覆われない」にする
+        covered = real_opening(material, m)
+        if "index" in added:
+            covered[added["index"]] = False
+        return covered
+
+    monkeypatch.setattr(min_width, "cube_opening", opening_that_never_covers_the_added_cell)
     monkeypatch.setattr(acceptance, "inspect", lambda *args, **kwargs: dict(
         status="pass", volumes=dict(material_mm3=1.0), checks=dict(safety=dict(status="pass", safety_factor=9.9))))
-    seen = []
 
-    def width_check(mask, cells, exempt):
-        seen.append((mask, cells, exempt))
-        return False
-
-    monkeypatch.setattr(binary_search, "_mask_satisfies_min_width", width_check)
+    monkeypatch.setattr(thin_voids, "fill_tubes", lambda mask, allowed: (np.array(mask, copy=True), dict(cells=1, rounds=[1])))
     result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
-    assert result["state"] == "fill_infeasible" and result["body_id"] is None
-    assert "min_width" in result["warning"]
-    assert len(seen) == 1 and seen[0][1] == 2
-    assert seen[0][2] is not None and np.asarray(seen[0][2]).shape == seen[0][0].shape
-    assert [body.id for body in session.document.bodies] == before
+    assert result["state"] == "done" and result["body_id"] is not None and result["filled_cells"] == 1
+    # 形が変わっていなければ「埋めた後 & 探索前に無い」セルは 0 個で、warning は出ない
+    assert "覆われない" not in (result["warning"] or "")
+
+    def fake_fill_protruding(mask, allowed):
+        # 材料に6近傍で接する空セルを1つ足す(つながったまま1セル張り出す)
+        from scipy import ndimage
+        filled = np.array(mask, copy=True)
+        added["index"] = tuple(np.argwhere(ndimage.binary_dilation(mask) & ~mask)[0])
+        filled[added["index"]] = True
+        return filled, dict(cells=1, rounds=[1])
+
+    monkeypatch.setattr(thin_voids, "fill_tubes", fake_fill_protruding)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "done" and result["filled_cells"] == 1, result["warning"]
+    assert "1 セルのうち 1 セルは最小幅" in result["warning"] and "覆われない" in result["warning"]

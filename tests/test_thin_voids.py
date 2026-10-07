@@ -77,7 +77,8 @@ def test_fill_tubes_refuses_to_stop_with_tubes_left(monkeypatch):
     assert MAX_ROUNDS >= 3  # 64条件の実測(最大3回)より大きいこと
 
 
-def test_filling_a_tube_can_break_min_width_and_needs_reinspection():
+def test_filled_cells_can_be_uncovered_by_min_width_cubes_and_are_treated_as_exempt():
+    # 埋めたセルは m 立方に覆われないことがある(対角が空の配置)。製品は保持セルと同じく対象外として数だけ warning に出す。
     from duocad.topopt.binary_search import _mask_satisfies_min_width
 
     mask = np.zeros((12, 12, 12), dtype=bool)
