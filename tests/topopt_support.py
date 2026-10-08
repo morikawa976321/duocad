@@ -134,9 +134,10 @@ def _box_sums(values: np.ndarray, m: int) -> np.ndarray:
             + total[:-m, :-m, m:] + total[:-m, m:, :-m] + total[m:, :-m, :-m] - total[:-m, :-m, :-m])
 
 
-def core_groups_oracle(mask: np.ndarray, m: int, exempt=None) -> int:
-    """S(m) の物差し(実装とは独立): 芯 = m 立方が全部材料のセル(累積和で数える)の6連結成分を、立方が `exempt` の
-    6連結成分と重なるか6近傍で接するものどうしで結んだときの塊の数。要求は1以下(芯が空なら0)。"""
+def core_groups_oracle(mask: np.ndarray, m: int, exempt=None, adjacency=None) -> int:
+    """S(m) の物差し(実装とは独立): 芯 = m 立方が全部材料のセル(累積和で数える)の連結成分(`adjacency`。既定は m ≥ 4 で26、
+    m ≤ 3 で6 —— #122 の仕様)を、立方が `exempt` の6連結成分と重なるか6近傍で接するものどうしで結んだときの塊の数。
+    要求は1以下(芯が空なら0)。"""
     material = mask if exempt is None else mask | exempt
     if any(n < m for n in mask.shape):
         return 0
@@ -144,7 +145,9 @@ def core_groups_oracle(mask: np.ndarray, m: int, exempt=None) -> int:
     core = np.zeros(mask.shape, bool)
     core[tuple(slice(0, n) for n in fits.shape)] = fits
     six = ndimage.generate_binary_structure(3, 1)
-    labels, count = ndimage.label(core, structure=six)
+    if adjacency is None:
+        adjacency = 26 if m >= 4 else 6
+    labels, count = ndimage.label(core, structure=six if adjacency == 6 else np.ones((3, 3, 3), bool))
     parent = list(range(count + 1))
 
     def find(x):

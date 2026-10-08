@@ -67,7 +67,6 @@ def _run(space, cond, cells, *, rule, name):
                peel_seconds=float(sum(s.seconds for s in stats)),
                skipped_neck=int(sum(s.skipped_neck for s in stats)),
                skipped_core=int(sum(s.skipped_core for s in stats)),
-               neck_rejected_6_only=int(sum(s.neck_rejected_6_only for s in stats)),
                neck_full_grid=int(sum(s.neck_full_grid for s in stats)),
                static_necks=reduction.get('static_necks'))
     if best is not None:

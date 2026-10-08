@@ -24,6 +24,15 @@ def _judge(before, removed, m, keep=None):
     return neck.NeckJudge(min_width.CoreConnectivity(m, keep)).creates_neck(after, np.array(removed))
 
 
+_SIX = [d for d in itertools.product((-1, 0, 1), repeat=3) if sum(map(abs, d)) == 1]
+_TWENTY_SIX = [d for d in itertools.product((-1, 0, 1), repeat=3) if any(d)]
+
+
+def _core_steps(m, adjacency=None):
+    """芯の隣接(#122 の仕様: m ≥ 4 は26、m ≤ 3 は6)。材料の隣接はいつも6。"""
+    return _SIX if (adjacency or (26 if m >= 4 else 6)) == 6 else _TWENTY_SIX
+
+
 # --- 参照実装: 仕様書 §2 を、`CoreConnectivity` も `core_cells` も使わずに書き直したもの ---------------------------------------
 
 def _ref_cores(material, m):
@@ -34,8 +43,8 @@ def _ref_cores(material, m):
     return out
 
 
-def _bfs_components(cells):
-    """セル集合(タプルの set)の6連結成分 → {セル: 成分番号}。"""
+def _bfs_components(cells, steps=_SIX):
+    """セル集合(タプルの set)の `steps` 近傍の連結成分 → {セル: 成分番号}。"""
     comp, label = {}, 0
     for start in cells:
         if start in comp:
@@ -45,17 +54,15 @@ def _bfs_components(cells):
         queue = deque([start])
         while queue:
             x = queue.popleft()
-            for axis, step in itertools.product(range(3), (-1, 1)):
-                y = list(x)
-                y[axis] += step
-                y = tuple(y)
+            for d in steps:
+                y = tuple(np.add(x, d))
                 if y in cells and y not in comp:
                     comp[y] = label
                     queue.append(y)
     return comp
 
 
-def _ref_creates_neck(before, removed, m, keep=None):
+def _ref_creates_neck(before, removed, m, keep=None, adjacency=None):
     shape = np.array(before.shape)
     keep = np.zeros_like(before) if keep is None else keep
     after = before.copy()
@@ -85,16 +92,16 @@ def _ref_creates_neck(before, removed, m, keep=None):
         inside = lambda c, a, b: all(a[i] <= c[i] < b[i] for i in range(3))
         mat = {tuple(c) for c in np.argwhere(after | keep) if inside(c, lo, mat_hi)}
         cores = {tuple(c) for c in np.argwhere(k_after) if inside(c, lo, hi)}
-        near = lambda c, s: any(tuple(np.add(c, d)) in s for d in
-                                [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)])
-        front_core = {c for c in cores if near(c, lost)}
+        steps = _core_steps(m, adjacency)
+        near = lambda c, s, ds: any(tuple(np.add(c, d)) in s for d in ds)
+        front_core = {c for c in cores if near(c, lost, steps)}
         if not front_core:
             return False
-        front_mat = {c for c in mat if near(c, removed_set)}
+        front_mat = {c for c in mat if near(c, removed_set, _SIX)}
         if not front_mat:
             return False
         if len({_bfs_components(mat)[c] for c in front_mat}) == 1:
-            comp = _bfs_components(cores)
+            comp = _bfs_components(cores, steps)
             parent = {v: v for v in set(comp.values())}
 
             def find(x):
@@ -156,6 +163,89 @@ def test_cutting_a_far_detour_that_leaves_a_crease_as_the_only_link_is_refused()
     before = _blocks(shape, ((0, 0, 0), (2, 24, 2)), ((3, 0, 0), (5, 24, 2)), ((2, 18, 0), (3, 24, 2)), ((2, 1, 0), (3, 2, 2)))
     removed = [(2, j, k) for j in range(18, 24) for k in range(2)]
     assert _judge(before, removed, m) and _ref_creates_neck(before, removed, m)
+
+
+@pytest.mark.parametrize('m,step,neck_expected', [
+    (4, (1, 1, 0), False), (4, (1, 1, 1), False), (5, (1, 1, 0), False),  # 26近傍の段は直径 m の球を通す(#122)
+    (4, (3, 3, 0), True),  # 1セル幅の稜線の共有(角のずれ m−1)は26近傍でもない
+    (3, (1, 1, 0), True), (3, (1, 1, 1), True),  # m ≤ 3 の斜めの段は √2(m−1) < m なので6のまま断る
+])
+def test_a_diagonal_step_between_two_cubes_is_a_neck_only_below_the_26_threshold(m, step, neck_expected):
+    """2つの m 立方 A・B(角のずれ `step`)を、A の角から B の角まで1軸ずつ進む立方の列でつないだ形から、列だけの材料を抜いて
+    A∪B を残す。落ちたら、芯の隣接の閾値(m ≥ 4 で26)が仕様とずれている。"""
+    shape = tuple(m + s + 2 for s in step)
+    a = np.zeros(shape, bool)
+    a[:m, :m, :m] = True
+    b = np.zeros(shape, bool)
+    b[step[0]:step[0] + m, step[1]:step[1] + m, step[2]:step[2] + m] = True
+    path = np.zeros(shape, bool)
+    corner = [0, 0, 0]
+    for axis in range(3):  # A から B へ面の段だけで進む立方の列(芯が6でもつながる太いつなぎ)
+        for _ in range(step[axis]):
+            corner[axis] += 1
+            path[corner[0]:corner[0] + m, corner[1]:corner[1] + m, corner[2]:corner[2] + m] = True
+    before = a | b | path
+    removed = [tuple(int(v) for v in c) for c in np.argwhere(before & ~(a | b))]
+    assert removed
+    assert _judge(before, removed, m) == _ref_creates_neck(before, removed, m) == neck_expected
+
+
+def test_cutting_a_far_detour_whose_remaining_link_is_a_diagonal_step_widens_the_window_and_is_allowed_from_m_4(monkeypatch):
+    """m=4: 左右の板(x=4 の隙間で離れる)を、y=0..9 の (1,1,0) 段の階段と、y=22..25 の面の迂回路 P でつなぐ。P の隙間の列を切ると、
+    材料は最初の窓(余白 2m)の中ではつながり直さず、窓を広げて階段まで届く。階段の芯は26でしかつながらないので、26ならくびれではなく、
+    6ならくびれ。落ちたら、窓を広げる経路で芯の隣接が26になっていない。"""
+    m = 4
+    before = np.zeros((40, 64, 40), bool)
+    before[0:4, 0:40, 0:4] = True
+    before[5:9, 5:40, 0:4] = True
+    for k in range(6):
+        before[k:k + m, k:k + m, 0:4] = True
+    before[0:9, 22:26, 0:4] = True
+    removed = [tuple(int(v) for v in c) for c in np.argwhere(before) if c[0] == 4 and 22 <= c[1] < 26]
+    calls = []
+    real = neck.core_cells
+    monkeypatch.setattr(neck, 'core_cells', lambda *a, **k: calls.append(1) or real(*a, **k))
+    assert not _judge(before, removed, m)
+    assert len(calls) > 2  # 窓を少なくとも1回広げた(1回の窓で core_cells を2回呼ぶ)
+    assert not _ref_creates_neck(before, removed, m) and _ref_creates_neck(before, removed, m, adjacency=6)
+
+
+def _cube_walk(rng, m, shape, *, walks=3, steps=10):
+    """m 立方を、ずれ {−1,0,1}³(斜めを含む)と面の段で歩かせた骨格と、少し太らせた塊を重ねた形。"""
+    mask = np.zeros(shape, bool)
+    c = np.array([int(rng.integers(0, n - m + 1)) for n in shape])
+    for _ in range(walks):
+        for _ in range(steps):
+            d = rng.integers(-1, 2, size=3) if rng.random() < 0.6 else np.eye(3, dtype=int)[int(rng.integers(3))] * rng.choice([-1, 1])
+            c = np.clip(c + d, 0, np.array(shape) - m)
+            mask[c[0]:c[0] + m, c[1]:c[1] + m, c[2]:c[2] + m] = True
+    return mask
+
+
+@pytest.mark.parametrize('m', [4, 5])
+def test_judge_matches_the_26_reference_on_random_moves_where_6_would_differ(m):
+    """m ≥ 4(芯は26連結)で、斜めの段を含む立方の骨格から一口を抜く手を参照実装と突き合わせる。落ちたら、前線の膨張か群の作り方の
+    どちらかだけが26になっている。通す手・断る手と、同じ手を6の参照で判定すると答えが変わる手のすべてを踏んだことも確かめる
+    (6との差が無ければ検査が効いていない)。"""
+    answers = []
+    for seed in range(8):
+        rng = np.random.default_rng(1220 + seed)
+        shape = (14, 12, 10)
+        mask = _cube_walk(rng, m, shape)
+        keep = np.zeros_like(mask)
+        if seed % 3 == 0:
+            keep[:2, :, :2] = mask[:2, :, :2]
+        k = keep if keep.any() else None
+        candidates = np.argwhere(mask & ~keep)
+        for index in rng.choice(len(candidates), size=min(10, len(candidates)), replace=False):
+            cell = candidates[index]
+            box = np.array([cell, np.minimum(cell + rng.integers(0, 3, 3), np.array(shape) - 1)])
+            removed = [tuple(c) for c in np.argwhere(mask & ~keep) if (c >= box[0]).all() and (c <= box[1]).all()]
+            got = _judge(mask, removed, m, k)
+            assert got == _ref_creates_neck(mask, removed, m, k)
+            answers.append((got, _ref_creates_neck(mask, removed, m, k, adjacency=6)))
+    assert len(answers) >= 60 and {got for got, _ in answers} == {True, False}
+    assert any(got != six for got, six in answers)
 
 
 @pytest.mark.parametrize('seed', range(10))

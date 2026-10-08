@@ -97,6 +97,17 @@ def bite_verdict(padded: np.ndarray, bite: np.ndarray) -> tuple[Optional[str], b
     return None, len(np.unique(rest[neighbours])) == 1
 
 
+#: 芯の隣接を26にする最小の m: 斜めの段を通る球の直径 √2(m−1) が m 以上になる最小の整数(m ≥ 2+√2)。
+#: **格子の間隔が3軸で等しい前提**(`voxelize.Grid.spacing` がスカラー)。導出と実測は docs/TOPOPT_CORE_ADJACENCY_122.md。
+CORE_26_MIN_M = 4
+_FULL_26 = np.ones((3, 3, 3), dtype=bool)
+
+
+def core_structure(m: int) -> np.ndarray:
+    """m 立方の芯どうしの隣接(`ndimage` の構造要素): m ≥ `CORE_26_MIN_M` なら26、未満なら6。"""
+    return _FULL_26 if int(m) >= CORE_26_MIN_M else NEIGHBOURHOOD_STRUCTURE
+
+
 def core_cells(material: np.ndarray, m: int) -> np.ndarray:
     """芯 K: セル c を最小の角とする m 立方が全部材料のセル(立方が配列に収まらない c は含めない)。"""
     core = np.asarray(material, dtype=bool)
@@ -128,16 +139,19 @@ def _fold_along_axes(cells: np.ndarray, m: int, combine, *, clear_tail: bool) ->
 
 
 class CoreConnectivity:
-    """規則 S(m): 侵食した芯 K の6連結成分が、`exempt`(保持ソリッド由来のセル)を介したつながりまで含めて1つにまとまる。
+    """規則 S(m): 侵食した芯 K の連結成分(芯の隣接 `structure`。既定は `core_structure(m)`)が、`exempt`(保持ソリッド由来のセル)を
+    介したつながりまで含めて1つにまとまる。
 
-    K_i と `exempt` の6連結成分 E_j は、K_i のどれかの立方が E_j と重なるか6近傍で接するとき結ばれる。
-    立方どうしが共有1セルの斜めのつなぎ目は、R(m) は許すが K が割れるので S(m) は許さない。
-    `exempt` が無ければ「K が6連結」。K が空のときは(要求するつながりが無いので)満たす。
+    K_i と `exempt` の6連結成分 E_j は、K_i のどれかの立方が E_j と重なるか6近傍で接するとき結ばれる(芯の隣接に依らず6)。
+    立方どうしが共有1セルの斜めのつなぎ目(角のずれ m−1)は、R(m) は許すが芯が隣り合わないので S(m) は許さない。
+    `exempt` が無ければ「K が連結」。K が空のときは(要求するつながりが無いので)満たす。
     `exempt` は探索の間動かないので、E_j ごとの「結ばれる K の候補セル」は作るときに1回だけ求める。
+    `structure` を渡すと芯の隣接を固定する(6と26の比較・テスト用)。
     """
 
-    def __init__(self, m: int, exempt: Optional[np.ndarray] = None) -> None:
+    def __init__(self, m: int, exempt: Optional[np.ndarray] = None, structure: Optional[np.ndarray] = None) -> None:
         self.m = int(m)
+        self.structure = core_structure(self.m) if structure is None else np.asarray(structure, dtype=bool)
         self.exempt = None if exempt is None else np.asarray(exempt, dtype=bool)
         self._links: list[tuple[tuple, np.ndarray]] = []
         #: `after_bite` がどの経路で答えたかの回数(窓で「つながる」/ 窓で「割れる」/ 大域の数え直し)と、窓を広げた最大の倍率。
@@ -170,9 +184,9 @@ class CoreConnectivity:
         return found
 
     def groups(self, mask: np.ndarray) -> int:
-        """K の6連結成分を E で結んでまとめたときの塊の数(K が空なら 0)。S(m) を満たすのは 1 以下。"""
+        """K の連結成分を E で結んでまとめたときの塊の数(K が空なら 0)。S(m) を満たすのは 1 以下。"""
         core = core_cells(self._material(mask), self.m)
-        labels, count = ndimage.label(core, structure=NEIGHBOURHOOD_STRUCTURE)
+        labels, count = ndimage.label(core, structure=self.structure)
         if count <= 1:
             return count
         parent = list(range(count + 1))
@@ -216,8 +230,9 @@ class CoreConnectivity:
         """`before` が S(m) を満たすとき、`after` も満たすかを窓の中だけで判定する。`before`・`after` は同じ窓(`window` の切り出し)の
         材料(`exempt` を除く)で、2つは変更範囲の外で一致する。真 = つながる、偽 = 確実に割れる、None = 窓の中では言えない。
 
-        根拠: 抜く前の芯(と E で結ばれたつながり)は1塊なので、残った芯のどのセルも、抜かれた芯に隣り合う残りの芯(前線)の
-        どれかへ窓の外を通らずに達する。だから抜いた後も1塊であることと、**前線どうしが残った芯の中でつながること**は同値。
+        根拠: 芯(隣接 `structure`)と E の結びを辺とするグラフで、抜く前は1塊なので、抜いた後の各成分は必ず前線(抜かれた芯に
+        隣り合う残りの芯)を含む。だから抜いた後も1塊であることと、**前線どうしが残った芯の中でつながること**は同値
+        (前線の膨張と芯の label は同じ隣接でなければならない。片方だけ広いと、斜めだけで接していた成分が前線から漏れて真を返す)。
         窓の中で前線が1つにつながれば真。前線が2つ以上の塊に分かれ、そのうち1つでも**閉じている**(窓の面のうち格子の縁で
         ない面に触れず、窓の外へ広がる E の結び先にも触れない)塊があれば、それは他と別の成分なので偽。どの塊も開いていれば
         None(`after_bite` が窓を広げる)。`shape`(格子の形)が None なら閉じているかを見ず、偽を返さない(`proven`)。
@@ -233,7 +248,7 @@ class CoreConnectivity:
             return True
         if gained.any():
             return None
-        labels, count = ndimage.label(core_after, structure=NEIGHBOURHOOD_STRUCTURE)
+        labels, count = ndimage.label(core_after, structure=self.structure)
         parent = list(range(count + 1))
 
         def find(x: int) -> int:
@@ -242,7 +257,7 @@ class CoreConnectivity:
                 x = parent[x]
             return x
 
-        need = {int(v) for v in np.unique(labels[ndimage.binary_dilation(lost, structure=NEIGHBOURHOOD_STRUCTURE) & core_after])}
+        need = {int(v) for v in np.unique(labels[ndimage.binary_dilation(lost, structure=self.structure) & core_after])}
         open_labels: set[int] = set()
         crop_shape = tuple(int(b - a) for a, b in zip(lo, hi))
         for link, extends in self._linked_with_extent(lo, crop_shape):
