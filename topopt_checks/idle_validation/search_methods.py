@@ -224,7 +224,7 @@ def core_group_count(mask: np.ndarray, min_width_cells: int) -> int:
     if min_width_cells <= 1:
         return 1 if mask.any() else 0
     core = min_width.core_cells(mask, min_width_cells)
-    _, count = ndimage.label(core, structure=NEIGHBOURHOOD_STRUCTURE)
+    _, count = ndimage.label(core, structure=min_width.core_structure(min_width_cells))
     return int(count)
 
 

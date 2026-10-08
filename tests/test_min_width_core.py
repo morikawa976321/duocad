@@ -54,6 +54,37 @@ def test_a_chain_of_cubes_sharing_one_cell_breaks_the_core_but_a_staircase_overl
     assert core.groups(staircase) == core_groups_oracle(staircase, m) == 1 and core.connected(staircase)
 
 
+@pytest.mark.parametrize('m,step,groups', [
+    (4, (1, 1, 0), 1), (4, (1, 1, 1), 1), (5, (1, 1, 0), 1),  # 26近傍の段(球の直径 m を通す)
+    (4, (3, 3, 0), 4),  # 角のずれ m−1 の稜線の共有は26近傍でもない
+    (3, (1, 1, 0), 4), (3, (1, 1, 1), 4),  # m ≤ 3 は6のまま
+])
+def test_diagonal_steps_join_the_core_from_m_4_and_the_adjacency_can_be_fixed_to_6(m, step, groups):
+    """落ちたら、芯の隣接の閾値(#122: m ≥ 4 で26)が仕様とずれているか、`structure` の上書きが効いていない。"""
+    chain = _chain(step, m=m)
+    assert bs._mask_satisfies_min_width(chain, m)
+    assert min_width.CoreConnectivity(m).groups(chain) == core_groups_oracle(chain, m) == groups
+    six = min_width.CoreConnectivity(m, structure=ndimage.generate_binary_structure(3, 1))
+    assert six.groups(chain) == core_groups_oracle(chain, m, adjacency=6) == 4
+
+
+def test_removing_the_middle_of_a_diagonal_chain_splits_the_core_even_though_no_remaining_core_is_a_face_neighbour():
+    """m=4 の (1,1,0) 段の鎖で、真ん中の立方だけが持つセルを抜くと、残りの芯は (2,2,0) 離れて割れる。抜かれた芯の前線は斜めの隣だけ。
+    落ちたら、`verdict` の前線の膨張が芯の隣接(26)とずれていて、前線が空のまま「つながる」と答えている。"""
+    m, n = 4, 6
+    chain = _chain((1, 1, 0), n=n, m=m)
+    middle = np.zeros_like(chain)
+    middle[3:3 + m, 3:3 + m, :m] = True
+    others = np.zeros_like(chain)
+    for i in range(n):
+        if i != 3:
+            others[i:i + m, i:i + m, :m] = True
+    bite = np.argwhere(middle & ~others)
+    after = chain & ~(middle & ~others)
+    assert core_groups_oracle(chain, m) == 1 and core_groups_oracle(after, m) == 2
+    assert not min_width.CoreConnectivity(m).after_bite(after, bite, 0)
+
+
 def test_exempt_material_joins_the_cores_it_touches_and_a_mask_without_a_core_holds_vacuously():
     """落ちたら、`exempt`(保持ソリッド由来)を介したつながりが数えられていない。立方が重なるか6近傍で接する E が2つの芯を結ぶ。"""
     mask = np.zeros((10, 6, 6), bool)
@@ -109,16 +140,20 @@ def test_the_window_proof_is_never_wrong_and_the_bite_verdict_equals_the_global_
     assert proven_yes > 20  # 窓で通す経路を試している
 
 
-def _random_skeleton_mask(rng, m, shape, *, walks=4, steps=12):
+def _random_skeleton_mask(rng, m, shape, *, walks=4, steps=12, diagonal=False):
     """m 立方を面で重ねながら歩かせた細い骨格(幅 m)。芯は歩いた角の集合で、面で重ねるので 1 塊。
-    枝の先端が多く、「先端が落ちて芯が割れる手」と「割れない手」の両方が出る。"""
+    枝の先端が多く、「先端が落ちて芯が割れる手」と「割れない手」の両方が出る。`diagonal` なら半分の段を {−1,0,1}³ の斜めにする
+    (芯が26でしかつながらない段ができる)。"""
     mask = np.zeros(shape, bool)
     corners = [np.array([int(rng.integers(0, n - m + 1)) for n in shape])]
     for _ in range(walks):
         c = corners[int(rng.integers(len(corners)))].copy()
         for _ in range(steps):
-            axis = int(rng.integers(3))
-            c[axis] = int(np.clip(c[axis] + rng.choice([-1, 1]) * rng.integers(1, m), 0, shape[axis] - m))
+            if diagonal and rng.random() < 0.5:
+                c = np.clip(c + rng.integers(-1, 2, size=3), 0, np.array(shape) - m)
+            else:
+                axis = int(rng.integers(3))
+                c[axis] = int(np.clip(c[axis] + rng.choice([-1, 1]) * rng.integers(1, m), 0, shape[axis] - m))
             mask[c[0]:c[0] + m, c[1]:c[1] + m, c[2]:c[2] + m] = True
             corners.append(c.copy())
     return mask
@@ -156,6 +191,35 @@ def test_the_window_verdict_is_exact_on_grids_larger_than_the_window_and_rarely_
     assert checked > 100 and truths == {True, False}
     assert stats['window_false'] > 0  # 窓の中で「確実に割れる」と言えた手がある
     assert stats['global_count'] < stats['window_false'] + stats['window_true']  # 大半は窓で決まる
+
+
+def test_the_window_verdict_is_exact_with_26_adjacent_cores_on_diagonal_skeletons():
+    """m ≥ 4(芯は26連結)で、斜めの段を含む骨格から一口を抜く手を大域の物差しと突き合わせる。落ちたら、窓の判定(前線・閉じた塊)の
+    どこかが6のまま。6で数えると答えが変わる形を踏んだことも確かめる(差が無ければ検査が効いていない)。"""
+    rng = np.random.default_rng(20261008)
+    checked, truths, six_differs = 0, set(), 0
+    for _ in range(24):
+        m = int(rng.integers(4, 6))
+        shape = tuple(int(x) for x in rng.integers(20, 29, size=3))
+        mask = _random_skeleton_mask(rng, m, shape, diagonal=True)
+        exempt = None
+        if rng.random() < 0.3:
+            exempt = np.zeros(shape, bool)
+            c = np.argwhere(mask)[int(rng.integers(int(mask.sum())))]
+            exempt[c[0]:c[0] + 2, c[1]:c[1] + 2, c[2]] = True
+        if core_groups_oracle(mask, m, exempt) != 1:
+            continue
+        six_differs += core_groups_oracle(mask, m, exempt, adjacency=6) != 1
+        core = min_width.CoreConnectivity(m, exempt)
+        for cell in np.argwhere(mask)[rng.permutation(int(mask.sum()))[:8]]:
+            bite = np.vstack(([list(cell)], min_width.casualties(mask, tuple(int(v) for v in cell), m, exempt)))
+            after = mask.copy()
+            after[tuple(bite.T)] = False
+            truth = core_groups_oracle(after, m, exempt) <= 1
+            assert core.after_bite(after, bite, 0) == truth
+            truths.add(truth)
+            checked += 1
+    assert checked > 60 and truths == {True, False} and six_differs > 5
 
 
 def test_the_window_grows_with_the_margin_and_never_leaves_the_grid():

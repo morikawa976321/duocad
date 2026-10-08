@@ -423,10 +423,10 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
         opened |= design_space_mask & exempt
     result = _find_initial_feasible(opened, conditions, max_evaluations=max_evaluations,
                                     min_width_cells=min_width_cells, is_cancelled=is_cancelled)
+    core = min_width.CoreConnectivity(int(min_width_cells), exempt)
     result.diagnostics = dict(result.diagnostics or {}, min_width=dict(
-        cells=int(min_width_cells), design_cells=int(design_space_mask.sum()),
-        trimmed_cells=int(design_space_mask.sum() - opened.sum()),
-        design_core_groups=int(min_width.CoreConnectivity(int(min_width_cells), exempt).groups(opened))))
+        cells=int(min_width_cells), core_adjacency=int(core.structure.sum()) - 1, design_cells=int(design_space_mask.sum()),
+        trimmed_cells=int(design_space_mask.sum() - opened.sum()), design_core_groups=int(core.groups(opened))))
     return result
 
 
@@ -612,7 +612,7 @@ class PeelStats:
     最初に落ちた理由で数える。m>1 の手は巻き添えを含む一口に対して判定する)。
     `skipped_thickness` は厚みを理由に手を却下しなくなったので常に0。
     `skipped_neck` は、手がくびれを作る(`neck.NeckJudge`。材料の前線をつなぎ直す最小の窓で芯の前線がつなぎ直されない)として飛ばした数、
-    `neck_rejected_6_only` はそのうち26連結の芯なら通っていた数、`neck_full_grid` は材料が格子全体まで広げないとつながらなかった判定の数(m=1 は常に0)。
+    `neck_full_grid` は材料が格子全体まで広げないとつながらなかった判定の数(m=1 は常に0)。
     `skipped_core` は、手を抜くと侵食した芯のつながり(`min_width.CoreConnectivity`)が切れるとして飛ばした数(m=1 は常に0)。
     保護セル(`peel` の `protected`)を含む成分を島として切り離す手は `skipped_connectivity` に数える。"""
 
@@ -632,7 +632,6 @@ class PeelStats:
     core_window_true: int = 0
     core_window_false: int = 0
     core_global: int = 0
-    neck_rejected_6_only: int = 0
     neck_full_grid: int = 0
     seconds: float = 0.0
     #: 順位から選んだセル(手の先頭。巻き添えは含まない)の平坦添字(記録には出さない)。
@@ -867,7 +866,6 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
         stats.core_window_true = int(core.stats['window_true'])
         stats.core_window_false = int(core.stats['window_false'])
         stats.core_global = int(core.stats['global_count'])
-        stats.neck_rejected_6_only = int(necks.stats['rejected_6_only'])
         stats.neck_full_grid = int(necks.stats['full_grid'])
     stats.seconds = time.perf_counter() - started
     return np.ascontiguousarray(inner), stats

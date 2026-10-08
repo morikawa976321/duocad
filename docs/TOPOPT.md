@@ -12,7 +12,8 @@
 | **形状探索の時間短縮**(内訳・候補評価の費用) | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) |
 | **最小幅保証の実測**(節I〜N) | [TOPOPT_THICKNESS.md](TOPOPT_THICKNESS.md) |
 | **完成形の最小幅と強度の原因解析**(#117、表面生成・平滑化・集合演算の切り分けとFEM比較) | [TOPOPT_FINAL_WIDTH_117.md](TOPOPT_FINAL_WIDTH_117.md) |
-| **くびれの探索規則と完成形の幅検査の方式**(#120・#117、3者合意・未実装) | [TOPOPT_NECK_RULE_120.md](TOPOPT_NECK_RULE_120.md) |
+| **くびれの探索規則と完成形の幅検査の方式**(#120・#117、3者合意・実装済み) | [TOPOPT_NECK_RULE_120.md](TOPOPT_NECK_RULE_120.md) |
+| **芯の隣接を m≥4 で26連結にした根拠と実測**(#122、3者合意) | [TOPOPT_CORE_ADJACENCY_122.md](TOPOPT_CORE_ADJACENCY_122.md) |
 | **探索目標係数2.4の根拠** | [TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md) |
 | **段階4の打ち切り(issue #22)の判断材料**(終盤の力学の実測・候補規則の後付け試算) | [TOPOPT_STOP_RULE.md](TOPOPT_STOP_RULE.md) |
 | **仕事をしていない材料が残る原因**(代表応力の母数と保持リング・大きな一歩による局所解) | [TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md) |
@@ -53,6 +54,7 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 | 条件面の作用位置のずれの許容 = 対応付けの探索半径(要素サイズ比。CAD面の面積重心から節点重心まで、モーメント誤差の許容はこの値×荷重の大きさ。`anchor.position_limit`) | **1.0** | `anchor.DEFAULT_RADIUS_RATIO` | 「境界条件の確定(2026-09-17)」 |
 | 要素サイズを指定しないときの最長軸の要素数 `DEFAULT_ELEMENTS_LONG_AXIS` | **40** | `design_space.DEFAULT_ELEMENTS_LONG_AXIS` | 塊の導出(`derive`) |
 | ヤング率の既定 `DEFAULT_YOUNGS_MODULUS_MPA` | **2000** MPa | `material.DEFAULT_YOUNGS_MODULUS_MPA` | 応力の実単位換算(`stress.UnitScale`) |
+| 最小幅の芯を26連結で数える最小の m `CORE_26_MIN_M`(未満は6連結) | **4** | `min_width.CORE_26_MIN_M` | 「最小幅の保証」、[TOPOPT_CORE_ADJACENCY_122.md](TOPOPT_CORE_ADJACENCY_122.md)(√2(m−1) ≥ m の最小の整数) |
 
 ## これは何か
 
@@ -606,8 +608,10 @@ matrix-freeの2案はブランチ`topopt-assembly-comparison`にだけ残る(採
 
 **規則は2つ**(m>1のとき両方満たす。m=1は規則を持たない): **R(m)** 全材料セル(保持セルを除く)が、
 材料だけのm×m×mのブロックのどれかに属する。**S(m)**(2026-09-21。`min_width.CoreConnectivity`)
-侵食した芯(m立方が全部材料であるセルの集合)の6連結成分が、保持セルを介したつながりまで含めて
-1つにまとまる。**R(m)だけでは、m立方が斜めにずれて1セルだけ重なるつなぎ目(首)を許してしまう**
+侵食した芯(m立方が全部材料であるセルの集合)の連結成分が、保持セルを介したつながりまで含めて
+1つにまとまる。**芯の隣接はm≥4で26、m≤3で6**(#122、2026-10-08。根拠と実測は
+[TOPOPT_CORE_ADJACENCY_122.md](TOPOPT_CORE_ADJACENCY_122.md))——m≥4なら、保持を介さない芯の経路に沿って
+ボクセルの材料の中を直径m×spacingの球が移動できる(十分条件で同値ではない。m≤3は立方そのものが滑る)。**R(m)だけでは、m立方が斜めにずれて1セルだけ重なるつなぎ目(首)を許してしまう**
 (詳細は[TOPOPT_THICKNESS.md](TOPOPT_THICKNESS.md)節J3)。S(m)は芯が**全体で**つながるかを見るので、
 首が芯のつながりの唯一の経路(橋)のときだけ、その断面が面でm×(m-1)セル以上あることを要求する
 (保持セルを介した結びは保持ソリッドが規則の対象外なので細い橋でも通す)。
