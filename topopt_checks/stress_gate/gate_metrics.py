@@ -76,3 +76,16 @@ def distance_to_boxes(grid, boxes) -> np.ndarray:
         closest = np.clip(pts, np.asarray(lo, float), np.asarray(hi, float))
         d = np.minimum(d, np.linalg.norm(pts - closest, axis=-1))
     return d.reshape(xx.shape)
+
+
+def distance_to_points(grid, points) -> np.ndarray:
+    """各セル中心から、点群(拘束面の節点のワールド座標)の最寄り点までの距離 [mm]。
+
+    面の AABB までの距離(`distance_to_boxes`)は、穴の内面のような曲面では AABB の角に入る材料を
+    距離0と見なして固定面域を過大にする。節点の点群なら面の形に沿う(最大で h·√3/2 の誤差)。
+    """
+    from scipy.spatial import cKDTree
+    xx, yy, zz = np.meshgrid(grid.centers_1d(0), grid.centers_1d(1), grid.centers_1d(2), indexing="ij")
+    pts = np.stack([xx, yy, zz], axis=-1).reshape(-1, 3)
+    d, _ = cKDTree(np.asarray(points, float)).query(pts, k=1)
+    return d.reshape(xx.shape)

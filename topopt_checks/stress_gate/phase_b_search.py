@@ -44,16 +44,18 @@ import gate_metrics as gm  # noqa: E402
 REAL_REP = stress.representative_stress
 
 
-def zone_ball(vm, mask, dist_fixed, h, w, d, keep=None):
+def zone_ball(vm, mask, dist_fixed, h, w, d, keep=None, dist_load=None):
     zone = mask & (dist_fixed <= d)
     if keep is not None:
         zone |= mask & keep
+    if dist_load is not None:
+        zone |= mask & (dist_load <= d)
     if not zone.any():
         return 0.0
     return float(gm.ball_mean_field(vm, mask, w, h)[zone].max())
 
 
-def make_rep(gate, *, h, w, c, d, keep, dist_fixed, baseline_mm3, zone_full, eps, target, log):
+def make_rep(gate, *, h, w, c, d, keep, dist_fixed, dist_load, baseline_mm3, zone_full, eps, target, log):
     cell = h ** 3
 
     def rep(field, rho, **kw):
@@ -71,12 +73,15 @@ def make_rep(gate, *, h, w, c, d, keep, dist_fixed, baseline_mm3, zone_full, eps
                 pop = mask & (dist_fixed > d)
             elif gate.startswith("split"):
                 pop = mask & ~keep & (dist_fixed > d)
+            elif gate.startswith("unified"):
+                pop = mask & ~keep & (dist_fixed > d) & (dist_load > d)
             elif gate == "qv_baseline":
                 vol = baseline_mm3 + c * w ** 3
             value = gm.top_volume_value(vm, pop, cell, vol)
         entry = dict(cells=int(mask.sum()), p995=float(real.value), member=float(value))
-        if gate in ("qv_out_zball", "qv_out_zrel", "split_zball", "split_zrel"):
-            zb = zone_ball(vm, mask, dist_fixed, h, w, d, keep if gate.startswith("split") else None)
+        if gate.endswith(("zball", "zrel")):
+            zb = zone_ball(vm, mask, dist_fixed, h, w, d, keep if gate.startswith(("split", "unified")) else None,
+                           dist_load if gate.startswith("unified") else None)
             limit = target if gate.endswith("zball") else max(target, (1.0 + eps) * zone_full)
             entry["zone_ball"] = zb
             value = max(value, target * zb / limit)  # 両方が目標以下のときだけ代表応力が目標以下
@@ -102,11 +107,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, choices=list(pa.MODELS))
     ap.add_argument("--gate", required=True, choices=["current", "qv", "qv_design", "qv_baseline", "qv_out", "qv_out_zball", "qv_out_zrel",
-                                                           "split_zball", "split_zrel"])
+                                                           "split_zball", "split_zrel",
+                                                           "unified", "unified_zball", "unified_zrel"])
     ap.add_argument("--eps", type=float, default=0.1)
     ap.add_argument("--shift", type=float, default=0.0, help="格子原点を全軸で h×shift ずらす")
     ap.add_argument("--c", type=float, default=1.0)
     ap.add_argument("--d", type=float, default=2.0)
+    ap.add_argument("--dist", choices=["aabb", "nodes"], default="aabb",
+                    help="固定面からの距離を面の AABB まで(aabb)か拘束節点まで(nodes)で測る")
     ap.add_argument("--load", type=float, default=None)
     ap.add_argument("--h", type=float, default=None)
     ap.add_argument("--w", type=float, default=None)
@@ -130,25 +138,38 @@ def main() -> int:
     ctx = context(h)
     target = ctx.cond.allowable_mpa / ctx.cond.target_safety_factor
     keep = np.asarray(ctx.cond.keep_cells if ctx.cond.keep_cells is not None else np.zeros(ctx.grid.shape, bool))
-    dist_fixed = gm.distance_to_boxes(ctx.grid, pa.fixed_boxes(ctx))
-    dist_load = gm.distance_to_boxes(ctx.grid, _fem_probe.face_world_boxes(ctx.table, ctx.cond.load_faces))
+    def fixed_distance(c):
+        if a.dist == "nodes":
+            return gm.distance_to_points(c.grid, c.table.positions(list(c.cond.fixed_faces)))
+        return gm.distance_to_boxes(c.grid, pa.fixed_boxes(c))
+
+    dist_fixed = fixed_distance(ctx)
+    def load_distance(c):
+        if a.dist == "nodes":
+            return gm.distance_to_points(c.grid, c.table.positions(list(c.cond.load_faces)))
+        return gm.distance_to_boxes(c.grid, _fem_probe.face_world_boxes(c.table, c.cond.load_faces))
+
+    dist_load = load_distance(ctx)
     full = np.asarray(ctx.space.mask, bool)
     vm_full, _ = pa.solve(full, ctx)
     baseline = gm.exceed_volume(vm_full, full, h ** 3, target)
-    zone_full = zone_ball(vm_full, full, dist_fixed, h, w, a.d, keep if a.gate.startswith("split") else None)
+    zone_full = zone_ball(vm_full, full, dist_fixed, h, w, a.d, keep if a.gate.startswith(("split", "unified")) else None,
+                          dist_load if a.gate.startswith("unified") else None)
     log: list = []
-    rep = make_rep(a.gate, h=h, w=w, c=a.c, d=a.d, keep=keep, dist_fixed=dist_fixed, baseline_mm3=baseline,
+    rep = make_rep(a.gate, h=h, w=w, c=a.c, d=a.d, keep=keep, dist_fixed=dist_fixed, dist_load=dist_load,
+                   baseline_mm3=baseline,
                    zone_full=zone_full, eps=a.eps, target=target, log=log)
     t0 = time.perf_counter()
     with patch.object(stress, "representative_stress", rep):
         result = binary_search.find_best_feasible(full, ctx.cond, max_evaluations=a.max_evaluations,
                                                   min_width_cells=ctx.min_width_cells)
     wall = time.perf_counter() - t0
-    name = f"{a.model}_{a.gate}_c{a.c:g}" + (f"_d{a.d:g}" if a.gate.startswith(("qv_out", "split")) else "") + \
+    name = f"{a.model}_{a.gate}_c{a.c:g}" + (f"_d{a.d:g}" if a.gate.startswith(("qv_out", "split", "unified")) else "") + \
         (f"_e{a.eps:g}" if a.gate.endswith("zrel") else "") + \
+        (f"_{a.dist}" if a.dist != "aabb" else "") + \
         f"_L{spec['load_n']:g}_h{h:g}_w{w:g}" + (f"_s{a.shift:g}" if a.shift else "") + (f"_{a.tag}" if a.tag else "")
     out = dict(model=a.model, gate=a.gate, c=a.c, d=a.d, load_n=spec["load_n"], h=h, w=w, target_mpa=target,
-               baseline_exceed_mm3=baseline, zone_ball_full=zone_full, eps=a.eps, shift=a.shift, status=result.status, termination=result.termination,
+               baseline_exceed_mm3=baseline, zone_ball_full=zone_full, eps=a.eps, shift=a.shift, dist=a.dist, status=result.status, termination=result.termination,
                evaluations=result.evaluations, wall_s=wall, log=log)
     print(name, result.status, result.termination, f"eval={result.evaluations}", f"{wall:.0f}s", flush=True)
     if result.status == "feasible" and result.best_feasible is not None:
@@ -160,13 +181,14 @@ def main() -> int:
         row["member_k1"] = region_check(vm, mask, keep, dist_fixed, dist_load, h, h, w)
         row["zone_ball_d"] = zone_ball(vm, mask, dist_fixed, h, w, a.d)
         row["zone_ball_keep_d"] = zone_ball(vm, mask, dist_fixed, h, w, a.d, keep)
+        row["zone_ball_boundary_d"] = zone_ball(vm, mask, dist_fixed, h, w, a.d, keep, dist_load)
         out["k1"] = row
         print("k1", json.dumps({k: (round(v, 3) if isinstance(v, float) else v) for k, v in row.items()
                                 if k != "hot_by_load_factor"}, ensure_ascii=False), flush=True)
         for k in a.refine:
             fctx = context(h / k)
             fkeep = np.asarray(fctx.cond.keep_cells if fctx.cond.keep_cells is not None else np.zeros(fctx.grid.shape, bool))
-            fdf = gm.distance_to_boxes(fctx.grid, pa.fixed_boxes(fctx))
+            fdf = fixed_distance(fctx)
             fdl = gm.distance_to_boxes(fctx.grid, _fem_probe.face_world_boxes(fctx.table, fctx.cond.load_faces))
             fmask, _ = refine_shape._project_mask_exact_subdivide(mask, k, fctx.space, ctx.grid.origin, h)
             fmask = (fmask & np.asarray(fctx.space.mask, bool)) | fkeep
