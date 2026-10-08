@@ -29,7 +29,7 @@ from duocad.agent.providers import (
     load_api_key,
 )
 from duocad.mcp_server import DocumentTools
-from duocad.server import Session
+from duocad.server import Server, Session
 from agent_support import FAKE_KEY
 from test_agent_loop import FakeTransport
 from test_agent_streaming import HANG, serving
@@ -279,6 +279,37 @@ def test_a_wait_that_does_not_fit_the_time_left_is_not_taken():
     assert len(transport.sent) == 1
 
 
+def test_an_abort_that_lands_before_sending_stops_the_request():
+    """ループが中断を確かめた後・送る前に届いた中断を、往復の頭で消さない。"""
+    transport = FakeTransport([answer()])
+    provider = claude(transport)
+    provider.abort()
+    with pytest.raises(ProviderError):
+        ask(provider)
+    assert transport.sent == [], "中断したのに送った"
+
+
+def test_an_abort_that_lands_while_connecting_discards_the_reply():
+    """`StreamingTransport` が自分の印を下ろした直後の中断は接続を閉じられない。応答のほうを捨てる。"""
+    provider = None
+
+    def aborted_midway(url, payload, headers, timeout):
+        provider.abort()
+        return answer()
+
+    provider = claude(aborted_midway)
+    with pytest.raises(ProviderError):
+        ask(provider)
+
+
+def test_the_next_request_is_not_cancelled_by_the_previous_abort(box_session: Session):
+    transport = FakeTransport([answer("次の依頼")])
+    provider = claude(transport)
+    provider.abort()  # 前の依頼の中断
+    run = AgentLoop(DocumentTools(box_session), provider).run("続けて")
+    assert run.status == "completed", run.detail
+
+
 def test_abort_cuts_a_retry_wait_short():
     transport = FakeTransport([busy(529, retry_after=30.0), answer()])
     provider = claude(transport)
@@ -307,6 +338,44 @@ def test_the_key_is_read_from_the_environment_first_then_the_secrets_file(monkey
     monkeypatch.delenv(providers.ANTHROPIC_API_KEY_ENV)
     secrets.write_text("{壊れている", encoding="utf-8")
     assert load_api_key() is None
+
+
+def test_the_secrets_file_is_read_whatever_a_windows_editor_saved_it_as(monkeypatch, tmp_path):
+    """PowerShell 5.1 の `>` は UTF-16LE、`Set-Content -Encoding utf8` はBOM付きUTF-8で書く。"""
+    secrets = tmp_path / "duocad_secrets.json"
+    monkeypatch.setattr(providers, "SECRETS_PATH", secrets)
+    body = json.dumps({providers.ANTHROPIC_API_KEY_ENV: "sk-ant-x"})
+    for encoding in ("utf-16", "utf-8-sig", "utf-8"):
+        secrets.write_bytes(body.encode(encoding))
+        assert load_api_key() == "sk-ant-x", encoding
+
+
+def test_an_unreadable_secrets_file_does_not_stop_the_server(monkeypatch, tmp_path, box_session: Session):
+    """読めないファイルは「未設定」扱い。例外にするとClaudeを使わない人のサーバまで立たなくなる。"""
+    secrets = tmp_path / "duocad_secrets.json"
+    monkeypatch.setattr(providers, "SECRETS_PATH", secrets)
+    secrets.write_bytes(b"\x80\x81\x82 not utf-8")
+
+    assert load_api_key() is None
+    assert Server(box_session)._ai_provider_kind == "openai_compat"
+    with pytest.raises(ProviderError) as caught:
+        build_provider("anthropic")
+    assert "読めなかった" in str(caught.value)
+
+
+def test_a_key_broken_by_a_newline_is_refused_and_never_echoed(monkeypatch):
+    """HTTPライブラリは改行入りのヘッダ値を `b'...\\n...'` の形で例外文へ載せる。その形でも消す。"""
+    broken = "sk-ant-abc\ndef"
+    leaking = FakeTransport([ValueError(f"Invalid header value {broken.encode()!r}")])
+    with pytest.raises(ProviderError) as caught:
+        ask(AnthropicProvider(broken, transport=leaking))
+    assert "abc\\ndef" not in str(caught.value)
+    assert "***" in str(caught.value)
+
+    monkeypatch.setenv(providers.ANTHROPIC_API_KEY_ENV, broken)
+    with pytest.raises(ProviderError) as refused:
+        build_provider("anthropic")
+    assert "abc" not in str(refused.value)
 
 
 def test_the_key_never_shows_up_in_errors_even_after_retries():

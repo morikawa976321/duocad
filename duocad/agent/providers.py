@@ -213,12 +213,15 @@ class ProviderReply:
 def _redact(text: str, secret: Optional[str]) -> str:
     """例外メッセージから鍵を消す。
 
-    HTTPライブラリは不正なヘッダ値を例外文へそのまま載せる(例: 改行入りのキー)。
+    HTTPライブラリは不正なヘッダ値を例外文へそのまま載せる(例: 改行入りのキー)。**載せるときは
+    `repr` の形**(`b'sk-...\\n...'`)なので、元の文字列との一致だけでは改行入りのキーを消せない。
     外へ出る文字列は**必ず**ここを通す。
     """
     if not secret:
         return text
-    return text.replace(secret, "***")
+    for form in (secret, repr(secret)[1:-1], repr(secret.encode("utf-8"))[2:-1]):
+        text = text.replace(form, "***")
+    return text
 
 
 def _redacted(error: Exception, secret: Optional[str]) -> ProviderError:
@@ -513,6 +516,9 @@ class Provider:
     def abort(self) -> None:
         """走っている往復を捨てる(中断フラグが立ったとき**別スレッドから**呼ばれる)。既定は何もしない。"""
 
+    def rearm(self) -> None:
+        """前の依頼で立った中断の印を下ろす(`AgentLoop.run` が依頼の頭で呼ぶ)。既定は何もしない。"""
+
     def prepare(self, *, system: str, tools: Sequence[dict], timeout: float) -> dict:
         """固定プレフィックス(system + tools)を相手のキャッシュへ載せておく。既定は何もしない。"""
         return {}
@@ -784,14 +790,20 @@ def load_api_key() -> Optional[str]:
     """ClaudeのAPIキーを読む。**環境変数が先、次にgitignore済みのローカル設定ファイル**。
 
     見つからなければ `None`(未設定は「使えない」であって異常ではない)。設定ファイルが
-    壊れていても値の推測はしない。
+    壊れていても値の推測はせず、**例外も上げない** —— `Server` は起動時にここを読むので、
+    投げるとClaudeを使わない人のサーバまで立たなくなる。
+
+    文字コードはBOMで見分ける(外部の罠): Windows PowerShell 5.1 の `>` / `Out-File` は UTF-16LE、
+    `Set-Content -Encoding utf8` はBOM付きUTF-8で書く。
     """
     value = (os.environ.get(ANTHROPIC_API_KEY_ENV) or "").strip()
     if value:
         return value
     try:
-        data = json.loads(SECRETS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        raw = SECRETS_PATH.read_bytes()
+        text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8-sig")
+        data = json.loads(text)
+    except (OSError, ValueError):  # UnicodeDecodeError と JSONDecodeError はどちらも ValueError
         return None
     if not isinstance(data, dict):
         return None
@@ -856,7 +868,8 @@ class AnthropicProvider(Provider):
         self._transport: Transport = (
             StreamingTransport(_assemble_anthropic) if transport is None else transport
         )
-        #: 中断が立ったか(再試行の待ちを打ち切るため。接続中の往復は `_transport.abort` が閉じる)。
+        #: 中断が立ったか。**下ろすのは依頼の頭(`rearm`)だけ** —— 往復の頭で下ろすと、ループが
+        #: 中断を確かめてから送るまでの間に届いた中断が消え、課金される往復が1回走る。
         self._aborted = threading.Event()
 
     def __repr__(self) -> str:  # pragma: no cover - 表示だけ
@@ -867,6 +880,9 @@ class AnthropicProvider(Provider):
         abort = getattr(self._transport, "abort", None)
         if callable(abort):
             abort()
+
+    def rearm(self) -> None:
+        self._aborted.clear()
 
     # ------------------------------------------------------------------ 整形
     def render_tools(self, tools: Sequence[dict]) -> list[dict]:
@@ -997,11 +1013,12 @@ class AnthropicProvider(Provider):
         """1往復(一時的な失敗はやり直す)。**外へ出る例外は必ずキーを消してから**投げ直す。"""
         headers = {"x-api-key": self._api_key, "anthropic-version": ANTHROPIC_API_VERSION}
         deadline = monotonic() + timeout
-        self._aborted.clear()
         attempt = 0
         while True:
+            if self._aborted.is_set():
+                raise ProviderError("中断したので送らなかった")
             try:
-                return self._transport(url, payload, headers, max(deadline - monotonic(), 0.001))
+                response = self._transport(url, payload, headers, max(deadline - monotonic(), 0.001))
             except Exception as error:
                 wait = _retry_wait(error, attempt)
                 if (
@@ -1012,6 +1029,12 @@ class AnthropicProvider(Provider):
                 ):
                     raise _redacted(error, self._api_key) from None
                 attempt += 1
+                continue
+            # `StreamingTransport` は往復の頭で自分の中断の印を下ろすので、送り出す直前に届いた
+            # 中断は接続を閉じずに素通りしうる。ここで拾って応答を捨てる。
+            if self._aborted.is_set():
+                raise ProviderError("中断したので応答を捨てた")
+            return response
 
 
 def _neutral_stop(raw: str, has_tool_calls: bool, truncated: set) -> str:
@@ -1061,10 +1084,18 @@ def build_provider(
     if kind == "anthropic":
         api_key = load_api_key()
         if not api_key:
+            unreadable = (
+                f"。{SECRETS_FILENAME} はあるが読めなかった(JSONの形とキー名を確かめる)"
+                if SECRETS_PATH.exists()
+                else ""
+            )
             raise ProviderError(
                 f"ClaudeのAPIキーが未設定(環境変数 {ANTHROPIC_API_KEY_ENV} か、リポジトリ直下の "
-                f"{SECRETS_FILENAME} に {{\"{ANTHROPIC_API_KEY_ENV}\": \"...\"}} の形で置く)"
+                f"{SECRETS_FILENAME} に {{\"{ANTHROPIC_API_KEY_ENV}\": \"...\"}} の形で置く){unreadable}"
             )
+        # 改行や空白の混じったキー(貼り付けの崩れ)は送らない。HTTPライブラリはそれを例外文へ載せる。
+        if any(ch.isspace() or not ch.isprintable() for ch in api_key):
+            raise ProviderError("ClaudeのAPIキーに空白か改行が混じっている(貼り付けを確かめる)")
         return AnthropicProvider(api_key, model=model or default_model(kind), transport=transport)
     if kind == "openai_compat":
         return OpenAICompatProvider(
