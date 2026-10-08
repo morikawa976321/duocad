@@ -26,8 +26,11 @@ from duocad.agent.providers import (
     ToolResult,
     ToolResultTurn,
     UserTurn,
+    api_key_status,
     build_provider,
+    delete_api_key,
     load_api_key,
+    save_api_key,
 )
 from duocad.mcp_server import DocumentTools
 from duocad.server import Server, Session
@@ -382,6 +385,32 @@ def test_an_unreadable_secrets_file_does_not_stop_the_server(monkeypatch, tmp_pa
     with pytest.raises(ProviderError) as caught:
         build_provider("anthropic")
     assert "読めなかった" in str(caught.value)
+
+
+def test_saving_and_deleting_the_key_keeps_other_fields(monkeypatch, tmp_path):
+    """画面から書くキーは同じファイルへ入り、他の欄は残す。消して空になればファイルごと消す。"""
+    secrets = tmp_path / "duocad_secrets.json"
+    monkeypatch.setattr(providers, "SECRETS_PATH", secrets)
+
+    save_api_key("sk-ant-first")
+    assert load_api_key() == "sk-ant-first"
+    assert api_key_status() == {"configured": True, "source": "file", "hint": "irst"}
+
+    secrets.write_text(json.dumps({"OTHER": "x", providers.ANTHROPIC_API_KEY_ENV: "sk-ant-old"}), encoding="utf-8")
+    save_api_key("sk-ant-second")
+    assert json.loads(secrets.read_text(encoding="utf-8")) == {
+        "OTHER": "x", providers.ANTHROPIC_API_KEY_ENV: "sk-ant-second"
+    }
+    delete_api_key()
+    assert json.loads(secrets.read_text(encoding="utf-8")) == {"OTHER": "x"}
+
+    secrets.unlink()
+    save_api_key("sk-ant-third")
+    delete_api_key()
+    assert not secrets.exists()
+    assert api_key_status() == {"configured": False, "source": None, "hint": None}
+    with pytest.raises(ValueError):
+        save_api_key("   ")
 
 
 def test_a_key_broken_by_a_newline_is_refused_and_never_echoed(monkeypatch):

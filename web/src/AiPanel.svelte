@@ -8,8 +8,8 @@
    * - **`ai_*` はverbではない**。ここから送るのは対話であって、文書の変更は
    *   AIが呼ぶ既存MCPツールの側から**通常のverb配信**として届く(`App.svelte` の
    *   `handleState` がいつもどおり描き直す。このパネルは何も描かない)。
-   * - **鍵を打つ場所がどこにも無い**。ClaudeのAPIキーはサーバ側(環境変数か
-   *   `duocad_secrets.json`)にだけ置き、画面が知るのは置いてあるかの真偽(`apiKeyConfigured`)だけ。
+   * - **鍵はここでは打たない**。ClaudeのAPIキーは設定ダイアログ(`SettingsDialog.svelte`)で置く
+   *   (一度決めたら触らない設定なので)。ここが見るのは置いてあるかの真偽(`apiKeyConfigured`)だけ。
    * - **プロバイダの選択は `status.providers` で駆動する**(2つ以上のときだけ選択UIを出す)。
    * - **会話の時系列(`transcript`)はここが持つ状態ではない** —— **正は `aiChat.svelte.ts`**で、
    *   ここは`props`として受け取って描くだけ(パネルは何も覚えない。
@@ -217,8 +217,7 @@
     {/if}
     {#if keyMissing}
       <p class="hint dim" data-ai-key-missing>
-        APIキーが未設定(リポジトリ直下の duocad_secrets.json か、環境変数 DUOCAD_ANTHROPIC_API_KEY。
-        環境変数はサーバを立て直してから効く)
+        APIキーが未設定(ヘッダーの「設定」から置ける)
       </p>
     {/if}
 

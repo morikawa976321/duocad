@@ -24,12 +24,16 @@
    * **レイアウトの大きさを持たないのは `position: absolute` による**(top-layer が理由ではない)ので、
    * 非モーダルでも `.viewport` の寸法＝カメラのアスペクトには触らない(styles.css の不変条件)。
    *
-   * **状態の正は `displaySettings.svelte.ts`**。ここは値と口を受け取るだけの presentational な部品で、
-   * 双方向束縛をコンポーネントの境界に持ち込まない。
+   * **状態の正は `displaySettings.svelte.ts`**(画角)と**サーバの `ai_status`**(APIキー)。ここは値と口を
+   * 受け取るだけの presentational な部品で、双方向束縛をコンポーネントの境界に持ち込まない。
+   *
+   * **APIキーは書くだけで、値は画面へ戻らない**(サーバが返すのは置いてあるか・どこから読んだか・末尾4文字)。
+   * 打ちかけは送ったら捨てる(DOMに残さない)。
    */
+  import type { AiStatus } from './session'
   import { FOV_DEFAULT, FOV_ORTHO } from './viewport'
 
-  const { open, fov, onFov, onClose }: {
+  const { open, fov, onFov, aiStatus, onSetApiKey, onClose }: {
     open: boolean
     /**
      * 今の画角[度]。`FOV_ORTHO`(0)なら完全正投影。**UIからは 0 か `FOV_DEFAULT` しか
@@ -39,11 +43,35 @@
     fov: number
     /** 選ばれた画角[度]。**その場で効く**(「適用」で確定させない)。 */
     onFov: (deg: number) => void
+    /** `null` は接続前(キーの欄は打てない)。 */
+    aiStatus: AiStatus | null
+    /** ClaudeのAPIキーを書く(`null` なら消す)。 */
+    onSetApiKey: (key: string | null) => void
     onClose: () => void
   } = $props()
 
   /** 完全正投影の状態か(チェックボックスの生死はこの1つで決まる)。 */
   const ortho = $derived(fov === FOV_ORTHO)
+
+  let keyDraft = $state('')
+  /** 環境変数のキーはファイルより優先されるので、ここで書いても効かない(欄ごと止める)。 */
+  const keyFromEnv = $derived(aiStatus?.apiKeySource === 'env')
+  const keyLine = $derived.by(() => {
+    if (!aiStatus) return '接続を待っている'
+    const hint = aiStatus.apiKeyHint ? `(…${aiStatus.apiKeyHint})` : ''
+    if (aiStatus.apiKeySource === 'env') {
+      return `環境変数 DUOCAD_ANTHROPIC_API_KEY で設定済み${hint}。こちらが優先されるので、ここでは変えられない。`
+    }
+    if (aiStatus.apiKeySource === 'file') return `設定済み${hint}。保存したキーは画面に戻らない。`
+    return '未設定。保存するとリポジトリ直下の duocad_secrets.json に書く(gitには載らない)。'
+  })
+
+  function saveKey(): void {
+    const key = keyDraft.trim()
+    if (!key) return
+    onSetApiKey(key)
+    keyDraft = ''
+  }
 
   let dialog: HTMLDialogElement
 
@@ -96,6 +124,33 @@
     切り替えても見かけの大きさは変わらない。正投影ではパースが完全に消え、
     同じ長さの辺は奥行きが違っても同じ長さに写る。
   </p>
+
+  <!-- **パスワード欄にする**(覗き込みと実機検査のスクリーンショットに値を写さない)。
+       `autocomplete="off"` はブラウザに保存させないため。 -->
+  <label class="field-row key-row">
+    Claude APIキー
+    <input
+      id="settings-api-key"
+      type="password"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="sk-ant-..."
+      bind:value={keyDraft}
+      disabled={!aiStatus || keyFromEnv}
+      onkeydown={(event) => {
+        if (event.key === 'Enter') saveKey()
+      }}
+    />
+  </label>
+  <div class="key-actions">
+    <button id="settings-api-key-save" onclick={saveKey} disabled={!aiStatus || keyFromEnv || !keyDraft.trim()}>
+      保存
+    </button>
+    {#if aiStatus?.apiKeySource === 'file'}
+      <button id="settings-api-key-delete" onclick={() => onSetApiKey(null)}>削除</button>
+    {/if}
+  </div>
+  <p class="hint dim" data-api-key-status>{keyLine}</p>
 </dialog>
 
 <style>
@@ -141,5 +196,22 @@
   /* 大きさは styles.css の `.hint` が持つ(--fs-meta)。 */
   .hint {
     margin: 6px 0 0;
+  }
+
+  /* 画角の説明との間を空けて、別の項目だと分かるようにする。 */
+  .key-row {
+    margin-top: 12px;
+  }
+
+  #settings-api-key {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .key-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 6px;
   }
 </style>

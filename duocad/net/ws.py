@@ -20,13 +20,14 @@
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
-        {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "running", "providers"}
+        {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "api_key_source",
+         "api_key_hint", "running", "providers"}
         {"type": "ai_tool_call", "name": str, "arguments": {...}, "result": {...}, "ok": bool}
         {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}
         {"type": "ai_error", "message": str}
 
-**`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_prepare` / `ai_send` /
-`ai_cancel` は文書を
+**`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_set_api_key` / `ai_prepare` /
+`ai_send` / `ai_cancel` は文書を
 直接は変えない(操作ログに載らず、undoの単位でもない) —— 文書を変えるのはエージェントが呼ぶ
 既存ツールの側で、それは通常のverb配信としてこの後に届く。したがって `catalog.COMMANDS` には
 **入れない**し、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
@@ -86,7 +87,10 @@ from ..agent.providers import (
     ANTHROPIC_MAX_TOKENS,
     DEFAULT_OPENAI_COMPAT_BASE_URL,
     api_key_configured,
+    api_key_status,
     default_model,
+    delete_api_key,
+    save_api_key,
 )
 from ..session import Session
 from .tools_on_loop import ToolsOnLoop
@@ -541,6 +545,8 @@ class Server:
                 # (待たずに関数を抜けると、テストのようにここで `asyncio.run` が閉じる
                 # 呼び方では配信タスクが実行される前に握りつぶされる)。
                 await self._broadcast({"type": "ai_status", **status})
+            elif command == "ai_set_api_key":
+                await self._broadcast({"type": "ai_status", **self._ai_set_api_key(message.get("key"))})
             elif command == "ai_prepare":
                 self._ai_prepare()
             elif command == "ai_send":
@@ -601,7 +607,7 @@ class Server:
 
     # ------------------------------------------------------------------ G: アプリ内AIエージェント
     def _ai_status(self) -> dict:
-        """画面に出してよい設定の全部。**キーの値は載せない**(載せるのは置いてあるかの真偽だけ)。
+        """画面に出してよい設定の全部。**キーの値は載せない**(載せるのは `api_key_status()` の3つだけ)。
 
         `model` / `base_url` は明示的に選んでいなければ**プロバイダの既定値**を返す
         (`null` のままだと画面が「何と話しているか」を言えない)。`anthropic` の `base_url` は
@@ -611,11 +617,14 @@ class Server:
         選択UIを出すか決める(1つなら出さない)。
         """
         anthropic = self._ai_provider_kind == "anthropic"
+        key = api_key_status()
         return {
             "provider": self._ai_provider_kind,
             "model": self._ai_model or default_model(self._ai_provider_kind),
             "base_url": None if anthropic else self._ai_base_url or DEFAULT_OPENAI_COMPAT_BASE_URL,
-            "api_key_configured": api_key_configured(),
+            "api_key_configured": key["configured"],
+            "api_key_source": key["source"],
+            "api_key_hint": key["hint"],
             "running": self._ai_running,
             "providers": list(AI_PROVIDERS),
         }
@@ -652,6 +661,35 @@ class Server:
         # 古い設定で走っているウォームアップの接続を閉じる(捨てる会話のために相手を占有しない)。
         self._ai_cancellation.cancel()
         # 次に使うときに作り直す(古いプロバイダ・古い会話の履歴を持ち越さない)。
+        self._ai_loop = None
+        self._ai_cancellation = Cancellation()
+        return self._ai_status()
+
+    def _ai_set_api_key(self, key: Any) -> dict:
+        """設定ダイアログから届いたClaudeのAPIキーを書く(`None` なら消す)。**値は返さない**。
+
+        書いたら Claude へ切り替える(キーを置く理由はそれを使うことなので、起動時の
+        「キーがあれば Claude から始める」と揃える)。会話は作り直す —— 走っている `AgentLoop` の
+        プロバイダは古いキーを持っている。実行中は `_ai_configure` と同じ理由で受け付けない。
+
+        **このコマンドは `catalog.COMMANDS` にもMCPにも載せない**(AIがキーを書き換える口を作らない)。
+        拒否の理由にキーの値を入れない(`key_problem`)。
+        """
+        if self._ai_running:
+            return {**self._ai_status(), "error": "AI応答中はAPIキーを変更できない(中断してから)"}
+        try:
+            if key is None:
+                delete_api_key()
+            elif not isinstance(key, str):
+                raise ValueError("APIキーは文字列で送る")
+            else:
+                save_api_key(key)
+                self._ai_provider_kind = "anthropic"
+                self._ai_base_url = None
+        except (ValueError, OSError) as error:
+            reason = str(error) if isinstance(error, ValueError) else f"APIキーの保存に失敗: {error}"
+            return {**self._ai_status(), "error": reason}
+        self._ai_cancellation.cancel()
         self._ai_loop = None
         self._ai_cancellation = Cancellation()
         return self._ai_status()

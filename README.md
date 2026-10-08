@@ -510,8 +510,11 @@ AIを選んで繋ぐ**（llama-server と Claude API の2つ）。**MCP経路は
   （`fillet`/`chamfer`/`extrude` は対象ボディの可視性も実行時に見直す）。
   **版は「ログの本数・選択の指紋・可視性の指紋」の3つ組** —— 可視性は操作ログに
   載らないので、指紋を持たないと「AIが考えている間に人がボディを隠した」が版に出ない
-- **Claude APIのキーは画面から受け取らない。** 置き場所は環境変数 `DUOCAD_ANTHROPIC_API_KEY` か、
-  リポジトリ直下の `duocad_secrets.json`（gitignore済み。形は `{"DUOCAD_ANTHROPIC_API_KEY": "sk-ant-..."}`）。
+- **Claude APIのキーは画面の「設定」で置ける**（`ai_set_api_key`。リポジトリ直下の `duocad_secrets.json` に書く。
+  gitignore済み）。**画面へは値を返さない** —— 返すのは置いてあるか・どこから読んだか・末尾4文字だけ。
+  このコマンドは verb にも MCP ツールにもしない（AIがキーを書き換える口を作らない）。手で置くなら
+  環境変数 `DUOCAD_ANTHROPIC_API_KEY` か同じファイル（形は `{"DUOCAD_ANTHROPIC_API_KEY": "sk-ant-..."}`）。
+  環境変数がファイルより優先され、そのときは画面から変えられない。
   **`ANTHROPIC_API_KEY` は読まない** —— その名前をユーザー環境に置くと、同じマシンの Claude Code が
   サブスクではなくそのキーで課金するようになる。キーが置いてあればサーバは Claude から始まる。
   モデルは環境変数 `DUOCAD_ANTHROPIC_MODEL` で差し替えられる（`claude-sonnet-5-5` など）
@@ -530,8 +533,9 @@ AIを選んで繋ぐ**（llama-server と Claude API の2つ）。**MCP経路は
 `tests/test_agent_claude_api.py`（課金されるので、キーがあっても `DUOCAD_LIVE_CLAUDE=1` のときだけ走る）の2本。
 実測と数値は [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md)。
 
-**WebSocketへの配線。** `duocad/net/ws.py` が `ai_get_status` / `ai_configure` / `ai_prepare` /
-`ai_send` / `ai_cancel` の5つを持ち、画面右サイドバーの `web/src/AiPanel.svelte` から叩く。
+**WebSocketへの配線。** `duocad/net/ws.py` が `ai_get_status` / `ai_configure` / `ai_set_api_key` /
+`ai_prepare` / `ai_send` / `ai_cancel` の6つを持ち、画面右サイドバーの `web/src/AiPanel.svelte`
+（`ai_set_api_key` だけは設定ダイアログ `web/src/SettingsDialog.svelte`）から叩く。
 
 - **`ai_*` はverbではない**。文書を直接は変えない(操作ログに載らずundoの単位でもない)ので
   `duocad/catalog.py` の `COMMANDS`(「MCPツール名==WSコマンド名==UIコマンドID==verb名」の

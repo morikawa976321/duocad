@@ -31,7 +31,7 @@ import time
 
 from duocad.mcp_server import DocumentTools
 from duocad.server import Server, Session
-from duocad.agent.providers import ANTHROPIC_API_KEY_ENV, ANTHROPIC_MAX_TOKENS
+from duocad.agent.providers import ANTHROPIC_API_KEY_ENV, ANTHROPIC_MAX_TOKENS, load_api_key, save_api_key
 from agent_support import FAKE_KEY, RecordedProvider, spoke, tool_use
 from session_support import FakeConnection
 
@@ -476,6 +476,72 @@ def test_a_tampered_base_url_never_redirects_the_claude_key(monkeypatch, box_ses
     assert run.status == "completed"
     assert calls[0]["url"] == "https://api.anthropic.com/v1/messages"
     assert calls[0]["payload"]["max_tokens"] == ANTHROPIC_MAX_TOKENS
+
+
+def _set_key(box_session: Session, key):
+    """`ai_set_api_key` を1回送り、全接続へ配られた ai_status と、配られたもの全部を返す。"""
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        sender, watcher = FakeConnection(), FakeConnection()
+        server.clients.update({sender, watcher})
+        await server._dispatch(sender, json.dumps({"cmd": "ai_set_api_key", "key": key}))
+        return server, watcher
+
+    server, watcher = asyncio.run(scenario())
+    return server, watcher.of_type("ai_status")[-1], json.dumps(watcher.payloads, ensure_ascii=False)
+
+
+def test_a_key_set_from_the_settings_is_saved_but_never_sent_back(box_session: Session):
+    """設定ダイアログから置いたキーはファイルへ書かれ、画面へは末尾4文字しか戻らない。Claudeに切り替わる。"""
+    server, status, everything = _set_key(box_session, f"  {FAKE_KEY}  ")
+
+    assert "error" not in status
+    assert load_api_key() == FAKE_KEY
+    assert status["api_key_configured"] is True
+    assert status["api_key_source"] == "file"
+    assert status["api_key_hint"] == FAKE_KEY[-4:]
+    assert status["provider"] == "anthropic"
+    assert FAKE_KEY not in everything, "キーの値が画面へ配られた"
+
+
+def test_a_broken_key_is_refused_without_echoing_it(box_session: Session):
+    server, status, everything = _set_key(box_session, "sk-ant-abc" + chr(10) + "def")
+    assert "改行" in status["error"]
+    assert load_api_key() is None
+    assert "abc" not in everything
+    assert server._ai_provider_kind == "openai_compat", "断ったのに切り替わった"
+
+
+def test_null_deletes_the_saved_key(box_session: Session):
+    save_api_key(FAKE_KEY)
+    server, status, _ = _set_key(box_session, None)
+    assert "error" not in status
+    assert status["api_key_configured"] is False
+    assert load_api_key() is None
+
+
+def test_an_environment_key_is_reported_as_taking_precedence(monkeypatch, box_session: Session):
+    monkeypatch.setenv(ANTHROPIC_API_KEY_ENV, "sk-ant-from-env-wxyz")
+    server, status, _ = _set_key(box_session, FAKE_KEY)
+    assert status["api_key_source"] == "env"
+    assert status["api_key_hint"] == "wxyz"
+
+
+def test_the_key_cannot_change_while_the_ai_is_running(monkeypatch, box_session: Session):
+    """走っている会話のプロバイダは古いキーを持っているので、実行中は断る(`ai_configure` と同じ)。"""
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        server._ai_running = True
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(connection, json.dumps({"cmd": "ai_set_api_key", "key": FAKE_KEY}))
+        return connection.of_type("ai_status")[-1]
+
+    status = asyncio.run(scenario())
+    assert "応答中" in status["error"]
+    assert load_api_key() is None
 
 
 # --------------------------------------------------------------------------------------

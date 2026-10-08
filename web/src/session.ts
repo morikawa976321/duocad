@@ -464,7 +464,8 @@ export interface VerticesPayload {
 /**
  * 繋げるプロバイダの綴り(`duocad/net/ws.py` の `AI_PROVIDERS` が正)。
  *
- * `'anthropic'` は Claude API。**APIキーはサーバ側(環境変数かファイル)にだけ置き、画面からは渡さない**。
+ * `'anthropic'` は Claude API。APIキーはサーバ側(環境変数かファイル)に置く。画面からは
+ * `aiSetApiKey` で**書くだけ**で、値は返ってこない。
  */
 /**
  * `measure` の**2項目のあいだ**(`duocad/measure.py` の `between`)。
@@ -493,13 +494,17 @@ export interface MeasurePayload {
 
 export type AiProviderKind = 'openai_compat' | 'anthropic'
 
-/** 画面に出してよい設定の全部。**キーの値は載らない**(置いてあるかの真偽だけ)。 */
+/** 画面に出してよい設定の全部。**キーの値は載らない**(置いてあるか・どこから読んだか・末尾4文字だけ)。 */
 export interface AiStatus {
   provider: AiProviderKind
   model: string | null
   /** `anthropic` では常に `null`(送り先は固定)。 */
   baseUrl: string | null
   apiKeyConfigured: boolean
+  /** `env` は環境変数(ファイルより優先され、画面からは変えられない)、`file` は `duocad_secrets.json`。 */
+  apiKeySource: 'env' | 'file' | null
+  /** キーの末尾4文字(どのキーかを見分けるため)。 */
+  apiKeyHint: string | null
   running: boolean
   providers: AiProviderKind[]
   /** `ai_configure` を拒否したときだけ入る(例: 実行中/未知のプロバイダ)。 */
@@ -903,6 +908,8 @@ export interface Session {
    * モデルは送らない —— llama-server は1モデルで起動すると `model` を無視するので、
    * サーバ側の既定値に任せる(`ai_configure` 自体は `model` を受け付けたまま)。 */
   aiConfigure(provider: AiProviderKind, baseUrl?: string): void
+  /** ClaudeのAPIキーを書く(`null` なら消す)。返事は `ai_status`(値は載らない)。書くと Claude に切り替わる。 */
+  aiSetApiKey(key: string | null): void
   /** ツール定義を先に読ませておく(返事は無い。1つの会話につき1回だけ効く)。 */
   aiPrepare(): void
   /** 1つの発話でエージェントを起こす。**待たずに返る** —— 進捗は `onAiToolCall`、
@@ -1028,6 +1035,8 @@ export function createSession(hooks: SessionHooks): Session {
       model?: string | null
       base_url?: string | null
       api_key_configured?: boolean
+      api_key_source?: 'env' | 'file' | null
+      api_key_hint?: string | null
       running?: boolean
       providers?: AiProviderKind[]
       error?: string
@@ -1115,6 +1124,8 @@ export function createSession(hooks: SessionHooks): Session {
         model: message.model ?? null,
         baseUrl: message.base_url ?? null,
         apiKeyConfigured: message.api_key_configured ?? false,
+        apiKeySource: message.api_key_source ?? null,
+        apiKeyHint: message.api_key_hint ?? null,
         running: message.running ?? false,
         providers: message.providers ?? ['openai_compat'],
         error: message.error,
@@ -1249,6 +1260,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     aiConfigure(provider, baseUrl) {
       send({ cmd: 'ai_configure', provider, base_url: baseUrl ?? null })
+    },
+    aiSetApiKey(key) {
+      send({ cmd: 'ai_set_api_key', key })
     },
     aiPrepare() {
       send({ cmd: 'ai_prepare' })

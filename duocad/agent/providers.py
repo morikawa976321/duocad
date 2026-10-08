@@ -11,7 +11,9 @@
 **APIキーの取り回し(セキュリティ要件)**:
 
 - 読み口は `load_api_key()` の1つだけ(環境変数 → gitignore済みのローカル設定ファイル)。
-  **画面からは受け取らない**。`build_provider` はキーを `anthropic` にだけ渡し、`openai_compat` には渡さない。
+  `build_provider` はキーを `anthropic` にだけ渡し、`openai_compat` には渡さない。
+- 画面(設定ダイアログ)からは**書くだけ**(`save_api_key` / `delete_api_key` がファイルへ書く)。
+  画面へ返すのは `api_key_status()` の3つ(置いてあるか・どこから読んだか・末尾4文字)だけ。
 - `anthropic` の送り先は**固定**(`build_provider` は `base_url` を渡さない)。送り先を差し替えられると、
   `x-api-key` に載った実キーがそのホストへ届く。
 - **値はどこにも出さない** —— `repr()` にも例外にもログにも。外へ出る文字列は `_redact()` を通す。
@@ -560,7 +562,7 @@ class OpenAICompatProvider(Provider):
     - ツール結果 … `role:"tool"` + `tool_call_id` を**1件ずつ**
 
     APIキーは既定で不要(ローカル)。要るサーバのために `api_key` を受けるが、
-    **`build_provider` は渡さない** —— 画面から鍵を受け取る経路は作らない。値は
+    **`build_provider` は渡さない**(送り先を画面から変えられるので、鍵を乗せると外へ出る)。値は
     `repr()` にも例外にも出さない(`_redact()`)。
     """
 
@@ -810,20 +812,74 @@ def load_api_key() -> Optional[str]:
     value = (os.environ.get(ANTHROPIC_API_KEY_ENV) or "").strip()
     if value:
         return value
+    return str(_read_secrets().get(ANTHROPIC_API_KEY_ENV) or "").strip() or None
+
+
+def _read_secrets() -> dict:
+    """`duocad_secrets.json` の中身。無い・読めない・形が違うときは空の辞書(例外にしない)。"""
     try:
         raw = SECRETS_PATH.read_bytes()
         text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8-sig")
         data = json.loads(text)
     except (OSError, ValueError):  # UnicodeDecodeError と JSONDecodeError はどちらも ValueError
-        return None
-    if not isinstance(data, dict):
-        return None
-    return str(data.get(ANTHROPIC_API_KEY_ENV) or "").strip() or None
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def api_key_configured() -> bool:
-    """**画面に出してよいのはこの2値だけ**(値は返さない)。"""
     return load_api_key() is not None
+
+
+def api_key_status() -> dict:
+    """**画面に出してよいのはこれだけ**: 置いてあるか・どこから読んだか・末尾4文字。値そのものは返さない。
+
+    `source` は `env`(環境変数。ファイルより優先される)/ `file` / `None`。
+    """
+    if (os.environ.get(ANTHROPIC_API_KEY_ENV) or "").strip():
+        source = "env"
+    else:
+        source = "file" if load_api_key() else None
+    key = load_api_key()
+    return {"configured": key is not None, "source": source, "hint": key[-4:] if key else None}
+
+
+def key_problem(key: str) -> Optional[str]:
+    """送ってはいけないキーなら理由(**キーの値は含めない**)。問題が無ければ `None`。
+
+    改行や空白の混じったキー(貼り付けの崩れ)は、HTTPライブラリがヘッダ値ごと例外文へ載せる。
+    """
+    if not key:
+        return "APIキーが空"
+    if any(ch.isspace() or not ch.isprintable() for ch in key):
+        return "APIキーに空白か改行が混じっている(貼り付けを確かめる)"
+    return None
+
+
+def save_api_key(key: str) -> None:
+    """画面から受け取ったキーを `duocad_secrets.json` へ書く(他の欄は残す)。
+
+    書き方は一時ファイル → 置き換え(書きかけのファイルを読まれない)。問題のあるキーは `ValueError`。
+    """
+    key = key.strip()
+    problem = key_problem(key)
+    if problem:
+        raise ValueError(problem)
+    _write_secrets({**_read_secrets(), ANTHROPIC_API_KEY_ENV: key})
+
+
+def delete_api_key() -> None:
+    """`duocad_secrets.json` からキーを消す。他の欄が残らなければファイルごと消す。"""
+    rest = {name: value for name, value in _read_secrets().items() if name != ANTHROPIC_API_KEY_ENV}
+    if rest:
+        _write_secrets(rest)
+    else:
+        SECRETS_PATH.unlink(missing_ok=True)
+
+
+def _write_secrets(data: dict) -> None:
+    staging = SECRETS_PATH.with_name(SECRETS_PATH.name + ".tmp")
+    staging.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(staging, SECRETS_PATH)
 
 
 def _retry_wait(error: Exception, attempt: int) -> Optional[float]:
@@ -1106,9 +1162,9 @@ def build_provider(
                 f"ClaudeのAPIキーが未設定(環境変数 {ANTHROPIC_API_KEY_ENV} か、リポジトリ直下の "
                 f"{SECRETS_FILENAME} に {{\"{ANTHROPIC_API_KEY_ENV}\": \"...\"}} の形で置く){unreadable}"
             )
-        # 改行や空白の混じったキー(貼り付けの崩れ)は送らない。HTTPライブラリはそれを例外文へ載せる。
-        if any(ch.isspace() or not ch.isprintable() for ch in api_key):
-            raise ProviderError("ClaudeのAPIキーに空白か改行が混じっている(貼り付けを確かめる)")
+        problem = key_problem(api_key)
+        if problem:
+            raise ProviderError(problem)
         return AnthropicProvider(api_key, model=model or default_model(kind), transport=transport)
     if kind == "openai_compat":
         return OpenAICompatProvider(
