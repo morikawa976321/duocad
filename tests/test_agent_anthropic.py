@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import http.client
 import json
 import threading
 import time
@@ -287,6 +288,26 @@ def test_an_abort_that_lands_before_sending_stops_the_request():
     with pytest.raises(ProviderError):
         ask(provider)
     assert transport.sent == [], "中断したのに送った"
+
+
+def test_an_abort_that_lands_while_connecting_is_never_sent(monkeypatch):
+    """往復の頭の確認を過ぎてから、ソケットを控える前に届いた中断(本物のHTTP)。
+
+    落ちたら、中断した依頼が相手へ送られて課金される(応答を捨てても請求は消えない)。
+    """
+    provider = None
+
+    class AbortedWhileConnecting(http.client.HTTPConnection):
+        def __init__(self, *args, **kwargs):
+            provider.abort()
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(http.client, "HTTPConnection", AbortedWhileConnecting)
+    with serving(streamed_tool_call()) as server:
+        provider = provider_for(server)
+        with pytest.raises(ProviderError):
+            ask(provider)
+    assert server.received == [], "中断したのに送った"
 
 
 def test_an_abort_that_lands_while_connecting_discards_the_reply():

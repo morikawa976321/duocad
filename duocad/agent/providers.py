@@ -381,11 +381,17 @@ class StreamingTransport:
     仕切り直されるので、締切を自前で数えて残り時間をソケットへ渡す。
     """
 
-    def __init__(self, assemble: Assemble = _assemble) -> None:
+    def __init__(self, assemble: Assemble = _assemble, cancelled: Optional[threading.Event] = None) -> None:
         self._assemble = assemble
+        #: 持ち主が立てて持ち主が下ろす中断の印(`AnthropicProvider`)。自分の `_aborted` と違って往復の頭で
+        #: 下ろさないので、往復が始まる前に届いた中断がここに残る。
+        self._cancelled = cancelled
         self._lock = threading.Lock()
         self._sock: Optional[socket.socket] = None
         self._aborted = False
+
+    def _stopped(self) -> bool:
+        return self._aborted or (self._cancelled is not None and self._cancelled.is_set())
 
     def abort(self) -> None:
         """走っている往復の接続を閉じる(**別スレッドから呼んでよい**)。走っていなければ何もしない。"""
@@ -410,18 +416,21 @@ class StreamingTransport:
         with self._lock:
             self._aborted = False
         try:
+            # **送る前に繋いでソケットを控え、そこで中断を見る。** 控えた後の中断は `abort` が接続を
+            # 閉じ、控える前の中断はここで拾うので、中断した依頼が送られる隙間が無い(課金される相手では
+            # 1回の送信がそのまま請求になる)。サーバが接続を閉じる応答(`Connection: close`)だと
+            # `getresponse()` が `connection.sock` を `None` にするので、応答の後からは取れない。
+            connection.connect()
+            with self._lock:
+                self._sock = connection.sock
+                if self._stopped():
+                    raise ProviderError("中断したので送らなかった")
             connection.request(
                 "POST",
                 parts.path + (f"?{parts.query}" if parts.query else ""),
                 body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                 headers={**headers, "content-type": "application/json"},
             )
-            # **ソケットはここで控える。** サーバが接続を閉じる応答(`Connection: close`)だと
-            # `getresponse()` が `connection.sock` を `None` にするので、後からは取れない。
-            with self._lock:
-                self._sock = connection.sock
-                if self._aborted:
-                    raise ProviderError("中断したので接続を閉じた")
             response = connection.getresponse()
             if response.status != 200:
                 raise _failure(
@@ -439,7 +448,7 @@ class StreamingTransport:
         except TimeoutError:
             raise ProviderTimeout(f"{_origin(url)} が {timeout:g}s で返らなかった") from None
         except (OSError, http.client.HTTPException) as error:
-            if self._aborted:
+            if self._stopped():
                 raise ProviderError("中断したので接続を閉じた") from None
             raise ProviderError(f"{_origin(url)} へ接続できない: {error}") from None
         finally:
@@ -457,7 +466,7 @@ class StreamingTransport:
                 sock.settimeout(remaining)
             line = response.readline()
             if not line:
-                if self._aborted:
+                if self._stopped():
                     raise ProviderError("中断したので接続を閉じた")
                 raise ProviderError(f"{_origin(url)} の応答が途中で切れた")
             text = line.decode("utf-8", "replace").strip()
@@ -865,12 +874,15 @@ class AnthropicProvider(Provider):
         self._api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
-        self._transport: Transport = (
-            StreamingTransport(_assemble_anthropic) if transport is None else transport
-        )
         #: 中断が立ったか。**下ろすのは依頼の頭(`rearm`)だけ** —— 往復の頭で下ろすと、ループが
         #: 中断を確かめてから送るまでの間に届いた中断が消え、課金される往復が1回走る。
+        #: `StreamingTransport` と共有する(送る直前にもこれを見る)。
         self._aborted = threading.Event()
+        self._transport: Transport = (
+            StreamingTransport(_assemble_anthropic, cancelled=self._aborted)
+            if transport is None
+            else transport
+        )
 
     def __repr__(self) -> str:  # pragma: no cover - 表示だけ
         return f"AnthropicProvider(model={self.model!r}, base_url={self.base_url!r})"
@@ -1030,8 +1042,7 @@ class AnthropicProvider(Provider):
                     raise _redacted(error, self._api_key) from None
                 attempt += 1
                 continue
-            # `StreamingTransport` は往復の頭で自分の中断の印を下ろすので、送り出す直前に届いた
-            # 中断は接続を閉じずに素通りしうる。ここで拾って応答を捨てる。
+            # 差し替えた transport(印を共有しないもの)が中断を素通りさせても、応答は使わない。
             if self._aborted.is_set():
                 raise ProviderError("中断したので応答を捨てた")
             return response
