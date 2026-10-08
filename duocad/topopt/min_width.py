@@ -97,10 +97,8 @@ def bite_verdict(padded: np.ndarray, bite: np.ndarray) -> tuple[Optional[str], b
     return None, len(np.unique(rest[neighbours])) == 1
 
 
-#: 芯の隣接を26にする最小の m。26近傍の芯(ずれ d ∈ {−1,0,1}³)の2立方の和集合を中心から中心へ通る球の直径は
-#: min(m, √2(m−1))(律速は凹の稜線。(1,1,0)・(1,1,1) で同じ)で、√2(m−1) ≥ m ⇔ m ≥ 2+√2。m ≥ 4 なら斜めの段も
-#: 面の段と同じ直径 m の球を通すので、内接球で測る保証(m セル)は6のときと変わらない。m ≤ 3 は足りない(m=2 の (1,1,1) は
-#: 1セル共有の首)。**格子の間隔が3軸で等しい前提**(`voxelize.Grid.spacing` がスカラー)。実測は docs/TOPOPT_CORE_ADJACENCY_122.md。
+#: 芯の隣接を26にする最小の m: 斜めの段を通る球の直径 √2(m−1) が m 以上になる最小の整数(m ≥ 2+√2)。
+#: **格子の間隔が3軸で等しい前提**(`voxelize.Grid.spacing` がスカラー)。導出と実測は docs/TOPOPT_CORE_ADJACENCY_122.md。
 CORE_26_MIN_M = 4
 _FULL_26 = np.ones((3, 3, 3), dtype=bool)
 

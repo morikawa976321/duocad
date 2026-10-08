@@ -190,6 +190,26 @@ def test_a_diagonal_step_between_two_cubes_is_a_neck_only_below_the_26_threshold
     assert _judge(before, removed, m) == _ref_creates_neck(before, removed, m) == neck_expected
 
 
+def test_cutting_a_far_detour_whose_remaining_link_is_a_diagonal_step_widens_the_window_and_is_allowed_from_m_4(monkeypatch):
+    """m=4: 左右の板(x=4 の隙間で離れる)を、y=0..9 の (1,1,0) 段の階段と、y=22..25 の面の迂回路 P でつなぐ。P の隙間の列を切ると、
+    材料は最初の窓(余白 2m)の中ではつながり直さず、窓を広げて階段まで届く。階段の芯は26でしかつながらないので、26ならくびれではなく、
+    6ならくびれ。落ちたら、窓を広げる経路で芯の隣接が26になっていない。"""
+    m = 4
+    before = np.zeros((40, 64, 40), bool)
+    before[0:4, 0:40, 0:4] = True
+    before[5:9, 5:40, 0:4] = True
+    for k in range(6):
+        before[k:k + m, k:k + m, 0:4] = True
+    before[0:9, 22:26, 0:4] = True
+    removed = [tuple(int(v) for v in c) for c in np.argwhere(before) if c[0] == 4 and 22 <= c[1] < 26]
+    calls = []
+    real = neck.core_cells
+    monkeypatch.setattr(neck, 'core_cells', lambda *a, **k: calls.append(1) or real(*a, **k))
+    assert not _judge(before, removed, m)
+    assert len(calls) > 2  # 窓を少なくとも1回広げた(1回の窓で core_cells を2回呼ぶ)
+    assert not _ref_creates_neck(before, removed, m) and _ref_creates_neck(before, removed, m, adjacency=6)
+
+
 def _cube_walk(rng, m, shape, *, walks=3, steps=10):
     """m 立方を、ずれ {−1,0,1}³(斜めを含む)と面の段で歩かせた骨格と、少し太らせた塊を重ねた形。"""
     mask = np.zeros(shape, bool)
@@ -224,7 +244,7 @@ def test_judge_matches_the_26_reference_on_random_moves_where_6_would_differ(m):
             got = _judge(mask, removed, m, k)
             assert got == _ref_creates_neck(mask, removed, m, k)
             answers.append((got, _ref_creates_neck(mask, removed, m, k, adjacency=6)))
-    assert {got for got, _ in answers} == {True, False}
+    assert len(answers) >= 60 and {got for got, _ in answers} == {True, False}
     assert any(got != six for got, six in answers)
 
 

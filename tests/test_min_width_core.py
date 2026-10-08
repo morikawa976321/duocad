@@ -85,6 +85,44 @@ def test_removing_the_middle_of_a_diagonal_chain_splits_the_core_even_though_no_
     assert not min_width.CoreConnectivity(m).after_bite(after, bite, 0)
 
 
+def test_a_diagonal_chain_split_near_a_short_stub_is_proven_split_after_widening_the_window_once():
+    """m=4 の (1,1,0) 段の長い鎖で、片側に8段だけ残る位置の立方を抜く。余白 m の窓では両側の芯が窓の面に触れて言えず、余白 2m で
+    短い側が閉じて「確実に割れる」と言える。落ちたら、窓を広げる経路の前線か「閉じた塊」の判定が26の芯とずれている。"""
+    m, n, j = 4, 40, 31
+    mask = np.zeros((n + m + 2, n + m + 2, 24), bool)
+    for i in range(n):
+        mask[i:i + m, i:i + m, :m] = True
+    others = np.zeros_like(mask)
+    for i in range(n):
+        if i != j:
+            others[i:i + m, i:i + m, :m] = True
+    exclusive = mask & ~others
+    bite = np.argwhere(exclusive)
+    after = mask & ~exclusive
+    assert core_groups_oracle(mask, m) == 1 and core_groups_oracle(after, m) == 2
+    core = min_width.CoreConnectivity(m)
+    assert not core.after_bite(after, bite, 0)
+    assert core.stats['window_false'] == 1 and core.stats['max_margin'] == 2 and core.stats['global_count'] == 0
+
+
+@pytest.mark.parametrize('b_corner', [(9, 2, 1), (9, 2, 2)], ids=['edge', 'vertex'])
+def test_exempt_material_touching_a_cube_only_along_an_edge_or_at_a_vertex_does_not_join_it_even_when_cores_are_26(b_corner):
+    """m=4(芯は26連結)でも、保持成分への結びは「立方が重なるか6近傍で接する」のまま(#122)。保持の棒は立方Aに面で接し、立方Bには
+    稜線か頂点だけで接する。落ちたら、保持への結びまで芯の隣接(26)で数えている(保持は規則の対象外で細いこともある)。"""
+    m = 4
+    mask = np.zeros((14, 7, 7), bool)
+    mask[1:5, 1:5, 1:5] = True
+    b = np.array(b_corner)
+    mask[b[0]:b[0] + m, b[1]:b[1] + m, b[2]:b[2] + m] = True
+    bar = np.zeros_like(mask)
+    bar[5:9, 1, 1] = True
+    assert min_width.CoreConnectivity(m).groups(mask) == 2
+    assert min_width.CoreConnectivity(m, bar).groups(mask) == core_groups_oracle(mask, m, bar) == 2
+    touching = bar.copy()
+    touching[8, 1:3, 1:3] = True  # 棒の先を B の面に届かせると結ぶ
+    assert min_width.CoreConnectivity(m, touching).groups(mask) == core_groups_oracle(mask, m, touching) == 1
+
+
 def test_exempt_material_joins_the_cores_it_touches_and_a_mask_without_a_core_holds_vacuously():
     """落ちたら、`exempt`(保持ソリッド由来)を介したつながりが数えられていない。立方が重なるか6近傍で接する E が2つの芯を結ぶ。"""
     mask = np.zeros((10, 6, 6), bool)
