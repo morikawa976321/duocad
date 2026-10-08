@@ -413,6 +413,32 @@ def test_saving_and_deleting_the_key_keeps_other_fields(monkeypatch, tmp_path):
         save_api_key("   ")
 
 
+def test_a_failed_replace_leaves_no_staging_file_with_the_key(monkeypatch, tmp_path):
+    """置き換えに失敗しても、キーの入った `duocad_secrets.json.tmp` を残さない。"""
+    secrets = tmp_path / "duocad_secrets.json"
+    monkeypatch.setattr(providers, "SECRETS_PATH", secrets)
+
+    def locked(*_args):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(providers.os, "replace", locked)
+    with pytest.raises(PermissionError):
+        save_api_key("sk-ant-staged")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_unreadable_secrets_file_is_not_overwritten(monkeypatch, tmp_path):
+    """読めないファイルを空とみなして書き戻すと、読めなかった欄を消す。書き換えずに断る。"""
+    secrets = tmp_path / "duocad_secrets.json"
+    monkeypatch.setattr(providers, "SECRETS_PATH", secrets)
+    secrets.write_text('{"OTHER": "x", 壊れている', encoding="utf-8")
+
+    for change in (lambda: save_api_key("sk-ant-new"), delete_api_key):
+        with pytest.raises(ValueError):
+            change()
+        assert secrets.read_text(encoding="utf-8") == '{"OTHER": "x", 壊れている'
+
+
 def test_a_key_broken_by_a_newline_is_refused_and_never_echoed(monkeypatch):
     """HTTPライブラリは改行入りのヘッダ値を `b'...\\n...'` の形で例外文へ載せる。その形でも消す。"""
     broken = "sk-ant-abc\ndef"

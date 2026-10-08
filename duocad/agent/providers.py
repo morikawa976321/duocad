@@ -815,15 +815,27 @@ def load_api_key() -> Optional[str]:
     return str(_read_secrets().get(ANTHROPIC_API_KEY_ENV) or "").strip() or None
 
 
-def _read_secrets() -> dict:
-    """`duocad_secrets.json` の中身。無い・読めない・形が違うときは空の辞書(例外にしない)。"""
+def _read_secrets(*, for_update: bool = False) -> dict:
+    """`duocad_secrets.json` の中身。無い・読めない・形が違うときは空の辞書(例外にしない)。
+
+    `for_update=True`(書き換える前の読み取り)では、**ファイルがあるのに読めないなら `ValueError`**。
+    空として扱って書き戻すと、読めなかった他の欄を消してしまう。
+    """
     try:
         raw = SECRETS_PATH.read_bytes()
         text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8-sig")
         data = json.loads(text)
-    except (OSError, ValueError):  # UnicodeDecodeError と JSONDecodeError はどちらも ValueError
+        if not isinstance(data, dict):
+            raise ValueError("JSONオブジェクトではない")
+    except FileNotFoundError:
         return {}
-    return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):  # UnicodeDecodeError と JSONDecodeError はどちらも ValueError
+        if for_update:
+            raise ValueError(
+                f"{SECRETS_FILENAME} を読めないので書き換えない(中身を確かめるか、ファイルを消してからやり直す)"
+            ) from None
+        return {}
+    return data
 
 
 def api_key_configured() -> bool:
@@ -864,12 +876,16 @@ def save_api_key(key: str) -> None:
     problem = key_problem(key)
     if problem:
         raise ValueError(problem)
-    _write_secrets({**_read_secrets(), ANTHROPIC_API_KEY_ENV: key})
+    _write_secrets({**_read_secrets(for_update=True), ANTHROPIC_API_KEY_ENV: key})
 
 
 def delete_api_key() -> None:
     """`duocad_secrets.json` からキーを消す。他の欄が残らなければファイルごと消す。"""
-    rest = {name: value for name, value in _read_secrets().items() if name != ANTHROPIC_API_KEY_ENV}
+    rest = {
+        name: value
+        for name, value in _read_secrets(for_update=True).items()
+        if name != ANTHROPIC_API_KEY_ENV
+    }
     if rest:
         _write_secrets(rest)
     else:
@@ -877,9 +893,15 @@ def delete_api_key() -> None:
 
 
 def _write_secrets(data: dict) -> None:
+    """一時ファイルに書いてから置き換える。**失敗したら一時ファイルを消す** —— キーの入った
+    `duocad_secrets.json.tmp` が残ると、そこにキーが転がり続ける(.gitignore は `*` 付きで除外しているが、
+    それだけに頼らない)。"""
     staging = SECRETS_PATH.with_name(SECRETS_PATH.name + ".tmp")
-    staging.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(staging, SECRETS_PATH)
+    try:
+        staging.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(staging, SECRETS_PATH)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _retry_wait(error: Exception, attempt: int) -> Optional[float]:

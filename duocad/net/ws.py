@@ -684,6 +684,9 @@ class Server:
                 raise ValueError("APIキーは文字列で送る")
             else:
                 save_api_key(key)
+                if self._ai_provider_kind != "anthropic":
+                    # 前のプロバイダ向けに選んだモデル名(`qwen3-30b` など)をClaudeへ持ち越さない。
+                    self._ai_model = None
                 self._ai_provider_kind = "anthropic"
                 self._ai_base_url = None
         except (ValueError, OSError) as error:

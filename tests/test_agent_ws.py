@@ -505,6 +505,25 @@ def test_a_key_set_from_the_settings_is_saved_but_never_sent_back(box_session: S
     assert FAKE_KEY not in everything, "キーの値が画面へ配られた"
 
 
+def test_saving_a_key_does_not_carry_the_local_model_name_over_to_claude(box_session: Session):
+    """llama-server 向けに選んだモデル名を、キーを置いて切り替えた Claude へ渡さない。"""
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(
+            connection,
+            json.dumps({"cmd": "ai_configure", "provider": "openai_compat", "model": "qwen3-30b"}),
+        )
+        await server._dispatch(connection, json.dumps({"cmd": "ai_set_api_key", "key": FAKE_KEY}))
+        return connection.of_type("ai_status")[-1]
+
+    status = asyncio.run(scenario())
+    assert status["provider"] == "anthropic"
+    assert status["model"] == "claude-haiku-5-5"
+
+
 def test_a_broken_key_is_refused_without_echoing_it(box_session: Session):
     server, status, everything = _set_key(box_session, "sk-ant-abc" + chr(10) + "def")
     assert "改行" in status["error"]
