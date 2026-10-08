@@ -1,22 +1,23 @@
 """LLMプロバイダのアダプタ —— **キーの詰め替えだけを担当する層**。
 
 - `openai_compat`  … llama-server などのOpenAI互換(`POST /v1/chat/completions`)
+- `anthropic`      … Claude API(`POST /v1/messages`)。APIキーで課金される
 
 **中立の往復型がここが層の境目**: ループは `UserTurn` / `AssistantTurn` / `ToolResultTurn` の
 3つだけを積み、**プロバイダ固有の本文の形はアダプタの中の話**である。逆にアダプタは
 `DocumentTools` も `Session` も知らない —— 受け取るのは `descriptors()` が返したツール定義
 そのままである(定義を書き写す場所を作らない)。
 
-**アダプタが1つでもこの層は畳まない** —— `Provider` / `build_provider` は
-次のプロバイダの差込口である。
+**APIキーの取り回し(セキュリティ要件)**:
 
-**この層はAPIキーを持たない**。Claudeを使う道はMCP(サブスク認証のClaude Codeが
-`/mcp` へ繋ぐ)だけである。
-`openai_compat` はキーを要求するサーバのために `api_key` を受けられるが、`build_provider`
-は渡さない(画面から鍵を受け取る経路を作らないため)。外へ出る文字列は `_redact()` を通す。
+- 読み口は `load_api_key()` の1つだけ(環境変数 → gitignore済みのローカル設定ファイル)。
+  **画面からは受け取らない**。`build_provider` はキーを `anthropic` にだけ渡し、`openai_compat` には渡さない。
+- `anthropic` の送り先は**固定**(`build_provider` は `base_url` を渡さない)。送り先を差し替えられると、
+  `x-api-key` に載った実キーがそのホストへ届く。
+- **値はどこにも出さない** —— `repr()` にも例外にもログにも。外へ出る文字列は `_redact()` を通す。
 
-公式SDK(`openai`)は入れず、標準ライブラリで素のHTTPを書く。応答は**ストリーミングで受けて
-組み立てる**(`StreamingTransport`。理由は表示ではなく打ち切り)。
+公式SDK(`openai` / `anthropic`)は入れず、標準ライブラリで素のHTTPを書く。応答は**ストリーミングで
+受けて組み立てる**(`StreamingTransport`。理由は表示ではなく打ち切り)。
 
 **OCP / build123d をimportしない**。
 """
@@ -24,17 +25,48 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import socket
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from time import monotonic
 from typing import Any, Callable, Iterator, Optional, Sequence
 
 #: llama-server の既定(`llama-server -c 16384 --port 8080` を想定)。
 DEFAULT_OPENAI_COMPAT_BASE_URL = "http://127.0.0.1:8080/v1"
+
+#: 既定のClaudeモデル。**日付サフィックスを付けない**(この綴りで完結している)。
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"
+#: 既定モデルを差し替える環境変数(画面からは選ばせていない)。
+ANTHROPIC_MODEL_ENV = "DUOCAD_ANTHROPIC_MODEL"
+#: Claude APIの版ヘッダ(`anthropic-version`)。
+ANTHROPIC_API_VERSION = "2023-06-01"
+ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+#: Claudeへの1リクエストの出力上限(思考+本文)。**自分で置いた値**(実測ではない)。
+#: `loop.DEFAULT_MAX_TOKENS`(1024)は llama-server の `--reasoning-budget` が思考を切る前提の値で、
+#: Claudeには思考をトークン数で切る口が無い(深さは `effort` でしか動かない)。1024のままだと
+#: 思考で上限を使い切り、本文もツール呼び出しも無いまま `max_tokens` で返る。
+ANTHROPIC_MAX_TOKENS = 8192
+
+#: APIキーを読む環境変数。**`ANTHROPIC_API_KEY` にしない** —— Claude Code はその名前の環境変数を
+#: 見つけるとサブスクの代わりにそのキーで従量課金する(非対話の `claude -p` では確認なしに)。
+#: duocadのためにユーザー環境へ置くと、同じマシンの Claude Code まで課金先が変わる。
+ANTHROPIC_API_KEY_ENV = "DUOCAD_ANTHROPIC_API_KEY"
+#: リポジトリ直下のローカル設定ファイル(**gitignore済み**)。形は `{"DUOCAD_ANTHROPIC_API_KEY": "..."}`。
+SECRETS_FILENAME = "duocad_secrets.json"
+SECRETS_PATH = Path(__file__).resolve().parents[2] / SECRETS_FILENAME
+
+#: 再試行する応答(Claude API)。429はレート制限、529は過負荷。値と待ち方は公式SDK(Python)の既定に合わせた。
+RETRYABLE_STATUSES = frozenset({408, 409, 429}) | frozenset(range(500, 600))
+MAX_RETRIES = 2
+INITIAL_RETRY_DELAY = 0.5
+MAX_RETRY_DELAY = 8.0
+#: `retry-after` をこの秒数まで信じる(超える指示は無視して上の間隔で待つ。SDKと同じ)。
+MAX_RETRY_AFTER = 60.0
 
 #: 失敗の本文をこの長さで切る(モデルへ返す文が無限に伸びないように)。
 MAX_ERROR_CHARS = 400
@@ -65,9 +97,13 @@ class ProviderError(RuntimeError):
     **メッセージに鍵を含めない**。生成元は必ず `_redact()` を通す。
     """
 
-    def __init__(self, message: str, *, status: Optional[int] = None) -> None:
+    def __init__(
+        self, message: str, *, status: Optional[int] = None, retry_after: Optional[float] = None
+    ) -> None:
         super().__init__(message)
         self.status = status
+        #: 相手が `retry-after` で指示した待ち(秒)。無ければ `None`。
+        self.retry_after = retry_after
 
 
 class ProviderTimeout(ProviderError):
@@ -88,13 +124,23 @@ class ProviderContextOverflow(ProviderError):
 
 
 #: 文脈あふれを名乗る本文の目印(llama-server の `exceed_context_size_error`、OpenAI の
-#: `context_length_exceeded`)。
-CONTEXT_OVERFLOW_MARKS = ("exceed_context_size", "context_length_exceeded")
+#: `context_length_exceeded`、Claude の `prompt is too long`)。
+CONTEXT_OVERFLOW_MARKS = ("exceed_context_size", "context_length_exceeded", "prompt is too long")
 
 
-def _failure(message: str, body: str, status: Optional[int] = None) -> ProviderError:
+def _failure(
+    message: str, body: str, status: Optional[int] = None, retry_after: Optional[float] = None
+) -> ProviderError:
     kind = ProviderContextOverflow if any(mark in body for mark in CONTEXT_OVERFLOW_MARKS) else ProviderError
-    return kind(f"{message}: {body[:MAX_ERROR_CHARS]}", status=status)
+    return kind(f"{message}: {body[:MAX_ERROR_CHARS]}", status=status, retry_after=retry_after)
+
+
+def _seconds(header: Optional[str]) -> Optional[float]:
+    """`retry-after` の秒数(HTTP日付の形は読まない)。読めなければ `None`。"""
+    try:
+        return float(header) if header else None
+    except ValueError:
+        return None
 
 
 # --------------------------------------------------------------------------------------
@@ -133,8 +179,8 @@ class UserTurn:
 class AssistantTurn:
     text: str
     tool_calls: tuple[ToolCall, ...] = ()
-    #: プロバイダが返した生の本文(そのまま返す必要のあるアダプタのため。現行の
-    #: `openai_compat` は使わず組み直す)。
+    #: プロバイダが返した生の本文。`anthropic` はこれを**そのまま送り返す**(thinkingブロックを
+    #: 壊さない)。`openai_compat` は使わず組み直す。
     raw: Any = None
 
 
@@ -173,6 +219,18 @@ def _redact(text: str, secret: Optional[str]) -> str:
     if not secret:
         return text
     return text.replace(secret, "***")
+
+
+def _redacted(error: Exception, secret: Optional[str]) -> ProviderError:
+    """外へ投げる例外へ詰め替える(鍵を消す)。
+
+    **`ProviderError` の型をそのまま保って作り直す**。`ProviderError(...)` と書くと
+    `ProviderTimeout` がただの `ProviderError` へ潰れる —— 呼び出し側は待ち時間切れだけを
+    別扱いするので、ここで型が消えると本物の障害と区別できなくなる。
+    """
+    if isinstance(error, ProviderError):
+        return type(error)(_redact(str(error), secret), status=error.status)
+    return ProviderError(_redact(f"{type(error).__name__}: {error}", secret))
 
 
 # --------------------------------------------------------------------------------------
@@ -250,8 +308,66 @@ def _assemble(chunks: Iterator[dict], url: str) -> dict:
     }
 
 
+def _assemble_anthropic(events: Iterator[dict], url: str) -> dict:
+    """Claude のストリーミング断片を、非streamingの `POST /v1/messages` と同じ形の辞書へ畳む。
+
+    **終わりは `message_stop` で知る** —— `[DONE]` は来ないので、そこで読むのをやめないと
+    接続の終わりを「途中で切れた」と取る。
+
+    thinkingブロックは**本文が空でも署名ごと残す**(既定では思考の本文は返らず `signature` だけが来る)。
+    次の往復でそのまま送り返す約束なので(`AnthropicProvider.render_messages`)、ここで落とすとその会話の
+    思考が捨てられる。ツール呼び出しの引数は文字列の断片で届くので、ブロックが閉じたときにparseする。
+    """
+    message: dict = {}
+    blocks: dict[int, dict] = {}
+    pieces: dict[int, list[str]] = {}
+    for event in events:
+        kind = event.get("type")
+        if kind == "error":
+            raise _failure(
+                f"{_origin(url)} が途中で失敗した", json.dumps(event.get("error"), ensure_ascii=False)
+            )
+        index = event.get("index")
+        if kind == "message_start" and isinstance(event.get("message"), dict):
+            message = dict(event["message"])
+        elif kind == "content_block_start" and isinstance(event.get("content_block"), dict):
+            blocks[index] = dict(event["content_block"])
+        elif kind == "content_block_delta" and index in blocks:
+            block, delta = blocks[index], event.get("delta") or {}
+            step = delta.get("type")
+            if step == "text_delta":
+                block["text"] = block.get("text", "") + delta.get("text", "")
+            elif step == "input_json_delta":
+                pieces.setdefault(index, []).append(delta.get("partial_json", ""))
+            elif step == "thinking_delta":
+                block["thinking"] = block.get("thinking", "") + delta.get("thinking", "")
+            elif step == "signature_delta":
+                block["signature"] = block.get("signature", "") + delta.get("signature", "")
+            elif step == "citations_delta":
+                block.setdefault("citations", []).append(delta.get("citation"))
+        elif kind == "content_block_stop" and index in pieces:
+            text = "".join(pieces.pop(index))
+            if text.strip():
+                try:
+                    blocks[index]["input"] = json.loads(text)
+                except json.JSONDecodeError:
+                    blocks[index]["input"] = text
+        elif kind == "message_delta":
+            message.update(event.get("delta") or {})
+            if isinstance(event.get("usage"), dict):
+                message["usage"] = {**(message.get("usage") or {}), **event["usage"]}
+        elif kind == "message_stop":
+            break
+    message["content"] = [blocks[index] for index in sorted(blocks)]
+    return message
+
+
+#: ストリーミングの断片を非streamingの形へ畳む関数(`_assemble` / `_assemble_anthropic`)。
+Assemble = Callable[[Iterator[dict], str], dict]
+
+
 class StreamingTransport:
-    """`POST /chat/completions` をストリーミングで受け、非streamingと同じ形の辞書にして返す。
+    """POSTをストリーミングで受け、非streamingと同じ形の辞書にして返す(畳み方は `assemble`)。
 
     **ストリーミングで受ける理由は表示ではなく打ち切りである。** llama-server は非streamingの
     リクエストを、クライアントが接続を閉じても最後まで生成し続ける(実測: 1,500トークンの生成を
@@ -262,7 +378,8 @@ class StreamingTransport:
     仕切り直されるので、締切を自前で数えて残り時間をソケットへ渡す。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, assemble: Assemble = _assemble) -> None:
+        self._assemble = assemble
         self._lock = threading.Lock()
         self._sock: Optional[socket.socket] = None
         self._aborted = False
@@ -308,11 +425,12 @@ class StreamingTransport:
                     f"HTTP {response.status} from {_origin(url)}",
                     response.read().decode("utf-8", "replace"),
                     response.status,
+                    _seconds(response.getheader("retry-after")),
                 )
             if "text/event-stream" not in (response.getheader("content-type") or ""):
                 # ストリーミングに応じないサーバは本文を1つ返す。
                 return _json_object(response.read().decode("utf-8", "replace"), url)
-            return _assemble(self._events(response, deadline, url), url)
+            return self._assemble(self._events(response, deadline, url), url)
         except ProviderError:
             raise
         except TimeoutError:
@@ -389,7 +507,7 @@ def post_json(url: str, payload: Optional[dict], headers: dict, timeout: float) 
 class Provider:
     """プロバイダ1つ。**ループが使うのは `name` / `model` / `complete` / `abort` だけ**。"""
 
-    #: `openai_compat`(増えたらここに足す)
+    #: `openai_compat` / `anthropic`
     name = "provider"
 
     def abort(self) -> None:
@@ -658,18 +776,242 @@ class OpenAICompatProvider(Provider):
     def _call(self, url: str, payload: dict, headers: dict, timeout: float) -> dict:
         try:
             return self._transport(url, payload, headers, timeout)
-        except ProviderError as error:
-            # **型をそのまま保って作り直す**。秘匿のために新しい例外へ
-            # 詰め替えるので、`ProviderError(...)` と書くと `ProviderTimeout` が
-            # ただの `ProviderError` へ潰れる —— 呼び出し側は待ち時間切れだけを
-            # 別扱いするので、ここで型が消えると本物の障害と区別できなくなる。
-            raise type(error)(
-                _redact(str(error), self._api_key), status=error.status
-            ) from None
         except Exception as error:
-            raise ProviderError(
-                _redact(f"{type(error).__name__}: {error}", self._api_key)
-            ) from None
+            raise _redacted(error, self._api_key) from None
+
+
+def load_api_key() -> Optional[str]:
+    """ClaudeのAPIキーを読む。**環境変数が先、次にgitignore済みのローカル設定ファイル**。
+
+    見つからなければ `None`(未設定は「使えない」であって異常ではない)。設定ファイルが
+    壊れていても値の推測はしない。
+    """
+    value = (os.environ.get(ANTHROPIC_API_KEY_ENV) or "").strip()
+    if value:
+        return value
+    try:
+        data = json.loads(SECRETS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return str(data.get(ANTHROPIC_API_KEY_ENV) or "").strip() or None
+
+
+def api_key_configured() -> bool:
+    """**画面に出してよいのはこの2値だけ**(値は返さない)。"""
+    return load_api_key() is not None
+
+
+def _retry_wait(error: Exception, attempt: int) -> Optional[float]:
+    """この失敗をやり直すなら何秒待つか。やり直さないものは `None`。
+
+    待ち時間切れはやり直さない(合計時間の予算で縮めた待ちなので、やり直しても予算を食うだけ)。
+    """
+    if not isinstance(error, ProviderError) or isinstance(error, ProviderTimeout):
+        return None
+    if error.status not in RETRYABLE_STATUSES:
+        return None
+    if error.retry_after is not None and 0 <= error.retry_after <= MAX_RETRY_AFTER:
+        return error.retry_after
+    return min(INITIAL_RETRY_DELAY * 2**attempt, MAX_RETRY_DELAY)
+
+
+class AnthropicProvider(Provider):
+    """Claude API(`POST /v1/messages`・ストリーミング)。
+
+    詰め替えは3つだけ:
+
+    - ツール定義 … `descriptors()` の `inputSchema` を `input_schema` へ(他はそのまま)
+    - ツール呼び出し … `content` の `tool_use` ブロック
+    - ツール結果 … `role:"user"` の `tool_result` ブロック(`tool_use_id` で対応づける)
+
+    **送らないもの**: `temperature` / `top_p` / `top_k` と `thinking`。現行モデルは既定値以外の
+    サンプリング指定と `thinking.budget_tokens` に400を返す。思考は既定(適応的)のまま触らない ——
+    Haikuの深さは `effort` で動かすもので、指定しなければ相手の既定(`medium`)になる。
+
+    **キャッシュの区切りは2つ置く**: system の末尾(tools + system。毎回同じ部分が、
+    会話の書き換えに関係なく読み出せる)と、リクエスト直下の自動区切り(伸びていく会話の末尾)。
+    ツール定義だけで毎往復数千トークンあり(docs/AI_INTEGRATION.md の実測)、キャッシュ読みは入力の1/10で済む。
+
+    一時的な失敗(429・529・5xx)は、合計時間の残りに収まる範囲で `MAX_RETRIES` 回までやり直す。
+    """
+
+    name = "anthropic"
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = DEFAULT_ANTHROPIC_MODEL,
+        base_url: str = ANTHROPIC_BASE_URL,
+        transport: Optional[Transport] = None,
+    ) -> None:
+        if not api_key:
+            raise ValueError("APIキーが未設定")
+        # 値は属性に持つが、`repr` にも例外にも出さない(下の __repr__ と _redacted)。
+        self._api_key = api_key
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self._transport: Transport = (
+            StreamingTransport(_assemble_anthropic) if transport is None else transport
+        )
+        #: 中断が立ったか(再試行の待ちを打ち切るため。接続中の往復は `_transport.abort` が閉じる)。
+        self._aborted = threading.Event()
+
+    def __repr__(self) -> str:  # pragma: no cover - 表示だけ
+        return f"AnthropicProvider(model={self.model!r}, base_url={self.base_url!r})"
+
+    def abort(self) -> None:
+        self._aborted.set()
+        abort = getattr(self._transport, "abort", None)
+        if callable(abort):
+            abort()
+
+    # ------------------------------------------------------------------ 整形
+    def render_tools(self, tools: Sequence[dict]) -> list[dict]:
+        return [
+            {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "input_schema": tool["inputSchema"],
+            }
+            for tool in tools
+        ]
+
+    def render_messages(self, turns: Sequence[Turn]) -> list[dict]:
+        messages: list[dict] = []
+        for turn in turns:
+            if isinstance(turn, UserTurn):
+                messages.append({"role": "user", "content": turn.text})
+            elif isinstance(turn, AssistantTurn):
+                # **生の本文をそのまま返す** —— thinkingブロックを1つでも落とす・書き換えると、
+                # その会話の思考が捨てられるか400になる。
+                content = turn.raw
+                if not isinstance(content, list) or not content:
+                    # 生の本文が無いとき(ループが代わりに呼んだ問い合わせ・畳んだ履歴)は組み直す。
+                    # **tool_useブロックを落とさない** —— 落とすと次のtool_resultが対応先を失って弾かれる。
+                    content = []
+                    if turn.text:
+                        content.append({"type": "text", "text": turn.text})
+                    content.extend(
+                        {"type": "tool_use", "id": call.id, "name": call.name, "input": call.arguments}
+                        for call in turn.tool_calls
+                    )
+                    if not content:
+                        continue
+                messages.append({"role": "assistant", "content": content})
+            elif isinstance(turn, ToolResultTurn):
+                # 複数のツール結果は**1つのuserメッセージにまとめる**(分けると並列呼びが止む)。
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": result.call_id,
+                                "content": result.content,
+                                "is_error": not result.ok,
+                            }
+                            for result in turn.results
+                        ],
+                    }
+                )
+            else:  # pragma: no cover - 型を増やしたときに気づくため
+                raise TypeError(f"未知のターン: {turn!r}")
+        return messages
+
+    def build_payload(
+        self,
+        *,
+        system: str,
+        turns: Sequence[Turn],
+        tools: Sequence[dict],
+        max_tokens: int,
+    ) -> dict:
+        cache = {"type": "ephemeral"}
+        payload: dict = {
+            "model": self.model,
+            "max_tokens": int(max_tokens),
+            "messages": self.render_messages(turns),
+            "stream": True,
+            "cache_control": cache,
+        }
+        if tools:
+            payload["tools"] = self.render_tools(tools)
+        if system:
+            payload["system"] = [{"type": "text", "text": system, "cache_control": cache}]
+        elif tools:
+            payload["tools"][-1]["cache_control"] = cache
+        return payload
+
+    def parse_reply(self, response: dict) -> ProviderReply:
+        content = response.get("content")
+        blocks = content if isinstance(content, list) else []
+        texts: list[str] = []
+        calls: list[ToolCall] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            kind = block.get("type")
+            if kind == "text":
+                texts.append(str(block.get("text", "")))
+            elif kind == "tool_use":
+                arguments = block.get("input")
+                calls.append(
+                    ToolCall(
+                        id=str(block.get("id", "")),
+                        name=str(block.get("name", "")),
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                        parse_error=(
+                            None
+                            if isinstance(arguments, dict)
+                            else "tool_use.input がJSONオブジェクトではない"
+                        ),
+                    )
+                )
+        stop_reason = str(response.get("stop_reason") or "")
+        return ProviderReply(
+            text="\n".join(text for text in texts if text).strip(),
+            tool_calls=tuple(calls),
+            stop_reason=stop_reason,
+            stop=_neutral_stop(stop_reason, bool(calls), {"max_tokens", "model_context_window_exceeded"}),
+            usage=dict(response["usage"]) if isinstance(response.get("usage"), dict) else {},
+            raw_message=blocks,
+        )
+
+    # ------------------------------------------------------------------ 1往復
+    def complete(
+        self,
+        *,
+        system: str,
+        turns: Sequence[Turn],
+        tools: Sequence[dict],
+        max_tokens: int,
+        timeout: float,
+    ) -> ProviderReply:
+        payload = self.build_payload(system=system, turns=turns, tools=tools, max_tokens=max_tokens)
+        return self.parse_reply(self._call(f"{self.base_url}/v1/messages", payload, timeout))
+
+    def _call(self, url: str, payload: dict, timeout: float) -> dict:
+        """1往復(一時的な失敗はやり直す)。**外へ出る例外は必ずキーを消してから**投げ直す。"""
+        headers = {"x-api-key": self._api_key, "anthropic-version": ANTHROPIC_API_VERSION}
+        deadline = monotonic() + timeout
+        self._aborted.clear()
+        attempt = 0
+        while True:
+            try:
+                return self._transport(url, payload, headers, max(deadline - monotonic(), 0.001))
+            except Exception as error:
+                wait = _retry_wait(error, attempt)
+                if (
+                    wait is None
+                    or attempt >= MAX_RETRIES
+                    or monotonic() + wait >= deadline
+                    or self._aborted.wait(wait)
+                ):
+                    raise _redacted(error, self._api_key) from None
+                attempt += 1
 
 
 def _neutral_stop(raw: str, has_tool_calls: bool, truncated: set) -> str:
@@ -691,6 +1033,13 @@ def _neutral_stop(raw: str, has_tool_calls: bool, truncated: set) -> str:
     return "other"
 
 
+def default_model(kind: str) -> str:
+    """モデルを明示しなかったときに使う名前(`build_provider` と画面の表示が同じ規則で引く)。"""
+    if kind == "anthropic":
+        return os.environ.get(ANTHROPIC_MODEL_ENV) or DEFAULT_ANTHROPIC_MODEL
+    return "local"
+
+
 def build_provider(
     kind: str,
     *,
@@ -700,14 +1049,27 @@ def build_provider(
 ) -> Provider:
     """名前からプロバイダを1つ作る(アプリ内UIが選ぶ入口)。
 
-    **ここでAPIキーを読まない** —— `api_key` を渡していないので
-    `OpenAICompatProvider._api_key` は常に `None` である。`base_url` を任意の外部ホストへ
-    向けても、飛ぶのはキーの無いリクエストだけになる。
+    APIキーは**呼び出し側から渡させない** —— `load_api_key()` を読むのはここだけで、
+    渡す先は `anthropic` だけである。
+
+    - `anthropic` … `base_url` を**受け取っても使わない**(送り先は公式APIに固定。差し替えられると
+      実キーがそのホストへ届く)。モデルは 引数 → 環境変数 `DUOCAD_ANTHROPIC_MODEL` → 既定 の順
+      (`default_model`)。
+    - `openai_compat` … キーを渡さないので `_api_key` は常に `None`。`base_url` を任意の外部ホストへ
+      向けても、飛ぶのはキーの無いリクエストだけになる。
     """
+    if kind == "anthropic":
+        api_key = load_api_key()
+        if not api_key:
+            raise ProviderError(
+                f"ClaudeのAPIキーが未設定(環境変数 {ANTHROPIC_API_KEY_ENV} か、リポジトリ直下の "
+                f"{SECRETS_FILENAME} に {{\"{ANTHROPIC_API_KEY_ENV}\": \"...\"}} の形で置く)"
+            )
+        return AnthropicProvider(api_key, model=model or default_model(kind), transport=transport)
     if kind == "openai_compat":
         return OpenAICompatProvider(
-            model=model or "local",
+            model=model or default_model(kind),
             base_url=base_url or DEFAULT_OPENAI_COMPAT_BASE_URL,
             transport=transport,
         )
-    raise ValueError(f"未知のプロバイダ: {kind!r} (openai_compat)")
+    raise ValueError(f"未知のプロバイダ: {kind!r} (openai_compat / anthropic)")

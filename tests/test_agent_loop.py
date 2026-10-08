@@ -17,7 +17,7 @@
 4. **ツールの失敗でループが落ちない** —— 封筒をそのままモデルへ返して自己修復させる
    (未知のツール名・引数の食い違い・壊れたJSONも含む)。
 5. **鍵がどこにも出ない** —— `repr`・例外メッセージ・進捗・結果のどれにも。
-   併せて **`build_provider` が鍵を渡さない**(画面から鍵を受け取る経路を作らない)。
+   併せて **`build_provider` が鍵を `anthropic` にだけ渡す**(`openai_compat` には渡さない)。
 """
 from __future__ import annotations
 
@@ -705,10 +705,9 @@ def test_the_conversation_continues_across_runs_until_reset():
 # --------------------------------------------------------------------------------------
 # 4. 鍵が漏れない(セキュリティ要件)
 #
-# **ClaudeをAPIキーで叩く経路は無い** —— 環境変数も `duocad_secrets.json` も読まない
-# (`load_api_key` / `api_key_configured` ごと存在しない)。残っているのは
-# `openai_compat` が鍵を要求するサーバのために受け取れる `api_key` だけで、**`build_provider`
-# はそれを渡さない**。ここで固定するのはその2点である。
+# キーの読み口は `load_api_key` の1つで、`build_provider` はそれを `anthropic` にだけ渡す。
+# `openai_compat` が受け取れる `api_key`(鍵を要求するサーバのため)を `build_provider` は渡さない。
+# Claude側の整形・受け方・再試行は `tests/test_agent_anthropic.py`。
 # --------------------------------------------------------------------------------------
 def test_a_provider_key_never_shows_up_in_repr_or_error_messages():
     """HTTPライブラリはヘッダ値を例外文へ載せることがある。**外へ出る前に消す**。"""
@@ -726,15 +725,20 @@ def test_a_provider_key_never_shows_up_in_repr_or_error_messages():
     assert FAKE_KEY not in json.dumps(run.to_dict(), ensure_ascii=False)
 
 
-def test_the_provider_the_app_builds_carries_no_key_at_all(monkeypatch):
-    """**アプリが作るプロバイダには鍵が乗らない**。
+def test_the_key_reaches_only_the_claude_provider(monkeypatch):
+    """**キーは `anthropic` にだけ渡り、`openai_compat` には乗らない**。
 
-    廃止した経路が生き残っていないことも同時に見る —— 環境に `ANTHROPIC_API_KEY` が
-    居ても拾わないし、`anthropic` という綴りはもう作れない。
+    `ANTHROPIC_API_KEY` は読まない(Claude Code がその名前で課金先を切り替えるので、名前を分けてある)。
     """
+    from duocad.agent import providers
     from duocad.agent.providers import build_provider
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_KEY)
+    with pytest.raises(ProviderError) as caught:
+        build_provider("anthropic")
+    assert providers.ANTHROPIC_API_KEY_ENV in str(caught.value), "どこに置けばよいかを言っていない"
+
+    monkeypatch.setenv(providers.ANTHROPIC_API_KEY_ENV, FAKE_KEY)
     transport = FakeTransport(
         [{"choices": [{"message": {"content": "はい"}, "finish_reason": "stop"}]}]
     )
@@ -745,7 +749,11 @@ def test_the_provider_the_app_builds_carries_no_key_at_all(monkeypatch):
     assert "authorization" not in {key.lower() for key in sent["headers"]}
     assert FAKE_KEY not in json.dumps(sent, ensure_ascii=False)
 
-    with pytest.raises(ValueError):
-        build_provider("anthropic")
+    claude = FakeTransport([{"content": [{"type": "text", "text": "はい"}], "stop_reason": "end_turn"}])
+    build_provider("anthropic", transport=claude).complete(
+        system="s", turns=[UserTurn("x")], tools=[], max_tokens=16, timeout=1.0
+    )
+    assert claude.sent[0]["headers"]["x-api-key"] == FAKE_KEY
+
     with pytest.raises(ValueError):
         build_provider("gemini")

@@ -8,10 +8,9 @@
    * - **`ai_*` はverbではない**。ここから送るのは対話であって、文書の変更は
    *   AIが呼ぶ既存MCPツールの側から**通常のverb配信**として届く(`App.svelte` の
    *   `handleState` がいつもどおり描き直す。このパネルは何も描かない)。
-   * - **鍵を打つ場所がどこにも無い**。ClaudeをAPIキーで使う経路は廃止したので、
-   *   キーという概念自体がこの画面にもサーバにも無い(Claudeへ繋ぐ道はMCP経路だけ)。
-   * - **プロバイダの選択は `status.providers` で駆動する**。今は1つ(llama-server)しか
-   *   無いので選択UIは出ないが、サーバの `AI_PROVIDERS` が増えれば自動で出る。
+   * - **鍵を打つ場所がどこにも無い**。ClaudeのAPIキーはサーバ側(環境変数か
+   *   `duocad_secrets.json`)にだけ置き、画面が知るのは置いてあるかの真偽(`apiKeyConfigured`)だけ。
+   * - **プロバイダの選択は `status.providers` で駆動する**(2つ以上のときだけ選択UIを出す)。
    * - **会話の時系列(`transcript`)はここが持つ状態ではない** —— **正は `aiChat.svelte.ts`**で、
    *   ここは`props`として受け取って描くだけ(パネルは何も覚えない。
    *   `duocad/agent/loop.py`の会話がサーバ側にしか残らないための代わりとして
@@ -65,7 +64,12 @@
   /** 画面に出す名前(綴りそのままだと何と話しているか分からない)。 */
   const PROVIDER_LABEL: Record<string, string> = {
     openai_compat: 'llama-server',
+    anthropic: 'Claude',
   }
+
+  /** 送り先を選べるのは鍵を持たないプロバイダだけ(Claudeは固定。`Server._ai_configure` が拒否する)。 */
+  const canPickEndpoint = $derived(providerDraft !== 'anthropic')
+  const keyMissing = $derived(status?.provider === 'anthropic' && !status.apiKeyConfigured)
 
   function openSettings(): void {
     providerDraft = status?.provider ?? 'openai_compat'
@@ -82,8 +86,7 @@
    * 隠れたまま `ai_configure` に乗って「指定した覚えのないURL」で繋ぎに行く。
    * 空にすれば `undefined` になり、サーバ側の既定値が使われる。
    *
-   * 今はプロバイダが1つなのでこの関数は動かない(選択UI自体が出ない)。**2つ目を足したら
-   * ここが効き始める** —— `duocad/server.py` の `AI_PROVIDERS` に足すだけで選択UIが出る。
+   * Claudeへ切り替えたときに打ちかけが残ると、サーバが `base_url` を拒否して切り替え自体が失敗する。
    */
   function selectProvider(next: AiProviderKind): void {
     if (next === providerDraft) return
@@ -122,8 +125,14 @@
   }
 
   /** 読む側と書く側のどちらに時間を使ったか(llama-server の `timings` を往復ぶん足した値)。
-   * `timings` を返さないサーバでは空文字(行ごと出さない)。 */
+   * Claudeは時間ではなくトークン数(課金の単位)を出す。どちらも返さないサーバでは空文字(行ごと出さない)。 */
   function usageLine(usage: Record<string, number> | undefined): string {
+    if (usage?.input_tokens !== undefined && usage.output_tokens !== undefined) {
+      return (
+        `入力 ${usage.input_tokens}(キャッシュ読み ${usage.cache_read_input_tokens ?? 0}` +
+        `・書き ${usage.cache_creation_input_tokens ?? 0})／ 出力 ${usage.output_tokens} トークン`
+      )
+    }
     if (usage?.prompt_n === undefined || usage.predicted_n === undefined) return ''
     const seconds = (ms: number | undefined): string => ((ms ?? 0) / 1000).toFixed(1)
     return (
@@ -150,6 +159,9 @@
       <span class="value" data-provider={status.provider}>
         {PROVIDER_LABEL[status.provider] ?? status.provider}
       </span>
+      {#if status.provider === 'anthropic' && status.model}
+        <span class="dim" data-ai-model>{status.model}</span>
+      {/if}
       {#if running}
         <span class="badge running">応答中</span>
       {/if}
@@ -183,24 +195,31 @@
             </select>
           </label>
         {/if}
-        <!-- **エンドポイントは常に出す** —— 今あるプロバイダは鍵を持たないので、
-             どこを指しても飛ぶのはキーの無いリクエストだけである。鍵を持つプロバイダを
-             足すときは、ここと `Server._ai_configure` の両方に制限を書き戻すこと。 -->
-        <label class="field-row">
-          エンドポイント
-          <input
-            id="ai-base-url"
-            type="text"
-            placeholder="http://127.0.0.1:8080/v1"
-            bind:value={baseUrlDraft}
-          />
-        </label>
+        <!-- **エンドポイントは鍵を持たないプロバイダにだけ出す** —— どこを指しても飛ぶのは
+             キーの無いリクエストだけだから許せる。Claudeの送り先は固定(`Server._ai_configure`)。 -->
+        {#if canPickEndpoint}
+          <label class="field-row">
+            エンドポイント
+            <input
+              id="ai-base-url"
+              type="text"
+              placeholder="http://127.0.0.1:8080/v1"
+              bind:value={baseUrlDraft}
+            />
+          </label>
+        {/if}
         <button id="ai-settings-apply" onclick={applySettings} disabled={running}>適用</button>
       </div>
     {/if}
 
     {#if blockedReason}
       <p class="hint dim" data-ai-blocked>{blockedReason}</p>
+    {/if}
+    {#if keyMissing}
+      <p class="hint dim" data-ai-key-missing>
+        APIキーが未設定(リポジトリ直下の duocad_secrets.json か、環境変数 DUOCAD_ANTHROPIC_API_KEY。
+        環境変数はサーバを立て直してから効く)
+      </p>
     {/if}
 
     <div class="ai-transcript" id="ai-transcript">

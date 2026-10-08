@@ -70,8 +70,8 @@ AIに頼む日も同じもので立てる。**先にアプリを立てて、Clau
 **AIから文書を触る道は2本ある**。どちらもこの1つの立て方の上に乗り、同じ `Session` を叩く
 対等なクライアントなので**同時に使ってよい**:
 
-- **アプリ内AIパネル**（画面右サイドバー）—— ローカルの llama-server（キー不要）。
-  APIキーでのClaude利用はできない（Claudeを使う道は下のMCP経路）
+- **アプリ内AIパネル**（画面右サイドバー）—— ローカルの llama-server（キー不要）か、
+  Claude API（APIキーで従量課金。既定モデル `claude-haiku-5-5`）。キーの置き方は §4「AI側」
 - **Claude Code**（MCP）—— **サブスク認証のまま使えるのはこちらだけ**。繋ぎ方は1.2
 
 ### 1.1 立てる
@@ -478,7 +478,7 @@ stdioとHTTP（`/mcp`）の2本**で、`McpServer.handle()` はどちらも知�
 ### AI側（アプリ内エージェント・`duocad/agent/`）
 
 **AIから文書を触る道は2本ある**（§1 と同じ）。`duocad/agent/` は**先にアプリが立っていて、アプリの中から
-AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路は残す** —— Claude Codeから
+AIを選んで繋ぐ**（llama-server と Claude API の2つ）。**MCP経路は残す** —— Claude Codeから
 触る道とアプリ内の道は共存する。どちらも「先にアプリが立っている」という同じ向きに揃っている。
 
 - **道具の定義を第二の場所に書かない** —— `DocumentTools.descriptors()` を渡し、`.call()` で実行し、
@@ -510,14 +510,24 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
   （`fillet`/`chamfer`/`extrude` は対象ボディの可視性も実行時に見直す）。
   **版は「ログの本数・選択の指紋・可視性の指紋」の3つ組** —— 可視性は操作ログに
   載らないので、指紋を持たないと「AIが考えている間に人がボディを隠した」が版に出ない
-- **鍵を持つ層ではない。** `build_provider` はプロバイダへ
-  鍵を渡さないので、`base_url` をどこへ向けても飛ぶのはキーの無いリクエストだけになる。
-  **鍵を要るプロバイダを足すなら、`Server._ai_configure` に `base_url` の拒否を書き戻すこと**
+- **Claude APIのキーは画面から受け取らない。** 置き場所は環境変数 `DUOCAD_ANTHROPIC_API_KEY` か、
+  リポジトリ直下の `duocad_secrets.json`（gitignore済み。形は `{"DUOCAD_ANTHROPIC_API_KEY": "sk-ant-..."}`）。
+  **`ANTHROPIC_API_KEY` は読まない** —— その名前をユーザー環境に置くと、同じマシンの Claude Code が
+  サブスクではなくそのキーで課金するようになる。キーが置いてあればサーバは Claude から始まる。
+  モデルは環境変数 `DUOCAD_ANTHROPIC_MODEL` で差し替えられる（`claude-sonnet-5-5` など）
+- **キーを渡すのは `anthropic` だけで、その送り先は公式APIに固定** —— `Server._ai_configure` は
+  `anthropic` の `base_url` を拒否し、`build_provider` も渡さない。`openai_compat` には鍵を渡さないので、
+  `base_url` をどこへ向けても飛ぶのはキーの無いリクエストだけになる
+- **Claudeの往復**（`AnthropicProvider`）—— 生の応答（thinkingブロックを含む）をそのまま送り返す、
+  tools + system と会話の末尾にキャッシュの区切りを置く、429・529・5xx は合計時間の残りに収まる範囲で
+  2回までやり直す。出力上限は `ANTHROPIC_MAX_TOKENS`（思考も上限に数えられるので llama-server 用の1024では足りない）
 - 依存は増やしていない（公式SDKを入れず標準ライブラリで素のHTTP）
 
 契約は `tests/test_agent_loop.py`（偽プロバイダで決定的に検査）と、`tests/test_agent_streaming.py`（受け方と
-打ち切り）・`tests/test_agent_prepare.py`（ウォームアップ）・`tests/test_agent_history.py`（履歴）。実機は
-`tests/test_agent_llama_server.py` の1本だけで、**8080にllama-serverが居なければskipする**。
+打ち切り）・`tests/test_agent_prepare.py`（ウォームアップ）・`tests/test_agent_history.py`（履歴）・
+`tests/test_agent_anthropic.py`（Claudeの整形・組み立て・再試行・キーの読み口）。実機は
+`tests/test_agent_llama_server.py`（**8080にllama-serverが居なければskipする**）と
+`tests/test_agent_claude_api.py`（課金されるので、キーがあっても `DUOCAD_LIVE_CLAUDE=1` のときだけ走る）の2本。
 実測と数値は [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md)。
 
 **WebSocketへの配線。** `duocad/net/ws.py` が `ai_get_status` / `ai_configure` / `ai_prepare` /

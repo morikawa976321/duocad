@@ -3,8 +3,8 @@
 MCP経路(`duocad/mcp_server.py`)はMCPクライアントがduocadのプロセスを所有する形だが、こちらは
 逆向きで、**先にアプリが立っていて、アプリの中からAIを選んで繋ぐ**。両方の道は共存する。
 
-- `providers` … `openai_compat` アダプタ(素のHTTP・非streaming)。**APIキーは持たない**
-  (Claudeへ繋ぐ道はMCP経路だけ)
+- `providers` … `openai_compat`(llama-server)と `anthropic`(Claude API・APIキー)の2アダプタ
+  (素のHTTP・ストリーミング)
 - `loop`      … プロバイダ非依存の tool-use ループ(打ち切り・進捗・自己修復)
 
 道具の定義はここに書かない —— `DocumentTools.descriptors()` を渡すだけである。
@@ -19,18 +19,21 @@ from .loop import (
     ToolSurface,
 )
 from .providers import (
+    AnthropicProvider,
     OpenAICompatProvider,
     Provider,
     ProviderError,
     ProviderReply,
     ProviderTimeout,
     ToolCall,
+    api_key_configured,
     build_provider,
 )
 
 __all__ = [
     "AgentLoop",
     "AgentRun",
+    "AnthropicProvider",
     "Cancellation",
     "Limits",
     "OpenAICompatProvider",
@@ -41,5 +44,6 @@ __all__ = [
     "ToolCall",
     "ToolOutcome",
     "ToolSurface",
+    "api_key_configured",
     "build_provider",
 ]

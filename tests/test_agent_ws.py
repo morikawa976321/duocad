@@ -6,23 +6,21 @@
 
 固定する7つ:
 
-1. **`ai_status` に鍵の類は載らない**。`api_key_configured` という欄自体が無い
-   (Claudeへ繋ぐ道はMCP経路に残っている)。
+1. **`ai_status` にキーの値は載らない**。載るのは置いてあるかの真偽(`api_key_configured`)だけ。
 2. **`ai_send` はモデルへのHTTPリクエストを待たずに返る**(実行は `run_in_executor`)。
    進捗・結果は別イベント(`ai_tool_call` / `ai_result`)で届く。
 3. **AIがツールを呼んで文書を変えると、開いているブラウザの絵が変わる**(通常のverb配信に乗る)。
 4. **中断できる**(`ai_cancel`)。どこまでやったかは `ai_result.tool_calls` に残る。
-5. **送り先を差し替えられても鍵は乗らない**。`ai_configure` の `base_url` は自由に変えられる
-   —— 今あるプロバイダ(`openai_compat`)が鍵を持たないからこそ許せる。**鍵を持つプロバイダを
-   足すなら、`_ai_configure` に拒否を書き戻すこと**(送り先を画面から選べれば、値をブラウザへ
-   出していなくても外部へ送られるのと同じである)。
+5. **送り先を差し替えられても鍵は外へ出ない**。`openai_compat` の `base_url` は自由に変えられる
+   (鍵を持たない)。`anthropic` は `base_url` を拒否し、内部状態ごと差し替えられても公式APIへしか
+   送らない(送り先を画面から選べれば、値をブラウザへ出していなくても外部へ送られるのと同じである)。
 6. **最後の1接続が切れたらAIの実行を中断する**。誰も見ていないまま文書が変わり続けるのを防ぐ
    (他の接続が残っていれば続ける)。
 7. **ウォームアップ(`ai_prepare`)は頼まれたときだけ、1会話に1回走る**。依頼はその終わりを待つ。
 
 実キーは使わない(`RecordedProvider` で `duocad.server.build_provider` を差し替える。
 5だけは「差し替えを素通りしても鍵が漏れないこと」自体を検査したいので、
-偽のtransportを挿して `duocad.server.build_provider` は本物のまま実行する)。
+偽のキーと偽のtransportを挿して `duocad.server.build_provider` は本物のまま実行する)。
 """
 from __future__ import annotations
 
@@ -33,6 +31,7 @@ import time
 
 from duocad.mcp_server import DocumentTools
 from duocad.server import Server, Session
+from duocad.agent.providers import ANTHROPIC_API_KEY_ENV, ANTHROPIC_MAX_TOKENS
 from agent_support import FAKE_KEY, RecordedProvider, spoke, tool_use
 from session_support import FakeConnection
 
@@ -71,7 +70,7 @@ async def _settle(server: Server) -> None:
 # 1. ai_status に鍵の類が載らない
 # --------------------------------------------------------------------------------------
 def test_ai_status_carries_no_key_of_any_kind(box_session: Session):
-    """鍵の欄が**そもそも無い**。"""
+    """キーが無ければ llama-server から始まり、置いてあるかの真偽だけが載る。"""
 
     async def scenario():
         server = build_server(box_session, asyncio.get_running_loop())
@@ -83,9 +82,10 @@ def test_ai_status_carries_no_key_of_any_kind(box_session: Session):
     assert len(payloads) == 1
     status = payloads[0]
     assert status["type"] == "ai_status"
-    assert "api_key_configured" not in status, "廃止した欄が復活している"
+    assert status["api_key_configured"] is False
+    assert status["provider"] == "openai_compat"
     assert status["running"] is False
-    assert set(status["providers"]) == {"openai_compat"}
+    assert set(status["providers"]) == {"openai_compat", "anthropic"}
     # **鍵の形をした文字列がどこにも無い**(dictを丸ごと文字列化して確かめる)
     assert "sk-" not in json.dumps(status)
 
@@ -382,7 +382,8 @@ def test_a_tampered_base_url_still_sends_no_key(monkeypatch, box_session: Sessio
 
     `base_url` を自由にできるのは、`build_provider` がプロバイダへ鍵を渡さないからである
     (`duocad/agent/providers.py`)。ここではそれをWS側から確かめる —— 環境に
-    `ANTHROPIC_API_KEY` が居ても拾わないことも同時に見る(廃止した経路の生き残り検査)。
+    `ANTHROPIC_API_KEY` が居ても拾わないことも同時に見る(Claude用のキーが乗らないことは
+    `tests/test_agent_loop.py::test_the_key_reaches_only_the_claude_provider`)。
 
     実際に1回HTTPを打たせる(偽transport。実ネットワークは叩かない)。
     **`duocad.server.build_provider` は差し替えない** —— 見たいのは本物の
@@ -409,6 +410,72 @@ def test_a_tampered_base_url_still_sends_no_key(monkeypatch, box_session: Sessio
     # **鍵はどこにも乗っていない**(ヘッダにも本文にも)。
     assert "authorization" not in {key.lower() for key in calls[0]["headers"]}
     assert FAKE_KEY not in json.dumps(calls[0], ensure_ascii=False)
+
+
+def test_with_a_key_the_server_starts_on_claude_and_shows_the_model_but_not_the_key(
+    monkeypatch, box_session: Session
+):
+    monkeypatch.setenv(ANTHROPIC_API_KEY_ENV, FAKE_KEY)
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        connection = FakeConnection()
+        await server._dispatch(connection, json.dumps({"cmd": "ai_get_status"}))
+        return connection.payloads[0]
+
+    status = asyncio.run(scenario())
+    assert status["provider"] == "anthropic"
+    assert status["model"] == "claude-haiku-5-5"
+    assert status["base_url"] is None
+    assert status["api_key_configured"] is True
+    assert FAKE_KEY not in json.dumps(status)
+
+
+def test_ai_configure_refuses_a_base_url_for_claude(box_session: Session):
+    """`anthropic` の送り先は選ばせない(**黙って無視せずエラーで返す**)。"""
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(
+            connection,
+            json.dumps(
+                {"cmd": "ai_configure", "provider": "anthropic", "base_url": "http://attacker.example"}
+            ),
+        )
+        return server, connection
+
+    server, connection = asyncio.run(scenario())
+    status = connection.of_type("ai_status")[-1]
+    assert "error" in status
+    assert status["provider"] == "openai_compat", "拒否したのに切り替わっている"
+    assert server._ai_base_url is None
+
+
+def test_a_tampered_base_url_never_redirects_the_claude_key(monkeypatch, box_session: Session):
+    """**深層防御**: 内部状態の `base_url` を書き換えても、Claudeへの要求は公式APIへしか飛ばない。
+
+    出力上限もClaude用(`ANTHROPIC_MAX_TOKENS`)になっていることを同じ1往復で見る。
+    """
+    monkeypatch.setenv(ANTHROPIC_API_KEY_ENV, FAKE_KEY)
+    calls: list[dict] = []
+
+    def fake_transport(url, payload, headers, timeout):
+        calls.append({"url": url, "payload": payload})
+        return {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        server._ai_base_url = "http://attacker.example/v1"
+        loop_obj = server._ensure_ai_loop()
+        loop_obj.provider._transport = fake_transport  # HTTPだけ差し替える
+        return loop_obj.run("ping")
+
+    run = asyncio.run(scenario())
+    assert run.status == "completed"
+    assert calls[0]["url"] == "https://api.anthropic.com/v1/messages"
+    assert calls[0]["payload"]["max_tokens"] == ANTHROPIC_MAX_TOKENS
 
 
 # --------------------------------------------------------------------------------------
