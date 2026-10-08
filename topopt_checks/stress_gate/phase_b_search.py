@@ -85,6 +85,8 @@ def make_rep(gate, *, h, w, c, d, keep, dist_fixed, dist_load, baseline_mm3, zon
             limit = target if gate.endswith("zball") else max(target, (1.0 + eps) * zone_full)
             entry["zone_ball"] = zb
             value = max(value, target * zb / limit)  # 両方が目標以下のときだけ代表応力が目標以下
+        elif gate == "unified":  # 境界域は判定せず記録だけ(探索中の推移を後で見る)
+            entry["zone_ball"] = zone_ball(vm, mask, dist_fixed, h, w, d, keep, dist_load)
         entry["used"] = float(value)
         log.append(entry)
         return dataclasses.replace(real, value=float(value))
@@ -172,6 +174,13 @@ def main() -> int:
                baseline_exceed_mm3=baseline, zone_ball_full=zone_full, eps=a.eps, shift=a.shift, dist=a.dist, status=result.status, termination=result.termination,
                evaluations=result.evaluations, wall_s=wall, log=log)
     print(name, result.status, result.termination, f"eval={result.evaluations}", f"{wall:.0f}s", flush=True)
+    (pa.OUT / "searches").mkdir(parents=True, exist_ok=True)
+    dest = pa.OUT / "searches" / f"{name}.json"
+
+    def save():
+        dest.write_text(json.dumps(out, ensure_ascii=False, indent=1, default=float), encoding="utf-8")
+
+    save()
     if result.status == "feasible" and result.best_feasible is not None:
         mask = np.asarray(result.best_feasible.mask, bool)
         (pa.OUT / "masks").mkdir(parents=True, exist_ok=True)
@@ -185,14 +194,25 @@ def main() -> int:
         out["k1"] = row
         print("k1", json.dumps({k: (round(v, 3) if isinstance(v, float) else v) for k, v in row.items()
                                 if k != "hot_by_load_factor"}, ensure_ascii=False), flush=True)
+        save()
         for k in a.refine:
-            fctx = context(h / k)
+            try:
+                fctx = context(h / k)
+            except Exception as exc:  # hanger の 1.2mm 格子は保持と除外が重なり設計空間を作れない(DesignSpaceConflictError)
+                out[f"k{k}"] = dict(error=f"{type(exc).__name__}: {exc}")
+                print(f"k{k} error", type(exc).__name__, flush=True)
+                continue
             fkeep = np.asarray(fctx.cond.keep_cells if fctx.cond.keep_cells is not None else np.zeros(fctx.grid.shape, bool))
             fdf = fixed_distance(fctx)
             fdl = gm.distance_to_boxes(fctx.grid, _fem_probe.face_world_boxes(fctx.table, fctx.cond.load_faces))
             fmask, _ = refine_shape._project_mask_exact_subdivide(mask, k, fctx.space, ctx.grid.origin, h)
             fmask = (fmask & np.asarray(fctx.space.mask, bool)) | fkeep
-            fvm, sec = pa.solve(fmask, fctx)
+            try:
+                fvm, sec = pa.solve(fmask, fctx)
+            except RuntimeError as exc:  # 原点をずらした細格子で条件面の対応が取れないことがある
+                out[f"k{k}"] = dict(error=str(exc))
+                print(f"k{k} error", exc, flush=True)
+                continue
             frow = pa.metric_row(fvm, fmask, fkeep, fdf, h / k, w, target)
             frow["member"] = region_check(fvm, fmask, fkeep, fdf, fdl, h, h / k, w)
             frow["zone_ball_d"] = zone_ball(fvm, fmask, fdf, h / k, w, a.d)
@@ -200,9 +220,7 @@ def main() -> int:
             frow["fem_s"] = sec
             out[f"k{k}"] = frow
             print(f"k{k} member", json.dumps(frow["member"]), f"p995={frow['p995']:.3f}", flush=True)
-    (pa.OUT / "searches").mkdir(parents=True, exist_ok=True)
-    (pa.OUT / "searches" / f"{name}.json").write_text(json.dumps(out, ensure_ascii=False, indent=1, default=float),
-                                                      encoding="utf-8")
+    save()
     return 0
 
 
