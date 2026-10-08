@@ -420,6 +420,8 @@ class StreamingTransport:
             # 閉じ、控える前の中断はここで拾うので、中断した依頼が送られる隙間が無い(課金される相手では
             # 1回の送信がそのまま請求になる)。サーバが接続を閉じる応答(`Connection: close`)だと
             # `getresponse()` が `connection.sock` を `None` にするので、応答の後からは取れない。
+            # HTTPS の握手の最中はまだ控えていないので、その間の中断は握手が終わるか待ち時間が切れるまで
+            # 効かない(終われば下で止まり、送りはしない)。
             connection.connect()
             with self._lock:
                 self._sock = connection.sock
