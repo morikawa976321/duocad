@@ -44,7 +44,7 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
   // **格子上の値は切り捨てて出す**(`minWidth.ts` の規律。四捨五入だと 4.9998mm が「5mm」になる)。
   const minWidth =
     `最小幅 要求 ${short(result.min_width.requested_mm)}mm(` +
-    (result.min_width.source === 'default' ? '既定: 要素サイズの2倍・1mmの大きい方' : '指定') +
+    (result.min_width.source === 'default' ? '既定: 選べるいちばん細い段' : '指定') +
     `)・探索の規則は ${result.min_width.cells}セル = ${shownMinWidthMm(result.min_width.guaranteed_mm)}mm の立方`
   return {
     kind: result.warning ? 'bad' : 'info',

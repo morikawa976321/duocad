@@ -596,13 +596,13 @@ export interface OptimizeResolutionStep {
   element_size_mm: number
   /** 設計空間の要素数の**見積もり**(領域の体積 ÷ 要素の体積。実数ではない)。 */
   design_elements_estimate: number
-  /** この段を選んだときの最小幅の下限[mm](= 要素サイズの2倍)。サーバーが計算する
-   *  (画面は要素数の数え方を持たない、という既存方針と同じ)。 */
+  /** この段を選んだときの最小幅の下限[mm](= 2mm 以上で最小の m(m ≥ 2)× 要素サイズ)。サーバーが計算する
+   *  (画面は格子の数え方を持たない、という既存方針と同じ。`optimize_run.min_width_cell_range`)。 */
   min_width_floor_mm: number
-  /** この段を選んだときの最小幅の上限[mm](= 格子の最短の辺のセル数 × 要素サイズ)。これを超える立方は格子に入らない。 */
+  /** この段を選んだときの最小幅の上限[mm](= floor(格子の最短の辺のセル数 × 1/4)× 要素サイズ)。下限を下回れば選べる段は無い。 */
   min_width_ceiling_mm: number
-  /** この段で保証できる最小幅の段(m = 2, 3, … の `m × 要素サイズ`)。**入力すると、ちょうどその m になる値**
-   *  (`optimize_run.min_width_steps_mm`)。段のあいだの入力は次の段へ切り上がる。 */
+  /** この段で選べる最小幅の段(下限の m から上限の m までの `m × 要素サイズ`)。**渡すと、ちょうどその m になる値**
+   *  (`optimize_run.min_width_steps_mm`)。画面はここから選ぶだけで値を作らない。 */
   min_width_steps_mm: number[]
 }
 
@@ -619,6 +619,14 @@ export interface OptimizeResolutionPayload {
   min_element_size_mm?: number
   default_element_size_mm?: number
   from_condition_faces_mm?: number
+  /** 要素サイズの上限の固定値(`optimize_run.MAX_ELEMENT_SIZE_MM`)。上限は条件面からの要求とこれの細かい方。 */
+  max_element_size_cap_mm?: number
+  /** `optimizeResolution(値)` で問い合わせた値(自由入力)。`selected`・`selected_error` はこの値についてのもの。 */
+  requested_element_size_mm?: number
+  /** 問い合わせた値を選んだときの段(実格子へ揃えた要素サイズ。`index` は -1)。 */
+  selected?: OptimizeResolutionStep
+  /** 問い合わせた値が範囲外・不正だった理由(人に見せる文)。 */
+  selected_error?: string
   max_design_elements?: number
   feasible?: boolean
   steps?: OptimizeResolutionStep[]
@@ -692,7 +700,7 @@ export interface OptimizeResultPayload {
   termination: string | null
   element_size_mm: number
   /** 最小幅の解決結果(`optimize_run._resolve_min_width`)。未指定なら既定
-   *  `max(要素サイズの2倍, 1mm)`(2026-09-22本人決定)を採用し、`source` が `'default'` になる
+   *  = 選べるいちばん細い段を採用し、`source` が `'default'` になる
    *  (`requested_mm` は既定のときも実際に使った値で、`null` にはならない)。明示すれば `'requested'`。 */
   min_width: {
     requested_mm: number
@@ -739,7 +747,7 @@ export interface NeckDiagnosis {
 /** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
 export interface OptimizeRunOptions {
   elementSizeMm?: number | null
-  /** 最小幅[mm]。`null` または省略 = 既定(要素サイズの2倍と1mmの大きい方)をサーバーが使う。 */
+  /** 最小幅[mm](選んだ段の値)。`null` または省略 = 既定(選べるいちばん細い段)をサーバーが使う。 */
   minWidthMm?: number | null
   /**
    * 開発用の可視化を頼む(`'space'` / `'anchors'` / `'rho'`)。**既定は空**で、
@@ -924,7 +932,8 @@ export interface Session {
    * 要素サイズの上限・下限・目盛りを聞く(応答は `onOptimizeResolution`)。
    * **軽い**(条件面のbboxを数枚測るだけ)ので、条件が変わるたびに呼んでよい。
    */
-  optimizeResolution(): void
+  /** 要素サイズの上限・下限・目盛り。`elementSizeMm` を渡すとその値の段(`selected`)も返る。 */
+  optimizeResolution(elementSizeMm?: number | null): void
   /**
    * 走らせる。**待たずに返る** —— 進捗は `onOptimizeProgress`、結果は `onOptimizeResult`
    * へ届き、結果が文書へ入ったことは通常の状態配信として別途来る。
@@ -1276,8 +1285,12 @@ export function createSession(hooks: SessionHooks): Session {
     optimizeConditions() {
       send({ cmd: 'optimize_conditions' })
     },
-    optimizeResolution() {
-      send({ cmd: 'optimize_resolution' })
+    optimizeResolution(elementSizeMm) {
+      send(
+        elementSizeMm === undefined || elementSizeMm === null
+          ? { cmd: 'optimize_resolution' }
+          : { cmd: 'optimize_resolution', element_size_mm: elementSizeMm },
+      )
     },
     runOptimization(options) {
       send({

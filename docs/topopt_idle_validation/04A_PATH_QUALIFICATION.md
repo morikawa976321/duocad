@@ -1,7 +1,7 @@
 # 段階4a: 経路喪失(原因2)を再現する小型モデルの認定
 
 2026-09-29。`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「0〜2レビュー後の訂正と実行順序」節の
-`20260928-1426-topopt-idle-04a-path-qualification`。着手前に `taskbox/done/20260928-1426-topopt-idle-04-searches.md`
+`20260928-1426-topopt-idle-04a-path-qualification`。着手前に `docs/contracts/topopt-idle-validation-runs.md`(出典 `20260928-1426-topopt-idle-04-searches`)
 「## 後続への契約」と `00_COMPACT_MODELS.md`・`03B_METRICS_RECHECK.md` を読んだ。
 
 ## 結論(先に要約)

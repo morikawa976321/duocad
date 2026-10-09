@@ -222,8 +222,7 @@ smoke 自身の不安定さの修理 15 件・追加 304 行、smoke が赤く�
   SwiftShader が gpu-process 1463%・0.7fps、D3D11 が 6%・36fps だったが、**検査の所要時間はほぼ変わらない**
   （smoke.mjs 163→150秒。律速は OCCT/Python 側と WS 往復）。変わるのは CPU 消費だけ（chrome 累積 1550秒→215秒）。
   合成ベンチの倍率を実タスクの改善幅として語らない。どちらで描いたかは起動時の `GL :` 行に出る
-  （黙ってソフト GL へ落ちても検査は通るので、この行を置いた）。taskbox drain（タスクスケジューラ経由）で実 GPU を
-  掴めているかは未実測 —— ログの `GL :` 行で分かる。
+  （黙ってソフト GL へ落ちても検査は通るので、この行を置いた）。
 - **`viewport.ts` の `tick()` は変化が無くても毎フレーム描き**、puppeteer は既定で `--disable-background-timer-throttling`
   を付けるので画面が無くても 60fps で回る。実 GPU なら費用はほぼ無い。
 - **`getBoundingClientRect()` を `page.evaluate` 単体で返すとフィールドが消える**（DOMRect のプロパティはプロトタイプの
@@ -233,8 +232,8 @@ smoke 自身の不安定さの修理 15 件・追加 304 行、smoke が赤く�
   `length > 0` を見ていた本は、`{}` が届いて永久に偽のまま緑だった（2026-09-25 に8本で実測）。`assertNoAppErrors` は
   ページの中で配列かどうかを見てから素の配列にして返す。
 - **最小幅の欄(`#optimize-min-width`)を `typeInto` で1文字ずつ打つと、途中の値(「29.999」の「2」)が下限割れになり、
-  通知が `errors` に積まれる。** `allow` なしの `assertNoAppErrors` で締めると赤くなる(`smoke-optimize-min-width.mjs`
-  は `最小幅 N mm: …下限…` を `allow` で受けている)。
+  通知が `errors` に積まれる。** `allow` なしの `assertNoAppErrors` で締めると赤くなる(旧 `smoke-optimize-min-width.mjs`
+  は `最小幅 N mm: …下限…` を `allow` で受けていた。e724eca で撤去)。
 - **ビューポートの寸法を変える変更（サイドバー・パネル・ボタンの増減・ツールバーの行数）は実機検査を全部回す。**
   掴むものが黙って入れ替わり、落ちるのは数手あとの `cut did not change the shape` のような無関係な文言
   （履歴パネルを外しただけで基準平面が手前の板の面に化けた実例がある）。`npm run check` も pytest もこの壊れ方を見ない。

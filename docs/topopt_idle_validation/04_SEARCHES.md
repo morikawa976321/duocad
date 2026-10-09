@@ -1,7 +1,7 @@
 # 段階4: 4探索方式の実験用実装
 
 2026-09-28。`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「0〜2レビュー後の訂正と実行順序」節の
-`20260928-1426-topopt-idle-04-searches`。着手前に `taskbox/done/20260928-1426-topopt-idle-03b-metrics-recheck.md`
+`20260928-1426-topopt-idle-04-searches`。着手前に `docs/contracts/topopt-idle-validation-setup.md`(出典 `20260928-1426-topopt-idle-03b-metrics-recheck`)
 「## 後続への契約」と `03B_METRICS_RECHECK.md` 本体を読み、03bが凍結した評価器(M5b合否ゲート・M3部位別
 診断・M7b探索補助)をそのまま引き継いだ。
 

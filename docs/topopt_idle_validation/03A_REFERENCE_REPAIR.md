@@ -3,7 +3,7 @@
 2026-09-28。`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「0〜2レビュー後の訂正と実行順序」節の
 `20260928-1426-topopt-idle-03a-reference-repair`。監査文書
 [`REVIEW_00_02_2026-09-28.md`](REVIEW_00_02_2026-09-28.md)(以下「監査」)の指摘を、**無条件に事実として
-扱わず**コード・生データで検証したうえで対応した。着手前に`taskbox/done/20260928-1426-topopt-idle-03-metrics.md`
+扱わず**コード・生データで検証したうえで対応した。着手前に`docs/contracts/topopt-idle-validation-setup.md`(出典 `20260928-1426-topopt-idle-03-metrics`)
 「## 後続への契約」を読み、00〜02の報告書・出力JSONも確認した。
 
 ## 結論(先に要約)

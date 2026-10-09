@@ -359,7 +359,7 @@ B 63,256 mm³(+19%)。幾何での不合格はA・Bとも0件、最終の再検�
 `_Frontier` / `_Budget` / `_pull`、引数 `frontier_capacity` / `max_consecutive_adds` / `max_candidates`、
 終了理由 `neighbourhood_exhausted` / `frontier_truncated` / `generation_limit`(と段階3の
 `evaluation_limit`)、`diagnostics['frontier']` / `['candidates']`、`min_width.cover_additions` /
-`CoreConnectivity.child_keeps` / `lost_coverage` の `refill`、`topopt_checks/measure_stage3_min_width.py`。
+`CoreConnectivity.child_keeps` / `lost_coverage` の `refill`(`measure_stage3_min_width.py` は58c9d62で撤去)。
 旧§4.2「満杯の候補が不合格だから全て不可能と結論しない」の原則はここで取り下げた。§4.3の旧追記
 (frontier 48・連続追加2・走査予算の決め方)、`docs/FIX_BINARY_SEARCH_INITIALIZATION.md`修正C、
 `docs/TOPOPT_THICKNESS.md`節L・節Mの段階3の部分は`0a9ddc7`以前のコードでしか再現できない。

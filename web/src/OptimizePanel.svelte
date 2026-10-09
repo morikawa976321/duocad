@@ -8,16 +8,16 @@
    *
    * ## 解像度の見せ方(ここが設計の肝)
    *
-   * **「範囲内で自由に選ぶ」ではなく、「既定＝粗い側の端。細かくする方向にだけ動かす」。**
-   * 両端の性質が違うからである:
+   * **要素サイズ[mm]を下限〜上限の範囲で自由に入れる。空欄が既定＝粗い側の端(上限)。**
+   * 両端の性質が違う:
    *
    * - **粗い側の端は「正しさ」の境界** —— 割ると条件面から節点が消える。
-   *   しかも**silent**(例外は出ず、もっともらしい形が返る)。
+   *   しかも**silent**(例外は出ず、もっともらしい形が返る)。上限より粗い入力はサーバが断る。
    * - **細かい側の端は「都合」の境界** —— 割っても間違いはしない。遅い、落ちる、それだけ。
    *
-   * したがってスライダーの左端(添字0)が既定であり、**そこより粗い側へ動かす操作を
-   * 用意しない**。目盛りの実体は `optimize_run.resolution_limits()["steps"]` で、
-   * **段はサーバが作る** —— 要素数の数え方(余白比率とパッド)を画面が持つと必ずずれる。
+   * 入れた値の段(実格子へ揃えた要素サイズ・要素数・最小幅の段)は**サーバが作る**
+   * (`optimize_resolution` に値を渡すと `selected` が返る) —— 要素数の数え方(余白比率とパッド)を
+   * 画面が持つと必ずずれる。梯子(`steps`)は入力の候補ボタンとして出す。
    *
    * **所要時間は付かない**(計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と
    * 表示する」)。走らせる前は1回もFEMを解いていないので実測が無く、旧SIMP係数を使った
@@ -37,17 +37,7 @@
    * **`position: absolute` でフローの外**に置くので、`.viewport` の寸法＝カメラのアスペクトに
    * 触らない(styles.css の不変条件)。
    */
-  import {
-    clampStepIndex,
-    isOutOfRange,
-    judgeMinWidth,
-    minWidthProblem,
-    roundUpNotice,
-    shownCeilingMm,
-    shownGuaranteedMm,
-    shownStepMm,
-    stepAt,
-  } from './minWidth'
+  import { chosenStep, shownElementSizeRange, shownMinWidthMm, stepCells } from './minWidth'
   import type {
     OptimizeConditionsReport,
     OptimizeProgress,
@@ -57,71 +47,68 @@
   const {
     conditions,
     resolution,
-    stepIndex,
+    elementSizeMm,
     minWidthMm,
     running,
     cancelling,
     progress,
     notice,
-    onStep,
+    onElementSize,
     onMinWidth,
     onRun,
     onCancel,
   }: {
     conditions: OptimizeConditionsReport | null
     resolution: OptimizeResolutionPayload | null
-    stepIndex: number
-    /** 最小幅の入力値[mm]。`null` = 空欄(サーバーの既定 = 要素サイズの2倍と1mmの大きい方を使う)。
-     *  正の値そのもの(下限割れの判定はここではしない)。 */
+    /** 要素サイズの入力値[mm]。`null` = 空欄(既定 = 上限側)。 */
+    elementSizeMm: number | null
+    /** 選んでいる最小幅の段[mm](`min_width_steps_mm` のどれか)。`null` = 既定(いちばん細い段)。 */
     minWidthMm: number | null
     running: boolean
     cancelling: boolean
     progress: OptimizeProgress | null
     notice: OptimizeNotice | null
-    onStep: (index: number) => void
+    onElementSize: (value: number | null) => void
     onMinWidth: (value: number | null) => void
     onRun: () => void
     onCancel: () => void
   } = $props()
 
   const steps = $derived(resolution?.steps ?? [])
-  /** 実際に効いている段の位置。**目盛りが縮んだときのために毎回丸め直す**(`minWidth.ts`。App と同じ丸め)。 */
-  const clamped = $derived(clampStepIndex(stepIndex, steps.length))
-  const step = $derived(stepAt(steps, stepIndex))
-  /** 入力した最小幅の判定(下限・上限はサーバーが段ごとに配る。判定と表示は `minWidth.ts`)。 */
-  const minWidthVerdict = $derived(judgeMinWidth(minWidthMm, step))
-  const minWidthInvalid = $derived(isOutOfRange(minWidthVerdict))
-  const minWidthProblemText = $derived(step === null ? null : minWidthProblem(minWidthVerdict, step))
-  const minWidthGuaranteedText = $derived(shownGuaranteedMm(minWidthVerdict))
-  const minWidthRoundUpText = $derived(roundUpNotice(minWidthVerdict, minWidthMm))
-  const minWidthLowerStep = $derived(minWidthVerdict.kind === 'ok' ? minWidthVerdict.lowerStepMm : null)
-  const minWidthCells = $derived(minWidthVerdict.kind === 'ok' ? minWidthVerdict.cells : null)
-  const minWidthUpperStep = $derived(minWidthVerdict.kind === 'ok' ? minWidthVerdict.stepMm : null)
-  /**
-   * 最小幅の欄に**打っている文字列そのもの**。数値(`minWidthMm`)から欄へは書き戻さない —— 書き戻すと
-   * 「1.」→「1.0」と打つ途中で欄が「1」に化け、続けて打った「5」で「15」になる(Blink の
-   * `type=number` は打ちかけの「1.」を空文字として返す)。欄を書き換えるのは、値が外から変わった
-   * とき(段のボタン・文書の切り替え)だけ。
-   */
-  let minWidthText = $state('')
-  /** 欄から最後に送った値。`minWidthMm` がこれと違えば外から変わったので欄を書き直す。 */
-  let minWidthSent: number | null | undefined = undefined
+  /** 効いている段(`chosenStep`。App と同じ判定)。入力した値への応答待ち・範囲外なら `null`。 */
+  const step = $derived(chosenStep(resolution, elementSizeMm))
+  const elementSizeRange = $derived(resolution === null ? null : shownElementSizeRange(resolution))
+  /** 要素サイズの欄の文字列。数値から欄へは外から変わったとき(候補ボタン・文書の切り替え)だけ書き戻す —— 打つたびに
+   *  書き戻すと打ちかけの「1.」が「1」に化ける。**書き戻すのは小数第2位までの表示で、送る値は丸めない**
+   *  (下限 1.574mm の段を「1.57」で送ると下限割れで断られる)。 */
+  let elementSizeText = $state('')
+  let elementSizeSent: number | null | undefined = undefined
   $effect.pre(() => {
-    const value = minWidthMm
-    if (value === minWidthSent) return
-    minWidthSent = value
-    minWidthText = value === null ? '' : String(value)
+    const value = elementSizeMm
+    if (value === elementSizeSent) return
+    elementSizeSent = value
+    elementSizeText = value === null ? '' : value.toFixed(2)
   })
-  /** 欄の文字列が数として読めない(空欄は読める = 既定)。 */
-  const minWidthUnreadable = $derived(minWidthText.trim() !== '' && !Number.isFinite(Number(minWidthText)))
+  /** 要素サイズの欄が数として読めない(空欄は読める = 既定)。 */
+  const elementSizeUnreadable = $derived(elementSizeText.trim() !== '' && !Number.isFinite(Number(elementSizeText)))
+  /** 入れた値をサーバが断った理由(上限より粗い・下限より細かい)。応答がまだその値のものでなければ出さない。 */
+  const elementSizeProblem = $derived(
+    elementSizeMm !== null && resolution?.requested_element_size_mm === elementSizeMm
+      ? (resolution.selected_error ?? null)
+      : null,
+  )
 
-  function typeMinWidth(raw: string): void {
-    minWidthText = raw
+  function typeElementSize(raw: string): void {
+    elementSizeText = raw
     const parsed = raw.trim() === '' ? null : Number(raw)
-    const value = parsed !== null && Number.isFinite(parsed) ? parsed : null
-    minWidthSent = value
-    onMinWidth(value)
+    if (parsed !== null && !Number.isFinite(parsed)) return // 読めない間は送らない(欄が赤くなり実行も止まる)
+    elementSizeSent = parsed
+    onElementSize(parsed)
   }
+  /** 選べる最小幅の段(サーバーが配る。`optimize_run.min_width_cell_range`)。空なら この解像度では選べない。 */
+  const minWidthSteps = $derived(step?.min_width_steps_mm ?? [])
+  /** 効いている最小幅(`null` は既定 = いちばん細い段)。 */
+  const minWidthShown = $derived(minWidthMm ?? minWidthSteps[0] ?? null)
 
   /**
    * パネルの実高さ(+ブラウザとの間隔10px)を `.stage` の `--browser-bottom-reserve` へ渡す。
@@ -146,12 +133,15 @@
     }
   })
 
-  /** 段のボタンに並べる先頭の数(全段はサーバーが配る。残りは入力欄に打つか、切り上げ先の表示から辿る)。 */
-  const STEP_BUTTONS = 4
   const problems = $derived(conditions?.problems ?? [])
   /** 走らせられるか。**条件と目盛りの両方がそろって初めて押せる。** */
   const canRun = $derived(
-    !running && conditions !== null && conditions.ready && step !== null && !minWidthInvalid && !minWidthUnreadable,
+    !running &&
+      conditions !== null &&
+      conditions.ready &&
+      step !== null &&
+      minWidthSteps.length > 0 &&
+      !elementSizeUnreadable,
   )
 </script>
 
@@ -177,9 +167,8 @@
     </ul>
   {/if}
 
-  <!-- **目盛りは細かくする方向にだけ動く**(左端＝既定＝いちばん粗くて安い)。
-       段が1つも無い＝「間違わない解像度」が作れない状態なので、スライダーごと出さずに
-       理由を出す。 -->
+  <!-- **要素サイズは下限〜上限の自由入力。空欄が既定(上限＝いちばん粗い)。**
+       段が1つも無い＝「間違わない解像度」が作れない状態なので、入力欄ごと出さずに理由を出す。 -->
   {#if resolution === null}
     <p id="optimize-resolution-note" class="hint dim">解像度を確認している…</p>
   {:else if resolution.error}
@@ -187,108 +176,85 @@
   {:else if steps.length === 0}
     <p id="optimize-resolution-note" class="hint bad">
       この部品と条件面では、間違わない解像度が設計空間の要素数の上限({resolution.max_design_elements?.toLocaleString() ?? '—'})に
-      収まらない。条件面をもっと大きい面に取り直すこと
+      収まらない(要素サイズの上限は条件面からの要求と {resolution.max_element_size_cap_mm ?? '—'}mm の細かい方)。
+      条件面が小さいなら大きい面に取り直し、部品が大きいなら設計空間を小さくすること
     </p>
   {:else}
     <label class="field-row">
-      解像度
+      要素サイズ[mm]
+      <!-- **`type="number"` にしない**(最小幅の欄と同じ理由。打ちかけの「1.」が空文字になる)。 -->
       <input
         id="optimize-resolution"
-        type="range"
-        min="0"
-        max={steps.length - 1}
-        step="1"
-        value={clamped}
-        disabled={running}
-        oninput={(event) => onStep(Number.parseInt(event.currentTarget.value, 10))}
-      />
-      <span class="unit">{clamped === 0 ? '既定(粗い)' : `+${clamped}`}</span>
-    </label>
-    <p id="optimize-estimate" class="hint dim">
-      要素 {step ? step.element_size_mm.toFixed(2) : '—'}mm ・ 設計空間 約
-      {step ? step.design_elements_estimate.toLocaleString() : '—'} 要素(見積もり。上限
-      {resolution.max_design_elements?.toLocaleString() ?? '—'})。
-      所要時間は事前に見積もらない(実測が無い段階では出さない。走らせると進捗に出る)。
-    </p>
-    <p class="hint dim">
-      左端が既定 —— 条件面を満たす、いちばん粗くて安い設定である。
-      <strong>右へ動かすほど得られるもの</strong>: STLの表面が滑らかになり、応力(＝安全率)と
-      体積の見積もりが確かになる。<strong>払うもの</strong>: 時間とメモリ。
-      <strong>左へは動かない</strong> —— 粗くすると条件面から節点が消える(しかも黙って起きる)。
-    </p>
-    <label class="field-row">
-      最小幅[mm]
-      <!-- **`type="number"` にしない**(上の `minWidthText`)。数字の鍵盤は `inputmode` で出す。 -->
-      <input
-        id="optimize-min-width"
         type="text"
         inputmode="decimal"
         autocomplete="off"
-        placeholder="既定"
-        list="optimize-min-width-list"
-        class:invalid={minWidthInvalid || minWidthUnreadable}
-        value={minWidthText}
+        placeholder={`既定 ${steps[0].element_size_mm.toFixed(2)}`}
+        class:invalid={elementSizeUnreadable || elementSizeProblem !== null}
+        value={elementSizeText}
         disabled={running}
-        oninput={(event) => typeMinWidth(event.currentTarget.value)}
+        oninput={(event) => typeElementSize(event.currentTarget.value)}
       />
     </label>
-    <p id="optimize-min-width-default-hint" class="hint dim">
-      空欄なら既定(要素サイズの2倍と1mmの大きい方)を使う
-    </p>
-    <datalist id="optimize-min-width-list">
-      {#each step?.min_width_steps_mm ?? [] as value, index}
-        <option {value} label="m={index + 2}"></option>
+    <p id="optimize-resolution-range" class="hint dim">
+      {elementSizeRange?.lower ?? '—'}〜{elementSizeRange?.upper ?? '—'}mm。空欄なら既定(上限側、いちばん粗くて安い)。候補:
+      {#each steps as candidate}
+        <button
+          type="button"
+          class="step"
+          disabled={running}
+          onclick={() => {
+            elementSizeSent = candidate.element_size_mm
+            elementSizeText = candidate.element_size_mm.toFixed(2)
+            onElementSize(candidate.element_size_mm)
+          }}>{candidate.element_size_mm.toFixed(2)}</button
+        >
       {/each}
-    </datalist>
-    <!-- ボタンは丸めない値を入れる(`minWidth.ts` の `shownStepMm`)。 -->
-    {#if step !== null && step.min_width_steps_mm.length > 0}
-      <p id="optimize-min-width-steps" class="hint dim">
-        探索が守る立方の幅は段になる(要素サイズ × m。全セルがこの幅の立方に属するという規則で、部材の太さの保証ではない):
-        {#each step.min_width_steps_mm.slice(0, STEP_BUTTONS) as value, index}
-          <button
-            type="button"
-            class="step"
-            disabled={running}
-            onclick={() => onMinWidth(value)}>{shownStepMm(value)}mm(m={index + 2})</button
+    </p>
+    {#if elementSizeUnreadable}
+      <p id="optimize-resolution-note" class="hint bad">要素サイズ「{elementSizeText}」が数として読めない</p>
+    {:else if elementSizeProblem !== null}
+      <p id="optimize-resolution-note" class="hint bad">{elementSizeProblem}</p>
+    {/if}
+    <p id="optimize-estimate" class="hint dim">
+      {#if step === null && !elementSizeUnreadable && elementSizeProblem === null}
+        この値の格子を確認している…
+      {:else}
+        実際の要素 {step ? step.element_size_mm.toFixed(2) : '—'}mm(格子の刻みに揃えた値) ・ 設計空間 約
+        {step ? step.design_elements_estimate.toLocaleString() : '—'} 要素(見積もり。上限
+        {resolution.max_design_elements?.toLocaleString() ?? '—'})。
+      {/if}
+      所要時間は事前に見積もらない(実測が無い段階では出さない。走らせると進捗に出る)。
+    </p>
+    <p class="hint dim">
+      <strong>細かくするほど得られるもの</strong>: STLの表面が滑らかになり、応力(＝安全率)と
+      体積の見積もりが確かになる。<strong>払うもの</strong>: 時間とメモリ。
+      <strong>上限より粗くはできない</strong> —— 条件面から節点が消える(しかも黙って起きる)か、完成形の安全率が測れなくなる。
+    </p>
+    <label class="field-row">
+      最小幅[mm]
+      <!-- **段から選ぶだけ**(数値は打たせない)。段は 2mm 以上で最小の m から、格子の最短の辺の 1/4 まで
+           (`optimize_run.min_width_cell_range`。根拠の無い暫定値)。 -->
+      <select
+        id="optimize-min-width"
+        disabled={running || minWidthSteps.length === 0}
+        value={minWidthShown === null ? '' : String(minWidthShown)}
+        onchange={(event) => onMinWidth(Number(event.currentTarget.value))}
+      >
+        {#each minWidthSteps as value, index}
+          <option value={String(value)}
+            >{shownMinWidthMm(value)}(m={stepCells(step!, value)}){index === 0 ? ' 既定' : ''}</option
           >
         {/each}
-        {#if step.min_width_steps_mm.length > STEP_BUTTONS}…{/if}
-        上限 {shownCeilingMm(step)}mm
-      </p>
-    {/if}
-    {#if minWidthUnreadable}
-      <p id="optimize-min-width-note" class="hint bad">最小幅「{minWidthText}」が数として読めない</p>
-    {:else if minWidthProblemText !== null}
+      </select>
+    </label>
+    {#if step !== null && minWidthSteps.length === 0}
       <p id="optimize-min-width-note" class="hint bad">
-        {minWidthProblemText}。{minWidthVerdict.kind === 'below'
-          ? '値を上げるか、解像度を細かくすること'
-          : '値を下げるか、解像度を粗くすること'}
+        この要素サイズでは選べる最小幅が無い(2mm 以上の段が、格子の最短の辺の 1/4 に収まらない)。要素サイズを下げること
       </p>
-    {:else if minWidthRoundUpText !== null}
-      <p id="optimize-min-width-note" class="hint bad">
-        {minWidthRoundUpText}。
-        {#if minWidthLowerStep !== null}
-          <button
-            type="button"
-            class="step"
-            disabled={running}
-            onclick={() => onMinWidth(minWidthLowerStep)}
-            >{shownStepMm(minWidthLowerStep)}mm(m={(minWidthCells ?? 0) - 1})に下げる</button
-          >
-        {/if}
-        {#if minWidthUpperStep !== null}
-          <button
-            type="button"
-            class="step"
-            disabled={running}
-            onclick={() => onMinWidth(minWidthUpperStep)}
-            >{shownStepMm(minWidthUpperStep)}mm(m={minWidthCells})にそろえる</button
-          >
-        {/if}
-      </p>
-    {:else if minWidthGuaranteedText !== null}
+    {:else}
       <p id="optimize-min-width-note" class="hint dim">
-        探索が守る立方の幅: {minWidthGuaranteedText}mm(探索する形の規則で、完成形のつなぎ目の幅は実行後に診断する)
+        探索が守る立方の幅(要素サイズ × m。全セルがこの幅の立方に属するという規則で、部材の太さの保証ではない。
+        完成形のつなぎ目の幅は実行後に診断する)
       </p>
     {/if}
   {/if}
@@ -364,13 +330,6 @@
     min-width: 0;
   }
 
-  .unit {
-    flex: 0 0 auto;
-    width: 6em;
-    text-align: right;
-    color: var(--text);
-  }
-
   .row {
     display: flex;
     gap: 6px;
@@ -402,7 +361,7 @@
     margin-right: 2px;
   }
 
-  #optimize-min-width.invalid {
+  #optimize-resolution.invalid {
     border-color: var(--bad);
   }
 </style>

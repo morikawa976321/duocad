@@ -1,5 +1,7 @@
 # 不要材料の改善案を検証するtaskboxタスク群
 
+> **taskbox は2026-10-09に廃止した。この文書は記録として残す**(以下の「taskbox」「drain」「queue」は当時の運用。タスクの契約は `docs/contracts/` へ移した)。
+
 > **2026-10-05の最新指示:** 本人が残りを2〜3日で終えるよう変更した。未完了07〜10は [期限付き再編](topopt_idle_validation/DEADLINE_PLAN_2026-10-05.md) を最優先する。以下に残る時間無制限・全条件実行・不足の無制限追加は今回の残工程には適用しない。目標10/07 18:00、最終期限10/08 18:00（JST）。未検証は明示して報告を完了し、製品安全性や全研究完了を偽らない。
 
 2026-09-28。元の計画: [解決策報告書・第8章](TOPOPT_IDLE_SOLUTIONS_2026-09-28.md#8-推奨する検証計画と採否基準)。
@@ -85,7 +87,7 @@
 - [目標係数](TOPOPT_TARGET_FACTOR.md)、[現行二値探索](PLAN_BINARY_STRESS_SEARCH.md)。
 - 完成形: [メッシュ集合演算](TOPOPT_MESH_BOOLEAN_STUDY.md)、[平滑化の交差](TOPOPT_SMOOTHING_INTERSECTIONS.md)、[最終形状の検査](TOPOPT_ACCEPTANCE.md)。
 - 今回の追加集計: `topopt_checks/analyze_idle_alternatives.py`、`output/idle_alternatives_20260928/analysis.json`。
-- taskboxの状態遷移と完了ゲート: `C:/Users/tm976/mf/taskbox/README.md`、前提タスクの `done/<task-id>.md` 内の「後続への契約」。
+- 前提タスクの契約(`docs/contracts/topopt-idle-validation-setup.md`・`topopt-idle-validation-runs.md` に分野別に移してある。項目末尾が出典タスクID)。
 
 ## 実験の品質と十分性
 

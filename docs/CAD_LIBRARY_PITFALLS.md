@@ -113,7 +113,7 @@
 
 - **PATH の `python` で `python -m pytest` を回すと、OCP を import する全モジュールが
   `ModuleNotFoundError: No module named 'OCP'` で収集エラーになる**(件数はファイル数で変わる。
-  19件 / 48件)。PATH の `python` はセッションごとに実体が違う(taskbox runner では別プロジェクトの
+  19件 / 48件)。PATH の `python` はセッションごとに実体が違う(旧 taskbox runner では別プロジェクトの
   venv を拾っていた)。**「テストが全部壊れている」に見えるが、インタプリタを間違えているだけ。**
   正しい呼び方は `.\.venv\Scripts\python.exe -m pytest -q`(`pyproject.toml` の `pythonpath=["."]`
   があるので venv の python なら素の `pytest` でも通る)。
@@ -128,7 +128,7 @@
   入っていないもの: trimesh・pyvista・vtk・gmsh・matplotlib・numba・cupy・torch・pyamg・scikit-sparse・meshio。
 - **検査の在庫は `.\.venv\Scripts\python.exe -m pytest -q --collect-only` で数える。**
   在庫は `--collect-only`、**契約と「なぜその形か」は各モジュールの docstring** —— 片方を
-  もう片方の代わりにしない。契約を散文でまとめた `tests/README.md` は削除した
+  もう片方の代わりにしない。契約を散文でまとめた `tests/README.md` は削除した(a83857e)
   (中身をコードのそばへ移した。別ファイルに置くと、コードを変える人の視界に入らないまま
   後追いで同期することになり、実際に実装と食い違う記述が5件たまった)。
 - **`importlib` でファイル1つだけを単体ロードして `@dataclass` を使うなら、`exec_module` より前に

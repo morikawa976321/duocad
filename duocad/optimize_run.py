@@ -38,6 +38,17 @@ RESULT_NAME = "optimized"
 #: 原点と刻みが要素サイズごとに引き直され、薄い部品にセル中心が入るかが偶然で決まる)。
 MAX_DESIGN_ELEMENTS = 1_300_000
 
+#: 要素サイズの上限の固定値[mm](2026-10-09 本人決定、#130)。上限は min(これ, 条件面からの要求)。条件面だけで決めると
+#: 面の大きな題材で格子が粗くなり、完成形の検査(`topopt.final_check`)が拘束面を割り当て直せず安全率を測れない
+#: (実測: path 題材は条件面 200mm² で上限 14mm になり測れず、5mm・2.5mm では測れた)。4mm で必ず測れる保証ではない。
+MAX_ELEMENT_SIZE_MM = 4.0
+
+#: 最小幅の段の下限[mm]と上限(格子の最短の辺に対する割合)。**根拠の無い暫定値**(2026-10-09 本人決定)。
+#: 選べる m は「m × 要素サイズ ≥ この下限」を満たす最小の m(ただし m ≥ 2)から、
+#: 「m ≤ 格子の最短の辺のセル数 × この割合」の最大の m まで(`min_width_cell_range`)。
+MIN_WIDTH_FLOOR_MM = 2.0
+MIN_WIDTH_CEILING_RATIO = 0.25
+
 #: 保持/除外ソリッドが「この解像度では表現できていない」と見なす要素数の境目。
 #: **0 は必ず止める**(その条件が黙って消える)。0 より多く これ未満は警告して続ける。
 #: 暫定値 —— 厳密な下限は中心軸変換に近い話で、事前計算では出せない(タスク本文)。
@@ -125,8 +136,7 @@ class OptimizeOptions:
     search_target_factor: float = SEARCH_TARGET_FACTOR
     #: 要素サイズ[mm]。省くと上限側(既定)。
     element_size_mm: Optional[float] = None
-    #: 最小幅[mm]。省くと既定 `max(2 × 実spacing, 1.0mm)` を使う(2026-09-22本人決定)。
-    #: 下限は要素サイズの2倍(`_resolve_min_width`)。
+    #: 最小幅[mm]。省くと既定 = 選べるいちばん細い段(`min_width_cell_range` の下限の m)。
     min_width_mm: Optional[float] = None
     #: 形状探索の評価予算(`binary_search.find_best_feasible` の
     #: `max_evaluations`。段階3・段階4を通した1本の予算)。省くとそちらの既定(1000)。
@@ -477,23 +487,28 @@ def _not_done(
 # --------------------------------------------------------------------------------------
 # 解像度(要素サイズ)をどう決めるか
 # --------------------------------------------------------------------------------------
-def resolution_limits(doc: "Document") -> dict:
+def resolution_limits(doc: "Document", element_size_mm: Any = None) -> dict:
     """要素サイズの**上限**(これより粗いと間違う)と**下限**(これより細かくはできない)。
 
-        {"max_element_size_mm": float,        # 条件面からの要求
+    `element_size_mm` を渡すと、その値を選んだときの段(`steps` の1件と同じ形)を `selected` に、
+    範囲外・不正なら理由を `selected_error` に入れ、渡した値を `requested_element_size_mm` に返す
+    (画面の自由入力。段の中身は格子の数え方を持つサーバが作る)。
+
+        {"max_element_size_mm": float,        # min(MAX_ELEMENT_SIZE_MM, 条件面からの要求)
          "min_element_size_mm": float,        # 設計空間の要素数の上限(見積もり)から
          "default_element_size_mm": float,    # 既定 = 上限側(いちばん粗くて安い)
          "from_condition_faces_mm": float,    # min(sqrt(条件面のCAD面積))
+         "max_element_size_cap_mm": float,    # MAX_ELEMENT_SIZE_MM
          "condition_faces": [{...}, ...],
          "bbox_min"/"bbox_max": [x,y,z],      # 条件の外接直方体(余白なし)
          "max_design_elements": int}
 
-    **上限は条件面からの要求で決まる**(拘束面・荷重面に格子節点が付く大きさ)。
+    **上限は固定値 `MAX_ELEMENT_SIZE_MM` と条件面からの要求(拘束面・荷重面に格子節点が付く大きさ)の細かい方。**
     **密度フィルタ半径(rmin)は上限に効かない**(解像度の上限からrmin/MIN_RMINを
     除去」——二値探索は密度フィルタを持たないので、最小部材幅からの要求という概念自体が無い)。
     **利用者に聞かない**。`anchor.AnchorTable.empty_face_diagnosis` の
     `suggested_max_spacing_mm` と**同じ式**(`sqrt(CAD面積)`)を使う。**近似であって保証ではない**
-    (`done/20260904-1556` の契約②)—— 正方形とみなした代表寸法なので、曲面や極端な縦横比の面
+    (`docs/contracts/topopt-design-space.md` の `20260904-1556` 契約②)—— 正方形とみなした代表寸法なので、曲面や極端な縦横比の面
     では過大にも過小にもなる。厳密に確かめる手段は「その要素サイズで実際に `empty_faces()` を
     取り直す」しかない。
 
@@ -530,7 +545,7 @@ def resolution_limits(doc: "Document") -> dict:
         raise OptimizeInputError("拘束面・荷重面が1枚も無いので解像度を決められない")
 
     from_faces = min(item["suggested_max_spacing_mm"] for item in faces)
-    upper = from_faces
+    upper = min(from_faces, MAX_ELEMENT_SIZE_MM)
 
     lo, hi = _condition_bbox(doc)
     volume = _design_volume(doc)
@@ -543,21 +558,32 @@ def resolution_limits(doc: "Document") -> dict:
     # `_resolve_element_size` が「下限より細かい」と断らないため)。分割数は変わらないので要素数も変わらない。
     lower = _snap_to_grid(lo, hi, _min_element_size(lo, hi, volume))
 
-    return {
+    limits = {
         "max_element_size_mm": upper,
         "min_element_size_mm": lower,
         "default_element_size_mm": upper,
         # **粗い側の端から細かい方向へだけ**動く目盛り(添字0が既定=上限側)。
         "steps": _resolution_steps(lo, hi, upper, lower, volume),
         "from_condition_faces_mm": from_faces,
+        "max_element_size_cap_mm": MAX_ELEMENT_SIZE_MM,
         "condition_faces": faces,
         "bbox_min": [float(v) for v in lo],
         "bbox_max": [float(v) for v in hi],
         "max_design_elements": MAX_DESIGN_ELEMENTS,
-        # **上限側が下限を下回る**(部品に対して条件面が小さすぎる)ときは、設計空間の要素数の上限に
+        # **上限側が下限を下回る**(部品に対して条件面が小さすぎる、または部品が大きすぎて上限の固定値まで細かくすると)ときは、設計空間の要素数の上限に
         # 引っかかって「間違わない解像度」が作れない。画面はここを見て断る。
         "feasible": lower <= upper,
     }
+    if element_size_mm is None:
+        return limits
+    limits["requested_element_size_mm"] = element_size_mm
+    try:
+        size = _snap_to_grid(lo, hi, _resolve_element_size(limits, element_size_mm))
+    except (OptimizeInputError, TypeError, ValueError) as error:
+        limits["selected_error"] = str(error)
+    else:
+        limits["selected"] = _resolution_step(lo, hi, size, volume, index=-1)
+    return limits
 
 
 def _resolution_steps(lo, hi, upper: float, lower: float, volume: float) -> List[dict]:
@@ -588,22 +614,25 @@ def _resolution_steps(lo, hi, upper: float, lower: float, volume: float) -> List
         # 「いちばん細かい」が選べない目盛りになる)。
         # 各段も実格子の要素サイズへ揃える(画面に出す値と `derive` が作る格子を一致させる)。
         size = lower if index == count - 1 else _snap_to_grid(lo, hi, upper * (ratio ** index))
-        shape = _grid_shape(lo, hi, size)
-        elements = _design_element_estimate(volume, size)
-        if elements in seen:
+        step = _resolution_step(lo, hi, size, volume, index=len(steps))
+        if step["design_elements_estimate"] in seen:
             continue
-        seen.add(elements)
-        steps.append(
-            {
-                "index": len(steps),
-                "element_size_mm": float(size),
-                "design_elements_estimate": int(elements),
-                "min_width_floor_mm": float(2.0 * size),
-                "min_width_ceiling_mm": float(min(shape) * size),
-                "min_width_steps_mm": min_width_steps_mm(size, min(shape)),
-            }
-        )
+        seen.add(step["design_elements_estimate"])
+        steps.append(step)
     return steps
+
+
+def _resolution_step(lo, hi, size: float, volume: float, *, index: int) -> dict:
+    """要素サイズ `size`(実格子へ揃えた値)の段1件。梯子の段と自由入力の `selected` が同じ形を使う。"""
+    shape = _grid_shape(lo, hi, size)
+    return {
+        "index": int(index),
+        "element_size_mm": float(size),
+        "design_elements_estimate": int(_design_element_estimate(volume, size)),
+        "min_width_floor_mm": float(min_width_cell_range(size, min(shape))[0] * size),
+        "min_width_ceiling_mm": float(min_width_cell_range(size, min(shape))[1] * size),
+        "min_width_steps_mm": min_width_steps_mm(size, min(shape)),
+    }
 
 
 def _face_max_spacing_mm(cad_area_mm2: float) -> float:
@@ -612,7 +641,7 @@ def _face_max_spacing_mm(cad_area_mm2: float) -> float:
     `anchor.AnchorTable.empty_face_diagnosis` の `suggested_max_spacing_mm` と**同じ式**
     (正方形とみなした代表寸法 `sqrt(CAD面積)`)。probe 側は空になった面の逃げ道として、
     ここは事前の解像度の決め方として同じ数字を使う。**近似であって保証ではない**
-    (`done/20260904-1556` の契約②)—— 曲面・極端な縦横比では過大にも過小にもなる。
+    (`docs/contracts/topopt-design-space.md` の `20260904-1556` 契約②)—— 曲面・極端な縦横比では過大にも過小にもなる。
     値が一致していることは `topopt_checks/check_optimize_wiring.py` [8] が突き合わせる。
     """
     area = float(cad_area_mm2)
@@ -1428,17 +1457,21 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     if not limits["feasible"]:
         raise OptimizeInputError(
             f"要素サイズの上限 {upper:.4g} mm が下限 {lower:.4g} mm を下回っている"
-            f"(設計空間の要素数の上限 {MAX_DESIGN_ELEMENTS} に収まらない)。条件面をもっと大きい面に取り直すこと"
+            f"(設計空間の要素数の上限 {MAX_DESIGN_ELEMENTS} に収まらない)。上限は条件面からの要求と固定値 "
+            f"{MAX_ELEMENT_SIZE_MM:g} mm の細かい方。条件面が小さいなら大きい面に取り直し、部品が大きいなら設計空間を小さくすること"
         )
     if requested is None:
         return upper
     value = float(requested)
     if not math.isfinite(value) or value <= 0.0:
         raise OptimizeInputError(f"element_size_mm は有限の正の値であること(いま {requested!r})")
-    if value > upper:
+    # 上限は実格子へ切り下げた値(4mm → 3.98mm など)なので、切り下げる前の値までは受ける。`_snap_to_grid` は
+    # 要求以下の実 spacing しか返さず単調なので、受けた値の実格子は切り下げた上限を超えない。
+    unsnapped = min(float(limits.get("from_condition_faces_mm", upper)), float(limits.get("max_element_size_cap_mm", upper)))
+    if value > max(upper, unsnapped) * (1.0 + 1e-12):
         raise OptimizeInputError(
             f"要素サイズ {value:.4g} mm は上限 {upper:.4g} mm より粗い"
-            "(条件面に格子節点が付かなくなる)"
+            f"(条件面に格子節点が付かなくなるか、固定値 {MAX_ELEMENT_SIZE_MM:g} mm を超えて完成形の安全率が測れなくなる)"
         )
     if value < lower:
         raise OptimizeInputError(
@@ -1448,67 +1481,74 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     return value
 
 
+def min_width_cell_range(spacing: float, max_cells: Optional[int]) -> tuple:
+    """選べる m の範囲 `(下限, 上限)`。`max_cells`(格子の最短の辺のセル数)が `None` なら上限は `None`。
+
+    下限は `m × spacing ≥ MIN_WIDTH_FLOOR_MM` を満たす最小の m で、m=1(最小幅の規則なし)にはしない。
+    上限は `floor(max_cells × MIN_WIDTH_CEILING_RATIO)`。上限が下限を下回れば、この解像度で選べる段は無い。
+    """
+    spacing = float(spacing)
+    lower = max(2, int(math.ceil(MIN_WIDTH_FLOOR_MM / spacing - 1e-9)))
+    upper = None if max_cells is None else int(math.floor(int(max_cells) * MIN_WIDTH_CEILING_RATIO + 1e-9))
+    return lower, upper
+
+
 def min_width_steps_mm(spacing: float, max_cells: int) -> List[float]:
-    """この解像度で保証できる最小幅の段(m = 2..max_cells の `m × spacing`)。
+    """この解像度で選べる最小幅の段(`min_width_cell_range` の m の `m × spacing`)。
 
     各値は `_resolve_min_width` に渡すとちょうどその m になる形へ揃える: 浮動小数の丸めで
     `m × spacing / spacing` が m を超える(0.1×3/0.1 → 4)ときは、値を1ulpずつ下げる。
     """
     spacing = float(spacing)
-    steps: List[float] = []
-    for cells in range(2, int(max_cells) + 1):
-        value = cells * spacing
-        while math.ceil(value / spacing) > cells:
-            value = math.nextafter(value, 0.0)
-        steps.append(float(value))
-    return steps
+    lower, upper = min_width_cell_range(spacing, max_cells)
+    return [_cells_value(spacing, cells) for cells in range(lower, upper + 1)]
+
+
+def _cells_value(spacing: float, cells: int) -> float:
+    value = cells * spacing
+    while math.ceil(value / spacing) > cells:
+        value = math.nextafter(value, 0.0)
+    return float(value)
 
 
 def _resolve_min_width(spacing: float, requested: Optional[float], max_cells: Optional[int] = None) -> dict:
     """最小幅[mm]の入口検査(`_resolve_element_size` と同じ形)。
 
-    `None` → 既定 `max(2 × spacing, 1.0mm)`(2026-09-22本人決定)。下限(`2 × spacing`。8等分した評価格子で
-    4セル分が見える最小の幅、案B)そのものなので、1.0mm が効くのは `spacing < 0.5mm` のときだけ。
-    有限の正の値でなければ `OptimizeInputError`。`2 × spacing` を下回る明示の値も同じ例外。
-    `max_cells`(格子の最短の辺のセル数)を渡すと、`max_cells × spacing` を超える値も断る
-    (m 立方が格子に1つも入らず、空マスク以外は必ず違反になる不可能な値。巨大な値は導出の後に時間とメモリを使い切る)。
-    通れば `m = ceil(値 / spacing)` を、実際に保証される幅 `m × spacing` と、既定を採用したか(`source`)と
-    一緒に返す。**`requested_mm` は既定のときも実際に使った値**(`None` のままだと呼び出し側が
+    `None` → 既定 = 選べるいちばん細い段(`min_width_cell_range` の下限の m)。有限の正の値でなければ
+    `OptimizeInputError`。`m = ceil(値 / spacing)` が下限の m を下回る値も同じ例外。`max_cells`(格子の最短の辺の
+    セル数)を渡すと、上限の段 `上限の m × spacing` を超える値も断る(上限が下限を下回れば、どの値も断る)。
+    通れば m を、実際に保証される幅 `m × spacing` と、既定を採用したか(`source`)と一緒に返す。
+    **`requested_mm` は既定のときも実際に使った値**(`None` のままだと呼び出し側が
     「未指定=制約なし」と読みうる。`web/src/session.ts` の `min_width` 型コメント)。
     """
     spacing = float(spacing)
+    lower, upper = min_width_cell_range(spacing, max_cells)
+    if upper is not None and upper < lower:
+        raise OptimizeInputError(
+            f"この解像度では選べる最小幅が無い(下限 {lower} セル = {lower * spacing:.4g} mm({MIN_WIDTH_FLOOR_MM:g} mm 以上)が、"
+            f"上限 {upper} セル(格子の最短の辺 {max_cells} セルの {MIN_WIDTH_CEILING_RATIO:g})を上回る)。要素サイズを下げること"
+        )
     if requested is None:
-        value, source = max(2.0 * spacing, 1.0), "default"
+        value, source = _cells_value(spacing, lower), "default"
     else:
         value, source = float(requested), "requested"
     if not math.isfinite(value) or value <= 0.0:
         raise OptimizeInputError(f"min_width_mm は有限の正の値であること(いま {requested!r})")
-    floor = 2.0 * spacing
-    if value < floor:
-        raise OptimizeInputError(
-            f"最小幅 {value:.4g} mm は下限 {floor:.4g} mm(要素サイズ {spacing:.4g} mm の2倍)より細い。"
-            "最小幅を上げるか、要素サイズを下げること"
-        )
     cells = int(math.ceil(value / spacing))
-    if max_cells is not None:
-        ceiling = max_cells * spacing
-        # 上限そのものの値は `value / spacing` の丸めで max_cells を超えうるので、mm で比べて m を丸める
-        # (画面が出す上限と同じ比較にするため)。
+    if cells < lower:
+        raise OptimizeInputError(
+            f"最小幅 {value:.4g} mm は下限 {lower * spacing:.4g} mm({lower} セル。{MIN_WIDTH_FLOOR_MM:g} mm 以上で"
+            f"いちばん細い段)より細い。選べる段から選ぶこと"
+        )
+    if upper is not None:
+        ceiling = upper * spacing
+        # 上限そのものの値は `value / spacing` の丸めで upper を超えうるので、mm で比べて m を丸める
         if value > ceiling:
-            if source == "default":
-                # 利用者は最小幅を入れていないので「最小幅を下げよ」ではなく「要素サイズを下げよ」と言う。
-                # 既定値の内訳(2×spacing か 1.0mm か)は spacing に依るので、ここでは断定しない。
-                raise OptimizeInputError(
-                    f"最小幅の指定が無いので既定 {value:.4g} mm(max(要素サイズ {spacing:.4g} mm の2倍, "
-                    f"1.0 mm))を使ったが、設計空間の最短の辺({max_cells}セル × 要素サイズ = {ceiling:.4g} mm)"
-                    "がそれより細い。要素サイズを下げること"
-                )
             raise OptimizeInputError(
-                f"最小幅 {value:.4g} mm は上限 {ceiling:.4g} mm(格子の最短の辺 {max_cells} セル × 要素サイズ "
-                f"{spacing:.4g} mm)より太い。この幅の立方は格子に入らないので、どの形も満たせない。"
-                "最小幅を下げるか、要素サイズを上げること"
+                f"最小幅 {value:.4g} mm は上限 {ceiling:.4g} mm({upper} セル = 格子の最短の辺 {max_cells} セルの "
+                f"{MIN_WIDTH_CEILING_RATIO:g})より太い。選べる段から選ぶこと"
             )
-        cells = min(cells, int(max_cells))
+        cells = min(cells, upper)
     return {"requested_mm": value, "spacing_mm": spacing, "cells": cells, "guaranteed_mm": cells * spacing,
             "source": source}
 

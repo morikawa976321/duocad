@@ -1,7 +1,7 @@
 # 段階5: 合成題材の比較・機構別検証
 
 2026-09-29。`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「0〜2レビュー後の訂正と実行順序」節の
-`20260928-1426-topopt-idle-05-synthetic`。着手前に `taskbox/done/20260928-1426-topopt-idle-04a-path-qualification.md`
+`20260928-1426-topopt-idle-05-synthetic`。着手前に `docs/contracts/topopt-idle-validation-runs.md`(出典 `20260928-1426-topopt-idle-04a-path-qualification`)
 「## 後続への契約」・`04A_PATH_QUALIFICATION.md`・`REVIEW_00_02_2026-09-28.md` を読んだ。
 
 ## 結論(先に要約)

@@ -118,7 +118,7 @@ export interface CommandArguments {
   get_vertices: { body_id: string }
   set_view_resolution: { world_per_pixel: number; size_hint?: number }
   optimize_conditions: Record<string, never>
-  optimize_resolution: Record<string, never>
+  optimize_resolution: { element_size_mm?: number }
   run_optimization: { element_size_mm?: number; target_safety_factor?: number; max_evaluations?: number }
   cancel_optimization: Record<string, never>
   get_edges: { body_id: string }

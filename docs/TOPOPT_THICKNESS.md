@@ -12,7 +12,7 @@
 
 **外部の罠(FEM中心評価の性質)**: 中心評価は表面ではなく半セル内側でしか値を取れないため、層数を増やしても参照解(n=16)自体に2.55%の残差が残る。n=1 で理論中心値が厳密に0になるのは中立軸と要素中心が一致するためでバグではない。既存検査(`check_stress.py`)は層数8・16・24でしか検証しておらず、1〜4層の取りこぼしを検出できていなかった。
 
-再現: `.\.venv\Scripts\python.exe topopt_checks\measure_thickness_layers.py --ns 1 2 3 4 8 --reference-n 16`(64.3秒、`output/` には何も残さない)。
+再現: 測定スクリプト `measure_thickness_layers.py --ns 1 2 3 4 8 --reference-n 16`(64.3秒、`output/` には何も残さない)は312aac5で撤去した(再現にはその前のコミットが要る)。
 
 ## B. ボクセル化の「個数」判定は位置合わせに依存する
 
@@ -20,7 +20,7 @@
 
 **外部の罠(ボクセル化の量子化位相)**: 比0.8・1.0では、CAD原点をわずかにずらすだけで判定が **stop(0要素)⇔pass(8要素以上)** の間を直接行き来する(警告帯1〜7要素を一度も通らない)。板がxy方向に大きいため1層でも占有すれば一気に閾値を超えるのが理由。同じ要素サイズでも位置合わせだけで「表現できていません」から「表現できています」まで結果が変わりうる。
 
-再現: `measure_thickness_layers.py --section b`(9秒)。
+再現: `measure_thickness_layers.py --section b`(9秒。撤去済み、312aac5)。
 
 ## C・D・E. 小さい塊状の保持ソリッドでの判定と境界条件
 
@@ -30,7 +30,7 @@
 - **D(境界条件ゲートの独立性)**: `_region_representation`(個数ゲート)と `_map_boundary_conditions`(確定表)は独立に動く。**stop(0要素)と判定された54ケース中13ケース(cube 9件全部・cylinder 4件)で、確定表はpass(境界条件は成立)してしまう**。stopと判定された側の一部では荷重面節点が**1個だけ**に集中する(cube比1.0 shift=0.50、比0.5 shift=0.25/0.50、比0.8 shift=0.00。他数件も同様)。一方、警告帯(1〜7要素)の18ケースでは確定表は全てpassし、荷重面節点は最小4個で、1〜2個への集中は一度も起きなかった。
 - **E(応力の跳ね)**: 警告帯の代表2ケースをρ=1固定・要素サイズ1/3の参照解と比較すると、粗い方が52%高い(安全側に見える=過小評価)ケースと29%低い(危険側=過大評価)ケースの両方が出た。サンプル2件のみで一般化はできない。
 
-再現: `measure_small_keep_bodies.py --section all`(16.4秒)。
+再現: `measure_small_keep_bodies.py --section all`(16.4秒。撤去済み、312aac5)。
 
 ## F・G. 採用マスク自体の部材厚み(hanger、4.8mm・2.4mm)
 
@@ -45,7 +45,7 @@
 
 **要素単位ではほぼ一定(約2.0〜2.05要素)、mm単位では解像度に反比例して半分になる**(9.81mm→4.90mm)。「約9.5mm前後で一定」という仮説は否定された。保持ソリッド由来を除いても割合はほぼ変わらず、最適化が新たに作る部分自体が薄い。応力分位の比較(薄い部分 vs 全体)は母集団がほぼ同一のため意味を持たなかった。4.8mmと2.4mmは異なるコード版(`peel`方式の置き換え前後)での測定であり、同じ段階の比較にはなっていない。2.0mmは同一機械上で別セッションと競合しメモリ不足(空き0.18GB)で打ち切った——**要素数30万を超える探索はピークメモリ7〜11GB超になりうるので、着手前に十分な空きメモリを確認する**。
 
-再現: `measure_member_thickness.py --spacing 2.4 --max-evaluations 60`(競合込みで約60分、ピークメモリ6.95GB)。`search.history`・ピークメモリまで取るには `verify_hanger_fix.verify` をラップする必要がある(`run_search_capturing_space` を経由)。
+再現: `measure_member_thickness.py --spacing 2.4 --max-evaluations 60`(競合込みで約60分、ピークメモリ6.95GB。スクリプトは撤去済み、312aac5)。`search.history`・ピークメモリまで取るには `verify_hanger_fix.verify` をラップする必要があった(`run_search_capturing_space` を経由)。
 
 ## H. 採用形状を「形は変えず格子だけ細かくして」解き直すと、安全率が下がる
 
@@ -165,11 +165,13 @@ hangerが唯一の実部品であることを補うため、**曲げ支配・引
 
 ## 再現手順の要点
 
+以下のうち `measure_thickness_layers.py`・`measure_small_keep_bodies.py`・`measure_member_thickness.py`・`measure_inner_target_synthetic.py` は312aac5で撤去した(再現にはその前のコミットが要る)。
+
 - A: `measure_thickness_layers.py --ns 1 2 3 4 8 --reference-n 16`
 - B: `measure_thickness_layers.py --section b`
 - C・D・E: `measure_small_keep_bodies.py --section all`(個別は `--section c` / `d` / `e`)
 - F・G: `measure_member_thickness.py --spacing <2.4|4.8> --max-evaluations 60`(`search.history` 等を取るには `verify_hanger_fix.verify` をラップする)
 - H〜N: `measure_min_width_floor.py --cells <m> --budget <n> --target <目標> --element-size <mm>` で探索、`refine_adopted_mask.py --mask-npz <npz> --k 1 2 3 [4]` で細分
-- O: `measure_inner_target_synthetic.py {calibrate,chain,search,refine}`(このスクリプトは事後に削除された。再現には `fb7d0fb` 前後のコミットが要る)
+- O: `measure_inner_target_synthetic.py {calibrate,chain,search,refine}`(このスクリプトは事後に削除された。再現には `fb7d0fb` 前後のコミットが要る。312aac5 で撤去)
 
 **共通の実務上の注意**: 高解像度(2.0mm相当、設計空間30万セル超)の探索はピークメモリ7〜11GB超になりうる。他プロセスと並走すると空きメモリ不足で強制終了することがあるので、着手前に空き10GB以上を確認し、同時に2本走らせない。`output/` はgit管理外なので、このドキュメントは実行結果のパスではなく数値そのものを記録している。
