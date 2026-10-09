@@ -2,7 +2,7 @@
 name = "duocad"
 version = "0.0.1"
 description = "自作3DCAD duocad — M0: コアの骨格（文書・操作ログ・STEP入出力）"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "build123d==0.11.1",
     "cadquery-ocp-novtk==7.9.3.1.1",

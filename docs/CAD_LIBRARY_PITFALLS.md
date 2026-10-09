@@ -122,9 +122,11 @@
 - **`.venv` は uv 管理で pip が無い**(`python -m pip` は `No module named pip`)。パッケージ操作は
   `uv pip ...`。依存の解決だけ見るなら
   `uv pip install --dry-run --python ./.venv/Scripts/python.exe <package>`。
-  Python は 3.11.15(`pyproject.toml` が `>=3.11,<3.12`)。宣言依存は build123d / cadquery-ocp-novtk /
-  pytest / websockets の4件で、numpy 2.4.6 / scipy 1.17.1 は推移依存で既に入っている
-  (scikit-image は形状最適化のために手で入れてある。[TOPOPT.md](TOPOPT.md))。
+  Python は 3.14(`pyproject.toml` が `>=3.14,<3.15`)。上限は C 拡張の固定版(cadquery-ocp-novtk /
+  gudhi / manifold3d / scikit-image)の Windows 用 wheel が cp314 までしか無いことで決まる。
+  `uv sync` は uv 管理の 3.14 が無ければ Python インストールマネージャの
+  `%LOCALAPPDATA%\Python\pythoncore-3.14-64` を拾って `.venv` を作る(それを消すと `.venv` も壊れる)。
+  宣言依存は `pyproject.toml` のとおりで、numpy 2.4.6 / scipy 1.17.1 は推移依存で入っている。
   入っていないもの: trimesh・pyvista・vtk・gmsh・matplotlib・numba・cupy・torch・pyamg・scikit-sparse・meshio。
 - **検査の在庫は `.\.venv\Scripts\python.exe -m pytest -q --collect-only` で数える。**
   在庫は `--collect-only`、**契約と「なぜその形か」は各モジュールの docstring** —— 片方を

@@ -1200,5 +1200,5 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
 | `output/optimized.stl` | `check_mesh.py`[7] STLの往復で書き出したSTL |
 | `output/check_design_space_case1.stl` | 案1で端から端まで通した実行(`check_design_space.py`検査5)で書き出したSTL |
 
-`.venv`(Python 3.11.15/numpy 2.4.6/scipy 1.17.1/**scikit-image 0.26.0**)。この venv は uv 管理で
+`.venv`(Python 3.14/numpy 2.4.6/scipy 1.17.1/**scikit-image 0.26.0**)。この venv は uv 管理で
 **pipが入っていない**(`uv pip ...`を使う。[CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md))。
