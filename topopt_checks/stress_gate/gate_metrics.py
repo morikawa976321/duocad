@@ -89,3 +89,40 @@ def distance_to_points(grid, points) -> np.ndarray:
     pts = np.stack([xx, yy, zz], axis=-1).reshape(-1, 3)
     d, _ = cKDTree(np.asarray(points, float)).query(pts, k=1)
     return d.reshape(xx.shape)
+
+
+# 面中心の応力(表面のピークの代理)。要素中心は曲げの表面応力を (1-1/n) に過小評価するが、
+# 面中心なら現行の要素でも 2 層で 0.954(docs/TOPOPT_TARGET_FACTOR.md §4.3)。
+_FACE_POINTS = ((-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1))
+
+
+def _b_at(xi, eta, zeta):
+    from duocad.topopt import fem
+    s = fem.NODE_SIGNS
+    grad = np.empty((8, 3))
+    grad[:, 0] = 0.25 * s[:, 0] * (1 + s[:, 1] * eta) * (1 + s[:, 2] * zeta)
+    grad[:, 1] = 0.25 * (1 + s[:, 0] * xi) * s[:, 1] * (1 + s[:, 2] * zeta)
+    grad[:, 2] = 0.25 * (1 + s[:, 0] * xi) * (1 + s[:, 1] * eta) * s[:, 2]
+    return fem.strain_displacement(grad)
+
+
+def exposed_face_vm(model, u, mask, stress_factor):
+    """材料の表面に出ている面(隣が空隙か格子の外)の面中心の von Mises [MPa]。形 (nx,ny,nz,6)、表面でない面は nan。
+
+    面の順は (-x,+x,-y,+y,-z,+z)。`stress_factor` は無次元→MPa の係数(`UnitScale.stress_factor`)。
+    """
+    from duocad.topopt import fem, stress
+    vec = np.asarray(u, float).ravel()[model.edof]  # (ne,24)
+    d = fem.elasticity_matrix(model.E, model.nu)
+    out = np.full(mask.shape + (6,), np.nan)
+    padded = np.pad(mask, 1, constant_values=False)
+    for f, (xi, eta, zeta) in enumerate(_FACE_POINTS):
+        axis = f // 2
+        step = -1 if f % 2 == 0 else 1
+        sl = [slice(1, -1)] * 3
+        sl[axis] = slice(1 + step, padded.shape[axis] - 1 + step)
+        exposed = mask & ~padded[tuple(sl)]
+        tensor = (vec @ (d @ _b_at(xi, eta, zeta)).T).reshape(mask.shape + (6,))
+        vm = stress.von_mises(tensor) * stress_factor
+        out[..., f] = np.where(exposed, vm, np.nan)
+    return out

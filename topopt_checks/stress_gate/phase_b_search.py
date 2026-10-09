@@ -32,6 +32,7 @@ sys.path.insert(0, str(HERE))
 import phase_a_fields as pa  # noqa: E402  (sys.path・_bootstrap はこちらで済む)
 
 import numpy as np  # noqa: E402
+from scipy import ndimage  # noqa: E402
 
 import _fem_probe  # noqa: E402
 import refine_shape  # noqa: E402
@@ -55,7 +56,8 @@ def zone_ball(vm, mask, dist_fixed, h, w, d, keep=None, dist_load=None):
     return float(gm.ball_mean_field(vm, mask, w, h)[zone].max())
 
 
-def make_rep(gate, *, h, w, c, d, keep, dist_fixed, dist_load, baseline_mm3, zone_full, eps, target, log):
+def make_rep(gate, *, h, w, c, d, keep, dist_fixed, dist_load, baseline_mm3, zone_full, eps, target, log,
+             fields_by_mask=None, peak_full=0.0, surface_box=None):
     cell = h ** 3
 
     def rep(field, rho, **kw):
@@ -87,8 +89,28 @@ def make_rep(gate, *, h, w, c, d, keep, dist_fixed, dist_load, baseline_mm3, zon
             value = max(value, target * zb / limit)  # 両方が目標以下のときだけ代表応力が目標以下
         elif gate == "unified":  # 境界域は判定せず記録だけ(探索中の推移を後で見る)
             entry["zone_ball"] = zone_ball(vm, mask, dist_fixed, h, w, d, keep, dist_load)
+        elif gate == "unified_peak":
+            # ピーク(判定域=保持外・拘束/荷重節点から d 超、の要素中心の最大)を、全材料のピークの (1+ε) 倍か
+            # 目標応力の大きい方以下に保つ。全材料のピークは利用者の形が決める下限で、探索はそれを作り増さない
+            region = mask & ~keep & (dist_fixed > d) & (dist_load > d)
+            peak = float(vm[region].max()) if region.any() else 0.0
+            limit = max(target, (1.0 + eps) * peak_full)
+            entry["peak"] = peak
+            value = max(value, target * peak / limit)
+        elif gate == "unified_speak":
+            # 表面(露出面)の面中心 von Mises の最大で同じことをする。面の場は stress.evaluate の差し替えが直前に置く
+            region = mask & ~keep & (dist_fixed > d) & (dist_load > d)
+            face = surface_box.get("face")
+            peak = float(np.nanmax(face[region])) if face is not None and region.any() else 0.0
+            limit = max(target, (1.0 + eps) * peak_full)
+            entry["peak"] = peak
+            value = max(value, target * peak / limit)
         entry["used"] = float(value)
         log.append(entry)
+        if fields_by_mask is not None:
+            fields_by_mask[np.packbits(mask).tobytes()] = vm
+            while len(fields_by_mask) > 4:  # hanger の場は1つ 8MB 級。直近の候補だけ持つ
+                fields_by_mask.pop(next(iter(fields_by_mask)))
         return dataclasses.replace(real, value=float(value))
 
     return rep
@@ -110,7 +132,8 @@ def main() -> int:
     ap.add_argument("--model", required=True, choices=list(pa.MODELS))
     ap.add_argument("--gate", required=True, choices=["current", "qv", "qv_design", "qv_baseline", "qv_out", "qv_out_zball", "qv_out_zrel",
                                                            "split_zball", "split_zrel",
-                                                           "unified", "unified_zball", "unified_zrel"])
+                                                           "unified", "unified_zball", "unified_zrel", "unified_peak",
+                                                           "unified_speak"])
     ap.add_argument("--eps", type=float, default=0.1)
     ap.add_argument("--shift", type=float, default=0.0, help="格子原点を全軸で h×shift ずらす")
     ap.add_argument("--c", type=float, default=1.0)
@@ -123,6 +146,9 @@ def main() -> int:
     ap.add_argument("--refine", nargs="*", type=int, default=[2, 3])
     ap.add_argument("--max-evaluations", type=int, default=1000)
     ap.add_argument("--tag", default="")
+    ap.add_argument("--halo", type=int, default=0,
+                    help="削除候補から外す、高応力セル(保持外・拘束/荷重面の1層の外で σ ≥ α·σt)のまわりのセル数(0 で無効)")
+    ap.add_argument("--halo-alpha", type=float, default=1.0)
     a = ap.parse_args()
     spec = dict(pa.MODELS[a.model])
     for key, val in (("load_n", a.load), ("h", a.h), ("w", a.w)):
@@ -154,25 +180,65 @@ def main() -> int:
     dist_load = load_distance(ctx)
     full = np.asarray(ctx.space.mask, bool)
     vm_full, _ = pa.solve(full, ctx)
+    surface_box: dict = {}
+    real_evaluate = stress.evaluate
+
+    def evaluate_with_surface(model, rho, *, scale, u, **kw):
+        surface_box["face"] = gm.exposed_face_vm(model, u, np.asarray(rho) >= 0.5, scale.stress_factor)
+        return real_evaluate(model, rho, scale=scale, u=u, **kw)
+
+    if a.gate == "unified_speak":
+        cnd = ctx.cond
+        pr = _fem_probe.evaluate_full(full, ctx.grid, ctx.table, cnd.fixed_faces, cnd.load_faces, cnd.forces,
+                                      allowable_mpa=cnd.allowable_mpa, youngs_modulus_mpa=cnd.youngs_modulus_mpa,
+                                      percentile=stress.DEFAULT_PERCENTILE, solver=cnd.solver)
+        fac = float(np.nanmax(vm_full[full]) / np.nanmax(stress.element_stress(pr["_model"], pr["_displacement"]).von_mises[full]))
+        face_full = gm.exposed_face_vm(pr["_model"], pr["_displacement"], full, fac)
     baseline = gm.exceed_volume(vm_full, full, h ** 3, target)
     zone_full = zone_ball(vm_full, full, dist_fixed, h, w, a.d, keep if a.gate.startswith(("split", "unified")) else None,
                           dist_load if a.gate.startswith("unified") else None)
+    region_full = full & ~keep & (dist_fixed > a.d) & (dist_load > a.d)
+    peak_full = float(vm_full[region_full].max()) if region_full.any() else 0.0
+    if a.gate == "unified_speak":
+        peak_full = float(np.nanmax(face_full[region_full])) if region_full.any() else 0.0
     log: list = []
+    rep_fields = {} if a.halo else None
     rep = make_rep(a.gate, h=h, w=w, c=a.c, d=a.d, keep=keep, dist_fixed=dist_fixed, dist_load=dist_load,
                    baseline_mm3=baseline,
-                   zone_full=zone_full, eps=a.eps, target=target, log=log)
+                   zone_full=zone_full, eps=a.eps, target=target, log=log, peak_full=peak_full,
+                   surface_box=surface_box,
+                   fields_by_mask=rep_fields)
+    real_ranked = binary_search.ranked_cells
+    halo_stats = dict(calls=0, protected_last=0)
+
+    def ranked_with_halo(mask, energy):
+        order = real_ranked(mask, energy)
+        vm = rep_fields.get(np.packbits(np.asarray(mask, bool)).tobytes()) if rep_fields is not None else None
+        if vm is None:
+            return order
+        hot = np.asarray(mask, bool) & ~keep & (dist_fixed > a.d) & (dist_load > a.d) & (vm >= a.halo_alpha * target)
+        halo = ndimage.binary_dilation(hot, structure=ndimage.generate_binary_structure(3, 3), iterations=a.halo) & ~hot
+        protected = np.flatnonzero((halo | hot).ravel())
+        halo_stats["calls"] += 1
+        halo_stats["protected_last"] = int(protected.size)
+        return order[~np.isin(order, protected)]
+
     t0 = time.perf_counter()
-    with patch.object(stress, "representative_stress", rep):
+    with patch.object(stress, "representative_stress", rep), \
+            patch.object(stress, "evaluate", evaluate_with_surface if a.gate == "unified_speak" else real_evaluate), \
+            patch.object(binary_search, "ranked_cells", ranked_with_halo if a.halo else real_ranked):
         result = binary_search.find_best_feasible(full, ctx.cond, max_evaluations=a.max_evaluations,
                                                   min_width_cells=ctx.min_width_cells)
     wall = time.perf_counter() - t0
     name = f"{a.model}_{a.gate}_c{a.c:g}" + (f"_d{a.d:g}" if a.gate.startswith(("qv_out", "split", "unified")) else "") + \
-        (f"_e{a.eps:g}" if a.gate.endswith("zrel") else "") + \
+        (f"_e{a.eps:g}" if a.gate.endswith(("zrel", "peak")) else "") + \
         (f"_{a.dist}" if a.dist != "aabb" else "") + \
-        f"_L{spec['load_n']:g}_h{h:g}_w{w:g}" + (f"_s{a.shift:g}" if a.shift else "") + (f"_{a.tag}" if a.tag else "")
+        f"_L{spec['load_n']:g}_h{h:g}_w{w:g}" + (f"_s{a.shift:g}" if a.shift else "") + \
+        (f"_halo{a.halo}a{a.halo_alpha:g}" if a.halo else "") + (f"_{a.tag}" if a.tag else "")
     out = dict(model=a.model, gate=a.gate, c=a.c, d=a.d, load_n=spec["load_n"], h=h, w=w, target_mpa=target,
                baseline_exceed_mm3=baseline, zone_ball_full=zone_full, eps=a.eps, shift=a.shift, dist=a.dist, status=result.status, termination=result.termination,
-               evaluations=result.evaluations, wall_s=wall, log=log)
+               evaluations=result.evaluations, wall_s=wall, log=log, halo=a.halo, halo_alpha=a.halo_alpha,
+               halo_stats=halo_stats, peak_full=peak_full)
     print(name, result.status, result.termination, f"eval={result.evaluations}", f"{wall:.0f}s", flush=True)
     (pa.OUT / "searches").mkdir(parents=True, exist_ok=True)
     dest = pa.OUT / "searches" / f"{name}.json"
