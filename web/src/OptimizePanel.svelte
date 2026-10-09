@@ -37,17 +37,7 @@
    * **`position: absolute` でフローの外**に置くので、`.viewport` の寸法＝カメラのアスペクトに
    * 触らない(styles.css の不変条件)。
    */
-  import {
-    chosenStep,
-    isOutOfRange,
-    judgeMinWidth,
-    minWidthProblem,
-    roundUpNotice,
-    shownCeilingMm,
-    shownGuaranteedMm,
-    shownElementSizeRange,
-    shownStepMm,
-  } from './minWidth'
+  import { chosenStep, shownElementSizeRange, shownMinWidthMm, stepCells } from './minWidth'
   import type {
     OptimizeConditionsReport,
     OptimizeProgress,
@@ -72,8 +62,7 @@
     resolution: OptimizeResolutionPayload | null
     /** 要素サイズの入力値[mm]。`null` = 空欄(既定 = 上限側)。 */
     elementSizeMm: number | null
-    /** 最小幅の入力値[mm]。`null` = 空欄(サーバーの既定 = 要素サイズの2倍と1mmの大きい方を使う)。
-     *  正の値そのもの(下限割れの判定はここではしない)。 */
+    /** 選んでいる最小幅の段[mm](`min_width_steps_mm` のどれか)。`null` = 既定(いちばん細い段)。 */
     minWidthMm: number | null
     running: boolean
     cancelling: boolean
@@ -114,40 +103,10 @@
     elementSizeSent = parsed
     onElementSize(parsed)
   }
-  /** 入力した最小幅の判定(下限・上限はサーバーが段ごとに配る。判定と表示は `minWidth.ts`)。 */
-  const minWidthVerdict = $derived(judgeMinWidth(minWidthMm, step))
-  const minWidthInvalid = $derived(isOutOfRange(minWidthVerdict))
-  const minWidthProblemText = $derived(step === null ? null : minWidthProblem(minWidthVerdict, step))
-  const minWidthGuaranteedText = $derived(shownGuaranteedMm(minWidthVerdict))
-  const minWidthRoundUpText = $derived(roundUpNotice(minWidthVerdict, minWidthMm))
-  const minWidthLowerStep = $derived(minWidthVerdict.kind === 'ok' ? minWidthVerdict.lowerStepMm : null)
-  const minWidthCells = $derived(minWidthVerdict.kind === 'ok' ? minWidthVerdict.cells : null)
-  const minWidthUpperStep = $derived(minWidthVerdict.kind === 'ok' ? minWidthVerdict.stepMm : null)
-  /**
-   * 最小幅の欄に**打っている文字列そのもの**。数値(`minWidthMm`)から欄へは書き戻さない —— 書き戻すと
-   * 「1.」→「1.0」と打つ途中で欄が「1」に化け、続けて打った「5」で「15」になる(Blink の
-   * `type=number` は打ちかけの「1.」を空文字として返す)。欄を書き換えるのは、値が外から変わった
-   * とき(段のボタン・文書の切り替え)だけ。
-   */
-  let minWidthText = $state('')
-  /** 欄から最後に送った値。`minWidthMm` がこれと違えば外から変わったので欄を書き直す。 */
-  let minWidthSent: number | null | undefined = undefined
-  $effect.pre(() => {
-    const value = minWidthMm
-    if (value === minWidthSent) return
-    minWidthSent = value
-    minWidthText = value === null ? '' : String(value)
-  })
-  /** 欄の文字列が数として読めない(空欄は読める = 既定)。 */
-  const minWidthUnreadable = $derived(minWidthText.trim() !== '' && !Number.isFinite(Number(minWidthText)))
-
-  function typeMinWidth(raw: string): void {
-    minWidthText = raw
-    const parsed = raw.trim() === '' ? null : Number(raw)
-    const value = parsed !== null && Number.isFinite(parsed) ? parsed : null
-    minWidthSent = value
-    onMinWidth(value)
-  }
+  /** 選べる最小幅の段(サーバーが配る。`optimize_run.min_width_cell_range`)。空なら この解像度では選べない。 */
+  const minWidthSteps = $derived(step?.min_width_steps_mm ?? [])
+  /** 効いている最小幅(`null` は既定 = いちばん細い段)。 */
+  const minWidthShown = $derived(minWidthMm ?? minWidthSteps[0] ?? null)
 
   /**
    * パネルの実高さ(+ブラウザとの間隔10px)を `.stage` の `--browser-bottom-reserve` へ渡す。
@@ -172,8 +131,6 @@
     }
   })
 
-  /** 段のボタンに並べる先頭の数(全段はサーバーが配る。残りは入力欄に打つか、切り上げ先の表示から辿る)。 */
-  const STEP_BUTTONS = 4
   const problems = $derived(conditions?.problems ?? [])
   /** 走らせられるか。**条件と目盛りの両方がそろって初めて押せる。** */
   const canRun = $derived(
@@ -181,9 +138,8 @@
       conditions !== null &&
       conditions.ready &&
       step !== null &&
-      !elementSizeUnreadable &&
-      !minWidthInvalid &&
-      !minWidthUnreadable,
+      minWidthSteps.length > 0 &&
+      !elementSizeUnreadable,
   )
 </script>
 
@@ -274,77 +230,29 @@
     </p>
     <label class="field-row">
       最小幅[mm]
-      <!-- **`type="number"` にしない**(上の `minWidthText`)。数字の鍵盤は `inputmode` で出す。 -->
-      <input
+      <!-- **段から選ぶだけ**(数値は打たせない)。段は 2mm 以上で最小の m から、格子の最短の辺の 1/4 まで
+           (`optimize_run.min_width_cell_range`。根拠の無い暫定値)。 -->
+      <select
         id="optimize-min-width"
-        type="text"
-        inputmode="decimal"
-        autocomplete="off"
-        placeholder="既定"
-        list="optimize-min-width-list"
-        class:invalid={minWidthInvalid || minWidthUnreadable}
-        value={minWidthText}
-        disabled={running}
-        oninput={(event) => typeMinWidth(event.currentTarget.value)}
-      />
-    </label>
-    <p id="optimize-min-width-default-hint" class="hint dim">
-      空欄なら既定(要素サイズの2倍と1mmの大きい方)を使う
-    </p>
-    <datalist id="optimize-min-width-list">
-      {#each step?.min_width_steps_mm ?? [] as value, index}
-        <option {value} label="m={index + 2}"></option>
-      {/each}
-    </datalist>
-    <!-- ボタンは丸めない値を入れる(`minWidth.ts` の `shownStepMm`)。 -->
-    {#if step !== null && step.min_width_steps_mm.length > 0}
-      <p id="optimize-min-width-steps" class="hint dim">
-        探索が守る立方の幅は段になる(要素サイズ × m。全セルがこの幅の立方に属するという規則で、部材の太さの保証ではない):
-        {#each step.min_width_steps_mm.slice(0, STEP_BUTTONS) as value, index}
-          <button
-            type="button"
-            class="step"
-            disabled={running}
-            onclick={() => onMinWidth(value)}>{shownStepMm(value)}mm(m={index + 2})</button
+        disabled={running || minWidthSteps.length === 0}
+        value={minWidthShown === null ? '' : String(minWidthShown)}
+        onchange={(event) => onMinWidth(Number(event.currentTarget.value))}
+      >
+        {#each minWidthSteps as value, index}
+          <option value={String(value)}
+            >{shownMinWidthMm(value)}(m={stepCells(step!, value)}){index === 0 ? ' 既定' : ''}</option
           >
         {/each}
-        {#if step.min_width_steps_mm.length > STEP_BUTTONS}…{/if}
-        上限 {shownCeilingMm(step)}mm
-      </p>
-    {/if}
-    {#if minWidthUnreadable}
-      <p id="optimize-min-width-note" class="hint bad">最小幅「{minWidthText}」が数として読めない</p>
-    {:else if minWidthProblemText !== null}
+      </select>
+    </label>
+    {#if step !== null && minWidthSteps.length === 0}
       <p id="optimize-min-width-note" class="hint bad">
-        {minWidthProblemText}。{minWidthVerdict.kind === 'below'
-          ? '値を上げるか、解像度を細かくすること'
-          : '値を下げるか、解像度を粗くすること'}
+        この要素サイズでは選べる最小幅が無い(2mm 以上の段が、格子の最短の辺の 1/4 に収まらない)。要素サイズを下げること
       </p>
-    {:else if minWidthRoundUpText !== null}
-      <p id="optimize-min-width-note" class="hint bad">
-        {minWidthRoundUpText}。
-        {#if minWidthLowerStep !== null}
-          <button
-            type="button"
-            class="step"
-            disabled={running}
-            onclick={() => onMinWidth(minWidthLowerStep)}
-            >{shownStepMm(minWidthLowerStep)}mm(m={(minWidthCells ?? 0) - 1})に下げる</button
-          >
-        {/if}
-        {#if minWidthUpperStep !== null}
-          <button
-            type="button"
-            class="step"
-            disabled={running}
-            onclick={() => onMinWidth(minWidthUpperStep)}
-            >{shownStepMm(minWidthUpperStep)}mm(m={minWidthCells})にそろえる</button
-          >
-        {/if}
-      </p>
-    {:else if minWidthGuaranteedText !== null}
+    {:else}
       <p id="optimize-min-width-note" class="hint dim">
-        探索が守る立方の幅: {minWidthGuaranteedText}mm(探索する形の規則で、完成形のつなぎ目の幅は実行後に診断する)
+        探索が守る立方の幅(要素サイズ × m。全セルがこの幅の立方に属するという規則で、部材の太さの保証ではない。
+        完成形のつなぎ目の幅は実行後に診断する)
       </p>
     {/if}
   {/if}
@@ -451,7 +359,6 @@
     margin-right: 2px;
   }
 
-  #optimize-min-width.invalid,
   #optimize-resolution.invalid {
     border-color: var(--bad);
   }

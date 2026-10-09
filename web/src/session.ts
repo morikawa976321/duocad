@@ -596,13 +596,13 @@ export interface OptimizeResolutionStep {
   element_size_mm: number
   /** 設計空間の要素数の**見積もり**(領域の体積 ÷ 要素の体積。実数ではない)。 */
   design_elements_estimate: number
-  /** この段を選んだときの最小幅の下限[mm](= 要素サイズの2倍)。サーバーが計算する
-   *  (画面は要素数の数え方を持たない、という既存方針と同じ)。 */
+  /** この段を選んだときの最小幅の下限[mm](= 2mm 以上で最小の m(m ≥ 2)× 要素サイズ)。サーバーが計算する
+   *  (画面は格子の数え方を持たない、という既存方針と同じ。`optimize_run.min_width_cell_range`)。 */
   min_width_floor_mm: number
-  /** この段を選んだときの最小幅の上限[mm](= 格子の最短の辺のセル数 × 要素サイズ)。これを超える立方は格子に入らない。 */
+  /** この段を選んだときの最小幅の上限[mm](= floor(格子の最短の辺のセル数 × 1/4)× 要素サイズ)。下限を下回れば選べる段は無い。 */
   min_width_ceiling_mm: number
-  /** この段で保証できる最小幅の段(m = 2, 3, … の `m × 要素サイズ`)。**入力すると、ちょうどその m になる値**
-   *  (`optimize_run.min_width_steps_mm`)。段のあいだの入力は次の段へ切り上がる。 */
+  /** この段で選べる最小幅の段(下限の m から上限の m までの `m × 要素サイズ`)。**渡すと、ちょうどその m になる値**
+   *  (`optimize_run.min_width_steps_mm`)。画面はここから選ぶだけで値を作らない。 */
   min_width_steps_mm: number[]
 }
 
@@ -700,7 +700,7 @@ export interface OptimizeResultPayload {
   termination: string | null
   element_size_mm: number
   /** 最小幅の解決結果(`optimize_run._resolve_min_width`)。未指定なら既定
-   *  `max(要素サイズの2倍, 1mm)`(2026-09-22本人決定)を採用し、`source` が `'default'` になる
+   *  = 選べるいちばん細い段を採用し、`source` が `'default'` になる
    *  (`requested_mm` は既定のときも実際に使った値で、`null` にはならない)。明示すれば `'requested'`。 */
   min_width: {
     requested_mm: number
@@ -747,7 +747,7 @@ export interface NeckDiagnosis {
 /** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
 export interface OptimizeRunOptions {
   elementSizeMm?: number | null
-  /** 最小幅[mm]。`null` または省略 = 既定(要素サイズの2倍と1mmの大きい方)をサーバーが使う。 */
+  /** 最小幅[mm](選んだ段の値)。`null` または省略 = 既定(選べるいちばん細い段)をサーバーが使う。 */
   minWidthMm?: number | null
   /**
    * 開発用の可視化を頼む(`'space'` / `'anchors'` / `'rho'`)。**既定は空**で、

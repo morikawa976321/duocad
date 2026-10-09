@@ -35,14 +35,22 @@ from session_support import face_with_normal, four_conditions, pad, select as _s
 from duocad.paths import REPO_ROOT
 
 
-#: 固定値の上限そのもの(テストの多くは速さのため 8mm で回すので、下の fixture が外す)。
+#: 固定値の上限そのものと、最小幅の上限の割合(テストの多くは速さのため 8mm で回すので、下の fixture が緩める)。
 REAL_MAX_ELEMENT_SIZE_MM = optimize_run.MAX_ELEMENT_SIZE_MM
+REAL_MIN_WIDTH_CEILING_RATIO = optimize_run.MIN_WIDTH_CEILING_RATIO
 
 
 @pytest.fixture(autouse=True)
 def _coarse_grids_allowed(monkeypatch) -> None:
-    """この題材を 8mm 前後の粗い格子で回すため、要素サイズの上限の固定値(#130)を外す。固定値を見るテストは自分で戻す。"""
+    """この題材を 8mm 前後の粗い格子(最短の辺 6〜9 セル)で回すため、要素サイズの上限の固定値(#130)を外し、最小幅の
+    上限を格子の最短の辺いっぱいまで緩める(1/4 だと段が無くなる)。実際の値を見るテストは自分で戻す。"""
     monkeypatch.setattr(optimize_run, "MAX_ELEMENT_SIZE_MM", math.inf)
+    monkeypatch.setattr(optimize_run, "MIN_WIDTH_CEILING_RATIO", 1.0)
+
+
+@pytest.fixture
+def real_min_width_bounds(monkeypatch) -> None:
+    monkeypatch.setattr(optimize_run, "MIN_WIDTH_CEILING_RATIO", REAL_MIN_WIDTH_CEILING_RATIO)
 
 
 # --------------------------------------------------------------------------------------
@@ -289,11 +297,14 @@ def test_element_size_outside_the_bounds_is_refused() -> None:
 
 
 def test_min_width_outside_the_bounds_is_refused() -> None:
+    """落ちたら、下限の段(m ≥ 2 かつ m × spacing ≥ 2mm)より細い値か、不正な値が通っている。"""
     assert optimize_run._resolve_min_width(2.0, None)["source"] == "default"
     requested = optimize_run._resolve_min_width(2.0, 4.0)
     assert (requested["cells"], requested["source"]) == (2, "requested")
     with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
-        optimize_run._resolve_min_width(2.0, 3.9)
+        optimize_run._resolve_min_width(2.0, 2.0)  # m=1
+    with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
+        optimize_run._resolve_min_width(0.5, 1.5)  # m=3 だが 2mm の段(m=4)より細い
     with pytest.raises(optimize_run.OptimizeInputError, match="有限の正"):
         optimize_run._resolve_min_width(2.0, 0.0)
     with pytest.raises(optimize_run.OptimizeInputError, match="有限の正"):
@@ -326,45 +337,50 @@ def test_a_thin_exclude_body_between_the_columns_is_reported_as_unrepresented(se
     assert diagnosis["role"] == "exclude_bodies" and diagnosis["elements"] == 0 and diagnosis["reason"]
 
 
-def test_min_width_none_resolves_to_max_of_twice_spacing_and_1mm() -> None:
-    """既定は `max(2 × spacing, 1.0mm)`。下限(2×spacing)そのものなので、1.0mm が効くのは
-    spacing < 0.5mm のときだけ(spacing 0.4mm → 1.0mm・m=3・保証1.2mm。spacing 0.5mm → 2×spacingのまま・m=2)。"""
-    default_2_4 = optimize_run._resolve_min_width(2.4, None)
-    assert default_2_4["source"] == "default" and default_2_4["requested_mm"] == pytest.approx(4.8)
-    assert default_2_4["cells"] == 2 and default_2_4["guaranteed_mm"] == pytest.approx(4.8)
-
-    default_thin = optimize_run._resolve_min_width(0.4, None)
-    assert default_thin["requested_mm"] == pytest.approx(1.0)
-    assert default_thin["cells"] == 3 and default_thin["guaranteed_mm"] == pytest.approx(1.2)
-
-    boundary = optimize_run._resolve_min_width(0.5, None)
-    assert boundary["requested_mm"] == pytest.approx(1.0) and boundary["cells"] == 2
+def test_min_width_cell_range_is_2mm_up_to_a_quarter_of_the_shortest_grid_edge(real_min_width_bounds) -> None:
+    """落ちたら、選べる m の範囲が「2mm 以上で最小の m(m ≥ 2)〜 格子の最短の辺のセル数 × 1/4」から外れている
+    (2026-10-09 本人決定の暫定値)。"""
+    assert optimize_run.MIN_WIDTH_FLOOR_MM == 2.0 and optimize_run.MIN_WIDTH_CEILING_RATIO == 0.25
+    assert optimize_run.min_width_cell_range(4.0, 13) == (2, 3)
+    assert optimize_run.min_width_cell_range(0.5, 89) == (4, 22)  # 2.0 / 0.5 ちょうどは 4 のまま
+    assert optimize_run.min_width_cell_range(0.509, 89) == (4, 22)
+    assert optimize_run.min_width_cell_range(1.0, 7) == (2, 1)  # 選べる段が無い
+    assert optimize_run.min_width_cell_range(1.0, None) == (2, None)
+    assert optimize_run.min_width_steps_mm(4.0, 13) == [8.0, 12.0]
+    assert optimize_run.min_width_steps_mm(1.0, 7) == []
 
 
-def test_min_width_default_above_the_grid_blames_the_element_size_not_the_input() -> None:
-    """既定が上限(設計空間の最短の辺)を超えたら、利用者は最小幅を入れていないので
-    「最小幅を下げよ」ではなく「要素サイズを下げよ」と言う。明示の値はいままでどおり。"""
+def test_min_width_none_resolves_to_the_thinnest_selectable_step(real_min_width_bounds) -> None:
+    """既定は選べるいちばん細い段。落ちたら、指定なしで 2mm より細い立方や m=1 で走る。"""
+    coarse = optimize_run._resolve_min_width(2.4, None, max_cells=40)
+    assert coarse["source"] == "default" and coarse["cells"] == 2 and coarse["guaranteed_mm"] == pytest.approx(4.8)
+    fine = optimize_run._resolve_min_width(0.4, None, max_cells=100)
+    assert fine["cells"] == 5 and fine["guaranteed_mm"] == pytest.approx(2.0)
+    assert fine["requested_mm"] == fine["guaranteed_mm"]
+
+
+def test_a_grid_with_no_selectable_step_blames_the_element_size(real_min_width_bounds) -> None:
+    """格子が小さく上限の m が下限を下回るときは、指定の有無に依らず「要素サイズを下げよ」と言う。"""
     with pytest.raises(optimize_run.OptimizeInputError, match="要素サイズを下げる"):
-        optimize_run._resolve_min_width(2.4, None, max_cells=1)
-    with pytest.raises(optimize_run.OptimizeInputError, match="最小幅を下げる"):
-        optimize_run._resolve_min_width(2.4, 5000.0, max_cells=40)
+        optimize_run._resolve_min_width(2.4, None, max_cells=7)
+    with pytest.raises(optimize_run.OptimizeInputError, match="要素サイズを下げる"):
+        optimize_run._resolve_min_width(2.4, 4.8, max_cells=7)
 
 
-def test_min_width_above_the_grid_is_refused_and_the_ceiling_itself_is_accepted() -> None:
-    """m 立方が格子に入らない幅は、確保量が m³ で増えるので入口で断る。上限ちょうどの値は
-    `値 / spacing` の丸めに依らず通る(画面が出す上限と同じ比較にしてある)。"""
+def test_min_width_above_the_ceiling_is_refused_and_the_ceiling_itself_is_accepted(real_min_width_bounds) -> None:
+    """上限の段より太い値は入口で断る。上限ちょうどの値は `値 / spacing` の丸めに依らず通る。"""
     with pytest.raises(optimize_run.OptimizeInputError, match="上限"):
         optimize_run._resolve_min_width(2.4, 5000.0, max_cells=40)
     with pytest.raises(optimize_run.OptimizeInputError, match="上限"):
-        optimize_run._resolve_min_width(2.4, 40 * 2.4 + 0.01, max_cells=40)
+        optimize_run._resolve_min_width(2.4, 10 * 2.4 + 0.01, max_cells=40)
     checked = rounded_up = 0
     for spacing in (0.1, 0.7, 1 / 3, 2.4, 2.387506, 4.9):
-        for cells in range(3, 61):
-            resolved = optimize_run._resolve_min_width(spacing, cells * spacing, max_cells=cells)
+        for cells in range(21, 61):
+            resolved = optimize_run._resolve_min_width(spacing, cells * spacing, max_cells=cells * 4)
             assert resolved["cells"] == cells and resolved["guaranteed_mm"] == cells * spacing
             checked += 1
             rounded_up += math.ceil(cells * spacing / spacing) > cells
-    assert checked == 6 * 58 and rounded_up > 0  # 丸めで1つ上へ跳ねる組が実際にあり、それでも通る
+    assert checked == 6 * 40 and rounded_up > 0  # 丸めで1つ上へ跳ねる組が実際にあり、それでも通る
 
 
 def test_run_refuses_a_min_width_beyond_the_grid_before_deriving_anything(session: Session, monkeypatch) -> None:
@@ -377,45 +393,46 @@ def test_run_refuses_a_min_width_beyond_the_grid_before_deriving_anything(sessio
         optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=9.8, min_width_mm=5000.0))
 
 
-def test_every_ladder_step_carries_its_own_min_width_floor(session: Session) -> None:
-    """段ごとの `min_width_floor_mm` は、その段の要素サイズの2倍(`_resolve_min_width` の floor と同じ式)。"""
+def test_every_ladder_step_carries_its_own_min_width_range(session: Session, real_min_width_bounds) -> None:
+    """段ごとの `min_width_floor_mm`・`min_width_ceiling_mm` は、その段の格子での `min_width_cell_range` の両端。"""
     four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     for step in limits["steps"]:
-        assert step["min_width_floor_mm"] == pytest.approx(2.0 * step["element_size_mm"])
+        size = step["element_size_mm"]
+        lower, upper = optimize_run.min_width_cell_range(
+            size, min(optimize_run._grid_shape(limits["bbox_min"], limits["bbox_max"], size)))
+        assert step["min_width_floor_mm"] == pytest.approx(lower * size)
+        assert step["min_width_ceiling_mm"] == pytest.approx(upper * size)
 
 
-def test_every_min_width_step_resolves_to_its_own_cell_count_and_the_gap_rounds_up() -> None:
-    """各段の値を入力すると、ちょうどその m になる(段の境界・その少し上・少し下)。落ちたら、画面が
-    示す段を選んでも m が1つ飛ぶ。"""
+def test_every_min_width_step_resolves_to_its_own_cell_count(real_min_width_bounds) -> None:
+    """各段の値を渡すと、ちょうどその m になる。落ちたら、画面が示す段を選んでも m が1つ飛ぶ。"""
     checked = 0
     for spacing in (0.1, 0.7, 1 / 3, 2.4, 2.387506, 2.4063, 4.9):
-        max_cells = 61
+        max_cells = 244
+        lower, upper = optimize_run.min_width_cell_range(spacing, max_cells)
         steps = optimize_run.min_width_steps_mm(spacing, max_cells)
-        assert len(steps) == max_cells - 1
-        for cells, value in zip(range(2, max_cells + 1), steps):
+        assert len(steps) == upper - lower + 1
+        for cells, value in zip(range(lower, upper + 1), steps):
             resolved = optimize_run._resolve_min_width(spacing, value, max_cells=max_cells)
             assert resolved["cells"] == cells, (spacing, cells)
             assert value == pytest.approx(cells * spacing, rel=1e-12)
-            if cells > 2:
-                below = optimize_run._resolve_min_width(spacing, value * (1 - 1e-6), max_cells=max_cells)
-                assert below["cells"] == cells, (spacing, cells)
-            if cells < max_cells:
-                above = optimize_run._resolve_min_width(spacing, value * (1 + 1e-6), max_cells=max_cells)
-                assert above["cells"] == cells + 1, (spacing, cells)
             checked += 1
-    assert checked == 7 * 60
+    assert checked > 0
 
 
-def test_every_ladder_step_lists_the_achievable_min_widths(session: Session) -> None:
-    """段ごとに、下限(m=2)から上限(格子の最短の辺のセル数)まで `m × 要素サイズ` の段が並ぶ。"""
+def test_every_ladder_step_lists_the_selectable_min_widths(session: Session, real_min_width_bounds) -> None:
+    """段ごとに、下限から上限まで `m × 要素サイズ` の段が並ぶ(格子が小さく段が無い段は上限 < 下限)。"""
     four_conditions(session)
     for step in optimize_run.resolution_limits(session.document)["steps"]:
         values = step["min_width_steps_mm"]
+        if not values:
+            assert step["min_width_ceiling_mm"] < step["min_width_floor_mm"]
+            continue
         assert values[0] == step["min_width_floor_mm"]
         assert values[-1] == pytest.approx(step["min_width_ceiling_mm"], rel=1e-12)
         assert values[-1] <= step["min_width_ceiling_mm"]
-        assert len(values) == round(step["min_width_ceiling_mm"] / step["element_size_mm"]) - 1
+        assert len(values) == round((step["min_width_ceiling_mm"] - step["min_width_floor_mm"]) / step["element_size_mm"]) + 1
 
 
 def test_every_ladder_step_reports_the_real_grid(session: Session) -> None:
@@ -433,7 +450,8 @@ def test_every_ladder_step_reports_the_real_grid(session: Session) -> None:
     space = ds.derive(bundle.conditions, spacing=mid["element_size_mm"])
     assert space.grid.spacing == pytest.approx(mid["element_size_mm"])
     assert mid["design_elements_estimate"] == pytest.approx(space.element_count, rel=0.3)
-    assert mid["min_width_ceiling_mm"] == pytest.approx(min(space.grid.shape) * mid["element_size_mm"])
+    assert mid["min_width_ceiling_mm"] == pytest.approx(
+        optimize_run.min_width_cell_range(mid["element_size_mm"], min(space.grid.shape))[1] * mid["element_size_mm"])
 
 
 def test_a_requested_element_size_off_the_ladder_is_snapped_to_the_real_grid(
