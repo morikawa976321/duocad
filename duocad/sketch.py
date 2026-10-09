@@ -937,9 +937,16 @@ def plane_from_selection(document: Document, base_plane: Any) -> Any:
     return face_plane(face["body"], face["index"])
 
 
+def _created(document: Document, sketch_id: SketchId) -> dict:
+    """作ったスケッチの応答。`frame` は追加の往復なしで座標系を知らせるため
+    (`catalog._SKETCH_FRAME_HELP`。面に貼ると原点は面の中心で、世界座標ではない)。"""
+    frame = kernel_sketch.sketch_plane_frame(get_sketch(document, sketch_id).plane)
+    return {"sketch_id": sketch_id, "frame": frame}
+
+
 @entry(VERB_SKETCH_CREATE)
 def _enter_sketch_create(document: Document, base_plane: Optional[str] = None) -> dict:
-    return {"sketch_id": sketch_create(document, plane_from_selection(document, base_plane))}
+    return _created(document, sketch_create(document, plane_from_selection(document, base_plane)))
 
 
 @entry(VERB_SKETCH_CREATE_OFFSET)
@@ -947,7 +954,7 @@ def _enter_sketch_create_offset(
     document: Document, distance: float, base_plane: Optional[str] = None
 ) -> dict:
     plane = offset_plane(plane_from_selection(document, base_plane), distance)
-    return {"sketch_id": sketch_create(document, plane, verb=VERB_SKETCH_CREATE_OFFSET)}
+    return _created(document, sketch_create(document, plane, verb=VERB_SKETCH_CREATE_OFFSET))
 
 
 @entry(VERB_ADD_LINE)

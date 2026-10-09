@@ -603,6 +603,54 @@ def test_sketch_create_can_sit_on_a_selected_face(server: McpServer, box_session
     assert sketch.plane["body"] == box.id
 
 
+def _plate_with_top_face_selected(server: McpServer) -> None:
+    """100x60x10 の板を XY に作り、上面を述語で選ぶ(Issue #125 の再現手順の1〜2)。"""
+    plate = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
+    call(server, "add_rectangle", {"sketch_id": plate, "corner": [0, 0], "width": 100, "height": 60})
+    select_refs(server, [{"sketch": plate, "index": 1}])
+    body_id = call(server, "extrude", {"distance": 10, "mode": "join"})["changed_bodies"][0]
+    up = [{"op": "normal_dot_gt", "axis": "Z", "value": 0.9}]
+    call(server, "set_selection", {"predicate": {"kind": "face", "body": body_id, "where": up}})
+
+
+def test_sketch_create_returns_the_frame_that_its_coordinates_are_measured_in(empty_session: Session):
+    """面に貼ったスケッチの (u, v) の原点は面の中心で、それが**戻り値の frame だけで分かる**。
+
+    落ちたら、AIは世界座標のつもりで描いて形を黙って別の場所に作る(Issue #125: 上面中央の穴の
+    つもりが板の角に4分の1だけ開いた)。frame どおりに座標を与えれば穴は板の中央に開く。
+    """
+    import math
+
+    server = McpServer(DocumentTools(empty_session))
+    assert call(server, "sketch_create", {"base_plane": "XY"})["frame"]["origin"] == [0.0, 0.0, 0.0]
+    _plate_with_top_face_selected(server)
+
+    payload = call(server, "sketch_create")
+    frame = payload["frame"]
+    assert frame["origin"] == pytest.approx([50.0, 30.0, 10.0])
+    described = call(server, "describe_document")["sketches"]
+    assert next(s for s in described if s["sketch_id"] == payload["sketch_id"])["plane"]["frame"] == frame
+
+    world = [50.0, 30.0, 10.0]
+    offset = [w - o for w, o in zip(world, frame["origin"])]
+    center = [sum(d * a for d, a in zip(offset, frame[axis])) for axis in ("u", "v")]
+    call(server, "add_circle", {"sketch_id": payload["sketch_id"], "center": center, "radius": 5})
+    select_refs(server, [{"sketch": payload["sketch_id"], "index": 1}])
+    body = empty_session.document.bodies[0]
+    before = query.volume(body.shape)
+    call(server, "extrude", {"distance": -5, "mode": "cut"})
+    assert before - query.volume(body.shape) == pytest.approx(math.pi * 25.0 * 5.0, rel=1e-3)
+
+
+def test_sketch_create_offset_on_a_face_returns_a_frame_above_the_face_center(empty_session: Session):
+    """面を基準にしたオフセットのスケッチも、原点は面の中心の真上で、それが戻り値で分かる。"""
+    server = McpServer(DocumentTools(empty_session))
+    _plate_with_top_face_selected(server)
+    frame = call(server, "sketch_create_offset", {"distance": 5})["frame"]
+    assert frame["origin"] == pytest.approx([50.0, 30.0, 15.0])
+    assert frame["normal"] == pytest.approx([0.0, 0.0, 1.0])
+
+
 def test_sketch_create_without_a_plane_or_a_selection_is_an_error(server: McpServer):
     """平面も選択も無ければ**推測しない**(既定でXYに貼ると静かに別の場所に図形が出る)。"""
     error = call_error(server, "sketch_create")

@@ -143,8 +143,8 @@ interface AppliedChangeBase {
 
 /** 操作を出した画面への確認応答。`verb` か `change` で絞り込むと、その応答が載せる値が見える。 */
 export type Applied =
-  | (AppliedVerbBase & { verb: 'sketch_create'; sketch_id: string })
-  | (AppliedVerbBase & { verb: 'sketch_create_offset'; sketch_id: string })
+  | (AppliedVerbBase & { verb: 'sketch_create'; sketch_id: string; frame: { origin: number[]; u: number[]; v: number[]; normal: number[] } })
+  | (AppliedVerbBase & { verb: 'sketch_create_offset'; sketch_id: string; frame: { origin: number[]; u: number[]; v: number[]; normal: number[] } })
   | (AppliedVerbBase & { verb: 'add_line'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_circle'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_rectangle'; entity_id: string })
