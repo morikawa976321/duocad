@@ -143,6 +143,23 @@ def floating_dofs(material: np.ndarray) -> np.ndarray:
     return np.flatnonzero(~np.repeat(active_nodes(material).ravel(), 3))
 
 
+def attached_dofs(material: np.ndarray, dofs: np.ndarray) -> np.ndarray:
+    """`dofs`(格子の自由度番号。整数)のうち材料に接する節点の自由度(昇順・重複なし)。格子の中の番号に対しては
+    `np.setdiff1d(dofs, floating_dofs(material))` と値・順序・dtype が同じ。
+
+    `floating_dofs` は格子の大半(hanger 2.0mm で約460万個)なので、それとの差を取らずに `dofs` 側で引く
+    (実測 hanger 2.0mm: `setdiff1d` 3.4秒 → 0.007秒、#103)。**格子の外の番号は断る** —— `setdiff1d` は黙って
+    残すが、ここで負の番号を添字に使うと後ろから数えた別の節点を引いてしまう。
+    """
+    dofs = np.asarray(dofs)
+    if dofs.dtype.kind not in 'iu':  # np.issubdtype(.., np.integer) は timedelta64 も通す
+        raise ValueError(f'自由度番号は整数であること(いま {dofs.dtype})')
+    live = active_nodes(material).ravel()
+    if dofs.size and (dofs.min() < 0 or dofs.max() >= 3 * live.size):
+        raise ValueError(f'自由度番号が格子の外にある(0〜{3 * live.size - 1} の外: {int(dofs.min())}〜{int(dofs.max())})')
+    return np.unique(dofs[live[dofs // 3]])
+
+
 def face_node_ids(table: Any, face: int) -> np.ndarray:
     """条件面 `face` の節点(**空の面は空配列**。`AnchorTable.node_ids` は空の面で例外を出すので
     `empty_faces` を先に見る)。`table` は `node_ids` / `empty_faces` を持てばよい(テストの代用表も通る)。"""

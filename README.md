@@ -583,7 +583,7 @@ duocad/
                          harness.mjs（骨格）／server.mjs（サーバの起動・停止）／browser.mjs（ブラウザ選択・起動）／
                          pick.mjs（指す手）／mcp-client.mjs（MCPクライアント）／args.mjs／models.mjs（STEPのパス）
     dist/                ビルド成果物（**Pythonサーバが配信するのはこちら**・git管理外）
-  .venv/                 Python 3.11（git管理外）
+  .venv/                 Python 3.14（git管理外）
   pyproject.toml         依存はバージョン固定（ローカル専用なので上げなければ壊れない）
 ```
 
