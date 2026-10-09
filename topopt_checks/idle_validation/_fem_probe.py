@@ -64,8 +64,7 @@ def evaluate_full(
                 solver=solver,
             )
 
-        floating = anchor.floating_dofs(mat)
-        physical_fixed = np.setdiff1d(fixed, floating)
+        physical_fixed = anchor.attached_dofs(mat, fixed)
         node_indices = np.array(
             np.unravel_index(physical_fixed // 3, tuple(n + 1 for n in mat.shape))
         ).T
@@ -88,7 +87,7 @@ def evaluate_full(
             *mat.shape,
             fixed_dofs=fixed,
             load=load,
-            extra_fixed_dofs=floating,
+            extra_fixed_dofs=anchor.floating_dofs(mat),
             active_mask=mat,
         )
         density = mat.astype(float)
@@ -578,12 +577,11 @@ def per_face_reactions(probe_result: dict, table, fixed_faces: Sequence[int]) ->
     model = probe_result["_model"]
     u = probe_result["_displacement"]
     rho = probe_result["_density"]
-    floating = anchor.floating_dofs(probe_result["density"])
     residual = model.stiffness_apply(rho, stress.PENAL, u) - model.f
     out: dict = {}
     for face in fixed_faces:
         dofs = table.fixed_dofs([face])
-        dofs = np.setdiff1d(dofs, floating)
+        dofs = anchor.attached_dofs(probe_result["density"], dofs)
         if dofs.size == 0:
             out[str(face)] = [0.0, 0.0, 0.0]
             continue

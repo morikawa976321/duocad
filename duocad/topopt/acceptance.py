@@ -381,8 +381,7 @@ def condition_check(material, table, fixed_faces, load_faces, forces):
 
 def rigid_body_constrained(material, fixed) -> bool:
     """拘束の自由度(浮いた節点を除く)が剛体運動6つを全部止めるか。"""
-    floating = anchor.floating_dofs(material)
-    physical_fixed = np.setdiff1d(fixed, floating)
+    physical_fixed = anchor.attached_dofs(material, fixed)
     node_indices = np.array(np.unravel_index(physical_fixed // 3, tuple(n + 1 for n in material.shape))).T
     positions = node_indices - node_indices.mean(axis=0)
     rigid = np.zeros((len(physical_fixed), 6))

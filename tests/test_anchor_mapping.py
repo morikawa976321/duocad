@@ -58,6 +58,22 @@ def test_the_shared_active_node_definition_is_one_function():
     assert acceptance_active_nodes is anchor.active_nodes
 
 
+@pytest.mark.parametrize('seed', range(6))
+def test_attached_dofs_equals_removing_the_floating_dofs(seed):
+    """落ちたら、`attached_dofs` が `np.setdiff1d(dofs, floating_dofs(material))` と値・順序・dtype のどれかで違う
+    (剛体拘束の判定に使う拘束自由度の集合が変わる)。並べ替え・重複・空の入力も含める。"""
+    rng = np.random.default_rng(seed)
+    material = rng.random((7, 5, 6)) < (0.15 + 0.1 * seed)
+    ndof = 3 * int(np.prod([n + 1 for n in material.shape]))
+    floating = anchor.floating_dofs(material)
+    for dofs in (rng.integers(0, ndof, 40), np.arange(ndof)[::-1], np.zeros(0, dtype=np.int64),
+                 np.repeat(rng.integers(0, ndof, 10), 3).astype(np.int32)):
+        expected = np.setdiff1d(dofs, floating)
+        actual = anchor.attached_dofs(material, dofs)
+        assert actual.dtype == expected.dtype
+        np.testing.assert_array_equal(actual, expected)
+
+
 def test_material_mapping_uses_only_nodes_that_touch_material_and_keeps_the_load():
     """幾何の表は材料の有無を見ないので、格子面に乗らない面では材料に接しない節点へも配る。
     確定表は許可節点だけへ配り、合力は厳密に保存され、重心のずれは球の半径以内に収まる。"""

@@ -143,6 +143,17 @@ def floating_dofs(material: np.ndarray) -> np.ndarray:
     return np.flatnonzero(~np.repeat(active_nodes(material).ravel(), 3))
 
 
+def attached_dofs(material: np.ndarray, dofs: np.ndarray) -> np.ndarray:
+    """`dofs` のうち材料に接する節点の自由度(昇順・重複なし。`np.setdiff1d(dofs, floating_dofs(material))` と同じ値)。
+
+    `floating_dofs` は格子の大半(hanger 2.0mm で約460万個)なので、それとの差を取らずに `dofs` 側で引く
+    (実測 hanger 2.0mm: `setdiff1d` 3.4秒 → 0.007秒、#103)。
+    """
+    dofs = np.asarray(dofs)
+    live = active_nodes(material).ravel()
+    return np.unique(dofs[live[dofs // 3]])
+
+
 def face_node_ids(table: Any, face: int) -> np.ndarray:
     """条件面 `face` の節点(**空の面は空配列**。`AnchorTable.node_ids` は空の面で例外を出すので
     `empty_faces` を先に見る)。`table` は `node_ids` / `empty_faces` を持てばよい(テストの代用表も通る)。"""
