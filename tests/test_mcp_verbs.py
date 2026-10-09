@@ -603,6 +603,55 @@ def test_sketch_create_can_sit_on_a_selected_face(server: McpServer, box_session
     assert sketch.plane["body"] == box.id
 
 
+def _plate_with_face_selected(server: McpServer, axis: str) -> str:
+    """100x60x10 の板を XY に作り、法線が +axis の面を述語で選んで body_id を返す。"""
+    plate = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
+    call(server, "add_rectangle", {"sketch_id": plate, "corner": [0, 0], "width": 100, "height": 60})
+    select_refs(server, [{"sketch": plate, "index": 1}])
+    body_id = call(server, "extrude", {"distance": 10, "mode": "join"})["changed_bodies"][0]
+    where = [{"op": "normal_dot_gt", "axis": axis, "value": 0.9}]
+    call(server, "set_selection", {"predicate": {"kind": "face", "body": body_id, "where": where}})
+    return body_id
+
+
+def _to_uv(frame: dict, point: list) -> list:
+    offset = [p - o for p, o in zip(point, frame["origin"])]
+    return [sum(d * a for d, a in zip(offset, frame[axis])) for axis in ("u", "v")]
+
+
+@pytest.mark.parametrize("axis", ["Z", "X"])
+def test_a_hole_drawn_in_the_returned_frame_lands_where_intended(empty_session: Session, axis: str):
+    """落ちたら、AIが戻り値の frame だけでは面の上の狙った位置に描けない(Issue #125。
+    側面の枠の原点は面の中心でなく角にあり、v は世界の -Z を向く)。"""
+    server = McpServer(DocumentTools(empty_session))
+    assert call(server, "sketch_create", {"base_plane": "XY"})["frame"]["origin"] == [0.0, 0.0, 0.0]
+    body = empty_session.document.get_body(_plate_with_face_selected(server, axis))
+    face = next(f for f in query.describe_faces(body.shape) if f["normal"]["XYZ".index(axis)] > 0.9)
+    target = query.face_centroid(body.shape, face["index"])
+
+    payload = call(server, "sketch_create")
+    frame = payload["frame"]
+    described = call(server, "describe_document")["sketches"]
+    assert next(s for s in described if s["sketch_id"] == payload["sketch_id"])["plane"]["frame"] == frame
+    call(server, "add_circle", {"sketch_id": payload["sketch_id"], "center": _to_uv(frame, target), "radius": 2})
+    select_refs(server, [{"sketch": payload["sketch_id"], "index": 1}])
+    call(server, "extrude", {"distance": -5, "mode": "cut"})
+
+    wall = next(f["index"] for f in query.describe_faces(body.shape) if f["kind"].startswith("cylinder"))
+    expected = [t - 2.5 * n for t, n in zip(target, frame["normal"])]
+    assert query.face_centroid(body.shape, wall) == pytest.approx(expected, abs=1e-6)
+
+
+def test_sketch_create_offset_on_a_face_returns_the_face_frame_moved_along_its_normal(empty_session: Session):
+    """落ちたら、面を基準にしたオフセットのスケッチの座標系が戻り値から読めない。"""
+    server = McpServer(DocumentTools(empty_session))
+    _plate_with_face_selected(server, "X")
+    face = call(server, "sketch_create")["frame"]
+    offset = call(server, "sketch_create_offset", {"distance": 5})["frame"]
+    assert offset["origin"] == pytest.approx([o + 5 * n for o, n in zip(face["origin"], face["normal"])])
+    assert [offset[k] for k in ("u", "v", "normal")] == [face[k] for k in ("u", "v", "normal")]
+
+
 def test_sketch_create_without_a_plane_or_a_selection_is_an_error(server: McpServer):
     """平面も選択も無ければ**推測しない**(既定でXYに貼ると静かに別の場所に図形が出る)。"""
     error = call_error(server, "sketch_create")
