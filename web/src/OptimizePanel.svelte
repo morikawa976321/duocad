@@ -187,7 +187,8 @@
   {:else if steps.length === 0}
     <p id="optimize-resolution-note" class="hint bad">
       この部品と条件面では、間違わない解像度が設計空間の要素数の上限({resolution.max_design_elements?.toLocaleString() ?? '—'})に
-      収まらない。条件面をもっと大きい面に取り直すこと
+      収まらない(要素サイズの上限は条件面からの要求と {resolution.max_element_size_cap_mm ?? '—'}mm の細かい方)。
+      条件面が小さいなら大きい面に取り直し、部品が大きいなら設計空間を小さくすること
     </p>
   {:else}
     <label class="field-row">

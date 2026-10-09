@@ -619,6 +619,8 @@ export interface OptimizeResolutionPayload {
   min_element_size_mm?: number
   default_element_size_mm?: number
   from_condition_faces_mm?: number
+  /** 要素サイズの上限の固定値(`optimize_run.MAX_ELEMENT_SIZE_MM`)。上限は条件面からの要求とこれの細かい方。 */
+  max_element_size_cap_mm?: number
   max_design_elements?: number
   feasible?: boolean
   steps?: OptimizeResolutionStep[]

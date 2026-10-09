@@ -38,6 +38,11 @@ RESULT_NAME = "optimized"
 #: 原点と刻みが要素サイズごとに引き直され、薄い部品にセル中心が入るかが偶然で決まる)。
 MAX_DESIGN_ELEMENTS = 1_300_000
 
+#: 要素サイズの上限の固定値[mm](2026-10-09 本人決定、#130)。上限は min(これ, 条件面からの要求)。条件面だけで決めると
+#: 面の大きな題材で格子が粗くなり、完成形の検査(`topopt.final_check`)が拘束面を割り当て直せず安全率を測れない
+#: (実測: path 題材は条件面 200mm² で上限 14mm になり測れず、5mm・2.5mm では測れた)。4mm で必ず測れる保証ではない。
+MAX_ELEMENT_SIZE_MM = 4.0
+
 #: 保持/除外ソリッドが「この解像度では表現できていない」と見なす要素数の境目。
 #: **0 は必ず止める**(その条件が黙って消える)。0 より多く これ未満は警告して続ける。
 #: 暫定値 —— 厳密な下限は中心軸変換に近い話で、事前計算では出せない(タスク本文)。
@@ -480,15 +485,16 @@ def _not_done(
 def resolution_limits(doc: "Document") -> dict:
     """要素サイズの**上限**(これより粗いと間違う)と**下限**(これより細かくはできない)。
 
-        {"max_element_size_mm": float,        # 条件面からの要求
+        {"max_element_size_mm": float,        # min(MAX_ELEMENT_SIZE_MM, 条件面からの要求)
          "min_element_size_mm": float,        # 設計空間の要素数の上限(見積もり)から
          "default_element_size_mm": float,    # 既定 = 上限側(いちばん粗くて安い)
          "from_condition_faces_mm": float,    # min(sqrt(条件面のCAD面積))
+         "max_element_size_cap_mm": float,    # MAX_ELEMENT_SIZE_MM
          "condition_faces": [{...}, ...],
          "bbox_min"/"bbox_max": [x,y,z],      # 条件の外接直方体(余白なし)
          "max_design_elements": int}
 
-    **上限は条件面からの要求で決まる**(拘束面・荷重面に格子節点が付く大きさ)。
+    **上限は固定値 `MAX_ELEMENT_SIZE_MM` と条件面からの要求(拘束面・荷重面に格子節点が付く大きさ)の細かい方。**
     **密度フィルタ半径(rmin)は上限に効かない**(解像度の上限からrmin/MIN_RMINを
     除去」——二値探索は密度フィルタを持たないので、最小部材幅からの要求という概念自体が無い)。
     **利用者に聞かない**。`anchor.AnchorTable.empty_face_diagnosis` の
@@ -530,7 +536,7 @@ def resolution_limits(doc: "Document") -> dict:
         raise OptimizeInputError("拘束面・荷重面が1枚も無いので解像度を決められない")
 
     from_faces = min(item["suggested_max_spacing_mm"] for item in faces)
-    upper = from_faces
+    upper = min(from_faces, MAX_ELEMENT_SIZE_MM)
 
     lo, hi = _condition_bbox(doc)
     volume = _design_volume(doc)
@@ -550,11 +556,12 @@ def resolution_limits(doc: "Document") -> dict:
         # **粗い側の端から細かい方向へだけ**動く目盛り(添字0が既定=上限側)。
         "steps": _resolution_steps(lo, hi, upper, lower, volume),
         "from_condition_faces_mm": from_faces,
+        "max_element_size_cap_mm": MAX_ELEMENT_SIZE_MM,
         "condition_faces": faces,
         "bbox_min": [float(v) for v in lo],
         "bbox_max": [float(v) for v in hi],
         "max_design_elements": MAX_DESIGN_ELEMENTS,
-        # **上限側が下限を下回る**(部品に対して条件面が小さすぎる)ときは、設計空間の要素数の上限に
+        # **上限側が下限を下回る**(部品に対して条件面が小さすぎる、または部品が大きすぎて上限の固定値まで細かくすると)ときは、設計空間の要素数の上限に
         # 引っかかって「間違わない解像度」が作れない。画面はここを見て断る。
         "feasible": lower <= upper,
     }
@@ -1428,17 +1435,21 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     if not limits["feasible"]:
         raise OptimizeInputError(
             f"要素サイズの上限 {upper:.4g} mm が下限 {lower:.4g} mm を下回っている"
-            f"(設計空間の要素数の上限 {MAX_DESIGN_ELEMENTS} に収まらない)。条件面をもっと大きい面に取り直すこと"
+            f"(設計空間の要素数の上限 {MAX_DESIGN_ELEMENTS} に収まらない)。上限は条件面からの要求と固定値 "
+            f"{MAX_ELEMENT_SIZE_MM:g} mm の細かい方。条件面が小さいなら大きい面に取り直し、部品が大きいなら設計空間を小さくすること"
         )
     if requested is None:
         return upper
     value = float(requested)
     if not math.isfinite(value) or value <= 0.0:
         raise OptimizeInputError(f"element_size_mm は有限の正の値であること(いま {requested!r})")
-    if value > upper:
+    # 上限は実格子へ切り下げた値(4mm → 3.98mm など)なので、切り下げる前の値までは受ける。`_snap_to_grid` は
+    # 要求以下の実 spacing しか返さず単調なので、受けた値の実格子は切り下げた上限を超えない。
+    unsnapped = min(float(limits.get("from_condition_faces_mm", upper)), float(limits.get("max_element_size_cap_mm", upper)))
+    if value > max(upper, unsnapped) * (1.0 + 1e-12):
         raise OptimizeInputError(
             f"要素サイズ {value:.4g} mm は上限 {upper:.4g} mm より粗い"
-            "(条件面に格子節点が付かなくなる)"
+            f"(条件面に格子節点が付かなくなるか、固定値 {MAX_ELEMENT_SIZE_MM:g} mm を超えて完成形の安全率が測れなくなる)"
         )
     if value < lower:
         raise OptimizeInputError(

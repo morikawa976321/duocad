@@ -35,6 +35,16 @@ from session_support import face_with_normal, four_conditions, pad, select as _s
 from duocad.paths import REPO_ROOT
 
 
+#: 固定値の上限そのもの(テストの多くは速さのため 8mm で回すので、下の fixture が外す)。
+REAL_MAX_ELEMENT_SIZE_MM = optimize_run.MAX_ELEMENT_SIZE_MM
+
+
+@pytest.fixture(autouse=True)
+def _coarse_grids_allowed(monkeypatch) -> None:
+    """この題材を 8mm 前後の粗い格子で回すため、要素サイズの上限の固定値(#130)を外す。固定値を見るテストは自分で戻す。"""
+    monkeypatch.setattr(optimize_run, "MAX_ELEMENT_SIZE_MM", math.inf)
+
+
 # --------------------------------------------------------------------------------------
 # 1. 入口の断り
 # --------------------------------------------------------------------------------------
@@ -211,21 +221,41 @@ def test_identical_bodies_are_told_apart_by_the_centroid(session: Session) -> No
 # --------------------------------------------------------------------------------------
 # 4. 解像度
 # --------------------------------------------------------------------------------------
-def test_condition_faces_alone_set_the_upper_bound(session: Session) -> None:
-    """落ちたら、要素サイズの上限が条件面の要求(min(sqrt(CAD面積)) を実格子へ切り下げた値)から外れている。"""
+def test_the_upper_bound_is_the_finer_of_the_fixed_cap_and_the_condition_faces(session: Session, monkeypatch) -> None:
+    """落ちたら、要素サイズの上限が min(固定値 4mm, 条件面の要求 min(sqrt(CAD面積))) を実格子へ切り下げた値から外れている(#130)。"""
+    monkeypatch.setattr(optimize_run, "MAX_ELEMENT_SIZE_MM", REAL_MAX_ELEMENT_SIZE_MM)
     four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
-    # 最小の条件面は荷重面 10x40mm で sqrt(400) = 20mm。
+    # 最小の条件面は荷重面 10x40mm で sqrt(400) = 20mm。固定値 4mm の方が細かい。
     assert limits["from_condition_faces_mm"] == pytest.approx(20.0, rel=1e-6)
+    assert limits["max_element_size_cap_mm"] == REAL_MAX_ELEMENT_SIZE_MM == 4.0
     lo, hi = optimize_run._condition_bbox(session.document)
-    assert limits["max_element_size_mm"] <= 20.0 * (1.0 + 1e-9)
-    assert limits["max_element_size_mm"] == pytest.approx(optimize_run._snap_to_grid(lo, hi, 20.0))
+    assert limits["max_element_size_mm"] <= 4.0 * (1.0 + 1e-9)
+    assert limits["max_element_size_mm"] == pytest.approx(optimize_run._snap_to_grid(lo, hi, 4.0))
     assert optimize_run._snap_to_grid(lo, hi, limits["max_element_size_mm"]) == pytest.approx(
         limits["max_element_size_mm"]
     )
     assert limits["default_element_size_mm"] == limits["max_element_size_mm"]
     assert limits["min_element_size_mm"] < limits["max_element_size_mm"]
     assert limits["feasible"] is True
+
+
+def test_condition_faces_finer_than_the_cap_set_the_upper_bound(session: Session, monkeypatch) -> None:
+    """落ちたら、条件面の要求が固定値より細かいときに上限が条件面の要求に従っていない(小さい面に格子節点が付かなくなる)。"""
+    monkeypatch.setattr(optimize_run, "MAX_ELEMENT_SIZE_MM", 100.0)
+    four_conditions(session)
+    limits = optimize_run.resolution_limits(session.document)
+    lo, hi = optimize_run._condition_bbox(session.document)
+    assert limits["max_element_size_mm"] == pytest.approx(optimize_run._snap_to_grid(lo, hi, 20.0))
+
+
+def test_the_round_cap_itself_is_accepted_although_the_snapped_upper_bound_is_finer() -> None:
+    """落ちたら、上限の固定値 4mm をそのまま指定すると、実格子へ切り下げた上限(例 3.98mm)より粗いとして断っている。"""
+    limits = {"max_element_size_mm": 3.98, "min_element_size_mm": 1.0, "feasible": True,
+              "from_condition_faces_mm": 20.0, "max_element_size_cap_mm": 4.0}
+    assert optimize_run._resolve_element_size(limits, 4.0) == 4.0
+    with pytest.raises(optimize_run.OptimizeInputError, match="上限"):
+        optimize_run._resolve_element_size(limits, 4.01)
 
 
 def test_element_size_outside_the_bounds_is_refused() -> None:
