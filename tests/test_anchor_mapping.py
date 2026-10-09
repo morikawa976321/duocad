@@ -74,6 +74,15 @@ def test_attached_dofs_equals_removing_the_floating_dofs(seed):
         np.testing.assert_array_equal(actual, expected)
 
 
+def test_attached_dofs_refuses_numbers_outside_the_grid():
+    """落ちたら、負の番号が後ろから数えた別の節点として黙って引かれるか、格子の外・整数でない番号が通る。"""
+    material = np.ones((1, 1, 1), dtype=bool)  # 節点8つ・自由度24
+    for bad in (np.array([-1]), np.array([24]), np.array([0.0]), np.zeros(0, dtype=np.float64)):
+        with pytest.raises(ValueError):
+            anchor.attached_dofs(material, bad)
+    np.testing.assert_array_equal(anchor.attached_dofs(material, np.array([23, 0])), [0, 23])
+
+
 def test_material_mapping_uses_only_nodes_that_touch_material_and_keeps_the_load():
     """幾何の表は材料の有無を見ないので、格子面に乗らない面では材料に接しない節点へも配る。
     確定表は許可節点だけへ配り、合力は厳密に保存され、重心のずれは球の半径以内に収まる。"""
