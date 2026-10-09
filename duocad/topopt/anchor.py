@@ -152,7 +152,7 @@ def attached_dofs(material: np.ndarray, dofs: np.ndarray) -> np.ndarray:
     残すが、ここで負の番号を添字に使うと後ろから数えた別の節点を引いてしまう。
     """
     dofs = np.asarray(dofs)
-    if not np.issubdtype(dofs.dtype, np.integer):
+    if dofs.dtype.kind not in 'iu':  # np.issubdtype(.., np.integer) は timedelta64 も通す
         raise ValueError(f'自由度番号は整数であること(いま {dofs.dtype})')
     live = active_nodes(material).ravel()
     if dofs.size and (dofs.min() < 0 or dofs.max() >= 3 * live.size):
