@@ -78,14 +78,16 @@
   /** 効いている段(`chosenStep`。App と同じ判定)。入力した値への応答待ち・範囲外なら `null`。 */
   const step = $derived(chosenStep(resolution, elementSizeMm))
   const elementSizeRange = $derived(resolution === null ? null : shownElementSizeRange(resolution))
-  /** 要素サイズの欄の文字列(最小幅の欄と同じく、数値から欄へは外から変わったときだけ書き戻す)。 */
+  /** 要素サイズの欄の文字列。数値から欄へは外から変わったとき(候補ボタン・文書の切り替え)だけ書き戻す —— 打つたびに
+   *  書き戻すと打ちかけの「1.」が「1」に化ける。**書き戻すのは小数第2位までの表示で、送る値は丸めない**
+   *  (下限 1.574mm の段を「1.57」で送ると下限割れで断られる)。 */
   let elementSizeText = $state('')
   let elementSizeSent: number | null | undefined = undefined
   $effect.pre(() => {
     const value = elementSizeMm
     if (value === elementSizeSent) return
     elementSizeSent = value
-    elementSizeText = value === null ? '' : String(value)
+    elementSizeText = value === null ? '' : value.toFixed(2)
   })
   /** 要素サイズの欄が数として読めない(空欄は読める = 既定)。 */
   const elementSizeUnreadable = $derived(elementSizeText.trim() !== '' && !Number.isFinite(Number(elementSizeText)))
@@ -202,7 +204,7 @@
           disabled={running}
           onclick={() => {
             elementSizeSent = candidate.element_size_mm
-            elementSizeText = String(candidate.element_size_mm)
+            elementSizeText = candidate.element_size_mm.toFixed(2)
             onElementSize(candidate.element_size_mm)
           }}>{candidate.element_size_mm.toFixed(2)}</button
         >
