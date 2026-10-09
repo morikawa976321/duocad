@@ -1,4 +1,4 @@
-"""タスク6・評価ごとの軌跡: 200N・2.0mm・最小幅5セル(w5)の製品step20(21評価)で、`acceptance.inspect`が
+r"""タスク6・評価ごとの軌跡: 200N・2.0mm・最小幅5セル(w5)の製品step20(21評価)で、`acceptance.inspect`が
 呼ばれるたびに(評価順)材料セル数・安全率・最大変位・2.2mmトラス専有セルの残存率を記録する。
 
 TOPOPT_IDLE_MATERIAL.md 2-1節の評価ごとの表(旧`measure_idle_counterfactual.py`)を、06と同じ現行コードで

@@ -1,4 +1,4 @@
-"""13条件の比較(*_mx.json)を、条件ごとに現行と統合ゲートで並べる。
+r"""13条件の比較(*_mx.json)を、条件ごとに現行と統合ゲートで並べる。
 
     .venv\Scripts\python.exe topopt_checks\stress_gate\summarize_matrix.py
 """

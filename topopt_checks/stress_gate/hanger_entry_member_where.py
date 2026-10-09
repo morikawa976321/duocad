@@ -1,4 +1,4 @@
-"""hanger 全材料の部材域(保持外・拘束/荷重節点から d 超)の目標超過が、どこにあるか(保持ボディ際・荷重面際・それ以外)。
+r"""hanger 全材料の部材域(保持外・拘束/荷重節点から d 超)の目標超過が、どこにあるか(保持ボディ際・荷重面際・それ以外)。
 
 FEMなし。段階Aの 200N の場を荷重倍率で拡大する。
     .venv\Scripts\python.exe topopt_checks\stress_gate\hanger_entry_member_where.py
