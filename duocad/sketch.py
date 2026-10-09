@@ -939,7 +939,7 @@ def plane_from_selection(document: Document, base_plane: Any) -> Any:
 
 def _created(document: Document, sketch_id: SketchId) -> dict:
     """作ったスケッチの応答。`frame` は追加の往復なしで座標系を知らせるため
-    (`catalog._SKETCH_FRAME_HELP`。面に貼ると原点は面の中心で、世界座標ではない)。"""
+    (`catalog._SKETCH_FRAME_HELP`。面に貼ると原点も向きも面ごとに違い、世界座標ではない)。"""
     frame = kernel_sketch.sketch_plane_frame(get_sketch(document, sketch_id).plane)
     return {"sketch_id": sketch_id, "frame": frame}
 

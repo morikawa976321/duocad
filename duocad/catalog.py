@@ -294,14 +294,15 @@ def _value_matches_json_type(value: Any, expected: str) -> bool:
 _SKETCH_ID = Param("sketch_id", "string", "対象スケッチのID")
 #: `sketch_create` / `sketch_create_offset` の応答に載せるスケッチの枠(`kernel_sketch.sketch_plane_frame`)。
 _SKETCH_FRAME = Result("frame", "{ origin: number[]; u: number[]; v: number[]; normal: number[] }")
-#: 同じ2つの説明に足す座標系の注意。**面に貼ったスケッチの原点は面の中心**なのに、AIは基準平面と
-#: 同じ世界座標だと思い込んで描き、形が黙って別の場所にできる(実測: アプリ内AIが上面中央の
-#: ポケットを4分の1だけ削った例が8題×3条件で3回。Issue #125)。
+#: 同じ2つの説明に足す座標系の注意。面に貼ったスケッチの枠は面の平面の座標系そのままで、原点も
+#: 向きも面ごとに違う(実測: 100x60x10 の板で上面の原点は面の中心、+X 面は角 (100, 0, 0) で
+#: v は世界の -Z)。AIは基準平面と同じ世界座標だと思い込んで描き、形が黙って別の場所にできる
+#: (アプリ内AIが上面中央のポケットを4分の1だけ削った例が8題×3条件で3回。Issue #125)。
 _SKETCH_FRAME_HELP = (
     "**図形の座標 (u, v) は戻り値の frame で測る**(3D位置 = origin + u*frame.u + v*frame.v)。"
-    "基準平面では origin が世界原点なので世界座標のまま描けるが、"
-    "**面を基準にすると origin は面の中心(offsetならその真上)**になる"
-    "(例: 中心が世界 (50, 30, 10) の上面に貼ったら、上面の中央は (u, v) = (0, 0))。"
+    "基準平面なら世界座標のままだが、**面を基準にすると原点も軸の向きも面ごとに違う**"
+    "(面の中心とは限らず角のこともあり、u/v が世界の軸と逆向きのこともある)。"
+    "世界の点 P に描くなら u = (P - origin)・frame.u、v = (P - origin)・frame.v で換算する。"
 )
 
 #: `set_selection` の述語の書き方。**説明に載せておく** —— 書き方を知らずに呼ぶと失敗して語彙が返り、
