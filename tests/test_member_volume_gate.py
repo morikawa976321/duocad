@@ -127,3 +127,21 @@ def test_the_finished_shape_is_refined_to_a_third_unless_the_grid_is_too_large()
     assert final_check.refine_factor(1000) == 3
     assert final_check.refine_factor(final_check.MAX_FINE_ELEMENTS // 8) == 2
     assert final_check.refine_factor(final_check.MAX_FINE_ELEMENTS) == 1
+
+
+def test_the_reported_peak_position_is_the_face_centre_not_the_element_centre(monkeypatch):
+    """落ちたら、完成形検査の最大応力の位置が測った面の中心から半要素ずれている。"""
+    material = np.ones((2, 2, 2), bool)
+    fine = voxelize.Grid((10.0, 20.0, 30.0), 1.0, (2, 2, 2))
+    faces = np.full((2, 2, 2, 6), np.nan)
+    faces[0, 0, 0, 1] = 5.0  # 要素 (0,0,0) の +x 面
+    monkeypatch.setattr(stress, "exposed_face_von_mises", lambda *a, **k: faces)
+    monkeypatch.setattr(acceptance, "rigid_body_constrained", lambda *a: True)
+    scale = stress.UnitScale(1.0, 1.0, 1.0, solved_load=1.0)
+    monkeypatch.setattr(acceptance, "solve_material", lambda *a, **k: (None, None, None, scale, 0.0))
+
+    class Conditions:
+        youngs_modulus_mpa, solver, allowable_mpa = 1.0, "direct", 40.0
+
+    report = final_check._strength(material, material, ~material, ~material, fine, None, None, Conditions(), 2.0)
+    assert report["peak_position_mm"] == [11.0, 20.5, 30.5] and report["peak_mpa"] == 5.0

@@ -100,6 +100,7 @@ def build_context(model_path: Path, *, load_n: float, element_size_mm: float, mi
         doc, space, bundle, optimize_run.OptimizeOptions(element_size_mm=element_size_mm),
         table=table, mapping=mapping,
     )
+    cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
     resolved = optimize_run._resolve_min_width(space.grid.spacing, min_width_mm)
     return SearchContext(model_path=model_path, load_n=load_n, element_size_mm=element_size_mm,
                          min_width_mm=min_width_mm, cond=cond, space=space, table=table,

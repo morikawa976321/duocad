@@ -13,6 +13,7 @@ stdout印字だけが根拠で、マスク・原点・ハッシュ付きの記�
 """
 from __future__ import annotations
 
+import dataclasses
 import argparse
 import json
 import sys
@@ -54,6 +55,7 @@ def run(src: str, dst: str, dilate: int) -> dict:
                                         min_width_mm=dst_row["min_width"]["requested_mm"])
     table, mapping = optimize_run._map_boundary_conditions(space, bundle)
     cond = optimize_run._build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
+    cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
     resolved = optimize_run._resolve_min_width(float(dst_voxel["spacing"]), dst_row["min_width"]["requested_mm"],
                                                max_cells=min(space.grid.shape))
     min_width_cells = resolved["cells"]

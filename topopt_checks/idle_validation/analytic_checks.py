@@ -1,6 +1,7 @@
 """解析解(一様引張・片持ち曲げ・Kirsch)とボクセルFEMの独立比較CLI。"""
 from __future__ import annotations
 
+import dataclasses
 import argparse
 import json
 import sys
@@ -271,6 +272,7 @@ def run_kirsch(shape: str, element_mm: float) -> dict | None:
         table=table,
         mapping=mapping,
     )
+    cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
     probe = _fem_probe.evaluate_full(
         mask,
         space.grid,

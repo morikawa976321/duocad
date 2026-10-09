@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -59,6 +60,7 @@ def main() -> int:
     opts = optimize_run.OptimizeOptions(element_size_mm=SIZE, min_width_mm=CELLS * SIZE)
     table, mapping = optimize_run._map_boundary_conditions(space, bundle)
     cond = optimize_run._build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
+    cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
     keep = np.asarray(space.model.keep, bool)
     near = ndimage.binary_dilation(keep, iterations=2)
 

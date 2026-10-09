@@ -70,6 +70,8 @@ def _strength(material, region, keep, layer, fine, fixed, load, conditions, targ
         flat = int(np.nanargmax(faces))
         cell = np.unravel_index(flat // 6, material.shape)
         position = [float(fine.centers_1d(axis)[cell[axis]]) for axis in range(3)]
+        face, half = flat % 6, 0.5 * float(fine.spacing)
+        position[face // 2] += -half if face % 2 == 0 else half  # 面の順は (-x,+x,-y,+y,-z,+z)
         return float(faces.reshape(-1)[flat]), position
 
     value, position = peak(region)

@@ -1,4 +1,5 @@
 """別の格子で得た採用マスクを写して、この格子の6条件で評価する。 python topopt_checks/measure_idle_transplant.py <元条件> <先条件> [太らせるセル数]"""
+import dataclasses
 import sys, json, numpy as np
 from pathlib import Path
 from unittest.mock import patch
@@ -19,6 +20,7 @@ space = ds.derive(bundle.conditions, spacing=float(t["spacing"]))
 opts = optimize_run.OptimizeOptions(element_size_mm=row["element_size_requested_mm"], min_width_mm=row["min_width"]["requested_mm"])
 table, mapping = optimize_run._map_boundary_conditions(space, bundle)
 cond = optimize_run._build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
+cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
 # 先の格子のセル中心 → 元の格子のセル
 idx = np.indices(space.grid.shape).reshape(3, -1).T
 w = np.asarray(space.grid.origin) + (idx + 0.5) * space.grid.spacing
