@@ -438,7 +438,7 @@ cg**(`fem.choose_solver`。2026-09-22本人決定。根拠は[TOPOPT_SPEED.md](T
 SIMP時代の連続密度の系ではCG反復/solveが0.07〜0.20倍だったが、現在の探索が解く形(二値マスク・
 材料要素だけで組むK)では速いのは太い形だけで、細い採用形状ではcgより遅く、solve中のメモリは
 常に多かった(実測は[TOPOPT_SPEED.md](TOPOPT_SPEED.md)「探索が解く形での cg と mg」)。実装と受入
-検査`check_multigrid.py`はgit履歴に残る。
+検査はgit履歴に残る。
 
 **CGの許容は`rtol = 1e-9`**(1e-6だと完了条件の対称性チェックに対して余裕が6倍しかなく、1e-9
 でも所要は13%しか増えない)。
@@ -996,7 +996,7 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
 決めた。
 
 - **誰も通らない分岐と、製品が使わない別実装は削除した**(`stress.evaluate`内部の解く経路、
-  `volume_atol`/`volume_rtol`、`mesh.build_surface`、`voxelize.voxelize()`、`fem._floating_dofs`、
+  `volume_atol`/`volume_rtol`、`mesh.build_surface`、`voxelize.voxelize()`、
   `on_outside="clip"`、`pressure_vector`、`anchors_for`、結果の`reactions`・`name`など)。受入検査は
   製品と同じ入口を通す。
 - **製品の値が正しいことを、値を振って確かめるためのつまみは残す**: `rho_min`・`percentile`・

@@ -7,7 +7,7 @@
 
 全体の前提(全節に共通):
 - コードは `topopt_checks/idle_validation/`(製品コード `duocad/` は無変更が原則)。出力は `output/idle_validation_20260928/`、モデルは `models/`。**`models/`・`output/` は `.gitignore` 対象でgit管理外**。コミットできるのは `topopt_checks/idle_validation/`・`tests/`・`docs/` だけ。生データはスクリプト再実行で作り直す。(00-compact-models / 01-protocol, 2026-09-28)
-- 最終的な検証は、期限(2026-10-05再編)で縮小範囲に切られたため「元の全検証の完了」ではない。その事情は runs 側の冒頭に書く。
+- 最終的な検証は、期限変更で縮小範囲に切られたため「元の全検証の完了」ではない。その事情は runs 側の冒頭に書く。
 
 ## 小型題材(topopt_idle_dilution_small.json / topopt_idle_path_small.json)
 

@@ -192,12 +192,9 @@ m=2 の部材の倍率(§2.1 の 2.3〜2.4)が上限として効く。材料は 
 
 ## 6. 再現手順
 
-コードは `duocad/`(HEAD)と `topopt_checks/`。venv の Python を使い、日本語を print するなら `PYTHONIOENCODING=utf-8`。所要は m=2・3 が約3分、m=4・5 が約6分。
+コードは `duocad/`(HEAD)と `topopt_checks/`。venv の Python を使い、日本語を print するなら `PYTHONIOENCODING=utf-8`。`measure_member_refinement_ratio.py`(m=2・3 が約3分、m=4・5 が約6分)と `measure_element_locking.py` は312aac5で撤去した(再現にはその前のコミットが要る)。
 
 ```
-.\.venv\Scripts\python.exe topopt_checks\measure_member_refinement_ratio.py --m 2 3 --out C:\tmp\member_probe.json
-.\.venv\Scripts\python.exe topopt_checks\measure_member_refinement_ratio.py --m 4 5 --groups straight ljoint diag2d --out C:\tmp\member_probe_m45.json
-.\.venv\Scripts\python.exe topopt_checks\measure_element_locking.py --out C:\tmp\locking_probe.json
 .\.venv\Scripts\python.exe topopt_checks\measure_thickness_along_search.py --run output\min_width\projected-peel-20260920\runs\project_m2 --out C:\tmp\thickness_along_search.json
 ```
 

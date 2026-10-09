@@ -28,8 +28,8 @@ pytest 全体が毎回それを払うことになる。呼ぶ側が
 from pathlib import Path
 
 # 成果物(STL・測定JSON)の置き場。**呼び出し側の作業ディレクトリに依存させない** ——
-# 相対パスで書くと runner が別のディレクトリから回したときにゴミが落ちる
-# (実際に `taskbox/queue/output/` へ落ちたことがある)。
+# 相対パスで書くと呼び出し側が別のディレクトリから回したときにゴミが落ちる
+# (実際に、廃止した taskbox の runner が回したとき `taskbox/queue/output/` へ落ちたことがある)。
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 __all__ = ["OUTPUT_DIR"]
