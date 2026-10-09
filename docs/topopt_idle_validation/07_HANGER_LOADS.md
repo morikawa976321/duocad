@@ -4,7 +4,7 @@
 **この文書の範囲は「今回の縮小範囲(保存済み台帳の集計と、固定形状診断2件)の報告」で、「元の全検証の完了」ではない。**
 本人の2026-10-05指示(「あと2-3日でおわるようにタスクを組みなおして」)と `docs/topopt_idle_validation/DEADLINE_PLAN_2026-10-05.md`
 が、以前の時間無制限・全行列の指示に優先する。旧 `chain07.ps1`(methods→origin→init の全行列自動継続)は本人の期限変更で停止・無効化され、再起動していない。
-前提の06(`06_HANGER_LOW.md`・`taskbox/done/20260928-1426-topopt-idle-06-hanger-low.md`「後続への契約」)は読了済みで、200N・太い幅の結果を6節で合流させた。
+前提の06(`06_HANGER_LOW.md`・`docs/contracts/topopt-idle-validation-runs.md`(出典 `20260928-1426-topopt-idle-06-hanger-low`)「後続への契約」)は読了済みで、200N・太い幅の結果を6節で合流させた。
 
 ## 結論(先に要約)
 

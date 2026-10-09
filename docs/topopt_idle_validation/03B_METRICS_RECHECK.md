@@ -1,8 +1,8 @@
 # 段階3b: 訂正後の評価式・反例・採否の再検証
 
 2026-09-28。`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「0〜2レビュー後の訂正と実行順序」節の
-`20260928-1426-topopt-idle-03b-metrics-recheck`。着手前に`taskbox/done/20260928-1426-topopt-idle-03a-reference-repair.md`
-「## 後続への契約」と`taskbox/done/20260928-1426-topopt-idle-03-metrics.md`「## 後続への契約」・
+`20260928-1426-topopt-idle-03b-metrics-recheck`。着手前に`docs/contracts/topopt-idle-validation-setup.md`(出典 `20260928-1426-topopt-idle-03a-reference-repair`)
+「## 後続への契約」と`docs/contracts/topopt-idle-validation-setup.md`(出典 `20260928-1426-topopt-idle-03-metrics`)「## 後続への契約」・
 本体(`03_METRICS.md`)・`03A_REFERENCE_REPAIR.md`全文を読み、03aの訂正台帳(8-2節)を引き継いだ。
 
 **本書の役割**: 03(`03_METRICS.md`、評価式10候補M1〜M7bの実測比較・採否)が、03a(`03A_REFERENCE_REPAIR.md`、

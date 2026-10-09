@@ -493,7 +493,7 @@ def resolution_limits(doc: "Document") -> dict:
     除去」——二値探索は密度フィルタを持たないので、最小部材幅からの要求という概念自体が無い)。
     **利用者に聞かない**。`anchor.AnchorTable.empty_face_diagnosis` の
     `suggested_max_spacing_mm` と**同じ式**(`sqrt(CAD面積)`)を使う。**近似であって保証ではない**
-    (`done/20260904-1556` の契約②)—— 正方形とみなした代表寸法なので、曲面や極端な縦横比の面
+    (`docs/contracts/topopt-design-space.md` の `20260904-1556` 契約②)—— 正方形とみなした代表寸法なので、曲面や極端な縦横比の面
     では過大にも過小にもなる。厳密に確かめる手段は「その要素サイズで実際に `empty_faces()` を
     取り直す」しかない。
 
@@ -612,7 +612,7 @@ def _face_max_spacing_mm(cad_area_mm2: float) -> float:
     `anchor.AnchorTable.empty_face_diagnosis` の `suggested_max_spacing_mm` と**同じ式**
     (正方形とみなした代表寸法 `sqrt(CAD面積)`)。probe 側は空になった面の逃げ道として、
     ここは事前の解像度の決め方として同じ数字を使う。**近似であって保証ではない**
-    (`done/20260904-1556` の契約②)—— 曲面・極端な縦横比では過大にも過小にもなる。
+    (`docs/contracts/topopt-design-space.md` の `20260904-1556` 契約②)—— 曲面・極端な縦横比では過大にも過小にもなる。
     値が一致していることは `topopt_checks/check_optimize_wiring.py` [8] が突き合わせる。
     """
     area = float(cad_area_mm2)

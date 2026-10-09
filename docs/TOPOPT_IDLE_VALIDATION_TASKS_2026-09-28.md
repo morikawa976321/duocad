@@ -85,7 +85,7 @@
 - [目標係数](TOPOPT_TARGET_FACTOR.md)、[現行二値探索](PLAN_BINARY_STRESS_SEARCH.md)。
 - 完成形: [メッシュ集合演算](TOPOPT_MESH_BOOLEAN_STUDY.md)、[平滑化の交差](TOPOPT_SMOOTHING_INTERSECTIONS.md)、[最終形状の検査](TOPOPT_ACCEPTANCE.md)。
 - 今回の追加集計: `topopt_checks/analyze_idle_alternatives.py`、`output/idle_alternatives_20260928/analysis.json`。
-- taskboxの状態遷移と完了ゲート: `C:/Users/tm976/mf/taskbox/README.md`、前提タスクの `done/<task-id>.md` 内の「後続への契約」。
+- taskboxの状態遷移と完了ゲート: `C:/Users/tm976/mf/taskbox/README.md`、前提タスクの契約(`docs/contracts/topopt-idle-validation-setup.md`・`topopt-idle-validation-runs.md` に分野別に移してある。項目末尾が出典タスクID)。
 
 ## 実験の品質と十分性
 

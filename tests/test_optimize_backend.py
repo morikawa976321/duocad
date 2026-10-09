@@ -880,7 +880,7 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
 def test_importing_the_session_does_not_pull_in_the_topopt_layer() -> None:
     """`optimize_run` を `session.py` が読むようになっても、**最適化の層は来ない**。
 
-    `duocad/topopt/*` の import は関数の中に置いてある(`done/20260904-1600` の契約②)。
+    `duocad/topopt/*` の import は関数の中に置いてある(`docs/contracts/topopt-pipeline-integration.md` の `20260904-1600` 契約②)。
     ここが崩れると pytest 全体が毎回 skimage と `duocad.topopt` の起動費用を払う。
 
     **`scipy` は見ない** —— `duocad/view.py` が(このタスクの前から)既に読んでいるので、

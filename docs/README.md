@@ -27,3 +27,28 @@
 | [TOPOPT_STOP_RULE.md](TOPOPT_STOP_RULE.md) | 段階4の打ち切り（issue #22）の判断材料: 終盤の力学の実測（issue の実行・hanger の回し直し・合成題材）と、候補規則を記録済みの軌道へ後付けした試算表。決定は無い |
 | [PLAN_BINARY_STRESS_SEARCH.md](PLAN_BINARY_STRESS_SEARCH.md) | 二値モデル・応力制約による探索の現行仕様（§1〜§5）と、段階7・段階4置き換えの実測（§10〜§12） |
 | [FIX_BINARY_SEARCH_INITIALIZATION.md](FIX_BINARY_SEARCH_INITIALIZATION.md) | hanger初期探索失敗への修正指示と実施結果（境界条件の確定・入口検査・候補メモリ管理。§9に実測） |
+
+### contracts/ — 作業タスクの契約の分野別蒸留
+
+taskbox 廃止に伴い、完了タスクの「後続への契約」(ソースから読めない不変条件・依存禁止・罠)を分野別に移した文書群。項目末尾の括弧は出典タスクIDと日付。「(対象コード不在・要確認)」は、その後に削除・改名されたコードの契約で、教訓として残してある。
+
+| 文書 | 何が書いてあるか |
+|---|---|
+| [contracts/topopt-design-space.md](contracts/topopt-design-space.md) | 形状最適化: 設計空間の導出・連結性・条件の可視化・bbox・void除去の契約(不変条件・依存禁止・罠。出典はタスクID) |
+| [contracts/topopt-volume-stress-safety.md](contracts/topopt-volume-stress-safety.md) | 形状最適化: 体積目標・von Mises 代表応力・安全率の外側ループの契約 |
+| [contracts/topopt-solver-optimizers.md](contracts/topopt-solver-optimizers.md) | 形状最適化: ソルバ・並列化・性能測定・OC/MMA・反力・アクティブセットの契約(削除済みコードの教訓を含む) |
+| [contracts/topopt-pipeline-integration.md](contracts/topopt-pipeline-integration.md) | 形状最適化: topopt の本体取り込み・probe 廃止・フィルタ・平滑化・導出の契約 |
+| [contracts/topopt-binary-search.md](contracts/topopt-binary-search.md) | 形状最適化: 二値探索の各段(FEM 抽出・受入・初期実行可能解・削減・製品配線・旧経路撤去)の契約 |
+| [contracts/topopt-measurements-stage4.md](contracts/topopt-measurements-stage4.md) | 形状最適化: 厚み・保持小体・節点所有の計測、peel、段階4の停止規則、中空なしの契約 |
+| [contracts/topopt-min-width-peel.md](contracts/topopt-min-width-peel.md) | 形状最適化: 最小幅・芯の連結・射影つき peel の契約 |
+| [contracts/topopt-keep-cells.md](contracts/topopt-keep-cells.md) | 形状最適化: 保持セルの exempt / protected の契約 |
+| [contracts/topopt-target-factor-warm-start.md](contracts/topopt-target-factor-warm-start.md) | 形状最適化: 探索目標係数・内側目標・warm start(撤去済み)の契約 |
+| [contracts/topopt-solver-pairs.md](contracts/topopt-solver-pairs.md) | 形状最適化: cg と直接解法の対の測定と solver=auto の契約 |
+| [contracts/topopt-finalize-smoothing.md](contracts/topopt-finalize-smoothing.md) | 形状最適化: 最終処理・平滑化コーパス・設計要素数上限の契約 |
+| [contracts/topopt-idle-validation-setup.md](contracts/topopt-idle-validation-setup.md) | 不要材料検証(題材・プロトコル・参照解・指標)の契約 |
+| [contracts/topopt-idle-validation-runs.md](contracts/topopt-idle-validation-runs.md) | 不要材料検証(探索・経路認定・合成・hanger・頑健性・最終形状・総括)の契約 |
+| [contracts/ui-selection-viewport.md](contracts/ui-selection-viewport.md) | UI: 選択の鍵・面数カウント・矩形選択・画面ピック・ビューキューブ・FOV・デバッグビューの契約 |
+| [contracts/ui-sketch-input.md](contracts/ui-sketch-input.md) | UI: コマンド引数仕様・スケッチ入力・ホバー・ゴースト・グリッド追従の契約 |
+| [contracts/ui-optimize-integration.md](contracts/ui-optimize-integration.md) | UI/コア: メッシュ body 種別・最適化バックエンド配線・実行 UI の契約 |
+| [contracts/verbs.md](contracts/verbs.md) | verb: move/pattern/mirror/boolean/envelope/extrude とそのプレビューの契約 |
+| [contracts/maintenance-docs-comments-tests.md](contracts/maintenance-docs-comments-tests.md) | 保守: 文書・コメント・テストの減量と、doc-code 一致検査・TOPOPT.md 構成の規約 |

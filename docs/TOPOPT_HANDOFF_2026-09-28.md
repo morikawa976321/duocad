@@ -54,7 +54,7 @@
 
 条件名は `F<荷重4桁>_h<要素サイズ>_w<セル数>`(例 `F0200_h1.8_w2`)。要素サイズの実値は 1.798 / 1.997 / 2.199 / 2.388 mm。
 座標規約: ワールド = `origin + verts * spacing`、verts はセル中心規約(セル `i` は `[i, i+1]`)。詳細と材料体積の表は `docs/TOPOPT.md`「平滑化の検証材料」、
-各タスクの契約は taskbox の `done/20260925-1826-*`・`done/20260925-1827-*`・`done/20260925-2101-*` の「後続への契約」。
+各タスクの契約(`20260925-1826`・`20260925-1827`・`20260925-2101`)は [contracts/topopt-finalize-smoothing.md](contracts/topopt-finalize-smoothing.md)。
 
 ### 3-2. (4)の調査の出力 `output/idle_study/`(git 管理外。`_trace/` が 5.3 GB)
 

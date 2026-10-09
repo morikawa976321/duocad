@@ -2,7 +2,7 @@
 
 2026-09-29〜2026-10-02。`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「0〜2レビュー後の訂正と実行順序」節の
 `20260928-1426-topopt-idle-06-hanger-low`。着手前に
-`taskbox/done/20260928-1426-topopt-idle-05-synthetic.md`「## 後続への契約」・
+`docs/contracts/topopt-idle-validation-runs.md`(出典 `20260928-1426-topopt-idle-05-synthetic`)「## 後続への契約」・
 `docs/topopt_idle_validation/REVIEW_00_02_2026-09-28.md`・
 `docs/topopt_idle_validation/03A_REFERENCE_REPAIR.md`(48.72 MPaピーク原因特定・06/07への割当)・
 `docs/topopt_idle_validation/03B_METRICS_RECHECK.md`(hanger共通条件採点の既存データ)を読んだ。
