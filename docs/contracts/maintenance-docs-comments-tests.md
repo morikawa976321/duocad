@@ -6,8 +6,6 @@
 [../DEV_NOTES.md](../DEV_NOTES.md)「コメントと文書の減量」が持つので、ここでは重複させず、それらに無いものだけを書く。
 
 出典は項目末尾の括弧 `(タスクID, 日付)`。タスクIDは元の作業タスクの識別子。
-`(対象コード不在・要確認)` は、その後のリファクタで名指しされた対象がリポジトリから消えているもの
-(原則だけが有効で、個別の名前は現行コードと照合してから使うこと)。
 
 ## 1. 文書に写してはいけないものの型(手動同期の口を増やさない)
 
@@ -51,8 +49,6 @@
   逆に、コード側コメントの引用句が文書のどこにも一致しない例も実在した。コードを触れないタスクでは、文書側の既存見出しに
   引用句を埋め込む形で解消した(見出し名の書き換えではなく句の追加)。
   `(20260906-0800-duocad-restructure-topopt-md, 2026-09-06)`
-  (当時の個別例 `simp.py`「1.5要素という下限の根拠」/`design_space.py`「案5の既定値をどう決めたか」/`bench.py:42`/`perf.py:63` は
-  `duocad/topopt/simp.py` `bench.py` `perf.py` ごと廃止され、該当見出しも現行の `docs/TOPOPT.md` に無い。対象コード不在・要確認)
 - `docs/TOPOPT.md` を再構成するときの具体的な面は4章。
 
 ## 3. 文書とコードの一致検査(`tests/test_doc_code_agreement.py`)
@@ -76,45 +72,31 @@
   意図して押さえていない。**「この検査があるから文書はもう腐らない」に依存しない。**
 - **不変条件: 期待値を検査側へ書き写して緑にしない。** 正はコード側。検査の中に「7語彙」のような数を定数で置かず、すべてコードから導出する。
   落ちたときに直すのは文書の行。
-- **検査を足すときの2点(`check_design_space.py` の旧 `[12-6]` 型=文字列を文書全体から `in` で探すだけ、の穴を塞ぐため)**:
+- **検査を足すときの2点(文字列を文書全体から `in` で探すだけの検査の穴を塞ぐため)**:
   (1) **走査が効いていることを先に見る**(0件なら常に緑になる。見出しや表の形が変わったら「読めなかった」で落とす)
   (2) **集合を両方向で比べる**(足りない側と余計な側の両方)。
-  `[12-6]` 型は文書側の古い行を検出できず、節が消えても同じ文字列が別の場所にあれば緑のままになる。
+  `in` で探すだけの検査は文書側の古い行を検出できず、節が消えても同じ文字列が別の場所にあれば緑のままになる。
 - **`README.md`「形状最適化の受入検査」に `topopt_checks/check_*.py` を1本残らず並べる。** この群は pytest に入っておらず、
   READMEのブロックを写して回すのが唯一の強制力(CIが無い)。**新しい `check_*.py` を足したらREADMEにも足す**(足さないとこの検査が落ちる)。
 - **`MCP.md`「公開ツール」表は `mcp=False` の verb を載せない**。
 - 文書を読む検査を足すなら必ず踏む穴: 節の切り出しを素の行頭 `#` で行うと、PowerShellコードブロックの `# 説明` 行で節が1行目で終わり0件を拾う。
   **コードフェンス(```)の内側は見出しに数えない**。失敗文は `path.name` だけだと `tests/README.md` も `README.md` も「README.md」と表示されるので
   リポジトリ相対パスで出す。 `(20260906-0900-duocad-lock-doc-code-agreement, 2026-09-06)`
-- **変異検査の罠**: `duocad/catalog.py`・`mcp_server.py`・`sketch.py` は CRLF、`tests/*.py` は LF。複数行文字列の置換は `old` が0件一致のまま
+- **変異検査の罠**: ファイルごとに CRLF/LF が違う(9章)ので、複数行文字列の置換は `old` が0件一致のまま
   「検査が緑」になり**変異が効いていないのに合格に見える**。変異は必ず「置換できたこと」(`count(old)==1`)を assert してから走らせる。
   `(20260906-0900-duocad-lock-doc-code-agreement, 2026-09-06)`
 - `Session` は引数なしでは作れない。検査では `Session(None, 0.2)`(`step_path` と `deviation` が必須)。
   `(20260906-0900-duocad-lock-doc-code-agreement, 2026-09-06)`
-- **失敗語彙の件数**: 「6語彙」と「7語彙」がリポジトリ内に混在していた(正しくは語彙の実数)。当時は件数を検査する
-  `test_the_written_vocabulary_counts_match_the_source` を足して「列挙が並記される場所では数を書いてよい」へ緩めたが、
-  **現行の `tests/test_doc_code_agreement.py` にこの件数検査は無い**(語彙の列挙 ↔ `error_envelope` の一致だけが残る)。
-  件数を書くと検査されない口になるので、型1に戻して語彙の数は書かない。 `(20260906-0900-duocad-lock-doc-code-agreement, 20260906-0100-duocad-fix-stale-docs, 2026-09-06)`
-- 当時は `tests/README.md` の失敗封筒節と `Entity.params` のキー種別表も掛かり先だったが、`tests/README.md` 自体が廃止された
-  (8章)ので検査からも外れた(種別の顔ぶれは `tests/test_entity_kind_tables.py` が、点のキーの正は `sketch.entity_point_keys` が持つ)。
-  `(20260906-0900-duocad-lock-doc-code-agreement, 2026-09-06)` (対象コード不在・要確認)
+- **失敗語彙の件数は書かない。** 「6語彙」と「7語彙」がリポジトリ内に混在していた(正しくは語彙の実数)。現行の検査は語彙の列挙 ↔ `error_envelope` の一致だけで件数は見ないので、件数を書くと検査されない口になる(型1)。 `(20260906-0900-duocad-lock-doc-code-agreement, 20260906-0100-duocad-fix-stale-docs, 2026-09-06)`
 
 ## 4. docs/TOPOPT.md の構成規約
 
 - **冒頭「## 現在の正」は索引であって値の置き場ではない。値そのものはコード側が正**(手動同期しない。本人指示 2026-09-05)。
   **新しい既定値を追加・変更したら、まずこの表の行を直す** —— ここが古いと文書全体が「時系列を読まないと現在値が分からない」状態に戻る。
   この表は3章の検査が値まで見る。 `(20260906-0800-duocad-restructure-topopt-md, 20260906-0900-duocad-lock-doc-code-agreement, 2026-09-06)`
-- **実測・基準線は「実測値の記録(時系列)」の下に `###` として足す。新しいトップレベル `##` の実測値/基準線節を独立して立てない**
-  (節は「行」でなく「節」の単位で増え、機能タスク1本で+397行になる。変異検査9節を1表に畳んだのと同じ規約)。
-  `(20260906-0800-duocad-restructure-topopt-md, 2026-09-06)`
-  (現行の `docs/TOPOPT.md` にこの見出し自体は無い。再構成の形が変わっている。規約の趣旨は有効。対象コード不在・要確認)
-- **置き換えられた方式の節(案1: 外接直方体+余白 / 密度場側のガウシアン平滑化)は削除せず、節の先頭に「置き換えられた」旨の1段落**を足す。
+- **置き換えられた方式の節は削除せず、節の先頭に「置き換えられた」旨の1段落**を足す。
   中身(実測・根拠・留保)は削らない。 `(20260906-0800-duocad-restructure-topopt-md, 2026-09-06)`
-- 「**失効した数字**」の一覧(rmin 1.5→2.5要素で失効した実測)は追記も削除もしない。どれを撮り直すかは本人判断。
-  `(20260906-0800-duocad-restructure-topopt-md, 2026-09-06)` (対象コード不在・要確認: 現行の見出しに該当節なし)
-- 性能の基準線の節には、現行の構造的な文書(題材の定義表・検査一覧・未解決の設計判断)が過去の測定値と同居していた。**「時系列の実測値は全部1箇所にある」前提で
-  自動処理を書かない。** 旧 `check_design_space.py [12-6]` は `design_space.CASES[...].covers` の4文字列を文書全体から検索しており、
-  この表を動かすと落ちた。 `(20260906-0800-duocad-restructure-topopt-md, 2026-09-06)` (対象コード不在・要確認: 現行の `check_design_space.py` に `[12-6]` も `covers` も無い)
+- 性能の基準線の節には、構造的な文書(題材の定義表・検査一覧・未解決の設計判断)が過去の測定値と同居することがある。**「時系列の実測値は全部1箇所にある」前提で自動処理を書かない。** 文書全体から文字列を探す検査は、この表を動かすと落ちる。 (20260906-0800-duocad-restructure-topopt-md, 2026-09-06)
 - 行数が変わらないことを失敗の根拠にしない(価値は「現在値が時系列を読まずに引けること」)。節の位置にも依存しない。見出し文字列で探す。
   `(20260906-0800-duocad-restructure-topopt-md, 2026-09-06)`
 - `docs/TOPOPT.md` は巨大(当時299KB)で全文読みはガードに止められる。見出しを `awk` / grep で1行だけ取って確かめる。
@@ -132,13 +114,12 @@
 - **経緯と実測が同じ括弧・同じ注記にあるときは、経緯を削り実測を残す**(判断は1文の中で両立させる)。例: `kernel.py` の
   `tessellate_edges`(ライブラリ名の変遷を削り、なぜ現行方式が要るかの実測を残す)、`topopt/mesh.py` の `DEFAULT_ITERS` 注記
   (「30→12→30に戻した」の往復を削り、その値が正しい理由の実測 0.765^30≈0.03%・4.8%→15.2% は1文字も削らない)、
-  `topopt/bench.py`(全行が `(2026-09-04実測: …)` の形。日付だけ削り数値・比較・しきい値は触らない)、`topopt/voxelize.py`(発見の経緯を削り、
+  `topopt/voxelize.py`(発見の経緯を削り、
   再現手順の具体値 `a=b=(0,0,0), c=(5,4,4), p=(10,4,-8)` は残す)。判断基準は「**数値の再現に日付の文脈が要るか**」。
   `web/src/viewport.ts` の実測数値(0.6%/55%ずれ、7e-14でカメラが動いた実例、93.6px→143.7px)も日付だけ外した。
   `(20260906-0300-duocad-trim-comments-core, 20260906-0400-duocad-trim-comments-subpackages, 20260906-0500-duocad-trim-comments-web-src, 2026-09-06)`
-  (`topopt/bench.py` と `topopt/simp.py` は現行コードに無い。対象コード不在・要確認 —— 判断線のみ有効)
 - **削ってよいと自信を持てた4種**: (1) 日付+決定の刻印だけの注記(`(2026-08-23)` `(2026-09-04本人決定)`)、(2) 「以前は〜だった」の過去形叙述、
-  (3) 削除済みの実験場・旧コードへの言及とコミットハッシュ(`DEBUG_RHO_THRESHOLD` の旧 `probe_topopt/server.py` 削除日+ハッシュ。「旧実験場と同じ0.5」という値の由来は残す)、
+  (3) 削除済みの実験場・旧コードへの言及とコミットハッシュ(値の由来は残す)、
   (4) 同一ファイル内の重複した理由付け(`selection.py` の `ref_key`/`same_ref` と `modify_selection` の「集合引きでO(n)にした」。実測込みの方だけ残し片方は結論だけに)。
   `(20260906-0300-duocad-trim-comments-core, 2026-09-06)`
 - **日付なしの `(本人決定)` `(本人裁定)` タグも削る。ただし機械的な全削除ではない**: 情報が「誰が決めたか」だけなら削り、
@@ -147,12 +128,8 @@
 - **同一ファイル内の重複**(同じ罠の全文が `sketchGridIsFacePlane` 宣言・`basePlaneForFrame`・`desiredGridPlanes`・`gridTiers()` の4箇所に)は
   宣言部に全文を残し他は「詳細はそちら参照」に圧縮する。罠の中身は「`sketchGridFrame` のframe一致だけでは基準平面か任意面かを判別できない —
   実ジオメトリの面でも数値的に基準平面と一致することがある」。 `(20260906-0500-duocad-trim-comments-web-src, 2026-09-06)`
-- **複数ファイルに同じ手順が重複していたものの集約先**(減量後は「詳細は○○参照」の圧縮形になっているので、個別に見るときは集約先を引く):
-  STEP読み込みの手順 → `smoke-files.mjs`、`clickEntityHandle` の完全なdocstring → `smoke-features.mjs`、「MCPの口」「径の打ち直しはAIの口だけ」→ `smoke-files.mjs`。
-  `(20260906-0700-duocad-trim-comments-scripts-and-checks, 2026-09-06)`
-  (`web/scripts/` はその後組み替えられ、これらのファイル名が現存するかは未確認。対象コード不在・要確認)
 - **経緯のパラグラフの中に `engine \`…\`` / `[[…]]` の参照が埋まっていることがある**。経緯として削る前にこの参照の有無を確認し、
-  実在するなら参照だけ残して周辺の日付・経緯だけ削る(`smoke-files.mjs` の「一覧の『上書き』は撤去した」パラグラフで巻き込みかけた)。
+  実在するなら参照だけ残して周辺の日付・経緯だけ削る。
   なお参照先ノートは各リポジトリの docs に移設済み([../DEV_NOTES.md](../DEV_NOTES.md)参照)。
   `(20260906-0700-duocad-trim-comments-scripts-and-checks, 2026-09-06)`
 - **残した代表例(消すと戻せない側)**:
@@ -164,20 +141,15 @@
   実測事実 —— `selection.py` の「PCケース(27部品・2835面)のピック失敗率63%」、`resolution.py`・`kernel.py` の実測テーブル、
   `topopt/voxelize.py` の `closest_triangle`(退化三角形の反例数値)。
   層をまたぐ契約 —— `resolution.py` のPython/TS二重実装、`optimize.py` の `FINGERPRINT_RTOL`/`ATOL`(再生の決定性を前提にした許容差)、
-  `session.py`/`view.py` の分担(`Session` が持つ値と `DocumentView` が持つ値)、`net/ws.py` のモジュールdocstring(プロトコルの上り下り・`state`/`delta` の分担)、
-  `topopt/simp.py` の `Model.__init__`(節点番号の規約が `_build_edof` と一致しないと荷重が黙って別の場所に入る)。
+  `session.py`/`view.py` の分担(`Session` が持つ値と `DocumentView` が持つ値)、`net/ws.py` のモジュールdocstring(プロトコルの上り下り・`state`/`delta` の分担)。
   意図的な変則 —— `meshbody.py` の「メッシュをB-repに直さない理由」3点(marching cubesの面数爆発・`face_count` のO(n)再走査・フィレットの意味喪失)、
   `verbs/move_body.py` の「既知の穴」(`copy=True` で回転対称な角度を指すと重なった複製ができるが、健全な判定コストの方が高いのでわざと通す)、
-  `verbs/extrude.py` の `_resolve_target`(いま到達しない分岐だが将来の verb 追加に備えて残してある防御的コード)、
-  `tests/test_move_verbs.py` の「既知の穴」「わざと許してある」(日付・QA参照の枕詞だけ削り本文は1文字も削らない)。
+  `verbs/extrude.py` の `_resolve_target`(いま到達しない分岐だが将来の verb 追加に備えて残してある防御的コード)。
   `(20260906-0300-duocad-trim-comments-core, 20260906-0400-duocad-trim-comments-subpackages, 20260906-0600-duocad-trim-comments-tests, 2026-09-06)`
-  (`_smoothing_weight` / `topopt/simp.py` の `Model.__init__` は現行の `duocad/topopt/` に無い。対象コード不在・要確認)
 - **`selection.py` / `session.py` / `kernel.py` は層をまたぐ契約が最も密なので、意図的に薄くしか削っていない。** 「まだコメント率が高い」を理由に
   この3ファイルへ追加の削除を掛けない(濃い箇所ほど契約が多い)。`net/ws.py` の51%も同じで、削ったのは16箇所以上の日付注記だけ。
   `(20260906-0300-duocad-trim-comments-core, 20260906-0400-duocad-trim-comments-subpackages, 2026-09-06)`
-- **`topopt_checks/` の日付注記は web/scripts のUI変更履歴とは性質が違う。** 「既定値がいつ変わったか」の較正根拠(例: `simp.DEFAULT_RMIN` 1.5→2.5 でしきい値を
-  取り直した日付)で、`docs/TOPOPT.md` の失効した数字の追跡に使われている可能性がある。**削る前に、その日付が `docs/TOPOPT.md` から参照されていないか確認する**
-  (当時は13本を読んだうえで0編集とした)。 `(20260906-0700-duocad-trim-comments-scripts-and-checks, 2026-09-06)`
+- **`topopt_checks/` の日付注記は web/scripts のUI変更履歴とは性質が違う。** 「既定値がいつ変わったか」の較正根拠(しきい値を取り直した日付)で、`docs/TOPOPT.md` の失効した数字の追跡に使われている可能性がある。**削る前に、その日付が `docs/TOPOPT.md` から参照されていないか確認する**。 `(20260906-0700-duocad-trim-comments-scripts-and-checks, 2026-09-06)`
 - **`tools/measure_bloat.py` と `tools/check_code_unchanged.py` のモジュールdocstringは `--help` に出るので触らない**
   (「これは門ではない」等の自己言及も層をまたぐ契約寄りで消しすぎない)。触ってよいのは `--help` に出ない関数docstring内の日付だけ。
   `(20260906-0700-duocad-trim-comments-scripts-and-checks, 20260906-0600-duocad-trim-comments-tests, 2026-09-06)`
@@ -188,8 +160,7 @@
 
 ## 6. 減量の運用の判断
 
-- **行数・コメント率は目標にしない。** 減量の結果(`duocad/` 36.9→36.8%、`topopt/` 32.4→32.3%、`web/src/` 37.9→37.6%、`tests/` 31.4→30.3%、
-  `web/scripts/` 20.2→19.8%)は「種別を守った結果この程度」であり、「もっと削れるはず」の追加削除の根拠にしない。
+- **行数・コメント率は目標にしない。** 減量の結果は「種別を守った結果この程度」であり、「もっと削れるはず」の追加削除の根拠にしない。
   `tools/measure_bloat.py` は報告専用(門にしない。[../DEV_NOTES.md](../DEV_NOTES.md))。
   `(20260906-0300-duocad-trim-comments-core, 20260906-0400-duocad-trim-comments-subpackages, 20260906-0500-duocad-trim-comments-web-src, 20260906-0600-duocad-trim-comments-tests, 20260906-0700-duocad-trim-comments-scripts-and-checks, 2026-09-06)`
 - **「触っていないファイルがある」は「見ていない」ではない。** 密度が高いのが実測事実・層をまたぐ契約なら規律準拠として無編集になる
@@ -215,21 +186,15 @@
 - 減量の完了後に回す検査: `pytest`、`topopt_checks/` の検査群(コメントだけの変更なら数値は不変)、smoke(`web/` から `node scripts/smoke*.mjs` で自己完結。サーバを別途立てなくてよい)。
   `(20260906-0400-duocad-trim-comments-subpackages, 20260906-0500-duocad-trim-comments-web-src, 2026-09-06)`
 
-## 8. tests/README.md の廃止と、契約を書く場所の役割分担
+## 8. 契約を書く場所の役割分担
 
-- **`tests/README.md`(当時1,199行)は削除された**(契約はコードのそばへ移し済み)。当時の再同期では、型1〜3の線引き(1章)を適用し、
-  選択リセットverbの顔ぶれ(`resets_selection=True` の全量。`duocad/catalog.py` が正)などを文書に**写さず**参照だけにした。
-  **テストの目録でも検査の作り方でもなく、「実装が守っている契約は何か」だけを書く**のが契約文書の役割で、個々のテスト関数は列挙しない(それが手動同期になる)。
-  `(20260906-0250-duocad-tests-readme-resync, 2026-09-06)` (対象コード不在・要確認: `tests/README.md` は存在しない。`docs/CAD_LIBRARY_PITFALLS.md` に旧参照が残る)
-- **契約を書き出すときは、当該テストを全文読んでから書く。ファイル名からの推測をしない。** 特に `test_view_cube.py` / `test_grid_scale.py` は
-  `.py` が node を起動して終了コードを見るだけで、**契約の実体は `tests/eval_*.mjs` の assert にある**(同じ形の対: `eval_adaptive_resolution.mjs` /
-  `eval_selection_ref_key.mjs`)。 `(20260906-0250-duocad-tests-readme-resync, 2026-09-06)`
+- **契約文書の役割は「実装が守っている契約は何か」だけ**。テストの目録でも検査の作り方でもなく、個々のテスト関数は列挙しない(それが手動同期になる)。選択リセット verb の顔ぶれ(`resets_selection=True` の全量。`duocad/catalog.py` が正)などは文書に写さず参照だけにする。旧 `tests/README.md`(1,199行)は廃止し、契約はコードのそばへ移した。 `(20260906-0250-duocad-tests-readme-resync, 2026-09-06)`
+- **契約を書き出すときは、当該テストを全文読んでから書く。ファイル名からの推測をしない。** 特に `tests/test_ts_evaluators.py` は `tests/eval_*.mjs` を node で走らせて終了コードを見るだけで、**契約の実体は `eval_*.mjs` の assert にある**。 `(20260906-0250-duocad-tests-readme-resync, 2026-09-06)`
 - **`ai_*` の実体は `duocad/net/ws.py`、`duocad/server.py` は再輸出**。テストは `duocad.server.Server` を import するので、`server.py` を読みに行くと `_ai_configure` が無い。
   `(20260906-0250-duocad-tests-readme-resync, 2026-09-06)`
-- **コード側コメントが指す文書の節が実在しない**例が、文書再同期の前から存在した(`mcp_server.py` の「tests/README『F』節」、`test_mcp_selection.py` の「Aの実装で分かったこと」)。
+- **コード側コメントが指す文書の節が実在しない**例が、文書再同期の前から存在した。
   コードコメントに文書の節名を書くときは、その節が実在することを grep で確かめる。 `(20260906-0250-duocad-tests-readme-resync, 2026-09-06)`
-  (`tests/README.md` 廃止により、現在はファイル全体への参照が死んでいる可能性。対象コード不在・要確認)
-- 契約の追加先に迷ったら、文書の目録(`tests/README.md` 型)を増やすのではなく、特定の行に紐づく制約はコメント、複数ファイルにまたがる判断・手順・比較表は docs/(CLAUDE.md の方針)。
+- 契約の追加先に迷ったら、文書の目録(旧 `tests/README.md` 型)を増やすのではなく、特定の行に紐づく制約はコメント、複数ファイルにまたがる判断・手順・比較表は docs/(CLAUDE.md の方針)。
 
 ## 9. 作業環境の罠(文書・コメント・検査の保守で踏んだもの)
 
@@ -238,9 +203,7 @@
   `(20260906-0250-duocad-tests-readme-resync, 20260906-0600-duocad-trim-comments-tests, 20260906-0700-duocad-trim-comments-scripts-and-checks, 20260906-0900-duocad-lock-doc-code-agreement, 2026-09-06)`
 - **`tools/check_code_unchanged.py` / `measure_bloat.py` の日本語出力は Windows 既定の cp932 で化ける。** `PYTHONIOENCODING=utf-8` を付け、終了コードだけで判断しない。
   `(20260906-0500-duocad-trim-comments-web-src, 20260906-0600-duocad-trim-comments-tests, 20260906-0700-duocad-trim-comments-scripts-and-checks, 2026-09-06)`
-- **改行コードがファイルによって混在**(CRLF: `README.md` `MCP.md` `docs/INITIAL_PLAN.md` の旧working tree・`duocad/catalog.py` `mcp_server.py` `sketch.py`、LF: `tests/*.py` `tests/README.md`)。
-  Python で読み書きするときは `newline=''` で素通しする。`git diff`/`git add` の "LF will be replaced by CRLF" 警告は正規化されるので無害(差分は意図した行だけ)。
-  詳細な形は [../DEV_NOTES.md](../DEV_NOTES.md)。
+- **改行コードがファイルによって混在する**(`.gitattributes` は無く、作業ツリーは autocrlf で CRLF のファイル — `README.md` `MCP.md` `duocad/sketch.py` `tests/test_*.py` の多く — と LF のもの — `duocad/kernel.py` — が並ぶ)。`file <path>` で確かめ、Python で読み書きするときは `newline=''` で素通しする。bash の `sed`/`grep -c` は CR を見せず、heredoc で追記するとその部分だけ LF になる。行番号での切り出しも Python で。`git diff`/`git add` の "LF will be replaced by CRLF" 警告は正規化されるので無害(差分は意図した行だけ)。詳細な形は [../DEV_NOTES.md](../DEV_NOTES.md)。
   `(20260906-0100-duocad-fix-stale-docs, 20260906-0250-duocad-tests-readme-resync, 20260906-0600-duocad-trim-comments-tests, 20260906-0900-duocad-lock-doc-code-agreement, 2026-09-06)`
 - **タスク本文や申し送りの行番号は着手時点で既にずれている。** 位置は見出し名と本文の一意な文字列で特定する。
   `(20260906-0100-duocad-fix-stale-docs, 20260906-0250-duocad-tests-readme-resync, 2026-09-06)`

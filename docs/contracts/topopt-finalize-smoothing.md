@@ -8,16 +8,14 @@
 ## 最終処理（finalize）
 
 **現行**: `finalize(vertices, faces, preserve, exclude, progress=None)` は、2026-10-06 から **manifold3d によるメッシュ集合演算**（平滑化後の表面 + 保持を足し、除外を引く）で、B-rep（OCCT）のブーリアンを使わない。
-下の元契約が前提にした B-rep の処理順「まとめて cut → 保持を単独で除外と cut → fuse」と、その `_boolean(..., allow_empty)`・スナップショット名 `material-cut` / `preserve-<i>-cut` / `preserve-fuse` / `final-solid` は**現行に無い** `(対象コード不在)`。
 現行のスナップショットは `smoothed-mesh-checks`・`cad-meshes`・`mesh-boolean`・`final-mesh-checks`（`docs/TOPOPT_RECORDING.md`）。2026-10-06 より前の実行記録には B-rep の段階が残っている。
 
 - **重複領域は除外が優先する**（`tests/test_finalization.py::test_exclusion_wins_overlap`。現行でも有効）。 (20260922-0710-finalize-cut-then-subtract-fuse, 2026-09-22)
-- **保持が除外に完全に覆われても、寄与ゼロとして成立する**（`test_preserve_fully_covered_by_exclude_contributes_nothing`。現行でも有効）。旧 B-rep 実装では `P_i - 除外` が空（0ソリッド）になって「演算結果が空または不正」の例外にしていた実バグを QA が発見し、`allow_empty` 分岐で直した。
+- **保持が除外に完全に覆われても、寄与ゼロとして成立する**（`test_preserve_fully_covered_by_exclude_contributes_nothing`。現行でも有効）。保持を個別にブーリアンする設計では `P_i - 除外` が空になって「演算結果が空または不正」の例外になる実バグを QA が発見した。
   **処理順を変えるときは「ツール側が対象を全部覆う」ケースを必ず確認する**（小さいボディを個別にブーリアンする設計は、大きいボディのブーリアンより空集合になりやすい）。現行の集合演算は結果が空（除外が材料を全部覆う）なら例外にする。 (20260922-0710-finalize-cut-then-subtract-fuse, 2026-09-22)
 - `preserve`/`exclude` は CAD ソリッドのリスト（または1回限りのイテレータでも可。冒頭で `list()` 化する）。 (20260922-0710-finalize-cut-then-subtract-fuse, 2026-09-22)
 - `check_trace.py`・`replay_finalization.py`・`TOPOPT_RECORDING.md` のスナップショット名は実装と一致させておく（処理を変えたら同時に直す）。 (20260922-0710-finalize-cut-then-subtract-fuse, 2026-09-22)
 - `replay_finalization.py` は、元の run が finalize 失敗でメッシュ側のスナップショットを残していない場合、`finalize-input` からのフォールバックになる。現行の読む順は `pre-boolean-mesh-world` → `final-mesh-world` → `finalize-input`。フォールバックで成功しても `grid` が無いため `final.stl` を保存しない。 (20260922-0710-finalize-cut-then-subtract-fuse, 2026-09-22)
-- 実行 `20260921T185659-b6799e00457d` の再生結果（旧 B-rep の `preserve-fuse` で `AcquiredSelfIntersection` 1件・`FaceBuilderUnusedEdges` 1件）は hanger の特定形状に依存した実測で、他のモデル・他の実行では一般に成立しない。「警告が1件でもあれば ValueError」という厳格判定は当時維持され、hanger はその変更だけでは合格しなかった（`docs/TOPOPT_ACCEPTANCE.md`「2026-09-22 まとめてcut→保持だけ引き算→fuseへの置き換え」）。この旧 B-rep 経路の合否は、集合演算への置き換え（`docs/TOPOPT_MESH_BOOLEAN_STUDY.md`）で解消済み `(要確認: 現行で hanger が合格することは TOPOPT_MESH_BOOLEAN_STUDY.md が持つ)`。 (20260922-0710-finalize-cut-then-subtract-fuse, 2026-09-22)
 
 ## 平滑化の検証材料（output/smoothing_corpus・64条件）
 
@@ -49,14 +47,14 @@
 - 分析は `topopt_checks/analyze_smoothing_intersections.py`（`.venv/Scripts/python.exe -X utf8`。引数なし=入力マスクが記録の後で変わった条件だけ作り直す・並列。`--force` 全作り直し・`--one`・`--report`・`--synthetic`・`--locality`・`--sensitivity`。64条件で約16秒）。文書は `docs/TOPOPT_SMOOTHING_INTERSECTIONS.md`（用語・規則・合成の結果）。`intersection_sites.json`（1件1行）・`intersection_records/<条件名>.json`（原本。`sites[]`・`runs[]`〈管の列の全件〉・`slit_hist`・`mask_sha256`・`counts_match_mesh_manifest`）。 (20260925-2101-topopt-smoothing-intersection-rules, 2026-09-25)
 - **規則の要約**: 64条件の交差は4箇所・21組で、4箇所とも四方が閉じた 1×1 の管（板を貫く穴、開-開）の中（長さ3が3箇所・長さ4が1箇所）。管は長さ4以上（開-開）・2以上（止-開）で壁の間隔が 0.1 要素未満に潰れるが、交差したのはそのうち開-開の長さ3〜4（19列中4列）だけで、止-開・長さ5以上・溝は 0。
   合成（板・棒）では板厚（=管の長さ）4のときだけ確実に交差し（平板20組・棒225/225）、3・5〜12は 0。**実データの長さ3の交差3箇所は合成で再現できておらず、周囲の形の特徴でも分けられていない**（管から4セル以内の形で決まる）。各条件の交差件数は `mesh_manifest.json` と一致（64/64）。 (20260925-2101-topopt-smoothing-intersection-rules, 2026-09-25)
-- `docs/TOPOPT_ACCEPTANCE.md` の「止まり穴 0.24 以上」は、止まり穴が 0.01〜0.12 まで潰れる本書の実測と食い違う（当時未解決 `(要確認: その後の解消は未確認)`）。壁の間隔の区切り（0.1/0.25/0.5/0.75）・塊のまとめ半径（3.0）は分析者が置いた値。 (20260925-2101-topopt-smoothing-intersection-rules, 2026-09-25)
+- 壁の間隔の区切り（0.1/0.25/0.5/0.75）・塊のまとめ半径（3.0）は分析者が置いた値で、実測ではない。 (20260925-2101-topopt-smoothing-intersection-rules, 2026-09-25)
 - **対策（現行）**: 2026-10-07 の本人判断で、探索が確定したマスクの管（2軸以上で挟まれた空セル）をメッシュ化の前に埋める（`duocad/topopt/thin_voids.py` の `fill_tubes`、`optimize_run` の探索後処理）。64条件で交差 21組 → 0、埋めたセルは条件あたり中央値 7・最大 80。**このコーパスの `voxel/*.npz` は埋める前のマスク**で、埋めた後の取り直しは `tube_fill_manifest.json`・`tube_fill_records/`。 (20260925-2101-topopt-smoothing-intersection-rules, 2026-09-25 の規則; 対策の出典: `docs/TOPOPT_SMOOTHING_INTERSECTIONS.md` 冒頭)
 - 座標は要素添字空間（`centre_cell`）で、ワールドは `origin + 添字 * spacing`（`centre_world_mm` は計算済み）。保持・除外との接触は追跡していない（npz にマスクが無い。`keep_or_exclude_contact: "not_tracked"`）。`rows` の並びに依存しない（`condition` で引く）。`runs[].hit` は記録に無く `--report` の読み込み時に付ける。 (20260925-2101-topopt-smoothing-intersection-rules, 2026-09-25)
 - 罠: 二値マスクの marching cubes は境界面の中心に頂点を1つずつ置くので頂点と境界面が1対1（壁の間隔はこの対応で測る。`_face_vertex_tables`）。`local_crossings` の「近い」は交差2三角形の頂点の重心で判定（交差点ではない）。交差の有無は三角形の並びの細部で決まり、間隔が 0.02〜0.05 の管の多くは交差しない。管の潰れと交差の因果は測っていない。合成の板厚1の棒 2/225 が交差する原因は未調査。 (20260925-2101-topopt-smoothing-intersection-rules, 2026-09-25)
 
 ## 設計要素数の上限（MAX_DESIGN_ELEMENTS）
 
-- `optimize_run.resolution_limits(doc)` の戻りは `max_design_elements`（旧 `max_elements` は無い）、`steps[].design_elements_estimate`（旧 `element_count` は無い。**見積もりで実数ではない**）。定数は `optimize_run.MAX_DESIGN_ELEMENTS`（旧 `MAX_ELEMENTS` は消した。現行値 1,300,000。本人判断 2026-09-26「1.6 mm が通る130万」）。
+- `optimize_run.resolution_limits(doc)` の戻りは `max_design_elements`、`steps[].design_elements_estimate`（**見積もりで実数ではない**）。定数は `optimize_run.MAX_DESIGN_ELEMENTS`（現行値 1,300,000。本人判断 2026-09-26「1.6 mm が通る130万」）。
   `design_space.offset_hull_volume(corners, margin)` / `obstacle_free_fraction(corners, obstacle)` が見積もりの部品（`_design_element_estimate(volume, spacing)` が組む）。 (20260926-1700-topopt-limit-design-elements, 2026-09-26)
 - **実行時の拒否は `derive` 後の `space.element_count` 実数で行う**（`_require_design_elements_within_limit`）。見積もりは実数と 1〜2% ずれうるので、見積もりだけで通ったことを保証と読まない。 (20260926-1700-topopt-limit-design-elements, 2026-09-26)
 - 梯子の要素数を格子の箱の数として使わない。見積もり/実数の比（0.984〜0.990）は hanger 1件の実測で、他の形では未測定。連続体積だけの見積もりは除外ソリッドを引かないため hanger で実数の1.21倍になり、1.6 mm が拒否される。 (20260926-1700-topopt-limit-design-elements, 2026-09-26)

@@ -13,7 +13,7 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 - **`showBodyGhosts` は本物を隠さない**(`showPreview` は隠す)。移動前と移動後が並んで見えることが `move_body` プレビューの中身。幽霊は 1 ボディ = 1 `THREE.Group` で、`group.matrixAutoUpdate = false` にして行列を直に置く(`group.position` を触っても効かない)。行列は `T(offset)·T(p)·R·T(-p)`。 (20260905-1814-duocad-add-preview-to-pattern-and-move-verbs, 2026-09-05; 20260906-0100-duocad-preview-follows-rotation, 2026-09-06)
 - **幽霊が消える場面は `viewport.clearPreview()` に集約**(`update`/`prune`/`showPreview`/`App.clearPreview`/`setMode` がすべてここを通る)。新しい消し口を別に作らない。 (20260905-1814-duocad-add-preview-to-pattern-and-move-verbs, 2026-09-05)
 - **幽霊は「解決済みの数値」でしか描かない。** 中心・軸を省略したときのコアの既定(スケッチ=対象の代表点の平均 / ソリッド=体積重心)はブラウザ側へ写さない。規則が2箇所に増えると幽霊と確定結果が別の場所に出るし、体積重心は三角形分割からの近似にしかならない。描かないほうが正しい。UI で軸・中心を指させるときも、画面側が数値へ解決してから渡す(辺の参照をそのまま `showLocalGhost` へ渡さない。実装は `App.svelte` の `resolvePicksForGhost`)。 (20260906-0100-duocad-preview-follows-rotation, 2026-09-06)
-- **長方形をまるごと回す指定が1つでも混ざったら、幽霊を1つも描かない。** コアは呼び出し全体を ValueError にする。他の図形だけ回った姿を出すと「プレビューは回る・確定するとエラー」になる。`pattern_circular` は逆に4本の線分へ落とすのが正しい(複製を展開するだけなので種別が変わってよい)。幽霊も同じ落とし方をしないと「プレビューは長方形・確定すると線分」になる。番人は当時 `smoke-features.mjs` の「長方形の円形反復」だったが、そのスクリプトは現存しない(対象コード不在・要確認。pytest 側では `tests/test_ghost_agreement.py::test_a_rotated_rectangle_ghost_is_still_the_same_rectangle`)。 (20260905-1814-duocad-add-preview-to-pattern-and-move-verbs, 2026-09-05; 20260906-0100-duocad-preview-follows-rotation, 2026-09-06)
+- **長方形をまるごと回す指定が1つでも混ざったら、幽霊を1つも描かない。** コアは呼び出し全体を ValueError にする。他の図形だけ回った姿を出すと「プレビューは回る・確定するとエラー」になる。`pattern_circular` は逆に4本の線分へ落とすのが正しい(複製を展開するだけなので種別が変わってよい)。幽霊も同じ落とし方をしないと「プレビューは長方形・確定すると線分」になる。番人は `tests/test_ghost_agreement.py::test_a_rotated_rectangle_ghost_is_still_the_same_rectangle`。 (20260905-1814-duocad-add-preview-to-pattern-and-move-verbs, 2026-09-05; 20260906-0100-duocad-preview-follows-rotation, 2026-09-06)
 - スケッチ回転の幽霊は `ghostCopies` の `args.mode === 'rotate'` 分岐(要る引数は `angle`(度)と `center: [u, v]` の数値、任意で `copy`)。`rotateCopies` は **`true`** を渡す(対象そのものを回す。`false` は反復の複製用で向きを変えず位置だけ回す)。 (20260905-1814-duocad-add-preview-to-pattern-and-move-verbs, 2026-09-05; 20260906-0100-duocad-preview-follows-rotation, 2026-09-06)
 
 ### 依存してはいけないもの
@@ -44,7 +44,7 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 - **長方形をまるごと回すのは ValueError**(仕様)。回すと種別が線分4本に変わり、「undo = 逆向きに同じ角度」も元の図形 ID と `dN` の名前つき寸法の復元も成り立たない。`pattern_circular` が落とせるのは複製をエンティティにせず展開時に作るから。長方形の1点(左下)を回すのは従来どおりできる。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05)
 - **`Session` の戻り値(= `Applied`)はモードによらずキーが同じで、使わない側が `null`。** `move_body`: `mode/dx/dy/dz/angle/axis_point/axis_dir/copy/created/changed_bodies`、`move_sketch_entities`: `mode/dx/dy/angle/center/copy/created/sketch_ids`。戻り値の顔ぶれがモードで変わる設計にはできない(verb ごとに走らせ方が1本しか無い)。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05)
 - **回転の引数の WS 露出は `ws="special"`**(省略できる引数があるので `ws="table"` は不可 —— 表は載せた引数を全部必須にする規律で、並進の UI が引数不足で送れなくなる)。現状の画面は `mode` の選択(`commands/moveMode.ts`)を持ち、回転軸を3Dで辺クリック、中心を頂点クリックで指す(`PickArgSpec`、共有選択集合には入れない)。詳細は `duocad/catalog.py` の `move_body`/`move_sketch_entities` の note。なお当初の「回転の引数は全部 `ws=False`」「UI から `mode` は飛ばない」「軸・中心の指し方は本人判断待ち」は後続の作業で解消済みなので落とした。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05; 20260906-0100-duocad-preview-follows-rotation, 2026-09-06)
-- kernel に足した面: `kernel.rotate_shape`/`kernel.edge_axis(shape, edge_index)`/`kernel.centroid`(体積重心)、`sketch.rotate_point`(旧 `_rotate_point` の公開名)。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05)
+- kernel に足した面: `kernel.rotate_shape`/`kernel.edge_axis(shape, edge_index)`/`kernel.centroid`(体積重心)、`sketch.rotate_point`。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05)
 
 ### 依存してはいけないもの
 
@@ -54,10 +54,7 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 
 ### 踏んだ罠 / 判断
 
-- **`kernel.py` に `gp_Ax1` は元々 import されていなかった**(あったのは `gp_Ax2`/`gp_Ax3`)。追加済み。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05)
-- **既知の穴を1つ残してある(判断)**: `move_body` の `copy=True` で、対象がその軸まわりの回転対称を持つ角度(立方体を自分の中心軸で90度など)を指すと元と完全に重なる複製ができる。スケッチ側は `params` 一致で弾けるが、ソリッドには同じだけ安くて健全な判定が無い。境界箱の一致は L 字を180度回した「重なっていない」場合を誤って断り、最小距離(`BRepExtrema_DistShapeShape`)は角を共有する正当な複製を誤って断り、ブーリアン共通部分は重い。**不健全な判定を入れるより通す**を選び、`test_a_symmetric_body_may_be_rotate_copied_onto_itself` で現状を固定した(このテスト名は現ソースの grep に掛からない → 対象コード不在・要確認)。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05)
-- **`tests/test_mcp_verbs.py` の `ARGUMENTS`(宣言引数の表)は一時どのテストからも読まれていなかった。** `test_the_declared_arguments_match_the_published_schema` で `tools/list` と突き合わせるようにしたが、現ソースで `ARGUMENTS`/このテスト名は grep に出ない(カタログ駆動に置き換わった可能性。対象コード不在・要確認)。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05)
-- **行末**: duocad の作業ツリーは CRLF(git は LF で持つ)。スクリプトで `newline="\n"` 保存すると作業ツリーだけ LF になり他セッションの差分表示が汚れる。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05)
+- **既知の穴を1つ残してある(判断)**: `move_body` の `copy=True` で、対象がその軸まわりの回転対称を持つ角度(立方体を自分の中心軸で90度など)を指すと元と完全に重なる複製ができる。スケッチ側は `params` 一致で弾けるが、ソリッドには同じだけ安くて健全な判定が無い。境界箱の一致は L 字を180度回した「重なっていない」場合を誤って断り、最小距離(`BRepExtrema_DistShapeShape`)は角を共有する正当な複製を誤って断り、ブーリアン共通部分は重い。**不健全な判定を入れるより通す**を選んだ(注意書きは `duocad/verbs/move_body.py` の「既知の穴」)。 (20260905-1900-duocad-add-rotation-to-move-verbs, 2026-09-05)
 
 ## 数値引数の既定値(`NumberArgSpec.default`)と空欄軸
 
@@ -90,12 +87,10 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 
 ### 踏んだ罠
 
-- **「MCP 専用だが操作ログに載る verb」(`add_mesh_body` 等)は `Applied` 型に載らない穴**を抱える。当時 `tests/test_applied_type_sync.py` の判定式を category で絞る形へ直すと `selection`/`visibility` 側の検査が 0 件になり `add_mesh_body` まで巻き込んで壊れた。`mirror_sketch_entities` を `ws="table"` に移して代理条件(`ws != "none"`)が効くようにしたのが解決で、穴自体は残る。現状は `Applied` が `web/src/generated/protocol.ts` の生成物になり同期検査は `tests/test_protocol.py` 側にある(`test_applied_type_sync.py` と `web/src/session.ts` 内の `Applied` 手書き型は対象コード不在・要確認)。MCP 専用 verb を足すときの扱いは docs/DEV_NOTES.md の「`ws="none"`(MCP 専用)の verb は画面の `Applied` に載らない」項を参照。 (20260906-1100-duocad-add-mirror-verb, 2026-09-06; 20260906-1500-duocad-mirror-reference-picking-ui, 2026-09-06)
+- **`ws="none"`(MCP 専用)の verb は画面の `Applied` 型に載らない**(`add_mesh_body` 等。ログには載る)。`Applied` は `web/src/generated/protocol.ts` の生成物で、同期の検査は `tests/test_protocol.py`。`mirror_sketch_entities` は `ws="table"` にして生成の対象へ入れてある。MCP 専用 verb を足すときの扱いは docs/DEV_NOTES.md の「`ws="none"`(MCP 専用)の verb は画面の `Applied` に載らない」項。 (20260906-1100-duocad-add-mirror-verb, 2026-09-06; 20260906-1500-duocad-mirror-reference-picking-ui, 2026-09-06)
 - **`#sketch-look` が合わせる視野は「そのとき見えているもの」に依る。** 板だけがあるスケッチへ入り直して押すと原点付近の (0,-20) が画面外になり `projectSketchPoint` が null を返した。スケッチの図形は入った直後に全部描く順序にする。 (20260906-1500-duocad-mirror-reference-picking-ui, 2026-09-06)
 - **円の半径の params キーは `radius`**(`r` ではない)、中心は `cx`/`cy`。円も領域を作る。押し出す領域は面積最大(`regions` の `index/area/centroid`)で選ぶ。 (20260906-1500-duocad-mirror-reference-picking-ui, 2026-09-06)
 - **`pytest.approx(0.0)` は絶対許容差がほぼ 0。** `kernel.bounding_box` を鏡映(x=0)で検算すると OCCT の境界箱が許容差ぶん膨らんで 1e-7 程度の誤差が乗るので、0 との比較には `abs=1e-4` を明示。 (20260906-1100-duocad-add-mirror-verb, 2026-09-06)
-- **編集したファイルが作業の途中で git 上「未変更」に戻っていた**(`duocad/sketch.py` だけ。並行セッションの衝突が最有力、未確定)。テスト実行の直前とコミット直前に `git status --short` で編集ファイルが全部載っているか数える。 (20260906-1100-duocad-add-mirror-verb, 2026-09-06)
-- **`tests/*.py` は CRLF。** heredoc で追記するとその部分だけ LF になる。追記後に行末を揃える。 (20260906-1500-duocad-mirror-reference-picking-ui, 2026-09-06)
 - **`smoke-mirror.mjs` の円を描く手順が 11 回中 1 回だけ落ちた**(原因未確定、再現せず)。描く 4 verb は点を 1 つずつ食うので、クリックが早すぎる/取りこぼされると図形が出ないのに理由も出ない。1 手ごとに `#command-prompt` の待ち受け(`awaitPrompt`)を確かめる形にし、失敗時にスケッチの図形・選択・トーストを出す。 (20260906-1500-duocad-mirror-reference-picking-ui, 2026-09-06)
 
 ## boolean_body
@@ -108,7 +103,7 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 - **プレビュー再計算は既存の汎用機構が覆う**: `CommandHost.svelte` の `selectionPrint`(`kind:'selection'` の arg を持つコマンドは確定選択の中身をプレビュー再送キーに含める)。選択の増減でプレビューが動く verb を足すときも、まずこの既存経路で足りるか確認してから配線を足す。 (20260911-2118-duocad-boolean-body-verb, 2026-09-11)
 - Web の `BOOLEAN_BODY` の `args` 順は `[pick target_ref(face), selection tools(face/edge/vertex, min=1), choice mode]`(`firstMissingArg` の質問順になる)。`SOLID_FEATURE_COMMANDS` にのみ追加。 (20260911-2118-duocad-boolean-body-verb, 2026-09-11)
 - 1つの Body 内に複数 SOLID(compound ソリッド)を持つ場合の個別演算は未保証(`boolean_bodies` は「SOLID が 1 個以上あるか」しか見ない)。キーボードショートカットは未割当(全 verb 完成後にまとめて決める方針)。 (20260911-2118-duocad-boolean-body-verb, 2026-09-11)
-- 新しい verb 追加時は `MCP.md` のツール表(`test_doc_code_agreement.py`)と画面の `Applied` 型(`npm run check`)の追随が不可避。`Applied` は現在 `web/src/generated/protocol.ts` の生成物なので、`MCP.md` と生成の更新が要る(当時の「`web/src/session.ts` の `Applied` を更新」は旧状態)。 (20260911-2118-duocad-boolean-body-verb, 2026-09-11)
+- 新しい verb 追加時は `MCP.md` のツール表(`test_doc_code_agreement.py`)と画面の `Applied` 型(`npm run check`)の追随が不可避。`Applied` は現在 `web/src/generated/protocol.ts` の生成物なので、`MCP.md` と生成の更新が要る。 (20260911-2118-duocad-boolean-body-verb, 2026-09-11)
 
 ## envelope_regions(スケッチの包絡)
 
@@ -129,13 +124,11 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 - **押し出しの公開 verb は `extrude` だけ**(領域は `regions`、面は `faces`)。`extrude_face` はカタログ・`Session`・MCP・WebSocket・`duocad.verbs.__all__` から消えた。`verbs/__init__.py` は `extrude_face` モジュールを import して `register_verb` の登録だけを残す(再生専用)。`kernel_extrude.extrude_face_on_shape` は削除済み。 (20260926-2134-duocad-extrude-4-retire-extrude-face, 2026-09-26)
 - **古い保存ログの `extrude_face`(args: `body_id`/`face_index`/`distance`)は再生される。** 中身は `kernel_extrude.extrude_faces(body.shape, [face_index], distance, "join" if distance > 0 else "cut", target_shape=body.shape)`、undo は `undo_shape`。再生した `extrude_face` の `provenance` は保存時のまま(キーは `verb`/`face_index`/`after_face_index`)。 (20260926-2134-duocad-extrude-4-retire-extrude-face, 2026-09-26)
 - **`tests/fixtures/extrude_face_log.json` は削除前の実装で作った保存ログ(体積 12240・6 面)で、`tests/test_extrude_face_replay.py` が再生して固定する。作り直さない**(「従来と同じ形」の根拠が失われる)。 (20260926-2134-duocad-extrude-4-retire-extrude-face, 2026-09-26)
-- **`extrude_face` を新しい操作の記録に使わない**(`Session`・MCP から呼べない)。新しい verb を足すときに形を真似ない。再生専用 verb はカタログに無いので、`tests/test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log` は登録済み verb から `extrude_face` を除いて突き合わせる(除外はこの 1 件で足りた)。 (20260926-2134-duocad-extrude-4-retire-extrude-face, 2026-09-26)
+- **`extrude_face` を新しい操作の記録に使わない**(`Session`・MCP から呼べない)。新しい verb を足すときに形を真似ない。再生専用 verb はカタログに無いので、`tests/test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log` は登録済み verb から `extrude_face` と `set_parameter`(どちらも再生専用)を除いて突き合わせる。 (20260926-2134-duocad-extrude-4-retire-extrude-face, 2026-09-26)
 - 曲面を掃引すると壊れた形になる実測は、`extrude_face_on_shape` の docstring と一緒に消えないよう docs/CAD_LIBRARY_PITFALLS.md の表を `kernel_extrude._check_coplanar_planes` へ向け直してある。 (20260926-2134-duocad-extrude-4-retire-extrude-face, 2026-09-26)
-- 旧 UI id `extrude_face`、ボタン `#extrude-regions`、入力欄 `#regions-distance` は廃止。smoke は `#extrude`/`#distance`/`#extrude-mode-*` を使う。`acceptance.mjs` の `VERBS`(AI 側の列)に `extrude_face` が残っていた —— `acceptance.mjs`/`HUMAN_FACE_EXTRUDE` は現ソースで grep に出ない(対象コード不在・要確認)。 (20260926-2133-duocad-extrude-3-web-unify, 2026-09-26; 20260926-2134-duocad-extrude-4-retire-extrude-face, 2026-09-26)
+- 旧 UI id `extrude_face`、ボタン `#extrude-regions`、入力欄 `#regions-distance` は廃止。現行の id は `#extrude`/`#distance`/`#extrude-mode-*`。 (20260926-2133-duocad-extrude-3-web-unify, 2026-09-26; 20260926-2134-duocad-extrude-4-retire-extrude-face, 2026-09-26)
 
 ### 踏んだ罠
 
-- **面の押し出しでは溝の底のような窪みの面は視点から見えず選べない。** 2 枚の同一平面の面を押す smoke の題材は溝を浅く広く(幅 24・深さ 3)した(MCP でコの字を作り柱の上面 2 枚を結合で押す / 平面の違う面を混ぜるとトーストに「同一平面上にない」。この `smoke-extrude-faces.mjs` は現存せず → 対象コード不在・要確認)。ログの `args.faces` は配信で件数の文字列に畳まれる。 (20260926-2133-duocad-extrude-3-web-unify, 2026-09-26)
-- 通常モードで領域を押し出していた smoke は、押し出しをスケッチ編集中へ移す必要があった。 (20260926-2133-duocad-extrude-3-web-unify, 2026-09-26)
-- **duocad の `.py` は作業ツリーで CRLF**(README.md だけ LF)。bash の `sed`/`grep -c` は CR を見せない。行番号での切り出しは Python で `newline=''` 読み書きし CRLF に揃える。 (20260926-2131-duocad-extrude-1-kernel-split, 2026-09-26)
-- **素の `python -m pytest` は OCP が無く落ちる。** `.venv\Scripts\python.exe -m pytest` で回す(全体で約 105 秒)。 (20260926-2131-duocad-extrude-1-kernel-split, 2026-09-26)
+- **面の押し出しでは溝の底のような窪みの面は視点から見えず選べない。** 2 枚の同一平面の面を押す smoke の題材は溝を浅く広く(幅 24・深さ 3)した(MCP でコの字を作り柱の上面 2 枚を結合で押す / 平面の違う面を混ぜるとトーストに「同一平面上にない」)。ログの `args.faces` は配信で件数の文字列に畳まれる。 (20260926-2133-duocad-extrude-3-web-unify, 2026-09-26)
+- 通常モードでは領域を押し出せない。領域の押し出しはスケッチ編集中に行う。 (20260926-2133-duocad-extrude-3-web-unify, 2026-09-26)

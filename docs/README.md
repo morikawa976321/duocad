@@ -30,19 +30,19 @@
 
 ### contracts/ — 作業タスクの契約の分野別蒸留
 
-taskbox 廃止に伴い、完了タスクの「後続への契約」(ソースから読めない不変条件・依存禁止・罠)を分野別に移した文書群。項目末尾の括弧は出典タスクIDと日付。「(対象コード不在・要確認)」は、その後に削除・改名されたコードの契約で、教訓として残してある。
+taskbox 廃止に伴い、完了タスクの「後続への契約」(ソースから読めない不変条件・依存禁止・罠)を分野別に移した文書群。項目末尾の括弧は出典タスクIDと日付。削除済みコードについての契約は外してあり(履歴は git)、現行コードにも当てはまる項目だけを残している。
 
 | 文書 | 何が書いてあるか |
 |---|---|
-| [contracts/topopt-design-space.md](contracts/topopt-design-space.md) | 形状最適化: 設計空間の導出・連結性・条件の可視化・bbox・void除去の契約(不変条件・依存禁止・罠。出典はタスクID) |
-| [contracts/topopt-volume-stress-safety.md](contracts/topopt-volume-stress-safety.md) | 形状最適化: 体積目標・von Mises 代表応力・安全率の外側ループの契約 |
-| [contracts/topopt-solver-optimizers.md](contracts/topopt-solver-optimizers.md) | 形状最適化: ソルバ・並列化・性能測定・OC/MMA・反力・アクティブセットの契約(削除済みコードの教訓を含む) |
-| [contracts/topopt-pipeline-integration.md](contracts/topopt-pipeline-integration.md) | 形状最適化: topopt の本体取り込み・probe 廃止・フィルタ・平滑化・導出の契約 |
-| [contracts/topopt-binary-search.md](contracts/topopt-binary-search.md) | 形状最適化: 二値探索の各段(FEM 抽出・受入・初期実行可能解・削減・製品配線・旧経路撤去)の契約 |
+| [contracts/topopt-design-space.md](contracts/topopt-design-space.md) | 形状最適化: 設計空間の導出・連結性・画面検査の罠・bbox・void除去の契約(不変条件・依存禁止・罠。出典はタスクID) |
+| [contracts/topopt-volume-stress-safety.md](contracts/topopt-volume-stress-safety.md) | 形状最適化: von Mises 代表応力・縮小検証の契約 |
+| [contracts/topopt-solver-optimizers.md](contracts/topopt-solver-optimizers.md) | 形状最適化: 線形解法・CPU並列化と性能測定・反力の契約 |
+| [contracts/topopt-pipeline-integration.md](contracts/topopt-pipeline-integration.md) | 形状最適化: パッケージ構成(依存の向き)・検査コードの罠・メッシュ化の Taubin 平滑化の契約 |
+| [contracts/topopt-binary-search.md](contracts/topopt-binary-search.md) | 形状最適化: 二値探索の各段(FEM 抽出・受入・初期実行可能解・削減・製品配線)と検査 CLI・docs 整理の契約 |
 | [contracts/topopt-measurements-stage4.md](contracts/topopt-measurements-stage4.md) | 形状最適化: 厚み・保持小体・節点所有の計測、peel、段階4の停止規則、中空なしの契約 |
 | [contracts/topopt-min-width-peel.md](contracts/topopt-min-width-peel.md) | 形状最適化: 最小幅・芯の連結・射影つき peel の契約 |
 | [contracts/topopt-keep-cells.md](contracts/topopt-keep-cells.md) | 形状最適化: 保持セルの exempt / protected の契約 |
-| [contracts/topopt-target-factor-warm-start.md](contracts/topopt-target-factor-warm-start.md) | 形状最適化: 探索目標係数・内側目標・warm start(撤去済み)の契約 |
+| [contracts/topopt-target-factor-warm-start.md](contracts/topopt-target-factor-warm-start.md) | 形状最適化: 探索目標係数・内側目標の契約 |
 | [contracts/topopt-solver-pairs.md](contracts/topopt-solver-pairs.md) | 形状最適化: cg と直接解法の対の測定と solver=auto の契約 |
 | [contracts/topopt-finalize-smoothing.md](contracts/topopt-finalize-smoothing.md) | 形状最適化: 最終処理・平滑化コーパス・設計要素数上限の契約 |
 | [contracts/topopt-idle-validation-setup.md](contracts/topopt-idle-validation-setup.md) | 不要材料検証(題材・プロトコル・参照解・指標)の契約 |

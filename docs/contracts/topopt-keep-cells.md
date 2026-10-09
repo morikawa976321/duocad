@@ -17,9 +17,7 @@
 - 「対象外」= そのセル自身が被覆されていなくても違反にしない、だけ。材料としては数える（**探索中のマスクにあるセルだけ**）。線引きは「保持ソリッドかどうか」の1本で、除外由来・条件面の節点の例外は無い。 (20260920-2123-topopt-min-width-exempt-preserve, 2026-09-20)
 - 設計空間の opening は `opened | (設計空間 & keep)`。残した設計空間も規則を満たす（絞った部分は被覆済み・足すのは対象外のセルだけ）。 (20260920-2123-topopt-min-width-exempt-preserve, 2026-09-20)
 - 判定関数は `exempt` を末尾の引数で受ける: `_mask_satisfies_min_width(mask, m, exempt=None)` / `peel(..., exempt=)` / `min_width.lost_coverage(mask, region, m, exempt=None)`。`_mask_satisfies_min_width` を位置引数2つだけで呼ぶ差し替えは壊れる（テストの monkeypatch は `exempt=None` を受ける形）。 (20260920-2123-topopt-min-width-exempt-preserve, 2026-09-20)
-  （旧契約が挙げた `_min_width_ok_after_clearing`・`_op_scan`・`_scan_descriptors`・`candidate_descriptors`・`_node` の `exempt` 引数は、段階3の探索撤去で現行に無い `(対象コード不在)`）
-- m=1 では判定関数（`_cube_opening` 相当）を一切呼ばない。 (20260920-2123-topopt-min-width-exempt-preserve, 2026-09-20)
-- **探索で削られた保持セルを材料に数える／数えない**: 20260920-2123 時点は「数えない」（本人判断待ち）。その後 `705bc1c` 以降は「数える版」（`mask ∪ keep`）になり、`1641` 以降は保持セルがそもそも削られない。現行は後者（下記）。 (20260920-2123-topopt-min-width-exempt-preserve, 2026-09-20; 20260921-0054-topopt-refine-measure-m2-m3, 2026-09-21; 20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
+- m=1 では判定関数（`min_width.cube_opening` など）を一切呼ばない。 (20260920-2123-topopt-min-width-exempt-preserve, 2026-09-20)
 
 ## 保持セルは決して抜かない（protected）
 
@@ -28,16 +26,15 @@
   m>1 で `protected` を渡すときは `protected ⊆ exempt`（でなければ `ValueError`。製品では `exempt` = 保持セルなので常に成り立つ）。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
 - `binary_search.resolve_islands(candidate, conditions)`: 生存成分は「全条件を満たし、かつ全保持セルを含む成分」だけ。保持セルが2つ以上の成分に分かれる形は生存成分が無い（段階3では `full_material_infeasible`）。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
 - `binary_search._evaluate_survivor`: `keep_cells` があり `survivor` が保持セルを欠くと `RuntimeError`（黙って塗り直さない）。段階3・段階4の全評価がここを通る。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
-- **不変条件**: `keep_cells` が与えられた探索が作る全候補・全合格形状で `mask[keep].all()`。テストは `tests/test_binary_search_keep.py`（m=1,2,3。元は `warm_start` False/True も parametrize していたが warm start 削除で軸を外した）。この検査は `u0` と無関係に全評価の入口にある。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21; 20260921-2240-topopt-remove-warm-start, 2026-09-21)
+- **不変条件**: `keep_cells` が与えられた探索が作る全候補・全合格形状で `mask[keep].all()`。テストは `tests/test_binary_search_keep.py`（m=1,2,3）。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
 - 変えていないもの: `keep_cells is None` の経路（`PeelStats` の項目・診断のキーも同じ）、`acceptance.inspect` の6条件の並び・報告の形、合格条件(3)（保持CADとの共通体積）、代表応力（99.5% 点）の母集団（保持セルも入る）、除外ソリッドのボクセル化、`mesh.apply_density_masks`。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
 
 ## 依存してはいけないもの・測定の読み方
 
-- 採用マスクに保持セルが残っていること（旧契約: m=3 で 858/1,475、m=2 で 744/1,475 しか残らなかった。旧の「削る」版の話で、`protected` 導入後は全保持セルが残る）。preserve の合否は「共通体積が正」だけ。 (20260920-2123-topopt-min-width-exempt-preserve, 2026-09-20; 20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
 - `mask | exempt` は保持セルが常に `mask` にあるので `mask` と同じになるが、`keep_cells is None` の経路と共有しているので畳んでいない（畳むなら別タスク）。`exempt` を `mask` の外に置く呼び方（`peel` を `protected` なしで直接呼ぶ）は API と単体テストに残っており、`_mask_satisfies_min_width`・`lost_coverage` はそれを前提にしたまま。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
 - `skipped_support` は hanger では 0 になる（条件面の確定節点が全て保持セルの角にあるため）が、それは hanger の構成であって他の設計空間の保証ではない。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
 - 変更前後の比較（`docs/TOPOPT_PRESERVE.md` 節B）は**6本とも `evaluation_limit` で止まった予算切れ時点の比較**で、目標に達した形どうしの比較ではない（安全率が目標 2.0 を上回ったまま止まる。変更後 m=1 は 5.12）。変更前 m=2・3 の採用マスクは節Aに保存されたものと一致しない（`peel` がその後に変わったため）。基準にするときは同じ条件で回し直す。変更前 m=1 は節Aの `cold.npz` と一致した（5,436 セル）。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
-- 納品形状（`mask | keep`）のセル数は m=1 と m=3 で変更後のほうが増えた（6,284 → 6,795、6,148 → 6,481）。本人判断待ち。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
+- 納品形状（`mask | keep`）のセル数は m=1 と m=3 で変更後のほうが増えた（6,284 → 6,795、6,148 → 6,481）。保持ソリッドが探索時の削減可能対象から外れているなら問題ない、が本人の判断（2026-09-22。`docs/TOPOPT_PRESERVE.md` 節B「本人判断」）。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
 
 ## 罠
 
@@ -45,4 +42,3 @@
 - m=3 の1評価は約144秒。予算60は約2.4時間。探索の結果は最後にしか出ない（途中経過のログが無い）。 (20260920-2123-topopt-min-width-exempt-preserve, 2026-09-20)
 - bash の `python -c "…"` の中にバッククォートを書くと、シェルがその中身をコマンドとして実行する。日本語とバッククォートが混ざる文書（cursor 用の依頼書など）は Write ツールで書く。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
 - 長時間の測定プロセスを `Start-Process` で python 直起動すると、使用量制限で親が死んでも測定は最後まで走る。再開のときは `out/progress*.txt` の `ALL DONE` を見て、回し直さない。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
-- 元の 1641 本文にあった「段階3の `_materialize` / `lost_coverage` の射影」は、当時のコードにも無かった（着手前確認で食い違いとして記録）。 (20260921-1641-topopt-keep-cells-never-removed, 2026-09-21)
