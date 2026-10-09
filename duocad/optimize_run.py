@@ -59,6 +59,11 @@ DEFAULT_TARGET_SAFETY_FACTOR = 2.0
 #: 既定(2026-09-22決定)により製品の実行は m=1 に到達しない。根拠と実測・限界は docs/TOPOPT_TARGET_FACTOR.md。
 SEARCH_TARGET_FACTOR = 2.4
 
+#: 完成形の表面の最大応力が目標を割ったら結果を足さないか。2026-10-09 本人指示で、高応力部の肉盛りが入るまでは偽
+#: (警告を付けて足す)。完成形検査を 1/3 格子の表面の最大応力にしたので、体積だけで軽くした形が割ることがある
+#: (docs/TOPOPT_STRESS_GATE_DILUTION.md 10章)。
+FINAL_UNSAFE_BLOCKS = False
+
 #: **デバッグ表示(`?debug=space` / `?voxel=1`)で1回に配るボクセルの上限。**
 #:
 #: 表示は `InstancedMesh`(立方体1個 = 12三角形)なので、実物の部品で 5〜12万要素の塊を
@@ -929,7 +934,7 @@ def _run(
                   | "boundary_mapping_failed"
                   | "no_feasible_found" | "input_contradiction" | "resolution_insufficient"
                   | "fill_infeasible"                        # 空隙を埋めた形が6条件に不合格
-                  | "final_unsafe",                          # 完成形の表面の最大応力で見た安全率が本来の目標を割る
+                  | "final_unsafe",                          # 完成形の表面の最大応力で見た安全率が本来の目標を割る(`FINAL_UNSAFE_BLOCKS` のときだけ)
          "search_safety_factor": float|None, "filled_cells": int|None,
          "body_id": BodyId | None, "name": str | None,
          "warning": str | None,
@@ -955,8 +960,8 @@ def _run(
     `safety`)に渡した目標(= 実際の目標 × `search_target_factor`)。**`safety_factor` は探索の格子での値**で、
     探索時の目標に対する合否であって、実際の目標に対する安全率の実測ではない。探索の代表応力は部材域の固定物理体積の上位値
     (`_build_search_conditions`)。**`final_safety_factor` は完成形を探索の格子の 1/3(大きい題材は 1/2)で解き直し、部材域の
-    表面の面中心の最大応力で割った値**で、係数を掛けずに実際の目標と比べ、割れば `state="final_unsafe"` で結果を足さない
-    (2026-10-07 本人決定。`topopt.final_check`)。
+    表面の面中心の最大応力で割った値**で、係数を掛けずに実際の目標と比べる。割ったときは `FINAL_UNSAFE_BLOCKS` が真なら
+    `state="final_unsafe"` で結果を足さず(2026-10-07 本人決定)、偽(既定)なら警告を付けて足す(`topopt.final_check`)。
 
     `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも
     m 立方が入らず保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
@@ -1271,21 +1276,26 @@ def _run(
                                   keep_cells=conditions.keep_cells, anchor_soup=space.soup)
     trace.snapshot('final-check', **checked)
     final_sf = checked["safety_factor"]
+    final_shortfall = None
     if checked["safety"] is not None and checked["safety"].get("status") == "fail":
+        final_shortfall = (f"完成形(平滑化・保持/除外の後)の表面の最大応力で見た安全率 {final_sf:.4g} が目標 "
+                           f"{opts.target_safety_factor:.4g} を下回る(探索時の値 {safety_factor:.4g}。"
+                           f"{final_check.peak_phrase(checked)})")
+    if final_shortfall is not None and FINAL_UNSAFE_BLOCKS:
         return dict(_not_done(
             common,
             started,
             keep_room_warning,
             state="final_unsafe",
-            warning=(f"完成形(平滑化・保持/除外の後)の表面の最大応力で見た安全率 {final_sf:.4g} が目標 "
-                     f"{opts.target_safety_factor:.4g} を下回る(探索時の値 {safety_factor:.4g}。"
-                     f"{final_check.peak_phrase(checked)})"),
+            warning=final_shortfall,
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
             evaluations=int(search_result.evaluations),
             termination=search_result.termination,
         ), final_safety_factor=final_sf, final_check=checked)
     final_warning = final_check.neck_warning(checked["neck"])
+    if final_shortfall is not None:
+        final_warning = _join_warnings(final_shortfall + "。高応力部の肉盛りが入るまでは結果を足す", final_warning)
     if final_sf is None:
         final_warning = _join_warnings(final_warning, "完成形の安全率を測れなかった(拘束・荷重の節点が完成形に載らないか、解けなかった)")
     positions = final_vertices.ravel().tolist()

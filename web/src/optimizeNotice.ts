@@ -34,9 +34,11 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
   const searched =
     `探索時 ${searchSafety}: 平滑化前の形・探索の格子での値。探索時の目標 ${short(result.search_target_safety_factor)} = ` +
     `目標 ${short(result.target_safety_factor)} × 係数 ${short(result.search_target_factor)}`
-  // 主に出すのは完成形を解き直した値(`topopt.final_check`)。目標を割ると結果は足されない(state = final_unsafe)。
+  // 主に出すのは完成形を解き直した値(`topopt.final_check`)。目標を割ったときは警告付きで足される(肉盛りが入るまで)。
   const finalSafety =
-    result.final_safety_factor == null ? '測れなかった' : `${result.final_safety_factor.toFixed(2)}(完成形を探索の格子で解き直した値)`
+    result.final_safety_factor == null
+      ? '測れなかった'
+      : `${result.final_safety_factor.toFixed(2)}(完成形を細かい格子で解き直した、表面の最大応力での値)`
   const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
   // 保証の対象は要求幅。格子上の立方規則(m セル)は探索の規則で、部材の太さの保証ではない(docs/TOPOPT_NECK_RULE_120.md)。
   // **格子上の値は切り捨てて出す**(`minWidth.ts` の規律。四捨五入だと 4.9998mm が「5mm」になる)。

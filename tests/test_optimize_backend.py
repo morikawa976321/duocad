@@ -1537,10 +1537,26 @@ def test_a_finished_shape_on_a_grid_too_large_to_refine_is_not_measured(session:
     assert "完成形の安全率を測れなかった" in result["warning"]
 
 
-def test_a_finished_shape_below_the_real_target_is_a_failure_without_touching_the_document(session: Session, monkeypatch) -> None:
-    # 落ちたら、完成形が本来の目標安全率を割っても結果を足している(2026-10-07 本人決定)。
+def test_a_finished_shape_below_the_real_target_is_added_with_a_warning_until_reinforcement_exists(session: Session, monkeypatch) -> None:
+    # 落ちたら、肉盛りが入るまでの間(2026-10-09 本人指示)に、完成形が目標を割った結果を足さないか、警告なしで足している。
     from duocad.topopt import final_check
 
+    four_conditions(session)
+    _replayed_search(monkeypatch)
+    monkeypatch.setattr(final_check, "inspect", lambda *a, **k: dict(
+        safety_factor=1.2, safety=dict(status="fail", safety_factor=1.2, peak_mpa=33.3, peak_position_mm=[1, 2, 3],
+                                       spacing_mm=1.0), conditions=dict(status="pass"),
+        material_cells=1, neck=dict(status="not_observed", events=[], required_mm=16.0)))
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "done" and result["body_id"] is not None
+    assert result["final_safety_factor"] == 1.2 and "1.2" in result["warning"] and "目標" in result["warning"]
+
+
+def test_a_finished_shape_below_the_real_target_is_a_failure_without_touching_the_document(session: Session, monkeypatch) -> None:
+    # 落ちたら、`FINAL_UNSAFE_BLOCKS` のとき完成形が本来の目標安全率を割っても結果を足している(2026-10-07 本人決定)。
+    from duocad.topopt import final_check
+
+    monkeypatch.setattr(optimize_run, "FINAL_UNSAFE_BLOCKS", True)
     four_conditions(session)
     before = [body.id for body in session.document.bodies]
     _replayed_search(monkeypatch)
