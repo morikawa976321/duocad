@@ -1533,6 +1533,7 @@ def test_a_finished_shape_on_a_grid_too_large_to_refine_is_not_measured(session:
     result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
     assert result["state"] == "done" and result["final_safety_factor"] is None
     assert result["final_check"]["safety"]["reason"] == "grid_too_large"
+    assert result["final_check"]["conditions"]["status"] == "unknown"  # 呼び出し側が conditions を読めること
     assert "完成形の安全率を測れなかった" in result["warning"]
 
 

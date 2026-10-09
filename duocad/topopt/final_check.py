@@ -105,7 +105,7 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
             min_width_cells=int(min_width['cells']), keep=neck_keep, voxel=(np.asarray(mask, dtype=bool), grid))
         return dict(safety_factor=None, safety=dict(status='unknown', reason='grid_too_large', safety_factor=None,
                                                     elements=int(np.prod(hi - lo)), limit=MAX_FINE_ELEMENTS),
-                    conditions=None, material_cells=0, neck=_plain(neck))
+                    conditions=dict(status='unknown', reason='grid_too_large'), material_cells=0, neck=_plain(neck))
     fine = voxelize.Grid(origin=tuple(float(o) + h * int(i) for o, i in zip(grid.origin, lo)),
                          spacing=h / factor, shape=tuple(int(n) * factor for n in hi - lo))
     material = voxelize.occupancy(soup, fine, allow_empty=True)[0]
