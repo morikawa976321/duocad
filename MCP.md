@@ -33,6 +33,12 @@
      `base_plane` 省略時は選択の面（ちょうど1枚）を基準にし、その法線方向へ
      `distance`（mm・正の向きが法線）だけ離れた平面にスケッチを貼る。基準の基準（offsetの
      offset）は作れない
+   - どちらも戻り値に**スケッチの枠 `frame`**（`origin` / `u` / `v` / `normal`）を返し、
+     図形の座標 (u, v) はこの枠で測る（3D位置 = `origin + u*frame.u + v*frame.v`）。
+     基準平面なら世界座標のままだが、**面を基準にすると原点も軸の向きも面ごとに違う**
+     （面の中心とは限らない。世界の点 P は `u = (P - origin)·frame.u`、`v = (P - origin)·frame.v`
+     で換算する。[Issue #125](https://github.com/morikawa976321/duocad/issues/125)：世界座標の
+     つもりで描くと、エラーにならずに形が別の場所にできる）
 3. `fillet(radius=…)` / `extrude(distance=…)` など — **辺や領域は引数に書かない**
 4. `import_step` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
 5. `import_svg(sketch_id, path)` はSVGの図形を**いま開いているスケッチへ**足す

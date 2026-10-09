@@ -292,6 +292,18 @@ def _value_matches_json_type(value: Any, expected: str) -> bool:
 #: 並び順は `tools/list` に出る順序でもある(AIが最初に読む順)。
 #: スケッチのverbが共通に受ける `sketch_id`(`Param` は frozen なので共有してよい)。
 _SKETCH_ID = Param("sketch_id", "string", "対象スケッチのID")
+#: `sketch_create` / `sketch_create_offset` の応答に載せるスケッチの枠(`kernel_sketch.sketch_plane_frame`)。
+_SKETCH_FRAME = Result("frame", "{ origin: number[]; u: number[]; v: number[]; normal: number[] }")
+#: 同じ2つの説明に足す座標系の注意。面に貼ったスケッチの枠は面の平面の座標系そのままで、原点も
+#: 向きも面ごとに違う(実測: 100x60x10 の板で上面の原点は面の中心、+X 面は角 (100, 0, 0) で
+#: v は世界の -Z)。AIは基準平面と同じ世界座標だと思い込んで描き、形が黙って別の場所にできる
+#: (アプリ内AIが上面中央のポケットを4分の1だけ削った例が8題×3条件で3回。Issue #125)。
+_SKETCH_FRAME_HELP = (
+    "**図形の座標 (u, v) は戻り値の frame で測る**(3D位置 = origin + u*frame.u + v*frame.v)。"
+    "基準平面なら世界座標のままだが、**面を基準にすると原点も軸の向きも面ごとに違う**"
+    "(面の中心とは限らず角のこともあり、u/v が世界の軸と逆向きのこともある)。"
+    "世界の点 P に描くなら u = (P - origin)・frame.u、v = (P - origin)・frame.v で換算する。"
+)
 
 #: `set_selection` の述語の書き方。**説明に載せておく** —— 書き方を知らずに呼ぶと失敗して語彙が返り、
 #: 知るために `describe_predicates` を呼んでも1往復かかるので、どちらにせよ選択のたびに
@@ -494,12 +506,12 @@ COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- スケッチ
     Command(
         name="sketch_create",
-        returns=(Result("sketch_id", "string"),),
+        returns=(Result("sketch_id", "string"), _SKETCH_FRAME),
         resets_selection=False,
         category="sketch",
         description=(
             "新しいスケッチを作るときに呼ぶ。"
-            "base_plane(XY/XZ/YZ)を渡すか、選択の平面(ちょうど1枚)に貼る。"
+            "base_plane(XY/XZ/YZ)を渡すか、選択の平面(ちょうど1枚)に貼る。" + _SKETCH_FRAME_HELP
         ),
         params=(
             Param(
@@ -517,13 +529,13 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="sketch_create_offset",
-        returns=(Result("sketch_id", "string"),),
+        returns=(Result("sketch_id", "string"), _SKETCH_FRAME),
         resets_selection=False,
         category="sketch",
         description=(
             "オフセット平面に新しいスケッチを作るときに呼ぶ。"
             "base_plane(XY/XZ/YZ)を渡すか選択の平面(ちょうど1枚)を基準にし、"
-            "その法線方向へdistanceだけ離れた平面に貼る。"
+            "その法線方向へdistanceだけ離れた平面に貼る。" + _SKETCH_FRAME_HELP
         ),
         params=(
             Param(
