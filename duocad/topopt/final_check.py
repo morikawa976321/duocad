@@ -58,7 +58,7 @@ def refine_factor(element_count: int) -> int:
 def _strength(material, region, keep, layer, fine, fixed, load, conditions, target) -> dict:
     solve_info: dict = {}
     if not acceptance.rigid_body_constrained(material, fixed):
-        return dict(status='fail', reason='rigid_body_modes', message='剛体運動を拘束できない')
+        return dict(status='unknown', reason='rigid_body_modes', message='剛体運動を拘束できない', safety_factor=None)
     model, _density, displacement, scale, relative = acceptance.solve_material(
         material, fine, fixed, load, youngs_modulus_mpa=conditions.youngs_modulus_mpa, solver=conditions.solver,
         solve_info=solve_info)
@@ -97,6 +97,15 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
     lo, hi = _crop(grid, vertices)
     factor = refine_factor(int(np.prod(hi - lo)))
     h = float(grid.spacing)
+    neck_keep = None if keep_cells is None or not np.asarray(keep_cells).any() else (np.asarray(keep_cells, dtype=bool), grid)
+    if int(np.prod(hi - lo)) > MAX_FINE_ELEMENTS:
+        # 分割しなくても上限を超える(疎な形で格子だけが大きい題材)。巨大な配列を確保して落ちる前に、測らなかったと返す
+        neck = neck_persistence.inspect_mesh(
+            vertices, faces, spacing=h, required_mm=float(min_width['requested_mm']),
+            min_width_cells=int(min_width['cells']), keep=neck_keep, voxel=(np.asarray(mask, dtype=bool), grid))
+        return dict(safety_factor=None, safety=dict(status='unknown', reason='grid_too_large', safety_factor=None,
+                                                    elements=int(np.prod(hi - lo)), limit=MAX_FINE_ELEMENTS),
+                    conditions=None, material_cells=0, neck=_plain(neck))
     fine = voxelize.Grid(origin=tuple(float(o) + h * int(i) for o, i in zip(grid.origin, lo)),
                          spacing=h / factor, shape=tuple(int(n) * factor for n in hi - lo))
     material = voxelize.occupancy(soup, fine, allow_empty=True)[0]
@@ -126,10 +135,9 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
             safety = dict(status='unknown', reason='evaluation_error', error=f'{type(error).__name__}: {error}',
                           safety_factor=None)
         safety['refine'] = int(factor)
-    keep_mask = None if keep_cells is None or not np.asarray(keep_cells).any() else (np.asarray(keep_cells, dtype=bool), grid)
     neck = neck_persistence.inspect_mesh(
         vertices, faces, spacing=h, required_mm=float(min_width['requested_mm']),
-        min_width_cells=int(min_width['cells']), keep=keep_mask, voxel=(np.asarray(mask, dtype=bool), grid))
+        min_width_cells=int(min_width['cells']), keep=neck_keep, voxel=(np.asarray(mask, dtype=bool), grid))
     sf = None if safety is None else safety.get('safety_factor')
     return dict(safety_factor=None if sf is None or not math.isfinite(sf) else float(sf), safety=_plain(safety),
                 conditions=_plain(report), material_cells=int(material.sum()), neck=_plain(neck))

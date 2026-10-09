@@ -1523,6 +1523,19 @@ def test_a_finished_shape_whose_rebuilt_conditions_do_not_cover_the_faces_is_not
     assert "完成形の安全率を測れなかった" in result["warning"]
 
 
+def test_a_finished_shape_on_a_grid_too_large_to_refine_is_not_measured(session: Session, monkeypatch) -> None:
+    # 落ちたら、分割しなくても要素数の上限を超える題材で、巨大な配列を確保しにいく(測らずに警告を返すべき)。
+    from duocad.topopt import final_check
+
+    four_conditions(session)
+    _replayed_search(monkeypatch)
+    monkeypatch.setattr(final_check, "MAX_FINE_ELEMENTS", 1)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "done" and result["final_safety_factor"] is None
+    assert result["final_check"]["safety"]["reason"] == "grid_too_large"
+    assert "完成形の安全率を測れなかった" in result["warning"]
+
+
 def test_a_finished_shape_below_the_real_target_is_a_failure_without_touching_the_document(session: Session, monkeypatch) -> None:
     # 落ちたら、完成形が本来の目標安全率を割っても結果を足している(2026-10-07 本人決定)。
     from duocad.topopt import final_check

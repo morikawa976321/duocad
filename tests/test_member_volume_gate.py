@@ -145,3 +145,16 @@ def test_the_reported_peak_position_is_the_face_centre_not_the_element_centre(mo
 
     report = final_check._strength(material, material, ~material, ~material, fine, None, None, Conditions(), 2.0)
     assert report["peak_position_mm"] == [11.0, 20.5, 30.5] and report["peak_mpa"] == 5.0
+
+
+def test_a_finished_shape_that_cannot_be_held_still_is_unmeasured_not_unsafe(monkeypatch):
+    """落ちたら、細かい格子で剛体運動を止められない完成形を「目標を割った」失敗として返す(安全率が無いまま失敗文を作る)。"""
+    material = np.ones((2, 2, 2), bool)
+    monkeypatch.setattr(acceptance, "rigid_body_constrained", lambda *a: False)
+
+    class Conditions:
+        youngs_modulus_mpa, solver, allowable_mpa = 1.0, "direct", 40.0
+
+    fine = voxelize.Grid((0.0, 0.0, 0.0), 1.0, (2, 2, 2))
+    report = final_check._strength(material, material, ~material, ~material, fine, None, None, Conditions(), 2.0)
+    assert report["status"] == "unknown" and report["safety_factor"] is None

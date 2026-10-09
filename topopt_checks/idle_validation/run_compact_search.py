@@ -31,6 +31,7 @@ from _documents import open_session  # noqa: E402
 import _record  # noqa: E402
 
 from duocad import optimize_run  # noqa: E402
+from _percentile_rule import percentile_rule  # noqa: E402
 
 MODELS_DIR = REPO / "models"
 
@@ -77,7 +78,8 @@ def run(model: Path, *, size: float, cells: int, load_n: float | None, max_evalu
     tracemalloc.start()
     rss_before_mb = process.memory_info().rss / 1e6
     started = time.perf_counter()
-    result = optimize_run.run(doc, options)
+    with percentile_rule():
+        result = optimize_run.run(doc, options)
     seconds = time.perf_counter() - started
     _, traced_peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
