@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -52,6 +53,7 @@ def main() -> int:
         table=table,
         mapping=mapping,
     )
+    cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
 
     mask_regrid_no_keep = rs._project_mask(src_mask, src_origin, src_spacing, space) & space.mask
     mask_regrid_with_keep = mask_regrid_no_keep

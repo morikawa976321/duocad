@@ -20,6 +20,7 @@ from scipy import ndimage  # noqa: E402
 from duocad import optimize_run  # noqa: E402
 from duocad.topopt import binary_search, design_space as ds, mesh, stress, trace  # noqa: E402
 from _documents import open_session  # noqa: E402
+from _percentile_rule import percentile_rule  # noqa: E402
 from sweep_smoothing_corpus import MODEL, _set_load  # noqa: E402
 
 import os
@@ -67,7 +68,8 @@ def search(*a, **k):
 
 
 with patch.object(trace, "DEFAULT_ROOT", out / "_trace"), patch.object(ds, "derive", derive), \
-        patch.object(stress, "representative_stress", rep), patch.object(binary_search, "find_best_feasible", search):
+        patch.object(stress, "representative_stress", rep), patch.object(binary_search, "find_best_feasible", search), \
+        percentile_rule():
     doc = open_session(MODEL).document
     _set_load(doc, load_n)
     limits = optimize_run.resolution_limits(doc)

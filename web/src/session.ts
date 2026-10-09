@@ -665,7 +665,7 @@ export interface OptimizeResultPayload {
     | 'resolution_insufficient'
     /** 探索後に平滑化で潰れる 1×1 の空隙を埋めた形が6条件に不合格(`optimize_run` の `thin_voids`)。 */
     | 'fill_infeasible'
-    /** 完成形(平滑化・保持/除外の後)を探索の格子で解き直した安全率が、本来の目標を割る(`topopt.final_check`)。 */
+    /** 完成形の表面の最大応力で見た安全率が本来の目標を割る(`optimize_run.FINAL_UNSAFE_BLOCKS` のときだけ。既定は警告付きで足す)。 */
     | 'final_unsafe'
   warning: string | null
   body_id: string | null
@@ -677,7 +677,7 @@ export interface OptimizeResultPayload {
   search_safety_factor?: number | null
   /** 探索後に埋めた 1×1 の空隙のセル数。 */
   filled_cells?: number | null
-  /** 完成形(平滑化・保持/除外の後)を探索の格子で解き直した安全率。測れなかったときと、完成形まで進まなかったときは `null`。 */
+  /** 完成形(平滑化・保持/除外の後)を細かい格子で解き直した、部材域の表面の最大応力での安全率。測れなかったときと、完成形まで進まなかったときは `null`。 */
   final_safety_factor?: number | null
   /** 完成形の検査(`topopt.final_check.inspect`)。完成形まで進まなかったときは `null`。 */
   final_check?: FinalCheck | null

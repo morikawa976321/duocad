@@ -1,6 +1,7 @@
 """保存済みマスクを細分格子へ投影し、同形状のままFEMを解いて参照データを作るCLI。"""
 from __future__ import annotations
 
+import dataclasses
 import argparse
 import json
 import sys
@@ -246,6 +247,7 @@ def _run_one(
         table=table,
         mapping=mapping,
     )
+    cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
 
     exact_subdivide_diagnostics = None
     if exact_subdivide:

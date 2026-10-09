@@ -1,6 +1,7 @@
 """全材料(探索なし)の dilution 模型で荷重スイープし、線形弾性の整合を記録するCLI。"""
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -53,6 +54,7 @@ def _evaluate_load(load_n: float) -> dict:
         table=table,
         mapping=mapping,
     )
+    cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
     with _common.SingleFemRun():
         probe = _fem_probe.evaluate_full(
             mask,

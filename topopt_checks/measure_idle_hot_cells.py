@@ -2,6 +2,7 @@
 
     python topopt_checks/measure_idle_hot_cells.py [条件名 ...]   (省略時は全64条件。結果は corpus_hot.jsonl に1条件1行で追記)
 """
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -49,6 +50,7 @@ for name in names:
     opts = optimize_run.OptimizeOptions(element_size_mm=row["element_size_requested_mm"], min_width_mm=row["min_width"]["requested_mm"])
     table, mapping = optimize_run._map_boundary_conditions(space, bundle)
     conditions = optimize_run._build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
+    conditions = dataclasses.replace(conditions, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
     with patch.object(stress, "evaluate", evaluate):
         report = acceptance.inspect(mask, mask, space.grid, **conditions.inspect_kwargs(bbox_cache=None))
     safety = report["checks"]["safety"]

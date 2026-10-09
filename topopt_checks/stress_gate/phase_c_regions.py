@@ -20,6 +20,7 @@ import phase_a_fields as pa  # noqa: E402
 
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
+from scipy import ndimage  # noqa: E402
 
 import _fem_probe  # noqa: E402
 import refine_shape  # noqa: E402
@@ -131,6 +132,17 @@ def main() -> int:
             row["member_max_world_mm"] = [float(c.grid.centers_1d(i)[idx[i]]) for i in range(3)]
             row["member_max_dist_fixed_mm"] = float(dfix[idx])
             row["member_max_dist_load_mm"] = float(dload[idx])
+            dkeep = ndimage.distance_transform_edt(~keep) * (h / k) if keep.any() else np.full(keep.shape, np.inf)
+            row["member_max_dist_keep_mm"] = float(dkeep[idx])
+            # 保持ボディ際(2h以内)の設計材料と、それ以外の部材域を分けた Q_V
+            near_keep = member & (dkeep <= 2 * h)
+            far = member & (dkeep > 2 * h)
+            for name, reg in (("member_near_keep", near_keep), ("member_far_keep", far)):
+                if reg.any():
+                    row[name] = dict(volume_mm3=float(reg.sum() * (h / k) ** 3), max=float(vm[reg].max()),
+                                     **{f"QV_{vf:g}w3": (gm.top_volume_value(vm, reg, (h / k) ** 3, vf * w ** 3)
+                                                         if reg.sum() * (h / k) ** 3 > vf * w ** 3 else None)
+                                        for vf in (0.125, 1.0)})
         cell = (h / k) ** 3
         # d・V の感度(部材域 = 保持外・固定面と荷重面から d 超)と、境界域(保持 ∨ 固定面・荷重面から d 以内)の球平均
         sweep = {}

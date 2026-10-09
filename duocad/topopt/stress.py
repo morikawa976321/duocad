@@ -27,6 +27,10 @@ from . import fem
 # そこで安全率が決まると解像度を上げるほど安全率が下がり続ける(docs/TOPOPT.md の実測表)。
 DEFAULT_RHO_MIN = 0.5
 DEFAULT_PERCENTILE = 99.5
+#: 部材域の規則で許す超過体積 V の一辺 = 最小幅 × これ(V = (最小幅 × これ)³)。最小幅に結びつけるのは「最小幅より細かい形は
+#: 探索が作れない」という意味づけで、強度上の根拠ではない。0.5 は小型でピークを少し抑えるが hanger 1000N を入口で断った
+#: (docs/TOPOPT_STRESS_GATE_DILUTION.md 6・10章)。
+MEMBER_VOLUME_WIDTH_RATIO = 1.0
 
 def strain_displacement_center(element_size: float = 1.0) -> np.ndarray:
     """要素**中心**(xi=eta=zeta=0)での B 行列 (6,24)。
@@ -199,8 +203,12 @@ class RepresentativeStress:
     dense_max: float  # ρ >= rho_min の中の max
     percentile: float
     rho_min: float
-    element_count: int  # 代表値を取った母集団(ρ >= rho_min)の要素数
+    element_count: int  # 代表値を取った母集団の要素数(パーセンタイルは ρ >= rho_min、部材域の規則は部材域)
     unit: str
+    #: `"percentile"`(ρ >= rho_min の上位パーセンタイル)か `"member_volume"`(部材域の固定物理体積の上位値)。
+    rule: str = "percentile"
+    #: 部材域の規則で許した超過体積 V [mm³]。パーセンタイルの規則では `None`。
+    volume_mm3: float | None = None
 
 
 def representative_stress(
@@ -209,8 +217,14 @@ def representative_stress(
     *,
     rho_min: float = DEFAULT_RHO_MIN,
     percentile: float = DEFAULT_PERCENTILE,
+    member_region: np.ndarray | None = None,
+    member_volume_mm3: float | None = None,
+    cell_mm3: float | None = None,
 ) -> RepresentativeStress:
     """代表応力 = 「ρ >= rho_min の要素」の von Mises の上位パーセンタイル。
+
+    `member_volume_mm3` を渡すと、代わりに部材域 `member_region`(∧ ρ >= rho_min)の固定物理体積の上位値
+    (`member_volume_stress`。`cell_mm3` は要素の体積)。部材域が空なら ρ >= rho_min の全体で取る。
 
     **素の max を使わない。** 規則は2段で、どちらも実測に裏がある(docs/TOPOPT.md の表):
 
@@ -246,6 +260,15 @@ def representative_stress(
             f"母集団の von Mises 応力に非有限値が {bad} 個ある(全 {count} 要素)。"
             "解が発散しているか、拘束・荷重の与え方が壊れている"
         )
+    if member_volume_mm3 is not None:
+        if member_region is None or np.asarray(member_region).shape != values.shape or cell_mm3 is None:
+            raise ValueError("部材域の規則には格子と同じ形の member_region と cell_mm3 が要る")
+        region = np.asarray(member_region, dtype=bool) & dense
+        value, population = member_volume_stress(values, region if region.any() else dense,
+                                                 volume_mm3=float(member_volume_mm3), cell_mm3=float(cell_mm3))
+        return RepresentativeStress(value=value, raw_max=float(values.max()), dense_max=float(picked.max()),
+                                    percentile=float(percentile), rho_min=float(rho_min), element_count=population,
+                                    unit=field.unit, rule="member_volume", volume_mm3=float(member_volume_mm3))
     return RepresentativeStress(
         value=float(np.percentile(picked, percentile)),
         raw_max=float(values.max()),
@@ -255,6 +278,99 @@ def representative_stress(
         element_count=count,
         unit=field.unit,
     )
+
+
+def member_volume_stress(values: np.ndarray, region: np.ndarray, *, volume_mm3: float, cell_mm3: float) -> tuple[float, int]:
+    """部材域の固定物理体積の上位値: 「これを超える応力を持つ部材域の体積が `volume_mm3` 以下」になる最小の応力と、母集団の要素数。
+
+    `Q_V ≤ σ` は「σ を超える部材域の体積 ≤ V」と同値で、部材域の外の材料をいくら足し引きしても値が変わらない
+    (99.5% 点は材料全体の割合なので、遠くの低応力材料を残すほど高応力部が上位に隠れる。docs/TOPOPT_STRESS_GATE_DILUTION.md)。
+
+    **意図的な変則**: 部材域の体積が V 以下なら、許容量を使わず部材域の最大を返す。そのまま数えると
+    「部材域の全部が目標を超えても合格」になるため(小さい題材・粗い格子で起きる)。
+    部材域が空なら母集団を材料全体(`values` の非 nan)に広げる —— 全部が保持か拘束・荷重面の1層という退化した入力。
+    """
+    if not (math.isfinite(volume_mm3) and volume_mm3 > 0.0 and math.isfinite(cell_mm3) and cell_mm3 > 0.0):
+        raise ValueError(f"volume_mm3・cell_mm3 は有限の正の値であること(受け取った値: {volume_mm3!r}, {cell_mm3!r})")
+    picked = np.asarray(values, dtype=float)[np.asarray(region, dtype=bool)]
+    if picked.size == 0:
+        raise ValueError("部材域が空")
+    ordered = np.sort(picked)[::-1]
+    allowed = int(math.floor(volume_mm3 / cell_mm3 + 1e-9))
+    if allowed >= ordered.size:
+        return float(ordered[0]), int(ordered.size)
+    return float(ordered[allowed]), int(ordered.size)
+
+
+def boundary_layer_cells(shape: tuple, node_ids: np.ndarray) -> np.ndarray:
+    """`node_ids`(節点の通し番号、`fem` の規約)のどれかを角に持つ要素のマスク。
+
+    要素中心から自分の角までは 0.87h、隣の要素だけの角までは 1.66h なので、「節点から h 以内の要素」と同じ。
+    拘束面・荷重面の節点に接する1層を部材域から外すのに使う(そこの最大は細分で発散する。docs/TOPOPT_STRESS_GATE_DILUTION.md 3章)。
+    """
+    nx, ny, nz = (int(n) for n in shape)
+    out = np.zeros((nx, ny, nz), dtype=bool)
+    ids = np.asarray(node_ids, dtype=np.int64).ravel()
+    if ids.size == 0:
+        return out
+    i, rest = np.divmod(ids, (ny + 1) * (nz + 1))
+    j, k = np.divmod(rest, nz + 1)
+    for di in (0, 1):
+        for dj in (0, 1):
+            for dk in (0, 1):
+                ci, cj, ck = i - di, j - dj, k - dk
+                ok = (ci >= 0) & (ci < nx) & (cj >= 0) & (cj < ny) & (ck >= 0) & (ck < nz)
+                out[ci[ok], cj[ok], ck[ok]] = True
+    return out
+
+
+#: 露出面の面中心の自然座標。面の順は (-x, +x, -y, +y, -z, +z)。
+_FACE_POINTS = ((-1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, -1.0), (0.0, 0.0, 1.0))
+
+
+def _strain_displacement_at(xi: float, eta: float, zeta: float) -> np.ndarray:
+    """一辺1の要素の自然座標 (xi, eta, zeta) での B 行列 (6,24)。中心(0,0,0)で `strain_displacement_center()` と一致する。"""
+    s = fem.NODE_SIGNS
+    grad = np.empty((8, 3))
+    grad[:, 0] = 0.25 * s[:, 0] * (1.0 + s[:, 1] * eta) * (1.0 + s[:, 2] * zeta)
+    grad[:, 1] = 0.25 * (1.0 + s[:, 0] * xi) * s[:, 1] * (1.0 + s[:, 2] * zeta)
+    grad[:, 2] = 0.25 * (1.0 + s[:, 0] * xi) * (1.0 + s[:, 1] * eta) * s[:, 2]
+    return fem.strain_displacement(grad)
+
+
+def exposed_face_von_mises(model: fem.Model, u: np.ndarray, material: np.ndarray, scale: UnitScale,
+                           cells: np.ndarray | None = None) -> np.ndarray:
+    """材料の表面に出ている面(隣が空隙か格子の外)の面中心の von Mises [MPa]。形 (nx,ny,nz,6)、表面でない面と
+    `cells` の外は nan。
+
+    要素中心の応力は曲げの表面応力を取りこぼす(片持ち梁の表面理論値に対し 2セル厚で 0.42。面中心なら 0.80。
+    docs/TOPOPT_STRESS_GATE_DILUTION.md 10-1)。完成形検査の最大応力はこれで測る。
+    """
+    material = np.asarray(material, dtype=bool)
+    if material.shape != (model.nelx, model.nely, model.nelz):
+        raise ValueError(f"material の形が {material.shape}、期待は {(model.nelx, model.nely, model.nelz)}")
+    target = material if cells is None else material & np.asarray(cells, dtype=bool)
+    out = np.full(material.shape + (6,), np.nan)
+    flat = np.flatnonzero(target.ravel())
+    if flat.size == 0:
+        return out
+    vec = np.asarray(u, dtype=float).ravel()[model.edof[flat]]
+    d = fem.elasticity_matrix(model.E, model.nu)
+    padded = np.pad(material, 1, constant_values=False)
+    idx = np.unravel_index(flat, material.shape)
+    for f, point in enumerate(_FACE_POINTS):
+        axis, step = f // 2, (-1 if f % 2 == 0 else 1)
+        neighbour = [idx[a] + 1 for a in range(3)]
+        neighbour[axis] = neighbour[axis] + step
+        exposed = ~padded[tuple(neighbour)]
+        if not exposed.any():
+            continue
+        tensor = vec[exposed] @ (d @ _strain_displacement_at(*point)).T
+        vm = von_mises(tensor) * scale.stress_factor
+        column = out[..., f].reshape(-1)
+        column[flat[exposed]] = vm
+        out[..., f] = column.reshape(material.shape)
+    return out
 
 
 @dataclass(frozen=True, eq=False)
@@ -271,10 +387,12 @@ class SafetyReport:
     field: StressField
 
     def summary(self) -> str:
+        rep = self.representative
+        rule = (f"部材域の上位 {rep.volume_mm3:.4g} mm³ を除いた値" if rep.rule == "member_volume"
+                else f"ρ>={rep.rho_min} の {rep.percentile}% 点")
         return (
             f"最小安全率 {self.safety_factor:.3f} "
-            f"(許容 {self.allowable_mpa:.4g} MPa / 代表 {self.representative_mpa:.4g} MPa、"
-            f"ρ>={self.representative.rho_min} の {self.representative.percentile}% 点。"
+            f"(許容 {self.allowable_mpa:.4g} MPa / 代表 {self.representative_mpa:.4g} MPa、{rule}。"
             f"素の max {self.raw_max_mpa:.4g} MPa は採らない)"
         )
 
@@ -301,8 +419,14 @@ def evaluate(
     u: np.ndarray,
     rho_min: float = DEFAULT_RHO_MIN,
     percentile: float = DEFAULT_PERCENTILE,
+    member_region: np.ndarray | None = None,
+    member_volume_mm3: float | None = None,
 ) -> SafetyReport:
-    """形(密度場)とその変位 `u`(`solve_displacement` の解)を渡すと最小安全率が返る、この段の入口。"""
+    """形(密度場)とその変位 `u`(`solve_displacement` の解)を渡すと最小安全率が返る、この段の入口。
+
+    `member_volume_mm3` を渡すと代表応力は部材域 `member_region` の固定物理体積の上位値(`member_volume_stress`)、
+    渡さなければ ρ >= rho_min の上位パーセンタイル。
+    """
     density = np.asarray(rho, dtype=float)
     if density.shape != (model.nelx, model.nely, model.nelz):
         raise ValueError(
@@ -311,7 +435,9 @@ def evaluate(
     displacement = np.asarray(u, dtype=float).ravel()
     field = element_stress(model, displacement).scaled(scale)
     trace.snapshot('stress-displacement', displacement=displacement, scale=scale)
-    rep = representative_stress(field, density, rho_min=rho_min, percentile=percentile)
+    member = {} if member_volume_mm3 is None else dict(member_region=member_region, member_volume_mm3=member_volume_mm3,
+                                                       cell_mm3=scale.element_mm ** 3)
+    rep = representative_stress(field, density, rho_min=rho_min, percentile=percentile, **member)
     return SafetyReport(
         safety_factor=safety_factor(rep.value, allowable_mpa),
         allowable_mpa=float(allowable_mpa),

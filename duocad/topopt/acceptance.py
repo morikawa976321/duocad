@@ -379,36 +379,71 @@ def condition_check(material, table, fixed_faces, load_faces, forces):
 # FEM: 材料マスクを再構築して安全率
 # ---------------------------------------------------------------------------
 
+def rigid_body_constrained(material, fixed) -> bool:
+    """拘束の自由度(浮いた節点を除く)が剛体運動6つを全部止めるか。"""
+    floating = anchor.floating_dofs(material)
+    physical_fixed = np.setdiff1d(fixed, floating)
+    node_indices = np.array(np.unravel_index(physical_fixed // 3, tuple(n + 1 for n in material.shape))).T
+    positions = node_indices - node_indices.mean(axis=0)
+    rigid = np.zeros((len(physical_fixed), 6))
+    for i, (position, dof) in enumerate(zip(positions, physical_fixed)):
+        axis = dof % 3
+        rigid[i, axis] = 1
+        for rotation in range(3):
+            rigid[i, 3 + rotation] = np.cross(np.eye(3)[rotation], position)[axis]
+    return bool(np.linalg.matrix_rank(rigid) >= 6)
+
+
+def solve_material(material, grid, fixed, load, *, youngs_modulus_mpa, solver, solve_info=None):
+    """材料マスクの FEM を解いて残差を検算する。戻り値 `(model, density, displacement, scale, relative_residual)`。
+    検算に落ちたら `RuntimeError`。剛体運動の判定は呼び出し側(`rigid_body_constrained`)。"""
+    floating = anchor.floating_dofs(material)
+    model = fem.Model(*material.shape, fixed_dofs=fixed, load=load,
+                      extra_fixed_dofs=floating, active_mask=material)
+    density = material.astype(float)
+    displacement = stress.solve_displacement(model, density, solver=solver, info=solve_info)
+    # 検算は解いたときと同じ `penal`(二値の場では値が効かないが、違う値では別の行列になる)。
+    residual = model.stiffness_apply(density, stress.PENAL, displacement) - model.f
+    relative = float(np.linalg.norm(residual[model.free]) / np.linalg.norm(model.f[model.free]))
+    if not np.isfinite(displacement).all() or not math.isfinite(relative) or relative > fem.SOLVE_RESIDUAL_TOL:
+        raise RuntimeError(f'残差検算に失敗: {relative}')
+    # load は既に N。相殺後の節点力で再正規化せず、単位格子の長さだけ換算する。
+    scale = stress.UnitScale(grid.spacing, 1.0, youngs_modulus_mpa, solved_load=1.0)
+    return model, density, displacement, scale, relative
+
+
+def member_region(material, table, fixed_faces, load_faces, keep_cells=None) -> np.ndarray:
+    """部材域 = 材料 ∧ 保持セル以外 ∧ 拘束面・荷重面の節点を角に持たない(節点から h 以内でない)要素。
+
+    外す1層は拘束・荷重の理想化で最大が細分のたびに上がる所、保持は利用者が決めた形で探索が変えられない所
+    (docs/TOPOPT_STRESS_GATE_DILUTION.md 3・7章)。節点は確定表の面の節点全部で、材料に依らない。
+    """
+    material = np.asarray(material, dtype=bool)
+    ids = [anchor.face_node_ids(table, face) for face in tuple(fixed_faces) + tuple(load_faces)]
+    nodes = np.unique(np.concatenate(ids)) if ids else np.zeros(0, dtype=np.int64)
+    region = material & ~stress.boundary_layer_cells(material.shape, nodes)
+    if keep_cells is not None:
+        keep = np.asarray(keep_cells, dtype=bool)
+        if keep.shape != material.shape:
+            raise ValueError(f'keep_cells の形 {keep.shape} が格子の形 {material.shape} と違う')
+        region &= ~keep
+    return region
+
+
 def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_modulus_mpa,
-                 percentile, solver, fields=None):
+                 percentile, solver, fields=None, member_region=None, member_volume_mm3=None):
+    """FEM を解いて安全率 = 許容 ÷ 代表応力 を出す。代表応力は `member_volume_mm3` を渡せば部材域 `member_region` の
+    固定物理体積の上位値(`stress.member_volume_stress`)、渡さなければ材料全体の `percentile` 点。"""
     solve_info = {}
     try:
-        floating = anchor.floating_dofs(material)
-        physical_fixed = np.setdiff1d(fixed, floating)
-        node_indices = np.array(np.unravel_index(physical_fixed // 3, tuple(n + 1 for n in material.shape))).T
-        positions = node_indices - node_indices.mean(axis=0)
-        rigid = np.zeros((len(physical_fixed), 6))
-        for i, (position, dof) in enumerate(zip(positions, physical_fixed)):
-            axis = dof % 3
-            rigid[i, axis] = 1
-            for rotation in range(3):
-                rigid[i, 3 + rotation] = np.cross(np.eye(3)[rotation], position)[axis]
-        if np.linalg.matrix_rank(rigid) < 6:
+        if not rigid_body_constrained(material, fixed):
             return dict(status='fail', reason='rigid_body_modes', message='剛体運動を拘束できない',
                         solver=None, solver_policy=solver)
-        model = fem.Model(*material.shape, fixed_dofs=fixed, load=load,
-                          extra_fixed_dofs=floating, active_mask=material)
-        density = material.astype(float)
-        displacement = stress.solve_displacement(model, density, solver=solver, info=solve_info)
-        # 検算は解いたときと同じ `penal`(二値の場では値が効かないが、違う値では別の行列になる)。
-        residual = model.stiffness_apply(density, stress.PENAL, displacement) - model.f
-        relative = float(np.linalg.norm(residual[model.free]) / np.linalg.norm(model.f[model.free]))
-        if not np.isfinite(displacement).all() or not math.isfinite(relative) or relative > fem.SOLVE_RESIDUAL_TOL:
-            raise RuntimeError(f'残差検算に失敗: {relative}')
-        # load は既に N。相殺後の節点力で再正規化せず、単位格子の長さだけ換算する。
-        scale = stress.UnitScale(grid.spacing, 1.0, youngs_modulus_mpa, solved_load=1.0)
+        model, density, displacement, scale, relative = solve_material(
+            material, grid, fixed, load, youngs_modulus_mpa=youngs_modulus_mpa, solver=solver, solve_info=solve_info)
         report = stress.evaluate(model, density, scale=scale, allowable_mpa=allowable_mpa,
-                                 u=displacement, percentile=percentile)
+                                 u=displacement, percentile=percentile, member_region=member_region,
+                                 member_volume_mm3=member_volume_mm3)
         sf = float(report.safety_factor)
         if not math.isfinite(sf):
             raise RuntimeError('安全率が非有限')
@@ -420,6 +455,9 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
                     target_safety_factor=target, representative_mpa=report.representative_mpa,
                     allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
                     material_max_mpa=report.representative.dense_max, percentile=percentile,
+                    representative_rule=report.representative.rule,
+                    member_volume_mm3=report.representative.volume_mm3,
+                    representative_population_cells=int(report.representative.element_count),
                     max_displacement_mm=report.max_displacement_mm, relative_residual=relative,
                     residual_tolerance=fem.SOLVE_RESIDUAL_TOL, solver=solve_info.get('solver', solver),
                     solver_policy=solver,
@@ -479,7 +517,7 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
             preserves, excludes, target_safety_factor, allowable_mpa=DEFAULT_ALLOWABLE_MPA,
             youngs_modulus_mpa=DEFAULT_YOUNGS_MODULUS_MPA, percentile=stress.DEFAULT_PERCENTILE,
             solver='auto', history=None, converged=None, max_evaluations=None,
-            bbox_cache=None, region_overlaps=None, fields=None):
+            bbox_cache=None, region_overlaps=None, fields=None, member_volume_mm3=None, keep_cells=None):
     """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接
     受ける**(計画書§5: 「新規の製品APIはboolマスクを受ける」)。過去記録の密度場からの
     二値化は行わない —— それは読み取りアダプター `inspect_document` に閉じてある。
@@ -490,6 +528,8 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
     材料外は 0)を `fields['element_energy']` に入れる。報告(JSON)には入れない(段階4の削る順位用)。
     `solver` は解法の方針(`'auto'` は `fem.choose_solver` が候補ごとに `cg` / `direct` を選ぶ)。報告の
     `safety.solver` は実際に使った解法、`safety.solver_policy` は渡した方針。
+    `member_volume_mm3` を渡すと安全率の代表応力は部材域(`member_region`。`keep_cells` は保持セル)の
+    固定物理体積の上位値になり、`percentile` は使わない。
     """
     for name, value in [('spacing', grid.spacing), ('target', target_safety_factor),
                         ('allowable_mpa', allowable_mpa), ('youngs_modulus_mpa', youngs_modulus_mpa)]:
@@ -511,9 +551,14 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
                                        overlaps=region_overlaps))
     checks['conditions'], fixed, load = condition_check(material, table, fixed_faces, load_faces, forces)
     if all(checks[key]['status'] == 'pass' for key in ('watertight', 'single_solid', 'conditions')):
+        region = None
+        if member_volume_mm3 is not None:
+            _positive(member_volume_mm3, 'member_volume_mm3')
+            region = member_region(material, table, fixed_faces, load_faces, keep_cells)
         checks['safety'] = safety_check(material, grid, fixed, load, target=target_safety_factor,
                                        allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
-                                       percentile=percentile, solver=solver, fields=fields)
+                                       percentile=percentile, solver=solver, fields=fields,
+                                       member_region=region, member_volume_mm3=member_volume_mm3)
     else:
         checks['safety'] = dict(status='unknown', reason='prerequisites_failed')
     status = _overall_status([check['status'] for check in checks.values()])
