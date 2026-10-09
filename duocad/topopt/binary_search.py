@@ -64,8 +64,12 @@ class SearchConditions:
     #: 保持ソリッド由来のセル(設計空間と同じ形の bool 配列、`DesignSpace.keep`。設計空間に含まれること)。
     #: 探索が作るどの候補でも材料のまま(`keep ⊆ mask`): `peel` は削らず、島の除去は全保持セルを含む成分だけを残す。
     #: 最小幅の規則は、これらのセル自身が m 立方に被覆されていなくても違反にしない(他のセルの立方には材料として数える)。
-    #: `None` は制約なし。評価(FEM・6条件)の入力ではないので `evaluation_identifier` に入れない。
+    #: `None` は制約なし。`member_volume_mm3` を使うときは部材域から外すセルとして安全率の入力にもなり、
+    #: そのときだけ `evaluation_identifier` に入れる。
     keep_cells: Any = field(default=None, compare=False, repr=False)
+    #: 安全率の代表応力の規則。`None` は材料全体の `percentile` 点、値を渡すと部材域(保持セル以外・拘束/荷重面の節点に
+    #: 接する1層の外)の固定物理体積の上位値で、この体積 V [mm³] までの超過を許す(`acceptance.member_region`)。
+    member_volume_mm3: Optional[float] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'fixed_faces', tuple(int(f) for f in self.fixed_faces))
@@ -90,6 +94,9 @@ class SearchConditions:
                       region_overlaps=overlaps)
         if self.percentile is not None:
             kwargs['percentile'] = self.percentile
+        if self.member_volume_mm3 is not None:
+            kwargs['member_volume_mm3'] = float(self.member_volume_mm3)
+            kwargs['keep_cells'] = self.keep_cells
         return kwargs
 
 
@@ -154,6 +161,9 @@ def evaluation_identifier(conditions: SearchConditions) -> str:
         allowable_mpa=float(conditions.allowable_mpa),
         youngs_modulus_mpa=float(conditions.youngs_modulus_mpa),
         percentile=None if conditions.percentile is None else float(conditions.percentile),
+        member_volume_mm3=None if conditions.member_volume_mm3 is None else float(conditions.member_volume_mm3),
+        member_keep=(None if conditions.member_volume_mm3 is None or conditions.keep_cells is None
+                     else hashlib.sha256(np.packbits(np.asarray(conditions.keep_cells, dtype=bool)).tobytes()).hexdigest()),
         solver=str(conditions.solver),
         volume_atol=acceptance.VOLUME_ATOL,
         volume_rtol=acceptance.VOLUME_RTOL,

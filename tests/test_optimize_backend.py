@@ -1493,6 +1493,9 @@ def test_the_finished_shape_is_solved_again_and_its_safety_factor_and_neck_diagn
     assert result["state"] == "done", result["warning"]
     checked = result["final_check"]
     assert result["final_safety_factor"] == checked["safety_factor"] and checked["safety_factor"] > 0
+    safety = checked["safety"]
+    assert safety["rule"] == "member_surface_peak" and safety["refine"] == 3 and safety["spacing_mm"] == pytest.approx(result["grid"]["spacing"] / 3)
+    assert checked["safety_factor"] == pytest.approx(safety["allowable_mpa"] / safety["peak_mpa"])
     assert checked["neck"]["status"] in ("suspect", "undetermined", "not_observed")
     json.dumps(result)  # 結果メッセージにそのまま載る
 

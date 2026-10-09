@@ -929,7 +929,7 @@ def _run(
                   | "boundary_mapping_failed"
                   | "no_feasible_found" | "input_contradiction" | "resolution_insufficient"
                   | "fill_infeasible"                        # 空隙を埋めた形が6条件に不合格
-                  | "final_unsafe",                          # 完成形を探索格子で再解析した安全率が本来の目標を割る
+                  | "final_unsafe",                          # 完成形の表面の最大応力で見た安全率が本来の目標を割る
          "search_safety_factor": float|None, "filled_cells": int|None,
          "body_id": BodyId | None, "name": str | None,
          "warning": str | None,
@@ -947,14 +947,16 @@ def _run(
          "material_mm3": float|None, "evaluations": int, "termination": str|None,
          "anchor_check": {"limit_mm","fixed_mm","load_mm"} | None,
          "triangle_count": int|None, "vertex_count": int|None,
-         "final_safety_factor": float|None,      # 完成形(平滑化・集合演算の後)を探索格子で再解析した安全率
+         "final_safety_factor": float|None,      # 完成形(平滑化・集合演算の後)を細かい格子で解いた、部材域の表面の最大応力での安全率
          "final_check": topopt.final_check.inspect の戻り | None,   # 強度と、つなぎ目の幅の診断(3値。適合は出さない)
          "seconds": float}
 
     `target_safety_factor` は利用者が指定した実際の目標、`search_target_safety_factor` は探索(と6条件の
     `safety`)に渡した目標(= 実際の目標 × `search_target_factor`)。**`safety_factor` は探索の格子での値**で、
-    探索時の目標に対する合否であって、実際の目標に対する安全率の実測ではない。**`final_safety_factor` は完成形を同じ格子で解き直した値**で、
-    実際の目標を割れば `state="final_unsafe"` で結果を足さない(2026-10-07 本人決定。`topopt.final_check`)。
+    探索時の目標に対する合否であって、実際の目標に対する安全率の実測ではない。探索の代表応力は部材域の固定物理体積の上位値
+    (`_build_search_conditions`)。**`final_safety_factor` は完成形を探索の格子の 1/3(大きい題材は 1/2)で解き直し、部材域の
+    表面の面中心の最大応力で割った値**で、係数を掛けずに実際の目標と比べ、割れば `state="final_unsafe"` で結果を足さない
+    (2026-10-07 本人決定。`topopt.final_check`)。
 
     `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも
     m 立方が入らず保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
@@ -1122,7 +1124,8 @@ def _run(
     # **アンカーはここで1回だけ配る**(`?debug=anchors`)。探索が使う確定表の節点。
     dbg.anchors("mapping", space, table=table)
 
-    conditions = _build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
+    conditions = _build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping,
+                                          min_width_mm=float(min_width["requested_mm"]))
     search_kwargs: Dict[str, Any] = {}
     if opts.max_evaluations is not None:
         search_kwargs["max_evaluations"] = int(opts.max_evaluations)
@@ -1260,11 +1263,12 @@ def _run(
     )
     from .topopt import final_check
 
-    pump.emit(phase="final_check", message="完成形を探索の格子で解き直し、つなぎ目の幅を調べる")
+    pump.emit(phase="final_check",
+              message=f"完成形を探索の格子の1/{final_check.REFINE}で解き直して表面の最大応力を測り、つなぎ目の幅を調べる")
     pump.check()
     checked = final_check.inspect(final_vertices, final_faces, grid=space.grid, conditions=conditions, mask=mask,
                                   min_width=min_width, target_safety_factor=float(opts.target_safety_factor),
-                                  keep_cells=conditions.keep_cells)
+                                  keep_cells=conditions.keep_cells, anchor_soup=space.soup)
     trace.snapshot('final-check', **checked)
     final_sf = checked["safety_factor"]
     if checked["safety"] is not None and checked["safety"].get("status") == "fail":
@@ -1273,8 +1277,9 @@ def _run(
             started,
             keep_room_warning,
             state="final_unsafe",
-            warning=(f"完成形(平滑化・保持/除外の後)を探索の格子で解き直した安全率 {final_sf:.4g} が目標 "
-                     f"{opts.target_safety_factor:.4g} を下回る(探索時の値 {safety_factor:.4g})"),
+            warning=(f"完成形(平滑化・保持/除外の後)の表面の最大応力で見た安全率 {final_sf:.4g} が目標 "
+                     f"{opts.target_safety_factor:.4g} を下回る(探索時の値 {safety_factor:.4g}。"
+                     f"{final_check.peak_phrase(checked)})"),
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
             evaluations=int(search_result.evaluations),
@@ -1547,7 +1552,8 @@ def _map_boundary_conditions(space, bundle: ConditionBundle) -> tuple:
 
 
 def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
-                             opts: OptimizeOptions, *, table=None, mapping=None) -> Any:
+                             opts: OptimizeOptions, *, table=None, mapping=None,
+                             min_width_mm: Optional[float] = None) -> Any:
     """`DesignSpace` と `ConditionBundle` から `binary_search.SearchConditions` を組み立てる。
 
     `table` は探索用の確定表(`_map_boundary_conditions`)。省くとここで作る —— 検査・CLIが
@@ -1558,6 +1564,9 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
     (境界箱の再計算を候補評価のたびに払わないため、`kernel.BoundingBoxCache`)。
     探索の目標は実際の目標 × `opts.search_target_factor`。**係数を掛けるのはここ1か所**で、検査・測定が
     この関数を通すときも掛かる(測定は `search_target_factor=1.0` で「渡した目標そのまま」に固定する)。
+    安全率の代表応力は部材域の固定物理体積の上位値で、許す超過体積 V = 最小幅³(`min_width_mm`。省くと
+    `_resolve_min_width` の既定)。V を最小幅に結びつけるのは「最小幅より細かい形は探索が作れない」という意味づけで、
+    強度上の根拠ではない(docs/TOPOPT_STRESS_GATE_DILUTION.md 7章)。
     """
     from .topopt import binary_search
 
@@ -1565,6 +1574,8 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
         table, mapping = _map_boundary_conditions(space, bundle)
     preserves = tuple((bid, doc.get_body(bid).shape) for bid in bundle.keep_body_ids)
     excludes = tuple((bid, doc.get_body(bid).shape) for bid in bundle.exclude_body_ids)
+    if min_width_mm is None:
+        min_width_mm = float(_resolve_min_width(space.grid.spacing, None)["requested_mm"])
     return binary_search.SearchConditions(
         grid=space.grid,
         table=table,
@@ -1577,6 +1588,7 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
         bbox_cache=doc.bbox_cache,
         mapping=mapping,
         keep_cells=space.keep,
+        member_volume_mm3=float(min_width_mm) ** 3,
     )
 
 

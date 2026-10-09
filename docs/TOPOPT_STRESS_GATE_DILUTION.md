@@ -304,6 +304,20 @@ w=4.8mm(製品既定の最小幅)なら 1000N で既に開始不可(部材域 Q_
   (c) hanger 1000N の付け根の固有のピーク(全材料で表面 21.2MPa、細格子では 1.0〜2.3 倍)は利用者目標のピーク基準 20MPa を割る見込みで、
   これは探索では直せない(付け根にフィレット、荷重・目標の見直しなど利用者側の手になる)。
 
+### 10-4. 製品に入れたもの(2026-10-09 本人指示)
+
+本人指示(要旨): 99.5% 点から「部材域 R の Q_V ≤ 40 ÷ (利用者目標 × 2.4)」へ移し、完成形検査を「探索格子の 1/3 で表面ピークを測る」形にする。肉盛りはまだ入れない。
+
+- 探索: `SearchConditions.member_volume_mm3` = 最小幅³(要求値。既定の最小幅でも同じ)。部材域は `acceptance.member_region`
+  (保持セル以外・拘束/荷重面の確定表の節点を角に持たない要素)。V は w³ を選んだ。(w/2)³ は小型でピークを少し抑えるが hanger 1000N を
+  入口で断り、V より小さい集中は完成形検査が見るため(10-1 の表で、体積の判定だけの形のピークは w³ と (w/2)³ でほぼ同じ)。
+- 完成形検査: 完成メッシュの境界箱で探索格子を切り出し、1/3(要素数 800万を超えるときは 1/2・1/1)へ占有化、確定表を細かい格子で作り直して解く。
+  部材域(外す1層と保持は探索格子で決めて細分する)の露出面の面中心 von Mises の最大で 安全率 = 40 ÷ 最大 を出し、利用者の目標と比べる。
+  保持セルと拘束/荷重面の1層の最大は `keep_peak_mpa`・`boundary_layer_peak_mpa` として返すだけ。
+- 製品経路の実測(`run_product.py`): path 3000N は 40,912 mm³(現行 71,928)・完成形の安全率 5.33 で合格、60 秒、プロセスの最大メモリ 3.2GB。
+  dilution 300N は探索は通るが完成形の表面の最大 24.6MPa(安全率 1.62)で `final_unsafe` になり結果を足さない(肉盛りが無いため。10-2)。
+  hanger 1000N は(追記)。
+
 ## 11. 再現(リポジトリ直下。FEM の同時実行は避ける)
 
 ```
@@ -320,6 +334,7 @@ w=4.8mm(製品既定の最小幅)なら 1000N で既に開始不可(部材域 Q_
 .venv\Scripts\python.exe topopt_checks\stress_gate\phase_d_peak.py --model dilution --mask output\stress_gate_20261008\masks\<名前>.npz
 .venv\Scripts\python.exe topopt_checks\stress_gate\phase_f_relief.py --model dilution --mask output\stress_gate_20261008\masks\<名前>.npz --rounds 4
 .venv\Scripts\python.exe topopt_checks\stress_gate\phase_b_search.py --model dilution --gate unified_speak --eps 0.05 --d 2 --dist nodes --refine 2 --tag sp
+.venv\Scripts\python.exe topopt_checks\stress_gate\run_product.py --model path      # 製品の入口(探索+完成形検査)
 bash topopt_checks/stress_gate/run_matrix.sh <ログ>          # 13条件(現行・境界球平均つき)
 bash topopt_checks/stress_gate/run_matrix_member.sh <ログ>   # 13条件(部材域のみ)
 .venv\Scripts\python.exe topopt_checks\stress_gate\summarize_matrix.py
