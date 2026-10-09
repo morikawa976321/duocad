@@ -12,7 +12,8 @@
 
     {"safety_factor": float|None,           # 完成形の安全率(部材域の表面の最大応力で)。測れなければ None
      "safety": 強度の報告(下の _strength) | None,
-     "conditions": acceptance.condition_check の報告(拘束・荷重の節点が細かい格子の完成形に載ったか),
+     "conditions": acceptance.condition_check の報告(拘束・荷重の節点が細かい格子の完成形に載ったか)と、
+                   作り直した確定表の検証 `mapping_status`・`mapping_reasons`(`anchor.condition_mapping`),
      "material_cells": int,                 # 細かい格子での材料セル数
      "neck": neck_persistence の戻り}
 """
@@ -98,8 +99,14 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
                          spacing=h / factor, shape=tuple(int(n) * factor for n in hi - lo))
     material = voxelize.occupancy(soup, fine, allow_empty=True)[0]
     table = anchor.build_anchors(anchor_soup, fine, allowed_nodes=acceptance.active_nodes(material))
+    # 作り直した表が条件面を覆っているかを確かめる(`condition_check` は残った節点へ荷重を配り直すので、
+    # 完成形が条件面の一部から離れても合格する)
+    mapping = anchor.condition_mapping(table, conditions.fixed_faces, conditions.load_faces, conditions.forces,
+                                       material=material)
     report, fixed, load = acceptance.condition_check(material, table, conditions.fixed_faces,
                                                      conditions.load_faces, conditions.forces)
+    report = dict(report, mapping_status=mapping['status'],
+                  mapping_reasons={row['condition']: row['reasons'] for row in mapping['faces'] if row['reasons']})
     # 部材域から外す範囲は探索格子で決める(探索の判定と同じ物理範囲。細かい格子の1層にすると特異点へ近づく)
     nodes = [anchor.face_node_ids(conditions.table, f) for f in tuple(conditions.fixed_faces) + tuple(conditions.load_faces)]
     layer_coarse = stress.boundary_layer_cells(grid.shape, np.concatenate(nodes) if nodes else np.zeros(0, np.int64))
@@ -108,7 +115,9 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
             else _refine_cells(keep_cells, lo, hi, factor))
     region = material & ~layer & ~keep
     safety = None
-    if report['status'] == 'pass':
+    if report['status'] == 'pass' and mapping['status'] != 'pass':
+        safety = dict(status='unknown', reason='boundary_mapping_failed', safety_factor=None, refine=int(factor))
+    elif report['status'] == 'pass':
         try:
             safety = _strength(material, region, keep, layer, fine, fixed, load, conditions, target_safety_factor)
         except Exception as error:  # 解けない完成形は「測れなかった」として呼び出し側が警告にする

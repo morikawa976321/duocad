@@ -1564,18 +1564,17 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
     (境界箱の再計算を候補評価のたびに払わないため、`kernel.BoundingBoxCache`)。
     探索の目標は実際の目標 × `opts.search_target_factor`。**係数を掛けるのはここ1か所**で、検査・測定が
     この関数を通すときも掛かる(測定は `search_target_factor=1.0` で「渡した目標そのまま」に固定する)。
-    安全率の代表応力は部材域の固定物理体積の上位値で、許す超過体積 V = 最小幅³(`min_width_mm`。省くと
-    `_resolve_min_width` の既定)。V を最小幅に結びつけるのは「最小幅より細かい形は探索が作れない」という意味づけで、
-    強度上の根拠ではない(docs/TOPOPT_STRESS_GATE_DILUTION.md 7章)。
+    安全率の代表応力は部材域の固定物理体積の上位値で、許す超過体積 V = (最小幅 × `stress.MEMBER_VOLUME_WIDTH_RATIO`)³
+    (最小幅は `min_width_mm`。省くと `opts.min_width_mm` を `_resolve_min_width` に通した値)。
     """
-    from .topopt import binary_search
+    from .topopt import binary_search, stress
 
     if table is None:
         table, mapping = _map_boundary_conditions(space, bundle)
     preserves = tuple((bid, doc.get_body(bid).shape) for bid in bundle.keep_body_ids)
     excludes = tuple((bid, doc.get_body(bid).shape) for bid in bundle.exclude_body_ids)
     if min_width_mm is None:
-        min_width_mm = float(_resolve_min_width(space.grid.spacing, None)["requested_mm"])
+        min_width_mm = float(_resolve_min_width(space.grid.spacing, opts.min_width_mm)["requested_mm"])
     return binary_search.SearchConditions(
         grid=space.grid,
         table=table,
@@ -1588,7 +1587,7 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
         bbox_cache=doc.bbox_cache,
         mapping=mapping,
         keep_cells=space.keep,
-        member_volume_mm3=float(min_width_mm) ** 3,
+        member_volume_mm3=(float(min_width_mm) * stress.MEMBER_VOLUME_WIDTH_RATIO) ** 3,
     )
 
 

@@ -44,9 +44,9 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 | 塊(設計空間)の余白比率 `margin_ratio` | **0.20** | `design_space.DEFAULT_MARGIN_RATIO` | 「固定凸包による設計空間(2026-09-16)」(2026-09-16 本人判断で 0.25 → 0.20。0.25 の根拠は「余白比率をどう決めたか(既定 0.25)」) |
 | 塊の導出方式 | 固定凸包(保持・条件面のボディの外接箱の頂点の凸包から距離 `m` 以内 = 球とのミンコフスキー和)。材料量によらず1実行に1回 | `design_space.DERIVATION` | 「固定凸包による設計空間(2026-09-16)」 |
 | 許容応力(PETG の降伏応力 × 造形の低減係数) | **50** MPa × **0.8** | `material.PETG_YIELD_MPA` / `PRINT_DERATE` | 「許容応力の導出」 |
-| 探索の代表応力の規則(製品) | **部材域**(保持セル以外・拘束/荷重面の節点に接する1層の外)の**固定物理体積の上位値**、許す超過体積 V = **最小幅³** | `stress.member_volume_stress` / `acceptance.member_region` / `optimize_run._build_search_conditions` | 「代表応力の規則」、[TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) |
+| 探索の代表応力の規則(製品): 部材域(保持セル以外・拘束/荷重面の節点に接する1層の外)の固定物理体積の上位値。許す超過体積 V の一辺 = 最小幅 × これ | **1.0** | `stress.MEMBER_VOLUME_WIDTH_RATIO`(`member_volume_stress` / `acceptance.member_region` / `optimize_run._build_search_conditions`) | 「代表応力の規則」、[TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) |
 | 代表応力の規則(`member_volume_mm3` を渡さない検査・研究の経路) | ρ >= **0.5** の要素の上位 **99.5%** 点 | `stress.DEFAULT_RHO_MIN` / `DEFAULT_PERCENTILE` | 「代表応力の規則」 |
-| 完成形検査の強度 | 完成メッシュを探索格子の **1/3**(要素数が **800万** を超える題材は 1/2・1/1)へ占有化し、部材域の**表面の面中心の最大応力**で安全率。係数なしで利用者の目標と比べる | `final_check.REFINE` / `MAX_FINE_ELEMENTS` | [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) 10章 |
+| 完成形検査の強度: 完成メッシュを探索格子の 1/n へ占有化し(細かい格子の要素数が上限を超える題材は n を下げる)、部材域の表面の面中心の最大応力で安全率を出して係数なしで利用者の目標と比べる | n = **3**、上限 **8000000** 要素 | `final_check.REFINE` / `MAX_FINE_ELEMENTS` | [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) 10章 |
 | メッシュ平滑化(Taubin)の反復数 `DEFAULT_ITERS` | **30** | `mesh.DEFAULT_ITERS` | 「平滑化の既定をどう決めたか」 |
 | 既定スレッド数 `PARALLEL_THREADS` | **総コアの半分** | `fem.PARALLEL_THREADS`(`_default_thread_count()`) | 「既定スレッド数を総コアの半分にする」 |
 | 段階4で1回に削る割合の上限 `DEFAULT_MAX_STEP_RATIO` | **0.2** | `binary_search.DEFAULT_MAX_STEP_RATIO` | 計画書§11.2 |

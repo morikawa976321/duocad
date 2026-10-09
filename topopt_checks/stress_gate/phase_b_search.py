@@ -164,6 +164,8 @@ def main() -> int:
         return smeth.build_context(spec["model"], load_n=spec["load_n"], element_size_mm=size, min_width_mm=w)
 
     ctx = context(h)
+    # このスクリプトの 'current' は 2026-10-08 時点の製品(材料全体の99.5%点)。製品の部材域の規則は使わない
+    ctx.cond = binary_search.replace(ctx.cond, member_volume_mm3=None)
     target = ctx.cond.allowable_mpa / ctx.cond.target_safety_factor
     keep = np.asarray(ctx.cond.keep_cells if ctx.cond.keep_cells is not None else np.zeros(ctx.grid.shape, bool))
     def fixed_distance(c):

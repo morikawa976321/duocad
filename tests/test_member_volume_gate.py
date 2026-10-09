@@ -101,6 +101,25 @@ def test_the_search_conditions_carry_the_member_rule_into_the_inspection_and_the
     assert binary_search.evaluation_identifier(other) != binary_search.evaluation_identifier(conditions)
     legacy = binary_search.replace(conditions, member_volume_mm3=None)
     assert 'member_volume_mm3' not in legacy.inspect_kwargs()
+    requested = optimize_run._build_search_conditions(
+        doc, space, bundle, optimize_run.OptimizeOptions(element_size_mm=8.0, min_width_mm=24.0))
+    assert requested.member_volume_mm3 == 24.0 ** 3  # 引数を省いたら利用者の要求した最小幅
+
+
+def test_the_member_rule_goes_through_representative_stress_so_it_can_be_replaced(monkeypatch):
+    """落ちたら、部材域の規則が `representative_stress` の外で値を上書きし、差し替えた代表応力が効かない。"""
+    m = 2
+    material, fixed, load = _cantilever(m)
+    model = fem.Model(*material.shape, fixed_dofs=fixed, load=load, active_mask=material)
+    density = material.astype(float)
+    u = model.solve(density, 3.0, solver='direct')
+    scale = stress.UnitScale(1.0, 1.0, 1.0, solved_load=1.0)
+    real = stress.representative_stress
+    monkeypatch.setattr(stress, "representative_stress",
+                        lambda field, rho, **kw: stress.RepresentativeStress(**{**real(field, rho, **kw).__dict__, "value": 0.5}))
+    report = stress.evaluate(model, density, scale=scale, allowable_mpa=1.0, u=u, member_region=material,
+                             member_volume_mm3=1.0)
+    assert report.safety_factor == 2.0
 
 
 def test_the_finished_shape_is_refined_to_a_third_unless_the_grid_is_too_large():

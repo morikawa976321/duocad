@@ -1500,6 +1500,29 @@ def test_the_finished_shape_is_solved_again_and_its_safety_factor_and_neck_diagn
     json.dumps(result)  # 結果メッセージにそのまま載る
 
 
+def test_a_finished_shape_whose_rebuilt_conditions_do_not_cover_the_faces_is_not_measured(session: Session, monkeypatch) -> None:
+    # 落ちたら、細かい格子で作り直した確定表が条件面を覆っていないのに、残った節点へ配り直した荷重で強度を測っている。
+    from duocad.topopt import anchor
+
+    four_conditions(session)
+    _replayed_search(monkeypatch)
+    real = anchor.condition_mapping
+    calls = []
+
+    def failing_on_the_fine_grid(table, *args, **kwargs):
+        report = real(table, *args, **kwargs)
+        calls.append(table.grid.spacing)
+        if table.grid.spacing < calls[0] - 1e-9:  # 探索の格子より細かい表 = 完成形検査が作り直したもの
+            report = dict(report, status="fail")
+        return report
+
+    monkeypatch.setattr(anchor, "condition_mapping", failing_on_the_fine_grid)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "done" and result["final_safety_factor"] is None
+    assert result["final_check"]["safety"]["reason"] == "boundary_mapping_failed"
+    assert "完成形の安全率を測れなかった" in result["warning"]
+
+
 def test_a_finished_shape_below_the_real_target_is_a_failure_without_touching_the_document(session: Session, monkeypatch) -> None:
     # 落ちたら、完成形が本来の目標安全率を割っても結果を足している(2026-10-07 本人決定)。
     from duocad.topopt import final_check

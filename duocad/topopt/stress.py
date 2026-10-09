@@ -27,6 +27,10 @@ from . import fem
 # そこで安全率が決まると解像度を上げるほど安全率が下がり続ける(docs/TOPOPT.md の実測表)。
 DEFAULT_RHO_MIN = 0.5
 DEFAULT_PERCENTILE = 99.5
+#: 部材域の規則で許す超過体積 V の一辺 = 最小幅 × これ(V = (最小幅 × これ)³)。最小幅に結びつけるのは「最小幅より細かい形は
+#: 探索が作れない」という意味づけで、強度上の根拠ではない。0.5 は小型でピークを少し抑えるが hanger 1000N を入口で断った
+#: (docs/TOPOPT_STRESS_GATE_DILUTION.md 6・10章)。
+MEMBER_VOLUME_WIDTH_RATIO = 1.0
 
 def strain_displacement_center(element_size: float = 1.0) -> np.ndarray:
     """要素**中心**(xi=eta=zeta=0)での B 行列 (6,24)。
@@ -213,8 +217,14 @@ def representative_stress(
     *,
     rho_min: float = DEFAULT_RHO_MIN,
     percentile: float = DEFAULT_PERCENTILE,
+    member_region: np.ndarray | None = None,
+    member_volume_mm3: float | None = None,
+    cell_mm3: float | None = None,
 ) -> RepresentativeStress:
     """代表応力 = 「ρ >= rho_min の要素」の von Mises の上位パーセンタイル。
+
+    `member_volume_mm3` を渡すと、代わりに部材域 `member_region`(∧ ρ >= rho_min)の固定物理体積の上位値
+    (`member_volume_stress`。`cell_mm3` は要素の体積)。部材域が空なら ρ >= rho_min の全体で取る。
 
     **素の max を使わない。** 規則は2段で、どちらも実測に裏がある(docs/TOPOPT.md の表):
 
@@ -250,6 +260,15 @@ def representative_stress(
             f"母集団の von Mises 応力に非有限値が {bad} 個ある(全 {count} 要素)。"
             "解が発散しているか、拘束・荷重の与え方が壊れている"
         )
+    if member_volume_mm3 is not None:
+        if member_region is None or np.asarray(member_region).shape != values.shape or cell_mm3 is None:
+            raise ValueError("部材域の規則には格子と同じ形の member_region と cell_mm3 が要る")
+        region = np.asarray(member_region, dtype=bool) & dense
+        value, population = member_volume_stress(values, region if region.any() else dense,
+                                                 volume_mm3=float(member_volume_mm3), cell_mm3=float(cell_mm3))
+        return RepresentativeStress(value=value, raw_max=float(values.max()), dense_max=float(picked.max()),
+                                    percentile=float(percentile), rho_min=float(rho_min), element_count=population,
+                                    unit=field.unit, rule="member_volume", volume_mm3=float(member_volume_mm3))
     return RepresentativeStress(
         value=float(np.percentile(picked, percentile)),
         raw_max=float(values.max()),
@@ -416,18 +435,9 @@ def evaluate(
     displacement = np.asarray(u, dtype=float).ravel()
     field = element_stress(model, displacement).scaled(scale)
     trace.snapshot('stress-displacement', displacement=displacement, scale=scale)
-    rep = representative_stress(field, density, rho_min=rho_min, percentile=percentile)
-    if member_volume_mm3 is not None:
-        if member_region is None or np.asarray(member_region).shape != density.shape:
-            raise ValueError("部材域の規則には格子と同じ形の member_region が要る")
-        region = np.asarray(member_region, dtype=bool) & (density >= rho_min)
-        if not region.any():
-            region = density >= rho_min
-        value, count = member_volume_stress(field.von_mises, region, volume_mm3=float(member_volume_mm3),
-                                            cell_mm3=scale.element_mm ** 3)
-        rep = RepresentativeStress(value=value, raw_max=rep.raw_max, dense_max=rep.dense_max, percentile=rep.percentile,
-                                   rho_min=rep.rho_min, element_count=count, unit=rep.unit, rule="member_volume",
-                                   volume_mm3=float(member_volume_mm3))
+    member = {} if member_volume_mm3 is None else dict(member_region=member_region, member_volume_mm3=member_volume_mm3,
+                                                       cell_mm3=scale.element_mm ** 3)
+    rep = representative_stress(field, density, rho_min=rho_min, percentile=percentile, **member)
     return SafetyReport(
         safety_factor=safety_factor(rep.value, allowable_mpa),
         allowable_mpa=float(allowable_mpa),
