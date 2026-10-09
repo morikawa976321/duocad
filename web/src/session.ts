@@ -621,6 +621,12 @@ export interface OptimizeResolutionPayload {
   from_condition_faces_mm?: number
   /** 要素サイズの上限の固定値(`optimize_run.MAX_ELEMENT_SIZE_MM`)。上限は条件面からの要求とこれの細かい方。 */
   max_element_size_cap_mm?: number
+  /** `optimizeResolution(値)` で問い合わせた値(自由入力)。`selected`・`selected_error` はこの値についてのもの。 */
+  requested_element_size_mm?: number
+  /** 問い合わせた値を選んだときの段(実格子へ揃えた要素サイズ。`index` は -1)。 */
+  selected?: OptimizeResolutionStep
+  /** 問い合わせた値が範囲外・不正だった理由(人に見せる文)。 */
+  selected_error?: string
   max_design_elements?: number
   feasible?: boolean
   steps?: OptimizeResolutionStep[]
@@ -926,7 +932,8 @@ export interface Session {
    * 要素サイズの上限・下限・目盛りを聞く(応答は `onOptimizeResolution`)。
    * **軽い**(条件面のbboxを数枚測るだけ)ので、条件が変わるたびに呼んでよい。
    */
-  optimizeResolution(): void
+  /** 要素サイズの上限・下限・目盛り。`elementSizeMm` を渡すとその値の段(`selected`)も返る。 */
+  optimizeResolution(elementSizeMm?: number | null): void
   /**
    * 走らせる。**待たずに返る** —— 進捗は `onOptimizeProgress`、結果は `onOptimizeResult`
    * へ届き、結果が文書へ入ったことは通常の状態配信として別途来る。
@@ -1278,8 +1285,12 @@ export function createSession(hooks: SessionHooks): Session {
     optimizeConditions() {
       send({ cmd: 'optimize_conditions' })
     },
-    optimizeResolution() {
-      send({ cmd: 'optimize_resolution' })
+    optimizeResolution(elementSizeMm) {
+      send(
+        elementSizeMm === undefined || elementSizeMm === null
+          ? { cmd: 'optimize_resolution' }
+          : { cmd: 'optimize_resolution', element_size_mm: elementSizeMm },
+      )
     },
     runOptimization(options) {
       send({

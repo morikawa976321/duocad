@@ -660,8 +660,8 @@ class Session:
         """4条件がそろって走らせられるか(`optimize_run.conditions_report`)。"""
         return optimize_run.conditions_report(self.document)
 
-    def optimize_resolution(self, rmin_mm: Any = None) -> dict:
-        """要素サイズの上限・下限・既定。
+    def optimize_resolution(self, rmin_mm: Any = None, element_size_mm: Any = None) -> dict:
+        """要素サイズの上限・下限・既定。`element_size_mm` を渡すとその値の段も返す(`resolution_limits`)。
 
         `rmin_mm`(密度フィルタ半径)は**この版では扱えない**(二値探索は
         密度フィルタを持たない)。届いたら黙って無視せず `OptimizeInputError` にする
@@ -673,7 +673,7 @@ class Session:
                 "rmin_mm(最小部材幅/密度フィルタ半径)はこの版では扱えない。"
                 "二値探索は密度フィルタを持たないので、要素サイズを直接指定すること"
             )
-        return optimize_run.resolution_limits(self.document)
+        return optimize_run.resolution_limits(self.document, element_size_mm)
 
     def cancel_optimization(self) -> dict:
         """走っている最適化に降りるよう伝える(**旗を立てるだけ**)。

@@ -780,7 +780,7 @@ optimize_run.run
 
 ```
 Session.optimize_conditions()     4条件がそろって走らせられるか(足りないものを名指しする)
-Session.optimize_resolution()     要素サイズの上限・下限・既定
+Session.optimize_resolution(...)  要素サイズの上限・下限・既定(element_size_mm を渡すとその値の段 selected も返す。画面の自由入力)
 Session.run_optimization(...)     端から端まで走らせ、結果をメッシュボディとして足す(重い)
 Session.cancel_optimization()     走っている最適化に降りるよう伝える(旗を立てるだけ)
 ```

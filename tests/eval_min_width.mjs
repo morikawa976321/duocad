@@ -1,8 +1,8 @@
 /** `web/src/minWidth.ts` の純関数を評価する口(`tests/test_ts_evaluators.py` が node で走らせる)。失敗したら非ゼロで終了する。 */
 import assert from 'node:assert/strict'
 import {
-  clampStepIndex, isOutOfRange, judgeMinWidth, roundUpNotice, shownCeilingMm, shownFloorMm, shownGuaranteedMm,
-  shownMinWidthMm, shownStepMm, stepAt,
+  chosenStep, isOutOfRange, judgeMinWidth, roundUpNotice, shownCeilingMm, shownElementSizeRange, shownFloorMm,
+  shownGuaranteedMm, shownMinWidthMm, shownStepMm,
 } from '../web/src/minWidth.ts'
 
 const stepOf = (size, cells) => ({
@@ -48,15 +48,28 @@ for (const exact of [2 * 2.4063, 3 * 2.4063, 17 * 2.4063, ...grid.min_width_step
 
 assert.doesNotThrow(() => shownStepMm(2e-98)) // toFixed は100桁まで
 
-// 段の番号の丸め(目盛りが空・目盛りより大きい番号)と、範囲外の判定(App と OptimizePanel が同じものを読む)。
+// 梯子(要素サイズの候補)と、範囲外の判定(App と OptimizePanel が同じものを読む)。
 const ladder = [stepOf(1, 5), stepOf(2, 5), stepOf(3, 5)]
-assert.equal(stepAt([], 0), null)
-assert.equal(stepAt([], 3), null)
-assert.equal(clampStepIndex(3, 0), 0)
-assert.equal(clampStepIndex(7, 3), 2)
-assert.equal(clampStepIndex(1, 3), 1)
-assert.equal(stepAt(ladder, 7), ladder[2])
-assert.equal(stepAt(ladder, 1), ladder[1])
+// 要素サイズの自由入力: 空欄は梯子の先頭(既定)、入力はその値への応答の `selected` だけを使う(古い値の応答では走らせない)。
+const picked = stepOf(1.5, 5)
+assert.equal(chosenStep(null, null), null)
+assert.equal(chosenStep({ error: 'まだ条件面が無い' }, null), null)
+assert.equal(chosenStep({ steps: ladder }, null), ladder[0])
+assert.equal(chosenStep({ steps: [] }, null), null)
+assert.equal(chosenStep({ steps: ladder, requested_element_size_mm: 1.5, selected: picked }, 1.5), picked)
+assert.equal(chosenStep({ steps: ladder, requested_element_size_mm: 1.5, selected: picked }, 2), null)
+assert.equal(chosenStep({ steps: ladder, requested_element_size_mm: 9, selected_error: '上限より粗い' }, 9), null)
+
+// 範囲の表示: 上限は実格子へ切り下げる前の値(4mm)まで受けるので 3.98 ではなく 4.00、下限は切り上げ。
+assert.deepEqual(
+  shownElementSizeRange({ min_element_size_mm: 3.2581818, max_element_size_mm: 3.9822, from_condition_faces_mm: 14.14, max_element_size_cap_mm: 4 }),
+  { lower: '3.26', upper: '4.00' },
+)
+assert.deepEqual(
+  shownElementSizeRange({ min_element_size_mm: 1, max_element_size_mm: 2.95, from_condition_faces_mm: 3.0, max_element_size_cap_mm: 4 }),
+  { lower: '1.00', upper: '3.00' },
+)
+assert.equal(shownElementSizeRange({ error: 'x' }), null)
 assert.equal(isOutOfRange({ kind: 'none' }), false)
 assert.equal(isOutOfRange(judgeMinWidth(5, awkward)), false)
 assert.equal(isOutOfRange(judgeMinWidth(4.9, awkward)), true)

@@ -482,8 +482,12 @@ def _not_done(
 # --------------------------------------------------------------------------------------
 # 解像度(要素サイズ)をどう決めるか
 # --------------------------------------------------------------------------------------
-def resolution_limits(doc: "Document") -> dict:
+def resolution_limits(doc: "Document", element_size_mm: Any = None) -> dict:
     """要素サイズの**上限**(これより粗いと間違う)と**下限**(これより細かくはできない)。
+
+    `element_size_mm` を渡すと、その値を選んだときの段(`steps` の1件と同じ形)を `selected` に、
+    範囲外・不正なら理由を `selected_error` に入れ、渡した値を `requested_element_size_mm` に返す
+    (画面の自由入力。段の中身は格子の数え方を持つサーバが作る)。
 
         {"max_element_size_mm": float,        # min(MAX_ELEMENT_SIZE_MM, 条件面からの要求)
          "min_element_size_mm": float,        # 設計空間の要素数の上限(見積もり)から
@@ -549,7 +553,7 @@ def resolution_limits(doc: "Document") -> dict:
     # `_resolve_element_size` が「下限より細かい」と断らないため)。分割数は変わらないので要素数も変わらない。
     lower = _snap_to_grid(lo, hi, _min_element_size(lo, hi, volume))
 
-    return {
+    limits = {
         "max_element_size_mm": upper,
         "min_element_size_mm": lower,
         "default_element_size_mm": upper,
@@ -565,6 +569,16 @@ def resolution_limits(doc: "Document") -> dict:
         # 引っかかって「間違わない解像度」が作れない。画面はここを見て断る。
         "feasible": lower <= upper,
     }
+    if element_size_mm is None:
+        return limits
+    limits["requested_element_size_mm"] = element_size_mm
+    try:
+        size = _snap_to_grid(lo, hi, _resolve_element_size(limits, element_size_mm))
+    except (OptimizeInputError, TypeError, ValueError) as error:
+        limits["selected_error"] = str(error)
+    else:
+        limits["selected"] = _resolution_step(lo, hi, size, volume, index=-1)
+    return limits
 
 
 def _resolution_steps(lo, hi, upper: float, lower: float, volume: float) -> List[dict]:
@@ -595,22 +609,25 @@ def _resolution_steps(lo, hi, upper: float, lower: float, volume: float) -> List
         # 「いちばん細かい」が選べない目盛りになる)。
         # 各段も実格子の要素サイズへ揃える(画面に出す値と `derive` が作る格子を一致させる)。
         size = lower if index == count - 1 else _snap_to_grid(lo, hi, upper * (ratio ** index))
-        shape = _grid_shape(lo, hi, size)
-        elements = _design_element_estimate(volume, size)
-        if elements in seen:
+        step = _resolution_step(lo, hi, size, volume, index=len(steps))
+        if step["design_elements_estimate"] in seen:
             continue
-        seen.add(elements)
-        steps.append(
-            {
-                "index": len(steps),
-                "element_size_mm": float(size),
-                "design_elements_estimate": int(elements),
-                "min_width_floor_mm": float(2.0 * size),
-                "min_width_ceiling_mm": float(min(shape) * size),
-                "min_width_steps_mm": min_width_steps_mm(size, min(shape)),
-            }
-        )
+        seen.add(step["design_elements_estimate"])
+        steps.append(step)
     return steps
+
+
+def _resolution_step(lo, hi, size: float, volume: float, *, index: int) -> dict:
+    """要素サイズ `size`(実格子へ揃えた値)の段1件。梯子の段と自由入力の `selected` が同じ形を使う。"""
+    shape = _grid_shape(lo, hi, size)
+    return {
+        "index": int(index),
+        "element_size_mm": float(size),
+        "design_elements_estimate": int(_design_element_estimate(volume, size)),
+        "min_width_floor_mm": float(2.0 * size),
+        "min_width_ceiling_mm": float(min(shape) * size),
+        "min_width_steps_mm": min_width_steps_mm(size, min(shape)),
+    }
 
 
 def _face_max_spacing_mm(cad_area_mm2: float) -> float:

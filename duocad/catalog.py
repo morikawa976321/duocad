@@ -1771,6 +1771,13 @@ COMMANDS: tuple[Command, ...] = (
         name="optimize_resolution",
         category="protocol",
         description="",
+        params=(
+            Param(
+                "element_size_mm", "number",
+                "要素サイズ[mm]。渡すとその値を選んだときの段を selected に、範囲外なら理由を selected_error に返す",
+                required=False,
+            ),
+        ),
         session="optimize_resolution",
         ws="special",
         mcp=False,
@@ -1778,8 +1785,8 @@ COMMANDS: tuple[Command, ...] = (
         note=(
             "**軽い**(OCCTは条件面のbboxを数枚測るだけ)。返る `steps` が**粗い側の端から"
             "細かい方向へだけ**動く目盛り。**時間は付けない**(走らせる前は"
-            "実測が無い)。**引数は無い**(密度フィルタ半径`rmin_mm`は二値探索に無い概念。"
-            "届いたら `{\"error\": ...}` として断る、`OptimizeInputError` 経由)"
+            "実測が無い)。密度フィルタ半径`rmin_mm`は二値探索に無い概念で、"
+            "届いたら `{\"error\": ...}` として断る(`OptimizeInputError` 経由)"
         ),
     ),
     Command(

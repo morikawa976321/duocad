@@ -572,7 +572,7 @@ class Server:
             # 最中ずっとエラーが点滅することになる。
             elif command == "optimize_resolution":
                 try:
-                    payload = self.session.optimize_resolution(message.get("rmin_mm"))
+                    payload = self.session.optimize_resolution(message.get("rmin_mm"), message.get("element_size_mm"))
                 except ValueError as error:
                     payload = {"error": str(error)}
                 await _send(connection, {"type": "optimize_resolution", **payload})

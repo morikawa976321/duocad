@@ -249,6 +249,23 @@ def test_condition_faces_finer_than_the_cap_set_the_upper_bound(session: Session
     assert limits["max_element_size_mm"] == pytest.approx(optimize_run._snap_to_grid(lo, hi, 20.0))
 
 
+def test_a_free_element_size_returns_the_same_step_the_ladder_would(session: Session) -> None:
+    """落ちたら、自由入力した要素サイズの段(`selected`)が梯子の段と別の数え方をしているか、範囲外を段として返している。"""
+    four_conditions(session)
+    limits = optimize_run.resolution_limits(session.document)
+    ladder = limits["steps"][2]
+    picked = optimize_run.resolution_limits(session.document, ladder["element_size_mm"])
+    assert picked["requested_element_size_mm"] == ladder["element_size_mm"]
+    assert picked["selected"] == dict(ladder, index=-1)
+    between = 0.5 * (limits["steps"][1]["element_size_mm"] + limits["steps"][2]["element_size_mm"])
+    lo, hi = optimize_run._condition_bbox(session.document)
+    assert optimize_run.resolution_limits(session.document, between)["selected"]["element_size_mm"] == pytest.approx(
+        optimize_run._snap_to_grid(lo, hi, between))
+    for wrong, reason in ((limits["max_element_size_mm"] * 2.0, "上限"), (limits["min_element_size_mm"] * 0.5, "下限"), (-1.0, "正の値")):
+        refused = optimize_run.resolution_limits(session.document, wrong)
+        assert "selected" not in refused and reason in refused["selected_error"]
+
+
 def test_the_round_cap_itself_is_accepted_although_the_snapped_upper_bound_is_finer() -> None:
     """落ちたら、上限の固定値 4mm をそのまま指定すると、実格子へ切り下げた上限(例 3.98mm)より粗いとして断っている。"""
     limits = {"max_element_size_mm": 3.98, "min_element_size_mm": 1.0, "feasible": True,

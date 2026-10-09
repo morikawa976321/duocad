@@ -15,7 +15,7 @@
    * 1. **ピック → コアの選択への翻訳**(修飾キーで追加・除去・置き換えを決める)
    * 2. **プレビューの往復**(コマンド層が「何を試すか」を決め、ここが投げて幽霊を描く)
    */
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import {
     bodyRef,
@@ -52,7 +52,7 @@
   } from './commands/optimize'
   import OptimizePanel from './OptimizePanel.svelte'
   import { optimizeNoticeFor, type OptimizeNotice } from './optimizeNotice'
-  import { isOutOfRange, judgeMinWidth, minWidthProblem, stepAt } from './minWidth'
+  import { chosenStep, isOutOfRange, judgeMinWidth, minWidthProblem } from './minWidth'
   import { buildSketchDraws, regionsStillExist } from './sketchDraws'
   import { installTestHooks } from './testHooks.svelte'
   import { bodyGhostRotation, ghostSources, resolvePicksForGhost, type GhostContext } from './ghostArgs'
@@ -456,7 +456,20 @@
     onAiResult: ai.onResult,
     onAiError: ai.onError,
     onOptimizeConditions: (report) => (optimizeConditions = report),
-    onOptimizeResolution: (payload) => (optimizeResolution = payload),
+    onOptimizeResolution: (payload) => {
+      const before = optimizeStep?.element_size_mm
+      optimizeResolution = payload
+      // 段は応答で遅れて届く。届いた段で、既に入っている最小幅が新しい下限・上限を外れたら黙って残さない。
+      const after = chosenStep(payload, optimizeElementSizeMm)
+      if (after !== null && after.element_size_mm !== before) {
+        noteMinWidthValidity(
+          optimizeMinWidthMm,
+          after,
+          (problem) =>
+            `解像度を変えたので最小幅の範囲が変わった。いまの入力 ${optimizeMinWidthMm}mm: ${problem}。値を見直すこと`,
+        )
+      }
+    },
     onOptimizeStatus: (running, cancelling) => {
       // **控えを確定するのはサーバが受け付けてから**(押した瞬間に控えると、「別の文書で既に走っている」と
       // 断られた押下が、走っている実行の控えを上書きする)。
@@ -474,7 +487,7 @@
         return
       }
       if (optimizeRunSettings !== null && optimizeRunSettings.name === files.currentName) {
-        optimizeStepIndex = optimizeRunSettings.stepIndex
+        optimizeElementSizeMm = optimizeRunSettings.elementSizeMm
         optimizeMinWidthMm = optimizeRunSettings.minWidthMm
       }
       // 戻ってきた直後は、文書の差し替えで欄が空になっている(`resetOptimizeView`)。取り直しの
@@ -482,7 +495,7 @@
       // 戻ったときに条件と解像度が実行の終わりまで「確認している…」のままになる。
       if (optimizeConditions === null || optimizeResolution === null) {
         session.optimizeConditions()
-        session.optimizeResolution()
+        session.optimizeResolution(optimizeElementSizeMm)
       }
       // 走らせている文書へ戻ってきたら、実行中の表示(進捗・中断ボタン)が見えるモードへ入る。
       // 普通のモードのままだと、編集が断られる理由が画面に無い。
@@ -525,8 +538,8 @@
   // どれも操作ログに載らない(`duocad/catalog.py` の `category="protocol"`)。
   let optimizeConditions = $state<OptimizeConditionsReport | null>(null)
   let optimizeResolution = $state<OptimizeResolutionPayload | null>(null)
-  /** 解像度の目盛りの位置。**0が既定(いちばん粗い)**で、増やすほど細かい。 */
-  let optimizeStepIndex = $state(0)
+  /** 要素サイズの入力[mm]。`null` = 空欄 = 既定(上限側、いちばん粗い)。範囲の判定はサーバー(`selected_error`)。 */
+  let optimizeElementSizeMm = $state<number | null>(null)
   let optimizeMinWidthMm = $state<number | null>(null)
   /** 直前に「下限割れ」だったか(トーストの立ち上がり検知用、描画には使わない普通の変数でよい)。
    *  下限割れが続いているあいだ(1文字打つごと等)にトーストを連打しないための状態。 */
@@ -539,7 +552,7 @@
   const optimizeBusy = $derived(optimizeRunning || optimizeStarting)
   let optimizeCancelling = $state(false)
   let optimizeProgress = $state<OptimizeProgress | null>(null)
-  type OptimizeRunSettings = { name: string | null; stepIndex: number; minWidthMm: number | null }
+  type OptimizeRunSettings = { name: string | null; elementSizeMm: number | null; minWidthMm: number | null }
   /** **次に走らせるまで消えない通知**(トーストは時間で消えるので、結果の信用度はこちら)。 */
   let optimizeNotice = $state<OptimizeNotice | null>(null)
   /** 走らせたときの設定と文書。別の文書へ移ると欄は既定へ戻る(`resetOptimizeView`)ので、走らせた文書へ
@@ -548,8 +561,8 @@
   /** 実行を押してからサーバが受け付けるまでの控え(`onOptimizeStatus` が `optimizeRunSettings` へ確定する)。 */
   let optimizeStartingSettings: OptimizeRunSettings | null = null
 
-  /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す(`stepAt`。OptimizePanel と同じ丸め)。 */
-  const optimizeStep = $derived(stepAt(optimizeResolution?.steps ?? [], optimizeStepIndex))
+  /** いま効いている段(`chosenStep`。入力した値への応答がまだなら `null` で、実行させない)。 */
+  const optimizeStep = $derived(chosenStep(optimizeResolution, optimizeElementSizeMm))
 
   function runOptimization(): void {
     if (optimizeBusy) return
@@ -559,7 +572,7 @@
     // **前の実行のデバッグ表示を捨ててから走らせる。** 残すと、新しい条件を解いている
     // あいだ古い塊が重なって見え、切り分けの道具が切り分けを妨げる。
     clearOptimizeDebug()
-    optimizeStartingSettings = { name: files.currentName, stepIndex: optimizeStepIndex, minWidthMm: optimizeMinWidthMm }
+    optimizeStartingSettings = { name: files.currentName, elementSizeMm: optimizeElementSizeMm, minWidthMm: optimizeMinWidthMm }
     session.runOptimization({
       elementSizeMm: optimizeStep?.element_size_mm ?? null,
       minWidthMm: optimizeMinWidthMm,
@@ -591,22 +604,17 @@
     noteMinWidthValidity(value, optimizeStep, (problem) => `最小幅 ${value}mm: ${problem}。値を見直すこと`)
   }
 
-  /** 解像度の段を変える。既に入っている最小幅が新しい下限・上限を外れたら、黙って実行可能なまま残さない。 */
-  function handleOptimizeStep(index: number): void {
-    optimizeStepIndex = index
-    noteMinWidthValidity(
-      optimizeMinWidthMm,
-      stepAt(optimizeResolution?.steps ?? [], index),
-      (problem) =>
-        `解像度を変えたので最小幅の範囲が変わった。いまの入力 ${optimizeMinWidthMm}mm: ${problem}。値を見直すこと`,
-    )
+  /** 要素サイズの入力が変わった。その値の段はサーバーに聞く(格子の数え方は画面が持たない)。読めない入力は `null` が来る前に欄が止める。 */
+  function handleOptimizeElementSize(value: number | null): void {
+    optimizeElementSizeMm = value
+    session.optimizeResolution(value)
   }
 
   /** 文書を差し替えたとき、前の文書について出していた最適化の表示を戻す。 */
   function resetOptimizeView(): void {
     optimizeNotice = null
     optimizeProgress = null
-    optimizeStepIndex = 0
+    optimizeElementSizeMm = null
     optimizeMinWidthMm = null
     optimizeMinWidthWasInvalid = false
     optimizeResolution = null
@@ -2137,7 +2145,7 @@
     void optimize
     if (!optimizeMode || status !== 'open' || optimizeBusy) return
     session.optimizeConditions()
-    session.optimizeResolution()
+    session.optimizeResolution(untrack(() => optimizeElementSizeMm))
   })
 
   /**
@@ -2190,7 +2198,7 @@
     optimizeCancelling: () => optimizeCancelling,
     optimizeConditions: () => optimizeConditions,
     optimizeResolution: () => optimizeResolution,
-    optimizeStepIndex: () => optimizeStepIndex,
+    optimizeElementSizeMm: () => optimizeElementSizeMm,
     optimizeProgress: () => optimizeProgress,
     optimizeNotice: () => optimizeNotice,
     debugFlags,
@@ -2500,13 +2508,13 @@
         <OptimizePanel
           conditions={optimizeConditions}
           resolution={optimizeResolution}
-          stepIndex={optimizeStepIndex}
+          elementSizeMm={optimizeElementSizeMm}
           minWidthMm={optimizeMinWidthMm}
           running={optimizeBusy}
           cancelling={optimizeCancelling}
           progress={optimizeProgress}
           notice={optimizeNotice}
-          onStep={handleOptimizeStep}
+          onElementSize={handleOptimizeElementSize}
           onMinWidth={handleOptimizeMinWidth}
           onRun={runOptimization}
           onCancel={() => session.cancelOptimization()}

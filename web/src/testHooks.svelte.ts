@@ -52,7 +52,7 @@ export interface TestHookContext {
   optimizeCancelling: () => boolean
   optimizeConditions: () => OptimizeConditionsReport | null
   optimizeResolution: () => OptimizeResolutionPayload | null
-  optimizeStepIndex: () => number
+  optimizeElementSizeMm: () => number | null
   optimizeProgress: () => OptimizeProgress | null
   optimizeNotice: () => OptimizeNotice | null
   debugFlags: DebugFlags
@@ -169,7 +169,7 @@ export function installTestHooks(ctx: TestHookContext): void {
       optimizeCancelling: ctx.optimizeCancelling(),
       optimizeConditions: ctx.optimizeConditions(),
       optimizeResolution: ctx.optimizeResolution(),
-      optimizeStepIndex: ctx.optimizeStepIndex(),
+      optimizeElementSizeMm: ctx.optimizeElementSizeMm(),
       optimizeProgress: ctx.optimizeProgress(),
       optimizeNotice: ctx.optimizeNotice(),
       optimizeAnnotations: () => viewport()?.optimizeAnnotations() ?? { fixtures: [], loads: [] },

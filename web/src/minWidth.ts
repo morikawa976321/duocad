@@ -6,7 +6,7 @@
  * 切り捨て、保証される幅は切り捨て(四捨五入の `toFixed(2)` だと、要素サイズが 2.4501mm のとき
  * 「下限 4.90mm」と表示されたまま 4.90mm が下限割れになる)。
  */
-import type { OptimizeResolutionStep } from './session'
+import type { OptimizeResolutionPayload, OptimizeResolutionStep } from './session'
 
 export type MinWidthVerdict =
   | { kind: 'none' }
@@ -25,15 +25,34 @@ export type MinWidthVerdict =
       lowerStepMm: number | null
     }
 
-/** 段の番号を目盛りの範囲へ丸める(目盛りが縮んだときのため。目盛りが空なら 0)。 */
-export function clampStepIndex(index: number, count: number): number {
-  return Math.min(index, Math.max(count - 1, 0))
+/**
+ * 要素サイズの入力 `valueMm`(`null` = 空欄 = 既定)に対して効いている段。空欄なら梯子の先頭(既定 = 上限側)、
+ * 入力があればサーバーがその値について返した `selected`。**応答がまだその値のものでない間は `null`**
+ * (実行ボタンを押させない。古い値の段で走らせない)。
+ */
+export function chosenStep(
+  payload: OptimizeResolutionPayload | null,
+  valueMm: number | null,
+): OptimizeResolutionStep | null {
+  if (payload === null || payload.error) return null
+  if (valueMm === null) return payload.steps?.[0] ?? null
+  if (payload.requested_element_size_mm !== valueMm) return null
+  return payload.selected ?? null
 }
 
-/** 目盛り `steps` の `index` 番目の段(範囲へ丸める。目盛りが空なら `null`)。 */
-export function stepAt(steps: readonly OptimizeResolutionStep[], index: number): OptimizeResolutionStep | null {
-  if (steps.length === 0) return null
-  return steps[clampStepIndex(index, steps.length)] ?? null
+/**
+ * 要素サイズの入力できる範囲の表示(下限は切り上げ、上限は切り捨て —— 表示した値がそのまま通る)。
+ * 上限はサーバーが**実格子へ切り下げる前の値**まで受ける(`optimize_run._resolve_element_size`)ので、
+ * 条件面からの要求と固定値の細かい方を出す(4mm が 3.98mm と表示されて打てない値に見えないように)。
+ */
+export function shownElementSizeRange(payload: OptimizeResolutionPayload): { lower: string; upper: string } | null {
+  const lower = payload.min_element_size_mm
+  const snapped = payload.max_element_size_mm
+  if (lower === undefined || snapped === undefined) return null
+  const unsnapped = Math.min(payload.from_condition_faces_mm ?? snapped, payload.max_element_size_cap_mm ?? snapped)
+  const upper = Math.max(snapped, unsnapped)
+  const digits = digitsFor(lower)
+  return { lower: roundTo(lower, digits, 'up'), upper: roundTo(upper, digits, 'down') }
 }
 
 /**
