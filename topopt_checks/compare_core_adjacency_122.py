@@ -56,7 +56,7 @@ def _final(mask0, space, cond, doc, bundle, width_mm):
     v, f = finalize(smooth, surface.faces, [doc.get_body(b).shape for b in bundle.keep_body_ids],
                     [doc.get_body(b).shape for b in bundle.exclude_body_ids])
     r = final_check.inspect(v, f, grid=grid, conditions=cond, mask=mask, min_width=resolved, target_safety_factor=2.0,
-                            keep_cells=cond.keep_cells)
+                            keep_cells=cond.keep_cells, anchor_soup=space.soup)
     nk = r['neck']
     ev = nk['events']
     return dict(final_safety_factor=r['safety_factor'], conditions=r['conditions']['status'], neck_status=nk['status'],

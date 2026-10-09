@@ -2517,6 +2517,8 @@
         open={settingsOpen}
         fov={display.fov}
         onFov={display.applyFov}
+        aiStatus={ai.status}
+        onSetApiKey={(key) => session.aiSetApiKey(key)}
         onClose={() => (settingsOpen = false)}
       />
     </div>

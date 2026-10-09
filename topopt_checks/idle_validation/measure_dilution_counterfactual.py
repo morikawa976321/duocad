@@ -12,6 +12,7 @@ Rセル以内を母集団から除く。結果は `output/idle_validation_202609
 """
 from __future__ import annotations
 
+import dataclasses
 import argparse
 import json
 import sys
@@ -26,6 +27,7 @@ import numpy as np  # noqa: E402
 from scipy import ndimage  # noqa: E402
 
 import _record  # noqa: E402
+from _percentile_rule import percentile_rule  # noqa: E402
 from _documents import open_session  # noqa: E402
 
 from duocad import optimize_run  # noqa: E402
@@ -73,7 +75,8 @@ def run_counterfactual(model: Path, *, size: float, cells: int, radius: int, max
 
     OUT.mkdir(parents=True, exist_ok=True)
     with patch.object(trace, "DEFAULT_ROOT", OUT / "_trace"), patch.object(ds, "derive", derive), \
-            patch.object(stress, "representative_stress", rep), patch.object(binary_search, "find_best_feasible", search):
+            patch.object(stress, "representative_stress", rep), patch.object(binary_search, "find_best_feasible", search), \
+            percentile_rule():
         session = open_session(model)
         doc = session.document
         try:
@@ -98,6 +101,7 @@ def run_counterfactual(model: Path, *, size: float, cells: int, radius: int, max
         conditions = optimize_run._build_search_conditions(
             doc, space, optimize_run.build_conditions(doc),
             optimize_run.OptimizeOptions(element_size_mm=size, min_width_mm=cells * size), table=table, mapping=mapping)
+        conditions = dataclasses.replace(conditions, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
         recheck = acceptance.inspect(best.mask, best.mask, space.grid, **conditions.inspect_kwargs(bbox_cache=None))
         record["recheck_with_full_percentile"] = dict(
             status=recheck["status"],

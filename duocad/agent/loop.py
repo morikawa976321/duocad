@@ -306,6 +306,10 @@ class AgentLoop:
 
     def run(self, prompt: str) -> AgentRun:
         """1つの指示を投げて、モデルがツールを呼ばなくなるまで回す。"""
+        # 前の依頼の中断で立ったプロバイダの印を下ろす。この後に届いた中断は下の判定が拾う。
+        rearm = getattr(self.provider, "rearm", None)
+        if callable(rearm):
+            rearm()
         self._settle_history()
         self.turns.append(UserTurn(prompt))
         self._look_first()

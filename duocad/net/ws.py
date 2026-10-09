@@ -20,13 +20,14 @@
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
-        {"type": "ai_status", "provider", "model", "base_url", "running", "providers"}
+        {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "api_key_source",
+         "api_key_hint", "running", "providers"}
         {"type": "ai_tool_call", "name": str, "arguments": {...}, "result": {...}, "ok": bool}
         {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}
         {"type": "ai_error", "message": str}
 
-**`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_prepare` / `ai_send` /
-`ai_cancel` は文書を
+**`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_set_api_key` / `ai_prepare` /
+`ai_send` / `ai_cancel` は文書を
 直接は変えない(操作ログに載らず、undoの単位でもない) —— 文書を変えるのはエージェントが呼ぶ
 既存ツールの側で、それは通常のverb配信としてこの後に届く。したがって `catalog.COMMANDS` には
 **入れない**し、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
@@ -80,9 +81,17 @@ import threading
 from typing import Any, Optional  # Any: listeners / 接続
 
 from .. import catalog, optimize_run, selection
-from ..agent import AgentLoop, Cancellation, ProviderError
+from ..agent import AgentLoop, Cancellation, Limits, ProviderError
 from ..agent.loop import FIRST_LOOK
-from ..agent.providers import DEFAULT_OPENAI_COMPAT_BASE_URL
+from ..agent.providers import (
+    ANTHROPIC_MAX_TOKENS,
+    DEFAULT_OPENAI_COMPAT_BASE_URL,
+    api_key_configured,
+    api_key_status,
+    default_model,
+    delete_api_key,
+    save_api_key,
+)
 from ..session import Session
 from .tools_on_loop import ToolsOnLoop
 
@@ -121,9 +130,13 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 FILE_COMMANDS: dict = catalog.file_table()
 
 #: アプリ内AIが繋げるプロバイダ(`ai_configure` が受け付ける綴り・`ai_status.providers`)。
-#: Claudeへ繋ぐ道はMCP(サブスク認証のClaude Codeが `/mcp` へ来る)側に残っている。
-#: **列のまま残すのは次のプロバイダの差込口だから**で、画面はこの長さで選択UIの要否を決める。
-AI_PROVIDERS: tuple = ("openai_compat",)
+#: 画面はこの長さで選択UIの要否を決める。`anthropic` はキーが無くても並べる —— 選んで送ると
+#: 「どこにキーを置くか」がエラーとして返る(並べないと、その道があること自体が見えない)。
+AI_PROVIDERS: tuple = ("openai_compat", "anthropic")
+
+#: プロバイダごとの打ち切り(無ければ `Limits()`)。出力上限の理由は `ANTHROPIC_MAX_TOKENS`。
+#: 合計時間(`max_total_seconds`)は人が待てる時間なので、プロバイダによらず同じにしてある。
+AI_LIMITS: dict = {"anthropic": Limits(max_tokens=ANTHROPIC_MAX_TOKENS)}
 
 async def _send(connection: Any, payload: dict) -> None:
     await connection.send(json.dumps(payload, ensure_ascii=False))
@@ -168,7 +181,8 @@ class Server:
         # `server` をimportしているので逆方向は循環になる)ので、実体は `mcp_server._run`
         # が渡す。`ToolSurface`(`descriptors`/`call`/`error_envelope`)を満たせば何でもよい。
         self._ai_tools: Optional[Any] = None
-        self._ai_provider_kind = "openai_compat"
+        # キーが置いてあれば Claude から始める(選び直しはサーバを立て直すたびに消える)。
+        self._ai_provider_kind = "anthropic" if api_key_configured() else "openai_compat"
         self._ai_model: Optional[str] = None
         self._ai_base_url: Optional[str] = None
         self._ai_loop: Optional[AgentLoop] = None
@@ -531,6 +545,8 @@ class Server:
                 # (待たずに関数を抜けると、テストのようにここで `asyncio.run` が閉じる
                 # 呼び方では配信タスクが実行される前に握りつぶされる)。
                 await self._broadcast({"type": "ai_status", **status})
+            elif command == "ai_set_api_key":
+                await self._broadcast({"type": "ai_status", **self._ai_set_api_key(message.get("key"))})
             elif command == "ai_prepare":
                 self._ai_prepare()
             elif command == "ai_send":
@@ -591,19 +607,24 @@ class Server:
 
     # ------------------------------------------------------------------ G: アプリ内AIエージェント
     def _ai_status(self) -> dict:
-        """画面に出してよい設定の全部。**鍵の類は一切載せない** ——
-        `api_key_configured` も無い(APIキーで繋ぐプロバイダが無いため)。
+        """画面に出してよい設定の全部。**キーの値は載せない**(載せるのは `api_key_status()` の3つだけ)。
 
         `model` / `base_url` は明示的に選んでいなければ**プロバイダの既定値**を返す
-        (`null` のままだと画面が「何と話しているか」を言えない)。
+        (`null` のままだと画面が「何と話しているか」を言えない)。`anthropic` の `base_url` は
+        常に `null`(送り先は固定で、選べるものが無い)。
 
         **`providers` は増減しうる列として返し続ける** —— 画面はこの長さを見て
         選択UIを出すか決める(1つなら出さない)。
         """
+        anthropic = self._ai_provider_kind == "anthropic"
+        key = api_key_status()
         return {
             "provider": self._ai_provider_kind,
-            "model": self._ai_model or "local",
-            "base_url": self._ai_base_url or DEFAULT_OPENAI_COMPAT_BASE_URL,
+            "model": self._ai_model or default_model(self._ai_provider_kind),
+            "base_url": None if anthropic else self._ai_base_url or DEFAULT_OPENAI_COMPAT_BASE_URL,
+            "api_key_configured": key["configured"],
+            "api_key_source": key["source"],
+            "api_key_hint": key["hint"],
             "running": self._ai_running,
             "providers": list(AI_PROVIDERS),
         }
@@ -618,15 +639,21 @@ class Server:
         (`loop_obj.run` は `run_in_executor` に渡した時点でその回のオブジェクトを掴んでいる)。
 
         **`base_url` を自由に差し替えてよいのは、鍵を持たないプロバイダだけ**である。
-        今ある `openai_compat` はローカルのllama-serverで鍵を持たないので、任意のホストを
-        指しても飛ぶのはキーの無いリクエストだけになる(WebSocketは同一オリジンポリシーで
-        止まらないので、127.0.0.1 bindは防御にならない —— 鍵を持つプロバイダを足すときは
-        この節に拒否を書き戻すこと)。
+        `anthropic` は実キーを `x-api-key` に載せて `{base_url}/v1/messages` へ送るので、送り先を
+        変えられると `ai_configure` → `ai_send` の2手でキーが外へ出る(WebSocketは同一オリジン
+        ポリシーで止まらないので、127.0.0.1 bindは防御にならない)。`anthropic` を選んでいる間の
+        `base_url` は**明示的なエラーで拒否する**(黙って無視すると、効かない理由が画面から分からない)。
+        `openai_compat` はキーを持たないので、どこを指しても飛ぶのはキーの無いリクエストだけになる。
         """
         if self._ai_running:
             return {**self._ai_status(), "error": "AI応答中は設定を変更できない(中断してから)"}
         if provider is not None and provider not in AI_PROVIDERS:
             return {**self._ai_status(), "error": f"未知のプロバイダ: {provider!r}"}
+        if (provider or self._ai_provider_kind) == "anthropic" and base_url:
+            return {
+                **self._ai_status(),
+                "error": "Claude(anthropic)の送り先は公式APIに固定している(base_url は指定できない)",
+            }
         if provider is not None:
             self._ai_provider_kind = provider
         self._ai_model = model or None
@@ -634,6 +661,38 @@ class Server:
         # 古い設定で走っているウォームアップの接続を閉じる(捨てる会話のために相手を占有しない)。
         self._ai_cancellation.cancel()
         # 次に使うときに作り直す(古いプロバイダ・古い会話の履歴を持ち越さない)。
+        self._ai_loop = None
+        self._ai_cancellation = Cancellation()
+        return self._ai_status()
+
+    def _ai_set_api_key(self, key: Any) -> dict:
+        """設定ダイアログから届いたClaudeのAPIキーを書く(`None` なら消す)。**値は返さない**。
+
+        書いたら Claude へ切り替える(キーを置く理由はそれを使うことなので、起動時の
+        「キーがあれば Claude から始める」と揃える)。会話は作り直す —— 走っている `AgentLoop` の
+        プロバイダは古いキーを持っている。実行中は `_ai_configure` と同じ理由で受け付けない。
+
+        **このコマンドは `catalog.COMMANDS` にもMCPにも載せない**(AIがキーを書き換える口を作らない)。
+        拒否の理由にキーの値を入れない(`key_problem`)。
+        """
+        if self._ai_running:
+            return {**self._ai_status(), "error": "AI応答中はAPIキーを変更できない(中断してから)"}
+        try:
+            if key is None:
+                delete_api_key()
+            elif not isinstance(key, str):
+                raise ValueError("APIキーは文字列で送る")
+            else:
+                save_api_key(key)
+                if self._ai_provider_kind != "anthropic":
+                    # 前のプロバイダ向けに選んだモデル名(`qwen3-30b` など)をClaudeへ持ち越さない。
+                    self._ai_model = None
+                self._ai_provider_kind = "anthropic"
+                self._ai_base_url = None
+        except (ValueError, OSError) as error:
+            reason = str(error) if isinstance(error, ValueError) else f"APIキーの保存に失敗: {error}"
+            return {**self._ai_status(), "error": reason}
+        self._ai_cancellation.cancel()
         self._ai_loop = None
         self._ai_cancellation = Cancellation()
         return self._ai_status()
@@ -656,13 +715,17 @@ class Server:
         # 逆向きの参照は呼び出し時まで遅らせる(import時の循環は起きない)。
         from .. import server as entry
 
+        # **`anthropic` には `base_url` を渡さない**(`_ai_configure` が拒否しているうえでの二重の保証。
+        # 検証を素通りする経路がどこかに生まれても、実キーが外部ホストへ渡る手前で止まる)。
+        kind = self._ai_provider_kind
         provider = entry.build_provider(
-            self._ai_provider_kind, model=self._ai_model, base_url=self._ai_base_url
+            kind, model=self._ai_model, base_url=None if kind == "anthropic" else self._ai_base_url
         )
         marshaled = ToolsOnLoop(self._ai_tools, self._loop)
         self._ai_loop = AgentLoop(
             marshaled,
             provider,
+            limits=AI_LIMITS.get(kind, Limits()),
             cancellation=self._ai_cancellation,
             progress=self._ai_progress,
             first_look=FIRST_LOOK,

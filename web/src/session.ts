@@ -462,10 +462,10 @@ export interface VerticesPayload {
  * ここにある4つはその会話そのものの配線でしかない。
  */
 /**
- * 繋げるプロバイダの綴り(`duocad/server.py` の `AI_PROVIDERS` が正)。
+ * 繋げるプロバイダの綴り(`duocad/net/ws.py` の `AI_PROVIDERS` が正)。
  *
- * **ClaudeをAPIキーで叩く経路は廃止し、`'anthropic'` は無い**。
- * 型を潰さず union のまま残してあるのは、次のプロバイダの差込口だからである。
+ * `'anthropic'` は Claude API。APIキーはサーバ側(環境変数かファイル)に置く。画面からは
+ * `aiSetApiKey` で**書くだけ**で、値は返ってこない。
  */
 /**
  * `measure` の**2項目のあいだ**(`duocad/measure.py` の `between`)。
@@ -492,13 +492,19 @@ export interface MeasurePayload {
   between_error?: string | null
 }
 
-export type AiProviderKind = 'openai_compat'
+export type AiProviderKind = 'openai_compat' | 'anthropic'
 
-/** 画面に出してよい設定の全部。**鍵の類は載らない**(APIキー経路は廃止済み)。 */
+/** 画面に出してよい設定の全部。**キーの値は載らない**(置いてあるか・どこから読んだか・末尾4文字だけ)。 */
 export interface AiStatus {
   provider: AiProviderKind
   model: string | null
+  /** `anthropic` では常に `null`(送り先は固定)。 */
   baseUrl: string | null
+  apiKeyConfigured: boolean
+  /** `env` は環境変数(ファイルより優先され、画面からは変えられない)、`file` は `duocad_secrets.json`。 */
+  apiKeySource: 'env' | 'file' | null
+  /** キーの末尾4文字(どのキーかを見分けるため)。 */
+  apiKeyHint: string | null
   running: boolean
   providers: AiProviderKind[]
   /** `ai_configure` を拒否したときだけ入る(例: 実行中/未知のプロバイダ)。 */
@@ -659,7 +665,7 @@ export interface OptimizeResultPayload {
     | 'resolution_insufficient'
     /** 探索後に平滑化で潰れる 1×1 の空隙を埋めた形が6条件に不合格(`optimize_run` の `thin_voids`)。 */
     | 'fill_infeasible'
-    /** 完成形(平滑化・保持/除外の後)を探索の格子で解き直した安全率が、本来の目標を割る(`topopt.final_check`)。 */
+    /** 完成形の表面の最大応力で見た安全率が本来の目標を割る(`optimize_run.FINAL_UNSAFE_BLOCKS` のときだけ。既定は警告付きで足す)。 */
     | 'final_unsafe'
   warning: string | null
   body_id: string | null
@@ -671,7 +677,7 @@ export interface OptimizeResultPayload {
   search_safety_factor?: number | null
   /** 探索後に埋めた 1×1 の空隙のセル数。 */
   filled_cells?: number | null
-  /** 完成形(平滑化・保持/除外の後)を探索の格子で解き直した安全率。測れなかったときと、完成形まで進まなかったときは `null`。 */
+  /** 完成形(平滑化・保持/除外の後)を細かい格子で解き直した、部材域の表面の最大応力での安全率。測れなかったときと、完成形まで進まなかったときは `null`。 */
   final_safety_factor?: number | null
   /** 完成形の検査(`topopt.final_check.inspect`)。完成形まで進まなかったときは `null`。 */
   final_check?: FinalCheck | null
@@ -902,6 +908,8 @@ export interface Session {
    * モデルは送らない —— llama-server は1モデルで起動すると `model` を無視するので、
    * サーバ側の既定値に任せる(`ai_configure` 自体は `model` を受け付けたまま)。 */
   aiConfigure(provider: AiProviderKind, baseUrl?: string): void
+  /** ClaudeのAPIキーを書く(`null` なら消す)。返事は `ai_status`(値は載らない)。書くと Claude に切り替わる。 */
+  aiSetApiKey(key: string | null): void
   /** ツール定義を先に読ませておく(返事は無い。1つの会話につき1回だけ効く)。 */
   aiPrepare(): void
   /** 1つの発話でエージェントを起こす。**待たずに返る** —— 進捗は `onAiToolCall`、
@@ -1026,6 +1034,9 @@ export function createSession(hooks: SessionHooks): Session {
       provider?: AiProviderKind
       model?: string | null
       base_url?: string | null
+      api_key_configured?: boolean
+      api_key_source?: 'env' | 'file' | null
+      api_key_hint?: string | null
       running?: boolean
       providers?: AiProviderKind[]
       error?: string
@@ -1112,6 +1123,9 @@ export function createSession(hooks: SessionHooks): Session {
         provider: message.provider ?? 'openai_compat',
         model: message.model ?? null,
         baseUrl: message.base_url ?? null,
+        apiKeyConfigured: message.api_key_configured ?? false,
+        apiKeySource: message.api_key_source ?? null,
+        apiKeyHint: message.api_key_hint ?? null,
         running: message.running ?? false,
         providers: message.providers ?? ['openai_compat'],
         error: message.error,
@@ -1246,6 +1260,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     aiConfigure(provider, baseUrl) {
       send({ cmd: 'ai_configure', provider, base_url: baseUrl ?? null })
+    },
+    aiSetApiKey(key) {
+      send({ cmd: 'ai_set_api_key', key })
     },
     aiPrepare() {
       send({ cmd: 'ai_prepare' })

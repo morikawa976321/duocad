@@ -79,6 +79,7 @@ def solve_shape(
         optimize_run.OptimizeOptions(element_size_mm=fine_spacing),
         table=table, mapping=mapping,
     )
+    cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
 
     mask = refine_shape._project_mask(src_mask, src_origin, src_spacing, space) & space.mask
     keep = shape_cfg.get("keep")

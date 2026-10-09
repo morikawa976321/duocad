@@ -9,6 +9,10 @@ dist/
 # Windows PowerShell が LocalAppData を誤解決したときリポジトリ直下に落ちるキャッシュ
 /Microsoft/
 
+# アプリ内AIのClaude APIキー置き場(duocad/agent/providers.py の SECRETS_PATH)。
+# **中身は絶対にコミットしない**。`*` は書き換え中の一時ファイル(`.tmp`)も含めるため。
+/duocad_secrets.json*
+
 # 実機検査のスクリーンショット(個人の画面のスクショなのでgitに載せない)。
 /screenshots/
 

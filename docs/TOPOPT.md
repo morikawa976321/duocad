@@ -17,6 +17,7 @@
 | **探索目標係数2.4の根拠** | [TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md) |
 | **段階4の打ち切り(issue #22)の判断材料**(終盤の力学の実測・候補規則の後付け試算) | [TOPOPT_STOP_RULE.md](TOPOPT_STOP_RULE.md) |
 | **仕事をしていない材料が残る原因**(代表応力の母数と保持リング・大きな一歩による局所解) | [TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md) |
+| **母数に依らない応力の合否判定の候補と実測**(固定物理体積の上位値・拘束面1層の除外・保持の別報告、小型13条件と hanger 1000N) | [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) |
 | **2026-09-25〜28 の対話セッションの引継ぎ**(平滑化・最終処理・上限・(4)の調査と、残っている問題・判断待ちの全部) | [TOPOPT_HANDOFF_2026-09-28.md](TOPOPT_HANDOFF_2026-09-28.md) |
 
 **コードは `duocad/topopt/`、受入検査は `topopt_checks/`(`duocad/` の外)、画面と撮影は `web/` にある。**
@@ -43,7 +44,9 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 | 塊(設計空間)の余白比率 `margin_ratio` | **0.20** | `design_space.DEFAULT_MARGIN_RATIO` | 「固定凸包による設計空間(2026-09-16)」(2026-09-16 本人判断で 0.25 → 0.20。0.25 の根拠は「余白比率をどう決めたか(既定 0.25)」) |
 | 塊の導出方式 | 固定凸包(保持・条件面のボディの外接箱の頂点の凸包から距離 `m` 以内 = 球とのミンコフスキー和)。材料量によらず1実行に1回 | `design_space.DERIVATION` | 「固定凸包による設計空間(2026-09-16)」 |
 | 許容応力(PETG の降伏応力 × 造形の低減係数) | **50** MPa × **0.8** | `material.PETG_YIELD_MPA` / `PRINT_DERATE` | 「許容応力の導出」 |
-| 代表応力の規則 | ρ >= **0.5** の要素の上位 **99.5%** 点 | `stress.DEFAULT_RHO_MIN` / `DEFAULT_PERCENTILE` | 「代表応力の規則(黙って max にしない)」 |
+| 探索の代表応力の規則(製品): 部材域(保持セル以外・拘束/荷重面の節点に接する1層の外)の固定物理体積の上位値。許す超過体積 V の一辺 = 最小幅 × これ | **1.0** | `stress.MEMBER_VOLUME_WIDTH_RATIO`(`member_volume_stress` / `acceptance.member_region` / `optimize_run._build_search_conditions`) | 「代表応力の規則」、[TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) |
+| 代表応力の規則(`member_volume_mm3` を渡さない検査・研究の経路) | ρ >= **0.5** の要素の上位 **99.5%** 点 | `stress.DEFAULT_RHO_MIN` / `DEFAULT_PERCENTILE` | 「代表応力の規則」 |
+| 完成形検査の強度: 完成メッシュを探索格子の 1/n へ占有化し(細かい格子の要素数が上限を超える題材は n を下げる)、部材域の表面の面中心の最大応力で安全率を出して係数なしで利用者の目標と比べる | n = **3**、上限 **8000000** 要素 | `final_check.REFINE` / `MAX_FINE_ELEMENTS` | [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) 10章 |
 | メッシュ平滑化(Taubin)の反復数 `DEFAULT_ITERS` | **30** | `mesh.DEFAULT_ITERS` | 「平滑化の既定をどう決めたか」 |
 | 既定スレッド数 `PARALLEL_THREADS` | **総コアの半分** | `fem.PARALLEL_THREADS`(`_default_thread_count()`) | 「既定スレッド数を総コアの半分にする」 |
 | 段階4で1回に削る割合の上限 `DEFAULT_MAX_STEP_RATIO` | **0.2** | `binary_search.DEFAULT_MAX_STEP_RATIO` | 計画書§11.2 |
@@ -364,9 +367,20 @@ u_real[mm]      = u_nd     * (F / F_nd) * (E_nd / E) / L
 (`UnitScale(..., load_n=1.0, solved_load=1.0)`)で、要素サイズだけを換算する。無次元の荷重で解いた系に
 実荷重を割り当てる`stress.UnitScale.for_model`(`F_nd`を`Model.f`の総量から読む)は検査専用。
 
-### 代表応力の規則(黙って max にしない)
+### 代表応力の規則
 
-**代表応力 = 「ρ >= 0.5 の要素」の von Mises の 99.5 パーセンタイル。** 素のmaxを採らない理由は
+**製品の探索(2026-10-09〜)**: 代表応力 = **部材域の固定物理体積の上位値** Q_V。部材域は材料のうち、保持セル
+(利用者が決めた形)と、拘束面・荷重面の節点を角に持つ要素(節点から h 以内の1層)を除いた所。Q_V は「これを超える応力を
+持つ部材域の体積が V 以下」になる最小の応力で、V = 最小幅³(`optimize_run._build_search_conditions`)。部材域の体積が V 以下なら
+部材域の最大を使う(意図的な変則。`stress.member_volume_stress`)。合格は 安全率 = 許容 ÷ Q_V ≥ 探索の目標(利用者目標 × 2.4)。
+
+下の 99.5% 点は材料全体の割合なので、**遠くの低応力材料を残すほど高応力部が上位に隠れ、探索がそれを「重り」として残した**
+(母数依存。[TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md))。V を体積で固定すると部材域の外の材料の量に値が依らない。
+拘束面の1層は細分で最大が発散する所、保持は探索が変えられない所なので判定から外す(値は完成形検査が参考として返す)。
+根拠・比較・限界は [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md)。V より小さい集中は探索の判定に出ないので、
+**完成形検査**(`final_check`)が完成メッシュを 1/3 格子で解き、部材域の表面の面中心の最大応力で利用者目標と比べる。
+
+**`member_volume_mm3` を渡さない経路(受入検査・研究のスクリプト)**: 代表応力 = 「ρ >= 0.5 の要素」の von Mises の 99.5 パーセンタイル。 素のmaxを採らない理由は
 2つ、どちらも単独では足りない: (1)ρの低い要素を落とす——実測では全要素のmaxが代表値の
 9.8〜30.5倍まで跳ね、細分するほど大きくなる (2)残った母集団でも上位パーセンタイルを取る——
 ρ>=0.5に絞ってもなおmaxは階段状境界の角で発散し、**maxで安全率を決めると解像度を上げるほど

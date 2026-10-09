@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import argparse
 import json
 import sys
@@ -52,6 +53,7 @@ def _search_conditions(doc, size: float):
     opts = optimize_run.OptimizeOptions(element_size_mm=size, min_width_mm=MIN_WIDTH_MM)
     table, mapping = optimize_run._map_boundary_conditions(space, bundle)
     cond = optimize_run._build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
+    cond = dataclasses.replace(cond, member_volume_mm3=None)  # この研究は材料全体の99.5%点(2026-10-09 より前の製品)を対象にする
     resolved = optimize_run._resolve_min_width(size, MIN_WIDTH_MM, max_cells=min(space.grid.shape))
     return space, cond, resolved["cells"]
 

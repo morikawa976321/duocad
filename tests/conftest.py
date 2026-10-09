@@ -30,6 +30,20 @@ def _optimization_runs_go_to_a_temporary_directory(tmp_path_factory, monkeypatch
     monkeypatch.setattr(trace, 'DEFAULT_ROOT', tmp_path_factory.mktemp('optimization_runs'))
 
 
+@pytest.fixture(autouse=True)
+def _no_claude_api_key(tmp_path, monkeypatch):
+    """ClaudeのAPIキーの読み口(環境変数・`duocad_secrets.json`)を空にする。
+
+    外すと、キーを置いたマシンでだけ `Server` が `anthropic` から始まり、既定のプロバイダを見る
+    検査が落ちる(キーを使う検査は自分で置く)。実キーで課金される経路を検査から断つ意味もある。
+    """
+    from duocad.agent import providers
+
+    monkeypatch.delenv(providers.ANTHROPIC_API_KEY_ENV, raising=False)
+    monkeypatch.delenv(providers.ANTHROPIC_MODEL_ENV, raising=False)
+    monkeypatch.setattr(providers, "SECRETS_PATH", tmp_path / "no-secrets.json")
+
+
 @pytest.fixture()
 def session(tmp_path) -> Session:
     """STEPを読まない空の文書。`models_dir` を使い捨てにしないと、保存がリポジトリの `duocad/models/` を汚す。"""
