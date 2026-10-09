@@ -18,6 +18,7 @@ import phase_a_fields as pa  # noqa: E402
 import psutil  # noqa: E402
 
 import refine_shape  # noqa: E402
+from _percentile_rule import percentile_rule  # noqa: E402
 from duocad import optimize_run  # noqa: E402
 
 
@@ -27,6 +28,7 @@ def main() -> int:
     ap.add_argument("--load", type=float, default=None)
     ap.add_argument("--h", type=float, default=None)
     ap.add_argument("--w", type=float, default=None)
+    ap.add_argument("--legacy", action="store_true", help="探索の代表応力を 2026-10-09 より前の 99.5% 点にする(完成形検査は今のまま)")
     a = ap.parse_args()
     spec = dict(pa.MODELS[a.model])
     for key, val in (("load_n", a.load), ("h", a.h), ("w", a.w)):
@@ -35,7 +37,12 @@ def main() -> int:
     doc = refine_shape.open_session(spec["model"]).document
     refine_shape._set_load_doc(doc, spec["load_n"])
     started = time.perf_counter()
-    result = optimize_run.run(doc, optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"]))
+    options = optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"])
+    if a.legacy:
+        with percentile_rule():
+            result = optimize_run.run(doc, options)
+    else:
+        result = optimize_run.run(doc, options)
     seconds = time.perf_counter() - started
     checked = result.get("final_check") or {}
     safety = checked.get("safety") or {}
@@ -50,7 +57,7 @@ def main() -> int:
                warning=result.get("warning"))
     print(json.dumps(row, ensure_ascii=False, default=float), flush=True)
     (pa.OUT / "product").mkdir(parents=True, exist_ok=True)
-    tag = f"{a.model}_L{spec['load_n']:g}_h{spec['h']:g}_w{spec['w']:g}"
+    tag = f"{a.model}_L{spec['load_n']:g}_h{spec['h']:g}_w{spec['w']:g}" + ("_legacy" if a.legacy else "")
     (pa.OUT / "product" / f"{tag}.json").write_text(json.dumps(row, ensure_ascii=False, indent=1, default=float),
                                                     encoding="utf-8")
     return 0

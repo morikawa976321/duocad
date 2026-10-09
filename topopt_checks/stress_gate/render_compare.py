@@ -35,10 +35,12 @@ def surface_from_mask(mask, grid):
     return np.asarray(grid.origin) + np.asarray(s.verts_smooth) * grid.spacing, np.asarray(s.faces)
 
 
-def surface_from_run(run: Path):
-    snap = sorted(run.glob("*-pre-boolean-mesh-world.json"))[-1]
-    data = trace.load_snapshot(snap)
-    return np.asarray(data["vertices"], float), np.asarray(data["faces"], int)
+def mask_from_run(run: Path):
+    """製品の実行記録から、メッシュ化に渡した確定マスクと格子を読む。"""
+    data = trace.load_snapshot(sorted(run.glob("*-surface-from-mask-input.json"))[-1])
+    result = json.loads(sorted(run.glob("*-result.json"))[-1].read_text(encoding="utf-8"))
+    g = result["grid"]
+    return np.asarray(data["mask"], bool), voxelize.Grid(tuple(g["origin"]), float(g["spacing"]), tuple(g["shape"]))
 
 
 def triangle_stress(v, f, mask, vm, grid):
@@ -56,9 +58,10 @@ def main() -> int:
     ap.add_argument("--load", type=float, default=None)
     ap.add_argument("--h", type=float, default=None)
     ap.add_argument("--w", type=float, default=None)
-    ap.add_argument("--left", nargs=2, required=True, metavar=("MASK", "LABEL"))
-    ap.add_argument("--right-mask", nargs=2, metavar=("MASK", "LABEL"))
-    ap.add_argument("--right-run", nargs=2, metavar=("RUN", "LABEL"))
+    ap.add_argument("--mask", nargs=2, action="append", default=[], metavar=("MASK", "LABEL"),
+                    help="研究の探索が保存したマスク(格子は --h で組む)")
+    ap.add_argument("--run", nargs=2, action="append", default=[], metavar=("RUN", "LABEL"),
+                    help="製品の実行記録フォルダ(マスクと格子をそこから読む)")
     ap.add_argument("--vmax", type=float, default=20.0)
     ap.add_argument("--size", type=int, default=520)
     ap.add_argument("--out", required=True)
@@ -67,23 +70,25 @@ def main() -> int:
     for key, val in (("load_n", a.load), ("h", a.h), ("w", a.w)):
         if val is not None:
             spec[key] = val
-    ctx = smeth.build_context(spec["model"], load_n=spec["load_n"], element_size_mm=spec["h"], min_width_mm=spec["w"])
-    grid, keep = ctx.grid, np.asarray(ctx.cond.keep_cells, bool)
     panels = []
-    sides = [("mask", *a.left)]
-    if a.right_mask:
-        sides.append(("mask", *a.right_mask))
-    if a.right_run:
-        sides.append(("run", *a.right_run))
+    sides = [("mask", *m) for m in a.mask] + [("run", *r) for r in a.run]
+    contexts: dict = {}
     for kind, src, label in sides:
         if kind == "mask":
             with np.load(src) as z:
                 mask = np.asarray(z["mask"], bool)
-            v, f = surface_from_mask(mask, grid)
+            size = spec["h"]
         else:
-            v, f = surface_from_run(Path(src))
-            soup = voxelize.TriangleSoup(positions=v, triangles=f, face_index=np.zeros(len(f), dtype=np.int64))
-            mask = (voxelize.occupancy(soup, grid, allow_empty=True)[0] & np.asarray(ctx.space.mask, bool)) | keep
+            mask, run_grid = mask_from_run(Path(src))
+            size = float(run_grid.spacing)
+        if size not in contexts:
+            contexts[size] = smeth.build_context(spec["model"], load_n=spec["load_n"], element_size_mm=size,
+                                                 min_width_mm=spec["w"])
+        ctx = contexts[size]
+        grid = ctx.grid
+        if mask.shape != tuple(grid.shape):
+            raise ValueError(f"{src}: マスクの形 {mask.shape} が格子 {grid.shape} と違う")
+        v, f = surface_from_mask(mask, grid)
         vm, _ = pa.solve(mask, ctx)
         val = triangle_stress(v, f, mask, vm, grid) / a.vmax
         rgb = colormap(val)
