@@ -2,7 +2,7 @@
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_stress.py
 
-**このファイルが合否そのものである。** タスク `20260904-0143` の完了条件1〜5を、
+**このファイルが合否そのものである。** 完了条件1〜5を、
 それだけでは通らない下支えの検査(B行列と `fem` の局所節点順が一致しているか)と
 一緒に assert する。どれか1つでも落ちればプロセスは非ゼロで終わる。
 
@@ -180,12 +180,7 @@ def end_face_load(nelx: int, nely: int, nelz: int, *, rows: int, axis: int, sign
 
 
 def build_bar(nelx: int, nely: int, nelz: int) -> fem.Model:
-    """密度1で埋めた直方体を x 方向に引く系。
-
-    x=0 / y=0 / z=0 の3面を対称面(その面に垂直な成分だけ拘束)にすると、横方向の
-    収縮が自由になり**厳密に一様な単軸応力**になる。全自由度を固定する片持ち梁式の
-    拘束にすると、拘束面の近傍でポアソン収縮が止められて解析解と合わなくなる。
-    """
+    """密度1で埋めた直方体を x 方向に引く系(対称面拘束。理由は `_symmetry_constraints` の docstring)。"""
     fixed = symmetry_fixed_dofs(nelx, nely, nelz)
     f = end_face_load(nelx, nely, nelz, rows=nely, axis=0)
     return fem.Model(
@@ -255,11 +250,9 @@ def build_cantilever(nelx: int, nely: int, nelz: int) -> fem.Model:
 def bending_ratio(nelx: int, nely: int, nelz: int) -> dict:
     """1解像度ぶんの曲げ応力を測って理論値との比を返す。
 
-    測る断面を根元そのものではなく**梁せい1つぶん先**に取る。x=0 は全自由度を固定した
-    面で、そこでは梁理論の前提(断面が自由に反る)が成り立たず、サンブナンの局所効果が
-    残る(実測: 根元の要素は理論値を 8.5% 上回る)。**この offset は理論と合わせるための
-    細工ではなく、比較してよい場所を選んでいる** —— offset を 1〜2 倍に振っても比は
-    同じ値に落ち着く。
+    測る断面は根元そのものではなく**梁せい1つぶん先**に取る。x=0 は全自由度を固定した面で、
+    梁理論の前提(断面が自由に反る)が成り立たずサンブナンの局所効果が残る
+    (実測: 根元の要素は理論値を 8.5% 上回る)。offset を 1〜2 倍に振っても比は同じ値に落ち着く。
     """
     model = build_cantilever(nelx, nely, nelz)
     rho = np.ones((nelx, nely, nelz))
@@ -360,7 +353,7 @@ def check_unit_scaling(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> None
         rel = abs(got - want) / abs(want)
         check(label, rel < 1e-12, f"{got:.10g} (期待 {want:.10g}, 相対差 {rel:.2e})")
 
-    # 「E と荷重を10倍」の合わせ技(タスク本文の検査3の文言そのもの)。
+    # 「E と荷重を10倍」の合わせ技。
     both = report(e_mpa=E_MPA * 10, load_n=LOAD_N * 10)
     rel = abs(both.representative_mpa - base.representative_mpa * 10.0) / (
         base.representative_mpa * 10.0
@@ -479,11 +472,8 @@ def check_representative_rule() -> None:
 
 def _mixed_density_field(dims: tuple[int, int, int]) -> np.ndarray:
     """中間密度(灰色)を含む密度場を合成する(SIMPは回さない)。
-
     ランダムな二値の種をガウスぼかしして、境界に灰色の勾配帯が残る密度場を作る。
-    [4b] が見たいのは「中間密度の
-    要素が離散化ノイズで素の max を支配する」ことなので、SIMPで実際に収束させる必要はない
-    —— 灰色帯を持つ密度場でありさえすればよい。
+    [4b] が見たいのは中間密度の要素が離散化ノイズで素の max を支配することなので、収束は不要。
     """
     rng = np.random.default_rng(20261017)
     seed = (rng.random(dims) < 0.35).astype(float)
@@ -550,10 +540,10 @@ def check_representative_on_mixed_density_field() -> None:
         "ValueError" in raised,
         raised[:120],
     )
-    # 応力側に非有限が混ざったら落とすこと(nan は比較が常に False なので、
-    # 黙って通すと「危険側」の判定にも引っかからないまま安全率が nan になる)。
-    # **母集団(rho>=0.5)に入る要素を汚すこと** —— rho の低い要素は最初から
-    # 母集団の外なので、そこを nan にしても検出力が無い(実際に一度踏んだ)。
+    # 応力側に非有限が混ざったら落とすこと(nan は比較が常に False なので、黙って通すと
+    # 「危険側」の判定にも引っかからないまま安全率が nan になる)。
+    # **母集団(rho>=0.5)に入る要素を汚すこと** —— rho の低い要素は最初から母集団の外なので、
+    # そこを nan にしても検出力が無い。
     dense_index = tuple(int(x) for x in np.unravel_index(np.argmax(rho), rho.shape))
     poisoned_vm = report.field.von_mises.copy()
     poisoned_vm[dense_index] = np.nan
