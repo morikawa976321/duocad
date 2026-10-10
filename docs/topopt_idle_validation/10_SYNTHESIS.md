@@ -649,3 +649,57 @@ holding p99.5(最大)/ load p99.5(最大): 保存 hanger_base 15.86(19.39)/ 23.2
 .venv/Scripts/python.exe topopt_checks/idle_validation/build_07_json.py                       # 新規FEMなし
 ```
 共有ヘルパーは `hanger_loads_support.py`。`07_masks/` は 09 の代表形の候補(`F2000_thick10mm_h2_step20`・`F0500_thin5mm_h2_step20` など)。適応3形は出発点なので完成形の候補ではない。
+
+---
+
+# 付録F: 探索不具合の監査と研究用修正(08)
+
+出典: 旧 08_ROBUSTNESS(git 履歴)。期限再編(A-3)の小型8実行(各20分 wall timeout、計約9分、timeout 0件)。修正は `search_methods.py` のみで製品コードは無変更。出力は `output/idle_validation_20260928/08_*.json`(`08_robustness.json` が集約。`08_runs.json` が実行台帳)。数値の要点は 3-1・3-2・2章の表と 本文の結論 4・5。
+
+## F-1. 監査(新規FEMなし。`analyze_08_audit.py` → `08_audit.json`。04〜07の保存台帳から重複除去後57実行を数えた)
+
+- **予測誤差の小分母による過剰拒否**: `_run_adaptive_impl` の `prediction_error = actual_jump > predicted_jump × 2.5`(`predicted_jump = calibrated_k × 削除エネルギー比`。`calibrated_k` は最初に受理された1手で一度だけ較正)。倍率2.5既定の52実行・6,791手で 2,119手(31%)が `prediction_error` で拒否され、うち 2,100手はゲートも急変検知も通っていた。その実ジャンプ(M3最悪ゾーンの一手あたり相対変化)は中央値 1.6e-4(受理された手の中央値 1.1e-4 と同じ桁)、2,097/2,100手が1%以下。実ジャンプが微小でも予測値がさらに小さいと比だけが倍率を超える。拒否が続くと削除できる手が尽きて材料が動かない(05 の dilution 3.0mm・path 1.5mm、06 の hanger H1)。
+- **再配置の追加が全材料へ戻る**: 再配置21実行・追加59件が全件 `initial_all_material` 由来で、追加後の材料は初期全材料の99.4%以上。最長の連結成分を丸ごと足す実装で、単純な形状では削除済みセル全体が1つの成分になるため。
+- **ゲートの不一致**: 受理ゲート m5b_raw の50実行のうち27実行は製品SFが目標4.8未満(最小3.85)。percentile の5実行は目標換算を満たさない。ゲートの違う形は体積だけで順位付けできない。
+- **出発点がゲートを満たさないと探索が動かない**(07): `prediction_error` 0件で 1-1 とは別の機構。
+
+## F-2. 研究用修正(既定はすべて旧挙動)
+
+| 設定 | 内容 |
+|---|---|
+| `AdaptiveConfig.prediction_error_floor`(0.0) | 実ジャンプがこの値以下なら予測誤差で拒否しない(`actual > max(予測×倍率, floor)`)。0.01 は拒否手の分布を見て置いた丸め値で未調整・感度未測定 |
+| `ReallocationConfig.grow_max_fraction_of_removed`(None) | 追加1回の上限=削除済みセル数×この割合。超える連結成分は候補から外し、候補が尽きたときの局所表面追加も上限に抑え、目標換算しきい値超過セルの近くから足す |
+| `AdaptiveConfig.stop_if_start_fails_gate`(False) | 開始形が受理ゲートを満たさなければ `stop_reason="start_fails_gate"` で戻る(`resume_from` 付きでは見ない) |
+
+修正前の3件(d3・p15 の before と step20)は 05 の保存結果と同一のマスクハッシュを再現した。
+
+## F-3. 小型比較(同じ格子・実現最小幅・荷重・ゲート・初期形・予算のペアだけを比べた)
+
+| 条件 | 実行 | ゲート | 材料 mm³ | 製品SF | raw / 目標換算 | 評価 | 停止 |
+|---|---|---|---:|---:|---|---:|---|
+| dilution 3.0mm(実2.97mm・3セル=8.91mm・300N) | floor 0 | m5b_raw | 63,013 | 5.716 | 合格/合格 | 45 | finish_stagnation |
+| 同 | floor 0.01 | m5b_raw | 22,288 | **4.039** | 合格/不合格 | 100 | evaluation_limit |
+| path 1.5mm(4セル=6.0mm・3000N) | floor 0 | m5b_raw | 152,385 | 5.915 | 合格/不合格 | 9 | finish_stagnation |
+| 同 | floor 0.01 | m5b_raw | 54,466 | **4.028** | 合格/不合格 | 100 | evaluation_limit |
+| dilution 3.0mm | 製品 step20 | percentile | 23,440 | 4.837 | 合格/不合格 | 39 | converged |
+| 同 | 適応(floor 0.01) | percentile | 24,854(+6.0%) | 4.801 | 合格/不合格 | 53 | finish_stagnation |
+
+- 拒否理由の内訳: dilution 3.0mm の m5b_raw は修正前 `prediction_error` 32件、修正後 `prediction_error` 54・`sudden_jump` 51・`safety_gate` 40(1手に複数の理由)。path 1.5mm は修正前8件・修正後0件。
+- **体積-64%は目標SFの低下(4.04・4.03)と引き換え**で「改善」ではない。percentile に揃えると修正後の適応は step20 より+6.0%重い。percentile ゲートで floor が効くかは未確認(floor 有無の percentile 対照は未実施)。
+- 再配置(dilution 300N・2.0mm・6mm・m5b_raw・seed43・60評価×3サイクル、追加上限10%。修正前は再実行せず 05 の保存値を対照): 追加は 2セル(初期全材料由来)・248セル・180セル(実行内履歴由来)で全材料復帰は止まったが、最終 64,496 mm³・SF 4.744 は同条件の適応(05保存値 57,768 mm³・SF 4.713)より+11.6%重く、予測誤差拒否が78件再発(floor 未併用)。cap+floor の併用は未実施。
+- 出発点不成立の早期停止(dilution 300N・2.0mm・6mm・gate=m5b_target、出発点は全材料157,376 mm³・製品SF 5.588・目標換算超過192.9): FEM1回・2秒で `start_fails_gate`。修正前の同条件対照は未実施。
+- 最良形7件すべてで最小幅・正則境界・単一成分・閉空洞を検査して満たした(`check_08_final_masks.py` → `08_mask_checks.json`)。
+
+## F-4. 限界・未実施
+
+小型2種の3条件・各1実行(seed固定)。`calibrated_k` の単点較正そのものは直していない(修正後も dilution 3.0mm m5b_raw で予測誤差拒否が54件残る)。未実施: percentile ゲートでの floor 対照・再配置の cap と floor の併用・予測係数の再較正・m5b_raw と percentile を同時に課す複合ゲート・早期停止の修正前対照・floor 値の感度。
+
+## F-5. 再現
+
+```
+.venv\Scripts\python.exe topopt_checks\idle_validation\analyze_08_audit.py          # 監査(新規FEMなし)
+.venv\Scripts\python.exe topopt_checks\idle_validation\run_08_robustness.py --all   # 小型8実行(各20分 wall timeout。--only/--force)
+.venv\Scripts\python.exe topopt_checks\idle_validation\check_08_final_masks.py      # 最良形検査(FEMなし)
+.venv\Scripts\python.exe topopt_checks\idle_validation\build_08_json.py             # 機械可読まとめ
+```
+`run_08_robustness.py` は台帳 `08_runs.json` に書き、`LEDGER_NOT_OK` が出たら終了コード2。**終了コード0だけでは合格とせず台帳の `status` を読む**。最初の1件(`d3_adaptive_raw_after`)はチェックポイント保存時の Windows `os.replace` の一時的な `PermissionError` で台帳に書かず落ちたため1回再起動した。
