@@ -8,8 +8,7 @@ kernel の外へ出さないための規律で、境界テスト(importの静的
 唯一の例外は `kernel_extrude.extrude_faces` / `kernel_extrude.extrude_regions` / `face_of`
 (と `kernel_sketch.sketch_regions`)の戻りに含まれる TopoDS_*(document.Body.shape や領域押し出しの入力になる値)。
 
-**ocp_tessellate は使わない**(この venv に入っておらず、かつ面ピッキングには面ごとの
-三角形グループが要るので自前実装の方が制御できる)。
+**ocp_tessellate は使わない**(この venv に入っておらず、面ごとの三角形グループが要るため自前実装)。
 """
 from __future__ import annotations
 
@@ -110,16 +109,10 @@ def read_step(path: str) -> "TopoDS_Shape":
 def read_step_text(text: str) -> "TopoDS_Shape":
     """**STEP本文の文字列**を読み、TopoDS_Shapeを返す。壊れていれば ValueError。
 
-    操作ログに埋め込んだSTEP本文(verb `import_step`)を
-    再生するための入口。**OCCTのSTEPリーダはファイルパスしか受け取らない**ので、
-    一時ファイルへ書き出してから `read_step` を通す。
-
-    **ReadFile()の戻り値検査は `read_step` のものをそのまま通る**(安全弁を二重に持たない)。
-    ここで別経路のリーダを立てると、失敗した状態で TransferRoots() を呼んで
-    **プロセスごと落ちる**(0xC0000005)経路が新しく1本できてしまう。
-
-    一時ディレクトリは読み終えた時点で消す。**形状はOCCTのメモリ上に構築済み**で
-    ファイルを参照し続けないので、戻り値は消した後も有効。
+    操作ログに埋め込んだSTEP本文(verb `import_step`)の再生用。**OCCTのSTEPリーダは
+    ファイルパスしか受け取らない**ので、一時ファイルへ書き出して `read_step` を通す
+    (別経路のリーダを立てると ReadFile の検査を飛ばして落ちる経路ができる)。
+    一時ディレクトリは読み終えたら消す(形状はOCCTのメモリ上に構築済みで戻り値は有効)。
 
     書き出しは**バイト列で行う**(`write_text` は Windows で `\\n` を `\\r\\n` へ
     書き換えるため、`\\r\\n` を含む元のSTEPが `\\r\\r\\n` に化ける)。
@@ -127,8 +120,7 @@ def read_step_text(text: str) -> "TopoDS_Shape":
     if not isinstance(text, str):
         raise TypeError(f"STEP本文は文字列で渡すこと: {type(text).__name__}")
     if text.strip() == "":
-        # OCCTへ渡す前に止める(空ファイルは ReadFile が失敗し、その先は read_step が
-        # 止めるが、埋め込みが空だった、という原因のほうを言いたい)。
+        # 「埋め込みが空だった」という原因を言うため、OCCTへ渡す前に止める。
         raise ValueError("埋め込まれたSTEP本文が空")
     with tempfile.TemporaryDirectory(prefix="duocad-step-") as tmpdir:
         staging = os.path.join(tmpdir, "embedded.step")
@@ -150,8 +142,7 @@ def write_step(shape: "TopoDS_Shape", path: str) -> None:
 
     filename = os.fspath(path)
     writer = STEPControl_Writer()
-    # Transfer も IFSelect_ReturnStatus を返す。ここを捨てると「転送に失敗したのに
-    # Write は成功した(=中身の無いSTEP)」を成功として通しうる(§7「例外を投げずに黙って失敗する」)。
+    # Transfer の戻り値を捨てると「転送に失敗したのに Write は成功した(=中身の無いSTEP)」を通しうる。
     transfer_status = writer.Transfer(shape, STEPControl_StepModelType.STEPControl_AsIs)
     if transfer_status != IFSelect_ReturnStatus.IFSelect_RetDone:
         raise ValueError(f"failed to transfer shape to STEP: {filename} (Transfer -> {transfer_status})")
@@ -163,7 +154,7 @@ def write_step(shape: "TopoDS_Shape", path: str) -> None:
 
 
 def _unlink_quietly(filename: str) -> None:
-    """書き出し失敗時に半端なファイルを残さない(0バイトの成果物を作らない。§6予防6)。"""
+    """書き出し失敗時に半端なファイルを残さない。"""
     try:
         os.remove(filename)
     except OSError:
@@ -177,13 +168,10 @@ def volume(shape: "TopoDS_Shape") -> float:
     """形状の体積(mm^3)。
 
     `BRepGProp.VolumeProperties_s(shape, props)` の**既定の積分**を使う(`Eps` を渡さない)。
-    `Eps` 付きの適応積分にすると精度が落ち(Eps=1e-9で相対1.8e-10、Eps=1e-6で相対3.7e-8)、
-    STEP往復の体積比較が体積の求め方に依存してしまう。
+    `Eps` 付きの適応積分にすると精度が落ちる(Eps=1e-9で相対1.8e-10、Eps=1e-6で相対3.7e-8)。
 
-    STEP書き出し→読み込みを挟んだ体積は**bit-exactではない**(浮動小数点の積分順序に由来する
-    丸め、実測相対誤差 約8e-16)。比較には `math.isclose(rel_tol=1e-6)` を使う —— 実測誤差の
-    約10億倍のマージンで、面の欠落・重複などの実ジオメトリ破損は検出しつつ丸めノイズでは
-    落ちない。面数は往復後も厳密一致(`==`)でよい。
+    STEP往復を挟んだ体積は**bit-exactではない**(実測相対誤差 約8e-16)。比較には
+    `math.isclose(rel_tol=1e-6)` を使う。面数は往復後も厳密一致(`==`)でよい。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the volume of an empty shape")
@@ -195,12 +183,9 @@ def volume(shape: "TopoDS_Shape") -> float:
 def centroid(shape: "TopoDS_Shape") -> List[float]:
     """形状の**体積重心**(mm)。`volume` と同じ `VolumeProperties_s` の既定積分を使う。
 
-    `move_body` の回転の既定の中心がこれである。**境界箱の中心ではない** —— 境界箱は
-    軸の向きに依存して動くので、同じボディを別の軸で回すと中心が変わってしまう。
-    重心は形だけで決まる。
+    `move_body` の回転の既定の中心。境界箱の中心は軸の向きで動くので使わない。
 
-    体積が0の形状(面だけのシェル等)は ValueError —— `Mass()` が0だと `CentreOfMass()` は
-    意味の無い点を返すので、黙って原点近くを中心に回さない。
+    体積が0の形状(面だけのシェル等)は ValueError(`Mass()` が0だと `CentreOfMass()` は無意味な点を返す)。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the centroid of an empty shape")
@@ -242,12 +227,10 @@ class _ShapeKey:
     """`TopoDS_Shape` を dict の鍵にするためのラッパ。
 
     **素の `TopoDS_Shape` は鍵にならない。** 同じ面を2回取り出すと `hash` は一致するのに
-    `__eq__` が False を返すので、`dict` も `lru_cache` も**ヒット率0%のまま、遅いまま
-    メモリだけ増える**(2026-09-07実測)。動いてはいるので気づかない。
+    `__eq__` が False を返し、`dict` も `lru_cache` も**ヒット率0%のまま動き続ける**(2026-09-07実測)。
 
-    同一性は `IsSame`(TShape と Location の一致)で見る。`move_body` の
-    `shape.Moved(TopLoc_Location(trsf))` は TShape を共有するが、Location が違うので
-    別扱いになる(実測: 1000mm 動かすと `hash` 不一致・`IsSame` False)。
+    同一性は `IsSame`(TShape と Location の一致)で見る。`move_body` の `Moved` は TShape を
+    共有するが Location が違うので別扱いになる(実測: 1000mm 動かすと `hash` 不一致・`IsSame` False)。
 
     **`IsSame` は Orientation(forward/reversed)を見ない。** 向きに依存しない値にしか
     使ってはいけない。
@@ -292,8 +275,8 @@ def shape_key(shape: "TopoDS_Shape") -> Any:
 class BoundingBoxCache:
     """`bounding_box` の結果を覚える、**1つの文書のあいだだけ生きる**メモ。
 
-    `Document` が1つ持ち(`document.bbox_cache`)、文書を差し替えると `Document` ごと
-    作り直される。モジュールに1つ置くと、長いセッションで別の文書の形状が積み上がる。
+    `Document` が1つ持ち(`document.bbox_cache`)、文書を差し替えると作り直される
+    (モジュールに1つ置くと別の文書の形状が積み上がる)。
 
     **bbox 専用。** 鍵の同一性(`_ShapeKey`)は Orientation を見ないので、向きに依存する
     値をここへ載せると静かに壊れる。
@@ -354,12 +337,8 @@ def bounding_box(
 
     戻り値: {"min":[x,y,z], "max":[x,y,z], "center":[x,y,z], "size":[dx,dy,dz], "diagonal": float}
 
-    `cache` に `document.bbox_cache` を渡すと、同じ形状の測り直しを避ける(測り方の詳細と
-    速さは `_bounding_box_extents` / `BoundingBoxCache`)。**戻り値の dict は毎回作り直す**
-    ので、呼び出し側が書き換えても他の呼び出し側には波及しない。
-
-    `kernel.tessellate` の戻りにある `bbox` は三角形の節点から作った別物で、
-    あちらはアプリ層のカメラ合わせ用。
+    `cache` に `document.bbox_cache` を渡すと測り直しを避ける。戻り値の dict は毎回作り直す。
+    `kernel.tessellate` の戻りの `bbox` は三角形の節点から作った別物(カメラ合わせ用)。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the bounding box of an empty shape")
@@ -382,8 +361,7 @@ def count_subshapes(shape: "TopoDS_Shape", kind: str) -> int:
     """重複を除いた部分形状の数(`TopExp.MapShapes_s`)。kind は "face" | "edge" | "vertex"。
 
     `TopExp_Explorer` で素朴に列挙すると隣接2面から同じ辺を2回拾う
-    (shelf_attachment_GD.step 実測: 重複除去66 / 素朴な列挙132)。
-    null の検査はしない(NULL 形状は 0。`_face_map` 等と違って ValueError にしない)。
+    (shelf_attachment_GD.step 実測: 重複除去66 / 素朴な列挙132)。NULL 形状は 0(ValueError にしない)。
     """
     if kind not in _SUBSHAPE_KINDS:
         raise ValueError(f"unknown subshape kind: {kind!r}")
@@ -436,9 +414,8 @@ def _checked_volume(
 
 
 def _require_valid(shape: "TopoDS_Shape", label: str, context: str = "") -> None:
-    """`BRepCheck_Analyzer` の最後の関門。ここまでの検査を全部通っても壊れていることがある
-    (曲面の掃引で実測)。`_checked_volume` と分けてあるのは、`extrude_faces` の join / cut だけ
-    間に `_unify_same_domain` が入るため(統合後の形に対して行う)。"""
+    """`BRepCheck_Analyzer` の最後の関門。体積検査を通っても壊れていることがある(曲面の掃引で実測)。
+    `_checked_volume` と分けてあるのは、`extrude_faces` の join / cut だけ間に `_unify_same_domain` が入るため。"""
     if not BRepCheck_Analyzer(shape).IsValid():
         suffix = f", {context}" if context else ""
         raise ValueError(f"{label} produced an invalid shape (BRepCheck{suffix})")
@@ -495,7 +472,7 @@ def _positions_in(final_map: "TopTools_IndexedMapOfShape", candidates: Iterable[
 
 
 # --------------------------------------------------------------------------------------
-# 由来(provenance)の正規化アダプタ — day1で置き場所だけ作る(§6予防2)
+# 由来(provenance)の正規化アダプタ
 # --------------------------------------------------------------------------------------
 def normalize_provenance(
     builder: Any,
@@ -505,7 +482,7 @@ def normalize_provenance(
 
     **取り出し方が操作ごとに違う**のを吸収する —— ブーリアン(`BRepAlgoAPI_*`)は `History()`
     -> `BRepTools_History` を持ち、フィレット等の `BRepBuilderAPI_MakeShape` 系は自分自身が
-    `Modified()` / `Generated()` / `IsDeleted()` を持つ。**正規化はこの1関数に閉じる**。
+    `Modified()` / `Generated()` / `IsDeleted()` を持つ。
 
     戻り値の形(由来が1件も取れなければ None):
 
@@ -515,9 +492,7 @@ def normalize_provenance(
             "deleted":   [<TopoDS_Shape>, ...],
         }
 
-    戻り値は `TopoDS_Shape` を直接含む**メモリ上の形**であり、そのままでは
-    `OpLog.to_json()` でJSON化できない。呼び出し側で永続化用の射影に変換すること
-    (`_blend_provenance` 参照)。
+    戻り値は `TopoDS_Shape` を含む**メモリ上の形**で、JSON化できない(永続化は `_blend_provenance`)。
     """
     source = builder.History() if hasattr(builder, "History") else builder
 
@@ -544,7 +519,7 @@ def normalize_provenance(
 
 
 def _iter_faces_and_edges(shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:
-    """由来を問い合わせる対象の部分形状(面・辺)を重複なしで列挙する。"""
+    """由来を問い合わせる部分形状(面・辺)を重複なしで列挙する。"""
     out: List[TopoDS_Shape] = []
     for enum in (TopAbs_ShapeEnum.TopAbs_FACE, TopAbs_ShapeEnum.TopAbs_EDGE):
         shape_map = indexed_map(shape, enum)
@@ -579,11 +554,9 @@ def _is_removed(source: Any, sub: "TopoDS_Shape") -> bool:
 # --------------------------------------------------------------------------------------
 # テセレーション — 面ごとの三角形群
 # --------------------------------------------------------------------------------------
-#: 既定の線形偏差(mm)。「絶対」の偏差(`tessellate` の isRelative=False)。
+#: 既定の線形偏差(mm)。絶対偏差(isRelative=False)。
 DEFAULT_DEVIATION = 0.2
-#: 既定の角度偏差(**ラジアン**。度ではない — OCCTのBRepMesh_IncrementalMesh/GCPnts_TangentialDeflection
-#: の角度偏差パラメータはラジアンで、既定は0.5rad(`IMeshTools_Parameters().Angle`で確認済み)。
-#: 0.35radは約20度)。曲面(穴の円筒)が多角形に見えない程度に細かくする。
+#: 既定の角度偏差(**ラジアン**。OCCTの角度偏差パラメータはラジアンで、OCCT既定は0.5rad)。0.35radは約20度。
 DEFAULT_ANGULAR_DEFLECTION = 0.35
 
 
@@ -592,19 +565,15 @@ def translate_shape(
 ) -> "TopoDS_Shape":
     """形状を (dx, dy, dz) だけ平行移動した形状を返す(元の形状は変えない)。
 
-    **面・辺・頂点の添字が変わらないこと**がこの関数の要点である。`move_body` の後も
-    選択に入っている参照がそのまま同じ実体を指し続けるので、選択をリセットしなくてよい
-    (`catalog.Command.resets_selection` の注記)。
+    **面・辺・頂点の添字が変わらないこと**が要点。`move_body` の後も選択の参照が同じ実体を
+    指し続ける(`catalog.Command.resets_selection` の注記)。
 
-    - `copy=False` … `TopoDS_Shape.Moved` で**位置だけを差し替える**。下層の形状(TShape)を
-      共有するので、面の数え上げの順序は原理的に不変で、再計算も走らない(数十MBの
-      読み込みSTEPでも一瞬)。
+    - `copy=False` … `TopoDS_Shape.Moved` で**位置だけを差し替える**。TShape を共有するので
+      面の数え上げの順序は不変で、再計算も走らない。
     - `copy=True`  … `BRepBuilderAPI_Transform(..., Copy=True)` で**独立した形状**を作る。
-      複製元と実体を共有すると、後から片方をフィレットしたときにもう片方の由来が壊れる。
+      実体を共有すると、後から片方をフィレットしたときにもう片方の由来が壊れる。
 
-    **移動の合成は厳密**である。`gp_Trsf` の平行移動どうしの積は並進ベクトルの和になり、
-    `T(-d) * T(d)` は誤差なく単位変換に戻る —— `move_body` の undo が逆向きの平行移動で
-    済むのはこのため(形状のスナップショットを控えなくてよい)。
+    平行移動の合成は厳密(`T(-d) * T(d)` は誤差なく単位変換)なので、`move_body` の undo は逆向きの平行移動で済む。
     """
     trsf = gp_Trsf()
     trsf.SetTranslation(gp_Vec(float(dx), float(dy), float(dz)))
@@ -621,25 +590,14 @@ def rotate_shape(
 ) -> "TopoDS_Shape":
     """形状を軸(`axis_point` を通り `axis_dir` を向く直線)まわりに回した形状を返す。
 
-    `translate_shape` の姉妹で、**変わるのは `gp_Trsf` の作り方だけ**である
-    (`SetTranslation` -> `SetRotation`)。したがって次の2つも平行移動と同じ:
+    `translate_shape` の姉妹(`copy` の意味・添字不変も同じ)。**角度は度**(`gp_Trsf.SetRotation` は
+    ラジアンなのでここで変換する)。符号は軸の向きに対する**右ねじ**で、スケッチ側の
+    `sketch.rotate_point`(u->v が正)と同じ向き。
 
-    - **面・辺・頂点の添字は変わらない**(`copy=False` は `TopoDS_Shape.Moved` で位置だけを
-      差し替え、下層の形状を共有する)。`move_body` が回転の後も選択をリセットしなくてよい
-      根拠はここにある。
-    - `copy=True` は `BRepBuilderAPI_Transform(..., Copy=True)` で**独立した形状**を作る。
+    逆回転は元へ戻る(`R(-a)` は `R(a)` の転置で、積は丸め誤差 相対1e-16程度を除き単位行列)ので、
+    `move_body` の undo は「逆向きに同じ角度」で済む。
 
-    **角度は度**(`gp_Trsf.SetRotation` はラジアンなのでここで変換する)。符号は軸の向きに
-    対する**右ねじ**(Z軸まわり正の角度は、上から見て反時計回り)で、スケッチ側の
-    `sketch.rotate_point`(u->v が正)と同じ向きである。
-
-    **逆回転は元へ戻る**。`cos(-a) == cos(a)` と `sin(-a) == -sin(a)` は浮動小数でも厳密なので
-    `R(-a)` は `R(a)` の転置そのもので、積は丸め誤差(相対1e-16程度)を除いて単位行列になる
-    —— 幾何の許容差(mmの1e-9未満)より桁違いに小さい。`move_body` の undo が形状の
-    スナップショットを控えず「逆向きに同じ角度」で済むのはこのためである。
-
-    軸方向が零ベクトル・非有限なら ValueError(`gp_Dir` は零ベクトルで例外を投げるが、
-    そこまで持って行かずに手前で断る)。
+    軸方向が零ベクトル・非有限なら ValueError。
     """
     point, direction = _point_and_direction(
         axis_point, axis_dir, names=("axis_point", "axis_dir"), zero_reason="軸の向きが決まらない"
@@ -671,11 +629,8 @@ def mirror_shape(
 ) -> "TopoDS_Shape":
     """形状を、点 `point` を通り法線 `normal` の平面に対して鏡映した形状を返す(元は変えない)。
 
-    `translate_shape` / `rotate_shape` の姉妹だが、**鏡映は向きを反転する変換**
-    (行列式が負)である。`mirror_body` は常に複製を作る(in-place反転の口を持たない)ので
-    `copy` の既定は `True` —— `translate_shape`/`rotate_shape` と揃えて残してあるだけで、
-    `copy=False`(`Moved` で位置だけ差し替え)も `gp_Trsf` が向きの反転を保持したまま動くので
-    技術的には壊れない。
+    **鏡映は向きを反転する変換**(行列式が負)。`mirror_body` は常に複製を作るので `copy` の既定は `True`
+    (`copy=False` も `gp_Trsf` が向きの反転を保持するので壊れない)。
 
     点・法線が3要素でない/非有限、または法線が零ベクトルなら ValueError。
     """
@@ -691,11 +646,8 @@ def mirror_shape(
 def edge_axis(shape: "TopoDS_Shape", edge_index: int) -> tuple:
     """**まっすぐな辺**を回転軸 `([x, y, z], [dx, dy, dz])` にする(点は辺の上、向きは単位長)。
 
-    添字は `edge_count` / `edge_of` と同じ1始まりの体系 —— つまり**辺の選択の識別子そのもの**
-    で、`move_body(mode="rotate", axis_edge=...)` はこれを使って「この辺を軸に回す」を表す。
-
-    まっすぐでない辺(円・spline)は ValueError。円い辺を軸と読んで中心線を勝手に作ると、
-    人が指した辺と回る軸が食い違う(例外の出ない事故になる)。
+    添字は `edge_count` / `edge_of` と同じ1始まり(辺の選択の識別子そのもの)。
+    まっすぐでない辺(円・spline)は ValueError(中心線を勝手に作ると指した辺と回る軸が食い違う)。
     """
     edge = edge_of(shape, edge_index)
     if classify_edge(edge) != "line":
@@ -732,11 +684,9 @@ def face_solid_indices(shape: "TopoDS_Shape") -> List[int]:
 def face_plane(shape: "TopoDS_Shape", face_index: int) -> tuple:
     """**平らな面**を「面積重心と外向き単位法線」`([x, y, z], [nx, ny, nz])` にする(測定用)。
 
-    添字は `face_count` / `face_of` と同じ1始まりの体系(= 面の選択の識別子そのもの)。
-    平面でない面(円筒・トーラス・spline)は ValueError —— 曲面に法線を1本あてて平面扱い
-    すると、人が指した面と測る平面が食い違う(例外の出ない事故になる)。
-    重心は `BRepGProp` の面積重心で、平面なら必ず面の上に乗る(`Face.center()` の既定
-    (bbox中心)は傾いた平面では面から外れる —— `query.face_centroid` のdocstring)。
+    添字は `face_count` / `face_of` と同じ1始まり。平面でない面は ValueError(曲面を平面扱いすると
+    指した面と測る平面が食い違う)。重心は `BRepGProp` の面積重心で、平面なら必ず面の上に乗る
+    (`Face.center()` の既定(bbox中心)は傾いた平面では面から外れる —— `query.face_centroid`)。
     """
     face = face_of(shape, face_index)
     kind = classify_face(face)
@@ -761,12 +711,10 @@ def tessellate(
 ) -> dict:
     """形状を三角形分割し、**面ごとに分けた**三角形群を素の値だけで返す。
 
-    面ごとに分けるのは、当たった三角形から面へ戻れるようにするため(1つの塊にまとめると
-    戻れない)。添字は `face_count` と同じ `TopExp.MapShapes_s` の1始まりで、
-    `extrude` の面の参照(`faces[].index`)とも一致する。
+    添字は `face_count` と同じ `TopExp.MapShapes_s` の1始まりで、`extrude` の面の参照(`faces[].index`)とも一致する。
 
-    三角形の巻き方向は、面の向きが `TopAbs_REVERSED` のとき入れ替える(外向きに揃える)。
-    これをやらないと、アプリ側で法線が内側を向いた面が黒く落ちる。
+    三角形の巻き方向は、面の向きが `TopAbs_REVERSED` のとき入れ替える(外向きに揃える。
+    しないとアプリ側で法線が内側を向いた面が黒く落ちる)。
 
     戻り値:
         {
@@ -778,22 +726,18 @@ def tessellate(
           "boundary": {...},              # 境界折れ線の交差検査と共有辺再分割の診断(`kernel_meshing.mesh_shape`)
         }
 
-    `untriangulated` を戻り値に持たせているのは、**分割に失敗した面を黙って落とさない**ため。
-    1面でも欠けると画面上はただ穴が空いて見え、原因の分からない不具合になる。
-    全面が失敗した場合だけは形状として成立しないので例外にする。
+    分割に失敗した面は黙って落とさず `untriangulated` に入れる。全面が失敗したときだけ例外。
 
-    面分割の直前に境界折れ線の交差を独自に検査し、交差する辺を再分割してから分割する
-    (`kernel_meshing`)。解消できなかった面は**分割せず** `untriangulated` に入れ、
-    `boundary["unresolved"]` に理由(面・辺・種類)を残す —— 交差した境界を面分割へ渡すと
-    穴や非多様体の三角形になり、`untriangulated` にも現れない(docs/TOPOPT_GAP_CAUSALITY.md)。
+    面分割の直前に境界折れ線の交差を検査し、交差する辺を再分割してから分割する(`kernel_meshing`)。
+    解消できなかった面は**分割せず** `untriangulated` に入れ、`boundary["unresolved"]` に理由を残す ——
+    交差した境界を面分割へ渡すと穴や非多様体の三角形になり、`untriangulated` にも現れない
+    (docs/TOPOPT_GAP_CAUSALITY.md)。
     """
     _check_tessellation_args(shape, deviation, angular_deflection)
 
-    # 既存の三角形分割は `mesh_shape` が捨ててから測り直す(前回の粗いメッシュが残っていると
-    # 偏差が効かない。STL書き出しは同じ形状を偏差を変えて何度も測る)。偏差は絶対mm
+    # 既存の三角形分割は `mesh_shape` が捨ててから測り直す(残っていると偏差が効かない)。偏差は絶対mm
     # (Relative=False)。True にすると 0.2/0.05/0.01 のどれでも同じメッシュになる。
-    # **build123d の既定の `export_stl` は True 側**なので、流用すると
-    # 「deviationを小さくすると細かくなる」が落ちる。
+    # **build123d の既定の `export_stl` は True 側**なので流用しない。
     boundary = kernel_meshing.mesh_shape(shape, float(deviation), float(angular_deflection))
 
     shape_map = _face_map(shape)
@@ -824,13 +768,11 @@ def tessellate(
 def _is_closed_shell(shape: "TopoDS_Shape") -> bool:
     """**閉じた立体か**(すべての辺が2面以上に共有されているか)。
 
-    バックフェイスカリングの安全弁である。開いたシェル(板金の面1枚、STEPから来た
-    面だけの部品)では**裏を向いた面が本当に見えている**ので、法線とカメラの内積だけで
-    「裏だから粗くてよい」と決めてはいけない。閉じた立体でだけその判定を許す。
+    バックフェイスカリングの安全弁。開いたシェルでは裏向きの面が本当に見えているので、
+    閉じた立体でだけ「裏だから粗くてよい」を許す。
 
-    数え方は**面ごとの出現回数**であって、辺の一意な隣接面の数ではない ——
-    円筒のシーム辺は同じ1面に2回現れるので、一意な面で数えると閉じた円柱が
-    「開いている」と判定される。退化辺(極)は数えない(面を持たない)。
+    数え方は**面ごとの出現回数**であって、辺の一意な隣接面の数ではない(円筒のシーム辺は同じ
+    1面に2回現れるので、一意な面で数えると閉じた円柱が「開いている」になる)。退化辺(極)は数えない。
     """
     if shape is None or shape.IsNull():
         return False
@@ -843,7 +785,7 @@ def _is_closed_shell(shape: "TopoDS_Shape") -> bool:
         return False
     counts = [0] * (total_edges + 1)
     for index in range(1, face_map.Extent() + 1):
-        # **面ごとの列挙は重複を除かない**(`subshapes`。`indexed_map` にしてはいけない —— シーム辺を2回数えるのが要点)
+        # `indexed_map` にしてはいけない(シーム辺を2回数えるのが要点)
         for raw_edge in subshapes(face_map.FindKey(index), TopAbs_ShapeEnum.TopAbs_EDGE):
             edge = TopoDS.Edge_s(raw_edge)
             if not BRep_Tool.Degenerated_s(edge):
@@ -854,7 +796,7 @@ def _is_closed_shell(shape: "TopoDS_Shape") -> bool:
 
 
 def _describe_face(face: Any, index: int) -> dict:
-    """1面ぶんの配りもの(三角形・分類・面積・重心・法線)。`tessellate` と選択的版で共有する。"""
+    """1面ぶんの三角形・分類・面積・重心・法線。"""
     positions, indices = _face_triangles(face)
     area, centroid = _face_props(face)
     return {
@@ -890,19 +832,15 @@ def tessellate_selective(
         "closed":           閉じた立体か(`_is_closed_shell`。バックフェイス判定の可否)
         faces[i]["detail"]: "fine" | "coarse"
 
-    **2パスで測る**。1回の面分割に面ごとの偏差を渡す口がOCCTに無いので、
-    粗い面だけを集めたcompound・細かい面だけを集めたcompoundをそれぞれ測り、パスの間で
-    三角形を抜き出す。`BRepTools.Clean_s` を**パスごとに**形状全体へ呼ぶのは、前のパスの三角形が
-    残っているとOCCTが「もう十分細かい」と判断して測り直さないため。
+    **2パスで測る**(面ごとの偏差を渡す口がOCCTに無い)。粗い面・細かい面をそれぞれ compound にして
+    測り、パスの間で三角形を抜き出す。`BRepTools.Clean_s` を**パスごとに**形状全体へ呼ぶのは、
+    前のパスの三角形が残っているとOCCTが「もう十分細かい」と判断して測り直さないため。
 
-    境界の交差検査・共有辺の再分割(`kernel_meshing`)はパスごとに compound の中で完結する。
-    粗い面と細かい面が共有する辺は2つのパスで別々に離散化されるので、片方のパスで再分割しても
-    もう片方には伝わらない(下記の「隙間」と同じ境目の話。`boundary["passes"]` に両方の診断を残す)。
+    境界の交差検査・再分割(`kernel_meshing`)はパスごとに compound の中で完結し、共有辺の再分割は
+    他方のパスに伝わらない(`boundary["passes"]` に両方の診断を残す)。
 
-    **分かっている代償(隙間)**: 細かい面と粗い面が**曲線の辺**を共有していると、辺の折れ線が
-    パスごとに別々に作られるので、境目に粗い側の偏差ぶんの隙間が開きうる。境目は
-    「視錐台の縁」と「シルエット」で、平面どうしの共有辺(直線)では起きない。
-    塞ぐには境界の1リングを細かい側へ含めるなどが要るが、**画面の縁の話**なので入れていない。
+    **分かっている代償(隙間)**: 細かい面と粗い面が**曲線の辺**を共有していると、境目に粗い側の偏差
+    ぶんの隙間が開きうる(境目は視錐台の縁とシルエット。直線の共有辺では起きない)。画面の縁の話なので塞いでいない。
     """
     _check_tessellation_args(shape, deviation, angular_deflection)
 
@@ -921,7 +859,6 @@ def tessellate_selective(
     else:
         fine = {int(index) for index in fine_faces if 1 <= int(index) <= total}
 
-    # 1パスで済む場合は既存の道をそのまま通す(2つ目の経路を増やさない)。
     if not fine:
         result = tessellate(shape, coarse_dev, coarse_ang)
     elif len(fine) == total or (
@@ -965,10 +902,9 @@ def _tessellate_split(
         if not group_indices:
             continue
         group = compound([shape_map.FindKey(index) for index in sorted(group_indices)])
-        # **毎パスで形状全体を捨ててから測る**(残っていると「十分細かい」と見なされて測り直さない)。
         BRepTools.Clean_s(shape)
         passes.append(kernel_meshing.mesh_shape(group, float(dev), float(angle)))
-        # **次のパスで Clean_s する前に**抜き出す。
+        # 次のパスの Clean_s で消える前に抜き出す。
         for index in sorted(group_indices):
             face = TopoDS.Face_s(shape_map.FindKey(index))
             payload = _describe_face(face, index)
@@ -1000,7 +936,7 @@ def face_of(shape: "TopoDS_Shape", face_index: int) -> Any:
 
 
 def _face_at(shape_map: "TopTools_IndexedMapOfShape", face_index: int) -> Any:
-    """既に作った面マップから引く(まとめて引くときにマップを作り直さないため。辺の `_edge_at` と同じ形)。"""
+    """既に作った面マップから引く。"""
     if not 1 <= int(face_index) <= shape_map.Extent():
         raise ValueError(
             f"face index out of range: {face_index} (1..{shape_map.Extent()})"
@@ -1057,20 +993,18 @@ def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> 
 # --------------------------------------------------------------------------------------
 # フィレット・面取り・円弧の幾何
 # --------------------------------------------------------------------------------------
-#: 辺の種別(`classify_edge` が返す値。面の FACE_KINDS と同じ流儀で、判定はここに固定する)
+#: 辺の種別(`classify_edge` が返す値)
 EDGE_KINDS = ("line", "circle", "other")
 
 
 def edge_count(shape: "TopoDS_Shape") -> int:
-    """重複を除いた辺の数。**この数え方の1始まりの添字が、辺の選択の識別子そのもの**
-    (面の `face_count` と同じ規律。`TopExp.MapShapes_s` を使う)。"""
+    """重複を除いた辺の数。**この数え方の1始まりの添字が、辺の選択の識別子そのもの**(`face_count` と同じ)。"""
     return _edge_map(shape).Extent()
 
 
 def classify_edge(edge: Any) -> str:
     """1つの辺を EDGE_KINDS のいずれかへ分類する。
 
-    円い辺のフィレットはトーラスを、円い辺の面取りは円錐を、まっすぐな辺の面取りは平面を作る。
     """
     adaptor = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
     curve_type = adaptor.GetType()
@@ -1082,15 +1016,14 @@ def classify_edge(edge: Any) -> str:
 
 
 def edge_of(shape: "TopoDS_Shape", edge_index: int) -> Any:
-    """形状の1始まり添字の辺を返す。範囲外は ValueError(面の `face_of` と同じ流儀)。"""
+    """形状の1始まり添字の辺を返す。範囲外は ValueError。"""
     return _edge_at(_edge_map(shape), edge_index)
 
 
 def edge_index_of(shape: "TopoDS_Shape", edge: Any) -> int:
     """辺が形状の何番目か(1始まり)を `IsSame` で返す。無ければ ValueError。
 
-    build123d の列挙順が `_edge_map` と一致する保証は無いので、`query.edges_of_face` は
-    形状の同一性で引き当てる(既存の `edge_of` / `edge_count` のふるまいは変えない)。
+    build123d の列挙順が `_edge_map` と一致する保証は無いので、`query.edges_of_face` は形状の同一性で引き当てる。
     """
     shape_map = _edge_map(shape)
     for index in range(1, shape_map.Extent() + 1):
@@ -1106,29 +1039,22 @@ def tessellate_edges(
 ) -> List[dict]:
     """辺を1始まりの添字つきの**折れ線**にする。
 
-    `tessellate` の辺版。**辺も面と同じように配らないと人は辺を指せない**(画面に出ている
-    輪郭線は three.js の `EdgesGeometry` による見た目であって、コアの辺の添字とは対応しない)。
+    `tessellate` の辺版(画面の輪郭線は three.js の `EdgesGeometry` で、コアの辺の添字とは対応しない)。
 
     戻り値(素の値だけ):
         [{"index": int, "kind": "line"|"circle"|"other", "length": float,
           "closed": bool, "points": [x,y,z, x,y,z, ...]}, ...]
 
-    `index` は `edge_count` / `edge_of` / `fillet(edges=[...])` と**同じ数え方**
-    (`_edge_map` の1始まり)。ここがずれると「指した辺と違う辺が丸まる」という、例外も出ない
-    静かな事故になるので、添字は必ず `_edge_map` から取る。
+    `index` は `edge_count` / `edge_of` / `fillet(edges=[...])` と**同じ数え方**(`_edge_map` の1始まり)。
+    ずれると「指した辺と違う辺が丸まる」静かな事故になるので、添字は必ず `_edge_map` から取る。
 
-    折れ線は `GCPnts_TangentialDeflection` で `deviation`(mm、線形)と `angular_deflection`
-    (ラジアン、角度)の**両方**を満たすまで分割する。**線形偏差だけでは足りない** ——
-    小半径の円弧は角度の制約が無いと分割数が2〜4点まで落ち込んで多角形に見える
-    (実測: 20mm立方体の全辺フィレットでr=0.5mmの円弧が2点=弦1本)。
-    `angular_deflection` の既定値 `DEFAULT_ANGULAR_DEFLECTION` は `tessellate()` が
-    `BRepMesh_IncrementalMesh` に渡すのと同じ値(ラジアン。OCCTの角度偏差パラメータは
-    ラジアンで、既定0.5rad ≈ 28.6度。`IMeshTools_Parameters().Angle` の既定値で確認済み)
-    なので、通常のソリッド表示と辺オーバーレイの粗さが揃う。
-    `GCPnts_TangentialDeflection` のコンストラクタは `(adaptor, angular, linear,
-    minNbPoints=2, ...)` の順で、`IsDone()` を持たない(常に何かしらの点列を作るか、
-    退化した曲線では例外を投げる)。**分割に失敗した辺は端点だけの2点で返す**(黙って
-    落とすと、その辺だけ画面から消えて「指せない辺」になり原因が分からない)。
+    折れ線は `GCPnts_TangentialDeflection` で `deviation`(mm)と `angular_deflection`(ラジアン)の
+    **両方**を満たすまで分割する。**線形偏差だけでは足りない** —— 小半径の円弧は分割数が2〜4点まで
+    落ち込んで多角形に見える(実測: 20mm立方体の全辺フィレットでr=0.5mmの円弧が2点=弦1本)。
+    既定の角度偏差は `tessellate()` と同じなので、ソリッド表示と辺オーバーレイの粗さが揃う。
+    `GCPnts_TangentialDeflection` のコンストラクタは `(adaptor, angular, linear, minNbPoints=2, ...)`
+    の順で、`IsDone()` を持たず、退化した曲線では例外を投げる。**分割に失敗した辺は端点だけの2点で返す**
+    (落とすとその辺だけ画面から消えて「指せない辺」になる)。
     """
     _check_tessellation_args(
         shape, deviation, angular_deflection, target="the edges of an empty shape"
@@ -1168,7 +1094,7 @@ def tessellate_edges(
 
 
 def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:
-    """既に作った辺マップから引く(まとめて引くときにマップを作り直さないため)。"""
+    """既に作った辺マップから引く。"""
     if not 1 <= int(edge_index) <= shape_map.Extent():
         raise ValueError(
             f"edge index out of range: {edge_index} (1..{shape_map.Extent()})"
@@ -1180,8 +1106,7 @@ def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:
 # 頂点(選択集合に入った頂点を画面に出すための座標)
 # --------------------------------------------------------------------------------------
 def _vertex_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
-    """頂点の重複除去済みマップ(1始まり)。**`count_subshapes(shape, "vertex")` と同じ
-    数え方**であり、その添字が `selection.select_vertex` の識別子そのものになる。"""
+    """頂点の重複除去済みマップ(1始まり)。添字が `selection.select_vertex` の識別子そのもの。"""
     return _subshape_map(shape, "vertex")
 
 
@@ -1190,9 +1115,6 @@ def vertex_positions(shape: "TopoDS_Shape") -> List[dict]:
 
     戻り値(素の値だけ): `[{"index": int, "point": [x, y, z]}, ...]`
 
-    添字がずれると**AIが指した頂点と違う点が画面に出る**(例外は出ない)ので、
-    数え方は `_vertex_map` 1箇所に固定する。`tests/test_vertex_pick.py` が
-    `count_subshapes(shape, "vertex")` との一致を機械で見ている。
     """
     shape_map = _vertex_map(shape)
     described: List[dict] = []
@@ -1209,10 +1131,8 @@ def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
 
     `radii` は `{辺の添字: 半径}`。入力の `shape` は変更しない。
 
-    **必ず `IsDone()` を確認する**。OCCTのフィレットは例外を投げずに失敗し、しかも
-    半径に対して単調でない(20mm立方体の全辺で実測: r=3.0 成功 / r=10.0
-    `IsDone()=False` / r=10.5 成功 / r=30.0 `IsDone()=False`)。失敗は例外にして
-    呼び出し側が操作ごと捨てられるようにする。
+    **必ず `IsDone()` を確認する**。OCCTのフィレットは例外を投げずに失敗し、半径に対して単調でない
+    (20mm立方体の全辺で実測: r=3.0 成功 / r=10.0 `IsDone()=False` / r=10.5 成功 / r=30.0 `IsDone()=False`)。
 
     **限界値ちょうどの半径は通らず、限界未満では微小な平面が残る**(20mm立方体の上面4辺で
     r=9.99 は成功して 0.02mm 角の面が残り、r=10.0 は `IsDone()=False`。20×10×20 の長辺2本でも
@@ -1230,19 +1150,13 @@ def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
 def chamfer_edges(shape: "TopoDS_Shape", distances: dict) -> dict:
     """辺(1始まりの添字)を面取りした新しい形状と由来の射影を返す。
 
-    `distances` は `{辺の添字: 距離}`。`fillet_edges` と同じ契約(`IsDone()` の確認・
-    入力を変更しない・戻り値の形)。`BRepFilletAPI_MakeChamfer` は同じ系統なので、
-    **黙って失敗する性質も同じ**。
+    `distances` は `{辺の添字: 距離}`。`fillet_edges` と同じ契約(`MakeChamfer` も黙って失敗する)。
     """
     return _blend_edges(shape, distances, verb="chamfer")
 
 
 def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
-    """フィレットと面取りの共通実装(違うのはビルダの型だけ)。
-
-    **同じ系統(`BRepFilletAPI_*`)なので失敗の仕方も由来の取り出し方も同じ**であり、
-    2つに書き分けると片方だけ検査が抜ける。
-    """
+    """フィレットと面取りの共通実装(違うのはビルダの型だけ)。"""
     if shape is None or shape.IsNull():
         raise ValueError(f"cannot {verb} an empty shape")
     if not values:
@@ -1266,7 +1180,7 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
     except Exception as error:  # noqa: BLE001  OCCTは例外でも失敗しうる
         raise ValueError(f"{verb} failed while building (edges {edge_indices}): {error}") from error
     if not maker.IsDone():
-        # **ここが最重要**: OCCTは例外を投げずに失敗する。半径/距離の範囲検査では代用できない
+        # OCCTは例外を投げずに失敗する。半径/距離の範囲検査では代用できない
         raise ValueError(
             f"{verb} failed (IsDone is false) for edges {edge_indices} with {values}"
         )
@@ -1291,13 +1205,7 @@ def _blend_provenance(
     verb: str,
     edge_indices: List[int],
 ) -> dict:
-    """由来を**正規化アダプタ経由で**回収し、JSON化できる射影へ落とす。
-
-    フィレット系は `History()` を持たず `Modified()` / `Generated()` / `IsDeleted()` だけを
-    持ち、ブーリアンは `History()` を持つ ——**その差を吸収するのが `normalize_provenance` の
-    存在理由**である。アダプタの戻りは `TopoDS_Shape` を含む**メモリ上の形**なので、そのままでは
-    `OpLog.to_json()` で落ちる。ここで添字の射影に変換する(`extrude_faces` と同じ形)。
-    """
+    """由来を `normalize_provenance` 経由で回収し、JSON化できる添字の射影へ落とす(`extrude_faces` と同じ形)。"""
     normalized = normalize_provenance(maker, [shape]) or {}
     modified = {}
     for entry in normalized.get("modified", []):
@@ -1311,7 +1219,6 @@ def _blend_provenance(
         old_face = shape_map.FindKey(index)
         candidates = _lookup_by_identity(modified, old_face)
         if candidates is None:
-            # アダプタが「触っていない」と言った面は、そのまま残っているはず
             candidates = [] if _contains_identity(deleted_inputs, old_face) else [old_face]
         successors[str(index)] = _positions_in(final_map, candidates)
 
@@ -1346,10 +1253,8 @@ def split_solids(shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:
     """形状をSOLIDごとに分解する。
 
     `TopExp.MapShapes_s(shape, TopAbs_SOLID)` で重複除去済みのSOLID群を取り出し、
-    各SOLIDを個別の TopoDS_Shape として返す。**SOLIDが1つも無い形状(裸の面・シェルのみ)は
-    形状全体を1要素のリストにして返す**(0個のBodyを黙って作らない。io_step.pyの契約)。
-
-    列挙順は `TopExp.MapShapes_s` の走査順(同じ形状に対して決定的)。
+    **SOLIDが1つも無い形状(裸の面・シェルのみ)は形状全体を1要素のリストにして返す**
+    (0個のBodyを黙って作らない。io_step.pyの契約)。列挙順は `TopExp.MapShapes_s` の走査順(決定的)。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot split an empty shape")
@@ -1363,7 +1268,7 @@ def split_solids(shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:
 
 
 def make_compound(shapes: Sequence["TopoDS_Shape"]) -> "TopoDS_Shape":
-    """複数の形状を1つの TopoDS_Compound へまとめる(複数Bodyを1つのSTEP/STLへ書き出すため)。"""
+    """複数の形状を1つの TopoDS_Compound へまとめる。"""
     if not shapes:
         raise ValueError("cannot build a compound from an empty sequence of shapes")
     return compound(shapes)
@@ -1373,8 +1278,8 @@ def make_compound(shapes: Sequence["TopoDS_Shape"]) -> "TopoDS_Shape":
 # 内部ヘルパ
 # --------------------------------------------------------------------------------------
 def _subshape_map(shape: "TopoDS_Shape", kind: str) -> "TopTools_IndexedMapOfShape":
-    """`kind`("face" | "edge" | "vertex")の重複除去済みマップ(1始まり)。**添字が選択の識別子になる**
-    ので数え方はここ1箇所に固定する。null は ValueError(`count_subshapes` と違って 0 を返さない)。"""
+    """`kind`("face" | "edge" | "vertex")の重複除去済みマップ(1始まり)。添字が選択の識別子になる。
+    null は ValueError(`count_subshapes` と違って 0 を返さない)。"""
     enum, plural = _SUBSHAPE_KINDS[kind]
     if shape is None or shape.IsNull():
         raise ValueError(f"cannot map the {plural} of an empty shape")
@@ -1387,8 +1292,7 @@ def _face_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
 
 
 def _face_normal(face: Any) -> tuple:
-    """面の中央での**外向き**単位法線。`BRepGProp_Face` は面の向きを見るので反転面でも外を向く
-    (20mm立方体の6面で実測: x=0の面が (-1,0,0)、x=20の面が (1,0,0))。"""
+    """面の中央での**外向き**単位法線。`BRepGProp_Face` は面の向きを見るので反転面でも外を向く(20mm立方体の6面で実測)。"""
     gface = BRepGProp_Face(TopoDS.Face_s(face))
     u_min, u_max, v_min, v_max = gface.Bounds()
     point = gp_Pnt()
@@ -1401,7 +1305,7 @@ def _face_normal(face: Any) -> tuple:
 
 
 def _face_props(face: Any) -> tuple:
-    """(面積, 重心)。`BRepGProp.SurfaceProperties_s` の既定積分を使う(volume と同じ流儀)。"""
+    """(面積, 重心)。`BRepGProp.SurfaceProperties_s` の既定積分。"""
     props = GProp_GProps()
     BRepGProp.SurfaceProperties_s(TopoDS.Face_s(face), props)
     centre = props.CentreOfMass()
@@ -1439,7 +1343,7 @@ def _face_triangles(face: Any) -> tuple:
 
 
 def _bounding_box(faces: List[dict]) -> dict:
-    """三角形の節点から境界箱を作る(アプリ層のカメラ合わせ用)。面が無ければ原点の退化した箱。"""
+    """三角形の節点から境界箱を作る(カメラ合わせ用)。面が無ければ原点の退化した箱。"""
     lows = [float("inf")] * 3
     highs = [float("-inf")] * 3
     for face in faces:
@@ -1457,27 +1361,24 @@ def _bounding_box(faces: List[dict]) -> dict:
 def _unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
     """同一平面の面を統合した形状・その履歴・採用したかを返す。
 
-    採用しない場合は**統合を一度も通していない元の形状**と履歴 None を返す
-    (由来の射影はブーリアンの結果へ直接張る)。
+    採用しない場合は**統合を一度も通していない元の形状**と履歴 None を返す。
 
-    **`ShapeUpgrade_UnifySameDomain` は入力の形状を壊す**(実測・最重要):
+    **`ShapeUpgrade_UnifySameDomain` は入力の形状を壊す**(実測):
 
         fuse の結果        -> IsValid()=True
         unify.Build() した後、**同じ fuse の結果を測り直すと** IsValid()=False
         unify の前に取った BRepBuilderAPI_Copy は unify 後も IsValid()=True
 
-    つまり「統合してみて、ダメだったら統合前に戻る」を素直に書くと、**戻り先が既に壊れている**。
-    そのため必ず**コピーで試してから**本番を行う:
+    したがって「統合してダメなら統合前へ戻る」は戻り先が既に壊れている。必ず**コピーで試してから**本番を行う:
 
     1. コピーに対して統合を試し、(a)妥当 (b)体積が変わらない (c)**面が実際に減る** を確かめる
     2. 3つとも満たすときだけ、元の形状に対して本番の統合を行い、その出力と履歴を返す
-       (由来の射影は「ブーリアンの結果の部分形状」を鍵に引くので、本番は必ず元の形状に対して
-       行う必要がある。コピーに対して統合すると部分形状の同一性が切れて射影が壊れる)
-    3. 満たさないときは元の形状をそのまま返す(統合を通していないので無傷)
+       (由来の射影は元の形状の部分形状を鍵に引くので、コピーに対して統合すると同一性が切れる)
+    3. 満たさないときは元の形状をそのまま返す
 
-    (c)を条件に入れているのは、面が減らない統合は利得ゼロで**入力を壊す危険だけが残る**ため。
-    `shelf_attachment_GD.step` の面36・43を+2mmしたときが実際にこれで、面数は57のまま変わらず、
-    統合後の形状だけが壊れていた。20mm立方体の上面+10では 10面 -> 6面 に減るので採用される。
+    (c)は、面が減らない統合は利得ゼロで入力を壊す危険だけが残るため。`shelf_attachment_GD.step` の
+    面36・43を+2mmしたときが実際にこれで、面数は57のまま統合後の形状だけが壊れていた
+    (20mm立方体の上面+10では 10面 -> 6面 に減るので採用される)。
     """
     trial = ShapeUpgrade_UnifySameDomain(
         BRepBuilderAPI_Copy(shape).Shape(), True, True, False
