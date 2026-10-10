@@ -144,6 +144,7 @@ function vertsOf(index) {
 
 const allVerts = manifest.panels.map((_, index) => vertsOf(index))
 
+/** 全部の面の外接箱の中心。**同じ点を見る**ので比較の土俵は崩れない。 */
 function commonCentre() {
   const lo = [Infinity, Infinity, Infinity]
   const hi = [-Infinity, -Infinity, -Infinity]
@@ -158,6 +159,10 @@ function commonCentre() {
   return [0, 1, 2].map((a) => (lo[a] + hi[a]) / 2)
 }
 
+/**
+ * その視線方向で**全部の面が画面に収まる**距離を1つ決める。
+ * 外接球ではなく実際の投影から決める —— 外接球だと細長い題材が画面の3分の1にしか映らない。
+ */
 function distanceFor(dir, centre) {
   const n = Math.hypot(...dir)
   const d = dir.map((v) => v / n)
@@ -210,17 +215,20 @@ renderer.setPixelRatio(1);
 renderer.setSize(${CANVAS_W}, H, false);
 renderer.setScissorTest(true);
 renderer.autoClear = false;
-// clear() はシザー矩形の中だけを既定色で塗るので、隙間の色を BG と揃える(揃えないと 6px だけ真っ黒)。
+// **面と面のすきまも同じ色で塗る。** clear() はシザー矩形の中だけを既定色で塗るので、
+// ここを揃えないと 6px の隙間だけ真っ黒になる(BG と揃える)。
 renderer.setClearColor(new THREE.Color('${BG}'), 1);
 document.body.appendChild(renderer.domElement);
 
+// **光源は全部の面で同一。** 1つの scene を使い回すので、面ごとに別の値を持てない。
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('${BG}');
 scene.add(new THREE.HemisphereLight(0xffffff, 0x333344, 0.65));
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
 dirLight.position.set(2, 3, 1);
 scene.add(dirLight);
-// カメラ追従の弱い正面光。無いと背面側の視点(side)が真っ黒になる。
+// **カメラ追従の弱い正面光。** 4方向から撮るので、背面側の視点(side)がこれ無しでは
+// 真っ黒になる。全部の面で同一。
 const headLight = new THREE.DirectionalLight(0xffffff, 0.45);
 scene.add(headLight);
 
@@ -248,7 +256,8 @@ window.__load = async () => {
     mesh.visible = false;
     scene.add(mesh);
     meshes.push(mesh);
-    // 位置の名前を頭に付ける(3面までは LEFT / MID / RIGHT、それ以上は番号)。
+    // **位置の名前を頭に付ける**(3面までは LEFT / MID / RIGHT、それ以上は番号)。
+    // ラベルだけだと「どっちが後か」を画像だけ見て言えない。
     const names = PANELS === 2 ? ['LEFT', 'RIGHT']
       : PANELS === 3 ? ['LEFT', 'MID', 'RIGHT']
       : Array.from({ length: PANELS }, (_, k) => '#' + (k + 1));
@@ -271,7 +280,7 @@ window.__render = (dir, dist, centre) => {
   camera.updateProjectionMatrix();
   renderer.setScissor(0, 0, ${CANVAS_W}, H);
   renderer.clear();
-  // 面ごとの数を返す(合算だと1面だけ真っ黒でも合格する)。
+  // **面ごとの数を返す。** 合算すると「1面だけ真っ黒」が他の面に隠れて合格する。
   const triangles = [];
   for (let i = 0; i < PANELS; i += 1) {
     const x = i * (W + GAP);
@@ -298,7 +307,8 @@ const server = createServer((request, response) => {
     response.end(PAGE)
     return
   }
-  // favicon は 204 で返す(404 だとコンソールエラーとして検出され撮影が止まる)。
+  // **favicon は 204 で返す。** 404 にするとブラウザのコンソールにエラーが1件出て、
+  // 「ページ側でエラー」の網に毎回かかる(絵とは無関係の失敗で撮影が止まる)。
   if (url.pathname === '/favicon.ico') {
     response.writeHead(204)
     response.end()
@@ -327,7 +337,8 @@ const written = []
 try {
   const page = await browser.newPage()
   await page.setViewport({ width: CANVAS_W, height: HEIGHT + BAND })
-  // ハンドラ内の throw は呼び出し元へ伝わらないので、溜めて描画の後で見る。
+  // **ページ側の例外は握り潰さない。** ハンドラの中で throw しても呼び出し元へは
+  // 伝わらない(未処理のPromise拒否になるだけ)ので、溜めて描画の後で見る。
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(String(error)))
   page.on('console', (message) => {
@@ -348,7 +359,8 @@ try {
       dist,
       centre,
     )
-    // 面ごとに最低1枚は三角形がGPUへ行っていること(合算だと1面だけ真っ黒でも合格する)。
+    // **真っ黒の合格を防ぐ。** **面ごとに**最低1枚は三角形がGPUへ行っていること
+    // (合算で見ると、1面だけ真っ黒でも他の面に隠れて合格する)。
     const empty = triangles.flatMap((count, i) => (count > 0 ? [] : [i]))
     if (empty.length > 0) {
       throw new Error(
