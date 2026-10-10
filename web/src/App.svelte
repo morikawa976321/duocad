@@ -2251,7 +2251,11 @@
     <button
       id="settings-open"
       class="tag"
-      onclick={() => (settingsOpen = !settingsOpen)}
+      onclick={() => {
+        settingsOpen = !settingsOpen
+        // GPU が使えず CPU へ戻ったことは配られないので、開くたびに取り直す。
+        if (settingsOpen) session.femGetStatus()
+      }}
       title={settingsOpen ? '設定を閉じる' : '設定を開く'}
     >
       設定

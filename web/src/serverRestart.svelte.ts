@@ -7,7 +7,13 @@
  * `restart.current` を見て出す。
  */
 export type ServerVersion = { commit?: string; date?: string }
-export type ServerConfig = { channel?: 'dev' | 'stable'; version?: ServerVersion; update_supported?: boolean }
+export type ServerConfig = {
+  channel?: 'dev' | 'stable'
+  version?: ServerVersion
+  /** サーバのプロセスの起動ごとに変わる印(`duocad/channel.py` の `BOOT_ID`)。 */
+  boot?: string
+  update_supported?: boolean
+}
 
 /** 立て直しを押してから読み直すまでの間、`sessionStorage` に立てておく印。読み直し後に結果を知らせる。 */
 export const PENDING_KEY = 'duocad-update-pending'
@@ -53,7 +59,7 @@ export async function restartServer(
 ): Promise<void> {
   if (restarting) return
   restarting = { title: shown.title, detail: shown.detail }
-  const before = (await loadConfig())?.version?.commit
+  const before = (await loadConfig())?.boot
   let response: Response
   try {
     response = await fetch(new URL(path, location.href), { method: 'POST' })
@@ -73,7 +79,8 @@ export async function restartServer(
   } catch {
     // 保存できなくても立て直しは進む(読み直し後の知らせが出ないだけ)
   }
-  // **落ちたのを見てから**立ち直りを待つ —— 落ちる前の応答を「立ち直った」と読むと、古い画面のまま読み直してしまう。
+  // **起動の印が変わったら**立ち直った —— 落ちる前の応答を「立ち直った」と読むと、古い画面のまま読み直してしまう。
+  // 落ちている間を一度も見なくても(画面が止まっていた等)、印が変われば立ち直ったと分かる。
   const deadline = Date.now() + RESTART_TIMEOUT_MS
   let wentDown = false
   while (Date.now() < deadline) {
@@ -83,7 +90,7 @@ export async function restartServer(
       wentDown = true
       continue
     }
-    if (wentDown || next.version?.commit !== before) {
+    if (next.boot !== before || (wentDown && before === undefined)) {
       location.reload()
       return
     }

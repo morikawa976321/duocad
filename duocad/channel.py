@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -37,6 +38,10 @@ RESULT_FILE = "last-update-result.json"
 
 #: **pythonw から console のプログラム(git)を呼ぶと、そのたびに黒い窓が一瞬出る**。
 #: 安定版は窓の無い pythonw で動くので、子プロセスはすべてこれで起こす。
+#: このサーバのプロセスの起動ごとに変わる印(`/duocad-config.json` の `boot`)。画面は立て直しの終わりを
+#: これの変化で知る —— GPU の部品だけを入れる立て直しはコミットを変えないので、版では見分けられない。
+BOOT_ID = uuid.uuid4().hex
+
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
@@ -241,5 +246,6 @@ def describe(channel: str, updater: Optional[StableUpdater]) -> dict[str, Any]:
     return {
         "channel": channel,
         "version": version_info(),
+        "boot": BOOT_ID,
         "update_supported": updater is not None,
     }

@@ -77,6 +77,8 @@ def test_config_names_the_channel(serve):
     assert config["channel"] == "dev"
     assert config["update_supported"] is False
     assert config["ws_url"] == "ws://127.0.0.1:1"
+    # 立て直しの終わりを画面が知る印。GPU の部品だけ入れる立て直しはコミットを変えないので、版とは別に要る。
+    assert isinstance(config["boot"], str) and config["boot"]
 
 
 def test_update_endpoint_is_absent_on_dev(serve):

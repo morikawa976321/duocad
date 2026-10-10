@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+
+from .paths import REPO_ROOT
 
 FILENAME = "duocad_settings.json"
-PATH = Path(__file__).resolve().parents[1] / FILENAME
+PATH = REPO_ROOT / FILENAME
 FEM_DEVICES = ("cpu", "gpu")
 
 
