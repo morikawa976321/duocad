@@ -1,6 +1,6 @@
 """必須反例(g): 格子原点移動。`design_space.derive` は原点を直接のパラメータとして持たないため
 (task01契約②)、`metric_eval.solve_shape(..., origin_shift_mm=...)` がプロセス内だけで
-`design_space.grid_for_frame` を差し替えて原点だけをずらす(01_PROTOCOL.md 6-1節の実行版)。
+`design_space.grid_for_frame` を差し替えて原点だけをずらす(10_SYNTHESIS 付録A(旧 01_PROTOCOL 6-1節)の実行版)。
 
 対象: `dilution_r-1`@300N(安全率に余裕あり)、`path_2.5mm`@6000N(安全率2.42、余裕が薄い)。
 シフト量は±0.5セル幅(半セル、格子依存性の標準的な試験量)。

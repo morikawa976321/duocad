@@ -1,12 +1,12 @@
 """タスク4: 20%削除・5%削除・適応歩幅＋復帰・再配置の4探索方式を公平に比較する実験用実装。
 
-**製品コードは変更しない**(`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「実験用モジュールとして
+**製品コードは変更しない**(`docs/TOPOPT_IDLE_MATERIAL.md` に統合された旧 TOPOPT_IDLE_VALIDATION_TASKS「実験用モジュールとして
 実装し、製品既定値や公開UIの仕様は変更しない」)。既存のFEM(`duocad.topopt.fem`/`stress`)・
 幾何検査(`duocad.topopt.acceptance`/`binary_search.peel`/`resolve_islands`)・力学条件
 (`optimize_run.build_conditions`/`_build_search_conditions`)は共用する。評価器は03bが凍結した
 版をそのまま使う(`topopt_checks/idle_validation/stress_metrics.py` M5b=`metric_exceedance_integral`
 〈合否ゲート〉・M3=`metric_zone_percentile`〈部位別診断〉・M7b=`metric_ks_aggregation`〈探索補助〉。
-`docs/topopt_idle_validation/03B_METRICS_RECHECK.md`①「03の評価式採否は変更なし」)。
+`docs/topopt_idle_validation/10_SYNTHESIS.md 付録B(旧 03B_METRICS_RECHECK)`①「03の評価式採否は変更なし」)。
 
 ## 4方式の入口(§後続への契約②に対応)
 - `run_fixed_step(ctx, config)`: **製品コードそのもの**(`binary_search.find_best_feasible`)を
@@ -398,7 +398,7 @@ def run_fixed_step(ctx: SearchContext, *, max_step_ratio: float = binary_search.
 # ---------------------------------------------------------------------------
 @dataclass
 class AdaptiveConfig:
-    """`gate` は3択(実測で確定した理由は `score_mask` のdocstring・`docs/topopt_idle_validation/04_SEARCHES.md`
+    """`gate` は3択(実測で確定した理由は `score_mask` のdocstring・`docs/topopt_idle_validation/10_SYNTHESIS.md 付録C(旧 04_SEARCHES)`
     「評価ゲートの選び方」節): `"m5b_raw"`(既定。03bが凍結した定義そのもの——材料の生の許容応力に対する
     超過。「04は03bの評価器で実装」に最も忠実)/ `"m5b_target"`(`allowable_mpa/target_safety_factor` を
     しきい値にした版。方式1・2と**同じ安全余裕**で体積を比べたいときに使う——実測: dilution_smallの
@@ -417,7 +417,7 @@ class AdaptiveConfig:
     prediction_error_multiplier: float = 2.5
     #: 実ジャンプ(M3最悪ゾーンの一手あたり相対変化)がこの値以下なら、予測との比が倍率を超えても
     #: `prediction_error` で拒否しない。0.0=旧挙動(比だけで拒否)。予測値(分母)が小さいと実ジャンプが
-    #: 微小でも比が倍率を超えて拒否が続くため(05_SYNTHETIC.md 4-1節・08_ROBUSTNESS.md)。
+    #: 微小でも比が倍率を超えて拒否が続くため(10_SYNTHESIS 付録D(旧 05_SYNTHETIC 4-1節)・10_SYNTHESIS 付録F(旧 08_ROBUSTNESS))。
     prediction_error_floor: float = 0.0
     sudden_jump_relative_drop: float = 0.15  # safety_factor_product の一手あたり許容低下率
     #: compliance C・最大変位の一手あたり許容増加率(急変検知にこの2つも使う。QA指摘対応:
@@ -426,7 +426,7 @@ class AdaptiveConfig:
     sudden_displacement_relative_increase: float = 0.5
     #: True なら、開始形(全材料など)が受理ゲートを満たさないとき、探索せず `stop_reason="start_fails_gate"` で戻る。
     #: False=旧挙動(全候補が `safety_gate` で拒否され続け、開始形を返す。hanger 2000N太い幅で
-    #: 実測18.5〜19.1時間、07_HANGER_LOADS.md)。`resume_from` 付きの再開では見ない。
+    #: 実測18.5〜19.1時間、10_SYNTHESIS 付録E(旧 07_HANGER_LOADS))。`resume_from` 付きの再開では見ない。
     stop_if_start_fails_gate: bool = False
     finish_window_tolerance: float = 0.02  # 目標 × (1+これ) 以下で仕上げ探索へ
     finish_max_evaluations: int = 200

@@ -3,7 +3,7 @@
 入力: `output/idle_validation_20260928/` の 07_corpus_rescore / 07_grid / 07_methods / 07_full_material_probe(あれば)
 と、合流先の 06_main_matrix / 06_grid_resolution。出力: `07_hanger_loads.json`(schema_version=1)。
 
-2026-10-05の期限再編(`docs/topopt_idle_validation/DEADLINE_PLAN_2026-10-05.md`)で、origin/init 行列と methods の残り19件は
+2026-10-05の期限再編(`docs/topopt_idle_validation/10_SYNTHESIS.md 付録A(旧 DEADLINE_PLAN_2026-10-05)`)で、origin/init 行列と methods の残り19件は
 実行されず、`deferred_by_user_deadline` として `coverage` に列挙する。
 実行: `.venv/Scripts/python.exe topopt_checks/idle_validation/build_07_json.py`
 """

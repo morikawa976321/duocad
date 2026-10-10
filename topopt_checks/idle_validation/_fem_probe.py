@@ -252,7 +252,7 @@ def zone_masks_with_load(
     distance_mm: float,
 ) -> dict:
     """`zone_masks`に荷重面近傍ゾーン`load`を足した4ゾーン版。`zone_masks`は3ゾーンのまま(02〜05が使う)。
-    荷重パッド接触端のピークは3ゾーンでは`general`へ希釈される(03A_REFERENCE_REPAIR.md 7-1節)。
+    荷重パッド接触端のピークは3ゾーンでは`general`へ希釈される(10_SYNTHESIS 付録A(旧 03A_REFERENCE_REPAIR 7-1節))。
     優先順位はholding→load→joint→general(holdingと重なる小さい形状ではholdingが先)。
     """
     mat = np.asarray(material, dtype=bool)

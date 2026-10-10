@@ -1,7 +1,7 @@
 """topopt不要材料検証タスク群(0〜10)の共通基盤。
 
 生データ索引・版管理・実験の再開/重複排除・単一FEM実行制御・メモリ監視を1箇所にまとめる
-(`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「全段階の生データ索引、版管理…を共通化する」)。
+(`docs/TOPOPT_IDLE_MATERIAL.md` に統合された旧 TOPOPT_IDLE_VALIDATION_TASKS「全段階の生データ索引、版管理…を共通化する」)。
 ロック機構は `topopt_checks/sweep_smoothing_corpus.py`(`_acquire_lock`/`_release_lock`)の
 OS排他ロック(`msvcrt.locking`)をタスク非依存の形へ切り出したもの——**プロセスが異常終了しても
 OSがロックを放すので、死んだ錠の回収ロジックが要らない**(同スクリプトのコメントと同じ理由)。
@@ -82,7 +82,7 @@ class ExecutionLock:
     """1つの `lock_path` につき同時に1プロセスだけが `with` ブロックへ入れる。
 
     タスクをまたいで**同じファイル**を指定すれば「このPC上で重いFEMは1実行ずつ」を
-    タスク横断で強制できる(`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「計算の継続と資源」)。
+    タスク横断で強制できる(`docs/TOPOPT_IDLE_MATERIAL.md` に統合された旧 TOPOPT_IDLE_VALIDATION_TASKS「計算の継続と資源」)。
     タスクごとに別ファイルを指定すれば、そのタスク内だけの多重起動防止になる。
     どちらの粒度で使うかは呼び出し側の判断(本モジュールは強制しない)。
     """

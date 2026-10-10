@@ -257,7 +257,7 @@ def _run_one(
         mask = projected & space.mask
         # 整数分割マスクは体積保存(diagnostics参照)でも、`space.mask`(design_space.deriveが
         # spacingごとに独立再計算する設計空間の外枠)との積で材料セルが失われることがある
-        # (03A_REFERENCE_REPAIR.md 3節: dilution_r-1 level2で355セル)。投影方式に関わらず起きる
+        # (10_SYNTHESIS 付録A(旧 03A_REFERENCE_REPAIR 3節): dilution_r-1 level2で355セル)。投影方式に関わらず起きる
         # 外枠の後退なので、exact_subdivideのときだけ生じる問題と誤解されないよう明示的に記録する。
         lost_outside_space = projected & ~space.mask
         exact_subdivide_diagnostics["cells_lost_to_design_space_mask"] = int(lost_outside_space.sum())

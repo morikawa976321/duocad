@@ -3,7 +3,7 @@
 adaptive(`run_adaptive`=`find_initial_feasible`からの全材料開始)が兼ねるのでここでは扱わない。
 
 - `transplant`: 2.2mm由来の移植トラス(`hanger_transplant`、既にSF8.87の優越形)から開始。
-  05_SYNTHETIC.md 8節(小型pathで「安全な初期形状から始めても適応方式が目標未達まで削り込む」)を
+  10_SYNTHESIS 付録D(旧 05_SYNTHETIC 8節)(小型pathで「安全な初期形状から始めても適応方式が目標未達まで削り込む」)を
   hanger規模で確認する。
 - `coarse_skeleton`: `run_06_grid_resolution.py`の2.4mm step20結果を2.0mm格子へ投影して開始
   (「粗い骨組み開始」)。**このスクリプトの前に`run_06_grid_resolution.py`を完走させること**

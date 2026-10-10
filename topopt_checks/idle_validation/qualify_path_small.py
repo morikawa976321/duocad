@@ -7,7 +7,7 @@
 `search_methods._growth_geometry_ok`(保持・除外・アンカー・単一成分・正則境界・芯の連結・最小幅・
 閉空洞禁止の全項目)で検査しながら局所的に材料を再導入し(段B)、`run_adaptive_from_mask`で
 過剰分を削って仕上げ(段B')、2.0mm現行(`step20`)結果より軽く目標安全率を満たす形を作る
-(移植=段A。段ラベルは`docs/topopt_idle_validation/04A_PATH_QUALIFICATION.md` 2節と揃えてある)。
+(移植=段A。段ラベルは`docs/topopt_idle_validation/10_SYNTHESIS.md 付録C(旧 04A_PATH_QUALIFICATION)` 2節と揃えてある)。
 
 続けて、`search_methods.run_adaptive`を`gate="percentile"`・`stop_policy="legacy"`・
 `sudden_*`/`prediction_error_multiplier`を無効化する値に設定すると製品の`_reduce_volume`

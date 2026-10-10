@@ -79,7 +79,7 @@ def _record_for(name: str, variant: str) -> dict:
                           script_sha256=_common.sha256_file(IDLE_STUDY / "counterfactual.py")
                           if (IDLE_STUDY / "counterfactual.py").is_file() else None,
                           note="output/idle_study/配下はこのリポジトリの.gitignore対象(/output/)で、gitのコミットハッシュで"
-                               "版を特定できない。ここではファイル自体のsha256を版の代わりにする(01_PROTOCOL.md「入力棚卸し」節参照)。"),
+                               "版を特定できない。ここではファイル自体のsha256を版の代わりにする(10_SYNTHESIS 付録A(旧 01_PROTOCOL)「入力棚卸し」節参照)。"),
     )
 
 
@@ -121,7 +121,7 @@ def main() -> int:
             "(min_width_ok=false)**。同節の記述は6条件のみを根拠にしており、最小幅は検査されていなかった"
             "(acceptance.inspectに最小幅が含まれないのはtask00契約②と同じ既知の罠)。したがってこの移植トラスは"
             "現時点で『同条件での確定的な優越形』の証拠として使えない——hangerでも原因2の限界はpath_smallと"
-            "同種(00_COMPACT_MODELS.md 3-4節)。後続タスクへ引き継ぐ(01_PROTOCOL.md「入力棚卸し」節)。"
+            "同種(00_COMPACT_MODELS.md 3-4節)。後続タスクへ引き継ぐ(10_SYNTHESIS 付録A(旧 01_PROTOCOL)「入力棚卸し」節)。"
         )
 
     registry = dict(

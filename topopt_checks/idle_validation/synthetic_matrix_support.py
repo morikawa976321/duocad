@@ -1,7 +1,7 @@
 """タスク5(合成題材の比較・機構別検証)が共有する条件定義とヘルパー。
 
-**スコープの決定(§05_SYNTHETIC.mdで詳述)**: タスクファイル自身の「小型題材への変更(今回の追記が
-下記の旧行列指示に優先)」が、本文の「第1タスクの全合成題材(01_PROTOCOL.md §5のS-T/S-B/S-TB/S-L/S-MS)」
+**スコープの決定(§10_SYNTHESIS 付録D(旧 05_SYNTHETIC)で詳述)**: タスクファイル自身の「小型題材への変更(今回の追記が
+下記の旧行列指示に優先)」が、本文の「第1タスクの全合成題材(10_SYNTHESIS 付録A(旧 01_PROTOCOL) §5のS-T/S-B/S-TB/S-L/S-MS)」
 要求より優先する。主題材は task0 が認定した `topopt_idle_dilution_small.json`(原因1)・
 `topopt_idle_path_small.json`(原因2、04a追記で2.0mm/3000N/6.0mm・percentileシナリオに限り認定)。
 S-T等は本タスクでは新規構築しない(未構築のまま)。
@@ -92,7 +92,7 @@ def reallocation_config(*, seed: int, max_evaluations: int, gate: str = "m5b_raw
 
 
 # ---------------------------------------------------------------------------
-# 原点シフト(01_PROTOCOL.md 6-1節)。`metric_eval._shifted_grid_for_frame` と同じ手口を
+# 原点シフト(10_SYNTHESIS 付録A(旧 01_PROTOCOL 6-1節))。`metric_eval._shifted_grid_for_frame` と同じ手口を
 # `search_methods.build_context` にも適用する(新規探索から原点をずらすため。metric_eval側は
 # 既存マスクの再投影専用で新規探索には使えない)。
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ def build_context_with_origin_shift(model_path: Path, *, load_n: float, element_
                                     min_width_mm: float, shift_mm) -> sm.SearchContext:
     """`search_methods.build_context` と同じ手順だが、格子原点だけを `shift_mm`(スカラー or 3要素)
     ずらす。`achieved_origin_mm` を呼び出し側が `ctx.grid.origin` から確認できる(達成シフトが
-    ちょうど0.5セルにならない場合があるため——01_PROTOCOL.md 6-1節の注記どおり記録すること)。"""
+    ちょうど0.5セルにならない場合があるため——10_SYNTHESIS 付録A(旧 01_PROTOCOL 6-1節)の注記どおり記録すること)。"""
     shift = shift_mm if isinstance(shift_mm, tuple) else (float(shift_mm),) * 3
     if not any(shift):
         return sm.build_context(model_path, load_n=load_n, element_size_mm=element_size_mm, min_width_mm=min_width_mm)
@@ -120,7 +120,7 @@ def build_context_with_origin_shift(model_path: Path, *, load_n: float, element_
 
 
 # ---------------------------------------------------------------------------
-# フィルタ幅mm固定(01_PROTOCOL.md 6-3節)。`binary_search.ENERGY_FILTER_SIZE` はセル数固定(既定3)。
+# フィルタ幅mm固定(10_SYNTHESIS 付録A(旧 01_PROTOCOL 6-3節))。`binary_search.ENERGY_FILTER_SIZE` はセル数固定(既定3)。
 # `ranked_cells` がモジュール属性を呼び出し時に参照する(デフォルト引数に焼き込まれていない)ため、
 # `patch.object` で一時的に差し替えられる(実測で確認)。
 # ---------------------------------------------------------------------------

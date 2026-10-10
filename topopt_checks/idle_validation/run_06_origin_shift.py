@@ -1,10 +1,10 @@
 """タスク6・原点半セル移動: H1条件(2.0mm・200N・min_width実寸10mm)で格子原点を+0.5セル
 (=1.0mm。全軸・x・y・zの4方向)動かし、製品コード(step20)で採点する。基準(シフト0)は`run_06_main_matrix.py`のstep20が兼ねる。
 
-05_SYNTHETIC.md 7-1節(小型モデルで原点半セル移動だけで材料が最大50.8%変動・全条件で位相が変化)を
+10_SYNTHESIS 付録D(旧 05_SYNTHETIC 7-1節)(小型モデルで原点半セル移動だけで材料が最大50.8%変動・全条件で位相が変化)を
 hanger規模で代表確認する(共通指示書「小型題材を主にする変更」節「小型が省略した現象や結論の逆転が
 ある場合は必要なhanger実験を追加する」への対応)。フル8方向シフトは小型で実施済みのため、hangerでは
-最も変化が大きかった全軸+0.5(05_SYNTHETIC.md 7-1節)と単軸3方向に絞る。
+最も変化が大きかった全軸+0.5(10_SYNTHESIS 付録D(旧 05_SYNTHETIC 7-1節))と単軸3方向に絞る。
 
 `synthetic_matrix_support.build_context_with_origin_shift`をそのまま再利用する(model引数を取るので
 hangerでも無変更で動く)。
@@ -32,7 +32,7 @@ import search_methods as sm  # noqa: E402
 import synthetic_matrix_support as sup  # noqa: E402
 
 LEDGER_PATH = hls.OUT / "06_origin_shift.json"
-#: 全軸+0.5は05_SYNTHETIC.md 7-1節で最も変化が大きかった方向。単軸3点は、製品の`evaluation_error`打ち切りが全軸シフト固有かを見る(06_HANGER_LOW.md 4節)。
+#: 全軸+0.5は10_SYNTHESIS 付録D(旧 05_SYNTHETIC 7-1節)で最も変化が大きかった方向。単軸3点は、製品の`evaluation_error`打ち切りが全軸シフト固有かを見る(10_SYNTHESIS 付録E(旧 06_HANGER_LOW 4節))。
 SHIFTS = {
     "hanger_h1_origin_shift_all_axes_+0.5cell": (0.5, 0.5, 0.5),
     "hanger_h1_origin_shift_x_+0.5cell": (0.5, 0.0, 0.0),

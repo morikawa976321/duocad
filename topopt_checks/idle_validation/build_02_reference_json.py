@@ -50,16 +50,16 @@ def main() -> int:
     analytic = sorted({c.get("analytic_kind", "") for c in cases if c.get("analytic_kind", "").startswith("analytic")})
     failed = sum(1 for c in cases if c.get("status") in ("failed", "disconnected_at_this_level", "solve_failed"))
     # **手で決め打ちのリスト**(QA指摘: 「missingが常に空」は「要求を全部満たした」という意味に
-    # 誤読されうる)。02_REFERENCE.md 7-1節・8節が明記する、意図的に対象外とした/未実施の組み合わせを
+    # 誤読されうる)。10_SYNTHESIS 付録A(旧 02_REFERENCE 7-1節)・8節が明記する、意図的に対象外とした/未実施の組み合わせを
     # ここにも複製する(機械可読側の読者がdocs/を読まなくても分かるように)。
     missing = [
         "hanger_step05(5%形)・hanger_transplant(移植トラス)は格子細分・ゾーン解析を未実施"
         "(01_PROTOCOL §4のH1/H2代表条件に該当しないため対象外。refine_shape.pyは選択肢として実装済み)。",
         "hangerの格子細分(level>=2)は未実施(design要素が約1200万に達し既知の安全上限を超えるため。"
-        "02_REFERENCE.md 1-2節)。hanger_base/hanger_r2はネイティブ解像度(level=1)のみ。",
+        "10_SYNTHESIS 付録A(旧 02_REFERENCE 1-2節))。hanger_base/hanger_r2はネイティブ解像度(level=1)のみ。",
         "dilution_r-1のlevel=4(0.5mm)は未実施(設計要素約126万が既知の安全上限に近いため見送り)。",
         "Kirsch比較は同軸引張理論と実際の曲げ支配荷重との不一致、および局所maxの格子依存発散のため"
-        "絶対値としては未校正(02_REFERENCE.md 5-2節)。",
+        "絶対値としては未校正(10_SYNTHESIS 付録A(旧 02_REFERENCE 5-2節))。",
     ]
     limitations = [
         "実CAD/平滑化境界に沿う独立コンフォーマルメッシュ(gmsh等)はこの環境に無く未実装。"

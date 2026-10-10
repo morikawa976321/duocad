@@ -1,4 +1,4 @@
-"""タスク4の機械可読まとめを組み立てる(`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`
+"""タスク4の機械可読まとめを組み立てる(`docs/TOPOPT_IDLE_MATERIAL.md` に統合された旧 TOPOPT_IDLE_VALIDATION_TASKS
 「成果物と後続への契約」の schema: `cases`/`coverage`/`limitations`)。
 
 入力(すべて実行済みであること。無ければ即座に失敗する——ファイルの実在で完了と扱わない):
@@ -128,7 +128,7 @@ def main() -> int:
         ),
         no_superiority_claim=dict(
             requirement="新方式の性能優位は次の実測まで主張しない",
-            evidence="docs/topopt_idle_validation/04_SEARCHES.md 全体で数値のみ記録し優劣を結論しない。"
+            evidence="docs/topopt_idle_validation/10_SYNTHESIS.md 付録C(旧 04_SEARCHES) 全体で数値のみ記録し優劣を結論しない。"
                     "評価ゲート(m5b_raw/m5b_target/percentile)が異なる方式間の体積比較は評価シナリオが異なるため"
                     "直接比較しない(各シナリオ内で比較)",
             status="done",

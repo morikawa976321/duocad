@@ -8,7 +8,7 @@
 - path_small(3000N・2.5mm・min_width 6.0mm): 方式1・2・3・4。経路喪失=原因2の代表題材
   ——04a未認定のため、長い部材の復元評価は「未認定pathモデルでの機構確認」と明記する。
 
-**単一実行ロック**を全モデル・全方式で共有する(`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`
+**単一実行ロック**を全モデル・全方式で共有する(`docs/TOPOPT_IDLE_MATERIAL.md` に統合された旧 TOPOPT_IDLE_VALIDATION_TASKS
 「計算の継続と資源」)。`hanger_external_check.py` と同じ `_locks/fem_single_run.lock` を使うので、
 どちらか一方が実行中はもう一方を起動しない(同時に起動すると `RuntimeError` で即座に落ちる——
 仕様どおり)。

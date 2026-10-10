@@ -7,7 +7,7 @@ FEMを解き、`stress_metrics.py` の候補式が必要とする生の場(von_m
 差し替え、`derive` が組む格子の原点だけをずらす(box_lo/box_hi や `elements_long_axis` は変えない
 ので、格子の大きさ・要素サイズは変わらず「どこにセル境界が来るか」だけが動く)。
 `task01契約②`と同じ理由で `design_space.derive` は原点を直接のパラメータとして持たないため、
-この形のパッチが必要(01_PROTOCOL.md 6-1節)。
+この形のパッチが必要(10_SYNTHESIS 付録A(旧 01_PROTOCOL 6-1節))。
 """
 from __future__ import annotations
 

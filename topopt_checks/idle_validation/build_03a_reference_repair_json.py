@@ -148,7 +148,7 @@ def main() -> int:
         ))
     else:
         cases.append(dict(case_id="03a_exact_subdivide_volume_check", status="not_run_in_this_build",
-                           note="03A_REFERENCE_REPAIR.md 3節の再現コマンドで再実行できる(検証用、34ケース比較用データは変更しない)"))
+                           note="10_SYNTHESIS 付録A(旧 03A_REFERENCE_REPAIR 3節)の再現コマンドで再実行できる(検証用、34ケース比較用データは変更しない)"))
 
     payload = dict(
         task_id="20260928-1426-topopt-idle-03a-reference-repair",

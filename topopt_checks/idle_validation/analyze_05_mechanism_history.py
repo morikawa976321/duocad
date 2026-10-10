@@ -11,7 +11,7 @@ b) **細かく失うと逃す**: `requested_cells`が小さい(=中央値以下)
    `sudden_jump`閾値を一度も超えないまま `m5b` 超過へ転じる区間の有無。
 c) **枝が荷重経路になるまで評価されない**: 再配置の`grow_accepted`イベントのうち
    `temporarily_heavier`(仮追加で一時重くなる。`search_methods.run_reallocation`が記録するイベント
-   キー名。04_SEARCHES.mdの文章表現「temporarily_heavier_observed」とは異なるので注意)が真の回で、
+   キー名。10_SYNTHESIS 付録C(旧 04_SEARCHES)の文章表現「temporarily_heavier_observed」とは異なるので注意)が真の回で、
    その直後の削減フェーズ内で安全率/M5bが改善するまでの手数(=成長した枝が実際に荷重経路として
    働き始めるまでの遅延)。
 

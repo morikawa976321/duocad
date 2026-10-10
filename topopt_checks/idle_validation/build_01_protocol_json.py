@@ -52,13 +52,13 @@ def build() -> dict:
              script="topopt_checks/idle_validation/reproduce_stage1_transplant.py",
              result_summary=transplant,
              finding="acceptance.inspectの6条件は全pass・安全率8.87で文書報告値と一致するが、製品の最小幅規則(5セル=9.99mm)は不合格。"
-                     "「同条件での確定的な優越形」は未実証(01_PROTOCOL.md 2-4節)"),
+                     "「同条件での確定的な優越形」は未実証(10_SYNTHESIS 付録A(旧 01_PROTOCOL 2-4節))"),
         dict(case_id="compare_unit_split", kind="protocol_definition", status="defined",
              description="旧64条件=セル数指定比較(凍結・追加実行なし)、新規追加=mm固定比較(min_width_mm指定・実現セル数を記録)に分離",
-             output="docs/topopt_idle_validation/01_PROTOCOL.md#3", execution="none (この区分は台帳規約。実行は各後続タスク)"),
+             output="docs/topopt_idle_validation/10_SYNTHESIS.md 付録A(旧 01_PROTOCOL#3)", execution="none (この区分は台帳規約。実行は各後続タスク)"),
         dict(case_id="hanger_matrix_disposition", kind="protocol_definition", status="defined",
              description="hanger旧64条件(4荷重×4要素サイズ×4幅)の扱い一覧(凍結/再現対照/新規最小限H1・H2/未実行)",
-             output="docs/topopt_idle_validation/01_PROTOCOL.md#4"),
+             output="docs/topopt_idle_validation/10_SYNTHESIS.md 付録A(旧 01_PROTOCOL#4)"),
         dict(case_id="hanger_external_check_H1", kind="planned", status="defined_not_executed",
              description="原因2代表条件(低荷重・太幅、200N・w5相当)のmm固定外部確認。比較相手はtask2〜8が選ぶ改善方式",
              depends_on_undetermined="task2〜8が確定する評価式・探索方式",
@@ -86,7 +86,7 @@ def build() -> dict:
         dict(case_id="origin_shift_ledger", kind="matrix_definition", status="defined_not_executed",
              description="半セル原点移動: 基準+各軸単独±0.5セル(6件)+全軸同時+0.5セル(1件)=8条件。対象は主にtask00小型2題材",
              count=8, assigned_to="task4/task8",
-             note="design_space.deriveは原点を明示的に受け取らないため、実装には格子計算のプロセス内パッチが要る(01_PROTOCOL.md 6-1節)"),
+             note="design_space.deriveは原点を明示的に受け取らないため、実装には格子計算のプロセス内パッチが要る(10_SYNTHESIS 付録A(旧 01_PROTOCOL 6-1節))"),
         dict(case_id="initial_shape_ledger", kind="matrix_definition", status="defined_not_executed",
              description="初期形状3種: 全材料(既定)/移植トラス/粗い探索から写す形",
              count=3, assigned_to="task4",
@@ -97,7 +97,7 @@ def build() -> dict:
         dict(case_id="multi_load_ledger", kind="matrix_definition", status="defined_not_executed",
              description="複数荷重: (a)同時載荷 (b)択一載荷(製品未サポートの可能性あり、要件のみ記録)",
              assigned_to="task5",
-             note="択一載荷が製品ネイティブでない場合、実験用パッチと製品改修推奨を混同しない(01_PROTOCOL.md 11節)"),
+             note="択一載荷が製品ネイティブでない場合、実験用パッチと製品改修推奨を混同しない(10_SYNTHESIS 付録A(旧 01_PROTOCOL 11節))"),
     ]
 
     coverage = {
@@ -115,20 +115,20 @@ def build() -> dict:
             status="defined_not_executed",
             evidence=["origin_shift_ledger", "initial_shape_ledger", "filter_width_ledger", "multi_load_ledger"]),
         "question_experiment_table": dict(requirement="各疑問→必要実験→判定根拠→出力の対応表(タスク指示)",
-                                          status="done", evidence="docs/topopt_idle_validation/01_PROTOCOL.md#7"),
+                                          status="done", evidence="docs/topopt_idle_validation/10_SYNTHESIS.md 付録A(旧 01_PROTOCOL#7)"),
         "tolerance_basis": dict(requirement="精度・残差・力/モーメント許容値の根拠(タスク指示)",
-                                status="done", evidence="docs/topopt_idle_validation/01_PROTOCOL.md#8 (製品既定値を流用、新規閾値なし)"),
+                                status="done", evidence="docs/topopt_idle_validation/10_SYNTHESIS.md 付録A(旧 01_PROTOCOL#8) (製品既定値を流用、新規閾値なし)"),
         "common_infrastructure": dict(
             requirement="生データ索引・版管理・再開/重複排除・単一FEM実行制御・メモリ監視の共通化(タスク指示)",
             status="done",
             evidence="topopt_checks/idle_validation/_common.py (git_state/sha256_file/write_atomic/peak_memory_mb/"
                      "ExecutionLock/condition_id/load_ledger/upsert_case/is_case_done/SingleFemRun)"),
         "stage1_2_3_coverage_table": dict(requirement="全3段階のcoverage表(完了条件)",
-                                          status="done", evidence="docs/topopt_idle_validation/01_PROTOCOL.md#10"),
+                                          status="done", evidence="docs/topopt_idle_validation/10_SYNTHESIS.md 付録A(旧 01_PROTOCOL#10)"),
         "stage3_final_shape_reanalysis": dict(requirement="平滑化・集合演算後の再解析(8章第3段階)",
                                               status="framework_only",
-                                              evidence="docs/topopt_idle_validation/01_PROTOCOL.md#7 "
-                                                      "(出力先を09_FINAL_SHAPES.mdに指定、具体条件はtask9が確定)"),
+                                              evidence="docs/topopt_idle_validation/10_SYNTHESIS.md 付録A(旧 01_PROTOCOL#7) "
+                                                      "(出力先を10_SYNTHESIS 付録G(旧 09_FINAL_SHAPES)に指定、具体条件はtask9が確定)"),
     }
 
     limitations = [
@@ -159,7 +159,7 @@ def build() -> dict:
     return dict(
         generated_at=_common.now_iso(), task_id="20260928-1426-topopt-idle-01-protocol",
         depends_on="20260928-1426-topopt-idle-00-compact-models",
-        report="docs/topopt_idle_validation/01_PROTOCOL.md", git=_common.git_state(),
+        report="docs/topopt_idle_validation/10_SYNTHESIS.md 付録A(旧 01_PROTOCOL)", git=_common.git_state(),
         cases=cases, coverage=coverage, limitations=limitations,
     )
 
