@@ -27,7 +27,7 @@ MESH_MATERIAL_GRID = (35, 14, 14)
 # 準備: 合成した二値マスク(単一連結)から mesh.build_surface_from_mask でメッシュを作る
 # ---------------------------------------------------------------------------
 def run_pipeline() -> tuple[np.ndarray, mesh.MeshResult]:
-    """探索は回さない。製品と同じ入口へ、製品と同じ契約(単一連結の bool マスク)の合成形状を渡す。"""
+    """探索は回さず、製品と同じ契約(単一連結の bool マスク)の合成形状を製品と同じ入口へ渡す。"""
     nelx, nely, nelz = MESH_MATERIAL_GRID
     print(
         f"[0] 合成マスクを作る ({nelx}x{nely}x{nelz} = {nelx * nely * nelz}要素)"
@@ -147,10 +147,8 @@ def check_min_wall_thickness(mr: mesh.MeshResult) -> None:
     before = mesh.min_wall_thickness(mr.verts_raw, mr.faces)
     after = mesh.min_wall_thickness(mr.verts_smooth, mr.faces)
     ratio = after / before if before > 0 else float("inf")
-    # 平滑化前(marching cubes直後)は階段状の局所ノイズで「近接する逆向き法線ペア」が
-    # 過剰検出され、実際より薄く出る傾向がある。平滑化するとノイズが消えてこの値は
-    # 通常むしろ増える。ここで守りたいのは「平滑化が部材を食っていないか」で、
-    # 極端な縮退(反復過多・パラメータ誤り)だけを検出できればよいので閾値は緩めに取る。
+    # 平滑化前は階段状ノイズで逆向き法線ペアが過剰検出され実際より薄く出るため、
+    # 平滑化後は通常むしろ増える。極端な縮退(反復過多・パラメータ誤り)だけ拾えればよく、閾値は緩い。
     check(
         "平滑化後の最小肉厚が平滑化前の50%を下回らない",
         ratio >= 0.5,
@@ -202,7 +200,6 @@ def check_stl_roundtrip(mr: mesh.MeshResult) -> None:
 # 8. 座標系の整合(セル中心規約)
 # ---------------------------------------------------------------------------
 def check_bounding_box_alignment() -> None:
-    """単一ブロックの境界位置から、半セルの座標変換を検査する。"""
     print("\n[8] 座標系の整合(既知の位置に置いた合成密度場のバウンディングボックス)")
     lo = (2, 1, 0)
     hi = (4, 3, 2)
@@ -217,8 +214,7 @@ def check_bounding_box_alignment() -> None:
 
     err_min = float(np.abs(bbox_min - expected_min).max())
     err_max = float(np.abs(bbox_max - expected_max).max())
-    # 許容0.25要素: 正しい実装なら誤差はほぼ0(浮動小数点誤差のみ)、報告されたバグは
-    # 0.5要素ぶんずれるので、その中間に閾値を置けばどちらも明確に判定できる。
+    # 許容0.25要素: 正しければ誤差はほぼ0、半セルのずれのバグは0.5要素なので中間に置く。
     check(
         "バウンディングボックスがセル中心規約の期待範囲と一致(半セルずれていない)",
         err_min < 0.25 and err_max < 0.25,
@@ -244,11 +240,9 @@ def check_face_winding(mr: mesh.MeshResult) -> None:
         f"符号付き体積={signed:.3f}",
     )
 
-    # 符号付き体積は総和なので、一部の三角形だけ裏返っていても打ち消し合いで正のまま
-    # になりうる。向きが全面で一貫していることは有向辺で判定できる —— 向きの揃った
-    # 閉多様体では、有向辺 (a,b) はちょうど1本、その逆向き (b,a) もちょうど1本になる。
-    # **重心方向との内積では判定できない**: トポロジー最適化の結果は星形ではないので、
-    # 正しく外向きでも重心から見て後ろを向く面が普通にある。
+    # 符号付き体積は一部の三角形が裏返っても打ち消し合いで正のままになりうるので、有向辺で見る
+    # (向きの揃った閉多様体では (a,b) も (b,a) もちょうど1本)。
+    # **重心方向との内積では判定できない**: 結果は星形でなく、外向きでも重心から見て後ろを向く面がある。
     n_verts = verts.shape[0]
     directed = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
     key = directed[:, 0].astype(np.int64) * n_verts + directed[:, 1]
@@ -285,7 +279,6 @@ def check_spike_and_cavity() -> None:
 
     mr = mesh.build_surface_from_mask((rho & ~zero_mask) | keep_mask)
 
-    # (a) メッシュを同じ格子へ焼き直して幾何で確認
     soup = vx.TriangleSoup(
         positions=mr.verts_smooth.astype(np.float64),
         triangles=mr.faces.astype(np.int64),
@@ -305,7 +298,6 @@ def check_spike_and_cavity() -> None:
     )
     RESULTS["spike_cavity_unbalanced_columns"] = occ_stats.get("unbalanced_columns")
 
-    # (b) 水密・面の向き(検査1・9と同じ観点をこの合成場でも)
     verts, faces = mr.verts_raw, mr.faces
     degenerate, isolated, counts = watertight_counts(verts, faces)
     bad_edges = int(np.sum(counts != 2))

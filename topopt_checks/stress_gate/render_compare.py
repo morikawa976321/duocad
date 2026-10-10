@@ -104,7 +104,6 @@ def main() -> int:
         d.text((12, y + 10), f"{label}   材料 {volume:,.0f} mm³   (斜め・正面・上から)", fill="black", font=font)
         for c, im in enumerate(views):
             canvas.paste(im, (c * a.size, y + head))
-    # 色の目盛り
     y = (a.size + head) * len(panels) + 10
     bar = (colormap(np.linspace(0, 1, 400)) * 255).astype(np.uint8)
     canvas.paste(Image.fromarray(np.repeat(bar[None], 24, axis=0)), (12, y))

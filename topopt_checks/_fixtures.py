@@ -22,10 +22,9 @@ def voxel_model(
     obstacle: Any = None,
     grid: Optional[vx.Grid] = None,
 ) -> vx.VoxelModel:
-    """1つのソリッドを「削る前の塊」兼「面アンカーの対象」として格子に載せる。
+    """1つのソリッドを「削る前の塊」兼「面アンカーの対象」として格子に載せる。占有は `stats["occupancy"]` に入る。
 
-    格子は **B-rep の bbox** から起こす(三角形分割の bbox からではない。弦は真の面より内側に来るので、
-    仕様の「B-repの周囲に1要素分の余白」が満たせなくなる)。占有は `stats["occupancy"]` に入れる。
+    格子は B-rep の bbox から起こす。三角形分割の bbox だと弦が真の面より内側に来て、「B-repの周囲に1要素分の余白」を満たせない。
     """
     solid = vx.unwrap(shape)
     if grid is None:
@@ -47,12 +46,7 @@ def voxel_model(
 # 合成ブラケット
 # ---------------------------------------------------------------------------
 def demo_bracket():
-    """x方向に伸びた箱の、先端の上に小さな耳(lug)を生やした形。
-
-    - 固定面: 箱の x が最小の面(面積 24x24)
-    - 荷重面: 耳の上面(面積 8x8)。箱の面とは別の面添字になるので、
-      「小さい面を名指しして荷重を載せる」がそのまま試せる。
-    """
+    """x方向に伸びた箱の先端上に小さな耳(lug)を生やした形。固定面は箱の x 最小面、荷重面は耳の上面(8x8)。"""
     from build123d import Box, Pos
 
     body = Box(60, 24, 24)
@@ -61,7 +55,7 @@ def demo_bracket():
 
 
 def demo_faces(soup: vx.TriangleSoup) -> tuple[int, int]:
-    """`demo_bracket()` の (固定面, 荷重面) の面添字を、位置から決定的に選ぶ。"""
+    """`demo_bracket()` の (固定面, 荷重面) の面添字。"""
     hint = "。demo_bracket を変えたら見直すこと"
     fixed = an.the_face_matching(soup, kind="plane", normal=(-1, 0, 0), near_point=(-30, 0, 0), near_tol=1e-6, hint=hint)
     load = an.the_face_matching(soup, kind="plane", normal=(0, 0, 1), near_point=(26, 0, 18), near_tol=1e-6, hint=hint)
@@ -72,17 +66,13 @@ def demo_faces(soup: vx.TriangleSoup) -> tuple[int, int]:
 # 合成の4条件
 # ---------------------------------------------------------------------------
 def demo_conditions(angle_deg: float = 0.0) -> ds.Conditions:
-    """4条件だけの合成題材。**設計空間ソリッドは作らない。**
+    """4条件だけの合成題材(設計空間ソリッドは作らない)。
 
-    - 保持ソリッド: 固定側パッド(x=-30の板)と荷重側パッド(x=+26,z=15の小箱)の2つ。
-      利用者が「ここは必ず材料を残す」と指定した部分に相当する。両者は離れており、
-      **その間をどう繋ぐかが最適化の答え**になる。
-    - 除外ソリッド: 2つのパッドの間を y 方向に貫く円柱(配線・ボルトの通り道に相当)。
-    - 拘束面: 固定側パッドの x 最小面。荷重面: 荷重側パッドの上面。
-      **どちらも保持ソリッドの面**(利用者が画面でクリックできるのは自分が置いた形の面だけ)。
+    - 保持: 固定側パッド(x=-30の板)と荷重側パッド(x=+26,z=15の小箱)。離れており、間の繋ぎ方が最適化の答え。
+    - 除外: 2つのパッドの間を y 方向に貫く円柱。
+    - 拘束面・荷重面はどちらも保持ソリッドの面(利用者がクリックできるのは自分が置いた形の面だけ)。
 
-    `angle_deg` は世界の z 軸まわりの回転。**外接箱は軸整列なので、回すと塊が膨らむ**
-    —— その姿勢依存を測るための口。
+    `angle_deg` は z 軸まわりの回転。外接箱は軸整列なので回すと塊が膨らむ(姿勢依存を測る口)。
     """
     from build123d import Box, Cylinder, Pos, Rot
 
@@ -105,14 +95,11 @@ def demo_conditions(angle_deg: float = 0.0) -> ds.Conditions:
 
 
 def severed_conditions(angle_deg: float = 0.0, *, thickness: float = 10.0) -> ds.Conditions:
-    """`demo_conditions` の除外ソリッドを、**拘束と荷重の間を丸ごと塞ぐ壁**に差し替えた配置。
+    """`demo_conditions` の除外ソリッドを、拘束と荷重の間を丸ごと塞ぐ壁(x=0)に差し替えた配置。
 
-    壁は2つのパッドの間(x=0)に立て、y/z 方向は塊よりずっと大きく取る —— 塊の断面を端まで
-    塞がないと、**縁を回り込む道が残って「切れている」配置にならない**(既定の余白比率 0.20 で
-    塊は y -25..25 / z -25..31 程度なので、±100 あれば余白比率を振っても足りる)。
-
-    `thickness` は壁の厚み[mm]。**要素サイズより十分厚くすること** —— 要素中心が壁に入らないと
-    塊が1要素も削れず、塞いだつもりの配置がつながったまま通る。
+    y/z は塊の断面を端まで塞ぐ大きさにする。縁を回り込む道が残ると「切れている」配置にならない
+    (既定の余白比率 0.20 で塊は y -25..25 / z -25..31 程度、±100 なら余白比率を振っても足りる)。
+    `thickness`[mm] は要素サイズより十分厚くすること。要素中心が壁に入らないと塊が削れず、つながったまま通る。
     """
     from build123d import Box, Pos, Rot
 
@@ -131,10 +118,9 @@ def severed_conditions(angle_deg: float = 0.0, *, thickness: float = 10.0) -> ds
 def _rotated_face(
     soup: vx.TriangleSoup, angle_deg: float, *, normal: Sequence[float], point: Sequence[float]
 ) -> int:
-    """回す前の法線・重心で指定した面を、回したあとの三角形群から一意に選ぶ。
+    """回す前の法線・重心で指定した面を、回したあとの三角形群から選ぶ。
 
-    面添字が回転で変わらないことに賭けない(OCCT の面の並びは形の作り方に依存するので、
-    「回しても同じ添字のはず」は検査が守っていない仮定になる)。
+    面添字が回転で変わらないことに賭けない(OCCT の面の並びは形の作り方に依存する)。
     """
     c, s = math.cos(math.radians(angle_deg)), math.sin(math.radians(angle_deg))
     rot = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
