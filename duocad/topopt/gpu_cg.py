@@ -3,7 +3,7 @@
 `fem.PreparedSystem.solve` が、設定が `gpu` のときだけ呼ぶ(既定は CPU。`fem.FEM_DEVICE`)。
 ここで使えない・合わないと分かったら `Unavailable` を投げ、呼び出し側が CPU で初期値から解き直す。
 
-一致させている 3 つの演算(根拠の実測は gpu_feasibility/CONCLUSION.md・results/s5_bitexact_*.json・s10・s12):
+一致させている 3 つの演算(根拠の実測は docs/TOPOPT_GPU.md「実測」):
 
 1. 内積 —— numpy は `np.dot` を同梱 OpenBLAS の ddot に渡す。その足し順(スレッド数ぶんの区間 → 区間ごとに
    16 本の累算器へ積和を融合して足す → 累算器のたたみ方 → 区間の和を先頭から)を GPU でなぞる。

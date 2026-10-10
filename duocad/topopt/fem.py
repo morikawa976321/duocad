@@ -216,7 +216,7 @@ PARALLEL_THREADS: int = _default_thread_count()
 
 # CG を解く装置(`cpu` / `gpu`)。`prepare` が呼ばれたときに読む。**既定は cpu** —— GPU は機械ごとに人が
 # 画面の「設定」で有効にし、サーバがその値(`duocad.local_settings`)をここへ入れる(VRAM を他の作業と
-# 分け合うので、使えるからといって黙って取らない。gpu_feasibility/CONCLUSION.md「方針」)。
+# 分け合うので、使えるからといって黙って取らない。docs/TOPOPT_GPU.md「方針」)。
 # `gpu` でも、GPU で解けない・合わないときは CPU で解き直し、理由を `linear-solve` の記録に残す(`gpu_cg`)。
 FEM_DEVICE: str = "cpu"
 
