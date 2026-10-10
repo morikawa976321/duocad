@@ -42,6 +42,11 @@ RESULT_FILE = "last-update-result.json"
 #: これの変化で知る —— GPU の部品だけを入れる立て直しはコミットを変えないので、版では見分けられない。
 BOOT_ID = uuid.uuid4().hex
 
+#: 更新スクリプトへ引き継がない環境変数。**uv の venv の python は、起動時に `PYTHONHOME` を自分の基の
+#: python(例: 3.11)へ向けて子に渡す**。それを引き継いだ `uv sync` が新しい版(例: 3.14)の venv で duocad を
+#: ビルドすると、3.14 が 3.11 の標準ライブラリを読んで落ちる(`SRE module mismatch`。2026-10-10 の 3.11 → 3.14 で実測)。
+_INHERITED_PYTHON_ENV = ("PYTHONHOME", "UV_INTERNAL__PYTHONHOME", "PYTHONPATH", "__PYVENV_LAUNCHER__", "VIRTUAL_ENV")
+
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
@@ -230,6 +235,7 @@ class StableUpdater:
             subprocess.Popen(
                 command,
                 cwd=str(self.repo_root),
+                env={k: v for k, v in os.environ.items() if k.upper() not in _INHERITED_PYTHON_ENV},
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from duocad import channel
 from duocad.channel import StableUpdater, describe
 from duocad.mcp_server import parse_args
 from duocad.server import WebHandler, start_http_server
@@ -296,3 +297,45 @@ def test_installing_the_gpu_parts_does_not_need_new_commits(tmp_path):
     if sys.platform == "win32":
         status, body = updater.start(mode="gpu")
         assert status == 409 and body["error"].startswith("テスト") and asked == [1]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="自己更新は Windows だけ")
+def test_the_update_script_does_not_inherit_the_servers_python_home(tmp_path, monkeypatch):
+    """落ちたら、uv の venv の python が渡す PYTHONHOME を更新スクリプトが引き継ぎ、Python の版を上げる更新で
+    新しい版の python が古い版の標準ライブラリを読んで uv sync が落ちる(元の版へ戻され、上げられない)。"""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "user.email", "t@example.com")
+    _git(origin, "config", "user.name", "t")
+    (origin / "a.txt").write_text("1", encoding="utf-8")
+    _git(origin, "add", "a.txt")
+    _git(origin, "commit", "-q", "-m", "first")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    (clone / "tools" / "stable").mkdir(parents=True)
+    (clone / "tools" / "stable" / "update.ps1").write_text("# テスト", encoding="utf-8")
+    (origin / "a.txt").write_text("2", encoding="utf-8")
+    _git(origin, "commit", "-q", "-am", "second")
+
+    launched = []
+    real_popen = channel.subprocess.Popen
+
+    def popen(command, **kwargs):  # git(subprocess.run)は通し、更新スクリプトの起動だけ横取りする
+        if command[0] != "powershell.exe":
+            return real_popen(command, **kwargs)
+        launched.append(kwargs)
+
+    monkeypatch.setattr(channel.subprocess, "Popen", popen)
+    monkeypatch.setenv("PYTHONHOME", r"C:\python311")
+    monkeypatch.setenv("UV_INTERNAL__PYTHONHOME", r"C:\python311")
+    monkeypatch.setenv("DUOCAD_TEST_KEEP", "1")
+    updater = StableUpdater(
+        log_dir=tmp_path / "logs",
+        relaunch={"channel": "stable", "port": 1, "http_port": 2, "data_dir": tmp_path},
+        update_blocker=lambda: None, on_started=lambda: None, repo_root=clone,
+    )
+    assert updater.start()[0] == 202
+    (kwargs,) = launched
+    assert "PYTHONHOME" not in kwargs["env"] and "UV_INTERNAL__PYTHONHOME" not in kwargs["env"]
+    assert kwargs["env"]["DUOCAD_TEST_KEEP"] == "1"

@@ -28,6 +28,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# サーバ(uv の venv の python)が子へ渡す PYTHONHOME 等を消す。残すと、Python の版を上げる更新で
+# 新しい版の python が古い版の標準ライブラリを読んで uv sync が落ちる(duocad/channel.py の _INHERITED_PYTHON_ENV)。
+foreach ($name in 'PYTHONHOME', 'UV_INTERNAL__PYTHONHOME', 'PYTHONPATH', '__PYVENV_LAUNCHER__', 'VIRTUAL_ENV') {
+    Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+}
 # 外部コマンド(vite等)のUTF-8出力をログで化けさせない(既定はコンソールのcp932で読む)。
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 # 窓が無いので、認証やホスト鍵を聞かれたら答えられない。聞かずに失敗させる。
