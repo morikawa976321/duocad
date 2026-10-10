@@ -144,9 +144,7 @@ class DocumentTools:
         return self._descriptor_by_name.get(name)
 
     def _build_descriptors(self) -> list[dict]:
-        """中身は `duocad/catalog.py` の宣言そのもの。説明文はAIがツールを選ぶ唯一の手がかりなので、
-        **何ができるかではなく「いつ使うか」**を書く。
-        """
+        """中身は `duocad/catalog.py` の宣言そのもの(説明文の書き方は `Command.description` の注記)。"""
         return catalog.tool_descriptors()
 
     def _build_handlers(self) -> dict:
