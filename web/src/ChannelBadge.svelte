@@ -2,12 +2,9 @@
   /**
    * ヘッダー左端の、開発版の札と安定版の更新ボタン(`duocad/channel.py`・`docs/STABLE.md`)。
    *
-   * - 開発版: 常に「開発版」の札を出し、窓のタイトルにも付ける —— 安定版と並べて開いたとき、
-   *   見た目が同じ2つの窓を取り違えないため。**サーバが `channel: 'stable'` と答えたときだけ札を消す**
-   *   (設定が取れない Vite の dev サーバ等も開発版として扱う。付け忘れ・取り損ねで札が消える側へ倒さない)。
-   * - 安定版: mainに新しいコミットがあるときだけ「更新」ボタンが出る。押すとサーバが
-   *   更新スクリプトを起こして終了し、立ち直ったら画面を読み直す(`serverRestart.svelte.ts`)。
-   *   立て直し中の全面の表示と、読み直した後の結果の知らせは、設定の「GPU の部品を入れる」の分もここが出す。
+   * - 開発版: サーバが `channel: 'stable'` と答えたとき以外は札を出す(設定が取れない Vite の dev サーバ等も開発版扱い)。
+   * - 安定版: main に新しいコミットがあるときだけ「更新」ボタンが出る(`serverRestart.svelte.ts`)。
+   *   立て直し中の全面表示と読み直し後の知らせは、設定の「GPU の部品を入れる」の分もここが出す。
    */
   import { onMount } from 'svelte'
   import { fail, inform } from './Toast.svelte'
@@ -25,7 +22,6 @@
     ok: boolean
     restored?: boolean
     rollback: boolean
-    /** 設定の「GPU の部品を入れる」(`update.ps1 -InstallGpu`)の結果か。 */
     gpu?: boolean
     from: string
     to: string
@@ -44,7 +40,7 @@
   const STATUS_POLL_MS = 30 * 60 * 1000
 
   let config = $state<ServerConfig | null>(null)
-  /** 設定を取りに行き終えたか。取りに行く前に札を出すと、安定版でも一瞬「開発版」が光る。 */
+  /** 取りに行く前に札を出すと、安定版でも一瞬「開発版」が出る。 */
   let loaded = $state(false)
   const isDev = $derived(loaded && config?.channel !== 'stable')
   let status = $state<UpdateStatus | null>(null)
@@ -133,8 +129,6 @@
 {/if}
 
 <style>
-  /* 開発版の札。**琥珀(--accent =「人の手が要る」)とも赤(--bad = 失敗)とも別の色**にする ——
-     どちらかに寄せると、札が状態の知らせに読まれる。 */
   .channel-dev {
     padding: 0 8px;
     border-radius: 3px;

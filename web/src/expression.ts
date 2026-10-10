@@ -1,33 +1,25 @@
 /**
- * 数値入力欄に打った**式**を読む(四則・単項マイナス・括弧・べき乗・sqrt・abs・三角・pi)。
+ * 数値入力欄に打った式を読む(四則・単項マイナス・括弧・べき乗・sqrt・abs・三角・pi)。
  *
- * **`eval` も `Function` も使わない。** ここへ来る文字列は人の打鍵だけとは限らない
- * (アプリ内AIパネルが画面を触る)ので、打った文字列をJSとして走らせる道は作らない。
+ * `eval` も `Function` も使わない: 文字列は人の打鍵だけとは限らない(アプリ内AIパネルが画面を触る)。
  *
- * **層をまたぐ契約**: 素の数値だけを打ったとき(`isPlainNumber`)は `Number.parseFloat` と
- * 同じ値を返す。数値欄の呼び出し側も `web/scripts/*.mjs` の実機検査も、数字だけを打つ
- * 経路に乗っている。
+ * 層をまたぐ契約: 素の数値だけ(`isPlainNumber`)なら `Number.parseFloat` と同じ値を返す
+ * (数値欄の呼び出し側も `web/scripts/*.mjs` の実機検査も、その経路に乗っている)。
  *
- * **角度は度**(`sin(30)` は 0.5、`atan2(10, 25)` は度で返る)。duocadの角度欄が度で
- * 統一されているため。ラジアンで書きたいときは `sin(x*180/pi)`。
+ * 角度は度(`sin(30)` は 0.5、`atan2(10, 25)` は度で返る)。ラジアンは `sin(x*180/pi)`。
  */
 
 export type ExpressionResult = { ok: true; value: number } | { ok: false; reason: string }
 
-/** 打った文字列が読めなかった理由。`evaluateExpression` の外へは投げない。 */
 class ExpressionError extends Error {}
 
 // ============================================================================ 度の三角関数
 
-/** 0以上360未満へ畳んだ角度(負の角も同じ象限へ来る)。 */
 function turnOf(deg: number): number {
   return ((deg % 360) + 360) % 360
 }
 
-/**
- * **90度の倍数を厳密に返す**(`Math.sin(Math.PI)` は 1.2e-16 で 0 にならない)。
- * 打った `sin(180)` が 0 でないと、水平・垂直を式で作った線が微小に傾く。
- */
+/** 90度の倍数を厳密に返す(`Math.sin(Math.PI)` は 1.2e-16 で 0 にならず、式で作った水平・垂直線が微小に傾く)。 */
 function sinDeg(deg: number): number {
   const turn = turnOf(deg)
   if (turn % 90 === 0) return [0, 1, 0, -1][turn / 90]
@@ -89,10 +81,7 @@ const NAME_HEAD = /[A-Za-z_]/
 const SPACE = /\s/
 const OPERATORS = '+-*/^'
 
-/**
- * **日本語IMEを入れたまま打った式を読めるようにする**。NFKC が全角の数字・括弧・
- * `＋－＊／` をASCIIへ畳み、NFKCが触らない数学記号だけを個別に置き換える。
- */
+/** 日本語IME入力の式を読めるようにする。NFKC が全角を畳み、NFKC が触らない数学記号だけ個別に置き換える。 */
 function normalize(text: string): string {
   return text
     .normalize('NFKC')
@@ -247,15 +236,11 @@ function expectClose(cursor: Cursor): void {
 
 const PLAIN_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
 
-/** 素の数値そのものか(式ではないか)。評価結果を添えて見せるかの判定に使う。 */
 export function isPlainNumber(text: string): boolean {
   return PLAIN_NUMBER.test(normalize(text))
 }
 
-/**
- * 打った文字列を数にする。**末尾のゴミを黙って捨てない** ——
- * `Number.parseFloat('3 4')` は 3 を、`'50mm'` は 50 を返すが、ここは理由を返して拒む。
- */
+/** 打った文字列を数にする。末尾のゴミは捨てず理由を返して拒む(`parseFloat('50mm')` は 50 を返す)。 */
 export function evaluateExpression(text: string): ExpressionResult {
   const source = normalize(text)
   if (source === '') return { ok: false, reason: '式が空' }
@@ -267,8 +252,7 @@ export function evaluateExpression(text: string): ExpressionResult {
     return { ok: true, value }
   } catch (error) {
     if (error instanceof ExpressionError) return { ok: false, reason: error.message }
-    // **括弧の入れ子だけが再帰する**。深く貼り付けられると `RangeError` になり、投げたままだと
-    // これを呼ぶ `$derived` ごと画面が落ちる。
+    // 括弧の入れ子だけが再帰する。深く貼り付けられた `RangeError` を投げたままだと、呼ぶ `$derived` ごと画面が落ちる。
     if (error instanceof RangeError) return { ok: false, reason: '式が深すぎる' }
     throw error
   }

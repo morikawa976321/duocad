@@ -1,9 +1,4 @@
-/**
- * 測定の結果(`MeasureBetween`)を人が読む文にする。**数値の書式はここ1箇所**
- * (読み札と3Dの札が別々に丸めると、同じ測定で違う数字が並ぶ)。
- *
- * 桁は小数3桁(0.001mm / 0.001度)で固定 —— CAD の寸法表示の慣例で、単位は mm 固定。
- */
+/** 測定の結果(`MeasureBetween`)を文にする。数値の書式はここ1箇所(読み札と3Dの札で丸めが食い違わないように)。 */
 import type { MeasureBetween } from './session'
 
 const PAIR_NAMES: Record<string, string> = {
@@ -19,14 +14,12 @@ function fixed3(value: number): string {
   return value.toFixed(3)
 }
 
-/** 3Dの札に出す短い文(数値と単位だけ)。 */
 export function measureLabel(between: MeasureBetween): string {
   if (between.distance !== null) return `${fixed3(between.distance)} mm`
   if (between.angle_deg !== null) return `${fixed3(between.angle_deg)}°`
   return ''
 }
 
-/** 画面の読み札に出す1行(組の名前・距離か角度・点と点なら Δxyz)。 */
 export function measureReadout(between: MeasureBetween): string {
   const pair = PAIR_NAMES[between.kind] ?? between.kind
   if (between.distance !== null) {

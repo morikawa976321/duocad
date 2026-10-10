@@ -1,10 +1,6 @@
 /**
- * 安定版のサーバを立て直す操作(`api/update`)の画面側。ヘッダーの更新ボタン(`ChannelBadge.svelte`)と、
- * 設定の「GPU の部品を入れる」(`SettingsDialog.svelte`)が使う。
- *
- * サーバは更新スクリプトを起こして一度落ち、立ち直る(`duocad/channel.py`)。**落ちたのを見てから**
- * 立ち直りを待ち、立ち直ったら画面を読み直す。待っている間の全面の表示は `ChannelBadge` が
- * `restart.current` を見て出す。
+ * 安定版のサーバを立て直す操作(`api/update`)の画面側。サーバは更新スクリプトを起こして一度落ち、
+ * 立ち直る(`duocad/channel.py`)。立ち直ったら画面を読み直す。待っている間の全面表示は `ChannelBadge` が `restart.current` で出す。
  */
 export type ServerVersion = { commit?: string; date?: string }
 export type ServerConfig = {
@@ -15,7 +11,7 @@ export type ServerConfig = {
   update_supported?: boolean
 }
 
-/** 立て直しを押してから読み直すまでの間、`sessionStorage` に立てておく印。読み直し後に結果を知らせる。 */
+/** 読み直し後に結果を知らせるための `sessionStorage` の印。 */
 export const PENDING_KEY = 'duocad-update-pending'
 const RESTART_POLL_MS = 2000
 /** `uv sync`(GPU の部品は約 2GB)と `npm ci` の両方が走っても収まる上限。 */
@@ -23,7 +19,6 @@ const RESTART_TIMEOUT_MS = 15 * 60 * 1000
 
 let restarting = $state<{ title: string; detail: string } | null>(null)
 
-/** 立て直しの最中なら、全面に出す見出しと説明。 */
 export const restart = {
   get current() {
     return restarting
@@ -41,7 +36,7 @@ export async function fetchJson<T>(path: string): Promise<T | null> {
 
 let config: Promise<ServerConfig | null> | null = null
 
-/** `duocad-config.json`(読み直すまで変わらないので1回だけ取りに行く)。 */
+/** `duocad-config.json`(1回だけ取りに行く)。 */
 export function loadConfig(): Promise<ServerConfig | null> {
   config ??= fetchJson<ServerConfig>('duocad-config.json')
   return config
@@ -51,7 +46,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** `path` へ POST して立て直しを始め、立ち直ったら読み直す。始められなければ `failPrefix` を付けて `fail` で知らせる。 */
+/** `path` へ POST して立て直しを始め、立ち直ったら読み直す。 */
 export async function restartServer(
   path: string,
   shown: { title: string; detail: string; failPrefix: string },
@@ -59,8 +54,7 @@ export async function restartServer(
 ): Promise<void> {
   if (restarting) return
   restarting = { title: shown.title, detail: shown.detail }
-  // 比べる元は押した時点の印(ページを開いた後に別の画面から立て直されていることがある)。
-  // 取れなければ始めない —— 比べる元が無いまま始めると、落ちる前の応答を「立ち直った」と読みうる。
+  // 比べる元は押した時点の印。取れなければ始めない(落ちる前の応答を「立ち直った」と読みうる)。
   const now = await fetchJson<ServerConfig>('duocad-config.json')
   if (now === null) {
     restarting = null
@@ -85,11 +79,10 @@ export async function restartServer(
   try {
     sessionStorage.setItem(PENDING_KEY, '1')
   } catch {
-    // 保存できなくても立て直しは進む(読み直し後の知らせが出ないだけ)
+    // 保存できなくても立て直しは進む
   }
-  // **起動の印が変わったら**立ち直った —— 落ちる前の応答を「立ち直った」と読むと、古い画面のまま読み直してしまう。
-  // 落ちている間を一度も見なくても(画面が止まっていた等)、印が変われば立ち直ったと分かる。
-  // 印を持たない古いサーバ(この印を足す前の版)からの更新だけは、落ちたのを見てから立ち直りを待つ。
+  // 起動の印(`boot`)が変わったら立ち直った。落ちている間を見なくても判定できる。
+  // 印を持たない古いサーバからの更新だけは、落ちたのを見てから立ち直りを待つ。
   const deadline = Date.now() + RESTART_TIMEOUT_MS
   let wentDown = false
   while (Date.now() < deadline) {

@@ -1,7 +1,6 @@
-/** 平面の枠(原点・u軸・v軸を数値3つの配列で持つもの)から three.js の点を作る小物。 */
 import * as THREE from 'three'
 
-/** `frame.origin` / `u` / `v` / `normal` のような数値3つの配列から `Vector3` を作る(正規化はしない。要る側が `.normalize()` を付ける)。 */
+/** 数値3つの配列から `Vector3` を作る(正規化はしない)。 */
 export function frameVector(values: readonly number[]): THREE.Vector3 {
   return new THREE.Vector3(values[0], values[1], values[2])
 }

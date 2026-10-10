@@ -1,29 +1,18 @@
-/**
- * 形状最適化の結果(`OptimizeResultPayload`)から、パネルに残す通知の文を組み立てる(`App.svelte` から
- * 切り出した純関数)。副作用(ステータスバーの `note` と `?voxel=1` の隠しボディ)は App に残る。
- */
 import { shownMinWidthMm } from './minWidth'
 import type { NeckDiagnosis, OptimizeResultPayload } from './session'
 
-/**
- * パネルに残す通知1件(次に走らせるまで消えない)。`OptimizePanel.svelte` と `App.svelte` がここから読む
- * (`.svelte` の名前付きの型は tsc から読めないので、型は `.ts` に置く。`tsconfig.json` の注記)。
- */
+/** パネルに残す通知1件。型を `.ts` に置くのは、`.svelte` の名前付きの型が tsc から読めないため(`tsconfig.json` の注記)。 */
 export interface OptimizeNotice {
   /** `bad` は「結果が信用できない/走らせられない」、`info` は済んだことの報告。 */
   kind: 'bad' | 'info'
   lines: string[]
 }
 
-/**
- * 結果の通知。**「走ったのに何も増えていない」を、利用者が画面から読めるようにするため**。
- * `warning` はトーストにも出る(`onWarning` 経由)が、あちらは気づかせる役で、読み返す役はここ。
- */
+/** 結果の通知。`warning` はトーストにも出る(`onWarning` 経由)が、読み返す役はここ。 */
 export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice {
   if (result.state !== 'done') {
-    // **`warning` は`state`ごとにサーバが作った具体的な一言**(`optimize_run._search_failure_warning`
-    // / `format_condition_face_warning` / `format_region_warning`)なので、ここで
-    // 汎用の言い直しを重ねない —— 「文書は変わっていない」の1点だけ添える。
+    // `warning` は `state` ごとにサーバが作った具体的な一言(`optimize_run._search_failure_warning` 等)なので、
+    // 言い直しを重ねず「文書は変わっていない」だけ添える。
     return {
       kind: 'bad',
       lines: [result.warning ?? '結果を作れなかった', '文書は1ビットも変わっていない(結果のボディは足していない)'],
@@ -34,14 +23,14 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
   const searched =
     `探索時 ${searchSafety}: 平滑化前の形・探索の格子での値。探索時の目標 ${short(result.search_target_safety_factor)} = ` +
     `目標 ${short(result.target_safety_factor)} × 係数 ${short(result.search_target_factor)}`
-  // 主に出すのは完成形を解き直した値(`topopt.final_check`)。目標を割ったときは警告付きで足される(肉盛りが入るまで)。
+  // 主に出すのは完成形を解き直した値(`topopt.final_check`)。
   const finalSafety =
     result.final_safety_factor == null
       ? '測れなかった'
       : `${result.final_safety_factor.toFixed(2)}(完成形を細かい格子で解き直した、表面の最大応力での値)`
   const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
   // 保証の対象は要求幅。格子上の立方規則(m セル)は探索の規則で、部材の太さの保証ではない(docs/TOPOPT_MIN_WIDTH.md)。
-  // **格子上の値は切り捨てて出す**(`minWidth.ts` の規律。四捨五入だと 4.9998mm が「5mm」になる)。
+  // 格子上の値は切り捨てて出す(`minWidth.ts`)。
   const minWidth =
     `最小幅 要求 ${short(result.min_width.requested_mm)}mm(` +
     (result.min_width.source === 'default' ? '既定: 選べるいちばん細い段' : '指定') +
@@ -62,8 +51,8 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
 }
 
 /**
- * つなぎ目の診断の行(docs/TOPOPT_MIN_WIDTH.md 3章)。**「適合」「検証済み」は出さない** —— 標本化で見えない細部と、
- * 雑音と区別できない変化があるので、言えるのは「疑いあり / 未確定 / 疑いは観測されなかった」まで。端は常に未検証。
+ * つなぎ目の診断の行(docs/TOPOPT_MIN_WIDTH.md 3章)。「適合」「検証済み」は出さない —— 標本化で見えない細部があるので、
+ * 言えるのは「疑いあり / 未確定 / 疑いは観測されなかった」まで。端は常に未検証。
  */
 export function neckLines(neck: NeckDiagnosis | null): string[] {
   if (neck === null) return []
