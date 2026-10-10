@@ -3,12 +3,11 @@
 - `Document.units` は "mm" 固定で変更できない(セッターを持たないプロパティ)。
 - `Body.kind` は "solid"(B-rep・編集対象)と "mesh"(三角形メッシュ・**表示とSTL書き出しだけ**)の2種。
 - **形の持ち方はkindごとに1本だけ**: "solid" は `shape`(TopoDS_Shape)、"mesh" は `mesh`(`Mesh`)。
-  両方を同時に持つBodyは作れない(`__post_init__` が弾く)。**混ぜられるようにすると、
-  `body.shape is None` で分岐している既存の経路が「どちらの意味か」を判定できなくなる。**
+  両方を持つBodyは作れない(`__post_init__` が弾く)。混ぜると `body.shape is None` で分岐している
+  既存の経路が判定できなくなる。
 
 存在しないBodyIdを渡された `remove_body` / `set_active_body` / `is_editable` は KeyError、
-ID重複の `add_body` は ValueError で落とす(黙って無視すると、取り消しや再生の空振りが
-静かに文書を壊すため)。
+ID重複の `add_body` は ValueError(黙って無視すると取り消しや再生の空振りが文書を静かに壊す)。
 """
 from __future__ import annotations
 
@@ -25,8 +24,7 @@ MESH_KIND = "mesh"
 
 _VALID_KINDS = {SOLID_KIND, MESH_KIND}
 
-#: 存在しないIDのエラーに並べる有効IDの上限。超えたぶんは件数だけ言って列挙ツールへ送る
-#: (エラー文がスケッチ1枚ぶんの図形IDで埋まると、AIの文脈をそれだけで食う)。
+#: 存在しないIDのエラーに並べる有効IDの上限。超えたぶんは件数だけ言って列挙ツールへ送る。
 _MAX_LISTED_IDS = 20
 
 
@@ -35,13 +33,9 @@ def unknown_id_message(
 ) -> str:
     """存在しないIDのエラー文。**有効なIDか、その出し方を必ず添える**。
 
-    `no such entity: 'c1'` のように「違う」とだけ言うエラーは行き止まりで、次の一手が
-    書いていない。AIはIDが分からないとき「尋ねる」ではなく**「推測する」に倒れる**ので
-    (実測: ローカルLLMが「ID形式を推測して試します」と述べて存在しない図形IDを捏造した)、
-    弾くだけでは同じ推測を繰り返される。**弾いたら、その場で正解の集合を見せる。**
-
-    並び順は与えられた順のままにする —— 図形IDは作った順に並んでおり、ソートするとその
-    手がかりが消える(IDの文字列自体には意味が無い)。
+    AIはIDが分からないとき「尋ねる」ではなく「推測する」に倒れる(実測: ローカルLLMが
+    「ID形式を推測して試します」と述べて存在しない図形IDを捏造した)ので、弾いたらその場で
+    正解の集合を見せる。並び順は与えられた順のまま(図形IDは作った順で、ソートすると手がかりが消える)。
     """
     ids = list(known)
     scope = f" in {where}" if where else ""
@@ -58,10 +52,7 @@ def unknown_id_message(
 
 
 def new_body_id() -> BodyId:
-    """新しいBodyId(**再生時は記録済みのIDをそのまま使う**のでここは通らない)。
-
-    **BodyId の持ち主はこのモジュール**。verb側に置くと `io_step` が verbs/ を引き層が逆になる。
-    """
+    """新しいBodyId(再生時は記録済みのIDを使うのでここは通らない)。持ち主がこのモジュールなのは、verb側だと `io_step` が verbs/ を引き層が逆になるため。"""
     return f"body-{uuid4().hex[:12]}"
 
 
@@ -69,13 +60,10 @@ def new_body_id() -> BodyId:
 class Mesh:
     """三角形メッシュ(頂点＋三角形)。**不変**。
 
-    `positions` は x,y,z を平らに並べた頂点座標[mm]、`indices` は頂点添字を3つずつ並べた
-    三角形(**0始まり**。`kernel.tessellate` が面ごとに返すのと同じ並べ方)。
-    どちらもタプルなので、`Body` を控えて戻すだけの巻き戻し(`duocad.speculative`)が
-    そのまま効く —— **書き換える経路を作らないこと**(編集verbを拒否する設計と対)。
-
-    `dict`/`list` ではなくこの型にしてあるのは、**検査を通った三角形群であることを型で示す**
-    ため。生のリストを持ち回すと、範囲外の添字や3の倍数でない長さが画面まで届く。
+    `positions` は x,y,z を平らに並べた頂点座標[mm]、`indices` は頂点添字を3つずつ並べた三角形
+    (**0始まり**。`kernel.tessellate` の並べ方と同じ)。タプルなので `Body` を控えて戻すだけの
+    巻き戻し(`duocad.speculative`)が効く —— **書き換える経路を作らないこと**。
+    検査を通った三角形群であることを型で示す(生のリストだと範囲外の添字が画面まで届く)。
     """
 
     positions: tuple
@@ -109,12 +97,7 @@ class Mesh:
 
 
 def make_mesh(positions, indices) -> Mesh:
-    """素の並び(list / tuple / 数値)から `Mesh` を作る。**値の型もここで確定させる**。
-
-    `positions` は float、`indices` は int へ落とす —— JSONから戻ってきた値・numpyの
-    スカラーがそのまま入ると、保存のたびに `1.0` と `np.float64(1.0)` のような
-    表現の違いがログへ漏れる。
-    """
+    """素の並びから `Mesh` を作る。`positions` は float、`indices` は int へ落とす(numpyスカラーの表現の違いがログへ漏れないように)。"""
     return Mesh(
         positions=tuple(float(value) for value in positions),
         indices=tuple(int(value) for value in indices),
@@ -123,11 +106,7 @@ def make_mesh(positions, indices) -> Mesh:
 
 @dataclass
 class Body:
-    """1つのボディ。
-
-    `visible` は**選択機構の一部**(見えないものは指せない)で、選択と同じく
-    **操作ログに載らず保存もされない** —— 切り替えは `duocad.selection.set_visible`。
-    """
+    """1つのボディ。`visible` は選択機構の一部で、操作ログに載らず保存もされない(切り替えは `duocad.selection.set_visible`)。"""
 
     id: BodyId
     name: str
@@ -159,35 +138,26 @@ class Document:
 
     def __init__(self) -> None:
         self._units = "mm"
-        # 常にリスト(Optionalな単一ボディにしない)。STEPは1回の読み込みで複数ソリッドを
-        # 普通に生むので、「文書=1ボディ」という前提を持ち込まないこと。
+        # STEPは1回の読み込みで複数ソリッドを生むので、「文書=1ボディ」を前提にしない。
         self.bodies: list[Body] = []
-        # 型は duocad.sketch.Sketch だが、document.py -> sketch.py の依存を作らないため
-        # 注釈は付けない(sketch.py が document.py を import する一方向を保つ)。
+        # 型は duocad.sketch.Sketch(sketch.py が document.py を import する一方向を保つため注釈なし)。
         self.sketches: list = []
-        # 名前つきの寸法値。図形は値そのものではなくこの名前への参照を持つ。
-        # 書き換えは `duocad.parameters.set_parameter` を通す(直接代入すると操作ログに
-        # 載らず、形状の再生と食い違う)。
+        # 名前つきの寸法値。書き換えは `duocad.parameters.set_parameter` を通す(直接代入は操作ログに載らない)。
         self.parameters: dict = {}
         self._active_body_id: Optional[BodyId] = None
-        # 遅延import: document.py -> oplog.py の一方向依存に留め、循環importを避ける。
+        # 遅延import: 循環importを避ける(oplog / selection / optimize は document.py を読む側)。
         from .oplog import OpLog
 
         self.log = OpLog()
-        # 遅延import の理由は OpLog と同じ(selection.py が document.py を import する一方向)。
-        # **保存されない** — 保存の経路は `self.log.to_json()` だけで、選択はログに載らない。
+        # 保存されない(保存の経路は `self.log.to_json()` だけ)。
         from .selection import Selection
 
         self.selection = Selection()
-        # 形状最適化(第3のモード)の条件。**選択と違って保存される** —— 書き込む口は
-        # `duocad/verbs/optimize_setup.py` の4 verb だけで、実体は操作ログに載る
-        # (ここにあるのはその再生結果)。遅延import の理由は上の2つと同じ。
+        # 形状最適化の条件。選択と違って保存される(書き込む口は `duocad/verbs/optimize_setup.py` の4 verb。実体は操作ログ)。
         from .optimize import OptimizeSetup
 
         self.optimize = OptimizeSetup()
-        #: bbox のメモ。**この文書と寿命を共にする** —— 文書を差し替えると
-        #: `Session._replace_document` が新しい `Document` を作るので一緒に捨てられる
-        #: (`view.DocumentView.reset()` と同じ規律)。**保存されない**。
+        #: bbox のメモ。この文書と寿命を共にする(`Session._replace_document` が新しい `Document` を作る)。保存されない。
         from .kernel import BoundingBoxCache
 
         self.bbox_cache = BoundingBoxCache()
@@ -202,10 +172,7 @@ class Document:
 
         同じIDのボディが既にある場合は ValueError(黙って上書き・重複させない)。
 
-        `index` を渡すとその位置へ差し込む(既定は末尾)。**使うのは削除のundoだけ**で、
-        消したボディを元の並びへ戻すために要る —— 末尾へ足すだけだと、undoしたのに
-        ブラウザのパーツ一覧の順序だけが変わり、「取り消したのに元に戻っていない」
-        という説明のつかない差が残る(形は同じなので誰も落とせない)。
+        `index` を渡すとその位置へ差し込む(既定は末尾)。使うのは削除のundoだけ(パーツ一覧の順序を元へ戻す)。
         """
         if self._find(body.id) is not None:
             raise ValueError(f"body id already exists: {body.id!r}")
@@ -219,7 +186,7 @@ class Document:
     def remove_body(self, body_id: BodyId) -> None:
         """指定IDのボディをbodiesから取り除く。activeだった場合はactiveをNoneに戻す。
 
-        存在しないIDは KeyError(取り消しや再生が空振りしたことを黙って見逃さない)。
+        存在しないIDは KeyError。
         """
         body = self.get_body(body_id)
         self.bodies.remove(body)
@@ -241,11 +208,7 @@ class Document:
         return self.get_body(body_id).kind == SOLID_KIND
 
     def get_body(self, body_id: BodyId) -> Body:
-        """IDでボディを引く。**無ければ KeyError**(黙ってNoneを返さない)。
-
-        呼び出し側がそれぞれ `next(...)` を書き直すと「引けなかったときにどうなるか」が
-        呼び出し元ごとに変わる(`StopIteration` と `KeyError` が混ざる)ので、ここへ一本化する。
-        """
+        """IDでボディを引く。**無ければ KeyError**(呼び出し元ごとに `StopIteration` と混ざらないよう一本化)。"""
         body = self._find(body_id)
         if body is None:
             raise KeyError(
@@ -254,7 +217,7 @@ class Document:
         return body
 
     def _find(self, body_id: BodyId) -> Optional[Body]:
-        """IDでボディを引く(無ければNone)。存在検査に使う内部用。"""
+        """IDでボディを引く(無ければNone)。"""
         for body in self.bodies:
             if body.id == body_id:
                 return body

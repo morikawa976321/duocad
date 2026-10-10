@@ -1,25 +1,22 @@
 """形状最適化(第3のモード)の条件 —— **データ・面の指紋・配りものだけ**を持つ。
 
-verbの本体は `duocad/verbs/optimize_setup.py`、状態を配る口は
-`DocumentView.state_meta()` である。ここに置くのは3つ:
+verbの本体は `duocad/verbs/optimize_setup.py`、状態を配る口は `DocumentView.state_meta()`。
+ここに置くのは3つ:
 
-1. **`OptimizeSetup`** … 1文書が1つ持つ条件の入れ物(`Document.optimize`)。
-   保持/除外ソリッド・拘束面・荷重面。**荷重の大きさ[N]と向きは面ごとに持つ**
-   (面Aは鉛直下向き50N・面Bは法線20N、が同じ文書で共存できる)。
-2. **面の指紋** … 面の参照は添字だけでは足りない(`duocad/selection.py` のとおり
-   **添字は現時点のものであって、形が変われば別の実体を指す**)。重心・法線・面積を
-   一緒に控えておき、配るときに照合する。**壊れないようにするのではなく、壊れたと
-   気づけるようにする**のが狙いで、合わない条件は配らずに `stale` として名指しする。
-   **照合に使うのは面積と法線だけで、重心は記録するだけ**(理由は `fingerprint_mismatch`)。
-3. **配りもの** … `state_meta()` に載せる形(下記 `state_payload`)と、その**増分維持**。
+1. **`OptimizeSetup`** … 1文書が1つ持つ条件の入れ物(`Document.optimize`)。保持/除外ソリッド・
+   拘束面・荷重面。荷重の大きさ[N]と向きは面ごとに持つ。
+2. **面の指紋** … 面の参照は添字だけでは足りない(`duocad/selection.py`: 添字は現時点のもので、
+   形が変われば別の実体を指す)。面積・法線・重心を控えて配るときに照合し、合わない条件は
+   配らずに `stale` として名指しする。**照合に使うのは面積と法線だけで、重心は記録するだけ**
+   (理由は `fingerprint_mismatch`)。
+3. **配りもの** … `state_meta()` に載せる形(`state_payload`)と、その増分維持。
 
-**配信のたびに全ボディを走査しない**。
-照合が要るのは**条件が指しているボディだけ**で、しかも**その形状が差し替わったときだけ**
-である。条件を1つも置いていない文書ではOCCTを1回も呼ばない。
+**配信のたびに全ボディを走査しない**。照合が要るのは条件が指しているボディの形状が差し替わった
+ときだけで、条件を1つも置いていない文書ではOCCTを1回も呼ばない。
 
-**OCP / build123d を直接importしない**(幾何は `query` 越し)。さらに `query` の import は
-**関数の中**に置いてある —— `document.py` がこのモジュールを読むので、モジュール直下で
-`query` を引くと、文書のデータモデルを触るだけでOCPまで芋づるに読み込まれる。
+**OCP / build123d を直接importしない**(幾何は `query` 越し)。`query` の import は**関数の中**に
+置く —— `document.py` がこのモジュールを読むので、モジュール直下で引くと文書のデータモデルを
+触るだけでOCPまで読み込まれる。
 """
 from __future__ import annotations
 
@@ -30,15 +27,12 @@ from typing import TYPE_CHECKING, Any, List, Optional, Sequence
 if TYPE_CHECKING:  # pragma: no cover - 型注釈のためだけ(実行時は読まない)
     from .document import Document
 
-#: 面の指紋の許容差(相対・絶対)。
-#:
-#: **再生は決定的**(同じ操作列を同じOCCTへ流す)なので、開き直した文書の面積・法線は
-#: 記録した値と一致する。ここにあるのは丸め誤差ぶんの隙間でしかなく、**緩めると
-#: 「添字が別の面へ移った」を見逃す**(それを検出するために指紋を置いている)。
+#: 面の指紋の許容差(相対・絶対)。再生は決定的なので丸め誤差ぶんの隙間でしかなく、
+#: 緩めると「添字が別の面へ移った」を見逃す。
 FINGERPRINT_RTOL = 1e-6
 FINGERPRINT_ATOL = 1e-9
 
-#: 面を食う役割の名前(排他の相手を引くのにも使う)。
+#: 面を食う役割の名前。
 FACE_ROLES = ("fixtures", "loads")
 
 #: ボディを食う役割の名前。
@@ -52,7 +46,7 @@ OPPOSITE_ROLE = {
     "loads": "fixtures",
 }
 
-#: 役割の日本語名(エラー文はAIにも人にも読まれるので、名前を1箇所で持つ)。
+#: 役割の日本語名(エラー文用)。
 ROLE_LABEL = {
     "preserve_bodies": "保持ソリッド",
     "exclude_bodies": "除外ソリッド",
@@ -64,10 +58,8 @@ ROLE_LABEL = {
 class RoleConflict(ValueError):
     """**先勝ち**の排他に当たった(`ValueError` の派生 = MCPの `invalid_argument`)。
 
-    「すでに保持に割り当てられているボディを除外に割り当てようとした」ような失敗。
-    **どれが衝突したかを名指しで持つ**(`conflicts`)ので、画面はそれをトーストに出せる。
-    集合代入なので、移したいときは「元の役割のverbで外す → 新しい役割のverbで付ける」の
-    2手になる —— これは意図した仕様であって、ここで自動的に奪い取らない。
+    衝突したものを `conflicts` で名指しで持つ(画面がトーストに出す)。役割を移すには
+    「元の役割のverbで外す → 新しい役割のverbで付ける」の2手で、**自動的に奪い取らない**(意図した仕様)。
     """
 
     def __init__(self, message: str, role: str, conflicts: Sequence[dict]) -> None:
@@ -80,25 +72,22 @@ class RoleConflict(ValueError):
 class OptimizeSetup:
     """形状最適化の条件。**操作ログが正で、これはその再生結果**(`Document.optimize`)。
 
-    保存されるのは操作ログのJSONだけなので、ここを直に書き換えてはならない ——
-    書き換えると保存・再オープンで復元されない状態が生まれる。書き込む口は
-    `duocad/verbs/optimize_setup.py` の4つのverbだけである。
+    直に書き換えてはならない(保存・再オープンで復元されない状態が生まれる)。書き込む口は
+    `duocad/verbs/optimize_setup.py` の4つのverbだけ。
 
-    `fixtures` の要素は **FaceCondition**(下記 `face_condition`)で、
-    `{"body", "index", "area", "normal", "center"}` を持つ。`loads` の要素は
-    そこへ `{"magnitude", "direction", "vector"}` を足した **LoadCondition**
-    (下記 `load_condition`)で、**大きさと向きは面ごとに違ってよい**。
+    `fixtures` の要素は **FaceCondition**(`face_condition`: `{"body", "index", "area", "normal", "center"}`)、
+    `loads` の要素はそこへ `{"magnitude", "direction", "vector"}` を足した **LoadCondition**
+    (`load_condition`)で、大きさと向きは面ごとに違ってよい。
     """
 
-    #: 保持ソリッド / 除外ソリッド(`body_id` の並び。`body-{uuid}` は安定なのでそのまま)
+    #: 保持ソリッド / 除外ソリッド(`body_id` の並び)
     preserve_bodies: List[str] = field(default_factory=list)
     exclude_bodies: List[str] = field(default_factory=list)
     #: 拘束面(FaceCondition の並び)
     fixtures: List[dict] = field(default_factory=list)
     #: 荷重面(LoadCondition の並び。大きさ[N]・向きを面ごとに持つ)
     loads: List[dict] = field(default_factory=list)
-    #: **配りものの増分維持のための版**。中身を変えたら必ず `touch()` で1つ上げる
-    #: (上げ忘れると、画面が古い割り当てを描き続ける)。
+    #: 配りものの増分維持のための版。中身を変えたら必ず `touch()` で上げる(忘れると画面が古い割り当てを描き続ける)。
     revision: int = 0
 
     def touch(self) -> None:
@@ -109,9 +98,7 @@ class OptimizeSetup:
 # 面の指紋
 # --------------------------------------------------------------------------------------
 def face_fingerprint(doc: "Document", body_id: str, index: int) -> dict:
-    """いまの形から面1枚の指紋(面積・法線・重心)を測る。
-
-    **重心も測って記録する**が、照合には使わない(`fingerprint_mismatch`)。
+    """いまの形から面1枚の指紋(面積・法線・重心)を測る。重心は照合に使わない(`fingerprint_mismatch`)。
 
     存在しないBodyは KeyError、範囲外の添字は ValueError(`query.face_fingerprint`)。
     """
@@ -119,8 +106,7 @@ def face_fingerprint(doc: "Document", body_id: str, index: int) -> dict:
 
     body = doc.get_body(body_id)
     if body.mesh is not None:
-        # **名指しの面参照なので断る**(`predicates._target_bodies` と同じ線)。
-        # 断り文は `meshbody.reject` に一元化してある。
+        # 名指しの面参照なので断る(`predicates._target_bodies` と同じ線)。
         from . import meshbody  # 遅延import(モジュール docstring)
 
         meshbody.reject(body, "面の指紋を測る")
@@ -134,8 +120,7 @@ def face_condition(doc: "Document", ref: dict) -> dict:
 
     `{"body": BodyId, "index": int, "area": float, "normal": [x,y,z], "center": [x,y,z]}`。
 
-    **測るのは付けた瞬間の1回だけ**である。以後は照合に使うだけなので、配信のたびに
-    測り直すことはしない(モジュール docstring)。
+    測るのは付けた瞬間の1回だけ。配信のたびに測り直さない(モジュール docstring)。
     """
     body_id = ref["body"]
     index = int(ref["index"])
@@ -152,12 +137,10 @@ def face_condition(doc: "Document", ref: dict) -> dict:
 def load_condition(doc: "Document", ref: dict, magnitude: Any, direction: Any) -> dict:
     """面の ShapeRef + 大きさ + 向き から **LoadCondition** を作る。
 
-    `FaceCondition` に `{"magnitude": float, "direction": str, "vector": [x,y,z]|None}` を
-    足したもの。**大きさと向きを面ごとに持つ**のがこの型の存在理由で、荷重の合成
-    (`optimize_run.build_conditions`)は面ごとの力ベクトルを足し合わせる。
+    `FaceCondition` に `{"magnitude": float, "direction": str, "vector": [x,y,z]|None}` を足したもの。
+    荷重の合成(`optimize_run.build_conditions`)は面ごとの力ベクトルを足し合わせる。
 
-    `direction` が `"normal"` / `"-normal"` のとき `vector` は `None` —— 実際の向きは
-    **その面の指紋に焼き込んだ法線**から起こす(面ごとに違ってよい)。
+    `direction` が `"normal"` / `"-normal"` のとき `vector` は `None`(向きは指紋の法線から起こす)。
     """
     condition = face_condition(doc, ref)
     mode, vector = normalize_direction(direction)
@@ -168,11 +151,7 @@ def load_condition(doc: "Document", ref: dict, magnitude: Any, direction: Any) -
 
 
 def load_force(condition: dict) -> List[float]:
-    """LoadCondition → **世界座標の力ベクトル[N]**(向き × 大きさ)。
-
-    `"normal"` / `"-normal"` は指紋に焼き込んだ**その面の**外向き法線から起こす。
-    面ごとに向きが違ってよいのは、まさにここが面ごとに引くからである。
-    """
+    """LoadCondition → **世界座標の力ベクトル[N]**(向き × 大きさ)。`"normal"` / `"-normal"` は指紋の外向き法線から起こす。"""
     mode = condition["direction"]
     if mode == "vector":
         vector = condition.get("vector")
@@ -185,8 +164,8 @@ def load_force(condition: dict) -> List[float]:
         unit = [-float(v) for v in condition["normal"]]
     else:
         raise ValueError(f"未知の荷重の向き {mode!r}")
-    # **面法線は単位ベクトルとは限らない**(`query.face_fingerprint` が測った値をそのまま
-    # 焼いてある)。ここで単位化しないと、大きさ[N]が法線の長さぶん黙ってずれる。
+    # 面法線は単位ベクトルとは限らない(`query.face_fingerprint` の値をそのまま焼いてある)。
+    # 単位化しないと大きさ[N]が法線の長さぶんずれる。
     length = math.sqrt(sum(component * component for component in unit))
     if not length > 0.0:
         raise ValueError("荷重の向きが零ベクトルになっている")
@@ -202,15 +181,11 @@ def face_key(item: dict) -> tuple:
 def fingerprint_mismatch(doc: "Document", condition: dict) -> Optional[str]:
     """条件が指す面が**今も同じ面か**を照合する。合っていれば `None`、違えば理由の文字列。
 
-    理由を文字列で返すのは、画面がトーストにそのまま出すためである(「合わない」だけでは
-    次の一手が書いていない)。**ここで文書を直さない** —— 条件は操作ログの上に残り、
-    形を戻せば(undo)また合うようになる。消してしまうと戻せない。
+    理由は画面がトーストにそのまま出す。**ここで文書を直さない**(条件は操作ログ上に残り、undoで合うようになる)。
 
-    **見るのは面積と法線だけで、重心は見ない**。重心は世界座標なので、
-    面の添字を変えない `move_body`(平行移動)でも不一致になり、位置を詰めるたびに条件が
-    付け直しになっていた。面積と法線は平行移動で不変で、かつ照合には添字の一致も要るため、
-    本来の狙い(添字が別の面を指すようになった)の検出力はほとんど落ちない。
-    重心は `center` として記録され続ける —— 不一致になったときに何が起きたかを見るため。
+    **見るのは面積と法線だけで、重心は見ない**。重心は世界座標なので、添字を変えない `move_body`
+    でも不一致になり、位置を詰めるたびに条件が付け直しになる。面積と法線は平行移動で不変で、
+    添字の一致も要るため、検出力はほとんど落ちない。
     """
     body_id = condition["body"]
     index = int(condition["index"])
@@ -254,14 +229,9 @@ def _fmt(values: Sequence[float]) -> str:
 def normalize_direction(value: Any) -> tuple:
     """`set_loads` の `direction` 引数を `(モード, 単位ベクトル|None)` へ均す。
 
-    受けるのは3つの形: `"normal"` / `"-normal"` / 長さ3の数値の並び。
-
-    **世界軸に名前を足さない**(`-Z` は `[0, 0, -1]` として渡す)。軸の名前をもう一つの語彙に
-    すると、同じ向きの綴りが2系統になり、片方だけ直したときに黙って食い違う。
-
-    **ベクトルは単位化して控える。** 大きさ[N]は `magnitude` が持つと決めた以上、向きの
-    長さにも意味があると、`magnitude=100` `direction=[0,0,-2]` が 100N なのか 200N なのかを
-    読む側が決められない。長さ0・非有限は ValueError。
+    受けるのは `"normal"` / `"-normal"` / 長さ3の数値の並び。世界軸に名前を足さない(`-Z` は
+    `[0, 0, -1]` で渡す)。ベクトルは単位化して控える(大きさ[N]は `magnitude` だけが持つ)。
+    長さ0・非有限は ValueError。
     """
     if isinstance(value, str):
         mode = value.strip()
@@ -302,16 +272,12 @@ def normalize_magnitude(value: Any) -> float:
 # 配りもの(`state_meta()` の "optimize")
 # --------------------------------------------------------------------------------------
 def body_ref(body_id: str) -> dict:
-    """配信用のボディ参照。**`selection.select_body` と同じ形**にしておく。
-
-    画面は受け取った参照をそのまま `modify_selection` へ渡してプリセレクトする ——
-    形が違うと、画面側にもう1つ変換が生まれる。
-    """
+    """配信用のボディ参照。画面が `modify_selection` へそのまま渡すので、`selection.select_body` と同じ形にする。"""
     return {"body": body_id, "kind": "body", "index": None, "provenance": None}
 
 
 def face_ref(condition: dict) -> dict:
-    """配信用の面参照(`selection.select_face` と同じ形。理由は `body_ref` と同じ)。"""
+    """配信用の面参照(`selection.select_face` と同じ形)。"""
     return {
         "body": condition["body"],
         "kind": "face",
@@ -323,18 +289,9 @@ def face_ref(condition: dict) -> dict:
 class OptimizeStateCache:
     """`state_payload()` の増分維持(`DocumentView` が1つ持つ)。
 
-    作り直すのは次の3つのどれかが起きたときだけ:
-
-    1. 条件そのものが変わった(`OptimizeSetup.revision` が動いた)
-    2. 条件が**指しているボディ**の形状が差し替わった(`is` で判定。他のボディは見ない)
-    3. まだ1度も作っていない
-
-    2'. 条件が指しているボディの**可視性**が変わった(見えないものは指せないので、
-        配る参照から外れる)
-
-    定常状態では**OCCTを1回も呼ばない**。形状オブジェクトは参照ごと控える ——
-    `id()` の整数だけだと、解放後に同じアドレスが再利用されて偽ヒットしうる
-    (`DocumentView._body_volume` と同じ代償・同じ理由)。
+    作り直すのは、条件が変わった(`OptimizeSetup.revision`)・条件が指しているボディの形状が
+    差し替わった(`is` で判定)・そのボディの可視性が変わった・まだ作っていない、のどれかのときだけ。
+    定常状態ではOCCTを呼ばない。形状は `id()` ではなく参照ごと控える(解放後のアドレス再利用で偽ヒットしうる)。
     """
 
     def __init__(self) -> None:
@@ -349,7 +306,7 @@ class OptimizeStateCache:
         self._payload = None
 
     def fresh_for(self, revision: int, referenced: dict) -> bool:
-        """`(形状, 可視性)` の表が前回と同じか。**形状は `is`、可視性は `==`**。"""
+        """`(形状, 可視性)` の表が前回と同じか(形状は `is`、可視性は `==`)。"""
         if self._payload is None or self._revision != revision:
             return False
         if set(self._referenced) != set(referenced):
@@ -377,7 +334,7 @@ def state_payload(
     *,
     previewing: bool = False,
 ) -> dict:
-    """`state_meta()["optimize"]` に載せる形。**画面側(後続タスク)が読む契約はこれ。**
+    """`state_meta()["optimize"]` に載せる形。**画面側が読む契約はこれ。**
 
         {
           "preserve_bodies": [BodyRef, ...],   # {"body","kind":"body","index":null,"provenance":null}
@@ -394,28 +351,24 @@ def state_payload(
           "revision": int,
         }
 
-    **4つの配列はそのまま `modify_selection` へ渡せる** —— verbを起動したときに、既に
-    その役割が付いている対象をプリセレクトするのが画面側の使い方だからである。
-    したがって**いま指せないものは4つの配列に載らない**(不可視・消えたボディを
-    `modify_selection` へ渡すと例外になる。選択機構の「見えないものは指せない」)。
-    載らなかったものは全部 `stale` に理由つきで出るので、**黙って消える経路は無い**。
+    **4つの配列はそのまま `modify_selection` へ渡せる**(画面がプリセレクトに使う)ので、**いま指せない
+    ものは載らない**(不可視・消えたボディを渡すと例外になる)。載らなかったものは全部 `stale` に
+    理由つきで出るので、黙って消える経路は無い。
 
-    **`load_specs` は文書が持つ how であって「いま荷重がかかっているか」ではない。** 荷重面の
-    ボディを隠すと `loads` は空になるが `load_specs` は残る —— 隠しただけで大きさと向きが
-    画面から消えると、表示に戻したときに打ち直しになるからである。かかる面は `loads` を見ること。
-    **`load_specs` と `loads` は長さが違いうる**ので、画面は `(body, index)` で突き合わせること。
+    **`load_specs` は文書が持つ how であって「いま荷重がかかっているか」ではない。** 荷重面のボディを
+    隠すと `loads` は空になるが `load_specs` は残る(表示に戻したとき打ち直しにならないよう)。かかる面は
+    `loads` を見る。両者は長さが違いうるので、画面は `(body, index)` で突き合わせること。
 
-    **`stale` は「割り当てが消えた」ではない。** 文書からは何も消えていない(操作ログが正)
-    ので、形を戻せば・表示に戻せば次の配信でまた載る。**画面がトーストに出すかどうかは
-    文言ではなく `code` で決めること**:
+    **`stale` は「割り当てが消えた」ではない。** 文書からは何も消えておらず、形を戻せば・表示に戻せば
+    次の配信でまた載る。**画面がトーストに出すかどうかは文言ではなく `code` で決めること**:
 
     - `"fingerprint"` … 後から形を変えて、添字が別の面を指すようになった(**本来の狙い**)
     - `"missing"`     … 対象のボディが文書に無い(undoで作成ごと消えている)
     - `"hidden"`      … 対象のボディが非表示。表示に戻せばそのまま使われる。人が部品を隠す
       たびに出るので、**出さない側である**
 
-    `previewing` の間は作り直さない —— プレビューは文書を投機的に書き換えて必ず元へ戻すので、
-    その最中の形で照合すると偽の `stale` が出る(`DocumentView._prune_body_caches` と同じ規律)。
+    `previewing` の間は作り直さない(プレビューは文書を投機的に書き換えるので、偽の `stale` が出る。
+    `DocumentView._prune_body_caches` と同じ規律)。
 
     **戻り値は書き換えないこと**(キャッシュしている実体をそのまま返す)。
     """
@@ -473,9 +426,7 @@ def state_payload(
         "exclude_bodies": live["exclude_bodies"],
         "fixtures": live["fixtures"],
         "loads": live["loads"],
-        # **`live["loads"]` ではなく文書の側を見る** —— 荷重面のボディを隠しただけで
-        # 大きさと向きが画面から消えると、表示に戻したときに打ち直しになる。
-        # 「実際に荷重がかかる面」は `loads` が持つ(こちらは how だけ)。
+        # `live["loads"]` ではなく文書の側を見る(上の docstring の `load_specs`)。
         "load_specs": [
             {
                 "body": condition["body"],
@@ -495,11 +446,7 @@ def state_payload(
 
 
 def _body_trouble(doc: "Document", body_id: str) -> Optional[tuple]:
-    """そのボディが**いま指せるか**。指せれば `None`、指せなければ `(code, 理由)`。
-
-    可視性の判定をここに置いてあるのは、**指紋を測る前に落とすため**でもある
-    (隠しただけの部品でOCCTを回す理由が無い)。
-    """
+    """そのボディが**いま指せるか**。指せれば `None`、指せなければ `(code, 理由)`。指紋を測る前に落とす。"""
     try:
         body = doc.get_body(body_id)
     except KeyError:
@@ -510,11 +457,9 @@ def _body_trouble(doc: "Document", body_id: str) -> Optional[tuple]:
 
 
 def _referenced_state(doc: "Document", setup: OptimizeSetup) -> dict:
-    """条件が指しているボディの `(形状, 可視性)` だけを集める(**全ボディを走査しない**)。
+    """条件が指しているボディの `(形状, 可視性)` だけを集める。消えたボディは `(None, False)`。
 
-    文書から消えたボディは `(None, False)` を持たせる —— 「消えた」も「隠された」も
-    配りものを変える状態なので、キャッシュの鍵に入っていないと判定が更新されない
-    (可視性は形状の同一性を動かさないので、形だけを鍵にすると取りこぼす)。
+    可視性は形状の同一性を動かさないので、形だけを鍵にすると取りこぼす。
     """
     referenced: dict = {}
     for role in BODY_ROLES:
