@@ -120,7 +120,7 @@
   反力表示を作るなら FEM 層への新規配線が要る。(20260917-0444-binary-search-5-product-wiring, 2026-09-17)
 - `check_optimize_wiring.py` は `CHECK_ELEMENT_SIZE_MM = 4.0` を `session.run_optimization(element_size_mm=...)` へ明示して回す。省くと既定は「いちばん粗い」解像度になり、
   細長い直方体を離して並べた題材では当時 `voxelize.occupancy` がレイ縮退の `ValueError` を出した(2ボディ 10x40x40 と 10x40x10 を60mm離す題材で、要素サイズ14mmまで成功・16mm以上で失敗。
-  現行 `voxelize.py` は縮退検知時にずらし幅を変えてやり直す実装になっており、この失敗が現行でも再現するかは未確認)。(20260917-0444-binary-search-5-product-wiring, 20260917-0445-binary-search-6-legacy-removal, 2026-09-17)
+  要素サイズの上限 4 mm(#130)の後は、既定と選べる全解像度で再現しない。14 mm 以上は最小幅の段が無く入口で断られる。2026-10-10 実測、docs/TOPOPT.md「制限」)。(20260917-0444-binary-search-5-product-wiring, 20260917-0445-binary-search-6-legacy-removal, 2026-09-17)
 
 ## 検査 CLI と docs 整理の教訓
 

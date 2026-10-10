@@ -894,8 +894,8 @@ hanger 1件だけで、係数の値を決められないため。形が違うモ
 
 **この1本だけが本物を回す**(`tests/test_optimize_backend.py`はFEMを1回も回さない——pytestを
 重くしないため)。題材は離れた2つのパッド(拘束側10x40x40/荷重側10x40x10を離して置く。
-`element_size_mm=4.0`〈`CHECK_ELEMENT_SIZE_MM`〉を明示している——既定解像度だと
-`voxelize.occupancy`のレイキャスト頑健性の既存バグを踏むため)。
+`element_size_mm=4.0`〈`CHECK_ELEMENT_SIZE_MM`〉を明示している。既定解像度で踏んでいたレイキャストの`ValueError`は、
+要素サイズの上限 4 mm の後は再現しない——下「制限」)。
 
 0. **端から端まで** — `state == "done"`、ボディが1つだけ増え、それがメッシュボディで、元の
    ボディは1つも消えず・形も差し替わらない。戻り値が素の値だけでできていることも見る。
@@ -1032,9 +1032,15 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
   ない。
 - **つながり検査(`connect_seeds`)は道の細さを見ない。** 幅1要素の糸でつながっている塊も設計
   空間としては通る。
-- **既定の(いちばん粗い)解像度が`voxelize.occupancy`のレイキャスト頑健性の既存バグを踏み、一部の
-  条件では`ValueError`のまま失敗しうる**(段階5で発見・本人判断待ちのまま持ち越し。
-  `check_optimize_wiring.py`は`element_size_mm`を明示して回避している)。
+- **既定の(いちばん粗い)解像度で`voxelize.occupancy`のレイキャストが`ValueError`を出す件は、要素サイズの上限 4 mm
+  (#130)の後は再現しない**(2026-10-10 実測。段階5で、`check_optimize_wiring.py`の離れた2パッドが 16 mm 以上で
+  落ちていたもの)。`optimize_run.run`を本物で呼んで`design_space.derive`の直後で止め、既定と、選べる範囲(下限〜上限)を
+  刻んだ全解像度を試した: 2パッド(0.65〜3.92 mm を 0.01 mm 刻み、極小の保持あり・なし)各110通り、
+  `topopt_idle_dilution_small`(0.49〜3.92 mm、0.02 mm 刻み)92通り、`topopt_idle_path_small`(0.51〜4.0 mm)86通り、
+  hanger(1.575〜3.969 mm、0.05 mm 刻み)50通りで、レイキャストの`ValueError`は0件。hanger の4解像度(1.675・2.125・2.675・
+  3.875 mm)は保持と除外の重なり(`DesignSpaceConflictError`、下「受入検査の題材の大きさ」の飛び飛びの解像度と同じ性格)で、
+  別件。上限を外して2パッドを粗くすると 12.25 mm まで通り、14 mm 以上は最小幅の段が無いので入口で断られる(当時の失敗域には
+  製品から届かない)。レイキャストそのものを直したわけではない。
 
 ## 受入検査の題材の大きさ
 
