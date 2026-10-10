@@ -32,11 +32,7 @@ def test_set_active_body_unknown_id_raises_key_error():
 
 
 def test_unknown_id_message_lists_the_valid_ids():
-    """存在しないIDのエラー文は、**有効なIDをその場に並べる**。
-
-    行き止まりのエラー(「そのIDは違う」だけ)は、呼び出し元のAIを存在しない図形IDの
-    捏造へ倒しかねない。
-    """
+    """存在しないIDのエラー文は、**有効なIDをその場に並べる**。"""
     message = unknown_id_message("entity", "c1", ["entity-aaa", "entity-bbb"])
     assert "'c1'" in message
     assert "entity-aaa" in message and "entity-bbb" in message
@@ -50,11 +46,7 @@ def test_unknown_id_message_names_the_scope_it_searched():
 
 
 def test_unknown_id_message_sends_you_to_the_listing_tool_when_too_many():
-    """有効IDが多すぎるときは全部並べず件数だけ言い、列挙ツールへ送る。
-
-    エラー文がスケッチ1枚ぶんの図形IDで埋まると、それだけでAIの文脈を食う。
-    並べきれないなら、次の一手は「一覧を取り直す」である。
-    """
+    """有効IDが多すぎるときは全部並べず件数だけ言い、列挙ツールへ送る。"""
     ids = [f"entity-{index:04d}" for index in range(40)]
     message = unknown_id_message("entity", "c1", ids)
     assert "entity-0000" in message

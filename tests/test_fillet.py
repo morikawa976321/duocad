@@ -2,14 +2,6 @@
 
 期待値の出どころ(20mm立方体・全辺フィレットの実測):
 
-    r=3.0   IsDone=True   plane 6 / cylinder_partial 12 / other(球) 8   計26面
-    r=10.0  IsDone=False  (例外なしで黙って失敗する)
-    r=10.5  IsDone=True だが **BRepCheck.IsValid=False**(＝「歪」の正体。duocadは受け取らない)
-    r=30.0  IsDone=False
-    半径バラバラ(1.0〜3.75) IsDone=True  plane 6 / cylinder_partial 12 / bspline 8  計26面
-
-穴(貫通・半径4mm)の円い辺2本に r=1.5 で plane 6 / cylinder_full 1 / torus 2 の計9面。
-
 **球が `other` に落ちること自体が契約**(`kernel.classify_face` は球を独立の種別に持たない)。
 """
 from __future__ import annotations
@@ -34,9 +26,6 @@ VARIED_RADII_KINDS = {"plane": 6, "cylinder_partial": 12, "bspline": 8}
 HOLE_FILLET_KINDS = {"plane": 6, "cylinder_full": 1, "torus": 2}
 
 
-# --------------------------------------------------------------------------------------
-# 箱の縦エッジにフィレット（同一半径なら splineなし）
-# --------------------------------------------------------------------------------------
 def test_fillet_on_a_box_makes_cylinders_spheres_and_planes():
     """全辺・同一半径なら**円筒 + 球 + 平面**になり、B-splineは出ない(球は `other`)。"""
     doc = Document()
@@ -70,9 +59,6 @@ def test_fillet_on_the_vertical_edges_only():
     assert kinds.get("other", 0) == 0, "縦辺だけなら角の球は出ない"
 
 
-# --------------------------------------------------------------------------------------
-# 半径をバラバラにすると B-spline が出る（副産物であることの固定）
-# --------------------------------------------------------------------------------------
 def test_varied_radii_produce_bspline_faces():
     """**半径をバラバラにすると B-spline が出る**(splineはフィレットの副産物であり異常ではない)。"""
     doc = Document()
@@ -94,9 +80,6 @@ def test_radius_list_must_match_the_edges():
         fillet(doc, [1, 2, 3], [1.0, 2.0], body_id=body_id)
 
 
-# --------------------------------------------------------------------------------------
-# 穴の円い辺へのフィレットで トーラスが出る
-# --------------------------------------------------------------------------------------
 def test_fillet_on_a_circular_edge_produces_torus():
     """曲がった辺(穴の縁)を丸めると**トーラス**になる —— **辺の種別が結果の面の種別を決める**。"""
     doc = Document()
@@ -111,9 +94,6 @@ def test_fillet_on_a_circular_edge_produces_torus():
     assert kinds_of(doc, body_id) == HOLE_FILLET_KINDS
 
 
-# --------------------------------------------------------------------------------------
-# 失敗を黙って通さない（最重要）
-# --------------------------------------------------------------------------------------
 @pytest.mark.parametrize("radius", [RADIUS_FAILS_LOW])
 def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     """`IsDone()=False` を例外にし、文書もログも変えない。"""
@@ -134,9 +114,6 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     assert len(doc.log.entries) == log_before, "失敗したのにログへ積まれた"
 
 
-#--------------------------------------------------------------------------------------
-# r=10.5 は「成功するが歪」
-# --------------------------------------------------------------------------------------
 def test_radius_10_5_is_reported_as_done_but_is_actually_broken():
     """r=10.5は`IsDone()`は真だが`BRepCheck.IsValid=False`(実測) —— 立方体の半辺(10mm)を
     わずかに超えてフィレット同士が干渉し始める境界値。duocadはこの形状を文書に入れない。
@@ -157,9 +134,6 @@ def test_radius_10_5_is_reported_as_done_but_is_actually_broken():
     assert len(doc.log.entries) == log_before
 
 
-# --------------------------------------------------------------------------------------
-# 操作ログに載り、undoできる
-# --------------------------------------------------------------------------------------
 def test_fillet_is_logged_and_undoable():
     """フィレットは操作ログに1行積まれ、undoで元の形状へ戻る。"""
     doc = Document()
@@ -184,9 +158,6 @@ def test_fillet_is_logged_and_undoable():
     assert kinds_of(doc, body_id) == FILLET_R3_KINDS
 
 
-# --------------------------------------------------------------------------------------
-# 由来（provenance）が回収されている
-# --------------------------------------------------------------------------------------
 def test_fillet_records_provenance_through_the_normalizing_adapter():
     """由来(`Operation.provenance`)が正規化アダプタ経由で埋まり、JSON化できること。"""
     doc = Document()
@@ -201,9 +172,6 @@ def test_fillet_records_provenance_through_the_normalizing_adapter():
     doc.log.to_json()  # JSON化できない値が混ざっていればここで落ちる
 
 
-# --------------------------------------------------------------------------------------
-# フィレット後は面の添字がずれる（生の添字を保存してはいけない）
-# --------------------------------------------------------------------------------------
 def test_fillet_shifts_face_indices():
     """同じ面でも添字は形状変更で変わりうる(実測: 20mm立方体の1辺にr=2で2→7/3→6/6→2)。
     穴の径変更・追加・ポケット・面取りでは動かなかった —— 散発的に静かに間違う。
@@ -225,9 +193,6 @@ def test_fillet_shifts_face_indices():
     assert moved, "1面も添字が動かないなら、この実測（および§7の前提）と食い違う"
 
 
-# --------------------------------------------------------------------------------------
-# 選択と対象の拒否
-# --------------------------------------------------------------------------------------
 def test_fillet_rejects_an_unknown_edge_index():
     """範囲外の辺の添字は ValueError（黙って無視して「成功」にしない）。"""
     doc = Document()
@@ -246,9 +211,6 @@ def test_fillet_needs_at_least_one_edge():
         fillet(doc, [], 1.0, body_id=body_id)
 
 
-# --------------------------------------------------------------------------------------
-# 面取りとフィレットの合成
-# --------------------------------------------------------------------------------------
 def test_chamfer_and_fillet_compose_on_the_same_body():
     """同じボディに面取りとフィレットを順にかけられること。"""
     from duocad.verbs import chamfer

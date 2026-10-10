@@ -62,10 +62,7 @@ def test_import_step_malformed_file_raises_value_error_and_does_not_mutate_docum
 
 
 def test_export_from_empty_document_raises_and_writes_no_file(tmp_path):
-    """書き出す形状が無い文書からのexportは例外になり、半端なファイルを残さない。
-
-    黙って0バイトのSTEP/STLを吐くと、壊れた成果物が「成功」として残る。
-    """
+    """書き出す形状が無い文書からのexportは例外になり、半端なファイルを残さない。"""
     doc = Document()
     step_path = tmp_path / "empty.step"
     stl_path = tmp_path / "empty.stl"
@@ -112,11 +109,7 @@ def test_export_excludes_a_hidden_solid_from_step_and_stl(tmp_path):
 
 
 def test_export_raises_a_dedicated_error_when_all_candidates_are_hidden(tmp_path):
-    """候補はあるが全部非表示 → `ValueError` かつファイルを作らない。
-
-    「形が無い」場合の文言(`nothing to export: no body with a shape`)とは分ける
-    ——こちらは `set_visible(visible=True)` で戻せば直る、という別種の状態だから。
-    """
+    """候補はあるが全部非表示 → `ValueError` かつファイルを作らない。"""
     doc = Document()
     box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
     body_id = _add_solid_body(doc, "box", box)
@@ -138,19 +131,13 @@ def test_export_raises_a_dedicated_error_when_all_candidates_are_hidden(tmp_path
         export_step(Document(), step_path)
 
 
-# --------------------------------------------------------------------------------------
 # 埋め込み: 読み込んだSTEPの形はログの中にある
 #
 # **ここが本命の契約** —— 再生が外部ファイルを読まない、を検査する。読まないことは
 # 「元のSTEPを消してから開く」でしか確かめられない(パスを引数に残したままでも、
 # ファイルがそこに在れば往復テストは緑になってしまう)。
-# --------------------------------------------------------------------------------------
 def _two_solid_step(tmp_path) -> Path:
-    """2ソリッド(体積1000と216)のSTEPを作って返す。
-
-    **`3d-models/` の私物STEPは使わない**(読み取り専用・リポジトリ外への依存を作らない)。
-    テスト側は境界検査の対象外なのでOCPで直接作ってよい。
-    """
+    """2ソリッド(体積1000と216)のSTEPを作って返す。"""
     box_a = BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape()
     box_b = BRepPrimAPI_MakeBox(gp_Pnt(50.0, 0.0, 0.0), 6.0, 6.0, 6.0).Shape()
     step_path = tmp_path / "two_solids.step"
@@ -167,15 +154,7 @@ def _shape_fingerprint(doc: Document) -> list:
 
 
 def test_import_step_logs_the_step_text_and_no_path(tmp_path):
-    """`import_step` のログは**STEP本文**と元のファイル名を持ち、パスを持たない。
-
-    パスが残っていると、それが「第二の正」になり得る(再生がそちらを読む実装へ
-    いつでも戻れてしまう)。`source_name` は名前だけで、ディレクトリを含まないこと。
-
-    **`args` の顔ぶれそのものが契約**である —— 作った全ID(`body_ids`)が記録されていないと、
-    再生で別のIDが振られて選択集合や押し出しの参照先が迷子になる。
-    **ソリッドが何個あってもログは1行**(`(operation,) = ...` がそれを押さえている)。
-    """
+    """`import_step` のログは**STEP本文**と元のファイル名を持ち、パスを持たない。"""
     doc = Document()
     step_path = _two_solid_step(tmp_path)
 
@@ -194,12 +173,7 @@ def test_import_step_logs_the_step_text_and_no_path(tmp_path):
 
 
 def test_replay_rebuilds_the_shape_after_the_original_step_is_gone(tmp_path):
-    """**元のSTEPを消してから再生しても同じ形が出る**(名前・面数・体積・可視性まで)。
-
-    保存形式(JSON)を往復させたうえで、読み込み元のSTEPをリネーム(=移動・改名・削除・
-    別PCへの持ち出しと同じ状況)してから `replay` する。**読み込みの経路はこれ1本**なので、
-    ここが通らなければ「保存ファイルが自己完結する」は実質成立しない。
-    """
+    """**元のSTEPを消してから再生しても同じ形が出る**(名前・面数・体積・可視性まで)。"""
     doc = Document()
     step_path = _two_solid_step(tmp_path)
     import_step(doc, step_path)

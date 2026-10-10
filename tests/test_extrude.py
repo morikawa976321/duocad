@@ -1,8 +1,5 @@
 """M2契約: 領域の押し出し(`duocad.verbs.extrude`)。
 
-同じ verb の面を受ける側(面群)は `test_extrude_faces.py`。こちらは**スケッチの領域**を
-`join`(足す)/`cut`(引く)する。
-
 検算はすべて**実測または算術で決まる値**:
 
     片側だけの押し出し   : 体積 = その領域の面積 × 距離
@@ -76,9 +73,6 @@ def drill(document: Document) -> None:
     extrude(document, [region_ref(sketch_id, hole[0].index)], HOLE_DEPTH, mode="cut")
 
 
-# --------------------------------------------------------------------------------------
-# 押し出し — 面積 × 距離で検算する
-# --------------------------------------------------------------------------------------
 def test_extruding_one_half_of_a_split_circle_gives_area_times_distance():
     """**分割した領域の片方だけ**を10mm押し出すと、体積 = その領域の面積 × 10 になる。
 
@@ -139,15 +133,8 @@ def test_join_fuses_into_the_existing_body():
     )
 
 
-# --------------------------------------------------------------------------------------
-# `new` — 「対象があっても融合しない」種別
-# --------------------------------------------------------------------------------------
 def test_new_makes_a_second_body_instead_of_fusing():
-    """`mode="new"` は対象ボディがあっても融合せず、**独立したソリッドを1つ足す**。
-
-    差が出なければ、既存ボディがいると2つ目の板が作れない状態に `new` が `join` へ
-    落ちている。
-    """
+    """`mode="new"` は対象ボディがあっても融合せず、**独立したソリッドを1つ足す**。"""
     document = plate_document()
     plate = document.active_body()
     sketch_id = sketch_create(document, "XY")
@@ -192,11 +179,7 @@ def test_new_refuses_a_body_id():
 
 
 def test_new_is_undoable_and_replays():
-    """`new` で作ったボディは undo で消え、保存したログの再生でも同じ2ボディに戻る。
-
-    再生の分岐が `join`(「無ければ作る」)と別なので、ここを通さないと**開くと
-    ボディが1つに融合している**という形で表面化する。
-    """
+    """`new` で作ったボディは undo で消え、保存したログの再生でも同じ2ボディに戻る。"""
     document = plate_document()
     plate_id = document.active_body().id
     sketch_id = sketch_create(document, "XY")
@@ -291,9 +274,6 @@ def test_undo_restores_the_shape_for_fuse_and_cut():
     )
 
 
-# --------------------------------------------------------------------------------------
-# 失敗を黙って通さない(§6予防6・§7)
-# --------------------------------------------------------------------------------------
 def test_extrude_without_an_existing_region_fails_and_changes_nothing():
     """押し出し対象の領域が存在しない場合は失敗し、文書が変更されない。"""
     document = plate_document()
@@ -344,9 +324,6 @@ def test_cut_without_a_target_body_fails():
     assert document.bodies == []
 
 
-# --------------------------------------------------------------------------------------
-# 受入テストへの前進 — 棚取付具の「板と穴」
-# --------------------------------------------------------------------------------------
 def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
     """長方形を押し出して板にし、円を `cut` で押し出して穴を開けられる。
 
@@ -384,11 +361,7 @@ def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
 
 
 def test_replay_reproduces_the_split_circle_extrusion():
-    """円＋線分のスケッチと片側だけの押し出しが、保存したログから再生できる。
-
-    下の板と穴の再生は長方形と円しか通らないので、`add_line` の再生はこちらでしか
-    検査されない。
-    """
+    """円＋線分のスケッチと片側だけの押し出しが、保存したログから再生できる。"""
     document = Document()
     sketch_id = split_circle_sketch(document)
     target = max(regions(document, sketch_id), key=lambda region: region.area)
@@ -419,9 +392,6 @@ def test_replay_reproduces_the_plate_with_the_hole():
     assert len(replayed.sketches) == 2
 
 
-# ---------------------------------------------------------------------------------
-# 面の統合(面を受ける `extrude`)。実STEPを使わない唯一の押し出し検査。
-# ---------------------------------------------------------------------------------
 
 def test_extrude_faces_adopt_face_merging_when_it_helps():
     """統合が効く場合は採用され、面が増えっぱなしにならない(20mm立方体の上面を+10)。

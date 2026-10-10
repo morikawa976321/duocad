@@ -62,9 +62,6 @@ def busy(status: int = 529, retry_after: float | None = 0.0) -> ProviderError:
     return ProviderError(f"HTTP {status}: overloaded", status=status, retry_after=retry_after)
 
 
-# --------------------------------------------------------------------------------------
-# 整形
-# --------------------------------------------------------------------------------------
 def test_the_request_is_in_claude_shape_and_caches_the_fixed_prefix():
     transport = FakeTransport([answer()])
     ask(claude(transport))
@@ -135,9 +132,6 @@ def test_a_loop_round_trip_sends_the_thinking_back_after_the_tool_result(box_ses
     assert second[-1]["content"][0]["tool_use_id"] == "t1"
 
 
-# --------------------------------------------------------------------------------------
-# ストリーミングの組み立て(本物のHTTP)
-# --------------------------------------------------------------------------------------
 def event(payload: dict) -> bytes:
     return f"event: {payload['type']}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
 
@@ -250,9 +244,6 @@ def test_a_prompt_too_long_is_a_context_overflow():
     assert isinstance(error, ProviderContextOverflow)
 
 
-# --------------------------------------------------------------------------------------
-# 再試行
-# --------------------------------------------------------------------------------------
 def test_an_overloaded_response_is_retried():
     transport = FakeTransport([busy(529), answer("通った")])
     assert ask(claude(transport)).text == "通った"
@@ -345,9 +336,6 @@ def test_abort_cuts_a_retry_wait_short():
     assert len(transport.sent) == 1
 
 
-# --------------------------------------------------------------------------------------
-# キーとモデル
-# --------------------------------------------------------------------------------------
 def test_the_key_is_read_from_the_environment_first_then_the_secrets_file(monkeypatch, tmp_path):
     secrets = tmp_path / "duocad_secrets.json"
     monkeypatch.setattr(providers, "SECRETS_PATH", secrets)

@@ -1,15 +1,4 @@
-"""**2項目のあいだを測る**(issue #10)—— `duocad/measure.py` と、その口(MCP / WebSocket)。
-
-固定する契約:
-
-1. 点・直線・平面の6通りの組で、距離(平行なら)か角度(平行でなければ)が返る。
-   **直線と平面は無限に延ばして測る**(有限の辺・面の最短距離ではない)。
-2. 直線でない辺・平面でない面・ボディ・スケッチの図形は `between_error` で断る
-   (例外ではない —— 各項目の寸法は読めたままにする)。
-3. `between` が付くのは**ちょうど2項目**のときだけ。
-4. MCP の `measure` と WebSocket の `measure` は同じ計算を通り、WSの応答は
-   要求した接続にだけ返る(`client_op` を添えて)。
-"""
+"""**2項目のあいだを測る**(issue #10)—— `duocad/measure.py` と、その口(MCP / WebSocket)。"""
 from __future__ import annotations
 
 import json
@@ -28,9 +17,6 @@ from session_support import browser
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
 
-# --------------------------------------------------------------------------------------
-# 道具
-# --------------------------------------------------------------------------------------
 @pytest.fixture()
 def session() -> Session:
     """30×30×40 の直方体(id "box")と、半径10・高さ20の円柱(id "cyl")を持つセッション。"""
@@ -79,9 +65,6 @@ def ref(kind: str, index: int, body: str = "box") -> dict:
     return {"body": body, "kind": kind, "index": index}
 
 
-# --------------------------------------------------------------------------------------
-# 1. 純粋な幾何(`between`)
-# --------------------------------------------------------------------------------------
 def test_point_point_reports_distance_and_delta():
     result = between(Point((0.0, 0.0, 0.0)), Point((3.0, 4.0, 12.0)))
     assert result["kind"] == "point-point"
@@ -161,9 +144,6 @@ def test_the_parallel_tolerance_is_tighter_than_the_predicate_one():
     assert PARALLEL_SIN_TOLERANCE < 1e-3
 
 
-# --------------------------------------------------------------------------------------
-# 2. 実物のB-repから(`Session.measure`)
-# --------------------------------------------------------------------------------------
 def test_two_vertices_of_the_box(session: Session):
     shape = _shape(session, "box")
     select(session, [ref("vertex", vertex_at(shape, (0, 0, 0))), ref("vertex", vertex_at(shape, (30, 30, 40)))])
@@ -265,9 +245,6 @@ def test_between_is_reported_only_for_exactly_two_items(session: Session):
     assert empty["count"] == 0 and "between" not in empty
 
 
-# --------------------------------------------------------------------------------------
-# 3. 口(MCP / WebSocket)
-# --------------------------------------------------------------------------------------
 def test_the_mcp_tool_returns_the_same_between_as_the_session(session: Session):
     shape = _shape(session, "box")
     server = McpServer(DocumentTools(session))

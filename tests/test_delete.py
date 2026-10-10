@@ -1,16 +1,4 @@
-"""verb `delete` の契約。固定するのは5つ:
-
-1. **選択の読み方**(`selection.require_deletable`) —— ボディ由来(面/辺/頂点/ボディ)と
-   スケッチ図形を**同時に**畳む。片方が0件でも壊れない(既存の `require_*` は
-   「1つも無ければ例外」なので、2つ呼ぶと片方しか選ばれていないときに壊れる)。
-   **領域が混ざっていても黙って無視**し、残りを消す。領域**だけ**なら拒否する。
-2. **粒度** —— 混ざった選択でも**1回のverb呼び出し = 1行のログ = 1回のundo**。
-3. **undo が対象によって別物**である —— ボディは `_common.SNAPSHOTS`(並びと active ごと)、
-   図形は args の生の数値。**名前つきの値は解放され、undoで同じ名前が戻る**。
-4. **保存 -> 開く(再生) -> undo** が通る(スナップショットは再生が埋める)。
-5. **消したあとに壊れないこと** —— 反復の元を消しても状態の配りものは落ちない
-   (ボディのキャッシュは既存の生存集合差分が落とす。`tests/test_body_cache_pruning.py`)。
-"""
+"""verb `delete` の契約。固定するのは5つ。"""
 from __future__ import annotations
 
 import pytest
@@ -32,9 +20,6 @@ def _entity_ids(session: Session, sketch_id: str) -> list:
     return [entity.id for entity in sketch.get_sketch(session.document, sketch_id).entities]
 
 
-# --------------------------------------------------------------------------------------
-# 1. 選択の読み方(`require_deletable`)
-# --------------------------------------------------------------------------------------
 def test_a_face_a_body_and_an_entity_all_resolve_in_one_call(session: Session) -> None:
     """面はボディへ逆引きされ、図形はそのまま。**両方あれば両方返る**。"""
     body, sketch_id = _box(session)
@@ -90,11 +75,7 @@ def test_an_empty_confirmed_selection_is_selection_empty(session: Session) -> No
 
 
 def test_a_region_in_the_selection_is_ignored_and_the_rest_is_deleted(session: Session) -> None:
-    """領域が選択に混ざっていても、残りは問題なく消える(領域は黙って無視)。
-
-    領域は図形の配置から計算されるだけの見た目で、それ自体を消す操作は無い ——
-    面(=ボディ)を消せば領域も自然に消える。
-    """
+    """領域が選択に混ざっていても、残りは問題なく消える(領域は黙って無視)。"""
     body, sketch_id = _box(session)
     _select(
         session,
@@ -129,9 +110,6 @@ def test_a_selection_of_only_regions_is_refused(session: Session) -> None:
     assert session.applied_count == applied_before
 
 
-# --------------------------------------------------------------------------------------
-# 2〜3. 削除の粒度と undo / redo
-# --------------------------------------------------------------------------------------
 def test_deleting_a_body_and_an_entity_is_one_operation_and_one_undo(session: Session) -> None:
     """**混在した選択でも1回のverb呼び出し・1行のログ・1回のundo**。"""
     body, sketch_id = _box(session)
@@ -204,11 +182,7 @@ def test_undo_restores_the_active_body_that_was_deleted(session: Session) -> Non
 def test_deleting_an_entity_releases_its_parameters_and_undo_restores_the_names(
     session: Session,
 ) -> None:
-    """**`release_param_refs` を対にする** —— 忘れると名前つきの値が誰にも参照されず残る。
-
-    undoは同じ順に登録し直すので**同じ名前**が振り直される(後ろに載った
-    `set_parameter` が記録した名前が別の値を指さないための条件)。
-    """
+    """**`release_param_refs` を対にする** —— 忘れると名前つきの値が誰にも参照されず残る。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     kept = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
     doomed = session.add_circle(sketch_id, [4.0, 4.0], 2.0)["entity_id"]
@@ -275,9 +249,6 @@ def test_a_hidden_body_is_refused(session: Session) -> None:
     assert body.id in _body_ids(session)
 
 
-# --------------------------------------------------------------------------------------
-# 4. 保存 -> 開く(再生)-> undo
-# --------------------------------------------------------------------------------------
 def test_the_document_survives_save_reopen_and_can_still_be_undone(session: Session) -> None:
     """再生が同じ結果を作り、**再生後は undo も通る**(スナップショットは再生が埋める)。"""
     body, sketch_id = _box(session)
@@ -329,9 +300,6 @@ def test_a_parameter_edit_after_a_delete_replays_the_delete(session: Session) ->
     assert session.document.parameters[radius] == 3.0
 
 
-# --------------------------------------------------------------------------------------
-# 5. 消したあとに壊れないこと
-# --------------------------------------------------------------------------------------
 def test_deleting_the_source_of_a_pattern_does_not_break_the_state(session: Session) -> None:
     """反復の元を消しても落ちない(依存グラフは作らない。undoで元どおり展開される)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
@@ -365,15 +333,8 @@ def test_deleting_a_body_leaves_a_sketch_pasted_on_its_face_alone(session: Sessi
     assert frame["frame"] is not None
 
 
-# --------------------------------------------------------------------------------------
-# WebSocket 経由
-# --------------------------------------------------------------------------------------
 def test_the_browser_can_delete_what_the_ai_selected(session: Session) -> None:
-    """AIが選んだ集合を、ブラウザからそのまま消せる。
-
-    `previewable=False` との組み合わせ(プレビューせず即実行)がWSの表で捌けることも
-    ここで一緒に見る。
-    """
+    """AIが選んだ集合を、ブラウザからそのまま消せる。"""
     body, _ = _box(session)
     session.set_selection([{"body": body.id, "kind": "face", "index": 1}])
 

@@ -2,9 +2,6 @@
 
 **Originヘッダ無しは許可する**(本人決定)。**「無しを許可」を緩みと読み替えて塞がないこと**
 —— 塞ぐと `web/scripts/*.mjs` が全部落ちる。
-
-ここは**握手だけ**を検査する(duocadのプロトコルは他のテストが見る)ので、ハンドラは接続を
-受けるだけの空実装でよい。
 """
 from __future__ import annotations
 
@@ -21,14 +18,8 @@ from duocad.mcp_server import VITE_DEV_PORT, allowed_origins
 from duocad.server import Session
 
 
-# --------------------------------------------------------------------------------------
-# 許可リストそのもの
-# --------------------------------------------------------------------------------------
 def test_the_allowlist_covers_both_host_spellings_and_the_dev_server():
-    """`localhost` と `127.0.0.1` は**別オリジン**なので両方要る。
-
-    片方だけにすると「なぜか繋がらない日がある」という最悪の壊れ方をする。
-    """
+    """`localhost` と `127.0.0.1` は**別オリジン**なので両方要る。"""
     origins = allowed_origins(8766)
     for host in ("127.0.0.1", "localhost"):
         assert f"http://{host}:8766" in origins        # 静的配信
@@ -47,9 +38,6 @@ def test_a_missing_origin_header_is_allowed_on_purpose():
     assert None in allowed_origins(8766)
 
 
-# --------------------------------------------------------------------------------------
-# 実際の握手
-# --------------------------------------------------------------------------------------
 async def _accept(connection) -> None:
     """握手が通ったことだけ確かめるハンドラ(1通受けて閉じる)。"""
     try:
@@ -89,12 +77,7 @@ def _handshake(origin: str | None) -> bool:
     ],
 )
 def test_a_page_from_somewhere_else_cannot_open_the_websocket(origin: str):
-    """**これが塞ぎたかった穴**。duocadが配っていないページからは繋がらない。
-
-    `"null"` を含めているのは、sandboxed iframe や `file://` のページが `Origin: null` を
-    送るため —— `None`(ヘッダ無し)の許可と文字列 `"null"` の許可を取り違えると**穴が空いた
-    まま緑になる**。
-    """
+    """**これが塞ぎたかった穴**。duocadが配っていないページからは繋がらない。"""
     assert _handshake(origin) is False
 
 
@@ -120,9 +103,6 @@ def test_a_client_without_an_origin_header_can_connect():
     assert _handshake(None) is True
 
 
-# --------------------------------------------------------------------------------------
-# 本番の配線(`mcp_server._run` が立てる WebSocket)
-# --------------------------------------------------------------------------------------
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -130,10 +110,7 @@ def _free_port() -> int:
 
 
 def test_the_running_server_applies_the_allowlist(monkeypatch, tmp_path):
-    """落ちたら、本番の起動経路(`mcp_server._run`)が WebSocket に Origin 検査を掛けずに立っている。
-
-    stdio の待ち受けを握手の試行に差し替え、プロセスを起こさずに同じ `serve(...)` を通す。
-    """
+    """落ちたら、本番の起動経路(`mcp_server._run`)が WebSocket に Origin 検査を掛けずに立っている。"""
     port = _free_port()
     outcomes: dict = {}
 

@@ -1,18 +1,5 @@
 """同時編集の安全性 —— 人とAIが**本当に並行して**同じ文書を触るときの2つの穴を塞ぐ。
 
-「添字は現時点のものであって、形が変われば別の実体を指す」ので、MCP経路(人が頼んで待つ=
-実質シリアル)では問題にならなかったことが、アプリ内AIでは本当に並行になる。
-
-固定するのは2つ:
-
-1. **AIのターンをまたいで文書が変わったとき、AIのverb呼び出しが静かに別の対象へ効かない。**
-   `Session._reset_selection_if_needed` の全リセットが届かない2つの経路を埋めてある ——
-   (a) `fillet` / `chamfer` / `extrude` は**選択を経由しない対象ボディ解決**(`body_id` の
-   既定=アクティブ)を持つので `editable_body(require_visible=True)` を課す(「B」節)、
-   なお各テストの依頼文に寸法(10mm・R2)を書いてあるのは、**このファイルが見たいのが
-   楽観ロックだから**である。書かないと寸法のガード
-   (`AgentLoop._dimensions_nobody_asked_for`)が先に立ち、verbまで届かない。
-
    (b) 選択をまったく経由しないverb(`set_visible` 等)には `AgentLoop.run()` の**楽観ロック**
    (「D」節)。版は `(ログの本数, 選択の指紋)` で、チェックは**ツール1件を実行する直前ごと**
    —— 件数も種別も変わらない「選択の入れ替え」も、1つの応答に束ねられた呼び出しの**間**も
@@ -42,18 +29,11 @@ def commit_face(session: Session, body_id: str = "box", index: int = 1) -> None:
     selection.set_selection(session.document, refs=[{"body": body_id, "kind": "face", "index": index}])
 
 
-# ========================================================================================
-# A. 契約の確認: 形を変えるverbの後、選択は全リセットされる(タスクC・実機で既に成立)
-# ========================================================================================
 def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_verb_fails_loud(
     box_session: Session,
 ):
     """AIが辺を確定した後、別の主体(人)が**無関係な**形状変更を挟むと、
     AIの次のverb呼び出しは対象を黙って変えず `SelectionEmpty` で止まる。
-
-    `extrude` は `resets_selection=True`(`duocad/catalog.py`)なので、確定した
-    面を1つ押し出すだけで選択が全リセットされる —— AIが辺を選んでいたことは
-    もう関係なくなる。
     """
     commit_edge(box_session)
     assert len(selection.get_selection(box_session.document).items) == 1
@@ -67,9 +47,6 @@ def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_
         box_session.fillet(1.0)
 
 
-# ========================================================================================
-# B. 埋めた穴: 選択は生きているが、対象ボディが人に隠された(resets_selectionが届かない経路)
-# ========================================================================================
 def test_fillet_refuses_a_body_hidden_after_the_selection_was_confirmed(box_session: Session):
     """人が選択を消費させる**前に**そのボディを隠すと、`fillet` は静かに丸めない。
 
@@ -101,15 +78,8 @@ def test_extrude_refuses_the_active_body_when_it_was_hidden_meanwhile(
         box_session.extrude(1.0, mode="join")
 
 
-# ========================================================================================
-# C. 予防: 選択の種別とverbが要求する種別の食い違いを、モデルに考えさせる前に返す
-# ========================================================================================
 def test_a_kind_mismatch_names_what_is_actually_confirmed(box_session: Session):
-    """面が3枚確定しているのに `fillet`(辺が要る)を呼ぶと、理由に**両方**が入る。
-
-    1回の呼び出しの返り値だけで「フィレットは辺を要求するが、確定しているのは面」と
-    分かるようにする(モデルが確認ツールを繰り返して止まるのを防ぐ)。
-    """
+    """面が3枚確定しているのに `fillet`(辺が要る)を呼ぶと、理由に**両方**が入る。"""
     selection.set_selection(
         box_session.document,
         refs=[
@@ -135,17 +105,11 @@ def test_a_genuinely_empty_selection_keeps_the_short_message(box_session: Sessio
     assert str(excinfo.value) == "no edge in the confirmed selection"
 
 
-# ========================================================================================
-# D. AgentLoopの楽観ロック: モデルが考えている間に文書が変わったら実行しない
-# ========================================================================================
 
 
 class ConcurrentEditProvider(Provider):
     """`RecordedProvider`(`tests/agent_support.py`)と同じ形だが、応答を返す**直前**に
     副作用(=人の並行編集を模したコールバック)を挟める。
-
-    `AgentLoop.run()` は `provider.complete()` の**前後**で文書の版を比べるので、
-    ここで走らせる副作用が「モデルが考えている間に人が文書を変えた」を模す唯一の場所になる。
     """
 
     name = "concurrent-edit"
@@ -170,11 +134,6 @@ def test_the_loop_refuses_a_tool_call_decided_before_a_concurrent_edit_and_the_m
 ):
     """`set_visible` は選択を経由しないので `resets_selection` の網に掛からない —— これが
     楽観ロックを足した理由そのもの(モジュールdocstring「D」節)。
-
-    1往復目: モデルは「boxを見せて」のつもりで `set_visible(True)` を計画するが、
-    その応答が返ってくる**間に**人が別の理由でboxを隠す(副作用)。ループはこれを検出し、
-    ツールを実行せずに「文書が変わった」を返す —— **静かに人の意図の上から実行しない**。
-    2往復目: モデルは(自己修復して)同じツールを呼び直し、今度は割り込みが無いので通る。
     """
     tools = DocumentTools(box_session)
 
@@ -213,13 +172,7 @@ def test_the_loop_refuses_a_tool_call_decided_before_a_concurrent_edit_and_the_m
 
 
 def test_the_optimistic_lock_does_not_trip_on_the_loops_own_actions(box_session: Session):
-    """自分自身が同じ往復で積んだ変更を「よそからの変更」と誤認しない。
-
-    1つの応答に2つのツール呼び出し(`extrude` → `describe_document`)が入っている。
-    チェックは**呼び出しごと**(1件実行するたびに次の基準値を取り直す)なので、
-    1件目が版を動かしても2件目の直前チェックはその動いた後の値を基準にする ——
-    どちらも実行される。誤検出しないことを確かめる回帰。
-    """
+    """自分自身が同じ往復で積んだ変更を「よそからの変更」と誤認しない。"""
     tools = DocumentTools(box_session)
     commit_face(box_session, index=1)
     reply = ProviderReply(
@@ -240,19 +193,10 @@ def test_the_optimistic_lock_does_not_trip_on_the_loops_own_actions(box_session:
     assert all(outcome.ok for outcome in run.tool_calls)
 
 
-# ========================================================================================
-# E. 版の比較が見逃しうる2つの経路への回帰
-# ========================================================================================
 def test_reselecting_the_same_kind_between_commit_and_the_verb_call_is_detected(
     box_session: Session,
 ):
-    """ログの本数だけでは「選択の入れ替え」を見逃す。
-
-    `set_selection` は操作ログに一切乗らないので、人が**辺1の選択を
-    外して同じ種別(辺)の辺5へ選び直して確定する**手順は件数も種別も変わらず、
-    `resets_selection` も `selection_empty` も発火しない。`current_seq()` に選択の指紋を
-    混ぜたことでこの入れ替えも「版が動いた」として検出されることを固定する。
-    """
+    """ログの本数だけでは「選択の入れ替え」を見逃す。"""
     tools = DocumentTools(box_session)
     commit_edge(box_session, index=1)  # AIはこの時点の「辺1」を見て計画したはず
 
@@ -281,14 +225,7 @@ def test_reselecting_the_same_kind_between_commit_and_the_verb_call_is_detected(
 
 
 class InterferingTools:
-    """`DocumentTools` を薄く覆い、**N回目の `current_seq()` 呼び出し**の直前に副作用を挟める。
-
-    `ConcurrentEditProvider` は往復(`provider.complete()`)単位でしか副作用を挟めないので、
-    「1つの応答に束ねられた2件のツール呼び出しの間」という**呼び出し単位**の隙間はこちらで
-    なければ作れない。副作用を `current_seq()` の呼び出し自体の直前で起こすのは、
-    `AgentLoop.run()` が呼び出し直前にそれを読む構造そのものを利用して、「直前チェックの次の
-    読み取りで初めて変化が見える」ことを保証するため。
-    """
+    """`DocumentTools` を薄く覆い、**N回目の `current_seq()` 呼び出し**の直前に副作用を挟める。"""
 
     def __init__(self, inner: DocumentTools, trigger_at_call: int, side_effect) -> None:
         self.inner = inner
@@ -320,14 +257,7 @@ class InterferingTools:
 def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
     box_session: Session,
 ):
-    """1つの応答に束ねられた複数のツール呼び出しの**間**も見る。
-
-    本番経路(`ToolsOnLoop._run_on_loop`)は呼び出しのたびにイベントループへ制御を返すので、
-    1件目の実行後(版の取り直しの後)・2件目の実行前にも人の操作が挟まりうる。`current_seq()` の
-    4回目の呼び出し(=2件目の直前チェック)の直前に人の操作を割り込ませ、2件目が実行されないことを
-    固定する。実行の完了と版の取り直しの**間**に挟まる操作は、本番では1手にまとめてあるので起きない
-    (`ToolsOnLoop.call_and_seq`。下の `test_a_human_edit_landing_right_after_a_tool_call_...`)。
-    """
+    """1つの応答に束ねられた複数のツール呼び出しの**間**も見る。"""
     inner = DocumentTools(box_session)
     commit_face(box_session, index=1)
 
@@ -366,9 +296,6 @@ def test_a_human_edit_landing_right_after_a_tool_call_is_not_absorbed_into_the_n
 ):
     """落ちたら、ツール実行の完了と「実行直後の版」の読み取りが別々にイベントループへ投げられ、
     その間にループが処理した人の操作が次の直前チェックの基準に吸われて AI に見えない(issue #48)。
-
-    本番の覆い(`ToolsOnLoop`)で、ツールの実行中に「直後に人が箱を隠す」をループへ予約する。
-    1手で読んでいれば、返った版はその操作を含まず、次に読む版と食い違う(=次の直前チェックで検出できる)。
     """
     import asyncio
 

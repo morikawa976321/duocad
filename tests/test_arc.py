@@ -6,12 +6,6 @@
 
 期待値の出どころ —— 半円(半径5mm・180°)と弦の線分で閉じた領域を法線方向へ3mm押し出した実測:
 
-    部分円筒 1(U範囲 180.0度)+ 平面 3   計4面
-
-「部分円筒」は `kernel.classify_face` が U範囲 350度以下の円筒に付ける種別で、**全周円筒(穴)
-と区別される**。円弧を押し出して全周円筒になったら、それは円を押し出しているのと同じ＝円弧が
-効いていない、ということ。
-
 `add_arc(doc, sketch_id, center, radius, start_deg, end_deg)` は**中心・半径・角度**で持つ。
 3点(始点・中点・終点)で受け取ると、円弧だけが「数値を持たない図形」になり `set_parameter` の
 外側へ落ちる。`params` のキーは `cx` / `cy` / `radius` / `start_deg` / `end_deg` で、角度は
@@ -48,9 +42,6 @@ def half_disc_sketch(doc: Document) -> str:
     return sketch_id
 
 
-# --------------------------------------------------------------------------------------
-# スケッチに円弧を追加できる
-# --------------------------------------------------------------------------------------
 def test_add_arc_stores_named_numbers():
     """円弧は**中心・半径・角度**を名前つきの数値として持つ(3点で持つと `set_parameter` の外側へ落ちる)。"""
     doc = Document()
@@ -97,9 +88,6 @@ def test_broken_arcs_are_refused(radius: float, start_deg: float, end_deg: float
     assert get_sketch(doc, sketch_id).entities == []
 
 
-# --------------------------------------------------------------------------------------
-# 円弧を含む閉領域が検出できる
-# --------------------------------------------------------------------------------------
 def test_a_region_closed_by_an_arc_and_a_line_is_detected():
     """線分＋円弧で囲んだ領域が検出できること。
 
@@ -123,15 +111,8 @@ def test_an_open_arc_alone_does_not_close_a_region():
     assert regions(doc, sketch_id) == []
 
 
-# --------------------------------------------------------------------------------------
-# 押し出すと部分円筒面ができる（全周円筒ではない）
-# --------------------------------------------------------------------------------------
 def test_the_partial_cylinder_spans_the_arc_angle():
-    """できた形に**指定した角度の円弧がそのまま残っている**こと(長さで見る)。
-
-    面の種別だけを見ていると「たまたま部分円筒になった」を通してしまう。円弧の長さは r·θ で
-    角度と1対1なので、長さを見れば角度を見たことになる。
-    """
+    """できた形に**指定した角度の円弧がそのまま残っている**こと(長さで見る)。"""
     doc = Document()
     sketch_id = half_disc_sketch(doc)
     operation = extrude(doc, [region_ref(sketch_id, 1)], EXTRUDE_MM, mode="join")
@@ -149,14 +130,8 @@ def test_the_partial_cylinder_spans_the_arc_angle():
     assert kinds_of(doc, operation.args["body_id"]) == HALF_DISC_PRISM_KINDS
 
 
-# --------------------------------------------------------------------------------------
-# 操作ログに載り、undoできる（押し出しまで通したとき）
-# --------------------------------------------------------------------------------------
 def test_arc_survives_a_log_round_trip():
-    """円弧を含むスケッチが保存・再生で完全に復元できること。
-
-    円弧の数値（半径・角度）が `args` に載っていなければ再生で別の形になる。
-    """
+    """円弧を含むスケッチが保存・再生で完全に復元できること。"""
     doc = Document()
     sketch_id = half_disc_sketch(doc)
     extrude(doc, [region_ref(sketch_id, 1)], EXTRUDE_MM, mode="join")

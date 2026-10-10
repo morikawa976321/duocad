@@ -1,19 +1,4 @@
-"""面に貼ったスケッチの姿勢は**作成時に固定**され、その後の形状変更に動かされない。
-
-2026-08-30の事故: 直方体の上面にスケッチを貼った状態で辺をフィレットしたら、スケッチと
-無関係な場所の操作なのに面の列挙順が変わり、`plane["index"]` の指す先が球面・円筒面へずれて
-スケッチが丸ごと描けなくなった(`ValueError: face is cone: スケッチ平面にできるのは平面だけ` /
-`face is cylinder_full: ...`)。原因は**描画のたびにライブの `body.shape` から添字で面を引き
-直していた**こと。
-
-設計の正はFusion 360の実機挙動(2026-08-30に反証確認): 参照した面の面積が0になるまで丸めても
-スケッチは元の高さ・向きのまま残る。つまり**作成時点の姿勢をスケッチ自身へ焼き付け、以後その
-ボディに何が起きても引き直さない**。一方、スケッチ作成**より前**のパラメータ編集には従来どおり
-追随する —— `rebuild()` が履歴を頭から再生し、その時点の形状から解き直すため。
-
-面の**実体**(`TopoDS_Face`)が要るのは領域計算だと思われがちだが、実際に使われていたのは
-無限平面としての姿勢だけである(トリムされた境界は使っていない)。だからこの凍結で失うものは無い。
-"""
+"""面に貼ったスケッチの姿勢は**作成時に固定**され、その後の形状変更に動かされない。"""
 from __future__ import annotations
 
 import math
@@ -40,9 +25,6 @@ TOP_FACE_INDEX = 6
 PLUS_X_FACE_INDEX = 3
 
 
-# --------------------------------------------------------------------------------------
-# 道具（duocadのverbだけで素材を作る。生のOCPで組み立てない = tests/test_fillet.py と同じ）
-# --------------------------------------------------------------------------------------
 def live_frame(doc: Document, body_id: str, face_index: int) -> dict:
     """**その瞬間の** `body.shape` の面から枠を取る(凍結前の古い解決の再現)。"""
     return kernel_sketch.face_frame(doc.get_body(body_id).shape, face_index)
@@ -59,16 +41,8 @@ def top_plane_indices(doc: Document, body_id: str, z: float) -> list:
     return found
 
 
-# --------------------------------------------------------------------------------------
-# 1. 作成後の形状変更は姿勢を動かさない
-# --------------------------------------------------------------------------------------
 def test_a_later_fillet_does_not_move_a_face_sketch_even_when_the_index_now_lands_on_a_sphere():
-    """2026-08-30の事故そのもの。**添字の指す先が球面へずれてもスケッチは動かない**。
-
-    立方体の全12辺を r=3 で丸めると面は26枚になり、上面だった添字6は角の球面
-    (`classify_face` は球を `other` に落とす)を指す。凍結前はここでスケッチの枠を
-    引き直していたため `ValueError: face is other: ...` で描画ごと落ちていた。
-    """
+    """2026-08-30の事故そのもの。**添字の指す先が球面へずれてもスケッチは動かない**。"""
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
@@ -93,9 +67,6 @@ def test_a_later_fillet_does_not_move_a_face_sketch_even_when_the_index_now_land
 
 def test_a_face_sketch_survives_the_referenced_face_disappearing_completely():
     """参照元の面が**完全に消滅**してもスケッチは元の高さ・向きで残る(Fusion実機の挙動)。
-
-    上面を丸ごと削り落とす(上面より大きい長方形で 5mm 切り下げる)。切削後、z=20 に上向きの
-    平面は**1枚も無い**。それでもスケッチの枠は z=20 のままで、領域も計算できる。
 
     **フィレットで面積をちょうど0にする経路は使えない**: OCCTのフィレットは半径が限界値
     (20mm立方体の上面4辺なら r=10)ちょうどだと `IsDone=False` で失敗する(実測。
@@ -131,10 +102,7 @@ def test_a_face_sketch_survives_the_referenced_face_disappearing_completely():
 
 
 def test_extrude_takes_its_direction_from_the_frozen_frame():
-    """押し出しの向きも凍結した枠から取る(ライブの面から引き直さない)。
-
-    向きだけ別経路で解いていると、面取り後に**押し出しだけが別の面の法線へ**静かに移る。
-    """
+    """押し出しの向きも凍結した枠から取る(ライブの面から引き直さない)。"""
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
@@ -151,15 +119,8 @@ def test_extrude_takes_its_direction_from_the_frozen_frame():
     assert volume_after > volume_before, "上向きに積めていない(法線が別の面へ移った)"
 
 
-# --------------------------------------------------------------------------------------
-# 2. 作成より前のパラメータ編集には従来どおり追随する
-# --------------------------------------------------------------------------------------
 def test_a_face_sketch_follows_a_parameter_edit_that_precedes_it():
-    """`set_parameter` は履歴を頭から再生するので、スケッチはその時点の形状で解き直される。
-
-    直方体の幅(`d3`)を 20 → 30 にすると +X 側の側面が動く。そこに貼ったスケッチの原点も
-    x=20 から x=30 へ**ついていく**(向きは変わらない)。凍結によってここが止まってはいけない。
-    """
+    """`set_parameter` は履歴を頭から再生するので、スケッチはその時点の形状で解き直される。"""
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, PLUS_X_FACE_INDEX))
@@ -179,9 +140,6 @@ def test_a_face_sketch_follows_a_parameter_edit_that_precedes_it():
     )
 
 
-# --------------------------------------------------------------------------------------
-# 3. 焼き付けた枠そのものの契約
-# --------------------------------------------------------------------------------------
 def test_the_frozen_frame_equals_the_live_resolution_at_creation_time_for_every_face():
     """凍結した枠は「作成時にライブで解いた枠」と**厳密に一致**する。
 
@@ -218,10 +176,7 @@ def test_the_frozen_frame_equals_the_live_resolution_at_creation_time_for_every_
 
 
 def test_the_frame_is_kept_out_of_the_oplog():
-    """ログには**素の参照だけ**を載せる。焼き付けた枠を入れると再生で古い姿勢が復活する。
-
-    ログが持つのは `kind`/`body`/`index`/`provenance`。姿勢は再生のたびに解き直す。
-    """
+    """ログには**素の参照だけ**を載せる。焼き付けた枠を入れると再生で古い姿勢が復活する。"""
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
@@ -234,11 +189,7 @@ def test_the_frame_is_kept_out_of_the_oplog():
 
 
 def test_a_log_round_trip_reproduces_the_same_frames():
-    """保存(JSON)→再生でスケッチの枠が同じに戻る(undo/redoと保存の互換)。
-
-    再生の途中では、面取り前のボディに対して姿勢が解かれる。**再生後の最終形状に対して
-    ではない** —— そこが「作成時点で固定する」の実体である。
-    """
+    """保存(JSON)→再生でスケッチの枠が同じに戻る(undo/redoと保存の互換)。"""
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
@@ -277,16 +228,8 @@ def test_undo_and_redo_of_the_fillet_leave_the_sketch_pose_alone():
     assert_same_frame(region.plane_frame(document, sketch_id), expected)
 
 
-# --------------------------------------------------------------------------------------
-# 4. 壊れた枠を黙って通さない
-# --------------------------------------------------------------------------------------
 def test_a_face_plane_without_a_frame_still_resolves_from_the_given_face():
-    """枠を持たない面参照は、渡された面から解く(後方互換の経路)。
-
-    `sketch_create` を通った平面は必ず枠を持つので製品の経路では通らないが、**kernelは
-    OCPの境界**であり、手で組んだ PlaneRef が来る余地がある。枠が無いのに面も無ければ
-    ValueError —— 黙って基準平面へ落とさない。
-    """
+    """枠を持たない面参照は、渡された面から解く(後方互換の経路)。"""
     document = Document()
     body_id = new_box(document, BOX)
     shape = document.get_body(body_id).shape
@@ -329,11 +272,7 @@ def test_a_face_plane_without_a_frame_still_resolves_from_the_given_face():
     ],
 )
 def test_a_broken_frame_is_rejected_instead_of_silently_mirroring_the_plane(frame):
-    """直交していない・非有限・欠けている枠は ValueError。
-
-    黙って通すと**領域の添字も押し出しの向きも意味を失ったまま成功する**(平面内で鏡像に
-    なった図形は、そのまま見ても間違いに見えない)。
-    """
+    """直交していない・非有限・欠けている枠は ValueError。"""
     plane = {"kind": "face", "body": "b", "index": 1, "provenance": None, "frame": frame}
     with pytest.raises(ValueError):
         kernel_sketch.sketch_plane_frame(plane)

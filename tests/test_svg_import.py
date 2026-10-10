@@ -1,17 +1,4 @@
-"""verb `import_svg` と図形種別 `bezier` の契約。
-
-## このファイルが固定する6つ
-
-1. **単位はmm** — 物理単位を持つSVG(`width="100mm"`)はその寸法で、`viewBox` しか無いSVGは
-   1ユーザー単位=1mmで入る。**Yは反転する**(SVGは下向き、スケッチのvは上向き)。
-2. **曲線は曲線のまま** — ベジエは折れ線に落ちない。押し出した側面が線分の数だけ平面に
-   割れないことを面数で見る。
-3. **ログ1行・undo1回** — ロゴ1枚が数百行にならない。`add_bezier` というverbは**無い**。
-4. **再生は外部ファイルを読まない** — SVGを消してもログから同じ形が戻る。
-5. **取り込んだ図形は名前つきの値を持たない** — SketchPanelの図形一覧がロゴ1枚で埋まらない。
-6. **貼る先は「いま開いているスケッチ」(`sketch_id`)だけ** — 新しいスケッチは作らない。
-   `sketch_id` が実在しなければ拒否し、既存の図形は消えず、新しく足した分だけが増える。
-"""
+"""verb `import_svg` と図形種別 `bezier` の契約。"""
 from __future__ import annotations
 
 import math
@@ -63,17 +50,11 @@ def new_sketch(document: Document, plane: str = "XY") -> str:
     return sketch_module.sketch_create(document, plane)
 
 
-# --------------------------------------------------------------------------------------
-# 1: 単位と向き
-# --------------------------------------------------------------------------------------
 def test_physical_units_come_in_as_millimetres(tmp_path: Path) -> None:
     """`width="100mm"` のSVGは、書いてある寸法がそのままmmで入る。
 
     落ちたら `svg_import.MM_PER_INCH`(ppi)が効いていない —— svgelementsの既定(96ppi)だと
     全長がpxへ正規化され、100mmが377.95という数値で入る(**3.78倍で静かに大きくなる**)。
-
-    **厳密一致では比べない**。svgelementsのmm→pxが丸めた定数を使うので0.54ppmずれる
-    (`svg_import` のモジュールdocstring)。ここで見たいのは3.78倍かどうかである。
     """
     _name, entities = svg_import.read_svg_entities(
         write_svg(tmp_path, "units.svg", SVG_WITH_UNITS)
@@ -102,11 +83,7 @@ def test_viewbox_only_svg_is_one_unit_per_millimetre(tmp_path: Path) -> None:
 
 
 def test_the_y_axis_is_flipped(tmp_path: Path) -> None:
-    """SVGのYは下向き、スケッチのvは上向き。**反転しないと上下が逆に入る**。
-
-    高さ50の座標系で y=5..25 に置いた矩形は、v=25..45 に入るのが正しい。反転していなければ
-    v=5..25 のままになる。
-    """
+    """SVGのYは下向き、スケッチのvは上向き。**反転しないと上下が逆に入る**。"""
     _name, entities = svg_import.read_svg_entities(
         write_svg(tmp_path, "flip.svg", SVG_WITH_UNITS)
     )
@@ -143,14 +120,8 @@ def test_scale_rejects_unusable_values(tmp_path: Path, bad: float) -> None:
         svg_import.read_svg_entities(path, scale=bad)
 
 
-# --------------------------------------------------------------------------------------
-# 2: 種別の振り分けと、曲線が曲線のままであること
-# --------------------------------------------------------------------------------------
 def test_shapes_map_to_the_expected_entity_kinds(tmp_path: Path) -> None:
-    """真円は `arc`、楕円と2次ベジエは `bezier`、直線は `line`。
-
-    2次ベジエ(Q)は**次数上げで厳密に**3次になるので、近似の話ではない。
-    """
+    """真円は `arc`、楕円と2次ベジエは `bezier`、直線は `line`。"""
     _name, entities = svg_import.read_svg_entities(
         write_svg(tmp_path, "mixed.svg", SVG_MIXED)
     )
@@ -203,9 +174,6 @@ def test_an_elliptical_arc_is_within_a_tenth_of_a_percent(tmp_path: Path) -> Non
             assert error < 0.001, f"t={t} で楕円から {error:.3%} ずれている"
 
 
-# --------------------------------------------------------------------------------------
-# 3: ログの粒度と、ベジエを1本ずつ足すverbが無いこと
-# --------------------------------------------------------------------------------------
 def test_the_whole_import_is_one_log_entry(tmp_path: Path) -> None:
     """図形が何個あってもログは1行。**Ctrl+Z 1回で取り込みごと戻る**。
 
@@ -244,10 +212,6 @@ def test_import_svg_adds_to_an_existing_sketch_without_replacing_it(tmp_path: Pa
 
 def test_undo_after_two_imports_removes_only_the_most_recent_batch(tmp_path: Path) -> None:
     """**このタスクが作った契約そのもの**: undoは「そのverb呼び出しが足した図形だけ」を消す。
-
-    同じスケッチへ2回取り込むと、1回目のログエントリと2回目のログエントリは別々に残る
-    (2回とも `import_svg`)。2回目の呼び出しのあとにundoすると、**2回目が足した図形だけ**が
-    消え、1回目の取り込み分と、取り込みより前から手で描いてあった図形は無傷で残る。
 
     落ちたら `_undo_import_svg` がスケッチ全体を消す(古い設計)か、全図形を無差別に消す形へ
     戻っている —— どちらも「開いているスケッチへ足す」という今回の意味と両立しない。
@@ -289,15 +253,8 @@ def test_there_is_no_verb_that_adds_a_single_bezier() -> None:
     assert "add_bezier" not in {command.name for command in catalog.COMMANDS}
 
 
-# --------------------------------------------------------------------------------------
-# 4: 再生(保存して開く)
-# --------------------------------------------------------------------------------------
 def test_replay_does_not_read_the_svg_file(tmp_path: Path) -> None:
-    """**元のSVGを消しても**ログから同じ形が戻る(形はログの中にある)。
-
-    SVG本文を埋めて再生時にパースし直す形だと、svgelementsの版が変わった日に
-    同じログから別の形が出てくる。ここはそれを禁じている。
-    """
+    """**元のSVGを消しても**ログから同じ形が戻る(形はログの中にある)。"""
     path = write_svg(tmp_path, "gone.svg", SVG_MIXED)
     document = Document()
     sketch_id = new_sketch(document)
@@ -329,9 +286,6 @@ def test_undo_and_redo_round_trip(tmp_path: Path) -> None:
     ] == ids
 
 
-# --------------------------------------------------------------------------------------
-# 5: パラメータを増やさないこと
-# --------------------------------------------------------------------------------------
 def test_imported_entities_do_not_create_named_parameters(tmp_path: Path) -> None:
     """取り込んだ図形は `d1` `d2` … を作らない。
 
@@ -345,9 +299,6 @@ def test_imported_entities_do_not_create_named_parameters(tmp_path: Path) -> Non
     assert document.parameters == {}
 
 
-# --------------------------------------------------------------------------------------
-# 6: 貼る先は「開いているスケッチ」だけ
-# --------------------------------------------------------------------------------------
 def test_an_unknown_sketch_id_is_refused(tmp_path: Path) -> None:
     """`sketch_id` が実在しなければ拒否する。**doc.sketches にもログにも何も残さない**。"""
     document = Document()
@@ -357,9 +308,6 @@ def test_an_unknown_sketch_id_is_refused(tmp_path: Path) -> None:
     assert document.sketches == [] and document.log.entries == []
 
 
-# --------------------------------------------------------------------------------------
-# 失敗の契約
-# --------------------------------------------------------------------------------------
 def test_a_missing_file_raises_file_not_found(tmp_path: Path) -> None:
     document = Document()
     sketch_id = new_sketch(document)
@@ -419,9 +367,6 @@ def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
     assert len(document.log.entries) == before
 
 
-# --------------------------------------------------------------------------------------
-# Session(WS/MCPが通る経路)
-# --------------------------------------------------------------------------------------
 def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
     session = Session(None, 0.2, models_dir=tmp_path)
     sketch_id = session.sketch_create("XY")["sketch_id"]
@@ -438,12 +383,7 @@ def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
 
 
 def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:
-    """状態配信の射影で図形を伏せる。
-
-    `args["entities"]` はロゴ1枚で数百件になり、`state_meta()` は**操作のたびに全接続へ
-    配られる**。素通しにすると1操作ごとにそれが流れる(STEP本文で踏んだのと同じ罠)。
-    **ログそのものは無傷**であること(保存は図形を書く)も併せて見る。
-    """
+    """状態配信の射影で図形を伏せる。"""
     session = Session(None, 0.2, models_dir=tmp_path)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.import_svg(sketch_id, str(write_svg(tmp_path, "feed.svg", SVG_MIXED)))

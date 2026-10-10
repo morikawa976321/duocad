@@ -1,9 +1,4 @@
-"""MCPのプロトコル層(JSON-RPC 2.0 と stdio トランスポート)の契約。
-
-**依存を増やさず素で実装した**ので、プロトコルの正しさはここでしか担保されない。
-ツールの中身は `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py`、HTTPトランスポートは
-`tests/test_mcp_http.py`、実ブラウザでの確認は `web/scripts/smoke-mcp.mjs` が行う。
-"""
+"""MCPのプロトコル層(JSON-RPC 2.0 と stdio トランスポート)の契約。"""
 from __future__ import annotations
 
 import asyncio
@@ -27,9 +22,6 @@ def _server() -> McpServer:
     return McpServer(DocumentTools(session=None))  # type: ignore[arg-type]
 
 
-# --------------------------------------------------------------------------------------
-# JSON-RPC の誤りは標準コードで断る
-# --------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("message", "code"),
     [
@@ -58,9 +50,6 @@ def test_an_unknown_protocol_version_is_answered_with_the_server_default():
     assert response["result"]["protocolVersion"] == SUPPORTED_PROTOCOL_VERSIONS[0]
 
 
-# --------------------------------------------------------------------------------------
-# stdio トランスポート
-# --------------------------------------------------------------------------------------
 def test_stdio_transport_speaks_line_delimited_json_rpc():
     """`serve_stdio` が1行1メッセージで読み書きし、EOFで戻ること(プロセスは起こさない)。"""
     import io
@@ -87,12 +76,7 @@ def test_stdio_transport_speaks_line_delimited_json_rpc():
 
 
 def test_the_process_starts_and_answers_over_real_stdio():
-    """`python -m duocad.mcp_server` を**実プロセスとして起動**して喋れること。
-
-    MCPクライアント(Claude Code / Claude Desktop)はこの経路でしか繋がらない。
-    あわせて **stdoutにJSON-RPC以外の行が出ていないこと**を確かめる — 起動メッセージを
-    1行stdoutへ出すだけで接続は失敗する(だからログはstderrへ出す設計にしてある)。
-    """
+    """`python -m duocad.mcp_server` を**実プロセスとして起動**して喋れること。"""
     handshake = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -144,9 +128,6 @@ def test_the_process_starts_and_answers_over_real_stdio():
 def test_fd1_noise_outside_a_tool_call_never_reaches_the_rpc_channel(tmp_path) -> None:
     """落ちたら、fd 1 の振り替え(`_claim_stdout`)がツール実行の間だけになっていて、人がブラウザから
     STEP を書き出したときに OCCT の C++ が fd 1 へ吐く統計が JSON-RPC の行に混ざる。
-
-    実プロセスは起こさず、`_claim_stdout` を通した後に**ツール実行の外で** fd 1 へ書く(C++ と同じ経路)。
-    JSON-RPC の書き口には JSON だけが、fd 1 への書き込みは stderr 側に出ること。
     """
     from duocad.mcp_server import _claim_stdout
 

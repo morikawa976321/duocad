@@ -1,8 +1,4 @@
-"""`tests/eval_*.mjs` のような Node の評価器を走らせるテストの道具。
-
-**skip しない** —— node が無い・評価器が無いときの skip は無人実行では緑と区別が付かず、
-「TS 側の式を誰も見ていない」状態をそのまま通してしまうので、どちらも赤にする。
-"""
+"""`tests/eval_*.mjs` のような Node の評価器を走らせるテストの道具。"""
 from __future__ import annotations
 
 import json
@@ -13,11 +9,7 @@ from duocad.paths import REPO_ROOT
 
 
 def run_node(evaluator: Path, what: str, *, stdin=None, json_out: bool = False, timeout: int = 60):
-    """`node <evaluator>` をリポジトリ直下で走らせ、stdout を返す(`json_out` なら JSON で読む)。
-
-    `stdin` を渡すと JSON にして標準入力へ送る。`what` は落ちたときに「何を検査できなかったか」を
-    言う語(例: 「両言語の式の一致」)。
-    """
+    """`node <evaluator>` をリポジトリ直下で走らせ、stdout を返す(`json_out` なら JSON で読む)。"""
     assert evaluator.exists(), f"評価の口が無い: {evaluator}"
     try:
         completed = subprocess.run(

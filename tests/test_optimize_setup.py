@@ -1,24 +1,4 @@
-"""形状最適化(第3のモード)の条件を置く4 verb の契約。
-
-固定するのは6つ。**どれも、外れても例外が出ないまま静かに間違う**種類のずれである:
-
-1. **集合代入** —— 「1つ足す」ではなく「その役割の集合を、選択そのものに置き換える」。
-   **空の選択も正当な入力**で、その役割を全部外すことを意味する(だから解除専用の
-   verbが要らない)。
-2. **排他は先勝ち** —— 既に相手の役割が付いている対象を割り当てようとしたら失敗し、
-   **どれが衝突したかを名指しする**。失敗した側は文書にもログにも何も残さない。
-3. **指紋の不一致** —— 面の参照は添字だけでは足りない。後から形を変えて添字が別の面を
-   指すようになったら、その条件は**使わずに** `stale` として名指しする(壊れないように
-   するのではなく、壊れたと気づけるようにする)。
-4. **保存 → 再オープンの往復** —— 条件は操作ログに載るので、`to_json` → `from_json` →
-   `replay` で完全に戻る。
-5. **undo / redo** —— 直前の集合へ戻り、やり直せる。
-6. **3経路** —— コア(`Session`)・WebSocket・MCPのどこから踏んでも同じ結果になる
-   (宣言は `duocad/catalog.py` の1箇所が正)。
-
-**選択種別 `body` の新設**もここで押さえる —— ソリッドを丸ごと指す手段が無いと、
-保持/除外ソリッドの対象を選択から取れない。
-"""
+"""形状最適化(第3のモード)の条件を置く4 verb の契約。"""
 from __future__ import annotations
 
 import re
@@ -49,11 +29,7 @@ def _body_refs(*bodies) -> list:
 
 
 def _preserve(session: Session, *bodies) -> None:
-    """条件面を置く前に、そのボディを保持ソリッドにする。
-
-    **拘束面・荷重面は保持ソリッドの面にしか置けない**(2026-09-18〜)ので、面を指す前に通す。
-    保持は集合代入なので、既に保持のボディも一緒に入れ直す。
-    """
+    """条件面を置く前に、そのボディを保持ソリッドにする。"""
     kept = list(session.document.optimize.preserve_bodies)
     refs = [{"body": body_id, "kind": "body"} for body_id in kept]
     refs += [ref for ref in _body_refs(*bodies) if ref["body"] not in kept]
@@ -78,9 +54,6 @@ def _optimize(session: Session) -> dict:
     return session.state_meta()["optimize"]
 
 
-# --------------------------------------------------------------------------------------
-# 1. 選択種別 `body`
-# --------------------------------------------------------------------------------------
 def test_a_body_can_be_selected_whole(session: Session) -> None:
     """**ソリッドを丸ごと指せる**(面を全部入れる案は採っていない)。
 
@@ -110,15 +83,8 @@ def test_the_same_body_is_not_selected_twice(session: Session) -> None:
     assert session.get_selection()["items"] == []
 
 
-# --------------------------------------------------------------------------------------
-# 2. 集合代入
-# --------------------------------------------------------------------------------------
 def test_assigning_bodies_replaces_the_whole_set(session: Session) -> None:
-    """**置き換えであって追加ではない。** 2回目の確定で1回目の中身が消える。
-
-    ここが「足す」に変わると、verbの中で外したはずのものが役割に残り続ける ——
-    解除専用のverbを作らない設計の前提そのものが崩れる。
-    """
+    """**置き換えであって追加ではない。** 2回目の確定で1回目の中身が消える。"""
     first = _box(session)
     second = _box(session, corner=(50.0, 0.0))
 
@@ -132,10 +98,7 @@ def test_assigning_bodies_replaces_the_whole_set(session: Session) -> None:
 
 
 def test_an_empty_selection_clears_the_role(session: Session) -> None:
-    """**空の選択で確定すると、その役割が空になる**(解除専用のverbを作らない根拠)。
-
-    ここが `SelectionEmpty` で拒まれると、一度付けた役割を外す手段がどこにも無くなる。
-    """
+    """**空の選択で確定すると、その役割が空になる**(解除専用のverbを作らない根拠)。"""
     body = _box(session)
     _select(session, _body_refs(body))
     session.set_preserve_bodies()
@@ -170,15 +133,8 @@ def test_a_selection_set_by_the_ai_feeds_the_verb_from_the_browser(session: Sess
     assert _ids(_optimize(session)["preserve_bodies"]) == [body.id]
 
 
-# --------------------------------------------------------------------------------------
-# 3. 排他は先勝ち
-# --------------------------------------------------------------------------------------
 def test_a_preserved_body_cannot_be_excluded(session: Session) -> None:
-    """**先勝ち**。しかも**どのボディが衝突したかを名指しする**(画面がトーストに出す)。
-
-    失敗した側は文書にもログにも何も残さない —— 半分だけ割り当たると、画面の色と
-    実際の割り当てが食い違ったまま気づけない。
-    """
+    """**先勝ち**。しかも**どのボディが衝突したかを名指しする**(画面がトーストに出す)。"""
     body = _box(session)
     _select(session, _body_refs(body))
     session.set_preserve_bodies()
@@ -246,9 +202,6 @@ def test_the_conflict_is_an_invalid_argument_over_mcp(session: Session) -> None:
     assert envelope["code"] == "invalid_argument", envelope
 
 
-# --------------------------------------------------------------------------------------
-# 4. 荷重の how(大きさと向き)
-# --------------------------------------------------------------------------------------
 def test_a_load_direction_can_be_a_world_vector(session: Session) -> None:
     """**面法線だけでは足りない**(棚受けは世界の -Z へ受ける)。ベクトルは単位化して控える。"""
     body = _box(session)
@@ -300,9 +253,6 @@ def test_a_bad_load_is_refused_without_touching_the_document(
     assert _optimize(session)["loads"] == []
 
 
-# --------------------------------------------------------------------------------------
-# 5. 面の指紋
-# --------------------------------------------------------------------------------------
 def test_a_face_condition_carries_a_fingerprint(session: Session) -> None:
     """条件には**添字だけでなく重心・法線・面積**が焼き込まれている(操作ログにも載る)。"""
     body = _box(session)
@@ -317,9 +267,6 @@ def test_a_face_condition_carries_a_fingerprint(session: Session) -> None:
 
 def test_a_face_that_changed_is_reported_and_not_used(session: Session) -> None:
     """**形が変われば、その条件は使われず `stale` に名指しで出る。**
-
-    ここが効かないと、拘束のつもりで指した面が別の場所へ移ったまま最適化へ渡る ——
-    例外も出ないので、結果を見るまで誰も気づかない。
 
     形の変え方に辺1のフィレットを使うのは**検出を決定的にするため**である。実測で、
     面1は同じ面のまま面積が 400→360 に減り(面積で捕まる)、面2は法線が
@@ -344,12 +291,7 @@ def test_a_face_that_changed_is_reported_and_not_used(session: Session) -> None:
 
 
 def test_moving_a_body_does_not_invalidate_its_face_conditions(session: Session) -> None:
-    """**平行移動では条件が外れない**。
-
-    `move_body` は面の添字を変えず、指した面は同じ面のままなので、外れるのは誤検出である
-    (指紋の一致判定が重心を見ない理由は `duocad/optimize.py` の
-    `fingerprint_mismatch` のdocstringが正)。
-    """
+    """**平行移動では条件が外れない**。"""
     body = _box(session)
     _preserve(session, body)
     _select(session, _face_refs(body, [1]))
@@ -364,10 +306,7 @@ def test_moving_a_body_does_not_invalidate_its_face_conditions(session: Session)
 
 
 def test_a_stale_condition_comes_back_when_the_shape_comes_back(session: Session) -> None:
-    """指紋が合わない条件は**文書からは消えない** —— 形を戻せばまた使われる。
-
-    配信のときに落としているだけで、削除していないこと(操作ログが唯一の正)。
-    """
+    """指紋が合わない条件は**文書からは消えない** —— 形を戻せばまた使われる。"""
     body = _box(session)
     _preserve(session, body)
     _select(session, _face_refs(body, [1]))
@@ -384,12 +323,7 @@ def test_a_stale_condition_comes_back_when_the_shape_comes_back(session: Session
 
 
 def test_a_hidden_body_drops_out_of_the_refs_but_says_why(session: Session) -> None:
-    """**見えないものは指せない**ので、隠したボディの割り当ては配る参照から外れる。
-
-    外すだけだと画面から黙って消えるので、`stale` に `code="hidden"` で出す ——
-    人が部品を隠すたびに出る種類なので、**トーストに出す側ではない**(だからコードで
-    区別できるようにしてある)。表示に戻せばそのまま戻る。
-    """
+    """**見えないものは指せない**ので、隠したボディの割り当ては配る参照から外れる。"""
     body = _box(session)
     _select(session, _body_refs(body))
     session.set_preserve_bodies()
@@ -443,9 +377,6 @@ def test_the_fingerprint_check_names_what_changed(session: Session) -> None:
     assert reason is not None and "面積" in reason, reason
 
 
-# --------------------------------------------------------------------------------------
-# 6. 保存 → 再オープンの往復 / undo / redo
-# --------------------------------------------------------------------------------------
 def test_the_setup_survives_a_save_and_reopen(session: Session) -> None:
     """**保存の実体は操作ログのJSON**なので、条件も往復する。
 
@@ -548,16 +479,7 @@ def test_undo_and_redo_walk_the_assignment_back(session: Session) -> None:
 
 
 def test_redo_never_hits_the_exclusion_it_already_passed(session: Session) -> None:
-    """**戻してからやり直しても排他に当たらない**(やり直せない履歴を作らない)。
-
-    undoは排他の検査を通さず「以前に成立していた集合」へ戻すだけで、redoは元と同じ順序で
-    `_apply_*` を通す。したがってredoの時点で相手の役割が持っている中身は、最初に通った
-    ときと同じである —— ここが崩れると、**戻した後にやり直せない履歴**ができて、例外が
-    出るのは redo を押した瞬間になる(何が悪いのか人には見えない)。
-
-    役割をまたぐ2手(外す → 付ける)を挟むのは、そこが唯一「相手の役割が動いた状態で
-    同じボディを割り当て直す」形になるからである。
-    """
+    """**戻してからやり直しても排他に当たらない**(やり直せない履歴を作らない)。"""
     body = _box(session)
     _select(session, _body_refs(body))
     session.set_preserve_bodies()
@@ -578,10 +500,7 @@ def test_redo_never_hits_the_exclusion_it_already_passed(session: Session) -> No
 
 
 def test_a_new_verb_after_undo_drops_the_redo_tail(session: Session) -> None:
-    """undoの後に別のverbを打つと、やり直せた末尾は捨てられる(`OpLog.append` の規律)。
-
-    捨て損なうと、**同じ役割への代入が2本の枝に残って**redoで思わぬ集合が戻る。
-    """
+    """undoの後に別のverbを打つと、やり直せた末尾は捨てられる(`OpLog.append` の規律)。"""
     first = _box(session)
     second = _box(session, corner=(50.0, 0.0))
 
@@ -614,11 +533,7 @@ def test_undoing_a_load_restores_the_previous_how(session: Session) -> None:
 
 
 def test_the_load_how_survives_hiding_the_body(session: Session) -> None:
-    """**`load_specs` は文書が持つ how** で、面が一時的に使えなくなっても消えない。
-
-    隠しただけで大きさと向きが画面から消えると、表示に戻したときに打ち直しになる。
-    「いま荷重がかかる面」は `loads` の側が持つ。
-    """
+    """**`load_specs` は文書が持つ how** で、面が一時的に使えなくなっても消えない。"""
     body = _box(session)
     _preserve(session, body)
     _select(session, _face_refs(body, [1]))
@@ -680,11 +595,7 @@ def test_reassigning_a_face_replaces_only_that_face(session: Session) -> None:
 
 
 def test_setting_a_load_with_no_face_selected_is_refused(session: Session) -> None:
-    """**0枚での確定は失敗**(「空で確定 = 全部外れる」と取り違えさせない)。
-
-    上書き代入なので0枚は本来なにも起きない。黙って通すと、外したつもりの人が
-    外れていないまま実行まで進む。
-    """
+    """**0枚での確定は失敗**(「空で確定 = 全部外れる」と取り違えさせない)。"""
     _box(session)
     session.clear_selection()
     with pytest.raises(ValueError, match="1枚も選ばれていない"):
@@ -723,9 +634,6 @@ def test_clearing_a_face_that_has_no_load_is_not_an_error(session: Session) -> N
     assert _specs(session) == []
 
 
-# --------------------------------------------------------------------------------------
-# 7. 3経路(コア / WebSocket / MCP)と状態の配信
-# --------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "verb", ["set_preserve_bodies", "set_exclude_bodies", "set_fixtures", "set_loads"]
 )
@@ -780,12 +688,7 @@ _ROUTES = {
 
 @pytest.mark.parametrize("verb", sorted(_ROUTES))
 def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
-    """**4 verb とも、WS経由とMCP経由で実際に走って同じ結果になる。**
-
-    宣言の照合ではなく**実行**で見る(引数の受け渡しは走らせないと繋がりが分からない)。
-    同じ選択に対して2経路で走らせ、**どちらも同じものを割り当てる**ことまで確かめる ——
-    片方だけが対象を取り違えていると、AIと人で結果が食い違う形で出る。
-    """
+    """**4 verb とも、WS経由とMCP経由で実際に走って同じ結果になる。**"""
     picker, arguments, read = _ROUTES[verb]
 
     def run(use_websocket: bool):
@@ -835,11 +738,7 @@ def test_the_mcp_schema_takes_only_the_how(session: Session) -> None:
 def test_the_delivered_refs_can_be_fed_straight_back_into_the_selection(
     session: Session,
 ) -> None:
-    """**配る参照はそのまま `modify_selection` へ渡せる形**である。
-
-    画面はverbを起動したときに、既にその役割が付いている対象をこれでプリセレクトする ——
-    形が違うと画面側にもう1つ変換が生まれる。
-    """
+    """**配る参照はそのまま `modify_selection` へ渡せる形**である。"""
     body = _box(session)
     _select(session, _body_refs(body))
     session.set_preserve_bodies()
@@ -855,11 +754,7 @@ def test_the_delivered_refs_can_be_fed_straight_back_into_the_selection(
 
 
 def test_the_state_is_not_rebuilt_on_every_broadcast(session: Session) -> None:
-    """**配信のたびに全ボディを走査しない**。
-
-    照合が要るのは条件が指しているボディだけで、しかもその形が差し替わったときだけ。
-    ここが緩むと、面を何枚か指しただけで**全配信に指紋の測り直しの税**がかかる。
-    """
+    """**配信のたびに全ボディを走査しない**。"""
     body = _box(session)
     other = _box(session, corner=(50.0, 0.0))
     _preserve(session, body)
@@ -896,10 +791,7 @@ def test_the_state_is_not_rebuilt_on_every_broadcast(session: Session) -> None:
 
 
 def test_the_log_broadcast_does_not_carry_every_fingerprint(session: Session) -> None:
-    """状態配信は面の指紋の本文を配らない(**保存(`to_json`)は書く**)。
-
-    配ると、面を数十枚指した1操作の指紋が**以後の全配信に乗り続ける**。
-    """
+    """状態配信は面の指紋の本文を配らない(**保存(`to_json`)は書く**)。"""
     body = _box(session)
     _preserve(session, body)
     _select(session, _face_refs(body, [1, 2, 3]))
@@ -910,9 +802,6 @@ def test_the_log_broadcast_does_not_carry_every_fingerprint(session: Session) ->
     assert len(session.document.log.entries[-1].args["faces"]) == 3
 
 
-# --------------------------------------------------------------------------------------
-# 8. 選択種別の顔ぶれがTS側の型と一致すること(**静的に読む**)
-# --------------------------------------------------------------------------------------
 def _ts_union_arms(path: Path, name: str) -> set:
     """`export type <name> = A | B | C` の右辺を集合で返す。"""
     text = path.read_text(encoding="utf-8")
@@ -922,11 +811,7 @@ def _ts_union_arms(path: Path, name: str) -> set:
 
 
 def test_the_typescript_selectable_kinds_match_the_core() -> None:
-    """TSの `SelectableKind` の顔ぶれが、コアの `SELECTABLE_KINDS` と一致する。
-
-    ここが古いままだと、`KIND_COUNTERS` のような**種別ごとの表に穴が開く**
-    (件数表示が `undefined` になる形で、型検査も実行時例外も出ないまま画面に出る)。
-    """
+    """TSの `SelectableKind` の顔ぶれが、コアの `SELECTABLE_KINDS` と一致する。"""
     shape_kinds = {arm.strip("'") for arm in _ts_union_arms(SESSION_TS, "ShapeKind")}
     declared = set()
     for arm in _ts_union_arms(COMMAND_TS, "SelectableKind"):

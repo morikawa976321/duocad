@@ -51,9 +51,6 @@ def reply(*, text: str = "", calls: bool = False, stop: str, prompt: int, comple
     )
 
 
-# --------------------------------------------------------------------------------------
-# 済んだ依頼の畳み方
-# --------------------------------------------------------------------------------------
 def test_a_finished_request_keeps_only_what_was_said():
     provider = RecordedProvider([tool_use("describe_document", {}), spoke("ボディは無い"), spoke("はい")])
     loop = AgentLoop(tools(), provider)
@@ -89,9 +86,6 @@ def test_the_dimension_guard_still_hears_what_an_earlier_request_said():
     assert "dimension_not_given" not in codes
 
 
-# --------------------------------------------------------------------------------------
-# 先に見ておく(モデルが最初に呼ぶ問い合わせを、代わりに呼んで履歴へ置く)
-# --------------------------------------------------------------------------------------
 def test_the_loop_looks_at_the_document_before_the_model_has_to():
     """落ちたら、依頼のたびに `describe_document` の1往復を払う状態に戻っている。"""
     seen: list = []
@@ -159,9 +153,6 @@ def test_a_large_document_is_seen_by_its_counts_only():
     assert _condensed({"bodies": bodies[:2]}) == {"bodies": bodies[:2]}, "小さい結果まで畳んでいる"
 
 
-# --------------------------------------------------------------------------------------
-# 文脈長に当たったとき
-# --------------------------------------------------------------------------------------
 def test_an_overflow_drops_the_older_half_and_retries_the_same_request():
     replies = [spoke(f"返事{index}") for index in range(4)]
     provider = RecordedProvider(replies + [ProviderContextOverflow("exceeds the available context size"), spoke("やり直せた")])

@@ -1,8 +1,4 @@
-"""`kernel.bounding_box` が返す寸法を、三角形分割の bbox を独立の基準として突き合わせる。
-
-落ちたとき: bbox の取り方(`BRepBndLib` の `Add` / `AddOptimal`)か、三角形分割の粗さが
-変わっている。
-"""
+"""`kernel.bounding_box` が返す寸法を、三角形分割の bbox を独立の基準として突き合わせる。"""
 
 from __future__ import annotations
 
@@ -20,11 +16,7 @@ DEVIATION = kernel.DEFAULT_DEVIATION
 
 
 def _torus_segment():
-    """`BRepPrimAPI_MakeTorus` の第3引数は掃引角。
-
-    箱・円柱・平面では `BRepBndLib` の `Add` と `AddOptimal` が一致するので、bbox の取り方を
-    見るにはトリムされた曲面の題材が要る。
-    """
+    """`BRepPrimAPI_MakeTorus` の第3引数は掃引角。"""
     return BRepPrimAPI_MakeTorus(100.0, 10.0, math.pi / 6).Shape()
 
 
@@ -39,11 +31,7 @@ UNTRIMMED = ["box", "cylinder", "cone"]
 
 
 def _triangulation_box(shape, deviation: float) -> tuple[list[float], list[float]]:
-    """三角形の節点から作った [min, max]。節点は必ず真の面の上にあるので真の寸法を超えない。
-
-    `payload["bbox"]` を使わないのは意図的で、そちらの作り方が変わった日にこの検査が
-    黙って循環参照になるため。
-    """
+    """三角形の節点から作った [min, max]。節点は必ず真の面の上にあるので真の寸法を超えない。"""
     payload = kernel.tessellate(shape, deviation=deviation)
     lows = [math.inf] * 3
     highs = [-math.inf] * 3
@@ -88,9 +76,7 @@ def test_the_bounding_box_is_as_tight_as_the_triangulation_for_a_trimmed_torus_s
     assert max(outward) <= DEVIATION, f"最大の膨らみ {max(outward):.6f}mm"
 
 
-# --------------------------------------------------------------------------------------
 # 呼び出し側が `cache=` を渡しているか
-# --------------------------------------------------------------------------------------
 #: `cache=` を渡さないと決めた場所。**空にしておくこと** —— ここへ足すのは
 #: 「この呼び出しは毎回測り直してよい」という判断なので、理由を添えて明示的に書く。
 #: 鍵はソースの相対パス、値は理由。
@@ -128,10 +114,6 @@ def test_every_bounding_box_call_passes_a_cache() -> None:
     速さだけ(実測: `resolution_limits` が 0.5ms → 145ms)。だから他のどの検査も緑のまま通る。
     `AddOptimal` は繰り返しても速くならない(OCCTが結果を持たない)ので、渡し忘れは
     そのまま利用者の待ち時間になる。
-
-    渡さないと決めた呼び出しは `BOUNDING_BOX_WITHOUT_CACHE` へ理由付きで足す。
-    **`cache=None` と明示的に書いた呼び出しはここを通る** —— この検査が捕まえるのは
-    「決めたこと」ではなく「忘れたこと」である。
     """
     missing = [
         f"{name}:{line}"
@@ -147,10 +129,6 @@ def test_every_bounding_box_call_passes_a_cache() -> None:
 
 
 def test_the_call_scan_actually_finds_the_calls() -> None:
-    """落ちたら: 上の検査が**何も見ていない**(走査が壊れて空振りしている)。
-
-    ソースを読む検査は、対象を1つも見つけられなくても緑になる。ここが無いと、
-    `bounding_box` を改名した日に上の検査が黙って無効化される。
-    """
+    """落ちたら: 上の検査が**何も見ていない**(走査が壊れて空振りしている)。"""
     calls = _bounding_box_calls()
     assert len(calls) >= 3, f"duocad/ の中に bounding_box の呼び出しが {len(calls)} 件しか無い"

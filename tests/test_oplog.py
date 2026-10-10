@@ -1,7 +1,4 @@
-"""Operation / OpLog(操作ログ)の契約。
-
-操作ログはコアの中核で、ここが薄いと上の層が全部揺れる。
-"""
+"""Operation / OpLog(操作ログ)の契約。"""
 from __future__ import annotations
 
 import dataclasses
@@ -45,9 +42,6 @@ def test_to_json_from_json_roundtrip_matches_exactly():
 def test_from_json_ignores_unknown_operation_keys():
     """`Operation` に無いキー(かつて存在した `selection` 等)が入っていても読み込みが
     壊れず、値は単に無視されること。
-
-    **入れ物の版(`version`)の話とは別**。版が違うファイルは `_check_version` が
-    はっきり断る(下のテスト)が、操作1件の中の余分なキーは無視して読めるのが正しい。
     """
     legacy_json = json.dumps({
         "version": OpLog.FORMAT_VERSION,
@@ -74,24 +68,14 @@ def test_from_json_ignores_unknown_operation_keys():
 
 
 def test_to_json_stamps_the_current_format_version():
-    """`to_json` が出す入れ物には現在の版が入る(読み手が版で判断できること)。
-
-    版は「読み込んだSTEPの形がログの中にあるか」を分ける印なので、
-    書き出し側が版を書かないと、下の拒否が意味を持たなくなる。
-    """
+    """`to_json` が出す入れ物には現在の版が入る(読み手が版で判断できること)。"""
     payload = json.loads(OpLog().to_json())
 
     assert payload["version"] == OpLog.FORMAT_VERSION
 
 
 def test_from_json_refuses_the_old_format_version_explicitly():
-    """旧形式(version 1)は**読まずに断る**。
-
-    版1の `import_step` は `args={"path": ...}` だけを持ち、形が外部STEPにある。
-    今の再生経路はログの `args["step"]` から形を作るので、黙って読み進めると
-    KeyError になり「保存形式の版が古い」という本当の理由が見えない。
-    版の話だと分かる文言で断ること。
-    """
+    """旧形式(version 1)は**読まずに断る**。"""
     old = json.dumps({
         "version": 1,
         "operations": [

@@ -1,20 +1,7 @@
 """文書に**意図的に残した列挙**が、コード側の正と一致していることを機械で見る。
 
-列挙の転記は消して参照へ畳むのが原則だが、**読み手がそこで引けなくなる列挙は文書側に残して
-ある**。残したものは手で同期するしかないので、ここがその最後の受け皿になる。
-
-**落ちたときの意味**: コードを変えたのに、それを写した文書の行が古いまま。
-**期待値を書き換えて緑にしない** —— 正はコード側にあるので、失敗メッセージが名指しする
-文書の箇所を直すこと。
-
-**`topopt_checks/check_design_space.py` の `[12-6]` と同じ穴を踏まない。** [12-6] は文字列を
-文書全体から `in` で探すだけなので、(a) 文書側に**古い行が残っている**ことを検出できず、
-(b) 節が消えても同じ文字列がどこかにあれば緑のままになる。ここの検査はすべて
-
 1. **走査そのものが効いていることを先に見る**(見出しや表の形を変えたら「読めなかった」で落ちる)
 2. **集合を両方向で比べる**(足りない側と余計な側の両方)
-
-の2点でその穴を塞いでいる。
 """
 from __future__ import annotations
 
@@ -40,9 +27,6 @@ def _section(path: Path, heading: str) -> str:
 
     見出しが消えた/改名された場合はここで落ちる —— 空文字を返すと下の集合比較が
     「両方空で一致」になり、[12-6] と同じ静かな失効になる。
-
-    **コードブロックの中は見出しとして数えない** —— PowerShellの手順には `# 説明` の行が
-    並んでおり、素の行頭 `#` で切ると節がその1行目で終わる。
     """
     text = path.read_text(encoding="utf-8")
     level = len(heading) - len(heading.lstrip("#"))
@@ -82,9 +66,6 @@ def _table_rows(section: str) -> list[list[str]]:
     return rows
 
 
-# --------------------------------------------------------------------------------------
-# MCP.md 「公開ツール」表 —— AIが読む一覧。実際に生えている口と一致すること
-# --------------------------------------------------------------------------------------
 def _published_tool_names() -> set[str]:
     server = McpServer(DocumentTools(Session(None, 0.2)))
     response = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -92,11 +73,7 @@ def _published_tool_names() -> set[str]:
 
 
 def _documented_tool_names() -> set[str]:
-    """`MCP.md`「公開ツール」表のツール名。
-
-    セルは `` `a` / `b` — 補足の文 `` の形なので、**全角ダッシュより前だけ**を見る
-    (補足の中の識別子をツール名に数えない)。
-    """
+    """`MCP.md`「公開ツール」表のツール名。"""
     names: set[str] = set()
     for row in _table_rows(_section(MCP_MD, "## 公開ツール")):
         names.update(re.findall(r"`([a-z][a-z0-9_]*)`", row[-1].split("——")[0]))
@@ -124,17 +101,8 @@ def test_the_mcp_tool_table_matches_the_tools_that_are_actually_published():
     )
 
 
-# --------------------------------------------------------------------------------------
-# 失敗封筒の語彙 —— 正は `error_envelope` の実装。`MCP.md` が写している
-# --------------------------------------------------------------------------------------
 def _error_codes_from_source() -> set[str]:
-    """`duocad/mcp_server.py` が実際に返しうる `code` の語彙をソースから読む。
-
-    3経路ある: `error_envelope` が直に置くリテラルと、`ToolError(code, ...)` の
-    第1引数(封筒は `error.code` をそのまま通す)と、アプリ内AIのループが自分で作る封筒
-    `_failure(tool, code, ...)`(`duocad/agent/loop.py`)の第2引数。**実行時に集められない** ——
-    全語彙を出す例外を並べる検査は、その並びがまた手動同期になる。
-    """
+    """`duocad/mcp_server.py` が実際に返しうる `code` の語彙をソースから読む。"""
     codes = set()
     loop_tree = ast.parse((REPO_ROOT / "duocad" / "agent" / "loop.py").read_text(encoding="utf-8"))
     for node in ast.walk(loop_tree):
@@ -212,15 +180,8 @@ def test_the_documented_error_vocabulary_matches_the_source(path: Path, heading:
     )
 
 
-# --------------------------------------------------------------------------------------
-# docs/TOPOPT.md 「現在の正」表 —— 既定値の索引。値そのものはコード側が正
-# --------------------------------------------------------------------------------------
 def _current_truth_rows() -> list[tuple[str, list[float], list[tuple[str, str]]]]:
-    """「現在の正」表を (項目, 太字に書かれた数値, 参照している (モジュール, 名前)) で返す。
-
-    3列目は `safety_loop.DEFAULT_REL_TOL` / `DEFAULT_MAX_EVALUATIONS` のように
-    **2つ目以降のモジュール名を省く**書き方があるので、行の中で直前のモジュールを引き継ぐ。
-    """
+    """「現在の正」表を (項目, 太字に書かれた数値, 参照している (モジュール, 名前)) で返す。"""
     rows = []
     for cells in _table_rows(_section(TOPOPT_MD, "## 現在の正")):
         numbers = []
@@ -291,9 +252,6 @@ def test_the_current_truth_table_values_match_the_code():
     )
 
 
-# --------------------------------------------------------------------------------------
-# README.md §3 の受入検査の並び —— 正は `topopt_checks/` の中身
-# --------------------------------------------------------------------------------------
 def test_the_readme_lists_every_acceptance_check_script():
     """`README.md`「形状最適化の受入検査」が `topopt_checks/check_*.py` を全部並べている。
 

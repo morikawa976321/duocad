@@ -1,22 +1,4 @@
-"""形状最適化を**画面から走らせる**ための配線(`20260904-1705`)の契約。
-
-`tests/test_optimize_backend.py` はコア(`duocad/optimize_run.py`)そのものを見る。
-ここが見るのは**その上に開けた口**である:
-
-1. **解像度の目盛り**(`resolution_limits()["steps"]`)—— **添字0が上限側(いちばん粗い=既定)**で、
-   進むほど細かく・要素数が増える。**粗い側へ動く段を作らない**のが
-   この機能の全部なので、順序そのものを固定する。
-2. **WebSocketの4つの口** —— `optimize_conditions` / `optimize_resolution` /
-   `run_optimization` / `cancel_optimization`。verbではない(`category="protocol"`)ので、
-   応答は状態配信ではなく専用のイベントである。
-3. **走らせられないときの断り方** —— 条件が足りない・二重実行。**どちらも `type: "error"`
-   ではなく `optimize_error`** で返す(画面がパネルの中に出せる形)。
-4. **見積もれないときは赤い札にしない** —— 条件面がまだ1枚も無いのは「設定の途中」であって
-   事故ではないので、`optimize_resolution` は `error` キーに文を入れて返す。
-
-**ここで最適化の探索は回さない。** 端から端まで実際に回すのは実ブラウザの
-`web/scripts/smoke-optimize.mjs`(約1〜2分)である。
-"""
+"""形状最適化を**画面から走らせる**ための配線(`20260904-1705`)の契約。"""
 from __future__ import annotations
 
 import asyncio
@@ -31,9 +13,6 @@ from duocad.verbs.add_mesh import add_mesh_body
 from session_support import FakeConnection, browser, four_conditions
 
 
-# --------------------------------------------------------------------------------------
-# 1. 解像度の目盛り —— **細かくする方向にだけ動く**
-# --------------------------------------------------------------------------------------
 def test_steps_start_at_the_coarse_end(session: Session) -> None:
     """**添字0が上限側**(＝既定＝最も安い設定)。ここが逆を向くと、画面のスライダーは
     「既定より粗い設定」を用意することになり、条件が黙って消える側へ人を送り出す。
@@ -59,9 +38,6 @@ def test_steps_get_finer_and_costlier(session: Session) -> None:
         assert current["design_elements_estimate"] <= optimize_run.MAX_DESIGN_ELEMENTS
 
 
-# --------------------------------------------------------------------------------------
-# 2. WebSocketの4つの口
-# --------------------------------------------------------------------------------------
 def _dispatch(session: Session, message: dict) -> FakeConnection:
     """1コマンドを流して応答を集める。**探索が回らない**コマンドだけをここで使う。"""
     return browser(session, lambda send: send(message), connections=1)[1][0]
@@ -100,11 +76,7 @@ def test_resolution_without_condition_faces_is_not_an_error_toast(session: Sessi
 
 
 def test_resolution_rejects_the_old_rmin_argument_without_a_toast(session: Session) -> None:
-    """**旧引数(`rmin_mm`)が届いたら、黙って無視せず分かるエラーにする**
-
-    (`docs/TOPOPT.md`「変更してはいけないもの」の「旧引数の契約」)。この口は元々「まだ設定の途中」を非トーストで運ぶ経路
-    (`ValueError` → `{"error": ...}`)を持っているので、そこへ乗せる。
-    """
+    """**旧引数(`rmin_mm`)が届いたら、黙って無視せず分かるエラーにする**"""
     four_conditions(session)
     connection = _dispatch(session, {"cmd": "optimize_resolution", "rmin_mm": 3.0})
     reply = connection.of_type("optimize_resolution")[0]
@@ -134,12 +106,7 @@ def test_second_run_is_refused_while_one_is_running(session: Session) -> None:
 
 
 def _run_to_completion(session: Session, message: dict) -> tuple:
-    """`run_optimization` を1本走らせ、バックグラウンドタスクの完了まで待つ。
-
-    `_optimize_start` は待たずに返る(`FakeConnection` 経由の応答だけでは
-    完了後の副作用(自動保存)が終わっているとは限らない)ので、
-    `_pending_optimize_runs` を明示的に `gather` してから戻る。
-    """
+    """`run_optimization` を1本走らせ、バックグラウンドタスクの完了まで待つ。"""
 
     async def scenario() -> tuple:
         server = Server(session)
@@ -159,12 +126,7 @@ def _run_to_completion(session: Session, message: dict) -> tuple:
 def test_run_optimization_rejects_the_old_arguments_with_a_named_error(
     session: Session, kwarg: str
 ) -> None:
-    """**旧引数(`rmin_mm`/`max_iter`/`material_min_mm3`/`material_max_mm3`)が届いたら、
-
-    黙って無視せず `optimize_error` として断る**(`docs/TOPOPT.md`「変更してはいけないもの」の「旧引数の契約」)。`net/ws.py` がこれらを
-    転送し(`_optimize_start` のkwargs構築)、`session.run_optimization` が
-    `OptimizeInputError` で断る配線を4つとも確かめる。
-    """
+    """**旧引数(`rmin_mm`/`max_iter`/`material_min_mm3`/`material_max_mm3`)が届いたら、"""
     four_conditions(session)
     server, connection = _run_to_completion(
         session, {"cmd": "run_optimization", kwarg: 3.0}
@@ -230,11 +192,7 @@ def test_a_missing_min_width_mm_still_reaches_run_at_the_default_cells(session: 
 def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(
     session: Session, monkeypatch, tmp_path
 ) -> None:
-    """2026-09-13実測: 数時間がかりの実行が、結果を見る前にサーバプロセスごと消えた。
-
-    結果は文書のRAMにしか無いので、**成功した瞬間にディスクへ書く**——broadcastを
-    待つ相手(タブ)がいなくても、そのあとサーバが落ちても消えない形にする。
-    """
+    """2026-09-13実測: 数時間がかりの実行が、結果を見る前にサーバプロセスごと消えた。"""
     four_conditions(session)
     session.models_dir = tmp_path
     session._current_name = "hanger.json"
@@ -284,9 +242,6 @@ def test_cancel_sets_the_flag_while_running(session: Session) -> None:
     assert session._optimize_cancel.is_set() is True
 
 
-# --------------------------------------------------------------------------------------
-# 5. 実行の始まりと終わり(中断の旗・自動保存・再接続した画面)
-# --------------------------------------------------------------------------------------
 def test_a_cancel_sent_right_after_the_start_is_not_lost(session: Session, monkeypatch) -> None:
     """落ちたら、実行をワーカースレッドへ投げてから走り出すまでに届いた中断が、走り出した実行に消されて
     結果が足される(issue #35)。"""
@@ -374,9 +329,6 @@ def test_a_new_connection_is_told_whether_an_optimization_is_running(session: Se
     assert status["running"] is running and status.get("cancelling", False) is running
 
 
-# --------------------------------------------------------------------------------------
-# 6. 走らせたまま別の文書へ移る(進捗はその文書を開いている間だけ・結果は戻ってきたら見える)
-# --------------------------------------------------------------------------------------
 def test_a_run_keeps_going_on_another_document_and_shows_up_on_return(session: Session, monkeypatch) -> None:
     """落ちたら、別の文書の画面に進捗・結果が出る、または走らせた文書へ戻っても実行中/完了が見えない。"""
     four_conditions(session)

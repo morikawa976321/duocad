@@ -1,23 +1,4 @@
-"""UIのコマンドIDが、サーバが受け取れる名前に**実在するか**を検査する。
-
-同じverbの表面が3層にある:
-
-1. `duocad/server.py` の `SKETCH_COMMANDS` / `FEATURE_COMMANDS` / `FILE_COMMANDS`(WebSocket)
-2. `duocad/mcp_server.py` のツール(MCP。**`tests/test_mcp_verbs.py` が一致で固定済み**)
-3. `web/src/commands/*.ts` の `CommandDef.id`(UIが引数を集めて送る先)
-
-**1と3の食い違いだけが誰にも見られていない**。TS側のIDを1文字打ち間違えても `tsc` は通り
-(ただの文字列)、pytest も通り、**実ブラウザのsmokeを走らせて初めて** `unknown command` で
-出る。この抜けを、TS側の `CommandDef` を Node で実際に読み込んで(`tests/eval_command_defs.mjs`)塞ぐ。
-
-**1と2は `duocad/catalog.py` の `COMMANDS` からの導出**なので、この検査が見るのは「宣言と
-3層目(TS)の食い違い」である。3層目を宣言から生成しないのは、TS側が持つのが**引数の集め方**
-(どのクリックを待つか・入力欄のid・ボタンのid)であって宣言には無い情報だからで、名前の
-一致だけをここで機械的に固定する。
-
-**対象集合はどの層でも引数ではない** —— 面・辺・領域はコアの選択から取るので、WSの
-コマンドに残る引数は数値・名前・パスだけである(`test_no_websocket_command_takes_a_target_set`)。
-"""
+"""UIのコマンドIDが、サーバが受け取れる名前に**実在するか**を検査する。"""
 from __future__ import annotations
 
 import ast
@@ -30,14 +11,7 @@ from node_support import run_node
 
 
 def _catalog():
-    """`duocad/catalog.py` を**パッケージを経由せずに**読み込む。
-
-    `import duocad.catalog` にすると `duocad/__init__.py` が verb を登録するために
-    `io_step` → `kernel` → OCP まで読み込む。この検査は幾何が無い環境でも走ってほしいので
-    (`test_boundaries.py` と同じ方針)、ファイル1つだけをその場で読む。
-    **宣言が純データであること**(相対importを持たないこと)がこの読み方の前提で、
-    ここが壊れたらそれ自体が設計の逸脱である。
-    """
+    """`duocad/catalog.py` を**パッケージを経由せずに**読み込む。"""
     name = "duocad_catalog_static"
     if name in sys.modules:
         return sys.modules[name]
@@ -88,19 +62,7 @@ BODY_ID_IS_A_NAME_HERE = {
 
 
 def _server_command_names() -> set[str]:
-    """サーバが受け取れるコマンド名を、**サーバを立てずに**集める。
-
-    集めるのは2箇所:
-
-    1. 宣言(`catalog.websocket_command_names()`)—— 表に載るものも、`_dispatch` が
-       個別に捌くもの(`ws="special"`)も含む
-    2. `Server._dispatch` の中の `command == "..."` 比較
-
-    **2を落とさない** —— 宣言に無いコマンドを `_dispatch` へ直接生やしたときも、
-    ここが拾えば「UIのIDがサーバに実在する」の判定は正しいままになる
-    (その逆、宣言にあるのに `_dispatch` に無い方は
-    `test_every_hand_dispatched_command_has_a_branch` が見る)。
-    """
+    """サーバが受け取れるコマンド名を、**サーバを立てずに**集める。"""
     names = set(_catalog().websocket_command_names())
     tree = ast.parse((REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
@@ -115,13 +77,7 @@ def _server_command_names() -> set[str]:
 
 
 def _server_command_args() -> dict[str, tuple]:
-    """4つの表の「コマンド名 -> 受け取る引数名」を宣言から組み立てる。
-
-    表そのもの(`PREVIEWABLE_VERBS` / `SKETCH_COMMANDS` / `FEATURE_COMMANDS` /
-    `FILE_COMMANDS`)は `duocad/server.py` が宣言から導出しているので、ここでは
-    **同じ導出関数を呼ぶ**。同じコマンドが複数の表に出るときは引数を合併する
-    (`extrude` は `preview` だけが `body_id` を受け取る)。
-    """
+    """4つの表の「コマンド名 -> 受け取る引数名」を宣言から組み立てる。"""
     catalog = _catalog()
     tables = [
         catalog.previewable_verbs(),
@@ -137,13 +93,7 @@ def _server_command_args() -> dict[str, tuple]:
 
 
 def _dispatch_message_keys() -> set[str]:
-    """`Server._dispatch` が `message[...]` / `message.get(...)` で読む名前を集める。
-
-    **表に載らないコマンドを取り逃さないため**(`open_document` のように個別に捌かれる
-    ものがある。verb は宣言から引数を取り出すので、ここには現れない)。どのコマンドの
-    引数かまでは分岐を追わないと分からないので、ここは「対象集合の名前が1つも出てこない」
-    ことだけを見るのに使う。
-    """
+    """`Server._dispatch` が `message[...]` / `message.get(...)` で読む名前を集める。"""
     source = (REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     keys: set[str] = set()
@@ -180,12 +130,7 @@ def test_server_command_tables_are_readable():
 
 
 def test_every_hand_dispatched_command_has_a_branch():
-    """宣言で「個別に捌く」と書いたコマンドは、**`_dispatch` に実際に分岐がある**。
-
-    導出にしたことで生まれた抜け —— 宣言に1行足せばUI側の検査は通るようになるが、
-    `ws="special"` は表に載らないので `_dispatch` に何も無くても誰も気づかない
-    (実行時に `unknown command` で返るだけ)。ここで名前の実在を見る。
-    """
+    """宣言で「個別に捌く」と書いたコマンドは、**`_dispatch` に実際に分岐がある**。"""
     catalog = _catalog()
     source = (REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8")
     dispatch = source[source.index("async def _dispatch("):]
@@ -249,12 +194,7 @@ def test_no_websocket_command_takes_a_target_set():
 
 
 def test_body_id_survives_only_where_it_is_not_a_target_set():
-    """`body_id` は名前として残っているだけ。**残ってよい場所を名指しで固定する**。
-
-    Bodyは選択集合の項目ではない(選べるのは面・辺・頂点・領域)ので、
-    「どのBodyへ足すか」は対象集合ではなく引数でよい。ただし `fillet` の対象Bodyのように
-    **選択が持っている情報を引数でも受ける**形へ戻ると、2つの真実源が復活する。
-    """
+    """`body_id` は名前として残っているだけ。**残ってよい場所を名指しで固定する**。"""
     takes_body_id = {
         command
         for command, names in _server_command_args().items()
@@ -269,12 +209,6 @@ def test_body_id_survives_only_where_it_is_not_a_target_set():
 def test_ai_commands_are_not_verbs():
     """`ai_*`(G・アプリ内AIエージェントの配線)はWebSocketから踏めるが、
     「MCPツール名==WSコマンド名==UIコマンドID==verb名」の一致規律の対象集合には入らない。
-
-    `ai_get_status` / `ai_configure` / `ai_set_api_key` / `ai_prepare` / `ai_send` / `ai_cancel` は
-    文書を直接は変えない
-    (操作ログに載らずundoの単位でもない)。**この検査はその除外を明示的に固定する**
-    (`_server_command_names()` はソースを機械的に読むだけなので、宣言に無い名前が
-    無言で増減しても他の検査は気づかない)。
     """
     ai_names = {name for name in _server_command_names() if name.startswith("ai_")}
     assert ai_names == {
@@ -294,9 +228,6 @@ def test_ai_commands_are_not_verbs():
     )
 
 
-# --------------------------------------------------------------------------------------
-# Enter要否(即適用)
-# --------------------------------------------------------------------------------------
 def test_which_commands_apply_without_enter():
     """落ちたら、`command.ts` の `needsEnter` か引数の書き方(`max` / `fromPoints`)が変わり、
     Enter無しで適用されるコマンドの顔ぶれが変わった(意図した変更なら README「操作の型」も直す)。"""
@@ -312,9 +243,7 @@ def test_which_commands_apply_without_enter():
     ], f"即適用になるコマンドの顔ぶれが変わった: {immediate}"
 
 
-# --------------------------------------------------------------------------------------
 # プレビュー
-# --------------------------------------------------------------------------------------
 #: ローカル方式(ブラウザだけで幽霊を描く)で幽霊を出す4verb。実際に幽霊が出ることは
 #: `web/scripts/smoke-features.mjs` / `smoke-move.mjs` が実機で見る。
 #:
@@ -329,11 +258,7 @@ TRANSFORM_PREVIEW_VERBS = {
 
 
 def test_the_transform_verbs_are_not_added_to_speculative_execution():
-    """ローカル方式に移したverbを**コアの投機実行へは足していない**。
-
-    足すと「Escで中断しても文書が一切変わらない」が、`Session.preview` の巻き戻しに
-    依存する話になる。ローカル方式はそもそも送らないので、その依存が要らない。
-    """
+    """ローカル方式に移したverbを**コアの投機実行へは足していない**。"""
     previewable = set(_catalog().previewable_verbs())
     leaked = sorted(TRANSFORM_PREVIEW_VERBS & previewable)
     assert not leaked, f"ローカル方式のverbが `previewable=True` になっている: {leaked}"

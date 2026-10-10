@@ -1,27 +1,4 @@
-"""**選択と述語をMCPへ出す**契約。
-
-`tests/test_mcp_verbs.py` が操作(verb)の側を持ち、こちらが**交互操作の中心**——AIが選択を
-し、人が過不足を直し、AIが読み直して適用する——の側を持つ。`duocad/selection.py` と
-`duocad/predicates.py` にあるコアAPIをそのままMCPツールとして出す。**ここに新しい選択の
-ロジックを書かない** —— MCPはコアのもう一人のクライアントである。
-
-## このファイルが固定する5つ
-
-1. **選択5ツールが届く** — `get_selection` / `set_selection`(`refs=` と `predicate=` の
-   両方)/ `modify_selection` / `toggle_selection` / `clear_selection`。
-2. **述語の語彙をAIが自己記述で知れる** — `describe_predicates` が
-   `predicates.describe_ops()` を**そのまま**返す。
-3. **0件と不正は別物** — 0件は成功して `count: 0`、不正な述語は `invalid_predicate` で
-   **有効なopの一覧つき**。AIが自力で直せることが条件。
-4. **選択はそのまま verb に渡せる** — 出所の区別は無く、人もAIも同じ操作で触る。
-5. **AI起点の選択変更が画面へ届く** — イベントとして発火し、かつ `state_meta()["selection"]`
-   に載る。
-
-**MCP層は5つとも `{"selection": {"items","count"}, ...}` に揃える**。`Session` 側は
-変更する4メソッドが発火したイベントそのものを返し、`get_selection` だけが
-`Selection.to_dict()` を返すが、その差はコアの都合であってAIに見せる理由が無い ——
-揃えないと、AIは `["selection"]` を挟むかどうかをツールごとに覚えることになる。
-"""
+"""**選択と述語をMCPへ出す**契約。"""
 from __future__ import annotations
 
 import math
@@ -49,9 +26,6 @@ VERTICAL_EDGES = {
 NO_MATCH = {"kind": "edge", "where": [{"op": "length_gt", "value": 1000.0}]}
 
 
-# --------------------------------------------------------------------------------------
-# 道具
-# --------------------------------------------------------------------------------------
 @pytest.fixture()
 def session() -> Session:
     """30×30×40 の直方体を1つ持つセッション(面6・辺12・頂点8)。"""
@@ -82,9 +56,6 @@ def top_face_index(shape) -> int:
     raise AssertionError("上向きの面が無い(テストの前提が崩れている)")
 
 
-# --------------------------------------------------------------------------------------
-# 1. 選択5ツールが届き、戻り値の形が揃っている
-# --------------------------------------------------------------------------------------
 def _assert_selection_payload(payload: dict) -> dict:
     """選択ツールの戻り値の形(モジュールdocstring「なぜ統一するのか」)。"""
     selection = payload["selection"]
@@ -105,10 +76,7 @@ def test_set_selection_accepts_explicit_references(server: McpServer, session: S
 
 
 def test_set_selection_needs_exactly_one_of_them(server: McpServer, session: Session):
-    """`refs` と `predicate` の**両方**も**どちらも無し**も拒む(コアの契約と同じ)。
-
-    両方通すと「どちらが効いたのか」がAIから見て分からない集合ができる。
-    """
+    """`refs` と `predicate` の**両方**も**どちらも無し**も拒む(コアの契約と同じ)。"""
     box = box_of(session)
     both = call_error(
         server, "set_selection", {"refs": [edge_ref(box.id, 1)], "predicate": VERTICAL_EDGES}
@@ -118,26 +86,14 @@ def test_set_selection_needs_exactly_one_of_them(server: McpServer, session: Ses
     assert neither["code"] == "invalid_argument"
 
 
-# --------------------------------------------------------------------------------------
-# 2. 述語の語彙をAIが自己記述で知れる
-# --------------------------------------------------------------------------------------
 def test_describe_predicates_is_the_core_vocabulary_itself(server: McpServer):
-    """`predicates.describe_ops()` を**そのまま**出す(二重管理にしない)。
-
-    `describe_ops` の docstring が「F1で書き直さずに済むように、opの定義はここ1箇所を
-    正にする」と宣言している。MCP側で書き直すと、**片方だけ増えたopが黙って通る**
-    (スキーマにはあるがバリデータには無い、またはその逆)。
-    """
+    """`predicates.describe_ops()` を**そのまま**出す(二重管理にしない)。"""
     payload = call(server, "describe_predicates")
     assert payload["ops"] == predicates.describe_ops()
 
 
 def test_describe_predicates_tells_the_ai_how_to_write_one(server: McpServer):
-    """opの一覧だけでは述語を組み立てられない —— 形・種別・ANDの規則まで出す。
-
-    `where` がANDであること・**ORが無い**ことをAIが知らないと、無いものを試して失敗する
-    (A1の決定5: ORが要るときは2回評価して `modify_selection(add=...)` で足す)。
-    """
+    """opの一覧だけでは述語を組み立てられない —— 形・種別・ANDの規則まで出す。"""
     payload = call(server, "describe_predicates")
     assert set(payload["kinds"]) == set(predicates.PREDICATE_KINDS)
     assert payload["where_is"] == "and"
@@ -149,8 +105,6 @@ def test_describe_predicates_tells_the_ai_how_to_write_one(server: McpServer):
 def test_the_predicate_format_is_in_the_tool_description_itself(server: McpServer):
     """述語の書き方が `set_selection` の説明にあること。落ちたら、AIは選択のたびに語彙を取りに
     1往復を払う(`describe_predicates` を呼ぶか、書式を外して失敗するか)状態に戻っている。
-
-    **語彙の正は `predicates.describe_ops()`**。op・引数を足したら説明にも書く。
     """
     tools = {tool["name"]: tool for tool in catalog.tool_descriptors()}
     written = tools["set_selection"]["inputSchema"]["properties"]["predicate"]["description"]
@@ -206,16 +160,8 @@ def test_describe_predicates_changes_nothing(server: McpServer, session: Session
     assert len(session.document.log.entries) == before
 
 
-# --------------------------------------------------------------------------------------
-# 3. 0件と不正は別物
-# --------------------------------------------------------------------------------------
 def test_zero_matches_is_a_success_that_says_zero(server: McpServer):
-    """**一致0件はエラーではない**。0件だと分かる形で返る。
-
-    ここをエラーにすると、AIは「述語が壊れている」と読んで書き方をいじり始める。
-    実際に直すべきは条件の値である。逆に黙って古い選択を残すと、人が承認したつもりで
-    **別の集合に verb がかかる**。
-    """
+    """**一致0件はエラーではない**。0件だと分かる形で返る。"""
     selection = _assert_selection_payload(call(server, "set_selection", {"predicate": NO_MATCH}))
     assert selection["count"] == 0
     assert selection["items"] == []
@@ -230,11 +176,7 @@ def test_zero_matches_still_replaces_the_previous_selection(server: McpServer, s
 
 
 def test_an_unknown_op_comes_back_with_the_valid_ones(server: McpServer):
-    """**AIが自力で直せるエラー**。未知の `op` に有効なopの一覧を添える。
-
-    一覧を添えないと、AIは `describe_predicates` を知らないかぎり総当たりに入る。
-    添える一覧は `describe_ops()` そのもの —— ここで書き下すと二重管理になる。
-    """
+    """**AIが自力で直せるエラー**。未知の `op` に有効なopの一覧を添える。"""
     error = call_error(
         server,
         "set_selection",
@@ -246,10 +188,7 @@ def test_an_unknown_op_comes_back_with_the_valid_ones(server: McpServer):
 
 
 def test_an_invalid_predicate_leaves_the_selection_untouched(server: McpServer, session: Session):
-    """不正な述語で**選択を変えない**(A1の決定6)。MCP経由でも同じ。
-
-    黙って空集合にすると「0件だった」と区別が付かなくなる。
-    """
+    """不正な述語で**選択を変えない**(A1の決定6)。MCP経由でも同じ。"""
     box = box_of(session)
     call(server, "set_selection", {"refs": [edge_ref(box.id, 1)]})
     before = selection_of(server)
@@ -262,11 +201,7 @@ def test_an_invalid_predicate_leaves_the_selection_untouched(server: McpServer, 
 def test_a_malformed_reference_is_refused_without_touching_the_selection(
     server: McpServer, session: Session
 ):
-    """**参照**が不正な場合は述語とは別のコード(直し方が違う)。
-
-    例外の種類はコアの `select_*` と揃っている —— 形が不正なら ValueError、
-    存在しないBodyなら KeyError。MCPはそれを `invalid_argument` / `not_found` に写す。
-    """
+    """**参照**が不正な場合は述語とは別のコード(直し方が違う)。"""
     box = box_of(session)
     call(server, "set_selection", {"refs": [edge_ref(box.id, 1)]})
     before = selection_of(server)
@@ -282,10 +217,7 @@ def test_a_malformed_reference_is_refused_without_touching_the_selection(
 
 
 def test_a_hidden_body_is_not_scanned_and_saying_so_is_an_error(server: McpServer, session: Session):
-    """不可視Bodyは走査しない。**明示して指したら**エラーになる。
-
-    「指定したのに0件」と「見えないので対象外」はAIから区別が付かないため。
-    """
+    """不可視Bodyは走査しない。**明示して指したら**エラーになる。"""
     box = box_of(session)
     session.set_visible(box.id, False)
     assert call(server, "set_selection", {"predicate": VERTICAL_EDGES})["selection"]["count"] == 0
@@ -350,13 +282,7 @@ def test_human_and_ai_have_the_same_selection_operations():
 
 @pytest.mark.parametrize("tool,arguments", [("fillet", {"radius": 2.0}), ("chamfer", {"distance": 2.0})])
 def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, arguments: dict):
-    """**選択が指しているBodyに当たること**(アクティブなBodyへ誤って当たる穴の再発防止)。
-
-    辺の参照は `body` と `index` の両方を持つ。MCPが `index` だけを取り出して
-    `body_id` を渡さないと、コアのverbは**アクティブなBody**を対象にする ——
-    27部品のPCケースでは「同じ添字の別部品の辺」を黙って丸める。例外も出ない。
-    `extrude` の面の経路は面の参照から `body` を渡していて、辺の側だけが抜けていた。
-    """
+    """**選択が指しているBodyに当たること**(アクティブなBodyへ誤って当たる穴の再発防止)。"""
     session = Session(None, 0.2)
     # **選択する側を先に足す** —— `add_body` は足したBodyをアクティブにするので、
     # 後から足した `other` がアクティブになる。アクティブでないほうを狙うのが試験の要点。
@@ -388,15 +314,8 @@ def test_measure_reads_the_current_selection(server: McpServer):
     assert payload["count"] == 4
 
 
-# --------------------------------------------------------------------------------------
-# 5. measure(selection) — §5の問い合わせ
-# --------------------------------------------------------------------------------------
 def test_measure_reports_lengths_for_edges(server: McpServer, session: Session):
-    """辺は長さと端点(§5「面積・長さ・法線・中心」の長さ側)。
-
-    値は**問い合わせ層のもの**をそのまま渡す(MCPが測り直さない)。測り直すと、
-    述語が使う `describe_edges` と別の値になりうる。
-    """
+    """辺は長さと端点(§5「面積・長さ・法線・中心」の長さ側)。"""
     box = box_of(session)
     call(server, "set_selection", {"predicate": VERTICAL_EDGES})
     payload = call(server, "measure")
@@ -431,11 +350,7 @@ def test_measure_of_an_empty_selection_is_not_an_error(server: McpServer):
 
 
 def test_measure_reports_the_area_of_a_region(tmp_path: Path):
-    """領域も測れる(§5の面積側。`region.regions` が既に面積を持っている)。
-
-    領域を黙って落とす実装だと、AIは押し出す前に「この領域で合っているか」を確かめられない
-    —— 領域は**描くものではなく計算されるもの**(§3.3)なので、確かめる手段が要る。
-    """
+    """領域も測れる(§5の面積側。`region.regions` が既に面積を持っている)。"""
     from duocad.sketch import add_circle, sketch_create
 
     empty = Session(None, 0.2)
@@ -452,11 +367,7 @@ def test_measure_reports_the_area_of_a_region(tmp_path: Path):
 
 
 def test_measure_returns_the_position_of_a_vertex(server: McpServer, session: Session):
-    """頂点は3D座標(`point`)で返る。落ちたら、AIが選んだ頂点の位置を誰も言えない。
-
-    座標は `kernel.vertex_positions` の添字体系そのもの —— ずれると、AIが指した頂点と
-    違う点が画面のマーカーに出る(例外は出ない)。
-    """
+    """頂点は3D座標(`point`)で返る。落ちたら、AIが選んだ頂点の位置を誰も言えない。"""
     from duocad import kernel
 
     box = box_of(session)
@@ -466,17 +377,8 @@ def test_measure_returns_the_position_of_a_vertex(server: McpServer, session: Se
     assert item["point"] == kernel.vertex_positions(box.shape)[0]["point"]
 
 
-# --------------------------------------------------------------------------------------
-# 6. 交互操作の一巡 — **MCP経由だけで**
-# --------------------------------------------------------------------------------------
 def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, session: Session):
-    """**このファイルで最も重要な1本**。
-
-    述語で辺を選ぶ → `get_selection` で読む → `modify_selection` で1本足して1本引く →
-    `fillet` を適用 → 体積と面数が変わる。
-    A2 が素のPythonで通した一巡を、
-    **MCPのツールだけで**もう一度通す。ここが通れば §0 の交互操作の条件はAI側から満たせている。
-    """
+    """**このファイルで最も重要な1本**。"""
     box = box_of(session)
     faces_before = kernel.face_count(box.shape)
     volume_before = query.volume(box.shape)
@@ -519,9 +421,6 @@ def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, ses
     assert selection_of(server) == {"items": [], "count": 0}
 
 
-# --------------------------------------------------------------------------------------
-# 7. AI起点の選択変更が画面へ届く
-# --------------------------------------------------------------------------------------
 def test_a_selection_change_from_mcp_fires_exactly_one_event(server: McpServer, session: Session):
     """1ツール1イベント。イベントは**選択を丸ごと**運ぶ(UIが描き直すのに足る)。"""
     seen: list = []
@@ -539,12 +438,7 @@ def test_a_selection_change_from_mcp_fires_exactly_one_event(server: McpServer, 
 
 
 def test_a_selection_change_from_mcp_reaches_the_browser(session: Session):
-    """**AI→人の方向**が生きていること(A1の決定8が名指しで警告している経路)。
-
-    `Server._on_core_change` はMCP起点の変更から `applied` を落として配るので、
-    **`state_meta()["selection"]` に載っていないとAIの提案は画面へ届かない**。
-    イベントだけ実装して状態に載せないと、人→AIは動くのでテストが無ければ気づけない。
-    """
+    """**AI→人の方向**が生きていること(A1の決定8が名指しで警告している経路)。"""
     mcp = McpServer(DocumentTools(session))
     payloads = pushed_by_mcp(session, lambda: call(mcp, "set_selection", {"predicate": VERTICAL_EDGES}))
     assert len(payloads) > 1, "AIが選択を書き換えたのにブラウザへ配信されていない"

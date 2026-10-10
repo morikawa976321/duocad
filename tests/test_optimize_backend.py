@@ -1,9 +1,5 @@
 """形状最適化の**配線**(`duocad/optimize_run.py`)の契約。
 
-ここで固定するのは、**外れても例外が出ないまま静かに間違う**ところと、**入口の断り方**である。
-端から端まで実際に二値探索を回す受入検査は `topopt_checks/check_optimize_wiring.py`
-(約20秒。pytest には入れない —— `topopt_checks/_bootstrap.py` と同じ理由)。
-
 1. **面の対応** —— 条件面が複数のボディに散っていると `kernel.make_compound` で1つにまとめる。
    面添字は `face_count` の累積だけずれるが、**ずれても例外は出ない**(荷重が別の面に入り、
    最適化はもっともらしく収束する)。だから対応を測り直して確かめる層があり、
@@ -53,9 +49,6 @@ def real_min_width_bounds(monkeypatch) -> None:
     monkeypatch.setattr(optimize_run, "MIN_WIDTH_CEILING_RATIO", REAL_MIN_WIDTH_CEILING_RATIO)
 
 
-# --------------------------------------------------------------------------------------
-# 1. 入口の断り
-# --------------------------------------------------------------------------------------
 def test_conditions_report_names_every_missing_piece(session: Session) -> None:
     report = optimize_run.conditions_report(session.document)
     assert report["ready"] is False
@@ -110,9 +103,6 @@ def test_stale_condition_face_blocks_the_run(session: Session) -> None:
         optimize_run.build_conditions(session.document)
 
 
-# --------------------------------------------------------------------------------------
-# 2. メッシュボディ
-# --------------------------------------------------------------------------------------
 def _mesh_body(session: Session) -> str:
     positions = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
     indices = [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]
@@ -143,9 +133,6 @@ def test_mesh_body_left_over_from_a_replayed_log_is_refused_at_run_time(
     assert any("mesh body" in problem for problem in report["problems"])
 
 
-# --------------------------------------------------------------------------------------
-# 3. 面の対応(compound の面添字)
-# --------------------------------------------------------------------------------------
 def test_face_indices_shift_by_the_face_count_of_earlier_bodies(session: Session) -> None:
     from duocad import kernel
 
@@ -226,9 +213,6 @@ def test_identical_bodies_are_told_apart_by_the_centroid(session: Session) -> No
         )
 
 
-# --------------------------------------------------------------------------------------
-# 4. 解像度
-# --------------------------------------------------------------------------------------
 def test_the_upper_bound_is_the_finer_of_the_fixed_cap_and_the_condition_faces(session: Session, monkeypatch) -> None:
     """落ちたら、要素サイズの上限が min(固定値 4mm, 条件面の要求 min(sqrt(CAD面積))) を実格子へ切り下げた値から外れている(#130)。"""
     monkeypatch.setattr(optimize_run, "MAX_ELEMENT_SIZE_MM", REAL_MAX_ELEMENT_SIZE_MM)
@@ -486,11 +470,7 @@ def test_a_requested_element_size_off_the_ladder_is_snapped_to_the_real_grid(
 
 
 def test_a_derived_space_over_the_limit_stops_before_the_search(session: Session, monkeypatch) -> None:
-    """落ちたら、実行前の見積もりを通った要求でも、`derive` 後の実数が上限を超えたのに探索へ進んでいる。
-
-    見積もりは実数とずれうるので、拒否の最終判断は `derive` の後の `space.element_count` に置く。
-    見積もり側の門(`_min_element_size`)を素通しにして、実数の門だけを効かせる。
-    """
+    """落ちたら、実行前の見積もりを通った要求でも、`derive` 後の実数が上限を超えたのに探索へ進んでいる。"""
     from duocad.topopt import binary_search
 
     four_conditions(session)
@@ -538,11 +518,7 @@ def test_build_conditions_lists_the_condition_bodies_and_ignores_unrelated_ones(
 def test_run_derives_once_and_hands_the_space_to_the_search(
     session: Session, monkeypatch
 ) -> None:
-    """**塊は探索の前に1回だけ導出し、そのまま `find_best_feasible` へ渡す。**
-
-    デバッグ配信の塊(`space`)は導出直後の1回だけで、探索の後に別の塊を配り直さない
-    (`docs/TOPOPT.md`「固定凸包による設計空間」の「塊を1回導出」)。
-    """
+    """**塊は探索の前に1回だけ導出し、そのまま `find_best_feasible` へ渡す。**"""
     from duocad.topopt import binary_search
     from duocad.topopt import design_space as ds
 
@@ -585,9 +561,6 @@ def test_run_derives_once_and_hands_the_space_to_the_search(
     assert conditions.mapping["status"] == "pass"
 
 
-# --------------------------------------------------------------------------------------
-# 5. 座標系(要素添字空間 → ワールド[mm])
-# --------------------------------------------------------------------------------------
 def test_mesh_vertices_are_converted_to_world_millimetres() -> None:
     from duocad.topopt import voxelize as vx
 
@@ -603,9 +576,6 @@ def test_mesh_vertices_are_converted_to_world_millimetres() -> None:
         )
 
 
-# --------------------------------------------------------------------------------------
-# 6. 中断
-# --------------------------------------------------------------------------------------
 def test_cancelling_leaves_the_document_untouched(session: Session) -> None:
     """**旗が立っていれば1つも作らずに降りる。** 塊の導出より手前で見るので費用も掛からない。"""
     four_conditions(session)
@@ -759,11 +729,7 @@ def test_every_evaluation_of_the_search_reaches_the_progress_sink_and_never_rais
 def test_search_statuses_other_than_feasible_pass_through_without_touching_the_document(
     session: Session, monkeypatch
 ) -> None:
-    """`SearchResult.status` が `'feasible'` 以外の4値は、そのまま `state` として返る
-
-    (段階4の契約「製品配線側はこの値をそのままUI/ログへ渡せばよい」)。文書は変わらない。
-    `boundary_mapping_failed` の一言は評価予算の増加を案内しない(候補では直らない)。
-    """
+    """`SearchResult.status` が `'feasible'` 以外の4値は、そのまま `state` として返る"""
     from duocad.topopt import binary_search
 
     four_conditions(session)
@@ -876,11 +842,7 @@ def test_an_entry_failure_says_the_check_ran_on_the_design_space_trimmed_by_min_
 def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
     session: Session, monkeypatch
 ) -> None:
-    """**探索候補の評価中はメッシュ化・STL出力を呼ばない。後段へ渡るのは最終確定マスクだけ**
-
-    (`docs/TOPOPT.md`「二値探索の方式と契約」)。`mesh.write_stl` が呼ばれたら落とし、`mesh.build_surface_from_mask` が
-    ちょうど1回だけ、探索が返した確定マスクで呼ばれることを確かめる。
-    """
+    """**探索候補の評価中はメッシュ化・STL出力を呼ばない。後段へ渡るのは最終確定マスクだけ**"""
     import numpy as np
 
     from duocad.topopt import binary_search
@@ -939,14 +901,8 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
     assert "spacing" not in kwargs_seen[0]
 
 
-# --------------------------------------------------------------------------------------
-# 8. import の費用
-# --------------------------------------------------------------------------------------
 def test_importing_the_session_does_not_pull_in_the_topopt_layer() -> None:
     """`optimize_run` を `session.py` が読むようになっても、**最適化の層は来ない**。
-
-    `duocad/topopt/*` の import は関数の中に置いてある(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
-    ここが崩れると pytest 全体が毎回 skimage と `duocad.topopt` の起動費用を払う。
 
     **`scipy` は見ない** —— `duocad/view.py` が(このタスクの前から)既に読んでいるので、
     scipy の有無ではこの配線の退行を検出できない(2026-09-05実測)。
@@ -963,20 +919,14 @@ def test_importing_the_session_does_not_pull_in_the_topopt_layer() -> None:
     assert out.stdout.strip() == "[]", out.stdout
 
 
-# --------------------------------------------------------------------------------------
 # 9. 開発用のデバッグ表示(`?debug=space` / `?debug=anchors` / `?voxel=1`。20260905-1700)
 #
 # 端から端まで(本物のSIMPを1回通して塊・節点・密度場が実ブラウザに出る)は
 # `web/scripts/smoke-optimize-debug.mjs`。ここで固定するのは、**外れても例外が出ないまま
 # 静かに間違う**2点である: (a) セル中心の規約(半要素ずれても絵は出る)、
 # (b) 頼んでいない配信が起きない(＝既定の実行に費用が乗らない)。
-# --------------------------------------------------------------------------------------
 def test_debug_voxels_carry_the_cell_centre_convention() -> None:
-    """通し添字はC順(`i*(ny*nz) + j*nz + k`)。**画面はこれを中心へ戻す。**
-
-    ここがずれると、画面のボクセルが半要素ぶん(あるいは丸ごと)動く —— 絵は出るので
-    目視では気づけない(`duocad/topopt/mesh.py:169` のセル中心の規約)。
-    """
+    """通し添字はC順(`i*(ny*nz) + j*nz + k`)。**画面はこれを中心へ戻す。**"""
     import numpy as np
 
     from duocad.topopt import voxelize as vx
@@ -1009,12 +959,7 @@ def test_debug_voxels_carry_the_cell_centre_convention() -> None:
 
 
 def test_debug_voxels_thin_out_instead_of_shipping_a_million_cubes() -> None:
-    """上限を超えたら**軸方向に間引く**。間引いたことが payload から読めること。
-
-    立方体1個 = 12三角形なので、実物の部品の塊(5〜12万要素)をそのまま出すと
-    60〜144万三角形になる。**黙って全部送らない**(画面が固まる)、
-    **黙って切り捨てない**(「全部見えている」と誤解する)、の両方を守る。
-    """
+    """上限を超えたら**軸方向に間引く**。間引いたことが payload から読めること。"""
     import numpy as np
 
     from duocad.topopt import voxelize as vx
@@ -1036,12 +981,7 @@ def test_debug_voxels_thin_out_instead_of_shipping_a_million_cubes() -> None:
 
 
 def test_debug_sink_builds_nothing_unless_asked() -> None:
-    """**頼まれた種類だけ**を作る。頼まれなければ `numpy` の配列を1本も作らない。
-
-    これが崩れると、フラグを付けていない利用者の実行にデバッグ配信の費用が乗る
-    (数十万要素の `argwhere` + JSON 化)。`wants()` が門で、`space()` /
-    `anchors()` / `rho()` はその門を必ず先に通る。
-    """
+    """**頼まれた種類だけ**を作る。頼まれなければ `numpy` の配列を1本も作らない。"""
     import numpy as np
 
     from duocad.topopt import voxelize as vx
@@ -1079,9 +1019,6 @@ def test_debug_sink_builds_nothing_unless_asked() -> None:
     assert events[0]["threshold"] == pytest.approx(optimize_run.DEBUG_RHO_THRESHOLD)
 
 
-# --------------------------------------------------------------------------------------
-# 9. 面アンカーの門が「面の上のどこか」と比べている
-# --------------------------------------------------------------------------------------
 def test_face_centroid_is_the_area_centroid_not_the_geometry_center() -> None:
     """**曲面では両者が大きく離れる。** 離れないなら片方をもう片方で代用してしまっている。"""
     from duocad import query
@@ -1161,9 +1098,6 @@ def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
         optimize_run._check_anchor_centroids(session.document, space)
 
 
-# --------------------------------------------------------------------------------------
-# 9. 境界条件の確定(docs/TOPOPT.md「境界条件の確定」「回帰検査の対応」)
-# --------------------------------------------------------------------------------------
 def test_a_load_face_on_a_body_that_is_not_preserved_is_refused(session: Session) -> None:
     """落ちたら、保持しないボディの面に荷重を置けてしまう(探索が削れる材料に荷重が載り、確定表が
     そのボディ以外の材料の節点へ荷重を配る)か、条件の載ったボディを保持から外せてしまう。"""
@@ -1317,9 +1251,6 @@ def test_the_keep_cells_without_room_warning_rides_on_every_early_return_too(
     assert "保持ソリッドのセルが 4 個" in result["warning"]
 
 
-# --------------------------------------------------------------------------------------
-# 10. 探索に渡す目標 = 実際の目標 × 係数(docs/TOPOPT_TARGET_FACTOR.md)
-# --------------------------------------------------------------------------------------
 def test_the_search_target_is_the_real_target_times_2_4_unless_the_factor_is_pinned_to_1(session: Session) -> None:
     """落ちたら、探索と6条件の `safety` が、利用者の目標をそのまま(または別の係数で)使っている。"""
     from duocad.topopt import design_space as ds
@@ -1407,9 +1338,6 @@ def test_a_full_material_shortfall_names_the_search_target_and_the_factor_not_a_
     assert "安全率 3.1 が目標 4.8 に届かない" in optimize_run._search_failure_warning(failed)
 
 
-# --------------------------------------------------------------------------------------
-# 9. 探索後の 1×1 の空隙埋め(thin_voids)と6条件の取り直し
-# --------------------------------------------------------------------------------------
 def _replayed_search(monkeypatch, safety_factor: float = 9.9) -> None:
     # 探索を差し替え、最小幅を満たして保持セルを残した確定マスクを返す(評価3回・収束)。
     import numpy as np

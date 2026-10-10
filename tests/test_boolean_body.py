@@ -72,9 +72,6 @@ def _volume(doc: Document, body_id: str) -> float:
     return query.volume(doc.get_body(body_id).shape)
 
 
-# --------------------------------------------------------------------------------------
-# 基本3モード
-# --------------------------------------------------------------------------------------
 def test_union_adds_the_part_of_the_tool_outside_the_target(session: Session) -> None:
     """x方向に5mmはみ出したツールを union すると 8000 -> 8500(ツールのボディは消える)。"""
     target_id = _add_body(session.document, "target", _box_shape(SIDE, SIDE, SIDE))
@@ -102,9 +99,6 @@ def test_intersect_with_two_tools_is_union_of_intersections(session: Session) ->
     assert math.isclose(_volume(session.document, target_id), 2 * TOOL**3, rel_tol=1e-5)
 
 
-# --------------------------------------------------------------------------------------
-# エラー
-# --------------------------------------------------------------------------------------
 def test_non_solid_target_is_rejected(session: Session) -> None:
     doc = session.document
     solid_id = _add_body(doc, "solid", _box_shape(SIDE, SIDE, SIDE))
@@ -129,9 +123,6 @@ def test_target_cannot_also_be_a_tool(session: Session) -> None:
         boolean_body_verb(doc, _target_ref(target_id), [tool_id, target_id], mode="union")
 
 
-# --------------------------------------------------------------------------------------
-# undo / redo
-# --------------------------------------------------------------------------------------
 def test_undo_redo_restores_target_shape_and_removed_tools(session: Session) -> None:
     """1回の undo でターゲット形状と消えたツールが戻り、redo で再演算される。"""
     doc = session.document

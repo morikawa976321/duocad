@@ -1,7 +1,4 @@
-"""verb `extrude` が選択の**面群**(同一平面・同一ボディ)を押し出せること(join / cut / new)。
-
-領域の押し出しは `test_extrude.py`。1面の結果は、保存済みの `extrude_face` のログ(`test_extrude_face_replay.py`)と体積・面数が一致する。
-"""
+"""verb `extrude` が選択の**面群**(同一平面・同一ボディ)を押し出せること(join / cut / new)。"""
 from __future__ import annotations
 
 import json

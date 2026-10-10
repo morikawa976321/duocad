@@ -16,9 +16,6 @@ from topopt_support import (Table, appendage_conditions, assert_min_width_invari
                             slim_bar_conditions)
 
 
-# ---------------------------------------------------------------------------
-# §4.4 島処理: 最大成分を選ばず、条件を単独で満たす成分だけを残す
-# ---------------------------------------------------------------------------
 def test_resolve_islands_rejects_an_isolated_component_that_holds_only_one_condition():
     """孤立成分が条件を持つ例: 一方は固定面だけ、他方は荷重面だけを持ち、どちらも
     単独では6条件の前提を満たさない。**大きい方を選んで一方の条件を無視してはいけない。**"""
@@ -47,9 +44,6 @@ def test_resolve_islands_keeps_the_component_that_alone_satisfies_every_conditio
     assert diagnostics['removed_islands'] == []
 
 
-# ---------------------------------------------------------------------------
-# 統合: find_initial_feasible
-# ---------------------------------------------------------------------------
 def test_full_design_space_already_feasible_is_found_and_saved_on_the_first_try():
     shape = (4, 2, 2)
     conditions = bar_conditions(shape=shape)
@@ -163,9 +157,6 @@ def test_full_material_is_evaluated_once_without_the_bbox_cache_or_the_region_pr
     assert len(seen) == 1 and seen[0]['bbox_cache'] is None and seen[0]['region_overlaps'] is None
 
 
-# ---------------------------------------------------------------------------
-# 段階4: ひずみエネルギーの順位で削る体積削減(docs/TOPOPT.md「段階4: ひずみエネルギーの順位で削る」)
-# ---------------------------------------------------------------------------
 def test_step_ratio_is_zero_at_the_target_grows_with_the_margin_and_is_capped():
     """削る割合は安全率の余裕で決まる。目標ちょうどで0、余裕が大きいほど大きく、上限で止まる。"""
     assert bs.step_ratio(2.0, 2.0) == 0.0
@@ -332,9 +323,6 @@ def test_peel_refuses_a_cell_whose_removal_leaves_an_irregular_vertex():
     assert np.array_equal(after, mask) and (stats.picked, stats.skipped_manifold) == (0, 1)
 
 
-# ---------------------------------------------------------------------------
-# 最小幅の保証(`min_width_cells`)
-# ---------------------------------------------------------------------------
 def test_cube_opening_equals_scipy_binary_opening():
     """落ちたら、軸ごとに分けた opening が `binary_opening` とずれている(最小幅の全判定がこれを使う)。"""
     rng = np.random.default_rng(20260922)
@@ -507,9 +495,6 @@ def test_min_width_with_a_design_space_that_holds_no_m_cube_is_refused_at_entry(
     assert result.diagnostics['min_width']['trimmed_cells'] == 4
 
 
-# ---------------------------------------------------------------------------
-# 最小幅の規則から保持ソリッド由来のセルを外す(`SearchConditions.keep_cells`)
-# ---------------------------------------------------------------------------
 def _bar_with_protrusion(*, second_protrusion: bool = False):
     """棒の脇の1セルの突起(5,2,0)は m=2 の立方に入らない。保持ソリッドはそこだけに重なり、そのセルを保持セルにする。"""
     design = np.zeros((10, 4, 4), bool)
@@ -720,9 +705,6 @@ def test_keep_cells_without_room_ignores_keep_cells_that_a_cube_covers_and_count
     assert bs.keep_cells_without_room(design, keep, 2) == dict(cells=1, around_exclude=0, around_outside=26)
 
 
-# ---------------------------------------------------------------------------
-# 段階4の制御: 採用・歩幅・忍耐・目標の許容・評価不能・中断・決定性
-# ---------------------------------------------------------------------------
 def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_supported():
     conditions, design, appendage = appendage_conditions()
     result = bs.find_best_feasible(design, conditions, max_evaluations=200)
@@ -851,9 +833,7 @@ def _single_cell_safety_failures(steps):
 
 
 def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell_safety_failure_converges(monkeypatch):
-    """落ちたら、削減割合の後退規則か、`single_cell_patience=1` で1セルの安全率不合格が即収束になる規則が壊れている。
-
-    `rejected` に当たった候補は評価に数えずに倍率を半分にするので、記録された評価の間では 2 の冪で何段か落ちうる。"""
+    """落ちたら、削減割合の後退規則か、`single_cell_patience=1` で1セルの安全率不合格が即収束になる規則が壊れている。"""
     conditions, design, _ = appendage_conditions()
     floor = 0.75 * design.sum()
     _fail_safety_when(monkeypatch, lambda material: material.sum() < floor)  # 体積の下限を安全率の不足に見立てる
@@ -1230,9 +1210,6 @@ def test_computation_failure_is_recorded_as_unknown_and_never_becomes_the_best_f
     assert len(result.history) == 1
 
 
-# ---------------------------------------------------------------------------
-# 修正B: 入口の必要条件(docs/TOPOPT.md「回帰検査の対応」)
-# ---------------------------------------------------------------------------
 def test_uncovered_anchor_nodes_stop_at_the_entry_without_evaluating(monkeypatch):
     """確定表の節点が全設計空間の材料に接しないなら、FEM0回で `boundary_mapping_failed`。
     APIを直接呼ぶ経路でも同じ判定を通る(製品入口だけの防御にしない)。"""
@@ -1282,9 +1259,6 @@ def test_the_identifier_depends_on_the_fixed_nodes_not_only_on_the_face_indices(
     assert bs.evaluation_identifier(a) == bs.evaluation_identifier(bar_conditions())
 
 
-# ---------------------------------------------------------------------------
-# 条件固定: 確定後は再配分しない(§3.2)
-# ---------------------------------------------------------------------------
 def test_removing_the_scaffold_under_a_fixed_anchor_is_infeasible_and_never_renormalised():
     """初期合格後に確定アンカーの足場を削ると不合格になり、合力の再正規化で合格へ戻らない。"""
     shape = (4, 2, 2)
@@ -1308,9 +1282,6 @@ def test_removing_the_scaffold_under_a_fixed_anchor_is_infeasible_and_never_reno
         assert live[conditions.table.node_ids([face])].all()  # 採用マスクは確定節点を全て支えている
 
 
-# ---------------------------------------------------------------------------
-# 保持・除外の重なりの前計算と、段階4の採用形状の再検査(§3)
-# ---------------------------------------------------------------------------
 def partial_region_conditions():
     """`appendage_conditions` と同じ棒だが、保持CADが格子の一部にだけ掛かり(境界のセルが部分的に重なる)、除外CADは
     設計空間の切り欠きの中にある。除外に掛かるセルは設計空間から抜いておく(製品の `design_space.derive` と同じ。

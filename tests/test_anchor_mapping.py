@@ -20,12 +20,7 @@ DEFAULT_PHASE = (0.37, 0.21, 0.44)
 
 
 def _setup(shape, spacing=1.0, phase=DEFAULT_PHASE):
-    """形状を包む格子(各軸に1要素以上の余白)と、その占有(材料を置ける範囲)を作る。
-
-    `phase`(要素サイズ比)だけ格子原点をずらし、箱の面が格子面に乗らないようにする(乗ると面の
-    外側の節点は距離 >= 1要素で重み0になり、幾何の表でも材料に接しない節点が出ない。hanger の
-    荷重面は曲面で格子面に乗らない)。
-    """
+    """形状を包む格子(各軸に1要素以上の余白)と、その占有(材料を置ける範囲)を作る。"""
     soup = voxelize.triangles_from_shape(shape.wrapped, deviation=spacing * voxelize.DEFAULT_DEVIATION_RATIO)
     lo, hi = soup.bbox
     origin = np.asarray(lo, dtype=float) - spacing * (1.0 + np.asarray(phase, dtype=float))

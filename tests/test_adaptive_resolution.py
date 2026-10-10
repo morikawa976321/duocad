@@ -1,19 +1,4 @@
-"""可変解像度(ズーム連動のテセレーション) — 変換式・配りもの・プロトコルの契約。
-
-**「寄っても多角形の角が出ない」こと自体は pytest では判定できない**(見た目は目でしか
-分からない)。実機での確認は `web/scripts/smoke-resolution.mjs` が数値で行う。ここが固定する
-のは、その手前にある**機械で見える3つ**である:
-
-1. **変換式が2つの言語で同じ**こと。スケッチの円はブラウザ側(`web/src/adaptiveResolution.ts`)、
-   ソリッドと辺はこちら(`duocad/resolution.py`)で折られるので、**定数が片方だけ動くと
-   同じ画面で滑らかさが食い違う** —— 例外もコンソールエラーも出ない壊れ方なので、
-   TS側を Node で実際に評価して突き合わせる(`tests/eval_adaptive_resolution.mjs`)。
-2. **配りもの(`DocumentView`)が目標精度に従う**こと。ソリッド・辺・スケッチ領域の3経路
-   すべてで、キャッシュを跨いで効き、版(`body_revision`)が上がって差分配信が届くこと。
-3. **画面の設定が文書に漏れない**こと。`Session.deviation`(画面の土台)はズームで動かない。
-   書き出しはこれすら見ない(`io_step.STL_DEVIATION` 固定)ので、**書き出す形の粗さは
-   カメラでも設定でも変わらない**。
-"""
+"""可変解像度(ズーム連動のテセレーション) — 変換式・配りもの・プロトコルの契約。"""
 from __future__ import annotations
 
 import math
@@ -32,10 +17,6 @@ SIDE = 20.0
 RADIUS = 10.0
 
 
-# --------------------------------------------------------------------------------------
-# 1. 変換式が2つの言語で同じ
-# --------------------------------------------------------------------------------------
-#: TS側を実際に評価する口(`tests/eval_adaptive_resolution.mjs` のdocstring)。
 TS_EVALUATOR = Path(__file__).resolve().parent / "eval_adaptive_resolution.mjs"
 
 #: 非有限をJSONで運ぶときの綴り(JSONに非有限の数値リテラルが無いため)。
@@ -86,9 +67,6 @@ def _evaluate_in_typescript(cases: list) -> list:
 def test_the_conversion_formula_matches_between_python_and_typescript() -> None:
     """落ちたら、`resolution.py` と `adaptiveResolution.ts` の式か定数(TS側が写す `kernel` の既定値2つを
     含む)が食い違い、同じ画面でスケッチの円とソリッド・辺の粗さがずれる。
-
-    比較は**厳密一致**。四則と `sqrt` はIEEE754で正しく丸められ、JSONの往復は倍精度を
-    そのまま運ぶので、桁が1つでも違えば式が違う。
     """
     cases = _equivalence_cases()
     assert len(cases) >= 100, f"突き合わせる入力が少なすぎる: {len(cases)}件"
@@ -126,12 +104,7 @@ def test_zooming_in_asks_for_a_finer_deviation_and_zooming_out_a_coarser_one() -
 
 
 def test_the_default_deviation_maps_back_to_the_default_angular_deflection() -> None:
-    """**既定値の意味を変えていない** —— 線形が既定なら角度も既定に戻る。
-
-    `tests/test_feature_ui.py` の小半径円弧の下限は `kernel.DEFAULT_ANGULAR_DEFLECTION`
-    から導かれている。この対応が崩れると、あちらの検査の意図(角度偏差1本で下限が決まる)
-    が静かに壊れる。
-    """
+    """**既定値の意味を変えていない** —— 線形が既定なら角度も既定に戻る。"""
     assert resolution.angular_for_deviation(kernel.DEFAULT_DEVIATION) == pytest.approx(
         kernel.DEFAULT_ANGULAR_DEFLECTION
     )
@@ -172,9 +145,6 @@ def test_the_deviation_is_clamped_both_absolutely_and_relative_to_the_model() ->
     )
 
 
-# --------------------------------------------------------------------------------------
-# 2〜3. 配りものが目標精度に従い、文書の土台は動かない
-# --------------------------------------------------------------------------------------
 @pytest.fixture()
 def cylinder_session() -> tuple:
     """円(半径10mm)を押し出した円柱を1つ持つセッション。**曲面と円い辺の両方がある**。"""
@@ -288,9 +258,6 @@ def test_the_baseline_comes_back_untouched_for_a_fresh_session() -> None:
     )
 
 
-# --------------------------------------------------------------------------------------
-# プロトコル(WebSocket)
-# --------------------------------------------------------------------------------------
 def test_the_websocket_command_redelivers_the_geometry_at_the_new_resolution(
     cylinder_session,
 ) -> None:

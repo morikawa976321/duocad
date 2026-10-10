@@ -63,9 +63,6 @@ def cylinder(session: Session, radius: float, height: float, *, center=(0.0, 0.0
     return session.document.bodies[-1]
 
 
-# --------------------------------------------------------------------------------------
-# 形状最適化の題材
-# --------------------------------------------------------------------------------------
 def face_with_normal(body, nx: float, ny: float, nz: float) -> int:
     for face in query.describe_faces(body.shape):
         normal = face["normal"]
@@ -100,9 +97,6 @@ def four_conditions(session: Session, magnitude: float = 500.0):
     return left, right, fixed, load
 
 
-# --------------------------------------------------------------------------------------
-# 画面の代わり(WebSocket の接続)
-# --------------------------------------------------------------------------------------
 class FakeConnection:
     """`Server` が使うのは `send` だけ(配信の出口)。届いた封筒を `payloads` に溜める。"""
 
@@ -122,12 +116,7 @@ class FakeConnection:
 
 
 def browser(session: Session, script, *, connections: int = 2, initial_push: bool = True):
-    """`script(send)` を1つのイベントループで走らせ、`(script の戻り値, 接続の並び)` を返す。
-
-    `send(command)` は1本目の接続から送り、1本目に最後に届いた封筒を返す。接続直後の配信
-    (`initial_push`)は数えない —— 数える件数が変わるテストは `initial_push=False` で配信そのものを省く。
-    既定で**2本つなぐ** —— 1本だけだと「要求した接続にだけ返す」「全接続へ配る」の区別が付かない。
-    """
+    """`script(send)` を1つのイベントループで走らせ、`(script の戻り値, 接続の並び)` を返す。"""
 
     async def scenario():
         server = Server(session)
@@ -157,8 +146,6 @@ def send_one(session: Session, command: dict) -> dict:
 def pushed_by_mcp(session: Session, act) -> list:
     """接続を1本つないで接続直後の配信を受けた後、`act()`(MCP 起点の変更)が起こす配信を待ち、
     届いた封筒を**接続直後の分も含めて**返す(`len(payloads) > 1` が「配信された」の印)。
-
-    MCP 起点の配信は別タスクで走るので、`sleep(0)` で最大50回だけループへ番を譲って待つ。
     """
 
     async def scenario() -> list:

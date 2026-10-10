@@ -1,8 +1,4 @@
-"""verb `extrude_face` は再生専用で残してある: 古い保存ログを読み込んで再生すると従来と同じ形になる。
-
-`fixtures/extrude_face_log.json` は、`extrude_face` が公開verbだった実装で作った保存ログ
-(20mm立方体 → 上面+10 → +X面-3 → +Y面+4)。体積・面数は、そのログを作った時点の実装で測った値。
-"""
+"""verb `extrude_face` は再生専用で残してある: 古い保存ログを読み込んで再生すると従来と同じ形になる。"""
 from __future__ import annotations
 
 import math
