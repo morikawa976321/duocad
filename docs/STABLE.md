@@ -7,9 +7,9 @@
 
 | | 安定版(制作用) | 開発版 |
 |---|---|---|
-| コード | `$env:USERPROFILE\mf\duocad-stable`(`main` のclone) | `mf\duocad`(develop) |
+| コード | `%USERPROFILE%\mf\duocad-stable`(`main` のclone) | `mf\duocad`(develop) |
 | 実行環境 | 専用の `.venv` / `node_modules` / `web/dist` | 開発用のもの |
-| 制作データ | `$env:USERPROFILE\mf\duocad-data\{models,export,logs}` | リポジトリ直下の `models/` `export/` |
+| 制作データ | `%USERPROFILE%\mf\duocad-data\{models,export,logs}` | リポジトリ直下の `models/` `export/` |
 | ポート(WS / HTTP) | **8775 / 8776** | 8765 / 8766(既定) |
 | 画面 | Edgeのアプリウィンドウ。ヘッダーに更新ボタン(更新があるときだけ) | ヘッダー左端に「開発版」の札、窓のタイトルに `[開発版]` |
 | MCP(Claude Code) | 安定版のフォルダで開いたセッション → 8776(local スコープ登録) | `.mcp.json` → 8766 |
@@ -92,7 +92,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\mf\duocad-s
 直前の更新の前のコミットは `duocad-stable\.git\duocad-previous` に残る。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot $env:USERPROFILE\mf\duocad-stable -LogDir $env:USERPROFILE\mf\duocad-data\logs -DataDir $env:USERPROFILE\mf\duocad-data -Rollback
+powershell -NoProfile -ExecutionPolicy Bypass -File %USERPROFILE%\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot %USERPROFILE%\mf\duocad-stable -LogDir %USERPROFILE%\mf\duocad-data\logs -DataDir %USERPROFILE%\mf\duocad-data -Rollback
 ```
 
 動いているサーバは8776から探して**すぐ強制終了する**(止まるよう頼む口は無い。文書は自動保存済みなので、
