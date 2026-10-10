@@ -1,21 +1,17 @@
 /**
- * 実機での確認 — **ズームに応じて分割数が増減する**(可変解像度)。
+ * 実機での確認 — ズームに応じて分割数が増減する(可変解像度)。
  *
  *   node scripts/smoke-resolution.mjs
  *
- * 「寄っても多角形の角が出ない」は目でしか判定できないので、**代わりに分割数と目標偏差を
- * 数値で見る**。見るのは3経路すべて(タスクの完了条件):
+ * 「寄っても多角形の角が出ない」を、分割数と目標偏差の数値で見る。見るのは3経路:
  *
  *   1. スケッチの円 …… ブラウザ内で折る(`entityKinds.ts` + `adaptiveResolution.ts`)
  *   2. 通常のソリッド … サーバの `BRepMesh_IncrementalMesh`(`kernel.tessellate`)
  *   3. 辺オーバーレイ … サーバの `GCPnts_TangentialDeflection`(`kernel.tessellate_edges`)
  *
- * 手順は「本物のホイールで寄る/引く」→「落ち着くのを待つ」→「3経路の分割数を読む」。
- * **サーバへ何を送るかは見ない** —— 見るのは画面に実際に届いた形だけである
- * (プロトコルの契約は `tests/test_adaptive_resolution.py` が持つ)。
- *
- * サーバはこのスクリプトが空の文書で起動し、円柱はMCP経由で作る。
- * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
+ * 本物のホイールで寄る/引く → 落ち着くのを待つ → 3経路の分割数を読む。サーバへ何を送るかは見ず、
+ * 画面に実際に届いた形だけを見る(プロトコルの契約は `tests/test_adaptive_resolution.py`)。
+ * サーバは空の文書で起動し、円柱はMCP経由で作る。
  */
 import { assertNoAppErrors, frameAll, openApp, sleep, viewportCenter } from './browser.mjs'
 import { fail, ok } from './args.mjs'
@@ -65,19 +61,13 @@ runSmoke('smoke-resolution', { timeout: 60000, mcp: true }, async ({ mcp, browse
     }
 
     /**
-     * 画面が落ち着くまで待ってから3経路の分割数を読む。
-     *
-     * **「値が既定と一致したら終わり」にはできない。** 解像度をまだ一度も採っていない状態の
-     * 既定値(0.2mm)と、サーバが最初に配った粗さは同じなので、その条件は**ズーム前でも
-     * ズーム後でも即座に真になり、検査が何も見ないまま緑になる**(実際に一度そうなった)。
-     * したがって待つのは次の3つが**同時に**満たされることである:
-     *
+     * 画面が落ち着くまで待ってから3経路の分割数を読む。「値が既定(0.2mm)と一致したら終わり」にはできない:
+     * 解像度を採る前の既定値とサーバが最初に配った粗さは同じで、ズーム前後どちらでも即座に真になり、
+     * 検査が何も見ないまま緑になる(実際に一度そうなった)。次の3つが同時に満たされるまで待つ:
      *   (a) ビューポートが解像度を実際に採っている(`worldPerPixel > 0`)
-     *   (b) 採った値がサーバから届いた `geometry.deviation` と一致している(往復が終わった)
-     *   (c) 辺が今の版のものである(古い添字の辺が残っていない)
-     *
-     * さらに (a) の値が**3回続けて同じ**であることを見る(減衰つきのドリーはホイールを
-     * 止めた後も動き続けるので、1回の一致では「まだ動いている途中」を掴んでしまう)。
+     *   (b) 採った値がサーバから届いた `geometry.deviation` と一致している
+     *   (c) 辺が今の版のものである
+     * さらに (a) の値が3回続けて同じであること(減衰つきのドリーはホイールを止めた後も動き続ける)。
      */
     async function measure(label) {
       const deadline = Date.now() + timeout
@@ -111,7 +101,7 @@ runSmoke('smoke-resolution', { timeout: 60000, mcp: true }, async ({ mcp, browse
       return seen
     }
 
-    /** 本物のホイールで寄る(引く)。**減衰が収まるのは `measure` の待ちが見る。** */
+    /** 本物のホイールで寄る(引く)。 */
     async function wheel(deltaY, times) {
       for (let i = 0; i < times; i += 1) {
         await page.mouse.wheel({ deltaY })
@@ -144,7 +134,7 @@ runSmoke('smoke-resolution', { timeout: 60000, mcp: true }, async ({ mcp, browse
         `スケッチ ${base.sketchPoints}->${near.sketchPoints}点)`,
     )
 
-    // **画面上の弦の誤差**で見る —— 分割数そのものではなく「角が見えるか」に対応する量。
+    // 画面上の弦の誤差で見る(「角が見えるか」に対応する量)。
     const nearPixelError = near.deviation / near.resolution.worldPerPixel
     if (!(nearPixelError <= 1)) {
       fail(`寄った状態で弦の誤差が1画素を超えている: ${nearPixelError.toFixed(3)}px`)

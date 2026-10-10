@@ -394,23 +394,11 @@ export interface VerticesPayload {
 }
 
 // --------------------------------------------------------------------------------------
-// G: アプリ内AIエージェント — **verbではない**
+// G: アプリ内AIエージェント — verbではない
 // --------------------------------------------------------------------------------------
 /**
- * `ai_*` は文書を直接は変えない(操作ログに載らずundoの単位でもない)。AIがツールを呼んで
- * 文書を変えたときは、その変更は**通常の `state` 配信**として別途届く(`onState` の
- * `applied` は `null` —— MCP起点の変更と同じ扱い。`duocad/server.py` のモジュールdocstring)。
- * ここにある4つはその会話そのものの配線でしかない。
- */
-/**
- * 繋げるプロバイダの綴り(`duocad/net/ws.py` の `AI_PROVIDERS` が正)。
- *
- * `'anthropic'` は Claude API。APIキーはサーバ側(環境変数かファイル)に置く。画面からは
- * `aiSetApiKey` で**書くだけ**で、値は返ってこない。
- */
-/**
- * `measure` の**2項目のあいだ**(`duocad/measure.py` の `between`)。
- * **キーの顔ぶれは組によらず同じ**(無い値は null)—— 距離が出る組は `distance`・`from`・`to`、
+ * `measure` の2項目のあいだ(`duocad/measure.py` の `between`)。
+ * キーの顔ぶれは組によらず同じ(無い値は null)。距離が出る組は `distance`・`from`・`to`、
  * 平行でない線・面どうしは `angle_deg` だけ、点と点は `delta` も。
  */
 export interface MeasureBetween {
@@ -428,14 +416,19 @@ export interface MeasurePayload {
   client_op: number | null
   count: number
   items: unknown[]
-  /** **ちょうど2項目のときだけ**付く(`duocad/measure.py` の `measure_selection`)。 */
+  /** ちょうど2項目のときだけ付く(`duocad/measure.py` の `measure_selection`)。 */
   between?: MeasureBetween | null
   between_error?: string | null
 }
 
+/**
+ * 繋げるプロバイダの綴り(`duocad/net/ws.py` の `AI_PROVIDERS` が正)。
+ * `ai_*` は文書を直接は変えない。AIがツールで文書を変えたときは通常の `state` 配信として届く
+ * (`onState` の `applied` は `null`。`duocad/server.py` のモジュールdocstring)。
+ */
 export type AiProviderKind = 'openai_compat' | 'anthropic'
 
-/** 画面に出してよい設定の全部。**キーの値は載らない**(置いてあるか・どこから読んだか・末尾4文字だけ)。 */
+/** 画面に出してよい設定の全部。キーの値は載らない(置いてあるか・どこから読んだか・末尾4文字だけ)。 */
 export interface AiStatus {
   provider: AiProviderKind
   model: string | null
@@ -465,8 +458,7 @@ export interface FemStatus {
   error?: string
 }
 
-/** ツール呼び出し1件の進捗(`AgentLoop` の `progress` コールバックそのもの)。
- * **`name` は操作ログ・MCPツール名と同じ綴り** —— 操作ログと突き合わせられる。 */
+/** ツール呼び出し1件の進捗(`AgentLoop` の `progress` コールバックそのもの)。`name` は操作ログ・MCPツール名と同じ綴り。 */
 export interface AiToolCall {
   name: string
   arguments: Record<string, unknown>
@@ -480,8 +472,7 @@ export interface AiToolCall {
  * - `completed`  … ツールを呼ばずに答えた(正常終了)
  * - `max_turns`  … 往復の上限で打ち切った
  * - `cancelled`  … 中断ボタンで止めた。`tool_calls` にどこまでやったかが残る
- * - `max_tokens` … 出力が上限で切れた。**そのターンのツールは実行していない**
- *                  (切れた引数のままでは危険なので、実行せず止める設計)
+ * - `max_tokens` … 出力が上限で切れた。そのターンのツールは実行していない(切れた引数のままでは危険なため)
  * - `refusal`    … プロバイダが安全上の理由で断った
  * - `provider_error` … HTTP・接続の失敗(`detail` に理由。APIキーは含まれない)
  * - `timeout`    … 合計時間の上限で打ち切った。実行済みのツールは `tool_calls` に残る
@@ -509,9 +500,8 @@ export interface AiRunResult {
 }
 
 /**
- * `AiPanel.svelte` が描く1本の時系列。**コアには無い**(会話の再構成はここが唯一の場所。
- * `duocad/agent/loop.py` の `turns` はサーバ側に留まり、WSへは出さない)——再読込で消えるのは
- * 「途中まで入力していたコマンド」と同じ扱いで許容している(docs/DESIGN_DECISIONS.md「外してはいけない3つ」の3)。
+ * `AiPanel.svelte` が描く1本の時系列。コアには無い(`duocad/agent/loop.py` の `turns` はWSへ出さない)。
+ * 再読込で消えるのは「途中まで入力していたコマンド」と同じ扱いで許容(docs/DESIGN_DECISIONS.md「外してはいけない3つ」の3)。
  */
 export type AiTranscriptEntry =
   | { kind: 'user'; text: string }
@@ -520,15 +510,13 @@ export type AiTranscriptEntry =
   | { kind: 'error'; message: string }
 
 // --------------------------------------------------------------------------------------
-// H: 形状最適化を走らせる — **verbではない**(`duocad/catalog.py` の `category="protocol"`)
+// H: 形状最適化を走らせる — verbではない(`duocad/catalog.py` の `category="protocol"`)
 // --------------------------------------------------------------------------------------
 /**
  * 走らせる前の点検(`duocad/optimize_run.py` の `conditions_report`)。
- *
- * **`problems` はそのまま人に見せる文**であって、画面が組み立て直すものではない ——
- * 「拘束面が2枚ある。この版が扱えるのは1枚だけである」のように**理由と次の一手**が
- * 入っている(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。ここで文言を作ると、コアの制限が変わっても
- * 画面が古い説明を出し続ける。
+ * `problems` はそのまま人に見せる文で、画面が組み立て直さない(理由と次の一手が入っている。
+ * 画面で文言を作るとコアの制限が変わっても古い説明を出し続ける。
+ * `docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
  */
 export interface OptimizeConditionsReport {
   ready: boolean
@@ -540,32 +528,26 @@ export interface OptimizeConditionsReport {
 }
 
 /**
- * 解像度の目盛り1段。**添字0がいちばん粗い**(＝既定)で、進むほど細かい。
- *
- * **所要時間は付かない**(移行時の方針「所要時間は旧SIMP係数を使わない。初回は不明と
- * 表示する」)——走らせる前は実測が無いので、要素数だけで判断する。
+ * 解像度の目盛り1段。添字0がいちばん粗い(＝既定)で、進むほど細かい。
+ * 所要時間は付かない(走らせる前は実測が無いので、要素数だけで判断する)。
  */
 export interface OptimizeResolutionStep {
   index: number
   element_size_mm: number
-  /** 設計空間の要素数の**見積もり**(領域の体積 ÷ 要素の体積。実数ではない)。 */
+  /** 設計空間の要素数の見積もり(領域の体積 ÷ 要素の体積。実数ではない)。 */
   design_elements_estimate: number
-  /** この段を選んだときの最小幅の下限[mm](= 2mm 以上で最小の m(m ≥ 2)× 要素サイズ)。サーバーが計算する
-   *  (画面は格子の数え方を持たない、という既存方針と同じ。`optimize_run.min_width_cell_range`)。 */
+  /** この段を選んだときの最小幅の下限[mm](= 2mm 以上で最小の m(m ≥ 2)× 要素サイズ)。サーバーが計算する(`optimize_run.min_width_cell_range`)。 */
   min_width_floor_mm: number
   /** この段を選んだときの最小幅の上限[mm](= floor(格子の最短の辺のセル数 × 1/4)× 要素サイズ)。下限を下回れば選べる段は無い。 */
   min_width_ceiling_mm: number
-  /** この段で選べる最小幅の段(下限の m から上限の m までの `m × 要素サイズ`)。**渡すと、ちょうどその m になる値**
-   *  (`optimize_run.min_width_steps_mm`)。画面はここから選ぶだけで値を作らない。 */
+  /** この段で選べる最小幅の段(下限の m から上限の m までの `m × 要素サイズ`)。渡すと、ちょうどその m になる(`optimize_run.min_width_steps_mm`)。 */
   min_width_steps_mm: number[]
 }
 
 /**
  * 要素サイズの上限・下限・目盛り(`optimize_run.resolution_limits`)。
- *
- * **`error` が入っていたら他のキーは無い** —— 条件面がまだ1枚も無い、または旧引数
- * (`rmin_mm`)が届いたなど、「この版では見積もれない」状態(サーバは赤い札にせず
- * ここへ入れて返す)。
+ * `error` が入っていたら他のキーは無い(条件面がまだ1枚も無い、旧引数 `rmin_mm` が届いた等、
+ * 「この版では見積もれない」状態。サーバは赤い札にせずここへ入れて返す)。
  */
 export interface OptimizeResolutionPayload {
   error?: string
@@ -609,12 +591,11 @@ export interface OptimizeProgress {
 }
 
 /**
- * 実行の結果。**`state` で分岐する**(`docs/contracts/ui-optimize-integration.md`「最適化の配線」、段階5で3値→6値へ拡張、
- * 境界条件の確定(2026-09-17)で `boundary_mapping_failed` が増えて7値)。
- * `no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
- * `boundary_mapping_failed` は `binary_search.SearchResult.status` をそのまま渡したもの
- * (`docs/TOPOPT.md`「状態・最初の合格モデル・島除去・応力評価」の終了理由。`boundary_mapping_failed` は探索の前の確定表の検証からも来る)。
- * **`"done"` 以外では文書は1ビットも変わっていない。**
+ * 実行の結果。`state` で分岐する(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
+ * `no_feasible_found` / `input_contradiction` / `resolution_insufficient` / `boundary_mapping_failed` は
+ * `binary_search.SearchResult.status` をそのまま渡したもの(`docs/TOPOPT.md`「状態・最初の合格モデル・島除去・応力評価」。
+ * `boundary_mapping_failed` は探索の前の確定表の検証からも来る)。
+ * `"done"` 以外では文書は1ビットも変わっていない。
  */
 export interface OptimizeResultPayload {
   state:
@@ -653,9 +634,8 @@ export interface OptimizeResultPayload {
   /** 探索の終了理由(`converged` / `evaluation_limit` / `cancelled` / ...)。 */
   termination: string | null
   element_size_mm: number
-  /** 最小幅の解決結果(`optimize_run._resolve_min_width`)。未指定なら既定
-   *  = 選べるいちばん細い段を採用し、`source` が `'default'` になる
-   *  (`requested_mm` は既定のときも実際に使った値で、`null` にはならない)。明示すれば `'requested'`。 */
+  /** 最小幅の解決結果(`optimize_run._resolve_min_width`)。未指定なら選べるいちばん細い段を採用し `source` が `'default'`
+   *  (`requested_mm` は既定のときも実際に使った値で `null` にならない)。明示すれば `'requested'`。 */
   min_width: {
     requested_mm: number
     spacing_mm: number
@@ -698,15 +678,14 @@ export interface NeckDiagnosis {
   reason: string | null
 }
 
-/** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
+/** 実行の摘み。省いたものはコアの既定(いちばん粗くて安い設定)。 */
 export interface OptimizeRunOptions {
   elementSizeMm?: number | null
   /** 最小幅[mm](選んだ段の値)。`null` または省略 = 既定(選べるいちばん細い段)をサーバーが使う。 */
   minWidthMm?: number | null
   /**
-   * 開発用の可視化を頼む(`'space'` / `'anchors'` / `'rho'`)。**既定は空**で、
-   * 空のときサーバは配列を1本も作らない。頼んだぶんが `onOptimizeDebug` へ届く。
-   * 決めるのは `debugFlags.ts`(URLパラメータ)であって、画面の操作ではない。
+   * 開発用の可視化を頼む。既定は空で、空のときサーバは配列を1本も作らない。
+   * 頼んだぶんが `onOptimizeDebug` へ届く。決めるのは `debugFlags.ts`(URLパラメータ)。
    */
   debug?: OptimizeDebugKind[]
 }
@@ -714,8 +693,7 @@ export interface OptimizeRunOptions {
 /** 開発用の可視化の種類(`duocad/optimize_run.py` の `DEBUG_KINDS`)。 */
 export type OptimizeDebugKind = 'space' | 'anchors' | 'rho'
 
-/** 格子(`duocad/topopt/voxelize.py` の `Grid.as_dict`)。要素の中心の規約(セル中心)は
- *  `optimizeDebug.ts` の `buildDebugVoxels`(唯一の変換点)。 */
+/** 格子(`duocad/topopt/voxelize.py` の `Grid.as_dict`)。セル中心の規約の変換点は `optimizeDebug.ts` の `buildDebugVoxels` だけ。 */
 export interface OptimizeDebugGrid {
   origin: number[]
   spacing: number
@@ -723,13 +701,10 @@ export interface OptimizeDebugGrid {
 }
 
 /**
- * 開発用の可視化1件(`duocad/optimize_run.py` の `_DebugSink`)。**頼んだときしか来ない。**
- *
- * `stage` は `'derive'`(導出直後に届く塊。探索の全候補がこの塊を使うので、塊はこれ1回しか
- * 届かない)、`'mapping'`(境界条件の確定直後に届く面アンカー。探索・FEMが実際に使う確定表の
- * 節点)、`'final'`(探索の後に届く、実際に解いた密度場 `rho`)。
+ * 開発用の可視化1件(`duocad/optimize_run.py` の `_DebugSink`)。頼んだときしか来ない。
+ * `stage` は `'derive'`(導出直後の塊。1回しか届かない)、`'mapping'`(境界条件の確定直後の面アンカー。
+ * 探索・FEMが実際に使う確定表の節点)、`'final'`(探索の後の、実際に解いた密度場 `rho`)。
  * 同じ `kind` が届いたら後から来たほうで置き換えること。
- *
  * `elements` は立っている要素の通し添字(C順 `i*(ny*nz) + j*nz + k`)。
  * `total` が本当の数、`shown` が配った数、`stride` が間引きの幅(1なら間引いていない)。
  */
@@ -743,13 +718,13 @@ export interface OptimizeDebugPayload {
   shown?: number
   stride?: number
   threshold?: number
-  /** `kind` が `'anchors'` のとき。`points` は**ワールドmm**の平坦な [x,y,z,...]。 */
+  /** `kind` が `'anchors'` のとき。`points` はワールドmmの平坦な [x,y,z,...]。 */
   fixed?: OptimizeDebugAnchor
   load?: OptimizeDebugAnchor
 }
 
 export interface OptimizeDebugAnchor {
-  /** その側の条件面すべて(拘束側なら全拘束面)。点群は**側ごとに1つへまとめてある**。 */
+  /** その側の条件面すべて(拘束側なら全拘束面)。点群は側ごとに1つへまとめてある。 */
   faces: number[]
   count: number
   points: number[]
@@ -780,11 +755,11 @@ export interface SessionHooks {
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   /** 設定が変わった/`ai_get_status` の返事/実行の開始・終了で `running` が変わったとき。 */
   onAiStatus(status: AiStatus): void
-  /** ツールを1つ呼んだ(進行中に逐次届く。**verb配信ではない**)。 */
+  /** ツールを1つ呼んだ(進行中に逐次届く)。 */
   onAiToolCall(call: AiToolCall): void
   /** `run()` が止まった(理由は `status`)。 */
   onAiResult(result: AiRunResult): void
-  /** 空メッセージ・実行中の2通目・プロバイダ未設定など、**繋がらない理由**。 */
+  /** 空メッセージ・実行中の2通目・プロバイダ未設定など、繋がらない理由。 */
   onAiError(message: string): void
   // ---------------------------------------------------------------- H: 形状最適化を走らせる
   // ---------------------------------------------------------------- I: 計算の設定
@@ -800,11 +775,11 @@ export interface SessionHooks {
   onOptimizeProgress(event: OptimizeProgress): void
   /** 開発用の可視化が届いた(頼んだときだけ。`OptimizeDebugPayload`)。 */
   onOptimizeDebug(payload: OptimizeDebugPayload): void
-  /** 走り終わった。**`state` が "done" でなければ文書は変わっていない。** */
+  /** 走り終わった。`state` が "done" でなければ文書は変わっていない。 */
   onOptimizeResult(result: OptimizeResultPayload): void
   /**
-   * 走らせられなかった / 途中で落ちた / **中断した**。`problems` は条件が
-   * 足りないときだけ入る。**`cancelled` は失敗ではない** —— 人が中断を押した結果である。
+   * 走らせられなかった / 途中で落ちた / 中断した。`problems` は条件が足りないときだけ入る。
+   * `cancelled` は失敗ではない(人が中断を押した結果)。
    * `alreadyRunning` は「別の実行が走っているので断った」で、走っている実行の表示は変えない。
    */
   onOptimizeError(message: string, problems: string[], cancelled: boolean, alreadyRunning: boolean): void
@@ -813,14 +788,10 @@ export interface SessionHooks {
 export interface Session {
   start(): void
   /**
-   * コマンドを1つ送る。**文書を変える verb に限らない**(保存・改名・一覧などファイル操作も
-   * ここを通る)。**引数のdictをそのまま流す**(`cmd` と `client_op` を足すだけ)。
-   *
-   * 引数を作るのは `CommandDef.build` の仕事で、ここは運ぶだけ —— verbごとにメソッドを
-   * 書き写すと、キー名を1文字打ち間違えた経路が**そのverbでだけ**静かに壊れる。
-   * **受け取れるverbの一覧はコアの宣言(`duocad/catalog.py` の `COMMANDS`)が正**で、
-   * そこに無い文字列は `unknown command` で返る
-   * (任意のメソッドを呼べる作りにしない、はサーバ側で担保する)。
+   * コマンドを1つ送る。文書を変える verb に限らない(保存・改名・一覧などファイル操作もここを通る)。
+   * 引数のdictをそのまま流す(`cmd` と `client_op` を足すだけ)。引数を作るのは `CommandDef.build` の仕事で、
+   * verbごとにメソッドを書き写すと、キー名を打ち間違えた経路がそのverbでだけ静かに壊れる。
+   * 受け取れるverbの一覧はコアの宣言(`duocad/catalog.py` の `COMMANDS`)が正で、無い文字列は `unknown command` で返る。
    */
   sendCommand(cmd: string, args: Record<string, unknown>, clientOp: number): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
@@ -831,34 +802,28 @@ export interface Session {
   toggleSelection(refs: SelectionRef[], clientOp: number): void
   clearSelection(clientOp: number): void
   /**
-   * verbを投機的に実行して形だけ測らせる。**文書は変わらない**(サーバが元へ戻す)。
+   * verbを投機的に実行して形だけ測らせる。文書は変わらない(サーバが元へ戻す)。
    * 応答は `onPreview` へ。`previewId` は古い応答を捨てるための番号。
    */
   preview(verb: string, args: Record<string, unknown>, previewId: number): void
   // ---------------------------------------------------------------- D: フィーチャ
   /**
-   * 1Bodyの辺を折れ線で取りに行く(応答は `onEdges`)。**状態配信ではない**ので
-   * 他のクライアントには何も起きない。フィレット・面取りを起動している間だけ呼ぶ
-   * (常時配ると27部品ぶんの辺が乗る。`Session.edges` のdocstring)。
+   * 1Bodyの辺を折れ線で取りに行く(応答は `onEdges`)。状態配信ではない。
+   * フィレット・面取りを起動している間だけ呼ぶ(常時配ると27部品ぶんの辺が乗る。`Session.edges` のdocstring)。
    */
   getEdges(bodyId: string): void
   /**
-   * 1Bodyの頂点の座標を取りに行く(応答は `onVertices`)。**状態配信ではない**。
-   *
-   * 呼ぶのは**選択に頂点が入っているとき**だけ。辺のように「コマンドを起動している間」
-   * ではない —— 頂点を引数に取るコマンドが無く、要るのは「AIが選んだ頂点が今どれか」を
-   * 人が見て外せることだけである(`duocad/server.py` の `Session.vertices`)。
+   * 1Bodyの頂点の座標を取りに行く(応答は `onVertices`)。状態配信ではない。
+   * 呼ぶのは選択に頂点が入っているときだけ(`duocad/server.py` の `Session.vertices`)。
    */
   getVertices(bodyId: string): void
   /**
-   * 画面の見え方をサーバへ知らせ、**ズームに合わせた粗さでソリッド・辺・領域を
-   * 測り直させる**(可変解像度)。応答は通常の状態配信で、変わらなければ何も来ない。
-   *
-   * **導出済みの偏差ではなくカメラの事実を送る** —— 「画面の許容誤差 → 目標偏差」の
-   * 変換式は `web/src/adaptiveResolution.ts` と `duocad/resolution.py` の両方にあり
-   * (同じ定数・検査あり)、どちらが正かを決めずに済ませるとサーバが任意の粗さを
-   * クライアントから押し込まれる。呼ぶのは `viewport.onResolutionChange` の中だけで、
-   * そちらがズーム中の連打を止めてある。
+   * 画面の見え方をサーバへ知らせ、ズームに合わせた粗さでソリッド・辺・領域を測り直させる(可変解像度)。
+   * 応答は通常の状態配信で、変わらなければ何も来ない。
+   * 導出済みの偏差ではなくカメラの事実を送る: 「画面の許容誤差 → 目標偏差」の変換式は
+   * `web/src/adaptiveResolution.ts` と `duocad/resolution.py` の両方にあり(同じ定数・検査あり)、
+   * 偏差を送るとサーバが任意の粗さをクライアントから押し込まれる。
+   * 呼ぶのは `viewport.onResolutionChange` の中だけ(ズーム中の連打はそちらが止める)。
    *
    * @param worldPerPixel 画面1画素ぶんの世界長さ[mm]
    * @param sizeHint いま見えているものの外接対角[mm](上下限の丸めにだけ使う)

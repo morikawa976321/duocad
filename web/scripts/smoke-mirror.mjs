@@ -41,7 +41,7 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
     /** スケッチ平面の (u,v) をクリックする(`key` を渡すとその修飾キーを押しながら)。 */
     const clickPlane = (u, v, key = null) => clickSketchPoint(page, u, v, { modifier: key })
 
-    /** いまのスケッチ(図形と選択)。**JSONへ落としてから返す**(Svelteの`$state`は素で渡らない)。 */
+    /** いまのスケッチ(図形と選択)。`$state` は素で渡らないので JSON へ落として返す。 */
     async function sketchNow() {
       return page.evaluate(() => {
         const hook = window.__duocad
