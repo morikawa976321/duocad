@@ -1,23 +1,16 @@
 /**
  * ビューポート — three.js をここに閉じ込める(docs/DESIGN_DECISIONS.md「技術選定の根拠」)。
  *
- * **three.js の型を外へ漏らさない**。公開するのは `viewportTypes.ts` の `Viewport`
- * インタフェースだけで、three.js のオブジェクトは1つも戻り値・引数に出さない。three.js は
- * semver を持たず r番号でほぼ毎月リリースし非推奨APIを定期的に削除するため、**このスタックで
- * 最も churn が激しい依存**である。three.js を触るのはこのファイルとその兄弟モジュール群
- * (`planeGrid.ts` / `faceCulling.ts` / `viewCubeOverlay.ts` など)だけで、破壊的変更の影響は
- * Svelte 層へ出ない。
+ * three.js の型を外へ漏らさない: 公開するのは `viewportTypes.ts` の `Viewport` だけ。
+ * three.js を触るのはこのファイルと兄弟モジュール(`planeGrid.ts` / `faceCulling.ts` /
+ * `viewCubeOverlay.ts` など)だけで、破壊的変更の影響を Svelte 層へ出さない。
  *
- * **canvas はフレームワークの外**(docs/DESIGN_DECISIONS.md「技術選定の根拠」の「frontend で守るべき唯一のルール」)。Svelte から
- * 受け取るのは空の `HTMLElement` 1つだけで、canvas の生成・破棄・再描画は全部この中で行う。
- * Svelte はこのコンテナの中身を二度と触らない。
+ * canvas はフレームワークの外(docs/DESIGN_DECISIONS.md「技術選定の根拠」の「frontend で守るべき唯一のルール」)。
+ * Svelte から受け取るのは空の `HTMLElement` 1つだけで、canvas の生成・破棄・再描画は全部この中で行う。
  *
- * **Bodyごとの差分更新に対応している。** 文書はSTEPの読み込みなどでソリッドごとに
- * 分かれる(パーツ一覧UI)ので、「変わったBodyだけ差し替える」`update()` が要る。
- * **ここが27部品ぶんを毎回全部作り直すと、サーバ側を速くした意味(差分送信)が描画で
- * 消える**(モジュールの利用側 `App.svelte` 参照)。面の当たり判定・強調表示・射影は
- * body_id + face_index の組で指す(1個のBodyの中でしか一意でない `faceIndex` 単独では
- * 指さない)。
+ * Bodyごとの差分更新に対応する(`update()` は変わったBodyだけ差し替える)。毎回全部作り直すと
+ * サーバ側の差分送信の意味が描画で消える。面の当たり判定・強調表示・射影は
+ * body_id + face_index の組で指す(`faceIndex` は1個のBodyの中でしか一意でない)。
  */
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -84,55 +77,38 @@ export function createViewport(container: HTMLElement): Viewport {
   scene.background = new THREE.Color(BACKGROUND_COLOR)
 
   /**
-   * **カメラは2つあり、`camera` が今どちらを使っているかを指す。**
-   *
-   * 正投影は「画角0度の透視」ではなく別種の投影なので、1つのカメラでは表せない
-   * (`FOV_ORTHO` の説明を参照)。**姿勢(position / up / near / far)は切り替えのたびに
-   * 写す**ので、どちらを使っていても視点は同じ ——「どちらのカメラか」は投影の作り方
-   * だけの違いに閉じている。
-   *
-   * **`camera` を直接見てよいのは姿勢と投影の共通部分だけ**。`fov` / `aspect` は
-   * 透視にしか無く、`left`/`right`/`top`/`bottom`/`zoom` は正投影にしか意味が無いので、
-   * それらを触る処理は `perspective` / `orthographic` を名指しすること。
+   * カメラは2つあり、`camera` が今使っている方を指す(正投影は別種の投影で1つのカメラでは
+   * 表せない。`FOV_ORTHO` 参照)。姿勢(position / up / near / far)は切り替えのたびに写す。
+   * `camera` を直接見てよいのは姿勢と投影の共通部分だけ: `fov` / `aspect` は透視、
+   * `left`/`right`/`top`/`bottom`/`zoom` は正投影にしか無いので、触る処理は
+   * `perspective` / `orthographic` を名指しすること。
    */
   const perspective = new THREE.PerspectiveCamera(FOV_DEFAULT, 1, 0.1, 10000)
   const orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000)
   let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = perspective
   // 空の文書でも原点まわりが見える位置。部品が届いたら `frameToContent` が上書きする。
-  // **`BASE_EXTENT` を使う**(可変の `grid.extent()` ではない) —— ここは起動直後の1回きりで、
-  // `grid` はまだ作られておらず(下の平面グリッドの節より前)、その初期値は
-  // 常に `BASE_EXTENT` だから同じ値になる。
-  //
-  // **距離は `fitDistance` で求める**。決め打ちの `diagonal * 1.2` のような定数は
-  // FOV_DEFAULT を変えると式とずれる(45度では差0.6%で気づきにくいが、30度では55%もずれ、
-  // 起動直後の空の文書やまだ内容の無いスケッチが想定より大きく寄って見える事故になる ——
-  // `smoke-move.mjs` の辺クリックが実際にこれで外れた)。`frameToContent` と同じ式を
-  // 通すことで、FOV_DEFAULTがいくつでも起動直後の見かけの大きさが揃う。
+  // `grid` はまだ無く、その初期値は常に `BASE_EXTENT` なので `grid.extent()` の代わりにこれを使う。
+  // 距離は `fitDistance` で求める: 定数(`diagonal * 1.2` など)は FOV_DEFAULT を変えると
+  // ずれる(45度で0.6%、30度で55%)。
   {
     const diagonal = Math.hypot(BASE_EXTENT * 2, BASE_EXTENT * 2, BASE_EXTENT * 2)
     const distance = fitDistance(diagonal / 2)
     camera.position.copy(HOME_VIEW_OFFSET).multiplyScalar(distance)
   }
   scene.add(camera)
-  // 光をカメラに付ける(視点を回しても面が真っ黒にならない。見た目の作り込みではなく可視性)
   const headlight = new THREE.DirectionalLight(0xffffff, 1.6)
   headlight.position.set(0.4, 0.7, 1)
   camera.add(headlight)
   scene.add(new THREE.HemisphereLight(0xdfe7f2, 0x191c21, 1.0))
 
-  // **型引数を明示する** —— 省くと生成に渡した `perspective` で固まり、正投影へ
-  // 差し替えるときに `controls.object` が受け取れない(`activateCamera`)。
+  // 型引数を明示する: 省くと `perspective` で固まり、正投影へ差し替えるとき
+  // `controls.object` が受け取れない(`activateCamera`)。
   const controls: OrbitControls<THREE.PerspectiveCamera | THREE.OrthographicCamera> =
     new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.15
-  // **マウスの割り当て**: 左=ウィンドウ選択(このファイルが自前で
-  // 実装する)/ 中=パン / 右=カメラ回転。
-  //
-  // `OrbitControls` の既定は LEFT=ROTATE / MIDDLE=DOLLY / RIGHT=PAN なので、**3つとも
-  // 変える**。左を `null` にするのは、
-  // 左ドラッグを丸ごとこちらへ渡すため —— 左に何か割り当てたままだと、矩形を引く間に
-  // カメラが動いて「囲ったつもりの範囲」と実際の範囲がずれる。
+  // 左=ウィンドウ選択(自前実装)/ 中=パン / 右=回転。左を `null` にするのは左ドラッグを
+  // 丸ごとこちらへ渡すため(割り当てたままだと矩形を引く間にカメラが動く)。
   controls.mouseButtons = {
     LEFT: null,
     MIDDLE: THREE.MOUSE.PAN,
@@ -142,20 +118,17 @@ export function createViewport(container: HTMLElement): Viewport {
   const root = new THREE.Group()
   scene.add(root)
 
-  // **スケッチのグループもここで作る**(使うのは下の「C: スケッチ」節だが、宣言だけ先に置く)。
-  // グリッドの描く範囲が**すべてのスケッチとソリッド**から決まる(`contentBoxForGrid`)ので、
-  // 初期化中の `createGridPlanes()` が既にこれを読む。宣言をC節に置いたままにすると
-  // **TDZで落ちる**(`Cannot access 'sketchRoot' before initialization`) —— 例外は
-  // `createViewport` の途中で投げられ、`window.__duocad.ready` が永久に立たないので、
-  // 症状は「画面が出ない・実機smokeが60秒待って死ぬ」という原因から遠い形で出る。
+  // スケッチのグループはここで作る(使うのは下の「C: スケッチ」節)。初期化中の
+  // `createGridPlanes()` が `contentBoxForGrid` 経由で読むため、C節に置くとTDZで落ち
+  // (`Cannot access 'sketchRoot' before initialization`)、`window.__duocad.ready` が
+  // 立たず「画面が出ない」という原因から遠い症状になる。
   const sketchRoot = new THREE.Group()
   scene.add(sketchRoot)
 
   // ------------------------------------------------------------------ 形状最適化(第3のモード)の注記
   //
-  // 拘束の固定記号・荷重の矢印+ラベル。**`root` には入れない**(グリッドと同じ理由 ——
-  // 外接直方体に混ざると初回フレーミングやnear/far計算を歪める)。**指せない**(装飾)ので
-  // ピックの対象にも足さない。`setOptimizeState` が唯一の書き手。
+  // 拘束の固定記号・荷重の矢印+ラベル。`root` に入れない(外接直方体に混ざると初回フレーミングや
+  // near/far計算を歪める)。装飾なのでピック対象にも足さない。`setOptimizeState` が唯一の書き手。
   const annotations = createOptimizeAnnotations({
     faceMeshes: () => allFaceMeshes,
     contentDiagonal: () => contentDiagonal,
@@ -163,28 +136,24 @@ export function createViewport(container: HTMLElement): Viewport {
   annotations.object.renderOrder = LAYER.optimize
   scene.add(annotations.object)
 
-  // 測定の線と札(issue #10)。装飾で指せない(`root` にも入れない —— 上と同じ理由)。
-  // `showMeasurement` が唯一の書き手。
+  // 測定の線と札(issue #10)。`root` に入れず、ピック対象にもしない。`showMeasurement` が唯一の書き手。
   const measureAnnotation = createMeasureAnnotation({ contentDiagonal: () => contentDiagonal })
   measureAnnotation.object.renderOrder = LAYER.measure
   scene.add(measureAnnotation.object)
 
   // ------------------------------------------------------------------ 開発用のデバッグ表示
   //
-  // 塊(`?debug=space`)・平滑化前のボクセル(`?voxel=1`)・面アンカーの節点
-  // (`?debug=anchors`)。**`root` には入れない**(注記と同じ理由 —— 外接直方体に混ざると
-  // 初回フレーミングやnear/far、グリッドの範囲まで歪む)。ピックの対象にも足さない。
-  // `setOptimizeDebug` が唯一の書き手。
+  // 塊(`?debug=space`)・平滑化前のボクセル(`?voxel=1`)・面アンカーの節点(`?debug=anchors`)。
+  // `root` に入れず、ピック対象にもしない。`setOptimizeDebug` が唯一の書き手。
   const optimizeDebug = createOptimizeDebug({ setBodyVisible })
   optimizeDebug.object.renderOrder = LAYER.debug
   scene.add(optimizeDebug.object)
 
   // ------------------------------------------------------------------ 平面グリッド(3段固定・無限)
   //
-  // 描く平面・基準平面のピック範囲・ホバー板・面外の軸線は `gridPlanes.ts`。
-  // `root` には入れない —— 入れると初回の `frameToContent` がグリッドの箱に引っ張られる。
-  // ピック対象にもしない(判定は `basePlaneAt` の解析交差が別に持ち、範囲の半幅は `grid.extent()`)。
-  // **`root` / `sketchRoot` を作った後で呼ぶ**(最初の描画で `contentBoxForGrid` を読む)。
+  // `root` に入れない(初回の `frameToContent` がグリッドの箱に引っ張られる)。
+  // ピック対象にもしない(判定は `basePlaneAt` の解析交差、範囲の半幅は `grid.extent()`)。
+  // `root` / `sketchRoot` を作った後で呼ぶ(最初の描画で `contentBoxForGrid` を読む)。
   const grid = createGridPlanes({
     contentBox: contentBoxForGrid,
     faceMesh: (bodyId, faceIndex) =>
@@ -199,16 +168,13 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ 常設の原点ギズモ(issue #8)
   //
-  // 原点・軸・平面の7項目を1つのGroupにまとめた装飾(`originGizmo.ts`)。**`grid.object` には
-  // 入れない** —— あちらは `groupOrder` を -1 に固定しており、中に入れると個々の
-  // `LAYER.originGizmo` が効かなくなる。理由は `root` にも入れない(初回フレーミングを
-  // 歪めない、既存装飾群と同じ規律)。既定は表示。
+  // `grid.object` には入れない(あちらは `groupOrder` を -1 に固定しており、
+  // 個々の `LAYER.originGizmo` が効かなくなる)。`root` にも入れない。
   const originGizmo = createOriginGizmo()
   scene.add(originGizmo.object)
 
   // ------------------------------------------------------------------ 断面表示(issue #6)
   //
-  // 渡す関数はどれも後で呼ばれる閉包なので、後方で宣言する `size` / `projectRaw` を読んでも TDZ にかからない。
   const section = createSectionView({
     rayAt,
     camera: () => camera,
@@ -241,11 +207,8 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 今ホバーで当てている色(**実機検査フック専用**)。
-   *
-   * **材質から読み戻す** —— ホバーは色相を変えず明度だけを上げるので、`highlightColors`
-   * では変化が出ない(選択中の面は橙のままである)。「本当に明るくなったか」は実際に
-   * 当たっている材質を見るしかない。
+   * 今ホバーで当てている色(実機検査フック専用)。ホバーは明度だけを上げ、
+   * `highlightColors` には変化が出ないので、材質から読み戻す。
    */
   function hoverColorNow(): number | null {
     const pick = (object: THREE.Object3D | undefined): number | null => {
@@ -289,17 +252,7 @@ export function createViewport(container: HTMLElement): Viewport {
     return null
   }
 
-  /**
-   * 面の材質は **(役割 × 選択状態 × ホバー × 陰影)** をキーにした遅延生成のキャッシュから取る。
-   *
-   * 役割は形状最適化(第3のモード)の保持/除外/拘束で、素の面(`'none'`)を含めて4種。
-   * 選択状態は2種(未選択 `'plain'` / 選択 `'user'`)、ホバーは2種、
-   * 陰影は2種(平滑 / メッシュボディのフラット)。組み合わせは最大32だが、**使った組だけ**を
-   * この中で作る(全部を手で書き下さない) —— 増える軸を、静的な定数ではなく関数1つに閉じるための形。
-   *
-   * **選択は役割に勝つ**。`state !== 'plain'` のときは役割を見ない ——
-   * 保持ソリッド(緑)を選ぶとハイライト色になり、緑は一時的に見えなくなる。
-   */
+  /** 形状最適化(第3のモード)の保持/除外/拘束の役割。素の面は `'none'`。 */
   type OptimizeFaceRole = 'none' | 'preserve' | 'exclude' | 'fixture'
   type FaceMaterialState = 'plain' | 'user'
 
@@ -312,7 +265,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * 面の材質は (役割 × 状態 × ホバー × 平面陰影) の遅延生成のキャッシュから取る(`variantCache`)。
-   * `state !== 'plain'` のときは役割(保持・除外・拘束の色)を見ない —— 選択が役割に勝つ。
+   * 選択は役割に勝つ: `state !== 'plain'` のときは役割の色を見ない(保持ソリッドを選ぶとハイライト色になる)。
    */
   const faceMaterials = variantCache(
     (role: OptimizeFaceRole, state: FaceMaterialState, hovered: boolean, flat: boolean) =>
@@ -340,7 +293,7 @@ export function createViewport(container: HTMLElement): Viewport {
     side: THREE.DoubleSide,
     transparent: true,
     opacity: 0.55,
-    // 半透明どうしが互いを隠して真っ黒な塊にならないようにする(奥行きは書かない)
+    // 半透明どうしが互いを隠して真っ黒な塊にならないよう、奥行きは書かない
     depthWrite: false,
     clippingPlanes: section.clipPlanes,
   })
@@ -350,13 +303,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /** body_id -> そのBodyが画面に持つメッシュ。非表示・未読込のBodyはキーごと無い。 */
   const bodies = new Map<string, BodyMeshes>()
   const thumbnailer = createThumbnailer(renderer)
-  /**
-   * body_id -> サーバから届いた生の `GeometryPayload`。
-   *
-   * three.jsのメッシュ(`bodies`)とは別に持つ — `getGeometry()` は実機検査フックが
-   * 「今どんな形が届いているか」をJSONで読むためのもので、three.jsのバッファは読めない
-   * (型も漏らさない設計)。`bodies` と寿命を揃える(build/clear/pruneで同時に出し入れする)。
-   */
+  /** body_id -> サーバから届いた生の `GeometryPayload`(`getGeometry()` 用)。`bodies` と寿命を揃える。 */
   const rawGeometry = new Map<string, GeometryPayload>()
   /** `rawGeometry` と寿命を揃える可視判定用サンプル(`resolutionTracker` の `computeFocus` が2835面を毎フレーム走査しない)。 */
   const faceSamples = new Map<string, BodySamples>()
@@ -364,7 +311,6 @@ export function createViewport(container: HTMLElement): Viewport {
   let focusGeneration = 0
   /** 全Body分の面メッシュを1本にまとめたもの(ピック用)。update() のたびに作り直す。 */
   let allFaceMeshes: THREE.Mesh[] = []
-  /** プレビュー(幽霊)のメッシュ。**ピックの対象にしない**ので `bodies` とは別に持つ。 */
   let pickListener: ((event: PickEvent) => void) | null = null
   let boxSelectListener: ((event: BoxSelectEvent) => void) | null = null
   let sectionDragListener: ((position: number) => void) | null = null
@@ -374,14 +320,10 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ---------------------------------------------------------------- ホバー強調
   //
-  // **「そのままクリックしたら取れるもの」を1つだけ明るくする**。
-  // 対象は面・辺・領域・基準平面・スケッチの図形/点で、**頂点は出さない** ——
-  // 選択に入っている頂点しかマーカーが無く、「クリックすれば選択されるもの」を出せる
-  // 状態にない(スケッチの点マーカーは常に描かれているので、頂点と違って対象にできる)。
-  //
-  // 当たり判定は `resolveHit` **1つだけ**をクリックと共有する。優先順位を2箇所に
-  // 書くとプレビューが嘘をつき、この機能の存在意義が消える。
-  /** ポインタの現在位置(canvasの外なら null)。**解決はフレームに1回**(`tick`)。 */
+  // 「そのままクリックしたら取れるもの」を1つだけ明るくする。対象は面・辺・領域・基準平面・
+  // スケッチの図形/点。頂点は出さない(選択に入っている頂点しかマーカーが無い)。
+  // 当たり判定は `resolveHit` をクリックと共有する(優先順位を2箇所に書くとプレビューが嘘をつく)。
+  /** ポインタの現在位置(canvasの外なら null)。解決はフレームに1回(`tick`)。 */
   let hoverAt: { x: number; y: number } | null = null
   /** 視点回転中(=そのポインタの動きはクリックではない)。回している間は解決しない。 */
   let orbiting = false
@@ -395,21 +337,12 @@ export function createViewport(container: HTMLElement): Viewport {
   let hoverEdgeKey = ''
   let hoverRegionKey = ''
   let hoverSketchKey = ''
-  /**
-   * 直近にホバーを解決したときの「ポインタ位置+視点+`pickGeneration`」。**同じなら
-   * 当たるものも同じ**なので、レイキャストごと省く(止まって眺めている間は毎フレーム
-   * 2835面を撃たない)。
-   */
+  /** 直近にホバーを解決したときの「ポインタ位置+視点+`pickGeneration`」。同じならレイキャストごと省く。 */
   let hoverProbe = ''
   /**
-   * **「何が指せるか」が変わるたびに増やす番号**。`hoverProbe` に混ぜてあるので、
-   * ポインタも視点も動いていなくても次のフレームで必ず解決し直す。
-   *
-   * これが無いと、**止まったまま予告だけが古くなる**。例: 領域をホバーしたまま Esc で
-   * コマンドを解除すると `pickRegions(false)` で領域は指せなくなるのに、ポインタも視点も
-   * 動いていないので解決が省かれ、明るいままの領域が「クリックすれば取れる」と嘘をつく。
-   * 頂点マーカーが増えたとき・プレビューで本物を隠したとき・ビューポートの寸法が
-   * 変わったときも同じ(いずれも当たるものが変わる)。
+   * 「何が指せるか」が変わるたびに増やす番号。`hoverProbe` に混ぜてあり、ポインタも視点も
+   * 動いていなくても次のフレームで解決し直す(無いと、領域をホバーしたまま Esc でコマンドを
+   * 解除しても明るいまま残る)。頂点マーカーの増減・プレビューで本物を隠したとき・寸法変更も同じ。
    */
   let pickGeneration = 0
 
@@ -418,10 +351,7 @@ export function createViewport(container: HTMLElement): Viewport {
     pickGeneration += 1
   }
 
-  /**
-   * ホバーの印を捨てる。**描画対象を作り直した側が呼ぶ** —— 作り直したメッシュは
-   * 素の材質で生まれるので、印を残すと「変わっていない」と判断して明るくし直さない。
-   */
+  /** ホバーの印を捨てる。描画対象を作り直した側が呼ぶ(作り直したメッシュは素の材質で生まれるため)。 */
   function invalidateHover(): void {
     hoverFace = null
     hoverEdge = null
@@ -433,8 +363,7 @@ export function createViewport(container: HTMLElement): Viewport {
     hoverSketchKey = ''
     hoverPlane = null
     pickChanged()
-    // **材質まで戻す**。参照と印を捨てるだけだと、作り直していない対象に付けた明るい材質が
-    // そのまま残る(次の解決が「なし」や別種別だと、誰も戻さないまま画面に居座る)。
+    // 材質まで戻す(印を捨てるだけだと、作り直していない対象の明るい材質が居座る)
     applyFaceMaterials()
     applyEdgeMaterials()
     applyRegionMaterials()
@@ -468,13 +397,11 @@ export function createViewport(container: HTMLElement): Viewport {
     const aspect = width / height
     perspective.aspect = aspect
     perspective.updateProjectionMatrix()
-    // **正投影は縦(`top`/`bottom`)を正として横を作り直す。** 透視の `aspect` と同じで、
-    // 縦の見え方を寸法に依存させない(`smoke-features.mjs` がv方向を基準に置いている)。
-    // **`zoom` には触らない** —— あれは OrbitControls のドリーの持ち物である。
+    // 正投影は縦(`top`/`bottom`)を正として横を作り直す(`smoke-features.mjs` がv方向を基準にする)。
+    // `zoom` は OrbitControls のドリーの持ち物なので触らない。
     orthographic.right = orthographic.top * aspect
     orthographic.left = -orthographic.top * aspect
     orthographic.updateProjectionMatrix()
-    // 使っていない側も同時に整えてある(切り替えた瞬間に1フレーム歪むのを防ぐ)。
     sketchLineResolution.set(width, height)
   }
 
@@ -490,15 +417,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 1面ぶんの `BufferGeometry` を作る(本物と幽霊で**同じ形の作り方**)。
-   *
-   * 本物(`buildBody`)と確定前の幽霊(`ghostLayer.ts`)はどちらも同じ三角形群から作るので、
-   * **ここがずれると「プレビューと確定結果が違う形に見える」**という、いちばん困る形の
-   * 不具合になる。
-   *
-   * 一方で**メッシュの組み立てまでは共通化しない** —— 本物は `userData`(ピックのための
-   * body_id と面の添字)と面の境界線を持ち、幽霊はどちらも持たない(指せない・線を出さない)。
-   * 材質だけの違いに見えて、実際には「何のために置くか」が違う。
+   * 1面ぶんの `BufferGeometry` を作る。本物(`buildBody`)と幽霊(`ghostLayer.ts`)で共有する
+   * (ずれるとプレビューと確定結果が違う形に見える)。メッシュの組み立ては共通化しない:
+   * 本物は `userData` と面の境界線を持ち、幽霊は持たない。
    */
   function faceGeometry(face: FaceGeometry): THREE.BufferGeometry {
     const geometry = new THREE.BufferGeometry()
@@ -521,26 +442,21 @@ export function createViewport(container: HTMLElement): Viewport {
       if (face.indices.length === 0) continue // 三角形が取れなかった面(サーバが警告を出す)
       const geometry = faceGeometry(face)
       faceGeometries.push(geometry)
-      // メッシュボディは**面1つ・`kind: "mesh"`** で届く(`duocad/meshbody.py` の
-      // `tessellate`。B-repの面種別にこの値は無い)。三角形がそのまま形なので、
-      // 頂点法線を平均すると元のメッシュに無い滑らかさが出る。
+      // メッシュボディは面1つ・`kind: "mesh"` で届く(`duocad/meshbody.py` の `tessellate`)。
+      // 三角形がそのまま形なので、頂点法線を平均すると元に無い滑らかさが出る。
       const flat = face.kind === 'mesh'
-      // **素の材質**で生む(役割・選択・ホバーは `applyFaceMaterials()` が
-      // `rebuildPickIndex()`(→ `invalidateHover()`)経由ですぐに塗り直す)。
+      // 素の材質で生む(役割・選択・ホバーは `rebuildPickIndex()` 経由の `applyFaceMaterials()` が塗り直す)
       const mesh = new THREE.Mesh(geometry, faceMaterialFor('none', 'plain', false, flat))
       mesh.userData.bodyId = bodyId
       mesh.userData.faceIndex = face.index
-      // 塗り直す側(`applyFaceMaterials`)は `GeometryPayload` を見ないので、ここで印を残す。
-      mesh.userData.flatShaded = flat
+      mesh.userData.flatShaded = flat // `applyFaceMaterials` は `GeometryPayload` を見ない
       root.add(mesh)
       faceMeshes.push(mesh)
       sceneObjects.push(mesh)
       disposables.push(geometry)
 
-      // 面の境界線。装飾ではなく「どこが1つの面か」を見せるためで、
-      // これが無いと隣り合う同色の面を狙い分けられず、狙いにくさの計測が意味を失う。
-      // **メッシュボディには出さない** —— 面が1つしか無いので狙い分けの役に立たず、
-      // 三角形の稜線がそのまま線になって形が潰れる。
+      // 面の境界線(隣り合う同色の面を狙い分けるため)。メッシュボディには出さない
+      // (面が1つで、三角形の稜線がそのまま線になって形が潰れる)。
       if (!flat) {
         const edges = new THREE.EdgesGeometry(geometry, 20)
         const line = new THREE.LineSegments(edges, edgeMaterial)
@@ -572,25 +488,22 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const entry of entries) {
       clearBody(entry.bodyId)
       if (entry.geometry) buildBody(entry.bodyId, entry.geometry)
-      // 形が変わったBodyの辺は**その場で消す**。古い添字の線を残すと、指した線と
-      // 違う辺が丸まる(§7の「添字は形状変更で壊れる」の辺版)。要るなら呼び出し側が
-      // 版の変化を見て取り直す(`App.svelte`)。
+      // 形が変わったBodyの辺はその場で消す(古い添字の線は違う辺を指す)。要るなら
+      // 呼び出し側が版の変化を見て取り直す(`App.svelte`)。
       if (entry.bodyId === edgeBodyId) clearEdges()
     }
     rebuildPickIndex()
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
     updateClipPlanes() // 内容が変わった → 視錐台を引き直す(姿勢は初回のみ下で決める)
 
-    // **`frameToContent()` が実際に合わせたときだけ機会を消費する**。
-    // 空振り(箱が空)で `framed = true` にすると、以後どんなに大きな内容が届いても
-    // 初回フレーミングが二度と起きない(上の関数docstring参照)。
+    // `frameToContent()` が実際に合わせたときだけ初回フレーミングの機会を消費する
+    // (箱が空のまま `framed = true` にすると以後二度と起きない)。
     if (!framed && frameToContent()) {
       framed = true
     }
 
-    // **作り直したボディに、デバッグ表示の「隠す」を当て直す。** `?voxel=1` は結果ボディを
-    // 隠してボクセルを見せる —— ここで当て直さないと、結果が届いた直後の状態配信で
-    // ボディが生まれ直し、平滑化メッシュとボクセルが重なって両方読めなくなる。
+    // 作り直したボディにデバッグ表示の「隠す」を当て直す(`?voxel=1` は結果ボディを隠す。
+    // 当て直さないと生まれ直したボディとボクセルが重なる)。
     optimizeDebug.applyHidden()
   }
 
@@ -624,46 +537,26 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 半径 `radius` の球が画面に収まる、注視点からの距離。FOVとアスペクトの狭い方で決まる。
-   *
-   * **FOVを可変にした以上、収まる距離を定数で決め打ちできない** —— 既定の30度・
-   * アスペクト1以上では `radius / tan(15°) = radius * 3.7321`(`frameToContent` は
-   * `radius = diagonal / 2` で呼ぶので `diagonal * 1.8660`)。45度なら
-   * `radius / tan(22.5°) = radius * 2.4142`(`diagonal * 1.2071`)—— FOVが変われば
-   * この係数も変わり、30度は45度よりパースが弱く見えるぶんカメラは約1.55倍遠くに置かれる。
-   * 縦長のビューポート(aspect<1)では狭い方(横)に合わせるため距離がさらに伸びる。
-   *
-   * **正投影のときも透視の画角で評価する。** 正投影では距離が見え方に効かないので、
-   * ここが返すのは「透視と同じ場所にカメラを置くための距離」でしかない(収める仕事は
-   * `fitHalfHeight` + `setViewHalfHeight` がする)。
-   *
-   * **収める量は `fitHalfHeight` が持ち、ここはそれを距離へ直すだけ**(縦横の狭い方に
-   * 合わせる判断はあちらに1つだけ置く)。
+   * 半径 `radius` の球が画面に収まる注視点からの距離(FOVとアスペクトの狭い方で決まる)。
+   * 既定30度・aspect>=1 では `diagonal * 1.8660`、45度なら `diagonal * 1.2071`。
+   * 正投影のときも透視の画角で評価する(返すのは透視と同じ場所にカメラを置く距離でしかなく、
+   * 収めるのは `fitHalfHeight` + `setViewHalfHeight`)。収める量は `fitHalfHeight` が持ち、ここは距離へ直すだけ。
    */
   function fitDistance(radius: number): number {
     return fitHalfHeight(radius) / Math.tan(THREE.MathUtils.degToRad(perspective.fov) / 2)
   }
 
   /**
-   * 半径 `radius` の球が画面に収まる「見かけの大きさ」の半分(＝注視点の面で画面の縦に
-   * 収まる世界長さの半分)。**縦横の狭い方に合わせる** —— 横長の画面では縦が、
-   * 縦長の画面では横が先に詰まる。
-   *
-   * **`fitDistance` と対で、同じ球を収める。** 透視は距離で、正投影は視錐台の大きさで
-   * 収めるので、収める量そのもの(この関数)と、それを距離へ直す換算(`fitDistance`)に
-   * 分けてある。分けないと正投影側が「収める距離」という意味の無い値を通ることになる。
+   * 半径 `radius` の球が画面に収まる、注視点の面での縦の半分の世界長さ(縦横の狭い方に合わせる)。
+   * `fitDistance` と対: 透視は距離で、正投影は視錐台の大きさで収める。
    */
   function fitHalfHeight(radius: number): number {
     return perspective.aspect >= 1 ? radius : radius / perspective.aspect
   }
 
   /**
-   * 注視点の面で画面の縦に収まる世界長さの半分。**2つのカメラを同じ物差しで測るための穴**
-   * で、「見かけの大きさを保つ」処理(`setFov` の切り替え)と画面1画素ぶんの世界長さ
-   * (`worldPerPixel`)がここを通る。
-   *
-   * 透視は距離×tan(画角/2)、正投影は視錐台の半分の高さ÷`zoom`(ドリーは `zoom` を動かす
-   * だけでカメラを動かさないので、`zoom` を割らないと見かけの大きさにならない)。
+   * 注視点の面で画面の縦に収まる世界長さの半分(`setFov` の切り替えと `worldPerPixel` が通る)。
+   * 正投影はドリーが `zoom` だけを動かすので `zoom` で割る。
    */
   function viewHalfHeight(): number {
     if (camera === orthographic) return orthographic.top / orthographic.zoom
@@ -672,12 +565,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 見かけの大きさ(`viewHalfHeight`)を `half` にする。**透視は注視点からの距離で、
-   * 正投影は視錐台の大きさで作る** —— 正投影ではカメラを前後させても大きさは1ミリも
-   * 変わらないので、距離で調節する道が無い。
-   *
-   * 正投影側は `zoom` を1へ戻して視錐台そのものへ焼き込む(`zoom` は OrbitControls の
-   * ドリーの持ち物なので、こちらが値を持ち続けると次のドリーで踏まれる)。
+   * 見かけの大きさ(`viewHalfHeight`)を `half` にする。透視は注視点からの距離、正投影は
+   * 視錐台の大きさで作る(カメラを前後させても大きさが変わらない)。正投影は `zoom` を1へ戻して
+   * 視錐台へ焼き込む(`zoom` は OrbitControls のドリーの持ち物)。
    */
   function setViewHalfHeight(half: number): void {
     const safe = Math.max(half, 1e-6)
@@ -699,12 +589,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 使うカメラを差し替える(透視 ⇄ 正投影)。**視点は持ち越す** —— 姿勢・クリップ範囲を
-   * 写し、ヘッドライトとシーンへの所属、`OrbitControls` の操作対象を全部移す。
-   *
-   * **`OrbitControls` は `object` の差し替えを受け付ける**が、極(`_quat`)だけは生成時の
-   * `up` から焼かれたまま動かない —— これは**そのままでよい**。両方のカメラの上方向は
-   * ワールド+Zで同じなので、焼かれた極も同じである(`WORLD_UP` の説明を参照)。
+   * 使うカメラを差し替える(透視 ⇄ 正投影)。姿勢・クリップ範囲・ヘッドライト・シーン所属・
+   * `OrbitControls` の操作対象を移す。`OrbitControls` の極(`_quat`)は生成時の `up` から焼かれた
+   * まま動かないが、両カメラの上方向は同じワールド+Z(`WORLD_UP` 参照)なので問題ない。
    */
   function activateCamera(next: THREE.PerspectiveCamera | THREE.OrthographicCamera): void {
     if (next === camera) return
@@ -713,7 +600,6 @@ export function createViewport(container: HTMLElement): Viewport {
     next.quaternion.copy(camera.quaternion)
     next.near = camera.near
     next.far = camera.far
-    // ヘッドライトはカメラの子(視点を回しても面が真っ黒にならない)。置き去りにすると暗くなる。
     camera.remove(headlight)
     scene.remove(camera)
     next.add(headlight)
@@ -724,25 +610,13 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * near/far(視錐台の前後端)を、いまの内容とカメラ距離から引き直す。
-   *
-   * **`frameToContent`(姿勢)から独立させてある**。姿勢はページ読み込みで
-   * 1回決めれば十分だが、near/farは「最初に届いた形の大きさ」で固定してよいものではない
-   * —— 後から大きなSTEPが届けばfarを追い越して手前が切り取られ(farはズーム・オービットでは
-   * 一切広がらない)、逆に小さな細部へ深く寄ればnearが大きいまま手前が切れる。**内容が変わる
-   * たび**(`refreshContentDiagonal` の呼び出し元)**とカメラが意味のある幅で動くたび**
-   * (`resolutionTracker` の `cameraMoved` 判定に相乗り)の両方で呼ぶことで、視錐台を常時追随させる。
-   *
-   * near は**距離側からも**導く —— コンテンツの大きさだけで決めると、大きなモデルの中の
-   * 小さな面へ深く寄ったときに手前が切れる(near は「いま見ている距離」に対しても十分
-   * 小さくなければならない)。far は既存の `対角 × 20` の保守性をそのまま保ちつつ、
-   * 距離が伸びた場合の下限も持つ(`frameToContent` の元のガードコメントの理由と同じ)。
-   *
-   * `span` の下限に `grid.extent() * 2` を置くのは、空の文書やグリッドしか無い場面でも
-   * 視錐台がグリッド全体を収める大きさを保つため(`contentDiagonal` はボディが無いと0)。
-   * **ピック範囲の半幅は固定ではない**(`grid.rescale`)ので、グリッドが
-   * 広がればここの下限も一緒に広がる —— 取りこぼすと、グリッドは見えているのに
-   * その外側でnear/farが詰まる、という遠い壊れ方をする。
+   * near/far を、いまの内容とカメラ距離から引き直す。姿勢(`frameToContent`)とは独立:
+   * 後から大きなSTEPが届くとfarを追い越して手前が切れ(farはズーム・オービットでは広がらない)、
+   * 小さな細部へ深く寄るとnearが大きいまま手前が切れる。内容が変わるたび
+   * (`refreshContentDiagonal` の呼び出し元)とカメラが意味のある幅で動くたび
+   * (`resolutionTracker` の `cameraMoved` 判定)に呼ぶ。near は距離側からも導く。
+   * `span` の下限 `grid.extent() * 2` は、空の文書やグリッドだけの場面でも視錐台がグリッドを
+   * 収めるため(ピック範囲の半幅は `grid.rescale` で変わる)。
    */
   function updateClipPlanes(): void {
     const span = Math.max(contentDiagonal, grid.extent() * 2)
@@ -753,10 +627,8 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * グリッド計算専用の外接直方体。**`root` + `sketchRoot` だけ**から作る —— `grid.object`
-   * (グリッド自身)を含めると「グリッドが伸びる→箱が大きくなる→グリッドが伸びる」の
-   * 発散フィードバックループになる(`grid.object` は `root` に入れていない。平面グリッドの節の
-   * コメント参照)。`refreshContentDiagonal` の箱と同じもの(そちらは対角の長さだけを取り出す)。
+   * グリッド計算専用の外接直方体。`root` + `sketchRoot` だけから作る(`grid.object` を含めると
+   * 「グリッドが伸びる→箱が大きくなる→グリッドが伸びる」の発散ループになる)。
    */
   function contentBoxForGrid(): THREE.Box3 {
     const box = new THREE.Box3().setFromObject(root)
@@ -764,29 +636,16 @@ export function createViewport(container: HTMLElement): Viewport {
     return box
   }
 
-  /** シーンに今ある全メッシュの外接直方体にカメラを合わせる(初回だけ)。
-   *
-   * 複数Bodyでは初回に届く順序や本数が変わりうるので、**実際に置いたメッシュから計算する**方が
-   * 頑丈(サーバのbbox形式に依存しない)。
-   *
-   * **姿勢(位置・向き)だけを決める。** near/farは `updateClipPlanes` の仕事(上記コメント)。
-   *
-   * **実際に合わせたかを boolean で返す**。箱が空(=描くものがまだ無い)なら
-   * 何もせず `false` を返す —— 呼び出し側の `update()` はこれを見て初めて「一度きりの機会」
-   * (`framed` フラグ)を消費する。戻り値を見ずに常に `framed = true` にすると、
-   * `geometry: null` のBodyだけが届いた1通(本体の形状がまだ無い等)で空振りのまま
-   * 機会が焼き切れ、以後どれだけ内容が届いても初回フレーミングが起きなくなる。
+  /**
+   * シーンに今ある全メッシュの外接直方体にカメラを合わせる(初回だけ。姿勢のみで、near/farは
+   * `updateClipPlanes`)。実際に合わせたかを返す: 箱が空なら何もせず `false`。呼び出し側の
+   * `update()` はこれを見て初めて一度きりの機会(`framed`)を消費する
+   * (`geometry: null` だけの1通で焼き切れるのを防ぐ)。
    */
   function frameToContent(): boolean {
     const box = new THREE.Box3().setFromObject(root)
-    // **姿勢を合わせられるか(box空)に関わらず、グリッドの縮小許可は必ず1回通す**。
-    // `frameAll()`はここ(`frameToContent`)を呼ぶだけで、
-    // 縮小の許可はここにしか無い —— 下の `box.isEmpty()` の早期returnより前に置かないと、
-    // モデルを全部消してから`frameAll()`しても、広がったグリッドが二度と縮まなかった
-    // (`contentBoxForGrid()`は`sketchRoot`も見るので、ボディだけ消してスケッチが残る
-    // 場合も同じ早期returnを通る)。**姿勢(戻り値・カメラの位置/向き)の扱いは変えない**
-    // —— これは「実際に合わせたか」を表す契約のままで、グリッドの縮小はそれとは独立に
-    // 判定する(`grid.rescale`はその一手だけを担う)。
+    // 箱が空でも、グリッドの縮小許可は必ず1回通す(許可はここにしか無い。早期returnより前に
+    // 置かないと、全部消して `frameAll()` してもグリッドが縮まない)。戻り値(姿勢を合わせたか)とは独立。
     grid.rescale(contentBoxForGrid(), true)
     if (box.isEmpty()) return false
     const center = new THREE.Vector3()
@@ -795,14 +654,9 @@ export function createViewport(container: HTMLElement): Viewport {
     const distance = fitDistance(diagonal / 2)
     camera.position.copy(center).addScaledVector(HOME_VIEW_OFFSET, distance)
     controls.target.copy(center)
-    // **正投影は距離では収まらない。** カメラは上で透視と同じ場所へ置いた(回転の半径のため)が、
-    // 収める仕事は視錐台がする。
-    //
-    // **`fitHalfHeight` をそのまま渡さない。** `HOME_VIEW_OFFSET` の長さが1ではないので、
-    // 透視が実際に出すのは `fitHalfHeight` の 1.5362倍ぶん引いた絵である —— 素の
-    // `fitHalfHeight` で視錐台を作ると、`frameAll` のたびに**正投影だけが1.54倍に寄る**
-    // (実測: 93.6px → 143.7px)。同じ係数を掛けて、どちらの投影でも
-    // `frameAll` の見かけが揃うようにする。
+    // 正投影は視錐台で収める。`HOME_VIEW_OFFSET` の長さが1ではなく、透視は `fitHalfHeight` の
+    // 1.5362倍ぶん引いた絵になるので、同じ係数を掛けて揃える(掛けないと `frameAll` のたびに
+    // 正投影だけ1.54倍に寄る。実測 93.6px → 143.7px)。
     if (camera === orthographic) {
       setViewHalfHeight(fitHalfHeight(diagonal / 2) * HOME_VIEW_OFFSET.length())
     }
@@ -813,16 +667,14 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function setFov(deg: number): void {
     if (!Number.isFinite(deg)) return
-    // **0だけが正投影**で、それ以外は 30〜90 へ丸める(あいだの1〜29という値は無い)。
+    // 0だけが正投影で、それ以外は 30〜90 へ丸める。
     const next = deg === FOV_ORTHO ? FOV_ORTHO : Math.min(FOV_MAX, Math.max(FOV_MIN, deg))
     const wantOrtho = next === FOV_ORTHO
     const already = wantOrtho
       ? camera === orthographic
       : camera === perspective && Math.abs(next - perspective.fov) < 1e-6
     if (already) return
-    // **切り替えの前に見かけの大きさを測り、切り替えた後に同じ値へ戻す。**
-    // これをしないとパースの強さと一緒に拡大率まで変わり、ただの「ズーム」になってしまう
-    // (正投影への切り替えでも同じ —— 視錐台の大きさを、測った値から作る)。
+    // 切り替えの前に見かけの大きさを測り、後で同じ値へ戻す(しないとパースと一緒に拡大率が変わる)。
     const half = viewHalfHeight()
     activateCamera(wantOrtho ? orthographic : perspective)
     if (!wantOrtho) perspective.fov = next
@@ -865,24 +717,18 @@ export function createViewport(container: HTMLElement): Viewport {
     return `${owner}\u0000${index}`
   }
 
-  /** 今の選択(`highlight` が受け取ったもの)。**材質を決めるのは下の1箇所だけ**。 */
+  /** 今の選択(`highlight` が受け取ったもの)。 */
   let selectedFaceKeys = new Set<string>()
   /** ボディ単位の選択(`highlightBodies`。保持/除外を決めているあいだだけ埋まる)。 */
   let selectedBodyIds = new Set<string>()
 
-  /**
-   * 形状最適化(第3のモード)の役割。**モードを抜けたら空にする**(`setOptimizeState(null)`)
-   * ので、抜けているあいだは常に `'none'` になる(タスク仕様「モードを抜けているあいだは
-   * 描かない」)。
-   */
+  /** 形状最適化(第3のモード)の役割。モードを抜けたら空にする(`setOptimizeState(null)`)。 */
   let bodyRoles = new Map<string, 'preserve' | 'exclude'>()
   let fixtureFaceKeys = new Set<string>()
 
   /**
-   * 面の材質を決める。**選択とホバーと役割の全部を見る唯一の場所**。
-   *
-   * 分けてはいけない —— どれも `mesh.material` を書くので、後から上書きする形にすると
-   * 次のstate配信で走る `highlight()` の全走査に黙って消される。
+   * 面の材質を決める。選択・ホバー・役割の全部を見る唯一の場所
+   * (別々に `mesh.material` を書くと次の `highlight()` の全走査に消される)。
    */
   function applyFaceMaterials(): void {
     highlightColor.face =
@@ -909,23 +755,15 @@ export function createViewport(container: HTMLElement): Viewport {
     applyFaceMaterials()
   }
 
-  /**
-   * 選択中のボディを強調する(`highlight` のボディ版)。保持/除外ソリッドを決めている
-   * あいだだけ非空になる —— **選択が役割色に勝つ**ので、ここに載ったボディは
-   * `applyFaceMaterials()` が全面をハイライト色で塗る。
-   */
+  /** 選択中のボディを強調する(`highlight` のボディ版)。選択は役割色に勝つので全面がハイライト色になる。 */
   function highlightBodies(bodyIds: string[]): void {
     selectedBodyIds = new Set(bodyIds)
     applyFaceMaterials()
   }
 
   /**
-   * 形状最適化(第3のモード)の見た目を作り直す。**`null` は全部消すだけ**
-   * (モードを抜けた・そもそも入っていない)。
-   *
-   * `preserveBodies` / `excludeBodies` は `applyFaceMaterials()` が読む役割の表を差し替える
-   * だけ(ボディの色は選択と同じ経路)。拘束・荷重は**装飾**(`optimizeAnnotations.ts`)を
-   * 作り直す。
+   * 形状最適化(第3のモード)の見た目を作り直す。`null` は全部消すだけ。
+   * 保持/除外ボディは `applyFaceMaterials()` の役割表、拘束・荷重は装飾(`optimizeAnnotations.ts`)。
    */
   function setOptimizeState(state: OptimizeVisualState | null): void {
     annotations.clear()
@@ -958,23 +796,18 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 面のピック。`pickAt` はこれの薄い覆いで、切り口を区別しない呼び出し側のためにある。
-   *
-   * **`ref` が null の当たりは断面の切り口** —— 指せないが実体なので、その画素の基準平面を
-   * 塞ぐ(`resolveHit`)。
-   *
-   * 断面が ON のとき、レイキャストはクリップ平面を見ないので、平面をよぎる位置(`section.cut`)
-   * を境に当たりを捨てる。切られた側からレイが入る場合は、よぎる点が中身かどうかを「同じ
-   * ボディの表面をそれまでに奇数回またいだか」で決める(描画のステンシルの偶奇と同じ規則。
-   * `sectionView.ts`)。
+   * 面のピック(`pickAt` は切り口を区別しない呼び出し側向けの薄い覆い)。`ref` が null の当たりは
+   * 断面の切り口: 指せないが実体なので、その画素の基準平面を塞ぐ(`resolveHit`)。
+   * レイキャストはクリップ平面を見ないので、断面が ON のときは平面をよぎる位置(`section.cut`)を
+   * 境に当たりを捨てる。切られた側からレイが入る場合は、同じボディの表面をそれまでに奇数回
+   * またいだかで中身かどうかを決める(描画のステンシルの偶奇と同じ。`sectionView.ts`)。
    */
   function faceHitAt(
     offsetX: number,
     offsetY: number,
   ): { ref: FaceRef | null } | null {
     const ray = rayAt(offsetX, offsetY)
-    // **隠しているメッシュは指せない**(プレビュー中の本物。three.js の Raycaster は
-    // `visible` を見ないので、ここで明示的に外す)。
+    // 隠しているメッシュは指せない(Raycaster は `visible` を見ないので明示的に外す)。
     const hits = raycaster.intersectObjects(
       allFaceMeshes.filter((mesh) => mesh.visible),
       false,
@@ -1016,15 +849,12 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ 基準3平面(スケッチを貼る先)
   //
-  // 「指せるか」の旗はグリッドが持つ(`grid.armed()`) —— **どの平面を出すかがその旗で決まる**ので、
-  // 表示側と同じ場所に置く。
+  // 「指せるか」の旗はグリッドが持つ(`grid.armed()`)。
 
   function showBasePlanes(on: boolean): void {
     if (grid.armed() === on) return
     grid.setArmed(on)
     pickChanged()
-    // 指せなくなった平面の板を残さない(`basePlaneAt` が null を返すので次のフレームでも
-    // 消えるが、ゲートを閉じた瞬間に消えるほうが「もう指せない」が伝わる)。
     if (!on) {
       hoverPlane = null
       applyBasePlaneHover()
@@ -1032,15 +862,10 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 基準3平面のうち当たった1枚(当たらなければ null)。
-   *
-   * **描いているグリッドは判定に使わない**(格子はシェーダーが無限に描くので、そもそも
-   * 当たれるジオメトリが無い)。`planePointAt` と同じ解析交差を3枚ぶん回し、**ピック範囲**
-   * の外(|u| か |v| が `grid.extent()` 超)は捨て、**レイ距離が最小の1枚**を採る。
-   *
-   * **描画が無限になってもピック範囲は無限にしない**。
-   * ホバー板(`gridPlanes.ts`)も同じ `grid.extent()` から作る —— ここだけずれると
-   * 「板は見えているのに指せない」という遠い壊れ方をする。
+   * 基準3平面のうち当たった1枚(当たらなければ null)。描いているグリッドは判定に使わない
+   * (格子はシェーダーが無限に描き、当たれるジオメトリが無い)。`planePointAt` と同じ解析交差を
+   * 3枚ぶん回し、ピック範囲(|u| か |v| が `grid.extent()` 超)の外を捨て、レイ距離が最小の1枚を採る。
+   * ホバー板(`gridPlanes.ts`)も同じ `grid.extent()` から作る(ずれると「板は見えているのに指せない」)。
    */
   function basePlaneAt(
     offsetX: number,
@@ -1069,8 +894,7 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const [u, v] of BASE_PLANE_PROBES) {
       const screen = toScreen(planePoint(null, spec.u, spec.v, u, v))
       if (screen === null) continue
-      // **クリックしたら本当にその平面が取れる画素か**を、クリックと同じ `resolveHit` で
-      // 確かめてから返す(優先順位をここに書き写さない)。
+      // クリックしたら本当にその平面が取れる画素かを `resolveHit` で確かめる(優先順位を書き写さない)
       if (resolveHit(screen.x, screen.y).plane !== name) continue
       return screen
     }
@@ -1110,19 +934,14 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ D: 辺(選べる線)
   //
-  // **フィレット・面取りが人間側から使えるようになる場所**。輪郭線として常時出ている
-  // `EdgesGeometry` の線(`buildBody` 参照)はコアの辺の添字と対応しておらず、どれを指しても
-  // フィレットの引数にならない。ここで描くのはサーバが配る
-  // `kernel.tessellate_edges` の折れ線で、**1本1本がコアの添字を持っている**。
-  //
-  // ソリッドともスケッチとも別のグループに持つ(`update()`/`prune()` は `root` しか
-  // 触らないので、押し出しで辺のグループが巻き込まれない)。
+  // 輪郭線の `EdgesGeometry`(`buildBody` 参照)はコアの辺の添字と対応しない。ここで描くのは
+  // サーバが配る `kernel.tessellate_edges` の折れ線で、1本ごとにコアの添字を持つ。
+  // ソリッドともスケッチとも別のグループに持つ(`update()`/`prune()` は `root` しか触らない)。
   const edgeRoot = new THREE.Group()
   scene.add(edgeRoot)
 
   type EdgeMaterialState = 'plain' | 'user'
-  /** 辺の材質は (状態 × ホバー) のキャッシュから取る。ホバーは面と同じで明度を足すだけ。深度検査はしない
-   *  (奥の辺も見え、指せる)。 */
+  /** 辺の材質は (状態 × ホバー) のキャッシュから取る。深度検査はしない(奥の辺も見え、指せる)。 */
   const edgeMaterials = variantCache(
     (state: EdgeMaterialState, hovered: boolean) => `${state}:${hovered ? 1 : 0}`,
     (state, hovered) => {
@@ -1135,10 +954,10 @@ export function createViewport(container: HTMLElement): Viewport {
     },
   )
 
-  /** 今出している辺(**1つのBodyぶんだけ**)。空なら辺モードではない。 */
+  /** 今出している辺(1つのBodyぶんだけ)。空なら辺モードではない。 */
   let edgeLines: THREE.Line[] = []
   let edgeBodyId: string | null = null
-  /** 今出している辺の元になった配列(**同じものを渡されたら作り直さない**ための印)。 */
+  /** 今出している辺の元になった配列(同じものを渡されたら作り直さない印)。 */
   let edgeSource: EdgeGeometry[] | null = null
   /** 辺の除去と破棄の束(ピックは `edgeLines` から)。 */
   const edgeBatch = createBatch(edgeRoot)
@@ -1152,18 +971,16 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function showEdges(bodyId: string | null, edges: EdgeGeometry[]): void {
-    // **同じものを渡されたら何もしない**。呼び出し側(`App.svelte`)は選択が変わるたびに
-    // 呼び直すので、毎回作り直すと**辺を1本クリックするたびに数百本ぶんの
-    // BufferGeometry を捨てて作り直す**ことになる(27部品では1Bodyで600本超)。
+    // 同じものを渡されたら何もしない(`App.svelte` は選択が変わるたびに呼び直すので、毎回
+    // 作り直すと辺のクリックのたびに数百本の BufferGeometry を作り直す。27部品で1Bodyに600本超)。
     if (bodyId !== null && bodyId === edgeBodyId && edges === edgeSource) return
     clearEdges()
     if (bodyId === null || edges.length === 0) return
     edgeBodyId = bodyId
     edgeSource = edges
     for (const edge of edges) {
-      // 2点(=6要素)未満は線にならない。`kernel.tessellate_edges` は失敗時も端点2点を
-      // 返す契約なので**ここへは届かないはず**だが、届いたときに黙って壊れた線を
-      // 作らないための番人として残す。
+      // 2点(=6要素)未満は線にならない。`kernel.tessellate_edges` は失敗時も端点2点を返す契約なので
+      // 届かないはずだが、壊れた線を作らないための番人。
       if (edge.points.length < 6) continue
       const geometry = new THREE.BufferGeometry()
       geometry.setAttribute(
@@ -1182,7 +999,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /** 今出している辺のうち選択に入っているもの(面の `selectedFaceKeys` と同じ役目)。 */
   let selectedEdgeIndices = new Set<number>()
 
-  /** 辺の材質を決める。**選択とホバーの両方を見る唯一の場所**(面と同じ規律)。 */
+  /** 辺の材質を決める。選択とホバーの両方を見る唯一の場所。 */
   function applyEdgeMaterials(): void {
     // 色は材質から読み戻す(`highlightColors()` の検査がこの値を読む)。
     highlightColor.edge = selectedEdgeIndices.size === 0 ? null : edgeMaterials.get('user', false).color.getHex()
@@ -1204,10 +1021,7 @@ export function createViewport(container: HTMLElement): Viewport {
     applyEdgeMaterials()
   }
 
-  /**
-   * いまのカメラを投影の種類ごとの最小限の形へ落とす(`gridScale.ts` の純関数へ渡す用)。
-   * **正投影には「距離」に相当する量が無い**ので、透視と同じ形にはできない。
-   */
+  /** いまのカメラを投影の種類ごとの最小限の形へ落とす(`gridScale.ts` の純関数へ渡す用)。 */
   function cameraProjection(): CameraProjection {
     if (camera === orthographic) {
       return { kind: 'ortho', frustumHeight: 2 * Math.max(viewHalfHeight(), 1e-6) }
@@ -1219,10 +1033,7 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
-  /**
-   * 画面1画素ぶんの世界座標の長さ。**式は `gridScale.ts` の `mmPerPixel` 1つに寄せてある**
-   * —— グリッドの段の判定・可変解像度・視点が止まったかの判定が同じ物差しで動く。
-   */
+  /** 画面1画素ぶんの世界座標の長さ。式は `gridScale.ts` の `mmPerPixel` 1つ(グリッドの段・可変解像度・視点静止判定が同じ物差し)。 */
   function worldPerPixel(): number {
     const { height } = size()
     return Math.max(mmPerPixel(cameraProjection(), height), 1e-9)
@@ -1230,9 +1041,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ 可変解像度(ズーム連動)
   /**
-   * いま見えているものの外接対角[mm]。**毎フレーム測らない** —— `Box3.setFromObject` は
-   * 全メッシュを走査するので、中身が変わったとき(`update` / `prune` / `showSketches`)に
-   * だけ測り直す。上下限の丸めにしか使わないので、1フレーム古くても害が無い。
+   * いま見えているものの外接対角[mm]。`Box3.setFromObject` は全メッシュを走査するので、
+   * 中身が変わったとき(`update` / `prune` / `showSketches`)だけ測り直す(1フレーム古くても害が無い)。
    */
   let contentDiagonal = 0
 
@@ -1241,8 +1051,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 断面の枠・切り口はボディ(と幽霊)だけの外接箱で決める(スケッチは切らないので入れない)
     section.setContent(new THREE.Box3().setFromObject(root))
     contentDiagonal = box.isEmpty() ? 0 : box.getSize(new THREE.Vector3()).length()
-    // **広げるのは即座、縮めない**(`allowShrink: false`) —— ふつうの編集で内容がしきい値
-    // 付近で揺れても、グリッドが縮んで点滅することはない(`gridPlanes.ts` の `rescale` のdocstring)。
+    // 広げるのは即座、縮めない(`allowShrink: false`)。内容がしきい値付近で揺れてもグリッドが点滅しない。
     grid.rescale(box, false)
   }
 
@@ -1259,25 +1068,19 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------ 当たり判定の共有部品(screen pick)
   //
-  // 当たり半径の定数(`EDGE_PICK_PIXELS` / `SKETCH_HANDLE_PIXELS` / `VERTEX_PIXELS`)は
-  // **画面上の半径[CSS px]**として使う。Raycaster の world threshold
-  // (`worldPerPixel() * 定数`)では、注視点と対象の奥行きが違うだけで実際の screen 半径が
-  // 変わり、斜めから見た線は 3D 垂線距離ぶん楕円状に当たる。
-  //
-  // **`worldPerPixel()` はここから外れた**。残っているのはグリッド・可変解像度・clip 用。
+  // 当たり半径の定数(`EDGE_PICK_PIXELS` / `SKETCH_HANDLE_PIXELS` / `VERTEX_PIXELS`)は画面上の
+  // 半径[CSS px]として使う。Raycaster の world threshold だと注視点と対象の奥行き差で
+  // 実際の screen 半径が変わり、斜めから見た線は 3D 垂線距離ぶん楕円状に当たる。
 
   const pickScratch = new THREE.Vector3()
 
-  /** 折れ線1本ぶんの world 座標の読み口。**配列は作らない**(`polylineScreenDistSq`)。 */
+  /** 折れ線1本ぶんの world 座標の読み口(配列は作らない)。 */
   interface PickPolyline {
     count: number
     at(index: number, out: THREE.Vector3): void
   }
 
-  /**
-   * 折れ線を screen 上で歩き、カーソルまでの距離²[px²]の最小を返す。**射影できた隣り合う
-   * 2点だけ**を線分として見るので、1本も見えなければ null。
-   */
+  /** 折れ線を screen 上で歩き、カーソルまでの距離²[px²]の最小を返す。射影できた隣り合う2点だけを線分と見る。見えなければ null。 */
   function polylineScreenDistSq(
     offsetX: number,
     offsetY: number,
@@ -1314,9 +1117,8 @@ export function createViewport(container: HTMLElement): Viewport {
   const clipScratchB = new THREE.Vector3()
 
   /**
-   * `polylineScreenDistSq` の断面つき版。`clip`(残る側が正の符号付き距離)で切られた線分は
-   * 落とし、平面をまたぐ線分は交点で切り詰めてから測る —— 端点を1つずつ落とすだけだと、
-   * 切り口のすぐ手前の見えている部分が指せなくなる。
+   * `polylineScreenDistSq` の断面つき版。`clip`(残る側が正の符号付き距離)で切られた線分は落とし、
+   * 平面をまたぐ線分は交点で切り詰めてから測る(端点を落とすだけだと切り口手前の見えている部分が指せない)。
    */
   function clippedPolylineScreenDistSq(
     offsetX: number,
@@ -1367,10 +1169,8 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * スケッチの図形(`Line2`)の折れ線。**`geometry` からは読めない** ——
-   * `LineGeometry` の `position` 属性は太線を描くための箱テンプレートであって折れ線ではない。
-   * world 座標の点列は `buildEntityLine` が `userData.polylineWorld` へ入れてある
-   * (矩形選択の `collectInBox` も同じものを読む)。
+   * スケッチの図形(`Line2`)の折れ線。`geometry` の `position` は太線を描く箱テンプレートなので読めない。
+   * `buildEntityLine` が `userData.polylineWorld` に入れた world 座標の点列を読む(矩形選択の `collectInBox` も同じ)。
    */
   function sketchPolyline(line: SketchFatLine): PickPolyline | null {
     const points = line.userData.polylineWorld as readonly THREE.Vector3[] | undefined
@@ -1481,8 +1281,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (edgeBodyId !== bodyId) return null
     const line = edgeLines.find((candidate) => candidate.userData.edgeIndex === edgeIndex)
     if (!line) return null
-    // **端点は避ける**(隣の辺と共有しているので、そこを狙うと隣が取れることがある)。
-    // 中ほどから順に試し、**実際にその辺へ当たる画素**だけを返す(面の `project` と同じ規律)。
+    // 端点は避ける(隣の辺と共有していて隣が取れることがある)。中ほどから順に試し、実際にその辺へ当たる画素だけを返す。
     for (const fraction of [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9]) {
       const point = pointAlong(line, fraction)
       if (point === null) continue
@@ -1506,13 +1305,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ C: スケッチ
   //
-  // **描くのは線と領域だけ**で、スケッチ平面そのもの(無限に広がる面)は描かない ——
-  // 面を描くと奥のソリッドが隠れ、「既存の部品の上に描く」が見えなくなる。
-  //
-  // ソリッドとは別のグループ(`sketchRoot`)に持つ。`update()`/`prune()` はソリッド側の
-  // `root` しか触らないので、押し出しでスケッチが消えることがない。
-  // **`sketchRoot` の宣言は `root` の隣へ上げてある**(初期化中の `createGridPlanes()` が
-  // 読むため。あちらのコメント参照)。
+  // 描くのは線と領域だけ。スケッチ平面そのもの(無限に広がる面)を描くと奥のソリッドが隠れる。
+  // ソリッドとは別のグループ(`sketchRoot`。宣言は `root` の隣)に持つ。`update()`/`prune()` は `root` しか触らない。
 
   const sketchLineResolution = new THREE.Vector2(1, 1)
   const sketchMaterial = createSketchLineMaterial(SKETCH_COLOR, sketchLineResolution)
@@ -1520,15 +1314,13 @@ export function createViewport(container: HTMLElement): Viewport {
   const sketchGhostWarnMaterial = createSketchLineMaterial(SKETCH_GHOST_WARN_COLOR, sketchLineResolution)
 
   /**
-   * スケッチの線・点の材質は **(選択状態 × ホバー)** をキーにした遅延生成のキャッシュから取る
-   * (`faceMaterialFor` と同じ形)。**反復を展開した `entities` 側の描画は通らない** ——
-   * あちらは `sketchMaterial` を直接使う(ピック対象外なので選択もホバーも起きない)。
+   * スケッチの線・点の材質は (選択状態 × ホバー) のキャッシュから取る(`faceMaterialFor` と同じ形)。
+   * 反復を展開した `entities` 側の描画は通らない(`sketchMaterial` を直接使う。ピック対象外)。
    */
   type SketchMaterialState = 'plain' | 'selected'
   type SketchLineMaterial = ReturnType<typeof createSketchLineMaterial>
   const sketchStateKey = (state: SketchMaterialState, hovered: boolean): string => `${state}:${hovered ? 1 : 0}`
-  // `plain` の非ホバーは既存の `sketchMaterial` を種として使う(2つの独立インスタンスに分裂させない。
-  // 捨てるのはキャッシュの `dispose()` の1回だけ)。
+  // `plain` の非ホバーは既存の `sketchMaterial` を種にする(インスタンスを分裂させない)。
   const sketchLineMaterials = variantCache(
     sketchStateKey,
     (state, hovered) => {
@@ -1541,7 +1333,7 @@ export function createViewport(container: HTMLElement): Viewport {
     return sketchLineMaterials.get(state, hovered)
   }
 
-  // **深度を書かない**(頂点マーカーと同じ) —— 線の上に必ず出す。
+  // 深度を書かない(頂点マーカーと同じ。線の上に必ず出す)。
   const sketchHandleMaterials = variantCache(sketchStateKey, (state, hovered) => {
     const base = state === 'selected' ? SKETCH_SELECTED_COLOR : SKETCH_HANDLE_COLOR
     return new THREE.PointsMaterial({
@@ -1554,10 +1346,7 @@ export function createViewport(container: HTMLElement): Viewport {
   function sketchHandleMaterialFor(state: SketchMaterialState, hovered: boolean): THREE.PointsMaterial {
     return sketchHandleMaterials.get(state, hovered)
   }
-  /**
-   * 領域の材質は (選択 × ホバー) のキャッシュから取る。不透明度は選択で変わる(非選択 0.35 / 選択 0.55)。
-   * ホバーは**3Dに領域の色を新しく作らない** —— 面・辺と同じで、既にある色に明度を足すだけ。
-   */
+  /** 領域の材質は (選択 × ホバー) のキャッシュから取る。不透明度は選択で変わる(非選択 0.35 / 選択 0.55)。 */
   const regionMaterials = variantCache(
     (selected: boolean, hovered: boolean) => `${selected ? 1 : 0}:${hovered ? 1 : 0}`,
     (selected, hovered) => {
@@ -1577,19 +1366,14 @@ export function createViewport(container: HTMLElement): Viewport {
     plane: SketchDraw['plane']
     /** シーンに足したもの(除去と破棄のため。ピック用の配列は別に持つ)。 */
     batch: SceneBatch
-    /** 領域のメッシュ(ピック対象)。 */
     regionMeshes: THREE.Mesh[]
     /** 図形の (u,v) の折れ線(視点合わせの中心を出すのに使う)。 */
     points: Array<[number, number]>
     /** 図形1本ごとの折れ線の点数(実機検査の `sketchPolylineCounts` が読む)。 */
     polylineCounts: number[]
-    /**
-     * 点のマーカー(**1点1オブジェクト**)。当たった点からコアの参照へ戻すために
-     * `userData` に `entityId` と `point`(xキー)を持つ ——
-     * まとめて1つの `Points` にすると戻れない(頂点マーカーと同じ理由)。
-     */
+    /** 点のマーカー(1点1オブジェクト)。当たった点からコアの参照へ戻すため `userData` に `entityId` と `point`(xキー)を持つ(まとめて1つの `Points` にすると戻れない)。 */
     handleMeshes: THREE.Points[]
-    /** 図形の折れ線(**元の図形だけ**。`userData.entityId` を持つ)。辺のピック対象。 */
+    /** 図形の折れ線(元の図形だけ。`userData.entityId` を持つ)。辺のピック対象。 */
     handleLines: SketchFatLine[]
     /** 元の図形(`handles`)。スナップ座標の解決に使う。 */
     handles: SketchDraw['handles']
@@ -1604,10 +1388,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /** いま描けているスケッチの幽霊の中身(`ghostInfo` が返す。実機検査用の穴)。 */
   let sketchGhostInfo: Array<{ kind: string; params: Record<string, number> }> = []
   let activeSketchId: string | null = null
-  /**
-   * 通常モードで領域を指せるか(`pickRegions`)。**スケッチモード中は関係ない** ——
-   * モード中は常に「そのスケッチの領域」が対象で、このゲートは見ない。
-   */
+  /** 通常モードで領域を指せるか(`pickRegions`)。スケッチモード中は見ない(常にそのスケッチの領域が対象)。 */
   let regionPickWanted = false
 
   /** スケッチ平面上の (u,v) を3Dの点へ(コアの `kernel_sketch._to_pnt` と同じ規則)。 */
@@ -1620,8 +1401,7 @@ export function createViewport(container: HTMLElement): Viewport {
     entity: { kind: string; params: Record<string, number> },
     material: SketchLineMaterial,
   ): { object: SketchFatLine; geometry: THREE.BufferGeometry; points: Array<[number, number]> } | null {
-    // **今の画面の粗さで折る**(`resolution.applied()`)。固定分割だった頃は、寄ると
-    // 円が多角形に見え、引くと使われない点をGPUへ送っていた。
+    // 今の画面の粗さで折る(`resolution.applied()`)
     const points = entityPoints(entity.kind, entity.params, resolution.applied())
     if (points.length < 2) return null
     const worldPoints = points.map(([u, v]) => toWorld(frame, u, v))
@@ -1638,10 +1418,7 @@ export function createViewport(container: HTMLElement): Viewport {
     sketches.delete(sketchId)
   }
 
-  /**
-   * 直近に受け取った描画指示。**解像度が変わったときに折り直すために控える**
-   * (折れ線はここで作るので、指示そのものを持っていないと粗さだけを変えられない)。
-   */
+  /** 直近に受け取った描画指示。解像度が変わったとき折り直すために控える。 */
   let lastSketchDraws: SketchDraw[] = []
 
   /** 控えた指示で描き直す(`resolutionTracker` が解像度を採り直したときに呼ぶ)。中身が無ければ何もしない。 */
@@ -1685,8 +1462,7 @@ export function createViewport(container: HTMLElement): Viewport {
         const mesh = new THREE.Mesh(geometry, regionMaterials.get(selected.has(region.index), false))
         mesh.userData.sketchId = entry.sketchId
         mesh.userData.regionIndex = region.index
-        // ホバーとの組み合わせを後から決められるように、選択かどうかを印として残す
-        // (材質から読み戻すと、ホバー色が付いた瞬間に選択が分からなくなる)。
+        // 選択かどうかを印として残す(材質から読み戻すとホバー色が付いた瞬間に選択が分からなくなる)
         mesh.userData.selected = selected.has(region.index)
         regionMeshes.push(batch.add(mesh, geometry))
       }
@@ -1699,9 +1475,8 @@ export function createViewport(container: HTMLElement): Viewport {
         polylineCounts.push(built.points.length)
       }
 
-      // **元の図形(`handles`)を、展開した描画の上に重ねて置く。** ここに置くのは
-      // 「指せるもの」であって「見えるもの」ではない —— 反復で増えた複製は `entities`
-      // 側だけに出て、指す対象にはならない(複製は導出物で `entity_id` を持たない)。
+      // 元の図形(`handles`)を展開した描画の上に重ねる: ここに置くのは「指せるもの」
+      // (反復の複製は導出物で `entity_id` を持たず、指す対象にならない)。
       for (const handle of entry.handles) {
         const selected = pickedWhole.has(handle.entityId)
         const built = buildEntityLine(
@@ -1712,18 +1487,14 @@ export function createViewport(container: HTMLElement): Viewport {
         if (built) {
           built.object.renderOrder = LAYER.sketchLine
           built.object.userData.entityId = handle.entityId
-          // ホバーとの組み合わせを後から決められるように、選択かどうかを印として残す
-          // (`applySketchHoverMaterials` が材質から読み戻すと、ホバー色が付いた瞬間に
-          // 選択が分からなくなる。領域の `userData.selected` と同じ理由)。
+          // 選択かどうかの印(領域の `userData.selected` と同じ理由)
           built.object.userData.selected = selected
           handleLines.push(batch.add(built.object, built.geometry))
         }
-        // **点が互いに独立して動く種別だけ常時表示する**(entityHasIndependentPoints)。
-        // rectangle/circle/arcは点が1個で、その点だけ動かすのと図形全体を動かすのが
-        // move_sketch_entities内で同じ処理になる(entityHasIndependentPointsのdocstring
-        // 参照) —— 常時出すと「なぜこの1点だけ特別か」という見た目の非対称になるので、
-        // ホバー/選択のときだけ見せる。ピック可能な座標そのものは変えない
-        // (`pickPointsAt` はmesh.visibleを見ない)。
+        // 点が互いに独立して動く種別だけ常時表示する(entityHasIndependentPoints)。
+        // rectangle/circle/arc は点が1個で、その点だけ動かすのと図形全体を動かすのが
+        // move_sketch_entities 内で同じ処理になるため、ホバー/選択のときだけ見せる
+        // (ピック可能な座標は変えない。`pickPointsAt` は mesh.visible を見ない)。
         const showPointsAtRest = entityHasIndependentPoints(handle.kind)
         for (const point of entityHandles(handle.kind, handle.params)) {
           if (!Number.isFinite(point.u) || !Number.isFinite(point.v)) continue
@@ -1767,7 +1538,7 @@ export function createViewport(container: HTMLElement): Viewport {
     refreshGridSketchFrame() // 編集中スケッチのframeがここで初めて届くことがある
   }
 
-  /** 領域の材質を決める。**選択とホバーの両方を見る唯一の場所**(面・辺と同じ規律)。 */
+  /** 領域の材質を決める。選択とホバーの両方を見る唯一の場所。 */
   function applyRegionMaterials(): void {
     for (const [sketchId, entry] of sketches) {
       for (const mesh of entry.regionMeshes) {
@@ -1783,12 +1554,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * スケッチの線・点の材質を決める。**選択とホバーの両方を見る唯一の場所**
-   * (面・辺・領域と同じ規律)。作り直さず、`handleLines`/`handleMeshes` を歩いて
-   * `.material` を差し替えるだけにする(面・辺と同じ)。
-   *
-   * 点は必ず辺の上に乗っているので、**点がホバーされているときは線を光らせない**
-   * (`hoverSketchEntity.point === null` を線側の条件に入れて排他にする)。
+   * スケッチの線・点の材質を決める。選択とホバーの両方を見る唯一の場所。`handleLines`/`handleMeshes` を
+   * 歩いて `.material` を差し替えるだけ。点は必ず辺の上に乗るので、点がホバーされているときは
+   * 線を光らせない(`hoverSketchEntity.point === null` を線側の条件に入れて排他にする)。
    */
   function applySketchHoverMaterials(): void {
     for (const [sketchId, entry] of sketches) {
@@ -1819,11 +1587,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * いま編集中のスケッチ平面のframeをグリッドへ渡す(モード外は null)。
-   *
-   * **`setActiveSketch` と `showSketches` の両方から呼ぶ** —— モードに入った時点では
-   * そのスケッチの描画指示がまだ届いておらず、frameを知らないことがある。届いた時点で
-   * 呼び直さないと、基準平面へのスケッチ中もXY床が出たままになる。
+   * いま編集中のスケッチ平面のframeをグリッドへ渡す(モード外は null)。`setActiveSketch` と
+   * `showSketches` の両方から呼ぶ: モードに入った時点では描画指示がまだ届かずframeを知らないことがあり、
+   * 届いた時点で呼び直さないと基準平面へのスケッチ中もXY床が出たままになる。
    */
   function refreshGridSketchFrame(): void {
     const target = activeSketchId === null ? undefined : sketches.get(activeSketchId)
@@ -1855,8 +1621,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const built = buildEntityLine(target.frame, entity, material)
       if (!built) continue
       batch.add(built.object, built.geometry)
-      // **実際に描けたものだけ**を控える(`ghostInfo`)。折れ線化できなかった図形を
-      // 数に入れると、実機検査が「出ている」と判断したまま画面には何も無い状態になる。
+      // 実際に描けたものだけ控える(折れ線化できなかった図形を数えると検査が「出ている」と誤判断する)
       sketchGhostInfo.push({ kind: entity.kind, params: { ...entity.params } })
     }
     if (batch.objects.length === 0) return
@@ -1864,28 +1629,19 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * スケッチに入る直前の視点(抜けるときに戻す)。**モード外では null**。
-   *
-   * `lookAtSketch` は描いている図形の大きさに寄るので、半径4mmの円を描いて抜けると
-   * **40mmの板が画面の外に残る**。視点を全体へ戻すボタンは `7363c76`(下段バーの削除)で
-   * 落としてあり、人に残る手は手動のオービット/ズームしかない —— **抜けたら入る前へ戻す**。
-   * 「全体が入る視点」ではなく「入る前の視点」なのは、スケッチに入る前に自分で寄せていた
-   * 視点まで毎回捨てないため。
-   *
-   * `framedAtEntry` は入った時点で**もう何か描かれていたか**を覚える。**最初の板は
-   * スケッチの中で生まれる**ので(`update` の初回 `frameToContent`)、そのときの「入る前」は
-   * 何も無い文書の視点であり、戻すと生まれたばかりの形から離れる。その1回だけは戻さない。
+   * スケッチに入る直前の視点(抜けるときに戻す)。モード外では null。
+   * `lookAtSketch` は図形の大きさに寄るので、戻さないと小さな図形のとき大きな板が画面外に残る。
+   * 「入る前の視点」へ戻すのは、入る前に自分で寄せた視点を捨てないため。
+   * `framedAtEntry` は入った時点でもう何か描かれていたかを覚える: 最初の板はスケッチの中で生まれる
+   * (`update` の初回 `frameToContent`)ので、そのときの「入る前」は何も無い文書の視点で、
+   * 戻すと形から離れる。その1回だけは戻さない。
    */
   let cameraBeforeSketch:
     | {
         position: THREE.Vector3
         target: THREE.Vector3
         up: THREE.Vector3
-        /**
-         * 入る前の見かけの大きさ(`viewHalfHeight`)。**位置だけでは戻せない** ——
-         * 正投影では寄り引きが視錐台の大きさであってカメラの位置ではないので、
-         * 位置を戻しても `lookAtSketch` がスケッチに合わせた倍率のまま残る。
-         */
+        /** 入る前の見かけの大きさ(`viewHalfHeight`)。正投影では寄り引きが視錐台の大きさなので、位置だけでは戻せない。 */
         halfHeight: number
         framedAtEntry: boolean
       }
@@ -1894,20 +1650,15 @@ export function createViewport(container: HTMLElement): Viewport {
   function setActiveSketch(sketchId: string | null): void {
     const wasActive = activeSketchId !== null
     if (activeSketchId !== sketchId) pickChanged() // モードの出入りで優先順位ごと変わる
-    // **`hoverAt`(画面座標)を捨てる** —— 入る/出る/切り替えのどれでもカメラが飛ぶことがある
-    // (`lookAtSketch` の正対・退出時の視点復元)。飛んだ直後は同じ画面座標が指す3D点が
-    // 別物になるので、そのままカーソル追従(`grid.followCursor` の毎フレーム経路)
-    // に食わせると、切り替え前の位置が新しい平面の外側へ再投影されて縁のグリッドが
-    // 意味なく広がる(実測: 面スケッチへの切替直後、直前のクリック位置が新しい面の外へ
-    // 再投影されて内容だけの範囲より広い値が一瞬出た)。次の実際のポインタ移動まで
-    // 「いま指している場所は無い」も同じ扱いにする(`onPointerLeave` と同じ考え方)。
+    // `hoverAt` を捨てる: 入る/出る/切り替えでカメラが飛ぶと同じ画面座標が別の3D点を指し、
+    // `grid.followCursor` に食わせると旧位置が新しい平面の外へ再投影されて縁のグリッドが広がる
+    // (実測: 面スケッチへの切替直後、内容だけの範囲より広い値が一瞬出た)。`onPointerLeave` と同じ扱い。
     hoverAt = null
     activeSketchId = sketchId
     refreshGridSketchFrame() // 出すグリッドの平面がモードの出入りで変わる
     if (sketchId !== null) {
-      // **入る「とき」だけ控える**。`lookAtSketch` の側で控えないのは、あれが
-      // 「正面から見る」でも呼ばれるから —— そこで控えると戻り先が寄った視点に化ける。
-      // モード中に別のスケッチへ移ったときも、戻り先は最初に入る前のままにする。
+      // 入る「とき」だけ控える(`lookAtSketch` は「正面から見る」でも呼ばれ、そこで控えると戻り先が
+      // 寄った視点になる)。モード中に別のスケッチへ移っても戻り先は最初のまま。
       if (!wasActive) {
         cameraBeforeSketch = {
           position: camera.position.clone(),
@@ -1920,8 +1671,7 @@ export function createViewport(container: HTMLElement): Viewport {
       return
     }
     clearGhost()
-    // 上方向を既定へ戻す。`lookAtSketch` が平面のv軸へ倒したままだと、モードを抜けた後の
-    // オービットが入る前と違う傾きになる。
+    // 上方向を既定へ戻す(`lookAtSketch` がv軸へ倒したままだと、抜けた後のオービットの傾きが変わる)。
     camera.up.copy(WORLD_UP)
     const previous = cameraBeforeSketch
     cameraBeforeSketch = null
@@ -1929,9 +1679,7 @@ export function createViewport(container: HTMLElement): Viewport {
       camera.position.copy(previous.position)
       camera.up.copy(previous.up)
       controls.target.copy(previous.target)
-      // **見かけの大きさを戻すのは正投影のときだけ。** 正投影では寄り引きがカメラの位置
-      // ではないので、位置を戻しても `lookAtSketch` が作った倍率が残る。透視は上の位置の
-      // 復元で戻り終わっているので、ここを通しても同じ値を計算し直すだけである。
+      // 見かけの大きさを戻すのは正投影のときだけ(透視は上の位置の復元で戻り終わっている)。
       if (camera === orthographic) setViewHalfHeight(previous.halfHeight)
       camera.updateProjectionMatrix()
     }
@@ -1956,13 +1704,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * **見た目だけの角**(`entityVisualCorners`。長方形の残り3隅など)と**直線どうしの交点**
-   * (`target.intersections`)を、本物の点と**同じ半径・同じ優先度**で拾う。`point` は
-   * 常に null —— 独立した参照は持たない(`pointKeys` の点ではない)ので、当たった結果は
-   * 「この図形の、たまたま角(または交点)の位置」であり、辺のどこかに当たったのと
-   * 同じ図形全体の扱いになる(`move_sketch_entities` の的にはならない)。交点は2つの
-   * 図形にまたがるが、参照は片方(`entityIds[0]`)だけを返す —— どちらも辺として選べば
-   * 同じ位置なので、線が重なったときの「近い方が勝つ」既存の規則と同じ扱いでよい。
+   * 見た目だけの角(`entityVisualCorners`。長方形の残り3隅など)と直線どうしの交点(`target.intersections`)を、
+   * 本物の点と同じ半径・同じ優先度で拾う。`point` は常に null: 独立した参照を持たないので、辺に当たったのと
+   * 同じ図形全体の扱い(`move_sketch_entities` の的にならない)。交点の参照は片方(`entityIds[0]`)だけ返す。
    * `sketchEntityAt` の点パスと辺パスの間だけから呼ぶこと。
    */
   function sketchCornerAt(offsetX: number, offsetY: number, target: SketchScene): SketchEntityHit | null {
@@ -1997,11 +1741,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * **直線区間の中点**(`entityMidpoints`)を、本物の点と**同じ半径**(`SKETCH_HANDLE_PIXELS`)
-   * だが**1段低い優先度**(点・角・交点より下、辺より上)で拾う。本人指定
-   * 「吸着優先順位は点と線の間」。`snapDirection` はカーソル強調(垂直な短いティック)が
-   * 画面角度を出すのに使う —— 呼び出し側(`sketchEntityAt`)の点パス・角パスの後、
-   * 辺パスの前からだけ呼ぶこと。
+   * 直線区間の中点(`entityMidpoints`)を、本物の点と同じ半径(`SKETCH_HANDLE_PIXELS`)で1段低い優先度
+   * (点・角・交点より下、辺より上)で拾う(本人指定「吸着優先順位は点と線の間」)。`snapDirection` は
+   * カーソル強調が画面角度を出すのに使う。`sketchEntityAt` の点パス・角パスの後、辺パスの前からだけ呼ぶこと。
    */
   function sketchMidpointAt(offsetX: number, offsetY: number, target: SketchScene): SketchEntityHit | null {
     const sketchId = activeSketchId
@@ -2029,14 +1771,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * その画素で当たるスケッチの図形(**アクティブなスケッチだけ**)。
-   *
-   * **点が先・角/交点が次・中点がその次・辺が最後**。点は必ず辺の上に乗っているので、
-   * 辺を先に見ると端点を掴めない(頂点マーカーを辺より先に見るのと同じ理由)。角・交点
-   * (`sketchCornerAt`)も同じ理由で辺より先 —— 角・交点は必ずどれかの辺の上に乗っている。
-   * 中点(`sketchMidpointAt`)は角・交点より1段低い優先度(本人指定「点と線の間」)。
-   * 当たり半径は画面上の画素で決める(`edgeAt` / `vertexAt` と同じ `pickPointsAt` /
-   * `pickLinesAt`)。
+   * その画素で当たるスケッチの図形(アクティブなスケッチだけ)。点が先・角/交点が次・中点がその次・辺が最後:
+   * 点・角・交点は必ずどれかの辺の上に乗っているので、辺を先に見ると掴めない。当たり半径は画面上の画素
+   * (`edgeAt` / `vertexAt` と同じ `pickPointsAt` / `pickLinesAt`)。
    */
   function sketchEntityAt(offsetX: number, offsetY: number): SketchEntityHit | null {
     if (activeSketchId === null) return null
@@ -2079,7 +1816,7 @@ export function createViewport(container: HTMLElement): Viewport {
     pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
   }
 
-  /** **頂点を辺より先に見るか**(`preferVertices`)。既定は辺が先(`resolveHit` の順序)。 */
+  /** 頂点を辺より先に見るか(`preferVertices`)。既定は辺が先(`resolveHit` の順序)。 */
   let vertexPickWanted = false
 
   function preferVertices(on: boolean): void {
@@ -2089,12 +1826,8 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 今クリックで当たってよい領域メッシュ。
-   *
-   * - **スケッチモード中**: そのスケッチの領域だけ(描いている最中に別のスケッチの
-   *   領域を掴まない)。ゲートは見ない —— モードに入っている時点で領域が対象である。
-   * - **通常モード**: `pickRegions(true)` の間だけ、**全スケッチの領域**。
-   *   出していない間は空配列なので、面のピックはそのまま動く(辺の `edgeAt` と同じ形)。
+   * 今クリックで当たってよい領域メッシュ。スケッチモード中はそのスケッチの領域だけ(ゲートは見ない)。
+   * 通常モードは `pickRegions(true)` の間だけ全スケッチの領域で、出していない間は空配列(面のピックはそのまま動く)。
    */
   function regionPickTargets(): THREE.Mesh[] {
     if (activeSketchId !== null) return sketches.get(activeSketchId)?.regionMeshes ?? []
@@ -2108,8 +1841,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const targets = regionPickTargets()
     if (targets.length === 0) return null
     rayAt(offsetX, offsetY)
-    // **近い方が勝つ**(`intersectObjects` は距離順)。複数スケッチの領域が重なっても
-    // 手前のものが取れる。
+    // 近い方が勝つ(`intersectObjects` は距離順)
     const hits = raycaster.intersectObjects(targets, false)
     if (hits.length === 0) return null
     const { sketchId, regionIndex } = hits[0].object.userData
@@ -2135,39 +1867,28 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     const previous = camera.position.distanceTo(controls.target)
     const distance = radius > 0 ? Math.max(fitDistance(radius * SKETCH_FIT_MARGIN), 1) : Math.max(previous, 1)
-    // 上方向はビューキューブと同じ規則(`upForDirection`)で決める。ほとんどの平面では
-    // WORLD_UPのまま変わらない —— `OrbitControls`は生成時に焼いたZ軸を回転の極として
-    // 使い続ける(`WORLD_UP`の説明参照)ので、camera.upをそこから逸らすとキューブの見た目
-    // (`cubeActive.up`がcamera.upをそのまま写す)と実際の回転軸がずれ、スケッチ中だけ
-    // ビューキューブの動きがおかしくなっていた。`frame.v` を直接使うと任意面や XY 平面で
-    // camera.up が回転軸とずれる。真上・真下に近い面(cube側の上面図/底面図と同じ閾値)だけ
-    // ±Yへ差し替わる。
+    // 上方向はビューキューブと同じ規則(`upForDirection`)で決める。`OrbitControls` は生成時に焼いた
+    // Z軸を回転の極として使い続ける(`WORLD_UP` 参照)ので、camera.up をそこから逸らすとキューブの見た目
+    // (`cubeActive.up` が camera.up を写す)と実際の回転軸がずれる。`frame.v` を直接使うと任意面や XY 平面で
+    // ずれる。真上・真下に近い面(cube側の上面図/底面図と同じ閾値)だけ ±Y へ差し替わる。
     camera.up.set(...upForDirection([normal.x, normal.y, normal.z]))
     camera.position.copy(center).add(normal.multiplyScalar(distance))
     controls.target.copy(center)
-    // 正投影は距離では寄れない(`frameToContent` と同じ理由)。描いてあるものが無いときは
-    // 今の見かけの大きさのまま —— 透視側が `previous` の距離を保つのと同じ扱いにする。
+    // 正投影は距離では寄れない(`frameToContent` と同じ理由)。描いてあるものが無いときは今の見かけの大きさのまま。
     if (camera === orthographic && radius > 0) setViewHalfHeight(fitHalfHeight(radius * SKETCH_FIT_MARGIN))
     camera.updateProjectionMatrix()
     controls.update()
   }
 
   /**
-   * その画素が**本当に押せるか**(canvasの上に浮いているDOMに覆われていないか)。
-   *
-   * 3Dのレイ検査(`pickAt` / `faceHitAt` / `basePlaneAt`)は**canvasの中しか見ない**ので、
-   * ビューポートに浮かせたパネル —— `BrowserPanel.svelte` のブラウザ —— に覆われた画素も
-   * 「取れる」と答えてしまう。実際にそこを押すとクリックはパネルに吸われ、**指したはずの
-   * ものが指されない**。`project*` は「その画素が本当にそれを取れる」ことを確かめてから
-   * 返す約束なので、覆われた画素は候補から落とす(呼び出し側の探索が次の候補へ進む)。
-   *
-   * `Toast.svelte` の札が引っかからないのは、あちらが `pointer-events: none` で
-   * クリックを吸わないから —— 覆っているかどうかではなく、**吸うかどうか**が判定基準であり、
-   * それを直接答えるのが `elementFromPoint` である。
+   * その画素が本当に押せるか(canvasの上に浮いているDOMに覆われていないか)。3Dのレイ検査
+   * (`pickAt` / `faceHitAt` / `basePlaneAt`)はcanvasの中しか見ないので、浮かせたパネル
+   * (`BrowserPanel.svelte`)に覆われた画素も「取れる」と答えてしまう。`project*` は押せることを確かめて
+   * 返す約束なので、覆われた画素は候補から落とす。判定基準は覆っているかではなく「クリックを吸うか」
+   * (`Toast.svelte` は `pointer-events: none`)で、`elementFromPoint` がそれを答える。
    */
   function clickable(x: number, y: number): boolean {
-    // **キューブは同一canvasの第2パスなので `elementFromPoint` だけでは判定できない**
-    // ——常にcanvasを返し続けるので、ここで明示的に矩形を除外する(タスク仕様の落とし穴1)。
+    // キューブは同一canvasの第2パスで `elementFromPoint` は常にcanvasを返すので、矩形を明示的に除外する
     if (cube.inside(x, y)) return false
     if (section.handleAt(x, y)) return false // ハンドルが押下を引き取る画素(`onPointerDown`)
     const rect = container.getBoundingClientRect()
@@ -2235,9 +1956,8 @@ export function createViewport(container: HTMLElement): Viewport {
       return
     }
     const [su, sv] = snappedSketchUv(planePoint.u, planePoint.v, hit, sketch)
-    // **角・交点かどうかは `hit.snapAt` の有無(中点を除く)で決める**(`sketchCornerAt` だけが
-    // 中点でないほうを立てる)。以前は確定後の座標を自分自身への射影と比べていたが、交点は
-    // 2つの図形にまたがるため、その比較では検出できない(`SketchEntityHit.snapAt` のdocstring)。
+    // 角・交点かどうかは `hit.snapAt` の有無(中点を除く)で決める(交点は2つの図形にまたがり、
+    // 確定後の座標と自分自身への射影の比較では検出できない。`SketchEntityHit.snapAt` 参照)。
     const isCorner = hit !== null && hit.snapAt !== undefined && !hit.midpoint
     const isMidpoint = hit !== null && hit.midpoint === true
     const snap = classifySketchSnap(hit, planePoint.u, planePoint.v, isCorner, isMidpoint)
@@ -2249,11 +1969,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * `snapDirection`((u,v)空間の単位ベクトル)を画面上の角度(度)へ変換する。
-   * カーソル強調のティック(`sketchCursorOverlay.ts`)専用 —— 実際に表示する位置
-   * (`snapScreenAt`)とは別に、方向だけを知りたいので `projectForPick` を使う
-   * (`toScreen` はDOM被覆を見るため、方向の補助点がたまたま覆われた画素に落ちると
-   * 角度だけ消えてしまう)。
+   * `snapDirection`((u,v)空間の単位ベクトル)を画面上の角度(度)へ変換する。カーソル強調のティック
+   * (`sketchCursorOverlay.ts`)専用。方向だけ要るので `projectForPick` を使う(`toScreen` はDOM被覆を見るため、
+   * 補助点が覆われた画素に落ちると角度だけ消える)。
    */
   function tickAngleForDirection(
     sketch: SketchScene,
@@ -2275,12 +1993,10 @@ export function createViewport(container: HTMLElement): Viewport {
     const position = mesh.geometry.getAttribute('position')
     const triangles = mesh.geometry.getIndex()
     if (!position || !triangles) return null
-    // 面の `project` と同じ流儀: 三角形の内側の点を狙い、**実際にその領域へ当たる点**を返す。
-    //
-    // **1つの三角形につき4点試す**(重心 + 各頂点へ寄せた3点)。重心1点だけだと、
-    // スケッチモードで**点・辺のほうが手前で拾われる**画素に当たったときに候補が尽きる ——
-    // ベジエの制御点は曲線から離れた所(＝領域の内側)にも立つので、細長い三角形の重心が
-    // その近くに来ることが実際にある(`smoke-svg` の丘の領域で実際に踏んだ)。
+    // 面の `project` と同じ流儀: 三角形の内側の点を狙い、実際にその領域へ当たる点を返す。
+    // 1つの三角形につき4点試す(重心 + 各頂点へ寄せた3点): 重心1点だと、スケッチモードで点・辺が手前で
+    // 拾われる画素に当たったとき候補が尽きる(ベジエの制御点は領域の内側にも立ち、細長い三角形の
+    // 重心がその近くに来る。`smoke-svg` の丘の領域で実際に踏んだ)。
     const weights: ReadonlyArray<readonly [number, number, number]> = [
       [1 / 3, 1 / 3, 1 / 3],
       [0.5, 0.25, 0.25],
@@ -2300,14 +2016,11 @@ export function createViewport(container: HTMLElement): Viewport {
       }
       const screen = toScreen(point.clone())
       if (screen === null) continue
-      // **スケッチも一致していること**を見る —— 通常モードでは全スケッチの領域が対象に
-      // なるので、添字だけ見ると別のスケッチの同じ添字を「当たった」と読む。
+      // スケッチも一致を見る(通常モードは全スケッチの領域が対象で、添字だけだと別スケッチの同じ添字を当たりと読む)
       const hit = regionAt(screen.x, screen.y)
       if (!hit || hit.sketchId !== sketchId || hit.index !== index) continue
-      // **スケッチの図形が勝つ画素は返さない**。スケッチモード中は点・辺が
-      // 領域より手前で拾われるので、`regionAt` だけで確かめると「領域に当たるが、実際に
-      // クリックすると線が選ばれる」画素を返しうる —— `project*` の約束(その画素で
-      // 本当にそれが取れる)が破れる。判定は実際のクリックと同じ `sketchEntityAt` で行う。
+      // スケッチの図形が勝つ画素は返さない(スケッチモードでは点・辺が領域より手前で拾われ、`project*` の約束が破れる)。
+      // 判定はクリックと同じ `sketchEntityAt`。
       if (sketchEntityAt(screen.x, screen.y) !== null) continue
       return screen
     }
@@ -2316,23 +2029,19 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ ウィンドウ選択(左ドラッグ)
   //
-  // 帯の DOM と包含判定は `selectionBand.ts`。何を候補にするか(`collectInBox`)は
-  // **クリックのゲートと同じ**にしてある(辺は辺を出している間だけ、領域は要求している間だけ、
-  // スケッチの図形はスケッチモード中だけ)。ここだけ別の規則にすると、
-  // 「クリックでは指せないものがドラッグでだけ選べる」ができてしまう。
+  // 帯の DOM と包含判定は `selectionBand.ts`。候補(`collectInBox`)はクリックのゲートと同じ
+  // (辺は辺を出している間だけ、領域は要求している間だけ、スケッチの図形はスケッチモード中だけ)。
+  // 違うと「クリックでは指せないものがドラッグでだけ選べる」ができる。
   const band = createSelectionBand({ container, projectRaw })
 
   const projectScratch = new THREE.Vector3()
 
-  /** 世界座標を**コンテナ内の画素**へ(カメラの裏 —— z が clip の外 —— だけ null)。**当たり判定の射影はこれ** ——
-   *  viewport の矩形でも `clickable()` でも切らない(画面の外へ出た端点も、線分までの距離を測るには要る。切るのは `screenOf`)。
-   *  `width`/`height` は呼び出し元から渡す —— `selectionBand.ts` の頂点ループから
-   *  頂点ごとに `size()`(= DOM の `clientWidth`/`clientHeight` 読み取り)を呼ぶと、
-   *  矩形選択の実測で射影時間の92%を占めるほど遅い。
-   *  ここでモジュール側にキャッシュしないこと —— リサイズで寸法が変わるため、
-   *  キャッシュすると「同じ画素が別のものを指す」落とし穴に直結する。
-   *  呼び出し元が
-   *  1回の矩形選択の中でだけ `size()` を読んで使い回す。 */
+  /**
+   * 世界座標をコンテナ内の画素へ(カメラの裏だけ null)。当たり判定の射影はこれ: viewport の矩形でも
+   * `clickable()` でも切らない(画面外の端点も線分までの距離を測るのに要る。切るのは `screenOf`)。
+   * `width`/`height` は呼び出し元から渡す: 頂点ごとに `size()`(DOM 読み取り)を呼ぶと矩形選択の
+   * 射影時間の92%を占める(実測)。リサイズで寸法が変わるので、モジュール側にキャッシュしないこと。
+   */
   function projectRaw(point: THREE.Vector3, width: number, height: number): { x: number; y: number } | null {
     projectScratch.copy(point).project(camera)
     if (projectScratch.z < -1 || projectScratch.z > 1) return null
@@ -2349,14 +2058,12 @@ export function createViewport(container: HTMLElement): Viewport {
     const regions: Array<{ sketchId: string; index: number }> = []
     const sketchEntities: SketchEntityHit[] = []
 
-    // ビューポートの寸法はこの呼び出し1回の間ずっと不変なので、頂点ごとに読まず
-    // ここで1回だけ読んで使い回す(モジュール側にはキャッシュしない —
-    // `projectRaw` のコメント参照)。
+    // 寸法はこの呼び出しの間不変なので1回だけ読んで使い回す(`projectRaw` 参照)
     const { width, height } = size()
 
     if (activeSketchId === null) {
       const keep = section.keepsFilter()
-      // **面は常に指せる**(クリックと同じ)。隠したBodyのメッシュは `visible=false` なので外す。
+      // 面は常に指せる(クリックと同じ)。隠したBodyのメッシュは `visible=false` なので外す。
       for (const [bodyId, entry] of bodies) {
         for (const mesh of entry.faceMeshes) {
           if (!mesh.visible) continue
@@ -2377,8 +2084,7 @@ export function createViewport(container: HTMLElement): Viewport {
         if (typeof bodyId === 'string' && typeof vertexIndex === 'number') vertices.push({ bodyId, vertexIndex })
       }
     } else {
-      // **スケッチモードでは図形だけ**。図形全体が入っていればその図形を、
-      // 入っていなければ矩形に入った点だけを返す(点と図形全体の二重取りを作らない)。
+      // スケッチモードでは図形だけ。図形全体が入っていればその図形を、入っていなければ矩形に入った点だけを返す。
       const target = sketches.get(activeSketchId)
       const whole = new Set<string>()
       for (const line of target?.handleLines ?? []) {
@@ -2399,7 +2105,7 @@ export function createViewport(container: HTMLElement): Viewport {
       }
     }
 
-    // 領域は**クリックと同じゲート**(`regionPickTargets`)。スケッチモード中はそのスケッチだけ。
+    // 領域はクリックと同じゲート(`regionPickTargets`)。スケッチモード中はそのスケッチだけ。
     for (const mesh of regionPickTargets()) {
       if (!band.objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
       const { sketchId, regionIndex } = mesh.userData
@@ -2421,10 +2127,9 @@ export function createViewport(container: HTMLElement): Viewport {
     // 新しいポインタ操作が来たら、進行中のキューブ視点アニメーションは中断してよい(タスク仕様)。
     cube.cancelSnap()
     if (event.button !== 0) return
-    // **キューブの内側で始まった左ボタン押下は、キューブが引き取る**(モデルのピック・
-    // 矩形選択の開始へ漏らさない。タスク仕様の落とし穴1)。
+    // キューブの内側で始まった左ボタン押下はキューブが引き取る(ピック・矩形選択の開始へ漏らさない)
     if (cube.pointerDown(event)) return
-    // **断面のハンドルの上で始まった左ボタン押下は、ハンドルが引き取る**(キューブと同じ規律)。
+    // 断面のハンドルの上で始まった左ボタン押下はハンドルが引き取る
     if (section.pointerDown(event.offsetX, event.offsetY)) {
       renderer.domElement.setPointerCapture(event.pointerId)
       renderer.domElement.style.cursor = 'grabbing'
@@ -2438,8 +2143,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function onPointerUp(event: PointerEvent): void {
-    // **ボタンの種類より先に解除する**。右/中ボタンで視点を回して離した場合、ここで
-    // 解除しないと次の `pointermove` が来るまでホバーが止まったままになる。
+    // ボタンの種類より先に解除する(右/中ボタンで回して離したとき、解除しないと次の `pointermove` までホバーが止まる)
     orbiting = false
     if (section.dragging()) {
       section.pointerUp()
@@ -2457,7 +2161,7 @@ export function createViewport(container: HTMLElement): Viewport {
     downValid = false
     const moved = Math.hypot(event.offsetX - downX, event.offsetY - downY)
     const elapsed = performance.now() - downAt
-    // **矩形を引いていたならウィンドウ選択**(クリックにはしない)。引いた向きは見ない。
+    // 矩形を引いていたならウィンドウ選択(クリックにはしない)。引いた向きは見ない。
     if (band.active()) {
       const rect = band.rect(downX, downY, event.offsetX, event.offsetY)
       band.hide()
@@ -2468,24 +2172,15 @@ export function createViewport(container: HTMLElement): Viewport {
     pickListener?.({ ...resolveHit(event.offsetX, event.offsetY), mode: modeOf(event) })
   }
 
-  /**
-   * 修飾キーから選択の扱いを決める。**クリックもウィンドウ選択も同じ規則**
-   * (2箇所に書くと片方だけ直したときに操作が食い違う)。
-   *
-   * **Shift も Ctrl(Mac は Meta)も同じトグル**。除外専用のキーは
-   * 持たない —— 間違えたらもう一度クリック(またはドラッグ)すればよい。
-   */
+  /** 修飾キーから選択の扱いを決める。クリックもウィンドウ選択も同じ規則。Shift も Ctrl(Mac は Meta)も同じトグルで、除外専用のキーは持たない。 */
   function modeOf(event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): PickMode {
     return event.shiftKey || event.ctrlKey || event.metaKey ? 'toggle' : 'replace'
   }
 
   /**
-   * その画素をクリックしたら**何が取れるか**(修飾キー以外の `PickEvent` そのもの)。
-   *
-   * **クリックとホバー強調はこの1つの関数だけを見る**。優先順位をクリック側と
-   * ホバー側の2箇所に書くと、片方だけ直したときにプレビューが黙って嘘をつく ——
-   * それはこの機能の存在意義そのものを消す。**副作用はここに置かない**
-   * (`pickListener` を呼ぶのは `onPointerUp` だけ)。
+   * その画素をクリックしたら何が取れるか(修飾キー以外の `PickEvent` そのもの)。
+   * クリックとホバー強調はこの関数だけを見る(優先順位を2箇所に書くとプレビューが嘘をつく)。
+   * 副作用はここに置かない(`pickListener` を呼ぶのは `onPointerUp` だけ)。
    */
   function resolveHit(offsetX: number, offsetY: number): Omit<PickEvent, 'mode'> {
     const nothing: Omit<PickEvent, 'mode'> = {
@@ -2497,14 +2192,12 @@ export function createViewport(container: HTMLElement): Viewport {
       plane: null,
       sketchEntity: null,
     }
-    // **スケッチモード中は面を拾わない**。描いている最中に奥のソリッドの面を掴むと、
-    // 線を引くつもりのクリックが選択の置き換えになる。領域が手前・平面の点がその次。
+    // スケッチモード中は面を拾わない(線を引くつもりのクリックが選択の置き換えになる)。領域が手前・平面の点がその次。
     if (activeSketchId !== null) {
       const region = regionAt(offsetX, offsetY)
       const plane = planePointAt(offsetX, offsetY)
-      // **図形は領域より手前**(点・辺は領域の縁に乗っているので、領域が勝つと
-      // 端点を掴めない)。ただし `point`(平面上の座標)は常に一緒に返す ——
-      // 描くコマンドが起動している間はそちらが優先で、判断は `App.svelte` が持つ。
+      // 図形は領域より手前(点・辺は領域の縁に乗っており、領域が勝つと端点を掴めない)。`point` は常に一緒に返し、
+      // 描くコマンドが起動している間はそちらが優先(判断は `App.svelte`)。
       return {
         ...nothing,
         region,
@@ -2512,35 +2205,27 @@ export function createViewport(container: HTMLElement): Viewport {
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
       }
     }
-    // **頂点を直接ピックさせている間だけ、頂点が辺より先**(`preferVertices`)。
-    // **既定の順序のままでは角の頂点は絶対に取れない** —— 頂点は必ず辺の端点に乗って
-    // いるので、辺を出しているコマンド(`move_body` は対象を面/辺/頂点で指すので常に
-    // 出ている)では下の `edgeAt` が必ず先に当たる。ゲートを閉じている間は既定の順序で、
-    // フィレット中に辺の端を掴めることは変わらない。
+    // 頂点を直接ピックさせている間だけ、頂点が辺より先(`preferVertices`)。既定の順序では角の頂点は取れない
+    // (頂点は辺の端点に乗っており、`move_body` のように辺を出しているコマンドでは `edgeAt` が必ず先に当たる)。
+    // ゲートを閉じている間は既定の順序で、フィレット中に辺の端を掴めることは変わらない。
     if (vertexPickWanted) {
       const wanted = vertexMarkers.at(offsetX, offsetY)
       if (wanted !== null) return { ...nothing, vertex: wanted }
     }
-    // **辺を出しているときは辺が先**。辺は面の上に重なっているので、面より後に見ると
-    // 必ず面が勝つ。出していないときは `edgeAt` が即 null を返すので、面のピックは
-    // そのまま動く。**この順序は変えない**(基準平面を足しても辺→面の優先順位は同じ)。
+    // 辺を出しているときは辺が先(辺は面の上に重なり、面より後に見ると必ず面が勝つ)。出していないときは
+    // `edgeAt` が即 null を返す。この順序は変えない(基準平面を足しても辺→面は同じ)。
     const edge = edgeAt(offsetX, offsetY)
     if (edge !== null) return { ...nothing, edge }
-    // **領域を要求しているときは領域が先**(辺と同じ「要求中のものが勝つ」)。領域は
-    // スケッチ平面の上に浮いており、押し出した板の底面と重なるので、面より後に見ると
-    // 視点によって面が勝ってしまう。`pickRegions(false)` の間は `regionAt` が即 null を
-    // 返すので、面のピックはそのまま動く。
+    // 領域を要求しているときは領域が先(辺と同じ「要求中のものが勝つ」)。領域はスケッチ平面の上に浮いて
+    // 押し出した板の底面と重なるので、面より後だと視点によって面が勝つ。`pickRegions(false)` の間は `regionAt` が即 null。
     const region = regionAt(offsetX, offsetY)
     if (region !== null) return { ...nothing, region }
-    // **頂点マーカーは面より先**(最小の的なので、当たったならそれが狙いである)。
-    // 辺・領域より後なのは、頂点が必ず辺の端点に乗っているから —— 先に見ると
-    // フィレットを起動している間に辺の端が掴めなくなる。出していない間は
-    // `vertexAt` が即 null を返すので、面のピックはそのまま動く。
+    // 頂点マーカーは面より先(最小の的なので当たったなら狙い)。辺・領域より後なのは、頂点が辺の端点に
+    // 乗っており、先に見るとフィレット起動中に辺の端が掴めなくなるため。出していない間は `vertexAt` が即 null。
     const vertex = vertexMarkers.at(offsetX, offsetY)
     if (vertex !== null) return { ...nothing, vertex }
-    // **面に当たる画素では面が勝ち、基準平面は面の無い画素でだけ取れる** —— レイ距離では
-    // 競わせない。わざとであり、部品のシルエットに重なる部分の基準平面は指せない
-    // (#109、本人判断 2026-10-07。理由は docs/VIEWPORT.md「ピック」)。
+    // 面に当たる画素では面が勝ち、基準平面は面の無い画素でだけ取れる(レイ距離では競わせない。わざと:
+    // 部品のシルエットに重なる部分の基準平面は指せない。#109、本人判断 2026-10-07、docs/VIEWPORT.md「ピック」)。
     // 基準平面は `showBasePlanes(true)` の間しか当たらない。
     const face = faceHitAt(offsetX, offsetY)
     if (face !== null) return { ...nothing, hit: face.ref }
@@ -2548,7 +2233,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function onPointerMove(event: PointerEvent): void {
-    // **キューブが引き取ったポインタはメインの経路を一切通らない**(タスク仕様の落とし穴1)。
+    // キューブが引き取ったポインタはメインの経路を一切通らない
     if (cube.capturing()) {
       cube.pointerMove(event)
       return
@@ -2567,8 +2252,7 @@ export function createViewport(container: HTMLElement): Viewport {
       updateSketchCursor(event.offsetX, event.offsetY, null, null)
       return
     }
-    // ポインタがキューブの矩形の内側にあるあいだは、メインのホバー予告・矩形選択開始の
-    // どちらも早期に打ち切る(まだ何も押していない=ホバーのみの場合)。
+    // キューブの矩形の内側では、メインのホバー予告・矩形選択開始を早期に打ち切る(ホバーのみの場合)。
     const overCube = cube.inside(event.offsetX, event.offsetY)
     cube.setHoverAt(overCube ? { x: event.offsetX, y: event.offsetY } : null)
     if (overCube) {
@@ -2576,17 +2260,13 @@ export function createViewport(container: HTMLElement): Viewport {
       updateSketchCursor(event.offsetX, event.offsetY, null, null)
       return
     }
-    // **座標を控えるだけ**。当たり判定は `tick` が1フレームに1回だけ回す
-    // (pointermove は1フレームに何度も飛ぶので、ここで解決すると同じ絵のために
-    // 何度もレイキャストすることになる)。
+    // 座標を控えるだけ。当たり判定は `tick` が1フレームに1回回す(pointermove は1フレームに何度も飛ぶ)。
     hoverAt = { x: event.offsetX, y: event.offsetY }
-    // 視点回転中は取れるものの予告を出さない(**これはクリックにならない**)。境目は
-    // `onPointerUp` の moved 判定と揃える。**`downValid` ではなく `buttons` で見る** ——
-    // canvasの外でボタンを離されると `pointerup` が来ず、`downValid` は立ったままになる。
+    // 視点回転中は取れるものの予告を出さない。境目は `onPointerUp` の moved 判定と揃える。`downValid` ではなく
+    // `buttons` で見る(canvasの外でボタンを離されると `pointerup` が来ず、`downValid` が立ったままになる)。
     const dragged = Math.hypot(event.offsetX - downX, event.offsetY - downY)
     orbiting = event.buttons !== 0 && dragged > CLICK_MOVE_LIMIT_PX
-    // **左ボタンを押したまま一定距離を越えたらウィンドウ選択**。`downValid` ではなく
-    // `buttons` も見るのは、canvasの外で離されたときに帯が出たままになるのを防ぐため。
+    // 左ボタンを押したまま一定距離を越えたらウィンドウ選択。`buttons` も見るのは、canvasの外で離されたとき帯が出たままになるのを防ぐため。
     if (downValid && (event.buttons & 1) !== 0 && dragged > BOX_SELECT_MIN_PX) {
       band.show(downX, downY, event.offsetX, event.offsetY)
     }
@@ -2596,9 +2276,7 @@ export function createViewport(container: HTMLElement): Viewport {
       if (activeSketchId === null) {
         planeMoveListener(null, null)
       } else {
-        // **`sketchEntityAt` は `resolveHit` と同じ関数**(クリックの `PickEvent.sketchEntity` と
-        // 同一)。同じ画素で呼ぶことで、幽霊のスナップ先とクリック確定時のスナップ先が
-        // 同じ入力を通る(App.svelte の不変条件)。
+        // `sketchEntityAt` は `resolveHit` と同じ関数: 幽霊のスナップ先とクリック確定時のスナップ先が同じ入力を通る(App.svelte の不変条件)。
         planePoint = planePointAt(event.offsetX, event.offsetY)
         sketchHit = sketchEntityAt(event.offsetX, event.offsetY)
         planeMoveListener(planePoint, sketchHit)
@@ -2608,26 +2286,21 @@ export function createViewport(container: HTMLElement): Viewport {
     updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit)
   }
 
-  /** ポインタがcanvasから出た。**強調を残さない**(戻ってくるまで指せるものは無い)。 */
+  /** ポインタがcanvasから出た。強調を残さない(戻ってくるまで指せるものは無い)。 */
   function onPointerLeave(event: PointerEvent): void {
     hoverAt = null
     orbiting = false
     section.setHover(false)
-    // ハンドルのドラッグは `pointercancel`(OS の横取り)でだけ打ち切る —— `pointerleave` は
-    // `setPointerCapture` 中には来ないし、来ても座標は届き続ける(キューブと同じ規律)。
+    // ハンドルのドラッグは `pointercancel` でだけ打ち切る(`pointerleave` は `setPointerCapture` 中には来ず、来ても座標は届き続ける。キューブと同じ)。
     if (event.type === 'pointercancel') section.pointerUp()
     if (!section.dragging()) renderer.domElement.style.cursor = ''
     sketchCursor.update(null, 'free', null)
-    // カーソルがcanvas外に出た=いま追従すべき位置が無い。`sketchCursor` と同じく
-    // 「カーソル無し」(`point: null`)へ戻す —— そのままだと、キャンバスの外へ出ている間
-    // ずっと直前の拡大状態が残る。
+    // 追従すべき位置が無いので「カーソル無し」(`point: null`)へ戻す(`sketchCursor` と同じ。さもないと直前の拡大状態が残る)。
     grid.followCursor(null)
-    // **引きかけの矩形は捨てる**(帯だけが残って画面に貼り付くのを防ぐ)。
+    // 引きかけの矩形は捨てる(帯が画面に残るのを防ぐ)
     band.hide()
     downValid = false
-    // キューブの操作中(クリック判定待ち・ドラッグ中)は無視する —— `setPointerCapture` で
-    // 押下中は座標がどこへ行ってもこの要素が受け取り続けるので、`pointerleave` が来ても
-    // 操作を打ち切らない(ロック中はそもそも座標が凍結して動かない)。
+    // キューブの操作中は無視する(`setPointerCapture` で押下中は座標がどこへ行ってもこの要素が受け取り続けるので、`pointerleave` で打ち切らない)。
     if (!cube.capturing()) cube.setHoverAt(null)
   }
 
@@ -2643,11 +2316,8 @@ export function createViewport(container: HTMLElement): Viewport {
   applySize()
 
   /**
-   * ホバー強調を1フレームぶん更新する。
-   *
-   * **毎フレーム解決し直す** —— 視点を回すとポインタが動かなくても当たるものが変わるので、
-   * 「動いたときだけ」では足りない。材質の書き換えは**変わったときだけ**行う
-   * (全メッシュ走査を毎フレームやらない)。
+   * ホバー強調を1フレームぶん更新する。毎フレーム解決し直す(視点を回すとポインタが動かなくても
+   * 当たるものが変わる)。材質の書き換えは変わったときだけ。
    */
   function updateHover(): void {
     const point = orbiting ? null : hoverAt
@@ -2656,18 +2326,14 @@ export function createViewport(container: HTMLElement): Viewport {
         ? ''
         : `${pickGeneration},${point.x},${point.y},` +
           `${camera.position.toArray().join(',')},${camera.quaternion.toArray().join(',')},` +
-          // **`zoom` も入れる** —— 正投影のドリーは `zoom` だけを動かしてカメラを動かさない
-          // ので、位置と姿勢だけのキーでは「ホイールで寄ったのに当たるものが変わらない」になる。
+          // `zoom` も入れる: 正投影のドリーは `zoom` だけを動かすので、無いとホイールで寄っても当たるものが変わらない。
           `${camera.zoom}`
     if (probe === hoverProbe) return
     hoverProbe = probe
     const next = point === null ? null : resolveHit(point.x, point.y)
-    // **頂点は出さない**。頂点が取れる画素では面も辺も光らない ——
-    // そこをクリックしても面は選ばれないのだから、光らせないほうが正しい。
-    //
-    // **スケッチの点・辺も同じ扱い**。予告の色は付けないが、
-    // **そこが取れるときは領域を光らせない** —— 光らせると「クリックすれば取れるもの」の
-    // 予告が嘘になり、この機能の存在意義そのものが消える(点・辺は領域より手前で拾われる)。
+    // 頂点は出さない: 頂点が取れる画素では面も辺も光らない(クリックしても面は選ばれない)。
+    // スケッチの点・辺も同じ扱い: 予告の色は付けないが、そこが取れるときは領域を光らせない
+    // (点・辺は領域より手前で拾われ、光らせると予告が嘘になる)。
     const face = next?.hit ?? null
     const edge = next?.edge ?? null
     const region = next?.sketchEntity ? null : (next?.region ?? null)
@@ -2706,25 +2372,14 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 視線が極(真上/真下)から離れたら、`camera.up`をWORLD_UPへ戻す。
-   *
-   * `OrbitControls`は生成時に焼いた軸(`WORLD_UP`)だけを回転の極として使うので、
-   * 位置そのものの計算は`camera.up`の値に影響されない —— が、`controls.update()`が
-   * 最後に呼ぶ`object.lookAt()`は**そのときの`camera.up`**でロール(傾き)を決める。
-   * ビューキューブの上面図/底面図クリック(`upForDirection`)も`lookAtSketch`も、
-   * 極付近の縮退(upが視線と平行になり`lookAt`の直交化が壊れる)を避けるために
-   * 一時的に`camera.up`をYへ傾ける。**傾けたまま戻さないと**、「キューブの上面を
-   * クリックしてから回すと絵が転がる」形で壊れる —— 極から離れたら必ずここで戻すこと。
-   *
-   * **極に近い間(`|z| > POLE_Z`)は何もしない。** 毎フレーム`upForDirection(今の向き)`を
-   * 焼き直す実装は、あの関数が極付近で定数`(0,±1,0)`を返す階段関数であるため、
-   * **通常のドラッグで極をまたぐだけで上が固定されたように(勝手に上下が揃うように)
-   * 見える**壊れ方になる。普段のドラッグはそもそも`camera.up`を一切書き換えなくても、`controls`側の
-   * 回転計算(常にZ軸が極)だけで滑らかに繋がる —— `upForDirection`のGram-Schmidt射影は
-   * 素の`(0,0,1)`を渡した場合と`lookAt`内部の直交化後は同じ絵になる(`upForDirection`の
-   * docstring参照)ので、**極から離れているときはWORLD_UPのまま放っておけばよい**。
-   * 直したいのは「極ぴったりへ明示的にスナップした直後、そこから離れても誰も戻さない」
-   * ことだけなので、**極から外れた瞬間にWORLD_UPへ戻す片方向の掃除**に留める。
+   * 視線が極(真上/真下)から離れたら、`camera.up` を WORLD_UP へ戻す。`controls.update()` が最後に呼ぶ
+   * `object.lookAt()` は `camera.up` でロールを決める。ビューキューブの上面図/底面図クリック(`upForDirection`)も
+   * `lookAtSketch` も、極付近の縮退を避けるため一時的に `camera.up` をYへ傾けるので、戻さないと
+   * 「キューブの上面をクリックしてから回すと絵が転がる」。
+   * 極に近い間(`|z| > POLE_Z`)は何もしない: 毎フレーム `upForDirection(今の向き)` を焼き直すと、あれは
+   * 極付近で定数 `(0,±1,0)` を返す階段関数なので、通常のドラッグで極をまたぐだけで上が固定されたように見える。
+   * 極から離れているときは WORLD_UP のままでよい(`upForDirection` の docstring 参照)ので、
+   * 極から外れた瞬間に WORLD_UP へ戻す片方向の掃除に留める。
    */
   function syncCameraUp(): void {
     if (cube.snapping()) return
@@ -2742,18 +2397,14 @@ export function createViewport(container: HTMLElement): Viewport {
     cube.stepSnap(performance.now())
     controls.update()
     syncCameraUp()
-    // **描画ループで見る**(`OrbitControls` の 'change' ではない) —— 減衰つきのドリーは
-    // イベントが止まった後も数十フレーム動き続けるので、「止まったか」はフレーム側でしか
-    // 分からない。中身は算術数本で、当たったときだけ作り直しが走る。
+    // 描画ループで見る(`OrbitControls` の 'change' ではない): 減衰つきのドリーはイベントが止まった後も
+    // 動き続けるので、「止まったか」はフレーム側でしか分からない。
     resolution.update(performance.now())
     updateHover()
     cube.updateHover()
-    // **カーソル追従もフレームごとに引き直す**(`onPointerMove` だけに任せない)。
-    // ホイールでズームすると `hoverAt`(画面座標)は動かないが、レイと平面frameの交点
-    // (`planePointAt`)はカメラが動いた分だけ変わる —— `onPointerMove` 経由だけでは
-    // 「カーソルを動かさずホイールで寄せる/引く」だけの操作でグリッドが追従しない
-    // (本人報告2026-09-11)。`planePointAt`/`grid.followCursor` は
-    // どちらもスケッチ非活性なら即 `null`/no-opで返るので、素通りの費用は無視できる。
+    // カーソル追従もフレームごとに引き直す(`onPointerMove` だけに任せない): ホイールでズームすると `hoverAt` は
+    // 動かないがレイと平面frameの交点(`planePointAt`)は変わり、カーソルを動かさず寄せ引きするだけではグリッドが
+    // 追従しない(本人報告2026-09-11)。スケッチ非活性なら `planePointAt`/`grid.followCursor` は即 `null`/no-op。
     grid.followCursor(hoverAt === null ? null : planePointAt(hoverAt.x, hoverAt.y))
     // グリッドは毎フレームここだけを更新する(段の不透明度とカメラ行列。ジオメトリは無い)。
     grid.updateUniforms()
@@ -2877,9 +2528,8 @@ export function createViewport(container: HTMLElement): Viewport {
     projectRegion,
     viewCubeRect: cube.rect,
     captureThumbnail() {
-      // **`object.visible` は見ない** —— 文書で非表示の立体は `bodies` にキーごと無く、
-      // `visible=false` はプレビュー中に本物を一時的に隠しているだけ(`setBodyVisible`)。
-      // 見て撮ると、プレビュー中に撮った絵から立体が欠ける。
+      // `object.visible` は見ない: 文書で非表示の立体は `bodies` にキーごと無く、`visible=false` はプレビュー中の
+      // 一時的な非表示(`setBodyVisible`)。見るとプレビュー中に撮った絵から立体が欠ける。
       return thumbnailer.capture([...bodies.values()].flatMap((entry) => entry.sceneObjects))
     },
     dispose() {
