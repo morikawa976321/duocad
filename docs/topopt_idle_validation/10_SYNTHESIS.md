@@ -467,3 +467,54 @@ p=8、ρ=1.0(1/MPa)は研究用の初期値で較正していない。M5b/M7b �
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\build_04a_json.py                       # 前2つを集約 → 04a_path_qualification.json
 ```
 `qualify_path_small.py` は `path_mask_mesh_2.5mm.npz` が前提(無ければ `measure_path_local_optimum.py mesh --sizes 2.5`)。出力は `output/idle_validation_20260928/`。
+
+---
+
+# 付録D: 小型題材での機構別比較(05)
+
+出典: 旧 05_SYNTHETIC(git 履歴)。15条件×4方式の体積・SF の表は 3-1 節。題材は dilution_small(300N・2.0mm・最小幅6mm 基準)と path_small(04a 認定条件=3000N・2.0mm・6mm、パーセンタイル評価に限る)。5合成題材(S-T/S-B/S-TB/S-L/S-MS)は新規構築せず、設計空間を持たない解析解比較(パッチテスト)専用のまま。製品コードは無変更。
+
+## D-1. 結論
+
+- 4方式は明確に区別できる(同一条件内で材料差最大168.8%〔dilution 3.0mm〕・83.3%〔path 1.5mm〕)ので追加方式は要らない。**方向は荷重・幅・解像度のどの軸を動かしたかで符号が変わり、新方式の一般的優位は言えない**(dilution の baseline・幅8mm・1.5mm では適応/再配置が-18〜-36%軽いが、200N/250N では横ばい〜やや重く、3.0mm では約2.7倍重い。path は 2700N +12.5%、3300N +47.4%、1.5mm +83.3%)。
+- **適応方式の一次予測係数 `calibrated_k` は最初に受理された1手だけで較正され以後固定されるため、粗い格子・小さい候補セル数の条件で予測誤差ロールバックが暴走する**。dilution 3.0mm では序盤に1,011セル除去(実ジャンプ0.031%)で校正した後、終盤の2〜4セルの候補(実ジャンプ0.03〜0.1%)が全て `prediction_error` で拒否され続け、path 1.5mm でも最初の1手(5,607セル)で校正した後2手目(4,476セル)から拒否が始まり `revert_restart` を経ても同じ点に留まる。原因は単位エネルギーあたりの安全率変化が序盤の一括除去と終盤の少数除去で大きく違うのに単一の線形係数で予測するため。修正候補は直近N手の移動平均での再較正、または候補セル数の桁が変わったときの再較正(→ 08 で floor を試験)。
+- **`m5b_raw` ゲート単独では製品の目標SF(4.8)を守れない**: dilution 250N は SF 3.850、path の warm-start 各条件は 4.56 前後まで沈んでも m5b_raw は 0 超過のまま合格。hanger で使うなら `m5b_target` か `percentile` との併用(両方合格で受理)が要る。
+- **再配置の「追加」は実質「全材料形からの再削減」**: 全 main_matrix・全 ablation の51件の `grow_accepted` すべてで追加候補は `initial_all_material` 由来の1連結成分(設計空間のほぼ全体、例 dilution 200N は 16,936→157,376 mm³)。`_connected_remnants` が箱型形状では「削除済み全セル」を現在形に隣接する単一の巨大成分として最長候補に選ぶため。`grow_fraction_of_removed`/`grow_min_cells` の調整では直らない。連結成分を分割する代替実装は幾何検査でほぼ必ず落ちる(04 の罠)。
+- **原点の半セル移動で材料が大きく動く**: step20 の8条件(基準+各軸±0.5+全軸+0.5)で、dilution は基準以外の7条件すべてで位相(mask_hash)が変わり材料は-50.8%〜0%(±0.5z が最大)、path は-20.6%〜+7.4%。適応方式でも基準と全軸+0.5の比較で dilution 78,648→102,032 mm³(+29.7%)、path 67,312→57,008(-15.3%)。達成シフト量は `achieved_origin_mm` に記録。
+- フィルタ幅の mm 固定とセル数固定(`ENERGY_FILTER_SIZE`)の比較(step20): 2.0mm では定義上一致。1.5/2.5/3.0mm では材料量の差は2%未満だが mask_hash は異なる。体積だけで「同じ結論」と判断しない。
+
+## D-2. アブレーション(baseline: dilution 300N/2.0mm/4mm、path 3000N/2.0mm/6mm、評価予算100)
+
+| 設定 | dilution 材料/SF | path 材料/SF |
+|---|---|---|
+| 適応歩幅のみ(revert無効) | 58,088 / 4.722 | **49,224 / 4.148**(目標未達) |
+| +復帰(既定) | 58,088 / 4.722(上と完全一致) | 67,144 / 4.741(+36.4%重く、SF +0.59) |
+| +再配置 | 58,088 / 4.722(削減段は同じ、403評価) | 67,144 / 4.741(392評価) |
+| stop=legacy(×gate percentile/m5b_raw) | 88,368 / 4.836(17評価、製品step20と酷似。ゲートの差は出ない) | 71,928 / 4.842(26評価) |
+| stop=adaptive_finish×percentile | 82,680 / 4.800(56評価) | 70,720 / 4.800(46評価) |
+| stop=adaptive_finish×m5b_raw | 58,088 / 4.722 | 67,144 / 4.741 |
+
+dilution では復帰が既定パラメータで一度も発動しない。path では 52回の rollback・7回の revert_restart が発動し、安全率を 4.148→4.741 に回復させた(復帰が正しく機能したケース)。ゲートの違いが効くのは `adaptive_finish` のときだけで、percentile は 4.800 で止まり m5b_raw はそれを割る。巻き添え除去(連結性維持のための要求外セル)は dilution 100手中43手(平均0.8セル・最大4)、path 48手中21手(平均1.2・最大7)で、急変の原因になっている証拠はない。
+
+## D-3. パラメータ感度(評価予算70)と warm-start
+
+- 3パラメータ(`stagnation_patience`・`prediction_error_multiplier`・`sudden_jump_relative_drop`)を3値ずつ: dilution は全て無感度(rollback 未発動)、path は `prediction_error_multiplier` のみ感度あり(体積スプレッド14.4%。1.5→64,240、2.5→67,272、4.0→57,600 mm³)、他は0.0〜0.2%。既定値(`stagnation_patience=6`・`prediction_error_multiplier=2.5`・`sudden_jump_relative_drop=0.15`)を疑う破綻は出ず**既定のまま据え置き**。未使用検証(dilution 200N・path 2700N/3300N)は既定=選定値なので汎化の検証にはなっていない。
+- warm-start(m5b_raw ゲートの適応、評価予算60): dilution 3.0mm 解像度から投影した 22,248 mm³ は 22,064 mm³・SF 3.899 まで削って目標を割り、path の 04a 優越形(67,800 mm³・SF 4.800)は 60,624 mm³・SF 4.562、path 3.0mm からの投影(109,176 mm³)は 58,896 mm³・SF 4.479。**安全な初期形状から始めても m5b_raw ゲートが削り過ぎる**ので、warm-start で経路喪失を避けられるかには「否」(再配置の warm-start は未実施)。
+- **罠**: warm-start の投影は目的格子(2.0mm)の origin ではなく**投影元の格子自身の origin/spacing** を使う(2.0mm の origin (-16,-16,-16) と 3.0mm の (-16.97,-17.70,-17.76) を取り違える事故があった)。
+
+## D-4. 未検証
+
+late_response(急変検知の遅延)と fine_grained_creep(微小除去の連続を見逃す)の分析は 0 件(42件中)だったが、`m5b_raw` ゲート下では受理手が構造上超過 0 なので観測されないだけで、percentile ゲート×広い評価予算での追試が要る。`calibrated_k` 暴走が hanger 規模(64万要素。序盤の1手が相対的に小さい)で起きるかは未検証。
+
+## D-5. 再現
+
+```
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\run_05_main_matrix.py     # 15条件×4方式(--only <case_id...>、--smoke)
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\run_05_ablation.py
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\run_05_sensitivity.py
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\run_05_grid_origin.py
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\run_05_initshape.py       # main_matrix の dilution_res3.0_w6 のマスクに依存
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\analyze_05_mechanism_history.py   # 新規FEMなし
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\build_05_synthetic_json.py
+```
+出力は `output/idle_validation_20260928/05_*.json`(`05_synthetic.json` が集約)と `05_masks/`。共有ヘルパーは `synthetic_matrix_support.py`(条件表・原点シフト/フィルタ幅 mm 固定のプロセス内パッチ・best-so-far 曲線抽出)。
