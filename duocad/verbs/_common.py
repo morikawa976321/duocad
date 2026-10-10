@@ -1,16 +1,8 @@
-"""verb層が共有する道具 —— **1 verb 1モジュールを保ったまま、同型の部品だけを1つにする**。
+"""verb層が共有する道具(1 verb 1モジュールを保ったまま同型の部品だけを集める)。
 
-- undo用スナップショット表(`fillet` / `chamfer` / `extrude` が使う)と、
-  形状を差し替えるverbの再適用・undo(`reapply_shape` / `undo_shape`)
-- `editable_body()`(`fillet` / `chamfer` / `extrude` が使う)
-- ボディを複製するverbの部品(`resolve_shape_ref` / `editable_bodies` / `copy_ids` /
-  `add_transformed_copies` / `remove_created_bodies`。`move_body` / `mirror_body` / `boolean_body`)
-- ボディを消す前の退避と undo での復元(`detach_bodies` / `reattach_bodies`。`delete` / `boolean_body`)
-- 移動の2verb(`move_body` / `move_sketch_entities`)が共有する `mode` の定数と引数の検査
-
-**スナップショット表を1つにしていることが、この統合の主な利得**である。プレビューは文書を
-投機的に変えて戻すので(`duocad/speculative.py`)、**戻し忘れたテーブルが1つでもあると、
-中断したプレビューの形状が後の実undoで復元されうる**。表が1つなら1箇所で確かめれば済む。
+**undo用スナップショット表を1つにしてある**のが要点。プレビューは文書を投機的に変えて戻す
+ので(`duocad/speculative.py`)、戻し忘れた表が1つでもあると、中断したプレビューの形状が
+後の実undoで復元されうる。
 """
 from __future__ import annotations
 
@@ -56,7 +48,7 @@ def reapply_shape(doc: Document, body: Body, result: dict, operation: Operation)
 
     **`remember` は do の側でも毎回取り直す** —— `parameters.rebuild()` はログを頭から再生して
     新しい `Body` を作るので、初回に控えたものは同じ seq でも別の実体になる。
-    `provenance` は初回適用で入っているのが正なので、空のときだけ埋める。
+    `provenance` は空のときだけ埋める。
     """
     previous_shape = body.shape
     body.shape = result["shape"]
@@ -86,12 +78,10 @@ def editable_body(
     `reject_as` はメッシュボディを断る文に入れる言い方(省略時は `what`。`extrude` は
     「押し出しの対象にする」と言う)。
 
-    **選ぶ時点の門番(`selection._visible_body`)だけでは足りない**。アプリ内AIが人と本当に
-    並行して動くと、**選択した後・verbを呼ぶ前に人がそのボディを隠す**という順序が
-    起きうる —— 選択に入った時点では可視でも、使う時点では不可視というずれが生じ、選択側の
-    門番はもう働かない。実測(`tests/test_agent_concurrency.py`)で `fillet`/`chamfer` が
-    この順序で隠したボディを黙って丸めることを確認したため、**面・辺どちらを取るverbも
-    True にする**(`fillet` / `chamfer`)。
+    **選択側の門番(`selection._visible_body`)だけでは足りない**。AIと人が並行して動くと、
+    選択した後・verbを呼ぶ前に人がそのボディを隠す順序が起きる。`fillet`/`chamfer` がこの順序で
+    隠したボディを黙って丸めることを実測した(`tests/test_agent_concurrency.py`)ので、
+    面・辺どちらを取るverbも True にする。
     """
     if body_id is None:
         active = doc.active_body()
@@ -99,8 +89,7 @@ def editable_body(
             raise ValueError(f"no active body to {what} (document is empty)")
         body_id = active.id
     if not doc.is_editable(body_id):  # 存在しないIDは KeyError(document側の契約)
-        # **編集verbがメッシュボディを断る唯一の入口**。verbごとに
-        # `kind` を見て分岐させると、verbが増えるたびに断り漏れが1本ずつできる。
+        # 編集verbがメッシュボディを断る唯一の入口(verbごとに分岐すると断り漏れが出る)。
         body = doc.get_body(body_id)
         if body.kind == MESH_KIND:
             meshbody.reject(body, what if reject_as is None else reject_as)
@@ -120,11 +109,10 @@ def editable_body(
 def deletable_body(doc: Document, body_id: BodyId, *, require_visible: bool = True) -> Body:
     """削除の対象になるボディ。**編集できるかは問わない**(メッシュボディも消せる)。
 
-    `editable_body` と分けてあるのは、**削除だけは種別に関係なく通す**から ——
-    「編集できないから消せもしない」ボディがあると、間違えて入れた形を取り除けなくなる。
-    可視性の門番は**選択から取る `delete` だけ**に課す(`editable_body` と同じ理由: 選択した後・
-    verbを呼ぶ前に人がそのボディを隠す順序が実際に起きる)。ID で名指しする `delete_items` は
-    その順序の問題を持たないので `require_visible=False` —— ブラウザでは隠したボディの行も ✕ で消せる。
+    `editable_body` と分けてあるのは、削除だけは種別に関係なく通すため(間違えて入れた形を
+    取り除けなくしない)。可視性の門番は**選択から取る `delete` だけ**に課す(理由は
+    `editable_body`)。ID で名指しする `delete_items` は `require_visible=False` —— ブラウザでは
+    隠したボディの行も ✕ で消せる。
     """
     body = doc.get_body(body_id)  # 存在しないIDは KeyError(document側の契約)
     if require_visible and not body.visible:
@@ -137,9 +125,8 @@ def deletable_body(doc: Document, body_id: BodyId, *, require_visible: bool = Tr
 
 
 def editable_bodies(doc: Document, body_ids: Sequence[BodyId], *, verb: str, what: str) -> List[Body]:
-    """動かす・鏡映するボディの並び(1つも無ければ ValueError)。**編集できないもの・隠したものは例外**
-    (`require_visible=True` の理由は `editable_body`: 選んだ後・verbを呼ぶ前に人がそのボディを隠す
-    順序が、AIと人が並行して動くと実際に起きる)。"""
+    """動かす・鏡映するボディの並び(1つも無ければ ValueError)。編集できないもの・隠したものは例外
+    (`require_visible=True` の理由は `editable_body`)。"""
     if not body_ids:
         raise ValueError(f"{verb} requires at least one body")
     return [editable_body(doc, body_id, what=what, require_visible=True) for body_id in body_ids]
@@ -148,12 +135,10 @@ def editable_bodies(doc: Document, body_ids: Sequence[BodyId], *, verb: str, wha
 def resolve_shape_ref(doc: Document, ref: Any, *, kind: str, what: str, mesh_hint: str) -> tuple:
     """`{"body": BodyId, "index": int}`(選択の ShapeRef と同じ形)を (Body, 添字) にする。
 
-    **選択を経由しない**。呼ぶ verb の選択は「対象」の解決に既に使われているので、
-    軸・中心・鏡映面・ターゲットを同じ経路へ載せると対象なのかそれ以外なのか区別が付かなくなる。
-    `kind` キーは省略できる(付いていれば要求した種別と一致すること) —— `get_selection` が返す参照を
-    そのまま貼れることと、手で `{"body":.., "index":..}` と書けることの両立。`mesh_hint` はメッシュ
-    ボディを指されたときの文(何が無いかは verb ごとに違う)。名前を `selection._shape_ref`(参照を
-    **組み立てる**側)と紛れさせない。
+    **選択を経由しない**(選択は「対象」の解決に使われているので、軸・中心・鏡映面・ターゲットを
+    同じ経路に載せると区別が付かなくなる)。`kind` キーは省略できる(付いていれば要求した種別と
+    一致すること。`get_selection` が返す参照をそのまま貼れる)。`mesh_hint` はメッシュボディを
+    指されたときの文。
     """
     if not isinstance(ref, dict):
         raise ValueError(
@@ -231,11 +216,10 @@ def remove_created_bodies(doc: Document, body_ids: Sequence[BodyId]) -> None:
 def detach_bodies(doc: Document, body_ids: Sequence[BodyId]) -> dict:
     """ボディを消す前に undo 用の退避を取り、消す。戻りは `{"bodies": [(元の添字, Body), ...], "active": ...}`。
 
-    **消す前の並びの昇順**で控える —— undo はこの順に元の添字へ差し戻すと元の並びが再現する
-    (末尾へ足し直すだけだと、undoしたのにパーツ一覧の順序だけが変わる)。`Document.remove_body` は
-    消したのが active だったときだけ active を None へ落とすが、**消さなかったボディが active のままの
-    場合もある**ので、消す前の値をそのまま控える(`add_body` は足したボディを必ず active にするので、
-    戻すときに上書きされる)。`_active_body_id` に触るのはここと `reattach_bodies` だけにする。
+    **消す前の並びの昇順**で控える(この順に元の添字へ差し戻すと並びが再現する。末尾へ足し直すと
+    パーツ一覧の順序が変わる)。`Document.remove_body` は消したのが active だったときだけ active を
+    None に落とすが、消さなかったボディが active のままの場合もあるので、消す前の値をそのまま
+    控える。`_active_body_id` に触るのはここと `reattach_bodies` だけにする。
     """
     positions = {body.id: index for index, body in enumerate(doc.bodies)}
     detached = {
@@ -251,8 +235,7 @@ def reattach_bodies(doc: Document, detached: dict) -> None:
     """undo: `detach_bodies` の退避を元の添字へ戻し、active も戻す。"""
     for index, body in detached["bodies"]:
         doc.add_body(body, index=index)
-    # `set_active_body` は None を受け付けない(存在しないIDとして KeyError)ので直接戻す
-    # (`parameters.rebuild` が同じ理由で同じことをしている)。
+    # `set_active_body` は None を受け付けない(KeyError)ので直接戻す。
     doc._active_body_id = detached["active"]
 
 
@@ -260,9 +243,8 @@ def reattach_bodies(doc: Document, detached: dict) -> None:
 # 移動の2verb(`move_body` / `move_sketch_entities`)が共有する mode と引数の検査
 # --------------------------------------------------------------------------------------
 #: 並進 / 回転の切り替え。**宣言はここが正**(`catalog.py` の `mode` の説明と `Session` の
-#: 既定値がこれを写す)。`extrude` の join/cut/new と同じく、モードで明示的に分岐させる ——
-#: 「dx が来たら並進、angle が来たら回転」にすると、両方来たときの挙動が呼び出し側から
-#: 見えない。AIとUIから見て「移動の2つのverbは同じ mode を取る」であること自体が契約。
+#: 既定値がこれを写す)。引数の有無で暗黙に分岐させない(両方来たときの挙動が見えなくなる)。
+#: 移動の2つのverbが同じ mode を取ること自体が契約。
 MODE_TRANSLATE = "translate"
 MODE_ROTATE = "rotate"
 MOVE_MODES = (MODE_TRANSLATE, MODE_ROTATE)
@@ -297,8 +279,8 @@ def rotation_degrees(angle: Any, *, verb: str, noun: str) -> float:
 
 
 def is_rotation(args: dict) -> bool:
-    """ログの `args` が回転か。**`mode` キーが無いログは並進**として読む —— 2026-09-05より前に
-    保存した文書には `mode` が無く、それらは全部平行移動だからである(保存済みの文書を開けなくしない)。"""
+    """ログの `args` が回転か。**`mode` キーが無いログは並進**として読む(2026-09-05より前に保存した
+    文書は全部平行移動)。"""
     return args.get("mode", MODE_TRANSLATE) == MODE_ROTATE
 
 
@@ -332,8 +314,7 @@ def normalize_values(
 ) -> tuple[List[float], Union[float, List[float]]]:
     """辺ごとの値をそろえる(スカラーなら全辺へ配る)。**0以下と非有限は例外**。
 
-    戻り値は `(適用する値のリスト, ログへ積む形)`。ログには**打った形のまま**
-    (スカラーならスカラー)を積む —— 再生でリストへ化けると、ログの diff が読めなくなる。
+    戻り値は `(適用する値のリスト, ログへ積む形)`。ログには打った形のまま(スカラーならスカラー)を積む。
     """
     if isinstance(value, (int, float)):
         values = [float(value)] * len(edges)
@@ -354,8 +335,7 @@ def normalize_values(
 def edge_entry(document: Document, verb: Any, value: Any) -> dict:
     """選択の辺に `verb`(`fillet` / `chamfer`)を掛ける入口の共通部分。
 
-    辺と対象 Body は `selection.require_edges` が**選択順のまま**返す。順序が効くのは、辺と値
-    (半径・距離のリスト)を位置で対応させるため(並べ替えると値の割り当てがずれる)。
+    辺は `selection.require_edges` が**選択順のまま**返す(値のリストと位置で対応させるため)。
     """
     edges, body_id = selection.require_edges(document)
     changed = verb(document, edges, value, body_id=body_id).args["body_id"]

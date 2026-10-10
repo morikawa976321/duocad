@@ -1,10 +1,9 @@
 """verb `extrude_face` — **再生専用**。新しい操作は `extrude`(面を受ける)で記録される。
 
-意図的な変則: 公開面(カタログ・Session・MCP・WebSocket)からは外したが、保存済みの古いログに
-`extrude_face` が残っていて読み込めなくなるのを避けるため、登録だけ残してある。
-1面の正の距離は `join`、負の距離は `cut` として `kernel_extrude.extrude_faces` へ渡す
-(体積・面数は従来の実装と一致する。`tests/test_extrude_face_replay.py` が保存済みのログで固定)。
-undo は `extrude` と同じ形状のスナップショット(再生・redo のたびに `reapply_shape` が取り直す)。
+意図的な変則: 公開面(カタログ・Session・MCP・WebSocket)からは外したが、保存済みの古いログを
+読めるよう登録だけ残してある。1面の正の距離は `join`、負の距離は `cut` として
+`kernel_extrude.extrude_faces` へ渡す(`tests/test_extrude_face_replay.py` が固定)。
+undo は `extrude` と同じ形状のスナップショット。
 """
 from __future__ import annotations
 
@@ -17,7 +16,7 @@ VERB_EXTRUDE_FACE = "extrude_face"
 
 
 def _do_extrude_face(document: Document, operation: Operation) -> None:
-    """redo / replay: 記録された添字と距離で押し出し直す。**ログには触らない**(二重記録になる)。"""
+    """redo / replay: 記録された添字と距離で押し出し直す(ログには触らない)。"""
     args = operation.args
     body = editable_body(document, args["body_id"], what="extrude", require_visible=True)
     distance = float(args["distance"])
