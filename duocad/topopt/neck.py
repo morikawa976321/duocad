@@ -5,10 +5,9 @@
 - R(m)・S(m) を満たしても、輪の中では2つの塊が1セル幅でしかつながらない形が残る(S(m) は芯が**大域で**つながるかしか見ない)。
 - 1手(一口 + 巻き添え。島は除く)について、**材料の前線をつなぎ直す最小の窓の中で、芯の前線がつなぎ直されない**なら、その手はくびれを作る。
   材料が格子全体でもつなぎ直されない手(部材を切り切って本体から離す手)はこの判定の対象外。
-- 芯どうしの結びは S(m) と同じ: 芯の隣接 `CoreConnectivity.structure`(m ≥ 4 は26、m ≤ 3 は6。#122)+ 保持成分ごとの結び(`CoreConnectivity._linked`)。
-  材料の前線と材料の連結は6のまま。保持成分は大域のラベルなので、
-  保持の中の経路が窓の外を通っても結ぶ(「保持経由は太い」の決定による例外)。
-- `CoreConnectivity.verdict` は流用しない —— 窓の中で前線が1群でも、保持の結び先が窓外へ伸びると None を返す(Codex の反例、仕様書 §4)。
+- 芯どうしの結びは S(m) と同じ: 芯の隣接 `CoreConnectivity.structure`(m ≥ 4 は26、m ≤ 3 は6)+ 保持成分ごとの結び(`CoreConnectivity._linked`)。
+  材料の前線と材料の連結は6のまま。保持成分は大域のラベルなので、保持の中の経路が窓の外を通っても結ぶ(「保持経由は太い」)。
+- `CoreConnectivity.verdict` は流用しない —— 窓の中で前線が1群でも、保持の結び先が窓外へ伸びると None を返す。
 """
 from __future__ import annotations
 
@@ -20,8 +19,8 @@ from scipy import ndimage
 from .acceptance import NEIGHBOURHOOD_STRUCTURE
 from .min_width import CoreConnectivity, core_cells
 
-#: 判定窓の余白の初期値(m の倍数)。hanger S2 で、余白 m では折れ目3つをくびれと分類し、2m・3m では同じ分類(くびれ1・折れ目4)になった
-#: (芯を6連結で数えていたときの実測)。
+#: 判定窓の余白の初期値(m の倍数)。実測: hanger S2 で余白 m は折れ目3つをくびれと分類し、2m・3m は同じ分類(くびれ1・折れ目4)
+#: (芯を6連結で数えていたとき)。
 START_MARGIN_FACTOR = 2
 
 

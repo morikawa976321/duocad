@@ -21,7 +21,7 @@ from scipy import ndimage
 
 from . import voxelize
 
-#: 標本数の上限。超えるときは粗くせず「未確定」(仕様書 §3)。距離変換と gudhi の複体で 1 標本あたり数十バイト。
+#: 標本数の上限。超えるときは粗くせず「未確定」。距離変換と gudhi の複体で 1 標本あたり数十バイト。
 MAX_SAMPLES = 16_000_000
 EPSILON_PER_SAMPLE = math.sqrt(3.0)
 #: 「微小片」とみなす小さい側の体積(標本数)。(2s)³。
