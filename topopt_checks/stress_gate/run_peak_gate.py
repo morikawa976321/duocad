@@ -45,12 +45,16 @@ def main() -> int:
     ap.add_argument("--eps", type=float, default=None, help="ピーク判定の ε。省くと判定しない(今の製品)")
     ap.add_argument("--step", type=float, default=None, help="段階4の max_step_ratio。省くと製品の既定")
     ap.add_argument("--no-final-check", action="store_true")
+    ap.add_argument("--gpu", action="store_true", help="FEM の CG を GPU で解く(CPU とビット一致。docs/TOPOPT_GPU.md)")
     ap.add_argument("--tag", default=None)
     a = ap.parse_args()
     spec = dict(pa.MODELS[a.model])
     for key, val in (("load_n", a.load), ("h", a.h), ("w", a.w)):
         if val is not None:
             spec[key] = val
+    if a.gpu:
+        from duocad.topopt import fem
+        fem.FEM_DEVICE = "gpu"
     doc = refine_shape.open_session(spec["model"]).document
     refine_shape._set_load_doc(doc, spec["load_n"])
     options = optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"])
