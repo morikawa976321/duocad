@@ -1,24 +1,13 @@
 /**
- * カメラの見え方から目標のテセレーション精度を決める変換(可変解像度) — **TS側の実装**。
+ * カメラの見え方から目標のテセレーション精度を決める変換(可変解像度)のTS側実装。
+ * スケッチの円・円弧はここで折れ線になり、ソリッドと辺はバックエンド(OCCT)がテセレーションする。
+ * 共有できるのは「画面の許容誤差 → 目標偏差」の変換だけ。
  *
- * **同じ式が2つの言語にある**。スケッチの円・円弧はここ(ブラウザ)で折れ線になり
- * (編集中のデータの真実源がフロントにあるため)、ソリッドと辺はOCCTを持つバックエンドで
- * テセレーションされる。フロントに曲線を評価するカーネルは無いので、**共有できるのは
- * 「画面の許容誤差 → 目標偏差」の変換だけ**である(曲線の評価は共有しない)。
- *
- *     TS:     ここ(`web/src/adaptiveResolution.ts`)
- *     Python: `duocad/resolution.py`
- *
- * **2つの実装の定数が一致していることは `tests/test_adaptive_resolution.py` が機械で見る。**
- * 片方だけ変えると、同じ画面でスケッチの線とソリッドの辺の滑らかさが食い違う ——
- * 例外もコンソールエラーも出ない種類の壊れ方なので、検査を外さないこと。
+ * Python側の対: `duocad/resolution.py`。定数の一致は `tests/test_adaptive_resolution.py` が検査する
+ * (片方だけ変えると、同じ画面でスケッチの線とソリッドの辺の滑らかさが食い違うが、エラーは出ない)。
  * **定数は `export const NAME = <数値リテラル>` の形で書く**(検査がその形で読む)。
  *
- * 考え方は Python 側の docstring が持つ(要約: 弦と弧の乖離を**画面の画素**で決め、
- * 角度偏差は `theta = sqrt(2e/r)` から `sqrt(線形偏差)` に比例させる)。
- *
- * **角度はすべてラジアン**(度ではない)。OCCTの角度偏差パラメータがラジアンだからで、
- * ここで度へ直すと2つの単位が混ざる。
+ * **角度はすべてラジアン**(OCCTの角度偏差パラメータの単位に揃える)。
  */
 
 /** 既定の線形偏差[mm](`duocad/kernel.py` の `DEFAULT_DEVIATION`)。 */
@@ -44,9 +33,8 @@ export const ANGULAR_MIN = 0.02
 export const ANGULAR_MAX = 0.5
 
 /**
- * 折れ線1本の分割数の下限。**引ききっても線分1本にはしない**(1本にすると円弧が弦に
- * 潰れて、図形として何だったか分からなくなる)。円1周は角度偏差の上限
- * (`ANGULAR_MAX`)から13分割が下限になるので、ここが効くのは開きの小さい円弧だけである。
+ * 折れ線1本の分割数の下限。引ききっても線分1本にはしない(円弧が弦に潰れる)。
+ * 円1周は `ANGULAR_MAX` から13分割が下限なので、ここが効くのは開きの小さい円弧だけ。
  */
 export const MIN_CURVE_SEGMENTS = 4
 /** 折れ線1本の分割数の上限。寄りきったときに1本の曲線でGPUを埋めないための蓋。 */
@@ -60,7 +48,7 @@ export interface ViewResolution {
   angularDeflection: number
 }
 
-/** ズーム連動を入れる前と同じ粗さ。カメラがまだ分からないときに使う。 */
+/** カメラがまだ分からないときの既定。 */
 export const DEFAULT_RESOLUTION: ViewResolution = {
   deviation: DEFAULT_DEVIATION,
   angularDeflection: DEFAULT_ANGULAR_DEFLECTION,
@@ -111,11 +99,9 @@ export function viewResolution(worldPerPixel: number, sizeHint = 0): ViewResolut
 
 /**
  * 半径 `radius`[mm]・開き `sweep`[ラジアン]の円弧を折れ線にするときの分割数。
- *
- * **線形偏差と角度偏差の両方を満たす**(OCCTの `GCPnts_TangentialDeflection` と同じ規約に
- * 揃えてある —— 揃えないと、同じ画面でスケッチの円だけが辺より粗く/細かく見える)。
- * 弦の張る角 `theta` に対する乖離は `r(1 - cos(theta/2))` なので、線形側は
- * `theta = 2*acos(1 - e/r)` が上限になる。
+ * 線形偏差と角度偏差の両方を満たす(OCCTの `GCPnts_TangentialDeflection` と同じ規約。
+ * 揃えないと同じ画面でスケッチの円だけが辺より粗く/細かく見える)。
+ * 線形側は `theta = 2*acos(1 - e/r)` が上限。
  */
 export function arcSegments(radius: number, sweep: number, resolution: ViewResolution): number {
   const span = Math.abs(sweep)
@@ -131,11 +117,9 @@ export function arcSegments(radius: number, sweep: number, resolution: ViewResol
 }
 
 /**
- * 3次ベジエを折れ線にするときの分割数。
- *
- * 均等分割の最大誤差は `max|B''| / (8 n^2)` で抑えられる(3次ベジエの標準的な評価。
- * `max|B''| <= 6*max(|P0-2P1+P2|, |P1-2P2+P3|)`)ので、そこから `n` を逆に解く。
- * **角度偏差はここでは使わない** —— ベジエには半径が無く、角度の意味が円弧と揃わない。
+ * 3次ベジエを折れ線にするときの分割数。均等分割の最大誤差 `max|B''| / (8 n^2)`
+ * (`max|B''| <= 6*max(|P0-2P1+P2|, |P1-2P2+P3|)`)から `n` を逆に解く。
+ * 角度偏差は使わない(ベジエには半径が無く、角度の意味が円弧と揃わない)。
  */
 export function bezierSegments(
   p0: readonly [number, number],

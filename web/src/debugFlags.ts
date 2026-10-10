@@ -1,23 +1,11 @@
 /**
- * **開発用の表示フラグ(URLパラメータ)。** `?debug=space` / `?debug=anchors` / `?voxel=1`。
+ * 開発用の表示フラグ(URLパラメータ)。`?debug=space` / `?debug=anchors` / `?voxel=1`。
  *
- * ## なぜビルドで落とさないか
- *
- * **落とすと、利用者の環境で起きた問題を調べられなくなる。**
- * 「変な答えが出た」と言われた画面でその場でフラグを付けて塊とアンカーを見る、が
- * この3つの存在理由なので、開発ビルドにしか無いなら移す意味が無い。
- *
- * ## 代わりに守ること
- *
- * **フラグが無いときの画面は1ピクセルも変わらない。** ここが返す値は既定で
- * すべて `false`/空で、`App.svelte` はそのとき `setOptimizeDebug(null)` すら呼ばない。
- * 既存の実機smokeが番人である(製品の見た目を測る検査はフラグ無しで走る)。
- *
- * ## 決めていないこと
- *
- * **画面にフラグの状態を出さない。** 出すとフラグ無しの画面と差が出る(上の不変条件を
- * 破る)ので、確認はブラウザの `location.search` と `window.__duocad.optimizeDebugCounts()`
- * で行う。
+ * ビルドで落とさない: 利用者の環境で起きた問題を、その画面にフラグを付けて調べるための口だから。
+ * フラグが無いときの画面は1ピクセルも変えない(既定はすべて `false`/空で、`App.svelte` は
+ * `setOptimizeDebug(null)` すら呼ばない。既存の実機smokeが番人)。
+ * 画面にフラグの状態は出さない(出すとフラグ無しの画面と差が出る)。確認は `location.search` と
+ * `window.__duocad.optimizeDebugCounts()` で行う。
  */
 import type { OptimizeDebugKind } from './session'
 
@@ -32,11 +20,8 @@ export interface DebugFlags {
 }
 
 /**
- * クエリ文字列(`location.search`)からフラグを読む。
- *
- * **`debug` は複数指定できる** —— `?debug=space,anchors` でも
- * `?debug=space&debug=anchors` でも両方立つ。probe は1つしか見なかったが、
- * ここは「塊の中でアンカーがどこに付いたか」を一度に見たい場面があるので広げた。
+ * クエリ文字列(`location.search`)からフラグを読む。`debug` は複数指定できる
+ * (`?debug=space,anchors` でも `?debug=space&debug=anchors` でも)。
  * 知らない値は黙って無視する(将来フラグが増えても古いURLが壊れない)。
  */
 export function readDebugFlags(search: string): DebugFlags {
@@ -55,17 +40,11 @@ export function readDebugFlags(search: string): DebugFlags {
   }
 }
 
-/** どれか1つでも立っているか(立っていなければ画面はデバッグの口を一切触らない)。 */
 export function anyDebugFlag(flags: DebugFlags): boolean {
   return flags.space || flags.anchors || flags.voxel
 }
 
-/**
- * サーバへ頼む種類(`run_optimization` の `debug`)。
- *
- * **立っているフラグのぶんだけ**頼む —— 頼まないものはサーバが配列を1本も作らないので、
- * 既定の実行の費用は1ビットも増えない。
- */
+/** サーバへ頼む種類(`run_optimization` の `debug`)。立っているフラグのぶんだけ頼む(頼まないものはサーバが配列を作らない)。 */
 export function debugKindsFor(flags: DebugFlags): OptimizeDebugKind[] {
   const kinds: OptimizeDebugKind[] = []
   if (flags.space) kinds.push('space')

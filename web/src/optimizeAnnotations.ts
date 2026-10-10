@@ -8,7 +8,6 @@ import { makeTextSprite } from './textSprite'
 import { OPTIMIZE_FIXTURE_MARK_COLOR, OPTIMIZE_LOAD_COLOR } from './viewportConstants'
 import type { FaceRef, OptimizeVisualState } from './viewportTypes'
 
-/** 本編(`viewport.ts`)から借りるもの。 */
 export interface OptimizeAnnotationsDeps {
   /** いま画面にある面メッシュ。**`update()` のたびに作り直される**ので毎回読み直す。 */
   faceMeshes(): THREE.Mesh[]
@@ -19,17 +18,9 @@ export interface OptimizeAnnotationsDeps {
 export interface OptimizeAnnotations {
   /** 装飾を入れるグループ。`scene` へ足すのは呼び出し側。 */
   object: THREE.Group
-  /** 拘束記号・荷重矢印+ラベルを全部消す。 */
   clear(): void
-  /**
-   * 拘束記号・荷重矢印+ラベルを作り直す。**`clear()` を先に呼ぶこと**。
-   *
-   * 拘束面は固定記号(四角錐)を法線の上に置き、荷重面は矢印(`THREE.ArrowHelper`。長さは
-   * 大きさの対数スケール)+ 大きさのラベルを描く。どちらも**モデルの大きさへ追随**させる
-   * (`contentDiagonal()` が0なら文書が空なので何も描けない)。
-   */
+  /** 拘束記号・荷重矢印+ラベルを作り直す。`clear()` を先に呼ぶこと。`contentDiagonal()` が0なら文書が空なので何も描けない。 */
   draw(state: OptimizeVisualState): void
-  /** 子オブジェクトの総数(実機検査フック専用)。 */
   count(): number
   /** いま描いている装飾の中身(実機検査フック専用)。 */
   info(): {
@@ -43,19 +34,14 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
   let optimizeDisposables: Array<{ dispose(): void }> = []
 
   /**
-   * いま描いている装飾の**中身**(実機検査フック専用)。
-   *
-   * `optimizeAnnotationCount()`(子オブジェクトの総数)だけでは、拘束記号と荷重矢印を
-   * 取り違えても・矢印が逆向きでも・ラベルが空文字でも数だけは合ってしまい検出できない。
-   * ここに種別ごとの中身(拘束は対象の面、荷重は単位ベクトルとラベル文字列)を控えておき、
-   * `optimizeAnnotations()` で読めるようにする。
+   * いま描いている装飾の中身(実機検査フック専用)。子の総数だけでは拘束と荷重の取り違え・矢印の逆向き・空ラベルを
+   * 検出できないので、種別ごとの中身を控えて `optimizeAnnotations()` で読めるようにする。
    */
   let optimizeAnnotationInfo: {
     fixtures: FaceRef[]
     loads: Array<{ bodyId: string; faceIndex: number; direction: [number, number, number]; label: string }>
   } = { fixtures: [], loads: [] }
 
-  /** 拘束記号・荷重矢印+ラベルを全部消す。`setOptimizeState` が最初に呼ぶ。 */
   function clearOptimizeAnnotations(): void {
     optimizeRoot.clear()
     for (const item of optimizeDisposables) item.dispose()
@@ -64,11 +50,8 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
   }
 
   /**
-   * 面の重心と平均法線を、**いま実際に描かれているメッシュ**から測る。
-   *
-   * サーバの配りもの(`FaceRef`)は添字だけで重心・法線を持たない。ここは装飾専用の
-   * 簡易測定であって `duocad/optimize.py` の指紋(面積加重・照合用)とは別物 ——
-   * 頂点の単純平均でよい(タスク仕様「あとから直すのは安い。凝りすぎない」)。
+   * 面の重心と平均法線を、いま実際に描かれているメッシュから測る(サーバの `FaceRef` は添字だけ持つ)。
+   * 装飾専用の簡易測定で、`duocad/optimize.py` の指紋(面積加重・照合用)とは別物。
    */
   function faceCentroidNormal(
     bodyId: string,
@@ -100,8 +83,7 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
     return { center, normal }
   }
 
-  /** 荷重の大きさのラベル(canvasテクスチャの札)。**モデルの大きさへ追随**させる
-   *  (`height` は呼び出し側が `contentDiagonal` から決める)。 */
+  /** 荷重の大きさのラベル(canvasテクスチャの札)。`height` は呼び出し側が `contentDiagonal` から決める。 */
   function makeMagnitudeLabel(
     text: string,
     height: number,
@@ -137,12 +119,10 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
     // -------------------------------------------------- 荷重の矢印+ラベル
     if (state.loads.length > 0) {
       const labelHeight = scale * 0.05
-      // **大きさと向きは面ごとに引く。** ループの外で1本取り出して使い回すと、
-      // 面ごとに違う荷重を置いても全部同じ矢印になり、画面が嘘をつく。
+      // 大きさと向きは面ごとに引く(ループの外で使い回すと、違う荷重を置いても全部同じ矢印になる)。
       for (const ref of state.loads) {
         const { magnitude, direction, vector } = ref
-        // **長さは大きさの対数スケール**(タスク仕様)。1N未満でも長さが0にならないよう
-        // `Math.max(magnitude, 1)` で下駄を履かせる(見た目専用の式で、正確な力学ではない)。
+        // 長さは大きさの対数スケール。1N未満でも0にならないよう `Math.max(magnitude, 1)` で下駄を履かせる(見た目専用)。
         const length = scale * 0.12 * (1 + Math.log10(Math.max(magnitude, 1)) * 0.3)
         const labelText = `${Number(magnitude.toFixed(2))}N`
         const measured = faceCentroidNormal(ref.bodyId, ref.faceIndex)
