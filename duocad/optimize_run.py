@@ -1,14 +1,9 @@
 """文書の条件を数値計算へ渡し、平滑化後の保持・除外ブーリアンを適用してCADを追加する。
 
-optimize.py は条件の保存・配信、ここは条件の点検・実行・進捗・結果の追加を担当する。
-元のボディは変更しない。
+optimize.py は条件の保存・配信、ここは条件の点検・実行・進捗・結果の追加を担当する。元のボディは変更しない。
 
 面は (body_id, 1始まりの面添字) で指定する。複数ボディを compound にまとめると
 面添字がずれるため、_verify_face_mapping が面積・法線・重心を照合する。
-
-メッシュ頂点は要素添字座標なので、_mesh_to_world で
-grid.origin + verts * grid.spacing によりワールド座標[mm]へ変換する。
-幾何操作は kernel / query 越しに行い、topopt は関数内で遅延 import する。
 設計理由と実測は docs/TOPOPT.md の「設計と画面」「本体への配線」を参照。"""
 from __future__ import annotations
 
@@ -20,20 +15,18 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 if TYPE_CHECKING:  # pragma: no cover - 型注釈のためだけ
     from .document import Document
 
-#: 結果ボディの名前の頭。同じ文書で2回走らせると `optimized-2` になる(作るときに一意にする。
-#: 後から変えるのは `rename`)。
+#: 結果ボディの名前の頭。同じ文書で2回走らせると `optimized-2` になる。
 RESULT_NAME = "optimized"
 
-#: **設計空間の要素数(塊。空要素は `simp.Model(active_mask=...)` で外れる)の上限**(= 要素サイズの下限を決める)。
+#: 設計空間の要素数(塊。空要素は `simp.Model(active_mask=...)` で外れる)の上限 = 要素サイズの下限を決める。
+#: 130万は本人判断(2026-09-26: 「1.6mm が通る130万」)。
 #:
-#: 格子の箱の数では上限にしない —— ピークメモリを決めるのは箱ではなく組み立てに載る塊の数で、hanger は
-#: 箱の約42%しか塊にならず、箱の数の上限では同じ値でもモデルの形でメモリが約2.4倍振れる。
-#: 実行前(`resolution_limits`)は幾何からの見積もり(`_design_element_estimate`)、実行時は `derive` 後の
-#: 実数(`space.element_count`)で判定する。130万は本人判断(2026-09-26: 「1.6mm が通る130万」)。
-#: 実測と見積もりの誤差は docs/TOPOPT.md「要素サイズの下限」。
+#: 格子の箱の数でなく塊の数で見る: hanger は箱の約42%しか塊にならず、箱の数の上限ではモデルの形でメモリが約2.4倍振れる。
+#: 実行前(`resolution_limits`)は幾何の見積もり(`_design_element_estimate`)、実行時は `derive` 後の
+#: 実数(`space.element_count`)で判定する。誤差は docs/TOPOPT.md「要素サイズの下限」。
 #:
 #: **これより粗ければ通る、とは限らない。** `models/hanger_bar_attachment.json` は薄い部品(5.00mm)があり、
-#: 粗いと事前検出(`_region_representation`)で止まる。通るかどうかは要素サイズに対して単調でない
+#: 粗いと事前検出(`_region_representation`)で止まる。通るかは要素サイズに対して単調でない
 #: (2026-09-09 実測: 4.2mm 止まる / 4.4 通る / 4.6 止まる / 4.8 通る / 5.333 止まる。格子の
 #: 原点と刻みが要素サイズごとに引き直され、薄い部品にセル中心が入るかが偶然で決まる)。
 MAX_DESIGN_ELEMENTS = 1_300_000
@@ -50,15 +43,12 @@ MIN_WIDTH_FLOOR_MM = 2.0
 MIN_WIDTH_CEILING_RATIO = 0.25
 
 #: 保持/除外ソリッドが「この解像度では表現できていない」と見なす要素数の境目。
-#: **0 は必ず止める**(その条件が黙って消える)。0 より多く これ未満は警告して続ける。
-#: 暫定値 —— 厳密な下限は中心軸変換に近い話で、事前計算では出せない(タスク本文)。
+#: **0 は必ず止める**(その条件が黙って消える)。0 より多く これ未満は警告して続ける。暫定値。
 MIN_REGION_ELEMENTS = 8
 
-#: 解像度の梯子の段数(既定=いちばん粗い、を含む)。**粗い側の端から細かい方向へだけ**
-#: 動くスライダの目盛りで、画面はこの並びの添字を持つ(`resolution_limits()["steps"]`)。
-#: **時間を入力にしないための形**でもある —— 各段は要素サイズ・要素数だけを持ち時間を
-#: 付けない(段階5で所要時間の事前見積もりを廃止した)ので、「時間から解像度を逆算する」
-#: 経路が画面に生えない(タスク `20260904-1705` の設計)。
+#: 解像度の梯子の段数(既定=いちばん粗い、を含む)。粗い側の端から細かい方向へだけ動くスライダの目盛りで、
+#: 画面はこの並びの添字を持つ(`resolution_limits()["steps"]`)。各段は要素サイズ・要素数だけを持ち時間を
+#: 付けないので、「時間から解像度を逆算する」経路が画面に生えない。
 RESOLUTION_STEPS = 6
 
 #: 目標安全率の既定。**利用者が入れる値**で、ここにあるのは画面が最初に出す初期値でしかない。
@@ -75,71 +65,59 @@ SEARCH_TARGET_FACTOR = 2.4
 #: (docs/TOPOPT_STRESS_GATE_DILUTION.md 10章)。
 FINAL_UNSAFE_BLOCKS = False
 
-#: **デバッグ表示(`?debug=space` / `?voxel=1`)で1回に配るボクセルの上限。**
-#:
-#: 表示は `InstancedMesh`(立方体1個 = 12三角形)なので、実物の部品で 5〜12万要素の塊を
-#: そのまま出すと 60〜144万三角形になる。上限を超えたら**軸方向に等間隔で間引く**
-#: (`_debug_voxel_payload` の `stride`) —— 間引いたことは payload の `stride` /
-#: `total` / `shown` に出るので、画面は「全部見えている」と誤解しない。
-#: **間引きは表示だけの話で、計算には1ビットも触れない。**
+#: デバッグ表示(`?debug=space` / `?voxel=1`)で1回に配るボクセルの上限。表示は `InstancedMesh`
+#: (立方体1個 = 12三角形)なので、5〜12万要素の塊をそのまま出すと 60〜144万三角形になる。
+#: 超えたら軸方向に等間隔で間引き(`_debug_voxel_payload` の `stride`)、payload の `stride`/`total`/`shown`
+#: に出す。間引きは表示だけで、計算には触れない。
 DEBUG_VOXEL_LIMIT = 150_000
 
 #: デバッグ配信の種類。`run()` の `debug_kinds` に渡せる値。
 DEBUG_KINDS = ("space", "anchors", "rho")
 
-#: `?voxel=1` のボクセル表示で「材料がある」と見なす密度の境目。
-#: `np.flatnonzero(flat > 0.5)`。`shoot-topopt.mjs` と揃える —— 不一致だと同じ密度場が
-#: 別の形に見える。
+#: `?voxel=1` のボクセル表示で「材料がある」と見なす密度の境目(`np.flatnonzero(flat > 0.5)`)。
+#: `shoot-topopt.mjs` と揃える(不一致だと同じ密度場が別の形に見える)。
 DEBUG_RHO_THRESHOLD = 0.5
 
 
 class OptimizeInputError(ValueError):
     """条件がそろっていない・この版では扱えない(`ValueError` = MCPの `invalid_argument`)。
-
-    **利用者に見せる文がそのまま入る** —— 何が足りないかと、次に何をすればよいかを含める。
+    利用者に見せる文がそのまま入る。
     """
 
 
 class FaceMappingError(RuntimeError):
-    """条件面と `TriangleSoup` の面添字の対応が取れなかった(**静かな事故の門**)。
+    """条件面と `TriangleSoup` の面添字の対応が取れなかった(静かな事故の門)。
 
-    `ValueError` にしていないのは、**握り潰されてはならない**からである。これが出るのは
-    「まとめた形の面の並びが、ボディごとの並びの連結ではなかった」ときで、そのまま走らせると
-    荷重が別の面に入ったまま最適化が成功してしまう。
+    `ValueError` にしないのは握り潰されないため。そのまま走らせると荷重が別の面に入ったまま最適化が成功する。
     """
 
 
 class OptimizeCancelled(RuntimeError):
-    """`should_cancel()` が真を返した、または探索が `termination='cancelled'` で戻ったので
-    途中で降りた(「中断時は...製品文書へ勝手に結果を追加しない」。`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
+    """`should_cancel()` が真、または探索が `termination='cancelled'` で戻ったので途中で降りた
+    (`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
 
-    `RuntimeError` にしてあるのは、`acceptance.inspect` 内の例外処理に**拾われないため**
-    である(`ValueError` にすると入力の不備と分類されて探索が続く)。
+    `RuntimeError` なのは `acceptance.inspect` 内の例外処理に拾われないため(`ValueError` だと入力不備と分類され探索が続く)。
     """
 
 
 @dataclass
 class OptimizeOptions:
-    """実行の摘み。**既定値は「条件を満たす、最も粗くて安い設定」**(本人決定)。
+    """実行の摘み。既定値は「条件を満たす、最も粗くて安い設定」(本人決定)。
 
-    `element_size_mm` を省くと `resolution_limits()` の上限側(いちばん粗い)を採る。
-    時間は制約にしない。**密度フィルタ半径(`rmin_mm`)・SIMP反復数(`max_iter`)・材料量の
-    直接指定(`material_min_mm3`/`material_max_mm3`)は無い**——二値探索は
-    連続密度もSIMP反復も持たないので、渡しても意味の翻訳先が無い。届いたら黙って無視せず
-    `OptimizeInputError` にする(`session.run_optimization` / `resolution_limits` の入口)。
+    `element_size_mm` を省くと `resolution_limits()` の上限側を採る。密度フィルタ半径(`rmin_mm`)・SIMP反復数
+    (`max_iter`)・材料量の直接指定(`material_min_mm3`/`material_max_mm3`)は無い(二値探索は連続密度も
+    SIMP反復も持たない)。届いたら黙って無視せず `OptimizeInputError`(`session.run_optimization` / `resolution_limits` の入口)。
     """
 
     #: 目標安全率。許容応力は固定(`allowable_stress()`)なので、利用者が動かすのはこちら。
     target_safety_factor: float = DEFAULT_TARGET_SAFETY_FACTOR
-    #: 探索に渡す目標 = `target_safety_factor` × これ(`SEARCH_TARGET_FACTOR`)。利用者の入力ではなく、
-    #: UI・WebSocket の入力には出さない。1.0 はテストと測定が「係数なし」に固定する口。1.0 未満・非有限は断る。
+    #: 探索に渡す目標 = `target_safety_factor` × これ(`SEARCH_TARGET_FACTOR`)。UI・WebSocket の入力には出さない。
+    #: 1.0 はテストと測定が「係数なし」に固定する口。1.0 未満・非有限は断る。
     search_target_factor: float = SEARCH_TARGET_FACTOR
-    #: 要素サイズ[mm]。省くと上限側(既定)。
     element_size_mm: Optional[float] = None
     #: 最小幅[mm]。省くと既定 = 選べるいちばん細い段(`min_width_cell_range` の下限の m)。
     min_width_mm: Optional[float] = None
-    #: 形状探索の評価予算(`binary_search.find_best_feasible` の
-    #: `max_evaluations`。段階3・段階4を通した1本の予算)。省くとそちらの既定(1000)。
+    #: 形状探索の評価予算(`binary_search.find_best_feasible` の `max_evaluations`。段階3・4通しの1本)。
     max_evaluations: Optional[int] = None
 
 
@@ -147,10 +125,7 @@ class OptimizeOptions:
 # 固定している材料の許容応力
 # --------------------------------------------------------------------------------------
 def allowable_stress() -> dict:
-    """許容応力[MPa]と**その導出**。duocad 側でも材料は選ばせない(暫定)。
-
-    値を持っているのは `duocad.topopt.material` の1箇所だけで、ここはそれを読んで
-    導出を並べ直すだけである(2箇所に書くと片方だけ直る)。
+    """許容応力[MPa]とその導出。値を持つのは `duocad.topopt.material` の1箇所だけで、ここは読んで並べ直すだけ。
     """
     from .topopt import material
 
@@ -166,18 +141,15 @@ def allowable_stress() -> dict:
 # 条件の点検(走らせる前に、何が足りないかを名指しする)
 # --------------------------------------------------------------------------------------
 def conditions_report(doc: "Document") -> dict:
-    """4条件が**そろって走らせられる状態か**を返す。画面はこれで実行ボタンの可否を決める。
+    """4条件が走らせられる状態かを返す。画面はこれで実行ボタンの可否を決める。
 
         {"ready": bool, "problems": [str, ...],
          "preserve_bodies": [BodyId,...], "exclude_bodies": [BodyId,...],
          "fixtures": [FaceCondition,...], "loads": [LoadCondition,...],
          "load_total_n": float}   # 荷重の大きさの総和[N](合力ではない)
 
-    `loads` の要素は **LoadCondition**(`optimize.load_condition`)なので、大きさ[N]と向きは
-    面ごとに入っている。
-
-    **`state_payload()` の `stale` とは別の点検**である。あちらは「いま画面で指せるか」で、
-    こちらは「いま最適化に渡せるか」——非表示のボディは指せないが、形はあるので渡せる。
+    `state_payload()` の `stale`(いま画面で指せるか)とは別の点検で、こちらは最適化に渡せるか
+    (非表示のボディは指せないが渡せる)。
     """
     from . import optimize
 
@@ -229,8 +201,7 @@ def _body_problem(doc: "Document", role: str, body_id: str) -> List[str]:
     except KeyError:
         return [f"{label}のボディ {body_id} が文書に無い"]
     if body.mesh is not None:
-        # `verbs/optimize_setup.py` の入口でも断っているが、**過去のログを再生した文書**には
-        # 入りうるので、ここでも同じ門を通す(断り文の実体は `meshbody.reject` の1箇所)。
+        # 過去のログを再生した文書には入りうるので、入口(`verbs/optimize_setup.py`)に加えてここでも断る。
         try:
             meshbody.reject(body, f"{label}に指定する")
         except Exception as error:  # noqa: BLE001 - 文面だけを取り出す
@@ -248,9 +219,8 @@ def _face_problem(doc: "Document", role: str, condition: dict) -> List[str]:
     if problems:
         return problems
     if condition["body"] not in doc.optimize.preserve_bodies:
-        # **条件面は保持ソリッドの面に限る**(2026-09-18 本人指示)。`verbs/optimize_setup.py` の
-        # 入口でも断っているが、**過去のログを再生した文書**には入りうるので、ここでも通す
-        # (メッシュボディの門と同じ形)。
+        # 条件面は保持ソリッドの面に限る(2026-09-18 本人指示)。入口(`verbs/optimize_setup.py`)に加え、
+        # 過去のログを再生した文書にも効かせるためここでも断る。
         name = doc.get_body(condition["body"]).name
         return [
             f"{label}が保持ソリッドでないボディ {name} の面に載っている。"
@@ -276,25 +246,19 @@ class ConditionBundle:
     load_faces: tuple
     keep_body_ids: List[str]
     exclude_body_ids: List[str]
-    #: 荷重面と**同じ並び**の力ベクトル[N](向き × 大きさ)。`load_faces[i]` に `forces[i]`。
+    #: 荷重面と同じ並びの力ベクトル[N]。`load_faces[i]` に `forces[i]`。
     forces: tuple
 
 
 def build_conditions(doc: "Document") -> ConditionBundle:
     """4条件を `duocad.topopt.design_space.Conditions` へ翻訳する。
 
-    - 保持ソリッド → `keep`(1つならその形、複数なら `kernel.make_compound`)
-    - 除外ソリッド → `obstacle`(空なら `None`)
+    - 保持ソリッド → `keep`(複数なら `kernel.make_compound`)、除外ソリッド → `obstacle`(空なら `None`)
     - 拘束面 / 荷重面 → `anchor_shape` の面添字(`fixed_faces` / `load_faces`)
-    - 保持ボディ ∪ 条件面のボディ → `bodies`(ボディごとの役割と B-rep の外接箱。
-      塊の凸包はここから起きる。除外だけのボディは入れない)
-    - 荷重 → `forces`(面ごとの**実単位[N]の力ベクトル**)
+    - 保持ボディ ∪ 条件面のボディ → `bodies`(役割と B-rep の外接箱。塊の凸包の元。除外だけのボディは入れない)
+    - 荷重 → `forces`(面ごとの実単位[N]の力ベクトル。探索はこれをそのまま受け、面アンカーが節点へ配る)
 
-    **「荷重が全部0」の門は大きさの総和で見る**(合力ではない —— 打ち消し合う組(面Aへ下向き50N・
-    面Bへ上向き50N)では合力が0になるが、総和は0にならない)。総和そのものは後段が使わないので持ち回らない。
-
-    探索(`binary_search`/`acceptance`)は `forces` を実単位[N]のまま受け、面アンカーが節点へ配る
-    (`acceptance.safety_check` は要素サイズだけを換算する)。
+    「荷重が全部0」の門は大きさの総和で見る(打ち消し合う組では合力が0になるが、総和は0にならない)。
     """
     from . import optimize
     from .topopt import design_space as ds
@@ -309,8 +273,7 @@ def build_conditions(doc: "Document") -> ConditionBundle:
     fixtures = [dict(item) for item in setup.fixtures]
     loads = [dict(item) for item in setup.loads]
 
-    # 面アンカーの対象は「条件面を持っているボディ」だけ。**文書の並び順**で固定する
-    # (集合の反復順に頼ると、同じ文書でも面添字が変わりうる)。
+    # 面アンカーの対象は条件面を持つボディだけ。文書の並び順で固定する(集合の反復順では面添字が変わりうる)。
     anchor_ids: List[str] = []
     wanted = {item["body"] for item in fixtures} | {item["body"] for item in loads}
     for body in doc.bodies:
@@ -367,8 +330,7 @@ def build_conditions(doc: "Document") -> ConditionBundle:
 def _compound_with_offsets(doc: "Document", body_ids: List[str]) -> tuple:
     """ボディの並び → (まとめた形, body_id → 面添字のオフセット)。
 
-    **1つだけならまとめない**(その形をそのまま渡せば面添字は完全に同じ)。複数のときだけ
-    `kernel.make_compound` で1つにし、面添字は `face_count` の累積でずらす。
+    1つだけならまとめない。複数のときだけ `kernel.make_compound` で1つにし、面添字は `face_count` の累積でずらす。
     """
     from . import kernel
 
@@ -392,10 +354,8 @@ def _compound_with_offsets(doc: "Document", body_ids: List[str]) -> tuple:
 def _verify_face_mapping(
     doc: "Document", anchor_shape: Any, offsets: Dict[str, int], conditions: List[dict]
 ) -> None:
-    """**まとめた形の面添字が、本当に同じ面を指しているか**を測り直して確かめる。
-
-    合わなければ `FaceMappingError`。**この検査を外すと、荷重が別の面に入ったまま
-    最適化がもっともらしく収束する**(モジュール docstring)。
+    """まとめた形の面添字が本当に同じ面を指しているかを測り直す。合わなければ `FaceMappingError`
+    (外すと荷重が別の面に入ったまま最適化が収束する)。
     """
     from . import query
 
@@ -421,7 +381,7 @@ def _verify_face_mapping(
 
 
 def _same_face(left: dict, right: dict) -> bool:
-    """同じ `TopoDS_Face` を2回測ったのかを見る。**重心も見る**(モジュール docstring)。"""
+    """面積・法線・重心が一致するか(同じ面を2回測ったのかを見る)。"""
     if not _close(left["area"], right["area"]):
         return False
     return _close_seq(left["normal"], right["normal"]) and _close_seq(
@@ -430,8 +390,7 @@ def _same_face(left: dict, right: dict) -> bool:
 
 
 def _close(left: float, right: float) -> bool:
-    # 同じ面を同じ関数で2回測っているので、本来は完全一致する。桁落ちだけを吸う幅にしてある
-    # (緩めると「別の面だが面積が近い」を通してしまう)。
+    # 本来は完全一致する。桁落ちだけを吸う幅(緩めると「別の面で面積が近い」を通してしまう)。
     return math.isclose(float(left), float(right), rel_tol=1e-7, abs_tol=1e-7)
 
 
@@ -458,10 +417,8 @@ def _not_done(
 ) -> dict:
     """結果を作れずに戻るときの応答(`state="done"` 以外の4経路)。
 
-    値の無い欄(`body_id` / `name` / `safety_factor` / `material_mm3` / `triangle_count` / `vertex_count`)は
-    None に固定し、**`keep_room_warning` はここで繋ぐ**(経路ごとに繋ぐと、どれかで繋ぎ忘れる形になる。
-    `tests/test_optimize_backend.py` の "rides on every early return" が固定する)。経路ごとに違う値は
-    全部引数で明示する(既定値に頼らない)。
+    値の無い欄は None に固定し、`keep_room_warning` はここで繋ぐ(経路ごとに繋ぐと繋ぎ忘れる。
+    `tests/test_optimize_backend.py` の "rides on every early return" が固定する)。
     """
     return dict(
         common,
@@ -491,8 +448,7 @@ def resolution_limits(doc: "Document", element_size_mm: Any = None) -> dict:
     """要素サイズの**上限**(これより粗いと間違う)と**下限**(これより細かくはできない)。
 
     `element_size_mm` を渡すと、その値を選んだときの段(`steps` の1件と同じ形)を `selected` に、
-    範囲外・不正なら理由を `selected_error` に入れ、渡した値を `requested_element_size_mm` に返す
-    (画面の自由入力。段の中身は格子の数え方を持つサーバが作る)。
+    範囲外・不正なら理由を `selected_error` に入れ、渡した値を `requested_element_size_mm` に返す(画面の自由入力)。
 
         {"max_element_size_mm": float,        # min(MAX_ELEMENT_SIZE_MM, 条件面からの要求)
          "min_element_size_mm": float,        # 設計空間の要素数の上限(見積もり)から
@@ -503,24 +459,17 @@ def resolution_limits(doc: "Document", element_size_mm: Any = None) -> dict:
          "bbox_min"/"bbox_max": [x,y,z],      # 条件の外接直方体(余白なし)
          "max_design_elements": int}
 
-    **上限は固定値 `MAX_ELEMENT_SIZE_MM` と条件面からの要求(拘束面・荷重面に格子節点が付く大きさ)の細かい方。**
-    **密度フィルタ半径(rmin)は上限に効かない**(解像度の上限からrmin/MIN_RMINを
-    除去」——二値探索は密度フィルタを持たないので、最小部材幅からの要求という概念自体が無い)。
-    **利用者に聞かない**。`anchor.AnchorTable.empty_face_diagnosis` の
-    `suggested_max_spacing_mm` と**同じ式**(`sqrt(CAD面積)`)を使う。**近似であって保証ではない**
-    (`docs/contracts/topopt-design-space.md`「条件面が空のとき」)—— 正方形とみなした代表寸法なので、曲面や極端な縦横比の面
-    では過大にも過小にもなる。厳密に確かめる手段は「その要素サイズで実際に `empty_faces()` を
-    取り直す」しかない。
+    上限は固定値 `MAX_ELEMENT_SIZE_MM` と条件面からの要求(拘束面・荷重面に格子節点が付く大きさ)の細かい方。
+    条件面からの要求は `anchor.AnchorTable.empty_face_diagnosis` の `suggested_max_spacing_mm` と同じ式
+    (`sqrt(CAD面積)`)で、近似であって保証ではない(`docs/contracts/topopt-design-space.md`「条件面が空のとき」。
+    曲面や極端な縦横比では過大にも過小にもなり、厳密には「その要素サイズで `empty_faces()` を取り直す」しかない)。
+    密度フィルタ半径は上限に効かない。
 
-    **下限は設計空間の要素数の上限**(`MAX_DESIGN_ELEMENTS`)を幾何の見積もりで割り戻した値。根拠はその定数のところにある。
+    下限は設計空間の要素数の上限(`MAX_DESIGN_ELEMENTS`)を幾何の見積もりで割り戻した値。
 
-    保持・除外ソリッドからは**上限を厳密に計算できない**(細い通路を取りこぼす)ので、
-    ここでは見ない —— ボクセル化したあとに数えて通知する(`run()` の事後検出)。
-
-    **所要時間は見積もらない**(所要時間は旧SIMP係数を使わない。初回は不明と
-    表示し、実測FEM評価時間と予算から幅付きで見積もる」)。走らせる前は1回もFEMを解いていない
-    ので実測が無く、旧SIMP係数を使った桁の見当も出さない —— 実測に基づく見積もりは
-    `run()` の進捗イベント(`_ProgressPump`)側で、実際に評価が進んでから出す。
+    保持・除外ソリッドからは上限を厳密に計算できない(細い通路を取りこぼす)ので見ず、ボクセル化後に数えて通知する
+    (`run()` の事後検出)。所要時間は見積もらない(走らせる前は実測が無い。実測に基づく見積もりは `run()` の進捗イベント
+    (`_ProgressPump`)側)。
     """
     from . import optimize
 
@@ -551,18 +500,16 @@ def resolution_limits(doc: "Document", element_size_mm: Any = None) -> dict:
     volume = _design_volume(doc)
     if not upper > 0.0:
         raise OptimizeInputError("条件面の面積が0で要素サイズの上限を決められない")
-    # **上限は実際の格子の要素サイズに揃える。** `derive` は最長辺を要求値で割った数を丸めるので、
-    # 要求値そのままだと実 spacing が僅かに大きくなる(実測: 要求 4.0mm → 実 4.038mm)。
+    # 上限は実際の格子の要素サイズに揃える(`derive` は最長辺を要求値で割った数を丸めるので、要求値のままだと
+    # 実 spacing が僅かに大きくなる。実測: 要求 4.0mm → 実 4.038mm)。
     upper = _snap_to_grid(lo, hi, upper)
-    # 下限も実格子の要素サイズへ揃える(梯子の最後の段 = `min_element_size_mm` を画面が送り返しても
-    # `_resolve_element_size` が「下限より細かい」と断らないため)。分割数は変わらないので要素数も変わらない。
+    # 下限も実格子へ揃える(画面が `min_element_size_mm` を送り返しても `_resolve_element_size` が断らないため)。
     lower = _snap_to_grid(lo, hi, _min_element_size(lo, hi, volume))
 
     limits = {
         "max_element_size_mm": upper,
         "min_element_size_mm": lower,
         "default_element_size_mm": upper,
-        # **粗い側の端から細かい方向へだけ**動く目盛り(添字0が既定=上限側)。
         "steps": _resolution_steps(lo, hi, upper, lower, volume),
         "from_condition_faces_mm": from_faces,
         "max_element_size_cap_mm": MAX_ELEMENT_SIZE_MM,
@@ -570,8 +517,7 @@ def resolution_limits(doc: "Document", element_size_mm: Any = None) -> dict:
         "bbox_min": [float(v) for v in lo],
         "bbox_max": [float(v) for v in hi],
         "max_design_elements": MAX_DESIGN_ELEMENTS,
-        # **上限側が下限を下回る**(部品に対して条件面が小さすぎる、または部品が大きすぎて上限の固定値まで細かくすると)ときは、設計空間の要素数の上限に
-        # 引っかかって「間違わない解像度」が作れない。画面はここを見て断る。
+        # 上限が下限を下回ると、設計空間の要素数の上限に引っかかって「間違わない解像度」が作れない。画面はここを見て断る。
         "feasible": lower <= upper,
     }
     if element_size_mm is None:
@@ -587,21 +533,15 @@ def resolution_limits(doc: "Document", element_size_mm: Any = None) -> dict:
 
 
 def _resolution_steps(lo, hi, upper: float, lower: float, volume: float) -> List[dict]:
-    """要素サイズの梯子。**添字0が上限側(いちばん粗くて安い=既定)**で、進むほど細かい。
+    """要素サイズの梯子。添字0が上限側(いちばん粗い=既定)で、進むほど細かい。
 
-    **粗い側へ動く目盛りを作らない。** 粗い側の端は「正しさ」の境界(割ると条件面から
-    節点が消える。しかも silent)であり、細かい側の端は「都合」の境界
-    (遅い・落ちる、それだけ)である —— 性質が違うので、片側だけ開ける
-    (タスク `20260904-1705` の設計。本人了承)。
+    粗い側へ動く目盛りは作らない: 粗い側の端は「正しさ」の境界(割ると条件面から節点が静かに消える)、細かい側の端は
+    「都合」の境界(遅い・落ちる)で性質が違うので片側だけ開ける(タスク `20260904-1705`、本人了承)。
 
-    段は上限から下限までの**等比**で刻む(要素数は要素サイズの3乗に反比例するので、
-    等差にすると最後の1段だけで要素数が桁で跳ねる)。**予想時間は付けない**
-    (所要時間は旧SIMP係数を使わない。初回は不明と表示する——走らせる前は
-    実測が無いので、要素数だけを見せて時間は語らない)。**見せる要素数は設計空間の見積もり**
-    (`_design_element_estimate`)で、実数ではない。
+    段は上限から下限までの等比(要素数は要素サイズの3乗に反比例し、等差だと最後の1段で要素数が桁で跳ねる)。
+    時間は付けない。見せる要素数は設計空間の見積もり(`_design_element_estimate`)で実数ではない。
 
-    上限が下限以下(部品に対して条件面が小さすぎる)のときは**空**を返す ——
-    「間違わない解像度」が作れないので、選ばせる目盛りが無い(`feasible` が偽になる)。
+    上限が下限以下のときは空を返す(`feasible` が偽になる)。
     """
     if not (upper > 0.0 and lower > 0.0) or lower > upper:
         return []
@@ -610,9 +550,8 @@ def _resolution_steps(lo, hi, upper: float, lower: float, volume: float) -> List
     steps: List[dict] = []
     seen: set = set()
     for index in range(count):
-        # 最後の段は等比の丸めを使わず下限そのものに合わせる(端が届かないと、
-        # 「いちばん細かい」が選べない目盛りになる)。
-        # 各段も実格子の要素サイズへ揃える(画面に出す値と `derive` が作る格子を一致させる)。
+        # 最後の段は等比の丸めを使わず下限そのものに合わせる(端が届かないと「いちばん細かい」が選べない)。
+        # 各段も実格子の要素サイズへ揃える。
         size = lower if index == count - 1 else _snap_to_grid(lo, hi, upper * (ratio ** index))
         step = _resolution_step(lo, hi, size, volume, index=len(steps))
         if step["design_elements_estimate"] in seen:
@@ -636,13 +575,11 @@ def _resolution_step(lo, hi, size: float, volume: float, *, index: int) -> dict:
 
 
 def _face_max_spacing_mm(cad_area_mm2: float) -> float:
-    """**条件面からの要求要素サイズ**(この面に格子節点が付く見込みの上限)。
+    """条件面からの要求要素サイズ(この面に格子節点が付く見込みの上限)。
 
-    `anchor.AnchorTable.empty_face_diagnosis` の `suggested_max_spacing_mm` と**同じ式**
-    (正方形とみなした代表寸法 `sqrt(CAD面積)`)。probe 側は空になった面の逃げ道として、
-    ここは事前の解像度の決め方として同じ数字を使う。**近似であって保証ではない**
-    (`docs/contracts/topopt-design-space.md`「条件面が空のとき」)—— 曲面・極端な縦横比では過大にも過小にもなる。
-    値が一致していることは `topopt_checks/check_optimize_wiring.py` [8] が突き合わせる。
+    `anchor.AnchorTable.empty_face_diagnosis` の `suggested_max_spacing_mm` と同じ式(`sqrt(CAD面積)`)。
+    近似であって保証ではない(`docs/contracts/topopt-design-space.md`「条件面が空のとき」)。
+    一致は `topopt_checks/check_optimize_wiring.py` [8] が突き合わせる。
     """
     area = float(cad_area_mm2)
     return math.sqrt(area) if area > 0.0 else float("nan")
@@ -650,14 +587,11 @@ def _face_max_spacing_mm(cad_area_mm2: float) -> float:
 
 def _condition_boxes(doc: "Document") -> List[tuple]:
     """凸包の点群になるボディ(保持ソリッド ∪ 条件面が属するボディ)を文書の並びで返す。
+    要素は `(body_id, roles, kernel.bounding_box の戻り)`。
 
-    要素は `(body_id, roles, kernel.bounding_box の戻り)`。`design_space.derive` はこの
-    **ボディ全体**の外接箱の頂点から凸包を起こす(条件面だけの箱ではない)。
-    **除外ソリッドは入れない**(除外は塊から引くものであって、塊を広げる理由にはならない)。
-
-    **`doc.bbox_cache` を必ず渡す。** `resolution_limits` は目盛りを引くたびに呼ばれ、
-    `bounding_box` は1形状あたり数十msかかる(`kernel.BoundingBoxCache`)。渡さないと
-    定常状態が 0.5ms から 145ms になる(2026-09-07実測)。
+    `design_space.derive` はこの**ボディ全体**の外接箱の頂点から凸包を起こす。除外ソリッドは入れない。
+    **`doc.bbox_cache` を必ず渡す。** `resolution_limits` は目盛りのたびに呼ばれ、`bounding_box` は1形状数十ms
+    かかる。渡さないと定常状態が 0.5ms から 145ms になる(2026-09-07実測)。
     """
     from . import kernel
 
