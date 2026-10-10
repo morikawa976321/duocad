@@ -85,6 +85,14 @@ def test_the_system_prompt_is_the_same_text_the_mcp_server_hands_out():
     assert str(len(catalog.tool_names())) in shared
 
 
+def test_the_system_prompt_says_how_close_is_close_enough():
+    """落ちたら、誤差の範囲のずれを直そうとして作り直しを繰り返す・迷って何もせず終わる失敗が戻る(#134。
+    文言と幅は docs/LOCAL_LLM_QWEN38.md の測定で使ったもの)。"""
+    shared = catalog.agent_instructions()
+
+    assert "寸法の差が0.01mm以内、体積や面積の差が0.1%以内なら指示どおりにできているとみなし" in shared
+
+
 #: 固定の停止・進行の規則を置く言い回し。AI が依頼の文面から判断するので、プロンプトに置かない。
 FIXED_AUTONOMY_RULES = ("必ず止", "必ず進", "曖昧なら", "迷ったら", "承認を待", "許可を得", "(1) ", "(2) ")
 
