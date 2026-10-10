@@ -377,4 +377,4 @@ M5b(0・PASS)がすべて合格を示す一方、**M7aだけが41.9(許容40超�
 - **並行して見つかった監査文書 `docs/topopt_idle_validation/REVIEW_00_02_2026-09-28.md`**(本タスクの
   実行中に作業ツリーへ出現。未コミット、taskboxの正式な依存関係には無い)は、raw_max/材料内maxの
   混同(本書1節で同じ結論に独立到達済み)と、原因2(path)の認定が部分的であることを指摘している。
-  本人が対話セッションでこの監査の扱い(段階0〜2の再作業要否)を判断する必要がある——**本人判断待ち**。
+  この監査には [03A_REFERENCE_REPAIR.md](03A_REFERENCE_REPAIR.md) と [03B_METRICS_RECHECK.md](03B_METRICS_RECHECK.md) で対応した。
