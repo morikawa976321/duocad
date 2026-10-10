@@ -1,6 +1,6 @@
 """段階4a: GPU だけで完結する CG が、同じ入力で毎回同じビットを返すかを確かめる。
 
-実行(検証用 venv): gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s4_determinism.py <run_id> [行列名 ...]
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく): .venv/Scripts/python.exe gpu_feasibility/scripts/s4_determinism.py <run_id> [行列名 ...]
 出力: gpu_feasibility/results/s4_determinism.json の `<run_id>` の下
 
 同一プロセス内で REPEATS 回解いて解のハッシュを並べる。プロセスをまたぐ一致は、`run_id` を変えて

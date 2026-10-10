@@ -1,9 +1,9 @@
 """段階12(#104 の実測1): 実寸の探索 1 本を、プロファイラなしで「線形求解 / 候補生成 / それ以外」に分けて秒を取る。
 
-実行(製品の .venv に CuPy は無いので検証用 venv。PYTHONPATH にリポジトリ直下を入れる):
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく。PYTHONPATH にリポジトリ直下を入れる):
 
-    gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s12_search_breakdown.py cpu --load 200 --width 5 --size 2.0
-    gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s12_search_breakdown.py gpu --load 200 --width 5 --size 2.0
+    .venv/Scripts/python.exe gpu_feasibility/scripts/s12_search_breakdown.py cpu --load 200 --width 5 --size 2.0
+    .venv/Scripts/python.exe gpu_feasibility/scripts/s12_search_breakdown.py gpu --load 200 --width 5 --size 2.0
 
 出力: gpu_feasibility/results/s12_search_<tag>_<mode>.json(探索の履歴は s6 と同じ形で、cpu と gpu の一致を比べられる)
 

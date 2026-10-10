@@ -1,4 +1,4 @@
-"""Windows のメモリ量を標準ライブラリだけで読む(製品 .venv と検証用 venv の両方から使う)。"""
+"""Windows のメモリ量を標準ライブラリだけで読む。"""
 from __future__ import annotations
 
 import ctypes

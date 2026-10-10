@@ -1,11 +1,11 @@
 """段階6: 探索(`binary_search.find_best_feasible`)を CPU の CG と GPU の CG(ビット一致版)で走らせ、
 試行の履歴と採用形状が一致するかを確かめる。
 
-実行(検証用 venv。PYTHONPATH にリポジトリ直下を入れる):
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく。PYTHONPATH にリポジトリ直下を入れる):
 
-    gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s6_search_identity.py gpu --load 1000 --size 4.8 --width 10
-    gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s6_search_identity.py cpu --load 1000 --size 4.8 --width 10 --threads 4
-    gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s6_search_identity.py compare --load 1000 --size 4.8 --width 10
+    .venv/Scripts/python.exe gpu_feasibility/scripts/s6_search_identity.py gpu --load 1000 --size 4.8 --width 10
+    .venv/Scripts/python.exe gpu_feasibility/scripts/s6_search_identity.py cpu --load 1000 --size 4.8 --width 10 --threads 4
+    .venv/Scripts/python.exe gpu_feasibility/scripts/s6_search_identity.py compare --load 1000 --size 4.8 --width 10
 
 GPU の CG は**このプロセスの中でだけ** `fem.spla.cg` を差し替えて入れる。製品のファイルは変更しない。
 FEM ロックは取らない。CPU の秒は 07 と競合しスレッド数も既定と違うので、ベースラインではない。

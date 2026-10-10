@@ -1,6 +1,6 @@
-"""段階0: 検証用 venv で GPU の倍精度疎行列 CG が動くかを確認する。
+"""段階0: GPU の倍精度疎行列 CG が動くかを確認する。
 
-実行: gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s0_env_check.py
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく): .venv/Scripts/python.exe gpu_feasibility/scripts/s0_env_check.py
 出力: gpu_feasibility/results/s0_env.json
 """
 from __future__ import annotations

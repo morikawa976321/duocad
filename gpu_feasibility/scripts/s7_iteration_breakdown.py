@@ -1,6 +1,6 @@
 """ビット一致版 CG の 1 反復の内訳を測る(さらに速くできる余地を見積もるための材料)。
 
-実行(検証用 venv): gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s7_iteration_breakdown.py [行列名 ...]
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく): .venv/Scripts/python.exe gpu_feasibility/scripts/s7_iteration_breakdown.py [行列名 ...]
 出力: gpu_feasibility/results/s7_iteration_breakdown.json
 
 各演算を REPEATS 回続けて投げ、最後に 1 回だけ同期して割った秒(= GPU が実際に計算している時間に近い)と、

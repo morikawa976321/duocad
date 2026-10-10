@@ -1,6 +1,6 @@
 """段階4: 「行列ベクトル積だけ GPU、他は CPU の scipy のまま」の CG が、CPU の CG とビット一致するかを確かめる。
 
-実行(検証用 venv): gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s4_hybrid_bitmatch.py [行列名 ...]
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく): .venv/Scripts/python.exe gpu_feasibility/scripts/s4_hybrid_bitmatch.py [行列名 ...]
 出力: gpu_feasibility/results/s4_hybrid_bitmatch.json
 
 CPU の参照解は scipy の cg を 1 スレッドの行列ベクトル積で解く(製品の行ブロック並列とビット一致する経路)。

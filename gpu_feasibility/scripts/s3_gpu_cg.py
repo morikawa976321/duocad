@@ -1,6 +1,6 @@
 """段階3: 保存した K_ff を GPU へ送り、ヤコビ前処理つき CG の秒・反復数・残差を測る。
 
-実行(検証用 venv): gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s3_gpu_cg.py [行列名 ...]
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく): .venv/Scripts/python.exe gpu_feasibility/scripts/s3_gpu_cg.py [行列名 ...]
 出力: gpu_feasibility/results/s3_gpu_cg.json(行列名ごとに上書き)
 
 CPU の秒は測らない(本人指示)。比較値は製品の実行記録から出した「1反復・非ゼロ1個あたり 0.41〜0.48 ns」

@@ -1,7 +1,7 @@
 """段階10(#104 の判断前の実測 a・b): Python 3.14 の環境で、CPU の CG の秒を実測し、同じ行列のビット一致版 GPU の CG と比べる。
 
-実行(Python 3.14・numpy 2.4.6・scipy 1.17.1・cupy-cuda13x 14.2.0 の venv。製品 .venv ではない):
-    <venv>/Scripts/python.exe gpu_feasibility/scripts/s10_cpu_gpu_baseline.py [行列名 ...]
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく。測ったときは Python 3.14・numpy 2.4.6・scipy 1.17.1・cupy-cuda13x 14.2.0):
+    .venv/Scripts/python.exe gpu_feasibility/scripts/s10_cpu_gpu_baseline.py [行列名 ...]
 出力: gpu_feasibility/results/s10_cpu_gpu_baseline.json
 
 CPU の CG は製品の `Model.prepare` / `PreparedSystem.solve` と同じ形で解く(`_cpucg.py`)。

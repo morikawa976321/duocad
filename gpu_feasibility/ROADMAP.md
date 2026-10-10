@@ -262,7 +262,9 @@ GPU 解法は**検証プロセスの中でだけ**実行時に差し替える(�
       scripts/          段階ごとの計測スクリプト
       results/          JSON と要約(git に載せる)
       data/             行列・右辺(git に載せない)
-      .venv/            検証用の環境(git に載せない)
+
+検証用の環境は持たない。開発用の `.venv` に `uv sync --extra gpu` で CuPy を入れて使う
+(AMG の s11・s11b だけは、pyamg 5.3.0 に Python 3.14 の Windows wheel が無いので 3.13 の使い捨ての環境で走らせる)。
 
 ## 9. 依頼の論点との対応
 

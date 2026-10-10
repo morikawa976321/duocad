@@ -1,6 +1,6 @@
 """段階5d: 演算の順序と丸めを CPU に合わせた GPU の CG が、CPU の CG とビット一致するかを確かめ、秒を測る。
 
-実行(検証用 venv): gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s5_bitexact_cg.py [行列名 ...]
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく): .venv/Scripts/python.exe gpu_feasibility/scripts/s5_bitexact_cg.py [行列名 ...]
 出力: gpu_feasibility/results/s5_bitexact_cg.json
 
 CPU の解は解き直さない。`s4_hybrid_bitmatch.json` に残した CPU の解のハッシュと突き合わせる

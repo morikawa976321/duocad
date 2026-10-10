@@ -1,8 +1,8 @@
 """探索 1 本を cProfile にかけ、CG 以外でどこに時間を使っているかを出す。
 
-実行(検証用 venv。PYTHONPATH にリポジトリ直下を入れる):
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく。PYTHONPATH にリポジトリ直下を入れる):
 
-    gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s8_search_profile.py --load 200 --size 4.8 --width 10
+    .venv/Scripts/python.exe gpu_feasibility/scripts/s8_search_profile.py --load 200 --size 4.8 --width 10
 
 CG は GPU のビット一致版に差し替えて短くする(探索の軌道は CPU 版と同じ)。FEM ロックは取らない。
 プロファイラの分だけ関数呼び出しの多い箇所は実際より重く出るので、秒は割合を見るために使う。

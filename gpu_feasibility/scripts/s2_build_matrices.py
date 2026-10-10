@@ -1,6 +1,6 @@
 """段階2: 07 の保存マスクから、製品の組立コードで計測用の K_ff・右辺を作って保存する。
 
-**製品の `.venv` の python で、リポジトリ直下から実行する**(検証用 venv には duocad の依存が無い)。
+**開発用の `.venv` の python で、リポジトリ直下から実行する**。
 
     .venv/Scripts/python.exe gpu_feasibility/scripts/s2_build_matrices.py F0200_thin5mm_h2.4_step20:0 ...
 

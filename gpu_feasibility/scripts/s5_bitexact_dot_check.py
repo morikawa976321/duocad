@@ -1,6 +1,6 @@
 """段階5d の前提: GPU の内積を `np.dot` とビット一致させられるかを、足す順序の候補を総当たりして確かめる。
 
-実行(検証用 venv): gpu_feasibility/.venv/Scripts/python.exe gpu_feasibility/scripts/s5_bitexact_dot_check.py
+実行(開発用の .venv。`uv sync --extra gpu` で CuPy を入れておく): .venv/Scripts/python.exe gpu_feasibility/scripts/s5_bitexact_dot_check.py
 出力: gpu_feasibility/results/s5_bitexact_dot.json
 """
 from __future__ import annotations
