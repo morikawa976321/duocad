@@ -175,6 +175,7 @@ class AgentRun:
     `status`:
 
     - `completed`      … モデルがツールを呼ばずに答えた(正常終了)
+    - `empty_reply`    … 本文もツール呼び出しも無いまま、正常な終了理由で返ってきた(結論を出さずに止まった)
     - `max_turns`      … 往復の上限で打ち切った
     - `timeout`        … 合計時間の上限で打ち切った。往復の境目で切るので、実行済みのツールの結果は `tool_calls` に入る
     - `cancelled`      … 中断フラグが立った
@@ -366,6 +367,10 @@ class AgentLoop:
                     "max_tokens": "max_tokens",
                     "refusal": "refusal",
                 }.get(reply.stop, "stopped")
+                if status == "completed" and not reply.text:
+                    # 思考が縮退ループした後に本文もツール呼び出しも出さず終わる(#137)。completed にすると、画面では
+                    # 何もせずに「完了」と出る。再試行はしない(同じ文脈で同じ長考に入りやすく、1回で数十分かかりうる)。
+                    status = "empty_reply"
                 detail = "" if status == "completed" else f"stop_reason={reply.stop_reason!r}"
                 return self._result(status, detail, turn, outcomes, usage, text=reply.text)
 
