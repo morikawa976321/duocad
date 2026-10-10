@@ -10,6 +10,7 @@
 | [MANUAL.md](MANUAL.md) | 使い方（制作用の安定版と開発用の使い分け） |
 | [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) | コア・全体の設計判断と実測（層の分け方・外してはいけない3つ・技術選定の根拠・verb 粒度・図形の表現・保存・性能・テスト方針・方向） |
 | [AI_INTEGRATION.md](AI_INTEGRATION.md) | アプリ内 AI・MCP・ローカル LLM（方向と未決・実測・「止まる」規律の実装・落とし穴） |
+| [LOCAL_LLM_QWEN38.md](LOCAL_LLM_QWEN38.md) | Qwen3.8-27B を dGPU 無しのラップトップで動かしたアプリ内 AI の実測（思考の設定・依頼文・失敗の型・ばらつき対策・スロット保存が効かない理由・測定の運用） |
 | [UI.md](UI.md) | 画面と操作の判断（方針・パネル配置・コマンド層・スケッチ入力・見た目） |
 | [VIEWPORT.md](VIEWPORT.md) | 3D ビューポート（深度の規約・カメラ・ピック・グリッド・可変解像度と面カリング・ビューキューブ・断面） |
 | [SMOKE_TESTING.md](SMOKE_TESTING.md) | 実機検査（puppeteer）の書き方: 座標・待機・選択・fixture・環境 |
