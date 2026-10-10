@@ -1,15 +1,11 @@
 """1つの文書を持つサーバ側の状態(`Session`)。WebSocketの接続とは独立(接続が切れても文書は残る)。
 
 verbの呼び出し・選択・パラメータ・操作ログ・保存/開くを、1つの文書の上でまとめる。
-**イベントループのスレッドだけが触る**前提の上に立つ(別スレッドから入ってくる経路は
-`duocad/net/tools_on_loop.py` が畳む)。誰へどう配るかは `duocad/net/ws.py` の仕事で、
-ここが持つのは変更を購読者へ知らせるところまで。
+**イベントループのスレッドだけが触る**前提(別スレッドから入る経路は `duocad/net/tools_on_loop.py` が畳む)。
+配信は `duocad/net/ws.py` の仕事で、ここは変更を購読者へ知らせるところまで。配りもの(状態・版・キャッシュ)は
+`duocad/view.py` の `DocumentView` が持つ(`session.view`)。
 
-**配りもの(状態・版・キャッシュ)はここに無い** —— `duocad/view.py` の `DocumentView` が持ち、
-`Session` は1行の委譲だけを残す(`session.view`)。向きは `Session` -> `view` の一方向。
-
-**`duocad/net/` を参照しない**(向きは `net/` -> ここの一方向)。
-**OCPを直接importしない**(境界はkernel.pyだけ)。
+**`duocad/net/` を参照しない**(向きは `net/` -> ここの一方向)。**OCPを直接importしない**(境界はkernel.pyだけ)。
 """
 from __future__ import annotations
 
@@ -45,36 +41,28 @@ from .verbs import import_step as import_step_verb
 from .verbs.envelope_regions import envelope_pieces, selected_regions
 from .view import DocumentView
 
-#: Windowsの予約デバイス名(拡張子の有無に関わらず特別扱いされる)。
-#: 大文字小文字を区別しない。`_resolve_document_name` が拒否理由をまとめて言う。
+#: Windowsの予約デバイス名(拡張子の有無に関わらず特別扱い。大文字小文字を区別しない)。
 _RESERVED_WINDOWS_NAMES = frozenset({
     "CON", "PRN", "AUX", "NUL",
     "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
     "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 })
 
-# サーバは何も開いていない状態(トップ画面)で立ち上がり、STEPは文書を開いてからアプリ内の「STEP読み込み」かMCPの `import_step`
-# から読む(読み込みのverbは1本だけ)。読み込むSTEPのパスを既定として持つ場所は無いので、smokeスクリプトが使う
-# PCケースのパスは `web/scripts/models.mjs` が持つ。
 class DocumentBusy(RuntimeError):
     """形状最適化を走らせている文書に、文書を変える操作が来た(`Session._edits_document`)。
 
-    最適化は別スレッドで**開始時の文書を持ったまま**数分〜数時間走り、終わりにその文書へ結果を足して
-    保持・除外の形を読み直す。その間にその文書を変えると、古い条件の形が足される・Undo した条件のまま
-    結果が入る(issue #26)。選択・表示の切り替え・保存・書き出しは通す。**別のファイルを開いて編集する
-    のは通す** —— 結果は走らせた文書のファイルへ届く(`deliver_optimization_result`)。
+    最適化は別スレッドで開始時の文書を持ったまま走り、終わりにその文書へ結果を足すので、その間に変えると
+    古い条件の形が足される・Undo した条件のまま結果が入る(issue #26)。選択・表示の切り替え・保存・書き出し、
+    別のファイルを開いて編集することは通す(結果は走らせた文書のファイルへ届く。`deliver_optimization_result`)。
     """
 
 
 class NoDocument(ValueError):
     """文書を開いていない(トップ画面)のに、文書を変える操作が来た(`Session._edits_document`)。
-
-    閉じている間の `Session.document` は空の `Document` で、これを素通しすると最初の変更で
-    自動保存が `untitled-<n>.json` を作り、「何も開いていない」が黙って「無題の文書」に変わる。
+    素通しすると最初の変更で自動保存が `untitled-<n>.json` を作り、「何も開いていない」が黙って「無題の文書」になる。
     """
 
 
-#: サムネイルの置き場(`models_dir` の下。一覧は `models_dir/*.json` しか見ないので混ざらない)。
 THUMBNAIL_DIR = ".thumbnails"
 #: 受け取るPNGの上限[バイト]。画面が撮るのは128px四方で、RGBAを圧縮せず持っても64KiB。
 THUMBNAIL_MAX_BYTES = 256 * 1024
@@ -89,10 +77,8 @@ def _mtime_or_none(path: Path) -> Optional[float]:
 
 
 def _edits_document(method: Any) -> Any:
-    """文書を変える `Session` のメソッドに付ける。**形状最適化を走らせている文書なら `DocumentBusy` で断る**。
-
-    ブラウザ・MCP・アプリ内AIのどの経路も `Session` のメソッドを通るので、ここ1箇所で全部が止まる
-    (画面の灰色化だけでは別タブ・AI・キーボードを止められない)。
+    """文書を変える `Session` のメソッドに付ける。形状最適化を走らせている文書なら `DocumentBusy` で断る。
+    ブラウザ・MCP・アプリ内AIのどの経路も `Session` のメソッドを通るので、ここ1箇所で全部が止まる。
     """
 
     @functools.wraps(method)
@@ -109,9 +95,8 @@ def _edits_document(method: Any) -> Any:
     return guarded
 
 
-#: プレビューできるverb -> (`Session` のメソッド名, 受け取ってよい引数名)。
-#: `Session.preview` の唯一の入口で、**ここに無いverbはプレビューできない**
-#: (載せてよいverbの条件は `catalog.Command.previewable`)。
+#: プレビューできるverb -> (`Session` のメソッド名, 受け取ってよい引数名)。ここに無いverbはプレビューできない
+#: (載せてよい条件は `catalog.Command.previewable`)。
 PREVIEWABLE_VERBS: dict = catalog.previewable_verbs()
 
 class Session:
@@ -126,124 +111,89 @@ class Session:
         opened: bool = True,
     ) -> None:
         self.document = Document()
-        #: 文書を開いているか。**False がトップ画面**(何も開いていない)で、`self.document` は
-        #: 空のまま持ち、文書を変える操作は `NoDocument` で断る(`_require_open`)。サーバは閉じて
-        #: 起動し(`mcp_server.main`)、Python から組み立てる側(テスト・スクリプト)は開いて始まる。
-        #: **書き換えるのは `_replace_document`(開く/新規で True)と `close_document` だけ**。
+        #: 文書を開いているか。False がトップ画面で、`self.document` は空のまま持ち、変更操作は `NoDocument` で断る(`_require_open`)。
+        #: サーバは閉じて起動し(`mcp_server.main`)、Python から組み立てる側(テスト・スクリプト)は開いて始まる。
+        #: 書き換えるのは `_replace_document` と `close_document` だけ。
         self._open = bool(opened)
         self.deviation = float(deviation)
-        #: 保存/開く/一覧の唯一の置き場。既定は `DEFAULT_MODELS_DIR`
-        #: (リポジトリ直下の `models/`)。テストが実フォルダを汚さないよう差し替えられる。
         self.models_dir: Path = (
             DEFAULT_MODELS_DIR if models_dir is None else Path(models_dir)
         ).resolve()
-        #: STEP/STL書き出しの既定の置き場(`DEFAULT_EXPORTS_DIR` = リポジトリ直下の `export/`)。
         self.exports_dir: Path = (
             DEFAULT_EXPORTS_DIR if exports_dir is None else Path(exports_dir)
         ).resolve()
-        #: `geometry()` や `_sketch_state` が積む警告。**`view` と同じリストオブジェクトを
-        #: 共有する**(吸い出す口は `take_warnings()` だけ。2つの持ち主を作らない)。
+        #: `geometry()` や `_sketch_state` が積む警告。`view` と同じリストオブジェクトを共有する(吸い出す口は `take_warnings()` だけ)。
         self.warnings: list[str] = []
-        #: **いま編集しているファイルの名前**(`models_dir` 配下のファイル名だけ。無ければ `None`)。
-        #: これを持たせることで `save_document` の契約を2つに割り、「編集中でないファイルを
-        #: 上書きできる」穴を**どのUIからも**塞いでいる(契約の詳細は下記 `save_document`)。
-        #:
-        #: **書き換えるのは3箇所だけ**: `save_document(name)` の成功・`open_document` の成功・
-        #: `_replace_document`(開く/新規の共通部分。引数で必ず決めさせる)。
+        #: いま編集しているファイルの名前(`models_dir` 配下のファイル名だけ。無ければ `None`)。これで `save_document` の契約を2つに割り、
+        #: 「編集中でないファイルを上書きできる」穴をどのUIからも塞いでいる。
+        #: 書き換えるのは `save_document(name)` の成功・`open_document` の成功・`_replace_document` の3箇所だけ。
         self._current_name: Optional[str] = None
-        #: 編集中の文書のファイルを最初に書いた時刻(UNIX秒。`OpLog.to_json` の `created`)。
-        #: 新しい名前で書いたときに決まり、開けばファイルから読む。**`created` を持たない
-        #: 既存ファイルは None のまま上書きされ続ける**(理由は docs/UI.md のファイル一覧の項)。
+        #: 編集中の文書のファイルを最初に書いた時刻(UNIX秒。`OpLog.to_json` の `created`)。`created` を持たない既存ファイルは
+        #: None のまま上書きされ続ける(理由は docs/UI.md のファイル一覧の項)。
         self._created: Optional[float] = None
         self._applied_count = 0
-        #: **自動保存で書けなかった変更があるか**(issue #5、本人判断 2026-09-16)。文書が
-        #: 変わるたび `_emit` が `autosave()` を走らせるので、通常は常に False。True になるのは
-        #: 書き込みが失敗したとき(ディスク・権限)だけで、`state()["saved"]` が画面へ運ぶ。
+        #: 自動保存で書けなかった変更があるか(issue #5)。通常は常に False で、書き込み失敗(ディスク・権限)のときだけ True。
         self._unsaved = False
-        #: 保存の書き込みを直列にする。アプリ内AIの道具は**ワーカースレッドで**動き
-        #: (`net/ws.py` の `_ai_start` の `run_in_executor`)、`apply` → `_emit` → 自動保存へ来るので、
-        #: イベントループ側の操作の保存と同じ一時ファイルへ同時に書く経路がある。
+        #: 保存の書き込みを直列にする。アプリ内AIの道具はワーカースレッドで動き(`net/ws.py` の `_ai_start`)、`apply` → `_emit` → 自動保存へ来るので、
+        #: イベントループ側の保存と同じ一時ファイルへ同時に書く経路がある。
         self._save_lock = threading.Lock()
-        #: 配りもの(状態・版・キャッシュ)。**文書を差し替えたら `view.reset()` を呼ぶ**
-        #: (`_replace_document`)——古い文書について測ったものを握ったままにしないため。
+        #: 配りもの。文書を差し替えたら `view.reset()` を呼ぶ(`_replace_document`)。
         self.view = DocumentView(self.document, self.deviation, self.warnings)
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
         self._suppress_events = 0  # >0 の間は `_emit` が配らない(プレビュー。`preview` 参照)
-        #: 形状最適化の中断の旗。**別スレッドから立てられる**(実行はワーカースレッド、
-        #: `cancel_optimization` はイベントループのスレッド)ので `Event` にしてある。
+        #: 形状最適化の中断の旗。別スレッド(実行はワーカー、`cancel_optimization` はイベントループ)から触るので `Event`。
         self._optimize_cancel = threading.Event()
-        #: 形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。立っている間は
-        #: **走らせている文書だけ**を変える操作を断る(`_edits_document` / `_document_locked`)。
-        #: 別のファイルを開いて編集するのは通す。**イベントループのスレッドだけが書く**。
+        #: 形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。立っている間は走らせている文書だけを変える操作を断る
+        #: (`_edits_document` / `_document_locked`)。イベントループのスレッドだけが書く。
         self._optimizing = False
-        #: 走らせている文書(開始時の `self.document`)とそのファイル名・作成日時。**別の文書へ
-        #: 切り替えても実行はこの `Document` を持ったまま走り続け**、結果はここへ足されてから
-        #: `deliver_optimization_result` がファイルへ届ける。
+        #: 走らせている文書(開始時の `self.document`)とそのファイル名・作成日時。別の文書へ切り替えても実行はこの `Document` を持ったまま
+        #: 走り続け、結果は `deliver_optimization_result` がファイルへ届ける。
         self._optimize_document: Optional[Document] = None
         self._optimize_name: Optional[str] = None
         self._optimize_created: Optional[float] = None
-        #: ファイルへ書けなかった結果(ファイル名 -> (文書, 作成日時))。次にその名前を開いたとき、
-        #: ディスクではなくこちらを開く —— 書けなかったからといって数時間の結果を捨てない。
+        #: ファイルへ書けなかった結果(ファイル名 -> (文書, 作成日時))。次にその名前を開いたときディスクでなくこちらを開く。
         self._undelivered: dict[str, tuple[Document, Optional[float]]] = {}
-        #: 別の文書を開いている間に終わった実行の、画面へまだ見せていない結果/失敗の封筒(ファイル名 -> 封筒)。
-        #: 中身を作って配るのは `net/ws.py`。ここに置くのは、削除で一緒に捨てるため(`delete_document`)。
+        #: 別の文書を開いている間に終わった実行の、画面へまだ見せていない結果/失敗の封筒(ファイル名 -> 封筒。作って配るのは `net/ws.py`)。
         self.unseen_optimize_results: dict[str, dict] = {}
         if step_path is not None:
             self.load_step(step_path)
 
     # ---------------------------------------------------------------- 変更イベント(上り方向)
     def add_listener(self, callback: Any) -> None:
-        """文書が変わったら `callback(applied: dict)` で知らせる。
-
-        **コアが変更を発火し、アプリ層が購読して描き直す**。これが無いと、**WebSocket経由
-        以外の主体**——MCPサーバからAIが文書を変えたとき——にブラウザが何も知らないまま
-        古い絵を出し続け、交互操作が原理的に成立しない。購読者は `Server`(WebSocket)で、
-        1つの操作につき1回だけ呼ばれる。
+        """文書が変わったら `callback(applied: dict)` で知らせる(1操作につき1回)。
+        コアが変更を発火しアプリ層が購読して描き直す。これが無いと、WebSocket以外の主体(MCPのAI)が文書を変えても
+        ブラウザが古い絵を出し続ける。購読者は `Server`(WebSocket)。
         """
         self._listeners.append(callback)
 
     def remove_listener(self, callback: Any) -> None:
-        """購読をやめる。登録されていなければ ValueError(黙って空振りさせない)。
-
-        文書は接続より長生きするので、`Server` を作り直す運用(テスト・再起動)で
-        古い購読者が残ると、既に閉じたループへ配信しようとして警告が溜まる。
+        """購読をやめる。登録されていなければ ValueError。
+        `Server` を作り直す運用で古い購読者が残ると、閉じたループへ配信しようとして警告が溜まる。
         """
         self._listeners.remove(callback)
 
     @property
     def can_undo(self) -> bool:
-        """次のundoが通るか。**土台(部品の読み込み・編集用ボディ)は取り消せない**。
-
-        `state_meta()` と MCP の `describe_document` が同じ答えを返すための唯一の出どころ
-        (MCP側が `document.log.can_undo` を素で見ると、土台の直後に「undoできる」と
-        答えてしまい、実際に呼ぶと拒否される食い違いが起きる)。
+        """次のundoが通るか。土台(部品の読み込み・編集用ボディ)は取り消せない。
+        `state_meta()` と MCP の `describe_document` が同じ答えを返すための唯一の出どころ。
         """
         return self.document.log.can_undo and not self._at_setup_floor()
 
     @property
     def applied_count(self) -> int:
-        """**verbを適用した回数**(undo / redo では動かない・単調増加)。
+        """verbを適用した回数(undo / redo では動かない・単調増加)。
 
-        `state_meta()` と MCP の `describe_document` が同じ答えを返すための唯一の出どころ。
-        **操作ログの長さ(`len(document.log.entries)`)ではない** —— ログの長さはundoで減るので、
-        「undoで保存時点へ戻した文書」と「undoしてから別のverbを打った文書」が同じ値になる。
-        `web/src/App.svelte` の保存済み判定は、この2つを見分けるために**動かないほう**の意味に
-        依存している(そちらへ揃える。逆向きに揃えない)。
-
-        書き換える側(`extrude` 等の各verb / `_after_logged_verb` / 文書を開く)は
-        従来どおり `_applied_count` を直に動かす。**`preview()` は投機実行のあいだ
-        `_applied_count` を退避して戻す**ので、プレビューでこの値は動かない。
+        `state_meta()` と MCP の `describe_document` の唯一の出どころ。操作ログの長さではない(undoで減るので、
+        「undoで保存時点へ戻した文書」と「undoしてから別のverbを打った文書」が同じ値になる)。
+        `web/src/App.svelte` の保存済み判定は、この「動かない」意味に依存している(そちらへ揃える)。
+        `preview()` は投機実行のあいだ `_applied_count` を退避して戻すので、プレビューでこの値は動かない。
         """
         return self._applied_count
 
     @property
     def current_name(self) -> Optional[str]:
-        """いま編集中のファイル名(`models_dir` 配下、無ければ `None`)。`state()["current_name"]` と同じ値。
-
-        `net/ws.py` が「開こうとしている名前は今の文書そのものか」を判定するために読む
-        (`_current_name` を外から直接触らせないための窓)。
-        """
+        """いま編集中のファイル名(`models_dir` 配下、無ければ `None`)。`state()["current_name"]` と同じ値。"""
         return self._current_name
 
     @property
@@ -260,22 +210,16 @@ class Session:
     def _emit(self, applied: dict) -> dict:
         """購読者へ変更を知らせて `applied` をそのまま返す(呼び出し側は `return self._emit(...)`)。
 
-        **1人の購読者が落ちても他へ配り、操作自体は成功のままにする** — 通知の失敗で
-        既に確定した文書の変更を巻き戻すことはできないため。落ちたことは警告として残す。
-
-        **プレビュー中(`_suppress_events`)は誰にも配らない**。投機的に実行したverbも `_emit` を
-        通るので、ここで止めないと「確定していない形」が全クライアントへ配信され、直後の
-        巻き戻しで元へ戻る —— 画面がちらつくだけでなく、MCP側が読んだ状態が実在しない中間状態に
-        なる。**呼び出し経路(WebSocket / MCP / 直呼び)に関わらず止まる**ようにここへ置いてある
+        1人の購読者が落ちても他へ配り、操作は成功のままにする(確定した変更は巻き戻せない)。落ちたことは警告に残す。
+        プレビュー中(`_suppress_events`)は誰にも配らない: 投機的に実行したverbも通るので、止めないと確定していない形が
+        全クライアントへ配信され、MCPが実在しない中間状態を読む。呼び出し経路に関わらず止まるようここに置いてある
         (`Server._dispatching` の二重配信よけはWebSocket経由にしか効かない)。
         """
         if self._suppress_events:
             return applied
-        # **文書が変わったら、配る前にディスクへ書く**(1操作ごとの自動保存。issue #5)。
-        # verb の応答(`verb` キー。`_after_logged_verb` / undo / redo)だけが
-        # 対象で、選択・可視性(`change` キー)はファイルに載らない。ここが WebSocket・MCP・
-        # 形状最適化のどの経路も通る唯一の合流点である。配る前に書くのは、配りもの
-        # (`state.saved` / `current_name`)が保存の結果を含むため。
+        # 文書が変わったら配る前にディスクへ書く(1操作ごとの自動保存。issue #5)。対象は verb の応答(`verb` キー)だけで、
+        # 選択・可視性(`change` キー)は載らない。WebSocket・MCP・形状最適化のどの経路も通る唯一の合流点。
+        # 配る前に書くのは、配りもの(`state.saved` / `current_name`)が保存の結果を含むため。
         if "verb" in applied:
             self.autosave()
         for callback in list(self._listeners):
@@ -288,15 +232,10 @@ class Session:
     # ---------------------------------------------------------------- 文書の組み立て
     @_edits_document
     def load_step(self, path: Path) -> list:
-        """STEPを読み、ソリッドごとに参照ボディ+編集用コピーを作る(Python APIとして残す)。
+        """STEPを読み、ソリッドごとに参照ボディ+編集用コピーを作る(中身は verb `import_step`。pytestが直に呼ぶときだけ通る)。
 
-        中身は verb `import_step` そのもの。
-
-        **土台(undoの対象外にする範囲)はverb名ではなくseqの下限で区切る**(`_setup_floor_seq`)。
-        verb名で判定すると、後からユーザー操作としても呼ばれうるverbが末尾に来た瞬間に
-        以後の `undo` が誤って拒否される。
-
-        通常の起動でここは通らない(pytestが直に呼ぶときだけ通る)。
+        土台(undoの対象外)はverb名でなくseqの下限で区切る(`_setup_floor_seq`)。verb名で判定すると、後から
+        ユーザー操作としても呼ばれうるverbが末尾に来た瞬間に以後の `undo` が誤って拒否される。
         """
         editable_ids = import_step_verb(self.document, str(path))
         entries = self.document.log.entries
@@ -309,13 +248,8 @@ class Session:
         return bool(entries) and entries[-1].seq <= self._setup_floor_seq
 
     # ---------------------------------------------------------------- 配りもの(`DocumentView` への委譲)
-    #
-    # 状態・版・キャッシュの実体は `duocad/view.py` にある。ここに
-    # 残すのは**1行の委譲だけ**で、呼び出し側(`net/ws.py` の `_push`、`mcp_server.py`、
-    # テスト)が `session.state_meta()` の形で引き続き引けるようにするためのものである。
-    #
-    # `can_undo` / `applied_count` / 「プレビュー中か」の**持ち主は `Session`** なので、
-    # 委譲のときにこちらから渡す(`view` は `Session` を見ない)。
+    # 実体は `duocad/view.py`。ここは1行の委譲だけ。`can_undo` / `applied_count` / 「プレビュー中か」の持ち主は
+    # `Session` なので、委譲のときにこちらから渡す(`view` は `Session` を見ない)。
     def _view_inputs(self) -> dict:
         """`view` が封筒に載せる値のうち、**持ち主が `Session` のもの**。"""
         return {
@@ -333,16 +267,10 @@ class Session:
         return self._with_current_name(self.view.state_meta(**self._view_inputs()))
 
     def _with_current_name(self, state: dict) -> dict:
-        """配りものに**いま編集しているファイル名**・**保存状態**(`saved`)・**開いているか**を足す(`view` の持ち物ではない)。
+        """配りものに、いま編集しているファイル名・保存状態(`saved`)・開いているかを足す(`view` の持ち物ではない)。
 
-        **`view.state_meta()` へ足さない** —— `DocumentView` が持つのは文書から測れるもの
-        (形・版・スケッチ)だけで、どのファイルを開いているかは `Session` の持ち物である。
-        `state()` と `state_meta()` の両方をここへ通すのは、片方だけに載って
-        「`get_state` では見えるのに配信では見えない」が起きないようにするため。
-
-        **載せないと画面が説明のつかない状態になる**: リロードすると文書はサーバに残る
-        のにブラウザ側の名前だけ失われ、ヘッダが「(無題)」のままなのに自動保存と Ctrl+S は
-        現在のファイルへ書き続ける、という食い違いが出る。
+        `state()` と `state_meta()` の両方を通すのは、片方だけに載って「`get_state` では見えるのに配信では見えない」を
+        防ぐため。載せないとリロードで名前だけ失われ、ヘッダが「(無題)」のまま自動保存と Ctrl+S が現在のファイルへ書き続ける。
         """
         state["current_name"] = self._current_name
         state["saved"] = self.saved
@@ -371,17 +299,9 @@ class Session:
         size_hint: float = 0.0,
         focus=None,
     ) -> bool:
-        """ビューポートのズームに合わせて目標のテセレーション精度を決め直す。
-
-        **文書は一切変わらない**(操作ログにもundoにも載らず、`applied` も出ない)。
-        変わるのは配りものの粗さだけなので、`DocumentView` へそのまま委譲する。
-        戻り値が True のときだけ配信し直せばよい(`duocad/net/ws.py`)。
-
-        `self.deviation`(セッションの土台。STL書き出しが使う)は**動かさない** ——
-        書き出す形の粗さが画面のズームで変わってはいけない。
-
-        `focus` は face単位の高精度化(`{body_id: [面添字]}`)。省略すれば全面が細かい側になる
-        (`DocumentView.set_view_resolution`)。
+        """ビューポートのズームに合わせて目標のテセレーション精度を決め直す。文書は変わらない(ログにもundoにも載らない)。
+        戻り値が True のときだけ配信し直せばよい(`duocad/net/ws.py`)。`self.deviation`(STL書き出しが使う)は動かさない。
+        `focus` は face単位の高精度化(`{body_id: [面添字]}`)。省略すれば全面が細かい側(`DocumentView.set_view_resolution`)。
         """
         return self.view.set_view_resolution(world_per_pixel, size_hint, focus)
 
@@ -395,18 +315,9 @@ class Session:
 
     # ---------------------------------------------------------------- 選択の全リセット
     def _reset_selection_if_needed(self, verb: str) -> None:
-        """形を変えるverbの確定後、選択を全リセットする(統一契約)。
-
-        **カタログの `resets_selection` が正**(`duocad/catalog.py`)。面・辺・領域の添字は
-        形状変更で壊れるので、後継を当てにいくより**全部空にする**ほうが単純で正しい。
-
-        呼び出し側は**成功した後にだけ**呼ぶこと — 失敗した verb は操作ログに積まれず
-        この関数にも到達しないので、「失敗しても選択は保持される」は自然に満たされる。
-
-        **プレビュー(`preview` → `speculative()`)の中では見かけ上効かない** — ここが呼ばれても
-        `with speculative(doc):` を抜ける時点で選択そのものが巻き戻り対象なので元へ戻る
-        (イベントも `_suppress_events` で配らない)。確定(Enter)した本物の呼び出しだけが
-        実際にリセットする。
+        """形を変えるverbの確定後、選択を全リセットする。カタログの `resets_selection` が正(`duocad/catalog.py`)。
+        面・辺・領域の添字は形状変更で壊れるので、後継を当てにいかず全部空にする。呼び出し側は成功した後にだけ呼ぶ。
+        プレビュー(`speculative()`)の中では抜けるときに選択ごと巻き戻るので効かない。
         """
         command = catalog.BY_NAME.get(verb)
         if command is not None and command.resets_selection:
@@ -414,19 +325,15 @@ class Session:
 
     # ---------------------------------------------------------------- 操作
     def set_visible(self, body_id: str, visible: bool, client_op: Optional[int] = None) -> dict:
-        """パーツ一覧からの表示・非表示切り替え。**コアの `selection.set_visible` を呼ぶだけ**
-        (アプリ層に可視性の状態を持たせない。docs/DESIGN_DECISIONS.md「層の分け方」)。
+        """パーツ一覧からの表示・非表示切り替え。コアの `selection.set_visible` を呼ぶだけ(docs/DESIGN_DECISIONS.md「層の分け方」)。
 
-        **verbではない**ので操作ログには積まれず、undo / redo では戻らない
-        (理由は `selection.set_visible`)。発火するのは選択と同じ `change` 系のイベントで、
-        verbの `applied` とはキーで区別する:
+        verbではないので操作ログに積まれず、undo / redo では戻らない(理由は `selection.set_visible`)。
+        選択と同じ `change` 系のイベントを発火する(verbの `applied` とはキーで区別):
 
             {"change": "visibility", "body_id": .., "visible": .., "previous": .., "changed": ..,
              "client_op": int | None}
 
-        効果そのものは配信される状態の `bodies[].visible` に載る(`body_revision` が
-        可視性を版に含めているので、`delta` でも必ず1つ上がる)。存在しない `body_id` は
-        `KeyError`(コア側の契約どおり。documentは変更しない)。
+        効果は配信される状態の `bodies[].visible` に載る。存在しない `body_id` は `KeyError`(documentは変更しない)。
         """
         changed = selection.set_visible(self.document, body_id, bool(visible))
         return self._emit({"change": "visibility", "client_op": client_op, **changed})
@@ -434,40 +341,26 @@ class Session:
     def set_sketch_visible(
         self, sketch_id: str, visible: bool, client_op: Optional[int] = None
     ) -> dict:
-        """ブラウザのスケッチ一覧からの表示・非表示切り替え。`set_visible`(ボディ)と同じ形で、
-        実体は `selection.set_sketch_visible`(verbではない。ログに載らず undo でも戻らない)。
-        イベントは `sketch_id` を持つ `{"change": "visibility", ...}` で、効果は配信される状態の
-        `sketches[].visible` に載る。存在しない `sketch_id` は `KeyError`。
+        """ブラウザのスケッチ一覧からの表示・非表示切り替え(`selection.set_sketch_visible`。`set_visible` と同じ形)。
+        イベントは `sketch_id` を持つ `{"change": "visibility", ...}`。存在しない `sketch_id` は `KeyError`。
         """
         changed = selection.set_sketch_visible(self.document, sketch_id, bool(visible))
         return self._emit({"change": "visibility", "client_op": client_op, **changed})
 
-    # ---------------------------------------------------------------- A1: 共有される選択集合
-    #
-    # **`set_visible` と同じ上り方向に乗せる**(別系統を新設しない)。
-    # 変更 → `Session._emit` → `add_listener` の購読者(`Server._on_core_change`) → 全接続へ配信。
-    # **`state_meta()` に `"selection"` を載せない限りAIが書き換えた選択は画面へ届かない**
-    # (MCP起点の変更では `applied` を落として配るため)。イベントと状態の両方を通す。
-    #
-    # 発火するイベントの形(verbの `applied` とはキーで区別する。選択はverbではない):
-    #     {"change": "selection",
-    #      "selection": {"items": [...], "count": int},
-    #      "client_op": int | None}
-    #
-    # **戻り値**: 変更する4つは `self._emit(...)` の戻り —— つまり**発火したイベントそのもの**
-    # (`{"change","selection","client_op"}`)。`get_selection` だけは発火しないので
-    # `Selection.to_dict()`(`{"items","count"}`)を返す。**この2つは形が違う**ので、
-    # 呼び出し側は `["selection"]` を挟むかどうかを取り違えないこと。
+    # ---------------------------------------------------------------- 共有される選択集合
+    # `set_visible` と同じ上り方向に乗せる: 変更 → `Session._emit` → `add_listener` の購読者(`Server._on_core_change`) → 全接続へ配信。
+    # `state_meta()` に `"selection"` を載せない限りAIが書き換えた選択は画面へ届かない(MCP起点の変更では `applied` を落として配る)ので、
+    # イベントと状態の両方を通す。
+    # 発火するイベント(選択はverbではないので `applied` とはキーで区別): {"change": "selection",
+    #   "selection": {"items": [...], "count": int}, "client_op": int | None}
+    # 戻り値: 変更する4つは `self._emit(...)` の戻り(発火したイベントそのもの)、`get_selection` だけは発火せず
+    # `Selection.to_dict()`(`{"items","count"}`)を返す。この2つは形が違うので `["selection"]` を挟むかどうかを取り違えないこと。
     def get_selection(self) -> dict:
         """現在の選択集合を素の値で返す(`Selection.to_dict()`)。発火はしない。"""
         return selection.get_selection(self.document).to_dict()
 
     def measure(self) -> dict:
-        """いまの選択を測る(`measure.measure_selection`)。verb ではない —— 発火も記録もしない。
-
-        MCP の `measure` と WebSocket の `measure` はどちらもここを通る(画面の「測定」と
-        AI が読む値を同じ計算から出す)。
-        """
+        """いまの選択を測る(`measure.measure_selection`)。MCP の `measure` と WebSocket の `measure` が同じ計算を通る。"""
         return measure_selection(self)
 
     def set_selection(
@@ -515,26 +408,17 @@ class Session:
     # ---------------------------------------------------------------- B: プレビュー(投機的実行)
     @_edits_document
     def preview(self, verb: str, args: Optional[dict] = None) -> dict:
-        """verbを**投機的に実行して形だけ測り、文書を元へ戻す**。
-
-        コマンド層の状態機械「起動 → 引数収集 → プレビュー → 確定(Enter) / 中断(Esc)」の
-        プレビューの実体。**操作ログには何も積まれず、イベントも発火しない**。巻き戻しは
-        `duocad.speculative.speculative` が行う。
+        """verbを投機的に実行して形だけ測り、文書を元へ戻す(巻き戻しは `duocad.speculative.speculative`)。操作ログにも
+        イベントにも出ない。
 
         戻り値:
             {"verb": str,
              "bodies": [{"body_id","name","face_count","volume","geometry"}, ...]}
 
-        `bodies` に入るのは**形が変わった可視のBodyだけ**。`geometry` は `state`/`delta` の
-        同名フィールドと同じ形なので、アプリ層は本物の形状と同じ道具で描ける。
-
-        **プレビューできるverbは `PREVIEWABLE_VERBS` に登録したものだけ**(ソケットから届いた
-        文字列で `Session` の任意のメソッドを呼べる作りにしない)。
-
-        **`_applied_count` は自分で退避する** —— `speculative` が戻すのは文書であって
-        `Session` の持ち物ではない。テセレーションは **`view` を通さず** `kernel.tessellate` を
-        直に呼ぶ(`view` のキャッシュを投機的な形で汚さないため)。剪定のほうは
-        `_view_inputs()` の `previewing` が止める。
+        `bodies` は形が変わった可視のBodyだけ。`geometry` は `state`/`delta` の同名フィールドと同じ形。
+        プレビューできるverbは `PREVIEWABLE_VERBS` のものだけ(ソケットの文字列で任意のメソッドを呼べる作りにしない)。
+        `_applied_count` は自分で退避する(`speculative` が戻すのは文書だけ)。テセレーションは `view` を通さず
+        `kernel.tessellate` を直に呼ぶ(`view` のキャッシュを投機的な形で汚さないため)。剪定は `_view_inputs()` の `previewing` が止める。
         """
         if verb not in PREVIEWABLE_VERBS:
             raise ValueError(
@@ -567,8 +451,7 @@ class Session:
                         "name": body.name,
                         "face_count": kernel.face_count(body.shape),
                         "volume": query.volume(body.shape),
-                        # **プレビューも画面の粗さで測る**(本物のBodyと並べて出るので、
-                        # ここだけ土台の粗さのままだと確定の前後で滑らかさが跳ねる)。
+                        # プレビューも画面の粗さで測る(本物のBodyと並べて出るので、土台の粗さのままだと確定の前後で滑らかさが跳ねる)。
                         "geometry": kernel.tessellate(
                             body.shape,
                             self.view.view_deviation,
@@ -582,11 +465,8 @@ class Session:
 
     @_edits_document
     def undo(self) -> dict:
-        """直前の操作を取り消す。**文書の土台を作った操作は取り消させない**。
-
-        計測の手順は「10回押して10回戻す」ので、1回多く押すと編集用ボディを作った操作まで
-        取り消され、`active_body` が消えて以後の画面更新が全部落ちる。
-        土台はundoの対象外にして、理由を画面へ返す。
+        """直前の操作を取り消す。文書の土台を作った操作は取り消させない
+        (1回多く押すと編集用ボディを作った操作まで取り消され、`active_body` が消えて以後の画面更新が全部落ちる)。
         """
         if not self.document.log.entries:
             raise ValueError("取り消せる操作が無い")
@@ -611,14 +491,12 @@ class Session:
 
     # ---------------------------------------------------------------- verb の適用
     def apply(self, verb: str, args: Optional[dict] = None) -> dict:
-        """verb を1つ適用し、変更イベントを発火して**そのイベント**を返す。
+        """verb を1つ適用し、変更イベントを発火して、そのイベントを返す。verb を掛ける唯一の口。
 
-        **verb を掛ける唯一の口**である。WebSocket(`net/ws.py`)・MCP とアプリ内 AI
-        (`mcp_server.DocumentTools`)・`session.fillet(2.0)` の形の呼び出し(末尾の `_verb_method`)が
+        WebSocket・MCP とアプリ内 AI(`mcp_server.DocumentTools`)・`session.fillet(2.0)` の形の呼び出し(末尾の `_verb_method`)が
         全部ここを通るので、実行中の断り・選択のリセット・自動保存・配信はどの経路でも同じに効く。
-
-        実体は verb のモジュールに置いた入口(`duocad/entry.py`)。**引数の検査はしない** —— 何を必須と
-        するかは口ごとに違う(`catalog.Command.input_schema` / `ws_schema`)ので、呼ぶ側が済ませて来る。
+        実体は verb のモジュールの入口(`duocad/entry.py`)。引数の検査はしない(必須は口ごとに違う。
+        `catalog.Command.input_schema` / `ws_schema`)ので、呼ぶ側が済ませて来る。
         """
         function = entry_for(verb)
         self._require_open()
@@ -639,10 +517,8 @@ class Session:
         return self._emit(payload)
 
     def preview_envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:
-        """`envelope_regions` の確定前の姿。**文書を変えない**(`Session.preview` の経路)。
-
-        分裂しても失敗にせず、全部の面の境界と面の数(`pieces`)を返す —— 分裂を知らせるのは
-        確定時のトーストで、プレビューは線の色で見せる(本人決定)。消えたときは `pieces=0`。
+        """`envelope_regions` の確定前の姿。文書を変えない。分裂しても失敗にせず、全部の面の境界と面の数(`pieces`)を返す
+        (確定時はトースト、プレビューは線の色で見せる。本人決定)。消えたときは `pieces=0`。
         """
         refs = selected_regions(self.document)
         sketch_id, pieces = envelope_pieces(self.document, refs, float(radius), float(offset))
@@ -653,20 +529,15 @@ class Session:
             for entity in kernel_sketch.face_boundary_entities(plane, piece)
         ]
         return {"sketch_ghost": {"sketch_id": sketch_id, "entities": entities, "pieces": len(pieces)}}
-    # ---------------------------------------------------------------- 形状最適化を走らせる
-    # 条件を置く4 verb の**続き**(`duocad/optimize_run.py`)。ここにあるのは委譲と、
-    # 「中断の旗」と「結果を1つのボディとして足したことの通知」だけである。
+    # ---------------------------------------------------------------- 形状最適化を走らせる(`duocad/optimize_run.py` への委譲)
     def optimize_conditions(self) -> dict:
         """4条件がそろって走らせられるか(`optimize_run.conditions_report`)。"""
         return optimize_run.conditions_report(self.document)
 
     def optimize_resolution(self, rmin_mm: Any = None, element_size_mm: Any = None) -> dict:
         """要素サイズの上限・下限・既定。`element_size_mm` を渡すとその値の段も返す(`resolution_limits`)。
-
-        `rmin_mm`(密度フィルタ半径)は**この版では扱えない**(二値探索は
-        密度フィルタを持たない)。届いたら黙って無視せず `OptimizeInputError` にする
-        (`net/ws.py` の `optimize_resolution` コマンドはこれを `ValueError` として拾い、
-        `{"error": ...}` の非トースト表示へ運ぶ——既存の「設定の途中」表示と同じ経路)。
+        `rmin_mm`(密度フィルタ半径)は扱えない(二値探索に密度フィルタが無い)ので、届いたら `OptimizeInputError`
+        (`net/ws.py` の `optimize_resolution` が `ValueError` として拾い、`{"error": ...}` の非トースト表示へ運ぶ)。
         """
         if rmin_mm is not None:
             raise optimize_run.OptimizeInputError(
@@ -676,19 +547,15 @@ class Session:
         return optimize_run.resolution_limits(self.document, element_size_mm)
 
     def cancel_optimization(self) -> dict:
-        """走っている最適化に降りるよう伝える(**旗を立てるだけ**)。
-
-        実際に降りるのは次に進捗が出た時点で、`run_optimization` が `OptimizeCancelled` を
-        投げる。**旗は次の `begin_optimization` が畳む** —— ここで畳むと、中断の直後に
-        立て直された旗を新しい実行が拾ってしまう。
+        """走っている最適化に降りるよう伝える(旗を立てるだけ。実際に降りるのは次に進捗が出た時点)。
+        旗は次の `begin_optimization` が畳む(ここで畳むと、中断の直後に立て直された旗を新しい実行が拾う)。
         """
         self._optimize_cancel.set()
         return {"cancelled": True}
 
     @property
     def optimizing(self) -> bool:
-        """形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。**どの文書でか**は問わない
-        —— 同時に走らせられるのは1本だけ(理由は docs/TOPOPT.md)。"""
+        """形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。どの文書でかは問わない(同時に走るのは1本だけ。docs/TOPOPT.md)。"""
         return self._optimizing
 
     @property
@@ -702,11 +569,8 @@ class Session:
         return self._document_locked()
 
     def _document_locked(self) -> bool:
-        """今の文書が、走っている最適化の対象か(=文書を変える操作を断るか)。
-
-        **同じオブジェクトか、同じファイル名か**の2通りで判定する。実行中に同じファイルを開き直すと、
-        ディスクから再生した別の `Document` になる —— 名前で見ないとそちらは編集でき、終わった結果が
-        その編集を上書きする。
+        """今の文書が、走っている最適化の対象か(=文書を変える操作を断るか)。同じオブジェクトか同じファイル名で判定する
+        (実行中に同じファイルを開き直すとディスクから再生した別の `Document` になり、名前で見ないと編集できて結果がその編集を上書きする)。
         """
         if not self._optimizing:
             return False
@@ -716,12 +580,8 @@ class Session:
 
     def optimization_status(self) -> dict:
         """走っているか・中断を頼まれているか(`net/ws.py` の `optimize_status` の中身)。
-
-        **`running` は「いま開いている文書で走っているか」**(`optimization_visible`)。別の文書を
-        開いている間は走っていない扱いにして、その文書の画面に実行中の表示を一切出さない。
-
-        `cancelling` は**走っている間だけ**載せる —— 旗は次の開始まで立ったままなので、
-        走っていないのに「中断中」と出すと次の実行が中断表示から始まって見える。
+        `running` は「いま開いている文書で走っているか」(`optimization_visible`)。`cancelling` は走っている間だけ載せる
+        (旗は次の開始まで立ったままなので、走っていないのに載せると次の実行が中断表示から始まって見える)。
         """
         visible = self.optimization_visible
         status: dict = {"running": visible}
@@ -730,10 +590,8 @@ class Session:
         return status
 
     def begin_optimization(self) -> None:
-        """走らせる前に**イベントループのスレッドで**呼ぶ。中断の旗を畳み、今の文書を対象として控える。
-
-        **旗はワーカースレッドの中で畳まない** —— 実行を別スレッドへ投げてから走り出すまでの間に届いた
-        中断が、走り出した実行に消されて結果が足される(issue #35)。
+        """走らせる前にイベントループのスレッドで呼ぶ。中断の旗を畳み、今の文書を対象として控える。
+        旗をワーカースレッドの中で畳むと、投げてから走り出すまでに届いた中断が消されて結果が足される(issue #35)。
         """
         if self._optimizing:
             raise ValueError("最適化が既に走っている(中断してから)")
@@ -751,23 +609,18 @@ class Session:
         self._optimize_created = None
 
     def deliver_optimization_result(self, result: dict) -> dict:
-        """足し終えた結果を、走らせた文書のファイルへ届ける。**`end_optimization` より前に、イベントループの
-        スレッドで**呼ぶ(人の操作と同じスレッドで文書を差し替えるため。ワーカースレッドで差し替えると、
-        同時に届いた「開く」と入れ違う)。
+        """足し終えた結果を、走らせた文書のファイルへ届ける。`end_optimization` より前に、イベントループのスレッドで呼ぶ
+        (ワーカースレッドで文書を差し替えると、同時に届いた「開く」と入れ違う)。
 
-        結果は実行が持っていた `Document` にもう足されている(`optimize_run.run`)。届け先は3通り:
+        結果は実行が持っていた `Document` に足されている(`optimize_run.run`)。届け先は3通り:
 
-        - **その文書を開いたまま** … 今までどおり変更イベントを発火し、自動保存する。
-        - **同じファイルを開き直していた** … 開き直した写し(結果が無い)を実行の文書へ差し替える。
-          写しは編集を断られていたので、捨てて失うものは無い。
-        - **別の文書を開いている** … 実行の文書をそのファイルへ書くだけ(今の文書には触れない)。
-          戻り値に `"elsewhere": True` を付ける —— 画面へは配らず、次に開いたときに見せる(`net/ws.py`)。
+        - その文書を開いたまま … 変更イベントを発火し、自動保存する。
+        - 同じファイルを開き直していた … 開き直した写し(編集を断られていたので捨てて失うものは無い)を実行の文書へ差し替える。
+        - 別の文書を開いている … 実行の文書をそのファイルへ書くだけ。戻り値に `"elsewhere": True` を付け、画面へは配らず
+          次に開いたときに見せる(`net/ws.py`)。
 
-        **結果の警告(`warning`)を `Session.warnings`(=今の画面のトースト)へ積むのは、その文書を開いている
-        ときだけ** —— 別の文書の画面には何も出さない。離れている間の警告と書けなかったことは結果の
-        `warning` に載せ、戻ってきたときにパネルの通知で読ませる(`net/ws.py` が控えて配る)。
-
-        `state != "done"` のときは文書を変えていないので、警告の行き先を決めるだけ。
+        結果の警告(`warning`)を `Session.warnings` へ積むのは、その文書を開いているときだけ。離れている間の分は結果の
+        `warning` に載せ、戻ってきたときにパネルの通知で読ませる(`net/ws.py`)。`state != "done"` のときは警告の行き先を決めるだけ。
         """
         document = self._optimize_document
         name = self._optimize_name
@@ -790,9 +643,8 @@ class Session:
                         "triangle_count": result["triangle_count"],
                     }
                 )
-            # **配る前にディスクへ書く**(2026-09-13実測: 数時間がかりの実行が、結果を見る前に
-            # サーバプロセスごと消えた)。`_after_logged_verb` の自動保存と重なるが、変更イベントを
-            # 発火しない経路(結果にボディが無い)でも書く。
+            # 配る前にディスクへ書く(2026-09-13実測: 数時間がかりの実行が、結果を見る前にサーバプロセスごと消えた)。
+            # 変更イベントを発火しない経路(結果にボディが無い)でも書く。
             self.autosave()
             return result if applied is None else dict(result, applied=applied)
         label = name
@@ -832,25 +684,16 @@ class Session:
     ) -> dict:
         """形状最適化を端から端まで走らせ、結果をメッシュボディとして足す。
 
-        **重い(数十秒〜数分)。** 呼び出し側はイベントループを塞がないよう別スレッドで
-        回すこと(`asyncio.to_thread`)。`progress(event: dict)` はそのスレッドから呼ばれる。
+        重い(数十秒〜数分)ので、呼び出し側は別スレッド(`asyncio.to_thread`)で回す。`progress(event: dict)` はそのスレッドから呼ばれる。
+        `debug` / `debug_kinds` は開発用の可視化(`?debug=space` / `?debug=anchors` / `?voxel=1`)の材料を `optimize_run.run()` へ
+        渡す口で、頼まなければ費用ゼロ・結果にも文書にも影響しない。
+        `rmin_mm` / `max_iter` / `material_min_mm3` / `material_max_mm3` は旧SIMP方式の引数で扱えない。キーワードとして受け続けるのは、
+        届いたときに `TypeError` でなく `OptimizeInputError`(意味を説明した文)で断るため(`net/ws.py` が転送すればここ1か所で断る)。
+        `state != "done"` のときは文書を変えていない。
 
-        `debug` / `debug_kinds` は開発用の可視化(画面の `?debug=space` / `?debug=anchors` /
-        `?voxel=1`)の材料をそのまま `optimize_run.run()` へ渡す口。**頼まなければ費用ゼロ**で、
-        結果にも文書にも1ビットも影響しない。
-
-        `rmin_mm` / `max_iter` / `material_min_mm3` / `material_max_mm3` は**旧SIMP方式の
-        引数で、この版では扱えない**(旧引数が外部から届いたら黙って無視せず、
-        不支持と分かるエラーにする」)。キーワードとして受け続けているのは、届いたときに
-        `TypeError`(引数名を知らない)ではなく`OptimizeInputError`(意味を説明した文)で
-        断るため —— 呼び出し側(`net/ws.py`)が転送さえすれば、ここが一箇所で断る。
-
-        **`state != "done"` のときは文書を1ビットも変えていない**。
-
-        **呼び出し側が `begin_optimization` を済ませていなければ、ここで開始・届け・終了まで囲む**(テスト・
-        スクリプトの直呼び。戻り値は成功時に `"applied"` 付き)。`net/ws.py` は別スレッドへ投げる前に
-        開始しておき(issue #35)、**届け(`deliver_optimization_result`)はイベントループへ戻ってから
-        自分で呼ぶ** —— ここ(ワーカースレッド)は結果を実行の文書へ足すところまでしかしない。
+        呼び出し側が `begin_optimization` を済ませていなければ、ここで開始・届け・終了まで囲む(テスト・スクリプトの直呼び。
+        戻り値は成功時に `"applied"` 付き)。`net/ws.py` は別スレッドへ投げる前に開始しておき(issue #35)、届け
+        (`deliver_optimization_result`)はイベントループへ戻ってから自分で呼ぶ(ここは結果を実行の文書へ足すところまで)。
         """
         unsupported = {
             "rmin_mm": rmin_mm,
@@ -891,33 +734,22 @@ class Session:
                 self.end_optimization()
         return result
 
-    # ---------------------------------------------------------------- E: ファイル操作
-    #
-    # **保存形式は操作ログのJSON**(docs/DESIGN_DECISIONS.md「技術選定の根拠」)。形状はそこから導出されるので、
-    # 開くたびに再生経路が検査されることになる —— 「保存したものが開けない」が
-    # 起きるとしたら、それは再生が壊れているということであり、隠さない方がよい。
+    # ---------------------------------------------------------------- ファイル操作
+    # 保存形式は操作ログのJSON(docs/DESIGN_DECISIONS.md「技術選定の根拠」)。保存したものが開けないなら再生が壊れているので、隠さない。
     def _resolve_document_name(self, name: Any) -> Path:
-        """**ファイル名だけ**を受け取り、`models_dir` 配下に閉じたパスへ解決する。
+        """ファイル名だけを受け取り、`models_dir` 配下に閉じたパスへ解決する(`models_dir` が無ければ作る)。
 
-        保存先が「その日サーバをどこで起動したか」で変わらないよう、起点を `models_dir` に
-        固定してある。**文字列だけの拒否では脱出経路が残る**(いずれも実測):
+        保存先が起動場所で変わらないよう起点を `models_dir` に固定してある。文字列だけの拒否では脱出経路が残る(いずれも実測):
 
-        - `Path("D:outside.json").is_absolute()` は **False**(Windowsのドライブ相対パス)。
-          素の絶対パス判定をすり抜け、しかも `models_dir / "D:outside.json"` は pathlib が
-          右辺の「ドライブ付きセグメント」を**新しいアンカー**として扱うため、`models_dir` 側が
-          黙って捨てられて `D:\\outside.json` に解決される。**コロン1文字**が入口で、NTFSの
-          代替データストリーム(`a.json:x` → `models\\a.json:x` へ書ける)も同じ入口を通る。
-        - 予約デバイス名(`CON`/`COM1`等、拡張子を付けても特別扱い)・末尾のドット/空白
-          (Windowsが黙って落とすため `foo.json.` と `foo.json` が同じ実体になりうる)。
-        - **文字列の拒否だけでは、既存のシンボリックリンク/ジャンクションを指すファイル名が
-          `models_dir` の外へ実際に解決されるケースを塞げない** —— 最終判定は必ず
-          **解決後のパスが `models_dir` 配下か**で行う(`resolve()` はリンクを辿る)。
+        - `Path("D:outside.json").is_absolute()` は False(Windowsのドライブ相対パス)。しかも `models_dir / "D:outside.json"` は
+          pathlib が「ドライブ付きセグメント」を新しいアンカーとして扱い、`models_dir` を捨てて `D:\\outside.json` に解決される。
+          コロン1文字が入口で、NTFSの代替データストリーム(`a.json:x`)も同じ。
+        - 予約デバイス名(`CON`/`COM1`等、拡張子を付けても特別扱い)・末尾のドット/空白(Windowsが黙って落とすため
+          `foo.json.` と `foo.json` が同じ実体になりうる)。
+        - 既存のシンボリックリンク/ジャンクションを指すファイル名は、文字列検査では `models_dir` の外へ解決されるのを塞げない。
 
-        したがって判定は2段: ①明らかに拒まれる形を早く言う文字列検査(区切り文字・コロン・
-        `.`/`..`・予約名・前後の空白・末尾のドット/空白・拡張子)、②**解決後のパスが
-        `models_dir` 配下であることの検査**(`is_relative_to`)。①だけに頼らない。
-
-        `models_dir` が無ければここで作る。
+        判定は2段: ①明らかに拒まれる形を早く言う文字列検査、②解決後のパスが `models_dir` 配下か(`is_relative_to`。
+        `resolve()` はリンクを辿る)。①だけに頼らない。
         """
         text = str(name)
         stripped = text.strip()
@@ -939,9 +771,8 @@ class Session:
         if base_name in _RESERVED_WINDOWS_NAMES:
             raise ValueError(f"予約されたデバイス名は使えない: {text!r}")
         if not text.lower().endswith(".json"):
-            # **一覧(`list_documents`)は `*.json` しか見ない**。拡張子違いを受理すると、
-            # 保存はできるのに一覧から二度と開けないファイルができる。黙って `.json` を
-            # 補うより、打ち間違いをその場で本人に返す。
+            # 一覧(`list_documents`)は `*.json` しか見ない。拡張子違いを受理すると、保存はできるのに一覧から二度と開けないファイルができる。
+            # 黙って `.json` を補うより、打ち間違いをその場で返す。
             raise ValueError(f"拡張子は.json(一覧はモデルの*.jsonだけを見る): {text!r}")
         candidate = Path(text)
         if candidate.is_absolute():
@@ -949,52 +780,37 @@ class Session:
         self.models_dir.mkdir(parents=True, exist_ok=True)
         root = self.models_dir.resolve()
         resolved = (root / text).resolve()
-        # **正の判定はここ**。文字列検査をすり抜けるものが
-        # あっても、シンボリックリンク越しの脱出も含めて最終的にここで止まる。
+        # 正の判定はここ(シンボリックリンク越しの脱出も含めて最終的にここで止まる)。
         if not resolved.is_relative_to(root):
             raise ValueError(f"models/の外を指している: {text!r} -> {resolved}")
         return resolved
 
     @staticmethod
     def _write_document_file(target: Path, payload: str) -> None:
-        """**一時ファイルへ書いてから差し替える**(呼び手が `_save_lock` を持つ)。素の上書きは既存の
-        中身を先に切り詰めるので、途中で落ちると**唯一の永続形式である前回の保存が
-        半端なJSONで潰れる**(形状は導出物なので、これを失うと復旧の手立てが無い)。
-        `os.replace` は同じディレクトリ内なら不可分に差し替わる。
+        """一時ファイルへ書いてから差し替える(呼び手が `_save_lock` を持つ)。素の上書きは既存の中身を先に切り詰めるので、
+        途中で落ちると唯一の永続形式である前回の保存が半端なJSONで潰れる。`os.replace` は同じディレクトリ内なら不可分。
         """
         staging = target.with_name(target.name + ".writing")
         staging.write_text(payload, encoding="utf-8")
         os.replace(staging, target)
 
     def save_document(self, name: Any = None) -> dict:
-        """操作ログをJSONで書き出す。**verbではない**(文書を変えないのでログに載らない)。
+        """操作ログをJSONで書き出す。verbではない(ログに載らない)。
 
-        **契約は2つに割れている**:
+        契約は2つに割れている:
 
-        - `save_document()`(引数なし) … **いま編集しているファイルへ上書き**する。
-          編集中のファイルが無ければ拒否する
-        - `save_document(name)` … **新しい名前でのみ保存**する。**既に在る名前は拒否**する
-          (いま編集しているファイルの名前であっても拒否する)
+        - `save_document()`(引数なし) … いま編集しているファイルへ上書きする。編集中のファイルが無ければ拒否する。
+        - `save_document(name)` … 新しい名前でのみ保存する。既に在る名前は拒否する(いま編集しているファイルの名前でも)。
 
-        **`name == self._current_name` なら通す、という例外条項を置かない**(本人決定)。
-        一覧の行から上書きを送るUIが無くなった今、`name` の意味は「新しい名前」1つに
-        固定できる。例外を残すと、後から別のUIを足したときに**そこだけ穴が開く**
-        (しかも、その穴が開いたことは誰にも見えない)。
+        `name == self._current_name` なら通す、という例外条項を置かない(本人決定)。例外を残すと、後から別のUIを足したときに
+        そこだけ穴が開き、しかもその穴は誰にも見えない。塞いでいるのは「編集中でないファイルを上書きできる」穴で、誤クリック1回で
+        無関係なモデルが今の文書に置き換わり、操作ログが唯一の正である以上、失ったものは復旧できない。
+        拒否の文はどうすればできるかまで言う(封筒 `net/ws.py` の `{"type":"error"}` が `{型名}: {文}` を前置するので、文だけで人に通じる形で)。
 
-        塞いでいるのは「**編集中でないファイルを上書きできる**」穴である。誤クリック1回で
-        無関係なモデルが今の文書に置き換わり、操作ログが唯一の正である以上、失ったものは
-        復旧できない。**拒否の文はどうすればできるかまで言う** —— 呼び出し側の封筒
-        (`net/ws.py` の `{"type":"error"}`)が `{型名}: {文}` を前置するので、
-        文だけで人に通じる形で書くこと。
-
-        `name` は**ファイル名だけ**(`models_dir` 配下に固定)。区切り文字・絶対パス・
-        `..` は `_resolve_document_name` が拒否する。**その検査を先に通す** ——
-        「既に在るか」を見るより前にパスの安全性を決着させる(models/ の外を指す名前は、
-        存在の有無を問う前に断る)。
-
-        **呼び手は自動保存が主**(issue #5、2026-09-16): 文書が変わるたび `autosave()` が
-        引数なしで呼び、無題なら `untitled-<n>.json` を `name` に渡す。Ctrl+S は引数なしを
-        手で呼ぶだけ(同じ内容を書き直す)。人が名前を決める口は `rename_document`。
+        `name` はファイル名だけ(`_resolve_document_name` が区切り文字・絶対パス・`..` を拒否する)。
+        その検査を先に通す(models/ の外を指す名前は、存在の有無を問う前に断る)。
+        呼び手は自動保存が主(issue #5、2026-09-16): 文書が変わるたび `autosave()` が引数なしで呼び、無題なら
+        `untitled-<n>.json` を `name` に渡す。人が名前を決める口は `rename_document`。
         """
         if name is None:
             if self._current_name is None:
@@ -1007,8 +823,7 @@ class Session:
             target = self._resolve_document_name(name)
             self._require_open()  # 閉じている間の空の文書を、新しい名前のファイルにしない
             if target.exists():
-                # **どちらの枝も拒否する**。分かれるのは「次に何をすればよいか」の文言だけで、
-                # 「現在のファイルなら通す」という抜け道はここに無い(上記docstring)。
+                # どちらの枝も拒否する(分かれるのは「次に何をすればよいか」の文言だけ)。
                 raise ValueError(
                     f"{target.name} は既にある(いま編集中のファイルで、自動保存とCtrl+Sが書いている)"
                     if target.name == self._current_name
@@ -1027,9 +842,8 @@ class Session:
             if name is not None:
                 # 同じ名前の古い文書(外で消された)の絵が残っていれば、それはこの文書の絵ではない。
                 self._drop_thumbnail(target)
-            # **書けてから現在ファイルにする**。先に控えると、書き込みが落ちたときに
-            # 「存在しないファイルを編集中」という状態が残り、次の引数なし保存が
-            # 黙って新しいファイルを作る(拒否されるべき経路が通ってしまう)。
+            # 書けてから現在ファイルにする。先に控えると、書き込みが落ちたとき「存在しないファイルを編集中」になり、
+            # 次の引数なし保存が黙って新しいファイルを作る。
             self._current_name = target.name
             self._created = created
             self._unsaved = False
@@ -1041,10 +855,8 @@ class Session:
 
     @property
     def saved(self) -> bool:
-        """今の文書がそのままファイルに載っているか(`state()["saved"]`)。
-
-        **自動保存が書けなかったときだけ False**。無題で何も変えていない文書は True
-        (書くものが無い —— 最初の変更で名前が付いて書かれる)。
+        """今の文書がそのままファイルに載っているか(`state()["saved"]`)。自動保存が書けなかったときだけ False
+        (無題で何も変えていない文書は True)。
         """
         return not self._unsaved
 
@@ -1057,20 +869,14 @@ class Session:
         return f"untitled-{number}.json"
 
     def autosave(self) -> bool:
-        """今の文書をディスクへ書く(**1操作ごとの自動保存**。issue #5、本人判断 2026-09-16)。
+        """今の文書をディスクへ書く(1操作ごとの自動保存。issue #5、本人判断 2026-09-16)。
 
-        `_emit` が verb の応答のたびに呼ぶ(undo / redo も含む —— ファイルは常に今の文書の
-        鏡で、redo の山は残さない)。**無題の文書は最初の変更で `untitled-<n>.json` の名前を
-        自動で付ける**(以後はそこへ上書き。人が名前を決めるのは `rename_document`)。
-
-        **失敗しても例外にしない** —— 文書の変更は既に確定しており、巻き戻せない。書けな
-        かったことは警告と `saved=False`(画面の「未保存」札)で知らせる。戻り値は書けたか。
-        **捕まえるのは種類を問わない** —— Windows では別のプログラムがファイルを開いている
-        だけで `os.replace` が `PermissionError` になる(実測)。ここから例外が漏れると、
-        最適化の経路では結果も終了の `optimize_status` も配られず画面が実行中のまま固まる。
-
-        費用は操作ログ全体のJSON化と書き込み(差分ではない)。実測は 4.8MB の文書で 0.02秒
-        なので、debounce も差分保存も入れていない。
+        `_emit` が verb の応答のたびに呼ぶ(undo / redo も含む。ファイルは常に今の文書の鏡)。無題の文書は最初の変更で
+        `untitled-<n>.json` を自動で付ける(人が名前を決めるのは `rename_document`)。
+        失敗しても例外にしない(文書の変更は確定済みで巻き戻せない)。書けなかったことは警告と `saved=False` で知らせ、
+        戻り値は書けたか。捕まえるのは種類を問わない: Windows では別のプログラムがファイルを開いているだけで
+        `os.replace` が `PermissionError` になり(実測)、漏れると最適化の経路で結果も終了の `optimize_status` も配られず画面が実行中のまま固まる。
+        費用は操作ログ全体のJSON化と書き込み。実測は 4.8MB の文書で 0.02秒なので debounce も差分保存も入れていない。
         """
         try:
             if self._current_name is None:
@@ -1084,13 +890,9 @@ class Session:
         return True
 
     def rename_document(self, name: Any) -> dict:
-        """いま編集しているファイルの名前を変える(ディスク上で移す)。**verbではない**。
-
-        自動保存が名前を `untitled-<n>.json` で決めるので、人が名前を付ける口はこれになる
-        (ファイルパネルの名前欄。issue #5)。`name` が既に在れば拒否 —— 上書きの口は持たない
-        (`copy_document` と同じ線)。**無題で何も変えていない文書**(ファイルがまだ無い)は、
-        その名前で空の文書を書く(「この文書をこの名前にする」の意味は同じで、書く先が
-        無ければ作るだけ)。
+        """いま編集しているファイルの名前を変える(ディスク上で移す)。verbではない。
+        人が名前を付ける口(ファイルパネルの名前欄。issue #5)。`name` が既に在れば拒否(上書きの口は持たない。`copy_document` と同じ)。
+        無題で何も変えていない文書(ファイルがまだ無い)は、その名前で空の文書を書く。
         """
         target = self._resolve_document_name(name)
         # 閉じている間に通すと、空の文書がその名前で書かれる(トップ画面のまま新規ファイルが増える)。
@@ -1124,19 +926,12 @@ class Session:
         }
 
     def open_document(self, name: Any) -> dict:
-        """保存した操作ログを読み、**再生して**文書を差し替える(§3.1「これが正」)。
+        """保存した操作ログを読み、再生して文書を差し替える(§3.1「これが正」)。`name` はファイル名だけ(`save_document` と同じ)。
 
-        `name` は**ファイル名だけ**(`models_dir` 配下に固定。`save_document` と同じ)。
-
-        **失敗しても今の文書を壊さない**。新しい `Document` の上で再生し切ってから
-        差し替えるので、途中で落ちたら例外が上がるだけで画面はそのまま残る。
-
-        **形状最適化の実行中も断らない**(`new_document` も同じ)。実行は開始時の文書を持ったまま
-        走り続け、結果はそのファイルへ届く(`deliver_optimization_result`)。走らせている
-        ファイル自身を開き直した写しは、終わるまで編集を断る(`_document_locked`)。
-
-        差し替えの後始末(キャッシュ・版・土台の下限)は `_replace_document` が持つ
-        (`new_document` と共通)。
+        失敗しても今の文書を壊さない(新しい `Document` で再生し切ってから差し替える)。
+        形状最適化の実行中も断らない(`new_document` も同じ)。実行は開始時の文書を持ったまま走り、結果はそのファイルへ届く
+        (`deliver_optimization_result`)。走らせているファイル自身を開き直した写しは、終わるまで編集を断る(`_document_locked`)。
+        差し替えの後始末は `_replace_document`(`new_document` と共通)。
         """
         source = self._resolve_document_name(name)
         if source.name in self._undelivered:
@@ -1146,15 +941,12 @@ class Session:
         payload = json.loads(source.read_text(encoding="utf-8"))
         log = OpLog.from_payload(payload)
         document = Document()
-        # **束ねてから再生する**(順序が逆だと `set_parameter` を含むログで落ちる)。
-        # パラメータの再生は「その操作までを作り直す」ために `document.log` を頭から
-        # 読むので、再生中の文書が自分のログを持っていないと成立しない
-        # (`parameters.rebuild` が理由つきで拒否する)。
+        # 束ねてから再生する(逆だと `set_parameter` を含むログで落ちる。パラメータの再生は `document.log` を頭から読むので、
+        # 再生中の文書が自分のログを持っていないと成立しない。`parameters.rebuild` が理由つきで拒否する)。
         document.log = log
         log.replay(document)
 
-        # **開けたものが編集中のファイルになる**(以後、引数なしの `save_document()` は
-        # ここへ書く)。再生が落ちたときはこの行まで来ないので、現在名も差し替わらない。
+        # 開けたものが編集中のファイルになる。再生が落ちたときはここまで来ないので現在名も差し替わらない。
         self._replace_document(
             document, current_name=source.name, created=OpLog.created_of(payload)
         )
@@ -1166,11 +958,7 @@ class Session:
         })
 
     def _open_undelivered(self, name: str) -> dict:
-        """ファイルへ書けなかった最適化の結果入りの文書を開き、もう一度書く。
-
-        開いた時点で今の文書になるので手放す —— 以後は普通の文書と同じく、書けなければ
-        `saved=False` の札と1操作ごとの書き直しが受け持つ。
-        """
+        """ファイルへ書けなかった最適化の結果入りの文書を開き、もう一度書く。開いた時点で今の文書になるので手放す。"""
         document, created = self._undelivered.pop(name)
         self._replace_document(document, current_name=name, created=created)
         self.autosave()
@@ -1182,36 +970,26 @@ class Session:
         })
 
     def new_document(self) -> dict:
-        """空の文書へ差し替える(「新規」)。**verbではない**(ログに載らない)。
+        """空の文書へ差し替える(「新規」)。verbではない(ログに載らない)。
 
-        **今の文書は捨てられ、undoでは戻らない**(`open_document` と同じ)。確認は挟まない ——
-        一覧からのクリック1つで別の文書へ移れるのに、空の文書へ移るときだけ確認を挟むと
-        挙動が割れる(`web/src/FilesPanel.svelte` の「開くのに確認ダイアログを挟まない」)。
-
-        **捨てる前に保存はしない** —— 名前つきの文書は1操作ごとに自動保存されていて
-        (`autosave`)、失うものが無い。
-
-        **編集中のファイルも無くなる**(`current_name=None`)。空の文書はどこにも書かれて
-        おらず、次に文書を変えた瞬間に自動保存が `untitled-<n>.json` を作る(それまで
-        引数なしの `save_document()` は拒否される)。
+        今の文書は捨てられ、undoでは戻らない(`open_document` と同じ)。確認は挟まない(一覧からのクリック1つで別の文書へ移れるのに、
+        空の文書へ移るときだけ確認すると挙動が割れる。`web/src/FilesPanel.svelte`)。捨てる前の保存もしない(1操作ごとに自動保存済み)。
+        編集中のファイルも無くなる(`current_name=None`)。次に文書を変えた瞬間に自動保存が `untitled-<n>.json` を作る
+        (それまで引数なしの `save_document()` は拒否される)。
         """
         self._replace_document(Document(), current_name=None, created=None)
         return self._emit({
             "change": "document",
             "action": "new",
-            # **開いたファイルが無いので `path` / `name` は `None`**。受け取る側
-            # (`web/src/App.svelte`)はこれで「今どれを触っているか」の表示を(無題)へ戻し、
-            # 保存状態も「未保存」へ戻す(どこにも書かれていない文書になるため)。
+            # 開いたファイルが無いので `path` / `name` は `None`(`web/src/App.svelte` はこれで表示を(無題)・保存状態を「未保存」へ戻す)。
             "path": None,
             "name": None,
         })
 
     def close_document(self) -> dict:
-        """文書を閉じてトップ画面(何も開いていない状態)へ戻す。**verbではない**。
-
-        保存はしない(1操作ごとに自動保存されている)。中身は空の `Document` に差し替えて
-        undo の山ごと捨てる —— 中身を残したまま閉じた扱いにすると、開き直さずに編集できる
-        経路が1つでも残った瞬間に、前の文書の続きが `untitled-<n>.json` として書かれる。
+        """文書を閉じてトップ画面(何も開いていない状態)へ戻す。verbではない。保存はしない(自動保存済み)。
+        空の `Document` に差し替えてundoの山ごと捨てる: 中身を残したまま閉じた扱いにすると、開き直さずに編集できる経路が
+        1つでも残った瞬間に、前の文書の続きが `untitled-<n>.json` として書かれる。
         """
         self._replace_document(Document(), current_name=None, created=None)
         self._open = False
@@ -1227,46 +1005,31 @@ class Session:
     ) -> None:
         """今の文書を `document` へ差し替える(`open_document` / `new_document` の共通部分)。
 
-        **`current_name` は既定値を持たない**(キーワード必須)。文書を差し替える経路は
-        必ず「この後どのファイルを編集していることになるか」を1つ決める —— 既定で
-        持ち越すと、`new_document` の後に前の文書のファイル名が残って、引数なしの
-        `save_document()` が**捨てたはずのファイルを空の文書で潰す**。
-
-        差し替えでは配りものを `view.reset()` で作り直す —— Bodyのidは再生で作り直されるが、
-        同じidが再び現れる可能性があり、古い形状を指したキャッシュが残っていると別の文書の
-        形を配ることになる。
-
-        **選択集合はここで触らない** —— 選択は `Document` が持つので、差し替えた時点で
-        新しい文書の空の選択になっている。
+        `current_name` は既定値を持たない(キーワード必須): 既定で持ち越すと、`new_document` の後に前の文書のファイル名が残り、
+        引数なしの `save_document()` が捨てたはずのファイルを空の文書で潰す。
+        配りものは `view.reset()` で作り直す(Bodyのidは再生で作り直されるが同じidが再び現れうる。古い形状を指したキャッシュが
+        残ると別の文書の形を配る)。選択集合は `Document` が持つので、差し替えた時点で空になっている。
         """
         self.document = document
         self._open = True  # 閉じる側(`close_document`)は差し替えの後で False に戻す
         self._current_name = current_name
         self._created = created
         self._unsaved = False  # 開いた/空にした文書に、書けなかった変更は無い
-        # キャッシュの破棄は**`view` の1呼び出し**(何を捨てて何を残すかは `DocumentView.reset`
-        # が持つ。とくに版の数え上げを消さない理由はそちらのdocstring)。
+        # キャッシュの破棄は `view` の1呼び出し(とくに版の数え上げを消さない理由は `DocumentView.reset` の docstring)。
         self.view.reset(document)
-        # **土台の下限は引き継がない**。読み込んだログはすべてその文書の操作であり、
-        # 起動時の `load_step` が積んだ「取り消させない土台」とは別物である。
+        # 土台の下限は引き継がない(読み込んだログはすべてその文書の操作で、起動時の `load_step` の土台とは別物)。
         self._setup_floor_seq = 0
         self._applied_count += 1
 
     def list_documents(self) -> dict:
-        """`models_dir` の中身を一覧にする(名前/更新日時/作成日時/サムネイルの版)。**verbではない**。
+        """`models_dir` の中身を一覧にする(名前/更新日時/作成日時/サムネイルの版)。verbではない。
 
-        読めるファイルだけを載せる判定は、`OpLog.from_payload` のパースだけで行う —— 形状の再生
-        (`log.replay`)まではしない。STEP本文がログに入って1ファイルが4.8MB級になったが、実測で
-        ファイルあたり約30ms(PCケースの4.8MBを3件で0.09s)なので、この作りのままにしてある。
-
-        壊れたファイル(手で触られた・書き込み途中の `.writing` 等)は一覧からは省く
-        (一覧が原因不明の例外で丸ごと落ちるより、読める分だけ見せる方が実用に沿う)。
-        **旧形式(version 1)のファイルもここでは黙って省かれる** —— `from_payload` が ValueError
-        にするため。次に版を上げるときは「一覧に出ないだけで理由が分からない」になることに注意。
-
-        `created` は入れ物の作成日時(無いファイルは None)。`thumb` はサムネイルの更新日時で、
-        **画像そのものは載せない** —— 一覧は自動保存のたびに取り直されるので、載せると全件の
-        画像を毎回送ることになる。画像は `get_thumbnail` で1件ずつ取る。
+        読めるファイルだけを載せる判定は `OpLog.from_payload` のパースだけで行う(形状の再生はしない)。
+        実測でファイルあたり約30ms(4.8MBのPCケースを3件で0.09s)。壊れたファイル(手で触られた・書き込み途中の `.writing` 等)は
+        省く。旧形式(version 1)のファイルも `from_payload` が ValueError にするため黙って省かれる(次に版を上げるときは
+        「一覧に出ないだけで理由が分からない」になる)。
+        `created` は入れ物の作成日時(無いファイルは None)。`thumb` はサムネイルの更新日時で、画像そのものは載せない
+        (一覧は自動保存のたびに取り直されるので、載せると全件の画像を毎回送る)。画像は `get_thumbnail` で1件ずつ取る。
         """
         self.models_dir.mkdir(parents=True, exist_ok=True)
         files = []
@@ -1286,15 +1049,10 @@ class Session:
         return {"action": "list", "path": str(self.models_dir), "files": files}
 
     def copy_document(self, source: Any, dest: Any) -> dict:
-        """`models_dir` の `source` を `dest` へ複製する。**verbではない**(文書を変えない)。
-
-        **いま編集している文書も `current_name` も変わらない**
-        (`open_document` とは別の操作。複製元を開いていなくてもよい)。`dest` が既に在れば
-        拒否する —— 上書きの口は持たない(`save_document(name)` と同じ線。issue #17)。
-        どちらの名前も `_resolve_document_name` を通す(`models_dir` の外は指せない)。
-
-        **複製は新しいファイルなので作成日時を今にする** —— バイト列を写さず、読んで書き直す
-        (操作は `from_json`/`to_json` の往復で一致する)。サムネイルは写す。
+        """`models_dir` の `source` を `dest` へ複製する。verbではない。
+        いま編集している文書も `current_name` も変わらない。`dest` が既に在れば拒否(上書きの口は持たない。
+        `save_document(name)` と同じ。issue #17)。どちらの名前も `_resolve_document_name` を通す。
+        複製は新しいファイルなので作成日時を今にする(バイト列を写さず、読んで書き直す)。サムネイルは写す。
         """
         origin = self._resolve_document_name(source)
         target = self._resolve_document_name(dest)
@@ -1303,8 +1061,7 @@ class Session:
         if target.exists():
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
         log = OpLog.from_json(origin.read_text(encoding="utf-8"))
-        # `save_document` と同じく一時ファイル経由で差し替える(途中で落ちても半端な
-        # ファイルが一覧に出ない。`list_documents` は `.writing` を省く)。
+        # `save_document` と同じく一時ファイル経由(`list_documents` は `.writing` を省く)。
         staging = target.with_name(target.name + ".writing")
         staging.write_text(log.to_json(created=time.time()), encoding="utf-8")
         os.replace(staging, target)
@@ -1318,13 +1075,11 @@ class Session:
         }
 
     def delete_document(self, name: Any) -> dict:
-        """`models_dir` の `name` をディスクから削除する。**verbではない**。
-
-        **いま編集しているファイルなら、消してから文書を閉じる**(トップ画面へ戻る。応答に
-        `closed: True`)。閉じずに中身を持ったままにすると、次の操作の自動保存が消したはずの
-        中身を `untitled-<n>.json` として黙って復活させる。ファイルを消せなかったら閉じない。
-        無ければ FileNotFoundError。確認は挟まない(画面側が行内で聞く。
-        `FilesPanel.svelte`)。`models/.trash` への退避はしない(issue #17)。サムネイルも消す。
+        """`models_dir` の `name` をディスクから削除する。verbではない。
+        いま編集しているファイルなら、消してから文書を閉じる(応答に `closed: True`)。閉じずに残すと、次の操作の自動保存が
+        消したはずの中身を `untitled-<n>.json` として黙って復活させる。ファイルを消せなかったら閉じない。
+        無ければ FileNotFoundError。確認は挟まない(画面側が行内で聞く。`FilesPanel.svelte`)。
+        `models/.trash` への退避はしない(issue #17)。サムネイルも消す。
         """
         target = self._resolve_document_name(name)
         if self._optimizing and target.name == self._optimize_name:
@@ -1346,10 +1101,8 @@ class Session:
         return deleted
 
     # ---------------------------------------------------------------- サムネイル
-    # **一覧の絵は画面(three.js)が撮ってここへ預ける**(`web/src/thumbnail.ts`)。サーバに
-    # 描画の仕組みは無い。置き場は `models/.thumbnails/<文書のファイル名>.png` の付随ファイルで、
-    # 文書のJSONには入れない —— 描き直せる写しであって文書の正ではなく、無くなっても
-    # 次に開いたときに撮り直される。だから付随ファイルの失敗は元の操作を失敗にしない。
+    # 一覧の絵は画面(three.js)が撮って預ける(`web/src/thumbnail.ts`)。置き場は `models/.thumbnails/<文書のファイル名>.png` の付随ファイルで、
+    # 文書のJSONには入れない(描き直せる写し)。だから付随ファイルの失敗は元の操作を失敗にしない。
     def _thumbnail_path(self, document: Path) -> Path:
         """文書のファイル(`models_dir` 直下)に付くサムネイルのパス。"""
         return document.parent / THUMBNAIL_DIR / f"{document.name}.png"
@@ -1361,8 +1114,7 @@ class Session:
             self.warnings.append(f"サムネイルを消せなかった: {error}")
 
     def _carry_thumbnail(self, source: Path, target: Path, *, move: bool) -> None:
-        """改名(`move`)・複製でサムネイルも付いていかせる。複製は更新日時ごと写す
-        (画面は版で取り直しを決めるので、同じ絵を取り直させない)。"""
+        """改名(`move`)・複製でサムネイルも付いていかせる。複製は更新日時ごと写す(画面は版で取り直しを決める)。"""
         origin = self._thumbnail_path(source)
         if not origin.exists():
             return
@@ -1375,13 +1127,10 @@ class Session:
             self.warnings.append(f"サムネイルを{'移せ' if move else '写せ'}なかった: {error}")
 
     def save_thumbnail(self, name: Any, png: Any) -> dict:
-        """画面が撮ったPNG(base64)を `name` のサムネイルとして書く。**verbではない**。
-
-        `png` が空文字なら消す(見えている立体が1つも無い文書。古い絵を残さない)。
-        **文書のファイルが無い・書けない(OSError)ときも断らず `saved: False` を返す** —— 画面は
-        撮ってから送るまでに改名が挟まりうるし、Windows では別のプログラムが開いているだけで
-        `os.replace` が落ちる(`autosave` と同じ)。断ると人が何もしていないのに通知が出る。
-        断るのは中身が壊れているとき(画面側の不具合)だけ。
+        """画面が撮ったPNG(base64)を `name` のサムネイルとして書く。verbではない。
+        `png` が空文字なら消す(見えている立体が1つも無い文書)。文書のファイルが無い・書けない(OSError)ときも断らず
+        `saved: False` を返す(撮ってから送るまでに改名が挟まりうるし、Windows では別のプログラムが開いているだけで
+        `os.replace` が落ちる)。断るのは中身が壊れているとき(画面側の不具合)だけ。
         """
         target = self._resolve_document_name(name)
         thumbnail = self._thumbnail_path(target)
@@ -1428,19 +1177,11 @@ class Session:
         return {**reply, "png": base64.b64encode(data).decode("ascii"), "thumb": thumb}
 
     def export_step_file(self, path: Any) -> dict:
-        """STEPを書き出す。**ログに載らない**(文書を変えないのでverbではない)。
-
-        対象は**いま表示中のBodyだけ**(引数で選べない)。非表示で除外した件数は
-        `skipped_hidden` として必ず応答に載る(0件でも載る)。
-        """
+        """STEPを書き出す。ログに載らない。対象はいま表示中のBodyだけ。非表示で除外した件数は `skipped_hidden` として必ず応答に載る。"""
         return {"action": "export_step", **io_step.export(self.document, self._resolve_export_path(path), "step")}
 
     def _resolve_export_path(self, path: Any) -> Path:
-        """書き出し先を絶対パスにする。
-
-        **相対は `exports_dir` 基準**(起動ディレクトリに依存しない)。絶対パスはそのまま
-        (テスト・MCPの明示パス用)。相対で `exports_dir` の外へ逃げる経路は拒否する。
-        """
+        """書き出し先を絶対パスにする。相対は `exports_dir` 基準(その外へ逃げる経路は拒否)。絶対パスはそのまま(テスト・MCPの明示パス用)。"""
         text = str(path)
         stripped = text.strip()
         if stripped == "":
@@ -1463,10 +1204,7 @@ class Session:
 
     def export_stl_file(self, path: Any) -> dict:
         """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定で、人にもAIにも選ばせない。
-
-        対象は**いま表示中のBodyだけ**(引数で選べない)。非表示で除外した件数は
-        `skipped_hidden` として必ず応答に載る(0件でも載る)。応答の `deviation` は
-        **書いた粗さの記録**であって入力ではない。
+        対象はいま表示中のBodyだけ。非表示で除外した件数は `skipped_hidden` として必ず応答に載る。応答の `deviation` は書いた粗さの記録で入力ではない。
         """
         exported = io_step.export(self.document, self._resolve_export_path(path), "stl")
         return {
@@ -1478,11 +1216,8 @@ class Session:
         }
 
     def take_warnings(self) -> list[str]:
-        """溜まった警告を取り出して空にする(出したら消す)。
-
-        **リストを束ね直さず中身を空にする**(`self.warnings = []` にしない)。`DocumentView` が
-        同じリストオブジェクトへ積むので、ここで別のリストへ差し替えると、以後 `view` が積んだ
-        警告が誰にも読まれないまま消える。
+        """溜まった警告を取り出して空にする。リストを束ね直さず中身を空にする: `DocumentView` が同じリストオブジェクトへ積むので、
+        別のリストへ差し替えると以後 `view` が積んだ警告が誰にも読まれず消える。
         """
         warnings = list(self.warnings)
         self.warnings.clear()
@@ -1490,10 +1225,8 @@ class Session:
 
 
 def _verb_method(verb: str, function: Any) -> Any:
-    """`session.fillet(2.0)` の形で verb を呼べるメソッド。**中身は `Session.apply` だけ**。
-
-    位置引数・既定値は入口(`duocad/entry.py`)の引数の並びに従う。Python から文書を組み立てる側
-    (テスト・スクリプト)のための書き方で、WebSocket と MCP は `apply` を直接呼ぶ。
+    """`session.fillet(2.0)` の形で verb を呼べるメソッド。中身は `Session.apply` だけ。
+    位置引数・既定値は入口(`duocad/entry.py`)の引数の並びに従う(Pythonから組み立てる側のため。WebSocket と MCP は `apply` を直接呼ぶ)。
     """
     signature = inspect.signature(function)
 
