@@ -419,10 +419,33 @@ def member_region(material, table, fixed_faces, load_faces, keep_cells=None) -> 
     return region
 
 
+def peak_check(model, displacement, material, scale, region, limit_mpa, grid) -> dict:
+    """部材域の露出面の面中心 von Mises が、セルごとの上限 `limit_mpa`(格子と同じ形)以下か。
+
+    安全率とは別の判定で、探索は却下にだけ使う(歩幅・停止に流さない。docs/TOPOPT_PEAK_GATE.md)。
+    """
+    limit = np.asarray(limit_mpa, dtype=float)
+    if limit.shape != material.shape:
+        raise ValueError(f'peak_limit_mpa の形 {limit.shape} が格子の形 {material.shape} と違う')
+    cells = material if region is None else region
+    vm = np.nan_to_num(stress.exposed_face_von_mises(model, displacement, material, scale, cells=cells), nan=0.0)
+    ratio = vm / limit[..., None]
+    worst = np.unravel_index(int(np.argmax(ratio)), ratio.shape)
+    cell = np.asarray(worst[:3], dtype=float)
+    return dict(status='fail' if ratio[worst] > 1.0 else 'pass', peak_mpa=float(vm.max()),
+                worst_ratio=float(ratio[worst]), worst_mpa=float(vm[worst]), worst_limit_mpa=float(limit[worst[:3]]),
+                worst_cell=[int(i) for i in worst[:3]], worst_face=int(worst[3]),
+                worst_position_mm=[float(v) for v in np.asarray(grid.origin) + (cell + 0.5) * grid.spacing],
+                violating_faces=int((ratio > 1.0).sum()))
+
+
 def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_modulus_mpa,
-                 percentile, solver, fields=None, member_region=None, member_volume_mm3=None):
+                 percentile, solver, fields=None, member_region=None, member_volume_mm3=None, peak_limit_mpa=None):
     """FEM を解いて安全率 = 許容 ÷ 代表応力 を出す。代表応力は `member_volume_mm3` を渡せば部材域 `member_region` の
-    固定物理体積の上位値(`stress.member_volume_stress`)、渡さなければ材料全体の `percentile` 点。"""
+    固定物理体積の上位値(`stress.member_volume_stress`)、渡さなければ材料全体の `percentile` 点。
+
+    `peak_limit_mpa` を渡すと同じ変位から `peak_check` を取り、戻り値の `peak` に入れる(`inspect` が別の検査に移す)。
+    `fields` に `cell_face_max` の鍵を置くと、材料セルごとの6面(内部の面も含む)の面中心 von Mises の最大を入れる。"""
     solve_info = {}
     try:
         if not rigid_body_constrained(material, fixed):
@@ -440,7 +463,13 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
             # 同じ変位から取る u_eᵀ k₀ u_e(単位剛性。空セルは節点を共有しても 0 にする)。
             _, element_energy = model.compliance(density, stress.PENAL, displacement)
             fields['element_energy'] = np.where(material, element_energy, 0.0)
-        return dict(status='pass' if sf >= target else 'fail', safety_factor=sf,
+            if 'cell_face_max' in fields:
+                faces = stress.exposed_face_von_mises(model, displacement, material, scale, all_faces=True)
+                fields['cell_face_max'] = np.nan_to_num(faces, nan=0.0).max(axis=-1)
+        extra = {}
+        if peak_limit_mpa is not None:
+            extra['peak'] = peak_check(model, displacement, material, scale, member_region, peak_limit_mpa, grid)
+        return dict(status='pass' if sf >= target else 'fail', safety_factor=sf, **extra,
                     target_safety_factor=target, representative_mpa=report.representative_mpa,
                     allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
                     material_max_mpa=report.representative.dense_max, percentile=percentile,
@@ -506,7 +535,8 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
             preserves, excludes, target_safety_factor, allowable_mpa=DEFAULT_ALLOWABLE_MPA,
             youngs_modulus_mpa=DEFAULT_YOUNGS_MODULUS_MPA, percentile=stress.DEFAULT_PERCENTILE,
             solver='auto', history=None, converged=None, max_evaluations=None,
-            bbox_cache=None, region_overlaps=None, fields=None, member_volume_mm3=None, keep_cells=None):
+            bbox_cache=None, region_overlaps=None, fields=None, member_volume_mm3=None, keep_cells=None,
+            peak_limit_mpa=None):
     """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接受ける**
     (`docs/contracts/topopt-binary-search.md`)。密度場の二値化は読み取りアダプター `inspect_document` に閉じてある。
     `before` は島除去前のマスク(除去で材料が増えていないことを確認する)。
@@ -544,7 +574,10 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
         checks['safety'] = safety_check(material, grid, fixed, load, target=target_safety_factor,
                                        allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
                                        percentile=percentile, solver=solver, fields=fields,
-                                       member_region=region, member_volume_mm3=member_volume_mm3)
+                                       member_region=region, member_volume_mm3=member_volume_mm3,
+                                       peak_limit_mpa=peak_limit_mpa)
+        if 'peak' in checks['safety']:
+            checks['peak'] = checks['safety'].pop('peak')
     else:
         checks['safety'] = dict(status='unknown', reason='prerequisites_failed')
     status = _overall_status([check['status'] for check in checks.values()])
