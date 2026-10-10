@@ -545,7 +545,7 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
 
 - **誰も通らない分岐と、製品が使わない別実装は削除した**(受入検査は製品と同じ入口を通す)。削除したものは git 履歴が持つ(`warm_start`/`u0` の実測は [TOPOPT_SPEED.md](TOPOPT_SPEED.md))。
 - **製品の値が正しいことを、値を振って確かめるためのつまみは残す**: `rho_min`・`percentile`・`cg_rtol`・`element_components(neighbourhood=)`・`build_anchors(radius_ratio=, sample_ratio=)`・`derive(elements_long_axis=)`・`step_exponent`/`max_step_ratio`/`single_cell_patience`。製品が渡さないことを理由に削らない(検出力の検査が成り立たなくなる)。
-- `acceptance.inspect_document`(旧記録の密度場を読むアダプター)、`target_safety_factor`/`max_evaluations`の受け口(UIに入力欄が無い)、`catalog.py`のParam宣言は残す。
+- `acceptance.inspect_document`(旧記録の密度場を読むアダプター)は念のため残す。`target_safety_factor`/`max_evaluations`の受け口(UIに入力欄が無い)と`catalog.py`のParam宣言は、いったんそのまま(保留)。
 
 ## 制限(承知のうえで残しているもの)
 
