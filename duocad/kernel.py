@@ -685,8 +685,7 @@ def face_plane(shape: "TopoDS_Shape", face_index: int) -> tuple:
     """**平らな面**を「面積重心と外向き単位法線」`([x, y, z], [nx, ny, nz])` にする(測定用)。
 
     添字は `face_count` / `face_of` と同じ1始まり。平面でない面は ValueError(曲面を平面扱いすると
-    指した面と測る平面が食い違う)。重心は `BRepGProp` の面積重心で、平面なら必ず面の上に乗る
-    (`Face.center()` の既定(bbox中心)は傾いた平面では面から外れる —— `query.face_centroid`)。
+    指した面と測る平面が食い違う)。重心は `BRepGProp` の面積重心で、平面なら必ず面と同じ平面に乗る。
     """
     face = face_of(shape, face_index)
     kind = classify_face(face)

@@ -25,10 +25,11 @@ from .sketch import SketchId, entity_kind_ops, get_sketch
 
 @dataclass(frozen=True)
 class Region:
-    """計算された閉領域。`area` は mm^2。"""
+    """計算された閉領域。`area` は mm^2、`centroid` は面積重心のワールド座標 [mm]。"""
 
     index: int
     area: float
+    centroid: tuple
 
 
 @dataclass
@@ -73,7 +74,7 @@ def regions(doc: Document, sketch_id: SketchId) -> List[Region]:
     分割する(docs/DESIGN_DECISIONS.md「領域は計算されるもの」)。
     """
     return [
-        Region(index=item["index"], area=item["area"])
+        Region(index=item["index"], area=item["area"], centroid=tuple(item["centroid"]))
         for item in _regions_detailed(doc, sketch_id)
     ]
 

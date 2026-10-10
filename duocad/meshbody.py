@@ -83,6 +83,26 @@ def volume(mesh: Mesh) -> float:
     return abs(total) / 6.0
 
 
+def centroid(mesh: Mesh) -> list:
+    """体積重心[mm]。`volume` と同じ符号付き四面体(原点・a・b・c)の、体積で重みを付けた重心の平均。
+
+    体積が0のメッシュは ValueError(`kernel.centroid` と同じ扱い)。
+    """
+    total = 0.0
+    weighted = [0.0, 0.0, 0.0]
+    for a, b, c in triangles(mesh):
+        ax, ay, az = a
+        bx, by, bz = b
+        cx, cy, cz = c
+        signed = ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)
+        total += signed
+        for axis in range(3):
+            weighted[axis] += signed * (a[axis] + b[axis] + c[axis])
+    if total == 0.0:
+        raise ValueError("cannot compute the centroid of a zero-volume mesh")
+    return [value / (4.0 * total) for value in weighted]
+
+
 def geometry(mesh: Mesh) -> dict:
     """画面へ配る payload。`kernel.tessellate_selective` と同じキー構成。
 
