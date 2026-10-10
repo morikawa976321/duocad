@@ -1,20 +1,13 @@
 """verb `mirror_sketch_entities` — 選択のスケッチ図形を、既存の線分1本を軸に鏡映複製する。
 
-**常に複製を作る**(`move_sketch_entities` と違い in-place反転の口は無い —— 本人の依頼は
-「鏡像反転コピーを作る」の1点だけ)。対象は**選択のスケッチ図形そのもの**
-(`move_sketch_entities` と違い、点単位は扱わない —— 鏡映は図形全体の形を変える操作であり、
-寸法編集ではないため)。
+**常に複製を作る**(in-place反転の口は無い)。対象は選択のスケッチ図形そのもの(点単位は扱わない:
+鏡映は図形全体の形を変える操作)。
 
-鏡映軸は**既存の線分1本**への参照 `{"sketch": sketch_id, "entity": entity_id}`。
-**対象の選択とは別引数で受ける**(`move_body.axis_edge` と同じ理由 —— 対象の選択集合に
-軸の線分を混ぜると、それが「鏡映される側」か「軸」かをコアが区別できない)。軸自身が対象の
-選択に混ざっていてもよい —— **軸に使った図形は対象から黙って外す**(直線は軸まわりに
-常に自分自身へ映るので、鏡映しても「元と完全に重なる複製」にしかならない。軸以外の対象は
-そのまま鏡映する)。呼び出し前に軸の2端点の座標(u, v)へ解決し、ログには解決済みの数値
-`{"axis_p0", "axis_dir"}` だけを載せる(軸に使った線分が対象に混ざっている場合、複製後に
-参照を引き直すと別の線分になるため)。
-
-**OCP / build123d を直接importしない**(幾何は `duocad.sketch` の表越し)。
+鏡映軸は既存の線分1本への参照 `{"sketch": sketch_id, "entity": entity_id}`。対象の選択とは別引数
+(混ぜると鏡映される側か軸か区別できない)。軸自身が対象に混ざっていてもよく、**軸に使った図形は
+対象から黙って外す**(直線は軸まわりに自分自身へ映り、元と重なる複製にしかならない)。軸の2端点の
+座標(u, v)へ解決し、ログには解決済みの数値 `{"axis_p0", "axis_dir"}` だけを載せる(軸に使った線分が
+対象に混ざっていると、複製後に参照を引き直すと別の線分になる)。
 """
 from __future__ import annotations
 
@@ -42,8 +35,7 @@ VERB_MIRROR_SKETCH_ENTITIES = "mirror_sketch_entities"
 def _normalize_targets(doc: Document, targets: Sequence[dict]) -> List[tuple]:
     """選択の参照を `(sketch_id, entity_id)` の重複なしの並びへ畳む。
 
-    **点は見ない**(モジュールdocstring) —— 鏡映は図形全体を対象にする操作で、
-    `move_sketch_entities` のような点単位の選択は無い。存在しないスケッチ・図形は KeyError。
+    点は見ない(モジュールdocstring)。存在しないスケッチ・図形は KeyError。
     """
     if not targets:
         raise ValueError("mirror_sketch_entities requires at least one target")
@@ -65,8 +57,7 @@ def _axis_line(doc: Document, axis: Any) -> tuple:
     """軸への参照を `(sketch_id, entity_id, ax, ay, ux, uy)` にする(点+単位方向は解決済み)。
 
     `kind` が `"line"` でなければ ValueError(それ以外の図形は鏡映軸にできない)。
-    `sketch_id`/`entity_id` を一緒に返すのは、**軸自身が対象に混ざっていたら弾かず外す**
-    (`mirror_sketch_entities` 参照)ための識別に使うためである。
+    `sketch_id`/`entity_id` は、軸自身が対象に混ざっていたら外す(`mirror_sketch_entities`)ための識別。
     """
     if not isinstance(axis, dict) or "sketch" not in axis or "entity" not in axis:
         raise ValueError(
@@ -89,10 +80,7 @@ def _axis_line(doc: Document, axis: Any) -> tuple:
 def _mirrored_plan(
     doc: Document, normalized: Sequence[tuple], ax: float, ay: float, ux: float, uy: float
 ) -> List[tuple]:
-    """検査してから返す計画 `[(sketch, kind, values), ...]`(対象と同じ順序)。
-
-    **書き込みより前に全部検査する** —— 途中で1つでも失敗したら文書に何も残らない。
-    """
+    """検査してから返す計画 `[(sketch, kind, values), ...]`(対象と同じ順序。書き込みより前に全部検査する)。"""
     planned: List[tuple] = []
     for sketch_id, entity_id in normalized:
         sketch = get_sketch(doc, sketch_id)
@@ -100,12 +88,10 @@ def _mirrored_plan(
         current = parameters.resolve_all(doc, entity.params)
         values = dict(current)
         values.update(entity_kind_ops(entity.kind).mirror(current, ax, ay, ux, uy))
-        # **元が持っているキーだけで比べる** —— `angle` を持たない時代のログから再生した
-        # 長方形は `values` のほうがキーが1つ多く、素の辞書比較では常に不一致になる
-        # (= 元と完全に重なる複製を見逃す)。
+        # 元が持っているキーだけで比べる(`angle` を持たない時代のログから再生した長方形は
+        # `values` のほうがキーが1つ多く、素の辞書比較では常に不一致になる)。
         if all(values[key] == current[key] for key in current):
-            # 対象が軸の上に乗っている(鏡映しても動かない)。**元と重なる複製は作らない**
-            # (`move_sketch_entities._copy` と同じ理由 —— 領域検出が同じ辺を2本見る)。
+            # 対象が軸の上に乗っている。元と重なる複製は作らない(領域検出が同じ辺を2本見る)。
             raise ValueError(
                 f"mirror_sketch_entities: 複製 {entity_id!r} が元と完全に重なる"
                 "(対象が鏡映軸の上に乗っている)"
@@ -124,10 +110,7 @@ def _create_mirrors(
     uy: float,
     new_ids: Sequence[str],
 ) -> List[str]:
-    """検査済みの計画から複製を作って追加し、作った entity_id の並びを返す。
-
-    **do(初回呼び出し)も redo/replay もここを通る**(`move_sketch_entities._copy` と同じ形)。
-    """
+    """検査済みの計画から複製を作って追加し、作った entity_id の並びを返す(do も redo/replay もここを通る)。"""
     plan = _mirrored_plan(doc, normalized, ax, ay, ux, uy)
     if len(new_ids) != len(plan):
         raise ValueError(
@@ -140,10 +123,8 @@ def _create_mirrors(
 def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) -> Operation:
     """選択のスケッチ図形を、既存の線分 `axis` を軸に鏡映複製する(常に複製)。
 
-    軸自身が対象の選択に混ざっていてもよい —— **軸に使った図形自身は対象から黙って外す**
-    (直線は軸まわりに常に自分自身へ映るので、鏡映しても「元と完全に重なる複製」にしか
-    ならない。断らずに、軸以外の対象だけを鏡映する)。失敗したときは文書にもログにも
-    何も残さない。
+    軸自身が対象に混ざっていてもよく、軸に使った図形は対象から黙って外す。失敗したときは
+    文書にもログにも何も残さない。
     """
     normalized = _normalize_targets(doc, targets)
     axis_sketch, axis_entity, ax, ay, ux, uy = _axis_line(doc, axis)
