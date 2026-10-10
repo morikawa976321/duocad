@@ -1,5 +1,5 @@
 """探索用の確定表(材料に接する節点だけへの対応付け。`anchor.build_anchors(allowed_nodes=...)` と
-`anchor.condition_mapping`)。実CADと実数値で見る(`docs/FIX_BINARY_SEARCH_INITIALIZATION.md` §6)。"""
+`anchor.condition_mapping`)。実CADと実数値で見る(`docs/TOPOPT.md`「回帰検査の対応」)。"""
 import dataclasses
 import sys
 from pathlib import Path

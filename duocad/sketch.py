@@ -38,7 +38,7 @@ def new_entity_id() -> EntityId:
     return f"entity-{uuid4().hex[:12]}"
 
 
-#: 基準平面の名前(この3つだけ。実装計画書§1「平面(基準3面)」)
+#: 基準平面の名前(この3つだけ)
 BASE_PLANES = ("XY", "XZ", "YZ")
 
 #: 反復の種別(矩形・円形)

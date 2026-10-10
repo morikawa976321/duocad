@@ -54,7 +54,7 @@ RESULTS = CHECK.results
 
 DEVIATION = 0.2
 # 検証用に縮めた設定。**本番の既定ではない** —— 既定(`max_evaluations=1000`)の
-# ままだと1回の実行が長くなる(`20260904-1437` の契約③)。
+# ままだと1回の実行が長くなる。
 CHECK_MAX_EVALUATIONS = 3
 # 解像度は既定に任せず固定する(既定は条件面と上限 4 mm で決まり、変わると検査の所要が変わる)。この題材は以前、
 # 既定解像度(16 mm 以上)で`voxelize.occupancy`のValueErrorを踏んでいたが、上限 4 mm(#130)の後は選べる全解像度で
@@ -136,7 +136,7 @@ def run_once() -> tuple:
     print(
         f"  要素サイズ: 上限 {limits['max_element_size_mm']:.4g}mm / "
         f"下限 {limits['min_element_size_mm']:.4g}mm(所要時間は事前見積もりが無い"
-        "——計画書§6.2)"
+        ")"
     )
 
     before_ids = [body.id for body in session.document.bodies]

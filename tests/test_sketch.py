@@ -108,7 +108,7 @@ def test_sketch_create_rejects_an_unknown_base_plane():
 
 
 def test_sketch_create_on_a_planar_face_of_an_existing_solid(box):
-    """既存ソリッドの**平面状の面**にスケッチを貼れる(実装計画書§1のsketch_createの引数)。"""
+    """既存ソリッドの**平面状の面**にスケッチを貼れる(`sketch_create` の引数。MCP.md が正)。"""
     body = box.active_body()
     index = first_face_index(body.shape, "plane")
 

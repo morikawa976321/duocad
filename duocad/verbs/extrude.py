@@ -37,7 +37,7 @@ from ..sketch import get_sketch
 
 VERB_EXTRUDE = "extrude"
 
-#: 押し出しの種別(実装計画書§1「mode(join | cut)」＋ new)
+#: 押し出しの種別(join | cut ＋ new)
 MODES = ("join", "cut", "new")
 
 

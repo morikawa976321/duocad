@@ -12,7 +12,7 @@
 3. **メッシュボディ** —— 保持・除外に指定できない。ただし
    **過去のログの再生は落とさない**(門は verb の入口だけで、`_apply_bodies` には無い)。
 4. **解像度** —— 上限は「条件面からの要求」だけで決まる(密度フィルタ半径は二値探索に
-   無いので上限に効かない。計画書§6.2)。下限は総要素数の上限から。
+   無いので上限に効かない)。下限は総要素数の上限から。
 5. **座標系** —— 結果メッシュは要素添字空間で来るので、ワールド[mm]へ直す。
 6. **中断** —— 旗が立っていれば文書を1ビットも変えずに降りる。
 7. **import の費用** —— `import duocad.session` で skimage と `duocad.topopt` が来ない。
@@ -541,7 +541,7 @@ def test_run_derives_once_and_hands_the_space_to_the_search(
     """**塊は探索の前に1回だけ導出し、そのまま `find_best_feasible` へ渡す。**
 
     デバッグ配信の塊(`space`)は導出直後の1回だけで、探索の後に別の塊を配り直さない
-    (計画書§3「固定設計空間を1回導出」)。
+    (`docs/TOPOPT.md`「固定凸包による設計空間」の「塊を1回導出」)。
     """
     from duocad.topopt import binary_search
     from duocad.topopt import design_space as ds
@@ -878,7 +878,7 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
 ) -> None:
     """**探索候補の評価中はメッシュ化・STL出力を呼ばない。後段へ渡るのは最終確定マスクだけ**
 
-    (計画書§3)。`mesh.write_stl` が呼ばれたら落とし、`mesh.build_surface_from_mask` が
+    (`docs/TOPOPT.md`「二値探索の方式と契約」)。`mesh.write_stl` が呼ばれたら落とし、`mesh.build_surface_from_mask` が
     ちょうど1回だけ、探索が返した確定マスクで呼ばれることを確かめる。
     """
     import numpy as np
@@ -945,7 +945,7 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
 def test_importing_the_session_does_not_pull_in_the_topopt_layer() -> None:
     """`optimize_run` を `session.py` が読むようになっても、**最適化の層は来ない**。
 
-    `duocad/topopt/*` の import は関数の中に置いてある(`docs/contracts/topopt-pipeline-integration.md` の `20260904-1600` 契約②)。
+    `duocad/topopt/*` の import は関数の中に置いてある(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
     ここが崩れると pytest 全体が毎回 skimage と `duocad.topopt` の起動費用を払う。
 
     **`scipy` は見ない** —— `duocad/view.py` が(このタスクの前から)既に読んでいるので、
@@ -1162,7 +1162,7 @@ def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
 
 
 # --------------------------------------------------------------------------------------
-# 9. 境界条件の確定(docs/FIX_BINARY_SEARCH_INITIALIZATION.md 修正A・B)
+# 9. 境界条件の確定(docs/TOPOPT.md「境界条件の確定」「回帰検査の対応」)
 # --------------------------------------------------------------------------------------
 def test_a_load_face_on_a_body_that_is_not_preserved_is_refused(session: Session) -> None:
     """落ちたら、保持しないボディの面に荷重を置けてしまう(探索が削れる材料に荷重が載り、確定表が

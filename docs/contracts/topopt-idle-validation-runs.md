@@ -1,7 +1,7 @@
 # topopt-idle 検証(実行編: 探索方式・認定・合成行列・hanger・最終形状・総括)の契約
 
 不要材料の2原因(原因1=応力指標の母数希釈 / 原因2=探索の経路喪失)の検証研究のうち、**4探索方式の研究用実装、path_small の認定、合成行列、hanger低荷重・荷重行列、頑健性、最終形状、総括**の不変条件・依存禁止・罠を、作業タスクの契約から分野別に蒸留したもの。
-いまの挙動の正はコードとテスト。実測値・再現コマンド・表は `topopt_idle_validation/04_SEARCHES.md`〜`10_SYNTHESIS.md`。共通基盤・参照解・指標は [topopt-idle-validation-setup.md](topopt-idle-validation-setup.md)。
+いまの挙動の正はコードとテスト。実測値・再現コマンド・表は `topopt_idle_validation/10_SYNTHESIS.md`(本体と付録C〜G)。共通基盤・参照解・指標は [topopt-idle-validation-setup.md](topopt-idle-validation-setup.md)。
 出典: 節末尾の括弧は `(タスクID, 日付)`。タスクIDは先頭の `20260928-1426-topopt-idle-` を省略。
 
 **縮小範囲であること(全節の前提)**: 07〜10は本人の期限変更で縮小範囲の報告で、「元の全検証の完了」でも製品安全の保証でもない。未実行・中断・lost を合格として扱わない。成果物 `output/idle_validation_20260928/*` は `.gitignore`(`/output/`)で追跡されない。延期項目は末尾。(07〜10, 2026-09-28)

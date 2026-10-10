@@ -1,11 +1,11 @@
-"""全材料の評価と、ひずみエネルギーの順位で削る体積削減(計画書§8 段階3・段階4
-`docs/PLAN_BINARY_STRESS_SEARCH.md`。入口検査は `docs/FIX_BINARY_SEARCH_INITIALIZATION.md`)。
+"""全材料の評価と、ひずみエネルギーの順位で削る体積削減(段階3・段階4。
+`docs/TOPOPT.md`「二値探索の方式と契約」。入口検査は同「回帰検査の対応」)。
 
 `find_initial_feasible` は入口検査のあと設計空間の全材料マスクを1回だけ6条件(`acceptance.inspect`)に掛け、
 合格すれば `best_feasible` に確定する(段階3)。合格しなければ形を探さず、落ちた検査を返す。
 `find_best_feasible` はそこから、合格形状を解いた変位の要素エネルギーが
 低い材料を、安全率の余裕に応じた割合でまとめて削り、6条件に合格するたびに `best_feasible` を
-更新する(段階4、「小さくする」。計画書§11・§12)。前者は後者の第一段としてそのまま使われる。
+更新する(段階4、「小さくする」。`docs/TOPOPT.md`「段階4: ひずみエネルギーの順位で削る」)。前者は後者の第一段としてそのまま使われる。
 
 責務の分け方(§5): 島処理は§4.4、6条件の判定は `acceptance.inspect` そのもの
 (このモジュールは6条件を再実装しない)。保持するマスクは合格形状1つと試行中の候補だけ。
@@ -549,23 +549,23 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
 
 
 # ---------------------------------------------------------------------------
-# 段階4: ひずみエネルギーの順位で削る体積削減(docs/PLAN_BINARY_STRESS_SEARCH.md §11)
+# 段階4: ひずみエネルギーの順位で削る体積削減(docs/TOPOPT.md「段階4: ひずみエネルギーの順位で削る」)
 # ---------------------------------------------------------------------------
 #: 1回に削る割合 r の既定。r = min(DEFAULT_MAX_STEP_RATIO, 1 − (目標安全率 / 現在の安全率)^θ) × 後退倍率。
 #: θ は「安全率が体積に比例するなら、次の形の安全率を現在と目標の間のどこへ置くか」(対数で見た位置。
-#: 0.5 は幾何平均)。上限 0.2 と θ=0.5 は hanger 4.8mm の比較で決めた(計画書 §11)。
+#: 0.5 は幾何平均)。上限 0.2 と θ=0.5 は hanger 4.8mm の比較で決めた(docs/TOPOPT.md「段階4: ひずみエネルギーの順位で削る」)。
 DEFAULT_STEP_EXPONENT = 0.5
 DEFAULT_MAX_STEP_RATIO = 0.2
 #: 削る順位に使うエネルギーをならす近傍の一辺(セル)。3 は自身と26近傍の材料平均。
 ENERGY_FILTER_SIZE = 3
 #: 削ったセルが1つで安全率が落ちたとき、順位から外して次のセルを試すのを、採用を挟まず何セル続けたら収束とみなすか
 #: (`None` は順位が尽きるまで)。**8 は本人判断(2026-09-24)で、実測で決めていない。** 16 は、外したセルを採用のたびに順位へ
-#: 戻す旧規則で hanger 4.8mm の 1・4・16・無制限を測って決めた値(計画書 §12.7)。外したセルを採用をまたいで保つ現行規則
+#: 戻す旧規則で hanger 4.8mm の 1・4・16・無制限を測って決めた値(docs/TOPOPT.md「段階4: ひずみエネルギーの順位で削る」)。外したセルを採用をまたいで保つ現行規則
 #: (`_reduce_volume` の `poison`)では同じセルが二度数えられないので、同じ値でも意味が変わる。4 や 1 も検討中。
 DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = 8
 #: 合格形状の安全率が 目標 × (1 + これ) 以下になったら収束とみなす(`None` は見ない)。割合なのは、1回に削る割合 r が
 #: 目標/安全率 だけで決まるから(探索時の目標の係数を掛けても意味が変わらない)。製品経路の 1.87mm の実行では、
-#: 目標の +0.13% に入った後の FEM 81 回で減ったのは 0.27% だった(計画書 §12.12。0.01 は本人判断)。
+#: 目標の +0.13% に入った後の FEM 81 回で減ったのは 0.27% だった(docs/TOPOPT.md「段階4: ひずみエネルギーの順位で削る」。0.01 は本人判断)。
 DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
 #: 安全率の**評価が落ちた**(`checks['safety']` が `unknown` かつ `reason='evaluation_error'`)候補が
 #: 何回続いたら段階4を打ち切るか(`None` は見ない)。安全率が目標に届かない不合格(`fail`)とも、水密・単一成分・
@@ -738,7 +738,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
       不変条件を壊さない。`exempt` を材料に数える m≥3 では mask に無い `exempt` セルを挟んで跨ぎうるので、島を消した形を
       大域で確かめ、崩れる手は却下する(`skipped_connectivity`)。
     - くびれ(m>1): 一口を抜くと、材料の前線をつなぎ直す最小の窓の中で芯の前線がつなぎ直されない手は抜かない(`skipped_neck`。
-      `neck.NeckJudge`、docs/TOPOPT_NECK_RULE_120.md §2)。S(m) は芯が大域でつながるかしか見ないので、輪の中のくびれを通す(#120)。
+      `neck.NeckJudge`、docs/TOPOPT_MIN_WIDTH.md 2.2節)。S(m) は芯が大域でつながるかしか見ないので、輪の中のくびれを通す(#120)。
     - 芯の連結(m>1): 一口(と島)を抜くと侵食した芯が割れる手は抜かない(`skipped_core`)。R(m) は m 立方の共有1セルの斜めのつなぎ目を許すので、
       厚みの不変条件(上)を保つだけでは芯は割れうる。判定は一口の周りの窓で言えれば通し、言えなければ大域で数え直す(島を消すときは常に大域)。
     - 表面: x が空の6近傍(格子の外を含む)を持たなければ抜かない(内部に空洞を作らない。中空構造を許容しない製品制約)。
@@ -1036,7 +1036,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                      evaluation_error_patience=evaluation_error_patience, evaluation_errors=0,
                      safety_excluded_cells=0, adopted_after_exclusion=0, poison_cells=0, poison_released=0,
                      geometry_rejections=[], stop_reason=None, steps=steps)
-    # 形のくびれの静的診断(探索の判定ではない。docs/TOPOPT_NECK_RULE_120.md §2)。開始形と結果形で取り、増えた組は個別に見る。
+    # 形のくびれの静的診断(探索の判定ではない。docs/TOPOPT_MIN_WIDTH.md 2.2節)。開始形と結果形で取り、増えた組は個別に見る。
     static_core = min_width.CoreConnectivity(min_width_cells, exempt) if min_width_cells > 1 else None
     if static_core is not None:
         reduction['static_necks'] = dict(start=neck.static_necks(best.mask, static_core))

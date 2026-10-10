@@ -1,5 +1,5 @@
 /**
- * コアとの接続 — コマンドは下り、イベントは上り(実装計画書 §2)。
+ * コアとの接続 — コマンドは下り、イベントは上り(docs/DESIGN_DECISIONS.md「外してはいけない3つ」)。
  *
  * ここが持つのは「WebSocketの接続」と「途中まで入力していたコマンド」だけで、
  * 文書・操作ログ・undo履歴・**可視性**はコア側にある
@@ -139,7 +139,7 @@ export interface SketchFrame {
  * **パラメータ名**(`set_parameter` で打ち直せる。名前が無ければ null)。
  *
  * この2つが揃っているのが「クリックだけで置いた後も値を打ち直せる」の実体である
- * (実装計画書§3.4 パラメトリック・プリミティブ)。
+ * (docs/DESIGN_DECISIONS.md「day 1 に払った予防」の名前つきの値)。
  */
 export interface SketchEntity {
   entity_id: string
@@ -570,7 +570,7 @@ export interface AiRunResult {
 /**
  * `AiPanel.svelte` が描く1本の時系列。**コアには無い**(会話の再構成はここが唯一の場所。
  * `duocad/agent/loop.py` の `turns` はサーバ側に留まり、WSへは出さない)——再読込で消えるのは
- * 「途中まで入力していたコマンド」と同じ扱いで許容している(実装計画書§2予防3)。
+ * 「途中まで入力していたコマンド」と同じ扱いで許容している(docs/DESIGN_DECISIONS.md「外してはいけない3つ」の3)。
  */
 export type AiTranscriptEntry =
   | { kind: 'user'; text: string }
@@ -586,7 +586,7 @@ export type AiTranscriptEntry =
  *
  * **`problems` はそのまま人に見せる文**であって、画面が組み立て直すものではない ——
  * 「拘束面が2枚ある。この版が扱えるのは1枚だけである」のように**理由と次の一手**が
- * 入っている(`20260904-1704` の契約①)。ここで文言を作ると、コアの制限が変わっても
+ * 入っている(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。ここで文言を作ると、コアの制限が変わっても
  * 画面が古い説明を出し続ける。
  */
 export interface OptimizeConditionsReport {
@@ -601,7 +601,7 @@ export interface OptimizeConditionsReport {
 /**
  * 解像度の目盛り1段。**添字0がいちばん粗い**(＝既定)で、進むほど細かい。
  *
- * **所要時間は付かない**(計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と
+ * **所要時間は付かない**(移行時の方針「所要時間は旧SIMP係数を使わない。初回は不明と
  * 表示する」)——走らせる前は実測が無いので、要素数だけで判断する。
  */
 export interface OptimizeResolutionStep {
@@ -647,7 +647,7 @@ export interface OptimizeResolutionPayload {
 
 /**
  * 進捗1件(`optimize_run.run()` の `progress`)。`phase` ごとにキーが増える
- * (`20260904-1704` の契約①)ので、共通の2つだけを必須にする。
+ * (`docs/contracts/ui-optimize-integration.md`「最適化の配線」)ので、共通の2つだけを必須にする。
  *
  * `phase: 'search'` は探索を始めるときの1件に続けて、評価(FEM 1回)ごとに1件来る
  * (`evaluation` 以下のキーを持つ。`binary_search._reduce_volume` の `on_evaluation`)。
@@ -668,11 +668,11 @@ export interface OptimizeProgress {
 }
 
 /**
- * 実行の結果。**`state` で分岐する**(`20260904-1704` の契約①、段階5で3値→6値へ拡張、
+ * 実行の結果。**`state` で分岐する**(`docs/contracts/ui-optimize-integration.md`「最適化の配線」、段階5で3値→6値へ拡張、
  * 境界条件の確定(2026-09-17)で `boundary_mapping_failed` が増えて7値)。
  * `no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
  * `boundary_mapping_failed` は `binary_search.SearchResult.status` をそのまま渡したもの
- * (計画書§8段階4の契約。`boundary_mapping_failed` は探索の前の確定表の検証からも来る)。
+ * (`docs/TOPOPT.md`「状態・最初の合格モデル・島除去・応力評価」の終了理由。`boundary_mapping_failed` は探索の前の確定表の検証からも来る)。
  * **`"done"` 以外では文書は1ビットも変わっていない。**
  */
 export interface OptimizeResultPayload {
@@ -736,7 +736,7 @@ export interface FinalCheck {
   neck: NeckDiagnosis
 }
 
-/** つなぎ目の幅の診断(`duocad/topopt/neck_persistence.py`、docs/TOPOPT_NECK_RULE_120.md §3)。 */
+/** つなぎ目の幅の診断(`duocad/topopt/neck_persistence.py`、docs/TOPOPT_MIN_WIDTH.md 3章)。 */
 export interface NeckDiagnosis {
   status: 'suspect' | 'undetermined' | 'not_observed'
   required_mm: number
@@ -962,7 +962,7 @@ export interface Session {
   runOptimization(options: OptimizeRunOptions): void
   /**
    * 中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**で、
-   * 進捗を出さない短い処理の途中では止まらない(`20260904-1704` の契約③)。
+   * 進捗を出さない短い処理の途中では止まらない(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
    */
   cancelOptimization(): void
   dispose(): void

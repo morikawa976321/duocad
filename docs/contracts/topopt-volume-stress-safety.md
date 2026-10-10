@@ -1,6 +1,6 @@
 # 形状最適化の応力・安全率・縮小検証の契約
 
-形状最適化の「von Mises 応力と代表応力」「受入検査の題材の縮小」の契約集。**いまの挙動の正はコードとテスト。** ソースから読めない不変条件・依存禁止・罠を作業タスクの契約から蒸留したもの。実測の表と設計の説明は [../TOPOPT.md](../TOPOPT.md)(「von Mises応力と最小安全率」)と [../PLAN_BINARY_STRESS_SEARCH.md](../PLAN_BINARY_STRESS_SEARCH.md)が持つので重複は書かない。塊の導出・連結性・bbox は [topopt-design-space.md](topopt-design-space.md)。
+形状最適化の「von Mises 応力と代表応力」「受入検査の題材の縮小」の契約集。**いまの挙動の正はコードとテスト。** ソースから読めない不変条件・依存禁止・罠を作業タスクの契約から蒸留したもの。実測の表と設計の説明は [../TOPOPT.md](../TOPOPT.md)(「von Mises応力と最小安全率」「二値探索の方式と契約」)が持つので重複は書かない。塊の導出・連結性・bbox は [topopt-design-space.md](topopt-design-space.md)。
 出典: 節末尾の括弧は `(タスクID, 日付)`（先頭の `2026MMDD-HHMM-topopt-` は省略）。
 
 ## von Mises 応力と代表応力(duocad/topopt/stress.py)

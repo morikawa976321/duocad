@@ -994,7 +994,7 @@ class Server:
         """別スレッドで端から端まで回し、結果を配る。**例外を握り潰さない**。
 
         `optimize_run.run()` の例外は「次に何をすればよいか」を文面に持っている
-        (`20260904-1704` の契約①)ので、そのまま `optimize_error` として画面へ出す。
+        (`docs/contracts/ui-optimize-integration.md`「最適化の配線」)ので、そのまま `optimize_error` として画面へ出す。
 
         **最後に必ず状態を配り直す**(`_push`)。文書が変わったぶんはコアのリスナ
         (`_on_core_change`)が配るが、`state != "done"` のときは文書が変わらないので
@@ -1051,8 +1051,8 @@ class Server:
     def _optimize_progress(self, event: dict) -> None:
         """`optimize_run.run()` の進捗。**実行器スレッドから呼ばれる**ので `_emit_event` 経由。
 
-        中身は `{"phase", "message", "evaluation"}` + phase ごとの追加(`20260904-1704`
-        の契約①)。**素の値だけでできている**のでそのまま載せてよい。
+        中身は `{"phase", "message", "evaluation"}` + phase ごとの追加(
+        `docs/contracts/ui-optimize-integration.md`「最適化の配線」)。**素の値だけでできている**のでそのまま載せてよい。
         """
         self._emit_optimize_event({"type": "optimize_progress", **event})
 

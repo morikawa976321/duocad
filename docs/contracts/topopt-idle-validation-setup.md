@@ -1,7 +1,7 @@
 # topopt-idle 検証(土台編: 小型題材・プロトコル・参照解・応力指標)の契約
 
 不要材料(idle material)の2原因(原因1=応力指標の母数希釈 / 原因2=探索の経路喪失)の検証研究のうち、**小型題材・共通基盤・参照解と格子細分・評価式の比較・それらの訂正**の不変条件・依存禁止・罠を、作業タスクの契約から分野別に蒸留したもの。
-いまの挙動の正はコードとテスト。実測値・再現コマンド・表は `topopt_idle_validation/00_COMPACT_MODELS.md`〜`03B_METRICS_RECHECK.md`(出典タスクIDと同番号の md)。
+いまの挙動の正はコードとテスト。実測値・再現コマンド・表は `topopt_idle_validation/00_COMPACT_MODELS.md` と `topopt_idle_validation/10_SYNTHESIS.md` 付録A・B(出典タスク01〜03Bの記録を畳んだもの)。
 探索方式・認定・合成行列・hanger・最終形状・総括は [topopt-idle-validation-runs.md](topopt-idle-validation-runs.md)。
 出典: 節末尾の括弧は `(タスクID, 日付)`。タスクIDは先頭の `20260928-1426-topopt-idle-` を省略。
 
@@ -40,7 +40,7 @@
 - `is_case_done` は status だけを見る。`--smoke`(小予算の疎通確認)の記録が `--smoke` 無しの再実行でもスキップされ、小予算のまま本番データに混入した。台帳ベースのスクリプトは各caseに `smoke` フィールドを持たせ `--force` で強制再実行できるようにする(`run_05_main_matrix.py` の `_case_record`/`--force` が実装例)。(05-synthetic)
 - 機械可読の `01_protocol.json`・`01_stage1_shapes.json` は**手で編集しない**。生成スクリプト(`build_01_protocol_json.py`・`inventory_stage1_shapes.py`)を直して再実行。`reproduce_stage1_transplant.py --src --dst --dilate` の既定は `F0200_h2.2_w5`→`F0200_h2.0_w5`・dilate=1、`output/smoothing_corpus/voxel/` の該当npzが前提。
 - `design_space.derive` は原点を明示パラメータとして受け取らない(外接箱+余白から内部計算)。半セル原点移動の実験にはプロセス内パッチが要り、達成シフト量が意図した0.5セルからずれうる。
-- 実行条件の正は `docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「0〜2レビュー後の訂正と実行順序」節。`01_PROTOCOL.md` 4節の「hangerの新規実行は2条件(H1: 200N・w5相当・原因2 / H2: 2000N・w2相当・原因1)に限る」表は実行条件の正としない。(03a-reference-repair)
+- 実行条件の正は `docs/topopt_idle_validation/10_SYNTHESIS.md` 付録A(旧 REVIEW_00_02 の訂正を畳んだもの)。旧 01_PROTOCOL 4節の「hangerの新規実行は2条件(H1: 200N・w5相当・原因2 / H2: 2000N・w2相当・原因1)に限る」表は実行条件の正としない。(03a-reference-repair)
 - 合成材料5種(S-T/S-B/S-TB/S-L/S-MS)・半セル原点移動8条件・初期形状3種・フィルタ実幅2条件・複数荷重・第3段階(平滑化・集合演算後の再解析)は01で「定義済み・未実行」。実行範囲は runs 側。
 
 (01-protocol, 2026-09-28)
@@ -55,7 +55,7 @@
   - `_project_mask(src_mask, src_origin, src_spacing, target_space)` の origin/spacing は**投影元(ソース)自身の格子のもの**を渡す。目的格子のものを渡すと位置がずれる(`_snap_to_grid` が解像度ごとに bbox へ合わせて origin をずらす。dilution 2.0mm の origin (-16,-16,-16) vs 3.0mm の (-16.97,-17.70,-17.76))。(05-synthetic)
   - `--exact-subdivide`(`_project_mask_exact_subdivide`。整数分割で体積保存、既定False)の検証は**必ず `--out-dir` で既存の `output/idle_validation_20260928/` 直下と別ディレクトリを指定**。怠ると02/03が使う共有 `refine_*.json` を上書きする(実際に発生)。出力 `exact_subdivide_diagnostics.cells_lost_to_design_space_mask` は `design_space.derive` の外枠再計算で失われる材料セル数。(03a)
 - `analytic_checks.py {tension | bending --levels ... | kirsch --shape {dilution|path} --element-mm}`。**`analytic_tension.json`/`analytic_bending.json` は呼ぶたびに全体を上書きする**(`--levels` に渡した分しか残らない。`tension --levels 1 2` で4レベル分が2レベル分に縮んだ事故あり)。軽い確認で再実行したら後で `--levels 1 2 3 4`(曲げは等比細分の `--levels 1 2 4 8`)のフル実行をやり直す。kirschは解像度ごとに別名なので安全。(02 / 03a)
-- 曲げの採点は**位置補正値**(`run_bending` の `sigma_theory_position_corrected_mpa`・`probe_x_actual_mm`・`probe_z_half_actual_mm`)。名目理論値 `sigma_max_theory_mpa`(固定端から20mm・表面ちょうど)は互換のため残すが参考値。正しい曲げ収束は 23.98 MPa(理論24.0の0.075%以内、p≈1.0)。**旧 `02_REFERENCE.md` 5-1節の収束次数1.5〜1.7・外挿値20.6〜21.7 MPaは使わない**(採点位置未補正+非等比Richardson)。(03a)
+- 曲げの採点は**位置補正値**(`run_bending` の `sigma_theory_position_corrected_mpa`・`probe_x_actual_mm`・`probe_z_half_actual_mm`)。名目理論値 `sigma_max_theory_mpa`(固定端から20mm・表面ちょうど)は互換のため残すが参考値。正しい曲げ収束は 23.98 MPa(理論24.0の0.075%以内、p≈1.0)。**旧 02_REFERENCE 5-1節の収束次数1.5〜1.7・外挿値20.6〜21.7 MPaは使わない**(採点位置未補正+非等比Richardson)。(03a)
 - `richardson_extrapolate` は等比細分前提の3点公式で、非等比細分(dilution 2.0/1.0/0.6667mm=比2.0,1.5)の収束次数は ratios[i] と ratios[i+1] のどちらを使うかで変わる(外挿値自体は選び方に依存しない)。**非等比には `richardson_extrapolate_general(values, spacings)`**(二分探索で次数pを解く。等比では旧関数と数値一致。解が `p∈(1e-3,10)` に無ければ `window_diagnostics` に `no_solution=True`)。`no_solution` は発散の証明ではなく「単純べき乗収束モデルが当てはまらない」の確認にとどまる。(02 / 03a)
 - `zone_masks` の距離パラメータ `D` に対し、保持部ゾーンのmaxは頑健だが接続部/一般部のmaxは敏感。ゾーンmaxを比較に使うなら `D` の根拠を明記する。(02)
 - `raw_max`(空セルを含む全要素max。`stress.py` の `RepresentativeStress.raw_max`、材料の外 ρ<rho_min で計算された値)は製品評価・保持部の物理的根拠に使わない。台帳の `raw_max_mpa` は M5b raw が0でも数百〜数千MPaになり判定に使えない。(03a / 07)
@@ -63,7 +63,7 @@
 - Kirsch/Peterson比較(`kirsch --shape dilution`)の `kt_fem` を保持部応力集中の絶対値の根拠にしない(荷重条件の不一致〈曲げ支配 vs 同軸引張〉と局所maxの格子依存が混ざった未校正値)。hangerの `section_forces` は独立検算の根拠にしない(axis=x固定の断面カットが実形状で意味を持たない箇所あり)。hangerの独立検算は `per_face_reactions_n`(支持別反力分担)。(02)
 - 02の成果は5%形(hanger_step05)・移植トラスの格子細分とゾーン解析を持たない。引用しない。必要なら `refine_shape.py --shape hanger_step05 / hanger_transplant` で新規実行(未検証のコード経路)。実CAD/平滑化境界に沿う独立コンフォーマルメッシュ検証は未実装(gmsh等が無い。Richardson外挿と解析解比較で代替)。(02)
 - hanger H1 の一般部48.72 MPaピークは**荷重パッド接触端の応力集中**(荷重面から4.99mm・拘束面から190mm以上)と特定。ゾーン分類に荷重面近傍が無いため一般部へ希釈される。H1の1ピークでの確認にとどまり一般化は未検証。(03a)
-- 本文を訂正済みで引用してはならない箇所: 00の200N(4.77)/250N(5.97)安全率、02 5-1節の曲げ収束、01 4節の実行条件表。各文書冒頭の「訂正(03a)」ポインタから `03A_REFERENCE_REPAIR.md` を辿る。
+- 本文を訂正済みで引用してはならない箇所: 00の200N(4.77)/250N(5.97)安全率、02 5-1節の曲げ収束、01 4節の実行条件表。訂正済みの値は `10_SYNTHESIS.md` 付録A(A-2)。
 - 03aの検証は path_2.5mm・dilution_r-1・hanger H1 の限定題材のみ。`no_solution` 判定・局所平均の収束・load-zone仮説を hanger H2 や他の小型題材へ無条件に一般化しない。`keep` セル合成・`resolve_islands` の体積寄与は03aでは未定量化(03bで定量、下記)。
 
 (02-reference / 03a-reference-repair / 05 / 06 / 07, 2026-09-28)

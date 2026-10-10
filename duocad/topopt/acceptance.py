@@ -1,7 +1,7 @@
-"""島除去後・平滑化前の6条件(計画書§2 `docs/PLAN_BINARY_STRESS_SEARCH.md`)。
+"""島除去後・平滑化前の6条件(`docs/TOPOPT.md`「合格モデルの契約」)。
 
 検査対象は候補に対して島除去を終えた、平滑化前の材料マスク(bool)。表面抽出・平滑化・
-最終CAD生成は呼ばない。合否の意味・許容差の規則は `docs/TOPOPT_PRE_SMOOTHING_CHECKS.md`。
+最終CAD生成は呼ばない。合否の意味・許容差の規則は `docs/TOPOPT_ACCEPTANCE.md`「島除去後・平滑化前の受入検査」。
 
 役割を4つに分けて持つ:
     幾何       — 格子内部の境界・連結性(numpy/scipyのみ、OCPには触らない)
@@ -518,7 +518,7 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
             solver='auto', history=None, converged=None, max_evaluations=None,
             bbox_cache=None, region_overlaps=None, fields=None, member_volume_mm3=None, keep_cells=None):
     """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接
-    受ける**(計画書§5: 「新規の製品APIはboolマスクを受ける」)。過去記録の密度場からの
+    受ける**(`docs/contracts/topopt-binary-search.md`)。過去記録の密度場からの
     二値化は行わない —— それは読み取りアダプター `inspect_document` に閉じてある。
     `before` は島除去前のboolマスク(除去で材料が増えていないことをここで確認する)。
     `region_overlaps`(`RegionOverlaps`)を渡すと、保持・除外の共通体積を前計算から引く(既定は候補ごとに
@@ -574,10 +574,10 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
 
 def inspect_document(document, rho_clean, rho_before, grid, *, level=0.5, **kwargs):
     """過去記録(密度場)を読む**読み取りアダプター**。密度→bool変換をここに閉じ、
-    boolマスクを直接受ける `inspect` を呼ぶ(計画書§5)。
+    boolマスクを直接受ける `inspect` を呼ぶ(`docs/contracts/topopt-binary-search.md`)。
 
     密度積算量(SIMP時代の指標。過去記録にしか存在しない)は、二値領域の体積とは別に
-    `volumes.density_integral_*_mm3` として付記する(`docs/TOPOPT_PRE_SMOOTHING_CHECKS.md`
+    `volumes.density_integral_*_mm3` として付記する(`docs/TOPOPT_ACCEPTANCE.md`
     「密度積算量と、この二値領域の体積は別々に報告する」)。
     """
     before = np.asarray(rho_before, dtype=float)
@@ -593,7 +593,7 @@ def inspect_document(document, rho_clean, rho_before, grid, *, level=0.5, **kwar
     bundle = build_conditions(document)
     soup = voxelize.triangles_from_shape(voxelize.unwrap(bundle.conditions.anchor),
                                          deviation=grid.spacing * voxelize.DEFAULT_DEVIATION_RATIO)
-    # 「元の条件」は材料に対応付けた確定表(`docs/TOPOPT_PRE_SMOOTHING_CHECKS.md`)。過去記録には
+    # 「元の条件」は材料に対応付けた確定表(`docs/TOPOPT_ACCEPTANCE.md`)。過去記録には
     # 設計空間が無いので、島除去前の材料(候補が使えた材料の上限)に接する節点へ対応付ける。
     # 対応付けが不成立(対応不能標本など)なら、節点だけを見る条件5を合格にしない。
     table = anchor.build_anchors(soup, grid, allowed_nodes=anchor.active_nodes(original))

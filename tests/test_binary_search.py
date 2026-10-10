@@ -164,7 +164,7 @@ def test_full_material_is_evaluated_once_without_the_bbox_cache_or_the_region_pr
 
 
 # ---------------------------------------------------------------------------
-# §8 段階4: ひずみエネルギーの順位で削る体積削減(計画書§11)
+# 段階4: ひずみエネルギーの順位で削る体積削減(docs/TOPOPT.md「段階4: ひずみエネルギーの順位で削る」)
 # ---------------------------------------------------------------------------
 def test_step_ratio_is_zero_at_the_target_grows_with_the_margin_and_is_capped():
     """削る割合は安全率の余裕で決まる。目標ちょうどで0、余裕が大きいほど大きく、上限で止まる。"""
@@ -1231,7 +1231,7 @@ def test_computation_failure_is_recorded_as_unknown_and_never_becomes_the_best_f
 
 
 # ---------------------------------------------------------------------------
-# 修正B: 入口の必要条件(docs/FIX_BINARY_SEARCH_INITIALIZATION.md §4)
+# 修正B: 入口の必要条件(docs/TOPOPT.md「回帰検査の対応」)
 # ---------------------------------------------------------------------------
 def test_uncovered_anchor_nodes_stop_at_the_entry_without_evaluating(monkeypatch):
     """確定表の節点が全設計空間の材料に接しないなら、FEM0回で `boundary_mapping_failed`。

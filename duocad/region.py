@@ -75,7 +75,7 @@ def regions(doc: Document, sketch_id: SketchId) -> List[Region]:
     """スケッチの閉領域を計算して返す(1始まりの連番・順序は安定)。
 
     図形が1つも無ければ空リスト。実装は `BRepAlgoAPI_Splitter` で平面状の面を
-    スケッチの辺で分割する(実装計画書§3.3。実測で成立を確認済み)。
+    スケッチの辺で分割する(docs/DESIGN_DECISIONS.md「領域は計算されるもの」。実測で成立を確認済み)。
     """
     return [
         Region(index=item["index"], area=item["area"])

@@ -1,7 +1,7 @@
 """平滑化後の表面に保持・除外のメッシュ集合演算(manifold3d)を適用する。重複領域は除外が残る。
 
 採用の判断と実測(hanger を含む3例での合格、偏差ごとの体積差・めり込み、`as_original()` が要る理由)は
-docs/TOPOPT_MESH_BOOLEAN_STUDY.md。
+docs/TOPOPT_ACCEPTANCE.md「メッシュ集合演算」。
 """
 import time
 
@@ -16,12 +16,12 @@ from . import trace
 
 #: 保持・除外 CAD を三角形分割する線形偏差[mm]。STL 書き出しと同じ値(2026-09-25 本人判断)で、角度偏差は
 #: `kernel.DEFAULT_ANGULAR_DEFLECTION`。三角形は内接するので、円柱では半径によらず約 0.005 mm だけ弦が
-#: 内側を通り、除外の穴の内面はその分だけ除外の中に残る(docs/TOPOPT_MESH_BOOLEAN_STUDY.md「円柱の除外へのめり込み」)。
+#: 内側を通り、除外の穴の内面はその分だけ除外の中に残る(docs/TOPOPT_ACCEPTANCE.md「円柱の除外へのめり込み」)。
 CAD_DEVIATION_MM = STL_DEVIATION
 
 #: 集合演算の結果を簡略化するときの形状変化の許容値[mm]。欠陥を見逃すしきい値ではない。
 #: `as_original()` で入力面の由来を捨ててからかけないと、float32 で潰れる細い三角形が STL に残る
-#: (docs/TOPOPT_MESH_BOOLEAN_STUDY.md「保存精度と簡略化」)。
+#: (docs/TOPOPT_ACCEPTANCE.md「保存精度と簡略化」)。
 SIMPLIFY_TOLERANCE_MM = 1e-5
 
 _NO_ERROR = manifold3d.Error.NoError
@@ -89,7 +89,7 @@ def input_mesh_checks(vertices, faces):
     """集合演算へ渡すメッシュ(平滑化後の表面・三角形化した保持・除外)の合否。
 
     manifold3d は閉じて向きが揃い交差の無い入力を前提にし、交差があっても止まらず結果に交差を残す
-    (docs/TOPOPT_MESH_BOOLEAN_STUDY.md「集合演算のみの結果」の偏差 0.002 mm)。接続6項目・向き
+    (docs/TOPOPT_ACCEPTANCE.md「集合演算のみの結果」の偏差 0.002 mm)。接続6項目・向き
     (包含深さと閉殻の向きの一致)・自己交差を見る。戻り値は JSON 化できる辞書で、`failed` に不合格の項目名を並べる。
     """
     stats, components = topology(vertices, faces)

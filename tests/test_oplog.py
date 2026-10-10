@@ -13,7 +13,7 @@ from duocad.oplog import OpLog
 
 def test_to_json_emits_actual_json_with_the_logged_fields():
     """to_json()の出力は本物のJSONで、各操作のseq/verb/args/provenanceが読める形で入る
-    (保存形式はJSON。SQLiteもpickleもrepr+evalも不可。実装計画書§3.6 —
+    (保存形式はJSON。SQLiteもpickleもrepr+evalも不可。docs/DESIGN_DECISIONS.md「技術選定の根拠」 —
     gitで差分が読める・AIが全履歴を読める、が理由なので「往復すれば何でもよい」ではない)。"""
     log = OpLog()
     log.append("import_step", {"path": "x.step", "body_id": "b1"})

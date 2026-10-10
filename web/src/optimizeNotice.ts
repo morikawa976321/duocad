@@ -40,7 +40,7 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
       ? '測れなかった'
       : `${result.final_safety_factor.toFixed(2)}(完成形を細かい格子で解き直した、表面の最大応力での値)`
   const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
-  // 保証の対象は要求幅。格子上の立方規則(m セル)は探索の規則で、部材の太さの保証ではない(docs/TOPOPT_NECK_RULE_120.md)。
+  // 保証の対象は要求幅。格子上の立方規則(m セル)は探索の規則で、部材の太さの保証ではない(docs/TOPOPT_MIN_WIDTH.md)。
   // **格子上の値は切り捨てて出す**(`minWidth.ts` の規律。四捨五入だと 4.9998mm が「5mm」になる)。
   const minWidth =
     `最小幅 要求 ${short(result.min_width.requested_mm)}mm(` +
@@ -62,7 +62,7 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
 }
 
 /**
- * つなぎ目の診断の行(docs/TOPOPT_NECK_RULE_120.md §3)。**「適合」「検証済み」は出さない** —— 標本化で見えない細部と、
+ * つなぎ目の診断の行(docs/TOPOPT_MIN_WIDTH.md 3章)。**「適合」「検証済み」は出さない** —— 標本化で見えない細部と、
  * 雑音と区別できない変化があるので、言えるのは「疑いあり / 未確定 / 疑いは観測されなかった」まで。端は常に未検証。
  */
 export function neckLines(neck: NeckDiagnosis | null): string[] {

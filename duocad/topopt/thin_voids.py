@@ -1,7 +1,7 @@
 """探索が確定したマスクから、平滑化で潰れる 1×1 の空隙(管)を埋める。
 
 四方が材料で閉じた空セル(2軸以上で両隣が材料)は Taubin 30回で壁の間隔が 0.1 要素未満まで潰れ、まれに壁どうしが
-交差する(docs/TOPOPT_SMOOTHING_INTERSECTIONS.md の R1・R2。64条件の交差4箇所はすべて管の中)。1軸だけ挟まれた溝は
+交差する(docs/TOPOPT_ACCEPTANCE.md「平滑化(Taubin)後の自己交差」の R1・R2。64条件の交差4箇所はすべて管の中)。1軸だけ挟まれた溝は
 0.12 要素以上残り交差しないので埋めない。埋めた後の6条件(FEM)は `optimize_run` が `acceptance.inspect` で取り直す。
 """
 from __future__ import annotations

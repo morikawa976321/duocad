@@ -2,7 +2,7 @@
 
 探索が守る最小幅の規則 R(m)・S(m) の上に足した「くびれ判定」(#120)と「芯の隣接」(#122)、および完成形の最小幅・強度の原因解析と診断(#117)の結論・根拠の数値・再現手順。
 R(m)・S(m) 自体の仕様は [TOPOPT.md](TOPOPT.md)「最小幅の保証」、層数・安全率のずれの実測は [TOPOPT_THICKNESS.md](TOPOPT_THICKNESS.md) が正。
-旧 `TOPOPT_FINAL_WIDTH_117.md`・`TOPOPT_NECK_RULE_120.md`・`TOPOPT_CORE_ADJACENCY_122.md` を統合した(コードのコメントにある「NECK_RULE_120 §2/§3」は本書の2.2節・3章)。
+旧 `TOPOPT_FINAL_WIDTH_117.md`・`TOPOPT_NECK_RULE_120.md`・`TOPOPT_CORE_ADJACENCY_122.md` を統合した。
 
 ## 1. 定義と言葉づかい
 

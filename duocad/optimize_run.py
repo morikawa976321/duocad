@@ -111,7 +111,7 @@ class FaceMappingError(RuntimeError):
 
 class OptimizeCancelled(RuntimeError):
     """`should_cancel()` が真を返した、または探索が `termination='cancelled'` で戻ったので
-    途中で降りた(計画書§4.6「中断時は...製品文書へ勝手に結果を追加しない」)。
+    途中で降りた(「中断時は...製品文書へ勝手に結果を追加しない」。`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
 
     `RuntimeError` にしてあるのは、`acceptance.inspect` 内の例外処理に**拾われないため**
     である(`ValueError` にすると入力の不備と分類されて探索が続く)。
@@ -508,7 +508,7 @@ def resolution_limits(doc: "Document", element_size_mm: Any = None) -> dict:
     除去」——二値探索は密度フィルタを持たないので、最小部材幅からの要求という概念自体が無い)。
     **利用者に聞かない**。`anchor.AnchorTable.empty_face_diagnosis` の
     `suggested_max_spacing_mm` と**同じ式**(`sqrt(CAD面積)`)を使う。**近似であって保証ではない**
-    (`docs/contracts/topopt-design-space.md` の `20260904-1556` 契約②)—— 正方形とみなした代表寸法なので、曲面や極端な縦横比の面
+    (`docs/contracts/topopt-design-space.md`「条件面が空のとき」)—— 正方形とみなした代表寸法なので、曲面や極端な縦横比の面
     では過大にも過小にもなる。厳密に確かめる手段は「その要素サイズで実際に `empty_faces()` を
     取り直す」しかない。
 
@@ -641,7 +641,7 @@ def _face_max_spacing_mm(cad_area_mm2: float) -> float:
     `anchor.AnchorTable.empty_face_diagnosis` の `suggested_max_spacing_mm` と**同じ式**
     (正方形とみなした代表寸法 `sqrt(CAD面積)`)。probe 側は空になった面の逃げ道として、
     ここは事前の解像度の決め方として同じ数字を使う。**近似であって保証ではない**
-    (`docs/contracts/topopt-design-space.md` の `20260904-1556` 契約②)—— 曲面・極端な縦横比では過大にも過小にもなる。
+    (`docs/contracts/topopt-design-space.md`「条件面が空のとき」)—— 曲面・極端な縦横比では過大にも過小にもなる。
     値が一致していることは `topopt_checks/check_optimize_wiring.py` [8] が突き合わせる。
     """
     area = float(cad_area_mm2)
@@ -949,10 +949,10 @@ def _run(
 ) -> dict:
     """入力条件 → 固定設計空間の導出(1回) → 全材料の評価とエネルギー順の削減 → 1×1 の空隙を埋めて6条件を取り直す
     (`thin_voids`)→ 最終確定マスクのメッシュ化 → 保持・除外のメッシュ集合演算 → メッシュボディとして文書へ
-    (計画書§3の単一経路)。
+    (単一の製品経路。`docs/contracts/topopt-binary-search.md`)。
 
     **元のボディは1つも消さない・変えない。** 足すのは1つだけで、その `body_id` を返す。
-    **探索候補の評価中はメッシュ化・STL出力を呼ばない**(計画書§3) —— 後段
+    **探索候補の評価中はメッシュ化・STL出力を呼ばない**(`docs/TOPOPT.md`「二値探索の方式と契約」) —— 後段
     (`duocad.topopt.mesh.build_surface_from_mask` 以降)へ渡るのは
     `binary_search.find_best_feasible` が返す最終確定マスク(`best_feasible`)に、平滑化で潰れる 1×1 の空隙を
     埋めたものだけである(埋めたときは6条件を取り直し、`safety_factor` はその値。探索時の値は `search_safety_factor`)。
@@ -1200,7 +1200,7 @@ def _run(
     )
 
     if search_result.termination == 'cancelled':
-        # 計画書§4.6「中断時は合格チェックポイントを記録するが、製品文書へ勝手に結果を
+        # 中断の方針「中断時は合格チェックポイントを記録するが、製品文書へ勝手に結果を
         # 追加しない」—— best_feasible が見つかっていても保存しない(トレースには残した)。
         raise OptimizeCancelled("形状探索を中断した")
 
@@ -1276,7 +1276,7 @@ def _run(
 
     pump.emit(phase="mesh", message="確定マスクをメッシュ化する")
     # **候補評価中には一度も呼ばれない入口。** 島除去・保持塗り直しをもう一度掛けない
-    # (計画書§3、`mesh.build_surface_from_mask` のdocstring)。
+    # (`docs/TOPOPT.md`「二値探索の方式と契約」、`mesh.build_surface_from_mask` のdocstring)。
     # **`spacing` は既定(要素添字空間の1.0)のまま渡す。** 実寸への変換は下の
     # `_mesh_to_world`(`grid.origin + verts * grid.spacing`)が一括して行う契約
     # (モジュール docstring)——ここでも実 spacing を渡すと二重に掛かってメッシュが
@@ -1609,7 +1609,7 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
     `table` は探索用の確定表(`_map_boundary_conditions`)。省くとここで作る —— 検査・CLIが
     この関数だけを呼んでも、製品と同じ確定表・同じ入口検査を通る(製品入口だけの防御にしない)。
     `preserves`/`excludes` は `(name, shape)` の対にする —— `acceptance.inspect_document`
-    (過去記録を読む読み取りアダプター)が同じ変換をしている(計画書§5)ので、それと
+    (過去記録を読む読み取りアダプター)が同じ変換をしているので、それと
     同じ形にしておく。`bbox_cache=doc.bbox_cache` を渡すのは `_condition_boxes` と同じ理由
     (境界箱の再計算を候補評価のたびに払わないため、`kernel.BoundingBoxCache`)。
     探索の目標は実際の目標 × `opts.search_target_factor`。**係数を掛けるのはここ1か所**で、検査・測定が

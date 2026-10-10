@@ -1,7 +1,7 @@
 # 形状最適化の最終処理・平滑化コーパス・設計要素数の上限の契約
 
 (1) 最終処理（`duocad/topopt/finalize.py`: 保持を足し除外を引く）、(2) 平滑化（marching cubes + Taubin）の検証材料 64 条件（`output/smoothing_corpus/`）とその自己交差の規則、(3) 設計要素数の上限（`MAX_DESIGN_ELEMENTS`）について、ソースを読んでも分からない不変条件・依存禁止・罠。
-いまの挙動の正はコードとテスト。判断・実測の正は [../TOPOPT_MESH_BOOLEAN_STUDY.md](../TOPOPT_MESH_BOOLEAN_STUDY.md)・[../TOPOPT_ACCEPTANCE.md](../TOPOPT_ACCEPTANCE.md)・[../TOPOPT_SMOOTHING_INTERSECTIONS.md](../TOPOPT_SMOOTHING_INTERSECTIONS.md)・[../TOPOPT.md](../TOPOPT.md)「要素サイズの下限は設計空間の要素数で決める」。
+いまの挙動の正はコードとテスト。判断・実測の正は [../TOPOPT_ACCEPTANCE.md](../TOPOPT_ACCEPTANCE.md)・[../TOPOPT.md](../TOPOPT.md)「要素サイズの下限は設計空間の要素数で決める」。
 各項目末尾の括弧は出典のタスクID(先頭8桁が日付)。
 
 ## 最終処理（finalize）
@@ -36,10 +36,10 @@
 
 ### 自己交差の規則（intersection_sites.json）
 
-- 分析は `topopt_checks/analyze_smoothing_intersections.py`（`.venv/Scripts/python.exe -X utf8`。引数なし=入力マスクが記録の後で変わった条件だけ作り直す・並列。`--force`・`--one`・`--report`・`--synthetic`・`--locality`・`--sensitivity`）。文書は `docs/TOPOPT_SMOOTHING_INTERSECTIONS.md`。`intersection_sites.json`（1件1行）・`intersection_records/<条件名>.json`（原本。`sites[]`・`runs[]`〈管の列の全件〉・`slit_hist`・`mask_sha256`・`counts_match_mesh_manifest`）。(20260925-2101-topopt-smoothing-intersection-rules)
+- 分析は `topopt_checks/analyze_smoothing_intersections.py`（`.venv/Scripts/python.exe -X utf8`。引数なし=入力マスクが記録の後で変わった条件だけ作り直す・並列。`--force`・`--one`・`--report`・`--synthetic`・`--locality`・`--sensitivity`）。文書は `docs/TOPOPT_ACCEPTANCE.md`「平滑化(Taubin)後の自己交差」。`intersection_sites.json`（1件1行）・`intersection_records/<条件名>.json`（原本。`sites[]`・`runs[]`〈管の列の全件〉・`slit_hist`・`mask_sha256`・`counts_match_mesh_manifest`）。(20260925-2101-topopt-smoothing-intersection-rules)
 - **規則の要約**: 64条件の交差は4箇所・21組で、4箇所とも四方が閉じた 1×1 の管（板を貫く穴、開-開）の中（長さ3が3箇所・長さ4が1箇所）。管は長さ4以上（開-開）・2以上（止-開）で壁の間隔が 0.1 要素未満に潰れるが、交差したのはそのうち開-開の長さ3〜4（19列中4列）だけで、止-開・長さ5以上・溝は 0。合成（板・棒）では板厚（=管の長さ）4のときだけ確実に交差し（平板20組・棒225/225）、3・5〜12は 0。**実データの長さ3の交差3箇所は合成で再現できておらず、周囲の形の特徴でも分けられていない**（管から4セル以内の形で決まる）。各条件の交差件数は `mesh_manifest.json` と一致（64/64）。(同上)
 - 壁の間隔の区切り（0.1/0.25/0.5/0.75）・塊のまとめ半径（3.0）は分析者が置いた値で、実測ではない。(同上)
-- **対策（現行）**: 2026-10-07 の本人判断で、探索が確定したマスクの管（2軸以上で挟まれた空セル）をメッシュ化の前に埋める（`duocad/topopt/thin_voids.py` の `fill_tubes`、`optimize_run` の探索後処理）。64条件で交差 21組 → 0、埋めたセルは条件あたり中央値 7・最大 80。**このコーパスの `voxel/*.npz` は埋める前のマスク**で、埋めた後の取り直しは `tube_fill_manifest.json`・`tube_fill_records/`。(出典: `docs/TOPOPT_SMOOTHING_INTERSECTIONS.md` 冒頭)
+- **対策（現行）**: 2026-10-07 の本人判断で、探索が確定したマスクの管（2軸以上で挟まれた空セル）をメッシュ化の前に埋める（`duocad/topopt/thin_voids.py` の `fill_tubes`、`optimize_run` の探索後処理）。64条件で交差 21組 → 0、埋めたセルは条件あたり中央値 7・最大 80。**このコーパスの `voxel/*.npz` は埋める前のマスク**で、埋めた後の取り直しは `tube_fill_manifest.json`・`tube_fill_records/`。(出典: `docs/TOPOPT_ACCEPTANCE.md`「平滑化(Taubin)後の自己交差」)
 - 座標は要素添字空間（`centre_cell`）で、ワールドは `origin + 添字 * spacing`（`centre_world_mm` は計算済み）。保持・除外との接触は追跡していない（npz にマスクが無い。`keep_or_exclude_contact: "not_tracked"`）。`rows` の並びに依存しない（`condition` で引く）。`runs[].hit` は記録に無く `--report` の読み込み時に付ける。(20260925-2101-topopt-smoothing-intersection-rules)
 - 罠: 二値マスクの marching cubes は境界面の中心に頂点を1つずつ置くので頂点と境界面が1対1（壁の間隔はこの対応で測る。`_face_vertex_tables`）。`local_crossings` の「近い」は交差2三角形の頂点の重心で判定（交差点ではない）。交差の有無は三角形の並びの細部で決まり、間隔が 0.02〜0.05 の管の多くは交差しない。管の潰れと交差の因果は測っていない。合成の板厚1の棒 2/225 が交差する原因は未調査。(同上)
 

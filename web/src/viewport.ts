@@ -1,5 +1,5 @@
 /**
- * ビューポート — three.js をここに閉じ込める(実装計画書 §4.2 予防2)。
+ * ビューポート — three.js をここに閉じ込める(docs/DESIGN_DECISIONS.md「技術選定の根拠」)。
  *
  * **three.js の型を外へ漏らさない**。公開するのは `viewportTypes.ts` の `Viewport`
  * インタフェースだけで、three.js のオブジェクトは1つも戻り値・引数に出さない。three.js は
@@ -8,7 +8,7 @@
  * (`planeGrid.ts` / `faceCulling.ts` / `viewCubeOverlay.ts` など)だけで、破壊的変更の影響は
  * Svelte 層へ出ない。
  *
- * **canvas はフレームワークの外**(実装計画書 §4「守るべき唯一のルール」)。Svelte から
+ * **canvas はフレームワークの外**(docs/DESIGN_DECISIONS.md「技術選定の根拠」の「frontend で守るべき唯一のルール」)。Svelte から
  * 受け取るのは空の `HTMLElement` 1つだけで、canvas の生成・破棄・再描画は全部この中で行う。
  * Svelte はこのコンテナの中身を二度と触らない。
  *

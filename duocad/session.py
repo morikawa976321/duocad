@@ -415,7 +415,7 @@ class Session:
     # ---------------------------------------------------------------- 操作
     def set_visible(self, body_id: str, visible: bool, client_op: Optional[int] = None) -> dict:
         """パーツ一覧からの表示・非表示切り替え。**コアの `selection.set_visible` を呼ぶだけ**
-        (アプリ層に可視性の状態を持たせない。実装計画書§2)。
+        (アプリ層に可視性の状態を持たせない。docs/DESIGN_DECISIONS.md「層の分け方」)。
 
         **verbではない**ので操作ログには積まれず、undo / redo では戻らない
         (理由は `selection.set_visible`)。発火するのは選択と同じ `change` 系のイベントで、
@@ -893,7 +893,7 @@ class Session:
 
     # ---------------------------------------------------------------- E: ファイル操作
     #
-    # **保存形式は操作ログのJSON**(実装計画書§3.1)。形状はそこから導出されるので、
+    # **保存形式は操作ログのJSON**(docs/DESIGN_DECISIONS.md「技術選定の根拠」)。形状はそこから導出されるので、
     # 開くたびに再生経路が検査されることになる —— 「保存したものが開けない」が
     # 起きるとしたら、それは再生が壊れているということであり、隠さない方がよい。
     def _resolve_document_name(self, name: Any) -> Path:

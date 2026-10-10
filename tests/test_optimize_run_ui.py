@@ -102,7 +102,7 @@ def test_resolution_without_condition_faces_is_not_an_error_toast(session: Sessi
 def test_resolution_rejects_the_old_rmin_argument_without_a_toast(session: Session) -> None:
     """**旧引数(`rmin_mm`)が届いたら、黙って無視せず分かるエラーにする**
 
-    (計画書§6.2)。この口は元々「まだ設定の途中」を非トーストで運ぶ経路
+    (`docs/TOPOPT.md`「変更してはいけないもの」の「旧引数の契約」)。この口は元々「まだ設定の途中」を非トーストで運ぶ経路
     (`ValueError` → `{"error": ...}`)を持っているので、そこへ乗せる。
     """
     four_conditions(session)
@@ -161,7 +161,7 @@ def test_run_optimization_rejects_the_old_arguments_with_a_named_error(
 ) -> None:
     """**旧引数(`rmin_mm`/`max_iter`/`material_min_mm3`/`material_max_mm3`)が届いたら、
 
-    黙って無視せず `optimize_error` として断る**(計画書§6.2)。`net/ws.py` がこれらを
+    黙って無視せず `optimize_error` として断る**(`docs/TOPOPT.md`「変更してはいけないもの」の「旧引数の契約」)。`net/ws.py` がこれらを
     転送し(`_optimize_start` のkwargs構築)、`session.run_optimization` が
     `OptimizeInputError` で断る配線を4つとも確かめる。
     """

@@ -98,7 +98,7 @@ def bite_verdict(padded: np.ndarray, bite: np.ndarray) -> tuple[Optional[str], b
 
 
 #: 芯の隣接を26にする最小の m: 斜めの段を通る球の直径 √2(m−1) が m 以上になる最小の整数(m ≥ 2+√2)。
-#: **格子の間隔が3軸で等しい前提**(`voxelize.Grid.spacing` がスカラー)。導出と実測は docs/TOPOPT_CORE_ADJACENCY_122.md。
+#: **格子の間隔が3軸で等しい前提**(`voxelize.Grid.spacing` がスカラー)。導出と実測は docs/TOPOPT_MIN_WIDTH.md 2.1節・4.2節。
 CORE_26_MIN_M = 4
 _FULL_26 = np.ones((3, 3, 3), dtype=bool)
 
