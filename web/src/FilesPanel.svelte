@@ -1,60 +1,30 @@
 <script lang="ts">
   /**
-   * ファイルパネル — **保存先が固定フォルダになったことをUIに落とす場所**。
-   * `App.svelte` の**左サイドバー(`.data-panel`)の中身はこれ1枚だけ**である
-   * (Fusion 360のデータパネルに対応する位置)。
+   * ファイルパネル — `App.svelte` の左サイドバー(`.data-panel`)の中身。`duocad/models/` の一覧を見せ、クリック1つで開く。
+   * `BrowserPanel.svelte` と同じ作りで状態はコアが持つ(`documents` は `list_documents` の写し)。保存・開く・一覧は
+   * `documentFiles.svelte.ts` が `session.sendCommand(...)` で直接送る(`CommandHost` は経由しない: 一覧のクリックは
+   * 「対象を選ぶ」そのもので、引数収集の状態機械を通す理由が無い)。
+   * ブラウザのネイティブファイルダイアログ(File System Access API)は使わない: ファイルを書くのはサーバ側のPythonで、ブラウザがハンドルを持っても噛み合わない。
    *
-   * **`duocad/models/` の中身を一覧で見せて、クリック1つで開く**。`BrowserPanel.svelte`
-   * と同じ作りで、**状態はコアが持つ**(`documents` はサーバの
-   * `list_documents` が返した一覧の写しで、ここでは何も覚えない)。保存・開く・一覧はどれも
-   * `documentFiles.svelte.ts` が `session.sendCommand(...)` で直接送る(`CommandHost` は経由しない ——
-   * 一覧からのクリックは「対象を選ぶ」そのものであって、引数収集の状態機械を通す理由が無い)。
+   * 保存は1操作ごとに自動(issue #5、本人判断 2026-09-16)。保存ボタンは無く、名前欄はいま編集しているファイルの改名(`rename_document`。
+   * 無題は最初の変更で `untitled-<n>.json` が付く)。別名で複製したければ行の「複製」。上書きの口はどこにも無い:
+   * 既存名への改名はサーバが拒否する(操作ログが唯一の正なので、潰したファイルは復旧できない)。
+   * 開くにも「新規」(`onNew`)にも確認を挟まない(名前つきの文書は自動保存済みで失うものが無く、一覧のクリック1つで移れるのに新規だけ確認すると挙動が割れる)。
    *
-   * **ブラウザのネイティブファイルダイアログ(File System Access API)は使わない**。実際に
-   * ファイルを書いているのはサーバ側のPythonなので、ブラウザがファイルハンドルを持っても
-   * 噛み合わない。
+   * 一覧の1行は正方形のサムネイル・ファイル名・作成日時・更新日時(本人指示 2026-10-04)。サムネイルから日時までが1つの「開く」ボタンで、
+   * 右端に複製・削除が縦に並ぶ。サムネイルは行が見えたときに `onNeedThumbnail` で取りに行かせる(撮るのは `documentFiles.svelte.ts`)。
+   * 作成日時を持たない既存ファイルは「—」(docs/UI.md)。
    *
-   * **保存は1操作ごとに自動で走る**(issue #5、本人判断 2026-09-16)。このパネルに保存ボタンは
-   * 無く、名前欄は**いま編集しているファイルの改名**(`rename_document`)である —— 無題の
-   * 文書は最初の変更で `untitled-<n>.json` が自動で付くので、人が決めるのは名前だけでよい。
-   * 別名で複製したければ一覧の行の「複製」(下記)。**上書きの口はどこにも無い**: A を
-   * 編集中に B の名前へ改名しようとすればサーバが拒否する(操作ログが唯一の正である以上、
-   * 潰したファイルは復旧できない)。
+   * 複製・削除(issue #17)はディスク上のファイルの整理で、いま編集している文書は変わらない。複製先は行の直下の欄に `<元の名前>-copy` を
+   * 先埋めして Enter で確定(既にあればサーバが拒否)。削除は2段階(「削除」→ 行の直下に「本当に削除」。モーダルは出さない):
+   * 「開くのに確認を挟まない」の根拠は「消えるのは未保存の編集だけ」で、ディスクの保存済みファイルには当たらない(本人判断 2026-09-16)。
+   * 編集中のファイルも削除でき、消すと文書は閉じてトップ画面へ戻る(`Session.delete_document`)ので確認の文言でそれを言う。
    *
-   * **開くのに確認ダイアログを挟まない**。**「新規」も同じ**(`onNew`) —— 一覧の
-   * クリック1つで別の文書へ移れるのに、空の文書へ移るときだけ確認を挟むと挙動が割れる。
-   * 名前つきの文書は自動保存されていて失うものが無く、無題の文書も最初の変更で名前が付く。
+   * 一覧の下は書き出し(STEP・STL)だけ。文書を変えない(操作ログに載らず undo の対象でもない)ので、ここでよい。
+   * STEP/SVG 読み込みは文書を変えるverbなのでここには無い(`commands/files.ts` の `IMPORT_STEP`、`commands/sketch.ts` の `IMPORT_SVG`)。
    *
-   * **一覧の1行は、正方形のサムネイル・ファイル名・作成日時・更新日時**(本人指示 2026-10-04)。
-   * サムネイルから日時までが1つの「開く」ボタンで、右端に複製・削除が縦に並ぶ。サムネイルは
-   * 行が見えたときに `onNeedThumbnail` で取りに行かせる(319件を一度に取らない)。撮るのは
-   * `documentFiles.svelte.ts`。作成日時を持たない既存ファイルは「—」(docs/UI.md)。
-   *
-   * **一覧の行からは、開く・別名で複製・削除ができる**(issue #17)。複製と削除はディスク上の
-   * ファイルの整理であって、いま編集している文書は変わらない(`open_document` とは別の操作)。
-   * 複製先の名前は行の直下の欄に `<元の名前>-copy` を先埋めして Enter で確定する(打ち直せる。
-   * 既にあればサーバが拒否する)。**削除は2段階**(「削除」→ 行の直下に「本当に削除」が出る。
-   * モーダルは出さない) —— 「開くのに確認を挟まない」の根拠は「消えるのは未保存の
-   * 編集だから」であり、ディスクの保存済みファイルには当たらない(本人判断 2026-09-16)。
-   * **編集中のファイルも削除できる**。消すと文書は閉じてトップ画面へ戻る(`Session.delete_document`)
-   * ので、確認の文言でそれを言う。
-   *
-   * **一覧の下に置くのは書き出しの2つだけ**(STEP書き出し・STL書き出し)。どちらも
-   * 保存/開くと同じ形で `documentFiles.svelte.ts` が `session.sendCommand(...)` を直接呼ぶ
-   * (`CommandHost` を経由しない)。**文書を変えないから**ここでよい ——
-   * 操作ログに載らず、undoの対象でもなく、モデルは1ミリも動かない。
-   *
-   * **STEP読み込み(`import_step`)はここには無い**(理由は `commands/files.ts` の
-   * `IMPORT_STEP` のdocstring) —— あれだけは文書を変えるverbで、ファイルの出し入れでは
-   * なくモデリングの1手である。**SVG読み込み(`import_svg`)も同じ理由でここには無い**
-   * (`commands/sketch.ts` の `IMPORT_SVG` を見よ)。
-   *
-   * **名前とパスの欄は拡張子を打たせない**(`SuffixField.svelte`)。`.json` / `.step` / `.stl` は
-   * 欄の右に固定で出ていて、送るときに付ける(本人指示 2026-10-07)。
-   *
-   * **送信後もパス欄は消さない**(ファイル名欄=`draftName`とは逆の規律)。STEP/STLのパスは
-   * 同じ値へ書き出し直す・同じファイルを読み直すことが多く、毎回打ち直させると手間になる
-   * ——「名前を変える」が消すのは1回きりの新しい名前だからで、性質が違う。
+   * 名前とパスの欄は拡張子を打たせない(`SuffixField.svelte`。`.json` / `.step` / `.stl` は欄の右に固定で、送るときに付ける。本人指示 2026-10-07)。
+   * 送信後もパス欄は消さない(STEP/STLのパスは同じ値へ書き出し直す・読み直すことが多い。ファイル名欄 `draftName` は1回きりの新しい名前なので消す)。
    */
   import { tick } from 'svelte'
   import { pathLike } from './commands/command'
@@ -76,61 +46,33 @@
     thumbnailUrl,
     onNeedThumbnail,
   }: {
-    /** `duocad/models/` の中身(サーバの `list_documents` の写し)。 */
     documents: DocumentInfo[]
-    /**
-     * **いま編集しているファイル名**(サーバの `state.current_name` の写し。無ければ `null`)。
-     *
-     * ヘッダの `#current-file` と同じ値で、自動保存と Ctrl+S が書く先そのものである。
-     * **このパネルは名前を文字で出さない**(同じ文字列をヘッダと2度出さないため)。
-     * 代わりに**一覧の中の当該行を光らせる**:
-     * 「どれを開いているか」は一覧を見るときの問いなので、答えは一覧の中にあるべきで、
-     * `BrowserPanel.svelte` が編集中のスケッチを `.sketch-row.active` で示すのと同じ形。
-     */
+    /** サーバの `state.current_name` の写し(無ければ `null`)。名前は文字で出さず(ヘッダの `#current-file` と二重になる)、一覧の当該行を光らせる(`BrowserPanel.svelte` の `.sketch-row.active` と同じ形)。 */
     currentName: string | null
     /** 文書を開いているか。閉じている(トップ画面)間は、今の文書に向けた口(閉じる・改名・書き出し)を出さない。 */
     documentOpen: boolean
-    /**
-     * **いま編集しているファイルを改名する**(名前欄。無題なら「名前を付ける」)。
-     *
-     * **既存のファイル名を渡してもサーバが拒否する** —— 上書きの口はどこにも無い
-     * (冒頭のdocstring参照)。
-     */
+    /** いま編集しているファイルを改名する(無題なら「名前を付ける」)。既存名を渡してもサーバが拒否する。 */
     onRename: (name: string) => void
-    /** ファイル名を渡して開く。 */
     onOpen: (name: string) => void
-    /** 空の文書にする(引数なし。ファイルはまだ1つも決まっていない)。 */
     onNew: () => void
-    /** 文書を閉じてトップ画面へ戻る(保存は自動で済んでいる)。 */
     onClose: () => void
-    /** `source` を `dest` へ別名で複製する(ディスクのJSONを写すだけ。文書は変わらない)。 */
     onCopy: (source: string, dest: string) => void
-    /** ディスクから削除する(編集中のファイルなら、消した後で文書が閉じる)。 */
+    /** 編集中のファイルなら、消した後で文書が閉じる。 */
     onDelete: (name: string) => void
-    /** 書き出し先のパスを渡してSTEPへ書き出す(文書は変えない)。 */
     onExportStep: (path: string) => void
-    /** 書き出し先のパスを渡してSTLへ書き出す(文書は変えない)。**粗さは固定**で選べない。 */
+    /** 粗さは固定で選べない。 */
     onExportStl: (path: string) => void
-    /** 手元にあるサムネイルの `data:` URL(無ければ null。仮の絵を出す)。 */
+    /** 無ければ null(仮の絵を出す)。 */
     thumbnailUrl: (name: string) => string | null
-    /** 行が見えた。`version` は一覧の `thumb`(手元より新しければ取りに行く)。 */
     onNeedThumbnail: (name: string, version: number | null) => void
   } = $props()
 
-  /** 打ちかけの新しい名前(改名)。送ったら空に戻す(パネルは打ちかけ以外の状態を覚えない)。 */
   let draftName = $state('')
 
   /**
-   * 打った名前(拡張子 `.json` は欄の外で付く)が使える形か(空・区切り文字・`.`/`..`・コロン・前後の空白)。
-   *
-   * **最終判定はサーバ**(`Session._resolve_document_name` の `is_relative_to` 検査)。
-   * ここでの検査は明らかに拒まれる形を早く言うための入力補助でしかなく、実在チェックはしない
-   * (サーバと2箇所で別々のパス解釈を持たない)。
-   *
-   * **既存名かどうかもここでは見ない**。`documents` は手元にあるが、
-   * それは `list_documents` を最後に呼んだ時点の写しでしかなく、「その名前にできるか」の正は
-   * サーバ側の `rename_document` にある。打った名前が既にあればサーバが拒否し、
-   * `onError` -> `fail()` でトースト1枚になる —— **新しい通知経路を作らない**。
+   * 打った名前(拡張子 `.json` は欄の外で付く)が使える形か。最終判定はサーバ(`Session._resolve_document_name` の `is_relative_to` 検査)で、
+   * ここは明らかに拒まれる形を早く言う入力補助。実在・既存名は見ない: `documents` は `list_documents` を最後に呼んだ時点の写しでしかなく、
+   * 正はサーバの `rename_document`(拒否は `onError` -> `fail()` のトースト1枚。新しい通知経路を作らない)。
    */
   function nameProblem(text: string): string | null {
     const trimmed = text.trim()
@@ -151,7 +93,6 @@
     draftName = ''
   }
 
-  /** `2026-10-04 20:16`(手元の時刻)。作成日時を持たないファイルは「—」。 */
   function formatStamp(epochSeconds: number | null): string {
     if (epochSeconds === null) return '—'
     const date = new Date(epochSeconds * 1000)
@@ -165,12 +106,8 @@
   const sorted = $derived([...documents].sort((a, b) => b.mtime - a.mtime))
 
   /**
-   * 行が一覧の見える範囲(+少し先)に入ったら、その行のサムネイルを求める。見えている間に
-   * 一覧が取り直されて版が上がったときも求め直す(`update`)。
-   *
-   * **引数は値(`{ name, thumb }`)で受ける。** 関数を渡すと、Svelte は関数を作るだけで中の
-   * `file.thumb` を読まないので、版が上がっても `update` が呼ばれない(svelte 5.56 のコンパイル
-   * 結果で確認)。
+   * 行が一覧の見える範囲(+少し先)に入ったらサムネイルを求め、見えている間に版が上がったら求め直す(`update`)。
+   * 引数は値で受ける: 関数を渡すと Svelte は中の `file.thumb` を読まないので、版が上がっても `update` が呼ばれない(svelte 5.56 のコンパイル結果で確認)。
    */
   function whenVisible(node: HTMLElement, wanted: { name: string; thumb: number | null }) {
     let visible = false
@@ -194,17 +131,12 @@
     }
   }
 
-  // ---------------------------------------------------------------- 複製・削除(行内)
-  /** 複製の名前を打っている元の行(無ければ null)。削除の確認中の行と同時には立たない。 */
+  /** 複製の名前を打っている元の行。削除の確認中の行と同時には立たない。 */
   let copyingFrom = $state<string | null>(null)
   let copyName = $state('')
-  /** 「本当に削除」を出している行(無ければ null)。 */
   let deletingName = $state<string | null>(null)
 
-  /**
-   * 複製先の先埋め: `<元の名前>-copy`(拡張子は欄の外)。既にあれば `-copy2` `-copy3` …
-   * (手元の一覧で見るだけ。**存在の正はサーバ**で、打ち直して衝突すれば拒否される)。
-   */
+  /** 複製先の先埋め: `<元の名前>-copy`(既にあれば `-copy2` …)。手元の一覧で見るだけで、存在の正はサーバ。 */
   function suggestCopyName(source: string): string {
     const stem = withoutSuffix(source, '.json')
     const taken = new Set(documents.map((file) => file.name))
@@ -252,11 +184,9 @@
     deletingName = null
   }
 
-  // ---------------------------------------------------------------- STEP/STL(入出力)
   /**
-   * 空と、ファイル名の無いパス(`sub/` は拡張子を付けると `sub/.step` になる)だけを弾く
-   * (**ファイル名の検査`nameProblem`は掛けない**)。相対パスはサーバが
-   * `export/` 基準に解決する(保存の `models/` とは別の置き場)。
+   * 空と、ファイル名の無いパス(`sub/` は拡張子を付けると `sub/.step` になる)だけを弾く(`nameProblem` は掛けない)。
+   * 相対パスはサーバが `export/` 基準に解決する(保存の `models/` とは別の置き場)。
    */
   const pathProblem = pathLike('パス')
 
@@ -283,7 +213,6 @@
     onExportStl(withSuffix(exportStlPath, '.stl'))
   }
 
-  /** Enterで、その行のボタンと同じことをする。 */
   function onRowEnter(event: KeyboardEvent, submit: () => void): void {
     if (event.key !== 'Enter') return
     event.preventDefault()
@@ -292,13 +221,7 @@
 </script>
 
 <section class="files-panel">
-  <!-- **見出しも編集中のファイル名も置かない** —— 「ファイル」の語はヘッダの開閉ボタン
-       (`#data-panel-toggle`)が既に言っている。編集中のファイルは**文字ではなく
-       一覧の行の強調**(下の `.files-row.active`)で示す(冒頭のdocstring参照)。 -->
   <div class="row">
-    <!-- **新規は一覧の外にある** —— 開くのが「一覧のどれかを指す」操作なのに対し、こちらは
-         指す先が無い(空の文書にする)。名前を打つ欄より前に置いて、ファイル名の入力と
-         「名前を変える」の組から離してある。 -->
     <button
       id="file-new"
       onclick={onNew}
@@ -314,8 +237,6 @@
   </div>
 
   {#if documentOpen}
-    <!-- 名前欄 = **いま編集しているファイルの改名**(冒頭のdocstring)。無題なら「名前を付ける」。
-         置き場所の欄は空のまま、いまの名前を薄く見せる。 -->
     <div class="new-row">
       <SuffixField
         id="file-name-input"
@@ -338,7 +259,6 @@
       <span class="value empty dim">models/ にファイルが無い</span>
     {/if}
     {#each sorted as file (file.name)}
-      <!-- **編集中の1行を光らせる**(`BrowserPanel` の `.sketch-row.active` と同じ形)。 -->
       <!-- `active` は実機検査が行の印として読む。見た目は `row-active`(styles.css)。 -->
       {@const url = thumbnailUrl(file.name)}
       <div
@@ -357,7 +277,6 @@
             {#if url !== null}
               <img src={url} alt="" draggable="false" />
             {:else}
-              <!-- 撮ったことの無い文書(開けば撮られる)・立体の無い文書。 -->
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
                   d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4 7.5l8 4.5 8-4.5M12 12v9"
@@ -375,8 +294,6 @@
             <span class="files-date">更新 {formatStamp(file.mtime)}</span>
           </span>
         </button>
-        <!-- **行に「上書き」ボタンは無い**(冒頭のdocstring)。上書きの口はどこにも無く、
-             保存は自動で走る。 -->
         <span class="files-actions">
           <button
             class="files-copy row-action"
@@ -408,9 +325,8 @@
         </span>
       </div>
       {#if deletingName === file.name}
-        <!-- 削除の2段目。行の直下で聞く(モーダルは出さない。冒頭のdocstring)。 -->
         <div class="new-row confirm-row" data-delete-of={file.name}>
-          <!-- 幅240pxの行に収まる長さにしてある(長いと末尾が切れて「戻せない」が読めない)。 -->
+          <!-- 幅240pxの行に収まる長さにする(長いと末尾が切れて「戻せない」が読めない)。 -->
           <span class="confirm-text" title={file.name === currentName ? '開いている文書。消すと閉じて戻せない' : undefined}>
             {file.name === currentName ? '閉じて消す' : '消すと戻せない'}
           </span>
@@ -421,7 +337,6 @@
         </div>
       {/if}
       {#if copyingFrom === file.name}
-        <!-- 複製先の名前。先埋めしてあるので Enter だけで通る(打ち直してもよい)。 -->
         <div class="new-row copy-row" data-copy-of={file.name}>
           <SuffixField
             id="file-copy-name"
@@ -446,8 +361,6 @@
     {/each}
   </div>
 
-  <!-- STEP/STLの**書き出し**。一覧の下に区切りを置いて積む(読み込みは含まない ——
-       冒頭のdocstring)。「入力欄+ボタン」の見た目は上の名前欄の行と揃えてある。 -->
   {#if documentOpen}
     <div class="io-section">
       <div class="new-row">
@@ -486,10 +399,7 @@
 </section>
 
 <style>
-  /* 左サイドバーの高さを丸ごと受け取り、余った分は `.list` が持つ
-     (自分の高さを固定していた頃の 140px は、右サイドバーで他のパネルと
-     縦に並んでいたときの都合であって、専用の枠に移った今は要らない)。
-     溢れるのは `.list` の中だけなので、ファイルが増えても `.viewport` の寸法には触らない。 */
+  /* 左サイドバーの高さを受け取り、余った分は `.list` が持つ。溢れるのは `.list` の中だけなので `.viewport` の寸法には触らない。 */
   .files-panel {
     display: flex;
     flex-direction: column;
@@ -521,8 +431,6 @@
     flex: 0 0 auto;
   }
 
-  /* 大きさは styles.css の `.hint` が持つ(--fs-meta)。ここは色だけ —— 打った値が
-     通らない理由なので、他の添え物と違って琥珀で言う。 */
   .hint {
     color: var(--accent);
   }
@@ -542,8 +450,6 @@
     gap: 2px;
   }
 
-  /* サムネイル・名前・日時をまとめた「開く」。行の幅は240pxのサイドバーで決まるので、
-     日時(`2026-10-04 20:16` に「更新 」を足した幅)が名前の欄に収まるよう、操作子は縦に積む。 */
   .files-open {
     flex: 1 1 auto;
     min-width: 0;
@@ -611,7 +517,6 @@
     gap: 2px;
   }
 
-  /* 行内の操作子(複製・削除・やめる)。面は持たず、大きさは添え物(`--fs-meta`)に揃える。 */
   .row-action,
   .files-row-cancel,
   .files-delete-confirm {
@@ -641,7 +546,6 @@
     pointer-events: none;
   }
 
-  /* 2段目の「本当に削除」だけは目立たせる(戻せない操作なので)。 */
   .files-delete-confirm {
     color: var(--accent);
     border-color: var(--accent);
@@ -666,8 +570,7 @@
     color: var(--dim);
   }
 
-  /* `.list`は伸縮する(flex:1)のでスクロールを持つ。この区切りから下は
-     `.new-row`(ファイル名の行)と同じく縮まない(flex:0 0 auto)。 */
+  /* `.list` は伸縮する(flex:1)のでスクロールを持つ。この区切りから下は縮まない(flex:0 0 auto)。 */
   .io-section {
     display: flex;
     flex-direction: column;
