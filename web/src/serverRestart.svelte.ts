@@ -59,7 +59,8 @@ export async function restartServer(
 ): Promise<void> {
   if (restarting) return
   restarting = { title: shown.title, detail: shown.detail }
-  const before = (await loadConfig())?.boot
+  // 比べる元は押した時点の印(ページを開いた後に別の画面から立て直されていることがある)。
+  const before = (await fetchJson<ServerConfig>('duocad-config.json'))?.boot
   let response: Response
   try {
     response = await fetch(new URL(path, location.href), { method: 'POST' })
