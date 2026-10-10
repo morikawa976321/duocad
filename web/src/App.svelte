@@ -1,19 +1,11 @@
 <script lang="ts">
   /**
-   * アプリ層の組み立て — 接続・ビューポート・パネルを繋ぐだけの場所。
+   * アプリ層の組み立て — 接続・ビューポート・パネルを繋ぐ。
+   * 引数を集める状態機械は `commands/CommandHost.svelte` に1つだけある。
    *
-   * **「面を選ぶ → 距離を打つ → Enter」の状態機械も、引数を集める仕組みも
-   * `commands/CommandHost.svelte` に1つだけあり**、verbはそこへ載せるだけになる
-   * (コマンドが増えても、ここは変わらない)。
-   *
-   * **選択の正はコアにある。** ブラウザ側に持たせると、docs/DESIGN_DECISIONS.md「層の分け方」が定める
-   * 「選択集合もコア側(永続・双方向)」を満たせない —— ここは `state.selection` を
-   * 描き直すだけで、**選択の値を1つも覚えていない**。可視性と同じ形である。
-   *
-   * ここに残っている責務は2つだけ:
-   *
-   * 1. **ピック → コアの選択への翻訳**(修飾キーで追加・除去・置き換えを決める)
-   * 2. **プレビューの往復**(コマンド層が「何を試すか」を決め、ここが投げて幽霊を描く)
+   * 選択の正はコアにある(docs/DESIGN_DECISIONS.md「層の分け方」)。ここは `state.selection` を
+   * 描き直すだけで、選択の値を覚えない。責務は、ピック→コアの選択への翻訳(修飾キーで
+   * 追加・除去・置き換え)と、プレビューの往復(コマンド層が決め、ここが投げて幽霊を描く)。
    */
   import { onMount, untrack } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
@@ -113,36 +105,23 @@
   } from './viewport'
 
   /**
-   * ツールバーの中身(モードごと)。**状態機械は1つのまま**で、変わるのは一覧と既定だけ。
-   * ソリッド側の一覧には2つ、スケッチ側には反復の2つが載る ——
-   * 領域押し出しは**両方に居る**(描いた直後に押し出すのと、モードを抜けてから
-   * 領域を選んで押し出すのは、どちらも実際に使う)。
-   *
-   * **`sketch_create` はもうここに載らない**。あれはverbの行に置くと
-   * 「押すと戻ってくる操作」(押し出し・フィレット)と同じ見た目で**モードを切り替える**
-   * ボタンになる。いまはモードの行(`.mode-row`)に上げてあり、押すと `sketch-pending` へ
-   * 入って `SKETCH_PENDING_COMMANDS` が起動済みで現れる(下の `mode` のdocstring)。
+   * ツールバーの中身(モードごと)。領域押し出しはソリッド側・スケッチ側の両方に載る。
+   * `sketch_create` は載せない: verbの行に置くと、押すと戻ってくる操作と同じ見た目で
+   * モードを切り替えるボタンになるため、モードの行(`.mode-row`)に置く(`mode` のdocstring)。
    */
   const SOLID_COMMANDS = [
     ...SOLID_FEATURE_COMMANDS,
-    // **`file` 分類はこの1つだけ**(理由は `commands/files.ts` のモジュールdocstring)。
-    // 書き出し(`export_step`/`export_stl`)と
-    // 保存/開く/新規は左サイドバーに残るので、`CommandDef` を持たずここにも載らない。
-    // `IMPORT_SVG` はスケッチモードのコマンドへ移り、`SKETCH_COMMANDS`(下)側に載っている。
+    // `file` 分類はこの1つだけ(理由は `commands/files.ts`)。
     IMPORT_STEP,
-    // **測定は verb ではない**(`query`。文書もログも変えない)が、verb→target の枠に
-    // そのまま乗るのでここに並ぶ(`commands/measure.ts`)。通常モードだけ。
+    // 測定は verb ではなく `query`(文書もログも変えない)。通常モードだけ(`commands/measure.ts`)。
     MEASURE,
   ]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
   /**
-   * verb名 -> そのコマンドの分類。**送信経路の分岐はこれだけで決まる。**
-   *
-   * 知らない名前は `undefined` になり、`runCommand` がその場で断る。
-   * **モードごとの一覧を全部含める** —— 1つ忘れると `runCommand` がそのモードのverbを
-   * 「未知のコマンド」で断ってしまう(`sketch_create` は `SOLID_COMMANDS` に無いので、
-   * `SKETCH_PENDING_COMMANDS` を足し忘れると即これを踏む)。
+   * verb名 -> そのコマンドの分類。送信経路の分岐はこれだけで決まる。
+   * モードごとの一覧を全部含めること: 漏れると `runCommand` がそのモードのverbを
+   * 「未知のコマンド」で断る(`SKETCH_PENDING_COMMANDS` を足し忘れると即これを踏む)。
    */
   const CATEGORY_OF: Map<string, CommandCategory> = new Map(
     [
@@ -164,51 +143,37 @@
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
   let pendingOp = $state<number | null>(null)
   let opCounter = 0
-  /** 送って配信待ちの `clear_selection` の `client_op`(`currentItems()`)。描画に使わない。 */
+  /** 送って配信待ちの `clear_selection` の `client_op`。描画に使わない。 */
   let clearingOp: number | null = null
 
-  /** 投げたプレビューの番号(古い応答を捨てるため。0は「投げていない」)。 */
+  /** 投げたプレビューの番号(古い応答を捨てる。0は「投げていない」)。 */
   let previewId = 0
   /** 画面に幽霊が出ているか(テスト用フックが見る)。 */
   let previewing = $state(false)
   /**
-   * いま構えているサーバ投機実行(`clearPreview` で null)。**無関係な再配信のあと投げ直すため**に
-   * 控える —— `viewport.update()` は届いた本物で幽霊を落とすが、`CommandHost` は引数が
-   * 変わらない限り再発火しない(`previewedKey`)ので、投げ直さないと消えたまま戻らない。
+   * いま構えているサーバ投機実行(`clearPreview` で null)。無関係な再配信のあと投げ直すために控える:
+   * `viewport.update()` は届いた本物で幽霊を落とすが、`CommandHost` は引数が変わらない限り
+   * 再発火しない(`previewedKey`)ので、投げ直さないと消えたまま戻らない。
    */
   let serverPreview: { verb: string; args: Record<string, unknown> } | null = null
   let refireTimer: ReturnType<typeof setTimeout> | null = null
   const PREVIEW_REFIRE_MS = 250
 
   // ---------------------------------------------------------------- モード(verbより1つ上の次元)
-  /**
-   * スケッチを抜けたときの戻り先。**「一時停止からの復帰」を型で持つ** ——
-   * 最適化モードの最中に(ブラウザのスケッチ名クリックで)スケッチへ入ったら、抜けたときに
-   * 最適化モードへ戻る。
-   */
+  /** スケッチを抜けたときの戻り先(最適化モード中にスケッチ名クリックで入ったら、抜けて最適化へ戻る)。 */
   type ResumeMode = 'idle' | 'optimize'
   /**
-   * **モードはverbより1つ上の次元**。
+   * モード = 文書のどの部分系を編集対象にしているか(通常=ボディ群 / スケッチ=`sketches[i]` /
+   * 最適化=`Document.optimize`)。verb = その対象に1操作を適用すること。次元が違うので
+   * モードの行(`.mode-row`)が上、verbの行(`CommandHost`)が下。
    *
-   * モード = **文書のどの部分系を編集対象にしているか**(通常=ボディ群 / スケッチ=`sketches[i]` /
-   * 最適化=`Document.optimize`)であり、verb = **その対象に1操作を適用すること**。次元が
-   * 違うので、同じツールバーの行に並べない —— モードの行(`.mode-row`)が上、verbの行
-   * (`CommandHost`)が下。
+   * タグ付きユニオンにしたのは、スケッチと最適化モードが同時に真になる状態を書けなくするため。
+   * `sketch-pending` はスケッチモードに入ったが、まだどのスケッチも開いていない状態(貼る先のクリック待ち)。
    *
-   * **不正な状態が表現できない**のが型にした理由である —— `BrowserPanel` のスケッチ名
-   * クリックが「スケッチと最適化モードが同時に真」になる穴を実際に開けたことがあり(QA指摘)、
-   * タグ付きユニオンならその状態が最初から書けない。
-   *
-   * `sketch-pending` は**スケッチモードに入ったが、まだどのスケッチも開いていない**状態
-   * (貼る先のクリック待ち)。これは新設した状態ではなく、**通常モードで `sketch_create` を
-   * 起動している間**として今までも存在していたものを、モードの側へ持ち上げただけである
-   * —— だから手数は変わらない(「スケッチ」を押す → 貼る先をクリックの2手)。
-   *
-   * **コアには持ち込まない。** `duocad/` 側にモードの概念は1つも無く(`Document` にフラグが
-   * 無い・verbは毎回 `sketch_id` を明示で受ける・MCPのツール一覧はモードによらず固定)、
-   * それが人とAIの交互操作を成立させている(人がスケッチAを見ている間にAIがBを触れる)。
-   * モード遷移は「1回のundo / 操作ログ1行 / MCP1呼び出し」のどれとも一致しないので
-   * verbではない —— ここは画面だけの状態である。
+   * コアには持ち込まない: `duocad/` 側にモードの概念は無く(`Document` にフラグが無い・verbは
+   * 毎回 `sketch_id` を明示で受ける・MCPのツール一覧はモードによらず固定)、それが人とAIの
+   * 交互操作を成立させている。モード遷移は undo/操作ログ/MCP呼び出しのどれとも一致しないので
+   * verbではなく画面だけの状態。
    */
   type Mode =
     | { kind: 'idle' }
@@ -218,12 +183,9 @@
   let mode = $state<Mode>({ kind: 'idle' })
 
   /**
-   * 今どのスケッチを編集しているか(null なら編集していない)。**図形も領域もコアが持つ**。
-   *
-   * **`mode` からの派生**にしてあるので、これを読む側(この画面と `viewport.ts` で計100箇所
-   * 以上)は今までと1文字も変わらない。`sketch-pending` では **null のまま**なのが要点で、
-   * 「基準平面を指せるのは `sketchId === null` のときだけ」等の既存の規律
-   * (`wantsBasePlanes` / `wantsEdges` / `wantsRegions`)がそのまま貼る先待ちに効く。
+   * 今どのスケッチを編集しているか(null なら編集していない)。`mode` からの派生。
+   * `sketch-pending` では null のままなので、「基準平面を指せるのは `sketchId === null` のときだけ」
+   * 等の規律(`wantsBasePlanes` / `wantsEdges` / `wantsRegions`)がそのまま貼る先待ちに効く。
    */
   const sketchId = $derived(mode.kind === 'sketch' ? mode.id : null)
   /** ポインタが指しているスケッチ平面上の点(確定前の線を見せるためだけ)。 */
@@ -241,22 +203,12 @@
     commandSucceeded(): void
   } | null>(null)
 
-  /**
-   * 第3のモード(形状最適化)に入っているか。**対応する文書実体が無い**ので、スケッチと違い
-   * 画面側だけの状態でよい(バックエンドには一切知らせない)。**状態機械は増やさない** ——
-   * 変わるのはツールバーの一覧(`OPTIMIZE_MODE_COMMANDS`)と、それに応じた描画だけ。
-   *
-   * **スケッチとの排他は `Mode` が持つ** —— タグ付きユニオンでは `sketch` と `optimize` が
-   * 同じ1つの値の別の枝なので、「同時に真」が書けない。要求の保持(スケッチから戻ってくる)は
-   * `ResumeMode` が担う。
-   */
+  /** 形状最適化モードか。対応する文書実体が無いので画面側だけの状態(バックエンドには知らせない)。 */
   const optimizeMode = $derived(mode.kind === 'optimize')
   /**
-   * 直近にトーストへ出した `stale` の鍵(`role:body:index:code`)。**`code` を含める** ——
-   * 含めないと、`hidden`(出さない側)として一度記録された
-   * 対象が後で `fingerprint`/`missing`(出す側)に変わっても、role/body/indexだけが一致する
-   * ために「既に見た」と誤判定され、二度と通知されない。**消えたら忘れる**
-   * (次に見た集合で作り直す)ので、直ってからまた壊れれば同じ組でも再度出す。
+   * 直近にトーストへ出した `stale` の鍵(`role:body:index:code`)。`code` を含めないと、
+   * `hidden`(出さない側)で記録された対象が後で `fingerprint`/`missing`(出す側)に変わっても
+   * 「既に見た」と誤判定され二度と通知されない。消えたら忘れる(次に見た集合で作り直す)。
    */
   let seenStaleKeys = new Set<string>()
 
@@ -265,42 +217,29 @@
   let wantedKinds = $state<SelectableKind[]>([])
   /**
    * 起動中のコマンド(無起動・スケッチの既定「選ぶ」は null)。`CommandHost` の
-   * `onStart` / `onEnd` と `setMode` だけが書く。普通の変数でよい(描画に使わない)。
+   * `onStart` / `onEnd` と `setMode` だけが書く。描画に使わない。
    *
-   * **起動中は素のクリックが選択のトグルになり(`toggleOnlyMode`)、終わると選択を全解除する
-   * (`onCommandEnd`)。** 起動していない間は従来どおり(素のクリックは置き換え)なので、
-   * 先に選んでからverbを起動する手・AIが選んだ選択をそのまま使う手は変わらない。
-   *
-   * 保持/除外ソリッド・拘束面の集合 verb は起動した時点で既存の割り当てが選択状態で現れ、
-   * 測定は対象が「ちょうど2つ」なので、置き換えのままだと成り立たない(どちらも起動中のトグルで満たされる)。
+   * 起動中は素のクリックが選択のトグルになり(`toggleOnlyMode`)、終わると選択を全解除する
+   * (`onCommandEnd`)。保持/除外ソリッド・拘束面の集合 verb は既存の割り当てが選択状態で現れ、
+   * 測定は対象がちょうど2つなので、置き換えのままだと成り立たない。
    */
   let activeVerb: string | null = null
-  /**
-   * 集合 verb の起動時に表示へ戻した非表示ボディの `set_visible` の応答待ち。**全部戻ってから**
-   * 既存の割り当てを選択に並べる(`onCommandStart`)。描画には使わないので普通の変数でよい。
-   */
+  /** 集合 verb の起動時に表示へ戻した非表示ボディの `set_visible` の応答待ち。全部戻ってから既存の割り当てを選択に並べる(`onCommandStart`)。 */
   let pendingOptimizePreset: { role: 'preserve_bodies' | 'exclude_bodies' | 'fixtures'; ops: Set<number> } | null = null
-  /**
-   * 起動中のコマンドが**基準平面を要求している**か(`CommandHost` が知らせる)。
-   * 辺と同じ規律で、要求している間だけビューポートで指せるようにする。
-   */
+  /** 起動中のコマンドが基準平面を要求しているか(`CommandHost` が知らせる)。要求している間だけ指せる。 */
   let wantedPlane = $state(false)
-  /**
-   * 起動中のコマンドが**図形の直接ピックを待っている**種別(`CommandHost` が知らせる)。
-   * 辺・基準平面と同じ規律で、待っている間だけ**その種別を指せるようにする**。
-   */
+  /** 起動中のコマンドが図形の直接ピックを待っている種別(`CommandHost` が知らせる)。待っている間だけ指せる。 */
   let wantedPick = $state<PickTarget | null>(null)
   /**
-   * 起動中のコマンドが**頂点そのものを対象にする**か(`SelectionArgSpec.pickVertices`。測定。
-   * `CommandHost` が知らせる)。回転中心のピック(`wantedPick === 'vertex'`)と同じ扱いで、
-   * 対象ボディの頂点を候補として出し、辺より先に取る。
+   * 起動中のコマンドが頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`。測定)。
+   * `wantedPick === 'vertex'` と同じ扱いで、対象ボディの頂点を候補に出し、辺より先に取る。
    */
   let wantedVertices = $state(false)
-  /** 取り寄せた辺(body_id -> その版の折れ線)。**版が変われば捨てる**。 */
+  /** 取り寄せた辺(body_id -> その版の折れ線)。版が変われば捨てる。 */
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
   let edgesAsked = new Set<string>()
-  /** 頂点の座標(**選択に頂点が入っているBodyの分だけ**取り寄せる)。 */
+  /** 頂点の座標(選択に頂点が入っているBodyの分だけ取り寄せる)。 */
   let vertices = $state<Record<string, VerticesPayload>>({})
   /** 取り寄せ中のもの(辺と同じ形の印)。 */
   let verticesAsked = new Set<string>()
@@ -319,69 +258,41 @@
     connected: () => status === 'open',
   })
   /**
-   * 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。**サーバの写し**
-   * (`Session.saved`)。自動保存が書けなかったときだけ false になる —— 無題で何も変えていない
-   * 文書は true(書くものが無い)で、最初の変更で `untitled-<n>.json` が自動で付く。
+   * 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`。サーバの写し `Session.saved`)。
+   * 自動保存が書けなかったときだけ false。無題で何も変えていない文書は true。
    */
   const saved = $derived(model?.saved ?? true)
-  /**
-   * 文書を開いているか(`state.document_open`)。**最初の状態が届くまでは false** —— 届く前に
-   * ツールバーを出すと、閉じて起動したサーバでは一瞬だけ出て消える。
-   */
+  /** 文書を開いているか(`state.document_open`)。最初の状態が届くまでは false(閉じて起動したサーバでツールバーが一瞬出るのを防ぐ)。 */
   const documentOpen = $derived(model?.document_open ?? false)
   /** トップ画面を出すか。状態が届いて、閉じていると分かったときだけ。 */
   const showStart = $derived(model !== null && !model.document_open)
-  /** 直前の状態で開いていたか(閉じた瞬間だけ後片付けをするため。`handleState`)。 */
+  /** 直前の状態で開いていたか(閉じた瞬間だけ後片付けをする。`handleState`)。 */
   let wasDocumentOpen = false
   /**
-   * 左サイドバー(ファイル一覧)を出しているか。**見た目だけの状態**で、コアには送らない
-   * (モデルの状態ではないので操作ログにも残さない)。
-   *
-   * 畳むとビューポートが横に広がる —— `.viewport` は ResizeObserver で自分の寸法を
-   * 見張っており(`viewport.ts` の `applySize`)、カメラのアスペクトも追随する。
-   * **開閉のたびに射影が変わる**ので、画面の座標を覚えて使い回す側(実機検査)は
-   * 開閉を挟んだら取り直すこと。
+   * 左サイドバー(ファイル一覧)を出しているか。見た目だけの状態でコアには送らない。
+   * 開閉のたびに `.viewport` の寸法が変わり射影が変わる(`viewport.ts` の `applySize`)ので、
+   * 画面座標を使い回す側(実機検査)は開閉を挟んだら取り直すこと。
    */
   let dataPanelOpen = $state(true)
-  /**
-   * 右サイドバー(`AiPanel` だけ = **完全にAI専用**)を開いているか。
-   *
-   * 左サイドバー(`dataPanelOpen`)と**同じ形**にしてある —— `{#if}` で `<aside>` ごと
-   * 出し分け、開閉ボタンはヘッダーの逆端(`#sidebar-toggle`)。`.viewport` のサイズ指定は
-   * 動かさず、flex の配分だけが変わる(左と同じ不変条件)。
-   */
+  /** 右サイドバー(`AiPanel` だけ)を開いているか。`{#if}` で `<aside>` ごと出し分け。`.viewport` のサイズ指定は動かさず、flex の配分だけが変わる(左と同じ)。 */
   let sidebarOpen = $state(true)
-  /**
-   * 設定ダイアログ(`SettingsDialog.svelte`)を出しているか。**既定は閉じている。**
-   * 見た目だけの状態で、コアにも操作ログにも行かない。
-   */
+  /** 設定ダイアログ(`SettingsDialog.svelte`)を出しているか。見た目だけの状態。 */
   let settingsOpen = $state(false)
-  /** 形状最適化の CG を解く装置の設定(サーバの `fem_status`。設定ダイアログの3つ目)。 */
+  /** 形状最適化の CG を解く装置の設定(サーバの `fem_status`)。 */
   let femStatus = $state<FemStatus | null>(null)
   /** 画角・原点ギズモ・断面(どれも文書の状態ではない)。 */
   const display = createDisplaySettings({ fail })
   /**
-   * この画面が出した `client_op` の控え。
-   *
-   * **`pendingOp` では足りない** —— パラメータの打ち直しや可視性の切り替えは
-   * 「応答待ち」を立てない経路なので、`pendingOp` と突き合わせると
-   * **自分でやったのに印が付かない**(パラメータ編集は中心的な操作の1つ)。
-   * 出した番号を全部覚えておいて、返ってきた `applied.client_op` で照合する。
+   * この画面が出した `client_op` の控え。パラメータの打ち直しや可視性の切り替えは
+   * `pendingOp` を立てない経路なので、`pendingOp` では自分の操作を照合できない。
+   * 返ってきた `applied.client_op` で照合する。
    */
   const myClientOps = new Set<number>()
   /**
-   * **この画面のクリックで選択が変わった回数**(コマンド層の「即適用」の引き金)。
-   *
-   * Enterの要らないコマンド(`command.ts` の `needsEnter`)は、引数が揃った瞬間に適用する。
-   * その引き金は**人がこの画面で指したこと**でなければならない —— 選択集合はAIも
-   * `modify_selection` で書き換えられるので、「選択が1つになった」だけを見て発火させると、
-   * **人が何も触っていないのに文書が変わる**。
-   *
-   * 見分けは、返ってきた `client_op` が
-   * `myClientOps` にあるかどうかでできる: あれば、それはこの画面が出した選択変更である。
-   * **数を渡すだけ**にして
-   * あるのは、コマンド層に「誰が変えたか」の判断を持ち込まないため(向こうは
-   * 「起動してから増えたか」しか見ない)。
+   * この画面のクリックで選択が変わった回数(コマンド層の「即適用」の引き金)。
+   * Enterの要らないコマンド(`command.ts` の `needsEnter`)の引き金は人がこの画面で指したことでなければならない。
+   * 選択集合はAIも `modify_selection` で書き換えられるので、選択の個数だけを見ると人が触っていないのに文書が変わる。
+   * 数だけを渡すのは、コマンド層に「誰が変えたか」の判断を持ち込まないため。
    */
   let selfSelections = $state(0)
 
@@ -391,62 +302,51 @@
   const session = createSession({
     onState: handleState,
     onError: (message, where) => {
-      // **サムネイルは裏の要求**(`documentFiles.svelte.ts`)。人が出した操作の応答待ち
-      // (`pendingOp`)を解かない —— 解くと、待っていた操作の確定より先に次の Enter が通る。
+      // サムネイルは裏の要求。`pendingOp` を解くと、待っていた操作の確定より先に次の Enter が通る。
       if (where === 'save_thumbnail' || where === 'get_thumbnail') {
         files.dropThumbnailRequests()
         fail(`エラー[${where}] ${message}`)
         return
       }
-      // `where` はどのverbで失敗したかを言う印だが、**`send` はverbではない**
-      // (「繋がっていないので送れなかった」。2026-08-27にヘッダの常設ステータスを外して以来、
-      // 繋がっていないことに気づく唯一の札になった)。内部の語を頭に付けると、
-      // その1枚だけが人間の言葉でなくなるので付けない。
+      // `send` はverbではなく「繋がっていないので送れなかった」で、繋がっていないことに気づく唯一の札。
+      // 内部の語を頭に付けない。
       fail(where === 'send' ? message : `エラー[${where}] ${message}`)
       pendingOp = null
       if (where === 'preview') clearPreview()
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
       if (where === 'get_edges' || where === 'send') edgesAsked.clear()
       if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
-      // **失敗しても、やり直せる状態にして返す**。OCCTのフィレットは半径に対して
-      // 単調でなく(§7: r=10.0 失敗 / r=10.5 成功)、すぐ近くの値で打ち直すのが実際の
-      // 使い方になる。選択はコア側にあるので失敗では消えない —— ここで戻すのは
-      // 打った値だけでよく、24本選び直しにはならない。
+      // 失敗してもやり直せる状態にして返す。OCCTのフィレットは半径に対して単調でなく
+      // (§7: r=10.0 失敗 / r=10.5 成功)、近い値で打ち直すのが実際の使い方。
+      // 選択はコア側にあるので失敗では消えず、戻すのは打った値だけ。
       if (CATEGORY_OF.get(where) === 'feature') host?.restoreLastInputs()
     },
     onWarning: (message) => fail(`警告 ${message}`),
     onStatus: (next) => {
       // 切断・再接続の試行は黙る(`session.ts` が「開けなかった試行」だけトーストへ回す)。
-      // キープアライブで切れた直後は自動で繋ぎ直すだけで、戻ってきたら開くことが多い。
       status = next
-      // (再)接続したら今のAI設定を取り直す(サーバは再起動していなくても、
-      // 前回の接続が切れている間に別の画面が `ai_configure` した可能性がある)。
+      // (再)接続したら今のAI設定を取り直す(切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
       if (next === 'open') session.femGetStatus()
       // 人が最初の依頼を打っている間に、AIへツール定義を読ませておく(遅い機種で分単位かかる)。
       if (next === 'open') session.aiPrepare()
-      // (再)接続したら `models/` の一覧も取り直す(サーバの再起動・別セッションの
-      // 保存で増減しうる。`FilesPanel.svelte` が空のまま固まらないようにする)。
+      // `models/` の一覧も取り直す(サーバの再起動・別セッションの保存で増減しうる)。
       if (next === 'open') files.refresh()
-      // 応答待ちの最中に接続が切れたら、その `client_op` はもう返ってこない。
-      // 捨てないと再接続後も「直前の操作の応答待ち」が残り続け、Enterが永久に拒否される
-      // (`onerror` を伴わない正常クローズで踏む)。
+      // 応答待ちの最中に切れたら、その `client_op` はもう返ってこない。捨てないと
+      // Enterが永久に拒否される(`onerror` を伴わない正常クローズで踏む)。
       if (next !== 'open' && pendingOp !== null) {
         pendingOp = null
         clearPreview()
       }
       // 全解除の配信も同じく返ってこない(残すと以後の差分が空の選択に対して組まれ続ける)。
       if (next !== 'open') clearingOp = null
-      // **投げ損ねた辺の要求を覚えたままにしない**。接続が切れて
-      // いる間の要求は送られずに捨てられるが、`edgesAsked` には残る —— 再接続しても
-      // 版が同じなら「もう頼んだ」と判断して二度と取りに行かず、**そのBodyの辺が
-      // 出ないまま**フィレットが使えなくなる(`pendingOp` を捨てるのと同じ形の穴)。
+      // 切断中の要求は捨てられるが `edgesAsked` には残る。残すと再接続後も版が同じなら
+      // 「もう頼んだ」と判断して二度と取りに行かず、そのBodyの辺が出ないままになる。
       if (next !== 'open') {
         edgesAsked.clear()
         verticesAsked.clear()
         files.dropThumbnailRequests()
-        // 実行の押下への返事(`optimize_status` / `optimize_error`)はもう来ない。走っているかは
-        // 繋ぎ直したときにサーバが最初に送る `optimize_status` で取り直す。
+        // 実行の押下への返事はもう来ない。走っているかは繋ぎ直したときの `optimize_status` で取り直す。
         optimizeStarting = false
       }
     },
@@ -468,16 +368,14 @@
       if (step !== null) optimizeMinWidthMm = snapMinWidth(step.min_width_steps_mm, optimizeMinWidthMm)
     },
     onOptimizeStatus: (running, cancelling) => {
-      // **控えを確定するのはサーバが受け付けてから**(押した瞬間に控えると、「別の文書で既に走っている」と
-      // 断られた押下が、走っている実行の控えを上書きする)。
+      // 控えの確定はサーバが受け付けてから(押した瞬間だと、断られた押下が走っている実行の控えを上書きする)。
       if (running && optimizeStarting && optimizeStartingSettings !== null) optimizeRunSettings = optimizeStartingSettings
       optimizeStartingSettings = null
       optimizeRunning = running
       optimizeStarting = false
-      // **中断中の印は「走っている間」だけ**。走り終わったら畳む —— 畳まないと、
-      // 次に実行を押した瞬間に中断表示から始まって見える。
+      // 中断中の印は走っている間だけ(畳まないと次の実行が中断表示から始まって見える)。
       optimizeCancelling = running && cancelling ? true : running ? optimizeCancelling : false
-      // `running` は「**いま開いている文書で**走っているか」(サーバの `optimization_status`)。
+      // `running` は「いま開いている文書で走っているか」(サーバの `optimization_status`)。
       // 走らせたまま別の文書へ移ると偽になるので、その文書に進捗の行を残さない。
       if (!running) {
         optimizeProgress = null
@@ -487,15 +385,13 @@
         optimizeElementSizeMm = optimizeRunSettings.elementSizeMm
         optimizeMinWidthMm = optimizeRunSettings.minWidthMm
       }
-      // 戻ってきた直後は、文書の差し替えで欄が空になっている(`resetOptimizeView`)。取り直しの
-      // `$effect` は実行中には問い合わせないので、ここで1回だけ頼む —— 頼まないと、普通のモードから
-      // 戻ったときに条件と解像度が実行の終わりまで「確認している…」のままになる。
+      // 文書の差し替えで欄が空になっている(`resetOptimizeView`)。取り直しの `$effect` は
+      // 実行中には問い合わせないので、ここで1回だけ頼む(でないと実行の終わりまで「確認している…」のまま)。
       if (optimizeConditions === null || optimizeResolution === null) {
         session.optimizeConditions()
         session.optimizeResolution(optimizeElementSizeMm)
       }
-      // 走らせている文書へ戻ってきたら、実行中の表示(進捗・中断ボタン)が見えるモードへ入る。
-      // 普通のモードのままだと、編集が断られる理由が画面に無い。
+      // 走らせている文書へ戻ったら、実行中の表示が見えるモードへ入る(編集が断られる理由を画面に出す)。
       if (mode.kind === 'idle') setMode({ kind: 'optimize' })
     },
     onOptimizeProgress: (event) => (optimizeProgress = event),
@@ -504,15 +400,13 @@
     onOptimizeError: (message, problems, cancelled, alreadyRunning) => {
       optimizeStarting = false
       optimizeStartingSettings = null
-      // **別の実行が走っているという断りは、その実行の表示を消さない**(進捗の行も通知も
-      // その実行のもの)。トーストで知らせるだけにする。
+      // 別の実行が走っているという断りは、その実行の表示(進捗の行も通知)を消さない。
       if (alreadyRunning) {
         fail(`最適化: ${message}`)
         return
       }
       optimizeProgress = null
-      // **中断はエラーではない**(人がそう言ったのだから、赤いトーストで驚かせない)。
-      // パネルには残す —— 「押したのに何も増えていない」の理由が画面から読める必要がある。
+      // 中断はエラーではないのでトーストは出さず、パネルにだけ残す。
       if (cancelled) {
         optimizeNotice = {
           kind: 'info',
@@ -520,18 +414,14 @@
         }
         return
       }
-      // **デバッグ表示は消さない**(2026-09-05 QA指摘への回答)。失敗したときこそ
-      // 「塊が悪いのか最適化が悪いのか」を見たいので、`stage:'derive'` で届いた塊と
-      // 節点は残す。古くなる心配は無い —— 次の実行が `runOptimization()` の先頭で消す。
+      // デバッグ表示は消さない(失敗したときこそ塊と節点を見たい)。次の実行が `runOptimization()` の先頭で消す。
       optimizeNotice = { kind: 'bad', lines: [message, ...problems] }
       fail(`最適化: ${message}`)
     },
   })
 
   // ---------------------------------------------------------------- H: 形状最適化を走らせる
-  //
-  // **配りもの(`state.optimize`)とは別の口**である —— あちらは「条件がどう置かれているか」、
-  // ここにあるのは「走らせられるか / どの解像度で / いま何反復目か / 結果はどうだったか」で、
+  // `state.optimize`(条件の置かれ方)とは別の口。ここにあるのは実行可否・解像度・進捗・結果で、
   // どれも操作ログに載らない(`duocad/catalog.py` の `category="protocol"`)。
   let optimizeConditions = $state<OptimizeConditionsReport | null>(null)
   let optimizeResolution = $state<OptimizeResolutionPayload | null>(null)
@@ -540,18 +430,16 @@
   /** 選んでいる最小幅の段[mm](`min_width_steps_mm` のどれか)。`null` = 既定(いちばん細い段)。 */
   let optimizeMinWidthMm = $state<number | null>(null)
   let optimizeRunning = $state(false)
-  /** 実行を押してからサーバの返事(`optimize_status` / `optimize_error`)が届くまで。**二度押しを止める**
-   *  —— 返事が戻るまで実行ボタンが押せたままだと、2回目が「既に走っている」の断りになる。 */
+  /** 実行を押してからサーバの返事(`optimize_status` / `optimize_error`)が届くまで。二度押しを止める。 */
   let optimizeStarting = $state(false)
-  /** 走っている、または走り出すところ。**文書を変える操作を画面から出さない**(サーバも断る)。 */
+  /** 走っている、または走り出すところ。文書を変える操作を画面から出さない(サーバも断る)。 */
   const optimizeBusy = $derived(optimizeRunning || optimizeStarting)
   let optimizeCancelling = $state(false)
   let optimizeProgress = $state<OptimizeProgress | null>(null)
   type OptimizeRunSettings = { name: string | null; elementSizeMm: number | null; minWidthMm: number | null }
-  /** **次に走らせるまで消えない通知**(トーストは時間で消えるので、結果の信用度はこちら)。 */
+  /** 次に走らせるまで消えない通知(トーストは時間で消える)。 */
   let optimizeNotice = $state<OptimizeNotice | null>(null)
-  /** 走らせたときの設定と文書。別の文書へ移ると欄は既定へ戻る(`resetOptimizeView`)ので、走らせた文書へ
-   *  戻ってきたときにここから戻す —— 戻さないと、実行中なのに走っていない設定が欄に出る。 */
+  /** 走らせたときの設定と文書。別の文書へ移ると欄は既定へ戻る(`resetOptimizeView`)ので、走らせた文書へ戻ったときにここから戻す。 */
   let optimizeRunSettings: OptimizeRunSettings | null = null
   /** 実行を押してからサーバが受け付けるまでの控え(`onOptimizeStatus` が `optimizeRunSettings` へ確定する)。 */
   let optimizeStartingSettings: OptimizeRunSettings | null = null
@@ -564,8 +452,7 @@
     optimizeStarting = true
     optimizeProgress = null
     optimizeNotice = null
-    // **前の実行のデバッグ表示を捨ててから走らせる。** 残すと、新しい条件を解いている
-    // あいだ古い塊が重なって見え、切り分けの道具が切り分けを妨げる。
+    // 前の実行のデバッグ表示を捨ててから走らせる(残すと古い塊が重なって見える)。
     clearOptimizeDebug()
     optimizeStartingSettings = { name: files.currentName, elementSizeMm: optimizeElementSizeMm, minWidthMm: optimizeMinWidthMm }
     session.runOptimization({
@@ -598,23 +485,16 @@
   }
 
   // ---------------------------------------------------------------- H2: 開発用のデバッグ表示
-  //
-  // **URLパラメータでだけ出る**(`debugFlags.ts`)。フラグが1つも立っていなければ、
-  // ここは `session.runOptimization` に空配列を渡すだけで、サーバも画面も何もしない ——
-  // **製品の既定の画面は1ピクセルも変わらない。**
-  //
-  // probe との違いは「デモ題材に固定されていない」こと(このタスクの完了条件2)。
-  // 材料は**いま走らせた最適化そのもの**から来るので、利用者が置いた任意の条件・
-  // 任意のボディで出る。
+  // URLパラメータでだけ出る(`debugFlags.ts`)。フラグが無ければ `session.runOptimization` に
+  // 空配列を渡すだけで、製品の既定の画面は変わらない。材料はいま走らせた最適化そのものから来る。
   const debugFlags: DebugFlags = readDebugFlags(
     typeof location === 'undefined' ? '' : location.search,
   )
-  // **`$state.raw`**(丸ごと差し替えるだけ)。深い `$state` にすると最大15万要素の配列が
-  // プロキシで包まれ、下の `$effect` が読むたびに要素ごとの追跡を払う。
+  // `$state.raw`: 深い `$state` にすると最大15万要素の配列がプロキシで包まれ、下の `$effect` が読むたびに要素ごとの追跡を払う。
   let optimizeDebugSpace = $state.raw<OptimizeDebugPayload | null>(null)
   let optimizeDebugRho = $state.raw<OptimizeDebugPayload | null>(null)
   let optimizeDebugAnchors = $state.raw<OptimizeDebugPayload | null>(null)
-  /** `?voxel=1` のときだけ入る、隠す結果ボディ。**表示だけ**(文書には触れない)。 */
+  /** `?voxel=1` のときだけ入る、隠す結果ボディ。表示だけ。 */
   let optimizeDebugHiddenBodyId = $state<string | null>(null)
 
   function clearOptimizeDebug(): void {
@@ -624,27 +504,19 @@
     optimizeDebugHiddenBodyId = null
   }
 
-  /**
-   * デバッグ配信が届いた。塊は `stage: 'derive'` で1回、面アンカーは `stage: 'mapping'`(探索が
-   * 使う確定表)で1回、密度場は `stage: 'final'` で1回届く。同じ `kind` が来たら後から来たほうで
-   * 置き換える。
-   */
+  /** デバッグ配信が届いた。塊は `stage: 'derive'`、面アンカーは `stage: 'mapping'`、密度場は `stage: 'final'` で各1回。同じ `kind` は後から来たほうで置き換える。 */
   function handleOptimizeDebug(payload: OptimizeDebugPayload): void {
     if (payload.kind === 'space') optimizeDebugSpace = payload
     else if (payload.kind === 'rho') optimizeDebugRho = payload
     else if (payload.kind === 'anchors') optimizeDebugAnchors = payload
   }
 
-  /**
-   * デバッグ表示をビューポートへ当てる。**フラグが1つも立っていなければ呼ばない** ——
-   * `setOptimizeDebug(null)` すら送らないので、既定の画面には触れる経路が無い。
-   */
+  /** デバッグ表示をビューポートへ当てる。フラグが無ければ呼ばない(既定の画面には触れる経路が無い)。 */
   $effect(() => {
     if (!anyDebugFlag(debugFlags)) return
-    // **依存を先に読み切ってから呼ぶ。** `viewport?.setOptimizeDebug({...})` と直接書くと、
-    // 初回に `viewport` がまだ未定義(`onMount` で入る)のとき**オプショナル連鎖が
-    // 引数の評価ごと飛ばす**ので、この効果は依存を1つも登録できず**二度と再実行されない**
-    // —— 症状は「フラグを付けても何も出ない」で、型検査にもコンソールにも出ない。
+    // 依存を先に読み切ってから呼ぶ。`viewport?.setOptimizeDebug({...})` と直接書くと、初回に
+    // `viewport` が未定義だとオプショナル連鎖が引数の評価ごと飛ばし、依存を1つも登録できず
+    // 二度と再実行されない(症状は「何も出ない」で、型検査にもコンソールにも出ない)。
     const voxels = (payload: OptimizeDebugPayload | null, want: boolean) =>
       want && payload?.elements
         ? {
@@ -661,8 +533,7 @@
       anchors:
         debugFlags.anchors && optimizeDebugAnchors?.fixed && optimizeDebugAnchors.load
           ? {
-              // **格子も渡す**(球の半径が要素サイズから決まる。`?debug=anchors` 単独でも
-              // 同じ大きさになるように。2026-09-05 QA指摘)。
+              // 格子も渡す(球の半径が要素サイズで決まる。`?debug=anchors` 単独でも同じ大きさにする)。
               grid: optimizeDebugAnchors.grid,
               fixed: optimizeDebugAnchors.fixed,
               load: optimizeDebugAnchors.load,
@@ -674,37 +545,21 @@
   })
 
   /**
-   * 結果を受けた。**`state` で分かれる**(`'done'` と、それ以外の6値。
-   * `docs/contracts/ui-optimize-integration.md`「最適化の配線」、段階5で `binary_search.SearchResult.status` の3値ぶん増え、境界条件の確定で
-   * `boundary_mapping_failed` が増えた)。
-   *
-   * **`"done"` 以外は文書が1ビットも変わっていない**ので、そのことを通知に書く ——
-   * 「走ったのに何も増えていない」を、利用者が画面から読めるようにするため。
-   * `warning` はトーストにも出る(`onWarning` 経由)が、あちらは気づかせる役で、
-   * **読み返す役はここ**である。
+   * 結果を受けた。`state` が `'done'` かそれ以外かで分かれる(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
+   * `'done'` 以外は文書が変わらないので、そのことを通知に書く。`warning` のトーストは気づかせる役で、読み返す役は通知。
    */
   function handleOptimizeResult(result: OptimizeResultPayload): void {
     optimizeProgress = null
     optimizeNotice = optimizeNoticeFor(result) // 文の組み立ては `optimizeNotice.ts`
     if (result.state === 'done') {
       note(`最適化が終わった: ${result.name}`)
-      // **`?voxel=1`: 平滑化メッシュへ差し替えず、ボクセルのまま止める。**
-      // **数十msだけ両方が見える**(密度場はメッシュ化より前に届き、隠す相手の `body_id` が
-      // 分かるのは結果が届いてからなので、その間だけ重なる。2026-09-05 QA指摘)。
-      // 消すには「まだ存在しないボディを先に隠す」口が要るので、過渡として受け入れている。
-      // probe は最初からボクセルしか描いていなかったので「差し替えない」で済んだが、
-      // 本体の結果は**文書に入るメッシュボディ**なので、代わりに**表示だけ隠す**。
-      // 文書は1ビットも変えない(隠すのはビューポートのローカルな見え方だけ)。
+      // `?voxel=1`: 平滑化メッシュへ差し替えず、ボクセルのまま止める。結果は文書に入るメッシュボディなので
+      // 表示だけ隠す。隠す相手の `body_id` は結果が届いてから分かるため、数十msだけ両方が見える(過渡として受け入れ)。
       if (debugFlags.voxel && result.body_id) optimizeDebugHiddenBodyId = result.body_id
     }
   }
 
-  /**
-   * **情報**を1行、ステータスバーへ出す(状態の説明・成功の報告)。
-   *
-   * エラーはここへ来ない —— `fail()` を使うこと。分けているのは表示先が違うからではなく、
-   * **「操作が拒まれた」に人間が気づけるかどうかが違う**からである(Toast.svelte のdocstring)。
-   */
+  /** 情報を1行、ステータスバーへ出す。エラーは `fail()` を使う(Toast.svelte のdocstring)。 */
   function note(message: string): void {
     if (!message) return
     messages = [message, ...messages].slice(0, 4)
@@ -712,7 +567,7 @@
   // ---------------------------------------------------------------- 操作の番号と応答待ち
   function nextOp(): number {
     opCounter += 1
-    myClientOps.add(opCounter) // この番号で返ってきた操作は「自分」(上のdocstring)
+    myClientOps.add(opCounter)
     return opCounter
   }
 
@@ -737,27 +592,20 @@
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
     model = next
     files.onState(next)
-    // **状態が1通届くたびに1つ増える番号**(実機検査のための穴。`__duocad.stateEpoch`)。
-    // これが無いと「サーバの往復がまだ終わっていない」と「もう何も変わらない」を
-    // 外から区別できず、**要求が出ていく前の画面を『落ち着いた』と読む**検査になる
-    // (2026-08-30に実際にそう読んで、入りと切りが同じ値に見えた)。
+    // 状態が1通届くたびに1つ増える番号(実機検査用の穴。`__duocad.stateEpoch`)。無いと
+    // 「往復が終わっていない」と「もう変わらない」を外から区別できない。
     stateEpoch += 1
 
-    // 差分更新: 版が変わったBodyだけをビューポートへ渡す。27部品のうち1つを押し出しても
-    // 描き直すのはその1つ(サーバ側の差分送信をここで無駄にしない。§2)。
+    // 差分更新: 版が変わったBodyだけを渡す(§2)。
     viewport?.update(changed.map((body) => ({ bodyId: body.body_id, geometry: body.geometry })))
-    // 文書から消えたBody(サーバの契約: 知っているのに state.bodies に無いID)があれば
-    // ビューポートからも取り除く。
+    // 文書から消えたBodyはビューポートからも取り除く。
     viewport?.prune(next.bodies.map((body) => body.body_id))
-    // **これはサーバ投機実行のプレビュー(`showPreview`)だけの話**である。本物が届くと
-    // `viewport.update()` がそれを落とすので、待っている印もここで降ろす。
-    // **ローカル幽霊(`showBodyGhosts`)はここに含めない** —— あちらは同じ `update()` の中で
-    // 届いた形から組み直されて出続ける(`viewportTypes.ts` の `update` の項)。
+    // サーバ投機実行のプレビュー(`showPreview`)だけの話。本物が届くと `viewport.update()` が落とすので待っている印も降ろす。
+    // ローカル幽霊(`showBodyGhosts`)は `update()` の中で組み直されて出続ける(`viewportTypes.ts` の `update` の項)。
     if (changed.length > 0) {
       previewing = false
       // 自分の確定ならここは null(`commit()` が先に `onCancelPreview` を呼ぶ)。残っているのは
-      // 他の操作やカメラ(可変解像度の測り直し)による再配信なので、同じ引数で投げ直す。
-      // 再配信はドラッグ中に続けて来るので、落ち着くまで待つ(`CommandHost` のデバウンスと同じ理由)。
+      // 他の操作やカメラによる再配信なので同じ引数で投げ直す。ドラッグ中は続けて来るので落ち着くまで待つ。
       if (serverPreview !== null) {
         if (refireTimer) clearTimeout(refireTimer)
         refireTimer = setTimeout(() => {
@@ -768,15 +616,12 @@
     }
 
     drawHighlight()
-    // スケッチも「コアが持ち、ここは描き直すだけ」(可視性・選択と同じ形)。
-    // **$effect ではなくここで同期に描く** —— 直後の `lookAtSketch` が平面の枠を要るので、
-    // 描画が1手遅れると「入った瞬間に正面を向く」が効かない。
+    // スケッチも「コアが持ち、ここは描き直すだけ」。直後の `lookAtSketch` が平面の枠を要るので $effect ではなく同期に描く。
     drawSketches()
     if (sketchId !== null && !sketches.some((item) => item.sketch_id === sketchId)) {
       exitSketch() // undoでスケッチごと消えた
     }
-    // 閉じた(別のタブが閉じた・開いている文書が消された、も含む)。前の文書のモード・最適化の表示・
-    // 断面・測定を持ち越さない —— 次に開いたときに、別の文書の上へ前の文書の続きが出る。
+    // 閉じた(別のタブが閉じた・文書が消された場合も含む)。前の文書のモード・最適化の表示・断面・測定を持ち越さない。
     if (wasDocumentOpen && !next.document_open) {
       setMode({ kind: 'idle' })
       resetOptimizeView()
@@ -784,14 +629,10 @@
       measure.clear()
     }
     wasDocumentOpen = next.document_open
-    // **消えた図形のIDを持ち続ける心配は無くなった**(2026-08-30) —— 反復の対象は
-    // 共有選択集合から導くようになり、選択の掃除はコア側の責務になった。
 
-    // **選択の変更イベントはverbの適用ではない**(`change: "selection"` で見分ける。
-    // session.ts の `Applied` 参照)。verbの応答としてだけ `lastApplied` を動かす。
+    // 選択の変更イベントはverbの適用ではない(`change: "selection"`。session.ts の `Applied`)。
     if (applied && applied.change === 'selection') {
-      // **この画面が出した選択変更だけ**を数える(上の `selfSelections` のdocstring)。
-      // AIが書き換えた選択はここを素通りするので、即適用の引き金にならない。
+      // この画面が出した選択変更だけを数える(`selfSelections`)。AIが書き換えた選択は即適用の引き金にならない。
       if (applied.client_op !== null && myClientOps.has(applied.client_op)) {
         selfSelections += 1
       }
@@ -800,10 +641,8 @@
       return
     }
     if (applied && applied.change === 'visibility') {
-      // **可視性もverbではない**(操作ログに載らない)ので `lastApplied` を動かさない。
-      // 効果は同じ配信の `state.bodies[].visible` に載っており、ここで見るのは
-      // 「自分が出した操作か」の突き合わせだけ(表示切り替えは `pendingOp` を立てない
-      // 経路なので、印は `myClientOps` の側が持っている)。
+      // 可視性もverbではない(操作ログに載らない)ので `lastApplied` を動かさない。表示切り替えは
+      // `pendingOp` を立てないので、自分の操作かは `myClientOps` が持つ。
       releasePending(applied.client_op)
       // 集合 verb の起動時に表示へ戻したボディが全部戻ったら、既存の割り当てを並べる(`onCommandStart`)。
       const preset = pendingOptimizePreset
@@ -814,24 +653,13 @@
       return
     }
     if (applied && applied.change === 'document') {
-      // **開いた**(`open_document`)か**新規にした**(`new_document`)。保存と同じく、ここで
-      // ファイル名を追い、一覧も取り直す(他の操作でファイルが増減している可能性は保存と同じく
-      // 否定できない)。**新規は `name` が `null`** で来るので、触っているファイルの表示は
-      // 「(無題)」へ戻る —— ただし表示そのものを更新するのは上の `next.current_name` で、
-      // ここが見るのは「開いたのか新規にしたのか」の区別だけである。
-      // **前の文書の最適化の表示を持ち越さない**(結果の通知・解像度の段・最小幅・`?voxel=1` で
-      // 隠した結果ボディ)。段の添字は目盛りが文書ごとに違うので、既定(いちばん粗い)へ戻す。
+      // 開いた(`open_document`)か新規にした(`new_document`)。ファイル名を追い、一覧も取り直す。
+      // 前の文書の最適化の表示を持ち越さない(段の添字は目盛りが文書ごとに違うので既定へ戻す)。
       resetOptimizeView()
       display.closeSection() // 断面はその場限り(文書が替わったら切らない状態へ)
-      // **開いた(`open_document`)ときだけ視点を合わせ直す。** 文書のスケールが不連続に
-      // 変わるのは import_step と同じくここだけ(実測: 小さな部品→大きな板を保存し、開き直すと
-      // 前の文書の視点のまま端が画面外に出た)。**新規(`new_document`)は空の文書**なので
-      // 合わせる内容が無く、`frameToContent()` は箱が空のまま何もしない(呼んでも無害だが、
-      // 完了条件が言う「文書のスケールが不連続に変わるのはインポートとopen_documentだけ」に
-      // 忠実に、対象を開いた場合だけへ絞る)。
-      // **新規のときは基準グリッドだけ縮める。** カメラは動かさないが、前の文書で広がった
-      // グリッド(基準平面グリッドはモデルの大きさに追随する)は空の文書に戻ったので
-      // `BASE_EXTENT` へ縮めてよい(`viewport.resetGrid` のヒステリシス許可。2026-08-30)。
+      // 視点を合わせ直すのは open_document だけ(文書のスケールが不連続に変わるのは import_step と同じくここだけ。
+      // 実測: 小さな部品→大きな板を保存して開き直すと前の視点のまま端が画面外に出た)。新規は空の文書で合わせる内容が無く、
+      // 基準グリッドだけ縮める(`viewport.resetGrid` のヒステリシス許可)。
       if (applied.action === 'close') {
         note('文書を閉じた')
       } else if (applied.name !== null) {
@@ -850,38 +678,24 @@
     if (applied) {
       // 作ったスケッチへはそのまま入る(作ってから改めて「入る」を押させない)
       if (applied.verb === 'sketch_create' && applied.sketch_id) enterSketch(applied.sketch_id)
-      // **読み込んだら何ができる状態になったか**を言う。読み込みの経路は1本だけ
-      // (`import_step`)で、必ず編集可能なボディまでできる。
       if (applied.verb === 'import_step') {
-        // **読み込んだモデル全体が入る視点へ合わせ直す**。文書のスケールが不連続に
-        // 変わるのはインポート(2026-08-30の本人実測: 対角約640mmのSTEPを読んで
-        // 端が画面外に出た)だけで、押し出し等ふつうの編集で視点が跳ぶと操作の妨害に
-        // なるので、この分岐以外へは広げない。**このジオメトリはもう届いている**——
-        // `handleState` は自身の先頭で `viewport?.update(changed...)` を呼んでおり
-        // (このifより上)、import_step の応答は state 配信1通の中に delta.bodies(実体)と
-        // applied(この分岐)が一緒に載って届く(`duocad/net/ws.py` の `_push`)ので、
-        // 順序を気にする必要が無い。
+        // 読み込んだモデル全体が入る視点へ合わせ直す。文書のスケールが不連続に変わるのはインポートだけ
+        // (実測: 対角約640mmのSTEPで端が画面外に出た)で、ふつうの編集で視点が跳ぶと妨げになるので他へ広げない。
+        // ジオメトリはこの関数の先頭の `viewport?.update(changed...)` で届いている(`duocad/net/ws.py` の `_push`)。
         viewport?.frameAll()
         const count = applied.body_ids?.length ?? 0
         note(`STEPを読み込んだ(${count}部品)。そのまま面をクリックして押し出せる`)
       }
       if (releasePending(applied.client_op)) {
-        // **CommandHostが出した確定が、実際に成功したと確認できた**——ここで
-        // 初めて無起動へ戻す。`commit()` の時点(`onRun` を呼んだ直後)ではまだ成否が
-        // 分からず、先に戻すとOCCTのフィレット失敗時の打ち直し(`CommandHost.commit()`の
-        // コメント参照)が壊れる。**`CommandHost` を通るverbだけが対象**で、`CATEGORY_OF` に
-        // 載っていないもの(`export_step`/`export_stl`/`save_document` 等、`FilesPanel` が
-        // 直接送るぶん)は `undefined` になってここを素通りする —— 人が別コマンドに
-        // 入力しているCommandHostを、外で走った操作の成功で畳んではならない。
+        // CommandHostが出した確定が成功したと確認できたので、ここで初めて無起動へ戻す(`commit()` の時点では
+        // 成否が分からず、先に戻すとOCCTのフィレット失敗時の打ち直しが壊れる)。`CATEGORY_OF` に無い verb
+        // (`FilesPanel` が直接送るぶん)は素通りする: 別コマンドに入力中の CommandHost を外の操作の成功で畳まない。
         const category = CATEGORY_OF.get(applied.verb)
         if (category === 'sketch' || category === 'feature' || category === 'file') {
           host?.commandSucceeded()
         }
-        // **荷重の2つは確定のたびに選択を空へ戻す**(`OPTIMIZE_EMPTY_START_VERBS`)。
-        // 他のverbは確定後も選択が残ったまま構え続けるが、荷重は上書き代入なので
-        // 残ったままだと**次の確定がその面の大きさ・向きまで書き換える** ——
-        // 面Aへ50Nを置いた直後に面Bを足して確定すると、面Aも同じ値になる。
-        // 起動時に空にするだけでは足りない(同じverbを続けて使う経路がここを通る)。
+        // 荷重の2つは確定のたびに選択を空へ戻す(`OPTIMIZE_EMPTY_START_VERBS`)。上書き代入なので、
+        // 残すと次の確定が前の面の大きさ・向きまで書き換える。起動時に空にするだけでは同じverbの連続使用が漏れる。
         if (OPTIMIZE_EMPTY_START_VERBS.has(applied.verb)) presetSelection([])
       }
       lastApplied = applied
@@ -918,8 +732,7 @@
   })
 
   function handleMeasure(payload: MeasurePayload): void {
-    // 結果を先に入れる —— `commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で
-    // 選択を残すかを決める。
+    // 結果を先に入れる(`commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で選択を残すかを決める)。
     measure.onResult(payload)
     if (releasePending(payload.client_op)) {
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
@@ -929,44 +742,29 @@
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
   const selection = $derived(model?.selection ?? null)
-  /** 形状最適化の条件(第3のモード)。**配りものの正はコア**(`duocad/optimize.py`)。 */
+  /** 形状最適化の条件(第3のモード)。正はコア(`duocad/optimize.py`)。 */
   const optimize = $derived(model?.optimize ?? null)
   /**
-   * 反復のverbが引数で取る図形のID。
-   *
-   * **共有選択集合から導く**(2026-08-30)。スケッチの図形が選択の一種になった
-   * (`sketch_entity`)ので、以前の「スケッチパネルの一覧でだけ選べる」局所状態は要らない ——
-   * パネルごと消し、3Dのクリック/ドラッグで選んだものをそのまま反復の対象にする。
-   * 点で選んでも辺で選んでも**その図形1つ**を指す(重複は畳む)。
-   *
-   * **コア側では今までどおり引数**である(`entities` は選択集合から取らない。
-   * `duocad/catalog.py` の `pattern_rectangular` の note)—— 変えたのは人が選ぶ場所だけ。
+   * 反復のverbが引数で取る図形のID。共有選択集合から導く。点で選んでも辺で選んでも図形1つを指す。
+   * コア側では引数のまま(`duocad/catalog.py` の `pattern_rectangular` の note)。
    */
   const selectedEntities = $derived([
     ...new Set(
       refsOfKind(selection?.items ?? [], 'sketch_entity')
-        // **編集中のスケッチのものだけ**(反復verbは `sketch_id` と `entities` を別々に送るので、
-        // 混ざると「このスケッチに無い図形ID」をサーバへ渡すことになる)。`enterSketch` が
-        // 他のスケッチの選択を外すのが本筋で、ここはそれを二重に守る側である。
+        // 編集中のスケッチのものだけ(反復verbは `sketch_id` と `entities` を別々に送るので、混ざると
+        // 他スケッチの図形IDを渡す)。`enterSketch` が他の選択を外すのが本筋で、ここは二重の守り。
         .filter((item) => item.sketch === sketchId)
         .map((item) => item.entity),
     ),
   ])
 
   const selectedFaces = $derived(refsOfKind(selection?.items ?? [], 'face'))
-  /**
-   * 選択中のボディ(形状最適化の保持/除外を決めているあいだだけ現れる。
-   * `refKind` で見分ける —— `BodyRef` は `kind: 'body'` を持つ)。
-   */
+  /** 選択中のボディ(形状最適化の保持/除外を決めているあいだだけ現れる)。 */
   const selectedBodies = $derived(refsOfKind(selection?.items ?? [], 'body'))
   /**
-   * `move_body` の幽霊を出す対象のボディ。**コアの `selection.require_bodies` の写し** ——
-   * 面・辺・頂点・ボディの参照から `body` を逆引きし、最初に現れた順で重複を畳む。
-   *
-   * `selectedBodies`(`kind === 'body'` の参照だけ)とは別物である。あちらは形状最適化の
-   * 役割付けが「ボディを直に指した」ものだけを見るのに対し、こちらは**指し方を問わず
-   * どのボディが動くか**を答える —— コアが同じ規則で動かすので、ここを絞ると
-   * 「面で指したら幽霊が出ないのに実行すると動く」という食い違いになる。
+   * `move_body` の幽霊を出す対象のボディ。コアの `selection.require_bodies` の写し(面・辺・頂点・ボディの参照から
+   * `body` を逆引きし、最初に現れた順で重複を畳む)。指し方を問わず動くボディを答える: 絞ると
+   * 「面で指したら幽霊が出ないのに実行すると動く」になる。
    */
   const ghostBodyIds = $derived([
     ...new Set(
@@ -975,16 +773,16 @@
         .map((item) => item.body),
     ),
   ])
-  /** 選択中の辺(**辺を出している間だけ**3Dで色が変わる)。 */
+  /** 選択中の辺(辺を出している間だけ3Dで色が変わる)。 */
   const selectedEdges = $derived(refsOfKind(selection?.items ?? [], 'edge'))
 
-  /** 選択中の頂点(**選ばれているものだけ**が3Dにマーカーで出る)。 */
+  /** 選択中の頂点(3Dにマーカーで出る)。 */
   const selectedVertices = $derived(refsOfKind(selection?.items ?? [], 'vertex'))
 
   /**
-   * 取り寄せた辺・頂点(`edges` / `vertices`)のうち、**ボディの版(`revision`)が今と同じもの**だけを返す(§7)。
-   * 形が変わった後の古い座標・添字は、実物のどこにも無い所にマーカーが浮く・別の辺を指す。
-   * `requireVisible` は頂点の表示・取り寄せの側だけ(隠れたボディの頂点はサーバが断る)。辺と幽霊の解決は見ない。
+   * 取り寄せた辺・頂点(`edges` / `vertices`)のうち、ボディの版(`revision`)が今と同じもの(§7)だけを返す。
+   * 古い座標・添字は、実物に無い所にマーカーが浮く・別の辺を指す。
+   * `requireVisible` は頂点の側だけ(隠れたボディの頂点はサーバが断る)。
    * `$effect` の中から呼ぶと `model` と手元の値の両方が依存に入る(`?.` で短絡する前に読む)。
    */
   function freshPayload<T extends { revision: number }>(
@@ -1006,11 +804,8 @@
   }
 
   /**
-   * 画面に出す頂点マーカー(参照 + 座標)。
-   *
-   * **版が合っている座標しか使わない**(辺と同じ規律 §7)—— 形が変わった後の古い座標を
-   * 描くと、実物のどこにも無い所にマーカーが浮く。座標がまだ届いていないBodyは黙って
-   * 落ちるが、下の `$effect` が取りに行くので次の配信で出る。
+   * 画面に出す頂点マーカー(参照 + 座標)。版が合っている座標しか使わない(辺と同じ §7)。
+   * 座標がまだ届いていないBodyは黙って落ち、下の `$effect` が取りに行くので次の配信で出る。
    */
   const vertexMarkers = $derived.by(() => {
     const markers: VertexMarker[] = []
@@ -1020,10 +815,8 @@
       const point = known.vertices.find((candidate) => candidate.index === item.index)?.point
       if (point) markers.push({ bodyId: item.body, vertexIndex: item.index, point })
     }
-    // **頂点を直接ピックさせている間だけ候補を全部出す**(`vertexCandidateBody`)。
-    // 選ばれた頂点しか出ていない既定のままだと、回転中心に使う頂点を**指せる的が画面に
-    // 1つも無い**(頂点を選択へ足すコマンドが無いので、そもそも出しようがない)。
-    // **辺の折れ線と同じ規律** —— 要求しているコマンドを起動している間だけに限る。
+    // 頂点を直接ピックさせている間だけ候補を全部出す(`vertexCandidateBody`)。選ばれた頂点しか出ない
+    // 既定のままだと、回転中心に使う頂点を指せる的が無い。辺の折れ線と同じく、要求するコマンドの起動中だけ。
     if (vertexCandidateBody !== null) {
       const known = freshPayload(vertices, vertexCandidateBody, { requireVisible: true })
       if (known !== null) {
@@ -1039,35 +832,22 @@
 
   function drawHighlight(): void {
     viewport?.highlight(selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
-    // **選択が勝つ**(タスク仕様の色の規則)。ボディが選ばれているあいだは保持/除外の
-    // 役割色より優先してハイライト色を出す(`viewport.applyFaceMaterials` が実体)。
+    // 選択が勝つ: ボディが選ばれているあいだは保持/除外の役割色より優先(`viewport.applyFaceMaterials` が実体)。
     viewport?.highlightBodies(selectedBodies.map((item) => item.body))
     viewport?.highlightEdges(selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
     viewport?.showVertices(vertexMarkers)
   }
 
-  /**
-   * 選択に入った頂点の座標を取りに行く。
-   *
-   * **辺と違って「コマンドが要求している間」ではない** —— 頂点を引数に取るコマンドが
-   * 無いので、要求の有無ではなく**選択に入っているかどうか**が出す条件になる
-   * (`viewport.showVertices` のdocstring)。
-   */
-  // 取り寄せは候補のボディと1本の `$effect` で行う(`vertexCandidateBody` の下)。
-
+  // 頂点の取り寄せは候補のボディと1本の `$effect` で行う(`vertexCandidateBody` の下)。
   // ---------------------------------------------------------------- D: 辺を取りに行く
   /**
-   * 辺を出す対象のBody。**選んでいる形のBody**を優先し、無ければアクティブボディ。
-   *
-   * アクティブ固定にすると、27部品を読んだ文書で「見ている部品ではない方」の辺が出る。
-   * 選択優先なら、面をクリックしてからフィレットを起動すれば必ずその部品の辺が出る。
+   * 辺を出す対象のBody。選んでいる形のBodyを優先し、無ければアクティブボディ
+   * (アクティブ固定だと、27部品を読んだ文書で見ていない部品の辺が出る)。
    */
   const edgeTargetBody = $derived.by(() => {
-    // **見えているボディだけを対象にする**。AIが述語で提案した集合は
-    // 隠したボディにまたがりうる。そこを対象にするとサーバが「隠れているものの辺は
-    // 指せない」と断り、画面にはエラーだけが出て**見えている辺も出なくなる**。
-    // 選択のうち見えているものを先に見る。**メッシュボディも同じ理由で外す** —— 辺も頂点も
-    // 持たないので、頼むとサーバが「mesh body」と断ってエラーの札だけが出る。
+    // 見えているボディだけを対象にする。AIが述語で提案した集合は隠したボディにまたがりうる、
+    // そこを頼むとサーバが「隠れているものの辺は指せない」と断って見えている辺も出なくなる。
+    // メッシュボディも外す(辺も頂点も持たず、サーバが「mesh body」と断る)。
     const visible = new Set(
       (model?.bodies ?? [])
         .filter((body) => body.visible && body.kind !== 'mesh')
@@ -1077,28 +857,21 @@
       (item): item is ShapeRef => !('sketch' in item) && visible.has((item as ShapeRef).body),
     )
     if (picked) return picked.body
-    // アクティブボディへ落ちるときも同じ判定をする —— 隠したまま辺を頼むと、
-    // 頼んでもいないエラーが画面に出るだけで何も得られない(自分で断るほうが正しい)。
+    // アクティブボディへ落ちるときも同じ判定をする(隠したまま頼むと断られるだけ)。
     const active = model?.active_body_id ?? null
     return active !== null && visible.has(active) ? active : null
   })
 
   /**
-   * **回転中心の頂点を指させている間**、または**頂点そのものを対象にするコマンド(測定)を
-   * 起動している間**、候補を出すボディ(出さないなら null)。
-   *
-   * 対象は辺と同じ1つ(`edgeTargetBody`) —— 全ボディの頂点を出すと、27部品の文書では
-   * 数千個の的が画面を覆う。**軸に使う辺と同じボディの頂点**が指せれば足りる。
-   * 測定も同じ1つに絞る(別のボディとの距離は面で測る)。
+   * 回転中心の頂点を指させている間、または頂点そのものを対象にするコマンド(測定)の起動中に、
+   * 候補を出すボディ(出さないなら null)。対象は辺と同じ1つ(`edgeTargetBody`): 全ボディだと
+   * 27部品の文書で数千個の的が画面を覆う。
    */
   const vertexCandidateBody = $derived(
     sketchId === null && (wantedPick === 'vertex' || wantedVertices) ? edgeTargetBody : null,
   )
 
-  /**
-   * 選択に入った頂点のボディと、候補として出すボディの頂点の座標を取りに行く。
-   * **見えているBodyだけ**に頼む(隠れているものの頂点はサーバが断る。辺と同じ規律)。
-   */
+  /** 選択に入った頂点のボディと、候補として出すボディの頂点の座標を取りに行く。見えているBodyだけに頼む(隠れているものはサーバが断る)。 */
   $effect(() => {
     const targets = new Set(selectedVertices.map((item) => item.body))
     if (vertexCandidateBody !== null) targets.add(vertexCandidateBody)
@@ -1110,17 +883,11 @@
     }
   })
 
-  /**
-   * 今のコマンドが辺を要求しているか(スケッチモード中は辺を出さない)。
-   *
-   * **直接ピック(回転軸)も同じ口を通す** —— 選択から取る引数が辺を食わないコマンドでも、
-   * 辺を指させるなら折れ線を配ってもらう必要がある。
-   */
+  /** 今のコマンドが辺を要求しているか(スケッチモード中は出さない)。直接ピック(回転軸)も同じ口を通す。 */
   const wantsEdges = $derived(
     sketchId === null &&
-      // **面を1つ指させている間は辺を出さない。** 辺は面より先に拾われるので、出したままだと
-      // 鏡映面を狙ったクリックが辺に取られ、**その辺が対象の選択へ入る**(素のクリックは
-      // 選択を置き換えるので、選び直したつもりのない対象がその場で入れ替わる)。
+      // 面を1つ指させている間は辺を出さない。辺は面より先に拾われるので、鏡映面を狙ったクリックが
+      // 辺に取られ、その辺が対象の選択へ入ってしまう。
       wantedPick !== 'face' &&
       (wantedKinds.includes('edge') || wantedPick === 'edge'),
   )
@@ -1130,8 +897,7 @@
       viewport?.showEdges(null, [])
       return
     }
-    // **版が違う辺は使わない**(形が変わった後の古い添字は別の辺を指す。§7)。可視性は見ない
-    // (`edgeTargetBody` が見えているボディしか返さない)。
+    // 版が違う辺は使わない(§7)。可視性は見ない(`edgeTargetBody` が見えているボディしか返さない)。
     const known = freshPayload(edges, edgeTargetBody)
     if (known !== null) {
       viewport?.showEdges(edgeTargetBody, known.edges)
@@ -1145,45 +911,35 @@
   })
 
   /**
-   * 基準3平面を指せるのは**スケッチのコマンドを起動している間だけ**(辺と同じ規律)。
-   * スケッチモード中は出さない —— 描いている最中のクリックは点か領域であり、
-   * 奥の基準平面を掴むと線が引けなくなる。
+   * 基準3平面を指せるのはスケッチのコマンドを起動している間だけ(辺と同じ)。
+   * スケッチモード中は、奥の基準平面を掴むと線が引けなくなるので出さない。
    */
   const wantsBasePlanes = $derived(sketchId === null && wantedPlane)
 
   $effect(() => {
-    // **先に読んでから渡す。** `viewport?.showBasePlanes(wantsBasePlanes)` と書くと、
-    // 初回(まだ `onMount` 前で `viewport` が null)に `?.` が短絡して
-    // `wantsBasePlanes` を一度も読まず、この $effect が依存を1つも持たないまま二度と
-    // 再実行されない —— 起動しても平面が指せない、という形で出る(実測で踏んだ)。
-    // 上の辺の $effect が同じ穴に落ちていないのは、`wantsEdges` を先に読んでいるから。
+    // 先に読んでから渡す。`viewport?.showBasePlanes(wantsBasePlanes)` と書くと、初回(`onMount` 前で
+    // `viewport` が null)に `?.` が短絡して `wantsBasePlanes` を読まず、依存が空のまま二度と再実行されない
+    // (実測で踏んだ。起動しても平面が指せない)。
     const on = wantsBasePlanes
     viewport?.showBasePlanes(on)
   })
 
   /**
-   * 通常モードで領域を指せるのは、**領域を要求しているコマンドを起動している間だけ**
-   * (辺・基準平面と同じ規律。2026-08-23の本人裁定5)。通常モードの「押し出す」は面版なので、
-   * 今は通常モードで領域を要求するコマンドは無い。
-   *
-   * 常時指せると、スケッチ平面と重なる面(領域から押し出した板の底面など)を狙う
-   * クリックが、手前に浮いている領域に取られる。**スケッチモード中はゲートを立てない**
-   * —— モード中の領域ピックは `setActiveSketch` 側の規律(そのスケッチの領域だけ)で
-   * 動いており、ここから触ると別のスケッチの領域まで拾えるようになってしまう。
+   * 通常モードで領域を指せるのは、領域を要求しているコマンドの起動中だけ。常時指せると、スケッチ平面と
+   * 重なる面を狙うクリックが手前の領域に取られる。スケッチモード中はゲートを立てない: そこの領域ピックは
+   * `setActiveSketch` 側の規律(そのスケッチの領域だけ)で動いており、触ると別スケッチの領域まで拾う。
    */
   const wantsRegions = $derived(sketchId === null && wantedKinds.includes('region'))
 
   $effect(() => {
-    // 先に読んでから渡す(上の基準平面と同じ理由。`?.` の短絡で依存を失わない)。
+    // 先に読んでから渡す(上と同じ理由)。
     const on = wantsRegions
     viewport?.pickRegions(on)
   })
 
   /**
-   * **回転中心の頂点を待っている間だけ、頂点を辺より先に取る**(`viewport.preferVertices`)。
-   *
-   * `move_body` は対象を面/辺/頂点で指すので**辺が常に出ている** —— 既定の順序
-   * (辺が先)のままだと、角の頂点を狙ったクリックが必ず辺に取られて中心を指せない。
+   * 回転中心の頂点を待っている間だけ、頂点を辺より先に取る(`viewport.preferVertices`)。
+   * `move_body` は辺が常に出ているので、既定順(辺が先)だと角を狙ったクリックが必ず辺に取られる。
    */
   $effect(() => {
     const on = wantedPick === 'vertex' || wantedVertices
@@ -1196,14 +952,9 @@
   }
 
   /**
-   * 1つの参照を選択集合の編集へ翻訳する(面・辺・領域で同じ規則。すべて3Dのクリック経由)。
-   *
-   * Shift / Ctrl=トグル(選ばれていれば外す・いなければ足す) / 修飾なし=置き換え。
-   * **除外専用の修飾キーは無い**(2026-08-30本人決定。間違えたらもう一度クリックする)。
-   * 置き換えは **1つだけ選んでいるものを再クリックしたら外す**(狙いを外したときに素で解除できる)。
-   *
-   * 置き換えのとき**自分自身は remove に入れない** —— コアは remove を後に適用するので、
-   * 入れると足したそばから外れる(`duocad/selection.py` の契約)。
+   * 1つの参照を選択集合の編集へ翻訳する(面・辺・領域で同じ規則)。Shift / Ctrl=トグル、修飾なし=置き換え。
+   * 除外専用の修飾キーは無い。置き換えは、1つだけ選んでいるものを再クリックしたら外す。
+   * 置き換えのとき自分自身は remove に入れない: コアは remove を後に適用するので足したそばから外れる(`duocad/selection.py` の契約)。
    */
   function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
     const current = currentItems()
@@ -1215,29 +966,15 @@
   }
 
   /**
-   * ウィンドウ選択(左ドラッグ)を選択集合の編集へ翻訳する。
-   *
-   * - 修飾なし … 囲んだものだけが選ばれている状態にする(**囲まなかったものは全部外れる**)。
-   *   空の矩形は「全部外す」であって空振りではない —— 何もない所を素でクリックしたときに
-   *   選択が解除されるのと同じ規則。
-   * - Shift / Ctrl … 囲んだものを1つずつトグルする(既存の選択は消さない)。
-   *
-   * **1回の `modify_selection` にまとめる**。参照ごとに送ると、20個囲んだドラッグが
-   * 20往復になり、途中の状態が全部画面へ配信される。
-   *
-   * **突き合わせは `refKey` の `Set` で行う**(2026-09-04。総当たりのM×Nをやめた)。
-   * 画面全体を囲むドラッグ(実測2835面)を、既に大きく選んだ状態の上へ重ねたときだけ
-   * 効く経路なので、選択を空にして測ると表に出ない。
+   * ウィンドウ選択(左ドラッグ)を選択集合の編集へ翻訳する。修飾なし=囲んだものだけが選ばれている状態にする
+   * (空の矩形は「全部外す」)。Shift / Ctrl=囲んだものを1つずつトグルする。
+   * 1回の `modify_selection` にまとめる(参照ごとに送ると20個囲んで20往復になる)。
+   * 突き合わせは `refKey` の `Set`(総当たりM×Nは、画面全体を囲む実測2835面のドラッグを大きな選択の上へ重ねたときだけ効く)。
    */
   /**
-   * 当たった面を選択の参照へ翻訳する。**メッシュボディだけはボディ参照へ畳む。**
-   *
-   * メッシュに指せる面は無い(`selection.select_face` が断る)が、**指せるものが
-   * 何も無いわけではない** —— ボディ単位なら選べて、そのまま削除できる。畳んでおけば
-   * 「クリックしても何も起きない」も「一括選択が丸ごと落ちる」も起きず、しかも
-   * **編集verbは自然に押せないまま**になる(`move_body` / `fillet` / `chamfer` /
-   * 領域押し出しはどれも `kinds` にボディを持たないので、選択要件を満たさない)。
-   * **押せるのに断られる、を画面から消すのはこの1本**である。
+   * 当たった面を選択の参照へ翻訳する。メッシュボディだけはボディ参照へ畳む:
+   * メッシュに指せる面は無い(`selection.select_face` が断る)が、ボディ単位なら選べる。
+   * 編集verbは `kinds` にボディを持たないので押せないまま、「押せるのに断られる」が画面から消える。
    */
   function pickedRef(bodyId: string, faceIndex: number): SelectionRef {
     if (meshBodyIds.has(bodyId)) return bodyRef(bodyId)
@@ -1245,13 +982,9 @@
   }
 
   /**
-   * **素のクリック・矩形選択をトグルとして読むか**(クリック `onPick` と矩形選択
-   * `onBoxSelect` で共有する)。
-   *
-   * 保持/除外ソリッド・拘束面の集合 verb は、起動した時点で既存の割り当てが選択状態で現れる
-   * 集合代入なので、置き換えのままだと足すたびに他の割り当てを全部外してしまう。測定は対象が
-   * 「ちょうど2つ」なので、2つ目の素のクリックが1つ目を消しては永久に揃わない。
-   * 立つのはコマンド起動中(`activeVerb`)だけ。
+   * 素のクリック・矩形選択をトグルとして読むか(`onPick` と `onBoxSelect` で共有)。
+   * 集合 verb は既存の割り当てが選択状態で現れる集合代入で、置き換えだと他の割り当てを全部外す。
+   * 測定は対象がちょうど2つなので、2つ目のクリックが1つ目を消しては揃わない。立つのは起動中(`activeVerb`)だけ。
    */
   function toggleOnlyMode(mode: PickEvent['mode']): PickEvent['mode'] {
     return commandClickToggles() ? 'toggle' : mode
@@ -1263,9 +996,8 @@
   }
 
   /**
-   * **保持/除外ソリッドの間はボディ粒度**。`wantedKinds` に `'body'` が立つのは
-   * `SET_PRESERVE_BODIES` / `SET_EXCLUDE_BODIES` だけ(`commands/optimize.ts` の宣言)。
-   * 面の参照を確定すると `require_selected_bodies` が面を無視し、**集合が黙って空になる**。
+   * 保持/除外ソリッドの間はボディ粒度(`wantedKinds` に `'body'` が立つのは `SET_PRESERVE_BODIES` /
+   * `SET_EXCLUDE_BODIES` だけ)。面の参照を確定すると `require_selected_bodies` が面を無視し集合が黙って空になる。
    */
   function optimizeSetFaceRef(bodyId: string, faceIndex: number): SelectionRef {
     if (wantedKinds.includes('body')) return bodyRef(bodyId)
@@ -1275,7 +1007,7 @@
   function onBoxSelect(event: BoxSelectEvent): void {
     const mode = toggleOnlyMode(event.mode)
     const picked: SelectionRef[] = [
-      // **同じボディの面が何枚囲まれても参照は1つ**(`refKey` で重複を落とす)。
+      // 同じボディの面が何枚囲まれても参照は1つ(`refKey` で重複を落とす)。
       ...dedupeRefs(event.faces.map((item) => optimizeSetFaceRef(item.bodyId, item.faceIndex))),
       ...event.edges.map((item) => edgeRef(item.bodyId, item.edgeIndex)),
       ...event.vertices.map((item) => vertexRef(item.bodyId, item.vertexIndex)),
@@ -1302,12 +1034,9 @@
   }
 
   /**
-   * その参照**だけ**が選ばれている状態にする(常に置き換え。再クリックで外さない)。
-   *
-   * `editSelection` の置き換えの実体でもあるが、**トグルの判定を通らない**のが違い ——
-   * スケッチを貼る先として面を指す経路がこれを直接呼ぶ。既に選ばれている面をもう一度
-   * クリックしたときに `editSelection` の解除に落ちると選択が空になり、直後に走る
-   * `sketch_create` が「面が選ばれていない」で失敗する。ここでは「指した面に貼る」が常に成立する。
+   * その参照だけが選ばれている状態にする(常に置き換え。再クリックで外さない)。
+   * `editSelection` と違いトグルの判定を通らない: スケッチを貼る先として面を指す経路が直接呼ぶ。
+   * 選択済みの面の再クリックで解除に落ちると、直後の `sketch_create` が「面が選ばれていない」で失敗する。
    */
   function selectOnly(ref: SelectionRef): void {
     const current = currentItems()
@@ -1337,24 +1066,19 @@
   }
 
   /**
-   * コマンドが起動した(`CommandHost.start`)。**形状最適化のverbだけが意味を持つ。**
-   *
-   * 集合代入の3つは、起動した役割の**既存の割り当て**をそのまま選択状態にして見せる
-   * (タスク仕様「verb起動 → 既存の割り当てが選択状態で現れる」)。`duocad/optimize.py` の
-   * 契約どおり `state.optimize` の該当配列はそのまま `modifySelection` へ渡せる形をしている。
-   * 荷重の2つは**空にする**(`OPTIMIZE_EMPTY_START_VERBS`)。
+   * コマンドが起動した(`CommandHost.start`)。形状最適化のverbだけが意味を持つ。
+   * 集合代入の3つは、起動した役割の既存の割り当て(`state.optimize` の該当配列。`duocad/optimize.py` の契約で
+   * そのまま `modifySelection` へ渡せる)を選択状態にして見せる。荷重の2つは空にする(`OPTIMIZE_EMPTY_START_VERBS`)。
    */
   function onCommandStart(verb: string): void {
     measure.clear() // 次の操作に入ったら、前の測定の札は用済み
     pendingOptimizePreset = null
-    // **別のverbへ直接移ったら、前のverbの終わり**として選択を空にする(`onCommandEnd`)。
-    // 同じverbの押し直し(構え直し)は終わりではない。
-    // `model === null` の早期returnより前に置く —— 起動そのものは文書が無くても起きる。
+    // 別のverbへ直接移ったら前のverbの終わりとして選択を空にする(`onCommandEnd`)。同じverbの押し直しは終わりではない。
+    // `model === null` の早期returnより前に置く(起動そのものは文書が無くても起きる)。
     const switched = activeVerb !== null && activeVerb !== verb
     activeVerb = verb === DEFAULT_SKETCH_COMMAND_ID ? null : verb
     if (model === null) return
-    // 荷重の2つは**空から始める**(`OPTIMIZE_EMPTY_START_VERBS` の理由を参照)。
-    // 「何もしない」ではなく「空を代入する」でなければ、前のverbの選択が残る。
+    // 荷重の2つは空から始める。「何もしない」ではなく「空を代入する」でなければ前のverbの選択が残る。
     if (OPTIMIZE_EMPTY_START_VERBS.has(verb)) {
       presetSelection([])
       return
@@ -1365,9 +1089,8 @@
       if (switched) clearSelectionIfAny()
       return
     }
-    // **非表示のボディに付いた割り当ては選択に並ばない**(`state.optimize` の配列は指せるものだけ)。
-    // 集合 verb は集合全体を置き換えるので、並ばなかった割り当ては確定で黙って消える —— 先に
-    // そのボディを表示へ戻し、戻った状態の配列を並べる(2026-09-24 本人判断。issue #33)。
+    // 非表示のボディに付いた割り当ては選択に並ばない(`state.optimize` の配列は指せるものだけ)。集合 verb は
+    // 集合全体を置き換えるので、並ばなかった割り当ては確定で黙って消える。先にそのボディを表示へ戻して並べる。
     const hidden = [
       ...new Set(
         model.optimize.stale.filter((item) => item.role === role && item.code === 'hidden').map((item) => item.body),
@@ -1398,13 +1121,9 @@
   }
 
   /**
-   * **選択集合の差分を組むときに読む今の選択。** 送った `clear_selection` の配信が
-   * まだ届いていない間は空を返す。
-   *
-   * 配信前の `selection` を読むと、Esc直後(終了で全解除を送った直後)に「唯一選ばれていた
-   * 要素」をクリックしたとき `editSelection` が解除と判定し、コアでは「全解除 → その要素を外す」
-   * と順に効いて**選んだはずの要素が選ばれない**。サーバは1接続の要求を順に処理するので、
-   * 全解除の後に届く要求は空の集合に対して効く —— 判定もそれに合わせる。
+   * 選択集合の差分を組むときに読む今の選択。送った `clear_selection` の配信がまだ届いていない間は空を返す。
+   * 配信前の `selection` を読むと、Esc直後に唯一選ばれていた要素をクリックしたとき `editSelection` が解除と判定し、
+   * コアでは「全解除 → その要素を外す」と順に効いて選んだはずの要素が選ばれない(サーバは1接続の要求を順に処理する)。
    * 表示(ハイライト・件数)は配信どおりの `selection` を使う。
    */
   function currentItems(): SelectionRef[] {
@@ -1412,15 +1131,10 @@
   }
 
   /**
-   * コマンドが終わった(`CommandHost.onEnd`: Esc・中断ボタン・確定成功)。**選択を全解除する。**
-   *
-   * 形を変えるverbの確定ではコアが先に空にしているので何も起きない。ここで効くのは中断と、
-   * 形を変えない確定(集合代入・測定の失敗等)である。
-   *
-   * **測定の成功だけは残す** —— 読み札と3Dの線は「測った選択が変わるまで」残る
-   * (`measurement.svelte.ts`)ので、空にすると結果が出た瞬間に消える。
-   * `activeVerb === null` は、モード遷移(`setMode`)が先に起動を畳んだ後の遅れて届いた通知
-   * (スケッチ作成の成功等)で、選択に触らない。
+   * コマンドが終わった(`CommandHost.onEnd`: Esc・中断ボタン・確定成功)。選択を全解除する。
+   * 形を変えるverbの確定ではコアが先に空にしているので効くのは中断と、形を変えない確定(集合代入・測定の失敗等)。
+   * 測定の成功だけは残す(読み札と3Dの線は測った選択が変わるまで残る。`measurement.svelte.ts`)。
+   * `activeVerb === null` は、`setMode` が先に起動を畳んだ後に遅れて届いた通知で、選択に触らない。
    */
   function onCommandEnd(verb: string): void {
     if (activeVerb === null) return
@@ -1430,7 +1144,7 @@
   }
 
   /**
-   * `CommandHost` の `onWants`。無起動の `command.args` は常に `[]` なので、`kinds` が空になった =
+   * `CommandHost` の `onWants`。無起動の `command.args` は常に `[]` なので、`kinds` が空 =
    * 中断/確定成功/モード切替のどれかで降りた、とみなして集合 verb の並べ直し待ちを捨てる。
    */
   function onWantsKinds(kinds: SelectableKind[]): void {
@@ -1438,18 +1152,14 @@
     if (kinds.length === 0) pendingOptimizePreset = null
   }
 
-  /**
-   * ピックを選択集合の編集へ翻訳する。**UI側に選択状態を持たない**ので、
-   * ここが作るのは「何を足して何を引くか」だけで、結果はコアから返ってくる。
-   */
+  /** ピックを選択集合の編集へ翻訳する。ここが作るのは「何を足して何を引くか」だけで、結果はコアから返ってくる。 */
   function onPick(event: PickEvent): void {
     if (sketchId !== null) {
       onSketchPick(event)
       return
     }
     const current = currentItems()
-    // **スケッチを貼る先を待っているとき**。基準平面はその場で決まり(即適用が同期に走る)、
-    // 面は「選択を置き換えたうえで `'face'` を入れる」——
+    // スケッチを貼る先を待っているとき。基準平面はその場で決まり、面は「選択を置き換えたうえで `'face'` を入れる」。
     // 送るのは選択が確定して配信されてからで、その待ち受けは `CommandHost` が持つ。
     if (host?.wantsPlane()) {
       if (event.plane !== null) {
@@ -1457,9 +1167,8 @@
         return
       }
       if (event.hit !== null) {
-        // **メッシュボディには貼れない**(平面が取れない。`sketch.resolve_plane` が断る)。
-        // ここはピックを畳まずに理由を出す —— ボディ参照へ畳んでも `sketch_create` は
-        // 面を要求するので、押した結果は変わらないまま理由だけが消える。
+        // メッシュボディには貼れない(平面が取れない。`sketch.resolve_plane` が断る)。
+        // ボディ参照へ畳んでも `sketch_create` は面を要求するので、畳まずに理由を出す。
         if (meshBodyIds.has(event.hit.bodyId)) {
           note('メッシュボディにはスケッチを貼れない(平面が取れない)')
           return
@@ -1470,17 +1179,10 @@
       }
       // 何も無い所をクリックしたら、通常どおり選択解除だけして待ち続ける(下へ落とす)
     }
-    // **コマンドが辺・頂点を直接待っているとき**(回転軸・回転中心)。`wantsPlane` と
-    // 同じ位置・同じ順序 —— 下の辺・頂点の分岐より**前**に置く。ここを後にすると、
-    // 指した辺が共有選択へ入り、コアの `require_bodies` がそのボディまで
-    // 「動かす対象」に数える(= 軸に使った部品まで一緒に回る)。
-    //
-    // **待っているものが当たらなかったクリックは素通りさせる**(`wantsPlane` と同じ)——
-    // 対象を選び直す・何もない所で解除する、が構えている間もできる。
-    //
-    // **修飾キー付き(Shift / Ctrl)のクリックはピックへ行かない** —— 待っている間も
-    // 対象を足す・外す手が要る(軸や鏡映面を指す構えは、対象が1つ揃った時点で自動的に
-    // 開くので、素のクリックだけを食うと2つ目の対象が永久に選べない)。
+    // コマンドが辺・頂点を直接待っているとき(回転軸・回転中心)。下の辺・頂点の分岐より前に置く: 後だと
+    // 指した辺が共有選択へ入り、コアの `require_bodies` が軸に使った部品まで動かす対象に数える。
+    // 待っているものが当たらなかったクリックは素通りさせる(対象の選び直し・解除ができる)。
+    // 修飾キー付きは行かない: 待っている間も対象を足す・外す手が要る(素のクリックだけを食う)。
     if (host !== null && event.mode === 'replace') {
       const wants = host.wantsPick()
       if (wants === 'edge' && event.edge !== null) {
@@ -1496,38 +1198,32 @@
         return
       }
     }
-    // **素クリックのトグル(`toggleOnlyMode`)は面だけでなく辺・頂点・領域にも効かせる** ——
-    // 測定は辺・頂点でも測るので、下の分岐すべてが同じ `pickMode` を通る。
+    // 素クリックのトグル(`toggleOnlyMode`)は面・辺・頂点・領域のすべてに効かせる(測定は辺・頂点でも測る)。
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
-    // **辺が当たったら辺**。フィレット・面取り・測定を起動している間だけ来る。
+    // 辺が当たったら辺。フィレット・面取り・測定の起動中だけ来る。
     if (event.edge !== null) {
       editSelection(edgeRef(event.edge.bodyId, event.edge.edgeIndex), pickMode)
       return
     }
-    // **頂点が当たったら頂点**。マーカーが出ているのは選択に入っている頂点と、測定の
-    // 候補(対象ボディの全頂点)だけなので、ここへ来るのは「AIが選んだ頂点を人が
-    // Ctrl+クリックで外す」か「測る頂点を指す」のどちらか。参照の形も修飾キーの規則も面・辺と同じ。
+    // 頂点が当たったら頂点。ここへ来るのは「AIが選んだ頂点を人がCtrl+クリックで外す」か「測る頂点を指す」のどちらか。
     if (event.vertex !== null) {
       editSelection(vertexRef(event.vertex.bodyId, event.vertex.vertexIndex), pickMode)
       return
     }
-    // **領域が当たったら領域**。領域を要求しているコマンドの起動中(スケッチ編集中を除く)だけ来る
-    // (`wantsRegions` → `viewport.pickRegions`)。参照の形も修飾キーの規則も
-    // スケッチモードの `onSketchPick` と同じ —— 同じものを同じように選ぶ。
+    // 領域が当たったら領域。領域を要求するコマンドの起動中(スケッチ編集中を除く)だけ来る(`wantsRegions`)。
     if (event.region !== null) {
       editSelection(regionRef(event.region.sketchId, event.region.index), pickMode)
       return
     }
     if (event.hit === null) {
       // 何もない所を素でクリック = 選択解除(修飾キー付きは空振りにする)。
-      // **コマンド起動中は選択を変えない**(外したいものは足すのと同じクリックで外す)。
+      // コマンド起動中は選択を変えない(外したいものは足すのと同じクリックで外す)。
       if (commandClickToggles()) return
       if (event.mode === 'replace' && current.length > 0) clearSelection()
       else if (event.mode === 'replace') note('面を外した')
       return
     }
-    // 保持/除外ソリッドの間だけボディ粒度へ畳む(`optimizeSetFaceRef`)。素クリックのトグルは
-    // 上の `pickMode` が面・辺・頂点・領域へ一様に効かせる。
+    // 保持/除外ソリッドの間だけボディ粒度へ畳む(`optimizeSetFaceRef`)。
     editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
 
@@ -1543,29 +1239,16 @@
   }
 
   /**
-   * **モード遷移はここ1本だけ**(2026-09-03)。以前は `enterSketch` / `exitSketch` /
-   * `enterOptimizeMode` / `exitOptimizeMode` の4つが**それぞれ違う流儀で**選択を掃除して
-   * いた(外国スケッチの図形だけ / 図形を全部 / 何もしない / ボディだけ)。遷移が型として
-   * 存在せず手書きで散っているのが、`duocad-sketch-switch-keeps-foreign-selection`
-   * (スケッチAからBへ直接移る抜け道)や最適化⇄スケッチの両立の穴を生んだ形である。
+   * モード遷移はここ1本だけ。掃除の規則は「行き先が使えない参照を落とす」の1つ(経路が増えても書き忘れが無い):
    *
-   * **掃除の規則は「行き先が使えない参照を落とす」の1つだけ。** 出口側で列挙するのを
-   * やめたので、経路が増えても書き忘れる場所が無い:
-   *
-   * - **スケッチの図形** … 行き先のスケッチのものでなければ落とす(同じスケッチへ入り直す
-   *   ときは何も落ちない。行き先がスケッチでなければ全部落ちる)。混ざったまま持ち越すと、
-   *   Bで `move_sketch_entities` を実行したときにAの図形が動く —— サーバは `entity_id` を
-   *   素直に解決するので黙って通る。
-   * - **ボディ(`kind:'body'`)** … 行き先が最適化モードでなければ落とす。保持/除外の
-   *   割り当てにしか使えない種別で、他のモードのverbは「種別が違う」と断るだけになる。
-   * - **面・辺・頂点・領域はどのモードでも残す** —— スケッチを抜けてそのまま押し出す、
-   *   最適化を抜けてそのまま面取りする、はどちらも実際に使う経路である。
+   * - スケッチの図形: 行き先のスケッチのものでなければ落とす。混ざったまま持ち越すと、Bで
+   *   `move_sketch_entities` を実行したときにAの図形が動く(サーバは `entity_id` を素直に解決して黙って通る)。
+   * - ボディ(`kind:'body'`): 行き先が最適化モードでなければ落とす(保持/除外の割り当てにしか使えない)。
+   * - 面・辺・頂点・領域はどのモードでも残す(スケッチを抜けてそのまま押し出す等が実際の経路)。
    */
   function setMode(next: Mode): void {
-    // **確定前の姿を持ち越さない。** モードが変わると下の `{#key mode.kind}` が
-    // `CommandHost` ごと作り直すので、コマンド層からの中断(`onCancelPreview`)は**来ない**
-    // —— ここで消さないと、起動したまま抜けた `move_body` の半透明ボディや、
-    // `extrude` の投機実行の幽霊(本物を隠したまま)が画面に残り続ける。
+    // 確定前の姿を持ち越さない。モードが変わると下の `{#key mode.kind}` が `CommandHost` ごと作り直すので
+    // `onCancelPreview` は来ない。ここで消さないと、`move_body` の半透明ボディや `extrude` の投機実行の幽霊が残り続ける。
     clearPreview()
     const nextSketch = next.kind === 'sketch' ? next.id : null
     const unusable = currentItems().filter((item) => {
@@ -1580,12 +1263,9 @@
     activeVerb = null
     hoverPoint = null
     viewport?.setActiveSketch(nextSketch)
-    // **どの遷移でも描き直す**(`$effect` に任せない)。入る側は直後の `lookAtSketch` が
-    // 平面の枠を要るので1手遅らせられない(`handleState` と同じ理由)。**抜ける側にも呼ぶ**
-    // —— 旧 `exitSketch` はここを呼んでおらず、抜けたスケッチの点マーカーが次の状態配信まで
-    // 画面に残っていた(選択の掃除が空振りするとWS往復が起きず、その配信も来ない)。
-    // 残ったマーカーは手前に浮くのでクリックを奪いうる。**`smoke-move.mjs` の辺ピックの失敗がこれで直るかは未確認** ——
-    // あの失敗は実測でflake(同じビルドで5回中2回緑)であり、因果は結べていない。
+    // どの遷移でも同期に描き直す(入る側は直後の `lookAtSketch` が平面の枠を要る。`handleState` と同じ)。
+    // 抜ける側にも要る: 抜けたスケッチの点マーカーが次の状態配信まで残り、手前に浮いてクリックを奪いうる
+    // (選択の掃除が空振りするとWS往復が無く配信も来ない)。
     drawSketches()
     if (next.kind === 'sketch') viewport?.lookAtSketch(next.id)
   }
@@ -1597,36 +1277,21 @@
     return 'idle'
   }
 
-  /**
-   * **スケッチモードへ入る**(まだ貼る先は決まっていない)。「スケッチ」ボタンから。
-   *
-   * 入った先の `sketch-pending` では `SKETCH_PENDING_COMMANDS` が**起動済みで**現れる
-   * (`CommandHost` の `startCommandId`)ので、次の1クリックで貼る先が決まる ——
-   * ボタン→クリックの2手は変わらない。
-   */
+  /** スケッチモードへ入る(まだ貼る先は決まっていない)。`sketch-pending` では `SKETCH_PENDING_COMMANDS` が起動済みで現れる(`CommandHost` の `startCommandId`)。 */
   function startSketchMode(): void {
     setMode({ kind: 'sketch-pending', resume: resumeOf(mode) })
   }
 
-  /**
-   * **そのスケッチを開く。** `sketch_create` の成功(`handleState`)と、ブラウザパネルの
-   * スケッチ名クリックの2箇所から呼ばれる。
-   *
-   * **後者はもう「抜け道」ではない**(2026-09-03)。以前は最適化モード中でも無条件に
-   * ここへ来て両モードを両立させかけたが、いまは他と同じ `setMode` の1本を通る ——
-   * 戻り先(`resume`)を持って移るので、抜ければ最適化モードへ戻る。
-   */
+  /** そのスケッチを開く。`sketch_create` の成功(`handleState`)とブラウザパネルのスケッチ名クリックから呼ばれる。戻り先(`resume`)を持って移るので、抜ければ最適化モードへ戻る。 */
   function enterSketch(id: string): void {
-    // **隠したスケッチに入るときは先に表示へ戻す**(拒否ではなく表示に戻して入る。本人判断
-    // 2026-09-16)。編集中のスケッチは `buildSketchDraws` が可視性に関わらず描くので、
-    // サーバの往復を待たずに入ってよい(抜けた後も表示のまま —— 隠し直しはしない)。
+    // 隠したスケッチに入るときは先に表示へ戻す(拒否しない)。編集中のスケッチは `buildSketchDraws` が
+    // 可視性に関わらず描くので、サーバの往復を待たずに入ってよい。抜けた後も表示のまま。
     const target = sketches.find((item) => item.sketch_id === id)
     if (target !== undefined && !target.visible) setSketchVisible(id, true)
     setMode({ kind: 'sketch', id, resume: resumeOf(mode) })
   }
 
-  /** ブラウザパネルのスケッチ名クリック。**最適化が走っている間はモードを抜けさせない** —— 抜けると
-   *  パネルごと中断ボタンが消える(「抜ける」ボタンを止めているのと同じ理由)。 */
+  /** ブラウザパネルのスケッチ名クリック。最適化が走っている間はモードを抜けさせない(パネルごと中断ボタンが消える)。 */
   function enterSketchFromBrowser(id: string): void {
     if (optimizeBusy) {
       fail('形状最適化の実行中はスケッチへ入れない(終わるか中断してから)')
@@ -1635,7 +1300,7 @@
     enterSketch(id)
   }
 
-  /** スケッチモードを抜ける。**戻り先は入る前のモード**(通常 or 最適化)。 */
+  /** スケッチモードを抜ける。戻り先は入る前のモード(通常 or 最適化)。 */
   function exitSketch(): void {
     setMode(resumeOf(mode) === 'optimize' ? { kind: 'optimize' } : { kind: 'idle' })
   }
@@ -1651,37 +1316,29 @@
   }
 
   /**
-   * スケッチモードのクリック。**描いている最中は点、そうでなければ領域の選択**。
-   *
-   * 点を待っているコマンド(線分・円…)が起動している間は、領域の上を押しても点になる
-   * —— 既存の領域の内側に線を引けないと、分割そのものができない。既定のコマンドは
-   * 「選ぶ」(点を待たない)なので、描いていないときのクリックは領域へ行く。
+   * スケッチモードのクリック。描いている最中は点、そうでなければ領域の選択。
+   * 点を待つコマンドの起動中は、領域の上を押しても点になる(既存の領域の内側に線を引けないと分割できない)。
    */
   function onSketchPick(event: PickEvent): void {
     if (event.point && host?.wantsPoint()) {
-      // **当たっている図形へ落としてから渡す**(`snappedPlanePoint`)。幽霊(`hoverPoint`)も
-      // 同じ関数を通るので、吸い付いて見える位置と確定結果はずれない。
+      // 当たっている図形へ落としてから渡す。幽霊(`hoverPoint`)も同じ関数を通るので、吸い付いて見える位置と確定結果はずれない。
       const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity)
       if (host.addPoint(u, v)) return
     }
-    // **コマンドがスケッチの点・図形を直接待っているとき**(回転中心・鏡映軸)。3Dの辺・
-    // 頂点と同じ規律で、下の共有選択への翻訳より**前**に置く —— 中心や軸に使うものが
-    // 選択へ入ると、それ自体が「動かす/鏡映する対象」になる。
-    // **修飾キー付きがピックへ行かないのも3Dと同じ**(`onPick`)。
+    // コマンドがスケッチの点・図形を直接待っているとき(回転中心・鏡映軸)。3Dの辺・頂点と同じ規律で
+    // 共有選択への翻訳より前に置く(中心や軸に使うものが選択へ入ると、それ自体が動かす/鏡映する対象になる)。
     if (event.sketchEntity && host !== null && event.mode === 'replace') {
       const hit = event.sketchEntity
       const wants = host.wantsPick()
       if (wants === 'sketchPoint' && host.setPick(sketchEntityRef(hit.sketchId, hit.entityId, hit.point))) {
         return
       }
-      // **軸に要るのは線分そのもの**なので、端点の近くを押しても点を落として図形へ畳む
-      // (`point` を残すと、コアの `mirror_sketch_entities` が軸の参照として読めない)。
+      // 軸に要るのは線分そのものなので、端点の近くを押しても点を落として図形へ畳む(`point` を残すとコアの `mirror_sketch_entities` が軸として読めない)。
       if (wants === 'sketchEntity' && host.setPick(sketchEntityRef(hit.sketchId, hit.entityId, null))) {
         return
       }
     }
-    // **図形は領域より先**(点・辺は領域の縁に乗っているので、領域が勝つと端点を掴めない)。
-    // 描くコマンドが起動している間は上の `addPoint` が先に食うので、ここへは来ない。
+    // 図形は領域より先(点・辺は領域の縁に乗っているので、領域が勝つと端点を掴めない)。
     const pickMode = commandClickToggles() ? 'toggle' : event.mode
     if (event.sketchEntity) {
       editSelection(
@@ -1703,15 +1360,8 @@
       clearSelection()
     }
   }
-
-
-
   // ---------------------------------------------------------------- コマンド層との繋ぎ
-  /**
-   * 揃った引数をサーバへ送る。**経路はコマンドの分類(`categoryOf`)だけで決まる。**
-   *
-   * **知らない名前はここで断る**(分類を書き忘れたverbが黙って別のverbになるのを防ぐ)。
-   */
+  /** 揃った引数をサーバへ送る。経路はコマンドの分類(`categoryOf`)だけで決まり、知らない名前はここで断る。 */
   function runCommand(verb: string, args: Record<string, unknown>): void {
     const category = CATEGORY_OF.get(verb)
     if (category === undefined || category === 'ui') {
@@ -1722,10 +1372,8 @@
     switch (category) {
       // -------------------------------------------------------------- C: スケッチ
       case 'sketch': {
-        // **`sketch_create` だけはスケッチモードの外で走る** —— スケッチを作るverbなので、
-        // 入っていることを要求すると永久に起動できない。反復の `needsSketchId` と同じ形の
-        // 判定を1つ置いて迂回させる: 反復が「分類は feature だが `sketch_id` が要る」で、
-        // こちらは「分類は sketch だが `sketch_id` が要らない」という裏返しの位置にいる。
+        // `sketch_create` だけはスケッチモードの外で走る(入っていることを要求すると永久に起動できない)。
+        // 反復の `needsSketchId`(分類は feature だが `sketch_id` が要る)の裏返しの位置にいる。
         if (runsOutsideSketch(verb)) {
           sendTracked(verb, args)
           return
@@ -1735,10 +1383,8 @@
           return
         }
         viewport?.showSketchGhosts(sketchId, []) // 本物を頼んだので幽霊は消す
-        // **引数名はコマンド定義とサーバの宣言で既に揃っている**(p0/p1・center/radius・
-        // corner/width/height・center/radius/start_deg/end_deg)。ここで詰め替えない。
-        // **`move_sketch_entities` だけは `sketch_id` を足さない** —— どのスケッチかは
-        // 選んだ参照(`{sketch, entity, point}`)が持っている(`runsWithoutSketchId`)。
+        // 引数名はコマンド定義とサーバの宣言で揃っているので詰め替えない。
+        // `move_sketch_entities` だけは `sketch_id` を足さない(選んだ参照が持っている。`runsWithoutSketchId`)。
         sendTracked(verb, runsWithoutSketchId(verb) ? args : { ...args, sketch_id: sketchId })
         return
       }
@@ -1749,8 +1395,7 @@
           return
         }
         if (verb === 'extrude' && !regionsStillExist(selection, sketches)) {
-          // **領域はパラメータ編集で分裂・消失しうる**(§7)。消えた領域を送ると
-          // サーバは添字が範囲外だと言うだけなので、ここで何が起きたかを画面へ出す。
+          // 領域はパラメータ編集で分裂・消失しうる(§7)。消えた領域を送るとサーバは添字が範囲外と言うだけ。
           fail('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
           return
         }
@@ -1759,29 +1404,23 @@
       }
       // -------------------------------------------------------------- F: ファイル
       case 'file': {
-        // **`FilesPanel` からの操作と同じ口**(`files.run`)へ流す。ここで二重化すると
-        // 「ツールバー経由の import_step だけ応答待ちの解き方が違う」という差が生まれる。
+        // `FilesPanel` と同じ口(`files.run`)へ流す(二重化すると応答待ちの解き方に差が生まれる)。
         files.run(verb, args)
         return
       }
       // -------------------------------------------------------------- 測定(読み取り専用)
       case 'query': {
-        // **verb と同じ口で送る**(`{cmd, client_op}`)。返事は状態配信ではなく
-        // `{type:'measure'}` で、`handleMeasure` が `client_op` を突き合わせて
-        // コマンド層を無起動へ戻す(verb なら `applied.client_op` が担う役)。
+        // verb と同じ口で送る。返事は状態配信ではなく `{type:'measure'}` で、`handleMeasure` が `client_op` を突き合わせる。
         sendTracked(verb, args)
         return
       }
       default: {
-        // **分類を1つ足すとここで型が落ちる**(`never` に狭まらなくなる)。
-        // 送り方を書かずに分類だけ増やすことができない、というのがこの1行の役目。
+        // 分類を1つ足すとここで型が落ちる(送り方を書かずに分類だけ増やせない)。
         const unhandled: never = category
         fail(`送り方が決まっていない分類: ${String(unhandled)}`)
       }
     }
   }
-
-
   /** 幽霊の解決に要る手元の状態(`ghostArgs.ts`)。辺・頂点は版を照合した後の値だけ渡す(`freshPayload`)。 */
   function ghostContext(): GhostContext {
     return {
@@ -1795,11 +1434,8 @@
 
   /**
    * カーソルの生の (u,v) を、当たっているスケッチの図形か1mmグリッドへ落とす(スナップ)。
-   *
-   * **クリック(`onSketchPick` の `addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を
-   * 通すこと**(20260906タスクの不変条件)。段の規則は `entityKinds.snapSketchPoint` の1か所
-   * (viewport のカーソル強調も同じ関数を通る)。図形はサーバの `sketches[].entities` から引き、
-   * 1mm への丸めは点を待っている(`host.wantsPoint()`)ときだけ —— 選択のクリック等では丸めない。
+   * クリック(`onSketchPick` の `addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を通すこと。段の規則は
+   * `entityKinds.snapSketchPoint` の1か所(viewport のカーソル強調も通る)。1mm への丸めは点を待っているときだけ。
    */
   function snappedPlanePoint(u: number, v: number, hit: SketchEntityHit | null): Point2 {
     return snapSketchPoint(
@@ -1816,24 +1452,15 @@
   }
 
   /**
-   * ブラウザだけで描く確定前の姿(`preview: 'local'`)——**3つの経路**。
-   *
-   * 1. **これから打つ図形**(`add_line` 等): `ghostEntity` が生の座標から組み立てる。
-   * 2. **既にある図形の変換後**(`pattern_*` / `move_sketch_entities`): `ghostCopies` が
-   *    今のスケッチ状態(`ghostSources`)を反復・平行移動・回転する。
-   * 3. **既にあるボディの変換後**(`move_body`): 届いているメッシュをずらして/回して重ねる。
-   *    **スケッチの外で走る唯一の経路**なので `sketchId` を要求しない。
-   *
-   * どの経路も**サーバへ何も投げない**。Escで中断しても文書が一切変わらないことを、
-   * 「そもそも送らない」で構造的に成立させる(スケッチの幽霊と同じ契約)。
+   * ブラウザだけで描く確定前の姿(`preview: 'local'`)の3経路: これから打つ図形(`ghostEntity`)、
+   * 既にある図形の変換後(`ghostCopies`)、既にあるボディの変換後(`move_body`。スケッチの外で走る唯一の経路)。
+   * どれもサーバへ何も投げない(Escで中断しても文書が変わらないことを構造で成立させる)。
    */
   function showLocalGhost(verb: string, args: Record<string, unknown>): void {
     const view = viewport
     if (view === null) return
     if (verb === MOVE_BODY.id) {
-      // **コアの `selection.require_bodies` と同じ導き方**(面/辺/頂点/ボディから
-      // ボディを逆引きし、重複を畳む)。ここがずれると幽霊と結果が別のボディになる。
-      // **空配列でも必ず呼ぶ** —— 使えない値で古い幽霊を残さない。
+      // コアの `selection.require_bodies` と同じ導き方(ずれると幽霊と結果が別のボディになる)。空配列でも必ず呼ぶ(古い幽霊を残さない)。
       if (args.mode === 'rotate') {
         const rotate = bodyGhostRotation(args)
         view.showBodyGhosts(
@@ -1859,22 +1486,18 @@
       view.showSketchGhosts(sketchId, [single])
       return
     }
-    // **空配列でも呼ぶ** —— 対象が消えた・値が使えないときに古い幽霊を残さない。
+    // 空配列でも呼ぶ(対象が消えた・値が使えないときに古い幽霊を残さない)。
     view.showSketchGhosts(sketchId, ghostCopies(verb, args, ghostSources(ghostContext(), verb, args)))
   }
 
-  /**
-   * 確定前の姿。**ローカル方式はサーバへ投げない**(`mode === 'local'`)——
-   * 形はブラウザ側で分かっており、投機実行にすると中断しても文書に一度は入る。
-   */
+  /** 確定前の姿。ローカル方式はサーバへ投げない(形はブラウザ側で分かっており、投機実行にすると中断しても文書に一度は入る)。 */
   function requestPreview(
     verb: string,
     args: Record<string, unknown>,
     mode: 'server' | 'local',
   ): void {
     if (mode === 'local') {
-      // **参照を数値へ解決してから渡す**(`resolvePicksForGhost`)。`showLocalGhost` は
-      // 解決済みの数値しか読まない層のままにしておく。
+      // 参照を数値へ解決してから渡す(`resolvePicksForGhost`)。`showLocalGhost` は解決済みの数値しか読まない層。
       showLocalGhost(verb, resolvePicksForGhost(ghostContext(), verb, args))
       return
     }
@@ -1906,30 +1529,18 @@
     if (!(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
     if (key !== 'z' && key !== 'y' && key !== 's') return
-    // 編集中のフィールドではブラウザ標準のテキスト取り消しに任せ、文書のundo/redoは
-    // 発火しない(`CommandHost.onKeydown` と同じ書き方の判定)。**BUTTONとチェックボックスは
-    // 除外しない** —— どちらも「編集中のテキスト」を持たない操作対象で、フォーカスが
-    // 乗っているだけならCtrl+Zは文書のundoでよい(パーツ一覧の可視性チェックボックスに
-    // フォーカスが残った状態のCtrl+Zがundoを起こすのは既存の実機検査が固定している)。
-    // **戻るのは直前のverbであって、そのチェックボックスの表示切り替えではない** ——
-    // 可視性は操作ログに載らない(2026-08-26。`duocad/selection.py` の `set_visible`)。
+    // 編集中のフィールドではブラウザ標準のテキスト取り消しに任せ、文書のundo/redoは発火しない
+    // (`CommandHost.onKeydown` と同じ判定)。BUTTONとチェックボックスは除外しない: フォーカスが乗っているだけなら
+    // Ctrl+Zは文書のundoでよい(既存の実機検査が固定している)。戻るのは直前のverbで、可視性は操作ログに載らない(`duocad/selection.py` の `set_visible`)。
     const target = event.target as HTMLElement | null
     const isTextEditingField =
       target?.tagName === 'TEXTAREA' ||
       (target?.tagName === 'INPUT' && !['checkbox', 'radio'].includes((target as HTMLInputElement).type))
-    // **Ctrl+S は今の文書を手で書き直す**(`files.save`)。保存は自動で済んでいる(issue #5)ので
-    // 普段は何も変わらないが、キーは残す —— 自動保存が書けなかったときの押し直しと、
-    // ブラウザの「ページを保存」を止めるため。
-    //
-    // **`preventDefault()` はフォーカスがどこにあっても必ず通す** —— 止めないと
-    // ブラウザの「ページを保存」ダイアログが開き、こちらの保存が起きたのかどうかが
-    // 人から見えなくなる(実機検査ではモーダルで止まる)。
-    //
-    // **ここだけ `isTextEditingField` で抜けない**のは、Ctrl+S にはテキスト編集としての
-    // 意味が無いからである。Ctrl+Z/Y を入力欄で見送るのは「ブラウザ標準のテキスト取り消しに
-    // 任せる」ためで、譲る相手がいる。Ctrl+S に譲る相手はページ保存ダイアログしかなく、
-    // それは止めると決めた側なので、見送ると**何も起きない死んだキー**になる
-    // (判定式そのものは undo/redo と同じものを使い、意味の違いだけをここに書く)。
+    // Ctrl+S は今の文書を手で書き直す(`files.save`)。保存は自動で済んでいる(issue #5)ので普段は何も変わらないが、
+    // 自動保存が書けなかったときの押し直しと、ブラウザの「ページを保存」を止めるために残す。
+    // `preventDefault()` はフォーカスがどこにあっても必ず通す(止めないとページ保存ダイアログが開き、保存が起きたか見えなくなる)。
+    // ここだけ `isTextEditingField` で抜けない: Ctrl+S にテキスト編集としての意味は無く、譲る相手がページ保存ダイアログしか
+    // いないので、見送ると何も起きない死んだキーになる。
     if (key === 's') {
       event.preventDefault()
       files.save()
@@ -1937,7 +1548,7 @@
     }
     if (!documentOpen) return
     if (isTextEditingField) return
-    // **実行中は送らない**(サーバも `DocumentBusy` で断る)。Undo した条件のまま結果が足される。
+    // 実行中は送らない(サーバも `DocumentBusy` で断る。Undo した条件のまま結果が足される)。
     if (optimizeBusy) {
       event.preventDefault()
       fail('形状最適化の実行中は取り消し・やり直しできない(終わるか中断してから)')
@@ -1953,20 +1564,13 @@
   }
 
   // ---------------------------------------------------------------- 可視性(パーツ一覧から)
-  // **コアの `set_visible` verb を呼ぶだけ**(アプリ層に可視性の状態を持たせない)。
-  //
-  // `model.bodies` は常に編集用ボディ(`kind="solid"`)だけを持つ。参照ボディ
-  // (`kind="reference"`・読み込みの原本を不可視のまま持つ二重管理)は2026-09-03に
-  // 概念ごと撤去した。
+  // コアの `set_visible` verb を呼ぶだけ(アプリ層に可視性の状態を持たせない)。
   const partBodies = $derived(model?.bodies ?? [])
   /**
-   * **面を持たないボディ**(三角形メッシュ)のID。`duocad.document.MESH_KIND` と同じ綴り。
-   *
-   * これが要るのは**ピックの畳み込み**のためである(`pickedRef`)。viewport は
-   * メッシュも1枚の面(添字1)として描くので、素直に翻訳すると `{kind:'face'}` の
-   * 参照が飛び、コアの `select_face` が「メッシュボディには面が無い」と断る
-   * (`docs/contracts/ui-optimize-integration.md`「編集 verb を効かせない」)。**ドラッグの一括選択はまとめて1回で送る**ので、
-   * 画面を囲んだドラッグにメッシュが1つ入っているだけで**選択が丸ごと落ちる**。
+   * 面を持たないボディ(三角形メッシュ)のID。`duocad.document.MESH_KIND` と同じ綴り。
+   * ピックの畳み込み(`pickedRef`)に要る: viewport はメッシュも1枚の面(添字1)として描くので、素直に翻訳すると
+   * コアの `select_face` が断り、ドラッグの一括選択はまとめて1回で送るのでメッシュが1つ入るだけで選択が丸ごと落ちる
+   * (`docs/contracts/ui-optimize-integration.md`「編集 verb を効かせない」)。
    */
   const meshBodyIds = $derived(
     new Set(partBodies.filter((body) => body.kind === 'mesh').map((body) => body.body_id)),
@@ -2024,9 +1628,8 @@
     viewport.onPlaneMove((point, hit) => {
       hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit)
     })
-    // 可変解像度 —— ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域を
-    // その粗さで測り直させる。**スケッチの折れ線はビューポート側が自分で折り直す**
-    // (ブラウザ内で完結するので往復が要らない)。連打の抑制も向こうが持っている。
+    // 可変解像度: ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域をその粗さで測り直させる。
+    // スケッチの折れ線はビューポート側が自分で折り直す。連打の抑制も向こうが持っている。
     viewport.onResolutionChange(sendViewResolution)
     session.start()
     return () => {
@@ -2037,11 +1640,8 @@
   })
 
   /**
-   * 今の見え方をサーバへ知らせる(可変解像度)。**繋がっていないときは黙って捨てる。**
-   *
-   * `session.send` は送れなかった操作をトーストに出すが、これは人が起こした操作ではなく
-   * 画面の都合の連絡なので、切れている間にホイールを回しただけで「操作を送れなかった」の
-   * 札が出るのは誤報である。繋ぎ直したときは下の `$effect` が送り直す。
+   * 今の見え方をサーバへ知らせる(可変解像度)。繋がっていないときは黙って捨てる:
+   * `session.send` の「操作を送れなかった」札は人が起こした操作向けで、ホイールを回しただけで出るのは誤報。
    */
   function sendViewResolution(resolution: {
     worldPerPixel: number
@@ -2052,29 +1652,24 @@
     session.setViewResolution(resolution.worldPerPixel, resolution.sizeHint, resolution.focus ?? null)
   }
 
-  // 繋がった(繋ぎ直した)ら、今の見え方をもう一度知らせる。**サーバ側の目標精度は
-  // セッションの持ち物**なので、サーバが立ち上がり直すと既定の粗さへ戻る —— 次に人が
-  // ズームするまで粗いままになるのを避ける。
+  // 繋がった(繋ぎ直した)ら今の見え方をもう一度知らせる。サーバ側の目標精度はセッションの持ち物で、
+  // サーバが立ち上がり直すと既定の粗さへ戻るため。
   $effect(() => {
     if (status !== 'open') return
     const resolution = viewport?.viewResolution()
     if (resolution && resolution.worldPerPixel > 0) sendViewResolution(resolution)
   })
 
-  // 選択が変わったら描き直す(コア発 → 購読 → 再描画。上り方向の出口)
+  // 選択が変わったら描き直す
   $effect(() => {
     void selection
     drawHighlight()
-    // **スケッチはここで描き直さない**。選択もスケッチも `handleState` 経由でしか変わらず、
-    // そこで既に描き直している。ここにも置くと、1回の状態受信で全スケッチのジオメトリを
-    // 2回作り直すことになる(面のハイライトと違って作り直しが重い)。
+    // スケッチはここで描き直さない(`handleState` で描き直し済み。ここにも置くと全スケッチのジオメトリを2回作り直す)。
   })
 
   /**
-   * 形状最適化(第3のモード)の見た目を描き直す —— 保持/除外ソリッドの色、拘束面の
-   * 色分けと固定記号、荷重の矢印+ラベル。**モードを抜けているあいだは描かない**
-   * (タスク仕様)。`viewport.ts` の `FaceRef` はコアの `ShapeRef`(`{body, kind, index}`)
-   * とは形が違う(`{bodyId, faceIndex}`)ので、ここで詰め替える。
+   * 形状最適化(第3のモード)の見た目を描き直す。モードを抜けているあいだは描かない。
+   * `viewport.ts` の `FaceRef` はコアの `ShapeRef` と形が違う(`{bodyId, faceIndex}`)のでここで詰め替える。
    */
   $effect(() => {
     if (!optimizeMode || optimize === null) {
@@ -2085,9 +1680,8 @@
       preserveBodies: optimize.preserve_bodies.map((item) => item.body),
       excludeBodies: optimize.exclude_bodies.map((item) => item.body),
       fixtures: optimize.fixtures.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
-      // **面ごとの how を突き合わせて渡す。** `loads`(いま指せる面)と `load_specs`
-      // (文書が持つ how)は長さが違いうるので `(body, index)` で引く —— 荷重面のボディを
-      // 隠すと前者からだけ消える。突き合わない面は描かない(描く向きも大きさも無いため)。
+      // 面ごとの how を `(body, index)` で突き合わせる。`loads`(いま指せる面)と `load_specs`(文書が持つ how)は
+      // 長さが違いうる(荷重面のボディを隠すと前者からだけ消える)。突き合わない面は描かない。
       loads: optimize.loads.flatMap((item) => {
         const spec = optimize.load_specs.find(
           (one) => one.body === item.body && one.index === item.index,
@@ -2106,15 +1700,8 @@
   })
 
   /**
-   * 最適化モードにいる間、**条件の点検と解像度の目盛りを取り直す**。
-   *
-   * 引き金は2つ: モードの出入り / 配りものの `state.optimize` が変わった(4 verb を
-   * 打った・undoした・部品を消した)。**どちらも軽い**
-   * (点検は文書を舐めるだけ、解像度は条件面のbboxを数枚測るだけ)ので、
-   * 状態が届くたびに聞き直してよい。
-   *
-   * **走っている最中は聞き直さない** —— 実行の途中で `state` が動く経路は無いのに、
-   * 進捗のたびに往復を足す理由が無い。
+   * 最適化モードにいる間、条件の点検と解像度の目盛りを取り直す。引き金はモードの出入りと `state.optimize` の変化で、
+   * どちらも軽い(点検は文書を舐めるだけ、解像度は条件面のbboxを数枚測るだけ)。走っている最中は聞き直さない。
    */
   $effect(() => {
     void optimize
@@ -2124,18 +1711,9 @@
   })
 
   /**
-   * `state.optimize.stale`(いま使えない割り当て)をトーストで知らせる。
-   *
-   * **`code` で分岐する**(`duocad/optimize.py` の契約) —— `"hidden"` は部品を隠す
-   * たびに出るので出さない側、`"fingerprint"`/`"missing"` は出す側。文言では分岐しない。
-   * **モードに関係なく見る** —— 割り当てが壊れるのは他のverb(undo・部品の削除)が
-   * 起こすので、最適化モードに入っていないときにも気づけて良い。
-   *
-   * **鍵に `code` を含める**(2026-08-31 QA指摘で修正)。`role:body:index` だけだと、
-   * `hidden`(出さない側)として一度記録した対象が後で `fingerprint`/`missing`(出す側)へ
-   * 変わっても「もう見た」と誤判定され、二度と通知されない —— 表示に戻して直したつもりが
-   * 実は指す面が変わっていた、のような事故に人が気づけなくなる。`code` を鍵に混ぜれば、
-   * コードが変わった時点で別の鍵として扱われ、正しく再通知される。
+   * `state.optimize.stale`(いま使えない割り当て)をトーストで知らせる。`code` で分岐する(`duocad/optimize.py` の契約):
+   * `"hidden"` は部品を隠すたびに出るので出さない側、`"fingerprint"`/`"missing"` は出す側。モードに関係なく見る
+   * (割り当てを壊すのは他のverb)。鍵に `code` を含める理由は `seenStaleKeys`。
    */
   $effect(() => {
     const stale = optimize?.stale ?? []
@@ -2148,7 +1726,7 @@
     seenStaleKeys = next
   })
 
-  /** 状態配信を受けた回数。**実機検査が往復の完了を知るための穴**(`handleState` が増やす)。 */
+  /** 状態配信を受けた回数(`handleState` が増やす。実機検査が往復の完了を知る)。 */
   let stateEpoch = $state(0)
 
   // 自動テスト(scripts/smoke*.mjs)がブラウザの中を見るための穴 `window.__duocad`(中身は testHooks.svelte.ts)。
@@ -2204,11 +1782,9 @@
 
 <div class="app">
   <header>
-    <!-- 開発版の札 / 安定版の更新ボタン(`ChannelBadge.svelte`)。左端に置く —— 窓を取り違えたら最初に目に入る位置。 -->
+    <!-- 開発版の札 / 安定版の更新ボタン(`ChannelBadge.svelte`)。窓を取り違えたら最初に目に入る左端に置く。 -->
     <ChannelBadge />
-    <!-- 左サイドバー(ファイル一覧)の開閉。**実物をクリックできない対象なのでボタンを置く**
-         (UI指針1「実物クリックできるものにボタンを作らない」の裏返し —— パネルそのものは
-         畳むと画面から消えるので、外に手を出す場所が要る)。 -->
+    <!-- 左サイドバー(ファイル一覧)の開閉。畳むとパネルが画面から消えるので、外に手を出す場所が要る。 -->
     <button
       id="data-panel-toggle"
       class="tag"
@@ -2219,35 +1795,19 @@
     >
       ファイル
     </button>
-    <!-- **現在開いているファイル名**(完了条件4)。**常に名前だけを出す**(2026-08-27) ——
-         まだ保存も読み込みもしていない文書には名前が無いので「(無題)」と置く。
-         書けているかどうかは隣の `#save-state` が言う。 -->
+    <!-- 現在開いているファイル名。名前の無い文書は「(無題)」。書けているかは隣の `#save-state` が言う。 -->
     {#if documentOpen}
       <span id="current-file" class="dim">{files.currentName ?? '(無題)'}</span>
     {/if}
-    <!-- **自動保存が書けなかったときだけ出る札**(`state.saved`。issue #5)。保存は1操作ごとに
-         自動で走るので「保存済み」は黙っていてよく、人の手が要る「未保存」だけを出す
-         (Ctrl+S で書き直せる)。**明示の保存ボタンは無い**(2026-09-16本人判断で撤去)。 -->
+    <!-- 自動保存が書けなかったときだけ出る札(`state.saved`。issue #5)。「保存済み」は黙っていてよく、人の手が要る「未保存」だけを出す(Ctrl+S で書き直せる)。 -->
     {#if documentOpen && !saved}
       <span id="save-state" class="tag on" title="自動保存が書けなかった(Ctrl+Sで書き直す)">未保存</span>
     {/if}
-    <!-- **常設の指標はこれで全部**(2026-08-27に本人裁定で4つ外した)。外したものと行き先:
-         - **接続状態** → 常時光らせず、**操作したのに送れなかった瞬間**にトーストで言う
-           (`session.ts` の `send`)。見ても何もしなくてよい間ずっと視線を取るのをやめた。
-           再接続が開けないときの通知(`session.ts` の `onError` / `socket`)だけ残る。
-         - **部品数 / 操作数** → 数そのものは人の判断に使わない。何があるかはブラウザ
-           (`BrowserPanel.svelte`)を見れば分かる。操作数はファイルの一覧にも出さない。
-         - **プレビュー中の印** → **印が要らない見え方を目指す**方針(本人)。幽霊が
-           出ていることは幽霊自身が示すべきで、札で補うのは見え方が弱い証拠になる。
-           状態(`previewing`)は実機検査が見るので残してある。 -->
-    <!-- 設定ダイアログを開く口(2026-08-28)。**一度決めたらほとんど変更しない設定**は
-         常設パネルに置かずここへまとめる(本人決定。線引きは「作業中に切り替えるものは
-         その場のパネル、一度決めたら触らないものは設定モーダル」)。
-         **このボタンは開閉のトグル**(2026-09-04)。ダイアログを非モーダル(`show()`)に
-         した結果、開いている間もこのボタンが押せるようになったので、押して何も起きない
-         死んだボタンにせず、そのまま閉じる口にする(閉じる手段は他に `#settings-close`
-         とEscもある)。**idは `settings-open` のまま**変えない —— 実機検査が名前で
-         掴んでおり、開く口であることに変わりはない。 -->
+    <!-- 常設の指標は出さない。接続状態は操作したのに送れなかった瞬間にトーストで言う(`session.ts` の `send`)。
+         部品数・操作数は人の判断に使わない。プレビュー中の印は、幽霊自身が示す見え方を目指す(`previewing` は実機検査が見る)。 -->
+    <!-- 設定ダイアログの開閉トグル。一度決めたらほとんど変更しない設定はここへまとめる(作業中に切り替えるものはその場のパネル)。
+         ダイアログは非モーダル(`show()`)で開いている間もこのボタンが押せるので、そのまま閉じる口にする。
+         idは `settings-open` のまま(実機検査が名前で掴んでいる)。 -->
     <button
       id="settings-open"
       class="tag"
@@ -2260,8 +1820,7 @@
     >
       設定
     </button>
-    <!-- 右サイドバー(AI)の開閉。**ヘッダーの右端**(ファイル一覧の開閉ボタンと同じ段の逆端。
-         2026-08-30本人指定)。`margin-left:auto` で押し出すので、間に何を足しても右端に残る。 -->
+    <!-- 右サイドバー(AI)の開閉。ヘッダーの右端(`margin-left:auto` で押し出すので、間に何を足しても右端に残る)。 -->
     <button
       id="sidebar-toggle"
       class="tag end"
@@ -2275,31 +1834,16 @@
   </header>
 
   <!-- コマンドのツールバー。モードが変わったらコマンド層を作り直す(集めかけの引数を持ち越さない)。
-       `FilesPanel` はここには載らない —— 2026-08-23にいったんここへ統合したが、
-       2026-08-26に本人が左サイドバーへの復元を決定した(下の `.main` 直下の `.data-panel` 参照)。 -->
-  <!-- 閉じている(トップ画面)間はツールバーごと出さない —— 灰色の道具が並ぶと「何か開いているが使えない」に見える。 -->
+       閉じている(トップ画面)間はツールバーごと出さない(灰色の道具が並ぶと「開いているが使えない」に見える)。 -->
   {#if documentOpen}
     <section class="toolbar">
-      <!-- **モードの行**(`.mode-row`)。**ここがverbより1つ上の次元**(2026-09-03) ——
-           入口・札・「抜ける」がここに揃い、verbは下の `CommandHost` にだけ並ぶ。
-           **常設の表示は増えていない**: 通常モードに出るのは入口ボタン2つで、
-           そのうち「スケッチ」は下のverbの行から**移設**したもの、「形状最適化」は
-           元からこの位置にいた(「画面に何かを足して
-           既定に据えるのではない」に触れない)。 -->
+      <!-- モードの行(`.mode-row`)。入口・札・「抜ける」がここに揃い、verbは下の `CommandHost` にだけ並ぶ。 -->
       {#if mode.kind === 'idle'}
         <div class="mode-row">
-          <!-- **行の見出し**(2026-09-05)。下の `CommandHost` の「コマンド」と同じ
-               `.label` の列に揃える —— 揃っていなかった間、モードの2つとverbの6つは
-               ラベル列の有無だけがずれた**同じ形のボタンの帯**が2本並んでいるように見え、
-               その「1つ上の次元」が画面から
-               読み取れなかった。スケッチ中/形状最適化中の行はすでにモード名を同じ列に
-               置いており(下の `{#if}`)、通常モードだけが欠けていた。 -->
+          <!-- 行の見出し。下の `CommandHost` の「コマンド」と同じ `.label` の列に揃える(揃わないと、モードとverbが「同じ形のボタンの帯」2本に見える)。 -->
           <span class="label">モード</span>
-          <!-- **スケッチの入口**(2026-09-03にverbの行から移設)。idは `sketch_create` の
-               コマンドボタンと同じ `sketch-create` のまま —— 押したときに起きること
-               (スケッチモードへ入り、貼る先のクリックを待つ)は変わっておらず、
-               実機検査が叩く口を変える理由が無い。**両方が同時にDOMへ出ることはない**
-               (この行は通常モードだけ、コマンドボタンは貼る先待ちのときだけ)。 -->
+          <!-- スケッチの入口。idはコマンドボタンと同じ `sketch-create` のまま(実機検査が叩く口)。
+               両方が同時にDOMへ出ることはない(この行は通常モードだけ、コマンドボタンは貼る先待ちのときだけ)。 -->
           <button
             id="sketch-create"
             class="tag"
@@ -2308,9 +1852,7 @@
           >
             スケッチ
           </button>
-          <!-- **形状最適化(第3のモード)への入口**(2026-08-31)。対応する文書実体が無く
-               viewport上に「これをクリックすれば入れる」実物が存在しないので、UI指針1の
-               裏返しとしてボタンを置く(スケッチと同じ「モードに入るボタン」の作法)。 -->
+          <!-- 形状最適化(第3のモード)への入口。viewport上に「これをクリックすれば入れる」実物が無いのでボタンを置く(UI指針1の裏返し)。 -->
           <button
             id="optimize-enter"
             class="tag"
@@ -2321,8 +1863,7 @@
           </button>
         </div>
       {/if}
-      <!-- **スケッチモードだが、まだどのスケッチも開いていない**(貼る先のクリック待ち)。
-           下の `CommandHost` には `sketch_create` が1つだけ、**起動済みで**出ている。 -->
+      <!-- スケッチモードだが、まだどのスケッチも開いていない(貼る先のクリック待ち)。下の `CommandHost` には `sketch_create` が起動済みで出ている。 -->
       {#if mode.kind === 'sketch-pending'}
         <div class="mode-row">
           <span class="label">スケッチ</span>
@@ -2330,10 +1871,7 @@
           <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
         </div>
       {/if}
-      <!-- **スケッチモードの札とモード操作**(2026-08-30に `SketchPanel.svelte` から移設)。
-           右サイドバーをAI専用にするため、モード表示・「正面から見る」・「抜ける」は
-           モードに応じて作り直されるこのツールバー側へ移した(本人決定)。
-           idは移設前と同じにしてある —— 実機検査が叩く口を変える理由が無い。 -->
+      <!-- スケッチモードの札とモード操作。idは `SketchPanel.svelte` にあった頃と同じ(実機検査が叩く口)。 -->
       {#if mode.kind === 'sketch' && activeSketch}
         <div class="mode-row">
           <span class="label">スケッチ</span>
@@ -2354,15 +1892,13 @@
             保持 {optimize?.preserve_bodies.length ?? 0} ・除外 {optimize?.exclude_bodies.length ?? 0}
             ・拘束 {optimize?.fixtures.length ?? 0} ・荷重 {optimize?.loads.length ?? 0}
           </span>
-          <!-- **走っている間は抜けさせない。** 抜けるとパネルごと消えて中断ボタンが
-               画面から無くなる(止める手段がゼロになる)。 -->
+          <!-- 走っている間は抜けさせない(抜けるとパネルごと中断ボタンが消え、止める手段がゼロになる)。 -->
           <button id="optimize-exit" disabled={optimizeBusy} onclick={exitOptimizeMode}>
             抜ける
           </button>
         </div>
       {/if}
-      <!-- **verbの行。** モードが変わったらコマンド層ごと作り直す(集めかけの引数を持ち越さない)。
-           鍵はモードのタグそのもの —— スケッチAからBへ移るときは作り直さない(今までどおり)。 -->
+      <!-- verbの行。鍵はモードのタグそのもの(スケッチAからBへ移るときは作り直さない)。 -->
       {#key mode.kind}
         <CommandHost
           bind:this={host}
@@ -2397,9 +1933,7 @@
   {/if}
 
   <div class="main">
-    <!-- 左サイドバー: 保存済みファイルの一覧(Fusion 360のデータパネルに対応)。
-         **開閉で `.viewport` の幅が変わる**が、変えているのは相変わらず flex の配分だけで、
-         `.viewport` 自身のサイズ指定は動かない(styles.css の不変条件)。 -->
+    <!-- 左サイドバー: 保存済みファイルの一覧。開閉で変わるのは flex の配分だけで、`.viewport` 自身のサイズ指定は動かない(styles.css の不変条件)。 -->
     {#if dataPanelOpen}
       <aside class="data-panel">
         <FilesPanel
@@ -2420,17 +1954,13 @@
       </aside>
     {/if}
 
-    <!-- ビューポートと、その上に浮かぶブラウザの入れ物。**`.stage` が浮かせる側の位置の基準**で、
-         大きさを決めているのは `.stage` の中の `.viewport` 1つだけ(ブラウザは position:absolute で
-         フローの外にいるので、開閉してもカメラのアスペクトに触らない)。 -->
+    <!-- ビューポートと、その上に浮かぶブラウザの入れ物。`.stage` が浮かせる側の位置の基準で、大きさを決めるのは
+         `.viewport` だけ(ブラウザは position:absolute でフローの外なので、開閉してもカメラのアスペクトに触らない)。 -->
     <div class="stage">
       <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
       <div class="viewport" bind:this={container}></div>
 
-      <!-- 測定の読み札(issue #10)。**結果があるときだけ**浮く(常設の指標ではない —— docs/UI.md
-           「常設の指標を置かない」)。`.stage` の中の position:absolute なので `.viewport` の
-           寸法＝カメラのアスペクトには触らない(ブラウザ・設定ダイアログと同じ)。 -->
-      <!-- 最初の状態が届く前も覆う(届く前は開いているか分からず、出すとグリッドが一瞬見えてから消える)。 -->
+      <!-- 最初の状態が届く前も覆う(出さないとグリッドが一瞬見えてから消える)。 -->
       {#if !documentOpen}
         <StartScreen
           waiting={!showStart}
@@ -2444,6 +1974,7 @@
         />
       {/if}
 
+      <!-- 測定の読み札(issue #10)。結果があるときだけ浮く(docs/UI.md「常設の指標を置かない」)。 -->
       {#if measure.text !== ''}
         <div id="measure-result" class="measure-readout">{measure.text}</div>
       {/if}
@@ -2473,16 +2004,7 @@
         />
       {/if}
 
-      <!-- 設定ダイアログ。**`.stage` の中に置くのは「ブラウザの右」に出すため**(2026-09-04
-           本人指示) —— 位置の基準が `.stage` になるので、左右のサイドバーを開閉しても
-           ブラウザとの隣接が保たれる。以前は画面右上(`position: fixed`)に出しており、
-           **AIサイドバーを閉じるとビューキューブの70%を覆っていた**(同日実測。キューブは
-           ビューポートの右上アンカーなので、ビューポートが右へ伸びるとダイアログの下へ入る)。
-           **大きさは持たない**(`position: absolute` でフローの外)ので、ブラウザや Toast と
-           同じく `.viewport` の寸法＝カメラのアスペクトには触らない。 -->
-      <!-- 形状最適化を走らせるパネル。**最適化モードのあいだだけ**出す。
-           `SettingsDialog` と同じく `.stage` の中の `position: absolute` なので、
-           `.viewport` の寸法＝カメラのアスペクトには触らない(styles.css の不変条件)。 -->
+      <!-- 形状最適化を走らせるパネル。最適化モードのあいだだけ出す。`.stage` 内の position:absolute なので `.viewport` の寸法には触らない(styles.css の不変条件)。 -->
       {#if optimizeMode}
         <OptimizePanel
           conditions={optimizeConditions}
@@ -2500,6 +2022,8 @@
         />
       {/if}
 
+      <!-- 設定ダイアログ。`.stage` の中に置くのはブラウザの右に出すため(左右のサイドバーを開閉してもブラウザとの隣接が保たれる)。
+           画面右上の `position: fixed` だとAIサイドバーを閉じたときビューキューブの70%を覆った(実測)。大きさは持たない。 -->
       <SettingsDialog
         open={settingsOpen}
         fov={display.fov}
@@ -2512,11 +2036,7 @@
       />
     </div>
 
-    <!-- 右サイドバー。**AiPanel だけ = 完全にAI専用**(2026-08-30本人決定)。
-         `SketchPanel.svelte` はここから外し、モード表示・「正面から見る」・「抜ける」は
-         上のコマンドツールバーへ移した(数値の打ち直しは `move_sketch_entities` が引き受ける)。
-         `{#if}` で `<aside>` ごと出し分けるのは左サイドバーと同じ形で、`.viewport` の
-         サイズ指定は動かさず flex の配分だけが変わる。 -->
+    <!-- 右サイドバー。AiPanel だけ(完全にAI専用)。`{#if}` で `<aside>` ごと出し分け、`.viewport` のサイズ指定は動かさず flex の配分だけが変わる。 -->
     {#if sidebarOpen}
       <aside class="sidebar">
         <AiPanel
@@ -2533,8 +2053,7 @@
       </aside>
     {/if}
 
-    <!-- エラーの札。**`.main` の中に置くが大きさは持たない**(position:absolute で浮く)ので、
-         ビューポートの寸法＝カメラのアスペクトには触らない。出す側は `fail()` の1本だけ。 -->
+    <!-- エラーの札。大きさは持たない(position:absolute)ので `.viewport` の寸法には触らない。出す側は `fail()` の1本だけ。 -->
     <Toast />
   </div>
 </div>
