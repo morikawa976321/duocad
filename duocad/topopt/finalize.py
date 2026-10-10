@@ -14,7 +14,7 @@ from ..mesh_geometry import TOPOLOGY_DEFECTS, degenerate_triangles, topology, we
 from ..mesh_intersections import triangle_intersections
 from . import trace
 
-#: 保持・除外 CAD を三角形分割する線形偏差[mm]。STL 書き出しと同じ値(2026-09-25 本人判断)で、角度偏差は
+#: 保持・除外 CAD を三角形分割する線形偏差[mm]。STL 書き出しと同じ値で、角度偏差は
 #: `kernel.DEFAULT_ANGULAR_DEFLECTION`。三角形は内接するので、円柱では半径によらず約 0.005 mm だけ弦が
 #: 内側を通り、除外の穴の内面はその分だけ除外の中に残る(docs/TOPOPT_ACCEPTANCE.md「円柱の除外へのめり込み」)。
 CAD_DEVIATION_MM = STL_DEVIATION
@@ -110,7 +110,7 @@ def input_mesh_checks(vertices, faces):
 def final_mesh_checks(vertices, faces):
     """最終メッシュの合否。戻り値は JSON 化できる辞書で、`failed` に不合格の項目名を並べる。
 
-    - 接続6項目(`topology`)は float64 の頂点で見る(現行の契約)。
+    - 接続6項目(`topology`)は float64 の頂点で見る。
     - 単一ソリッド: 接続成分のうち符号付き体積が正のもの(材料)がちょうど1つ。負のもの(空洞)は数えて残し、
       0 のもの、および包含深さに対して向きが不正なものは不合格。
     - **float32 に丸めた座標**でも見る: STL(`meshbody.write_stl`)も画面(three.js の Float32Array)も
@@ -147,7 +147,6 @@ def final_mesh_checks(vertices, faces):
 def collapse_float32_slivers(vertices, faces, *, max_edge_mm=SIMPLIFY_TOLERANCE_MM):
     """float32 に丸めると潰れる三角形(面積 0)の最短辺を、長さが `max_edge_mm` 未満なら潰す。
 
-    文書・画面・STL は float32 で消費するので、float32 で表せない三角形は成果物に存在できない。
     manifold3d の `simplify` は許容値未満の辺でも残すことがある(実測: 辺 3.9e-6 mm のスライバーが
     1e-5・1e-4 で残り、1e-3 では別の条件で簡略化自身が縮退を作る。docs/TOPOPT_ACCEPTANCE.md
     「メッシュ集合演算での実測」)。潰すのは辺の両端点を一方へ寄せる操作で、面はその辺の長さまでしか動かない。
