@@ -67,6 +67,15 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 取り込みからビルドまで4秒、壊れたビルドからの巻き戻しを含めて7秒。
 
 サーバの外で更新するのに失敗しても(uv・npm が見つからない等)、スクリプトは最後に必ず立て直す。
+
+**Python の版を上げる更新**(例: 3.11 → 3.14)は、サーバ(uv の venv の python)が子へ渡す `PYTHONHOME` を
+更新スクリプトが引き継ぐと `uv sync` が落ちる。`duocad/channel.py` と `update.ps1` が外しているが、**外す前の版の
+サーバから押した更新では落ちる**(元の版へ戻る)。そのときは duocad から起動していない普通の端末で `update.ps1` を手で走らせる
+(`-ServerPid` を省くと `-HttpPort` からサーバを探して止める):
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File %USERPROFILE%\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot %USERPROFILE%\mf\duocad-stable -LogDir %USERPROFILE%\mf\duocad-data\logs -DataDir %USERPROFILE%\mf\duocad-data
+```
 元の版への復元にも失敗したときは、トーストがそう言う(`last-update-result.json` の `restored: false`)。
 
 ボタンが出ない・押せない条件(`duocad/channel.py`):
