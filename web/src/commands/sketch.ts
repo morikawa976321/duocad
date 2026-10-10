@@ -1,16 +1,9 @@
 /**
- * スケッチのコマンド定義 — **手動操作が一級の操作モードになる場所**。
+ * スケッチのコマンド定義。状態機械・数値入力・中断は `CommandHost.svelte` の1つを使い回す。
+ * 骨格の点(point)引数は、スケッチ平面をクリックして (u,v) を集める第3の集め方。
  *
- * 状態機械・数値入力・中断は `CommandHost.svelte` の1つを使い回す(verbごとに独自のUIを
- * 作らない)。骨格には**点(point)引数**があり、これは「スケッチ平面をクリックして (u,v) を
- * 集める」という、選択でも数値でもない3つ目の集め方である。
- *
- * **幽霊はブラウザで描く**(`preview: 'local'`)。押し出しのプレビューはコアに投機実行させる
- * (形がコアにしか分からない)が、スケッチの図形は**形がブラウザ側で分かっている**。
- * **そもそも送らない**ことで「Escで中断しても文書が一切変わらない」が構造的に成立する。
- *
- * **`sketch_id` はここでは付けない**。どのスケッチに描くかは「今どのスケッチモードに居るか」
- * であって、コマンドが集める引数ではない —— `App.svelte` が送信時に足す。
+ * 幽霊はブラウザで描く(`preview: 'local'`): 図形の形はブラウザ側で分かっており、サーバへ送らないので「Escで中断しても文書が変わらない」が構造的に成立する。
+ * `sketch_id` はここでは付けない(今どのスケッチモードに居るかで決まる。`App.svelte` が送信時に足す)。
  */
 import {
   buildPathArgs,
@@ -32,11 +25,7 @@ import {
   rectFromPoints,
 } from './sketchGeometry'
 
-/**
- * 確定前の姿(幽霊)の組み立ては `../entityKinds` の唯一の表へ寄せてある
- * (図形種別ごとの処理を1箇所にまとめる。README.md「モジュールとimport境界」)。
- * ここは元の呼び出し口を保つための再エクスポートだけ。
- */
+/** 幽霊の組み立ては `../entityKinds` の唯一の表にある(README.md「モジュールとimport境界」)。ここは再エクスポートだけ。 */
 export { ghostEntity } from '../entityKinds'
 
 /** 打っていない `fromPoints` の寸法は `undefined`(集めた点から導く合図)。 */
@@ -45,12 +34,7 @@ function typed(values: ArgValues, name: string): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-/**
- * 線分。**寸法はFusionの線ツールと同じ「長さ・角度」**(dx/dyではない)。角度は度・
- * 反時計回り・スケッチ平面のX軸からで、`add_arc` の角度と同じ規約に揃えてある。
- *
- * サーバへ送るのは `p0`/`p1` だけ(`add_line` の契約は変えない)。
- */
+/** 線分。寸法は長さ・角度(度・反時計回り・スケッチ平面のX軸から。`add_arc` と同じ規約)。サーバへ送るのは `p0`/`p1` だけ。 */
 export const ADD_LINE: CommandDef<'add_line'> = {
   id: 'add_line',
   label: '線分',
@@ -80,7 +64,6 @@ export const ADD_LINE: CommandDef<'add_line'> = {
       label: '角度',
       unit: '度',
       inputId: 'sketch-line-angle',
-      // 0度は正当な向き(X軸方向)なので弾かない。
       reject: () => null,
       fromPoints: true,
       live: (args) => {
@@ -128,10 +111,7 @@ export const ADD_CIRCLE: CommandDef<'add_circle'> = {
   },
 }
 
-/**
- * 長方形。**角度の欄は無い** —— マウスで置く長方形は軸平行に限る(`add_rectangle` の
- * `angle` は省略され、コアの既定 0 が効く)。
- */
+/** 長方形。マウスで置く長方形は軸平行に限る(`add_rectangle` の `angle` は省略され、コアの既定 0 が効く)。 */
 export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
   id: 'add_rectangle',
   label: '長方形',
@@ -169,11 +149,7 @@ export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
   },
 }
 
-/**
- * 円弧。**3点目は「中心」ではなく「円弧上の点」**で、開始角・終了角は始点と終点の
- * クリックから決まる(角度の欄は持たない)。幾何と掃引の向きは `sketchGeometry.ts` の
- * `arcFromPoints` が閉じている。
- */
+/** 円弧。3点目は中心ではなく円弧上の点で、開始角・終了角は始点と終点から決まる。幾何は `sketchGeometry.ts` の `arcFromPoints`。 */
 export const ADD_ARC: CommandDef<'add_arc'> = {
   id: 'add_arc',
   label: '円弧',
@@ -212,18 +188,9 @@ export const ADD_ARC: CommandDef<'add_arc'> = {
   },
 }
 
-/**
- * SVGの図形を**いま開いているスケッチへ**足す(CADの「アクティブなスケッチに挿入する」に
- * 相当する形)。
- *
- * **引数はパスだけ**。`sketch_id` はここでは付けない(モジュールdocstringの規律どおり
- * `App.svelte` が送信時に足す)。
- *
- * **倍率(`scale`)はここに出していない** —— 単位の合わないSVGを直すための逃げ道であって、
- * 普段は要らない。常に出すと「毎回1.0と打つ欄」が1つ増える(`catalog` の `ws=False`)。
- */
+/** SVGの図形をいま開いているスケッチへ足す。引数はパスだけ(`scale` は単位の合わないSVG用の逃げ道で、常に出すと毎回1.0と打つ欄が増える。`catalog` の `ws=False`)。 */
 export const IMPORT_SVG: CommandDef<'import_svg'> = {
-  // **id == サーバのコマンド名 == ログのverb名**。
+  // id == サーバのコマンド名 == ログのverb名。
   id: 'import_svg',
   label: 'SVG読み込み',
   buttonId: 'sketch-import-svg',
@@ -242,47 +209,30 @@ export const IMPORT_SVG: CommandDef<'import_svg'> = {
 }
 
 /**
- * スケッチを作る —— **「スケッチ」を押して、貼る先をクリックする2手**。
+ * スケッチを作る(「スケッチ」を押して貼る先をクリックする2手)。
+ * 分類は `sketch` だが `sketch_id` を取らず、まだどのスケッチも開いていない状態(スケッチモードの貼る先待ち `sketch-pending`)で走る唯一のverb。
+ * 反復(`pattern_*`)の裏返しで、`App.svelte` の送信経路は `needsSketchId`(features.ts)と下の `runsOutsideSketch` で捌く。
  *
- * 分類は `sketch` だが `sketch_id` を取らず、**まだどのスケッチも開いていない状態で走る
- * 唯一のverb**である —— 走る場所は**スケッチモードの貼る先待ち**(`sketch-pending`)で、
- * `sketch_id` を足さずに送る。反復
- * (`pattern_*`)が「分類は feature だが `sketch_id` が要る」のちょうど裏返しで、`App.svelte` の
- * 送信経路はその2箇所を `needsSketchId`(features.ts)と下の `runsOutsideSketch` で捌く。
- *
- * 基準平面のボタンは置かない —— 置くと「ボタンで指す」と「クリックで指す」の2つが並び、面に
- * 貼る経路だけがクリックになる(UI指針1「実物をクリックできるものにボタンを作らない」)。
- *
- * **面は送らない**: 面に貼るときの `build` は **`{}`** を返す。面の参照を引数に入れると
- * 「対象集合の指定方法」が再び2つになる(サーバは `require_selected(doc, "face",
- * exactly_one=True)` で選択から取る)。2枚選んでいれば `SelectionAmbiguous` が返り、
- * トーストで人に見える。面に貼る
- * (`base_plane` を送らない)経路は対象集合を選択から取る。
+ * 基準平面のボタンは置かない(UI指針1「実物をクリックできるものにボタンを作らない」)。
+ * 面に貼るときの `build` は `{}` を返す: 面の参照を引数に入れると対象集合の指定方法が2つになる(サーバは `require_selected(doc, "face", exactly_one=True)` で選択から取り、2枚なら `SelectionAmbiguous`)。
  */
 export const SKETCH_CREATE: CommandDef<'sketch_create'> = {
   id: 'sketch_create',
   label: 'スケッチ',
   buttonId: 'sketch-create',
   preview: 'none',
-  // **引数名は `target`** —— WSに載る名前(`base_plane`)とわざと変えてある。値は
-  // 「基準平面名」か「面は選択にある」の2状態で、`base_plane` だと後者が嘘になる。
+  // 引数名 `target` はWSに載る名前(`base_plane`)とわざと変えてある: 値は「基準平面名」か「面は選択にある」で、`base_plane` だと後者が嘘になる。
   args: [{ kind: 'plane', name: 'target', label: 'スケッチを貼る先' }],
   build(values) {
     const plane = values.target
     if (!isPlaneArgValue(plane)) return { ok: false, reason: '貼る先が決まっていない' }
-    // **面は送らない**(サーバがコアの選択から取る)。基準平面だけが引数になる。
     return { ok: true, args: plane === 'face' ? {} : { base_plane: plane } }
   },
 }
 
 /**
- * オフセット平面にスケッチを作る —— 「基準となる平面(or 面)をクリックして、オフセット距離を
- * 打ってEnter」の3手。
- *
- * **`sketch_create` とは別verb**(`duocad/sketch.py` の `sketch_create` docstring参照)。
- * 貼る先の指し方(`target`)は `SKETCH_CREATE` と全く同じ2状態(基準平面 / 面は選択にある)
- * だが、`distance` という how を持つので Enter が要る —— 同じverb名に足すと
- * `sketch_create` 自体の即適用まで変わってしまうため、名前を分けてある。
+ * オフセット平面にスケッチを作る。貼る先の指し方は `SKETCH_CREATE` と同じだが `distance` を持つので Enter が要る。
+ * 別verbなのは、`sketch_create` に足すとその即適用まで変わるため(`duocad/sketch.py` の `sketch_create` docstring)。
  */
 export const SKETCH_CREATE_OFFSET: CommandDef<'sketch_create_offset'> = {
   id: 'sketch_create_offset',
@@ -290,7 +240,7 @@ export const SKETCH_CREATE_OFFSET: CommandDef<'sketch_create_offset'> = {
   buttonId: 'sketch-create-offset',
   preview: 'none',
   args: [
-    // **引数名は `target`**(`SKETCH_CREATE` と同じ理由。WSに載る名前は `base_plane`)。
+    // 引数名 `target` は `SKETCH_CREATE` と同じ理由。
     { kind: 'plane', name: 'target', label: '基準となる平面' },
     {
       kind: 'number',
@@ -298,7 +248,6 @@ export const SKETCH_CREATE_OFFSET: CommandDef<'sketch_create_offset'> = {
       label: 'オフセット距離',
       unit: 'mm',
       inputId: 'sketch-create-offset-distance',
-      // 0は基準平面と同じ位置になるだけで、禁止する理由が無い(`pattern`のdx/dyと同じ)。
       reject: () => null,
     },
   ],
@@ -314,49 +263,24 @@ export const SKETCH_CREATE_OFFSET: CommandDef<'sketch_create_offset'> = {
   },
 }
 
-/**
- * スケッチモードの**貼る先待ち**(`sketch-pending`)のツールバー。
- *
- * 2つ —— 「そのまま貼る」(`SKETCH_CREATE`)と「オフセット平面に貼る」
- * (`SKETCH_CREATE_OFFSET`)。`App.svelte` が `startCommandId` でどちらかを起動済みにして
- * 入るので、モードに入った次のクリック(基準平面 or 面)が最初の1手になる。
- */
+/** スケッチモードの貼る先待ち(`sketch-pending`)のツールバー。`App.svelte` が `startCommandId` でどちらかを起動済みにして入る。 */
 export const SKETCH_PENDING_COMMANDS: CommandDef[] = [SKETCH_CREATE, SKETCH_CREATE_OFFSET]
 
-/**
- * そのverbは**まだどのスケッチも開いていない状態で走る**か(= `sketch_id` を足さずに送るか)。
- *
- * 該当するのは `sketch_create` と `sketch_create_offset` の2つである —— どちらもスケッチを
- * 作るverbなので、開いていることを要求すると永久に起動できない。`features.ts` の
- * `needsSketchId` のちょうど裏返しで、**分類だけでは送り方が決まらない箇所**をこの述語で
- * 名指ししている。
- *
- * **列挙にしてある**(「引数に `plane` があるか」等で導出しない)ので、スケッチモードのverbを
- * 新しく足しても既定は変わらない —— 足したverbは今までどおり `sketch_id` が付く。
- */
+/** そのverbがまだどのスケッチも開いていない状態で走るか(`sketch_id` を足さずに送るか)。`needsSketchId`(features.ts)の裏返し。導出せず列挙なので、新しいスケッチverbの既定は `sketch_id` 付きのまま。 */
 export function runsOutsideSketch(verb: string): boolean {
   return verb === SKETCH_CREATE.id || verb === SKETCH_CREATE_OFFSET.id
 }
 
 /**
- * スケッチの点・辺の平行移動 / 回転 / 複製。
- *
- * 対象はコアの選択から取る(3Dで点や辺をクリック / 左ドラッグで囲む)。
- * `sketch_id` を取らない唯一のスケッチverbで、どのスケッチかは**選んだ参照が持っている**
- * (下の `runsWithoutSketchId`)。
- *
- * **複製するかどうかも、並進か回転かも人に選ばせる**(既定を置かない)。`move_body` と
- * 同じ理由。**軸は無い** —— スケッチは2Dなので回転軸は常に平面の法線で、自由度が無い
- * (コア側の判断。`duocad/verbs/move_sketch.py`)。中心は省略でき、既定はコアが決める
- * (対象の代表点の平均)。
+ * スケッチの点・辺の平行移動 / 回転 / 複製。対象はコアの選択から取る。
+ * どのスケッチかは選んだ参照が持つので `sketch_id` を取らない(`runsWithoutSketchId`)。
+ * 複製するか・並進か回転かは既定を置かず人に選ばせる(`move_body` と同じ理由)。回転軸は無い(2Dなので常に平面の法線。`duocad/verbs/move_sketch.py`)。中心は省略可で、既定はコアが決める(対象の代表点の平均)。
  */
 export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
   id: 'move_sketch_entities',
   label: '動かす',
   buttonId: 'sketch-move',
-  // **ローカル方式**。`move_body` と同じ発想で、選んだ図形の今の座標を
-  // dx/dy だけずらした姿を描く。対象は引数に無い(サーバがコアの選択から取る)ので、
-  // 幽霊の対象も `App.svelte` が同じ選択集合から導く(`ghostSources`)。
+  // 幽霊の対象は引数に無いので、`App.svelte` が同じ選択集合から導く(`ghostSources`)。
   preview: 'local',
   args: [
     {
@@ -369,7 +293,6 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
     },
     { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('sketch-move') },
     { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('sketch-move') },
-    // 片方の軸だけ動かすのは普通なので0は弾かない(両方0だけを `buildMove` が断る)。
     { kind: 'number', ...offsetArg('dx', 'sketch-move', () => null) },
     { kind: 'number', ...offsetArg('dy', 'sketch-move', () => null) },
     {
@@ -378,7 +301,6 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
       label: '回転中心の点',
       target: 'sketchPoint',
       buttonId: 'sketch-move-center',
-      // 省略時の中心は**コアが決める**(対象の代表点の平均)。
       optional: true,
       when: isRotateMode,
     },
@@ -390,9 +312,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
       axes: ['dx', 'dy'],
       zeroReason: '移動量が両方0',
       rotateArgs: (angle, given) => {
-        // **中心は参照のまま送る**(`move_body` の軸と同じ規律)。図形の点の座標を出す
-        // 規則(`point` 省略ならその種別の最初の点)はコアの `_point_of` が正で、
-        // 数値へ潰して送ると同じ規則がもう1つ増える。
+        // 中心は参照のまま送る: 点の座標を出す規則(`point` 省略なら最初の点)はコアの `_point_of` が正で、数値に潰すと規則が2つになる。
         const center = pickedRefOf(given.center_entity)
         return { ok: true, args: { mode: 'rotate', angle, ...(center === null ? {} : { center_entity: center }) } }
       },
@@ -401,18 +321,10 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
 }
 
 /**
- * スケッチ図形の鏡映複製。**軸は既存の線分を1本クリックして指す。**
- *
- * 対象はコアの選択から取り、軸は**共有選択集合を経由しない別チャンネル**
- * (`PickArgSpec`)で受ける。同じ集合に載せると `require_sketch_entities` が軸の線分まで
- * 対象に数える —— 軸は自分自身へ映るのでverb側は黙って外すが、画面が数えた対象の件数と
- * 結果が食い違う。
- *
- * **軸の既定は無い**(`optional` を付けていない)ので、対象が揃った時点で軸のピックが
- * その場で開く。それでも対象を選び直せるのは、**修飾キー付きのクリックがピックへ
- * 行かない**からである(`App.svelte` の `onSketchPick`)。
- *
- * **幽霊は無い**(`preview: 'none'`)。対象は何個でも選べるので確定はEnterである(`needsEnter`)。
+ * スケッチ図形の鏡映複製。軸は既存の線分を1本クリックして指す。
+ * 軸は共有選択集合を経由しない別チャンネル(`PickArgSpec`)で受ける: 載せると `require_sketch_entities` が軸の線分まで対象に数え、画面の件数と結果が食い違う。
+ * 軸の既定は無いので、対象が揃うと軸のピックが開く。対象を選び直せるのは修飾キー付きクリックがピックへ行かないから(`App.svelte` の `onSketchPick`)。
+ * 幽霊は出さない。対象は何個でも選べるので確定はEnter(`needsEnter`)。
  */
 export const MIRROR_SKETCH_ENTITIES: CommandDef<'mirror_sketch_entities'> = {
   id: 'mirror_sketch_entities',
@@ -439,8 +351,7 @@ export const MIRROR_SKETCH_ENTITIES: CommandDef<'mirror_sketch_entities'> = {
   build(values) {
     const targets = (values.target ?? []) as unknown[]
     if (targets.length === 0) return { ok: false, reason: '点も辺も選ばれていない' }
-    // **参照のまま送る**(`move_sketch_entities` の中心と同じ規律)。線分が乗る直線を
-    // 出す規則はコアの `mirror_sketch_entities` が正で、数値へ潰すと規則が2箇所になる。
+    // 参照のまま送る(`move_sketch_entities` の中心と同じ)。
     const axis = pickedRefOf(values.axis)
     if (axis === null) return { ok: false, reason: '鏡映軸の線分が指されていない' }
     return { ok: true, args: { axis } }
@@ -448,16 +359,10 @@ export const MIRROR_SKETCH_ENTITIES: CommandDef<'mirror_sketch_entities'> = {
 }
 
 /**
- * 選んだ複数の領域を、へこみに沿って包む**単一の領域線**を同じスケッチへ足す。
- *
- * **R(追従半径)と d(オフセット)の両方を打たせる**。どちらも空欄は 0 mm(`default: 0`)で、
- * R = d = 0 なら選択領域の和集合そのものになる。R は幅 2R 未満の隙間とへこみを埋め、d は正で外へ・
- * 負で内へ動かす。**必要な R・d の最小値は出さない** —— 結果が1つの領域にならないときは
- * コアが個数を添えて拒み、トーストで見える(確定時だけ)。入力中の幽霊はサーバが文書を変えずに
- * 計算し(`preview_envelope_regions`)、分裂している間は警告色で描く。
- *
- * 対象の領域は選択から取る(サーバが取るので引数に載せない)。どのスケッチかは選んだ領域が
- * 持っているので `sketch_id` は足さない(`runsWithoutSketchId`)。
+ * 選んだ複数の領域を、へこみに沿って包む単一の領域線を同じスケッチへ足す。
+ * R(追従半径)と d(オフセット)はどちらも既定 0 mm で、R = d = 0 なら選択領域の和集合そのもの。R は幅 2R 未満の隙間とへこみを埋め、d は正で外へ・負で内へ動かす。
+ * 結果が1つの領域にならないときはコアが個数を添えて拒む(確定時のみ、トーストで見える)。入力中の幽霊はサーバが文書を変えずに計算し(`preview_envelope_regions`)、分裂している間は警告色。
+ * 対象の領域は選択から取り、`sketch_id` は選んだ領域が持つ(`runsWithoutSketchId`)。
  */
 export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
   id: 'envelope_regions',
@@ -488,7 +393,6 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
       label: 'オフセット d',
       unit: 'mm',
       inputId: 'sketch-envelope-offset',
-      // 負は内へ縮める正当な値で、0 は「オフセットしない」。
       reject: () => null,
       default: 0,
     },
@@ -504,37 +408,20 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
   },
 }
 
-/**
- * そのverbは**スケッチモードの中で走るのに `sketch_id` を取らない**か。
- *
- * `runsOutsideSketch`(モードの外で走る)のちょうど半分だけ違う位置にいる ——
- * `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` はモードに入っていることを
- * 要求するが、どのスケッチかは選んだ参照(`{sketch, entity, point}` / `{sketch, index}`)が
- * 持っているので引数に要らない。
- *
- * **列挙にしてある**(引数の形から導出しない)ので、スケッチverbを新しく足しても既定は
- * 変わらない —— 足したverbは今までどおり `sketch_id` が付く。
- */
+/** そのverbがスケッチモードの中で走るのに `sketch_id` を取らないか(どのスケッチかは選んだ参照 `{sketch, entity, point}` / `{sketch, index}` が持つ)。`runsOutsideSketch` の隣。導出せず列挙。 */
 export function runsWithoutSketchId(verb: string): boolean {
   return verb === MOVE_SKETCH_ENTITIES.id || verb === MIRROR_SKETCH_ENTITIES.id || verb === ENVELOPE_REGIONS.id
 }
 
 /**
- * 何も描かないコマンド(スケッチモードの既定)。
- *
- * **これが既定でないと領域をクリックで選べない** —— 描くコマンドが常に点を待っていると、
- * 領域を狙ったクリックが図形の頂点になる。
- *
- * **確定が成功するとここへ戻る**(`CommandHost.svelte` の `commandSucceeded()`)。
- * 連続で同じ図形を描くには、確定のたびにツールバーのボタンを押し直す。
+ * 何も描かないコマンド(スケッチモードの既定)。既定でないと、描くコマンドが常に点を待ち、領域を狙ったクリックが図形の頂点になる。
+ * 確定が成功するとここへ戻る(`CommandHost.svelte` の `commandSucceeded()`)。
  */
 export const SELECT_IN_SKETCH: CommandDef = {
   id: 'select_in_sketch',
   label: '選ぶ',
   buttonId: 'sketch-select',
-  // **ボタンは出さない**。領域を直接クリックして選べるので、
-  // 領域クリックと重複するのでボタンは出さない。既定コマンド(`DEFAULT_SKETCH_COMMAND_ID`)としての
-  // 役割はそのまま——Escや確定後はここへ戻る(`CommandHost` のdocstring参照)。
+  // 領域を直接クリックして選べるのでボタンは出さない。Escや確定後はここへ戻る。
   hidden: true,
   preview: 'none',
   args: [],

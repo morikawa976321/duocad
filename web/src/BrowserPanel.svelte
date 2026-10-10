@@ -11,21 +11,13 @@
 
 <script lang="ts">
   /**
-   * ブラウザ — **ビューポートの左上に浮かぶ、モデルの中身の一覧**(Fusion 360の
-   * 「ブラウザ」に対応する場所)。
-   *
-   * **状態はコアが持つ**。ここは `bodies`(コアの `state.bodies` のうち `kind==="solid"`)と
-   * `sketches`(コアの `state.sketches`)を描くだけで、可視性(ボディもスケッチも)も
-   * ローカルには持たない。持っているのは**折りたたみの開閉だけ**で、これは見た目であって
-   * モデルの状態ではない。
-   *
-   * **今は「モデル」と「スケッチ」の2区分をフラットに並べるだけ**。入れ子のツリー化と
-   * 「コンストラクション」の追加は将来の発展であり、今はその2区分の器だけを用意してある
-   * (区分の見出しを先に立てておかないと、後からツリーにするときに一覧の作り直しになる)。
-   *
-   * **ビューポートの寸法には触らない**。`position: absolute` で `.stage` の上に浮くので
-   * フローから外れており、開閉してもカメラのアスペクトは変わらない(`Toast.svelte` と同じ
-   * 作り。`styles.css` の「ビューポートのサイズを変えるのは .viewport だけ」を守るため)。
+   * ブラウザ — ビューポート左上に浮かぶ、モデルの中身の一覧(Fusion 360の「ブラウザ」に対応)。
+   * 状態はコアが持つ。`bodies`(`state.bodies` のうち `kind==="solid"`)と `sketches`(`state.sketches`)を描くだけで、
+   * 可視性もローカルに持たない。持つのは折りたたみの開閉だけ(見た目)。
+   * 今は「モデル」と「スケッチ」の2区分をフラットに並べるだけ(入れ子のツリー化と「コンストラクション」は将来。
+   * 見出しを先に立てておかないと、後からツリーにするとき一覧の作り直しになる)。
+   * `position: absolute` で `.stage` の上に浮くので、開閉してもカメラのアスペクトは変わらない
+   * (`Toast.svelte` と同じ。`styles.css` の「ビューポートのサイズを変えるのは .viewport だけ」)。
    */
   import type { BasePlaneName, BodyMeta } from './session'
   import type { SectionState } from './viewport'
@@ -52,48 +44,40 @@
     onSectionPosition,
     onSectionInvert,
   }: {
-    /** ユーザーに見せるボディ(常に `kind==="solid"`)。 */
     bodies: BodyMeta[]
     sketches: SketchState[]
-    /** 編集中のスケッチ(無ければ null)。行に「編集中」の印を出すのに使う。 */
+    /** 編集中のスケッチ(無ければ null)。 */
     activeSketchId: string | null
-    /** 常設の原点ギズモ(原点・3軸・3平面)が出ているか。**文書の状態ではなく画面設定**
-     * (`viewSettings.ts` がlocalStorageへ持つ)なので、ボディと違い可視性はここが持つ
-     * 値をそのまま映すだけでよい。 */
+    /** 常設の原点ギズモが出ているか。文書の状態ではなく画面設定(`viewSettings.ts` が localStorage へ持つ)。 */
     originVisible: boolean
     onToggle: (bodyId: string, visible: boolean) => void
     onShowAll: () => void
     onHideAll: () => void
-    /** 行のクリックでそのスケッチに入る(再開)。**隠したスケッチも入れる**(入る側が表示へ戻す)。 */
+    /** 隠したスケッチも入れる(入る側が表示へ戻す)。 */
     onEnterSketch: (sketchId: string) => void
-    /** スケッチの表示/非表示(ボディの `onToggle` と同じ形。コアの `set_sketch_visible`)。 */
     onToggleSketch: (sketchId: string, visible: boolean) => void
     onShowAllSketches: () => void
     onHideAllSketches: () => void
-    /** 原点ギズモの表示/非表示(7項目まとめて1つのトグル。本人指定)。 */
     onToggleOrigin: (visible: boolean) => void
-    /** 行の名前の確定(コアの `rename`。ボディもスケッチも同じ口)。 */
     onRename: (target: string, name: string) => void
-    /** 行の ✕(コアの `delete_items`)。**確認は挟まない** —— 1回の Ctrl+Z で戻る。 */
+    /** 確認は挟まない: 1回の Ctrl+Z で戻る。 */
     onDeleteBody: (bodyId: string) => void
     onDeleteSketch: (sketchId: string) => void
     /** 断面表示(issue #6)。原点と同じく画面側の状態で、App が持つ。 */
     section: SectionState
     onSectionToggle: (on: boolean) => void
     onSectionPlane: (plane: BasePlaneName) => void
-    /** 位置の欄の確定。数式のまま渡す(評価と失敗のトーストは App)。受け付けたら true。 */
+    /** 数式のまま渡す(評価と失敗のトーストは App)。受け付けたら true。 */
     onSectionPosition: (text: string) => boolean
     onSectionInvert: (inverted: boolean) => void
   } = $props()
 
   const SECTION_PLANES: readonly BasePlaneName[] = ['XY', 'XZ', 'YZ']
 
-  /** 位置の欄のラベルは平面の法線軸。 */
   function sectionAxis(plane: BasePlaneName): string {
     return plane === 'XY' ? 'Z' : plane === 'XZ' ? 'Y' : 'X'
   }
 
-  /** ドラッグの端数は見せない(打った値はそのまま残る)。 */
   function formatPosition(value: number): string {
     return String(Number(value.toFixed(2)))
   }
@@ -101,7 +85,6 @@
   function commitPosition(event: Event): void {
     const input = event.target as HTMLInputElement
     // 同じ値に評価される式(`10/2` → 5 のまま)では Svelte が欄を書き直さないので、自分で戻す。
-    // 失敗したら打った式を残す(直して打ち直せるように)。
     if (onSectionPosition(input.value)) input.value = formatPosition(section.position)
   }
 
@@ -109,12 +92,10 @@
     if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
   }
 
-  /** パネル全体の折りたたみ。ビューポートに重なるので、畳めないと形が隠れる。 */
   let open = $state(true)
 
-  /** 名前を書き換えている行の ID(無ければ null)。一度に1行だけ。**下書きは別の状態に持つ** ——
-   *  `{id, draft}` を1つにして `bind:value={draft}` にすると、欄を閉じた瞬間に
-   *  消えかけの欄の束縛が null を読んで TypeError を投げる(実機で確認)。 */
+  /** 名前を書き換えている行の ID。下書きは別の状態に持つ: `{id, draft}` を1つにして `bind:value={draft}` にすると、
+   *  欄を閉じた瞬間に消えかけの欄の束縛が null を読んで TypeError を投げる(実機で確認)。 */
   let renamingId = $state<string | null>(null)
   let draft = $state('')
 
@@ -123,10 +104,7 @@
     renamingId = id
   }
 
-  /** 確定。**空・今と同じなら送らずに閉じる**(何も変えない行をログに積まない)。それ以外の
-   *  不正(前後の空白・改行)はコアが断り、エラーの札に出る。
-   *
-   *  **`id` で自分の行かを確かめる** —— Enter で閉じた欄の blur は DOM から外れるときに遅れて届き、
+  /** 空・今と同じなら送らずに閉じる。`id` で自分の行かを確かめる: Enter で閉じた欄の blur は DOM から外れるときに遅れて届き、
    *  その間に別の行の ✎ が押されていると、相手の行の下書きを自分の名前で確定してしまう。 */
   function commitRename(id: string, current: string): void {
     if (renamingId !== id) return
@@ -135,8 +113,7 @@
     onRename(id, draft)
   }
 
-  /** **Esc は窓まで届かせない** —— `CommandHost` の窓の keydown が入力欄の Esc も拾って、
-   *  起動中のコマンドまで中断する。 */
+  /** Esc は窓まで届かせない: `CommandHost` の窓の keydown が入力欄の Esc も拾って、起動中のコマンドまで中断する。 */
   function renameKey(event: KeyboardEvent, id: string, current: string): void {
     if (event.key === 'Enter') commitRename(id, current)
     else if (event.key === 'Escape') {
@@ -145,7 +122,6 @@
     }
   }
 
-  /** 開いた欄へ入力を移す(Svelte の action)。 */
   function focusSelect(input: HTMLInputElement): void {
     input.focus()
     input.select()
@@ -176,8 +152,6 @@
 
   {#if open}
     <div class="browser-body">
-      <!-- 区分0: 原点(issue #8)。原点・3軸・3平面の7項目を1つのトグルでまとめて出し入れする
-           (本人指定「7つまとめて」) -->
       <div class="group">
         <div class="group-head">
           <span class="group-name">原点</span>
@@ -192,8 +166,6 @@
         </div>
       </div>
 
-      <!-- 区分0b: 断面(issue #6)。ON のあいだだけ平面・位置・反転の操作子を出す。
-           状態は App が持つ画面側のもので、文書には載らない。 -->
       <div class="group">
         <div class="group-head">
           <span class="group-name">断面</span>
@@ -247,7 +219,6 @@
         {/if}
       </div>
 
-      <!-- 区分1: モデル(ボディ)。可視性の切り替えはここが持つ -->
       <div class="group">
         <div class="group-head">
           <span class="group-name">モデル</span>
@@ -300,8 +271,6 @@
         </ul>
       </div>
 
-      <!-- 区分2: スケッチ。名前のクリックでそのスケッチに入る。表示/非表示のトグルは
-           ボディの行と同じ `input.visible-toggle`(issue #7)。 -->
       <div class="group">
         <div class="group-head">
           <span class="group-name">スケッチ</span>
@@ -323,8 +292,7 @@
               class:hidden-row={!sketch.visible}
               data-sketch-id={sketch.sketch_id}
             >
-              <!-- **編集中のスケッチは隠せない**(トグルを無効にする)。描いている最中に
-                   自分の図形が消えると、次のクリックが何を指すか分からなくなる。 -->
+              <!-- 編集中のスケッチは隠せない(トグルを無効にする): 描いている最中に自分の図形が消えると、次のクリックが何を指すか分からなくなる。 -->
               <input
                 type="checkbox"
                 class="visible-toggle"
@@ -383,24 +351,22 @@
 </aside>
 
 <style>
-  /* ビューポートの左上に浮かせる。`.stage` が位置の基準(App.svelte で position:relative)。
-     高さは中身なりだが上限を持つ —— 27部品を並べると画面の下まで届いてしまう。 */
+  /* `.stage` が位置の基準(App.svelte で position:relative)。 */
   .browser-panel {
     position: absolute;
     top: calc(10px + var(--toolbar-overlay-h, 0px));
     left: 10px;
     z-index: 5;
-    /* 幅は `styles.css` の `:root` が持つ(設定ダイアログの位置がこれを見るため)。 */
+    /* 幅は `styles.css` の `:root` が持つ(設定ダイアログの位置がこれを見る)。 */
     width: var(--browser-panel-w);
-    /* 下端は、同じ列の下に浮くパネル(`OptimizePanel.svelte` の `--browser-bottom-reserve`)の手前で
-       止める。上端は verb の引数行のぶん下がっているので、そのぶんも引く。 */
+    /* 下端は同じ列の下に浮くパネル(`OptimizePanel.svelte` の `--browser-bottom-reserve`)の手前で止める。
+       上端は verb の引数行のぶん下がっているので、そのぶんも引く。 */
     max-height: calc(100% - 20px - var(--toolbar-overlay-h, 0px) - var(--browser-bottom-reserve, 0px));
     display: flex;
     flex-direction: column;
     min-height: 0;
     background: color-mix(in oklab, var(--panel) 88%, transparent);
     border: 1px solid var(--line);
-    /* 浮いているものが背景と地続きに見えないように、影で1枚持ち上げる */
     box-shadow: 0 6px 18px oklch(0% 0 0 / 0.45);
   }
 
@@ -432,9 +398,8 @@
   .group {
     display: flex;
     flex-direction: column;
-    /* **縮ませない**。縦のflexである `.browser-body` の中では既定の `flex-shrink: 1` が効き、
-       区分が中身より低く潰れる。潰れてもリストは隠れず枠の外へ溢れるので、下の区分の
-       見出し(「スケッチ」)と行が重なって見える。スクロールは `.browser-body` が1つ持つ。 */
+    /* 縮ませない: 縦のflexである `.browser-body` の中では既定の `flex-shrink: 1` が効いて区分が中身より低く潰れ、
+       リストが枠の外へ溢れて下の区分と重なる。スクロールは `.browser-body` が1つ持つ。 */
     flex: 0 0 auto;
   }
 
@@ -532,16 +497,12 @@
     cursor: pointer;
   }
 
-  /* 面数・図形数は**本文に添える情報**なので `--fs-meta`(styles.css)。
-     名前と同じ列に2つの大きさが並ぶのがここでの正しい使い方。 */
   .parts-count,
   .sketch-count {
     flex: 0 0 auto;
     font-size: var(--fs-meta);
   }
 
-  /* 行の ✎ / ✕ は**指したときだけ出す**(常に出すと名前の幅が削られ、27部品の一覧が読みにくい)。
-     `visibility` で隠すので幅は常に取っておく —— 出し入れで名前が左右に揺れない。 */
   .row-action {
     flex: 0 0 auto;
     padding: 0 4px;
@@ -559,7 +520,6 @@
     min-width: 0;
   }
 
-  /* 大きさは styles.css の `.empty` が持つ(--fs-meta)。 */
   .empty {
     padding: 3px 8px;
   }

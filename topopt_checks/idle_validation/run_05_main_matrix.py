@@ -1,18 +1,18 @@
 """タスク5・主要行列: 4方式(20%削除・5%削除・適応歩幅+復帰・再配置)を、dilution_small・
 path_small(04a認定 2.0mm/3000N/6.0mm)それぞれについて 荷重/最小幅/解像度/初期形状 を振って比較する。
 
-**baseline再利用(本スクリプトの`_cases()`は対象外、05_SYNTHETIC.md 1節の文脈説明としての引用)**:
+**baseline再利用(本スクリプトの`_cases()`は対象外、10_SYNTHESIS 付録D(旧 05_SYNTHETIC 1節)の文脈説明としての引用)**:
 dilution 300N/2.0mm/**4.0mm**幅(task4が既に実測)は`04_searches_compact.json`にあり、本スクリプトは
-これを再実行しない(4.0mm/300Nの新規FEMは`run_05_ablation.py`側が行う。=05_SYNTHETIC.md 5節
+これを再実行しない(4.0mm/300Nの新規FEMは`run_05_ablation.py`側が行う。=10_SYNTHESIS 付録D(旧 05_SYNTHETIC 5節)
 アブレーションが使うbaselineと同じ4.0mm幅)。**本スクリプトが実際に新規実行するdilution baseline
 (`dilution_base_w6`ケース、`_cases()`が定義する)は幅6.0mmで、task4の4.0mmとは別条件**(幅スイープの
-起点をtask4と揃えず6.0mmにしたため——05_SYNTHETIC.md 1節参照)。path側は**04aが2.0mm解像度を
+起点をtask4と揃えず6.0mmにしたため——10_SYNTHESIS 付録D(旧 05_SYNTHETIC 1節)参照)。path側は**04aが2.0mm解像度を
 認定条件としている**(§04A後続への契約①)ため、
 task4の2.5mm実測とは別条件として新規に2.0mm/6.0mm/3000Nを実行する(=本スクリプトの `path_baseline`
 ケース)。
 
 条件は `synthetic_matrix_support.py` の `DILUTION_BASELINE`/`PATH_BASELINE` を基点に、
-load/width/resolutionを1軸ずつ振る(one-factor-at-a-time。01_PROTOCOL.md 3節「挟み込み比較」と
+load/width/resolutionを1軸ずつ振る(one-factor-at-a-time。10_SYNTHESIS 付録A(旧 01_PROTOCOL 3節)「挟み込み比較」と
 同じ考え方)。初期形状(warm-start)は別スクリプト `run_05_initshape.py` で扱う(adaptive/reallocationのみ、
 本スクリプトが書く`res3.0_w6`ケースの最良形状マスクに依存する)。
 

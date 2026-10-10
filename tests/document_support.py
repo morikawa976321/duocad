@@ -29,10 +29,7 @@ def document_with_box() -> Document:
 
 
 def new_box(doc: Document, width: float = 20.0, depth: float | None = None, height: float | None = None) -> str:
-    """スケッチ(長方形)→押し出しで直方体を1つ作り body_id を返す。`depth`/`height` の既定は `width`。
-
-    長方形の名前つきの値は追加順に `d1`=x / `d2`=y / `d3`=width / `d4`=height。
-    """
+    """スケッチ(長方形)→押し出しで直方体を1つ作り body_id を返す。`depth`/`height` の既定は `width`。"""
     sketch_id = sketch_create(doc, base_plane("XY"))
     add_rectangle(doc, sketch_id, (0.0, 0.0), width, width if depth is None else depth)
     return extrude(doc, [region_ref(sketch_id, 1)], width if height is None else height, mode="join").args["body_id"]
@@ -106,8 +103,5 @@ def hole_axes(shape) -> list:
 
 
 def corner_set(params: dict) -> list:
-    """長方形の4隅を順序に依らない集合として比べられる形へ。
-
-    **`angle` と基準の角の組は一意ではない**(同じ4隅を張る取り方が複数ある)ので、値そのものを期待値にしない。
-    """
+    """長方形の4隅を順序に依らない集合として比べられる形へ。"""
     return sorted((round(u, 9), round(v, 9)) for u, v in kernel_sketch.rectangle_corners(params))

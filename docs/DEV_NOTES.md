@@ -4,164 +4,127 @@
 
 ## 環境
 
-- **数値計算（numpy 2.4.6 / scipy 1.17.1）は `.venv` にしか無い。** 既定の `python`（3.14）には無く、matplotlib は
-  どの venv にも無い（図が要るなら標準ライブラリだけで PNG/SVG を書く）。実行は `.\.venv\Scripts\python.exe`。
-- **`.venv` は `uv sync --frozen` で `uv.lock` から作り直せる。** 依存は `uv add` で `pyproject.toml` と
-  `uv.lock` に入れる。`uv pip install` で手入れしたものは作り直すと消え、そのときは収集エラー（`No module named ...`）で初めて気づく。
-- **git worktree で作業するときは `.venv` を本体からジャンクションで引く**（2026-09-16 実測）。`web/scripts/server.mjs` は
-  `REPO_ROOT/.venv/Scripts/python.exe` を決め打ちなので、無いと実機 smoke が「venvのpythonが無い」で1本も走らない。
-  `New-Item -ItemType Junction -Path <worktree>\.venv -Target C:\Users\tm976\mf\duocad\.venv`（管理者権限不要。git は
-  `.venv` を無視するので混ざらない）。`python -m pytest` は cwd の `duocad` を先に読むのでワークツリー側のコードで走る。
-  `web/node_modules` はワークツリーごとに `npm ci`。ブラウザペインの `preview_start` は本体の `launch.json` しか読まないので、
-  ワークツリーの画面を見るときは Python サーバを立てて `http://127.0.0.1:8766/`（`web/dist`）を開く。
-- **同じリポジトリ内でも行末はファイルごとに違う。** `core.autocrlf=true` で git の blob は LF だが、作業ツリーは
-  ツールが直接書いたファイル（`web/src/viewport.ts` 等）が LF、checkout を経たファイル（`App.svelte` / `viewCube.ts` 等）が
-  CRLF。`git diff` も `git status` も差分を出さないので目視では分からない。踏んだ形:
-  複数行の完全一致置換が0件で落ちる／変異検査で置換が0件のまま「変異を入れても緑」＝「テストが噛んでいない」という
-  **逆の結論**が出る／`git checkout -- <path>` が1ファイルだけ CRLF で書き戻して `line == '}'` の完全一致が `'}\r'` で外れる。
-  守り方: 置換は**必ず件数を assert**（`assert s.count(old) == 1`）／変異チェックで緑が出たらテストを疑う前に
-  `git diff` で変異が入ったかを見る／検出は `python -c "d=open(p,'rb').read(); print(d.count(b'\r\n'), d.count(b'\n'))"`
-  （Git Bash の `grep -c $'\r$'` は当てにならない）／`newline="\n"` で保存すると作業ツリーだけ LF になり並行セッションの
-  差分表示が汚れる。
-- **ソースに生の NUL バイトを書くと git がバイナリ扱いにする**（`viewport.ts` に面の強調キーの区切りとして2個入っていた。
-  実行は正常）。`git diff` / `blame` が効かず、`core.autocrlf` の正規化も止まる。最も churn の激しいファイルで5日以上
-  差分が読めない状態だった。Unicode エスケープへ置き換える。見つけ方は `git ls-files --eol` に `i/-text` が出るテキストファイル、
-  `git diff --stat` と `--ignore-all-space --stat` が桁違い。
+- **数値計算（numpy / scipy）は `.venv` にしか無い。** 既定の `python`（3.14）には無く、matplotlib はどの venv にも無い
+  （図が要るなら標準ライブラリだけで PNG/SVG を書く）。実行は `.\.venv\Scripts\python.exe`。
+- **`.venv` は `uv sync --frozen` で `uv.lock` から作り直せる。** 依存は `uv add` で入れる。`uv pip install` で手入れした
+  ものは作り直すと消え、収集エラー（`No module named ...`）で初めて気づく。
+- **同じリポジトリ内でも行末はファイルごとに違う。** `core.autocrlf=true` で blob は LF だが、作業ツリーはツールが直接書いた
+  ファイルが LF、checkout を経たファイルが CRLF。`git diff` も `git status` も差分を出さない。踏んだ形: 複数行の完全一致置換が
+  0件で落ちる／変異検査で置換が0件のまま「変異を入れても緑」＝「テストが噛んでいない」という**逆の結論**が出る／
+  `git checkout -- <path>` が1ファイルだけ CRLF で書き戻して `line == '}'` の完全一致が `'}\r'` で外れる。
+  守り方: 置換は**必ず件数を assert**／変異チェックで緑が出たらテストを疑う前に `git diff` で変異が入ったかを見る／検出は
+  `python -c "d=open(p,'rb').read(); print(d.count(b'\r\n'), d.count(b'\n'))"`（Git Bash の `grep -c $'\r$'` は当てにならない）／
+  `newline="\n"` で保存すると作業ツリーだけ LF になり並行セッションの差分表示が汚れる。
+- **ソースに生の NUL バイトを書くと git がバイナリ扱いにする**（`git diff` / `blame` が効かず `core.autocrlf` の正規化も止まる）。
+  Unicode エスケープにする。見つけ方は `git ls-files --eol` に `i/-text` が出るテキストファイル、`git diff --stat` と
+  `--ignore-all-space --stat` が桁違い。
 - **GitHub リモートは private で公開しない**（[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)）。
 
 ## 機械的な一括編集の道具
 
-- **行番号指定でコメント/docstring を一括置換する道具には4つ要る**（83ファイル分で全部踏んだ）: (1) 行末を保存する
-  （バイト列で `split(b"\n")` して `\r` を行の一部として運ぶ。往復するだけで全行が差分になる）(2) docstring の閉じ引用符を
-  範囲に含める（1行足りないと `unterminated triple-quoted string`。3回踏んだ）(3) 書き込み**前**に `ast.parse`
-  (4) 置換先の1行目（できれば最終行も）を照合する（1行ずれても構文が通り、同じコメントが2行重複する。実際に2箇所作った）。
-- **Python の関数を機械的に消すときは正規表現ではなく `ast`。** 「`def` 行から次の `def` まで」＋「直前が `@` の間だけ遡る」
-  は複数行デコレータ（`@pytest.mark.parametrize(` … `)`）で `)` の手前で止まり、残ったデコレータが次の関数に付く
-  （構文は通るので気づけない）。`decorator_list` の最小 `lineno` から `end_lineno` まで。壊れた3ファイルだけでなく
-  同じ手口で触った14ファイル全部を戻してやり直した。
-- **既存呼び出しを新ラッパーへ一括置換すると、ラッパー内の元関数呼び出しまで置換されて無限相互再帰になる**
-  （`dragFovTo` を包む `setFovTo` で 7＋1＝8 件。件数を数えて assert していたのに数が合ったのは巻き込んだから）。
-  非同期だと例外もタイムアウトも出ず低い CPU で回り続ける（約30分溶かした）。置換後にラッパーの本体を目で読む。
-  無時間で止まったら相互再帰を先に疑う。
-- **引数を1つ減らすリファクタは、その引数をキーにしていたキャッシュ・重複送信よけ・デバウンス判定を黙って無効化する。**
-  フィレットの引数から辺の集合を落としたら、プレビュー再送判定が `JSON.stringify([verb, args])` を印にしていたため
-  辺を足しても印が変わらなくなった。消す前にその名前が (1) キャッシュキー (2) 重複送信よけ (3) 再計算トリガ に
-  使われていないか grep する。代わりに新しい真実源の指紋（選択の参照キー）を印へ足す（`CommandHost` の `selectionPrint`）。
+- **行番号指定でコメント/docstring を一括置換する道具には4つ要る**: (1) 行末を保存する（バイト列で `split(b"\n")` して `\r` を
+  行の一部として運ぶ）(2) docstring の閉じ引用符を範囲に含める (3) 書き込み**前**に `ast.parse` (4) 置換先の1行目（できれば
+  最終行も）を照合する（1行ずれても構文が通り、同じコメントが2行重複する）。
+- **Python の関数を機械的に消すときは正規表現ではなく `ast`。** 複数行デコレータ（`@pytest.mark.parametrize(` … `)`）で
+  `)` の手前で止まり、残ったデコレータが次の関数に付く（構文は通る）。`decorator_list` の最小 `lineno` から `end_lineno` まで。
+- **既存呼び出しを新ラッパーへ一括置換すると、ラッパー内の元関数呼び出しまで置換されて無限相互再帰になる**（件数を assert
+  していても巻き込んだ分で数が合う）。非同期だと例外もタイムアウトも出ず低 CPU で回り続ける。置換後にラッパー本体を目で読む。
+- **引数を1つ減らすリファクタは、その引数をキーにしていたキャッシュ・重複送信よけ・デバウンス判定を黙って無効化する**
+  （フィレットの引数から辺の集合を落としたら、プレビュー再送判定が `JSON.stringify([verb, args])` を印にしていたため辺を
+  足しても印が変わらなくなった）。消す前に (1) キャッシュキー (2) 重複送信よけ (3) 再計算トリガ への使用を grep し、
+  代わりに新しい真実源の指紋を印へ足す（`CommandHost` の `selectionPrint`）。
 - **クラスを割って可変リストを共有させるとき、`x, self.x = self.x, []` の束ね直しが共有を静かに切る**
-  （`Session.take_warnings()`。中身を `clear()` する）。分割と同時に「共有が続いていること」を見る検査を足す。
-- **plan-then-write は同じオブジェクトへの複数の計画を併合しないと最後だけが勝つ**（`move_sketch_entities` で線分の
-  両端を選ぶと片方しか動かなかった。計画の単位は入力の単位ではなく書き込みの単位）。「2つ動かして両方動く」テストが要る ——
-  1つだけ動かすテストは何本あっても通り、片方が偶然同じ値になる配置も素通りする。
-- **「既定を置き換える引数」に「既定へ追加したいもの」を相乗りさせない**（`fixed_dofs` に内部で計算した拘束を代入したら、
-  `void_mask` だけ渡した呼び出しで既定の拘束がまるごと消えた。`extra_fixed_dofs` として別の引数にする）。
+  （`Session.take_warnings()`。中身を `clear()` する）。「共有が続いていること」を見る検査を足す。
+- **plan-then-write は同じオブジェクトへの複数の計画を併合しないと最後だけが勝つ**（`move_sketch_entities` で線分の両端を
+  選ぶと片方しか動かなかった）。計画の単位は書き込みの単位。「2つ動かして両方動く」テストが要る。
+- **「既定を置き換える引数」に「既定へ追加したいもの」を相乗りさせない**（`fixed_dofs` に内部計算の拘束を代入したら既定の
+  拘束がまるごと消えた。`extra_fixed_dofs` として別の引数にする）。
 
 ## コメントと文書の減量
 
-規律は [../CLAUDE.md](../CLAUDE.md)。減量の判定基準:
+規律は [../CLAUDE.md](../CLAUDE.md)。判定基準:
 
-- **日付＋実測が同じ括弧に同居するとき、日付だけを消し数値は残す。** 「実測だから残す」を理由に日付まで保護しない。
-  逆に「日付があるから経緯」と数値ごと消すのも誤り。発見者・発見日の枕詞も、後ろの再現手順だけ残せば自立する。
-- **経緯のパラグラフを削る前に、中に埋まっている参照（`[[…]]` / `engine \`…\``）を grep する。** パラグラフごと
-  「経緯だから消す」と判断すると巻き添えで消える。context-engine のノートは各リポジトリの文書へ移設済みなので、
-  コード中の `[[…]]` 参照の行き先は `docs/` のこの文書群になる。
-- **「複数ファイルへ同じ理屈を書く重複」は同一ファイル内でも起きる。** `viewport.ts` で同じ罠の説明が4箇所に全文重複していた。
-  宣言部に全文を残し、他は「詳細はそちら参照」に圧縮する。1,500行超のファイルでは減量の完了条件に
-  「同一ファイル内の重複説明が無いこと」を含める。
-- **減量は流入を変えなければ戻る**（実測）: 減量5コミットで 32.9%→29.3%（3.6pt）、13日後に 31.1%（1.8pt 戻り）。
-  追加された非空行のコメント密度は減量前と同じだった。ファイルサイズも片道（`viewport.ts` 388→5,155行、
-  `App.svelte` 950→2,461、`kernel.py` 298→2,052。一度も減っていない）。肥大の主因は（2026-10-09 に廃止した）無人実行 taskbox の drain の積み重ね
-  （各 runner が経緯・正当化を書き残す癖）。**AI にコードを書かせるなら、コメント規律は最初からリポジトリ
-  規約（CLAUDE.md）に入れておかないと単調増加する。**
-- **文書は「行」でなく「節」の単位で増える。** `docs/TOPOPT.md` は削減タスクで −173行の9時間後に機能タスク1本が
-  +397行（機能タスク1本＝日付付きの新規節1つ）。反復する節（実測値・基準線・案N）は表に畳み「新見出しを立てず表の末尾に行を足す」
-  と契約に書く。
-- **正を宣言してもコピーは腐る。** README が正を宣言しながら再掲していた4組のうち2組がコピー側だけ、あるいは連鎖ごと
-  誤っていた。重複を見つけたら正を選ぶだけでなく**コピーを消して参照に置き換える**。
-- **一括掃除の削減率を次回に当てない。** 初回（規律が無かった時代の在庫）の 14.7% を掛けた見積もり −3,000行に対し
-  実績 −232行（13倍の過大）。規律がある状態で書かれたコードは最初から経緯の密度が低い。**行数を成果の指標にしていたら
-  「失敗」と誤判定していた**（実質の完了条件は全部満たされていた）。
-- 率・行数の門は作らない（本人 2026-09-05「価値あるコメントが増える類のタスクもある」）。門を作ると実測値の1行メモが
-  経緯の語りより先に消える。`tools/measure_bloat.py` は報告専用。
+- **日付＋実測が同じ括弧に同居するとき、日付だけを消し数値は残す。** 逆に数値ごと消すのも誤り。発見者・発見日の枕詞も、
+  後ろの再現手順だけ残せば自立する。
+- **経緯のパラグラフを削る前に、中に埋まっている参照（`[[…]]` / `engine \`…\``）を grep する。** context-engine のノートは
+  各リポジトリの文書へ移設済みで、コード中の `[[…]]` 参照の行き先は `docs/` の文書群。
+- **「複数ファイルへ同じ理屈を書く重複」は同一ファイル内でも起きる。** 宣言部に全文を残し、他は参照に圧縮する。
+  1,500行超のファイルでは減量の完了条件に「同一ファイル内の重複説明が無いこと」を含める。
+- **減量は流入を変えなければ戻る**（実測: 減量5コミットで 32.9%→29.3%、13日後に 31.1%）。ファイルサイズも片道
+  （`viewport.ts` 388→5,155行、`App.svelte` 950→2,461、`kernel.py` 298→2,052）。肥大の主因は無人実行 taskbox の積み重ね
+  （各 runner が経緯・正当化を書き残す癖）。**AI にコードを書かせるならコメント規律は最初からリポジトリ規約（CLAUDE.md）に
+  入れておく。**
+- **文書は「行」でなく「節」の単位で増える**（`docs/TOPOPT.md` は −173行の9時間後に機能タスク1本が +397行）。反復する節
+  （実測値・基準線・案N）は表に畳み「新見出しを立てず表の末尾に行を足す」と契約に書く。
+- **正を宣言してもコピーは腐る。** 重複を見つけたら正を選ぶだけでなく**コピーを消して参照に置き換える**。
+- **一括掃除の削減率を次回に当てない**（初回の 14.7% を掛けた見積もり −3,000行に対し実績 −232行）。**行数を成果の指標に
+  しない。**
+- 率・行数の門は作らない（本人 2026-09-05「価値あるコメントが増える類のタスクもある」）。門を作ると実測値の1行メモが経緯の
+  語りより先に消える。`tools/measure_bloat.py` は報告専用。
 
 ## 測定記録（`output/`）の書き方
 
 **リポジトリ直下の `output/` は git 管理外**（`.gitignore` の `/output/`。`duocad/topopt/output/` の検査成果物は追跡する）。
-文書は結論・表・再現コマンドを持ち、生データは持たない —— 生データは再実行で作り直す。
-PR #20 で 85 ファイル（+29,905 行）を追跡から外した。それまでは `optimization_runs/`・`min_width/` などを
-個別に除外していたため、同じ調査でも一部だけが載る不統一が起きていた（docs が根拠に挙げる実験ディレクトリの
-大半は元々未追跡だった）。**文書に貼る図は `docs/images/` へ置く**（`output/` に置くと文書だけ残って図が消える）。
+文書は結論・表・再現コマンドを持ち、生データは持たない —— 生データは再実行で作り直す。**文書に貼る図は `docs/images/` へ置く**
+（`output/` に置くと文書だけ残って図が消える）。
 
 `topopt_checks/` の記録は **`_record.py` の `dumps` / `write` で書く**（`json.dumps(..., indent=N)` を直接使わない）。
-コンパクト形が600文字に収まる辞書・配列を1行にまとめるので、試行1件が1行になり差分が試行単位で読める。
+600文字に収まる辞書・配列を1行にまとめるので、試行1件が1行になり差分が試行単位で読める。`indent=2` だと追跡中の測定記録22件が
+174,841 行、コンパクト形で 13,343 行（−92.4%）で、記録の 98〜99% は `search.diagnostics.reduction.steps` と `search.history` の
+2配列。
 
-- **`indent=2` の費用は行数**（2026-09-21 実測）。git 管理下の測定記録22件で **174,841 → 13,343 行（−92.4%）**、
-  5.22 → 3.42 MB（−34.4%）。`json.load` した結果は一致する（空白だけが違う）。PR #20 では output/ の記録が
-  +174,841 行で、コード・文書の実質（+17,202 / −45,513）を差分の 91% で埋めていた。
-- **記録の 98〜99% は `search.diagnostics.reduction.steps` と `search.history` の2配列**。どちらも1試行1レコードなので、
-  レコードを1行にすれば全体が縮む。
-- **まだ外していない重複**（2026-09-21 実測。外せばコンパクト形で −37%）: `steps[].step_ratio` は
-  `gap_step_ratio × multiplier`（記録3,982件すべてで一致）、`safety_factor_before` / `material_mm3_before` は
-  直前の採用 step の値（3,967/3,967 件で一致）、`trials` は常に長さ1でリポジトリ内のどこからも読まれていない、
-  `history[].checks` は `steps[].failed` と同じ情報（history のバイトの 44.7%）。
-- **同じ結果しか持たない実行を別ファイルでコミットしない。** `patience-16` と `patience-unlimited` は秒と記録した
-  パラメータ2個以外まったく同一（差分1,010個のうち1,008個が秒。`PLAN_BINARY_STRESS_SEARCH.md` §12.7 自身が
-  「完全に同じ試行列」と書いている）。`B-*` と `B-*-recheck` の3組も同様。
+- **同じ結果しか持たない実行を別ファイルでコミットしない**（`patience-16` と `patience-unlimited` は秒と記録したパラメータ
+  以外まったく同一。`B-*` と `B-*-recheck` も同様）。
+- 外せる重複（外せばコンパクト形で −37%）: `steps[].step_ratio`（= `gap_step_ratio × multiplier`）、
+  `safety_factor_before` / `material_mm3_before`（直前の採用 step の値）、常に長さ1で誰も読まない `trials`、
+  `steps[].failed` と同じ情報の `history[].checks`。
 
 ## タスクの切り方（サブエージェントに渡すとき）
 
-- **verb を1つ足したら宣言（`Command.returns` まで）を書いて `python tools/generate_protocol_ts.py` を走らせる。**
-  画面の `Applied` はその生成物なので、バックエンドだけのタスクでも `tests/test_protocol.py` は自分で緑にできる。
-  `state_meta` にキーを足すときだけは `web/src/session.ts` の `ServerState` も直す（直さないと型検査が落ちる）。
-  **宣言・型・種別の表＝バックエンド／引数の集め方・描画＝フロント**で切る。
-  `tests/test_ui_command_wiring.py` の即適用の顔ぶれは逆に画面側（`CommandDef` からの導出）。
-  `commands/command.ts` の `SelectableKind` / `KIND_COUNTERS` はコアの `SELECTABLE_KINDS` の写しで、足し忘れると
-  件数表示が `undefined` になる（`tsc` では出ない。`ref as ShapeRef` のキャストで書かれているため）。
-- **`ws="none"`（MCP 専用）の verb は画面の `Applied` に載らない**（生成の対象は `ws != "none"` で `returns` を持つもの）。
-  `add_mesh_body` / `mirror_sketch_entities` のようにブラウザに開けていないのに操作ログに載る verb は、MCP 経由で呼ばれても
-  全ブラウザへ状態配信されるが、`Applied` に型が無くても検査は緑。MCP 専用 verb を足すとき `Applied` を省略してよいかは
-  この抜け穴を踏まえて都度判断し、省略するなら理由を宣言に書く。
-- **文書の置き場は「誰が直せるか」で決める。** 設計文書がリポジトリの外（`reports/`）にあった間は、AI の作業ディレクトリ
-  （旧 taskbox drain なら `target_dir`）の外なので実装が進むたび文書だけが古くなった。コードと同じリポジトリなら同じコミットで直せる。
-  日付入りのファイル名は継続改訂する文書に向かない。
-- **「直した」と「記録を直した」は別の作業**で後者は落ちやすい。とくに同じコミットの中で問題を直しているとき、
-  直前に自分が書いた「未決」が視界から外れる。
+- **verb を1つ足したら宣言（`Command.returns` まで）を書いて `python tools/generate_protocol_ts.py` を走らせる。** 画面の
+  `Applied` はその生成物なので、バックエンドだけのタスクでも `tests/test_protocol.py` は自分で緑にできる。`state_meta` にキーを
+  足すときだけ `web/src/session.ts` の `ServerState` も直す。**宣言・型・種別の表＝バックエンド／引数の集め方・描画＝フロント**で
+  切る。`commands/command.ts` の `SelectableKind` / `KIND_COUNTERS` はコアの `SELECTABLE_KINDS` の写しで、足し忘れると件数表示が
+  `undefined` になる（`ref as ShapeRef` のキャストで書かれているため `tsc` では出ない）。
+- **`ws="none"`（MCP 専用）の verb は画面の `Applied` に載らない。** ブラウザに開けていないのに操作ログに載る verb
+  （`add_mesh_body` / `mirror_sketch_entities`）は全ブラウザへ状態配信されるが、型が無くても検査は緑。足すとき `Applied` を省略
+  してよいかは都度判断し、省略するなら理由を宣言に書く。
+- **文書の置き場は「誰が直せるか」で決める。** AI の作業ディレクトリの外にある文書は実装が進むたびに古くなる。コードと同じ
+  リポジトリなら同じコミットで直せる。日付入りのファイル名は継続改訂する文書に向かない。
+- **「直した」と「記録を直した」は別の作業**で後者は落ちやすい。同じコミットで問題を直しているとき、直前に自分が書いた
+  「未決」が視界から外れる。
 - **MCP サーバは catalog を変えたら立て直す**（`delete` 追加直後に `unknown command`）。
-- **状態変更の配信を「直後の別コマンドの配信」に相乗りさせない**（`duocad/net/ws.py` の自動 commit）。配信しない種類の
-  コマンド（`preview`）が同じ入口を通った瞬間に破れ、例外は出ない。検査は**2接続**で書く（1接続だと要求元には結果が返るので
-  緑に見える）。自動で起こした変更に人の操作 ID を載せない。
+- **状態変更の配信を「直後の別コマンドの配信」に相乗りさせない**（`duocad/net/ws.py` の自動 commit）。配信しない種類のコマンド
+  （`preview`）が同じ入口を通った瞬間に破れ、例外は出ない。検査は**2接続**で書く（1接続だと要求元には結果が返るので緑に見える）。
+  自動で起こした変更に人の操作 ID を載せない。
 
-## ワークツリーでの作業（既定では使わない）
+## ワークツリー（既定では使わない）
 
-**本人指示: ワークツリーは作らない。** 作業は本体チェックアウト（リポジトリ直下）の develop で行う。
-並行セッションのワークツリーが増えると変更が develop に集まらず、ジャンクション経由で本体の `.venv` を
-消す事故も起きた。以下は、本人が明示的に「ワークツリーで」と言ったときのための手順と落とし穴。
+**本人指示: ワークツリーは作らない。** 作業は本体チェックアウトの develop で行う（並行セッションのワークツリーが増えると変更が
+develop に集まらず、ジャンクション経由で本体の `.venv` を消す事故も起きた）。以下は、本人が明示的に「ワークツリーで」と言った
+ときのための落とし穴。ワークツリーのブランチは develop から切り、develop へ戻す。
 
-### 手順と落とし穴（issue #9）
-
-ワークツリーのブランチは **develop から切り、develop へ戻す**（main は動作確認済みの完成品で、develop → main は
-PR だけ。`CLAUDE.md`「ブランチ」）。以下の「本体」はリポジトリ直下のチェックアウト（develop）を指す。
-
-**セッションが動いているワークツリーは消せない。** Windows ではそのセッションのシェルがディレクトリを掴んでいて
-`git worktree remove` が `Permission denied` になり、セッション側も自分のカレントをワークツリーの外へ移せない
-（ツールが毎回戻す）。**そのセッションを閉じてから** `git worktree prune` と空ディレクトリの削除で片付ける。
-
-**ジャンクションを張る。** `git worktree add` 直後のワークツリーには gitignore 済みの `.venv` と `web/node_modules` が無く、`npm run check` は依存が解決できず、`web/scripts/server.mjs`（smoke の起点）は「venv の python が無い」で止まる。本体のそれらへジャンクションを張る:
-
-```powershell
-New-Item -ItemType Junction -Path <worktree>\.venv -Target C:\Users\tm976\mf\duocad\.venv
-New-Item -ItemType Junction -Path <worktree>\web\node_modules -Target C:\Users\tm976\mf\duocad\web\node_modules
-```
-
-- ジャンクションは gitignore 対象なので `git status` には出ない。
-- pytest は本体の `.venv\Scripts\python.exe -m pytest` をワークツリーの cwd で呼べば足りる（`duocad.__file__` はワークツリー側を指す）。
-
-**ワークツリーを消す前に、ジャンクションを先に外す。** `.venv` へのジャンクションを張ったままのワークツリーを
-削除した処理がジャンクションを辿り、**本体の `.venv` の中身を丸ごと消した**（`uv sync --frozen` で作り直した）。
-リンクだけを外すのは PowerShell の `[System.IO.Directory]::Delete('<worktree>\.venv', $false)`（本体の `.venv`
-が残ることを実測済み）。外してから `git worktree remove` する。再帰削除（`Remove-Item -Recurse`、エクスプローラー
-でのフォルダ削除など）をジャンクション入りのワークツリーへ向けない。
-- smoke が配る画面は `web/dist` なので、ワークツリーで先に `npm run build` を回す。
-
-**素の python スクリプトは本体を import する。** `.venv` は `_editable_impl_duocad.pth` で本体の checkout を sys.path に入れているため、ワークツリーで scratch のスクリプトを `python script.py` で走らせるとワークツリーではなく本体の `duocad` を import する（ワークツリーで足した属性が「無い」と言われ、原因が分かるまで1往復溶かした）。ワークツリーのコードを確実に読ませる経路は `pytest`（pyproject の `pythonpath = ["."]`）、`topopt_checks/*.py`（`_bootstrap` がリポジトリ直下を `sys.path[0]` へ）、`python -m duocad...` / `python -c`（cwd が先頭に入る）の3つ。それ以外は `PYTHONPATH=<worktree>` を明示するか `sys.path.insert(0, ...)` を書く。
-
-**Browser pane の `preview_start` はワークツリーの `.claude/launch.json` を見ない**（起動元リポジトリ直下の launch.json を読み、本体の `web/src` を配る）。回避: `web/scripts/server.mjs` の `startServer` は `REPO_ROOT` をスクリプト位置から解くので、ワークツリーのそれを `file:///` で import した使い捨ての puppeteer スクリプトを scratchpad に置き、MCP（HTTP `/mcp`）で素材を作って UI 操作とスクリーンショットを撮る。Browser pane 経由の確認は諦める。
+- **セッションが動いているワークツリーは消せない。** Windows ではそのセッションのシェルがディレクトリを掴んでいて
+  `git worktree remove` が `Permission denied` になる。**そのセッションを閉じてから** `git worktree prune` と空ディレクトリの
+  削除で片付ける。
+- **ジャンクションを張る。** 新しいワークツリーには gitignore 済みの `.venv` と `web/node_modules` が無く、`npm run check` は
+  依存が解決できず、`web/scripts/server.mjs` は `REPO_ROOT/.venv/Scripts/python.exe` を決め打ちなので「venv の python が無い」で
+  smoke が1本も走らない:
+  ```powershell
+  New-Item -ItemType Junction -Path <worktree>\.venv -Target C:\Users\tm976\mf\duocad\.venv
+  New-Item -ItemType Junction -Path <worktree>\web\node_modules -Target C:\Users\tm976\mf\duocad\web\node_modules
+  ```
+  管理者権限不要。git は無視するので `git status` に出ない。smoke が配る画面は `web/dist` なので、ワークツリーで先に
+  `npm run build` を回す。pytest は本体の `.venv\Scripts\python.exe -m pytest` をワークツリーの cwd で呼べば足りる。
+- **ワークツリーを消す前にジャンクションを先に外す。** ジャンクション入りのワークツリーを削除した処理がジャンクションを辿り、
+  **本体の `.venv` の中身を丸ごと消した**（`uv sync --frozen` で作り直した）。外すのは PowerShell の
+  `[System.IO.Directory]::Delete('<worktree>\.venv', $false)`（本体の `.venv` が残ることを実測済み）。再帰削除
+  （`Remove-Item -Recurse`、エクスプローラーでの削除）をジャンクション入りのワークツリーへ向けない。
+- **素の python スクリプトは本体を import する。** `.venv` は `_editable_impl_duocad.pth` で本体の checkout を sys.path に入れて
+  いるため、ワークツリーで `python script.py` するとワークツリーではなく本体の `duocad` を読む。ワークツリーのコードを確実に
+  読ませる経路は `pytest`（`pythonpath = ["."]`）、`topopt_checks/*.py`（`_bootstrap`）、`python -m duocad...` / `python -c`
+  （cwd が先頭）の3つ。それ以外は `PYTHONPATH=<worktree>` を明示するか `sys.path.insert(0, ...)`。
+- **Browser pane の `preview_start` はワークツリーの `.claude/launch.json` を見ない**（本体の `web/src` を配る）。ワークツリーの
+  画面は Python サーバを立てて `http://127.0.0.1:8766/`（`web/dist`）を開くか、`web/scripts/server.mjs` の `startServer`
+  （`REPO_ROOT` をスクリプト位置から解く）をワークツリーから `file:///` で import した使い捨ての puppeteer スクリプトで撮る。
+  `web/node_modules` はワークツリーごとに `npm ci` でもよい。

@@ -1,10 +1,10 @@
 /**
- * **断面表示**(issue #6)。基準3平面の1枚でボディを切り、切り口を塗り、法線方向の矢印(ハンドル)の
+ * 断面表示(issue #6)。基準3平面の1枚でボディを切り、切り口を塗り、法線方向の矢印(ハンドル)の
  * ドラッグで位置を動かす。状態の正は App で、ここは写すだけ。判断の理由は docs/VIEWPORT.md「断面」。
  *
- * **切り口はステンシルの偶奇で塗るので、閉じた立体でしか正しくない**(開いたシェルでは板がはみ出す・欠ける)。
+ * 切り口はステンシルの偶奇で塗るので、閉じた立体でしか正しくない(開いたシェルでは板がはみ出す・欠ける)。
  *
- * **three.js のレイキャストはクリップ平面を見ない。** 切られた側が指せないことは viewport が
+ * three.js のレイキャストはクリップ平面を見ない。切られた側が指せないことは viewport が
  * `cut` / `keeps` / `signedDistance` で判定する。`cut` の偶奇の規則は描画のステンシルと揃えてある。
  */
 import * as THREE from 'three'
@@ -29,7 +29,7 @@ import {
 import type { SectionInfo, SectionState } from './viewportTypes'
 
 export interface SectionViewDeps {
-  /** その画素を通るレイ。**使い回しの実体**なので受け取ったらすぐ読む。 */
+  /** その画素を通るレイ。使い回しの実体なので受け取ったらすぐ読む。 */
   rayAt(offsetX: number, offsetY: number): THREE.Ray
   /** いま使っているカメラ(透視と正投影で差し替わる)。 */
   camera(): THREE.Camera
@@ -228,12 +228,11 @@ export function createSectionView(deps: SectionViewDeps): SectionView {
   group.add(frame)
 
   // ------------------------------------------------------------------ ハンドル(矢印)
-  // 寸法は画素で作り、毎フレーム「1画素ぶんの世界長さ」で拡大する。
   const handle = new THREE.Group()
   handle.renderOrder = LAYER.sectionHandle
   const handleMaterial = new THREE.MeshBasicMaterial({
     color: SECTION_HANDLE_COLOR,
-    // A群(指せるもの)と同じく深度を見ない。透明の列へ入れるのは、後から描く装飾に上書きさせないため。
+    // 指せるもの(A群)と同じく深度を見ない。透明の列へ入れるのは後から描く装飾に上書きさせないため。
     depthTest: false,
     depthWrite: false,
     transparent: true,
@@ -323,7 +322,7 @@ export function createSectionView(deps: SectionViewDeps): SectionView {
     const spec = planeSpec(state.plane)
     axis = spec.normal.indexOf(1)
     axisUnit.set(spec.normal[0], spec.normal[1], spec.normal[2])
-    // 反転なしで消すのはホームビューのカメラがいる側(手前が消えて中が見える)
+    // 反転なしで消すのはホームビューのカメラがいる側
     const homeSide: 1 | -1 = HOME_VIEW_OFFSET.getComponent(axis) >= 0 ? 1 : -1
     keepSign = state.inverted ? homeSide : (-homeSide as 1 | -1)
     plane.normal.copy(axisUnit).multiplyScalar(keepSign)

@@ -1,21 +1,4 @@
-"""**`applied_count` はAI(MCP)経路とUI(WebSocket)経路で同じ数を意味する**という契約。
-
-同じ `Session` を、AIは `DocumentTools.describe_document()` から、ブラウザは
-`Session.state_meta()` から見る。この2つが返す `applied_count` は**どんな操作順序でも
-常に一致**しなければならない —— ログの長さはundoで減るが `Session` の数え上げは減らないため、
-**片方だけ `len(document.log.entries)` を返す実装だとundoの直後にずれる**。
-
-**揃える先は「undo / redoで動かない」ほうの意味**である。かつて `web/src/App.svelte` の
-保存済み判定がこの性質に依存していた(2026-09-16の自動保存化で判定はサーバの `saved` へ
-移った)が、AIとUIが同じ数を見るという契約は据え置く —— 逆向き(ログの長さ)へ揃えると
-undoの直後にAIの読む数が減る。
-
-このファイルが固定する2つ:
-
-1. **一致** — verbを適用したあと、2つの経路の値が等しい。
-2. **undo / redoで減らない** — undoを挟んでも一致し続け、値が下がらない。undoの後に
-   打った新しいverbでは**増える**(App.svelteが見分けに使っているのはこの差)。
-"""
+"""**`applied_count` はAI(MCP)経路とUI(WebSocket)経路で同じ数を意味する**という契約。"""
 from __future__ import annotations
 
 import pytest
@@ -51,9 +34,6 @@ def draw_three_verbs(tools: DocumentTools) -> str:
     return sketch_id
 
 
-# --------------------------------------------------------------------------------------
-# 1. 一致
-# --------------------------------------------------------------------------------------
 def test_both_paths_report_the_same_count_after_applying_verbs(
     session: Session, tools: DocumentTools
 ):
@@ -73,19 +53,12 @@ def test_both_paths_report_the_same_count_after_applying_verbs(
 def test_verbs_applied_through_the_core_are_counted_the_same_way(
     session: Session, tools: DocumentTools
 ):
-    """**UI経路(`Session` を直に叩く)で適用しても**同じ数が両方から見える。
-
-    ブラウザは `Session.add_line` を直接呼ぶ(MCPを経由しない)ので、数え上げが
-    `DocumentTools` 側に寄っていると、この経路だけ数が増えない形の食い違いが起きうる。
-    """
+    """**UI経路(`Session` を直に叩く)で適用しても**同じ数が両方から見える。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_line(sketch_id, [0, 0], [30, 0])
     assert_agree(session, tools, 2, "UI経路で2回適用したあと")
 
 
-# --------------------------------------------------------------------------------------
-# 2. undo / redo
-# --------------------------------------------------------------------------------------
 def test_undo_does_not_move_the_count_on_either_path(session: Session, tools: DocumentTools):
     """**undoで減らない**。減っていたのが直したバグそのもの。"""
     draw_three_verbs(tools)
@@ -118,12 +91,7 @@ def test_redo_does_not_move_the_count_on_either_path(session: Session, tools: Do
 def test_a_new_verb_after_undo_increases_the_count_on_both_paths(
     session: Session, tools: DocumentTools
 ):
-    """undoの後の新しいverbでは**増える**。
-
-    `App.svelte` の保存済み判定は、まさにこの増え方で「undoで保存時点へ戻した文書」
-    (増えない)と「undoしてから別のverbを打った文書」(増える)を見分けている。
-    どちらの経路から見てもその見分けが成り立つこと。
-    """
+    """undoの後の新しいverbでは**増える**。"""
     sketch_id = draw_three_verbs(tools)
     tools.undo()
     assert_agree(session, tools, 3, "undo の直後")

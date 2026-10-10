@@ -1,6 +1,6 @@
 """タスク6(hanger低荷重: 骨組み回復・格子依存)が共有する条件定義とヘルパー。
 
-条件はH1(200N・要素2.0mm・最小幅は実寸10mm固定)。結果と解釈は`docs/topopt_idle_validation/06_HANGER_LOW.md`。
+条件はH1(200N・要素2.0mm・最小幅は実寸10mm固定)。結果と解釈は`docs/topopt_idle_validation/10_SYNTHESIS.md`付録E。
 実測: hangerは64万要素で、1FEM解あたり約27〜114秒(step20約48秒・適応約114秒)。
 製品コード(`duocad.topopt.*`)は変更しない。`search_methods.py`・`synthetic_matrix_support.py`を無変更で再利用する。
 """
@@ -40,9 +40,8 @@ COARSE_SOURCE_RESOLUTION_MM = 2.4  # 「粗い骨組み開始」の投影元(run
 
 def project_mask_to_context(src_mask: np.ndarray, src_origin, src_spacing: float, ctx: sm.SearchContext) -> np.ndarray:
     """`src_mask`(`src_origin`/`src_spacing`は投影元自身の格子)を`ctx`の格子へ投影する。
-    **投影元自身のorigin/spacingを渡すこと**(05が踏んだ罠: 目的格子のorigin/spacingを誤って渡すと
-    位置がずれたまま投影される。05_SYNTHETIC.md「踏んだ罠」参照)。`hanger_external_check.py`の
-    `_project_current_shape`と同じ手順(投影→設計空間との積→最大連結成分)。
+    **投影元自身のorigin/spacingを渡すこと**(目的格子のものを誤って渡すと位置がずれたまま投影される)。
+    `hanger_external_check.py`の`_project_current_shape`と同じ手順(投影→設計空間との積→最大連結成分)。
     """
     mask = rs._project_mask(np.asarray(src_mask, dtype=bool), np.asarray(src_origin, dtype=float),
                             float(src_spacing), ctx.space) & ctx.space.mask

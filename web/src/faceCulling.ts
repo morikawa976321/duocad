@@ -1,69 +1,51 @@
 /**
- * 面単位の視錐台・バックフェイス判定 — **画面側だけが持つ**「どの面を細かく測るか」の入力。
+ * 面単位の視錐台・バックフェイス判定 — 画面側だけが持つ「どの面を細かく測るか」の入力。
  *
- * ズーム連動の可変解像度(`adaptiveResolution.ts`)は目標精度が**文書全体で1つ**だったため、
- * 大きなアセンブリに深く寄ると画面外の部品まで同じ細かさで測り直す(27部品2835面で
- * 三角形118万・往復14.5秒)。
- * **ここで絞った面添字だけが**サーバの `set_view_resolution.focus` に載る ——
- * 送らなければ従来どおり全面が細かい側になる。
+ * 可変解像度の目標精度は文書全体で1つなので、大きなアセンブリに深く寄ると画面外の部品まで同じ細かさで
+ * 測り直す(27部品2835面で三角形118万・往復14.5秒)。ここで絞った面添字だけがサーバの
+ * `set_view_resolution.focus` に載る(送らなければ全面が細かい側)。
  *
- * **オクルージョン(他部品による遮蔽)は判定しない**(依頼者の明示的な決定)。
- * 視錐台への包含とバックフェイスだけで、どちらも**保守的に「細かい側」へ倒す**:
- * 迷ったら細かく測る(遅くなるだけ)。粗い側へ倒す誤りは**画面に角が出る**ので質が違う。
+ * オクルージョン(他部品による遮蔽)は判定しない(依頼者の明示的な決定)。視錐台への包含とバックフェイスだけで、
+ * どちらも保守的に「細かい側」へ倒す: 粗い側へ倒す誤りは画面に角が出る。
  */
 import * as THREE from 'three'
 import type { GeometryPayload } from './viewport'
 
-/** 背を向けていると見なす内積のしきい値。**0より大きくして保守的に倒す**
- *  (真横を向いた面をうっかり粗くしない)。 */
+/** 背を向けていると見なす内積のしきい値。0より大きくして保守的に倒す(真横を向いた面を粗くしない)。 */
 export const BACKFACE_MARGIN = 0.15
 
 export interface FaceSample {
   /** 1始まりの面添字(サーバの `faces[i].index` そのまま)。 */
   index: number
-  /**
-   * その面の三角形の節点から作った世界座標のバウンディングボックス。
-   * **`slack` だけ膨らませてある**(下記 `BodySamples.slack`)。
-   */
+  /** 三角形の節点から作った世界座標のバウンディングボックス。`slack` だけ膨らませてある(`BodySamples.slack`)。 */
   box: THREE.Box3
-  /** 面の重心(世界座標)。 */
   centroid: THREE.Vector3
-  /** 面の外向き単位法線。 */
   normal: THREE.Vector3
-  /** 平面か(`kind === 'plane'`)。**平面のfaceにだけバックフェイス判定を使う** ——
-   *  円筒などの曲面は「中央の法線」が面全体を代表しないので、背を向けた側だけを見て
-   *  粗くすると手前側まで粗くなる。 */
+  /** 平面か(`kind === 'plane'`)。平面のfaceにだけバックフェイス判定を使う(曲面は「中央の法線」が面全体を代表しない)。 */
   planar: boolean
-  /** **いま届いている三角形が細かい側で測られたものか**(サーバの `detail`)。
-   *  ヒステリシス(下記 `selectFineFaces`)がこれを見る。 */
+  /** いま届いている三角形が細かい側で測られたものか(サーバの `detail`)。ヒステリシスが見る。 */
   wasFine: boolean
 }
 
 export interface BodySamples {
-  /** 閉じた立体か(payload の `closed`)。**開いたシェルでは裏を向いた面が本当に見える**ので
-   *  false のときはバックフェイス判定を一切使わない。 */
+  /** 閉じた立体か(payload の `closed`)。開いたシェルでは裏向きの面が本当に見えるので、falseならバックフェイス判定を使わない。 */
   closed: boolean
   /**
-   * 箱を膨らませた量[mm](= 粗い側の偏差)。**判定を測り方から独立させるためにある。**
-   *
-   * 三角形は曲面の内側に張るので、**同じ面でも粗く測った箱は細かく測った箱より小さい**。
-   * 生の箱で判定すると「粗いから視錐台の外 → 粗いまま」「細かいから中 → 細かいまま」の
-   * 両方が安定してしまい、境目の面で**測り直しが往復し続ける**(サーバへの再要求が
-   * 止まらない)。偏差ぶん膨らませておけば、粗い箱が細かい箱を覆う。
+   * 箱を膨らませた量[mm](= 粗い側の偏差)。判定を測り方から独立させる。
+   * 三角形は曲面の内側に張るので、粗く測った箱は細かく測った箱より小さい。生の箱で判定すると
+   * 境目の面で測り直しが往復し続けるので、偏差ぶん膨らませて粗い箱が細かい箱を覆うようにする。
    */
   slack: number
   faces: FaceSample[]
 }
 
-/** サーバから届いた geometry から、可視判定に要る値だけを取り出す(1度だけ作って使い回す)。 */
 export function sampleFaces(payload: GeometryPayload): BodySamples {
   // 粗い側の偏差が分からない古いサーバでは、届いた偏差を使う(0にはしない)。
   const slack = Math.max(0, payload.coarse_deviation ?? payload.deviation ?? 0)
   const faces: FaceSample[] = []
   for (const face of payload.faces) {
     const box = new THREE.Box3()
-    // **Vector3 を1点ずつ作らない** —— 27部品の初回配信で数十万点を通るので、
-    // ここで確保すると配信のたびにGCが走る(`expandByPoint` は座標しか見ない)。
+    // Vector3 を1点ずつ作らない(27部品の初回配信で数十万点を通り、GCが走る。`expandByPoint` は座標しか見ない)。
     const positions = face.positions
     if (face.indices.length > 0 && positions.length >= 3) {
       let minX = Infinity
@@ -106,17 +88,14 @@ export function sampleFaces(payload: GeometryPayload): BodySamples {
 }
 
 /**
- * 細かく測るべき面の添字(1始まり・昇順)。**全部細かいときは `null`** を返す
- * (`null` は「そのBodyの指定を送らない」= 全面細かい、を意味する)。
+ * 細かく測るべき面の添字(1始まり・昇順)。全部細かいときは `null`(= そのBodyの指定を送らない)。
  *
  * @param samples   `sampleFaces` の結果
  * @param frustum   カメラの視錐台
  * @param viewpoint 透視投影ならカメラの世界位置、正投影なら `null`
  * @param viewDirection カメラの向き(正規化済み。正投影のバックフェイス判定に使う)
- * @param hysteresis **いま細かい面が粗い側へ落ちるまでの余裕[mm]**。0にすると、
- *   視錐台の縁にある面が「入った/出た」を往復し、そのたびに測り直しがサーバへ飛ぶ。
- *   落ちるのは縁から `hysteresis` だけ外へ出たときだけ、戻るのは触れた瞬間、と
- *   **向きで条件を変える**のがヒステリシスである。
+ * @param hysteresis いま細かい面が粗い側へ落ちるまでの余裕[mm]。0だと視錐台の縁の面が入/出を往復し、
+ *   そのたびに測り直しがサーバへ飛ぶ。落ちるのは縁から `hysteresis` 外へ出たときだけ、戻るのは触れた瞬間。
  */
 export function selectFineFaces(
   samples: BodySamples,
@@ -150,11 +129,9 @@ export function selectFineFaces(
       } else {
         toFace.copy(viewDirection)
       }
-      // 法線が視線と同じ向き = カメラに背を向けている → 粗い側。
       if (face.normal.dot(toFace) > BACKFACE_MARGIN) continue
     }
     fine.push(face.index)
   }
-  // 面は添字の昇順で届くので、ここで作った配列も昇順である(サーバ側の比較が楽になる)。
   return fine.length === samples.faces.length ? null : fine
 }

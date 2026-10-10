@@ -1,7 +1,7 @@
 """段階1タスク3の機械可読まとめを再生成する(引数なし)。`run_metric_comparison.py`・
 `counterexamples_field_only.py`・`counterexamples_material_edit.py`・`counterexamples_origin_shift.py`
 の出力を集約し、`03_metrics.json`(cases/coverage/limitations)を書き直す。**手で編集しないこと**
-(01_PROTOCOL.mdのQA指摘を踏まえた運用と同じ——追記・変更はこのスクリプトのソースを直す)。
+(10_SYNTHESIS 付録A(旧 01_PROTOCOL)のQA指摘を踏まえた運用と同じ——追記・変更はこのスクリプトのソースを直す)。
 """
 from __future__ import annotations
 
@@ -130,12 +130,12 @@ def main() -> int:
         "モデルごとに異なる許容応力を使う場合はここを条件ごとの値に置き換える必要がある。",
         "M4(固定物理体積)・M6/M7(p/KS)のパラメータ(top_volume_mm3・p・rho)は本タスクが選んだ"
         "研究用の初期値(8mm^3/216mm^3、p=8、rho=1.0)であり、製品定数として較正していない"
-        "(03_METRICS.md 5節に選定根拠と感度を記載)。",
+        "(10_SYNTHESIS 付録B(旧 03_METRICS 5節)に選定根拠と感度を記載)。",
         "反例(c)(e)の『部位別ですら1セルの局所超過を見逃す』という結果は holding=1064〜joint=684セル"
         "程度の母集団サイズで確認したものであり、母集団がもっと小さい特殊なゾーン(数十セル程度)では"
         "挙動が変わりうる(未検証)。",
         "『独立解析に基づく局所評価』はgmsh等の外部メッシュツールがこの環境に無いため、02_REFERENCEと"
-        "同じ制約下で「格子細分による収束の追跡」を代替手段として扱った(03_METRICS.md 5-8節)。",
+        "同じ制約下で「格子細分による収束の追跡」を代替手段として扱った(10_SYNTHESIS 付録B(旧 03_METRICS 5-8節))。",
     ]
 
     payload = dict(
@@ -152,7 +152,7 @@ def main() -> int:
             counterexamples_field_only="output/idle_validation_20260928/counterexamples_field_only.json",
             counterexamples_material_edit="output/idle_validation_20260928/counterexamples_material_edit.json",
             counterexamples_origin_shift="output/idle_validation_20260928/counterexamples_origin_shift.json",
-            report="docs/topopt_idle_validation/03_METRICS.md",
+            report="docs/topopt_idle_validation/10_SYNTHESIS.md 付録B(旧 03_METRICS)",
         ),
     )
     out_path = OUT / "03_metrics.json"

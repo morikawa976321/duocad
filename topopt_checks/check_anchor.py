@@ -3,8 +3,7 @@
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_anchor.py
 
 **このファイルが合否そのものである。** 1件でも落ちればプロセスは非ゼロで終わる。
-検査で使う形状は **build123d でその場生成する合成ソリッドだけ**で、リポジトリ外の
-私物STEPには依存しない(stage1 と同じ理由)。
+私物STEPには依存しない。
 
 検査の構成:
 
@@ -70,8 +69,7 @@ _TABLES: dict = {}
 
 
 def _table(shape, n: int, **kw) -> tuple[vx.VoxelModel, an.AnchorTable]:
-    """同じ (形, 解像度) は作り直さない。**返す値は素の構築と同一** —— 検査の意味は変えず、
-    同じ格子を何度も組み直していたぶんだけを削っている。"""
+    """同じ (形, 解像度) は作り直さない(返す値は素の構築と同一)。"""
     key = (id(shape), n, tuple(sorted(kw.items())))
     if key not in _TABLES:
         model = voxel_model(shape, n)
@@ -161,8 +159,7 @@ def check_node_numbering() -> None:
     )
 
     # 拘束不足の系を**黙って解かない**こと。1自由度だけ拘束すると K は特異になるが、
-    # 「非空で範囲内」の検査は通ってしまう。実測ではCGが収束しないまま
-    # max|u| が有限の大きな値で返っていた(原因から遠い場所で落ちるのが最悪)。
+    # 「非空で範囲内」の検査は通ってしまう(実測: CGが収束しないまま max|u| が有限の大きな値で返った)。
     raised = ""
     try:
         singular = fem.Model(6, 4, 4, fixed_dofs=np.array([0]))
@@ -428,8 +425,7 @@ def _smoothed_uniformity(
     P = np.concatenate(pts_list)
     A = np.concatenate(area_list)
 
-    # `smooth_true` は `loads` に依存しない(節点位置と真の面積分布だけで決まる)。
-    # **同じ面を本番と対照で2回通すので、ここを共有しないと支配項を2度払う**
+    # `smooth_true` は `loads` に依存しない。本番と対照で2回通すので共有する
     # (実測: 円筒の面で 1回 25秒。節点3,708 x 標本178,848 の exp が費用の全部)。
     smooth_load = np.empty(X.shape[0])
     smooth_true = cache.get("smooth_true") if cache is not None else None
@@ -604,9 +600,8 @@ def check_edge_rule() -> None:
         raised[:90] if raised else "例外が出なかった(黙って拘束なしになっている)",
     )
 
-    # **混ぜたときが本番**。合計で
-    # 見ていると、大きい面と一緒に指した空の面だけが黙って落ちる —— 2面を固定したつもりで
-    # 1面しか効いていない系が、例外も通知も無いまま最適化へ入る。
+    # **混ぜたときが本番**。合計で見ていると、大きい面と一緒に指した空の面だけが黙って落ちる —— 2面を
+    # 固定したつもりで1面しか効いていない系が、例外も通知も無いまま最適化へ入る。
     big = next(f for f in table_t.face_indices() if f not in empty)
     raised = ""
     try:

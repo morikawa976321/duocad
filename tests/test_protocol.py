@@ -1,17 +1,11 @@
 """コアの宣言(`duocad/catalog.py`)が、実際に配るものと TypeScript の生成物の両方と一致することを見る。
 
-画面が読む型(`web/src/generated/protocol.ts`)は宣言からの生成物なので、見るのは2つの継ぎ目だけ:
-
 1. **宣言 ⇔ 実際の応答** —— verb を1つずつ走らせ、応答(`applied`)のキーと型が `Command.returns` /
    `CHANGE_EVENTS` のとおりであること。状態配信のキーが `STATE_KEYS` のとおりであること。
    落ちたら、入口の戻り値と宣言のどちらかが古い(画面は `undefined` を読む)。
 2. **宣言 ⇔ 生成物** —— `protocol.ts` が今の宣言から作ったものと一致し、画面のコードがその型で通ること。
    落ちたら、宣言を変えたのに `python tools/generate_protocol_ts.py` を走らせていないか、
    画面のコードが宣言と合っていない。
-
-**見ないもの**: 独自型(`SelectionState`)の中身、観測できなかった値域(`| null` の付けすぎ)、整数と
-小数の区別、`client_op`(`net/ws.py` が後から載せる)。走らせ方(`_RUNNERS`)の無い対象は skip ではなく
-fail にする。
 """
 from __future__ import annotations
 
@@ -50,9 +44,7 @@ def _change_commands() -> list[str]:
     ]
 
 
-# --------------------------------------------------------------------------------------
 # 型の突き合わせ(`Result.type` は TypeScript の型の書き方)
-# --------------------------------------------------------------------------------------
 #: **`boolean` と `number` を取り違えない** —— Pythonの `bool` は `int` の派生なので、
 #: `number` 側で明示的に弾かないと `True` が `number` として通ってしまう。
 _PRIMITIVES: dict[str, Callable[[Any], bool]] = {
@@ -98,9 +90,6 @@ def _compare(what: str, results, applied: dict) -> None:
     assert not problems, f"{what} の型が宣言と食い違う:\n  " + "\n  ".join(problems)
 
 
-# --------------------------------------------------------------------------------------
-# 走らせ方(**表そのものは verb の一覧ではない**。一覧は catalog が導く)
-# --------------------------------------------------------------------------------------
 _RUNNERS: dict[str, Callable[..., dict]] = {}
 
 
@@ -432,10 +421,7 @@ def _run_add_mesh_body(session: Session, tmp_path: Path) -> dict:
 
 @pytest.fixture(scope="module")
 def applied_by_command(tmp_path_factory) -> dict[str, Any]:
-    """対象コマンドを**全部1回ずつ**走らせて `applied` を集める。
-
-    1つが落ちても他の突合まで潰さないよう、例外は握って値の代わりに入れる(受け側が落とす)。
-    """
+    """対象コマンドを**全部1回ずつ**走らせて `applied` を集める。"""
     results: dict[str, Any] = {}
     for name in _verbs() + _change_commands():
         runner = _RUNNERS.get(name)
@@ -463,9 +449,6 @@ def _applied(command: str, applied_by_command: dict[str, Any]) -> dict:
     return applied
 
 
-# --------------------------------------------------------------------------------------
-# 1. 宣言 ⇔ 実際の応答
-# --------------------------------------------------------------------------------------
 def test_every_target_command_has_a_runner() -> None:
     """対象を走らせる手続きが全部ある(無いものを黙って飛ばすと、そのコマンドだけ誰も見ない)。"""
     targets = _verbs() + _change_commands()
@@ -517,9 +500,6 @@ def test_state_keys_match_the_runtime_state(tmp_path) -> None:
     assert len(catalog.STATE_KEYS) == len(set(catalog.STATE_KEYS))
 
 
-# --------------------------------------------------------------------------------------
-# 2. 宣言 ⇔ 生成物(`web/src/generated/protocol.ts`)
-# --------------------------------------------------------------------------------------
 def test_the_generated_typescript_is_up_to_date() -> None:
     """落ちたら、宣言を変えたあと `python tools/generate_protocol_ts.py` を走らせていない。"""
     generator = runpy.run_path(str(REPO_ROOT / "tools" / "generate_protocol_ts.py"))

@@ -1,10 +1,9 @@
 """topopt不要材料検証タスク群(0〜10)の共通基盤。
 
-生データ索引・版管理・実験の再開/重複排除・単一FEM実行制御・メモリ監視を1箇所にまとめる
-(`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「全段階の生データ索引、版管理…を共通化する」)。
+生データ索引・版管理・実験の再開/重複排除・単一FEM実行制御・メモリ監視を1箇所にまとめる。
 ロック機構は `topopt_checks/sweep_smoothing_corpus.py`(`_acquire_lock`/`_release_lock`)の
-OS排他ロック(`msvcrt.locking`)をタスク非依存の形へ切り出したもの——**プロセスが異常終了しても
-OSがロックを放すので、死んだ錠の回収ロジックが要らない**(同スクリプトのコメントと同じ理由)。
+OS排他ロック(`msvcrt.locking`)をタスク非依存の形にしたもの——**プロセスが異常終了しても
+OSがロックを放すので、死んだ錠の回収ロジックが要らない**。
 
 新しいタスク(2〜10)は、このモジュールを直接 import して使う。コピーして書き換えない
 (コピーすると単一実行制御の穴・記録形式の食い違いが再発する)。
@@ -29,10 +28,8 @@ def now_iso() -> str:
 def git_state(*, paths: tuple[str, ...] = ("duocad",)) -> dict:
     """現在のHEADと、指定パス配下(既定は製品コード `duocad/`)の未コミット差分の有無。
 
-    `topopt_checks/idle_validation/`自身の未コミット差分は対象外(このモジュールを直接
-    使う実験スクリプトはリポジトリ管理下にあるが、`output/idle_study/`のような旧世代の
-    使い捨てスクリプトはgit管理外なので、コミットハッシュで版を特定できない。その場合は
-    呼び出し側がファイルの sha256(`sha256_file`)で版を代用すること)。
+    `topopt_checks/idle_validation/` 自身の未コミット差分は対象外。git管理外の使い捨てスクリプトなど
+    コミットハッシュで版を特定できない場合は、呼び出し側がファイルの sha256(`sha256_file`)で代用すること。
     """
     def git(*args: str) -> str:
         return subprocess.run(["git", "-C", str(REPO_ROOT), *args], capture_output=True, text=True).stdout.strip()
@@ -81,8 +78,7 @@ def available_memory_mb() -> float:
 class ExecutionLock:
     """1つの `lock_path` につき同時に1プロセスだけが `with` ブロックへ入れる。
 
-    タスクをまたいで**同じファイル**を指定すれば「このPC上で重いFEMは1実行ずつ」を
-    タスク横断で強制できる(`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「計算の継続と資源」)。
+    タスクをまたいで**同じファイル**を指定すれば「このPC上で重いFEMは1実行ずつ」を強制できる。
     タスクごとに別ファイルを指定すれば、そのタスク内だけの多重起動防止になる。
     どちらの粒度で使うかは呼び出し側の判断(本モジュールは強制しない)。
     """
@@ -173,11 +169,10 @@ def is_case_done(ledger: dict, case_id: str, *, required_status: tuple[str, ...]
 
 
 class SingleFemRun:
-    """1回のFEM/最適化実行の所要時間とメモリを計測する(`run_compact_search.py`と同じ二重計測:
-    `tracemalloc`でPythonヒープのピーク、`peak_memory_mb()`〈psutil〉でプロセス全体のピークを
-    別々に取る——OCCT/numpyのネイティブバッファはtracemallocに映らないため、どちらか一方だけでは
-    ピークを見誤る)。`elapsed_seconds`・`traced_peak_mb`・`peak`(プロセス全体)は`__exit__`後に読める。
-    ネストして使うと内側の`tracemalloc.stop()`が外側の計測も止めてしまうので、**ネストしないこと**。
+    """1回のFEM/最適化実行の所要時間とメモリを計測する。`tracemalloc`(Pythonヒープのピーク)と
+    `peak_memory_mb()`〈psutil〉(プロセス全体のピーク)の二重計測(OCCT/numpyのネイティブバッファは
+    tracemallocに映らない)。`elapsed_seconds`・`traced_peak_mb`・`peak` は `__exit__` 後に読める。
+    **ネストしないこと**(内側の `tracemalloc.stop()` が外側の計測も止める)。
     """
 
     def __init__(self):

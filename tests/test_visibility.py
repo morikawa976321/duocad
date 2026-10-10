@@ -1,11 +1,4 @@
-"""可視性のverbと、**可視性が選択機構の一部であること**の契約。
-
-PCケース(27部品・2835面)の実機テストではピック失敗12回/押し出し7回(失敗率63%)の原因が
-**手前の部品が奥の面を隠していた**ことだった。可視性は見た目の設定ではなく**何を指せるかの
-定義**であり、見えないものは指せないことをコアで保証する。
-
-ShapeRef の形は `{"body": BodyId, "kind": "face", "index": int, "provenance": None}`。
-"""
+"""可視性のverbと、**可視性が選択機構の一部であること**の契約。"""
 from __future__ import annotations
 
 import pytest
@@ -15,9 +8,6 @@ from duocad.server import Session
 from session_support import session_with_box
 
 
-# --------------------------------------------------------------------------------------
-# 可視性は undo / redo の対象外
-# --------------------------------------------------------------------------------------
 def test_hiding_a_body_is_not_undoable():
     """**Ctrl+Z で表示は戻らない**。undoが戻すのは直前の「形を変えた操作」であり、
     可視性はその対象ではない。
@@ -35,11 +25,7 @@ def test_hiding_a_body_is_not_undoable():
 
 
 def test_hiding_a_body_does_not_discard_the_redo_stack():
-    """隠しただけでredoが消えない。
-
-    `OpLog.append` は**redo可能だった末尾を新しい操作で捨てる**。可視性がverbとして
-    ログに乗ると、隠しただけで「やり直せるはずのもの」が黙って消える。
-    """
+    """隠しただけでredoが消えない。"""
     session = session_with_box()
     session.sketch_create("XY")
     session.undo()
@@ -52,9 +38,6 @@ def test_hiding_a_body_does_not_discard_the_redo_stack():
     assert len(session.document.log.entries) == 1
 
 
-# --------------------------------------------------------------------------------------
-# スケッチの可視性(ボディと同じ契約: undo対象外・保存されない・隠したものは指せない)
-# --------------------------------------------------------------------------------------
 def _sketch_with_region(session: Session) -> str:
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 10.0)

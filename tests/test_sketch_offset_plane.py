@@ -1,17 +1,4 @@
-"""オフセット平面へのスケッチ作成(issue #3)。
-
-`sketch_create_offset` は `sketch_create` の兄弟verbで、貼る先(基準平面 or 面)から法線
-方向へ `distance` だけ離れた平面にスケッチを貼る。実体は `sketch.offset_plane` が組み立てる
-PlaneRef(`{"kind":"offset","base":..,"distance":..,"provenance":None}`)を
-`sketch.resolve_plane` が姿勢まで解決するだけで、`duocad/kernel_sketch.py` の `_ax3_from_plane` が
-「`frame` を持つ参照はkindを問わずそれを使う」よう一般化してあるので、面参照(`face_plane`)と
-まったく同じ「作成時に1回だけ焼き付けて以後動かさない」規律に自動で乗る
-(`tests/test_sketch_plane_freeze.py` と同じ不変条件)。
-
-**verb名を分けている理由**は `sketch.sketch_create` のdocstring参照 ——
-`base_plane`(貼る先)に加えて `distance`(how)を持つので、同じverb名に足すと
-`sketch_create` 自体の即適用(Enter不要)まで変わってしまう。
-"""
+"""オフセット平面へのスケッチ作成(issue #3)。"""
 from __future__ import annotations
 
 import math
@@ -36,9 +23,6 @@ BOX = 20.0
 TOP_FACE_INDEX = 6
 
 
-# --------------------------------------------------------------------------------------
-# 1. 姿勢の計算 — 法線方向への平行移動だけで、u/v/normalは不変
-# --------------------------------------------------------------------------------------
 @pytest.mark.parametrize("name", BASE_PLANES)
 def test_an_offset_from_each_base_plane_translates_along_that_planes_own_normal(name):
     """3基準平面それぞれで、平行移動する向きがその平面自身の法線であること(XYだけでは
@@ -84,15 +68,7 @@ def test_an_offset_from_a_face_stacks_on_top_of_the_frozen_face_frame():
 
 
 def test_a_later_fillet_does_not_move_an_offset_from_face_sketch():
-    """オフセット元の面が丸められて添字の指す先が球面へずれても、offset平面は動かない。
-
-    `tests/test_sketch_plane_freeze.py` の
-    `test_a_later_fillet_does_not_move_a_face_sketch_even_when_the_index_now_lands_on_a_sphere`
-    と同じ不変条件を offset 経路で固定する ——
-    `resolve_plane` のoffset分岐は `base` を凍結してから平行移動するので、base側が
-    面参照であれば `face_frame` と同じ凍結が効くはずだが、これは実装から独立に確かめて
-    おく価値がある(2026-08-30の事故の再発点そのものであるため)。
-    """
+    """オフセット元の面が丸められて添字の指す先が球面へずれても、offset平面は動かない。"""
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(
@@ -146,9 +122,6 @@ def test_an_offset_from_every_face_including_reversed_ones_keeps_the_faces_uv_ax
         )
 
 
-# --------------------------------------------------------------------------------------
-# 2. 入れ子(offsetのoffset)は作れない
-# --------------------------------------------------------------------------------------
 def test_offsetting_an_offset_plane_is_rejected():
     document = Document()
     once = offset_plane(base_plane("XY"), 5.0)
@@ -156,9 +129,6 @@ def test_offsetting_an_offset_plane_is_rejected():
         resolve_plane(document, offset_plane(once, 5.0))
 
 
-# --------------------------------------------------------------------------------------
-# 3. ログ — 姿勢は載せず、素の参照(base/distance)だけを積む
-# --------------------------------------------------------------------------------------
 def test_the_frame_is_kept_out_of_the_oplog():
     """ログには姿勢を載せない(貼る先の面の枠も落とす)。落ちたら、焼き付けた枠がログへ漏れている。"""
     document = Document()

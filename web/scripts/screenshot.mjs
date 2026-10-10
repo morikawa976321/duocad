@@ -1,13 +1,9 @@
 /**
- * 区画・境界の視認性タスク用の実機スクリーンショット撮影。
- * 「空の文書の初期画面」と「モデルを1つ読み込んだ画面」の2場面を撮る
- * (before/after比較の材料。本人が目で見て良し悪しを決める)。
+ * 実機スクリーンショット撮影(before/after比較用)。
+ * 「空の文書の初期画面」と「モデルを1つ読み込んだ画面」の2場面を撮る。
  *
  *   web> node scripts/screenshot.mjs --tag before
  *   web> node scripts/screenshot.mjs --tag after
- *
- * サーバは `--models-dir` に使い捨てのtempディレクトリを渡す
- * (渡し忘れるとリポジトリ直下の実 models/ を触ってしまう)。
  */
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
@@ -28,8 +24,7 @@ runSmoke('screenshot', { timeout: 60000 }, async ({ options, browser, url, timeo
   await page.screenshot({ path: emptyPath })
   console.log(`  saved: ${emptyPath}`)
 
-  // **STEP読み込みはツールバーのコマンド**(起動して初めてパス欄が現れる。
-  // 詳細は `smoke-files.mjs` 参照)。
+  // STEP読み込みはツールバーのコマンド(起動して初めてパス欄が現れる)。
   await page.click('#file-import-step')
   await typeInto(page, '#file-import-path', PC_CASE_STEP, { delay: 20 })
   await page.keyboard.press('Enter')

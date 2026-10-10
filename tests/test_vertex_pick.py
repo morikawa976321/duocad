@@ -1,11 +1,4 @@
-"""頂点のピック/ハイライトの土台(頂点の3D座標を引ける)。
-
-**頂点の3D座標を引ける**(`kernel.vertex_positions` / `query.describe_vertices` /
-`Session.vertices` / WSの `get_vertices`)。添字は
-`kernel.count_subshapes(shape, "vertex")` の1始まりで、`selection.select_vertex` が
-範囲を検査する体系と同じ。**ずれると、AIが指した頂点と違う点が画面のマーカーに出る**
-(例外は出ない静かな事故)。
-"""
+"""頂点のピック/ハイライトの土台(頂点の3D座標を引ける)。"""
 from __future__ import annotations
 
 import pytest
@@ -15,9 +8,6 @@ from duocad.server import Session
 from session_support import SIDE, box as _box, browser as _browser
 
 
-# --------------------------------------------------------------------------------------
-# 1. 頂点の座標(添字の体系)
-# --------------------------------------------------------------------------------------
 def test_vertex_positions_use_the_same_index_as_the_selection(session: Session) -> None:
     """`vertex_positions` の添字は `count_subshapes(shape, "vertex")` の体系と同じ。
 
@@ -41,9 +31,6 @@ def test_an_empty_shape_has_no_vertex_map() -> None:
         kernel.vertex_positions(None)
 
 
-# --------------------------------------------------------------------------------------
-# 2. 頂点を配る口(Session.vertices / get_vertices)
-# --------------------------------------------------------------------------------------
 def test_vertices_are_sent_only_to_the_connection_that_asked(session: Session) -> None:
     """`get_vertices` は要求した接続にだけ返る(`get_edges` と同じ扱い)。"""
     body, _ = _box(session)
@@ -73,10 +60,7 @@ def test_the_vertex_revision_follows_the_shape(session: Session) -> None:
 
 
 def test_the_vertices_of_a_hidden_body_are_refused(session: Session) -> None:
-    """隠したBodyの頂点は配らない(`edges()` / `geometry()` と同じ規律)。
-
-    配ると、隠したはずの部品の頂点マーカーだけが宙に浮いて見え、しかも指せる。
-    """
+    """隠したBodyの頂点は配らない(`edges()` / `geometry()` と同じ規律)。"""
     body, _ = _box(session)
     session.set_visible(body.id, False)
 

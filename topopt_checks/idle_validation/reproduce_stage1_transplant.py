@@ -3,7 +3,7 @@
 `docs/TOPOPT_IDLE_MATERIAL.md` 2-1節の「2.2 mm のトラスを 2.0 mm の格子に写し…198.4 cm³」は
 `output/idle_study/transplant.py`(gitignore対象・製品コード扱いされないその場スクリプト)の
 stdout印字だけが根拠で、マスク・原点・ハッシュ付きの記録として保存されていなかった
-(`01_PROTOCOL.md`棚卸しの「欠損は既存スクリプトから再生成する」に該当)。本スクリプトは同じ手口
+(`10_SYNTHESIS 付録A(旧 01_PROTOCOL)`棚卸しの「欠損は既存スクリプトから再生成する」に該当)。本スクリプトは同じ手口
 (製品の`resolve_islands`/`acceptance.inspect`をそのまま使う)を、`topopt_checks/idle_validation/`配下の
 追跡対象コードとして再実装し、`output/idle_validation_20260928/`へハッシュ付きで保存する。
 

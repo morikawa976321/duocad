@@ -38,7 +38,7 @@ verbを起動すると**既にその役割が付いている対象が選択状�
 **メッシュボディは4つとも受け付けない**。保持/除外はここが `meshbody.reject` で
 断り、拘束/荷重は `optimize.face_fingerprint` が断る。ボディや面を**名指しして**
 「これをボクセル化できる/これに面がある」と主張する経路だからである
-(`docs/contracts/ui-optimize-integration.md` の `20260904-1703` 契約②の線)。
+(`docs/contracts/ui-optimize-integration.md`「編集 verb を効かせない」の線)。
 
 保存と復元:
 
@@ -99,7 +99,7 @@ def _assign_bodies(doc: Document, verb: str, body_ids: Sequence[BodyId]) -> Oper
             # **メッシュボディは保持/除外に指定できない**(`20260904-1704` の判断)。
             # ボディを名指しして「これをボクセル化して塊に載せろ」と主張する経路であり、
             # 三角形メッシュにはB-repの面が無いのでその主張は成り立たない
-            # (`docs/contracts/ui-optimize-integration.md` の `20260904-1703` 契約②「名指ししたら断る / 導出した集合からは黙って外す」の
+            # (`docs/contracts/ui-optimize-integration.md`「編集 verb を効かせない」の「名指ししたら断る / 導出した集合からは黙って外す」の
             # 名指し側)。**断り文の実体は `meshbody.reject` の1箇所**。
             # `_apply_bodies` ではなくここに置いてあるのは、`_apply_bodies` を
             # redo / replay も通るためである —— 過去に受け付けたログの再生を、あとから

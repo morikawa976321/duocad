@@ -1,19 +1,4 @@
-"""参照の同一性の鍵(`selection.ref_key`)の契約。
-
-**選択の等価判定を書き下ろす場所は `ref_key` 1つだけ**であり、`same_ref` はその鍵の一致で
-定義される。鍵を別に書き下ろすと「重複が残る / 別物を同一視する」が**静かに**入る ——
-`modify_selection` の集合引きが落とす重複と、`same_ref` が「同じ」と言う組が食い違っても、
-どちらも例外を投げないからである。
-
-ここで固定するのは4つ:
-
-1. **鍵の一致 ⇔ `same_ref`** —— 参照の総当たりで、独立に書き下ろした判定と突き合わせる。
-2. **種別ごとの等価 / 非等価** —— 添字の正規化・`point` の畳み方・Bodyが添字を見ないこと・
-   種別が違えば別物であること・`provenance` を見ないこと。
-3. **並び順の保存** —— 既に入っている参照を再度 add しても位置が動かない
-   (`fillet` の辺リストと半径リストの対応がずれる)。
-4. **件数に対して線形** —— 鍵の引き当て回数を数える。総当たりならM^2に増える。
-"""
+"""参照の同一性の鍵(`selection.ref_key`)の契約。"""
 from __future__ import annotations
 
 from typing import List
@@ -52,15 +37,8 @@ def _all_refs(doc: Document) -> List[dict]:
     return refs
 
 
-# --------------------------------------------------------------------------------------
-# 1. 鍵の一致 ⇔ same_ref
-# --------------------------------------------------------------------------------------
 def _same_ref_written_out(left: dict, right: dict) -> bool:
-    """`ref_key` を**使わずに**書き下ろした同一性判定(照合用の第2の実装)。
-
-    鍵の側を1フィールド落としたり、正規化を忘れたりすると、この判定とずれる。
-    `ref_key` から導いてしまうと何も検査しないことになるので、意図的に重複して書く。
-    """
+    """`ref_key` を**使わずに**書き下ろした同一性判定(照合用の第2の実装)。"""
     left_sketch = "sketch" in left
     right_sketch = "sketch" in right
     if left_sketch != right_sketch:
@@ -109,9 +87,6 @@ def test_a_ref_that_is_neither_shape_nor_region_is_a_value_error():
         ref_key({"body": "box", "kind": "solid", "index": 1})
 
 
-# --------------------------------------------------------------------------------------
-# 2. 種別ごとの等価 / 非等価
-# --------------------------------------------------------------------------------------
 def test_a_string_index_is_the_same_entity_as_the_int():
     """添字は `int` へ正規化する(手書きの `"3"` と `3` は同じ面)。"""
     assert ref_key({"body": "box", "kind": "face", "index": "3"}) == ref_key(
@@ -154,9 +129,6 @@ def test_provenance_is_not_part_of_the_key():
     assert ref_key(region_bare) == ref_key(region_prov)
 
 
-# --------------------------------------------------------------------------------------
-# 3. 並び順の保存(`fillet` の辺リストと半径リストの対応)
-# --------------------------------------------------------------------------------------
 def test_re_adding_an_existing_ref_does_not_move_it(doc: Document):
     """既に入っている参照を再度 add しても位置が動かない。"""
     edges = [{"body": "box", "kind": "edge", "index": i} for i in (1, 2, 3, 4)]
@@ -214,9 +186,6 @@ def test_removing_a_face_does_not_touch_the_edge_of_the_same_index(doc: Document
     assert [selection.ref_kind(item) for item in doc.selection.items] == ["edge"]
 
 
-# --------------------------------------------------------------------------------------
-# 4. 件数に対して線形
-# --------------------------------------------------------------------------------------
 def test_modify_selection_looks_up_each_ref_a_bounded_number_of_times(
     many_bodies: Document, monkeypatch
 ):
@@ -242,9 +211,6 @@ def test_modify_selection_looks_up_each_ref_a_bounded_number_of_times(
         assert len(half) <= counter[0] <= 2 * len(refs) + len(half)
 
 
-# --------------------------------------------------------------------------------------
-# 領域・スケッチ図形の参照(総当たり用の corpus)
-# --------------------------------------------------------------------------------------
 @pytest.fixture()
 def sketch_refs() -> List[dict]:
     """領域とスケッチ図形の参照(実在の文書は要らない —— 鍵は形だけを見る)。"""

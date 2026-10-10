@@ -1,23 +1,4 @@
-"""face単位の選択的高精度化(視錐台+バックフェイスカリング) — 契約。
-
-先行の可変解像度(`test_adaptive_resolution.py`)は**文書全体で1つの目標精度**だった。
-そのままPCケース(27部品2835面)へ深く寄ると、**画面に出ていない部品まで同じ細かさで
-測り直して**三角形118万・往復14.5秒になる。ここが固定するのは、それを解く
-仕掛けの**機械で見える部分**である:
-
-1. **粗い側の粗さはズームで動かない**(`resolution.coarse_view_resolution`)。
-   動くと、画面外のBodyのレシピが毎回変わって版が上がり、**結局全部を配り直す**。
-2. **面ごとに粗さを分けられる**(`kernel.tessellate_selective`)。しかも
-   「細かく測った面の三角形」は**全面を細かく測ったときと同一**である ——
-   面が互いの粗さに引きずられないことがこの仕掛けの前提。
-3. **画面外のBodyは版が上がらず、差分配信が何も送らない**(`DocumentView`)。
-   **ここが効き所そのもの**で、ここが壊れると転送量は元に戻る。
-4. **旧クライアント互換**。`focus` を送らなければ全面が細かい側になり、
-   2026-08-29時点の挙動と一致する。
-
-見た目(隙間が出ていないか・角が見えないか)は目でしか判定できないので、実機側の
-`web/scripts/smoke-face-culling.mjs` と `smoke-resolution.mjs` が数値で見る。
-"""
+"""face単位の選択的高精度化(視錐台+バックフェイスカリング) — 契約。"""
 from __future__ import annotations
 
 import pytest
@@ -31,9 +12,6 @@ SIDE = 20.0
 RADIUS = 10.0
 
 
-# --------------------------------------------------------------------------------------
-# 1. 粗い側の粗さ
-# --------------------------------------------------------------------------------------
 def test_the_coarse_side_does_not_move_when_the_camera_zooms() -> None:
     """**ズームに依らない**。これが版とキャッシュの据え置きを成立させている。"""
     far = resolution.coarse_view_resolution(1.11, 600.0)
@@ -66,9 +44,6 @@ def test_zoomed_all_the_way_out_the_two_sides_meet() -> None:
     assert resolution.coarse_view_resolution(50.0, 600.0) == resolution.view_resolution(50.0, 600.0)
 
 
-# --------------------------------------------------------------------------------------
-# 2. 面ごとに粗さを分ける(kernel)
-# --------------------------------------------------------------------------------------
 @pytest.fixture()
 def cylinder_shape():
     """円柱(曲面1・平面2)。**曲面と平面が混ざっている**ので粗さの効きが見える。"""
@@ -141,9 +116,6 @@ def test_out_of_range_face_indices_are_ignored(cylinder_shape) -> None:
     assert [face["detail"] for face in payload["faces"]] == ["coarse", "fine", "coarse"]
 
 
-# --------------------------------------------------------------------------------------
-# 3. 閉じた立体かどうか(バックフェイス判定の安全弁)
-# --------------------------------------------------------------------------------------
 def test_a_solid_is_closed_and_a_lone_face_is_not(cylinder_shape) -> None:
     """**開いたシェルでは裏を向いた面が本当に見える** —— 画面側はこの旗で判定を止める。"""
     solid = kernel.tessellate_selective(cylinder_shape, None, 0.1, 0.35)
@@ -154,9 +126,6 @@ def test_a_solid_is_closed_and_a_lone_face_is_not(cylinder_shape) -> None:
     assert opened["closed"] is False
 
 
-# --------------------------------------------------------------------------------------
-# 4. 配りもの(DocumentView) —— 画面外のBodyは版が上がらない
-# --------------------------------------------------------------------------------------
 @pytest.fixture()
 def two_body_session() -> tuple:
     """円柱を2つ持つセッション(片方を「画面外」に見立てる)。"""
@@ -260,9 +229,6 @@ def test_the_edges_of_a_culled_body_stay_coarse(two_body_session) -> None:
     assert coarse_points < fine_points
 
 
-# --------------------------------------------------------------------------------------
-# 5. プロトコル(WebSocket)
-# --------------------------------------------------------------------------------------
 def test_the_websocket_carries_the_focus_and_only_redelivers_what_changed(
     two_body_session,
 ) -> None:

@@ -1,8 +1,7 @@
 /**
  * スケッチの点入力待ちのカーソル強調(Fusion 360 の十字・正方形と同型)。
  *
- * **DOMオーバーレイ**(`viewCubeOverlay` は同一canvasの第2パスだが、こちらは常に画面水平の
- * 線を描くのでHTML/SVG)。`pointer-events: none` でクリックは下のcanvasへ通す。
+ * DOMオーバーレイ(常に画面水平の線を描くのでHTML/SVG)。`pointer-events: none` でクリックは下のcanvasへ通す。
  */
 import { SKETCH_CURSOR_CROSS_COLOR, SKETCH_CURSOR_SNAP_COLOR } from './viewportConstants'
 
@@ -24,9 +23,8 @@ export interface SketchCursorOverlay {
   /**
    * @param pointer 未スナップ時のカーソル位置(コンテナ内CSS px)。`snap === 'free'` だけ使う。
    * @param snapAt 確定位置の画面座標。吸着時は十字・正方形・ティックをここに置く。
-   * @param tickAngleDeg `snap === 'midpoint'` のときだけ使う、線分と直交させるティックの
-   *   画面上の角度(度)。呼び出し側(`viewport.ts`)が画面座標へ射影して求める ——
-   *   このファイルは three.js を知らないので、(u,v) 空間の向きを自分では画面角度にできない。
+   * @param tickAngleDeg `snap === 'midpoint'` のときだけ使う、線分の画面上の角度(度)。
+   *   このファイルは three.js を知らないので、呼び出し側(`viewport.ts`)が射影して求める。
    */
   update(
     pointer: { x: number; y: number } | null,
@@ -39,15 +37,11 @@ export interface SketchCursorOverlay {
 
 /**
  * 当たり判定の結果から、カーソル強調の種別を決める。
+ * 優先順はクリックのスナップ(`entityKinds.snapSketchPoint`)と同じ: 点(角・交点を含む) → 中点 → 線 → 格子 → 自由。
  *
- * 優先順はクリックのスナップ(`entityKinds.snapSketchPoint`)と同じ: 点(角・交点を含む) → 中点 →
- * 線 → 格子 → 自由。
- *
- * `isCorner` / `isMidpoint` は呼び出し側(`viewport.ts`)が渡す —— `hit.snapAt` /
- * `hit.midpoint` が立っているか(このファイルは three.js も entityKinds も知らない、
- * SVG描画だけの層に閉じてある)。長方形の残り3隅や直線どうしの交点のように、独立した
- * 点ではないが幾何的には点と同じ精度で吸い付く場所を、□ではなく×にしてしまわないため。
- * 中点はそれより1段低い優先度の別種別(□でも×でもなく、線分と直交するティック)。
+ * `isCorner` / `isMidpoint` は呼び出し側(`viewport.ts`)が `hit.snapAt` / `hit.midpoint` から渡す
+ * (このファイルは entityKinds を知らない)。長方形の残り3隅や直線の交点のような独立した点でない吸着点を、
+ * □ではなく×にしないため。
  */
 export function classifySketchSnap(
   hit: { point: string | null } | null,
@@ -183,7 +177,7 @@ export function createSketchCursorOverlay(container: HTMLElement): SketchCursorO
           setCross(snapAt.x, snapAt.y, true, SKETCH_CURSOR_SNAP_COLOR)
           break
         case 'midpoint':
-          if (tickAngleDeg === undefined) break // 呼び出し側の契約違反(角度が無い)。何も描かない
+          if (tickAngleDeg === undefined) break // 角度が無ければ描かない
           tickGroup.style.display = ''
           setTick(snapAt.x, snapAt.y, tickAngleDeg, SKETCH_CURSOR_SNAP_COLOR)
           break

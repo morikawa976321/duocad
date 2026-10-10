@@ -19,6 +19,14 @@ dependencies = [
     "websockets==17.0.1",
 ]
 
+[project.optional-dependencies]
+# duocad/topopt/gpu_cg.py(形状最適化の CG を GPU で解く経路)。使う機械だけ `uv sync --extra gpu` で入れ、
+# 画面の「設定」の「GPU で計算する」で有効にする(docs/TOPOPT_GPU.md)。[ctk] で CUDA ランタイムも wheel で入り、
+# システムへの CUDA Toolkit は要らない。NVIDIA の GPU が無い機械では入れない。
+gpu = [
+    "cupy-cuda13x[ctk]==14.2.0; sys_platform == 'win32' or sys_platform == 'linux'",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # duocad は venv へインストールしていないので、rootdir を sys.path に入れる。

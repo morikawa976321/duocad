@@ -5,7 +5,7 @@
 ±10%動かした2条件(2700N・3300N)で同じ手順が同じ方向の結果(軽い・合格)を出すか確認する
 (「近傍荷重/原点条件でも再現性を確認し、偶然の一例と頑健な範囲を区別する」)。原点シフトは
 本モデルの拘束・荷重パッド位置がSTEP形状の直接編集を要するため本タスクでは実施しない
-(04A_PATH_QUALIFICATION.md「限界」節に明記)。
+(10_SYNTHESIS 付録C(旧 04A_PATH_QUALIFICATION)「限界」節に明記)。
 
 出力: output/idle_validation_20260928/04a_robustness_loads.json
 """

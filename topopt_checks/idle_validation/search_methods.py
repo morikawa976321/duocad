@@ -1,35 +1,29 @@
 """タスク4: 20%削除・5%削除・適応歩幅＋復帰・再配置の4探索方式を公平に比較する実験用実装。
 
-**製品コードは変更しない**(`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「実験用モジュールとして
-実装し、製品既定値や公開UIの仕様は変更しない」)。既存のFEM(`duocad.topopt.fem`/`stress`)・
+**製品コードは変更しない**(`docs/TOPOPT_IDLE_MATERIAL.md`)。既存のFEM(`duocad.topopt.fem`/`stress`)・
 幾何検査(`duocad.topopt.acceptance`/`binary_search.peel`/`resolve_islands`)・力学条件
 (`optimize_run.build_conditions`/`_build_search_conditions`)は共用する。評価器は03bが凍結した
-版をそのまま使う(`topopt_checks/idle_validation/stress_metrics.py` M5b=`metric_exceedance_integral`
-〈合否ゲート〉・M3=`metric_zone_percentile`〈部位別診断〉・M7b=`metric_ks_aggregation`〈探索補助〉。
-`docs/topopt_idle_validation/03B_METRICS_RECHECK.md`①「03の評価式採否は変更なし」)。
+版をそのまま使う(`stress_metrics.py` M5b=`metric_exceedance_integral`〈合否ゲート〉・
+M3=`metric_zone_percentile`〈部位別診断〉・M7b=`metric_ks_aggregation`〈探索補助〉)。
 
-## 4方式の入口(§後続への契約②に対応)
+## 4方式の入口
 - `run_fixed_step(ctx, config)`: **製品コードそのもの**(`binary_search.find_best_feasible`)を
   `max_step_ratio` だけ変えて呼ぶ。`method="step20"`(既定0.2, 製品既定)/`"step05"`(0.05)。
-  安全率ゲートは製品どおり(パーセンタイル)。「既存条件で旧20%/5%経路を再現」の実装そのもの。
+  安全率ゲートは製品どおり(パーセンタイル)。
 - `run_adaptive(ctx, config)`: 新規。歩幅は安全率余裕(`step_ratio`)と実削除体積(巻き添え/島込みの
   実削除セルの要素エネルギー、一次予測の基準)から決める。**部位別応力(M3)・compliance C・最大変位**
   は候補ごとの一手あたり変化を監視し、いずれかが許容を超えて悪化(急変)または一次予測との乖離が
-  大きければロールバック(候補を却下し、後退倍率を半減して同じ基点から再評価)する。停滞したら
-  最軽量合格形へ復帰し別順序で再開する。安全率ゲートはM5b(`AdaptiveConfig.gate`。既定`"m5b_raw"`=
-  03bの凍結定義そのもの。`"m5b_target"`=方式1・2と同じ安全余裕で揃えた版、`"percentile"`=製品ゲート
-  との対照、の3択)。
+  大きければロールバック(後退倍率を半減して同じ基点から再評価)する。停滞したら
+  最軽量合格形へ復帰し別順序で再開する。安全率ゲートは `AdaptiveConfig.gate`
+  (`"m5b_raw"`〈既定。03bの凍結定義〉/`"m5b_target"`/`"percentile"`)。
 - `run_reallocation(ctx, config)`: 新規。`run_adaptive` の削減フェーズを内側に持ち、削減が停滞したら
-  同体積付近で追加→削減のサイクルへ入る。追加候補は初期全材料形・実行内履歴・外部候補(粗い解像度の
-  探索結果や移植トラス。`ReallocationConfig.external_candidate_masks`)の和集合から、現在形へ再結合する
+  同体積付近で追加→削減のサイクルへ入る。追加候補は初期全材料形・実行内履歴・外部候補
+  (`ReallocationConfig.external_candidate_masks`)の和集合から、現在形へ再結合する
   連結成分ごと(＝失った部材の単位)を長い順に提案する。
 
-## 評価器(§後続への契約②)
+## 評価器
 `score_mask(mask, ctx, *, m5b_tolerance_mpa_mm3=0.0, m3_percentile=99.5, ks_rho=8.0)` が候補1つを
-1回のFEM(`_fem_probe.evaluate_full`)で採点する(`CandidateScore`)。M5b(raw/target 両方)・M3内訳・
-M7b・`safety_factor_product`(製品のパーセンタイル安全率。ゲートには使わないが比較・報告のため
-常に併記)・compliance・max_displacement_mm・element_energy(歩幅/順位に使う要素ひずみエネルギー場)
-を返す。M5bのどちらを受理ゲートに使うかは`AdaptiveConfig.gate`が選ぶ(`CandidateScore`のdocstring)。
+1回のFEM(`_fem_probe.evaluate_full`)で採点する(`CandidateScore`)。
 """
 from __future__ import annotations
 
@@ -83,12 +77,11 @@ class SearchContext:
 
 
 def build_context(model_path: Path, *, load_n: float, element_size_mm: float, min_width_mm: float) -> SearchContext:
-    """`metric_eval.solve_shape`(タスク3の共有ヘルパー)と同じ手順で `cond`/`space`/`table` を組む。
-    こちらは既存の保存済み形状(`shape_cfg["mask"]`)を評価するのでなく、**新規に探索する**ための
-    設計空間全体(`space.mask`)が要るので、`_build_search_conditions` はそこで止め、投影・保存マスクの
-    読み込みは行わない(`metric_eval.py` の一部だけを再現。同じ関数を呼ぶので計算結果は共通)。
+    """`metric_eval.solve_shape` と同じ手順で `cond`/`space`/`table` を組む。
+    保存済み形状ではなく**新規に探索する**ので設計空間全体(`space.mask`)が要り、
+    `_build_search_conditions` で止めて投影・保存マスクの読み込みは行わない。
     `min_width_mm` は `optimize_run._resolve_min_width` で `min_width_cells` へ解決し、以後の
-    `find_initial_feasible`/`find_best_feasible`/本モジュールの削減ループへ明示的に渡す
+    `find_initial_feasible`/`find_best_feasible`/削減ループへ明示的に渡す
     (`00_COMPACT_MODELS.md` 3-1節の罠: 渡し忘れると既定 `min_width_cells=1`〈制約なし〉で走る)。
     """
     doc = refine_shape.open_session(model_path).document
@@ -112,18 +105,14 @@ def build_context(model_path: Path, *, load_n: float, element_size_mm: float, mi
 # ---------------------------------------------------------------------------
 @dataclass
 class CandidateScore:
-    """候補マスク1つのFEM1回ぶんの採点。**`m5b_raw_*` と `m5b_target_*` の違いに注意**
-    (実測で踏んだ罠): `m5b_raw_*` は03b自身の比較スクリプト(`run_metric_comparison._score_all_metrics`)
-    と同じ `cond.allowable_mpa`(材料の生の許容応力。例: 40MPa)をしきい値にする——「セルが1つでも
-    実際に壊れる境界(SF≈1)を割っていないか」を測る、03bが凍結した定義そのもの。`m5b_target_*` は
-    `cond.allowable_mpa / cond.target_safety_factor` をしきい値にした版で、製品の探索目標
-    (方式1・2がパーセンタイルで守るSF、例: 4.8)と**同じ安全余裕**を測る。**どちらを受理ゲートに
-    使うかは `AdaptiveConfig.gate` が選ぶ**(既定 `"m5b_raw"`。docstring参照)——`CandidateScore` 自身は
-    両方を常に計算して返すだけで、どちらが「正しい」ゲートかを決めない(実測: dilution_smallの全材料形は
-    `m5b_raw` では合格するが `m5b_target` では不合格〈192.9 MPa·mm³超過〉。安全の定義が違うので
-    数字も違って当然、片方だけを「唯一の合否」と決め打たない)。
-    `safety_factor_product` は製品のパーセンタイル安全率(受理には使わないが、旧方式との比較・
-    reportingのため常に載せる——「性能優位は次の実測まで主張しない」ので複数の数字を残す)。
+    """候補マスク1つのFEM1回ぶんの採点。**`m5b_raw_*` と `m5b_target_*` の違いに注意**:
+    `m5b_raw_*` は `cond.allowable_mpa`(材料の生の許容応力。例: 40MPa)をしきい値にする
+    (03bが凍結した定義)。`m5b_target_*` は `cond.allowable_mpa / cond.target_safety_factor` を
+    しきい値にした版で、製品の探索目標(方式1・2がパーセンタイルで守るSF)と**同じ安全余裕**を測る。
+    **どちらを受理ゲートに使うかは `AdaptiveConfig.gate` が選ぶ**。`CandidateScore` は両方を
+    常に計算して返すだけ(実測: dilution_smallの全材料形は `m5b_raw` では合格するが
+    `m5b_target` では不合格〈192.9 MPa·mm³超過〉)。`safety_factor_product` は製品の
+    パーセンタイル安全率で、ゲートには使わず比較・報告のため常に載せる。
     """
 
     material_mm3: float
@@ -157,14 +146,12 @@ def score_mask(mask: np.ndarray, ctx: SearchContext, *, m5b_tolerance_mpa_mm3: f
               m3_percentile: float = 99.5, ks_rho: float = 8.0,
               zone_distance_mm: Optional[float] = None,
               probe: Optional[dict] = None) -> Optional[CandidateScore]:
-    """`mask` を1回FEMで解き、M5b/M3/M7b(03bの評価器)・compliance・要素エネルギーまで一括で返す。
-    FEM(残差検算含む)が失敗すれば `None`(呼び出し側は幾何は合格・物理が不明の候補として扱う)。
-    `_fem_probe.evaluate_full` の返す `_model`/`_density`/`_displacement` から
-    `model.compliance` を直接呼び、`acceptance.safety_check` と同じ式で要素エネルギーを取る
-    (2回目のFEM解を避ける——層をまたぐ契約: `fem.Model.compliance` の `ce` は全要素ぶん返る仕様
-    〈`fem.py` の docstring〉を前提にしている)。
-    `probe` は同じ `mask`・`ctx` で呼び出し側が既に `evaluate_full` を解いた結果(反力など採点外の量も
-    欲しい診断が、FEMを2回解かずに済ませるため)。渡さなければここで解く。
+    """`mask` を1回FEMで解き、M5b/M3/M7b・compliance・要素エネルギーまで一括で返す。
+    FEM(残差検算含む)が失敗すれば `None`(幾何は合格・物理が不明の候補)。
+    `_fem_probe.evaluate_full` の `_model`/`_density`/`_displacement` から `model.compliance` を
+    直接呼び、`acceptance.safety_check` と同じ式で要素エネルギーを取る(2回目のFEM解を避ける。
+    層をまたぐ契約: `fem.Model.compliance` の `ce` は全要素ぶん返る仕様を前提にしている)。
+    `probe` は同じ `mask`・`ctx` で呼び出し側が既に解いた `evaluate_full` の結果(渡さなければここで解く)。
     """
     cond = ctx.cond
     if probe is None:
@@ -220,8 +207,7 @@ def _removal_geometry_ok(candidate: np.ndarray, conditions) -> tuple[bool, list,
 
 
 def core_group_count(mask: np.ndarray, min_width_cells: int) -> int:
-    """`m` 立方の侵食(`min_width.core_cells`)後、芯が連結成分いくつに割れているか(2026-09-21規則Sの
-    診断と同じ考え方を追加側にも適用する——「芯の連結」検査)。"""
+    """`m` 立方の侵食(`min_width.core_cells`)後、芯が連結成分いくつに割れているか(「芯の連結」検査)。"""
     if min_width_cells <= 1:
         return 1 if mask.any() else 0
     core = min_width.core_cells(mask, min_width_cells)
@@ -232,10 +218,10 @@ def core_group_count(mask: np.ndarray, min_width_cells: int) -> int:
 def _growth_geometry_ok(grown: np.ndarray, base_core_groups: int, conditions, min_width_cells: int
                         ) -> tuple[bool, list]:
     """追加候補の幾何検査。`acceptance.inspect` は「材料が `before` を超えない」ことを前提にしている
-    (`if np.any(material & ~original): raise` )ので**呼べない**——ここでは `inspect` が内部で使う
-    個々のチェック(`boundary_check`/`connectivity_check`/`region_check`/`condition_check`)を直接呼び、
-    追加側にも「保持・除外・アンカー、単一成分、正則境界、芯の連結、最小幅、閉空洞禁止」の全項目を課す。
-    `inspect` を経由しないので自動の安全率FEMは走らない(採点は呼び出し側が `score_mask` で行う)。
+    (`if np.any(material & ~original): raise`)ので**呼べない**。代わりに個々のチェック
+    (`boundary_check`/`connectivity_check`/`region_check`/`condition_check`)を直接呼び、
+    保持・除外・アンカー、単一成分、正則境界、芯の連結、最小幅、閉空洞禁止を課す。
+    安全率FEMは走らない(採点は呼び出し側が `score_mask` で行う)。
     """
     cond = conditions
     problems = []
@@ -296,8 +282,7 @@ class StepRecord:
 
 @dataclass
 class MethodRecord:
-    """4方式共通の戻り値。`mechanism_events` が「小問題で各機構が発動した証拠」の生ログ
-    (完了条件「小問題で各機構が発動した証拠があり」に対応)。"""
+    """4方式共通の戻り値。`mechanism_events` は小問題で各機構が発動した証拠の生ログ。"""
 
     method: str
     status: str  # 'feasible' | 'no_feasible_found'
@@ -362,9 +347,8 @@ def run_fixed_step(ctx: SearchContext, *, max_step_ratio: float = binary_search.
                    max_evaluations: int = 2000, is_cancelled=None,
                    m5b_tolerance_mpa_mm3: float = 0.0) -> MethodRecord:
     """`method="step20"`(既定 `max_step_ratio=0.2`)/`"step05"`(`max_step_ratio=0.05`)。
-    `binary_search.find_best_feasible` を無変更で呼ぶ(製品の受理ゲートはパーセンタイル安全率のまま)。
-    採用形状は探索後に一度だけ `score_mask` でM5b/M3/M7bを付け(「04は03bの評価器で実装」の
-    比較側の意味——受理は製品どおり、**比較の採点だけ**03bの評価器に揃える)。
+    `binary_search.find_best_feasible` を無変更で呼ぶ(受理ゲートはパーセンタイル安全率のまま)。
+    採用形状は探索後に一度だけ `score_mask` でM5b/M3/M7bを付ける(**比較の採点だけ**03bの評価器に揃える)。
     """
     method = "step20" if abs(max_step_ratio - 0.2) < 1e-9 else ("step05" if abs(max_step_ratio - 0.05) < 1e-9
                                                                  else f"step{max_step_ratio:g}")
@@ -398,14 +382,12 @@ def run_fixed_step(ctx: SearchContext, *, max_step_ratio: float = binary_search.
 # ---------------------------------------------------------------------------
 @dataclass
 class AdaptiveConfig:
-    """`gate` は3択(実測で確定した理由は `score_mask` のdocstring・`docs/topopt_idle_validation/04_SEARCHES.md`
-    「評価ゲートの選び方」節): `"m5b_raw"`(既定。03bが凍結した定義そのもの——材料の生の許容応力に対する
-    超過。「04は03bの評価器で実装」に最も忠実)/ `"m5b_target"`(`allowable_mpa/target_safety_factor` を
-    しきい値にした版。方式1・2と**同じ安全余裕**で体積を比べたいときに使う——実測: dilution_smallの
-    全材料形は `"m5b_raw"` では合格〈5.59〉だが `"m5b_target"` では不合格〈192.9 MPa·mm³超過〉。
-    除去だけでは目標安全率まで届かない入口もありうるので、既定は使わない)/ `"percentile"`
-    (製品ゲートで同じループを回す対照実験用)。**3つは異なる安全の定義を測っており、跨いだ体積の
-    大小だけで優劣を主張しない**(「評価シナリオを分ける場合は各シナリオ内で比較する」)。"""
+    """`gate` は3択(理由は `score_mask` の docstring と `docs/topopt_idle_validation/10_SYNTHESIS.md` 付録C):
+    `"m5b_raw"`(既定。03bが凍結した定義。生の許容応力に対する超過)/ `"m5b_target"`
+    (`allowable_mpa/target_safety_factor` をしきい値にした版。方式1・2と同じ安全余裕で体積を比べる用。
+    実測: dilution_smallの全材料形は `"m5b_raw"` では合格〈5.59〉だが `"m5b_target"` では
+    不合格〈192.9 MPa·mm³超過〉なので既定にしない)/ `"percentile"`(製品ゲートで同じループを回す対照)。
+    **3つは異なる安全の定義を測っており、跨いだ体積の大小だけで優劣を主張しない**。"""
 
     gate: str = "m5b_raw"
     m5b_tolerance_mpa_mm3: float = 0.0
@@ -416,17 +398,16 @@ class AdaptiveConfig:
     stagnation_patience: int = 6  # best_ever が改善しない連続手数
     prediction_error_multiplier: float = 2.5
     #: 実ジャンプ(M3最悪ゾーンの一手あたり相対変化)がこの値以下なら、予測との比が倍率を超えても
-    #: `prediction_error` で拒否しない。0.0=旧挙動(比だけで拒否)。予測値(分母)が小さいと実ジャンプが
-    #: 微小でも比が倍率を超えて拒否が続くため(05_SYNTHETIC.md 4-1節・08_ROBUSTNESS.md)。
+    #: `prediction_error` で拒否しない。0.0=比だけで拒否。予測値(分母)が小さいと実ジャンプが
+    #: 微小でも比が倍率を超えて拒否が続くため(10_SYNTHESIS 付録D・付録F)。
     prediction_error_floor: float = 0.0
     sudden_jump_relative_drop: float = 0.15  # safety_factor_product の一手あたり許容低下率
-    #: compliance C・最大変位の一手あたり許容増加率(急変検知にこの2つも使う。QA指摘対応:
-    #: 記録するだけで受理判定に使っていなかったため、sudden_jump の判定条件へ追加した)。
+    #: compliance C・最大変位の一手あたり許容増加率(sudden_jump の判定にも使う)。
     sudden_compliance_relative_increase: float = 0.5
     sudden_displacement_relative_increase: float = 0.5
-    #: True なら、開始形(全材料など)が受理ゲートを満たさないとき、探索せず `stop_reason="start_fails_gate"` で戻る。
-    #: False=旧挙動(全候補が `safety_gate` で拒否され続け、開始形を返す。hanger 2000N太い幅で
-    #: 実測18.5〜19.1時間、07_HANGER_LOADS.md)。`resume_from` 付きの再開では見ない。
+    #: True なら、開始形が受理ゲートを満たさないとき、探索せず `stop_reason="start_fails_gate"` で戻る。
+    #: False=全候補が `safety_gate` で拒否され続け開始形を返す(hanger 2000N太い幅で実測18.5〜19.1時間。
+    #: 10_SYNTHESIS 付録E)。`resume_from` 付きの再開では見ない。
     stop_if_start_fails_gate: bool = False
     finish_window_tolerance: float = 0.02  # 目標 × (1+これ) 以下で仕上げ探索へ
     finish_max_evaluations: int = 200
@@ -438,8 +419,7 @@ class AdaptiveConfig:
 
 
 def _relative_zone_jump(before: Optional[CandidateScore], after: CandidateScore, *, allowable_mpa: float) -> float:
-    """M3最悪ゾーン値の一手あたり相対変化(「部位別応力」信号)。`allowable_mpa` は探索が使う
-    ゲートのしきい値(呼び出し側が`cond.allowable_mpa`か目標調整版かを選んで渡す)。"""
+    """M3最悪ゾーン値の一手あたり相対変化(「部位別応力」信号)。`allowable_mpa` は探索が使うゲートのしきい値。"""
     if before is None or before.m3_worst_value is None or after.m3_worst_value is None:
         return 0.0
     return abs(after.m3_worst_value - before.m3_worst_value) / max(allowable_mpa, abs(before.m3_worst_value))
@@ -460,22 +440,18 @@ def run_adaptive(ctx: SearchContext, config: AdaptiveConfig = AdaptiveConfig(), 
     """安全率余裕・部位別応力・実削除体積の一次予測・compliance/変位の急変検知で歩幅を決め、
     予測誤差/急変でロールバック(小さい候補を同じ基点から再評価)、`stagnation_patience` 手
     best_ever が改善しなければ最軽量合格形へ復帰し、tie-break の乱数順序を変えて再開する
-    (完了条件「小問題で各機構が発動した証拠」に対応する事象は `mechanism_events` に記録)。
+    (発動した機構は `mechanism_events` に記録)。
 
-    `gate` は `AdaptiveConfig` のdocstring参照(既定 `"m5b_raw"`。固定5%化ではなく複数信号で歩幅を決める
-    新方式そのもの)。`config.stop_policy="legacy"` は `binary_search` の `target_tolerance` 方式と同じ停止条件で
-    比較できるようにした対照(完了条件「元の停止条件との対照」)。`resume_from` は `load_checkpoint`
-    の戻り値をそのまま渡す(再開)。ループ本体は `_run_adaptive_impl`(段0=`find_initial_feasible`の
-    後を切り出した実体。`_run_adaptive_from_mask` も同じ実体を呼ぶ——重複実装しない)。
+    `gate` は `AdaptiveConfig` の docstring 参照。`config.stop_policy="legacy"` は
+    `binary_search` の `target_tolerance` 方式と同じ停止条件(対照用)。`resume_from` は
+    `load_checkpoint` の戻り値をそのまま渡す。ループ本体は `_run_adaptive_impl`。
 
-    `extra_protected`(04a追加。既定`None`=既存呼び出しは無変更)は `conditions.keep_cells` と同じ
-    `peel`の`protected`集合へOR結合するセル集合。`gate="percentile"`・`stop_policy="legacy"`・
-    `sudden_*`/`prediction_error_multiplier`を実質無効化する値・`stagnation_patience`を大きい値にすると、
-    このループは製品の`binary_search._reduce_volume`(固定`max_step_ratio`)と同じ受理条件・同じ
-    `peel`/`ranked_cells`/`step_ratio`を辿る対照実験(「該当経路の再導入」因果検査)になる——
-    `extra_protected`はその対照の一方だけへ特定セルの保護を追加する目的で導入した。
+    `extra_protected`(既定`None`)は `conditions.keep_cells` と同じ `peel` の `protected` 集合へOR結合する
+    セル集合。`gate="percentile"`・`stop_policy="legacy"`・`sudden_*`/`prediction_error_multiplier` を
+    実質無効化・`stagnation_patience` を大きくすると、このループは製品の
+    `binary_search._reduce_volume` と同じ受理条件・`peel`/`ranked_cells`/`step_ratio` を辿る対照になる。
     `on_accept(evaluations, working_mask, working_score)`(既定`None`)は受理した手ごとに1回、次の候補を
-    作る前に呼ぶ(「途中マスク」を経路で追わず外部から観測する目的。呼び出し側で例外を投げれば探索ごと落ちる)。
+    作る前に呼ぶ(呼び出し側が例外を投げれば探索ごと落ちる)。
     """
     initial = binary_search.find_initial_feasible(ctx.space.mask, ctx.cond, max_evaluations=config.max_evaluations,
                                                    min_width_cells=ctx.min_width_cells, is_cancelled=is_cancelled)
@@ -494,19 +470,17 @@ def run_adaptive(ctx: SearchContext, config: AdaptiveConfig = AdaptiveConfig(), 
 # ---------------------------------------------------------------------------
 @dataclass
 class ReallocationConfig:
-    """`grow_cycles` 回、削減(`run_adaptive`系)→追加(1連結成分)を繰り返す。「削減が停滞したら
-    追加へ移る」の「停滞」は、内側の削減フェーズ自身の停止条件(`adaptive.stagnation_patience`が
-    引き起こす`revert_restart`を経て`no_removable_cell`/`within_target_tolerance`/評価予算切れの
-    いずれかに達すること)がそのまま担う——削減フェーズは常にその停止条件まで走ってから次の
-    追加サイクルへ進むので、追加専用の別カウンタは持たない。
+    """`grow_cycles` 回、削減(`run_adaptive`系)→追加(1連結成分)を繰り返す。削減の「停滞」は
+    内側の削減フェーズ自身の停止条件(`no_removable_cell`/`within_target_tolerance`/評価予算切れ)が
+    担い、追加専用の別カウンタは持たない。
     """
 
     adaptive: AdaptiveConfig = field(default_factory=AdaptiveConfig)
     grow_cycles: int = 3
     grow_fraction_of_removed: float = 0.5  # 直近の削減量に対する仮追加の割合(「同体積付近」の運用値)
     grow_min_cells: int = 4
-    #: 追加1回で足してよい量の上限(=直近までの削除セル数に対する割合)。None=旧挙動(上限なし。最長の連結成分を
-    #: まるごと足すため、単純な形状では設計空間の残り全体=ほぼ全材料へ戻る)。値を入れると、上限を超える
+    #: 追加1回で足してよい量の上限(=直近までの削除セル数に対する割合)。None=上限なし(最長の連結成分を
+    #: まるごと足すため、単純な形状では設計空間の残り全体へ戻る)。値を入れると、上限を超える
     #: 連結成分は候補から外し、候補が尽きたときの局所表面追加も上限セル数に抑え、超過応力の目標換算
     #: しきい値(許容/目標安全率)を超えるセルの近くから足す。
     grow_max_fraction_of_removed: Optional[float] = None
@@ -516,8 +490,7 @@ class ReallocationConfig:
 
 
 def _connected_remnants(reference: np.ndarray, current: np.ndarray) -> list[tuple[np.ndarray, int]]:
-    """`reference \\ current` を連結成分に分け、現在形へ隣接する成分だけ (mask, 長さ) で返す
-    (長さ=セル数。長い部材の単位ごと提案するので、追加は必ず連結を保ったまま起きる)。"""
+    """`reference \\ current` を連結成分に分け、現在形へ隣接する成分だけ (mask, 長さ=セル数) で返す。"""
     remnant = reference & ~current
     if not remnant.any():
         return []
@@ -534,7 +507,7 @@ def _connected_remnants(reference: np.ndarray, current: np.ndarray) -> list[tupl
 
 def _surface_growth_pool(current: np.ndarray, design_space: np.ndarray, hot_mask: Optional[np.ndarray]) -> np.ndarray:
     """連結成分の候補が尽きたときの局所表面フォールバック: 設計空間内で現在形に隣接する空セル。
-    `hot_mask`(あれば超過セル)に近いものを優先する単純な距離順位。"""
+    `hot_mask`(あれば超過セル)に近いものを優先する。"""
     empty_adjacent = ndimage.binary_dilation(current, structure=NEIGHBOURHOOD_STRUCTURE) & design_space & ~current
     idx = np.flatnonzero(empty_adjacent)
     if idx.size == 0 or hot_mask is None or not hot_mask.any():
@@ -547,19 +520,13 @@ def _surface_growth_pool(current: np.ndarray, design_space: np.ndarray, hot_mask
 def run_reallocation(ctx: SearchContext, config: ReallocationConfig = ReallocationConfig(), *,
                      checkpoint_path: Optional[Path] = None, is_cancelled: Optional[Callable[[], bool]] = None
                      ) -> MethodRecord:
-    """`run_adaptive` の削減ループを内側の部品として繰り返し呼び、削減フェーズがその停止条件に
-    達するたびに追加フェーズへ入る(`ReallocationConfig` docstring)。追加候補は
-    `initial_all_material ∪ history ∪ external` から
-    現在形へ隣接する連結成分(=部材の単位)を長い順に提案し、`_growth_geometry_ok` の全項目
-    (保持・除外・アンカー・単一成分・正則境界・芯の連結・最小幅・閉空洞禁止)を通ったものだけ採用する。
-    仮追加は一時的に体積を増やす(「作業中形状」)。**`_growth_geometry_ok` はFEMを呼ばない事前検査
-    なので、幾何で却下された候補は `evaluations` に数えない**(QA指摘対応: 以前は数えていて
-    「採用されなかった仮追加もFEM評価を1回使う」という説明と食い違っていた)。`evaluations` は
-    幾何検査に通った候補を実際にFEMで採点する箇所(`score_mask`呼び出し)でのみ増える——現在の
-    採用側の実装は幾何検査に通った最初の候補をそのまま採用するので、追加候補についてFEM評価が
-    棄却理由になることはない(FEMは採用後の採点用)。追加を受理した直後に `poison`/`rejected` を
-    無効化する(`mechanism_events` に `poison_invalidated` を記録。「再配置後のpoison/失敗キャッシュ
-    の無効化」)。
+    """`run_adaptive` の削減ループを内側の部品として繰り返し呼び、削減フェーズが停止条件に
+    達するたびに追加フェーズへ入る。追加候補は `initial_all_material ∪ history ∪ external` から
+    現在形へ隣接する連結成分を長い順に提案し、`_growth_geometry_ok` を通ったものだけ採用する。
+    **`_growth_geometry_ok` はFEMを呼ばない事前検査なので、幾何で却下された候補は `evaluations` に
+    数えない**。`evaluations` は幾何検査に通った候補を `score_mask` で採点する箇所でのみ増える
+    (採用側は幾何検査に通った最初の候補をそのまま採用する)。追加を受理した直後に
+    `poison`/`rejected` を無効化する(`mechanism_events` に `poison_invalidated`)。
     """
     t0 = time.perf_counter()
     mechanism_events: list[dict] = []
@@ -620,7 +587,7 @@ def run_reallocation(ctx: SearchContext, config: ReallocationConfig = Reallocati
         for label, comp, length in remnants:
             # 成分は「失った部材の単位」なのでまるごと足す(セル数上限で途中を切ると、ravel順の
             # 部分集合は部材自身と非連結になりやすく、幾何検査でほぼ必ず落ちる)。`grow_target` は
-            # このサイクルで足す規模の目安(reporting用)であって、部材を分割する上限ではない。
+            # reporting用の目安で、部材を分割する上限ではない。
             if grow_cap_cells is not None and length > grow_cap_cells:
                 continue
             take = comp
@@ -628,10 +595,8 @@ def run_reallocation(ctx: SearchContext, config: ReallocationConfig = Reallocati
             key = acceptance.material_sha256(candidate_grown)
             if key in rejected:
                 continue
-            # 幾何検査は事前(FEM無し)なので、ここでは `evaluations` を数えない
-            # (QA指摘対応: 以前は幾何却下でも数えていて「採用されなかった仮追加もFEM評価を1回使う」
-            # というdocstringの説明と食い違っていた)。`evaluations` はこの後、実際にFEM
-            # (`score_mask`)を呼ぶ箇所でのみ増やす(このサイクルで採用が決まった候補につき1回)。
+            # 幾何検査は事前(FEM無し)なので `evaluations` を数えない。FEM(`score_mask`)を呼ぶ箇所で
+            # のみ増やす(このサイクルで採用が決まった候補につき1回)。
             ok, problems = _growth_geometry_ok(candidate_grown, base_core_groups, ctx.cond, ctx.min_width_cells)
             step = StepRecord(index=len(all_steps), kind="grow", requested_cells=int(take.sum()),
                               actual_cells=int(take.sum()), outcome="rejected",
@@ -727,13 +692,11 @@ def run_reallocation(ctx: SearchContext, config: ReallocationConfig = Reallocati
 
 
 class _SeedResult:
-    """`_run_adaptive_impl` が読むのは `initial.best_feasible.mask` だけ(他の属性は参照しない)。
-    `find_initial_feasible` をそのまま呼ぶと**設計空間全体**(`ctx.space.mask`)を1回FEMで解く
-    コストがかかる——hanger本体のような大設計空間(実測: 2.0mm要素で64万要素)では、既に合格が
-    分かっている形(再配置の仮追加形・hangerの既存保存形)から続きを回したいだけなのに毎回この
-    コストを払うのは無駄なので、`run_adaptive_from_mask`/`_run_adaptive_from_mask` はこの軽量な
-    代用オブジェクトで済ませる。呼び出し側は `start_mask` が既に構造的に妥当(単一成分・水密・
-    アンカー到達)であることを保証すること——`_run_adaptive_impl` はこの前提を再検査しない。"""
+    """`_run_adaptive_impl` が読むのは `initial.best_feasible.mask` だけ。
+    `find_initial_feasible` は**設計空間全体**を1回FEMで解くので、大設計空間(実測: 2.0mm要素で
+    64万要素)で既に合格が分かっている形から続きを回すときの無駄を、この軽量な代用オブジェクトで避ける。
+    呼び出し側は `start_mask` が既に構造的に妥当(単一成分・水密・アンカー到達)であることを保証すること
+    (`_run_adaptive_impl` は再検査しない)。"""
 
     def __init__(self, mask: np.ndarray):
         self.status = "feasible"
@@ -746,17 +709,15 @@ def run_adaptive_from_mask(ctx: SearchContext, start_mask: np.ndarray, config: A
                            extra_protected: Optional[np.ndarray] = None,
                            on_accept: Optional[Callable[[int, np.ndarray, "CandidateScore"], None]] = None
                            ) -> MethodRecord:
-    """既存の合格形状(製品の保存済み形状・別方式の結果)から `run_adaptive` の削減ループを続ける
-    公開入口。`start_mask` は `ctx.space.mask` と同じ形の bool 配列で、呼び出し側が構造的妥当性
-    (単一成分・水密・保持/除外・アンカー到達・最小幅)を保証すること。`extra_protected`/`on_accept`は
-    `run_adaptive` と同じ(04a追加、既定`None`=無変更)。"""
+    """既存の合格形状から `run_adaptive` の削減ループを続ける公開入口。`start_mask` は `ctx.space.mask` と
+    同じ形の bool 配列で、呼び出し側が構造的妥当性(単一成分・水密・保持/除外・アンカー到達・最小幅)を
+    保証すること。`extra_protected`/`on_accept` は `run_adaptive` と同じ。"""
     return _run_adaptive_impl(ctx, _SeedResult(start_mask), config, checkpoint_path=checkpoint_path,
                               is_cancelled=is_cancelled, extra_protected=extra_protected, on_accept=on_accept)
 
 
 def _run_adaptive_from_mask(ctx: SearchContext, start_mask: np.ndarray, config: AdaptiveConfig) -> MethodRecord:
-    """再配置(`run_reallocation`)の内側ループ専用の薄いラッパー(`run_adaptive_from_mask` と同じ実体を
-    呼ぶ。仮追加形は `_growth_geometry_ok` で既に構造検査済みなので前提を満たす)。"""
+    """再配置の内側ループ専用の薄いラッパー(仮追加形は `_growth_geometry_ok` で構造検査済み)。"""
     return run_adaptive_from_mask(ctx, start_mask, config)
 
 
@@ -765,9 +726,8 @@ def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
                        extra_protected: Optional[np.ndarray] = None,
                        on_accept: Optional[Callable[[int, np.ndarray, "CandidateScore"], None]] = None
                        ) -> MethodRecord:
-    """`run_adaptive`/`_run_adaptive_from_mask` が共有するループ本体(段階3=`find_initial_feasible`の
-    後を受け取る)。開始形状の違い(全材料 or 再配置の仮追加形)は呼び出し側が `initial.best_feasible.mask`
-    を差し替えることで表す——ここは1つの実装だけを持つ。"""
+    """`run_adaptive`/`_run_adaptive_from_mask` が共有するループ本体。開始形状の違いは呼び出し側が
+    `initial.best_feasible.mask` を差し替えることで表す。"""
     cond = ctx.cond
     t0 = time.perf_counter()
     fem_solves = 0
@@ -800,9 +760,8 @@ def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
     protected = binary_search._keep_cells(cond, working.shape)
     if extra_protected is not None:
         protected = extra_protected.copy() if protected is None else (protected | extra_protected)
-        # `peel`の不変条件(m>1では`protected`⊆`exempt`。docstring参照)を満たすため、追加保護セルも
-        # 最小幅の規則対象外に含める(`extra_protected`は既に別経路で最小幅確認済みの既存構造の一部を
-        # 想定しているので、個別の m立方被覆チェックを免除しても不変条件は壊れない)。
+        # `peel` の不変条件(m>1では `protected` ⊆ `exempt`)を満たすため、追加保護セルも
+        # 最小幅の規則対象外に含める(既に最小幅確認済みの既存構造の一部を想定)。
         if ctx.min_width_cells > 1:
             exempt = extra_protected.copy() if exempt is None else (exempt | extra_protected)
     multiplier = 1.0
@@ -866,19 +825,16 @@ def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
             stop_reason = "finish_budget_exhausted"
             break
         elif in_finish_phase and finish_counter >= config.finish_patience:
-            # `finish_max_evaluations`(仕上げ局面の総評価予算)とは別に、best_ever を更新しない
-            # 手が `finish_patience` 連続したら停滞とみなして打ち切る(改善停滞判定。QA指摘対応:
-            # `finish_patience` が定義のみで未配線だった)。
+            # `finish_max_evaluations` とは別に、best_ever を更新しない手が `finish_patience` 連続したら停滞とみなして打ち切る。
             stop_reason = "finish_stagnation"
             break
 
         gap_ratio = binary_search.step_ratio(max((working_score.safety_factor_product if working_score else 1.0), 1e-6),
                                              target, exponent=config.step_exponent, max_ratio=config.max_step_ratio)
-        # `min_step_ratio` は目標に対する基準歩幅(`gap_ratio`)だけへ床を敷く。後退倍率
-        # `multiplier` には床を敷かない——ここへ床を敷くと、同じ複数セル候補が却下され続けたとき
-        # `requested` がその床で頭打ちのまま変わらなくなり、`peel` が毎回同じ候補を返して
-        # `rejected` に当たり続ける無限ループになる(実測で踏んだ罠。`multiplier` は無制限に
-        # 半減させて初めて `requested→1` に収束し、既存の `_reduce_volume` と同じ停止保証が成り立つ)。
+        # `min_step_ratio` は基準歩幅(`gap_ratio`)だけへ床を敷く。後退倍率 `multiplier` には
+        # 敷かない — 敷くと、同じ複数セル候補が却下され続けたとき `requested` が床で頭打ちのまま
+        # `peel` が毎回同じ候補を返して `rejected` に当たり続ける無限ループになる(実測)。
+        # `multiplier` は無制限に半減して初めて `requested→1` に収束し、`_reduce_volume` と同じ停止保証になる。
         ratio = max(config.min_step_ratio, gap_ratio) * multiplier
         requested = max(1, int(ratio * int(working.sum())))
         candidate, peeled = binary_search.peel(working, order, requested, anchor_ids,
@@ -931,9 +887,8 @@ def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
         step.actual_relative_jump = actual_jump
         sudden_drop = ((working_score.safety_factor_product - cand_score.safety_factor_product)
                       / max(working_score.safety_factor_product, 1e-9)) if working_score else 0.0
-        # compliance C・最大変位も急変検知に使う(QA指摘対応: 記録するだけで受理判定に未使用だった)。
-        # どれか1つでも一手あたり許容を超えて悪化すれば sudden_jump とみなす——安全率だけでは
-        # 見えない構造性能の急変(例: 安全率はまだ余裕があるのに剛性が急落する候補)を捕まえるため。
+        # compliance C・最大変位も急変検知に使う。安全率だけでは見えない構造性能の急変
+        # (安全率に余裕があるのに剛性が急落する候補)を捕まえるため。
         compliance_jump = _relative_increase(working_score.compliance if working_score else None, cand_score.compliance)
         displacement_jump = _relative_increase(working_score.max_displacement_mm if working_score else None,
                                                cand_score.max_displacement_mm)
@@ -973,9 +928,8 @@ def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
                        poison=poison, rejected=rejected, evaluations=evaluations, restart_count=restart_count,
                        steps=steps, mechanism_events=mechanism_events, config=dataclasses.asdict(config))
             if in_finish_phase:
-                # QA指摘対応: 「best_ever不変の連続回数」という説明どおり、受理でも best_ever が
-                # 改善しなければ finish_counter は増やす(以前は受理のたびに無条件で0へ戻していた
-                # ため、stagnation_counter との定義がずれていた)。
+                # 受理でも best_ever が改善しなければ finish_counter は増やす
+                # (「best_ever不変の連続回数」の定義を stagnation_counter と揃える)。
                 finish_counter = 0 if best_ever_improved else finish_counter + 1
                 finish_total_evals += 1
         else:

@@ -1,24 +1,4 @@
-"""MCPのHTTPトランスポート(`/mcp`)の契約。
-
-**なぜこの口があるか**: stdioは「MCPクライアントがduocadのプロセスを所有する」
-形なので、起動のトリガーも人間用UI(8766)の寿命もクライアントのセッションに縛られていた。
-HTTPの口は逆向きで、**先にアプリが立っていて、Claude Codeが後から繋ぎに来る**。
-
-固定するのは4つ:
-
-1. **トランスポートで中身が変わらない** —— 握手もツールの顔ぶれも stdio と同じ。
-   `handle()` がトランスポートを知らないという設計(`mcp_server.py` のdocstring)の帰結であり、
-   ここが崩れたら「口を増やしただけ」ではなくなっている。
-2. **ワーカースレッドから文書を書き換えても `Session` の前提を壊さない** —— `/mcp` は
-   `ThreadingHTTPServer` のスレッドで走るので、道具は `ToolsOnLoop` でイベントループへ
-   投げ返される。**この検査だけが本番と同じスレッド構成を通る**(他のMCP検査は `handle()` を
-   直に呼ぶので、包みが外れていても緑のままになる)。
-3. **ブラウザからは叩けない** —— `127.0.0.1` へのbindは防御にならない(`allowed_origins` と
-   同じ理屈)。JSON-RPCの本文は `text/plain` にすればプリフライト無しで送れるので、
-   `Origin` を持つリクエストと知らない `Host` を落とすことが防御線そのものである。
-4. **静的配信を壊していない** —— 同じポートに口を生やしたので、ページが配れなくなる形の
-   事故がありうる。
-"""
+"""MCPのHTTPトランスポート(`/mcp`)の契約。"""
 from __future__ import annotations
 
 import asyncio
@@ -134,11 +114,7 @@ def test_handshake_and_tool_lineup_do_not_depend_on_the_transport(http_mcp):
 
 
 def test_tool_call_from_a_worker_thread_changes_the_same_document(http_mcp):
-    """2. ワーカースレッドからの `tools/call` が、**イベントループ側の文書**を変える。
-
-    `ToolsOnLoop` の包みを外すとここが競合する(検査としては緑のまま通ることもあるが、
-    その場合でも「同じ `Session` を触っている」ことは下の assert が押さえる)。
-    """
+    """2. ワーカースレッドからの `tools/call` が、**イベントループ側の文書**を変える。"""
     http, session, _tools = http_mcp
     before = len(session.document.sketches)
 

@@ -1,4 +1,4 @@
-"""タスク6・診断: 全軸+0.5セル原点シフトのstep20が`evaluation_error`で全材料の99.94%のまま打ち切られた原因を特定する。
+r"""タスク6・診断: 全軸+0.5セル原点シフトのstep20が`evaluation_error`で全材料の99.94%のまま打ち切られた原因を特定する。
 
 `run_06_origin_shift.py`の`capture_unknown_safety`は安全率が`unknown`だった呼び出しを0件としか拾えなかった。
 ここでは`acceptance.inspect`の全呼び出し(材料セル数・各検査のstatus・安全率のstatus/reason/error)と、

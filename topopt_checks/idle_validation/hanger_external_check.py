@@ -49,10 +49,9 @@ RESULTS_PATH = OUT / "04_hanger_external_check.json"
 
 CONDITIONS = {
     # 名前: (hanger_condition文字列, load_n, element_size_mm, min_width_mm, 由来)
-    # min_width_mm=None は「製品既定(2×実spacing)」——`_resolve_min_width` の下限がちょうど
-    # 2×実spacingなので、要求mmを固定値で書くと格子スナップ後の実spacingがわずかにずれたときに
-    # 下限未満になりうる(実測で踏んだ罠: 2.4mm指定がスナップ後2.406mmになり、4.8mm指定が下限
-    # 4.813mmを下回ってエラーになった)。
+    # min_width_mm=None は「製品既定(2×実spacing)」。要求mmを固定値で書くと、格子スナップ後の実spacingが
+    # わずかにずれたとき `_resolve_min_width` の下限(2×実spacing)未満になりうる
+    # (実測: 2.4mm指定がスナップ後2.406mmになり、4.8mm指定が下限4.813mmを下回ってエラー)。
     "H1": ("F0200_h2.0_w5", 200.0, 2.0, 10.0, "原因2(低荷重・太幅)代表。03bのhanger共通条件採点と同じ条件"),
     "H2": ("F5000_h2.4_w2", 5000.0, 2.4, None, "原因1(高荷重)代表。製品既定幅(w2=2セル相当)"),
 }
@@ -167,9 +166,7 @@ def main() -> int:
     names = ["H1", "H2"] if args.condition == "both" else [args.condition]
 
     with _common.ExecutionLock(LOCK, tag="hanger_external_check"):
-        # 既存結果を読み込んでから更新する(条件ごとに別プロセスで走らせても、先に書いた条件の
-        # 結果を上書きで失わない——`--condition H2` 単体実行が `--condition H1` の結果を
-        # 消していた実装ミスを実測で発見・修正した)。
+        # 既存結果を読み込んでから更新する(条件ごとに別プロセスで走らせても先の条件の結果を上書きで失わない)。
         results = {}
         if RESULTS_PATH.exists():
             results = json.loads(RESULTS_PATH.read_text(encoding="utf-8")).get("results", {})

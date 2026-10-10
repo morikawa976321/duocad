@@ -33,11 +33,7 @@ def two_bodies() -> Document:
 
 @pytest.fixture()
 def sketch_doc():
-    """半径20の円を1つ持つスケッチの文書と、その sketch_id(領域はちょうど1個)。
-
-    領域は計算されるもの(§3.3)なので、`select_region` の範囲検査を実際の領域数に
-    対して働かせるには、図形のあるスケッチが要る。
-    """
+    """半径20の円を1つ持つスケッチの文書と、その sketch_id(領域はちょうど1個)。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
     add_circle(document, sketch_id, (0.0, 0.0), 20.0)
@@ -61,9 +57,6 @@ def _first_extrudable_face(shape) -> int:
     raise AssertionError("押し出せる面が1つも無い(テストの前提が崩れている)")
 
 
-# --------------------------------------------------------------------------------------
-# 面・辺・頂点・領域を選択に入れられ、種別が保持される
-# --------------------------------------------------------------------------------------
 def test_each_kind_of_reference_keeps_its_kind(doc: Document):
     """面・辺・頂点の参照が、それぞれ `kind` を保持したまま選択に入る。"""
     refs = [
@@ -82,11 +75,7 @@ def test_shape_refs_have_the_shape_of_the_spec(doc: Document):
 
 
 def test_edge_and_vertex_indexes_follow_the_kernel_numbering(doc: Document):
-    """辺・頂点の添字は `kernel` の数え方(1始まり)で、範囲外は ValueError。
-
-    **添字の出どころが `kernel` でないと「選んだ辺と違う辺が丸まる」**という、
-    例外も出ない事故になる(query.py の `describe_edges` の警告と同じ理由)。
-    """
+    """辺・頂点の添字は `kernel` の数え方(1始まり)で、範囲外は ValueError。"""
     shape = doc.bodies[0].shape
     assert kernel.edge_count(shape) == 12
     assert kernel.count_subshapes(shape, "vertex") == 8
@@ -100,14 +89,7 @@ def test_edge_and_vertex_indexes_follow_the_kernel_numbering(doc: Document):
 
 
 def test_regions_can_be_selected_with_a_region_ref(sketch_doc):
-    """領域は RegionRef(`{"sketch":.., "index":.., "provenance": None}`)で選ぶ(§3.5)。
-
-    領域は面・辺・頂点と違い**Bodyではなくスケッチに属する**ので、参照の形が別になる。
-    ここを ShapeRef に押し込むと `body` に嘘のIDが入る。
-
-    形は M2 の `duocad.region.RegionRef.to_dict()` と**同じもの**を使う
-    (別形式を組み立て直すと、操作ログの `selection` に2つの形が混ざる)。
-    """
+    """領域は RegionRef(`{"sketch":.., "index":.., "provenance": None}`)で選ぶ(§3.5)。"""
     document, sketch_id = sketch_doc
     ref = selection.select_region(document, sketch_id, 1)
     assert ref == region_ref(sketch_id, 1).to_dict()
@@ -116,11 +98,7 @@ def test_regions_can_be_selected_with_a_region_ref(sketch_doc):
 
 
 def test_selecting_a_region_validates_the_sketch_and_the_index(sketch_doc):
-    """存在しないスケッチは KeyError、範囲外の領域添字は ValueError(黙って通さない)。
-
-    領域は**計算されるもの**(§3.3)で、図形を1本足しただけで個数が変わる。
-    その場で数え直して検査しないと、存在しない領域を指す参照が選択に入る。
-    """
+    """存在しないスケッチは KeyError、範囲外の領域添字は ValueError(黙って通さない)。"""
     document, sketch_id = sketch_doc
     assert len(regions(document, sketch_id)) == 1
 
@@ -131,13 +109,7 @@ def test_selecting_a_region_validates_the_sketch_and_the_index(sketch_doc):
 
 
 def test_regions_go_into_the_selection_like_any_other_kind(sketch_doc, doc: Document):
-    """**領域が選択集合に実際に入る**こと(参照を作れるだけでは足りない)。
-
-    差分編集・重複除去・種別での絞り込みが、面や辺と同じように領域にも効くこと。
-    RegionRef は `kind` キーを持たない(§3.5)ので、種別の判定は `"sketch"` キーの有無で
-    導く(`selection.ref_kind`)。ここを面・辺と別扱いにすると、領域だけが
-    「選べるが差分編集できない」二級市民になる。
-    """
+    """**領域が選択集合に実際に入る**こと(参照を作れるだけでは足りない)。"""
     document, sketch_id = sketch_doc
     region = selection.select_region(document, sketch_id, 1)
 
@@ -162,15 +134,8 @@ def test_selecting_from_a_missing_body_raises(doc: Document):
         selection.select_edge(doc, "nope", 1)
 
 
-# --------------------------------------------------------------------------------------
-# 差分編集・重複しない・空にできる
-# --------------------------------------------------------------------------------------
 def test_modify_selection_refuses_a_malformed_ref(doc: Document):
-    """人が触る主経路でも、壊れた参照は落ちて選択を変更しない(`propose` と同じ契約)。
-
-    ここを素通りさせると、UIの実装ミスがそのまま壊れた参照として選択に紛れ込み、
-    verbに渡る段階まで発覚しない。
-    """
+    """人が触る主経路でも、壊れた参照は落ちて選択を変更しない(`propose` と同じ契約)。"""
     selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
     with pytest.raises(ValueError):
         selection.modify_selection(doc, add=[{"body": "box", "index": 1}])
@@ -189,11 +154,7 @@ def test_removing_something_that_is_not_selected_is_a_no_op(doc: Document):
 
 
 def test_remove_wins_when_the_same_reference_is_added_and_removed(doc: Document):
-    """同じ参照が add と remove の両方にあるとき、**remove が勝つ**(引き算を後に適用)。
-
-    どちらが勝つかを決めておかないと、UIが「全選択してから除外」を組み立てたときの
-    結果が実装依存になる。
-    """
+    """同じ参照が add と remove の両方にあるとき、**remove が勝つ**(引き算を後に適用)。"""
     ref = selection.select_edge(doc, "box", 5)
     result = selection.modify_selection(doc, add=[ref], remove=[dict(ref)])
     assert result.items == []
@@ -219,20 +180,8 @@ def test_hidden_bodies_cannot_be_selected(two_bodies: Document):
         selection.select_face(two_bodies, "b", 1)
 
 
-# --------------------------------------------------------------------------------------
-# 永続する / ログに載らない / 保存されない
-# --------------------------------------------------------------------------------------
 def test_operating_the_raw_verb_function_does_not_touch_selection(doc: Document):
-    """**選択集合そのものは永続する**。verb関数(`duocad/verbs/*.py` の生の関数)は形しか触らない。
-
-    製品として見える経路(WS・MCP)は `Session` を必ず通り、`_reset_selection_if_needed` が
-    確定後に選択を空にする。**そのリセットは Session 層の関心事であって、verb関数自身の
-    責務ではない** —— verb関数は形状だけを差し替え、選択集合には触らない、という分離を
-    このテストは固定する。
-
-    製品レベルの「形を変えたら選択は空になる」契約は `tests/test_mcp_selection.py` と
-    `tests/test_server_selection_reset.py` が固定する。
-    """
+    """**選択集合そのものは永続する**。verb関数(`duocad/verbs/*.py` の生の関数)は形しか触らない。"""
     face_index = _first_extrudable_face(doc.bodies[0].shape)
     before = selection.modify_selection(doc, add=[selection.select_face(doc, "box", face_index)])
     kept = [dict(item) for item in before.items]
@@ -243,12 +192,7 @@ def test_operating_the_raw_verb_function_does_not_touch_selection(doc: Document)
 
 
 def test_changing_the_selection_does_not_touch_the_operation_log(doc: Document):
-    """**選択の変更は操作ログに載らない**(選択は文書を変更しないため)。
-
-    undoの単位(§2「verbの粒度」)を選択が汚さないようにするためでもある —— 選択し直す
-    たびにundo1手を消費する編集は使い物にならない。同じ理由で `set_visible` も載せない
-    (下のテスト)。
-    """
+    """**選択の変更は操作ログに載らない**(選択は文書を変更しないため)。"""
     before = len(doc.log.entries)
     selection.set_selection(doc, refs=[selection.select_face(doc, "box", 1)])
     selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
@@ -261,9 +205,6 @@ def test_set_visible_does_not_land_in_the_log_either(doc: Document):
     """**可視性もログに載らない**。`Body.visible` という文書の状態を変えるが、
     形は1つも変えないので undo の1手を使わせない —— 奥を覗くために手前を隠して戻す
     「見るための操作」が編集の履歴を埋めると、直前の押し出しへ戻れなくなる。
-
-    **対照実験を同じテストに入れる**。上のテストと合わせて「ログが増えない」しか見ていないと、
-    そもそもこの文書でログが増える経路が死んでいても両方緑になる。
     """
     before = len(doc.log.entries)
     set_visible(doc, "box", False)
@@ -275,12 +216,7 @@ def test_set_visible_does_not_land_in_the_log_either(doc: Document):
 
 
 def test_selection_is_not_saved(doc: Document):
-    """**選択は保存されない**(セッション状態)。保存・再生の対象は操作ログだけ。
-
-    保存の経路は `doc.log.to_json()` しか無いので、再生した文書の選択は空になる。
-    **選択が空でないまま保存し、選択のある文書へ再生しても消える**ところまで見る
-    (「新しい文書の選択が空」を見るだけでは、実装が間違っていても緑になる)。
-    """
+    """**選択は保存されない**(セッション状態)。保存・再生の対象は操作ログだけ。"""
     sketch_create(doc, "XY")  # ログに1行積んでおく(空のログを再生しても何も検査できない)
     selected = selection.select_face(doc, "box", 1)
     selection.set_selection(doc, refs=[selected])
@@ -299,14 +235,8 @@ def test_selection_is_not_saved(doc: Document):
     assert restored.selection.items == []
 
 
-# 人とAIが同じ集合を同じ操作で触る
-# --------------------------------------------------------------------------------------
 def test_the_ai_selects_the_human_fixes_and_the_ai_reads_it_back(doc: Document):
-    """**交互操作そのもの。このファイルの核心の1本**。
-
-    AIが選ぶ → 人が過不足を直す → **AIが直した結果を読み直せる**。
-    3つが同じ1つのオブジェクトを触っていなければ、この往復は閉じない。
-    """
+    """**交互操作そのもの。このファイルの核心の1本**。"""
     chosen = selection.set_selection(
         doc, refs=[selection.select_edge(doc, "box", index) for index in (1, 2, 3)]
     )
@@ -358,10 +288,7 @@ def test_selected_items_can_be_filtered_by_kind(doc: Document):
 
 
 def test_edge_indices_feed_fillet_directly(doc: Document):
-    """確定した選択が `fillet(edges=[...])` へそのまま渡せる形で取り出せる。
-
-    **ここが繋がっていないと、選択集合は「読めるだけの飾り」になる**。
-    """
+    """確定した選択が `fillet(edges=[...])` へそのまま渡せる形で取り出せる。"""
     selection.modify_selection(
         doc, add=[selection.select_edge(doc, "box", index) for index in (1, 3)]
     )
@@ -383,11 +310,7 @@ def test_edge_indices_refuses_to_guess_across_bodies(two_bodies: Document):
 
 
 def test_proposing_again_replaces_the_previous_selection(doc: Document):
-    """`set_selection` は**置き換え**(差分は `modify_selection` の仕事)。
-
-    ここが追加になっていると、AIが述語を外して提案し直すたびに古い候補が残り、
-    人が消す作業を押し付けられる。
-    """
+    """`set_selection` は**置き換え**(差分は `modify_selection` の仕事)。"""
     selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
     result = selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 2)])
     assert [item["index"] for item in result.items] == [2]
@@ -408,11 +331,7 @@ def test_proposing_again_replaces_the_previous_selection(doc: Document):
 def test_a_malformed_ref_is_refused_without_touching_the_selection(
     doc: Document, bad: dict, expected: type, why: str
 ):
-    """手書きの壊れた参照も**落ちて、選択を変更しない**。
-
-    例外の種類は `select_*` と揃える —— 形が不正なら ValueError、存在しないBodyは KeyError。
-    どこが悪いかで例外が変わらないと、MCPがAIへ返す説明を作れない。
-    """
+    """手書きの壊れた参照も**落ちて、選択を変更しない**。"""
     keep = [selection.select_edge(doc, "box", 1)]
     selection.modify_selection(doc, add=keep)
 
@@ -435,16 +354,8 @@ def test_set_selection_needs_exactly_one_source(doc: Document):
         )
 
 
-# --------------------------------------------------------------------------------------
-# イベント(コア→アプリ層の上り方向)
-# --------------------------------------------------------------------------------------
 def test_every_selection_api_fires_exactly_one_event(session: Session):
-    """変更する4つのAPIがそれぞれ1回だけ発火し、読み取りは発火しない。
-
-    2回発火すると、購読側(`Server._on_core_change`)が同じ状態を2回配ることになる
-    (M4で「1つの操作につき1回だけ」を契約にしたのと同じ理由)。合計だけ見ると
-    「0回と2回」が打ち消し合って緑になるので、各APIの直後に件数を見る。
-    """
+    """変更する4つのAPIがそれぞれ1回だけ発火し、読み取りは発火しない。"""
     events = []
     session.add_listener(events.append)
     ref = selection.select_edge(session.document, "box", 1)
@@ -463,10 +374,7 @@ def test_every_selection_api_fires_exactly_one_event(session: Session):
 
 
 def test_the_event_carries_enough_to_redraw(session: Session):
-    """イベントは**UIが描き直すのに足る情報**を持つ。
-
-    「何が選択されたか」。
-    """
+    """イベントは**UIが描き直すのに足る情報**を持つ。"""
     events = []
     session.add_listener(events.append)
     session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
@@ -478,11 +386,7 @@ def test_the_event_carries_enough_to_redraw(session: Session):
 
 
 def test_the_event_carries_the_client_op_back(session: Session):
-    """`client_op` をそのまま載せて返す(操作を出したクライアントが自分の計測と突き合わせる)。
-
-    `set_visible` の `applied` と同じ約束。載らないと、UI側は自分が出した選択操作の
-    応答なのか、他人(AI)の変更なのかを区別できない。
-    """
+    """`client_op` をそのまま載せて返す(操作を出したクライアントが自分の計測と突き合わせる)。"""
     events = []
     session.add_listener(events.append)
     ref = selection.select_edge(session.document, "box", 1)
@@ -516,16 +420,7 @@ def test_selection_events_ride_the_same_up_path_as_set_visible(session: Session)
 
 
 def test_selection_is_part_of_the_pushed_state(session: Session):
-    """選択は `state_meta()` に載る —— **これが無いとAIの変更は画面へ届かない**。
-
-    `Server._on_core_change` は **MCP起点の変更から `applied` を落として**配る
-    (`applied` は操作を出したクライアントへの確認応答なので、他人の操作に付けられない)。
-    したがってブラウザに届くのは `state` だけであり、`set_visible` の効果が
-    `bodies[].visible` で届いているのと同じ場所に選択も載っている必要がある。
-
-    イベントだけ実装して状態に載せないと、**AI→人の方向だけが黙って死ぬ**
-    (人→AIは動くのでテストが無ければ気づけない)。
-    """
+    """選択は `state_meta()` に載る —— **これが無いとAIの変更は画面へ届かない**。"""
     session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
     state = session.state_meta()
     assert "origin" not in state["selection"]
@@ -533,11 +428,7 @@ def test_selection_is_part_of_the_pushed_state(session: Session):
 
 
 def test_a_failing_listener_does_not_undo_the_selection(session: Session):
-    """購読者が落ちても**選択の変更は成立したまま**にする(M4で決めた `_emit` の契約)。
-
-    通知の失敗で確定した状態を巻き戻すことはできない。落ちたことは警告に残す
-    (黙って握りつぶさない。§6予防6)。
-    """
+    """購読者が落ちても**選択の変更は成立したまま**にする(M4で決めた `_emit` の契約)。"""
     def broken(_applied):
         raise RuntimeError("購読者が落ちた")
 

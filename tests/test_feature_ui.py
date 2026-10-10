@@ -1,24 +1,4 @@
-"""サーバ側の契約: ブラウザから**手でフィーチャをかける**ための口と、辺の配信。
-
-UI(領域押し出し・フィレット・面取り・反復のコマンド)そのものは**`pytest` では完了判定
-できない**(実機確認は `web/scripts/smoke.mjs`)。ここが固定するのはコアとサーバ側の2つ ——
-**辺を折れ線で配る**こと(`kernel.tessellate_edges` + `Session.edges` + `get_edges`。面が
-クリックで選べるのは面ごとの三角形を配っているからで、**辺も配らないと人は辺を指せない**)と、
-**フィーチャのverbをWebSocketにも開ける**こと(`FEATURE_COMMANDS`)。
-
-固定する契約:
-
-- 辺は**1始まりの添字つきの折れ線**で届き、その添字は選択の参照が持つ添字と同じ
-  (ずれると「指した辺と違う辺が丸まる」という、例外も出ない静かな事故になる)
-- **フィーチャのコマンドは対象集合を引数で受け取らない**。丸める辺も押し出す領域もコアの
-  選択から取るので、WebSocketへ送るのは数値と `mode` だけである
-- 辺は**要求した接続にだけ**返る(状態配信に混ぜない)。形が変われば `revision` が上がる
-- 領域押し出し・フィレット・面取り・矩形反復・円形反復をWebSocketから踏める
-- **`mode`(join/cut/new)は必須**。既定値で補わない(切り取るつもりで足すのを黙って通さない)
-- **フィレットの失敗は文書に何も残さない**(OCCTは例外を投げずに失敗し、半径に対して単調でも
-  ない)。**選択も保持される** —— 24本選び直しにならないことがUI側の要件の前提
-- プレビューはフィレット・面取り・領域押し出しでも**何も残さない**
-"""
+"""サーバ側の契約: ブラウザから**手でフィーチャをかける**ための口と、辺の配信。"""
 from __future__ import annotations
 
 import json
@@ -66,9 +46,6 @@ def _fingerprint(session: Session) -> dict:
     }
 
 
-# --------------------------------------------------------------------------------------
-# 辺を折れ線で配る(kernel)
-# --------------------------------------------------------------------------------------
 def test_every_edge_arrives_as_a_polyline_with_at_least_two_points(session: Session) -> None:
     """立方体の12辺すべてが折れ線で届く。**1本も欠けない**(欠けた辺は指せない辺になる)。"""
     body, _ = _box(session)
@@ -84,13 +61,7 @@ def test_every_edge_arrives_as_a_polyline_with_at_least_two_points(session: Sess
 
 
 def test_the_polyline_index_is_the_index_fillet_takes(session: Session) -> None:
-    """折れ線の添字は `describe_edges` / `fillet(edges=[...])` と**同じ辺**を指す。
-
-    ここがずれると「指した辺と違う辺が丸まる」という、例外も出ない静かな事故になる。
-    `describe_edges` は端点を build123d で測る別経路なので、**両端が一致することが
-    2経路の突き合わせ**になっている(`describe_faces` の法線が tessellate と突き合わせ
-    られているのと同じ規律)。
-    """
+    """折れ線の添字は `describe_edges` / `fillet(edges=[...])` と**同じ辺**を指す。"""
     body, _ = _box(session)
     polylines = {item["index"]: item for item in kernel.tessellate_edges(body.shape, DEVIATION)}
 
@@ -109,11 +80,7 @@ def test_the_polyline_index_is_the_index_fillet_takes(session: Session) -> None:
 
 
 def test_a_round_edge_comes_back_curved_and_closed(session: Session) -> None:
-    """円い辺は**折れ線として曲がって**届き、閉じた辺には `closed` が立つ。
-
-    直線と同じ2点で返すと、画面上は円筒の丸い稜線が弦1本になり、**狙ってクリックできない**
-    (面取りで円錐を作るには円い辺を指す必要がある。タスクDの検証3 = `PC_case_feet` の構成)。
-    """
+    """円い辺は**折れ線として曲がって**届き、閉じた辺には `closed` が立つ。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
@@ -140,10 +107,6 @@ def test_small_radius_circle_still_gets_enough_points_from_angular_deflection(
     `GCPnts_TangentialDeflection`(線形+角度)は角度偏差
     `kernel.DEFAULT_ANGULAR_DEFLECTION`(ラジアン)1本で必要点数の下限が決まり、
     半径に依存しない。
-
-    下限は**マジックナンバーを埋めない**——満周(2π rad)を角度偏差で割った分割数
-    (切り上げ)+ 閉曲線の始点=終点を含めた+1、から導く。この式のまま
-    `DEFAULT_ANGULAR_DEFLECTION` を変えても検査が追随する。
     """
     minimum_points = math.ceil(2.0 * math.pi / kernel.DEFAULT_ANGULAR_DEFLECTION) + 1
 
@@ -184,9 +147,6 @@ def test_tessellate_edges_rejects_an_empty_shape_and_a_bad_deviation(session: Se
         kernel.tessellate_edges(body.shape, 0.0)
 
 
-# --------------------------------------------------------------------------------------
-# 辺を配る口(Session.edges / get_edges)
-# --------------------------------------------------------------------------------------
 def test_edges_are_sent_only_to_the_connection_that_asked(session: Session) -> None:
     """`get_edges` は要求した接続にだけ返る(状態配信に混ぜない。`preview` と同じ扱い)。"""
     body, _ = _box(session)
@@ -215,12 +175,7 @@ def test_the_edge_revision_follows_the_shape(session: Session) -> None:
 
 
 def test_the_edges_of_a_hidden_body_are_refused(session: Session) -> None:
-    """隠したBodyの辺は配らない(`geometry()` と同じ規律)。
-
-    配ると、隠したはずの部品の辺だけが宙に浮いて見え、しかも指せる —— 辺のピッキングは
-    「見えているものと指せるものを一致させる」ことで成り立っているので、ここが破れると
-    見えない辺を丸める経路ができる。
-    """
+    """隠したBodyの辺は配らない(`geometry()` と同じ規律)。"""
     body, _ = _box(session)
     session.set_visible(body.id, False)
 
@@ -240,10 +195,7 @@ def test_asking_for_the_edges_of_an_unknown_body_is_an_error(session: Session) -
 
 
 def test_extrude_without_a_mode_is_refused(session: Session) -> None:
-    """落ちたら、WSの表が欠けた `mode` を既定(join)で埋めている(切り取るつもりの押し出しが黙って足す)。
-
-    円は立方体の外に置く —— 内側だと join で埋まっても「形が変わらない」で断られ、この検査が効かない。
-    """
+    """落ちたら、WSの表が欠けた `mode` を既定(join)で埋めている(切り取るつもりの押し出しが黙って足す)。"""
     _box(session)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [40.0, 40.0], 4.0)
@@ -260,12 +212,7 @@ def test_extrude_without_a_mode_is_refused(session: Session) -> None:
 
 
 def test_the_browser_can_make_a_new_body(session: Session) -> None:
-    """`mode="new"` をブラウザから打つと、**既存の立方体に融合せず**2つ目のボディが増える。
-
-    ブラウザは `body_id` を送れない(`catalog` の `ws=False`)ので、`join` のときの行き先は
-    常にアクティブなボディである —— つまり**画面からは既存ボディがある限り2つ目の板が
-    作れなかった**。`new` はその一点を開ける口なので、WSの経路でも通しておく。
-    """
+    """`mode="new"` をブラウザから打つと、**既存の立方体に融合せず**2つ目のボディが増える。"""
     box, _ = _box(session)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [5.0, 5.0], 10.0, 10.0)
@@ -285,11 +232,7 @@ def test_the_browser_can_make_a_new_body(session: Session) -> None:
 
 
 def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:
-    """辺を複数選んでフィレットがかけられる(タスクDの検証2)。
-
-    **選んだ辺はコマンドに載らない** —— 画面のクリックが `modify_selection` で
-    コアの選択集合を編集し、`fillet` はそこから辺を取る(MCPと同じ入口)。
-    """
+    """辺を複数選んでフィレットがかけられる(タスクDの検証2)。"""
     body, _ = _box(session)
     faces_before = kernel.face_count(body.shape)
     _select(session, _edges(body, [1, 2]))
@@ -307,16 +250,7 @@ def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:
 
 
 def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:
-    """**同じ操作をUIからとMCPからで行い、結果が一致する**(タスクDの検証6)。
-
-    UIが叩くのは `FEATURE_COMMANDS` 経由の `Session.fillet`、AIが叩くのは
-    `DocumentTools.fillet`。**同じ `Session` のメソッドに集まる**というのがこの企画の
-    設計(§2「コアはUIが無くても完全」)であり、ここが分岐した瞬間に
-    「画面では丸まったのにAIから見ると丸まっていない」が起きる。
-
-    **両側とも選択の辺を取る**。どちらも添字を引数で渡す口を持たず、
-    違いは選択の入れ方だけ —— 人はクリック(`modify_selection`)、AIは述語や参照である。
-    """
+    """**同じ操作をUIからとMCPからで行い、結果が一致する**(タスクDの検証6)。"""
     from_ui = Session(None, DEVIATION)
     from_ai = Session(None, DEVIATION)
     ui_body, _ = _box(from_ui)
@@ -340,9 +274,6 @@ def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:
     ]
 
 
-# --------------------------------------------------------------------------------------
-# プレビュー(確定前の姿)
-# --------------------------------------------------------------------------------------
 def test_previewing_a_fillet_shows_the_shape_and_leaves_nothing_behind(
     session: Session,
 ) -> None:

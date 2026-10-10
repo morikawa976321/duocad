@@ -1,4 +1,4 @@
-"""タスク6・48.72 MPaピークの荷重ゾーン診断: 03A_REFERENCE_REPAIR.md 7-1節が特定した原因
+"""タスク6・48.72 MPaピークの荷重ゾーン診断: 10_SYNTHESIS 付録A(旧 03A_REFERENCE_REPAIR 7-1節)が特定した原因
 (hanger一般部のピークは荷重パッド接触端の応力集中だが、`_fem_probe.zone_masks`に荷重面近傍ゾーンが
 無いため一般部へ希釈される)を、`_fem_probe.zone_masks_with_load`(本タスクで追加。既存`zone_masks`は
 無変更)で複数条件にわたって確認する。「残る作業(06/07へ割当)」(03A 7-1節)への対応。
@@ -57,7 +57,7 @@ def _zone_percentile_all(vm: np.ndarray, zones: dict, *, allowable_mpa: float) -
 
 def _peak_locality(vm: np.ndarray, mask: np.ndarray, ctx: sm.SearchContext) -> dict:
     """材料内(mask=True)でvon Mises最大のセルの世界座標・拘束面/荷重面までの最短距離
-    (03A_REFERENCE_REPAIR.md 7-1節と同じ手法)。"""
+    (10_SYNTHESIS 付録A(旧 03A_REFERENCE_REPAIR 7-1節)と同じ手法)。"""
     idx_flat = int(np.argmax(np.where(mask, vm, -np.inf)))
     idx = np.unravel_index(idx_flat, vm.shape)
     world = np.asarray(ctx.grid.origin) + (np.array(idx, dtype=float) + 0.5) * ctx.grid.spacing

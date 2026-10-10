@@ -54,12 +54,9 @@ RESULTS = CHECK.results
 
 DEVIATION = 0.2
 # 検証用に縮めた設定。**本番の既定ではない** —— 既定(`max_evaluations=1000`)の
-# ままだと1回の実行が長くなる(`20260904-1437` の契約③)。
+# ままだと1回の実行が長くなる。
 CHECK_MAX_EVALUATIONS = 3
-# **既定(いちばん粗い)解像度を使わない。** この題材(離れた2パッド)は`design_space.derive`が
-# 既定解像度で`voxelize.occupancy`のValueErrorを踏む既知の未解決バグがある
-# (`20260917-0444`の契約④。段階5・このタスクの担当範囲外)。4mmは以前rminが実質作っていた
-# 上限(6/1.5)を引き継いだだけの値で、この題材では安全に通る(14mmまでは実測で成功)。
+# 解像度は既定に任せず固定する(既定は条件面と上限 4 mm で決まり、変わると検査の所要が変わる)。
 CHECK_ELEMENT_SIZE_MM = 4.0
 
 
@@ -137,7 +134,7 @@ def run_once() -> tuple:
     print(
         f"  要素サイズ: 上限 {limits['max_element_size_mm']:.4g}mm / "
         f"下限 {limits['min_element_size_mm']:.4g}mm(所要時間は事前見積もりが無い"
-        "——計画書§6.2)"
+        ")"
     )
 
     before_ids = [body.id for body in session.document.bodies]
@@ -177,7 +174,7 @@ def check_end_to_end(session, out, before_ids, before_shapes) -> None:
         len(added) == 1 and added[0].id == out["body_id"],
         f"{len(before_ids)} -> {len(bodies)} (増えたのは {[b.name for b in added]})",
     )
-    # 結果は編集可能ソリッドではなくメッシュボディで入る(2026-09-23 本人判断。docs/TOPOPT.md)
+    # 結果は編集可能ソリッドではなくメッシュボディで入る(docs/TOPOPT.md)
     check(
         "増えたのはメッシュボディ",
         bool(added) and added[0].kind == "mesh" and added[0].mesh is not None and added[0].shape is None,
@@ -197,8 +194,7 @@ def check_end_to_end(session, out, before_ids, before_shapes) -> None:
         and added[0].mesh.triangle_count == out["triangle_count"],
         f"{out['triangle_count']} 枚",
     )
-    # **画面(`20260904-1705`)はこの戻り値をWebSocketへそのまま載せる。** 実体
-    # (`DesignSpace` / `AnchorTable`)が混ざっていたらここで落ちる。
+    # **画面はこの戻り値をWebSocketへそのまま載せる。** 実体(`DesignSpace` / `AnchorTable`)が混ざっていたらここで落ちる。
     wire = dict(out)
     wire.pop("applied", None)
     try:

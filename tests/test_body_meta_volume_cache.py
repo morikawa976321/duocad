@@ -1,14 +1,4 @@
-"""`Session.body_meta()` の体積キャッシュ。
-
-`state_meta()` は接続のたびに全Bodyぶん `body_meta()` を呼ぶ(`Server._push`)。
-`query.volume` は面ごとの数値積分で軽くない(PCケース27部品で693ms/回)ので、
-形状が変わっていないBodyの体積を測り直さないことを固定する。
-
-キャッシュの規律は `geometry()` と同じ —— 形状の**同一性**(`is`)で判定する(版ではない)。
-
-**実体の持ち主は `session.view`(`duocad/view.py` の `DocumentView._body_volume` /
-`_volume_cache`)**。
-"""
+"""`Session.body_meta()` の体積キャッシュ。"""
 from __future__ import annotations
 
 import math

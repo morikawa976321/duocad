@@ -39,11 +39,7 @@ class Table:
 
 def bar_conditions(shape=(4, 2, 2), *, fixed=(1,), load=(2,), empty=(), forces=((0., 0., -1.),),
                     keep_box=None, target_safety_factor=.001, solver='direct'):
-    """まっすぐな棒(4x2x2既定)。固定面=x最小平面(節点0..8)、荷重面=x最大平面。
-
-    `keep_box` を省略すると、格子全体を覆う箱にする(保持条件を常に自明に満たし、
-    島処理の判定を固定面・荷重面だけに絞れるようにする補助)。
-    """
+    """まっすぐな棒(4x2x2既定)。固定面=x最小平面(節点0..8)、荷重面=x最大平面。"""
     grid = voxelize.Grid((0., 0., 0.), 1., shape)
     ny1, nz1 = shape[1] + 1, shape[2] + 1
     x_max_node = shape[0] * ny1 * nz1

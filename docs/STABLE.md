@@ -15,8 +15,7 @@
 | MCP(Claude Code) | 安定版のフォルダで開いたセッション → 8776(local スコープ登録) | `.mcp.json` → 8766 |
 | 起動 | Win → `duocad` → Enter | 従来どおり(README 1章) |
 
-**開発版が既定のポートを持ち、安定版がずれる**のは、開発セッションとエージェントが既定のポートで
-サーバを立て・繋ぐ習慣を変えずに済ませるため。追跡している `.mcp.json`(8766)は両方のcloneに
+**開発版が既定のポートを持ち、安定版がずれる**のは、開発側が既定のポートで立て・繋ぐ習慣を変えずに済ませるため。追跡している `.mcp.json`(8766)は両方のcloneに
 入るが、安定版のフォルダでは local スコープの登録(8776)が優先される(local > project > user)。
 **登録が消えると、安定版のフォルダのセッションは 8766 へ繋ぐ**(開発版が立っていればそれを操作してしまう)ので、
 `install.ps1` は登録の後に `claude mcp get duocad` で 8776 を指すことを確かめ、違えば止まる。
@@ -58,14 +57,22 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 
 1. サーバが `tools/stable/update.ps1` を一時フォルダへ写して切り離して起動し、自分は終了する
    (**Windowsでは動いている `.venv` の python.exe を置き換えられない**ので、更新はサーバの外で行う)
-2. スクリプトが `git merge --ff-only origin/main` → `uv sync --frozen` →(`package-lock.json` が変わったときだけ)
+2. スクリプトが `git merge --ff-only origin/main` → `uv sync --frozen`(設定で GPU を選んだか、GPU の部品が入っている clone では
+   `--extra gpu` も。[TOPOPT_GPU.md](TOPOPT_GPU.md))→(`package-lock.json` が変わったときだけ)
    `npm ci` → `npm run build`
 3. `duocad.launcher --no-window` で立て直す。画面は再接続を待って自動で読み直し、結果をトーストで出す
 
-**失敗したら元のコミットへ戻して立て直す**(トーストに理由とログの場所)。実測(2026-10-04、依存の変化なし):
-取り込みからビルドまで4秒、壊れたビルドからの巻き戻しを含めて7秒。
+**失敗したら元のコミットへ戻して立て直す**(トーストに理由とログの場所。uv・npm が見つからない等でも、
+スクリプトは最後に必ず立て直す)。実測(依存の変化なし): 取り込みからビルドまで4秒、巻き戻しを含めて7秒。
 
-サーバの外で更新するのに失敗しても(uv・npm が見つからない等)、スクリプトは最後に必ず立て直す。
+**Python の版を上げる更新**(例: 3.11 → 3.14)は、サーバ(uv の venv の python)が子へ渡す `PYTHONHOME` を
+更新スクリプトが引き継ぐと `uv sync` が落ちる。`duocad/channel.py` と `update.ps1` が外しているが、**外す前の版の
+サーバから押した更新では落ちる**(元の版へ戻る)。そのときは duocad から起動していない普通の PowerShell で `update.ps1` を手で走らせる
+(`-ServerPid` を省くと `-HttpPort` からサーバを探して止める):
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot $env:USERPROFILE\mf\duocad-stable -LogDir $env:USERPROFILE\mf\duocad-data\logs -DataDir $env:USERPROFILE\mf\duocad-data
+```
 元の版への復元にも失敗したときは、トーストがそう言う(`last-update-result.json` の `restored: false`)。
 
 ボタンが出ない・押せない条件(`duocad/channel.py`):

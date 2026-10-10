@@ -4,82 +4,50 @@
     .\\.venv\\Scripts\\python.exe -m duocad.topopt.anchor           # 合成ブラケットの面アンカー表を作って要約する
 
 これは `duocad.topopt` の **stage2**。stage1(`voxelize.py`)が作った格子の上に、
-「ボディXの面#42」→「これらの格子節点」の翻訳を載せる。これが無いと固定面・荷重面を
-指定できず、統合時の `add_fixture` / `add_load` verb も書けない。
+「ボディXの面#42」→「これらの格子節点」の翻訳を載せる(固定面・荷重面の指定に必要)。
 
-## なぜボクセルの側から境界を取り直してはいけないか
-
-ボクセルの表面は階段状で、真のCAD面から最大で半要素ずれる。「占有ボクセルの最も左の層」の
-ような取り方をすると、斜面や曲面で荷重の向きと面積が歪み、階段の角に**偽の応力集中**が出る。
-出てくる形は「少し悪い」のではなく「自信を持って間違っている」。
-
-正解は**両方の表現が手元にある瞬間(=ボクセル化時)に対応を固定し、以後はその表を引く**こと。
-本モジュールは `TriangleSoup`(面添字つきの三角形群)と `Grid` だけを見て表を作る。
-ボクセルの占有マスクは**一切見ない**(見た瞬間に階段が混入する)。
+ボクセルの表面は階段状で真のCAD面から最大で半要素ずれ、斜面や曲面で荷重の向きと面積が歪んで
+**偽の応力集中**が出る。そのため境界はボクセルから取り直さず、ボクセル化時に対応を固定して以後その表を引く。
+本モジュールは `TriangleSoup`(面添字つきの三角形群)と `Grid` だけを見て表を作り、占有マスクは**一切見ない**。
 
 ## 契約(後続がここに依存する。壊すと黙って間違った荷重が入る)
 
-- **節点は要素の角**である。要素格子が `(nx, ny, nz)` なら節点格子は `(nx+1, ny+1, nz+1)`。
-  節点 (i,j,k) のワールド座標は `origin + spacing * (i, j, k)`(要素**中心**の
-  `+0.5` は付かない。付けると半セルずれる。要素中心が要るときは `Grid.centers_of`)。
+- **節点は要素の角**。要素格子が `(nx, ny, nz)` なら節点格子は `(nx+1, ny+1, nz+1)`。
+  節点 (i,j,k) のワールド座標は `origin + spacing * (i, j, k)`(要素中心の `+0.5` は付かない。要素中心は `Grid.centers_of`)。
 - **節点番号は `fem.py` の DOF 写像と同じ**: `n = i*(ny+1)*(nz+1) + j*(nz+1) + k`、
-  自由度は `3n, 3n+1, 3n+2`(`fem._build_edof` と一致。ここがずれると荷重が
-  別の場所に入り、それでも最適化は「もっともらしく」収束する)。
-- **1つの節点は高々1つの面に属する**(後述の稜線規則)。面ごとの節点集合は排他である。
-- **節点は「担当面積」を持つ**。荷重はこの面積比で配る。重み無しの等分は禁止 ——
-  解像度を2倍にすると同じ面に4倍の節点が乗るので、等分すると総荷重か分布が黙って変わる。
+  自由度は `3n, 3n+1, 3n+2`(`fem._build_edof` と一致。ずれると荷重が別の場所に入る)。
+- **1つの節点は高々1つの面に属する**(稜線規則)。面ごとの節点集合は排他。
+- **節点は「担当面積」を持ち、荷重はこの面積比で配る。** 重み無しの等分は禁止(解像度を2倍にすると
+  同じ面に4倍の節点が乗り、総荷重か分布が黙って変わる)。
 
 ## 表の作り方
 
-1. 面 f の三角形を、辺長が `sample_ratio * spacing`(既定 0.25)以下になるまで細分し、
-   各小三角形の**重心**を標本点にする。標本点は親三角形の面積を等分して持つ
-   (小三角形の面積は厳密に等しいので、面積は分割で保存される)。
-   細分が要るのは、平面の面が三角形2枚で返ってくるため —— 三角形の重心だけを見ると
-   40x20 の面の荷重が2点に集中する。
-2. 各標本点から半径 `radius = radius_ratio * spacing`(既定 1.0)の球に入る節点を拾い、
-   **テント重み** `w = 1 - d/radius` を付ける。標本ごとに重みの和で正規化するので、
-   面積は配っても保存される(単位の分割 = partition of unity)。
-   - 既定を範囲(0.5〜1.0)の**上端**にしてあるのは、`radius >= sqrt(3)/2 * spacing`
-     でないと「どの節点も球に入らない標本点」が出るため(要素の中心から最も近い節点までが
-     `sqrt(3)/2 * spacing`)。そこへ落ちると最近傍1点へ全部載り、**面の置かれ方によって
-     荷重が特定の節点へ集中する**(まさに避けたい失敗)。それでも念のため最近傍への
-     退避は残してある(`stats["fallback_samples"]` に件数が出る)。
-   - `radius_ratio` は引数で変えられる。小さくすると節点は面に貼り付くが上記の集中が出る。
-3. 面 f が節点 n へ配った面積を `raw` として全部覚えておく。1つの節点が複数の面の
-   球に入りうる(稜線付近)ので、**最後に持ち主を決める**。
+1. 面 f の三角形を辺長が `sample_ratio * spacing`(既定 0.25)以下になるまで細分し、各小三角形の重心を標本点にする
+   (面積は等分で保存される)。細分が要るのは、平面が三角形2枚で返り、重心だけだと 40x20 の面の荷重が2点に集中するため。
+2. 各標本点から半径 `radius = radius_ratio * spacing`(既定 1.0)の球に入る節点へ**テント重み** `w = 1 - d/radius` を付け、
+   標本ごとに重みの和で正規化する(面積は保存される)。既定を範囲(0.5〜1.0)の上端にしてあるのは、
+   `radius >= sqrt(3)/2 * spacing` でないと「どの節点も球に入らない標本点」が出て最近傍1点へ荷重が集中するため
+   (退避は残してあり、`stats["fallback_samples"]` に件数が出る)。
+3. 面 f が節点 n へ配った面積を `raw` として覚えておき、最後に持ち主を決める。
 
-## 稜線の規則(明文化。黙って重複させない)
+## 稜線の規則
 
-**節点の持ち主は、その節点へ最も多くの面積を配った面**とする。同点のときは**面添字の
-小さい面**が勝つ(決定的にするため)。したがって:
-
-- 面ごとの節点集合は**排他**(どの節点も高々1つの面に属する)。
-- 面 f が他面に取られた節点へ配った面積は**捨てる**(再正規化しない)。捨てた割合は
-  `FaceAnchor.leak_ratio` に出る。再正規化しないのは、**担当面積の合計が「その面が
-  実際に受け持っている面積」であってほしい**ため。捨てた分は隣の面が受け持っている。
-- 荷重は「その面の節点の担当面積の比」で配るので、捨てた分があっても**指定した総荷重は
-  厳密に保存される**(比の正規化で吸収される)。
-
-重みを割って両方に配る案(節点を共有する)も考えたが採らなかった —— 固定面と荷重面が
-稜線を共有していると、同じ節点が「拘束されていて、かつ荷重を受ける」ことになり、
-その荷重は**黙って消える**(拘束DOFの荷重は解に効かない)。排他なら、少なくとも
-どちらか一方には必ず効く。
+**節点の持ち主は、その節点へ最も多くの面積を配った面**(同点は面添字の小さい面)。他面に取られた節点へ配った面積は
+捨て(再正規化しない。捨てた割合は `FaceAnchor.leak_ratio`)、荷重は面の節点の担当面積の比で配るので総荷重は厳密に保存される。
+重みを割って節点を共有する案は採らなかった: 固定面と荷重面が稜線を共有すると同じ節点が「拘束されかつ荷重を受ける」ことになり、
+その荷重は黙って消える(拘束DOFの荷重は解に効かない)。排他なら少なくとも一方には効く。
 
 ## 荷重直下を非設計領域にする
 
-最適化は荷重直下の材料を溶かしにいく(そこに材料が無くても計算上は荷重が入るため)。
-実務上の定石どおり、アンカー節点に接する要素を保持領域(ρ=1)へ固定する口を付けてある
-(`element_mask`)。`design_space.derive` が固定面・荷重面ごとの接続の種(seed)として使う。
+最適化は荷重直下の材料を溶かしにいくので、アンカー節点に接する要素を保持領域(ρ=1)へ固定する口がある(`element_mask`。
+`design_space.derive` が接続の種として使う)。
 
 ## 材料に接する節点だけへ対応付ける(探索用の確定表)
 
-上の表は材料の有無を見ない(幾何の対応表)。探索(`binary_search`)は**全アンカー節点が材料に
-接する**ことを要求するので、設計空間の外にしか無い節点へ配った表をそのまま渡すと、
-全材料マスクでも「荷重・拘束が有効」が落ちる。`build_anchors(..., allowed_nodes=...)` は
-**標本ごとに、球内の節点のうち許可された節点だけへ重みを配る**(配ってから捨てるのではない)。
-球内に許可節点が1つも無い標本は**対応不能**として面ごとに数え、遠い節点へは移さない
-(探す範囲は同じ球 `radius`。`FaceAnchor.unmapped_samples` / `unmapped_positions`)。
-確定表の検証(節点数・対応不能標本・被覆・合力・重心・モーメント)は `condition_mapping`。
+探索(`binary_search`)は**全アンカー節点が材料に接する**ことを要求するので、`build_anchors(..., allowed_nodes=...)` は
+**標本ごとに、球内の節点のうち許可された節点だけへ重みを配る**(配ってから捨てない)。球内に許可節点が無い標本は
+**対応不能**として面ごとに数え、遠い節点へは移さない(`FaceAnchor.unmapped_samples` / `unmapped_positions`)。
+確定表の検証は `condition_mapping`。
 """
 
 from __future__ import annotations
@@ -94,29 +62,25 @@ import numpy as np
 
 from . import voxelize as vx
 
-# 標本点の目標間隔(要素サイズ比)。小さいほど分布が滑らかになり、標本点の数は2乗で増える。
+# 標本点の目標間隔(要素サイズ比)。
 DEFAULT_SAMPLE_RATIO = 0.25
 # 節点を拾う球の半径(要素サイズ比)。既定を 1.0 にしてある理由はモジュール docstring。
 DEFAULT_RADIUS_RATIO = 1.0
-# 1三角形あたりの細分の上限(k x k 個の小三角形になる)。暴走を止めるためだけの値。
+# 1三角形あたりの細分の上限(k x k)。暴走止め。
 MAX_SUBDIVISION = 512
 # 1回のベクトル演算で扱う標本点の上限(中間配列を数MBに抑える)。
 SAMPLE_BATCH = 40_000
-#: 対応不能標本の座標を面ごとに何件まで残すか(診断の大きさを抑えるためだけの値)。
+#: 対応不能標本の座標を面ごとに何件まで残すか(診断の大きさを抑える)。
 UNMAPPED_SAMPLE_RECORD = 20
-#: 作用位置の門(`position_limit`)に足す相対の数値許容差。ちょうど半径の位置を丸め誤差で落とさないためだけの値。
+#: 作用位置の門(`position_limit`)に足す相対の数値許容差(ちょうど半径の位置を丸め誤差で落とさないため)。
 MAPPING_POSITION_RTOL = 1e-9
 
 
 def position_limit(table: "AnchorTable") -> float:
     """条件面の作用位置のずれの許容 [mm] = 対応付けの探索半径(`table.radius`)。
 
-    荷重・拘束を置く位置の合格基準で、`condition_mapping`(重心・モーメント)と
-    `optimize_run._check_anchor_centroids` が同じ値を使う(層をまたぐ契約)。
-    半径は「各標本の面積を配ってよい距離」という対応規則そのものなので、稜線の所有権で面積を
-    失わない限り、節点の重心は標本の重心から必ず半径以内に収まる(標本ごとに半径内の節点への
-    凸結合で、面の重心はその面積平均)。越えるのは、稜線で片側の面積を大きく失った・
-    三角形分割がCAD面から離れた・別の面を掴んだ、のいずれか。
+    `condition_mapping`(重心・モーメント)と `optimize_run._check_anchor_centroids` が同じ値を使う(層をまたぐ契約)。
+    稜線で片側の面積を大きく失わない限り、節点の重心は標本の重心から必ず半径以内に収まる。
     """
     return float(table.radius) * (1.0 + MAPPING_POSITION_RTOL)
 
@@ -124,8 +88,7 @@ def position_limit(table: "AnchorTable") -> float:
 def active_nodes(material: np.ndarray) -> np.ndarray:
     """材料セル(bool、要素格子)に角として接する節点のマスク(節点格子 `(nx+1, ny+1, nz+1)`)。
 
-    `acceptance` の6条件「荷重・拘束が有効」と、探索用の確定表(`build_anchors` の
-    `allowed_nodes`)が同じ定義を使う(層をまたぐ契約: ここが変わると両方が同時に変わる)。
+    `acceptance` の6条件「荷重・拘束が有効」と探索用の確定表(`allowed_nodes`)が同じ定義を使う(層をまたぐ契約)。
     """
     material = np.asarray(material, dtype=bool)
     nodes = np.zeros(tuple(n + 1 for n in material.shape), dtype=bool)
@@ -135,21 +98,19 @@ def active_nodes(material: np.ndarray) -> np.ndarray:
 
 
 def floating_dofs(material: np.ndarray) -> np.ndarray:
-    """空要素にしか接していない(材料に接しない)節点の自由度番号(昇順)。
+    """空要素にしか接していない節点の自由度番号(昇順)。
 
-    `fem.Model` の `extra_fixed_dofs` と `active_mask` は**同じ `material` から作る**(層をまたぐ契約。
-    `fem.Model` の docstring)。ここが唯一の作り方で、`acceptance.safety_check` と検査が共有する。
+    `fem.Model` の `extra_fixed_dofs` と `active_mask` は**同じ `material` から作る**(層をまたぐ契約)。
     """
     return np.flatnonzero(~np.repeat(active_nodes(material).ravel(), 3))
 
 
 def attached_dofs(material: np.ndarray, dofs: np.ndarray) -> np.ndarray:
-    """`dofs`(格子の自由度番号。整数)のうち材料に接する節点の自由度(昇順・重複なし)。格子の中の番号に対しては
-    `np.setdiff1d(dofs, floating_dofs(material))` と値・順序・dtype が同じ。
+    """`dofs`(格子の自由度番号。整数)のうち材料に接する節点の自由度(昇順・重複なし)。
+    格子の中の番号に対しては `np.setdiff1d(dofs, floating_dofs(material))` と同じ値・順序・dtype。
 
-    `floating_dofs` は格子の大半(hanger 2.0mm で約460万個)なので、それとの差を取らずに `dofs` 側で引く
-    (実測 hanger 2.0mm: `setdiff1d` 3.4秒 → 0.007秒、#103)。**格子の外の番号は断る** —— `setdiff1d` は黙って
-    残すが、ここで負の番号を添字に使うと後ろから数えた別の節点を引いてしまう。
+    `floating_dofs` は格子の大半(hanger 2.0mm で約460万個)なので、差を取らず `dofs` 側で引く
+    (実測 hanger 2.0mm: `setdiff1d` 3.4秒 → 0.007秒、#103)。**格子の外の番号は断る**(負の番号は後ろから数えた別の節点を引く)。
     """
     dofs = np.asarray(dofs)
     if dofs.dtype.kind not in 'iu':  # np.issubdtype(.., np.integer) は timedelta64 も通す
@@ -161,8 +122,7 @@ def attached_dofs(material: np.ndarray, dofs: np.ndarray) -> np.ndarray:
 
 
 def face_node_ids(table: Any, face: int) -> np.ndarray:
-    """条件面 `face` の節点(**空の面は空配列**。`AnchorTable.node_ids` は空の面で例外を出すので
-    `empty_faces` を先に見る)。`table` は `node_ids` / `empty_faces` を持てばよい(テストの代用表も通る)。"""
+    """条件面 `face` の節点(**空の面は空配列**。`AnchorTable.node_ids` は空の面で例外を出す)。`table` は `node_ids` / `empty_faces` を持てばよい。"""
     face = int(face)
     if face in {int(f) for f in table.empty_faces()}:
         return np.zeros(0, dtype=np.int64)
@@ -171,9 +131,7 @@ def face_node_ids(table: Any, face: int) -> np.ndarray:
 
 def face_coverage(table: Any, face: int, live: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """条件面 `face` の節点 `ids` と、そのうち材料に接しない `uncovered`(`live` は `active_nodes(...).ravel()`)。
-
-    接しない節点だけを返さないのは、「空の面」と「全部接している面」を呼び出し側が区別するため
-    (どちらも uncovered は空)。空の面は `face_node_ids` のとおり両方とも空配列。
+    空の面と全部接している面を呼び出し側が区別できるよう、接しない節点だけは返さない。
     """
     ids = face_node_ids(table, face)
     return ids, ids[~live[ids]]
@@ -182,11 +140,8 @@ def face_coverage(table: Any, face: int, live: np.ndarray) -> tuple[np.ndarray, 
 def _candidate_offsets(radius_ratio: float) -> np.ndarray:
     """半径 `radius_ratio * spacing` の球に入りうる節点の、格子添字のずれ。
 
-    標本点 p が入る要素の低い側の角を `base = floor((p-origin)/h)` とすると、p の
-    セル内の位置 `frac` は [0,1) にある。節点 `base+d` までの1軸ぶんの距離は
-    `|d - frac| * h` なので、球に入りうるのは `d` が `[1-ceil(ρ), ceil(ρ)]` のときだけ
-    (それ以外は frac をどう取っても距離が半径を超える)。既定の ρ=1 では
-    **その要素の8隅だけ**になり、重みは三線形形状関数と同じ形になる。
+    標本点が入る要素の低い側の角からの差 `d` で、球に入りうるのは `d` が `[1-ceil(ρ), ceil(ρ)]` のときだけ。
+    既定の ρ=1 では**その要素の8隅だけ**になり、重みは三線形形状関数と同じ形になる。
     """
     reach = int(np.ceil(float(radius_ratio) - 1e-12))
     span = np.arange(1 - reach, reach + 1, dtype=np.int64)
@@ -194,9 +149,6 @@ def _candidate_offsets(radius_ratio: float) -> np.ndarray:
     return np.stack([a.ravel(), b.ravel(), c.ravel()], axis=1)
 
 
-# ---------------------------------------------------------------------------
-# 節点格子(要素格子の角)
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class NodeGrid:
     """要素格子 `Grid` の角にある節点の格子。番号は `fem.py` の DOF 写像と同じ。"""
@@ -214,7 +166,7 @@ class NodeGrid:
         return nx * ny * nz
 
     def positions_of(self, indices: np.ndarray) -> np.ndarray:
-        """(N,3) の節点添字 → (N,3) のワールド座標。**要素中心の +0.5 は付かない。**"""
+        """(N,3) の節点添字 → (N,3) のワールド座標(要素中心の +0.5 は付かない)。"""
         idx = np.asarray(indices, dtype=float)
         if idx.ndim != 2 or idx.shape[1] != 3:
             raise ValueError(f"indices must be (N,3), got {idx.shape}")
@@ -251,16 +203,12 @@ class NodeGrid:
         return 3 * self.count
 
 
-# ---------------------------------------------------------------------------
-# 1面ぶんのアンカー
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class FaceAnchor:
     """面 `face_index` に対応づいた節点と、その担当面積。
 
-    `nodes` / `node_ids` / `areas` / `normals` は**持ち主が確定した後**の集合(排他)。
-    `raw_*` は持ち主を決める前に「この面が配った先」で、稜線の規則を検算するために残してある。
-    `cad_*` は B-rep から直に取った真値(三角形分割の近似ではない)。
+    `nodes` / `node_ids` / `areas` / `normals` は持ち主が確定した後の集合(排他)。`raw_*` は持ち主を決める前の配り先
+    (稜線の規則の検算用)。`cad_*` は B-rep から直に取った真値。
     """
 
     face_index: int
@@ -275,14 +223,13 @@ class FaceAnchor:
     cad_area: float
     cad_centroid: np.ndarray
     cad_normal: np.ndarray
-    # 標本点(細分した三角形の重心)の面積重み重心。三角形群の面積重心と厳密に一致するので、
-    # 節点集合の重心のずれ(格子近似の誤差)を測る基準になる。
+    # 標本点の面積重み重心(三角形群の面積重心と一致。節点集合の重心のずれを測る基準)。
     sample_centroid: Optional[np.ndarray] = None
     # `allowed_nodes` 付きで作ったときだけ非零: 球内に許可節点が無かった標本の数・面積・座標。
     unmapped_samples: int = 0
     unmapped_area: float = 0.0
     unmapped_positions: Optional[np.ndarray] = None
-    # 実際に重みが付いた標本→節点の距離の最大(球の半径以下。対応距離の実測)。
+    # 実際に重みが付いた標本→節点の距離の最大(球の半径以下)。
     max_mapping_distance: float = 0.0
 
     @property
@@ -291,7 +238,7 @@ class FaceAnchor:
 
     @property
     def total_area(self) -> float:
-        """担当面積の合計。稜線で隣の面に取られた分は入らない。"""
+        """担当面積の合計(稜線で隣の面に取られた分は入らない)。"""
         return float(self.areas.sum())
 
     @property
@@ -322,9 +269,6 @@ class FaceAnchor:
         return self.areas / total
 
 
-# ---------------------------------------------------------------------------
-# 対応表
-# ---------------------------------------------------------------------------
 @dataclass
 class AnchorTable:
     """面添字 → 節点集合の対応表。**これが stage2 の成果物**で、後続はこの表を引く。"""
@@ -344,17 +288,12 @@ class AnchorTable:
         return [f for f in self.face_indices() if self.anchors[f].node_count == 0]
 
     def empty_face_diagnosis(self, face_index: int) -> dict:
-        """`face_index` が空になった理由の当たりと、逃げ道2つの数字。**空でない面は例外**
-        (呼び出し側の勘違いを早く拾うため —— 空の面だけを渡す前提の口)。
+        """`face_index` が空になった理由の当たりと、逃げ道2つの数字。**空でない面は例外**。
 
-        - `absorbed_by_faces`: 稜線の規則(最も多く面積を配った面が持ち主)でこの面の
-          `raw_node_ids`(持ち主を決める前に配った先)を実際に持っていった面。**この面を
-          指し直せば拘束・荷重が乗る**という具体的な逃げ道1。標本点が1つも節点の球に
-          入らなかった(=raw_node_ids も空の)極端に小さい面では特定できず、空リストになる。
-        - `representative_length_mm` = `sqrt(cad_area)`。**近似**(正方形とみなした代表寸法。
-          曲面・極端な縦横比の面では粗い)。逃げ道2「要素サイズをこれ以下にすれば節点が付く
-          見込み」として `suggested_max_spacing_mm` にも同じ値を出す —— 保証ではなく目安
-          (実際に付くかは対象の要素サイズで `empty_faces()` を取り直して確認すること)。
+        - `absorbed_by_faces`: この面の `raw_node_ids` を稜線の規則で実際に持っていった面(**指し直せば拘束・荷重が乗る**)。
+          標本点が1つも節点の球に入らなかった極端に小さい面では特定できず空リスト。
+        - `representative_length_mm` = `sqrt(cad_area)`(正方形とみなした**近似**。曲面・極端な縦横比では粗い)。
+          `suggested_max_spacing_mm` にも同じ値が入る。保証ではなく目安(`empty_faces()` を取り直して確認すること)。
         """
         anchor = self[int(face_index)]
         if anchor.node_count != 0:
@@ -385,9 +324,7 @@ class AnchorTable:
     def condition_face_diagnoses(self, fixed_faces: Any, load_faces: Any) -> list[dict]:
         """拘束面・荷重面のうち `empty_faces()` に入っているものだけの診断(側の別つき)。
 
-        `optimize_run._empty_condition_faces` が製品経路の入口で使う。**1枚も空でなければ
-        空リスト** —— 通常経路の戻り値には影響しない(新しい通知の仕組みではなく、既存の
-        `empty_faces()` を機械可読な形に整えるだけの薄い層)。面は `int` 1つでも並びでも受ける。
+        `optimize_run._empty_condition_faces` が製品経路の入口で使う。1枚も空でなければ空リスト。面は `int` 1つでも並びでも受ける。
         """
         empty = set(self.empty_faces())
         out: list[dict] = []
@@ -416,12 +353,11 @@ class AnchorTable:
         return picked
 
     def node_ids(self, faces: Iterable[int] | int) -> np.ndarray:
-        """指定した面の節点の通し番号(昇順・重複なし)。面ごとの集合は排他なので単純に連結できる。
+        """指定した面の節点の通し番号(昇順・重複なし)。
 
-        **節点が1つも付かなかった面が1つでも混ざっていたら落とす。** 要素サイズより小さい面
-        (フィレット・面取り・小さな段差)は、隣の大きい面に節点を全部持っていかれて
-        空になる(実測: 231面のSTEPを要素サイズ1.54mmで割ると22面が空)。黙って空の
-        集合を返すと、**拘束の無い系や荷重0の系がそのまま最適化に入る**。
+        **節点が1つも付かなかった面が1つでも混ざっていたら落とす。** 要素サイズより小さい面は隣の大きい面に節点を
+        全部持っていかれて空になり(実測: 231面のSTEPを要素サイズ1.54mmで割ると22面が空)、
+        黙って返すと**拘束の無い系や荷重0の系がそのまま最適化に入る**。
         """
         picked = self._selected(faces)
         ids = np.concatenate([a.node_ids for a in picked]) if picked else np.zeros(0, int)
@@ -436,9 +372,7 @@ class AnchorTable:
     def _require_nodes(self, picked: list[FaceAnchor]) -> None:
         """空の面が**1つでも**混ざっていたら落とす(`node_ids` と荷重の口で共有する)。
 
-        **合計で見てはならない。** 大きい面と小さい面を一緒に指すと合計は正になり、
-        小さい面だけが黙って落ちる —— 2面を固定したつもりで1面しか効いていない系が、
-        例外も通知も無いまま最適化へ入る。
+        **合計で見てはならない**(大きい面と小さい面を一緒に指すと、小さい面だけが黙って落ちる)。
         """
         empty = [a for a in picked if a.node_count == 0]
         if not empty:
@@ -475,11 +409,7 @@ class AnchorTable:
         *,
         out: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """荷重面 → 荷重ベクトル (ndof,)。**合計は `total_force` に厳密に一致する。**
-
-        面が複数のときは、面の担当面積の合計比で面へ配ってから面内で配る
-        (= 全節点の担当面積の比で配るのと同じ)。解像度を変えても総和は変わらない。
-        """
+        """荷重面 → 荷重ベクトル (ndof,)。**合計は `total_force` に厳密に一致する**(面の担当面積の合計比で面へ配り、面内でも担当面積の比で配る)。"""
         picked = self._selected(faces)
         force = np.asarray(total_force, dtype=float).reshape(3)
         ids = np.concatenate([a.node_ids for a in picked])
@@ -499,11 +429,7 @@ class AnchorTable:
         return f
 
     def element_mask(self, faces: Iterable[int] | int) -> np.ndarray:
-        """アンカー節点を角に持つ要素の bool マスク (nx,ny,nz)。非設計領域に固定するのに使う。
-
-        荷重・拘束の近傍を ρ=1 に固定するのが実務上の定石で、これをやらないと最適化が
-        荷重直下の材料を溶かして「荷重が宙に浮いた」形が出る。
-        """
+        """アンカー節点を角に持つ要素の bool マスク (nx,ny,nz)。荷重・拘束の近傍を非設計領域(ρ=1)に固定するのに使う。"""
         nx, ny, nz = self.grid.shape
         mask = np.zeros((nx, ny, nz), dtype=bool)
         idx = self.nodes(faces)
@@ -517,9 +443,6 @@ class AnchorTable:
         return mask
 
 
-# ---------------------------------------------------------------------------
-# 標本点(三角形の細分)
-# ---------------------------------------------------------------------------
 def _unit_triangle_centroids(k: int) -> np.ndarray:
     """単位三角形を k x k 個の等面積の小三角形へ割ったときの重心の重心座標 (k^2, 2)。"""
     ii, jj = np.meshgrid(np.arange(k), np.arange(k), indexing="ij")
@@ -573,9 +496,6 @@ def _iter_samples(
             yield pts.reshape(-1, 3), areas, parents
 
 
-# ---------------------------------------------------------------------------
-# 表の構築
-# ---------------------------------------------------------------------------
 def build_anchors(
     soup: vx.TriangleSoup,
     grid: vx.Grid,
@@ -587,14 +507,10 @@ def build_anchors(
 ) -> AnchorTable:
     """面添字 → 節点の対応表を作る。
 
-    `faces` を渡すとその面だけを対象にする(既定は全面)。`radius_ratio` は節点を拾う球の
-    半径(要素サイズ比)、`sample_ratio` は三角形を細分するときの目標辺長(要素サイズ比)。
-
-    `allowed_nodes`(節点格子と同じ形か平坦な bool)を渡すと、**標本ごとに球内の許可節点だけへ
-    重みを配る**(材料に接する節点だけへ対応付ける探索用の確定表。モジュール docstring)。
-    球内に許可節点が無い標本は対応不能として面ごとに数え、最近傍への退避はしない
-    (`stats["mapping"] == "material"`)。渡さなければ従来どおり材料を見ない幾何の表
-    (`stats["mapping"] == "geometry"`)。
+    `faces` を渡すとその面だけを対象にする(既定は全面)。`radius_ratio` は球の半径、`sample_ratio` は細分の目標辺長(いずれも要素サイズ比)。
+    `allowed_nodes`(節点格子と同じ形か平坦な bool)を渡すと、標本ごとに球内の許可節点だけへ重みを配る探索用の確定表になり、
+    球内に許可節点が無い標本は対応不能として数える(最近傍への退避はしない。`stats["mapping"] == "material"`)。
+    渡さなければ材料を見ない幾何の表(`stats["mapping"] == "geometry"`)。
     """
     started = time.perf_counter()
     if not radius_ratio > 0:
@@ -678,8 +594,7 @@ def build_anchors(
                 + cand_clipped[:, :, 2]
             )
             if allowed is not None:
-                # 許可節点を**重みを計算する前に**選別する。配ってから捨てると標本ごとの
-                # 正規化(単位の分割)が許可外の節点を含めた重みで決まってしまう。
+                # 許可節点を**重みを計算する前に**選別する(配ってから捨てると正規化が許可外の節点を含めた重みで決まる)。
                 valid &= allowed[ids]
             node_pos = origin + h * cand_clipped
             dist = np.linalg.norm(node_pos - pts[:, None, :], axis=2)
@@ -793,8 +708,7 @@ def build_anchors(
         "anchor_nodes": int(sum(a.node_count for a in anchors.values())),
         "empty_faces": [f for f in sorted(anchors) if anchors[f].node_count == 0],
         "node_shape": list(node_grid.shape),
-        # 幾何の表(材料を見ない)か、材料に接する節点だけへ対応付けた探索用の確定表か。
-        # 記録・ログはこの値で2つの表を見分ける。
+        # 記録・ログはこの値で幾何の表と確定表を見分ける。
         "mapping": "geometry" if allowed is None else "material",
         "allowed_nodes": None if allowed is None else int(np.count_nonzero(allowed)),
         "unmapped_samples": int(unmapped_total),
@@ -804,9 +718,6 @@ def build_anchors(
     )
 
 
-# ---------------------------------------------------------------------------
-# 確定表の検証(探索へ渡す前の境界条件の対応付け)
-# ---------------------------------------------------------------------------
 def condition_mapping(
     table: AnchorTable,
     fixed_faces: Any,
@@ -817,20 +728,13 @@ def condition_mapping(
 ) -> dict:
     """拘束面・荷重面ごとに、表の対応付けが成立しているかを検証して機械可読な報告にする。
 
-    面ごとに見るもの: 節点数(0なら不成立)、対応不能標本(1つでもあれば不成立)、`material` を
-    渡したときは材料に接しない節点(1つでもあれば不成立)、荷重面の合力(入力ベクトルと
-    数値許容差 `atol 1e-10·max(1,|F|)` / `rtol 1e-10` で一致しなければ不成立)、
-    **作用位置**: 節点の担当面積重心とCAD面の面積重心のずれ(`position_limit` を超えれば不成立)、
-    荷重面では格子原点まわりのモーメント(CAD面への一様分布荷重の参照値 `c_CAD×F` と、
-    `load_vector` が実際に作る節点荷重の `Σ p×f` の差が `position_limit·|F|` を超えれば不成立)。
-
-    モーメントの門は、1面に1つの荷重ベクトルを面積比で配る限り `|Δc×F| ≤ |Δc|·|F|` なので
-    重心の門より緩い。それでも門にするのは、重心を担当面積から、モーメントを `load_vector` の
-    自由度配列から別々に計算していて、荷重の配り方が面積とずれたときにこちらだけが気づくため。
-    CAD面の重心が無い表(`face_props` を持たない三角形群)では三角形の面積重心を基準にし、
-    `centroid_reference` に書く。合力は担当面積の比で配る限り厳密に保存されるので、合力だけを見て
-    対応付けを採用しない。数値は実単位(mm/N)と、要素サイズ・荷重で正規化した値の両方を持つ。
-    戻り値は素の値だけ(JSONにそのまま通る)。
+    面ごとに見るもの: 節点数(0なら不成立)、対応不能標本(1つでもあれば不成立)、`material` を渡したときは材料に接しない節点、
+    荷重面の合力(`atol 1e-10·max(1,|F|)` / `rtol 1e-10` で入力と一致しなければ不成立)、**作用位置**(節点の担当面積重心と
+    CAD面の面積重心のずれが `position_limit` を超えれば不成立)、荷重面では格子原点まわりのモーメント
+    (CAD面への一様分布荷重の参照値 `c_CAD×F` と `load_vector` の節点荷重の `Σ p×f` の差が `position_limit·|F|` を超えれば不成立。
+    重心の門より緩いが、重心は担当面積から、モーメントは `load_vector` の自由度配列から別々に計算するので、
+    配り方が面積とずれたときにこちらだけが気づく)。CAD面の重心が無い表では三角形の面積重心を基準にし `centroid_reference` に書く。
+    合力だけを見て採用しない。数値は実単位(mm/N)と正規化値の両方を持つ。戻り値は素の値だけ(JSONにそのまま通る)。
     """
     fixed = _face_list(fixed_faces)
     load = _face_list(load_faces)
@@ -959,8 +863,7 @@ def condition_mapping(
 def format_mapping_warning(report: dict) -> str:
     """`condition_mapping` が不成立の面を利用者向けの1メッセージにする(成立なら空文字列)。
 
-    **評価予算の増加は案内しない** —— 対応付けの不成立は候補の削除・追加・置換では直らない
-    (候補は常に設計空間の部分集合で、設計空間で接しない節点はどの候補でも接しない)。
+    **評価予算の増加は案内しない**(対応付けの不成立は候補の削除・追加・置換では直らない)。
     """
     parts: list[str] = []
     for row in report.get("faces", []):
@@ -1007,10 +910,7 @@ def faces_matching(
     near_point: Optional[Sequence[float]] = None,
     near_tol: float = 1e-6,
 ) -> list[int]:
-    """面を条件で拾う小さな道具(検査が「あの面」を名指しするために使う)。
-
-    実運用では人が画面でクリックした面添字が来るので、この関数は**検査の便宜**でしかない。
-    """
+    """面を条件で拾う小さな道具(検査用。実運用では人が画面でクリックした面添字が来る)。"""
     out = []
     for index, props in sorted(soup.face_props.items()):
         if not np.any(soup.face_index == index):
@@ -1031,8 +931,7 @@ def faces_matching(
 
 
 def the_face_matching(soup: vx.TriangleSoup, *, hint: str = "", **criteria) -> int:
-    """`faces_matching` で**ちょうど1面**拾えたらその添字。0面・複数面は ValueError(`hint` を文末に添える)。
-    検査が「あの面」を名指しする道具で、実運用の経路では使わない(`faces_matching` と同じ)。"""
+    """`faces_matching` で**ちょうど1面**拾えたらその添字。0面・複数面は ValueError(`hint` を文末に添える)。検査用。"""
     found = faces_matching(soup, **criteria)
     if len(found) != 1:
         raise ValueError(f"面を一意に選べなかった({criteria} → {found}){hint}")
@@ -1040,11 +939,7 @@ def the_face_matching(soup: vx.TriangleSoup, *, hint: str = "", **criteria) -> i
 
 
 def format_condition_face_warning(diagnoses: list[dict]) -> str:
-    """`AnchorTable.condition_face_diagnoses` の結果を利用者向けの1メッセージにする。
-
-    `optimize_run.run()` が空リスト(=空の条件面なし)ならこの関数を呼ばない。呼ぶのは
-    1件以上あるときだけを想定している(空リストを渡すと空文字列)。
-    """
+    """`AnchorTable.condition_face_diagnoses` の結果を利用者向けの1メッセージにする(空リストなら空文字列)。"""
     parts = []
     for d in diagnoses:
         side_ja = "拘束面" if d["side"] == "fixed" else "荷重面"
@@ -1066,11 +961,7 @@ def format_condition_face_warning(diagnoses: list[dict]) -> str:
 
 
 def _face_list(value: Any) -> list:
-    """`int` 1つでも面の並びでも受けて、面添字のリストにする。
-
-    **既存の呼び出し(検査)が `int` を渡し続けられるようにするため**の入口。
-    ここで均さないと「面が1枚の場合」の分岐が呼び出し側に散らばる。
-    """
+    """`int` 1つでも面の並びでも受けて、面添字のリストにする。"""
     if isinstance(value, (int, np.integer)):
         return [int(value)]
     return [int(item) for item in value]

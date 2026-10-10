@@ -1,8 +1,5 @@
 """固定凸包による塊(設計空間)の導出(`duocad/topopt/design_space.py`)の単体検査。
 
-合成の箱だけで走る(私物のSTEPや実行フォルダに依存しない)。SIMP は回さない。
-実物(hanger)での再現は `topopt_checks/check_design_space.py --run <実行フォルダ>`。
-
 1. **幾何** —— 1つの箱なら塊は「箱から距離 m 以内」(角の丸い箱) / 離れた2部品では凸包が
    両者を橋渡しし、外枠より小さい / 平面オフセットの多面体より角が丸いぶん小さい /
    平行移動で塊が一緒に動く / 余白は最長辺の比率。
@@ -74,9 +71,6 @@ def _two_pads_conditions(offset=(40.0, 30.0, 0.0), obstacle=None, shift=(0.0, 0.
     )
 
 
-# --------------------------------------------------------------------------------------
-# 1. 幾何
-# --------------------------------------------------------------------------------------
 def test_a_single_box_gives_the_box_within_the_margin_distance() -> None:
     """箱の凸包は箱そのもの。塊は「箱から距離 m 以内」の点(角・稜が丸い箱)で、
     箱を各方向に m 広げた直方体(平面オフセット)より角のぶん小さい。"""
@@ -145,9 +139,6 @@ def test_the_margin_is_a_ratio_of_the_longest_edge_of_the_point_cloud() -> None:
     assert space.stats["design_bbox"][0][0] == pytest.approx(-5.0 - 7.0)
 
 
-# --------------------------------------------------------------------------------------
-# 2. 入力
-# --------------------------------------------------------------------------------------
 def test_conditions_require_the_condition_bodies() -> None:
     keep = _box((10.0, 10.0, 10.0), (0.0, 0.0, 0.0))
     fixed = _face(keep, (-1, 0, 0), (-5.0, 0.0, 0.0))
@@ -267,9 +258,6 @@ def test_the_bounding_box_does_not_depend_on_an_earlier_tessellation() -> None:
     assert np.allclose(product["max"], before.bbox_max, atol=1e-6)
 
 
-# --------------------------------------------------------------------------------------
-# 3. 条件の保持と接続
-# --------------------------------------------------------------------------------------
 def _seed(shape, *cells) -> np.ndarray:
     mask = np.zeros(shape, dtype=bool)
     for cell in cells:
@@ -517,9 +505,6 @@ def test_every_keep_body_and_every_condition_face_is_checked_individually() -> N
     assert all(item["keep_elements"] > 0 for item in space.stats["bodies"])
 
 
-# --------------------------------------------------------------------------------------
-# 4. 固定性と記録
-# --------------------------------------------------------------------------------------
 def test_the_mask_is_read_only_and_the_hash_is_reproducible() -> None:
     first = ds.derive(_two_pads_conditions(), elements_long_axis=LONG_AXIS)
     second = ds.derive(_two_pads_conditions(), elements_long_axis=LONG_AXIS)

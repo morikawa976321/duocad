@@ -1,22 +1,4 @@
-"""`_coerce_refs`(`duocad/selection.py`)がボディごとに数え上げを1回だけ行う契約。
-
-`_coerce_ref` を参照1件ごとに呼ぶと、`kernel.face_count`/`edge_count` の中の
-`_face_map`/`_edge_map` が `TopExp.MapShapes_s` で形状全体を毎回走査し直す。同じボディの
-同じ形状を選択件数ぶん何度も指す一括選択(ドラッグ選択)では、この全走査が繰り返される。
-`_coerce_refs` は `(body_id, kind)` の組ごとに数え上げを1回だけ行い、結果を使い回す。
-
-**既存の複数ボディfixture(`test_selection.py` の `two_bodies`・`test_selection_ref_key.py`
-の `many_bodies`)は全て同一寸法の箱**で、面数(6)・辺数(12)・頂点数(8)がボディ間で
-偶然一致する。そのため「ボディを取り違えて数え上げ結果を使い回す」クラスの回帰は、
-既存テストでは**検出できない**(実装時の変異検査で実際に確認した — キャッシュ鍵から
-`body_id` を落としても既存の回帰は全緑のまま通った)。ここでは意図的に面数・辺数が異なる
-形状(箱6面12辺 / 円柱3面)を混ぜ、そのクラスの回帰を検出できるようにする。
-
-**`bodies`/`counts` は `modify_selection` の `add`/`remove` 呼び出し間で共有する**:
-`modify_selection` 内部では `_coerce_refs` が `add` 用・`remove` 用の2回呼ばれるが、
-`add` と `remove` に同じボディの面/辺参照が混ざっても、1回の `modify_selection` 呼び出しの
-中で同じ `(body_id, kind)` を2回数えてはいけない。
-"""
+"""`_coerce_refs`(`duocad/selection.py`)がボディごとに数え上げを1回だけ行う契約。"""
 from __future__ import annotations
 
 from typing import List
@@ -58,9 +40,6 @@ def _count_kernel_calls(monkeypatch: pytest.MonkeyPatch, name: str) -> List[int]
     return counter
 
 
-# --------------------------------------------------------------------------------------
-# 選択件数ぶんではなく、ボディごとに1回だけ数える
-# --------------------------------------------------------------------------------------
 def test_face_count_is_looked_up_once_per_body_not_per_ref(
     two_shapes: Document, monkeypatch: pytest.MonkeyPatch
 ):
@@ -116,19 +95,10 @@ def test_add_and_remove_in_the_same_call_share_the_count_cache(
     assert face_calls[0] == 1  # add・removeを合わせてもこの呼び出し中は1回だけ
 
 
-# --------------------------------------------------------------------------------------
-# 変異検査(必須): キャッシュ鍵から body_id を落とすと、この境目で赤くなる
-# --------------------------------------------------------------------------------------
 def test_the_cache_does_not_confuse_a_smaller_bodys_count_with_a_larger_bodys(
     two_shapes: Document,
 ):
-    """`(body_id, kind)` がキャッシュ鍵であることを直接見る。
-
-    先に円柱(3面)の面を1件処理させてから、箱(6面)の6番目の面を同じ
-    `modify_selection` 呼び出しに混ぜる。キャッシュ鍵が `kind` だけ(`body_id` を
-    見ない)だと、箱の検査に円柱の面数3が使い回され、`face index out of range:
-    6 (1..3)` と**誤って**弾かれる(変異検査で実際に再現した回帰)。
-    """
+    """`(body_id, kind)` がキャッシュ鍵であることを直接見る。"""
     refs = [
         {"body": "cyl", "kind": "face", "index": 1},
         {"body": "box", "kind": "face", "index": 6},
@@ -152,9 +122,6 @@ def test_out_of_range_index_is_still_rejected_per_bodys_own_count(two_shapes: Do
         selection.modify_selection(two_shapes, add=[{"body": "box", "kind": "face", "index": 7}])
 
 
-# --------------------------------------------------------------------------------------
-# 可視性の門番(`_visible_body`)はキャッシュ経路でも飛ばさない
-# --------------------------------------------------------------------------------------
 def test_hidden_body_face_ref_is_refused_through_modify_selection(two_shapes: Document):
     """不可視ボディへの面参照は、`_coerce_refs` のキャッシュ経路でも今までどおり
     `ValueError` になる(可視性チェックをボディごとに1回へ間引いても、その1回を

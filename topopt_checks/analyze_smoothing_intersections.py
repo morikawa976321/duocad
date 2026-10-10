@@ -1,4 +1,4 @@
-"""平滑化後の自己交差が起きるボクセルの局所形を、検証材料の全条件で集計する。用語・結果は docs/TOPOPT_SMOOTHING_INTERSECTIONS.md。
+"""平滑化後の自己交差が起きるボクセルの局所形を、検証材料の全条件で集計する。用語・結果は docs/TOPOPT_ACCEPTANCE.md「平滑化(Taubin)後の自己交差」。
 
     .venv/Scripts/python.exe -X utf8 topopt_checks/analyze_smoothing_intersections.py            # 全条件(再開可・並列)
     ... --one F1000_h2.4_w2 / --force / --workers N

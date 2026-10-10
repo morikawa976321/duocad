@@ -1827,7 +1827,7 @@ COMMANDS: tuple[Command, ...] = (
         changes_document=False,
         note=(
             "**旗を立てるだけ**。実際に降りるのは次に進捗が出た時点で、"
-            "進捗を出さない短い処理の途中では止まらない(`20260904-1704` の契約③)"
+            "進捗を出さない短い処理の途中では止まらない(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)"
         ),
     ),
     Command(

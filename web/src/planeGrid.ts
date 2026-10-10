@@ -1,36 +1,21 @@
 /**
- * **ある平面frame(原点・u軸・v軸)を受け取って、その面にグリッドを描くもの。**
+ * ある平面frame(原点・u軸・v軸)を受け取って、その面にグリッドを描くもの。XY床はその一利用者。
  *
- * XY床はこの仕組みの一利用者にすぎない —— 呼び出し元が渡す `frame` を差し替えれば、
- * 基準平面でも任意面でも同じコードが同じように描く。
+ * 全画面を覆う三角形を1枚だけ描き、フラグメントごとに視線と平面の交点を求めて frame上の (u,v) を出す
+ * (1mm刻みを±500mmでジオメトリとして持つと1平面あたり約2000本になる)。
  *
- * ## 描き方(なぜ全画面三角形か)
+ * 刻みは `gridScale.ts` の `TIERS`。段ごとの不透明度は画面上の線間隔[px]だけで決まる(`fadeFromSpacingPx`)。
+ * シェーダーは同じ規則を1画素ごとの局所的な線間隔にも掛けて `min` で合成する —— 視線が寝ている/遠い所で
+ * 1画素に何本も線が入って潰れる(モアレ)のを、局所側が先に0へ落として止める。
+ * 定数(`FADE_MIN`/`FADE_FULL`)は `gridScale.ts` から注入する。
  *
- * 1mm刻みを±500mmでジオメトリとして持つと1平面あたり約2000本になり現実的でない。
- * 全画面を覆う三角形を1枚だけ描き、**フラグメントごとに視線と平面の交点**を求めて
- * frame上の (u,v) を出す。線本数の爆発・タイルの作り直し・LODのちらつきが**原理的に**
- * 起きず、CPU側は毎フレーム行列を1つ作るだけで、ジオメトリには一切触らない。
+ * 深度: 深度検査あり・`depthWrite: false` + 視線方向の深度バイアス。全画面三角形では `gl_Position` が
+ * 使えないので、交点を視線方向へ `uDepthBias`(画面の高さに対する比。単位は `viewportConstants.ts` の
+ * `DEPTH_BIAS_UNIT`)ぶん手前へ寄せた深度専用コピーを射影して `gl_FragDepth` を書く。色・UV・範囲判定に
+ * 使う `hit` は動かさないので、描画のズレがレイ検査(`basePlaneAt`)に漏れない。
  *
- * ## 段と不透明度
- *
- * 刻みは `gridScale.ts` の `TIERS`(1/10/100mm)で固定。段ごとの不透明度は
- * **画面上の線間隔[px]** だけで決まる1本の規則(`fadeFromSpacingPx`)で、段ごとの特例は無い。
- * シェーダーは同じ規則を**1画素ごとの局所的な線間隔**にも掛け、`min` で合成する ——
- * 視線が平面に対して寝ているところや遠いところでは、1画素の中に何本もの線が入って
- * 白く潰れる(モアレ)ので、そこは局所側が先に0へ落とす。定数(`FADE_MIN`/`FADE_FULL`)は
- * `gridScale.ts` から注入するので、**数値の正はTS側の1箇所**である。
- *
- * ## 深度(B群)
- *
- * **深度検査あり・`depthWrite: false` ＋ 視線方向の深度バイアス。** 全画面三角形なので
- * `gl_Position` は使えず、交点から自分で `gl_FragDepth` を書く —— `hit` を視線方向へ
- * `uDepthBias`(画面の高さに対する比、単位の意味は `viewportConstants.ts` の `DEPTH_BIAS_UNIT`)ぶん
- * 手前へ寄せた**深度専用のコピー**を射影し直して深度だけ取り出す。**色・UV・範囲判定に
- * 使う `hit` 自体は1mmも動かさない**ので、描画のズレがレイ検査(`basePlaneAt` の解析交差)
- * に漏れない。
- *
- * **`renderer.reversedDepthBuffer` とは併用できない** —— あれは深度の向きと範囲の規約を
- * 変えるので、ここの `gl_FragDepth` の式(`z/w * 0.5 + 0.5`)が黙って壊れる。
+ * **`renderer.reversedDepthBuffer` とは併用できない**(深度の向きと範囲の規約が変わり、
+ * `gl_FragDepth` の式 `z/w * 0.5 + 0.5` が黙って壊れる)。
  */
 import * as THREE from 'three'
 
@@ -43,16 +28,11 @@ export interface PlaneFrame {
   v: readonly [number, number, number] | number[]
 }
 
-/**
- * 段ごとの線の半幅[px]。**3段を線の太さで見分ける**(細/中/太)。0.5px刻みの差は
- * アンチエイリアスで滑らかに出る(`lineCoverage` が距離を画素で測っている)。
- */
+/** 段ごとの線の半幅[px]。3段を線の太さで見分ける(細/中/太)。 */
 const TIER_HALF_WIDTH_PX = [0.5, 0.75, 1.1] as const
 
-/** 段ごとの明るさ倍率。太さだけでなく明るさでも見分けられるようにする。 */
 const TIER_BRIGHTNESS = [0.8, 1.0, 1.3] as const
 
-/** 面内の軸線(u=0 / v=0)の半幅[px]。いちばん太い段より太くして、色と合わせて主線にする。 */
 const AXIS_HALF_WIDTH_PX = 1.2
 
 const VERTEX_SHADER = /* glsl */ `
@@ -168,7 +148,7 @@ void main() {
 
   // 描く範囲(正方形)で切る。**原点対称ではなく中心を持つ** —— 面のframeの原点は
   // 面の隅のことが多く、対称な枠だと面の片側へ大きく偏る。縁は距離を画素で測ってAAを付け、
-  // きっぱり切る(ぼかしてフェードアウトさせない。本人指定「その部分までだけ描画する」)。
+  // きっぱり切る(ぼかしてフェードアウトさせない)。
   if (uBoundsHalf > 0.0) {
     float edgeU = (abs(uv.x - uBoundsCenter.x) - uBoundsHalf) / max(fwidth(uv.x), 1e-8);
     float edgeV = (abs(uv.y - uBoundsCenter.y) - uBoundsHalf) / max(fwidth(uv.y), 1e-8);
@@ -194,45 +174,31 @@ void main() {
 }
 `
 
-/** frameを差し替えて使い回す、1面ぶんの無限グリッド。 */
 export interface PlaneGrid {
-  /** シーンへ足すオブジェクト。 */
   readonly object: THREE.Mesh
   /** 描く平面を差し替える(**u/v は単位ベクトルで直交していること**。コアが配るframeは満たす)。 */
   setFrame(frame: PlaneFrame): void
   /**
-   * 面内の軸線(u=0 / v=0)の色。`null` の側は描かない —— 同じ世界軸を2枚の平面が
-   * 二重に描かないため。
-   *
-   * **格子の側は u=0 / v=0 の1本を常に抜いてある**ので、`null` にするとその1本が
-   * 空くことに注意する(基準3平面では、抜けた側を必ず別の平面が色付きで描いている)。
-   * 線が要るのに色に意味が無い場面では、格子と同じ色を渡せばよい。
+   * 面内の軸線(u=0 / v=0)の色。`null` の側は描かない(同じ世界軸を2枚の平面が二重に描かないため)。
+   * 格子の側は u=0 / v=0 の1本を常に抜いてあるので、`null` にするとその1本が空く。
    */
   setAxisColors(uColor: number | null, vColor: number | null): void
-  /** 格子線の色(`showBasePlanes` の「起動中」で差し替わる)。 */
   setColor(hex: number): void
   /** 段ごとの不透明度(`gridScale.ts` の `tierAlphas` が出した値)。 */
   setTierAlphas(alphas: readonly [number, number, number]): void
-  /** カメラ行列(毎フレーム)。 */
   setCamera(viewProjection: THREE.Matrix4, inverseViewProjection: THREE.Matrix4): void
   /** 深度バイアス(画面の高さに対する比。層番号 × `DEPTH_BIAS_UNIT`)。 */
   setDepthBias(bias: number): void
   /**
-   * 描く正方形(frame上の中心と半径[mm])。`null` で無限。
-   *
-   * **無限は既定ではない** —— 呼び出し元は内容を一回り大きく包む
-   * 正方形(`gridScale.ts` の `boundingSquare`)を必ず渡す。`null` は「範囲が測れなかった」
-   * ときの安全側の逃げ道で、装飾が消えるより広めに描いて残す方を採るためにだけ残してある。
+   * 描く正方形(frame上の中心と半径[mm])。`null` で無限(範囲が測れなかったときの逃げ道。
+   * 呼び出し元は通常 `gridScale.ts` の `boundingSquare` の結果を渡す)。
    */
   setBounds(bounds: UvBounds | null): void
   setVisible(visible: boolean): void
   dispose(): void
 }
 
-/**
- * 全画面三角形は**一度だけ作って共有する**(3枚とも同じ3頂点を使う)。
- * `dispose` で参照が全部消えたときに捨てる。
- */
+/** 全画面三角形は一度だけ作って3枚で共有し、`dispose` で参照が全部消えたときに捨てる。 */
 let sharedGeometry: THREE.BufferGeometry | null = null
 let sharedGeometryUsers = 0
 

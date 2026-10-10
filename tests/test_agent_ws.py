@@ -1,27 +1,4 @@
-"""アプリ内AIエージェントをWebSocketへ配線する契約(`duocad/server.py` の `ai_*`)。
-
-**`ai_*` はverbではない**(文書を直接は変えない・操作ログに載らない・undoの単位でもない)ので、
-`duocad/catalog.py` の `COMMANDS` には入れない。除外そのものは
-`test_ui_command_wiring.py::test_ai_commands_are_not_verbs` が固定する。
-
-固定する7つ:
-
-1. **`ai_status` にキーの値は載らない**。載るのは置いてあるかの真偽(`api_key_configured`)だけ。
-2. **`ai_send` はモデルへのHTTPリクエストを待たずに返る**(実行は `run_in_executor`)。
-   進捗・結果は別イベント(`ai_tool_call` / `ai_result`)で届く。
-3. **AIがツールを呼んで文書を変えると、開いているブラウザの絵が変わる**(通常のverb配信に乗る)。
-4. **中断できる**(`ai_cancel`)。どこまでやったかは `ai_result.tool_calls` に残る。
-5. **送り先を差し替えられても鍵は外へ出ない**。`openai_compat` の `base_url` は自由に変えられる
-   (鍵を持たない)。`anthropic` は `base_url` を拒否し、内部状態ごと差し替えられても公式APIへしか
-   送らない(送り先を画面から選べれば、値をブラウザへ出していなくても外部へ送られるのと同じである)。
-6. **最後の1接続が切れたらAIの実行を中断する**。誰も見ていないまま文書が変わり続けるのを防ぐ
-   (他の接続が残っていれば続ける)。
-7. **ウォームアップ(`ai_prepare`)は頼まれたときだけ、1会話に1回走る**。依頼はその終わりを待つ。
-
-実キーは使わない(`RecordedProvider` で `duocad.server.build_provider` を差し替える。
-5だけは「差し替えを素通りしても鍵が漏れないこと」自体を検査したいので、
-偽のキーと偽のtransportを挿して `duocad.server.build_provider` は本物のまま実行する)。
-"""
+"""アプリ内AIエージェントをWebSocketへ配線する契約(`duocad/server.py` の `ai_*`)。"""
 from __future__ import annotations
 
 import asyncio
@@ -54,21 +31,12 @@ async def _wait_until(predicate, *, timeout: float = 3.0, interval: float = 0.01
 
 
 async def _settle(server: Server) -> None:
-    """走っているAIの実行と、その知らせを運ぶ配信タスクが終わるのを待つ。
-
-    **実行の途中で `scenario()` を抜けない。** `asyncio.run` はループを閉じる前に実行器スレッドの
-    終了を待つので、実行はそこで終わり、結果の配信タスクがそこで作られる。ループはその直後に
-    止まるので、タスクは走らないまま捨てられ「coroutine 'Server._broadcast' was never awaited」が
-    出る(警告はGCの時点で出るので、**原因のテストではなく後ろのテストの名前で報告される**)。
-    """
+    """走っているAIの実行と、その知らせを運ぶ配信タスクが終わるのを待つ。"""
     while server._pending_ai_runs or server._pending_pushes:
         await asyncio.gather(*server._pending_ai_runs, *server._pending_pushes, return_exceptions=True)
         await asyncio.sleep(0)
 
 
-# --------------------------------------------------------------------------------------
-# 1. ai_status に鍵の類が載らない
-# --------------------------------------------------------------------------------------
 def test_ai_status_carries_no_key_of_any_kind(box_session: Session):
     """キーが無ければ llama-server から始まり、置いてあるかの真偽だけが載る。"""
 
@@ -146,9 +114,6 @@ def test_ai_configure_is_rejected_while_running(box_session: Session):
     assert server._ai_base_url is None, "実行中なのにエンドポイントが変わっている"
 
 
-# --------------------------------------------------------------------------------------
-# 2. ai_send はブロックしない・進捗と結果が届く
-# --------------------------------------------------------------------------------------
 def test_ai_send_returns_before_the_run_finishes(monkeypatch, box_session: Session):
     """`ai_send` の `_dispatch` 自体は**モデルの応答を待たずに**返る(スロー・プロバイダで確認)。"""
     monkeypatch.setattr(
@@ -265,9 +230,6 @@ def test_ai_send_rejects_an_empty_message(box_session: Session):
     assert server._ai_running is False, "空メッセージなのに実行中フラグが立っている"
 
 
-# --------------------------------------------------------------------------------------
-# 3. AIが文書を変えると、開いているブラウザの絵が変わる
-# --------------------------------------------------------------------------------------
 def test_a_tool_call_that_mutates_the_document_reaches_the_browser(
     monkeypatch, box_session: Session
 ):
@@ -310,9 +272,6 @@ def test_a_tool_call_that_mutates_the_document_reaches_the_browser(
     assert "applied" not in mutated[-1]
 
 
-# --------------------------------------------------------------------------------------
-# 4. 中断できる
-# --------------------------------------------------------------------------------------
 def test_ai_cancel_stops_the_run_and_keeps_what_happened_so_far(monkeypatch, box_session: Session):
     monkeypatch.setattr(
         "duocad.server.build_provider",
@@ -349,9 +308,6 @@ def test_ai_cancel_stops_the_run_and_keeps_what_happened_so_far(monkeypatch, box
     assert len(result["tool_calls"]) < 2, "中断が効かず最後まで回ってしまった"
 
 
-# --------------------------------------------------------------------------------------
-# 5. 送り先を差し替えられても鍵は乗らない
-# --------------------------------------------------------------------------------------
 def test_ai_configure_allows_a_base_url_for_openai_compat(box_session: Session):
     """`openai_compat`(キーを持たない)は今までどおりエンドポイントを差し替えられる。"""
 
@@ -378,17 +334,7 @@ def test_ai_configure_allows_a_base_url_for_openai_compat(box_session: Session):
 
 
 def test_a_tampered_base_url_still_sends_no_key(monkeypatch, box_session: Session):
-    """**深層防御**: 送り先を内部状態ごと差し替えても、**リクエストに鍵は乗らない**。
-
-    `base_url` を自由にできるのは、`build_provider` がプロバイダへ鍵を渡さないからである
-    (`duocad/agent/providers.py`)。ここではそれをWS側から確かめる —— 環境に
-    `ANTHROPIC_API_KEY` が居ても拾わないことも同時に見る(Claude用のキーが乗らないことは
-    `tests/test_agent_loop.py::test_the_key_reaches_only_the_claude_provider`)。
-
-    実際に1回HTTPを打たせる(偽transport。実ネットワークは叩かない)。
-    **`duocad.server.build_provider` は差し替えない** —— 見たいのは本物の
-    `build_provider` が正しく振る舞うことそのもの。
-    """
+    """**深層防御**: 送り先を内部状態ごと差し替えても、**リクエストに鍵は乗らない**。"""
     monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_KEY)
     calls: list[dict] = []
 
@@ -454,10 +400,7 @@ def test_ai_configure_refuses_a_base_url_for_claude(box_session: Session):
 
 
 def test_a_tampered_base_url_never_redirects_the_claude_key(monkeypatch, box_session: Session):
-    """**深層防御**: 内部状態の `base_url` を書き換えても、Claudeへの要求は公式APIへしか飛ばない。
-
-    出力上限もClaude用(`ANTHROPIC_MAX_TOKENS`)になっていることを同じ1往復で見る。
-    """
+    """**深層防御**: 内部状態の `base_url` を書き換えても、Claudeへの要求は公式APIへしか飛ばない。"""
     monkeypatch.setenv(ANTHROPIC_API_KEY_ENV, FAKE_KEY)
     calls: list[dict] = []
 
@@ -563,9 +506,6 @@ def test_the_key_cannot_change_while_the_ai_is_running(monkeypatch, box_session:
     assert load_api_key() is None
 
 
-# --------------------------------------------------------------------------------------
-# 6. 最後の1接続が切れたらAIの実行を中断する
-# --------------------------------------------------------------------------------------
 def test_last_client_disconnecting_cancels_a_running_ai_run(monkeypatch, box_session: Session):
     monkeypatch.setattr(
         "duocad.server.build_provider",
@@ -597,9 +537,6 @@ def test_last_client_disconnecting_cancels_a_running_ai_run(monkeypatch, box_ses
     assert server._ai_running is False
 
 
-# --------------------------------------------------------------------------------------
-# 7. ウォームアップ(`ai_prepare`)は1会話に1回で、依頼はその終わりを待つ
-# --------------------------------------------------------------------------------------
 class WarmingProvider(RecordedProvider):
     """`prepare` を数え、`gate` が開くまでその中で待つ(ウォームアップの最中を作る)。"""
 

@@ -1,5 +1,5 @@
 /*
- * バニラCSS＋CSS変数(実装計画書 §4)。Tailwindは使わない —
+ * バニラCSS＋CSS変数(docs/DESIGN_DECISIONS.md「技術選定の根拠」)。Tailwindは使わない —
  * 既定値に寄せると「よくあるWebアプリの見た目」になり、CADツールがWebアプリに見えてはいけない。
  *
  * 配色はダーク×琥珀。配置はFusion 360に寄せてあり、左サイドバー(.data-panel)が

@@ -1,13 +1,6 @@
 """M2契約: 領域検出(`duocad.region`)。
 
-**領域は描くものではなく計算されるもの**(実装計画書§3.3)。円を線分で分けて片側だけを
-押し出す、という本人の運用の土台であり、M2の本体はここにある。
-
-期待値は**すべて実測値**(実装計画書§3.3と一致):
-
-    半径20の円          -> 領域1個・面積 1256.637
-    それを y=5 の線分で分割 -> 領域2個・面積 826.215 と 430.422(合計が元の円と一致)
-    線を2本にすると       -> 領域3個
+期待値は**すべて実測値**(docs/DESIGN_DECISIONS.md「領域は計算されるもの」の実測と一致):
 """
 from __future__ import annotations
 
@@ -33,11 +26,7 @@ AREA_REL_TOL = 1.0e-6
 
 
 def circle_sketch(document: Document, lines: tuple = ()) -> str:
-    """半径20の円と、必要なら y=`lines` の水平線を持つスケッチを作って返す。
-
-    線分は円(直径40)より長い x=-30..30 に取る。**端点が円の内側で止まる線は領域を割らない**
-    (割るには境界まで届く必要がある)ので、ここは意図的に貫かせている。
-    """
+    """半径20の円と、必要なら y=`lines` の水平線を持つスケッチを作って返す。"""
     sketch_id = sketch_create(document, "XY")
     add_circle(document, sketch_id, (0.0, 0.0), CIRCLE_RADIUS)
     for y in lines:
@@ -45,9 +34,7 @@ def circle_sketch(document: Document, lines: tuple = ()) -> str:
     return sketch_id
 
 
-# --------------------------------------------------------------------------------------
 # 領域検出 — 実測値で縛る
-# --------------------------------------------------------------------------------------
 def test_a_single_circle_yields_one_region():
     """半径20の円だけのスケッチ -> 領域1個・面積 1256.637。添字は1始まり。"""
     document = Document()
@@ -61,10 +48,7 @@ def test_a_single_circle_yields_one_region():
 
 
 def test_a_line_splits_the_circle_into_two_regions():
-    """y=5 の線分で分割 -> 領域2個・面積 826.215 と 430.422。**合計が元の円と一致**する。
-
-    合計の一致がいちばん効く検査で、領域の取り違え・重複・取りこぼしをまとめて落とす。
-    """
+    """y=5 の線分で分割 -> 領域2個・面積 826.215 と 430.422。**合計が元の円と一致**する。"""
     document = Document()
     sketch_id = circle_sketch(document, lines=(SPLIT_LINE_Y,))
 

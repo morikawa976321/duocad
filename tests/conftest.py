@@ -1,10 +1,4 @@
-"""pytest 全体の下ごしらえ。
-
-**`Session` の既定の保存先をテストごとの使い捨てディレクトリへ向ける。** 1操作ごとの
-自動保存(`Session.autosave`。issue #5)は `models_dir` を渡していない `Session(None, 0.2)`
-でも走るので、そのままだとリポジトリ直下の実 `models/` へ `untitled-<n>.json` が溜まる。
-`Session.__init__` は `duocad.session.DEFAULT_MODELS_DIR` を読むので、その名前を差し替える。
-"""
+"""pytest 全体の下ごしらえ。"""
 from __future__ import annotations
 
 import pytest
@@ -42,6 +36,17 @@ def _no_claude_api_key(tmp_path, monkeypatch):
     monkeypatch.delenv(providers.ANTHROPIC_API_KEY_ENV, raising=False)
     monkeypatch.delenv(providers.ANTHROPIC_MODEL_ENV, raising=False)
     monkeypatch.setattr(providers, "SECRETS_PATH", tmp_path / "no-secrets.json")
+
+
+@pytest.fixture(autouse=True)
+def _local_settings_in_tmp(tmp_path, monkeypatch):
+    """この clone の設定ファイル(`duocad_settings.json`)を使い捨てにする。外すと、GPU を選んだ機械でだけ
+    `Server` が `fem.FEM_DEVICE = "gpu"` で始まり、設定ダイアログの検査が実ファイルを書き換える。"""
+    from duocad import local_settings
+    from duocad.topopt import fem
+
+    monkeypatch.setattr(local_settings, "PATH", tmp_path / "duocad_settings.json")
+    monkeypatch.setattr(fem, "FEM_DEVICE", "cpu")
 
 
 @pytest.fixture()

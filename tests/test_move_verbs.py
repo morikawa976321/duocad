@@ -1,18 +1,4 @@
-"""`move_sketch_entities` / `move_body` の契約 —— スケッチパラメータパネルの後継。
-
-固定するのは、**選択の新しい種別**と**2つの移動verb**の約束である:
-
-- スケッチの図形は `{"sketch", "entity", "point"}` で選べる(`point=None` が図形全体 = 辺)。
-  参照は**添字ではなく `entity_id`** なので、他の図形を足しても平行移動しても失効しない
-- 点を動かすと**その点だけ**、辺を動かすと**図形全体**が同じ量だけ動く(形は変わらない)
-- 同じ図形に辺と点の両方が選ばれていたら**辺が勝つ**(その点だけ2回動かない)
-- `copy=True` は元を残し、**対象が属する図形をまるごと**複製する(点だけは複製できない)
-- `move_body` は面/辺/頂点から**ボディを逆引き**して動かす。複数ボディなら全部同じ量
-- **どちらも面・辺・頂点の添字と `entity_id` を壊さない**ので、確定後に選択をリセットしない
-- undo は移動なら逆向きの平行移動、複製なら作ったものの削除
-- 保存 -> 読み直し -> 再生で同じ形になる(ログが唯一の正)
-- `move_sketch_entities` が書いた座標は、後の `set_parameter` の `rebuild()` で**消えない**
-"""
+"""`move_sketch_entities` / `move_body` の契約 —— スケッチパラメータパネルの後継。"""
 from __future__ import annotations
 
 import pytest
@@ -58,9 +44,6 @@ def _add_bezier(session: Session, sketch_id: str) -> str:
     return entity_id
 
 
-# --------------------------------------------------------------------------------------
-# 選択の新しい種別
-# --------------------------------------------------------------------------------------
 def test_a_sketch_entity_can_be_selected_as_a_point_or_as_a_whole(session: Session) -> None:
     sketch_id, entity_id = _line(session)
     point = selection.select_sketch_entity(session.document, sketch_id, entity_id, "x0")
@@ -110,9 +93,6 @@ def test_every_kind_has_points_and_a_translation_moves_all_of_them(session: Sess
             )
 
 
-# --------------------------------------------------------------------------------------
-# move_sketch_entities
-# --------------------------------------------------------------------------------------
 def test_moving_a_point_moves_only_that_point(session: Session) -> None:
     sketch_id, entity_id = _line(session)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x0"}])
@@ -176,13 +156,7 @@ def test_the_same_point_selected_twice_moves_once(session: Session) -> None:
 
 
 def test_two_points_of_one_entity_both_move(session: Session) -> None:
-    """**同じ図形の複数の点を同時に動かすと、全部動く。**
-
-    ウィンドウ選択で線分をまるごと囲えば両端が選ばれるので、これは普通に踏む経路である。
-    対象ごとに「自分だけを動かした完全な `params`」を作って順に書き戻す実装だと、
-    後の書き込みが前の書き込みを丸ごと打ち消して**最後の点しか動かない**
-    (`_apply` は図形ごとに1つの計画へ併合してから書く)。
-    """
+    """**同じ図形の複数の点を同時に動かすと、全部動く。**"""
     sketch_id, entity_id = _line(session)
     _select(session, [
         {"sketch": sketch_id, "entity": entity_id, "point": "x0"},
@@ -428,12 +402,7 @@ def test_the_selection_resets_after_a_sketch_move(session: Session) -> None:
 
 
 def test_a_later_set_parameter_does_not_erase_the_move(session: Session) -> None:
-    """`rebuild()` の値の強制が **move の後まで効かない**ことを固定する。
-
-    `set_parameter` はログの後ろに載るので、再生では「先に最終値を当ててから」進む。
-    その強制を当の `set_parameter` より後ろのオペレーションにも掛け続けると、
-    後から積んだ `move_sketch_entities` の座標が毎回上書きされて**黙って消える**。
-    """
+    """`rebuild()` の値の強制が **move の後まで効かない**ことを固定する。"""
     sketch_id, entity_id = _line(session)
     entity = sketch.get_entity(sketch.get_sketch(session.document, sketch_id), entity_id)
     x0_name = entity.params["x0"]
@@ -462,9 +431,6 @@ def test_set_parameter_still_wins_when_it_comes_last(session: Session) -> None:
     assert _params(session, sketch_id, entity_id)["x0"] == pytest.approx(7.0)
 
 
-# --------------------------------------------------------------------------------------
-# move_body
-# --------------------------------------------------------------------------------------
 def test_moving_a_body_from_a_face_selection(session: Session) -> None:
     body, _sketch_id = _box(session)
     before = _center(body)
@@ -646,9 +612,7 @@ def test_the_body_revision_moves_with_the_shape(session: Session) -> None:
     assert session.body_revision(body.id) > before
 
 
-# --------------------------------------------------------------------------------------
 # move_body(mode="rotate")
-# --------------------------------------------------------------------------------------
 #
 # 固定するのは4つ:
 #
@@ -809,11 +773,7 @@ def test_rotating_keeps_the_volume_and_the_face_indices(session: Session) -> Non
 
 
 def test_two_bodies_rotate_about_one_composite_centre(session: Session) -> None:
-    """複数対象の中心は**1つ**(対象ごとに個別の重心で回さない)。
-
-    体積の等しい2つの箱を左右に並べて180度回すと、**入れ替わる**のが合成重心まわりに
-    回った証拠である。個々の重心で回していたら、どちらもその場に留まる。
-    """
+    """複数対象の中心は**1つ**(対象ごとに個別の重心で回さない)。"""
     first, sketch_id = _box(session)
     session.add_rectangle(sketch_id, [40.0, 0.0], SIDE, SIDE)
     _select(session, [{"sketch": sketch_id, "index": 2}])
@@ -957,12 +917,7 @@ def test_an_edge_axis_cannot_be_combined_with_numbers(session: Session) -> None:
 
 
 def test_an_edge_axis_can_be_combined_with_a_center_vertex(session: Session) -> None:
-    """**辺が向きを、頂点が位置を決める組み合わせは意図的に許してある**。
-
-    `axis_point` との同時指定は断るのに、こちらは通す —— 辺の向きだけを借りて別の点を
-    通す軸にするのは実際に要る操作(「この稜線と平行な軸で、この角を中心に回す」)である。
-    `_rotation_args` の拒否条件を広げすぎるとここが黙って塞がるので、明示的に固定する。
-    """
+    """**辺が向きを、頂点が位置を決める組み合わせは意図的に許してある**。"""
     body, _sketch_id = _box(session)
     edge = _vertical_edge_at(body, 0.0, 0.0)          # (0,0) に立つ縦の辺 = Z方向
     vertex = _vertex_at(body, [SIDE, SIDE, 0.0])      # 対角の角
@@ -1031,9 +986,6 @@ def test_an_axis_edge_on_a_missing_body_is_not_found(session: Session) -> None:
         )
 
 
-# --------------------------------------------------------------------------------------
-# move_sketch_entities(mode="rotate")
-# --------------------------------------------------------------------------------------
 def test_rotating_a_line_about_a_given_centre(session: Session) -> None:
     """(0,0)-(10,0) を原点まわりに90度回すと (0,0)-(0,10)(u->v が正)。"""
     sketch_id, entity_id = _line(session)
@@ -1278,11 +1230,7 @@ def test_a_half_specified_sketch_rotation_is_refused(session: Session, kwargs: d
 
 
 def test_a_replayed_sketch_log_without_a_mode_is_still_a_translation(session: Session) -> None:
-    """**2026-09-05より前に保存した文書**(`mode` キーが無い)は平行移動として読む。
-
-    `move_body` 側と対にしてある —— 後方互換は2つの verb が別々に持っているので、
-    片方だけ壊れても気づけるように両方を見る。
-    """
+    """**2026-09-05より前に保存した文書**(`mode` キーが無い)は平行移動として読む。"""
     from duocad.oplog import Operation
     from duocad.verbs.move_sketch import _do_move_sketch_entities
 
@@ -1305,9 +1253,6 @@ def test_a_replayed_sketch_log_without_a_mode_is_still_a_translation(session: Se
     }
 
 
-# --------------------------------------------------------------------------------------
-# kernel の回転そのもの
-# --------------------------------------------------------------------------------------
 def test_a_degenerate_axis_is_refused() -> None:
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
@@ -1318,9 +1263,7 @@ def test_a_degenerate_axis_is_refused() -> None:
         kernel.rotate_shape(shape, [0.0, 0.0], [0.0, 0.0, 1.0], 30.0)
 
 
-# --------------------------------------------------------------------------------------
 # WebSocketの口 —— **画面から回転を踏めるようになった**(2026-09-06)
-# --------------------------------------------------------------------------------------
 #
 # 移動の2つは表(`SKETCH_COMMANDS` / `FEATURE_COMMANDS`)に載らず `_dispatch` が個別に捌く
 # (`catalog` の `ws="special"`)。表は「載せた引数は全部必須」なので、`mode` で要る引数が
@@ -1330,11 +1273,7 @@ def test_a_degenerate_axis_is_refused() -> None:
 
 
 def test_the_browser_rotates_a_body_around_a_picked_edge(session: Session) -> None:
-    """**辺への参照をそのまま送れる**(画面が指した辺 = `axis_edge`)。
-
-    画面は辺を座標へ潰さずに送る —— 辺が乗る直線を厳密に出せるのはコアだけである
-    (`kernel.edge_axis`)。応答には**解決後の数値**が載り、undo と再生はそちらを使う。
-    """
+    """**辺への参照をそのまま送れる**(画面が指した辺 = `axis_edge`)。"""
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     before = _center(body)
@@ -1398,11 +1337,7 @@ def test_the_browser_still_translates_a_body_without_a_mode(session: Session) ->
 
 
 def test_the_browser_cannot_mix_the_two_modes(session: Session) -> None:
-    """回転に並進の引数を添えたら**エラーで返る**(黙って片方だけ効かない)。
-
-    `_dispatch` が省略された引数を既定値で埋めていると、`dx=0` が「渡された」ことになって
-    ここが通ってしまう —— **`None` のまま渡している**ことの検査でもある。
-    """
+    """回転に並進の引数を添えたら**エラーで返る**(黙って片方だけ効かない)。"""
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
 
@@ -1445,11 +1380,7 @@ def test_the_browser_rotates_sketch_entities_around_a_picked_point(session: Sess
 
 
 def test_the_browser_may_omit_the_sketch_rotation_centre(session: Session) -> None:
-    """中心を送らなければ**コアの既定**(対象の代表点の平均)になる。
-
-    画面は指されなかった中心を**引数ごと送らない**ので、既定の規則がコアの1箇所に
-    とどまる(ブラウザ側に写すと、片方だけ変わったときに幽霊と結果が別の場所へ出る)。
-    """
+    """中心を送らなければ**コアの既定**(対象の代表点の平均)になる。"""
     sketch_id, entity_id = _line(session)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 

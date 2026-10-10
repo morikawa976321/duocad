@@ -1,6 +1,6 @@
 """段階9: 保存済み完成形候補の幾何検査(平滑化・集合演算前後)と、最終形を同じ格子へ戻した固定形状の再解析。
 
-結果と解釈は `docs/topopt_idle_validation/09_FINAL_SHAPES.md`。製品コード(`duocad.topopt.*`)は変更しない。新規の最適化はしない。
+結果と解釈は `docs/topopt_idle_validation/10_SYNTHESIS.md 付録G(旧 09_FINAL_SHAPES)`。製品コード(`duocad.topopt.*`)は変更しない。新規の最適化はしない。
 1形状 = 1子プロセス(`run_09_final_shapes.py` がwall timeoutを掛ける)。
 
     convert:  マスクの前検査 → 平滑化(`build_surface_from_mask`) → 製品の `finalize`(保持・除外のメッシュ集合演算)

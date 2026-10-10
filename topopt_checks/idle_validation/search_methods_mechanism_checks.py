@@ -1,8 +1,8 @@
 """タスク4完了条件「小問題で各機構が発動した証拠があり、長い部材の復元が可能」の実証。
 
 全項目、実際にFEM(`search_methods.score_mask`)を解いて確かめる(モックしない)。小型モデル
-(`models/topopt_idle_dilution_small.json`)を使う——安価に繰り返し実行でき、方式1・2の再現が
-既に `00_COMPACT_MODELS.md` の既知値と一致することを確認済み(§後続への契約④)。
+(`models/topopt_idle_dilution_small.json`)は安価に繰り返し実行でき、方式1・2の再現が
+`00_COMPACT_MODELS.md` の既知値と一致する。
 
 出力: `output/idle_validation_20260928/04_mechanism_checks.json`(各チェックの `passed`・生の証拠)。
 1つでも失敗すれば非ゼロで終了する(呼び出し側=`build_04_searches_json.py`がこれを実行状態として扱う)。

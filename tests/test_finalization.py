@@ -35,7 +35,7 @@ def test_union_then_cut_preserves_cad_and_inputs():
     result_vertices, result_faces = finalize(vertices, faces, [keep], [cut])
     checks = final_mesh_checks(result_vertices, result_faces)
     assert checks['failed'] == [] and checks['solids'] == 1
-    # 円柱は内接する三角形で引くので、引ける体積は真値よりわずかに小さい(docs/TOPOPT_MESH_BOOLEAN_STUDY.md)
+    # 円柱は内接する三角形で引くので、引ける体積は真値よりわずかに小さい(docs/TOPOPT_ACCEPTANCE.md「メッシュ集合演算」)
     assert mesh_volume(result_vertices, result_faces) == pytest.approx(12-np.pi*.3**2*2/4, rel=1e-3)
     assert [kernel.volume(s) for s in (source, keep, cut)] == before
 

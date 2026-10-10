@@ -2,51 +2,35 @@
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_voxelize.py   # 受入検査
 
-これは `duocad.topopt` の **stage1**。担当は「形 → 格子」だけで、境界条件を面に紐づける
-処理(stage2「面アンカー」)は入っていない。ただし**そのための材料は捨てない** —
-`TriangleSoup` は三角形ごとに OCCT の面添字(1始まり)を持ち、`Grid` は原点と要素サイズを
-持つので、stage2 は「格子の要素 ↔ ワールド座標 ↔ 面」を本モジュールだけで往復できる。
+これは `duocad.topopt` の **stage1**。担当は「形 → 格子」だけ。`TriangleSoup` は三角形ごとに OCCT の面添字(1始まり)を、
+`Grid` は原点と要素サイズを持つので、stage2(面アンカー)は「格子の要素 ↔ ワールド座標 ↔ 面」を本モジュールだけで往復できる。
 
 ## 規約(ここを間違えると後段が全部ずれる)
 
-- **セル中心規約**: `mask[i, j, k]` は要素 (i, j, k) の**中心**の値であり、頂点の値ではない。
-  中心のワールド座標は `origin + spacing * (i + 0.5, j + 0.5, k + 0.5)`。
-  `mesh.py` の `rho[ex]` と同じ規約で、`run_marching_cubes` が半セルのオフセットを
-  引いているのはこの規約に戻すため。
-  **新しく格子と実座標を対応づけるコードを書くときは、必ず `Grid.center_of` /
-  `Grid.centers_1d` を通すこと。** 添字に `spacing` を直接掛けると半セルずれる。
-- **要素は立方体・ワールド軸に整列**する。`fem.py` は全要素が同形状であることに依存していて
-  要素剛性行列 `Ke` を1つ作って使い回すので、非立方体の要素は入れられない。
+- **セル中心規約**: `mask[i, j, k]` は要素 (i, j, k) の**中心**の値。中心のワールド座標は `origin + spacing * (i + 0.5, j + 0.5, k + 0.5)`。
+  `mesh.py` の `rho[ex]` と同じ規約(`run_marching_cubes` の半セルオフセットはこれに戻すため)。
+  **格子と実座標を対応づけるコードは必ず `Grid.center_of` / `Grid.centers_1d` を通すこと**(添字に `spacing` を直接掛けると半セルずれる)。
+- **要素は立方体・ワールド軸に整列**する(`fem.py` は要素剛性行列 `Ke` を1つ作って使い回す)。
 - 配列の軸順は `(nx, ny, nz)` で、`fem.py` の `rho` (nelx, nely, nelz) とそのまま合う。
 
-## 占有判定のやり方(なぜこの形か)
+## 占有判定
 
-`kernel.tessellate` が返す三角形群に対して、各列 (i, j) から **+z 方向のレイ**を飛ばし、
-交点の z を集めて内部区間を塗る。新規依存はゼロで、numpy だけで書ける。
+`kernel.tessellate` の三角形群に対し、各列 (i, j) から **+z 方向のレイ**を飛ばし、交点の z を集めて内部区間を塗る(numpy のみ)。
 
-- **偶奇(parity)ではなく巻き数(winding)で数える。** 向きの違う2枚(稜線の上と下)の
-  共有辺をレイが通ると同じ z に「入る」と「出る」が1つずつ出て相殺する。符号は三角形の
-  xy 投影の符号付き面積 = 外向き法線の z 成分の符号から取る。
-- **ただし同じ向きの2枚の共有辺(平らな面の対角線など)では巻き数でも壊れる。** 両方に数えると
-  入る面と出る面の両方で2回ずつになり、列の巻き数は `2, 1, 2, 0` のように0へ戻ったまま
-  間の空洞が材料になる(どちらにも数えないと材料が抜ける)。したがって**交点が三角形の辺・
-  頂点に `RAY_EDGE_TOLERANCE` 以内で乗ったら縮退として扱い、ずらし幅を変えてやり直す**。
-- **レイの (x, y) をセル中心から `RAY_JITTER` 倍(要素サイズ比)だけ決定的にずらす。**
-  格子は bbox の中心から起こすので、軸に整列した箱では面や辺が列の中心と厳密に一致する
-  (縮退が偶然ではなく系統的に起きる)。ずらし幅は要素サイズの 1e-4 程度で、
-  受入検査が「曖昧」として除外する境界近傍の帯(要素サイズの数%)よりはるかに小さい。
-  **乱数ではないので決定性は保たれる。**
-- `BRepClass3d_SolidClassifier` は**本番経路では使わない**。1点ずつしか判定できず
-  100³=100万点をPythonループで回すのは非現実的。受入検査の神託としてだけ使う。
+- **偶奇ではなく巻き数で数える。** 向きの違う2枚の共有辺をレイが通ると同じ z に「入る」と「出る」が1つずつ出て相殺する。
+  符号は三角形の xy 投影の符号付き面積 = 外向き法線の z 成分から取る。
+- **同じ向きの2枚の共有辺(平らな面の対角線など)では巻き数でも壊れる**(列の巻き数が `2, 1, 2, 0` のように0へ戻らず
+  間の空洞が材料になる。どちらにも数えないと材料が抜ける)。**交点が三角形の辺・頂点に `RAY_EDGE_TOLERANCE` 以内で乗ったら
+  縮退として扱い、ずらし幅を変えてやり直す。**
+- **レイの (x, y) をセル中心から `RAY_JITTER` 倍(要素サイズ比)だけ決定的にずらす。** 格子は bbox の中心から起こすので、
+  軸整列の箱では面や辺が列の中心と厳密に一致する(縮退が系統的に起きる)。ずらし幅は要素サイズの 1e-4 程度で、
+  受入検査が「曖昧」として除外する境界近傍の帯(要素サイズの数%)よりはるかに小さい。乱数ではないので決定性は保たれる。
+- `BRepClass3d_SolidClassifier` は本番経路では使わない(1点ずつしか判定できない)。受入検査の神託としてだけ使う。
 
 ## 黙って間違った格子を返さないための検査(`inspect_soup`)
 
-1. 三角形が取れなかった面がある(`untriangulated`) → 穴の空いた表面になる
-2. 有向辺の対が揃わない → 非水密(開いたシェル)、または向きが不整合
-3. 符号付き体積が正でない → 法線が内向き(裏返った形状)
-
-いずれも `ValueError` にする。ここを通さないと、開いたシェルは「レイが1回しか交差しない
-列は全部内部」という**もっともらしいゴミ**を返す。
+三角形が取れなかった面(`untriangulated`)、有向辺の対が揃わない(非水密・向きの不整合)、符号付き体積が正でない(法線が内向き)は
+いずれも `ValueError`。通さないと、開いたシェルは「レイが1回しか交差しない列は全部内部」というもっともらしいゴミを返す。
 """
 
 from __future__ import annotations
@@ -59,57 +43,41 @@ import numpy as np
 
 from .. import kernel
 
-# レイを列の中心からずらす幅(要素サイズに対する比)。軸整列した形状で縮退が系統的に
-# 起きるのを避けるためのもので、乱数ではない。2軸で違う無理数比にして、両軸が同時に
-# 縮退する形状(例: 対角線上の辺)も外す。
+# レイを列の中心からずらす幅(要素サイズ比)。2軸で違う無理数比にして、両軸が同時に縮退する形状(対角線上の辺など)も外す。
 RAY_JITTER_X = 1.0e-4
 RAY_JITTER_Y = 0.6180339887498949e-4
 
-# **1つの固定値では守れない。** ずらし幅を固定にすると、その値にちょうど合った位置に
-# 頂点が来る格子を渡されたときに縮退する(円錐の頂点へ既定のずらしを
-# 合わせた格子を作れば再現する)。縮退(巻き数が0に戻らない列)を検知したら、**決定的な列**を
-# 順に試し直す。倍率を素数にしてあるのは、ある倍率で当たった位置が別の倍率で当たり直さない
-# ようにするため。乱数は使わない(決定性を保つ)。
+# 固定値1つでは、その値にちょうど合った位置に頂点が来る格子で縮退する(円錐の頂点へ既定のずらしを合わせた格子で再現)。
+# 縮退(巻き数が0に戻らない列)を検知したら決定的な列を順に試し直す。倍率を素数にしてあるのは、ある倍率で当たった位置が
+# 別の倍率で当たり直さないようにするため。
 RAY_JITTER_SEQUENCE: tuple[tuple[float, float], ...] = tuple(
     (RAY_JITTER_X * k, RAY_JITTER_Y * m)
     for k, m in ((1, 1), (3, 5), (7, 11), (13, 17), (19, 23), (29, 31))
 )
 
-# 交点が三角形の辺・頂点に乗ったとみなす重心座標の幅(`_occupancy_once`)。重心座標は三角形の大きさに
-# 対する比なので、既定のずらし(要素サイズの 1e-4)で辺から離れた交点はこれより5桁以上大きい。
-# 小さすぎると浮動小数の誤差で辺の上の点を片側だけ・両側・どちらにも数える形を見逃す。
+# 交点が三角形の辺・頂点に乗ったとみなす重心座標の幅(`_occupancy_once`)。既定のずらし(要素サイズの 1e-4)で辺から離れた交点は
+# これより5桁以上大きい。小さすぎると浮動小数の誤差で辺の上の点の数え漏れ・二重計上を見逃す。
 RAY_EDGE_TOLERANCE = 1.0e-9
 
-# 既定の三角形分割の細かさ。**要素サイズに比例させる**(格子を細かくすると三角形も
-# 細かくなる)。0.02 は「格子の誤差が支配的で、三角形分割の弦誤差はその20分の1」という
-# 配分。受入検査が曖昧として除外する帯(要素サイズの5%)より細かいことが要る。
+# 既定の三角形分割の細かさ。**要素サイズに比例させる**。0.02 は「三角形分割の弦誤差が格子の誤差の20分の1」という配分で、
+# 受入検査が曖昧として除外する帯(要素サイズの5%)より細かいことが要る。
 DEFAULT_DEVIATION_RATIO = 0.02
 DEFAULT_ANGULAR_DEFLECTION = 0.2
 
-# バウンディングボックスの周囲に取る余白(要素数)。**セル数で一定なので、物理量(mm)は要素サイズに
-# 比例して増える。** 長軸基準で解像度を粗くすると、薄い軸ではパッド2セルが実寸を超えて格子が形状を
-# 覆わなくなり、`occupancy` が「交点が1つも無い」の `NoRayCrossings` になる(格子範囲は形状より
-# 大きいのに、という読み取りにくい出方)。実測: 厚み12mm・長さ182mm の板を
-# 長辺12要素で切ると spacing 16.68mm、z のパッド2セル = 約33mm で失敗、14要素(14.3mm)なら通る。
-# 粗い解像度を選ぶときは最も薄い軸のパッドに対する余裕も見る(1点で試して通ったら採る、をしない)。
+# バウンディングボックスの周囲に取る余白(要素数)。**セル数で一定なので、物理量(mm)は要素サイズに比例して増える。**
+# 粗い解像度だと薄い軸ではパッド2セルが実寸を超えて格子が形状を覆わなくなり、`occupancy` が `NoRayCrossings` になる。
+# 実測: 厚み12mm・長さ182mm の板を長辺12要素で切ると spacing 16.68mm、z のパッド2セル = 約33mm で失敗、14要素(14.3mm)なら通る。
+# 粗い解像度を選ぶときは最も薄い軸のパッドに対する余裕も見る。
 DEFAULT_PAD = 1
 
-# **セル中心規約の唯一の定義**。要素 (i,j,k) の値は中心 origin + spacing*(i+CELL_CENTER_OFFSET)
-# のもの。`mesh.py` の `rho[ex]` と同じで、半セルずれの原因になるのでここ以外に書かない
-# (変異検査で、同じ 0.5 が3箇所に散っていて1箇所を壊しても検査が緑のままだったことがある)。
+# **セル中心規約の唯一の定義**。`mesh.py` の `rho[ex]` と同じで、半セルずれの原因になるのでここ以外に書かない
+# (同じ 0.5 が3箇所に散っていて1箇所を壊しても変異検査が緑のままだったことがある)。
 CELL_CENTER_OFFSET = 0.5
 
 
-# ---------------------------------------------------------------------------
-# 格子
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Grid:
-    """立方体要素・ワールド軸整列の規則格子。
-
-    `origin` は**要素 (0,0,0) の低い側の角**のワールド座標(中心ではない)。
-    要素 (i,j,k) の中心は `origin + spacing * (i+0.5, j+0.5, k+0.5)`。
-    """
+    """立方体要素・ワールド軸整列の規則格子。`origin` は**要素 (0,0,0) の低い側の角**のワールド座標(中心ではない)。"""
 
     origin: tuple[float, float, float]
     spacing: float
@@ -131,7 +99,7 @@ class Grid:
         return float(self.spacing) ** 3
 
     def centers_1d(self, axis: int) -> np.ndarray:
-        """軸 `axis` のセル中心座標(長さ = その軸の要素数)。"""
+        """軸 `axis` のセル中心座標。"""
         n = self.shape[axis]
         return self.origin[axis] + self.spacing * (
             np.arange(n, dtype=float) + CELL_CENTER_OFFSET
@@ -142,7 +110,7 @@ class Grid:
         return self.centers_of(np.array([[i, j, k]]))[0]
 
     def centers_of(self, indices: np.ndarray) -> np.ndarray:
-        """(N,3) の要素添字 → (N,3) の中心座標。stage2 が要素と面を突き合わせるための口。"""
+        """(N,3) の要素添字 → (N,3) の中心座標。"""
         idx = np.asarray(indices, dtype=float)
         if idx.ndim != 2 or idx.shape[1] != 3:
             raise ValueError(f"indices must be (N,3), got {idx.shape}")
@@ -179,10 +147,8 @@ def grid_for_bbox(
 ) -> Grid:
     """バウンディングボックスから立方体格子を起こす。
 
-    要素サイズは `最長辺 / elements_long_axis`。各軸の要素数は
-    `ceil(辺長 / spacing) + 2*pad` で、形状は格子の**中央**に置く(原点は bbox の中心から
-    格子の半分を引く)。中央に置くのは決定的にするため — 低い側の角に合わせると、
-    軸ごとに余白の配分が変わって同じ形でも軸ごとに違う位置に載る。
+    要素サイズは `最長辺 / elements_long_axis`。各軸の要素数は `ceil(辺長 / spacing) + 2*pad` で、
+    形状は格子の**中央**に置く(低い側の角に合わせると軸ごとに余白の配分が変わる)。
     """
     lo = np.asarray(list(bbox_min), dtype=float)
     hi = np.asarray(list(bbox_max), dtype=float)
@@ -203,7 +169,7 @@ def grid_for_bbox(
         raise ValueError(f"pad must be >= 0, got {pad!r}")
 
     spacing = longest / n_long
-    # 浮動小数の丸めで最長軸が n_long+1 になるのを避けるため、ceil の前に微小量を引く。
+    # 浮動小数の丸めで最長軸が n_long+1 になるのを避ける。
     counts = np.ceil(extent / spacing - 1e-9).astype(int)
     counts = np.maximum(counts, 1) + 2 * int(pad)
     center = 0.5 * (lo + hi)
@@ -215,23 +181,14 @@ def grid_for_bbox(
     )
 
 
-# ---------------------------------------------------------------------------
-# 三角形群(面添字つき)
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class TriangleSoup:
-    """外向きに揃った三角形群。**面添字を捨てない**(stage2「面アンカー」がこれを使う)。
+    """外向きに揃った三角形群。**面添字を捨てない**(stage2 がこれを使う)。
 
-    `positions`  : (V,3) 頂点座標[mm]
-    `triangles`  : (T,3) 頂点添字
-    `face_index` : (T,)  その三角形が属する OCCT の面添字(1始まり。`kernel.tessellate` と同じ)
-    `face_kind`  : {面添字: "plane"/"cylinder"/...}
-    `face_props` : {面添字: {"area": float, "centroid": (3,), "normal": (3,), "kind": str}}
-                   **B-rep から直に取った真値**(三角形分割の近似ではない)。`kernel.tessellate`
-                   が面ごとに返すものをそのまま畳んである。stage2「面アンカー」の受入検査が
-                   「節点集合の重心・面積が解像度を上げると真の面へ近づく」を測る基準になる —
-                   三角形から作った値を基準にすると、近似を近似と比べることになって
-                   何も検査していないのと同じになる。
+    `positions` (V,3) 頂点座標[mm] / `triangles` (T,3) 頂点添字 / `face_index` (T,) OCCT の面添字(1始まり。`kernel.tessellate` と同じ) /
+    `face_kind` {面添字: "plane"/"cylinder"/...} / `face_props` {面添字: {"area", "centroid", "normal", "kind"}}。
+    `face_props` は **B-rep から直に取った真値**(三角形分割の近似ではない)で、面アンカーの受入検査の基準になる
+    (三角形から作った値を基準にすると近似を近似と比べることになる)。
     """
 
     positions: np.ndarray
@@ -240,8 +197,7 @@ class TriangleSoup:
     face_kind: dict[int, str] = field(default_factory=dict)
     deviation: float = 0.0
     face_props: dict[int, dict] = field(default_factory=dict)
-    #: (T,) その三角形を含む SOLID の0始まりの番号(-1 はどの SOLID にも無い面)。**SOLID が2つ以上ある
-    #: 形のときだけ入る**(`inspect_soup` はこれでソリッドごとに閉じているかを見る)。
+    #: (T,) その三角形を含む SOLID の0始まりの番号(-1 はどの SOLID にも無い面)。**SOLID が2つ以上ある形のときだけ入る**。
     solid_index: Optional[np.ndarray] = None
 
     @property
@@ -258,27 +214,21 @@ class TriangleSoup:
         return p[t[:, 0]], p[t[:, 1]], p[t[:, 2]]
 
     def triangles_of_face(self, face_index: int) -> np.ndarray:
-        """面添字 → その面の三角形の添字。stage2 が面から要素を引くための口。"""
+        """面添字 → その面の三角形の添字。"""
         return np.flatnonzero(self.face_index == int(face_index))
 
     def signed_volume(self, triangles: Optional[np.ndarray] = None) -> float:
         """発散定理による符号付き体積。外向きに揃っていれば正。
 
-        **基準点(bboxの中心)を引いてから三重積を取る。** 絶対座標のまま足すと、原点から
-        遠いソリッドで桁落ちする(原点から 1e8 mm の 40x20x10 の箱で
-        8000 が 7957.33 になり、薄い形なら符号が反転して「法線が内向き」と誤って拒否する)。
-        体積は平行移動に対して不変なので、基準点を引くのは数値の都合だけの操作。
-
-        `triangles` に三角形の添字を渡すと、その部分集合だけの符号付き体積を返す
-        (連結成分ごとに見るため)。このとき**基準点はその部分集合自身の点から取る**。
-        soup 全体の bbox 中心を使うと、離れた位置にある小さな殻でその殻の座標が基準点から
-        大きく離れ、桁落ちが戻ってくる。
+        **基準点(bboxの中心)を引いてから三重積を取る**(絶対座標のままだと原点から遠いソリッドで桁落ちする。
+        原点から 1e8 mm の 40x20x10 の箱で 8000 が 7957.33 になり、薄い形なら符号が反転して「法線が内向き」と誤って拒否する)。
+        `triangles` に三角形の添字を渡すとその部分集合だけの体積を返し、**基準点はその部分集合自身の点から取る**
+        (離れた小さな殻で桁落ちが戻るため)。
         """
         p = self.positions
         t = self.triangles if triangles is None else self.triangles[triangles]
         if t.shape[0] == 0:
-            # 三角形が1枚も無い部分集合は体積ゼロ。基準点を空配列から取ろうとすると落ちるので
-            # 先に返す(いまの呼び出し元は必ず1枚以上あるが、stage2 はこの関数を直に呼ぶ)。
+            # 三角形が1枚も無い部分集合は体積ゼロ(空配列から基準点を取ると落ちる)。
             return 0.0
         a_raw = p[t[:, 0]]
         b_raw = p[t[:, 1]]
@@ -354,15 +304,8 @@ def triangles_from_shape(
     )
 
 
-# ---------------------------------------------------------------------------
-# 入力の健全性検査
-# ---------------------------------------------------------------------------
 def weld_vertices(positions: np.ndarray, tolerance: float) -> np.ndarray:
-    """座標が `tolerance` 以内の頂点を同一視するラベルを返す(格子への丸めによる融着)。
-
-    `kernel.tessellate` は**面ごとに**頂点配列を返すので、隣り合う面の共有辺は
-    別々の頂点添字になる。辺の対を数えるにはまず座標で融着する必要がある。
-    """
+    """座標が `tolerance` 以内の頂点を同一視するラベルを返す(`kernel.tessellate` は面ごとに頂点配列を返すので、辺の対を数える前に融着が要る)。"""
     if not tolerance > 0:
         raise ValueError(f"tolerance must be positive, got {tolerance!r}")
     keys = np.round(positions / tolerance).astype(np.int64)
@@ -373,17 +316,11 @@ def weld_vertices(positions: np.ndarray, tolerance: float) -> np.ndarray:
 def inspect_soup(soup: TriangleSoup, weld_tolerance: Optional[float] = None) -> dict:
     """三角形群が「閉じていて外向きに揃った表面」かを調べる。壊れていたら `ValueError`。
 
-    検査するのは3つ:
+    検査するのは、有向辺の対(辺 (u,v) と逆向き (v,u) がちょうど1回ずつ。片方だけなら穴、同じ向きが2回なら向きの不整合)、
+    符号付き体積が正(法線が内向きの形状を弾く)、退化三角形が全部ではない、の3つ。
 
-    1. **有向辺の対** — 閉じた向きの揃った表面では、辺 (u,v) はちょうど1回現れ、
-       その逆向き (v,u) もちょうど1回現れる。片方しか無ければ穴(非水密)、
-       同じ向きが2回現れれば向きの不整合。
-    2. **符号付き体積が正** — 法線が内向き(裏返った形状)を弾く。
-    3. **退化三角形が全部ではない**。
-
-    **SOLID が2つ以上ある形(`solid_index`)はソリッドごとに調べる。** まとめた形では、面で接する
-    ボディの接した辺が同じ向きで2回現れ、重なる・入れ子のボディは殻の入れ子の深さが崩れるが、
-    どちらも入力として正しい(占有は巻き数が0でない区間なので、重なりはそのまま和になる)。
+    **SOLID が2つ以上ある形(`solid_index`)はソリッドごとに調べる。** まとめると、面で接するボディの接した辺が同じ向きで
+    2回現れ、重なる・入れ子のボディは殻の入れ子の深さが崩れるが、どちらも入力として正しい(重なりは占有の和になる)。
     """
     lo, hi = soup.bbox
     diagonal = float(np.linalg.norm(hi - lo))
@@ -418,7 +355,7 @@ def _inspect_closed(soup: TriangleSoup, tol: float) -> dict:
     labels = weld_vertices(positions, tol)
     tri = labels[soup.triangles]
 
-    # 退化三角形(融着後に頂点が重なるもの)は面を持たないので辺の対から外す。
+    # 退化三角形は面を持たないので辺の対から外す。
     degenerate = (tri[:, 0] == tri[:, 1]) | (tri[:, 1] == tri[:, 2]) | (tri[:, 2] == tri[:, 0])
     live = tri[~degenerate]
     if live.shape[0] == 0:
@@ -427,12 +364,10 @@ def _inspect_closed(soup: TriangleSoup, tol: float) -> dict:
     edges = np.concatenate(
         [live[:, [0, 1]], live[:, [1, 2]], live[:, [2, 0]]], axis=0
     )
-    # 有向辺を1つの整数キーにする(頂点数は融着後のラベル数)
     n_labels = int(labels.max()) + 1
     forward = edges[:, 0].astype(np.int64) * n_labels + edges[:, 1].astype(np.int64)
     backward = edges[:, 1].astype(np.int64) * n_labels + edges[:, 0].astype(np.int64)
     keys, counts = np.unique(forward, return_counts=True)
-    # 各有向辺が何回現れたか
     fwd_count = counts[np.searchsorted(keys, forward)]
     bwd_pos = np.searchsorted(keys, backward)
     bwd_pos = np.clip(bwd_pos, 0, keys.size - 1)
@@ -494,10 +429,8 @@ def _shell_orientation_report(
 ) -> list[dict]:
     """連結成分(殻)ごとに、符号付き体積と「他の殻いくつの内側にあるか」を返す。
 
-    内部空洞の殻は外向き法線が**空洞のほうを向く**ので符号付き体積が負になる。
-    殻ごとに見ないと、**空洞の殻だけを裏返した入力**が総体積が正のまま通ってしまい、
-    空洞が材料として埋まる(40³の箱に20³の空洞で実際に再現した)。
-    入れ子の深さが偶数の殻は正、奇数(=空洞)の殻は負でなければならない。
+    内部空洞の殻は外向き法線が空洞のほうを向くので体積が負になる。殻ごとに見ないと、**空洞の殻だけを裏返した入力**が
+    総体積が正のまま通って空洞が埋まる(40³の箱に20³の空洞で再現)。入れ子の深さが偶数の殻は正、奇数(空洞)の殻は負でなければならない。
     """
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -523,7 +456,7 @@ def _shell_orientation_report(
     for k in range(n_comp):
         members = live_idx[comp_of_tri == k]
         if members.size == 0:
-            continue  # 三角形を持たない孤立ラベル(退化三角形だけのラベル)
+            continue
         tri_sets.append(members)
         reps.append(soup.positions[soup.triangles[members[0], 0]])
         out.append(
@@ -549,11 +482,7 @@ def _shell_orientation_report(
 def _point_is_inside(
     soup: TriangleSoup, triangles: np.ndarray, point: np.ndarray, eps: float
 ) -> bool:
-    """1点が三角形の部分集合が囲む領域の内側かを、+z のレイの巻き数で判定する。
-
-    `occupancy` と同じ考え方だが、格子ではなく1点だけを見る(殻の入れ子の深さを数えるため)。
-    レイの (x,y) は `eps` だけずらす(頂点や辺をちょうど貫く縮退を外す)。
-    """
+    """1点が三角形の部分集合が囲む領域の内側かを、+z のレイの巻き数で判定する(殻の入れ子の深さ用)。レイの (x,y) は `eps` だけずらす。"""
     idx = np.asarray(triangles)
     a = soup.positions[soup.triangles[idx, 0]]
     b = soup.positions[soup.triangles[idx, 1]]
@@ -577,15 +506,9 @@ def _point_is_inside(
     return winding != 0
 
 
-# ---------------------------------------------------------------------------
-# 占有判定(+zレイの巻き数)
-# ---------------------------------------------------------------------------
 class NoRayCrossings(ValueError):
-    """どの列のレイも三角形と交わらなかった(列の中心が形状の xy 投影に1つも入らない)。
-
-    **縮退ではなく「この格子では0セル」**である。格子の列より薄い・小さい形や、格子の縁を
-    かすめるだけの形で起きる。`occupancy(allow_empty=True)` はこれを空のマスクとして返す。
-    """
+    """どの列のレイも三角形と交わらなかった。**縮退ではなく「この格子では0セル」**(格子の列より薄い・小さい形など)。
+    `occupancy(allow_empty=True)` はこれを空のマスクとして返す。"""
 
     def __init__(self, message: str, stats: dict) -> None:
         super().__init__(message)
@@ -601,22 +524,14 @@ def occupancy(
 ) -> tuple[np.ndarray, dict]:
     """三角形群と格子から占有マスク (nx,ny,nz) の bool 配列を返す。
 
-    `jitter=None`(既定)のときは `RAY_JITTER_SEQUENCE` を順に試し、縮退(巻き数が0に
-    戻らない列)が出たら**次のずらし幅でやり直す**。全部だめだったときだけ例外にする。
-    明示的にタプルを渡すとその1回だけを試す(受入検査がずらしの効きを見るための口)。
-    `stats["jitter"]` に実際に成功したずらし幅、`stats["jitter_attempts"]` に試した回数が入る。
+    `jitter=None`(既定)のときは `RAY_JITTER_SEQUENCE` を順に試し、縮退(巻き数が0に戻らない列)が出たら次のずらし幅でやり直す
+    (全部だめなときだけ例外)。明示的にタプルを渡すとその1回だけを試す。`stats["jitter"]` に成功したずらし幅、
+    `stats["jitter_attempts"]` に試した回数が入る。
 
-
-    各列 (i,j) の**セル中心**を通る +z のレイを飛ばし、三角形との交点を集める。
-    交点には「入る(+1)/出る(-1)」の符号を付け、z 順の累積(巻き数)が 0 でない区間に
-    ある**セル中心**を占有とする。詳細と、偶奇ではなく巻き数を使う理由はモジュール
-    docstring を参照。
-
-    戻り値の2つめは診断。`unbalanced_columns` は最後まで巻き数が 0 に戻らなかった列の数で、
-    閉じた表面なら 0 でなければならない(0 でないとき例外)。
-
-    `allow_empty=True` なら、どの列のレイも形状と交わらないとき(`NoRayCrossings`)に例外にせず
-    全 False のマスクを返す(`stats["empty"]` が真)。**呼び出し側が「0セル」を報告できるときだけ**使うこと。
+    各列の**セル中心**を通る +z のレイの交点に 入る(+1)/出る(-1) を付け、巻き数が 0 でない区間のセル中心を占有とする。
+    戻り値の2つめは診断。`unbalanced_columns` は巻き数が 0 に戻らなかった列の数で、0 でなければ例外。
+    `allow_empty=True` なら `NoRayCrossings` の代わりに全 False のマスクを返す(`stats["empty"]`)。
+    **呼び出し側が「0セル」を報告できるときだけ**使うこと。
     """
     if jitter is not None:
         try:
@@ -631,7 +546,7 @@ def occupancy(
         try:
             mask, stats = _occupancy_once(soup, grid, candidate)
         except NoRayCrossings as exc:
-            # 縮退ではないので、ずらし幅を変えても答えは変わらない(要素サイズの 1e-4 しか動かない)。
+            # 縮退ではないので、ずらし幅を変えても答えは変わらない。
             if not allow_empty:
                 raise
             return np.zeros(tuple(grid.shape), dtype=bool), dict(
@@ -658,7 +573,7 @@ def _occupancy_once(
     nx, ny, nz = grid.shape
     h = float(grid.spacing)
 
-    # セル中心は必ず Grid 経由で取る(規約の定義を1箇所に閉じ込めるため)。
+    # セル中心は必ず Grid 経由で取る。
     ray_x = grid.centers_1d(0) + jitter[0] * h
     ray_y = grid.centers_1d(1) + jitter[1] * h
     center_z = grid.centers_1d(2)
@@ -751,10 +666,8 @@ def _occupancy_once(
     z = z[order]
     sign = sign[order]
 
-    # 列ごとの累積(巻き数)。全体の累積から、その列が始まる直前の値を引く。
-    # 閉じた表面では各列の符号の和が 0 になるので、この引き算は実は恒等的に何もしない
-    # (変異検査で確認済み)。それでも「列ごとの巻き数」という定義どおりに
-    # 書いておく — 閉じているという不変条件が別の場所で守られていることに依存させない。
+    # 列ごとの累積(巻き数)。閉じた表面では各列の符号の和が 0 になるので、この引き算は恒等的に何もしない(変異検査で確認済み)が、
+    # 「閉じている」という不変条件に依存させないため定義どおりに書いてある。
     cumulative = np.cumsum(sign)
     is_first = np.empty(col.size, dtype=bool)
     is_first[0] = True
@@ -800,9 +713,6 @@ def _occupancy_once(
     return mask, stats
 
 
-# ---------------------------------------------------------------------------
-# 表面までの距離(受入検査の「境界近傍を除く」と、stage2 の最近傍面のための共通部品)
-# ---------------------------------------------------------------------------
 def closest_triangle(
     soup: TriangleSoup, points: np.ndarray, chunk: Optional[int] = None
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -817,20 +727,13 @@ def distance_to_triangles(
     a: np.ndarray, b: np.ndarray, c: np.ndarray, points: np.ndarray, *, chunk: Optional[int] = None
 ) -> tuple[np.ndarray, np.ndarray]:
     """各点について、三角形群 `(a, b, c)`(それぞれ (T,3))までの**厳密な**最短距離とその三角形の添字を返す。
+    `design_space.distance_to_hull` と `closest_triangle` が同じ計算を使う。
 
-    `design_space.distance_to_hull`(凸包までの距離)と `closest_triangle` が同じ計算を使う。
-
-    **候補点の最小値で求める(領域分けの優先順位では求めない)。** 三角形上の最近傍点は
-    「3頂点 / 3辺への射影(端で打ち切る) / 面への射影(重心座標が三角形の内側のときだけ)」の
-    どれかなので、7候補の距離を全部出して最小を取れば必ず正しい。教科書(Ericson)の
-    領域分けは分岐が排他であることを前提にしていて、**退化した三角形(2頂点が重なる等)では
-    複数の領域が同時に真になり、後から上書きしたほうが勝って誤った距離を返す**
-    (`a=b=(0,0,0), c=(5,4,4), p=(10,4,-8)` で 13.416407865 を返したが、
-    線分への正解は 12.638010059)。**退化三角形はOCCTの三角形分割に実際に現れる**ので
-    (円錐の頂点まわりなど)、入力側で弾くのではなくここで正しく扱う。
-
-    点をチャンクに切ってメモリを抑える。頂点だけの近似(KD木)は三角形1枚ぶん距離を
-    過大評価しうるので使わない。
+    **候補点の最小値で求める(領域分けの優先順位では求めない)。** 最近傍点は 3頂点 / 3辺への射影 / 面への射影(重心座標が内側のときだけ)
+    のどれかなので、7候補を全部出して最小を取れば正しい。教科書(Ericson)の領域分けは分岐が排他な前提で、
+    **退化三角形(2頂点が重なる等)では複数の領域が同時に真になり誤った距離を返す**(`a=b=(0,0,0), c=(5,4,4), p=(10,4,-8)` で
+    13.416407865 を返したが、線分への正解は 12.638010059)。退化三角形は OCCT の三角形分割に実際に現れる(円錐の頂点まわりなど)。
+    頂点だけの近似(KD木)は三角形1枚ぶん距離を過大評価しうるので使わない。点はチャンクに切ってメモリを抑える。
     """
     pts = np.asarray(points, dtype=float)
     if pts.ndim != 2 or pts.shape[1] != 3:
@@ -842,10 +745,9 @@ def distance_to_triangles(
     ac = c - a
     bc = c - b
     if chunk is None:
-        # (点数 x 三角形数) の中間配列を数MBに抑える。三角形が多いほど点を細かく切る。
+        # (点数 x 三角形数) の中間配列を数MBに抑える。
         chunk = int(max(1, 200_000 // max(a.shape[0], 1)))
 
-    # 辺の長さの2乗(0 なら退化した辺 = 端点そのものが最近傍)
     len_ab = np.einsum("ij,ij->i", ab, ab)
     len_ac = np.einsum("ij,ij->i", ac, ac)
     len_bc = np.einsum("ij,ij->i", bc, bc)
@@ -896,16 +798,10 @@ def distance_to_surface(soup: TriangleSoup, points: np.ndarray, chunk: int = 256
     return closest_triangle(soup, points, chunk=chunk)[0]
 
 
-# ---------------------------------------------------------------------------
-# 入口
-# ---------------------------------------------------------------------------
 @dataclass
 class VoxelModel:
-    """設計空間の格子と、そこに載る保持/障害物領域。
-
-    `design` / `keep` / `obstacle` はすべて同じ格子・同じ形の bool 配列 (nx,ny,nz)。
-    `keep` と `obstacle` は**設計空間の内側に切り詰めてある**(外へはみ出した分は捨てる)。
-    """
+    """設計空間の格子と、そこに載る保持/障害物領域。`design` / `keep` / `obstacle` は同じ格子・同じ形の bool 配列で、
+    `keep` と `obstacle` は設計空間の内側に切り詰めてある。"""
 
     grid: Grid
     design: np.ndarray
@@ -925,11 +821,7 @@ class VoxelModel:
 
 
 class OutsideDesignSpaceError(ValueError):
-    """保持/障害物領域が塊(設計空間)からはみ出した。
-
-    `ValueError` の派生なので、既存の `except ValueError` はそのまま効く。はみ出した要素数は
-    `outside`(キーは `"keep"` / `"obstacle"`、値は要素数)で引ける。
-    """
+    """保持/障害物領域が塊(設計空間)からはみ出した。`ValueError` の派生。はみ出した要素数は `outside`(`"keep"` / `"obstacle"`)で引ける。"""
 
     def __init__(self, message: str, outside: dict) -> None:
         super().__init__(message)
@@ -949,15 +841,9 @@ def model_from_design_mask(
 ) -> VoxelModel:
     """塊(設計空間)を bool マスクで、面アンカーの対象ソリッドを別に受け取って組み立てる。
 
-    塊は `design`(格子と同じ形の bool 配列)から、面は `anchor_shape` から来る。
-    **塊をどのロジックで決めるかはここでは決めない**(呼び出し側の話)。
-
-    `anchor_shape` は OCCT の `TopoDS_Shape` / build123d のオブジェクト / 既に作った
-    `TriangleSoup` のいずれか。**面添字は渡したものの面の並びで決まる**ので、面を選ぶのに
-    使った `TriangleSoup` があるならそれをそのまま渡すこと(作り直すと面添字が食い違いうる)。
-
-    `keep` / `obstacle` は同じ格子に載せる(形か、既に載せた同じ格子の bool マスク)。
-    **塊からはみ出したら `OutsideDesignSpaceError`**(黙って切り詰めない)。
+    `anchor_shape` は OCCT の `TopoDS_Shape` / build123d のオブジェクト / 既に作った `TriangleSoup`。**面添字は渡したものの面の並びで決まる**ので、
+    面を選ぶのに使った `TriangleSoup` があればそれを渡すこと(作り直すと面添字が食い違いうる)。
+    `keep` / `obstacle` は同じ格子に載せる(形か bool マスク)。**塊からはみ出したら `OutsideDesignSpaceError`**(黙って切り詰めない)。
     """
     started = time.perf_counter()
 
@@ -966,7 +852,7 @@ def model_from_design_mask(
         raise ValueError(
             f"design のかたちが格子と違う: design {tuple(mask.shape)} / 格子 {tuple(grid.shape)}"
         )
-    # 呼び出し側の配列と共有しない(後で書き換えられると `VoxelModel` の中身が黙って変わる)。
+    # 呼び出し側の配列と共有しない。
     design_mask = np.array(mask, dtype=bool)
     if not design_mask.any():
         raise ValueError(
@@ -1055,9 +941,8 @@ def model_from_design_mask(
 def _voxelize_region(region: Any, grid: Grid, deviation: float, angular: float, label: str):
     """保持/障害物の領域を設計空間と同じ格子に載せる。
 
-    **格子とまったく重ならない領域は黙って空にせず拒否する。** 「材料を必ず残せ」と
-    言われた領域が1要素も掴めないまま最適化が走ると、支えの無い構造がもっともらしく
-    出てくる。座標系や単位の取り違えがいちばんありそうな原因なので、範囲を出して落とす。
+    **格子とまったく重ならない領域は拒否する**(「材料を必ず残せ」の領域が1要素も掴めないまま走ると支えの無い構造が出る。
+    座標系や単位の取り違えが原因として最もありそう)。
     """
     solid = unwrap(region)
     soup = triangles_from_shape(solid, deviation=deviation, angular_deflection=angular)
@@ -1090,36 +975,22 @@ def unwrap(shape: Any) -> Any:
 
 
 def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:
-    """OCCT の bbox(`BRepBndLib::AddOptimal`)。**面のトリムを尊重する**。
+    """OCCT の bbox(`BRepBndLib::AddOptimal`)。**面のトリムを尊重する**。条件ボディの外接箱と格子外ガード(`design_space.derive`)が使う。
 
-    条件ボディの外接箱と、格子外ガード(`design_space.derive`)が使う。
-
-    **`Add` にしてはいけない。** あちらはトリムを見ず下地のサーフェス全体で囲むので、
-    トーラス面の部品が実寸の10倍以上に化け、**はみ出していない保持をはみ出したと言う**
-    (実測: `models/hanger_bar_attachment.json` の 35mm 角の部品が 482.8mm と報告された)。
-    円柱・平面だけの部品では両者がほとんど一致するので、**曲面の種類によって壊れ方が変わる**。
-
-    **`useTriangulation=False` で呼ぶ。** `True` にすると、形状に**既に付いている三角形分割**
-    があればそれを使うので、同じ形状オブジェクトに2回ボクセル化をかけると
-    「1回目=素の幾何のbbox → 2回目以降=前回の三角形分割のbbox」と値が変わり、
-    そこから決まる要素サイズ・三角形分割の細かさ・格子まで変わってしまう
-    (実測: 実物STEPで三角形数が呼ぶたびに 62264 → 62168 → 62138 と動いた。
-    `Cylinder(10,30)` でも1回目312枚・2回目以降308枚)。**決定性はここで壊れる**。
-
-    **遅い**(トリム曲線を実際に評価する。実測: 1ボディ 18〜60ms)。OCCT は結果を持たない
-    ので呼ぶたびに同じだけかかる —— 導出1回につき数回で済む場所から呼ぶこと。
+    **`Add` にしてはいけない**: トリムを見ず下地のサーフェス全体で囲むので、トーラス面の部品が実寸の10倍以上に化ける
+    (実測: `models/hanger_bar_attachment.json` の 35mm 角の部品が 482.8mm)。
+    **`useTriangulation=False` で呼ぶ**: `True` だと既存の三角形分割があればそれを使うので、同じ形状に2回ボクセル化すると
+    bbox が変わり要素サイズ・格子まで変わる(実測: 三角形数が 62264 → 62168 → 62138、`Cylinder(10,30)` で 312 → 308)。決定性がここで壊れる。
+    **遅い**(実測: 1ボディ 18〜60ms。OCCT は結果を持たない)ので、導出1回につき数回で済む場所から呼ぶこと。
     """
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
 
     box = Bnd_Box()
     BRepBndLib.AddOptimal_s(shape, box, False, False)
-    # Bnd_Box は形状の公差ぶんの「隙間」を足して返す。その 1e-7 mm が要素サイズに乗ると、
-    # 辺長が要素サイズの整数倍の箱で体積が厳密一致しなくなるので隙間を落とす。
-    # **`SetGap(0.0)` は `Add` の後に呼ぶ。** 前に呼んでも `Add` が隙間を上書きするので効かない
-    # (`kernel.bounding_box` はその順で、1e-7mm 膨らんだ値を返す)。この関数を `kernel` 側へ寄せて
-    # 1本にすると `check_voxelize.py` [7] の厳密一致が落ちる(2026-09-05 に確認)。統合するなら
-    # `kernel` に「隙間を落とした厳密な bbox」を別の口として足すこと。
+    # Bnd_Box は公差ぶんの隙間(1e-7 mm)を足して返す。辺長が要素サイズの整数倍の箱で体積が厳密一致しなくなるので落とす。
+    # **`SetGap(0.0)` は `Add` の後に呼ぶ**(前だと `Add` が上書きする。`kernel.bounding_box` はその順で 1e-7mm 膨らんだ値を返す)。
+    # `kernel` 側へ寄せて1本にすると `check_voxelize.py` [7] の厳密一致が落ちる(2026-09-05 確認)。統合するなら `kernel` に隙間を落とした別の口を足すこと。
     box.SetGap(0.0)
     if box.IsVoid():
         raise ValueError("bounding box is empty (null shape?)")

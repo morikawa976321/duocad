@@ -1,4 +1,3 @@
-/** スケッチ線の太線描画(three.js `Line2` / `LineMaterial`)。 */
 import * as THREE from 'three'
 import { Line2 } from 'three/examples/jsm/lines/Line2.js'
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js'

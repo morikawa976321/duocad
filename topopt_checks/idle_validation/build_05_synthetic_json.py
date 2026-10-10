@@ -176,7 +176,7 @@ def build_coverage(main_matrix, ablation, sensitivity, grid_origin, initshape, m
 
 def build_limitations(main_matrix, ablation, sensitivity, grid_origin, initshape, mech) -> list[str]:
     lim = [
-        "01_PROTOCOL.md §5の合成材料5種(S-T/S-B/S-TB/S-L/S-MS)は本タスクでは新規構築していない。"
+        "10_SYNTHESIS 付録A(旧 01_PROTOCOL) §5の合成材料5種(S-T/S-B/S-TB/S-L/S-MS)は本タスクでは新規構築していない。"
         "タスクファイル自身の優先指定(「小型題材への変更」節)に基づく判断——task10のcoverage監査へ"
         "この判断の妥当性を引き継ぐ。",
         "path_smallの04a認定はpercentile評価シナリオに限る(m5b_targetでは現行・優越形とも不合格・"

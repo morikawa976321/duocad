@@ -1,16 +1,10 @@
 """文書を画面へ配るための表現に変える部分(`DocumentView`)。
 
-`Session` が「文書を動かすもの」なら、こちらは**配りもの** —— 文書を一切変えず、読み取って
-アプリ層が描ける形へ射影するだけの側である。持ち物はすべて**寿命の管理が要るキャッシュ**で、
-その寿命を1クラスに閉じることがこのファイルの目的である。
+文書を変えず、読み取ってアプリ層が描ける形へ射影するだけの側で、持ち物はすべて**寿命の管理が要るキャッシュ**。
 
-**依存の向きは `Session` -> ここの一方向**で、ここから `Session` は見ない。配る封筒に載る値の
-うち**持ち主が `Session` のもの**——`can_undo`(取り消せる下限を `Session` が持つ)・
-`applied_count`・「いまプレビュー中か」——は、呼び出し側が引数で渡す(`state_meta`)。
-旗をこちらへ複製すると、片方だけ立てて戻し忘れる形になる。
-
-**`duocad/net/` を参照しない**(`session.py` と同じ規律)。
-**OCPを直接importしない**(境界はkernel.pyだけ)。
+**依存の向きは `Session` -> ここの一方向**。持ち主が `Session` の値(`can_undo`・`applied_count`・
+プレビュー中か)は呼び出し側が引数で渡す(`state_meta`。旗を複製すると戻し忘れる)。
+**`duocad/net/` を参照しない・OCPを直接importしない**(境界はkernel.pyだけ)。
 """
 from __future__ import annotations
 
@@ -32,11 +26,8 @@ from .document import Document
 
 
 def _face_count(body) -> int:
-    """`body_meta` が配る面の数。**メッシュボディは常に1**。
-
-    メッシュは「面1枚」として配る(`meshbody.geometry`)ので、封筒の `face_count` も
-    それに合わせる。**三角形の枚数を入れない** —— 画面の「面」の数と食い違う値を同じキーに
-    入れると、面添字で指すという前提(B-rep側)がメッシュにも成り立つように見えてしまう。
+    """`body_meta` が配る面の数。**メッシュボディは常に1**(メッシュは面1枚として配る。`meshbody.geometry`)。
+    三角形の枚数を入れると、面添字で指すというB-repの前提がメッシュにも成り立つように見える。
     """
     if body.mesh is not None:
         return 1
@@ -44,19 +35,10 @@ def _face_count(body) -> int:
 
 
 #: 状態配信で本文を伏せるログ引数。値の代わりに文字数だけを配る。
-#:
-#: `import_step` は読み込んだSTEPの**本文**を `args["step"]` に持ち、
-#: `import_svg` は翻訳した**図形の全部**を `args["entities"]` に持つ(ロゴ1枚で数百件)。
-#: PCケースのSTEPは4.6MBあり、`state_meta()` はWebSocketで**操作のたびに全部配られる**ので、
-#: 素通しにすると1操作ごとに数MBが流れる(「27部品でも数KB」という前提が壊れる)。
-#: 履歴パネルが使うのは `source_name` と件数だけなので、本文は配らない。
-#: **ログそのもの(`document.log`)は無傷** —— 伏せるのは配信用の射影だけで、
-#: 保存(`to_json`)は本文を書く。
-#: 形状最適化の4 verb も**量を持つ引数**を積む(`faces` / `previous*` は面の指紋つきで、
-#: 面を数十枚選べば1操作で数KB)。履歴パネルが要るのは件数だけなので同じ扱いにする ——
-#: **`previous` が数値の操作(`set_parameter`)は素通りする**(下の射影は文字列と配列しか
-#: 置き換えない)。`add_mesh_body` の三角形(`positions` / `indices`)も同じ —— 形状最適化の結果は
-#: 約11万面あり、配ると以後の全操作の配信に数MBが乗る(5万三角形で 387 B → 2.29 MB に膨らんだ)。
+#: `state_meta()` は操作のたびにWebSocketで全部配られるので、量を持つ引数(`import_step` の STEP本文 4.6MB、
+#: `import_svg` の `entities`、形状最適化4 verb の `faces` / `previous*`、`add_mesh_body` の三角形 —— 5万三角形で
+#: 387 B → 2.29 MB)は素通しにできない。履歴パネルが要るのは件数だけ。伏せるのは配信用の射影だけで、
+#: `document.log` と保存(`to_json`)は無傷。**`previous` が数値の操作(`set_parameter`)は素通りする**。
 _REDACTED_LOG_ARGS = (
     "step", "entities", "faces", "previous", "previous_faces", "positions", "indices",
 )
@@ -77,11 +59,10 @@ def _log_args_for_state(args: dict) -> dict:
 
 
 def _memo(cache: dict, body_id: str, source: Any, key: Any, compute: Callable[[], Any]) -> Any:
-    """`cache[body_id]` が `(source, key, result)` で、`source` が同一かつ `key` が一致なら `result` を返す。
-    違えば `compute()` して入れる。
+    """`cache[body_id]` が `(source, key, result)` で、`source` が同一かつ `key` が一致なら `result` を返す。違えば `compute()` して入れる。
 
-    同一性は **`is`** で見る(版ではない。可視性だけ変えたときに測り直さないため)。`id()` の整数だけを
-    控えると、旧 shape が解放された後に同じアドレスが再利用されて偽ヒットしうるので、source そのものを保持する。
+    同一性は **`is`**(版ではない。可視性だけ変えたときに測り直さないため)。`id()` だけを控えると、
+    旧 shape の解放後に同じアドレスが再利用されて偽ヒットしうるので、source そのものを保持する。
     """
     cached = cache.get(body_id)
     if cached is not None and cached[0] is source and cached[1] == key:
@@ -94,9 +75,7 @@ def _memo(cache: dict, body_id: str, source: Any, key: Any, compute: Callable[[]
 class DocumentView:
     """1つの文書の「配りもの」。**文書を変えない読み取り + キャッシュ**だけを持つ。
 
-    `Session` が1つだけ持ち(`session.view`)、文書を差し替えるときに `reset()` を呼ぶ。
-    **古い文書への参照を握ったままにしない**のが `reset()` の役目で、これが無いと
-    別の文書のために測った形を配ることになる。
+    `Session` が1つ持ち(`session.view`)、文書の差し替え時に `reset()` を呼ぶ(古い文書の形を配らないため)。
     """
 
     def __init__(
@@ -107,27 +86,21 @@ class DocumentView:
     ) -> None:
         #: いま配っている文書。差し替えは `reset()` だけが行う。
         self.document = document
-        #: **文書の粗さの土台**(セッション起動時の `--deviation`)。ビューポートの
-        #: ズーム連動値(下記)が来ていない間だけ使われる。**画面だけの値**で、STL書き出しは
-        #: 見ない(`io_step.STL_DEVIATION` 固定 —— 書き出す形の粗さはカメラでも設定でも変わらない)。
+        #: **文書の粗さの土台**(`--deviation`)。ズーム連動値が来ていない間だけ使う。画面だけの値で、
+        #: STL書き出しは見ない(`io_step.STL_DEVIATION` 固定)。
         self.deviation = float(deviation)
         #: **ズーム連動の目標精度**(`set_view_resolution`)。`(線形偏差[mm], 角度偏差[rad])`。
-        #: `None` は「まだ画面から届いていない」で、そのときは `self.deviation` +
-        #: `kernel.DEFAULT_ANGULAR_DEFLECTION` を使う(ズーム連動を入れる前と同じ)。
-        #: **画面の設定であって文書の状態ではない** —— 操作ログにもundoにも載らない。
+        #: `None` は未着で、`self.deviation` + `kernel.DEFAULT_ANGULAR_DEFLECTION` を使う。
+        #: 画面の設定であって文書の状態ではない(操作ログにもundoにも載らない)。
         self._view_resolution: Optional[tuple] = None
         #: **画面外・背を向けた面に使う粗さ**(`(線形偏差[mm], 角度偏差[rad])`)。
-        #: `duocad/resolution.py` の `coarse_view_resolution` が決める値で、
-        #: **ズームに依存しない**(モデルの大きさだけで決まる)。`None` は分けないという意味。
+        #: `resolution.coarse_view_resolution` が決める、ズームに依存しない値。`None` は分けない。
         self._view_coarse_resolution: Optional[tuple] = None
-        #: **どの面を細かく測るか**(`{body_id: frozenset(1始まりの面添字)}`)。
-        #: `None` は「画面から指定が無い」= 全Body全面を細かく(ズーム連動を入れた直後と同じ)。
-        #: dictに**居ないBody**も全面を細かく扱う。空のfrozensetは「そのBodyは全面粗く」。
-        #: **画面の設定であって文書の状態ではない** —— 操作ログにもundoにも載らない。
+        #: **どの面を細かく測るか**(`{body_id: frozenset(1始まりの面添字)}`)。`None` = 全Body全面を細かく。
+        #: dictに居ないBodyも全面細かく。空のfrozensetは「そのBodyは全面粗く」。画面の設定で文書の状態ではない。
         self._view_focus: Optional[dict] = None
-        #: **`Session.warnings` と同じリストオブジェクト**を共有する(2つの持ち主を作らない)。
-        #: 吸い出す口は `Session.take_warnings()` にだけ置いてあり、そちらは**中身を空にする**
-        #: (新しいリストへ束ね直さない —— 束ね直すと、ここが古いリストへ書き続ける)。
+        #: **`Session.warnings` と同じリストオブジェクト**を共有する。`Session.take_warnings()` は
+        #: 中身を空にする(束ね直すと、ここが古いリストへ書き続ける)。
         self.warnings = warnings
         # body_id -> (id(shape), visible, 目標精度) 直近の状態(`body_revision`)
         self._revision_state: dict = {}
@@ -141,8 +114,7 @@ class DocumentView:
         self._vertex_cache: dict = {}      # vertex_positions結果
         self._volume_cache: dict = {}      # query.volume結果
         #: 形状最適化の条件の配りもの(`optimize.state_payload`)の増分維持。
-        #: **配信のたびに作り直さない** —— 作り直しは「条件が変わった」か
-        #: 「条件が指しているボディの形が差し替わった」ときだけで、他のボディは見ない。
+        #: 作り直すのは「条件が変わった」か「条件が指しているボディの形が差し替わった」ときだけ。
         self._optimize_cache = optimize.OptimizeStateCache()
 
     # ---------------------------------------------------------------- 可変解像度(ズーム連動)
@@ -167,11 +139,9 @@ class DocumentView:
     def body_recipe(self, body_id: str) -> tuple:
         """そのBodyを**どう測るか**の実効レシピ。キャッシュの鍵であり、版の鍵でもある。
 
-        **ここが「画面外のBodyを配り直さない」の要である。** 全面を粗く測るBodyのレシピには
-        細かい側の値が入らないので、寄っても引いてもレシピが変わらず、
-        `body_revision` が上がらず、`delta()` が「変わっていない」と判断して何も送らない。
-        逆に、細かい側の値をレシピへ無条件に入れると**画面に出ていないBodyまで
-        ズームのたびに配り直す**(それが2026-08-30に14.5秒かかっていた形である)。
+        全面を粗く測るBodyのレシピには細かい側の値が入らないので、ズームでレシピが変わらず
+        `body_revision` が上がらず、`delta()` が何も送らない。細かい側の値を無条件に入れると
+        画面外のBodyまでズームのたびに配り直す(2026-08-30に14.5秒かかっていた形)。
         """
         fine = self._body_focus(body_id)
         if fine is None:
@@ -202,9 +172,7 @@ class DocumentView:
 
     def body_view_resolution(self, body_id: str) -> tuple:
         """そのBody**全体**に使う `(偏差, 角度偏差)`。面ごとに分けられない配りもの(辺)が使う。
-
-        細かい面が1つでもあれば細かい側、1つも無ければ粗い側。**辺は面ごとに分けない** ——
-        辺が要るのはフィレット/面取りを起動している1Bodyだけで、そこは必ず画面の中にある。
+        細かい面が1つでもあれば細かい側、1つも無ければ粗い側(辺が要るのはフィレット/面取り中の1Bodyだけで画面内)。
         """
         fine = self._body_focus(body_id)
         if fine is None or fine or self._view_coarse_resolution is None:
@@ -213,11 +181,8 @@ class DocumentView:
 
     @staticmethod
     def _normalize_focus(focus) -> Optional[dict]:
-        """画面から届いた `focus` を `{body_id: frozenset(int)}` へ正規化する(不正は捨てる)。
-
-        **信じない**: 型が違う値・整数でない添字・負の添字は黙って落とす。落とした結果が
-        空集合になれば「そのBodyは全面粗く」になるだけで、形が壊れることはない
-        (粗く測るのは**測り方**であって、面が消えるわけではない)。
+        """画面から届いた `focus` を `{body_id: frozenset(int)}` へ正規化する。
+        型違い・整数でない・負の添字は黙って落とす(落ちて空集合になれば「全面粗く」になるだけで形は壊れない)。
         """
         if focus is None:
             return None
@@ -248,33 +213,22 @@ class DocumentView:
     ) -> bool:
         """画面の見え方から目標精度を決め直す。**変わったら True**(呼び出し側の再配信の合図)。
 
-        受け取るのは**カメラの事実**(画面1画素ぶんの世界長さ[mm]と、モデルの外接対角[mm])
-        であって、導出済みの偏差ではない。変換式の持ち主を1つにするための線引きで、
-        式そのものは `duocad/resolution.py` にあり、ブラウザ側の
-        `web/src/adaptiveResolution.ts` と定数まで一致している(検査あり)。
+        受け取るのは**カメラの事実**(画面1画素ぶんの世界長さ[mm]とモデルの外接対角[mm])で、導出済みの
+        偏差ではない。式は `duocad/resolution.py` にあり、ブラウザ側 `web/src/adaptiveResolution.ts`
+        と定数まで一致している(検査あり)。
 
-        `focus` は **face単位の高精度化**(2026-08-30)。`{body_id: [1始まりの面添字]}` で、
-        **入っている面だけを細かく、残りを粗く**測る。`focus` を省略したとき・キーの無い
-        Body・`None` は「全面細かく」。空リストは「全面粗く」。
-        判定するのは画面側である —— 視錐台に入っているか・カメラに背を向けているかは
-        **カメラを持っている側にしか分からない**ので、サーバは受け取った事実に従うだけにする
-        (`web/src/faceCulling.ts`)。粗い側の値は `resolution.coarse_view_resolution` が
-        決める **ズームに依存しない**粗さで、これが後述のキャッシュ据え置きを成立させている。
+        `focus` は face単位の高精度化(2026-08-30)。`{body_id: [1始まりの面添字]}` で、入っている面だけを
+        細かく、残りを粗く測る。省略・キーの無いBody・`None` は全面細かく、空リストは全面粗く。
+        視錐台・背面の判定はカメラを持つ画面側(`web/src/faceCulling.ts`)。粗い側は
+        `resolution.coarse_view_resolution` が決めるズーム非依存の値。
 
-        **キャッシュは捨てない**(2026-08-30に改めた)。`geometry()` / `edges()` の鍵には
-        `body_recipe()`(実効レシピ)が入っているので、レシピの変わらないBody —— つまり
-        **画面外で粗いまま据え置かれるBody** —— は測ったものがそのまま生き、
-        版も上がらないので `delta()` が何も送らない。ここで一括で捨てると、
-        face単位に分けた意味が丸ごと消える。粗さだけを見て捨てていたのが、
-        27部品2835面で往復14.5秒かかっていた形である。
-        スケッチはブラウザ側で折る経路で面を持たないので、細かい側が動いたときだけ捨てる。
+        **キャッシュは捨てない**。`geometry()` / `edges()` の鍵は `body_recipe()` なので、画面外で粗いまま
+        据え置かれるBodyは測ったものが生き、版も上がらず `delta()` が何も送らない。一括で捨てると
+        27部品2835面で往復14.5秒かかっていた形に戻る。スケッチはブラウザ側で折るので、細かい側が動いたときだけ捨てる。
 
-        **目標精度は文書に1つ**(接続ごとには持たない)。これは**単一ブラウザ前提**
-        (2026-08-27本人決定。`Server` の
-        docstring「同時編集は前提にしない」)に乗った選択である —— 2つのブラウザが別々の
-        ズームで開いていれば、後から来た方の粗さで両方が測り直され、先客は自分のカメラに
-        合わない粗さのまま残る。**同時編集を仕様にするなら、ここを接続ごとに分ける**
-        (そのときは `DocumentView` のキャッシュも接続ごとになる)。
+        **目標精度は文書に1つ**(単一ブラウザ前提。2026-08-27本人決定、`Server` のdocstring「同時編集は前提にしない」)。
+        2つのブラウザが別ズームだと、後から来た方の粗さで両方が測り直される。同時編集を仕様にするなら
+        接続ごとに分ける(`DocumentView` のキャッシュも)。
         """
         target = resolution.view_resolution(world_per_pixel, size_hint)
         coarse = resolution.coarse_view_resolution(world_per_pixel, size_hint)
@@ -291,10 +245,7 @@ class DocumentView:
         self._view_resolution = target
         self._view_coarse_resolution = coarse
         self._view_focus = normalized
-        # **geometry / edges のキャッシュはここでは捨てない。** 鍵に `body_recipe()` が
-        # 入っているので、レシピの変わっていないBody(=画面外で粗いままのBody)は
-        # 測ったものがそのまま生き、`delta()` も送らない。ここで一括で捨てると、
-        # face単位に分けた意味が丸ごと消える(全Bodyを毎回測り直すことになる)。
+        # geometry / edges のキャッシュは捨てない(`set_view_resolution` のdocstring)。
         if resolution_changed:
             # スケッチはブラウザ側で折るので面ごとの粗さを持たない(細かい側で1つ)。
             self._sketch_cache.clear()
@@ -304,14 +255,12 @@ class DocumentView:
     def reset(self, document: Document) -> None:
         """配る先を `document` へ差し替え、**古い文書について測ったものを全部捨てる**。
 
-        `Session._replace_document`(`open_document` / `new_document`)から呼ぶ。Bodyのidは
-        再生で作り直されるが、同じidが再び現れる可能性があり、古い形状を指したキャッシュが
-        残っていると別の文書の形を配ることになる。
+        `Session._replace_document` から呼ぶ。Bodyのidは再生で再び現れうるので、古い形状を指した
+        キャッシュが残ると別の文書の形を配る。
 
-        **版の数え上げ(`_revision_counter`)は消さない**。消すと版が1へ戻り、同じidのBodyを
-        知っているクライアントが「版が同じ=変わっていない」と判断して、**前の文書の形を
-        描き続ける**(idはログに記録されるので再生で同じidが現れうる)。状態のほう
-        (`_revision_state`)だけ捨てれば、次の `body_revision` で必ず1つ上がる。
+        **版の数え上げ(`_revision_counter`)は消さない**。消すと版が1へ戻り、同じidのBodyを知っている
+        クライアントが「版が同じ=変わっていない」と判断して前の文書の形を描き続ける。
+        `_revision_state` だけ捨てれば、次の `body_revision` で必ず1つ上がる。
         """
         self.document = document
         self._geometry_cache.clear()
@@ -327,10 +276,8 @@ class DocumentView:
     # ---------------------------------------------------------------- 状態
     def state(self, *, can_undo: bool, applied_count: int, previewing: bool) -> dict:
         """アプリ層へ渡す全状態。bodiesは配列(部品ごと)。**geometryを含む(重い)**。
-
-        WebSocket配信(`Server._push`)はこれを毎回は使わない — `state_meta()` + `delta()`
-        を組み合わせて、版が変わったBodyの `geometry` だけを送る(`duocad/net/ws.py` 参照)。
-        `state()` はテストと `get_state` の全量確認用に残す。**入口は `Session.state()`**。
+        WebSocket配信(`Server._push`)は `state_meta()` + `delta()` を使い、これはテストと `get_state` の
+        全量確認用。**入口は `Session.state()`**。
         """
         meta = self.state_meta(
             can_undo=can_undo, applied_count=applied_count, previewing=previewing
@@ -339,11 +286,7 @@ class DocumentView:
         return meta
 
     def state_meta(self, *, can_undo: bool, applied_count: int, previewing: bool) -> dict:
-        """`state()` の軽量版。**bodiesの各要素にgeometryを含まない**(テセレーションを呼ばない)。
-
-        パーツ一覧(名前・面数・可視性)のように形状そのものが要らない用途、および
-        WebSocket配信のたびに送る「土台」の情報に使う。27部品でも数KB(state()は6MB超)。
-        """
+        """`state()` の軽量版。**bodiesの各要素にgeometryを含まない**(テセレーションを呼ばない)。27部品でも数KB(state()は6MB超)。"""
         self._prune_body_caches(previewing)
         active = self.document.active_body()
         return {
@@ -360,21 +303,15 @@ class DocumentView:
             ],
             "can_undo": can_undo,
             "can_redo": self.document.log.can_redo,
-            # **どこまで戻れるか**を画面に出すために位置を配る。
-            # 真偽だけだと「3回undoした状態」と「1回undoした状態」が同じに見える。
+            # 位置を配る(真偽だけだと「3回undoした状態」と「1回undoした状態」が同じに見える)。
             "redo_count": self.document.log.redo_count,
             "applied_count": applied_count,
-            # 名前つきの寸法値(§3.4)。**打ち直しの対象そのもの**なので、どの名前が
-            # 今いくつかを配らないと、パラメータ編集パネルは何も出せない。
+            # 名前つきの寸法値。パラメータ編集パネルが現在値を要る。
             "parameters": dict(self.document.parameters),
             "selection": selection.get_selection(self.document).to_dict(),
-            # スケッチは平面の枠・図形・領域まで含めて配る(下記)。
             "sketches": self.sketches_state(),
-            # 形状最適化の条件(第3のモード)。**画面はこれを見て、verbを起動したときに
-            # 既にその役割が付いている対象をプリセレクトする** —— 配らないと
-            # 「既に付いているものが選択状態で現れる」という操作の流れが成立しない。
-            # 中身の契約と、指紋が合わなかった条件の扱い(`stale`)は
-            # `duocad/optimize.py` の `state_payload` のdocstringが正。
+            # 形状最適化の条件。画面がverb起動時に役割が付いている対象をプリセレクトするのに要る。
+            # 契約と指紋が合わなかった条件(`stale`)の扱いは `duocad/optimize.py` の `state_payload` が正。
             "optimize": optimize.state_payload(
                 self.document, self._optimize_cache, previewing=previewing
             ),
@@ -392,17 +329,12 @@ class DocumentView:
              "drawn":    [{"kind","params"}],                      # 反復を展開した描画用
              "regions":  [{"index","area","centroid","positions","indices"}]}
 
-        **`entities` と `drawn` を分けている理由**: 前者は**指せるもの**(`entity_id` を持つ元の
-        図形。点・辺の選択と `move_sketch_entities` の対象)で、後者は反復を展開した
-        「実際に見えるもの」。反復した図形が画面に出ないのに領域だけ増える、を避けるため
-        描画は必ず `drawn` を使い、ピックは `entities` を使う(複製は導出物なので指せない)。
-        **`patterns`** は反復の寸法(間隔・個数)と、どの図形が反復に吸われているかを配る。
-        `refs`(パラメータ名)は値の打ち直し(`set_parameter`。公開面には無い)のための口として
-        残してある。
+        `entities` は**指せるもの**(点・辺の選択と `move_sketch_entities` の対象)、`drawn` は反復を展開した
+        「実際に見えるもの」。描画は `drawn`、ピックは `entities`(複製は導出物なので指せない)。
+        `refs`(パラメータ名)は値の打ち直し(`set_parameter`)の口。
 
-        **領域の計算は重い**(`BRepAlgoAPI_Splitter`+テセレーション)。`state` は変更のたびに
-        全接続へ配るので、**スケッチの内容の署名でキャッシュする**。署名には解決済みの数値が
-        入るので、`set_parameter` で値が変われば作り直される。
+        **領域の計算は重い**(`BRepAlgoAPI_Splitter`+テセレーション)ので**スケッチの内容の署名でキャッシュする**
+        (署名には解決済みの数値が入り、`set_parameter` で作り直される)。
         """
         # undoで消えたスケッチのキャッシュを落とす(セッション寿命で溜め込まない)
         alive = {item.id for item in self.document.sketches}
@@ -416,11 +348,9 @@ class DocumentView:
         except Exception as error:  # 壊れたスケッチで画面全体を落とさない
             self.warnings.append(f"スケッチ {item.id} を描けない: {type(error).__name__}: {error}")
             drawn = []
-        # **貼った先のボディの形状は署名に入れない**。面に貼ったスケッチの姿勢は
-        # `item.plane["frame"]` が持っており(`duocad.region.plane_frame`)、ボディを後から
-        # 面取り・フィレットしてもスケッチの枠も領域も変わらない。逆に `set_parameter` の
-        # `rebuild()` で姿勢が解き直されたときは `plane` そのものが変わるので、この署名が
-        # 拾う。
+        # **貼った先のボディの形状は署名に入れない**。面に貼ったスケッチの姿勢は `item.plane["frame"]` が持つ
+        # (`duocad.region.plane_frame`)ので、後からのフィレット等で枠も領域も変わらない。
+        # `rebuild()` で姿勢が解き直されると `plane` が変わるので署名が拾う。
         signature = json.dumps(
             [item.plane, drawn, self.view_deviation], sort_keys=True, default=str
         )
@@ -447,17 +377,15 @@ class DocumentView:
         payload["plane"] = item.plane
         payload["visible"] = item.visible
         payload["name"] = item.name
-        # 図形そのものは軽いのでキャッシュしない(打ち直しの反映が1手遅れるのを避ける)。
-        # **ここも try で包む** —— 上の `drawn` だけを守っても、同じパラメータ解決を
-        # するこちらが素通りすると `state_meta()` ごと落ち、以後の配信が全部止まる。
+        # 図形そのものは軽いのでキャッシュしない。**try で包む**(上の `drawn` だけ守っても、
+        # 同じパラメータ解決のこちらが落ちると `state_meta()` ごと落ち、以後の配信が全部止まる)。
         try:
             payload["entities"] = [
                 {
                     "entity_id": entity.id,
                     "kind": entity.kind,
                     "params": sketch.entity_params(self.document, item.id, entity.id),
-                    # 値が名前つきパラメータなら**その名前**(`set_parameter` で打ち直せる)。
-                    # 素の数値のままなら None(名前つきパラメータへの参照が無い図形)。
+                # 値が名前つきパラメータならその名前、素の数値なら None。
                     "refs": {
                         key: ref if isinstance(ref, str) else None
                         for key, ref in entity.params.items()
@@ -470,10 +398,8 @@ class DocumentView:
                 f"スケッチ {item.id} の図形を読めない: {type(error).__name__}: {error}"
             )
             payload["entities"] = []
-        # 反復も同じ理由でキャッシュしない・try で包む(上の `entities` と同じ規律)。
-        # SketchPanelが反復の行を出すために要る(`pattern_id`/`kind`/`sources`/`params`/
-        # `refs`/`options`。`entities` と同じ形にしておくと、フロント側の打ち直しの
-        # コンポーネント(`commitParam`)をそのまま使い回せる)。
+        # 反復もキャッシュしない・try で包む(`entities` と同じ)。SketchPanelの反復の行用で、
+        # `entities` と同じ形にしてフロントの `commitParam` を使い回す。
         try:
             payload["patterns"] = [
                 {
@@ -498,16 +424,13 @@ class DocumentView:
 
     # ---------------------------------------------------------------- M3.5: 差分送信
     def body_revision(self, body_id: str) -> int:
-        """そのBodyの版。**版は「経路」ではなく「状態」から導く** — 形状の同一性(id)とvisible
-        のタプルが前回の記録と違ったら+1する。押し出し・undo・redo・可視性変更のどれでも
-        自動的に効く(verbごとに数え上げない)。
+        """そのBodyの版。**「経路」ではなく「状態」から導く** — 形状の同一性(id)とvisibleのタプルが
+        前回の記録と違ったら+1する(押し出し・undo・redo・可視性変更のどれでも自動的に効く)。
         """
         body = self.document.get_body(body_id)
-        # **粗さも「状態」のうち**(2026-08-30、可変解像度)。ズームで目標精度が変われば
-        # 配るべきgeometryも変わるので、ここに入れておかないと差分配信が
-        # 「版が同じ=変わっていない」と判断して**古い粗さのメッシュを画面に残す**。
-        # メッシュボディは `shape` が常に None なので、**メッシュの同一性も鍵に入れる**
-        # (`id(None)` は常に同じ値で、入れ忘れると版が二度と上がらない)。
+        # 粗さも「状態」のうち。入れないと、ズームで目標精度が変わっても差分配信が「版が同じ」と
+        # 判断して古い粗さのメッシュが画面に残る。メッシュボディは `shape` が常に None なので
+        # **メッシュの同一性も鍵に入れる**(`id(None)` は常に同じ値で、版が二度と上がらない)。
         key = (id(body.shape), id(body.mesh), body.visible, self.body_recipe(body_id))
         if self._revision_state.get(body_id) != key:
             self._revision_state[body_id] = key
@@ -516,19 +439,15 @@ class DocumentView:
 
     def geometry(self, body_id: str) -> dict:
         """1Bodyのテセレーション結果(キャッシュ付き)。不可視Bodyは ValueError。
-
-        キャッシュは**形状の同一性**で判定する(版ではない)。可視性だけを変えたときに
-        測り直すと、表示を切り替えるたびに高コストな再測定が走ってしまう。
+        キャッシュは**形状の同一性**で判定する(版ではない。可視性だけ変えたときに測り直さないため)。
         """
         body = self.document.get_body(body_id)
         if not body.visible:
             raise ValueError(f"body {body_id!r} is not visible: 不可視Bodyは測らない")
         if body.mesh is not None:
-            # **持っている三角形をそのまま配る**(画面の可変解像度は効かない)。
-            # 測り直しは無いが**キャッシュはする** —— `body_state()` は接続と状態配信のたびに
-            # 呼ばれ、`meshbody.geometry` は毎回 positions/indices をリストへ写す。
-            # 数万三角形では1回あたり十数万要素の複製になる。鍵はB-rep側と同じ規律で
-            # **メッシュの同一性**(`is`)。
+            # 持っている三角形をそのまま配る(可変解像度は効かない)。`body_state()` は状態配信のたびに
+            # 呼ばれ、`meshbody.geometry` は毎回 positions/indices をリストへ写す(数万三角形で十数万要素)
+            # ので**メッシュの同一性**(`is`)でキャッシュする。
             return _memo(self._geometry_cache, body_id, body.mesh, None, lambda: meshbody.geometry(body.mesh))
         recipe = self.body_recipe(body_id)
         return _memo(self._geometry_cache, body_id, body.shape, recipe, lambda: self._tessellate_body(body))
@@ -557,13 +476,9 @@ class DocumentView:
 
         戻り値: `{"body_id", "revision", "edges": [kernel.tessellate_edges の1件, ...]}`
 
-        **`state` にも `delta` にも入れない**。辺が要るのはフィレット・面取りを起動している
-        間だけで、常時配ると27部品(2835面)の初回配信にその数倍の折れ線が乗る ——
-        差分配信にして稼いだぶんを、使わない辺の転送で丸ごと使い切ることになる。
-
-        `revision` を一緒に返すのは、**クライアントが「今の形の辺か」を判定できるように**
-        するため。押し出しで形が変われば版が上がるので、古い辺を指したままフィレットをかける
-        (＝別の辺が丸まる)経路が閉じる。
+        **`state` にも `delta` にも入れない**(辺が要るのはフィレット・面取り中だけで、常時配ると
+        27部品(2835面)の初回配信にその数倍の折れ線が乗る)。`revision` は、クライアントが「今の形の辺か」
+        を判定するためで、古い辺を指したままフィレットをかける(別の辺が丸まる)経路を閉じる。
         """
         body = self._visible_brep(body_id, "辺")
         revision = self.body_revision(body_id)
@@ -579,14 +494,8 @@ class DocumentView:
 
         戻り値: `{"body_id", "revision", "vertices": [{"index", "point": [x,y,z]}, ...]}`
 
-        **`edges()` と同じく配信しない**(`state` にも `delta` にも入れない)。違うのは
-        画面側の使い方で、辺は「要求しているコマンドを起動している間だけ全部出す」のに対し、
-        頂点は**選択に入っているものだけ**を出す —— 頂点を引数に取るverbが無いので候補を
-        全部見せる意味が無い。ここが全頂点を返すのは、どれが選ばれるかを事前に知らない
-        からで、画面に出るのは選択に入った添字だけである。
-
-        `revision` を返す理由も辺と同じ —— 形が変われば版が上がるので、古い座標を
-        描き続ける経路が閉じる。
+        `edges()` と同じく配信しない。画面に出るのは**選択に入った頂点だけ**(どれが選ばれるかを
+        事前に知らないので全頂点を返す)。`revision` の理由も辺と同じ。
         """
         body = self._visible_brep(body_id, "頂点")
         revision = self.body_revision(body_id)
@@ -597,9 +506,7 @@ class DocumentView:
 
     def _visible_brep(self, body_id: str, what: str):
         """辺・頂点(`what`)を配ってよい Body。存在 → B-rep → 形あり → 可視の順で断る。
-
-        **不可視Bodyの辺・頂点は配らない**(`geometry()` と同じ規律)。配ると、隠したはずの部品の辺だけが
-        宙に浮いて見え、しかも指せる —— 見えているものと指せるものを一致させる、というピッキングの前提が崩れる。
+        **不可視Bodyの辺・頂点は配らない**(隠した部品の辺だけが宙に浮き、しかも指せてしまう)。
         `geometry()` はこれを使わない(不可視を先に断り、メッシュは断らずに配る)。
         """
         body = self.document.get_body(body_id)
@@ -612,19 +519,11 @@ class DocumentView:
         return body
 
     def _prune_body_caches(self, previewing: bool) -> None:
-        """undoで消えたBodyのキャッシュを4つのdictから落とす(セッション寿命で溜め込まない)。
+        """undoで消えたBodyのキャッシュを4つのdictから落とす。
 
-        `sketches_state()` の剪定(生存集合との差分をpop)と同じ形に揃えてある。**`_revision_counter`
-        は絶対に剪定しない** —— 版が1へ戻ると、同じ `body_id` を知っているクライアントが
-        「版が同じ=変わっていない」と判断して前の文書の形を描き続ける
-        (`reset()` のコメントと同じ理由)。`_revision_state` は次の `body_revision` が
-        必ず版を1つ上げるだけなので落としてよいが、ここでは触らない(必須ではないため)。
-
-        **プレビュー中(`previewing`)は何も落とさない** —— `Session.preview()` は
-        `duocad.speculative.speculative` で文書を投機的に書き換えて必ず元へ戻す。その最中の
-        生存集合で消すと、戻した後に `_volume_cache` 等の再測定が走ってしまう
-        (PCケース27部品で693ms/回の再測定を避けるために入れたキャッシュなので、
-        ここを無効化すると入れた目的が消える)。
+        **`_revision_counter` は絶対に剪定しない**(版が1へ戻ると前の文書の形を描き続ける。`reset()`)。
+        **プレビュー中(`previewing`)は何も落とさない** —— `Session.preview()` は文書を投機的に書き換えて
+        元へ戻すので、その最中の生存集合で消すと戻した後に再測定が走る(PCケース27部品で693ms/回)。
         """
         if previewing:
             return
@@ -642,9 +541,8 @@ class DocumentView:
               "unchanged": [BodyId, ...],   # 版が一致したBody
             }
 
-        `known_revisions` に無いBodyId(＝クライアントが知らないBody)は必ず `bodies` に入る。
-        逆に、クライアントが知っているのに `bodies` にも `unchanged` にも現れないIDは
-        **文書から消えた**ことを意味する(undoでの消滅がこれ。専用の "removed" は持たない)。
+        クライアントが知っているのに `bodies` にも `unchanged` にも現れないIDは**文書から消えた**
+        (undoでの消滅。専用の "removed" は持たない)。
         """
         bodies_out = []
         unchanged = []
@@ -659,12 +557,9 @@ class DocumentView:
     def body_meta(self, body) -> dict:
         """1Bodyぶんの軽量な状態(geometryを含まない。state_metaとの共有部分)。
 
-        **公開メソッド**: `DocumentTools._body_summary`(mcp_server.py)がMCP封筒の `bodies[]`
-        要素を作るのにもこれを使う。MCP側は封筒の契約に合わせて `revision` キーを落とす。
-
-        `state_meta()` を通じて**接続のたびに全Bodyぶん**呼ばれる(`_push`。MCPが引くのは
-        `Session.body_meta()` の委譲越し)。`volume` は
-        キャッシュ付き(下記 `_body_volume`)——`face_count` は合計2msと軽いので毎回測る。
+        **公開メソッド**: `DocumentTools._body_summary`(mcp_server.py)がMCP封筒の `bodies[]` 要素にも使う
+        (MCP側は封筒の契約に合わせて `revision` キーを落とす)。`volume` はキャッシュ付き(`_body_volume`)、
+        `face_count` は合計2msと軽いので毎回測る。
         """
         return {
             "body_id": body.id,
@@ -677,11 +572,8 @@ class DocumentView:
         }
 
     def _body_volume(self, body) -> float:
-        """bodyの体積(キャッシュ付き)。
-
-        `geometry()` と同じ規律(`_memo`)。
-        `query.volume` は面ごとの数値積分でここにだけキャッシュが無く、可視性を切り替えた
-        だけでも全ボディぶん測り直していた(PCケースで693ms/回)。
+        """bodyの体積(キャッシュ付き。`geometry()` と同じ `_memo`)。
+        `query.volume` は面ごとの数値積分で、キャッシュが無いと可視性切替だけで全ボディ測り直していた(PCケースで693ms/回)。
         """
         if body.mesh is not None:
             return _memo(self._volume_cache, body.id, body.mesh, None, lambda: meshbody.volume(body.mesh))

@@ -50,9 +50,6 @@ def hole_pattern(document: Document) -> tuple:
     return sketch_id, circle, pattern_id
 
 
-# --------------------------------------------------------------------------------------
-# 反復そのもの
-# --------------------------------------------------------------------------------------
 def test_pattern_multiplies_the_entity_into_nx_times_ny_regions():
     """`pattern_rectangular` で図形が nx × ny 個に増える(格子は元を含む)。"""
     document = Document()
@@ -133,11 +130,7 @@ def test_pattern_rejects_counts_that_are_not_positive_integers(dx, dy, nx, ny):
 
 
 def test_pattern_rejects_an_empty_or_foreign_entity_list():
-    """反復する図形が無い / 別スケッチの図形は失敗する(黙って空の反復を作らない)。
-
-    「値がおかしい」は `ValueError`、「そのIDのものが無い」は `KeyError`
-    (`get_sketch` / `entity_params` と同じ)。
-    """
+    """反復する図形が無い / 別スケッチの図形は失敗する(黙って空の反復を作らない)。"""
     document = Document()
     first = sketch_create(document, "XY")
     add_circle(document, first, FIRST_HOLE, HOLE_RADIUS)
@@ -155,10 +148,7 @@ def test_pattern_rejects_an_empty_or_foreign_entity_list():
 
 
 def test_pattern_rejects_patterning_the_same_entity_twice():
-    """既に反復に使われている図形を二重に反復させない(ValueError・文書とログは不変)。
-
-    通すと同じ位置に辺が二重に重なり、領域検出が黙って壊れる。
-    """
+    """既に反復に使われている図形を二重に反復させない(ValueError・文書とログは不変)。"""
     document = Document()
     sketch_id, circle, _ = hole_pattern(document)
     entries_before = len(document.log.entries)
@@ -170,9 +160,6 @@ def test_pattern_rejects_patterning_the_same_entity_twice():
     assert len(document.log.entries) == entries_before
 
 
-# --------------------------------------------------------------------------------------
-# 反復した図形を押し出す
-# --------------------------------------------------------------------------------------
 def test_extruding_a_pattern_opens_nx_times_ny_holes():
     """反復した図形群を押し出すと、穴が nx × ny 個できる。"""
     document = Document()

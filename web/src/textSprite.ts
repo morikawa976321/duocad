@@ -1,10 +1,4 @@
-/**
- * 文字を1枚の札(canvas テクスチャの `THREE.Sprite`)にする。荷重の "250N"(`optimizeAnnotations.ts`)と
- * 測定の "12.345 mm"(`measureAnnotation.ts`)が同じ作りを共有する。
- *
- * 大きさは世界座標(`height`[mm])なので、寄れば大きく引けば小さく見える —— 呼び出し側が
- * モデルの大きさ(`contentDiagonal`)から決める。深度検査はしない(奥にあっても読める札)。
- */
+/** 文字を canvas テクスチャの `THREE.Sprite` にする。大きさは世界座標(`height`[mm])で、深度検査はしない(奥でも読める)。 */
 import * as THREE from 'three'
 
 export function makeTextSprite(

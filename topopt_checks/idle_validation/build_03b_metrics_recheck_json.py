@@ -6,7 +6,7 @@
 `03b_metrics_recheck.json`(cases/coverage/limitations)を書く。**手で編集しないこと**
 (追記・変更はこのスクリプトのソースを直す)。
 
-`coverage`・`limitations`の文言は03B_METRICS_RECHECK.mdの結論と対応させてある——数値の正はそちらの
+`coverage`・`limitations`の文言は10_SYNTHESIS 付録B(旧 03B_METRICS_RECHECK)の結論と対応させてある——数値の正はそちらの
 JSON入力ファイル、判断の正は報告書本文(このスクリプトはaggregatorであり判断を下さない)。
 """
 from __future__ import annotations
@@ -81,7 +81,7 @@ def main() -> int:
             case_id="03b_keep_islands_volume_contribution",
             status="ok" if keep_islands else "missing_input",
             description=(
-                "03A_REFERENCE_REPAIR.md 3-3節が未定量化と申し送ったkeepセル合成・resolve_islandsの"
+                "10_SYNTHESIS 付録A(旧 03A_REFERENCE_REPAIR 3-3節)が未定量化と申し送ったkeepセル合成・resolve_islandsの"
                 "体積寄与を、path_2.5mm(keep持ち)のlevel2で定量化した。"
             ),
             source_file="03b_keep_islands_volume_path25.json",
@@ -90,7 +90,7 @@ def main() -> int:
             case_id="03b_level4_exceedance_locality",
             status="ok" if level4_locality else "missing_input",
             description=(
-                "03_METRICS.md 5-6節のpath_2.5mm@6000N・level4で新たに現れた8超過セルが、"
+                "10_SYNTHESIS 付録B(旧 03_METRICS 5-6節)のpath_2.5mm@6000N・level4で新たに現れた8超過セルが、"
                 "design_space.deriveの外枠再計算(03A 3節)が及ぶ境界近傍にあるか、内部にあるかを判定した。"
             ),
             source_file="03b_level4_exceedance_locality.json",
@@ -109,8 +109,8 @@ def main() -> int:
                         "物理体積平均を未検証の理由で除外しない",
             status="解消(03aの実測を追認)",
             evidence="stress_metrics.py全10候補はmaterial_maskのみを母集団にしraw_maxを一切使わない"
-                     "(コード読解で確認済み、03aの03_METRICS.md1節の記述とも一致)。"
-                     "固定物理体積の局所平均は03A_REFERENCE_REPAIR.md5節が既に実測済みで、"
+                     "(コード読解で確認済み、03aの10_SYNTHESIS 付録B(旧 03_METRICS 1節)の記述とも一致)。"
+                     "固定物理体積の局所平均は10_SYNTHESIS 付録A(旧 03A_REFERENCE_REPAIR 5節)が既に実測済みで、"
                      "本タスクはこれを追加で除外していない。",
         ),
         dict(
@@ -148,7 +148,7 @@ def main() -> int:
         dict(
             requirement="物理校正が足りない式を研究用と表示し、採用できる式が無ければ理由を明示",
             status="解消(03の凍結を維持)",
-            evidence="03_METRICS.md6-7節の採否(M5b採用/M7b探索補助/他不採用)は03aの訂正で変わる"
+            evidence="10_SYNTHESIS 付録B(旧 03_METRICS 6-7節)の採否(M5b採用/M7b探索補助/他不採用)は03aの訂正で変わる"
                      "根拠が無いことを本タスクで確認(03b_reuse_audit_34cases)。研究用未較正パラメータ"
                      "(top_volume_mm3・p・rho・tolerance)の扱いも据え置く。",
         ),
@@ -169,7 +169,7 @@ def main() -> int:
         dict(
             requirement="03の報告・集約に訂正先を明記し、再現コマンド・版・失敗例・選定変更表を残す",
             status="解消",
-            evidence="03B_METRICS_RECHECK.md本文(9節相当)に再現コマンド・新規ファイル一覧・03aとの対応表。",
+            evidence="10_SYNTHESIS 付録B(旧 03B_METRICS_RECHECK)本文(9節相当)に再現コマンド・新規ファイル一覧・03aとの対応表。",
         ),
     ]
 

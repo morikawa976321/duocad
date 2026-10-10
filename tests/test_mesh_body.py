@@ -1,12 +1,4 @@
-"""三角形メッシュのボディ(`Body.kind == "mesh"`)の受入検査。
-
-**主張は「表示とSTL書き出しだけができて、編集は必ず断られる」**である。だから
-「できること」(§2〜§5)と「断られること」(§6)を同じ重さで固定する —— 断りが緩むと、
-数万面のシェルをOCCTへ入れる経路が黙って開き、選択1回が秒単位になる
-(理由は `duocad/meshbody.py` のモジュールdocstring)。
-
-B-repのSTLが画面と同じ三角形になることは `tests/test_stl_export.py` が見る。
-"""
+"""三角形メッシュのボディ(`Body.kind == "mesh"`)の受入検査。"""
 from __future__ import annotations
 
 import struct
@@ -107,12 +99,7 @@ def test_add_mesh_body_puts_the_triangles_on_the_body_and_one_line_in_the_log():
 
 
 def test_a_b_rep_body_can_be_turned_into_a_mesh_body_through_the_kernel():
-    """**要件7の経路** —— 既存のB-repをテッセレーションしてメッシュボディにする。
-
-    元のボディは**消えない**(足すだけ)。体積が箱と合うことで、面をまたぐ頂点オフセットが
-    正しいこと(`meshbody.from_tessellation`)まで見る —— オフセットを忘れると全ての面が
-    1枚目の頂点を指し、体積が崩れる。
-    """
+    """**要件7の経路** —— 既存のB-repをテッセレーションしてメッシュボディにする。"""
     doc = Document()
     doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
     mesh = meshbody.from_tessellation(kernel.tessellate(_box_shape(), DEVIATION))
@@ -143,11 +130,7 @@ def test_undo_and_redo_move_the_mesh_body_in_and_out():
 
 
 def test_a_mesh_body_survives_a_parameter_rebuild():
-    """`parameters.rebuild()` は **`doc.bodies` を空にしてログを頭から再生する**別の経路。
-
-    `OpLog.replay` の検査(上)とは通る道が違い、`set_parameter` を1回打つだけで踏む ——
-    ここで復元されないと、寸法をひとつ直しただけで最適化結果が黙って消える。
-    """
+    """`parameters.rebuild()` は **`doc.bodies` を空にしてログを頭から再生する**別の経路。"""
     session = session_with_box(SIDE, SIDE, SIDE)
     tools = DocumentTools(session)
     sketch_id = tools.call("sketch_create", {"base_plane": "XY"})["sketch_id"]
@@ -324,11 +307,7 @@ def test_edges_and_vertices_are_not_delivered_for_a_mesh_body():
 # **「名指ししたら断る / 導出した集合からは黙って外す」**が、このタスクの門の一貫した線
 # である(`predicates._target_bodies` のdocstring)。§6 が前半、ここが後半を見る。
 def test_predicates_skip_mesh_bodies_when_no_body_was_named():
-    """**メッシュだけの文書でも述語が落ちない**。
-
-    走査集合は呼び出し側の主張ではなく導出なので、**黙って外す**(不可視Bodyと同じ扱い)。
-    ここで断ると、最適化結果のメッシュが文書に1つあるだけで述語選択が丸ごと使えなくなる。
-    """
+    """**メッシュだけの文書でも述語が落ちない**。"""
     doc, _ = _tetra_doc()
     assert predicates.evaluate(doc, {"kind": "edge", "where": []}) == []
     assert predicates.evaluate(doc, {"kind": "face", "where": []}) == []

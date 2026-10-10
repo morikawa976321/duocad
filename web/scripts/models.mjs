@@ -1,8 +1,3 @@
-/**
- * 実機検査スクリプトが読むSTEPのパス。
- *
- * 起動オプション `--step` は無いので、「どのSTEPを読むか」はサーバではなく**読み込む側**が決める。
- */
 export const PC_CASE_STEP =
   'C:\\Users\\tm976\\mf\\3d-models\\mATX_PC_case_20251122\\PC_case_20251122.step'
 

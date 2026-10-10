@@ -1,4 +1,4 @@
-"""要素サイズの下限付近(既定 1.6 mm)で hanger を端から端まで回し、ピークメモリ・設計空間の要素数・所要時間を記録する。
+r"""要素サイズの下限付近(既定 1.6 mm)で hanger を端から端まで回し、ピークメモリ・設計空間の要素数・所要時間を記録する。
 
     .\.venv\Scripts\python.exe topopt_checks\measure_limit_run.py --derive-only   # derive まで(軽い。箱の数に比例するコストの実測)
     .\.venv\Scripts\python.exe topopt_checks\measure_limit_run.py                 # 探索・表面生成・finalize まで(重い。1時間以上)

@@ -1,24 +1,4 @@
-"""F(アプリ内エージェント)契約: **UIなしで回るtool-useループ**とプロバイダアダプタ。
-
-ここが本体の検査である —— 実機のLLMには依存させない。**偽プロバイダ(記録済みの応答列を
-返すスタブ)**でループの分岐を決定的に固定し、アダプタの整形はHTTPを差し替えた単体検査で見る
-(llama-serverの実機は `tests/test_agent_llama_server.py` の1本だけ)。
-
-**プロバイダは `openai_compat` の1つだけである**。Claudeへ繋ぐ道はMCP経路に残っている
-(`tests/test_mcp.py` / `tests/test_mcp_http.py`)。
-
-## このファイルが固定する5つ
-
-1. **道具の定義を第二の場所に書かない** —— ツール一覧は `DocumentTools.descriptors()` そのまま、
-   実行は `.call()`、失敗の封筒は `.error_envelope()`。MCP経路と顔ぶれ・挙動・失敗の形が同一。
-2. **システムプロンプトを二重に持たない** —— MCPの `instructions` とエージェントは
-   `catalog.agent_instructions()` の1本を読む。
-3. **打ち切りが効く** —— `max_turns` / 中断フラグ / プロバイダの失敗。理由は構造化して返す。
-4. **ツールの失敗でループが落ちない** —— 封筒をそのままモデルへ返して自己修復させる
-   (未知のツール名・引数の食い違い・壊れたJSONも含む)。
-5. **鍵がどこにも出ない** —— `repr`・例外メッセージ・進捗・結果のどれにも。
-   併せて **`build_provider` が鍵を `anthropic` にだけ渡す**(`openai_compat` には渡さない)。
-"""
+"""F(アプリ内エージェント)契約: **UIなしで回るtool-useループ**とプロバイダアダプタ。"""
 from __future__ import annotations
 
 import json
@@ -49,9 +29,6 @@ from agent_support import FAKE_KEY, RecordedProvider, spoke, tool_use
 #: 本物ではない。**形だけ本物に似せた文字列**(このリポジトリのどこにも実キーは置かない)。
 
 
-# --------------------------------------------------------------------------------------
-# 偽プロバイダ(記録済みの応答列)と道具のスパイ
-# --------------------------------------------------------------------------------------
 class SpyTools:
     """`ToolSurface` を満たす薄い覆い。**どのツールが実際に走ったか**を記録する。"""
 
@@ -85,9 +62,6 @@ def envelope_code(result) -> str:
     return result["error"]["code"]
 
 
-# --------------------------------------------------------------------------------------
-# 1. 道具の定義とシステムプロンプトの出所
-# --------------------------------------------------------------------------------------
 def test_the_loop_sends_document_tools_descriptors_verbatim():
     """ツール定義は `DocumentTools.descriptors()` そのもの(第二の表を作らない)。"""
     surface = tools()
@@ -132,9 +106,6 @@ def test_the_system_prompt_leaves_stop_or_proceed_to_the_ai():
     assert "commit_selection" not in shared
 
 
-# --------------------------------------------------------------------------------------
-# 2. アダプタの整形(HTTPを差し替えた単体検査。外部を叩かない)
-# --------------------------------------------------------------------------------------
 class FakeTransport:
     """`post_json` と同じ形をした差し替え。送った内容を全部覚える。"""
 
@@ -281,9 +252,6 @@ def test_openai_compat_marks_broken_json_arguments_instead_of_guessing():
     assert reply.tool_calls[0].arguments == {}
 
 
-# --------------------------------------------------------------------------------------
-# 3. ループの分岐(ここが本体の検査)
-# --------------------------------------------------------------------------------------
 def test_multiple_tool_calls_in_one_reply_all_run_and_report_progress():
     surface = SpyTools(tools())
     reply = ProviderReply(
@@ -312,11 +280,7 @@ def test_multiple_tool_calls_in_one_reply_all_run_and_report_progress():
 
 
 def test_a_raising_progress_callback_is_logged_with_a_warning_but_does_not_break_the_loop(caplog):
-    """B(1.2, CODE_SURVEY_ACTIONS): `_notify` は購読者の例外を握りつぶさず、痕跡を残す。
-
-    「購読者の事故でループを落とさない」設計は変えない(ループは最後まで走り、結果は正常)が、
-    例外はもう無音では消えない —— WARNINGが1件、型・トレースバックが分かる形で出る。
-    """
+    """B(1.2, CODE_SURVEY_ACTIONS): `_notify` は購読者の例外を握りつぶさず、痕跡を残す。"""
     surface = SpyTools(tools())
     reply = ProviderReply(
         text="1つ調べる",
@@ -345,12 +309,7 @@ def test_a_raising_progress_callback_is_logged_with_a_warning_but_does_not_break
 
 
 def test_a_failing_tool_returns_the_structured_envelope_and_the_loop_keeps_going():
-    """**構造化封筒をそのままモデルへ返して自己修復させる**(MCP経路と同じ語彙)。
-
-    依頼に半径を書いてあるのは、**このテストが見たいのが選択の空**だからである。
-    書かないと寸法のガードが先に立って `dimension_not_given` で
-    止まり、`selection_empty` まで届かない —— ガード自体は下の専用テストが見る。
-    """
+    """**構造化封筒をそのままモデルへ返して自己修復させる**(MCP経路と同じ語彙)。"""
     surface = tools()
     provider = RecordedProvider(
         [tool_use("fillet", {"radius": 2.0}), tool_use("describe_document", {}), spoke("直しました")]
@@ -434,9 +393,6 @@ def test_the_total_time_budget_cuts_the_loop_off_before_max_turns():
     assert run.to_dict()["status"] == "timeout"
 
 
-# --------------------------------------------------------------------------------------
-# 人が言っていない寸法で形を変えないこと
-# --------------------------------------------------------------------------------------
 def test_a_dimension_nobody_asked_for_is_refused_before_the_verb_runs():
     """**規律を文章で頼まず、ここで機械的に止める**。
 
@@ -494,11 +450,7 @@ def test_a_dimension_the_person_gave_passes_through():
 
 
 def test_a_dimension_derived_from_what_the_person_said_passes_through():
-    """**厳密な照合にしない** —— 「直径8mm」から `radius: 4` を導くのは正しい。
-
-    値がそのまま本文にあることを求めると、この普通の依頼が通らなくなる。
-    見るのは「人が量を与えたか」だけでよい。
-    """
+    """**厳密な照合にしない** —— 「直径8mm」から `radius: 4` を導くのは正しい。"""
     surface = tools()
     provider = RecordedProvider(
         [tool_use("add_circle", {"sketch_id": "s", "center": [0, 0], "radius": 4}, "c0"),
@@ -595,13 +547,7 @@ def test_a_provider_failure_is_reported_not_raised():
 
 
 def test_a_real_provider_failure_is_not_renamed_to_timeout():
-    """**本物の障害を `timeout` と名乗らせない**。
-
-    合計時間の予算は1リクエストの待ちより常に短いので、「予算が縮めたか」だけで
-    判定すると接続拒否やHTTP 5xxまで `timeout` になる。読み替えてよいのは
-    `ProviderTimeout`(待ち時間切れ)のときだけである —— 原因がこちらの予算なのか
-    相手の障害なのかで、直す場所が違う。
-    """
+    """**本物の障害を `timeout` と名乗らせない**。"""
     surface = tools()
     provider = RecordedProvider([ProviderError("https://api.example へ接続できない: refused")])
 
@@ -640,15 +586,8 @@ def test_an_unknown_stop_reason_falls_through_to_stopped_with_the_raw_value():
     assert run.ok is False
 
 
-# --------------------------------------------------------------------------------------
-# 3b. 出力上限で切れたターンのツールは走らせない
-# --------------------------------------------------------------------------------------
 def test_a_truncated_reply_is_not_mistaken_for_tool_use():
-    """**打ち切りの判定がツール呼び出しより先** —— 切れた引数を実行しないための前提。
-
-    上限で切られた応答にも `tool_calls` は載る(**ブロック自体はある**)。それを
-    `tool_use` に丸めると、切れた引数のままツールが走る。
-    """
+    """**打ち切りの判定がツール呼び出しより先** —— 切れた引数を実行しないための前提。"""
     compat = OpenAICompatProvider(transport=FakeTransport([]))
     truncated = {
         "choices": [
@@ -702,13 +641,11 @@ def test_the_conversation_continues_across_runs_until_reset():
     assert loop.turns == []
 
 
-# --------------------------------------------------------------------------------------
 # 4. 鍵が漏れない(セキュリティ要件)
 #
 # キーの読み口は `load_api_key` の1つで、`build_provider` はそれを `anthropic` にだけ渡す。
 # `openai_compat` が受け取れる `api_key`(鍵を要求するサーバのため)を `build_provider` は渡さない。
 # Claude側の整形・受け方・再試行は `tests/test_agent_anthropic.py`。
-# --------------------------------------------------------------------------------------
 def test_a_provider_key_never_shows_up_in_repr_or_error_messages():
     """HTTPライブラリはヘッダ値を例外文へ載せることがある。**外へ出る前に消す**。"""
     leaking = FakeTransport([ValueError(f"Invalid header value {FAKE_KEY!r}")])
@@ -726,10 +663,7 @@ def test_a_provider_key_never_shows_up_in_repr_or_error_messages():
 
 
 def test_the_key_reaches_only_the_claude_provider(monkeypatch):
-    """**キーは `anthropic` にだけ渡り、`openai_compat` には乗らない**。
-
-    `ANTHROPIC_API_KEY` は読まない(Claude Code がその名前で課金先を切り替えるので、名前を分けてある)。
-    """
+    """**キーは `anthropic` にだけ渡り、`openai_compat` には乗らない**。"""
     from duocad.agent import providers
     from duocad.agent.providers import build_provider
 

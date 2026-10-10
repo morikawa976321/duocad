@@ -1,6 +1,6 @@
 """タスク4a: `04a_qualification_run.json`(qualify_path_small.pyの生データ、3000N)と
 `04a_robustness_loads.json`(robustness_path_qualification.pyの生データ、2700N/3300N)を合わせ、
-`docs/TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md`「成果物と後続への契約」節の共通schema
+`docs/TOPOPT_IDLE_MATERIAL.md` に統合された旧 TOPOPT_IDLE_VALIDATION_TASKS「成果物と後続への契約」節の共通schema
 (`cases`/`coverage`/`limitations`。00〜04の`build_0X_*_json.py`と同じ形)へまとめる。
 2つの入力が両方揃っていることが前提(揃っていなければ`FileNotFoundError`で止まる——
 ファイルだけ作って未実行をpassにしない、というタスク共通指示に従う)。
@@ -83,17 +83,17 @@ def build_coverage(run: dict, robustness: dict) -> dict:
             requirement="同じ格子・荷重・拘束・評価器・実現最小幅で、現行探索より軽くて合格する形",
             evidence=f"qualified_form: {qf['qualified_material_mm3']} mm3 (native {qf['native_material_mm3']} mm3、"
                     f"-{round((1-qf['qualified_material_mm3']/qf['native_material_mm3'])*100,1)}%)。"
-                    f"percentile_gate_passed={qf['percentile_gate_passed']}。6条件+最小幅は04A_PATH_QUALIFICATION.md 4節",
+                    f"percentile_gate_passed={qf['percentile_gate_passed']}。6条件+最小幅は10_SYNTHESIS 付録C(旧 04A_PATH_QUALIFICATION 4節)",
             status="done_percentile_scenario_only"),
         "path_loss_contrast_experiment": dict(
             requirement="削除直前への復帰＋別の一手、または該当経路の再導入と対照追加で因果を検査する",
             evidence="causal_check: 無保護対照が現行と厳密一致(71928mm3)・corridor保護で71544mm3・"
-                    "単一代替手でもcorridor保持率8.4%まで低下(04A_PATH_QUALIFICATION.md 5節)",
+                    "単一代替手でもcorridor保持率8.4%まで低下(10_SYNTHESIS 付録C(旧 04A_PATH_QUALIFICATION 5節))",
             status="done"),
         "reproduction_commands": dict(
             requirement="再現コマンド",
             evidence="qualify_path_small.py(引数無し)/robustness_path_qualification.py(引数無し)。"
-                    "04A_PATH_QUALIFICATION.md 8節",
+                    "10_SYNTHESIS 付録C(旧 04A_PATH_QUALIFICATION 8節)",
             status="done"),
         "all_rules_pass": dict(
             requirement="全規則の合否(保持・除外・アンカー・単一成分・正則境界・芯の連結・最小幅・閉空洞禁止)",
@@ -128,7 +128,7 @@ def build_limitations(run: dict) -> list[str]:
         "『優越形は現行より軽く安全』という結論はパーセンタイル評価シナリオに限る。",
         "軸方向シフトによる局所成長は、この形状(細い部材が支持点近くで太いパッドへ急に接続する構成)で"
         "有効だった手法。他題材(hanger等)でも同じ効率が出る保証は無い。",
-        "hangerの移植トラス(5セル最小幅)の優越形構成は本タスクの対象外(01_PROTOCOL.md参照、別件のまま残る)。",
+        "hangerの移植トラス(5セル最小幅)の優越形構成は本タスクの対象外(10_SYNTHESIS 付録A(旧 01_PROTOCOL)参照、別件のまま残る)。",
     ]
 
 

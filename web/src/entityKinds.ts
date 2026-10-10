@@ -1,12 +1,7 @@
 /**
- * スケッチ図形の種別ごとの純フロントエンド処理(表) — kind分岐のテーブル化。
- *
- * 「描画用の折れ線化」(`viewport.ts` の `entityPoints`)と「幽霊(確定前の姿)の組み立て」
- * (`commands/sketch.ts` の `ghostEntity`)を**図形種別ごとに1行**へ集約してある
- * (コアの `duocad/sketch.py` の `_ENTITY_KIND_TABLE` と対になる、TS側の唯一の宣言)。
- *
- * **表に無い種別は即時エラー**(`entityPoints` は throw。`ghostEntity` は「知らないverbなら
- * 描かない」契約なので null のまま —— 幽霊はスケッチのverb以外にも呼ばれるため)。
+ * スケッチ図形の種別ごとの純フロントエンド処理(表)。「描画用の折れ線化」(`viewport.ts` の `entityPoints`)と「幽霊の組み立て」(`commands/sketch.ts` の `ghostEntity`)を図形種別ごとに1行へ集約する
+ * (コアの `duocad/sketch.py` の `_ENTITY_KIND_TABLE` と対になるTS側の唯一の宣言)。
+ * 表に無い種別は `entityPoints` が throw。`ghostEntity` は null のまま(幽霊はスケッチのverb以外にも呼ばれる)。
  */
 
 import {
@@ -16,7 +11,7 @@ import {
   type ViewResolution,
 } from './adaptiveResolution'
 
-/** 図形の種別。**この表のキーが唯一の正**(新種別は表に1行足すだけでよい)。 */
+/** 図形の種別。この表のキーが唯一の正。 */
 export type EntityKind = 'line' | 'circle' | 'rectangle' | 'arc' | 'bezier'
 
 /**
@@ -29,31 +24,13 @@ export type IntersectableCurve =
   | { kind: 'arc'; center: readonly [number, number]; radius: number; startDeg: number; endDeg: number }
 
 interface EntityKindSpec {
-  /**
-   * この種別を作るverb名(`add_*`)。`ghostEntity` の逆引きに使う。
-   *
-   * **省略できる** —— `bezier` はこれを作るverbが無い(取り込み `import_svg` だけが作り、
-   * 人もAIもベジエを1本ずつは足せない)。verbが無い種別は
-   * 幽霊(確定前の姿)も持たないので、`fromArgs` ではなく表ごと持たない形にしてある。
-   */
+  /** この種別を作るverb名(`add_*`。`ghostEntity` の逆引きに使う)。`bezier` は作るverbが無い(`import_svg` だけが作る)ので省略でき、verbが無い種別は幽霊も持たない。 */
   verb?: string
-  /** verbの `build()` が作った引数から、コアの `Entity.params` と同じキーへ移し替える。
-   *  **`verb` があるときだけ要る**(幽霊を描くのはverbで起動したコマンドだけ)。 */
+  /** verbの `build()` が作った引数から、コアの `Entity.params` と同じキーへ移し替える。`verb` があるときだけ要る。 */
   fromArgs?(args: Record<string, unknown>): Record<string, number>
-  /**
-   * `params` を dx/dy だけ平行移動した `params`。
-   *
-   * **コアの `duocad/sketch.py` の `_translate_*` と同じ規則**でなければならない ——
-   * ここがずれると「プレビューと確定結果が違う場所に出る」という、いちばん困る形の
-   * 不具合になる(`viewport.ts` の `faceGeometry` が本物と幽霊で共有されているのと同じ理由)。
-   */
+  /** `params` を dx/dy だけ平行移動した `params`。コアの `duocad/sketch.py` の `_translate_*` と同じ規則でなければならない(ずれるとプレビューと確定結果が違う場所に出る)。 */
   translate(params: Record<string, number>, dx: number, dy: number): Record<string, number>
-  /**
-   * `params` を (cx,cy) まわりに `angleDeg` 度(反時計回り)回した姿。**種別は変わらない**
-   * (コアの `duocad/sketch.py` の `EntityKindOps.rotate` と同じ)。
-   *
-   * `rotateCopies=false` は**向きを変えずに位置だけ**回す(中心を回して平行移動する)。
-   */
+  /** `params` を (cx,cy) まわりに `angleDeg` 度(反時計回り)回した姿。種別は変わらない(コアの `EntityKindOps.rotate` と同じ)。`rotateCopies=false` は向きを変えず位置だけ回す。 */
   rotate(
     params: Record<string, number>,
     cx: number,
@@ -61,66 +38,32 @@ interface EntityKindSpec {
     angleDeg: number,
     rotateCopies: boolean,
   ): Record<string, number>
-  /** `params` を (u,v) の折れ線へ(円・円弧は分割線で近似)。コアの `Entity.params` のキーを
-   *  そのまま読む(`duocad/sketch.py` の `Entity` docstring)。
-   *
-   *  **`resolution` は「いまの画面でどれくらい細かく折るか」**(`adaptiveResolution.ts`)。 */
+  /** `params` を (u,v) の折れ線へ(円・円弧は分割線で近似)。コアの `Entity.params`(`duocad/sketch.py` の `Entity` docstring)のキーをそのまま読む。`resolution` は今の画面での細かさ(`adaptiveResolution.ts`)。 */
   toPoints(params: Record<string, number>, resolution: ViewResolution): Array<[number, number]>
   /**
-   * **動かせる点**の (xキー, yキー)。コアの `EntityKindOps.points`(`duocad/sketch.py`)と
-   * 同じ並びでなければならない —— 参照が持つ `point` はこの**xキー**そのものである。
-   *
-   * 寸法(半径・幅高さ・角度)は入れない。点を動かしても形は変わらないが、寸法を動かすと
-   * 形が変わる(寸法の編集は今回のスコープ外)。長方形は基準の角1つだけで、残り3隅は
-   * `width`/`height`/`angle` からの導出値なので独立に動かせない。
+   * 動かせる点の (xキー, yキー)。コアの `EntityKindOps.points`(`duocad/sketch.py`)と同じ並びでなければならない(参照が持つ `point` はこのxキーそのもの)。
+   * 寸法(半径・幅高さ・角度)は入れない。長方形は基準の角1つだけで、残り3隅は `width`/`height`/`angle` の導出値。
    */
   pointKeys: ReadonlyArray<readonly [string, string]>
   /**
-   * **`pointKeys` にない、見た目だけの角**(`viewport.ts` の `sketchCornerAt` が
-   * `entityVisualCorners` 経由で読む。当たり判定・カーソルの □/× 表示の両方に効く)。
-   *
-   * 独立に動かせないというだけで、輪郭上の頂点であることに変わりはなく、`snap()` は
-   * 隣接する辺のどちらから来ても同じ座標へ厳密に落ちる(端点へのクランプ)。それを
-   * `pointKeys` と同じ精度なのに×表示にすると、長方形の基準コーナーだけが特別に見える
-   * (残り3隅は `width`/`height`/`angle` の導出値というだけで、幾何的な角であることは同じ)。
-   * 省略した種別(line/circle/arc/bezier)は追加の角を持たない —— 円・円弧は曲線上の
-   * サンプル点を角と誤認すると線上のあちこちで□が出てしまう。
+   * `pointKeys` にない見た目だけの角(`viewport.ts` の `sketchCornerAt` が `entityVisualCorners` 経由で読む。当たり判定・カーソルの □/× 表示に効く)。
+   * 独立に動かせないだけで輪郭上の頂点であり、`snap()` は同じ座標へ厳密に落ちる。省略した種別は追加の角を持たない(円・円弧はサンプル点を角と誤認すると線上に□が出る)。
    */
   visualCorners?(params: Record<string, number>): Array<[number, number]>
-  /**
-   * **交点探索用の幾何プリミティブ**(直線区間・円・円弧。`sketchIntersections` が
-   * 図形間の交点を探すのに使う。同じ図形の複数区間どうし(長方形の隣り合う辺)は
-   * 交点探索の対象にしない —— それは自分の角で、既に `visualCorners` が持つ)。
-   *
-   * ベジエは持たない —— 直線・円・円弧の交差は閉じた式で解けるが、ベジエとの交点は
-   * 数値的な求根が要るため今回のスコープ外。
-   */
+  /** 交点探索用の幾何プリミティブ(`sketchIntersections` が図形間の交点に使う)。同じ図形の区間どうし(長方形の隣り合う辺)は対象にしない(`visualCorners` が持つ)。ベジエは持たない(交点に数値的な求根が要る)。 */
   intersectables?(params: Record<string, number>): IntersectableCurve[]
   /**
-   * 与えた (u,v) をこの図形の輪郭へ落とす(スナップ)。
-   *
-   * **拘束ではない** —— duocadは拘束ソルバを持たない(`duocad/parameters.py` 冒頭)ので、
-   * ここが返すのは「たまたま同じ座標」であり、図形を後から動かしても付いていかない。
-   * `snapToSketchEntity` から**クリック(addPoint)と幽霊(hoverPoint)の両方**が呼ぶ
-   * (どちらかだけ直すと、吸い付いて見える位置と確定結果がずれる)。
-   *
-   * `resolution` は**当たり判定(`sketchEntityAt`)が使っているのと同じ折れ線の粗さ**を
-   * 渡す(呼び出し側が `viewport.viewResolution()` から読む)。射影が解析式で決まる種別は
-   * 無視してよいが、bezierのように `toPoints` の近似で当たる種別はここがずれると
-   * 「見えている線と落ちる場所が違う」になる。
+   * 与えた (u,v) をこの図形の輪郭へ落とす(スナップ)。拘束ではない(duocadは拘束ソルバを持たない。`duocad/parameters.py` 冒頭)ので、図形を後から動かしても付いていかない。
+   * `snapToSketchEntity` からクリック(addPoint)と幽霊(hoverPoint)の両方が呼ぶ(片方だけ直すと吸い付く位置と確定結果がずれる)。
+   * `resolution` は当たり判定(`sketchEntityAt`)と同じ折れ線の粗さ(`viewport.viewResolution()`)。bezierのように `toPoints` の近似で当たる種別はずれると「見えている線と落ちる場所が違う」になる。
    */
   snap(params: Record<string, number>, u: number, v: number, resolution: ViewResolution): [number, number]
 }
 
 /**
- * 円弧を折れ線へ。`start` / `end` は**度**(コアの `Entity.params` がそう持っている)、
- * 分割数の計算は**ラジアン**で行う(`adaptiveResolution.ts` の単位に合わせる)。
- *
- * **掃引の規約がコアと違う**: ここは `end - start` の符号どおりに描くが、`duocad/kernel.py` は
- * `(end_deg - start_deg) % 360` で**必ず反時計回り**に掃く(`sketch.add_arc` は角度を正規化せず
- * そのまま格納する)。`end < start` を送ると幽霊と確定結果が別の弧になるので、角度を作る側
- * (`commands/sketch.ts` の `arcFromPoints`)は常に `start_deg <= end_deg` を出すこと。
- * 時計回りの弧は始点と終点を入れ替えれば同じ弧として表せる。
+ * 円弧を折れ線へ。`start` / `end` は度(コアの `Entity.params`)、分割数の計算はラジアン(`adaptiveResolution.ts` の単位)。
+ * 掃引の規約がコアと違う: ここは `end - start` の符号どおりに描くが、`duocad/kernel.py` は `(end_deg - start_deg) % 360` で必ず反時計回りに掃く(`sketch.add_arc` は角度を正規化せず格納する)。
+ * `end < start` だと幽霊と確定結果が別の弧になるので、角度を作る側(`commands/sketch.ts` の `arcFromPoints`)は常に `start_deg <= end_deg` を出すこと。
  */
 function arcPoints(
   cx: number,
@@ -140,8 +83,7 @@ function arcPoints(
   return points
 }
 
-/** 3次ベジエを折れ線へ。**描画と当たり判定だけの話**で、
- *  コア側(`kernel_sketch._edges_bezier`)は曲線のままOCCTへ渡すので形は近似されない。 */
+/** 3次ベジエを折れ線へ。描画と当たり判定だけの話で、コア側(`kernel_sketch._edges_bezier`)は曲線のままOCCTへ渡す。 */
 function bezierPoints(
   x0: number, y0: number,
   cx1: number, cy1: number,
@@ -162,10 +104,7 @@ function bezierPoints(
   return points
 }
 
-/**
- * 点 (x,y) を中心 (cx,cy) まわりに `angleDeg` 度だけ反時計回りに回す。
- * コアの `duocad/sketch.py` の `rotate_point` と同じ式。
- */
+/** 点 (x,y) を中心 (cx,cy) まわりに `angleDeg` 度だけ反時計回りに回す(コアの `duocad/sketch.py` の `rotate_point` と同じ式)。 */
 function rotatePoint(
   x: number,
   y: number,
@@ -216,12 +155,8 @@ function projectToPolyline(u: number, v: number, points: Array<[number, number]>
 }
 
 /**
- * 角度(度)を弧 `[startDeg, endDeg]`(反時計回り。`endDeg <= startDeg` は0度またぎ)へクランプする。
- * 弧の外なら**円周上で近いほうの端**へ寄せる(`arcPoints`/`toPoints` と同じ0度またぎの扱い)。
- *
- * **`%` で正規化する(反復加算のwhileループにしない)** —— SVG取り込みなどで
- * `start_deg`/`end_deg` が異常値になった場合、whileループ版は停止しない
- * (`angleWithinArc` のdocstring参照。同じ理由でこちらも直した)。
+ * 角度(度)を弧 `[startDeg, endDeg]`(反時計回り。`endDeg <= startDeg` は0度またぎ)へクランプする。弧の外なら円周上で近いほうの端へ寄せる。
+ * `%` で正規化する: SVG取り込みなどで角度が異常値になると、反復加算のwhileループは停止しない(`angleWithinArc` のdocstring)。
  */
 function clampAngleToArc(angle: number, startDeg: number, endDeg: number): number {
   if (!Number.isFinite(startDeg) || !Number.isFinite(endDeg)) return startDeg
@@ -234,7 +169,7 @@ function clampAngleToArc(angle: number, startDeg: number, endDeg: number): numbe
   return distToEnd <= distToStartWrap ? startDeg + span : startDeg
 }
 
-/** ベジエの制御点(**始点・制御点1・制御点2・終点の順**。コアの `BEZIER_KEYS` と同じ)。 */
+/** ベジエの制御点(始点・制御点1・制御点2・終点の順。コアの `BEZIER_KEYS` と同じ)。 */
 const BEZIER_KEYS = ['x0', 'y0', 'cx1', 'cy1', 'cx2', 'cy2', 'x1', 'y1'] as const
 
 function bezierControlPoints(params: Record<string, number>): Array<[number, number]> {
@@ -251,9 +186,7 @@ function bezierParams(points: Array<[number, number]>): Record<string, number> {
   return Object.fromEntries(BEZIER_KEYS.map((key, index) => [key, flat[index]]))
 }
 
-// 平行移動は種別ごとに**表の外**へ出してある —— `rotate(rotateCopies=false)` が
-// 「中心を回した差分だけ平行移動する」形で同じ関数を呼ぶので、表の中から `this` 越しに
-// 引くことになる(`this` の型が付かない)。コアの `_translate_*` と1対1。
+// 平行移動は表の外に出してある: `rotate(rotateCopies=false)` が「中心を回した差分だけ平行移動する」形で同じ関数を呼ぶため。コアの `_translate_*` と1対1。
 function translateLine(params: Record<string, number>, dx: number, dy: number): Record<string, number> {
   return { x0: params.x0 + dx, y0: params.y0 + dy, x1: params.x1 + dx, y1: params.y1 + dy }
 }
@@ -265,9 +198,7 @@ function translateAtCenter(
   dx: number,
   dy: number,
 ): Record<string, number> {
-  // **他のキーはそのまま持ち越す**(半径・角度は平行移動で変わらない。コアの
-  // `_translate_circle` / `_translate_arc` / `_translate_rectangle` が `dict(params)` を
-  // 元にしているのと同じ)。
+  // 他のキー(半径・角度)はそのまま持ち越す(コアの `_translate_*` が `dict(params)` を元にするのと同じ)。
   return { ...params, [xKey]: params[xKey] + dx, [yKey]: params[yKey] + dy }
 }
 
@@ -277,20 +208,12 @@ function translateBezier(params: Record<string, number>, dx: number, dy: number)
   )
 }
 
-/**
- * 長方形の傾き(度・反時計)。**キーが無ければ 0** —— `angle` を持たない時代に保存された
- * 操作ログを再生した図形は `params` にこのキーを持たない(コアの `kernel_sketch.rectangle_angle`)。
- */
+/** 長方形の傾き(度・反時計)。キーが無ければ 0(`angle` を持たない時代の操作ログを再生した図形。コアの `kernel_sketch.rectangle_angle`)。 */
 function rectangleAngle(params: Record<string, number>): number {
   return params.angle ?? 0
 }
 
-/**
- * 長方形の4隅を、基準の角 `(x, y)` から反時計回りに返す。
- *
- * **コアの `duocad/kernel_sketch.py` の `rectangle_corners` と同じ規則でなければならない** ——
- * ここがずれると、幽霊(確定前の姿)と確定した形が別の場所に出る。
- */
+/** 長方形の4隅を、基準の角 `(x, y)` から反時計回りに返す。コアの `duocad/kernel_sketch.py` の `rectangle_corners` と同じ規則でなければならない(ずれると幽霊と確定した形が別の場所に出る)。 */
 function rectangleCorners(params: Record<string, number>): Array<[number, number]> {
   const { x, y, width, height } = params
   const radians = (rectangleAngle(params) * Math.PI) / 180
@@ -345,7 +268,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     verb: 'add_circle',
     translate: (params, dx, dy) => translateAtCenter(params, 'cx', 'cy', dx, dy),
     rotate(params, cx, cy, angleDeg) {
-      // **円は `rotateCopies` を見ない**(向きの無い図形。コアの `_rotate_circle` と同じ)。
+      // 円は `rotateCopies` を見ない(向きの無い図形。コアの `_rotate_circle`)。
       const [nx, ny] = rotatePoint(params.cx, params.cy, cx, cy, angleDeg)
       return { cx: nx, cy: ny, radius: params.radius }
     },
@@ -354,7 +277,6 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
       return { cx: center[0], cy: center[1], radius: args.radius as number }
     },
     toPoints(params, resolution) {
-      // 反時計回り・0度をまたいでよい(`add_arc` の契約と揃える。円は0〜360固定)。
       return arcPoints(params.cx, params.cy, params.radius, 0, 360, resolution)
     },
     snap(params, u, v) {
@@ -434,7 +356,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     translate: (params, dx, dy) => translateAtCenter(params, 'cx', 'cy', dx, dy),
     rotate(params, cx, cy, angleDeg, rotateCopies) {
       const [nx, ny] = rotatePoint(params.cx, params.cy, cx, cy, angleDeg)
-      // **向きを回すときだけ開始/終了角も回す**(コアの `_rotate_arc`)。
+      // 向きを回すときだけ開始/終了角も回す(コアの `_rotate_arc`)。
       const start = rotateCopies ? params.start_deg + angleDeg : params.start_deg
       const end = rotateCopies ? params.end_deg + angleDeg : params.end_deg
       return { cx: nx, cy: ny, radius: params.radius, start_deg: start, end_deg: end }
@@ -450,7 +372,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
       }
     },
     toPoints(params, resolution) {
-      // end<=start は一周分足す(0度またぎ。`add_arc` の契約)。
+      // end<=start は一周分足す(`add_arc` の契約)。
       let end = params.end_deg
       if (end <= params.start_deg) end += 360
       return arcPoints(params.cx, params.cy, params.radius, params.start_deg, end, resolution)
@@ -466,12 +388,10 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   },
   bezier: {
     pointKeys: [['x0', 'y0'], ['cx1', 'cy1'], ['cx2', 'cy2'], ['x1', 'y1']],
-    // **`verb` を持たない唯一の種別**(上の `EntityKindSpec.verb` のコメント)。
-    // ただし平行移動と回転は要る —— 取り込んだSVGの曲線も反復・移動の対象になる。
+    // `verb` を持たない唯一の種別。平行移動と回転は要る(取り込んだSVGの曲線も反復・移動の対象になる)。
     translate: translateBezier,
     rotate(params, cx, cy, angleDeg, rotateCopies) {
-      // **ベジエはアフィン不変**なので、制御点を回すだけで曲線が厳密に回る
-      // (コアの `_rotate_bezier`)。
+      // ベジエはアフィン不変なので制御点を回すだけで厳密に回る(コアの `_rotate_bezier`)。
       if (rotateCopies) {
         return bezierParams(
           bezierControlPoints(params).map(([px, py]) => rotatePoint(px, py, cx, cy, angleDeg)),
@@ -493,10 +413,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
       )
     },
     snap(params, u, v, resolution) {
-      // 折れ線の最近傍の線分へ射影する(当たり判定 `sketchEntityAt` と同じ近似)。
-      // **当たり判定の `handleLines` と同じ `resolution` で折る** —— ここが
-      // `DEFAULT_RESOLUTION` 固定だと、既定ズーム以外で「当たった見えている線」と
-      // 「落ちる座標」がずれる(当たり判定は常に `appliedResolution` で描いている)。
+      // 折れ線の最近傍の線分へ射影する。当たり判定(`sketchEntityAt`)の `handleLines` と同じ `resolution` で折る(`DEFAULT_RESOLUTION` 固定だと既定ズーム以外で当たった線と落ちる座標がずれる)。
       return projectToPolyline(
         u,
         v,
@@ -512,8 +429,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   },
 }
 
-// **`verb` を持つ種別だけ**を入れる。持たない種別(`bezier`)を `undefined` キーで
-// 入れると、verbの綴りを間違えた呼び出しがそこへ落ちて幽霊が別の図形として描かれる。
+// `verb` を持つ種別だけを入れる(`bezier` を `undefined` キーで入れると、verbの綴り間違いがそこへ落ちて幽霊が別の図形になる)。
 const VERB_TO_KIND: Record<string, EntityKind> = Object.fromEntries(
   (Object.entries(ENTITY_KIND_TABLE) as Array<[EntityKind, EntityKindSpec]>)
     .filter(([, spec]) => spec.verb !== undefined)
@@ -526,11 +442,7 @@ function entityKindSpec(kind: string): EntityKindSpec {
   return spec
 }
 
-/**
- * その図形の**動かせる点**を `{key, u, v}` で返す(`move_sketch_entities` の選択の的)。
- *
- * `key` はコアの参照が持つ `point` の値そのもの。表に無い種別は例外(`entityPoints` と同じ)。
- */
+/** その図形の動かせる点を `{key, u, v}` で返す(`move_sketch_entities` の選択の的)。`key` はコアの参照が持つ `point` の値そのもの。表に無い種別は例外。 */
 export function entityHandles(
   kind: string,
   params: Record<string, number>,
@@ -544,47 +456,24 @@ export function entityHandles(
 
 /**
  * その図形の点(`pointKeys`)は互いに独立して動くか(2個以上あるか)。
- *
- * 1個しかない種別(rectangle/circle/arc)は「その点だけ動かす」と「図形全体を動かす」が
- * `move_sketch_entities` の中で完全に同じ処理になる(`duocad/verbs/move_sketch.py` の
- * `_moved_params`: `point=None` は `EntityKindOps.translate` を呼び、`point='x'` 等は
- * その1点の座標を直接動かすだけで、rectangleならどちらも結局 `x,y` を足すだけの同じ式 ——
- * `duocad/sketch.py` の `_translate_rectangle` 参照)。つまりこれらの種別では点は
- * 「ドラッグして掴む場所」としては辺のどこを掴むのとも変わらず、常時表示すると
- * 「なぜこの1点だけ特別に見えるか」という見た目の非対称だけが残る(本人指摘・2026-09-11)。
- * `viewport.ts` はこれを「常時表示するか、ホバー/選択時だけ見せるか」の判定に使う ——
- * ピック可能かどうか(`pickPointsAt` が読む座標そのもの)は変えない。
+ * 1個の種別(rectangle/circle/arc)は「その点だけ動かす」と「図形全体を動かす」が `move_sketch_entities` 内で同じ処理になる(`duocad/verbs/move_sketch.py` の `_moved_params`、`duocad/sketch.py` の `_translate_rectangle`)ので、点を常時表示すると見た目の非対称だけが残る(本人指摘・2026-09-11)。
+ * `viewport.ts` は常時表示かホバー/選択時のみかの判定に使う。ピック可能かどうか(`pickPointsAt` が読む座標)は変えない。
  */
 export function entityHasIndependentPoints(kind: string): boolean {
   return entityKindSpec(kind).pointKeys.length > 1
 }
 
-/**
- * その図形の「見た目だけの角」(`EntityKindSpec.visualCorners`)を列挙する。
- *
- * `entityHandles` とは別 —— こちらは `move_sketch_entities` の的にならない座標の並びで、
- * `viewport.ts` の当たり判定(`sketchEntityAt`)が本物の点と同じ優先度で拾うために読む。
- * 持たない種別は空配列(`entityHandles` と違い例外にしない —— line/circle/arc/bezierの
- * ように「追加の角が無い」のは正常系で、呼び出し側が毎回 kind 分岐する必要が無いように
- * するため)。
- */
+/** その図形の「見た目だけの角」(`EntityKindSpec.visualCorners`)を列挙する。`move_sketch_entities` の的にならず、`viewport.ts` の当たり判定が本物の点と同じ優先度で拾う。持たない種別は空配列(正常系なので例外にしない)。 */
 export function entityVisualCorners(kind: string, params: Record<string, number>): Array<[number, number]> {
   return entityKindSpec(kind).visualCorners?.(params) ?? []
 }
 
-/**
- * その図形の交点探索用プリミティブ(`EntityKindSpec.intersectables`)を列挙する。
- * 持たない種別(ベジエ)は空配列 —— `entityVisualCorners` と同じ理由で例外にしない。
- */
+/** その図形の交点探索用プリミティブ(`EntityKindSpec.intersectables`)を列挙する。持たない種別(ベジエ)は空配列。 */
 export function entityIntersectables(kind: string, params: Record<string, number>): IntersectableCurve[] {
   return entityKindSpec(kind).intersectables?.(params) ?? []
 }
 
-/**
- * その図形の**直線区間の中点**(`viewport.ts` の当たり判定がカーソル強調(垂直な短い
- * ティック)に使う)。円・円弧・ベジエは対象外(本人指定「線分の中点」) ——
- * `intersectables` のうち `kind:'segment'` だけを見れば自然にそうなる。
- */
+/** その図形の直線区間の中点(`viewport.ts` の当たり判定がカーソル強調の垂直ティックに使う)。円・円弧・ベジエは対象外。 */
 export function entityMidpoints(
   kind: string,
   params: Record<string, number>,
@@ -601,11 +490,7 @@ export function entityMidpoints(
   return out
 }
 
-/**
- * 2線分の交点。**端点を含む区間内**でだけ交わる場合に返す(延長線上の交点は含めない)。
- * 平行(分母0)は交点なし —— 重なる場合も含めて拾わない(重なりは「交点」ではなく
- * 「一致」で、意味が違う)。
- */
+/** 2線分の交点。端点を含む区間内でだけ返す。平行(分母0)は重なる場合も拾わない(重なりは「一致」で「交点」と意味が違う)。 */
 function segmentSegmentIntersection(
   a0: readonly [number, number],
   a1: readonly [number, number],
@@ -676,12 +561,7 @@ function circleCircleIntersections(
 
 /**
  * 点が中心から見て弧 `[startDeg,endDeg]`(反時計回り。0度またぎ可)の範囲内にあるか。
- *
- * **`%` で正規化する(反復加算のwhileループにしない)** —— `clampAngleToArc` の
- * whileループ版は、SVG取り込みなどで `start_deg`/`end_deg` が異常値(非常に大きい値・
- * `Infinity`)になった場合に停止しない(実測: `smoke-svg.mjs` がここでハングした)。
- * `%` なら入力がどんな大きさでも定数時間で終わり、`Infinity`/`NaN` は比較が全部false
- * になって自然に「範囲外」に落ちる。
+ * `%` で正規化する: 反復加算のwhileループは `start_deg`/`end_deg` が異常値(非常に大きい値・`Infinity`)だと停止しない(実測: `smoke-svg.mjs` がハングした)。`Infinity`/`NaN` は比較が全部falseで範囲外に落ちる。
  */
 function angleWithinArc(point: readonly [number, number], center: readonly [number, number], startDeg: number, endDeg: number): boolean {
   if (!Number.isFinite(startDeg) || !Number.isFinite(endDeg)) return false
@@ -718,7 +598,7 @@ function curveIntersections(a: IntersectableCurve, b: IntersectableCurve): Array
  *
  * 同じ図形どうしのペアは見ない —— 長方形自身の隣り合う辺が作る交点(=自分の角)は
  * 既に `visualCorners` が持つ。ベジエは `intersectables` が空なので自然に対象外になる
- * (閉じた式で解けない。本人指定は「線分・円・円弧の交点」)。
+ * (閉じた式で解けない)。
  */
 export function sketchIntersections(
   handles: ReadonlyArray<{ entityId: string; kind: string; params: Record<string, number> }>,

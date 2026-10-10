@@ -1,9 +1,6 @@
 /**
- * 測定(issue #10)の装飾 —— 測った2点を結ぶ線・両端の点・数値の札。**指せない**
- * (ピックの対象に足さない)。`viewport.showMeasurement` が唯一の書き手。
- *
- * **深度検査をしない**(奥にあっても見える)—— 点から面へ下ろした垂線の足は、面の裏側や
- * ソリッドの内側に落ちうる。隠すと「どこまでの距離か」が読めない。
+ * 測定の装飾(2点を結ぶ線・両端の点・数値の札)。ピックの対象にしない。`viewport.showMeasurement` が唯一の書き手。
+ * 深度検査をしない: 垂線の足は面の裏側やソリッドの内側に落ちうるので、隠すと距離の端が読めない。
  */
 import * as THREE from 'three'
 
@@ -11,14 +8,13 @@ import { makeTextSprite } from './textSprite'
 import { LAYER, MEASURE_COLOR, MEASURE_TEXT_COLOR } from './viewportConstants'
 import type { MeasurementVisual } from './viewportTypes'
 
-/** 本編(`viewport.ts`)から借りるもの。 */
 export interface MeasureAnnotationDeps {
-  /** 内容の外接直方体の対角[mm]。札の大きさをこれへ追随させる。 */
+  /** 内容の外接直方体の対角[mm]。 */
   contentDiagonal(): number
 }
 
 export interface MeasureAnnotation {
-  /** 装飾を入れるグループ。`scene` へ足すのは呼び出し側。 */
+  /** `scene` へ足すのは呼び出し側。 */
   object: THREE.Group
   show(visual: MeasurementVisual | null): void
   info(): MeasurementVisual | null
@@ -68,7 +64,6 @@ export function createMeasureAnnotation(deps: MeasureAnnotationDeps): MeasureAnn
     root.add(ends)
     disposables.push(endGeometry)
 
-    // 札はモデルの大きさに追随させる(荷重の札と同じ。空の文書は測れないので 0 は来ない)。
     const height = Math.max(deps.contentDiagonal(), 1e-6) * 0.04
     const { sprite, disposables: spriteDisposables } = makeTextSprite(visual.label, height, MEASURE_TEXT_COLOR)
     sprite.position.copy(from).add(to).multiplyScalar(0.5)

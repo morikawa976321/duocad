@@ -60,6 +60,11 @@ def _atomic(path, write):
     temporary.replace(path)
 
 
+def _fem_device():
+    from . import fem  # fem が trace を import するので、ここで遅れて読む
+    return fem.FEM_DEVICE
+
+
 def _git(*args):
     # stdin を継承させない: MCP を stdio で受けるサーバは別スレッドが stdin を readline し続けており、
     # Windows では継承した git がその読みが返るまで(次の1行が届くまで)返らず15秒で時間切れになる。
@@ -227,6 +232,7 @@ class Recorder:
                       loaded_function_hashes=runtime,
                       platform=platform.platform(), cpu_count=os.cpu_count(), packages=versions,
                       threads={k:os.environ[k] for k in ('OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS') if k in os.environ},
+                      fem_device=_fem_device(),
                       git_head=_git('rev-parse','HEAD'), git_diff=_git('diff','--','duocad','pyproject.toml'),
                       git_status=_git('status','--short')))
         def write_sources(stream):

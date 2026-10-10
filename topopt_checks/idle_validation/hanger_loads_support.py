@@ -1,6 +1,6 @@
 """タスク7(hanger高荷重・幅の一般性・旧64条件の照合)が共有する条件定義と診断。
 
-結果と解釈は `docs/topopt_idle_validation/07_HANGER_LOADS.md`。製品コード(`duocad.topopt.*`)は変更しない。
+結果と解釈は `docs/topopt_idle_validation/10_SYNTHESIS.md` 付録E。製品コード(`duocad.topopt.*`)は変更しない。
 `search_methods.py`・`synthetic_matrix_support.py`・`hanger_low_support.py` を再利用する。
 
 最小幅は**実寸mm固定**(06と同じ): 要求mmを `optimize_run._resolve_min_width` が `ceil(mm/格子幅)` セルへ丸めるので、

@@ -90,7 +90,7 @@ from .view import (  # noqa: F401
 
 
 if __name__ == "__main__":
-    # **黙って何もしないで終わらない**(実装計画書§6予防6)。`main()` を持たないので、
+    # **黙って何もしないで終わらない**(docs/DESIGN_DECISIONS.md「day 1 に払った予防」の「失敗を黙って通さない」)。`main()` を持たないので、
     # この番人が無いと `python -m duocad.server` が終了コード0で素通りする。
     print(
         "duocad.server は起動コマンドではない。サーバはこちら:\n"

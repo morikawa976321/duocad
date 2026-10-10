@@ -7,7 +7,7 @@
 #    (pushもPRもせずに導入するとき。**完全なハッシュ**を渡す —— ローカルのリポジトリからの fetch は
 #    短縮ハッシュを解決しない)。ローカルの main をそのコミットに置き、追跡先は origin/main のまま。
 #    mainがそのコミットを取り込むまで更新ボタンは出ない(docs/STABLE.md)
-# 2. uv sync --frozen / npm ci / npm run build
+# 2. uv sync --frozen(GPU の部品を入れる clone なら --extra gpu も) / npm ci / npm run build
 # 3. 制作データの置き場(models/ export/ logs/)を作る。-ImportModelsFrom の *.json を写す(上書きしない)
 # 4. スタートメニューに「duocad」を登録する(Win -> duocad -> Enter で起動)
 # 5. 安定版のフォルダで開いた Claude Code だけが安定版のMCP(8776)へ繋ぐよう、local スコープで登録する
@@ -61,7 +61,23 @@ if (Test-Path (Join-Path $StableRoot '.git')) {
 }
 
 # ---- 2. 依存とビルド ----
-Run 'uv' @('sync', '--frozen') $StableRoot
+# GPU の部品(extra gpu = CuPy)を入れるか。**その版が extra gpu を持ち**(持たない旧版へ巻き戻すとき、付けると
+# uv sync が失敗する)、かつ画面の「設定」で GPU を選んでいるか、すでに入っているとき。**extra を付けない
+# `uv sync` は入っている CuPy を消す**ので、GPU を切っても入れたままにする(切り直すたびに約 2GB を入れ直さない)。
+# 設定ファイルの鍵は duocad/local_settings.py と揃える(docs/TOPOPT_GPU.md)。
+function Want-GpuExtra([string]$root) {
+    if (-not (Select-String -Path (Join-Path $root 'pyproject.toml') -Pattern '^\s*gpu\s*=' -Quiet)) { return $false }
+    if (Test-Path (Join-Path $root '.venv\Lib\site-packages\cupy')) { return $true }
+    try {
+        $settings = Get-Content -Raw -Encoding UTF8 -Path (Join-Path $root 'duocad_settings.json') | ConvertFrom-Json
+        return ($settings.fem_device -eq 'gpu')
+    } catch {
+        return $false
+    }
+}
+$syncArgs = @('sync', '--frozen')
+if (Want-GpuExtra $StableRoot) { $syncArgs += @('--extra', 'gpu') }
+Run 'uv' $syncArgs $StableRoot
 $web = Join-Path $StableRoot 'web'
 Run 'npm.cmd' @('ci') $web
 Run 'npm.cmd' @('run', 'build') $web

@@ -1,8 +1,5 @@
 """円形反復 `pattern_circular` の契約。`pattern_rectangular` の兄弟で語彙・規律を揃える
 (数値の場合分けは `duocad/verbs/pattern.py` の docstring)。
-
-矩形反復に無かったぶん: `Pattern.kind`(`"rectangular"` | `"circular"`)は `Body.kind` /
-`Entity.kind` と同じ語彙。
 """
 from __future__ import annotations
 
@@ -62,9 +59,6 @@ def angles_from_center(points: list) -> list:
     )
 
 
-# --------------------------------------------------------------------------------------
-# 基本（個数・1操作・undo）
-# --------------------------------------------------------------------------------------
 def test_pattern_multiplies_the_entity_into_count_regions():
     """`count=N` で領域が N 個になる（元を含めて N。N-1個の複製が足される）。"""
     document = Document()
@@ -116,9 +110,6 @@ def test_pattern_can_be_undone():
     assert len(regions(document, sketch_id)) == COUNT
 
 
-# --------------------------------------------------------------------------------------
-# 押し出して穴がN個
-# --------------------------------------------------------------------------------------
 def test_extruding_a_circular_pattern_opens_count_holes():
     """反復した円を `cut` で押し出すと穴が **count個** できる。"""
     document = Document()
@@ -133,9 +124,6 @@ def test_extruding_a_circular_pattern_opens_count_holes():
     assert math.isclose(query.volume(body.shape), expected, rel_tol=1e-9)
 
 
-# --------------------------------------------------------------------------------------
-# 幾何の正しさ（刻み角の場合分け）
-# --------------------------------------------------------------------------------------
 def test_a_full_circle_divides_360_by_count():
     """全周のときの刻みは360/count。6個なら60度ずつ(`count-1`で割ると72度になり、
     6個目が元の位置へ戻って重なる)。
@@ -177,9 +165,6 @@ def test_a_single_copy_needs_no_step():
     assert len(regions(document, sketch_id)) == 1
 
 
-# --------------------------------------------------------------------------------------
-# rotate_copies
-# --------------------------------------------------------------------------------------
 def test_rotate_copies_false_keeps_the_original_orientation():
     """`rotate_copies=False` の複製は元と同じ向き(中心から見た4隅が元と一致する)。
 
@@ -233,9 +218,6 @@ def test_rotated_copies_of_a_rectangle_are_all_rectangles():
         assert _corner_set(item["params"]) == pytest.approx(sorted(turned), abs=1e-9)
 
 
-# --------------------------------------------------------------------------------------
-# パラメトリック（後から編集できる）
-# --------------------------------------------------------------------------------------
 def test_changing_the_count_changes_the_number_of_holes():
     """`count` は名前つきの値。変更すると穴の数が追随する。"""
     document = Document()
@@ -268,11 +250,7 @@ def test_changing_the_total_angle_moves_the_copies():
 
 
 def test_changing_the_center_moves_the_whole_ring():
-    """`center` を変更すると配置全体が移動する（中心も名前つきの値）。
-
-    `Region` は `index` と `area` しか持たないので、位置は押し出して開いた穴の軸で見る
-    （`test_pattern.py` と同じ流儀）。中心を+5mm動かせば、6つの穴の重心の平均も+5mm動く。
-    """
+    """`center` を変更すると配置全体が移動する（中心も名前つきの値）。"""
     document = Document()
     plate(document)
     sketch_id, _, _ = hole_ring(document)
@@ -305,9 +283,7 @@ def test_pattern_survives_save_load_and_replay():
     assert len(regions(restored, restored_sketch_id)) == COUNT
 
 
-# --------------------------------------------------------------------------------------
 # 失敗を黙って通さない
-# --------------------------------------------------------------------------------------
 #: 0 / 負 / 非整数の3分岐は `test_pattern.py` が網羅済み(`parameters.is_positive_int` は共有)。
 #: ここは呼び出し口の配線確認なので境界の 0 だけ通す。
 @pytest.mark.parametrize("count", [0])
@@ -328,10 +304,7 @@ def test_count_must_be_a_positive_integer(count):
 #: -90.0 は 0.0 と同じ分岐(`not 0 < angle <= 360`)なので落とした。
 @pytest.mark.parametrize("total_angle", [0.0, 361.0, float("nan")])
 def test_total_angle_must_be_usable(total_angle):
-    """`total_angle` は 0 < angle <= 360。0・負・360超・NaNは ValueError。
-
-    360を超える指定は「1周を超えて並べる」意味になり、複製が必ず重なる。
-    """
+    """`total_angle` は 0 < angle <= 360。0・負・360超・NaNは ValueError。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, FIRST_HOLE, HOLE_RADIUS)
@@ -379,11 +352,7 @@ def test_patterning_the_same_entity_twice_is_refused():
 
 
 def test_a_shape_centred_on_the_pivot_is_refused():
-    """回転中心と図形の中心が一致する場合は拒否する。
-
-    すべての複製が元と完全に重なり、「反復したのに何も増えない」が成功として通って
-    しまう（領域は1個のまま）。
-    """
+    """回転中心と図形の中心が一致する場合は拒否する。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, CENTER, HOLE_RADIUS)  # 中心が回転中心と一致
@@ -408,11 +377,7 @@ def test_reducing_the_count_below_one_is_refused_afterwards_too():
 
 
 def test_changing_the_total_angle_to_an_unusable_value_is_refused():
-    """`total_angle` も `set_parameter` 経由で検査する。
-
-    `count` だけを検査していると、角度のほうから同じ壊れ方(0度で全複製が重なる/360超で
-    1周を超えて重なる)を作れてしまう。
-    """
+    """`total_angle` も `set_parameter` 経由で検査する。"""
     document = Document()
     sketch_id, _, _ = hole_ring(document)
     name = get_sketch(document, sketch_id).patterns[0].params["total_angle"]

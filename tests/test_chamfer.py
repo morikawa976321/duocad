@@ -1,11 +1,6 @@
 """面取りの契約。
 
 実測(重要 —— **まっすぐな辺の面取りは円錐にならない**):
-
-    箱のまっすぐな辺を面取り(距離2mm) -> IsDone=True / plane 7 / 面7   ← 平面が1枚増えるだけ
-    円筒の円い縁を面取り(距離1mm)     -> IsDone=True / plane 2 + cylinder_full 1 + cone 1 / 面4
-
-円錐は**円い辺**の面取りから生まれる(まっすぐな辺に沿って平らに削るのだから面も平ら)。
 """
 from __future__ import annotations
 
@@ -28,14 +23,8 @@ def new_cylinder(doc: Document, radius: float = 10.0, height: float = 5.0) -> st
     return extrude(doc, [region_ref(sketch_id, 1)], height, mode="join").args["body_id"]
 
 
-# --------------------------------------------------------------------------------------
-# まっすぐな辺の面取りは平面／円い辺の面取りが円錐
-# --------------------------------------------------------------------------------------
 def test_chamfering_a_straight_edge_makes_a_plane():
-    """箱のまっすぐな辺を面取りすると**平面が1枚増える**(実測: 6面 -> 平面7)。
-
-    円錐は円い辺から生まれる(次のテスト)。
-    """
+    """箱のまっすぐな辺を面取りすると**平面が1枚増える**(実測: 6面 -> 平面7)。"""
     doc = Document()
     body_id = new_box(doc)
     assert kinds_of(doc, body_id) == {"plane": 6}
@@ -61,9 +50,6 @@ def test_chamfering_a_circular_edge_makes_a_cone():
     assert kinds_of(doc, body_id) == CYLINDER_CHAMFER_KINDS
 
 
-# --------------------------------------------------------------------------------------
-# 操作ログに載り、undoできる
-# --------------------------------------------------------------------------------------
 def test_chamfer_is_logged_and_undoable():
     doc = Document()
     body_id = new_cylinder(doc)

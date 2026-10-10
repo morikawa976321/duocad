@@ -1,17 +1,16 @@
 /**
- * 形状最適化の**比較スクリーンショットの撮影台**(20260905-1700)。
+ * 形状最適化の比較スクリーンショットの撮影台。
  *
  *   web> node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json \
  *          --panel "既定:" --panel "細かく:element_mm=2.5" --views iso,side
  *
- * **1本のコマンドで終わる。** 重い段(面ごとに最適化を回す)も、描く段も、並べてラベルを
- * 焼く段も、ここが全部やる —— 使うたびに手順書を読み返す道具は使われなくなる。
+ * 最適化(面ごと)・描画・ラベル焼きまで1本のコマンドで終わる。
  *
  * ## 引数
  *
- *   --model <name>     **利用者の文書**(`models/` 配下の操作ログ。条件は文書のものを使う)
+ *   --model <name>     利用者の文書(`models/` 配下の操作ログ。条件は文書のものを使う)
  *   --models-dir <dir> `--model` の置き場(既定はリポジトリ直下の `models/`)
- *   --panel "<ラベル>:<つまみ>"   **2つ以上**。左から順に並ぶ
+ *   --panel "<ラベル>:<つまみ>"   2つ以上。左から順に並ぶ
  *                      つまみ: element_mm
  *   --views iso,side,threeq,zoom   撮る向き(既定は4つ全部)
  *   --dir x,y,z        `--views custom` と併せて任意の向き(`--zoom` で距離を詰める)
@@ -21,20 +20,13 @@
  *
  * ## 守っていること
  *
- * - **カメラ・光源・背景・画角は面をまたいで完全に同一**である。ずれた比較は無価値なので、
- *   面ごとの自由度を1つも持たせていない —— **1枚のcanvasに `setScissor` で並べて描く**ので、
- *   構造として別の値を持てない(面ごとにレンダラを作る作りだと、いつか片方だけ変わる)。
- * - **距離は全部の面の頂点から1つだけ決める**。外接球ではなく**その視線方向での実際の投影**
- *   から決める(外接球で決めると細長い題材が画面の3分の1にしか映らず、見たいものが見えない)。
- * - **サーバは自分で立てて自分で止める**(他の実ブラウザ検査と同じ流儀)。
- *   **ポートは 0 を渡してOSに空きを選ばせる**ので、8765/8775 が埋まっていてもぶつからない。
- * - **三角形が1枚もGPUへ行っていない面があったら落とす**(真っ黒の合格を防ぐ)。
- *
- * ## 新しいパッケージを入れていない
- *
- * three.js は本体の `web/node_modules/three`、puppeteer-core も同じ場所から借りる。
- * ラベルは**ブラウザのDOM**で焼く(PIL のような画像ライブラリを足さない) ——
- * canvas の上に帯を置いて、ページごと1枚に撮る。
+ * - カメラ・光源・背景・画角は面をまたいで同一(1枚のcanvasに `setScissor` で並べて描く)。
+ * - 距離は全部の面の頂点から1つだけ、その視線方向での実際の投影から決める
+ *   (外接球だと細長い題材が画面の3分の1にしか映らない)。
+ * - サーバは自分で立てて止める。ポートは 0 でOSに空きを選ばせる。
+ * - 三角形が1枚もGPUへ行っていない面があったら落とす(真っ黒の合格を防ぐ)。
+ * - 新しいパッケージは入れない: three.js と puppeteer-core は `web/node_modules` から借り、
+ *   ラベルはブラウザのDOMで焼く。
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -48,9 +40,6 @@ import { PYTHON, REPO_ROOT } from './server.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
-// --------------------------------------------------------------------------------------
-// 引数
-// --------------------------------------------------------------------------------------
 const argv = process.argv.slice(2)
 const options = parseArgs(argv)
 /** `--panel` は繰り返せる(`parseArgs` は最後の1つしか残さないので自分で拾う)。 */
@@ -67,20 +56,17 @@ if (panels.length < 2) {
 
 const WIDTH = Number.parseInt(options.width ?? '900', 10)
 const HEIGHT = Number.parseInt(options.height ?? '700', 10)
-/** ラベルの帯と面のすきま。 */
 const BAND = 34
 const GAP = 6
-// **FOV / BG / MESH_COLOR は面をまたいで同一。** 片方だけ変えないこと(比較の土俵が変わる)。
 const FOV = 50
 const BG = '#0a0a12'
 const MESH_COLOR = 0x6fa8dc
 
-/** 撮る向き(iso / side / threeq / zoom)。 */
 const VIEWS = {
-  iso: { dir: [-0.75, 0.5, 0.6], zoom: 1.0 }, // 3/4俯瞰
-  side: { dir: [-0.06, -1.0, 0.08], zoom: 1.0 }, // ほぼ真横。輪郭のシルエットが出る
-  threeq: { dir: [0.62, 0.66, 0.42], zoom: 1.0 }, // iso の反対側からの3/4
-  zoom: { dir: [-0.75, 0.5, 0.6], zoom: 0.62 }, // iso と同じ向きで距離だけ詰めた拡大
+  iso: { dir: [-0.75, 0.5, 0.6], zoom: 1.0 },
+  side: { dir: [-0.06, -1.0, 0.08], zoom: 1.0 },
+  threeq: { dir: [0.62, 0.66, 0.42], zoom: 1.0 },
+  zoom: { dir: [-0.75, 0.5, 0.6], zoom: 0.62 },
 }
 if (options.dir) {
   VIEWS.custom = {
@@ -99,15 +85,11 @@ for (const name of wantViews) {
   }
 }
 
-/** 出力の名前になる題材名。`--model` の `.json` はファイル名に混ぜない。 */
 const subject = options.model.replace(/\.json$/i, '')
 const outDir = resolve(REPO_ROOT, options.out ?? join('screenshots', 'topopt-compare'))
 const dataDir = join(outDir, '_data')
 mkdirSync(dataDir, { recursive: true })
 
-// --------------------------------------------------------------------------------------
-// 1. 重い段 —— 面ごとに最適化を回す(Python)
-// --------------------------------------------------------------------------------------
 async function runExport() {
   const args = [
     join(HERE, 'shoot_topopt_export.py'),
@@ -143,9 +125,7 @@ if (options['skip-export']) {
 
 const manifest = JSON.parse(readFileSync(join(dataDir, 'manifest.json'), 'utf8'))
 const PANEL_COUNT = manifest.panels.length
-// **使い回すデータが別の題材のものでないことを確かめる。** `_data` は出力先ごとに1つなので、
-// 同じ `--out` へ別の題材を撮ると上書きされる —— 気づかずに `--skip-export` すると
-// **ラベルは新しい題材、絵は前の題材**という、画像を見ても分からない嘘ができる。
+// `_data` は出力先ごとに1つ。別の題材のデータを `--skip-export` で使い回すと、ラベルと絵の題材が食い違う。
 if (options['skip-export'] && manifest.subject !== subject) {
   console.error(
     `--skip-export だが ${dataDir} に入っているのは ${manifest.subject} の結果` +
@@ -154,10 +134,6 @@ if (options['skip-export'] && manifest.subject !== subject) {
   process.exit(1)
 }
 
-// --------------------------------------------------------------------------------------
-// 2. 描く段 —— 1枚のcanvasに全部の面を並べて撮る
-// --------------------------------------------------------------------------------------
-/** 面 `i` の頂点(mm)。距離と中心を**面をまたいで1つに決める**ために読む。 */
 function vertsOf(index) {
   const payload = JSON.parse(readFileSync(join(dataDir, `panel-${index}.json`), 'utf8'))
   const buffer = Buffer.from(payload.verts_b64, 'base64')

@@ -1,18 +1,4 @@
-"""M2の回帰テスト — **契約のテストが通っていても壊れていた経路**。
-
-`tests/test_sketch.py` / `test_region.py` / `test_extrude.py` がM2のAPI契約で、
-このファイルは契約ではなく**再発防止**である。M2のロジック実装は、契約のテストが
-全部緑のまま次の4つの経路が壊れる(または黙って壊れる)。
-
-1. 面に貼ったスケッチは、`sketch_create` までしか通らず `regions()` で必ず例外になっていた
-   （`gp_Ax3(gp_Ax3)` というコンストラクタが無い／`ReverseZ` はOCCTでは `ZReverse`）。
-   実装計画書§3.3の「基準平面 **または既存ソリッドの平面状の面**」の後半が一度も動いていない。
-2. 別スケッチの領域を混ぜて押し出すと、全部を最初のスケッチの法線で押して
-   **体積0の退化ソリッド**を黙って作っていた（`IsDone()` も `BRepCheck_Analyzer` も通る）。
-3. 壊れた数値（NaN・半径0・辺0）がスケッチとログに永続化され、NaNの場合は
-   **同じスケッチ上の正常な領域まで黙って消えた**うえ `to_json()` が裸のNaNを吐いた。
-4. STEPを読んだ直後の文書で `join` が最初の板を作れなかった。受入対象そのものの経路。
-"""
+"""M2の回帰テスト — **契約のテストが通っていても壊れていた経路**。"""
 from __future__ import annotations
 
 import json
@@ -50,11 +36,7 @@ def box_document() -> Document:
 
 
 def face_index_by_normal_z(shape, sign: float) -> int:
-    """法線のZ成分が `sign` 向きの面の添字(上面 / 底面を選ぶ)。
-
-    立方体の底面は `TopAbs_REVERSED` で入っており、平面の `gp_Ax3` をそのまま使うと
-    法線が内側を向く。押し出しが外向きになるかを見るために両方を試す。
-    """
+    """法線のZ成分が `sign` 向きの面の添字(上面 / 底面を選ぶ)。"""
     for face in kernel.tessellate(shape)["faces"]:
         if face["normal"][2] * sign > 0.999:
             return face["index"]
@@ -63,11 +45,7 @@ def face_index_by_normal_z(shape, sign: float) -> int:
 
 @pytest.mark.parametrize("sign", [1.0, -1.0], ids=["top_face", "bottom_face"])
 def test_sketch_on_a_face_can_be_extruded_and_replayed(sign):
-    """面に貼ったスケッチが、領域検出 → 押し出し → 再生まで通る。
-
-    5×5の長方形を4mm押し出すので、体積の増分は 100 で**面の向きによらない**
-    (外向きに押せていなければ、立方体の内側を押して増分が0になるか形状が壊れる)。
-    """
+    """面に貼ったスケッチが、領域検出 → 押し出し → 再生まで通る。"""
     document = box_document()
     index = face_index_by_normal_z(document.active_body().shape, sign)
 
@@ -145,23 +123,14 @@ def test_broken_numbers_never_enter_the_sketch(add):
 
 
 def _single_solid_step(tmp_path) -> Path:
-    """20×10×5(体積1000)のソリッド1個だけのSTEPを作って返す。
-
-    `test_io_step.py::_two_solid_step` と同じ理由でテスト側がOCPで作る
-    (`3d-models/` の私物STEPには依存しない)。ここで欲しいのは「読み込み直後の文書」
-    という**状態**だけなので、部品は1つで足りる。
-    """
+    """20×10×5(体積1000)のソリッド1個だけのSTEPを作って返す。"""
     step_path = tmp_path / "reference.step"
     kernel.write_step(BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape(), str(step_path))
     return step_path
 
 
 def test_join_right_after_importing_a_step_does_not_fail(tmp_path):
-    """STEPを読んだ直後のアクティブが編集可能で、そこへ `join` が通る。落ちたら最初の板が作れない。
-
-    体積: 20×10 の底面を10mm押し出した角柱(2000)が、その中に丸ごと入る箱(1000)を
-    飲み込むので、融合後は 2000 ちょうどになる。
-    """
+    """STEPを読んだ直後のアクティブが編集可能で、そこへ `join` が通る。落ちたら最初の板が作れない。"""
     document = Document()
     body_ids = import_step(document, _single_solid_step(tmp_path))
 

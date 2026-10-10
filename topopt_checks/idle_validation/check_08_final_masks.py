@@ -1,4 +1,4 @@
-"""段階8・監査2: 08の小型比較が返した最良形を、最小幅・単一成分・正則境界・閉空洞で検査する(FEMなし)。
+r"""段階8・監査2: 08の小型比較が返した最良形を、最小幅・単一成分・正則境界・閉空洞で検査する(FEMなし)。
 最小幅は探索が `peel` に渡した規則(`binary_search._mask_satisfies_min_width`・免除域は `_min_width_exempt`)と同じ判定。
 出力: `output/idle_validation_20260928/08_mask_checks.json`
 実行: `.venv\Scripts\python.exe topopt_checks\idle_validation\check_08_final_masks.py`

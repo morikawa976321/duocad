@@ -1,34 +1,15 @@
 <script lang="ts">
   /**
-   * AIパネル — **アプリ内からAIを選んで対話する**唯一の口。
+   * AIパネル — アプリ内からAIを選んで対話する口(`duocad/agent/` の tool-use ループを `duocad/server.py` の `ai_*` 経由で繋ぐ)。
+   * - `ai_*` は verb ではない。文書の変更はAIが呼ぶ既存MCPツール側から通常の verb 配信として届く(`App.svelte` の `handleState` が描き直す。このパネルは何も描かない)。
+   * - 鍵はここでは打たない(`SettingsDialog.svelte`)。ここが見るのは置いてあるかの真偽(`apiKeyConfigured`)だけ。
+   * - プロバイダの選択は `status.providers` で駆動する(2つ以上のときだけ選択UIを出す)。
+   * - 会話の時系列(`transcript`)の正は `aiChat.svelte.ts`。サーバ側の会話(`duocad/agent/loop.py`)が残らないための代わりにブラウザ側が持つ
+   *   (`session.ts` の `AiTranscriptEntry` 参照)。ここが持つのは見た目だけの状態(`draft`・設定フォームの開閉と打ちかけ・`open`)で、再読込で消える。
+   * - ツール呼び出しの表示は verb 名をそのまま出す(操作ログ・MCPツール名と同じ綴り)。
    *
-   * タスクF(`duocad/agent/`)のtool-useループをWebSocket(`duocad/server.py` の `ai_*`)
-   * 経由でここへ繋ぐ。中心の設計は他のパネルと同じ規律を保つこと ——
-   *
-   * - **`ai_*` はverbではない**。ここから送るのは対話であって、文書の変更は
-   *   AIが呼ぶ既存MCPツールの側から**通常のverb配信**として届く(`App.svelte` の
-   *   `handleState` がいつもどおり描き直す。このパネルは何も描かない)。
-   * - **鍵はここでは打たない**。ClaudeのAPIキーは設定ダイアログ(`SettingsDialog.svelte`)で置く
-   *   (一度決めたら触らない設定なので)。ここが見るのは置いてあるかの真偽(`apiKeyConfigured`)だけ。
-   * - **プロバイダの選択は `status.providers` で駆動する**(2つ以上のときだけ選択UIを出す)。
-   * - **会話の時系列(`transcript`)はここが持つ状態ではない** —— **正は `aiChat.svelte.ts`**で、
-   *   ここは`props`として受け取って描くだけ(パネルは何も覚えない。
-   *   `duocad/agent/loop.py`の会話がサーバ側にしか残らないための代わりとして
-   *   ブラウザ側に置いてある。`session.ts`の`AiTranscriptEntry`docstring参照)。
-   *   **ここが自前で持つ状態**は、打ちかけの発話(`draft`)・設定フォームの
-   *   開閉と打ちかけ・本体の開閉(`open`。下記)だけで、どれも見た目だけの状態(再読込で消える)。
-   * - **ツール呼び出しの表示はverb名をそのまま出す**(操作ログ・MCPツール名と同じ綴り。
-   *   タスクファイルの要件)。
-   *
-   * **`BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ**
-   * (方針 3段目「使うかもしれないし使わないかも
-   * しれないものは…ユーザーが表示・非表示を切り替えられるようにする」)。
-   * tier3の常設パネルは全て畳める(ファイル一覧=ヘッダのトグル、
-   * ブラウザ=カレット、AI設定フォーム=設定ボタン、AI本体=このカレット)。
-   * **畳んでも会話が壊れない理由は上の`transcript`の所在そのもの** —— 正が親にある以上、
-   * このパネルを畳んで`open`が変わっても`transcript`は影響を受けず、開き直せば続きが見える。
-   * **既定は開いている**(`BrowserPanel.svelte` と同じ形。再読込をまたいだ保持はしない)。
-   * 「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
+   * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
+   * 既定は開いている(再読込をまたいで保持しない)。「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
   import type { AiProviderKind, AiStatus, AiTranscriptEntry } from './session'
 
@@ -48,20 +29,15 @@
 
   let draft = $state('')
   let settingsOpen = $state(false)
-  /** パネル本体(会話・入力・設定)を出しているか。**既定は開いている**(`BrowserPanel.svelte`
-   * の `open` と同じ形)。畳んでもヘッダ行(プロバイダ名・中断・設定)は見えたままにする ——
-   * それらは「何が繋がっているか」「応答中か」を一目で言う役目なので、畳んでも隠さない。 */
+  /** パネル本体(会話・入力・設定)を出しているか。畳んでもヘッダ行(プロバイダ名・中断・設定)は「何が繋がっているか」「応答中か」を言う役目なので見せたままにする。 */
   let open = $state(true)
-  /** 設定フォームの打ちかけ(開いた時点の `status` で初期化する)。 */
   let providerDraft = $state<AiProviderKind>('openai_compat')
   let baseUrlDraft = $state('')
 
   const running = $derived(status?.running ?? false)
   const blockedReason = $derived(status ? null : '接続を待っている')
-  /** 選択UIは**2つ以上あるときだけ**出す(1つしか無い今は出さない)。 */
   const canPickProvider = $derived((status?.providers?.length ?? 0) > 1)
 
-  /** 画面に出す名前(綴りそのままだと何と話しているか分からない)。 */
   const PROVIDER_LABEL: Record<string, string> = {
     openai_compat: 'llama-server',
     anthropic: 'Claude',
@@ -75,18 +51,13 @@
     providerDraft = status?.provider ?? 'openai_compat'
     baseUrlDraft = status?.baseUrl ?? ''
     settingsOpen = true
-    // **畳んだまま設定を開いても見えない**ので、設定を押したら本体ごと開く。
     open = true
   }
 
   /**
-   * プロバイダを切り替えたら **エンドポイントの打ちかけを捨てる**。
-   *
-   * **打ちかけはプロバイダに属する** —— 欄が隠れても `baseUrlDraft` は生きているので、
-   * 隠れたまま `ai_configure` に乗って「指定した覚えのないURL」で繋ぎに行く。
-   * 空にすれば `undefined` になり、サーバ側の既定値が使われる。
-   *
-   * Claudeへ切り替えたときに打ちかけが残ると、サーバが `base_url` を拒否して切り替え自体が失敗する。
+   * プロバイダを切り替えたらエンドポイントの打ちかけを捨てる。欄が隠れても `baseUrlDraft` は生きていて `ai_configure` に乗り、
+   * 指定した覚えのないURLで繋ぎに行く。空にすれば `undefined` でサーバ側の既定値が使われる
+   * (Claudeへ切り替えて打ちかけが残ると、サーバが `base_url` を拒否して切り替え自体が失敗する)。
    */
   function selectProvider(next: AiProviderKind): void {
     if (next === providerDraft) return
@@ -106,7 +77,7 @@
     draft = ''
   }
 
-  /** verbと同じ綴りの名前 + 成否だけを1行に(引数・結果はJSONで畳んでおく。§長い応答対策)。 */
+  /** 引数・結果はJSONで畳んでおく(§長い応答対策)。 */
   function toolLine(call: AiTranscriptEntry & { kind: 'tool' }): string {
     const args = Object.keys(call.call.arguments).length ? JSON.stringify(call.call.arguments) : ''
     return `${call.call.name}${args ? ` ${args}` : ''}`
@@ -124,8 +95,7 @@
     stopped: '止まった(理由不明)',
   }
 
-  /** 読む側と書く側のどちらに時間を使ったか(llama-server の `timings` を往復ぶん足した値)。
-   * Claudeは時間ではなくトークン数(課金の単位)を出す。どちらも返さないサーバでは空文字(行ごと出さない)。 */
+  /** llama-server の `timings` を往復ぶん足した値。Claudeは時間ではなくトークン数(課金の単位)を出す。どちらも返さないサーバでは空文字(行ごと出さない)。 */
   function usageLine(usage: Record<string, number> | undefined): string {
     if (usage?.input_tokens !== undefined && usage.output_tokens !== undefined) {
       return (
@@ -144,7 +114,6 @@
 
 <section class="ai-panel" class:collapsed={!open}>
   <div class="ai-head">
-    <!-- **BrowserPanel.svelteと同じ形の開閉カレット**(新しい畳み方を発明しない)。 -->
     <button
       id="ai-collapse"
       class="caret"
@@ -181,9 +150,8 @@
         {#if canPickProvider}
           <label class="field-row">
             プロバイダ
-            <!-- `bind:value` にしない —— 束縛の更新と `onchange` の順序に依存せず、
-                 切り替えを1か所(`selectProvider`)で扱うため。
-                 **選択肢はサーバの `ai_status.providers` が正**(ここに書き写さない)。 -->
+            <!-- `bind:value` にしない(束縛の更新と `onchange` の順序に依存せず、切り替えを `selectProvider` 1か所で扱う)。
+                 選択肢の正はサーバの `ai_status.providers`。 -->
             <select
               id="ai-provider"
               value={providerDraft}
@@ -195,8 +163,7 @@
             </select>
           </label>
         {/if}
-        <!-- **エンドポイントは鍵を持たないプロバイダにだけ出す** —— どこを指しても飛ぶのは
-             キーの無いリクエストだけだから許せる。Claudeの送り先は固定(`Server._ai_configure`)。 -->
+        <!-- エンドポイントは鍵を持たないプロバイダにだけ出す(Claudeの送り先は固定。`Server._ai_configure`)。 -->
         {#if canPickEndpoint}
           <label class="field-row">
             エンドポイント
@@ -270,9 +237,8 @@
     border-top: 1px solid var(--line);
     background: var(--panel);
     padding: 6px 10px;
-    /* **高さを固定する。** 内容任せにすると、会話が伸びるたびにビューポートが
-       リサイズされてカメラのアスペクトと射影が動く —— 直前に射影した画素を
-       押すと別のものが取れる(実機検査が本物のクリックで指す前提が崩れる)。 */
+    /* 高さを固定する: 内容任せだと会話が伸びるたびにビューポートがリサイズされ、カメラのアスペクトと射影が動く
+       (直前に射影した画素を押すと別のものが取れる)。 */
     height: 220px;
     flex: 0 0 auto;
     display: flex;
@@ -280,8 +246,7 @@
     min-height: 0;
   }
 
-  /* **畳んだら220px固定を効かせず、ヘッダ行だけの高さにする**(`flex: 0 0 auto` は維持 ——
-     縮んでよいのはビューポートだけ、という不変条件は畳んでも変わらない)。 */
+  /* 畳んだら220px固定を効かせずヘッダ行だけの高さにする(`flex: 0 0 auto` は維持: 縮んでよいのはビューポートだけ)。 */
   .ai-panel.collapsed {
     height: auto;
   }
@@ -312,8 +277,6 @@
     flex: 0 0 auto;
   }
 
-  /* **幅は残りに合わせる**。「エンドポイント」の行が 300px のサイドバーから
-     はみ出さないよう、欄側が譲る。 */
   .ai-settings input,
   .ai-settings select {
     flex: 1 1 auto;
@@ -322,7 +285,6 @@
     text-align: left;
   }
 
-  /* 大きさは styles.css の `.hint` が持つ(--fs-meta)。 */
   .hint {
     margin: 4px 0 0;
   }

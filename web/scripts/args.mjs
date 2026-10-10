@@ -1,10 +1,3 @@
-/**
- * 検査スクリプトの引数と出力。
- *
- * `--key value` と `--flag` だけを解く素朴なもの。**検査スクリプトの引数はこれで足りている**
- * ので、依存(commander等)は入れない。
- */
-
 /** `--key value` / `--flag` を `{key: value|'true'}` にする。 */
 export function parseArgs(argv) {
   const parsed = {}
@@ -23,7 +16,6 @@ export function parseArgs(argv) {
   return parsed
 }
 
-/** 1件通ったことを出す。 */
 export function ok(message) {
   console.log(`  ok   ${message}`)
 }

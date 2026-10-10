@@ -1,14 +1,8 @@
 <script lang="ts">
   /**
-   * トップ画面 — **何も開いていないとき**(`state.document_open === false`)にビューポートを覆う。
-   *
-   * 作業面(グリッド・原点・ビューキューブ・ツールバー・ブラウザ)は文書に属するものとして
-   * 丸ごと見せない。空の無題の文書(「新規」直後。グリッドと原点が出ている)と、見た瞬間に
-   * 区別できることがこの画面の役目である(本人決定 2026-10-05、模型の案A)。
-   *
-   * ここでできるのは**開くことだけ**(最近の文書・新規・ファイル一覧を出す)。複製・削除・改名は
-   * 左サイドバーの `FilesPanel.svelte` に残す。一覧はサーバの `list_documents` の写しで、
-   * ここでは何も覚えない。
+   * トップ画面。何も開いていないとき(`state.document_open === false`)にビューポートを覆う。
+   * 作業面は丸ごと見せず、空の無題の文書(「新規」直後)と見た瞬間に区別できるようにする。
+   * できるのは開くことだけ。複製・削除・改名は `FilesPanel.svelte`。一覧はサーバの `list_documents` の写し。
    */
   import type { DocumentInfo } from './session'
 
@@ -25,7 +19,6 @@
     /** 最初の状態がまだ届いていない。覆うだけで中身は出さない。 */
     waiting: boolean
     documents: DocumentInfo[]
-    /** 左サイドバー(ファイル一覧)を出しているか。出ていれば「すべてのファイル」は要らない。 */
     filesPanelOpen: boolean
     onOpen: (name: string) => void
     onNew: () => void
@@ -34,7 +27,6 @@
     onNeedThumbnail: (name: string, version: number | null) => void
   } = $props()
 
-  /** カードに出す件数。残りは左サイドバーの一覧で見る。 */
   const RECENT_COUNT = 8
 
   const recent = $derived([...documents].sort((a, b) => b.mtime - a.mtime).slice(0, RECENT_COUNT))
@@ -98,8 +90,7 @@
 </div>
 
 <style>
-  /* `.stage` の中で `.viewport` を丸ごと覆う。大きさを持たない(position:absolute)ので、
-     `.viewport` の寸法＝カメラのアスペクトには触らない(styles.css の不変条件)。 */
+  /* position:absolute で `.viewport` の寸法には触らない(styles.css の不変条件)。 */
   .start-screen {
     position: absolute;
     inset: 0;

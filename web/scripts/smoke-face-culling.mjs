@@ -1,22 +1,16 @@
 /**
- * 実機での確認 — **face単位の視錐台+バックフェイスカリングが、深いズームを実際に軽くする**。
+ * 実機での確認 — face単位の視錐台+バックフェイスカリングが、深いズームを実際に軽くする。
  *
  *   node scripts/smoke-face-culling.mjs [--step <STEPのパス>]
  *
- * `smoke-resolution.mjs`(円柱1個で「寄ったら細かくなる」を見る)の続きで、こちらは
- * **大きなアセンブリで「寄っても重くならない」**を見る。判定に使うのは
- * **三角形の総数**と**測り直しの往復時間**の2つだけで、どちらも数値で出る。
+ * 大きなアセンブリで「寄っても重くならない」を、三角形の総数と測り直しの往復時間で見る。
+ * 同じ走行の中で入り/切りを比べる(検査用の穴 `__duocad.setFaceCulling(enabled)`。
+ * 切ると `focus` を送らなくなり、サーバは文書全体で1つの精度に戻る)。
  *
- * **同じ走行の中で入り/切りを比べる。** 版を戻して測り直すのでは機械が後から回せる証拠に
- * ならないので、ビューポートに検査用の穴 `__duocad.setFaceCulling(enabled)` を開けてある
- * (切ると `focus` を送らなくなり、サーバは「文書全体で1つの精度」という
- * 振る舞いに戻る)。
- *
- * 見るのは4点:
- *   1. 深いズームで、入りの三角形総数が切りより**大幅に少ない**
- *   2. 深いズームで、入りの測り直しが切りより**速い**
- *   3. **全体表示では悪化しない**(ほぼ全面が視錐台に入るので、入りでも切りでも同じ)
- *   4. 走行中にエラーが出ない(=粗い面が混ざっても描画経路が壊れていない)
+ *   1. 深いズームで、入りの三角形総数が切りより大幅に少ない
+ *   2. 深いズームで、入りの測り直しが切りより速い
+ *   3. 全体表示では悪化しない
+ *   4. 走行中にエラーが出ない
  *
  * サーバはこのスクリプトが空の文書で起動し、STEPはMCPの `import_step` で読む。
  */
@@ -54,13 +48,7 @@ runSmoke('smoke-face-culling', { timeout: 600000, mcp: true }, async ({ options,
     const center = await viewportCenter(page)
     await page.mouse.move(center.x, center.y)
 
-    /**
-     * いま画面が持っている形を丸ごと数える(**GPUに載っている量そのもの**)。
-     *
-     * `mismatched` は「届いた形が、画面がいま出している要求と食い違うBodyの数」。要求は
-     * `viewResolution()` の `focus`(Bodyごとの細かく測る面。キーが無ければ全面)と目標偏差で、
-     * 届いた形は `fine_face_count` と `deviation`(その形の中で一番細かい偏差)を持つ。
-     */
+    /** いま画面が持っている形を数える。`mismatched` は届いた形が現在の要求(`viewResolution()` の `focus` と目標偏差)と食い違う Body の数。 */
     function probe() {
       return page.evaluate(() => {
         const hook = window.__duocad
@@ -101,14 +89,10 @@ runSmoke('smoke-face-culling', { timeout: 600000, mcp: true }, async ({ options,
     }
 
     /**
-     * **測り直しが収束するまで**待ち、届いた形が要求と一致するまでの経過[ms]を返す。
-     * `requestBefore` は手を打つ前の要求(`probe().request`)。
-     *
-     * **「状態配信が一定時間止まったら終わり」では判定しない。** サーバは単一のイベントループで、
-     * 27部品の測り直しの間は WebSocket に何も流れない —— 静けさで切ると返事が届く前の画面を読む
-     * (実測: 2秒の静けさで切っていたとき、読み値が1手ずつずれて「入り 104,065 / 切り 192,033」に
-     * なった。一致で待つと「入り 192,033 / 切り 1,180,763」)。MCP の道具呼び出しを柵にしても
-     * 同じで、配信の途中でイベントループが空くと柵が先に返る。
+     * 測り直しが収束するまで待ち、届いた形が要求と一致するまでの経過[ms]を返す(`requestBefore` は手を打つ前の要求)。
+     * 「状態配信が一定時間止まったら終わり」では判定しない: サーバは単一のイベントループで、
+     * 27部品の測り直しの間は WebSocket に何も流れず、静けさで切ると返事が届く前の画面を読む
+     * (実測: 2秒の静けさで切ると読み値が1手ずつずれた)。MCP の道具呼び出しを柵にしても同じ。
      */
     async function waitQuiet(label, startedAt, requestBefore) {
       const deadline = Date.now() + timeout
@@ -191,7 +175,6 @@ runSmoke('smoke-face-culling', { timeout: 600000, mcp: true }, async ({ options,
     if (nearOn.culledBodies < 1) fail('深く寄っても粗くしたBodyが1つも無い(判定が効いていない)')
     ok(`深いズームで ${nearOn.culledBodies}/${expectedBodies} 部品が全面粗い側に落ちた`)
 
-    // **全体表示を悪化させない**(タスクの完了条件のもう半分)。
     if (!(farOn.triangles <= farOff.triangles * 1.05)) {
       fail(`全体表示が重くなっている: 入り ${farOn.triangles} / 切り ${farOff.triangles}`)
     }

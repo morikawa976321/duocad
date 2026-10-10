@@ -1,9 +1,4 @@
-"""スケッチの契約(`sketch_create` / `add_line` / `add_circle` / `add_rectangle`)。
-
-領域は `tests/test_region.py`、押し出しは `tests/test_extrude.py` が持つ。
-
-**座標はスケッチ平面上の2D**。基準平面 "XY" なら (x, y) がそのまま使える。
-"""
+"""スケッチの契約(`sketch_create` / `add_line` / `add_circle` / `add_rectangle`)。"""
 from __future__ import annotations
 
 import dataclasses
@@ -68,9 +63,6 @@ def first_face_index(shape, kind: str) -> int:
     raise AssertionError(f"{kind} の面が無い(この形状ではテストが成立しない)")
 
 
-# --------------------------------------------------------------------------------------
-# データモデル — day1で払う予防(素で通る)
-# --------------------------------------------------------------------------------------
 def test_entity_kind_is_validated():
     """図形の種別は登録されたものだけを受け付ける。未知の種別は黙って通さない(§6予防6)。"""
     assert Entity(id="e1", kind="circle").params == {}
@@ -81,9 +73,6 @@ def test_entity_kind_is_validated():
         Entity(id="e3", kind="spline")
 
 
-# --------------------------------------------------------------------------------------
-# sketch_create — 基準平面と既存ソリッドの面
-# --------------------------------------------------------------------------------------
 def test_sketch_create_on_a_base_plane():
     """基準平面にスケッチを作れ、文書が持つ。平面の参照はログへ入る形(保存形式)のまま。"""
     document = Document()
@@ -108,7 +97,7 @@ def test_sketch_create_rejects_an_unknown_base_plane():
 
 
 def test_sketch_create_on_a_planar_face_of_an_existing_solid(box):
-    """既存ソリッドの**平面状の面**にスケッチを貼れる(実装計画書§1のsketch_createの引数)。"""
+    """既存ソリッドの**平面状の面**にスケッチを貼れる(`sketch_create` の引数。MCP.md が正)。"""
     body = box.active_body()
     index = first_face_index(body.shape, "plane")
 
@@ -122,10 +111,7 @@ def test_sketch_create_on_a_planar_face_of_an_existing_solid(box):
 
 
 def test_sketch_create_rejects_a_non_planar_face(cylinder):
-    """平面でない面(円筒面)を指定したら失敗する。**黙って通さない**(§6予防6)。
-
-    通してしまうと、その上の領域検出・押し出しが全部意味を失った状態で成功する。
-    """
+    """平面でない面(円筒面)を指定したら失敗する。**黙って通さない**(§6予防6)。"""
     body = cylinder.active_body()
     index = first_face_index(body.shape, "cylinder_full")
 
@@ -136,16 +122,8 @@ def test_sketch_create_rejects_a_non_planar_face(cylinder):
     assert cylinder.log.entries == []
 
 
-# --------------------------------------------------------------------------------------
-# 図形の追加
-# --------------------------------------------------------------------------------------
 def test_line_circle_and_rectangle_are_kept_in_the_sketch():
-    """線・円・長方形を追加でき、スケッチが追加順に図形を保持する。
-
-    数値は `entity_params()` 越しに読む。M3で数値を図形へ焼き込まない形
-    (名前つきの値への参照)へ移しても、この関数の戻り(素の数値)は変わらないため、
-    M3の変更でこの契約が壊れない(duocad/sketch.py の `entity_params` docstring)。
-    """
+    """線・円・長方形を追加でき、スケッチが追加順に図形を保持する。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
 
@@ -178,17 +156,8 @@ def test_adding_an_entity_to_an_unknown_sketch_fails():
     assert document.log.entries == []
 
 
-# --------------------------------------------------------------------------------------
-# 操作ログとundo(verbの粒度: undo1回で消える単位＝ログ1行＝MCP1呼び出し。§2)
-# --------------------------------------------------------------------------------------
 def test_sketch_and_entities_are_logged_and_undoable():
-    """スケッチの作成・図形の追加が操作ログに1行ずつ載り、undoで1つずつ戻る。
-
-    ログが唯一の正(§3.1)なので、args だけで再生できる形になっていること
-    (作られたIDを記録していないと、再生した文書の選択が別物を指す)まで見る。
-    **3種類の図形すべての args の形を固定する** — 1種類だけ見ていると、
-    「`Entity` は正しいがログの形だけ別」という実装が緑のまま残る。
-    """
+    """スケッチの作成・図形の追加が操作ログに1行ずつ載り、undoで1つずつ戻る。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
     circle_id = add_circle(document, sketch_id, (0.0, 0.0), 20.0)

@@ -1,14 +1,4 @@
-"""述語による選択の契約。
-
-**AIは述語で引数を作る / 人はポインティングで引数を作る**。人のクリックに当たるのが
-`selection.select_face` 等(test_selection.py)、AIの述語に当たるのがこのファイルである。
-表現形式を構造化(JSON)にした理由は `duocad/predicates.py` のdocstringが正。
-
-期待値の出どころ: 30×30×40 の直方体。面6・辺12・頂点8。上面(法線 +Z)は1枚だけ、
-その外周は長さ30の辺4本、Zに平行な辺は長さ40の4本。**添字を決め打ちにせず、
-`kernel.tessellate` の法線と `query.describe_edges` の長さから毎回導く**
-(添字の決め打ちは、分解や数え方の細部が変わるとテストが静かに別の実体を見に行く)。
-"""
+"""述語による選択の契約。"""
 from __future__ import annotations
 
 import pytest
@@ -27,11 +17,7 @@ LENGTH_TOLERANCE = 1e-6
 
 
 def _top_face_index(shape) -> int:
-    """法線が +Z を向く面の1始まり添字(`kernel.tessellate` の外向き法線から導く)。
-
-    立方体の底面は `TopAbs_REVERSED` で入っており、面の向きを揃えないと底面も +Z を
-    向く。`tessellate` は外向きに揃えてある(test_m2_regressions.py と同じ流儀)。
-    """
+    """法線が +Z を向く面の1始まり添字(`kernel.tessellate` の外向き法線から導く)。"""
     indexes = [
         face["index"] for face in kernel.tessellate(shape)["faces"] if face["normal"][2] > 0.999
     ]
@@ -52,15 +38,8 @@ def _is_parallel_to_z(edge: dict) -> bool:
     )
 
 
-# --------------------------------------------------------------------------------------
-# 述語で面を選べる
-# --------------------------------------------------------------------------------------
 def test_faces_can_be_selected_by_normal(doc: Document):
-    """`faces where normal·Z > 0.9` で上向きの面が選べる(§5の例そのもの)。
-
-    直方体で満たすのは上面のちょうど1枚。2枚返るなら法線が外向きに揃っていない
-    (底面が内向きの +Z を返している)。
-    """
+    """`faces where normal·Z > 0.9` で上向きの面が選べる(§5の例そのもの)。"""
     shape = doc.bodies[0].shape
     matched = predicates.evaluate(
         doc,
@@ -106,15 +85,8 @@ def test_an_empty_where_matches_everything_of_that_kind(doc: Document):
     assert len(matched) == kernel.face_count(doc.bodies[0].shape) == 6
 
 
-# --------------------------------------------------------------------------------------
-# 述語で辺を選べる
-# --------------------------------------------------------------------------------------
 def test_edges_can_be_selected_by_direction_and_length(doc: Document):
-    """`edges where parallel_to Z and length > 20` で辺が選べる(§5の例そのもの)。
-
-    30×30×40 の直方体なら、Zに平行な辺4本(長さ40)だけが該当する。
-    X・Y方向の辺も長さ30で「20超」は満たすので、**向きの条件が効いていなければ12本返る**。
-    """
+    """`edges where parallel_to Z and length > 20` で辺が選べる(§5の例そのもの)。"""
     shape = doc.bodies[0].shape
     matched = predicates.evaluate(
         doc,
@@ -147,11 +119,7 @@ def test_length_conditions_are_strict_comparisons(doc: Document):
 
 
 def test_results_group_by_body_in_document_order():
-    """複数Bodyでも「`doc.bodies` の順 → その中で添字昇順」になる。
-
-    1Bodyだけで見ていると**Body順の部分は壊れても落ちない**。
-    Bodyをまたいで添字が交互に出ると、UIの一覧が部品ごとにまとまらない。
-    """
+    """複数Bodyでも「`doc.bodies` の順 → その中で添字昇順」になる。"""
     document = Document()
     document.add_body(Body(id="a", name="a", kind="solid", shape=_box_shape()))
     document.add_body(Body(id="b", name="b", kind="solid", shape=_box_shape()))
@@ -163,15 +131,8 @@ def test_results_group_by_body_in_document_order():
         assert indexes == sorted(indexes)
 
 
-# --------------------------------------------------------------------------------------
-# 関係述語 —— ある面の外周の辺
-# --------------------------------------------------------------------------------------
 def test_edges_on_the_boundary_of_a_face_can_be_selected(doc: Document):
-    """**関係述語**「ある面の外周の辺」。
-
-    フィレットの実用(**「上面の外周を丸める」**)に直結する。これが無いと、
-    その操作は辺の添字を決め直して並べる以外に表現できず、形が変わるたびに壊れる。
-    """
+    """**関係述語**「ある面の外周の辺」。"""
     shape = doc.bodies[0].shape
     top = _top_face_index(shape)
     matched = predicates.evaluate(
@@ -213,13 +174,7 @@ def test_the_boundary_of_the_bottom_face_is_a_different_set(doc: Document):
 
 
 def test_the_boundary_excludes_the_rim_of_a_hole():
-    """**穴の縁は外周に含めない**(この述語の契約の本体)。
-
-    穴無しの直方体だけで検査していると、面の**全ワイヤ**を返す誤実装でも
-    「件数4・長さ30・Z=40」で緑になってしまう。貫通穴を1つ開けた箱の上面で初めて
-    両者が区別できる —— 穴の縁を外周に含めると、「上面の外周を丸める」操作が
-    穴の縁まで丸めてトーラスになる(`test_fillet.py::test_fillet_on_a_circular_edge_produces_torus`)。
-    """
+    """**穴の縁は外周に含めない**(この述語の契約の本体)。"""
     document = Document()
     size, hole_radius = 20.0, 4.0
     sketch_id = sketch_create(document, base_plane("XY"))
@@ -259,11 +214,7 @@ def test_relation_predicate_rejects_a_face_index_out_of_range(doc: Document):
 
 
 def test_the_relation_predicate_refuses_to_guess_which_body():
-    """`face` は**Body局所の添字**なので、可視Bodyが複数あるなら `body` の指定が要る。
-
-    「全Bodyの3番目の面」という解釈は取らない —— 部品ごとに面の数え方は無関係なので、
-    その集合には意味が無い。可視Bodyがちょうど1つなら省略してよい(上のテスト群がそれ)。
-    """
+    """`face` は**Body局所の添字**なので、可視Bodyが複数あるなら `body` の指定が要る。"""
     document = Document()
     document.add_body(Body(id="a", name="a", kind="solid", shape=_box_shape()))
     document.add_body(Body(id="b", name="b", kind="solid", shape=_box_shape()))
@@ -276,14 +227,8 @@ def test_the_relation_predicate_refuses_to_guess_which_body():
     assert {item["body"] for item in scoped} == {"a"}
 
 
-# --------------------------------------------------------------------------------------
-# 不可視のBodyは述語の対象にならない
-# --------------------------------------------------------------------------------------
 def test_hidden_bodies_are_not_scanned_by_predicates():
-    """不可視Bodyは述語の対象にならない(M3.5「見えないものは選べない」の一貫性)。
-
-    ここが漏れると、**画面に出ていない部品がAIの述語経由で黙って変形する**。
-    """
+    """不可視Bodyは述語の対象にならない(M3.5「見えないものは選べない」の一貫性)。"""
     document = Document()
     document.add_body(Body(id="a", name="a", kind="solid", shape=_box_shape()))
     document.add_body(Body(id="b", name="b", kind="solid", shape=_box_shape()))
@@ -297,10 +242,7 @@ def test_hidden_bodies_are_not_scanned_by_predicates():
 
 
 def test_naming_a_hidden_body_explicitly_is_an_error():
-    """`body` を明示して不可視Bodyを指したら ValueError(黙って0件にしない)。
-
-    「指定したのに何も返らない」と「見えないので対象外」は、AIから見て区別が付かない。
-    """
+    """`body` を明示して不可視Bodyを指したら ValueError(黙って0件にしない)。"""
     document = Document()
     document.add_body(Body(id="a", name="a", kind="solid", shape=_box_shape()))
     set_visible(document, "a", False)
@@ -308,15 +250,8 @@ def test_naming_a_hidden_body_explicitly_is_an_error():
         predicates.evaluate(document, {"kind": "edge", "where": [], "body": "a"})
 
 
-# --------------------------------------------------------------------------------------
-# 一致0件はエラーにしない
-# --------------------------------------------------------------------------------------
 def test_a_zero_match_proposal_still_replaces_the_previous_selection(doc: Document):
-    """0件の提案でも置き換えは起きる(古い候補が残らない)。
-
-    ここで「0件なら何もしない」にすると、外した述語のあとに古い選択が残り、
-    人が承認したつもりで**別の集合**にverbがかかる。
-    """
+    """0件の提案でも置き換えは起きる(古い候補が残らない)。"""
     selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
     result = selection.set_selection(
         doc, predicate={"kind": "edge", "where": [{"op": "length_gt", "value": 10_000}]}
@@ -324,9 +259,6 @@ def test_a_zero_match_proposal_still_replaces_the_previous_selection(doc: Docume
     assert result.items == []
 
 
-# --------------------------------------------------------------------------------------
-# 不正な述語は失敗し、選択は変更されない
-# --------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "bad, why",
     [
@@ -344,10 +276,7 @@ def test_a_zero_match_proposal_still_replaces_the_previous_selection(doc: Docume
     ],
 )
 def test_invalid_predicates_are_rejected(doc: Document, bad: dict, why: str):
-    """不正な述語は ValueError(未知のop・型違い・kindに無いop・未知の軸)。
-
-    黙って空集合を返すと、**0件一致と区別が付かない**。
-    """
+    """不正な述語は ValueError(未知のop・型違い・kindに無いop・未知の軸)。"""
     with pytest.raises(ValueError):
         predicates.validate(bad)
     with pytest.raises(ValueError):
@@ -393,11 +322,7 @@ def test_a_predicate_that_fails_at_evaluation_also_leaves_the_selection_untouche
 
 
 def test_validate_returns_a_normalized_copy(doc: Document):
-    """`validate` は正規化した写しを返し、**渡した辞書を書き換えない**。
-
-    呼び出し元(MCPのツール引数)の辞書を書き換えると、AIが送った内容と
-    ログに残る内容が食い違う。
-    """
+    """`validate` は正規化した写しを返し、**渡した辞書を書き換えない**。"""
     original = {"kind": "edge", "where": [{"op": "length_gt", "value": 20}]}
     snapshot = {"kind": "edge", "where": [{"op": "length_gt", "value": 20}]}
     normalized = predicates.validate(original)
@@ -406,11 +331,7 @@ def test_validate_returns_a_normalized_copy(doc: Document):
 
 
 def test_the_op_catalogue_covers_every_supported_op():
-    """`describe_ops()` が **opの唯一の正**であること(MCPのスキーマがここから作られる)。
-
-    バリデータと公開スキーマが二重管理になると、片方にだけ足したopが
-    「MCPからは呼べるが検証を素通りする」状態で入る。
-    """
+    """`describe_ops()` が **opの唯一の正**であること(MCPのスキーマがここから作られる)。"""
     catalogue = predicates.describe_ops()
     assert set(catalogue) == set(predicates.PREDICATE_KINDS)
     assert {entry["op"] for entry in catalogue["face"]} == set(predicates.FACE_OPS)

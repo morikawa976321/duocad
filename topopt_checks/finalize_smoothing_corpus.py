@@ -28,7 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MODEL = REPO_ROOT / "models" / "hanger_bar_attachment.json"
 OUT = REPO_ROOT / "output" / "smoothing_corpus"
 PARALLEL = 3
-#: 子を起動する前に要る空きメモリ[GB]の既定。2026-09-26 に B-rep ブーリアンの経路が OOM でPCを落としているので
+#: 子を起動する前に要る空きメモリ[GB]の既定。B-rep ブーリアンの経路が OOM でPCを落とした実績があるので
 #: 控えめに取る(分析者の置いた値)。メッシュ集合演算の経路の実測は記録の `peak_working_set_mb`(`--min-free-gb` で下げる)。
 MIN_FREE_GB = 8.0
 

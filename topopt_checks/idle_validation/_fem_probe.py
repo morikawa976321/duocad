@@ -252,7 +252,7 @@ def zone_masks_with_load(
     distance_mm: float,
 ) -> dict:
     """`zone_masks`に荷重面近傍ゾーン`load`を足した4ゾーン版。`zone_masks`は3ゾーンのまま(02〜05が使う)。
-    荷重パッド接触端のピークは3ゾーンでは`general`へ希釈される(03A_REFERENCE_REPAIR.md 7-1節)。
+    荷重パッド接触端のピークは3ゾーンでは`general`へ希釈される(10_SYNTHESIS 付録A(旧 03A_REFERENCE_REPAIR 7-1節))。
     優先順位はholding→load→joint→general(holdingと重なる小さい形状ではholdingが先)。
     """
     mat = np.asarray(material, dtype=bool)
@@ -414,13 +414,10 @@ def richardson_extrapolate(values: list[float], ratios: list[float]) -> dict | N
     extrapolated: list[float | None] = []
     n = len(values)
     for i in range(n - 2):
-        # **ratios[i] は values[i]→values[i+1] 間の細分比(呼び出し側の規約: run_bending の
-        # `ratios.append(prev_el / element_mm)` と同じ並び)。d0 も同じ2点の差なので、
-        # d0とペアにする比は ratios[i](1つ後ろのratios[i+1]ではない)——QAで指摘された
-        # 「d1側の比をd0/d1の対数比に使っていた」ずれを修正。比が全区間で一定でない場合
-        # (このモジュールの呼び出し元は等比細分を保証しない)、この3点式の次数推定は近似に
-        # なる(docstringのとおり「収束していない/発散気味の列で無意味な外挿値を出さない」
-        # ための閾値チェックはそのまま機能する)。
+        # **ratios[i] は values[i]→values[i+1] 間の細分比**(run_bending の `ratios.append(prev_el / element_mm)`
+        # と同じ並び)。d0 も同じ2点の差なので、d0 とペアにする比は ratios[i](ratios[i+1] ではない)。
+        # 比が全区間で一定でない場合(呼び出し元は等比細分を保証しない)この3点式の次数推定は近似になるが、
+        # 発散気味の列で無意味な外挿値を出さないための閾値チェックはそのまま機能する。
         ratio = ratios[i] if i < len(ratios) else ratios[-1]
         d0 = abs(values[i + 1] - values[i])
         d1 = abs(values[i + 2] - values[i + 1])

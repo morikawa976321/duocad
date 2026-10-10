@@ -1,12 +1,9 @@
 /**
  * ファイル一覧のサムネイルを撮る(128px四方のPNG。背景は透明)。
  *
- * **画面のシーンは描かない。** 形状(`BufferGeometry`)だけを借りて専用の小さなシーンに並べ、
- * 材質・光・カメラはここで持つ —— 選択の強調・ホバー・断面のクリップ・グリッドやスケッチの
- * 重ね表示が写り込まず、撮ったときの視点にも左右されない(いつ撮っても同じ向きの絵になる)。
- *
- * 呼び手(`viewport.ts`)は見えている立体のメッシュを渡すだけで、撮る時機は
- * `documentFiles.svelte.ts` が決める。
+ * 画面のシーンは描かない。形状(`BufferGeometry`)だけを借りて専用のシーンに並べ、材質・光・カメラはここで持つ
+ * (選択の強調・断面のクリップ・グリッド等が写り込まず、いつ撮っても同じ向きの絵になる)。
+ * 撮る時機は `documentFiles.svelte.ts` が決める。
  */
 import * as THREE from 'three'
 import { BASE_COLOR, EDGE_COLOR, HOME_VIEW_OFFSET } from './viewportConstants'
@@ -29,15 +26,11 @@ export interface Thumbnailer {
 
 export function createThumbnailer(renderer: THREE.WebGLRenderer): Thumbnailer {
   const pixels = THUMBNAIL_SIZE * SUPERSAMPLE
-  // **sRGBの描画先にする**。three は描画先へは線形のまま書くので、素の8bitの描画先から
-  // 読むと画面より暗い絵になる。sRGBの描画先ならGPUが書き込み時に変換し、読み出しは
-  // 変換後の値を返す。
+  // sRGBの描画先にする。three は描画先へ線形のまま書くので、素の8bitから読むと画面より暗くなる。
   const target = new THREE.WebGLRenderTarget(pixels, pixels, { colorSpace: THREE.SRGBColorSpace })
   const scene = new THREE.Scene()
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10)
-  // 光は画面(`viewport.ts`)と同じ組: 視点に付けた平行光 + 天地の半球光。
-  // 平行光の向きは「光の位置 → `target`」で決まる。`target` を立体の中心に置き、光の位置は
-  // 立体の大きさに合わせて離す(寸法の桁が違っても同じ向きから当たるように)。
+  // 光は画面(`viewport.ts`)と同じ組。`target` を立体の中心に置き、光の位置は立体の大きさに合わせて離す。
   const headlight = new THREE.DirectionalLight(0xffffff, 1.6)
   const aim = new THREE.Object3D()
   headlight.target = aim

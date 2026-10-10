@@ -1,16 +1,4 @@
-"""境界と規律 —— 「問い合わせ層をインタフェースにする」「OCPを叩くのはカーネル層だけ」。
-
-verbがOCP/build123dを直接叩き始めるのを防ぐための唯一の安全網。ソースを静的に走査するので
-OCP/build123dの実行環境が無くても走る。
-
-検査の実効性について:
-- `duocad/` 配下を **再帰的に** 走査する(サブパッケージを作って逃げられない)。
-- `import OCP` / `import OCP.X` / `from OCP import X` / `from OCP.X import Y` に加え、
-  **動的import**(`importlib.import_module("OCP.X")` / `__import__("OCP")`)も検出する。
-  静的importだけを見ていると、境界を破る最も安直な逃げ道(文字列でのimport)が素通りする。
-- 免除は **パッケージ直下からの相対パスで名指し**する(ファイル名一致ではない)。
-  ファイル名だけで免除すると `duocad/verbs/kernel.py` を作れば境界を無効化できてしまう。
-"""
+"""境界と規律 —— 「問い合わせ層をインタフェースにする」「OCPを叩くのはカーネル層だけ」。"""
 from __future__ import annotations
 
 import ast
@@ -65,10 +53,7 @@ def _dotted_name(node: ast.AST) -> str:
 
 
 def _imported_module_roots(py_file: Path) -> set[str]:
-    """py_fileが参照するトップレベルモジュール名の集合。
-
-    関数内import・条件付きimport・動的import(importlib.import_module / __import__)を含む。
-    """
+    """py_fileが参照するトップレベルモジュール名の集合。"""
     tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
     roots: set[str] = set()
     for node in ast.walk(tree):
@@ -156,11 +141,7 @@ def test_boundary_scan_detects_every_import_form(tmp_path):
 
 
 def test_boundary_scan_covers_every_source_file():
-    """走査対象がサブパッケージを含む全ソースであること(免除は名指しした相対パスのみ)。
-
-    走査が0件になっていたら上の境界テストは常に緑で何も検査していないので、
-    既知のモジュールと免除に名指ししたファイルを取りこぼしていないことを固定する。
-    """
+    """走査対象がサブパッケージを含む全ソースであること(免除は名指しした相対パスのみ)。"""
     scanned = {rel for rel, _ in _source_files()}
     expected = {
         "__init__.py",

@@ -1,18 +1,4 @@
-"""`mirror_sketch_entities` / `mirror_body` の契約 —— 「鏡像反転コピーを作る」1点だけの verb。
-
-固定するのは:
-
-- **どちらも常に複製を作る**(move側と違い in-place反転の口は無い)
-- スケッチ: 対象は選択の図形そのもの(点単位は扱わない)。軸は既存の線分1本への参照で、
-  対象の選択とは別引数(共有選択集合には混ぜない)
-- スケッチ: 長方形は**どんな軸でも長方形1つのまま**鏡映できる(`params` の `angle` が
-  向きを持つ)。検算は4隅の集合で行い、`angle` の値そのものは期待値にしない
-- ソリッド: 対象は選択中の面/辺/頂点が属するボディ。鏡映面は base_plane(XY/XZ/YZ)か
-  plane_face(既存の平面な面)のどちらか一方(両方/どちらも無しは ValueError)
-- ソリッド: 非平面の面を plane_face に渡すと ValueError
-- どちらも undo で複製だけが消え、元は触らない
-- 確定後に選択は全リセットする
-"""
+"""`mirror_sketch_entities` / `mirror_body` の契約 —— 「鏡像反転コピーを作る」1点だけの verb。"""
 from __future__ import annotations
 
 import math
@@ -52,9 +38,6 @@ def _curved_face_index(shape) -> int:
     raise AssertionError("非平面の面が無い(テストの前提が崩れている)")
 
 
-# --------------------------------------------------------------------------------------
-# mirror_sketch_entities
-# --------------------------------------------------------------------------------------
 def test_mirroring_a_line_reflects_its_endpoints(session: Session) -> None:
     sketch_id = session.sketch_create("XY")["sketch_id"]
     axis_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
@@ -248,10 +231,7 @@ def test_a_target_lying_on_the_axis_is_refused(session: Session) -> None:
 
 
 def test_the_axis_may_be_one_of_the_targets(session: Session) -> None:
-    """軸自身が対象の選択に混ざっていてもよい(自分自身を軸にしつつ他を鏡映する)。
-
-    軸に使った図形自身は対象から黙って外れる(鏡映しても自分自身と重なるだけなので)。
-    """
+    """軸自身が対象の選択に混ざっていてもよい(自分自身を軸にしつつ他を鏡映する)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     axis_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
     other_id = session.add_line(sketch_id, [1.0, 2.0], [3.0, 4.0])["entity_id"]
@@ -309,9 +289,6 @@ def test_the_selection_resets_after_a_sketch_mirror(session: Session) -> None:
     assert session.get_selection()["items"] == []
 
 
-# --------------------------------------------------------------------------------------
-# mirror_body
-# --------------------------------------------------------------------------------------
 def test_mirroring_a_body_with_a_base_plane(session: Session) -> None:
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])

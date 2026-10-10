@@ -294,12 +294,12 @@ def build_surface_from_mask(
     n_iter: int = DEFAULT_ITERS,
     pad_width: int = DEFAULT_PAD,
 ) -> MeshResult:
-    """確定済みの二値マスクを直接メッシュ化する(計画書§3・§8段階5の唯一の入口)。
+    """確定済みの二値マスクを直接メッシュ化する(段階5の唯一の入口。`docs/TOPOPT.md`「二値探索の方式と契約」)。
 
     保持/除外の塗り直しも浮島除去も**しない**。呼び出し側が渡すマスクは既に `acceptance.inspect` の6条件に
     合格し、`binary_search.resolve_islands` で単一連結成分に絞られている確定マスクである
     ——ここでもう一度どちらかを掛けると、探索が確定した形状を検査を経ずに書き換えることになる
-    (計画書§3「候補ごとのメッシュ生成・STL出力は廃止する」と表裏、確定後の1回だけがこの入口)。
+    (`docs/TOPOPT.md`「二値探索の方式と契約」の「候補ごとのメッシュ生成・STL出力は無く」と表裏、確定後の1回だけがこの入口)。
     """
     t0 = time.perf_counter()
     rho = np.asarray(mask, dtype=np.float64)

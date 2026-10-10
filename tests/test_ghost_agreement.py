@@ -3,9 +3,6 @@
 幽霊は TS(`entityKinds.ghostCopies` / `ghostArgs` / `viewportTypes.bodyGhostMatrix`)、確定結果は
 Python のコアが別々に計算する。落ちたら**プレビューと違うものが出来る**(反復の刻み・回転の符号・
 点だけ動かす規則・軸の位置のどれかが片方だけ変わった)。
-
-TS 側は `tests/eval_ghosts.mjs` を node で実際に走らせ、**サーバが配る形そのまま**(`sketches_state` /
-`get_selection` / `edges` / `vertices`)を渡す。
 """
 from __future__ import annotations
 
@@ -52,9 +49,6 @@ def _entity(session: Session, sketch_id: str, entity_id: str) -> dict:
     return {"kind": kind, "params": sketch.entity_params(session.document, sketch_id, entity_id)}
 
 
-# --------------------------------------------------------------------------------------
-# 反復: 幽霊は「増える分」だけ。元を足すと、コアが展開した全量と同じになる
-# --------------------------------------------------------------------------------------
 def _pattern_agrees(session: Session, sketch_id: str, source: str, verb: str, args: dict, apply) -> int:
     ghosts = _ghost(session, verb, {"entities": [source], **args}, editing=sketch_id)["sketch"]
     original = _entity(session, sketch_id, source)
@@ -98,9 +92,6 @@ def test_a_circular_pattern_of_a_tilted_rectangle_keeps_rectangles(session: Sess
     )
 
 
-# --------------------------------------------------------------------------------------
-# move_sketch_entities: 幽霊は、確定後のその図形と同じ params
-# --------------------------------------------------------------------------------------
 def _line(session: Session) -> tuple:
     sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_line(sketch_id, [60.0, 0.0], [80.0, 10.0])["entity_id"]
@@ -161,9 +152,6 @@ def test_no_sketch_ghost_is_drawn_when_the_screen_cannot_know_the_result(session
     assert _ghost(session, "move_sketch_entities", {"copy": False, **args}, editing=sketch_id)["sketch"] == []
 
 
-# --------------------------------------------------------------------------------------
-# move_body(mode="rotate"): 幽霊に掛かる行列が、コアの回転と同じ場所へ頂点を運ぶ
-# --------------------------------------------------------------------------------------
 def _sorted_points(points) -> list:
     return sorted([round(value, 6) + 0.0 for value in point] for point in points)
 

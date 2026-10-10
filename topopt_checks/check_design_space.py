@@ -5,11 +5,11 @@
 
 **このファイルが合否そのものである。** どれか1つでも落ちればプロセスは非ゼロで終わる。
 
-- **[1]〜[3]**: 塊と面アンカーの対象ソリッドの分離(`20260903-2216`)。
-- **[5]〜[10]**: 固定凸包による導出(`design_space.derive`。2026-09-16)。材料量によらず
+- **[1]〜[3]**: 塊と面アンカーの対象ソリッドの分離。
+- **[5]〜[10]**: 固定凸包による導出(`design_space.derive`)。材料量によらず
   1回で決まる塊の性質と、条件ごとの接続を見る。
 - **[11]**: 実物(hanger)の基準実行との突き合わせ。`--run` で実行フォルダを明示したときだけ走る。
-- **[14]**: 空の条件面のメッセージ(`20260904-1556`)。
+- **[14]**: 空の条件面のメッセージ。
 
 [1]〜[3] の構成:
 
@@ -20,9 +20,7 @@
 3. **はみ出しが例外になる** — 保持ソリッドが塊から出る配置で `OutsideDesignSpaceError` が
    上がり、メッセージにはみ出し要素数が入る。
 
-（旧[4]「塊が入力ソリッドに縛られていない」— 大きい箱の塊にSIMPを回して外に材料が
-できることを見る合成問題 — は、同じ性質を[5]が固定凸包 `derive()` の実経路でより忠実に
-見ているため削除した。）
+[4] は欠番([5]が固定凸包 `derive()` の実経路で同じ性質を見ている)。
 
 [5]〜[10] の構成(固定凸包):
 
@@ -105,8 +103,7 @@ def check_mask_is_the_design_space() -> None:
     print("\n[1] 塊を bool マスクで与えられる(ソリッド由来でない)")
     grid, soup = bracket_grid(6.0, 20)
     # ソリッドの占有とは似ても似つかないマスク(市松に間引いた箱)にして、
-    # 「どこかで占有計算に差し替えられていたら必ず落ちる」ようにする。
-    # OCCT を通さない(`occupancy()` を使うと、塊がソリッド由来でないことを確かめられない)。
+    # どこかで占有計算に差し替えられていたら必ず落ちるようにする(`occupancy()` は使わない)。
     mask = ds.box_mask(grid, DESIGN_BOX_LO, DESIGN_BOX_HI)
     mask[::2, ::2, ::2] = False
     model = vx.model_from_design_mask(grid, mask, anchor_shape=soup)
@@ -282,10 +279,8 @@ def check_outside_raises() -> None:
     )
 
 
-# [4]の旧検査(「塊を大きい箱にすると材料がブラケットの外へ出る」)は
-# `anchor.run_pipeline`/SIMPを直接叩く合成問題だった。同じ性質([5]の「本丸」注記)を
-# 固定凸包 `derive()` の実経路(§5 `check_case1_end_to_end`)がより忠実な題材
-# (4条件から導出した本物の塊)で見ているため、削除して[5]に一本化した。
+# [4] は欠番。「塊を大きい箱にすると材料がブラケットの外へ出る」性質は、固定凸包 `derive()` の
+# 実経路([5])が見ている。
 
 # ===========================================================================
 # 固定凸包: 4条件だけから塊を1回で導出する(`design_space.derive`)
@@ -310,8 +305,7 @@ def case1_space():
 def check_case1_end_to_end() -> None:
     print("\n[5] 4条件だけ(設計空間ソリッド無し)で塊が出て、端から端まで通る")
     cond, space = case1_space()
-    # `Conditions` に設計空間ソリッドを入れる場所が無いことを型で見る。**渡していない**の
-    # 根拠を「渡さなかった」という自己申告に置かない。
+    # `Conditions` に設計空間ソリッドを入れる場所が無いことを型で見る。
     field_names = {f.name for f in dataclasses.fields(ds.Conditions)}
     check(
         "条件は4条件 + ボディの外接箱だけ(設計空間ソリッドを受け取る口も荷重の大きさも無い)",
@@ -339,12 +333,11 @@ def check_case1_end_to_end() -> None:
     from duocad.topopt import binary_search as bs
     from duocad.topopt import mesh as topo_mesh
 
-    # **検索の実行だけは別の解像度で導出し直す。** `CASE1_LONG_AXIS=14` は §6-10 の他の
-    # 幾何検査に合わせた値で、このまま `find_initial_feasible` に渡すと全要素材料の
-    # marching cubes メッシュが watertight にならず(実測)、探索が毎回 `infeasible`
-    # になる。`elements_long_axis` を 14/20/24/28 で振ると軒並み同じ理由で落ち、
-    # 18 のときだけ最初の候補(全要素材料)がそのまま watertight・合格になる
-    # (このデモ形状固有の実測値 — `derive()` 自体の検査[5]-[10]には影響しない)。
+    # **検索の実行だけは別の解像度で導出し直す。** `CASE1_LONG_AXIS=14` のまま
+    # `find_initial_feasible` に渡すと全要素材料の marching cubes メッシュが watertight に
+    # ならず(実測)、探索が毎回 `infeasible` になる。`elements_long_axis` を 14/20/24/28 で
+    # 振ると同じ理由で落ち、18 のときだけ最初の候補がそのまま合格になる
+    # (このデモ形状固有の実測値。`derive()` 自体の検査[5]-[10]には影響しない)。
     search_space = ds.derive(cond, elements_long_axis=18)
     conditions = bs.SearchConditions(
         grid=search_space.grid,
@@ -354,8 +347,8 @@ def check_case1_end_to_end() -> None:
         forces=[(0.0, 0.0, -1.0)] * len(search_space.load_faces),
         preserves=[("keep", vx.unwrap(cond.keep))],
         excludes=[],
-        # 収束や安全率の質を見る検査ではない(それは check_optimize_wiring.py / check_stress.py
-        # の役目)ので、初期合格が速く見つかるよう目標安全率は緩く取る。
+        # 収束や安全率の質は見ない(check_optimize_wiring.py / check_stress.py の役目)ので、
+        # 初期合格が速く見つかるよう目標安全率は緩く取る。
         target_safety_factor=0.1,
     )
     t0 = time.perf_counter()
@@ -382,8 +375,7 @@ def check_case1_end_to_end() -> None:
     )
 
     # **本丸**: 条件のどのソリッドにも入っていない空間に材料が置かれた = 塊が条件から作られ、
-    # かつ探索の初期合格モデルがその中で自由に形を持てる。ここが0だと「保持ソリッドを
-    # 塗っただけ」になる。
+    # 探索の初期合格モデルがその中で自由に形を持てる。0だと「保持ソリッドを塗っただけ」。
     keep_occ, _ = vx.occupancy(
         vx.triangles_from_shape(vx.unwrap(cond.keep), deviation=search_space.stats["deviation"]),
         search_space.grid,
@@ -417,8 +409,7 @@ def check_case1_keep_inside() -> None:
         outside == 0 and dropped == 0,
         f"塊の外に出た保持 {outside} 要素 / voxelize が捨てた {dropped} 要素",
     )
-    # **「はみ出し0」だけでは足りない。** 解像度が粗すぎて保持が1要素も立たないと、はみ出しも
-    # 0になって検査が自明に通る。
+    # **「はみ出し0」だけでは足りない。** 保持が1要素も立たなくてもはみ出しは0になる。
     keep_elements = int(np.count_nonzero(space.model.keep))
     check(
         "保持が塊の中で1要素以上に表現されている(はみ出し0が自明に通るのを防ぐ)",
@@ -443,9 +434,8 @@ def check_case1_keep_inside() -> None:
     )
     RESULTS["case1_keep_elements"] = keep_elements
 
-    # **黙って切り詰めないこと。** 除外が保持に重なると、そのセルは CAD の保持と除外が交わって
-    # いる。格子で除外を保持で埋め戻すと最終ブーリアン(除外優先)と違う塊を最適化することに
-    # なるので、入力矛盾として名前付きで落とす。
+    # **黙って切り詰めないこと。** 格子で除外を保持で埋め戻すと、最終ブーリアン(除外優先)と
+    # 違う塊を最適化することになるので、入力矛盾として名前付きで落とす。
     from build123d import Box, Pos
 
     eater = Pos(-30, 0, 0) * Box(10, 30, 30)  # 固定側パッドを丸ごと覆う除外
@@ -933,12 +923,11 @@ def check_case1_connectivity() -> None:
 # ===========================================================================
 # 11. 実物(hanger)の基準実行との突き合わせ(`--run <実行フォルダ>` を明示したときだけ)
 # ===========================================================================
-# 余白比率 0.20・距離(ミンコフスキー和)の膨張(どちらも 2026-09-16 本人判断)で取り直した基準値。
+# 余白比率 0.20・距離(ミンコフスキー和)の膨張で取り直した基準値。
 # 理由なく更新しない —— セル数が違ったら格子・箱・境界判定の差を説明すること
-# (docs/TOPOPT.md「固定凸包による設計空間(2026-09-16)」)。
-# 余白 0.25・平面オフセットの予備計測(`analysis/convex_domain_proposal.json`)は 522,424 / 535,254 /
-# 成分 [522,424, 12,830] / 格子 [78, 138, 109]。0.20・平面オフセットでは 389,213(条件のない孤立成分は
-# 凸包の外に出て消える)。距離にすると角・稜が丸くなり 367,390。
+# (docs/TOPOPT.md「固定凸包による設計空間」)。
+# 参考: 余白 0.25・平面オフセットは 522,424 / 成分 [522,424, 12,830] / 格子 [78, 138, 109]、
+# 0.20・平面オフセットは 389,213、距離にすると角・稜が丸くなり 367,390。
 HANGER_EXPECTED = {
     "20260914T133910-1d5adc93ee4d": {
         "connected": 367_390,
@@ -1045,8 +1034,8 @@ def check_empty_condition_face_warning() -> None:
     empty_face = empty[0]
     big_face = big[0]
 
-    # --- 14-1: 荷重面が空(anchor.run_pipeline は削除済みなので、製品経路が実際に
-    # 呼ぶ AnchorTable.condition_face_diagnoses / format_condition_face_warning を直接見る) ---
+    # --- 14-1: 荷重面が空(製品経路が呼ぶ AnchorTable.condition_face_diagnoses /
+    # format_condition_face_warning を直接見る) ---
     diag = scaffold_table.condition_face_diagnoses([big_face], [empty_face])
     check(
         "14-1 condition_face_diagnoses に荷重側の診断が1件載る",
@@ -1114,9 +1103,7 @@ def check_empty_condition_face_warning() -> None:
         f"{normal_diag}",
     )
 
-    # --- 14-5: 検出力 — 診断を経由せず空の面へ直接アクセスすると、
-    # 元の _require_nodes 例外(節点が無い)で落ちる(診断はこれを防ぐのではなく
-    # 先回りして分かりやすく説明するだけ、という契約の確認) ---
+    # --- 14-5: 検出力 — 診断を経由せず空の面へ直接アクセスすると、元の _require_nodes 例外で落ちる ---
     raised = ""
     try:
         scaffold_table.load_vector([empty_face], (0.0, 0.0, -1.0))
@@ -1154,8 +1141,7 @@ def main() -> int:
     ]
     if args.run:
         sections.append(lambda: check_hanger_run(args.run))
-    # **1件が例外で落ちても残りを走らせる**(`catch=True`)。実装を壊したときに最初の1件で止まると、
-    # 何がどこまで壊れているかが1周では分からない(`check()` と同じ方針を関数の粒度でも取る)。
+    # **1件が例外で落ちても残りを走らせる**(`catch=True`)。最初の1件で止まると壊れ具合が1周では分からない。
     return run(
         CHECK,
         "check_design_space.py : 塊(設計空間)の受入検査\n"
