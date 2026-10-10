@@ -706,21 +706,10 @@ def _min_element_size(lo, hi, volume: float) -> float:
 
 
 # --------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------
-# デバッグ表示の配信(`?debug=space` / `?debug=anchors` / `?voxel=1`)
-#
-# **製品の既定の画面には1ビットも出ない。** 画面がURLパラメータを見て `debug_kinds` を
-# 頼んだときだけ、`run()` がここを通って `debug(event)` を呼ぶ。頼まれなければ配列を
-# 1本も作らない(費用ゼロ)。
-#
-# **デモ題材に固定されていない**(このタスクの完了条件2) —— 材料はすべて
-# **いま走っている最適化そのもの**(利用者の文書の条件から導いた `DesignSpace` と、
-# 実際に解いた密度場)から取る。固定の合成題材カタログを参照する経路はここに無い。
-#
-# 座標は**ワールドmm**である。要素 (i,j,k) の中心は
-# `origin + spacing*(i+0.5, j+0.5, k+0.5)`、その角の節点 (i,j,k) は `origin + spacing*(i,j,k)`
-# ——「セル中心の規約」(`duocad/topopt/mesh.py:169`)そのままで、画面側では足し引きしない
-# (両側で足すと半要素ずれる)。
+# デバッグ表示の配信(`?debug=space` / `?debug=anchors` / `?voxel=1`)。頼まれたときだけ `run()` がここを通って
+# `debug(event)` を呼び、頼まれなければ配列を作らない。材料はデモ題材ではなく走っている最適化そのものから取る。
+# 座標はワールドmm。要素 (i,j,k) の中心は `origin + spacing*(i+0.5, j+0.5, k+0.5)`、角の節点は
+# `origin + spacing*(i,j,k)`(セル中心の規約 `duocad/topopt/mesh.py:169`)。画面側で足し引きしない(両側で足すと半要素ずれる)。
 # --------------------------------------------------------------------------------------
 def _debug_stride_for(mask, limit: int) -> int:
     """`mask[::s,::s,::s]` の立っている数が `limit` 以下になる最小の `s`。"""
@@ -736,10 +725,8 @@ def _debug_stride_for(mask, limit: int) -> int:
 
 
 def _debug_voxel_payload(kind: str, stage: str, grid, mask, *, limit: int) -> dict:
-    """立っている要素の**通し添字**(C順 `i*(ny*nz) + j*nz + k`)を配る。
-
-    座標そのものではなく添字を配るのは、150,000要素で座標だと float が45万個になるため
-    (添字なら15万個)。画面は `grid.shape` から `(i,j,k)` へ戻して中心を計算する。
+    """立っている要素の通し添字(C順 `i*(ny*nz) + j*nz + k`)を配る。
+    座標でなく添字なのは配る量を1/3にするため。画面は `grid.shape` から `(i,j,k)` へ戻す。
     """
     import numpy as np
 
@@ -763,11 +750,8 @@ def _debug_voxel_payload(kind: str, stage: str, grid, mask, *, limit: int) -> di
 
 
 def _debug_anchor_payload(stage: str, space, table=None) -> Optional[dict]:
-    """拘束面・荷重面に**実際に割り当たった格子節点**のワールド座標。
-
-    出所は `table`(製品経路では探索が使う確定表。`_check_anchor_centroids` が距離を測るのと
-    同じ表)。省くと導出が持ち帰った `DesignSpace.table`。表が無い塊(検査が直接組んだもの)では
-    `None` を返す。
+    """拘束面・荷重面に実際に割り当たった格子節点のワールド座標。
+    出所は `table`(製品経路では探索が使う確定表)、省くと `DesignSpace.table`。表が無い塊では `None`。
     """
     import numpy as np
 
@@ -777,9 +761,7 @@ def _debug_anchor_payload(stage: str, space, table=None) -> Optional[dict]:
         return None
     node_grid = table.node_grid
     out: dict = {"kind": "anchors", "stage": stage, "grid": space.grid.as_dict()}
-    # **側ごとに1つの点群へまとめる**(面ごとに分けない)。画面が描くのは「拘束側の節点」と
-    # 「荷重側の節点」の2色で、面の別は色に出ない —— 分けて配ると受け取る側に
-    # 面ごとのループが増えるだけで、見えるものは同じになる。
+    # 側ごとに1つの点群にまとめる(画面は拘束側・荷重側の2色で、面の別は色に出ない)。
     for key, faces in (("fixed", space.fixed_faces), ("load", space.load_faces)):
         chunks = []
         area = 0.0
@@ -802,10 +784,7 @@ def _debug_anchor_payload(stage: str, space, table=None) -> Optional[dict]:
 
 
 class _DebugSink:
-    """`run()` からデバッグ配信を出す口。**頼まれた種類だけ**を作る。
-
-    `kinds` に無い種類は payload を組み立てるところまで行かない —— 配列を作る費用
-    (数十万要素の `argwhere`)を、頼まれてもいないのに払わないため。
+    """`run()` からデバッグ配信を出す口。頼まれた種類だけ payload を作る(数十万要素の `argwhere` を払わないため)。
     """
 
     def __init__(
@@ -885,11 +864,9 @@ def _run(
     (`thin_voids`)→ 最終確定マスクのメッシュ化 → 保持・除外のメッシュ集合演算 → メッシュボディとして文書へ
     (単一の製品経路。`docs/contracts/topopt-binary-search.md`)。
 
-    **元のボディは1つも消さない・変えない。** 足すのは1つだけで、その `body_id` を返す。
-    **探索候補の評価中はメッシュ化・STL出力を呼ばない**(`docs/TOPOPT.md`「二値探索の方式と契約」) —— 後段
-    (`duocad.topopt.mesh.build_surface_from_mask` 以降)へ渡るのは
-    `binary_search.find_best_feasible` が返す最終確定マスク(`best_feasible`)に、平滑化で潰れる 1×1 の空隙を
-    埋めたものだけである(埋めたときは6条件を取り直し、`safety_factor` はその値。探索時の値は `search_safety_factor`)。
+    元のボディは変えず、足すのは1つだけ(その `body_id` を返す)。探索候補の評価中はメッシュ化・STL出力を呼ばない
+    (`docs/TOPOPT.md`「二値探索の方式と契約」)。後段へ渡るのは `binary_search.find_best_feasible` の最終確定マスクに
+    1×1 の空隙を埋めたものだけ(埋めたときは6条件を取り直し、`safety_factor` はその値。探索時の値は `search_safety_factor`)。
 
     戻り値(`state` で分岐すること。`"done"` 以外では `body_id` は `None`):
 
@@ -919,50 +896,34 @@ def _run(
          "final_check": topopt.final_check.inspect の戻り | None,   # 強度と、つなぎ目の幅の診断(3値。適合は出さない)
          "seconds": float}
 
-    `target_safety_factor` は利用者が指定した実際の目標、`search_target_safety_factor` は探索(と6条件の
-    `safety`)に渡した目標(= 実際の目標 × `search_target_factor`)。**`safety_factor` は探索の格子での値**で、
-    探索時の目標に対する合否であって、実際の目標に対する安全率の実測ではない。探索の代表応力は部材域の固定物理体積の上位値
-    (`_build_search_conditions`)。**`final_safety_factor` は完成形を探索の格子の 1/3(大きい題材は 1/2)で解き直し、部材域の
-    表面の面中心の最大応力で割った値**で、係数を掛けずに実際の目標と比べる。割ったときは `FINAL_UNSAFE_BLOCKS` が真なら
-    `state="final_unsafe"` で結果を足さず(2026-10-07 本人決定)、偽(既定)なら警告を付けて足す(`topopt.final_check`)。
+    `target_safety_factor` は利用者の実際の目標、`search_target_safety_factor` は探索(と6条件の `safety`)に渡した目標
+    (= 実際の目標 × `search_target_factor`)。`safety_factor` は探索の格子での値で、探索時の目標に対する合否であって
+    実際の目標に対する実測ではない。`final_safety_factor` は完成形を探索の格子の 1/3(大きい題材は 1/2)で解き直し、
+    部材域の表面の面中心の最大応力で割った値で、係数を掛けずに実際の目標と比べる。割ったときは `FINAL_UNSAFE_BLOCKS` が
+    真なら `state="final_unsafe"` で結果を足さず(2026-10-07 本人決定)、偽(既定)なら警告を付けて足す(`topopt.final_check`)。
 
-    `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも
-    m 立方が入らず保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
-    既定でも m≥2 の制約が掛かる(`_resolve_min_width`)ので、影響が無ければ 0 になるだけで、
-    「最小幅が無効だから 0」という状態はもう無い。
+    `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも m 立方が入らず
+    保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
 
-    後半の `state`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
-    `boundary_mapping_failed`)は `binary_search.SearchResult.status` を**そのまま**渡したもの
-    (段階4の契約「製品配線側はこの値をそのままUI/ログへ渡せばよい」)。`boundary_mapping_failed`
-    は探索の前、確定表の検証(`_map_boundary_conditions`)で不成立になったときにもここから返す
-    (探索の入口検査と同じ語)。
+    後半の `state`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient` / `boundary_mapping_failed`)は
+    `binary_search.SearchResult.status` をそのまま渡したもの。`boundary_mapping_failed` は探索の前、確定表の検証
+    (`_map_boundary_conditions`)で不成立になったときにもここから返す。
 
-    **戻り値は素の値だけでできている**(`json.dumps` がそのまま通る)。画面(`20260904-1705`)は
-    これをWebSocketへそのまま載せられる —— `DesignSpace` や `AnchorTable` のような
-    実体をここから外へ出さない(出すと配れる形が壊れ、キャッシュの持ち主も増える)。
+    戻り値は素の値だけでできている(`json.dumps` が通り、画面がWebSocketへそのまま載せられる)。
+    `DesignSpace` や `AnchorTable` のような実体は外へ出さない。
 
-    **デバッグ表示**は `debug(event: dict)` + `debug_kinds`(`DEBUG_KINDS` の部分集合)。
-    **頼まれたときだけ**塊(`space`)を導出直後に1回(`stage="derive"`)、面アンカーの節点
-    (`anchors`)を境界条件の確定直後に1回(`stage="mapping"`。探索・FEMが実際に使う確定表の
-    節点であって、導出が接続の確認に使った幾何の表ではない)、最終確定マスク(`rho`。値は0/1の
-    二値)を探索の後に1回(`stage="final"`)配る —— 画面の `?debug=space` / `?debug=anchors` /
-    `?voxel=1` の材料である。塊は探索を通して1つなので、最初と最後で違う塊を出すことはない。
-    頼まれなければ配列を1本も作らないので、既定の実行の費用は1ビットも増えない。
-    **戻り値には入れない**(素の値だけという契約を保つのと、結果メッセージが数MBに
-    膨らむのを避けるため)。中身は `_DebugSink` の各メソッド、座標はワールドmm。
+    デバッグ表示は `debug(event: dict)` + `debug_kinds`(`DEBUG_KINDS` の部分集合)。頼まれたときだけ、塊(`space`)を
+    導出直後に1回(`stage="derive"`)、面アンカーの節点(`anchors`。探索・FEMが使う確定表の節点)を境界条件の確定直後に
+    1回(`stage="mapping"`)、最終確定マスク(`rho`。0/1の二値)を探索の後に1回(`stage="final"`)配る。
+    戻り値には入れない(結果メッセージが数MBに膨らむため)。
 
-    **進捗**は `progress(event: dict)`(下記 `_ProgressPump`)。**中断**は
-    `should_cancel()` が真を返した時点で `OptimizeCancelled` を投げて降りる。
-    `find_best_feasible` 自体の `is_cancelled` 引数にも同じ callable を渡す。探索は評価と評価の
-    あいだ(段階3は候補ブロックを1つ調べる前ごと、段階4は削る候補を作る前ごと)で中断を見るが、
-    **FEM評価1回の途中では降りない**(hanger 2.4mm では1回 約100〜137秒)。
+    進捗は `progress(event: dict)`(`_ProgressPump`)。中断は `should_cancel()` が真になった時点で `OptimizeCancelled` を
+    投げて降りる(`find_best_feasible` の `is_cancelled` にも同じ callable を渡す)。探索は評価と評価のあいだでしか
+    中断を見ず、FEM評価1回の途中では降りない(hanger 2.4mm では1回 約100〜137秒)。
 
-    失敗は例外で上がる。**握り潰さないこと** —— `OptimizeInputError`(条件が足りない・
-    この版で扱えない)/ `FaceMappingError`(面添字の対応が壊れている。**RuntimeError 派生**)/
-    `OptimizeCancelled`(中断)と、下の層からの `design_space.DesignSpaceDisconnectedError`
-    (全条件を含む連結成分が無い)/ `DesignSpaceTooSmallError` / `DesignSpaceConflictError`
-    (保持と除外が重なっている)/ `DesignSpaceGeometryError`(凸包が起こせない)はどれも
-    「利用者が次に何をすればよいか」を文面に持っている。
+    失敗は例外で上がる。握り潰さないこと —— `OptimizeInputError` / `FaceMappingError`(RuntimeError 派生)/
+    `OptimizeCancelled` と、下の層の `design_space.DesignSpaceDisconnectedError` / `DesignSpaceTooSmallError` /
+    `DesignSpaceConflictError` / `DesignSpaceGeometryError` は、どれも「利用者が次に何をすればよいか」を文面に持っている。
     """
     from .topopt import design_space as ds
 
@@ -972,8 +933,7 @@ def _run(
     factor = float(opts.search_target_factor)
     bundle = build_conditions(doc)
     limits = resolution_limits(doc)
-    # 利用者が梯子の外の値を渡しても、`derive` が実際に作る格子の要素サイズ(要求値以下)に揃える。
-    # 梯子の値は既にその形なので変わらない。
+    # 梯子の外の値を渡されても、`derive` が実際に作る格子の要素サイズ(要求値以下)に揃える。
     spacing = _snap_to_grid(
         limits["bbox_min"], limits["bbox_max"], _resolve_element_size(limits, opts.element_size_mm)
     )
@@ -991,9 +951,7 @@ def _run(
     dbg = _DebugSink(debug, debug_kinds)
     pump.emit(phase="prepare", message=f"要素サイズ {spacing:.4g} mm で塊を導出する")
 
-    # **塊はここで1回だけ導出し、探索の全候補がこの `space` を使う。** 材料量の探索範囲は
-    # 呼び出し側が決める契約(`20260904-1437`)なので、塊の容量と保持ソリッドが占める体積を
-    # ここで測る。導出は材料量を受け取らないので「量を決めるために量が要る」堂々巡りは無い。
+    # 塊はここで1回だけ導出し、探索の全候補がこの `space` を使う。
     space = ds.derive(bundle.conditions, spacing=spacing)
     pump.check()
     _require_design_elements_within_limit(space.element_count, float(space.grid.spacing))
@@ -1002,8 +960,7 @@ def _run(
         message=f"塊 {space.element_count} 要素(格子 {space.grid.shape})",
         design_elements=space.element_count,
     )
-    # **塊はここで1回だけ配る**(`?debug=space`)。探索の全候補が同じ塊を使うので、最後に別の塊を
-    # 配り直すことはない —— 最後に届くのは密度場 `rho` だけ。アンカーは確定表ができてから配る。
+    # 塊は1回だけ配る(`?debug=space`)。最後に届くのは密度場 `rho` だけ。
     dbg.space("derive", space)
 
     from .topopt import binary_search
@@ -1027,10 +984,8 @@ def _run(
         "anchor_check": None,
     }
 
-    # **条件面が本番の解像度で空になっていないか。** 導出が作った面アンカーの表から自分で見る
-    # (`design_space.connect_conditions` は空のときに判定を降りるだけで、上へは伝えない)。
-    # 運び方は `20260904-1556` と同じ —— 診断を戻り値へ積み、1文の警告を付け、
-    # 探索(`binary_search.find_best_feasible`)は呼ばずに早期return。
+    # 条件面が本番の解像度で空になっていないか(`design_space.connect_conditions` は空のとき判定を降りるだけで
+    # 上へ伝えない)。空なら診断を積み、探索を呼ばず早期return。
     empty_faces = _empty_condition_faces(space)
     if empty_faces:
         from .topopt import anchor as an
@@ -1048,8 +1003,7 @@ def _run(
             termination=None,
         )
 
-    # **事後検出。** 保持・除外ソリッドが、この解像度で1つでも表現できていないなら
-    # 最適化を回さずに戻る(同じ運び方)。
+    # 事後検出。保持・除外ソリッドがこの解像度で1つでも表現できていなければ最適化を回さずに戻る。
     unrepresented = _region_representation(doc, bundle, space)
     if any(item["elements"] == 0 for item in unrepresented):
         return _not_done(
@@ -1064,9 +1018,8 @@ def _run(
             termination=None,
         )
 
-    # **境界条件の確定。** 導出出力に接する節点だけへ条件面を対応付け直した確定表を作り、
-    # 面ごとの対応・荷重保存・作用位置を検証する。以後の検査・島処理・FEM・デバッグ表示は
-    # 全てこの表を使う。不成立なら候補生成もFEMも始めない(探索の入口検査と同じ語で返す)。
+    # 境界条件の確定。導出出力に接する節点だけへ条件面を対応付け直した確定表を作って検証する。
+    # 以後は全てこの表を使い、不成立なら探索もFEMも始めない。
     from .topopt import anchor as an
 
     table, mapping = _map_boundary_conditions(space, bundle)
@@ -1084,12 +1037,9 @@ def _run(
             termination="boundary_mapping_failed",
         )
 
-    # **荷重・拘束が本当に選んだ面に載ったか**を、確定表の節点で測り直す。
-    # `_verify_face_mapping` は「まとめた形の面添字」の対応を見るが、こちらは
-    # 「その面添字で作られた節点集合が、その面のところにあるか」を見る(2枚目の網)。
+    # 荷重・拘束が選んだ面に載ったかを確定表の節点で測り直す(`_verify_face_mapping` は面添字の対応、こちらは節点の位置。2枚目の網)。
     anchor_check = _check_anchor_centroids(doc, space, table=table)
     common["anchor_check"] = anchor_check
-    # **アンカーはここで1回だけ配る**(`?debug=anchors`)。探索が使う確定表の節点。
     dbg.anchors("mapping", space, table=table)
 
     conditions = _build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping,
@@ -1107,7 +1057,6 @@ def _run(
         phase="search",
         message=f"形状の探索を始める(全材料の評価 → エネルギー順の削減。{target_text}・評価予算 {budget_text})",
     )
-    # 探索に入る前の中断はここで拾う(探索の中では評価と評価のあいだでしか見ない)。
     pump.check()
 
     def on_evaluation(event: dict) -> None:
@@ -1134,13 +1083,11 @@ def _run(
     )
 
     if search_result.termination == 'cancelled':
-        # 中断の方針「中断時は合格チェックポイントを記録するが、製品文書へ勝手に結果を
-        # 追加しない」—— best_feasible が見つかっていても保存しない(トレースには残した)。
+        # 中断時は製品文書へ勝手に結果を追加しない(best_feasible が見つかっていても。トレースには残した)。
         raise OptimizeCancelled("形状探索を中断した")
 
     if search_result.status != 'feasible':
-        # 段階4の契約「SearchResult.status が 'feasible' 以外なら、この値をそのまま
-        # UI/ログへ渡せばよい」——ここではそれに日本語の一言を添えるだけ。
+        # `SearchResult.status` が 'feasible' 以外ならそのまま渡す(段階4の契約)。
         return _not_done(
             common,
             started,
@@ -1156,8 +1103,8 @@ def _run(
     best = search_result.best_feasible
     from .topopt import acceptance, thin_voids
 
-    # 平滑化で潰れる 1×1 の空隙(管)を埋める(2026-10-07 本人判断: 探索後に1回、E1)。埋めた形は探索が合格させた形と
-    # 違うので、6条件(FEM)を取り直し、納品するのは最後に検査に通った形にする。埋めるセルが無ければ検査は増えない。
+    # 平滑化で潰れる 1×1 の空隙(管)を埋める(2026-10-07 本人判断: 探索後に1回)。埋めた形は探索の合格形と違うので
+    # 6条件(FEM)を取り直し、納品は最後に検査に通った形にする。
     pump.emit(phase="fill", message="平滑化で潰れる 1×1 の空隙を埋める")
     mask, fill = thin_voids.fill_tubes(best.mask, space.mask)
     safety_factor, material_mm3 = float(best.safety_factor), float(best.material_mm3)
@@ -1165,11 +1112,9 @@ def _run(
     if fill["cells"]:
         pump.emit(phase="fill", message=f"{fill['cells']} セルを埋めたので6条件を取り直す")
         report = acceptance.inspect(mask, mask, space.grid, **conditions.inspect_kwargs())
-        # 最小幅の規則(m 立方の被覆)は6条件に無い。埋めたセルは2軸以上で両隣が材料なので m より細い材料の筋は作らないが、
-        # 対角が空の配置(十字の中心など)では m 立方に覆われない(実測 2026-10-07: 探索の確定マスクは保持セルを対象外にして
-        # 規則を満たし、埋めると F2000_h2.4_w2 で 53 セル中 5、F2000_h2.2_w2 で 63 中 2、F1000_h2.4_w3 で 20 中 2 が
-        # 覆われない。どれも保持セルに接しない)。覆われることを求めて止めると実データの多くが落ちるので、保持セルと同じく
-        # 対象外として扱い、数を記録して warning に出す(`keep_cells_without_room` と同じ扱い)。
+        # 最小幅の規則(m 立方の被覆)は6条件に無い。対角が空の配置(十字の中心など)では埋めたセルが m 立方に覆われない
+        # (実測 2026-10-07: F2000_h2.4_w2 で 53 セル中 5、F2000_h2.2_w2 で 63 中 2、F1000_h2.4_w3 で 20 中 2。どれも保持セルに接しない)。
+        # 覆われることを求めると実データの多くが落ちるので、保持セルと同じく対象外として数を warning に出す(`keep_cells_without_room` と同じ扱い)。
         uncovered = 0
         if min_width["cells"] > 1:
             from .topopt import min_width as min_width_rules
@@ -1202,19 +1147,15 @@ def _run(
                             f"(2軸以上で両隣が材料なので、保持セルと同じく最小幅の規則の対象外として扱った)")
     else:
         trace.snapshot('tube-fill', **fill)
-    # 最終確定マスク(値は0/1のbool)。`_DebugSink.rho` の閾値0.5はboolに対しても
-    # 形式的に成り立つ(True > 0.5 / False > 0.5)ので、二値専用の配信経路を新設していない。
+    # 最終確定マスク(0/1のbool)。`_DebugSink.rho` の閾値0.5はboolにも成り立つ。
     dbg.rho("final", space.grid, mask)
 
     from .topopt import mesh as topo_mesh
 
     pump.emit(phase="mesh", message="確定マスクをメッシュ化する")
-    # **候補評価中には一度も呼ばれない入口。** 島除去・保持塗り直しをもう一度掛けない
-    # (`docs/TOPOPT.md`「二値探索の方式と契約」、`mesh.build_surface_from_mask` のdocstring)。
-    # **`spacing` は既定(要素添字空間の1.0)のまま渡す。** 実寸への変換は下の
-    # `_mesh_to_world`(`grid.origin + verts * grid.spacing`)が一括して行う契約
-    # (モジュール docstring)——ここでも実 spacing を渡すと二重に掛かってメッシュが
-    # 格子の外へ大きく外れる。
+    # 候補評価中には呼ばれない入口(島除去・保持塗り直しを掛け直さない。`docs/TOPOPT.md`「二値探索の方式と契約」)。
+    # `spacing` は既定(要素添字空間の1.0)のまま渡す: 実寸への変換は `_mesh_to_world` が一括で行う契約で、
+    # ここでも渡すと二重に掛かりメッシュが格子の外へ外れる。
     surface = topo_mesh.build_surface_from_mask(mask)
     positions = _mesh_to_world(surface.verts_smooth, space.grid)
     _check_mesh_placement(positions, space.grid)
@@ -1270,8 +1211,7 @@ def _run(
     pump.emit(phase="insert", message="保持・除外を反映した結果をメッシュボディとして足す")
     from .verbs import add_mesh_body
 
-    # 結果は編集可能ソリッドとして持たない(2026-09-23 本人判断)。文書に入るのは `finalize` が
-    # 合格させた三角形で、画面・STL はそれをそのまま使う(再テセレーションは無い)。
+    # 結果は編集可能ソリッドとして持たない(2026-09-23 本人判断)。画面・STL は `finalize` が合格させた三角形をそのまま使う。
     body_id = add_mesh_body(doc, positions, indices, name=name)
 
     return dict(
@@ -1300,22 +1240,15 @@ def _run(
 
 
 def _check_anchor_centroids(doc: "Document", space, *, table=None) -> dict:
-    """条件面の**節点集合が本当にその面のところにあるか**を測る(実行時の2枚目の網)。
+    """条件面の節点集合が本当にその面のところにあるかを測る(実行時の2枚目の網)。
 
-    面添字の取り違えは例外を出さない。`_verify_face_mapping` は B-rep の側で対応を確かめるが、
-    それを通り抜けた場合(まとめ方を将来変えたとき等)、ここが最後に気づける場所である。
-    測るのは `anchor.FaceAnchor.centroid`(節点の担当面積で重み付けした重心)と、
-    **その面の面積重心**(`query.face_centroid`)の距離。許容は `anchor.position_limit`(対応付けの
-    探索半径)で、`anchor.condition_mapping` の作用位置の門と同じ値。あちらはまとめた形の三角形群が
-    持つ面の重心と比べ、こちらは文書のボディの面から取り直した重心と比べる —— 面添字の対応が
-    壊れていれば、こちらだけが気づく。`table` を渡すとその表(探索用の確定表)を
-    測り、省くと導出の幾何の表(`space.table`)を測る。
+    面添字の取り違えは例外を出さず、`_verify_face_mapping` を通り抜けた場合の最後の砦になる。
+    `anchor.FaceAnchor.centroid`(節点の担当面積で重み付けした重心)と、その面の面積重心(`query.face_centroid`)の距離を
+    `anchor.position_limit`(`anchor.condition_mapping` の作用位置の門と同じ値)と比べる。`table` を省くと `space.table`。
 
-    **条件に焼き込んである `center` を使ってはいけない。** あれは `Face.center()` の既定
-    (`CenterOf.GEOMETRY`)で、曲面では面パッチから離れる —— hanger の荷重面(トーラス)では
-    節点重心から 12.807mm 離れ、許容は要素サイズ比例なので**要素を細かくするといつか必ず落ちる**
-    (面積重心なら 0.055mm)。ここは離散化の誤差を測る門なので、比べる相手は
-    「その面の上のどこか」でなければならない。
+    条件に焼き込んである `center` を使ってはいけない: `Face.center()` の既定(`CenterOf.GEOMETRY`)は曲面で面パッチから離れる
+    (hanger の荷重面(トーラス)では節点重心から 12.807mm、面積重心なら 0.055mm)。許容は要素サイズ比例なので、
+    使うと要素を細かくしたとき必ず落ちる。
     """
     import numpy as np
 
