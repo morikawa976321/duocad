@@ -7,8 +7,8 @@
      "where": [{"op": "parallel_to", "axis": "Z"},
                {"op": "length_gt", "value": 20}]}
 
-構造化引数なら**MCPのスキーマ検証が効き**、AIが書式を外したときにその場で明確に落ちる。
-文字列DSLは、パースに成功して意味が違うという最悪の失敗(黙って別の辺を丸める)を作りうる。
+構造化引数なら**MCPのスキーマ検証が効き**、書式違いはその場で落ちる。文字列DSLは、
+パースに成功して意味が違う失敗(黙って別の辺を丸める)を作りうる。
 
 `where` は**AND**(全条件を満たすものだけ)。空リストはその種別の全部を意味する。ORが要るときは
 述語を2回評価して `modify_selection(add=...)` で足す —— 述語言語に論理演算子を持ち込まない。
@@ -23,10 +23,8 @@
 **不可視Bodyは走査しない**。`body` を明示して不可視Bodyを指した場合も ValueError
 (`selection._visible_body` と同じ契約)。
 
-幾何は `query.py` 越しに取る(**build123d も OCP も import しない**)。面の法線・面積は
-`query.describe_faces`、辺の長さ・向きは `query.describe_edges`、面と辺の関係は
-`query.edges_of_face`。**添字は kernel の数え方に揃っている** —— ここがずれると「選んだ辺と
-違う辺が丸まる」という例外も出ない事故になる。
+幾何は `query.py` 越しに取る(**build123d も OCP も import しない**)。**添字は kernel の
+数え方に揃っている** —— ずれると「選んだ辺と違う辺が丸まる」事故が例外も出ずに起きる。
 """
 from __future__ import annotations
 
@@ -48,10 +46,8 @@ FACE_OPS = ("normal_dot_gt", "area_gt", "kind_is")
 
 #: 辺の述語で使える `op`(`on_boundary_of_face` が**関係述語**)
 #:
-#: `on_boundary_of_face` の `face` は**Body局所の1始まり添字**である。したがって
-#: 可視Bodyが複数あるときは `body` の指定が要る(無ければ ValueError)。
-#: 「全Bodyの3番目の面」という解釈は取らない —— 部品ごとに面の数え方は無関係なので、
-#: その集合には意味が無い。可視Bodyがちょうど1つなら省略してよい。
+#: `on_boundary_of_face` の `face` は**Body局所の1始まり添字**。可視Bodyが複数あるときは
+#: `body` の指定が要る(無ければ ValueError)。ちょうど1つなら省略してよい。
 EDGE_OPS = ("parallel_to", "length_gt", "length_lt", "kind_is", "on_boundary_of_face")
 
 #: `axis` に書ける名前(3要素のベクトルを直接書いてもよい)
@@ -70,13 +66,11 @@ def validate(predicate: dict) -> dict:
     検査するもの: `kind` が `PREDICATE_KINDS` にある / `where` がリスト /
     各条件が `op` を持つ / `op` がその `kind` で使える / `op` ごとの引数の型と有無。
 
-    **評価より前に全条件を検査する**。途中まで評価してから落ちると、
-    「選択は変えない」(項番20)を守るのが実装依存になる。
+    **評価より前に全条件を検査する**(途中で落ちても選択を変えないため)。
     """
     if not isinstance(predicate, dict):
         raise ValueError(f"predicate must be a dict, got {type(predicate).__name__}")
-    # 知らないキーを黙って捨てない。`body_id` と書かれた絞り込みを無視すると、全ボディの辺が
-    # 選ばれたまま成功を返し、次の verb が「複数ボディにまたがる」で落ちて初めて気づく。
+    # 知らないキーを黙って捨てない(`body_id` を無視すると全ボディの辺が選ばれたまま成功する)。
     unknown = sorted(set(predicate) - set(PREDICATE_KEYS))
     if unknown:
         raise ValueError(f"unknown predicate key(s): {unknown} (allowed: {', '.join(PREDICATE_KEYS)})")
@@ -106,8 +100,7 @@ def validate(predicate: dict) -> dict:
 def evaluate(doc: Document, predicate: dict) -> List[dict]:
     """述語に一致する ShapeRef のリストを返す(0件なら空リスト。**エラーにしない**)。
 
-    順序は「`doc.bodies` の順 × 添字の昇順」で安定させる。UIの一覧と、テストの
-    期待値の両方が順序に依存できるようにするため。
+    順序は「`doc.bodies` の順 × 添字の昇順」。
     """
     normalized = validate(predicate)
     bodies = _target_bodies(doc, normalized.get("body"), normalized["where"])
@@ -125,8 +118,7 @@ def describe_ops() -> dict:
     """MCPのツールスキーマへそのまま出せる形の一覧を返す。
 
     `{"face": [{"op":.., "args": {..}, "doc": ..}, ..], "edge": [...]}`。
-    **MCPのツールスキーマを書き直さずに済むように、opの定義はここ1箇所を正にする**
-    (スキーマとバリデータが二重管理になると、片方だけ増えたopが黙って通る)。
+    opの定義はここ1箇所を正にする(二重管理だと片方だけ増えたopが黙って通る)。
     """
     return {
         "face": [
@@ -251,17 +243,12 @@ def _normalize_axis(axis) -> Tuple[float, float, float]:
 def _target_bodies(doc: Document, body_id, where: Sequence[dict]) -> list:
     """走査対象のBody列。不可視は除外。明示指定の契約は `_visible_body` と同じ。
 
-    **メッシュボディの扱いは「名指ししたら断る / 導出した集合からは黙って外す」**
-    (他の述語の門と同じ線で揃える)。
+    **メッシュボディは「名指ししたら断る / 導出した集合からは黙って外す」**。
 
-    - `body` を**明示された**ら断る(`meshbody.reject`) —— 「このボディの辺を選べ」は、
-      面も辺も持たない形に対する誤った要求であり、`selection.select_edge(mesh, 3)` と
-      同じ性格の誤りである。黙って0件を返すと、AIは「条件に合う辺が無かった」と読んで
-      条件を緩める側へ動く(実際には辺という概念が無い)。
-    - `body` を**省略された**ら黙って外す —— このときの走査集合は呼び出し側が主張した
-      ものではなく**導出**であり(不可視Bodyを黙って外しているのと同じ)、外しても
-      呼び出し側の主張と矛盾しない。ここで断ると、**最適化結果のメッシュが文書に1つ
-      あるだけで、述語による選択が丸ごと使えなくなる**。
+    - `body` を明示されたら断る(`meshbody.reject`)。黙って0件を返すと、AIは「条件に合う辺が
+      無かった」と読んで条件を緩める側へ動く(実際には辺という概念が無い)。
+    - `body` を省略されたら黙って外す。走査集合は導出で、断ると最適化結果のメッシュが
+      1つあるだけで述語による選択が丸ごと使えなくなる。
     """
     from .selection import _visible_body
 
@@ -271,15 +258,13 @@ def _target_bodies(doc: Document, body_id, where: Sequence[dict]) -> list:
             meshbody.reject(body, "述語で面や辺を絞る")
         return [body]
 
-    # **メッシュボディを先に外してから単一Body検査へ掛ける**。後にすると、可視のメッシュが
-    # 1つあるだけで `on_boundary_of_face` が「複数のBodyが見えている」で断られる。
+    # メッシュボディを先に外してから単一Body検査へ掛ける(後だと可視メッシュ1つで断られる)。
     mesh_ids = {body.id for body in doc.bodies if body.mesh is not None}
     visible_ids = [
         candidate for candidate in selectable_bodies(doc) if candidate not in mesh_ids
     ]
     if _needs_single_body(where) and len(visible_ids) != 1:
-        # **0件と複数件で言うことを変える**。0件は「複数ある」ではないし、
-        # `body` を明示しても解決しない —— AIが次に何を試せばよいかが逆になる。
+        # 0件と複数件で言うことを変える(0件は `body` を明示しても解決しない)。
         raise ValueError(
             "on_boundary_of_face needs a visible body to count faces on, "
             "but no body is visible (set_visible で表示してから選ぶこと)"
@@ -338,8 +323,7 @@ def _boundary_sets(body, where: Sequence[dict]) -> dict:
         try:
             resolved[face_index] = set(query.edges_of_face(body.shape, face_index))
         except ValueError as error:
-            # **有効な範囲まで言う**(`select_*` と揃える)。
-            # 添字だけ返しても、AIは次に何を試せばよいか分からない。
+            # 有効な範囲まで言う(`select_*` と揃える)。
             raise ValueError(
                 f"on_boundary_of_face face out of range: {face_index} "
                 f"(1..{kernel.face_count(body.shape)} on body {body.id!r})"
