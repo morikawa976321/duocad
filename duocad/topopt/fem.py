@@ -689,7 +689,6 @@ class PreparedSystem:
                     u_free, iterations, info, gpu_fallback = self._solve_on_gpu(ff, cg_rtol)
                     device = "cpu" if u_free is None else "gpu"
                     if info != 0:
-                        # 収束しなかった解は下で CPU の直接解法が作り直すので、GPU で解けた数に入れない。
                         device = "cpu"
                         gpu_fallback = f"not-converged: GPU の CG が {iterations} 反復で収束しない(直接解法へ)"
                 if u_free is None:

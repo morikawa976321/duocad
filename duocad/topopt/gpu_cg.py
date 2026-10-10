@@ -232,20 +232,23 @@ def _cg(kf: sp.csr_matrix, ff: np.ndarray, threads: int, rtol: float) -> tuple[n
     return cp.asnumpy(x), maxiter, maxiter
 
 
-def _release() -> None:
-    """解き終わった VRAM をドライバへ返す(Unity・ローカル LLM と分け合っているので抱えない)。
+def _release() -> str | None:
+    """解き終わった VRAM をドライバへ返す(Unity・ローカル LLM と分け合っているので抱えない)。失敗したら理由を返す。
 
     **ここでは投げない。** 先に起きた非同期の CUDA エラーは解放の呼び出しで初めて表に出ることがあり、
-    投げると `Unavailable` を上書きして CPU への戻りをすり抜ける。失敗したら以後 GPU を使わない。
+    `finally` の中で投げると先に作った `Unavailable` を上書きして CPU への戻りをすり抜ける。失敗したら以後 GPU を使わない。
     """
     global _disabled
     if _kernels is None:
-        return
+        return None
     try:
         _kernels["cp"].get_default_memory_pool().free_all_blocks()
     except Exception as exc:  # noqa: BLE001
+        reason = f"gpu-error: VRAM の解放で {type(exc).__name__}: {exc}"
         if _disabled is None:
-            _disabled = f"gpu-error: VRAM の解放で {type(exc).__name__}: {exc}"
+            _disabled = reason
+        return reason
+    return None
 
 
 def _check_startup(make_system: Callable[[], tuple[sp.spmatrix, np.ndarray]], rtol: float) -> None:
@@ -298,7 +301,7 @@ def _solve_locked(kf, ff, rtol, make_startup_system):
             _dot_ok[key] = _dot_matches(n, threads)
         if not _dot_ok[key]:
             raise Unavailable(f"dot-mismatch: n={n} threads={threads}", sticky=False)
-        return _cg(_as_csr(kf), ff, threads, rtol)
+        solved = _cg(_as_csr(kf), ff, threads, rtol)
     except Unavailable as exc:
         if exc.sticky:
             _disabled = exc.reason
@@ -312,9 +315,15 @@ def _solve_locked(kf, ff, rtol, make_startup_system):
             # CUDA の実行時エラー等。原因が分からないので以後は使わない。
             _disabled = f"gpu-error: {type(exc).__name__}: {exc}"
             failure = Unavailable(_disabled, sticky=True)
+        solved = None
     finally:
-        _release()
-    raise failure
+        released = _release()
+    if solved is None:
+        raise failure
+    if released is not None:
+        # 解は写し終えているが、CUDA の例外が出た solve は他と同じく CPU で解き直す。
+        raise Unavailable(released, sticky=True)
+    return solved
 
 
 def reset() -> None:

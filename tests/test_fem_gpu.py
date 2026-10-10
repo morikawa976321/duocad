@@ -175,8 +175,10 @@ def test_a_gpu_cg_that_does_not_converge_is_recorded_as_a_fallback_not_as_a_gpu_
     assert record['device'] == 'cpu' and record['gpu_fallback'].startswith('not-converged')
 
 
-def test_an_error_while_releasing_vram_does_not_escape_the_fallback(monkeypatch):
-    """落ちたら、VRAM を返す処理で表に出た CUDA のエラーが CPU への戻りをすり抜け、探索の評価ごと落ちる。"""
+@pytest.mark.parametrize('solved_on_gpu', [False, True])
+def test_an_error_while_releasing_vram_falls_back_to_the_cpu(monkeypatch, solved_on_gpu):
+    """落ちたら、VRAM を返す処理で表に出た CUDA のエラーが CPU への戻りをすり抜け、探索の評価ごと落ちるか、
+    GPU で解き終えた後のエラーなのに GPU で解けたと数えている。"""
 
     class BrokenPool:
         def free_all_blocks(self):
@@ -190,10 +192,11 @@ def test_an_error_while_releasing_vram_does_not_escape_the_fallback(monkeypatch)
     monkeypatch.setattr(gpu_cg, '_cupy', lambda: (None, {}))
     monkeypatch.setattr(gpu_cg, 'openblas_threads', lambda: 1)
     monkeypatch.setattr(gpu_cg, '_check_startup', lambda *_a: None)
-    monkeypatch.setattr(gpu_cg, '_dot_matches', lambda n, threads: False)
+    monkeypatch.setattr(gpu_cg, '_dot_matches', lambda n, threads: solved_on_gpu)
+    monkeypatch.setattr(gpu_cg, '_cg', lambda kf, ff, threads, rtol: (np.zeros_like(ff), 1, 0))
     model = fem.Model(10, 4, 4)
     expected, _ = _solve(model, 'cpu')
-    with pytest.warns(RuntimeWarning, match='dot-mismatch'):
+    with pytest.warns(RuntimeWarning, match='VRAM の解放' if solved_on_gpu else 'dot-mismatch'):
         u, stats = _solve(model, 'gpu')
     assert np.array_equal(u, expected) and stats['gpu_fallbacks'] == 1
     assert gpu_cg._disabled.startswith('gpu-error: VRAM の解放')
