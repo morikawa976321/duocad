@@ -160,3 +160,58 @@ def test_a_search_takes_the_same_path_on_the_gpu_as_on_the_cpu(monkeypatch):
     gpu_history, gpu = run('gpu')
     assert gpu['gpu_solves'] > 0 and gpu['gpu_fallbacks'] == 0
     assert gpu_history == cpu_history
+
+
+def test_a_gpu_cg_that_does_not_converge_is_recorded_as_a_fallback_not_as_a_gpu_solve(monkeypatch):
+    """落ちたら、GPU の CG が収束せず CPU の直接解法が解いたのに、GPU で解けたと数えている(秒の集計が混ざる)。"""
+    model = fem.Model(10, 4, 4)
+    expected = model.solve(np.ones((10, 4, 4)), 3.0, solver='direct')
+    monkeypatch.setattr(gpu_cg, 'solve', lambda kf, ff, **_k: (np.zeros_like(ff), 7, 7))
+    with trace.recording() as rec, pytest.warns(RuntimeWarning, match='直接解法へフォールバック'):
+        u, stats = _solve(model, 'gpu')
+    assert np.allclose(u, expected, rtol=1e-12, atol=0)
+    assert stats['gpu_solves'] == 0 and stats['gpu_fallbacks'] == 1 and stats['fallbacks'] == 1
+    (record,) = _linear_solve_records(rec)
+    assert record['device'] == 'cpu' and record['gpu_fallback'].startswith('not-converged')
+
+
+def test_an_error_while_releasing_vram_does_not_escape_the_fallback(monkeypatch):
+    """落ちたら、VRAM を返す処理で表に出た CUDA のエラーが CPU への戻りをすり抜け、探索の評価ごと落ちる。"""
+
+    class BrokenPool:
+        def free_all_blocks(self):
+            raise RuntimeError('テスト: 非同期の CUDA エラー')
+
+    class FakeCupy:
+        def get_default_memory_pool(self):
+            return BrokenPool()
+
+    monkeypatch.setattr(gpu_cg, '_kernels', {'cp': FakeCupy()})
+    monkeypatch.setattr(gpu_cg, '_cupy', lambda: (None, {}))
+    monkeypatch.setattr(gpu_cg, 'openblas_threads', lambda: 1)
+    monkeypatch.setattr(gpu_cg, '_check_startup', lambda *_a: None)
+    monkeypatch.setattr(gpu_cg, '_dot_matches', lambda n, threads: False)
+    model = fem.Model(10, 4, 4)
+    expected, _ = _solve(model, 'cpu')
+    with pytest.warns(RuntimeWarning, match='dot-mismatch'):
+        u, stats = _solve(model, 'gpu')
+    assert np.array_equal(u, expected) and stats['gpu_fallbacks'] == 1
+    assert gpu_cg._disabled.startswith('gpu-error: VRAM の解放')
+
+
+@needs_gpu
+def test_vram_is_returned_after_a_failure_inside_the_gpu_cg(monkeypatch):
+    """落ちたら、GPU の CG が途中で失敗したとき、例外が握った GPU の配列のせいで VRAM が返らず CPU で解く間も抱えている。"""
+    import cupy as cp
+
+    def fails_after_allocating(kf, ff, threads, rtol):
+        held = cp.ones(32 * 2**20 // 8)  # noqa: F841 —— 例外のフレームに残る 32MB
+        raise cp.cuda.memory.OutOfMemoryError(2**40, 0)
+
+    monkeypatch.setattr(gpu_cg, '_cg', fails_after_allocating)
+    monkeypatch.setattr(gpu_cg, '_startup_checked', True)
+    model = fem.Model(10, 4, 4)
+    with pytest.warns(RuntimeWarning, match='vram'):
+        _u, stats = _solve(model, 'gpu')
+    assert stats['gpu_fallbacks'] == 1 and gpu_cg._disabled is None
+    assert cp.get_default_memory_pool().total_bytes() == 0

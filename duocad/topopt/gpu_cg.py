@@ -233,9 +233,19 @@ def _cg(kf: sp.csr_matrix, ff: np.ndarray, threads: int, rtol: float) -> tuple[n
 
 
 def _release() -> None:
-    """解き終わった VRAM をドライバへ返す(Unity・ローカル LLM と分け合っているので抱えない)。"""
-    if _kernels is not None:
+    """解き終わった VRAM をドライバへ返す(Unity・ローカル LLM と分け合っているので抱えない)。
+
+    **ここでは投げない。** 先に起きた非同期の CUDA エラーは解放の呼び出しで初めて表に出ることがあり、
+    投げると `Unavailable` を上書きして CPU への戻りをすり抜ける。失敗したら以後 GPU を使わない。
+    """
+    global _disabled
+    if _kernels is None:
+        return
+    try:
         _kernels["cp"].get_default_memory_pool().free_all_blocks()
+    except Exception as exc:  # noqa: BLE001
+        if _disabled is None:
+            _disabled = f"gpu-error: VRAM の解放で {type(exc).__name__}: {exc}"
 
 
 def _check_startup(make_system: Callable[[], tuple[sp.spmatrix, np.ndarray]], rtol: float) -> None:
@@ -294,13 +304,17 @@ def _solve_locked(kf, ff, rtol, make_startup_system):
             _disabled = exc.reason
         raise
     except Exception as exc:  # noqa: BLE001
+        # **元の例外を連鎖させず、except の外で投げる。** 元の例外の traceback が `_cg` のフレームごと GPU の配列を
+        # 握っているので、`from exc` で残すと `free_all_blocks` が返せず、CPU で解き直す間も VRAM を抱える。
         if isinstance(exc, _kernels["cp"].cuda.memory.OutOfMemoryError):
-            raise Unavailable(f"vram: {exc}", sticky=False) from exc
-        # CUDA の実行時エラー等。原因が分からないので以後は使わない。
-        _disabled = f"gpu-error: {type(exc).__name__}: {exc}"
-        raise Unavailable(_disabled, sticky=True) from exc
+            failure = Unavailable(f"vram: {exc}", sticky=False)
+        else:
+            # CUDA の実行時エラー等。原因が分からないので以後は使わない。
+            _disabled = f"gpu-error: {type(exc).__name__}: {exc}"
+            failure = Unavailable(_disabled, sticky=True)
     finally:
         _release()
+    raise failure
 
 
 def reset() -> None:

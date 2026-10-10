@@ -63,7 +63,11 @@ if (Test-Path (Join-Path $StableRoot '.git')) {
 # ---- 2. 依存とビルド ----
 # DUOCAD_FEM_DEVICE=gpu の機械では CuPy(extra gpu)も入れる(update.ps1 の Build と同じ)。
 $syncArgs = @('sync', '--frozen')
-if ("$env:DUOCAD_FEM_DEVICE".Trim().ToLower() -eq 'gpu') { $syncArgs += @('--extra', 'gpu') }
+# 版が extra gpu を持つときだけ付ける(持たない旧版へ巻き戻すとき、付けると uv sync が失敗する)。
+if (("$env:DUOCAD_FEM_DEVICE".Trim().ToLower() -eq 'gpu') -and
+    (Select-String -Path (Join-Path $StableRoot 'pyproject.toml') -Pattern '^\s*gpu\s*=' -Quiet)) {
+    $syncArgs += @('--extra', 'gpu')
+}
 Run 'uv' $syncArgs $StableRoot
 $web = Join-Path $StableRoot 'web'
 Run 'npm.cmd' @('ci') $web

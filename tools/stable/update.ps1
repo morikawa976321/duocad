@@ -69,7 +69,11 @@ function Build([string]$fromCommit) {
     # DUOCAD_FEM_DEVICE=gpu の機械では CuPy(extra gpu)も入れる。**extra を付けない `uv sync` は
     # 入っている CuPy を消す**ので、付け忘れると更新のたびに GPU の経路が CPU へ戻る(docs/TOPOPT_GPU.md)。
     $syncArgs = @('sync', '--frozen')
-    if ("$env:DUOCAD_FEM_DEVICE".Trim().ToLower() -eq 'gpu') { $syncArgs += @('--extra', 'gpu') }
+    # 版が extra gpu を持つときだけ付ける(持たない旧版へ巻き戻すとき、付けると uv sync が失敗する)。
+    if (("$env:DUOCAD_FEM_DEVICE".Trim().ToLower() -eq 'gpu') -and
+        (Select-String -Path (Join-Path $RepoRoot 'pyproject.toml') -Pattern '^\s*gpu\s*=' -Quiet)) {
+        $syncArgs += @('--extra', 'gpu')
+    }
     Run 'uv sync' $uv $syncArgs
     $web = Join-Path $RepoRoot 'web'
     $lockChanged = $false
