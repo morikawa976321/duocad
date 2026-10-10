@@ -1,26 +1,17 @@
 """verb `extrude` — スケッチの**領域**、または**同一平面・同一ボディのソリッドの面群**を押し出す。
 
-領域は `extrude(doc, regions, ...)`、面は `extrude_faces(doc, faces, ...)`。どちらも同じ verb
-`extrude` として記録し、ログの args が `regions` か `faces` かで再生を分ける。`mode="join"` で足し、`mode="cut"` で引き、
-`mode="new"` で独立したボディにする。
+領域は `extrude(doc, regions, ...)`、面は `extrude_faces(doc, faces, ...)`。どちらも同じ verb `extrude`
+として記録し、ログの args が `regions` か `faces` かで再生を分ける。
 
-- `"join"` … 対象ボディへ足す。**対象が無ければ新しいソリッドを1つ作る**(最初の板はこれで
-  生まれる)。作った場合も `args["body_id"]` にそのIDを記録する(再生で同じIDが再現できないと
-  選択が壊れるため)。
-- `"cut"` … 対象ボディから引く。**対象が無ければ ValueError**(引く相手が無いのに成功した
-  ことにしない)。
-- 面のとき、行き先の既定は**その面を持つボディ**(領域のようなアクティブボディではない)。
-  距離の正は面の外向き法線側なので、面から削るには**負の距離で `cut`**。
-- `"new"` … **対象が何であっても、常に新しいソリッドを1つ作る**。`join` の「対象が無ければ
-  作る」という**落ち方**を、種別として言えるようにしたもの —— これが無いと、既存部品がいる
-  文書では2つ目の板が作れず(`join` が黙って融合する)、最初の板は空の文書でしか生まれない。
-  **`body_id` は受け付けない**(行き先の無い操作に行き先を渡されたら取り違えである)。
+- `"join"` … 対象ボディへ足す。対象が無ければ新しいソリッドを作る(最初の板)。作った場合も
+  `args["body_id"]` にそのIDを記録する(再生で同じIDが再現できないと選択が壊れる)。
+- `"cut"` … 対象ボディから引く。対象が無ければ ValueError。面のとき、行き先の既定はその面を持つ
+  ボディ。距離の正は面の外向き法線側なので、面から削るには負の距離で `cut`。
+- `"new"` … 対象が何であっても常に新しいソリッドを作る(これが無いと既存部品がいる文書で2つ目の板が
+  作れない)。`body_id` は受け付けない。
 
-**失敗を黙って通さない**: 領域が空・添字が範囲外・`mode` が未知・距離0・ブーリアン失敗の
-いずれでも例外を送出し、**documentにもログにも変更を残さない**。とくに「切り取ったのに穴が
-1つも開いていない」を成功として通さないこと。
-
-**OCP を直接importしない**。幾何は `duocad.kernel` / `duocad.kernel_extrude` 越しに呼ぶ。
+失敗(領域が空・添字が範囲外・`mode` が未知・距離0・ブーリアン失敗)は例外を送出し、documentにも
+ログにも変更を残さない。「切り取ったのに穴が1つも開いていない」を成功として通さないこと。
 """
 from __future__ import annotations
 
@@ -175,16 +166,12 @@ def _resolve_target(
 ) -> tuple[Optional[Body], Optional[BodyId]]:
     """対象ボディを決める。cut で対象が無い・reference は ValueError。
 
-    **`new` は対象を決めない**(常に新規作成)。`body_id` を渡されたら ValueError。
+    `new` は対象を決めない(常に新規作成)。`body_id` を渡されたら ValueError。
 
-    `body_id` を省略したときのアクティブボディが**編集できない**(参照ボディ)なら、
-    「対象が無い」として扱い、join でも最初の板を作れるようにする。
-    **この分岐へ落ちる経路は現在は残っていない** —— `import_step` は
-    参照ボディの**後に**編集用ボディを足すので、読み込み直後のアクティブは常に編集可能で、
-    参照ボディを作る verb は他に無い。それでも握り潰さずに残してあるのは、アクティブが
-    参照ボディである状態を作る verb が将来増えたときに、ここが黙って ValueError を投げる
-    (= join が最初の板を作れない)側へ倒れないようにするためである。
-    一方、**明示的に参照ボディを指定された場合は ValueError**(取り違えを黙認しない)。
+    `body_id` を省略したときのアクティブボディが編集できない(参照ボディ)なら「対象が無い」として扱い、
+    join でも最初の板を作れるようにする。この分岐へ落ちる経路は現在は無い(`import_step` は参照ボディの
+    後に編集用ボディを足す)が、アクティブが参照ボディになる verb が増えても join が最初の板を作れなく
+    ならないよう残してある。明示的に参照ボディを指定された場合は ValueError。
     """
     if mode == "new":
         if body_id is not None:
@@ -204,9 +191,8 @@ def _resolve_target(
             raise ValueError("cut requires a target body")
         return None, None
 
-    # 領域は選択から取るが、足す/引く**対象ボディ**(既定はアクティブ)は選択の外から来る。
-    # 人がこのボディを隠した後にAIが押し出すと、見えなくなったボディが黙って変わる
-    # (`fillet`/`chamfer` と同じ穴)ので `require_visible=True`。
+    # 対象ボディ(既定はアクティブ)は選択の外から来る。人が隠した後にAIが押し出すと見えないボディが
+    # 黙って変わる(`editable_body` と同じ穴)ので `require_visible=True`。
     return _editable_target(doc, body_id), body_id
 
 
@@ -237,11 +223,10 @@ def _resolve_faces_and_normal(
 ) -> tuple[List[Any], tuple]:
     """領域参照から面と、スケッチ平面の法線を取り出す。範囲外は ValueError。
 
-    **1回の押し出しが対象にできるのは1つのスケッチの領域だけ**。押し出しの向きは
-    スケッチ平面の法線で決まるので、別平面の領域を混ぜると「最初のスケッチの法線」で
-    全部押すことになり、方向がその面に寝た領域は**体積0の退化ソリッド**になる。
-    それは `IsDone()` も `BRepCheck_Analyzer` も通ってしまう(体積が期待の半分でも
-    例外は出ない)ので、ここで弾くのが唯一の関門である。
+    **1回の押し出しが対象にできるのは1つのスケッチの領域だけ**。向きはスケッチ平面の法線で決まり、
+    別平面の領域を混ぜると最初のスケッチの法線で全部押すことになって、方向がその面に寝た領域は
+    体積0の退化ソリッドになる。`IsDone()` も `BRepCheck_Analyzer` も通ってしまうので、ここで弾くのが
+    唯一の関門。
     """
     sketch_ids = {ref.sketch for ref in refs}
     if len(sketch_ids) > 1:
@@ -262,10 +247,9 @@ def _resolve_faces_and_normal(
         faces.append(match["face"])
 
     sketch = get_sketch(doc, sketch_id)
-    # 面に貼ったスケッチでも**ライブの面は引かない**。押し出しの向きはスケッチ平面の法線で
-    # 決まり、その法線は作成時に `plane["frame"]` へ焼き付けてある(`kernel_sketch.face_frame`)。
-    # 添字で引き直していた頃は、貼った先のボディを後から面取りしただけで押し出し方向が
-    # 別の面の法線へ静かに移りえた。
+    # 面に貼ったスケッチでもライブの面は引かない。法線は作成時に `plane["frame"]` へ焼き付けてある
+    # (`kernel_sketch.face_frame`)。添字で引き直すと、貼った先のボディを後から面取りしただけで
+    # 押し出し方向が別の面の法線へ移りうる。
     normal = kernel_sketch.sketch_plane_normal(sketch.plane)
     return faces, normal
 
@@ -286,15 +270,12 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     refs = [RegionRef.from_dict(item) for item in args["regions"]]
     faces, normal = _resolve_faces_and_normal(document, refs)
 
-    # **ここは存在検査**(無いことが「新しく作る」への分岐条件で、失敗ではない)。
-    # `get_body` は無ければ KeyError なので使わない。
+    # 存在検査(無いことは「新しく作る」への分岐条件で、失敗ではない)。`get_body` は KeyError なので使わない。
     existing = next(
         (candidate for candidate in document.bodies if candidate.id == body_id), None
     )
 
-    # `new` は**常に作る**(`join` のように既存へ合流しない)。同じIDが既にいるなら再生の
-    # 前提が壊れているので、黙って上書き・融合させずに落とす。`join` で対象が無ければ作る
-    # (最初の板)。`cut` に対象が無いのは失敗。
+    # `new` で同じIDが既にいるなら再生の前提が壊れているので、上書き・融合させず落とす。
     if mode == "new" and existing is not None:
         raise ValueError(f"cannot replay new: body {body_id!r} already exists")
     if existing is None and mode == "cut":
@@ -360,8 +341,7 @@ def _enter_extrude(
 ) -> dict:
     """選択の領域、または同一平面・同一ボディの面を押し出す(混在は ValueError)。
 
-    `body_id` だけは引数のまま —— 「どの Body へ足す/から引くか」であって対象集合ではない
-    (Body は選択集合の項目ではない)。面のときの既定はその面を持つ Body。
+    `body_id` だけは引数のまま(どの Body へ足す/から引くかであって、対象集合ではない)。
     """
     kind, items = selection.require_extrude_targets(document)
     if kind == "face":
