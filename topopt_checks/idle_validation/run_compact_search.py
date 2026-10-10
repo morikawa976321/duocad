@@ -60,8 +60,8 @@ def run(model: Path, *, size: float, cells: int, load_n: float | None, max_evalu
     if load_n is not None:
         _set_load(doc, load_n)
     resolved_min_width_mm = cells * size if min_width_mm is None else min_width_mm
-    # `_run()`が実際に使う値(製品と同じ手順でスナップした要素サイズから解決する。QAで指摘された
-    # 「recordのcellsが要求値のままで、製品が実際に解決したセル数と食い違う」を避けるため)。
+    # `_run()` が実際に使う値(製品と同じ手順でスナップした要素サイズから解決する)。
+    # record の cells を要求値のままにすると、製品が実際に解決したセル数と食い違う。
     limits = optimize_run.resolution_limits(doc)
     snapped_spacing = optimize_run._snap_to_grid(limits["bbox_min"], limits["bbox_max"],
                                                   optimize_run._resolve_element_size(limits, size))

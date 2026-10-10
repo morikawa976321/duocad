@@ -49,8 +49,8 @@ def main() -> int:
             loads[sh].add(float(c["load_n"]))
     analytic = sorted({c.get("analytic_kind", "") for c in cases if c.get("analytic_kind", "").startswith("analytic")})
     failed = sum(1 for c in cases if c.get("status") in ("failed", "disconnected_at_this_level", "solve_failed"))
-    # **手で決め打ちのリスト**(QA指摘: 「missingが常に空」は「要求を全部満たした」という意味に
-    # 誤読されうる)。10_SYNTHESIS 付録A(旧 02_REFERENCE 7-1節)・8節が明記する、意図的に対象外とした/未実施の組み合わせを
+    # **手で決め打ちのリスト**(「missingが常に空」は「要求を全部満たした」と誤読されうる)。
+    # 10_SYNTHESIS 付録A(旧 02_REFERENCE 7-1節)・8節が明記する、意図的に対象外とした/未実施の組み合わせを
     # ここにも複製する(機械可読側の読者がdocs/を読まなくても分かるように)。
     missing = [
         "hanger_step05(5%形)・hanger_transplant(移植トラス)は格子細分・ゾーン解析を未実施"

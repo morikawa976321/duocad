@@ -32,7 +32,7 @@ import search_methods as sm  # noqa: E402
 import synthetic_matrix_support as sup  # noqa: E402
 
 LEDGER_PATH = hls.OUT / "06_origin_shift.json"
-#: 全軸+0.5は10_SYNTHESIS 付録D(旧 05_SYNTHETIC 7-1節)で最も変化が大きかった方向。単軸3点は、製品の`evaluation_error`打ち切りが全軸シフト固有かを見る(10_SYNTHESIS 付録E(旧 06_HANGER_LOW 4節))。
+#: 全軸+0.5は最も変化が大きかった方向(10_SYNTHESIS 付録D 7-1節)。単軸3点は、製品の`evaluation_error`打ち切りが全軸シフト固有かを見る(付録E 4節)。
 SHIFTS = {
     "hanger_h1_origin_shift_all_axes_+0.5cell": (0.5, 0.5, 0.5),
     "hanger_h1_origin_shift_x_+0.5cell": (0.5, 0.0, 0.0),
