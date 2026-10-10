@@ -709,7 +709,7 @@
     )
     const ghost = payload.sketch_ghost
     if (ghost !== null) {
-      // 分裂は確定時にトーストで拒まれる形。入力中はトーストを出さず色だけで知らせる(本人決定)。
+      // 分裂は確定時にトーストで拒まれる形。入力中はトーストを出さず色だけで知らせる。
       viewport?.showSketchGhosts(ghost.sketch_id, ghost.entities, ghost.pieces === 1 ? 'normal' : 'warn')
     }
     previewing = payload.bodies.length > 0 || (ghost?.entities.length ?? 0) > 0

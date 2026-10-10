@@ -473,7 +473,7 @@ export function entityIntersectables(kind: string, params: Record<string, number
   return entityKindSpec(kind).intersectables?.(params) ?? []
 }
 
-/** その図形の直線区間の中点(`viewport.ts` の当たり判定がカーソル強調の垂直ティックに使う)。円・円弧・ベジエは対象外(本人指定「線分の中点」)。 */
+/** その図形の直線区間の中点(`viewport.ts` の当たり判定がカーソル強調の垂直ティックに使う)。円・円弧・ベジエは対象外。 */
 export function entityMidpoints(
   kind: string,
   params: Record<string, number>,
@@ -598,7 +598,7 @@ function curveIntersections(a: IntersectableCurve, b: IntersectableCurve): Array
  *
  * 同じ図形どうしのペアは見ない —— 長方形自身の隣り合う辺が作る交点(=自分の角)は
  * 既に `visualCorners` が持つ。ベジエは `intersectables` が空なので自然に対象外になる
- * (閉じた式で解けない。本人指定は「線分・円・円弧の交点」)。
+ * (閉じた式で解けない)。
  */
 export function sketchIntersections(
   handles: ReadonlyArray<{ entityId: string; kind: string; params: Record<string, number> }>,

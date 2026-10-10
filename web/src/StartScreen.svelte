@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
    * トップ画面。何も開いていないとき(`state.document_open === false`)にビューポートを覆う。
-   * 作業面は丸ごと見せず、空の無題の文書(「新規」直後)と見た瞬間に区別できるようにする(本人決定 2026-10-05)。
+   * 作業面は丸ごと見せず、空の無題の文書(「新規」直後)と見た瞬間に区別できるようにする。
    * できるのは開くことだけ。複製・削除・改名は `FilesPanel.svelte`。一覧はサーバの `list_documents` の写し。
    */
   import type { DocumentInfo } from './session'

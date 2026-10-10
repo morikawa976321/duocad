@@ -40,7 +40,7 @@ export const REGION_SELECTED_COLOR = 0xffb454
 /** 確定前の形。半透明で「まだ無いもの」に見せる。 */
 export const PREVIEW_COLOR = 0x7ee081
 /**
- * 形状最適化(第3のモード)の役割色。選択が勝つ(本人決定): 選ばれているあいだは
+ * 形状最適化(第3のモード)の役割色。選択が勝つ: 選ばれているあいだは
  * `HIGHLIGHT_COLOR` になり、役割色は一時的に見えなくなる(`applyFaceMaterials` が実体)。
  */
 export const OPTIMIZE_PRESERVE_COLOR = 0x3f9b58
@@ -153,7 +153,7 @@ export const BASE_PLANE_AXES: Record<
 }
 
 /**
- * 常設の原点ギズモ(`originGizmo.ts`)の寸法[mm]。正の方向だけを描く(本人指定 2026-09-13)。
+ * 常設の原点ギズモ(`originGizmo.ts`)の寸法[mm]。正の方向だけを描く。
  * 軸線・平面とも原点から `GAP` ぶん離れた位置から始まる。
  */
 export const ORIGIN_GIZMO_AXIS_LENGTH_MM = 40

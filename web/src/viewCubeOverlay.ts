@@ -19,8 +19,7 @@ import { BASE_COLOR, FOV_DEFAULT, HOME_VIEW_OFFSET, HOVER_LIGHTEN, lighten } fro
 /**
  * ビューキューブ(常設・26領域)の一辺[画素]と右上の余白[画素]。
  * クリックを吸う矩形でもある(`viewCubeRect` / `insideCubeRect`)ので、広げるほど右上で
- * モデルを指せる領域が減る。`web/scripts/smoke-files.mjs` の空白クリック候補のように
- * 画面の隅を突く検査がある。
+ * モデルを指せる領域が減る。
  */
 export const CUBE_SIZE_PX = 144
 export const CUBE_MARGIN_PX = 12

@@ -46,7 +46,7 @@
   let log = $state<string[]>([])
 
   /**
-   * これまでに `fail` へ来たエラー(新しい順)。表示には使わない: 札は消えるので、`smoke-files.mjs` などが
+   * これまでに `fail` へ来たエラー(新しい順)。表示には使わない: 札は消えるので、smoke 検査(`web/scripts/browser.mjs`)が
    * 最後に一度「走行中にエラーが出ていないか」を見る場所である。
    * `$state` に置き、この関数が呼ばれた時点で読む: `testHooks` の `$effect` が依存し、新しいエラーで
    * `window.__duocad.errors` が作り直される(素の `let` だと古い写しで止まる)。

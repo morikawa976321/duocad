@@ -1742,7 +1742,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * 直線区間の中点(`entityMidpoints`)を、本物の点と同じ半径(`SKETCH_HANDLE_PIXELS`)で1段低い優先度
-   * (点・角・交点より下、辺より上)で拾う(本人指定「吸着優先順位は点と線の間」)。`snapDirection` は
+   * (点・角・交点より下、辺より上)で拾う。`snapDirection` は
    * カーソル強調が画面角度を出すのに使う。`sketchEntityAt` の点パス・角パスの後、辺パスの前からだけ呼ぶこと。
    */
   function sketchMidpointAt(offsetX: number, offsetY: number, target: SketchScene): SketchEntityHit | null {

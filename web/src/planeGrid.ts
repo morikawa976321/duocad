@@ -148,7 +148,7 @@ void main() {
 
   // 描く範囲(正方形)で切る。**原点対称ではなく中心を持つ** —— 面のframeの原点は
   // 面の隅のことが多く、対称な枠だと面の片側へ大きく偏る。縁は距離を画素で測ってAAを付け、
-  // きっぱり切る(ぼかしてフェードアウトさせない。本人指定「その部分までだけ描画する」)。
+  // きっぱり切る(ぼかしてフェードアウトさせない)。
   if (uBoundsHalf > 0.0) {
     float edgeU = (abs(uv.x - uBoundsCenter.x) - uBoundsHalf) / max(fwidth(uv.x), 1e-8);
     float edgeV = (abs(uv.y - uBoundsCenter.y) - uBoundsHalf) / max(fwidth(uv.y), 1e-8);

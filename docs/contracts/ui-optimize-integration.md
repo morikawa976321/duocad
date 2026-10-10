@@ -13,7 +13,7 @@
 - `duocad/meshbody.py`: `triangles/bbox/volume/geometry/write_stl/from_tessellation/reject`。**断り文の実体は `reject()` の1箇所**で「次に何ができるか」を必ず含む(`tests/test_mesh_body.py` の `EXPECTED_HINT` が固定)。形状最適化の結果は `from_tessellation` ではなく `duocad.topopt.mesh` の `verts`/`faces` をそのまま平らにして渡す(`verts.ravel().tolist()`/`faces.ravel().tolist()`。巻き順は `topopt.mesh` が外向きに揃えてあるので入れ替えない)。
 - **`add_mesh_body` の args に「元の B-rep の ID」を入れない。** 三角形そのものを積む(元を指すと、元ボディを後で編集した文書の再生で別の形が復元される)。
 - **`meshbody.py` に OCP / build123d を import しない**(`tests/test_boundaries.py`)。numpy/scipy は関数内 lazy import(現行は `validate_float32` 内)。モジュール直下で import しない。
-- 画面への配りものは `meshbody.geometry(mesh)`: `kernel.tessellate_selective` と同じキー構成で `faces` は**要素1つだけ**(`index:1`/`kind:"mesh"`/`detail:"fine"`/`deviation:0.0`)。`web/` は変えずに描画・投影できる。`App.svelte` の `partBodies` 付近のコメントは「`model.bodies` は常に編集用ボディだけ」と書くが実体は `model?.bodies ?? []` で濾していない(コメントが古い。信じて画面側を直しに行かない)。
+- 画面への配りものは `meshbody.geometry(mesh)`: `kernel.tessellate_selective` と同じキー構成で `faces` は**要素1つだけ**(`index:1`/`kind:"mesh"`/`detail:"fine"`/`deviation:0.0`)。`web/` は変えずに描画・投影できる。`App.svelte` の `partBodies` は `model?.bodies ?? []` をそのまま使い、濾していない。
 
 ### 編集 verb を効かせない(断りの門)
 

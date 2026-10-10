@@ -432,7 +432,7 @@ export interface Viewport {
   showBasePlanes(on: boolean): void
   // ------------------------------------------------------------------ 常設の原点ギズモ(issue #8)
   /**
-   * 原点の点・X/Y/Z軸・XY/XZ/YZ平面(7項目)をまとめて出し入れする(本人指定「7つまとめて」)。
+   * 原点の点・X/Y/Z軸・XY/XZ/YZ平面(7項目)をまとめて出し入れする。
    * 当たり判定を持たない装飾。既定は表示。
    */
   setOriginVisible(visible: boolean): void
