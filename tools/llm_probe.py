@@ -236,7 +236,6 @@ class Probe:
         body.pop("stream_options", None)
         return {**body, "stream": False, **self.extra}
 
-    # ------------------------------------------------------------------ シナリオ
     def facts(self) -> list:
         server = self.server
         server.forget()

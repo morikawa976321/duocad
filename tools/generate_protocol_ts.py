@@ -4,13 +4,11 @@
     python tools/generate_protocol_ts.py --check  今のファイルが宣言と一致しているかだけを見る(違えば終了コード1)
 
 宣言(コマンド名・分類・WebSocket が受け取る引数・verb が応答に載せる値・状態配信のキー)を
-TypeScript の型へ写す。手で書き写していた頃は、片方だけ直ったずれを JSON の境界で `tsc` が
-検出できず、実機で `undefined` を読むまで分からなかった。生成物は git に入れる(画面のビルドに
-Python を要らせないため)ので、宣言を変えたらここを走らせる —— 走らせ忘れは
-`tests/test_protocol.py` が落とす。
+TypeScript の型へ写す。JSON の境界のずれは `tsc` が検出できないので、手で写さず生成する。
+生成物は git に入れる(画面のビルドに Python を要らせないため)ので、宣言を変えたらここを走らせる
+(走らせ忘れは `tests/test_protocol.py` が落とす)。
 
-`duocad/catalog.py` を**パッケージを経由せずに**読む(`duocad/__init__.py` は OCP まで import する。
-宣言は純データなので、ファイル1つだけで読める)。
+`duocad/catalog.py` はパッケージを経由せずに読む(`duocad/__init__.py` は OCP まで import するが、宣言は純データ)。
 """
 from __future__ import annotations
 
