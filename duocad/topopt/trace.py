@@ -1,14 +1,12 @@
 """実製品の1実行に閉じた診断記録。配列は損失なし・内容ハッシュで重複排除する。
 
 ContextVarは製品の実行器スレッド内だけに設定する。数値関数を単独で呼ぶと記録しない。
-**記録の書き出しが失敗しても計算を止めない**(フォルダの作成・スナップショット・イベント・manifest・
-`provenance` の source.zip と git・`document` の JSON・入力ボディの STEP・`final_mesh` の final.stl の
-すべてが best effort)。記録は診断のための仕組みであり、解けた形状を捨てる権利を持たない —— `arrays/` が
-実行中に消えて `OSError` が `acceptance.safety_check` の `except Exception` に落ち、FEMが解けている候補を
-20回続けて「安全率を計算できず」で不合格にした実績がある(2026-09-24)。失敗は握りつぶさず
-`write_failures` に数えて manifest と stderr へ出し、記録が欠けた実行を無傷に見せない。
-`_encode` の `TypeError` は伝える —— 記録できない値を渡したのはこちらの書き方の誤りで、飲むと永久に
-気づけない。
+**記録の書き出しが失敗しても計算を止めない**(スナップショット・イベント・manifest・source.zip と git・
+document の JSON・入力ボディの STEP・final.stl のすべてが best effort)。記録は診断のための仕組みであり、
+解けた形状を捨てる権利を持たない(`arrays/` が実行中に消えた `OSError` が `acceptance.safety_check` の
+`except Exception` に落ち、解けている候補を20回続けて不合格にした実績がある)。失敗は握りつぶさず
+`write_failures` に数えて manifest と stderr へ出す。`_encode` の `TypeError` は伝える —— 記録できない値を
+渡したのはこちらの書き方の誤りで、飲むと永久に気づけない。
 """
 from __future__ import annotations
 
@@ -49,8 +47,7 @@ def current():
 
 
 def _atomic(path, write):
-    # 書く直前に親を作る。記録の開始時に1回作るだけでは、実行中にディレクトリが消えたとき
-    # その実行は最後まで回復しない(`arrays/` が消えて全候補の評価が落ちた実績がある)。
+    # 書く直前に親を作る(開始時に1回作るだけでは、実行中にディレクトリが消えると最後まで回復しない)。
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.tmp')
     with temporary.open('wb') as stream:
@@ -106,8 +103,7 @@ class Recorder:
     def _failed(self, where, error):
         """記録の書き込みが落ちたことを数え、最初の数回だけ stderr へ出す。
 
-        **ここから記録を書きに行かない**(`_manifest` を呼ぶと、その `_manifest` が落ちて再入する)。
-        数えた回数は次に成功した `_manifest` が持っていく。
+        **ここから記録を書きに行かない**(`_manifest` を呼ぶと、落ちて再入する)。
         """
         self.write_failures += 1
         self.manifest['write_failures'] = self.write_failures
@@ -180,8 +176,7 @@ class Recorder:
         try:
             self._json(self.path/filename, self._encode(value, {}))
         except OSError as error:
-            # **`OSError` だけを飲む**。`_encode` の `TypeError`(object配列など記録できない値)は
-            # こちらの書き方の誤りなので、飲むと永久に気づけない。
+            # **`OSError` だけを飲む**(`_encode` の `TypeError` は伝える。上のモジュール docstring)。
             self.write_seconds += time.perf_counter()-started
             self._failed(f'snapshot:{name}', error)
             return None
@@ -192,8 +187,7 @@ class Recorder:
     def save(self, name, write, *, digest):
         """記録用のファイルを1つ書き、書いた後に読み返した内容のハッシュを manifest の `digest` へ入れる。
 
-        `snapshot` と同じく best effort。手元のバイト列ではなく読み返して数えるので、
-        **manifest にハッシュがある = そのファイルが最後まで書けている**。
+        `snapshot` と同じく best effort。読み返して数えるので、**manifest にハッシュがある = 最後まで書けている**。
         """
         try:
             _atomic(self.path/name, write)
