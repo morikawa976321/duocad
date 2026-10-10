@@ -1,22 +1,16 @@
 /**
- * 検査に使うブラウザの選択と起動。
+ * 検査に使うブラウザの選択と起動(インストール済みのブラウザを使う。puppeteer-core なのでダウンロードしない)。
  *
- * **インストール済みのブラウザを使う**(puppeteer-core なのでダウンロードしない)。
- * **WebGLは実GPU(ANGLE/D3D11)で描く。** `--enable-unsafe-swiftshader` は「掴めなかったときに
- * ソフトGLへ落ちてよい」という許可であって強制ではない。**強制すると直るのはCPU消費であって
- * 検査の速さではない** —— `smoke.mjs` 1本の実測で、chromeのCPUは 1550秒(平均9.5コア) ->
- * 215秒(1.4コア)、所要時間は 163秒 -> 150秒でほぼ変わらない(検査の律速はOCCT側とWS往復で、
- * 描画のfpsではない)。どちらで描いたかは起動時の `GL :` 行に出る。
+ * WebGLは実GPU(ANGLE/D3D11)で描く。`--enable-unsafe-swiftshader` はソフトGLへ落ちてよいという
+ * 許可で、強制ではない。強制して直るのはCPU消費だけで検査の速さではない(実測: `smoke.mjs` 1本で
+ * chromeのCPU 1550秒 -> 215秒、所要時間 163秒 -> 150秒。律速はOCCTとWS往復)。
+ * どちらで描いたかは起動時の `GL :` 行に出る。
  */
 import { existsSync } from 'node:fs'
 import { launch } from 'puppeteer-core'
 import { fail, ok } from './args.mjs'
 
-/**
- * 探す順。**Chromeが先** —— この環境の Edge 151 は headless で起動できず、
- * `Failed to launch the browser process: Code: 0` を出して即座に終了する(専用プロファイルを
- * 与えても同じで、duocad側の問題ではない)。Edgeは候補として残す(Chromeが無い環境のため)。
- */
+/** Chromeが先: この環境の Edge 151 は headless で起動できず `Code: 0` で即終了する(duocad側の問題ではない)。 */
 export const CANDIDATE_BROWSERS = [
   process.env.DUOCAD_BROWSER,
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -25,7 +19,7 @@ export const CANDIDATE_BROWSERS = [
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
 ].filter(Boolean)
 
-/** 最初に見つかった実行ファイル。無ければ例外(**黙って別の経路へ落ちない**)。 */
+/** 最初に見つかった実行ファイル。無ければ例外。 */
 export function findBrowser() {
   const found = CANDIDATE_BROWSERS.find((candidate) => existsSync(candidate))
   if (!found) {
@@ -36,7 +30,6 @@ export function findBrowser() {
   return found
 }
 
-/** headless で起動する。戻り値は puppeteer の Browser。 */
 export async function launchBrowser(executablePath = findBrowser()) {
   const browser = await launch({
     executablePath,
@@ -53,10 +46,7 @@ export async function launchBrowser(executablePath = findBrowser()) {
   return browser
 }
 
-/**
- * 実際に描いたGLの実装名。**黙ってソフトGLへ落ちたことに気づくため**に毎回出す
- * (落ちても検査は通ってしまい、遅いだけの状態が見えないため)。取得に失敗しても検査は続ける。
- */
+/** 実際に描いたGLの実装名。ソフトGLへ落ちても検査は通ってしまうので毎回出す。取得に失敗しても検査は続ける。 */
 async function glRenderer(browser) {
   const page = await browser.newPage()
   try {
@@ -76,19 +66,12 @@ async function glRenderer(browser) {
 }
 
 /**
- * ビューポートに浮かぶ**ブラウザ(`BrowserPanel.svelte`)を畳んだ状態で `run` を走らせ、
- * 終わったら元に戻す。
+ * 浮いているブラウザ(`BrowserPanel.svelte`)を畳んだ状態で `run` を走らせ、終わったら元に戻す。
  *
- * このパネルは `.viewport` の左上に重なっており、**その下の画素は押せない**(押すと
- * クリックがパネルに吸われる)。`viewport.ts` の `clickable` が覆われた画素を候補から
- * 落とすので、`project*` のうち**候補を複数持つもの**(面・辺・領域・基準平面)は勝手に
- * 別の画素へ逃げる。逃げ場が無いのは `projectSketchPoint` だけ —— **スケッチ平面の
- * 特定の (u,v) は1画素しかない**ので、そこがパネルの下に来ると押せない。
- *
- * だから畳むのは**その1点を押す間だけ**にする。パネルを開けたままにしておくのは、
- * 一覧(モデル・スケッチ)そのものを触る検査が同じ画面を使うからである。
- *
- * パネルが無い画面でも落ちない(何もせず `run` を走らせる)。
+ * パネルは `.viewport` の左上に重なり、その下の画素は押せない。`viewport.ts` の `clickable` が
+ * 覆われた画素を候補から落とすので、候補を複数持つ `project*` は別の画素へ逃げるが、
+ * `projectSketchPoint` は (u,v) が1画素しかないので逃げ場が無い。畳むのはその1点を押す間だけにする
+ * (一覧そのものを触る検査は開いたままの画面を使う)。パネルが無い画面ではそのまま `run` を走らせる。
  */
 export async function withoutBrowserPanel(page, run) {
   const changed = await setBrowserPanel(page, false)
@@ -100,13 +83,10 @@ export async function withoutBrowserPanel(page, run) {
 }
 
 /**
- * undo / redo。画面にボタン(`#undo`/`#redo`)は無いので、
- * `App.svelte` の `onWindowKeydown` が拾うのと同じキー(Ctrl+Z / Ctrl+Y)を送る。
- *
- * **先にフォーカスを外す**。数値入力(INPUT/TEXTAREA)にフォーカスが残っていると、
- * `onWindowKeydown` はブラウザ標準のテキスト取り消しに譲って文書のundo/redoを
- * 発火しない(意図どおりの挙動。`smoke.mjs`「入力欄にフォーカスがある状態のCtrl+Z」参照)。
- * コマンドは確定後も構えたままなので、Enterで確定した直後は入力欄にフォーカスが残っている。
+ * undo のキー(Ctrl+Z)を送る(画面にボタンは無く、`App.svelte` の `onWindowKeydown` が拾うキー)。
+ * 先にフォーカスを外す: INPUT/TEXTAREA にフォーカスが残っていると `onWindowKeydown` は文書の
+ * undo を発火しない(意図どおり。`smoke.mjs`「入力欄にフォーカスがある状態のCtrl+Z」)。
+ * Enterで確定した直後は入力欄にフォーカスが残っている。
  */
 async function blurTextField(page) {
   await page.evaluate(() => {
@@ -122,15 +102,12 @@ export async function pressUndo(page) {
   await page.keyboard.up('Control')
 }
 
-/**
- * 視点をシーン全体へ戻す。画面にボタン(`#view-fit`)は無いので、
- * 実機検査だけが使う穴(`window.__duocad.frameAll`)を直接呼ぶ。
- */
+/** 視点をシーン全体へ戻す(画面にボタンは無く、実機検査用の穴 `window.__duocad.frameAll` を呼ぶ)。 */
 export async function frameAll(page) {
   await page.evaluate(() => window.__duocad.frameAll())
 }
 
-/** ブラウザの開閉を `open` に合わせる。**動かしたときだけ true**(戻す要否の判定に使う)。 */
+/** パネルの開閉を `open` に合わせる。動かしたときだけ true。 */
 async function setBrowserPanel(page, open) {
   const changed = await page.evaluate((want) => {
     const panel = document.querySelector('.browser-panel')
@@ -139,7 +116,7 @@ async function setBrowserPanel(page, open) {
     document.querySelector('#browser-collapse')?.click()
     return true
   }, open)
-  // **DOMに反映されるまで待つ**(Svelteの更新は次のタスクなので、押した直後は古い)
+  // Svelteの更新は次のタスクなので、押した直後のDOMは古い
   if (changed) {
     await page.waitForFunction(
       (want) => {
@@ -153,12 +130,9 @@ async function setBrowserPanel(page, open) {
   return changed
 }
 
-// ---------------------------------------------------------------------------------- 画面を開く・終わりのエラー確認
-
 /**
- * ページのエラーを控える(`pageerror`・`console.error`・4xx/5xx 応答)。走行の最後に
- * `assertNoAppErrors` へ渡す。**サーバのエラーはトーストへ出るだけでコンソールには出ない**ので、
- * これだけでは足りない(控え `window.__duocad.errors` と合わせて見る)。
+ * ページのエラーを控える(`pageerror`・`console.error`・4xx/5xx 応答)。最後に `assertNoAppErrors` へ渡す。
+ * サーバのエラーはトーストへ出るだけでコンソールには出ないので、控え `window.__duocad.errors` と合わせて見る。
  */
 export function watchErrors(page, { watchHttp = true } = {}) {
   const errors = []
@@ -167,7 +141,6 @@ export function watchErrors(page, { watchHttp = true } = {}) {
     if (message.type() === 'error') errors.push(message.text())
   })
   if (watchHttp) {
-    // どのURLで落ちたかを残す(「404が1件」だけ言われても原因が分からない)
     page.on('response', (response) => {
       if (response.status() >= 400) errors.push(`HTTP ${response.status()} ${response.url()}`)
     })
@@ -178,12 +151,11 @@ export function watchErrors(page, { watchHttp = true } = {}) {
 /**
  * 画面を開いて `__duocad.ready` まで待つ。戻り値は `{ page, consoleErrors }`。
  *
- * `height` は 860 が既定(900 の本もある)。**高さが変わると掴む画素が変わる**ので本ごとの値は
- * 揃えない。`until` は ready の後に待つ述語(`page.waitForFunction` に渡す。部品が届いたこと等)。
- * `newDocument`(既定 true)は、トップ画面が出ていれば「新規」を押して空の文書にしてから返す
- * (トップ画面そのものを見る本だけ false にする)。
- * **`frameAll` はここでは呼ばない** —— 初回フレーミングそのものを見る本と、near/far を作り直すと
- * 再現条件が壊れる本(`smoke-clip-planes.mjs`)がある。
+ * `height` の既定は 860。高さが変わると掴む画素が変わるので本ごとの値は揃えない。
+ * `until` は ready の後に待つ述語。`newDocument`(既定 true)はトップ画面が出ていれば「新規」を押す
+ * (トップ画面そのものを見る本だけ false)。
+ * `frameAll` はここでは呼ばない: 初回フレーミングを見る本と、near/far の作り直しで再現条件が壊れる本
+ * (`smoke-clip-planes.mjs`)がある。
  */
 export async function openApp(
   browser,
@@ -198,8 +170,7 @@ export async function openApp(
     timeout,
     polling: 100,
   })
-  // サーバは何も開いていない状態(トップ画面)で起動し、その間は文書を変える操作が断られる。
-  // 本はどれも空の文書から始める前提なので、トップ画面が出ていれば「新規」を押してツールバーを待つ。
+  // サーバはトップ画面で起動し、その間は文書を変える操作が断られるので「新規」を押す。
   if (newDocument) {
     await page.waitForFunction(
       () => document.querySelector('#start-new') !== null || document.querySelector('#sketch-create') !== null,
@@ -217,18 +188,15 @@ export async function openApp(
 /**
  * 走行の終わりに「エラーが1件も出ていない」を見る。
  *
- * 読む先は2つ。走行全体の有無は控え(`window.__duocad.errors`。**札は8秒で消える**ので DOM を
- * 最後に1回見ても取りこぼす)、ブラウザ側の例外・console.error・4xx は `watchErrors` の控え。
- * **控えが配列で来ることを先に確かめる** —— `undefined` や object に化けると `length > 0` が
- * 永久に偽になり、赤くならないまま検査が死ぬ(穴を1つ足すたびに起きうる形なので握らずに落とす)。
+ * 読む先は `window.__duocad.errors`(札は8秒で消えるので DOM は見ない)と、`watchErrors` の控え。
+ * 控えが配列で来ることを先に確かめる: `undefined` や object に化けると `length > 0` が偽のまま
+ * 検査が赤くならない。
  *
- * `allow` はわざと出させたエラー文言(受け取った文字列との完全一致。種別や前方一致で緩めない)。
- * **積んだ文言が控えに実在することも見る** —— 出ていないのに除外だけ積むと、「拒否されたはず」の
- * 検査が空振りしていても緑になる。`expectCount` は文言ではなく件数で見る本のため(`allow` と併用しない)。
+ * `allow` はわざと出させたエラー文言(完全一致)。積んだ文言が控えに実在することも見る
+ * (出ていないのに除外だけ積むと、空振りしていても緑になる)。`expectCount` は件数で見る本用(`allow` と併用しない)。
  */
 export async function assertNoAppErrors(page, consoleErrors, { allow = [], expectCount = null } = {}) {
-  // **`$state` のプロキシは構造化複製で `{}` になる**ので、配列かどうかはページの中で見て素の配列にして返す
-  // (`?? []` で読んでいた本は、プロキシが `{}` で届いて `length > 0` が偽のまま緑だった)。
+  // `$state` のプロキシは構造化複製で `{}` になるので、ページの中で素の配列にして返す。
   const errors = await page.evaluate(() => {
     const list = window.__duocad.errors
     return Array.isArray(list) ? JSON.parse(JSON.stringify(list)) : { notArray: String(list) }
@@ -259,8 +227,6 @@ export async function assertNoAppErrors(page, consoleErrors, { allow = [], expec
   return errors
 }
 
-// ---------------------------------------------------------------------------------- 入力と待ち
-
 /** 入力欄へ打つ: クリック → 全選択 → 消す → 打つ。`delay` は打鍵の間隔(ms)。 */
 export async function typeInto(page, selector, value, { delay = 15 } = {}) {
   await page.click(selector)
@@ -272,11 +238,9 @@ export async function typeInto(page, selector, value, { delay = 15 } = {}) {
 }
 
 /**
- * 述語が真になるまで待ち、待ちきれなければ **`what` を添えて失敗する**。
- *
- * `args` は述語へ渡す引数の**配列**(可変長ではない —— 2つの呼び方が混在すると引数が黙ってずれる)。
- * `dump` を渡すと落ちたときにその戻り(`look()` 等の画面の中身)を添える —— 「120秒待った」だけでは
- * 切り分けられない。
+ * 述語が真になるまで待ち、待ちきれなければ `what` を添えて失敗する。
+ * `args` は述語へ渡す引数の配列(可変長にすると2つの呼び方が混在して引数が黙ってずれる)。
+ * `dump` を渡すと落ちたときにその戻り(`look()` 等)を添える。
  */
 export async function waitOrFail(
   page,
@@ -295,9 +259,8 @@ export async function waitOrFail(
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
- * 描画ループの `n` フレームを待つ(`requestAnimationFrame` を n 回)。ホバー・段の不透明度・
- * レイアウトは `tick()` や次のフレームで入れ直されるので、動かした直後に読む前・射影する前に挟む
- * (2 でレイアウト、4 でホバーの解決を待つのが各本の相場)。
+ * 描画ループの `n` フレームを待つ。ホバー・不透明度・レイアウトは次のフレームで入れ直されるので、
+ * 動かした直後に読む前・射影する前に挟む(2 でレイアウト、4 でホバーの解決が相場)。
  */
 export async function waitFrames(page, n) {
   await page.evaluate(
@@ -318,7 +281,7 @@ export async function waitFrames(page, n) {
   )
 }
 
-/** `.viewport` の中央(ページ座標)。ホイールはカーソル位置で発火するので、その前に置く先。 */
+/** `.viewport` の中央(ページ座標)。ホイールはカーソル位置で発火する。 */
 export async function viewportCenter(page) {
   return page.evaluate(() => {
     const box = document.querySelector('.viewport').getBoundingClientRect()

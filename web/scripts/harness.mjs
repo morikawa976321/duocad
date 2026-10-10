@@ -1,11 +1,10 @@
 /**
  * 実機検査の骨格: 引数 → サーバ → (MCP の握手) → ブラウザ → 本体 → 後始末 → 終了コード。
  *
- * 各本は `runSmoke(name, defaults, body)` を1回呼ぶだけにする。骨格を書き写すと、
- * `modelsDir` を渡し忘れてリポジトリ直下の実 `models/` を書く・ポートが別の本と重なる・
- * temp を消さない・`process.exit` が `finally` を飛ばして子プロセスが残る、がそれぞれ別の本で起きた。
+ * 各本は `runSmoke(name, defaults, body)` を1回呼ぶだけにする(骨格を書き写すと、実 `models/` への書き込み・
+ * ポート重複・temp の消し忘れ・`process.exit` が `finally` を飛ばして子プロセスが残る、が起きた)。
  *
- * - `modelsDir` は**必ず**使い捨ての temp(`--workdir` で外から渡されたときだけ消さない)。
+ * - `modelsDir` は必ず使い捨ての temp(`--workdir` で外から渡されたときだけ消さない)。
  * - 失敗は `${name}: FAIL ...` を出して `process.exitCode = 1`(後始末を待ってから終わる)。
  * - ポートは OS に空きを選ばせる(`--port` / `--http-port` で明示したときだけ固定)。
  */
@@ -19,12 +18,10 @@ import { McpClient } from './mcp-client.mjs'
 import { startServer } from './server.mjs'
 
 /**
- * 空いているポートを `count` 個。**全部を握ってから離す**(1個ずつ取って離すと同じ番号が2回返りうる)。
+ * 空いているポートを `count` 個。全部を握ってから離す(1個ずつ取って離すと同じ番号が2回返りうる)。
  *
- * 本ごとの固定ポートにしないのは、同じ機械の無関係なプロセスが先に握っていると、その本だけが
- * 「サーバが起動直後に終了した」で落ちるため(実測: 別プロジェクトの開発サーバが 8797 を使っていて
- * smoke-svg が赤)。同じ HTTP ポートを2本が持つと、片方が bind に失敗する前に `startServer` の
- * `fetch` が先客のサーバへ通って進みうるので、並列に回すときも番号は重ねられない。
+ * 固定ポートにしないのは、無関係なプロセスが先に握っていると「サーバが起動直後に終了した」で落ち、
+ * 同じ HTTP ポートを2本が持つと `startServer` の `fetch` が先客のサーバへ通って進みうるため。
  */
 async function freePorts(count) {
   const probes = []
@@ -102,7 +99,7 @@ export async function runSmoke(name, defaults, body) {
   const dropWorkdir = () => {
     if (ownWorkdir) rmSync(ctx.workdir, { recursive: true, force: true })
   }
-  /** サーバとブラウザを立て直す(文書がまっさらな状態からやり直す本のため)。 */
+  /** サーバとブラウザを立て直す。 */
   ctx.restart = async () => {
     await stop()
     dropWorkdir()

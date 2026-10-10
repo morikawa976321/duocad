@@ -1,15 +1,12 @@
 /**
- * 検査用サーバの起動と停止 — 実ブラウザの検査が共有する。
+ * 検査用サーバの起動と停止(実ブラウザの検査が共有する)。
  *
- * **各スクリプトが自分でサーバを立てて、終わったら止める。** 別窓で立てておく手順は無い。
+ * 各スクリプトが自分でサーバを立てて終わったら止める。文書は接続より長生きするので、
+ * 毎回起動し直さないと前の検査の形が残り、「最初のソリッドが生まれる」経路を通れない。
  *
- * こうすると手順が1つ減るだけでなく、**文書が毎回まっさらになる**という要件が自動で満たされる
- * ——文書は接続より長生きするので、前の検査の形が残っていると「最初のソリッドが生まれる」経路を
- * 通れない(各スクリプトのdocstringが「サーバは毎回起動し直す」と書いていたのはこのため)。
- *
- * **stdinを閉じないこと。** `duocad.mcp_server` はstdioでMCPを喋るので、**stdinがEOFになると
- * プロセスごと終了する**(`serve_stdio` が戻る)。`spawn` の既定はパイプなので開いたままになるが、
- * `stdio: 'ignore'` や `< /dev/null` で起動すると**立ち上がった直後に落ちる**。
+ * stdinを閉じないこと。`duocad.mcp_server` は stdio で MCP を喋り、stdin が EOF になるとプロセスごと
+ * 終了する(`serve_stdio` が戻る)。`spawn` の既定(パイプ)なら開いたままだが、`stdio: 'ignore'` や
+ * `< /dev/null` で起動すると立ち上がった直後に落ちる。
  */
 import { existsSync, mkdtempSync } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -20,23 +17,18 @@ import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = resolve(HERE, '..', '..')
 export const PYTHON = resolve(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
-/** 目で見るためのスクリーンショットの置き場(`.gitignore` 対象)。 */
 export const SCREENSHOTS_DIR = resolve(REPO_ROOT, 'screenshots')
 
 /**
  * サーバを立てて、HTTPが応答するまで待つ。
  *
- * 戻り値の `child` は**MCPで叩く側のため**(`smoke-mcp` / `acceptance` が stdio に
- * `McpClient` を繋ぐ)。ブラウザだけの検査は使わない。
+ * 戻り値の `child` は MCP で叩く側のため(`smoke-mcp` / `acceptance` が stdio に `McpClient` を繋ぐ)。
  *
- * `modelsDir` は保存/開く/一覧の置き場(`--models-dir`)。**渡さなければ使い捨ての一時
- * ディレクトリを作って渡す** —— 1操作ごとの自動保存(issue #5)が最初の変更で
- * `untitled-<n>.json` を書くので、既定(リポジトリ直下の実 `models/`)のまま立てると
- * どの検査もそこへファイルを増やす。保存/開くを検査するスクリプトは、実在確認のために
- * 自分の workdir を明示して渡す。
+ * `modelsDir`(`--models-dir`)を渡さなければ使い捨ての一時ディレクトリを渡す: 1操作ごとの自動保存
+ * (issue #5)が `untitled-<n>.json` を書くので、既定(実 `models/`)のままだとファイルが増える。
+ * 保存/開くを検査するスクリプトは自分の workdir を明示して渡す。
  *
- * `newDocument`(既定 true)は、立ち上がった後に「新規」を送って文書を開いた状態にする
- * (トップ画面そのものを見る検査だけ false にする)。
+ * `newDocument`(既定 true)は立ち上がり後に「新規」を送る(トップ画面そのものを見る検査だけ false)。
  *
  * @param {{wsPort: number|string, httpPort: number|string, timeout?: number,
  *          modelsDir?: string, newDocument?: boolean}} options
@@ -77,13 +69,12 @@ export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir
     }
     await new Promise((done) => setTimeout(done, 200))
   }
-  // サーバは何も開いていない状態(トップ画面)で起動し、その間は MCP からの操作も断られる。
-  // 本はどれも空の文書から始める前提なので、画面を開く前に「新規」を送っておく。
+  // サーバはトップ画面で起動し、その間は MCP からの操作も断られる。
   if (newDocument) await sendNewDocument(wsPort, timeout)
 
   const stop = async () => {
     if (exited !== null) return
-    // **stdinを閉じて終わらせる**(MCPのクライアントが切れたときと同じ経路)。
+    // stdinを閉じて終わらせる(MCPのクライアントが切れたときと同じ経路)。
     child.stdin.end()
     await new Promise((done) => {
       const timer = setTimeout(() => {

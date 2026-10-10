@@ -1,14 +1,13 @@
 /**
  * 射影 → 画面座標 → クリック(実機検査が共有する「指す」手)。
  *
- * `page` と対象を引数で受けて値を返す形(`web/src/planeGrid.ts` と同じ)。**rect の取得と射影を
- * 同じ `page.evaluate` の中で行う** —— `getBoundingClientRect()` を単体で返すと DOMRect の
- * プロパティは構造化複製に乗らず `rect.left` が undefined になる(SMOKE_TESTING.md「環境」)。
- * **画素は持ち越さず、押す直前に射影し直す**(コマンドの起動や引数の確定でツールバーの行が
- * 変わり、ビューポートの高さ=射影が動く。SMOKE_TESTING.md「座標」)。
+ * rect の取得と射影は同じ `page.evaluate` の中で行う: `getBoundingClientRect()` を単体で返すと
+ * DOMRect のプロパティは構造化複製に乗らず `rect.left` が undefined になる(SMOKE_TESTING.md「環境」)。
+ * 画素は持ち越さず、押す直前に射影し直す: ツールバーの行が変わるとビューポートの高さ=射影が動く
+ * (SMOKE_TESTING.md「座標」)。
  *
- * **「その視点で最初に射影できた面」を選ぶ手(`pickAnyFace`)はここに置かない** —— 検査が視点に
- * 暗黙依存する形そのもので、対象は法線や寸法で名指しする(SMOKE_TESTING.md)。
+ * 「その視点で最初に射影できた面」を選ぶ手(`pickAnyFace`)はここに置かない: 検査が視点に暗黙依存する。
+ * 対象は法線や寸法で名指しする(SMOKE_TESTING.md)。
  */
 import { fail } from './args.mjs'
 import { waitFrames, withoutBrowserPanel } from './browser.mjs'
@@ -39,8 +38,7 @@ export async function clickAt(page, at, { modifier = null } = {}) {
 
 /**
  * スケッチ平面の (u,v) の画面座標。`sketchId` を渡すと通常モードでも取れる(省略時は今のスケッチ)。
- * `settle` は射影の前に2フレーム待つ —— コマンドを起動したり引数が1つ埋まったりするとツールバーの
- * 行が変わり、射影して即クリックすると狙いと違う場所を押す(`smoke-regions.mjs` の作法)。
+ * `settle` は射影の前に2フレーム待つ(ツールバーの行が変わると、即クリックは狙いと違う場所を押す)。
  */
 export async function sketchPointAt(page, u, v, { sketchId = null, settle = false } = {}) {
   if (settle) await waitFrames(page, 2)
@@ -50,12 +48,9 @@ export async function sketchPointAt(page, u, v, { sketchId = null, settle = fals
 }
 
 /**
- * スケッチ平面の (u,v) を押す。**常に浮いているブラウザを畳んでから**押す —— (u,v) は画面の
- * 1画素しかなく、そこがパネルの下に来ると逃げ場が無い(`browser.mjs` の `withoutBrowserPanel`)。
- *
- * **射影の前に2フレーム待つのが既定**(`settle`)。直前のクリックで引数が1つ埋まるとツールバーの
- * 行が増え、待たずに射影すると増える前の配置で画素を決めてしまう(実測: 円の中心を押した直後に
- * 半径の点を押すと、4mm のはずの半径が 6mm になった。2回に1回)。
+ * スケッチ平面の (u,v) を押す。常にブラウザパネルを畳んでから押す(`browser.mjs` の `withoutBrowserPanel`)。
+ * 射影の前に2フレーム待つのが既定(`settle`): 待たないと、直前のクリックでツールバーの行が増える前の
+ * 配置で画素を決めてしまう(実測: 円の中心の直後に半径の点を押すと、4mm のはずが 6mm になった。2回に1回)。
  */
 export async function clickSketchPoint(
   page,
@@ -72,9 +67,8 @@ export async function clickSketchPoint(
 }
 
 /**
- * 平らな面を**法線の向きで名指す**(戻り値は面の添字。形が届くまで待ち、無ければ失敗)。
- * `at` を渡すと、重心の `at.axis` 成分(0/1/2)が `at.value` の面に絞る。同じ向きの面が複数
- * あるときは面積が最大のもの。
+ * 平らな面を法線の向きで名指す(戻り値は面の添字。形が届くまで待ち、無ければ失敗)。
+ * `at` を渡すと、重心の `at.axis` 成分(0/1/2)が `at.value` の面に絞る。複数あれば面積最大。
  */
 export async function planarFace(page, bodyId, normal, { at = null, timeout = 30000 } = {}) {
   try {
@@ -101,15 +95,11 @@ export async function planarFace(page, bodyId, normal, { at = null, timeout = 30
   }
 }
 
-/** 面の画面座標(射影できなければ null)。 */
 export async function faceAt(page, bodyId, index) {
   return screenOf(page, 'projectFace', bodyId, index)
 }
 
-/**
- * 面を押す。面は逃げ場がある(候補の三角形を複数持ち、パネルに覆われた画素は候補から落ちる)ので、
- * パネルを畳むかは選べる(`hidePanel`)。
- */
+/** 面を押す。面は覆われた画素を候補から落として逃げられるので、パネルを畳むかは選べる(`hidePanel`)。 */
 export async function clickFace(page, bodyId, index, { modifier = null, hidePanel = false } = {}) {
   const run = async () => {
     const at = await faceAt(page, bodyId, index)
@@ -121,8 +111,8 @@ export async function clickFace(page, bodyId, index, { modifier = null, hidePane
 }
 
 /**
- * スケッチの図形を**その最初の点**(円・円弧は中心、線分・ベジエは始点、長方形は左下)のクリックで
- * 選ぶ。点は必ずその図形の上にあり、当たり判定も点が最優先なので確実に掴める。
+ * スケッチの図形をその最初の点(円・円弧は中心、線分・ベジエは始点、長方形は左下)のクリックで選ぶ。
+ * 当たり判定は点が最優先なので確実に掴める。
  */
 export async function clickEntityHandle(page, entityId) {
   return withoutBrowserPanel(page, async () => {
@@ -144,15 +134,12 @@ export async function clickEntityHandle(page, entityId) {
 }
 
 /**
- * **スケッチを作る2手**: ツールバーの「スケッチ」を起動 → 基準平面をクリック(Enter は無い:
- * 対象1つ・how の入力なし → 即適用)。戻り値は作られた sketch_id。
- *
- * 起動してから、その平面を指せる画素が出るまで待つ(`projectBasePlane` は「その画素からのレイが
- * 本当にその平面に当たり、その画素に面が無い」ことを確かめてから返す)。`settle` は起動の反映を待って
- * 2フレーム置いてから射影する(`smoke-regions.mjs` の作法)。
- * **貼れた先が本当にその基準平面かを毎回検算する**(`verifyFrame`) —— `projectBasePlane` が
- * 返す画素は部品の輪郭のすぐ外側になることがあり、1画素ずれると側面に貼られ、後続のアサーションは
- * それで全部通ってしまう(SMOKE_TESTING.md「座標」)。
+ * スケッチを作る2手: ツールバーの「スケッチ」を起動 → 基準平面をクリック(即適用なので Enter は無い)。
+ * 戻り値は作られた sketch_id。平面を指せる画素が出るまで待ち、`settle` は起動の反映を待って
+ * 2フレーム置いてから射影する。
+ * 貼れた先が本当にその基準平面かを毎回検算する(`verifyFrame`): `projectBasePlane` の画素は部品の
+ * 輪郭のすぐ外側になることがあり、1画素ずれると側面に貼られ、後続のアサーションが全部通ってしまう
+ * (SMOKE_TESTING.md「座標」)。
  */
 export async function createSketchOnBasePlane(
   page,

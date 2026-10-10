@@ -1,12 +1,9 @@
 /**
- * MCP(stdio・JSON-RPC 2.0)のクライアント(`smoke-mcp.mjs` ほか MCP を叩く smoke が共有する)。
+ * MCP(stdio・JSON-RPC 2.0)のクライアント(MCP を叩く smoke が共有する)。
  *
- * **stdoutに出てよいのはJSON-RPCの行だけ**という契約の検査点でもある。OCCTがC++から
- * 実fdへ吐く統計が混ざると接続が壊れるので、**JSONにならない行は捨てない**。
- * どう扱うかだけスクリプトによって違うので `onNoise` で受ける:
- *
- * - `smoke-mcp` … 既定のまま(例外にして検査を止める)
- * - `acceptance` … 記録して続ける(受入は落ちても最後まで走り、❌ を残す作り)
+ * サーバの stdout に出てよいのは JSON-RPC の行だけという契約の検査点でもある(OCCT が C++ から
+ * 実fdへ吐く統計が混ざると接続が壊れる)。JSONにならない行は捨てず `onNoise` で受ける:
+ * `smoke-mcp` は既定(例外で止める)、`acceptance` は記録して続ける。
  */
 export class McpClient {
   /**
@@ -74,7 +71,7 @@ export class McpClient {
     this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`)
   }
 
-  /** 握手。`initialize` → `notifications/initialized`。戻り値は initialize の result。 */
+  /** 握手(`initialize` → `notifications/initialized`)。 */
   async handshake(clientName) {
     const initialized = await this.send('initialize', {
       protocolVersion: '2025-06-18',
@@ -101,9 +98,8 @@ export class McpClient {
  * MCP で矩形を押し出して箱を作る: `sketch_create` → `add_rectangle` → `set_selection`(領域1)
  * → `extrude` →(`clear_selection`)。戻り値は `{ sketchId, bodyId }`。
  *
- * `bodyId` は `extrude` の応答の `bodies[0].body_id`(版が変わった Body の一覧。空の文書での最初の
- * 押し出しなら `describe_document().bodies[0]` と同じ Body)。fixture の寸法は呼び手が持つ ——
- * 寸法そのものが検査の条件になる本がある(原点中心の箱、極小と巨大の板)。
+ * `bodyId` は `extrude` の応答の `bodies[0].body_id`。fixture の寸法は呼び手が持つ
+ * (寸法そのものが検査の条件になる本がある)。
  */
 export async function addExtrudedRect(
   mcp,
