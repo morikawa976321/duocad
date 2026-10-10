@@ -92,7 +92,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\mf\duocad-s
 直前の更新の前のコミットは `duocad-stable\.git\duocad-previous` に残る。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File %USERPROFILE%\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot %USERPROFILE%\mf\duocad-stable -LogDir %USERPROFILE%\mf\duocad-data\logs -DataDir %USERPROFILE%\mf\duocad-data -Rollback
+powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot $env:USERPROFILE\mf\duocad-stable -LogDir $env:USERPROFILE\mf\duocad-data\logs -DataDir $env:USERPROFILE\mf\duocad-data -Rollback
 ```
 
 動いているサーバは8776から探して**すぐ強制終了する**(止まるよう頼む口は無い。文書は自動保存済みなので、
