@@ -346,3 +346,68 @@
 ## A-3. 検証範囲の縮小(2026-10-05 本人指示)
 
 本人の「あと2-3日でおわるように組みなおして」に基づき、以前の費用・時間無制限・全行列の指示より優先して縮小した(納期目標 2026-10-07 18:00・最終 10-08 18:00)。縮小後の規則: 重い FEM は1プロセス系列ずつ、子計算に OS プロセス単位の wall timeout(小型1ケース20分・hanger 固定形状1ケース45分)、hanger の全材料開始の新規最適化・全行列・未完チェーンの再起動は禁止、小型探索の比較は同じ格子・実現幅・荷重・評価ゲート・初期形・停止条件で行い体積だけで順位付けしない、未実施は `deferred_by_user_deadline` で一覧化して pass にしない。工程別の縮小内容は 6-4 節。
+
+---
+
+# 付録B: 評価式(応力集約指標)の比較と採否
+
+出典: 旧 03_METRICS・03B_METRICS_RECHECK(git 履歴)。コードは `topopt_checks/idle_validation/stress_metrics.py`(候補式。材料セル ρ=1 の von Mises 配列+マスクを受ける純粋関数、FEM は呼ばない)・`metric_eval.py`(形状→FEM解→ゾーン付き生の場)。
+
+## B-1. 候補式の定義
+
+全候補は `material_mask`(またはそのゾーン部分集合)だけを母集団にし、`raw_max_mpa` は入力に使わない(空隙を分母や平均に混ぜる経路はコード上ない)。許容は `cond.allowable_mpa`=40 MPa(製品の安全率計算と同じ値)。
+
+| ID | 関数 | 定義 |
+|---|---|---|
+| M1 | `full_population_percentile` | `percentile(v[material], 99.5)`(現行製品の `stress.representative_stress`) |
+| M2 | `excluded_population_percentile` | 保持部を除いた母集団の99.5%点 |
+| M3 | `zone_percentile` | holding/joint/general 各ゾーンで99.5%点を取り、全ゾーン合格で合格 |
+| M4a / M4b | `top_volume_rank` / `top_volume_average` | 応力降順で物理体積 `V_top` に対応する `k=round(V_top/cell³)` 番目の値 / 上位k個の平均(窓 8mm³ と 216mm³ の2点) |
+| M5a | `exceedance_volume` | `count(v>allowable)·cell³` |
+| M5b | `exceedance_integral` | `Σ(v_i−allowable)·cell³`(超過セルのみ。tolerance=0=1セルでも超えたら不合格) |
+| M6 | `p_mean` | `mean(v^p)^(1/p)` |
+| M7a | `p_norm_unnormalized` | `sum(v^p)^(1/p)`(`vmax` でスケール) |
+| M7b | `ks_aggregation` | `vmax + (1/ρ)ln(Σexp(ρ(v_i−vmax)))` |
+
+p=8、ρ=1.0(1/MPa)は研究用の初期値で較正していない。M5b/M7b のパラメータ(tolerance、p、ρ)は未校正。
+
+## B-2. 採否(結論)
+
+- **M5b(超過量積分)が合否の本体**: 反例7件・34実形状ケースで一度も危険を見逃さず、母数・窓・ゾーンのいずれの希釈にも強い。**ただし粗格子の合格は安全の証明でない**(path 6000N の固定形状細分で level1〜3 は M5b=0、level4(0.6176mm)で突然8セル〈41.8〜46.7 MPa、全て holding zone、設計空間の外枠から13セル内側=境界アーティファクトではなく拘束近傍の応力集中が解像されたもの〉が超過して M5b=5.91)。
+- **M3(部位別99.5%点)は診断の内訳に保持**: ゾーンが数百セル以上あると内部で同じ希釈を再現する。許容の1.25倍(50 MPa)を holding/joint/general のどのゾーンの1セルへ注入しても3ゾーンとも合格のまま(dilution の 1,064/684/9,298 セルでも hanger_base の 507/1,606/29,224 セルでも再現)。**部位別分割は必要条件だが十分条件でない**。ゾーン別に使うなら99.5%点でなく超過量積分にする(ゾーン別 M5b は未実装)。
+- **M7b(KS)は探索時の補助指標**: M5b は超過が無い限り勾配を持たないので、探索の順位付け・勾配用。足切り(合否)には使わない。M7a(非正規化pノルム)は母数希釈にほぼ免疫でピーク集中に鋭敏だが、「個々には合格だが多数がやや高い」形(path 独立探索1.5mm・6000N、超過セル0)を過剰に不合格にする。
+- **不採用**: M1 は母数希釈(下記)と局所危険の見逃しで単独不可。M2 は保持部を母集団から除く設計が必然的に保持部の危険を隠し、除外域の外で操作してもM1と無差別(希釈に無防備)。M4 は窓より小さい局所超過を完全に見逃す(80 MPa の1セルを216mm³ 窓で取ると順位8.70・平均11.82 MPa)。M5a は深刻さを区別しない。M6 は N で割る構造が希釈と同型(20倍水増しで-31%)。いずれもパラメータで救えない。
+- 独立解析による局所評価(別ソルバ・局所サブモデル・conformal メッシュ)は gmsh 等が環境に無く未実装。
+
+## B-3. 主要な実測
+
+- **母数希釈(dilution_r-1・300N、遠方の2.0 MPa セルを足す)**: 20倍水増し(総母集団231,966)で M1=8.271→2.0(注入値に収束、-76%)、M2 も同一、M6 -31%、M7a +0.23%、M7b +9.5%。hanger_base(31,337要素)では M1→2.0(-76%)、M7a +0.000045%・M7b ±0%。
+- **同じ実形状が指標だけで合否逆転**:
+
+| 形状・条件 | 製品SF | M1 | M3 | M5b | M7b |
+|---|---:|---|---|---|---|
+| hanger H1(200N) | 4.824 | PASS 8.29 | PASS 15.9 | **FAIL 69.5** | FAIL 48.7 |
+| hanger H2(2000N) | 2.727 | PASS 14.7 | FAIL 42.5 | FAIL 317.5 | FAIL 48.0 |
+
+  H1 は一般部(29,224セル)に荷重端の48.72 MPa のピーク(保持部19.39を上回る)があり、M3 の一般部99.5%点は7.31 MPa で現れない。M5b だけが H1・H2 の両方を捕捉した。
+- 現実的な材料編集(一般部の低応力20%除去/1セル膨張、SF 4.836 の余裕あり)では全指標が1〜5%しか動かず合否も反転しない。極端な場だけの操作と、幾何・力学的に成立する操作は区別して評価する。
+- 格子原点を±0.5セルずらす: dilution(SF余裕4.8倍)は2〜3%、path(余裕2.4倍)は M3 +21.6%・SF -12.7%、-0.5セルは連結成分が消えて候補が不成立。+1.0セルは基準と完全一致。
+- 同条件(200N・2.0mm・最小幅5セル)の再採点: hanger_r2(保持部除外の探索結果)は全母集団M1で SF 3.726(探索時の除外母集団評価では4.84)。製品の実質下限は2.0(探索目標4.8=2.0×2.4)なので「R2が危険」ではなく「R2の探索目標達成は評価式次第」。hanger_step05(5%歩幅)は M5b=0・材料-38%(19,451要素、SF 4.819)で、現行形(M5b 69.5、31,337要素)にある荷重端の局所超過を持たない。移植トラスは SF 8.869 だが最小幅不合格(`_min_width_exempt` 経由の正しい判定)。
+
+## B-4. 再現と落とし穴
+
+```
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\run_metric_comparison.py            # 34ケース×10候補 → metric_comparison.json
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\counterexamples_field_only.py       # 反例 a/d/e(場だけ)
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\counterexamples_material_edit.py    # 反例 b
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\counterexamples_origin_shift.py     # 反例 g
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\counterexamples_hanger_extension.py # a/e を hanger 実形状へ
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\hanger_common_condition_scoring.py  # 現行/R2/5%/移植の共通条件採点
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\level4_exceedance_locality.py
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\keep_islands_volume_contribution.py
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\build_03_metrics_json.py   # 集約。出力は output\idle_validation_20260928\ の metric_comparison.json など
+```
+- 最小幅の判定は `binary_search._min_width_exempt(cond, shape, 5)` 経由で保持セルを規則の対象外にする。`_mask_satisfies_min_width(mask, 5)` を exempt なしで呼ぶと現行形自身が不合格になる(製品の受理基準と矛盾)。
+- keep 合成・`resolve_islands` が細分の体積差に与える寄与は 0 セル(path_2.5mm・level2)。keep が元格子で mask の部分集合なら同じ投影を通した後も部分集合のまま(`floor` 逆引きは単調写像)。
+- 00 の時間・メモリ表とJSONの差は所要時間の実行間ゆらぎ(3〜10%)のみで、design_elements・材料体積・SF は一致。`rss_delta_mb` は前後差分でありピークメモリではない(ピークは `tracemalloc` の `traced_peak_mb`)。
+- 03 の34ケースは製品コード(`stress.py`・`binary_search.py`・`design_space.py`)と評価計算パスの変更ゼロで、2ケースを再計算してビット一致を確認済み。
