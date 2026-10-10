@@ -39,6 +39,9 @@ GPU の無い機械(ThinkPad P14s Gen 6 等)では選ばない。選んでも、
 | `residual:` | 収束したのに残差検算に通らない | 試す |
 | `gpu-error:` | それ以外の CUDA の例外 | 試さない |
 
+GPU の CG が収束しない(`not-converged:`)ときだけは CPU の CG を経ず、直接解法(`spsolve`)へ回す。ビット一致なので CPU の CG も
+同じ反復で収束せず、CPU だけで解いたときの「CG が収束しない → 直接解法」と同じ道になる。以後も GPU を試す。
+
 - 戻るたびに `RuntimeWarning` を出す。
 - 実行記録の `linear-solve` に `device_requested` / `device`(実際に解いた方)/ `gpu_fallback`(理由。戻らなければ null)が残る。
   `fem.collect_solve_stats()` は `gpu_solves` / `gpu_fallbacks` を数える。**`gpu_fallbacks` が 0 でない実行は、CPU と GPU の秒が混ざっている**

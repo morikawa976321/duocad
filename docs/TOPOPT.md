@@ -1,7 +1,7 @@
 # 形状最適化(topopt) — 測って分かったこと
 
 **現在の最優先目標と最終形状の2条件(水密・単一ソリッド)**は [TOPOPT_ACCEPTANCE.md](TOPOPT_ACCEPTANCE.md)。
-保持・除外は平滑化後のCADブーリアンで反映する。
+保持・除外は平滑化後の表面とのメッシュ集合演算で反映する(下「最終処理はメッシュ集合演算」)。
 
 | 何が | どこにあるか |
 |---|---|
@@ -718,6 +718,8 @@ optimize_run.run
        ├─ mesh.build_surface_from_mask        埋めた後の確定マスクだけをメッシュ化
        ├─ finalize.finalize                   平滑化後の表面を検査 → 0.01 mmで分割した保持を足し除外を引く(manifold3d)
        │                                      → 簡略化 → 接続6項目・単一ソリッド・float32・自己交差で検査
+       ├─ final_check.inspect                 完成メッシュを探索格子の 1/3 で解き直し、部材域の表面の最大応力で安全率を出す
+       │                                      + neck_persistence でつなぎ目の幅を3値で診断(目標を割れば警告。FINAL_UNSAFE_BLOCKS が真なら final_unsafe)
        └─ add_mesh_body                       合格した三角形をメッシュボディとして文書へ追加
 ```
 

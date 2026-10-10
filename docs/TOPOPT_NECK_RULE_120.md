@@ -96,8 +96,9 @@ p を覆う芯と q を覆う芯が上と同じ群の作り方で同じ群にな
 - 探索: `duocad/topopt/neck.py` の `NeckJudge` を `binary_search.peel` に入れた(`skipped_neck`)。静的診断 `static_necks` は段階4の開始形と結果形で
   `diagnostics['reduction']['static_necks']` に記録する。§2 を `CoreConnectivity` を使わずに書いた参照実装と、固定例6つ・乱数の手で照合した
   (`tests/test_neck.py`。乱数80通りで「くびれを作る」168手・「作らない」444手が全て一致)。
-- 完成形: `duocad/topopt/neck_persistence.py`(§3)と `duocad/topopt/final_check.py`(完成形を探索の格子へ占有化して FEM を解き直す)を
-  `optimize_run._run` の最終処理の後に入れた。本来の目標安全率を割れば `final_unsafe`。ε = √3·s(二値 EDT の偏り s√3/2 + 標本化 s√3/2)で、
+- 完成形: `duocad/topopt/neck_persistence.py`(§3)と `duocad/topopt/final_check.py`(完成形を探索の格子の 1/3 へ占有化して FEM を解き直し、
+  表面の最大応力で安全率を出す。[TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) 10章)を `optimize_run._run` の最終処理の後に入れた。
+  本来の目標安全率を割ったときは、肉盛りが入るまで警告を付けて結果を足す(`optimize_run.FINAL_UNSAFE_BLOCKS = False`、#129)。ε = √3·s(二値 EDT の偏り s√3/2 + 標本化 s√3/2)で、
   向きを乱数で変えた木のくびれ4例・輪のくびれ4例すべてで区間が真の直径を含んだ(`tests/test_neck_persistence.py`)。
 - 小型3題材(dilution 2.5mm、path 2.5mm・2.0mm、m=3)で判定の有無を比べた(`topopt_checks/compare_neck_judge_120.py`、出力 `output/neck_judge_120/`):
   材料量・安全率・評価回数は3題材とも**完全に同じ**。くびれ判定が断った手(19・80手)は、判定なしで S(m) が断っていた手と同じ数で、
