@@ -1,41 +1,20 @@
 <script lang="ts">
   import type { OptimizeNotice } from './optimizeNotice'
   /**
-   * 形状最適化を**走らせる**パネル。
+   * 形状最適化を走らせるパネル(条件を置く4 verb はツールバー)。解像度を選ぶ / 走らせる / 進捗 / 中断 / 通知。
    *
-   * 条件を置く4 verb はツールバーにあり、ここが受け持つのはその続き ——
-   * **解像度を選ぶ / 走らせる / 進捗を見る / 中断する / 通知を読む**。
+   * 要素サイズ[mm]は下限〜上限の範囲で自由に入れる。空欄が既定＝粗い側の端(上限)。両端の性質が違う:
+   * - 粗い側の端は「正しさ」の境界: 割ると条件面から節点が消える。しかも silent(例外は出ず、もっともらしい形が返る)。上限より粗い入力はサーバが断る。
+   * - 細かい側の端は「都合」の境界: 割っても間違いはしない。遅い、落ちる、それだけ。
+   * 入れた値の段(実格子へ揃えた要素サイズ・要素数・最小幅の段)はサーバが作る(`optimize_resolution` に値を渡すと `selected` が返る):
+   * 要素数の数え方(余白比率とパッド)を画面が持つと必ずずれる。梯子(`steps`)は入力の候補ボタンとして出す。
    *
-   * ## 解像度の見せ方(ここが設計の肝)
+   * 所要時間は付けない(計画書§6.2。走らせる前は1回もFEMを解いておらず実測が無い)。密度フィルタ半径の入力欄も無い(二値探索は密度フィルタを持たない、計画書§6.2)。
    *
-   * **要素サイズ[mm]を下限〜上限の範囲で自由に入れる。空欄が既定＝粗い側の端(上限)。**
-   * 両端の性質が違う:
+   * 通知(「荷重面に格子節点が付かなかった」「保持ソリッドがこの解像度では表現できていない」)は結果が信用できないという意味なので、
+   * 時間で消えるトースト(`Toast.svelte`)だけに流さず、次に走らせるまでここに残す。
    *
-   * - **粗い側の端は「正しさ」の境界** —— 割ると条件面から節点が消える。
-   *   しかも**silent**(例外は出ず、もっともらしい形が返る)。上限より粗い入力はサーバが断る。
-   * - **細かい側の端は「都合」の境界** —— 割っても間違いはしない。遅い、落ちる、それだけ。
-   *
-   * 入れた値の段(実格子へ揃えた要素サイズ・要素数・最小幅の段)は**サーバが作る**
-   * (`optimize_resolution` に値を渡すと `selected` が返る) —— 要素数の数え方(余白比率とパッド)を
-   * 画面が持つと必ずずれる。梯子(`steps`)は入力の候補ボタンとして出す。
-   *
-   * **所要時間は付かない**(計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と
-   * 表示する」)。走らせる前は1回もFEMを解いていないので実測が無く、旧SIMP係数を使った
-   * 桁の見当も出さない——段の選択は要素数だけを見て行う。密度フィルタ半径(最小部材幅)の
-   * 入力欄も廃止した(二値探索は密度フィルタを持たない、計画書§6.2)。
-   *
-   * ## 通知をここに残す理由
-   *
-   * 「荷重面に格子節点が付かなかった」「保持ソリッドがこの解像度では表現できていない」は
-   * **結果が信用できないという意味**である。トースト(`Toast.svelte`)は時間で消える設計
-   * なので、これを流すと見落とす。**次に走らせるまでパネルに残す**(トーストにも同じ文が
-   * 出るが、あちらは気づかせる役、ここが読み返す役)。
-   *
-   * ## 状態の正は `App.svelte`
-   *
-   * ここは値と口を受け取るだけの presentational な部品(`SettingsDialog.svelte` と同じ規律)。
-   * **`position: absolute` でフローの外**に置くので、`.viewport` の寸法＝カメラのアスペクトに
-   * 触らない(styles.css の不変条件)。
+   * 状態の正は `App.svelte`。`position: absolute` でフローの外なので `.viewport` の寸法＝カメラのアスペクトに触らない(styles.css の不変条件)。
    */
   import { chosenStep, shownElementSizeRange, shownMinWidthMm, stepCells } from './minWidth'
   import type {
@@ -75,12 +54,11 @@
   } = $props()
 
   const steps = $derived(resolution?.steps ?? [])
-  /** 効いている段(`chosenStep`。App と同じ判定)。入力した値への応答待ち・範囲外なら `null`。 */
+  /** 効いている段(`chosenStep`)。入力した値への応答待ち・範囲外なら `null`。 */
   const step = $derived(chosenStep(resolution, elementSizeMm))
   const elementSizeRange = $derived(resolution === null ? null : shownElementSizeRange(resolution))
-  /** 要素サイズの欄の文字列。数値から欄へは外から変わったとき(候補ボタン・文書の切り替え)だけ書き戻す —— 打つたびに
-   *  書き戻すと打ちかけの「1.」が「1」に化ける。**書き戻すのは小数第2位までの表示で、送る値は丸めない**
-   *  (下限 1.574mm の段を「1.57」で送ると下限割れで断られる)。 */
+  /** 要素サイズの欄の文字列。外から変わったとき(候補ボタン・文書の切り替え)だけ書き戻す: 打つたびに書き戻すと打ちかけの「1.」が「1」に化ける。
+   *  書き戻すのは小数第2位までの表示で、送る値は丸めない(下限 1.574mm の段を「1.57」で送ると下限割れで断られる)。 */
   let elementSizeText = $state('')
   let elementSizeSent: number | null | undefined = undefined
   $effect.pre(() => {
@@ -89,7 +67,6 @@
     elementSizeSent = value
     elementSizeText = value === null ? '' : value.toFixed(2)
   })
-  /** 要素サイズの欄が数として読めない(空欄は読める = 既定)。 */
   const elementSizeUnreadable = $derived(elementSizeText.trim() !== '' && !Number.isFinite(Number(elementSizeText)))
   /** 入れた値をサーバが断った理由(上限より粗い・下限より細かい)。応答がまだその値のものでなければ出さない。 */
   const elementSizeProblem = $derived(
@@ -101,21 +78,17 @@
   function typeElementSize(raw: string): void {
     elementSizeText = raw
     const parsed = raw.trim() === '' ? null : Number(raw)
-    if (parsed !== null && !Number.isFinite(parsed)) return // 読めない間は送らない(欄が赤くなり実行も止まる)
+    if (parsed !== null && !Number.isFinite(parsed)) return
     elementSizeSent = parsed
     onElementSize(parsed)
   }
-  /** 選べる最小幅の段(サーバーが配る。`optimize_run.min_width_cell_range`)。空なら この解像度では選べない。 */
+  /** サーバが配る最小幅の段(`optimize_run.min_width_cell_range`)。空ならこの解像度では選べない。 */
   const minWidthSteps = $derived(step?.min_width_steps_mm ?? [])
-  /** 効いている最小幅(`null` は既定 = いちばん細い段)。 */
   const minWidthShown = $derived(minWidthMm ?? minWidthSteps[0] ?? null)
 
   /**
    * パネルの実高さ(+ブラウザとの間隔10px)を `.stage` の `--browser-bottom-reserve` へ渡す。
-   *
-   * ブラウザ(`BrowserPanel.svelte`)は同じ列の上端に浮いており、こちらが重なり順で上にある。
-   * 高さを知らせないと、伸びたこちらがブラウザの下の行を覆って押せなくする(実測: 窓の高さ860pxで
-   * パネルが458pxになり、スケッチの行の中央に見出しが重なって、スケッチ名のクリックが吸われた)。
+   * 知らせないと、伸びたこちらがブラウザの下の行を覆って押せなくする(実測: 窓の高さ860pxでパネルが458pxになり、スケッチ名のクリックが吸われた)。
    */
   let panelEl = $state<HTMLDivElement | null>(null)
   $effect(() => {
@@ -134,7 +107,6 @@
   })
 
   const problems = $derived(conditions?.problems ?? [])
-  /** 走らせられるか。**条件と目盛りの両方がそろって初めて押せる。** */
   const canRun = $derived(
     !running &&
       conditions !== null &&
@@ -148,9 +120,7 @@
 <div id="optimize-panel" class="floating-panel" bind:this={panelEl}>
   <div class="head"><strong>形状最適化を走らせる</strong></div>
 
-  <!-- **条件の点検はいちばん上**。走らせられない理由があるなら、入力欄を触る前に読ませる。
-       文はサーバが作る(`conditions_report` の `problems`)—— **この版は拘束面1枚・
-       荷重面1枚だけ**という制限もここに文として現れる。 -->
+  <!-- 条件の点検はいちばん上。文はサーバが作る(`conditions_report` の `problems`)。この版は拘束面1枚・荷重面1枚だけという制限もここに文として現れる。 -->
   {#if conditions === null}
     <p id="optimize-conditions" class="hint dim">条件を確認している…</p>
   {:else if conditions.ready}
@@ -167,8 +137,7 @@
     </ul>
   {/if}
 
-  <!-- **要素サイズは下限〜上限の自由入力。空欄が既定(上限＝いちばん粗い)。**
-       段が1つも無い＝「間違わない解像度」が作れない状態なので、入力欄ごと出さずに理由を出す。 -->
+  <!-- 段が1つも無い＝「間違わない解像度」が作れない状態なので、入力欄ごと出さずに理由を出す。 -->
   {#if resolution === null}
     <p id="optimize-resolution-note" class="hint dim">解像度を確認している…</p>
   {:else if resolution.error}
@@ -182,7 +151,7 @@
   {:else}
     <label class="field-row">
       要素サイズ[mm]
-      <!-- **`type="number"` にしない**(最小幅の欄と同じ理由。打ちかけの「1.」が空文字になる)。 -->
+      <!-- `type="number"` にしない(最小幅の欄と同じ理由。打ちかけの「1.」が空文字になる)。 -->
       <input
         id="optimize-resolution"
         type="text"
@@ -232,8 +201,7 @@
     </p>
     <label class="field-row">
       最小幅[mm]
-      <!-- **段から選ぶだけ**(数値は打たせない)。段は 2mm 以上で最小の m から、格子の最短の辺の 1/4 まで
-           (`optimize_run.min_width_cell_range`。根拠の無い暫定値)。 -->
+      <!-- 段から選ぶだけ。段は 2mm 以上で最小の m から、格子の最短の辺の 1/4 まで(`optimize_run.min_width_cell_range`。根拠の無い暫定値)。 -->
       <select
         id="optimize-min-width"
         disabled={running || minWidthSteps.length === 0}
@@ -266,9 +234,8 @@
     </button>
   </div>
 
-  <!-- **進捗**。局面(prepare/derive/search/mesh/finalize/insert)ごとに届く
-       (`20260904-1704` の契約①)。探索の間は評価(FEM 1回)ごとに1件届く。
-       走っていないときは行ごと消す —— 前回の最後の1件を残すと、走っているように見える。 -->
+  <!-- 進捗。局面(prepare/derive/search/mesh/finalize/insert)ごとに届き、探索の間は評価(FEM 1回)ごとに1件届く(`20260904-1704` の契約①)。
+       走っていないときは行ごと消す(前回の最後の1件が残ると走っているように見える)。 -->
   {#if running}
     <p id="optimize-progress" class="hint">
       {progress === null ? '準備中…' : `[${progress.phase}] ${progress.message}`}
@@ -279,8 +246,7 @@
     </p>
   {/if}
 
-  <!-- **消えない通知**(次に走らせるまで残る)。結果が信用できないという意味の文を
-       トーストで流さないための場所。 -->
+  <!-- 消えない通知(次に走らせるまで残る)。 -->
   {#if notice !== null}
     <ul id="optimize-notice" class={notice.kind === 'bad' ? 'problems' : 'done dim'}>
       {#each notice.lines as line}
@@ -291,19 +257,10 @@
 </div>
 
 <style>
-  /* **ビューポート左のブラウザ(`BrowserPanel.svelte`)と同じ列の下端**に出す。
-
-     **新しい帯を画面に取らない**のが位置の決め手である —— `viewport.project()` は
-     `clickable(x, y)` で「浮いているパネルに覆われていないか」を見ており(実機検査が
-     面をクリックできるかどうかもこれで決まる)、**ブラウザの右に320pxの帯を足した版では
-     左のボディの面が1つも指せなくなった**(`smoke-optimize-mode.mjs` が検出)。条件を
-     置くのはこのモードの仕事そのものなので、モデルを覆う位置には置けない。
-
-     `SettingsDialog` がブラウザの右へ出るのは、開いている時間が短い一時的なダイアログ
-     だからである。こちらはモードのあいだ出しっぱなしなので同じ扱いにできない。
-
-     `position: absolute` はフローの外 —— `.viewport` の寸法＝カメラのアスペクトには
-     触らない(styles.css の不変条件)。重なり順はブラウザ(5)より上、設定(10)より下。 */
+  /* ビューポート左のブラウザ(`BrowserPanel.svelte`)と同じ列の下端。新しい帯を画面に取らない:
+     `viewport.project()` は `clickable(x, y)` で浮いているパネルに覆われていないかを見ており、
+     ブラウザの右に320pxの帯を足した版では左のボディの面が1つも指せなくなった(`smoke-optimize-mode.mjs` が検出)。
+     `position: absolute` なので `.viewport` の寸法に触れない(styles.css の不変条件)。重なり順はブラウザ(5)より上、設定(10)より下。 */
   #optimize-panel {
     position: absolute;
     left: 10px;
@@ -318,12 +275,10 @@
     margin-bottom: 6px;
   }
 
-  /* 並べ方は styles.css の `.field-row`。ここは行の間隔だけ。 */
   label {
     margin-top: 6px;
   }
 
-  /* 幅・面は styles.css の `input` が持つ。ここは残り幅いっぱいに伸ばすだけ。 */
   #optimize-resolution {
     flex: 1 1 auto;
     width: auto;
@@ -340,7 +295,6 @@
     margin: 6px 0 0;
   }
 
-  /* **走らせられない理由・結果が信用できない理由**。トーストと違って消えない。 */
   .problems,
   .done {
     margin: 6px 0 0;

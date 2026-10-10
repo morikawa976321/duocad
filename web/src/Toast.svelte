@@ -1,13 +1,8 @@
 <script module lang="ts">
   /**
-   * トースト — **エラーを人間に気づかせる唯一の場所**と、見落とされると困る知らせの札。
-   *
-   * クリック即適用のUIでは、**操作が拒まれたことがステータスバーの1行では気づけない**。
-   * **「拒まれた・失敗した・繋がらない」**は `fail` で琥珀の札に出す。失敗ではないが
-   * 気づかせたい知らせは `inform` で無彩色の札に出す(状態の説明・ありふれた成功の報告は
-   * これまでどおりステータスバー)。
-   *
-   * ## 呼び方(公開APIは `fail` と `inform` と `errorLog` だけ)
+   * トースト — エラー(`fail`、琥珀の札)と、見落とされると困る知らせ(`inform`、無彩色の札)。
+   * 公開APIは `fail` / `inform` / `errorLog` だけ。種別は関数名で分け、引数は文字列1つ(`fail(msg, 'warn')` のような口を
+   * 開けると呼ぶ側が分類を判断することになり、エラー経路を1本にした意味が消える)。
    *
    * ```ts
    * import Toast, { fail, inform, errorLog } from './Toast.svelte'
@@ -15,82 +10,57 @@
    * inform('STEPを書き出した')
    * ```
    *
-   * **種別は関数名で分け、引数は文字列1つだけ**にしてある(種別・寿命・位置の引数を持たせない)。
-   * `fail(msg, 'warn')` のような口を開けると、呼ぶ側がその都度分類を判断することになり、
-   * **エラー経路を1本にした意味が消える** —— `fail` へ来た時点でエラーである。
-   *
-   * **札を出す口は `fail` しか公開しない。** `fail` は「控え(`errorLog`)に積む」と
-   * 「札を出す」を1回の呼び出しで両方やるので、札だけ出して控えを飛ばす書き方が存在しない
-   * (控えを飛ばすと、`__duocad.errors` を見る実機検査から**そのエラーだけ見えなくなる**)。
-   *
-   * インスタンスではなくモジュールに状態を置いてあるので、`bind:this` を配り歩かずに
-   * どこからでも呼べる。**構造で守れず、呼ぶ側が守ること**が2つ残る:
-   * - 同じ失敗を2つの層から報告しない。規則3がまとめるのは**同じ文言だけ**で、前置きが
-   *   違えば(`エラー[…]` / `最適化:` / `警告` …)2枚出て、控えにも2件入る。
+   * `fail` は控え(`errorLog`)に積むのと札を出すのを1回でやる(札だけ出して控えを飛ばす書き方が無い。
+   * 飛ばすと `__duocad.errors` を見る実機検査からそのエラーだけ見えなくなる)。
+   * 状態はモジュールに置くのでどこからでも呼べる。構造で守れず、呼ぶ側が守ること:
+   * - 同じ失敗を2つの層から報告しない。まとめるのは同じ文言だけで、前置きが違えば2枚出て控えにも2件入る。
    * - エラーの検出をパネルの `$effect` に置かない。そのパネルを畳むと検出ごと止まる。
    *
-   * ## 見た目より先に決めた3つ
-   *
-   * 1. **ビューポートの大きさを変えない。** `position: absolute` で `.main` の上に浮かせる
-   *    (`styles.css` の不変条件: `.main` の中で大きさを持つのは `.viewport` だけ)。
-   *    通常のフローに置くと、エラーが出た瞬間にカメラのアスペクトが変わり
-   *    **さっき見えていた面がずれる** —— 打ち直しのために選び直す羽目になる。
-   * 2. **クリックを吸わない。** 本体は `pointer-events: none` にし、コピー・閉じるのボタンだけ受ける。
-   *    CADの主対象はcanvasなので、失敗の直後に画面へ出た札が次のクリックを飲むのは最悪である
-   *    (実機検査も生の座標でcanvasを叩いている)。
-   * 3. **同じ文言は積まずに数える。** 再接続の試行のように同じエラーが連発する経路があり、
-   *    素直に積むと画面がその1種類で埋まる。
+   * 1. `position: absolute` で `.main` の上に浮かせる(`styles.css` の不変条件: `.main` の中で大きさを持つのは `.viewport` だけ)。
+   *    フローに置くとエラーが出た瞬間にカメラのアスペクトが変わり、見えていた面がずれる。
+   * 2. 本体は `pointer-events: none`、コピー・閉じるのボタンだけ受ける。失敗直後の札が次の canvas クリックを飲まないように(実機検査も生の座標で叩く)。
+   * 3. 同じ文言は積まずに数える(再接続の試行のように同じエラーが連発する経路がある)。
    */
 
   type ToastKind = 'error' | 'info'
 
-  /** 1枚。`timer` は自動消滅の予約(手で閉じたら取り消す)。 */
+  /** 1枚。`timer` は自動消滅の予約。 */
   type ToastItem = {
     id: number
     kind: ToastKind
     message: string
     /** この札が出ている間に同じ文言が来た回数。2以上のときだけ画面に出す。 */
     count: number
-    /** クリップボードへコピー済み(札が消えるまでチェック表示を維持)。 */
     copied: boolean
     timer: ReturnType<typeof setTimeout> | null
   }
 
-  /**
-   * 自動で消えるまで。**エラーは読み切れる長さが要る**ので、よくある3秒より長くしてある
-   * (日本語1行を読んで、何をやり直すか決めるまでの時間)。
-   */
+  /** 自動で消えるまで。エラーは読み切れる長さが要るので、よくある3秒より長い。 */
   const LIFETIME_MS = 15000
-  /** 同時に出す上限。溢れたら古い方から捨てる(画面がトーストで埋まる方が有害)。 */
   const MAX_VISIBLE = 5
 
   let items = $state<ToastItem[]>([])
   let lastId = 0
 
-  /** 控えに残す件数。 */
   const LOG_SIZE = 20
   let log = $state<string[]>([])
 
   /**
-   * これまでに `fail` へ来たエラー(新しい順)。**表示には使わない** —— 札は時間で消えるので、
-   * 消えた後も見られる場所である。`smoke-files.mjs` などは最後に一度だけ「走行中にエラーが
-   * 出ていないか」を見ており、札を最後に見ても途中で出て消えたエラーは拾えない。
-   * `log` は **`$state` に置き、この関数が呼ばれた時点で読む**: `testHooks` の `$effect` が
-   * 呼ぶので依存が付き、新しいエラーが来たら `window.__duocad.errors` が作り直される
-   * (素の `let` にすると古い写しのまま止まる)。
+   * これまでに `fail` へ来たエラー(新しい順)。表示には使わない: 札は消えるので、`smoke-files.mjs` などが
+   * 最後に一度「走行中にエラーが出ていないか」を見る場所である。
+   * `$state` に置き、この関数が呼ばれた時点で読む: `testHooks` の `$effect` が依存し、新しいエラーで
+   * `window.__duocad.errors` が作り直される(素の `let` だと古い写しで止まる)。
    */
   export function errorLog(): string[] {
     return log
   }
 
-  /** 自動消滅の予約を取り消す(二重に消さないよう `null` に戻す)。 */
   function stop(item: ToastItem): void {
     if (item.timer === null) return
     clearTimeout(item.timer)
     item.timer = null
   }
 
-  /** 寿命を数え直す(同じ文言が来たときは、最初の1枚の寿命を延ばす)。 */
   function restart(item: ToastItem): void {
     stop(item)
     item.timer = setTimeout(() => dismiss(item.id), LIFETIME_MS)
@@ -113,15 +83,13 @@
     }
   }
 
-  /** 札を1枚出す(同じ種別・同じ文言が出ていれば数えるだけ)。**公開しない** —— 口は `fail` と `inform`。 */
+  /** 札を1枚出す(同じ種別・同じ文言が出ていれば数えるだけ)。公開しない。 */
   function show(kind: ToastKind, text: string): void {
-    // **出ている札の全部を見る**(直近の1枚だけでは足りない)。WSが切れている間は
-    // 「WebSocketのエラー」と「接続が切れた」が交互に届くので、直近だけを見ると
-    // A,B,A,B… と積み上がって画面が2種類のエラーで埋まる。
+    // 出ている札の全部を見る(直近の1枚だけだと、WS切断中に交互に届く2種のエラーが A,B,A,B… と積み上がる)。
     const same = items.find((item) => item.kind === kind && item.message === text)
     if (same !== undefined) {
       same.count += 1
-      restart(same) // まだ起きている事象なので寿命を数え直す
+      restart(same)
       return
     }
     const created: ToastItem = {
@@ -133,23 +101,21 @@
       timer: null,
     }
     const next = [created, ...items]
-    // 溢れた分は**予約も取り消してから**捨てる(捨てた札のタイマーが後から起きないように)
+    // 溢れた分は予約も取り消してから捨てる(捨てた札のタイマーが後から起きないように)
     for (const dropped of next.slice(MAX_VISIBLE)) stop(dropped)
     items = next.slice(0, MAX_VISIBLE)
-    // **`created` ではなく `items[0]` に予約を書く。** `$state` に入れた時点で中身は
-    // プロキシに包まれており、素のオブジェクトを触ると「同じものに見えて別の口」になる。
+    // `created` ではなく `items[0]` に予約を書く: `$state` に入れた時点で中身はプロキシに包まれ、素のオブジェクトは別の口になる。
     restart(items[0])
   }
 
-  /** エラーを1件、控えに積んで札に出す(拒まれた・失敗した・繋がらない)。 */
   export function fail(message: string): void {
     const text = message.trim()
-    if (text === '') return // 空文字で空の札を出さない(`note()` と同じ扱い)
+    if (text === '') return
     log = [text, ...log].slice(0, LOG_SIZE)
     show('error', text)
   }
 
-  /** 失敗ではない知らせを1件、札に出す。**控え(`errorLog`)には積まない** —— 控えはエラーの記録である。 */
+  /** 失敗ではない知らせを札に出す。控え(`errorLog`)には積まない(控えはエラーの記録)。 */
   export function inform(message: string): void {
     const text = message.trim()
     if (text === '') return
@@ -157,10 +123,9 @@
   }
 </script>
 
-<!-- `id="toasts"` は実機検査が文言を読むための穴(`.toast-text` が**エラー**1枚ぶんの本文)。
-     **中身が空でも枠は出す** —— 検査が「今は0件」を querySelectorAll で素直に書ける。
-     知らせの札の本文は `.toast-info-text` に分けてある —— smoke 群は `#toasts .toast-text` を
-     「エラーが出た」と読むので、同じクラスにすると知らせの札で検査が赤くなる。 -->
+<!-- `id="toasts"` は実機検査が文言を読む穴(`.toast-text` がエラー1枚の本文)。中身が空でも枠は出す。
+     知らせの本文は `.toast-info-text` に分ける: smoke 群は `#toasts .toast-text` を「エラーが出た」と読むので、
+     同じクラスにすると知らせの札で検査が赤くなる。 -->
 <div id="toasts" class="toasts" role="log" aria-live="assertive" aria-relevant="additions">
   {#each items as item (item.id)}
     <div class="toast" class:info={item.kind === 'info'} data-toast-id={item.id} data-toast-kind={item.kind}>
@@ -203,21 +168,18 @@
 </div>
 
 <style>
-  /* ビューポートの右下に浮かせる。`.main` が位置の基準(styles.css で position:relative)。
-     右サイドバー(AIパネル)の幅は `--sidebar-w` が正 —— ここに 300px を書き写すと、幅を変えた日に
-     トーストだけサイドバーの下へ潜る。 */
+  /* `.main` が位置の基準(styles.css で position:relative)。右端は `--sidebar-w` に合わせる
+     (幅を直書きすると、変えた日にトーストだけサイドバーの下へ潜る)。 */
   .toasts {
     position: absolute;
     bottom: 12px;
     right: calc(var(--sidebar-w) + 16px);
     z-index: 20;
     display: flex;
-    /* 新しい札をコーナー側(下)に置く。column-reverseなので配列の先頭(最新)が一番下に来る。 */
     flex-direction: column-reverse;
     gap: 6px;
     width: 360px;
     max-width: 40%;
-    /* クリックはcanvasへ素通しする(上のdocstring 2) */
     pointer-events: none;
   }
 
@@ -228,15 +190,12 @@
     padding: 6px 8px 6px 10px;
     background: var(--panel);
     border: 1px solid var(--accent-line);
-    /* 左の太い帯で「これはエラー」を色で言う(琥珀の配色から外れない) */
     box-shadow:
       inset 3px 0 0 var(--accent),
       0 2px 10px oklch(0% 0 0 / 0.45);
     pointer-events: none;
   }
 
-  /* 知らせは無彩色の帯。有彩色は琥珀(人の手が要る)と --bad(失敗)だけなので、
-     3つ目の色相を足さずに「エラーではない」を言う。 */
   .toast.info {
     border-color: var(--line);
     box-shadow:
@@ -247,8 +206,6 @@
   .toast-text,
   .toast-info-text {
     flex: 1 1 auto;
-    /* **折り返す。** エラーは末尾に理由が書いてあることが多く、`text-overflow: ellipsis`
-       (ステータスバーの `.value` の作り)だと肝心の部分が消える。 */
     overflow-wrap: anywhere;
   }
 
@@ -263,7 +220,6 @@
     display: flex;
     align-items: flex-start;
     gap: 2px;
-    /* 本体が素通しなので、受け取るのはこの中のボタンだけ */
     pointer-events: auto;
   }
 
