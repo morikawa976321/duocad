@@ -1,7 +1,6 @@
-"""タスク5・初期形状の比較(10_SYNTHESIS 付録A(旧 01_PROTOCOL 6-2節)): 全材料(製品既定)以外の初期形状から
+"""タスク5・初期形状の比較(10_SYNTHESIS 付録A 6-2節): 全材料(製品既定)以外の初期形状から
 適応方式/再配置を開始した場合に、局所解(原因2)を避けられるか・結果が変わるかを見る
-(タスク指示「途中形状…部材復元…の履歴を保存し…枝が荷重経路になるまで評価されない等の失敗を検査する」
-の一部、および01_PROTOCOL 6-2「ウォームスタートが原因2を避けられるか」)。
+(ウォームスタートが原因2を避けられるか)。
 
 2種類のwarm-start源:
 - **粗い格子から写す形**: `run_05_main_matrix.py` が3.0mm解像度で見つけたstep20の採用マスクを、
@@ -10,8 +9,8 @@
   既にbaseline解像度(2.0mm)なので投影不要——「経路喪失から一度抜けた形」から続けても
   `run_adaptive`/`run_reallocation`がそこに留まるか、別の局所解へ落ちるかを見る。
 
-投影後のマスクは `resolve_islands`→最小幅検査で構造的妥当性を検査する(`run_adaptive_from_mask`は
-これを再検査しない契約——10_SYNTHESIS 付録C(旧 04_SEARCHES) §後続への契約①)。不合格なら `status=warm_start_infeasible`
+投影後のマスクは `resolve_islands`→最小幅検査で構造的妥当性を検査する(`run_adaptive_from_mask` は
+これを再検査しない契約)。不合格なら `status=warm_start_infeasible`
 として記録し、無理に使わない。
 
 出力: `output/idle_validation_20260928/05_initshape.json`
@@ -71,11 +70,9 @@ def _prepare_start_mask(src_mask: np.ndarray, src_origin, src_spacing: float, ct
 def _run_from_mask(ctx, mask, *, seed, max_evaluations, tag) -> dict:
     adaptive_cfg = sup.revert_config(seed=seed, max_evaluations=max_evaluations)
     adaptive = sm.run_adaptive_from_mask(ctx, mask, adaptive_cfg)
-    # 再配置は「run_adaptiveの削減→追加」の内部から始めるため、専用のwarm-start入口が無い
-    # (10_SYNTHESIS 付録C(旧 04_SEARCHES) §依存してはいけないもの: run_reallocationは常にfind_initial_feasible相当の
-    # run_adaptiveから始める設計)。ここでは`_run_adaptive_from_mask`の削減結果を再配置の「削減フェーズ
-    # 結果」として代用せず、warm-start自体の効果は`run_adaptive_from_mask`(方式3相当)でのみ測る
-    # (方式4への拡張はスコープ外として限界に明記する)。
+    # 再配置は run_adaptive の削減→追加の内部から始めるため、専用のwarm-start入口が無い。
+    # `_run_adaptive_from_mask` の削減結果を再配置の「削減フェーズ結果」として代用せず、
+    # warm-start自体の効果は `run_adaptive_from_mask`(方式3相当)でのみ測る(方式4への拡張はスコープ外)。
     return dict(adaptive=sup.record_summary(adaptive), adaptive_full=adaptive.to_json(mask_dir=sup.MASK_DIR, tag=tag))
 
 
@@ -101,10 +98,9 @@ def main() -> int:
         ctx_d = sm.build_context(sup.DILUTION_MODEL, load_n=300.0, element_size_mm=2.0, min_width_mm=4.0)
         if src_case and src_case.get("status") == "ok":
             src_mask = load_mask_source("dilution_res3.0_w6")
-            # `_project_mask`はワールド座標で対応付けるため、投影元(3.0mm)自身のorigin/spacingが要る
-            # (`_snap_to_grid`で解像度ごとにbboxへ合わせてoriginがずれる。2.0mm文脈のoriginを流用すると
-            # 誤って位置がずれた投影になる——実測で発見: 2.0mm origin(-16,-16,-16) vs 3.0mm origin
-            # (-16.97,-17.70,-17.76))。
+            # `_project_mask` はワールド座標で対応付けるため、投影元(3.0mm)自身の origin/spacing が要る
+            # (2.0mm文脈の origin を流用すると位置がずれる。実測: 2.0mm origin(-16,-16,-16) vs
+            # 3.0mm origin(-16.97,-17.70,-17.76))。
             ctx_d_src = sm.build_context(sup.DILUTION_MODEL, load_n=300.0, element_size_mm=3.0, min_width_mm=6.0)
             prep = _prepare_start_mask(src_mask, ctx_d_src.space.grid.origin, ctx_d_src.grid.spacing, ctx_d)
             entry = dict(source="dilution_res3.0_w6_step20", prep_status=prep["status"])

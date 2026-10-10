@@ -33,21 +33,18 @@ from duocad.topopt import acceptance, binary_search, design_space as ds  # noqa:
 MODELS_DIR = REPO / "models"
 OUT = REPO / "output" / "idle_validation_20260928"
 MODEL = MODELS_DIR / "topopt_idle_path_small.json"
-#: 物理mmで固定する(セル数指定 `cells * size` だと解像度ごとに実際のmmが動き、
-#: 解像度をまたぐ比較〈mesh/step/transplant〉の「同条件」が崩れる。docs 3-1節)。
-#: **6.0mmは3.0mm要素での下限(`optimize_run._resolve_min_width`が課す2×要素サイズ)と一致する
-#: 最小の値** —— 3.0/2.5/2.0/1.5mmの4解像度すべてで`_resolve_min_width`がエラーにならない
-#: 唯一の整数mm値(4.0/5.0は3.0mm要素で下限6.0mm未満としてエラーになる。実測済み)。
+#: 物理mmで固定する(セル数指定 `cells * size` だと解像度ごとに実際のmmが動き、解像度をまたぐ比較の
+#: 「同条件」が崩れる。docs 3-1節)。**6.0mmは3.0/2.5/2.0/1.5mmの4解像度すべてで
+#: `_resolve_min_width` がエラーにならない唯一の整数mm値**(3.0mm要素の下限は2×要素サイズ=6.0mm。
+#: 4.0/5.0は下限未満でエラー。実測済み)。
 MIN_WIDTH_MM = 6.0
 
 
 def _search_conditions(doc, size: float):
-    """`(space, cond, min_width_cells)` を返す。**`min_width_cells` は`find_best_feasible`へ
-    明示で渡すこと** —— `SearchConditions`(`_build_search_conditions`の戻り値)は最小幅を持たず、
-    製品入口(`optimize_run._run`)は`_resolve_min_width`の戻り値を`find_best_feasible`の
-    キーワード引数として**別経路**で渡している(`duocad/optimize_run.py`: 1000行`_resolve_min_width`呼び出し・
-    1119行`search_kwargs`への代入・1141行`find_best_feasible`呼び出し)。ここを省くと
-    `find_best_feasible`の既定`min_width_cells=1`(制約なし)で走り、製品より細い部材を許してしまう。"""
+    """`(space, cond, min_width_cells)` を返す。**`min_width_cells` は `find_best_feasible` へ
+    明示で渡すこと** —— `SearchConditions` は最小幅を持たず、製品入口(`optimize_run._run`)は
+    `_resolve_min_width` の戻り値を別経路で渡している。省くと既定 `min_width_cells=1`(制約なし)で走り、
+    製品より細い部材を許してしまう。"""
     bundle = optimize_run.build_conditions(doc)
     space = ds.derive(bundle.conditions, spacing=size)
     opts = optimize_run.OptimizeOptions(element_size_mm=size, min_width_mm=MIN_WIDTH_MM)

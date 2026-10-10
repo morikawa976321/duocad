@@ -55,12 +55,9 @@ def _record_for(name: str, variant: str) -> dict:
         mismatch = dict(doc_reported_mm3=reported, measured_mm3=material_mm3, diff_mm3=material_mm3 - reported)
     return dict(
         shape_kind=f"stage1_{variant}", condition=name,
-        # `data["status"]`は製品の`SearchResult.status`をそのまま転記する(counterfactual.pyの出力は実際に
-        # "feasible"を持ち、この登録では"ok"に丸められずそのまま残る。実測: 01_stage1_shapes.jsonの全stage1_base/
-        # stage1_R2/stage1_step05エントリが"status": "feasible")。"ok"分岐は、他の生成元(statusキーを持たない
-        # 記録)や将来の製品戻り値が"ok"を使う場合のための保険。material_mm3が無ければ(候補が見つからなかった等)
-        # "unknown"のまま残す。"missing"(上の早期return)とは別概念——"missing"は「ファイル自体が無い」、
-        # ここはファイルはあって中身も読めている状態。
+        # `data["status"]` は製品の `SearchResult.status` をそのまま転記する(実測: 全 stage1_base/stage1_R2/
+        # stage1_step05 エントリが "feasible")。"ok" 分岐は statusキーを持たない他の生成元や将来の戻り値向けの保険。
+        # material_mm3 が無ければ "unknown" のまま残す("missing"=ファイル自体が無い、とは別概念)。
         status="ok" if data.get("status") in ("ok", None) and material_mm3 is not None else data.get("status", "unknown"),
         load_n=data.get("load_n"), element_size_requested_mm=data.get("size"), min_width_cells=data.get("cells"),
         exclude_radius_cells=data.get("radius"), max_step_ratio=data.get("max_step_ratio"),
