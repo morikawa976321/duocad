@@ -56,9 +56,7 @@ DEVIATION = 0.2
 # 検証用に縮めた設定。**本番の既定ではない** —— 既定(`max_evaluations=1000`)の
 # ままだと1回の実行が長くなる。
 CHECK_MAX_EVALUATIONS = 3
-# 解像度は既定に任せず固定する(既定は条件面と上限 4 mm で決まり、変わると検査の所要が変わる)。この題材は以前、
-# 既定解像度(16 mm 以上)で`voxelize.occupancy`のValueErrorを踏んでいたが、上限 4 mm(#130)の後は選べる全解像度で
-# 再現しない(2026-10-10 実測。docs/TOPOPT.md「制限」)。
+# 解像度は既定に任せず固定する(既定は条件面と上限 4 mm で決まり、変わると検査の所要が変わる)。
 CHECK_ELEMENT_SIZE_MM = 4.0
 
 
@@ -176,7 +174,7 @@ def check_end_to_end(session, out, before_ids, before_shapes) -> None:
         len(added) == 1 and added[0].id == out["body_id"],
         f"{len(before_ids)} -> {len(bodies)} (増えたのは {[b.name for b in added]})",
     )
-    # 結果は編集可能ソリッドではなくメッシュボディで入る(2026-09-23 本人判断。docs/TOPOPT.md)
+    # 結果は編集可能ソリッドではなくメッシュボディで入る(docs/TOPOPT.md)
     check(
         "増えたのはメッシュボディ",
         bool(added) and added[0].kind == "mesh" and added[0].mesh is not None and added[0].shape is None,
@@ -196,8 +194,7 @@ def check_end_to_end(session, out, before_ids, before_shapes) -> None:
         and added[0].mesh.triangle_count == out["triangle_count"],
         f"{out['triangle_count']} 枚",
     )
-    # **画面(`20260904-1705`)はこの戻り値をWebSocketへそのまま載せる。** 実体
-    # (`DesignSpace` / `AnchorTable`)が混ざっていたらここで落ちる。
+    # **画面はこの戻り値をWebSocketへそのまま載せる。** 実体(`DesignSpace` / `AnchorTable`)が混ざっていたらここで落ちる。
     wire = dict(out)
     wire.pop("applied", None)
     try:

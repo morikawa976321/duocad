@@ -80,9 +80,9 @@ def run_tension(levels: list[int]) -> list[dict]:
     E_mpa = material.DEFAULT_YOUNGS_MODULUS_MPA
     records = []
     for level in levels:
-        # **同じ物理形状(30mm立方)を保ったまま3軸とも同じ比率で細分する**——`fem.Model`は等方格子
-        # (1つのelement_mmをx/y/z共通で使う)なので、1軸だけ要素数を増やすと他の2軸の物理寸法が
-        # 動いてしまう(level間で理論値まで変わり、収束比較にならない実装ミスをここで避けている)。
+        # **同じ物理形状(30mm立方)を保ったまま3軸とも同じ比率で細分する**。`fem.Model` は等方格子
+        # (element_mm をx/y/z共通で使う)なので、1軸だけ増やすと他の2軸の物理寸法が動いて
+        # level間で理論値まで変わる。
         nelx = nely = nelz = 6 * level
         element_mm = PHYS_TENSION_MM / nelx
         fixed, load = _tension_fixed_load(nelx, nely, nelz, TENSION_LOAD_N)
@@ -147,10 +147,9 @@ def _bending_fixed_load(
 def run_bending(levels: list[int]) -> list[dict]:
     E_mpa = material.DEFAULT_YOUNGS_MODULUS_MPA
     I = BEND_WIDTH_MM * BEND_HEIGHT_MM ** 3 / 12.0
-    # **曲げモーメントの腕は測定位置までの距離**(固定端までのBEND_LENGTH_MMではない)。
-    # 測定点をBEND_PROBE_X_MMだけ固定端から離しているので、その位置でのモーメントは
-    # 荷重×(全長−BEND_PROBE_X_MM)(=自由端から測定点までの距離)。固定端の値(全長を腕にした値)を
-    # 使うと、測定点をわざと固定端から離した意味が無くなり理論値が実際より過大になる。
+    # **曲げモーメントの腕は測定位置までの距離**(固定端までの BEND_LENGTH_MM ではない)。
+    # 測定点を固定端から BEND_PROBE_X_MM 離しているので、モーメントは荷重×(全長−BEND_PROBE_X_MM)。
+    # 固定端の値を使うと理論値が実際より過大になる。
     moment_arm_mm = BEND_LENGTH_MM - BEND_PROBE_X_MM
     sigma_theory = BENDING_LOAD_N * moment_arm_mm * (BEND_HEIGHT_MM / 2.0) / I
     tip_theory = BENDING_LOAD_N * BEND_LENGTH_MM ** 3 / (3.0 * E_mpa * I)
@@ -158,10 +157,8 @@ def run_bending(levels: list[int]) -> list[dict]:
     stress_levels = []
     defl_levels = []
     for level in levels:
-        # 基準比 length:width:height = 100:10:20 = 10:1:2 に要素数を揃える(等方格子なので
-        # tension側と同じ理由で3軸とも同じ比率で細分しないと物理寸法がlevelごとに動く。
-        # 旧版はnely=2固定・nelz=4*levelで、level=1で既に幅20mm・高さ40mm相当になり
-        # BEND_WIDTH_MM/BEND_HEIGHT_MMの理論値前提〈10mm/20mm〉と食い違っていた)。
+        # 基準比 length:width:height = 100:10:20 = 10:1:2 に要素数を揃える
+        # (tension側と同じ理由で3軸とも同じ比率で細分する)。
         nelx = 10 * level
         nely = 1 * level
         nelz = 2 * level
@@ -177,10 +174,9 @@ def run_bending(levels: list[int]) -> list[dict]:
         rel = float(np.linalg.norm(residual[model.free]) / np.linalg.norm(model.f[model.free]))
         scale = stress.UnitScale(element_mm, 1.0, E_mpa, solved_load=1.0)
         field = stress.element_stress(model, u).scaled(scale)
-        # **固定端からの物理距離(mm)を揃えて測る**——index=2固定だと、細分するほどelement_mmが
-        # 縮んで測定点が固定端(局所3次元効果の領域)へ寄っていき、Euler-Bernoulli理論(遠方の純曲げ
-        # を仮定)との比較が細分するほど不利になる(level間で比較の物理位置がずれる実装ミスを
-        # ここで避けている)。BEND_PROBE_X_MMはlevel=1のindex=2(=20mm)と同じ物理位置に揃えてある。
+        # **固定端からの物理距離(mm)を揃えて測る**。index固定だと細分するほど測定点が固定端
+        # (局所3次元効果の領域)へ寄り、Euler-Bernoulli理論(遠方の純曲げを仮定)との比較が
+        # 細分するほど不利になる。BEND_PROBE_X_MM は level=1 の index=2(=20mm)と同じ位置。
         i_probe = min(max(1, round(BEND_PROBE_X_MM / element_mm)), nelx - 1)
         probe_x_actual_mm = (i_probe + 0.5) * element_mm
         probe_z_half_actual_mm = BEND_HEIGHT_MM / 2.0 - element_mm / 2.0
@@ -291,11 +287,10 @@ def run_kirsch(shape: str, element_mm: float) -> dict | None:
     grid = space.grid
     hole_r = DILUTION_HOLE_R
     boss_w = DILUTION_BOSS_W
-    # **穴は Z 軸に沿って貫通する縦穴**(`build_compact_models._drill_through`がXYスケッチを
-    # Z方向へ押し出す/切り取る)。穴の中心は台座の平面座標 (boss_w/2, boss_d/2) に固定(層をまたぐ
-    # 契約: 座標はbuild_compact_models.pyのジオメトリ定数そのもの、格子から逆算しない——`keep`セルを
-    # Y-Z平面へ集約して中心を推定する旧実装は、穴の実際の軸(X-Y平面内)と違う平面を見ており、
-    # 台座から遠く離れた位置(荷重パッド付近)を「穴の近く」と誤認してkt_femが3桁の異常値になった)。
+    # **穴は Z 軸に沿って貫通する縦穴**(`build_compact_models._drill_through` がXYスケッチをZ方向へ
+    # 押し出す/切り取る)。穴の中心は台座の平面座標 (boss_w/2, boss_d/2) に固定(層をまたぐ契約:
+    # 座標は build_compact_models.py のジオメトリ定数そのもの、格子から逆算しない。`keep` セルから
+    # 推定すると穴の軸と違う平面を見て、荷重パッド付近を「穴の近く」と誤認し kt_fem が3桁の異常値になった)。
     hole_x = DILUTION_BOSS_W / 2.0
     hole_y = DILUTION_BOSS_D / 2.0
     xx = grid.centers_1d(0)
@@ -394,8 +389,8 @@ def main() -> int:
     else:
         record = run_kirsch(args.shape, args.element_mm)
         payload = dict(generated_at=_common.now_iso(), code_version=_common.git_state(), record=record)
-        # element_mmをファイル名に含める(細分レベルを変えて複数回呼ぶことを想定——同名上書きだと
-        # kt_femの格子依存(細分するほど発散する階段角アーチファクト)の記録が直前の1回だけになる)。
+        # element_mmをファイル名に含める(細分レベルを変えて複数回呼ぶため。同名上書きだと
+        # kt_femの格子依存〈階段角アーチファクト〉の記録が直前の1回だけになる)。
         name = f"analytic_kirsch_{args.shape}_{args.element_mm:g}mm.json"
         out = OUT / name
         _common.write_atomic(out, json.dumps(payload, ensure_ascii=False, indent=1, default=float) + "\n")

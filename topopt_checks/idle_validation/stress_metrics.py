@@ -1,10 +1,10 @@
-"""タスク3(評価式選定)の候補指標。旧 TOPOPT_IDLE_SOLUTIONS 5.1節の表に挙げた8候補(定義は `docs/topopt_idle_validation/10_SYNTHESIS.md` 付録B-1)を
+"""タスク3(評価式選定)の候補指標。8候補(定義は `docs/topopt_idle_validation/10_SYNTHESIS.md` 付録B-1)を
 数式として実装する。全て「材料セルの von Mises 応力配列 + 母集団を選ぶマスク」から1つのスカラー値
 (または部位別ならゾーンごとのスカラー)を返す純粋関数で、FEMは呼ばない(`metric_eval.py` が解いた
 場を渡す)。
 
 候補ごとの物理的意味・母数依存・上界/下界・領域移動・特異点への挙動の**判断と実測根拠**は
-`docs/topopt_idle_validation/10_SYNTHESIS.md 付録B(旧 03_METRICS)` 5節にまとめてある(コードコメントではなくそちらが正)。
+`docs/topopt_idle_validation/10_SYNTHESIS.md` 付録B 5節にまとめてある(コードコメントではなくそちらが正)。
 """
 from __future__ import annotations
 

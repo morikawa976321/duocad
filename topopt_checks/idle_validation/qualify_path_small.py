@@ -3,18 +3,17 @@
 
 00_COMPACT_MODELS.md 3-4節の未達点(「同格子上の確定的な優越形」)を埋めるのが目的。
 2.5mm格子(現行探索が斜材解へ収束する格子)の採用マスクを2.0mm格子へ移植すると、幾何は全合格するが
-安全率が目標(4.8)にわずかに届かない(4.40〜4.48)——00の実測。本スクリプトはこの移植形を起点に、
-`search_methods._growth_geometry_ok`(保持・除外・アンカー・単一成分・正則境界・芯の連結・最小幅・
-閉空洞禁止の全項目)で検査しながら局所的に材料を再導入し(段B)、`run_adaptive_from_mask`で
-過剰分を削って仕上げ(段B')、2.0mm現行(`step20`)結果より軽く目標安全率を満たす形を作る
-(移植=段A。段ラベルは`docs/topopt_idle_validation/10_SYNTHESIS.md 付録C(旧 04A_PATH_QUALIFICATION)` 2節と揃えてある)。
+安全率が目標(4.8)にわずかに届かない(4.40〜4.48)。本スクリプトはこの移植形を起点に、
+`search_methods._growth_geometry_ok` で検査しながら局所的に材料を再導入し(段B)、
+`run_adaptive_from_mask` で過剰分を削って仕上げ(段B')、2.0mm現行(`step20`)結果より軽く
+目標安全率を満たす形を作る(移植=段A。段ラベルは `docs/topopt_idle_validation/10_SYNTHESIS.md` 付録C 2節と揃える)。
 
-続けて、`search_methods.run_adaptive`を`gate="percentile"`・`stop_policy="legacy"`・
-`sudden_*`/`prediction_error_multiplier`を無効化する値に設定すると製品の`_reduce_volume`
-(固定`max_step_ratio`)と同じ受理条件・同じ`peel`/`ranked_cells`/`step_ratio`を辿る対照実験になる
-ことを利用し、`extra_protected`で段B/B'が見つけた斜材専有セルを保護した場合/しない場合を比較する
-(段C。「該当経路の再導入と対照追加」の因果検査)。`on_accept`で受理ごとの途中マスクを記録し、
-非保護版でその専有セルの保持率が初めて崩れる手を特定して「削除直前への復帰＋別の一手」も行う(段D)。
+続けて、`search_methods.run_adaptive` を `gate="percentile"`・`stop_policy="legacy"`・
+`sudden_*`/`prediction_error_multiplier` 無効化に設定すると製品の `_reduce_volume` と同じ受理条件・
+同じ `peel`/`ranked_cells`/`step_ratio` を辿る対照になることを利用し、`extra_protected` で
+段B/B'が見つけた斜材専有セルを保護した場合/しない場合を比較する(段C)。`on_accept` で受理ごとの
+途中マスクを記録し、非保護版でその専有セルの保持率が初めて崩れる手を特定して
+「削除直前への復帰＋別の一手」も行う(段D)。
 
 出力: output/idle_validation_20260928/04a_qualification_run.json(生データ。schema付きのまとめは
 `build_04a_json.py`が`04a_robustness_loads.json`と合わせて`04a_path_qualification.json`へ作る)。
@@ -53,10 +52,9 @@ def _load_native_mesh_mask(tag: str) -> tuple[np.ndarray, dict]:
 
 
 def build_transplant(ctx: sm.SearchContext) -> np.ndarray:
-    """`measure_path_local_optimum.cmd_transplant`と同じ射影+closing+keep+resolve_islandsの手順
-    (00_COMPACT_MODELS.md 3-4節)。ここでは`_search_conditions`を経ず`ctx`をそのまま使うので、
-    座標系(`ctx.grid.origin`/`spacing`)は`build_context`が導出したものと一致する——00の値
-    (57,656 mm3, SF 4.481)への一致で射影ロジックの同一性を検算する。"""
+    """`measure_path_local_optimum.cmd_transplant` と同じ射影+closing+keep+resolve_islands の手順
+    (00_COMPACT_MODELS.md 3-4節)。`ctx` をそのまま使うので座標系は `build_context` の導出と一致する
+    (00の値 57,656 mm3, SF 4.481 への一致で同一性を検算)。"""
     s = np.load(OUT / f"path_mask_{TRANSPLANT_SRC}.npz")
     idx = np.indices(ctx.grid.shape).reshape(3, -1).T
     w = np.asarray(ctx.grid.origin) + (idx + 0.5) * ctx.grid.spacing
@@ -82,15 +80,14 @@ def build_transplant(ctx: sm.SearchContext) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # 段B: 局所growth(軸方向1セルシフトの貪欲選択。search_methods._growth_geometry_okで検査)
 # ---------------------------------------------------------------------------
-#: 最小幅3セルの離散化では、1セル層の**孤立点周りの**表面追加(`_surface_growth_pool`や単一点の
-#: 立方体膨張)はほぼ必ず`min_width`検査で落ちる(実測: 追加分自身がどの m立方ブロックにも属さない)か、
-#: 通っても非効率(実測: 最悪応力点中心の立方体膨張は半径4〜10まで拡げてようやく安全率が動き、
-#: 10ラウンドで83,768 mm3〈現行71,928 mm3超過〉に達した)。**現在の材料全体を軸方向へ1セルだけ
-#: シフトして重ねる(=断面をその方向へ1セル太らせる)と、追加分は既存材料に全面で接するので
-#: 大半のセルが最小幅を保ったまま通り、1セル層でも幾何検査を通過する**(実測: 6方向とも
-#: `_growth_geometry_ok`合格、449〜572セル/方向)。6方向を毎ラウンド全部評価し、安全率(または
-#: 指定ゲートの指標)を最も改善する方向を貪欲に採用する——3ラウンドで69,440 mm3・SF4.838
-#: (現行71,928 mm3・目標4.8を下回りかつ達成)。
+#: 最小幅3セルでは、孤立点周りの表面追加(`_surface_growth_pool` や単一点の立方体膨張)は
+#: `min_width` 検査で落ちる(実測: 追加分自身がどの m立方ブロックにも属さない)か、通っても非効率
+#: (実測: 最悪応力点中心の立方体膨張は半径4〜10まで拡げてようやく安全率が動き、10ラウンドで
+#: 83,768 mm3〈現行71,928 mm3超過〉)。**現在の材料全体を軸方向へ1セルだけシフトして重ねる
+#: (=断面をその方向へ1セル太らせる)と、追加分は既存材料に全面で接するので大半のセルが最小幅を
+#: 保ったまま通る**(実測: 6方向とも `_growth_geometry_ok` 合格、449〜572セル/方向)。
+#: 6方向を毎ラウンド全部評価し、指標を最も改善する方向を貪欲に採用する(3ラウンドで
+#: 69,440 mm3・SF4.838。現行は71,928 mm3)。
 _AXIS_SHIFTS = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
 
 
@@ -121,10 +118,9 @@ def _gate_score(s: "sm.CandidateScore", gate: str) -> float:
 def local_reinforcement(ctx: sm.SearchContext, start_mask: np.ndarray, allowed_material: np.ndarray, *,
                         gate: str, max_rounds: int, log: list) -> tuple[np.ndarray, "sm.CandidateScore"]:
     """`start_mask`(幾何は合格・安全率/M5b不足)から、6軸方向シフト(`_AXIS_SHIFTS`)のうち
-    `_growth_geometry_ok`を通り`gate`の指標を最も改善する1つを毎ラウンド貪欲に採用する。
-    `allowed_material`は`find_initial_feasible`が返す最小幅済み全材料(00 3-1節どおり
-    `min_width_cells`を明示解決した空間)——このスーパーセットの外には出ない。全方向が幾何で落ちるか
-    改善しなければ打ち切る(有限停止: `allowed_material`は有限集合で、採用のたびに`working`が真に増える)。
+    `_growth_geometry_ok` を通り `gate` の指標を最も改善する1つを毎ラウンド貪欲に採用する。
+    `allowed_material` は `find_initial_feasible` が返す最小幅済み全材料で、この外には出ない。
+    全方向が幾何で落ちるか改善しなければ打ち切る。
     """
     working = start_mask.copy()
     score = sm.score_mask(working, ctx)
@@ -141,8 +137,8 @@ def local_reinforcement(ctx: sm.SearchContext, start_mask: np.ndarray, allowed_m
 
     rounds = 0
     while not gate_pass(score) and rounds < max_rounds:
-        # `run_reallocation`と同様、芯の連結上限(`base_core_groups`)は毎ラウンド`working`から
-        # 取り直す(採用のたびに材料が増えるので、上限が古いままだと後段の妥当な追加まで拒否しうる)。
+        # 芯の連結上限(`base_core_groups`)は毎ラウンド `working` から取り直す
+        # (材料が増えるので、古いままだと妥当な追加まで拒否しうる)。
         base_core_groups = sm.core_group_count(working, ctx.min_width_cells)
         candidates = []
         for d in _AXIS_SHIFTS:
@@ -174,11 +170,10 @@ def local_reinforcement(ctx: sm.SearchContext, start_mask: np.ndarray, allowed_m
 
 
 def finish_trim(ctx: sm.SearchContext, mask: np.ndarray) -> tuple[np.ndarray, "sm.CandidateScore", "sm.MethodRecord"]:
-    """段B(貪欲成長)は`gate`を跨いだ瞬間に止まるので、越えた分(オーバーシュート)を削る仕上げ(段B')。
-    `stop_policy="legacy"`(製品の`target_tolerance`同値)だと越えた直後で即座に`within_target_tolerance`
-    停止してしまい削れない(実測: 3000Nでは越え幅が小さく無changeだった)ため、ここは既定の
-    `stop_policy="adaptive_finish"`(仕上げ局面の`finish_patience`まで粘る)を使う——`run_adaptive`の
-    ロールバック機構(安全率/compliance/変位の急変検知)も有効なまま(製品どおりの安全な削減)。"""
+    """段B(貪欲成長)は `gate` を跨いだ瞬間に止まるので、越えた分を削る仕上げ(段B')。
+    `stop_policy="legacy"` だと越えた直後に `within_target_tolerance` で即停止して削れない
+    (実測: 3000Nでは越え幅が小さく無変更だった)ため、既定の `stop_policy="adaptive_finish"` を使う。
+    `run_adaptive` のロールバック機構も有効なまま。"""
     finish_cfg = sm.AdaptiveConfig(gate="percentile", stop_policy="adaptive_finish", max_step_ratio=0.05,
                                    min_step_ratio=0.0, max_evaluations=500, seed=0)
     rec = sm.run_adaptive_from_mask(ctx, mask, finish_cfg)
@@ -191,9 +186,8 @@ def finish_trim(ctx: sm.SearchContext, mask: np.ndarray) -> tuple[np.ndarray, "s
 # 段C/D: 「該当経路の再導入と対照追加」「削除直前への復帰＋別の一手」
 # ---------------------------------------------------------------------------
 def _tracer_config(seed: int = 0, max_evaluations: int = 1000) -> sm.AdaptiveConfig:
-    """`_reduce_volume`(製品の固定`max_step_ratio`段階4)と同じ受理条件・停止条件になるよう、
-    adaptive方式固有の機構(ロールバック・復帰・仕上げ局面)を実質無効化した設定
-    (04aだけの対照実験用。既定`AdaptiveConfig`はそのまま使わない)。"""
+    """`_reduce_volume` と同じ受理条件・停止条件になるよう、adaptive方式固有の機構
+    (ロールバック・復帰・仕上げ局面)を実質無効化した設定(04aの対照実験用)。"""
     return sm.AdaptiveConfig(
         gate="percentile", stop_policy="legacy", legacy_target_tolerance=binary_search.DEFAULT_TARGET_TOLERANCE,
         step_exponent=binary_search.DEFAULT_STEP_EXPONENT, max_step_ratio=binary_search.DEFAULT_MAX_STEP_RATIO,
@@ -366,13 +360,13 @@ def main() -> int:
 
 def traced_run_from(ctx: sm.SearchContext, start_mask: np.ndarray, *, extra_protected_first_move: np.ndarray,
                     corridor: np.ndarray, seed: int) -> tuple[sm.MethodRecord, list]:
-    """段D: `start_mask`(削除直前)から、直後の1手だけ`extra_protected_first_move`(実際に削られた
-    斜材専有セル)を保護し、以降は無保護で`_tracer_config`を再開する。`AdaptiveConfig`の`extra_protected`は
-    ループ全体に効くので、1手だけに限定するにはここで2段階に分けて呼ぶ(1手目=保護あり`max_evaluations=1`、
-    以降=保護なしで再開)。**`max_evaluations=1`が保証するのは「FEMを解く候補が1個までしか試されない」
-    ことであり「1手が受理される」ことではない**(その1個が幾何/ゲートで却下されれば、`working`は
-    `start_mask`のまま`resume_mask`へ渡る)。実測(3000N条件)ではその1個が受理され、無保護版の元の1手
-    (322セル除去)とほぼ同規模の318セル(保護した33セルを避けた代替)が除去されたことを別途確認している。"""
+    """段D: `start_mask`(削除直前)から、直後の1手だけ `extra_protected_first_move`(実際に削られた
+    斜材専有セル)を保護し、以降は無保護で `_tracer_config` を再開する。`extra_protected` はループ全体に
+    効くので、1手だけに限定するには2段階に分けて呼ぶ(1手目=保護あり `max_evaluations=1`、以降=保護なし)。
+    **`max_evaluations=1` が保証するのは「FEMを解く候補が1個までしか試されない」ことであり
+    「1手が受理される」ことではない**(却下されれば `working` は `start_mask` のまま渡る)。
+    実測(3000N条件)ではその1個が受理され、無保護版の元の1手(322セル除去)とほぼ同規模の318セル
+    (保護した33セルを避けた代替)が除去された。"""
     trace: list[dict] = []
 
     def on_accept(evaluations, working, score):
