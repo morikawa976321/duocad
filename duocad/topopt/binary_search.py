@@ -533,6 +533,11 @@ DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
 #: (`None` は見ない)。`fail` や `prerequisites_failed` とは別に数える(こちらは判定そのものが出ていない)。
 #: **4 は実測で決めていない暫定値**(2026-09-24)。1候補の求解に 35 秒かかる実測がある。
 DEFAULT_EVALUATION_ERROR_PATIENCE: Optional[int] = 4
+#: ピーク判定の探索で、採用形の露出面が上限のこの割合を超えるセル(と却下の最悪セル)から `PEAK_SKIP_RADIUS` セル以内を
+#: 削る順位から外す。同じ高応力箇所の周りを何度も試して patience を使い切るのを避ける(dilution で却下 89 回中 73 回が
+#: 同じ1か所、止まった時点で上位30手中12手が通った。docs/TOPOPT_PEAK_GATE.md)。**値は暫定で実測で決めていない。**
+PEAK_HOT_RATIO = 0.9
+PEAK_SKIP_RADIUS = 2
 _CORNERS = tuple(product(range(2), repeat=3))
 
 
@@ -928,7 +933,8 @@ def _attach_peak_limit(best: FeasibleModel, conditions: SearchConditions, reduct
         baseline_max_position_mm=[float(v) for v in np.asarray(conditions.grid.origin)
                                   + (np.asarray(worst, dtype=float) + 0.5) * conditions.grid.spacing],
         cells_above_sigma_t=int((region & (base > sigma_t)).sum()),
-        rejections=0, rejections_with_safety_margin=0, single_cell_rejections=0, rejection_sites=[])
+        rejections=0, rejections_with_safety_margin=0, single_cell_rejections=0, skipped_near_peaks=0,
+        rejection_sites=[])
     return replace(conditions, peak_limit_mpa=limit), fields.get('element_energy')
 
 
@@ -1040,7 +1046,21 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
             del poison[cell]
         reduction['poison_released'] += len(released)
         order = ranked_cells(best.mask, energy)
-        return order[~np.isin(order, list(poison))] if poison else order
+        if poison:
+            order = order[~np.isin(order, list(poison))]
+        return away_from_peaks(order)
+
+    peak_near = None  # 採用形の高応力箇所の近く(ピーク判定のときだけ)
+
+    def away_from_peaks(order: np.ndarray) -> np.ndarray:
+        if peak_near is None:
+            return order
+        keep_order = ~peak_near.ravel()[order]
+        reduction['peak_gate']['skipped_near_peaks'] += int((~keep_order).sum())
+        return order[keep_order]
+
+    def near(cells: np.ndarray) -> np.ndarray:
+        return ndimage.binary_dilation(cells, structure=np.ones((3, 3, 3), bool), iterations=PEAK_SKIP_RADIUS)
 
     order = ranking()
     safety_streak = 0
@@ -1127,6 +1147,8 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                                  energy=energy)
             step.update(safety_factor=best.safety_factor, material_mm3=best.material_mm3)
             multiplier = min(1.0, 2.0 * multiplier)
+            if conditions.peak_limit_mpa is not None and 'peak_ratio' in fields:
+                peak_near = near(fields['peak_ratio'] >= PEAK_HOT_RATIO)
             order = ranking()
             reduction['adopted_after_exclusion'] += int(safety_streak > 0)
             safety_streak = 0
@@ -1168,6 +1190,11 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                         reduction['stop_reason'] = 'peak_at_single_cell'
                         return result('converged')
                 order = order[~np.isin(order, peeled.picked_cells)]
+            if peak_failed:
+                worst = np.zeros(best.mask.shape, dtype=bool)
+                worst[tuple(peak['worst_cell'])] = True
+                peak_near = near(worst) if peak_near is None else peak_near | near(worst)
+                order = away_from_peaks(order)
 
 
 def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditions, *,

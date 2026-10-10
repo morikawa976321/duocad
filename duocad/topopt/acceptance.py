@@ -419,10 +419,11 @@ def member_region(material, table, fixed_faces, load_faces, keep_cells=None) -> 
     return region
 
 
-def peak_check(model, displacement, material, scale, region, limit_mpa, grid) -> dict:
+def peak_check(model, displacement, material, scale, region, limit_mpa, grid, fields=None) -> dict:
     """部材域の露出面の面中心 von Mises が、セルごとの上限 `limit_mpa`(格子と同じ形)以下か。
 
     安全率とは別の判定で、探索は却下にだけ使う(歩幅・停止に流さない。docs/TOPOPT_PEAK_GATE.md)。
+    `fields` を渡すとセルごとの「露出面の値 ÷ 上限」の最大を `fields['peak_ratio']` に入れる。
     """
     limit = np.asarray(limit_mpa, dtype=float)
     if limit.shape != material.shape:
@@ -430,6 +431,8 @@ def peak_check(model, displacement, material, scale, region, limit_mpa, grid) ->
     cells = material if region is None else region
     vm = np.nan_to_num(stress.exposed_face_von_mises(model, displacement, material, scale, cells=cells), nan=0.0)
     ratio = vm / limit[..., None]
+    if fields is not None:
+        fields['peak_ratio'] = ratio.max(axis=-1)
     worst = np.unravel_index(int(np.argmax(ratio)), ratio.shape)
     cell = np.asarray(worst[:3], dtype=float)
     return dict(status='fail' if ratio[worst] > 1.0 else 'pass', peak_mpa=float(vm.max()),
@@ -468,7 +471,8 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
                 fields['cell_face_max'] = np.nan_to_num(faces, nan=0.0).max(axis=-1)
         extra = {}
         if peak_limit_mpa is not None:
-            extra['peak'] = peak_check(model, displacement, material, scale, member_region, peak_limit_mpa, grid)
+            extra['peak'] = peak_check(model, displacement, material, scale, member_region, peak_limit_mpa, grid,
+                                       fields=fields)
         return dict(status='pass' if sf >= target else 'fail', safety_factor=sf, **extra,
                     target_safety_factor=target, representative_mpa=report.representative_mpa,
                     allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
