@@ -230,7 +230,7 @@ def test_ai_commands_are_not_verbs():
 
 def test_which_commands_apply_without_enter():
     """落ちたら、`command.ts` の `needsEnter` か引数の書き方(`max` / `fromPoints`)が変わり、
-    Enter無しで適用されるコマンドの顔ぶれが変わった(意図した変更なら README「操作の型」も直す)。"""
+    Enter無しで適用されるコマンドの顔ぶれが変わった(意図した変更なら docs/contracts/ui-sketch-input.md の `needsEnter` の項も直す)。"""
     immediate = sorted(command["id"] for command in _ui_commands() if not command["needsEnter"])
     assert immediate == [
         "add_arc",
