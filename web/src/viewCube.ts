@@ -1,30 +1,21 @@
 /**
  * ビューキューブ(6面+12辺+8角=26領域)の**純関数**。three.js を import しない
- * (`tests/eval_view_cube.mjs` が Node から直接読んで検査できるようにするため —
- * `web/src/gridScale.ts` / `tests/eval_grid_scale.mjs` と同じ作法)。
+ * (`tests/eval_view_cube.mjs` が Node から直接読んで検査できるようにするため)。
  *
- * 立方体 `[-1,1]³` を各軸で3分割し(端セルの厚み `EDGE_T` ・中央セルの厚み
- * `1 - 2*EDGE_T`、ともに「全体を1とした比率」)、27セルから中心 `(0,0,0)` を除いた
- * 26セルが領域そのものになる。セルのインデックス `(i,j,k) ∈ {-1,0,1}³` は
- * そのまま「その領域をクリックしたときに見る向き」でもある —— 面(`|i|+|j|+|k|=1`)は
- * 軸方向、辺(`=2`)は2軸複合、角(`=3`)は3軸複合の視点になる。
+ * 立方体 `[-1,1]³` を各軸で3分割し(端セルの厚み `EDGE_T`・中央セルの厚み `1 - 2*EDGE_T`、
+ * ともに全体を1とした比率)、27セルから中心を除いた26セルが領域になる。
+ * セルのインデックス `(i,j,k) ∈ {-1,0,1}³` はそのままクリック時に見る向きでもある
+ * (面 `|i|+|j|+|k|=1`・辺 `=2`・角 `=3`)。
  *
- * 描画(three.js)・入力(Pointer Lock)・第2パスのcanvas合成は `viewCubeOverlay.ts` の仕事。
- * ここは形と向きの計算だけを持つ。
+ * 描画・入力・第2パスは `viewCubeOverlay.ts`。ここは形と向きの計算だけ。
  */
 
-/**
- * 端セル(辺・角)の厚み(全体を1とした比率)。面セルは `1 - 2*EDGE_T` で、
- * 面:辺 の面積比はおよそ 2:1 になる(3等分だと主従が付かない)。
- */
+/** 端セル(辺・角)の厚み(全体を1とした比率)。面:辺 の面積比はおよそ 2:1。 */
 export const EDGE_T = 0.25
 
 /**
- * 真上・真下とみなす境界(`|d.z|`がこれを超えたら極)。`upForDirection`の射影が退化する
- * 側の閾値そのものだが、`viewport.ts`の`syncCameraUp`(極を離れたら`camera.up`を
- * WORLD_UPへ戻す判定)も**同じ境界**を見る必要があるので、ここに1つだけ持ってexportする——
- * 2箇所に0.99を書き写すと、片方だけ動かした日に「極のすぐ外側なのに戻らない/戻り過ぎる」
- * 帯ができる。
+ * 真上・真下とみなす境界(`|d.z|`がこれを超えたら極)。`upForDirection` の射影が退化する閾値で、
+ * `viewport.ts` の `syncCameraUp` も同じ境界を見る必要があるのでここに1つだけ持つ。
  */
 export const POLE_Z = 0.99
 
@@ -48,13 +39,7 @@ function axisExtent(idx: number): { center: number; size: number } {
   return { center: idx * (1 - EDGE_T), size: 2 * EDGE_T }
 }
 
-/**
- * セル中心の座標と一辺の長さ(半幅1の立方体上)。
- *
- * 境界は `±(1 - 2*EDGE_T)` にある(3軸とも同じ)。端セルは
- * `[idx*(1-EDGE_T) - EDGE_T, idx*(1-EDGE_T) + EDGE_T]` を占め、外側の面(`±1`)は
- * 立方体の表面にちょうど一致する。セル同士は境界を共有するだけで重ならない。
- */
+/** セル中心の座標と一辺の長さ(半幅1の立方体上)。外側の面(`±1`)は立方体の表面に一致し、セル同士は重ならない。 */
 export function cellBox(
   i: number,
   j: number,
@@ -78,28 +63,19 @@ export function cellDirection(i: number, j: number, k: number): [number, number,
 
 /**
  * 方向 `d`(正規化済み)に対する `camera.up`。
+ * 世界の+ZをGram-Schmidt射影で `d` に直交化する: `up = normalize(zHat - (zHat・d) d)`。
+ * three.js の `lookAt` が内部で行う直交化と同一の式なので、カメラの姿勢は変わらない。
  *
- * **世界の+ZをGram-Schmidt射影で `d` に直交化して返す**: `up = normalize(zHat - (zHat・d) d)`。
- * three.js の `camera.lookAt` / `Matrix4.lookAt` が「upヒント」から基底を作るときに内部で
- * 行っている直交化と同一の式なので、**このモジュールが+Zを厳密な直交ベクトルとして返しても
- * lookAt側の見え方(カメラの姿勢)は変わらない**。
- *
- * `d` が水平(`z===0`)なら射影は何もせず結果はそのまま `(0,0,1)`(既定+Zの記述と矛盾しない)。
- *
- * **ただし `|d.z| > 0.99`(真上・真下)では射影が退化する**(`zHat - (zHat・d) d` がほぼ零ベクトルに
- * なり正規化できない) —— そこだけ **+Y(上面図)/ −Y(底面図)** に差し替える。上面図で
- * 「前(−Y)」が画面の下に来る、一般的なCADの並びになる。
+ * `|d.z| > POLE_Z`(真上・真下)では射影が零ベクトルに退化するので、+Y(上面図)/ −Y(底面図)に差し替える
+ * (上面図で前(−Y)が画面の下に来る一般的なCADの並び)。
  */
 export function upForDirection(d: readonly [number, number, number]): [number, number, number] {
   const z = d[2]
   if (Math.abs(z) > POLE_Z) return z > 0 ? [0, 1, 0] : [0, -1, 0]
-  // zHat=(0,0,1) なので zHat・d = z。射影 zHat - z*d を正規化する。
   const ux = -z * d[0]
   const uy = -z * d[1]
   const uz = 1 - z * d[2]
   const length = Math.hypot(ux, uy, uz)
-  // `-0` を避ける(`+ 0` はIEEE754で `-0 -> 0` にだけ効き、他の値は変えない) ——
-  // 水平方向では ux/uy が厳密に0のはずなのに符号だけ `-0` になり、`Object.is` ベースの
-  // 等値検査(`assert.deepEqual` の strict版)で `0` と食い違って見える。
+  // `+ 0` で `-0` を `0` にする(`Object.is` ベースの `assert.deepEqual` strict で食い違うため)。
   return [ux / length + 0, uy / length + 0, uz / length + 0]
 }

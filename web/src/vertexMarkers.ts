@@ -1,14 +1,11 @@
 /**
  * 頂点マーカー(選択中のものだけ)。
  *
- * **辺と違い、候補を全部出すことはしない。** 頂点を引数に取るverbが無いので
- * 「候補を見せて選ばせる」場面が無く、要るのは「AIが選んだ頂点が今どれか」を人が見て
- * 外せることだけである(`duocad/server.py` の `Session.vertices` と同じ理由)。
+ * 辺と違い候補は全部出さない(頂点を引数に取るverbが無く、要るのは「AIが選んだ頂点が今どれか」を
+ * 人が見て外せることだけ。`duocad/server.py` の `Session.vertices` と同じ理由)。
  *
- * **点(`THREE.Points`)で描き、大きさは画素で固定する**(`sizeAttenuation: false`)。
- * 世界座標の球にすると、描いた時のカメラ距離で大きさが決まってしまい、**寄れば巨大な玉、
- * 引けば1画素未満**になる —— 頂点マーカーは選択中の頂点を見る唯一の手段なので、
- * 27部品を引きで見ているときに消えるのは機能が無いのと同じである。
+ * 点(`THREE.Points`)で描き、大きさは画素で固定する(`sizeAttenuation: false`)。
+ * 世界座標の球だと寄れば巨大な玉、引けば1画素未満になり、27部品を引きで見ると消える。
  */
 import * as THREE from 'three'
 
@@ -19,10 +16,7 @@ import type { VertexMarker, VertexRef } from './viewportTypes'
 
 /** 本編(`viewport.ts`)から借りるもの。 */
 export interface VertexMarkersDeps {
-  /**
-   * その画素で取れる点(**当たり半径は画面上のCSS px**)。本編の screen pick をそのまま
-   * 借りる —— カメラと寸法を持つのは本編だけなので、射影をこちら側へ写さない。
-   */
+  /** その画素で取れる点(当たり半径は画面上のCSS px)。本編の screen pick を借りる(カメラと寸法を持つのは本編だけ)。 */
   pickPointsAt<T>(
     offsetX: number,
     offsetY: number,
@@ -62,8 +56,7 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
 
   const vertexRoot = new THREE.Group()
 
-  /** マーカーの材質。辺と同じく**深度検査をしない**
-   *  (奥のマーカーも見え、奥のマーカーも指せる。見た目だけ隠すと「見えない頂点が外れる」になる)。 */
+  /** マーカーの材質。辺と同じく深度検査をしない(見た目だけ隠すと「見えない頂点が外れる」になる)。 */
   const vertexMaterial = new THREE.PointsMaterial({
     color: HIGHLIGHT_COLOR,
     size: VERTEX_PIXELS * 2,
@@ -72,10 +65,9 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
     clippingPlanes: clipPlanes,
   })
 
-  /** 今出している頂点マーカー。空なら選択に頂点が入っていない。 */
   let vertexMeshes: THREE.Points[] = []
   const vertexBatch = createBatch(vertexRoot)
-  /** 直前に描いた印(**同じものを渡されたら作り直さない**ため)。 */
+  /** 直前に描いた印(同じものを渡されたら作り直さない)。 */
   let vertexKey = ''
 
   function clearVertices(): void {
@@ -88,18 +80,16 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
     const key = markers
       .map((marker) => `${marker.bodyId}|${marker.vertexIndex}|${marker.point.join(',')}`)
       .join(';')
-    // 呼び出し側(App.svelte)は選択が変わるたびに呼び直すので、毎回作り直すと
-    // ジオメトリを捨てて作り直し続けることになる(`showEdges` と同じ番人)。
+    // App.svelte は選択が変わるたびに呼び直す(`showEdges` と同じ番人)。
     if (key === vertexKey) return
     clearVertices()
     vertexKey = key
-    pickChanged() // 頂点マーカーは面より先に取られるので、増減で「指せるもの」が変わる
+    pickChanged()
     highlightColor.vertex = markers.length === 0 ? null : vertexMaterial.color.getHex()
     if (markers.length === 0) return
     for (const marker of markers) {
       if (marker.point.length < 3) continue
-      // **1マーカー1オブジェクト**(辺が1本1 `THREE.Line` なのと同じ) —— まとめると
-      // 当たった点からコアの添字へ戻れない。数は選択中のものだけなので費用は無視できる。
+      // 1マーカー1オブジェクト(まとめると当たった点からコアの添字へ戻れない)。
       const geometry = new THREE.BufferGeometry()
       geometry.setAttribute(
         'position',
@@ -107,7 +97,7 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
       )
       geometry.computeBoundingSphere()
       const mesh = new THREE.Points(geometry, vertexMaterial)
-      mesh.renderOrder = LAYER.region // 深度を書かないぶん、描く順序で辺より手前に出す
+      mesh.renderOrder = LAYER.region // 深度を書かないので、描く順序で辺より手前に出す
       mesh.userData.bodyId = marker.bodyId
       mesh.userData.vertexIndex = marker.vertexIndex
       mesh.userData.point = marker.point
@@ -116,7 +106,6 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
   }
 
   function vertexAt(offsetX: number, offsetY: number): VertexRef | null {
-    // 当たり半径は**画面上の画素**(辺の `edgeAt` と同じ)。描いている大きさと揃えておく。
     return pickPointsAt(
       offsetX,
       offsetY,
@@ -140,7 +129,7 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
     const point = mesh.userData.point as number[]
     const screen = toScreen(new THREE.Vector3(point[0], point[1], point[2]))
     if (screen === null) return null
-    // **本当にその頂点が取れる画素か**を確かめてから返す(面の `project` と同じ流儀)。
+    // 本当にその頂点が取れる画素か確かめてから返す(面の `project` と同じ)。
     const hit = vertexAt(screen.x, screen.y)
     if (hit === null || hit.bodyId !== bodyId || hit.vertexIndex !== vertexIndex) return null
     return screen
