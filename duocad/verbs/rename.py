@@ -1,11 +1,10 @@
 """verb `rename` — ボディかスケッチの名前を変える(種別を問わない。メッシュボディも)。
 
 **操作ログに載せる**(可視性と違う)。保存されるのはログだけなので、ログの外で変えた名前は
-保存されず、開き直すと作成時の名前へ戻る。名前を変えることは Ctrl+Z の1手を使う編集である。
+開き直すと作成時の名前へ戻る。Ctrl+Z の1手を使う編集である。
 
-対象は ID 1つで指す(`target`)。ボディとスケッチの ID は綴りが違い(`body-…` / `sketch-…`)、
-どちらも uuid なので、両方から引いて見つかった方を変える。名前で引く口はどこにも無い
-(参照はすべて ID)ので、**同じ名前が並ぶのは許す**。
+対象は ID 1つ(`target`)で、ボディとスケッチの両方から引く。名前で引く口は無い(参照はすべて
+ID)ので、**同じ名前が並ぶのは許す**。
 """
 from __future__ import annotations
 
@@ -36,8 +35,7 @@ def _target(doc: Document, target: str) -> Any:
 def check_name(name: Any) -> str:
     """名前として受け付けるか。違反は ValueError。
 
-    前後の空白は**削らずに断る**(画面のファイル名の欄と同じ線。削ると、打った名前と
-    付いた名前が黙って食い違う)。改行などの制御文字は一覧の1行を壊すので断る。
+    前後の空白は削らずに断る(画面のファイル名の欄と同じ線)。制御文字は一覧の1行を壊すので断る。
     """
     if not isinstance(name, str):
         raise ValueError(f"name must be a string, got {type(name).__name__}")
@@ -78,7 +76,7 @@ register_verb(VERB_RENAME, do=_do_rename, undo=_undo_rename)
 
 @entry(VERB_RENAME)
 def _enter_rename(document: Document, target: str, name: str) -> dict:
-    """対象は選択ではなく引数の ID(ブラウザの一覧の行・AI)。"""
+    """対象は選択ではなく引数の ID。"""
     args = rename(document, str(target), name).args
     kind = "sketch" if isinstance(_target(document, args["target"]), Sketch) else "body"
     return {"target": args["target"], "kind": kind, "name": args["name"]}

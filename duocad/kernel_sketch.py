@@ -39,11 +39,7 @@ from .mesh_geometry import compound, indexed_map
 
 
 def require_planar_face(shape: "TopoDS_Shape", face_index: int) -> Any:
-    """面 `face_index` が平面でなければ ValueError(スケッチを貼れない)。平面ならその面を返す。
-
-    面を返すのは `face_frame` が同じ面をもう一度数え直さずに済ませるため
-    (`_face_map` は毎回 `MapShapes_s` を走らせるので、面の多い形状では数え直しが効く)。
-    """
+    """面 `face_index` が平面でなければ ValueError。平面ならその面を返す(`_face_map` の数え直しを避ける)。"""
     face = face_of(shape, face_index)
     kind = classify_face(face)
     if kind != "plane":
@@ -78,25 +74,18 @@ def sketch_plane_normal(plane: dict, face: Any = None) -> Tuple[float, float, fl
 
 
 def sketch_plane_frame(plane: dict, face: Any = None) -> dict:
-    """スケッチ平面の3Dの枠(原点と2軸と法線)を素の数値で返す。
+    """スケッチ平面の3Dの枠 {"origin", "u", "v", "normal"}(各 [x,y,z])を素の数値で返す。
 
-    戻り値: {"origin": [x,y,z], "u": [..], "v": [..], "normal": [..]}
-
-    **スケッチ平面上の (u, v) と3D座標を行き来する規則そのもの**である
-    (`p = origin + u*u_axis + v*v_axis`)。同じ計算をアプリ層が独自に持つと、基準平面3面の
-    軸の取り方と面に貼ったスケッチの `ZReverse` の扱いが必ずずれるので、**枠はコアが配る**。
+    (u, v) と3D座標を行き来する規則そのもの(`p = origin + u*u_axis + v*v_axis`)。アプリ層が
+    独自に持つと基準平面の軸の取り方と `ZReverse` の扱いがずれるので、**枠はコアが配る**。
     """
     return _frame_from_ax3(_ax3_from_plane(plane, face=face))
 
 
 def offset_plane_frame(frame: dict, distance: float) -> dict:
-    """`frame` を自身の法線方向へ `distance` だけ平行移動した枠。u/v/normalは不変。
+    """`frame` を自身の法線方向へ `distance` だけ平行移動した枠(u/v/normalは不変)。
 
-    OCPの `gp_Ax3` を経由しない純粋な数値計算 —— origin だけを動かし u/v/normal を
-    そのまま引き継ぐので、入力が直交系である限り出力も直交系のままである(平行移動は
-    直交性を壊さない)。**ここで往復検査はしない** —— この結果を後で
-    `sketch_plane_frame`/`_ax3_from_plane` に通したとき(`_ax3_from_frame` 経由で)
-    初めて検査される、遅延した検査である。
+    `gp_Ax3` を経由しない数値計算。**往復検査はここでせず**、後で `_ax3_from_frame` を通るときに行う。
     """
     origin = frame["origin"]
     normal = frame["normal"]
@@ -166,11 +155,9 @@ def sketch_regions(
         if area <= 0:
             continue
         u, v = _to_uv(ax3, centroid[0], centroid[1], centroid[2])
-        # 第1キーは**丸めた**面積。生の面積で比べると、幾何的に等しい2領域でも
-        # 1e-16級の積分残差で先に決着してしまい、docstringが約束するタイブレーク
-        # (重心の u,v)が事実上発火しない(y=0で割った半円が
-        # 628.3185307179587 と ...584 になる)。順序は選択集合が指す先そのものなので、
-        # 残差ではなく座標で決まるようにする。
+        # 第1キーは**丸めた**面積。生の面積だと等しい2領域でも1e-16級の積分残差で先に決着し、
+        # docstringが約束するタイブレーク(重心の u,v)が発火しない(y=0で割った半円が
+        # 628.3185307179587 と ...584 になる)。
         kept.append((-round(area, 6), u, v, area, centroid, region_face))
 
     kept.sort(key=lambda item: (item[0], item[1], item[2]))
@@ -279,9 +266,8 @@ def _erode_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[A
 def _dilate_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[Any]:
     """面の和集合を `distance`(正)だけ広げ、つながった成分ごとの面の並びにする。
 
-    面ごとに広げてから結合する(ミンコフスキー和は和集合に分配する)。`BRepOffsetAPI_MakeOffset` は
-    面を渡してもワイヤの並びしか返さないので、ワイヤの入れ子(外周と穴)から面を組み直す
-    (`_faces_from_wires`)。
+    `BRepOffsetAPI_MakeOffset` は面を渡してもワイヤの並びしか返さないので、外周と穴を
+    `_faces_from_wires` で組み直す。
     """
     result: List[Any] = []
     for face in faces:
@@ -294,8 +280,7 @@ def _dilate_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[
             raise ValueError(f"2Dオフセット(距離 {distance} mm)が空の結果を返した")
         wire_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_WIRE)
         wires = [TopoDS.Wire_s(wire_map.FindKey(i)) for i in range(1, wire_map.Extent() + 1)]
-        # 入れ子の数え上げは**入力の面ごと**にする(別の面のオフセット結果どうしは重なりうるので、
-        # 混ぜると片方の外周がもう片方の穴に数えられる)。
+        # 入れ子の数え上げは入力の面ごと(別の面のオフセット結果は重なりうる)。
         result.extend(_faces_from_wires(ax3, wires))
     return _union_faces(result)
 
@@ -404,13 +389,10 @@ def face_boundary_entities(plane: dict, face: Any) -> List[dict]:
 def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
     """PlaneRef から gp_Ax3 を作る。面参照で平面でなければ ValueError。
 
-    **`kind` を問わず `plane["frame"]`(作成時に焼き付けた姿勢)が最優先**で、そこに枠がある
-    限り `face` は見ない —— これが「後続の面取り・フィレットがスケッチを動かさない」の実体
-    である(`face_frame` のdocstring)。`face` 参照・`offset` 参照はどちらも
-    `sketch.resolve_plane` が必ず `frame` を焼き付けてから渡すので、ここで両者を区別する
-    必要が無い(新しい `kind` が増えても、frameさえ焼き付けてあればこの関数は無改修で通る)。
-    枠を持たない面参照は `face` から解決する —— 古い操作ログを再生した文書や、手で組んだ
-    PlaneRef のための後方互換の経路。
+    **`kind` を問わず `plane["frame"]`(作成時に焼き付けた姿勢)が最優先**で、枠がある限り
+    `face` は見ない(`face_frame` のdocstring)。`sketch.resolve_plane` が必ず `frame` を焼き付けて
+    渡すので、新しい `kind` が増えても無改修で通る。枠を持たない面参照は `face` から解決する
+    (古い操作ログ・手組みの PlaneRef のための後方互換)。
     """
     kind = plane.get("kind")
     if kind == "base":
@@ -430,7 +412,7 @@ def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
 
 
 def _frame_from_ax3(ax3: "gp_Ax3") -> dict:
-    """gp_Ax3 を素の数値の枠へ。`_ax3_from_frame` の逆で、往復して同じものに戻る。"""
+    """gp_Ax3 を素の数値の枠へ(`_ax3_from_frame` の逆)。"""
     origin = ax3.Location()
     xdir = ax3.XDirection()
     ydir = ax3.YDirection()
@@ -448,13 +430,11 @@ def _ax3_from_frame(frame: Any) -> "gp_Ax3":
 
     **`v` を捨ててはいけない**。`gp_Ax3(location, direction, xdirection)` は必ず右手系を作る
     (`YDirection = Direction ^ XDirection`)のに対し、`_ax3_from_face` が反転面へ当てる
-    `ZReverse()` は Direction だけを裏返して X/Y を据え置く(＝左手系になる)。
-    origin/normal/u の3つだけを保存して組み直すと、**反転面に貼ったスケッチの v 軸だけが
-    符号反転し、図形が平面内で鏡像になる**。実測でOCCTのこの挙動を確認済み。
-    そこで `v` も保存し、必要なら `YReverse()`(Y だけを裏返す)で左手系へ戻す。
+    `ZReverse()` は Direction だけを裏返して X/Y を据え置く(＝左手系)。origin/normal/u だけで
+    組み直すと反転面のスケッチは v 軸が符号反転し、図形が鏡像になる(実測)。
+    そこで `v` も保存し、必要なら `YReverse()` で左手系へ戻す。
 
-    復元した3軸が保存値と一致しない場合は ValueError —— 黙って鏡像の平面を配ると、
-    領域の添字も押し出しの向きも意味を失ったまま成功してしまう。
+    復元した軸が保存値と一致しなければ ValueError(黙って鏡像の平面を配らない)。
     """
     if not isinstance(frame, dict):
         raise ValueError(f"invalid sketch plane frame: {frame!r}")
@@ -471,9 +451,8 @@ def _ax3_from_frame(frame: Any) -> "gp_Ax3":
     origin, u, v, normal = given["origin"], given["u"], given["v"], given["normal"]
 
     try:
-        # 長さ0のベクトルや normal と u が平行な枠は OCCT が Standard_ConstructionError で
-        # 落とす。層の外(操作ログ・手書きのPlaneRef)から来た値の検査なので ValueError へ
-        # 揃える —— 呼び出し側は「平面が不正」を1種類の例外で捕まえられなければならない。
+        # 長さ0や normal と u が平行な枠は OCCT が Standard_ConstructionError で落とす。
+        # 呼び出し側が「平面が不正」を1種類の例外で捕まえられるよう ValueError へ揃える。
         ax3 = gp_Ax3(gp_Pnt(*origin), gp_Dir(*normal), gp_Dir(*u))
     except Exception as error:
         raise ValueError(f"invalid sketch plane frame: {frame!r}") from error
@@ -491,7 +470,7 @@ def _ax3_from_frame(frame: Any) -> "gp_Ax3":
 
 
 def _dot3(direction: "gp_Dir", vector: Sequence[float]) -> float:
-    """gp_Dir と素の3成分の内積(枠の復元で向きの一致だけを見る)。"""
+    """gp_Dir と素の3成分の内積。"""
     return (
         direction.X() * float(vector[0])
         + direction.Y() * float(vector[1])
@@ -507,9 +486,8 @@ def _ax3_from_face(face: Any) -> "gp_Ax3":
         raise ValueError(
             f"face is {classify_face(face)}: スケッチ平面にできるのは平面だけ"
         )
-    # `Position()` は既に gp_Ax3 だが、OCP には gp_Ax3(gp_Ax3) のコンストラクタが無いので
-    # 位置・法線・X方向から組み直す。反転面は `ZReverse`(OCCTの綴り。`ReverseZ` は存在しない)
-    # で法線だけを裏返す — XDirection/YDirection は変わらないので2D座標の意味は保たれる。
+    # OCP には gp_Ax3(gp_Ax3) のコンストラクタが無いので位置・法線・X方向から組み直す。
+    # 反転面は `ZReverse`(`ReverseZ` は存在しない)で法線だけを裏返す(X/Y は変わらない)。
     position = adaptor.Plane().Position()
     ax3 = gp_Ax3(position.Location(), position.Direction(), position.XDirection())
     if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
@@ -570,12 +548,10 @@ def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:
         raise ValueError(f"arc radius must be positive, got {radius}")
     start_deg = float(params["start_deg"])
     end_deg = float(params["end_deg"])
-    # 反時計回りに start→end。0度またぎは (end-start)%360 の掃引角で表現する。
     sweep_deg = (end_deg - start_deg) % 360.0
     start_rad = math.radians(start_deg)
     end_rad = start_rad + math.radians(sweep_deg)
-    # gp_Ax2(center, N, X): P(U)=O+R*cos(U)*X+R*sin(U)*(N×X) なので
-    # U=0 がスケッチX、U増加が反時計回り（右手系）。
+    # gp_Ax2(center, N, X): U=0 がスケッチX、U増加が反時計回り(右手系)。
     axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
     maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius), start_rad, end_rad)
     if not maker.IsDone():
@@ -584,8 +560,7 @@ def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:
 
 
 #: 3次ベジエの `params` のキー(**始点・制御点1・制御点2・終点の順**)。**この並びが唯一の正**で、
-#: `sketch.BEZIER_KEYS` / `sketch._bezier_points` / `sketch` の表の `points` はここから導く
-#: (`sketch` が `kernel` を import する向きなので、正は kernel 側に置く)。
+#: `sketch.BEZIER_KEYS` / `sketch._bezier_points` / `sketch` の表の `points` はここから導く。
 BEZIER_POINT_KEYS = (("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1"))
 
 
@@ -593,8 +568,7 @@ def _edges_bezier(ax3: "gp_Ax3", params: dict) -> List[Any]:
     """3次ベジエを**厳密に**1本の辺にする(折れ線へ落とさない)。
 
     折れ線化した輪郭を押し出すと側面が線分の数だけ平面に割れる(実測: 制御点2本ぶんの形で
-    面数4に対し130)。fillet/chamferの対象指定も面の一覧も実用にならなくなるので、
-    曲線は曲線のまま `Geom_BezierCurve` へ渡す。
+    面数4に対し130)ので、`Geom_BezierCurve` へ渡す。
     """
     points = TColgp_Array1OfPnt(1, 4)
     for index, (key_x, key_y) in enumerate(BEZIER_POINT_KEYS, start=1):
@@ -665,12 +639,7 @@ def _bbox_arc(params: dict) -> Tuple[float, float, float, float]:
 
 
 def _bbox_bezier(params: dict) -> Tuple[float, float, float, float]:
-    """**制御点の凸包**で押さえる。3次ベジエは必ず制御点の凸包の内側に入るので、
-    曲線の真のbboxより広いことはあっても狭いことはない(安全側)。
-
-    ここのbboxが使われるのは `sketch_regions` が分割用の補助面をどれだけ大きく作るかの
-    決定だけなので、広い側に外れても結果は変わらない。
-    """
+    """制御点の凸包で押さえる(真のbboxより広いことはあっても狭くはない。補助面の大きさにしか使わない)。"""
     xs = [float(params[key_x]) for key_x, _ in BEZIER_POINT_KEYS]
     ys = [float(params[key_y]) for _, key_y in BEZIER_POINT_KEYS]
     return (min(xs), max(xs), min(ys), max(ys))
@@ -685,11 +654,10 @@ def _bbox_rectangle(params: dict) -> Tuple[float, float, float, float]:
 
 @dataclass(frozen=True)
 class _KernelEntityKindOps:
-    """図形1種別ぶんのOCP依存演算(辺生成・2D bbox)。表の1行 = その種別の全処理。
+    """図形1種別ぶんのOCP依存演算(辺生成・2D bbox)。
 
-    `duocad/sketch.py` の `EntityKindOps`(純幾何・OCP不要)の姉妹表 —— import境界
-    (OCPはカーネル層だけ)のため1本化できず、種別ごとの処理は2つの表に分かれている
-    (README.md「モジュールとimport境界」)。
+    `duocad/sketch.py` の `EntityKindOps`(純幾何)の姉妹表。import境界(OCPはカーネル層だけ)のため
+    1本化できない(README.md「モジュールとimport境界」)。
     """
 
     edges: Callable[["gp_Ax3", dict], List[Any]]
@@ -706,7 +674,7 @@ _KERNEL_ENTITY_KIND_TABLE: Dict[str, _KernelEntityKindOps] = {
 
 
 def _kernel_entity_kind_ops(kind: str) -> _KernelEntityKindOps:
-    """種別ごとのOCP依存演算を引く。表に無い種別は即時 ValueError(silent defaultなし)。"""
+    """種別ごとのOCP依存演算を引く。表に無い種別は ValueError。"""
     try:
         return _KERNEL_ENTITY_KIND_TABLE[kind]
     except KeyError:
@@ -714,7 +682,6 @@ def _kernel_entity_kind_ops(kind: str) -> _KernelEntityKindOps:
 
 
 def _entity_edges(ax3: "gp_Ax3", entity: dict) -> List[Any]:
-    """1図形から 3D の辺リストを作る。"""
     return _kernel_entity_kind_ops(entity["kind"]).edges(ax3, entity["params"])
 
 
@@ -741,7 +708,7 @@ def _entities_bbox_2d(entities: list) -> Tuple[float, float, float, float]:
 def _plane_face(
     ax3: "gp_Ax3", u0: float, u1: float, v0: float, v1: float
 ) -> Any:
-    """スケッチ平面上の軸平行矩形を TopoDS_Face にする(補助面用)。"""
+    """スケッチ平面上の軸平行矩形の TopoDS_Face(補助面)。"""
     corners = [
         _to_pnt(ax3, u0, v0),
         _to_pnt(ax3, u1, v0),
@@ -774,7 +741,7 @@ def _face_vertices_inside_bbox_2d(
     v_max: float,
     tol: float,
 ) -> bool:
-    """面の頂点がすべて 2D bbox(+tol) の内側なら True(補助面の余りを落とす)。"""
+    """面の頂点がすべて 2D bbox(+tol) の内側なら True。"""
     shape_map = indexed_map(TopoDS.Face_s(face), TopAbs_ShapeEnum.TopAbs_VERTEX)
     if shape_map.Extent() < 1:
         return False

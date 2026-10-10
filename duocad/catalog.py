@@ -7,7 +7,7 @@
 - `duocad/mcp_server.py` … `tools/list` が返すツール定義と `tools/call` の引数の検査
 
 frontend(`web/src/commands/*.ts`)だけは別に持つ —— TS側が持つのは**引数の集め方**
-(どのクリックを待つか・入力欄のid・ボタンのid)であって、ここには無い情報だからである。
+(どのクリックを待つか・入力欄のid・ボタンのid)で、ここには無い情報だから。
 
 verbを1つ足すとき:
 
@@ -22,8 +22,8 @@ WebSocket・MCP・アプリ内AIはどれも `Session.apply` を通って入口�
 
 **対象集合は引数ではない** —— 面・辺・領域はどの層でも引数で受けず、コアの選択から取る
 (`selection.require_selected` / `require_edges`)。したがってここに並ぶ引数は**数値・名前・
-パスだけ**である。`body_id` が残っているのは「どのBodyへ足す/から引くか」のような**名前**で
-あって対象集合ではないため(Bodyは選択集合の項目ではない)。
+パスだけ**である。`body_id` は「どのBodyへ足す/から引くか」という**名前**であって対象集合
+ではない(Bodyは選択集合の項目ではない)。
 
 **OCP / build123d をimportしない**(純データ)。
 """
@@ -44,8 +44,8 @@ from typing import Any, Optional
 CATEGORIES = ("query", "selection", "sketch", "feature", "file", "history", "protocol")
 
 #: 形(面・辺・領域の添字)を変えうる verb のカテゴリ。ここに属し文書を変える宣言は、
-#: `resets_selection` を**明示しないと import 時点で落ちる**(既定に頼ると、形を変える verb を
-#: 足すときの付け忘れがどこにも現れない。issue #51)。
+#: `resets_selection` を**明示しないと import 時点で落ちる**(既定に頼ると付け忘れが
+#: どこにも現れない。issue #51)。
 SHAPE_CATEGORIES = ("sketch", "feature", "history")
 
 #: `Command.ws` に書ける値。
@@ -67,7 +67,6 @@ class Param:
 
     #: 引数名。**MCP・WS・`Session` のメソッドで同じ綴り**である。
     name: str
-    #: JSON Schema の `type`(`"number"` / `["number", "array"]` のような値)。
     type: Any
     #: AIに見せる説明。**何ができるかではなく、何を渡すか**を書く。
     description: str
@@ -79,17 +78,16 @@ class Param:
     #: 既定値で補うと、打ち忘れた寸法や `mode` が黙って既定で入る(`extrude` の `mode` が
     #: `join` に落ちると「切るつもりで足した」が通る)。
     ws: Any = True
-    #: **形の寸法を決める値か**。`agent_instructions()` の言う how のうち、
-    #: **数値の分だけ**をここで印す —— 半径・距離・間隔・個数・角度。
+    #: **形の寸法を決める値か**。`agent_instructions()` の言う how のうち**数値の分だけ**を
+    #: 印す —— 半径・距離・間隔・個数・角度。
     #:
-    #: 選択肢(`mode` / `visible`)とパス(`path`)は how だが印さない。あれらは言葉で
-    #: 指定されるものなので、「人が数量を言ったか」では測れず、印すと誤って止まる
-    #: (「カバーを隠して」に数字は無い)。**AIが勝手に決めてしまうのは寸法**であり、
-    #: undoでしか戻せない形を左右するのも寸法である。
+    #: 選択肢(`mode` / `visible`)とパス(`path`)は how だが印さない。言葉で指定されるので
+    #: 「人が数量を言ったか」では測れず、印すと誤って止まる(「カバーを隠して」に数字は無い)。
+    #: **AIが勝手に決めてしまうのは寸法**であり、undoでしか戻せない形を左右するのも寸法である。
     #:
-    #: 対象を指すもの(`body_id` / `sketch_id` / `entities`)、点の座標
-    #: (`center` / `corner` / `p0`)、貼る先の平面名(`base_plane`)、命名(`name`)は
-    #: how ではないので印さない(`agent_instructions()` の但し書きと同じ線)。
+    #: 対象を指すもの(`body_id` / `sketch_id` / `entities`)、点の座標(`center` / `corner` /
+    #: `p0`)、貼る先の平面名(`base_plane`)、命名(`name`)も how ではないので印さない
+    #: (`agent_instructions()` の但し書きと同じ線)。
     #:
     #: 使い道は `duocad/agent/loop.py` のガード1つだけ。
     dimension: bool = False
@@ -116,7 +114,6 @@ class Command:
     #: **MCPツール名 == WSコマンド名 == UIコマンドID == 操作ログのverb名**。AIは
     #: `describe_document` のログを読んで次の一手を決めるので、綴りが違うと対応表を推測させる。
     name: str
-    #: `CATEGORIES` のどれか。WSの表の割り振りと、UI側の送信経路の分岐に対応する。
     category: str
     #: AIに見せる説明。**何ができるかではなく「いつ使うか」**を書く
     #: (説明文はAIがツールを選ぶ唯一の手がかり)。`mcp=False` のものは空でよい。
@@ -126,8 +123,7 @@ class Command:
     #: (`verb` / `seq` / `client_op` はどの verb にも付くので書かない)。verb でないものは空。
     returns: tuple[Result, ...] = ()
     #: `Session` のメソッド名(WebSocket側の実体)。WSに開けていないものは None。
-    #: **verb名と違ってよい**(`export_step` -> `export_step_file` のように、
-    #: コア側の名前がverb名と一致しないことがある)。
+    #: **verb名と違ってよい**(`export_step` -> `export_step_file`)。
     session: Optional[str] = None
     #: WebSocketでの露出のしかた(`WS_SURFACES`)。
     ws: str = "table"
@@ -146,11 +142,11 @@ class Command:
     changes_document: bool = True
     #: 確定後に選択集合を全リセットするか。**面・辺・領域の添字は形状変更で壊れる**
     #: (kernel.pyの既知の地雷)ので、形を変えるverbの確定後は選択を空にする。
-    #: `Session._reset_selection_if_needed` がここを見て1箇所で発火するので、UI経由・MCP経由の
+    #: `Session._reset_selection_if_needed` が1箇所で発火するので、UI経由・MCP経由の
     #: どちらでも同じに効く。**失敗したverb(ログに積まれない)には効かない**。
-    #: **`undo`/`redo` も true**(添字が壊れていない可能性があっても、何を戻した/やり直したかで
-    #: 場合分けしない単純な規則を優先する)。**`SHAPE_CATEGORIES` の verb は書くこと**(`None` のままなら
-    #: `__post_init__` が落とす)。それ以外は省略すると false。
+    #: **`undo`/`redo` も true**(何を戻したかで場合分けしない単純な規則を優先する)。
+    #: **`SHAPE_CATEGORIES` の verb は書くこと**(`None` のままなら `__post_init__` が落とす)。
+    #: それ以外は省略すると false。
     resets_selection: Optional[bool] = None
     #: 設計上の注記(なぜこの形か)。コードの読み手向けで、AIには渡さない。
     note: str = ""
@@ -175,11 +171,9 @@ class Command:
 
     @property
     def ws_params(self) -> tuple[str, ...]:
-        """WebSocketのコマンドが受け取る引数名。"""
         return tuple(p.name for p in self.params if p.ws)
 
     def ws_schema(self) -> dict:
-        """WebSocket が受け取る引数の JSON Schema(`input_schema` の WebSocket 版)。"""
         return _schema(
             [p for p in self.params if p.ws],
             [p.name for p in self.params if p.ws == "required" or (p.ws and p.required)],
@@ -209,11 +203,9 @@ class Command:
         return tuple(p.name for p in self.params)
 
     def input_schema(self) -> dict:
-        """MCPの `inputSchema`(JSON Schema)。"""
         return _schema(self.params, [p.name for p in self.params if p.required])
 
     def descriptor(self) -> dict:
-        """MCPの `tools/list` が返す1件。"""
         return {
             "name": self.name,
             "description": self.description,
@@ -243,7 +235,7 @@ def check_arguments(schema: dict, arguments: dict) -> Optional[str]:
     (例: `fillet.radius` の `["number","array"]`)。いずれも**間違ったまま実行すると
     静かに別のことをする**類の誤りである(例: `visible` に "false" → 真、`True` を
     数値として通すと 1.0、`radius: "12"` は1文字ずつ読まれて辺2本に半径1と2が付く)。
-    **任意引数の `null` も型違い**(スキーマに `null` は無い。省略はキーごと落とすこと)。
+    **任意引数の `null` も型違い**(省略はキーごと落とすこと)。
     エラーメッセージには**引数名を必ず含める**。
     """
     properties = schema.get("properties") or {}
@@ -286,9 +278,6 @@ def _value_matches_json_type(value: Any, expected: str) -> bool:
     return True
 
 
-# --------------------------------------------------------------------------------------
-# 宣言(**verbを足すのはここ**)
-# --------------------------------------------------------------------------------------
 #: 並び順は `tools/list` に出る順序でもある(AIが最初に読む順)。
 #: スケッチのverbが共通に受ける `sketch_id`(`Param` は frozen なので共有してよい)。
 _SKETCH_ID = Param("sketch_id", "string", "対象スケッチのID")
@@ -325,7 +314,6 @@ PREDICATE_HELP = (
 )
 
 COMMANDS: tuple[Command, ...] = (
-    # ---------------------------------------------------------------- 問い合わせ
     Command(
         name="describe_document",
         category="query",
@@ -429,7 +417,6 @@ COMMANDS: tuple[Command, ...] = (
             "返す(状態配信ではない。`get_edges` と同じ扱い)。"
         ),
     ),
-    # ---------------------------------------------------------------- 選択
     Command(
         name="get_selection",
         category="selection",
@@ -503,7 +490,6 @@ COMMANDS: tuple[Command, ...] = (
         session="clear_selection",
         ws="special",
     ),
-    # ---------------------------------------------------------------- スケッチ
     Command(
         name="sketch_create",
         returns=(Result("sketch_id", "string"), _SKETCH_FRAME),
@@ -622,7 +608,6 @@ COMMANDS: tuple[Command, ...] = (
         session="add_arc",
         resets_selection=True,
     ),
-    # ---------------------------------------------------------------- フィーチャ
     Command(
         name="extrude",
         returns=(
@@ -1084,7 +1069,6 @@ COMMANDS: tuple[Command, ...] = (
             "プレビュー(幽霊)は無い —— `previewable=False`。"
         ),
     ),
-    # ---------------------------------------------------------------- 削除
     Command(
         name="delete",
         returns=(
@@ -1152,17 +1136,14 @@ COMMANDS: tuple[Command, ...] = (
             "消える)。`resets_selection=False` —— 形も添字も変わらない"
         ),
     ),
-    # ---------------------------------------------------------------- 形状最適化の条件(第3のモード)
-    #
-    # **4つとも集合代入**である(「1つ足す」ではなく「この役割の集合を、いま確定している
-    # 選択集合そのものに置き換える」)。だから**解除専用のverbが無い** —— verbの中で
-    # 全部外して決定すれば、その役割は空になる。実体と契約は
-    # `duocad/verbs/optimize_setup.py`、配りものの形は `duocad/optimize.py`。
-    #
-    # `category="feature"` にしてあるのは、ソリッドに対する操作でWSの `FEATURE_COMMANDS`
-    # の捌き方(引数を表から読んで `Session` のメソッドを呼ぶ)がそのまま当たるからである。
-    # **モードの分け方は画面側の話**で、コアの分類ではない —— 分類を1つ増やすと、
-    # WSの表・`_dispatch` の分岐・UIの送信経路がverbの中身と関係なく増える。
+    # 形状最適化の条件(第3のモード)。**4つとも集合代入**(「この役割の集合を、いま確定して
+    # いる選択集合そのものに置き換える」)なので**解除専用のverbが無い** —— verbの中で全部
+    # 外して決定すれば、その役割は空になる。実体と契約は `duocad/verbs/optimize_setup.py`、
+    # 配りものの形は `duocad/optimize.py`。
+    # `category="feature"` なのは、ソリッドに対する操作でWSの `FEATURE_COMMANDS` の捌き方
+    # (引数を表から読んで `Session` のメソッドを呼ぶ)がそのまま当たるから。**モードの分け方は
+    # 画面側の話**で、コアの分類を1つ増やすと、WSの表・`_dispatch` の分岐・UIの送信経路が
+    # verbの中身と関係なく増える。
     Command(
         name="set_preserve_bodies",
         returns=(Result("bodies", "string[]"),),
@@ -1350,7 +1331,6 @@ COMMANDS: tuple[Command, ...] = (
             "**`rotate_copies` は画面から送らない**(`ws=False`)ので、幽霊も既定の true で描く"
         ),
     ),
-    # ---------------------------------------------------------------- ファイル操作
     Command(
         name="import_svg",
         returns=(
@@ -1646,7 +1626,6 @@ COMMANDS: tuple[Command, ...] = (
             "載せ、画像は行が見えたときにこれで取る"
         ),
     ),
-    # ---------------------------------------------------------------- 履歴
     Command(
         name="undo",
         returns=(Result("undone", "string"),),
@@ -1668,9 +1647,8 @@ COMMANDS: tuple[Command, ...] = (
         ws="special",
         resets_selection=True,
     ),
-    # ---------------------------------------------------------------- WebSocketだけの口
-    # **verbではない**(文書を変えない)。下りコマンドの一覧を1箇所で読めるように
-    # ここへ置いてあるだけで、4つの表のどれにも載らない。
+    # WebSocketだけの口。**verbではない**(文書を変えない)。下りコマンドの一覧を1箇所で読める
+    # ようここへ置いてあるだけで、4つの表のどれにも載らない。
     Command(
         name="get_state",
         category="protocol",
@@ -1739,20 +1717,14 @@ COMMANDS: tuple[Command, ...] = (
             "`ws=\"special\"`)"
         ),
     ),
-    # ---------------------------------------------------------------- 形状最適化を走らせる(protocol)
-    #
-    # **verbではない。** 文書へ積まれるのは `run_optimization` が中で呼ぶ `add_mesh_body`
-    # 1本だけで、この4つは「点検する / 見積もる / 走らせる / 止める」であり操作ログに
-    # 載らない(`changes_document=False`。`run_optimization` が結果を入れる経路は
-    # `add_mesh_body` の側でログに載る)。したがって `catalog` の分類は `protocol` である。
-    #
-    # **4つとも `mcp=False`。** AIに走らせる口は今回は開けない —— 数分かかる同期の呼び出しを
-    # MCPのツールとして出すと、進捗も中断も運べないまま呼び出し側がタイムアウトする
-    # (WSは進捗イベントと `cancel_optimization` を持つのでこの経路だけを開ける)。
-    # AI から走らせたくなったら、まず**進捗と中断をMCPで運ぶ形**を決めること。
-    #
-    # **`ws="special"`** —— 表(`ws="table"`)は「載せた引数は全部必須」であり、ここは
-    # 省略できる引数しか無い(既定＝いちばん粗い設定で走る)。
+    # 形状最適化を走らせる(protocol)。**verbではない**。文書へ積まれるのは `run_optimization` が
+    # 中で呼ぶ `add_mesh_body` のログ1行だけで、この4つ(点検する / 見積もる / 走らせる / 止める)は
+    # 操作ログに載らない(`changes_document=False`)。したがって分類は `protocol`。
+    # **4つとも `mcp=False`**。数分かかる同期の呼び出しをMCPのツールにすると、進捗も中断も運べ
+    # ないまま呼び出し側がタイムアウトする(WSは進捗イベントと `cancel_optimization` を持つ)。
+    # AIから走らせるなら、まず**進捗と中断をMCPで運ぶ形**を決めること。
+    # **`ws="special"`** —— 表(`ws="table"`)は「載せた引数は全部必須」で、ここは省略できる
+    # 引数しか無い(既定＝いちばん粗い設定で走る)。
     Command(
         name="optimize_conditions",
         category="protocol",
@@ -1888,16 +1860,12 @@ STATE_KEYS: tuple[str, ...] = (
     "document_open",
 )
 
-#: 名前 -> 宣言。
 BY_NAME: dict = {command.name: command for command in COMMANDS}
 
 if len(BY_NAME) != len(COMMANDS):
     raise RuntimeError("COMMANDS に同じ名前が2つある")
 
 
-# --------------------------------------------------------------------------------------
-# 導出(server.py / mcp_server.py はこれを使う)
-# --------------------------------------------------------------------------------------
 def previewable_verbs() -> dict:
     """`server.PREVIEWABLE_VERBS`: verb名 -> (`Session` のメソッド名, 受け取ってよい引数名)。"""
     return {
@@ -1926,17 +1894,14 @@ def file_table() -> dict:
 
 
 def websocket_command_names() -> set:
-    """WebSocketから踏めるコマンド名の全部(表に載るものも個別に捌くものも)。"""
     return {command.name for command in COMMANDS if command.ws != "none"}
 
 
 def tool_descriptors() -> list:
-    """MCPの `tools/list` が返すツール定義(宣言の順)。"""
     return [command.descriptor() for command in COMMANDS if command.mcp]
 
 
 def tool_names() -> tuple:
-    """MCPが公開するツール名(宣言の順)。"""
     return tuple(command.name for command in COMMANDS if command.mcp)
 
 

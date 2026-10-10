@@ -62,8 +62,7 @@ def extrude_regions(
     if mode == "cut" and (target_shape is None or target_shape.IsNull()):
         raise ValueError("cut requires a target shape")
     if mode == "new" and target_shape is not None and not target_shape.IsNull():
-        # `new` は**必ず独立したソリッドになる**。相手を渡されたのに黙って無視すると
-        # 「足したつもりが別ボディになっていた」が成功として通る。
+        # 相手を黙って無視すると「足したつもりが別ボディ」が成功として通る。
         raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
 
     nx, ny, nz = float(normal[0]), float(normal[1]), float(normal[2])
@@ -77,9 +76,8 @@ def extrude_regions(
         prism_shape = prism.Shape()
         if prism_shape is None or prism_shape.IsNull():
             raise ValueError("prism from a region face is empty")
-        # 押し出し方向が面の平面内に寝ていると**体積0の退化ソリッド**ができる。
-        # `IsDone()` も `IsNull()` も `BRepCheck_Analyzer` も全部通ってしまうので、
-        # 体積を直接見るのがここでの唯一の関門。
+        # 押し出し方向が面の平面内に寝ると体積0の退化ソリッドができ、`IsDone()` も
+        # `IsNull()` も `BRepCheck_Analyzer` も通る。体積を見るのが唯一の関門。
         if volume(prism_shape) <= 0:
             raise ValueError(
                 "prism from a region face has no volume "
@@ -91,7 +89,6 @@ def extrude_regions(
 
     volume_before: Optional[float] = None
     if mode in ("join", "new"):
-        # `new` はここへ来る時点で `target_shape is None` が保証されている(上の検査)。
         if target_shape is None or target_shape.IsNull():
             result = combined
         else:
@@ -109,7 +106,6 @@ def extrude_regions(
             raise ValueError("cut failed")
         result = builder.Shape()
 
-    # 無変化の検査は相手があるときだけ(`volume_before` が None なら飛ぶ)。
     volume_after = _checked_volume(result, mode, volume_before=volume_before)
     _require_valid(result, mode)
 
@@ -213,7 +209,7 @@ def extrude_faces(
     if mode == "new":
         final, history, unified = result, None, False
     else:
-        # 順序は 無変化 → 統合 → BRepCheck(統合は入力の形状を壊しうるので、検査は統合後の形に対して行う)。
+        # 順序は 無変化 → 統合 → BRepCheck(統合は形状を壊しうるので、検査は統合後に行う)。
         final, history, unified = _unify_same_domain(result, volume_result)
     _require_valid(final, mode, context)
     final_map = _face_map(final)
@@ -266,8 +262,7 @@ def extrude_faces(
 
 
 def _check_coplanar_planes(faces: Sequence[Any], indices: Sequence[int]) -> tuple:
-    """全部が平面・同じ外向き法線・同一平面上であることを確かめ、`(法線, 各面の重心)` を返す。
-    違反は「何番目の面(添字)が何に反したか」を添えた ValueError。基準は先頭の面。"""
+    """全部が平面・同じ外向き法線・同一平面上であることを確かめ、`(法線, 各面の重心)` を返す(基準は先頭の面)。違反は ValueError。"""
     normals: List[tuple] = []
     centroids: List[tuple] = []
     for position, (index, face) in enumerate(zip(indices, faces), start=1):
@@ -325,9 +320,8 @@ def _find_translated_face(
 ) -> Optional[int]:
     """重心が `target`・法線が `normal` と同じ向きの面の添字(無ければNone)。
 
-    押し出した面が新形状のどれになったかを幾何で突き合わせる。由来マップ(`Modified`)は
-    ブーリアンでは空を返すことが多く(実測: Fuseは押し出した面を `IsDeleted` にするだけ)、
-    「押し出した面を選択したまま続けて押す」という計測の手続きには足りないため。
+    押し出した面が新形状のどれになったかを幾何で突き合わせる。由来マップ(`Modified`)はブーリアンでは
+    空を返すことが多い(実測: Fuseは押し出した面を `IsDeleted` にするだけ)ため。
     """
     tolerance = _MATCH_TOL * max(1.0, abs(scale), *(abs(value) for value in target))
     best: Optional[tuple] = None

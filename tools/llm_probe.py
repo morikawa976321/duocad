@@ -49,7 +49,6 @@ from duocad.agent.providers import (
 SYSTEM = catalog.agent_instructions()
 TOOLS = catalog.tool_descriptors()
 QUESTION = "body-0001 の面数を調べて。"
-#: 生成を長引かせるための依頼(中断の検査用)。
 LONG_TASK = "1から2000まで、数字を1つずつ改行して書き出して。途中で省略しない。"
 SCENARIOS = ("facts", "agent", "warmup", "breakers", "trim", "cancel", "save", "restore")
 JSON_HEADERS = {"content-type": "application/json"}
@@ -190,7 +189,6 @@ class CannedTools:
 
 
 def run_turns(index: int, state: str = "") -> list:
-    """台本の1依頼ぶん(依頼 → describe_shape → 結果 → 返答)。"""
     body_id = f"body-{index:04d}"
     call = ToolCall(id=f"call_{index}", name="describe_shape", arguments={"body_id": body_id})
     result = json.dumps(canned("describe_shape", {"body_id": body_id}), ensure_ascii=False)
@@ -236,7 +234,6 @@ class Probe:
         body.pop("stream_options", None)
         return {**body, "stream": False, **self.extra}
 
-    # ------------------------------------------------------------------ シナリオ
     def facts(self) -> list:
         server = self.server
         server.forget()
@@ -361,7 +358,6 @@ class Probe:
         return records
 
     def trim(self) -> list:
-        """`keep` 依頼を超えたら古い側を落とす。落とし方だけを変えて総処理量を比べる。"""
         records = []
         for policy in ("切らない", "滑らせる(毎回1依頼落とす)", "まとめて落とす(半分)"):
             self.server.forget()

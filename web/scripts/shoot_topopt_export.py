@@ -35,11 +35,9 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 def parse_panel(spec: str) -> dict:
-    """`"名前:element_mm=2.5"` を dict にする。
+    """`"名前:element_mm=2.5"` を dict にする。ラベルに `:` は使えない(最初の `:` で切る)。
 
-    **ラベルに `:` は使えない**(最初の `:` で切る)。値は実数。知らないキーは
-    **そのまま持ち回して呼び出し側が断る** —— ここで捨てると、綴りを間違えた設定が
-    黙って既定で撮られる。
+    知らないキーは捨てず呼び出し側に断らせる(捨てると綴り違いの設定が黙って既定で撮られる)。
     """
     label, _, rest = spec.partition(":")
     out: dict = {"label": label}
@@ -60,15 +58,8 @@ def _encode(verts: np.ndarray, faces: np.ndarray) -> dict:
     }
 
 
-# --------------------------------------------------------------------------------------
-# 利用者の文書(`--models-dir` 配下の操作ログ)
-# --------------------------------------------------------------------------------------
 def export_model(name: str, models_dir: Path, panels: list[dict], out: Path) -> list[dict]:
-    """**製品の経路をそのまま通す**(`optimize_run.run`)。
-
-    ここが合成題材と決定的に違うのは、**塊も条件も文書から来る**ことである ——
-    「実物の部品で変な答えが出た」を撮れないなら、撮影台を本体へ移した意味が無い。
-    """
+    """製品の経路(`optimize_run.run`)をそのまま通す。塊も条件も文書から来る。"""
     from duocad.server import Session
 
     known = {"label", "element_mm"}
@@ -81,8 +72,7 @@ def export_model(name: str, models_dir: Path, panels: list[dict], out: Path) -> 
                 "(製品の経路には二値探索の内部パラメータのつまみが無い)"
             )
         started = time.perf_counter()
-        # **面ごとに文書を開き直す。** 前の面が足した結果ボディが次の面の条件に混ざる
-        # (保持ソリッドの体積が変わる)のを防ぐ —— 同じ土俵で比べられなくなる。
+        # 面ごとに開き直す: 前の面が足した結果ボディが次の面の条件(保持ソリッドの体積)に混ざる。
         session = Session(None, 0.2, models_dir=models_dir)
         session.open_document(name)
         report = session.optimize_conditions()
@@ -140,7 +130,7 @@ def main() -> int:
 
         models_dir = DEFAULT_MODELS_DIR
     written = export_model(args.model, models_dir, panels, out)
-    # **`.json` を落とす**(呼び出し側の `--skip-export` の照合と揃える)。
+    # `--skip-export` の照合と揃えて `.json` を落とす。
     subject = args.model[:-5] if args.model.lower().endswith(".json") else args.model
 
     manifest = {

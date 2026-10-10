@@ -5,17 +5,16 @@
         payload = kernel.tessellate(body.shape, 0.2)
     # 抜けた時点で文書は with に入る前と完全に同じ
 
-**形状(`shape`)は差し替えであって書き換えではない**(OCCTのTopoDS_Shapeを破壊的に編集する
-経路はkernelに無い)。だから参照を控えて戻すだけで完全な巻き戻しになり、深いコピーは要らない。
+**形状(`shape`)は差し替えであって書き換えではない**(TopoDS_Shapeを破壊的に編集する経路は
+kernelに無い)。参照を控えて戻すだけで巻き戻せ、深いコピーは要らない。
 
 戻さないもの(意図的):
 
-- `duocad.verbs._common.SNAPSHOTS` の undo用スナップショット。**同一seqの再適用しか
-  起こさないverb**(`fillet` / `chamfer` / `extrude`)なら、確定時に
-  正しい値で上書きされるので誤ったundoにはならない。`set_parameter` のように
-  `parameters.rebuild` が**操作ログを頭から再生する**verbは、過去のseqのスナップショットを
-  別の値で作り直すため、中断したプレビューの形状が後の実undoで復元されうる。
-  **`PREVIEWABLE_VERBS` に再生系のverbを足すときは、ここも一緒に戻すこと**(1行足すだけでは壊れる)。
+- `duocad.verbs._common.SNAPSHOTS` の undo用スナップショット。同一seqの再適用しか起こさない
+  verb(`fillet` / `chamfer` / `extrude`)なら確定時に正しい値で上書きされる。
+  `set_parameter` のように `parameters.rebuild` が操作ログを頭から再生するverbは、過去のseqの
+  スナップショットを別の値で作り直すため、中断したプレビューの形状が後の実undoで復元されうる。
+  **`PREVIEWABLE_VERBS` に再生系のverbを足すときは、ここも一緒に戻すこと。**
 - `Session` 側のキャッシュ(版・テセレーション・`_applied_count`)。`Session.preview` の責務。
 """
 from __future__ import annotations
@@ -43,8 +42,6 @@ def speculative(doc: Document) -> Iterator[None]:
 def _snapshot(doc: Document) -> dict:
     """巻き戻しに要るものを控える。"""
     return {
-        # **`mesh` も控える**。いまメッシュを差し替えるverbは無いが、控えから
-        # 落ちているフィールドは「戻したはずなのに戻っていない」という形で後から効く。
         "bodies": [
             (body, body.shape, body.visible, body.name, body.kind, body.mesh)
             for body in doc.bodies
@@ -60,8 +57,7 @@ def _snapshot(doc: Document) -> dict:
 
 def _restore(doc: Document, snapshot: dict) -> None:
     """控えた状態へ戻す。**リストは中身を入れ替える**(`[:] = ...`)。
-
-    新しいリストで置き換えると、`doc.bodies` を掴んでいる呼び出し側が古いリストを見続ける。
+    新しいリストにすると、`doc.bodies` を掴んでいる呼び出し側が古いリストを見続ける。
     """
     doc.bodies[:] = [entry[0] for entry in snapshot["bodies"]]
     for body, shape, visible, name, kind, mesh in snapshot["bodies"]:

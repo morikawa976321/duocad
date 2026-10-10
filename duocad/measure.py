@@ -6,8 +6,7 @@ verb ではない(文書もログも触らない)。MCP の `measure` と WebSoc
 ## 2項目のあいだ(`between`)
 
 頂点・直線の辺・平らな面を、点・直線・平面の3種に還元して測る。**直線と平面は無限に
-延ばす** —— 有限の辺・面どうしの最短距離ではない(平行な面どうしは、面が重なっていなくても
-「面の間隔」が答え。issue #10 の「平行な面同士の距離」はこれ)。
+延ばす**(有限の辺・面どうしの最短距離ではない。平行な面どうしは重なっていなくても「面の間隔」が答え。issue #10)。
 
 | 組 | 返すもの |
 |---|---|
@@ -15,12 +14,10 @@ verb ではない(文書もログも触らない)。MCP の `measure` と WebSoc
 | 点-直線 / 点-平面 | 垂線の長さ(足が `to`) |
 | 直線-直線 / 直線-平面 / 平面-平面 | 平行なら距離、平行でなければ**角度**(0〜90度。距離は無い) |
 
-`from` / `to` は「どこからどこまでの距離か」を画面が線で描くための2点で、直線側は
-辺の中点・平面側は面の面積重心を起点にする(どちらも指した実物の上にある)。
+`from` / `to` は画面が線で描くための2点で、直線側は辺の中点・平面側は面の面積重心を起点にする。
 
-平行の判定は `PARALLEL_SIN_TOLERANCE`(単位ベクトルの外積の大きさ = sin θ)。述語の
-`PARALLEL_TOLERANCE`(1e-3 ≈ 2.6度)は「だいたい平行な辺を拾う」ための粗さで、測定に
-使うと 2度傾いた面どうしの「距離」が出てしまう。
+平行の判定は `PARALLEL_SIN_TOLERANCE`(sin θ)。述語の `PARALLEL_TOLERANCE`(1e-3 ≈ 2.6度)は
+粗すぎ、測定に使うと 2度傾いた面どうしの「距離」が出てしまう。
 
 OCP / build123d を import しない(幾何は `kernel` / `query` から数値で受け取る)。
 """
@@ -61,7 +58,7 @@ class Plane:
 
 Measurable = Union[Point, Line, Plane]
 
-#: 組の名前を「点-直線」のように**種別の順で正規化する**ための順位(選択の順序に依らない)。
+#: 組の名前を種別の順で正規化するための順位(選択の順序に依らない)。
 _RANK = {Point: 0, Line: 1, Plane: 2}
 _NAME = {Point: "point", Line: "line", Plane: "plane"}
 
@@ -114,8 +111,7 @@ def _angle_deg(sin_value: float, cos_value: float) -> float:
 
 
 def _result(kind: str, **fields: Any) -> dict:
-    """`between` の1件。**キーの顔ぶれは組によらず同じ**(無い値は None) ——
-    AI も画面も、組ごとにキーの有無を覚えずに済む。"""
+    """`between` の1件。キーの顔ぶれは組によらず同じ(無い値は None)。"""
     base = {
         "kind": kind,
         "parallel": None,
@@ -195,8 +191,7 @@ def between(first: Measurable, second: Measurable) -> dict:
 def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measurable, str]]:
     """1項目の寸法と、2項目測定に使う幾何(使えない種別ならその理由の文字列)。
 
-    値は**問い合わせ層のもの**をそのまま渡す(`query.describe_faces` / `describe_edges` /
-    `region.regions`)。測り直すと述語が使う値と食い違いうる。
+    値は問い合わせ層のものをそのまま渡す(`query.describe_faces` / `describe_edges` / `region.regions`。測り直すと述語と食い違いうる)。
     """
     if kind == "face":
         body = session.document.get_body(ref["body"])
@@ -253,9 +248,8 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
         return item, "領域は2項目の測定に使えない(測れるのはソリッドの頂点・直線の辺・平らな面)"
 
     if kind == selection.BODY_KIND:
-        # **ソリッドを丸ごと指す種別**(形状最適化の保持/除外)。面積にも長さにも
-        # 足さない —— ボディの「大きさ」は体積であって、面の面積の合計ではない。
-        # 値は `body_meta` から取る(体積はキャッシュ済み。測り直さない)。
+        # ソリッドを丸ごと指す種別(形状最適化の保持/除外)。面積にも長さにも足さない。
+        # 値は `body_meta` から取る(体積はキャッシュ済み)。
         body = session.document.get_body(ref["body"])
         meta = session.body_meta(body)
         item = {
@@ -268,9 +262,7 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
         return item, "ボディそのものは2項目の測定に使えない(頂点・辺・面を指す)"
 
     if kind == selection.SKETCH_ENTITY_KIND:
-        # **スケッチの図形**。点なら (u, v) を、辺(図形全体)なら解決済みの `params` を
-        # そのまま返す —— `move_sketch_entities` の dx, dy を決めるのに要るのは
-        # 「いまどこにあるか」だけである。
+        # スケッチの図形。点なら (u, v) を、辺なら解決済みの `params` をそのまま返す。
         sketch_id = ref["sketch"]
         entity_id = ref["entity"]
         target = sketch.get_entity(sketch.get_sketch(session.document, sketch_id), entity_id)
@@ -295,10 +287,8 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
 def measure_selection(session: Any) -> dict:
     """いまの選択を測る。
 
-    戻り値は `{"count", "items", "total_area", "total_length"}`。**ちょうど2項目
-    のときだけ** `between`(組の距離/角度。`between()`)と `between_error`(測れない理由。
-    測れたなら None)が加わる —— 1項目や3項目のときに「2つではない」と言い続けるのは
-    各項目の寸法を読みたい側には雑音でしかない。
+    戻り値は `{"count", "items", "total_area", "total_length"}`。**ちょうど2項目のときだけ**
+    `between`(`between()`)と `between_error`(測れない理由。測れたなら None)が加わる。
     """
     current = selection.get_selection(session.document)
     items: list[dict] = []

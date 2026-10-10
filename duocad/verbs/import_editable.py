@@ -2,25 +2,20 @@
 
 ソリッドごとに編集用ボディ(`kind="solid"` / 可視)を1つ追加し、そのIDを返す。
 
-**STEPの読み込みはこの1 verbしかない**。参照ボディ(`kind="reference"`・読み込んだ原本を
-不可視のまま持つ二重管理)という概念は撤去済みである。
+STEPの読み込みはこの1 verbしかない(参照ボディの概念は撤去済み)。
 
-**ログ1行・undo1回・MCP1呼び出しに収める**。何部品あっても1操作である —— 部品ごとに
-verbを発行する形にすると、27部品を読んだ後の Ctrl+Z が最後の1個だけを戻す挙動になる。
-**この規律(verb粒度)は名前が1本になっても変わらない**: 上の層(コマンド・MCP・UI)は
-この verb を1回呼ぶだけで、読み込みを複数の操作へ分解してはならない。
+**ログ1行・undo1回・MCP1呼び出しに収める**。何部品あっても1操作(部品ごとにverbを発行すると、
+27部品を読んだ後の Ctrl+Z が最後の1個だけを戻す)。上の層はこの verb を1回呼ぶだけで、
+読み込みを複数の操作へ分解してはならない。
 
-**作った全IDを `args` に記録する**(`body_ids`)。記録が無いと再生
-(redo / `open_document`)で別のIDが振られ、保存した選択集合や押し出しの `body_id` が
-指す先を失う(`sketch_create` と同じ理由)。
+**作った全IDを `args` に記録する**(`body_ids`)。無いと再生で別のIDが振られ、保存した選択集合や
+押し出しの `body_id` が指す先を失う。
 
-**形はログの中にある**: `args["step"]` にSTEP本文を生テキストで取り込むので**再生は外部
-ファイルを一切読まない**。`args["source_name"]` は元のファイル名でパスではない。失敗の契約
-(パス無し=FileNotFoundError / 壊れている=ValueError。**埋め込み経路も同じ1本の安全弁を
-通る**)ともども `io_step.py` のモジュールdocstringを参照。
+**形はログの中にある**: `args["step"]` にSTEP本文を生テキストで取り込むので再生は外部ファイルを
+読まない。`args["source_name"]` は元のファイル名でパスではない。失敗の契約(パス無し=FileNotFoundError /
+壊れている=ValueError。埋め込み経路も同じ安全弁を通る)は `io_step.py` のモジュールdocstringを参照。
 
-**旧保存ファイルの`reference_ids`キーは無視される**(`oplog.OpLog`の契約「未知のキーは
-無視する」)。移行スクリプトは書かない。
+旧保存ファイルの`reference_ids`キーは無視される(`oplog.OpLog`の「未知のキーは無視する」契約)。
 """
 from __future__ import annotations
 
@@ -42,8 +37,7 @@ VERB_IMPORT_STEP = "import_step"
 def import_step(doc: Document, path: PathLike) -> list[BodyId]:
     """STEPを読み、ソリッドごとに編集用ボディを作ってIDを返す。
 
-    **単一ソリッドでも1要素のリストを返す** —— 戻り値の型が入力(部品数)に依存すると、
-    呼び出し側が毎回分岐を書く羽目になる。
+    単一ソリッドでも1要素のリストを返す(戻り値の型を部品数に依存させない)。
     """
     source_name, text = read_step_source(path)
     shape = kernel.read_step_text(text)  # 壊れていればここで例外、doc/logは無傷
@@ -74,10 +68,7 @@ def _apply_to(
 
 
 def _do_import_step(document: Document, operation: Operation) -> None:
-    """redo / replay: **ログに埋め込まれたSTEP本文**から、記録されたIDをそのまま使って復元する。
-
-    公開APIの `import_step` を呼び直してはいけない(ログに二重記録される)。
-    """
+    """redo / replay: ログに埋め込まれたSTEP本文から、記録されたIDで復元する(`import_step` を呼ぶとログに二重記録される)。"""
     args = operation.args
     shape = kernel.read_step_text(args["step"])
     solids = kernel.split_solids(shape)

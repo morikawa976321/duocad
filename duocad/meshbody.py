@@ -31,7 +31,6 @@ _STL_HEADER = b"duocad binary STL"
 
 
 def triangles(mesh: Mesh) -> Iterator[tuple]:
-    """三角形を「頂点3つの組」で1枚ずつ返す。"""
     positions = mesh.positions
     indices = mesh.indices
     for i in range(0, len(indices), 3):
@@ -46,7 +45,6 @@ def bbox_payload(lows, highs, *, size: bool = False) -> dict:
 
     **キーの形はここが唯一の正**(層をまたぐ契約): `kernel.bounding_box` / `kernel.tessellate` の
     `bbox` / `bbox` が同じ形で組み、画面側が同じ形で読む。`size` は `kernel.bounding_box` だけが付ける。
-    空のときの扱い(退化した箱にするか ValueError にするか)は呼び出し側が決める。
     """
     lows = list(lows)
     highs = list(highs)
@@ -71,12 +69,9 @@ def bbox(mesh: Mesh) -> dict:
 
 
 def volume(mesh: Mesh) -> float:
-    """体積[mm^3]。符号付き四面体の総和(発散定理)の**絶対値**。
+    """体積[mm^3]。符号付き四面体の総和(発散定理)の絶対値(B-repの `query.volume` が常に正なので揃える)。
 
-    絶対値にするのは、巻き順が内向きに揃ったメッシュでも負の値を画面へ出さないため
-    (B-repの `query.volume` は常に正を返すので、そちらへ揃える)。閉じていないメッシュでは
-    値に意味が無いが、**開いているかどうかをここで判定はしない** —— 判定には辺の多重度の
-    走査が要り、体積を1つ出すためだけに払う費用としては重い。
+    閉じていないメッシュでは値に意味が無いが、開いているかの判定はしない(辺の多重度の走査が重い)。
     """
     total = 0.0
     for (ax, ay, az), (bx, by, bz), (cx, cy, cz) in triangles(mesh):
@@ -89,13 +84,11 @@ def volume(mesh: Mesh) -> float:
 
 
 def geometry(mesh: Mesh) -> dict:
-    """画面へ配る payload。**`kernel.tessellate_selective` と同じキー構成**にする。
+    """画面へ配る payload。`kernel.tessellate_selective` と同じキー構成。
 
-    **三角形群を「面1枚」として配る**(三角形1枚を1面にしない) —— 画面側
-    (`web/src/viewport.ts` の `FaceGeometry`)は面ごとに1つのTHREE.Meshを作るので、
-    三角形の数だけ面を作るとドローコールが数万になる。面添字を持たせるのは
-    payload の形を合わせるためだけで、**この添字で面を選べるわけではない**
-    (`selection.select_face` はメッシュボディを拒否する)。
+    **三角形群を「面1枚」として配る** —— 画面側(`web/src/viewport.ts` の `FaceGeometry`)は面ごとに
+    THREE.Mesh を作るので、三角形ごとに面を作るとドローコールが数万になる。面添字は payload の形を
+    合わせるためだけで、面は選べない(`selection.select_face` はメッシュボディを拒否する)。
     """
     area = 0.0
     weighted = [0.0, 0.0, 0.0]
@@ -113,15 +106,14 @@ def geometry(mesh: Mesh) -> dict:
         [value / area for value in weighted] if area > 0 else list(box["center"])
     )
     return {
-        # **偏差は 0.0**。持っている三角形をそのまま配るので「どれくらい細かく測ったか」が
-        # 無い(画面の可変解像度はメッシュボディには効かない)。
+        # 持っている三角形をそのまま配るので偏差は無い(画面の可変解像度は効かない)。
         "deviation": 0.0,
         "coarse_deviation": 0.0,
         "fine_face_count": 1,
         "face_count": 1,
         "closed": False,
         "untriangulated": [],
-        # 境界検査はB-repの三角形分割にしか無い(メッシュボディは持っている三角形をそのまま配る)
+        # 境界検査はB-repの三角形分割にしか無い
         "boundary": None,
         "bbox": box,
         "faces": [
@@ -140,17 +132,13 @@ def geometry(mesh: Mesh) -> dict:
 
 
 def write_stl(path, sources: Iterable[Iterable[tuple]]) -> None:
-    """バイナリSTLを1本書く。`sources` は**「三角形の並び」の並び**(複数ボディを1本へ連結する)。
+    """バイナリSTLを1本書く。`sources` は「三角形の並び」の並び(複数ボディを1本へ連結する)。B-repもメッシュもここを通る(`io_step.export_stl`)。
 
-    **`export_stl` のSTLはB-repもメッシュもすべてここを通る**(`io_step.export_stl`)。
+    三角形が1枚も無ければ ValueError で、ファイルを作らない。
 
-    三角形が1枚も無ければ ValueError で落とし、**ファイルを作らない**(0バイトの成果物を
-    残さない。`kernel.write_step` と同じ規律)。
-
-    **書く前に、float32 に丸めた実際の座標を検証する**(`validate_float32`)。STL は float32 なので、
-    float64 では正常な三角形が丸めで潰れる(2頂点が同じ値になる・共線になる)ことがある。
-    不正なら理由つきの ValueError で止め、**既存の出力ファイルには触らない**(検証は open の前)。
-    頂点を動かしたり三角形を捨てたりして通すことはしない。
+    **書く前に float32 に丸めた実際の座標を検証する**(`validate_float32`): float64 で正常な三角形が
+    丸めで潰れる(2頂点が一致・共線)ことがある。不正なら ValueError で止め、既存の出力ファイルには
+    触らない(検証は open の前)。頂点を動かしたり三角形を捨てて通すことはしない。
     """
     body = bytearray()
     rounded = []
@@ -208,7 +196,6 @@ def validate_float32(rounded: list) -> dict:
 
 
 def _unlink_quietly(filename: str) -> None:
-    """書き出し失敗時に半端なファイルを残さない(`kernel._unlink_quietly` と同じ)。"""
     try:
         os.remove(filename)
     except OSError:
@@ -218,8 +205,7 @@ def _unlink_quietly(filename: str) -> None:
 def from_tessellation(result: dict) -> Mesh:
     """`kernel.tessellate` / `tessellate_selective` の戻り値を1つのメッシュへ畳む。
 
-    **面をまたぐときに頂点のオフセットを足す**(面ごとの `indices` は面の中で0始まりなので、
-    そのまま連結すると全部の面が1枚目の頂点を指す)。
+    面ごとの `indices` は面の中で0始まりなので、頂点のオフセットを足して連結する。
     """
     positions: list = []
     indices: list = []
@@ -237,11 +223,7 @@ def from_tessellation(result: dict) -> Mesh:
 
 
 def reject(body, what: str) -> NoReturn:
-    """メッシュボディへの編集要求を断る。**できることを必ず並べる**。
-
-    「できない」だけで終えると利用者は次に何をすればよいか分からない。
-    文言を変えるときもこの後半を落とさないこと。
-    """
+    """メッシュボディへの編集要求を断る。できることを必ず並べる(文言を変えるときも後半を落とさないこと)。"""
     raise ValueError(
         f"body {body.id!r} is a mesh body: {what} できない"
         "(三角形メッシュには面・辺・領域の同一性が無い)。"

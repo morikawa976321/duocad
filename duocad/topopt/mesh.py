@@ -19,21 +19,16 @@ import scipy.sparse as sp
 from scipy.spatial import cKDTree
 from skimage.measure import marching_cubes
 
-# Taubin平滑化の既定値(タスク指定)。level は等値の太さを決める設計の摘みなので
-# 定数で埋め込まず、常に引数として外に出す。
+# level は等値の太さを決める設計の摘みなので、定数で埋め込まず常に引数として外に出す。
 DEFAULT_LEVEL = 0.5
 DEFAULT_LAMBDA = 0.5
 DEFAULT_MU = -0.53
-# 30の根拠(docs/TOPOPT.md「1要素幅のフィラメントを消す既定値を選び直した」の段4):
-# 反復30で k≥1 の残りが 0.765^30 ≈ 0.03%、Taubin による体積変化は
+# 30の根拠: 反復30で k≥1 の残りが 0.765^30 ≈ 0.03%、Taubin による体積変化は
 # −0.003%(12反復の −0.21% より小さい)、最小肉厚は縮まない。
 DEFAULT_ITERS = 30
 DEFAULT_SPACING = (1.0, 1.0, 1.0)  # [mm]。1要素=1mmという既存の描画規約に合わせた値。
-# **`optimize_run` はここへ実spacingを渡さない**(既定の要素添字空間のまま呼ぶ)。
-# 実寸への変換は呼び出し側の `optimize_run._mesh_to_world`
-# (`grid.origin + verts * grid.spacing`)が一括して行う契約 —— ここで実spacingを渡すと
-# 二重に掛かってメッシュが格子の外へ大きく外れる(`build_surface_from_mask` の
-# docstring・`optimize_run._run` のコメントに同じ注意)。
+# **`optimize_run` はここへ実spacingを渡さない**(要素添字空間のまま呼ぶ)。実寸への変換は呼び出し側の
+# `optimize_run._mesh_to_world`(`grid.origin + verts * grid.spacing`)が行う契約で、ここで渡すと二重に掛かる。
 DEFAULT_PAD = 1
 
 
@@ -54,30 +49,20 @@ def run_marching_cubes(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """`rho_padded`(連続値・パッド済み)から (verts, faces, interpolation_ratios) を返す。
 
-    座標は「パディングしていない元の格子」の**セル中心規約**に戻す。`rho[ex]` は要素 `ex` の
-    **中心**の値であり(画面側のボクセル描画 —— `web/src/optimizeDebug.ts` の `buildDebugVoxels` ——
-    もこの規約に合わせてある。**変換点はあそこ1箇所だけ**で、サーバは素の添字を送る)、
-    パッド済み配列の添字 `i` は元の添字 `ex = i - pad_width` に対応する。
-    `marching_cubes` は添字 `i` をそのまま `i*spacing` の位置とみなして頂点を置くので、
-    それを中心規約の座標 `(ex+0.5)*spacing = (i-pad_width+0.5)*spacing` へ戻すには
-    `(pad_width-0.5)*spacing` を引けばよい。**`pad_width*spacing` を引くと0.5要素ぶん
-    ずれる**。
-    `level` は引数(等値の太さを決める設計の摘み。定数で埋め込まない)。
+    座標は「パディングしていない元の格子」の**セル中心規約**に戻す。`rho[ex]` は要素 `ex` の**中心**の値で
+    (画面側のボクセル描画 `web/src/optimizeDebug.ts` の `buildDebugVoxels` もこの規約。**変換点はあそこ1箇所だけ**で、
+    サーバは素の添字を送る)、パッド済みの添字 `i` は `ex = i - pad_width`。`marching_cubes` は添字 `i` を
+    `i*spacing` に置くので、`(pad_width-0.5)*spacing` を引いて `(ex+0.5)*spacing` に戻す。
+    **`pad_width*spacing` を引くと0.5要素ずれる**。
 
     **`interpolation_ratios` はオフセットを引く前(marching_cubes直後の生座標)で計算する。**
-    生座標は「2軸が整数格子点・1軸だけが端点間の線形補間値」という
-    `edge_interpolation_ratios` の前提どおりに整数*spacingへ乗っている。オフセット後の
-    座標は半要素ぶん(整数ではなく半整数)ずれるため、offset適用後に計算すると
-    軸判定が丸ごと反転し「常に0.5」という誤った結果になる。
+    生座標は「2軸が整数格子点・1軸だけが補間値」という `edge_interpolation_ratios` の前提どおり。オフセット後は
+    半整数にずれるので、後で計算すると軸判定が反転して「常に0.5」になる。
 
-    **巻き順もここで直す。** `skimage.measure.marching_cubes` が返す巻き順は、
-    `(v1-v0)x(v2-v0)` を外向き法線とする一般的な規約(STL/OCCT/three.js)に対して逆向き
-    (実測: 単純な直方体で発散定理の符号付き体積が負になる)。列を `[0, 2, 1]` へ
-    入れ替えて**生成側で**規約に合わせ、以後 `faces` を受け取る側は全て外向きを
-    前提にしてよいことにする。**書き出し直前で直してはいけない** —— STL書き出しの
-    直前でだけ直すと、`faces` を直接ブラウザへ送る経路(`duocad/optimize_run.py` →
-    `add_mesh_body` → `web/src/viewport.ts`)は内向き法線のまま残る。`check_mesh.py` の検査9が
-    これを機械で見張る。
+    **巻き順もここで直す。** `skimage.measure.marching_cubes` の巻き順は、`(v1-v0)x(v2-v0)` を外向き法線とする
+    規約(STL/OCCT/three.js)に対して逆向き(実測: 単純な直方体で符号付き体積が負)。列を `[0, 2, 1]` に入れ替えて
+    **生成側で**揃え、受け取る側は外向き前提にしてよい。**書き出し直前で直してはいけない** —— `faces` を直接
+    ブラウザへ送る経路(`optimize_run.py` → `add_mesh_body` → `web/src/viewport.ts`)が内向きのまま残る。
     """
     verts, faces, _normals, _values = marching_cubes(rho_padded, level=level, spacing=spacing)
     faces = faces[:, (0, 2, 1)]
@@ -190,17 +175,13 @@ def min_wall_thickness(
     k: int = 20,
     normal_dot_max: float = -0.3,
 ) -> float:
-    """最小肉厚の近似値。
-
-    各頂点について、法線がほぼ逆向き(内積 < `normal_dot_max`)な近傍点との距離の
-    最小値を取る — 薄い壁の表と裏はほぼ逆向きの法線で近接しているので、この値が
-    壁の厚みの近似になる(3Dプリントの薄肉検出でよく使われる考え方)。
+    """最小肉厚の近似値: 各頂点について、法線がほぼ逆向き(内積 < `normal_dot_max`)な近傍点との距離の最小値。
 
     **返すのは最小値1つで、これだけでは1要素幅の筋(チェッカーボード)の有無を弁別できない** ——
-    階段状メッシュの局所ノイズが逆向き法線の対を作り、1点でも薄い値を出せば最小値がそこへ
-    張り付く(実測: 筋あり 0.0133要素 / 筋なし 0.0797要素で、どちらも「1要素よりはるかに薄い」)。
-    弁別が要るなら `per_vertex_min` の分布の下側の裾(壁厚<1要素の頂点の割合。実測 17.29% 対
-    0.79%)を見る(docs/TOPOPT.md「測った指標」)。平均・中央値では埋もれる。
+    階段状メッシュの局所ノイズが逆向き法線の対を作り、1点でも薄い値を出せば最小値がそこへ張り付く
+    (実測: 筋あり 0.0133要素 / 筋なし 0.0797要素で、どちらも「1要素よりはるかに薄い」)。
+    弁別が要るなら `per_vertex_min` の分布の下側の裾(壁厚<1要素の頂点の割合。実測 17.29% 対 0.79%)を見る。
+    平均・中央値では埋もれる。
     """
     if verts.shape[0] < 2:
         return float("inf")
@@ -225,10 +206,7 @@ def min_wall_thickness(
 def write_stl(path: str | Path, verts: np.ndarray, faces: np.ndarray) -> None:
     """バイナリSTL(80バイトヘッダ + uint32三角形数 + 三角形ごとに法線+3頂点+attr2バイト)。
 
-    **`faces` の巻き順はここでは触らない。** 外向き規約へ合わせるのは
-    `run_marching_cubes` の仕事(そちらのdocstring)であり、ここで再度 `[0,2,1]` へ
-    入れ替えると二重反転してSTLだけが裏返る。書き出す法線も `faces` の巻き順から
-    そのまま計算する。
+    **`faces` の巻き順はここでは触らない**(`run_marching_cubes` で揃え済み。ここで入れ替えると二重反転でSTLだけ裏返る)。
     """
     verts32 = np.asarray(verts, dtype=np.float32)
     faces = np.asarray(faces, dtype=np.int64)
@@ -296,10 +274,8 @@ def build_surface_from_mask(
 ) -> MeshResult:
     """確定済みの二値マスクを直接メッシュ化する(段階5の唯一の入口。`docs/TOPOPT.md`「二値探索の方式と契約」)。
 
-    保持/除外の塗り直しも浮島除去も**しない**。呼び出し側が渡すマスクは既に `acceptance.inspect` の6条件に
-    合格し、`binary_search.resolve_islands` で単一連結成分に絞られている確定マスクである
-    ——ここでもう一度どちらかを掛けると、探索が確定した形状を検査を経ずに書き換えることになる
-    (`docs/TOPOPT.md`「二値探索の方式と契約」の「候補ごとのメッシュ生成・STL出力は無く」と表裏、確定後の1回だけがこの入口)。
+    保持/除外の塗り直しも浮島除去も**しない**。渡すマスクは既に `acceptance.inspect` の6条件に合格し、
+    `binary_search.resolve_islands` で単一連結成分に絞られた確定マスクで、ここで掛けると検査を経ずに書き換わる。
     """
     t0 = time.perf_counter()
     rho = np.asarray(mask, dtype=np.float64)

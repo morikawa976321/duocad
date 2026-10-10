@@ -34,7 +34,7 @@ def lost_coverage(mask: np.ndarray, region: tuple, m: int,
     (`region` を空にしても、その中の `exempt` は材料のまま)。製品の探索では `exempt` は保持セルで、`mask` に常に入っている
     (`docs/TOPOPT_PRESERVE.md`)。`mask` の外の `exempt` を数えるのはこの関数を単独で呼ぶときの契約。
     m 立方はそのセルから距離 m-1 以内にしか広がらないので、`region` から距離 2×(m-1) の
-    材料データだけで判定できる(大域を再計算しない)。`mask` が既に規則を満たす(`exempt` を除く)ことが前提。
+    材料データだけで判定できる。`mask` が既に規則を満たす(`exempt` を除く)ことが前提。
     """
     reach = m - 1
     pad = 2 * reach
@@ -313,8 +313,7 @@ class CoreConnectivity:
         """`peel` の1手(`bite`: セルの添字1つ `(i,j,k)` か (n,3) の配列。切り離して一緒に消した島は `island_cells` セル)を抜いた後の
         `inner` が S(m) を満たすか。抜く前は満たす前提。島を消したときは大域で数える。島が無ければ一口の周りの窓で判定し
         (`verdict`)、言えなければ窓を倍に広げて繰り返し、窓が格子全体に達したら大域で数える。答えは大域の数え直しと同じ
-        (窓の判定は真も偽も厳密)。hanger 1.875mm・m=4 の終盤では、以前の「窓で言えなければ大域」が 20,401 回・1 回 9 ms
-        の数え直しをしていて、その 99.5% は割れる手だった(`docs/TOPOPT_STOP_RULE.md` §5)。"""
+        (窓の判定は真も偽も厳密)。窓で判定する効果の実測は `docs/TOPOPT_STOP_RULE.md` §11。"""
         if island_cells:
             self.stats['global_count'] += 1
             return self.connected(inner)

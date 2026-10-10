@@ -81,7 +81,6 @@ def metric_row(vm, mask, keep, dist_fixed, h, w, target_mpa):
                                  for f in (0.5, 1.0, 2.5, 5.0, 10.0)}
     row["p995_count_cells"] = int(np.ceil(0.005 * mask.sum()))
     row["m5b_target"] = gm.exceed_integral(vm, mask, cell, target_mpa)
-    # 最大セルの位置
     idx = np.unravel_index(np.argmax(np.where(mask, vm, -1)), vm.shape)
     row["peak_dist_fixed_mm"] = float(dist_fixed[idx])
     row["peak_in_keep"] = bool(keep[idx])
@@ -89,7 +88,7 @@ def metric_row(vm, mask, keep, dist_fixed, h, w, target_mpa):
 
 
 def field_only(vm, mask, keep, dist_fixed, h, w, target_mpa, rng):
-    """場だけの操作(FEMなし)。リスト系の式は値の配列だけで測れるので、セルを足す操作は値の追加で表す。"""
+    """場だけの操作(FEMなし)。リスト系の式は値の配列だけで測れるので、セルの追加は値の追加で表す。"""
     cell = h ** 3
     vals = vm[mask]
     res = {}

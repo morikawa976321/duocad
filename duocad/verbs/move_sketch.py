@@ -1,38 +1,23 @@
 """verb `move_sketch_entities` — スケッチの点・辺を平行移動する / 複製する。
 
-**パラメータパネル(数値の打ち直し)の後継**である(本人判断)。位置の打ち直しは、右サイドバーの
-入力欄ではなく「3Dで点/辺を選んで dx, dy を渡す」に一本化した。
+`mode="translate"`(既定)は dx, dy、`mode="rotate"` は角度[度]と回転中心を取る(`move_body` と同じ流儀)。
+軸は常にスケッチ平面の法線でパラメータにしない。角度の符号は `pattern_circular` の `total_angle`
+と同じ u->v の反時計回りが正。
 
-**`mode` で並進と回転を切り替える**(`move_body` と同じ流儀)。
-`mode="translate"`(既定)は dx, dy、`mode="rotate"` は角度[度]と回転中心を取る。軸は常に
-スケッチ平面の法線で、**パラメータにしない**(スケッチは2Dなので軸の自由度が無い。
-本人判断)。角度の符号は `pattern_circular` の `total_angle` と同じ u->v の反時計回りが正。
+対象は選択のスケッチ図形(`selection.SKETCH_ENTITY_KIND`)で、参照が持つ `point` が
 
-対象は**選択のスケッチ図形**(`selection.SKETCH_ENTITY_KIND`)で、参照が持つ `point` が
-
-    None       … その図形1つ全体(= 辺)。全部の点を同じ量だけ動かす **= 形は変えない**
+    None       … その図形1つ全体(= 辺)。全部の点を同じ量だけ動かす = 形は変えない
     "x0" 等    … その1点だけ(線の端点・円/弧の中心・長方形の左下・ベジエの制御点)
 
-を意味する。**寸法(半径・幅高さ・角度)は動かさない** —— 今回のスコープ外(本人判断)で、寸法を変えると既存ソリッドの再計算が絡む。
+を意味する。**寸法(半径・幅高さ・角度)は動かさない**(寸法を変えると既存ソリッドの再計算が絡む)。
 
-`copy` の意味:
+`copy=True` は元を残し、**対象が属する図形をまるごと複製**して動かした位置に置く(点だけの複製は
+できない)。複製は反復(`Pattern`)には入らず、素の図形になる。
 
-- `copy=False` … 対象を動かす。
-- `copy=True`  … **元を残し、対象が属する図形をまるごと複製**して平行移動した位置に置く。
-  点だけを複製することはできない(点は図形の一部であって、それ自体が図形ではない)ので、
-  複製の単位は常に図形1つである(本人明言「copyはentity単体が対象」)。複製は
-  **反復(`Pattern`)には入らない** —— 反復の元を複製しても、複製は素の図形になる。
+同じ図形に「辺」と「点」が同時に選ばれていたら**辺(全体)が勝つ**(両方適用すると点が2回動いて歪む)。
 
-**同じ図形に「辺」と「点」が同時に選ばれていたら辺(全体)が勝つ**。両方を素直に適用すると
-その点だけ2回動いて図形が歪む —— 選び方の違いで形が壊れるのは、この verb が
-「形を変えない平行移動」であるという約束と食い違う。
-
-**既存ソリッドは追従しない**(本人が許容済み)。
-`set_parameter` と違って `rebuild()` を呼ばない —— 押し出し済みのソリッドは動かず、
-スケッチの線だけが動く。操作ログ上この verb は押し出しより**後ろ**に載るので、
-`rebuild()` が走っても押し出しは元の座標で作り直され、見え方は変わらない。
-
-**OCP / build123d を直接importしない**(幾何はここでは要らない。純粋な数値の書き換え)。
+**既存ソリッドは追従しない**。`set_parameter` と違って `rebuild()` を呼ばない。押し出し済みの
+ソリッドは動かずスケッチの線だけが動く(このverbは操作ログ上、押し出しより後ろに載る)。
 """
 from __future__ import annotations
 
@@ -68,17 +53,14 @@ from ._common import (
 )
 
 VERB_MOVE_SKETCH_ENTITIES = "move_sketch_entities"
-#: `mode` の宣言(`MODE_TRANSLATE` / `MODE_ROTATE`)は `_common` が正(`move_body` と同じ値を取ることが契約)。
+#: `mode` の宣言は `_common` が正(`move_body` と同じ値を取ることが契約)。
 
 
 def _normalize_targets(doc: Document, targets: Sequence[dict]) -> List[dict]:
     """選択の参照を `{"sketch","entity","point"}` の**重複なし**の並びへ畳む。
 
-    - 同じ (sketch, entity, point) は1つに畳む(同じ点を2回動かさない)。
-    - **図形全体(`point=None`)が入っていたら、その図形の点の指定は落とす**
-      (モジュールdocstringの「辺が勝つ」)。
-    - 存在しないスケッチ・図形は KeyError、その種別に無い点の名前は ValueError。
-      **検査が全部通ってから**しか呼び出し側は文書を触らない。
+    同じ (sketch, entity, point) は1つに畳み、図形全体(`point=None`)が入っていたらその図形の
+    点の指定は落とす。存在しないスケッチ・図形は KeyError、その種別に無い点の名前は ValueError。
     """
     if not targets:
         raise ValueError("move_sketch_entities requires at least one target")
@@ -113,13 +95,10 @@ def _normalize_targets(doc: Document, targets: Sequence[dict]) -> List[dict]:
 def _write_params(doc: Document, entity: Entity, values: Dict[str, float]) -> None:
     """解決済みの数値を図形へ書き戻す。
 
-    **名前つきの値なら文書のパラメータ表を書き換える**(`d3` を 12.0 にする)ので、その名前を
-    `set_parameter` で後から打ち直す道は残る。素の数値のまま持っている図形(取り込んだベジエ)は
-    `Entity.params` の側を直接書き換える。
-
-    **その図形がまだ持っていないキーは、名前つきの値として新しく登録する** —— `angle` を
-    持たない時代のログから再生した長方形をまるごと回すとここへ来る。登録はこの操作の
-    再生でも同じ順序で起きるので、`d<n>` の割り当ては再生しても変わらない。
+    名前つきの値なら文書のパラメータ表を書き換える(`d3` を 12.0 にする)。素の数値のまま持つ図形
+    (取り込んだベジエ)は `Entity.params` を直接書き換える。まだ持っていないキーは名前つきの値として
+    新しく登録する(`angle` を持たない時代のログから再生した長方形を回すとここへ来る。再生でも同じ
+    順序で起きるので `d<n>` の割り当ては変わらない)。
     """
     for key, value in values.items():
         ref = entity.params.get(key)
@@ -132,19 +111,13 @@ def _write_params(doc: Document, entity: Entity, values: Dict[str, float]) -> No
 
 
 # --------------------------------------------------------------------------------------
-# 回転の引数の解決 —— **ログに載せるのは解決した数値だけ**
+# 回転の引数の解決 —— ログに載せるのは解決した数値だけ
 # --------------------------------------------------------------------------------------
 #
-# 回転中心を図形の点で指したとき(`center_entity`)、その点は**回した後には別の場所にいる**
-# ことがある(中心に使った図形自身が対象に入っていれば必ずそうなる)。参照をログに残して
-# undo で引き直すと別の中心で戻すことになるので、`move_sketch_entities()` の入口で [u, v] の
-# 数値へ潰す(`move_body` の軸と同じ規律)。
+# `center_entity` の点は、中心に使った図形自身が対象に入っていれば回した後には別の場所にいる。
+# 参照をログに残して undo で引き直すと別の中心で戻すので、入口で [u, v] の数値へ潰す。
 def _point_of(doc: Document, sketch_id: str, entity_id: str, point: Any) -> tuple:
-    """図形の点1つの座標 (u, v)。`point=None` なら**その種別の最初の点**を使う。
-
-    最初の点は「線の始点・円/弧の中心・長方形の左下・ベジエの始点」で、`EntityKindOps.points`
-    の並びが唯一の正である(`sketch.entity_point_keys`)。
-    """
+    """図形の点1つの座標 (u, v)。`point=None` なら種別の最初の点(`sketch.entity_point_keys` の先頭)。"""
     entity = get_entity(get_sketch(doc, sketch_id), entity_id)
     values = parameters.resolve_all(doc, entity.params)
     if point is None:
@@ -158,11 +131,9 @@ def _point_of(doc: Document, sketch_id: str, entity_id: str, point: Any) -> tupl
 
 
 def _center_of_targets(doc: Document, targets: Sequence[dict]) -> tuple:
-    """**対象の代表点の平均**(回転中心を省略したときの既定)。
+    """対象の代表点の平均(回転中心を省略したときの既定。境界箱の中心ではない)。
 
-    図形まるごと(`point=None`)なら種別ごとの中心(`EntityKindOps.center_2d` —— 線分は中点、
-    円/弧は中心、長方形は中央、ベジエは制御点の重心)、点を選んでいるならその点そのもの。
-    **境界箱の中心ではない**(`move_body` の重心と同じ判断)。
+    図形まるごと(`point=None`)なら種別ごとの中心(`EntityKindOps.center_2d`)、点ならその点。
     """
     points = []
     for item in targets:
@@ -188,9 +159,8 @@ def _rotation_args(
 ) -> dict:
     """回転の引数を検査して、ログに載せる数値 `{angle, center}` にする。
 
-    中心は次の順で決まる: `center_entity`(既存の点を指す) -> `center`([u, v] の数値) ->
-    **対象の代表点の平均**(`_center_of_targets`)。前2つを同時に渡すのは ValueError
-    (どちらが勝つかを暗黙にしない)。
+    中心は `center_entity`(既存の点を指す) -> `center`([u, v] の数値) -> 対象の代表点の平均
+    (`_center_of_targets`)の順で決まる。前2つの同時指定は ValueError。
     """
     degrees = rotation_degrees(angle, verb="move_sketch_entities", noun="図形")
 
@@ -231,13 +201,10 @@ def _rotated_params(
     cy: float,
     angle_deg: float,
 ) -> Dict[str, float]:
-    """`current` の上から1つの対象を回した `params` を返す(**書き込みはしない**)。
-
-    `_moved_params` の回転版で、積み上げ方(同じ図形の複数の点を順に重ねる)の理由も同じ。
+    """`current` の上から1つの対象を回した `params` を返す(書き込みはしない。積み上げ方は `_moved_params`)。
 
     - `point is None` … 図形まるごと。種別の表の `rotate(..., rotate_copies=True)` を使う
-      —— **`True` でなければならない**。`False` は「複製の向きを変えず位置だけ回す」ための
-      円形反復用の挙動で、こちらは対象そのものを回すからである。
+      (`False` は円形反復用の「複製の向きを変えず位置だけ回す」挙動で、ここでは誤り)。
     - `point` あり … その点だけを `sketch.rotate_point` で回す。
     """
     if point is None:
@@ -253,10 +220,7 @@ def _rotated_params(
 
 
 def _params_transform(args: dict) -> Callable:
-    """ログの `args` から「(種別, params, 点) -> 変換後の params」を作る。
-
-    **do も undo も再生もここを通る**(`mode` の無いログは並進。`_common.is_rotation`)。
-    """
+    """ログの `args` から「(種別, params, 点) -> 変換後の params」を作る。do も undo も再生もここを通る。"""
     if is_rotation(args):
         cx, cy = float(args["center"][0]), float(args["center"][1])
         degrees = float(args["angle"])
@@ -271,17 +235,14 @@ def _params_transform(args: dict) -> Callable:
 def _moved_params(
     kind: str, current: Dict[str, float], point: Any, dx: float, dy: float
 ) -> Dict[str, float]:
-    """`current` の上から1つの対象を動かした `params` を返す(**書き込みはしない**)。
+    """`current` の上から1つの対象を動かした `params` を返す(書き込みはしない)。
 
-    **渡された `current` を土台にする**のが要点である。「同じ図形の複数の点」を動かすとき、
-    毎回モデルから読み直すと**各対象が「自分だけを動かした完全な辞書」を作る**ことになり、
-    それを順に書き戻すと**最後の1つ以外が元の値で上書きされて消える**
-    (実際に踏んだ: 線分の両端を選んで動かすと片方しか動かなかった)。
-    呼び出し側は同じ図形の対象をここで**積み上げてから**1回だけ書く。
+    **渡された `current` を土台にする**のが要点。同じ図形の複数の点を毎回モデルから読み直すと、
+    順に書き戻したとき最後の1つ以外が元の値で上書きされる(線分の両端を選ぶと片方しか動かなかった)。
+    呼び出し側は同じ図形の対象を積み上げてから1回だけ書く。
     """
     if point is None:
-        # `translate` は種別ごとに「変える鍵だけ」を返すものと全部返すものが混在するので、
-        # 元の値の上へ重ねて全鍵を揃える(半径・角度はそのまま残る)。
+        # `translate` は種別により変える鍵だけ返すものと全部返すものが混在するので、元の値に重ねる。
         result = dict(current)
         result.update(entity_kind_ops(kind).translate(current, dx, dy))
         return result
@@ -293,20 +254,8 @@ def _moved_params(
 
 
 def _apply(doc: Document, targets: Sequence[dict], transform: Callable) -> None:
-    """`copy=False` の本体。**図形ごとに1つの計画へ併合してから**、全部検査して書き込む。
-
-    2段階に分かれている:
-
-    1. **併合** —— 同じ図形に属する対象(線分の両端など)を1つの `params` へ積み上げる。
-       対象ごとに別々の完全な辞書を作って順に書くと、後の書き込みが前の書き込みを
-       丸ごと打ち消す(`_moved_params` のdocstring)。
-    2. **検査してから書く** —— 途中で書きながら検査すると、3つ目の点で「線分の長さが0に
-       なる」と分かったときに1つ目・2つ目だけが動いた文書が残る(この verb を取り消す手は
-       まだログに無い)。
-
-    `_normalize_targets` が「図形全体と、その図形の点」を既に畳んでいるので、1つの図形に
-    `point=None` と点が混ざって来ることはない。
-    """
+    """`copy=False` の本体。同じ図形の対象を1つの `params` に積み上げ(`_moved_params`)、
+    全部検査してから書く(書きながら検査すると、途中で長さ0の線分が分かったとき一部だけ動いた文書が残る)。"""
     merged: dict = {}   # (sketch_id, entity_id) -> [entity, 積み上げ中の params]
     order: List[tuple] = []
     for item in targets:
@@ -333,13 +282,10 @@ def _copy(
 ) -> List[str]:
     """`copy=True` の本体。対象が属する**図形をまるごと**複製して EntityId を返す。
 
-    `new_ids` は作るIDの並び(再生で同じIDになるよう、ログに記録したものを渡す)。
-    **同じ図形を指す対象が複数あっても複製は1つ**(`_entities_to_copy` が畳む)。
+    `new_ids` は作るIDの並び(再生では記録したものを渡す)。同じ図形を指す対象が複数あっても複製は1つ。
 
-    **元と完全に重なる複製は作らない**(ValueError)。回転で起きる —— 円をその中心まわりに
-    回すと座標が1つも変わらないので、`pattern_circular` が「回転中心と図形の中心が一致」を
-    断るのと同じ事故(領域検出が同じ辺を2本見る)になる。並進は (0,0) を先に断っているので
-    ここへは来ない。
+    **元と完全に重なる複製は作らない**(ValueError。円をその中心まわりに回すと起きる。領域検出が
+    同じ辺を2本見る)。
     """
     plan = _entities_to_copy(targets)
     if len(new_ids) != len(plan):
@@ -360,7 +306,7 @@ def _copy(
             )
         require_valid_params(entity.kind, values)
         prepared.append((sketch, new_id, entity.kind, values))
-    # ID の重複(既存・並びの中)は `add_entities` が全部検査してから足す
+    # ID の重複は `add_entities` が全部検査してから足す
     return add_entities(doc, prepared)
 
 
@@ -375,7 +321,7 @@ def _entities_to_copy(targets: Sequence[dict]) -> List[tuple]:
 
 
 def _translation_args(dx: Any, dy: Any) -> dict:
-    """並進の引数を検査して、ログに載せる数値 `{dx, dy}` にする(既存のふるまい)。"""
+    """並進の引数を検査して、ログに載せる数値 `{dx, dy}` にする。"""
     if dx is None or dy is None:
         raise ValueError(
             f"move_sketch_entities(mode='translate') needs dx, dy "
@@ -407,15 +353,11 @@ def move_sketch_entities(
 ) -> Operation:
     """選択のスケッチの点・辺を動かす(`copy=True` なら複製する)。
 
-    - `mode="translate"`(既定) … (dx, dy) だけ平行移動する。`dx` と `dy` が**両方0は
-      ValueError**(`copy=False` では何も起きない操作が undo を1手消費し、`copy=True` では
-      元と完全に重なる図形ができて領域検出が壊れる)。
+    - `mode="translate"`(既定) … (dx, dy)[mm] だけ平行移動する。両方0は ValueError。
     - `mode="rotate"` … スケッチ平面の法線まわりに `angle` 度だけ回す(中心の決め方は
-      `_rotation_args`)。**360の倍数は ValueError**(0度と同じ理由)。
-      長方形をまるごと回すと `angle` も同じだけ回り、長方形のまま残る。
-    - **モードが取らない引数を渡すと ValueError**(黙って片方だけ効くことは無い)。
-    - 数値が非有限なら ValueError。動かした結果が使えない図形(長さ0の線分など)になっても
-      ValueError で、**文書にもログにも何も残さない**。
+      `_rotation_args`)。360の倍数は ValueError。長方形をまるごと回すと `angle` も同じだけ回る。
+    - モードが取らない引数・非有限の数値は ValueError。動かした結果が使えない図形(長さ0の
+      線分など)になっても ValueError で、文書にもログにも何も残さない。
     """
     require_move_mode(mode, verb="move_sketch_entities")
     normalized = _normalize_targets(doc, targets)
@@ -448,7 +390,7 @@ def move_sketch_entities(
         VERB_MOVE_SKETCH_ENTITIES,
         {
             **args,
-            # **複製したIDはログが持つ**(再生で同じIDになる。`pattern_*` の `pattern_id` と同じ流儀)
+            # 複製したIDはログが持つ(再生で同じIDになる)。
             "created": list(created),
         },
     )
@@ -469,15 +411,10 @@ def _do_move_sketch_entities(document: Document, operation: Operation) -> None:
 
 
 def _undo_move_sketch_entities(document: Document, operation: Operation) -> None:
-    """undo: 複製なら作った図形を消し、移動なら**逆向きに同じ量**を動かす(回転は逆角度)。
+    """undo: 複製なら作った図形を消し、移動なら逆向きに同じ量を動かす(回転は逆角度)。
 
-    逆向きの変換にしてあるのは、`do` と同じ1本の経路を通るからである(移動前の値を
-    args へ控えて書き戻す形にすると、`rebuild()` で土台の値が変わったときに**控えた値が
-    古いまま**復元されうる)。浮動小数の丸めで最下位が1ulpずれることはあるが、
-    幾何の許容差(mmの1e-9未満)よりはるかに小さい。
-
-    **回転の中心は数値でログに入っている**ので、undo が図形から引き直すことはない ——
-    引き直すと、中心に使った点が既に回った後にいて別の中心になる(`_rotation_args` の注記)。
+    移動前の値を args に控えて書き戻す形にしないのは、`rebuild()` で土台の値が変わると控えが
+    古いまま復元されうるため。丸めで1ulpずれうるが、幾何の許容差(1e-9mm未満)よりはるかに小さい。
     """
     args = operation.args
     if args.get("copy"):
@@ -511,8 +448,8 @@ def _enter_move_sketch_entities(
     center: Any = None,
     center_entity: Any = None,
 ) -> dict:
-    """**戻り値のキーはモードによらず同じ** —— 使わない側は `None` にする
-    (`web/src/session.ts` の `Applied` が形の変わる封筒を読めないため)。"""
+    """戻り値のキーはモードによらず同じで、使わない側は `None`(`web/src/session.ts` の `Applied` が
+    形の変わる封筒を読めないため)。"""
     targets = selection.require_sketch_entities(document)
     sketch_ids = sorted({str(item["sketch"]) for item in targets})
     operation = move_sketch_entities(

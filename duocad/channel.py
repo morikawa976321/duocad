@@ -25,19 +25,15 @@ CHANNELS = ("dev", "stable")
 #: 更新元の枝。
 UPDATE_BRANCH = "main"
 
-#: `git fetch` を叩く間隔の下限(秒)。画面は開くたびと定期的に状態を聞くので、
-#: そのたびにGitHubへ行かない。
+#: `git fetch` を叩く間隔の下限(秒)。
 STATUS_CACHE_SECONDS = 60.0
 
 #: 一覧に出す新しいコミットの件数の上限。
 MAX_LISTED_COMMITS = 20
 
-#: `update.ps1` が結果を書くファイル名(`log_dir` 直下)。画面が更新後の再読み込みで
-#: 成否を知るのに使う(`last_result`)。
+#: `update.ps1` が結果を書くファイル名(`log_dir` 直下。`last_result` が読む)。
 RESULT_FILE = "last-update-result.json"
 
-#: **pythonw から console のプログラム(git)を呼ぶと、そのたびに黒い窓が一瞬出る**。
-#: 安定版は窓の無い pythonw で動くので、子プロセスはすべてこれで起こす。
 #: このサーバのプロセスの起動ごとに変わる印(`/duocad-config.json` の `boot`)。画面は立て直しの終わりを
 #: これの変化で知る —— GPU の部品だけを入れる立て直しはコミットを変えないので、版では見分けられない。
 BOOT_ID = uuid.uuid4().hex
@@ -47,6 +43,7 @@ BOOT_ID = uuid.uuid4().hex
 #: ビルドすると、3.14 が 3.11 の標準ライブラリを読んで落ちる(`SRE module mismatch`。2026-10-10 の 3.11 → 3.14 で実測)。
 _INHERITED_PYTHON_ENV = ("PYTHONHOME", "UV_INTERNAL__PYTHONHOME", "PYTHONPATH", "__PYVENV_LAUNCHER__", "VIRTUAL_ENV")
 
+# pythonw から console のプログラム(git)を呼ぶと黒い窓が一瞬出る。子プロセスはすべてこれで起こす。
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
@@ -133,8 +130,7 @@ class StableUpdater:
         try:
             branch = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.repo_root)
             if branch.returncode == 0 and branch.stdout.strip() != self.branch:
-                # 開発用のチェックアウト(develop)で `--channel stable` を立てた場合など。
-                # ここで止めないと update.ps1 が開発中の作業ツリーでビルドと再起動をする。
+                # 開発用チェックアウトで `--channel stable` を立てた場合など。止めないと update.ps1 が開発中の作業ツリーを再起動する。
                 return {
                     **base,
                     "state": "blocked",
@@ -144,7 +140,7 @@ class StableUpdater:
             if dirty.returncode != 0:
                 return {**base, "state": "unknown", "reason": dirty.stderr.strip() or "git status に失敗"}
             if dirty.stdout.strip():
-                # 安定版のcloneを手で書き換えた形跡。取り込みで潰さない(update.ps1 も同じ検査で止まる)。
+                # 取り込みで潰さない(update.ps1 も同じ検査で止まる)。
                 return {**base, "state": "blocked", "reason": "安定版のフォルダに未コミットの変更がある"}
             fetch = _git("fetch", "--quiet", "origin", self.branch, timeout=60.0, cwd=self.repo_root)
             if fetch.returncode != 0:
@@ -152,9 +148,7 @@ class StableUpdater:
             remote = f"origin/{self.branch}"
             ancestor = _git("merge-base", "--is-ancestor", "HEAD", remote, cwd=self.repo_root)
             if ancestor.returncode != 0:
-                # developのコミットから導入した場合(install.ps1 -Commit)。mainにだけあるのが
-                # PRのマージコミットだけなら取り込むものは無い。次に develop → main がマージされると
-                # HEAD がmainの祖先になり、早送りで取り込めるようになる。
+                # developのコミットから導入した場合(install.ps1 -Commit)。mainにだけあるのがマージコミットだけなら取り込むものは無い。
                 only_main = _git(
                     "rev-list", "--count", "--no-merges", f"HEAD..{remote}", cwd=self.repo_root
                 )
@@ -188,8 +182,8 @@ class StableUpdater:
     def start(self, mode: str = "update") -> tuple[int, dict]:
         """更新スクリプトを切り離して起動し、サーバの終了を予約する。(HTTPステータス, 本文) を返す。
 
-        `mode="gpu"` は**取り込みもビルドもせず、GPU の部品(extra gpu)だけを入れて立て直す**
-        (画面の「設定」で GPU を選んだのに CuPy が無いとき。main に新しいコミットが無くても走る)。
+        `mode="gpu"` は取り込みもビルドもせず、GPU の部品(extra gpu)だけを入れて立て直す
+        (main に新しいコミットが無くても走る)。
         """
         if mode not in ("update", "gpu"):
             return 400, {"error": f"未知の mode: {mode!r}"}
@@ -229,8 +223,7 @@ class StableUpdater:
                 "-DataDir", str(self.relaunch["data_dir"]),
                 *(["-InstallGpu"] if mode == "gpu" else []),
             ]
-            # CREATE_NO_WINDOW: 見えないコンソールを持たせる(DETACHED_PROCESS にすると、
-            # スクリプトが呼ぶ git / uv / npm がそれぞれ自分の窓を開いてしまう)。
+            # CREATE_NO_WINDOW: DETACHED_PROCESS にするとスクリプトが呼ぶ git / uv / npm が自分の窓を開く。
             # Windowsの子プロセスは親が終わっても残るので、切り離しはこれで足りる。
             subprocess.Popen(
                 command,

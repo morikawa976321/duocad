@@ -2,24 +2,15 @@
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_parallel.py
 
-**この検査の存在理由**: 並列化はスレッド数を変えても「速くなったように見えるが答えが違う」
-「1スレッドに戻すと元より遅い/答えが違う(退避経路が壊れている)」という壊れ方をする。
-どちらも「動いているように見える」ので、次の4つを分けて見る。
+並列化は「速くなったが答えが違う」「threads=1 の退避経路が壊れている」という壊れ方をする。
+見るのは次の4点(docs/TOPOPT.md「線形解法とCPU並列化」):
 
-1. **行ブロック並列 matvec そのものの正しさ** —— `_BlockedMatvec` / `parallel_matvec` が
-   スレッド数に関わらず生の `a @ x` とビット一致するか(正方・非正方の両方)。
-2. **しきい値とクランプ** —— 小さい行列でスレッド数を機械的に絞ること
-   (絞らないと検査のような小さい格子でオーバーヘッドだけが乗る)。
-3. **`Model.solve` の退避経路** —— `threads=1` が並列化を入れる前と**同じコード経路**
-   (CG に生の `kf` を渡す)を通り、答えが変わらないこと。
-4. **`Model.solve` の並列一致性** —— `threads` を 1/2/4/8 と振っても変位場が**ビット一致**すること
-   (docs/TOPOPT.md「線形解法とCPU並列化」)。複数の密度場を続けて解く経路(候補評価の
-   逐次呼び出しを模す)まで確認する。
+1. 行ブロック並列 matvec が生の `a @ x` とビット一致(正方・非正方)
+2. 小さい行列でスレッド数を絞るしきい値とクランプ
+3. `threads=1` が並列化前と同じコード経路(CG に生の `kf`)を通る
+4. `threads` を振っても変位場がビット一致(密度場を続けて解く経路を含む)
 
-**スケーリングの実測(頭打ちの有無・題材ごとの倍率)は受入検査の範囲外**であり、ここでは
-やらない —— 秒は機械の熱状態で 1.2〜1.7倍振れるので、厳格な閾値の合否判定にすると
-機械の調子で恒常的に失敗する検査になる。ここで見るのは「並列化しても壊れていないか」
-という正しさだけである。
+スケーリングの実測は範囲外: 秒は機械の熱状態で 1.2〜1.7倍振れ、閾値で合否を決めると恒常的に失敗する。
 """
 
 from __future__ import annotations
@@ -38,14 +29,12 @@ check = CHECK.check
 FAILURES = CHECK.failures
 RESULTS = CHECK.results
 
-# 検査で使う格子。**受入検査は速さが命**なので、性能の基準線実測より小さい。
 GRID = (24, 12, 12)
 SMALL_GRID = (8, 4, 4)
 
 
 def _rho_after(dims: tuple[int, int, int], iters: int = 6) -> np.ndarray:
-    """剛性差のある滑らかな密度場を合成で作る(一様密度だと剛性差が無く並列化の効きが変わるため、
-    単純な乱数のガウスぼかしで代える)。"""
+    """剛性差のある滑らかな密度場(一様密度だと剛性差が無く並列化の効きが変わる)。"""
     from scipy import ndimage
 
     rng = np.random.default_rng(1000 * dims[0] + 100 * dims[1] + 10 * dims[2] + iters)
@@ -74,7 +63,6 @@ def check_blocked_matvec_correctness() -> None:
             f"最大差 {np.max(np.abs(got - want)):.3e}",
         )
 
-    # 非正方行列でも同じことを確認する(行ブロックの分割は列数に依らない)。
     p = kf[:, : kf.shape[1] // 3].tocsr()
     e = rng.standard_normal(p.shape[1])
     want_p = p @ e
@@ -96,7 +84,6 @@ def check_blocked_matvec_correctness() -> None:
             f"最大差 {np.max(np.abs(got_pt - want_pt)):.3e}",
         )
 
-    # 構造そのもの: 行ブロックの境界が行数を過不足なく覆っているか。
     bm = fem._BlockedMatvec(kf, 8)
     if bm.blocks is None:
         check("1-4 8スレッド分の行ブロックが作られる", False, "blocks が None")
@@ -129,7 +116,7 @@ def check_thread_clamping() -> None:
         f"_effective_threads(1000, 0)={fem._effective_threads(1000, 0)} / "
         f"_effective_threads(1000, -5)={fem._effective_threads(1000, -5)}",
     )
-    small_n = 100  # `_MIN_ROWS_PER_THREAD`(512)よりずっと少ない行数
+    small_n = 100  # _MIN_ROWS_PER_THREAD(512)未満
     eff = fem._effective_threads(small_n, 14)
     check(
         "2-3 小さい行列は要求スレッド数を機械的に絞る",
@@ -200,8 +187,7 @@ def check_retreat_path() -> None:
     rho = _rho_after(GRID)
 
     u_default_before = model.solve(rho, 3.0, threads=1)
-    # **`fem.PARALLEL_THREADS` は唯一の実体。** `Model.prepare`/`solve` は呼び出し時に
-    # これを直接読むので、ここを書き換えれば足りる。
+    # `Model.prepare`/`solve` は呼び出し時に fem.PARALLEL_THREADS を直接読む。
     saved = fem.PARALLEL_THREADS
     try:
         fem.PARALLEL_THREADS = 1
@@ -243,7 +229,6 @@ def check_parallel_consistency() -> None:
         f"最大差 {max(float(np.max(np.abs(base - u))) for u in results.values()):.3e}",
     )
 
-    # 同じ threads でも複数回呼んで結果が安定していること(スレッドの実行順序に依らない)。
     reps = [model.solve(rho, 3.0, threads=8) for _ in range(5)]
     check(
         "5-2 threads=8 を5回繰り返しても毎回ビット一致(スレッドの実行順序に依らない)",
@@ -251,7 +236,7 @@ def check_parallel_consistency() -> None:
         "5回の solve が全て同じ配列",
     )
 
-    # **複数の密度場を続けて解く**(探索が候補を逐次評価する使い方を模す)。
+    # 探索の候補評価(密度場を逐次に解く)を模す。
     sequence = [_rho_after(GRID, iters=i) for i in range(3)]
     seq_t1 = [model.solve(r, 3.0, threads=1) for r in sequence]
     seq_t8 = [model.solve(r, 3.0, threads=8) for r in sequence]

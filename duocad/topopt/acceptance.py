@@ -30,9 +30,8 @@ from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 VOLUME_ATOL = 1e-9
 VOLUME_RTOL = 1e-9
 
-#: 連結の数え方(6近傍。§4.4 冒頭)。島処理(`binary_search`)・最小幅(`min_width`)と最終の
-#: `connectivity_check` が別の近傍で数えると、島処理で生かした成分がここで複数成分に見えることが
-#: ある —— 定義は1箇所(この値)に揃える。
+#: 連結の数え方(6近傍)。島処理(`binary_search`)・最小幅(`min_width`)・`connectivity_check` が
+#: 別の近傍で数えると、島処理で生かした成分が複数成分に見えることがある —— 定義はこの1箇所に揃える。
 NEIGHBOURHOOD_STRUCTURE = ndimage.generate_binary_structure(3, 1)
 
 
@@ -193,11 +192,7 @@ def _material_boxes_within_bbox(material, grid, shape, *, cache=None):
 
 def intersection_volume(material, grid, shape, *, cache=None):
     """セル中心近似を使わず、材料セルとCADの共通体積を合計する(kernel_brep.boxes_common_volume)。
-
-    `cache` に `duocad.kernel.BoundingBoxCache`(既定 `document.bbox_cache`)を渡すと、
-    同じCAD形状のbbox測り直しを避ける。**測り方自体は変わらない**ので、`cache=None` と
-    渡した場合とで体積は一致する(この一致は検査で固定してある)。
-    """
+    `cache`(`duocad.kernel.BoundingBoxCache`)はbboxの測り直しを避けるだけで、体積は変わらない。"""
     shape = voxelize.unwrap(shape)
     total = _positive_volume(shape)
     boxes = _material_boxes_within_bbox(material, grid, shape, cache=cache)
@@ -254,19 +249,15 @@ class _CellOverlaps:
 class RegionOverlaps:
     """保持・除外CADと格子セルの重なり体積を、格子 × ソリッドの組ごとに求めて持つメモ。
 
-    `region_check(..., overlaps=)` に渡すと、候補マスクごとの共通体積が「材料セルの重なり体積の
-    足し算」になる(直接ブーリアン `intersection_volume` は候補ごとに材料を直方体列へ融着してブーリアンを
-    取る)。重なり体積は直接ブーリアンと同じく、セル中心近似ではなく**セルとソリッドの共通体積
-    そのもの**(境界のセルは部分的な重なりを持つ)。
+    `region_check(..., overlaps=)` に渡すと、候補ごとの共通体積が材料セルの重なり体積の足し算になる
+    (直接ブーリアン `intersection_volume` は候補ごとに直方体列へ融着してブーリアンを取る)。重なり体積は
+    セル中心近似ではなく**セルとソリッドの共通体積そのもの**(境界のセルは部分的な重なり)。
 
-    **寿命は探索1回**(`binary_search.SearchConditions` が持つ。探索中は格子も条件も固定)。
-    鍵は (ソリッドの同一性〈TShape・Location・Orientation〉, 格子の原点・間隔・形) なので、
-    入力が変われば別の項目になり古い値は読まれない。文書を編集するとソリッドは別物になるので、
-    探索をまたいで持ち越さない。**スレッド間で共有しない**(計算は遅延して書き込む)。
-    メモリは外接箱と格子の共通部分のセル数 × 8 byte(ソリッドごと)。
+    **寿命は探索1回**(`binary_search.SearchConditions` が持つ)。鍵は (ソリッドの同一性〈TShape・Location・
+    Orientation〉, 格子の原点・間隔・形)。文書を編集するとソリッドは別物になるので探索をまたいで持ち越さない。
+    **スレッド間で共有しない**(計算は遅延して書き込む)。メモリは外接箱と格子の共通部分のセル数 × 8 byte(ソリッドごと)。
 
     前計算を作れない・途中で失敗するソリッドは、そのソリッドだけ直接ブーリアンへ戻す(`fallbacks` に理由が残る)。
-    前計算は速さのためだけにあり、直接ブーリアンと同じ答えを返せないなら使わない。
     """
 
     def __init__(self):
@@ -311,8 +302,7 @@ class RegionOverlaps:
 
 
 def region_check(material, grid, bodies, *, preserve, cache=None, overlaps=None):
-    """`overlaps`(`RegionOverlaps`)を渡すと、共通体積を前計算したセルごとの値の足し算で取る。
-    渡さなければ `intersection_volume`(候補ごとのブーリアン)。**戻り値は同じ形・同じ数値許容差**。"""
+    """`overlaps`(`RegionOverlaps`)を渡すと共通体積を前計算の足し算で取る。**戻り値は渡さない場合と同じ形・同じ許容差**。"""
     rows = []
     for name, shape in bodies:
         try:
@@ -517,18 +507,15 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
             youngs_modulus_mpa=DEFAULT_YOUNGS_MODULUS_MPA, percentile=stress.DEFAULT_PERCENTILE,
             solver='auto', history=None, converged=None, max_evaluations=None,
             bbox_cache=None, region_overlaps=None, fields=None, member_volume_mm3=None, keep_cells=None):
-    """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接
-    受ける**(`docs/contracts/topopt-binary-search.md`)。過去記録の密度場からの
-    二値化は行わない —— それは読み取りアダプター `inspect_document` に閉じてある。
-    `before` は島除去前のboolマスク(除去で材料が増えていないことをここで確認する)。
-    `region_overlaps`(`RegionOverlaps`)を渡すと、保持・除外の共通体積を前計算から引く(既定は候補ごとに
-    ブーリアンを取る直接ブーリアン。報告の形と数値許容差は同じ)。
-    `fields` に dict を渡すと、安全率を計算できたときだけ要素ごとの `u_eᵀ k₀ u_e`(格子と同じ形、
-    材料外は 0)を `fields['element_energy']` に入れる。報告(JSON)には入れない(段階4の削る順位用)。
-    `solver` は解法の方針(`'auto'` は `fem.choose_solver` が候補ごとに `cg` / `direct` を選ぶ)。報告の
-    `safety.solver` は実際に使った解法、`safety.solver_policy` は渡した方針。
-    `member_volume_mm3` を渡すと安全率の代表応力は部材域(`member_region`。`keep_cells` は保持セル)の
-    固定物理体積の上位値になり、`percentile` は使わない。
+    """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接受ける**
+    (`docs/contracts/topopt-binary-search.md`)。密度場の二値化は読み取りアダプター `inspect_document` に閉じてある。
+    `before` は島除去前のマスク(除去で材料が増えていないことを確認する)。
+    `fields` に dict を渡すと、安全率を計算できたときだけ要素ごとの `u_eᵀ k₀ u_e`(材料外は 0)を
+    `fields['element_energy']` に入れる(報告のJSONには入れない)。
+    `solver='auto'` は `fem.choose_solver` が候補ごとに選ぶ。報告の `safety.solver` は実際に使った解法、
+    `safety.solver_policy` は渡した方針。
+    `member_volume_mm3` を渡すと代表応力は部材域(`member_region`。`keep_cells` は保持セル)の固定物理体積の
+    上位値になり、`percentile` は使わない。
     """
     for name, value in [('spacing', grid.spacing), ('target', target_safety_factor),
                         ('allowable_mpa', allowable_mpa), ('youngs_modulus_mpa', youngs_modulus_mpa)]:

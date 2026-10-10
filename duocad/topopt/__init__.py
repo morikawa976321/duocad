@@ -11,9 +11,7 @@
     stress      — von Mises 応力・安全率(後処理)
     material    — 許容応力・ヤング率・印刷低減係数の唯一の定義
     acceptance  — 島除去後・平滑化前の6条件(幾何・CAD・境界条件・FEM)。合否の型
-    binary_search — 二値候補の探索。`find_initial_feasible`(段階3)が設計空間の全材料を1回だけ
-                    6条件に掛け、`find_best_feasible`(段階4)がそこからひずみエネルギーの
-                    低い材料を安全率の余裕に応じてまとめて削る。島処理・履歴・停止理由
+    binary_search — 二値候補の探索(段階3 `find_initial_feasible`・段階4 `find_best_feasible`)。島処理・履歴・停止理由
     mesh        — marching cubes + Taubin平滑化 + STL書き出し
 
 **サブモジュールをここで import しない。** `import duocad` は verb 登録のために
@@ -27,9 +25,7 @@ pytest 全体が毎回それを払うことになる。呼ぶ側が
 """
 from pathlib import Path
 
-# 成果物(STL・測定JSON)の置き場。**呼び出し側の作業ディレクトリに依存させない** ——
-# 相対パスで書くと呼び出し側が別のディレクトリから回したときにゴミが落ちる
-# (実際に、廃止した taskbox の runner が回したとき `taskbox/queue/output/` へ落ちたことがある)。
+# 成果物(STL・測定JSON)の置き場。**呼び出し側の作業ディレクトリに依存させない**(相対パスだと別ディレクトリから回したときにゴミが落ちる)。
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 __all__ = ["OUTPUT_DIR"]

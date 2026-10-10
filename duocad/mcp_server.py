@@ -1,54 +1,47 @@
 """MCPサーバ — AIがコアを直接叩くための口。
 
-**層の位置づけ(ここを誤ると設計が崩れる)**: MCPサーバは**アプリ層ではなく、コアのもう一人の
-クライアント**である。ブラウザ(web/)とMCPは同じ `Session`(=コア側の文書)を叩く対等な
-クライアントで、MCPからブラウザを操作したりブラウザの状態を読んだりしない。したがって
-`set_visible` はアプリ層を一切通らずに文書を変える(ただし**操作ログには載らず、undoで戻らない**
-—— 理由は `duocad.selection.set_visible`)。
+**MCPサーバはアプリ層ではなく、コアのもう一人のクライアント**である。ブラウザ(web/)とMCPは
+同じ `Session`(=コア側の文書)を叩く対等なクライアントで、MCPからブラウザを操作したり
+ブラウザの状態を読んだりしない。したがって `set_visible` はアプリ層を通らずに文書を変える
+(ただし**操作ログには載らず、undoで戻らない** —— 理由は `duocad.selection.set_visible`)。
+コアが変更を発火し(`Session.add_listener`)、`Server`(WebSocket)が購読して全接続へ配信するので、
+MCPが可視性を変えると**開いているブラウザの表示も変わる**。
 
-**上り方向(コアが変更を発火し、アプリ層が購読して描き直す)**: 実体は `Session.add_listener`
-で、`Server`(WebSocket)が購読して全接続へ配信する。MCPが可視性を変えると、**開いている
-ブラウザの表示が自分では何もしていないのに変わる**。
-
-**MCPとWebSocketを同じプロセスで動かす**。別プロセスにするとMCP側が自分の `Document` を
-持ってしまい「AIが変えた文書」と「人が見ている文書」が別物になる:
+**MCPとWebSocketを同じプロセスで動かす**。別プロセスだとMCP側が自分の `Document` を持ち、
+「AIが変えた文書」と「人が見ている文書」が別物になる:
 
     HTTP /mcp ─┐
     stdio(MCP) ┼→ Session(文書・操作ログ) → WebSocket → ブラウザ
     ブラウザ ──┘
 
-**トランスポートは2本ある**。`handle()` はどちらも知らない(1メッセージの辞書を
-受け取って返すだけ)ので、増えたのは口だけである:
+**トランスポートは2本**。`handle()` はどちらも知らない(1メッセージの辞書を受け取って返すだけ):
 
-- **HTTP** —— 静的配信と同じ8766の `/mcp`。**アプリを先に立てて、MCPクライアントが後から
-  繋ぎに来る**。これが通常の道で、`claude mcp add --transport http duocad
-  http://127.0.0.1:8766/mcp` の一度きりの登録で繋がる。**アプリの寿命がクライアントの
-  セッションに縛られない**
-- **stdio** —— クライアントがこのプロセスを所有する古典的な形。Claude Desktopのように
-  stdioしか話せないクライアントのために残してある
+- **HTTP** —— 静的配信と同じ8766の `/mcp`。**アプリを先に立て、MCPクライアントが後から繋ぎに来る**
+  のが通常の道で、`claude mcp add --transport http duocad http://127.0.0.1:8766/mcp` を
+  一度登録すれば繋がる。アプリの寿命がクライアントのセッションに縛られない
+- **stdio** —— クライアントがこのプロセスを所有する古典的な形。stdioしか話せないクライアント
+  (Claude Desktop)のために残してある
 
 接続方法は `MCP.md` が正。
 
-**依存を増やさない**: MCPの公式Python SDK(`mcp`)は入れず、プロトコル(JSON-RPC 2.0 over
-stdio / HTTP)を素で実装する。この venv には `pip` すら無く(uv管理)、`mcp` は
-pydantic/anyio/httpx/starlette/uvicorn を連れてくる。使うのは `initialize` / `tools/list` /
-`tools/call` の3メソッドだけ。
+**依存を増やさない**: MCPの公式Python SDK(`mcp`)は入れず、JSON-RPC 2.0 over stdio / HTTP を
+素で実装する(`mcp` は pydantic/anyio/httpx/starlette/uvicorn を連れてくる。この venv には
+`pip` すら無い)。使うのは `initialize` / `tools/list` / `tools/call` の3メソッドだけ。
 
 **stdoutに出してよいのはJSON-RPCの行だけ**(1メッセージ1行・改行区切り)。起動メッセージや
-警告は必ず stderr へ出す — stdoutを1文字でも汚すとMCPクライアントが接続に失敗する。
+警告は必ず stderr へ — stdoutを1文字でも汚すとMCPクライアントが接続に失敗する。
 
 **既知の割り切り(意図的に据え置き)**:
 
-- `notifications/initialized` の受信を `tools/*` の前提条件に**しない**。厳格に弾いても
-  拒否できるのは行儀の悪いクライアントだけで、逆に握手の順序が違う実装で**繋がらない**
-  という失敗を作る。
+- `notifications/initialized` の受信を `tools/*` の前提条件に**しない**。厳格に弾いても拒否
+  できるのは行儀の悪いクライアントだけで、握手の順序が違う実装で**繋がらない**失敗を作る。
 - ツールの実行はイベントループの中で同期に走る(重い `describe_*` の間はWebSocketの配信も
   止まる)。実行器スレッドへ逃がすと `Server` 側のスレッド前提を作り直すことになる。
-  **stdioの経路は `serve_stdio` 自体がイベントループの上にいるので、これで済む**。
-  HTTPの経路だけは `ThreadingHTTPServer` のワーカースレッドから入ってくるので、
-  `ToolsOnLoop`(`duocad/server.py`)で包んでイベントループへ投げ返している。
+  stdioは `serve_stdio` 自体がループの上にいるのでこれで済む。HTTPだけは
+  `ThreadingHTTPServer` のワーカースレッドから入るので、`ToolsOnLoop`(`duocad/server.py`)で
+  包んでループへ投げ返している。
 - `/mcp` は**リクエストを直列化する**(`WebHandler.mcp_lock`)。MCPクライアントは1つしか
-  想定していないので、並行で捌く価値より握手の状態が混ざらないことを取った。
+  想定しておらず、並行で捌く価値より握手の状態が混ざらないことを取った。
 
 **OCPを直接importしない**(境界は kernel.py だけ)。
 """
@@ -89,23 +82,19 @@ from .server import (
     start_http_server,
 )
 
-#: MCPクライアントへ名乗る名前と版(`serverInfo`)
 SERVER_NAME = "duocad"
 SERVER_VERSION = "0.0.1"
 
-#: 対応するMCPプロトコル版。**新しい順**に並べる(先頭が既定)。
-#: クライアントが要求した版がこの中にあればそれをそのまま返し、無ければ先頭を返す
-#: (仕様どおり。クライアントは返ってきた版を見て続けるか切るかを決める)。
+#: 対応するMCPプロトコル版。**新しい順**(先頭が既定)。要求された版がこの中にあればそれを、
+#: 無ければ先頭を返す(仕様どおり。クライアントが返った版を見て続けるか切るかを決める)。
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 JSONRPC_VERSION = "2.0"
 
-#: verb の成功封筒のうち、入口の返したもので上書きしないキー。`verb` / `seq` は封筒が持ち、
-#: `changed_bodies` は版の前後差から導き(`DocumentTools._changed_bodies`)、`client_op` は
-#: 画面への確認応答で AI には意味が無い。
+#: verb の成功封筒のうち、入口の返したもので上書きしないキー。`changed_bodies` は版の前後差から導き
+#: (`DocumentTools._changed_bodies`)、`client_op` は画面への確認応答で AI には意味が無い。
 _ENVELOPE_OWNED_KEYS = frozenset({"verb", "seq", "changed_bodies", "client_op"})
 
-# JSON-RPC 2.0 の標準エラーコード
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
@@ -113,11 +102,7 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 
-# --------------------------------------------------------------------------------------
-# ツール(コアへの入口)
-# --------------------------------------------------------------------------------------
-#: `selection_empty` に添える「その種別の選び方」。実測で、領域を選ばずに `extrude` を呼び、
-#: 断られたあとも選び方(領域は述語では選べない)が分からず数往復を使っていた。
+#: `selection_empty` に添える「その種別の選び方」。実測で、領域は述語で選べないと分からず数往復を使った。
 _HOW_TO_SELECT = {
     "region": 'select the sketch region first: set_selection(refs=[{"sketch": sketch_id, "index": 1}])',
     "edge": 'select edges first: set_selection(predicate={"kind": "edge", "body": body_id, "where": [...]})',
@@ -138,50 +123,36 @@ class ToolError(Exception):
 class DocumentTools:
     """`Session`(コア)を叩くツール群。**ここに新しい幾何ロジックを書かない**。
 
-    どのツールも戻り値は**JSON化できる素の値だけ**(MCPのレスポンスに載るため)。
-    失敗は例外のまま上げる — 呼び出し側(`McpServer`)が `isError` の結果へ変換して
-    AIに見せる(黙って空の成功を返さない)。
+    戻り値は**JSON化できる素の値だけ**。失敗は例外のまま上げ、呼び出し側(`McpServer`)が
+    `isError` の結果へ変換する(黙って空の成功を返さない)。
     """
 
     def __init__(self, session: Session) -> None:
         self.session = session
         #: ツールの顔ぶれは起動中変わらない(`listChanged` を宣言していない)ので**1度だけ組む**。
-        #: `tools/call` は呼び出しのたびにこの表を引くため、都度組み直すとツールの数だけdictを毎回作る。
         self._descriptors = self._build_descriptors()
-        #: 名前 → 定義。`tools/call` の線形探索を避けるための索引。
         self._descriptor_by_name = {d["name"]: d for d in self._descriptors}
-        #: 名前 → 実体のメソッド(`tools/call` が引く)。
         self._handlers = self._build_handlers()
 
-    # ------------------------------------------------------------------ 記述
     def descriptors(self) -> list[dict]:
-        """`tools/list` が返すツール定義(名前・説明・入力スキーマ)。
-
-        中身は `__init__` で1度だけ組み、以降は**同じリストを返す**。
-        返ったリスト・辞書を書き換えないこと(全呼び出しで共有している)。
+        """`tools/list` が返すツール定義。`__init__` で1度だけ組んだ**同じリストを返す**ので、
+        返ったリスト・辞書を書き換えないこと。
         """
         return self._descriptors
 
     def descriptor(self, name: str) -> Optional[dict]:
-        """名前でツール定義を1つ引く(未知なら None)。"""
         return self._descriptor_by_name.get(name)
 
     def _build_descriptors(self) -> list[dict]:
-        """ツール定義の実体(`__init__` から1度だけ呼ぶ)。
-
-        **中身は `duocad/catalog.py` の宣言そのもの**(名前・説明・入力スキーマ)。ツールを
-        1つ足す/引数を1つ変えるときに触るのは宣言の1箇所だけである。説明文はAIがツールを
-        選ぶ唯一の手がかりなので、**何ができるかではなく「いつ使うか」**を書く。
-        """
+        """中身は `duocad/catalog.py` の宣言そのもの(説明文の書き方は `Command.description` の注記)。"""
         return catalog.tool_descriptors()
 
     def _build_handlers(self) -> dict:
-        """ツール名 -> 実体(`__init__` から1度だけ組む)。
+        """ツール名 -> 実体。同じ綴りのメソッドがあればそれ、無ければ verb の入口
+        (`duocad/entry.py`)へ渡す `_apply_verb`。
 
-        **同じ綴りのメソッドがここにあればそれ**(問い合わせ・選択・可視性・書き出し・履歴と、
-        応答に何かを足す verb)。無ければ verb の入口(`duocad/entry.py`)へ渡す `_apply_verb`。
-        **`__init__` の時点で組む**ので、宣言に足したのに入口もメソッドも無ければ `DocumentTools` を
-        作った瞬間に KeyError になる —— AIがそのツールを呼ぶまで気づかない、という失敗の仕方をしない。
+        `__init__` で組むので、宣言に足したのに入口もメソッドも無いツールは構築時に KeyError になる
+        (AIがそのツールを呼ぶまで気づかない、という失敗の仕方をしない)。
         """
         handlers = {}
         for name in catalog.tool_names():
@@ -195,10 +166,10 @@ class DocumentTools:
     def call(self, name: str, arguments: dict) -> dict:
         """ツールを実行して結果の辞書を返す。未知の名前は KeyError。
 
-        **引数はスキーマと突き合わせてから渡す**(必須・未知キー・型)。MCP は `McpServer._call_tool` が
-        同じ検査をプロトコルエラー(-32602)で先に弾くが、アプリ内AIの経路はここが唯一の門 ——
-        通すと `radius: "12"` が1文字ずつ読まれて辺2本に半径1と2が付くように、黙って別の値になる。
-        違反は `invalid_argument` の封筒(引数名つき)で返し、モデルが直せる形にする。
+        **引数はスキーマと突き合わせてから渡す**(必須・未知キー・型)。MCP は `McpServer._call_tool`
+        が同じ検査を -32602 で先に弾くが、アプリ内AIの経路はここが唯一の門 —— 通すと
+        `radius: "12"` が1文字ずつ読まれて辺2本に半径1と2が付くように、黙って別の値になる。
+        違反は `invalid_argument` の封筒(引数名つき)で返す。
         """
         try:
             handler = self._handlers[name]
@@ -212,9 +183,9 @@ class DocumentTools:
         return handler(**arguments)
 
     def call_and_seq(self, name: str, arguments: dict) -> tuple:
-        """`call` と、その**直後の** `current_seq` をひとまとまりで返す: `(結果, 例外, 版)`。
-        例外は上げずに返す(版はどちらの場合も読む)。`ToolsOnLoop` はこれを1回の投げ返しで
-        走らせる —— 2回に分けると、間に入った人の操作が版に吸われて検出できない(issue #48)。
+        """`call` と**直後の** `current_seq` を返す: `(結果, 例外, 版)`。例外は上げずに返す。
+        `ToolsOnLoop` はこれを1回の投げ返しで走らせる —— 2回に分けると、間に入った人の操作が
+        版に吸われて検出できない(issue #48)。
         """
         try:
             return self.call(name, arguments), None, self.current_seq()
@@ -222,28 +193,24 @@ class DocumentTools:
             return None, error, self.current_seq()
 
     def current_seq(self) -> tuple[int, str, str]:
-        """文書+選択の版。**モデルには見せない** —— `descriptors()` には出てこず、
-        `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
+        """文書+選択の版。**モデルには見せない** —— `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
 
-        `AgentLoop.run()` はモデルへの1往復のたび・ツールを1つ実行するたびにこれを控え、値が
-        変わっていたら残りのツール呼び出しを実行せずに構造化エラーへ差し替える(楽観ロック)。
+        `AgentLoop.run()` はモデルへの1往復・ツール1実行のたびにこれを控え、値が変わっていたら
+        残りのツール呼び出しを構造化エラーへ差し替える(楽観ロック)。
 
         戻り値は `(len(document.log.entries), selection.fingerprint(document),
         selection.visibility_fingerprint(document))`。**3つとも要る**:
 
-        - **ログの本数だけでは足りない**。選択の変更は操作ログに一切乗らないので、「人が辺Aの
-          選択を外して辺Bを選び直して確定する」という**入れ替え**(件数も種別も変わらない)を
-          検出できない —— `fillet(radius)` は選択から対象を取るので、見逃すとAIは辺Aの
-          つもりで辺Bを黙って丸める。
-        - **選択の指紋だけでも足りない**(形状が変わっても選択の中身が同じままのことがある)。
+        - ログの本数だけでは足りない。選択の変更は操作ログに乗らないので、辺Aを外して辺Bを
+          選び直す**入れ替え**を検出できず、`fillet(radius)`(選択から対象を取る)は辺Aの
+          つもりのAIに辺Bを黙って丸めさせる。
+        - 選択の指紋だけでも足りない(形状が変わっても選択の中身が同じままのことがある)。
+        - 可視性の指紋も要る。`set_visible` はログに載らないので、抜けると「考えている間に人が
+          隠したボディ」をAIが黙って表示に戻す(逆も同じ)。
 
-        - **可視性の指紋も要る**。`set_visible` は操作ログに載らなくなったので、
-          ログの本数でも選択の指紋でも「AIが考えている間に人がボディを隠した」が動かない。
-          抜けると、AIが**人が隠したものを黙って表示に戻す**(逆も同じ)。
-
-        **それでも塞ぎきれない範囲が残る**: 選択を経由せず body_id 等で直接効くverbは、
-        版がABAで偶然一致しても**「別の対象」へ効くことはない**(IDは削除も改名もされない)。
-        残るのは「人が既に同じ変更をしていたら上書きが起こりうる」程度の意図の陳腐化である。
+        **塞ぎきれない範囲**: 選択を経由せず body_id 等で直接効くverbは、版がABAで偶然一致しても
+        別の対象へ効くことはない(IDは不変)。残るのは「人が既に同じ変更をしていたら上書きが
+        起こりうる」程度の意図の陳腐化である。
         """
         return (
             len(self.session.document.log.entries),
@@ -251,7 +218,6 @@ class DocumentTools:
             selection.visibility_fingerprint(self.session.document),
         )
 
-    # ------------------------------------------------------------------ 実体
     def describe_document(
         self,
         include_bbox: bool = False,
@@ -260,7 +226,8 @@ class DocumentTools:
         """ボディ一覧・スケッチ一覧とパラメータ一覧。
 
         各図形は `params`(解決済みの数値)と `parameters`(その数値を持つパラメータ名)の
-        **両方**を返す(名前だけでは今の値が分からず、数値だけでは名前つきの寸法を指せない)。`include_regions` は領域の数え上げに計算コストがあるので任意にする。
+        **両方**を返す(名前だけでは今の値が分からず、数値だけでは名前つきの寸法を指せない)。
+        `include_regions` は領域の数え上げに計算コストがあるので任意。
         """
         document = self.session.document
         bodies = []
@@ -308,8 +275,8 @@ class DocumentTools:
 
         active = document.active_body()
         return {
-            # AI は文書を開けない(`open_document` / `new_document` は `mcp=False`)。False なら
-            # 空の文書を相手に操作せず、人に開いてもらうよう伝える。
+            # AI は文書を開けない(`open_document` / `new_document` は `mcp=False`)ので、
+            # False なら空の文書を相手に操作せず、人に開いてもらうよう伝える。
             "document_open": self.session.document_open,
             "units": document.units,
             "active_body_id": active.id if active is not None else None,
@@ -319,26 +286,22 @@ class DocumentTools:
             "sketches": sketches_out,
             "parameters": dict(document.parameters),
             # **`Session.can_undo` を使う**(生の `log.can_undo` ではない)。文書の土台
-            # (部品の読み込み・編集用ボディ)は取り消せないので、素のログを見ると
-            # 「undoできる」と答えたのに実際は拒否される、という食い違いが出る。
+            # (部品の読み込み・編集用ボディ)は取り消せず、素のログを見ると
+            # 「undoできる」と答えたのに拒否される食い違いが出る。
             "can_undo": self.session.can_undo,
             "can_redo": document.log.can_redo,
-            # **`Session.applied_count` を使う**(ログの長さ `len(log.entries)` ではない)。
-            # ログの長さはundoで減るので、AIが見る数とブラウザが見る数がundoの後でずれる。
+            # **`Session.applied_count` を使う**(`len(log.entries)` ではない)。ログの長さは
+            # undoで減り、AIが見る数とブラウザが見る数がundoの後でずれる。
             "applied_count": self.session.applied_count,
         }
 
     def set_visible(self, body_id: str, visible: bool) -> dict:
-        """可視性を切り替える。**コアを経由する**(`Session.set_visible`)。
+        """可視性を切り替える。**コアを経由する**(`Session.set_visible`)ので、文書の `Body.visible`
+        が変わり、変更イベントが発火して開いているブラウザが描き直す。
 
-        ここを通ることで (a) 文書の `Body.visible` が変わり (b) 変更イベントが発火して
-        開いているブラウザが描き直す、の2つが同時に成立する。
-
-        **verbではないので封筒に `verb` / `seq` を載せない**(契約2)。可視性は操作ログに
-        積まれず、undo / redo でも戻らない —— 理由は `duocad.selection.set_visible`。
-        AIが「隠したのを元に戻す」には `set_visible(visible=True)` を呼ぶ。
-
-        存在しない `body_id` は KeyError(コアの契約。文書は変更しない)。
+        **verbではないので封筒に `verb` / `seq` を載せない**(契約2)。操作ログに積まれず
+        undo / redo でも戻らない(理由は `duocad.selection.set_visible`)。隠したのを戻すには
+        `set_visible(visible=True)`。存在しない `body_id` は KeyError(文書は変更しない)。
         """
         body_id = str(body_id)
         before = self.session.document.get_body(body_id)
@@ -357,8 +320,7 @@ class DocumentTools:
 
     def set_sketch_visible(self, sketch_id: str, visible: bool) -> dict:
         """スケッチの可視性を切り替える(`set_visible` のスケッチ版。契約も封筒の形も同じ)。
-
-        形は1つも変わらないので `changed_bodies` は常に空。存在しない `sketch_id` は KeyError。
+        形は変わらないので `changed_bodies` は常に空。存在しない `sketch_id` は KeyError。
         """
         sketch_id = str(sketch_id)
         if not isinstance(visible, bool):
@@ -374,7 +336,6 @@ class DocumentTools:
         }
 
     def describe_shape(self, body_id: str) -> dict:
-        """1ボディの形状(面・辺の数と種別内訳・体積・境界箱)。読み取りのみ。"""
         body = self.session.document.get_body(str(body_id))
         if body.mesh is not None:
             # **面・辺の内訳を作らない**(メッシュには面の種別も辺の同一性も無い)。
@@ -407,29 +368,22 @@ class DocumentTools:
             ),
         }
 
-    # ------------------------------------------------------------------ 封筒(成功)
     def _revision_snapshot(self) -> dict[str, int]:
-        """全Bodyの現在の版。呼び出し前後の差から `changed_bodies` を導くための材料。"""
         return {
             body.id: self.session.body_revision(body.id)
             for body in self.session.document.bodies
         }
 
     def _body_summary(self, body) -> dict:
-        """封筒の `bodies[]` 1要素。キーは6つちょうど(`BODY_KEYS`)。
-
-        実体は `Session.body_meta`。MCP封筒は `revision` を持たない契約なので落とす。
+        """封筒の `bodies[]` 1要素(キーは `BODY_KEYS` の6つ)。`Session.body_meta` から、
+        MCP封筒の契約に無い `revision` を落とす。
         """
         meta = self.session.body_meta(body)
         del meta["revision"]
         return meta
 
     def _verb_envelope(self, verb: str, seq: int, before: dict[str, int]) -> dict:
-        """ログに1行積むツールの成功封筒。
-
-        `changed_bodies` は verbごとの数え上げではなく、`Session.body_revision` の前後差。
-        消えたBodyは出さない(現存Bodyだけを見る)。
-        """
+        """ログに1行積むツールの成功封筒。`changed_bodies` は `Session.body_revision` の前後差。"""
         changed_bodies = self._changed_bodies(before)
         by_id = {body.id: body for body in self.session.document.bodies}
         return {
@@ -444,9 +398,8 @@ class DocumentTools:
     def _changed_bodies(self, before: dict) -> list[str]:
         """`Session.body_revision` の**前後差**で「変わったBody」を出す(消えたBodyは出さない)。
 
-        verbごとに「これはbodyを変える」と数え上げると、verbが増えたときに静かに漏れる
-        (契約2)。`body_revision` は形状の同一性と可視性のタプルから版を導くので、
-        押し出しでも `set_visible` でも同じこの1本で拾える。
+        verbごとに数え上げると、verbが増えたときに静かに漏れる(契約2)。`body_revision` は
+        形状の同一性と可視性から版を導くので、押し出しでも `set_visible` でもこの1本で拾える。
         """
         after = self._revision_snapshot()
         return [
@@ -463,9 +416,8 @@ class DocumentTools:
     def error_envelope(self, tool: str, error: Exception) -> dict:
         """例外を決定3の語彙へ畳む。MCPは先に弾かず、落ちたあとに名前を付ける。
 
-        **公開API**(`descriptors()` / `call()` と同じ面)。MCPとアプリ内エージェント
-        (`duocad/agent/loop.py`)がどちらもこれを通るので、AIが見る失敗の形は経路によらず同じ。
-        エージェント側で語彙を書き写すと、片方だけ増えたときに気づけない。
+        **公開API**: MCPとアプリ内エージェント(`duocad/agent/loop.py`)がどちらもこれを通るので、
+        AIが見る失敗の形は経路によらず同じ(エージェント側で語彙を書き写すと片方だけ増えても気づけない)。
         """
         if isinstance(error, ToolError):
             payload = {
@@ -494,13 +446,13 @@ class DocumentTools:
         if isinstance(error, (KeyError, FileNotFoundError)):
             return {**base, "code": "not_found"}
         # 選択由来の拒否は**コアが型で言ってくる**(`duocad/selection.py` の `require_*`)。
-        # MCPは名前を付けて、次の一手を決める材料(`required_kind` / `selection`)を足すだけ。
+        # MCPは先に弾かず(同じ規則が2箇所に生まれ、片方だけ緩んでも気づけない)、落ちたあとに
+        # 名前を付け、次の一手の材料(`required_kind` / `selection`)を足すだけ。
         # 「1つだけ要るのに複数」は `invalid_argument` のまま —— AIが打つ次の手は
         # 「選び直す」ではなく「減らす」で、`selection_empty` とは違う。
         #
-        # **`SelectionKindMismatch` を先に見る**。`SelectionEmpty` の
-        # 派生なので、順序を入れ替えると種別違いが `selection_empty` に吸われて
-        # `selection_kind_mismatch` が死ぬ。「空でないのに empty と名乗らない」ためにコードを分けたので、ここが要。
+        # **`SelectionKindMismatch` を先に見る**。`SelectionEmpty` の派生なので、順序を
+        # 入れ替えると種別違いが `selection_empty` に吸われて `selection_kind_mismatch` が死ぬ。
         if isinstance(error, selection.SelectionKindMismatch):
             return {
                 **base,
@@ -547,37 +499,19 @@ class DocumentTools:
     #    **ログに載らない変更**(選択・`set_visible`)は `verb` / `seq` を持たず、代わりに
     #    `change`("selection" / "visibility")で見分ける —— 持たせると、undoで戻ると読める
     #    封筒をAIに配ることになる。
-    #    **`changed_bodies` は `Session.body_revision` の呼び出し前後の差**から導くこと。
-    #    verbごとに「これはbodyを変える」と数え上げると、verbが増えたときに静かに漏れる。
     # 3. **失敗も封筒に入れて返す。** `{"error": {"code","message","tool","exception", ...}}`
     #    を `json.dumps` した本文 + `isError: true`。コードは次の語彙に限る
     #    (`not_found` / `invalid_argument` / `selection_empty` /
     #    `selection_kind_mismatch` / `invalid_predicate` / `busy` / `internal`)。**例外のテキストを
     #    素で返さない。** **`FileNotFoundError` を忘れない** —— パスの間違いは AI が直せる
     #    誤りなので、`internal` に落とすと諦める。
-    #
-    # ## stdout を汚さない
-    #
-    # **OCCTのSTEP書き出しはC++側から標準出力へ統計を吐く**("Statistics on Transfer (Write)")。
-    # stdoutはJSON-RPC専用なので、これが混ざると接続が壊れる。Python層の
-    # `contextlib.redirect_stdout` では止まらない(C++が実fdへ直接書く)ため、**起動時に fd 1 を
-    # fd 2 へ振り替える**こと(`_claim_stdout`・`os.dup2`)。ツール実行の間だけ囲む形では、
-    # 人がブラウザから書き出す経路を取り逃す。
-    #
-    # ## 拒否はコアがする。MCPは名前を付けるだけ
-    #
-    # `selection_empty` / `selection_kind_mismatch` を返すために選択を**先に見て弾いてはいけない**。
-    # 拒否するのは `selection.require_*` だけであり、MCPは**落ちたあとに** `isinstance` で
-    # コードを選ぶ。先に弾くと同じ規則が2箇所に生まれ、片方だけ緩んだときに誰も気づかない。
-    # ------------------------------------------------------------------ 選択(5 + 自己記述)
     def _as_selection_payload(self, selection: dict) -> dict:
         """選択5ツールの戻り値を `{"selection": {...}}` に揃える。"""
         return {"selection": selection}
 
     def get_selection(self) -> dict:
-        """現在の選択を返す。**発火しない**(読むだけ)。
-
-        戻り値は `{"selection": {"items", "count"}}` で、**変更する4つと同じ形**。
+        """現在の選択を返す(読むだけ。発火しない)。
+        戻り値は変更する4つと同じ `{"selection": {"items", "count"}}`。
         """
         return self._as_selection_payload(self.session.get_selection())
 
@@ -586,8 +520,8 @@ class DocumentTools:
 
         §0のAI側の合格条件「引数を**述語**または明示的な参照で与えられ」がこの1つに載る。
         - 一致0件は**成功**(`count: 0`)。エラーにするとAIが述語の書式を疑い始める
-        - 不正な述語は `invalid_predicate` で、**`valid_ops` に
-          `predicates.describe_ops()` をそのまま添える**(AIが自力で直せるように)
+        - 不正な述語は `invalid_predicate` で、`valid_ops` に `predicates.describe_ops()` を
+          そのまま添える(AIが自力で直せるように)
         - 不正な参照は `invalid_argument`(形)/ `not_found`(Body)。いずれも選択を変えない
         """
         # 不正な述語はコアに渡す前に弾く —— 不可視Body等の ValueError を
@@ -606,7 +540,6 @@ class DocumentTools:
         return self._as_selection_payload(event["selection"])
 
     def modify_selection(self, add: Optional[list] = None, remove: Optional[list] = None) -> dict:
-        """差分編集(足す・外す)。"""
         event = self.session.modify_selection(add=add, remove=remove)
         return self._as_selection_payload(event["selection"])
 
@@ -616,19 +549,17 @@ class DocumentTools:
         return self._as_selection_payload(event["selection"])
 
     def clear_selection(self) -> dict:
-        """選択を空にする。"""
         event = self.session.clear_selection()
         return self._as_selection_payload(event["selection"])
 
     def describe_predicates(self) -> dict:
-        """述語の語彙をAIへ自己記述する。**`predicates.describe_ops()` をそのまま出す**。
+        """述語の語彙をAIへ自己記述する。**`predicates.describe_ops()` をそのまま出す**
+        (opの定義を書き直すと二重管理になり、片方だけ増えたopが黙って通る)。
 
         戻り値: `{"kinds": [...], "ops": <describe_ops()>, "where_is": "and", "example": {...}}`。
-        opの定義を書き直すと、スキーマとバリデータが二重管理になり、**片方だけ増えたopが
-        黙って通る**(`predicates.describe_ops` の docstring がこれを禁じている)。
-        `where_is: "and"` と **ORが無いこと**まで出すのは、AIが無い機能を試して失敗するのを
-        防ぐため(ORが要るときは2回評価して `modify_selection(add=...)`)。
-        `example` は `predicates.validate()` を通る本物であること(古くなって嘘にならない)。
+        `where_is: "and"` と**ORが無いこと**まで出すのは、AIが無い機能を試して失敗するのを防ぐため
+        (ORが要るときは2回評価して `modify_selection(add=...)`)。`example` は
+        `predicates.validate()` を通る本物であること。
         """
         example = {
             "kind": "edge",
@@ -647,9 +578,7 @@ class DocumentTools:
 
     def measure(self) -> dict:
         """選択を測る(§5 `measure(selection)`)。**verbではないので提案のままでも通る**。
-
-        実体は `Session.measure`(= `duocad/measure.py`)。WebSocket の `measure` と同じ
-        計算なので、AIが読む距離と画面に出る距離は一致する。
+        実体は `Session.measure`(= `duocad/measure.py`)で、WebSocket の `measure` と同じ計算。
         """
         return self.session.measure()
 
@@ -657,10 +586,9 @@ class DocumentTools:
     def _apply_verb(self, verb: str, **arguments: Any) -> dict:
         """verb を掛けて成功封筒を返す。**専用メソッドを持たない verb のツールは全部ここを通る。**
 
-        実体は `Session.apply`(= verb のモジュールの入口。`duocad/entry.py`)で、ブラウザが
-        WebSocket から掛けるのと同じ1本である。封筒には入口が返したもの(作ったものの ID・
-        解決後の数値など)をそのまま足す。**`changed_bodies` だけは入口の申告を使わず**、
-        `Session.body_revision` の前後差から導く(契約2)。
+        実体は `Session.apply`(`duocad/entry.py`)で、ブラウザがWebSocketから掛けるのと同じ1本。
+        封筒には入口が返したもの(作ったものの ID・解決後の数値など)をそのまま足すが、
+        **`changed_bodies` だけは入口の申告を使わず**、`Session.body_revision` の前後差から導く(契約2)。
         """
         before = self._revision_snapshot()
         applied = self.session.apply(verb, arguments)
@@ -691,10 +619,9 @@ class DocumentTools:
     def export_step(self, path: str) -> dict:
         """STEPを書き出す。**ログに載らない**(文書を変えないので verb ではない)。
 
-        対象は**いま表示中のBodyだけ**(引数で選べない)。そのぶん
-        `{"path", "body_ids", "skipped_hidden"}` を返す —— AIは自分でファイルを
-        確かめられないので、**書けなかったときは必ず例外になる**(半端なファイルも0バイトの
-        成果物も残さない。`kernel.write_step` / `meshbody.write_stl`)。
+        対象は**いま表示中のBodyだけ**(引数で選べない)。`{"path", "body_ids", "skipped_hidden"}` を
+        返す —— AIは自分でファイルを確かめられないので、**書けなかったときは必ず例外になる**
+        (半端なファイルも0バイトの成果物も残さない。`kernel.write_step` / `meshbody.write_stl`)。
         """
         return self._export_file_response(self.session.export_step_file(path))
 
@@ -710,10 +637,8 @@ class DocumentTools:
 
     # ------------------------------------------------------------------ 履歴
     def undo(self) -> dict:
-        """**UIから見た履歴と同じもの**を戻す(AI用の別履歴を作らない)。
-
-        取り消せるかの判定は `Session.can_undo` が唯一の出どころ ——
-        `describe_document` の答えと実際に通るかが一致する。
+        """**UIから見た履歴と同じもの**を戻す(AI用の別履歴を作らない)。取り消せるかの判定は
+        `Session.can_undo` が唯一の出どころで、`describe_document` の答えと実際に通るかが一致する。
         """
         before = self._revision_snapshot()
         applied = self.session.undo()
@@ -736,9 +661,8 @@ class DocumentTools:
 class McpServer:
     """MCPの3メソッド(`initialize` / `tools/list` / `tools/call`)＋ `ping` を処理する。
 
-    **トランスポートを知らない**(1メッセージの辞書を受け取り、返す辞書を返すだけ)ので、
-    stdioを立てなくてもテストから直接叩ける。`handle` が None を返したら
-    「返事を書いてはいけない」(通知・レスポンスの受信)という意味。
+    **トランスポートを知らない**ので、stdioを立てなくてもテストから直接叩ける。`handle` が None を
+    返したら「返事を書いてはいけない」(通知・レスポンスの受信)という意味。
     """
 
     def __init__(self, tools: DocumentTools, name: str = SERVER_NAME, version: str = SERVER_VERSION) -> None:
@@ -750,9 +674,8 @@ class McpServer:
     def handle(self, message: Any) -> Optional[dict]:
         """1メッセージを処理して返すレスポンス(通知なら None)。
 
-        **例外を外へ出さない** — プロトコル層で落ちるとMCPクライアントから見て
-        サーバが黙って死んだのと同じになるため、想定外の例外も内部エラーの
-        レスポンスへ畳んで返す。
+        **例外を外へ出さない** — プロトコル層で落ちるとMCPクライアントから見てサーバが黙って
+        死んだのと同じになるため、想定外の例外も内部エラーのレスポンスへ畳む。
         """
         if isinstance(message, list):
             # JSON-RPCのバッチはMCP 2025-06-18で廃止された。受け取っても解釈しない。
@@ -784,7 +707,7 @@ class McpServer:
     # ------------------------------------------------------------------ メソッド
     def _handle_notification(self, method: str) -> None:
         """通知(idなし)。返事を書いてはいけない。"""
-        # `notifications/initialized` を含めて何も控えない(握手の状態を使う処理が無い)。
+        # 何も控えない(`notifications/initialized` を含め、握手の状態を使う処理が無い)。
         # 未知の通知は無視する(仕様どおり。エラーを返すとプロトコル違反になる)
 
     def _handle_request(self, method: str, params: dict) -> dict:
@@ -808,7 +731,7 @@ class McpServer:
         )
         return {
             "protocolVersion": version,
-            # ツールしか持たない。**変更通知は出さない**(ツールの顔ぶれは起動中変わらない)ので
+            # ツールしか持たず、**変更通知は出さない**(顔ぶれは起動中変わらない)ので
             # listChanged は宣言しない。
             "capabilities": {"tools": {}},
             "serverInfo": {"name": self.name, "version": self.version},
@@ -882,15 +805,13 @@ def _exception_message(error: Exception) -> str:
 def _claim_stdout() -> Any:
     """JSON-RPC専用の書き口を確保し、**プロセスの fd 1 を fd 2 へ振り替える**。
 
-    ツール実行の間だけ囲む形では足りない —— このプロセスは
-    **MCPとWebSocketの両方**を持っており(`_run`)、**人がブラウザからSTEPを書き出した
-    ときにも**OCCTのC++が実fdへ統計を吐く。その経路はツール実行ではないので囲みの外に
-    あり、JSON-RPCの行の途中に `****** Statistics on Transfer (Write) ******` が
-    割り込んで接続が壊れる(交互操作は人とAIが同じプロセスを同時に触る形なので、
-    普通に起きる)。
+    OCCTのSTEP書き出しはC++側から実fdへ統計(`****** Statistics on Transfer (Write) ******`)を吐き、
+    Python層の `contextlib.redirect_stdout` では止まらない。ツール実行の間だけ囲む形では、
+    **人がブラウザからSTEPを書き出す経路**(ツール実行ではない)を取り逃し、JSON-RPCの行の途中に
+    割り込んで接続が壊れる(人とAIが同じプロセスを同時に触る形なので普通に起きる)。
 
-    確保したdupを返し、fd 1 は stderr を指すようにする。これ以降、**誰がどの経路で
-    標準出力へ書いても**それはstderrへ流れ、JSON-RPCは返した書き口だけを通る。
+    確保したdupを返し、fd 1 は stderr を指すようにする。以後、誰がどの経路で標準出力へ
+    書いてもstderrへ流れ、JSON-RPCは返した書き口だけを通る。
     """
     sys.stdout.flush()
     saved = os.dup(1)
@@ -898,14 +819,11 @@ def _claim_stdout() -> Any:
     return os.fdopen(saved, "wb", buffering=0)
 
 
-# --------------------------------------------------------------------------------------
-# stdio トランスポート
-# --------------------------------------------------------------------------------------
 async def serve_stdio(server: McpServer, reader: Any = None, writer: Any = None) -> None:
     """標準入出力でMCPを喋る(1メッセージ1行・UTF-8・改行区切り)。EOFで戻る。
 
-    `readline` はブロックするので実行器スレッドへ逃がす(Windowsのイベントループは
-    パイプの非同期読み取りに癖があるため、素直にスレッドで読むほうが壊れにくい)。
+    `readline` はブロックするので実行器スレッドへ逃がす(Windowsのイベントループはパイプの
+    非同期読み取りに癖があるため、素直にスレッドで読むほうが壊れにくい)。
     **stdoutに出すのはこの関数だけ**(モジュールdocstring)。
     """
     loop = asyncio.get_running_loop()
@@ -930,9 +848,6 @@ async def serve_stdio(server: McpServer, reader: Any = None, writer: Any = None)
             writer.flush()
 
 
-# --------------------------------------------------------------------------------------
-# 起動
-# --------------------------------------------------------------------------------------
 def _log(message: str) -> None:
     """**stderrへ**出す(stdoutはJSON-RPC専用)。"""
     print(message, file=sys.stderr, flush=True)
@@ -946,16 +861,15 @@ VITE_DEV_PORT = 5173
 def allowed_origins(http_port: int) -> list:
     """WebSocketを開いてよい `Origin` の許可リスト。
 
-    **なぜ要るか**: WebSocketは**同一オリジンポリシーの対象外**で、任意のWebページが
-    `ws://127.0.0.1:<port>` へ繋いで読み書きできる。`127.0.0.1` へのbindは防御にならない
-    —— 攻撃側のコードは利用者のブラウザの中で動くため。検査が無い間は、duocadを立てたまま
-    別のサイトを開いているだけで、そのページが文書を読み・壊し・`export_step` で任意のパスへ
-    書き・`ai_chat` で課金を消費できた。
+    WebSocketは**同一オリジンポリシーの対象外**で、任意のWebページが `ws://127.0.0.1:<port>` へ
+    繋いで読み書きできる。`127.0.0.1` へのbindは防御にならない(攻撃側のコードは利用者の
+    ブラウザの中で動く)。検査が無い間は、duocadを立てたまま別のサイトを開くだけで、そのページが
+    文書を読み・壊し・`export_step` で任意のパスへ書き・`ai_chat` で課金を消費できた。
 
-    **`None`(Originヘッダ無し)を許可する**のは意図的である。ブラウザは必ず `Origin` を送り、
-    JavaScriptから偽装できないので、**ブラウザ経由の攻撃はこれで塞がる**。一方 `smoke*.mjs` や
-    素のWSクライアントはヘッダを送らないので、拒否すると自分の検査だけが壊れる。素のWSを
-    立てられる相手は既にこのPCでコードを実行できており、この防御線の外側にいる。
+    **`None`(Originヘッダ無し)を許可する**のは意図的。ブラウザは必ず `Origin` を送り
+    JavaScriptから偽装できないので、ブラウザ経由の攻撃はこれで塞がる。一方 `smoke*.mjs` や素のWS
+    クライアントはヘッダを送らず、拒否すると自分の検査だけが壊れる。素のWSを立てられる相手は
+    既にこのPCでコードを実行できており、この防御線の外側にいる。
 
     許可するのは「duocad自身が配るページ」だけ: 静的配信(`--http-port`)と Vite dev server。
     `localhost` と `127.0.0.1` は**別オリジン**なので両方を挙げる。
@@ -971,22 +885,20 @@ def allowed_origins(http_port: int) -> list:
 
 
 async def _run(session: Session, args: argparse.Namespace) -> None:
-    """WebSocket・静的配信・MCPを1つのイベントループで動かす。"""
     server = Server(session)
     server.bind_loop(asyncio.get_running_loop())
-    # **同じ `DocumentTools`(= 同じ `Session`)をMCPとアプリ内AIの両方へ渡す**(G)。
-    # 別々に作ると道具の顔ぶれは同じでも別インスタンスになり、`_handlers` の索引を
-    # 2つ持つ理由が無い(状態は持たない薄いラッパなので共有して問題ない)。
+    # **同じ `DocumentTools`(= 同じ `Session`)をMCPとアプリ内AIの両方へ渡す**。
+    # 状態を持たない薄いラッパなので共有して問題なく、別々に作る理由が無い。
     tools = DocumentTools(session)
     server.bind_agent_tools(tools)
 
     ws_url = f"ws://127.0.0.1:{args.port}"
     page_url = f"http://127.0.0.1:{args.http_port}/"
     mcp_url = f"http://127.0.0.1:{args.http_port}{MCP_HTTP_PATH}"
-    # **HTTPトランスポート用のMCPは別インスタンスにする**。別のトランスポートに繋いだ
-    # 相手は別のクライアントなので、握手(initialize / initialized の往復)も別に持つ。
-    # `McpServer` は握手の状態を控えないが、控えるようになっても混ざらない形にしておく。
-    # 道具は `ToolsOnLoop` で包む(HTTPはワーカースレッドで走るため。下記 `start_http_server`)。
+    # **HTTPトランスポート用のMCPは別インスタンスにする**。別のトランスポートに繋いだ相手は
+    # 別のクライアントなので握手も別に持つ(`McpServer` は握手の状態を控えないが、
+    # 控えるようになっても混ざらない形にしておく)。道具は `ToolsOnLoop` で包む
+    # (HTTPはワーカースレッドで走るため。下記 `start_http_server`)。
     http_mcp = McpServer(ToolsOnLoop(tools, asyncio.get_running_loop()))
     loop = asyncio.get_running_loop()
     #: 安定版の更新が始まったら立つ。`--no-stdio` の待ちがこれで解けてプロセスが終わる。

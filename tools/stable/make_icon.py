@@ -21,7 +21,7 @@ def draw() -> Image.Image:
     k = SUPERSAMPLE / VIEWBOX
     image = Image.new("RGBA", (SUPERSAMPLE, SUPERSAMPLE), (0, 0, 0, 0))
     pen = ImageDraw.Draw(image)
-    # 奥: AI提案のゴースト(線のみ)。SVGの stroke は輪郭の中心に乗るので半分ずつ内外へ広げる。
+    # SVGの stroke は輪郭の中心に乗るので、半分ずつ内外へ広げる。
     stroke = 2.8
     x, y, size, radius = 13.9, 3.4, 14.7, 1.8
     pen.rounded_rectangle(
@@ -30,7 +30,6 @@ def draw() -> Image.Image:
         outline="#36d1ff",
         width=round(stroke * k),
     )
-    # 手前: 確定した形(塗り)。
     x, y, size, radius = 2.0, 12.5, 17.5, 2.6
     pen.rounded_rectangle([x * k, y * k, (x + size) * k, (y + size) * k], radius=radius * k, fill="#ffb454")
     return image

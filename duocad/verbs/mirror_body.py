@@ -1,35 +1,24 @@
 """verb `mirror_body` — 選択の面/辺/頂点が属するボディを、鏡映面に対して鏡映複製する。
 
-**常に複製を作る**(`move_body` と違い in-place反転の口は無い —— 本人の依頼は「鏡像反転
-コピーを作る」の1点だけ)。対象は `move_body` と同じ解決(`_common.editable_bodies`。選択中の
-面/辺/頂点が属するボディ。複数のボディにまたがる選択なら全部を同じ鏡映面で複製する)。
+**常に複製を作る**(in-place反転の口は無い)。対象は `move_body` と同じ解決
+(`_common.editable_bodies`)で、複数ボディにまたがる選択なら全部を同じ鏡映面で複製する。
 
-鏡映面は次のどちらか一方(**両方渡す/どちらも渡さないのは ValueError**):
+鏡映面は次のどちらか一方(両方・どちらも無しは ValueError):
 
-- `base_plane` … XY/XZ/YZ(原点通過)。**`sketch_create` と同じ座標定義を流用する**
-  (`sketch.base_plane` + `kernel_sketch.sketch_plane_frame`)。別々に定義すると同じ"XY"の意味が
-  食い違う。
-- `plane_face` … 既存ソリッドの平面な面への参照 `{"body": body_id, "index": 面の1始まりの
-  添字}`。**対象の選択とは別引数で受ける**(`move_body.axis_edge` と同じ理由 ——
-  対象集合に混ぜると、それが鏡映される側か基準かをコアが区別できない)。この面自身が
-  対象ボディに属していてもよい。非平面の面は `kernel_sketch.face_frame`(内部で
-  `require_planar_face` を通す)が ValueError にする。
+- `base_plane` … XY/XZ/YZ(原点通過)。`sketch_create` と同じ座標定義を流用する
+  (`sketch.base_plane` + `kernel_sketch.sketch_plane_frame`)。
+- `plane_face` … 既存ソリッドの平面な面への参照 `{"body": body_id, "index": 面の1始まりの添字}`。
+  対象の選択とは別引数(混ぜると鏡映される側か基準か区別できない)。この面自身が対象ボディに
+  属していてもよい。非平面の面は `kernel_sketch.face_frame` が ValueError にする。
 
-ログには解決済みの数値 `{"plane_point", "plane_normal"}` だけを載せる(`move_body` の軸と
-同じ理由 —— 鏡映対象にその面自身が含まれる場合、複製後に参照を引き直すと別の面になる)。
+ログには解決済みの数値 `{"plane_point", "plane_normal"}` だけを載せる(対象にその面自身が含まれる
+場合、複製後に参照を引き直すと別の面になる)。形状の鏡映は `kernel.mirror_shape`。
 
-形状の鏡映は `kernel.mirror_shape`(OCCTの `gp_Trsf.SetMirror` 相当)。
+鏡映は向きを反転する変換なので、複製の面の法線は元と逆向きになりうる。複製は別の body_id を持つ
+ので `query.face_fingerprint` の指紋とは衝突しない。
 
-**鏡映は向きを反転する変換**(行列式が負)。複製したボディの面の法線は元と逆向きになりうる
-—— `query.face_fingerprint`(面積・法線で照合)は**同じボディの同じ添字**を時点をまたいで
-照合するためのものであり、鏡映が作る新しいボディは元とは別の body_id を持つので既存の指紋
-とは独立している(衝突しない)。
-
-**元と完全に重なる複製を作らないことは検査しない**(`move_body` の回転と同じ判断 ——
-境界箱の一致では見抜けない形状があり、ブーリアンの共通部分で測るのは大きなモデルで重い。
-不健全な判定を入れるより、断らずに通すほうを選んでいる)。
-
-**OCP / build123d を直接importしない**(幾何は `duocad.kernel` 越し)。
+**元と完全に重なる複製は検査しない**(`move_body` の回転と同じ判断: 境界箱の一致では見抜けない形状が
+あり、ブーリアンの共通部分は大きなモデルで重い)。
 """
 from __future__ import annotations
 
@@ -85,8 +74,7 @@ def mirror_body(
 ) -> Operation:
     """選択の面/辺/頂点が属するボディを、鏡映面に対して鏡映複製する(常に複製)。
 
-    `created_ids` は**再生用**(省略すると新しいIDを振る)。失敗したときは文書にもログにも
-    何も残さない。
+    `created_ids` は再生用(省略すると新しいIDを振る)。失敗したときは文書にもログにも何も残さない。
     """
     bodies = editable_bodies(doc, list(body_ids), verb="mirror_body", what="mirror")
     plane_args = _mirror_plane(doc, base_plane, plane_face)
@@ -144,8 +132,7 @@ register_verb(VERB_MIRROR_BODY, do=_do_mirror_body, undo=_undo_mirror_body)
 def _enter_mirror_body(
     document: Document, base_plane: Optional[str] = None, plane_face: Any = None
 ) -> dict:
-    """**元は動かないので `changed_bodies` は複製だけ**(`move_body` と違い、動いたボディを
-    取り直す必要がない)。"""
+    """元は動かないので `changed_bodies` は複製だけ。"""
     body_ids = selection.require_bodies(document)
     args = mirror_body(document, body_ids, base_plane=base_plane, plane_face=plane_face).args
     created = list(args["created"])

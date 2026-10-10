@@ -7,8 +7,8 @@ MCP経路(`duocad/mcp_server.py`)はMCPクライアントがduocadのプロセ�
   (素のHTTP・ストリーミング)
 - `loop`      … プロバイダ非依存の tool-use ループ(打ち切り・進捗・自己修復)
 
-道具の定義はここに書かない —— `DocumentTools.descriptors()` を渡すだけである。
-システムプロンプトも持たない —— `catalog.agent_instructions()`(MCPと同じ文)を読む。
+道具の定義とシステムプロンプトはここに持たない(`DocumentTools.descriptors()` と
+`catalog.agent_instructions()` を読む)。
 """
 from .loop import (
     AgentLoop,

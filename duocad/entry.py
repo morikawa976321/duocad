@@ -1,8 +1,8 @@
 """verb の入口 —— **選択から対象を取り、verb を掛け、応答に載せるものを返す**関数の登録表。
 
-verb の純関数(`duocad/verbs/*.py`・`sketch.py`・`parameters.py`)は対象を引数で受ける。人も AI も
-対象を引数では渡さずコアの選択から取らせるので、その間をつなぐ関数が verb ごとに1つ要る。
-それを verb と同じモジュールに `@entry("<verb名>")` で置き、`Session.apply` が名前で引いて呼ぶ。
+verb の純関数(`duocad/verbs/*.py`・`sketch.py`・`parameters.py`)は対象を引数で受けるが、人も AI も
+対象をコアの選択から取らせるので、その間をつなぐ関数を verb と同じモジュールに
+`@entry("<verb名>")` で置き、`Session.apply` が名前で引いて呼ぶ。
 
 WebSocket・MCP・アプリ内 AI はどれも `Session.apply` を通るので、**verb を足すときに書くのは
 verb のモジュール(純関数と入口)と `duocad/catalog.py` の宣言の2箇所だけ**である。
@@ -35,7 +35,7 @@ def entry(verb: str) -> Callable[[EntryFn], EntryFn]:
 
 
 def _identity(function: Any) -> tuple:
-    """モジュールの読み直しで関数オブジェクトが変わっても同じ入口と見なすための名前。"""
+    """モジュールの読み直しで関数オブジェクトが変わっても同じ入口と見なす名前。"""
     return (function.__module__, function.__qualname__)
 
 

@@ -199,12 +199,11 @@ hanger で1回の探索が3.4〜10時間(新方式は全材料開始で19時間�
 
 ## A-1. 共通プロトコル
 
-- **`acceptance.inspect` の6条件(watertight/single_solid/preserve/exclude/conditions/safety)は最小幅を含まない**。最小幅は探索時の peel でだけ強制されるので、別の形から写した形は `binary_search._mask_satisfies_min_width` を別途呼ぶ。hanger の移植トラス(F0200_h2.2_w5 を 2.0mm へ1セル太らせて写した 198.4 cm³・SF 8.869)は6条件 pass だが最小幅5セル(9.99mm)で不合格。`TOPOPT_IDLE_MATERIAL.md` の「同じ条件に存在する」はこの形では最小幅つきで実証されていない。再現: `reproduce_stage1_transplant.py --src F0200_h2.2_w5 --dst F0200_h2.0_w5 --dilate 1`、棚卸しは `inventory_stage1_shapes.py`(出力 `output/idle_validation_20260928/01_stage1_shapes.json`。現行形・保持R2除外形4種・5%形・移植トラスの7件を登録し、`TOPOPT_IDLE_MATERIAL.md` の報告値と一致)。
-- **比較の単位**: 旧64条件(`output/smoothing_corpus/`)はセル数指定(`min_width_cells` 一定。実mm は格子ごとに変わる)で凍結。新規の実験は mm 固定(`min_width_mm`)で、`min_width_cells_resolved`・`min_width_guaranteed_mm`・`element_size_resolved_mm` を必ず記録する。複数解像度の比較は全解像度で有効な最小の mm(`_resolve_min_width` の下限 `max(2×要素サイズ, 1mm)` を最も粗い格子が決める)を共通実幅にする。
-- **許容差は製品既定をそのまま使う**(検証用の新しい閾値を作らない): 線形ソルバ相対残差 1e-6(`fem.SOLVE_RESIDUAL_TOL`)、代表応力 99.5 パーセンタイル(`stress.DEFAULT_PERCENTILE`)、1回の削減上限 20%(`binary_search.DEFAULT_MAX_STEP_RATIO`)、エネルギーフィルタ 3セル(`ENERGY_FILTER_SIZE`。物理幅は 3×spacing で格子ごとに変わる)。
-- **共通基盤** `topopt_checks/idle_validation/_common.py`: git 状態・sha256・アトミック書き込み・ピークメモリ・OS 排他ロック(`ExecutionLock`。異常終了でも OS がロックを放すので死んだ錠の回収が要らない)・条件台帳(`upsert_case`/`is_case_done`)・`SingleFemRun`。各スクリプトはコピーせず import する。`.gitignore` 対象の使い捨てスクリプトは版をコミットでなく sha256 で特定する。未実行の条件は `status=missing` のまま記録し pass にしない。
-- 半セル原点移動は製品の第一級パラメータでない(`design_space.derive` が外接箱+余白から原点を計算する)。実験はプロセス内パッチで行い、達成シフト量を記録する。
-- 5合成題材(引張・曲げ・ねじり+曲げ・L字・複数支持)は定義のみで構築されず、小型2題材の15条件で代替した(05)。
+- **`acceptance.inspect` の6条件は最小幅を含まない**。最小幅は探索時の peel でだけ強制されるので、別の形から写した形は `binary_search._mask_satisfies_min_width` を別途呼ぶ(hanger の移植トラス 198.4 cm³・SF 8.869 は6条件 pass だが最小幅5セル〈9.99mm〉で不合格。再現: `reproduce_stage1_transplant.py --src F0200_h2.2_w5 --dst F0200_h2.0_w5 --dilate 1`、棚卸しは `inventory_stage1_shapes.py`)。
+- **比較の単位**: 旧64条件(`output/smoothing_corpus/`)はセル数指定(`min_width_cells` 一定)で凍結。新規は mm 固定(`min_width_mm`)で `min_width_cells_resolved`・`min_width_guaranteed_mm`・`element_size_resolved_mm` を必ず記録し、両者は混ぜない。複数解像度の比較は最も粗い格子が決める共通実幅(`_resolve_min_width` の下限 `max(2×要素サイズ, 1mm)`)。
+- **許容差は製品既定をそのまま使う**(検証用の閾値を作らない): `fem.SOLVE_RESIDUAL_TOL`・`stress.DEFAULT_PERCENTILE`・`binary_search.DEFAULT_MAX_STEP_RATIO`・`ENERGY_FILTER_SIZE`(3セル。物理幅は格子ごとに変わる)。
+- **共通基盤** `topopt_checks/idle_validation/_common.py`(git 状態・sha256・アトミック書き込み・ピークメモリ・OS 排他ロック `ExecutionLock`・条件台帳 `upsert_case`/`is_case_done`・`SingleFemRun`)。各スクリプトはコピーせず import する。未実行の条件は `status=missing` のまま pass にしない。
+- 半セル原点移動は製品の第一級パラメータでない(`design_space.derive` が原点を計算する)。実験はプロセス内パッチで行い達成シフト量を記録する。5合成題材は構築せず小型2題材の15条件で代替した。
 
 ## A-2. 参照解析(固定形状の格子細分・解析解)
 
@@ -219,28 +218,26 @@ hanger で1回の探索が3.4〜10時間(新方式は全材料開始で19時間�
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\load_sweep_full_material.py
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\build_02_reference_json.py   # refine_*/analytic_* を集約。個別再実行後は最後に必ず再実行
 ```
-入力は保存マスク `output/idle_validation_20260928/dilution_mask_r-1.npz`・`path_mask_mesh_2.5mm.npz`(無ければ 00 の再現コマンドで再生成)と hanger の `01_stage1_shapes.json`。出力は `refine_*.json`・`analytic_*.json`・`03a_*.json`。
+入力は保存マスク `output/idle_validation_20260928/dilution_mask_r-1.npz`・`path_mask_mesh_2.5mm.npz`(無ければ 00 の再現コマンドで再生成)と hanger の `01_stage1_shapes.json`。
 
 **落とし穴**
-- `refine_shape.py --shape hanger_r2` の既定条件は `F0200_h2.4_w2`(200N)。H2(2000N)は `--hanger-condition F2000_h2.4_w2` を明示しないと別条件を静かに実行する。
+- `refine_shape.py --shape hanger_r2` の既定条件は `F0200_h2.4_w2`(200N)。H2 は `--hanger-condition` を明示しないと別条件を静かに実行する。
 - `--exact-subdivide` の検証は `--out-dir` で別ディレクトリを指定する(既存の `refine_*.json` を上書きした事故があった)。
-- `stress.RepresentativeStress.raw_max` は ρ<rho_min の空セルを含む全要素の最大(材料外の数値産物)、`dense_max` が材料内最大。**raw_max は評価に使わない**。224〜692 MPa(dilution)や 5470 MPa(hanger H1)は raw_max。
-- 細分で体積が変わる(88,368→88,013 mm³)原因は投影ではない(整数分割マスクと 0 セル差で一致)。`design_space.derive` が spacing ごとに外枠を再計算し、外枠が level 倍より `2(level-1)` セル小さくなって形の 355 セル(0.40%)がはみ出すため。製品の既定挙動なので実験側で吸収する。
-- 曲げパッチテストは FEM が要素中心を読むので、理論値も採点位置に合わせる(`σ = P(80−h/2)(10−h/2)/I`)。非等比細分に等比用 Richardson 式を当てない(`_fem_probe.richardson_extrapolate_general` は3点の格子幅から次数 p を直接解く)。
+- `stress.RepresentativeStress.raw_max` は空セルを含む全要素の最大(材料外の数値産物)、`dense_max` が材料内最大。**raw_max は評価に使わない**。
+- 細分で体積が変わる(88,368→88,013 mm³)のは `design_space.derive` が spacing ごとに外枠を再計算し、外枠が level 倍より `2(level-1)` セル小さくなって形の 355 セルがはみ出すため。製品の既定挙動なので実験側で吸収する。
+- 曲げパッチテストは FEM が要素中心を読むので理論値も採点位置に合わせる(`σ = P(80−h/2)(10−h/2)/I`)。非等比細分に等比用 Richardson 式を当てない(`_fem_probe.richardson_extrapolate_general`)。
 
 **結果**
-- 一様引張は解析解と相対誤差 1e-11〜1e-16 で一致。曲げ(位置補正後)は h=10/5/2.5/1.25mm で 12.13/3.37/0.877/0.230%、Richardson 外挿 23.98 MPa(理論24.0の0.075%以内、p≈1.03)。FEM 実装の正しさの裏付け。
-- 保持部の点応力は格子細分で増え続け、接続部は収束する(dilution 300N の保持部 max 10.45→15.11→18.06 MPa〈+73%〉、接続部 2.65→3.15、一般部 2.07→2.64。path 1500N/6000N の保持部 max はlevel1→4で2.48倍、接続部は1.07倍)。拘束面の階段角に特異点があり、接続部の内部には無い。保持部の判定は評価距離 D に頑健(ピークは同じ最内側セル)、接続部・一般部の代表値は D に敏感。
-- path_2.5mm の真の等比細分(levels 1,2,4)に一般化 Richardson(探索区間 p∈(1e-3,10))を当てると、holding zone max と raw_max は解なし、joint/general zone max と representative_mpa は収束(p=0.35〜3.0、外挿が level4 実測と0.1%以内)。**解なしは発散の証明ではない**(区間外や対数発散は未検討)。dilution の level1-3 は非等比なので検定自体が判定不能(等比の level4=0.5mm は約126万要素で未実行)。
-- 製品の代表応力(99.5%点)は比較的安定: dilution 300N は 8.271→7.997→7.555 MPa(level1→3で-8.7%、SFは+9.5%)、path は level2 以降 0.6%以内。2.4 係数(目標4.8/実際2.0)はこの 1〜10% のドリフトを吸収するが、点maxの発散は吸収しない。
-- **固定物理体積の局所平均は点maxが発散する同じ場所でも安定**: dilution の holding ピーク(世界座標 [17,9,3]mm)まわり半径2〜9mm の平均は3段細分で ±1.7〜6%(点max +73%、raw_max +208%)。
-- 断面力: 保持部/接続部境界の断面のせん断力は全レベルで荷重(300N)と小数点以下まで一致、反力も一致。path の支持反力は右77%/左23%(荷重の偏心と整合)。hanger は断面が薄く断面力検算が成立しないので反力の支持別分担を使う。
-- Kirsch/Peterson 近似は独立検証として機能しない(kt_fem 19.9→28.6→33.6 vs 理論 2.304。荷重が曲げ支配で単純引張の前提と違い、分子の穴際maxが格子依存)。独立ソルバ(gmsh 等が環境に無い)・実取付条件を反映した参照は未実装。
-- **hanger H1(200N)の「一般部」48.72 MPa のピーク**は荷重パッド接触端(荷重面から4.99mm、拘束面から190mm以上)の応力集中。`_fem_probe.zone_masks` に荷重ゾーンが無く一般部(29,224セル)へ希釈されて部位別99.5%点(7.31 MPa)に現れなかった。H2(2000N)は保持部 47.89 > 接続部 9.90 > 一般部 10.66 の序列。
+- 一様引張は解析解と相対誤差 1e-11〜1e-16 で一致、曲げ(位置補正後)の Richardson 外挿は理論 24.0 MPa の 0.075% 以内(p≈1.03)。FEM 実装は正しい。
+- **保持部の点応力は格子細分で増え続け、接続部・一般部は収束する**(dilution 300N の保持部 max 10.45→15.11→18.06 MPa、path の保持部 max は level1→4 で 2.48倍、接続部 1.07倍)。拘束面の階段角の特異点で、一般化 Richardson でも holding max と raw_max は解なし(解なしは発散の証明ではない)。
+- 製品の代表応力(99.5%点)は細分で 1〜10% ドリフトする(dilution 300N 8.271→7.997→7.555 MPa)。2.4 係数はこれを吸収するが点maxの発散は吸収しない。
+- **固定物理体積の局所平均は点maxが発散する場所でも安定**(dilution の holding ピークまわり半径2〜9mm の平均は3段細分で ±1.7〜6%。点max +73%)。
+- Kirsch/Peterson 近似は独立検証として機能しない(kt_fem 19.9〜33.6 vs 理論 2.304)。独立ソルバ(gmsh 等)は環境に無く未実装。
+- hanger H1 の **48.72 MPa は荷重パッド接触端**(荷重面から4.99mm)の集中。`_fem_probe.zone_masks` の3ゾーンに荷重ゾーンが無く一般部(29,224セル)へ希釈され、部位別99.5%点(7.31 MPa)に現れなかった。
 
-**訂正済みの値**: 全材料 dilution の荷重スイープは SF×荷重 = 1676.2988934(8桁一致)で厳密に反比例。00 に書かれていた 200N:4.77・250N:5.97 は誤りで正しくは 8.38・6.71(混入経路は run-id が無く不明)。
+**訂正済みの値**: 全材料 dilution の荷重スイープは SF×荷重 = 1676.2988934 で厳密に反比例。00 に書かれていた 200N:4.77・250N:5.97 は誤りで正しくは 8.38・6.71。
 
-**ゾーン定義**(`_fem_probe.zone_masks`): 保持部=材料のうち拘束面 bbox から D 以内、接続部=保持部でなく拘束面重心↔荷重面重心(複数支持なら支持間も)の線分から D 以内、一般部=残り。D の既定は元の格子幅の3倍(0.67倍・1.5倍も併走)。幾何位置だけで決まり部位の意味を知らないので、荷重端のような集中を見逃す(上記H1)。
+**ゾーン定義**(`_fem_probe.zone_masks`): 保持部=拘束面 bbox から D 以内、接続部=拘束面重心↔荷重面重心の線分から D 以内、一般部=残り(D の既定は格子幅の3倍)。幾何位置だけで決まるので荷重端のような集中を見逃す。
 
 ## A-3. 検証範囲の縮小(2026-10-05 本人指示)
 
@@ -250,37 +247,37 @@ hanger で1回の探索が3.4〜10時間(新方式は全材料開始で19時間�
 
 # 付録B: 評価式(応力集約指標)の比較と採否
 
-出典: 旧 03_METRICS・03B_METRICS_RECHECK(git 履歴)。コードは `topopt_checks/idle_validation/stress_metrics.py`(候補式。材料セル ρ=1 の von Mises 配列+マスクを受ける純粋関数、FEM は呼ばない)・`metric_eval.py`(形状→FEM解→ゾーン付き生の場)。
+出典: 旧 03_METRICS・03B_METRICS_RECHECK(git 履歴)。コードは `topopt_checks/idle_validation/stress_metrics.py`(候補式。von Mises 配列+マスクを受ける純粋関数、FEM は呼ばない)・`metric_eval.py`(形状→FEM解→ゾーン付き生の場)。
 
 ## B-1. 候補式の定義
 
-全候補は `material_mask`(またはそのゾーン部分集合)だけを母集団にし、`raw_max_mpa` は入力に使わない(空隙を分母や平均に混ぜる経路はコード上ない)。許容は `cond.allowable_mpa`=40 MPa(製品の安全率計算と同じ値)。
+全候補は `material_mask`(またはそのゾーン部分集合)だけを母集団にし、`raw_max_mpa` は入力に使わない。許容は `cond.allowable_mpa`=40 MPa。
 
 | ID | 関数 | 定義 |
 |---|---|---|
 | M1 | `full_population_percentile` | `percentile(v[material], 99.5)`(現行製品の `stress.representative_stress`) |
 | M2 | `excluded_population_percentile` | 保持部を除いた母集団の99.5%点 |
 | M3 | `zone_percentile` | holding/joint/general 各ゾーンで99.5%点を取り、全ゾーン合格で合格 |
-| M4a / M4b | `top_volume_rank` / `top_volume_average` | 応力降順で物理体積 `V_top` に対応する `k=round(V_top/cell³)` 番目の値 / 上位k個の平均(窓 8mm³ と 216mm³ の2点) |
+| M4a / M4b | `top_volume_rank` / `top_volume_average` | 応力降順で物理体積 `V_top` に対応する `k=round(V_top/cell³)` 番目の値 / 上位k個の平均(窓 8mm³ と 216mm³) |
 | M5a | `exceedance_volume` | `count(v>allowable)·cell³` |
 | M5b | `exceedance_integral` | `Σ(v_i−allowable)·cell³`(超過セルのみ。tolerance=0=1セルでも超えたら不合格) |
 | M6 | `p_mean` | `mean(v^p)^(1/p)` |
 | M7a | `p_norm_unnormalized` | `sum(v^p)^(1/p)`(`vmax` でスケール) |
 | M7b | `ks_aggregation` | `vmax + (1/ρ)ln(Σexp(ρ(v_i−vmax)))` |
 
-p=8、ρ=1.0(1/MPa)は研究用の初期値で較正していない。M5b/M7b のパラメータ(tolerance、p、ρ)は未校正。
+p=8、ρ=1.0(1/MPa)、tolerance=0 は研究用の初期値で較正していない。
 
 ## B-2. 採否(結論)
 
-- **M5b(超過量積分)が合否の本体**: 反例7件・34実形状ケースで一度も危険を見逃さず、母数・窓・ゾーンのいずれの希釈にも強い。**ただし粗格子の合格は安全の証明でない**(path 6000N の固定形状細分で level1〜3 は M5b=0、level4(0.6176mm)で突然8セル〈41.8〜46.7 MPa、全て holding zone、設計空間の外枠から13セル内側=境界アーティファクトではなく拘束近傍の応力集中が解像されたもの〉が超過して M5b=5.91)。
-- **M3(部位別99.5%点)は診断の内訳に保持**: ゾーンが数百セル以上あると内部で同じ希釈を再現する。許容の1.25倍(50 MPa)を holding/joint/general のどのゾーンの1セルへ注入しても3ゾーンとも合格のまま(dilution の 1,064/684/9,298 セルでも hanger_base の 507/1,606/29,224 セルでも再現)。**部位別分割は必要条件だが十分条件でない**。ゾーン別に使うなら99.5%点でなく超過量積分にする(ゾーン別 M5b は未実装)。
-- **M7b(KS)は探索時の補助指標**: M5b は超過が無い限り勾配を持たないので、探索の順位付け・勾配用。足切り(合否)には使わない。M7a(非正規化pノルム)は母数希釈にほぼ免疫でピーク集中に鋭敏だが、「個々には合格だが多数がやや高い」形(path 独立探索1.5mm・6000N、超過セル0)を過剰に不合格にする。
-- **不採用**: M1 は母数希釈(下記)と局所危険の見逃しで単独不可。M2 は保持部を母集団から除く設計が必然的に保持部の危険を隠し、除外域の外で操作してもM1と無差別(希釈に無防備)。M4 は窓より小さい局所超過を完全に見逃す(80 MPa の1セルを216mm³ 窓で取ると順位8.70・平均11.82 MPa)。M5a は深刻さを区別しない。M6 は N で割る構造が希釈と同型(20倍水増しで-31%)。いずれもパラメータで救えない。
+- **M5b(超過量積分)が合否の本体**: 反例7件・34実形状ケースで一度も危険を見逃さず、母数・窓・ゾーンのいずれの希釈にも強い。**ただし粗格子の合格は安全の証明でない**(path 6000N の固定形状細分で level1〜3 は M5b=0、level4〈0.6176mm〉で拘束近傍の8セルが超過して M5b=5.91)。
+- **M3(部位別99.5%点)は診断の内訳に保持**: ゾーンが数百セル以上あると内部で同じ希釈を再現する(許容の1.25倍をどのゾーンの1セルへ注入しても3ゾーンとも合格のまま)。部位別分割は必要条件だが十分条件でない。
+- **M7b(KS)は探索時の補助指標**(M5b は超過が無い限り勾配を持たない)。合否には使わない。M7a は「個々には合格だが多数がやや高い」形を過剰に不合格にする。
+- **不採用**: M1 は母数希釈と局所危険の見逃しで単独不可。M2 は保持部を除く設計が保持部の危険を隠す。M4 は窓より小さい局所超過を見逃す(80 MPa の1セルを 216mm³ 窓で取ると 8.70〜11.82 MPa)。M5a は深刻さを区別しない。M6 は N で割る構造が希釈と同型(20倍水増しで-31%)。いずれもパラメータで救えない。
 - 独立解析による局所評価(別ソルバ・局所サブモデル・conformal メッシュ)は gmsh 等が環境に無く未実装。
 
 ## B-3. 主要な実測
 
-- **母数希釈(dilution_r-1・300N、遠方の2.0 MPa セルを足す)**: 20倍水増し(総母集団231,966)で M1=8.271→2.0(注入値に収束、-76%)、M2 も同一、M6 -31%、M7a +0.23%、M7b +9.5%。hanger_base(31,337要素)では M1→2.0(-76%)、M7a +0.000045%・M7b ±0%。
+- **母数希釈(dilution_r-1・300N、遠方の 2.0 MPa セルを足す)**: 20倍水増し(総母集団231,966)で M1=8.271→2.0(-76%)、M2 も同一、M6 -31%、M7a +0.23%、M7b +9.5%。hanger_base でも M1 -76%、M7a/M7b ±0%。
 - **同じ実形状が指標だけで合否逆転**:
 
 | 形状・条件 | 製品SF | M1 | M3 | M5b | M7b |
@@ -288,10 +285,9 @@ p=8、ρ=1.0(1/MPa)は研究用の初期値で較正していない。M5b/M7b �
 | hanger H1(200N) | 4.824 | PASS 8.29 | PASS 15.9 | **FAIL 69.5** | FAIL 48.7 |
 | hanger H2(2000N) | 2.727 | PASS 14.7 | FAIL 42.5 | FAIL 317.5 | FAIL 48.0 |
 
-  H1 は一般部(29,224セル)に荷重端の48.72 MPa のピーク(保持部19.39を上回る)があり、M3 の一般部99.5%点は7.31 MPa で現れない。M5b だけが H1・H2 の両方を捕捉した。
-- 現実的な材料編集(一般部の低応力20%除去/1セル膨張、SF 4.836 の余裕あり)では全指標が1〜5%しか動かず合否も反転しない。極端な場だけの操作と、幾何・力学的に成立する操作は区別して評価する。
-- 格子原点を±0.5セルずらす: dilution(SF余裕4.8倍)は2〜3%、path(余裕2.4倍)は M3 +21.6%・SF -12.7%、-0.5セルは連結成分が消えて候補が不成立。+1.0セルは基準と完全一致。
-- 同条件(200N・2.0mm・最小幅5セル)の再採点: hanger_r2(保持部除外の探索結果)は全母集団M1で SF 3.726(探索時の除外母集団評価では4.84)。製品の実質下限は2.0(探索目標4.8=2.0×2.4)なので「R2が危険」ではなく「R2の探索目標達成は評価式次第」。hanger_step05(5%歩幅)は M5b=0・材料-38%(19,451要素、SF 4.819)で、現行形(M5b 69.5、31,337要素)にある荷重端の局所超過を持たない。移植トラスは SF 8.869 だが最小幅不合格(`_min_width_exempt` 経由の正しい判定)。
+  H1 は一般部に荷重端 48.72 MPa のピークがあり M3 の一般部99.5%点(7.31 MPa)に現れない。M5b だけが両方を捕捉した。
+- 現実的な材料編集(一般部の低応力20%除去/1セル膨張)では全指標が1〜5%しか動かず合否も反転しない。格子原点 ±0.5セルで dilution は2〜3%、path は M3 +21.6%・SF -12.7%。
+- hanger_r2(保持部除外の探索結果)は全母集団 M1 で SF 3.726(探索時の除外母集団評価では 4.84)——**探索目標の達成は評価式次第**。
 
 ## B-4. 再現と落とし穴
 
@@ -304,12 +300,10 @@ p=8、ρ=1.0(1/MPa)は研究用の初期値で較正していない。M5b/M7b �
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\hanger_common_condition_scoring.py  # 現行/R2/5%/移植の共通条件採点
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\level4_exceedance_locality.py
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\keep_islands_volume_contribution.py
-.\.venv\Scripts\python.exe topopt_checks\idle_validation\build_03_metrics_json.py   # 集約。出力は output\idle_validation_20260928\ の metric_comparison.json など
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\build_03_metrics_json.py   # 集約 → output\idle_validation_20260928\
 ```
-- 最小幅の判定は `binary_search._min_width_exempt(cond, shape, 5)` 経由で保持セルを規則の対象外にする。`_mask_satisfies_min_width(mask, 5)` を exempt なしで呼ぶと現行形自身が不合格になる(製品の受理基準と矛盾)。
-- keep 合成・`resolve_islands` が細分の体積差に与える寄与は 0 セル(path_2.5mm・level2)。keep が元格子で mask の部分集合なら同じ投影を通した後も部分集合のまま(`floor` 逆引きは単調写像)。
-- 00 の時間・メモリ表とJSONの差は所要時間の実行間ゆらぎ(3〜10%)のみで、design_elements・材料体積・SF は一致。`rss_delta_mb` は前後差分でありピークメモリではない(ピークは `tracemalloc` の `traced_peak_mb`)。
-- 03 の34ケースは製品コード(`stress.py`・`binary_search.py`・`design_space.py`)と評価計算パスの変更ゼロで、2ケースを再計算してビット一致を確認済み。
+- 最小幅の判定は `binary_search._min_width_exempt(cond, shape, 5)` 経由で保持セルを規則の対象外にする。`_mask_satisfies_min_width(mask, 5)` を exempt なしで呼ぶと現行形自身が不合格になる。
+- `rss_delta_mb` は前後差分でありピークメモリではない(ピークは `tracemalloc` の `traced_peak_mb`)。
 
 ---
 
@@ -319,14 +313,12 @@ p=8、ρ=1.0(1/MPa)は研究用の初期値で較正していない。M5b/M7b �
 
 ## C-1. 実装(`topopt_checks/idle_validation/search_methods.py`)
 
-- 入口: `run_fixed_step`(20%/5%。製品 `binary_search.find_best_feasible` を無変更で呼ぶ薄いラッパー)・`run_adaptive`・`run_adaptive_from_mask`(段階3を経由せず既存形から削減を続ける)・`run_reallocation`。記録は `MethodRecord`/`StepRecord`、評価器は `score_mask`(1回のFEMで M5b raw/target・M3・M7b・compliance・要素ひずみエネルギーを返す `CandidateScore`)。
-- 除去側の幾何検査は製品の `resolve_islands`/`_geometry_rejection`/`peel`/`ranked_cells`/`_min_width_exempt` を再実装せず呼ぶ。追加側(`_growth_geometry_ok`)は `acceptance.inspect` が「材料が before を超えない」前提で使えないため、個別チェック(境界・連結・保持/除外×2・条件面)に最小幅・閉空洞禁止・芯の連結を足して呼ぶ。
-- 検算: step20 を dilution_small で走らせると 88,368 mm³・SF 4.836・18評価で製品の既知値とビット一致。
-- 適応歩幅の機構(ロールバック・復帰と別順序での再開・旧停止条件との対照・決定性・チェックポイント再開・キャンセル後の合格形保持・poison/rejected キャッシュの条件非依存)は `search_methods_mechanism_checks.py` が強制発動条件込みで8項目すべて PASS(出力 `04_mechanism_checks.json`)。
-- **受理ゲート `AdaptiveConfig.gate`** は3択で、測る安全の定義が違うので体積だけで優劣を付けない: `m5b_raw`(既定。許容40 MPa=SF≈1を割らないことだけを見る最も緩いゲート)、`m5b_target`(`allowable/target_safety_factor`=8.33 MPa を閾値にした版)、`percentile`(製品の99.5%点ゲートそのまま)。dilution_small の全材料形(SF 5.59)でさえ `m5b_raw` は合格、`m5b_target` は不合格(192.9 MPa·mm³ 超過)。
-- 再配置: 追加候補は「初期全材料 ∪ 実行内履歴 ∪ 外部候補」から現在形を引いた連結成分のうち現在形に隣接するものを長い順に提案する(`_connected_remnants`)。**成分は分割せずまるごと足す**(セル数で機械的に切ると部材自身と非連結になり幾何検査でほぼ必ず落ちる)。path_small で1回の追加が最大 6,810 セル(主実証では dilution・path とも3サイクル全部が `grow_accepted`、1回 6,393〜11,637 セル)。**主実証の追加は毎回、初期全材料の連結成分を丸ごと再導入する規模で、ほぼ全材料形(dilution 157,376 mm³)まで戻ってから削減を再開した**。`grow_accepted` の直後に必ず `poison_invalidated` を記録する。
-- **罠**: 歩幅の下限 `min_step_ratio` を後退倍率(`multiplier`)にも床として適用すると、同じ複数セル候補が却下され続けて `requested` が床で頭打ちになり、`peel` が毎回同じ候補を返して無限ループになる。床は目標歩幅(`gap_ratio`)だけに敷く。
-- `finish_patience`(改善停滞判定)は評価数を大きく減らす: dilution の percentile 対照は 120 評価の予算を使い切らず 56 評価で停止、path の適応は 120→43 評価(機構ログ108→33件)。
+- 入口: `run_fixed_step`(20%/5%。製品 `binary_search.find_best_feasible` を無変更で呼ぶ薄いラッパー)・`run_adaptive`・`run_adaptive_from_mask`(既存形から削減を続ける)・`run_reallocation`。評価器は `score_mask`(1回のFEMで M5b raw/target・M3・M7b・compliance・要素ひずみエネルギーを返す)。除去側の幾何検査は製品の `resolve_islands`/`_geometry_rejection`/`peel`/`ranked_cells`/`_min_width_exempt` を呼ぶ。追加側(`_growth_geometry_ok`)は `acceptance.inspect` が「材料が before を超えない」前提で使えないため個別チェックに最小幅・閉空洞禁止・芯の連結を足す。
+- 検算: step20 を dilution_small で走らせると 88,368 mm³・SF 4.836・18評価で製品の既知値とビット一致。機構検査(`search_methods_mechanism_checks.py`)8項目 PASS。
+- **受理ゲート `AdaptiveConfig.gate`** は3択で、測る安全の定義が違うので体積だけで優劣を付けない: `m5b_raw`(既定。許容40 MPa=SF≈1 を割らないことだけを見る最も緩いゲート)、`m5b_target`(許容/目標SF=8.33 MPa を閾値にした版)、`percentile`(製品の99.5%点ゲートそのまま)。dilution_small の全材料形(SF 5.59)でさえ `m5b_raw` は合格、`m5b_target` は不合格。
+- 再配置の追加候補は「初期全材料 ∪ 実行内履歴 ∪ 外部候補」から現在形を引いた連結成分のうち現在形に隣接するものを長い順に提案する(`_connected_remnants`)。**成分は分割せずまるごと足す**(セル数で切ると部材と非連結になり幾何検査でほぼ必ず落ちる)。`grow_accepted` の直後に必ず `poison_invalidated` を記録する。
+- **罠**: 歩幅の下限 `min_step_ratio` を後退倍率にも床として適用すると `peel` が毎回同じ候補を返して無限ループになる。床は目標歩幅(`gap_ratio`)だけに敷く。
+- `finish_patience`(改善停滞判定)は評価数を大きく減らす(dilution の percentile 対照 120→56 評価、path の適応 120→43)。
 
 ## C-2. hanger 外部確認(H1=`F0200_h2.0_w5`、H2=`F5000_h2.4_w2`、`hanger_external_check.py --condition both`)
 
@@ -335,75 +327,66 @@ p=8、ρ=1.0(1/MPa)は研究用の初期値で較正していない。M5b/M7b �
 | H1(200N・2.0mm) | 640,306 | 249,716(保存形 `hanger_base` の再スコア) | 4.824 | 69.5 | 15.9 MPa | 0件受理(不変) |
 | H2(5000N・2.4mm) | 367,390 | 3,255,099(製品を新規実行。10評価で converged) | 4.842 | **29,949** | **93.2 MPa** | 0件受理(全材料5,118,824・SF 6.525のまま) |
 
-- 現行が局所超過を持つ状態(または全材料自身が `m5b_raw` 不合格)からの純粋な除去では超過を解消できない。製品は H2 を合格(SF 4.84)としながら材料の生の許容40 MPaの2倍超(93.2 MPa)を抱える(→ 本人判断1)。
-- `hanger_base` を H2(2.4mm)へ投影すると連結成分が条件面を失う(`resolve_islands` が17,811セルの成分を落とす)ので、H2 の「現行」は製品を H2 条件で新規実行した結果にした。H1 の全材料1回のFEMは約157秒。
-- 再配置は hanger 規模では未実行(06・07 で別途)。
+- 現行が局所超過を持つ状態からの純粋な除去では超過を解消できない(→ 本人判断1)。
+- `hanger_base` を H2(2.4mm)へ投影すると連結成分が条件面を失う(`resolve_islands` が17,811セルの成分を落とす)ので、H2 の「現行」は製品を H2 条件で新規実行した結果にした。H1 の全材料1回の FEM は約157秒。
 
 ## C-3. 原因2の認定(path_small・2.0mm格子・パーセンタイル評価シナリオに限る)
 
-2.0mm 格子(現行 step20 が経路を失う格子)で「同格子・同評価器・同実現最小幅(6.0mm=3セル)で合格する、現行より軽い形」を手作業の構成で作れた。構成(`qualify_path_small.py`)は (A)移植: 2.5mm step20 の採用マスクを2.0mm へ最近傍で射影し `binary_closing` 2回+`resolve_islands`(57,656 mm³・SF 4.481)、(B)局所成長: 現在の材料全体を軸方向へ1セルシフトして重ねる貪欲選択(毎ラウンド6方向を `_growth_geometry_ok` で検査し、パーセンタイルSFを最も改善する1方向を採る。候補プールは最小幅済み全材料の内側に限る)、(B')仕上げ削減: `run_adaptive_from_mask(gate="percentile", stop_policy="adaptive_finish", max_step_ratio=0.05)`。
+2.0mm 格子(現行 step20 が経路を失う格子)で「同格子・同評価器・同実現最小幅(6.0mm=3セル)で合格する、現行より軽い形」を手作業の構成で作れた(`qualify_path_small.py`): (A)移植: 2.5mm step20 の採用マスクを 2.0mm へ最近傍で射影し `binary_closing` 2回+`resolve_islands`、(B)局所成長: 材料全体を軸方向へ1セルシフトして重ねる貪欲選択(毎ラウンド6方向を `_growth_geometry_ok` で検査しパーセンタイルSFを最も改善する1方向を採る)、(B')仕上げ削減: `run_adaptive_from_mask(gate="percentile", stop_policy="adaptive_finish", max_step_ratio=0.05)`。
 
 | 荷重 | 現行 step20 | 優越形 | 軽量化 | 成長ラウンド | 仕上げ評価数 |
 |---:|---:|---:|---:|---:|---:|
 | 2700N | 53,664 mm³(SF 4.845) | 51,000(4.800) | -5.0% | 3 | 91 |
-| 3000N | 71,928(4.842) | 67,800(4.800) | -5.7% | 3(69,440で止まり仕上げ30手・33FEM) | 30 |
+| 3000N | 71,928(4.842) | 67,800(4.800) | -5.7% | 3 | 30 |
 | 3300N | 108,592(4.846) | 106,248(4.800) | -2.2% | 13 | 34 |
 
-- 優越形は `acceptance.inspect` の6条件と最小幅(`_mask_satisfies_min_width`)の全てに合格。
-- **m5b_target では現行・優越形とも不合格**(超過 387.98/396.64 MPa·mm³、3000N)。m5b_raw ではどちらも合格(0)。M3 は両者とも holding が最悪(10.641/10.598)で不合格。**優越形の優位はパーセンタイル評価に限り、m5b_target での優劣は未決着**。
-- 因果検査(3000N のみ。`gate="percentile"`・`stop_policy="legacy"` で製品の `_reduce_volume` を再現する対照): 優越形に固有の605セル(corridor、4,840 mm³。現行にしかないセルは1,121セル)を無保護で全材料から削ると 71,928 mm³(現行と厳密一致=対照の妥当性の検算)・corridor 保持率0%。corridor を保護しても 71,544 mm³ で優越形(67,800)には届かない。最初に corridor を33セル削る1手だけ禁止しても、以降無保護で再開すると保持率は8.4%まで下がる。**経路喪失は特定の1手の誤りではなく、ひずみエネルギー順位で削る現行アルゴリズムの構造的な傾向**。歩幅 0.05 でも 72,016 mm³ で変わらない(00)。
-- 未検証: 原点シフト頑健性、2.0mm 以外の格子で構成法が機能するか、他荷重での因果検査。軸方向シフト成長は「細い1本の部材が支持点近くで急に太いパッドへ接続する」この形状で有効だった手法で、hanger 等で同じ効率が出る保証はない。
-- **不採用の構成法**: 孤立点・表面セル単位の追加と、最悪応力点中心の立方体膨張は、最小幅3セルの離散化では `min_width` 検査で落ちるか非効率(半径4〜10セルまで拡げてようやくSFが動き、10ラウンドで 83,768 mm³ と現行超過)。仕上げに `stop_policy="legacy"` を使うと成長後のオーバーシュートが小さいとき何も削れない(69,440→69,440)ので `adaptive_finish` を使う。
-- 実装上の契約: `peel` の m>1 では `protected` は `exempt` の部分集合であることが不変条件(`extra_protected` は `exempt` にも OR する。`_run_adaptive_impl` が自動で行うが、渡すセルは別経路で最小幅確認済みの構造の一部であることを呼び出し側が保証する)。`on_accept(i, mask, score)` で受理ごとの途中マスクを取れる。
+- 優越形は6条件と最小幅の全てに合格。**m5b_target では現行・優越形とも不合格**(3000N)で、優越形の優位はパーセンタイル評価に限る。
+- 因果検査(3000N): 優越形に固有の605セル(corridor)を保護しても製品の `_reduce_volume` は 71,544 mm³ で優越形(67,800)に届かず、最初の1手だけ禁止して再開すると corridor 保持率は8.4%まで下がる。**経路喪失は特定の1手の誤りではなく、ひずみエネルギー順位で削る現行アルゴリズムの構造的な傾向**。歩幅 0.05 でも変わらない。
+- 未検証: 原点シフト頑健性、2.0mm 以外の格子、他荷重での因果検査。軸方向シフト成長はこの形状(細い部材が支持点近くで太いパッドへ接続)で有効だった手法で、hanger 等で同じ効率が出る保証はない。
+- **不採用の構成法**: 孤立点・表面セル単位の追加と最悪応力点中心の立方体膨張は、最小幅3セルの離散化では `min_width` 検査で落ちるか非効率。仕上げに `stop_policy="legacy"` を使うとオーバーシュートが小さいとき何も削れないので `adaptive_finish` を使う。
+- 実装上の契約: `peel` の m>1 では `protected` は `exempt` の部分集合であることが不変条件(`extra_protected` は `exempt` にも OR する。渡すセルは別経路で最小幅確認済みであることを呼び出し側が保証する)。`on_accept(i, mask, score)` で受理ごとの途中マスクを取れる。
 
 再現:
 ```
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\run_04_searches_compact.py            # 4方式×2題材の主実証 → 04_searches_compact.json
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\search_methods_mechanism_checks.py     # → 04_mechanism_checks.json
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\hanger_external_check.py --condition both
-.\.venv\Scripts\python.exe topopt_checks\idle_validation\qualify_path_small.py                 # 3000N 主実証+因果検査(約190秒・WS約800MB) → 04a_qualification_run.json
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\qualify_path_small.py                 # 3000N 主実証+因果検査(約190秒) → 04a_qualification_run.json
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\robustness_path_qualification.py       # 2700N・3300N → 04a_robustness_loads.json
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\build_04a_json.py                       # 前2つを集約 → 04a_path_qualification.json
 ```
-`qualify_path_small.py` は `path_mask_mesh_2.5mm.npz` が前提(無ければ `measure_path_local_optimum.py mesh --sizes 2.5`)。出力は `output/idle_validation_20260928/`。
+`qualify_path_small.py` は `path_mask_mesh_2.5mm.npz` が前提(無ければ `measure_path_local_optimum.py mesh --sizes 2.5`)。
 
 ---
 
 # 付録D: 小型題材での機構別比較(05)
 
-出典: 旧 05_SYNTHETIC(git 履歴)。15条件×4方式の体積・SF の表は 3-1 節。題材は dilution_small(300N・2.0mm・最小幅6mm 基準)と path_small(04a 認定条件=3000N・2.0mm・6mm、パーセンタイル評価に限る)。5合成題材(S-T/S-B/S-TB/S-L/S-MS)は新規構築せず、設計空間を持たない解析解比較(パッチテスト)専用のまま。製品コードは無変更。
+出典: 旧 05_SYNTHETIC(git 履歴)。15条件×4方式の体積・SF の表は 3-1 節。題材は dilution_small(300N・2.0mm・最小幅6mm 基準)と path_small(3000N・2.0mm・6mm)。製品コードは無変更。
 
 ## D-1. 結論
 
-- 4方式は明確に区別できる(同一条件内で材料差最大168.8%〔dilution 3.0mm〕・83.3%〔path 1.5mm〕)ので追加方式は要らない。**方向は荷重・幅・解像度のどの軸を動かしたかで符号が変わり、新方式の一般的優位は言えない**(dilution の baseline・幅8mm・1.5mm では適応/再配置が-18〜-36%軽いが、200N/250N では横ばい〜やや重く、3.0mm では約2.7倍重い。path は 2700N +12.5%、3300N +47.4%、1.5mm +83.3%)。
-- **適応方式の一次予測係数 `calibrated_k` は最初に受理された1手だけで較正され以後固定されるため、粗い格子・小さい候補セル数の条件で予測誤差ロールバックが暴走する**。dilution 3.0mm では序盤に1,011セル除去(実ジャンプ0.031%)で校正した後、終盤の2〜4セルの候補(実ジャンプ0.03〜0.1%)が全て `prediction_error` で拒否され続け、path 1.5mm でも最初の1手(5,607セル)で校正した後2手目(4,476セル)から拒否が始まり `revert_restart` を経ても同じ点に留まる。原因は単位エネルギーあたりの安全率変化が序盤の一括除去と終盤の少数除去で大きく違うのに単一の線形係数で予測するため。修正候補は直近N手の移動平均での再較正、または候補セル数の桁が変わったときの再較正(→ 08 で floor を試験)。
-- **`m5b_raw` ゲート単独では製品の目標SF(4.8)を守れない**: dilution 250N は SF 3.850、path の warm-start 各条件は 4.56 前後まで沈んでも m5b_raw は 0 超過のまま合格。hanger で使うなら `m5b_target` か `percentile` との併用(両方合格で受理)が要る。
-- **再配置の「追加」は実質「全材料形からの再削減」**: 全 main_matrix・全 ablation の51件の `grow_accepted` すべてで追加候補は `initial_all_material` 由来の1連結成分(設計空間のほぼ全体、例 dilution 200N は 16,936→157,376 mm³)。`_connected_remnants` が箱型形状では「削除済み全セル」を現在形に隣接する単一の巨大成分として最長候補に選ぶため。`grow_fraction_of_removed`/`grow_min_cells` の調整では直らない。連結成分を分割する代替実装は幾何検査でほぼ必ず落ちる(04 の罠)。
-- **原点の半セル移動で材料が大きく動く**: step20 の8条件(基準+各軸±0.5+全軸+0.5)で、dilution は基準以外の7条件すべてで位相(mask_hash)が変わり材料は-50.8%〜0%(±0.5z が最大)、path は-20.6%〜+7.4%。適応方式でも基準と全軸+0.5の比較で dilution 78,648→102,032 mm³(+29.7%)、path 67,312→57,008(-15.3%)。達成シフト量は `achieved_origin_mm` に記録。
-- フィルタ幅の mm 固定とセル数固定(`ENERGY_FILTER_SIZE`)の比較(step20): 2.0mm では定義上一致。1.5/2.5/3.0mm では材料量の差は2%未満だが mask_hash は異なる。体積だけで「同じ結論」と判断しない。
+- 4方式は明確に区別できる(同一条件内で材料差最大 168.8%)ので追加方式は要らない。**方向は荷重・幅・解像度のどの軸を動かしたかで符号が変わり、新方式の一般的優位は言えない**。
+- **適応方式の一次予測係数 `calibrated_k` は最初に受理された1手だけで較正され以後固定されるため、粗い格子・小さい候補セル数の条件で予測誤差ロールバックが暴走する**(dilution 3.0mm は序盤 1,011 セル除去で校正した後、終盤の2〜4セルの候補が全て `prediction_error` で拒否され続ける)。単位エネルギーあたりの安全率変化が序盤と終盤で大きく違うのに単一の線形係数で予測するため(→ 08 で floor を試験)。
+- **`m5b_raw` ゲート単独では製品の目標SF(4.8)を守れない**(dilution 250N は SF 3.850)。hanger で使うなら `m5b_target` か `percentile` との併用が要る。
+- **再配置の「追加」は実質「全材料形からの再削減」**: 51件の `grow_accepted` すべてで追加候補は `initial_all_material` 由来の1連結成分(例 dilution 200N は 16,936→157,376 mm³)。`grow_fraction_of_removed`/`grow_min_cells` の調整では直らない。
+- **原点の半セル移動で材料が大きく動く**: step20 の8条件(基準+各軸±0.5+全軸+0.5)で dilution は基準以外の7条件すべてで位相が変わり材料 -50.8%〜0%、path は -20.6%〜+7.4%。適応でも dilution +29.7%、path -15.3%。
+- フィルタ幅の mm 固定とセル数固定(`ENERGY_FILTER_SIZE`)は 2.0mm 以外で材料量の差 2% 未満だが mask_hash は異なる。体積だけで「同じ結論」と判断しない。
 
 ## D-2. アブレーション(baseline: dilution 300N/2.0mm/4mm、path 3000N/2.0mm/6mm、評価予算100)
 
-| 設定 | dilution 材料/SF | path 材料/SF |
-|---|---|---|
-| 適応歩幅のみ(revert無効) | 58,088 / 4.722 | **49,224 / 4.148**(目標未達) |
-| +復帰(既定) | 58,088 / 4.722(上と完全一致) | 67,144 / 4.741(+36.4%重く、SF +0.59) |
-| +再配置 | 58,088 / 4.722(削減段は同じ、403評価) | 67,144 / 4.741(392評価) |
-| stop=legacy(×gate percentile/m5b_raw) | 88,368 / 4.836(17評価、製品step20と酷似。ゲートの差は出ない) | 71,928 / 4.842(26評価) |
-| stop=adaptive_finish×percentile | 82,680 / 4.800(56評価) | 70,720 / 4.800(46評価) |
-| stop=adaptive_finish×m5b_raw | 58,088 / 4.722 | 67,144 / 4.741 |
-
-dilution では復帰が既定パラメータで一度も発動しない。path では 52回の rollback・7回の revert_restart が発動し、安全率を 4.148→4.741 に回復させた(復帰が正しく機能したケース)。ゲートの違いが効くのは `adaptive_finish` のときだけで、percentile は 4.800 で止まり m5b_raw はそれを割る。巻き添え除去(連結性維持のための要求外セル)は dilution 100手中43手(平均0.8セル・最大4)、path 48手中21手(平均1.2・最大7)で、急変の原因になっている証拠はない。
+- dilution では復帰(revert)が既定パラメータで一度も発動せず、適応のみ・+復帰・+再配置が同じ 58,088 mm³・SF 4.722。path では 52回の rollback・7回の revert_restart が発動し SF 4.148(目標未達)→4.741 に回復させた(+36.4% 重い)。
+- ゲートの違いが効くのは `stop=adaptive_finish` のときだけ(percentile は 4.800 で止まり、m5b_raw はそれを割る)。`stop=legacy` は製品 step20 と酷似(88,368 / 4.836)。
+- 巻き添え除去(連結性維持のための要求外セル)は dilution 100手中43手(平均0.8セル)、path 48手中21手(平均1.2)で、急変の原因になっている証拠はない。
 
 ## D-3. パラメータ感度(評価予算70)と warm-start
 
-- 3パラメータ(`stagnation_patience`・`prediction_error_multiplier`・`sudden_jump_relative_drop`)を3値ずつ: dilution は全て無感度(rollback 未発動)、path は `prediction_error_multiplier` のみ感度あり(体積スプレッド14.4%。1.5→64,240、2.5→67,272、4.0→57,600 mm³)、他は0.0〜0.2%。既定値(`stagnation_patience=6`・`prediction_error_multiplier=2.5`・`sudden_jump_relative_drop=0.15`)を疑う破綻は出ず**既定のまま据え置き**。未使用検証(dilution 200N・path 2700N/3300N)は既定=選定値なので汎化の検証にはなっていない。
-- warm-start(m5b_raw ゲートの適応、評価予算60): dilution 3.0mm 解像度から投影した 22,248 mm³ は 22,064 mm³・SF 3.899 まで削って目標を割り、path の 04a 優越形(67,800 mm³・SF 4.800)は 60,624 mm³・SF 4.562、path 3.0mm からの投影(109,176 mm³)は 58,896 mm³・SF 4.479。**安全な初期形状から始めても m5b_raw ゲートが削り過ぎる**ので、warm-start で経路喪失を避けられるかには「否」(再配置の warm-start は未実施)。
-- **罠**: warm-start の投影は目的格子(2.0mm)の origin ではなく**投影元の格子自身の origin/spacing** を使う(2.0mm の origin (-16,-16,-16) と 3.0mm の (-16.97,-17.70,-17.76) を取り違える事故があった)。
+- `stagnation_patience`・`prediction_error_multiplier`・`sudden_jump_relative_drop` を3値ずつ: dilution は全て無感度、path は `prediction_error_multiplier` のみ感度あり(体積スプレッド14.4%)。既定値(6・2.5・0.15)を疑う破綻は出ず**据え置き**。
+- warm-start(m5b_raw ゲートの適応): 3.0mm からの投影・04a 優越形(67,800 mm³・SF 4.800)のどれも目標SFを割るまで削った(SF 3.899・4.562・4.479)。**安全な初期形状から始めても m5b_raw ゲートが削り過ぎる**ので、warm-start で経路喪失を避けられるかには「否」。
+- **罠**: warm-start の投影は目的格子の origin ではなく**投影元の格子自身の origin/spacing** を使う(2.0mm と 3.0mm の origin を取り違える事故があった)。
 
 ## D-4. 未検証
 
-late_response(急変検知の遅延)と fine_grained_creep(微小除去の連続を見逃す)の分析は 0 件(42件中)だったが、`m5b_raw` ゲート下では受理手が構造上超過 0 なので観測されないだけで、percentile ゲート×広い評価予算での追試が要る。`calibrated_k` 暴走が hanger 規模(64万要素。序盤の1手が相対的に小さい)で起きるかは未検証。
+late_response・fine_grained_creep は 0 件(42件中)だったが、`m5b_raw` ゲート下では受理手が構造上超過 0 なので観測されないだけ。`calibrated_k` 暴走が hanger 規模で起きるかは未検証(→ 06 で再現した)。
 
 ## D-5. 再現
 
@@ -416,7 +399,7 @@ late_response(急変検知の遅延)と fine_grained_creep(微小除去の連続
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\analyze_05_mechanism_history.py   # 新規FEMなし
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\build_05_synthetic_json.py
 ```
-出力は `output/idle_validation_20260928/05_*.json`(`05_synthetic.json` が集約)と `05_masks/`。共有ヘルパーは `synthetic_matrix_support.py`(条件表・原点シフト/フィルタ幅 mm 固定のプロセス内パッチ・best-so-far 曲線抽出)。
+出力は `output/idle_validation_20260928/05_*.json`(`05_synthetic.json` が集約)と `05_masks/`。共有ヘルパーは `synthetic_matrix_support.py`。
 
 ---
 
@@ -424,15 +407,15 @@ late_response(急変検知の遅延)と fine_grained_creep(微小除去の連続
 
 ## E-1. 低荷重(06。H1=200N・要素2.0mm・最小幅は実寸10mm 固定)
 
-出典: 旧 06_HANGER_LOW(git 履歴)。「製品」は `binary_search.find_best_feasible`(20%歩幅)。本節の表は 3-2 節にも一部載る(step20/step05/適応/再配置)。
+出典: 旧 06_HANGER_LOW(git 履歴)。「製品」は `binary_search.find_best_feasible`(20%歩幅)。
 
 ### E-1-1. 結論
 
-1. **保存形 `hanger_base`(31,337セル・249,716 mm³・21評価)は最小幅5セル(実現9.987mm)で今のコードを走らせると1セルも違わず再現する**。要求の実寸10mm 以上(=6セル、実現11.98mm)にすると同じ製品コードが 139,230 mm³(-44%)・253評価の別の形で止まる(保存形との重なりは新形の60%・保存形の33%)。**最小幅が9.99→11.98mm へ約1セル変わっただけで収束先が別物になる**。保存形に基づく評価(03/03b/04)は「最小幅が実寸10mm に0.013mm足りない形」の結果で、「実現幅を固定せよ」が実際に効く。M5b_raw 69.5→0、KS 48.72→24.96 MPa、評価 21→253回。
-2. **48.72 MPa の荷重パッド端ピークは最小幅5セルの保存形(`hanger_base` と R2)にだけある**。最小幅6セルの新規 step20・解像度1.8/2.2/2.4mm の形には出ず(4ゾーン診断。load ゾーン最大は新規形 6.1〜21.4 MPa)、新規形のピークは固定面から1〜1.7mm の holding ゾーン。5%歩幅形・移植トラスの保存形にも荷重端ピークは無い。**48.72 MPa は「荷重パッド端が一般に破綻する」証拠ではなく5セル最小幅・20%歩幅の特定形の性質**。形の寄与と離散化の寄与は分離していない(同じ形を細分格子へ投影して解き直す検証が未実施)。H2(5000N)の93〜100.8 MPa は固定面近傍(1.2mm)のピークで荷重パッドではない。
-3. **斜材の回復は4方式のどれでも確認できなかった**。長予算(凍結パラメータのまま適応300評価上限・再配置60評価×3サイクル)でも全材料開始の適応・再配置は step20 に届かない: 凍結適応は82評価で自らの停滞則(`finish_stagnation`)に止められ 1,806,870 mm³・SF 84.35、再配置は243評価で 1,555,520 mm³・SF 75.65(3回の「追加」はすべて全材料5.10M mm³への回帰)、`prediction_error` 拒否を外した適応は200評価(`finish_budget_exhausted`)で 557,596 mm³・SF 30.70(step20の4.0倍)。評価を増やしても材料が減らない領域に入って止まる。2.2mm 移植トラス開始の適応だけが 198,413→166,690 mm³・SF 7.97(M5b target 2,212→344、KS 24.96→16.34 MPa)まで進むが、40評価で未収束・M5b target は不合格・トラス専有セル残存78%で、step20 より+20%重い。**長予算の3形は重い代わりに局所応力が低い(M5b target 0・KS 5.7〜8.3 MPa・最大変位0.09〜0.20 mm)だけで、「軽くて局所応力も低い」形ではない**。
-4. **探索結果が格子の位置・解像度に強く依存する**(下記)。収束した8形(step20/step05・解像度3・原点x/y/z)はいずれも製品SF(パーセンタイル)は目標4.8を満たしながら M5b target が 1,140〜3,564 超過で、製品ゲートだけでは局所超過を見逃す(原因1の再現)。
-5. 05 が hanger で未検証とした弱点 2 つが再現した: (a)`prediction_error` ロールバックの暴走(長予算で82評価のうち61件が `prediction_error` で拒否され、実変化が相対5.6e-3〜7e-8でも拒否されて材料が 1.81M mm³ から動かない)、(b)再配置の「追加」は全て `initial_all_material` への回帰。
+1. **保存形 `hanger_base`(31,337セル・249,716 mm³)は最小幅5セル(実現9.987mm)で今のコードを走らせると1セルも違わず再現する**。要求の実寸10mm 以上(=6セル、実現11.98mm)にすると同じ製品コードが 139,230 mm³(-44%)・253評価の別の形で止まる(保存形との重なりは新形の60%)。**最小幅が約1セル変わっただけで収束先が別物になる**ので、保存形に基づく評価(03/03b/04)は「最小幅が実寸10mm に0.013mm足りない形」の結果である。
+2. **48.72 MPa の荷重パッド端ピークは最小幅5セルの保存形にだけある**。最小幅6セルの新規 step20・解像度1.8/2.2/2.4mm の形には出ず(load ゾーン最大 6.1〜21.4 MPa)、新規形のピークは固定面から1〜1.7mm の holding ゾーン。形の寄与と離散化の寄与は分離していない。H2 の 93〜100.8 MPa は固定面近傍のピークで荷重パッドではない。
+3. **斜材の回復は4方式のどれでも確認できなかった**。長予算(適応300評価・再配置60評価×3サイクル)でも全材料開始の適応・再配置は step20 に届かず(1.81M/1.56M mm³・SF 84/76)、`prediction_error` 拒否なしでも 557,596 mm³・SF 30.70(step20 の4.0倍)。**長予算の3形は重い代わりに局所応力が低いだけで、「軽くて局所応力も低い」形ではない**。
+4. **探索結果が格子の位置・解像度に強く依存する**(E-1-3)。収束した8形はいずれも製品SFは目標4.8を満たしながら M5b target が 1,140〜3,564 超過(原因1の再現)。
+5. 05 の弱点2つが hanger で再現した: (a)`prediction_error` ロールバックの暴走(実変化が相対 5.6e-3〜7e-8 でも拒否)、(b)再配置の「追加」は全て `initial_all_material` への回帰。
 
 ### E-1-2. 4方式の比較(H1・最小幅6セル)と保存形の再現
 
@@ -447,7 +430,7 @@ late_response(急変検知の遅延)と fine_grained_creep(微小除去の連続
 | 長予算 再配置(凍結) | 243 | grow_cycles_exhausted | 1,555,520 | 75.65 | 0 | 5.37 | 5.74 | 0.090 | 98.1% | 8.2 |
 | 長予算 適応(`prediction_error` 拒否なし・gate=m5b_target) | 200 | finish_budget_exhausted | 557,596 | 30.70 | 0 | 6.73 | 8.33 | 0.204 | 81.2% | 2.5 |
 
-全材料は 5,098,682 mm³。step20/step05 はどちらも M5b raw は 0。5% 歩幅は20% より+14% 重く(159,327対139,230)、評価は3.4時間対10.3時間。**「歩幅を細かくすれば斜材が戻る」は6セル条件で支持されない**(トラス残存19.9%対18.4%)。縮小予算(50評価・30評価×2)の適応・再配置は未収束の途中経過で step20 と比べない。トラス専有セルの残存率は「2.2mm トラスを当該格子へ投影したマスクのうち5セル最小幅の現行形に無い部分(13,481セル)を最終形がどれだけ含むか」で、現行形5セル版は定義上0%(循環)、重い形ほど高くなる(適応・再配置の98%は体積が大きいためで斜材復元の証拠ではない)。荷重経路としての寄与は測っていない。
+全材料は 5,098,682 mm³。5% 歩幅は 20% より+14% 重く時間は3倍で、**「歩幅を細かくすれば斜材が戻る」は6セル条件で支持されない**。トラス残存率は「2.2mm トラスを当該格子へ投影したマスクのうち5セル現行形に無い部分を最終形がどれだけ含むか」で、重い形ほど高くなる(適応・再配置の98%は体積が大きいためで斜材復元の証拠ではない)。
 
 ### E-1-3. 格子・原点依存(step20、最小幅は実寸固定)
 
@@ -458,7 +441,7 @@ late_response(急変検知の遅延)と fine_grained_creep(微小除去の連続
 | 2.2mm | 5セル(10.99mm) | 196 | 126,400 | **5.234** | 1,140 | 17.75 | 57.5% | 3.5 |
 | 2.4mm | 5セル(12.03mm) | 18 | 176,465 | 4.821 | 3,564 | 22.89 | 28.3% | 0.2 |
 
-2.0mm 基準で 1.8mm +1.6%、2.2mm -9.2%、2.4mm +26.7%(単調でない)。2.2mm は製品ゲートが SF 5.234 の余裕を残して止まり、M5b・KS・M3 とも最良: ゲートと局所評価の順位が一致しない。応力指標は解像度で収束しない(holding ピークが 2.0mm 24.96→1.8mm 34.81 MPa)ので、解像度間の KS・M3・M5b の比較は形の差と特異点の格子依存を分離できていない。
+2.0mm 基準で 1.8mm +1.6%、2.2mm -9.2%、2.4mm +26.7%(単調でない)。応力指標は解像度で収束しない(holding ピーク 2.0mm 24.96→1.8mm 34.81 MPa)ので、解像度間の比較は形の差と特異点の格子依存を分離できていない。
 
 原点+0.5セル(=1.0mm)の移動(2.0mm・6セル):
 
@@ -470,30 +453,23 @@ late_response(急変検知の遅延)と fine_grained_creep(微小除去の連続
 | z +0.5 | 217 | 173,240 | +24.4% | 4.846 | 3,087 |
 | 全軸 +0.5 | 32 | 5,127,648(全材料へ戻された) | 約37倍 | - | - |
 
-単軸+0.5でも材料が-4%〜+48%動く。**全軸+0.5は、探索が 22,915セル(約182,590 mm³)・SF 4.812(`within_target_tolerance`)まで進んだのに、終了時の保持・除外の再検算で除外が `unknown`(`RuntimeError: common-volume boolean did not finish cleanly`、除外体との共通体積ブーリアンが完了しない)となり、製品が seed(全材料643,471セル)へ戻して `evaluation_error` にした**(`run_06_origin_diag.py --force`、約32分、`acceptance.region_check` 99呼び出しのうち pass 以外はこの1件)。全材料に対する同じ検査は pass で、`unknown` は疎な形(約2.3万セル)でだけ出た。根本原因(原点位置と形の幾何の組合せかライブラリ側の不安定さか)は未分離で、捨てられた形のマスクは保存していない。製品 step20 の失敗モードとして記録する(「何も削れなかった」は誤りで、削れて SF 4.812 に達した形を捨てた)。
+**全軸+0.5は、探索が 22,915セル・SF 4.812(`within_target_tolerance`)まで進んだのに、終了時の保持・除外の再検算で除外が `unknown`(`RuntimeError: common-volume boolean did not finish cleanly`)となり、製品が全材料へ戻して `evaluation_error` にした**(`run_06_origin_diag.py --force`。`acceptance.region_check` 99呼び出しのうち pass 以外はこの1件で、疎な形でだけ出た)。根本原因は未分離、捨てられた形のマスクは保存していない。製品 step20 の失敗モードとして記録する。
 
 ### E-1-4. 初期形状(適応 m5b_raw、40評価)
 
-| 開始形 | 開始 mm³ | 終了 mm³ | SF | M5b_target | KS | トラス残存 |
-|---|---:|---:|---:|---:|---:|---|
-| 移植トラス(2.2mm 由来を2.0mm へ投影) | 198,413 | 166,690 | 7.968 | 344 | 16.34 | 100%→78.1% |
-| 粗い骨組み(2.4mm step20 を投影・補修) | 175,687 | 173,551 | **4.459**(目標未達) | 5,490 | 35.67 | 28.8%→28.3% |
-
-移植トラス開始は step20 より+20%重いが局所超過は大きく小さい(未収束・M5b target は不合格のまま。拒否30件のうち29件が `prediction_error`)。粗い骨組みは投影の島処理で連結成分が残らず(21,803セルが条件を満たさず落ちた)保持セル244個・1,944 mm³ を足して補修した形で、体積はほとんど動かず `prediction_error` 拒否が32/40、**m5b_raw ゲートが目標SFを守れない(05)のが hanger でも再現**。粗い格子で見つけた骨組みは細かい格子の良い開始形にならなかった。全材料開始の `prediction_error` 拒否なし版(80評価・562,401 mm³・SF 30.80)は gate=m5b_raw と gate=m5b_target で全く同じマスク: m5b_raw は拒否理由にならず、m5b_target が加えた `safety_gate` 39回はすべて `sudden_jump` でも拒否される候補だったから。**ゲートの差(0%)より `prediction_error` 拒否の有無(-69%)の方が全材料開始の軽量化には効く**が、どちらも目標 SF の6〜18倍で止まる。
-
-全材料開始の適応の挙動: 凍結版は評価0〜3で大きな歩幅(12.8万→6.6万セル)が受理されて材料 5.10M→2.09M mm³(SF 143→92)、評価4以降は拒否が混じり、評価15以降は実変化が相対 1e-4 台以下でも拒否されて 1.81M mm³ のまま。`sudden_jump` は発動せず `revert_restart` は1回。拒否なし版は材料565,000 mm³・SF 31.3 で 36セル程度の候補を削ると SF 31.3→24.3(-22%)・コンプライアンス+66%・変位+70% に落ちる状態に入る(数十セルの小さな部材が荷重経路を握っている。位置は未特定。長予算では評価28〜199で材料-1.8%、1件で抜けるのは評価100以降で40〜454 mm³)。再配置は `grow_accepted` が毎回 `initial_all_material`(41〜44万セル追加)で材料を 5.10M mm³ へ戻す=「全材料からやり直す」と等価。
+移植トラス(2.2mm 由来)開始は 198,413→166,690 mm³・SF 7.968 で step20 より+20%重いが局所超過は小さい(未収束・M5b target 不合格のまま)。粗い骨組み(2.4mm step20 を投影・補修)開始は 173,551 mm³・**SF 4.459(目標未達)**で、**m5b_raw ゲートが目標SFを守れない(05)のが hanger でも再現**。粗い格子で見つけた骨組みは細かい格子の良い開始形にならなかった。全材料開始では gate=m5b_raw と m5b_target が全く同じマスクを返し、**ゲートの差(0%)より `prediction_error` 拒否の有無(-69%)の方が軽量化には効く**が、どちらも目標 SF の6〜18倍で止まる(数十セルの小さな部材が荷重経路を握っている状態に入る。位置は未特定)。
 
 ### E-1-5. 斜材の喪失は静かに進む(最小幅5セル製品 step20 の評価ごとの軌跡)
 
-`run_06_w5_trajectory.py`(最終 31,337セルは保存形と一致)。トラス専有セルの残存: 評価5の98%→評価6の88%→評価12の14%(**評価6〜12に集中**、材料 167,796→43,970セル〈-74%〉、SF 55→17、最大変位 0.16→0.53 mm と製品の判定には現れない)。**評価13の1手で SF 16.99→5.21(-69%)、最大変位 0.53→7.64 mm(14.5倍)**(材料 43,970→35,175セル〈-20%〉)に顕在化するが、製品は SF 5.21 > 目標4.8 なので受理する。適応の `sudden_jump` 閾値(安全率の相対低下0.15・コンプライアンス増0.5・変位増0.5)に照らせばこの手は拒否条件に該当する(同じ候補を実際に適応で評価したわけではない)。残存率は評価0から20まで単調に減り一度も増えない(製品は足し戻さない)。**荷重を運ぶ部材がどれかは未特定。最小幅6セルの形で同じ軌跡かは未確認**(製品が評価ごとの記録を返さない)。
+`run_06_w5_trajectory.py`: トラス専有セルの残存は評価5の98%→評価12の14%(**評価6〜12に集中**。SF 55→17、最大変位 0.16→0.53 mm と製品の判定には現れない)。**評価13の1手で SF 16.99→5.21(-69%)、最大変位 0.53→7.64 mm(14.5倍)**に顕在化するが、製品は SF 5.21 > 目標4.8 なので受理する(適応の `sudden_jump` 閾値なら拒否条件に該当)。残存率は単調に減り一度も増えない。**荷重を運ぶ部材がどれかは未特定。最小幅6セルの形で同じ軌跡かは未確認**。
 
-### E-1-6. 4ゾーン診断(`_fem_probe.zone_masks_with_load`。既存 `zone_masks` は無変更、`analyze_06_load_zone.py`)
+### E-1-6. 4ゾーン診断(`_fem_probe.zone_masks_with_load`。`analyze_06_load_zone.py`)
 
-holding p99.5(最大)/ load p99.5(最大): 保存 hanger_base 15.86(19.39)/ 23.25(**48.72**)、新規 step20 20.78(24.96)/ 5.43(9.44)、1.8mm 23.56(34.81)/ 3.27(6.06)、2.2mm 14.89(17.75)/ 7.14(10.47)、2.4mm 19.53(22.89)/ 14.56(21.42)、H2(5000N・2.4mm)93.23(**100.83**)/ 3.23(3.37)。ピークの位置は新規形で固定面から 0.9〜1.2mm(1.8mm 0.90、2.0mm 1.00、2.2mm 1.10、2.4mm 1.20=**要素サイズの0.5倍で格子に追従**=特異点の特徴)、保存 hanger_base は荷重面から 4.99mm。
+load ゾーン最大: 保存 hanger_base **48.72**、新規 step20 9.44、1.8mm 6.06、2.2mm 10.47、2.4mm 21.42、H2 3.37 MPa。holding ピークの位置は新規形で固定面から 0.90/1.00/1.10/1.20 mm(1.8/2.0/2.2/2.4mm)=**要素サイズの0.5倍で格子に追従**=特異点の特徴。
 
 ### E-1-7. 未検証
 
-凍結パラメータ自体(仕上げの評価上限200・`finish_patience`・`sudden_jump` 閾値)の hanger 固有調整、別乱数・別順位付け(各方式1シード)、原点の負方向・2軸組合せ、斜材の荷重経路としての評価、最小幅6セル形の軌跡。再配置の warm-start 入口は無い。
+凍結パラメータの hanger 固有調整、別乱数・別順位付け(各方式1シード)、原点の負方向・2軸組合せ、斜材の荷重経路としての評価、最小幅6セル形の軌跡。再配置の warm-start 入口は無い。
 
 ### E-1-8. 再現(各スクリプトは冪等=`_common.is_case_done`。`--force` で再実行。FEM ロックを共有するので並行しない。台帳に `status: error` が残っていないか必ず確認する〔例外を握りつぶして終了コード0で終わる〕)
 
@@ -510,33 +486,31 @@ holding p99.5(最大)/ load p99.5(最大): 保存 hanger_base 15.86(19.39)/ 23.2
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\analyze_06_load_zone.py
 .\.venv\Scripts\python.exe topopt_checks\idle_validation\build_06_json.py             # 集約 → 06_hanger_low.json
 ```
-出力は `output/idle_validation_20260928/06_*.json`・`06_masks/`。共有ヘルパーは `hanger_low_support.py`。FEM の総時間は約60.2時間(長予算を除くと約46.9時間)。
+出力は `output/idle_validation_20260928/06_*.json`・`06_masks/`。共有ヘルパーは `hanger_low_support.py`。FEM の総時間は約60時間。
 
 ## E-2. 高荷重・荷重/幅/格子の行列(07。保存済み結果の集計)
 
-出典: 旧 07_HANGER_LOADS(git 履歴)。期限再編(A-3)で縮小した範囲の報告で、元の全検証の完了ではない。出力は `output/idle_validation_20260928/07_corpus_rescore.json`(旧64条件の再採点)・`07_grid.json`(製品 step20 の新28条件=荷重{500,1000,2000}×幅{細い5mm,太い10mm}×格子{1.8,2.0,2.2,2.4}mm の24+200N 細い幅×4格子)・`07_methods.json`・`07_full_material_probe.json`・`07_hanger_loads.json`(集計)・`07_masks/*.npz`(28 step20形・step05 2形・適応3形)。荷重別の92形の判定件数は本人判断1と3-3節、2000N 方式比較も3-3節。
+出典: 旧 07_HANGER_LOADS(git 履歴)。期限再編(A-3)で縮小した範囲の報告。出力は `output/idle_validation_20260928/07_corpus_rescore.json`(旧64条件の再採点)・`07_grid.json`(製品 step20 の新28条件=荷重{500,1000,2000}×幅{細い5mm,太い10mm}×格子{1.8,2.0,2.2,2.4}mm の24+200N 細い幅×4格子)・`07_methods.json`・`07_full_material_probe.json`・`07_hanger_loads.json`(集計)・`07_masks/*.npz`。荷重別の92形の判定件数は本人判断1と3-3節。
 
 ### E-2-1. 結論
 
-- **再現**: 旧64条件(`output/smoothing_corpus`、セル数指定)を同じ評価器で再採点すると製品SF・材料体積が64/64で完全一致。新しい製品 step20 は解決後の格子が同じ条件で旧コーパスと同一マスク(15/15)。要求2.4mm だけは解決後の格子幅が 2.3875mm(旧)→2.4063mm(今のコード)に変わっており同一マスクは 0/7(別条件)。旧64条件(セル数指定)と新28条件(実寸mm指定)は別表で混ぜない。
-- **製品SFのゲートは全92形で満たされる(4.80〜5.23)が、局所の応力は荷重とともに悪化する**。M5b 目標換算と M3 は92/92が不合格。KS の平均は 18.9→24.2→31.7→52.1 MPa(200→2000N)。2000N の全24形が40 MPa を超える。
-- **高応力は荷重が上がるほど固定面近傍(holding)に集中する**: 目標超過量の holding 割合は 55%(200N)→76%→93%→97%(2000N)、荷重面(load)は5%→1%→1%→0%。ピーク位置は92形中85形が holding(固定面から2.12セル以内。2000N は全24形で0.5セル以内)、残りは200N の一般部5・荷重面1と500N の接続部1。**荷重面のピークは200N・最小幅5セルの1形(hanger_base と同じ 249,716 mm³、48.7 MPa、M5b raw 69.5)だけ**。固定面のうち面23(下側)が反力の約48%・塊の超過量の51〜64%を担い、面7・10(上側)は約26%ずつ。
-- **全材料(探索なしの設計空間全体、5,102,427 mm³)の局所ピークは荷重に比例**: 500N 14.1/14.0・1000N 28.0/27.9・2000N 56.0/55.9 MPa(KS/ピーク)。同荷重の製品 step20 形の KS 平均との比は 500N 1.72・1000N 1.13・2000N 0.93: **材料を削ったことによる局所悪化は低荷重ほど大きく、2000N では全材料と同水準**。M5b 目標換算は500N 以上で全材料自身が不合格(585/5,639/28,002)、M5b raw は2000N で全材料自身が不合格(1,077)。500N・1000N の全材料は固定形状診断(新規FEM各約2.5分、`run_07_full_material_probe.py`)、2000N は適応の出発点の値。
-- **2000N の方式比較は成立しない**(ゲートの出発点不成立): 適応(凍結)・再配置(凍結)・拒否なし適応(gate=m5b_target)は削除候補を全件 `safety_gate` で拒否(適応300/300、再配置60/60+追加1件は `min_width` で拒否)し、18.53・3.98・19.08時間かけて出発点と同一の全材料を返した。06 の200N の「`prediction_error` 暴走・全材料回帰」とは別の機構(ゲート自体が出発点で満たされない)。**出発点がゲートを満たすかを全材料1回のFEM(約2.5分)で先に確かめる**と19時間の空回しを避けられる。同じパーセンタイルゲートの step05 対 step20 は 2000N 太い幅 909,886(38評価・1.13時間)対 955,937(-4.8%)、細い幅 794,132(41評価・1.27時間)対 788,458(+0.7%)で、差は小さく符号も逆。
-- **格子と最小幅の効果は分離できない**: 同じ荷重・幅キーで格子を1.8〜2.4mm に振ると材料の最大/最小は 1.04〜1.40(200N 太いが最大、2000N は細い1.04・太い1.10、500N 太い1.08、1000N 太い1.33)。最小幅の実現値(太い幅=6・6・5・5セルで10.79/11.98/10.99/12.03mm、細い幅=3セルで5.39〜7.22mm)が格子と同時に動く。太い/細いの材料比は 1.11〜1.85(2000N は1.11〜1.21、500N・1000N は1.27〜1.85)で、実現幅の大小だけでは説明できない(2000N 太い: 12.03mm〈5セル、2.4mm〉の形 879,104 は 10.79mm〈6セル、1.8mm〉の形 947,708 より小さい)。新28条件の太い幅で500N・1000N の M5b raw が不合格なのは 2.0mm・6セル(11.98mm)の2形(66・404)のみ。
-- **固定面端のピークは格子依存が強い**: 2000N の KS 平均は要求格子 1.8mm 60.9・2.0mm 58.5・2.2mm 45.0・2.4mm 43.7 MPa。特異性か物理かは未切り分け(保存形を細分格子へ投影して解き直す検証が必要)。
-- **荷重と材料**: 200N→2000N(10倍)で材料は8.8倍(細い幅 2.0mm: 89,561→788,458、500N 189,839、1000N 267,478)。最小幅が太いほど材料が増え、2000N の旧64条件では5セル(9.99mm)が 1,063,483 mm³(2〜4セルは 785〜812k)で KS も最悪(66.8 MPa)。
-- 低寄与材料(目標許容の0.1倍未満の体積割合。解析者のしきい値で未校正)は 200N 17〜52%→2000N 1〜7%: 高荷重の形ほど密に使われている。
+- **再現**: 旧64条件を同じ評価器で再採点すると製品SF・材料体積が 64/64 で完全一致。新しい step20 は解決後の格子が同じ条件で旧コーパスと同一マスク(15/15)。要求2.4mm だけは解決後の格子幅が 2.3875mm(旧)→2.4063mm(今のコード)に変わり同一マスクは 0/7(別条件)。
+- **製品SFのゲートは全92形で満たされる(4.80〜5.23)が、局所の応力は荷重とともに悪化する**。KS の平均は 18.9→24.2→31.7→52.1 MPa(200→2000N)。2000N の全24形が 40 MPa を超える。
+- **高応力は荷重が上がるほど固定面近傍(holding)に集中する**(目標超過量の holding 割合 55%→97%)。ピーク位置は92形中85形が holding(2000N は全形で固定面から0.5セル以内)。荷重面のピークは200N・最小幅5セルの1形(`hanger_base` と同一)だけ。固定面のうち面23(下側)が反力の約48%・超過量の51〜64%を担う。
+- **全材料(設計空間全体 5,102,427 mm³)の局所ピークは荷重に比例**(500N 14.0・1000N 27.9・2000N 55.9 MPa)。製品 step20 形の KS 平均との比は 500N 1.72・2000N 0.93: **削ったことによる局所悪化は低荷重ほど大きく、2000N では全材料と同水準**。M5b raw は 2000N で全材料自身が不合格。
+- **2000N の方式比較は成立しない**(ゲートの出発点不成立): 適応・再配置・拒否なし適応は削除候補を全件 `safety_gate` で拒否し、18.53・3.98・19.08時間かけて全材料を返した。**出発点がゲートを満たすかを全材料1回の FEM(約2.5分)で先に確かめる**と空回しを避けられる。同じ percentile ゲートの step05 対 step20 は 2000N で -4.8% / +0.7% と小さく符号も逆。
+- **格子と最小幅の効果は分離できない**: 同じ荷重・幅で格子を 1.8〜2.4mm に振ると材料の最大/最小は 1.04〜1.40。実現最小幅(太い幅=6・6・5・5セル)が格子と同時に動く。太い/細いの材料比 1.11〜1.85 は実現幅の大小だけでは説明できない。
+- **固定面端のピークは格子依存が強い**(2000N の KS 平均は 1.8mm 60.9・2.4mm 43.7 MPa)。特異性か物理かは未切り分け。
+- 荷重10倍(200→2000N)で材料は8.8倍(細い幅 2.0mm: 89,561→788,458 mm³)。低寄与材料(目標許容の0.1倍未満の体積割合)は 200N 17〜52%→2000N 1〜7%。
 
 ### E-2-2. 費用・失敗・中断
 
-- 旧コーパス再採点は1条件12〜102秒(計約45分)。製品 step20 の新28件は0.21〜3.04時間(計17.2時間、13〜178評価。200N 細い幅2.0mm が最長)、**ピークのワーキングセット最大16,878 MB(1.8mm 格子)**。step05 は1.1〜1.3時間。適応は1ケース18.5〜19.1時間(300評価・352FEM、約3.2分/FEM)、再配置は4.0時間。methods だけで累計44.0時間(5件)。
-- **2000N 細い幅の適応(凍結)は 2026-10-05 09:23 に開始、19:04:49 に台帳へ書かず終了コード -1 で終了(約9.7時間)**。checkpoint なし、原因は未特定(本人の期限停止19:40より前なので期限変更の副作用ではない)。origin(16件)は shift_all の1件が中断・残り15件未開始、init(8件)、methods 残り19件は未実施(`deferred_by_user_deadline`。合格として扱わない)。
-- 旧 `chain07.ps1`(methods→origin→init の全行列自動継続)は本人の期限変更で停止・無効化。
+- 旧コーパス再採点は1条件12〜102秒。製品 step20 の新28件は 0.21〜3.04時間(計17.2時間)、**ピークのワーキングセット最大 16,878 MB(1.8mm 格子)**。適応は1ケース 18.5〜19.1時間(約3.2分/FEM)。
+- 2000N 細い幅の適応は約9.7時間走って台帳に書かず終了コード -1 で終了(checkpoint なし、原因未特定)。origin 15件・init 8件・methods 残り19件は未実施(`deferred_by_user_deadline`)。旧 `chain07.ps1`(全行列自動継続)は本人の期限変更で無効化。
 
 ### E-2-3. 限界と物理入力不明
 
-荷重500〜2000N が実機の想定か、固定面を完全固定とするモデルが実機の拘束を表すかは外部入力待ちで、結論はこの2点に左右される(固定面端のピークが主因)。1シード・1回、格子と実現幅の同時変化、原点・初期形状は未実施、全材料の算術外挿(約300N 目標換算・約1,430N raw)は実走で確認していない。
+荷重500〜2000N が実機の想定か、固定面を完全固定とするモデルが実機の拘束を表すかは外部入力待ちで、結論はこの2点に左右される(固定面端のピークが主因)。1シード・1回、格子と実現幅の同時変化、原点・初期形状は未実施、全材料の算術外挿(約1,430N raw)は実走で確認していない。
 
 ### E-2-4. 再現
 
@@ -547,30 +521,30 @@ holding p99.5(最大)/ load p99.5(最大): 保存 hanger_base 15.86(19.39)/ 23.2
 .venv/Scripts/python.exe topopt_checks/idle_validation/run_07_full_material_probe.py --case F1000
 .venv/Scripts/python.exe topopt_checks/idle_validation/build_07_json.py                       # 新規FEMなし
 ```
-共有ヘルパーは `hanger_loads_support.py`。`07_masks/` は 09 の代表形の候補(`F2000_thick10mm_h2_step20`・`F0500_thin5mm_h2_step20` など)。適応3形は出発点なので完成形の候補ではない。
+共有ヘルパーは `hanger_loads_support.py`。`07_masks/` は 09 の代表形の候補。適応3形は出発点なので完成形の候補ではない。
 
 ---
 
 # 付録F: 探索不具合の監査と研究用修正(08)
 
-出典: 旧 08_ROBUSTNESS(git 履歴)。期限再編(A-3)の小型8実行(各20分 wall timeout、計約9分、timeout 0件)。修正は `search_methods.py` のみで製品コードは無変更。出力は `output/idle_validation_20260928/08_*.json`(`08_robustness.json` が集約。`08_runs.json` が実行台帳)。数値の要点は 3-1・3-2節と結論4、推奨案の表。
+出典: 旧 08_ROBUSTNESS(git 履歴)。期限再編(A-3)の小型8実行(各20分 wall timeout、計約9分)。修正は `search_methods.py` のみで製品コードは無変更。出力は `output/idle_validation_20260928/08_*.json`(`08_robustness.json` が集約、`08_runs.json` が台帳)。
 
-## F-1. 監査(新規FEMなし。`analyze_08_audit.py` → `08_audit.json`。04〜07の保存台帳から重複除去後57実行を数えた)
+## F-1. 監査(新規FEMなし。`analyze_08_audit.py` → `08_audit.json`。04〜07の保存台帳から重複除去後57実行)
 
-- **予測誤差の小分母による過剰拒否**: `_run_adaptive_impl` の `prediction_error = actual_jump > predicted_jump × 2.5`(`predicted_jump = calibrated_k × 削除エネルギー比`。`calibrated_k` は最初に受理された1手で一度だけ較正)。倍率2.5既定の52実行・6,791手で 2,119手(31%)が `prediction_error` で拒否され、うち 2,100手はゲートも急変検知も通っていた。その実ジャンプ(M3最悪ゾーンの一手あたり相対変化)は中央値 1.6e-4(受理された手の中央値 1.1e-4 と同じ桁)、2,097/2,100手が1%以下。実ジャンプが微小でも予測値がさらに小さいと比だけが倍率を超える。拒否が続くと削除できる手が尽きて材料が動かない(05 の dilution 3.0mm・path 1.5mm、06 の hanger H1)。
-- **再配置の追加が全材料へ戻る**: 再配置21実行・追加59件が全件 `initial_all_material` 由来で、追加後の材料は初期全材料の99.4%以上。最長の連結成分を丸ごと足す実装で、単純な形状では削除済みセル全体が1つの成分になるため。
-- **ゲートの不一致**: 受理ゲート m5b_raw の50実行のうち27実行は製品SFが目標4.8未満(最小3.85)。percentile の5実行は目標換算を満たさない。ゲートの違う形は体積だけで順位付けできない。
-- **出発点がゲートを満たさないと探索が動かない**(07): `prediction_error` 0件で 1-1 とは別の機構。
+- **予測誤差の小分母による過剰拒否**: `prediction_error = actual_jump > predicted_jump × 2.5`(`calibrated_k` は最初の受理1手で一度だけ較正)。52実行・6,791手で 2,119手(31%)が `prediction_error` で拒否され、うち 2,100手はゲートも急変検知も通っていた(実ジャンプ中央値 1.6e-4 は受理手と同じ桁)。実ジャンプが微小でも予測値がさらに小さいと比だけが倍率を超える。
+- **再配置の追加が全材料へ戻る**: 21実行・追加59件が全件 `initial_all_material` 由来(追加後の材料は初期全材料の99.4%以上)。
+- **ゲートの不一致**: 受理ゲート m5b_raw の50実行のうち27実行は製品SFが目標4.8未満(最小3.85)。
+- **出発点がゲートを満たさないと探索が動かない**(07): `prediction_error` 0件で上とは別の機構。
 
 ## F-2. 研究用修正(既定はすべて旧挙動)
 
 | 設定 | 内容 |
 |---|---|
 | `AdaptiveConfig.prediction_error_floor`(0.0) | 実ジャンプがこの値以下なら予測誤差で拒否しない(`actual > max(予測×倍率, floor)`)。0.01 は拒否手の分布を見て置いた丸め値で未調整・感度未測定 |
-| `ReallocationConfig.grow_max_fraction_of_removed`(None) | 追加1回の上限=削除済みセル数×この割合。超える連結成分は候補から外し、候補が尽きたときの局所表面追加も上限に抑え、目標換算しきい値超過セルの近くから足す |
+| `ReallocationConfig.grow_max_fraction_of_removed`(None) | 追加1回の上限=削除済みセル数×この割合。超える連結成分は候補から外す |
 | `AdaptiveConfig.stop_if_start_fails_gate`(False) | 開始形が受理ゲートを満たさなければ `stop_reason="start_fails_gate"` で戻る(`resume_from` 付きでは見ない) |
 
-修正前の3件(d3・p15 の before と step20)は 05 の保存結果と同一のマスクハッシュを再現した。
+修正前の3件は 05 の保存結果と同一のマスクハッシュを再現した。
 
 ## F-3. 小型比較(同じ格子・実現最小幅・荷重・ゲート・初期形・予算のペアだけを比べた)
 
@@ -583,15 +557,14 @@ holding p99.5(最大)/ load p99.5(最大): 保存 hanger_base 15.86(19.39)/ 23.2
 | dilution 3.0mm | 製品 step20 | percentile | 23,440 | 4.837 | 合格/不合格 | 39 | converged |
 | 同 | 適応(floor 0.01) | percentile | 24,854(+6.0%) | 4.801 | 合格/不合格 | 53 | finish_stagnation |
 
-- 拒否理由の内訳: dilution 3.0mm の m5b_raw は修正前 `prediction_error` 32件、修正後 `prediction_error` 54・`sudden_jump` 51・`safety_gate` 40(1手に複数の理由)。path 1.5mm は修正前8件・修正後0件。
-- **体積-64%は目標SFの低下(4.04・4.03)と引き換え**で「改善」ではない。percentile に揃えると修正後の適応は step20 より+6.0%重い。percentile ゲートで floor が効くかは未確認(floor 有無の percentile 対照は未実施)。
-- 再配置(dilution 300N・2.0mm・6mm・m5b_raw・seed43・60評価×3サイクル、追加上限10%。修正前は再実行せず 05 の保存値を対照): 追加は 2セル(初期全材料由来)・248セル・180セル(実行内履歴由来)で全材料復帰は止まったが、最終 64,496 mm³・SF 4.744 は同条件の適応(05保存値 57,768 mm³・SF 4.713)より+11.6%重く、予測誤差拒否が78件再発(floor 未併用)。cap+floor の併用は未実施。
-- 出発点不成立の早期停止(dilution 300N・2.0mm・6mm・gate=m5b_target、出発点は全材料157,376 mm³・製品SF 5.588・目標換算超過192.9): FEM1回・2秒で `start_fails_gate`。修正前の同条件対照は未実施。
-- 最良形7件すべてで最小幅・正則境界・単一成分・閉空洞を検査して満たした(`check_08_final_masks.py` → `08_mask_checks.json`)。
+- **体積-64%は目標SFの低下(4.04・4.03)と引き換え**で「改善」ではない。percentile に揃えると修正後の適応は step20 より+6.0%重い。percentile ゲートで floor が効くかは未確認。
+- 再配置(dilution 300N・2.0mm・6mm・m5b_raw・追加上限10%): 全材料復帰は止まったが最終 64,496 mm³・SF 4.744 は同条件の適応(57,768 mm³)より+11.6%重く、予測誤差拒否が78件再発(floor 未併用)。
+- 出発点不成立の早期停止(gate=m5b_target): FEM1回・2秒で `start_fails_gate`。修正前の対照は未実施。
+- 最良形7件すべてで最小幅・正則境界・単一成分・閉空洞を満たした(`check_08_final_masks.py`)。
 
 ## F-4. 限界・未実施
 
-小型2種の3条件・各1実行(seed固定)。`calibrated_k` の単点較正そのものは直していない(修正後も dilution 3.0mm m5b_raw で予測誤差拒否が54件残る)。未実施: percentile ゲートでの floor 対照・再配置の cap と floor の併用・予測係数の再較正・m5b_raw と percentile を同時に課す複合ゲート・早期停止の修正前対照・floor 値の感度。
+小型2種の3条件・各1実行(seed固定)。`calibrated_k` の単点較正そのものは直していない(修正後も dilution 3.0mm で予測誤差拒否が54件残る)。未実施: percentile ゲートでの floor 対照・再配置の cap と floor の併用・予測係数の再較正・複合ゲート・早期停止の修正前対照・floor 値の感度。
 
 ## F-5. 再現
 
@@ -601,30 +574,30 @@ holding p99.5(最大)/ load p99.5(最大): 保存 hanger_base 15.86(19.39)/ 23.2
 .venv\Scripts\python.exe topopt_checks\idle_validation\check_08_final_masks.py      # 最良形検査(FEMなし)
 .venv\Scripts\python.exe topopt_checks\idle_validation\build_08_json.py             # 機械可読まとめ
 ```
-`run_08_robustness.py` は台帳 `08_runs.json` に書き、`LEDGER_NOT_OK` が出たら終了コード2。**終了コード0だけでは合格とせず台帳の `status` を読む**。最初の1件(`d3_adaptive_raw_after`)はチェックポイント保存時の Windows `os.replace` の一時的な `PermissionError` で台帳に書かず落ちたため1回再起動した。
+`run_08_robustness.py` は台帳 `08_runs.json` に書き、`LEDGER_NOT_OK` が出たら終了コード2。**終了コード0だけでは合格とせず台帳の `status` を読む**。チェックポイント保存時の Windows `os.replace` が一時的な `PermissionError` を出して台帳に書かず落ちることがある(再起動で通る)。
 
 ---
 
 # 付録G: 代表完成形の検証(09)
 
-出典: 旧 09_FINAL_SHAPES(git 履歴)。期限再編(A-3)の範囲(新規最適化なし、計約13分、timeout 0件)。数値は旧 B-rep 経路での記録で、2026-10-06 の最終処理のメッシュ集合演算への切り替え後は `final_shapes_09.py convert` が製品のメッシュ集合演算を使い検査結果を `final.mesh_checks` に保存する。`diagnose_cut_09.py` は旧 B-rep の失敗を再現する専用ツール(OCCT 演算を自身に持つ)で、`convert` と `cutdiag` は異なる経路を検証する。
+出典: 旧 09_FINAL_SHAPES(git 履歴)。期限再編(A-3)の範囲(新規最適化なし)。数値は旧 B-rep 経路での記録で、2026-10-06 の最終処理のメッシュ集合演算への切り替え後は `final_shapes_09.py convert` が製品のメッシュ集合演算を使い検査結果を `final.mesh_checks` に保存する。`diagnose_cut_09.py` は旧 B-rep の失敗を再現する専用ツールで、`convert` と `cutdiag` は異なる経路を検証する。
 
 ## G-1. 選んだ形(保存済みの探索結果から選定。最終形として保存されたものではない)
 
 | 形 | 役割 | 条件 | マスク |
 |---|---|---|---|
-| S1_dil25_realloc | 小型の代表改善形(05 の45形のうち、同条件の製品step20より軽く製品SFが4.776以上の11形の中で、新方式の形は dilution 2.5mm の適応-1.1%・再配置-3.8%だけ。その大きい方) | dilution_small・300N・2.5mm(実2.513mm)・最小幅3セル=7.54mm・再配置・m5b_raw・243評価 | `05_masks/dilution_res2.5_w6_reallocation_best_ever.npz` |
-| S1c_dil25_step20(対照) | S1 の同条件・製品step20(14評価) | 同上 | `05_masks/dilution_res2.5_w6_step20_best_ever.npz` |
-| S2_hanger200_step20 | hanger 低荷重の合格候補(06 の H1 step20。SF 4.84・M5b raw 0。M5b目標は不合格) | 200N・2.0mm(実1.997mm)・6セル=11.98mm・253評価 | `06_masks/hanger_h1_baseline_step20_best_ever.npz` |
-| S3_hanger2000_step20 | hanger 高荷重の代表(07 の2000N太い幅2.2mm。M5b raw 118.6=その格子4種で最小。出発点の全材料自身が不合格) | 2000N・2.2mm(実2.199mm)・5セル=10.99mm・13評価 | `07_masks/F2000_thick10mm_h2.2_step20_best_ever.npz` |
+| S1_dil25_realloc | 小型の代表改善形(同条件の step20 より軽く製品SF 4.776 以上の新方式の形は dilution 2.5mm の2形だけ。その大きい方) | dilution_small・300N・2.5mm(実2.513mm)・最小幅3セル=7.54mm・再配置・m5b_raw・243評価 | `05_masks/dilution_res2.5_w6_reallocation_best_ever.npz` |
+| S1c_dil25_step20(対照) | S1 の同条件・製品 step20(14評価) | 同上 | `05_masks/dilution_res2.5_w6_step20_best_ever.npz` |
+| S2_hanger200_step20 | hanger 低荷重の合格候補(06 の H1 step20) | 200N・2.0mm(実1.997mm)・6セル=11.98mm・253評価 | `06_masks/hanger_h1_baseline_step20_best_ever.npz` |
+| S3_hanger2000_step20 | hanger 高荷重の代表(07 の 2000N 太い幅 2.2mm。出発点の全材料自身が M5b raw 不合格) | 2000N・2.2mm(実2.199mm)・5セル=10.99mm・13評価 | `07_masks/F2000_thick10mm_h2.2_step20_best_ever.npz` |
 
-4形とも平滑化前のボクセルで最小幅(保持セル免除)・水密・単一成分・閉空洞なし・荷重/固定面の節点被覆・保持の欠け0が合格。
+4形とも平滑化前のボクセルで最小幅(保持セル免除)・水密・単一成分・閉空洞なし・節点被覆・保持の欠け0が合格。
 
 ## G-2. 結論
 
-- **製品の最終形が成立したのは小型の2形(S1・S1c)だけ**。水密・単一ソリッド・自己交差0で約5秒(S1 76,745 mm³・4,344三角形、S1c 79,645 mm³)。hanger の2形は保持ボディを引く最初のブーリアン(`material-cut`)で、保持の表面に沿って残る体積0.001〜266 mm³ の薄い破片のため単一ソリッドにならず(S2 13個・S3 10個)、S3 は OCCT が結果を不正とした(S2 は TooSmallEdge ×3 の警告、S3 は NotSplittableEdge・SolidBuilderUnusedFaces)。除外のみを引くと単一ソリッドのまま、保持のみを引くと S2 24個・S3 8個に割れる。**S3 の保持のみの cut は取り除いた体積が元のボクセルマスクと保持ボディの共通体積17,725 mm³ の約15%(2,704)しかなく、「妥当」な結果でも体積が合わない**(原因は未特定。S2 は 18,675 対 18,008 で整合)。
-- 旧コーパス64形(2026-09-26、同じ製品コード)も57形が最終形の段階で失敗(`material-cut` 28・三角形分割系18・最終ソリッドの自己干渉検査未完了6・`preserve-fuse` 3・最終検査不合格2)、成立したのは7形(`F0200_h2.2_w2`・`F0200_h2.4_w2`・`F0200_h2.4_w4`・`F0500_h2.2_w5`・`F1000_h2.2_w5`・`F2000_h2.2_w4`・`F2000_h2.4_w5`)。`F2000_h2.2_w5` は S3 と同一マスクで同様に不成立。出典 `output/smoothing_corpus/final_manifest.json`。**これは今回の不要材料の話とは独立の製品の既知の問題**(最終処理のメッシュ集合演算化は TOPOPT.md)。
-- **平滑化後のメッシュを同格子へ再占有化して解いた結果は保存値とほぼ同じ**(最終形の S1・S1c と、最終形が無い S2・S3 は平滑化メッシュ+保持セルの足し戻し=近似。最終CADそのものでも細格子でもない):
+- **製品の最終形が成立したのは小型の2形(S1・S1c)だけ**(水密・単一ソリッド・自己交差0、約5秒)。hanger の2形は保持ボディを引く最初のブーリアン(`material-cut`)で、保持の表面に沿って残る体積 0.001〜266 mm³ の薄い破片のため単一ソリッドにならず(S2 13個・S3 10個)、S3 は OCCT が結果を不正とした。**S3 の保持のみの cut は取り除いた体積が共通体積の約15%しかなく、「妥当」な結果でも体積が合わない**(原因未特定)。
+- 旧コーパス64形も57形が最終形の段階で失敗(`material-cut` 28・三角形分割系18・自己干渉検査未完了6・`preserve-fuse` 3・最終検査不合格2。出典 `output/smoothing_corpus/final_manifest.json`)。**これは不要材料の話とは独立の製品の既知の問題**(最終処理のメッシュ集合演算化は TOPOPT.md)。
+- **平滑化後のメッシュを同格子へ再占有化して解いた結果は保存値とほぼ同じ**(S2・S3 は平滑化メッシュ+保持セルの足し戻し=近似):
 
 | 形 | 材料 mm³ | 製品SF(保存値) | M5b raw(保存値) | M5b目標(保存値) | KS | ピーク(固定面から) |
 |---|---:|---|---|---|---:|---|
@@ -633,13 +606,13 @@ holding p99.5(最大)/ load p99.5(最大): 保存 hanger_base 15.86(19.39)/ 23.2
 | S2 平滑化+保持 | 139,501 | 4.8189(4.8418) | 0(0) | 2,200.7(2,212.2) | 24.94 | holding 24.94(1.00mm) |
 | S3 平滑化+保持 | 868,360 | 4.8618(4.8383) | 118.5(118.6) | 28,474.8(28,406.6) | 45.94 | holding 45.94(1.10mm) |
 
-  製品SFは保存値から±0.5%以内、材料は+0.09〜+0.33%。M3 は4形とも不合格。再占有化は元のセル占有からほぼ動かない(IoU 0.987〜0.994)ので、**同じ格子で同じ評価が出る確認であって、細格子でも安全という確認ではない**(保持部の局所ピークは格子細分で増える)。S1 対 S1c は材料-3.6%・SF 4.8187 対 4.8357・M5b目標 192.9 対 190.6 だが、探索の受理ゲートが違う(M5b raw 対パーセンタイル)ので優劣の根拠にしない。釣り合い残差は全形 2e-7 N 以下。
-- **平滑化は最小幅をおよそ半セル〜1セル細らせる**: 最小幅の保証は平滑化前のボクセルで成立している(元のボクセルを半格子へ単純に細分した対照は損失0)が、平滑化後のメッシュを半格子へ占有化して要求幅の立方の opening で失う材料の割合は、S2(実現11.98mm・要求10mm)で 10.0mm 立方 3.25%・11.0mm 11.1%・12.0mm 39.9%、S3(実現10.99mm)で 9.9mm 1.18%・11.0mm 1.86%、小型は要求6mm付近で 0.5%未満(S1 6.3mm 0.17%、S1c 6.3mm 0.46%、7.5mm 1.28%)。**「要求最小幅を平滑化後の形が満たす」とは言えない(hanger で特に)**。ただし opening は角・接合部の丸めでも損失を出すので損失の全部が違反ではなく、部材の断面厚さが11mm 未満になったとは断定できない(表面生成による角の丸めと測定格子の影響は [TOPOPT_MIN_WIDTH.md](../TOPOPT_MIN_WIDTH.md) 4.3 節の完成形の幅と強度の原因解析)。S2 の「10.0mm」は厳密には9.98695mm。製品の合否は平滑化前のボクセルの最小幅で、平滑化後のメッシュの幅は検査していない。
-- **平滑化メッシュ単独(足し戻しなし)は荷重・拘束が成立しない**: 同格子へ再占有化すると保持セルが S2 で10個・S3 で12個欠け、荷重面の節点1〜6個(S2 は固定面の節点1個も)が材料から外れて FEM の条件確認が通らない。製品の最終ブーリアンは保持を fuse で足し戻すので、保持の足し戻しが必須。小型は最終形で条件確認が通る。hanger の平滑化メッシュは除外ボディに 503 mm³(S2)・1,386 mm³(S3)侵入し、最終形が成立しないので除外の遵守は未確認。
+  製品SFは保存値から±0.5%以内、材料は+0.09〜+0.33%、IoU 0.987〜0.994。**同じ格子で同じ評価が出る確認であって、細格子でも安全という確認ではない**。S1 対 S1c は探索の受理ゲートが違うので優劣の根拠にしない。
+- **平滑化は最小幅をおよそ半セル〜1セル細らせる**: 平滑化後のメッシュを半格子へ占有化して要求幅の立方の opening で失う材料の割合は、S2(実現11.98mm・要求10mm)で 10.0mm 立方 3.25%・11.0mm 11.1%・12.0mm 39.9%、S3 で 9.9mm 1.18%、小型は要求6mm付近で 0.5%未満。**「要求最小幅を平滑化後の形が満たす」とは言えない(hanger で特に)**。ただし opening は角・接合部の丸めでも損失を出すので損失の全部が違反ではない([TOPOPT_MIN_WIDTH.md](../TOPOPT_MIN_WIDTH.md))。製品の合否は平滑化前のボクセルの最小幅で、平滑化後の幅は検査していない。
+- **平滑化メッシュ単独(足し戻しなし)は荷重・拘束が成立しない**(同格子へ再占有化すると保持セル・荷重面の節点が材料から外れる)ので保持の足し戻しが必須。hanger の平滑化メッシュは除外ボディに 503 mm³(S2)・1,386 mm³(S3)侵入し、除外の遵守は未確認。
 
 ## G-3. 未検証
 
-最終CADの細格子 FEM、hanger の最終ブーリアン(薄い破片)の修正と再検証、`F0500_h2.2_w5`・`F1000_h2.2_w5` の最終形の再解析(07 の `F0500_thick10mm_h2.2`・`F1000_thick10mm_h2.2` と同一マスク)、小型の複数条件・同ゲートでの追試(例: dilution 250N・step05)。小型の最終メッシュは `09_work/*_final_mesh.npz` に保存(細格子再解析の入力にできる)。
+最終CADの細格子 FEM、hanger の最終ブーリアン(薄い破片)の修正と再検証、`F0500_h2.2_w5`・`F1000_h2.2_w5` の最終形の再解析、小型の複数条件・同ゲートでの追試。小型の最終メッシュは `09_work/*_final_mesh.npz` に保存(細格子再解析の入力にできる)。
 
 ## G-4. 再現
 
@@ -649,4 +622,4 @@ holding p99.5(最大)/ load p99.5(最大): 保存 hanger_base 15.86(19.39)/ 23.2
 .venv\Scripts\python.exe topopt_checks\idle_validation\run_09_final_shapes.py --job resolve:S2_hanger200_step20:smoothed_keep
 .venv\Scripts\python.exe topopt_checks\idle_validation\build_09_json.py                                               # 機械可読まとめ(FEMなし)
 ```
-各ジョブは新しい OS プロセスで走り wall timeout(小型1200秒・hanger 形状変換1800秒・FEM 2700秒)を超えたら子の木を止めて台帳に `timeout` を残す。**`convert` ジョブは `finalize` が不成立でもジョブ自体は `ok`** なので、最終形の成否は台帳の `final_status`(結果JSONの `final.status`)で読む。出力は `output/idle_validation_20260928/09_*.json`・`09_runs.json`・`09_work/`。
+各ジョブは新しい OS プロセスで走り wall timeout(小型1200秒・hanger 形状変換1800秒・FEM 2700秒)を超えたら台帳に `timeout` を残す。**`convert` ジョブは `finalize` が不成立でもジョブ自体は `ok`** なので、最終形の成否は台帳の `final_status` で読む。出力は `output/idle_validation_20260928/09_*.json`・`09_runs.json`・`09_work/`。

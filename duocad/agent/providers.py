@@ -3,10 +3,9 @@
 - `openai_compat`  … llama-server などのOpenAI互換(`POST /v1/chat/completions`)
 - `anthropic`      … Claude API(`POST /v1/messages`)。APIキーで課金される
 
-**中立の往復型がここが層の境目**: ループは `UserTurn` / `AssistantTurn` / `ToolResultTurn` の
-3つだけを積み、**プロバイダ固有の本文の形はアダプタの中の話**である。逆にアダプタは
-`DocumentTools` も `Session` も知らない —— 受け取るのは `descriptors()` が返したツール定義
-そのままである(定義を書き写す場所を作らない)。
+**中立の往復型が層の境目**: ループは `UserTurn` / `AssistantTurn` / `ToolResultTurn` の
+3つだけを積み、プロバイダ固有の本文の形はアダプタの中の話。アダプタは `DocumentTools` も
+`Session` も知らず、`descriptors()` が返したツール定義をそのまま受け取る。
 
 **APIキーの取り回し(セキュリティ要件)**:
 
@@ -111,10 +110,8 @@ class ProviderError(RuntimeError):
 class ProviderTimeout(ProviderError):
     """**待ち時間切れ**だけを表す。
 
-    接続拒否やHTTP 5xxと**同じ型にしない** —— 呼び出し側(`AgentLoop`)は、自分が
-    合計時間の予算で待ちを縮めたときだけ、これを「こちらの都合による打ち切り」と
-    読み替える。型が同じだと、本物の障害まで `timeout` と名乗ることになり、
-    直す場所を見誤らせる。`ProviderError` を捕まえている既存の経路はそのまま効く。
+    接続拒否やHTTP 5xxと**同じ型にしない** —— `AgentLoop` は自分が合計時間の予算で待ちを
+    縮めたときだけ、これを「こちらの都合による打ち切り」と読み替える。
     """
 
 
@@ -215,9 +212,8 @@ class ProviderReply:
 def _redact(text: str, secret: Optional[str]) -> str:
     """例外メッセージから鍵を消す。
 
-    HTTPライブラリは不正なヘッダ値を例外文へそのまま載せる(例: 改行入りのキー)。**載せるときは
-    `repr` の形**(`b'sk-...\\n...'`)なので、元の文字列との一致だけでは改行入りのキーを消せない。
-    外へ出る文字列は**必ず**ここを通す。
+    HTTPライブラリは不正なヘッダ値を例外文へ載せる(例: 改行入りのキー)。**載せるときは
+    `repr` の形**(`b'sk-...\\n...'`)なので、元の文字列との一致だけでは消せない。
     """
     if not secret:
         return text
@@ -229,9 +225,7 @@ def _redact(text: str, secret: Optional[str]) -> str:
 def _redacted(error: Exception, secret: Optional[str]) -> ProviderError:
     """外へ投げる例外へ詰め替える(鍵を消す)。
 
-    **`ProviderError` の型をそのまま保って作り直す**。`ProviderError(...)` と書くと
-    `ProviderTimeout` がただの `ProviderError` へ潰れる —— 呼び出し側は待ち時間切れだけを
-    別扱いするので、ここで型が消えると本物の障害と区別できなくなる。
+    **`ProviderError` の型を保って作り直す**(`ProviderTimeout` が潰れると呼び出し側が区別できない)。
     """
     if isinstance(error, ProviderError):
         return type(error)(_redact(str(error), secret), status=error.status)
@@ -316,11 +310,10 @@ def _assemble(chunks: Iterator[dict], url: str) -> dict:
 def _assemble_anthropic(events: Iterator[dict], url: str) -> dict:
     """Claude のストリーミング断片を、非streamingの `POST /v1/messages` と同じ形の辞書へ畳む。
 
-    **終わりは `message_stop` で知る** —— `[DONE]` は来ないので、そこで読むのをやめないと
-    接続の終わりを「途中で切れた」と取る。
+    **終わりは `message_stop` で知る**(`[DONE]` は来ない)。
 
-    thinkingブロックは**本文が空でも署名ごと残す**(既定では思考の本文は返らず `signature` だけが来る)。
-    次の往復でそのまま送り返す約束なので(`AnthropicProvider.render_messages`)、ここで落とすとその会話の
+    thinkingブロックは**本文が空でも署名ごと残す**(既定では `signature` だけが来る)。
+    次の往復でそのまま送り返す約束なので(`AnthropicProvider.render_messages`)、落とすとその会話の
     思考が捨てられる。ツール呼び出しの引数は文字列の断片で届くので、ブロックが閉じたときにparseする。
     """
     message: dict = {}
@@ -418,12 +411,11 @@ class StreamingTransport:
         with self._lock:
             self._aborted = False
         try:
-            # **送る前に繋いでソケットを控え、そこで中断を見る。** 控えた後の中断は `abort` が接続を
-            # 閉じ、控える前の中断はここで拾うので、中断した依頼が送られる隙間が無い(課金される相手では
-            # 1回の送信がそのまま請求になる)。サーバが接続を閉じる応答(`Connection: close`)だと
-            # `getresponse()` が `connection.sock` を `None` にするので、応答の後からは取れない。
-            # HTTPS の握手の最中はまだ控えていないので、その間の中断は握手が終わるか待ち時間が切れるまで
-            # 効かない(終われば下で止まり、送りはしない)。
+            # 送る前に繋いでソケットを控え、そこで中断を見る。控えた後の中断は `abort` が接続を閉じ、
+            # 控える前の中断はここで拾うので、中断した依頼が送られる隙間が無い(課金される相手では
+            # 1回の送信がそのまま請求になる)。`Connection: close` の応答だと `getresponse()` が
+            # `connection.sock` を `None` にするので、応答の後からは取れない。
+            # HTTPS の握手の最中の中断は、握手が終わるか待ち時間が切れるまで効かない(終われば送らない)。
             connection.connect()
             with self._lock:
                 self._sock = connection.sock
@@ -503,10 +495,8 @@ def post_json(url: str, payload: Optional[dict], headers: dict, timeout: float) 
             f"HTTP {error.code} from {_origin(url)}: {detail}", status=error.code
         ) from None
     except urllib.error.URLError as error:
-        # **待ち時間切れが `URLError` に包まれて来る経路がある**。
-        # 接続の段階で切れると urllib は `URLError(reason=TimeoutError(...))` を投げ、
-        # この節が下の `except TimeoutError` より先に捕まえてしまう。包みの中を見て
-        # 名前を付け直さないと、こちらの予算による打ち切りが「接続できない」になる。
+        # 接続の段階で切れると urllib は `URLError(reason=TimeoutError(...))` を投げ、下の
+        # `except TimeoutError` より先にここへ来る。名前を付け直さないと予算による打ち切りが「接続できない」になる。
         if isinstance(error.reason, TimeoutError):
             raise ProviderTimeout(
                 f"{_origin(url)} が {timeout:g}s で返らなかった"
@@ -1131,10 +1121,9 @@ class AnthropicProvider(Provider):
 def _neutral_stop(raw: str, has_tool_calls: bool, truncated: set) -> str:
     """プロバイダの停止理由 → ループが分岐する4語彙 + `other`。
 
-    **打ち切りの判定がツール呼び出しより先**である。上限で切られた応答にも
-    `tool_calls` は載りうるが、その引数のJSONは**途中で切れている可能性がある**
-    —— `tool_use` に丸めると、ループは切れた引数のまま
-    ツールを実行してしまう(`loop.py` がここで止める理由)。
+    **打ち切りの判定がツール呼び出しより先**。上限で切られた応答にも `tool_calls` は載りうるが
+    引数のJSONが途中で切れている可能性があり、`tool_use` に丸めると切れた引数のまま実行される
+    (`loop.py` がここで止める理由)。
     """
     if raw in truncated:
         return "max_tokens"

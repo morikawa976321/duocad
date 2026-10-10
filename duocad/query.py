@@ -50,10 +50,9 @@ def volume(shape: Any) -> float:
 def describe_edges(shape: Any) -> list:
     """辺を1始まりの添字つきで列挙する(フィレット・面取りの辺はここから選ぶ)。
 
-    **添字と種別は `kernel` 側から取る**(`edge_count` / `edge_of` / `classify_edge`)。
-    build123d の `.edges()` も内部では同じ `TopExp.MapShapes_s` を使うが、その順序が
-    `kernel._edge_map` と一致することは保証されていない。ずれると**選んだ辺と違う辺が丸まる**
-    という、例外も出ない静かな事故になるので、build123d は長さと端点の計測にだけ使う。
+    **添字と種別は `kernel` 側から取る**。build123d の `.edges()` の順序が `kernel._edge_map`
+    と一致する保証は無く、ずれると**選んだ辺と違う辺が丸まる**ので、build123d は長さと端点の
+    計測にだけ使う。
 
     `start` / `end` は辺の端点(閉じた辺=円などでは同じ点になる)。
     """
@@ -79,13 +78,13 @@ def describe_edges(shape: Any) -> list:
 def face_centroid(shape: Any, face_index: int) -> list:
     """面1枚の**面積重心**(`CenterOf.MASS`)をワールド座標[mm]で返す。
 
-    **`face_fingerprint` の `center` とは別物である。** あちらは `Face.center()` の既定
+    **`face_fingerprint` の `center` とは別物。** あちらは `Face.center()` の既定
     (`CenterOf.GEOMETRY`)で、曲面では面パッチの上にすら乗らない —— hanger の荷重面
     (トーラス、面積 2783mm^2)で GEOMETRY は `[0, -212.862, 60]`、MASS は `[0, -200, 60]` と
-    12.9mm 離れる。**面の上に material が乗る場所を知りたい側はこちらを使うこと**
-    (`optimize_run._check_anchor_centroids`)。平面では両者は一致する。
+    12.9mm 離れる。面の上に material が乗る場所を知りたい側はこちら
+    (`optimize_run._check_anchor_centroids`)。平面では一致する。
 
-    添字は1始まり(`face_fingerprint` と同じ体系)。範囲外は ValueError(`kernel.face_of` が投げる)。
+    添字は1始まり。範囲外は ValueError(`kernel.face_of` が投げる)。
     """
     index = int(face_index)
     point = Face(kernel.face_of(_unwrap(shape), index)).center(CenterOf.MASS)
@@ -93,21 +92,17 @@ def face_centroid(shape: Any, face_index: int) -> list:
 
 
 def face_fingerprint(shape: Any, face_index: int) -> dict:
-    """面1枚の**指紋**(面積・法線・`Face.center()`)を返す。
-    `{"index", "area", "normal", "center"}`。
+    """面1枚の**指紋** `{"index", "area", "normal", "center"}` を返す。
 
     **`center` は面積重心ではない**(`Face.center()` の既定 = `CenterOf.GEOMETRY`)。
-    照合に使うのは面積と法線だけ(`optimize.fingerprint_mismatch`)なので値そのものは
-    問題にならないが、**「面の上のどこか」として使ってはいけない** —— 曲面では面パッチから
-    離れる。その用途は `face_centroid`。
+    照合に使うのは面積と法線だけ(`optimize.fingerprint_mismatch`)。「面の上のどこか」には
+    使えない(曲面では面パッチから離れる)ので、その用途は `face_centroid`。
 
-    値の作り方は `describe_faces` の1件と同じで、**面1枚ぶんしか測らない**のが違い ——
-    形状最適化の条件は数枚の面を指すだけなので、2835面のボディで全面を測る理由が無い
-    (`duocad/optimize.py`)。`kind` を含めないのは指紋に使わないためで、種別が要る用途は
-    `describe_faces` を使うこと。
+    `describe_faces` の1件と同じ値を**面1枚ぶんだけ**測る(2835面のボディで全面を測らない。
+    `duocad/optimize.py`)。`kind` は含めない。
 
-    添字は1始まり(`describe_faces` / `selection.select_face` と同じ体系)。範囲外は ValueError
-    (`kernel.face_of` が投げる。ここで数え直さない —— `_face_map` の全走査が2回になる)。
+    添字は1始まり。範囲外は ValueError(`kernel.face_of` が投げる。ここで数え直さない ——
+    `_face_map` の全走査が2回になる)。
     """
     index = int(face_index)
     wrapped = Face(kernel.face_of(_unwrap(shape), index))
@@ -124,17 +119,12 @@ def face_fingerprint(shape: Any, face_index: int) -> dict:
 def describe_faces(shape: Any) -> list:
     """面を1始まりの添字つきで列挙する。
 
-    1. **添字は `kernel` の数え方に揃える**(`face_count` / `face_of`)。ずれると
-       「選んだ面と違う面が押される」という、例外も出ない静かな事故になる。
-    2. **法線は外向き**で、`kernel.tessellate` の `faces[].normal` と同じ約束
-       (立方体なら `normal·Z > 0.9` を満たす面は上面のちょうど1枚)。向きは build123d の
-       `Face.normal_at()` に任せる —— `BRepPrimAPI_MakeBox` は底面を `TopAbs_REVERSED` で
-       持つが `normal_at()` はそれを織り込んだ外向きを返すので、**自分でもう一度反転すると
-       二重になる**。tessellate とは別のコードパスなので、どちらかだけ壊れると述語だけが
-       静かにずれる。
+    1. **添字は `kernel` の数え方に揃える**。ずれると選んだ面と違う面が押される。
+    2. **法線は外向き**で、`kernel.tessellate` の `faces[].normal` と同じ約束。向きは
+       build123d の `Face.normal_at()` に任せる —— `BRepPrimAPI_MakeBox` は底面を
+       `TopAbs_REVERSED` で持つが `normal_at()` は外向きを返すので、**自分で反転すると二重になる**。
 
-    曲面の `normal` / `center` は面の中央(UV範囲の中点)での値でしかなく、述語で曲面を
-    厳密に選ぶ用途には使わない。
+    曲面の `normal` / `center` は面の中央(UV範囲の中点)での値でしかない。
     """
     raw = _unwrap(shape)
     described = []
@@ -158,10 +148,9 @@ def describe_faces(shape: Any) -> list:
 def describe_vertices(shape: Any) -> list:
     """頂点を1始まりの添字つきで列挙する(`[{"index": int, "point": [x,y,z]}, ...]`)。
 
-    **添字は `kernel.count_subshapes(shape, "vertex")` の体系**で、`selection.select_vertex`
-    が範囲を検査する数え方と同じ。build123d の `.vertices()` の順序がこれと一致する保証は
-    無いので、座標も順序も `kernel.vertex_positions` から取る(`describe_edges` が
-    `.edges()` を使わないのと同じ理由)。
+    **添字は `kernel.count_subshapes(shape, "vertex")` の体系**(`selection.select_vertex`
+    と同じ)。build123d の `.vertices()` の順序とは一致する保証が無いので、座標も順序も
+    `kernel.vertex_positions` から取る。
     """
     return kernel.vertex_positions(_unwrap(shape))
 
@@ -169,10 +158,9 @@ def describe_vertices(shape: Any) -> list:
 def edges_of_face(shape: Any, face_index: int) -> list:
     """その面の**外周**を成す辺の添字を昇順で返す。
 
-    返すのは外周(outer wire)の辺だけで、**面に空いた穴の縁は含めない** —— 外周を
-    丸めたつもりの操作が黙って穴の縁まで変えないため(穴の縁を丸めるとトーラスになる)。
-    穴を対象にする述語が要るようになったら別の `op` として足すこと。
-    添字は `describe_edges` の `index` および `fillet(edges=[...])` の添字と一致する。
+    返すのは外周(outer wire)の辺だけで、**面に空いた穴の縁は含めない**(外周を丸める操作が
+    黙って穴の縁まで変えないため)。添字は `describe_edges` の `index` および
+    `fillet(edges=[...])` の添字と一致する。
     """
     raw = _unwrap(shape)
     face = Face(kernel.face_of(raw, face_index))

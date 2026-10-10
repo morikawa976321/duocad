@@ -46,9 +46,9 @@ from OCP.TopoDS import TopoDS
 from . import boundary_check
 from .mesh_geometry import indexed_map
 
-#: 再分割の反復上限の既定。実測(docs/TOPOPT_GAP_CAUSALITY.md「案Aの実装」)で決める仮置き。
+#: 再分割の反復上限の既定(仮置き。docs/TOPOPT_GAP_CAUSALITY.md「案Aの実装」)。
 DEFAULT_MAX_ROUNDS = 12
-#: 全辺の離散点数の予算。超えたら未解決として止める(メモリの歯止め。通常の形状では届かない)。
+#: 全辺の離散点数の予算。超えたら未解決として止める(メモリの歯止め)。
 DEFAULT_MAX_POINTS = 4_000_000
 
 _FAILURE = IMeshData_Status.IMeshData_Failure
@@ -85,7 +85,7 @@ def _copy_parameters(source: IMeshTools_Parameters) -> IMeshTools_Parameters:
 
 
 class _Model:
-    """内部モデルから取り出した use(wire 内の辺の利用箇所)と、そのハンドル。`close()` で順に手放す。"""
+    """内部モデルから取り出した use(wire 内の辺の利用箇所)と、そのハンドル。"""
 
     def __init__(self, context: IMeshTools_Context, shape):
         self.context = context
@@ -247,7 +247,6 @@ def _amplify(model: _Model, edge_id: int, parameters: IMeshTools_Parameters) -> 
 
 
 def _issue_summary(issues: List[dict]) -> List[dict]:
-    """診断に残す形(JSON 化できる素の値だけ)。"""
     return [dict(kind=i['kind'], edges=list(i['edges']), point=i.get('point'),
                  **({'gap': i['gap']} if 'gap' in i else {})) for i in issues]
 
