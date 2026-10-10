@@ -27,12 +27,26 @@ import refine_shape  # noqa: E402
 from duocad import optimize_run  # noqa: E402
 from duocad.topopt import acceptance, binary_search, final_check, stress  # noqa: E402
 
+import gate_metrics as gm  # noqa: E402
+
+#: 物理寸法の物差しの候補(docs/TOPOPT_PEAK_GATE.md 4-9): 露出面の面積の上位値と、材料だけで取った球平均の最大
+AREAS_MM2 = (1.0, 4.0, 9.0)
+BALL_RADII_MM = (1.0, 2.0)
+
 
 def banded_strength(material, region, keep, layer, fine, fixed, load, conditions, target, *, factor):
     model, _density, displacement, scale, relative = acceptance.solve_material(
         material, fine, fixed, load, youngs_modulus_mpa=conditions.youngs_modulus_mpa, solver=conditions.solver)
     near_keep = ndimage.binary_dilation(keep, structure=np.ones((3, 3, 3), bool), iterations=factor) if keep.any() \
         else np.zeros_like(keep)
+    hf = float(fine.spacing)
+    element_vm = stress.element_stress(model, displacement).scaled(scale).von_mises
+    balls = {r: gm.ball_mean_field(element_vm, material, r, hf) for r in BALL_RADII_MM}
+
+    def area_top(values, area):
+        # 露出面の面中心の値を大きい順に並べ、面積の合計が area になる位置の値(面1枚は hf²)
+        ordered = np.sort(values)[::-1]
+        return float(ordered[min(ordered.size - 1, max(0, int(np.ceil(area / hf ** 2)) - 1))])
 
     def peak(cells):
         faces = stress.exposed_face_von_mises(model, displacement, material, scale, cells=cells)
@@ -40,8 +54,11 @@ def banded_strength(material, region, keep, layer, fine, fixed, load, conditions
             return None
         flat = int(np.nanargmax(faces))
         cell = np.unravel_index(flat // 6, material.shape)
+        values = faces[np.isfinite(faces)]
         return dict(mpa=float(faces.reshape(-1)[flat]),
-                    position_mm=[round(float(fine.centers_1d(a)[cell[a]]), 3) for a in range(3)])
+                    position_mm=[round(float(fine.centers_1d(a)[cell[a]]), 3) for a in range(3)],
+                    area_top={f"{a:g}mm2": area_top(values, a) for a in AREAS_MM2},
+                    ball_max={f"r{r:g}mm": float(balls[r][cells & material].max()) for r in BALL_RADII_MM})
 
     return dict(status='measured', safety_factor=None, spacing_mm=float(fine.spacing), relative_residual=relative,
                 member_cells=int(region.sum()), junction=peak(region & near_keep), away=peak(region & ~near_keep),
