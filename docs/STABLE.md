@@ -7,9 +7,9 @@
 
 | | 安定版(制作用) | 開発版 |
 |---|---|---|
-| コード | `%USERPROFILE%\mf\duocad-stable`(`main` のclone) | `mf\duocad`(develop) |
+| コード | `$env:USERPROFILE\mf\duocad-stable`(`main` のclone) | `mf\duocad`(develop) |
 | 実行環境 | 専用の `.venv` / `node_modules` / `web/dist` | 開発用のもの |
-| 制作データ | `%USERPROFILE%\mf\duocad-data\{models,export,logs}` | リポジトリ直下の `models/` `export/` |
+| 制作データ | `$env:USERPROFILE\mf\duocad-data\{models,export,logs}` | リポジトリ直下の `models/` `export/` |
 | ポート(WS / HTTP) | **8775 / 8776** | 8765 / 8766(既定) |
 | 画面 | Edgeのアプリウィンドウ。ヘッダーに更新ボタン(更新があるときだけ) | ヘッダー左端に「開発版」の札、窓のタイトルに `[開発版]` |
 | MCP(Claude Code) | 安定版のフォルダで開いたセッション → 8776(local スコープ登録) | `.mcp.json` → 8766 |
@@ -70,11 +70,11 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 
 **Python の版を上げる更新**(例: 3.11 → 3.14)は、サーバ(uv の venv の python)が子へ渡す `PYTHONHOME` を
 更新スクリプトが引き継ぐと `uv sync` が落ちる。`duocad/channel.py` と `update.ps1` が外しているが、**外す前の版の
-サーバから押した更新では落ちる**(元の版へ戻る)。そのときは duocad から起動していない普通の端末で `update.ps1` を手で走らせる
+サーバから押した更新では落ちる**(元の版へ戻る)。そのときは duocad から起動していない普通の PowerShell で `update.ps1` を手で走らせる
 (`-ServerPid` を省くと `-HttpPort` からサーバを探して止める):
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File %USERPROFILE%\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot %USERPROFILE%\mf\duocad-stable -LogDir %USERPROFILE%\mf\duocad-data\logs -DataDir %USERPROFILE%\mf\duocad-data
+powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot $env:USERPROFILE\mf\duocad-stable -LogDir $env:USERPROFILE\mf\duocad-data\logs -DataDir $env:USERPROFILE\mf\duocad-data
 ```
 元の版への復元にも失敗したときは、トーストがそう言う(`last-update-result.json` の `restored: false`)。
 
