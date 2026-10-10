@@ -291,3 +291,58 @@
 - ラウンド2(`composer-2.5`): ラウンド1の4件の反映を確認。新規に約25件(ピーク距離÷要素サイズの分布・小型15条件のSF達成・08のゲート別件数・旧コーパス64形の最終形〈`output/smoothing_corpus/final_manifest.json` で ok 7・error 57・計64を確認〉・全材料の保持部最悪値3点・芯19条件〈保存JSONを読んだのみで再実行はしていない〉)を台帳から照合し一致。BLOCKER・MAJORなし、MINOR1件: 警告仕様の「ピークの固定面距離」が台帳では全体ピークの距離で、92形のうち7形は保持部の最悪値が最大でも全体ピークは保持部の外にある。**修正した**(推奨2(c)に部位別の位置と全体ピークの位置を分けると明記。「約0.5要素」は保持部がピークの85形のうち78形が0.45〜0.55の分布へ書き直した)。
 - ラウンド3(`composer-2.5`): ラウンド2の修正を台帳から再計算して確認(固定面距離÷要素サイズ、保持部がピークの85形・78形・7形、`m3_worst_zone==holding` かつ `peak_zone!=holding` の7形、9節の整合)。BLOCKER・MAJORなし、MINOR2件: (1)2章の要約表に「全体ピークと部位別最悪の位置は別」の注記がない、(2)推奨2(c)の「保持部の最悪値が最大」は台帳の定義(M3の最悪部位が保持部)と文言が合わない。**2件とも修正した**。
 - ラウンド4(`composer-2.5`、最終確認): ラウンド3の修正の反映と9節の記録を確認し、台帳から新規に28件を照合して指摘なし。**合格**(総計4ラウンド・指摘は全てMINOR計7件で全件修正済み。レビュアーが走らせなかったもの=図の目視・再実行系・08の監査件数の個別再集計・07の再現の再実行は未検証のまま)。
+
+---
+
+# 付録A: 検証の土台(プロトコル・参照解析・訂正)
+
+出典: 旧 01_PROTOCOL・02_REFERENCE・03A_REFERENCE_REPAIR・REVIEW_00_02・DEADLINE_PLAN(git 履歴)。
+
+## A-1. 共通プロトコル
+
+- **`acceptance.inspect` の6条件(watertight/single_solid/preserve/exclude/conditions/safety)は最小幅を含まない**。最小幅は探索時の peel でだけ強制されるので、別の形から写した形は `binary_search._mask_satisfies_min_width` を別途呼ぶ。hanger の移植トラス(F0200_h2.2_w5 を 2.0mm へ1セル太らせて写した 198.4 cm³・SF 8.869)は6条件 pass だが最小幅5セル(9.99mm)で不合格。`TOPOPT_IDLE_MATERIAL.md` の「同じ条件に存在する」はこの形では最小幅つきで実証されていない。再現: `reproduce_stage1_transplant.py --src F0200_h2.2_w5 --dst F0200_h2.0_w5 --dilate 1`、棚卸しは `inventory_stage1_shapes.py`(出力 `output/idle_validation_20260928/01_stage1_shapes.json`。現行形・保持R2除外形4種・5%形・移植トラスの7件を登録し、`TOPOPT_IDLE_MATERIAL.md` の報告値と一致)。
+- **比較の単位**: 旧64条件(`output/smoothing_corpus/`)はセル数指定(`min_width_cells` 一定。実mm は格子ごとに変わる)で凍結。新規の実験は mm 固定(`min_width_mm`)で、`min_width_cells_resolved`・`min_width_guaranteed_mm`・`element_size_resolved_mm` を必ず記録する。複数解像度の比較は全解像度で有効な最小の mm(`_resolve_min_width` の下限 `max(2×要素サイズ, 1mm)` を最も粗い格子が決める)を共通実幅にする。
+- **許容差は製品既定をそのまま使う**(検証用の新しい閾値を作らない): 線形ソルバ相対残差 1e-6(`fem.SOLVE_RESIDUAL_TOL`)、代表応力 99.5 パーセンタイル(`stress.DEFAULT_PERCENTILE`)、1回の削減上限 20%(`binary_search.DEFAULT_MAX_STEP_RATIO`)、エネルギーフィルタ 3セル(`ENERGY_FILTER_SIZE`。物理幅は 3×spacing で格子ごとに変わる)。
+- **共通基盤** `topopt_checks/idle_validation/_common.py`: git 状態・sha256・アトミック書き込み・ピークメモリ・OS 排他ロック(`ExecutionLock`。異常終了でも OS がロックを放すので死んだ錠の回収が要らない)・条件台帳(`upsert_case`/`is_case_done`)・`SingleFemRun`。各スクリプトはコピーせず import する。`.gitignore` 対象の使い捨てスクリプトは版をコミットでなく sha256 で特定する。未実行の条件は `status=missing` のまま記録し pass にしない。
+- 半セル原点移動は製品の第一級パラメータでない(`design_space.derive` が外接箱+余白から原点を計算する)。実験はプロセス内パッチで行い、達成シフト量を記録する。
+- 5合成題材(引張・曲げ・ねじり+曲げ・L字・複数支持)は定義のみで構築されず、小型2題材の15条件で代替した(05)。
+
+## A-2. 参照解析(固定形状の格子細分・解析解)
+
+再現:
+```
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\refine_shape.py --shape dilution_r-1 --levels 1 2 3 --loads 200 300
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\refine_shape.py --shape path_2.5mm --levels 1 2 3 4 --loads 1500 6000
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\refine_shape.py --shape hanger_base --levels 1 --loads 200
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\refine_shape.py --shape hanger_r2 --hanger-condition F2000_h2.4_w2 --levels 1 --loads 2000
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\analytic_checks.py tension --levels 1 2 3 4
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\analytic_checks.py bending --levels 1 2 4 8
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\load_sweep_full_material.py
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\build_02_reference_json.py   # refine_*/analytic_* を集約。個別再実行後は最後に必ず再実行
+```
+入力は保存マスク `output/idle_validation_20260928/dilution_mask_r-1.npz`・`path_mask_mesh_2.5mm.npz`(無ければ 00 の再現コマンドで再生成)と hanger の `01_stage1_shapes.json`。出力は `refine_*.json`・`analytic_*.json`・`03a_*.json`。
+
+**落とし穴**
+- `refine_shape.py --shape hanger_r2` の既定条件は `F0200_h2.4_w2`(200N)。H2(2000N)は `--hanger-condition F2000_h2.4_w2` を明示しないと別条件を静かに実行する。
+- `--exact-subdivide` の検証は `--out-dir` で別ディレクトリを指定する(既存の `refine_*.json` を上書きした事故があった)。
+- `stress.RepresentativeStress.raw_max` は ρ<rho_min の空セルを含む全要素の最大(材料外の数値産物)、`dense_max` が材料内最大。**raw_max は評価に使わない**。224〜692 MPa(dilution)や 5470 MPa(hanger H1)は raw_max。
+- 細分で体積が変わる(88,368→88,013 mm³)原因は投影ではない(整数分割マスクと 0 セル差で一致)。`design_space.derive` が spacing ごとに外枠を再計算し、外枠が level 倍より `2(level-1)` セル小さくなって形の 355 セル(0.40%)がはみ出すため。製品の既定挙動なので実験側で吸収する。
+- 曲げパッチテストは FEM が要素中心を読むので、理論値も採点位置に合わせる(`σ = P(80−h/2)(10−h/2)/I`)。非等比細分に等比用 Richardson 式を当てない(`_fem_probe.richardson_extrapolate_general` は3点の格子幅から次数 p を直接解く)。
+
+**結果**
+- 一様引張は解析解と相対誤差 1e-11〜1e-16 で一致。曲げ(位置補正後)は h=10/5/2.5/1.25mm で 12.13/3.37/0.877/0.230%、Richardson 外挿 23.98 MPa(理論24.0の0.075%以内、p≈1.03)。FEM 実装の正しさの裏付け。
+- 保持部の点応力は格子細分で増え続け、接続部は収束する(dilution 300N の保持部 max 10.45→15.11→18.06 MPa〈+73%〉、接続部 2.65→3.15、一般部 2.07→2.64。path 1500N/6000N の保持部 max はlevel1→4で2.48倍、接続部は1.07倍)。拘束面の階段角に特異点があり、接続部の内部には無い。保持部の判定は評価距離 D に頑健(ピークは同じ最内側セル)、接続部・一般部の代表値は D に敏感。
+- path_2.5mm の真の等比細分(levels 1,2,4)に一般化 Richardson(探索区間 p∈(1e-3,10))を当てると、holding zone max と raw_max は解なし、joint/general zone max と representative_mpa は収束(p=0.35〜3.0、外挿が level4 実測と0.1%以内)。**解なしは発散の証明ではない**(区間外や対数発散は未検討)。dilution の level1-3 は非等比なので検定自体が判定不能(等比の level4=0.5mm は約126万要素で未実行)。
+- 製品の代表応力(99.5%点)は比較的安定: dilution 300N は 8.271→7.997→7.555 MPa(level1→3で-8.7%、SFは+9.5%)、path は level2 以降 0.6%以内。2.4 係数(目標4.8/実際2.0)はこの 1〜10% のドリフトを吸収するが、点maxの発散は吸収しない。
+- **固定物理体積の局所平均は点maxが発散する同じ場所でも安定**: dilution の holding ピーク(世界座標 [17,9,3]mm)まわり半径2〜9mm の平均は3段細分で ±1.7〜6%(点max +73%、raw_max +208%)。
+- 断面力: 保持部/接続部境界の断面のせん断力は全レベルで荷重(300N)と小数点以下まで一致、反力も一致。path の支持反力は右77%/左23%(荷重の偏心と整合)。hanger は断面が薄く断面力検算が成立しないので反力の支持別分担を使う。
+- Kirsch/Peterson 近似は独立検証として機能しない(kt_fem 19.9→28.6→33.6 vs 理論 2.304。荷重が曲げ支配で単純引張の前提と違い、分子の穴際maxが格子依存)。独立ソルバ(gmsh 等が環境に無い)・実取付条件を反映した参照は未実装。
+- **hanger H1(200N)の「一般部」48.72 MPa のピーク**は荷重パッド接触端(荷重面から4.99mm、拘束面から190mm以上)の応力集中。`_fem_probe.zone_masks` に荷重ゾーンが無く一般部(29,224セル)へ希釈されて部位別99.5%点(7.31 MPa)に現れなかった。H2(2000N)は保持部 47.89 > 接続部 9.90 > 一般部 10.66 の序列。
+
+**訂正済みの値**: 全材料 dilution の荷重スイープは SF×荷重 = 1676.2988934(8桁一致)で厳密に反比例。00 に書かれていた 200N:4.77・250N:5.97 は誤りで正しくは 8.38・6.71(混入経路は run-id が無く不明)。
+
+**ゾーン定義**(`_fem_probe.zone_masks`): 保持部=材料のうち拘束面 bbox から D 以内、接続部=保持部でなく拘束面重心↔荷重面重心(複数支持なら支持間も)の線分から D 以内、一般部=残り。D の既定は元の格子幅の3倍(0.67倍・1.5倍も併走)。幾何位置だけで決まり部位の意味を知らないので、荷重端のような集中を見逃す(上記H1)。
+
+## A-3. 検証範囲の縮小(2026-10-05 本人指示)
+
+本人の「あと2-3日でおわるように組みなおして」に基づき、以前の費用・時間無制限・全行列の指示より優先して縮小した(納期目標 2026-10-07 18:00・最終 10-08 18:00)。縮小後の規則: 重い FEM は1プロセス系列ずつ、子計算に OS プロセス単位の wall timeout(小型1ケース20分・hanger 固定形状1ケース45分)、hanger の全材料開始の新規最適化・全行列・未完チェーンの再起動は禁止、小型探索の比較は同じ格子・実現幅・荷重・評価ゲート・初期形・停止条件で行い体積だけで順位付けしない、未実施は `deferred_by_user_deadline` で一覧化して pass にしない。工程別の縮小内容は 6-4 節。
