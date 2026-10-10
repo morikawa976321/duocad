@@ -411,3 +411,59 @@ p=8、ρ=1.0(1/MPa)は研究用の初期値で較正していない。M5b/M7b �
 - keep 合成・`resolve_islands` が細分の体積差に与える寄与は 0 セル(path_2.5mm・level2)。keep が元格子で mask の部分集合なら同じ投影を通した後も部分集合のまま(`floor` 逆引きは単調写像)。
 - 00 の時間・メモリ表とJSONの差は所要時間の実行間ゆらぎ(3〜10%)のみで、design_elements・材料体積・SF は一致。`rss_delta_mb` は前後差分でありピークメモリではない(ピークは `tracemalloc` の `traced_peak_mb`)。
 - 03 の34ケースは製品コード(`stress.py`・`binary_search.py`・`design_space.py`)と評価計算パスの変更ゼロで、2ケースを再計算してビット一致を確認済み。
+
+---
+
+# 付録C: 4探索方式の実験用実装と原因2の認定
+
+出典: 旧 04_SEARCHES・04A_PATH_QUALIFICATION(git 履歴)。
+
+## C-1. 実装(`topopt_checks/idle_validation/search_methods.py`)
+
+- 入口: `run_fixed_step`(20%/5%。製品 `binary_search.find_best_feasible` を無変更で呼ぶ薄いラッパー)・`run_adaptive`・`run_adaptive_from_mask`(段階3を経由せず既存形から削減を続ける)・`run_reallocation`。記録は `MethodRecord`/`StepRecord`、評価器は `score_mask`(1回のFEMで M5b raw/target・M3・M7b・compliance・要素ひずみエネルギーを返す `CandidateScore`)。
+- 除去側の幾何検査は製品の `resolve_islands`/`_geometry_rejection`/`peel`/`ranked_cells`/`_min_width_exempt` を再実装せず呼ぶ。追加側(`_growth_geometry_ok`)は `acceptance.inspect` が「材料が before を超えない」前提で使えないため、個別チェック(境界・連結・保持/除外×2・条件面)に最小幅・閉空洞禁止・芯の連結を足して呼ぶ。
+- 検算: step20 を dilution_small で走らせると 88,368 mm³・SF 4.836・18評価で製品の既知値とビット一致。
+- 適応歩幅の機構(ロールバック・復帰と別順序での再開・旧停止条件との対照・決定性・チェックポイント再開・キャンセル後の合格形保持・poison/rejected キャッシュの条件非依存)は `search_methods_mechanism_checks.py` が強制発動条件込みで8項目すべて PASS(出力 `04_mechanism_checks.json`)。
+- **受理ゲート `AdaptiveConfig.gate`** は3択で、測る安全の定義が違うので体積だけで優劣を付けない: `m5b_raw`(既定。許容40 MPa=SF≈1を割らないことだけを見る最も緩いゲート)、`m5b_target`(`allowable/target_safety_factor`=8.33 MPa を閾値にした版)、`percentile`(製品の99.5%点ゲートそのまま)。dilution_small の全材料形(SF 5.59)でさえ `m5b_raw` は合格、`m5b_target` は不合格(192.9 MPa·mm³ 超過)。
+- 再配置: 追加候補は「初期全材料 ∪ 実行内履歴 ∪ 外部候補」から現在形を引いた連結成分のうち現在形に隣接するものを長い順に提案する(`_connected_remnants`)。**成分は分割せずまるごと足す**(セル数で機械的に切ると部材自身と非連結になり幾何検査でほぼ必ず落ちる)。path_small で1回の追加が最大 6,810 セル(主実証では dilution・path とも3サイクル全部が `grow_accepted`、1回 6,393〜11,637 セル)。**主実証の追加は毎回、初期全材料の連結成分を丸ごと再導入する規模で、ほぼ全材料形(dilution 157,376 mm³)まで戻ってから削減を再開した**。`grow_accepted` の直後に必ず `poison_invalidated` を記録する。
+- **罠**: 歩幅の下限 `min_step_ratio` を後退倍率(`multiplier`)にも床として適用すると、同じ複数セル候補が却下され続けて `requested` が床で頭打ちになり、`peel` が毎回同じ候補を返して無限ループになる。床は目標歩幅(`gap_ratio`)だけに敷く。
+- `finish_patience`(改善停滞判定)は評価数を大きく減らす: dilution の percentile 対照は 120 評価の予算を使い切らず 56 評価で停止、path の適応は 120→43 評価(機構ログ108→33件)。
+
+## C-2. hanger 外部確認(H1=`F0200_h2.0_w5`、H2=`F5000_h2.4_w2`、`hanger_external_check.py --condition both`)
+
+| 条件 | 設計要素 | 現行: 材料 mm³ | SF | M5b raw | M3最悪 | 適応(m5b_raw、20評価) |
+|---|---:|---:|---:|---:|---:|---|
+| H1(200N・2.0mm) | 640,306 | 249,716(保存形 `hanger_base` の再スコア) | 4.824 | 69.5 | 15.9 MPa | 0件受理(不変) |
+| H2(5000N・2.4mm) | 367,390 | 3,255,099(製品を新規実行。10評価で converged) | 4.842 | **29,949** | **93.2 MPa** | 0件受理(全材料5,118,824・SF 6.525のまま) |
+
+- 現行が局所超過を持つ状態(または全材料自身が `m5b_raw` 不合格)からの純粋な除去では超過を解消できない。製品は H2 を合格(SF 4.84)としながら材料の生の許容40 MPaの2倍超(93.2 MPa)を抱える(→ 本書本文)。
+- `hanger_base` を H2(2.4mm)へ投影すると連結成分が条件面を失う(`resolve_islands` が17,811セルの成分を落とす)ので、H2 の「現行」は製品を H2 条件で新規実行した結果にした。H1 の全材料1回のFEMは約157秒。
+- 再配置は hanger 規模では未実行(06・07 で別途)。
+
+## C-3. 原因2の認定(path_small・2.0mm格子・パーセンタイル評価シナリオに限る)
+
+2.0mm 格子(現行 step20 が経路を失う格子)で「同格子・同評価器・同実現最小幅(6.0mm=3セル)で合格する、現行より軽い形」を手作業の構成で作れた。構成(`qualify_path_small.py`)は (A)移植: 2.5mm step20 の採用マスクを2.0mm へ最近傍で射影し `binary_closing` 2回+`resolve_islands`(57,656 mm³・SF 4.481)、(B)局所成長: 現在の材料全体を軸方向へ1セルシフトして重ねる貪欲選択(毎ラウンド6方向を `_growth_geometry_ok` で検査し、パーセンタイルSFを最も改善する1方向を採る。候補プールは最小幅済み全材料の内側に限る)、(B')仕上げ削減: `run_adaptive_from_mask(gate="percentile", stop_policy="adaptive_finish", max_step_ratio=0.05)`。
+
+| 荷重 | 現行 step20 | 優越形 | 軽量化 | 成長ラウンド | 仕上げ評価数 |
+|---:|---:|---:|---:|---:|---:|
+| 2700N | 53,664 mm³(SF 4.845) | 51,000(4.800) | -5.0% | 3 | 91 |
+| 3000N | 71,928(4.842) | 67,800(4.800) | -5.7% | 3(69,440で止まり仕上げ30手・33FEM) | 30 |
+| 3300N | 108,592(4.846) | 106,248(4.800) | -2.2% | 13 | 34 |
+
+- 優越形は `acceptance.inspect` の6条件と最小幅(`_mask_satisfies_min_width`)の全てに合格。
+- **m5b_target では現行・優越形とも不合格**(超過 387.98/396.64 MPa·mm³、3000N)。m5b_raw ではどちらも合格(0)。M3 は両者とも holding が最悪(10.641/10.598)で不合格。**優越形の優位はパーセンタイル評価に限り、m5b_target での優劣は未決着**。
+- 因果検査(3000N のみ。`gate="percentile"`・`stop_policy="legacy"` で製品の `_reduce_volume` を再現する対照): 優越形に固有の605セル(corridor、4,840 mm³。現行にしかないセルは1,121セル)を無保護で全材料から削ると 71,928 mm³(現行と厳密一致=対照の妥当性の検算)・corridor 保持率0%。corridor を保護しても 71,544 mm³ で優越形(67,800)には届かない。最初に corridor を33セル削る1手だけ禁止しても、以降無保護で再開すると保持率は8.4%まで下がる。**経路喪失は特定の1手の誤りではなく、ひずみエネルギー順位で削る現行アルゴリズムの構造的な傾向**。歩幅 0.05 でも 72,016 mm³ で変わらない(00)。
+- 未検証: 原点シフト頑健性、2.0mm 以外の格子で構成法が機能するか、他荷重での因果検査。軸方向シフト成長は「細い1本の部材が支持点近くで急に太いパッドへ接続する」この形状で有効だった手法で、hanger 等で同じ効率が出る保証はない。
+- **不採用の構成法**: 孤立点・表面セル単位の追加と、最悪応力点中心の立方体膨張は、最小幅3セルの離散化では `min_width` 検査で落ちるか非効率(半径4〜10セルまで拡げてようやくSFが動き、10ラウンドで 83,768 mm³ と現行超過)。仕上げに `stop_policy="legacy"` を使うと成長後のオーバーシュートが小さいとき何も削れない(69,440→69,440)ので `adaptive_finish` を使う。
+- 実装上の契約: `peel` の m>1 では `protected` は `exempt` の部分集合であることが不変条件(`extra_protected` は `exempt` にも OR する。`_run_adaptive_impl` が自動で行うが、渡すセルは別経路で最小幅確認済みの構造の一部であることを呼び出し側が保証する)。`on_accept(i, mask, score)` で受理ごとの途中マスクを取れる。
+
+再現:
+```
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\run_04_searches_compact.py            # 4方式×2題材の主実証 → 04_searches_compact.json
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\search_methods_mechanism_checks.py     # → 04_mechanism_checks.json
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\hanger_external_check.py --condition both
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\qualify_path_small.py                 # 3000N 主実証+因果検査(約190秒・WS約800MB) → 04a_qualification_run.json
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\robustness_path_qualification.py       # 2700N・3300N → 04a_robustness_loads.json
+.\.venv\Scripts\python.exe topopt_checks\idle_validation\build_04a_json.py                       # 前2つを集約 → 04a_path_qualification.json
+```
+`qualify_path_small.py` は `path_mask_mesh_2.5mm.npz` が前提(無ければ `measure_path_local_optimum.py mesh --sizes 2.5`)。出力は `output/idle_validation_20260928/`。
