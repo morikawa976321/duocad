@@ -47,9 +47,8 @@ def _count_face_interferences(ds, pairs):
     """`pairs`(`BOPDS_Pair`の列)のうち、両端の形状が面であるものだけを数える。
 
     `BOPAlgo_CheckerSI` の `Interferences()` は種類混在の集計で、頂点/辺を含むペアは許容差が
-    触れているだけで無条件にカウントされる(除外条件なし)。面-面だけ、OCCT自身が実際の交差点・
-    交差線の有無と「同一面の単純接触でないか」を確認してから数える。型だけで判定し、
-    数値のしきい値(距離・許容差)は使わない。
+    触れているだけで無条件にカウントされる。面-面だけは、OCCT自身が実際の交差の有無を確認してから
+    数える。型だけで判定し、数値のしきい値は使わない。
     """
     return sum(1 for pair in pairs
                if all(ds.Shape(index).ShapeType() == TopAbs_FACE for index in pair.Indices()))
@@ -68,7 +67,6 @@ def inspect_solid(shape):
         checker.Perform()
         if checker.HasErrors() or checker.HasWarnings():
             raise ValueError('最終ソリッドの自己干渉検査が完了しなかった')
-        # `self_intersections` は面-面の交差数のみを表す(頂点・辺レベルの接触は自己干渉として数えない)。
         ds = checker.DS()
         intersections = _count_face_interferences(ds, ds.Interferences())
     return dict(watertight=valid and closed and intersections == 0,
@@ -80,18 +78,14 @@ def inspect_solid(shape):
 # 箱・格子との共通体積(形状最適化の受入検査)
 # --------------------------------------------------------------------------------------
 def require_valid_solid(shape: "TopoDS_Shape") -> None:
-    """`shape` が非空かつ `BRepCheck_Analyzer` 上妥当でなければ `ValueError`。
-
-    `boxes_common_volume` はこの検査を通す前に体積を計算しない(不正な形状から
-    もっともらしい数値を返さない)。呼び出し側が事前に確認する場合も同じ判定に揃えられる。
-    """
+    """`shape` が非空かつ `BRepCheck_Analyzer` 上妥当でなければ `ValueError`。"""
     if shape is None or shape.IsNull() or not BRepCheck_Analyzer(shape).IsValid():
         raise ValueError("shape is null or not a valid solid")
 
 
 def _common_with_box(shape: "TopoDS_Shape", lo: Sequence[float], hi: Sequence[float]):
-    """`shape` と軸整列直方体1つの共通部分と、その体積。`BOPAlgo_BOP`(`SetFuzzyValue(0.0)`、あいまい判定を
-    入れない)で `BOPAlgo_COMMON` を取り、エラー・警告・不正な結果は例外にする(黙って0を積まない)。"""
+    """`shape` と軸整列直方体1つの共通部分と、その体積。`BOPAlgo_COMMON`(fuzzy 0.0)で取り、
+    エラー・警告・不正な結果は例外にする(黙って0を積まない)。"""
     box = BRepPrimAPI_MakeBox(gp_Pnt(*lo), gp_Pnt(*hi)).Shape()
     operation = BOPAlgo_BOP()
     operation.AddArgument(shape)
@@ -114,8 +108,7 @@ def box_common_volume(
     shape: "TopoDS_Shape", lo: Sequence[float], hi: Sequence[float]
 ) -> float:
     """`shape` と軸整列直方体1つ(`(min, max)` の mm 座標)の共通体積。重ならなければ 0.0。
-    取り方とエラーの扱いは `_common_with_box`。**`shape` の妥当性は見ない** —— 何度も呼ぶ側が
-    `require_valid_solid` を1回だけ通しておく。
+    **`shape` の妥当性は見ない**(呼ぶ側が `require_valid_solid` を1回だけ通す)。
     """
     return _common_with_box(shape, lo, hi)[1]
 
@@ -251,10 +244,7 @@ def boxes_common_volume(
 ) -> float:
     """`shape` と、軸整列直方体群(各要素は `(min, max)` の mm 座標)の共通体積の合計。
 
-    `boxes` は**互いに体積を共有しない**ことを呼び出し側が保証する(重なりがあると
-    合計が二重に数えられる)。トポロジー最適化の平滑化前受入検査が、材料マスクを
-    セル中心の内外近似ではなくOCCTの厳密なブーリアンでCADと比較するために使う
-    ——境界に接するセルを、近似では漏らす/拾いすぎる。各箱の取り方は `box_common_volume`。
+    `boxes` は**互いに体積を共有しない**ことを呼び出し側が保証する(重なると二重に数える)。
     """
     require_valid_solid(shape)
     overlap = 0.0
