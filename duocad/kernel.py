@@ -62,7 +62,7 @@ FACE_KINDS = (
     "other",
 )
 
-#: 全周円筒(=穴)と見なすU範囲のしきい値[度](実装計画書§8)。
+#: 全周円筒(=穴)と見なすU範囲のしきい値[度](docs/DESIGN_DECISIONS.md「全周円筒のしきい値」)。
 #: shelf_attachment_GD.step の円筒22面のU範囲は全て正確に360.0度で、しきい値付近に一件も無い
 #: (実測)ため、この値の選び方に結果は依存しない。
 FULL_CYLINDER_DEGREES = 350.0
@@ -216,7 +216,7 @@ def classify_face(face: Any) -> str:
     """1つの面を FACE_KINDS のいずれかへ分類する。
 
     円筒は `BRepAdaptor_Surface` のU範囲(度)が FULL_CYLINDER_DEGREES を超えるかで
-    全周(=穴)と部分に分ける(実装計画書§8)。
+    全周(=穴)と部分に分ける(docs/DESIGN_DECISIONS.md「全周円筒のしきい値」)。
     """
     adaptor = BRepAdaptor_Surface(TopoDS.Face_s(face))
     surface_type = adaptor.GetType()
