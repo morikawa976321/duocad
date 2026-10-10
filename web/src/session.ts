@@ -2,21 +2,14 @@
  * コアとの接続 — コマンドは下り、イベントは上り(docs/DESIGN_DECISIONS.md「外してはいけない3つ」)。
  *
  * ここが持つのは「WebSocketの接続」と「途中まで入力していたコマンド」だけで、
- * 文書・操作ログ・undo履歴・**可視性**はコア側にある
- * (§2「アプリ層が落ちて失われてよいのは、途中まで入力していたコマンドだけ」)。
+ * 文書・操作ログ・undo履歴・可視性・選択はコア側にある(§2)。
+ * `modify_selection` / `toggle_selection` / `clear_selection` / `set_visible` を送るだけで、状態は覚えない。
  *
- * **選択も可視性もコアが正**。このファイルは `modify_selection` / `toggle_selection` /
- * `clear_selection` / `set_visible` を送るだけで、どちらの状態も覚えない。
- *
- * **`state` は部品ごとの配列である。** `state.bodies` は軽量
- * (geometryを含まない)で、形状は `delta.bodies`(版が変わったBodyだけ)で届く
+ * `state.bodies` は軽量(geometryを含まない)で、形状は `delta.bodies`(版が変わったBodyだけ)で届く
  * (`duocad/server.py` のモジュールdocstring参照)。
- *
- * 選択の正は `state.selection`(コア側)。**ブラウザは選択を1つも覚えない。**
- * あわせて `preview`(投機的実行)を足した —— **これだけは状態を配信しない**ので、
- * 応答は `onState` ではなく `onPreview` へ来る。
+ * `preview`(投機的実行)は状態を配信しないので、応答は `onState` ではなく `onPreview` へ来る。
  */
-/** 図形の種別。**唯一の正は `entityKinds.ts` の表**(ここは型を通すだけ)。 */
+/** 図形の種別。唯一の正は `entityKinds.ts` の表。 */
 import type { EntityKind } from './entityKinds'
 import type { Applied, ServerStateKey } from './generated/protocol'
 import type { GeometryPayload } from './viewport'
@@ -37,9 +30,8 @@ export interface ShapeRef {
 /**
  * ソリッドを丸ごと指す参照(形状最適化の保持/除外ソリッド)。
  *
- * **添字を持たない** —— Bodyは他のBodyの部分形状ではないので数え上げる添字が無く、
- * コアは `index: null` を明示的に載せてくる(キーごと落とすと「まだ埋めていない」と
- * 「そもそも持たない」が見分けられない)。コア側の綴りは `duocad/selection.py` の `BODY_KIND`。
+ * 添字を持たない: コアは `index: null` を明示的に載せてくる(キーごと落とすと
+ * 「まだ埋めていない」と「そもそも持たない」が見分けられない)。綴りは `duocad/selection.py` の `BODY_KIND`。
  */
 export interface BodyRef {
   body: string
@@ -58,12 +50,9 @@ export interface RegionRef {
 /**
  * スケッチの図形(または図形上の1点)を指す参照。
  *
- * **`entity` を持つことが `RegionRef` との見分け方**(どちらも `sketch` を持つ。コアの
- * `duocad/selection.py` の `ref_kind` と同じ規則)。`point` が `null` なら図形1つ全体
- * (= 辺)、文字列ならその点(`x0` / `cx` / `x` 等の**xキー**)を指す。
- *
- * **添字ではなく `entity_id`** で指すので、他の図形を足しても平行移動しても失効しない ——
- * 面・辺・頂点の `ShapeRef` とはそこが違う。
+ * `entity` を持つことが `RegionRef` との見分け方(コアの `duocad/selection.py` の `ref_kind` と同じ規則)。
+ * `point` が `null` なら図形1つ全体(= 辺)、文字列ならその点(`x0` / `cx` / `x` 等のxキー)。
+ * 添字ではなく `entity_id` で指すので、他の図形を足しても平行移動しても失効しない。
  */
 export interface SketchEntityRef {
   sketch: string
@@ -75,18 +64,13 @@ export interface SketchEntityRef {
 /**
  * 選択集合に入りうる参照の全部(コアの `duocad/selection.py` の `SELECTABLE_KINDS` と対)。
  *
- * **`BodyRef` を落とさないこと** —— `state.optimize` の4配列は「そのまま
- * `modifySelection` へ渡せる」が契約なので、ここに入っていないと保持/除外ソリッドの
- * プリセレクトが型の上で書けない(`tests/test_optimize_setup.py` が宣言を静的に見ている)。
+ * `BodyRef` を落とさないこと: `state.optimize` の4配列は「そのまま `modifySelection` へ渡せる」が
+ * 契約なので、ここに無いと保持/除外ソリッドのプリセレクトが型の上で書けない
+ * (`tests/test_optimize_setup.py` が宣言を静的に見ている)。
  */
 export type SelectionRef = ShapeRef | BodyRef | RegionRef | SketchEntityRef
 
-/**
- * 共有される選択集合(`duocad/selection.py` の `Selection.to_dict()`)。
- *
- * **出所を持たない**。人がクリックで選んだものもAIが選んだものも同じ集合で、そのまま
- * verb の対象になる。人はAIの選択を見て、そのまま使うか、トグルで直す。
- */
+/** 共有される選択集合(`duocad/selection.py` の `Selection.to_dict()`)。人が選んだものもAIが選んだものも同じ集合で、出所を持たない。 */
 export interface SelectionState {
   items: SelectionRef[]
   count: number
@@ -109,12 +93,9 @@ export interface BodyGeometry extends BodyMeta {
 }
 
 // --------------------------------------------------------------------------------------
-// C: スケッチ — **手動操作が一級の操作モード**になる場所
+// C: スケッチ
 // --------------------------------------------------------------------------------------
-/**
- * スケッチを貼る平面(コアの PlaneRef。基準3面・既存ソリッドの平面状の面・その2つから
- * オフセットした平面のどれか)。
- */
+/** スケッチを貼る平面(コアの PlaneRef。基準3面・既存ソリッドの平面状の面・そのオフセット)。 */
 export type PlaneRef =
   | { kind: 'base'; name: BasePlaneName; provenance?: unknown }
   | { kind: 'face'; body: string; index: number; provenance?: unknown }
@@ -124,8 +105,8 @@ export type BasePlaneName = 'XY' | 'XZ' | 'YZ'
 
 /**
  * スケッチ平面の3Dの枠。`p = origin + u*uAxis + v*vAxis` が (u,v) と3Dの往復の規則で、
- * **コアが配る**(`kernel_sketch.sketch_plane_frame`)。アプリ層で同じ計算を持たない —— 基準3面の
- * 軸の取り方と、面に貼ったときの法線反転の扱いが必ずずれる。
+ * コアが配る(`kernel_sketch.sketch_plane_frame`)。アプリ層で同じ計算を持たない
+ * (基準3面の軸の取り方と、面に貼ったときの法線反転の扱いがずれる)。
  */
 export interface SketchFrame {
   origin: number[]
@@ -135,11 +116,9 @@ export interface SketchFrame {
 }
 
 /**
- * スケッチ上の1図形。`params` は**解決済みの数値**、`refs` は同じキーの
- * **パラメータ名**(`set_parameter` で打ち直せる。名前が無ければ null)。
- *
- * この2つが揃っているのが「クリックだけで置いた後も値を打ち直せる」の実体である
- * (docs/DESIGN_DECISIONS.md「day 1 に払った予防」の名前つきの値)。
+ * スケッチ上の1図形。`params` は解決済みの数値、`refs` は同じキーのパラメータ名
+ * (`set_parameter` で打ち直せる。名前が無ければ null)。
+ * (docs/DESIGN_DECISIONS.md「day 1 に払った予防」の名前つきの値)
  */
 export interface SketchEntity {
   entity_id: string
@@ -183,49 +162,38 @@ export interface SketchState {
   visible: boolean
   /** 平面が壊れている(貼った面が消えた等)ときだけ null。 */
   frame: SketchFrame | null
-  /** 反復を展開した**実際に見えるもの**。描画は必ずこちらを使う。 */
+  /** 反復を展開した実際に見えるもの。描画は必ずこちらを使う。 */
   drawn: Array<{ kind: EntityKind; params: Record<string, number> }>
   /** 人が値を打ち直す対象(反復は展開しない)。 */
   entities: SketchEntity[]
-  /** 反復(間隔・個数)。`entities` と対で、どの図形が反復に吸われているかを画面が知る。 */
+  /** 反復(間隔・個数)。 */
   patterns: SketchPattern[]
   regions: SketchRegion[]
 }
 
 /**
- * 形状最適化(第3のモード)で**いまどの対象にどの役割が付いているか**。
- *
- * **参照はそのまま `modifySelection` へ渡せる形**である —— verbを起動したときに、既に
- * その役割が付いている対象を選択状態にして見せる(集合代入なので、そこから付け外しして
- * 決定すると、その集合がそのまま新しい割り当てになる)のがこの型の使い道である。
- *
+ * 形状最適化(第3のモード)でいまどの対象にどの役割が付いているか。
+ * 参照はそのまま `modifySelection` へ渡せる形: verb起動時に、既にその役割が付いている対象を
+ * 選択状態にして見せる(集合代入なので、付け外しして決定した集合がそのまま新しい割り当てになる)。
  * 契約の正は `duocad/optimize.py` の `state_payload`。
  */
 export interface OptimizeState {
   preserve_bodies: BodyRef[]
   exclude_bodies: BodyRef[]
-  /**
-   * **いま指せるものだけ**が載る(不可視・消えたボディの分は `stale` へ回る)——
-   * `modifySelection` へそのまま渡せることがこの配列の存在理由なので、渡すと例外になる
-   * 参照を混ぜない。
-   */
+  /** いま指せるものだけが載る(不可視・消えたボディの分は `stale` へ回る)。`modifySelection` へ渡して例外になる参照は混ぜない。 */
   fixtures: ShapeRef[]
   loads: ShapeRef[]
   /**
-   * 荷重の大きさ[N]と向きを**面ごとに**持つ並び。荷重面が0枚なら空。
-   *
-   * **`loads` とは長さが違いうる**ので `(body, index)` で突き合わせること —— `loads` には
-   * 「いま指せる面」しか載らないが、こちらは文書が持つ how なので、荷重面のボディを隠しても
-   * 残る(隠しただけで打ち直しになるのを避けるため)。
+   * 荷重の大きさ[N]と向きを面ごとに持つ並び。荷重面が0枚なら空。
+   * `loads` とは長さが違いうるので `(body, index)` で突き合わせること(荷重面のボディを隠しても
+   * こちらは残る。隠しただけで打ち直しになるのを避けるため)。
    */
   load_specs: OptimizeLoadSpec[]
   /**
-   * **いま使えない割り当て**。上の4つの配列に載らなかったものが、全部理由つきでここに出る
+   * いま使えない割り当て。上の4配列に載らなかったものが理由つきで全部ここに出る
    * (指紋が合わなくなった面・消えたボディ・非表示のボディ)。
-   *
-   * **「割り当てが消えた」ではない** —— 文書からは何も消えていないので、形を戻せば・表示に
-   * 戻せば次の配信でまた載る。**トーストに出すかどうかは `code` で決める**こと
-   * (`'hidden'` は人が部品を隠すたびに出るので、出す側ではない)。
+   * 文書からは何も消えていないので、形か表示を戻せば次の配信でまた載る。
+   * トーストに出すかどうかは `code` で決める(`'hidden'` は人が部品を隠すたびに出る)。
    */
   stale: OptimizeStaleItem[]
   /** 条件の版(中身が変わると1つ上がる)。 */
@@ -245,8 +213,7 @@ export interface OptimizeLoadSpec {
  * いま使えない割り当て1件(`OptimizeState.stale`)。
  *
  * `index` はボディの役割(`preserve_bodies` / `exclude_bodies`)では `null`。
- * `reason` はそのままトーストに出せる文だが、**出すかどうかの判定は `code` で行う**
- * (文言で分岐すると、文を直した日に静かに壊れる)。
+ * `reason` はそのままトーストに出せる文だが、判定は `code` で行う(文言で分岐すると文を直した日に静かに壊れる)。
  */
 export interface OptimizeStaleItem {
   role: 'preserve_bodies' | 'exclude_bodies' | 'fixtures' | 'loads'
@@ -260,63 +227,49 @@ export interface OptimizeStaleItem {
 export interface ServerState {
   units: string
   active_body_id: string | null
-  /** 全Body。**geometryを含まない**(常に軽い。27部品でも数KB)。 */
+  /** 全Body。geometryを含まない(27部品でも数KB)。 */
   bodies: BodyMeta[]
   log: Array<{ seq: number; verb: string; args: Record<string, unknown> }>
   can_undo: boolean
   can_redo: boolean
   applied_count: number
-  /** 共有される選択集合。**ここが正**で、ブラウザは自前の選択を持たない。 */
+  /** 共有される選択集合。ここが正で、ブラウザは自前の選択を持たない。 */
   selection: SelectionState
-  /** 文書の全スケッチ。図形も領域もここが正で、ブラウザは溜めない。 */
+  /** 文書の全スケッチ。図形も領域もここが正。 */
   sketches: SketchState[]
-  /** あと何回やり直せるか。**真偽だけだと履歴の位置が出せない**。 */
+  /** あと何回やり直せるか。 */
   redo_count: number
   /** 名前つきの寸法値(§3.4)。パラメータ編集パネルが出す対象そのもの。 */
   parameters: Record<string, number>
   /**
-   * **いま編集しているファイルの名前**(`models/` 配下のファイル名だけ。無ければ `null`)。
-   *
-   * **サーバが正**(`Session._current_name`)。ブラウザは写しを持つだけで、自分では
-   * 書き換えない —— 保存できる先を決めているのはサーバであり、2箇所で持つと
-   * 「ヘッダは(無題)なのに上書きは通る」のような食い違いが出る(リロードすると文書は
-   * サーバに残るのにブラウザの値だけ失われるので、これは実際に起きていた)。
+   * いま編集しているファイルの名前(`models/` 配下のファイル名だけ。無ければ `null`)。
+   * サーバが正(`Session._current_name`)。ブラウザは写しを持つだけで書き換えない
+   * (2箇所で持つと「ヘッダは(無題)なのに上書きは通る」食い違いが出る。リロードで
+   * ブラウザの値だけ失われて実際に起きた)。
    */
   current_name: string | null
-  /**
-   * 今の文書がそのままファイルに載っているか(`Session.saved`)。**自動保存が書けなかった
-   * ときだけ false**(issue #5)。無題で何も変えていない文書は true(書くものが無い)。
-   */
+  /** 今の文書がそのままファイルに載っているか(`Session.saved`)。自動保存が書けなかったときだけ false(issue #5)。 */
   saved: boolean
   /** 文書を開いているか(`Session.document_open`)。false ならトップ画面を出し、編集の口を全部隠す。 */
   document_open: boolean
-  /**
-   * 形状最適化の条件(第3のモード)。**verb起動時のプリセレクトと役割の色はここが正**で、
-   * ブラウザは自前に溜めない(選択集合と同じ扱い)。
-   */
+  /** 形状最適化の条件(第3のモード)。verb起動時のプリセレクトと役割の色はここが正。 */
   optimize: OptimizeState
 }
 
 /**
- * ファイル操作の応答。**状態の配信ではない** —— 保存・書き出しは文書を変えないので、
- * 要求した接続にだけ「どこへ書いたか」が返る(`PreviewPayload` と同じ扱い)。
- *
- * `path` は**サーバが解決した絶対パス**。相対パスの基準はサーバの作業ディレクトリで、
- * ブラウザ側では解決できない(2箇所で別々に解釈すると必ずずれる)。
- *
- * `name` は `save_document` の応答にだけ乗る**ファイル名だけ**。
- * `open_document` は文書を差し替える側なので `Applied`(`change: "document"`)の
- * `name` を見ること —— こちらは応答チャンネルが違う(`FilesPanel.svelte` 参照)。
- *
- * `files` は `list_documents` の応答にだけ乗る(`FilesPanel.svelte` が描く一覧)。
- */
-/**
  * `ServerState` のキーが、サーバの宣言(`duocad/catalog.py` の `STATE_KEYS`)と一致することを
- * 型検査に見させる。キーを足した・消したのに片方だけ直すと、ここが `never` になって落ちる。
+ * 型検査に見させる。片方だけ直すと、ここが `never` になって落ちる。
  */
 type SameKeys<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never
 true satisfies SameKeys<keyof ServerState, ServerStateKey>
 
+/**
+ * ファイル操作の応答。状態の配信ではない(保存・書き出しは文書を変えないので、要求した接続にだけ届く)。
+ * `path` はサーバが解決した絶対パス(相対パスの基準はサーバの作業ディレクトリ)。
+ * `name` は `save_document` の応答にだけ乗るファイル名。`open_document` は文書を差し替える側なので
+ * `Applied`(`change: "document"`)の `name` を見ること(`FilesPanel.svelte` 参照)。
+ * `files` は `list_documents` の応答にだけ乗る。
+ */
 export interface FilePayload {
   action: string
   path: string
@@ -340,9 +293,7 @@ export interface FilePayload {
 
 /**
  * `models_dir` に置かれた1ファイルの一覧情報(`list_documents` の1件)。
- *
- * **壊れて読めないファイルはサーバの一覧に出てこない**(`Session.list_documents` が
- * 読めるものだけを返す)。
+ * 壊れて読めないファイルは一覧に出てこない。
  */
 export interface DocumentInfo {
   name: string
@@ -354,32 +305,27 @@ export interface DocumentInfo {
 }
 
 /**
- * 操作を出したクライアントへの確認応答(`Applied`)は**生成物**である —— `generated/protocol.ts`。
- * 正は `duocad/catalog.py` の `Command.returns`(verb が応答に載せる値)と `CHANGE_EVENTS`。
- *
- * `verb`(verbの適用)と `change`(`"selection"` = 選択の変更、`"visibility"` = 可視性、
- * `"document"` = ファイルを開いて文書ごと差し替わった。どれも操作ログには載らない)が
- * discriminant で、`applied.verb === "extrude"` で絞り込めば `body_id` / `distance` / `mode` が
- * **必須**として見える(他のverbのキーは見えない)。
+ * 操作を出したクライアントへの確認応答(`Applied`)は生成物 `generated/protocol.ts`。
+ * 正は `duocad/catalog.py` の `Command.returns` と `CHANGE_EVENTS`。
+ * `verb` と `change`(`"selection"` / `"visibility"` / `"document"`。どれも操作ログには載らない)が
+ * discriminant。
  *
  * 読むときの注意(値の意味。形は生成物が持つ):
- * - `move_sketch_entities` / `move_body` は `mode` で使う値が変わるが、**キーの顔ぶれは同じ**
+ * - `move_sketch_entities` / `move_body` は `mode` で使う値が変わるが、キーの顔ぶれは同じ
  *   (`'translate'` なら `dx`/`dy`(/`dz`) が入って `angle` と軸・中心が `null`、`'rotate'` はその逆)。
- *   `axis_point` / `axis_dir` / `axis_p0` / `plane_point` / `plane_normal` は**解決後の数値**で、
+ *   `axis_point` / `axis_dir` / `axis_p0` / `plane_point` / `plane_normal` は解決後の数値で、
  *   指した辺・面・線分の参照は載らない
- * - スケッチを動かす・鏡映する verb は `changed_bodies` を持たない(**ソリッドは追従しない**)。
- *   `delete` も持たない(消えたボディは `bodies` から居なくなるだけで、取り直す形が無い)
+ * - スケッチを動かす・鏡映する verb は `changed_bodies` を持たない(ソリッドは追従しない)。
+ *   `delete` も持たない(消えたボディは `bodies` から居なくなるだけ)
  * - `set_loads` の `face_count` は確定後の荷重面の総数、`applied_count` はこの操作で焼いた枚数。
  *   `direction_vector` は単位化済みで、`direction` が `'normal'` / `'-normal'` のときは `null`
  * - `change: 'document'` の `path` / `name` は、新規(`action: "new"`)のとき `null`
  */
 
 /**
- * プレビュー(投機的実行)の応答。**状態の配信ではない** —— 要求した接続にだけ届き、
- * サーバ側の文書は既に元へ戻っている(`Session.preview`)。
- *
- * `preview_id` は要求時に付けた番号。**古い応答を捨てるために要る** ——
- * 数値を打ち替えると要求が追い越しうるし、Escで中断した後に届くこともある。
+ * プレビュー(投機的実行)の応答。状態の配信ではなく、要求した接続にだけ届く
+ * (サーバ側の文書は既に元へ戻っている。`Session.preview`)。
+ * `preview_id` は古い応答を捨てるための番号(数値を打ち替えると要求が追い越しうるし、Escで中断した後にも届きうる)。
  */
 export interface PreviewPayload {
   preview_id: number | null
@@ -393,7 +339,7 @@ export interface PreviewPayload {
   }>
   /**
    * スケッチに足される線の確定前の姿(`catalog.Command.preview_session` の verb だけが載せる)。
-   * `pieces` は結果の領域の数で、1 以外は確定すると拒まれる形。
+   * `pieces` は結果の領域の数(1 以外は確定すると拒まれる)。
    */
   sketch_ghost: {
     sketch_id: string
@@ -405,8 +351,8 @@ export interface PreviewPayload {
 /**
  * 1本の辺の折れ線(`kernel.tessellate_edges` の1件そのまま)。
  *
- * `index` は**コアの数え方の1始まり**で、`fillet(edges=[...])` が食う添字と同じ。
- * ここがずれると「指した辺と違う辺が丸まる」という、例外も出ない事故になる。
+ * `index` はコアの数え方の1始まりで、`fillet(edges=[...])` が食う添字と同じ
+ * (ずれると指した辺と違う辺が丸まる。例外も出ない)。
  */
 export interface EdgeGeometry {
   index: number
@@ -417,10 +363,8 @@ export interface EdgeGeometry {
 }
 
 /**
- * 辺の応答。**状態の配信ではない**(要求した接続にだけ届く。`PreviewPayload` と同じ扱い)。
- *
- * `revision` は要求した時点のBodyの版。**形が変われば版が上がる**ので、古い辺を
- * 掴んだままフィレットをかける経路が閉じる(§7 添字は形状変更で壊れる、の辺版)。
+ * 辺の応答。状態の配信ではない(要求した接続にだけ届く)。
+ * `revision` は要求した時点のBodyの版。形が変われば上がるので、古い辺を掴んだままフィレットをかける経路が閉じる(§7)。
  */
 export interface EdgesPayload {
   body_id: string
@@ -431,8 +375,8 @@ export interface EdgesPayload {
 /**
  * 1つの頂点の3D座標(`kernel.vertex_positions` の1件そのまま)。
  *
- * `index` は**コアの数え方の1始まり**(`count_subshapes(shape, "vertex")`)で、
- * 選択の `ShapeRef`(`kind: "vertex"`)が持つ添字と同じ。
+ * `index` はコアの数え方の1始まり(`count_subshapes(shape, "vertex")`)で、
+ * 選択の `ShapeRef`(`kind: "vertex"`)の添字と同じ。
  */
 export interface VertexGeometry {
   index: number
@@ -440,11 +384,8 @@ export interface VertexGeometry {
 }
 
 /**
- * 頂点の応答。**状態の配信ではない**(要求した接続にだけ届く。`EdgesPayload` と同じ扱い)。
- *
- * 全頂点が入っているが、**画面に出るのは選択に入った添字だけ**である(辺と違い、
- * 頂点を要求するコマンドが無いので候補を見せる意味が無い)。`revision` は要求した
- * 時点のBodyの版で、形が変わった後の古い座標を描き続ける経路を閉じる。
+ * 頂点の応答。状態の配信ではない(要求した接続にだけ届く)。
+ * 全頂点が入っているが、画面に出るのは選択に入った添字だけ。`revision` の意味は `EdgesPayload` と同じ。
  */
 export interface VerticesPayload {
   body_id: string

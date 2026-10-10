@@ -33,7 +33,7 @@ export interface GeometryPayload {
 }
 
 /**
- * 「いまの画面はどれくらい細かく描くべきか」。**カメラから導く値であって設定ではない。**
+ * 「いまの画面はどれくらい細かく描くべきか」。カメラから導く値であって設定ではない。
  *
  * `worldPerPixel` と `sizeHint` が事実で、`deviation` / `angularDeflection` は
  * `adaptiveResolution.ts` の式で導いた目標精度。サーバへ送るのは事実の方だけ
@@ -229,41 +229,33 @@ export interface BodyGeometryUpdate {
 }
 
 /**
- * クリックが選択集合に対して何をするか。Shift も Ctrl(Mac は Meta)も同じ `toggle`
- * (入っていれば外す・入っていなければ足す)で、修飾なしは `replace`。
+ * クリックが選択集合に対して何をするか。Shift も Ctrl(Mac は Meta)も `toggle`、修飾なしは `replace`。
  * `add` / `remove` に分けないのは本人明言:
  * 「間違えたらもう一回クリックすればいいので、除外専用の機能は実質無意味」。
  */
 export type PickMode = 'replace' | 'toggle'
 
 export interface PickEvent {
-  /** 当たった面(Body+添字)。外したら null。**スケッチモード中は常に null**。 */
+  /** 当たった面(Body+添字)。外したら null。スケッチモード中は常に null。 */
   hit: FaceRef | null
-  /**
-   * 当たった辺。`showEdges` で出しているときだけ非null。辺が当たったときは `hit` を見ない
-   * (辺は面の上に重なっているので、両方返すと呼び出し側が毎回優先順位を書くことになる)。
-   */
+  /** 当たった辺。`showEdges` で出しているときだけ非null。辺が当たったときは `hit` を見ない。 */
   edge: EdgeRef | null
   /**
    * 当たった頂点。`showVertices` でマーカーを出しているときだけ非null。
-   * 既定の順序は辺より後・面より先 —— 頂点は必ず辺の端点に乗っているので、辺より先だと
-   * フィレット中に辺の端が掴めず、面より後だと最小の的である頂点マーカーが面に取られて外せない。
-   * `preferVertices(true)` の間だけ頂点が辺より先に入れ替わる(頂点そのものを指させる
-   * コマンドは、既定の順序では角の頂点を取れないため)。
+   * 既定の順序は辺より後・面より先 —— 辺より先だとフィレット中に辺の端が掴めず、
+   * 面より後だと最小の的である頂点マーカーが面に取られて外せない。
+   * `preferVertices(true)` の間だけ頂点が辺より先に入れ替わる。
    */
   vertex: VertexRef | null
   /** Shift / Ctrl(Mac は Meta)=トグル / 修飾なし=置き換え。 */
   mode: PickMode
   /**
-   * 当たったスケッチの図形(点または辺)。**スケッチモード中だけ**非null。
-   * `point` が文字列ならその点(コアの参照が持つ `point` と同じ**xキー**)、`null` なら
-   * 図形1つ全体(= 辺)。点は辺より先に見る(点は必ず辺の上に乗っていて、後だと端点を掴めない)。
+   * 当たったスケッチの図形(点または辺)。スケッチモード中だけ非null。
+   * `point` が文字列ならその点(コアの参照が持つ `point` と同じxキー)、`null` なら図形全体(= 辺)。
+   * 点は辺より先に見る(点は必ず辺の上に乗っていて、後だと端点を掴めない)。
    */
   sketchEntity: SketchEntityHit | null
-  /**
-   * スケッチモード中の、クリックした点のスケッチ平面上の座標。
-   * 平面がカメラの裏なら null。**これが「手で描く」の入力そのもの**。
-   */
+  /** スケッチモード中の、クリックした点のスケッチ平面上の座標。平面がカメラの裏なら null。 */
   point: { sketchId: string; u: number; v: number } | null
   /**
    * 当たった領域(スケッチ+添字)。スケッチモード中は常に(そのスケッチの領域だけ。
@@ -273,8 +265,7 @@ export interface PickEvent {
   region: { sketchId: string; index: number } | null
   /**
    * 当たった基準平面(XY/XZ/YZ)。`showBasePlanes(true)` の間だけ非null。
-   * 面に当たる画素では面だけが返り、平面は面の無い画素でだけ返る(手前か奥かは比べない)ので、
-   * `plane` が非nullなら `hit` は null。
+   * 平面は面の無い画素でだけ返る(手前か奥かは比べない)ので、非nullなら `hit` は null。
    */
   plane: BasePlaneName | null
 }
@@ -286,15 +277,13 @@ export interface SketchEntityHit {
   point: string | null
   /**
    * 見た目だけの角・直線どうしの交点に当たったときだけ、その厳密な座標。
-   * 在るときは `entityKinds.ts` の `snapToSketchEntity` を呼ばず**そのままスナップ結果として使うこと**
-   * —— 交点は2つの図形にまたがり `entityId` は片方でしかないので、その図形自身へ射影しても
-   * 交点には戻らない。
+   * 在るときは `entityKinds.ts` の `snapToSketchEntity` を呼ばずそのままスナップ結果として使うこと
+   * (交点は2つの図形にまたがり、片方の図形へ射影しても交点には戻らない)。
    */
   snapAt?: readonly [number, number]
   /**
-   * `snapAt` が**線分の中点**であることの印(優先度は点・角/交点の次、辺より上。
-   * `viewport.ts` の `sketchMidpointAt` だけが立てる)。
-   * `snapDirection` とセットで使う: カーソル強調(`sketchCursorOverlay.ts`)が直交ティックを描くのに線分の向きが要る。
+   * `snapAt` が線分の中点であることの印(優先度は点・角/交点の次、辺より上。
+   * `viewport.ts` の `sketchMidpointAt` だけが立てる)。`snapDirection` とセットで使う。
    */
   midpoint?: boolean
   /** `midpoint` が真のときだけ意味を持つ、その線分の向き(単位ベクトル・(u,v)空間)。 */
@@ -302,8 +291,8 @@ export interface SketchEntityHit {
 }
 
 /**
- * 左ドラッグのウィンドウ選択の結果(**矩形に完全包含されたものだけ**)。
- * 空の配列でも呼ぶ: 何も囲まなかったドラッグは(修飾なしなら)「選択を空にする」。
+ * 左ドラッグのウィンドウ選択の結果(矩形に完全包含されたものだけ)。
+ * 何も囲まなかったドラッグも空配列で呼ぶ(修飾なしなら選択を空にする)。
  */
 export interface BoxSelectEvent {
   faces: FaceRef[]
@@ -315,11 +304,9 @@ export interface BoxSelectEvent {
 }
 
 /**
- * スケッチを貼った平面。実ジオメトリの面(`face`)か、それ以外か。グリッドの表示平面決定
- * (`desiredGridPlanes`)と範囲の見積もり(`faceUvExtent`)が読む。
- *
+ * スケッチを貼った平面。実ジオメトリの面(`face`)か、それ以外か。
  * `session.ts` の `PlaneRef`(`base`/`face`/`offset`)とは語彙が違う: `offset` 平面は
- * 基準が面でも離れた位置に実ジオメトリの境界が無い(`faceUvBoxOnly` を当てられない)ので
+ * 離れた位置に実ジオメトリの境界が無い(`faceUvBoxOnly` を当てられない)ので
  * `base` 側へ畳む(`App.svelte` の `sketchDraws` が変換する)。
  */
 export type SketchPlaneRef = { kind: 'base' } | ({ kind: 'face' } & FaceRef)
@@ -337,9 +324,8 @@ export interface SketchDraw {
   /** 選択中の領域の添字(強調して描く)。 */
   selectedRegions: number[]
   /**
-   * **反復を展開していない**図形(`entity_id` つき)。点・辺のピックと点の表示に使う。
-   * `entities`(= コアの `drawn`)は展開済みで `entity_id` を持たず、選択の参照は `entity_id` で
-   * 指すので、指せるのはここの元の図形だけ(反復の複製は導出物で指せない)。
+   * 反復を展開していない図形(`entity_id` つき)。点・辺のピックと点の表示に使う。
+   * `entities`(= コアの `drawn`)は展開済みで `entity_id` を持たないので、指せるのはここだけ。
    */
   handles: Array<{ entityId: string; kind: string; params: Record<string, number> }>
   /** 選択中の図形(強調して描く)。`point` が null なら図形全体。 */
@@ -347,8 +333,8 @@ export interface SketchDraw {
 }
 
 /**
- * 断面表示(issue #6)の状態。**App が持ち、viewport は写す**(文書の状態でも画面設定でもない
- * その場限りの値。起動時と文書の差し替えで OFF)。`position` は平面の法線軸上の座標[mm](XY なら Z)。
+ * 断面表示(issue #6)の状態。App が持ち、viewport は写す(文書の状態でも画面設定でもない。
+ * 起動時と文書の差し替えで OFF)。`position` は平面の法線軸上の座標[mm](XY なら Z)。
  */
 export interface SectionState {
   on: boolean
@@ -372,9 +358,8 @@ export interface SectionInfo extends SectionState {
 
 export interface Viewport {
   /**
-   * Bodyの形状をまとめて反映する。**初回(まだ何も描いていない状態)だけ、反映後の
-   * シーン全体にカメラを合わせる**。以後は視点を保ったまま差分だけ描き直し、変更のない
-   * Bodyには触れない。
+   * Bodyの形状をまとめて反映する。初回(まだ何も描いていない状態)だけ、反映後の
+   * シーン全体にカメラを合わせる。以後は視点を保ったまま差分だけ描き直す。
    *
    * 確定前の姿の扱いは2種類で違う: サーバ投機実行のプレビュー(`showPreview`)は落ちるが、
    * ローカル幽霊(`showBodyGhosts`)は届いた形で組み直して出し直す。呼び直す側
@@ -382,27 +367,19 @@ export interface Viewport {
    * ここで出し直さないと幽霊は消えたまま戻らない。
    */
   update(bodies: BodyGeometryUpdate[]): void
-  /**
-   * 直近に `update()` で渡した生の `GeometryPayload` を読む(無ければ null)。
-   * 実機検査フック専用。形の正を「three.jsが今描いている形」の1箇所に保つため、
-   * App.svelte は写しを持たない。
-   */
+  /** 直近に `update()` で渡した生の `GeometryPayload`(無ければ null)。実機検査フック専用。 */
   getGeometry(bodyId: string): GeometryPayload | null
   /**
    * `validBodyIds` に無いBodyの描画を取り除く。`duocad/server.py` の `Session.delta` の契約
    * (知っているのに `bodies` にも `unchanged` にも現れないIDは消えた)に対応する側。
-   * 今のverbからは到達しない(undoは文書の土台より前へ戻せない)が、Body削除verbが増えたとき
-   * 「画面から消えない」不具合が出ないよう、呼び出し側は契約どおり毎回呼ぶ。
+   * 呼び出し側は契約どおり毎回呼ぶ。
    */
   prune(validBodyIds: string[]): void
   /** 面のクリック(当たり・外れとも)を受け取る。 */
   onPick(listener: (event: PickEvent) => void): void
   /**
-   * スケッチモード中、ポインタがスケッチ平面のどこを指しているか。
-   * モード外・平面の裏では null。確定前の線を見せるためだけに使う。
-   *
-   * 第2引数は同じ画素の `sketchEntityAt` の結果(クリックの `PickEvent.sketchEntity` と同じ関数)。
-   * クリック側の `addPoint` も同じスナップ関数を通るので、両者はずれない。
+   * スケッチモード中、ポインタがスケッチ平面のどこを指しているか。モード外・平面の裏では null。
+   * 第2引数は同じ画素の `sketchEntityAt` の結果(クリック側の `addPoint` も同じスナップ関数を通る)。
    */
   onPlaneMove(
     listener: (point: { u: number; v: number } | null, sketchEntity: SketchEntityHit | null) => void,
@@ -411,122 +388,104 @@ export interface Viewport {
   setSketchCursorWanted(wanted: boolean): void
   /**
    * 選択中の面を強調する(空配列で解除)。選択の色は人が選んでもAIが選んでも1つ(橙)。
-   * 領域は3Dでは色分けしない(スケッチ側で強調する)。辺は `showEdges` で折れ線を渡してある間だけ
-   * `highlightEdges` が、頂点は `showVertices` が、同じ橙で描く。
+   * 領域は3Dでは色分けしない(スケッチ側で強調する)。
    */
   highlight(refs: FaceRef[]): void
   /**
-   * 選択中の**ボディ**を強調する(`highlight` のボディ版。空配列で解除)。
-   * 形状最適化(第3のモード)で保持/除外ソリッドを決めているあいだだけ非空
-   * (他のverbはボディを選択できない。`App.svelte` の `wantedKinds`)。
+   * 選択中のボディを強調する(空配列で解除)。形状最適化で保持/除外ソリッドを決めているあいだだけ非空。
    * 選択は役割色(`setOptimizeState` の緑/赤)に勝つ。
    */
   highlightBodies(bodyIds: string[]): void
   /**
-   * 形状最適化(第3のモード)の見た目 —— 保持/除外ソリッドの色、拘束面の色分けと
-   * 固定記号、荷重の矢印+ラベル。`null` はモードを抜けたとき(何も描かない・ソリッドの色も素へ戻す)。
-   * 記号・矢印は指せない装飾(`allFaceMeshes` は変わらない)。
+   * 形状最適化の見た目(保持/除外ソリッドの色、拘束面の色分けと固定記号、荷重の矢印+ラベル)。
+   * `null` はモードを抜けたとき(ソリッドの色も素へ戻す)。記号・矢印は指せない装飾。
    */
   setOptimizeState(state: OptimizeVisualState | null): void
   /**
    * 開発用のデバッグ表示(塊・平滑化前のボクセル・面アンカーの節点)。
-   * `null`(既定)なら何も描かず、フラグを付けない利用者の画面は1画素も変わらない。
-   * 指せない装飾(`allFaceMeshes` は変わらない)。面アンカーの球は**深度検査を切って最前面**に描く
+   * `null`(既定)なら何も描かない。指せない装飾。面アンカーの球は深度検査を切って最前面に描く
    * (形状の裏側の節点も見えないと「見えているつもりで見えていない」になる)。
    */
   setOptimizeDebug(state: OptimizeDebugState | null): void
-  /**
-   * デバッグ表示のいまの数え(実機検査用。何も描いていなければ全部0)。
-   * `anchorsDepthTest` が `false` であることを実機検査が確かめる(深度検査を切る決まりの
-   * 見張り。目視では気づけない)。
-   */
+  /** デバッグ表示のいまの数え(実機検査用)。`anchorsDepthTest` が `false` であることの見張りを兼ねる。 */
   optimizeDebugCounts(): OptimizeDebugCounts
   // ------------------------------------------------------------------ D: 辺
   /**
-   * 辺の折れ線を出す(`bodyId` に null を渡すと消える)。**出している間だけ辺を指せる**。
+   * 辺の折れ線を出す(`bodyId` に null を渡すと消える)。出している間だけ辺を指せる。
+   * 常時出さないのは、27部品ぶんの辺はサーバから取るだけでも重く(`Session.edges` のdocstring)、
+   * 辺は面の手前に重なるので常時だと面を狙うクリックが辺に取られるため。
    *
-   * 常時出さない理由: (1)27部品ぶんの辺はサーバから取るだけでも重い(`Session.edges` のdocstring)。
-   * (2)辺は面の手前に重なるので、常時だと面を狙うクリックが辺に取られる。
-   *
-   * 奥の辺も見え、奥の辺も指せる(深度検査をしない)。three.js の線のレイキャストは
-   * 面による遮蔽を見ないので、見えるものと指せるものを一致させるにはこちらに揃えるしかない。
-   * 手前の辺のほうがレイに近いので、素直にクリックすれば手前が取れる。
+   * 奥の辺も見え、指せる(深度検査をしない)。three.js の線のレイキャストは面による遮蔽を
+   * 見ないので、見えるものと指せるものを一致させるにはこちらに揃えるしかない。
    */
   showEdges(bodyId: string | null, edges: EdgeGeometry[]): void
   // ------------------------------------------------------------------ 基準3平面(スケッチを貼る先)
   /**
    * 基準3平面(XY/XZ/YZ)を指せるようにする(`false` で指せなくなる)。
    * 辺と同じ規律で、その対象を要求しているコマンドを起動している間だけ指せる
-   * (常時だと面を狙うクリックが手前のグリッドに取られる。グリッドは原点を跨いで±100mmに
-   * 広がっていて、ほとんどの視点で部品の手前に1枚は居る)。
+   * (常時だと面を狙うクリックが、原点を跨いで±100mmに広がる手前のグリッドに取られる)。
    *
-   * 当たり判定に新しいメッシュは足さず、`raycaster.ray.intersectPlane()` を3枚ぶん回す解析交差。
-   * 描画中のグリッド(`gridRoot`)は判定に使わない(3平面の線が1つの `BufferGeometry` に
-   * 混在し、当たった線から平面を復元できない)。出している間はグリッドの色を変える。
+   * 当たり判定は `raycaster.ray.intersectPlane()` を3枚ぶん回す解析交差。描画中のグリッド
+   * (`gridRoot`)は判定に使わない(3平面の線が1つの `BufferGeometry` に混在し、
+   * 当たった線から平面を復元できない)。
    */
   showBasePlanes(on: boolean): void
   // ------------------------------------------------------------------ 常設の原点ギズモ(issue #8)
   /**
-   * 原点の点・X/Y/Z軸・XY/XZ/YZ平面(7項目)を**まとめて**出し入れする(本人指定「7つまとめて」)。
-   * 当たり判定を持たない装飾で、`showBasePlanes` とは無関係。既定は表示(`true`)。
+   * 原点の点・X/Y/Z軸・XY/XZ/YZ平面(7項目)をまとめて出し入れする(本人指定「7つまとめて」)。
+   * 当たり判定を持たない装飾。既定は表示。
    */
   setOriginVisible(visible: boolean): void
   /**
    * 断面表示(issue #6)。状態は App が持ち、ここは写すだけ。ON のあいだボディの面・境界線・
-   * 選べる辺・頂点マーカー・幽霊は平面で切られ、**切られた側は指せない**(`resolveHit` と
+   * 選べる辺・頂点マーカー・幽霊は平面で切られ、切られた側は指せない(`resolveHit` と
    * `collectInBox` が同じ平面で判定する)。スケッチ・領域・グリッド・原点ギズモ・注記は切らない。
    */
   setSection(state: SectionState): void
   /** ハンドルのドラッグで位置が動いた(App が状態を更新し `setSection` で書き戻す)。 */
   onSectionDrag(listener: (position: number) => void): void
   sectionInfo(): SectionInfo
-  /** 表示中のボディ(幽霊を含む)の外接箱の中心。空なら null。断面を入れた瞬間の位置に使う。 */
+  /** 表示中のボディ(幽霊を含む)の外接箱の中心。空なら null。 */
   contentCenter(): [number, number, number] | null
   /**
    * 頂点を辺より先に見る(`false` で既定の順序へ戻す)。理由は `PickEvent.vertex`。
-   * 頂点そのものを1つ指させたいコマンド(`move_body` の回転中心)で、待っている間だけ入れ替える。
+   * 頂点そのものを指させたいコマンド(`move_body` の回転中心)で、待っている間だけ入れ替える。
    */
   preferVertices(on: boolean): void
   // ------------------------------------------------------------------ 通常モードの領域
   /**
    * 通常モードでスケッチの領域を指せるようにする(`false` で指せなくなる)。
-   * 辺・基準平面と同じ規律で、要求しているコマンド(「領域を押し出す」)を起動している間だけ
-   * 指せる(常時だとスケッチ平面と重なる面のクリックが、手前に浮いている領域に取られる)。
-   *
-   * 領域のメッシュは既に `showSketches` で全スケッチぶん置かれている(`userData.sketchId`)。
-   * ここが変えるのは `regionAt` が見る対象の範囲だけ。スケッチモード中(`setActiveSketch`)は
-   * このゲートに関係なく、そのスケッチの領域だけが対象になる。
+   * 辺・基準平面と同じ規律で、要求しているコマンドを起動している間だけ指せる
+   * (常時だとスケッチ平面と重なる面のクリックが領域に取られる)。
+   * スケッチモード中(`setActiveSketch`)はこのゲートに関係なく、そのスケッチの領域だけが対象。
    */
   pickRegions(on: boolean): void
   /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
   highlightEdges(refs: EdgeRef[]): void
   // ------------------------------------------------------------------ 頂点(選択中のものだけ)
   /**
-   * **選択に入っている頂点だけ**を点(画面上で一定の大きさ)で出す(空配列で消える)。色は面・辺と同じ橙。
-   * 辺と違って「出す」と「選ばれている」が同じことなので1つの呼び出し(頂点を引数に取る
-   * コマンドが無く、候補を全部見せて選ばせる場面が無い)。
+   * 選択に入っている頂点だけを点(画面上で一定の大きさ)で出す(空配列で消える)。色は面・辺と同じ橙。
    * 奥のマーカーも見え、指せる(辺と同じく深度検査をしない)。
    */
   showVertices(markers: VertexMarker[]): void
   // ------------------------------------------------------------------ 測定(issue #10)
   /**
    * 測った2点を結ぶ線・両端の点・数値の札を出す(`null` で消す)。指せない装飾。
-   * 深度検査をしない —— 点から面へ下ろした垂線の足は面の裏やソリッドの内側に落ちうる。
+   * 点から面へ下ろした垂線の足は面の裏やソリッドの内側に落ちうるので、深度検査をしない。
    */
   showMeasurement(visual: MeasurementVisual | null): void
-  /** いま出している測定の線(実機検査用。出していなければ null)。 */
+  /** いま出している測定の線(実機検査用)。 */
   measurementInfo(): MeasurementVisual | null
   /** 今そのハイライトに使っている色(16進)。出していない種別は null。実機検査フック専用。 */
   highlightColors(): { face: number | null; edge: number | null; vertex: number | null }
   /**
-   * 指した面が**いま実際に塗られている色**(16進。無ければ null)。実機検査フック専用。
-   * 形状最適化の役割色(緑/赤/青)の切り替えは、選択の色しか見ない `highlightColors` では確かめられない。
+   * 指した面がいま実際に塗られている色(16進。無ければ null)。実機検査フック専用。
+   * 形状最適化の役割色は、選択の色しか見ない `highlightColors` では確かめられない。
    */
   faceColor(ref: FaceRef): number | null
   /**
-   * 形状最適化の装飾(拘束記号+荷重矢印・ラベル)の数。実機検査フック専用
-   * (`setOptimizeState` が空にすると0に戻る)。種別を区別しない粗い数なので、
-   * 取り違え・向きの逆転・ラベル欠落の検出には `optimizeAnnotations()` を使うこと。
+   * 形状最適化の装飾(拘束記号+荷重矢印・ラベル)の数。実機検査フック専用。
+   * 種別を区別しない粗い数なので、取り違え・向きの逆転・ラベル欠落の検出には `optimizeAnnotations()` を使うこと。
    */
   optimizeAnnotationCount(): number
   /**
@@ -540,7 +499,7 @@ export interface Viewport {
   }
   /**
    * 今ホバーで明るくしているもの(実機検査フック専用)。ホバーは色を足さず明度だけを上げるので
-   * `highlightColors` では読めない。頂点は対象外なので返さない。
+   * `highlightColors` では読めない。頂点は対象外。
    */
   hoveredRef(): {
     face: FaceRef | null
@@ -549,7 +508,7 @@ export interface Viewport {
     plane: BasePlaneName | null
     /** 当たったスケッチの図形(点または辺)。スケッチモード中だけ null 以外。 */
     sketchEntity: SketchEntityHit | null
-    /** そのものに**今実際に当たっている**色(16進)。何も指していなければ null。 */
+    /** そのものに今実際に当たっている色(16進)。何も指していなければ null。 */
     color: number | null
   }
   /**
@@ -563,32 +522,28 @@ export interface Viewport {
    */
   projectEdge(bodyId: string, edgeIndex: number): { x: number; y: number } | null
   /**
-   * 確定前の形(プレビュー)を重ねる。**本物のBodyは隠し、幽霊を代わりに描く**。
+   * 確定前の形(プレビュー)を重ねる。本物のBodyは隠し、幽霊を代わりに描く。
    * 幽霊はピックの対象にしない。本物の状態が届いたら(`update`)プレビューは無効になり自動的に消える。
    */
   showPreview(bodies: BodyGeometryUpdate[]): void
   /**
-   * プレビューを消して本物のBodyを出し直す。ボディ側の幽霊は2種類とも消える
-   * (`showPreview` と `showBodyGhosts`。消える場面が同じ)。
+   * プレビューを消して本物のBodyを出し直す。ボディ側の幽霊(`showPreview` と `showBodyGhosts`)も消える。
    * 本物の到着(`update`)だけは、消した後にローカル幽霊を組み直す。
    */
   clearPreview(): void
   /**
-   * **既にあるボディを変換した姿**を、ブラウザだけで半透明に重ねる(`move_body`)。
-   *
+   * 既にあるボディを変換した姿を、ブラウザだけで半透明に重ねる(`move_body`)。
    * `showPreview` との違い:
    * 1. サーバへ何も投げない。届いているメッシュ(`getGeometry` と同じ生データ)をそのまま使う。
-   * 2. 本物を隠さない。元の位置と移動先の両方が見えることが存在理由
-   *    (`duocad/catalog.py` の `move_body` の note)。
+   * 2. 本物を隠さない。元の位置と移動先の両方が見えることが存在理由(`duocad/catalog.py` の `move_body` の note)。
    * 3. 1ボディ = 1 `THREE.Group` で、変換はグループに掛ける。
    *
    * ピックの対象にしない。まだ形が届いていないボディ(非表示など)は黙って落ちる。空配列で消える。
    */
   showBodyGhosts(entries: BodyGhost[]): void
   /**
-   * いま出ている幽霊の中身。実機検査が「値を変えたら幽霊が追随したか」を数値で見る穴。
-   * `matrix` は**そのグループに実際に掛かっている行列**(three.js の列優先16要素)。
-   * 指示だけでは行列を組む式の正しさを検算できないので、掛かった結果そのものを出す。
+   * いま出ている幽霊の中身(実機検査用)。`matrix` はそのグループに実際に掛かっている行列
+   * (three.js の列優先16要素)。行列を組む式の正しさは、掛かった結果そのものでしか検算できない。
    */
   ghostInfo(): {
     sketch: Array<{ kind: string; params: Record<string, number> }>
@@ -597,22 +552,19 @@ export interface Viewport {
   /**
    * 面の表面上の点の画面座標(コンテナ内のCSSピクセル)。無理なら null。
    * 自動テスト(`scripts/smoke.mjs`)が本物のクリックで面を選ぶための穴。
-   * 重心ではなく三角形の上の点を返し(重心は円環や円筒では面の外にある)、
-   * **その画素からのレイが実際にこの面へ当たることを確かめてから**返す。
+   * 重心は円環や円筒では面の外にあるので三角形の上の点を返し、
+   * その画素からのレイが実際にこの面へ当たることを確かめてから返す。
    * 他のBodyに隠れている面は、そのBodyを隠さない限り null になる。
    */
   project(bodyId: string, faceIndex: number): { x: number; y: number } | null
   // ------------------------------------------------------------------ C: スケッチ
   /**
    * スケッチを描き直す(渡さなかったスケッチの描画は消える)。図形は線、領域は面で描く。
-   * ソリッドの描画(`update`)とは別のグループなので、押し出しで形が変わってもスケッチは消えない。
    */
   showSketches(sketches: SketchDraw[]): void
   /**
    * 確定前の図形(スケッチの幽霊)を描く。空配列で消える。
-   * 個々の図形は `buildEntityLine` が失敗しても他は描く。
-   *
-   * 描く図形は、ブラウザで分かるもの(ローカル方式)か、サーバが**文書を変えずに**計算したもの
+   * 渡してよいのは、ブラウザで分かるもの(ローカル方式)か、サーバが文書を変えずに計算したもの
    * (`envelope_regions`)だけ。投機実行の結果は渡さない(文書に一度は入るので、
    * Escで中断しても文書が変わらないことが巻き戻し頼みになる)。
    * `tone: 'warn'` は確定すると拒まれる形(分裂など)。
@@ -632,65 +584,45 @@ export interface Viewport {
   /** スケッチ平面を正面から見る視点へ移す。 */
   lookAtSketch(sketchId: string): void
   /**
-   * 今あるもの全体が入る視点へ戻す。`lookAtSketch` の戻り道ではない
-   * (抜けたときの復帰は `setActiveSketch(null)` が「入る前の視点」へ戻す)。
-   * 実機検査が図形を画面内へ収めるために呼ぶ。
+   * 今あるもの全体が入る視点へ戻す。抜けたときの復帰は `setActiveSketch(null)` が
+   * 「入る前の視点」へ戻す。実機検査が図形を画面内へ収めるために呼ぶ。
    */
   frameAll(): void
-  /**
-   * 新規文書にしたときに呼ぶ。**カメラは動かさない**。基準グリッドの縮小だけを許可する
-   * (`frameAll` と同じヒステリシスの「許可」を、姿勢を動かさずに与える)。
-   */
+  /** 新規文書にしたときに呼ぶ。カメラは動かさず、基準グリッドの縮小だけを許可する。 */
   resetGrid(): void
-  /**
-   * 左ドラッグのウィンドウ選択が終わったときに呼ばれる(矩形に**完全包含**されたものだけ)。
-   * `onPick` と別の入口なのは、返すものが集合だから。ドラッグの向きは見ない(本人明言)。
-   */
+  /** 左ドラッグのウィンドウ選択が終わったときに呼ばれる。ドラッグの向きは見ない(本人明言)。 */
   onBoxSelect(listener: (event: BoxSelectEvent) => void): void
   /**
-   * カメラの画角[度]を変える。**`FOV_ORTHO`(0) は完全正投影**で、そのとき裏では
-   * `OrthographicCamera` へ丸ごと差し替わる(近似ではない)。0以外は
-   * `FOV_MIN`〜`FOV_MAX` に丸め、NaN・∞は無視する。
-   *
+   * カメラの画角[度]を変える。`FOV_ORTHO`(0) は完全正投影で、そのとき裏では
+   * `OrthographicCamera` へ丸ごと差し替わる。0以外は `FOV_MIN`〜`FOV_MAX` に丸め、NaN・∞は無視する。
    * 画面の設定であって文書の状態ではない(コアにも操作ログにも行かず、undoの対象にもならない)。
-   * 値の持ち主はブラウザ側(`displaySettings.svelte.ts` + `viewSettings.ts`)。
-   *
-   * 切り替えの前後で、注視点の面で画面の縦に収まる世界長さを保つ(正投影への切り替えでも同じ)。
-   * しないと画角の変更がただの「ズーム」になり、パースの強さを比べられない。
+   * 切り替えの前後で、注視点の面で画面の縦に収まる世界長さを保つ
+   * (しないと画角の変更がただの「ズーム」になり、パースの強さを比べられない)。
    */
   setFov(deg: number): void
   // ------------------------------------------------------------------ 可変解像度(ズーム連動)
-  /** 今の画面が要求している解像度。実機検査と `App.svelte` の両方が読む。 */
+  /** 今の画面が要求している解像度。 */
   viewResolution(): ViewportResolution
   /**
    * face単位の高精度化(視錐台+バックフェイスカリング)を切る/入れる(既定は入り)。
-   * 実機検査のための穴: 導入前後の三角形数と測り直しの時間を、同じモデル・同じ視点で
-   * 両方測るため(`web/scripts/smoke-face-culling.mjs`)。切ると `focus` を送らなくなり、
+   * 実機検査のための穴(`web/scripts/smoke-face-culling.mjs`)。切ると `focus` を送らなくなり、
    * サーバは文書全体で1つの精度の振る舞いに戻る。
    */
   setFaceCulling(enabled: boolean): void
   /**
-   * 解像度が**意味のある幅で**変わったときに呼ばれる(ズーム・画角変更・寸法変更)。
-   *
-   * 落ち着いてから1回だけ呼ぶ: ホイール中ずっと呼ぶと27部品ぶんの再テセレーションが
-   * サーバで連続して走るので、カメラが止まったことを確かめ(減衰が収まるまで待つ)、
-   * かつ偏差が一定比以上動いたときだけ通す。
-   * スケッチの折れ線(ブラウザ内で完結)は、この呼び出しと同じ瞬間にここが描き直す。
-   * 呼び出し側がやるのはサーバへ知らせることだけ。
+   * 解像度が意味のある幅で変わったときに呼ばれる(ズーム・画角変更・寸法変更)。
+   * ホイール中ずっと呼ぶと27部品ぶんの再テセレーションがサーバで連続して走るので、
+   * カメラが止まってから(減衰が収まるまで待つ)、偏差が一定比以上動いたときだけ1回通す。
+   * スケッチの折れ線(ブラウザ内で完結)は、同じ瞬間にここが描き直す。
    */
   onResolutionChange(listener: (resolution: ViewportResolution) => void): void
-  /**
-   * スケッチの図形1本ごとの折れ線の点数(`sketch_id` -> 図形順の点数)。実機検査フック専用
-   * (ソリッド側は `getGeometry().deviation` と三角形数がその役をする)。
-   */
+  /** スケッチの図形1本ごとの折れ線の点数(`sketch_id` -> 図形順の点数)。実機検査フック専用。 */
   sketchPolylineCounts(): Record<string, number[]>
   /**
-   * 今のカメラの姿勢(ワールド座標)。実機検査が視点の向きを見る穴で、描画にも操作にも使わない。
-   *
+   * 今のカメラの姿勢(ワールド座標)。実機検査専用。
    * 確かめたいのは、`up` がワールド+Zであること、および水平ドラッグでオービットさせても
    * `position.z - target.z` が変わらないこと(回転の極が+Z)。後者は `OrbitControls` が
-   * 生成時の up を `_quat` へ焼き込む仕様のせいで**静かに壊れる**ので、見た目からは分からない。
-   * 文書の状態ではないのでコアへは何も飛ばさない(`testHooks.svelte.ts` の `window.__duocad` と同じ)。
+   * 生成時の up を `_quat` へ焼き込む仕様のせいで静かに壊れる。
    */
   cameraPose(): {
     position: [number, number, number]
@@ -700,23 +632,18 @@ export interface Viewport {
     far: number
   }
   /**
-   * 基準平面の**ピック範囲**の今の半幅[mm](`gridScale.ts` の `extentFor` が導いた値)。
+   * 基準平面のピック範囲の今の半幅[mm](`gridScale.ts` の `extentFor` の値)。実機検査フック専用。
    * near/farの下限と面外の軸線の長さも同じ値から引く。描画の範囲ではない(格子はシェーダーで無限に描く)。
-   * 実機検査フック専用。
    */
   gridScale(): { extent: number }
   /**
    * グリッドの3段(1/10/100mm)の今の見え方。実機検査フック専用。
-   *
    * `planes` は表示中の平面の名前で、基準平面(`XY`/`XZ`/`YZ`)か、任意面へのスケッチ中は
-   * `sketch-face`(`desiredGridPlanes` が付ける)。
-   * `axis` は面外に線として描いている軸(無ければ null)。
-   * `sketchFaceExtent` は任意面グリッドの枠の半径[mm](`faceUvBoxOnly`。測れなかった・
-   * 任意面でないときは null)。`planeBounds` は `planes` と同じ並びの枠(中心と半径。
-   * カーソル追従で広がった後の値も含む)。
-   * `depthBiasLayers` は `planes` と同じ並びの深度バイアス層番号(`DEPTH_BIAS_LAYER`)。
-   * frameが基準平面と数値的に一致する実ジオメトリの面でも `sketchFaceGrid` の別枠を
-   * 使っていることの検査用。
+   * `sketch-face`(`desiredGridPlanes` が付ける)。`axis` は面外に線として描いている軸。
+   * `sketchFaceExtent` は任意面グリッドの枠の半径[mm](`faceUvBoxOnly`。測れない・任意面でないときは null)。
+   * `planeBounds` と `depthBiasLayers`(`DEPTH_BIAS_LAYER`)は `planes` と同じ並び。
+   * `depthBiasLayers` は、frameが基準平面と数値的に一致する実ジオメトリの面でも
+   * `sketchFaceGrid` の別枠を使っていることの検査用。
    */
   gridTiers(): {
     mmPerPixel: number
@@ -730,34 +657,27 @@ export interface Viewport {
   /**
    * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
    * カメラの前後のクリップ範囲の外なら null。
-   *
-   * `project*` の仲間ではない: あちらは「その画素が本当にそれを取れる」ことまで確かめるが、
-   * こちらは投影そのものを問う。「+Zが画面で上か」は遮蔽と無関係に決まる(真上から見れば
-   * 下面は隠れて `project` が null でも上下関係は変わらない)。
+   * `project*` と違い遮蔽は見ず、投影そのものを問う(「+Zが画面で上か」は遮蔽と無関係に決まる)。
    */
   projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null
-  /** スケッチ平面上の (u,v) の画面座標。実機検査が本物のクリックで描くために要る。 */
+  /** スケッチ平面上の (u,v) の画面座標。実機検査用。 */
   projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
   /**
-   * 基準平面の上の点の画面座標(無理なら null)。実機検査が本物のクリックで基準平面を指すための穴。
+   * 基準平面の上の点の画面座標(無理なら null)。実機検査用。
    * 返す前に、その画素からのレイが実際にその平面へ当たり、かつ手前に面が無いことを確かめる。
-   * `showBasePlanes(true)` の間しか返らない(指せない状態の座標を返しても平面のピックにならない)。
+   * `showBasePlanes(true)` の間しか返らない。
    */
   projectBasePlane(name: BasePlaneName): { x: number; y: number } | null
   /**
-   * 領域の画面座標(実機検査が領域を本物のクリックで選ぶために要る)。
-   * 今その領域が指せる状態でなければ null(返す前に `regionAt` で当たることを確かめる。
-   * 通常モードでは `pickRegions(true)` の間しか返らない)。
+   * 領域の画面座標(実機検査用)。今その領域が指せる状態でなければ null
+   * (返す前に `regionAt` で当たることを確かめる。通常モードでは `pickRegions(true)` の間しか返らない)。
    */
   projectRegion(sketchId: string, index: number): { x: number; y: number } | null
-  /**
-   * ビューポート右上に常設するビューキューブの矩形(コンテナ内のCSSピクセル、左上原点)。
-   * 実機検査フック専用。寸法が変わると右上アンカーごと矩形も動くので、検査はここから読む。
-   */
+  /** ビューポート右上に常設するビューキューブの矩形(コンテナ内のCSSピクセル、左上原点)。実機検査フック専用。 */
   viewCubeRect(): { x: number; y: number; w: number; h: number }
   /**
    * 見えている立体だけを撮ったファイル一覧のサムネイル(PNGのbase64。`thumbnail.ts`)。
-   * 見えている立体が無ければ空文字。画面の視点・選択・断面には左右されない。
+   * 見えている立体が無ければ空文字。
    */
   captureThumbnail(): string
   dispose(): void
