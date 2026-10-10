@@ -1,8 +1,7 @@
 """この clone だけの設定(リポジトリ直下の未追跡ファイル `duocad_settings.json`)。画面の「設定」が書く。
 
-clone ごとに持つので、安定版(`duocad-stable`)と開発版で別の値になる。`tools/stable/update.ps1` も
-同じファイルを読む(`fem_device` が `gpu` なら `uv sync` に `--extra gpu` を付ける)—— **鍵の名前と値は
-update.ps1 と揃える**(層をまたぐ契約)。
+`tools/stable/update.ps1` も同じファイルを読む(`fem_device` が `gpu` なら `uv sync` に
+`--extra gpu` を付ける)—— **鍵の名前と値は update.ps1 と揃える**(層をまたぐ契約)。
 
 今ある鍵: `fem_device`(`cpu` / `gpu`。形状最適化の CG を解く装置。docs/TOPOPT_GPU.md)。
 """

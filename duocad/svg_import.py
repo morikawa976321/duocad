@@ -3,28 +3,26 @@
 `import_svg` verb の材料をここが作る。返すのは `[{"kind":.., "params":{..}}, ...]` という素の
 dictのリストで、`duocad.sketch` の `Entity` と同じ語彙・同じキーである。
 
-## 決めごと(なぜこの形か)
+## 決めごと
 
-**単位は `ppi=25.4` で解決する。** svgelementsは既定(96ppi)だと全長をpxへ正規化するので、
-`width="100mm"` のSVGが377.95という数値で出てくる。25.4を渡すと2つの都合が同時に揃う ——
-物理単位を持つSVGは**その寸法がそのままmm**になり(100mm → 100.0)、`viewBox` しか無いSVGは
-**1ユーザー単位 = 1mm** で素通しになる。duocadは単位mm固定なので分岐が要らない。
+**単位は `ppi=25.4` で解決する。** svgelementsは既定(96ppi)だと全長をpxへ正規化し、
+`width="100mm"` が377.95になる。25.4を渡すと物理単位のSVGは**寸法がそのままmm**、
+`viewBox` だけのSVGは**1ユーザー単位 = 1mm** になる。
 
-**物理単位のSVGには 0.54ppm の系統的なずれがある**(実測)。svgelementsがmm→pxに
-CSSの丸めた定数(3.7795296。厳密には 96/25.4 = 3.77952755…)を使うため、`width="100mm"` は
-100.000054 になる。100mmで54ナノメートルなので実用上は無視してよいが、**取り込んだ寸法が
-ぴったり一致しない**ことは知っておくこと(テストも近似で比べている)。
+**物理単位のSVGには 0.54ppm の系統的なずれがある**(実測)。svgelementsがmm→pxにCSSの丸めた
+定数(3.7795296。厳密には 96/25.4)を使うため `width="100mm"` は100.000054になる。
+取り込んだ寸法はぴったり一致しない(テストも近似で比べている)。
 
-**Y軸を反転する。** SVGのYは下向き、スケッチのvは上向き。反転しないと上下が逆に入る。
-反転は向きも裏返すので、**真円の弧は start/end を入れ替える**必要がある(中点の角度で判定)。
+**Y軸を反転する。** SVGのYは下向き、スケッチのvは上向き。反転は向きも裏返すので、
+**真円の弧は start/end を入れ替える**(中点の角度で判定)。
 
 **曲線は曲線のまま渡す。** 3次ベジエ(C/S)は1:1、2次ベジエ(Q/T)は次数上げで**厳密に**3次へ。
-楕円弧(rx≠ry)だけはベジエで厳密に表せないので90度以下に割って近似する
-(**最大誤差は半径の0.027%**。半径50mmで13.6um)。折れ線には落とさない —— 落とすと
-押し出した側面が線分の数だけ平面に割れる(`kernel_sketch._edges_bezier` のdocstring)。
+楕円弧(rx≠ry)だけは90度以下に割ってベジエ近似する(**最大誤差は半径の0.027%**。半径50mmで
+13.6um)。折れ線には落とさない —— 押し出した側面が線分の数だけ平面に割れる
+(`kernel_sketch._edges_bezier` のdocstring)。
 
 **見た目は捨てる。** fill / stroke / 色 / text / image / clip-path はスケッチに意味が無い。
-`<text>` を図形として取り込みたいなら、SVG側でアウトライン化してから読ませること。
+`<text>` はSVG側でアウトライン化してから読ませること。
 
 失敗は黙って通さない: パス無し=FileNotFoundError / 壊れている=ValueError /
 図形が1つも無い=ValueError / 多すぎる=ValueError(`MAX_ENTITIES`)。いずれもdoc/logは無傷。
@@ -38,11 +36,10 @@ from typing import Any, List, Tuple, Union
 
 PathLike = Union[str, Path]
 
-#: 単位解決に渡すppi。25.4 = 1インチ25.4 → **ユーザー単位がmmで出る**(モジュールdocstring)。
+#: 単位解決に渡すppi(モジュールdocstring)。
 MM_PER_INCH = 25.4
 
-#: 1回の取り込みで作ってよい図形の上限。画像をトレースしたSVGは数万セグメントになりうる。
-#: 黙って切り詰めず、**その場で断る**(切り詰めると欠けた輪郭で領域検出が別物を返す)。
+#: 1回の取り込みで作ってよい図形の上限。黙って切り詰めず断る(欠けた輪郭で領域検出が別物を返す)。
 MAX_ENTITIES = 5000
 
 #: 真円とみなす rx/ry の相対差。これ以下なら `arc` に、超えたらベジエ近似に振る。
@@ -52,9 +49,7 @@ _CIRCULAR_TOLERANCE = 1.0e-9
 def read_svg_entities(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dict]]:
     """SVGを読み、`(source_name, entities)` を返す。`source_name` は**ファイル名だけ**。
 
-    `entities` は `[{"kind":.., "params":{..}}, ...]`。`scale` は解決後のmmへさらに掛ける倍率で、
-    寸法の合わないSVG(単位を持たず1ユーザー単位=1mmでは大きすぎる/小さすぎる図)を
-    取り込むときだけ使う。
+    `entities` は `[{"kind":.., "params":{..}}, ...]`。`scale` は解決後のmmへさらに掛ける倍率。
     """
     scale = float(scale)
     if not math.isfinite(scale) or scale <= 0:
@@ -87,7 +82,7 @@ def read_svg_entities(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dic
 # 解析(svgelements)
 # --------------------------------------------------------------------------------------
 def _parse(data: bytes, source_name: str) -> Any:
-    """SVG本文をパースする。壊れていれば ValueError(パーサの例外をそのまま投げない)。"""
+    """SVG本文をパースする。壊れていれば ValueError。"""
     from svgelements import SVG
 
     try:
@@ -99,7 +94,7 @@ def _parse(data: bytes, source_name: str) -> Any:
 
 
 def _height_of(svg: Any) -> float:
-    """Y反転の基準にする高さ(mm)。取れなければ図形のbboxの上端で代用する。"""
+    """Y反転の基準にする高さ(mm)。取れなければ図形のbboxの上端で代用。"""
     try:
         value = float(getattr(svg, "height", None))
     except (TypeError, ValueError):
@@ -111,7 +106,7 @@ def _height_of(svg: Any) -> float:
 
 
 def _shapes(svg: Any) -> List[Any]:
-    """スケッチに取り込める要素(= 幾何を持つもの)だけを拾う。text / image はここで落ちる。"""
+    """幾何を持つ要素だけを拾う。text / image はここで落ちる。"""
     from svgelements import Shape
 
     return [element for element in svg.elements() if isinstance(element, Shape)]
@@ -157,7 +152,7 @@ def _translate_segment(segment: Any, height: float, scale: float) -> List[dict]:
 
 
 def _flip(x: float, y: float, height: float, scale: float) -> Tuple[float, float]:
-    """SVGの (x, y) をスケッチの (u, v) へ。**ここだけがY反転と倍率を知っている**。"""
+    """SVGの (x, y) をスケッチの (u, v) へ。Y反転と倍率はここだけが知っている。"""
     return (x * scale, (height - y) * scale)
 
 
@@ -201,7 +196,7 @@ def _bezier_entity(
 
 
 def _quadratic_as_cubic(segment: Any, height: float, scale: float) -> dict:
-    """2次ベジエを3次へ。**次数上げは厳密**で、近似ではない。
+    """2次ベジエを3次へ(次数上げは厳密)。
 
         c1 = p0 + 2/3 (q - p0),  c2 = p1 + 2/3 (q - p1)
     """
@@ -232,10 +227,8 @@ def _arc_entities(segment: Any, height: float, scale: float) -> List[dict]:
 def _circular_arc_entity(
     segment: Any, height: float, scale: float, radius: float
 ) -> List[dict]:
-    """真円の弧を `arc`(中心・半径・開始角・終了角)へ。
-
-    **Y反転で回転の向きが裏返る**ので、start/end をそのまま使うと弧が「残りの側」になる。
-    元の弧の中点が反時計回りに start→end の間へ入るかを見て、入らなければ入れ替える。
+    """真円の弧を `arc` へ。Y反転で回転の向きが裏返るので、中点が反時計回りに
+    start→end の間へ入らなければ start/end を入れ替える。
     """
     center = _point(segment.center, height, scale)
     start = _point(segment.start, height, scale)
@@ -267,10 +260,9 @@ def _circular_arc_entity(
 
 
 def _elliptical_arc_entities(segment: Any, height: float, scale: float) -> List[dict]:
-    """楕円弧を90度以下のベジエへ。制御点は**接ベクトル**から作るので回転楕円もそのまま扱える。
+    """楕円弧を90度以下のベジエへ。制御点は接ベクトルから作るので回転楕円も扱える。
 
-    `prx` / `pry` は中心から主軸・副軸の端点なので、その差ベクトルが楕円の2軸そのものになる。
-    楕円上の点は `P(t) = 中心 + cos(t)・軸x + sin(t)・軸y`。
+    `prx` / `pry` は中心から主軸・副軸の端点で、その差ベクトルが楕円の2軸。
     """
     center = segment.center
     axis_x = (
@@ -287,8 +279,7 @@ def _elliptical_arc_entities(segment: Any, height: float, scale: float) -> List[
         return []
     count = max(1, math.ceil(abs(sweep) / (math.pi / 2)))
     step = sweep / count
-    # 円弧を3次ベジエで近似する標準の係数。`tangent` は t についての微分なので、楕円は円のアフィン像として
-    # 同じ係数で近似できる(90度で半径の0.027%)。Maisonobe の式 sin·(√(4+3tan²)−1)/3 は同じ条件で0.196%(実測)。
+    # 円弧の3次ベジエ近似の標準係数(90度で半径の0.027%)。Maisonobe の式 sin·(√(4+3tan²)−1)/3 は同条件で0.196%(実測)。
     alpha = 4.0 / 3.0 * math.tan(step / 4.0)
 
     def position(t: float) -> Tuple[float, float]:
