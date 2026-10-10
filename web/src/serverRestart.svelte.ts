@@ -60,7 +60,14 @@ export async function restartServer(
   if (restarting) return
   restarting = { title: shown.title, detail: shown.detail }
   // 比べる元は押した時点の印(ページを開いた後に別の画面から立て直されていることがある)。
-  const before = (await fetchJson<ServerConfig>('duocad-config.json'))?.boot
+  // 取れなければ始めない —— 比べる元が無いまま始めると、落ちる前の応答を「立ち直った」と読みうる。
+  const now = await fetchJson<ServerConfig>('duocad-config.json')
+  if (now === null) {
+    restarting = null
+    fail(`${shown.failPrefix}: サーバの状態を取れなかった`)
+    return
+  }
+  const before = now.boot
   let response: Response
   try {
     response = await fetch(new URL(path, location.href), { method: 'POST' })
@@ -82,6 +89,7 @@ export async function restartServer(
   }
   // **起動の印が変わったら**立ち直った —— 落ちる前の応答を「立ち直った」と読むと、古い画面のまま読み直してしまう。
   // 落ちている間を一度も見なくても(画面が止まっていた等)、印が変われば立ち直ったと分かる。
+  // 印を持たない古いサーバ(この印を足す前の版)からの更新だけは、落ちたのを見てから立ち直りを待つ。
   const deadline = Date.now() + RESTART_TIMEOUT_MS
   let wentDown = false
   while (Date.now() < deadline) {
@@ -91,7 +99,7 @@ export async function restartServer(
       wentDown = true
       continue
     }
-    if (next.boot !== before || (wentDown && before === undefined)) {
+    if (before !== undefined ? next.boot !== before : wentDown) {
       location.reload()
       return
     }
