@@ -1,23 +1,11 @@
-"""**全verbをMCPツールとして公開する**契約。
-
-`tests/test_mcp_selection.py` が選択・述語の側を持ち、こちらが**操作(verb)と問い合わせ**の
-側を持つ。AI側の合格条件は「MCPツールとして呼べ/引数を**述語**または明示的な参照で
-与えられ/**結果と失敗が構造化して返る**」。
-
-## このファイルが固定する4つ
-
-1. **到達性** — 各ツールが引数スキーマ(型・必須・説明)を持ち、配った引数を実体
-   (`DocumentTools` のメソッド)がそのまま受け取れること。ツールの顔ぶれは
-   `tests/test_doc_code_agreement.py` が `MCP.md` の表と突き合わせる。
-2. **形は選択から、数値は引数から** — 面・辺・領域は**確定した選択**から取り、数値・名前・
-   パスだけを引数で渡す。これにより「提案のままでは適用できない」が**全verbに自動的にかかる**。
-   例外はBody(`body_id`)だけ —— Bodyは選択集合の項目ではない。
-3. **構造化された結果** — verbツールは `verb`/`seq`/`changed_bodies`/`bodies`/`can_undo`/
-   `can_redo` を必ず返す。自然文だけを返さない。**`changed_bodies` は `Session.body_revision`
-   の前後差分**で導くこと(verbごとに数え上げると、新しいverbを足すたびに数え漏れる)。
-4. **構造化された失敗** — 失敗はJSONで返す(`{"error": {"code","message","tool","exception"}}`)。
-   例外のテキストをそのまま投げない。コードは `tests/mcp_support.py` の `ERROR_CODES` の語彙に限る
-   (顔ぶれは `MCP.md`「実装のメモ」が正。一致は `tests/test_doc_code_agreement.py` が見る)。
+"""全verbをMCPツールとして公開する契約。ツールの顔ぶれは `tests/test_doc_code_agreement.py` が `MCP.md` の表と、
+選択・述語は `tests/test_mcp_selection.py` が見る。ここが固定するのは:
+1. 到達性: 各ツールが引数スキーマを持ち、配った引数を `DocumentTools` のメソッドがそのまま受け取れる。
+2. 形は確定した選択から取り、数値・名前・パスだけを引数で渡す(例外はBodyの `body_id`)。
+3. verbの結果は `verb`/`seq`/`changed_bodies`/`bodies`/`can_undo`/`can_redo` の構造で返す。`changed_bodies` は
+`Session.body_revision` の前後差分で導く(verbごとの数え上げは新verbで数え漏れる)。
+4. 失敗は `{"error": {"code","message","tool","exception"}}` のJSONで返す。コードは `tests/mcp_support.py` の
+`ERROR_CODES` の語彙に限る(`MCP.md`「実装のメモ」が正、一致は `tests/test_doc_code_agreement.py`)。
 """
 from __future__ import annotations
 
@@ -38,8 +26,7 @@ from document_support import BOX_X, BOX_Y, BOX_Z
 from mcp_support import call, call_error, request
 from session_support import pushed_by_mcp
 
-# JSON-RPC 2.0 の標準エラーコード。**実装から import しない**
-# (importすると実装が変わった瞬間にテストも追従して緑になり、契約にならない)。
+# # JSON-RPC 2.0 の標準エラーコード。実装から import しない(実装に追従して契約でなくなる)。
 INVALID_PARAMS = -32602
 
 
@@ -53,12 +40,8 @@ SHAPE_VERB_TOOLS = {
 }
 
 
-# --------------------------------------------------------------------------------------
-# 道具
-# --------------------------------------------------------------------------------------
 @pytest.fixture()
 def empty_session(tmp_path: Path) -> Session:
-    """STEPを読まない空のセッション(スケッチから作る経路の出発点)。"""
     return Session(None, 0.2)
 
 
@@ -72,7 +55,6 @@ def tool_list(server: McpServer) -> list:
 
 
 def select_refs(server: McpServer, refs: list) -> None:
-    """明示的な参照で選択を置く(そのまま verb へ渡せる)。"""
     call(server, "set_selection", {"refs": refs})
 
 
@@ -85,7 +67,6 @@ def edge_ref(body_id: str, index: int) -> dict:
 
 
 def top_face_index(shape) -> int:
-    """外向き法線が +Z の面の1始まり添字(**決め打ちしない**。A1と同じ流儀)。"""
     for face in query.describe_faces(shape):
         if face["normal"][2] > 0.9:
             return face["index"]
@@ -93,7 +74,6 @@ def top_face_index(shape) -> int:
 
 
 def vertical_edge_indices(shape) -> list:
-    """Zに平行で長い辺の添字(直方体なら4本)。"""
     found = []
     for edge in query.describe_edges(shape):
         start, end = edge["start"], edge["end"]
@@ -102,15 +82,8 @@ def vertical_edge_indices(shape) -> list:
     return found
 
 
-# --------------------------------------------------------------------------------------
-# 1. 到達性 — 全verbがMCPツールとして呼べること
-# --------------------------------------------------------------------------------------
 def test_tool_names_match_the_verb_names_in_the_operation_log():
-    """ログに載るverbと、catalog が「ログに載る」と宣言している名前が**両方向で**一致する。
-
-    落ちたら、ログのverb名と同じ綴りのツール(catalog の名前)が無いか、宣言した形のverbが
-    ログに登録されていない(AIはログのverb名を読んで次のツールを選ぶ)。
-    """
+    """落ちたら: ログのverb名と同じ綴りのツールが無いか、catalog が「ログに載る」と宣言した形のverbがログに登録されていない。"""
     from duocad.oplog import registered_verbs
 
     # `extrude_face` / `set_parameter` は保存済みログの再生のためだけに登録が残る(公開ツールではない)
@@ -138,11 +111,7 @@ def test_every_tool_has_a_description_and_an_object_schema(server: McpServer):
 
 
 def test_every_argument_is_typed_and_documented(server: McpServer):
-    """引数ひとつひとつが**型と説明**を持つ。
-
-    型が無いと `_check_arguments` が検査できず、説明が無いとAIは何を入れるか推測する。
-    型は文字列か、複数を許すなら文字列のリスト(`fillet.radius` は数値と配列の両方を取る)。
-    """
+    """引数は型と説明を持つ(型が無いと `_check_arguments` が検査できない)。型は文字列か文字列のリスト(`fillet.radius` は数値と配列の両方を取る)。"""
     known = {"object", "array", "string", "number", "integer", "boolean"}
     for tool in tool_list(server):
         for name, spec in (tool["inputSchema"].get("properties") or {}).items():
@@ -155,11 +124,8 @@ def test_every_argument_is_typed_and_documented(server: McpServer):
 
 
 def test_the_published_arguments_are_exactly_what_the_implementation_accepts(server: McpServer):
-    """配る引数(名前・必須)が実体の引数(名前・既定値の有無)と一致する。実体は `DocumentTools` に
-    同じ綴りのメソッドがあればそれ、無ければ verb の入口(`duocad/entry.py`)。
-
-    落ちたら、AIに見せた引数を実体が受け取れない(`TypeError` → `internal`)か、
-    実体が受け取る引数・省略できる引数をAIに見せていない(`catalog` の宣言と実体のずれ)。
+    """配る引数(名前・必須)が実体(`DocumentTools` の同名メソッド、無ければ `duocad/entry.py` のverb入口)の引数と一致する。
+    落ちたら: AIに見せた引数を実体が受け取れない(`TypeError` → `internal`)か、実体の引数を見せていない。
     """
     mismatched = {}
     for tool in tool_list(server):
@@ -177,11 +143,7 @@ def test_the_published_arguments_are_exactly_what_the_implementation_accepts(ser
 
 
 def test_no_verb_tool_takes_a_shape_argument(server: McpServer):
-    """**形の引数(面・辺・領域)を持つverbツールは1つも無い**(モジュールdocstring 2)。
-
-    `face_index=` や `edges=` を受ける裏口があると、A1が決めた「提案のままでは
-    verb に渡せない」がその経路だけ素通りになる。
-    """
+    """形の引数(面・辺・領域)を持つverbツールは無い。`face_index=` や `edges=` の裏口は「提案のままではverbに渡せない」を素通りさせる。"""
     forbidden = {"face_index", "face", "edges", "edge_indices", "regions", "refs", "selection"}
     for tool in tool_list(server):
         if tool["name"] not in SHAPE_VERB_TOOLS:
@@ -190,16 +152,8 @@ def test_no_verb_tool_takes_a_shape_argument(server: McpServer):
         assert not leaked, f"{tool['name']} が形を直接受けている: {sorted(leaked)}"
 
 
-# --------------------------------------------------------------------------------------
-# 2. スキーマ検証 — 黙って通さない(型)
-# --------------------------------------------------------------------------------------
 def _assert_rejects_argument(server: McpServer, name: str, arguments: dict, argument: str) -> None:
-    """スキーマ違反は INVALID_PARAMS で、**どの引数が悪いかを名指しする**。
-
-    名指しを要求するのは2つ理由がある: (a) AIが自力で直せる (b) このテストが
-    「そんなツールは無い」でも同じ INVALID_PARAMS になるため、**名指しが無いと
-    ツール未実装のまま緑になる**(F1の時点で偽の緑を作らない)。
-    """
+    """スキーマ違反は INVALID_PARAMS で、どの引数が悪いかを名指しする(名指しが無いと「そんなツールは無い」と区別できず、未実装のまま緑になる)。"""
     response = request(server, "tools/call", {"name": name, "arguments": arguments})
     assert "error" in response, f"{name}.{argument} を素通しした: {response}"
     assert response["error"]["code"] == INVALID_PARAMS
@@ -207,11 +161,7 @@ def _assert_rejects_argument(server: McpServer, name: str, arguments: dict, argu
 
 
 def test_numbers_are_not_accepted_as_strings(server: McpServer):
-    """`radius: "3"` を通すと、コア側で `float("3")` が成功して**黙って動く**。
-
-    スキーマが `number` と言っている以上、プロトコル層で弾く(実行時エラーではなく
-    INVALID_PARAMS。AIが型を間違えたのはプロトコルの誤りである)。
-    """
+    """`radius: "3"` を通すとコアの `float("3")` が成功して黙って動く。プロトコル層で INVALID_PARAMS にする。"""
     _assert_rejects_argument(server, "fillet", {"radius": "3"}, "radius")
 
 
@@ -237,17 +187,11 @@ def test_integer_arguments_reject_fractions(server: McpServer):
     )
 
 
-# --------------------------------------------------------------------------------------
-# 3. 構造化された結果 — 何が起きたかが返る
-# --------------------------------------------------------------------------------------
-#: `bodies[]` の1要素が持つキー。**過不足なく固定する** —— 「面数だけ合っていれば緑」に
-#: しておくと、名前や可視性を落とした実装が通り、AIは次の一手のために
-#: `describe_document` をもう1往復することになる。
+# #: `bodies[]` の1要素のキー。過不足なく固定する(落とした実装が通ると、AIが `describe_document` をもう1往復する)。
 BODY_KEYS = {"body_id", "name", "kind", "visible", "face_count", "volume"}
 
 
 def _assert_verb_envelope(payload: dict, verb: str) -> None:
-    """verbツールの戻り値が持つべき最低限(モジュールdocstring 3)。"""
     assert payload["verb"] == verb
     assert isinstance(payload["seq"], int) and payload["seq"] >= 1
     assert isinstance(payload["changed_bodies"], list)
@@ -262,10 +206,7 @@ def _assert_verb_envelope(payload: dict, verb: str) -> None:
 
 
 def test_a_verb_reports_what_changed_not_a_sentence(server: McpServer, box_session: Session):
-    """成功したら**変わったBody・新しい面数・操作のseq**が構造で返る。
-
-    自然文だけを返すと、AIは次の一手を文章から推測することになる。
-    """
+    """成功したら変わったBody・新しい面数・操作のseqが構造で返る(自然文だけだとAIが次の一手を推測する)。"""
     box = box_session.document.bodies[0]
     faces_before = kernel.face_count(box.shape)
     volume_before = query.volume(box.shape)
@@ -284,11 +225,7 @@ def test_a_verb_reports_what_changed_not_a_sentence(server: McpServer, box_sessi
 def test_changed_bodies_is_empty_when_only_a_sketch_changed(
     empty_session: Session,
 ):
-    """スケッチだけを触った操作は `changed_bodies` が空(嘘の変更を報告しない)。
-
-    `changed_bodies` を**版の前後差分**から導けばこれは自動的に成立する。
-    verbごとに「このverbはbodyを変える」と数え上げる実装だと、ここが静かに間違う。
-    """
+    """スケッチだけを触った操作は `changed_bodies` が空。verbごとに数え上げる実装だとここが静かに間違う。"""
     server = McpServer(DocumentTools(empty_session))
     payload = call(server, "sketch_create", {"base_plane": "XY"})
     _assert_verb_envelope(payload, "sketch_create")
@@ -299,11 +236,8 @@ def test_changed_bodies_is_empty_when_only_a_sketch_changed(
 def test_set_visible_reports_the_change_but_not_a_verb_envelope(
     server: McpServer, box_session: Session
 ):
-    """M4で決めた `set_visible` の戻り値(`previous` / `changed`)は壊さない。ただし
-    **`verb` / `seq` は載せない**。
-
-    可視性は操作ログに載らなくなったので、verbの封筒を配ると「undoで戻る」と読める嘘を
-    AIへ渡すことになる。見分けは選択と同じ `change` キー(契約2)。
+    """`set_visible` の戻り値(`previous` / `changed`)は壊さず、`verb` / `seq` は載せない(可視性は操作ログに載らず、
+    封筒を配ると「undoで戻る」という嘘になる)。見分けは選択と同じ `change` キー。
     """
     box = box_session.document.bodies[0]
     payload = call(server, "set_visible", {"body_id": box.id, "visible": False})
@@ -315,11 +249,8 @@ def test_set_visible_reports_the_change_but_not_a_verb_envelope(
 
 
 def test_every_sketch_verb_is_reachable_and_returns_its_id(empty_session: Session):
-    """スケッチの5verbを**実際に1回ずつ成功させる**(集合とスキーマだけでは足りない)。
-
-    到達性のテストは `tools/list` の顔ぶれしか見ないので、`descriptors()` に名前を書いて
-    偽の封筒を返すだけでも緑になる。**コアへ届いていること**(ログのverbと図形の増加)と
-    **作ったもののIDが返ること**(返さないとAIは次の呼び出しで指せない)まで見る。
+    """スケッチの5verbを実際に1回ずつ成功させる: コアへ届くこと(ログのverbと図形の増加)と作ったもののIDが返ること
+    (`tools/list` の顔ぶれだけでは偽の封筒でも緑になる)。
     """
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
@@ -363,10 +294,7 @@ def test_every_sketch_verb_is_reachable_and_returns_its_id(empty_session: Sessio
 
 
 def test_both_patterns_are_reachable_and_return_their_id(empty_session: Session):
-    """反復2verb(矩形・円形)も1回ずつ成功させる。`pattern_id` が返ること。
-
-    **1つの図形を2つの反復で使い回せない**(コアが ValueError で拒む)ので、図形を2つ作る。
-    """
+    """反復2verb(矩形・円形)も1回ずつ成功し `pattern_id` が返る。1つの図形を2つの反復で使い回せない(コアが ValueError)ので図形を2つ作る。"""
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     first = call(server, "add_circle", {"sketch_id": sketch_id, "center": [10, 0], "radius": 2})[
@@ -397,9 +325,6 @@ def test_both_patterns_are_reachable_and_return_their_id(empty_session: Session)
     ]
 
 
-# --------------------------------------------------------------------------------------
-# 4. 構造化された失敗 — 理由が機械可読で返る
-# --------------------------------------------------------------------------------------
 def test_a_missing_body_is_reported_as_not_found(server: McpServer, box_session: Session):
     """`KeyError` は `not_found` で、**その場で有効なボディIDを添える**(行き止まりのエラーにしない)。"""
     error = call_error(server, "describe_shape", {"body_id": "ghost"})
@@ -409,12 +334,8 @@ def test_a_missing_body_is_reported_as_not_found(server: McpServer, box_session:
 
 
 def test_an_unknown_entity_id_shows_the_real_ones(empty_session: Session):
-    """存在しない図形IDは、弾くだけでなく**その場で有効なIDを見せる**。
-
-    「そのIDは違う」としか言わないエラーは行き止まりで、次の一手が書いていない。AIは
-    IDが分からないとき「尋ねる」ではなく**「推測する」に倒れる**(実測: ローカルLLMが
-    「ID形式を推測して試します」と述べて存在しない `c1` を渡した)ので、弾くだけでは
-    同じ推測を繰り返される。弾いた瞬間に正解の集合が見えていれば次の一手で復帰できる。
+    """存在しない図形IDは弾くだけでなく有効なIDを見せる。実測: ローカルLLMが「ID形式を推測して試します」と述べて
+    存在しない `c1` を渡した。IDが分からないとAIは尋ねず推測するので、正解の集合が見えれば次の一手で復帰できる。
     """
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
@@ -455,13 +376,8 @@ def test_a_bad_value_is_reported_as_invalid_argument(server: McpServer, box_sess
 
 
 def test_applying_a_verb_with_nothing_selected_says_so(server: McpServer):
-    """選択が空のまま verb を呼んだら `selection_empty`(何が要るかも返す)。
-
-    ここを `invalid_argument` に潰すと、AIは「引数が悪い」と読んで数値をいじり始める。
-    **次に何をすればよいかが変わる失敗は、別のコードにする。**
-
-    選択に起因する失敗は `required_kind`(その verb が食う種別)と
-    `selection`(今の中身の要約)を必ず載せる —— これがAIの次の一手を決める材料である。
+    """選択が空のまま verb を呼んだら `selection_empty`(`invalid_argument` に潰すとAIが数値をいじり始める)。
+    `required_kind` と `selection`(今の中身の要約)を必ず載せる。
     """
     error = call_error(server, "fillet", {"radius": 2.0})
     assert error["code"] == "selection_empty"
@@ -471,14 +387,8 @@ def test_applying_a_verb_with_nothing_selected_says_so(server: McpServer):
 
 
 def test_selecting_the_wrong_kind_has_its_own_code(server: McpServer, box_session: Session):
-    """面を選んで `fillet` を呼ぶと `selection_kind_mismatch`(**種別の取り違え**)。
-
-    `selection_empty` と分けてあるのは、面が1枚入っている選択に対して「選択が空」と名乗ると
-    **名前が嘘をつく**からである。加えてアプリ層が種別違いにだけ反応する余地(「この面の辺を
-    選ぶ」等)をコードで分岐できる。
-
-    `present_kinds` に**実際に確定している種別と件数**が入るので、AIは `get_selection` を
-    呼び直さずに次の一手を決められる(矛盾指示でモデルが様子見を繰り返す暴走の予防)。
+    """面を選んで `fillet` を呼ぶと `selection_kind_mismatch`。`selection_empty` と分けるのは、面が入っている選択に
+    「空」と名乗ると嘘になるため。`present_kinds` に確定している種別と件数が入る。
     """
     box = box_session.document.bodies[0]
     select_refs(server, [face_ref(box.id, 1)])
@@ -490,15 +400,8 @@ def test_selecting_the_wrong_kind_has_its_own_code(server: McpServer, box_sessio
     assert "edge" in error["hint"]
 
 
-# --------------------------------------------------------------------------------------
-# 5. スケッチ → 領域 → 押し出し(MCPだけで形が作れること)
-# --------------------------------------------------------------------------------------
 def test_a_solid_can_be_built_from_scratch_through_mcp(empty_session: Session):
-    """**空の文書からMCPだけで箱が作れる**(スケッチ4verb + `extrude` の到達性の実証)。
-
-    領域は「描くもの」ではなく計算されるもの(§3.3)なので、AIは
-    `set_selection(refs=[{"sketch":.., "index":..}])` で領域を選んでから押し出す。
-    """
+    """空の文書からMCPだけで箱が作れる(スケッチ4verb + `extrude`)。領域は `set_selection(refs=[{"sketch":.., "index":..}])` で選んでから押し出す。"""
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     call(server, "add_rectangle", {"sketch_id": sketch_id, "corner": [0, 0], "width": BOX_X, "height": BOX_Y})
@@ -514,12 +417,7 @@ def test_a_solid_can_be_built_from_scratch_through_mcp(empty_session: Session):
 
 
 def test_extrude_can_cut(empty_session: Session):
-    """`mode="cut"` が実際にコアへ届く(スキーマに書いてあるだけにしない)。
-
-    `join` しか通っていないと、`mode` を読み飛ばす実装 —— つまり**切り取りのつもりが
-    足し算になる** —— でも緑になる。本人が日常的に使う「円を線で分けて片側だけ押し出す」は
-    この引数の上に乗っている(§1)。
-    """
+    """`mode="cut"` が実際にコアへ届く。`join` しか通っていないと、`mode` を読み飛ばして切り取りが足し算になる実装でも緑になる。"""
     server = McpServer(DocumentTools(empty_session))
     plate = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     call(server, "add_rectangle", {"sketch_id": plate, "corner": [0, 0], "width": BOX_X, "height": BOX_Y})
@@ -542,12 +440,7 @@ def test_extrude_can_cut(empty_session: Session):
 
 
 def test_extrude_can_make_a_new_body(empty_session: Session):
-    """`mode="new"` が実際にコアへ届く(既存ボディがあっても融合しない)。
-
-    `join` との差はボディの本数にしか出ない —— `new` を読み飛ばして `join` に落ちる実装は、
-    形が増えるので**体積だけ見ていると緑になる**。AIが「別のボディとして作って」と言われた
-    ときに黙って融合させないための一点。
-    """
+    """`mode="new"` が実際にコアへ届く(既存ボディがあっても融合しない)。差はボディの本数にしか出ず、体積だけ見ていると緑になる。"""
     server = McpServer(DocumentTools(empty_session))
     plate = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     call(server, "add_rectangle", {"sketch_id": plate, "corner": [0, 0], "width": BOX_X, "height": BOX_Y})
@@ -604,7 +497,6 @@ def test_sketch_create_can_sit_on_a_selected_face(server: McpServer, box_session
 
 
 def _plate_with_face_selected(server: McpServer, axis: str) -> str:
-    """100x60x10 の板を XY に作り、法線が +axis の面を述語で選んで body_id を返す。"""
     plate = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     call(server, "add_rectangle", {"sketch_id": plate, "corner": [0, 0], "width": 100, "height": 60})
     select_refs(server, [{"sketch": plate, "index": 1}])
@@ -703,15 +595,9 @@ def test_sketch_create_offset_without_a_plane_or_a_selection_is_an_error(
     assert error["code"] in {"selection_empty", "invalid_argument"}
 
 
-# --------------------------------------------------------------------------------------
-# 6. フィーチャ・パラメータ・ボディ
-# --------------------------------------------------------------------------------------
 def test_move_body_can_rotate_through_mcp(server: McpServer, box_session: Session):
-    """**`mode="rotate"` がMCPの口からコアまで届く**(スキーマに書いてあるだけにしない)。
-
-    ここを見ないと、`DocumentTools` が引数を `float()` で潰していて `dx=None` で落ちる/
-    `mode` を読み飛ばして並進になる、といった層の取りこぼしが誰にも見られない ——
-    AIが回転を使う経路はこの1本だけである(WebSocketには開けていない)。
+    """`mode="rotate"` がMCPの口からコアまで届く。`DocumentTools` が引数を `float()` で潰す/`mode` を読み飛ばして
+    並進になる層の取りこぼしを見る(AIが回転を使う経路はこの1本だけ)。
     """
     box = box_session.document.bodies[0]
     select_refs(server, [face_ref(box.id, 1)])
@@ -775,11 +661,7 @@ def test_chamfer_reaches_the_core_verb(server: McpServer, box_session: Session):
 
 
 def test_fillet_accepts_a_radius_per_edge(server: McpServer, box_session: Session):
-    """半径は辺ごとにも指定できる(コアの契約)。**順序は選択順**である。
-
-    `edge_indices` が選択順を保つ(A1の決定)ので、半径のリストは選択した順に対応する。
-    ここが昇順に並べ替えられていると、半径の割り当てが黙ってずれる。
-    """
+    """半径は辺ごとにも指定でき、順序は選択順(`edge_indices` が選択順を保つ)。昇順に並べ替えると割り当てが黙ってずれる。"""
     box = box_session.document.bodies[0]
     edges = vertical_edge_indices(box.shape)
     select_refs(server, [edge_ref(box.id, index) for index in edges])
@@ -792,10 +674,8 @@ def test_fillet_accepts_a_radius_per_edge(server: McpServer, box_session: Sessio
 
 
 def test_set_parameter_is_not_a_public_tool(empty_session: Session):
-    """`set_parameter` は公開面(カタログ・Session・MCP・WebSocket)から外してある。
-
-    人間側に値の打ち直し口ができたときに人とAIの両方へ同時に出す。実装と `register_verb` の登録は
-    保存済みログの再生のために残る(`tests/test_parameters.py` が再生を固定している)。
+    """`set_parameter` は公開面(カタログ・Session・MCP・WebSocket)から外してある。実装と `register_verb` は
+    保存済みログの再生のために残る(`tests/test_parameters.py` が固定)。
     """
     from duocad import catalog
 
@@ -809,11 +689,7 @@ def test_set_parameter_is_not_a_public_tool(empty_session: Session):
 
 
 def test_import_step_reports_a_missing_file_as_not_found(empty_session: Session):
-    """無いファイルは `FileNotFoundError` で来る。**`internal` に落とさない**。
-
-    AIが直せる誤り(パスの間違い)を「内部エラー」と名付けると、AIは直せるものを
-    直さずに諦める。型→コードの対応表に `FileNotFoundError` を入れておくこと。
-    """
+    """無いファイルは `FileNotFoundError` で来て `internal` に落とさない(AIが直せる誤りを内部エラーと名付けると諦める)。"""
     server = McpServer(DocumentTools(empty_session))
     error = call_error(server, "import_step", {"path": str(REPO_ROOT / "no-such-file.step")})
     assert error["code"] == "not_found"
@@ -821,11 +697,7 @@ def test_import_step_reports_a_missing_file_as_not_found(empty_session: Session)
 
 
 def test_export_writes_a_file_and_reports_where(server: McpServer, tmp_path: Path):
-    """書き出しは**ログに載らない**(文書を変えないので verb ではない)。
-
-    そのぶん「どこへ書いたか」を返す —— AIが自分で `ls` できない以上、
-    戻り値が唯一の確認手段である。サイズは返さない。
-    """
+    """書き出しはログに載らず(verbではない)、どこへ書いたかを返す(AIが自分で `ls` できないので戻り値が唯一の確認手段)。"""
     step_path = tmp_path / "out.step"
     payload = call(server, "export_step", {"path": str(step_path)})
     assert Path(payload["path"]) == step_path
@@ -877,20 +749,12 @@ def test_export_does_not_touch_the_operation_log(server: McpServer, box_session:
     assert len(box_session.document.log.entries) == before
 
 
-# --------------------------------------------------------------------------------------
-# 7. undo / redo — **UIから見た履歴と同じものを動かす**
-# --------------------------------------------------------------------------------------
 def test_undo_through_mcp_undoes_the_ui_operation(box_session: Session):
-    """**AI用の別履歴を作っていないこと**。
-
-    WebSocket(=人の操作)で積んだ操作が、MCPの `undo` で取り消せる。ここが別履歴なら
-    「人が押し出して、AIが取り消す」という交互操作の基本形が成立しない。
-    """
+    """AI用の別履歴を作っていない: WebSocket(人の操作)で積んだ操作がMCPの `undo` で取り消せる。"""
     box = box_session.document.bodies[0]
     server = McpServer(DocumentTools(box_session))
 
-    # 人の操作(アプリ層の経路)。**材料に可視性は使えない** —— `set_visible` は操作ログに
-    # 乗らず、undoの対象ではない(`duocad.selection.set_visible`)。
+    # # 人の操作(アプリ層の経路)。材料に可視性は使えない(`set_visible` は操作ログに乗らず undo の対象外)。
     select_refs(server, [face_ref(box.id, 1)])
     box_session.extrude(5.0, mode="join")
     extruded = call(server, "describe_shape", {"body_id": box.id})["volume"]
@@ -925,16 +789,8 @@ def test_undo_with_nothing_to_undo_is_a_structured_failure(server: McpServer):
     assert error["code"] == "invalid_argument"
 
 
-# --------------------------------------------------------------------------------------
-# 8. 問い合わせ — describe_document がスケッチまで見せる(§5)
-# --------------------------------------------------------------------------------------
 def test_describe_document_lists_sketches_and_their_entities(empty_session: Session):
-    """§5の `describe_document()` は「ボディ・**スケッチ**・パラメータの一覧」である。
-
-    スケッチが見えないと、`pattern_rectangular(entities=[...])` の引数をAIが作れない
-    ——自分が同じ会話の中で作った図形のIDしか知らないことになり、undo/redoや再接続で
-    盲目になる。
-    """
+    """`describe_document()` はボディ・スケッチ・パラメータの一覧。スケッチが見えないと `pattern_rectangular(entities=[...])` の引数をAIが作れない。"""
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     entity_id = call(
@@ -949,8 +805,7 @@ def test_describe_document_lists_sketches_and_their_entities(empty_session: Sess
     entities = sketches[sketch_id]["entities"]
     assert [entity["entity_id"] for entity in entities] == [entity_id]
     assert entities[0]["kind"] == "circle"
-    # 解決済みの**数値**と、その数値を持つ**パラメータ名**の両方を出す。
-    # 数値だけだと `set_parameter` の引数が作れず、名前だけだと今の値が分からない。
+    # # 解決済みの数値とパラメータ名の両方を出す(数値だけだと `set_parameter` の引数が作れず、名前だけだと今の値が分からない)。
     assert entities[0]["params"]["radius"] == 10.0
     assert entities[0]["parameters"]["radius"] in payload["parameters"]
     assert payload["parameters"][entities[0]["parameters"]["radius"]] == 10.0
@@ -967,15 +822,8 @@ def test_region_counts_are_opt_in(empty_session: Session):
     assert with_regions["sketches"][0]["region_count"] == 1
 
 
-# --------------------------------------------------------------------------------------
-# 9. 上り方向 — MCPの変更が1回だけ発火し、開いている画面へ届く
-# --------------------------------------------------------------------------------------
 def test_every_mutating_tool_fires_exactly_one_event(empty_session: Session):
-    """**1ツール1イベント**。多いと画面が二重に描き直し、少ないと画面が古いまま残る。
-
-    ここを verb ごとに手で `_emit` する実装だと、新しい verb を足したときに
-    **忘れても誰も気づかない**(pytestは通り、ブラウザだけが黙って古くなる)。
-    """
+    """1ツール1イベント。verbごとに手で `_emit` する実装だと、新verbで忘れてもpytestは通りブラウザだけが古くなる。"""
     server = McpServer(DocumentTools(empty_session))
     seen: list = []
     empty_session.add_listener(seen.append)
@@ -984,7 +832,7 @@ def test_every_mutating_tool_fires_exactly_one_event(empty_session: Session):
         assert len(seen) == 1, "sketch_create が発火していない/二重に発火した"
         call(server, "add_rectangle", {"sketch_id": sketch_id, "corner": [0, 0], "width": 30, "height": 30})
         assert len(seen) == 2
-        select_refs(server, [{"sketch": sketch_id, "index": 1}])  # 選択も発火する
+        select_refs(server, [{"sketch": sketch_id, "index": 1}])
         assert len(seen) == 3
         call(server, "extrude", {"distance": 10.0})
         assert len(seen) == 4
@@ -1014,7 +862,7 @@ def test_a_failed_tool_fires_nothing(server: McpServer, box_session: Session):
     seen: list = []
     box_session.add_listener(seen.append)
     try:
-        call_error(server, "fillet", {"radius": 2.0})  # 選択が空
+        call_error(server, "fillet", {"radius": 2.0})
         call_error(server, "set_visible", {"body_id": "ghost", "visible": False})
     finally:
         box_session.remove_listener(seen.append)
@@ -1022,20 +870,13 @@ def test_a_failed_tool_fires_nothing(server: McpServer, box_session: Session):
 
 
 def test_a_verb_applied_through_mcp_reaches_the_browser(box_session: Session):
-    """**MCPで形を変えると、開いているブラウザの絵が変わる**(F2の実機確認のpytest版)。
-
-    M4は `set_visible` でこれを実証した。増えた verb でも同じ経路に乗ることを、
-    幾何が変わる verb (`fillet`)で確かめる —— 版が変わったBodyだけが `delta` に載り、
-    そこに新しい `geometry` が入っていること。
-    """
+    """MCPで形を変えると、開いているブラウザへ版が変わったBodyだけが `delta` に新しい `geometry` つきで載る。"""
     import asyncio
 
     box = box_session.document.bodies[0]
     faces_before = kernel.face_count(box.shape)
     mcp = McpServer(DocumentTools(box_session))
-    # **選択は接続を作る前に済ませる**。選択の変更もイベントを起こすので、接続後にやると
-    # 「配信タスクは全部あとでまとめて走る」都合で、どの配信に幾何の差分が載るかが
-    # 実行順で変わる(このテストが見たいのは verb の配信であって、その順序ではない)。
+    # # 選択は接続を作る前に済ませる(選択の変更もイベントを起こし、後だとどの配信に幾何の差分が載るかが実行順で変わる)。
     select_refs(mcp, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])
 
     payloads = pushed_by_mcp(box_session, lambda: call(mcp, "fillet", {"radius": 2.0}))
