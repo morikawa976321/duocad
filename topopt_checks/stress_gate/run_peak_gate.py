@@ -46,6 +46,8 @@ def main() -> int:
     ap.add_argument("--step", type=float, default=None, help="段階4の max_step_ratio。省くと製品の既定")
     ap.add_argument("--no-final-check", action="store_true")
     ap.add_argument("--gpu", action="store_true", help="FEM の CG を GPU で解く(CPU とビット一致。docs/TOPOPT_GPU.md)")
+    ap.add_argument("--refine", type=int, default=None,
+                    help="完成形検査の分割数(製品は 3)。hanger の 1/3 は約 20 GB なので空きが足りないときに下げる")
     ap.add_argument("--tag", default=None)
     a = ap.parse_args()
     spec = dict(pa.MODELS[a.model])
@@ -55,6 +57,8 @@ def main() -> int:
     if a.gpu:
         from duocad.topopt import fem
         fem.FEM_DEVICE = "gpu"
+    if a.refine is not None:
+        final_check.REFINE = a.refine
     doc = refine_shape.open_session(spec["model"]).document
     refine_shape._set_load_doc(doc, spec["load_n"])
     options = optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"])
@@ -86,7 +90,7 @@ def main() -> int:
     sites = gate.pop("rejection_sites", [])
     checked = result.get("final_check") or {}
     safety = checked.get("safety") or {}
-    row = dict(model=a.model, load_n=spec["load_n"], h=spec["h"], w=spec["w"], eps=a.eps, step=a.step,
+    row = dict(model=a.model, load_n=spec["load_n"], h=spec["h"], w=spec["w"], eps=a.eps, step=a.step, gpu=a.gpu,
                state=result.get("state"), seconds=round(seconds, 1), evaluations=result.get("evaluations"),
                material_mm3=result.get("material_mm3"), search_safety_factor=result.get("safety_factor"),
                final_safety_factor=result.get("final_safety_factor"), peak_mpa=safety.get("peak_mpa"),
