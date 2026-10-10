@@ -21,8 +21,7 @@ class ToolsOnLoop:
 
     どちらも直接 `DocumentTools` を叩くと2スレッドが同時に文書を書き換えうる。ここでは
     `.call()` / `.error_envelope()` / `.current_seq()` を `asyncio.run_coroutine_threadsafe`
-    でイベントループへ1回ずつ投げ、その場で完了を待つ。往復するのは `Session` のverb呼び出し
-    1回ぶん(通常は数ms)で、**プロバイダへのHTTPリクエスト(本当に長くかかる方)はこの覆いを
+    でイベントループへ投げ、その場で完了を待つ。**プロバイダへのHTTPリクエストはこの覆いを
     経由しない**。
     """
 
@@ -31,39 +30,31 @@ class ToolsOnLoop:
         self._loop = loop
 
     def descriptors(self) -> list:
-        # 起動時に1度組んだ静的なリストを読むだけ(`DocumentTools._build_descriptors`)。
-        # 文書を触らないので、スレッドをまたいでも安全 —— 投げ返さない。
+        # 起動時に組んだ静的なリストを読むだけで文書を触らないので、投げ返さない。
         return self._tools.descriptors()
 
     def descriptor(self, name: str) -> Any:
-        # `descriptors()` と同じ静的な索引の引き当て(MCPの `tools/call` が引数検査に使う)。
-        # 文書を触らないので投げ返さない。
+        # `descriptors()` と同じく静的な引き当てなので投げ返さない。
         return self._tools.descriptor(name)
 
     def call(self, name: str, arguments: dict) -> dict:
         return self._run_on_loop(self._tools.call, name, arguments)
 
     def call_and_seq(self, name: str, arguments: dict) -> tuple:
-        # **実行と直後の版の読み取りを1回の投げ返しで行う。** `call` と `current_seq` を別々に
-        # 投げると、1回目の完了と2回目の読み取りの間にイベントループが人の操作を処理でき、
-        # その変更が「実行直後の版」に吸われて、次のツールの直前チェックで見えなくなる
-        # (楽観ロックの時間窓。issue #48)。
+        # 実行と直後の版の読み取りを1回の投げ返しで行う。別々だと間に人の操作が割り込み、その変更が
+        # 「実行直後の版」に吸われて次のツールの直前チェックで見えなくなる(楽観ロックの時間窓。issue #48)。
         return self._run_on_loop(self._tools.call_and_seq, name, arguments)
 
     def error_envelope(self, tool: str, error: Exception) -> dict:
         return self._run_on_loop(self._tools.error_envelope, tool, error)
 
     def current_seq(self) -> Any:
-        # 読み取りだけでも `self.session.document` を触るので、`call`/`error_envelope` と
-        # 同じくイベントループのスレッドへ投げ返す(このクラスの不変条件)。
+        # 読み取りだけでも `self.session.document` を触るので投げ返す。
         return self._run_on_loop(self._tools.current_seq)
 
     def _run_on_loop(self, fn: Any, *args: Any) -> Any:
-        # **既にイベントループのスレッド上にいるなら、直接呼ぶ**。`run()` が実行器を挟まずに
-        # 呼ばれる経路(`tests/test_agent_ws.py` が `asyncio.run(scenario())` の中から直に
-        # 呼ぶ検査)では、`run_coroutine_threadsafe(...).result()` は**自分自身が塞いでいる
-        # ループの完了を自分自身で待つ**ことになり、必ず固まる(実測)。
-        # 同じスレッドなら投げ返す意味が無いので、そのまま呼んで済ませる。
+        # 既にイベントループのスレッド上なら直接呼ぶ。`run_coroutine_threadsafe(...).result()` は
+        # 自分が塞いでいるループの完了を待つことになり必ず固まる(実測。`tests/test_agent_ws.py`)。
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
