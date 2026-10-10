@@ -1,16 +1,9 @@
 """保持・除外・拘束・荷重の4条件から、材料を置ける設計空間(塊)を1回で作る。
 
-derive: 保持ボディと条件面が属するボディの外接箱の頂点から凸包を作り、凸包から距離が
-全体寸法に比例する余白 `m` 以内の領域(凸包と半径 `m` の球のミンコフスキー和)を格子に載せ、
-除外ソリッドの占有を引き、条件(保持ボディ・拘束面・荷重面)を1つも含まない連結成分を落とす。
-
-材料量・安全率・参照密度・最適化結果は導出の入力に取らない。1回の最適化実行を通して
-格子・設計マスク・保持マスク・面アンカーの表は同じもの(`DesignSpace`)を使い、
-最適化側はそれを書き換えない(`mask` は読み取り専用にしてある)。
-
-voxelize のはみ出し判定は格子内だけを見るため、保持ソリッドが格子外へ
-出ていないことをここで確認してから model_from_design_mask を呼ぶ。
-設計理由・実測・制限は docs/TOPOPT.md を参照。"""
+derive: 保持ボディと条件面が属するボディの外接箱の頂点から凸包を作り、凸包から距離が全体寸法に比例する余白 `m` 以内の領域
+(凸包と半径 `m` の球のミンコフスキー和)を格子に載せ、除外ソリッドの占有を引き、条件を1つも含まない連結成分を落とす。
+材料量・安全率・参照密度・最適化結果は入力に取らない。1回の最適化実行を通して `DesignSpace` は同じものを使い、最適化側は書き換えない。
+保持ソリッドが格子外へ出ていないことは voxelize が見ないのでここで確認する。設計理由・実測・制限は docs/TOPOPT.md。"""
 
 from __future__ import annotations
 
@@ -32,9 +25,8 @@ from . import voxelize as vx
 #: 診断に書く導出方式の名前。記録を読む側(`topopt_checks/`)はこの文字列で新旧を見分ける。
 DERIVATION = "convex-hull-offset"
 
-# 余白は**条件の点群の外接箱の最長辺に対する比率**で持つ(絶対mmでは部品の大きさに追従しない)。
-# 0.20 は固定凸包への移行時の本人判断(2026-09-16。案1の 0.25 から下げた。
-# docs/TOPOPT.md「固定凸包による設計空間(2026-09-16)」)。
+# 余白は**条件の点群の外接箱の最長辺に対する比率**で持つ(絶対mmでは部品の大きさに追従しない)。0.20 は本人判断
+# (2026-09-16。docs/TOPOPT.md「固定凸包による設計空間(2026-09-16)」)。
 DEFAULT_MARGIN_RATIO = 0.20
 DEFAULT_ELEMENTS_LONG_AXIS = 40
 
@@ -43,27 +35,20 @@ ROLES = ("keep", "fixed", "load")
 
 
 class DesignSpaceTooSmallError(vx.OutsideDesignSpaceError):
-    """導出した塊が条件(保持ソリッド)を含みきれていない、または塊が空になった。
-
-    `voxelize.OutsideDesignSpaceError` の派生なので、既存の `except ValueError` /
-    `except vx.OutsideDesignSpaceError` はそのまま効く。
-    """
+    """導出した塊が条件(保持ソリッド)を含みきれていない、または塊が空になった。`voxelize.OutsideDesignSpaceError` の派生。"""
 
 
 class DesignSpaceGeometryError(ValueError):
     """条件の点群から凸包が起こせない(階数不足・非有限・箱が潰れている・Qhull の失敗)。
 
-    **黙って外接直方体へ戻る代替経路は無い。** ランダム摂動(Qhull の `QJ`)も使わない ——
-    どちらも入力の矛盾を隠して別の塊を返すことになる。
+    **外接直方体へ戻る代替経路も、Qhull の `QJ`(ランダム摂動)も使わない**(入力の矛盾を隠して別の塊を返すことになる)。
     """
 
 
 class DesignSpaceConflictError(ValueError):
     """保持ボディの占有セルが除外ソリッドの占有と重なっている(入力矛盾)。
 
-    セル中心が両方のソリッドの内側にあるので、CAD の保持ソリッドと除外ソリッドが実際に
-    交わっている。最終ブーリアンは除外優先なので、格子の上で除外を保持で埋め戻すと
-    最終CADと違う塊を最適化することになる —— だからここで落とす。
+    最終ブーリアンは除外優先なので、格子の上で除外を保持で埋め戻すと最終CADと違う塊を最適化することになる。
     `bodies` はボディ名 → 重なったセル数。
     """
 
@@ -75,15 +60,9 @@ class DesignSpaceConflictError(ValueError):
 class DesignSpaceDisconnectedError(ValueError):
     """塊の中で、全条件(保持ボディ・拘束面・荷重面)の必要領域が単一成分に収まらない。
 
-    **`DesignSpaceTooSmallError` とは別の型にしてある。** あちらは「余白を上げろ」と言う文面で、
-    分断には効かない直し方を指す —— 分断の直し方は除外ソリッドを削るか条件を置き直すことで、
-    余白を上げても塞がれた道は開かない。`ValueError` の派生なので既存の `except ValueError` は
-    そのまま効く。
-
-    `components` は塊の連結成分の数、`unreached` は取り残された条件の名前、`seeds` は
-    条件ごとの `{"elements": 塊の中の要素数, "labels": 所属する成分}`。条件面の名前は
-    `connect_conditions` が付ける `fixed_face_<面添字>` / `load_face_<面添字>`、
-    保持ボディは `keep_<ボディ名>`。
+    **`DesignSpaceTooSmallError` とは別の型**(あちらの「余白を上げろ」は分断には効かない。直し方は除外ソリッドを削るか条件を置き直すこと)。
+    `components` は塊の連結成分の数、`unreached` は取り残された条件の名前、`seeds` は条件ごとの
+    `{"elements": 塊の中の要素数, "labels": 所属する成分}`。名前は `fixed_face_<面添字>` / `load_face_<面添字>` / `keep_<ボディ名>`。
     """
 
     def __init__(
@@ -100,14 +79,9 @@ class DesignSpaceDisconnectedError(ValueError):
         self.seeds = dict(seeds or {})
 
 
-# ---------------------------------------------------------------------------
-# 連結性
-# ---------------------------------------------------------------------------
-# **連結性は 6近傍(面で接する)で定義する。** 26近傍にすると、角1点・稜1本だけで触れている
-# 2つの島を「つながっている」と数える。構造格子の六面体要素では、角で触れた2要素が共有するのは
-# 節点1つだけで、それは回転を止められないピン接合(機構)にしかならない —— 力の道としては
-# 成立しないので、26近傍で見るとこの検査は「切れていない」と言い張りながら宙に浮いた形を通す。
-# **6近傍でつながっていることは、部材の幅や剛性を保証しない**(材料が通る道があるというだけ)。
+# **連結性は 6近傍(面で接する)で定義する。** 角1点・稜1本だけで触れる2要素が共有するのは節点1つで、回転を止められない
+# ピン接合(機構)にしかならず、力の道にならない。26近傍だと宙に浮いた形を通す。
+# **6近傍でつながっていることは、部材の幅や剛性を保証しない。**
 NEIGHBOURHOOD = 6
 _RANK_OF_NEIGHBOURHOOD = {6: 1, 18: 2, 26: 3}
 
@@ -115,12 +89,8 @@ _RANK_OF_NEIGHBOURHOOD = {6: 1, 18: 2, 26: 3}
 def element_components(
     design: np.ndarray, *, neighbourhood: int = NEIGHBOURHOOD
 ) -> tuple[np.ndarray, int]:
-    """塊の連結成分。`(labels, n)` を返す(`labels == 0` は塊の外)。
-
-    `neighbourhood` は連結性の定義で、**塊のガードは常に 6近傍**(`NEIGHBOURHOOD`)。
-    18/26 を受けるのは「定義を変えると答えが変わる」ことを検査で見せるためだけの口で、
-    導出の経路からは 6 以外を渡さない。
-    """
+    """塊の連結成分。`(labels, n)` を返す(`labels == 0` は塊の外)。**塊のガードは常に 6近傍**(`NEIGHBOURHOOD`)。
+    18/26 を受けるのは定義を変えると答えが変わることを検査で見せるためだけの口。"""
     mask = np.asarray(design, dtype=bool)
     if mask.ndim != 3:
         raise ValueError(f"design は3次元の配列であること(いま shape={mask.shape})")
@@ -138,14 +108,9 @@ def connect_seeds(design: np.ndarray, seeds: dict) -> tuple[np.ndarray, dict]:
     """**全ての条件(種)が同じ連結成分に届くことを個別に確かめ、条件を含まない成分を落とす。**
 
     `seeds` は名前 → 塊と同じかたちの bool マスク。戻り値は `(条件を含む成分だけを残した塊, 診断)`。
-
-    - 塊の中に要素を1つも持たない種があれば `DesignSpaceDisconnectedError`(その名前が
-      `unreached`)。除外ソリッドが条件面の要素を全部削った、または保持ボディの占有が
-      塊の外にあるケース。
-    - 全ての種が共有する成分が1つも無ければ同じ例外(`unreached` は、最も多くの条件が
-      属する成分に入っていない条件)。**最大成分を選んで成功にしない。**
-    - 1つの種でも複数成分にまたがれば同じ例外(`unreached` は分断された条件)。
-      条件の一部だけを残して成功にしない。どの種にも触れない成分だけを落とす。
+    塊の中に要素を持たない種、全ての種が共有する成分が無い、1つの種が複数成分にまたがる、のいずれも `DesignSpaceDisconnectedError`
+    (`unreached` は届かない・分断された条件)。**最大成分を選んで成功にしない。条件の一部だけを残して成功にしない。**
+    どの種にも触れない成分だけを落とす。
     """
     mask = np.asarray(design, dtype=bool)
     if not seeds:
@@ -232,10 +197,8 @@ def connect_conditions(
 ) -> tuple[np.ndarray, dict]:
     """拘束面・荷重面のアンカー要素(1層)と保持ボディの占有を種にして `connect_seeds` を呼ぶ。
 
-    **節点が1つも付かなかった条件面があるときは連結性を見ず、塊もそのまま返す** —— それは
-    「要素サイズより小さい面にアンカーが付かない」という別の穴で、`AnchorTable.empty_faces()` を
-    見る既存の口(`optimize_run._empty_condition_faces`)が診断を出す。ここで落とすと
-    その手前で別の例外に化けて原因が分かりにくくなる。
+    **節点が1つも付かなかった条件面があるときは連結性を見ず塊をそのまま返す**(別の穴で、`optimize_run._empty_condition_faces` が診断を出す。
+    ここで落とすと別の例外に化けて原因が分かりにくい)。
     """
     fixed = _as_faces(fixed_faces)
     load = _as_faces(load_faces)
@@ -268,11 +231,9 @@ def _as_faces(value: Sequence[int] | int) -> tuple:
 class ConditionBody:
     """凸包の点群へ寄与する1ボディ(保持ボディ、または拘束面・荷重面が属するボディ)。
 
-    `roles` は `ROLES` の部分集合(1つのボディが保持で、かつ条件面を持つこともある)。
-    `bbox_min` / `bbox_max` は B-rep の外接箱[mm]。**三角形分割から取ってはいけない** ——
-    弦は真の面より内側に来るので曲面のぶん小さくなり、しかも同じ形状で表示用の三角形分割が
-    先にあるかどうかで値が動く(`voxelize._shape_bbox` / `kernel.bounding_box` の契約)。
-    `shape` は保持ボディでは必須(格子への占有を個別に数える)。条件面だけのボディでは省ける。
+    `roles` は `ROLES` の部分集合。`bbox_min` / `bbox_max` は B-rep の外接箱[mm]。**三角形分割から取ってはいけない**
+    (弦は曲面のぶん内側に来る上、表示用の三角形分割の有無で値が動く。`voxelize._shape_bbox` / `kernel.bounding_box` の契約)。
+    `shape` は保持ボディでは必須、条件面だけのボディでは省ける。
     """
 
     name: str
@@ -313,11 +274,7 @@ class ConditionBody:
 
 
 def condition_body(name: str, shape: Any, *, roles: Sequence[str]) -> ConditionBody:
-    """形状から外接箱を測って `ConditionBody` を作る(検査・CLI・合成題材の入口)。
-
-    製品(`optimize_run.build_conditions`)は文書側のキャッシュ付き `kernel.bounding_box` で
-    同じ B-rep の箱を取る。どちらも `useTriangulation=False` の `BRepBndLib.AddOptimal`。
-    """
+    """形状から外接箱を測って `ConditionBody` を作る(検査・CLI・合成題材の入口。製品は `optimize_run.build_conditions` が文書側のキャッシュ付き箱を使う)。"""
     lo, hi = vx._shape_bbox(vx.unwrap(shape))
     return ConditionBody(
         name=str(name),
@@ -332,18 +289,11 @@ def condition_body(name: str, shape: Any, *, roles: Sequence[str]) -> ConditionB
 class Conditions:
     """利用者が入れる4条件と、凸包の材料になるボディの外接箱。**設計空間ソリッドは無い。**
 
-    `fixed_faces` / `load_faces` は `anchor_shape`(省略時は `keep`)の三角形群での面添字で、
-    **どちらも何枚でもよい**(`int` 1つも受ける)。面添字は渡した形の面の並びで決まるので、
-    面を選ぶのに使った形をそのまま渡すこと。
-
-    `bodies` は保持ボディと条件面が属するボディを**重複なく**並べたもの(`ConditionBody`)。
-    除外だけのボディ・無関係なボディ・以前の最適化結果を入れてはいけない(塊が広がる)。
-    `keep` はそれら保持ボディをまとめた形で、`bodies` の保持ボディと同じ集合を指すこと
-    (層をまたぐ契約: 格子の外へ出ていないかは `keep` の外接箱で、格子への占有と条件ごとの接続は
-    `bodies` のボディごとに見る)。
-
-    荷重の大きさはここに無い。探索は面ごとの力ベクトルを実単位[N]のまま受ける
-    (`optimize_run.build_conditions` の `forces`)。
+    `fixed_faces` / `load_faces` は `anchor_shape`(省略時は `keep`)の三角形群での面添字で、何枚でもよい(`int` 1つも受ける)。
+    面添字は渡した形の面の並びで決まるので、面を選ぶのに使った形をそのまま渡すこと。
+    `bodies` は保持ボディと条件面が属するボディを**重複なく**並べたもの。除外だけ・無関係・以前の最適化結果のボディを入れると塊が広がる。
+    `keep` は `bodies` の保持ボディと同じ集合を指すこと(層をまたぐ契約: 格子の外へ出ていないかは `keep` の外接箱で、
+    格子への占有と条件ごとの接続は `bodies` のボディごとに見る)。荷重の大きさはここに無い(`optimize_run.build_conditions` の `forces`)。
     """
 
     keep: Any
@@ -354,7 +304,7 @@ class Conditions:
     bodies: tuple = field(kw_only=True)
 
     def __post_init__(self) -> None:
-        # `int` 1つも面の並びも受けてタプルへ均す(`frozen=True` なので `object.__setattr__`)。
+        # `frozen=True` なので `object.__setattr__`。
         object.__setattr__(self, "fixed_faces", _as_faces(self.fixed_faces))
         object.__setattr__(self, "load_faces", _as_faces(self.load_faces))
         if not self.fixed_faces:
@@ -388,11 +338,9 @@ class Conditions:
 class DesignSpace:
     """導出した塊と、その導出過程の実測。**1回の最適化実行を通して1つ**を使い回す。
 
-    `mask` は `grid` と同じかたちの bool 配列(塊)で**読み取り専用**。`model` は保持ソリッドを
-    同じ格子に載せた `VoxelModel` で、**`model.obstacle` は常に全 False**(除外は塊から
-    引き切っているため)。`table` は導出が作った面アンカーの表(条件ごとの接続の確認に使った
-    もの)。`hull_planes` は凸包の支持平面 `(n, 4)`(各行 `[a,b,c,d]`、`ax+by+cz+d <= 0` が内側、
-    法線は単位長)、`hull_triangles` は凸包の表面の三角形 `(f, 3, 3)`(距離の計算に使ったもの)、
+    `mask` は `grid` と同じかたちの bool 配列(塊)で**読み取り専用**。`model` は保持ソリッドを同じ格子に載せた `VoxelModel` で、
+    **`model.obstacle` は常に全 False**(除外は塊から引き切っている)。`table` は導出が作った面アンカーの表。
+    `hull_planes` は凸包の支持平面 `(n, 4)`(`ax+by+cz+d <= 0` が内側、法線は単位長)、`hull_triangles` は凸包の表面の三角形 `(f, 3, 3)`、
     `corners` は凸包を起こした点群。
     """
 
@@ -410,8 +358,7 @@ class DesignSpace:
     corners: np.ndarray
     stats: dict = field(default_factory=dict)
     table: Any = None
-    #: 除外ソリッドの格子上の占有。凸包の外や塊から外れた分も含む(`mask` は除外を引き切った後なので、
-    #: 塊の穴が除外由来かを見分けるのに使う)。除外が無い・格子と重ならないときは全 False。読み取り専用。
+    #: 除外ソリッドの格子上の占有(凸包の外や塊から外れた分も含む。塊の穴が除外由来かを見分けるのに使う)。除外が無い・格子と重ならないときは全 False。読み取り専用。
     obstacle: Optional[np.ndarray] = None
 
     @property
@@ -432,7 +379,7 @@ class DesignSpace:
 
     @property
     def mask_hash(self) -> str:
-        """塊の内容ハッシュ。候補間で塊が同一であることを検査が突き合わせる口。"""
+        """塊の内容ハッシュ(候補間で塊が同一であることの検査用)。"""
         return mask_digest(self.mask)
 
 
@@ -443,9 +390,6 @@ def mask_digest(mask: np.ndarray) -> str:
     return digest.hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# 幾何(点群 → 凸包 → 余白付きの支持平面 → 格子のマスク)
-# ---------------------------------------------------------------------------
 def condition_corners(bodies: Sequence[ConditionBody]) -> np.ndarray:
     """全ボディの外接箱の頂点(重複除去済み) (m,3)。"""
     if not bodies:
@@ -457,11 +401,8 @@ def condition_corners(bodies: Sequence[ConditionBody]) -> np.ndarray:
 def convex_hull(corners: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
     """点群の凸包。`(支持平面 (n, 4), 表面の三角形 (f, 3, 3), 診断)` を返す。
 
-    支持平面の各行は `[a, b, c, d]` で、`ax + by + cz + d <= 0` が凸包の内側、`(a,b,c)` は
-    単位法線(scipy の `ConvexHull.equations` の契約そのまま)。三角形は `ConvexHull.simplices`
-    の頂点座標で、凸包からの距離(`hull_distance_mask`)はこれに対して測る。
-    **点群が平面・直線・1点に潰れていれば `DesignSpaceGeometryError`** —— Qhull の `QJ`
-    (ランダム摂動)で通さない。
+    支持平面は `ax + by + cz + d <= 0` が内側、`(a,b,c)` は単位法線(scipy の `ConvexHull.equations` の契約)。
+    **点群が平面・直線・1点に潰れていれば `DesignSpaceGeometryError`**(`QJ` で通さない)。
     """
     points = np.asarray(corners, dtype=float).reshape(-1, 3)
     if points.shape[0] == 0 or not np.all(np.isfinite(points)):
@@ -490,10 +431,9 @@ def convex_hull(corners: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
 def offset_hull_volume(corners: np.ndarray, margin: float) -> float:
     """凸包と半径 `margin` の球のミンコフスキー和の体積[mm³](シュタイナーの公式)。
 
-    `V = V_凸包 + A·m + m²·Σ(稜長 × 外角)/2 + 4π/3·m³`。`derive` の塊(`hull_distance_mask`)の
-    **格子に載せる前の連続体積**で、除外ソリッドと「条件を含まない連結成分」を引く前の値。除外の分は
-    `obstacle_free_fraction` が別に見積もる。見積もり全体の誤差は docs/TOPOPT.md「要素サイズの下限」。
-    外角は隣り合う三角形の外向き法線のなす角(同一平面の三角形どうしは 0)。
+    `V = V_凸包 + A·m + m²·Σ(稜長 × 外角)/2 + 4π/3·m³`(外角は隣り合う三角形の外向き法線のなす角)。`derive` の塊の
+    格子に載せる前の連続体積で、除外と「条件を含まない連結成分」を引く前の値(除外の分は `obstacle_free_fraction`)。
+    見積もり全体の誤差は docs/TOPOPT.md「要素サイズの下限」。
     """
     _planes, _triangles, info = convex_hull(corners)  # 退化(平面・直線・1点)はここで断る
     points = np.asarray(corners, dtype=float).reshape(-1, 3)
@@ -504,7 +444,7 @@ def offset_hull_volume(corners: np.ndarray, margin: float) -> float:
         for slot, j in enumerate(neighbours):
             if j <= i:
                 continue
-            # 三角形 i の頂点 slot の向かいの辺 = 隣 j との共有辺
+            # 三角形 i の頂点 slot の向かいの辺 = 隣 j との共有辺。
             a, b = [v for s, v in enumerate(hull.simplices[i]) if s != slot]
             length = float(np.linalg.norm(points[a] - points[b]))
             cosine = float(np.clip(np.dot(normals[i], normals[j]), -1.0, 1.0))
@@ -515,11 +455,8 @@ def offset_hull_volume(corners: np.ndarray, margin: float) -> float:
 
 def obstacle_free_fraction(corners: np.ndarray, obstacle: Any, *, margin_ratio: float = DEFAULT_MARGIN_RATIO,
                            elements_long_axis: int = 60) -> float:
-    """余白付き凸包のセルのうち、除外ソリッドに食われずに残る割合(粗い格子で数えた値)。
-
-    `derive` と同じ外枠・同じ距離の判定を `elements_long_axis` 分割の粗い格子へ載せて数える。
-    粗いので値は揺れる(hanger で分割数 40〜240 の実測 0.810〜0.828)。除外が無ければ 1。
-    """
+    """余白付き凸包のセルのうち、除外ソリッドに食われずに残る割合(`derive` と同じ判定を `elements_long_axis` 分割の粗い格子で数えた値)。
+    粗いので揺れる(hanger で分割数 40〜240 の実測 0.810〜0.828)。除外が無ければ 1。"""
     if obstacle is None:
         return 1.0
     pts = np.asarray(corners, dtype=float).reshape(-1, 3)
@@ -548,9 +485,7 @@ def obstacle_free_fraction(corners: np.ndarray, obstacle: Any, *, margin_ratio: 
 def offset_hull_mask(grid: vx.Grid, planes: np.ndarray, margin: float) -> np.ndarray:
     """セル中心が、各支持平面を `margin` だけ外へ押し出した半空間の全てに入るセル。
 
-    **塊の定義ではない。** これは凸包から距離 `margin` 以内の領域(`hull_distance_mask`)を
-    必ず含む多面体で、角・稜のまわりに余分を持つ。距離の判定を全セルで払わないための
-    外側の当たりとして使い、診断にはこの多面体のセル数も残す。判定は `n·x + d <= margin`。
+    **塊の定義ではない。** 距離 `margin` 以内の領域(`hull_distance_mask`)を必ず含む多面体で、距離の判定を全セルで払わないための外側の当たり。
     """
     equations = np.asarray(planes, dtype=float)
     if equations.ndim != 2 or equations.shape[1] != 4:
@@ -565,11 +500,7 @@ def offset_hull_mask(grid: vx.Grid, planes: np.ndarray, margin: float) -> np.nda
 
 
 def distance_to_hull(points: np.ndarray, planes: np.ndarray, triangles: np.ndarray) -> np.ndarray:
-    """点群 `(N,3)` から凸包までのユークリッド距離(内側は 0)。
-
-    凸包は凸なので、外側の点から凸包への最短距離は**表面の三角形への距離の最小**に一致する
-    (最近点は必ず境界上にある)。内側は支持平面の全てで `n·x + d <= 0` になる点。
-    """
+    """点群 `(N,3)` から凸包までのユークリッド距離(内側は 0)。外側の点からの最短距離は表面の三角形への距離の最小に一致する。"""
     pts = np.asarray(points, dtype=float).reshape(-1, 3)
     eq = np.asarray(planes, dtype=float)
     signed = pts @ eq[:, :3].T + eq[:, 3]
@@ -577,9 +508,8 @@ def distance_to_hull(points: np.ndarray, planes: np.ndarray, triangles: np.ndarr
     out = np.zeros(pts.shape[0], dtype=float)
     outside = np.flatnonzero(~inside)
     if outside.size:
-        # 距離は `voxelize.distance_to_triangles`(7候補の最小)で取る。Ericson の領域分けは退化した三角形
-        # (3頂点が一直線)で NaN や大きすぎる距離を返し、NaN は `np.minimum` を通って**そのセルを黙って
-        # 塊から落とす**(`distance <= margin` が偽になる)。
+        # 距離は `voxelize.distance_to_triangles`(7候補の最小)で取る。Ericson の領域分けは退化三角形で NaN や過大な距離を返し、
+        # NaN は `np.minimum` を通って**そのセルを黙って塊から落とす**。
         tri = np.asarray(triangles, dtype=float).reshape(-1, 3, 3)
         out[outside] = vx.distance_to_triangles(tri[:, 0], tri[:, 1], tri[:, 2], pts[outside])[0]
     return out
@@ -588,12 +518,8 @@ def distance_to_hull(points: np.ndarray, planes: np.ndarray, triangles: np.ndarr
 def hull_distance_mask(
     grid: vx.Grid, planes: np.ndarray, triangles: np.ndarray, margin: float
 ) -> np.ndarray:
-    """セル中心が凸包から距離 `margin` 以内にあるセル(凸包と半径 `margin` の球のミンコフスキー和)。
-
-    面のまわりは支持平面を `margin` 押し出したものと同じで、稜・頂点のまわりは丸くなる
-    (平面のオフセットより小さい)。判定は `距離 <= margin`(等号を含む)。距離は
-    `offset_hull_mask` の多面体に入るセルだけで測る(外は必ず距離 > margin)。
-    """
+    """セル中心が凸包から距離 `margin` 以内にあるセル(凸包と半径 `margin` の球のミンコフスキー和。判定は `距離 <= margin`)。
+    距離は `offset_hull_mask` の多面体に入るセルだけで測る(外は必ず距離 > margin)。"""
     bound = offset_hull_mask(grid, planes, margin)
     index = np.argwhere(bound)
     if index.size == 0:
@@ -629,8 +555,7 @@ def grid_for_frame(box_lo, box_hi, *, elements_long_axis: int = DEFAULT_ELEMENTS
                    spacing: Optional[float] = None) -> vx.Grid:
     """外枠 → 格子。`spacing` を渡すと最長辺の分割数を丸めて決める(実 spacing は指定値と一致しない)。
 
-    **格子を起こす規則はここだけにある。** `derive` も解像度の梯子(`optimize_run`)もこれを呼ぶ ——
-    2箇所で同じ式を書くと、画面に出す要素サイズ・要素数と実際の格子が黙ってずれる(層をまたぐ契約)。
+    **格子を起こす規則はここだけにある**(`derive` も解像度の梯子(`optimize_run`)もこれを呼ぶ。2箇所に書くと画面の要素サイズ・要素数と実際の格子がずれる。層をまたぐ契約)。
     """
     if spacing is None:
         n_long = int(elements_long_axis)
@@ -640,9 +565,6 @@ def grid_for_frame(box_lo, box_hi, *, elements_long_axis: int = DEFAULT_ELEMENTS
     return vx.grid_for_bbox(box_lo, box_hi, n_long)
 
 
-# ---------------------------------------------------------------------------
-# 導出(本体)
-# ---------------------------------------------------------------------------
 @trace.stage("derive")
 def derive(
     conditions: Conditions,
@@ -656,14 +578,10 @@ def derive(
 ) -> DesignSpace:
     """4条件から塊(設計空間)を1回で導出する。**材料量は受け取らない。**
 
-    手順: ボディの外接箱の頂点 → 凸包 → 余白 `m = margin_ratio × 点群の外接箱の最長辺` →
-    格子の外枠 = 点群の外接箱を各軸に `m` 広げた箱(`grid_for_bbox`)→ 外枠かつ凸包から距離 `m`
-    以内のセル(凸包と球のミンコフスキー和)→ 除外ソリッドの占有を引く → 保持ボディを1つずつ格子に
-    載せて除外との衝突・取りこぼしを名指しで数える → 条件ごとの接続を確かめ、条件を含まない
-    成分を落とす → 確定マスクで `VoxelModel` を1回組む。
-
-    `spacing` を渡すと `elements_long_axis` の代わりに**要素サイズを固定**する(外枠の大きさから
-    要素数を逆算する。丸めのぶん実 spacing は指定値と厳密には一致しない)。
+    手順: 外接箱の頂点 → 凸包 → 余白 `m = margin_ratio × 点群の外接箱の最長辺` → 外枠(点群の外接箱を各軸に `m` 広げた箱。`grid_for_bbox`)
+    かつ凸包から距離 `m` 以内のセル → 除外の占有を引く → 保持ボディを1つずつ格子に載せて衝突・取りこぼしを名指しで数える
+    → 条件ごとの接続を確かめ条件を含まない成分を落とす → 確定マスクで `VoxelModel` を1回組む。
+    `spacing` を渡すと `elements_long_axis` の代わりに**要素サイズを固定**する(丸めで実 spacing は厳密には一致しない)。
     """
     started = time.perf_counter()
     ratio = float(margin_ratio)
@@ -682,15 +600,13 @@ def derive(
     margin = ratio * longest
     planes, triangles, hull_info = convex_hull(corners)
     grid = grid_for_frame(box_lo, box_hi, elements_long_axis=elements_long_axis, spacing=spacing)
-    # 実際に使った最長軸の分割数(`grid_for_frame` は外枠の最長辺 / 分割数を要素サイズにする)。
+    # 実際に使った最長軸の分割数。
     n_long = int(round(float(np.max(box_hi - box_lo)) / grid.spacing))
-    # **保持/除外を格子に載せるときの三角形分割は要素サイズから決める。** この関数の下の方で
-    # `model_from_design_mask` を deviation 無しで呼ぶ(= 要素サイズの `DEFAULT_DEVIATION_RATIO`
-    # 倍)ので、ここを揃えておかないと通した保持がそこで通らない。
+    # **保持/除外を格子に載せるときの三角形分割は要素サイズから決める**(下の `model_from_design_mask` が既定の deviation で呼ぶので、揃えないと通した保持がそこで通らない)。
     dev = float(deviation) if deviation else max(grid.spacing * deviation_ratio, 1e-6)
 
     frame = box_mask(grid, box_lo, box_hi)
-    # 平面のオフセット(多面体)は距離 m 以内の領域を含む外側の当たり。塊にするのは距離のほう。
+    # 塊にするのは距離のほう(平面のオフセットは外側の当たり)。
     polytope = frame & offset_hull_mask(grid, planes, margin)
     candidate = polytope & hull_distance_mask(grid, planes, triangles, margin)
     if not candidate.any():
@@ -708,8 +624,7 @@ def derive(
         if np.any(obs_hi < grid_lo) or np.any(obs_lo > grid_hi):
             obstacle_stats = {"skipped": "outside_grid"}
         else:
-            # 重なっていても列の中心を1本も通らない除外(薄い壁・格子の縁をかすめる板)は0セル。
-            # それが表現できていないことは `optimize_run._region_representation` がボディごとに報告する。
+            # 列の中心を1本も通らない除外(薄い壁など)は0セル。`optimize_run._region_representation` がボディごとに報告する。
             obs, obstacle_stats = vx.occupancy(obs_soup, grid, allow_empty=True)
             design = candidate & ~obs
     obstacle_elements_removed = int(np.count_nonzero(candidate & ~design))
@@ -719,8 +634,7 @@ def derive(
             {"obstacle": -1},
         )
 
-    # **格子の外は voxelize が見ていない。** 外枠は保持ボディの箱から起こしているので通常は
-    # 出ないが、渡された外接箱と `keep` の形が食い違っていると黙って消える —— 先に落とす。
+    # **格子の外は voxelize が見ていない。** 渡された外接箱と `keep` の形が食い違っていると黙って消えるので先に落とす。
     grid_lo, grid_hi = grid.world_box()
     k_lo, k_hi = vx._shape_bbox(vx.unwrap(conditions.keep))
     if np.any(k_lo < grid_lo - 1e-9) or np.any(k_hi > grid_hi + 1e-9):
@@ -747,9 +661,7 @@ def derive(
     soup = vx.triangles_from_shape(
         vx.unwrap(conditions.anchor), deviation=dev, angular_deflection=angular_deflection
     )
-    # アンカーの表は**全面・既定の半径**で作る。`faces=` で対象の面を絞ると稜線の規則
-    # (節点は最も面積を配った面が持つ)の競争相手が減り、**絞らずに作った表とは別の
-    # 節点集合**になる —— 同じものを見ているつもりで違うものを見ることになる。
+    # アンカーの表は**全面・既定の半径**で作る。`faces=` で絞ると稜線の規則の競争相手が減り、絞らない表とは別の節点集合になる。
     table = an.build_anchors(soup, grid)
     connected, connectivity = connect_conditions(
         design, table, keep_seeds, conditions.fixed_faces, conditions.load_faces
@@ -765,9 +677,8 @@ def derive(
     )
 
     try:
-        # 保持はボディごとの占有の和を渡す(まとめた形を数え直さない)。まとめた形で数え直すと、
-        # 保持ボディが全部要素サイズより小さいときにレイが1本も当たらず、取りこぼしの報告
-        # (`unrepresented_bodies`)の前に例外になる。
+        # 保持はボディごとの占有の和を渡す(まとめた形で数え直すと、全保持が要素サイズより小さいときにレイが1本も当たらず
+        # `unrepresented_bodies` の報告の前に例外になる)。
         model = vx.model_from_design_mask(
             grid,
             connected,
@@ -855,13 +766,10 @@ def _keep_bodies_on_grid(
 ) -> tuple[list, dict, np.ndarray, dict, list]:
     """保持ボディを**1つずつ**格子に載せ、占有・除外との衝突・取りこぼしを名前付きで数える。
 
-    まとめた形で数えると、大きい保持が1つあれば合計は必ず正になり、小さいほうが1要素も
-    掴めていないことが隠れる(`optimize_run._region_representation` と同じ理屈)。
-    戻り値は `(ボディごとの報告, 接続の種 {keep_<名前>: マスク}, 全保持ボディの占有の和,
-    衝突 {名前: セル数}, 取りこぼした名前)`。
-    取りこぼし(0セル)は解像度不足であって入力矛盾ではないので、ここでは落とさず報告だけする
-    —— `optimize_run` が `unrepresented_regions` として利用者へ返す。**閉じていない・向きの壊れた
-    表面は取りこぼしに数えず落とす**(解像度を上げても直らない)。
+    まとめると大きい保持が1つあれば合計は正になり、小さいほうが1要素も掴めていないことが隠れる。
+    戻り値は `(ボディごとの報告, 接続の種 {keep_<名前>: マスク}, 全保持ボディの占有の和, 衝突 {名前: セル数}, 取りこぼした名前)`。
+    取りこぼし(0セル)は解像度不足で入力矛盾ではないので落とさず報告だけする(`optimize_run` が `unrepresented_regions` として返す)。
+    **閉じていない・向きの壊れた表面は取りこぼしに数えず落とす**(解像度を上げても直らない)。
     """
     report: list = []
     seeds: dict = {}
