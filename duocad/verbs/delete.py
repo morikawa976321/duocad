@@ -1,78 +1,54 @@
 """verb `delete` — **選択のボディとスケッチ図形をまとめて消す**。
 verb `delete_items` — **IDで指したボディとスケッチ(入れ物ごと)をまとめて消す**。
 
-2つは**対象の指し方だけが違い、do / undo は同じ関数**である(args は
-`{bodies, entities, sketches}` の上位集合で、片方が使わない鍵は空)。`delete_items` が別の
-verb なのは、入口(`@entry`)が verb 名ごとに1つだから —— 「選択から取る」と「引数で指す」を
-1つの入口に混ぜると、引数の有無で意味が変わる。スケッチという入れ物は選択集合の種別に無い
-(`selection.SELECTABLE_KINDS`)ので、`import_svg` と同じく ID を引数で受ける(対象を指す ID は
-target であって how ではない)。ブラウザの一覧の行から消す口がこれを使う。
+2つは**対象の指し方だけが違い、do / undo は同じ関数**である(args は `{bodies, entities, sketches}` の
+上位集合で、片方が使わない鍵は空)。`delete_items` が別の verb なのは、入口(`@entry`)が verb 名
+ごとに1つで、「選択から取る」と「引数で指す」を混ぜると引数の有無で意味が変わるため。スケッチという
+入れ物は選択集合の種別に無い(`selection.SELECTABLE_KINDS`)ので、`import_svg` と同じく ID を引数で
+受ける。ブラウザの一覧の行から消す口がこれを使う。
 
-**対象は1つのverbで2種類ある**:
+**対象は2種類**:
 
-- **ボディ** … 面/辺/頂点/`kind="body"` のどれから指してもよい(`selection.require_deletable`
-  が `require_bodies` と同じ逆引きをする)。`move_body` が既に採っている考え方で、
-  「ボディを指すのに面を1枚選べばよい」。
-- **スケッチ図形** … `sketch_entity` の参照。点(`point` が文字列)を指しても**図形1つ**が
-  対象になる(点は図形の一部であって、それ自体が図形ではない)。
+- **ボディ** … 面/辺/頂点/`kind="body"` のどれから指してもよい(`selection.require_deletable`)。
+- **スケッチ図形** … `sketch_entity` の参照。点(`point` が文字列)を指しても図形1つが対象になる。
 
-**混ざっていても1回のverb呼び出し・1行のログ・1回のundo**である。
-ボディごと・図形ごとに分解しない —— 分解すると、
-「ボディ1つと図形2つを選んで消す」が Ctrl+Z 3回になる。
+混ざっていても1回のverb呼び出し・1行のログ・1回のundoである(分解すると Ctrl+Z が複数回になる)。
 
 --------------------------------------------------------------------------------------
-undo の仕組みが対象によって別物になる(**ここがこのモジュールの主な設計**)
+undo の仕組みが対象によって別物になる
 --------------------------------------------------------------------------------------
 
-`oplog` の契約は「`undo(document, operation)` は `operation.args`(JSON化できる値だけ)から
-自分で巻き戻す」であって、過去の状態のスナップショットが暗黙に付いてくるわけではない。
-対象の性質が違うので、巻き戻し方も2通りになる:
+`oplog` の契約は「`undo(document, operation)` は `operation.args`(JSON化できる値だけ)から自分で
+巻き戻す」。
 
-- **ボディ** … `TopoDS_Shape` はJSONにできないので、`_common.SNAPSHOTS`(文書の寿命で
-  消えるスナップショット表)へ **`Body` オブジェクトそのもの**を退避する。`fillet` が
-  形状を退避しているのと同じ表・同じ規律で、違うのは退避するのが「前の形」ではなく
-  「ボディまるごと」であることだけ。**並び順と active も一緒に控える** —— 末尾へ足し直す
-  だけだと、undoしたのにパーツ一覧の順序だけが変わる(形が同じなので誰も落とせない差)。
-- **スケッチ(入れ物ごと)** … 平面(焼き付けた姿勢ごと)・図形・反復・名前つきの値・名前を
-  args に全部控え、undo は args だけで作り直す。**平面は `resolve_plane` で解き直さない** ——
-  貼った面がその後の面取り・フィレットで添字を変えていると、別の面へ貼り直す/失敗する。
-  **名前つきの値は名前ごと直に戻す** —— 図形の側(下)のように「作った順に `register_value` し直す」
-  ことはできない(1つのスケッチの中で図形と反復の登録順が時間軸で混ざる)。undo は削除の直後へ
-  戻るので控えた名前は必ず空いており、空いていなければバグなので例外にする。
-- **スケッチ図形** … `kind` と**解決済みの生の数値**を args へ積めば足りる(スナップショットは
-  要らない)。`sketch._do_add_entity` / `_undo_add_entity` が**ちょうど鏡像**になっており、
-  **削除の do は「追加の undo」・削除の undo は「追加の do」**である。
-  消す側は **`sketch.remove_entities` を通す**(名前つきの値を手放す。直接外すと値が誰にも
-  参照されないまま文書に残り、`d1 d2 …` の連番が飛ぶ=保存して再生したときに
-  `set_parameter` の記録した名前が別の値を指す)。
+- **ボディ** … `TopoDS_Shape` はJSONにできないので、`_common.SNAPSHOTS` へ **`Body` オブジェクトそのもの**
+  を退避する(`fillet` と同じ表・同じ規律)。並び順と active も一緒に控える。
+- **スケッチ(入れ物ごと)** … 平面(焼き付けた姿勢ごと)・図形・反復・名前つきの値・名前を args に全部
+  控え、undo は args だけで作り直す。**平面は `resolve_plane` で解き直さない**(貼った面がその後の
+  面取り・フィレットで添字を変えていると、別の面へ貼り直す/失敗する)。名前つきの値は名前ごと直に
+  戻す(1つのスケッチの中で図形と反復の登録順が時間軸で混ざるので `register_value` し直せない)。
+  undo は削除の直後へ戻るので控えた名前は必ず空いており、空いていなければバグなので例外にする。
+- **スケッチ図形** … `kind` と解決済みの生の数値を args へ積めば足りる。`sketch._do_add_entity` /
+  `_undo_add_entity` のちょうど鏡像で、削除の do は「追加の undo」、削除の undo は「追加の do」。
+  消す側は **`sketch.remove_entities` を通す**(名前つきの値を手放す。直接外すと `d1 d2 …` の連番が
+  飛び、保存して再生したとき `set_parameter` の記録した名前が別の値を指す)。
 
-**素の数値のまま持つ図形がある**(`import_svg` の取り込んだベジエ。制御点は人が打ち直す
-寸法ではないので名前つきの値に登録しない)。undo でそれを `register_value` へ通すと、
-ロゴ1枚で数千個の `d1` が生えて元と違う文書になる —— どの鍵が名前つきだったかを
-`named` に控えて、**元と同じ形で**戻す。
+**素の数値のまま持つ図形がある**(`import_svg` の取り込んだベジエ)。undo でそれを `register_value` へ
+通すとロゴ1枚で数千個の `d1` が生えるので、どの鍵が名前つきだったかを `named` に控えて元と同じ形で戻す。
 
 --------------------------------------------------------------------------------------
 やらないこと(意図的な線引き)
 --------------------------------------------------------------------------------------
 
-- **スケッチを消しても、そこから押し出したボディには触らない**(下の「ボディを消しても
-  スケッチ側は何もしない」の鏡。形は導出物でありボディは既に独立した実体である)。
-- **確認は挟まない**(1回の undo で全部戻る)。**可視性は控えない** —— セッション状態なので、
-  undo で戻ったスケッチは可視で始まる(開き直した文書と同じ)。
-- **領域(`region`)は消せない**。領域は描くものではなく図形の配置から毎回計算されるもの
-  (`duocad/region.py`)で、永続化された実体が無い。選択に混ざっていたら
-  `require_deletable` が**黙って無視する** —— 領域を作っている図形自体を
-  消せば領域も自然に消えるので、拒否して選び直させるより無視するほうが安い。
-  選択が**領域だけ**なら削除できる対象が無いので、その場合は従来どおり拒否する。
-- **反復(`Pattern`)の元になっている図形を消しても、反復そのものは消さない**。消えた元は
-  展開されなくなるだけで、undoで元が戻れば反復も戻る(`duocad/region.py` の
-  `expanded_entities`)。図形どうしの依存グラフは作らない(本人判断)。
-- **ボディを消してもスケッチ側は何もしない**。スケッチ平面は作成時点で焼き付けてある
-  ので、貼った面のボディが消えても姿勢の計算は
-  壊れない。ボディ側のキャッシュは `DocumentView.state_meta()` の生存集合差分が汎用的に
-  落とす(専用の剪定は要らない)。
-
-**OCP / build123d を直接importしない**(幾何はここでは要らない。消すだけ)。
+- スケッチを消しても、そこから押し出したボディには触らない(ボディは既に独立した実体)。
+- 確認は挟まない。可視性は控えない(セッション状態なので、undo で戻ったスケッチは可視で始まる)。
+- **領域(`region`)は消せない**。領域は図形の配置から毎回計算されるもの(`duocad/region.py`)で、
+  永続化された実体が無い。選択に混ざっていたら `require_deletable` が黙って無視する(領域を作る図形を
+  消せば自然に消える)。領域だけの選択は削除できる対象が無いので拒否する。
+- 反復(`Pattern`)の元の図形を消しても反復そのものは消さない(元が戻れば反復も戻る。
+  `duocad/region.py` の `expanded_entities`)。図形どうしの依存グラフは作らない。
+- ボディを消してもスケッチ側は何もしない(スケッチ平面は作成時点で焼き付けてある)。ボディ側の
+  キャッシュは `DocumentView.state_meta()` の生存集合差分が落とす。
 """
 from __future__ import annotations
 
@@ -91,23 +67,17 @@ VERB_DELETE = "delete"
 VERB_DELETE_ITEMS = "delete_items"
 
 #: `_common.SNAPSHOTS` は `(body_id, seq)` を鍵にするが、この verb が控えるのは
-#: 「この操作で消したボディ全部 + 並び順 + active」という**操作1回ぶんの1つの塊**である。
+#: 「この操作で消したボディ全部 + 並び順 + active」という操作1回ぶんの1つの塊。
 #: BodyId は必ず `body-<hex>` なので、この綴りと衝突しない。
 _SNAPSHOT_KEY = "delete:removed"
 
 
 def _entity_snapshots(doc: Document, entities: Sequence[dict]) -> List[dict]:
-    """消す図形を**JSON安全な値だけ**で記録する(undoはこの記録だけから作り直す)。
+    """消す図形をJSON安全な値だけで記録する(undoはこの記録だけから作り直す)。
 
-    `params` は**解決済みの数値**で、鍵の順序は `Entity.params` の順序 = 作ったときに
-    `register_value` を呼んだ順序である。undoで同じ順に登録し直すと**同じ名前**(`d3` 等)が
-    振り直される(`parameters.register_value` は使われていない最小の番号を使うため)ので、
-    後ろに載った `set_parameter` が記録した名前が別の値を指すようにはならない。
-
-    `named` は**名前つきの値を持っていた鍵**。取り込んだベジエは素の数値のままなので、
-    ここが空になる(モジュールdocstring)。
-
-    存在しないスケッチ・図形は KeyError(**文書は何も変わらない**)。
+    `params` は解決済みの数値で、鍵の順序は作ったときに `register_value` を呼んだ順序。同じ順に
+    登録し直すと同じ名前(`d3` 等)が振り直される(最小の未使用番号を使うため)。`named` は名前つきの
+    値を持っていた鍵(取り込んだベジエは空)。存在しないスケッチ・図形は KeyError(文書は変わらない)。
     """
     specs: List[dict] = []
     for ref in entities:
@@ -119,7 +89,7 @@ def _entity_snapshots(doc: Document, entities: Sequence[dict]) -> List[dict]:
                 "sketch_id": sketch_id,
                 "entity_id": entity.id,
                 "kind": entity.kind,
-                # 図形の並びの位置。undoで**元の位置へ差し戻す**ために要る。
+                # undoで元の位置へ差し戻すための並びの位置。
                 "index": sketch.entities.index(entity),
                 "params": parameters.resolve_all(doc, entity.params),
                 "named": [
@@ -131,10 +101,7 @@ def _entity_snapshots(doc: Document, entities: Sequence[dict]) -> List[dict]:
 
 
 def _sketch_snapshots(doc: Document, sketch_ids: Sequence[str]) -> List[dict]:
-    """消すスケッチを**JSON安全な値だけ**で記録する(undo はこの記録だけから作り直す)。
-
-    存在しないスケッチは KeyError(**文書は何も変わらない**)。
-    """
+    """消すスケッチをJSON安全な値だけで記録する(undo はこの記録だけから作り直す)。存在しないスケッチは KeyError。"""
     specs: List[dict] = []
     for sketch_id in sketch_ids:
         target = get_sketch(doc, sketch_id)
@@ -168,7 +135,7 @@ def _sketch_snapshots(doc: Document, sketch_ids: Sequence[str]) -> List[dict]:
             {
                 "sketch_id": target.id,
                 "name": target.name,
-                # 並びの位置。undo で**元の位置へ差し戻す**(ブラウザの一覧の順序が変わらないため)。
+                # undo で元の位置へ差し戻す並びの位置(ブラウザの一覧の順序を保つ)。
                 "index": doc.sketches.index(target),
                 "plane": copy.deepcopy(target.plane),
                 "entities": entities,
@@ -189,8 +156,7 @@ def delete(
     - `bodies` … BodyId の並び(`selection.require_deletable` が逆引き済みのもの)
     - `entities` … `{"sketch": SketchId, "entity": EntityId}` の並び
 
-    **全部検査してから1つも消さない** —— 途中で落ちると「半分だけ消えた文書」が残り、
-    その状態はログに載っていないので undo でも戻らない。
+    全部検査してから消す(途中で落ちると、ログに載らない「半分だけ消えた文書」が残る)。
     """
     body_ids = [str(body_id) for body_id in bodies]
     if not body_ids and not entities:
@@ -202,16 +168,12 @@ def delete(
         raise ValueError(f"delete got duplicate body ids: {body_ids!r}")
     entity_keys = [(ref["sketch"], ref["entity"]) for ref in entities]
     if len(set(entity_keys)) != len(entity_keys):
-        # **同じ図形を2回渡されると undo が壊れる**(2回目の差し戻しが
-        # 「entity id already exists」で落ちる)。畳むのは `require_deletable` の役目で、
-        # ここは畳まずに断る —— 黙って畳むと、呼び出し側の重複が見えなくなる。
+        # 同じ図形を2回渡されると undo の2回目の差し戻しが落ちる。畳むのは `require_deletable` の役目。
         raise ValueError(f"delete got duplicate sketch entities: {entity_keys!r}")
 
     for body_id in body_ids:
-        # 隠したボディ・形の無いボディを弾く(可視性を見るのは `fillet` / `move_body` と
-        # 同じ理由 —— 選んだ後・verbを呼ぶ前に人がそのボディを隠す順序が、AIと人が並行して
-        # 動くと実際に起きる)。**種別は問わない** —— メッシュボディは編集できないが消せる
-        # (`_common.deletable_body` のdocstring)。
+        # 隠したボディ・形の無いボディを弾く(理由は `_common.editable_body`)。種別は問わない
+        # (メッシュボディは編集できないが消せる。`_common.deletable_body`)。
         deletable_body(doc, body_id)
     entity_specs = _entity_snapshots(doc, entities)
 
@@ -229,10 +191,7 @@ def delete_items(
     bodies: Sequence[str] = (),
     sketches: Sequence[str] = (),
 ) -> Operation:
-    """IDで指したボディとスケッチ(入れ物ごと)をまとめて消す。**片方だけでもよいが、両方空は ValueError**。
-
-    検査の規律は `delete` と同じ(全部検査してから1つも消さない・重複は断る)。
-    """
+    """IDで指したボディとスケッチ(入れ物ごと)をまとめて消す。片方だけでもよいが、両方空は ValueError。検査は `delete` と同じ。"""
     body_ids = [str(body_id) for body_id in bodies]
     sketch_ids = [str(sketch_id) for sketch_id in sketches]
     if not body_ids and not sketch_ids:
@@ -260,12 +219,8 @@ def _remove(
     entity_specs: Sequence[dict],
     sketch_ids: Sequence[str],
 ) -> Dict[str, Any]:
-    """実際に消す(**ログには触らない**)。戻り値がボディのundo用の退避。
-
-    ボディ・図形・スケッチのどれを先に消しても結果は同じ(互いを参照しない)。スケッチは
-    **名前つきの値を手放してから**外す(`sketch._undo_sketch_create` と同じ。手放し忘れると
-    `d1 d2 …` の連番が飛ぶ)。
-    """
+    """実際に消す(ログには触らない)。戻り値がボディのundo用の退避。スケッチは名前つきの値を手放してから外す
+    (忘れると `d1 d2 …` の連番が飛ぶ)。"""
     removed = detach_bodies(document, list(body_ids))
     for spec in entity_specs:
         remove_entities(document, [spec["entity_id"]], sketch_id=spec["sketch_id"])
@@ -283,12 +238,7 @@ def _remove(
 # verbの登録
 # --------------------------------------------------------------------------------------
 def _do_delete(document: Document, operation: Operation) -> None:
-    """redo / replay: 記録した対象を消し直す(ログには触らない)。
-
-    **スナップショットは毎回取り直す** —— `parameters.rebuild()` はログを頭から再生して
-    **新しい `Body` オブジェクト**を作るので、初回に控えたものは同じ seq でも別の実体になる。
-    `_common.reapply_shape` が同じ理由で `remember` を do の側にも書いている。
-    """
+    """redo / replay: 記録した対象を消し直す(ログには触らない)。スナップショットは毎回取り直す(理由は `_common.reapply_shape`)。"""
     args = operation.args
     body_ids = [str(body_id) for body_id in args["bodies"]]
     entity_specs = [dict(spec) for spec in args["entities"]]
@@ -303,18 +253,15 @@ def _do_delete(document: Document, operation: Operation) -> None:
 def _undo_delete(document: Document, operation: Operation) -> None:
     """undo: 図形は args から作り直し、ボディはスナップショット表から戻す。
 
-    **図形の側は保存したログを再生していなくても戻せる**(args だけで完結する)。ボディの側は
-    `TopoDS_Shape` をJSONに載せられない以上どうしても再生が要るので、控えが無ければ
-    `recall` が KeyError で止まる(黙って空振りさせない)。
+    図形の側は args だけで戻せる。ボディの側は再生が要り、控えが無ければ `recall` が KeyError で止まる。
     """
     args = operation.args
     # 0. スケッチを入れ物ごと作り直す。元の添字の昇順に差し込むと元の並びが再現する。
     for spec in sorted(args.get("sketches") or (), key=lambda item: int(item["index"])):
         _restore_sketch(document, spec)
 
-    # 1. 図形を作り直す —— **削除のundoは「追加のdo」**(`sketch._do_add_entity` の写し)。
-    #    元の添字の昇順に差し込むと元の並びが再現し、`register_value` を呼ぶ順序も
-    #    作ったときと同じになるので**同じ名前**が振り直される。
+    # 1. 図形を作り直す(`sketch._do_add_entity` の写し)。元の添字の昇順に差し込むと並びが再現し、
+    #    `register_value` の順序も作ったときと同じになるので同じ名前が振り直される。
     for spec in sorted(args["entities"], key=lambda item: int(item["index"])):
         sketch = get_sketch(document, spec["sketch_id"])
         entity_id = spec["entity_id"]
@@ -332,8 +279,7 @@ def _undo_delete(document: Document, operation: Operation) -> None:
             int(spec["index"]), Entity(id=entity_id, kind=spec["kind"], params=refs)
         )
 
-    # 2. ボディを戻す。**元の添字と active も戻す**(並びが変わると「取り消したのに
-    #    元に戻っていない」という説明のつかない差が残る)。
+    # 2. ボディを戻す(元の添字と active も戻す)。
     if not args["bodies"]:
         return
     reattach_bodies(document, recall(document, _SNAPSHOT_KEY, operation.seq))
@@ -380,11 +326,10 @@ register_verb(VERB_DELETE_ITEMS, do=_do_delete, undo=_undo_delete)
 # --------------------------------------------------------------------------------------
 @entry(VERB_DELETE)
 def _enter_delete(document: Document) -> dict:
-    """ボディ由来(面/辺/頂点/ボディ)と図形が混ざっていても1回で処理する —— `require_bodies` と
-    `require_sketch_entities` を2つ呼ぶと、片方しか選ばれていないときに `SelectionKindMismatch` で壊れる。
+    """ボディ由来(面/辺/頂点/ボディ)と図形が混ざっていても1回で処理する(`require_bodies` と
+    `require_sketch_entities` を2つ呼ぶと、片方しか選ばれていないとき `SelectionKindMismatch` で壊れる)。
 
-    **`changed_bodies` は返さない** —— 消えたボディは配りものの `bodies` から丸ごと居なくなる
-    (形が変わったのではない)。画面が形を取り直す対象は1つも無い。
+    `changed_bodies` は返さない(消えたボディは配信の `bodies` から居なくなるだけ)。
     """
     targets = selection.require_deletable(document)
     args = delete(document, targets.bodies, targets.entities).args
@@ -399,8 +344,7 @@ def _enter_delete(document: Document) -> dict:
 def _enter_delete_items(
     document: Document, bodies: Sequence[str] = (), sketches: Sequence[str] = ()
 ) -> dict:
-    """対象は選択ではなく引数の ID(ブラウザの一覧の行・AI)。選択は読まない(確定後の選択の
-    リセットは他の verb と同じ。`catalog` の `resets_selection`)。"""
+    """対象は選択ではなく引数の ID。選択は読まない。"""
     args = delete_items(document, list(bodies), list(sketches)).args
     return {
         "bodies": list(args["bodies"]),
