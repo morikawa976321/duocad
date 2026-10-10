@@ -703,3 +703,51 @@ holding p99.5(最大)/ load p99.5(最大): 保存 hanger_base 15.86(19.39)/ 23.2
 .venv\Scripts\python.exe topopt_checks\idle_validation\build_08_json.py             # 機械可読まとめ
 ```
 `run_08_robustness.py` は台帳 `08_runs.json` に書き、`LEDGER_NOT_OK` が出たら終了コード2。**終了コード0だけでは合格とせず台帳の `status` を読む**。最初の1件(`d3_adaptive_raw_after`)はチェックポイント保存時の Windows `os.replace` の一時的な `PermissionError` で台帳に書かず落ちたため1回再起動した。
+
+---
+
+# 付録G: 代表完成形の検証(09)
+
+出典: 旧 09_FINAL_SHAPES(git 履歴)。期限再編(A-3)の範囲(新規最適化なし、計約13分、timeout 0件)。数値は旧 B-rep 経路での記録で、2026-10-06 の最終処理のメッシュ集合演算への切り替え後は `final_shapes_09.py convert` が製品のメッシュ集合演算を使い検査結果を `final.mesh_checks` に保存する。`diagnose_cut_09.py` は旧 B-rep の失敗を再現する専用ツール(OCCT 演算を自身に持つ)で、`convert` と `cutdiag` は異なる経路を検証する。
+
+## G-1. 選んだ形(保存済みの探索結果から選定。最終形として保存されたものではない)
+
+| 形 | 役割 | 条件 | マスク |
+|---|---|---|---|
+| S1_dil25_realloc | 小型の代表改善形(05 の45形のうち、同条件の製品step20より軽く製品SFが4.776以上の11形の中で、新方式の形は dilution 2.5mm の適応-1.1%・再配置-3.8%だけ。その大きい方) | dilution_small・300N・2.5mm(実2.513mm)・最小幅3セル=7.54mm・再配置・m5b_raw・243評価 | `05_masks/dilution_res2.5_w6_reallocation_best_ever.npz` |
+| S1c_dil25_step20(対照) | S1 の同条件・製品step20(14評価) | 同上 | `05_masks/dilution_res2.5_w6_step20_best_ever.npz` |
+| S2_hanger200_step20 | hanger 低荷重の合格候補(06 の H1 step20。SF 4.84・M5b raw 0。M5b目標は不合格) | 200N・2.0mm(実1.997mm)・6セル=11.98mm・253評価 | `06_masks/hanger_h1_baseline_step20_best_ever.npz` |
+| S3_hanger2000_step20 | hanger 高荷重の代表(07 の2000N太い幅2.2mm。M5b raw 118.6=その格子4種で最小。出発点の全材料自身が不合格) | 2000N・2.2mm(実2.199mm)・5セル=10.99mm・13評価 | `07_masks/F2000_thick10mm_h2.2_step20_best_ever.npz` |
+
+4形とも平滑化前のボクセルで最小幅(保持セル免除)・水密・単一成分・閉空洞なし・荷重/固定面の節点被覆・保持の欠け0が合格。
+
+## G-2. 結論
+
+- **製品の最終形が成立したのは小型の2形(S1・S1c)だけ**。水密・単一ソリッド・自己交差0で約5秒(S1 76,745 mm³・4,344三角形、S1c 79,645 mm³)。hanger の2形は保持ボディを引く最初のブーリアン(`material-cut`)で、保持の表面に沿って残る体積0.001〜266 mm³ の薄い破片のため単一ソリッドにならず(S2 13個・S3 10個)、S3 は OCCT が結果を不正とした(S2 は TooSmallEdge ×3 の警告、S3 は NotSplittableEdge・SolidBuilderUnusedFaces)。除外のみを引くと単一ソリッドのまま、保持のみを引くと S2 24個・S3 8個に割れる。**S3 の保持のみの cut は取り除いた体積が元のボクセルマスクと保持ボディの共通体積17,725 mm³ の約15%(2,704)しかなく、「妥当」な結果でも体積が合わない**(原因は未特定。S2 は 18,675 対 18,008 で整合)。
+- 旧コーパス64形(2026-09-26、同じ製品コード)も57形が最終形の段階で失敗(`material-cut` 28・三角形分割系18・最終ソリッドの自己干渉検査未完了6・`preserve-fuse` 3・最終検査不合格2)、成立したのは7形(`F0200_h2.2_w2`・`F0200_h2.4_w2`・`F0200_h2.4_w4`・`F0500_h2.2_w5`・`F1000_h2.2_w5`・`F2000_h2.2_w4`・`F2000_h2.4_w5`)。`F2000_h2.2_w5` は S3 と同一マスクで同様に不成立。出典 `output/smoothing_corpus/final_manifest.json`。**これは今回の不要材料の話とは独立の製品の既知の問題**(最終処理のメッシュ集合演算化は TOPOPT.md)。
+- **平滑化後のメッシュを同格子へ再占有化して解いた結果は保存値とほぼ同じ**(最終形の S1・S1c と、最終形が無い S2・S3 は平滑化メッシュ+保持セルの足し戻し=近似。最終CADそのものでも細格子でもない):
+
+| 形 | 材料 mm³ | 製品SF(保存値) | M5b raw(保存値) | M5b目標(保存値) | KS | ピーク(固定面から) |
+|---|---:|---|---|---|---:|---|
+| S1 最終形 | 76,541 | 4.8187(4.8190) | 0(0) | 192.9(192.9) | 10.08 | holding 9.98 MPa(1.26mm) |
+| S1c 最終形 | 79,428 | 4.8357(4.8286) | 0(0) | 190.6(190.6) | 10.07 | holding 9.96(1.26mm) |
+| S2 平滑化+保持 | 139,501 | 4.8189(4.8418) | 0(0) | 2,200.7(2,212.2) | 24.94 | holding 24.94(1.00mm) |
+| S3 平滑化+保持 | 868,360 | 4.8618(4.8383) | 118.5(118.6) | 28,474.8(28,406.6) | 45.94 | holding 45.94(1.10mm) |
+
+  製品SFは保存値から±0.5%以内、材料は+0.09〜+0.33%。M3 は4形とも不合格。再占有化は元のセル占有からほぼ動かない(IoU 0.987〜0.994)ので、**同じ格子で同じ評価が出る確認であって、細格子でも安全という確認ではない**(保持部の局所ピークは格子細分で増える)。S1 対 S1c は材料-3.6%・SF 4.8187 対 4.8357・M5b目標 192.9 対 190.6 だが、探索の受理ゲートが違う(M5b raw 対パーセンタイル)ので優劣の根拠にしない。釣り合い残差は全形 2e-7 N 以下。
+- **平滑化は最小幅をおよそ半セル〜1セル細らせる**: 最小幅の保証は平滑化前のボクセルで成立している(元のボクセルを半格子へ単純に細分した対照は損失0)が、平滑化後のメッシュを半格子へ占有化して要求幅の立方の opening で失う材料の割合は、S2(実現11.98mm・要求10mm)で 10.0mm 立方 3.25%・11.0mm 11.1%・12.0mm 39.9%、S3(実現10.99mm)で 9.9mm 1.18%・11.0mm 1.86%、小型は要求6mm付近で 0.5%未満(S1 6.3mm 0.17%、S1c 6.3mm 0.46%、7.5mm 1.28%)。**「要求最小幅を平滑化後の形が満たす」とは言えない(hanger で特に)**。ただし opening は角・接合部の丸めでも損失を出すので損失の全部が違反ではなく、部材の断面厚さが11mm 未満になったとは断定できない(表面生成による角の丸めと測定格子の影響は [TOPOPT_MIN_WIDTH.md](../TOPOPT_MIN_WIDTH.md) の段階別解析)。S2 の「10.0mm」は厳密には9.98695mm。製品の合否は平滑化前のボクセルの最小幅で、平滑化後のメッシュの幅は検査していない。
+- **平滑化メッシュ単独(足し戻しなし)は荷重・拘束が成立しない**: 同格子へ再占有化すると保持セルが S2 で10個・S3 で12個欠け、荷重面の節点1〜6個(S2 は固定面の節点1個も)が材料から外れて FEM の条件確認が通らない。製品の最終ブーリアンは保持を fuse で足し戻すので、保持の足し戻しが必須。小型は最終形で条件確認が通る。hanger の平滑化メッシュは除外ボディに 503 mm³(S2)・1,386 mm³(S3)侵入し、最終形が成立しないので除外の遵守は未確認。
+
+## G-3. 未検証
+
+最終CADの細格子 FEM、hanger の最終ブーリアン(薄い破片)の修正と再検証、`F0500_h2.2_w5`・`F1000_h2.2_w5` の最終形の再解析(07 の `F0500_thick10mm_h2.2`・`F1000_thick10mm_h2.2` と同一マスク)、小型の複数条件・同ゲートでの追試(例: dilution 250N・step05)。小型の最終メッシュは `09_work/*_final_mesh.npz` に保存(細格子再解析の入力にできる)。
+
+## G-4. 再現
+
+```
+.venv\Scripts\python.exe topopt_checks\idle_validation\run_09_final_shapes.py --job convert:S2_hanger200_step20       # convert / cutdiag / resolve:<形>:<final|smoothed|smoothed_keep>
+.venv\Scripts\python.exe topopt_checks\idle_validation\run_09_final_shapes.py --job cutdiag:S2_hanger200_step20
+.venv\Scripts\python.exe topopt_checks\idle_validation\run_09_final_shapes.py --job resolve:S2_hanger200_step20:smoothed_keep
+.venv\Scripts\python.exe topopt_checks\idle_validation\build_09_json.py                                               # 機械可読まとめ(FEMなし)
+```
+各ジョブは新しい OS プロセスで走り wall timeout(小型1200秒・hanger 形状変換1800秒・FEM 2700秒)を超えたら子の木を止めて台帳に `timeout` を残す。**`convert` ジョブは `finalize` が不成立でもジョブ自体は `ok`** なので、最終形の成否は台帳の `final_status`(結果JSONの `final.status`)で読む。出力は `output/idle_validation_20260928/09_*.json`・`09_runs.json`・`09_work/`。
