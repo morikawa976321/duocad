@@ -227,6 +227,7 @@ class Recorder:
                       loaded_function_hashes=runtime,
                       platform=platform.platform(), cpu_count=os.cpu_count(), packages=versions,
                       threads={k:os.environ[k] for k in ('OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS') if k in os.environ},
+                      fem_device_env=os.environ.get('DUOCAD_FEM_DEVICE'),
                       git_head=_git('rev-parse','HEAD'), git_diff=_git('diff','--','duocad','pyproject.toml'),
                       git_status=_git('status','--short')))
         def write_sources(stream):

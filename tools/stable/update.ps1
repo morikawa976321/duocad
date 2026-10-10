@@ -66,7 +66,11 @@ function Resolve-Tool([string]$name, [string[]]$fallbacks) {
 }
 
 function Build([string]$fromCommit) {
-    Run 'uv sync' $uv @('sync', '--frozen')
+    # DUOCAD_FEM_DEVICE=gpu の機械では CuPy(extra gpu)も入れる。**extra を付けない `uv sync` は
+    # 入っている CuPy を消す**ので、付け忘れると更新のたびに GPU の経路が CPU へ戻る(docs/TOPOPT_GPU.md)。
+    $syncArgs = @('sync', '--frozen')
+    if ("$env:DUOCAD_FEM_DEVICE".Trim().ToLower() -eq 'gpu') { $syncArgs += @('--extra', 'gpu') }
+    Run 'uv sync' $uv $syncArgs
     $web = Join-Path $RepoRoot 'web'
     $lockChanged = $false
     if ($fromCommit) {

@@ -1,0 +1,55 @@
+# 形状最適化の CG を GPU で解く
+
+形状探索の FEM の線形求解(ヤコビ前処理つき CG)を、NVIDIA の GPU で解く経路。**既定は CPU** で、使う機械だけ人が有効にする。
+決めた経緯と実測は [gpu_feasibility/CONCLUSION.md](../gpu_feasibility/CONCLUSION.md)(morikawa976321/duocad#104)。
+
+- 実寸 2.0mm の探索 1 本で 2.3〜2.6 倍(デスクトップ、RTX 5060 Ti。同 CONCLUSION.md 表 3)。
+- **解・反復数は CPU の `scipy.sparse.linalg.cg` とビット一致する。** 探索の試行と採用形状も変わらない。途中で CPU に戻っても結果は同じ。
+- 直接解法に回る小さい系(`solver="auto"` の `direct`)は対象外。
+
+## 有効にする
+
+1. CuPy を入れる: `uv sync --frozen --extra gpu`(CUDA ランタイムも wheel で入る。約 2GB。システムへの CUDA Toolkit は要らない)。
+2. 環境変数 `DUOCAD_FEM_DEVICE=gpu` を設定する(ユーザー環境変数)。**import 時に 1 回だけ読む**ので、設定後にサーバを立て直す。
+   プロセスの中で変えるなら `fem.FEM_DEVICE = "gpu"`、1 回だけなら `Model.prepare(..., device="gpu")`。
+
+**安定版**では、`tools/stable/update.ps1` と `install.ps1` が `DUOCAD_FEM_DEVICE=gpu` を見て `--extra gpu` を付ける。
+**extra を付けない `uv sync` は入っている CuPy を消す**ので、この環境変数はサーバと更新の両方から見えている必要がある。
+この機能を取り込む最初の更新は、取り込む前の `update.ps1` が走る(一時フォルダへ写してから走らせるため)ので CuPy が入らない。
+その回だけ、安定版のフォルダで手で `uv sync --frozen --extra gpu` を走らせるか、次の更新を待つ。
+
+GPU の無い機械(ThinkPad P14s Gen 6 等)では何もしない。`gpu` を設定しても、最初の solve で CPU に戻ってそのプロセスでは以後試さない。
+
+## CPU に戻る条件と記録
+
+`gpu` のとき、次のどれかで **CPU が初期値から解き直す**(途中の解は渡さない。渡すとビット一致が崩れる)。
+
+| 理由(`gpu_fallback` の頭) | 中身 | 以後 GPU を試すか |
+|---|---|---|
+| `cupy:` | CuPy を読めない・GPU が無い | 試さない |
+| `openblas-threads:` | numpy 同梱 OpenBLAS のスレッド数を読めない | 試さない |
+| `startup-check:` | 起動時に小さい系を CPU と GPU の CG で解き、ビットが合わない(scipy の行列積・更新の番人) | 試さない |
+| `dot-mismatch:` | その長さの内積が `np.dot` とビット一致しない(numpy・OpenBLAS の番人。長さとスレッド数ごとに 1 回検査) | 他の長さは試す |
+| `vram:` | VRAM が足りない | 試す |
+| `residual:` | 収束したのに残差検算に通らない | 試す |
+| `gpu-error:` | それ以外の CUDA の例外 | 試さない |
+
+- 戻るたびに `RuntimeWarning` を出す。
+- 実行記録の `linear-solve` に `device_requested` / `device`(実際に解いた方)/ `gpu_fallback`(理由。戻らなければ null)が残る。
+  `fem.collect_solve_stats()` は `gpu_solves` / `gpu_fallbacks` を数える。**`gpu_fallbacks` が 0 でない実行は、CPU と GPU の秒が混ざっている**
+  (`wall_seconds` で手法どうしを比べる集計では分ける)。実行記録の `environment` には `fem_device_env` が残る。
+- 解き終わるたびに VRAM をドライバへ返す(Unity・ローカル LLM と 16GB を分け合うため)。
+
+## ビット一致の範囲
+
+保証するのは「**同じ機械・同じ numpy/scipy で、GPU の ON/OFF が結果を変えない**」ことだけ。
+
+- 内積の足し順は OpenBLAS のスレッド数(既定は論理プロセッサ数)と実行時カーネルで決まる。**機械をまたぐ一致は CPU 同士でも元々無い。**
+- numpy・scipy を上げると自己検査に落ちて CPU に戻ることがある(結果は変わらず、速度だけ戻る)。版は `uv.lock` で固定してあり、
+  上げるときは GPU のある機械で `tests/test_fem_gpu.py` を回す。
+- 確認した組み合わせ: numpy 2.4.6(OpenBLAS 0.3.31)・scipy 1.17.1・cupy-cuda13x 14.2.0、Python 3.11 と 3.14、Core Ultra 5 245KF。
+
+## テスト
+
+`tests/test_fem_gpu.py`。CPU へ戻る経路は GPU が無くても走る。ビット一致と探索の一致は、CuPy と GPU がある環境でだけ走る
+(開発用チェックアウトで回すなら `uv sync --extra gpu`)。

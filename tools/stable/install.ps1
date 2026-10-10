@@ -7,7 +7,7 @@
 #    (pushもPRもせずに導入するとき。**完全なハッシュ**を渡す —— ローカルのリポジトリからの fetch は
 #    短縮ハッシュを解決しない)。ローカルの main をそのコミットに置き、追跡先は origin/main のまま。
 #    mainがそのコミットを取り込むまで更新ボタンは出ない(docs/STABLE.md)
-# 2. uv sync --frozen / npm ci / npm run build
+# 2. uv sync --frozen(DUOCAD_FEM_DEVICE=gpu なら --extra gpu も) / npm ci / npm run build
 # 3. 制作データの置き場(models/ export/ logs/)を作る。-ImportModelsFrom の *.json を写す(上書きしない)
 # 4. スタートメニューに「duocad」を登録する(Win -> duocad -> Enter で起動)
 # 5. 安定版のフォルダで開いた Claude Code だけが安定版のMCP(8776)へ繋ぐよう、local スコープで登録する
@@ -61,7 +61,10 @@ if (Test-Path (Join-Path $StableRoot '.git')) {
 }
 
 # ---- 2. 依存とビルド ----
-Run 'uv' @('sync', '--frozen') $StableRoot
+# DUOCAD_FEM_DEVICE=gpu の機械では CuPy(extra gpu)も入れる(update.ps1 の Build と同じ)。
+$syncArgs = @('sync', '--frozen')
+if ("$env:DUOCAD_FEM_DEVICE".Trim().ToLower() -eq 'gpu') { $syncArgs += @('--extra', 'gpu') }
+Run 'uv' $syncArgs $StableRoot
 $web = Join-Path $StableRoot 'web'
 Run 'npm.cmd' @('ci') $web
 Run 'npm.cmd' @('run', 'build') $web

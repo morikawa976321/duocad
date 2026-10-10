@@ -17,6 +17,7 @@
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
 | [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **形状探索の時間短縮**（1回のFEM評価の内訳・候補評価の費用） | 探索を速くしたいとき |
+| [docs/TOPOPT_GPU.md](docs/TOPOPT_GPU.md) | **CG を GPU で解く経路**（有効にする手順・CPU に戻る条件・ビット一致の範囲） | GPU を使う・遅くなった理由を疑うとき |
 | [docs/TOPOPT_SMOOTHING_INTERSECTIONS.md](docs/TOPOPT_SMOOTHING_INTERSECTIONS.md) | **平滑化後の自己交差が起きるボクセルの形**（64条件の全数集計・管の潰れと交差の規則・合成での再現） | 平滑化の自己交差・潰れを疑うとき |
 | [docs/TOPOPT_TARGET_FACTOR.md](docs/TOPOPT_TARGET_FACTOR.md) | **探索に渡す目標安全率 = 実際の目標 × 2.4** の決定・根拠・実測（細分すると目標を割る問題の受け方） | 探索時の目標・報告の「探索の格子での値」を疑うとき |
 | [docs/topopt_idle_validation/10_SYNTHESIS.md](docs/topopt_idle_validation/10_SYNTHESIS.md) | **不要材料の改善案の検証の統合報告**(2026-10-05期限再編版。判定方式・節点所有権・最小幅の芯への推奨、探索方式の比較、証拠監査) | 不要材料の直し方を決めるとき |

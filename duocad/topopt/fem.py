@@ -69,6 +69,8 @@ def new_solve_stats() -> dict:
         "solve_seconds": 0.0,
         "fallbacks": 0,
         "direct_solves": 0,
+        "gpu_solves": 0,
+        "gpu_fallbacks": 0,
     }
 
 
@@ -211,6 +213,24 @@ def _default_thread_count() -> int:
 
 
 PARALLEL_THREADS: int = _default_thread_count()
+
+# CG を解く装置。環境変数 `DUOCAD_FEM_DEVICE`(`cpu` / `gpu`)を**import 時に1回だけ読む**
+# (後から変えるなら `FEM_DEVICE` へ代入する)。**既定は cpu** —— GPU は機械ごとに人が有効にする
+# (VRAM を他の作業と分け合うので、使えるからといって黙って取らない。gpu_feasibility/CONCLUSION.md「方針」)。
+# `gpu` でも、GPU で解けない・合わないときは CPU で解き直し、理由を `linear-solve` の記録に残す(`gpu_cg`)。
+FEM_DEVICE_ENV = "DUOCAD_FEM_DEVICE"
+
+
+def _default_device() -> str:
+    value = os.environ.get(FEM_DEVICE_ENV, "").strip().lower()
+    if value in ("", "cpu", "gpu"):
+        return value or "cpu"
+    warnings.warn(f"{FEM_DEVICE_ENV}={value!r} は cpu / gpu のどちらでもないので cpu で解く", RuntimeWarning,
+                  stacklevel=2)
+    return "cpu"
+
+
+FEM_DEVICE: str = _default_device()
 
 # プロセスの寿命だけ生存させるスレッドプールのキャッシュ(スレッド数ごとに1つ)。
 # **明示的に閉じない**——閉じても次の solve でまた同じ数だけ要るので、生成コストを
@@ -503,6 +523,7 @@ class Model:
         *,
         solver: str = "cg",
         threads: int | None = None,
+        device: str | None = None,
     ) -> "PreparedSystem":
         """K を組み立て、自由DOFへ縮め、前処理を作るところまでをやって返す。
 
@@ -514,6 +535,9 @@ class Model:
         """
         if solver not in ("cg", "direct", "auto"):
             raise ValueError(f"未知の解法: {solver!r}")
+        device = FEM_DEVICE if device is None else device
+        if device not in ("cpu", "gpu"):
+            raise ValueError(f"未知の装置: {device!r}")
         threads = PARALLEL_THREADS if threads is None else max(1, int(threads))
         stats = _SOLVE_STATS
         t0 = time.perf_counter()
@@ -538,7 +562,7 @@ class Model:
             # **setup も「解く時間」に数える。** 右辺ごとの CG は `PreparedSystem.solve` が
             # 足すので、右辺1本のときの `solve_seconds` は割る前と同じ意味(setup + CG)になる。
             stats["solve_seconds"] += time.perf_counter() - t2
-        return PreparedSystem(self, kf, a_op, precond, solver, policy)
+        return PreparedSystem(self, kf, a_op, precond, solver, policy, device)
 
     def stiffness_apply(self, rho: np.ndarray, penal: float, vec: np.ndarray) -> np.ndarray:
         """K @ vec を、K を組み立てずに要素ループで計算する (ndof,)。
@@ -616,6 +640,7 @@ class PreparedSystem:
         precond: "spla.LinearOperator | None",
         solver: str,
         policy: str | None = None,
+        device: str = "cpu",
     ) -> None:
         self.model = model
         self.kf = kf
@@ -623,6 +648,7 @@ class PreparedSystem:
         self._precond = precond
         self._solver = solver
         self._policy = solver if policy is None else policy
+        self._device = device
 
     @property
     def solver(self) -> str:
@@ -650,20 +676,28 @@ class PreparedSystem:
             ff = rhs[index][model.free]
             iterations = 0
             fell_back = False
+            device = "cpu"
+            gpu_fallback = None
             zero_rhs = not np.any(ff)
             if zero_rhs:
                 u_free = np.zeros(model.free.size)
             elif self._solver == "direct":
                 u_free = spla.spsolve(self.kf, ff)
             else:
-                counter = None
-                if stats is not None or trace.current() is not None:
+                u_free = None
+                if self._device == "gpu":
+                    u_free, iterations, info, gpu_fallback = self._solve_on_gpu(ff, cg_rtol)
+                    device = "cpu" if u_free is None else "gpu"
+                if u_free is None:
+                    iterations = 0
+                    counter = None
+                    if stats is not None or trace.current() is not None:
 
-                    def counter(_xk: np.ndarray) -> None:
-                        nonlocal iterations
-                        iterations += 1
+                        def counter(_xk: np.ndarray) -> None:
+                            nonlocal iterations
+                            iterations += 1
 
-                u_free, info = spla.cg(self._a_op, ff, M=self._precond, rtol=cg_rtol, callback=counter)
+                    u_free, info = spla.cg(self._a_op, ff, M=self._precond, rtol=cg_rtol, callback=counter)
                 fell_back = info != 0
                 if info != 0:
                     warnings.warn(
@@ -681,9 +715,12 @@ class PreparedSystem:
                 stats["cg_iterations_each"].append(iterations)
                 stats["fallbacks"] += int(fell_back)
                 stats["direct_solves"] += int(self._solver == "direct")
+                stats["gpu_solves"] += int(device == "gpu")
+                stats["gpu_fallbacks"] += int(gpu_fallback is not None)
             trace.snapshot('linear-solve', solver=self._solver, solver_policy=self._policy,
                            free_dofs=int(model.free.size), nnz=int(self.kf.nnz), cg_rtol=cg_rtol,
                            cg_iterations=iterations, fallback=fell_back,
+                           device_requested=self._device, device=device, gpu_fallback=gpu_fallback,
                            rhs_index=index, seconds=time.perf_counter()-t_start)
             if not zero_rhs:
                 model._verify_solution(self.kf, ff, u_free)
@@ -691,6 +728,36 @@ class PreparedSystem:
         if stats is not None:
             stats["solve_seconds"] += time.perf_counter() - t_start
         return out
+
+    def _solve_on_gpu(self, ff: np.ndarray, cg_rtol: float) -> tuple[np.ndarray | None, int, int, str | None]:
+        """GPU の CG で解く。(解, 反復数, info, CPU へ戻した理由)。戻すときは解が None。
+
+        **戻すときは CPU で初期値から解き直す**(呼び出し側)。途中の解を `x0` に渡すと Krylov 系列が
+        変わり、CPU だけで解いたときとビット一致しなくなる。収束したのに残差検算に通らない解も戻す
+        (ビット一致なら CPU も同じ解になるはずなので、GPU 側の異常とみなす)。
+        """
+        from . import gpu_cg
+
+        try:
+            u_free, iterations, info = gpu_cg.solve(self.kf, ff, rtol=cg_rtol,
+                                                    make_startup_system=_gpu_startup_system)
+        except gpu_cg.Unavailable as exc:
+            warnings.warn(f"GPU で解けないので CPU で解き直す: {exc.reason}", RuntimeWarning, stacklevel=3)
+            return None, 0, 0, exc.reason
+        if info == 0:
+            finite = bool(np.all(np.isfinite(u_free)))
+            if not finite or np.linalg.norm(self.kf @ u_free - ff) > SOLVE_RESIDUAL_TOL * np.linalg.norm(ff):
+                reason = "residual: GPU の解が残差検算に通らない"
+                warnings.warn(f"GPU で解けないので CPU で解き直す: {reason}", RuntimeWarning, stacklevel=3)
+                return None, 0, 0, reason
+        return u_free, iterations, info, None
+
+
+def _gpu_startup_system() -> tuple[sp.spmatrix, np.ndarray]:
+    """GPU の起動時の自己検査に使う小さい系(K_ff, f_f)。製品の組立と縮約の経路で作る。"""
+    model = Model(10, 4, 4)
+    kg = model.assemble(np.ones((10, 4, 4)), 3.0)
+    return kg[model.free, :][:, model.free].tocsc(), model.f[model.free]
 
 
 def load_resultant(f: np.ndarray) -> np.ndarray:

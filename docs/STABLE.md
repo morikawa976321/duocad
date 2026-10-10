@@ -58,7 +58,8 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 
 1. サーバが `tools/stable/update.ps1` を一時フォルダへ写して切り離して起動し、自分は終了する
    (**Windowsでは動いている `.venv` の python.exe を置き換えられない**ので、更新はサーバの外で行う)
-2. スクリプトが `git merge --ff-only origin/main` → `uv sync --frozen` →(`package-lock.json` が変わったときだけ)
+2. スクリプトが `git merge --ff-only origin/main` → `uv sync --frozen`(環境変数 `DUOCAD_FEM_DEVICE=gpu` の機械では
+   `--extra gpu` も。[TOPOPT_GPU.md](TOPOPT_GPU.md))→(`package-lock.json` が変わったときだけ)
    `npm ci` → `npm run build`
 3. `duocad.launcher --no-window` で立て直す。画面は再接続を待って自動で読み直し、結果をトーストで出す
 
