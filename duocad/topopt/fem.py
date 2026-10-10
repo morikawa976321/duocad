@@ -15,8 +15,7 @@ from .material import POISSON_RATIO
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
-# 解いた後に残差で検算するときの上限(相対)。CG は `cg_rtol=1e-9` まで詰め、直接解法は
-# 1e-14 程度まで出るので、1e-6 は「収束した解」に対して6桁以上の余裕がある。
+# 解いた後に残差で検算するときの上限(相対)。CG は `cg_rtol=1e-9`、直接解法は 1e-14 程度まで出るので 1e-6 は収束した解に6桁以上の余裕がある。
 # **拘束不足の系を黙って通さないための関門**であって、精度の要求ではない。
 SOLVE_RESIDUAL_TOL = 1e-6
 
@@ -38,28 +37,19 @@ def choose_solver(solver: str, free_dofs: int, nnz: int) -> str:
 
 
 class SolveResidualError(ValueError):
-    """`K U = F` が残差検算(`SOLVE_RESIDUAL_TOL`)を通らなかった。
+    """`K U = F` が残差検算(`SOLVE_RESIDUAL_TOL`)を通らなかった。`ValueError` の派生。
 
-    **`ValueError` の派生なので、既存の `except ValueError` はそのまま効く。**
-    別の型にしてあるのは、呼び出し側が**この失敗だけ**を他の `ValueError` と区別して
-    扱えるようにするため —— 低密度で系が悪条件になっただけなら材料を増やせば直るが、
-    拘束不足そのものは増やしても直らない(逆向きの手当てが要る)。
+    別の型にしてあるのは、低密度で悪条件になっただけなら材料を増やせば直るが、拘束不足は増やしても直らない(逆向きの手当てが要る)ため。
     """
 
 
-# ---------------------------------------------------------------------------
-# 性能計測の口
-# ---------------------------------------------------------------------------
-# `Model.solve` が反復数と各段の秒数を積む先。**None のときは何も積まず、callback も渡さない**
-# ので、本番経路の数値は1ビットも変わらない。
-#
-# **外から `scipy.sparse.linalg.cg` を差し替えて数える方式を採らない。** 解法を差し替えた
-# 瞬間に数え口が外れ、反復数が黙って 0 になるので、数え口は解法と同じ場所に置く。
+# `Model.solve` が反復数と各段の秒数を積む先。**None のときは何も積まず callback も渡さない**ので本番経路の数値は変わらない。
+# **外から `scipy.sparse.linalg.cg` を差し替えて数える方式は採らない**(差し替えた瞬間に数え口が外れ、反復数が黙って 0 になる)。
 _SOLVE_STATS: dict | None = None
 
 
 def new_solve_stats() -> dict:
-    """`collect_solve_stats` が積む器。鍵を1か所に置くためだけの関数。"""
+    """`collect_solve_stats` が積む器。"""
     return {
         "solves": 0,
         "cg_iterations": 0,
@@ -76,11 +66,7 @@ def new_solve_stats() -> dict:
 
 @contextlib.contextmanager
 def collect_solve_stats() -> Iterator[dict]:
-    """この文脈の中で `Model.solve` が積んだ実測を返す。**入れ子にしない**(後勝ちになる)。
-
-    `cg_iterations_each` は solve 1回ごとの反復数。合計や平均だけだと、設計反復が進んで
-    密度が二値へ寄るにつれ条件数が悪化する分が見えない。
-    """
+    """この文脈の中で `Model.solve` が積んだ実測を返す。**入れ子にしない**(後勝ちになる)。`cg_iterations_each` は solve 1回ごとの反復数。"""
     global _SOLVE_STATS
     previous = _SOLVE_STATS
     stats = new_solve_stats()
@@ -91,8 +77,8 @@ def collect_solve_stats() -> Iterator[dict]:
         _SOLVE_STATS = previous
 
 
-#: 局所節点 l = 4a+2b+c ↔ 単位立方体の頂点 (a,b,c) の符号 (2a-1, 2b-1, 2c-1)。**`_build_edof` の
-#: l のまわし方に一致していること** —— ずれると応力(`stress`)は「もっともらしい別の値」になって落ちない。
+#: 局所節点 l = 4a+2b+c ↔ 単位立方体の頂点 (a,b,c) の符号 (2a-1, 2b-1, 2c-1)。**`_build_edof` の l のまわし方に一致していること**
+#: (ずれると応力(`stress`)は落ちずに別の値になる)。
 NODE_SIGNS = np.array(
     [[2 * a - 1, 2 * b - 1, 2 * c - 1] for a in (0, 1) for b in (0, 1) for c in (0, 1)],
     dtype=float,
@@ -185,20 +171,12 @@ def _build_load(nelx: int, nely: int, nelz: int, ndof: int) -> np.ndarray:
     return f
 
 
-# ---------------------------------------------------------------------------
-# CPU 並列化 (solve(threads=...))
-# ---------------------------------------------------------------------------
-# **律速は CG の反復(行列ベクトル積)。** **scipy の CSR 行列ベクトル積(疎×密ベクトル)は
-# C実装で GIL を解放する**ので、スレッド化するのはこの積だけに絞る(数字は docs/TOPOPT.md「CPU並列化」)。
-#
-# **行ブロックへの分割は答えを変えない**: CSR の行 i の内積は行 i の非零要素だけで決まり、
-# 他の行・他のスレッドの計算と独立。どのスレッドが計算しても、スレッド数を変えても、
-# **丸め誤差が発生する順序は変わらずビット単位で同じ結果になる**(numpyの縮約はここでは
-# 並列化していないので、そちらの再現性はそもそも揺れない)。
+# **律速は CG の反復(行列ベクトル積)。** scipy の CSR 行列ベクトル積は C実装で GIL を解放するので、スレッド化はこの積だけに絞る
+# (数字は docs/TOPOPT.md「CPU並列化」)。行ブロックへの分割は、行 i の内積が行 i の非零要素だけで決まるので、
+# スレッド数を変えても**丸め誤差の順序は変わらずビット単位で同じ結果になる**。
 
-# `PARALLEL_THREADS` の初期値。環境変数 `TOPOPT_THREADS` は**import 時に1回だけ読む**
-# (後から変えるなら `PARALLEL_THREADS` へ代入する)。値を取れなければ 1(直列。壊れた環境変数で黙って
-# 並列化が有効になるより、壊れた値は無視して安全側へ倒す)。
+# `PARALLEL_THREADS` の初期値。環境変数 `TOPOPT_THREADS` は**import 時に1回だけ読む**(後から変えるなら `PARALLEL_THREADS` へ代入)。
+# 取れない・壊れた値は無視して 1(直列)へ倒す。
 def _default_thread_count() -> int:
     override = os.environ.get("TOPOPT_THREADS")
     if override:
@@ -206,24 +184,19 @@ def _default_thread_count() -> int:
             return max(1, int(override))
         except ValueError:
             return 1
-    # 総論理コアの半分(下限1)。duocad本体はこのマシン上でユーザーの操作と同時に
-    # 走るので、既定が全論理コアを占有するとフロントエンドまで応答しなくなる
-    # (probe単体なら困らないが、既定が本体まで持っていかれると困る)。
+    # 総論理コアの半分(下限1)。全論理コアを占有するとユーザーの操作と同時に走るフロントエンドが応答しなくなる。
     return max(1, (os.cpu_count() or 1) // 2)
 
 
 PARALLEL_THREADS: int = _default_thread_count()
 
-# CG を解く装置(`cpu` / `gpu`)。`prepare` が呼ばれたときに読む。**既定は cpu** —— GPU は機械ごとに人が
-# 画面の「設定」で有効にし、サーバがその値(`duocad.local_settings`)をここへ入れる(VRAM を他の作業と
-# 分け合うので、使えるからといって黙って取らない。docs/TOPOPT_GPU.md「方針」)。
-# `gpu` でも、GPU で解けない・合わないときは CPU で解き直し、理由を `linear-solve` の記録に残す(`gpu_cg`)。
+# CG を解く装置(`cpu` / `gpu`)。`prepare` が呼ばれたときに読む。**既定は cpu**: GPU は機械ごとに人が画面の「設定」で有効にし、
+# サーバがその値(`duocad.local_settings`)をここへ入れる(VRAM を他の作業と分け合うため。docs/TOPOPT_GPU.md「方針」)。
+# `gpu` でも解けない・合わないときは CPU で解き直し、理由を `linear-solve` の記録に残す(`gpu_cg`)。
 FEM_DEVICE: str = "cpu"
 
-# プロセスの寿命だけ生存させるスレッドプールのキャッシュ(スレッド数ごとに1つ)。
-# **明示的に閉じない**——閉じても次の solve でまた同じ数だけ要るので、生成コストを
-# 毎回払わせない。ワーカーはデーモンスレッドではなく、プロセス終了時は `concurrent.futures`
-# の終了フックがワーカーを止めて待つ(solve の外ではワーカーは待機しているだけ)。
+# プロセスの寿命だけ生存させるスレッドプールのキャッシュ(スレッド数ごとに1つ)。**明示的に閉じない**(生成コストを毎回払わせない)。
+# ワーカーはデーモンではなく、プロセス終了時は `concurrent.futures` の終了フックが止めて待つ。
 _THREAD_POOLS: dict[int, ThreadPoolExecutor] = {}
 
 
@@ -235,9 +208,8 @@ def _thread_pool(n: int) -> ThreadPoolExecutor:
     return pool
 
 
-# 1スレッドあたりこれ未満の行数しか無い行列は、スレッド化のオーバーヘッド
-# (`submit`/`result` の往復)のほうが計算そのものより高くつく。**しきい値の根拠**:
-# スレッド数を機械的に絞らないと、検査で使う小さい格子(数百行)でむしろ遅くなる実測があった。
+# 1スレッドあたりこれ未満の行数しか無い行列は、スレッド化のオーバーヘッドのほうが計算より高くつく
+# (絞らないと、検査で使う小さい格子(数百行)でむしろ遅くなる実測があった)。
 _MIN_ROWS_PER_THREAD = 512
 
 
@@ -250,13 +222,8 @@ def _effective_threads(n_rows: int, threads: int) -> int:
 
 
 class _BlockedMatvec:
-    """CSR行列を行ブロックへ割った並列 `A @ x`。**スレッド数に関わらずビット一致する**
-    (このセクション冒頭の説明を参照)。`threads<=1` または行数がスレッド数に対して
-    少なすぎるときは、プールへ投げずに `a @ x` を直に呼ぶ(オーバーヘッドを払わない)。
-
-    行ブロックへの分割(スライス)は**構築時に1回だけ**行う。密度が変わるたびに
-    作り直す必要があるので(`Model.prepare` が呼ぶ側で)、`solve` 1回の
-    寿命を超えてキャッシュしない。
+    """CSR行列を行ブロックへ割った並列 `A @ x`。**スレッド数に関わらずビット一致する**。`threads<=1` または行数が少なすぎるときは
+    プールへ投げず `a @ x` を直に呼ぶ。ブロック分割は構築時に1回だけ行い、`solve` 1回の寿命を超えてキャッシュしない(密度が変わるたびに作り直す)。
     """
 
     __slots__ = ("mat", "bounds", "blocks", "pool")
@@ -289,21 +256,14 @@ def _block_dot(block: sp.csr_matrix, x: np.ndarray) -> np.ndarray:
 
 
 def parallel_matvec(a: sp.spmatrix, x: np.ndarray, threads: int = 1) -> np.ndarray:
-    """`a @ x` を行ブロックへ割って `threads` 個のスレッドで計算する(公開の使い切り口)。
-
-    毎回ブロック分割を作り直すので、同じ `a` に対して繰り返し呼ぶ用途には向かない
-    (`Model.prepare` は `_BlockedMatvec` を密度が変わるたびに1回だけ
-    作って使い回している)。`check_parallel.py` の帯域測定と検出力用。
-    """
+    """`a @ x` を行ブロックへ割って `threads` 個のスレッドで計算する(公開の使い切り口。毎回分割を作り直すので繰り返し用途には向かない)。"""
     return _BlockedMatvec(a, threads)(x)
 
 
 def _coo_index_arrays(edof: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """要素DOF写像 (n,24) → 組み立て用の COO 行・列添字(各要素 576 項)。
 
-    **並びは `ke.ravel()` と対応していなければならない**(層をまたぐ契約) —— 行は各要素の
-    24自由度をそのまま24回並べ、列は各自由度を24回ずつ繰り返す。ずれると K は落ちずに
-    別の行列になる。
+    **並びは `ke.ravel()` と対応していなければならない**(層をまたぐ契約。ずれると K は落ちずに別の行列になる)。
     """
     rows = np.tile(edof, (1, 24)).ravel()
     cols = np.repeat(edof, 24, axis=1).ravel()
@@ -338,24 +298,15 @@ class Model:
         extra_fixed_dofs: np.ndarray | None = None,
         active_mask: np.ndarray | None = None,
     ) -> None:
-        """`fixed_dofs` / `load` を渡すと片持ち梁の既定の境界条件を置き換える。
+        """`fixed_dofs` / `load` を渡すと片持ち梁の既定の境界条件を置き換える(CAD の面から起こした拘束・荷重を入れる口。
+        番号の規約は `_build_edof` と同じで、ずれると荷重は黙って別の場所に入る)。
 
-        **既定(どちらも None)の挙動は追加前と1ビットも変わらない** —— CAD の面から
-        起こした拘束・荷重を入れるための口で、既存の `check_fem.py` はこの口を使わない
-        経路をそのまま通る。番号の規約は `_build_edof` と同じ(節点
-        `i*(nely+1)*(nelz+1)+j*(nelz+1)+k`、自由度 `3n+{0,1,2}`)。ずれると荷重は
-        黙って別の場所に入る。
+        `extra_fixed_dofs` は**置き換えではなく追加**(`acceptance.py` が `anchor.floating_dofs` を系から外すのに使う)。
+        `fixed_dofs` に混ぜると、`active_mask` だけ渡して拘束は既定のままにしたい呼び出しで片持ち梁の拘束が黙って消える。
 
-        `extra_fixed_dofs` は**置き換えではなく追加**。`acceptance.py` が「空要素にしか
-        接していない浮いた節点」(`anchor.floating_dofs`)を系から外すのに使う。**置き換えの口(`fixed_dofs`)に
-        混ぜてはいけない** —— それだと `active_mask` だけを渡して拘束は既定のままにしたい
-        呼び出しで、片持ち梁の拘束が黙って消える。
-
-        `active_mask` は**組み立てに載せる要素**で、True の要素だけで K を組む。
-        **`extra_fixed_dofs` と同じ `void` から作らなければならない**(層をまたぐ契約)
-        —— 組み立てから外した要素にしか接していない自由度が `free` に残ると、K_ff に
-        全零行ができて解が定まらない。`None` なら全要素で組む。`edof` そのものは
-        `compliance` と `stress.py` が全要素で引くので**間引かない**。
+        `active_mask` は**組み立てに載せる要素**(True の要素だけで K を組む。`None` は全要素)。
+        **`extra_fixed_dofs` と同じ `void` から作ること**(層をまたぐ契約。組み立てから外した要素にしか接さない自由度が
+        `free` に残ると K_ff に全零行ができて解が定まらない)。`edof` は `compliance` と `stress.py` が全要素で引くので間引かない。
         """
         self.nelx = nelx
         self.nely = nely
@@ -393,10 +344,8 @@ class Model:
             marked[self.fixed] = True
             marked[extra] = True
             self.fixed = np.flatnonzero(marked)
-        # **集合演算ではなく ndof 長のブール配列で取る。** `Model` は候補ごとに作り直すので
-        # ここは評価1回ごとに通る。実測(hanger 2.4mm、ndof 2,757,300): `union1d` 2.11秒 +
-        # `setdiff1d(arange(ndof), fixed)` 4.18秒 に対し、ブール配列は合わせて 0.02秒
-        # (整列済み・重複なしの同じ配列が出る。番号は全て [0, ndof) にあることを上で検査済み)。
+        # **集合演算ではなく ndof 長のブール配列で取る**(評価1回ごとに通る)。実測(hanger 2.4mm、ndof 2,757,300):
+        # `union1d` 2.11秒 + `setdiff1d(arange(ndof), fixed)` 4.18秒 に対し、ブール配列は合わせて 0.02秒(出る配列は同じ)。
         free = np.ones(self.ndof, dtype=bool)
         free[self.fixed] = False
         self.free = np.flatnonzero(free)
@@ -411,9 +360,8 @@ class Model:
             if not np.all(np.isfinite(vec)):
                 raise ValueError("荷重ベクトルに非有限値がある")
             self.f = vec.copy()
-        # **拘束DOFに載った荷重は解に一切効かない。** 固定面と荷重面が節点を共有していると
-        # ここに全部落ち、「変位ゼロ・コンプライアンスゼロ」で最適化がもっともらしく
-        # 収束してしまう(荷重を掛けたつもりで何も掛かっていない)。先に落とす。
+        # **拘束DOFに載った荷重は解に効かない。** 固定面と荷重面が節点を共有するとここに全部落ち、「変位ゼロ・コンプライアンスゼロ」で
+        # 最適化がもっともらしく収束するので先に落とす。
         if not np.any(self.f[self.free] != 0.0):
             raise ValueError(
                 "荷重が自由な自由度に1つも載っていない(全部が拘束DOFに落ちている)。"
@@ -454,21 +402,14 @@ class Model:
     ) -> np.ndarray:
         """K U = F を解いて U (ndof,) を返す。拘束DOFの成分はきっかり 0.0。
 
-        **解いた後に残差で検算し、通らなければ落とす。** 拘束が足りない系(剛体運動が
-        止まっていない)を渡されると K は特異になるが、`Model.__init__` の検査は
-        「拘束が非空で範囲内」しか見ないので通ってしまう。そのまま解くと CG は収束せず、
-        直接解法へ落ちた先で**有限だが桁違いの解**が返り、探索はその値を信じて進んだ末に
-        別の場所(応力の評価・安全率の比較)で落ちる。**原因から遠い場所で落ちるのが最悪**なのでここで名指しする
-        (実測は docs/TOPOPT.md「CADの面 → 格子の節点」の「SIMP側に足した口」節)。
-        剛体運動の完全な検出はしない —— 残差が通らなければ落とす、それだけでよい。
+        **解いた後に残差で検算し、通らなければ落とす。** 拘束不足(剛体運動が止まっていない)の系は K が特異だが `Model.__init__` の
+        検査は通り、CG は収束せず直接解法へ落ちた先で**有限だが桁違いの解**が返って、原因から遠い場所(応力・安全率)で落ちる。
+        (実測は docs/TOPOPT.md「CADの面 → 格子の節点」の「SIMP側に足した口」節)。剛体運動の完全な検出はしない。
 
-        `solver="auto"` は K_ff を縮めてから `choose_solver` で `direct` / `cg` を選ぶ(選んだ解法は
-        `PreparedSystem.solver` と `linear-solve` の記録に出る)。
-        `threads` は CG 反復が使うスレッド数(**行列ベクトル積だけを並列化**。docs/TOPOPT.md「CPU並列化」参照)。
-        **既定は `None` → `PARALLEL_THREADS`**(呼び出し時に読む。`PARALLEL_THREADS = 1` を
-        代入すれば全経路が直列に戻る)。
-        `threads=1` は並列化の前と**同じコード経路**(CG に生の `kf` を渡す)を通るので、
-        速度も答えも変わらない(退避経路)。
+        `solver="auto"` は K_ff を縮めてから `choose_solver` で選ぶ(`PreparedSystem.solver` と `linear-solve` の記録に出る)。
+        `threads` は CG 反復が使うスレッド数(行列ベクトル積だけを並列化。docs/TOPOPT.md「CPU並列化」)。
+        既定 `None` は `PARALLEL_THREADS`(呼び出し時に読む。1 を代入すれば全経路が直列に戻る)。
+        `threads=1` は並列化前と同じコード経路(CG に生の `kf` を渡す)。
         """
         return self.solve_many(
             rho,
@@ -491,16 +432,9 @@ class Model:
     ) -> np.ndarray:
         """**同じ K を複数の右辺で解く。** `rhs` (nrhs, ndof) → 解 (nrhs, ndof)。
 
-        `solve` はこれを右辺1本で呼ぶ薄い包みで、**1本のときの数値も経路も
-        `solve_many` 導入前と同一**である(組み立て → 縮約 → 前処理 → CG の順も同じ)。
-
-        **多重右辺の要点は K の組み立てと縮約を作り直さないこと。** 右辺ごとに `solve` を呼ぶと
-        それが本数ぶん重なる。K が同じなら1回で回せば**追加費用は CG の反復ぶんだけ**になる。
-
-        **右辺が零ベクトルの本は CG を回さず零解を返す** —— 残差の相対判定が 0/0 になるため。
-
-        **右辺が最初から揃っていないとき**(反力の随伴は、まず順問題を解かないと右辺が
-        決まらない)は `prepare` を直に呼んで `PreparedSystem` を使い回すこと。
+        `solve` は右辺1本のときの薄い包み。K の組み立てと縮約を右辺ごとに作り直さず、追加費用は CG の反復ぶんだけ。
+        **右辺が零ベクトルの本は CG を回さず零解を返す**(相対残差が 0/0 になるため)。
+        右辺が最初から揃わないとき(反力の随伴は順問題を解かないと右辺が決まらない)は `prepare` の `PreparedSystem` を使い回すこと。
         """
         return self.prepare(rho, penal, solver=solver, threads=threads).solve(rhs, cg_rtol=cg_rtol)
 
@@ -513,14 +447,8 @@ class Model:
         threads: int | None = None,
         device: str | None = None,
     ) -> "PreparedSystem":
-        """K を組み立て、自由DOFへ縮め、前処理を作るところまでをやって返す。
-
-        **返ってきた `PreparedSystem` に右辺を何本でも後から渡せる。** 反力の随伴は
-        順問題の解 `u` から右辺が決まるので、`solve_many` のように右辺を最初に
-        揃えられない —— それでも setup を1回で済ませるための口である。
-
-        **持っているものは大きい**(K_ff)。使い終わったら名前を手放すこと。
-        """
+        """K を組み立て、自由DOFへ縮め、前処理を作るところまでをやって返す。返った `PreparedSystem` に右辺を何本でも後から渡せる。
+        **持っているものは大きい**(K_ff)ので、使い終わったら名前を手放すこと。"""
         if solver not in ("cg", "direct", "auto"):
             raise ValueError(f"未知の解法: {solver!r}")
         device = FEM_DEVICE if device is None else device
@@ -539,25 +467,22 @@ class Model:
         if solver != "direct":
             diag = kf.diagonal()
             precond = spla.LinearOperator(kf.shape, matvec=lambda v, d=diag: v / d)
-            # **CG 自身の `A@x` も行ブロックで並列化する**(threads<=1 なら `kf` を生のまま
-            # 渡すので `spla.cg` は元のコード経路と同じ:`_BlockedMatvec` を経由しない)。
+            # CG 自身の `A@x` も行ブロックで並列化する(threads<=1 なら `kf` を生のまま渡し `_BlockedMatvec` を経由しない)。
             if threads > 1:
                 a_mv = _BlockedMatvec(kf, threads)
                 a_op = spla.LinearOperator(kf.shape, matvec=a_mv, dtype=float)
         if stats is not None:
             stats["assemble_seconds"] += t1 - t0
             stats["slice_seconds"] += t2 - t1
-            # **setup も「解く時間」に数える。** 右辺ごとの CG は `PreparedSystem.solve` が
-            # 足すので、右辺1本のときの `solve_seconds` は割る前と同じ意味(setup + CG)になる。
+            # setup も「解く時間」に数える(右辺1本のときの `solve_seconds` は setup + CG)。
             stats["solve_seconds"] += time.perf_counter() - t2
         return PreparedSystem(self, kf, a_op, precond, solver, policy, device)
 
     def stiffness_apply(self, rho: np.ndarray, penal: float, vec: np.ndarray) -> np.ndarray:
         """K @ vec を、K を組み立てずに要素ループで計算する (ndof,)。
 
-        **`assemble` と同じ要素の範囲**(`active`)で足す —— 範囲が違えば別の行列を掛けた
-        ことになる(層をまたぐ契約)。反力 `R = (K u - f)|_fixed`(`reaction_forces`)と残差の検算
-        (`acceptance.safety_check`)のための口で、どちらも K を持っていない場所から呼ばれる。
+        **`assemble` と同じ要素の範囲**(`active`)で足す(層をまたぐ契約)。反力 `R = (K u - f)|_fixed` と
+        残差の検算(`acceptance.safety_check`)用。
         """
         flat = np.asarray(rho).ravel()
         edof = self.edof
@@ -598,11 +523,8 @@ class Model:
     ) -> tuple[float, np.ndarray]:
         """(コンプライアンス c, 要素ひずみエネルギー ce) を返す。
 
-        **`c` は組み立てに載せた要素だけで足す**(層をまたぐ契約) —— `assemble` が
-        `active` だけで K を作るので、`c = F・U` はこの範囲で足したときにだけ成り立つ。
-        全要素で足すと、解いた系に無い emin 媒質のひずみエネルギーが目的値に混ざる。
-        `ce` のほうは**全要素ぶん返す**(要素エネルギーの場。`acceptance.safety_check` が
-        空セルを 0 にして `fields['element_energy']` に載せる)。
+        **`c` は組み立てに載せた要素だけで足す**(層をまたぐ契約。全要素で足すと解いた系に無い emin 媒質のエネルギーが混ざる)。
+        `ce` は全要素ぶん返す(`acceptance.safety_check` が空セルを 0 にして `fields['element_energy']` に載せる)。
         """
         ue = u[self.edof]
         ce = np.einsum("ij,jk,ik->i", ue, self.ke, ue).reshape(self.nelx, self.nely, self.nelz)
@@ -613,12 +535,7 @@ class Model:
 
 
 class PreparedSystem:
-    """1つの ρ に対する K_ff と、その前処理。**右辺を何本でも後から解ける。**
-
-    `Model.prepare` が作る。同じ設計反復のあいだ K は変わらないので、右辺を足すたびの
-    追加費用は CG の反復ぶんだけになる —— 素朴に `Model.solve` を右辺ごとに呼ぶと、
-    K の組み立てと縮約が本数ぶん重なる。
-    """
+    """1つの ρ に対する K_ff と、その前処理。**右辺を何本でも後から解ける**(`Model.prepare` が作る)。"""
 
     def __init__(
         self,
@@ -649,10 +566,7 @@ class PreparedSystem:
         return self._policy
 
     def solve(self, rhs: np.ndarray, *, cg_rtol: float = 1e-9) -> np.ndarray:
-        """`rhs` (nrhs, ndof) を解いて (nrhs, ndof) を返す。拘束DOFの成分はきっかり 0.0。
-
-        **右辺が零ベクトルの本は CG を回さず零解を返す** —— 残差の相対判定が 0/0 になるため。
-        """
+        """`rhs` (nrhs, ndof) を解いて (nrhs, ndof) を返す。拘束DOFの成分はきっかり 0.0。**零ベクトルの右辺は CG を回さず零解を返す**(相対残差が 0/0 になるため)。"""
         model = self.model
         rhs = np.atleast_2d(np.asarray(rhs, dtype=float))
         if rhs.shape[1] != model.ndof:
@@ -723,9 +637,8 @@ class PreparedSystem:
     def _solve_on_gpu(self, ff: np.ndarray, cg_rtol: float) -> tuple[np.ndarray | None, int, int, str | None]:
         """GPU の CG で解く。(解, 反復数, info, CPU へ戻した理由)。戻すときは解が None。
 
-        **戻すときは CPU で初期値から解き直す**(呼び出し側)。途中の解を `x0` に渡すと Krylov 系列が
-        変わり、CPU だけで解いたときとビット一致しなくなる。収束したのに残差検算に通らない解も戻す
-        (ビット一致なら CPU も同じ解になるはずなので、GPU 側の異常とみなす)。
+        **戻すときは CPU で初期値から解き直す**(途中の解を `x0` に渡すと Krylov 系列が変わりビット一致しなくなる)。
+        収束したのに残差検算に通らない解も戻す(ビット一致なら CPU も同じ解のはずなので GPU 側の異常とみなす)。
         """
         from . import gpu_cg
 
@@ -760,10 +673,7 @@ def load_resultant(f: np.ndarray) -> np.ndarray:
 def reaction_forces(model: "Model", rho: np.ndarray, penal: float, u: np.ndarray) -> np.ndarray:
     """拘束自由度全体が受け持つ反力の合力 (3,)。`R = (K u - f)|_fixed` の軸ごとの合計。
 
-    **層をまたぐ契約**: ここは荷重釣り合いの確認(合計が荷重合力の符号反転になること)
-    にだけ使う。拘束面ごとの内訳・下限制約・感度(随伴)は持たない —— それは削除した
-    旧SIMP経路(`ReactionGroup`・反力下限制約・MMA配線)の役目で、二値探索(`acceptance.py`/
-    `binary_search.py`)はいずれも使わない。
+    荷重釣り合いの確認(合計が荷重合力の符号反転になること)にだけ使う。拘束面ごとの内訳・下限制約・感度は持たない。
     """
     residual = model.stiffness_apply(rho, penal, u) - model.f
     dofs = model.fixed
