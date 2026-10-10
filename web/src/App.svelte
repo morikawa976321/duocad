@@ -2049,6 +2049,7 @@
             // 設定を変えると会話が作り直されるので、新しい相手にも読ませておく。
             session.aiPrepare()
           }}
+          onSetThinking={(thinking) => session.aiSetThinking(thinking)}
         />
       </aside>
     {/if}

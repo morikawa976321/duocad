@@ -428,6 +428,9 @@ export interface MeasurePayload {
  */
 export type AiProviderKind = 'openai_compat' | 'anthropic'
 
+/** llama-server へ送る思考の設定(`duocad/agent/providers.py` の `THINKING_CHOICES`)。`server` は何も送らずサーバの既定に任せる。 */
+export type AiThinking = 'off' | 'low' | 'medium' | 'server'
+
 /** 画面に出してよい設定の全部。キーの値は載らない(置いてあるか・どこから読んだか・末尾4文字だけ)。 */
 export interface AiStatus {
   provider: AiProviderKind
@@ -441,7 +444,10 @@ export interface AiStatus {
   apiKeyHint: string | null
   running: boolean
   providers: AiProviderKind[]
-  /** `ai_configure` を拒否したときだけ入る(例: 実行中/未知のプロバイダ)。 */
+  /** llama-server へ送る思考の設定(Claude には送らない)。 */
+  thinking: AiThinking
+  thinkingChoices: AiThinking[]
+  /** `ai_configure` / `ai_set_thinking` を拒否したときだけ入る(例: 実行中/未知のプロバイダ)。 */
   error?: string
 }
 
@@ -840,6 +846,8 @@ export interface Session {
    * モデルは送らない —— llama-server は1モデルで起動すると `model` を無視するので、
    * サーバ側の既定値に任せる(`ai_configure` 自体は `model` を受け付けたまま)。 */
   aiConfigure(provider: AiProviderKind, baseUrl?: string): void
+  /** 思考の設定を差し替える。会話は保ったまま次の往復から効く(`ai_configure` と違い会話を作り直さない)。 */
+  aiSetThinking(thinking: AiThinking): void
   /** ClaudeのAPIキーを書く(`null` なら消す)。返事は `ai_status`(値は載らない)。書くと Claude に切り替わる。 */
   aiSetApiKey(key: string | null): void
   /** ツール定義を先に読ませておく(返事は無い。1つの会話につき1回だけ効く)。 */
@@ -977,6 +985,8 @@ export function createSession(hooks: SessionHooks): Session {
       api_key_hint?: string | null
       running?: boolean
       providers?: AiProviderKind[]
+      thinking?: AiThinking
+      thinking_choices?: AiThinking[]
       error?: string
       name?: string
       arguments?: Record<string, unknown>
@@ -1071,6 +1081,8 @@ export function createSession(hooks: SessionHooks): Session {
         apiKeyHint: message.api_key_hint ?? null,
         running: message.running ?? false,
         providers: message.providers ?? ['openai_compat'],
+        thinking: message.thinking ?? 'server',
+        thinkingChoices: message.thinking_choices ?? [],
         error: message.error,
       })
     } else if (message.type === 'fem_status') {
@@ -1211,6 +1223,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     aiConfigure(provider, baseUrl) {
       send({ cmd: 'ai_configure', provider, base_url: baseUrl ?? null })
+    },
+    aiSetThinking(thinking) {
+      send({ cmd: 'ai_set_thinking', thinking })
     },
     aiSetApiKey(key) {
       send({ cmd: 'ai_set_api_key', key })

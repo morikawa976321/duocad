@@ -363,9 +363,10 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](docs/WEB_PITFALLS.md)�
   **`ANTHROPIC_API_KEY` は読まない** —— その名前をユーザー環境に置くと、同じマシンの Claude Code がサブスクではなくそのキーで課金する。
   モデルは `DUOCAD_ANTHROPIC_MODEL` で差し替える。出力上限は `ANTHROPIC_MAX_TOKENS`（思考も数えられる）
 - **キーを渡すのは `anthropic` だけで送り先は公式APIに固定**（`base_url` を拒否）。`openai_compat` には鍵を渡さない
+- **llama-server へは思考の設定とサンプリングを送る**（AIパネルの見出しで 思考なし / low / medium / サーバ任せ、既定 low。`THINKING_PAYLOAD`）。打ち切りは `AI_LIMITS` の `openai_compat`（60往復・16,384トークン・2時間）。根拠は [docs/LOCAL_LLM_QWEN38.md](docs/LOCAL_LLM_QWEN38.md)
 - 依存は増やしていない（公式SDKを入れず標準ライブラリで素のHTTP）
 
-**WebSocketへの配線**: `duocad/net/ws.py` の `ai_get_status` / `ai_configure` / `ai_set_api_key` / `ai_prepare` / `ai_send` / `ai_cancel`。
+**WebSocketへの配線**: `duocad/net/ws.py` の `ai_get_status` / `ai_configure` / `ai_set_thinking` / `ai_set_api_key` / `ai_prepare` / `ai_send` / `ai_cancel`。
 
 - **`ai_*` はverbではない**（操作ログに載らずundoの単位でもない）ので `COMMANDS` に入れず、MCPツールも作らない。
   `tests/test_ui_command_wiring.py::test_ai_commands_are_not_verbs` が固定する

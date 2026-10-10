@@ -8,6 +8,7 @@ import time
 
 from duocad.mcp_server import DocumentTools
 from duocad.server import Server, Session
+from duocad.net.ws import AI_LIMITS
 from duocad.agent.providers import ANTHROPIC_API_KEY_ENV, ANTHROPIC_MAX_TOKENS, load_api_key, save_api_key
 from agent_support import FAKE_KEY, RecordedProvider, spoke, tool_use
 from session_support import FakeConnection
@@ -555,6 +556,58 @@ class WarmingProvider(RecordedProvider):
     def complete(self, **request):
         self.order.append("complete")
         return super().complete(**request)
+
+
+def test_switching_the_thinking_keeps_the_conversation_and_applies_from_the_next_request(box_session: Session):
+    """落ちたら、思考の設定を変えるたびに会話が消える、または変えた設定が次の往復に届かない(#135)。"""
+    sent: list[dict] = []
+
+    def fake_transport(url, payload, headers, timeout):
+        sent.append(payload)
+        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        server._ai_configure("openai_compat", None, None)
+        loop_obj = server._ensure_ai_loop()
+        loop_obj.provider._transport = fake_transport
+        loop_obj.run("一つ目")
+        await server._dispatch(connection, json.dumps({"cmd": "ai_set_thinking", "thinking": "medium"}))
+        same_conversation = server._ensure_ai_loop() is loop_obj
+        loop_obj.run("二つ目")
+        await server._dispatch(connection, json.dumps({"cmd": "ai_set_thinking", "thinking": "xhigh"}))
+        return server, connection, same_conversation
+
+    server, connection, same_conversation = asyncio.run(scenario())
+    statuses = connection.of_type("ai_status")
+    assert statuses[0]["thinking"] == "medium" and "error" not in statuses[0]
+    assert statuses[0]["thinking_choices"] == ["off", "low", "medium", "server"]
+    assert same_conversation, "思考の設定を変えたら会話が作り直された"
+    assert sent[0]["chat_template_kwargs"]["reasoning_effort"] == "low"
+    assert sent[-1]["chat_template_kwargs"]["reasoning_effort"] == "medium"
+    assert "一つ目" in json.dumps(sent[-1]["messages"], ensure_ascii=False)
+    assert "error" in statuses[-1] and server._ai_thinking == "medium", "未知の設定で値が変わった"
+
+
+def test_the_thinking_cannot_change_while_the_ai_is_running(box_session: Session):
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        server._ai_running = True
+        return server, server._ai_set_thinking("off")
+
+    server, status = asyncio.run(scenario())
+    assert "error" in status
+    assert server._ai_thinking == "low"
+
+
+def test_llama_server_runs_under_the_limits_it_was_measured_with():
+    """落ちたら、dGPU の無い機械の 27B モデルが、どの思考の設定でも完走しない上限に戻っている(docs/LOCAL_LLM_QWEN38.md)。"""
+    limits = AI_LIMITS["openai_compat"]
+    assert (limits.max_turns, limits.max_tokens, limits.max_total_seconds) == (60, 16384, 7200.0)
+    # 1リクエストで出力上限まで書き切れる待ちがある(実測の生成 4.1 tok/s)
+    assert limits.request_timeout >= limits.max_tokens / 4.1
 
 
 def test_ai_prepare_warms_each_conversation_once_and_only_when_asked(monkeypatch, box_session: Session):

@@ -186,6 +186,44 @@ def test_openai_compat_request_shape():
     assert function["parameters"] == surface.descriptors()[0]["inputSchema"]
 
 
+def _sent_payload(thinking=None) -> dict:
+    transport = FakeTransport([{"choices": [{"message": {"content": "はい"}, "finish_reason": "stop"}]}])
+    provider = (
+        OpenAICompatProvider(transport=transport)
+        if thinking is None
+        else OpenAICompatProvider(transport=transport, thinking=thinking)
+    )
+    provider.complete(system="s", turns=[UserTurn("やって")], tools=[], max_tokens=16, timeout=5.0)
+    return transport.sent[0]["payload"]
+
+
+def test_llama_server_gets_the_thinking_setting_with_the_sampling_measured_for_it():
+    """落ちたら、Qwen3.8 がテンプレートの既定(思考あり・xhigh)で動く、または測定と違うサンプリングで動く(#135)。"""
+    default = _sent_payload()
+    assert default["chat_template_kwargs"] == {"enable_thinking": True, "reasoning_effort": "low"}
+    assert (default["temperature"], default["top_p"], default["top_k"], default["presence_penalty"]) == (1.0, 0.95, 20, 0.0)
+    assert "seed" not in default
+
+    medium = _sent_payload("medium")
+    assert medium["chat_template_kwargs"] == {"enable_thinking": True, "reasoning_effort": "medium"}
+
+    off = _sent_payload("off")
+    assert off["chat_template_kwargs"] == {"enable_thinking": False}
+    assert (off["temperature"], off["top_p"], off["top_k"], off["presence_penalty"]) == (0.7, 0.8, 20, 1.5)
+
+
+def test_leaving_thinking_to_the_server_sends_nothing_extra():
+    """落ちたら、「サーバ任せ」を選んでも Qwen 向けの値が他のモデルへ届く。"""
+    payload = _sent_payload("server")
+    for key in ("chat_template_kwargs", "temperature", "top_p", "top_k", "min_p", "presence_penalty"):
+        assert key not in payload
+
+
+def test_an_unknown_thinking_setting_is_refused():
+    with pytest.raises(ValueError):
+        OpenAICompatProvider(transport=FakeTransport([]), thinking="xhigh")
+
+
 def test_openai_compat_reply_parsing_and_tool_result_messages():
     provider = OpenAICompatProvider(transport=FakeTransport([]))
     reply = provider.parse_reply(OPENAI_TOOL_CALL)
