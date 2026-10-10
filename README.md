@@ -13,12 +13,13 @@
 | 文書 | 何が書いてあるか | 読むとき |
 |---|---|---|
 | [docs/README.md](docs/README.md) | **docs/ の索引**（配下の全文書一覧と要約） | 目的の文書を探すとき |
-| [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) | **最初期の実装計画**（なぜ・当初スコープ・到達表。「企画の前提」がなぜ） | 起点を辿るとき |
+| [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) | **設計判断と実測**（層の分け方・外してはいけない3つ・verbの粒度・技術選定の根拠） | 層・verb・保存形式を変えるとき |
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
 | [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **形状探索の時間短縮**（1回のFEM評価の内訳・候補評価の費用） | 探索を速くしたいとき |
 | [docs/TOPOPT_GPU.md](docs/TOPOPT_GPU.md) | **CG を GPU で解く経路**（有効にする手順・CPU に戻る条件・ビット一致の範囲） | GPU を使う・遅くなった理由を疑うとき |
-| [docs/TOPOPT_SMOOTHING_INTERSECTIONS.md](docs/TOPOPT_SMOOTHING_INTERSECTIONS.md) | **平滑化後の自己交差が起きるボクセルの形**（64条件の全数集計・管の潰れと交差の規則・合成での再現） | 平滑化の自己交差・潰れを疑うとき |
+| [docs/TOPOPT_ACCEPTANCE.md](docs/TOPOPT_ACCEPTANCE.md) | **最終形状の合格条件と最終処理の検査**（平滑化前の受入検査・平滑化後の自己交差の規則・メッシュ集合演算の採用根拠） | 受入検査・平滑化の自己交差・最終処理を疑うとき |
+| [docs/TOPOPT_MIN_WIDTH.md](docs/TOPOPT_MIN_WIDTH.md) | **最小幅**（くびれ判定・芯の隣接・完成形の最小幅と強度の診断） | 部材の細さ・つなぎ目の診断を疑うとき |
 | [docs/TOPOPT_TARGET_FACTOR.md](docs/TOPOPT_TARGET_FACTOR.md) | **探索に渡す目標安全率 = 実際の目標 × 2.4** の決定・根拠・実測（細分すると目標を割る問題の受け方） | 探索時の目標・報告の「探索の格子での値」を疑うとき |
 | [docs/topopt_idle_validation/10_SYNTHESIS.md](docs/topopt_idle_validation/10_SYNTHESIS.md) | **不要材料の改善案の検証の統合報告**(2026-10-05期限再編版。判定方式・節点所有権・最小幅の芯への推奨、探索方式の比較、証拠監査) | 不要材料の直し方を決めるとき |
 
@@ -197,7 +198,7 @@ cd web; npm run dev                                 # 画面(5173)
 この判定器自体の小形状による回帰検査は `tests/test_final_shape.py` にある。
 
 島除去後・平滑化前の6条件(境界・単一ソリッド・保持/除外・荷重欠落・安全率)は
-[平滑化前の受入検査](docs/TOPOPT_PRE_SMOOTHING_CHECKS.md)に従って `topopt_checks/check_pre_smoothing.py` で判定する。
+[平滑化前の受入検査](docs/TOPOPT_ACCEPTANCE.md)（「島除去後・平滑化前の受入検査」）に従って `topopt_checks/check_pre_smoothing.py` で判定する。
 検査ロジック本体は `duocad/topopt/acceptance.py` にあり、この判定器自体の回帰検査は `tests/test_pre_smoothing.py` にある。
 
 **以下の最適化の数値検査は pytest には入れていない。** `tests/` へ入れると `pytest -q` が毎回
@@ -291,7 +292,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 - AI側(MCP) — MCPツールを追加・変更するとき
 - AI側(アプリ内エージェント) — アプリ内AIエージェントの挙動を変更するとき
 
-**層の図と「外してはいけない3つ」は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §2 に書いてある（最初期の計画）。**
+**層の図と「外してはいけない3つ」は [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)「層の分け方」に書いてある。**
 
 ### 中核の決めごと
 
@@ -316,7 +317,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
   生成物（`python tools/generate_protocol_ts.py`）。`commands/*.ts` の定義は `CommandDef<'fillet'>` のように
   verb 名を付けて書き、`id` と `build` の引数が宣言どおりであることを型検査が見る。宣言と実際の応答の一致・
   生成物の鮮度・型検査は `tests/test_protocol.py` が `pytest -q` の中で見る。
-- **verbの粒度の定義は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §2「verbの粒度」が起点。**
+- **verbの粒度の定義は [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)「層の分け方」の verb の項が起点。**
 
 ### ボディの種別 —— B-rep と 三角形メッシュ
 
@@ -569,7 +570,7 @@ duocad/
   .mcp.json              Claude Code向けのMCP登録（projectスコープ。これがあるので登録作業が要らない）
   README.md              ← このファイル（入口）
   MCP.md                 MCPサーバの仕様と登録手順
-  docs/                  INITIAL_PLAN(最初期の計画) / TOPOPT
+  docs/                  DESIGN_DECISIONS(設計判断) / TOPOPT ほか。索引は docs/README.md
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール
                          session.py=1つの文書を持つサーバ側の状態／view.py=その配りもの
                          （状態配信・版・キャッシュ。session.py が1つ持つ）

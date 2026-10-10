@@ -7,8 +7,8 @@
 
 | 文書 | 何が書いてあるか |
 |---|---|
-| [INITIAL_PLAN.md](INITIAL_PLAN.md) | 最初期の実装計画（企画の前提・当初スコープ・到達表） |
-| [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) | コア・全体の設計判断と実測（技術選定の根拠・verb 粒度・図形の表現・保存・性能・テスト方針・方向） |
+| [MANUAL.md](MANUAL.md) | 使い方（制作用の安定版と開発用の使い分け） |
+| [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) | コア・全体の設計判断と実測（層の分け方・外してはいけない3つ・技術選定の根拠・verb 粒度・図形の表現・保存・性能・テスト方針・方向） |
 | [AI_INTEGRATION.md](AI_INTEGRATION.md) | アプリ内 AI・MCP・ローカル LLM（方向と未決・実測・「止まる」規律の実装・落とし穴） |
 | [UI.md](UI.md) | 画面と操作の判断（方針・パネル配置・コマンド層・スケッチ入力・見た目） |
 | [VIEWPORT.md](VIEWPORT.md) | 3D ビューポート（深度の規約・カメラ・ピック・グリッド・可変解像度と面カリング・ビューキューブ・断面） |
@@ -17,16 +17,22 @@
 | [QA_LESSONS.md](QA_LESSONS.md) | 検証設計の教訓（緑を根拠にしない・変異検査の読み方・検査の設計） |
 | [DEV_NOTES.md](DEV_NOTES.md) | 開発環境と運用（venv・行末・一括編集の道具・減量・測定記録の書き方・タスクの切り方） |
 | [STABLE.md](STABLE.md) | 安定版と開発版の分離（配置・ポート・導入・画面からの更新・巻き戻し・制作データの扱い） |
-| [TOPOPT.md](TOPOPT.md) ほか `TOPOPT_*.md` | 形状最適化（実測・設計と画面・受入検査・探索の時間短縮） |
-| [TOPOPT_IDLE_SOLUTIONS_2026-09-28.md](TOPOPT_IDLE_SOLUTIONS_2026-09-28.md) | 不要材料の2原因への解決策比較。保存場の追加集計、応力評価・可逆探索・検証計画の提案 |
-| [TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md](TOPOPT_IDLE_VALIDATION_TASKS_2026-09-28.md) | 第8章の検証を実行した taskbox の11タスク（taskbox は2026-10-09に廃止。記録として残す）。小型題材の作成・認定、依存関係、共通条件、成果物、十分性の基準 |
+| [TOPOPT.md](TOPOPT.md) | 形状最適化の正（実測・二値探索の方式と契約・設計と画面・受入検査の意味） |
+| [TOPOPT_ACCEPTANCE.md](TOPOPT_ACCEPTANCE.md) | 最終形状の合格条件と最終処理の検査（平滑化前の受入検査・平滑化後の自己交差の規則・メッシュ集合演算の採用根拠） |
+| [TOPOPT_MIN_WIDTH.md](TOPOPT_MIN_WIDTH.md) | 最小幅の探索規則の追加分（くびれ判定・芯の隣接）と完成形の最小幅・強度の診断 |
+| [TOPOPT_THICKNESS.md](TOPOPT_THICKNESS.md) | 厚み1〜4層での安全率のずれと最小幅の保証の実測（節 A〜O） |
+| [TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md) | 探索に渡す目標安全率 = 実際の目標 × 2.4 の決定・根拠・実測 |
+| [TOPOPT_PRESERVE.md](TOPOPT_PRESERVE.md) | 探索が保持セルを空にしない契約と、その前後の実測（hanger） |
+| [TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md) | 「仕事をしていない材料」が残る問題の原因の実測・対策案の採否・決定 |
+| [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) | 母数に依らない応力の合否判定（採用した判定・実測・却下した案） |
+| [topopt_idle_validation/10_SYNTHESIS.md](topopt_idle_validation/10_SYNTHESIS.md) | 不要材料の改善案の検証の統合報告（各検証は付録 A〜G に畳んである） |
+| [topopt_idle_validation/00_COMPACT_MODELS.md](topopt_idle_validation/00_COMPACT_MODELS.md) | 不要材料検証の小型題材2つの定義・認定条件 |
+| [TOPOPT_SPEED.md](TOPOPT_SPEED.md) | 形状探索の時間の内訳と速度に関する決定（前計算・warm start・解法の使い分け） |
+| [TOPOPT_GPU.md](TOPOPT_GPU.md) | CG を GPU で解く経路（有効にする手順・CPU に戻る条件・ビット一致の範囲） |
+| [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) | 最適化の途中記録（毎回自動で作る診断記録の中身） |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
-| [TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) | 島除去後・平滑化前の6条件と探索履歴の検査 |
-| [TOPOPT_MESH_BOOLEAN_STUDY.md](TOPOPT_MESH_BOOLEAN_STUDY.md) | メッシュ集合演算による最終処理の試作評価（合否・保存精度・寸法差。2026-10-06 に製品の最終処理として採用） |
 | [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md) | 穴口の微細隙間とメッシュ欠損の因果調査（境界交差・最小再現・OCCT内部検査）と、案A（境界交差の検出・共有辺再分割）の設計・実装・実測 |
 | [TOPOPT_STOP_RULE.md](TOPOPT_STOP_RULE.md) | 段階4の打ち切り（issue #22）の判断材料: 終盤の力学の実測（issue の実行・hanger の回し直し・合成題材）と、候補規則を記録済みの軌道へ後付けした試算表。決定は無い |
-| [PLAN_BINARY_STRESS_SEARCH.md](PLAN_BINARY_STRESS_SEARCH.md) | 二値モデル・応力制約による探索の現行仕様（§1〜§5）と、段階7・段階4置き換えの実測（§10〜§12） |
-| [FIX_BINARY_SEARCH_INITIALIZATION.md](FIX_BINARY_SEARCH_INITIALIZATION.md) | hanger初期探索失敗への修正指示と実施結果（境界条件の確定・入口検査・候補メモリ管理。§9に実測） |
 
 ### contracts/ — 作業タスクの契約の分野別蒸留
 
