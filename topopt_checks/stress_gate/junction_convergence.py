@@ -25,7 +25,7 @@ from scipy import ndimage  # noqa: E402
 
 import refine_shape  # noqa: E402
 from duocad import optimize_run  # noqa: E402
-from duocad.topopt import acceptance, final_check, stress  # noqa: E402
+from duocad.topopt import acceptance, binary_search, final_check, stress  # noqa: E402
 
 
 def banded_strength(material, region, keep, layer, fine, fixed, load, conditions, target, *, factor):
@@ -56,6 +56,7 @@ def main() -> int:
     ap.add_argument("--w", type=float, default=None)
     ap.add_argument("--eps", type=float, default=None)
     ap.add_argument("--refine", nargs="*", type=int, default=[2, 3, 4, 5])
+    ap.add_argument("--step", type=float, default=None, help="段階4の max_step_ratio。省くと製品の既定")
     a = ap.parse_args()
     spec = dict(pa.MODELS[a.model])
     for key, val in (("load_n", a.load), ("h", a.h), ("w", a.w)):
@@ -64,6 +65,12 @@ def main() -> int:
     doc = refine_shape.open_session(spec["model"]).document
     refine_shape._set_load_doc(doc, spec["load_n"])
     real_conditions, real_inspect = optimize_run._build_search_conditions, final_check.inspect
+    real_find = binary_search.find_best_feasible
+
+    def find(*args, **kwargs):
+        if a.step is not None:
+            kwargs["max_step_ratio"] = a.step
+        return real_find(*args, **kwargs)
     levels = {}
 
     def conditions(*args, **kwargs):
@@ -81,11 +88,13 @@ def main() -> int:
             print(f"k{k}", json.dumps(row, ensure_ascii=False), flush=True)
         return real_inspect(*args, **kwargs)
 
-    with patch.object(optimize_run, "_build_search_conditions", conditions), patch.object(final_check, "inspect", inspect):
+    with patch.object(optimize_run, "_build_search_conditions", conditions), patch.object(final_check, "inspect", inspect), \
+            patch.object(binary_search, "find_best_feasible", find):
         result = optimize_run.run(doc, optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"]))
     out = dict(model=a.model, spec={k: v for k, v in spec.items() if k in ("load_n", "h", "w")}, eps=a.eps,
                state=result.get("state"), material_mm3=result.get("material_mm3"), levels=levels)
-    name = f"junction_{a.model}" + ("" if a.eps is None else f"_eps{a.eps:g}") + ".json"
+    name = (f"junction_{a.model}_L{spec['load_n']:g}" + ("" if a.eps is None else f"_eps{a.eps:g}")
+            + ("" if a.step is None else f"_step{a.step:g}") + ".json")
     (pa.OUT / "peak_gate" / name).write_text(json.dumps(out, ensure_ascii=False, indent=1, default=float), encoding="utf-8")
     return 0
 
