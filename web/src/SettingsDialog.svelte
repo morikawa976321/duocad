@@ -194,7 +194,12 @@
       type="checkbox"
       checked={femStatus?.device === 'gpu'}
       disabled={!femStatus}
-      onchange={(event) => onFemDevice(event.currentTarget.checked ? 'gpu' : 'cpu')}
+      onchange={(event) => {
+        onFemDevice(event.currentTarget.checked ? 'gpu' : 'cpu')
+        // 表示はサーバの確定値(`fem_status`)に揃える。拒否されて同じ値が返ると Svelte は checked を
+        // 書き直さないので、押した分はここで戻しておく(受け付けられれば返事で付け直される)。
+        event.currentTarget.checked = femStatus?.device === 'gpu'
+      }}
     />
   </label>
   <p class="hint dim" data-fem-status>{femLine}</p>
