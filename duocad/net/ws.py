@@ -25,6 +25,7 @@
         {"type": "ai_tool_call", "name": str, "arguments": {...}, "result": {...}, "ok": bool}
         {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}
         {"type": "ai_error", "message": str}
+        {"type": "fem_status", "device", "cupy_installed", "gpu_name", "gpu_problem", "error"?}
 
 **`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_set_api_key` / `ai_prepare` /
 `ai_send` / `ai_cancel` は文書を
@@ -80,7 +81,7 @@ import json
 import threading
 from typing import Any, Optional  # Any: listeners / 接続
 
-from .. import catalog, optimize_run, selection
+from .. import catalog, local_settings, optimize_run, selection
 from ..agent import AgentLoop, Cancellation, Limits, ProviderError
 from ..agent.loop import FIRST_LOOK
 from ..agent.providers import (
@@ -93,6 +94,7 @@ from ..agent.providers import (
     save_api_key,
 )
 from ..session import Session
+from ..topopt import fem, gpu_cg
 from .tools_on_loop import ToolsOnLoop
 
 # --------------------------------------------------------------------------------------
@@ -202,6 +204,8 @@ class Server:
         #: 別の文書を開いている間に出た最後の進捗はここに、終わったときの結果/失敗は
         #: `Session.unseen_optimize_results` に控え、その文書へ戻ってきたときに見せる(`_announce_optimization`)。
         self._optimize_last_progress: Optional[dict] = None
+        # -------------------------------------------------- I: 計算の設定(この clone の設定ファイル)
+        fem.FEM_DEVICE = local_settings.fem_device()
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """配信に使うイベントループを覚える(`run()` と `mcp_server` が起動時に呼ぶ)。
@@ -580,6 +584,16 @@ class Server:
                 await self._optimize_start(connection, message)
             elif command == "cancel_optimization":
                 await self._optimize_cancel(connection)
+            # -------------------------------------------------- I: 計算の設定
+            # **verbではない**(`ai_*` と同じく文書を変えない。catalog にも MCP にも載せない)。
+            # 状態は CuPy を読む(初回は1秒前後)ので、イベントループを塞がないよう実行器で作る。
+            elif command == "fem_get_status":
+                status = await asyncio.get_running_loop().run_in_executor(None, self._fem_status)
+                await _send(connection, {"type": "fem_status", **status})
+            elif command == "fem_set_device":
+                error = self._fem_set_device(message.get("device"))
+                status = await asyncio.get_running_loop().run_in_executor(None, self._fem_status)
+                await self._broadcast({"type": "fem_status", **status, **({"error": error} if error else {})})
             else:
                 raise ValueError(f"unknown command: {command!r}")
         except Exception as error:  # 1つの失敗でサーバを落とさない。必ず画面へ返す
@@ -848,6 +862,40 @@ class Server:
         プロバイダが接続を閉じて止める。
         """
         self._ai_cancellation.cancel()
+
+    # ------------------------------------------------------------------ I: 計算の設定
+    def _fem_status(self) -> dict:
+        """画面の「設定」に出す、形状最適化の CG を解く装置の状態。
+
+        `gpu_name` / `gpu_problem` は **gpu を選んでいて CuPy が入っているときだけ**調べる(CuPy を読むと
+        GPU にコンテキストを作り VRAM を取るので、cpu を選んでいる機械では触らない)。
+        """
+        installed = gpu_cg.cupy_installed()
+        described = gpu_cg.describe() if fem.FEM_DEVICE == "gpu" and installed else {"name": None, "problem": None}
+        return {
+            "device": fem.FEM_DEVICE,
+            "cupy_installed": installed,
+            "gpu_name": described["name"],
+            "gpu_problem": described["problem"],
+        }
+
+    def _fem_set_device(self, device: Any) -> Optional[str]:
+        """設定ダイアログから届いた装置を書き、次に準備する計算から効かせる。拒否の理由か None。
+
+        **走っている最適化の途中で替わってもよい** —— GPU の解は CPU とビット一致するので結果は同じで、
+        変わるのは秒だけ(その回の記録の `linear-solve` に装置が残る)。gpu へ替えたときは、前に GPU を
+        使わないと決めた理由(`gpu_cg` が覚えている)を忘れて試し直す。
+        """
+        if device not in local_settings.FEM_DEVICES:
+            return f"未知の装置: {device!r}"
+        try:
+            local_settings.update(fem_device=device)
+        except OSError as error:
+            return f"設定を保存できなかった: {error}"
+        if device == "gpu":
+            gpu_cg.reset()
+        fem.FEM_DEVICE = device
+        return None
 
     # ------------------------------------------------------------------ H: 形状最適化を走らせる
     def _optimize_status(self) -> dict:

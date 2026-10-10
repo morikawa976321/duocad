@@ -13,6 +13,9 @@ dist/
 # **中身は絶対にコミットしない**。`*` は書き換え中の一時ファイル(`.tmp`)も含めるため。
 /duocad_secrets.json*
 
+# この clone だけの設定(duocad/local_settings.py。画面の「設定」が書く)。`*` は書き換え中の一時ファイル。
+/duocad_settings.json*
+
 # 実機検査のスクリーンショット(個人の画面のスクショなのでgitに載せない)。
 /screenshots/
 

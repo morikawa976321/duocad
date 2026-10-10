@@ -21,7 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # duocad/topopt/gpu_cg.py(形状最適化の CG を GPU で解く経路)。使う機械だけ `uv sync --extra gpu` で入れ、
-# 環境変数 DUOCAD_FEM_DEVICE=gpu で有効にする(docs/TOPOPT_GPU.md)。[ctk] で CUDA ランタイムも wheel で入り、
+# 画面の「設定」の「GPU で計算する」で有効にする(docs/TOPOPT_GPU.md)。[ctk] で CUDA ランタイムも wheel で入り、
 # システムへの CUDA Toolkit は要らない。NVIDIA の GPU が無い機械では入れない。
 gpu = [
     "cupy-cuda13x[ctk]==14.2.0; sys_platform == 'win32' or sys_platform == 'linux'",

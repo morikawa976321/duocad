@@ -44,6 +44,17 @@ def _no_claude_api_key(tmp_path, monkeypatch):
     monkeypatch.setattr(providers, "SECRETS_PATH", tmp_path / "no-secrets.json")
 
 
+@pytest.fixture(autouse=True)
+def _local_settings_in_tmp(tmp_path, monkeypatch):
+    """この clone の設定ファイル(`duocad_settings.json`)を使い捨てにする。外すと、GPU を選んだ機械でだけ
+    `Server` が `fem.FEM_DEVICE = "gpu"` で始まり、設定ダイアログの検査が実ファイルを書き換える。"""
+    from duocad import local_settings
+    from duocad.topopt import fem
+
+    monkeypatch.setattr(local_settings, "PATH", tmp_path / "duocad_settings.json")
+    monkeypatch.setattr(fem, "FEM_DEVICE", "cpu")
+
+
 @pytest.fixture()
 def session(tmp_path) -> Session:
     """STEPを読まない空の文書。`models_dir` を使い捨てにしないと、保存がリポジトリの `duocad/models/` を汚す。"""

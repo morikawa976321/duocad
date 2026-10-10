@@ -1,10 +1,15 @@
 """CG を GPU で解く経路(`fem.FEM_DEVICE` / `gpu_cg`)。前半は GPU が無くても走り、後半は CuPy と GPU があるときだけ走る。"""
+import asyncio
+import json
 import warnings
 
 import numpy as np
 import pytest
 
+from duocad import local_settings
+from duocad.server import Server, Session
 from duocad.topopt import binary_search as bs, fem, gpu_cg, trace
+from session_support import FakeConnection
 from topopt_support import bar_conditions
 
 
@@ -26,17 +31,52 @@ def _linear_solve_records(rec):
     return [trace.load_snapshot(p) for p in sorted(rec.path.glob('*-linear-solve.json'))]
 
 
-def test_the_device_setting_defaults_to_cpu_and_ignores_unknown_values(monkeypatch):
-    """落ちたら、環境変数が無い・読めない機械で GPU を使いにいく(既定は CPU という方針に反する)。"""
-    monkeypatch.delenv(fem.FEM_DEVICE_ENV, raising=False)
-    assert fem._default_device() == 'cpu'
-    monkeypatch.setenv(fem.FEM_DEVICE_ENV, ' GPU ')
-    assert fem._default_device() == 'gpu'
-    monkeypatch.setenv(fem.FEM_DEVICE_ENV, 'cuda')
-    with pytest.warns(RuntimeWarning, match='cpu で解く'):
-        assert fem._default_device() == 'cpu'
+def test_the_device_setting_defaults_to_cpu_and_survives_a_restart(tmp_path):
+    """落ちたら、設定ファイルが無い・壊れた・知らない値の clone で GPU を使いにいくか(既定は CPU という方針に反する)、
+    画面で選んだ装置がサーバを立て直すと消える。"""
+    assert fem.FEM_DEVICE == 'cpu'
+    assert local_settings.fem_device() == 'cpu'
+    local_settings.PATH.write_text('{broken', encoding='utf-8')
+    assert local_settings.fem_device() == 'cpu'
+    local_settings.PATH.write_text('{"fem_device": "cuda"}', encoding='utf-8')
+    assert local_settings.fem_device() == 'cpu'
+    local_settings.PATH.write_text('{"other": 1}', encoding='utf-8')
+    local_settings.update(fem_device='gpu')
+    assert local_settings.read() == {'other': 1, 'fem_device': 'gpu'}
+    Server(Session(None, 0.2, models_dir=tmp_path / 'models', exports_dir=tmp_path / 'export'))
+    assert fem.FEM_DEVICE == 'gpu'
     with pytest.raises(ValueError, match='未知の装置'):
         fem.Model(4, 2, 2).prepare(np.ones((4, 2, 2)), 3.0, device='cuda')
+
+
+def test_the_settings_dialog_switches_the_device_for_every_screen(tmp_path, monkeypatch):
+    """落ちたら、設定ダイアログの切り替えが次の計算に効かない・ファイルに残らない・他の画面へ配られないか、
+    cpu を選んでいる機械で CuPy を読んで GPU のメモリを取る。"""
+    described = []
+    monkeypatch.setattr(gpu_cg, 'describe', lambda: described.append(1) or {'name': 'テストGPU', 'problem': None})
+    monkeypatch.setattr(gpu_cg, 'cupy_installed', lambda: True)
+    gpu_cg._disabled = 'cupy: 前に失敗した'
+    server = Server(Session(None, 0.2, models_dir=tmp_path / 'models', exports_dir=tmp_path / 'export'))
+
+    async def scenario():
+        a, b = FakeConnection(), FakeConnection()
+        server.clients.update({a, b})
+        await server._dispatch(a, json.dumps({'cmd': 'fem_get_status'}))
+        first = list(a.payloads)
+        await server._dispatch(a, json.dumps({'cmd': 'fem_set_device', 'device': 'gpu'}))
+        await server._dispatch(a, json.dumps({'cmd': 'fem_set_device', 'device': 'cuda'}))
+        return first, a.payloads[len(first):], b.payloads
+
+    first, sent, others = asyncio.run(scenario())
+    assert first == [{'type': 'fem_status', 'device': 'cpu', 'cupy_installed': True,
+                      'gpu_name': None, 'gpu_problem': None}]
+    assert sent[0] == {'type': 'fem_status', 'device': 'gpu', 'cupy_installed': True,
+                       'gpu_name': 'テストGPU', 'gpu_problem': None}
+    assert sent[1]['device'] == 'gpu' and 'cuda' in sent[1]['error']
+    assert others == sent
+    assert len(described) == 2  # cpu のときは CuPy に触らない
+    assert fem.FEM_DEVICE == 'gpu' and local_settings.fem_device() == 'gpu'
+    assert gpu_cg._disabled is None  # gpu を選び直したら、前に使わないと決めた理由を忘れて試し直す
 
 
 @pytest.mark.parametrize('sticky', [False, True])

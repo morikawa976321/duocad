@@ -6,17 +6,27 @@
    *   見た目が同じ2つの窓を取り違えないため。**サーバが `channel: 'stable'` と答えたときだけ札を消す**
    *   (設定が取れない Vite の dev サーバ等も開発版として扱う。付け忘れ・取り損ねで札が消える側へ倒さない)。
    * - 安定版: mainに新しいコミットがあるときだけ「更新」ボタンが出る。押すとサーバが
-   *   更新スクリプトを起こして終了し、立ち直ったら画面を読み直す。
+   *   更新スクリプトを起こして終了し、立ち直ったら画面を読み直す(`serverRestart.svelte.ts`)。
+   *   立て直し中の全面の表示と、読み直した後の結果の知らせは、設定の「GPU の部品を入れる」の分もここが出す。
    */
   import { onMount } from 'svelte'
   import { fail, inform } from './Toast.svelte'
+  import {
+    PENDING_KEY,
+    fetchJson,
+    loadConfig,
+    restart,
+    restartServer,
+    type ServerConfig,
+    type ServerVersion,
+  } from './serverRestart.svelte'
 
-  type Version = { commit?: string; date?: string }
-  type Config = { channel?: 'dev' | 'stable'; version?: Version; update_supported?: boolean }
   type LastResult = {
     ok: boolean
     restored?: boolean
     rollback: boolean
+    /** 設定の「GPU の部品を入れる」(`update.ps1 -InstallGpu`)の結果か。 */
+    gpu?: boolean
     from: string
     to: string
     message: string
@@ -27,36 +37,21 @@
     behind: number
     commits: string[]
     reason?: string
-    current: Version
+    current: ServerVersion
     last_result?: LastResult | null
   }
 
-  /** 更新を押してから読み直すまでの間、`sessionStorage` に立てておく印。読み直し後に結果を知らせる。 */
-  const PENDING_KEY = 'duocad-update-pending'
   const STATUS_POLL_MS = 30 * 60 * 1000
-  const RESTART_POLL_MS = 2000
-  /** `uv sync` と `npm ci` の両方が走る更新でも収まる上限。 */
-  const RESTART_TIMEOUT_MS = 15 * 60 * 1000
 
-  let config = $state<Config | null>(null)
+  let config = $state<ServerConfig | null>(null)
   /** 設定を取りに行き終えたか。取りに行く前に札を出すと、安定版でも一瞬「開発版」が光る。 */
   let loaded = $state(false)
   const isDev = $derived(loaded && config?.channel !== 'stable')
   let status = $state<UpdateStatus | null>(null)
-  let updating = $state(false)
 
   const versionText = $derived(
     config?.version?.commit ? `${config.version.commit} (${config.version.date?.slice(0, 10) ?? ''})` : '',
   )
-
-  async function fetchJson<T>(path: string): Promise<T | null> {
-    try {
-      const response = await fetch(new URL(path, location.href), { cache: 'no-store' })
-      return response.ok ? ((await response.json()) as T) : null
-    } catch {
-      return null
-    }
-  }
 
   async function refreshStatus(force = false): Promise<void> {
     const next = await fetchJson<UpdateStatus>(`api/update${force ? '?force=1' : ''}`)
@@ -66,7 +61,11 @@
   function reportFinishedUpdate(result: LastResult | null | undefined): void {
     if (!result) return
     const short = (commit: string) => commit.slice(0, 7)
-    if (result.ok) {
+    if (result.gpu) {
+      if (result.ok) inform('GPU の部品を入れた')
+      else if (result.restored === false) fail(`GPU の部品を入れられず、元の構成にも戻せなかった: ${result.message}(ログ: ${result.log})`)
+      else fail(`GPU の部品を入れられなかったので、CPU の構成に戻した: ${result.message}(ログ: ${result.log})`)
+    } else if (result.ok) {
       inform(result.from === result.to ? '更新済み(変更なし)' : `更新した(${short(result.from)} → ${short(result.to)})`)
     } else if (result.restored === false) {
       fail(`更新に失敗し、元の版にも戻せなかった: ${result.message}(ログ: ${result.log})`)
@@ -75,57 +74,18 @@
     }
   }
 
-  function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
-  }
-
-  async function startUpdate(): Promise<void> {
-    if (updating) return
-    updating = true
-    let response: Response
-    try {
-      response = await fetch(new URL('api/update', location.href), { method: 'POST' })
-    } catch (error) {
-      updating = false
-      fail(`更新を始められなかった: ${error}`)
-      return
-    }
-    if (response.status !== 202) {
-      updating = false
-      const body = (await response.json().catch(() => null)) as { error?: string } | null
-      fail(`更新を始められなかった: ${body?.error ?? response.status}`)
-      return
-    }
-    try {
-      sessionStorage.setItem(PENDING_KEY, '1')
-    } catch {
-      // 保存できなくても更新は進む(読み直し後の知らせが出ないだけ)
-    }
-    // サーバは一度落ちてから立ち直る。**落ちたのを見てから**立ち直りを待つ ——
-    // 落ちる前の応答を「立ち直った」と読むと、古い画面のまま読み直してしまう。
-    const before = config?.version?.commit
-    const deadline = Date.now() + RESTART_TIMEOUT_MS
-    let wentDown = false
-    while (Date.now() < deadline) {
-      await sleep(RESTART_POLL_MS)
-      const next = await fetchJson<Config>('duocad-config.json')
-      if (next === null) {
-        wentDown = true
-        continue
-      }
-      if (wentDown || next.version?.commit !== before) {
-        location.reload()
-        return
-      }
-    }
-    updating = false
-    fail('更新が終わらない。安定版のデータフォルダの logs/ を見ること')
+  function startUpdate(): void {
+    void restartServer('api/update', {
+      title: '更新中…',
+      detail: '取り込みとビルドが終わると、自動で読み直す(数分かかることがある)',
+      failPrefix: '更新を始められなかった',
+    }, fail)
   }
 
   onMount(() => {
     let timer: ReturnType<typeof setInterval> | null = null
     void (async () => {
-      config = await fetchJson<Config>('duocad-config.json')
+      config = await loadConfig()
       loaded = true
       if (config?.channel !== 'stable') {
         document.title = `[開発版] ${document.title}`
@@ -156,7 +116,7 @@
     id="update-button"
     class="tag on"
     onclick={startUpdate}
-    disabled={updating}
+    disabled={restart.current !== null}
     title={`mainの新しい変更 ${status.behind}件(押すと再起動して取り込む):\n${status.commits.join('\n')}`}
   >
     更新 {status.behind}
@@ -165,10 +125,10 @@
   <span class="tag" title={status.reason ?? ''}>更新できない</span>
 {/if}
 
-{#if updating}
+{#if restart.current}
   <div class="update-overlay" role="status" aria-live="polite">
-    <p>更新中…</p>
-    <p class="dim">取り込みとビルドが終わると、自動で読み直す(数分かかることがある)</p>
+    <p>{restart.current.title}</p>
+    <p class="dim">{restart.current.detail}</p>
   </div>
 {/if}
 

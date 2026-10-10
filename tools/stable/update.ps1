@@ -3,6 +3,8 @@
 # 画面の「更新」ボタンから duocad/channel.py の StableUpdater が切り離して起動する
 # (一時フォルダへ写したこのファイルを走らせる。取り込みでこのファイル自身が書き換わるため)。
 # 手で巻き戻すときは -Rollback を付けて直接呼ぶ(ServerPid を省くと HttpPort から探して止める)。
+# -InstallGpu は取り込みもビルドもせず、GPU の部品(extra gpu)だけを入れて立て直す(画面の「設定」の
+# 「GPU の部品を入れる」。失敗したら extra なしで同期し直して CPU の構成に戻す)。
 #
 # 流れ: サーバの終了を待つ -> origin/<Branch> を早送りで取り込む -> uv sync --frozen
 #       -> (package-lock が変わったか node_modules が無ければ) npm ci -> npm run build
@@ -21,7 +23,8 @@ param(
     [int]$Port = 8775,
     [int]$HttpPort = 8776,
     [Parameter(Mandatory = $true)][string]$DataDir,
-    [switch]$Rollback
+    [switch]$Rollback,
+    [switch]$InstallGpu
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,15 +68,24 @@ function Resolve-Tool([string]$name, [string[]]$fallbacks) {
     throw "$name が見つからない"
 }
 
-function Build([string]$fromCommit) {
-    # DUOCAD_FEM_DEVICE=gpu の機械では CuPy(extra gpu)も入れる。**extra を付けない `uv sync` は
-    # 入っている CuPy を消す**ので、付け忘れると更新のたびに GPU の経路が CPU へ戻る(docs/TOPOPT_GPU.md)。
-    $syncArgs = @('sync', '--frozen')
-    # 版が extra gpu を持つときだけ付ける(持たない旧版へ巻き戻すとき、付けると uv sync が失敗する)。
-    if (("$env:DUOCAD_FEM_DEVICE".Trim().ToLower() -eq 'gpu') -and
-        (Select-String -Path (Join-Path $RepoRoot 'pyproject.toml') -Pattern '^\s*gpu\s*=' -Quiet)) {
-        $syncArgs += @('--extra', 'gpu')
+# GPU の部品(extra gpu = CuPy)を入れるか。**その版が extra gpu を持ち**(持たない旧版へ巻き戻すとき、付けると
+# uv sync が失敗する)、かつ画面の「設定」で GPU を選んでいるか、すでに入っているとき。**extra を付けない
+# `uv sync` は入っている CuPy を消す**ので、GPU を切っても入れたままにする(切り直すたびに約 2GB を入れ直さない)。
+# 設定ファイルの鍵は duocad/local_settings.py と揃える(docs/TOPOPT_GPU.md)。
+function Want-GpuExtra([string]$root) {
+    if (-not (Select-String -Path (Join-Path $root 'pyproject.toml') -Pattern '^\s*gpu\s*=' -Quiet)) { return $false }
+    if (Test-Path (Join-Path $root '.venv\Lib\site-packages\cupy')) { return $true }
+    try {
+        $settings = Get-Content -Raw -Encoding UTF8 -Path (Join-Path $root 'duocad_settings.json') | ConvertFrom-Json
+        return ($settings.fem_device -eq 'gpu')
+    } catch {
+        return $false
     }
+}
+
+function Build([string]$fromCommit) {
+    $syncArgs = @('sync', '--frozen')
+    if (Want-GpuExtra $RepoRoot) { $syncArgs += @('--extra', 'gpu') }
     Run 'uv sync' $uv $syncArgs
     $web = Join-Path $RepoRoot 'web'
     $lockChanged = $false
@@ -98,13 +110,13 @@ function Relaunch {
 
 function Write-Result([bool]$ok, [bool]$restored, [string]$from, [string]$to, [string]$message) {
     $result = [ordered]@{
-        ok = $ok; restored = $restored; rollback = [bool]$Rollback; from = $from; to = $to
+        ok = $ok; restored = $restored; rollback = [bool]$Rollback; gpu = [bool]$InstallGpu; from = $from; to = $to
         message = $message; log = $log; at = (Get-Date).ToString('o')
     }
     $result | ConvertTo-Json | Set-Content -Path (Join-Path $LogDir 'last-update-result.json') -Encoding UTF8
 }
 
-Log "start: repo=$RepoRoot branch=$Branch rollback=$Rollback"
+Log "start: repo=$RepoRoot branch=$Branch rollback=$Rollback gpu=$InstallGpu"
 
 # ---- サーバの終了を待つ ----
 if ($ServerPid -eq 0) {
@@ -143,6 +155,15 @@ try {
         $dirty = & git -C $RepoRoot status --porcelain --untracked-files=no
         if ($dirty) { throw "安定版のフォルダに未コミットの変更がある: $dirty" }
 
+        if ($InstallGpu) {
+            if (-not (Select-String -Path (Join-Path $RepoRoot 'pyproject.toml') -Pattern '^\s*gpu\s*=' -Quiet)) {
+                throw 'この版は extra gpu を持たない'
+            }
+            Run 'uv sync (gpu)' $uv @('sync', '--frozen', '--extra', 'gpu')
+            Log "ok: gpu extra installed at $from"
+            Write-Result $true $true $from $from ''
+            return
+        }
         if ($Rollback) {
             if (-not (Test-Path $previousFile)) { throw '戻り先(.git\duocad-previous)が無い' }
             $target = (Get-Content $previousFile -Raw).Trim()
@@ -162,7 +183,11 @@ try {
         Log "FAILED: $message"
         $restored = $true
         try {
-            if ($from) {
+            if ($InstallGpu) {
+                # 入れかけの CuPy を残さない(extra なしの同期は CuPy を消す)。設定は gpu のままなので、
+                # 画面は「GPU の部品が入っていない」と出し続ける。
+                Run 'uv sync (restore)' $uv @('sync', '--frozen')
+            } elseif ($from) {
                 $now = (& git -C $RepoRoot rev-parse HEAD).Trim()
                 if ($now -ne $from) {
                     Log "restoring $from"

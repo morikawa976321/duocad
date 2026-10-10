@@ -326,6 +326,27 @@ def _solve_locked(kf, ff, rtol, make_startup_system):
     return solved
 
 
+def cupy_installed() -> bool:
+    """CuPy が入っているか(読み込まずに調べる)。"""
+    import importlib.util
+
+    return importlib.util.find_spec("cupy") is not None
+
+
+def describe() -> dict:
+    """画面に出す GPU の状態 `{"name": GPU の名前 | None, "problem": 使えない理由 | None}`。CuPy を読む。"""
+    if _disabled is not None:
+        return {"name": None, "problem": _disabled}
+    try:
+        cp, _ = _cupy()
+        name = cp.cuda.runtime.getDeviceProperties(0)["name"]
+    except Unavailable as exc:
+        return {"name": None, "problem": exc.reason}
+    except Exception as exc:  # noqa: BLE001
+        return {"name": None, "problem": f"gpu-error: {type(exc).__name__}: {exc}"}
+    return {"name": name.decode() if isinstance(name, bytes) else str(name), "problem": None}
+
+
 def reset() -> None:
     """覚えている状態(使わない理由・自己検査の結果)を消す。テストと、設定を変えて試し直すとき用。"""
     global _disabled, _startup_checked

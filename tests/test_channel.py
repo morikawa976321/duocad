@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import sys
 import socket
 import subprocess
 from pathlib import Path
@@ -34,12 +35,14 @@ def _request(port: int, method: str, path: str, headers: dict = None):
 class _FakeUpdater:
     def __init__(self) -> None:
         self.started = 0
+        self.modes: list[str] = []
 
     def status(self, force: bool = False) -> dict:
         return {"state": "available", "behind": 2, "commits": ["a", "b"], "force": force}
 
-    def start(self):
+    def start(self, mode: str = "update"):
         self.started += 1
+        self.modes.append(mode)
         return 202, {"started": True}
 
 
@@ -99,6 +102,10 @@ def test_update_accepts_only_duocads_own_page(serve):
     status, body = _request(port, "POST", "/api/update", {"Origin": f"http://127.0.0.1:{port}"})
     assert status == 202 and body == {"started": True}
     assert updater.started == 1
+
+    assert _request(port, "POST", "/api/update?mode=gpu", {"Origin": "http://evil.example"})[0] == 403
+    assert _request(port, "POST", "/api/update?mode=gpu", {"Origin": f"http://127.0.0.1:{port}"})[0] == 202
+    assert updater.modes == ["update", "gpu"]
 
 
 def test_data_dir_moves_models_and_exports_out_of_the_repo(tmp_path):
@@ -257,3 +264,33 @@ def test_update_is_refused_while_the_server_cannot_stop_cleanly(tmp_path):
 
     assert make(broken).start()[0] == 503
     assert not started
+
+
+def test_installing_the_gpu_parts_does_not_need_new_commits(tmp_path):
+    """落ちたら、設定の「GPU の部品を入れる」が main に新しいコミットの無い安定版で断られる(更新を待たないと入らない)、
+    または知らない mode で更新スクリプトが走る。"""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "user.email", "t@example.com")
+    _git(origin, "config", "user.name", "t")
+    (origin / "a.txt").write_text("1", encoding="utf-8")
+    _git(origin, "add", "a.txt")
+    _git(origin, "commit", "-q", "-m", "first")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    asked = []
+
+    def blocker():
+        asked.append(1)
+        return "テスト: ここで止める(スクリプトは起こさない)"
+
+    updater = StableUpdater(
+        log_dir=tmp_path / "logs", relaunch={}, update_blocker=blocker, on_started=lambda: None, repo_root=clone,
+    )
+    assert updater.status(force=True)["state"] == "current"
+    assert updater.start()[0] == 409 and not asked
+    assert updater.start(mode="mystery")[0] == 400 and not asked
+    if sys.platform == "win32":
+        status, body = updater.start(mode="gpu")
+        assert status == 409 and body["error"].startswith("テスト") and asked == [1]

@@ -434,7 +434,7 @@ cg**(`fem.choose_solver`。2026-09-22本人決定。根拠は[TOPOPT_SPEED.md](T
 0、探索終盤の細い形ではdirectはcgの0.07〜0.20倍の秒)。**探索と6条件の既定はこの`auto`**。実際に
 使った解法は6条件の報告`safety.solver`と実行記録`linear-solve`に出る。
 
-**cgはGPUで解ける**(既定はCPU。`DUOCAD_FEM_DEVICE=gpu`の機械だけ。解・反復数はCPUとビット一致)。有効にする手順とCPUに戻る条件は[TOPOPT_GPU.md](TOPOPT_GPU.md)。
+**cgはGPUで解ける**(既定はCPU。画面の「設定」で「GPUで計算する」を選んだ機械だけ。解・反復数はCPUとビット一致)。有効にする手順とCPUに戻る条件は[TOPOPT_GPU.md](TOPOPT_GPU.md)。
 
 **幾何マルチグリッド前処理(`solver="mg"`、2026-09-04導入)は2026-09-21に削除した**(本人判断)。
 SIMP時代の連続密度の系ではCG反復/solveが0.07〜0.20倍だったが、現在の探索が解く形(二値マスク・

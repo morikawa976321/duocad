@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.parse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -138,7 +139,8 @@ class WebHandler(SimpleHTTPRequestHandler):
         if host not in self.mcp_hosts:
             self.send_error(403)
             return
-        status, payload = self.updater.start()
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        status, payload = self.updater.start(mode=(query.get("mode") or ["update"])[0])
         self._send_json(status, payload)
 
     def _send_json(self, status: int, payload: Any) -> None:

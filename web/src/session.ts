@@ -511,6 +511,19 @@ export interface AiStatus {
   error?: string
 }
 
+/** 形状最適化の CG を解く装置(`fem_status`。`duocad/net/ws.py` の `_fem_status`、docs/TOPOPT_GPU.md)。 */
+export interface FemStatus {
+  device: 'cpu' | 'gpu'
+  /** GPU の部品(CuPy)が入っているか。 */
+  cupyInstalled: boolean
+  /** gpu を選んでいて使えるとき、その GPU の名前。 */
+  gpuName: string | null
+  /** gpu を選んでいるのに使えないとき、その理由(CPU で解いている)。 */
+  gpuProblem: string | null
+  /** `fem_set_device` を拒否したときだけ入る。 */
+  error?: string
+}
+
 /** ツール呼び出し1件の進捗(`AgentLoop` の `progress` コールバックそのもの)。
  * **`name` は操作ログ・MCPツール名と同じ綴り** —— 操作ログと突き合わせられる。 */
 export interface AiToolCall {
@@ -833,6 +846,9 @@ export interface SessionHooks {
   /** 空メッセージ・実行中の2通目・プロバイダ未設定など、**繋がらない理由**。 */
   onAiError(message: string): void
   // ---------------------------------------------------------------- H: 形状最適化を走らせる
+  // ---------------------------------------------------------------- I: 計算の設定
+  /** 装置の設定が変わった/`fem_get_status` の返事。 */
+  onFemStatus(status: FemStatus): void
   /** 走らせる前の点検が返ってきた(要求した接続にだけ届く)。 */
   onOptimizeConditions(report: OptimizeConditionsReport): void
   /** 解像度の上限・下限・目盛りが返ってきた(要求した接続にだけ届く)。 */
@@ -925,6 +941,11 @@ export interface Session {
   aiSend(message: string): void
   /** 中断する。走っているツールの結果は `onAiResult` の `tool_calls` に残る。 */
   aiCancel(): void
+  // ---------------------------------------------------------------- I: 計算の設定
+  /** 今の装置の設定(応答は `onFemStatus`)。 */
+  femGetStatus(): void
+  /** 装置を選ぶ。次に準備する計算から効き、この clone の設定ファイルに残る。 */
+  femSetDevice(device: 'cpu' | 'gpu'): void
   // ---------------------------------------------------------------- H: 形状最適化を走らせる
   /** 4条件がそろって走らせられるかを聞く(応答は `onOptimizeConditions`)。 */
   optimizeConditions(): void
@@ -1058,6 +1079,11 @@ export function createSession(hooks: SessionHooks): Session {
       turns?: number
       tool_calls?: Array<{ name: string; arguments: Record<string, unknown>; ok: boolean }>
       usage?: Record<string, number>
+      // ---------------------------------------------------------------- I
+      device?: 'cpu' | 'gpu'
+      cupy_installed?: boolean
+      gpu_name?: string | null
+      gpu_problem?: string | null
       text?: string
       // ---------------------------------------------------------------- H
       // **形状最適化の応答は丸ごと型変換して渡す**(`optimize_result` だけで20キー近くあり、
@@ -1137,6 +1163,14 @@ export function createSession(hooks: SessionHooks): Session {
         apiKeyHint: message.api_key_hint ?? null,
         running: message.running ?? false,
         providers: message.providers ?? ['openai_compat'],
+        error: message.error,
+      })
+    } else if (message.type === 'fem_status') {
+      hooks.onFemStatus({
+        device: message.device ?? 'cpu',
+        cupyInstalled: message.cupy_installed ?? false,
+        gpuName: message.gpu_name ?? null,
+        gpuProblem: message.gpu_problem ?? null,
         error: message.error,
       })
     } else if (message.type === 'ai_tool_call') {
@@ -1281,6 +1315,12 @@ export function createSession(hooks: SessionHooks): Session {
     },
     aiCancel() {
       send({ cmd: 'ai_cancel' })
+    },
+    femGetStatus() {
+      send({ cmd: 'fem_get_status' })
+    },
+    femSetDevice(device) {
+      send({ cmd: 'fem_set_device', device })
     },
     optimizeConditions() {
       send({ cmd: 'optimize_conditions' })

@@ -214,23 +214,11 @@ def _default_thread_count() -> int:
 
 PARALLEL_THREADS: int = _default_thread_count()
 
-# CG を解く装置。環境変数 `DUOCAD_FEM_DEVICE`(`cpu` / `gpu`)を**import 時に1回だけ読む**
-# (後から変えるなら `FEM_DEVICE` へ代入する)。**既定は cpu** —— GPU は機械ごとに人が有効にする
-# (VRAM を他の作業と分け合うので、使えるからといって黙って取らない。gpu_feasibility/CONCLUSION.md「方針」)。
+# CG を解く装置(`cpu` / `gpu`)。`prepare` が呼ばれたときに読む。**既定は cpu** —— GPU は機械ごとに人が
+# 画面の「設定」で有効にし、サーバがその値(`duocad.local_settings`)をここへ入れる(VRAM を他の作業と
+# 分け合うので、使えるからといって黙って取らない。gpu_feasibility/CONCLUSION.md「方針」)。
 # `gpu` でも、GPU で解けない・合わないときは CPU で解き直し、理由を `linear-solve` の記録に残す(`gpu_cg`)。
-FEM_DEVICE_ENV = "DUOCAD_FEM_DEVICE"
-
-
-def _default_device() -> str:
-    value = os.environ.get(FEM_DEVICE_ENV, "").strip().lower()
-    if value in ("", "cpu", "gpu"):
-        return value or "cpu"
-    warnings.warn(f"{FEM_DEVICE_ENV}={value!r} は cpu / gpu のどちらでもないので cpu で解く", RuntimeWarning,
-                  stacklevel=2)
-    return "cpu"
-
-
-FEM_DEVICE: str = _default_device()
+FEM_DEVICE: str = "cpu"
 
 # プロセスの寿命だけ生存させるスレッドプールのキャッシュ(スレッド数ごとに1つ)。
 # **明示的に閉じない**——閉じても次の solve でまた同じ数だけ要るので、生成コストを

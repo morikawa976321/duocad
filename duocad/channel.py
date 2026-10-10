@@ -175,8 +175,14 @@ class StableUpdater:
 
     # ---- 更新 ----
 
-    def start(self) -> tuple[int, dict]:
-        """更新スクリプトを切り離して起動し、サーバの終了を予約する。(HTTPステータス, 本文) を返す。"""
+    def start(self, mode: str = "update") -> tuple[int, dict]:
+        """更新スクリプトを切り離して起動し、サーバの終了を予約する。(HTTPステータス, 本文) を返す。
+
+        `mode="gpu"` は**取り込みもビルドもせず、GPU の部品(extra gpu)だけを入れて立て直す**
+        (画面の「設定」で GPU を選んだのに CuPy が無いとき。main に新しいコミットが無くても走る)。
+        """
+        if mode not in ("update", "gpu"):
+            return 400, {"error": f"未知の mode: {mode!r}"}
         with self._lock:
             if self._started:
                 return 409, {"error": "更新はすでに始まっている"}
@@ -184,8 +190,10 @@ class StableUpdater:
                 return 501, {"error": "自己更新は Windows だけ"}
             state = self._probe()
             self._cached, self._cached_at = state, time.monotonic()
-            if state["state"] != "available":
+            if mode == "update" and state["state"] != "available":
                 return 409, {"error": state.get("reason") or "取り込む変更が無い"}
+            if mode == "gpu" and state["state"] == "blocked":
+                return 409, {"error": state.get("reason")}
             try:
                 reason = self.update_blocker()
             except Exception as error:  # noqa: BLE001  (イベントループが塞がっている等。HTTPスレッドへ漏らさない)
@@ -209,6 +217,7 @@ class StableUpdater:
                 "-Port", str(self.relaunch["port"]),
                 "-HttpPort", str(self.relaunch["http_port"]),
                 "-DataDir", str(self.relaunch["data_dir"]),
+                *(["-InstallGpu"] if mode == "gpu" else []),
             ]
             # CREATE_NO_WINDOW: 見えないコンソールを持たせる(DETACHED_PROCESS にすると、
             # スクリプトが呼ぶ git / uv / npm がそれぞれ自分の窓を開いてしまう)。

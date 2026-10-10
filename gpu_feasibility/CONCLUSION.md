@@ -8,7 +8,7 @@
 
 Claude・Codex(gpt-6-astra)・Fable の3者で詰めた案を本人が了承した(morikawa976321/duocad#104 のコメント)。
 
-- **CPU と GPU の両経路を持つ。既定は CPU**、GPU は機械ごとに設定(例 `DUOCAD_FEM_DEVICE=cpu|gpu`)で有効にする。
+- **CPU と GPU の両経路を持つ。既定は CPU**、GPU は機械ごとに設定で有効にする(画面の「設定」の「GPU で計算する」。docs/TOPOPT_GPU.md)。
   可用性による自動 ON はしない(VRAM を Unity・ローカル LLM と分け合う。低性能 GPU で遅くなる問題も既定 CPU なら起きない)。
 - GPU への完全移行はしない(ThinkPad P14s Gen 6 は Intel 内蔵 GPU だけで CuPy が動かない)。Intel 内蔵 GPU 向けの経路も作らない。
 - gpu のとき、CuPy を読めない・自己検査の不一致・VRAM 不足・GPU の残差検算の不合格で CPU に戻り、理由を `linear-solve` の記録に残す。

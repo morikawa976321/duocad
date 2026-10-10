@@ -9,16 +9,21 @@
 
 ## 有効にする
 
-1. CuPy を入れる: `uv sync --frozen --extra gpu`(CUDA ランタイムも wheel で入る。約 2GB。システムへの CUDA Toolkit は要らない)。
-2. 環境変数 `DUOCAD_FEM_DEVICE=gpu` を設定する(ユーザー環境変数)。**import 時に 1 回だけ読む**ので、設定後にサーバを立て直す。
-   プロセスの中で変えるなら `fem.FEM_DEVICE = "gpu"`、1 回だけなら `Model.prepare(..., device="gpu")`。
+画面の「設定」(ヘッダーの「設定」ボタン)の3つ目、**「GPU で計算する」にチェックを入れる**。次に準備する計算から効き、
+走っている最適化の途中で切り替えても答えは変わらない(秒だけが変わる)。
 
-**安定版**では、`tools/stable/update.ps1` と `install.ps1` が `DUOCAD_FEM_DEVICE=gpu` を見て `--extra gpu` を付ける。
-**extra を付けない `uv sync` は入っている CuPy を消す**ので、この環境変数はサーバと更新の両方から見えている必要がある。
-この機能を取り込む最初の更新は、取り込む前の `update.ps1` が走る(一時フォルダへ写してから走らせるため)ので CuPy が入らない。
-その回だけ、安定版のフォルダで手で `uv sync --frozen --extra gpu` を走らせるか、次の更新を待つ。
+- 選んだ値はこの clone の設定ファイル `duocad_settings.json`(リポジトリ直下・未追跡。`duocad/local_settings.py`)に残り、
+  サーバを立て直しても続く。安定版と開発版は別の clone なので別の値になる。
+- **GPU の部品(CuPy と CUDA ランタイムの wheel、約 2GB)が入っていなければ**、設定の下に「GPU の部品を入れる(約 2GB・再起動)」
+  ボタンが出る(安定版だけ)。押すとサーバが `tools/stable/update.ps1 -InstallGpu` を起こして落ち、`uv sync --frozen --extra gpu`
+  だけを走らせて立ち直る(取り込みとビルドはしない。main に新しいコミットが無くても使える)。失敗したら extra なしで同期し直して
+  CPU の構成に戻す。開発版では手で `uv sync --extra gpu` を走らせる。
+- 以後の更新(`update.ps1`)は、その版が extra gpu を持ち、かつ設定が gpu か CuPy が入っているときに `--extra gpu` を付ける。
+  **extra を付けない `uv sync` は入っている CuPy を消す**ので、GPU を切っても部品は入れたままにする(切り直すたびに入れ直さない)。
+- 設定の下の1行が今の状態を言う: CPU で解いている/GPU の名前/部品が入っていない/使えない理由(CPU で解いている)。
+- コードから使うなら `fem.FEM_DEVICE = "gpu"`、1 回だけなら `Model.prepare(..., device="gpu")`。
 
-GPU の無い機械(ThinkPad P14s Gen 6 等)では何もしない。`gpu` を設定しても、最初の solve で CPU に戻ってそのプロセスでは以後試さない。
+GPU の無い機械(ThinkPad P14s Gen 6 等)では選ばない。選んでも、最初の solve で CPU に戻ってそのプロセスでは以後試さない。
 
 ## CPU に戻る条件と記録
 
@@ -37,7 +42,7 @@ GPU の無い機械(ThinkPad P14s Gen 6 等)では何もしない。`gpu` を設
 - 戻るたびに `RuntimeWarning` を出す。
 - 実行記録の `linear-solve` に `device_requested` / `device`(実際に解いた方)/ `gpu_fallback`(理由。戻らなければ null)が残る。
   `fem.collect_solve_stats()` は `gpu_solves` / `gpu_fallbacks` を数える。**`gpu_fallbacks` が 0 でない実行は、CPU と GPU の秒が混ざっている**
-  (`wall_seconds` で手法どうしを比べる集計では分ける)。実行記録の `environment` には `fem_device_env` が残る。
+  (`wall_seconds` で手法どうしを比べる集計では分ける)。実行記録の `environment` には `fem_device`(その時点の設定)が残る。
 - 解き終わるたびに VRAM をドライバへ返す(Unity・ローカル LLM と 16GB を分け合うため)。
 
 ## ビット一致の範囲

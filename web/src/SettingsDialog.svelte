@@ -24,16 +24,19 @@
    * **レイアウトの大きさを持たないのは `position: absolute` による**(top-layer が理由ではない)ので、
    * 非モーダルでも `.viewport` の寸法＝カメラのアスペクトには触らない(styles.css の不変条件)。
    *
-   * **状態の正は `displaySettings.svelte.ts`**(画角)と**サーバの `ai_status`**(APIキー)。ここは値と口を
+   * **状態の正は `displaySettings.svelte.ts`**(画角)と**サーバの `ai_status`**(APIキー)・**`fem_status`**(GPU)。ここは値と口を
    * 受け取るだけの presentational な部品で、双方向束縛をコンポーネントの境界に持ち込まない。
    *
    * **APIキーは書くだけで、値は画面へ戻らない**(サーバが返すのは置いてあるか・どこから読んだか・末尾4文字)。
    * 打ちかけは送ったら捨てる(DOMに残さない)。
    */
-  import type { AiStatus } from './session'
+  import { onMount } from 'svelte'
+  import type { AiStatus, FemStatus } from './session'
+  import { loadConfig, restart, restartServer } from './serverRestart.svelte'
+  import { fail } from './Toast.svelte'
   import { FOV_DEFAULT, FOV_ORTHO } from './viewport'
 
-  const { open, fov, onFov, aiStatus, onSetApiKey, onClose }: {
+  const { open, fov, onFov, aiStatus, onSetApiKey, femStatus, onFemDevice, onClose }: {
     open: boolean
     /**
      * 今の画角[度]。`FOV_ORTHO`(0)なら完全正投影。**UIからは 0 か `FOV_DEFAULT` しか
@@ -47,6 +50,10 @@
     aiStatus: AiStatus | null
     /** ClaudeのAPIキーを書く(`null` なら消す)。 */
     onSetApiKey: (key: string | null) => void
+    /** 形状最適化の CG を解く装置。`null` は接続前。 */
+    femStatus: FemStatus | null
+    /** 装置を選ぶ(**その場で効く**。次に準備する計算から)。 */
+    onFemDevice: (device: 'cpu' | 'gpu') => void
     onClose: () => void
   } = $props()
 
@@ -71,6 +78,33 @@
     if (!key) return
     onSetApiKey(key)
     keyDraft = ''
+  }
+
+  /** GPU の部品を画面から入れられるか(安定版だけ。開発版は手で `uv sync --extra gpu`)。 */
+  let canInstallGpu = $state(false)
+  onMount(() => {
+    void loadConfig().then((config) => (canInstallGpu = config?.update_supported === true))
+  })
+
+  const femLine = $derived.by(() => {
+    if (!femStatus) return '接続を待っている'
+    if (femStatus.error) return femStatus.error
+    if (femStatus.device === 'cpu') return 'CPU で解く(既定)。NVIDIA の GPU がある機械だけ有効にする。'
+    if (!femStatus.cupyInstalled) {
+      return canInstallGpu
+        ? 'GPU の部品(CuPy)が入っていないので、CPU で解いている。下のボタンで入れる。'
+        : 'GPU の部品(CuPy)が入っていないので、CPU で解いている。開発版では uv sync --extra gpu を手で走らせる。'
+    }
+    if (femStatus.gpuProblem) return `GPU を使えないので、CPU で解いている: ${femStatus.gpuProblem}`
+    return `${femStatus.gpuName ?? 'GPU'} で解く。次に準備する計算から効く。答えは CPU と同じ。`
+  })
+
+  function installGpu(): void {
+    void restartServer('api/update?mode=gpu', {
+      title: 'GPU の部品を入れている…',
+      detail: '約 2GB を取ってきて入れ、サーバを立て直す。終わると自動で読み直す(数分かかることがある)',
+      failPrefix: 'GPU の部品を入れ始められなかった',
+    }, fail)
   }
 
   let dialog: HTMLDialogElement
@@ -151,6 +185,26 @@
     {/if}
   </div>
   <p class="hint dim" data-api-key-status>{keyLine}</p>
+
+  <!-- **答えは変わらない**(GPU の解は CPU とビット一致する。docs/TOPOPT_GPU.md)ので、確認なしでその場で切り替える。 -->
+  <label class="field-row gpu-row">
+    GPU で計算する
+    <input
+      id="settings-gpu"
+      type="checkbox"
+      checked={femStatus?.device === 'gpu'}
+      disabled={!femStatus}
+      onchange={(event) => onFemDevice(event.currentTarget.checked ? 'gpu' : 'cpu')}
+    />
+  </label>
+  <p class="hint dim" data-fem-status>{femLine}</p>
+  {#if femStatus?.device === 'gpu' && !femStatus.cupyInstalled && canInstallGpu}
+    <div class="key-actions">
+      <button id="settings-gpu-install" onclick={installGpu} disabled={restart.current !== null}>
+        GPU の部品を入れる(約 2GB・再起動)
+      </button>
+    </div>
+  {/if}
 </dialog>
 
 <style>
@@ -198,9 +252,14 @@
     margin: 6px 0 0;
   }
 
-  /* 画角の説明との間を空けて、別の項目だと分かるようにする。 */
-  .key-row {
+  /* 前の項目の説明との間を空けて、別の項目だと分かるようにする。 */
+  .key-row,
+  .gpu-row {
     margin-top: 12px;
+  }
+
+  #settings-gpu {
+    margin: 0;
   }
 
   #settings-api-key {

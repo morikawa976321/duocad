@@ -78,6 +78,7 @@
     type BodyRef,
     type ConnectionStatus,
     type EdgesPayload,
+    type FemStatus,
     type OptimizeConditionsReport,
     type OptimizeDebugPayload,
     type OptimizeProgress,
@@ -355,6 +356,8 @@
    * 見た目だけの状態で、コアにも操作ログにも行かない。
    */
   let settingsOpen = $state(false)
+  /** 形状最適化の CG を解く装置の設定(サーバの `fem_status`。設定ダイアログの3つ目)。 */
+  let femStatus = $state<FemStatus | null>(null)
   /** 画角・原点ギズモ・断面(どれも文書の状態ではない)。 */
   const display = createDisplaySettings({ fail })
   /**
@@ -419,6 +422,7 @@
       // (再)接続したら今のAI設定を取り直す(サーバは再起動していなくても、
       // 前回の接続が切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
+      if (next === 'open') session.femGetStatus()
       // 人が最初の依頼を打っている間に、AIへツール定義を読ませておく(遅い機種で分単位かかる)。
       if (next === 'open') session.aiPrepare()
       // (再)接続したら `models/` の一覧も取り直す(サーバの再起動・別セッションの
@@ -455,6 +459,7 @@
     onAiToolCall: ai.onToolCall,
     onAiResult: ai.onResult,
     onAiError: ai.onError,
+    onFemStatus: (next) => (femStatus = next),
     onOptimizeConditions: (report) => (optimizeConditions = report),
     onOptimizeResolution: (payload) => {
       optimizeResolution = payload
@@ -2497,6 +2502,8 @@
         onFov={display.applyFov}
         aiStatus={ai.status}
         onSetApiKey={(key) => session.aiSetApiKey(key)}
+        {femStatus}
+        onFemDevice={(device) => session.femSetDevice(device)}
         onClose={() => (settingsOpen = false)}
       />
     </div>
