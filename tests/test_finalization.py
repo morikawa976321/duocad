@@ -219,6 +219,19 @@ def test_collapse_float32_crossings_removes_the_needle_that_flips_when_rounded()
     assert collapse_float32_crossings(v, f, [])[2] == 0
 
 
+def test_repair_float32_crossings_leaves_float64_defects_to_fail():
+    """float64 で既にある交差を潰して合格にしてしまうと、集合演算・簡略化の欠陥が隠れる。"""
+    from duocad.topopt.finalize import repair_float32_crossings
+    # 四面体 ABCD の底面を頂点 P で3枚に割り、P を面 ADC の外へ 3e-4 mm 出す。辺 BP が面 ADC を貫く
+    v = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [-3e-4, 1e-4, 1e-4]])
+    f = np.array([[0, 2, 4], [2, 1, 4], [1, 0, 4], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
+    checks = final_mesh_checks(v, f)
+    assert 'self_intersections' in checks['failed']
+    rv, rf, after, repair = repair_float32_crossings(v, f, checks)
+    assert repair['collapsed_crossing_edges'] == 0 and any(repair['float64_self_intersections'].values())
+    assert np.array_equal(rv, v) and np.array_equal(rf, f) and 'self_intersections' in after['failed']
+
+
 def test_solid_operation_undo_redo_and_replay():
     doc = Document()
     shape = box((0, 0, 0), (2, 3, 4))
