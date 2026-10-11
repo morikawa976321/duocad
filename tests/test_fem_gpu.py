@@ -334,3 +334,21 @@ def test_a_gpu_cg_that_hits_the_iteration_limit_stops_where_scipy_stops(maxiter)
     gpu_cg._release()
     assert info == gpu_info == maxiter == iterations
     assert np.array_equal(u, expected)
+
+
+@needs_gpu
+def test_a_zero_denominator_takes_the_same_path_as_scipy():
+    """落ちたら、α や β の分母が 0 になる系で GPU の CG が scipy の cg と違う道を通る(scipy は NaN のまま上限まで回して info を返す)。"""
+    import scipy.sparse as sp
+    import scipy.sparse.linalg as spla
+
+    kf = sp.csr_matrix(np.eye(2) * 1e200)
+    ff = np.array([1e-100, 1e-100])
+    diag = kf.diagonal()
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        expected, info = spla.cg(kf, ff, M=spla.LinearOperator(kf.shape, matvec=lambda v: v / diag), rtol=1e-9)
+    u, iterations, gpu_info = gpu_cg._cg(gpu_cg._as_csr(kf), ff, 1, 1e-9)
+    gpu_cg._release()
+    assert info == gpu_info == iterations == 20
+    assert np.array_equal(u, expected, equal_nan=True)
