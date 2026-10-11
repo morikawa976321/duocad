@@ -18,7 +18,8 @@ def _accepted(safety_factors):
 
 
 def _context(target=2.0):
-    return SimpleNamespace(target_safety_factor=target, emit=lambda phase, message: None, check=lambda: None)
+    return SimpleNamespace(target_safety_factor=target, emit=lambda phase, message: None, check=lambda: None,
+                           passthrough=())
 
 
 def _completion(mask, search_sf, material, final_sf, verdict):
@@ -86,3 +87,32 @@ def test_nothing_to_go_back_to_without_an_earlier_shape():
     failed = _completion(accepted[-1].mask(), 3.0, 64.0, 1.0, 'fail')
     result = complete.backtrack(accepted, failed, _context(), complete_shape=_by_ratio(0.3))
     assert result.chosen is None and result.reason == 'nothing_to_go_back' and result.checks == []
+
+
+def test_a_candidate_that_raises_counts_as_a_failure_but_a_cancel_goes_through():
+    """落ちたら、候補の集合演算が例外で落ちたときに見つけてあった合格形まで捨てるか、中断を候補の失敗として握りつぶす。"""
+    import pytest
+
+    accepted = _accepted([20.0, 18.0, 16.0, 14.0, 12.0, 10.0, 8.0, 6.0])
+    failed = _completion(accepted[-1].mask(), 6.0, 57.0, 0.6, 'fail')
+    passing = _by_ratio(0.2)
+
+    def broken_at_14(mask, search_sf, material, ctx):
+        if search_sf == 14.0:
+            raise ValueError("集合演算の結果が自己交差する")
+        return passing(mask, search_sf, material, ctx)
+
+    result = complete.backtrack(accepted, failed, _context(), complete_shape=broken_at_14)
+    assert result.reason == 'passed' and result.chosen is not None
+    assert any(row['verdict'] == 'error' and 'ValueError' in row['error'] for row in result.checks)
+
+    class Cancelled(RuntimeError):
+        pass
+
+    def cancelled(mask, search_sf, material, ctx):
+        raise Cancelled()
+
+    ctx = _context()
+    ctx.passthrough = (Cancelled,)
+    with pytest.raises(Cancelled):
+        complete.backtrack(accepted, failed, ctx, complete_shape=cancelled)

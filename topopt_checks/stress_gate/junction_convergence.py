@@ -34,9 +34,10 @@ AREAS_MM2 = (1.0, 4.0, 9.0, 16.0)
 BALL_RADII_MM = (1.0, 2.0)
 
 
-def banded_strength(material, region, keep, layer, fine, fixed, load, conditions, target, *, factor):
+def banded_strength(material, region, keep, layer, fine, fixed, load, conditions, target, solver=None, *, factor):
     model, _density, displacement, scale, relative = acceptance.solve_material(
-        material, fine, fixed, load, youngs_modulus_mpa=conditions.youngs_modulus_mpa, solver=conditions.solver)
+        material, fine, fixed, load, youngs_modulus_mpa=conditions.youngs_modulus_mpa,
+        solver=conditions.solver if solver is None else solver)
     near_keep = ndimage.binary_dilation(keep, structure=np.ones((3, 3, 3), bool), iterations=factor) if keep.any() \
         else np.zeros_like(keep)
     hf = float(fine.spacing)
@@ -96,7 +97,7 @@ def main() -> int:
     def inspect(*args, **kwargs):
         for k in a.refine:
             started = time.perf_counter()
-            strength = lambda *s, _k=k: banded_strength(*s, factor=_k)  # noqa: E731
+            strength = lambda *s, solver=None, _k=k: banded_strength(*s, solver=solver, factor=_k)  # noqa: E731
             with patch.object(final_check, "refine_factor", lambda *_, _k=k: (_k, "assembled")), patch.object(final_check, "fits", lambda *_: True), \
                     patch.object(final_check, "_strength", strength):
                 checked = real_inspect(*args, **kwargs)

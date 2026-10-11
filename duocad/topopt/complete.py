@@ -26,7 +26,8 @@ MAX_BACKTRACK_CHECKS = 5
 @dataclass
 class Context:
     """`complete` が使う、探索の前に決まっているもの。`emit(phase, message)` は進捗、`check()` は中断の確認、
-    `place(verts_smooth)` はメッシュの頂点を実寸へ置いて格子に載っているかを確かめた平らな座標の並び。"""
+    `place(verts_smooth)` はメッシュの頂点を実寸へ置いて格子に載っているかを確かめた平らな座標の並び。
+    `passthrough` は `backtrack` が候補の失敗として握らずに通す例外の型(中断)。"""
 
     space_mask: np.ndarray
     grid: Any
@@ -42,6 +43,7 @@ class Context:
     place: Callable[[Any], list]
     search_status: str = 'feasible'
     search_termination: Optional[str] = None
+    passthrough: tuple = ()
 
 
 @dataclass
@@ -157,6 +159,7 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
     最初は「完成形の安全率 ÷ 探索の安全率」の比が変わらないと見て、探索の安全率が 目標 ÷ 比 以上あった最も新しい形へ一気に
     戻る。割ればその形の比で同じことをする(比が取れなければ最初の形との中間)。通る形が見つかった後は、通った形と割った形の
     間を二分して、通る中で最も新しい(材料の少ない)形へ寄せる。検査は `MAX_BACKTRACK_CHECKS` 回まで。
+    候補の手順が例外で落ちたら(集合演算の自己交差など)その形は割ったものとして続ける(`ctx.passthrough` の型は通す)。
     `complete_shape` は1形ぶんの手順(既定は `complete`。検査が差し替える口)。
     """
     complete_shape = complete if complete_shape is None else complete_shape
@@ -181,11 +184,20 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
         shape = accepted[probe]
         ctx.emit('backtrack', f"完成形が目標を割ったので、探索を {last - probe} 手戻した形(探索の安全率 "
                               f"{shape.safety_factor:.4g})で作り直して検査する({len(result.checks) + 1}/{MAX_BACKTRACK_CHECKS})")
-        done = complete_shape(shape.mask(), shape.safety_factor, shape.material_mm3, ctx)
-        result.checks.append(dict(index=probe, steps_back=last - probe, search_safety_factor=shape.safety_factor,
-                                  material_mm3=done.material_mm3, final_safety_factor=done.final_safety_factor,
-                                  verdict=done.verdict))
-        if done.verdict == 'pass':
+        try:
+            done = complete_shape(shape.mask(), shape.safety_factor, shape.material_mm3, ctx)
+        except ctx.passthrough:
+            raise
+        except Exception as error:
+            result.checks.append(dict(index=probe, steps_back=last - probe, search_safety_factor=shape.safety_factor,
+                                      material_mm3=shape.material_mm3, final_safety_factor=None, verdict='error',
+                                      error=f'{type(error).__name__}: {error}'))
+            done = None
+        else:
+            result.checks.append(dict(index=probe, steps_back=last - probe, search_safety_factor=shape.safety_factor,
+                                      material_mm3=done.material_mm3, final_safety_factor=done.final_safety_factor,
+                                      verdict=done.verdict))
+        if done is not None and done.verdict == 'pass':
             pass_lo, result.chosen, result.chosen_index = probe, done, probe
         else:
             fail_hi = probe
@@ -193,7 +205,7 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
             if probe == 0:
                 result.reason = 'exhausted'
                 break
-            probe = guided(done, fail_hi)
+            probe = fail_hi // 2 if done is None else guided(done, fail_hi)
         else:
             if fail_hi - pass_lo <= 1:
                 break

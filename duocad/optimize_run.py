@@ -1123,7 +1123,7 @@ def _run(
         exclude_shapes=[doc.get_body(bid).shape for bid in bundle.exclude_body_ids],
         anchor_soup=space.soup, emit=lambda phase, message: pump.emit(phase=phase, message=message),
         check=pump.check, place=place, search_status=search_result.status,
-        search_termination=search_result.termination)
+        search_termination=search_result.termination, passthrough=(OptimizeCancelled,))
     done = completion.complete(best.mask, float(best.safety_factor), float(best.material_mm3), context)
     if done.fill_failure is not None:
         return _not_done(
