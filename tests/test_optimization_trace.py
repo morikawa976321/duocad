@@ -110,8 +110,9 @@ def test_save_failure_does_not_stop_the_run_and_is_counted(recordings,monkeypatc
     with trace.recording() as rec:
         def fail(*args): raise OSError('disk full')
         monkeypatch.setattr(trace,'_atomic',fail)
-        assert rec.snapshot('important',np.ones(3)) is None
+        name = rec.snapshot('important',np.ones(3))
     assert trace.current() is None
+    assert not (rec.path/name).exists()
     assert rec.write_failures >= 1
     assert rec.manifest['write_failures'] == rec.write_failures
 
@@ -127,6 +128,7 @@ def test_the_array_directory_is_recreated_when_it_disappears_mid_run(recordings)
     """落ちたら、実行中に arrays/ が消えたあと記録が回復せず、その実行の残り全部が落ちる。"""
     with trace.recording() as rec:
         rec.snapshot('first',dict(a=np.ones(3)))
+        rec.flush()
         shutil.rmtree(rec.path/'arrays')
         rec.snapshot('second',dict(a=np.arange(5.)))
     assert np.array_equal(snapshot(rec,'second')['a'],np.arange(5.))
@@ -309,3 +311,123 @@ def test_git_provenance_returns_while_another_thread_blocks_on_piped_stdin():
         child.stdin.close()
         child.stdout.close()
         child.wait()
+
+
+def test_a_snapshot_keeps_the_values_it_was_given_even_if_the_caller_changes_them_afterwards(recordings):
+    """落ちたら、書き出しスレッドが書く前に呼び出し側が配列を書き換えると、記録が書き換え後の値になる。"""
+    work = np.zeros(1000)
+    with trace.recording() as rec:
+        for value in range(3):
+            work[:] = value
+            rec.snapshot(f'step{value}', dict(work=work))
+    for value in range(3):
+        assert np.all(snapshot(rec, f'step{value}')['work'] == value)
+    events = trace.RunArchive(rec.path).snapshots()
+    assert [e['name'] for e in events][-3:] == ['step0', 'step1', 'step2']
+
+
+def test_an_array_that_could_not_be_written_is_written_by_the_next_snapshot_that_uses_it(recordings, monkeypatch):
+    """落ちたら、書けなかった・消えた・符号化の途中で投げた記録の配列を「書いた」と覚え、後の JSON が無い配列を参照する。"""
+    real = trace._atomic
+    calls = {'n': 0}
+
+    def fail_once(path, write):
+        if path.suffix == '.npz' and calls['n'] == 0:
+            calls['n'] += 1
+            raise OSError('一時的に書けない')
+        return real(path, write)
+
+    shared = np.arange(7.)
+    with trace.recording() as rec:
+        monkeypatch.setattr(trace, '_atomic', fail_once)
+        rec.snapshot('first', dict(a=shared))
+        rec.snapshot('second', dict(a=shared))
+        rec.flush()
+        monkeypatch.setattr(trace, '_atomic', real)
+        shutil.rmtree(rec.path/'arrays')
+        rec.snapshot('third', dict(a=shared))
+        with pytest.raises(TypeError):
+            rec.snapshot('broken', dict(good=np.arange(3.), bad=np.array([object()], dtype=object)))
+        rec.snapshot('fourth', dict(good=np.arange(3.)))
+    assert rec.write_failures == 1
+    assert not list(rec.path.glob('*-first.json'))
+    for name in ('second', 'third'):
+        assert np.array_equal(snapshot(rec, name)['a'], shared)
+    assert np.array_equal(snapshot(rec, 'fourth')['good'], np.arange(3.))
+
+
+def test_an_event_is_encoded_when_it_is_recorded(recordings):
+    """落ちたら、イベントの値が積んだ後の書き換えで変わるか、記録できない値の誤りが別の記録の時点で投げられる。"""
+    values = [1]
+    with trace.recording() as rec:
+        rec.event('custom', values=values)
+        values[0] = 99
+        with pytest.raises(TypeError):
+            rec.event('custom', values=[object()])
+    custom = [e for e in trace.RunArchive(rec.path).events if e['kind'] == 'custom']
+    assert [e['values'] for e in custom] == [[1]]
+
+
+def test_an_error_in_the_run_reaches_the_caller_and_the_writer_is_closed(recordings):
+    """落ちたら、記録の後始末が計算の例外を別の例外で隠すか、書き出しスレッドが残る。"""
+    with pytest.raises(RuntimeError, match='計算の失敗'):
+        with trace.recording() as rec:
+            for index in range(10):
+                rec.snapshot(f'step{index}', dict(a=np.full(1000, float(index))))
+            raise RuntimeError('計算の失敗')
+    assert rec._writer._shutdown
+    assert json.loads((rec.path/'manifest.json').read_text(encoding='utf-8'))['status'] == 'failed'
+    assert snapshot(rec, 'step9')['a'][0] == 9.
+
+
+def test_a_snapshot_whose_shared_array_disappears_before_it_is_written_is_not_published(recordings):
+    """落ちたら、積んでから書くまでの間に既存の配列が消えたとき、参照の切れた JSON を成功扱いで残している。"""
+    import threading
+
+    shared = np.arange(5.)
+    gate = threading.Event()
+    with trace.recording() as rec:
+        rec.snapshot('first', dict(a=shared))
+        rec.flush()
+        rec._submit(gate.wait)
+        name = rec.snapshot('second', dict(a=shared))
+        shutil.rmtree(rec.path/'arrays')
+        gate.set()
+        rec.flush()
+        rec.snapshot('third', dict(a=shared))
+    assert not (rec.path/name).exists()
+    assert rec.write_failures == 1
+    assert np.array_equal(snapshot(rec, 'third')['a'], shared)
+
+
+def test_a_name_that_cannot_be_recorded_is_rejected_when_the_snapshot_is_taken(recordings):
+    """落ちたら、スナップショットの名前などイベント行に入る値の誤りが、その場で投げられず書き出しスレッドで数えられて消える。"""
+    with trace.recording() as rec:
+        with pytest.raises(TypeError):
+            rec.snapshot(np.int64(7), {'value': 1})
+    assert rec.write_failures == 0
+
+
+def test_a_snapshot_is_not_published_when_one_of_its_arrays_disappears_while_another_is_written(recordings, monkeypatch):
+    """落ちたら、新しい配列を書いている間に既存の配列が消えたとき、参照の切れた JSON を成功扱いで残している。"""
+    old, new = np.arange(4.), np.arange(6.)
+    real = trace._atomic
+
+    def remove_arrays_while_writing(path, write):
+        if path.suffix == '.npz':
+            for existing in path.parent.glob('*.npz'):
+                existing.unlink()
+        return real(path, write)
+
+    with trace.recording() as rec:
+        rec.snapshot('first', dict(a=old))
+        rec.flush()
+        monkeypatch.setattr(trace, '_atomic', remove_arrays_while_writing)
+        name = rec.snapshot('second', dict(a=old, b=new))
+        rec.flush()
+        monkeypatch.setattr(trace, '_atomic', real)
+        rec.snapshot('third', dict(a=old, b=new))
+    assert not (rec.path/name).exists()
+    assert rec.write_failures == 1
+    third = snapshot(rec, 'third')
+    assert np.array_equal(third['a'], old) and np.array_equal(third['b'], new)

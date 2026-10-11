@@ -464,8 +464,10 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
             raise RuntimeError('安全率が非有限')
         if fields is not None:
             # 同じ変位から取る u_eᵀ k₀ u_e(単位剛性。空セルは節点を共有しても 0 にする)。
-            _, element_energy = model.compliance(density, stress.PENAL, displacement)
-            fields['element_energy'] = np.where(material, element_energy, 0.0)
+            energy = np.zeros(material.shape)
+            cells = np.flatnonzero(material)
+            energy.ravel()[cells] = model.element_energy(displacement, cells)
+            fields['element_energy'] = energy
             if 'cell_face_max' in fields:
                 faces = stress.exposed_face_von_mises(model, displacement, material, scale, all_faces=True)
                 fields['cell_face_max'] = np.nan_to_num(faces, nan=0.0).max(axis=-1)
