@@ -132,26 +132,15 @@ def element_stiffness(E: float = 1.0, nu: float = POISSON_RATIO) -> np.ndarray:
 
 
 def _build_edof(nelx: int, nely: int, nelz: int) -> np.ndarray:
-    """要素DOF写像 (nele, 24) を返す。"""
+    """要素DOF写像 (nele, 24) を返す。要素 (x,y,z) の 8 頂点を (a,b,c) ∈ {0,1}³ の辞書順に並べ、各頂点の自由度 3n, 3n+1, 3n+2。"""
     nz1 = nelz + 1
     ny1 = nely + 1
-    ex, ey, ez = np.meshgrid(
-        np.arange(nelx), np.arange(nely), np.arange(nelz), indexing="ij"
-    )
-    ex = ex.ravel()
-    ey = ey.ravel()
-    ez = ez.ravel()
-    ed = np.empty((ex.size, 24), dtype=np.int32)
-    l = 0
-    for a in (0, 1):
-        for b in (0, 1):
-            for c in (0, 1):
-                n = (ex + a) * ny1 * nz1 + (ey + b) * nz1 + (ez + c)
-                ed[:, 3 * l + 0] = 3 * n
-                ed[:, 3 * l + 1] = 3 * n + 1
-                ed[:, 3 * l + 2] = 3 * n + 2
-                l += 1
-    return ed
+    origin = (np.arange(nelx, dtype=np.int32)[:, None, None] * (ny1 * nz1)
+              + np.arange(nely, dtype=np.int32)[None, :, None] * nz1
+              + np.arange(nelz, dtype=np.int32)[None, None, :]).ravel()
+    corners = np.array([a * ny1 * nz1 + b * nz1 + c for a in (0, 1) for b in (0, 1) for c in (0, 1)], dtype=np.int32)
+    xyz = np.arange(3, dtype=np.int32)
+    return (3 * (origin[:, None, None] + corners[None, :, None]) + xyz[None, None, :]).reshape(-1, 24)
 
 
 def _build_load(nelx: int, nely: int, nelz: int, ndof: int) -> np.ndarray:
@@ -558,6 +547,12 @@ class Model:
             "面アンカーから作った拘束なら、その面の節点が少なすぎないか"
             "(`AnchorTable.empty_faces()`)、1点だけを拘束していないかを確認すること"
         )
+
+    def element_energy(self, u: np.ndarray, cells: np.ndarray) -> np.ndarray:
+        """要素 `cells`(平坦添字)の u_eᵀ k₀ u_e。`compliance` の `ce` の同じ要素とビット一致する(einsum は行ごとに独立。
+        `tests/test_fem_dofs.py`)ので、材料の要素だけが要るときは箱の全要素を計算しない。"""
+        ue = u[self.edof[cells]]
+        return np.einsum("ij,jk,ik->i", ue, self.ke, ue)
 
     def compliance(
         self, rho: np.ndarray, penal: float, u: np.ndarray

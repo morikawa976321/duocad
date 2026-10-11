@@ -110,8 +110,9 @@ def test_save_failure_does_not_stop_the_run_and_is_counted(recordings,monkeypatc
     with trace.recording() as rec:
         def fail(*args): raise OSError('disk full')
         monkeypatch.setattr(trace,'_atomic',fail)
-        assert rec.snapshot('important',np.ones(3)) is None
+        name = rec.snapshot('important',np.ones(3))
     assert trace.current() is None
+    assert not (rec.path/name).exists()
     assert rec.write_failures >= 1
     assert rec.manifest['write_failures'] == rec.write_failures
 
@@ -127,6 +128,7 @@ def test_the_array_directory_is_recreated_when_it_disappears_mid_run(recordings)
     """落ちたら、実行中に arrays/ が消えたあと記録が回復せず、その実行の残り全部が落ちる。"""
     with trace.recording() as rec:
         rec.snapshot('first',dict(a=np.ones(3)))
+        rec.flush()
         shutil.rmtree(rec.path/'arrays')
         rec.snapshot('second',dict(a=np.arange(5.)))
     assert np.array_equal(snapshot(rec,'second')['a'],np.arange(5.))
@@ -309,3 +311,16 @@ def test_git_provenance_returns_while_another_thread_blocks_on_piped_stdin():
         child.stdin.close()
         child.stdout.close()
         child.wait()
+
+
+def test_a_snapshot_keeps_the_values_it_was_given_even_if_the_caller_changes_them_afterwards(recordings):
+    """落ちたら、書き出しスレッドが書く前に呼び出し側が配列を書き換えると、記録が書き換え後の値になる。"""
+    work = np.zeros(1000)
+    with trace.recording() as rec:
+        for value in range(3):
+            work[:] = value
+            rec.snapshot(f'step{value}', dict(work=work))
+    for value in range(3):
+        assert np.all(snapshot(rec, f'step{value}')['work'] == value)
+    events = trace.RunArchive(rec.path).snapshots()
+    assert [e['name'] for e in events][-3:] == ['step0', 'step1', 'step2']

@@ -10,6 +10,8 @@ document の JSON・入力ボディの STEP・final.stl のすべてが best eff
 """
 from __future__ import annotations
 
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import fields, is_dataclass
@@ -25,6 +27,7 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from uuid import uuid4
@@ -39,6 +42,9 @@ DEFAULT_ROOT = ROOT / 'output' / 'optimization_runs'
 #: 記録の書き込み失敗を stderr へ出す上限。同じ障害は何百回も続くので、全部出すと本当のエラーが埋もれる。
 #: 回数そのものは manifest の `write_failures` が持つ。
 _FAILURE_REPORT_LIMIT = 3
+#: 書き出しスレッドに積んでおける仕事(スナップショット・イベント)の数。プロセスごと落ちると、ここまでの数の記録が残らない
+#: (例外で抜けたときは `finish` が書き終えるのを待つ)。
+_PENDING_LIMIT = 4
 _current = ContextVar('optimization_trace', default=None)
 
 
@@ -83,6 +89,13 @@ class Recorder:
         self.sequence = 0
         self.write_failures = 0
         self.stack = []
+        # 書き出しは1本のスレッドが積まれた順に行う(配列 → スナップショットの JSON → イベントの行)。だから「書き終えた配列を
+        # 参照する JSON だけを公開する」は保たれる。圧縮(zlib)は GIL を放すので、その間も計算は進む(1 評価 0.6 秒。
+        # docs/TOPOPT_SPEED.md)。`manifest`・失敗の数・積んだ配列の鍵は両方のスレッドが触るので `_lock` の中で触る。
+        self._lock = threading.RLock()
+        self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix='trace-writer')
+        self._pending = deque()
+        self._queued_arrays = set()
         self.manifest = dict(schema_version=1, run_id=self.path.name, status='running',
                              process_id=os.getpid(),
                              started_utc=datetime.now(timezone.utc).isoformat(),
@@ -96,32 +109,58 @@ class Recorder:
             self._failed('run folder', error)
         self._manifest()
 
+    @staticmethod
+    def _dumps(value):
+        return json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False).encode('utf-8')
+
     def _json(self, path, value):
-        data = json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False).encode('utf-8')
+        data = self._dumps(value)
         _atomic(path, lambda stream: stream.write(data))
+
+    def _submit(self, job):
+        while len(self._pending) >= _PENDING_LIMIT:
+            self._pending.popleft().result()
+        self._pending.append(self._writer.submit(job))
+
+    def flush(self):
+        """積んだ書き出しを全部書き終えるまで待つ(同じプロセスで実行中の記録を読むとき・終えるとき)。"""
+        while self._pending:
+            self._pending.popleft().result()
+
+    def close(self):
+        self.flush()
+        self._writer.shutdown(wait=True)
 
     def _failed(self, where, error):
         """記録の書き込みが落ちたことを数え、最初の数回だけ stderr へ出す。
 
         **ここから記録を書きに行かない**(`_manifest` を呼ぶと、落ちて再入する)。
         """
-        self.write_failures += 1
-        self.manifest['write_failures'] = self.write_failures
-        if self.write_failures <= _FAILURE_REPORT_LIMIT:
+        with self._lock:
+            self.write_failures += 1
+            self.manifest['write_failures'] = self.write_failures
+            report = self.write_failures <= _FAILURE_REPORT_LIMIT
+        if report:
             print(f'[trace] 記録の書き込みに失敗(計算は続ける): {where}: {type(error).__name__}: {error}',
                   file=sys.stderr, flush=True)
 
     def _manifest(self):
-        self.manifest.update(elapsed_seconds=time.perf_counter()-self.started,
-                             write_seconds=self.write_seconds, records=self.sequence)
-        try:
-            self._json(self.path/'manifest.json', self.manifest)
-        except OSError as error:
-            self._failed('manifest', error)
+        with self._lock:
+            self.manifest.update(elapsed_seconds=time.perf_counter()-self.started,
+                                 write_seconds=self.write_seconds, records=self.sequence)
+            data = self._dumps(self.manifest)
+            try:
+                _atomic(self.path/'manifest.json', lambda stream: stream.write(data))
+            except OSError as error:
+                self._failed('manifest', error)
 
     def event(self, kind, **values):
         row = dict(kind=kind, elapsed_seconds=time.perf_counter()-self.started,
                    phase=self.stack[-1] if self.stack else None, **values)
+        self._submit(lambda: self._write_event(row))
+
+    def _write_event(self, row):
+        kind = row['kind']
         try:
             self.path.mkdir(parents=True, exist_ok=True)
             with (self.path/'events.jsonl').open('a', encoding='utf-8') as stream:
@@ -130,24 +169,29 @@ class Recorder:
         except OSError as error:
             self._failed(f'event:{kind}', error)
             return
-        self.manifest['last_event'] = row
-        self._manifest()
+        with self._lock:
+            self.manifest['last_event'] = row
+            self._manifest()
 
-    def _encode(self, value, seen):
+    def _encode(self, value, seen, arrays):
+        """`value` を JSON にできる形へ直し、まだ書いていない配列を `arrays` へ `(鍵, パス, 写し)` で足す。
+        写しを取る(書き出しスレッドが書く前に、呼び出し側が同じ配列を書き換えても記録が変わらないように)。"""
         if isinstance(value, np.ndarray):
             if value.dtype.hasobject:
                 raise TypeError('object配列は診断記録に保存できない')
-            array = np.asarray(value, order='C')
+            array = np.array(value, order='C', copy=True)
             digest = hashlib.sha256(json.dumps([array.dtype.str, array.shape]).encode())
             digest.update(memoryview(array.ravel()).cast('B'))
             key = digest.hexdigest()
             relative = f'arrays/{key}.npz'
-            path = self.path/relative
-            if not path.exists():
-                _atomic(path, lambda stream: np.savez_compressed(stream, data=array))
+            with self._lock:
+                fresh = key not in self._queued_arrays
+                self._queued_arrays.add(key)
+            if fresh:
+                arrays.append((key, self.path/relative, array))
             return {'$array':relative, 'shape':list(value.shape), 'dtype':value.dtype.str}
         if isinstance(value, np.generic):
-            return self._encode(value.item(), seen)
+            return self._encode(value.item(), seen, arrays)
         if isinstance(value, float) and not math.isfinite(value):
             return {'$float':str(value)}
         if value is None or isinstance(value, (str, bool, int, float)):
@@ -155,34 +199,51 @@ class Recorder:
         if isinstance(value, Path):
             return str(value)
         if isinstance(value, dict):
-            return {str(k):self._encode(v, seen) for k,v in value.items()}
+            return {str(k):self._encode(v, seen, arrays) for k,v in value.items()}
         if isinstance(value, (tuple, list)):
-            return [self._encode(v, seen) for v in value]
+            return [self._encode(v, seen, arrays) for v in value]
         if is_dataclass(value):
-            return {'$type':type(value).__name__, **{f.name:self._encode(getattr(value,f.name),seen)
+            return {'$type':type(value).__name__, **{f.name:self._encode(getattr(value,f.name),seen,arrays)
                     for f in fields(value) if f.name != 'cache'}}
         if type(value).__name__ == 'Model' and hasattr(value, 'ndof'):
             names = ('nelx','nely','nelz','ndof','E','nu','emin','fixed','free','f','active','ke')
-            return {'$type':'FEMModel', **{n:self._encode(getattr(value,n),seen) for n in names}}
+            return {'$type':'FEMModel', **{n:self._encode(getattr(value,n),seen,arrays) for n in names}}
         if isinstance(value, BaseException):
             return {'$error':type(value).__name__, 'message':str(value),
-                    'details':self._encode(vars(value),seen)}
+                    'details':self._encode(vars(value),seen,arrays)}
         return {'$omitted_type':f'{type(value).__module__}.{type(value).__name__}'}
 
     def snapshot(self, name, value):
+        """値を JSON と配列へ直すところまでをこのスレッドで行い(`TypeError` はここで伝える)、書き出しは積む。
+        書けなかったら(`OSError` だけ)数えて、その JSON とイベントは残さない。戻り値は書く予定のファイル名。"""
         started = time.perf_counter()
         self.sequence += 1
         filename = f'{self.sequence:06d}-{name}.json'
-        try:
-            self._json(self.path/filename, self._encode(value, {}))
-        except OSError as error:
-            # **`OSError` だけを飲む**(`_encode` の `TypeError` は伝える。上のモジュール docstring)。
+        arrays = []
+        data = self._dumps(self._encode(value, {}, arrays))
+        row = dict(kind='snapshot', elapsed_seconds=time.perf_counter()-self.started,
+                   phase=self.stack[-1] if self.stack else None, name=name, file=filename)
+        with self._lock:
             self.write_seconds += time.perf_counter()-started
-            self._failed(f'snapshot:{name}', error)
-            return None
-        self.write_seconds += time.perf_counter()-started
-        self.event('snapshot', name=name, file=filename)
+        self._submit(lambda: self._write_snapshot(name, filename, data, arrays, row))
         return filename
+
+    def _write_snapshot(self, name, filename, data, arrays, row):
+        started = time.perf_counter()
+        try:
+            for _key, path, array in arrays:
+                if not path.exists():
+                    _atomic(path, lambda stream, array=array: np.savez_compressed(stream, data=array))
+            _atomic(self.path/filename, lambda stream: stream.write(data))
+        except OSError as error:
+            with self._lock:
+                self._queued_arrays.difference_update(key for key, _path, _array in arrays)
+                self.write_seconds += time.perf_counter()-started
+            self._failed(f'snapshot:{name}', error)
+            return
+        with self._lock:
+            self.write_seconds += time.perf_counter()-started
+        self._write_event(row)
 
     def save(self, name, write, *, digest):
         """記録用のファイルを1つ書き、書いた後に読み返した内容のハッシュを manifest の `digest` へ入れる。
@@ -191,7 +252,9 @@ class Recorder:
         """
         try:
             _atomic(self.path/name, write)
-            self.manifest[digest] = hashlib.sha256((self.path/name).read_bytes()).hexdigest()
+            hashed = hashlib.sha256((self.path/name).read_bytes()).hexdigest()
+            with self._lock:
+                self.manifest[digest] = hashed
         except OSError as error:
             self._failed(f'save:{name}', error)
             return False
@@ -244,7 +307,9 @@ class Recorder:
                       bodies=[dict(id=b.id,name=b.name,kind=b.kind) for b in doc.bodies]))
 
     def finish(self, status, **values):
-        self.manifest.update(status=status, finished_utc=datetime.now(timezone.utc).isoformat(), **values)
+        self.flush()
+        with self._lock:
+            self.manifest.update(status=status, finished_utc=datetime.now(timezone.utc).isoformat(), **values)
         self._manifest()
 
 
@@ -272,6 +337,7 @@ def recording(doc=None, options=None, root=None):
             recorder.finish('complete')
     finally:
         _current.reset(token)
+        recorder.close()
 
 
 def _write_input_cad(recorder, doc):
