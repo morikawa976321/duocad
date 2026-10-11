@@ -114,6 +114,30 @@ def refine_factor(element_count: int, material_count: int, spacing_mm: float, av
     return factor
 
 
+def _occupy(soup, grid: voxelize.Grid, lo: np.ndarray, hi: np.ndarray, material_count: int, available_bytes):
+    """分割数を選んで完成メッシュを細かい格子へ占有化する。戻り値 `(factor, fine, material, material_count)`、
+    分割数 1 でも収まらなければ `(None, None, None, material_count)`。
+
+    `material_count` は探索の形のセル数で、探索の格子に載らない保持ボディの薄い部分などは数えていない。占有化した材料で
+    数え直し、収まらなければ分割数を下げてやり直す(占有化そのものは要素数に比例し `MAX_FINE_ELEMENTS` で抑えてある)。
+    """
+    h = float(grid.spacing)
+    elements = int(np.prod(hi - lo))
+    factor = refine_factor(elements, material_count, h, available_bytes)
+    while fits(elements, material_count, factor, available_bytes):
+        fine = voxelize.Grid(origin=tuple(float(o) + h * int(i) for o, i in zip(grid.origin, lo)),
+                             spacing=h / factor, shape=tuple(int(n) * factor for n in hi - lo))
+        material = voxelize.occupancy(soup, fine, allow_empty=True)[0]
+        counted = math.ceil(int(material.sum()) / factor ** 3)
+        if fits(elements, counted, factor, available_bytes):
+            return factor, fine, material, max(material_count, counted)
+        material_count = max(material_count, counted)
+        if factor == 1:
+            break
+        factor = min(factor - 1, refine_factor(elements, material_count, h, available_bytes))
+    return None, None, None, material_count
+
+
 def top_area_value(values: np.ndarray, area_mm2: float, spacing_mm: float) -> float:
     """面中心の値 `values`(1面の面積は spacing²)を大きい順に並べ、面積の合計が `area_mm2` に達する位置の値。
     面が足りなければ最小の値。"""
@@ -168,11 +192,11 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
     lo, hi = _crop(grid, vertices)
     h = float(grid.spacing)
     elements = int(np.prod(hi - lo))
-    material_count = int(np.asarray(mask, dtype=bool)[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]].sum())
     available = _available_memory_bytes()
-    factor = refine_factor(elements, material_count, h, available)
+    factor, fine, material, material_count = _occupy(
+        soup, grid, lo, hi, int(np.asarray(mask, dtype=bool)[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]].sum()), available)
     neck_keep = None if keep_cells is None or not np.asarray(keep_cells).any() else (np.asarray(keep_cells, dtype=bool), grid)
-    if not fits(elements, material_count, factor, available):
+    if factor is None:
         # 分割しなくても上限か空きメモリを超える。巨大な配列を確保して落ちる前に、測らなかったと返す
         neck = neck_persistence.inspect_mesh(
             vertices, faces, spacing=h, required_mm=float(min_width['requested_mm']),
@@ -182,9 +206,6 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
                                                     estimated_bytes=estimated_bytes(elements, material_count, 1),
                                                     available_bytes=available),
                     conditions=dict(status='unknown', reason='grid_too_large'), material_cells=0, neck=_plain(neck))
-    fine = voxelize.Grid(origin=tuple(float(o) + h * int(i) for o, i in zip(grid.origin, lo)),
-                         spacing=h / factor, shape=tuple(int(n) * factor for n in hi - lo))
-    material = voxelize.occupancy(soup, fine, allow_empty=True)[0]
     table = anchor.build_anchors(anchor_soup, fine, allowed_nodes=acceptance.active_nodes(material))
     # 作り直した表が条件面を覆っているかを確かめる(`condition_check` は残った節点へ荷重を配り直すので、
     # 完成形が条件面の一部から離れても合格する)

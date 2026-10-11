@@ -144,6 +144,27 @@ def test_the_refinement_shrinks_with_free_memory_and_with_the_material_it_must_h
                                                              + 200 * final_check.MATERIAL_CELL_BYTES)
 
 
+def test_material_the_search_grid_missed_is_recounted_after_occupancy_and_the_refinement_drops(monkeypatch):
+    """落ちたら、探索の格子に載らない保持ボディの薄い部分などで材料が見積もりより多いのに、数え直さずに空きメモリを超える
+    分割数で FEM へ進む。"""
+    factors = []
+
+    def full_occupancy(soup, fine, allow_empty):
+        factors.append(round(4.0 / fine.spacing))
+        return (np.ones(fine.shape, bool),)
+
+    monkeypatch.setattr(voxelize, "occupancy", full_occupancy)
+    grid = voxelize.Grid((0.0, 0.0, 0.0), 4.0, (10, 10, 2))
+    lo, hi = np.zeros(3, np.int64), np.array([10, 10, 2])
+    # 探索の形は 10 セルだが、占有化すると格子 200 セルが全部材料になる
+    available = 2 * final_check.estimated_bytes(200, 10, 6)
+    factor, fine, material, counted = final_check._occupy(None, grid, lo, hi, 10, available)
+    assert factors[0] == 6 and factor < 6 and counted == 200
+    assert final_check.fits(200, 200, factor, available) and not final_check.fits(200, 200, factor + 1, available)
+    assert material.shape == fine.shape == (10 * factor, 10 * factor, 2 * factor)
+    assert final_check._occupy(None, grid, lo, hi, 10, 2 * final_check.estimated_bytes(200, 10, 1))[0] is None  # 1 でも数え直すと収まらない
+
+
 def test_the_finished_shape_is_judged_by_the_top_area_stress_times_the_coarse_penalty(monkeypatch):
     """落ちたら、合否に1面の最大を使っているか、面積の上位値の位置を取り違えているか、粗く測った値を割り増さずに比べている。"""
     material = np.ones((2, 2, 2), bool)
