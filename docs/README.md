@@ -31,6 +31,7 @@
 | [topopt_idle_validation/00_COMPACT_MODELS.md](topopt_idle_validation/00_COMPACT_MODELS.md) | 不要材料検証の小型題材2つの定義・認定条件 |
 | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) | 形状探索の時間の内訳と速度に関する決定（前計算・warm start・解法の使い分け） |
 | [TOPOPT_GPU.md](TOPOPT_GPU.md) | CG を GPU で解く経路（有効にする手順・CPU に戻る条件・ビット一致の範囲） |
+| [TOPOPT_RANKING.md](TOPOPT_RANKING.md) | 削る順位の改良の検討（一口単位の順位・完成形検査との食い違い・本人へ出した選択肢） |
 | [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) | 最適化の途中記録（毎回自動で作る診断記録の中身） |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
 | [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md) | 穴口の微細隙間とメッシュ欠損の因果調査（境界交差・最小再現・OCCT内部検査）と、案A（境界交差の検出・共有辺再分割）の設計・実装・実測 |
