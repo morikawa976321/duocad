@@ -28,7 +28,7 @@ def main() -> int:
     ap.add_argument("--load", type=float, default=None)
     ap.add_argument("--h", type=float, default=None)
     ap.add_argument("--w", type=float, default=None)
-    ap.add_argument("--legacy", action="store_true", help="探索の代表応力を 2026-10-09 より前の 99.5% 点にする(完成形検査は今のまま)")
+    ap.add_argument("--legacy", action="store_true", help="探索の代表応力を 2026-10-09 より前の 99.5%% 点にする(完成形検査は今のまま)")
     a = ap.parse_args()
     spec = dict(pa.MODELS[a.model])
     for key, val in (("load_n", a.load), ("h", a.h), ("w", a.w)):
@@ -48,7 +48,12 @@ def main() -> int:
     safety = checked.get("safety") or {}
     row = dict(model=a.model, load_n=spec["load_n"], h=spec["h"], w=spec["w"], state=result.get("state"),
                seconds=round(seconds, 1), evaluations=result.get("evaluations"), material_mm3=result.get("material_mm3"),
+               termination=result.get("termination"), design_elements=result.get("design_elements"),
+               target_safety_factor=result.get("target_safety_factor"),
+               search_target_safety_factor=result.get("search_target_safety_factor"),
+               full_material_limit_load=result.get("full_material_limit_load"),
                search_safety_factor=result.get("safety_factor"), final_safety_factor=result.get("final_safety_factor"),
+               top_area_mpa=safety.get("top_area_mpa"), coarse_penalty=safety.get("coarse_penalty"),
                peak_mpa=safety.get("peak_mpa"), peak_position_mm=safety.get("peak_position_mm"),
                refine=safety.get("refine"), fine_spacing_mm=safety.get("spacing_mm"),
                fine_material_cells=safety.get("material_cells"), keep_peak_mpa=safety.get("keep_peak_mpa"),
