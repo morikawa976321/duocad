@@ -47,7 +47,7 @@ def main() -> int:
     ap.add_argument("--no-final-check", action="store_true")
     ap.add_argument("--gpu", action="store_true", help="FEM の CG を GPU で解く(CPU とビット一致。docs/TOPOPT_GPU.md)")
     ap.add_argument("--refine", type=int, default=None,
-                    help="完成形検査の分割数(製品は 3)。hanger の 1/3 は約 20 GB なので空きが足りないときに下げる")
+                    help="完成形検査の分割数(製品は間隔が 0.67 mm 以下になる最小の分割数)。要素数の上限を超えれば下げる")
     ap.add_argument("--tag", default=None)
     a = ap.parse_args()
     spec = dict(pa.MODELS[a.model])
@@ -58,7 +58,11 @@ def main() -> int:
         from duocad.topopt import fem
         fem.FEM_DEVICE = "gpu"
     if a.refine is not None:
-        final_check.REFINE = a.refine
+        def refine(elements, material, spacing, available, k=a.refine):
+            while k > 1 and not final_check.fits(elements, material, k, available):
+                k -= 1
+            return k
+        final_check.refine_factor = refine
     doc = refine_shape.open_session(spec["model"]).document
     refine_shape._set_load_doc(doc, spec["load_n"])
     options = optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"])

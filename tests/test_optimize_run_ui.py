@@ -12,6 +12,8 @@ from duocad.server import Server, Session
 from duocad.verbs.add_mesh import add_mesh_body
 from session_support import FakeConnection, browser, four_conditions
 
+pytestmark = pytest.mark.usefixtures("finished_shape_check_at_a_third_of_the_test_element")
+
 
 def test_steps_start_at_the_coarse_end(session: Session) -> None:
     """**添字0が上限側**(＝既定＝最も安い設定)。ここが逆を向くと、画面のスライダーは

@@ -30,6 +30,8 @@ from session_support import face_with_normal, four_conditions, pad, select as _s
 
 from duocad.paths import REPO_ROOT
 
+pytestmark = pytest.mark.usefixtures("finished_shape_check_at_a_third_of_the_test_element")
+
 
 #: 固定値の上限そのものと、最小幅の上限の割合(テストの多くは速さのため 8mm で回すので、下の fixture が緩める)。
 REAL_MAX_ELEMENT_SIZE_MM = optimize_run.MAX_ELEMENT_SIZE_MM
@@ -1338,6 +1340,45 @@ def test_a_full_material_shortfall_names_the_search_target_and_the_factor_not_a_
     assert "安全率 3.1 が目標 4.8 に届かない" in optimize_run._search_failure_warning(failed)
 
 
+def test_a_full_material_safety_shortfall_names_the_load_the_search_could_start_at() -> None:
+    """落ちたら、全材料が安全率だけで落ちたときに、どこまでの荷重なら探索を始められるかが出ない(数字が無いと直し方が分からない)。
+    他の検査も落ちた全材料・計算失敗・荷重 0 では、荷重を下げても通らないので出さない。"""
+    failed = _full_material_failure("full_material_infeasible", "fail", dict(
+        conditions=dict(status="pass"), safety=dict(status="fail", safety_factor=3.1, target_safety_factor=4.8)))
+    limit = optimize_run._full_material_limit_load(failed, 1000.0)
+    assert limit["factor"] == pytest.approx(3.1 / 4.8) and limit["limit_load_total_n"] == pytest.approx(1000.0 * 3.1 / 4.8)
+    warning = optimize_run._search_failure_warning(failed, None, 2.4, limit)
+    assert "今の 0.65 倍(荷重の大きさの合計 1000 N → 646 N)まで" in warning
+
+    geometry = _full_material_failure("full_material_infeasible", "fail", dict(
+        watertight=dict(status="fail", irregular_vertices=1, sample_vertex_indices=[], void_components=1),
+        safety=dict(status="fail", safety_factor=3.1, target_safety_factor=4.8)))
+    solver = _full_material_failure("evaluation_error", "unknown", dict(
+        safety=dict(status="unknown", reason="evaluation_error", error="RuntimeError: singular")))
+    assert optimize_run._full_material_limit_load(geometry, 1000.0) is None
+    assert optimize_run._full_material_limit_load(solver, 1000.0) is None
+    assert optimize_run._full_material_limit_load(failed, 0.0) is None
+
+
+def test_the_full_material_limit_load_rides_on_the_result_and_is_none_when_the_search_starts(session: Session, monkeypatch) -> None:
+    # 落ちたら、全材料が安全率で落ちた実行の応答に限界荷重が載らないか、探索が始まった実行に古い値が残る。
+    from duocad.topopt import binary_search
+
+    four_conditions(session)
+    total = sum(float(item.get("magnitude") or 0.0) for item in session.document.optimize.loads)
+    failed = _full_material_failure("full_material_infeasible", "fail", dict(
+        conditions=dict(status="pass"), safety=dict(status="fail", safety_factor=2.4, target_safety_factor=4.8)))
+    monkeypatch.setattr(binary_search, "find_best_feasible", lambda *a, **k: failed)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "no_feasible_found" and result["body_id"] is None
+    assert result["full_material_limit_load"]["limit_load_total_n"] == pytest.approx(total * 0.5)
+    assert f"{total * 0.5:.3g} N" in result["warning"]
+
+    _replayed_search(monkeypatch)
+    done = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert done["state"] == "done" and done["full_material_limit_load"] is None
+
+
 def _replayed_search(monkeypatch, safety_factor: float = 9.9) -> None:
     # 探索を差し替え、最小幅を満たして保持セルを残した確定マスクを返す(評価3回・収束)。
     import numpy as np
@@ -1487,8 +1528,12 @@ def test_the_finished_shape_is_solved_again_and_its_safety_factor_and_neck_diagn
     checked = result["final_check"]
     assert result["final_safety_factor"] == checked["safety_factor"] and checked["safety_factor"] > 0
     safety = checked["safety"]
-    assert safety["rule"] == "member_surface_peak" and safety["refine"] == 3 and safety["spacing_mm"] == pytest.approx(result["grid"]["spacing"] / 3)
-    assert checked["safety_factor"] == pytest.approx(safety["allowable_mpa"] / safety["peak_mpa"])
+    from duocad.topopt import final_check
+
+    assert safety["rule"] == "member_surface_top_area" and safety["spacing_mm"] <= final_check.MEASURE_SPACING_MM
+    assert safety["spacing_mm"] == pytest.approx(result["grid"]["spacing"] / safety["refine"])
+    assert safety["coarse_penalty"] == 1.0 and safety["top_area_mpa"] <= safety["peak_mpa"]
+    assert checked["safety_factor"] == pytest.approx(safety["allowable_mpa"] / safety["judged_mpa"])
     assert checked["neck"]["status"] in ("suspect", "undetermined", "not_observed")
     json.dumps(result)  # 結果メッセージにそのまま載る
 
@@ -1530,26 +1575,10 @@ def test_a_finished_shape_on_a_grid_too_large_to_refine_is_not_measured(session:
     assert "完成形の安全率を測れなかった" in result["warning"]
 
 
-def test_a_finished_shape_below_the_real_target_is_added_with_a_warning_until_reinforcement_exists(session: Session, monkeypatch) -> None:
-    # 落ちたら、肉盛りが入るまでの間(2026-10-09 本人指示)に、完成形が目標を割った結果を足さないか、警告なしで足している。
-    from duocad.topopt import final_check
-
-    four_conditions(session)
-    _replayed_search(monkeypatch)
-    monkeypatch.setattr(final_check, "inspect", lambda *a, **k: dict(
-        safety_factor=1.2, safety=dict(status="fail", safety_factor=1.2, peak_mpa=33.3, peak_position_mm=[1, 2, 3],
-                                       spacing_mm=1.0), conditions=dict(status="pass"),
-        material_cells=1, neck=dict(status="not_observed", events=[], required_mm=16.0)))
-    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
-    assert result["state"] == "done" and result["body_id"] is not None
-    assert result["final_safety_factor"] == 1.2 and "1.2" in result["warning"] and "目標" in result["warning"]
-
-
 def test_a_finished_shape_below_the_real_target_is_a_failure_without_touching_the_document(session: Session, monkeypatch) -> None:
-    # 落ちたら、`FINAL_UNSAFE_BLOCKS` のとき完成形が本来の目標安全率を割っても結果を足している(2026-10-07 本人決定)。
+    # 落ちたら、完成形が本来の目標安全率を割っても結果を足している(#129)。
     from duocad.topopt import final_check
 
-    monkeypatch.setattr(optimize_run, "FINAL_UNSAFE_BLOCKS", True)
     four_conditions(session)
     before = [body.id for body in session.document.bodies]
     _replayed_search(monkeypatch)

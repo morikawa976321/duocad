@@ -617,7 +617,7 @@ export interface OptimizeResultPayload {
     | 'resolution_insufficient'
     /** 探索後に平滑化で潰れる 1×1 の空隙を埋めた形が6条件に不合格(`optimize_run` の `thin_voids`)。 */
     | 'fill_infeasible'
-    /** 完成形の表面の最大応力で見た安全率が本来の目標を割る(`optimize_run.FINAL_UNSAFE_BLOCKS` のときだけ。既定は警告付きで足す)。 */
+    /** 完成形の表面の応力(面積の上位値)で見た安全率が本来の目標を割る(結果は足さない。#129)。 */
     | 'final_unsafe'
   warning: string | null
   body_id: string | null
@@ -629,10 +629,18 @@ export interface OptimizeResultPayload {
   search_safety_factor?: number | null
   /** 探索後に埋めた 1×1 の空隙のセル数。 */
   filled_cells?: number | null
-  /** 完成形(平滑化・保持/除外の後)を細かい格子で解き直した、部材域の表面の最大応力での安全率。測れなかったときと、完成形まで進まなかったときは `null`。 */
+  /** 完成形(平滑化・保持/除外の後)を細かい格子で解き直した、部材域の表面の応力(面積の上位値)での安全率。測れなかったときと、完成形まで進まなかったときは `null`。 */
   final_safety_factor?: number | null
   /** 完成形の検査(`topopt.final_check.inspect`)。完成形まで進まなかったときは `null`。 */
   final_check?: FinalCheck | null
+  /** 全材料が安全率だけで落ちたとき、探索を始められる荷重(荷重の大きさの合計 × `factor`)。それ以外は `null`。文面は `warning` にもある。 */
+  full_material_limit_load?: {
+    factor: number
+    load_total_n: number
+    limit_load_total_n: number
+    safety_factor: number
+    search_target_safety_factor: number
+  } | null
   /** 利用者が指定した実際の目標。 */
   target_safety_factor: number
   /** 探索に渡した目標(= `target_safety_factor` × `search_target_factor`)。`safety_factor` はこれに対する探索の格子での値。 */

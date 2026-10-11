@@ -467,8 +467,46 @@ button.row-button:not(:disabled):hover {
   border-color: transparent;
 }
 
+/* 選ぶ欄は押して開くものなので `button` と同じ出っぱりにし、右端に下向きの山を描く。
+   `appearance: none` で素の白い箱を消す。山は SVG の data URI だと CSS 変数が効かないのでグラデーション2枚で描く
+   (`background` の一括指定で上書きすると山が消えるので、hover・disabled は `background-color` だけ変える)。
+   `color-scheme: dark` は開いた一覧(OS が描く部分)を暗くするため。 */
+select {
+  font: inherit;
+  color: var(--text);
+  padding: 4px 24px 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 0;
+  appearance: none;
+  color-scheme: dark;
+  background-color: var(--control-bg);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--dim) 50%),
+    linear-gradient(135deg, var(--dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 13px) 50%,
+    calc(100% - 8px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+select:not(:disabled) {
+  cursor: pointer;
+}
+
+select:not(:disabled):hover {
+  background-color: var(--control-bg-hover);
+  border-color: var(--accent);
+}
+
+option {
+  background: var(--panel);
+  color: var(--text);
+}
+
 input:focus,
-button:focus {
+button:focus,
+select:focus {
   outline: 1px solid var(--accent);
 }
 
@@ -477,6 +515,11 @@ button:focus {
 button:disabled {
   color: var(--dim-2);
   background: color-mix(in oklab, var(--control-bg) 45%, transparent);
+}
+
+select:disabled {
+  color: var(--dim-2);
+  background-color: color-mix(in oklab, var(--control-bg) 45%, transparent);
 }
 
 /* 測定の読み札(issue #10)。結果があるときだけ `.stage` の上端中央に浮く。
