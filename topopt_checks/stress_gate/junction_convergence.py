@@ -97,7 +97,7 @@ def main() -> int:
         for k in a.refine:
             started = time.perf_counter()
             strength = lambda *s, _k=k: banded_strength(*s, factor=_k)  # noqa: E731
-            with patch.object(final_check, "REFINE", k), patch.object(final_check, "MAX_FINE_ELEMENTS", 10 ** 9), \
+            with patch.object(final_check, "refine_factor", lambda *_, _k=k: _k), patch.object(final_check, "fits", lambda *_: True), \
                     patch.object(final_check, "_strength", strength):
                 checked = real_inspect(*args, **kwargs)
             row = dict(checked["safety"] or {}, seconds=round(time.perf_counter() - started, 1))
