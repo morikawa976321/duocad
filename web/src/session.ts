@@ -624,6 +624,14 @@ export interface OptimizeResultPayload {
   final_safety_factor?: number | null
   /** 完成形の検査(`topopt.final_check.inspect`)。完成形まで進まなかったときは `null`。 */
   final_check?: FinalCheck | null
+  /** 全材料が安全率だけで落ちたとき、探索を始められる荷重(荷重の大きさの合計 × `factor`)。それ以外は `null`。文面は `warning` にもある。 */
+  full_material_limit_load?: {
+    factor: number
+    load_total_n: number
+    limit_load_total_n: number
+    safety_factor: number
+    search_target_safety_factor: number
+  } | null
   /** 利用者が指定した実際の目標。 */
   target_safety_factor: number
   /** 探索に渡した目標(= `target_safety_factor` × `search_target_factor`)。`safety_factor` はこれに対する探索の格子での値。 */

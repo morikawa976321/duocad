@@ -889,6 +889,8 @@ def _run(
          "triangle_count": int|None, "vertex_count": int|None,
          "final_safety_factor": float|None,      # 完成形(平滑化・集合演算の後)を細かい格子で解いた、部材域の表面の最大応力での安全率
          "final_check": topopt.final_check.inspect の戻り | None,   # 強度と、つなぎ目の幅の診断(3値。適合は出さない)
+         "full_material_limit_load": {"factor","load_total_n","limit_load_total_n","safety_factor",
+                                      "search_target_safety_factor"} | None,   # 全材料が安全率だけで落ちたとき、探索を始められる荷重
          "seconds": float}
 
     `target_safety_factor` は利用者の実際の目標、`search_target_safety_factor` は探索(と6条件の `safety`)に渡した目標
@@ -977,6 +979,8 @@ def _run(
         "search_target_factor": factor,
         # 条件面が空で早期returnしたときは測れない(節点が0個)ので None のまま。
         "anchor_check": None,
+        # 全材料が安全率だけで落ちたときだけ値を持つ(`_full_material_limit_load`)。
+        "full_material_limit_load": None,
     }
 
     # 条件面が本番の解像度で空になっていないか(`design_space.connect_conditions` は空のとき判定を降りるだけで
@@ -1083,17 +1087,19 @@ def _run(
 
     if search_result.status != 'feasible':
         # `SearchResult.status` が 'feasible' 以外ならそのまま渡す(段階4の契約)。
-        return _not_done(
+        limit = _full_material_limit_load(
+            search_result, sum(float(item.get("magnitude") or 0.0) for item in doc.optimize.loads))
+        return dict(_not_done(
             common,
             started,
             keep_room_warning,
             state=search_result.status,
-            warning=_search_failure_warning(search_result, min_width, factor),
+            warning=_search_failure_warning(search_result, min_width, factor, limit),
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
             evaluations=int(search_result.evaluations),
             termination=search_result.termination,
-        )
+        ), full_material_limit_load=limit)
 
     best = search_result.best_feasible
     from .topopt import acceptance, thin_voids
@@ -1520,10 +1526,11 @@ def _keep_without_room_warning(min_width: dict, keep_room: dict) -> str:
     return f"{head}。{cause}。最小幅を下げるか、除外ソリッドとの間隔を広げること"
 
 
-def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None, factor: float = 1.0) -> str:
+def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None, factor: float = 1.0,
+                            limit: Optional[dict] = None) -> str:
     """`SearchResult.status` が `'feasible'` 以外のときの一言。最小幅で設計空間を絞ったなら原因の候補を末尾に添える。
     `factor` は探索の目標に掛けた係数で、安全率の不足を言うときに実際の目標との関係を添える。"""
-    message = _search_failure_message(search_result, factor)
+    message = _search_failure_message(search_result, factor, limit)
     note = _min_width_failure_note(search_result, min_width)
     return f"{message}。{note}" if note else message
 
@@ -1543,7 +1550,7 @@ def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> st
             "空間に対して行った。最小幅を下げると通ることがある")
 
 
-def _search_failure_message(search_result: Any, factor: float = 1.0) -> str:
+def _search_failure_message(search_result: Any, factor: float = 1.0, limit: Optional[dict] = None) -> str:
     """`SearchResult.status` が `'feasible'` 以外のときの一言(段階4の契約によりその値自体はそのままUI/ログへ渡す)。
     評価予算を増やす案内は付けない: `feasible` 以外はどれも全材料かその手前で決まり、予算では直らない。
     """
@@ -1580,10 +1587,10 @@ def _search_failure_message(search_result: Any, factor: float = 1.0) -> str:
             "材料を減らす探索では直らない(候補は設計空間の部分集合)ので、"
             "除外ソリッド・条件面の位置と対応付けを見直すこと"
         )
-    return _full_material_failure_message(search_result, factor)
+    return _full_material_failure_message(search_result, factor, limit)
 
 
-def _full_material_failure_message(search_result: Any, factor: float = 1.0) -> str:
+def _full_material_failure_message(search_result: Any, factor: float = 1.0, limit: Optional[dict] = None) -> str:
     """全材料が合格しなかった(`no_feasible_found`)ときの一言。落ちた検査と数値を `diagnostics['full_material']['attempts']`
     から出す(形として落ちた成分を優先し、無ければ計算失敗の成分)。`factor` が 1 でなければ、検査の目標が探索時の目標であることを言う。"""
     full = (search_result.diagnostics or {}).get('full_material') or {}
@@ -1633,8 +1640,35 @@ def _full_material_failure_message(search_result: Any, factor: float = 1.0) -> s
     else:
         head = "設計空間の全材料でも6条件に合格しない"
     detail = f": {'、'.join(reasons)}" if reasons else ""
-    return (f"{head}{detail}。形状最適化は全材料から材料を減らすだけなので、ここから合格形状は探さない。"
-            "条件(荷重・目標安全率・保持・除外・条件面・解像度)を見直すこと")
+    message = f"{head}{detail}。形状最適化は全材料から材料を減らすだけなので、ここから合格形状は探さない"
+    if limit is not None:
+        return (f"{message}。この形で探索を始められる荷重は、今の {limit['factor']:.2g} 倍"
+                f"(荷重の大きさの合計 {limit['load_total_n']:.4g} N → {limit['limit_load_total_n']:.3g} N)まで"
+                "(応力は荷重に比例する)。荷重・目標安全率を下げるか、高応力の所の形(保持・設計空間)を見直すこと")
+    return f"{message}。条件(荷重・目標安全率・保持・除外・条件面・解像度)を見直すこと"
+
+
+def _full_material_limit_load(search_result: Any, load_total_n: float) -> Optional[dict]:
+    """全材料が安全率だけで落ちたとき、全材料が探索の目標を満たす荷重の上限。他の検査も落ちていれば None。
+
+    線形弾性なので応力は荷重に比例し、安全率は荷重に反比例する: 上限 = 今の荷重 × 全材料の安全率 ÷ 探索の目標。
+    探索は全材料から始まり途中の形も全部合格でなければならないので、これを超える荷重ではこの探索は合格形を作れない。
+    """
+    if search_result.termination != 'full_material_infeasible' or not load_total_n > 0.0:
+        return None
+    attempts = ((search_result.diagnostics or {}).get('full_material') or {}).get('attempts') or []
+    attempt = next((row for row in attempts if row.get('status') == 'fail'), None)
+    checks = (attempt or {}).get('checks') or {}
+    safety = checks.get('safety') or {}
+    if safety.get('status') != 'fail' or any(check.get('status') != 'pass' for name, check in checks.items()
+                                             if name != 'safety'):
+        return None
+    sf, target = safety.get('safety_factor'), safety.get('target_safety_factor')
+    if sf is None or not target or not math.isfinite(float(sf)):
+        return None
+    factor = float(sf) / float(target)
+    return dict(factor=factor, load_total_n=float(load_total_n), limit_load_total_n=float(load_total_n) * factor,
+                safety_factor=float(sf), search_target_safety_factor=float(target))
 
 
 def _mesh_to_world(verts, grid) -> List[float]:

@@ -1338,6 +1338,45 @@ def test_a_full_material_shortfall_names_the_search_target_and_the_factor_not_a_
     assert "安全率 3.1 が目標 4.8 に届かない" in optimize_run._search_failure_warning(failed)
 
 
+def test_a_full_material_safety_shortfall_names_the_load_the_search_could_start_at() -> None:
+    """落ちたら、全材料が安全率だけで落ちたときに、どこまでの荷重なら探索を始められるかが出ない(数字が無いと直し方が分からない)。
+    他の検査も落ちた全材料・計算失敗・荷重 0 では、荷重を下げても通らないので出さない。"""
+    failed = _full_material_failure("full_material_infeasible", "fail", dict(
+        conditions=dict(status="pass"), safety=dict(status="fail", safety_factor=3.1, target_safety_factor=4.8)))
+    limit = optimize_run._full_material_limit_load(failed, 1000.0)
+    assert limit["factor"] == pytest.approx(3.1 / 4.8) and limit["limit_load_total_n"] == pytest.approx(1000.0 * 3.1 / 4.8)
+    warning = optimize_run._search_failure_warning(failed, None, 2.4, limit)
+    assert "今の 0.65 倍(荷重の大きさの合計 1000 N → 646 N)まで" in warning
+
+    geometry = _full_material_failure("full_material_infeasible", "fail", dict(
+        watertight=dict(status="fail", irregular_vertices=1, sample_vertex_indices=[], void_components=1),
+        safety=dict(status="fail", safety_factor=3.1, target_safety_factor=4.8)))
+    solver = _full_material_failure("evaluation_error", "unknown", dict(
+        safety=dict(status="unknown", reason="evaluation_error", error="RuntimeError: singular")))
+    assert optimize_run._full_material_limit_load(geometry, 1000.0) is None
+    assert optimize_run._full_material_limit_load(solver, 1000.0) is None
+    assert optimize_run._full_material_limit_load(failed, 0.0) is None
+
+
+def test_the_full_material_limit_load_rides_on_the_result_and_is_none_when_the_search_starts(session: Session, monkeypatch) -> None:
+    # 落ちたら、全材料が安全率で落ちた実行の応答に限界荷重が載らないか、探索が始まった実行に古い値が残る。
+    from duocad.topopt import binary_search
+
+    four_conditions(session)
+    total = sum(float(item.get("magnitude") or 0.0) for item in session.document.optimize.loads)
+    failed = _full_material_failure("full_material_infeasible", "fail", dict(
+        conditions=dict(status="pass"), safety=dict(status="fail", safety_factor=2.4, target_safety_factor=4.8)))
+    monkeypatch.setattr(binary_search, "find_best_feasible", lambda *a, **k: failed)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "no_feasible_found" and result["body_id"] is None
+    assert result["full_material_limit_load"]["limit_load_total_n"] == pytest.approx(total * 0.5)
+    assert f"{total * 0.5:.3g} N" in result["warning"]
+
+    _replayed_search(monkeypatch)
+    done = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert done["state"] == "done" and done["full_material_limit_load"] is None
+
+
 def _replayed_search(monkeypatch, safety_factor: float = 9.9) -> None:
     # 探索を差し替え、最小幅を満たして保持セルを残した確定マスクを返す(評価3回・収束)。
     import numpy as np
