@@ -232,26 +232,27 @@ class Recorder:
         filename = f'{self.sequence:06d}-{name}.json'
         arrays = []
         data = self._dumps(self._encode(value, {}, arrays))
-        row = dict(kind='snapshot', elapsed_seconds=time.perf_counter()-self.started,
-                   phase=self.stack[-1] if self.stack else None, name=name, file=filename)
+        line = json.dumps(dict(kind='snapshot', elapsed_seconds=time.perf_counter()-self.started,
+                               phase=self.stack[-1] if self.stack else None, name=name, file=filename),
+                          ensure_ascii=False, allow_nan=False)
         with self._lock:
             self.write_seconds += time.perf_counter()-started
-        self._submit(lambda: self._write_snapshot(name, filename, data, arrays, row))
+        self._submit(lambda: self._write_snapshot(name, filename, data, arrays, line))
         return filename
 
-    def _write_snapshot(self, name, filename, data, arrays, row):
+    def _write_snapshot(self, name, filename, data, arrays, line):
         started = time.perf_counter()
         try:
             for key, path, array in arrays:
                 if array is not None and not path.exists():
                     _atomic(path, lambda stream, array=array: np.savez_compressed(stream, data=array))
-                if not path.exists():
-                    # 写しを取らなかった配列が、積んでから書くまでの間に消えた。参照の切れた JSON は公開しない。
-                    with self._lock:
-                        self._written_arrays.discard(key)
-                    raise FileNotFoundError(f'記録の配列が消えた: {path.name}')
-                with self._lock:
-                    self._written_arrays.add(key)
+            # 写しを取らなかった配列が、積んでから書くまでの間に消えていたら、参照の切れた JSON は公開しない(JSON を書く直前に全部見る)。
+            missing = [(key, path) for key, path, _array in arrays if not path.exists()]
+            with self._lock:
+                self._written_arrays.difference_update(key for key, _path in missing)
+                self._written_arrays.update(key for key, path, _array in arrays if (key, path) not in missing)
+            if missing:
+                raise FileNotFoundError(f'記録の配列が消えた: {missing[0][1].name}')
             _atomic(self.path/filename, lambda stream: stream.write(data))
         except OSError as error:
             with self._lock:
@@ -260,7 +261,7 @@ class Recorder:
             return
         with self._lock:
             self.write_seconds += time.perf_counter()-started
-        self._write_event('snapshot', json.dumps(row, ensure_ascii=False, allow_nan=False))
+        self._write_event('snapshot', line)
 
     def save(self, name, write, *, digest):
         """記録用のファイルを1つ書き、書いた後に読み返した内容のハッシュを manifest の `digest` へ入れる。

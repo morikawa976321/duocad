@@ -398,3 +398,36 @@ def test_a_snapshot_whose_shared_array_disappears_before_it_is_written_is_not_pu
     assert not (rec.path/name).exists()
     assert rec.write_failures == 1
     assert np.array_equal(snapshot(rec, 'third')['a'], shared)
+
+
+def test_a_name_that_cannot_be_recorded_is_rejected_when_the_snapshot_is_taken(recordings):
+    """落ちたら、スナップショットの名前などイベント行に入る値の誤りが、その場で投げられず書き出しスレッドで数えられて消える。"""
+    with trace.recording() as rec:
+        with pytest.raises(TypeError):
+            rec.snapshot(np.int64(7), {'value': 1})
+    assert rec.write_failures == 0
+
+
+def test_a_snapshot_is_not_published_when_one_of_its_arrays_disappears_while_another_is_written(recordings, monkeypatch):
+    """落ちたら、新しい配列を書いている間に既存の配列が消えたとき、参照の切れた JSON を成功扱いで残している。"""
+    old, new = np.arange(4.), np.arange(6.)
+    real = trace._atomic
+
+    def remove_arrays_while_writing(path, write):
+        if path.suffix == '.npz':
+            for existing in path.parent.glob('*.npz'):
+                existing.unlink()
+        return real(path, write)
+
+    with trace.recording() as rec:
+        rec.snapshot('first', dict(a=old))
+        rec.flush()
+        monkeypatch.setattr(trace, '_atomic', remove_arrays_while_writing)
+        name = rec.snapshot('second', dict(a=old, b=new))
+        rec.flush()
+        monkeypatch.setattr(trace, '_atomic', real)
+        rec.snapshot('third', dict(a=old, b=new))
+    assert not (rec.path/name).exists()
+    assert rec.write_failures == 1
+    third = snapshot(rec, 'third')
+    assert np.array_equal(third['a'], old) and np.array_equal(third['b'], new)
