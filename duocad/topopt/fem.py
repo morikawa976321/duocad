@@ -465,7 +465,7 @@ class Model:
         if device not in ("cpu", "gpu"):
             raise ValueError(f"未知の装置: {device!r}")
         if solver == "matrix_free":
-            return self._prepare_matrix_free(rho, penal)
+            return self._prepare_matrix_free(rho, penal, device)
         threads = PARALLEL_THREADS if threads is None else max(1, int(threads))
         stats = _SOLVE_STATS
         t0 = time.perf_counter()
@@ -490,10 +490,11 @@ class Model:
             stats["solve_seconds"] += time.perf_counter() - t2
         return PreparedSystem(self, kf, a_op, precond, solver, policy, device)
 
-    def _prepare_matrix_free(self, rho: np.ndarray, penal: float) -> "PreparedSystem":
-        """K を組み立てず、`K_ff x` を要素ごとの積で返す CG(Jacobi 前処理)を用意する。CPU だけ。
+    def _prepare_matrix_free(self, rho: np.ndarray, penal: float, device: str = "cpu") -> "PreparedSystem":
+        """K を組み立てず、`K_ff x` を要素ごとの積で返す CG(Jacobi 前処理)を用意する。`device="gpu"` なら GPU で解き
+        (`gpu_cg.solve_matrix_free`)、使えなければ CPU で解き直す。
 
-        メモリは組み立てる CG の約 1/8、時間は約 2 倍(完成形検査の実測。docs/TOPOPT_PEAK_GATE.md 4-13)。
+        CPU ではメモリは組み立てる CG の約 1/8、時間は約 2.2 倍(完成形検査の実測。docs/TOPOPT_PEAK_GATE.md 4-13・4-15)。
         CG が収束しなくても直接解法へは戻らない(戻ると組み立てでメモリが溢れる)。残差の検算が落とす。
         """
         flat = np.asarray(rho, dtype=float).ravel()
@@ -514,7 +515,9 @@ class Model:
         n = int(free.size)
         a_op = spla.LinearOperator((n, n), matvec=apply, dtype=float)
         precond = spla.LinearOperator((n, n), matvec=lambda v, d=diag: v / d, dtype=float)
-        return PreparedSystem(self, None, a_op, precond, "matrix_free", "matrix_free", "cpu")
+        system = PreparedSystem(self, None, a_op, precond, "matrix_free", "matrix_free", device)
+        system._matrix_free = (edof, ee)
+        return system
 
     def stiffness_apply(self, rho: np.ndarray, penal: float, vec: np.ndarray) -> np.ndarray:
         """K @ vec を、K を組み立てずに要素ループで計算する (ndof,)。
@@ -592,6 +595,7 @@ class PreparedSystem:
         self._solver = solver
         self._policy = solver if policy is None else policy
         self._device = device
+        self._matrix_free = None  # (組み立てる要素の edof, 要素の剛性の倍率)。`solver="matrix_free"` のときだけ
 
     @property
     def solver(self) -> str:
@@ -625,7 +629,10 @@ class PreparedSystem:
                 u_free = spla.spsolve(self.kf, ff)
             else:
                 u_free = None
-                if self._device == "gpu":
+                if self._device == "gpu" and self._matrix_free is not None:
+                    u_free, iterations, info, gpu_fallback = self._solve_matrix_free_on_gpu(ff, cg_rtol)
+                    device = "cpu" if u_free is None else "gpu"
+                elif self._device == "gpu":
                     u_free, iterations, info, gpu_fallback = self._solve_on_gpu(ff, cg_rtol)
                     device = "cpu" if u_free is None else "gpu"
                     if info != 0:
@@ -672,6 +679,26 @@ class PreparedSystem:
         if stats is not None:
             stats["solve_seconds"] += time.perf_counter() - t_start
         return out
+
+    def _solve_matrix_free_on_gpu(self, ff: np.ndarray, cg_rtol: float) -> tuple[np.ndarray | None, int, int, str | None]:
+        """組み立てない CG を GPU で解く。(解, 反復数, info, CPU へ戻した理由)。収束しない・残差検算に通らないときも
+        解を None にして CPU の組み立てない CG で解き直させる(直接解法へは戻れない)。"""
+        from . import gpu_cg
+
+        model = self.model
+        edof, ee = self._matrix_free
+        try:
+            u_free, iterations, info = gpu_cg.solve_matrix_free(edof, model.ke, ee, model.free, model.ndof, ff,
+                                                                 rtol=cg_rtol)
+        except gpu_cg.Unavailable as exc:
+            warnings.warn(f"GPU で解けないので CPU で解き直す: {exc.reason}", RuntimeWarning, stacklevel=3)
+            return None, 0, 0, exc.reason
+        if info != 0:
+            return None, iterations, 0, f"not-converged: GPU の CG が {iterations} 反復で収束しない(CPU で解き直す)"
+        if not bool(np.all(np.isfinite(u_free))) or (
+                np.linalg.norm(self._a_op @ u_free - ff) > SOLVE_RESIDUAL_TOL * np.linalg.norm(ff)):
+            return None, iterations, 0, "residual: GPU の解が残差検算に通らない(CPU で解き直す)"
+        return u_free, iterations, 0, None
 
     def _solve_on_gpu(self, ff: np.ndarray, cg_rtol: float) -> tuple[np.ndarray | None, int, int, str | None]:
         """GPU の CG で解く。(解, 反復数, info, CPU へ戻した理由)。戻すときは解が None。

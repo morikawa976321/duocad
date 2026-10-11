@@ -21,6 +21,9 @@ from .finalize import finalize
 #: さかのぼるときに完成形検査を回す回数の上限(最初の形の検査は数えない)。1回に空隙埋め・集合演算・完成形検査がかかり、
 #: hanger では数分。置いた値で実測ではない。
 MAX_BACKTRACK_CHECKS = 5
+#: 通る形が見つかった後、通った形と割った形の探索の材料の差がこの割合未満なら二分をやめる(それ以上寄せても減らせる材料が
+#: 小さい)。hanger 180N では 5.9% の差を詰める二分 4 回(約 80 分)がすべて割った(docs/TOPOPT_PEAK_GATE.md 4-14)。置いた値。
+BACKTRACK_MIN_GAIN = 0.03
 
 
 @dataclass
@@ -158,7 +161,8 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
 
     最初は「完成形の安全率 ÷ 探索の安全率」の比が変わらないと見て、探索の安全率が 目標 ÷ 比 以上あった最も新しい形へ一気に
     戻る。割ればその形の比で同じことをする(比が取れなければ最初の形との中間)。通る形が見つかった後は、通った形と割った形の
-    間を二分して、通る中で最も新しい(材料の少ない)形へ寄せる。検査は `MAX_BACKTRACK_CHECKS` 回まで。
+    間を二分して、通る中で最も新しい(材料の少ない)形へ寄せる。二分は両者の材料の差が `BACKTRACK_MIN_GAIN` 未満になったら
+    やめる。検査は `MAX_BACKTRACK_CHECKS` 回まで。
     候補の手順が例外で落ちたら(集合演算の自己交差など)その形は割ったものとして続ける(`ctx.passthrough` の型は通す)。
     `complete_shape` は1形ぶんの手順(既定は `complete`。検査が差し替える口)。
     """
@@ -208,6 +212,8 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
             probe = fail_hi // 2 if done is None else guided(done, fail_hi)
         else:
             if fail_hi - pass_lo <= 1:
+                break
+            if 1.0 - accepted[fail_hi].material_mm3 / accepted[pass_lo].material_mm3 < BACKTRACK_MIN_GAIN:
                 break
             probe = (pass_lo + fail_hi) // 2
     else:

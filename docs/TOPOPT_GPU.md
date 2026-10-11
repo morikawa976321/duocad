@@ -50,6 +50,8 @@ GPU の CG が収束しない(`not-converged:`)ときだけは CPU の CG を経
 
 ## ビット一致の範囲
 
+完成形検査が剛性行列を組み立てない解法(`fem` の `solver="matrix_free"`)を選んだときの GPU の CG(`gpu_cg.solve_matrix_free`)は**ビット一致させていない**(要素ごとの積を足す順が CPU の `np.bincount` と違う)。完成形検査は1回測るだけで探索の経路に効かないため。解は CPU で残差を検算し、通らない・収束しない・使えないときは CPU の同じ解法で解き直す。hanger 180N の完成形検査(k=3、反復 12,017)は CPU 1,188 秒 → GPU 77.6 秒、安全率は一致([TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 4-15)。
+
 保証するのは「**同じ機械・同じ numpy/scipy で、GPU の ON/OFF が結果を変えない**」ことだけ。
 
 - 内積の足し順は OpenBLAS のスレッド数(既定は論理プロセッサ数)と実行時カーネルで決まる。**機械をまたぐ一致は CPU 同士でも元々無い。**

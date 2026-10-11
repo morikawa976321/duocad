@@ -6,11 +6,13 @@ import numpy as np
 from duocad.topopt import binary_search, complete
 
 
-def _accepted(safety_factors):
+def _accepted(safety_factors, cells=None):
+    """探索の合格形の並び。`cells` を省くと 64 セルから1手ごとに1セルずつ減る。"""
     shapes = []
     for index, sf in enumerate(safety_factors):
-        mask = np.zeros((4, 4, 4), bool)
-        mask.ravel()[:64 - index] = True
+        count = 64 - index if cells is None else cells[index]
+        mask = np.zeros((10, 10, 10), bool)
+        mask.ravel()[:count] = True
         model = binary_search.FeasibleModel(mask=mask, before_mask=mask, trial_index=index, report=dict(
             material_sha256="", volumes=dict(material_mm3=float(mask.sum())), checks=dict(safety=dict(safety_factor=sf))))
         shapes.append(binary_search.AcceptedShape.of(model))
@@ -116,3 +118,13 @@ def test_a_candidate_that_raises_counts_as_a_failure_but_a_cancel_goes_through()
     ctx.passthrough = (Cancelled,)
     with pytest.raises(Cancelled):
         complete.backtrack(accepted, failed, ctx, complete_shape=cancelled)
+
+
+def test_bisection_stops_once_the_material_left_to_win_is_small():
+    """落ちたら、通った形と割った形の材料の差が小さいのに二分を続け、完成形検査(hanger で1回約20分)を浪費している。"""
+    accepted = _accepted([12.0, 11.0, 10.0, 9.0, 8.0, 7.0, 6.0], cells=[1000, 998, 996, 994, 992, 990, 988])
+    failed = _completion(accepted[-1].mask(), 6.0, 988.0, 1.5, 'fail')  # 比 0.25 → 8.0 以上の最も新しい形(添字 4)
+    result = complete.backtrack(accepted, failed, _context(), complete_shape=_by_ratio(0.25))
+    # 添字 4(992 セル)が通り、割った最終形(988 セル)との差は 0.4% なので二分しない
+    assert result.reason == 'passed' and result.chosen_index == 4 and len(result.checks) == 1
+    assert (1 - 988 / 992) < complete.BACKTRACK_MIN_GAIN
