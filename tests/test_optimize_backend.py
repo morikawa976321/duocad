@@ -1591,6 +1591,71 @@ def test_a_finished_shape_below_the_real_target_is_a_failure_without_touching_th
     assert [body.id for body in session.document.bodies] == before
 
 
+def _replayed_search_with_history(monkeypatch, safety_factors) -> None:
+    # 探索を差し替え、合格形の並び(最後が確定マスク)を持つ結果を返す。前の形ほど材料が多い。
+    import numpy as np
+    from duocad.topopt import binary_search, min_width
+
+    def fake_find(design_space_mask, conditions, **kwargs):
+        full = min_width.cube_opening(np.asarray(design_space_mask, dtype=bool), kwargs.get("min_width_cells", 1))
+        if conditions.keep_cells is not None:
+            full |= conditions.keep_cells
+        shapes = []
+        for index, sf in enumerate(safety_factors):
+            mask = full.copy()
+            removable = np.flatnonzero((full & ~(conditions.keep_cells if conditions.keep_cells is not None
+                                                  else np.zeros_like(full))).ravel())
+            mask.ravel()[removable[:index]] = False
+            report = dict(material_sha256="f" * 64,
+                          volumes=dict(material_mm3=float(mask.sum()) * conditions.grid.element_volume),
+                          checks=dict(safety=dict(safety_factor=sf)))
+            shapes.append(binary_search.FeasibleModel(mask=mask, before_mask=mask, report=report, trial_index=index))
+        return binary_search.SearchResult(status="feasible", termination="converged", best_feasible=shapes[-1],
+                                          history=[], evaluations=len(shapes), conditions_identifier="test",
+                                          accepted=[binary_search.AcceptedShape.of(shape) for shape in shapes])
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+
+
+def _final_check_by_material(monkeypatch, passes_from_cells: int) -> list:
+    # 完成形検査を差し替え: 確定マスクのセル数が passes_from_cells 以上なら合格(安全率 2.5)、未満なら割る(1.5)
+    from duocad.topopt import final_check
+
+    seen = []
+
+    def fake_inspect(*args, mask, **kwargs):
+        cells = int(mask.sum())
+        seen.append(cells)
+        sf = 2.5 if cells >= passes_from_cells else 1.5
+        return dict(safety_factor=sf, safety=dict(status="pass" if sf >= 2.0 else "fail", safety_factor=sf),
+                    conditions=dict(status="pass"), material_cells=cells,
+                    neck=dict(status="not_observed", events=[], required_mm=16.0))
+
+    monkeypatch.setattr(final_check, "inspect", fake_inspect)
+    monkeypatch.setattr(final_check, "peak_phrase", lambda checked: "根拠")
+    return seen
+
+
+def test_a_finished_shape_below_the_target_is_replaced_by_an_earlier_search_shape_that_passes(session: Session, monkeypatch) -> None:
+    # 落ちたら、探索の最終形が完成形検査で割ったとき、合格形をさかのぼらずに何も足さないか、割った形を足している。
+    four_conditions(session)
+    before = len(session.document.bodies)
+    _replayed_search_with_history(monkeypatch, [9.0, 8.0, 7.0, 6.0, 5.0])
+    seen = _final_check_by_material(monkeypatch, passes_from_cells=10 ** 9)
+    first = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert first["state"] == "final_unsafe" and first["body_id"] is None and len(session.document.bodies) == before
+    assert first["backtrack"]["reason"] == "exhausted" and "どれも目標を割った" in first["warning"]
+    full = max(seen)
+    seen.clear()
+    _final_check_by_material(monkeypatch, passes_from_cells=full - 2)  # 2手以上戻せば通る
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "done" and result["body_id"] is not None
+    assert result["backtrack"]["reason"] == "passed" and result["backtrack"]["steps_back"] == 2
+    assert result["final_safety_factor"] == 2.5 and result["search_safety_factor"] == 7.0
+    assert "手戻した形を足した" in result["warning"] and "1.5" in result["warning"]
+    json.dumps(result)
+
+
 def test_a_suspected_thin_joint_is_a_warning_not_a_silent_success(session: Session, monkeypatch) -> None:
     # 落ちたら、つなぎ目の幅不足の疑いを成功として黙って返している(#117 の完了条件)。
     from duocad.topopt import final_check

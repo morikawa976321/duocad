@@ -691,6 +691,22 @@ export interface OptimizeResultPayload {
     safety_factor: number
     search_target_safety_factor: number
   } | null
+  /** 探索の最終形が完成形検査で目標を割り、探索の合格形をさかのぼったときの記録(`topopt.complete.backtrack`)。
+   *  `steps_back` は足した形が最終形から何手前か(どれも通らなければ `null` で、結果は足さない)。文面は `warning` にもある。 */
+  backtrack?: {
+    reason: 'passed' | 'exhausted' | 'check_limit' | 'nothing_to_go_back'
+    steps_back: number | null
+    checks: Array<{
+      index: number
+      steps_back: number
+      search_safety_factor: number
+      material_mm3: number
+      final_safety_factor: number | null
+      verdict: string
+    }>
+    first_final_safety_factor: number | null
+    first_material_mm3: number
+  } | null
   /** 利用者が指定した実際の目標。 */
   target_safety_factor: number
   /** 探索に渡した目標(= `target_safety_factor` × `search_target_factor`)。`safety_factor` はこれに対する探索の格子での値。 */
