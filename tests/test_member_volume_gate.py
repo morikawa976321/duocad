@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from duocad import optimize_run
-from duocad.topopt import acceptance, binary_search, fem, final_check, stress, voxelize
+from duocad.topopt import acceptance, anchor, binary_search, fem, final_check, stress, voxelize
 
 from session_support import four_conditions
 
@@ -124,29 +124,36 @@ def test_the_member_rule_goes_through_representative_stress_so_it_can_be_replace
 
 def test_the_finished_shape_is_measured_at_a_fixed_physical_spacing_unless_the_grid_is_too_large():
     """落ちたら、完成形検査の細かさが要素サイズに比例している(物理寸法で揃わない)か、要素数の上限を超える分割を選ぶ。"""
-    assert final_check.refine_factor(1000, 100, 2.0, None) == 3
-    assert final_check.refine_factor(1000, 100, 4.0, None) == 6
-    assert final_check.refine_factor(1000, 100, 0.5, None) == 1
+    assert final_check.refine_factor(1000, 100, 2.0, None) == (3, 'assembled')
+    assert final_check.refine_factor(1000, 100, 4.0, None) == (6, 'assembled')
+    assert final_check.refine_factor(1000, 100, 0.5, None) == (1, 'assembled')
     over_six = final_check.MAX_FINE_ELEMENTS // 6 ** 3 + 1
-    assert final_check.refine_factor(over_six, 0, 4.0, None) == 5
-    assert final_check.refine_factor(final_check.MAX_FINE_ELEMENTS + 1, 0, 4.0, None) == 1
-    assert not final_check.fits(final_check.MAX_FINE_ELEMENTS + 1, 0, 1, None)
+    assert final_check.refine_factor(over_six, 0, 4.0, None) == (5, 'assembled')
+    assert final_check.refine_factor(final_check.MAX_FINE_ELEMENTS + 1, 0, 4.0, None) == (1, None)
+    assert not final_check.fits(final_check.MAX_FINE_ELEMENTS + 1, 0, 1, None, 'matrix_free')
 
 
-def test_the_refinement_shrinks_with_free_memory_and_with_the_material_it_must_hold():
+def test_the_refinement_takes_the_slower_solver_before_a_coarser_grid_and_shrinks_with_free_memory():
     """落ちたら、空きメモリが少ない機械で空きを超える細かい格子を確保しにいく(2026-09-26 にメモリ不足で PC が落ちた)か、
-    メモリの大半を占める材料セルの数を見積もりに入れていない。"""
-    budget = final_check.estimated_bytes(1000, 200, 3) / final_check.MEMORY_FRACTION
-    assert final_check.refine_factor(1000, 200, 4.0, budget) == 3
-    assert final_check.refine_factor(1000, 400, 4.0, budget) == 2   # 同じ格子でも材料が倍なら1段下げる
+    剛性行列を組み立てない解法なら細かく測れるのに格子を粗くしている(粗く測ると割り増しで不合格になりやすい)。"""
+    budget = final_check.estimated_bytes(1000, 200, 3) / final_check.MEMORY_FRACTION  # 組み立てる解法でちょうど k=3
     assert final_check.fits(1000, 200, 3, budget) and not final_check.fits(1000, 200, 4, budget)
+    assert final_check.refine_factor(1000, 200, 2.0, budget) == (3, 'assembled')
+    # 組み立てない解法でちょうど k=4 の空き(組み立てる解法は k=4 で、組み立てない解法も k=5 では収まらない)
+    lean = final_check.estimated_bytes(1000, 200, 4, 'matrix_free') / final_check.MEMORY_FRACTION
+    assert not final_check.fits(1000, 200, 4, lean) and not final_check.fits(1000, 200, 5, lean, 'matrix_free')
+    assert final_check.refine_factor(1000, 200, 4.0, lean) == (4, 'matrix_free')
+    assert final_check.refine_factor(1000, 20000, 4.0, lean) == (1, 'matrix_free')
+    assert final_check.refine_factor(1000, 10 ** 6, 4.0, lean) == (1, None)
     assert final_check.estimated_bytes(1000, 200, 2) == 8 * (1000 * final_check.FINE_ELEMENT_BYTES
                                                              + 200 * final_check.MATERIAL_CELL_BYTES)
+    assert final_check.estimated_bytes(1000, 200, 2, 'matrix_free') == 8 * (
+        1000 * final_check.MATRIX_FREE_ELEMENT_BYTES + 200 * final_check.MATRIX_FREE_MATERIAL_CELL_BYTES)
 
 
-def test_material_the_search_grid_missed_is_recounted_after_occupancy_and_the_refinement_drops(monkeypatch):
+def test_material_the_search_grid_missed_is_recounted_after_occupancy_and_the_plan_drops(monkeypatch):
     """落ちたら、探索の格子に載らない保持ボディの薄い部分などで材料が見積もりより多いのに、数え直さずに空きメモリを超える
-    分割数で FEM へ進む。"""
+    分割数・解法で FEM へ進む。"""
     factors = []
 
     def full_occupancy(soup, fine, allow_empty):
@@ -158,11 +165,27 @@ def test_material_the_search_grid_missed_is_recounted_after_occupancy_and_the_re
     lo, hi = np.zeros(3, np.int64), np.array([10, 10, 2])
     # 探索の形は 10 セルだが、占有化すると格子 200 セルが全部材料になる
     available = 2 * final_check.estimated_bytes(200, 10, 6)
-    factor, fine, material, counted = final_check._occupy(None, grid, lo, hi, 10, available)
-    assert factors[0] == 6 and factor < 6 and counted == 200
-    assert final_check.fits(200, 200, factor, available) and not final_check.fits(200, 200, factor + 1, available)
+    factor, solver, fine, material, counted = final_check._occupy(None, grid, lo, hi, 10, available)
+    assert factors[0] == 6 and counted == 200
+    assert (factor, solver) == final_check.refine_factor(200, 200, 4.0, available) != (6, 'assembled')
+    assert len(factors) == (1 if factor == 6 else 2)  # 同じ分割数で解法だけ替えるときは占有化をやり直さない
     assert material.shape == fine.shape == (10 * factor, 10 * factor, 2 * factor)
-    assert final_check._occupy(None, grid, lo, hi, 10, 2 * final_check.estimated_bytes(200, 10, 1))[0] is None  # 1 でも数え直すと収まらない
+    # 1 で組み立てない解法でも、数え直すと収まらない
+    assert final_check._occupy(None, grid, lo, hi, 10, 2 * final_check.estimated_bytes(200, 10, 1, 'matrix_free'))[0] is None
+
+
+def test_the_matrix_free_solver_gives_the_assembled_displacement():
+    """落ちたら、剛性行列を組み立てない解法の行列ベクトル積・前処理・拘束の扱いが組み立てる解法とずれている。"""
+    material = np.ones((6, 3, 3), bool)
+    material[2:4, 0, :] = False
+    floating = anchor.floating_dofs(material)  # 材料に接しない節点を外す(`acceptance.solve_material` と同じ)
+    model = fem.Model(6, 3, 3, extra_fixed_dofs=floating, active_mask=material)
+    density = material.astype(float)
+    assembled = model.solve(density, 3.0, solver='cg')
+    lean = fem.Model(6, 3, 3, extra_fixed_dofs=floating, active_mask=material)
+    free = lean.solve(density, 3.0, solver='matrix_free')
+    assert lean._coo is None  # 組み立て用の添字を作っていない
+    assert np.allclose(free, assembled, rtol=1e-7, atol=1e-12 * np.abs(assembled).max())
 
 
 def test_the_finished_shape_is_judged_by_the_top_area_stress_times_the_coarse_penalty(monkeypatch):
