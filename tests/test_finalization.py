@@ -194,18 +194,22 @@ def test_collapse_float32_slivers_removes_only_unrepresentable_edges():
     assert collapsed == 0
 
 
+#: F2000_h2.0_w2 (#133) の最終メッシュから取った、float32 で交差5組を作る5枚。(4, 2, 5) が辺 3.05e-4 mm の針
+NEEDLE_VERTICES = np.array([[17.47172086510047, -186.4580733292355, 58.52722761479261],
+                            [17.492879514968028, -186.37686499573488, 58.51839567628473],
+                            [17.49918044285612, -186.32033256484826, 58.35884796767712],
+                            [17.499348273106545, -186.32799719505292, 58.287291130940716],
+                            [17.499988021321386, -186.2435964631998, 59.07493259940401],
+                            [17.499989320350313, -186.24356399536146, 59.07523545827184],
+                            [19.179058114101224, -186.15252540887144, 59.70752185933259]])
+NEEDLE_FACES = [[3, 5, 2], [0, 1, 4], [1, 2, 4], [4, 2, 5], [3, 6, 5]]
+
+
 def test_collapse_float32_crossings_removes_the_needle_that_flips_when_rounded():
-    """F2000_h2.0_w2 (#133) の交差5組を作る5枚。落ちたら、float32 で裏返る針状の三角形を潰せていない。"""
+    """落ちたら、float32 で裏返る針状の三角形を潰せていない。"""
     from duocad.mesh_intersections import triangle_intersections
     from duocad.topopt.finalize import collapse_float32_crossings
-    v = np.array([[17.47172086510047, -186.4580733292355, 58.52722761479261],
-                  [17.492879514968028, -186.37686499573488, 58.51839567628473],
-                  [17.49918044285612, -186.32033256484826, 58.35884796767712],
-                  [17.499348273106545, -186.32799719505292, 58.287291130940716],
-                  [17.499988021321386, -186.2435964631998, 59.07493259940401],
-                  [17.499989320350313, -186.24356399536146, 59.07523545827184],
-                  [19.179058114101224, -186.15252540887144, 59.70752185933259]])
-    f = np.array([[3, 5, 2], [0, 1, 4], [1, 2, 4], [4, 2, 5], [3, 6, 5]])
+    v, f = NEEDLE_VERTICES, np.array(NEEDLE_FACES)
     rounded = lambda vertices: np.asarray(vertices).astype(np.float32).astype(np.float64)
     assert triangle_intersections(v, f)['pairs'] == []
     pairs = triangle_intersections(rounded(v), f)['pairs']
@@ -230,6 +234,25 @@ def test_repair_float32_crossings_leaves_float64_defects_to_fail():
     rv, rf, after, repair = repair_float32_crossings(v, f, checks)
     assert repair['collapsed_crossing_edges'] == 0 and any(repair['float64_self_intersections'].values())
     assert np.array_equal(rv, v) and np.array_equal(rf, f) and 'self_intersections' in after['failed']
+
+
+def test_repair_float32_crossings_fails_when_the_collapse_makes_a_float64_defect():
+    """潰した後は float32 で交差が消えても、潰したことで float64 にできた欠陥を見逃して合格させてはいけない。"""
+    from collections import Counter
+
+    from duocad.topopt.finalize import input_mesh_checks, repair_float32_crossings
+    # 針の5枚を 2^-36 の格子に寄せ、針の根元に1枚 (3, 2, 7) を足し、境界を下の頂点 8 への扇で閉じる
+    v = np.round(NEEDLE_VERTICES * 2**36) / 2**36
+    v = np.vstack([v, v[3] + 0.5 * (v[2] - v[3]) + 0.25 * (v[4] - v[3])])
+    v = np.vstack([v, v.mean(axis=0) + [0, -1, 0]])
+    f = [*NEEDLE_FACES, [3, 2, 7]]
+    directed = Counter((a, b) for tri in f for a, b in zip(tri, tri[1:] + tri[:1]))
+    f += [[b, a, 8] for a, b in directed if (b, a) not in directed]
+    f = np.array(f)[:, ::-1]
+    assert input_mesh_checks(v, f)['failed'] == []
+    _, _, after, repair = repair_float32_crossings(v, f, final_mesh_checks(v, f))
+    assert repair['collapsed_crossing_edges'] == 1 and any(repair['float64_self_intersections'].values())
+    assert after['failed'] == ['float64_self_intersections']
 
 
 def test_solid_operation_undo_redo_and_replay():

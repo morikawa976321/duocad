@@ -192,29 +192,36 @@ def collapse_float32_crossings(vertices, faces, pairs, *, max_edge_mm=FLOAT32_CR
 
 
 def repair_float32_crossings(vertices, faces, checks, progress=None):
-    """`final_mesh_checks` の結果 `checks` に交差の組があれば、`collapse_float32_crossings` で潰して検査し直す。
+    """`final_mesh_checks` の結果 `checks` の交差の組を `collapse_float32_crossings` で潰し、検査し直す。
 
-    float64 で既にある交差は集合演算・簡略化の欠陥で丸めのせいではないので、潰して隠さずそのまま返す
-    (呼び出し側が不合格にする)。float64 の検査は交差の組があるときだけかける。検査が返す組は先頭50組まで
-    なので、それより多い交差は次の周回で潰す。戻り値は (vertices, faces, checks, 記録用の辞書)。
+    `final_mesh_checks` は float32 側しか見ないので、float64 はここで見る(交差の組があるときだけ)。
+    潰す前から float64 で交差があれば集合演算・簡略化の欠陥で丸めのせいではないので、潰して隠さずそのまま返す。
+    潰した結果が float64 で交差を作ったら `failed` に `float64_self_intersections` を足す(float32 では消えて見えうる)。
+    検査が返す組は先頭50組までなので、それより多い交差は次の周回で潰す。戻り値は (vertices, faces, checks, 記録用の辞書)。
     """
     collapsed = 0
     float64_intersections = None
+    stale = False
     for _ in range(_CROSSING_ROUNDS):
         if not checks['self_intersections']['pairs']:
             break
-        float64_intersections = triangle_intersections(vertices, faces)['counts']
+        float64_intersections, stale = triangle_intersections(vertices, faces)['counts'], False
         if any(float64_intersections.values()):
             break
         vertices, faces, merges = collapse_float32_crossings(vertices, faces, checks['self_intersections']['pairs'])
         if not merges:
             break
-        collapsed += merges
+        collapsed, stale = collapsed + merges, True
         if progress:
             progress('float32 で交差する三角形を潰して最終メッシュを検査し直す')
         checks = final_mesh_checks(vertices, faces)
+    if stale:
+        float64_intersections = triangle_intersections(vertices, faces)['counts']
+    if collapsed and any(float64_intersections.values()):
+        checks = dict(checks, failed=[*checks['failed'], 'float64_self_intersections'])
     return vertices, faces, checks, dict(collapsed_crossing_edges=collapsed,
                                          float64_self_intersections=float64_intersections)
+
 
 def _collapse_shortest_edges(vertices, faces, triangles, max_edge_mm):
     """`triangles` の各三角形の最短辺を、`max_edge_mm` 未満なら一端へ寄せて潰す。(vertices, faces, 潰した辺の数)。"""
