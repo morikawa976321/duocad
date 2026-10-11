@@ -13,7 +13,6 @@ from session_support import browser
 
 @pytest.fixture()
 def session() -> Session:
-    """30×30×40 の直方体(id "box")と、半径10・高さ20の円柱(id "cyl")を持つセッション。"""
     made = Session(None, 0.2)
     made.document.add_body(Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(30, 30, 40).Shape()))
     made.document.add_body(
