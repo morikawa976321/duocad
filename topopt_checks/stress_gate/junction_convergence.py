@@ -30,7 +30,7 @@ from duocad.topopt import acceptance, binary_search, final_check, stress  # noqa
 import gate_metrics as gm  # noqa: E402
 
 #: 物理寸法の物差しの候補(docs/TOPOPT_PEAK_GATE.md 4-9): 露出面の面積の上位値と、材料だけで取った球平均の最大
-AREAS_MM2 = (1.0, 4.0, 9.0)
+AREAS_MM2 = (1.0, 4.0, 9.0, 16.0)
 BALL_RADII_MM = (1.0, 2.0)
 
 
@@ -110,7 +110,8 @@ def main() -> int:
         result = optimize_run.run(doc, optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"]))
     out = dict(model=a.model, spec={k: v for k, v in spec.items() if k in ("load_n", "h", "w")}, eps=a.eps,
                state=result.get("state"), material_mm3=result.get("material_mm3"), levels=levels)
-    name = (f"junction_{a.model}_L{spec['load_n']:g}" + ("" if a.eps is None else f"_eps{a.eps:g}")
+    name = (f"junction_{a.model}_L{spec['load_n']:g}" + ("" if a.h is None else f"_h{spec['h']:g}_w{spec['w']:g}")
+            + ("" if a.eps is None else f"_eps{a.eps:g}")
             + ("" if a.step is None else f"_step{a.step:g}") + ".json")
     (pa.OUT / "peak_gate" / name).write_text(json.dumps(out, ensure_ascii=False, indent=1, default=float), encoding="utf-8")
     return 0
