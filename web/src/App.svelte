@@ -43,6 +43,7 @@
     OPTIMIZE_ROLE_LABEL,
   } from './commands/optimize'
   import OptimizePanel from './OptimizePanel.svelte'
+  import SelectionInfoPanel from './SelectionInfoPanel.svelte'
   import { optimizeNoticeFor, type OptimizeNotice } from './optimizeNotice'
   import { chosenStep, snapMinWidth } from './minWidth'
   import { buildSketchDraws, regionsStillExist } from './sketchDraws'
@@ -95,6 +96,7 @@
   import { createDisplaySettings } from './displaySettings.svelte'
   import { createDocumentFiles } from './documentFiles.svelte'
   import { createMeasurement } from './measurement.svelte'
+  import { createSelectionInfo } from './selectionInfo.svelte'
   import {
     createViewport,
     type BoxSelectEvent,
@@ -354,6 +356,7 @@
     onEdges: handleEdges,
     onVertices: handleVertices,
     onMeasure: handleMeasure,
+    onSelectionInfo: (payload) => selectionInfo.onResult(payload),
     onFile: files.onFile,
     onAiStatus: ai.onStatus,
     onAiToolCall: ai.onToolCall,
@@ -738,6 +741,23 @@
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }
+  }
+
+  // ---------------------------------------------------------------- 選択情報(issue #140。verbではない)
+  const selectionInfo = createSelectionInfo({
+    selection: () => selection?.items ?? [],
+    // 文書を変える操作(人・AI・undo/redo)は必ずこのどちらかを動かす。
+    documentVersion: () => `${model?.applied_count ?? 0}/${model?.redo_count ?? 0}`,
+    connected: () => status === 'open',
+    request: (requestId) => session.inspectSelection(requestId),
+  })
+  const selectionInfoNames = {
+    body: (bodyId: string) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? bodyId,
+    sketch: (id: string) => sketches.find((item) => item.sketch_id === id)?.name ?? id,
+    entity: (id: string, entityId: string) => {
+      const position = sketches.find((item) => item.sketch_id === id)?.entities.findIndex((e) => e.entity_id === entityId)
+      return position === undefined || position < 0 ? entityId : `#${position + 1}`
+    },
   }
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
@@ -1980,6 +2000,12 @@
       {/if}
 
       {#if documentOpen}
+        <SelectionInfoPanel
+          item={selectionInfo.item}
+          error={selectionInfo.error}
+          names={selectionInfoNames}
+          besideOptimizePanel={optimizeMode}
+        />
         <BrowserPanel
           bodies={partBodies}
           {sketches}

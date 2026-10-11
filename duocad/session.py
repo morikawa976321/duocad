@@ -33,7 +33,7 @@ from . import (
 )
 from .document import Document
 from .entry import entries, entry_for
-from .measure import measure_selection
+from .measure import inspect_selection, measure_selection
 from .oplog import OpLog
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import speculative
@@ -362,6 +362,10 @@ class Session:
     def measure(self) -> dict:
         """いまの選択を測る(`measure.measure_selection`)。MCP の `measure` と WebSocket の `measure` が同じ計算を通る。"""
         return measure_selection(self)
+
+    def inspect_selection(self) -> Optional[dict]:
+        """選択がちょうど1項目ならその寸法、それ以外は None(`measure.inspect_selection`。画面の選択情報の表示)。"""
+        return inspect_selection(self)
 
     def set_selection(
         self,

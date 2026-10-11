@@ -53,6 +53,7 @@ export const COMMAND_CATEGORY = {
   redo: 'history',
   get_state: 'protocol',
   preview: 'protocol',
+  inspect_selection: 'protocol',
   get_vertices: 'protocol',
   set_view_resolution: 'protocol',
   optimize_conditions: 'protocol',
@@ -115,6 +116,7 @@ export interface CommandArguments {
   redo: Record<string, never>
   get_state: Record<string, never>
   preview: { verb: string; args: object }
+  inspect_selection: { request_id: number }
   get_vertices: { body_id: string }
   set_view_resolution: { world_per_pixel: number; size_hint?: number }
   optimize_conditions: Record<string, never>

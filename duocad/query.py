@@ -57,22 +57,26 @@ def describe_edges(shape: Any) -> list:
     `start` / `end` は辺の端点(閉じた辺=円などでは同じ点になる)。
     """
     raw = _unwrap(shape)
-    described = []
-    for index in range(1, kernel.edge_count(raw) + 1):
-        edge = kernel.edge_of(raw, index)
-        wrapped = Edge(edge)
-        start = wrapped.start_point()
-        end = wrapped.end_point()
-        described.append(
-            {
-                "index": index,
-                "kind": kernel.classify_edge(edge),
-                "length": float(wrapped.length),
-                "start": [float(start.X), float(start.Y), float(start.Z)],
-                "end": [float(end.X), float(end.Y), float(end.Z)],
-            }
-        )
-    return described
+    return [_describe_edge(kernel.edge_of(raw, index), index) for index in range(1, kernel.edge_count(raw) + 1)]
+
+
+def describe_edge(shape: Any, edge_index: int) -> dict:
+    """`describe_edges` の1件を**辺1本ぶんだけ**測る(選択1件の表示で全辺を測らない)。範囲外は ValueError。"""
+    index = int(edge_index)
+    return _describe_edge(kernel.edge_of(_unwrap(shape), index), index)
+
+
+def _describe_edge(edge: Any, index: int) -> dict:
+    wrapped = Edge(edge)
+    start = wrapped.start_point()
+    end = wrapped.end_point()
+    return {
+        "index": index,
+        "kind": kernel.classify_edge(edge),
+        "length": float(wrapped.length),
+        "start": [float(start.X), float(start.Y), float(start.Z)],
+        "end": [float(end.X), float(end.Y), float(end.Z)],
+    }
 
 
 def face_centroid(shape: Any, face_index: int) -> list:
@@ -128,22 +132,26 @@ def describe_faces(shape: Any) -> list:
     曲面の `normal` / `center` は面の中央(UV範囲の中点)での値でしかない。
     """
     raw = _unwrap(shape)
-    described = []
-    for index in range(1, kernel.face_count(raw) + 1):
-        face = kernel.face_of(raw, index)
-        wrapped = Face(face)
-        normal = wrapped.normal_at()
-        center = wrapped.center()
-        described.append(
-            {
-                "index": index,
-                "kind": kernel.classify_face(face),
-                "area": float(wrapped.area),
-                "normal": [float(normal.X), float(normal.Y), float(normal.Z)],
-                "center": [float(center.X), float(center.Y), float(center.Z)],
-            }
-        )
-    return described
+    return [_describe_face(kernel.face_of(raw, index), index) for index in range(1, kernel.face_count(raw) + 1)]
+
+
+def describe_face(shape: Any, face_index: int) -> dict:
+    """`describe_faces` の1件を**面1枚ぶんだけ**測る(選択1件の表示で全面を測らない)。範囲外は ValueError。"""
+    index = int(face_index)
+    return _describe_face(kernel.face_of(_unwrap(shape), index), index)
+
+
+def _describe_face(face: Any, index: int) -> dict:
+    wrapped = Face(face)
+    normal = wrapped.normal_at()
+    center = wrapped.center()
+    return {
+        "index": index,
+        "kind": kernel.classify_face(face),
+        "area": float(wrapped.area),
+        "normal": [float(normal.X), float(normal.Y), float(normal.Z)],
+        "center": [float(center.X), float(center.Y), float(center.Z)],
+    }
 
 
 def describe_vertices(shape: Any) -> list:

@@ -207,15 +207,16 @@ def between(first: Measurable, second: Measurable) -> dict:
 def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measurable, str]]:
     """1項目の寸法と、2項目測定に使う幾何(使えない種別ならその理由の文字列)。
 
-    値は問い合わせ層のものをそのまま渡す(`query.describe_faces` / `describe_edges` / `region.regions`。測り直すと述語と食い違いうる)。
+    値は問い合わせ層のものをそのまま渡す(`query.describe_face` / `describe_edge` / `region.regions`。測り直すと述語と食い違いうる)。
     """
     if kind == "face":
         body = session.document.get_body(ref["body"])
-        described = next(face for face in query.describe_faces(body.shape) if face["index"] == ref["index"])
+        described = query.describe_face(body.shape, int(ref["index"]))
         item = {
             "kind": "face",
             "body": ref["body"],
             "index": ref["index"],
+            "surface_kind": described["kind"],
             "area": described["area"],
             "normal": described["normal"],
             # `describe_faces` の `center`(曲面では UV 範囲の中点)ではなく面積重心を渡す。AI が重心の位置決めに読む値。
@@ -230,7 +231,7 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
 
     if kind == "edge":
         body = session.document.get_body(ref["body"])
-        described = next(edge for edge in query.describe_edges(body.shape) if edge["index"] == ref["index"])
+        described = query.describe_edge(body.shape, int(ref["index"]))
         item = {
             "kind": "edge",
             "body": ref["body"],
@@ -240,6 +241,8 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             "end": described["end"],
             "edge_kind": described["kind"],
         }
+        if described["kind"] == "circle":
+            item["center"], item["radius"] = kernel.edge_circle(body.shape, int(ref["index"]))
         if described["kind"] != "line":
             return item, (
                 f"辺 {ref['index']} は直線ではない({described['kind']})。直線として測れるのはまっすぐな辺だけ"
@@ -288,7 +291,7 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
         return item, "ボディそのものは2項目の測定に使えない(頂点・辺・面を指す)"
 
     if kind == selection.SKETCH_ENTITY_KIND:
-        # スケッチの図形。点なら (u, v) を、辺なら解決済みの `params` をそのまま返す。
+        # スケッチの図形。点なら (u, v) を、辺なら解決済みの `params` をそのまま返す(線分だけ長さも)。
         sketch_id = ref["sketch"]
         entity_id = ref["entity"]
         target = sketch.get_entity(sketch.get_sketch(session.document, sketch_id), entity_id)
@@ -302,12 +305,27 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
         }
         if ref.get("point") is None:
             item["params"] = resolved
+            if target.kind == "line":
+                item["length"] = math.hypot(resolved["x1"] - resolved["x0"], resolved["y1"] - resolved["y0"])
         else:
             x_key, y_key = sketch.entity_point_pair(target.kind, str(ref["point"]))
             item["position"] = [resolved[x_key], resolved[y_key]]
         return item, "スケッチの図形は2項目の測定に使えない(測れるのはソリッドの頂点・直線の辺・平らな面)"
 
     raise ValueError(f"unmeasurable selection kind: {kind!r}")
+
+
+def inspect_selection(session: Any) -> Union[dict, None]:
+    """選択が**ちょうど1項目**ならその項目(`measure_selection` の `items[0]` と同じ形)、それ以外は None。
+
+    画面の選択情報の表示(issue #140)が選択の変わるたびに呼ぶので、2項目以上では何も測らない。
+    """
+    current = selection.get_selection(session.document)
+    if len(current.items) != 1:
+        return None
+    ref = current.items[0]
+    item, _ = _measure_item(session, ref, selection.ref_kind(ref))
+    return item
 
 
 def measure_selection(session: Any) -> dict:

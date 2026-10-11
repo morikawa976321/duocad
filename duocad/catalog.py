@@ -409,6 +409,8 @@ COMMANDS: tuple[Command, ...] = (
             "領域はスケッチ座標の面積重心も `center_uv` に返る。"
             "重心に穴をあける・重心に合わせて置くときは、重心を公式から自分で計算せず、"
             "領域・面・ボディを選んでこれで読む(押し出す前の位置決めは領域で読む)。"
+            "面は種類を `surface_kind` に、円(円弧)の辺は `radius` と `center` を、"
+            "スケッチの線分は `length` を返す。"
             "ちょうど2項目(頂点・直線の辺・平らな面)なら、そのあいだの距離が `between` に"
             "返る(直線・平面は無限に延ばして測る。平行でない線・面どうしは距離の代わりに"
             "角度)。verb ではないので、選んだ対象を確かめる往復に使う。"
@@ -1676,6 +1678,22 @@ COMMANDS: tuple[Command, ...] = (
         mcp=False,
         changes_document=False,
         note="**配信しない**。投機実行して形だけ測り、文書は `speculative` が元へ戻す",
+    ),
+    Command(
+        name="inspect_selection",
+        category="protocol",
+        description="",
+        params=(Param("request_id", "integer", "画面が古い返事を捨てるための通し番号(そのまま返す)"),),
+        session="inspect_selection",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**配信しない**(`get_edges` と同じ)。画面の選択情報の表示(issue #140)が選択・文書の変わるたびに呼ぶ。"
+            "返事は `{type:'selection_info', request_id, item, error}` で、`item` は選択がちょうど1項目のときの"
+            "`measure` の1項目(それ以外は null)。失敗は `error` に入れて返し、`{type:'error'}` にしない"
+            "(裏の要求の失敗でトーストを出さず、人が待っている操作の待ちも解かない)"
+        ),
     ),
     Command(
         name="get_vertices",
