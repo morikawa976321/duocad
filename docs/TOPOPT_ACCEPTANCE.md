@@ -282,6 +282,7 @@ F2000_h2.0_w2 の `finalize` の入力を書き出し、製品と同じ集合演
 
 - 採用: 最終検査が返した交差の組の三角形だけ、最短辺が 1e-3 mm 未満なら潰して検査し直す(`finalize.repair_float32_crossings`)。
   高さで先に潰す案は交差しない条件の結果も変えるので採らなかった。float64 で既に交差があるときは潰さず不合格にする(集合演算・簡略化の欠陥を隠さない)。
+  潰した後も float64 で検査し直し、潰したことで float64 に交差ができたら不合格にする(float32 では消えて見えうる)。
   float64 の検査は交差の組があるときだけかけるので、交差の無い条件の時間は変わらない。
 - 結果: F2000_h2.0_w2 は `recheck_failed_finalize.py` で `done`(三角形 128,776、安全率 4.8355)。
   64条件(`finalize_smoothing_corpus.py --suffix _issue133 --min-free-gb 3`)は合格 60/64 で 2026-10-06 と同じ条件。合格60条件は `collapsed_crossing_edges` 0 で、
