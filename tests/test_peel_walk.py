@@ -92,3 +92,18 @@ def test_dropping_the_first_pick_resumes_instead_of_walking_from_the_start(monke
         order = order[~np.isin(order, stats.picked_cells)]
     reused = calls['n'] - fresh
     assert reused < fresh / 2
+
+
+def test_rewriting_the_order_in_place_and_asking_for_nothing_still_match_a_fresh_peel():
+    """落ちたら、呼び出し側が同じ順位の配列を書き換えたときか、要求数が 0 以下のときに、覚えた歩きを誤って返している。"""
+    full = np.ones((4, 4, 4), bool)
+    anchors = np.zeros(0, dtype=np.int64)
+    walk = bs.PeelWalk(full, anchors)
+    order = np.arange(full.size)
+    _same(walk.take(order, 3), bs.peel(full, order, 3, anchors))
+    order[:] = order[::-1].copy()
+    _same(walk.take(order, 3), bs.peel(full, order, 3, anchors))
+    for count in (0, -2):
+        got = walk.take(order, count)
+        _same(got, bs.peel(full, order, count, anchors))
+        assert np.array_equal(got[0], full) and got[1].picked == 0

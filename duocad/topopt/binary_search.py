@@ -766,6 +766,11 @@ class PeelWalk:
         self.count = dict.fromkeys(_WALK_COUNTERS, 0)
         self.work = self.support = None
 
+    def _zero_counters(self) -> tuple:
+        return ((0,) * len(_WALK_COUNTERS),
+                None if self.core is None else dict(window_true=0, window_false=0, global_count=0, max_margin=1),
+                None if self.necks is None else dict(rejected=0, full_grid=0))
+
     def _counters(self) -> tuple:
         return (tuple(self.count.values()),
                 None if self.core is None else dict(self.core.stats),
@@ -784,22 +789,19 @@ class PeelWalk:
             self.support[tuple(slice(c, c + n) for c, n in zip(corner, mask.shape))] += mask
         self.work = np.pad(mask, 1)
         self.position = position
-        if counters is None:
-            self.count = dict.fromkeys(_WALK_COUNTERS, 0)
-            if self.core is not None:
-                self.core.stats.update(window_true=0, window_false=0, global_count=0, max_margin=1)
-                self.necks.stats.update(rejected=0, full_grid=0)
-        else:
-            self.count = dict(zip(_WALK_COUNTERS, counters[0]))
-            if self.core is not None:
-                self.core.stats.update(counters[1])
-                self.necks.stats.update(counters[2])
+        counters = self._zero_counters() if counters is None else counters
+        self.count = dict(zip(_WALK_COUNTERS, counters[0]))
+        if self.core is not None:
+            self.core.stats.update(counters[1])
+            self.necks.stats.update(counters[2])
 
     def take(self, order: np.ndarray, count: int) -> tuple[np.ndarray, PeelStats]:
         """`peel(mask, order, count, ...)` と同じ戻り値。"""
         started = time.perf_counter()
-        if self.protected is not None:
-            order = order[~self.protected.ravel()[order]]
+        if count <= 0:
+            return self._result(0, self._zero_counters(), started)
+        # 写しで持つ(呼び出し側が同じ配列を書き換えても、前回の順位との食い違いを見落とさない)。
+        order = np.array(order if self.protected is None else order[~self.protected.ravel()[order]], copy=True)
         if self.order is None:
             self._restore(0, 0, None)
         else:
@@ -849,7 +851,6 @@ class PeelWalk:
         while self.position < len(order) and total < count:
             position = self.position
             self.position += 1
-            before = self._counters()
             cell = int(order[position])
             i, rest = divmod(cell, plane)
             j, k = divmod(rest, row)
@@ -866,6 +867,8 @@ class PeelWalk:
             if all(window[p] for p in _WINDOW_NEIGHBOURS):
                 tally['skipped_surface'] += 1
                 continue
+            # ここまでの判定は数えを動かさずに通ってきたので、これがこのセルを調べる直前の数え(この先は大域の数え直しと判定器が動かす)。
+            before = self._counters()
             bite = None
             if m > 1:
                 extra = min_width.casualties(inner, (i, j, k), m, exempt)
