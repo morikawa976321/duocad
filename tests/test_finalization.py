@@ -194,6 +194,31 @@ def test_collapse_float32_slivers_removes_only_unrepresentable_edges():
     assert collapsed == 0
 
 
+def test_collapse_float32_crossings_removes_the_needle_that_flips_when_rounded():
+    """F2000_h2.0_w2 (#133) の交差5組を作る5枚。落ちたら、float32 で裏返る針状の三角形を潰せていない。"""
+    from duocad.mesh_intersections import triangle_intersections
+    from duocad.topopt.finalize import collapse_float32_crossings
+    v = np.array([[17.47172086510047, -186.4580733292355, 58.52722761479261],
+                  [17.492879514968028, -186.37686499573488, 58.51839567628473],
+                  [17.49918044285612, -186.32033256484826, 58.35884796767712],
+                  [17.499348273106545, -186.32799719505292, 58.287291130940716],
+                  [17.499988021321386, -186.2435964631998, 59.07493259940401],
+                  [17.499989320350313, -186.24356399536146, 59.07523545827184],
+                  [19.179058114101224, -186.15252540887144, 59.70752185933259]])
+    f = np.array([[3, 5, 2], [0, 1, 4], [1, 2, 4], [4, 2, 5], [3, 6, 5]])
+    rounded = lambda vertices: np.asarray(vertices).astype(np.float32).astype(np.float64)
+    assert triangle_intersections(v, f)['pairs'] == []
+    pairs = triangle_intersections(rounded(v), f)['pairs']
+    assert len(pairs) == 5
+    rv, rf, collapsed = collapse_float32_crossings(v, f, pairs)
+    # 潰れるのは頂点4・5の間の 3.05e-4 mm の辺だけで、針(4, 2, 5)が消える
+    assert collapsed == 1 and len(rf) == 4
+    assert triangle_intersections(rounded(rv), rf)['pairs'] == []
+    same_v, same_f, collapsed = collapse_float32_crossings(v, f, pairs, max_edge_mm=1e-4)
+    assert collapsed == 0 and np.array_equal(same_v, v) and np.array_equal(same_f, f)
+    assert collapse_float32_crossings(v, f, [])[2] == 0
+
+
 def test_solid_operation_undo_redo_and_replay():
     doc = Document()
     shape = box((0, 0, 0), (2, 3, 4))
