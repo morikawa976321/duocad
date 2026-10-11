@@ -363,6 +363,13 @@ class Server:
                     connection,
                     {"type": "measure", "client_op": message.get("client_op"), **result},
                 )
+            elif command == "inspect_selection":
+                payload: dict = {"request_id": message.get("request_id"), "item": None, "error": None}
+                try:
+                    payload["item"] = self.session.inspect_selection()
+                except Exception as error:  # 契約は catalog の `inspect_selection` の note
+                    payload["error"] = f"{type(error).__name__}: {error}"
+                await _send(connection, {"type": "selection_info", **payload})
             # -------------------------------------------------- 可変解像度(ズーム連動)
             # 文書は変わらないが配る形の粗さが変わるので全接続へ配り直す(粗さは `DocumentView` が文書に1つ持つ設定で、
             # 単一ブラウザ前提。理由と同時編集のときの変更点は `DocumentView.set_view_resolution`)。

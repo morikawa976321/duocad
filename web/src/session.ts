@@ -411,6 +411,56 @@ export interface MeasureBetween {
   delta: number[] | null
 }
 
+/**
+ * `measure` の1項目(`duocad/measure.py` の `_measure_item`)。単位は mm / mm² / mm³、座標はワールド。
+ * スケッチの `position` / `params` / `center_uv` だけはスケッチ座標 (u, v)。
+ */
+export type MeasureItem =
+  | {
+      kind: 'face'
+      body: string
+      index: number
+      surface_kind: string
+      area: number
+      normal: number[]
+      center: number[]
+    }
+  | {
+      kind: 'edge'
+      body: string
+      index: number
+      length: number
+      start: number[]
+      end: number[]
+      edge_kind: string
+      /** 円(円弧)の辺だけ。 */
+      radius?: number
+      center?: number[]
+    }
+  | { kind: 'vertex'; body: string; index: number; point: number[] }
+  | { kind: 'region'; sketch: string; index: number; area: number; center: number[]; center_uv: number[] }
+  | { kind: 'body'; body: string; name: string; volume: number; face_count: number; center: number[] | null }
+  | {
+      kind: 'sketch_entity'
+      sketch: string
+      entity: string
+      entity_kind: EntityKind
+      point: string | null
+      /** 点を指したときだけ。 */
+      position?: number[]
+      /** 図形全体を指したときだけ(解決済みの素の数値)。 */
+      params?: Record<string, number>
+      /** 線分の図形全体を指したときだけ。 */
+      length?: number
+    }
+
+/** `inspect_selection` の返事(要求した接続にだけ届く)。`item` は選択がちょうど1項目のときだけ。 */
+export interface SelectionInfoPayload {
+  request_id: number | null
+  item: MeasureItem | null
+  error: string | null
+}
+
 /** `measure` の返事(要求した接続にだけ届く。状態は変わっていない)。 */
 export interface MeasurePayload {
   client_op: number | null
@@ -767,6 +817,8 @@ export interface SessionHooks {
   onVertices(payload: VerticesPayload): void
   /** 測った(状態は変わっていない)。要求した接続にだけ届く。 */
   onMeasure(payload: MeasurePayload): void
+  /** 選択情報の表示の返事(状態は変わっていない)。要求した接続にだけ届く。 */
+  onSelectionInfo(payload: SelectionInfoPayload): void
   /** ファイルを書いた(状態は変わっていない)。 */
   onFile(payload: FilePayload): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
@@ -834,6 +886,8 @@ export interface Session {
    * 呼ぶのは選択に頂点が入っているときだけ(`duocad/server.py` の `Session.vertices`)。
    */
   getVertices(bodyId: string): void
+  /** 選択がちょうど1項目ならその寸法を取りに行く(応答は `onSelectionInfo`)。状態配信ではない。 */
+  inspectSelection(requestId: number): void
   /**
    * 画面の見え方をサーバへ知らせ、ズームに合わせた粗さでソリッド・辺・領域を測り直させる(可変解像度)。
    * 応答は通常の状態配信で、変わらなければ何も来ない。
@@ -1025,6 +1079,9 @@ export function createSession(hooks: SessionHooks): Session {
       items?: unknown[]
       between?: MeasureBetween | null
       between_error?: string | null
+      // ---------------------------------------------------------------- 選択情報
+      request_id?: number | null
+      item?: MeasureItem | null
     }
     try {
       message = JSON.parse(raw)
@@ -1060,6 +1117,12 @@ export function createSession(hooks: SessionHooks): Session {
         items: message.items ?? [],
         between: message.between,
         between_error: message.between_error,
+      })
+    } else if (message.type === 'selection_info') {
+      hooks.onSelectionInfo({
+        request_id: message.request_id ?? null,
+        item: message.item ?? null,
+        error: message.error ?? null,
       })
     } else if (message.type === 'file') {
       hooks.onFile({
@@ -1208,6 +1271,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     getVertices(bodyId) {
       send({ cmd: 'get_vertices', body_id: bodyId })
+    },
+    inspectSelection(requestId) {
+      send({ cmd: 'inspect_selection', request_id: requestId })
     },
     setViewResolution(worldPerPixel, sizeHint, focus) {
       if (focus == null) {

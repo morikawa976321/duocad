@@ -695,6 +695,19 @@ def edge_axis(shape: "TopoDS_Shape", edge_index: int) -> tuple:
     )
 
 
+def edge_circle(shape: "TopoDS_Shape", edge_index: int) -> tuple:
+    """**円(円弧を含む)の辺**の `([cx, cy, cz], radius)`(ワールド座標[mm])。
+
+    添字は `edge_count` / `edge_of` と同じ1始まり。円でない辺は ValueError。
+    """
+    edge = edge_of(shape, edge_index)
+    if classify_edge(edge) != "circle":
+        raise ValueError(f"edge {int(edge_index)} is not a circle (kind={classify_edge(edge)!r})")
+    circle = BRepAdaptor_Curve(edge).Circle()
+    center = circle.Location()
+    return ([float(center.X()), float(center.Y()), float(center.Z())], float(circle.Radius()))
+
+
 def face_solid_indices(shape: "TopoDS_Shape") -> List[int]:
     """面(`face_count` の1始まりの並び)ごとに、それを含む SOLID の0始まりの番号。どの SOLID にも無い面は -1。
 

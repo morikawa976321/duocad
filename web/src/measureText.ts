@@ -10,7 +10,7 @@ const PAIR_NAMES: Record<string, string> = {
   'plane-plane': '平面と平面',
 }
 
-function fixed3(value: number): string {
+export function fixed3(value: number): string {
   return value.toFixed(3)
 }
 
