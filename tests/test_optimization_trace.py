@@ -378,3 +378,23 @@ def test_an_error_in_the_run_reaches_the_caller_and_the_writer_is_closed(recordi
     assert rec._writer._shutdown
     assert json.loads((rec.path/'manifest.json').read_text(encoding='utf-8'))['status'] == 'failed'
     assert snapshot(rec, 'step9')['a'][0] == 9.
+
+
+def test_a_snapshot_whose_shared_array_disappears_before_it_is_written_is_not_published(recordings):
+    """落ちたら、積んでから書くまでの間に既存の配列が消えたとき、参照の切れた JSON を成功扱いで残している。"""
+    import threading
+
+    shared = np.arange(5.)
+    gate = threading.Event()
+    with trace.recording() as rec:
+        rec.snapshot('first', dict(a=shared))
+        rec.flush()
+        rec._submit(gate.wait)
+        name = rec.snapshot('second', dict(a=shared))
+        shutil.rmtree(rec.path/'arrays')
+        gate.set()
+        rec.flush()
+        rec.snapshot('third', dict(a=shared))
+    assert not (rec.path/name).exists()
+    assert rec.write_failures == 1
+    assert np.array_equal(snapshot(rec, 'third')['a'], shared)

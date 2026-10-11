@@ -186,8 +186,8 @@ class Recorder:
             self._manifest()
 
     def _encode(self, value, seen, arrays):
-        """`value` を JSON にできる形へ直し、書く必要のある配列を `arrays` へ `(鍵, パス, 写し)` で足す。
-        書き出しスレッドが書けたと確かめた配列で、ファイルも残っているものだけ足さない(書けなかった・消えた配列は次の記録で書き直す)。"""
+        """`value` を JSON にできる形へ直し、参照する配列を `arrays` へ `(鍵, パス, 写し)` で足す。書き出しスレッドが書けたと
+        確かめた配列で、ファイルも残っているものは写しを取らない(写しは None。書けなかった・消えた配列は次の記録で書き直す)。"""
         if isinstance(value, np.ndarray):
             if value.dtype.hasobject:
                 raise TypeError('object配列は診断記録に保存できない')
@@ -199,8 +199,7 @@ class Recorder:
             path = self.path/relative
             with self._lock:
                 written = key in self._written_arrays
-            if not (written and path.exists()):
-                arrays.append((key, path, np.array(array, copy=True)))
+            arrays.append((key, path, None if written and path.exists() else np.array(array, copy=True)))
             return {'$array':relative, 'shape':list(value.shape), 'dtype':value.dtype.str}
         if isinstance(value, np.generic):
             return self._encode(value.item(), seen, arrays)
@@ -244,8 +243,13 @@ class Recorder:
         started = time.perf_counter()
         try:
             for key, path, array in arrays:
-                if not path.exists():
+                if array is not None and not path.exists():
                     _atomic(path, lambda stream, array=array: np.savez_compressed(stream, data=array))
+                if not path.exists():
+                    # 写しを取らなかった配列が、積んでから書くまでの間に消えた。参照の切れた JSON は公開しない。
+                    with self._lock:
+                        self._written_arrays.discard(key)
+                    raise FileNotFoundError(f'記録の配列が消えた: {path.name}')
                 with self._lock:
                     self._written_arrays.add(key)
             _atomic(self.path/filename, lambda stream: stream.write(data))
