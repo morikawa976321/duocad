@@ -78,6 +78,7 @@ def extrude(
             **numbered,
         },
     )
+    operation.provenance = result["provenance"]
     remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
     return operation
 
@@ -284,13 +285,14 @@ def _do_extrude(document: Document, operation: Operation) -> None:
         result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=None)
         _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
         remember(document, body_id, operation.seq, None)
-        return
-
-    target = _editable_target(document, body_id)
-    previous_shape = target.shape
-    result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=target.shape)
-    target.shape = result["shape"]
-    remember(document, body_id, operation.seq, previous_shape)
+    else:
+        target = _editable_target(document, body_id)
+        previous_shape = target.shape
+        result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=target.shape)
+        target.shape = result["shape"]
+        remember(document, body_id, operation.seq, previous_shape)
+    if operation.provenance is None:
+        operation.provenance = result["provenance"]
 
 
 def _redo_faces(

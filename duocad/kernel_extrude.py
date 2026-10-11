@@ -2,7 +2,7 @@
 
 面の押し出し(`extrude_faces`)と、スケッチの領域の押し出し(`extrude_regions`)を持つ。
 面の数え方(`_face_map` の1始まりの添字)・ブーリアンの検査(`_checked_volume` / `_require_valid`)・
-由来の射影(`_positions_in` / `_face_map_projection`)は `kernel` の側にあり、ここはそれを読むだけ ——
+由来の射影(`_target_successors` / `_face_map_projection`)は `kernel` の側にあり、ここはそれを読むだけ ——
 依存は kernel_extrude → kernel の一方向。
 
 戻り値の規律は kernel と同じ(JSON化できる素の値だけ)。例外は `"shape"`(TopoDS_Shape。
@@ -28,10 +28,8 @@ from .kernel import (
     _face_normal,
     _face_props,
     _fuse_all,
-    _is_removed,
-    _positions_in,
     _require_valid,
-    _shape_list,
+    _target_successors,
     _unify_same_domain,
     classify_face,
     volume,
@@ -50,7 +48,13 @@ def extrude_regions(
 ) -> dict:
     """領域の面群を法線方向へ押し出し、join/cut/new した形状を返す。
 
-    戻り値: {"shape": TopoDS_Shape, "volume_before": float | None, "volume_after": float}
+    同一平面の面の統合(`_unify_same_domain`)は、join / new で柱を束ねたとき(柱が複数か、相手への join)にだけ掛ける。
+
+    戻り値(`"shape"` 以外はJSON化できる素の値):
+        {"shape", "unified": bool, "volume_before": float | None, "volume_after": float,
+         "provenance": {"verb": "extrude", "mode": str, "distance": float, "unified": bool,
+                        "face_map": {"<旧添字>": [新添字, ...]}, "deleted": [...], "new_faces": [...]}}
+    `face_map` の旧添字は `target_shape` の面(相手が無ければ空)。
     """
     if not faces:
         raise ValueError("extrude_regions requires at least one face")
@@ -88,6 +92,7 @@ def extrude_regions(
     combined = _fuse_all(prisms, "region prisms")
 
     volume_before: Optional[float] = None
+    builder = None
     if mode in ("join", "new"):
         if target_shape is None or target_shape.IsNull():
             result = combined
@@ -107,12 +112,27 @@ def extrude_regions(
         result = builder.Shape()
 
     volume_after = _checked_volume(result, mode, volume_before=volume_before)
-    _require_valid(result, mode)
+    final, history, unified = result, None, False
+    # 柱1本の new は束ねていないので統合しない。統合すると輪郭の分割で割れた側面までまとまり、
+    # 後の操作が記録した面・辺の番号がずれる(実測: SVG を取り込んだ輪郭の柱1本で 38面 -> 26面)。
+    if mode in ("join", "new") and (len(prisms) > 1 or builder is not None):
+        final, history, unified = _unify_same_domain(result, volume_after)
+    _require_valid(final, mode)
+    final_map = _face_map(final)
+    successors = {} if builder is None else _target_successors(builder, target_shape, history, final_map)
 
     return {
-        "shape": result,
+        "shape": final,
+        "unified": unified,
         "volume_before": volume_before,
-        "volume_after": volume_after,
+        "volume_after": volume(final),
+        "provenance": {
+            "verb": "extrude",
+            "mode": mode,
+            "distance": distance,
+            "unified": unified,
+            **_face_map_projection(successors, final_map.Extent()),
+        },
     }
 
 
@@ -132,8 +152,8 @@ def extrude_faces(
     許容値は OCCT の `Precision`(kernel に押し出し用の定数は無い。`_MATCH_TOL` は重心の突き合わせ用で
     桁が緩い): 法線のずれは `Precision.Angular_s`、平面までの距離は `Precision.Confusion_s`。
 
-    同一平面の面の統合は `_unify_same_domain`(コピーで試して採否を決める)を join / cut にだけ掛ける。
-    掛けないと押すたびに面が分裂して増える。`new` は柱を返すだけで統合しない。
+    同一平面の面の統合は `_unify_same_domain`(コピーで試して採否を決める)を join / cut と、柱が複数の `new` に掛ける。
+    掛けないと押すたびに面が分裂して増える。柱1本の `new` は束ねていないので統合しない。
 
     戻り値(`"shape"` 以外はJSON化できる素の値):
         {"shape", "unified": bool, "normal": [nx,ny,nz], "distance": float,
@@ -206,7 +226,7 @@ def extrude_faces(
             ) from None
         raise
 
-    if mode == "new":
+    if mode == "new" and len(prisms) == 1:
         final, history, unified = result, None, False
     else:
         # 順序は 無変化 → 統合 → BRepCheck(統合は形状を壊しうるので、検査は統合後に行う)。
@@ -214,18 +234,7 @@ def extrude_faces(
     _require_valid(final, mode, context)
     final_map = _face_map(final)
 
-    successors: dict = {}
-    if builder is not None:
-        target_map = _face_map(target_shape)
-        for index in range(1, target_map.Extent() + 1):
-            old_face = target_map.FindKey(index)
-            candidates = _shape_list(builder, "Modified", old_face)
-            if not candidates and not _is_removed(builder, old_face):
-                candidates = [old_face]
-            successors[str(index)] = _positions_in(
-                final_map,
-                (survivor for candidate in candidates for survivor in _through_history(history, candidate)),
-            )
+    successors = {} if builder is None else _target_successors(builder, target_shape, history, final_map)
 
     after_face_indices = [
         _find_translated_face(
@@ -298,18 +307,6 @@ def _check_coplanar_planes(faces: Sequence[Any], indices: Sequence[int]) -> tupl
                 f"{where}: 同一平面上にない(平面までの距離 {offset:.6g} mm)"
             )
     return first_normal, centroids
-
-
-def _through_history(history: Any, sub: "TopoDS_Shape") -> List["TopoDS_Shape"]:
-    """`BRepTools_History` を1段たどる(消えたら空、触られていなければ自分自身)。"""
-    if history is None:
-        return [sub]
-    modified = _shape_list(history, "Modified", sub)
-    if modified:
-        return modified
-    if _is_removed(history, sub):
-        return []
-    return [sub]
 
 
 def _find_translated_face(

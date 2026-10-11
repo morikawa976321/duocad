@@ -107,6 +107,7 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 - **ソリッド限定チェックは `kernel.is_solid()`(SOLID 0 個なら False)を通す。** `selection.py` と verb 層は `OCP` を直接 import しない(`tests/test_boundaries.py` が強制)。
 - **プレビュー再計算は既存の汎用機構が覆う**: `CommandHost.svelte` の `selectionPrint`(`kind:'selection'` の arg を持つコマンドは確定選択の中身をプレビュー再送キーに含める)。選択の増減でプレビューが動く verb を足すときも、まずこれで足りるか確認する。
 - Web の `BOOLEAN_BODY` の `args` 順は `[pick target_ref(face), selection tools(face/edge/vertex, min=1), choice mode]`(`firstMissingArg` の質問順)。`SOLID_FEATURE_COMMANDS` にのみ追加。
+- **union だけ同一平面の面を統合する**(`_unify_same_domain`。隣り合うボディの継ぎ目を消し、またぐ辺にフィレットをかけられるようにする)。cut / intersect は統合しない。`provenance` は押し出しと同じ形(`face_map` の鍵はターゲットの面、ツール由来の面は `new_faces`)。
 - 1つの Body 内に複数 SOLID(compound ソリッド)を持つ場合の個別演算は未保証(`boolean_bodies` は「SOLID が 1 個以上あるか」しか見ない)。
 - 新しい verb の追加は `MCP.md` のツール表(`test_doc_code_agreement.py`)と画面の `Applied` 型(`web/src/generated/protocol.ts` の生成物。`npm run check`)の追随が不可避。
 
@@ -124,7 +125,7 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 ## 押し出し(extrude)の kernel 分離・web 統合・extrude_face 廃止
 
 - **押し出しの幾何は `duocad/kernel_extrude.py`**(`extrude_regions(faces, distance, mode, normal, target_shape=None)` と `extrude_faces`。mode は join/cut/new)。`verbs/extrude.py` が直接呼ぶ。`kernel.py` に再エクスポートは無く、`kernel.extrude_regions`/`kernel.extrude_face_on_shape` は存在しない(AttributeError)。`mcp_server.py` から `kernel_extrude.*` を直接呼ばない(`tests/test_mcp_verbs.py` が検査)。
-- **依存は `kernel_extrude` → `kernel` の一方向。** `kernel.py` から `kernel_extrude` を import しない(循環)。`kernel_extrude` は kernel の private 補助(`_face_map`・`_face_at`・`_face_normal`・`_face_props`・`_checked_volume`・`_require_valid`・`_unify_same_domain`・`_fuse_all`・`_positions_in`・`_face_map_projection`・`_shape_list`・`_is_removed`)を import している。これらの名前・シグネチャを `kernel.py` 側で変えるなら `kernel_extrude` も直す。`face_of`/`_face_at` は `query.py`・`kernel_sketch.py`・テストが使うので `kernel` に残す。
+- **依存は `kernel_extrude` → `kernel` の一方向。** `kernel.py` から `kernel_extrude` を import しない(循環)。`kernel_extrude` は kernel の private 補助(`_face_map`・`_face_at`・`_face_normal`・`_face_props`・`_checked_volume`・`_require_valid`・`_unify_same_domain`・`_fuse_all`・`_target_successors`・`_face_map_projection`)を import している。これらの名前・シグネチャを `kernel.py` 側で変えるなら `kernel_extrude` も直す。`face_of`/`_face_at` は `query.py`・`kernel_sketch.py`・テストが使うので `kernel` に残す。
 - **OCP を import してよいカーネル層は 6 本**(`tests/test_boundaries.py` の `OCP_ALLOWED` と README の表に `kernel_extrude.py`)。
 - **UI から `extrude_face` を呼ぶ経路は無い。** ツールバーの「押し出す」は 1 つ(`#extrude`)。`features.ts` の `makeExtrude('region'|'face')` が同じ id `extrude` の 2 定義を作り、`EXTRUDE_REGIONS`(`SKETCH_FEATURE_COMMANDS`、選択引数名 `regions`)と `EXTRUDE_FACES`(通常モードの `SOLID_FEATURE_COMMANDS`、`faces`)として出す(どちらも min 1・max null)。距離 `#distance`、種別 `#extrude-mode-join/cut/new`。サーバへ送るのは両方 `{distance, mode}` だけ(対象はコアの確定選択)。旧 UI id `extrude_face`、`#extrude-regions`、`#regions-distance` は廃止。
 - 同じ id `extrude` が 2 つの一覧に居ても、`CATEGORY_OF`(`App.svelte`)は id→category で両方 `feature` なので壊れない。`findCommand(id, list)` の `list`、`CommandHost` の `commands` プロップは必須(既定なし)。

@@ -64,12 +64,12 @@ def _validate_participants(
 
 
 def _apply(doc: Document, target_body, tools: Sequence, mode: str) -> tuple:
-    """演算(kernel)→ ターゲットの形を差し替え → ツールを退避して消す。戻りは `(前の形, 退避)`。
+    """演算(kernel)→ ターゲットの形を差し替え → ツールを退避して消す。戻りは `(前の形, 退避, 由来)`。
     幾何の失敗は差し替えより先に上がるので、落ちたときは文書に何も残らない。"""
     result = kernel.boolean_bodies(target_body.shape, [tool.shape for tool in tools], mode)
     previous_shape = target_body.shape
     target_body.shape = result["shape"]
-    return previous_shape, detach_bodies(doc, [tool.id for tool in tools])
+    return previous_shape, detach_bodies(doc, [tool.id for tool in tools]), result["provenance"]
 
 
 def _remember_undo(doc: Document, target_id: BodyId, seq: int, previous_shape: Any, detached: dict) -> None:
@@ -86,7 +86,7 @@ def boolean_body(
     """ターゲットにツール群を作用させる。`target_ref` は面1枚への参照、ツールは BodyId の並び。"""
     target_body_id = _validate_target_ref(doc, target_ref)
     target_body, tools = _validate_participants(doc, target_body_id, tool_body_ids)
-    previous_shape, detached = _apply(doc, target_body, tools, str(mode))
+    previous_shape, detached, provenance = _apply(doc, target_body, tools, str(mode))
     operation = doc.log.append(
         VERB_BOOLEAN_BODY,
         {
@@ -95,6 +95,7 @@ def boolean_body(
             "mode": str(mode),
         },
     )
+    operation.provenance = provenance
     _remember_undo(doc, target_body.id, operation.seq, previous_shape, detached)
     return operation
 
@@ -105,7 +106,9 @@ def _do_boolean_body(document: Document, operation: Operation) -> None:
     target_body, tools = _validate_participants(
         document, args["target_body_id"], [str(body_id) for body_id in args["tool_bodies"]]
     )
-    previous_shape, detached = _apply(document, target_body, tools, str(args["mode"]))
+    previous_shape, detached, provenance = _apply(document, target_body, tools, str(args["mode"]))
+    if operation.provenance is None:
+        operation.provenance = provenance
     _remember_undo(document, target_body.id, operation.seq, previous_shape, detached)
 
 
