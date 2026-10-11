@@ -150,6 +150,8 @@ python -m pytest tests/test_pre_smoothing.py -q
 最終ボディをメッシュとして持ち、STEP書き出し・面単位の選択・CAD編集を持たないことは製品仕様(本人判断 2026-09-23、2026-10-10 再確認。[TOPOPT.md](TOPOPT.md)「結果は編集可能ソリッドとして持たない」)。
 体積が小さいこと(結果とメッシュ化済み保持・除外を再演算した残りは約1e-12 mm³だが `is_empty()` は false で残存三角形あり)を理由に保持・除外の厳密合格とはしていない。
 
+他の外部実装として CGAL autorefinement・CGAL Alpha Wrap も確認したが、汎用の壊れた入力の修復器ではなく、採用するなら実物の独立検査が要るので採らなかった(Manifold を採用)。
+
 追加依存(Windows wheel): Manifold 3.5.3、CGAL Python bindings 6.0.1.post202410241521、PyMeshLab 2025.7.post1。
 
 ```powershell
@@ -266,30 +268,6 @@ OCCT は角度 0.35 rad(20°)に対して弦角を 10° に取り、線形 0.2 m
 確定マスクには管が 9 セルあり、`thin_voids.fill_tubes` で埋めると平滑化後の交差は 4組 → 0(三角形 51,836 → 51,764、体積 41,754.7 → 41,754.0 mm³。2026-10-07)。
 埋めた後の FEM の取り直しはこの実行では未実施。同じ hanger の検証材料(要素 2.4 mm の16条件)を製品経路に通した結果は [TOPOPT.md](TOPOPT.md)「1×1 の空隙を探索後に埋める」
 (16/16 `done`、安全率は全条件で下がらず +0.001%〜+0.904%、ピーク常駐 1.0〜1.9 GB)。#93 の他の3実行と 2026-09-21 の実行 `20260921T185659-b6799e00457d` はローカルにも `D:\` にも無く、再生していない。
-
-## B-rep ブーリアン経路を採らなかった理由(2026-10-06 まで)
-
-#95 でメッシュ集合演算へ置き換える前の最終処理(縫合 → `BOPAlgo_BOP` の cut / fuse → `inspect_solid` → `solid_mesh` の三角形分割 0.2 mm)の調査の要点。
-当時の `replay_finalization.py`(B-rep 版)・`final-solid` スナップショット・`check_final_shape.py --solid-snapshot` は無い。
-
-- **64条件の合格は 7/64(2026-09-26)**。落ちた段は material-cut の警告(`BOPAlgo_AlertTooSmallEdge`)21条件・`solid_mesh` の三角形分割できない面17・material-cut の演算結果が不正7・最終ソリッドの自己干渉検査が完了せず6・
-  preserve-fuse 3・ブーリアン後の水密不合格2・`solid_mesh` の成果物条件1。平滑化の交差がある4条件は全て不合格だが、不合格の大半(53条件)は平滑化の交差が無い条件で、B-rep のブーリアンとその後の分割で落ちた。1条件 131〜1,300 秒。
-- **外部の罠: 保持と除外が同一の面を共有するモデル**。hanger の保持7(厚さ5 mm の環)の内面と除外11(半径13.288 mm のロッド)のくびれ面が同一のトーラス(R=352.8617, r=340。距離 1e-13 mm、体積の重なりは0)で、
-  この2つが同じ cut に入り道具がもう1つ以上あると、OCCT の cut が `AcquiredSelfIntersection`・`FaceBuilderUnusedEdges`・`SolidBuilderUnusedFaces` の警告を出し、面を捨てて不正な形を返す(`BadOrientationOfSubshape`)ことがある
-  (メッシュ次第で出たり出なかったりする。直方体の除外を足した文書で4実行が同じところで止まった)。除外11を軸まわりに ×0.999(面が約13 µm離れる)にすると警告0、×1.001 では `FaceBuilderUnusedEdges` が2件残る。
-  辺が二重になって OCCT が部品をツール経由でつながったと見なす、と読んでいる(推定。共有面の同一性と、ずらすと警告が消えることは実測)。
-- 試して採らなかった回避策(いずれも保存済みB-repで実測): cut を先・union を後(後の union が壊れ体積が減る)・fuzzy 1e-4 / 1e-3 mm(警告が 6 / 5 件に減るだけ、1e-2 は15分以上終わらない)・
-  12個の道具を先に1回で fuse してから cut・除外だけ cut → 保持だけ cut の2回(どちらも警告が残る)・`BOPAlgo_CellsBuilder` で (メッシュ ∪ 保持) − 除外 を1回で作る
-  (警告0・体積 3,169,813.75 でソリッド1個だが最終検査の自己干渉が1件残り、`ShapeFix_Shape` は体積が変わって無効になる。fuzzy を付けると壊れる)。
-  製品に採用した「まとめて cut → 保持だけ引き算 → fuse」でも最後の fuse で警告が 1+1 件残り(除外11の円柱面とBSpline遷移面の境目。推定)、hanger は合格しなかった。
-  `_boolean` の警告ゲート(警告1件でも `ValueError`)を、エラーなしの警告なら `inspect_solid` の面-面の実交差だけを数える判定(`kernel_brep._count_face_interferences`)に通す形へ直すと `finalize()` は通ったが、直後の `solid_mesh()` が下の極小面で失敗した。
-- **三角形分割に失敗する極小面**(hanger 面 74485、面積 0.00824 mm² の剃刀のような平面。material-cut の段階で既に存在): 単独メッシュ化は毎回三角形0枚、`ShapeUpgrade_UnifySameDomain` は統合されず(許容差を広げると例外)、
-  `ShapeFix_FixSmallFace` は precision 0.05 以上で形状が無効になり別の面が失敗し始め、局所の穴埋め・Defeaturing は問題を別の面に移すだけ、全体を細かくする(偏差 0.0005 mm で別の11,366面が未分割)も解決にならなかった。
-  **2026-09-23 に境界折れ線の交差を独自に検査して再分割する形で修正**(`duocad/kernel_meshing.py`。[TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md))。
-  欠落6面は取付側の3つの保持リング周辺で、フィレット付き保持穴と単純な除外円柱の間の微細領域が原因。これは保持・除外入力の定義にもあり、モデル中の3か所全てに存在するので入力変更を解決の前提にしない。
-  **落とし穴: 面番号は `kernel._face_map`(`TopExp.MapShapes_s`、1始まり)と `duocad/mesh_geometry.subshapes`(`TopExp_Explorer`、0始まり)で同じ添字が別の面を指す**。突き合わせるときは `kernel._face_map` と `TopoDS.Face_s(face_map.FindKey(idx))` を使う。
-- 平滑化の交差(4組)は B-rep 経路でも material-cut を直した後の `inspect_solid` で `self_intersections=4` として落ちる(上「平滑化後の自己交差」)。
-- 外部実装の候補として Manifold・CGAL autorefinement・CGAL Alpha Wrap を確認し、後二者は汎用の壊れた入力の修復器ではなく採用するなら実物の独立検査が要る、と見た。採用したのは Manifold(上「メッシュ集合演算」)。
 
 ## ビューア表示とSTLエクスポートの同一性
 

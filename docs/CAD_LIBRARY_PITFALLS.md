@@ -22,7 +22,7 @@
 | `Face.center()` の既定は `CenterOf.GEOMETRY` で面積重心ではない(曲面では面パッチの上にすら乗らない) | `duocad/query.py` `face_centroid` / `face_fingerprint` |
 | 生の `TopoDS_Shape` を build123d で包む入口は `Compound.cast`(基底の `Shape.cast` は None を返す)。`faces()` / `edges()` は重複除去済み | `duocad/query.py` 冒頭 |
 | `BRepClass3d_SolidClassifier` は材料内部の孤立点を OUT と誤判定することがある(神託として使うときの作法) | [TOPOPT.md](TOPOPT.md) |
-| 面の添字は形状変更(フィレット)で散発的にずれる / STEP往復の体積は bit-exact でない / undo の再計算で体積の下位ビットが動く | [../README.md](../README.md)「実測で判明している技術的な地雷」、`web/scripts/smoke.mjs` `VOLUME_EPS` |
+| 面の添字は形状変更(フィレット)で散発的にずれる / STEP往復の体積は bit-exact でない | [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)(面の添字)、[../README.md](../README.md)「実測で判明している技術的な地雷」(STEP往復) |
 
 ## build123d / OCP
 
@@ -55,6 +55,11 @@
 - **R と d の円弧が同じ点で接する結果の結合は、既定の許容差(1e-7)だと取りこぼしうる**ので、ブーリアンに
   1e-6 のファジー値を付ける(`_ENVELOPE_TOLERANCE`)。ベジエ辺の領域は、オフセットが元の曲線の近似曲線を返し
   線分・円弧だけという指定を満たせないので拒む。
+- **外部の罠: 同一の面を共有する2つのソリッド(体積の重なりは0)が同じ `BOPAlgo_BOP` の cut に入ると、OCCT が面を捨てて不正な形を返すことがある。**
+  hanger の保持(厚さ5 mm の環)の内面と除外(半径13.288 mm のロッド)のくびれ面が同一のトーラス(距離 1e-13 mm)で、道具がもう1つ以上あると
+  `AcquiredSelfIntersection`・`FaceBuilderUnusedEdges`・`SolidBuilderUnusedFaces` の警告のあと `BadOrientationOfSubshape` が出る(メッシュ次第で出たり出なかったりする)。
+  片方を軸まわりに ×0.999(面が約13 µm離れる)にすると警告0、×1.001 では `FaceBuilderUnusedEdges` が2件残る。fuzzy 1e-4 / 1e-3 mm は警告が6 / 5件に減るだけで、cut と union の順の入れ替え・先に道具を fuse・2回に分けた cut でも警告は残る
+  (推定: 辺が二重になって部品をツール経由でつながったと見なす)。製品の最終処理はこの経路を持たない(メッシュ集合演算。[TOPOPT.md](TOPOPT.md)「最終処理はメッシュ集合演算」)。
 
 ## 複数面の押し出し（`kernel_extrude.extrude_faces`）
 
@@ -86,12 +91,10 @@
   6. ザグリ深さ — 円錐面と円筒面の境界頂点の軸方向座標差。
 
   B-spline サーフェスが混ざると手作業では割に合わない。断面が押し出しでない形は代表寸法までで止める。
-- **全周円筒は「穴」とは限らない。面の種類の前にソリッド数と体積を見る。** `shelf_attachment_GD.step` を
-  「56面 = 平面34 + 全周円筒22 → 板に22個の穴」と読んだが、実際は**17個の独立したソリッド**
-  (円柱 体積 1767.1 = π·5²·22.5、小円柱 117.8 = π·2.5²·6)で、ネジ・スペーサー類の集まりだった
-  (`_GD` が与件、`_result.stl` が成果物という命名)。面の種類は向きを持たないので穴の内壁もピンの外側も
-  同じ「全周円筒」になる。ソリッド数 → 1部品かアセンブリか、体積を既知の式と突き合わせる、の順が安い。
-  他人の配布データが混在するフォルダで面の統計から「本人の設計」を推定するのは危うい。
+- **STEP を面の種類から読む前に、ソリッド数と体積を見る。** 全周円筒は穴の内壁もピンの外側も同じ種類になる
+  (`shelf_attachment_GD.step` の事例は [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)「全周円筒のしきい値」)。
+  ソリッド数 → 1部品かアセンブリか、体積を既知の式と突き合わせる、の順が安い。他人の配布データが混在するフォルダで
+  面の統計から「本人の設計」を推定するのは危うい。
 - **duocad 自身の STEP 書き出し(`io_step.py export_step` → `kernel.write_step`、`STEPControl_Writer` を AsIs で使用)は
   `Interface_Static` を触っていないので OCCT 既定の AP214・mm で出る。部品名は載らない。** 実測(2026-10-06、
   穴あき直方体 50×30×10・φ6 と 20×20×10 ×2): OCP/build123d で再読込して体積 14717.26 / 8000、面 7、
@@ -105,7 +108,7 @@
 
 - **PATH の `python` で `python -m pytest` を回すと、OCP を import する全モジュールが
   `ModuleNotFoundError: No module named 'OCP'` で収集エラーになる**(19件 / 48件等、ファイル数で変わる)。
-  PATH の `python` はセッションごとに実体が違う(旧 taskbox runner では別プロジェクトの venv を拾っていた)。
+  PATH の `python` はセッションごとに実体が違う。
   **「テストが全部壊れている」に見えるが、インタプリタを間違えているだけ。**
   正しい呼び方は `.\.venv\Scripts\python.exe -m pytest -q`(`pyproject.toml` の `pythonpath=["."]`
   があるので venv の python なら素の `pytest` でも通る)。

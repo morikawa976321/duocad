@@ -11,9 +11,9 @@
 | 実行環境 | 専用の `.venv` / `node_modules` / `web/dist` | 開発用のもの |
 | 制作データ | `%USERPROFILE%\mf\duocad-data\{models,export,logs}` | リポジトリ直下の `models/` `export/` |
 | ポート(WS / HTTP) | **8775 / 8776** | 8765 / 8766(既定) |
-| 画面 | Edgeのアプリウィンドウ。ヘッダーに更新ボタン(更新があるときだけ) | ヘッダー左端に「開発版」の札、窓のタイトルに `[開発版]` |
 | MCP(Claude Code) | 安定版のフォルダで開いたセッション → 8776(local スコープ登録) | `.mcp.json` → 8766 |
-| 起動 | Win → `duocad` → Enter | 従来どおり(README 1章) |
+
+使う側の見え方(起動・画面・札・アドレス)は [MANUAL.md](MANUAL.md) の表。
 
 **開発版が既定のポートを持ち、安定版がずれる**のは、開発側が既定のポートで立て・繋ぐ習慣を変えずに済ませるため。追跡している `.mcp.json`(8766)は両方のcloneに
 入るが、安定版のフォルダでは local スコープの登録(8776)が優先される(local > project > user)。
@@ -45,8 +45,7 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 
 - **起動**: スタートメニューの「duocad」(`pythonw -m duocad.launcher`)。サーバが立っていなければ
   窓の無いプロセスで立て(初回は十数秒)、Edgeの `--app=` ウィンドウで開く。立っていれば窓を開くだけ。
-- **窓を閉じてもサーバは残る**(MCPクライアントが窓と無関係に繋ぐため)。止めるときはタスクマネージャーで
-  コマンドラインに `--channel stable` を含む python を止める。
+- **窓を閉じてもサーバは残る**(MCPクライアントが窓と無関係に繋ぐため)。止め方は [MANUAL.md](MANUAL.md)「サーバを止める」。
 - ログ: `duocad-data\logs\server.log`(5MBで1世代回す)。
 - 同じポートで別のduocad(開発版)が動いていたら、ランチャーは開かずにその旨を出す。
 
@@ -65,14 +64,6 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 **失敗したら元のコミットへ戻して立て直す**(トーストに理由とログの場所。uv・npm が見つからない等でも、
 スクリプトは最後に必ず立て直す)。実測(依存の変化なし): 取り込みからビルドまで4秒、巻き戻しを含めて7秒。
 
-**Python の版を上げる更新**(例: 3.11 → 3.14)は、サーバ(uv の venv の python)が子へ渡す `PYTHONHOME` を
-更新スクリプトが引き継ぐと `uv sync` が落ちる。`duocad/channel.py` と `update.ps1` が外しているが、**外す前の版の
-サーバから押した更新では落ちる**(元の版へ戻る)。そのときは duocad から起動していない普通の PowerShell で `update.ps1` を手で走らせる
-(`-ServerPid` を省くと `-HttpPort` からサーバを探して止める):
-
-```
-powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot $env:USERPROFILE\mf\duocad-stable -LogDir $env:USERPROFILE\mf\duocad-data\logs -DataDir $env:USERPROFILE\mf\duocad-data
-```
 元の版への復元にも失敗したときは、トーストがそう言う(`last-update-result.json` の `restored: false`)。
 
 ボタンが出ない・押せない条件(`duocad/channel.py`):
@@ -86,13 +77,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\mf\duocad-s
 
 ## 巻き戻し(手動)
 
-直前の更新の前のコミットは `duocad-stable\.git\duocad-previous` に残る。
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File $env:USERPROFILE\mf\duocad-stable\tools\stable\update.ps1 -RepoRoot $env:USERPROFILE\mf\duocad-stable -LogDir $env:USERPROFILE\mf\duocad-data\logs -DataDir $env:USERPROFILE\mf\duocad-data -Rollback
-```
-
-動いているサーバは8776から探して**すぐ強制終了する**(止まるよう頼む口は無い。文書は自動保存済みなので、
+直前の更新の前のコミットは `duocad-stable\.git\duocad-previous` に残る。実行するコマンドは
+[MANUAL.md](MANUAL.md)「前の版に戻す」（`update.ps1 -Rollback`）。動いているサーバは8776から探して**すぐ強制終了する**(止まるよう頼む口は無い。文書は自動保存済みなので、
 失うのは走っている形状最適化・AIの途中だけ)。戻り先は**成功した更新のときだけ**書き換わる。巻き戻した後も main は先にあるので、更新ボタンは出続ける。
 
 ## 制作データの扱い

@@ -20,15 +20,12 @@
     `duocad_secrets.json` に書く。手で置く場合の置き場所と、名前を `ANTHROPIC_API_KEY` にしない理由は README §4「AI側」。
 - **`claude` CLI をサブプロセス起動して AI パネルから使う案（3段構成の段2+3）は未決**（段1の MCP HTTP トランスポートだけ実装済み）。
   「web アプリであることが邪魔をしているのでは。ネイティブに移植すべきか」も未決。
-- **MCP 登録は `.mcp.json`（project スコープ）だけ**（本人。user スコープは選ばなかった）。登録がリポジトリに載り、クローンすれば
-  繋がる。コンテキスト消費は判断材料として小さかった（遅延読み込みが既定で、セッション開始時に載るのはツール名29個 731文字＋
-  instructions 836文字。全スキーマ 10,169文字は `alwaysLoad` か `ENABLE_TOOL_SEARCH=false` のときだけ）。
 
 ## ローカル LLM の実測（duocad の実ツールで）
 
-- **Qwen3.8-27B-Q3_K_M**（llama-server・`-c 16384`）: 5面6辺の STEP で `import_step` → `describe_predicates` を教えずに自発的に呼び、
+- **Qwen3.8-27B-Q3_K_M**（Q4_K_M に置き換え済み。下記）: 5面6辺の STEP で `import_step` → `describe_predicates` を教えずに自発的に呼び、
   「全部の辺」を選ぶ述語が無い問題を `length_gt: 0` で回避して `describe_shape` の `edge_count=6` と突き合わせて検算 →
-  `set_selection` → `fillet(radius=1)`。全7ターン 170秒。**ツール定義29個だけで 3,626 トークン（10,716文字）を毎ターン占める。**
+  `set_selection` → `fillet(radius=1)`。全7ターン 170秒。
 - **Ornith-1.5-9B**（Q4_K_M・RTX 5060 Ti・67 tok/s）: 「XYにスケッチ→原点に直径8mmの円→X20mm×4・Y15mm×3で配列」を5手で完走
   （エラーゼロ・ID の捏造ゼロ）。40ボディ＋8スケッチ＋24パラメータから「kind=solid のうち体積最大」も正答。**9B でもエージェントの
   土台に足りる**（dGPU 無しのラップトップへの移行余地）。
@@ -119,17 +116,15 @@ RTX 5060 Ti（2026-10-04）。
 
 ## MCP verb の設計原則
 
-- **形は選択から、数値は引数から**（`fillet(radius)` であって `fillet(edges, radius)` ではない。面・辺・領域を引数で受ける verb は
-  無い）。参照の検査を MCP 層に二重で書かなくて済み、「述語または明示的な参照で与えられる」が `set_selection` の1箇所に集まる。
-  **フィレット1回が選択→適用の2呼び出しになる代償は設計の主張であって欠陥ではない**（交互操作の一巡）。選択に出所の区別は無く、
-  人（`toggle_selection` / `modify_selection` / `clear_selection`）もAI（同じ3つ＋述語を書ける `set_selection`）も同じ操作で付け外しする
-  （`tests/test_mcp_selection.py` が両者の集合の一致を固定）。
+- **形は選択から、数値は引数から**（規則は [../MCP.md](../MCP.md) 冒頭が正）。参照の検査を MCP 層に二重で書かなくて済み、
+  「述語または明示的な参照で与えられる」が `set_selection` の1箇所に集まる。
+  **フィレット1回が選択→適用の2呼び出しになる代償は設計の主張であって欠陥ではない**（交互操作の一巡）。
 - **公開ツールの顔ぶれの契約は `tests/test_doc_code_agreement.py`（`MCP.md` の表 ↔ `tools/list`）の一致検査だけに置く。** 同じ主張を
   別のテストや smoke へ複製すると、増減のたびに片方の更新を忘れて必ず食い違う。
 
 ## 落とし穴
 
-- **未知の引数はプロトコルエラー**: `McpServer._call_tool` はツール本体の前に `_check_arguments` でスキーマ突合し、未知キーは
+- **未知の引数はプロトコルエラー**: `McpServer._call_tool` はツール本体の前に `catalog.check_arguments` でスキーマ突合し、未知キーは
   JSON-RPC のトップレベル `error`（-32602）で返す。`tests/test_mcp_verbs.py` の `call_error()`（`isError` 封筒を期待）では拾えず、
   `request()` を直接呼んで `response["error"]["code"]` を見る。**アプリ内AIの経路（`DocumentTools.call`）にも同じ検査がかかり、
   こちらは `invalid_argument` の封筒**（引数名つき）。かけていなかった頃は `radius: "12"` が1文字ずつ読まれて辺2本に半径1と2が付いた。

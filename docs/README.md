@@ -26,6 +26,7 @@
 | [TOPOPT_PRESERVE.md](TOPOPT_PRESERVE.md) | 探索が保持セルを空にしない契約と、その前後の実測（hanger） |
 | [TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md) | 「仕事をしていない材料」が残る問題の原因の実測・対策案の採否・決定 |
 | [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) | 母数に依らない応力の合否判定（採用した判定・実測・却下した案） |
+| [TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) | 完成形のピーク応力が目標を割る問題（#129）: 肉盛りに代わる案の検討・実測と、「割ったら結果を足さない」「0.67 mm 固定の物差し」の決定 |
 | [topopt_idle_validation/10_SYNTHESIS.md](topopt_idle_validation/10_SYNTHESIS.md) | 不要材料の改善案の検証の統合報告（各検証は付録 A〜G に畳んである） |
 | [topopt_idle_validation/00_COMPACT_MODELS.md](topopt_idle_validation/00_COMPACT_MODELS.md) | 不要材料検証の小型題材2つの定義・認定条件 |
 | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) | 形状探索の時間の内訳と速度に関する決定（前計算・warm start・解法の使い分け） |
@@ -33,29 +34,18 @@
 | [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) | 最適化の途中記録（毎回自動で作る診断記録の中身） |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
 | [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md) | 穴口の微細隙間とメッシュ欠損の因果調査（境界交差・最小再現・OCCT内部検査）と、案A（境界交差の検出・共有辺再分割）の設計・実装・実測 |
-| [TOPOPT_STOP_RULE.md](TOPOPT_STOP_RULE.md) | 段階4の打ち切り（issue #22）の判断材料: 終盤の力学の実測（issue の実行・hanger の回し直し・合成題材）と、候補規則を記録済みの軌道へ後付けした試算表。決定は無い |
 
 ### contracts/ — 作業タスクの契約の分野別蒸留
 
-taskbox 廃止に伴い、完了タスクの「後続への契約」(ソースから読めない不変条件・依存禁止・罠)を分野別に移した文書群。項目末尾の括弧は出典タスクIDと日付。削除済みコードについての契約は外してあり(履歴は git)、現行コードにも当てはまる項目だけを残している。
+完了タスクの「後続への契約」(ソースから読めない不変条件・依存禁止・罠)を分野別に移した文書群。削除済みコードについての契約は外してあり(履歴は git)、現行コードにも当てはまる項目だけを残している。コードとテストで足りる契約は docstring に移し、ここには置かない。
 
 | 文書 | 何が書いてあるか |
 |---|---|
-| [contracts/topopt-design-space.md](contracts/topopt-design-space.md) | 形状最適化: 設計空間の導出・連結性・画面検査の罠・bbox・void除去の契約(不変条件・依存禁止・罠。出典はタスクID) |
-| [contracts/topopt-volume-stress-safety.md](contracts/topopt-volume-stress-safety.md) | 形状最適化: von Mises 代表応力・縮小検証の契約 |
-| [contracts/topopt-solver-optimizers.md](contracts/topopt-solver-optimizers.md) | 形状最適化: 線形解法・CPU並列化と性能測定・反力の契約 |
-| [contracts/topopt-pipeline-integration.md](contracts/topopt-pipeline-integration.md) | 形状最適化: パッケージ構成(依存の向き)・検査コードの罠・メッシュ化の Taubin 平滑化の契約 |
-| [contracts/topopt-binary-search.md](contracts/topopt-binary-search.md) | 形状最適化: 二値探索の各段(FEM 抽出・受入・初期実行可能解・削減・製品配線)と検査 CLI・docs 整理の契約 |
-| [contracts/topopt-measurements-stage4.md](contracts/topopt-measurements-stage4.md) | 形状最適化: 厚み・保持小体・節点所有の計測、peel、段階4の停止規則、中空なしの契約 |
+| [contracts/topopt-design-space.md](contracts/topopt-design-space.md) | 形状最適化: 設計空間の導出・連結性・bbox・void除去の契約(不変条件・依存禁止・罠) |
+| [contracts/topopt-binary-search.md](contracts/topopt-binary-search.md) | 形状最適化: 二値探索の各段(FEM 抽出・受入・初期実行可能解・削減・製品配線)の契約 |
 | [contracts/topopt-min-width-peel.md](contracts/topopt-min-width-peel.md) | 形状最適化: 最小幅・芯の連結・射影つき peel の契約 |
 | [contracts/topopt-keep-cells.md](contracts/topopt-keep-cells.md) | 形状最適化: 保持セルの exempt / protected の契約 |
-| [contracts/topopt-target-factor-warm-start.md](contracts/topopt-target-factor-warm-start.md) | 形状最適化: 探索目標係数・内側目標の契約 |
-| [contracts/topopt-solver-pairs.md](contracts/topopt-solver-pairs.md) | 形状最適化: cg と直接解法の対の測定と solver=auto の契約 |
-| [contracts/topopt-finalize-smoothing.md](contracts/topopt-finalize-smoothing.md) | 形状最適化: 最終処理・平滑化コーパス・設計要素数上限の契約 |
-| [contracts/topopt-idle-validation-setup.md](contracts/topopt-idle-validation-setup.md) | 不要材料検証(題材・プロトコル・参照解・指標)の契約 |
-| [contracts/topopt-idle-validation-runs.md](contracts/topopt-idle-validation-runs.md) | 不要材料検証(探索・経路認定・合成・hanger・頑健性・最終形状・総括)の契約 |
 | [contracts/ui-selection-viewport.md](contracts/ui-selection-viewport.md) | UI: 選択の鍵・面数カウント・矩形選択・画面ピック・ビューキューブ・FOV・デバッグビューの契約 |
 | [contracts/ui-sketch-input.md](contracts/ui-sketch-input.md) | UI: コマンド引数仕様・スケッチ入力・ホバー・ゴースト・グリッド追従の契約 |
 | [contracts/ui-optimize-integration.md](contracts/ui-optimize-integration.md) | UI/コア: メッシュ body 種別・最適化バックエンド配線・実行 UI の契約 |
 | [contracts/verbs.md](contracts/verbs.md) | verb: move/pattern/mirror/boolean/envelope/extrude とそのプレビューの契約 |
-| [contracts/maintenance-docs-comments-tests.md](contracts/maintenance-docs-comments-tests.md) | 保守: 文書・コメント・テストの減量と、doc-code 一致検査・TOPOPT.md 構成の規約 |

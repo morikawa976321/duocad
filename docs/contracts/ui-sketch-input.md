@@ -1,7 +1,7 @@
 # スケッチ入力・コマンド引数・ゴースト・グリッドの契約
 
 スケッチを描く入力(クリックと打鍵の両対応)、コマンドの引数仕様(ピック引数・条件付き必須・`fromPoints`)、ホバー強調とスナップ、ローカル幽霊、スケッチ中のグリッド追従、長方形の角度について、ソースから読めない不変条件・依存禁止・罠。
-**いまの挙動の正はコードとテスト**。画面と操作の判断は [../UI.md](../UI.md)、グリッドは [../VIEWPORT.md](../VIEWPORT.md)。画面ピックの当たり判定は ui-selection-viewport.md。出所は各節末尾のタスクID。
+**いまの挙動の正はコードとテスト**。画面と操作の判断は [../UI.md](../UI.md)、グリッドは [../VIEWPORT.md](../VIEWPORT.md)。画面ピックの当たり判定は ui-selection-viewport.md。
 
 ---
 
@@ -19,8 +19,6 @@
 - **`kernel.edge_axis` の向きと、配られた折れ線の「始点→終点」の向きは一致する**(同じ `BRepAdaptor_Curve` の媒介変数順。立方体・穴あき・フィレット・合体・L字の直線辺83本で実測)。辺の解決を書き換えたら測り直す(逆だと幽霊だけ逆回りに見える)。
 - 曲線の辺を軸に指したときは「幽霊が出ず、確定でコアのエラーが札に出る」(UI 側で先回りして断る判定は無い)。軸の数値直接入力(数値6欄)は無い(MCP の `axis_point`/`axis_dir` は有効)。
 
-出所: 20260906-0916-duocad-move-verb-ui-rotation-picking
-
 ## スケッチ入力(クリック・打鍵の両立)(`commands/sketch.ts` / `sketchGeometry.ts`)
 
 - 描く4 verb(`add_line` / `add_rectangle` / `add_circle` / `add_arc`)は**クリックだけでも打鍵だけでも**置ける。寸法欄は `NumberArgSpec.fromPoints?: true`(空欄なら集めた点から導く寸法。値は作らず `build` が点から計算する)で、`commitsGhost(command)`(`fromPoints` 寸法を1つ以上持つか)が「見えている幽霊をそのまま確定してよい」を決める。`CommandHost` は `commitSource`(`built ?? ghostBuilt`)/ `canCommit` を見て、Enter・ボタン押し直しは `ready` ではなく `canCommit` を見る。**サーバの verb 契約は変えない。**
@@ -35,8 +33,6 @@
 - **線分の長さ・角度欄のマウス追従薄字**: `NumberArgSpec.live?(args): number | null`(名前で `build` の結果を引けない寸法だけが持つ。`ADD_LINE` の `length`/`angle_deg`、`args.p0/p1`=`ghostBuilt.args` から作る)。`placeholderFor` の優先順位は「`spec.name` で `build` の結果を引く→引けなければ `spec.live`」。**`live` は表示だけに使い、サーバへ送る引数を増やさない**(`add_line` の `build` 出力は `{p0, p1}` のまま)。`live` が受けるのは `ghostBuilt.args`(打った寸法を織り込んだ点)で生の入力値ではない(打った側の欄は `numberText[spec.name] !== ''` のガードで実入力になる)。`live` は `fromPoints` を持つ数値 spec にしか意味がない(`placeholderFor` が `spec.fromPoints !== true` を先に弾く)。
 - 罠: puppeteer の `page.evaluate` から `window.__duocad.sketches` の要素を素のオブジェクトで返すと Svelte 5 の `$state` プロキシで `{}` に潰れる。ブラウザ側で `JSON.stringify` するか数値を向こうで計算して返す。
 
-出所: 20260906-1000-duocad-fusion-style-sketch-input, 20260906-1405-duocad-line-dimension-placeholder
-
 ## ホバー強調とスナップ(`entityKinds.ts` / `App.svelte`)
 
 - **クリック(`addPoint`)と幽霊(`hoverPoint`)は必ず `snappedPlanePoint` → `snapToSketchEntity` を通る**(片方だけ直すと吸い付いて見える位置と確定結果がずれる)。`snappedPlanePoint(u, v, hit)` は `App.svelte` の唯一の入口(`onSketchPick` の `addPoint` 直前と、`onMount` の `viewport.onPlaneMove` コールバックの両方)。`snapToSketchEntity(entity, point, u, v)` は `point !== null`(点マーカーに当たり)なら射影せず `entityHandles` の値をそのまま返し、`point === null`(線に当たり)なら `snapToEntity(kind, params, u, v)`(種別ごとの表 `EntityKindSpec.snap`)へ落とす。`onPlaneMove(listener)` は第2引数 `sketchEntity: SketchEntityHit | null` を持ち、`planePointAt` と同じ `offsetX/offsetY` で `sketchEntityAt` も呼ぶ(`resolveHit` と同一の当たり判定を共有)。`hoveredRef()` の戻り値の `sketchEntity` は実機検査の穴。
@@ -45,8 +41,6 @@
 - **実機 smoke の罠(空き地)**: 「何にも当たっていない」座標は、**後続の検証が新しく引く線の終点を含めて除外**する。使い回すと既存線の当たり判定を拾い、`Math.round` を経由しない射影誤差(例 `15.000000000000002`)が返る。
 - **実機 smoke の罠(近接配置)**: スナップ導入後、新しい図形を近接配置する検査は既存図形の輪郭から**余裕を持って**(目安10mm以上、または実測で確認して)離す。2mm に置くとクリック点が輪郭へ吸い付き、中心間距離が意図の7mmでなく5mmになって「縮めても領域が3→2に戻らない」と表面化した(製品は正しく検査の前提が壊れていた)。切り分けは (a) 実際に送られた `entities[].params` をダンプ、(b) クリック前に同じ画素へマウスを動かして `hoveredRef()` を見る、(c) 輪郭からの距離を振って閾値を実測。閾値はそのカメラ距離・フレーミング固有で一般化できない。サーバ(領域計算)から疑うと遠回り。
 - 罠(検査): 既存スケッチへ再入場した直後、`activeSketch` は同期的に更新されるが `lookAtSketch()` のカメラ再フレームは数フレーム遅れ、直後の `projectSketchPoint` は稀に `null`。数フレーム `settle()` で待つ。`modify_selection` の add/remove は原子的に検証されるので、**隠した Body の古い選択参照が remove に混じると新しい選択を足す側ごと拒否される**。Body を隠す前に選択を空にする。
-
-出所: 20260906-1420-duocad-sketch-hover-highlight, 20260906-1452-duocad-grid-snap-1mm, 20260906-1620-duocad-fix-smoke-regions-broken-by-hover-highlight
 
 ## 長方形の角度(`duocad/kernel_sketch.py` / `sketch.py` / `entityKinds.ts`)
 
@@ -60,8 +54,6 @@
 - **罠(例外もログも出さずに壊れる形)**: 旧長方形はキーが少ない。`move_sketch._write_params` は `KeyError('angle')`(書き戻す側で `register_value` して足す。`tests/test_move_verbs.py::test_rotating_a_rectangle_from_a_log_without_angle`)、`mirror_sketch._mirrored_plan` の「元と完全に重なる複製」検査はキー数の違いで常に不一致になり重なった複製を素通しした(元が持つキーだけで比べる。`tests/test_mirror_verbs.py::test_a_rectangle_from_a_log_without_angle_still_refuses_a_self_overlapping_copy`)。旧文書を触る変更では「旧 entity はキーが少ない」を毎回疑う。
 - **罠(触った所の周辺だけ回すと取り逃す)**: 長方形の名前つきの値が4→5個に増えて、無関係に見える最適化モードの検査(ボディ C の新規パラメータ数を固定)が落ちた。**実機 smoke は全本数回す**。
 
-出所: 20260906-1442-duocad-rectangle-gets-an-angle
-
 ## ローカル幽霊(`viewport.update()` / `ghostLayer.ts`)
 
 - **`viewport.update(bodies)` の事後条件**: 呼ぶ前に出ていたローカル幽霊(`showBodyGhosts` で置いたもの=`move_body`)は、呼んだ後も出ている。中身は**届いたばかりの `rawGeometry` から組み直した**メッシュで、`ghostInfo().bodies` の `offset`/`rotate`/`matrix` は不変。**サーバ投機実行のプレビュー(`showPreview`)は落ちる。** 幽霊が乗っていたボディがこの更新で消えた(`entry.geometry === null`)ぶんは落ちる。`clearPreview()` 自体は変えない(`prune()`・Esc・App の中断はローカル幽霊も一緒に消す)。
@@ -72,14 +64,11 @@
 - **未解決**: **`preview: 'server'` の同じ race は直っていない。** fillet の半径を打ってプレビューが出た状態でカメラを右ドラッグすると約500ms後の再配信で消え、5.5秒待っても戻らない。サーバ投機実行の形はブラウザで組み直せず、選べるのは (i) 消さずに残す(文書が本当に変わったとき古い形が残る)、(ii) 配信のたびに投機実行を投げ直す(カメラを動かすたびにサーバ CPU を使う)のどちらかで、どちらも「古い幽霊を残さない／再描画コストを増やさない」と衝突する。(要確認: 以後に解決されたか未調査)
 - 確定の往復で二重オフセットの幽霊は載らない: `CommandHost.commit()` は `onRun()` の直後に `reset()` を同期で呼び `onCancelPreview()`→`viewport.clearPreview()` まで走る(WS へ送る前に `bodyGhostInfo` が空)。別の主体(AI/MCP)が対象ボディを変えた配信では、幽霊は新しい形の上に同じ offset で組み直される(意図した挙動)。
 
-出所: 20260906-1426-duocad-fix-local-ghost-dies-on-unrelated-update, 20260906-0916-duocad-move-verb-ui-rotation-picking
-
 ## スケッチ中のグリッド追従(`gridScale.ts` / `gridPlanes.ts`)
 
 - **`extendUvBoxToPoint(box, point)`**(`gridScale.ts`、状態を持たない純関数)を `boundingSquare` を呼ぶ**前**に噛ませ「内容 ∪ カーソル位置」にする。呼び出し側がキャッシュ(`sketchContentUvBox`/`sketchContentIncludeOrigin`)を持ち、内容が変わるとき(`desiredGridPlanes` の基準平面スケッチ分岐、`refreshGridSketchFrame` の面スケッチ分岐)にだけ更新する。**pointermove では絶対にジオメトリ走査(`contentBoxForGrid`・面メッシュの頂点走査)をしない**(`applyGridPlanes()` も呼ばない軽量経路)。実体は `gridPlanes.ts` のハンドルの `followCursor(point)`。
 - 追従が動くのは `sketchGridFrame !== null`(`activeSketchId !== null`)のときだけ。`basePlanesOn`(3平面選択中)・スケッチ外通常表示は触らない。`planeGrids[0]` を直接書き換えているのは、アクティブスケッチ中 `desiredGridPlanes()` が常に単一平面を返す前提の上で、その前提は `App.svelte` の `wantsBasePlanes = sketchId === null && wantedPlane` が保証する(変えるなら「常に index 0」の仮定も見直す)。
 - **`sketchContentUvBox === null` のときは、基準平面スケッチか面スケッチかを問わず `followCursor` は何もしない。** 基準平面の空スケッチは原点中心 ±100mm(`BASE_EXTENT`)固定、面の空スケッチは `faceUvBoxOnly` の null 契約(無制限描画 `setBounds(null)`)。空のスケッチ中にカーソルを動かしても `__duocad.gridTiers().planeBounds[0]` が変わらない。
-- 依存禁止: 面スケッチの `sketchContentUvBox` キャッシュは、**ボディ形状だけが `show()`/`update()` 経由で変わったケースでは再計算されない**(既存の非対称。直すなら `refreshGridSketchFrame` を `applyGridScale` からも呼ぶ形)。追従は**描画範囲(`boundingSquare`)側だけ**で、ピック範囲(`gridScale.ts` の `extentFor`/`BASE_EXTENT`=当たり判定・near/far クリップ用の別の値)には触れない。
+- 依存禁止: 面スケッチの `sketchContentUvBox` キャッシュは、**ボディ形状だけが `show()`/`update()` 経由で変わったケースでは再計算されない**(既存の非対称。直すなら `refreshGridSketchFrame`(`viewport.ts`)を `gridPlanes.ts` の `rescale` の後からも呼ぶ形)。追従は**描画範囲(`boundingSquare`)側だけ**で、ピック範囲(`gridScale.ts` の `extentFor`/`BASE_EXTENT`=当たり判定・near/far クリップ用の別の値)には触れない。
 - 罠: `viewport.ts` の `projectPoint` は z クリップしかしない(x/y が画面外でも値を返す)。smoke で「その世界座標が画面に映るまでズーム」を書くときは `.viewport` の rect と自前で突き合わせる。`web/dist` はビルド成果物(`npm run build` を挟み忘れると偽陰性。`duocad.mcp_server` が配信するのは `vite dev` でなく `web/dist`)。
 
-出所: 20260910-1615-duocad-grid-follow-cursor, 20260913-1756-duocad-issue1-empty-sketch-grid
