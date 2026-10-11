@@ -24,6 +24,7 @@
 """
 from __future__ import annotations
 
+import copy
 import http.client
 import json
 import os
@@ -39,6 +40,31 @@ from typing import Any, Callable, Iterator, Optional, Sequence
 
 #: llama-server の既定(`llama-server -c 16384 --port 8080` を想定)。
 DEFAULT_OPENAI_COMPAT_BASE_URL = "http://127.0.0.1:8080/v1"
+
+#: llama-server へ送る思考の設定(画面の選択肢)。`server` は何も送らず、サーバとチャットテンプレートの既定に任せる
+#: (Qwen3.8 のテンプレートの既定は「思考あり・xhigh」。他のモデルを載せたときの逃げ道)。
+THINKING_CHOICES = ("off", "low", "medium", "server")
+#: 既定は low(本人判断。根拠と、繰り返し測定をしなかった理由は docs/LOCAL_LLM_QWEN38.md「製品の思考の設定」)。
+DEFAULT_THINKING = "low"
+#: 思考の設定ごとに `chat/completions` へ足す欄。値は docs/LOCAL_LLM_QWEN38.md の測定で送ったものと同じ(Qwen の推奨サンプリング)。
+#: 測定の `seed=1` は送らない(固定すると同じ依頼の頼み直しが同じ答えになる)。
+#: テンプレートが `enable_thinking` / `reasoning_effort` を参照しなければ、その欄は使われないだけでエラーにはならない。
+#: **low はテンプレートがシステムプロンプトの先頭に1行足す**(medium と off は足さない)ので、low と他を切り替えた直後の1往復は
+#: プレフィックスキャッシュが外れて全部を読み直す(実測 約95秒)。
+_SAMPLING_THINKING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0}
+THINKING_PAYLOAD: dict = {
+    "off": {
+        "chat_template_kwargs": {"enable_thinking": False},
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+    },
+    "low": {"chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "low"}, **_SAMPLING_THINKING},
+    "medium": {"chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "medium"}, **_SAMPLING_THINKING},
+    "server": {},
+}
 
 #: 既定のClaudeモデル。**日付サフィックスを付けない**(この綴りで完結している)。
 DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"
@@ -565,9 +591,12 @@ class OpenAICompatProvider(Provider):
         base_url: str = DEFAULT_OPENAI_COMPAT_BASE_URL,
         api_key: Optional[str] = None,
         transport: Optional[Transport] = None,
+        thinking: str = DEFAULT_THINKING,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
+        #: 会話の途中でも差し替えてよい(次の往復から効く。`Server._ai_set_thinking`)。
+        self.thinking = check_thinking(thinking)
         self._api_key = api_key or None
         #: 既定の実体は**プロバイダごとに1つ**(走っている接続を覚えていて `abort` で閉じるため)。
         self._transport: Transport = StreamingTransport() if transport is None else transport
@@ -649,6 +678,8 @@ class OpenAICompatProvider(Provider):
             # 無いと最後の断片に `usage` が載らない(OpenAI互換の約束)。
             "stream_options": {"include_usage": True},
         }
+        # ウォームアップ(`prepare`)も同じ欄を送る: low はシステムプロンプトの先頭を変えるので、欠けると温めた先頭が使われない。
+        payload.update(copy.deepcopy(THINKING_PAYLOAD[self.thinking]))
         if tools:
             payload["tools"] = self.render_tools(tools)
             payload["tool_choice"] = "auto"
@@ -1143,12 +1174,20 @@ def default_model(kind: str) -> str:
     return "local"
 
 
+def check_thinking(thinking: Any) -> str:
+    """思考の設定の綴りを確かめる(`THINKING_CHOICES` 以外は ValueError)。"""
+    if thinking not in THINKING_CHOICES:
+        raise ValueError(f"未知の思考の設定: {thinking!r}({' / '.join(THINKING_CHOICES)})")
+    return thinking
+
+
 def build_provider(
     kind: str,
     *,
     model: Optional[str] = None,
     base_url: Optional[str] = None,
     transport: Optional[Transport] = None,
+    thinking: str = DEFAULT_THINKING,
 ) -> Provider:
     """名前からプロバイダを1つ作る(アプリ内UIが選ぶ入口)。
 
@@ -1159,7 +1198,7 @@ def build_provider(
       実キーがそのホストへ届く)。モデルは 引数 → 環境変数 `DUOCAD_ANTHROPIC_MODEL` → 既定 の順
       (`default_model`)。
     - `openai_compat` … キーを渡さないので `_api_key` は常に `None`。`base_url` を任意の外部ホストへ
-      向けても、飛ぶのはキーの無いリクエストだけになる。
+      向けても、飛ぶのはキーの無いリクエストだけになる。`thinking` を使うのはこちらだけ。
     """
     if kind == "anthropic":
         api_key = load_api_key()
@@ -1182,5 +1221,6 @@ def build_provider(
             model=model or default_model(kind),
             base_url=base_url or DEFAULT_OPENAI_COMPAT_BASE_URL,
             transport=transport,
+            thinking=thinking,
         )
     raise ValueError(f"未知のプロバイダ: {kind!r} (openai_compat / anthropic)")

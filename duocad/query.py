@@ -94,7 +94,8 @@ def face_centroid(shape: Any, face_index: int) -> list:
 def face_fingerprint(shape: Any, face_index: int) -> dict:
     """面1枚の**指紋** `{"index", "area", "normal", "center"}` を返す。
 
-    **`center` は面積重心ではない**(`Face.center()` の既定 = `CenterOf.GEOMETRY`)。
+    **曲面の `center` は面積重心ではない**(`Face.center()` の既定 = `CenterOf.GEOMETRY` は、build123d 0.11.1
+    では平面なら面積重心、曲面なら UV 範囲の中点を返す)。
     照合に使うのは面積と法線だけ(`optimize.fingerprint_mismatch`)。「面の上のどこか」には
     使えない(曲面では面パッチから離れる)ので、その用途は `face_centroid`。
 

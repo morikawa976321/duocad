@@ -85,6 +85,14 @@ def test_the_system_prompt_is_the_same_text_the_mcp_server_hands_out():
     assert str(len(catalog.tool_names())) in shared
 
 
+def test_the_system_prompt_says_how_close_is_close_enough():
+    """落ちたら、誤差の範囲のずれを直そうとして作り直しを繰り返す・迷って何もせず終わる失敗が戻る(#134。
+    文言と幅は docs/LOCAL_LLM_QWEN38.md の測定で使ったもの)。"""
+    shared = catalog.agent_instructions()
+
+    assert "寸法の差が0.01mm以内、体積や面積の差が0.1%以内なら指示どおりにできているとみなし" in shared
+
+
 #: 固定の停止・進行の規則を置く言い回し。AI が依頼の文面から判断するので、プロンプトに置かない。
 FIXED_AUTONOMY_RULES = ("必ず止", "必ず進", "曖昧なら", "迷ったら", "承認を待", "許可を得", "(1) ", "(2) ")
 
@@ -176,6 +184,44 @@ def test_openai_compat_request_shape():
     assert payload["tools"][0]["type"] == "function"
     assert function["name"] == surface.descriptors()[0]["name"]
     assert function["parameters"] == surface.descriptors()[0]["inputSchema"]
+
+
+def _sent_payload(thinking=None) -> dict:
+    transport = FakeTransport([{"choices": [{"message": {"content": "はい"}, "finish_reason": "stop"}]}])
+    provider = (
+        OpenAICompatProvider(transport=transport)
+        if thinking is None
+        else OpenAICompatProvider(transport=transport, thinking=thinking)
+    )
+    provider.complete(system="s", turns=[UserTurn("やって")], tools=[], max_tokens=16, timeout=5.0)
+    return transport.sent[0]["payload"]
+
+
+def test_llama_server_gets_the_thinking_setting_with_the_sampling_measured_for_it():
+    """落ちたら、Qwen3.8 がテンプレートの既定(思考あり・xhigh)で動く、または測定と違うサンプリングで動く(#135)。"""
+    default = _sent_payload()
+    assert default["chat_template_kwargs"] == {"enable_thinking": True, "reasoning_effort": "low"}
+    assert (default["temperature"], default["top_p"], default["top_k"], default["presence_penalty"]) == (1.0, 0.95, 20, 0.0)
+    assert "seed" not in default
+
+    medium = _sent_payload("medium")
+    assert medium["chat_template_kwargs"] == {"enable_thinking": True, "reasoning_effort": "medium"}
+
+    off = _sent_payload("off")
+    assert off["chat_template_kwargs"] == {"enable_thinking": False}
+    assert (off["temperature"], off["top_p"], off["top_k"], off["presence_penalty"]) == (0.7, 0.8, 20, 1.5)
+
+
+def test_leaving_thinking_to_the_server_sends_nothing_extra():
+    """落ちたら、「サーバ任せ」を選んでも Qwen 向けの値が他のモデルへ届く。"""
+    payload = _sent_payload("server")
+    for key in ("chat_template_kwargs", "temperature", "top_p", "top_k", "min_p", "presence_penalty"):
+        assert key not in payload
+
+
+def test_an_unknown_thinking_setting_is_refused():
+    with pytest.raises(ValueError):
+        OpenAICompatProvider(transport=FakeTransport([]), thinking="xhigh")
 
 
 def test_openai_compat_reply_parsing_and_tool_result_messages():
@@ -584,6 +630,17 @@ def test_an_unknown_stop_reason_falls_through_to_stopped_with_the_raw_value():
     assert run.status == "stopped"
     assert "content_filter" in run.detail
     assert run.ok is False
+
+
+def test_a_reply_with_neither_text_nor_tool_calls_is_not_completed():
+    """落ちたら、思考だけで何も出さずに止まった応答が画面に「完了」と出る、または空になる前に実行した操作が結果から消える(#137)。"""
+    empty = ProviderReply(text="", stop_reason="stop", stop="end_turn")
+    run = AgentLoop(tools(), RecordedProvider([tool_use("describe_document", {}), empty])).run("作って")
+
+    assert run.status == "empty_reply"
+    assert run.ok is False
+    assert "stop" in run.detail
+    assert [outcome.name for outcome in run.tool_calls] == ["describe_document"]
 
 
 def test_a_truncated_reply_is_not_mistaken_for_tool_use():

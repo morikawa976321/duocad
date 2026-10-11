@@ -19,13 +19,14 @@
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "api_key_source",
-         "api_key_hint", "running", "providers"}
+         "api_key_hint", "running", "providers", "thinking", "thinking_choices"}
         {"type": "ai_tool_call", "name": str, "arguments": {...}, "result": {...}, "ok": bool}
         {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}
         {"type": "ai_error", "message": str}
         {"type": "fem_status", "device", "cupy_installed", "gpu_name", "gpu_problem", "error"?}
 
-`ai_*` はverbではない(`ai_get_status` / `ai_configure` / `ai_set_api_key` / `ai_prepare` / `ai_send` / `ai_cancel`)。
+`ai_*` はverbではない(`ai_get_status` / `ai_configure` / `ai_set_thinking` / `ai_set_api_key` / `ai_prepare` / `ai_send` /
+`ai_cancel`)。
 文書を直接は変えず(操作ログに載らず、undoの単位でもない)、文書を変えるのはエージェントが呼ぶ既存ツール側で、それは通常のverb配信として後から届く。
 したがって `catalog.COMMANDS` には入れず、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
 
@@ -73,8 +74,11 @@ from ..agent.loop import FIRST_LOOK
 from ..agent.providers import (
     ANTHROPIC_MAX_TOKENS,
     DEFAULT_OPENAI_COMPAT_BASE_URL,
+    DEFAULT_THINKING,
+    THINKING_CHOICES,
     api_key_configured,
     api_key_status,
+    check_thinking,
     default_model,
     delete_api_key,
     save_api_key,
@@ -103,8 +107,28 @@ FILE_COMMANDS: dict = catalog.file_table()
 #: `anthropic` はキーが無くても並べる(選んで送ると「どこにキーを置くか」がエラーとして返る)。
 AI_PROVIDERS: tuple = ("openai_compat", "anthropic")
 
-#: プロバイダごとの打ち切り(無ければ `Limits()`)。出力上限の理由は `ANTHROPIC_MAX_TOKENS`。
-AI_LIMITS: dict = {"anthropic": Limits(max_tokens=ANTHROPIC_MAX_TOKENS)}
+#: llama-server の出力上限。往復数・合計時間とともに docs/LOCAL_LLM_QWEN38.md の測定と同じ値(`Limits()` の既定では
+#: dGPU の無い機械の 27B モデルがどの思考の設定でも完走しない。実測は同文書)。
+LOCAL_MAX_TOKENS = 16384
+#: 1リクエストの待ち上限 = 出力上限 ÷ 4 tok/s + 120秒。実測の生成 4.1 tok/s(思考ありの下限)とプレフィックスの読み込み
+#: 115秒(上限)を、待ち側に倒して丸めた値(丸め幅は自分で置いた余裕で、実測ではない)。
+LOCAL_REQUEST_TIMEOUT = LOCAL_MAX_TOKENS / 4.0 + 120.0
+#: 古い依頼を捨てる判定に残す余地(`Limits.room_tokens`)。出力上限(16,384)のままだと、文脈長 16,384 のサーバではツールを
+#: 呼ぶたびに履歴が捨てられる。実測(docs/LOCAL_LLM_QWEN38.md「思考時間のばらつき」): 373応答の出力の中央値 260、2,048 超は 8%。
+#: 2,048 はその分布を見て選んだ値で、最適値は測っていない。超えて文脈の端で切れた応答は、`run()` の「切れたら捨ててやり直す」が拾う。
+LOCAL_ROOM_TOKENS = 2048
+
+#: プロバイダごとの打ち切り(無ければ `Limits()`)。出力上限の理由は `ANTHROPIC_MAX_TOKENS` と `LOCAL_MAX_TOKENS`。
+AI_LIMITS: dict = {
+    "anthropic": Limits(max_tokens=ANTHROPIC_MAX_TOKENS),
+    "openai_compat": Limits(
+        max_turns=60,
+        max_tokens=LOCAL_MAX_TOKENS,
+        request_timeout=LOCAL_REQUEST_TIMEOUT,
+        max_total_seconds=2 * 60 * 60.0,
+        room_tokens=LOCAL_ROOM_TOKENS,
+    ),
+}
 
 async def _send(connection: Any, payload: dict) -> None:
     await connection.send(json.dumps(payload, ensure_ascii=False))
@@ -141,6 +165,8 @@ class Server:
         self._ai_provider_kind = "anthropic" if api_key_configured() else "openai_compat"
         self._ai_model: Optional[str] = None
         self._ai_base_url: Optional[str] = None
+        # llama-server へ送る思考の設定(`THINKING_CHOICES`)。プロバイダを切り替えても保つ(Claude には送らない)。
+        self._ai_thinking = DEFAULT_THINKING
         self._ai_loop: Optional[AgentLoop] = None
         self._ai_cancellation = Cancellation()
         self._ai_running = False
@@ -429,6 +455,8 @@ class Server:
                 # ここは既にイベントループのスレッドなので `call_soon_threadsafe` を挟まず直接 `await` する
                 # (待たずに抜けると、ここで `asyncio.run` が閉じるテストでは配信タスクが走る前に握りつぶされる)。
                 await self._broadcast({"type": "ai_status", **status})
+            elif command == "ai_set_thinking":
+                await self._broadcast({"type": "ai_status", **self._ai_set_thinking(message.get("thinking"))})
             elif command == "ai_set_api_key":
                 await self._broadcast({"type": "ai_status", **self._ai_set_api_key(message.get("key"))})
             elif command == "ai_prepare":
@@ -507,7 +535,26 @@ class Server:
             "api_key_hint": key["hint"],
             "running": self._ai_running,
             "providers": list(AI_PROVIDERS),
+            "thinking": self._ai_thinking,
+            "thinking_choices": list(THINKING_CHOICES),
         }
+
+    def _ai_set_thinking(self, thinking: Any) -> dict:
+        """llama-server へ送る思考の設定を差し替える。**会話は作り直さない**(`_ai_configure` と違い、次の往復から効く)。
+
+        実行中は受け付けない(走っている往復と次の往復で設定が混ざる)。ウォームアップはやり直さない: スロットを復元すると、
+        温まっている会話の続き(medium ↔ off ならキャッシュが保たれる)を system + tools だけの状態で上書きする。
+        """
+        if self._ai_running:
+            return {**self._ai_status(), "error": "AI応答中は思考の設定を変更できない(中断してから)"}
+        try:
+            self._ai_thinking = check_thinking(thinking)
+        except ValueError as error:
+            return {**self._ai_status(), "error": str(error)}
+        provider = self._ai_loop.provider if self._ai_loop is not None else None
+        if hasattr(provider, "thinking"):
+            provider.thinking = self._ai_thinking
+        return self._ai_status()
 
     def _ai_configure(
         self, provider: Optional[str], model: Optional[str], base_url: Optional[str]
@@ -588,7 +635,10 @@ class Server:
         # `anthropic` には `base_url` を渡さない(`_ai_configure` の拒否に対する二重の保証。検証を素通りする経路が生まれても、実キーが外部ホストへ渡る手前で止まる)。
         kind = self._ai_provider_kind
         provider = entry.build_provider(
-            kind, model=self._ai_model, base_url=None if kind == "anthropic" else self._ai_base_url
+            kind,
+            model=self._ai_model,
+            base_url=None if kind == "anthropic" else self._ai_base_url,
+            thinking=self._ai_thinking,
         )
         marshaled = ToolsOnLoop(self._ai_tools, self._loop)
         self._ai_loop = AgentLoop(

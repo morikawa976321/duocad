@@ -13,6 +13,7 @@ from duocad.agent import AgentLoop, Limits, ProviderError
 from duocad.agent.loop import FIRST_LOOK, _condensed
 from duocad.agent.providers import ProviderContextOverflow, ProviderReply, ToolCall, UserTurn
 from duocad.mcp_server import DocumentTools
+from duocad.net.ws import AI_LIMITS
 from duocad.server import Session
 from agent_support import RecordedProvider, spoke, tool_use
 
@@ -197,6 +198,36 @@ def test_an_answer_cut_by_the_context_running_out_is_retried_with_room():
 
     assert run.status == "completed" and run.text == "書けた"
     assert said(provider.requests[3]) == ["依頼1", "依頼2"]
+
+
+def test_the_room_kept_for_the_next_answer_can_be_smaller_than_the_output_cap():
+    """余地を `room_tokens` で分けたら、判定は出力上限ではなくそちらで行う。"""
+    crowded = reply(calls=True, stop="tool_use", prompt=880, completion=30)
+    provider = SizedProvider([spoke("a"), spoke("b"), crowded, spoke("終わり")], n_ctx=1000)
+    loop = AgentLoop(tools(), provider, limits=Limits(max_tokens=1000, room_tokens=50))
+    for index in range(3):
+        loop.run(f"依頼{index}")
+
+    assert said(provider.requests[3]) == ["依頼0", "依頼1", "依頼2"]
+
+
+def test_llama_server_keeps_an_earlier_dimension_on_a_16k_context():
+    """落ちたら、文脈長 16,384 の llama-server で、ツールを呼ぶたびに古い依頼が捨てられ、そこで言った寸法を
+    寸法ガードが見失って `dimension_not_given` で止める(出力上限 16,384 をそのまま余地にした状態。sol のレビュー指摘)。"""
+    fillet = ProviderReply(
+        tool_calls=(ToolCall(id="c1", name="fillet", arguments={"radius": 3}),),
+        stop_reason="tool_calls",
+        stop="tool_use",
+        usage={"prompt_tokens": 8000, "completion_tokens": 100},
+    )
+    provider = SizedProvider([spoke("了解"), spoke("了解"), fillet, spoke("終わり")], n_ctx=16384)
+    loop = AgentLoop(tools(), provider, limits=AI_LIMITS["openai_compat"])
+    loop.run("丸める半径は3mmにして")
+    loop.run("覚えておいて")
+    run = loop.run("この辺をその半径で丸めて")
+
+    assert said(provider.requests[-1])[0] == "丸める半径は3mmにして"
+    assert run.tool_calls[0].result["error"]["code"] != "dimension_not_given"
 
 
 def test_a_request_that_already_ended_does_not_cost_older_history():

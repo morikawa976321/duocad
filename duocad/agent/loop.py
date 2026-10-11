@@ -155,6 +155,9 @@ class Limits:
     max_tokens: int = DEFAULT_MAX_TOKENS
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT
     max_total_seconds: float = DEFAULT_MAX_TOTAL_SECONDS
+    #: 次の往復のために文脈に残す余地(トークン)。足りなければ古い依頼を捨てる(`_short_of_room`)。`None` なら `max_tokens`。
+    #: 出力上限が文脈長に近いと、ツールを呼ぶたびに履歴が捨てられる(捨てた依頼の寸法を寸法ガードが見失う)ので、そのときは分ける。
+    room_tokens: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +178,7 @@ class AgentRun:
     `status`:
 
     - `completed`      … モデルがツールを呼ばずに答えた(正常終了)
+    - `empty_reply`    … 本文もツール呼び出しも無いまま、正常な終了理由で返ってきた(結論を出さずに止まった)
     - `max_turns`      … 往復の上限で打ち切った
     - `timeout`        … 合計時間の上限で打ち切った。往復の境目で切るので、実行済みのツールの結果は `tool_calls` に入る
     - `cancelled`      … 中断フラグが立った
@@ -366,6 +370,10 @@ class AgentLoop:
                     "max_tokens": "max_tokens",
                     "refusal": "refusal",
                 }.get(reply.stop, "stopped")
+                if status == "completed" and not reply.text:
+                    # 思考が縮退ループした後に本文もツール呼び出しも出さず終わる(#137)。completed にすると、画面では
+                    # 何もせずに「完了」と出る。再試行はしない(同じ文脈で同じ長考に入りやすく、1回で数十分かかりうる)。
+                    status = "empty_reply"
                 detail = "" if status == "completed" else f"stop_reason={reply.stop_reason!r}"
                 return self._result(status, detail, turn, outcomes, usage, text=reply.text)
 
@@ -489,13 +497,14 @@ class AgentLoop:
         return True
 
     def _short_of_room(self, usage: dict) -> bool:
-        """いまの往復の続きに、出力1回ぶん(`max_tokens`)の余地が残っていないか。相手の文脈長とこの往復の実測トークン数が分かるときだけ判定する(推定はしない)。"""
+        """いまの往復の続きに、出力1回ぶん(`Limits.room_tokens`)の余地が残っていないか。相手の文脈長とこの往復の実測トークン数が分かるときだけ判定する(推定はしない)。"""
         used = (usage.get("prompt_tokens"), usage.get("completion_tokens"))
         if not all(isinstance(value, (int, float)) for value in used):
             return False
         context_size = getattr(self.provider, "context_size", None)
         n_ctx = context_size() if callable(context_size) else None
-        return bool(n_ctx) and used[0] + used[1] + self.limits.max_tokens > n_ctx
+        room = self.limits.max_tokens if self.limits.room_tokens is None else self.limits.room_tokens
+        return bool(n_ctx) and used[0] + used[1] + room > n_ctx
 
     # ------------------------------------------------------------------ ツール
     def _dimensions_nobody_asked_for(self, call: ToolCall) -> tuple[str, ...]:

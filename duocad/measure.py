@@ -27,7 +27,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Union
 
-from . import kernel, query, region, selection, sketch
+from . import kernel, meshbody, query, region, selection, sketch
 
 #: 2本の単位ベクトルを「平行」とみなす sin θ の上限(1e-6 rad ≈ 0.00006度)。
 PARALLEL_SIN_TOLERANCE = 1e-6
@@ -103,6 +103,22 @@ def _unit(a: Vec) -> Vec:
 
 def _as_vec(values: Any) -> Vec:
     return (float(values[0]), float(values[1]), float(values[2]))
+
+
+def _to_uv(frame: dict, point: Any) -> list:
+    """ワールド座標の点をスケッチ座標 (u, v) へ(`sketch_create` が返す `frame` の逆: 3D = origin + u·u軸 + v·v軸)。"""
+    offset = _sub(_as_vec(point), _as_vec(frame["origin"]))
+    return [_dot(offset, _as_vec(frame["u"])), _dot(offset, _as_vec(frame["v"]))]
+
+
+def _body_centroid(body: Any) -> Union[list, None]:
+    """ボディの体積重心(ワールド座標 [mm])。体積が0なら None。"""
+    try:
+        if body.mesh is not None:
+            return meshbody.centroid(body.mesh)
+        return [float(value) for value in kernel.centroid(body.shape)]
+    except ValueError:
+        return None
 
 
 def _angle_deg(sin_value: float, cos_value: float) -> float:
@@ -202,7 +218,8 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             "index": ref["index"],
             "area": described["area"],
             "normal": described["normal"],
-            "center": described["center"],
+            # `describe_faces` の `center`(曲面では UV 範囲の中点)ではなく面積重心を渡す。AI が重心の位置決めに読む値。
+            "center": query.face_centroid(body.shape, int(ref["index"])),
         }
         if described["kind"] != "plane":
             return item, (
@@ -244,7 +261,15 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
         described = next(
             reg for reg in region.regions(session.document, sketch_id) if reg.index == ref["index"]
         )
-        item = {"kind": "region", "sketch": sketch_id, "index": ref["index"], "area": described.area}
+        center = [float(value) for value in described.centroid]
+        item = {
+            "kind": "region",
+            "sketch": sketch_id,
+            "index": ref["index"],
+            "area": described.area,
+            "center": center,
+            "center_uv": _to_uv(region.plane_frame(session.document, sketch_id), center),
+        }
         return item, "領域は2項目の測定に使えない(測れるのはソリッドの頂点・直線の辺・平らな面)"
 
     if kind == selection.BODY_KIND:
@@ -258,6 +283,7 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             "name": meta["name"],
             "volume": meta["volume"],
             "face_count": meta["face_count"],
+            "center": _body_centroid(body),
         }
         return item, "ボディそのものは2項目の測定に使えない(頂点・辺・面を指す)"
 

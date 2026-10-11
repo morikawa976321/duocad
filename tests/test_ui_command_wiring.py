@@ -212,7 +212,7 @@ def test_ai_commands_are_not_verbs():
     """
     ai_names = {name for name in _server_command_names() if name.startswith("ai_")}
     assert ai_names == {
-        "ai_get_status", "ai_configure", "ai_set_api_key", "ai_prepare", "ai_send", "ai_cancel"
+        "ai_get_status", "ai_configure", "ai_set_thinking", "ai_set_api_key", "ai_prepare", "ai_send", "ai_cancel"
     }, (
         f"ai_* の顔ぶれが変わった(このテストを更新すること): {sorted(ai_names)}"
     )

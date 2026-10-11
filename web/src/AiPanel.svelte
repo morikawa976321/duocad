@@ -11,7 +11,7 @@
    * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
    * 既定は開いている(再読込をまたいで保持しない)。「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
-  import type { AiProviderKind, AiStatus, AiTranscriptEntry } from './session'
+  import type { AiProviderKind, AiStatus, AiThinking, AiTranscriptEntry } from './session'
 
   let {
     status,
@@ -19,12 +19,14 @@
     onSend,
     onCancel,
     onConfigure,
+    onSetThinking,
   }: {
     status: AiStatus | null
     transcript: AiTranscriptEntry[]
     onSend: (message: string) => void
     onCancel: () => void
     onConfigure: (provider: AiProviderKind, baseUrl?: string) => void
+    onSetThinking: (thinking: AiThinking) => void
   } = $props()
 
   let draft = $state('')
@@ -41,6 +43,16 @@
   const PROVIDER_LABEL: Record<string, string> = {
     openai_compat: 'llama-server',
     anthropic: 'Claude',
+  }
+
+  /** 思考の設定は llama-server にだけ送る(Claude の思考の深さは別の口)。 */
+  const canPickThinking = $derived(status?.provider === 'openai_compat' && (status?.thinkingChoices.length ?? 0) > 0)
+
+  const THINKING_LABEL: Record<AiThinking, string> = {
+    off: '思考なし',
+    low: '思考 low',
+    medium: '思考 medium',
+    server: 'サーバ任せ',
   }
 
   /** 送り先を選べるのは鍵を持たないプロバイダだけ(Claudeは固定。`Server._ai_configure` が拒否する)。 */
@@ -85,6 +97,7 @@
 
   const STATUS_LABEL: Record<string, string> = {
     completed: '完了',
+    empty_reply: 'AIが結論を出さずに止まった(ここまでの操作は残っている。言い方を変えてもう一度どうぞ)',
     max_turns: '往復の上限に達した(続けるにはもう一度どうぞ)',
     cancelled: '中断した',
     max_tokens: '出力の上限に達した(このターンのツールは実行していない。もう一度どうぞ)',
@@ -130,6 +143,20 @@
       </span>
       {#if status.provider === 'anthropic' && status.model}
         <span class="dim" data-ai-model>{status.model}</span>
+      {/if}
+      {#if canPickThinking}
+        <!-- 適用ボタンを待たずに送る(会話は作り直されず、次の往復から効く。`Server._ai_set_thinking`)。値の正は `ai_status.thinking`。 -->
+        <select
+          id="ai-thinking"
+          title="llama-server へ送る思考の設定"
+          value={status.thinking}
+          disabled={running}
+          onchange={(event) => onSetThinking(event.currentTarget.value as AiThinking)}
+        >
+          {#each status.thinkingChoices as choice (choice)}
+            <option value={choice}>{THINKING_LABEL[choice] ?? choice}</option>
+          {/each}
+        </select>
       {/if}
       {#if running}
         <span class="badge running">応答中</span>
