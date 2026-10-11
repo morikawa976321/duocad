@@ -122,11 +122,48 @@ def test_the_member_rule_goes_through_representative_stress_so_it_can_be_replace
     assert report.safety_factor == 2.0
 
 
-def test_the_finished_shape_is_refined_to_a_third_unless_the_grid_is_too_large():
-    """落ちたら、完成形検査の分割数が 1/3 でないか、大きい題材でメモリの上限を超える分割を選ぶ。"""
-    assert final_check.refine_factor(1000) == 3
-    assert final_check.refine_factor(final_check.MAX_FINE_ELEMENTS // 8) == 2
-    assert final_check.refine_factor(final_check.MAX_FINE_ELEMENTS) == 1
+def test_the_finished_shape_is_measured_at_a_fixed_physical_spacing_unless_the_grid_is_too_large():
+    """落ちたら、完成形検査の細かさが要素サイズに比例している(物理寸法で揃わない)か、要素数の上限を超える分割を選ぶ。"""
+    assert final_check.refine_factor(1000, 100, 2.0, None) == 3
+    assert final_check.refine_factor(1000, 100, 4.0, None) == 6
+    assert final_check.refine_factor(1000, 100, 0.5, None) == 1
+    over_six = final_check.MAX_FINE_ELEMENTS // 6 ** 3 + 1
+    assert final_check.refine_factor(over_six, 0, 4.0, None) == 5
+    assert final_check.refine_factor(final_check.MAX_FINE_ELEMENTS + 1, 0, 4.0, None) == 1
+    assert not final_check.fits(final_check.MAX_FINE_ELEMENTS + 1, 0, 1, None)
+
+
+def test_the_refinement_shrinks_with_free_memory_and_with_the_material_it_must_hold():
+    """落ちたら、空きメモリが少ない機械で空きを超える細かい格子を確保しにいく(2026-09-26 にメモリ不足で PC が落ちた)か、
+    メモリの大半を占める材料セルの数を見積もりに入れていない。"""
+    budget = final_check.estimated_bytes(1000, 200, 3) / final_check.MEMORY_FRACTION
+    assert final_check.refine_factor(1000, 200, 4.0, budget) == 3
+    assert final_check.refine_factor(1000, 400, 4.0, budget) == 2   # 同じ格子でも材料が倍なら1段下げる
+    assert final_check.fits(1000, 200, 3, budget) and not final_check.fits(1000, 200, 4, budget)
+    assert final_check.estimated_bytes(1000, 200, 2) == 8 * (1000 * final_check.FINE_ELEMENT_BYTES
+                                                             + 200 * final_check.MATERIAL_CELL_BYTES)
+
+
+def test_the_finished_shape_is_judged_by_the_top_area_stress_times_the_coarse_penalty(monkeypatch):
+    """落ちたら、合否に1面の最大を使っているか、面積の上位値の位置を取り違えているか、粗く測った値を割り増さずに比べている。"""
+    material = np.ones((2, 2, 2), bool)
+    fine = voxelize.Grid((0.0, 0.0, 0.0), 1.0, (2, 2, 2))  # 1面 1 mm² なので面積 4 mm² は大きい方から4面目
+    faces = np.full((2, 2, 2, 6), np.nan)
+    faces[0, 0, 0, :] = [10.0, 9.0, 8.0, 7.0, 6.0, 1.0]
+    monkeypatch.setattr(stress, "exposed_face_von_mises", lambda *a, **k: faces)
+    monkeypatch.setattr(acceptance, "rigid_body_constrained", lambda *a: True)
+    scale = stress.UnitScale(1.0, 1.0, 1.0, solved_load=1.0)
+    monkeypatch.setattr(acceptance, "solve_material", lambda *a, **k: (None, None, None, scale, 0.0))
+
+    class Conditions:
+        youngs_modulus_mpa, solver, allowable_mpa = 1.0, "direct", 40.0
+
+    report = final_check._strength(material, material, ~material, ~material, fine, None, None, Conditions(), 2.0)
+    penalty = (1.0 / final_check.MEASURE_SPACING_MM) ** final_check.COARSE_PENALTY_EXPONENT
+    assert report["peak_mpa"] == 10.0 and report["top_area_mpa"] == 7.0
+    assert report["coarse_penalty"] == pytest.approx(penalty) and penalty > 1.0
+    assert report["safety_factor"] == pytest.approx(40.0 / (7.0 * penalty))
+    assert final_check.coarse_penalty(final_check.MEASURE_SPACING_MM / 2) == 1.0
 
 
 def test_the_reported_peak_position_is_the_face_centre_not_the_element_centre(monkeypatch):

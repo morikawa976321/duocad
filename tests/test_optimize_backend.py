@@ -30,6 +30,8 @@ from session_support import face_with_normal, four_conditions, pad, select as _s
 
 from duocad.paths import REPO_ROOT
 
+pytestmark = pytest.mark.usefixtures("finished_shape_check_at_a_third_of_the_test_element")
+
 
 #: 固定値の上限そのものと、最小幅の上限の割合(テストの多くは速さのため 8mm で回すので、下の fixture が緩める)。
 REAL_MAX_ELEMENT_SIZE_MM = optimize_run.MAX_ELEMENT_SIZE_MM
@@ -1526,8 +1528,12 @@ def test_the_finished_shape_is_solved_again_and_its_safety_factor_and_neck_diagn
     checked = result["final_check"]
     assert result["final_safety_factor"] == checked["safety_factor"] and checked["safety_factor"] > 0
     safety = checked["safety"]
-    assert safety["rule"] == "member_surface_peak" and safety["refine"] == 3 and safety["spacing_mm"] == pytest.approx(result["grid"]["spacing"] / 3)
-    assert checked["safety_factor"] == pytest.approx(safety["allowable_mpa"] / safety["peak_mpa"])
+    from duocad.topopt import final_check
+
+    assert safety["rule"] == "member_surface_top_area" and safety["spacing_mm"] <= final_check.MEASURE_SPACING_MM
+    assert safety["spacing_mm"] == pytest.approx(result["grid"]["spacing"] / safety["refine"])
+    assert safety["coarse_penalty"] == 1.0 and safety["top_area_mpa"] <= safety["peak_mpa"]
+    assert checked["safety_factor"] == pytest.approx(safety["allowable_mpa"] / safety["judged_mpa"])
     assert checked["neck"]["status"] in ("suspect", "undetermined", "not_observed")
     json.dumps(result)  # 結果メッセージにそのまま載る
 

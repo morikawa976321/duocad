@@ -41,7 +41,7 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 | 許容応力(PETG の降伏応力 × 造形の低減係数) | **50** MPa × **0.8** | `material.PETG_YIELD_MPA` / `PRINT_DERATE` | 「許容応力の導出」 |
 | 探索の代表応力の規則(製品): 部材域(保持セル以外・拘束/荷重面の節点に接する1層の外)の固定物理体積の上位値。許す超過体積 V の一辺 = 最小幅 × これ | **1.0** | `stress.MEMBER_VOLUME_WIDTH_RATIO`(`member_volume_stress` / `acceptance.member_region` / `optimize_run._build_search_conditions`) | 「代表応力の規則」、[TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) |
 | 代表応力の規則(`member_volume_mm3` を渡さない検査・研究の経路) | ρ >= **0.5** の要素の上位 **99.5%** 点 | `stress.DEFAULT_RHO_MIN` / `DEFAULT_PERCENTILE` | 「代表応力の規則」 |
-| 完成形検査の強度: 完成メッシュを探索格子の 1/n へ占有化し(細かい格子の要素数が上限を超える題材は n を下げる)、部材域の表面の面中心の最大応力で安全率を出して係数なしで利用者の目標と比べる | n = **3**、上限 **8000000** 要素 | `final_check.REFINE` / `MAX_FINE_ELEMENTS` | [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) 10章 |
+| 完成形検査の強度: 完成メッシュを間隔 s 以下になる最小の分割数 k で探索格子の 1/k へ占有化し、部材域の露出面の面中心の値を大きい順に並べて面積の合計が A に達する位置の値で安全率を出し、係数なしで利用者の目標と比べる。細かい格子の要素数の上限かメモリの見積もり(要素数 × e + 探索の形のセル数 × k³ × c)が空きメモリの f 倍を超えるときは k を下げ、s より粗く測った値に (間隔 ÷ s)^p を掛ける | s = **0.67** mm、A = **4** mm²、p = **0.42**、上限 **8000000** 要素、e = **500** B、c = **21000** B、f = **0.5** | `final_check.MEASURE_SPACING_MM` / `TOP_AREA_MM2` / `COARSE_PENALTY_EXPONENT` / `MAX_FINE_ELEMENTS` / `FINE_ELEMENT_BYTES` / `MATERIAL_CELL_BYTES` / `MEMORY_FRACTION` | [TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 4-9〜4-11・6章 |
 | メッシュ平滑化(Taubin)の反復数 `DEFAULT_ITERS` | **30** | `mesh.DEFAULT_ITERS` | 「メッシュ化(marching cubes + Taubin平滑化)」 |
 | 既定スレッド数 `PARALLEL_THREADS` | **総コアの半分** | `fem.PARALLEL_THREADS`(`_default_thread_count()`) | 「線形解法とCPU並列化」 |
 | 段階4で1回に削る割合の上限 `DEFAULT_MAX_STEP_RATIO` | **0.2** | `binary_search.DEFAULT_MAX_STEP_RATIO` | 「二値探索の方式と契約」の「段階4」(削減割合) |
@@ -338,7 +338,7 @@ u_real[mm]      = u_nd     * (F / F_nd) * (E_nd / E) / L
 V = 最小幅³(`optimize_run._build_search_conditions`)。部材域の体積が V 以下なら部材域の最大を使う(意図的な変則。`stress.member_volume_stress`)。合格は 安全率 = 許容 ÷ Q_V ≥ 探索の目標(利用者目標 × 2.4)。
 旧規則の 99.5% 点は材料全体の割合なので、**遠くの低応力材料を残すほど高応力部が上位に隠れ、探索がそれを「重り」として残した**([TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md))。V を体積で固定すると部材域の外の材料の量に値が依らない。
 拘束面の1層は細分で最大が発散する所、保持は探索が変えられない所なので判定から外す。根拠・比較・限界は [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md)。V より小さい集中は探索の判定に出ないので、
-**完成形検査**(`final_check`)が完成メッシュを 1/3 格子で解き、部材域の表面の面中心の最大応力で利用者目標と比べる。
+**完成形検査**(`final_check`)が完成メッシュを 0.67 mm 以下の格子で解き、部材域の表面の面積 4 mm² の上位値で利用者目標と比べる([TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 6章)。
 
 **`member_volume_mm3` を渡さない経路(受入検査・研究のスクリプト)**: 「ρ >= 0.5 の要素」の von Mises の 99.5 パーセンタイル。素のmaxを採らない理由は2つ、どちらも単独では足りない: (1)ρの低い要素を落とす(全要素のmaxは代表値の9.8〜30.5倍まで跳ねる)
 (2)残った母集団でも上位パーセンタイルを取る(maxは階段状境界の角で発散し、**maxで安全率を決めると解像度を上げるほど安全率が下がり続ける**)。要素応力は要素中心1点で評価する(8隅だと階段の角がさらに尖る)。

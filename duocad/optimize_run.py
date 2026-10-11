@@ -869,7 +869,7 @@ def _run(
                   | "boundary_mapping_failed"
                   | "no_feasible_found" | "input_contradiction" | "resolution_insufficient"
                   | "fill_infeasible"                        # 空隙を埋めた形が6条件に不合格
-                  | "final_unsafe",                          # 完成形の表面の最大応力で見た安全率が本来の目標を割る
+                  | "final_unsafe",                          # 完成形の表面の応力(面積の上位値)で見た安全率が本来の目標を割る
          "search_safety_factor": float|None, "filled_cells": int|None,
          "body_id": BodyId | None, "name": str | None,
          "warning": str | None,
@@ -887,7 +887,7 @@ def _run(
          "material_mm3": float|None, "evaluations": int, "termination": str|None,
          "anchor_check": {"limit_mm","fixed_mm","load_mm"} | None,
          "triangle_count": int|None, "vertex_count": int|None,
-         "final_safety_factor": float|None,      # 完成形(平滑化・集合演算の後)を細かい格子で解いた、部材域の表面の最大応力での安全率
+         "final_safety_factor": float|None,      # 完成形(平滑化・集合演算の後)を細かい格子で解いた、部材域の表面の応力(面積の上位値)での安全率
          "final_check": topopt.final_check.inspect の戻り | None,   # 強度と、つなぎ目の幅の診断(3値。適合は出さない)
          "full_material_limit_load": {"factor","load_total_n","limit_load_total_n","safety_factor",
                                       "search_target_safety_factor"} | None,   # 全材料が安全率だけで落ちたとき、探索を始められる荷重
@@ -895,8 +895,9 @@ def _run(
 
     `target_safety_factor` は利用者の実際の目標、`search_target_safety_factor` は探索(と6条件の `safety`)に渡した目標
     (= 実際の目標 × `search_target_factor`)。`safety_factor` は探索の格子での値で、探索時の目標に対する合否であって
-    実際の目標に対する実測ではない。`final_safety_factor` は完成形を探索の格子の 1/3(大きい題材は 1/2)で解き直し、
-    部材域の表面の面中心の最大応力で割った値で、係数を掛けずに実際の目標と比べる。割ったときは `state="final_unsafe"` で
+    実際の目標に対する実測ではない。`final_safety_factor` は完成形を間隔 0.67 mm 以下の格子で解き直し、部材域の表面の
+    面積 4 mm² の上位値(要素数の上限で粗くしか測れないときは割り増す)で割った値で、係数を掛けずに実際の目標と比べる。
+    割ったときは `state="final_unsafe"` で
     結果を足さない(#129、2026-10-11 本人決定。`topopt.final_check`)。測れなかったとき(`final_safety_factor` が None)は警告を付けて足す。
 
     `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも m 立方が入らず
@@ -1174,7 +1175,8 @@ def _run(
     from .topopt import final_check
 
     pump.emit(phase="final_check",
-              message=f"完成形を探索の格子の1/{final_check.REFINE}で解き直して表面の最大応力を測り、つなぎ目の幅を調べる")
+              message=f"完成形を細かい格子(間隔 {final_check.MEASURE_SPACING_MM:g} mm 以下。大きい題材は粗くして割り増す)で"
+                      "解き直して表面の応力を測り、つなぎ目の幅を調べる")
     pump.check()
     checked = final_check.inspect(final_vertices, final_faces, grid=space.grid, conditions=conditions, mask=mask,
                                   min_width=min_width, target_safety_factor=float(opts.target_safety_factor),
@@ -1183,7 +1185,7 @@ def _run(
     final_sf = checked["safety_factor"]
     final_shortfall = None
     if checked["safety"] is not None and checked["safety"].get("status") == "fail":
-        final_shortfall = (f"完成形(平滑化・保持/除外の後)の表面の最大応力で見た安全率 {final_sf:.4g} が目標 "
+        final_shortfall = (f"完成形(平滑化・保持/除外の後)の表面の応力で見た安全率 {final_sf:.4g} が目標 "
                            f"{opts.target_safety_factor:.4g} を下回る(探索時の値 {safety_factor:.4g}。"
                            f"{final_check.peak_phrase(checked)})")
     if final_shortfall is not None:
