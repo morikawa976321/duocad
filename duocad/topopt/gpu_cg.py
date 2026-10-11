@@ -51,10 +51,18 @@ _kernels: dict | None = None
 # 状態(上の3つ)と GPU を守る。GPU は1枚なので、別スレッドの solve を同時に載せても速くならない。
 _lock = threading.Lock()
 
-_DDOT_SRC = r"""
-extern "C" __global__
-void ddot_chunks(const double* x, const double* y, const long long* starts, const long long* widths,
-                 double* chunk_out) {
+# 内積は区間ごとに 1 ブロック 16 スレッドで、OpenBLAS の 16 本の累算器と同じ順に足す(`ddot_body`)。CG の反復のスカラー
+# (区間和の畳み込み・α・β・収束判定)は 1 スレッドのカーネルが GPU の上で計算する(`fold` はホストで区間和を先頭から足していたのと同じ順)。
+# `state[0]` は 0 = 反復中・1 = 収束・2 = 反復の上限、`state[1]` は済んだ反復数。`scal` は [前の反復の ρ, ρ, β, α]。
+# 止まった後のカーネルは何もしないので、ホストが何反復かに 1 回だけ `state` を読んでも、x は止まった反復の値のまま。
+# - `cg_check`: 反復の頭。scipy の cg と同じく、反復数が上限に達したら残差を見ずに止め、そうでなければ ||r|| < atol で止める。
+# - `cg_ell`: 行の k 番目の項を k ごとにまとめた並び(列優先)。足す順序は scipy の CSR の積と同じ列番号の昇順。
+# - 分母が 0 になっても(内積のアンダーフロー等)止めない。scipy の cg も NaN のまま上限まで回して info を返すので、それに揃える。
+# **外部の罠(CuPy)**: カーネルのソースは ASCII だけにする。CuPy はソースを OS の既定の文字コード(日本語の Windows では cp932)で
+# 書き出してからコンパイルし、符号化できない文字があると読み込みごと失敗する(GPU が使えない扱いになる)。
+_CG_SRC = r"""
+__device__ __forceinline__ void ddot_body(const double* x, const double* y, const long long* starts,
+                                          const long long* widths, double* chunk_out) {
     const int c = blockIdx.x;
     const int lane = threadIdx.x;
     const long long start = starts[c];
@@ -73,13 +81,65 @@ void ddot_chunks(const double* x, const double* y, const long long* starts, cons
         chunk_out[c] = dot;
     }
 }
-"""
-# 行の k 番目の項を k ごとにまとめた並び(列優先)。足す順序は CSR と同じ列番号の昇順。
-_ELL_SPMV_SRC = r"""
+
+__device__ __forceinline__ double fold(const double* part, const int chunks) {
+    double s = part[0];
+    for (int c = 1; c < chunks; ++c) s = s + part[c];
+    return s;
+}
+
 extern "C" __global__
-void ell_spmv(const int n, const int* row_len, const int* cols, const double* vals,
-              const double* x, double* y) {
-    int i = blockDim.x * blockIdx.x + threadIdx.x;
+void ddot_chunks(const double* x, const double* y, const long long* starts, const long long* widths,
+                 double* chunk_out) {
+    ddot_body(x, y, starts, widths, chunk_out);
+}
+
+extern "C" __global__
+void cg_ddot(const double* x, const double* y, const long long* starts, const long long* widths,
+             double* chunk_out, const int* state) {
+    if (state[0]) return;
+    ddot_body(x, y, starts, widths, chunk_out);
+}
+
+extern "C" __global__
+void cg_check(const double* part_rr, const int chunks, const double atol, const int maxiter, int* state) {
+    if (state[0]) return;
+    if (state[1] >= maxiter) state[0] = 2;
+    else if (sqrt(fold(part_rr, chunks)) < atol) state[0] = 1;
+}
+
+extern "C" __global__
+void cg_divide(const int n, const double* r, const double* d, double* z, const int* state) {
+    if (state[0]) return;
+    const int i = blockDim.x * blockIdx.x + threadIdx.x;
+    if (i < n) z[i] = r[i] / d[i];
+}
+
+extern "C" __global__
+void cg_beta(const double* part_rz, const int chunks, double* scal, const int* state) {
+    if (state[0]) return;
+    scal[1] = fold(part_rz, chunks);
+    if (state[1] > 0) scal[2] = scal[1] / scal[0];
+}
+
+extern "C" __global__
+void cg_update_p(const int n, const double* z, double* p, const double* scal, const int* state) {
+    if (state[0]) return;
+    const int i = blockDim.x * blockIdx.x + threadIdx.x;
+    if (i >= n) return;
+    if (state[1] == 0) {
+        p[i] = z[i];
+        return;
+    }
+    const double t = p[i] * scal[2];
+    p[i] = t + z[i];
+}
+
+extern "C" __global__
+void cg_ell(const int n, const int* row_len, const int* cols, const double* vals, const double* x, double* y,
+            const int* state) {
+    if (state[0]) return;
+    const int i = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= n) return;
     double s = 0.0;
     const int len = row_len[i];
@@ -89,7 +149,34 @@ void ell_spmv(const int n, const int* row_len, const int* cols, const double* va
     }
     y[i] = s;
 }
+
+extern "C" __global__
+void cg_alpha(const double* part_pq, const int chunks, double* scal, const int* state) {
+    if (state[0]) return;
+    scal[3] = scal[1] / fold(part_pq, chunks);
+}
+
+extern "C" __global__
+void cg_update_xr(const int n, const double* p, const double* q, double* x, double* r, const double* scal,
+                  const int* state) {
+    if (state[0]) return;
+    const int i = blockDim.x * blockIdx.x + threadIdx.x;
+    if (i >= n) return;
+    const double ap = scal[3] * p[i];
+    x[i] = x[i] + ap;
+    const double aq = scal[3] * q[i];
+    r[i] = r[i] - aq;
+}
+
+extern "C" __global__
+void cg_next(double* scal, int* state) {
+    if (state[0]) return;
+    scal[0] = scal[1];
+    state[1] = state[1] + 1;
+}
 """
+# 1 回のホスト同期で流す反復数(CUDA Graph に 1 回撮る)。止まった後の余りは何もしないカーネルの起動だけ。
+_ITERATIONS_PER_SYNC = 32
 
 
 def _cupy():
@@ -103,17 +190,10 @@ def _cupy():
         cp.cuda.runtime.getDeviceCount()
         # `--fmad=false`: 融合しない側の式をコンパイラに融合させない(`fma()` の呼び出しは融合のまま)。
         nofma = ("--fmad=false",)
-        kernels = {
-            "cp": cp,
-            "ddot": cp.RawKernel(_DDOT_SRC, "ddot_chunks", options=nofma),
-            "ell": cp.RawKernel(_ELL_SPMV_SRC, "ell_spmv", options=nofma),
-            "update_p": cp.ElementwiseKernel("T z, T beta", "T p", "p = p * beta + z",
-                                             "duocad_cg_update_p", options=nofma),
-            "update_xr": cp.ElementwiseKernel("T alpha, T p, T q", "T x, T r",
-                                              "x = x + alpha * p; r = r - alpha * q",
-                                              "duocad_cg_update_xr", options=nofma),
-            "divide": cp.ElementwiseKernel("T r, T d", "T z", "z = r / d", "duocad_cg_divide", options=nofma),
-        }
+        module = cp.RawModule(code=_CG_SRC, options=nofma)
+        kernels = {"cp": cp, **{name: module.get_function(name) for name in
+                                ("ddot_chunks", "cg_ddot", "cg_check", "cg_divide", "cg_beta", "cg_update_p",
+                                 "cg_ell", "cg_alpha", "cg_update_xr", "cg_next")}}
     except Exception as exc:  # noqa: BLE001 —— import・ドライバ・デバイスのどれで落ちても理由を残して CPU へ
         raise Unavailable(f"cupy: {type(exc).__name__}: {exc}", sticky=True) from exc
     _kernels = kernels
@@ -154,7 +234,7 @@ class _Dot:
     def __init__(self, n: int, threads: int) -> None:
         cp, k = _cupy()
         widths = chunk_widths(n, threads)
-        self.kernel = k["ddot"]
+        self.kernel = k["ddot_chunks"]
         self.chunks = len(widths)
         self.starts = cp.asarray(np.concatenate([[0], np.cumsum(widths)[:-1]]), dtype=cp.int64)
         self.widths = cp.asarray(widths, dtype=cp.int64)
@@ -183,11 +263,17 @@ def _dot_matches(n: int, threads: int, trials: int = 4) -> bool:
     return True
 
 
-def _cg(kf: sp.csr_matrix, ff: np.ndarray, threads: int, rtol: float) -> tuple[np.ndarray, int, int]:
-    """scipy の `cg(A, b, M=ヤコビ, rtol=rtol)`(初期値 0・maxiter 既定)と同じ演算を同じ順序で行う。"""
+def _cg(kf: sp.csr_matrix, ff: np.ndarray, threads: int, rtol: float,
+        maxiter: int | None = None) -> tuple[np.ndarray, int, int]:
+    """scipy の `cg(A, b, M=ヤコビ, rtol=rtol, maxiter=maxiter)`(初期値 0。`maxiter` の既定は scipy と同じ 10n)と同じ演算を
+    同じ順序で行う。ホストと同期するのは `_ITERATIONS_PER_SYNC` 反復に 1 回(反復ごとに内積をホストへ戻すと、終盤の 5 万自由度では
+    同期とカーネルの起動が計算より長かった。docs/TOPOPT_SPEED.md「GPU の CG の同期」)。"""
     cp, k = _cupy()
     n = kf.shape[0]
-    dot = _Dot(n, threads)
+    widths = chunk_widths(n, threads)
+    chunks = len(widths)
+    starts = cp.asarray(np.concatenate([[0], np.cumsum(widths)[:-1]]), dtype=cp.int64)
+    widths_d = cp.asarray(widths, dtype=cp.int64)
     indptr = cp.asarray(kf.indptr, dtype=cp.int64)
     row_len = (indptr[1:] - indptr[:-1]).astype(cp.int32)
     width = int(row_len.max()) if n else 0
@@ -201,35 +287,49 @@ def _cg(kf: sp.csr_matrix, ff: np.ndarray, threads: int, rtol: float) -> tuple[n
     cols[at] = cp.asarray(kf.indices, dtype=cp.int32)
     del at
     diag = cp.asarray(kf.diagonal())
-    grid = ((n + _BLOCK - 1) // _BLOCK,)
-    head = (cp.int32(n), row_len, cols, vals)
 
     b = cp.asarray(ff, dtype=cp.float64)
-    bnrm2 = math.sqrt(dot(b, b))
+    bnrm2 = math.sqrt(_Dot(n, threads)(b, b))
     if bnrm2 == 0.0:
         return cp.asnumpy(b), 0, 0
-    atol = max(0.0, rtol * bnrm2)
-    maxiter = n * 10
+    atol = np.float64(max(0.0, rtol * bnrm2))
+    maxiter = np.int32(n * 10 if maxiter is None else maxiter)
     x = cp.zeros(n, dtype=cp.float64)
     r = b.copy()
-    z = cp.empty(n, dtype=cp.float64)
-    p = cp.empty(n, dtype=cp.float64)
-    q = cp.empty(n, dtype=cp.float64)
-    rho_prev = 0.0
-    for iteration in range(maxiter):
-        if math.sqrt(dot(r, r)) < atol:
-            return cp.asnumpy(x), iteration, 0
-        k["divide"](r, diag, z)
-        rho_cur = dot(r, z)
-        if iteration > 0:
-            k["update_p"](z, rho_cur / rho_prev, p)
-        else:
-            cp.copyto(p, z)
-        k["ell"](grid, (_BLOCK,), (*head, p, q))
-        alpha = rho_cur / dot(p, q)
-        k["update_xr"](alpha, p, q, x, r)
-        rho_prev = rho_cur
-    return cp.asnumpy(x), maxiter, maxiter
+    z, p, q = (cp.empty(n, dtype=cp.float64) for _ in range(3))
+    part_rr, part_rz, part_pq = (cp.empty(chunks, dtype=cp.float64) for _ in range(3))
+    scal = cp.zeros(4, dtype=cp.float64)
+    state = cp.zeros(2, dtype=cp.int32)
+    grid, block, dots, one = ((n + _BLOCK - 1) // _BLOCK,), (_BLOCK,), ((chunks,), (16,)), ((1,), (1,))
+    n_, chunks_ = np.int32(n), np.int32(chunks)
+
+    def iteration():
+        k["cg_ddot"](*dots, (r, r, starts, widths_d, part_rr, state))
+        k["cg_check"](*one, (part_rr, chunks_, atol, maxiter, state))
+        k["cg_divide"](grid, block, (n_, r, diag, z, state))
+        k["cg_ddot"](*dots, (r, z, starts, widths_d, part_rz, state))
+        k["cg_beta"](*one, (part_rz, chunks_, scal, state))
+        k["cg_update_p"](grid, block, (n_, z, p, scal, state))
+        k["cg_ell"](grid, block, (n_, row_len, cols, vals, p, q, state))
+        k["cg_ddot"](*dots, (p, q, starts, widths_d, part_pq, state))
+        k["cg_alpha"](*one, (part_pq, chunks_, scal, state))
+        k["cg_update_xr"](grid, block, (n_, p, q, x, r, scal, state))
+        k["cg_next"](*one, (scal, state))
+
+    # **外部の罠(CuPy)**: 上の準備は既定のストリームに積まれていて、グラフを流す非ブロッキングのストリームはそれを待たない。
+    # 先に揃えないと初期化前の配列を読み、収束しない・一致しない結果が時々出た(5 万自由度で 1 回観測。docs/TOPOPT_SPEED.md)。
+    cp.cuda.Device().synchronize()
+    stream = cp.cuda.Stream(non_blocking=True)
+    with stream:
+        stream.begin_capture()
+        for _ in range(_ITERATIONS_PER_SYNC):
+            iteration()
+        graph = stream.end_capture()
+    while True:
+        graph.launch(stream)
+        stopped, done = (int(v) for v in state.get(stream=stream))
+        if stopped:
+            return cp.asnumpy(x), done, 0 if stopped == 1 else done
 
 
 def _release() -> str | None:

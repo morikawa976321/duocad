@@ -310,3 +310,45 @@ def test_a_matrix_free_gpu_solution_that_is_not_usable_warns_and_is_solved_on_th
     with pytest.warns(RuntimeWarning, match='CPU で解き直す'):
         got = model.prepare(density, 3.0, solver='matrix_free', device='gpu').solve(model.f[None, :])[0]
     assert np.array_equal(got, expected) and stats['gpu_solves'] == 0 and stats['gpu_fallbacks'] == 1
+
+
+def test_the_kernel_source_is_ascii_only():
+    """落ちたら、CuPy がカーネルのソースを cp932 で書き出せず、日本語の Windows では GPU が丸ごと使えなくなる。"""
+    assert gpu_cg._CG_SRC.isascii()
+
+
+@needs_gpu
+@pytest.mark.parametrize('maxiter', [1, 17, 64])
+def test_a_gpu_cg_that_hits_the_iteration_limit_stops_where_scipy_stops(maxiter):
+    """落ちたら、反復の上限で止まるとき GPU の CG が scipy の cg と違う反復で止まるか、止まった後も解を書き換えている。"""
+    import scipy.sparse.linalg as spla
+
+    model = fem.Model(30, 12, 12)
+    kf = model.assemble(np.ones((30, 12, 12)), 3.0)[model.free, :][:, model.free].tocsc()
+    ff = model.f[model.free]
+    diag = kf.diagonal()
+    threads = gpu_cg.openblas_threads()
+    expected, info = spla.cg(kf, ff, M=spla.LinearOperator(kf.shape, matvec=lambda v: v / diag), rtol=1e-9,
+                             maxiter=maxiter)
+    u, iterations, gpu_info = gpu_cg._cg(gpu_cg._as_csr(kf), ff, threads, 1e-9, maxiter=maxiter)
+    gpu_cg._release()
+    assert info == gpu_info == maxiter == iterations
+    assert np.array_equal(u, expected)
+
+
+@needs_gpu
+def test_a_zero_denominator_takes_the_same_path_as_scipy():
+    """落ちたら、α や β の分母が 0 になる系で GPU の CG が scipy の cg と違う道を通る(scipy は NaN のまま上限まで回して info を返す)。"""
+    import scipy.sparse as sp
+    import scipy.sparse.linalg as spla
+
+    kf = sp.csr_matrix(np.eye(2) * 1e200)
+    ff = np.array([1e-100, 1e-100])
+    diag = kf.diagonal()
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        expected, info = spla.cg(kf, ff, M=spla.LinearOperator(kf.shape, matvec=lambda v: v / diag), rtol=1e-9)
+    u, iterations, gpu_info = gpu_cg._cg(gpu_cg._as_csr(kf), ff, 1, 1e-9)
+    gpu_cg._release()
+    assert info == gpu_info == iterations == 20
+    assert np.array_equal(u, expected, equal_nan=True)
