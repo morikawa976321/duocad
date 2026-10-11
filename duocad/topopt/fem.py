@@ -133,6 +133,7 @@ def element_stiffness(E: float = 1.0, nu: float = POISSON_RATIO) -> np.ndarray:
 
 def _build_edof(nelx: int, nely: int, nelz: int) -> np.ndarray:
     """要素DOF写像 (nele, 24) を返す。要素 (x,y,z) の 8 頂点を (a,b,c) ∈ {0,1}³ の辞書順に並べ、各頂点の自由度 3n, 3n+1, 3n+2。"""
+    nelx, nely, nelz = int(nelx), int(nely), int(nelz)
     nz1 = nelz + 1
     ny1 = nely + 1
     origin = (np.arange(nelx, dtype=np.int32)[:, None, None] * (ny1 * nz1)

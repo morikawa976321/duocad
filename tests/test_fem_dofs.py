@@ -68,3 +68,8 @@ def test_the_energy_of_some_elements_is_bit_identical_to_the_full_compliance_fie
     cells = np.sort(rng.choice(model.nele, size=count, replace=False))
     _, full = model.compliance(np.ones((30, 14, 12)), 3.0, u)
     assert np.array_equal(model.element_energy(u, cells), full.ravel()[cells])
+
+
+def test_the_element_dof_table_is_int32_for_numpy_integer_shapes():
+    """落ちたら、numpy の整数で格子の形を渡すと要素の自由度表が int64 になり、メモリが倍になる。"""
+    assert fem._build_edof(np.int64(4), np.int64(3), np.int64(2)).dtype == np.int32

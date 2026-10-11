@@ -324,3 +324,57 @@ def test_a_snapshot_keeps_the_values_it_was_given_even_if_the_caller_changes_the
         assert np.all(snapshot(rec, f'step{value}')['work'] == value)
     events = trace.RunArchive(rec.path).snapshots()
     assert [e['name'] for e in events][-3:] == ['step0', 'step1', 'step2']
+
+
+def test_an_array_that_could_not_be_written_is_written_by_the_next_snapshot_that_uses_it(recordings, monkeypatch):
+    """落ちたら、書けなかった・消えた・符号化の途中で投げた記録の配列を「書いた」と覚え、後の JSON が無い配列を参照する。"""
+    real = trace._atomic
+    calls = {'n': 0}
+
+    def fail_once(path, write):
+        if path.suffix == '.npz' and calls['n'] == 0:
+            calls['n'] += 1
+            raise OSError('一時的に書けない')
+        return real(path, write)
+
+    shared = np.arange(7.)
+    with trace.recording() as rec:
+        monkeypatch.setattr(trace, '_atomic', fail_once)
+        rec.snapshot('first', dict(a=shared))
+        rec.snapshot('second', dict(a=shared))
+        rec.flush()
+        monkeypatch.setattr(trace, '_atomic', real)
+        shutil.rmtree(rec.path/'arrays')
+        rec.snapshot('third', dict(a=shared))
+        with pytest.raises(TypeError):
+            rec.snapshot('broken', dict(good=np.arange(3.), bad=np.array([object()], dtype=object)))
+        rec.snapshot('fourth', dict(good=np.arange(3.)))
+    assert rec.write_failures == 1
+    assert not list(rec.path.glob('*-first.json'))
+    for name in ('second', 'third'):
+        assert np.array_equal(snapshot(rec, name)['a'], shared)
+    assert np.array_equal(snapshot(rec, 'fourth')['good'], np.arange(3.))
+
+
+def test_an_event_is_encoded_when_it_is_recorded(recordings):
+    """落ちたら、イベントの値が積んだ後の書き換えで変わるか、記録できない値の誤りが別の記録の時点で投げられる。"""
+    values = [1]
+    with trace.recording() as rec:
+        rec.event('custom', values=values)
+        values[0] = 99
+        with pytest.raises(TypeError):
+            rec.event('custom', values=[object()])
+    custom = [e for e in trace.RunArchive(rec.path).events if e['kind'] == 'custom']
+    assert [e['values'] for e in custom] == [[1]]
+
+
+def test_an_error_in_the_run_reaches_the_caller_and_the_writer_is_closed(recordings):
+    """落ちたら、記録の後始末が計算の例外を別の例外で隠すか、書き出しスレッドが残る。"""
+    with pytest.raises(RuntimeError, match='計算の失敗'):
+        with trace.recording() as rec:
+            for index in range(10):
+                rec.snapshot(f'step{index}', dict(a=np.full(1000, float(index))))
+            raise RuntimeError('計算の失敗')
+    assert rec._writer._shutdown
+    assert json.loads((rec.path/'manifest.json').read_text(encoding='utf-8'))['status'] == 'failed'
+    assert snapshot(rec, 'step9')['a'][0] == 9.

@@ -91,11 +91,13 @@ class Recorder:
         self.stack = []
         # 書き出しは1本のスレッドが積まれた順に行う(配列 → スナップショットの JSON → イベントの行)。だから「書き終えた配列を
         # 参照する JSON だけを公開する」は保たれる。圧縮(zlib)は GIL を放すので、その間も計算は進む(1 評価 0.6 秒。
-        # docs/TOPOPT_SPEED.md)。`manifest`・失敗の数・積んだ配列の鍵は両方のスレッドが触るので `_lock` の中で触る。
+        # docs/TOPOPT_SPEED.md)。値の JSON 化と配列の写しは積む前に呼び出し側で済ませる(書き方の誤りはその場で投げ、
+        # 積んだ後に呼び出し側が値を書き換えても記録は変わらない)。積んだ仕事は例外を外へ出さない(数えて捨てる)。
+        # `manifest`・失敗の数・書けた配列の鍵・`write_seconds` は両方のスレッドが触るので `_lock` の中で触る。
         self._lock = threading.RLock()
         self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix='trace-writer')
         self._pending = deque()
-        self._queued_arrays = set()
+        self._written_arrays = set()
         self.manifest = dict(schema_version=1, run_id=self.path.name, status='running',
                              process_id=os.getpid(),
                              started_utc=datetime.now(timezone.utc).isoformat(),
@@ -118,18 +120,28 @@ class Recorder:
         _atomic(path, lambda stream: stream.write(data))
 
     def _submit(self, job):
+        def guarded():
+            try:
+                job()
+            except Exception as error:  # noqa: BLE001 —— 記録は best effort。書き出しスレッドの例外で計算を止めない
+                self._failed('writer', error)
+
         while len(self._pending) >= _PENDING_LIMIT:
             self._pending.popleft().result()
-        self._pending.append(self._writer.submit(job))
+        self._pending.append(self._writer.submit(guarded))
 
     def flush(self):
-        """積んだ書き出しを全部書き終えるまで待つ(同じプロセスで実行中の記録を読むとき・終えるとき)。"""
+        """積んだ書き出しを全部書き終えるまで待つ。**同じプロセスで実行中の記録を読むときは先に呼ぶ**(`snapshot` が返す
+        ファイルは、まだ書かれていないことがある)。"""
         while self._pending:
             self._pending.popleft().result()
 
     def close(self):
-        self.flush()
-        self._writer.shutdown(wait=True)
+        """書き終えるのを待ってスレッドを閉じる。投げない(`recording` の後始末が元の例外を隠さないように)。"""
+        try:
+            self.flush()
+        finally:
+            self._writer.shutdown(wait=True)
 
     def _failed(self, where, error):
         """記録の書き込みが落ちたことを数え、最初の数回だけ stderr へ出す。
@@ -157,38 +169,38 @@ class Recorder:
     def event(self, kind, **values):
         row = dict(kind=kind, elapsed_seconds=time.perf_counter()-self.started,
                    phase=self.stack[-1] if self.stack else None, **values)
-        self._submit(lambda: self._write_event(row))
+        line = json.dumps(row, ensure_ascii=False, allow_nan=False)
+        self._submit(lambda: self._write_event(kind, line))
 
-    def _write_event(self, row):
-        kind = row['kind']
+    def _write_event(self, kind, line):
         try:
             self.path.mkdir(parents=True, exist_ok=True)
             with (self.path/'events.jsonl').open('a', encoding='utf-8') as stream:
-                stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False)+'\n')
+                stream.write(line+'\n')
                 stream.flush()
         except OSError as error:
             self._failed(f'event:{kind}', error)
             return
         with self._lock:
-            self.manifest['last_event'] = row
+            self.manifest['last_event'] = json.loads(line)
             self._manifest()
 
     def _encode(self, value, seen, arrays):
-        """`value` を JSON にできる形へ直し、まだ書いていない配列を `arrays` へ `(鍵, パス, 写し)` で足す。
-        写しを取る(書き出しスレッドが書く前に、呼び出し側が同じ配列を書き換えても記録が変わらないように)。"""
+        """`value` を JSON にできる形へ直し、書く必要のある配列を `arrays` へ `(鍵, パス, 写し)` で足す。
+        書き出しスレッドが書けたと確かめた配列で、ファイルも残っているものだけ足さない(書けなかった・消えた配列は次の記録で書き直す)。"""
         if isinstance(value, np.ndarray):
             if value.dtype.hasobject:
                 raise TypeError('object配列は診断記録に保存できない')
-            array = np.array(value, order='C', copy=True)
+            array = np.asarray(value, order='C')
             digest = hashlib.sha256(json.dumps([array.dtype.str, array.shape]).encode())
             digest.update(memoryview(array.ravel()).cast('B'))
             key = digest.hexdigest()
             relative = f'arrays/{key}.npz'
+            path = self.path/relative
             with self._lock:
-                fresh = key not in self._queued_arrays
-                self._queued_arrays.add(key)
-            if fresh:
-                arrays.append((key, self.path/relative, array))
+                written = key in self._written_arrays
+            if not (written and path.exists()):
+                arrays.append((key, path, np.array(array, copy=True)))
             return {'$array':relative, 'shape':list(value.shape), 'dtype':value.dtype.str}
         if isinstance(value, np.generic):
             return self._encode(value.item(), seen, arrays)
@@ -231,19 +243,20 @@ class Recorder:
     def _write_snapshot(self, name, filename, data, arrays, row):
         started = time.perf_counter()
         try:
-            for _key, path, array in arrays:
+            for key, path, array in arrays:
                 if not path.exists():
                     _atomic(path, lambda stream, array=array: np.savez_compressed(stream, data=array))
+                with self._lock:
+                    self._written_arrays.add(key)
             _atomic(self.path/filename, lambda stream: stream.write(data))
         except OSError as error:
             with self._lock:
-                self._queued_arrays.difference_update(key for key, _path, _array in arrays)
                 self.write_seconds += time.perf_counter()-started
             self._failed(f'snapshot:{name}', error)
             return
         with self._lock:
             self.write_seconds += time.perf_counter()-started
-        self._write_event(row)
+        self._write_event('snapshot', json.dumps(row, ensure_ascii=False, allow_nan=False))
 
     def save(self, name, write, *, digest):
         """記録用のファイルを1つ書き、書いた後に読み返した内容のハッシュを manifest の `digest` へ入れる。
