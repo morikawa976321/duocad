@@ -690,6 +690,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     `count` 個(巻き添え・島として消えたぶんも数える。最後の一口が超えることがある)消えるか順位が尽きたら止める。
     `mask` が「1成分・全頂点が正則・条件節点が全て支えられている・閉じた空洞が無い・(`min_width_cells>1` なら)全材料セルが
     m 立方の材料だけのブロックに属し、侵食した芯がつながる(S(m)。`min_width.CoreConnectivity`)」なら、返すマスクも同じ。
+    同じ親から何度も削るときは `PeelWalk` を使う(結果は同じで、歩いた分を使い回す)。
 
     **保護セル(`protected`。`mask` に含まれること)は決して抜かない**: 順位に並んでいても飛ばし(数えない)、島として切り離す手も却下する
     (`skipped_connectivity`)。m>1 では巻き添えにも入らないよう、`protected` は `exempt` に含まれること(`ValueError`)。
@@ -711,138 +712,247 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     - 表面: x が空の6近傍(格子の外を含む)を持たなければ抜かない。一口の6連結成分もそれぞれ既存の空につながっていること
       (閉じた空洞を作らない。中空構造を許容しない製品制約で、`acceptance.boundary_check` の `void_components` が落ちない根拠)。
     """
-    started = time.perf_counter()
-    mask = np.asarray(mask, dtype=bool)
-    shape = mask.shape
-    if protected is not None:
-        protected = np.asarray(protected, dtype=bool)
-        if min_width_cells > 1 and (exempt is None or (protected & ~exempt).any()):
-            raise ValueError('m>1 の peel では protected は exempt に含まれること(巻き添えに入らないため)')
-        order = order[~protected.ravel()[order]]
-    node_shape = tuple(n + 1 for n in shape)
-    support = np.zeros(node_shape, dtype=np.int32)
-    is_anchor = np.zeros(node_shape, dtype=bool)
-    is_anchor.ravel()[anchor_ids] = True
-    touches = np.zeros(shape, dtype=bool)
-    for corner in _CORNERS:
-        window = tuple(slice(c, c + n) for c, n in zip(corner, shape))
-        support[window] += mask
-        touches |= is_anchor[window]
-    support_flat, anchor_flat, touches_flat = support.ravel(), is_anchor.ravel(), touches.ravel()
-    plane, row = shape[1] * shape[2], shape[2]
-    node_plane, node_row = node_shape[1] * node_shape[2], node_shape[2]
+    return PeelWalk(mask, anchor_ids, min_width_cells=min_width_cells, exempt=exempt, protected=protected).take(order, count)
 
-    work = np.pad(mask, 1)
-    inner = work[1:-1, 1:-1, 1:-1]
-    stats = PeelStats()
-    core = min_width.CoreConnectivity(min_width_cells, exempt) if min_width_cells > 1 else None
-    necks = None if core is None else neck.NeckJudge(core)
-    picked: list[int] = []
-    for cell in order.tolist():
-        if stats.picked + stats.casualties + stats.islands >= count:
-            break
-        i, rest = divmod(cell, plane)
-        j, k = divmod(rest, row)
-        if not work[i + 1, j + 1, k + 1]:
-            stats.already_removed += 1
-            continue
-        corners = None
-        if touches_flat[cell]:
-            corners = [(i + a) * node_plane + (j + b) * node_row + (k + c) for a, b, c in _CORNERS]
-            if any(anchor_flat[n] and support_flat[n] <= 1 for n in corners):
-                stats.skipped_support += 1
-                continue
-        window = work[i:i + 3, j:j + 3, k:k + 3].copy()
-        if all(window[p] for p in _WINDOW_NEIGHBOURS):
-            stats.skipped_surface += 1
-            continue
-        bite = None
-        if min_width_cells > 1:
-            extra = min_width.casualties(inner, (i, j, k), min_width_cells, exempt)
-            if len(extra):
-                bite = np.vstack(([[i, j, k]], extra))
-        if bite is None:
-            cleared = (i, j, k)
-            window[1, 1, 1] = False
-            if not _regular_after_removal(window):
-                stats.skipped_manifold += 1
-                continue
-            connected = _neighbours_stay_connected(window)
-            if connected is None:
-                stats.skipped_connectivity += 1
-                continue
+
+#: `PeelStats` のうち歩きの途中で数える欄(`picked_cells`・`seconds` と、判定器の `stats` から写す欄を除く)。
+_WALK_COUNTERS = ('picked', 'casualties', 'islands', 'skipped_support', 'skipped_surface', 'skipped_manifold',
+                  'skipped_connectivity', 'skipped_neck', 'skipped_core', 'already_removed', 'global_checks')
+
+
+@dataclass(frozen=True)
+class _Pick:
+    """歩きの1手。`removed` はこの手で消したセル(一口と島)の平坦添字、`total` はここまでに消えた数の累計。
+    `before` / `after` はこの手を調べる直前・抜いた直後の数え(`PeelWalk._counters`)。"""
+
+    position: int
+    cell: int
+    removed: np.ndarray
+    total: int
+    before: tuple
+    after: tuple
+
+
+class PeelWalk:
+    """1つの親マスクに対する `peel` の歩き。歩いた手を覚え、同じ親への次の `take` で使い回す。
+
+    段階4は不合格のたびに同じ親から削り直す: 要求数を半分にする(候補は前の歩きの接頭辞)か、抜いた1手を順位から外す
+    (その手より前のセルは同じマスクで同じ判定)。`take` は前回の順位と比べ、食い違う位置より前の手を残して、その位置の状態から
+    歩きを再開する。判定は真偽と整数だけで決まるので、**候補・`picked_cells`・`PeelStats` の数(`seconds` を除く)は毎回 `peel` を
+    呼んだときと等しい**(`tests/test_peel_walk.py`)。親が変わったら作り直すこと。
+    """
+
+    def __init__(self, mask: np.ndarray, anchor_ids: np.ndarray, *, min_width_cells: int = 1,
+                 exempt: Optional[np.ndarray] = None, protected: Optional[np.ndarray] = None) -> None:
+        self.parent = np.asarray(mask, dtype=bool)
+        self.protected = None if protected is None else np.asarray(protected, dtype=bool)
+        if self.protected is not None and min_width_cells > 1 and (exempt is None or (self.protected & ~exempt).any()):
+            raise ValueError('m>1 の peel では protected は exempt に含まれること(巻き添えに入らないため)')
+        self.anchor_ids = anchor_ids
+        self.min_width_cells = int(min_width_cells)
+        self.exempt = exempt
+        shape = self.parent.shape
+        self.node_shape = tuple(n + 1 for n in shape)
+        self.is_anchor = np.zeros(self.node_shape, dtype=bool)
+        self.is_anchor.ravel()[anchor_ids] = True
+        self.touches = np.zeros(shape, dtype=bool)
+        for corner in _CORNERS:
+            self.touches |= self.is_anchor[tuple(slice(c, c + n) for c, n in zip(corner, shape))]
+        self.core = min_width.CoreConnectivity(self.min_width_cells, exempt) if self.min_width_cells > 1 else None
+        self.necks = None if self.core is None else neck.NeckJudge(self.core)
+        self.order: Optional[np.ndarray] = None
+        self.position = 0
+        self.picks: list[_Pick] = []
+        self.count = dict.fromkeys(_WALK_COUNTERS, 0)
+        self.work = self.support = None
+
+    def _zero_counters(self) -> tuple:
+        return ((0,) * len(_WALK_COUNTERS),
+                None if self.core is None else dict(window_true=0, window_false=0, global_count=0, max_margin=1),
+                None if self.necks is None else dict(rejected=0, full_grid=0))
+
+    def _counters(self) -> tuple:
+        return (tuple(self.count.values()),
+                None if self.core is None else dict(self.core.stats),
+                None if self.necks is None else dict(self.necks.stats))
+
+    def _restore(self, upto: int, position: int, counters: Optional[tuple]) -> None:
+        """`picks[:upto]` を抜いた状態・順位の `position` から歩けるようにする(`counters` が None なら数えは0から)。"""
+        del self.picks[upto:]
+        mask = self.parent.copy()
+        for pick in self.picks:
+            mask.ravel()[pick.removed] = False
+        # 支えの数は条件節点でだけ読む。抜いたセルのうち条件節点に接するものだけ減らす `_walk` の数え方と、条件節点では一致する
+        # (条件節点に接しないセル・島は角に条件節点を持たない)。
+        self.support = np.zeros(self.node_shape, dtype=np.int32)
+        for corner in _CORNERS:
+            self.support[tuple(slice(c, c + n) for c, n in zip(corner, mask.shape))] += mask
+        self.work = np.pad(mask, 1)
+        self.position = position
+        counters = self._zero_counters() if counters is None else counters
+        self.count = dict(zip(_WALK_COUNTERS, counters[0]))
+        if self.core is not None:
+            self.core.stats.update(counters[1])
+            self.necks.stats.update(counters[2])
+
+    def take(self, order: np.ndarray, count: int) -> tuple[np.ndarray, PeelStats]:
+        """`peel(mask, order, count, ...)` と同じ戻り値。"""
+        started = time.perf_counter()
+        if count <= 0:
+            return self._result(0, self._zero_counters(), started)
+        # 写しで持つ(呼び出し側が同じ配列を書き換えても、前回の順位との食い違いを見落とさない)。
+        order = np.array(order if self.protected is None else order[~self.protected.ravel()[order]], copy=True)
+        if self.order is None:
+            self._restore(0, 0, None)
         else:
-            cleared = tuple(bite.T)
-            for ci, cj, ck in extra[touches[extra[:, 0], extra[:, 1], extra[:, 2]]]:
-                corners = (corners or []) + [(ci + a) * node_plane + (cj + b) * node_row + (ck + c)
-                                             for a, b, c in _CORNERS]
-            if corners is not None:
-                dropped: dict = {}
-                for n in corners:
-                    if anchor_flat[n]:
-                        dropped[n] = dropped.get(n, 0) + 1
-                if any(support_flat[n] <= d for n, d in dropped.items()):
-                    stats.skipped_support += 1
+            n = min(len(order), len(self.order))
+            differ = np.flatnonzero(order[:n] != self.order[:n])
+            first = int(differ[0]) if differ.size else n
+            if first < self.position:
+                keep = sum(1 for pick in self.picks if pick.position < first)
+                if keep < len(self.picks) and self.picks[keep].position == first:
+                    self._restore(keep, first, self.picks[keep].before)
+                elif keep:
+                    self._restore(keep, self.picks[keep - 1].position + 1, self.picks[keep - 1].after)
+                else:
+                    self._restore(0, 0, None)
+        self.order = order
+        for index, pick in enumerate(self.picks):
+            if pick.total >= count:
+                return self._result(index + 1, pick.after, started)
+        self._walk(count)
+        return self._result(len(self.picks), self._counters(), started)
+
+    def _result(self, upto: int, counters: tuple, started: float) -> tuple[np.ndarray, PeelStats]:
+        candidate = self.parent.copy()
+        for pick in self.picks[:upto]:
+            candidate.ravel()[pick.removed] = False
+        stats = PeelStats(**dict(zip(_WALK_COUNTERS, counters[0])))
+        stats.picked_cells = np.asarray([pick.cell for pick in self.picks[:upto]], dtype=np.int64)
+        if counters[1] is not None:
+            stats.core_window_true = int(counters[1]['window_true'])
+            stats.core_window_false = int(counters[1]['window_false'])
+            stats.core_global = int(counters[1]['global_count'])
+            stats.neck_full_grid = int(counters[2]['full_grid'])
+        stats.seconds = time.perf_counter() - started
+        return candidate, stats
+
+    def _walk(self, count: int) -> None:
+        """今の状態から順位を歩き、消えた数の累計が `count` に届くか順位が尽きたら止める(`peel` の判定そのもの)。"""
+        shape = self.parent.shape
+        node_shape = self.node_shape
+        order, work, touches, exempt, protected = self.order, self.work, self.touches, self.exempt, self.protected
+        support_flat, anchor_flat, touches_flat = self.support.ravel(), self.is_anchor.ravel(), touches.ravel()
+        plane, row = shape[1] * shape[2], shape[2]
+        node_plane, node_row = node_shape[1] * node_shape[2], node_shape[2]
+        inner = work[1:-1, 1:-1, 1:-1]
+        m, core, necks, anchor_ids, tally = self.min_width_cells, self.core, self.necks, self.anchor_ids, self.count
+        total = tally['picked'] + tally['casualties'] + tally['islands']
+        while self.position < len(order) and total < count:
+            position = self.position
+            self.position += 1
+            cell = int(order[position])
+            i, rest = divmod(cell, plane)
+            j, k = divmod(rest, row)
+            if not work[i + 1, j + 1, k + 1]:
+                tally['already_removed'] += 1
+                continue
+            corners = None
+            if touches_flat[cell]:
+                corners = [(i + a) * node_plane + (j + b) * node_row + (k + c) for a, b, c in _CORNERS]
+                if any(anchor_flat[n] and support_flat[n] <= 1 for n in corners):
+                    tally['skipped_support'] += 1
                     continue
-            reason, connected = min_width.bite_verdict(work, bite)
-            if reason is not None:
-                setattr(stats, f'skipped_{reason}', getattr(stats, f'skipped_{reason}') + 1)
+            window = work[i:i + 3, j:j + 3, k:k + 3].copy()
+            if all(window[p] for p in _WINDOW_NEIGHBOURS):
+                tally['skipped_surface'] += 1
                 continue
-        island_cells = 0
-        inner[cleared] = False
-        if not connected:
-            stats.global_checks += 1
-            labels, _ = ndimage.label(inner, structure=NEIGHBOURHOOD_STRUCTURE)
-            holders = np.unique(labels[touches & inner])
-            if anchor_ids.size:
-                keep = int(holders[0]) if holders.size == 1 else 0
+            # ここまでの判定は数えを動かさずに通ってきたので、これがこのセルを調べる直前の数え(この先は大域の数え直しと判定器が動かす)。
+            before = self._counters()
+            bite = None
+            if m > 1:
+                extra = min_width.casualties(inner, (i, j, k), m, exempt)
+                if len(extra):
+                    bite = np.vstack(([[i, j, k]], extra))
+            if bite is None:
+                cleared = (i, j, k)
+                window[1, 1, 1] = False
+                if not _regular_after_removal(window):
+                    tally['skipped_manifold'] += 1
+                    continue
+                connected = _neighbours_stay_connected(window)
+                if connected is None:
+                    tally['skipped_connectivity'] += 1
+                    continue
             else:
-                keep = 1 if labels.max() == 1 else 0
-            if keep == 0:
+                cleared = tuple(bite.T)
+                for ci, cj, ck in extra[touches[extra[:, 0], extra[:, 1], extra[:, 2]]]:
+                    corners = (corners or []) + [(ci + a) * node_plane + (cj + b) * node_row + (ck + c)
+                                                 for a, b, c in _CORNERS]
+                if corners is not None:
+                    dropped: dict = {}
+                    for n in corners:
+                        if anchor_flat[n]:
+                            dropped[n] = dropped.get(n, 0) + 1
+                    if any(support_flat[n] <= d for n, d in dropped.items()):
+                        tally['skipped_support'] += 1
+                        continue
+                reason, connected = min_width.bite_verdict(work, bite)
+                if reason is not None:
+                    tally[f'skipped_{reason}'] += 1
+                    continue
+            island_cells = 0
+            inner[cleared] = False
+            if not connected:
+                tally['global_checks'] += 1
+                labels, _ = ndimage.label(inner, structure=NEIGHBOURHOOD_STRUCTURE)
+                holders = np.unique(labels[touches & inner])
+                if anchor_ids.size:
+                    keep = int(holders[0]) if holders.size == 1 else 0
+                else:
+                    keep = 1 if labels.max() == 1 else 0
+                if keep == 0:
+                    inner[cleared] = True
+                    tally['skipped_connectivity'] += 1
+                    continue
+                islands = (labels > 0) & (labels != keep)
+                if protected is not None and (islands & protected).any():
+                    inner[cleared] = True
+                    tally['skipped_connectivity'] += 1
+                    continue
+                island_cells = int(islands.sum())
+                # 島と保持成分は m=2 では同じ m 立方に入らない(2×2×2 の全セルは互いに26近傍)。m≥3 は大域で確かめる。
+                if exempt is not None and m > 2 and not _mask_satisfies_min_width(inner & ~islands, m, exempt):
+                    inner[cleared] = True
+                    tally['skipped_connectivity'] += 1
+                    continue
+                # 島は条件節点に接せず、保持成分と辺・頂点でも接しない(接すれば一口の頂点の正則判定で落ちている)。
+                inner[islands] = False
+            if necks is not None and necks.creates_neck(inner, np.array([[i, j, k]]) if bite is None else bite):
                 inner[cleared] = True
-                stats.skipped_connectivity += 1
+                if island_cells:
+                    inner[islands] = True
+                tally['skipped_neck'] += 1
                 continue
-            islands = (labels > 0) & (labels != keep)
-            if protected is not None and (islands & protected).any():
+            if core is not None and not core.after_bite(inner, (i, j, k) if bite is None else bite, island_cells):
                 inner[cleared] = True
-                stats.skipped_connectivity += 1
+                if island_cells:
+                    inner[islands] = True
+                tally['skipped_core'] += 1
                 continue
-            island_cells = int(islands.sum())
-            # 島と保持成分は m=2 では同じ m 立方に入らない(2×2×2 の全セルは互いに26近傍)。m≥3 は大域で確かめる。
-            if exempt is not None and min_width_cells > 2 and not _mask_satisfies_min_width(
-                    inner & ~islands, min_width_cells, exempt):
-                inner[cleared] = True
-                stats.skipped_connectivity += 1
-                continue
-            # 島は条件節点に接せず、保持成分と辺・頂点でも接しない(接すれば一口の頂点の正則判定で落ちている)。
-            inner[islands] = False
-        if necks is not None and necks.creates_neck(inner, np.array([[i, j, k]]) if bite is None else bite):
-            inner[cleared] = True
+            if corners is not None:
+                for n in corners:
+                    support_flat[n] -= 1
+            removed = (np.array([cell], dtype=np.int64) if bite is None
+                       else np.ravel_multi_index(tuple(bite.T), shape).astype(np.int64))
             if island_cells:
-                inner[islands] = True
-            stats.skipped_neck += 1
-            continue
-        if core is not None and not core.after_bite(inner, (i, j, k) if bite is None else bite, island_cells):
-            inner[cleared] = True
-            if island_cells:
-                inner[islands] = True
-            stats.skipped_core += 1
-            continue
-        if corners is not None:
-            for n in corners:
-                support_flat[n] -= 1
-        stats.picked += 1
-        stats.casualties += 0 if bite is None else len(bite) - 1
-        stats.islands += island_cells
-        picked.append(cell)
-    stats.picked_cells = np.asarray(picked, dtype=np.int64)
-    if core is not None:
-        stats.core_window_true = int(core.stats['window_true'])
-        stats.core_window_false = int(core.stats['window_false'])
-        stats.core_global = int(core.stats['global_count'])
-        stats.neck_full_grid = int(necks.stats['full_grid'])
-    stats.seconds = time.perf_counter() - started
-    return np.ascontiguousarray(inner), stats
+                removed = np.concatenate([removed, np.flatnonzero(islands)])
+            tally['picked'] += 1
+            tally['casualties'] += 0 if bite is None else len(bite) - 1
+            tally['islands'] += island_cells
+            total = tally['picked'] + tally['casualties'] + tally['islands']
+            self.picks.append(_Pick(position=position, cell=cell, removed=removed, total=total,
+                                    before=before, after=self._counters()))
 
 
 def _recheck_regions_without_precompute(best: FeasibleModel, seed: FeasibleModel,
@@ -1064,6 +1174,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
 
     multiplier = 1.0
     rejected: set[str] = set()
+    walk: Optional[PeelWalk] = None  # 今の合格形状からの歩き。採用で作り直す
 
     def ranking() -> np.ndarray:
         released = [cell for cell, (base, shortfall) in poison.items()
@@ -1102,8 +1213,9 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
             return result('cancelled')
         gap_ratio = step_ratio(best.safety_factor, target, exponent=step_exponent, max_ratio=max_step_ratio)
         requested = max(1, int(gap_ratio * multiplier * int(best.mask.sum())))
-        candidate, peeled = peel(best.mask, order, requested, anchor_ids, min_width_cells=min_width_cells,
-                                 exempt=exempt, protected=protected)
+        if walk is None:
+            walk = PeelWalk(best.mask, anchor_ids, min_width_cells=min_width_cells, exempt=exempt, protected=protected)
+        candidate, peeled = walk.take(order, requested)
         reduction['peel_calls'] += 1
         reduction['peel_seconds'] += peeled.seconds
         reduction['peel_seconds_max'] = max(reduction['peel_seconds_max'], peeled.seconds)
@@ -1172,6 +1284,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
             best = FeasibleModel(mask=survivor, before_mask=candidate, report=report, trial_index=trial.index,
                                  energy=energy)
             accepted_shapes.append(AcceptedShape.of(best))
+            walk = None
             step.update(safety_factor=best.safety_factor, material_mm3=best.material_mm3)
             multiplier = min(1.0, 2.0 * multiplier)
             if conditions.peak_limit_mpa is not None and 'peak_ratio' in fields:
