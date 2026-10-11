@@ -295,3 +295,18 @@ def test_the_matrix_free_cg_on_the_gpu_gives_the_cpu_displacement(monkeypatch):
     got = model.prepare(density, 3.0, solver='matrix_free', device='gpu').solve(model.f[None, :])[0]
     assert stats['gpu_solves'] == 1 and stats['gpu_fallbacks'] == 0
     assert np.allclose(got, expected, rtol=1e-6, atol=1e-9 * np.abs(expected).max())
+
+
+@pytest.mark.parametrize('broken', ['not_converged', 'wrong'])
+def test_a_matrix_free_gpu_solution_that_is_not_usable_warns_and_is_solved_on_the_cpu(monkeypatch, broken):
+    """落ちたら、組み立てない CG の GPU 版が収束しない・残差検算に通らない解を返したとき、黙って CPU へ戻るか、その解を使う。"""
+    model, density = _matrix_free_system()
+    expected = model.solve(density, 3.0, solver='matrix_free')
+    n = int(model.free.size)
+    result = (np.zeros(n), 7, 7) if broken == 'not_converged' else (np.ones(n), 7, 0)
+    monkeypatch.setattr(gpu_cg, 'solve_matrix_free', lambda *args, **kwargs: result)
+    stats = fem.new_solve_stats()
+    monkeypatch.setattr(fem, '_SOLVE_STATS', stats)
+    with pytest.warns(RuntimeWarning, match='CPU で解き直す'):
+        got = model.prepare(density, 3.0, solver='matrix_free', device='gpu').solve(model.f[None, :])[0]
+    assert np.array_equal(got, expected) and stats['gpu_solves'] == 0 and stats['gpu_fallbacks'] == 1

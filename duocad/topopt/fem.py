@@ -693,11 +693,15 @@ class PreparedSystem:
         except gpu_cg.Unavailable as exc:
             warnings.warn(f"GPU で解けないので CPU で解き直す: {exc.reason}", RuntimeWarning, stacklevel=3)
             return None, 0, 0, exc.reason
+        reason = None
         if info != 0:
-            return None, iterations, 0, f"not-converged: GPU の CG が {iterations} 反復で収束しない(CPU で解き直す)"
-        if not bool(np.all(np.isfinite(u_free))) or (
+            reason = f"not-converged: GPU の CG が {iterations} 反復で収束しない"
+        elif not bool(np.all(np.isfinite(u_free))) or (
                 np.linalg.norm(self._a_op @ u_free - ff) > SOLVE_RESIDUAL_TOL * np.linalg.norm(ff)):
-            return None, iterations, 0, "residual: GPU の解が残差検算に通らない(CPU で解き直す)"
+            reason = "residual: GPU の解が残差検算に通らない"
+        if reason is not None:
+            warnings.warn(f"GPU で解けないので CPU で解き直す: {reason}", RuntimeWarning, stacklevel=3)
+            return None, iterations, 0, reason
         return u_free, iterations, 0, None
 
     def _solve_on_gpu(self, ff: np.ndarray, cg_rtol: float) -> tuple[np.ndarray | None, int, int, str | None]:
