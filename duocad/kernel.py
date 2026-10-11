@@ -415,7 +415,7 @@ def _checked_volume(
 
 def _require_valid(shape: "TopoDS_Shape", label: str, context: str = "") -> None:
     """`BRepCheck_Analyzer` の最後の関門。体積検査を通っても壊れていることがある(曲面の掃引で実測)。
-    `_checked_volume` と分けてあるのは、`extrude_faces` の join / cut だけ間に `_unify_same_domain` が入るため。"""
+    `_checked_volume` と分けてあるのは、押し出しと union では間に `_unify_same_domain` が入るため。"""
     if not BRepCheck_Analyzer(shape).IsValid():
         suffix = f", {context}" if context else ""
         raise ValueError(f"{label} produced an invalid shape (BRepCheck{suffix})")
@@ -452,13 +452,44 @@ def _point_and_direction(
 
 def _face_map_projection(successors: dict, final_count: int) -> dict:
     """後継の表(旧添字 → 新添字の列)を `face_map` / `deleted` / `new_faces` の射影にする
-    (`extrude_faces` と `_blend_provenance` が同じ形で保存する)。"""
+    (押し出し・`boolean_bodies`・`_blend_provenance` が同じ形で保存する)。"""
     mapped = {position for positions in successors.values() for position in positions}
     return {
         "face_map": successors,
         "deleted": [int(key) for key, value in successors.items() if not value],
         "new_faces": [i for i in range(1, final_count + 1) if i not in mapped],
     }
+
+
+def _target_successors(
+    builder: Any, target_shape: "TopoDS_Shape", history: Any, final_map: "TopTools_IndexedMapOfShape"
+) -> dict:
+    """`target_shape` の各面が、ブーリアン(`builder`)と統合(`history`。統合しなければ None)を経て
+    `final_map` の何番になったか(旧添字の文字列 → 新添字の列)。ツール側の面は鍵に入らない。"""
+    target_map = _face_map(target_shape)
+    successors: dict = {}
+    for index in range(1, target_map.Extent() + 1):
+        old_face = target_map.FindKey(index)
+        candidates = _shape_list(builder, "Modified", old_face)
+        if not candidates and not _is_removed(builder, old_face):
+            candidates = [old_face]
+        successors[str(index)] = _positions_in(
+            final_map,
+            (survivor for candidate in candidates for survivor in _through_history(history, candidate)),
+        )
+    return successors
+
+
+def _through_history(history: Any, sub: "TopoDS_Shape") -> List["TopoDS_Shape"]:
+    """`BRepTools_History` を1段たどる(消えたら空、触られていなければ自分自身)。"""
+    if history is None:
+        return [sub]
+    modified = _shape_list(history, "Modified", sub)
+    if modified:
+        return modified
+    if _is_removed(history, sub):
+        return []
+    return [sub]
 
 
 def _positions_in(final_map: "TopTools_IndexedMapOfShape", candidates: Iterable[Any]) -> List[int]:
@@ -955,8 +986,13 @@ def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> 
 
     ツールは先に `BRepAlgoAPI_Fuse` で1つにまとめてからターゲットへ作用する
     (`extrude_regions` の領域融合と同じ)。intersect は `target ∩ (tool1 ∪ tool2 ∪ ...)`。
+    同一平面の面の統合(`_unify_same_domain`)は union にだけ掛ける。
 
-    戻り値: {"shape": TopoDS_Shape, "volume_before": float, "volume_after": float}
+    戻り値(`"shape"` 以外はJSON化できる素の値):
+        {"shape", "unified": bool, "volume_before": float, "volume_after": float,
+         "provenance": {"verb": "boolean_body", "mode": str, "unified": bool,
+                        "face_map": {"<旧添字>": [新添字, ...]}, "deleted": [...], "new_faces": [...]}}
+    `face_map` の旧添字は `target_shape` の面。ツールの面から来た面は `new_faces` に入る。
     """
     if target_shape is None or target_shape.IsNull():
         raise ValueError("boolean_bodies requires a target shape")
@@ -980,12 +1016,25 @@ def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> 
     result = builder.Shape()
     # 無変化は検査しない(`volume_before` を渡さない): 同じ体積で形だけ変わる intersect がある。
     volume_after = _checked_volume(result, mode)
-    _require_valid(result, mode)
+    final, history, unified = result, None, False
+    if mode == "union":
+        final, history, unified = _unify_same_domain(result, volume_after)
+    _require_valid(final, mode)
+    final_map = _face_map(final)
 
     return {
-        "shape": result,
+        "shape": final,
+        "unified": unified,
         "volume_before": volume_before,
-        "volume_after": volume_after,
+        "volume_after": volume(final),
+        "provenance": {
+            "verb": "boolean_body",
+            "mode": mode,
+            "unified": unified,
+            **_face_map_projection(
+                _target_successors(builder, target_shape, history, final_map), final_map.Extent()
+            ),
+        },
     }
 
 
