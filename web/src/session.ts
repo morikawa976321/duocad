@@ -484,7 +484,8 @@ export interface AiToolCall {
  * - `timeout`    … 合計時間の上限で打ち切った。実行済みのツールは `tool_calls` に残る
  * - `context_overflow` … 今の依頼だけで相手の文脈長を超えた
  * - `stopped`    … 上のどれでもない停止理由(`detail` に生値)
- * - `empty_reply` … 本文もツール呼び出しも無いまま返ってきた(結論を出さずに止まった。何もしていない)
+ * - `empty_reply` … 最後の応答が本文もツール呼び出しも無いまま返ってきた(結論を出さずに止まった)。それまでの往復で
+ *   実行したツールは `tool_calls` に残る
  */
 export type AiRunStatus =
   | 'completed'

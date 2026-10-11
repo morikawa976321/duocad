@@ -97,7 +97,7 @@
 
   const STATUS_LABEL: Record<string, string> = {
     completed: '完了',
-    empty_reply: 'AIが結論を出さずに止まった(何もしていない。言い方を変えてもう一度どうぞ)',
+    empty_reply: 'AIが結論を出さずに止まった(ここまでの操作は残っている。言い方を変えてもう一度どうぞ)',
     max_turns: '往復の上限に達した(続けるにはもう一度どうぞ)',
     cancelled: '中断した',
     max_tokens: '出力の上限に達した(このターンのツールは実行していない。もう一度どうぞ)',

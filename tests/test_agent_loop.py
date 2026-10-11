@@ -633,13 +633,14 @@ def test_an_unknown_stop_reason_falls_through_to_stopped_with_the_raw_value():
 
 
 def test_a_reply_with_neither_text_nor_tool_calls_is_not_completed():
-    """落ちたら、思考だけで何も出さずに止まった応答が画面に「完了」と出る(#137)。"""
+    """落ちたら、思考だけで何も出さずに止まった応答が画面に「完了」と出る、または空になる前に実行した操作が結果から消える(#137)。"""
     empty = ProviderReply(text="", stop_reason="stop", stop="end_turn")
-    run = AgentLoop(tools(), RecordedProvider([empty])).run("作って")
+    run = AgentLoop(tools(), RecordedProvider([tool_use("describe_document", {}), empty])).run("作って")
 
     assert run.status == "empty_reply"
     assert run.ok is False
     assert "stop" in run.detail
+    assert [outcome.name for outcome in run.tool_calls] == ["describe_document"]
 
 
 def test_a_truncated_reply_is_not_mistaken_for_tool_use():
