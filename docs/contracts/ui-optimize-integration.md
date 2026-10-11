@@ -1,7 +1,7 @@
 # メッシュ body 種別・最適化の配線と実行 UI の契約
 
 形状最適化の結果を文書に入れる「メッシュボディ」種別、最適化バックエンド(二値探索 `binary_search.find_best_feasible`)を `Session`/WebSocket/画面へつなぐ配線(`duocad/optimize_run.py`)、実行パネル(`OptimizePanel.svelte`)の、ソースから読めない不変条件・依存禁止・罠。
-**いまの挙動の正はコードとテスト**。アルゴリズム本体は [../TOPOPT.md](../TOPOPT.md) と `TOPOPT_*.md`、画面は [../UI.md](../UI.md)。デバッグビュー(`?debug=` `?voxel=1`)は ui-selection-viewport.md。出所は各節末尾のタスクID。
+**いまの挙動の正はコードとテスト**。アルゴリズム本体は [../TOPOPT.md](../TOPOPT.md) と `TOPOPT_*.md`、画面は [../UI.md](../UI.md)。デバッグビュー(`?debug=` `?voxel=1`)は ui-selection-viewport.md。
 
 ---
 
@@ -27,8 +27,6 @@
 - 罠: `session.document = doc` で文書を差し替えても `session.view` は古い文書を握ったまま。検査で `Session` にメッシュを持たせるときは `Session.add_mesh_body()` 越しに作る(view を作り直す口は `_replace_document` のみ)。`parameters.rebuild()` は `OpLog.replay` とは別の再生経路(`doc.bodies` を空にしてログを頭から流し直す)で、`set_parameter` を1回打つだけで踏む。メッシュボディが復元されることを別検査で固定してある。
 - 罠(網羅の取り方): `grep "\.shape"` だけでは `query.describe_edges(body.shape)` のように関数呼び出しの引数の中にあるものを数え落とす。`doc.bodies` を舐める場所(`grep "\.bodies"`)からも辿って**両方向**で潰す。
 
-出所: 20260904-1703-duocad-mesh-body-kind
-
 ## 最適化の配線(`duocad/optimize_run.py` / `session.py` / `net/ws.py`)
 
 - **verb は足していない**(結果を文書に入れる口は既存の `add_mesh_body` だけ)。`Session` の4つ: `optimize_conditions()`(4条件がそろって走らせられるか。`{ready, problems, preserve_bodies, exclude_bodies, fixtures, loads, load}`、**`problems` はそのまま人に見せる文**)/ `optimize_resolution()`(要素サイズの上限・下限・既定。軽い)/ `run_optimization(...)`(重い。成功時だけ戻り値に `"applied"` を足す)/ `cancel_optimization()`(旗を立てるだけ。実際に降りるのは次に進捗が出た時点)。コア側は `conditions_report(doc)`/`build_conditions(doc)`/`resolution_limits(doc)`/`run(doc, options, *, progress, should_cancel, debug, debug_kinds)`、摘みは `OptimizeOptions`。
@@ -45,8 +43,6 @@
 - 罠(中断の検査): **`Session.cancel_optimization()` を実行前に呼んでも効かない**(旗を畳むのは `begin_optimization`=実行の入口)。中断の検査は「進捗の途中で旗を立てる」形で書く。`should_cancel` を直に渡す `optimize_run.run` なら1件も進捗を出さずに降りる。
 - 罠(面添字の変異検査): 面添字を **+1** ずらす変異は「範囲外」で落ちて取り違えを見ていない(最後の面をまたぐ)。**−1 側でずらす**。
 
-出所: 20260904-1704-duocad-wire-optimize-backend
-
 ## 実行 UI(`OptimizePanel.svelte` / `session.ts` / `net/ws.py`)
 
 - WebSocket に4つ(`catalog` の `category="protocol"`=verb ではない、`ws="special"`/`mcp=False`/`changes_document=False`、実体は `duocad/net/ws.py` の `_dispatch`): `optimize_conditions`(要求した接続にだけ返す)／`optimize_resolution`(`OptimizeInputError` は `type:"error"` にせず `{"error": 文}` に畳む。条件面がまだ無いのは「設定の途中」)／`run_optimization`(**待たずに返り**、`optimize_status`→`optimize_progress`(多数)→`optimize_result` か `optimize_error`→`optimize_status` の順で**全接続へ**配る)／`cancel_optimization`(`optimize_status {running, cancelling}`)。**`optimize_error` には `cancelled: bool` が載り**、中断は失敗ではないので画面はトーストを出さない。`problems` は条件が足りないときだけ入る。`Server` の配信ヘルパは `_emit_event`/`_spawn_broadcast`/`_broadcast`。
@@ -62,4 +58,3 @@
 - **罠(Svelte)**: runes モードのインスタンススクリプトは `export` を持てない(`OptimizeNotice` 型は `optimizeNotice.ts`)。画面に出す文字列に markdown の `**` を書かない(`.svelte` のテンプレートは markdown を解釈しない。強調は `<strong>`)。
 - `web/dist` は `.gitignore` 対象。`web/src` を触ったら `npm run build` が要るが、コミットには現れない(緑の git status は「ビルドした」の証拠にならない)。
 
-出所: 20260904-1705-duocad-optimize-run-ui

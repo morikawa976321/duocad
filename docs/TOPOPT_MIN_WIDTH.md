@@ -132,7 +132,7 @@ hanger S2(200N、要素2mm、要求10mm、m=6)で全材料から探索をやり�
 
 ### 4.3 完成形の幅と強度の原因解析(#117)
 
-製品コード `0d3114642ea4ec780901da079c7d6b56f514e94b`、全数値は [measurements.json](topopt_width_117/measurements.json)。探索は再実行せず保存済み hanger と合成形状を解析した。
+製品コード `0d3114642ea4ec780901da079c7d6b56f514e94b`、主要値は 4.3 節の表(生データの JSON は持たない。再生成は 7 章)。探索は再実行せず保存済み hanger と合成形状を解析した。
 
 **単純な板の局所厚さ**(32×12×mセル、1セル=1mm、穴・保持・除外なし。メッシュとz方向直線の交点2つの距離。y=6.125mm、端 x=0.5mm / 中央 x=16mm):
 
@@ -188,7 +188,7 @@ hanger S2(200N、要素2mm、要求10mm、m=6)で全材料から探索をやり�
 ## 7. 再現手順
 
 ```powershell
-# #117 (出力は output/final_width_117/、小さいJSONは docs/topopt_width_117/measurements.json にも複製)
+# #117 (出力は output/final_width_117/*.json)
 .venv/Scripts/python.exe topopt_checks/analyze_final_width_117.py synthetic
 .venv/Scripts/python.exe topopt_checks/analyze_final_width_117.py real --shape S2_hanger200_step20
 .venv/Scripts/python.exe topopt_checks/analyze_final_width_117.py fem --spacing 0.5   # 0.25, 0.2 も

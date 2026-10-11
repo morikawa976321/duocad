@@ -1,7 +1,7 @@
 # 移動・鏡映・ブーリアン・押し出し系 verb の契約
 
 pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビュー(幽霊)・引数収集 UI の契約。
-いまの挙動の正はコードとテスト。ここはソースから読めない不変条件・依存禁止・罠だけ。出所は各節末尾のタスクID。
+いまの挙動の正はコードとテスト。ここはソースから読めない不変条件・依存禁止・罠だけ。
 
 ## ローカル幽霊(確定前のプレビュー)の層
 
@@ -30,8 +30,6 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 - **`onBoxSelect` はスケッチの領域も拾う。** 長方形をウィンドウ選択すると領域参照が混ざる。「図形まるごと1つ」の判定は `item.entity !== undefined` で絞る。
 - **選択の正はコア**。クリック/ドラッグ直後に `page.evaluate` で選択を読むと往復前の値を見る(必ず `waitFor`)。
 
-出所: 20260905-1814-duocad-add-preview-to-pattern-and-move-verbs, 20260906-0100-duocad-preview-follows-rotation
-
 ## move_body / move_sketch_entities の回転モード
 
 - **両 verb とも `mode`(`translate`/`rotate`。宣言の正は `duocad/verbs/_common.py` の `MOVE_MODES`)で分岐する。モードが取らない引数を渡すと必ず ValueError**(黙って無視も両方適用もしない)。
@@ -50,13 +48,11 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 
 - **`center`/`center_vertex` が3Dの結果を変えると思わない。** 3Dの回転は軸線上のどの点を基準にしても同じ変換。中心が効くのは軸の位置を持たないとき(`axis_dir` だけ → 重心を通す)と、`center_vertex` で軸を寄せるときだけ。
 - **`Applied` の `axis_point` を「ユーザーが渡した値」と読まない。** 解決後の数値で、辺で指したときはその辺から取った点が入る。
-- **`describe_shape`(MCP)は辺・頂点の ID を返さない**(`query.describe_edges`/`describe_vertices` はあるが MCP ツールにしていない)。AI が軸の辺の添字を知る経路は `propose_selection` + `get_selection`(参照に `index` が入る)だけ。
+- **`describe_shape`(MCP)は辺・頂点の ID を返さない**(`query.describe_edges`/`describe_vertices` はあるが MCP ツールにしていない)。AI が軸の辺の添字を知る経路は `set_selection` + `get_selection`(参照に `index` が入る)だけ。
 
 ### 既知の穴(判断)
 
 `move_body` の `copy=True` で、対象がその軸まわりの回転対称を持つ角度(立方体を自分の中心軸で90度など)を指すと元と完全に重なる複製ができる。スケッチ側は `params` 一致で弾けるが、ソリッドに安くて健全な判定が無い(境界箱の一致は L 字180度回転の正当な場合を誤って断り、最小距離 `BRepExtrema_DistShapeShape` は角を共有する正当な複製を誤って断り、ブーリアン共通部分は重い)。**不健全な判定を入れるより通す**を選んだ(注意書きは `duocad/verbs/move_body.py`)。
-
-出所: 20260905-1900-duocad-add-rotation-to-move-verbs
 
 ## 数値引数の既定値(`NumberArgSpec.default`)と空欄軸
 
@@ -65,8 +61,6 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 - **全軸空欄の拒否は `default` の責務ではなく各 verb の `build()` が個別に持つ**(移動量が全部 0 → 「移動量が全部0」、コア側 translate モードにも同じ ValueError)。`default` を付ける新 verb は、全部既定値落ちを拒否するチェックを自分で書く。
 - **ローカルプレビューに追加のフックは要らない。** `ghostBuilt`/`built` は共通の `values`(`default` 込み)から `command.build()` を呼ぶので、`default` を付ければプレビューも自動で追従する。
 - **実機検査の罠**: (1) `copy` の選択(`#move-body-move`/`#sketch-move-move` 等)を押すまで dx/dy/dz の入力欄が `ready` にならない。 (2) `page.evaluate` で `getBoundingClientRect()` を単体で返すと DOMRect のプロパティが own enumerable でなく座標が NaN になり `page.mouse.click` が `Invalid parameters` で落ちる。rect 取得と `project*` 呼び出しを同じ `evaluate` 内で行い、`{x: pos.x + rect.left, …}` まで計算して返す。
-
-出所: 20260905-2256-duocad-move-verbs-blank-axis-defaults-to-zero
 
 ## 鏡映(mirror_sketch_entities / mirror_body)と参照ピック UI
 
@@ -96,8 +90,6 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 - **`pytest.approx(0.0)` は絶対許容差がほぼ 0。** `kernel.bounding_box` を鏡映(x=0)で検算すると OCCT の境界箱が許容差ぶん膨らんで 1e-7 程度の誤差が乗るので、0 との比較には `abs=1e-4` を明示。
 - **`smoke-mirror.mjs` の円を描く手順が 11 回中 1 回だけ落ちた**(原因未確定、再現せず)。描く 4 verb は点を 1 つずつ食うので、クリックが早すぎると図形が出ないのに理由も出ない。1 手ごとに `#command-prompt` の待ち受け(`awaitPrompt`)で確かめ、失敗時にスケッチの図形・選択・トーストを出す。
 
-出所: 20260906-1100-duocad-add-mirror-verb, 20260906-1500-duocad-mirror-reference-picking-ui
-
 ## boolean_body
 
 - **ツールボディは引数で渡さない。** 呼ぶ前に `commit_selection` で確定選択(面/辺/頂点、`min=1`)へ入れ、内部で `selection.require_bodies(document)` が逆引きする。`target_ref` は `{"body","kind":"face","index"}`(面1枚。確定選択には入れない)、`mode` は `union|cut|intersect`。verb 層は `verbs.boolean_body(doc, target_ref, tool_body_ids, mode)`。WS は表(`ws=table`)で `target_ref`/`mode` とも必須。
@@ -111,16 +103,12 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 - 1つの Body 内に複数 SOLID(compound ソリッド)を持つ場合の個別演算は未保証(`boolean_bodies` は「SOLID が 1 個以上あるか」しか見ない)。
 - 新しい verb の追加は `MCP.md` のツール表(`test_doc_code_agreement.py`)と画面の `Applied` 型(`web/src/generated/protocol.ts` の生成物。`npm run check`)の追随が不可避。
 
-出所: 20260911-2118-duocad-boolean-body-verb
-
 ## envelope_regions(スケッチの包絡)
 
 - 呼ぶ面は MCP/セッション `envelope_regions(radius=0, offset=0)`(対象は確定選択の領域。WS は radius・offset 必須)。verb は `duocad/verbs/envelope_regions.py`、幾何は `kernel_sketch.envelope_faces`/`face_boundary_entities`。プレビューは投機実行でなく `preview_envelope_regions`(分裂しても失敗にせず全部の線と個数を返す)。
 - **結果は線分・円弧・円のみ。面がちょうど 1 枚でなければ ValueError で何も変えない。** redo/replay はログの図形数値を使う。
 - **依存禁止**: 領域の添字(後の編集で指す先が変わる)。負のオフセットを OCCT へ直接頼むこと。
 - **罠**: 同心円の面の内向きオフセットは失敗する(箱 − 補集合の拡大で代替)。詳細は docs/CAD_LIBRARY_PITFALLS.md。
-
-出所: 20260926-1648-duocad-sketch-envelope-verb
 
 ## 押し出し(extrude)の kernel 分離・web 統合・extrude_face 廃止
 
@@ -140,4 +128,3 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 
 - **面の押し出しでは溝の底のような窪みの面は視点から見えず選べない。** 2 枚の同一平面の面を押す smoke の題材は溝を浅く広く(幅 24・深さ 3)した(平面の違う面を混ぜるとトーストに「同一平面上にない」)。ログの `args.faces` は配信で件数の文字列に畳まれる。
 
-出所: 20260926-2131-duocad-extrude-1-kernel-split, 20260926-2133-duocad-extrude-3-web-unify, 20260926-2134-duocad-extrude-4-retire-extrude-face

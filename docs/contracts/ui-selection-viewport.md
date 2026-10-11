@@ -1,7 +1,7 @@
 # 選択・ビューポート・ピックの契約
 
 選択の同一性・3D ビューポート(射影・ビューキューブ・FOV・分割モジュール)・画面ピック・最適化デバッグビューの、ソースから読めない不変条件・依存禁止・罠。
-**いまの挙動の正はコードとテスト**。設計判断の本体は [../VIEWPORT.md](../VIEWPORT.md) / [../UI.md](../UI.md)。出所は各節末尾のタスクID。
+**いまの挙動の正はコードとテスト**。設計判断の本体は [../VIEWPORT.md](../VIEWPORT.md) / [../UI.md](../UI.md)。
 実機 smoke のうち現在 `web/scripts/` に残るのは `smoke.mjs` `smoke-sketch.mjs` `smoke-resolution.mjs` `smoke-mirror.mjs` `smoke-face-culling.mjs` と `tests/eval_*.mjs`。
 
 ---
@@ -17,12 +17,10 @@
 - **罠**: `_coerce_ref` を通った body 参照は必ず `index: None` を持つので、「body の鍵に `index` を足す」変異は `modify_selection` 経由の検査では1件も落ちない。`ref_key` を直接叩いて `{"kind":"body","index":7}` を渡す検査が要る。
 - **性能の測り方**: `modify_selection` の重複判定を鍵引きにして約810ms→0.8ms、残りは全部 `kernel.face_count`(M=2835 で 51.1ms)。fresh 起動5回の中央値で 1037ms→47.3ms。測るときは**プロセス1回につき1計測の fresh 起動5回の中央値**で見る(in-process の繰り返しは暖まりで 5〜15ms にばらつく)。
 
-出所: 20260904-0211-duocad-selection-dedup-by-key, 20260904-0212-duocad-face-count-once-per-body
-
 ## 面数・辺数のカウントのキャッシュ(`selection._coerce_refs`)
 
 - `_coerce_refs(doc, refs, *, bodies=None, counts=None)` は face/edge/vertex 参照を `(body_id, kind)` ごとに `kernel.face_count` / `edge_count` / `count_subshapes` を1回だけ呼んで使い回す。戻り値・例外の型とメッセージは `_coerce_ref` を1件ずつ呼んだときと同じ。モジュール内部関数(外から直接呼ぶ経路を増やさない)。戻りは入力 `refs` と1対1・同順。
-- **`modify_selection` は `add` 用・`remove` 用の2回の `_coerce_refs` 呼び出しへ同じ `bodies`/`counts` 辞書を渡す**(引数の副作用で共有)。新しい辞書だと同じボディの面が混ざったとき最大2回数える(実物27ボディで `_face_map` 42回→27回)。`propose_selection` は単発なので既定でよい。
+- **`modify_selection` は `add` 用・`remove` 用の2回の `_coerce_refs` 呼び出しへ同じ `bodies`/`counts` 辞書を渡す**(引数の副作用で共有)。新しい辞書だと同じボディの面が混ざったとき最大2回数える(実物27ボディで `_face_map` 42回→27回)。`set_selection` は単発なので既定でよい。
 - **可視性の門番 `_visible_body` は body_id ごとに最低1回は必ず通す**。キャッシュしてよいのは数え上げであって門番ではない(不可視ボディへの参照が通ると AI が人の隠したものを黙って選ぶ)。`tests/test_face_count_once_per_body.py` の `test_hidden_body_face_ref_is_refused_through_{modify,propose}_selection` が押さえる。
 - **キャッシュ鍵は `(body_id, kind)` の両方**。`kind` を落とすと面数と辺数が入れ替わる(既存 pytest が捕まえる)。`body_id` を落とすと違うボディの面数が使い回される(**`two_shapes` fixture(箱+円柱)でしか捕まらない**)。
 - **キャッシュの寿命は「1回の呼び出し」のローカル変数**。`kernel.py`・モジュールレベル・`Document`/`Body` レベルへ持ち出さない。
@@ -33,8 +31,6 @@
 - `projectRaw(x,y,z,width,height)` / `geometryInside(...,rect,width,height)` / `objectInside(...)` は末尾に `width, height` を取る。**`collectInBox` の入口で `size()` を1回だけ読んで下流へ渡す**。新しい呼び出し元も自分の呼び出し1回の中で `size()` を1回だけ読み、ループの中で読まない(実測 `collectInBox` 38.3ms→3.9ms、27部品2835面)。`geometryInside`/`objectInside` は `selectionBand.ts`。矩形選択以外で `projectRaw` を新設・流用するなら同じ規約に従う。
 - **`size()` の結果をモジュール側の変数へキャッシュしない**(リサイズで同じ画素が別のものを指す)。巻き上げてよいのは「1回の呼び出しの中だけ」。画面ピックの `pickPointsAt` / `pickLinesAt` も同じ。
 - **罠**: `web/dist` は `.gitignore` 対象のビルド成果物。`web/src` を編集しても `npm run build` を挟まないと実機 smoke・計測に反映されない(計測フックが「見つからない」で timeout する偽の失敗。`git status` は「ビルドした」の証拠にならない)。A/B で別サーバ起動をまたいで選択結果を比べるときは、`bodyId` がインポートごとに非決定的なので**ボディごとの面インデックス集合に正規化**してから比較する。
-
-出所: 20260904-0213-duocad-hoist-viewport-size-out-of-loop, 20260911-0024-duocad-screen-pick-implementation
 
 ## 画面ピック(`web/src/screenPick.ts` / `viewport.ts` / `vertexMarkers.ts`)
 
@@ -52,8 +48,6 @@
 - 頂点マーカーは選択に入ったものしか出ない=指せる的が画面に無いので、待っている間だけ対象ボディの全頂点を候補として出す(`vertexCandidateBody`、`__duocad.wantedPick` とともに実機検査用の穴。製品の分岐に使わない)。待ち受けが降りた瞬間に消える。
 - メッシュボディのピックは `App.svelte` の `pickedRef` でボディ参照へ畳む(畳まないと `select_face` が断り、ドラッグの一括選択が丸ごと落ちる)。`dedupeRefs` を外さない(重複 `{kind:"body"}` が `modify_selection` へ並ぶ)。**スケッチを貼る先だけは畳まず断る**。詳細は ui-optimize-integration.md。
 
-出所: 20260906-0916-duocad-move-verb-ui-rotation-picking, 20260904-1705-duocad-optimize-run-ui
-
 ## 頂点マーカー・分割モジュール(`viewport.ts` と兄弟)
 
 - 分割の形は `planeGrid.ts` と同じ: `create*(deps)` がハンドルを返し、three.js オブジェクトは `object` として渡すだけ。`scene.add` と `renderOrder` は `viewport.ts` 側が行う。分割先から `viewport.ts` を import しない(逆向き依存ゼロ)。`viewCubeOverlay.ts` だけは同一 canvas に第2パスを描くので `renderer` を直接受け取る。
@@ -66,8 +60,6 @@
 - `pointerDown`/`pointerUp` は**キューブが引き取ったら `true`** を返し、`viewport.ts` の `onPointerDown`/`onPointerUp` がその戻り値で早期 return する。`optimizeAnnotations`/`optimizeDebug`/`vertexMarkers` にグループを自分で `scene` へ足す実装へ変えない(初回フレーミングと near/far の計算対象が変わる)。
 - 分割が純粋な移設であることは、テキスト一致(連結差分ゼロ。挿入した `const camera = deps.camera()` 等を除く)と公開面差分ゼロで機械確認する。
 
-出所: 20260906-0200-duocad-split-viewport
-
 ## ビューキューブ(`viewCubeOverlay.ts`)
 
 - キューブ用カメラは本編と同じ**透視/正投影の2台持ち**(`cubePerspective`/`cubeOrthographic`)。`updateCubeCamera()` が `renderCubePass()` の先頭で毎フレーム、本編の投影種別(`camera === orthographic`)を見て `cubeActive` を指し替え、姿勢(`position/up`)と透視のとき `fov/near/far` を引き直す。定数 `CUBE_ORTHO_HALF`(1.8) / `CUBE_CAMERA_DISTANCE`(4、正投影のみ) / `CUBE_CIRCUMRADIUS`(√3) / `CUBE_NEAR_SAFETY`(0.5) / `CUBE_FAR_MARGIN`(1.5)。内部カメラは `Viewport` インターフェースに公開しない。
@@ -76,16 +68,12 @@
 - **既定視点 `HOME_VIEW_OFFSET=(1,-1,0.6)` は立方体の対角 (1,1,1) 方向ではない**。この向きで FOV90 にするとキューブが非対称・くさび形に見える(バウンディングボックスが対角視点比で線形約18%小さい実測)。**バグではなく、球フィット距離式を非球体・非対角視点へ適用した数学的帰結**(NDC z は全頂点 [-1,1] に収まり near/far クリップではない。(1,-1,1) の真の対角へスナップすれば FOV90 でも他 FOV と遜色なし)。直すなら距離式の係数調整ではなく視点ごとに係数を変える等の別設計。
 - 罠: 見た目の印象で近接クリッピングのバグと断じる前に NDC を数値で確かめる。`puppeteer-core` 25系は `page.waitForTimeout` が無い。固定時間待ちは `page.evaluate(() => new Promise(r => setTimeout(r, ms)))`。
 
-出所: 20260904-0311-duocad-view-cube-follows-fov
-
 ## FOV・初期カメラ(`viewportConstants.ts` / `viewport.ts` / `SettingsDialog.svelte`)
 
 - `FOV_DEFAULT` は 30。`FOV_MIN`(30)/`FOV_MAX`(90)/`FOV_ORTHO`(0)/`isSelectableFov`/`setFov` は**内部 API として 0 または 30〜90 の連続値を受け付ける**。画面の口は `#settings-ortho` チェックボックス1つだけ(`#settings-fov` スライダー／`#settings-fov-value` は無い)。`onchange` は `onFov(checked ? FOV_ORTHO : FOV_DEFAULT)`。**正投影を外すと常に `FOV_DEFAULT` へ戻る**。ラベルは「正投影」の1語で角度を出さない。
 - **`isSelectableFov` の受理範囲を `{0,30}` のような離散集合へ絞ってはならない**(基準平面と面の共平面ピック回帰検査(FOV 45〜55° スイープ)が連続値に依存)。
 - **起動直後のカメラ距離は `fitDistance(diagonal / 2)` を通す**(`createViewport` 冒頭、`camera.position.copy(HOME_VIEW_OFFSET).multiplyScalar(distance)` の直前)。`diagonal * 1.2` のような決め打ち定数を再導入しない。`SKETCH_FIT_MARGIN`(1.243)は `fitDistance` と組み合わさって FOV 非依存。FOV 関連の定数を変える前に `grep -rn "diagonal \* [0-9]" web/src/viewport.ts` で決め打ちが無いか確認する。
 - **罠**: FOV を 45→30 に変えただけだと、決め打ち `diagonal * 1.2` が起動時カメラ位置とスケッチ未内容時の `lookAtSketch`(半径0で「前の距離のまま」に倒す経路)に残り、カメラが1.55倍近くに寄ったまま固まった。症状は原因を名指ししない「線分(辺)をクリックで選べない(タイムアウト)」。**赤が出ても自分の変更のせいと決めつけず pristine との往復比較で切り分ける**(一過性の flake は pristine/変更後とも連続で緑、本物の回帰は pristine 緑・変更後連続赤)。
-
-出所: 20260904-2138-duocad-fov-ui-becomes-binary
 
 ## 最適化デバッグビューと撮影台
 
@@ -102,4 +90,3 @@
 - **撮影台** `node web/scripts/shoot-topopt.mjs`(重い段は `shoot_topopt_export.py` を自分で spawn する。**単体で呼ばない**): `--model <ファイル名>` + `--panel "<ラベル>:<つまみ>"` を2つ以上(つまみは `element_mm`。`--views` `--dir` `--zoom` `--out` `--models-dir` `--skip-export` `--width` `--height`)。カメラ・光源・背景・画角を面ごとに持てない構造(1枚の canvas に `setScissor` で並べる)を、分けて描く作りに戻さない。`_data` は出力先ごとに1つ(同じ `--out` へ別題材を撮ると上書き。`--skip-export` は manifest の `subject` を照合してから使う)。
 - 検査設計の罠: 「真っ黒の合格」を防ぐ検査は**面ごと**に見る(全面の三角形数の合算 `>0` は1面だけ真っ黒でも合格する)。headless Chrome は `/favicon.ico` を必ず取りに行く(404 にするとページ側エラーの網にかかるので 204 を返す)。テンプレートリテラル内にバッククォート付き日本語コメントを書くとリテラルが閉じる(`shoot-topopt.mjs` の `PAGE` ではコード引用に `'` を使う)。
 
-出所: 20260905-1700-duocad-debug-views-and-shooting-rig

@@ -2,7 +2,7 @@
 
 **読むとき**: `web/src/viewport.ts` とその兄弟（`planeGrid.ts` / `gridScale.ts` / `viewCube*.ts` /
 `faceCulling.ts` / `screenPick.ts` / `sectionView.ts`）を変えるとき。当たり判定は screen 半径[px]で揃える
-（正は `web/src/screenPick.ts` と `web/scripts/smoke-screen-pick.mjs`）。
+（正は `web/src/screenPick.ts` と `tests/eval_screen_pick.mjs`）。
 実装の詳細はコードのコメントが正で、ここは**判断の理由と実測**。
 
 ## 不変条件「見えるもの＝指せるもの」と深度の規約
@@ -39,7 +39,7 @@ three.js の線のレイキャストは面による遮蔽を見ないので、�
   姿勢の一致を「止まった」の条件にすると可変解像度が採り直されなくなる。閾値で見る。
   **閾値は画面の画素で決める**（位置は `worldPerPixel * 0.5`、向きは四元数内積 `1-1e-7`、倍率は相対差）。
 - **`fitDistance` を経由しない距離の決め打ちを残さない。** 起動時カメラ位置が `diagonal * 1.2` を独自に持ち、
-  既定 FOV を 45→30 に変えたとき `fitDistance` と 55% ずれて `smoke-move.mjs` が原因を名指ししない形で落ちた。
+  既定 FOV を 45→30 に変えたとき `fitDistance` と 55% ずれて実機検査が原因を名指ししない形で落ちた。
   既定値を変える前に `grep -rn "diagonal \* [0-9]"` で独自再計算を確認する。
 - **球にちょうど収まる距離 `R / sin(fov/2)` は、球でない凸体を対角からずれた向きで見ると FOV が大きいほど縮む**
   （ビューキューブで対角±22°ずれ、FOV 30→90 で一辺が約18%縮む）。UI の FOV が 2値になり 90 が選べなくなって
@@ -138,7 +138,6 @@ three.js の線のレイキャストは面による遮蔽を見ないので、�
   発散するので動かさない。大きさは画面の画素で一定（点ごとに1画素の世界長さを測る。注視点の `worldPerPixel` では
   ハンドルの奥行きでずれる）。**平面の枠は B群** —— 原点を通る断面では床のグリッド・原点ギズモの平面と同じ平面に
   乗るので深度バイアス層 `sectionFrame` を持つ。
-- 実機検査は `smoke-section.mjs`。`stencil: false` と「切られた側の面を捨てない」の2つの変異でそれぞれ赤になる。
 
 ## 調査の順序
 

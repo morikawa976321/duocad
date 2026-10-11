@@ -873,7 +873,7 @@ def _run(
          "search_safety_factor": float|None, "filled_cells": int|None,
          "body_id": BodyId | None, "name": str | None,
          "warning": str | None,
-         "empty_condition_faces": [診断, ...],     # `20260904-1556` と同じ形
+         "empty_condition_faces": [診断, ...],     # 空の条件面ごとの診断(`AnchorTable.condition_face_diagnoses`)
          "unrepresented_regions": [診断, ...],     # 事後検出(下記)
          "boundary_mapping": {...} | None,        # 確定表の検証(`anchor.condition_mapping`)
          "resolution": resolution_limits() の戻り, "element_size_mm": float,

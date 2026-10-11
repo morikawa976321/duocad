@@ -49,7 +49,7 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
   （終了で `clear_selection` を送るので往復が挟まる。直後に `look()` で件数を読むと毎回落ちた）。
 - **1回の走行で結論を出さない。** 赤が出たら pristine（`git show HEAD:<path>` で戻す。共有インデックスを通る
   `git stash` は避ける）と変更後をそれぞれ**2回以上**走らせる。pristine で安定緑・変更後で安定赤なら本物、
-  両方緑なら flake。`smoke-move.mjs` の最初の検査（左ドラッグでカメラが動かないこと）は原因未特定で間欠的に落ちる。
+  両方緑なら flake。
 - **検証範囲は「触ったファイル」ではなく「スイート」で選ぶ。** 部分実行にするなら回さなかったスイート名を
   完了報告に書く。壊れているのを見つけた側は二分して犯人のコミットを名指してから次へ渡す。
 - **IDクリック方式は到達可能性しか検査しない。** `page.click('#sketch-new-XY')` の緑は「要素が存在して押せる」
@@ -74,7 +74,7 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
   （画角 45→60 で 27.3px。重心を射影すれば 3.5px）。**視点・画角の違いを比べる測定点には `projectPoint(face.centroid)`
   を使う。** `projectFace` が要るのは実際にクリックする手だけ。
 - **`projectPoint` は z だけを見て x/y はクリップしない。** 非 null でも画面外のことがある。「映ったか」は
-  `.viewport` の rect と突き合わせる（`pick.mjs` の `zoomOutUntilVisible`）。画面外へ `page.mouse.move` しても
+  `.viewport` の rect と突き合わせる。画面外へ `page.mouse.move` しても
   例外は出ず、`pointermove` が canvas に届かないだけ。
 - **部分的に変形した後のクリック座標は、その時点の実パラメータから計算し直す。** 動かす前の定数と動かした後の値を
   混ぜると傾いた線分の中点から 4.5mm ずれ、当たり半径の外に出てタイムアウトする。
@@ -109,11 +109,9 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
   「クリック可能になったこと」を `waitForFunction` で待つ（15分のタイムアウトいっぱいまでハングした実例）。
 - **`page.waitForTimeout` は puppeteer-core 25 に無い。** 固定時間待ちは `browser.mjs` の `sleep(ms)`。
   既存スクリプトは `waitForFunction`（落ちたら中身を添える `waitOrFail`）と `waitFrames(page, 2)` を優先。
-- **`__duocad` に Svelte の `$state` オブジェクトをそのまま出すと、`page.evaluate` の戻り値では `{}` になる**
-  （`window.__duocad.errors` も同じ。`?? []` で読んで `length > 0` を見ていた本は永久に緑だった）。数値の比較が
-  `Math.abs(undefined - x) > tol` だと NaN で**素通り**する。フック側は `$state.snapshot(...)` で素のオブジェクトにして
-  出し、検査側の数値比較は「どちらも数値であること」を先に見る。`assertNoAppErrors` はページの中で配列かどうかを
-  見てから素の配列にして返す。
+- **`__duocad` の `$state` を `page.evaluate` で返すと中身が欠ける**（機序と対処は
+  [WEB_PITFALLS.md](WEB_PITFALLS.md)）。検査側の数値比較は「どちらも数値であること」を先に見る。
+  `window.__duocad.errors` も同じで、`assertNoAppErrors` がページの中で素の配列にして返す。
 
 ## 選択・モード
 

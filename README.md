@@ -8,22 +8,16 @@
 
 **制作に使うときは [docs/MANUAL.md](docs/MANUAL.md)**（制作用の安定版と開発用の使い分け）。
 
-### 文書の地図（このREADMEは入口。詳細は下記が正）
+### 文書の地図
 
-| 文書 | 何が書いてあるか | 読むとき |
-|---|---|---|
-| [docs/README.md](docs/README.md) | **docs/ の索引**（配下の全文書一覧と要約） | 目的の文書を探すとき |
-| [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) | **設計判断と実測**（層の分け方・外してはいけない3つ・verbの粒度・技術選定の根拠） | 層・verb・保存形式を変えるとき |
-| [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
-| [docs/UI.md](docs/UI.md) | **画面と操作の判断**（パネル配置・コマンド層・スケッチ入力・測定） | 画面の振る舞いを変えるとき |
-| [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md) | **アプリ内AI**（方向・実測・落とし穴） | AIパネル・エージェントを変えるとき |
-| [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
-| [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **形状探索の時間短縮** | 探索を速くしたいとき |
-| [docs/TOPOPT_GPU.md](docs/TOPOPT_GPU.md) | **CG を GPU で解く経路** | GPU を使う・遅くなった理由を疑うとき |
-| [docs/TOPOPT_ACCEPTANCE.md](docs/TOPOPT_ACCEPTANCE.md) | **最終形状の合格条件と最終処理の検査** | 受入検査・平滑化の自己交差を疑うとき |
-| [docs/TOPOPT_MIN_WIDTH.md](docs/TOPOPT_MIN_WIDTH.md) | **最小幅**（くびれ判定・芯の隣接・診断） | 部材の細さ・つなぎ目を疑うとき |
-| [docs/TOPOPT_TARGET_FACTOR.md](docs/TOPOPT_TARGET_FACTOR.md) | **探索に渡す目標安全率 = 実際の目標 × 2.4** の根拠 | 探索時の目標の値を疑うとき |
-| [docs/topopt_idle_validation/10_SYNTHESIS.md](docs/topopt_idle_validation/10_SYNTHESIS.md) | **不要材料の改善案の検証の統合報告** | 不要材料の直し方を決めるとき |
+全文書の一覧と要約は **[docs/README.md](docs/README.md)**（目的の文書を探すときはまずここ）。最初に読むのは次の4本:
+
+| 文書 | 読むとき |
+|---|---|
+| [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) | 層・verb・保存形式を変えるとき（設計判断と実測） |
+| [MCP.md](MCP.md) | AI側から触るとき（**MCPツール一覧の正**と登録手順） |
+| [docs/UI.md](docs/UI.md) | 画面の振る舞いを変えるとき |
+| [docs/TOPOPT.md](docs/TOPOPT.md) | 形状最適化の数字の根拠・配線を疑うとき |
 
 ---
 
@@ -327,7 +321,7 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](docs/WEB_PITFALLS.md)�
 | `web/src/generated/protocol.ts` | **生成物**。正は `duocad/catalog.py`。手で直さない |
 | `web/src/commands/CommandHost.svelte` | コマンド層の骨格（起動→引数収集→プレビュー→Enter/Esc・即適用）。verbごとに作り直さない |
 | `web/src/commands/{command,sketch,features,files,moveMode}.ts` | 各コマンドの引数の集め方の定義だけ（Enter要否はここから導出） |
-| `web/src/{Browser,Files,Sketch,Parameters}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ） |
+| `web/src/{Browser,Files,Optimize,SelectionInfo}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ） |
 | `web/src/Toast.svelte` | エラーの札。`fail(message)` の1本だけ |
 | `web/src/AiPanel.svelte` | AIパネル。文書は描かない |
 | `web/src/SettingsDialog.svelte` | 設定ダイアログ。native `<dialog>`（非モーダル）。一度決めたら触らない設定だけ |
@@ -371,7 +365,7 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](docs/WEB_PITFALLS.md)�
 - **`ai_*` はverbではない**（操作ログに載らずundoの単位でもない）ので `COMMANDS` に入れず、MCPツールも作らない。
   `tests/test_ui_command_wiring.py::test_ai_commands_are_not_verbs` が固定する
 - **`ai_send` はモデルへのHTTPを待たずに返る**（`run_in_executor`）。進捗 `ai_tool_call` と最終 `ai_result` は別イベント
-- **`Session` に触るのはイベントループのスレッドだけ** —— `Server._AiToolsOnLoop` が `.call()` 等をイベントループへ投げ返す
+- **`Session` に触るのはイベントループのスレッドだけ** —— `ToolsOnLoop`(`duocad/net/tools_on_loop.py`)が `.call()` 等をイベントループへ投げ返す
 - 中断は `ai_cancel`。反映は次のチェックポイントまで遅れうる。「どこまでやったか」は `ai_result.tool_calls`
 
 契約は `tests/test_agent_*.py`（偽プロバイダで決定的に検査）。実機は `tests/test_agent_llama_server.py`（8080に居なければskip）と
@@ -389,7 +383,7 @@ duocad/
   docs/                  設計判断・形状最適化ほか。索引は docs/README.md
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール。net/ はアプリ層との接点、
                          agent/ はアプリ内AIエージェント。役割は §4 の表
-  tests/                 pytest。README.md はモジュール単位のAPI契約リファレンス
+  tests/                 pytest
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs）と撮影（screenshot.mjs）。共有部品は harness.mjs ほか
@@ -424,7 +418,6 @@ OCCT・STEP・STL の罠の索引は [docs/CAD_LIBRARY_PITFALLS.md](docs/CAD_LIB
 - **OCCTのフィレットは例外を投げずに失敗し、「通ったのに壊れている」帯がある**（20mm立方体・全辺、2026-09-18 実測:
   r=9.9 成功、r=10.0 は `IsDone()=False`、**r=10.5 と 11.0 は `IsDone()` が真なのに `BRepCheck` が偽**で体積が
   4251.51 から 9246.46 へ増える。半径に対して単調ではない）→ verbのラッパで **`IsDone()` / 空でない / 体積>0 / `BRepCheck`** の4つとも通す。
-- **面の添字は形状変更で壊れる**（フィレットで i=5→9。穴の径変更では動かない＝散発的に静かに間違う）→ 生の添字を保存・再利用しない。
 - **STEP往復の体積は bit-exact ではない**（相対 約8e-16）→ 比較は `math.isclose(rel_tol=1e-6)`。
 
 ### 現行verbの制約

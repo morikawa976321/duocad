@@ -3,8 +3,8 @@
     .\\.venv\\Scripts\\python.exe topopt_checks\\refine_adopted_mask.py --mask-npz C:\\tmp\\m3.npz --k 1 2 3 --result C:\\tmp\\m3-refine.json
 
 `--mask-npz` は `measure_min_width_floor.py --mask-npz` が書く採用マスク(`mask`・`origin`・`spacing`)。確定表は
-細分した形に接する節点で作り、`acceptance.inspect` へ直接渡す(節H「再現」)。k=1 は探索の格子そのもので、探索の
-安全率と一致する。**判定はしない**(k ごとの要素数・安全率・最大変位などを書き出すだけ)。
+細分した形に接する節点で作り、`acceptance.inspect` へ直接渡す(節H「再現」)。k=1 は探索の格子そのものだが、探索の
+安全率と完全には一致しないことがある(差の原因は未切り分け)。**判定はしない**(k ごとの要素数・安全率・最大変位などを書き出すだけ)。
 `trace.DEFAULT_ROOT` を一時フォルダへ向け、`output/optimization_runs` に何も残さない。
 """
 from __future__ import annotations

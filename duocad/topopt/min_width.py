@@ -313,7 +313,7 @@ class CoreConnectivity:
         """`peel` の1手(`bite`: セルの添字1つ `(i,j,k)` か (n,3) の配列。切り離して一緒に消した島は `island_cells` セル)を抜いた後の
         `inner` が S(m) を満たすか。抜く前は満たす前提。島を消したときは大域で数える。島が無ければ一口の周りの窓で判定し
         (`verdict`)、言えなければ窓を倍に広げて繰り返し、窓が格子全体に達したら大域で数える。答えは大域の数え直しと同じ
-        (窓の判定は真も偽も厳密)。窓で判定する効果の実測は `docs/TOPOPT_STOP_RULE.md` §11。"""
+        (窓の判定は真も偽も厳密)。窓で判定する効果の実測は `docs/TOPOPT_SPEED.md`。"""
         if island_cells:
             self.stats['global_count'] += 1
             return self.connected(inner)

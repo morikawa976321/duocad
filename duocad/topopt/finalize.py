@@ -24,6 +24,14 @@ CAD_DEVIATION_MM = STL_DEVIATION
 #: (docs/TOPOPT_ACCEPTANCE.md「保存精度と簡略化」)。
 SIMPLIFY_TOLERANCE_MM = 1e-5
 
+#: float32 で交差する組の三角形を潰すときの最短辺の上限[mm]。辺1本を潰すと面はその長さだけ動く
+#: (潰しが連鎖すると足し合わさり、移動量そのものは検査していない)。F2000_h2.0_w2 で要ったのは
+#: 辺 3.05e-4 mm の針状の1本(docs/TOPOPT_ACCEPTANCE.md「float32 で裏返る針状の三角形」)。
+FLOAT32_CROSSING_MAX_EDGE_MM = 1e-3
+
+#: 交差の組を潰して検査し直す回数の上限。1回ごとに最終検査(数秒〜十数秒)をかけ直す。
+_CROSSING_ROUNDS = 8
+
 _NO_ERROR = manifold3d.Error.NoError
 
 
@@ -161,34 +169,89 @@ def collapse_float32_slivers(vertices, faces, *, max_edge_mm=SIMPLIFY_TOLERANCE_
         bad = np.flatnonzero(degenerate_triangles(rounded, faces))
         if not len(bad):
             break
-        parent = np.arange(len(vertices))
-
-        def find(i):
-            while parent[i] != i:
-                parent[i] = parent[parent[i]]
-                i = parent[i]
-            return int(i)
-
-        merges = 0
-        for t in bad:
-            tri = faces[t]
-            points = vertices[tri]
-            lengths = np.linalg.norm(points[[1, 2, 0]] - points, axis=1)
-            k = int(np.argmin(lengths))
-            if lengths[k] >= max_edge_mm:
-                continue
-            kept, dropped = find(int(tri[k])), find(int(tri[(k + 1) % 3]))
-            if kept != dropped:
-                parent[dropped] = kept
-                merges += 1
+        vertices, faces, merges = _collapse_shortest_edges(vertices, faces, bad, max_edge_mm)
         if not merges:
             break
-        roots = np.fromiter((find(i) for i in range(len(vertices))), dtype=np.int64, count=len(vertices))
-        faces = roots[faces]
-        faces = faces[(faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 2] != faces[:, 0])]
-        vertices, faces = weld_exact(vertices[faces])
         collapsed += merges
     return vertices, faces, collapsed
+
+
+def collapse_float32_crossings(vertices, faces, pairs, *, max_edge_mm=FLOAT32_CROSSING_MAX_EDGE_MM):
+    """float32 で交差・接触する組 `pairs`((i, j, kind) の並び)の三角形の最短辺を、`max_edge_mm` 未満なら潰す。
+
+    float64 では交差しない形でも、高さが float32 の丸め幅より低い針状の三角形は丸めで裏返り、隣と交差する
+    (面積は 0 にならないので `collapse_float32_slivers` では拾えない)。`pairs` に現れない三角形は触らないので、
+    交差が無ければ何もしない。潰した後の合否は呼び出し側が検査し直す。戻り値は (vertices, faces, 潰した辺の数)。
+    """
+    vertices = np.asarray(vertices, dtype=np.float64)
+    faces = np.asarray(faces)
+    triangles = np.unique(np.asarray([(i, j) for i, j, _ in pairs], dtype=np.int64).reshape(-1))
+    if not len(triangles):
+        return vertices, faces, 0
+    return _collapse_shortest_edges(vertices, faces, triangles, max_edge_mm)
+
+
+def repair_float32_crossings(vertices, faces, checks, progress=None):
+    """`final_mesh_checks` の結果 `checks` の交差の組を `collapse_float32_crossings` で潰し、検査し直す。
+
+    `final_mesh_checks` は float32 側しか見ないので、float64 はここで見る(交差の組があるときだけ)。
+    潰す前から float64 で交差があれば集合演算・簡略化の欠陥で丸めのせいではないので、潰して隠さずそのまま返す。
+    潰した結果が float64 で交差を作ったら `failed` に `float64_self_intersections` を足す(float32 では消えて見えうる)。
+    検査が返す組は先頭50組までなので、それより多い交差は次の周回で潰す。戻り値は (vertices, faces, checks, 記録用の辞書)。
+    """
+    collapsed = 0
+    float64_intersections = None
+    stale = False
+    for _ in range(_CROSSING_ROUNDS):
+        if not checks['self_intersections']['pairs']:
+            break
+        float64_intersections, stale = triangle_intersections(vertices, faces)['counts'], False
+        if any(float64_intersections.values()):
+            break
+        vertices, faces, merges = collapse_float32_crossings(vertices, faces, checks['self_intersections']['pairs'])
+        if not merges:
+            break
+        collapsed, stale = collapsed + merges, True
+        if progress:
+            progress('float32 で交差する三角形を潰して最終メッシュを検査し直す')
+        checks = final_mesh_checks(vertices, faces)
+    if stale:
+        float64_intersections = triangle_intersections(vertices, faces)['counts']
+    if collapsed and any(float64_intersections.values()):
+        checks = dict(checks, failed=[*checks['failed'], 'float64_self_intersections'])
+    return vertices, faces, checks, dict(collapsed_crossing_edges=collapsed,
+                                         float64_self_intersections=float64_intersections)
+
+
+def _collapse_shortest_edges(vertices, faces, triangles, max_edge_mm):
+    """`triangles` の各三角形の最短辺を、`max_edge_mm` 未満なら一端へ寄せて潰す。(vertices, faces, 潰した辺の数)。"""
+    parent = np.arange(len(vertices))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return int(i)
+
+    merges = 0
+    for t in triangles:
+        tri = faces[t]
+        points = vertices[tri]
+        lengths = np.linalg.norm(points[[1, 2, 0]] - points, axis=1)
+        k = int(np.argmin(lengths))
+        if lengths[k] >= max_edge_mm:
+            continue
+        kept, dropped = find(int(tri[k])), find(int(tri[(k + 1) % 3]))
+        if kept != dropped:
+            parent[dropped] = kept
+            merges += 1
+    if not merges:
+        return vertices, faces, 0
+    roots = np.fromiter((find(i) for i in range(len(vertices))), dtype=np.int64, count=len(vertices))
+    faces = roots[faces]
+    faces = faces[(faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 2] != faces[:, 0])]
+    vertices, faces = weld_exact(vertices[faces])
+    return vertices, faces, merges
 
 
 def _manifold(name, vertices, faces):
@@ -205,6 +268,7 @@ def finalize(vertices, faces, preserve, exclude, progress=None):
     """平滑化後の表面に保持を足し、除外を引いた最終メッシュ (vertices, faces) を返す。
 
     合格条件は `final_mesh_checks`(接続6項目・単一ソリッド・float32 の縮退と頂点の一致・自己交差)。
+    float32 だけで交差する組は `repair_float32_crossings` で潰して検査し直す。
     入力(平滑化後の表面、三角形化した保持・除外)にも `input_mesh_checks` をかける。どちらも不合格は例外
     (黙って穴・分断・交差のある形を返さない)。小さいから通す判定は無い。結果の三角形は文書・画面・STL が
     そのまま使う。
@@ -269,10 +333,13 @@ def finalize(vertices, faces, preserve, exclude, progress=None):
     if progress:
         progress('最終メッシュの接続・単一ソリッド・float32・自己交差を検査')
     checks = final_mesh_checks(final_vertices, final_faces)
-    trace.snapshot('final-mesh-checks', **checks)
+    final_vertices, final_faces, checks, repair = repair_float32_crossings(final_vertices, final_faces, checks,
+                                                                          progress=progress)
+    trace.snapshot('final-mesh-checks', **repair, **checks)
     if checks['failed']:
         raise ValueError(
             f"最終メッシュが成果物の条件(接続6項目・単一ソリッド・float32・自己交差)に不合格: {checks['failed']}, "
             f"solids={checks['solids']}, cavities={checks['cavities']}, topology={checks['topology']}, "
-            f"float32={checks['float32']}, self_intersections={checks['self_intersections']['counts']}")
+            f"float32={checks['float32']}, self_intersections={checks['self_intersections']['counts']}, "
+            f"float64_self_intersections={repair['float64_self_intersections']}")
     return final_vertices, final_faces
