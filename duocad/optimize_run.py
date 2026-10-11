@@ -891,14 +891,17 @@ def _run(
          "final_check": topopt.final_check.inspect の戻り | None,   # 強度と、つなぎ目の幅の診断(3値。適合は出さない)
          "full_material_limit_load": {"factor","load_total_n","limit_load_total_n","safety_factor",
                                       "search_target_safety_factor"} | None,   # 全材料が安全率だけで落ちたとき、探索を始められる荷重
+         "backtrack": {"reason","steps_back","checks","first_final_safety_factor","first_material_mm3"} | None,
+                                                 # 探索の最終形が完成形検査で割り、合格形をさかのぼったときの記録
          "seconds": float}
 
     `target_safety_factor` は利用者の実際の目標、`search_target_safety_factor` は探索(と6条件の `safety`)に渡した目標
     (= 実際の目標 × `search_target_factor`)。`safety_factor` は探索の格子での値で、探索時の目標に対する合否であって
     実際の目標に対する実測ではない。`final_safety_factor` は完成形を間隔 0.67 mm 以下の格子で解き直し、部材域の表面の
     面積 4 mm² の上位値(要素数の上限で粗くしか測れないときは割り増す)で割った値で、係数を掛けずに実際の目標と比べる。
-    割ったときは `state="final_unsafe"` で
-    結果を足さない(#129、2026-10-11 本人決定。`topopt.final_check`)。測れなかったとき(`final_safety_factor` が None)は警告を付けて足す。
+    割ったときは探索の合格形をさかのぼり、完成形検査に通る形を警告付きで足す(`topopt.complete.backtrack`、`backtrack` に記録)。
+    どれも通らなければ `state="final_unsafe"` で結果を足さない(#129、2026-10-11 本人決定)。
+    測れなかったとき(`final_safety_factor` が None)は警告を付けて足す。
 
     `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも m 立方が入らず
     保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
@@ -982,6 +985,7 @@ def _run(
         "anchor_check": None,
         # 全材料が安全率だけで落ちたときだけ値を持つ(`_full_material_limit_load`)。
         "full_material_limit_load": None,
+        "backtrack": None,
     }
 
     # 条件面が本番の解像度で空になっていないか(`design_space.connect_conditions` は空のとき判定を降りるだけで
@@ -1103,106 +1107,67 @@ def _run(
         ), full_material_limit_load=limit)
 
     best = search_result.best_feasible
-    from .topopt import acceptance, thin_voids
-
-    # 平滑化で潰れる 1×1 の空隙(管)を埋める(2026-10-07 本人判断: 探索後に1回)。埋めた形は探索の合格形と違うので
-    # 6条件(FEM)を取り直し、納品は最後に検査に通った形にする。
-    pump.emit(phase="fill", message="平滑化で潰れる 1×1 の空隙を埋める")
-    mask, fill = thin_voids.fill_tubes(best.mask, space.mask)
-    safety_factor, material_mm3 = float(best.safety_factor), float(best.material_mm3)
-    fill_warning = ""
-    if fill["cells"]:
-        pump.emit(phase="fill", message=f"{fill['cells']} セルを埋めたので6条件を取り直す")
-        report = acceptance.inspect(mask, mask, space.grid, **conditions.inspect_kwargs())
-        # 最小幅の規則(m 立方の被覆)は6条件に無い。対角が空の配置(十字の中心など)では埋めたセルが m 立方に覆われない
-        # (実測 2026-10-07: F2000_h2.4_w2 で 53 セル中 5、F2000_h2.2_w2 で 63 中 2、F1000_h2.4_w3 で 20 中 2。どれも保持セルに接しない)。
-        # 覆われることを求めると実データの多くが落ちるので、保持セルと同じく対象外として数を warning に出す(`keep_cells_without_room` と同じ扱い)。
-        uncovered = 0
-        if min_width["cells"] > 1:
-            from .topopt import min_width as min_width_rules
-            exempt = mask if conditions.keep_cells is None else (mask | conditions.keep_cells)
-            covered = min_width_rules.cube_opening(exempt, int(min_width["cells"]))
-            uncovered = int((mask & ~best.mask & ~covered).sum())
-        trace.snapshot('tube-fill', **fill, search_safety_factor=safety_factor, report=report,
-                       min_width=dict(cells=int(min_width["cells"]), uncovered_filled_cells=uncovered))
-        if report["status"] != "pass":
-            failed = [key for key, check in report["checks"].items() if check["status"] != "pass"]
-            safety = report["checks"]["safety"]
-            return _not_done(
-                common,
-                started,
-                keep_room_warning,
-                state="fill_infeasible",
-                warning=(f"平滑化で潰れる 1×1 の空隙 {fill['cells']} セルを埋めた形が6条件に不合格({', '.join(failed)})。"
-                         f"探索の安全率 {safety_factor:.4g}、埋めた後 {safety.get('safety_factor', float('nan')):.4g}"
-                         f"(探索の目標 {search_target:.4g})"),
-                unrepresented_regions=unrepresented,
-                boundary_mapping=mapping,
-                evaluations=int(search_result.evaluations),
-                termination=search_result.termination,
-            )
-        safety_factor = float(report["checks"]["safety"]["safety_factor"])
-        material_mm3 = float(report["volumes"]["material_mm3"])
-        if uncovered:
-            fill_warning = (f"埋めた 1×1 の空隙 {fill['cells']} セルのうち {uncovered} セルは最小幅 "
-                            f"{float(min_width['guaranteed_mm']):.4g} mm({int(min_width['cells'])}セル)の立方に覆われない"
-                            f"(2軸以上で両隣が材料なので、保持セルと同じく最小幅の規則の対象外として扱った)")
-    else:
-        trace.snapshot('tube-fill', **fill)
-    # 最終確定マスク(0/1のbool)。`_DebugSink.rho` の閾値0.5はboolにも成り立つ。
-    dbg.rho("final", space.grid, mask)
-
-    from .topopt import mesh as topo_mesh
-
-    pump.emit(phase="mesh", message="確定マスクをメッシュ化する")
-    # 候補評価中には呼ばれない入口(島除去・保持塗り直しを掛け直さない。`docs/TOPOPT.md`「二値探索の方式と契約」)。
-    # `spacing` は既定(要素添字空間の1.0)のまま渡す: 実寸への変換は `_mesh_to_world` が一括で行う契約で、
-    # ここでも渡すと二重に掛かりメッシュが格子の外へ外れる。
-    surface = topo_mesh.build_surface_from_mask(mask)
-    positions = _mesh_to_world(surface.verts_smooth, space.grid)
-    _check_mesh_placement(positions, space.grid)
-    trace.snapshot('selected-result', status=search_result.status, termination=search_result.termination,
-                   material_mm3=material_mm3, safety_factor=safety_factor, filled_cells=fill["cells"])
-    import numpy as np
-    from .topopt.finalize import finalize
-
-    final_vertices, final_faces = finalize(
-        np.asarray(positions).reshape(-1, 3), surface.faces,
-        [doc.get_body(bid).shape for bid in bundle.keep_body_ids],
-        [doc.get_body(bid).shape for bid in bundle.exclude_body_ids],
-        progress=lambda message: pump.emit(phase="finalize", message=message),
-    )
+    from .topopt import complete as completion
     from .topopt import final_check
 
-    pump.emit(phase="final_check",
-              message=f"完成形を細かい格子(間隔 {final_check.MEASURE_SPACING_MM:g} mm 以下。大きい題材は粗くして割り増す)で"
-                      "解き直して表面の応力を測り、つなぎ目の幅を調べる")
-    pump.check()
-    checked = final_check.inspect(final_vertices, final_faces, grid=space.grid, conditions=conditions, mask=mask,
-                                  min_width=min_width, target_safety_factor=float(opts.target_safety_factor),
-                                  keep_cells=conditions.keep_cells, anchor_soup=space.soup)
-    trace.snapshot('final-check', **checked)
-    final_sf = checked["safety_factor"]
-    final_shortfall = None
-    if checked["safety"] is not None and checked["safety"].get("status") == "fail":
-        final_shortfall = (f"完成形(平滑化・保持/除外の後)の表面の応力で見た安全率 {final_sf:.4g} が目標 "
-                           f"{opts.target_safety_factor:.4g} を下回る(探索時の値 {safety_factor:.4g}。"
-                           f"{final_check.peak_phrase(checked)})")
-    if final_shortfall is not None:
-        return dict(_not_done(
+    def place(verts) -> List[float]:
+        positions = _mesh_to_world(verts, space.grid)
+        _check_mesh_placement(positions, space.grid)
+        return positions
+
+    target = float(opts.target_safety_factor)
+    context = completion.Context(
+        space_mask=space.mask, grid=space.grid, conditions=conditions, min_width=min_width,
+        target_safety_factor=target, search_target_safety_factor=float(search_target),
+        keep_shapes=[doc.get_body(bid).shape for bid in bundle.keep_body_ids],
+        exclude_shapes=[doc.get_body(bid).shape for bid in bundle.exclude_body_ids],
+        anchor_soup=space.soup, emit=lambda phase, message: pump.emit(phase=phase, message=message),
+        check=pump.check, place=place, search_status=search_result.status,
+        search_termination=search_result.termination, passthrough=(OptimizeCancelled,))
+    done = completion.complete(best.mask, float(best.safety_factor), float(best.material_mm3), context)
+    if done.fill_failure is not None:
+        return _not_done(
             common,
             started,
             keep_room_warning,
-            state="final_unsafe",
-            warning=final_shortfall,
+            state="fill_infeasible",
+            warning=done.fill_failure,
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
             evaluations=int(search_result.evaluations),
             termination=search_result.termination,
-        ), final_safety_factor=final_sf, final_check=checked)
+        )
+    backtrack_warning = ""
+    backtrack_report = None
+    if done.verdict == "fail":
+        # 完成形が本来の目標を割ったら、探索の合格形をさかのぼって通る形を足す(2026-10-11 本人決定)。通らなければ足さない(#129)
+        back = completion.backtrack(search_result.accepted, done, context)
+        steps_back = None if back.chosen_index is None else len(search_result.accepted) - 1 - back.chosen_index
+        backtrack_report = dict(reason=back.reason, steps_back=steps_back, checks=back.checks,
+                                first_final_safety_factor=done.final_safety_factor,
+                                first_material_mm3=done.material_mm3)
+        if back.chosen is None:
+            return dict(_not_done(
+                common,
+                started,
+                keep_room_warning,
+                state="final_unsafe",
+                warning=_join_warnings(completion.shortfall_message(done, target), completion.exhausted_note(back)),
+                unrepresented_regions=unrepresented,
+                boundary_mapping=mapping,
+                evaluations=int(search_result.evaluations),
+                termination=search_result.termination,
+            ), final_safety_factor=done.final_safety_factor, final_check=done.checked, backtrack=backtrack_report)
+        backtrack_warning = completion.backtrack_message(done, back.chosen, steps_back, target)
+        done = back.chosen
+    # 最終確定マスク(0/1のbool)。`_DebugSink.rho` の閾値0.5はboolにも成り立つ。
+    dbg.rho("final", space.grid, done.mask)
+    checked = done.checked
+    final_sf = done.final_safety_factor
     final_warning = final_check.neck_warning(checked["neck"])
     if final_sf is None:
         final_warning = _join_warnings(final_warning, "完成形の安全率を測れなかった(拘束・荷重の節点が完成形に載らないか、解けなかった)")
+    final_vertices, final_faces, surface = done.final_vertices, done.final_faces, done.surface
     positions = final_vertices.ravel().tolist()
     indices = final_faces.ravel().tolist()
     trace.final_mesh(surface.verts_raw, surface.verts_smooth, surface.faces, space.grid,
@@ -1221,17 +1186,18 @@ def _run(
         body_id=body_id,
         name=name,
         warning=_join_warnings(
-            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning, fill_warning,
-            final_warning) or None,
+            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning, done.fill_warning,
+            backtrack_warning, final_warning) or None,
         empty_condition_faces=[],
         unrepresented_regions=unrepresented,
         boundary_mapping=mapping,
-        safety_factor=safety_factor,
-        search_safety_factor=float(best.safety_factor),
+        safety_factor=done.safety_factor,
+        search_safety_factor=done.search_safety_factor,
         final_safety_factor=final_sf,
         final_check=checked,
-        filled_cells=int(fill["cells"]),
-        material_mm3=material_mm3,
+        backtrack=backtrack_report,
+        filled_cells=int(done.fill["cells"]),
+        material_mm3=done.material_mm3,
         evaluations=int(search_result.evaluations),
         termination=search_result.termination,
         triangle_count=len(indices) // 3,

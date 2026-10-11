@@ -42,7 +42,7 @@ def capture(spec, path: Path) -> None:
         optimize_run.run(doc, optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"]))
 
 
-def measure(path: Path, k: int) -> dict:
+def measure(path: Path, k: int, solver: str) -> dict:
     args, kwargs = pickle.loads(path.read_bytes())
     lo, hi = final_check._crop(kwargs["grid"], np.asarray(args[0], dtype=float))
     process = psutil.Process()
@@ -50,7 +50,7 @@ def measure(path: Path, k: int) -> dict:
     started = time.perf_counter()
     spacing = float(kwargs["grid"].spacing) / k
     with patch.object(final_check, "MEASURE_SPACING_MM", spacing * (1 + 1e-6)), \
-            patch.object(final_check, "fits", lambda *_: True):
+            patch.object(final_check, "fits", lambda *a: (a[4] if len(a) > 4 else "assembled") == solver):
         checked = final_check.inspect(*args, **kwargs)
     after = process.memory_info()
     safety = checked.get("safety") or {}
@@ -72,9 +72,11 @@ def main() -> int:
     ap.add_argument("--refine", nargs="*", type=int, default=[3, 4, 5])
     ap.add_argument("--measure", type=int, default=None, help="内部用: 保存した引数で分割数 k の検査だけを解く")
     ap.add_argument("--args", type=Path, default=None)
+    ap.add_argument("--solver", choices=["assembled", "matrix_free"], default="assembled",
+                    help="matrix_free は剛性行列を組み立てない解法(`final_check.SOLVERS`)")
     a = ap.parse_args()
     if a.measure is not None:
-        print(json.dumps(measure(a.args, a.measure)), flush=True)
+        print(json.dumps(measure(a.args, a.measure, a.solver)), flush=True)
         return 0
     spec = dict(pa.MODELS[a.model])
     for key, val in (("h", a.h), ("w", a.w)):
@@ -83,6 +85,7 @@ def main() -> int:
     out_dir = pa.OUT / "peak_gate"
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"final_check_memory_{a.model}_h{spec['h']:g}_w{spec['w']:g}"
+    out_stem = stem + ("" if a.solver == "assembled" else f"_{a.solver}")
     args_path = out_dir / f"{stem}.pickle"
     if not args_path.exists():
         capture(spec, args_path)
@@ -90,12 +93,14 @@ def main() -> int:
     args, kwargs = pickle.loads(args_path.read_bytes())
     lo, hi = final_check._crop(kwargs["grid"], np.asarray(args[0], dtype=float))
     for k in a.refine:
-        # 1要素 6 KB と見て空きの 6 割を超える分割は解かない(2026-09-26 にメモリ不足で PC が落ちた)
-        if int(np.prod(hi - lo)) * k ** 3 * 6000 > 0.6 * psutil.virtual_memory().available:
+        # 1要素 6 KB(組み立てない解法は 1 KB)と見て空きの 6 割を超える分割は解かない(2026-09-26 にメモリ不足で PC が落ちた)
+        per_element = 6000 if a.solver == "assembled" else 1000
+        if int(np.prod(hi - lo)) * k ** 3 * per_element > 0.6 * psutil.virtual_memory().available:
             rows.append(dict(k=k, skipped="memory"))
             print(f"k{k} skipped (memory)", flush=True)
             continue
-        done = subprocess.run([sys.executable, __file__, "--model", a.model, "--measure", str(k), "--args", str(args_path)],
+        done = subprocess.run([sys.executable, __file__, "--model", a.model, "--measure", str(k), "--args", str(args_path),
+                               "--solver", a.solver],
                               capture_output=True, text=True, encoding="utf-8")
         if done.returncode != 0:
             rows.append(dict(k=k, error=done.stderr[-2000:]))
@@ -104,7 +109,7 @@ def main() -> int:
         row = json.loads(done.stdout.strip().splitlines()[-1])
         rows.append(row)
         print(json.dumps(row), flush=True)
-    (out_dir / f"{stem}.json").write_text(json.dumps(dict(model=a.model, spec={k: spec[k] for k in ("load_n", "h", "w")},
+    (out_dir / f"{out_stem}.json").write_text(json.dumps(dict(model=a.model, spec={k: spec[k] for k in ("load_n", "h", "w")},
                                                           rows=rows), indent=1), encoding="utf-8")
     return 0
 

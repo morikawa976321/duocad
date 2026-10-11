@@ -59,9 +59,11 @@ def main() -> int:
         fem.FEM_DEVICE = "gpu"
     if a.refine is not None:
         def refine(elements, material, spacing, available, k=a.refine):
-            while k > 1 and not final_check.fits(elements, material, k, available):
-                k -= 1
-            return k
+            for factor in range(k, 0, -1):
+                for solver in final_check.SOLVERS:
+                    if final_check.fits(elements, material, factor, available, solver):
+                        return factor, solver
+            return 1, None
         final_check.refine_factor = refine
     doc = refine_shape.open_session(spec["model"]).document
     refine_shape._set_load_doc(doc, spec["load_n"])

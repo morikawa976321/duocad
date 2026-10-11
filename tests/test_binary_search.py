@@ -1347,6 +1347,19 @@ def test_the_final_region_recheck_replaces_the_report_rows_and_falls_back_to_the
     assert fallback is seed and verdict == 'failed:preserve:fail'
 
 
+def test_every_adopted_shape_is_kept_in_order_from_the_stage3_shape_to_the_best():
+    """落ちたら、完成形検査に落ちたときに戻る先(探索の合格形の並び)が欠けているか、順・中身が合格形とずれている。"""
+    conditions, design, _ = appendage_conditions()
+    result = bs.find_best_feasible(design, conditions, max_evaluations=200)
+    accepted = result.accepted
+    steps = result.diagnostics['reduction']['steps']
+    adopted = [step['trials'][0] for step in steps if step.get('outcome') == 'accepted']
+    assert len(accepted) >= 2 and [shape.trial_index for shape in accepted][1:] == adopted
+    assert np.array_equal(accepted[-1].mask(), result.best_feasible.mask)
+    assert accepted[-1].safety_factor == result.best_feasible.safety_factor
+    assert all(a.material_mm3 >= b.material_mm3 for a, b in zip(accepted, accepted[1:]))
+
+
 def test_a_failed_final_region_recheck_ends_the_reduction_on_the_verified_stage3_shape(monkeypatch):
     conditions, design = partial_region_conditions()
     initial = bs.find_initial_feasible(design, conditions, max_evaluations=60)
@@ -1354,6 +1367,7 @@ def test_a_failed_final_region_recheck_ends_the_reduction_on_the_verified_stage3
     result = bs._reduce_volume(initial, conditions, max_evaluations=60, is_cancelled=None)
     assert result.best_feasible is initial.best_feasible and result.termination == 'evaluation_error'
     assert result.diagnostics['reduction']['final_region_recheck'] == 'failed:exclude:fail'
+    assert [shape.trial_index for shape in result.accepted] == [initial.best_feasible.trial_index]  # 戻した先より後は持たない
 
 
 def test_the_best_feasible_mask_is_read_only_and_survives_later_reduction():

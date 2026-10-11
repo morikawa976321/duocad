@@ -326,6 +326,77 @@ def _solve_locked(kf, ff, rtol, make_startup_system):
     return solved
 
 
+def _cg_matrix_free(edof: np.ndarray, ke: np.ndarray, ee: np.ndarray, free: np.ndarray, ndof: int,
+                    ff: np.ndarray, rtol: float) -> tuple[np.ndarray, int, int]:
+    """K を組み立てず、要素ごとの積で `K_ff x` を作るヤコビ前処理つき CG(`fem` の `solver="matrix_free"` の GPU 版)。
+    止め方・初期値は scipy の `cg` と同じだが、足し順は合わせていない(CPU とビット一致しない。完成形検査は1回測るだけなので
+    合わせない)。正しさは呼び出し側が CPU で残差を検算する。"""
+    cp, _ = _cupy()
+    edof_d = cp.asarray(edof)
+    index = cp.asarray(edof.ravel().astype(np.intp))
+    ke_d = cp.asarray(ke, dtype=cp.float64)
+    ee_d = cp.asarray(ee, dtype=cp.float64)[:, None]
+    free_d = cp.asarray(free)
+    full = cp.zeros(ndof, dtype=cp.float64)
+    diag = cp.bincount(index, weights=(cp.diag(ke_d)[None, :] * ee_d).ravel(), minlength=ndof)[free_d]
+
+    def apply(x):
+        full[free_d] = x
+        return cp.bincount(index, weights=((full[edof_d] @ ke_d) * ee_d).ravel(), minlength=ndof)[free_d]
+
+    n = int(free.size)
+    b = cp.asarray(ff, dtype=cp.float64)
+    bnrm2 = float(cp.linalg.norm(b))
+    if bnrm2 == 0.0:
+        return cp.asnumpy(b), 0, 0
+    atol = max(0.0, rtol * bnrm2)
+    x = cp.zeros(n, dtype=cp.float64)
+    r = b.copy()
+    p = None
+    rho_prev = 0.0
+    for iteration in range(n * 10):
+        if float(cp.linalg.norm(r)) < atol:
+            return cp.asnumpy(x), iteration, 0
+        z = r / diag
+        rho_cur = float(r @ z)
+        p = z if p is None else z + (rho_cur / rho_prev) * p
+        q = apply(p)
+        alpha = rho_cur / float(p @ q)
+        x += alpha * p
+        r -= alpha * q
+        rho_prev = rho_cur
+    return cp.asnumpy(x), n * 10, n * 10
+
+
+def solve_matrix_free(edof: np.ndarray, ke: np.ndarray, ee: np.ndarray, free: np.ndarray, ndof: int,
+                      ff: np.ndarray, *, rtol: float) -> tuple[np.ndarray, int, int]:
+    """`_cg_matrix_free` を `solve` と同じ作法(使えなければ `Unavailable`・VRAM を返す)で呼ぶ。(解, 反復数, info)。"""
+    global _disabled
+    with _lock:
+        if _disabled is not None:
+            raise Unavailable(_disabled, sticky=True)
+        try:
+            solved = _cg_matrix_free(edof, ke, ee, free, ndof, ff, rtol)
+        except Unavailable as exc:
+            if exc.sticky:
+                _disabled = exc.reason
+            raise
+        except Exception as exc:  # noqa: BLE001 —— 例外を連鎖させない理由は `_solve_locked` と同じ
+            if isinstance(exc, _kernels["cp"].cuda.memory.OutOfMemoryError):
+                failure = Unavailable(f"vram: {exc}", sticky=False)
+            else:
+                _disabled = f"gpu-error: {type(exc).__name__}: {exc}"
+                failure = Unavailable(_disabled, sticky=True)
+            solved = None
+        finally:
+            released = _release()
+        if solved is None:
+            raise failure
+        if released is not None:
+            raise Unavailable(released, sticky=True)
+        return solved
+
+
 def cupy_installed() -> bool:
     """CuPy が入っているか(読み込まずに調べる)。"""
     import importlib.util

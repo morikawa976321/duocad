@@ -292,6 +292,27 @@ class FeasibleModel:
         return self.report['checks']['safety']['safety_factor']
 
 
+@dataclass(frozen=True)
+class AcceptedShape:
+    """段階3・4で合格形状になった形(`SearchResult.accepted`)。完成形検査に落ちたとき `topopt.complete.backtrack` が戻る先。
+    マスクは1セル1ビットに詰めて持つ(hanger 2.4mm 格子で1形 約 0.1 MB)。"""
+
+    trial_index: int
+    safety_factor: float
+    material_mm3: float
+    shape: tuple
+    packed: np.ndarray = field(repr=False)
+
+    @classmethod
+    def of(cls, model: "FeasibleModel") -> "AcceptedShape":
+        mask = np.asarray(model.mask, dtype=bool)
+        return cls(trial_index=int(model.trial_index), safety_factor=float(model.safety_factor),
+                   material_mm3=float(model.material_mm3), shape=tuple(mask.shape), packed=np.packbits(mask.ravel()))
+
+    def mask(self) -> np.ndarray:
+        return np.unpackbits(self.packed, count=int(np.prod(self.shape))).astype(bool).reshape(self.shape)
+
+
 @dataclass
 class SearchResult:
     """探索1回の戻り値。`status` と `termination` は別欄(§4.6:「形状の合否とは別の欄にする」)。
@@ -313,6 +334,8 @@ class SearchResult:
     evaluations: int
     conditions_identifier: str
     diagnostics: dict = field(default_factory=dict)
+    #: 合格形状になった順の形(段階3の出発形状から `best_feasible` まで)。段階4に入らなかった結果では空。
+    accepted: list = field(default_factory=list)
 
 
 def _record_trial(history: list, parent: Optional[int], operation: str, report: dict) -> Trial:
@@ -978,6 +1001,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     identifier = initial.conditions_identifier
     history = list(initial.history)
     best = initial.best_feasible
+    accepted_shapes = [AcceptedShape.of(best)]
     evaluations = int(initial.evaluations)
     target = float(conditions.target_safety_factor)
     anchor_ids = _anchor_node_ids(conditions)
@@ -1004,11 +1028,13 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
         if static_core is not None:
             reduction['static_necks']['result'] = neck.static_necks(final.mask, static_core)
         reduction['poison_cells'] = len(poison)
+        shapes = accepted_shapes
         if verdict.startswith('failed'):
             termination = 'evaluation_error'
+            shapes = accepted_shapes[:1]  # 段階3の合格形状へ戻した
         return SearchResult(status='feasible', termination=termination, best_feasible=final, history=history,
                             evaluations=evaluations, conditions_identifier=identifier,
-                            diagnostics=dict(initial=initial.diagnostics, reduction=reduction))
+                            diagnostics=dict(initial=initial.diagnostics, reduction=reduction), accepted=shapes)
 
     def notify(outcome: str, failed: list, candidate_safety_factor: Optional[float], candidate_cells: int) -> None:
         if on_evaluation is not None:
@@ -1145,6 +1171,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
             survivor.setflags(write=False)
             best = FeasibleModel(mask=survivor, before_mask=candidate, report=report, trial_index=trial.index,
                                  energy=energy)
+            accepted_shapes.append(AcceptedShape.of(best))
             step.update(safety_factor=best.safety_factor, material_mm3=best.material_mm3)
             multiplier = min(1.0, 2.0 * multiplier)
             if conditions.peak_limit_mpa is not None and 'peak_ratio' in fields:

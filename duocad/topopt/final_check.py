@@ -46,6 +46,13 @@ MAX_FINE_ELEMENTS = 8_000_000
 #: 材料の項が支配する。
 FINE_ELEMENT_BYTES = 500
 MATERIAL_CELL_BYTES = 21_000
+#: 剛性行列を組み立てない解法(`fem` の `solver="matrix_free"`)の同じ見積もりの係数。メモリは約 1/8 だが時間は約 2.2 倍
+#: かかるので、組み立てる解法が収まらないときだけ使う。係数は dilution・path の分割数 3〜5 の実測を 1.13〜1.35 倍で覆う
+#: (分割数 2 の 100 MiB 前後の検査は固定の上乗せ 50〜60 MB を覆わない。docs/TOPOPT_PEAK_GATE.md 4-13)。
+MATRIX_FREE_ELEMENT_BYTES = 400
+MATRIX_FREE_MATERIAL_CELL_BYTES = 1_000
+#: 速い順。`refine_factor` は分割数を下げる前に、同じ分割数で次の解法を試す。
+SOLVERS = ('assembled', 'matrix_free')
 #: 見積もりが今の空き物理メモリのこの割合を超える分割数は使わない(検査中に他のアプリが増える分の余白。置いた値で実測ではない)。
 MEMORY_FRACTION = 0.5
 
@@ -73,16 +80,21 @@ def _available_memory_bytes():
         return None
 
 
-def estimated_bytes(element_count: int, material_count: int, factor: int) -> int:
-    """探索の格子で `element_count` 要素・材料 `material_count` セルの範囲を、分割数 `factor` で検査するときのメモリの見積もり。"""
-    return int((element_count * FINE_ELEMENT_BYTES + material_count * MATERIAL_CELL_BYTES) * factor ** 3)
+def estimated_bytes(element_count: int, material_count: int, factor: int, solver: str = 'assembled') -> int:
+    """探索の格子で `element_count` 要素・材料 `material_count` セルの範囲を、分割数 `factor`・解法 `solver`
+    (`SOLVERS` の1つ)で検査するときのメモリの見積もり。"""
+    per_element, per_material = ((FINE_ELEMENT_BYTES, MATERIAL_CELL_BYTES) if solver == 'assembled'
+                                 else (MATRIX_FREE_ELEMENT_BYTES, MATRIX_FREE_MATERIAL_CELL_BYTES))
+    return int((element_count * per_element + material_count * per_material) * factor ** 3)
 
 
-def fits(element_count: int, material_count: int, factor: int, available_bytes) -> bool:
-    """分割数 `factor` の細かい格子が `MAX_FINE_ELEMENTS` と空きメモリ(`available_bytes`。None なら見ない)に収まるか。"""
+def fits(element_count: int, material_count: int, factor: int, available_bytes, solver: str = 'assembled') -> bool:
+    """分割数 `factor`・解法 `solver` の細かい格子が `MAX_FINE_ELEMENTS` と空きメモリ(`available_bytes`。None なら
+    見ない)に収まるか。"""
     if element_count * factor ** 3 > MAX_FINE_ELEMENTS:
         return False
-    return available_bytes is None or estimated_bytes(element_count, material_count, factor) <= available_bytes * MEMORY_FRACTION
+    return (available_bytes is None
+            or estimated_bytes(element_count, material_count, factor, solver) <= available_bytes * MEMORY_FRACTION)
 
 
 def coarse_penalty(spacing_mm: float) -> float:
@@ -105,37 +117,41 @@ def _refine_cells(cells: np.ndarray, lo: np.ndarray, hi: np.ndarray, factor: int
     return sub.repeat(factor, axis=0).repeat(factor, axis=1).repeat(factor, axis=2)
 
 
-def refine_factor(element_count: int, material_count: int, spacing_mm: float, available_bytes) -> int:
-    """切り出した探索格子(`element_count` 要素・材料 `material_count` セル、間隔 `spacing_mm`)に対する分割数。間隔が
-    `MEASURE_SPACING_MM` 以下になる最小の分割数から、`fits` になるまで下げる(1 で収まらなくても 1 を返す)。"""
-    factor = max(1, math.ceil(float(spacing_mm) / MEASURE_SPACING_MM - 1e-9))
-    while factor > 1 and not fits(element_count, material_count, factor, available_bytes):
-        factor -= 1
-    return factor
+def refine_factor(element_count: int, material_count: int, spacing_mm: float, available_bytes) -> tuple[int, str | None]:
+    """切り出した探索格子(`element_count` 要素・材料 `material_count` セル、間隔 `spacing_mm`)に対する
+    `(分割数, 解法)`。間隔が `MEASURE_SPACING_MM` 以下になる最小の分割数から下げていき、`SOLVERS` の順に `fits` に
+    なる最初の組。分割数 1 でもどの解法も収まらなければ `(1, None)`。"""
+    for factor in range(max(1, math.ceil(float(spacing_mm) / MEASURE_SPACING_MM - 1e-9)), 0, -1):
+        for solver in SOLVERS:
+            if fits(element_count, material_count, factor, available_bytes, solver):
+                return factor, solver
+    return 1, None
 
 
 def _occupy(soup, grid: voxelize.Grid, lo: np.ndarray, hi: np.ndarray, material_count: int, available_bytes):
-    """分割数を選んで完成メッシュを細かい格子へ占有化する。戻り値 `(factor, fine, material, material_count)`、
-    分割数 1 でも収まらなければ `(None, None, None, material_count)`。
+    """分割数と解法を選んで完成メッシュを細かい格子へ占有化する。戻り値 `(factor, solver, fine, material, material_count)`、
+    分割数 1 でも収まらなければ `(None, None, None, None, material_count)`。
 
     `material_count` は探索の形のセル数で、探索の格子に載らない保持ボディの薄い部分などは数えていない。占有化した材料で
-    数え直し、収まらなければ分割数を下げてやり直す(占有化そのものは要素数に比例し `MAX_FINE_ELEMENTS` で抑えてある)。
+    数え直し、収まらなければ次の組(同じ分割数の次の解法か、下の分割数)でやり直す(占有化そのものは要素数に比例し
+    `MAX_FINE_ELEMENTS` で抑えてある)。数え直すと材料は増えるだけなので、選び直す組は必ず前より下になる。
     """
     h = float(grid.spacing)
     elements = int(np.prod(hi - lo))
-    factor = refine_factor(elements, material_count, h, available_bytes)
-    while fits(elements, material_count, factor, available_bytes):
-        fine = voxelize.Grid(origin=tuple(float(o) + h * int(i) for o, i in zip(grid.origin, lo)),
-                             spacing=h / factor, shape=tuple(int(n) * factor for n in hi - lo))
-        material = voxelize.occupancy(soup, fine, allow_empty=True)[0]
-        counted = math.ceil(int(material.sum()) / factor ** 3)
-        if fits(elements, counted, factor, available_bytes):
-            return factor, fine, material, max(material_count, counted)
+    factor, solver = refine_factor(elements, material_count, h, available_bytes)
+    occupied = None
+    while solver is not None:
+        if occupied is None or occupied[0] != factor:
+            fine = voxelize.Grid(origin=tuple(float(o) + h * int(i) for o, i in zip(grid.origin, lo)),
+                                 spacing=h / factor, shape=tuple(int(n) * factor for n in hi - lo))
+            material = voxelize.occupancy(soup, fine, allow_empty=True)[0]
+            occupied = (factor, fine, material, math.ceil(int(material.sum()) / factor ** 3))
+        _, fine, material, counted = occupied
         material_count = max(material_count, counted)
-        if factor == 1:
-            break
-        factor = min(factor - 1, refine_factor(elements, material_count, h, available_bytes))
-    return None, None, None, material_count
+        if fits(elements, material_count, factor, available_bytes, solver):
+            return factor, solver, fine, material, material_count
+        factor, solver = refine_factor(elements, material_count, h, available_bytes)
+    return None, None, None, None, material_count
 
 
 def top_area_value(values: np.ndarray, area_mm2: float, spacing_mm: float) -> float:
@@ -146,12 +162,14 @@ def top_area_value(values: np.ndarray, area_mm2: float, spacing_mm: float) -> fl
     return float(ordered[min(ordered.size, count) - 1])
 
 
-def _strength(material, region, keep, layer, fine, fixed, load, conditions, target) -> dict:
+def _strength(material, region, keep, layer, fine, fixed, load, conditions, target, solver=None) -> dict:
+    """`solver` は fem の解法の名前(None なら探索と同じ `conditions.solver`)。"""
     solve_info: dict = {}
+    solver = conditions.solver if solver is None else solver
     if not acceptance.rigid_body_constrained(material, fixed):
         return dict(status='unknown', reason='rigid_body_modes', message='剛体運動を拘束できない', safety_factor=None)
     model, _density, displacement, scale, relative = acceptance.solve_material(
-        material, fine, fixed, load, youngs_modulus_mpa=conditions.youngs_modulus_mpa, solver=conditions.solver,
+        material, fine, fixed, load, youngs_modulus_mpa=conditions.youngs_modulus_mpa, solver=solver,
         solve_info=solve_info)
 
     def peak(cells):
@@ -174,7 +192,7 @@ def _strength(material, region, keep, layer, fine, fixed, load, conditions, targ
                   measure_spacing_mm=MEASURE_SPACING_MM, top_area_mm2=TOP_AREA_MM2, coarse_penalty=penalty,
                   material_cells=int(material.sum()), member_cells=int(region.sum()), peak_mpa=value,
                   peak_position_mm=position, keep_peak_mpa=keep_peak, boundary_layer_peak_mpa=layer_peak,
-                  relative_residual=relative, solver=solve_info.get('solver', conditions.solver))
+                  relative_residual=relative, solver=solve_info.get('solver', solver))
     if value is None or not value > 0.0:
         return dict(status='unknown', reason='no_member_surface', safety_factor=None, **common)
     top_area = top_area_value(faces, TOP_AREA_MM2, fine.spacing)
@@ -193,7 +211,7 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
     h = float(grid.spacing)
     elements = int(np.prod(hi - lo))
     available = _available_memory_bytes()
-    factor, fine, material, material_count = _occupy(
+    factor, method, fine, material, material_count = _occupy(
         soup, grid, lo, hi, int(np.asarray(mask, dtype=bool)[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]].sum()), available)
     neck_keep = None if keep_cells is None or not np.asarray(keep_cells).any() else (np.asarray(keep_cells, dtype=bool), grid)
     if factor is None:
@@ -203,7 +221,8 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
             min_width_cells=int(min_width['cells']), keep=neck_keep, voxel=(np.asarray(mask, dtype=bool), grid))
         return dict(safety_factor=None, safety=dict(status='unknown', reason='grid_too_large', safety_factor=None,
                                                     elements=elements, limit=MAX_FINE_ELEMENTS,
-                                                    estimated_bytes=estimated_bytes(elements, material_count, 1),
+                                                    estimated_bytes=estimated_bytes(elements, material_count, 1,
+                                                                                    'matrix_free'),
                                                     available_bytes=available),
                     conditions=dict(status='unknown', reason='grid_too_large'), material_cells=0, neck=_plain(neck))
     table = anchor.build_anchors(anchor_soup, fine, allowed_nodes=acceptance.active_nodes(material))
@@ -227,7 +246,8 @@ def inspect(final_vertices, final_faces, *, grid: voxelize.Grid, conditions, mas
         safety = dict(status='unknown', reason='boundary_mapping_failed', safety_factor=None, refine=int(factor))
     elif report['status'] == 'pass':
         try:
-            safety = _strength(material, region, keep, layer, fine, fixed, load, conditions, target_safety_factor)
+            safety = _strength(material, region, keep, layer, fine, fixed, load, conditions, target_safety_factor,
+                               solver=None if method == 'assembled' else 'matrix_free')
         except Exception as error:  # 解けない完成形は「測れなかった」として呼び出し側が警告にする
             safety = dict(status='unknown', reason='evaluation_error', error=f'{type(error).__name__}: {error}',
                           safety_factor=None)

@@ -346,8 +346,8 @@ def check_void_assembly() -> None:
     )
     check(
         "組み立てる要素だけが減っている",
-        lean._iK.size == 576 * int((~void).sum()) < full._iK.size,
-        f"COO 項 {full._iK.size} -> {lean._iK.size} "
+        lean._coo_indices()[0].size == 576 * int((~void).sum()) < full._coo_indices()[0].size,
+        f"COO 項 {full._coo_indices()[0].size} -> {lean._coo_indices()[0].size} "
         f"(空 {int(void.sum())}/{void.size} 要素)",
     )
     check(

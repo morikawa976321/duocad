@@ -382,7 +382,14 @@ class Model:
             if self.active.size == 0:
                 raise ValueError("組み立てる要素が1つも無い(active_mask が全部 False)")
             edof_assembled = self.edof[self.active]
-        self._iK, self._jK = _coo_index_arrays(edof_assembled)
+        self._edof_assembled = edof_assembled
+        self._coo = None
+
+    def _coo_indices(self) -> tuple[np.ndarray, np.ndarray]:
+        """組み立て用の COO 添字(要素あたり 576 項 × 2)。最初の組み立てで作って持つ(`solver="matrix_free"` は作らない)。"""
+        if self._coo is None:
+            self._coo = _coo_index_arrays(self._edof_assembled)
+        return self._coo
 
     def assemble(self, rho: np.ndarray, penal: float) -> sp.spmatrix:
         """全体剛性行列 K (ndof,ndof) を返す。SIMP補間 E_e = emin + rho_e**penal * (E - emin)。"""
@@ -391,7 +398,8 @@ class Model:
             flat = flat[self.active]
         ee = self.emin + flat**penal * (self.E - self.emin)
         sk = (self.ke.ravel()[None, :] * ee[:, None]).ravel()
-        return sp.coo_matrix((sk, (self._iK, self._jK)), shape=(self.ndof, self.ndof)).tocsc()
+        rows, cols = self._coo_indices()
+        return sp.coo_matrix((sk, (rows, cols)), shape=(self.ndof, self.ndof)).tocsc()
 
     def solve(
         self,
@@ -451,11 +459,13 @@ class Model:
     ) -> "PreparedSystem":
         """K を組み立て、自由DOFへ縮め、前処理を作るところまでをやって返す。返った `PreparedSystem` に右辺を何本でも後から渡せる。
         **持っているものは大きい**(K_ff)ので、使い終わったら名前を手放すこと。"""
-        if solver not in ("cg", "direct", "auto"):
+        if solver not in ("cg", "direct", "auto", "matrix_free"):
             raise ValueError(f"未知の解法: {solver!r}")
         device = FEM_DEVICE if device is None else device
         if device not in ("cpu", "gpu"):
             raise ValueError(f"未知の装置: {device!r}")
+        if solver == "matrix_free":
+            return self._prepare_matrix_free(rho, penal, device)
         threads = PARALLEL_THREADS if threads is None else max(1, int(threads))
         stats = _SOLVE_STATS
         t0 = time.perf_counter()
@@ -479,6 +489,35 @@ class Model:
             # setup も「解く時間」に数える(右辺1本のときの `solve_seconds` は setup + CG)。
             stats["solve_seconds"] += time.perf_counter() - t2
         return PreparedSystem(self, kf, a_op, precond, solver, policy, device)
+
+    def _prepare_matrix_free(self, rho: np.ndarray, penal: float, device: str = "cpu") -> "PreparedSystem":
+        """K を組み立てず、`K_ff x` を要素ごとの積で返す CG(Jacobi 前処理)を用意する。`device="gpu"` なら GPU で解き
+        (`gpu_cg.solve_matrix_free`)、使えなければ CPU で解き直す。
+
+        CPU ではメモリは組み立てる CG の約 1/8、時間は約 2.2 倍(完成形検査の実測。docs/TOPOPT_PEAK_GATE.md 4-13・4-15)。
+        CG が収束しなくても直接解法へは戻らない(戻ると組み立てでメモリが溢れる)。残差の検算が落とす。
+        """
+        flat = np.asarray(rho, dtype=float).ravel()
+        if self.active is not None:
+            flat = flat[self.active]
+        ee = self.emin + flat**penal * (self.E - self.emin)
+        edof = self._edof_assembled
+        index = edof.ravel().astype(np.intp)  # 毎回の bincount で添字を変換しないよう先に作る
+        free = self.free
+        diag = np.bincount(index, weights=(np.diag(self.ke)[None, :] * ee[:, None]).ravel(), minlength=self.ndof)[free]
+        full = np.zeros(self.ndof)
+
+        def apply(x: np.ndarray) -> np.ndarray:
+            full[free] = x
+            # `ke` は対称なので `ve @ ke` が要素ごとの `ke @ v_e` になる(`stiffness_apply` と同じ)
+            return np.bincount(index, weights=((full[edof] @ self.ke) * ee[:, None]).ravel(), minlength=self.ndof)[free]
+
+        n = int(free.size)
+        a_op = spla.LinearOperator((n, n), matvec=apply, dtype=float)
+        precond = spla.LinearOperator((n, n), matvec=lambda v, d=diag: v / d, dtype=float)
+        system = PreparedSystem(self, None, a_op, precond, "matrix_free", "matrix_free", device)
+        system._matrix_free = (edof, ee)
+        return system
 
     def stiffness_apply(self, rho: np.ndarray, penal: float, vec: np.ndarray) -> np.ndarray:
         """K @ vec を、K を組み立てずに要素ループで計算する (ndof,)。
@@ -556,10 +595,11 @@ class PreparedSystem:
         self._solver = solver
         self._policy = solver if policy is None else policy
         self._device = device
+        self._matrix_free = None  # (組み立てる要素の edof, 要素の剛性の倍率)。`solver="matrix_free"` のときだけ
 
     @property
     def solver(self) -> str:
-        """実際に使う解法(`"cg"` / `"direct"`。`"auto"` は `Model.prepare` が解決済み)。"""
+        """実際に使う解法(`"cg"` / `"direct"` / `"matrix_free"`。`"auto"` は `Model.prepare` が解決済み)。"""
         return self._solver
 
     @property
@@ -589,7 +629,10 @@ class PreparedSystem:
                 u_free = spla.spsolve(self.kf, ff)
             else:
                 u_free = None
-                if self._device == "gpu":
+                if self._device == "gpu" and self._matrix_free is not None:
+                    u_free, iterations, info, gpu_fallback = self._solve_matrix_free_on_gpu(ff, cg_rtol)
+                    device = "cpu" if u_free is None else "gpu"
+                elif self._device == "gpu":
                     u_free, iterations, info, gpu_fallback = self._solve_on_gpu(ff, cg_rtol)
                     device = "cpu" if u_free is None else "gpu"
                     if info != 0:
@@ -605,8 +648,8 @@ class PreparedSystem:
                             iterations += 1
 
                     u_free, info = spla.cg(self._a_op, ff, M=self._precond, rtol=cg_rtol, callback=counter)
-                fell_back = info != 0
-                if info != 0:
+                fell_back = info != 0 and self.kf is not None
+                if fell_back:
                     warnings.warn(
                         f"CG が収束しませんでした (info={info})。直接解法へフォールバックします。",
                         RuntimeWarning,
@@ -625,16 +668,41 @@ class PreparedSystem:
                 stats["gpu_solves"] += int(device == "gpu")
                 stats["gpu_fallbacks"] += int(gpu_fallback is not None)
             trace.snapshot('linear-solve', solver=self._solver, solver_policy=self._policy,
-                           free_dofs=int(model.free.size), nnz=int(self.kf.nnz), cg_rtol=cg_rtol,
+                           free_dofs=int(model.free.size), nnz=None if self.kf is None else int(self.kf.nnz),
+                           cg_rtol=cg_rtol,
                            cg_iterations=iterations, fallback=fell_back,
                            device_requested=self._device, device=device, gpu_fallback=gpu_fallback,
                            rhs_index=index, seconds=time.perf_counter()-t_start)
             if not zero_rhs:
-                model._verify_solution(self.kf, ff, u_free)
+                model._verify_solution(self._a_op if self.kf is None else self.kf, ff, u_free)
             out[index, model.free] = u_free
         if stats is not None:
             stats["solve_seconds"] += time.perf_counter() - t_start
         return out
+
+    def _solve_matrix_free_on_gpu(self, ff: np.ndarray, cg_rtol: float) -> tuple[np.ndarray | None, int, int, str | None]:
+        """組み立てない CG を GPU で解く。(解, 反復数, info, CPU へ戻した理由)。収束しない・残差検算に通らないときも
+        解を None にして CPU の組み立てない CG で解き直させる(直接解法へは戻れない)。"""
+        from . import gpu_cg
+
+        model = self.model
+        edof, ee = self._matrix_free
+        try:
+            u_free, iterations, info = gpu_cg.solve_matrix_free(edof, model.ke, ee, model.free, model.ndof, ff,
+                                                                 rtol=cg_rtol)
+        except gpu_cg.Unavailable as exc:
+            warnings.warn(f"GPU で解けないので CPU で解き直す: {exc.reason}", RuntimeWarning, stacklevel=3)
+            return None, 0, 0, exc.reason
+        reason = None
+        if info != 0:
+            reason = f"not-converged: GPU の CG が {iterations} 反復で収束しない"
+        elif not bool(np.all(np.isfinite(u_free))) or (
+                np.linalg.norm(self._a_op @ u_free - ff) > SOLVE_RESIDUAL_TOL * np.linalg.norm(ff)):
+            reason = "residual: GPU の解が残差検算に通らない"
+        if reason is not None:
+            warnings.warn(f"GPU で解けないので CPU で解き直す: {reason}", RuntimeWarning, stacklevel=3)
+            return None, iterations, 0, reason
+        return u_free, iterations, 0, None
 
     def _solve_on_gpu(self, ff: np.ndarray, cg_rtol: float) -> tuple[np.ndarray | None, int, int, str | None]:
         """GPU の CG で解く。(解, 反復数, info, CPU へ戻した理由)。戻すときは解が None。
