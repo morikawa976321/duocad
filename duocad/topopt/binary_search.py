@@ -63,6 +63,11 @@ class SearchConditions:
     #: 安全率の代表応力の規則。`None` は材料全体の `percentile` 点、値を渡すと部材域(`acceptance.member_region`)の
     #: 固定物理体積の上位値で、この体積 V [mm³] までの超過を許す。
     member_volume_mm3: Optional[float] = None
+    #: 表面ピークの却下判定(docs/TOPOPT_PEAK_GATE.md)。`None` は判定しない。値 ε を渡すと段階4の開始時に全材料の
+    #: セルごとの6面の最大 B を測り、部材域の露出面に `max(許容 ÷ 目標, (1+ε)·B)` を課す。`member_volume_mm3` が要る。
+    peak_epsilon: Optional[float] = None
+    #: `peak_epsilon` から段階4が作るセルごとの上限 [MPa]。外から渡さない。
+    peak_limit_mpa: Any = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'fixed_faces', tuple(int(f) for f in self.fixed_faces))
@@ -88,6 +93,8 @@ class SearchConditions:
         if self.member_volume_mm3 is not None:
             kwargs['member_volume_mm3'] = float(self.member_volume_mm3)
             kwargs['keep_cells'] = self.keep_cells
+        if self.peak_limit_mpa is not None:
+            kwargs['peak_limit_mpa'] = self.peak_limit_mpa
         return kwargs
 
 
@@ -154,6 +161,8 @@ def evaluation_identifier(conditions: SearchConditions) -> str:
         volume_atol=acceptance.VOLUME_ATOL,
         volume_rtol=acceptance.VOLUME_RTOL,
     )
+    if conditions.peak_epsilon is not None:  # 判定しない探索の識別子は変えない
+        payload['peak_epsilon'] = float(conditions.peak_epsilon)
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -524,6 +533,11 @@ DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
 #: (`None` は見ない)。`fail` や `prerequisites_failed` とは別に数える(こちらは判定そのものが出ていない)。
 #: **4 は実測で決めていない暫定値**(2026-09-24)。1候補の求解に 35 秒かかる実測がある。
 DEFAULT_EVALUATION_ERROR_PATIENCE: Optional[int] = 4
+#: ピーク判定の探索で、採用形の露出面が上限のこの割合を超えるセル(と却下の最悪セル)から `PEAK_SKIP_RADIUS` セル以内を
+#: 削る順位から外す。同じ高応力箇所の周りを何度も試して patience を使い切るのを避ける(dilution で却下 89 回中 73 回が
+#: 同じ1か所、止まった時点で上位30手中12手が通った。docs/TOPOPT_PEAK_GATE.md)。**値は暫定で実測で決めていない。**
+PEAK_HOT_RATIO = 0.9
+PEAK_SKIP_RADIUS = 2
 _CORNERS = tuple(product(range(2), repeat=3))
 
 
@@ -891,6 +905,39 @@ def _check_stage4_options(single_cell_patience, target_tolerance, evaluation_err
         raise ValueError(f'evaluation_error_patience は 1 以上の整数か None(数えない): {evaluation_error_patience!r}')
 
 
+def _attach_peak_limit(best: FeasibleModel, conditions: SearchConditions, reduction: dict):
+    """段階4の出発形のセルごとの6面の最大 B から、ピーク判定の上限 `max(許容 ÷ 目標, (1+ε)·B)` を作って条件に付ける。
+
+    戻り値は (上限を付けた条件, 出発形の要素エネルギー)。B を測れなければ (None, None)。B は入口で1回だけ測り、
+    採用のたびに更新しない(利用者の形が全材料で持つ値を超えて悪化させない、だけを約束する。docs/TOPOPT_PEAK_GATE.md)。
+    """
+    if conditions.member_volume_mm3 is None:
+        raise ValueError('peak_epsilon には member_volume_mm3(部材域の判定)が要る')
+    epsilon = float(conditions.peak_epsilon)
+    if not (math.isfinite(epsilon) and epsilon >= 0.0):
+        raise ValueError(f'peak_epsilon は有限の 0 以上であること(受け取った値: {conditions.peak_epsilon!r})')
+    fields: dict = {'cell_face_max': None}
+    acceptance.inspect(best.mask, best.before_mask, conditions.grid, fields=fields,
+                       **conditions.inspect_kwargs(bbox_cache=None))
+    reduction['fem_solves'] += 1
+    base = fields.get('cell_face_max')
+    if base is None:
+        return None, None
+    sigma_t = float(conditions.allowable_mpa) / float(conditions.target_safety_factor)
+    limit = np.maximum(sigma_t, (1.0 + epsilon) * base)
+    region = acceptance.member_region(best.mask, conditions.table, conditions.fixed_faces, conditions.load_faces,
+                                      conditions.keep_cells)
+    worst = np.unravel_index(int(np.argmax(np.where(region, base, -np.inf))), base.shape)
+    reduction['peak_gate'] = dict(
+        epsilon=epsilon, sigma_t_mpa=sigma_t, baseline_max_mpa=float(base[worst]),
+        baseline_max_position_mm=[float(v) for v in np.asarray(conditions.grid.origin)
+                                  + (np.asarray(worst, dtype=float) + 0.5) * conditions.grid.spacing],
+        cells_above_sigma_t=int((region & (base > sigma_t)).sum()),
+        rejections=0, rejections_with_safety_margin=0, single_cell_rejections=0, skipped_near_peaks=0,
+        rejection_sites=[])
+    return replace(conditions, peak_limit_mpa=limit), fields.get('element_energy')
+
+
 def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                    *, max_evaluations: int, is_cancelled,
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
@@ -973,6 +1020,12 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
 
     notify('initial', [], float(best.safety_factor), int(best.mask.sum()))
     energy = best.energy
+    if conditions.peak_epsilon is not None:
+        gated, energy = _attach_peak_limit(best, conditions, reduction)
+        if gated is None:
+            reduction['stop_reason'] = 'peak_baseline_unavailable'
+            return result('evaluation_error')
+        conditions = gated
     if energy is None:
         fields: dict = {}
         acceptance.inspect(best.mask, best.before_mask, conditions.grid, fields=fields,
@@ -993,10 +1046,25 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
             del poison[cell]
         reduction['poison_released'] += len(released)
         order = ranked_cells(best.mask, energy)
-        return order[~np.isin(order, list(poison))] if poison else order
+        if poison:
+            order = order[~np.isin(order, list(poison))]
+        return away_from_peaks(order)
+
+    peak_near = None  # 採用形の高応力箇所の近く(ピーク判定のときだけ)
+
+    def away_from_peaks(order: np.ndarray) -> np.ndarray:
+        if peak_near is None:
+            return order
+        keep_order = ~peak_near.ravel()[order]
+        reduction['peak_gate']['skipped_near_peaks'] += int((~keep_order).sum())
+        return order[keep_order]
+
+    def near(cells: np.ndarray) -> np.ndarray:
+        return ndimage.binary_dilation(cells, structure=np.ones((3, 3, 3), bool), iterations=PEAK_SKIP_RADIUS)
 
     order = ranking()
     safety_streak = 0
+    peak_streak = 0
     error_streak = 0
     while True:
         if target_tolerance is not None and best.safety_factor <= target * (1.0 + target_tolerance):
@@ -1034,7 +1102,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                     safety_factor_before=best.safety_factor, material_mm3_before=best.material_mm3)
         steps.append(step)
 
-        accepted, failed, safety_failed, safety_unknown = None, [], False, False
+        accepted, failed, safety_failed, safety_unknown, peak_failed = None, [], False, False, False
         survivors, island_diag = resolve_islands(candidate, conditions)
         rejection = _geometry_rejection(candidate, survivors, island_diag, conditions)
         if rejection is not None:
@@ -1055,6 +1123,19 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                 # `prerequisites_failed` は形状の不合格なので数えない(混ぜると幾何で落ちる候補が続いただけで打ち切る)。
                 safety_unknown = (report['checks']['safety'].get('status') == 'unknown'
                                   and report['checks']['safety'].get('reason') == 'evaluation_error')
+                peak = report['checks'].get('peak')
+                peak_failed = peak is not None and peak.get('status') == 'fail'
+                if peak_failed:
+                    gate = reduction['peak_gate']
+                    gate['rejections'] += 1
+                    sf = report['checks']['safety'].get('safety_factor')
+                    margin = not safety_failed and sf is not None and sf >= target * 1.1
+                    gate['rejections_with_safety_margin'] += int(margin)
+                    if len(gate['rejection_sites']) < 200:
+                        gate['rejection_sites'].append(dict(
+                            step=len(steps) - 1, picked=int(peeled.picked), safety_factor=sf, safety_margin=margin,
+                            worst_ratio=peak['worst_ratio'], worst_mpa=peak['worst_mpa'],
+                            worst_position_mm=peak['worst_position_mm']))
         step.update(trials=[trial.index], outcome='accepted' if accepted is not None else 'rejected',
                     failed=sorted(set(failed)))
 
@@ -1066,9 +1147,12 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                                  energy=energy)
             step.update(safety_factor=best.safety_factor, material_mm3=best.material_mm3)
             multiplier = min(1.0, 2.0 * multiplier)
+            if conditions.peak_limit_mpa is not None and 'peak_ratio' in fields:
+                peak_near = near(fields['peak_ratio'] >= PEAK_HOT_RATIO)
             order = ranking()
             reduction['adopted_after_exclusion'] += int(safety_streak > 0)
             safety_streak = 0
+            peak_streak = 0
             error_streak = 0
             notify('accepted', failed, best.safety_factor, int(best.mask.sum()))
         else:
@@ -1098,7 +1182,19 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                                  if candidate_sf is not None and math.isfinite(candidate_sf) and candidate_sf < target
                                  else None)
                     poison[int(peeled.picked_cells[0])] = (float(best.safety_factor), shortfall)
+                elif peak_failed:
+                    # ピークだけで落ちた1セルは、この形の間だけ順位から外す(採用で順位を作り直すと戻る)。
+                    peak_streak += 1
+                    reduction['peak_gate']['single_cell_rejections'] += 1
+                    if single_cell_patience is not None and peak_streak >= single_cell_patience:
+                        reduction['stop_reason'] = 'peak_at_single_cell'
+                        return result('converged')
                 order = order[~np.isin(order, peeled.picked_cells)]
+            if peak_failed:
+                worst = np.zeros(best.mask.shape, dtype=bool)
+                worst[tuple(peak['worst_cell'])] = True
+                peak_near = near(worst) if peak_near is None else peak_near | near(worst)
+                order = away_from_peaks(order)
 
 
 def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditions, *,

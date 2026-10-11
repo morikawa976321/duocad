@@ -322,9 +322,9 @@ def _strain_displacement_at(xi: float, eta: float, zeta: float) -> np.ndarray:
 
 
 def exposed_face_von_mises(model: fem.Model, u: np.ndarray, material: np.ndarray, scale: UnitScale,
-                           cells: np.ndarray | None = None) -> np.ndarray:
+                           cells: np.ndarray | None = None, *, all_faces: bool = False) -> np.ndarray:
     """材料の表面に出ている面(隣が空隙か格子の外)の面中心の von Mises [MPa]。形 (nx,ny,nz,6)、表面でない面と
-    `cells` の外は nan。
+    `cells` の外は nan。`all_faces` なら隣が材料の面も含めて6面すべてを出す(ピーク判定の基準線用)。
 
     要素中心の応力は曲げの表面応力を取りこぼす(片持ち梁の表面理論値に対し 2セル厚で 0.42。面中心なら 0.80。
     docs/TOPOPT_STRESS_GATE_DILUTION.md 10-1)。完成形検査の最大応力はこれで測る。
@@ -345,7 +345,7 @@ def exposed_face_von_mises(model: fem.Model, u: np.ndarray, material: np.ndarray
         axis, step = f // 2, (-1 if f % 2 == 0 else 1)
         neighbour = [idx[a] + 1 for a in range(3)]
         neighbour[axis] = neighbour[axis] + step
-        exposed = ~padded[tuple(neighbour)]
+        exposed = np.ones(flat.size, dtype=bool) if all_faces else ~padded[tuple(neighbour)]
         if not exposed.any():
             continue
         tensor = vec[exposed] @ (d @ _strain_displacement_at(*point)).T

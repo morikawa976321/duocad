@@ -27,7 +27,7 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
   const finalSafety =
     result.final_safety_factor == null
       ? '測れなかった'
-      : `${result.final_safety_factor.toFixed(2)}(完成形を細かい格子で解き直した、表面の最大応力での値)`
+      : `${result.final_safety_factor.toFixed(2)}(完成形を細かい格子で解き直した、表面の面積 4mm² の上位値での値)`
   const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
   // 保証の対象は要求幅。格子上の立方規則(m セル)は探索の規則で、部材の太さの保証ではない(docs/TOPOPT_MIN_WIDTH.md)。
   // 格子上の値は切り捨てて出す(`minWidth.ts`)。
