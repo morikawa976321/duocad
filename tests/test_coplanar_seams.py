@@ -1,12 +1,10 @@
-"""隣り合う柱・ボディを束ねたときに、同一平面の継ぎ目が残らないこと(issue #141)。
-
-10×10×5 の直方体2つを x 方向に隣り合わせると、統合しなければ 10面・20辺(実測)、
-統合すれば 20×10×5 の直方体と同じ 6面・12辺になる。
-"""
+"""隣り合う柱・ボディを束ねたときに同一平面の継ぎ目が残らないこと(issue #141)。落ちたら、
+継ぎ目が残ってまたぐ辺を丸められないか、統合しない経路まで統合して保存済みログの番号がずれる。"""
 from __future__ import annotations
 
 import math
 
+import pytest
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
@@ -27,6 +25,13 @@ def _box(x: float):
     return BRepPrimAPI_MakeBox(gp_Pnt(x, 0.0, 0.0), SIDE, SIDE, HEIGHT).Shape()
 
 
+def _seamed_box():
+    """統合せずに束ねた 20×10×5(実測 10面)。"""
+    fused = BRepAlgoAPI_Fuse(_box(0.0), _box(SIDE))
+    fused.Build()
+    return fused.Shape()
+
+
 def _counts(shape) -> tuple:
     return kernel.face_count(shape), kernel.edge_count(shape)
 
@@ -39,7 +44,6 @@ def _two_squares_sketch(document: Document) -> str:
 
 
 def _face_index(shape, normal: tuple, centroid: tuple) -> int:
-    """法線と重心で面を引く(添字は統合で変わるので、検算は幾何で突き合わせる)。"""
     for face in kernel.tessellate(shape)["faces"]:
         if all(math.isclose(a, b, abs_tol=1e-6) for a, b in zip(face["normal"], normal)) and all(
             math.isclose(a, b, abs_tol=1e-6) for a, b in zip(face["centroid"], centroid)
@@ -91,7 +95,7 @@ def test_a_single_prism_as_new_is_not_merged():
     後の操作が記録した面・辺の番号がずれる。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    # 下辺を同一直線上の2本に割った長方形 → 側面が7枚(下辺側が2枚)
+    # 下辺を同一直線上の2本に割った長方形 → 側面5枚 + 上下 = 7面(統合すれば 6面)
     for start, end in [((0, 0), (10, 0)), ((10, 0), (20, 0)), ((20, 0), (20, 10)), ((20, 10), (0, 10)), ((0, 10), (0, 0))]:
         add_line(document, sketch_id, start, end)
     found = regions(document, sketch_id)
@@ -120,11 +124,19 @@ def test_union_of_adjacent_bodies_gives_one_box_and_maps_the_target_faces():
     assert all(operation.provenance["face_map"][key] for key in operation.provenance["face_map"] if key != str(old_seam))
 
 
-def test_cut_and_intersect_are_not_merged():
-    """統合は union だけ(cut / intersect は継ぎ目が残るかを未確認のため対象外)。"""
-    result = kernel.boolean_bodies(_box(0.0), [_box(SIDE / 2)], "cut")
+@pytest.mark.parametrize(
+    ("mode", "tool", "faces"),
+    [
+        # 統合すれば cut は 11面、intersect は 6面になる(実測)
+        ("cut", BRepPrimAPI_MakeBox(gp_Pnt(1.0, 1.0, 4.0), 2.0, 2.0, 2.0).Shape(), 15),
+        ("intersect", BRepPrimAPI_MakeBox(gp_Pnt(-1.0, -1.0, -1.0), 22.0, 12.0, 7.0).Shape(), 10),
+    ],
+)
+def test_cut_and_intersect_leave_the_seams_as_they_are(mode, tool, faces):
+    """統合は union だけ。落ちたら cut / intersect でも統合していて、継ぎ目の面の番号が変わる。"""
+    result = kernel.boolean_bodies(_seamed_box(), [tool], mode)
     assert result["unified"] is False
-    assert result["provenance"]["unified"] is False
+    assert kernel.face_count(result["shape"]) == faces
 
 
 def test_the_long_edge_across_the_former_seam_can_be_filleted():
@@ -142,10 +154,8 @@ def test_the_long_edge_across_the_former_seam_can_be_filleted():
 
 def test_extruding_two_coplanar_faces_as_new_gives_one_box():
     """`extrude_faces` の new も、柱が複数なら統合する(柱1本の new は従来どおり統合しない)。"""
-    fused = BRepAlgoAPI_Fuse(_box(0.0), _box(SIDE))
-    fused.Build()
     document = Document()
-    document.add_body(Body(id="split", name="split", kind="solid", shape=fused.Shape()))
+    document.add_body(Body(id="split", name="split", kind="solid", shape=_seamed_box()))
     shape = document.get_body("split").shape
     tops = [_face_index(shape, (0, 0, 1), (5, 5, HEIGHT)), _face_index(shape, (0, 0, 1), (15, 5, HEIGHT))]
 
