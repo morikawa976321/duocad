@@ -19,7 +19,7 @@ float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
 最終処理は入力検査で止まる。
 結果はメッシュボディとして三角形を操作ログに保存し、表示とSTLはその三角形をそのまま使う。
 
-安全率は2つ返す: 探索時の値(`safety_factor`。平滑化前の形・探索の格子)と、**完成形を探索の格子の 1/3 へ占有化して解き直し、表面の最大応力で出した値**(`final_safety_factor`、2026-10-07〜。1/3 格子と表面の最大応力は 2026-10-09〜、[TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) 10章)。完成形が本来の目標安全率を割ったときは、高応力部の肉盛り(#129)が入るまで警告を付けて結果を足す(`optimize_run.FINAL_UNSAFE_BLOCKS = False`。真にすると `final_unsafe` で足さない)。つなぎ目の幅は診断で、「幅不足の疑い / 未確定 / 疑いは観測されなかった」の3値(適合は出さない。[TOPOPT_MIN_WIDTH.md](TOPOPT_MIN_WIDTH.md))。
+安全率は2つ返す: 探索時の値(`safety_factor`。平滑化前の形・探索の格子)と、**完成形を探索の格子の 1/3 へ占有化して解き直し、表面の最大応力で出した値**(`final_safety_factor`、2026-10-07〜。1/3 格子と表面の最大応力は 2026-10-09〜、[TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) 10章)。完成形が本来の目標安全率を割ったときは `final_unsafe` で結果を足さない(#129、2026-10-11 本人決定。測り方の見直しは [TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md))。つなぎ目の幅は診断で、「幅不足の疑い / 未確定 / 疑いは観測されなかった」の3値(適合は出さない。[TOPOPT_MIN_WIDTH.md](TOPOPT_MIN_WIDTH.md))。
 
 入力・最終メッシュとも、閉殻の包含深さと面の向きを照合する。交差のない閉殻に対して代表頂点からの
 立体角で包含を判定し、深さが偶数なら外向き、奇数なら内向きを要求する。外に離れた内向きの閉殻を

@@ -608,7 +608,7 @@ export interface OptimizeResultPayload {
     | 'resolution_insufficient'
     /** 探索後に平滑化で潰れる 1×1 の空隙を埋めた形が6条件に不合格(`optimize_run` の `thin_voids`)。 */
     | 'fill_infeasible'
-    /** 完成形の表面の最大応力で見た安全率が本来の目標を割る(`optimize_run.FINAL_UNSAFE_BLOCKS` のときだけ。既定は警告付きで足す)。 */
+    /** 完成形の表面の最大応力で見た安全率が本来の目標を割る(結果は足さない。#129)。 */
     | 'final_unsafe'
   warning: string | null
   body_id: string | null

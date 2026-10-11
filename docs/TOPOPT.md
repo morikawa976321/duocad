@@ -456,7 +456,7 @@ Taubin 30回は1セル幅の構造を消すフィルタとして働くので、�
 
 **呼び出し経路**: `optimize_run.run` → `trace.recording` の中で `design_space.derive`(塊を1回導出)→ 条件面・保持/除外の点検(空の条件面 / 表現できていない領域は早期return)→ `binary_search.find_best_feasible`(`find_initial_feasible`=全材料を6条件で1回検査 →
 `_reduce_volume`=段階4)→ `thin_voids.fill_tubes`(埋めたセルがあれば `acceptance.inspect` で6条件を取り直す)→ `mesh.build_surface_from_mask`(確定マスクだけ)→ `finalize.finalize`(平滑化後の表面を検査 → 保持を足し除外を引く → 簡略化 → 接続6項目・単一ソリッド・float32・自己交差で検査)→
-`final_check.inspect`(完成メッシュを探索格子の 1/3 で解き直す + `neck_persistence`。目標を割れば警告、`FINAL_UNSAFE_BLOCKS` が真なら `final_unsafe`)→ `add_mesh_body`。**候補中はメッシュ化を呼ばない。**
+`final_check.inspect`(完成メッシュを探索格子の 1/3 で解き直す + `neck_persistence`。目標を割れば `final_unsafe` で結果を足さない。#129)→ `add_mesh_body`。**候補中はメッシュ化を呼ばない。**
 
 ### 境界条件の確定(2026-09-17)
 
