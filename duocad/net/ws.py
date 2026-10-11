@@ -113,6 +113,10 @@ LOCAL_MAX_TOKENS = 16384
 #: 1リクエストの待ち上限 = 出力上限 ÷ 4 tok/s + 120秒。実測の生成 4.1 tok/s(思考ありの下限)とプレフィックスの読み込み
 #: 115秒(上限)を、待ち側に倒して丸めた値(丸め幅は自分で置いた余裕で、実測ではない)。
 LOCAL_REQUEST_TIMEOUT = LOCAL_MAX_TOKENS / 4.0 + 120.0
+#: 古い依頼を捨てる判定に残す余地(`Limits.room_tokens`)。出力上限(16,384)のままだと、文脈長 16,384 のサーバではツールを
+#: 呼ぶたびに履歴が捨てられる。実測(docs/LOCAL_LLM_QWEN38.md「思考時間のばらつき」): 373応答の出力の中央値 260、2,048 超は 8%。
+#: 2,048 はその分布を見て選んだ値で、最適値は測っていない。超えて文脈の端で切れた応答は、`run()` の「切れたら捨ててやり直す」が拾う。
+LOCAL_ROOM_TOKENS = 2048
 
 #: プロバイダごとの打ち切り(無ければ `Limits()`)。出力上限の理由は `ANTHROPIC_MAX_TOKENS` と `LOCAL_MAX_TOKENS`。
 AI_LIMITS: dict = {
@@ -122,6 +126,7 @@ AI_LIMITS: dict = {
         max_tokens=LOCAL_MAX_TOKENS,
         request_timeout=LOCAL_REQUEST_TIMEOUT,
         max_total_seconds=2 * 60 * 60.0,
+        room_tokens=LOCAL_ROOM_TOKENS,
     ),
 }
 
