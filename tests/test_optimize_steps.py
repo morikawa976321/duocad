@@ -178,3 +178,12 @@ def test_a_finish_after_the_search_has_ended_is_refused_without_clearing_the_run
     [error] = connection.of_type("optimize_error")
     assert error["already_running"] is True and "探索はもう終わって" in error["message"]
     assert session._finish_request == 1  # 閉じた後の要求で書き換わらない
+
+
+def test_every_progress_event_of_a_session_run_carries_the_run_id(session: Session) -> None:
+    """落ちたら、後から届いた前の実行の進捗を画面が見分けられず、新しい実行の表示を上書きする。"""
+    four_conditions(session)
+    events: list = []
+    session.run_optimization(element_size_mm=8.0, progress=events.append)
+    run = session.optimization_steps.run
+    assert events and {event["run"] for event in events} == {run}

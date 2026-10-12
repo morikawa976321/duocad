@@ -649,6 +649,8 @@ export interface OptimizeProgress {
   target_safety_factor?: number
   /** 合格形が増えたとき(`outcome` が `'initial'` / `'accepted'`)だけ、そのステップ。 */
   step?: OptimizeStepMeta
+  /** 実行の識別子(`OptimizeStepMeta.run` と同じ)。前の実行の進捗が後から届いたら画面が捨てる。 */
+  run?: string
 }
 
 /**

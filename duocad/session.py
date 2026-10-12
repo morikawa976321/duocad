@@ -99,6 +99,13 @@ def _edits_document(method: Any) -> Any:
 #: (載せてよい条件は `catalog.Command.previewable`)。
 PREVIEWABLE_VERBS: dict = catalog.previewable_verbs()
 
+
+def _tagged(progress: Any, steps: Any) -> Any:
+    """進捗の各行に実行の識別子 `run` を付ける(画面は後から届いた前の実行の進捗を、表示を変える前に捨てる)。"""
+    if progress is None or steps is None:
+        return progress
+    return lambda event: progress(dict(event, run=steps.run))
+
 class Session:
     """1つの文書を持つサーバ側の状態。WebSocketの接続とは独立(接続が切れても文書は残る)。"""
 
@@ -781,7 +788,7 @@ class Session:
             result = optimize_run.run(
                 self._optimize_document,
                 options,
-                progress=progress,
+                progress=_tagged(progress, steps),
                 should_cancel=self._optimize_cancel.is_set,
                 debug=debug,
                 debug_kinds=debug_kinds,
@@ -807,7 +814,7 @@ class Session:
         if owned:
             self.begin_optimization()
         try:
-            result = optimize_run.finish_step(self._optimize_document, steps, int(step), progress=progress,
+            result = optimize_run.finish_step(self._optimize_document, steps, int(step), progress=_tagged(progress, steps),
                                               should_cancel=self._optimize_cancel.is_set, debug=debug,
                                               debug_kinds=debug_kinds)
             if owned:

@@ -405,11 +405,13 @@
       if (mode.kind === 'idle') setMode({ kind: 'optimize' })
     },
     onOptimizeProgress: (event) => {
+      // 前の実行の進捗が後から届くことがある(別の接続への配信待ち)。識別子は新しいほど大きい(`optimize_steps.py`)ので、
+      // 表示を変える前に捨てる(捨てないと「このステップで仕上げる」が受け付けの閉じた後に押せて見える)。
+      const run = event.run ?? event.step?.run
+      if (run !== undefined && (run === searchStepsStaleRun || (searchStepsRun !== null && run < searchStepsRun))) return
       optimizeProgress = event
       const step = event.step
       if (step === undefined) return
-      // 前の実行の進捗が後から届くことがある(別の接続への配信待ち)。識別子は新しいほど大きい(`optimize_steps.py`)。
-      if (step.run === searchStepsStaleRun || (searchStepsRun !== null && step.run < searchStepsRun)) return
       if (step.run !== searchStepsRun) {
         // 新しい実行の最初の進捗(前の実行の一覧が遅れて戻っていても、ここで切り替える)。
         searchSteps = []
