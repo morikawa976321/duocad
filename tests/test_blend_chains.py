@@ -1,4 +1,4 @@
-"""`blend_chains.blend_chains`: 画面で1本として選ぶ辺の連なりが、フィレット・面取りが実際にかかる範囲と一致する。"""
+"""`kernel_chains.blend_chains`: 画面で1本として選ぶ辺の連なりが、フィレット・面取りが実際にかかる範囲と一致する。"""
 from __future__ import annotations
 
 import pytest
@@ -6,7 +6,7 @@ from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
 
-from duocad import blend_chains, kernel
+from duocad import kernel, kernel_chains
 
 
 def _stepped():
@@ -31,7 +31,7 @@ def test_collinear_split_edges_share_one_chain() -> None:
     shape = _stepped()
     front = _bottom_edges_along_x(shape, 0.0)
     assert len(front) == 2
-    chains = blend_chains.blend_chains(shape)
+    chains = kernel_chains.blend_chains(shape)
     assert chains[front[0]] == chains[front[1]] == min(front)
 
 
@@ -62,7 +62,7 @@ def test_tangent_line_arc_line_is_one_chain() -> None:
 
 def test_a_plain_box_has_one_chain_per_edge() -> None:
     """落ちたら、接線で続かない辺(直角の角)までまとめて選ばれる。"""
-    chains = blend_chains.blend_chains(BRepPrimAPI_MakeBox(10, 10, 5).Shape())
+    chains = kernel_chains.blend_chains(BRepPrimAPI_MakeBox(10, 10, 5).Shape())
     assert sorted(chains) == list(range(1, 13))
     assert all(chains[index] == index for index in chains)
 
@@ -118,4 +118,4 @@ def _shapes() -> dict:
 def test_the_sieve_loses_no_chain(name: str) -> None:
     """落ちたら、`Add` を呼ぶ辺を絞る篩(`_sieve`)が連なりの辺を取りこぼし、画面で連なりが割れる。"""
     shape = _shapes()[name]
-    assert blend_chains.blend_chains(shape) == _every_edge_chains(shape)
+    assert kernel_chains.blend_chains(shape) == _every_edge_chains(shape)
