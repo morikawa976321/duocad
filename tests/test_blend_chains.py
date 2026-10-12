@@ -134,3 +134,21 @@ def test_the_sieve_loses_no_chain(name: str) -> None:
     """落ちたら、`Add` を呼ぶ辺を絞る篩(`_sieve`)が連なりの辺を取りこぼし、画面で連なりが割れる。"""
     shape = _shapes()[name]
     assert kernel_chains.blend_chains(shape) == _every_edge_chains(shape)
+
+
+def test_an_edge_also_listed_as_internal_still_chains() -> None:
+    """落ちたら、INTERNAL 向きでも現れる辺を篩が丸ごと除き、OCCT がつなぐ連なりが割れる。"""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopAbs import TopAbs_INTERNAL, TopAbs_SHELL, TopAbs_SOLID
+    from OCP.TopoDS import TopoDS, TopoDS_Solid
+
+    from duocad.mesh_geometry import indexed_map
+
+    stepped = _stepped()
+    front = _bottom_edges_along_x(stepped, 0.0)
+    solid = TopoDS.Solid_s(indexed_map(stepped, TopAbs_SOLID).FindKey(1))
+    builder, rebuilt = BRep_Builder(), TopoDS_Solid()
+    builder.MakeSolid(rebuilt)
+    builder.Add(rebuilt, kernel._edge_map(stepped).FindKey(front[0]).Oriented(TopAbs_INTERNAL))
+    builder.Add(rebuilt, indexed_map(solid, TopAbs_SHELL).FindKey(1))
+    assert kernel_chains.blend_chains(rebuilt) == _every_edge_chains(rebuilt)

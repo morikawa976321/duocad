@@ -11,7 +11,7 @@ from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.ChFi3d import ChFi3d
 from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_EXTERNAL, TopAbs_FACE, TopAbs_INTERNAL, TopAbs_VERTEX
-from OCP.TopExp import TopExp
+from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Vertex
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 
@@ -78,10 +78,18 @@ def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
         index = edge_map.FindIndex(edge_faces.FindKey(number))
         if faces.Extent() == 2:
             sides[index] = (TopoDS.Edge_s(edge_faces.FindKey(number)), TopoDS.Face_s(faces.First()), TopoDS.Face_s(faces.Last()))
+    # OCCT は頂点に集まる辺を出現ごとに見て INTERNAL / EXTERNAL の出現だけを飛ばす。同じ辺が通常の向きでも
+    # 現れれば数えるので、除くのは全出現が INTERNAL / EXTERNAL の辺だけ(代表キー1つの向きで決めない)。
+    regular: set = set()
+    explorer = TopExp_Explorer(shape, TopAbs_EDGE)
+    while explorer.More():
+        if explorer.Current().Orientation() not in (TopAbs_INTERNAL, TopAbs_EXTERNAL):
+            regular.add(edge_map.FindIndex(explorer.Current()))
+        explorer.Next()
     vertex_edges: Dict[int, List[int]] = {}
     for index in range(1, edge_map.Extent() + 1):
         edge = TopoDS.Edge_s(edge_map.FindKey(index))
-        if BRep_Tool.Degenerated_s(edge) or edge.Orientation() in (TopAbs_INTERNAL, TopAbs_EXTERNAL):
+        if index not in regular or BRep_Tool.Degenerated_s(edge):
             continue
         first, last = TopoDS_Vertex(), TopoDS_Vertex()
         TopExp.Vertices_s(edge, first, last)
