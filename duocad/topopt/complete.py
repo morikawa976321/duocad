@@ -24,6 +24,11 @@ MAX_BACKTRACK_CHECKS = 5
 #: 通る形が見つかった後、通った形と割った形の探索の材料の差がこの割合未満なら二分をやめる(それ以上寄せても減らせる材料が
 #: 小さい)。hanger 180N では 5.9% の差を詰める二分 4 回(約 80 分)がすべて割った(docs/TOPOPT_PEAK_GATE.md 4-14)。置いた値。
 BACKTRACK_MIN_GAIN = 0.03
+#: さかのぼりで、安い段(`screen`: 空隙を埋めて探索の格子で6条件を取り直す)を回す回数の上限。安い段は埋めるセルが無ければ
+#: FEM なし、あれば探索の評価1回分(dilution 約 0.3 秒、hanger 約 4 秒)。安い段で落ちた形は `MAX_BACKTRACK_CHECKS` に数えない。
+#: 置いた値(実測で決めていない)。dilution 180N では探索の最後の形から安い段を通る形まで 99 形あり、その間は通る形と落ちる形が
+#: 入り交じる(docs/TOPOPT_STOPPING.md 4節)ので、1手ずつではなく 1, 2, 4, ... 手ずつ飛んで探す(`backtrack`)。
+MAX_BACKTRACK_SCREENS = 64
 
 
 @dataclass
@@ -87,7 +92,17 @@ class Backtrack:
     reason: str = 'nothing_to_go_back'  # 'passed' | 'exhausted'(最初の形まで割った)| 'check_limit' | 'nothing_to_go_back'
 
 
-def complete(mask: np.ndarray, search_safety_factor: float, material_mm3: float, ctx: Context) -> Completion:
+def complete(mask: np.ndarray, search_safety_factor: float, material_mm3: float, ctx: Context, *,
+             screened: Optional[Completion] = None) -> Completion:
+    """1形ぶんの手順。`screened` に同じ形の `screen` の戻り(空隙埋めが通ったもの)を渡すと、その段を繰り返さない。"""
+    done = screen(mask, search_safety_factor, material_mm3, ctx) if screened is None else screened
+    if done.fill_failure is not None:
+        return done
+    return _finish(done, ctx)
+
+
+def screen(mask: np.ndarray, search_safety_factor: float, material_mm3: float, ctx: Context) -> Completion:
+    """安い段: 平滑化で潰れる 1×1 の空隙を埋め、埋めたら探索の格子で6条件を取り直す。落ちれば `fill_failure` が入る。"""
     ctx.emit('fill', '平滑化で潰れる 1×1 の空隙を埋める')
     filled, fill = thin_voids.fill_tubes(mask, ctx.space_mask)
     done = Completion(mask=filled, search_safety_factor=float(search_safety_factor),
@@ -124,7 +139,12 @@ def complete(mask: np.ndarray, search_safety_factor: float, material_mm3: float,
                                  f"(2軸以上で両隣が材料なので、保持セルと同じく最小幅の規則の対象外として扱った)")
     else:
         trace.snapshot('tube-fill', **fill)
+    return done
 
+
+def _finish(done: Completion, ctx: Context) -> Completion:
+    """高い段: 安い段を通った形をメッシュ化し、保持・除外の集合演算を当てて、完成形検査を回す。"""
+    filled, fill = done.mask, done.fill
     ctx.emit('mesh', '確定マスクをメッシュ化する')
     # 候補評価中には呼ばれない入口(島除去・保持塗り直しを掛け直さない。`docs/TOPOPT.md`「二値探索の方式と契約」)。
     # `spacing` は既定(要素添字空間の1.0)のまま渡す: 実寸への変換は `place` が一括で行う契約で、
@@ -155,24 +175,90 @@ def shortfall_message(done: Completion, target_safety_factor: float) -> str:
             f"{final_check.peak_phrase(done.checked)})")
 
 
-def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shape=None) -> Backtrack:
+def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shape=None, screen_shape=None) -> Backtrack:
     """完成形検査に落ちた `failed`(= `accepted[-1]` の完成形)から、`accepted`(`binary_search.AcceptedShape` の並び)を
     さかのぼって完成形検査に通る形を探す。
 
-    最初は「完成形の安全率 ÷ 探索の安全率」の比が変わらないと見て、探索の安全率が 目標 ÷ 比 以上あった最も新しい形へ一気に
-    戻る。割ればその形の比で同じことをする(比が取れなければ最初の形との中間)。通る形が見つかった後は、通った形と割った形の
-    間を二分して、通る中で最も新しい(材料の少ない)形へ寄せる。二分は両者の材料の差が `BACKTRACK_MIN_GAIN` 未満になったら
-    やめる。検査は `MAX_BACKTRACK_CHECKS` 回まで。
+    検査は2段。安い段(`screen`: 空隙埋めと探索の格子の6条件)で落ちた形は飛ばし、`MAX_BACKTRACK_CHECKS` に数えない
+    (上限は `MAX_BACKTRACK_SCREENS`。超えたら安い段で選り分けずに高い段へ進む)。空隙埋めで落ちた形と通る形は列の中で入り交じる
+    (docs/TOPOPT_STOPPING.md 4節)ので、安い段を通る形は 1, 2, 4, ... 手ずつ飛んで探し、通った形が見つかったらその手前で
+    飛ばした形を軽い側から見直す(`descend`)。
+    最初に失敗した形が空隙埋めで落ちたなら、安い段を通る中で最も新しい形から高い段へ進む。完成形検査で割ったなら、
+    「完成形の安全率 ÷ 探索の安全率」の比が変わらないと見て、探索の安全率が 目標 ÷ 比 以上あった最も新しい形へ一気に戻る
+    (割ればその形の比で同じことをする。比が取れなければ途中の形)。通る形が見つかった後は、通った形と割った形の間を二分して
+    通る中で最も新しい(材料の少ない)形へ寄せ、両者の材料の差が `BACKTRACK_MIN_GAIN` 未満になったらやめる。
     候補の手順が例外で落ちたら(集合演算の自己交差など)その形は割ったものとして続ける(`ctx.passthrough` の型は通す)。
-    `complete_shape` は1形ぶんの手順(既定は `complete`。検査が差し替える口)。
+    `complete_shape(mask, search_safety_factor, material_mm3, ctx)` は1形ぶんの手順、`screen_shape` は安い段(検査が差し替える口)。
+    `complete_shape` だけを渡すと安い段で選り分けない。
     """
-    complete_shape = complete if complete_shape is None else complete_shape
+    product = complete_shape is None
+    if product:
+        screen_shape = screen
+
+        def complete_shape(mask, search_safety_factor, material_mm3, ctx, screened=None):
+            return complete(mask, search_safety_factor, material_mm3, ctx, screened=screened)
     result = Backtrack(chosen=None, chosen_index=None)
     if len(accepted) < 2:
         return result
     target = float(ctx.target_safety_factor)
     last = len(accepted) - 1
     fail_hi, pass_lo = last, None
+    screened: dict = {}  # 添字 -> 安い段を通った `Completion`(落ちた形は None)
+    counts = dict(screens=0)
+
+    def record(index: int, shape, done: Optional[Completion], stage: str, error: Optional[str] = None) -> None:
+        row = dict(index=index, steps_back=last - index, search_safety_factor=shape.safety_factor,
+                   material_mm3=shape.material_mm3 if done is None else done.material_mm3,
+                   final_safety_factor=None if done is None else done.final_safety_factor,
+                   verdict='error' if done is None else done.verdict, stage=stage)
+        if error is not None:
+            row['error'] = error
+        result.checks.append(row)
+
+    def full_checks() -> int:
+        return sum(1 for row in result.checks if row['stage'] == 'full')
+
+    def screen_ok(index: int) -> bool:
+        """安い段を通るか(落ちたら記録する)。安い段が無いか上限を超えたら、高い段に任せて通す。"""
+        if screen_shape is None:
+            return True
+        if index in screened:
+            return screened[index] is not None
+        if counts['screens'] >= MAX_BACKTRACK_SCREENS:
+            return True
+        counts['screens'] += 1
+        ctx.check()
+        shape = accepted[index]
+        try:
+            done = screen_shape(shape.mask(), shape.safety_factor, shape.material_mm3, ctx)
+        except ctx.passthrough:
+            raise
+        except Exception as error:
+            record(index, shape, None, 'screen', f'{type(error).__name__}: {error}')
+            screened[index] = None
+            return False
+        if done.fill_failure is not None:
+            record(index, shape, done, 'screen')
+            screened[index] = None
+            return False
+        screened[index] = done
+        return True
+
+    def descend(high: int, low: int) -> Optional[int]:
+        """`high` から `low` へ向かって安い段を通る形を探す(1, 2, 4, ... 手ずつ飛び、通った形の手前で飛ばした形を軽い側から見直す)。"""
+        step, passed_over, index = 1, high + 1, high
+        while True:
+            index = max(index, low)
+            if index >= passed_over:
+                return None
+            passed = screen_ok(index)
+            if passed or index == low:
+                # 飛ばした形を軽い側から見直す(下限まで来て落ちたときも)。
+                for between in range(passed_over - 1, index, -1):
+                    if screen_ok(between):
+                        return between
+                return index if passed else None
+            passed_over, index, step = index, index - step, step * 2
 
     def guided(done: Completion, below: int) -> int:
         sf = done.final_safety_factor
@@ -182,25 +268,30 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
         fitting = [i for i in range(below) if accepted[i].safety_factor >= need]
         return max(fitting) if fitting else 0
 
-    probe = guided(failed, fail_hi)
-    while len(result.checks) < MAX_BACKTRACK_CHECKS:
+    if failed.fill_failure is not None and screen_shape is not None:
+        probe = descend(last - 1, 0)
+    else:
+        probe = descend(guided(failed, fail_hi), 0)
+    if probe is None:
+        result.reason = 'exhausted'
+    while probe is not None:
+        if full_checks() >= MAX_BACKTRACK_CHECKS:
+            result.reason = 'check_limit'
+            break
         ctx.check()
         shape = accepted[probe]
         ctx.emit('backtrack', f"{_why(failed)}ので、探索を {last - probe} 手戻した形(探索の安全率 "
-                              f"{shape.safety_factor:.4g})で作り直して検査する({len(result.checks) + 1}/{MAX_BACKTRACK_CHECKS})")
+                              f"{shape.safety_factor:.4g})で作り直して検査する({full_checks() + 1}/{MAX_BACKTRACK_CHECKS})")
+        extra = dict(screened=screened.get(probe)) if product else {}
         try:
-            done = complete_shape(shape.mask(), shape.safety_factor, shape.material_mm3, ctx)
+            done = complete_shape(shape.mask(), shape.safety_factor, shape.material_mm3, ctx, **extra)
         except ctx.passthrough:
             raise
         except Exception as error:
-            result.checks.append(dict(index=probe, steps_back=last - probe, search_safety_factor=shape.safety_factor,
-                                      material_mm3=shape.material_mm3, final_safety_factor=None, verdict='error',
-                                      error=f'{type(error).__name__}: {error}'))
+            record(probe, shape, None, 'full', f'{type(error).__name__}: {error}')
             done = None
         else:
-            result.checks.append(dict(index=probe, steps_back=last - probe, search_safety_factor=shape.safety_factor,
-                                      material_mm3=done.material_mm3, final_safety_factor=done.final_safety_factor,
-                                      verdict=done.verdict))
+            record(probe, shape, done, 'full')
         if done is not None and done.verdict == 'pass':
             pass_lo, result.chosen, result.chosen_index = probe, done, probe
         else:
@@ -209,19 +300,22 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
             if probe == 0:
                 result.reason = 'exhausted'
                 break
-            probe = fail_hi // 2 if done is None else guided(done, fail_hi)
-        else:
-            if fail_hi - pass_lo <= 1:
-                break
-            if 1.0 - accepted[fail_hi].material_mm3 / accepted[pass_lo].material_mm3 < BACKTRACK_MIN_GAIN:
-                break
-            probe = (pass_lo + fail_hi) // 2
-    else:
-        result.reason = 'check_limit'
+            probe = descend(fail_hi // 2 if done is None else guided(done, fail_hi), 0)
+            if probe is None:
+                result.reason = 'exhausted'
+            continue
+        if fail_hi - pass_lo <= 1:
+            break
+        if 1.0 - accepted[fail_hi].material_mm3 / accepted[pass_lo].material_mm3 < BACKTRACK_MIN_GAIN:
+            break
+        middle = (pass_lo + fail_hi) // 2
+        probe = descend(middle, pass_lo + 1)
+        if probe is None:
+            probe = descend(fail_hi - 1, middle + 1)
     if result.chosen is not None:
         result.reason = 'passed'
     trace.snapshot('backtrack', reason=result.reason, chosen_index=result.chosen_index, checks=result.checks,
-                   accepted=len(accepted))
+                   accepted=len(accepted), screens=counts['screens'])
     return result
 
 

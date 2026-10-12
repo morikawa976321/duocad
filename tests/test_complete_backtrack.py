@@ -154,3 +154,63 @@ def test_when_every_candidate_fails_only_its_filled_voids_the_note_does_not_clai
     result = complete.backtrack(accepted, failed, _context(), complete_shape=filled_voids_fail)
     note = complete.exhausted_note(result)
     assert result.chosen is None and "空隙を埋めた形が6条件に落ちた" in note and "目標を割った" not in note
+
+
+def _screened_by(passing_sfs):
+    """安い段(空隙埋め)が、探索の安全率が `passing_sfs` にある形だけ通る題材。呼ばれた形の探索の安全率を `calls` に積む。"""
+    calls = []
+
+    def screen_shape(mask, search_sf, material, ctx):
+        calls.append(search_sf)
+        fill_failure = None if search_sf in passing_sfs else "埋めた形が6条件に不合格"
+        return complete.Completion(mask=mask, search_safety_factor=search_sf, safety_factor=search_sf,
+                                   material_mm3=material, fill=dict(cells=1), fill_failure=fill_failure)
+    return screen_shape, calls
+
+
+def test_shapes_whose_filled_voids_fail_are_skipped_by_the_cheap_stage_without_using_the_check_budget():
+    """落ちたら、空隙埋めで落ちる形に完成形検査の枠を使い、通る軽い形へ届かない(dilution 180N で 15,168 に止まった件)。"""
+    sfs = [float(40 - i) for i in range(30)]
+    accepted = _accepted(sfs)
+    failed = complete.Completion(mask=accepted[-1].mask(), search_safety_factor=sfs[-1], safety_factor=sfs[-1],
+                                 material_mm3=35.0, fill=dict(cells=3), fill_failure="埋めた形が6条件に不合格")
+    screen_shape, screened = _screened_by({sfs[9], sfs[3]})  # 通るのは添字 9 と 3 だけ(入り交じり)
+    full = []
+
+    def complete_shape(mask, search_sf, material, ctx):
+        full.append(search_sf)
+        return _completion(mask, search_sf, material, 3.0, 'pass')
+
+    result = complete.backtrack(accepted, failed, _context(), complete_shape=complete_shape, screen_shape=screen_shape)
+    assert result.reason == 'passed' and result.chosen_index == 9 and full == [sfs[9]]
+    assert sum(1 for row in result.checks if row['stage'] == 'full') == 1
+    assert len(screened) < 28 - 9  # 1手ずつ全部は見ていない(1, 2, 4, ... 手ずつ飛んでから見直す)
+
+
+def test_the_cheap_stage_falls_back_to_full_checks_when_its_budget_runs_out(monkeypatch):
+    """落ちたら、安い段の回数に上限が無く(hanger では1回 約4秒)、上限を超えた後も止まらない。"""
+    monkeypatch.setattr(complete, "MAX_BACKTRACK_SCREENS", 3)
+    sfs = [float(40 - i) for i in range(30)]
+    accepted = _accepted(sfs)
+    failed = complete.Completion(mask=accepted[-1].mask(), search_safety_factor=sfs[-1], safety_factor=sfs[-1],
+                                 material_mm3=35.0, fill=dict(cells=3), fill_failure="埋めた形が6条件に不合格")
+    screen_shape, screened = _screened_by(set())
+    full = []
+
+    def complete_shape(mask, search_sf, material, ctx):
+        full.append(search_sf)
+        return _completion(mask, search_sf, material, 3.0, 'pass')
+
+    result = complete.backtrack(accepted, failed, _context(), complete_shape=complete_shape, screen_shape=screen_shape)
+    assert len(screened) == 3 and result.chosen is not None and len(full) <= complete.MAX_BACKTRACK_CHECKS
+
+
+def test_a_bisection_interval_whose_shapes_all_fail_the_cheap_stage_ends_the_search():
+    """落ちたら、通った形と割った形の間がどれも空隙埋めで落ちるのに、その形へ完成形検査を回している。"""
+    sfs = [12.0, 11.0, 10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0]
+    accepted = _accepted(sfs, cells=[1000 - 40 * i for i in range(len(sfs))])
+    failed = _completion(accepted[-1].mask(), 4.0, 680.0, 1.0, 'fail')  # 比 0.25 → 8.0 以上の最も新しい形(添字 4)
+    screen_shape, _ = _screened_by({12.0, 11.0, 10.0, 9.0, 8.0})  # 添字 5〜7 は空隙埋めで落ちる
+    result = complete.backtrack(accepted, failed, _context(), complete_shape=_by_ratio(0.25), screen_shape=screen_shape)
+    assert result.reason == 'passed' and result.chosen_index == 4
+    assert [row['index'] for row in result.checks if row['stage'] == 'full'] == [4]
