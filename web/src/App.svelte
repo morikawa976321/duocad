@@ -522,7 +522,6 @@
   })
 
   function clearSearchSteps(): void {
-    if (searchStepsRun !== null) searchStepsStaleRun = searchStepsRun
     searchStepsRun = null
     searchSteps = []
     searchStepsFinishable = false
@@ -544,6 +543,8 @@
     optimizeNotice = null
     // 前の実行のデバッグ表示とステップを捨ててから走らせる(残すと古い塊が重なって見える)。
     clearOptimizeDebug()
+    // 前の実行の一覧・形が遅れて届いたら捨てる印(文書を開き直したときに同じ実行の一覧を取り直すのは捨てない)。
+    if (searchStepsRun !== null) searchStepsStaleRun = searchStepsRun
     clearSearchSteps()
     optimizeStartingSettings = { name: files.currentName, elementSizeMm: optimizeElementSizeMm, minWidthMm: optimizeMinWidthMm }
     session.runOptimization({
