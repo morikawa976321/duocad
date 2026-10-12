@@ -1071,6 +1071,20 @@
   })
 
   /**
+   * 辺だけを食うコマンド(フィレット・面取り)の起動中か。面は指せず(`viewport.pickFaces`)、辺は連なりで選ぶ
+   * (`viewport.groupEdgeChains`。OCCTはこの2つを辺1本から連なり全体へ広げてかけるので、1本ずつだと光った所より広く丸まる)。
+   */
+  const edgeOnlyCommand = $derived(
+    sketchId === null && wantedKinds.length > 0 && wantedKinds.every((kind) => kind === 'edge'),
+  )
+
+  $effect(() => {
+    const on = edgeOnlyCommand
+    viewport?.pickFaces(!on)
+    viewport?.groupEdgeChains(on)
+  })
+
+  /**
    * 回転中心の頂点を待っている間だけ、頂点を辺より先に取る(`viewport.preferVertices`)。
    * `move_body` は辺が常に出ているので、既定順(辺が先)だと角を狙ったクリックが必ず辺に取られる。
    */
@@ -1142,7 +1156,7 @@
     const picked: SelectionRef[] = [
       // 同じボディの面が何枚囲まれても参照は1つ(`refKey` で重複を落とす)。
       ...dedupeRefs(event.faces.map((item) => optimizeSetFaceRef(item.bodyId, item.faceIndex))),
-      ...event.edges.map((item) => edgeRef(item.bodyId, item.edgeIndex)),
+      ...dedupeRefs(event.edges.flatMap((item) => edgeChainRefs(item.bodyId, item.edgeIndex))),
       ...event.vertices.map((item) => vertexRef(item.bodyId, item.vertexIndex)),
       ...event.regions.map((item) => regionRef(item.sketchId, item.index)),
       ...event.sketchEntities.map((item) => sketchEntityRef(item.sketchId, item.entityId, item.point)),
@@ -1283,6 +1297,42 @@
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
     if (kinds.length === 0) pendingOptimizePreset = null
+    // 辺だけを食うコマンドが起動したら、選択に残っている面を外す(辺は残す。面は指せなくなるので外す手が無い)。
+    // `untrack`: ここは `CommandHost` の `$effect` の中から呼ばれ、選択を読むとその effect が選択の変化ごとに走り直す。
+    if (kinds.length > 0 && kinds.every((kind) => kind === 'edge')) {
+      untrack(() => modifySelection([], refsOfKind(currentItems(), 'face')))
+    }
+  }
+
+  /** 辺の参照を、連なり(`viewport.edgeChain`)の全部の参照へ広げる。 */
+  function edgeChainRefs(bodyId: string, edgeIndex: number): SelectionRef[] {
+    const indices = viewport?.edgeChain({ bodyId, edgeIndex }) ?? [edgeIndex]
+    return indices.map((index) => edgeRef(bodyId, index))
+  }
+
+  /**
+   * 連なりを1つの単位として選択を編集する(`editSelection` の連なり版)。トグルは、全部入っていれば全部外し、
+   * そうでなければ欠けている分を足す(1本ずつトグルすると、一部だけ入っていた連なりが入れ替わるだけになる)。
+   */
+  function editEdgeChain(refs: SelectionRef[], mode: PickEvent['mode']): void {
+    if (refs.length === 1) {
+      editSelection(refs[0], mode)
+      return
+    }
+    const current = currentItems()
+    const currentKeys = new Set(current.map(refKey))
+    const allIn = refs.every((ref) => currentKeys.has(refKey(ref)))
+    if (mode === 'toggle') {
+      if (allIn) modifySelection([], refs)
+      else modifySelection(refs.filter((ref) => !currentKeys.has(refKey(ref))), [])
+      return
+    }
+    if (allIn && current.length === refs.length) {
+      modifySelection([], refs)
+      return
+    }
+    const keys = new Set(refs.map(refKey))
+    modifySelection(refs, current.filter((item) => !keys.has(refKey(item))))
   }
 
   /** ピックを選択集合の編集へ翻訳する。ここが作るのは「何を足して何を引くか」だけで、結果はコアから返ってくる。 */
@@ -1335,7 +1385,7 @@
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
     // 辺が当たったら辺。フィレット・面取り・測定の起動中だけ来る。
     if (event.edge !== null) {
-      editSelection(edgeRef(event.edge.bodyId, event.edge.edgeIndex), pickMode)
+      editEdgeChain(edgeChainRefs(event.edge.bodyId, event.edge.edgeIndex), pickMode)
       return
     }
     // 頂点が当たったら頂点。ここへ来るのは「AIが選んだ頂点を人がCtrl+クリックで外す」か「測る頂点を指す」のどちらか。

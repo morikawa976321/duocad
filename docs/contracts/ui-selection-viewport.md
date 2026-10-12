@@ -2,7 +2,7 @@
 
 選択の同一性・3D ビューポート(射影・ビューキューブ・FOV・分割モジュール)・画面ピック・最適化デバッグビューの、ソースから読めない不変条件・依存禁止・罠。
 **いまの挙動の正はコードとテスト**。設計判断の本体は [../VIEWPORT.md](../VIEWPORT.md) / [../UI.md](../UI.md)。
-実機 smoke のうち現在 `web/scripts/` に残るのは `smoke.mjs` `smoke-sketch.mjs` `smoke-resolution.mjs` `smoke-mirror.mjs` `smoke-face-culling.mjs` と `tests/eval_*.mjs`。
+実機 smoke のうち現在 `web/scripts/` に残るのは `smoke.mjs` `smoke-sketch.mjs` `smoke-resolution.mjs` `smoke-mirror.mjs` `smoke-face-culling.mjs` `smoke-fillet-pick.mjs` と `tests/eval_*.mjs`。
 
 ---
 
@@ -41,6 +41,12 @@
 - **Raycaster を粗い broad phase に降格する案は入れない**: 27部品 mATX PC ケース(`web/scripts/models.mjs` の `PC_CASE_STEP`)の最大ボディ(233面・辺645本・折れ線点1,768)、1280×860 で `edgeAt` 1回が p50 0.2ms／p95 0.7ms／最大1.4ms(基準 p95>16ms に20倍以上の余裕)。`edgeLines` は常に1ボディぶん(`showEdges` の契約)。
 - **未確認の手動受入**: 斜め視点で bezier に沿ったホバー、27部品モデルで狙った辺が取れること、`preferVertices` を通る実機 smoke(`vertexAt` 単体の検査しか無く退行を捕まえない)。
 - **罠**: ズーム直後に判定を読むと時々落ちる(ズームが可変解像度の測り直しを起こし、スケッチの折れ線が作り直される)。`stateEpoch` が止まるまで待ってから測る。pytest は `.venv\Scripts\python.exe` で(素の `python` は `OCP` 無しで51件が収集エラー)。
+
+## 辺だけを食うコマンド(フィレット・面取り)
+
+- 起動中(`App.svelte` の `edgeOnlyCommand` = 選択引数の種別が辺だけ)は**面を指せない**(`viewport.pickFaces(false)`。クリック・ホバー・矩形選択のすべて)。起動した時点で選択に残っている**面だけを外す**(辺・頂点などは残す。本人判断 2026-10-13)。面で辺を出すボディを切り替える手は無くなるので、別ボディの辺は起動前にそのボディを選ぶかアクティブにする。
+- 辺は**連なり**で選ぶ(`viewport.groupEdgeChains(true)`)。連なりは `kernel.blend_chains` = OCCT のフィレットが辺1本から広げる範囲(一直線上で割れた辺・直線→円弧の接線連続)で、`EdgeGeometry.chain` で届く。1本ずつ選ばせると、光った1本より広く丸まる(実測: 1本を `Add` すると連なり全部にフィレット・面取りがかかる)。トグルは「全部入っていれば全部外す、そうでなければ欠けている分を足す」。矩形選択も連なりへ広げる。
+- 選択・操作ログに入るのは辺1本ずつの添字のまま(カーネルの辺は統合しない。辺には面の `face_map` にあたる由来が無く、統合で添字が変わると保存済みログの再生が別の辺を指す)。測定・回転軸は連なりにしない(辺を1本として指す)。
 
 ## ピックの優先順位・頂点待ち(`preferVertices`)
 
