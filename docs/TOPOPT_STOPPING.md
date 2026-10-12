@@ -111,7 +111,15 @@ dilution 180N は、途中で止めた方が軽く納品された: 評価 286・
 - 枯渇は poison と幾何の規則を含む「規則の枯渇」で、最適の証明ではない。
   poison を解いて再検査すれば確かめられる(astra)。
 
-## 7. 再現
+## 7. 本人の判断(2026-10-12)
+
+6節の「決めていただくこと」(1: 既定の止め方を枯渇 + 予算にする、2: 「ここで止めて仕上げる」、3: さかのぼりの 3% の打ち切りの見直し)に、本人(原文):
+
+> 1については、変えていいと思う。懸念はhangerでどれくらい総時間が延びるか。
+> 2については、いい考えと思う。ただし、それに加えて、その時点までの各ステップでの結果をすべて保持しておいて利用者が切り替えて自由にみられるようにする方がよいだろう。
+> 3は見直す場合、どう直すことになる？
+
+## 8. 再現
 
 ```powershell
 .venv/Scripts/python.exe topopt_checks/stress_gate/run_product.py --model dilution --load 120 --v-cells 1 --target-tolerance none --patience none --max-evaluations 1000 --trace
