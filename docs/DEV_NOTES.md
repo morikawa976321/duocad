@@ -6,12 +6,20 @@
 
 - **数値計算（numpy / scipy）は `.venv` にしか無い。** 既定の `python`（3.14）には無く、matplotlib はどの venv にも無い
   （図が要るなら標準ライブラリだけで PNG/SVG を書く。マスクの画像化は Pillow の `topopt_checks/render_mask_png.py`）。実行は `.\.venv\Scripts\python.exe`。
+  逆にシステム側にだけある依存もある（2026-10-06: manifold3d がシステムの 3.14 にだけ入っていた）ので、素の `python` で
+  import できても製品・テストが venv で動く保証にならない。
+- **venv の python は1本がプロセス2つに見える。** uv が作った `.venv\Scripts\python.exe` はランチャで、実体
+  `%APPDATA%\uv\python\cpython-3.14-*\python.exe` を子として起こすので、プロセス一覧に同じコマンドラインが2つ、作成時刻が
+  同じ秒で出る（`sys.executable` を呼ぶ子プロセスも2つずつ）。二重起動を疑うときは親子関係（ppid）と作成時刻を見る
+  （2026-10-07 に本人の検証を二重起動と誤認して片方を止め、検証全体が止まった）。
 - **Git Bash の `python` は日本語入りのファイルを cp932 で読む。** `-X utf8` か `encoding="utf-8"`。
 - **形状探索の FEM を並べると OOM になる。** RAM 31.7 GB で普段 10〜15 GB は他のアプリが使う。hanger の1条件のピークは 2.388 mm で 7.5 GB〜1.592 mm で 24.2 GB。
   2本以上のピークが重なると落ちる（2026-09-26 に PC が落ちた）。
 - **PowerShell の `Invoke-CimMethod -ClassName Win32_Process -MethodName Create` で起動した独立プロセスは、Claude のアプリを閉じても続く**（親が `WmiPrvSE` になる）。
 - **`.venv` は `uv sync --frozen` で `uv.lock` から作り直せる。** 依存は `uv add` で入れる。`uv pip install` で手入れした
-  ものは作り直すと消え、収集エラー（`No module named ...`）で初めて気づく。
+  ものは作り直すと消え、収集エラー（`No module named ...`）で初めて気づく。Python の版が変わったときは venv ごと
+  作り直すしかない（2026-10-10 の 3.11→3.14 は `uv sync --frozen` で作り直した）。`pyvenv.cfg` まで消えて作り直せない
+  ときは、uv の python（`%APPDATA%\uv\python\cpython-<requires-python の版>-*`）を `home` にして書き戻す。
 - **同じリポジトリ内でも行末はファイルごとに違う。** `core.autocrlf=true` で blob は LF だが、作業ツリーはツールが直接書いた
   ファイルが LF、checkout を経たファイルが CRLF。`git diff` も `git status` も差分を出さない。踏んだ形: 複数行の完全一致置換が
   0件で落ちる／変異検査で置換が0件のまま「変異を入れても緑」＝「テストが噛んでいない」という**逆の結論**が出る／

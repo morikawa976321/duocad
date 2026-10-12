@@ -166,6 +166,10 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
 - **手で立てるサーバも `--models-dir` に使い捨てを渡す。** 実機検査は `startServer({modelsDir})` で temp を渡すが、
   手で立てるとリポジトリ直下の実 `models/` に保存され、本人の作業ファイルが 161KB→4.9MB になった。
   `python -m duocad.mcp_server --models-dir $env:TEMP\duocad-scratch`。stdin を閉じない（EOF で即終了）。
+  ポートは本人が常時動かしている 8765 / 8766 を避け、`--port 8785 --http-port 8786` など空きを渡す。Browser pane で見るときは
+  `.claude/launch.json` に一時の構成を足して `preview_start` し、終わったら `preview_stop` して launch.json を戻す。確認用の文書は
+  実 `models/` から使い捨ての models-dir へ写して使う。`web/dist` を作り直すと本人のサーバが配る画面も新しくなるので、
+  サーバ側に新しいコマンドを足したときは本人にサーバの再起動を伝える。
   `models/` の差分に「自分が入れた覚えのない操作」が混ざっていたら並行して誰かが触っている印 ——
   `git checkout` を向けない。
 - **headless Chrome は実 GPU を掴む。** `--use-angle=swiftshader` が CPU ラスタライズを強制していただけで、
