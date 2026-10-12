@@ -45,7 +45,7 @@
 
 ## 実行 UI(`OptimizePanel.svelte` / `session.ts` / `net/ws.py`)
 
-- WebSocket に4つ(`catalog` の `category="protocol"`=verb ではない、`ws="special"`/`mcp=False`/`changes_document=False`、実体は `duocad/net/ws.py` の `_dispatch`): `optimize_conditions`(要求した接続にだけ返す)／`optimize_resolution`(`OptimizeInputError` は `type:"error"` にせず `{"error": 文}` に畳む。条件面がまだ無いのは「設定の途中」)／`run_optimization`(**待たずに返り**、`optimize_status`→`optimize_progress`(多数)→`optimize_result` か `optimize_error`→`optimize_status` の順で**全接続へ**配る)／`cancel_optimization`(`optimize_status {running, cancelling}`)。**`optimize_error` には `cancelled: bool` が載り**、中断は失敗ではないので画面はトーストを出さない。`problems` は条件が足りないときだけ入る。`Server` の配信ヘルパは `_emit_event`/`_spawn_broadcast`/`_broadcast`。
+- WebSocket に4つ(と、下の「ステップ」の3つ。`catalog` の `category="protocol"`=verb ではない、`ws="special"`/`mcp=False`/`changes_document=False`、実体は `duocad/net/ws.py` の `_dispatch`): `optimize_conditions`(要求した接続にだけ返す)／`optimize_resolution`(`OptimizeInputError` は `type:"error"` にせず `{"error": 文}` に畳む。条件面がまだ無いのは「設定の途中」)／`run_optimization`(**待たずに返り**、`optimize_status`→`optimize_progress`(多数)→`optimize_result` か `optimize_error`→`optimize_status` の順で**全接続へ**配る)／`cancel_optimization`(`optimize_status {running, cancelling}`)。**`optimize_error` には `cancelled: bool` が載り**、中断は失敗ではないので画面はトーストを出さない。`problems` は条件が足りないときだけ入る。`Server` の配信ヘルパは `_emit_event`/`_spawn_broadcast`/`_broadcast`。
 - **重い処理は `run_in_executor` で回す。** `_dispatch` の中で待つと `handle()` が1接続を直列処理する以上、同じ接続から届く `cancel_optimization` が読めなくなる。`_ai_start` と同じ形。
 - **解像度の目盛りは粗い側へ動かさない。** 粗い側の端は「正しさ」の境界(割ると条件面から節点が消え最小部材幅が表現できず、しかも silent)、細かい側の端は「都合」の境界(遅い・落ちるだけ)。**時間を入力にしない**(時間から解像度を逆算すると最小部材幅と条件面の要求を黙って割る)。段(`resolution_limits()["steps"]`、`optimize_run.RESOLUTION_STEPS`=6の等比、添字0が最粗=既定、最後の段は下限そのもの、上限が下限を下回るときは空)は**サーバが作る**(`_resolution_steps`。要素数の数え方(余白比率0.25と `voxelize.DEFAULT_PAD`)を画面が持つと必ずずれる)。同じ要素数になる段は畳むので `steps.length` が `RESOLUTION_STEPS` と一致することに依存しない。
 - 画面の口: `session.ts` の `optimizeConditions/optimizeResolution/runOptimization/cancelOptimization` と hooks 6本(`onOptimizeConditions/Resolution/Status/Progress/Result/Error`)。`OptimizePanel.svelte`(`App.svelte` が状態を持ち、パネルは値と口だけ受け取る。`SettingsDialog.svelte` と同じ規律)。パネルの id: `#optimize-panel/#optimize-conditions/#optimize-resolution/#optimize-resolution-note/#optimize-estimate/#optimize-min-width/#optimize-run/#optimize-cancel/#optimize-progress/#optimize-notice`。`window.__duocad`(`testHooks.svelte.ts`)の読むだけの穴: `optimizeRunning/optimizeCancelling/optimizeConditions/optimizeResolution/optimizeElementSizeMm/optimizeProgress/optimizeNotice`。
@@ -58,3 +58,22 @@
 - **罠(Svelte)**: runes モードのインスタンススクリプトは `export` を持てない(`OptimizeNotice` 型は `optimizeNotice.ts`)。画面に出す文字列に markdown の `**` を書かない(`.svelte` のテンプレートは markdown を解釈しない。強調は `<strong>`)。
 - `web/dist` は `.gitignore` 対象。`web/src` を触ったら `npm run build` が要るが、コミットには現れない(緑の git status は「ビルドした」の証拠にならない)。
 
+
+## ステップ(探索の合格形を切り替えて見る・選んで仕上げる。`duocad/optimize_steps.py`、2026-10-12 本人指示)
+
+- **正はサーバ。** 1回の実行に `OptimizationSteps` が1つ(`Session.optimization_steps`、その実行の文書とファイル名を控える)。探索の
+  `on_accept`(`binary_search.find_best_feasible`)が合格形(`AcceptedShape`、1セル1ビット)を足し、探索が合格形を出して終わると
+  `optimize_run` が `finisher`(選んだステップを完成化・完成形検査・さかのぼり・追加まで進める手順。条件・格子はその実行のもの)を置く。
+  実行の後も、次に走らせるまで残る。いま開いている文書の実行のものだけを返す(`Session.steps_for_current`。同じオブジェクトか同じファイル名)。
+- WebSocket に3つ(`catalog` は `protocol`・`ws="special"`・`mcp=False`): `optimize_steps`(一覧 `{steps:[{index, evaluation, seconds,
+  material_mm3, safety_factor, cells}], finishable}`)/ `optimize_step_voxels {index}`(その形の**表面のセルだけ**の通し添字。内側は画面から
+  見えないので配らない。形はデバッグ表示の `rho` と同じで、`optimizeDebug.ts` の同じ層で描く)/ `finish_optimization {step?}`。
+- **`finish_optimization` は2通り。** 走っている間は `Session.request_finish(step)` の旗だけ(`optimize_status` に `finishing: true`)。探索は
+  次の候補を作る前に止まり(`is_cancelled` に中断と並べて渡す)、そのステップを仕上げる(終了理由 `stopped_by_user`)。**中断が先**(両方立って
+  いれば何も足さない)。合格形がまだ無ければ仕上げずに `OptimizeCancelled`。走っていなければ `Session.finish_optimization_step`
+  (`optimize_run.finish_step`。探索はやり直さない。終了理由 `finished_after_run`)を別タスクで回す。結果はどちらも `optimize_result` で、
+  `finished_step`(0 から)と `steps` が載る。利用者が選んだステップの結果の名前は `optimized-step<番号>`(番号は画面と同じく 1 から)。
+- 進捗(`optimize_progress`)は合格形が増えたとき `step`(上の一覧の1行)を持つ。画面は一覧をこれで伸ばし、走り終わったとき・接続し直したとき・
+  文書を切り替えたときに `optimize_steps` で取り直す。新しい実行の開始で `Session.optimization_steps` を空にする(前の実行のステップを見せない)。
+- 画面(`OptimizePanel.svelte` の `#optimize-steps`): スライダー・「ボクセルで見る」・「このステップで仕上げる」。走っている間に最後のステップを
+  選ぶと「最新を追う」(`step` を省いて送る)。形は選んだときだけ1つ取りに行き、返事を待つ間は次を頼まない(`App.svelte` の `searchStepVoxelsPending`)。

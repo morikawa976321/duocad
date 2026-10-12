@@ -647,6 +647,32 @@ export interface OptimizeProgress {
   safety_factor?: number
   cells?: number
   target_safety_factor?: number
+  /** 合格形が増えたとき(`outcome` が `'initial'` / `'accepted'`)だけ、そのステップ。 */
+  step?: OptimizeStepMeta
+}
+
+/**
+ * 探索の合格形1つ(ステップ。`duocad/optimize_steps.py` の `OptimizationSteps.append`)。`index` は 0 から。
+ * `safety_factor` は探索の格子での値(探索の目標と比べる)、`seconds` は実行の開始からの秒。
+ */
+export interface OptimizeStepMeta {
+  index: number
+  evaluation: number
+  seconds: number
+  material_mm3: number
+  safety_factor: number
+  cells: number | null
+}
+
+/** ステップ1つの形(表面のセル。`OptimizationSteps.voxels`)。`error` があれば形は無い。 */
+export interface OptimizeStepVoxels extends Partial<OptimizeStepMeta> {
+  index: number
+  grid?: OptimizeDebugGrid
+  elements?: number[]
+  total?: number
+  shown?: number
+  stride?: number
+  error?: string
 }
 
 /**
@@ -714,8 +740,11 @@ export interface OptimizeResultPayload {
   search_target_factor: number
   material_mm3: number | null
   evaluations: number
-  /** 探索の終了理由(`converged` / `evaluation_limit` / `cancelled` / ...)。 */
+  /** 探索の終了理由(`converged` / `evaluation_limit` / `stopped_by_user`(仕上げで止めた)/ `finished_after_run`(実行の後に仕上げた)/ ...)。 */
   termination: string | null
+  /** 仕上げたステップの番号と、その実行のステップの数(`state` が `done` / `final_unsafe` / `fill_infeasible` のとき)。 */
+  finished_step?: number
+  steps?: number
   element_size_mm: number
   /** 最小幅の解決結果(`optimize_run._resolve_min_width`)。未指定なら選べるいちばん細い段を採用し `source` が `'default'`
    *  (`requested_mm` は既定のときも実際に使った値で `null` にならない)。明示すれば `'requested'`。 */
@@ -854,8 +883,12 @@ export interface SessionHooks {
   onOptimizeConditions(report: OptimizeConditionsReport): void
   /** 解像度の上限・下限・目盛りが返ってきた(要求した接続にだけ届く)。 */
   onOptimizeResolution(payload: OptimizeResolutionPayload): void
-  /** 走っているかどうかが変わった(全接続へ配られる)。 */
-  onOptimizeStatus(running: boolean, cancelling: boolean): void
+  /** 走っているかどうかが変わった(全接続へ配られる)。`finishing` は「このステップで仕上げる」を伝えた後。 */
+  onOptimizeStatus(running: boolean, cancelling: boolean, finishing: boolean): void
+  /** いま開いている文書の直近の実行のステップの一覧(`optimizeSteps()` の返事)。`finishable` は実行の後に仕上げられるか。 */
+  onOptimizeSteps(steps: OptimizeStepMeta[], finishable: boolean): void
+  /** ステップ1つの形(`optimizeStepVoxels()` の返事)。 */
+  onOptimizeStepVoxels(payload: OptimizeStepVoxels): void
   /** 進捗1件(反復ごと・候補材料量ごと)。 */
   onOptimizeProgress(event: OptimizeProgress): void
   /** 開発用の可視化が届いた(頼んだときだけ。`OptimizeDebugPayload`)。 */
@@ -960,6 +993,15 @@ export interface Session {
    * 進捗を出さない短い処理の途中では止まらない(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)。
    */
   cancelOptimization(): void
+  /**
+   * 「このステップで仕上げる」。走っている間は探索を止めて `step`(`null` は最新)を仕上げる(降りるのは次の候補を作る前)。
+   * 走っていなければ、いま開いている文書の直近の実行のステップを、探索をやり直さずに仕上げて結果を足す。
+   */
+  finishOptimization(step: number | null): void
+  /** いま開いている文書の直近の実行のステップの一覧を聞く(応答は `onOptimizeSteps`)。 */
+  optimizeSteps(): void
+  /** ステップ1つの形を聞く(応答は `onOptimizeStepVoxels`)。 */
+  optimizeStepVoxels(index: number): void
   dispose(): void
 }
 
@@ -1086,9 +1128,12 @@ export function createSession(hooks: SessionHooks): Session {
       // **形状最適化の応答は丸ごと型変換して渡す**(`optimize_result` だけで20キー近くあり、
       // ここへ書き写すと同じ宣言が2箇所になる)。分岐に要るキーだけをここに置く。
       cancelling?: boolean
+      finishing?: boolean
       cancelled?: boolean
       already_running?: boolean
       problems?: string[]
+      steps?: unknown[]
+      finishable?: boolean
       // ---------------------------------------------------------------- 測定
       client_op?: number | null
       count?: number
@@ -1204,7 +1249,11 @@ export function createSession(hooks: SessionHooks): Session {
     } else if (message.type === 'optimize_resolution') {
       hooks.onOptimizeResolution(message as unknown as OptimizeResolutionPayload)
     } else if (message.type === 'optimize_status') {
-      hooks.onOptimizeStatus(message.running ?? false, message.cancelling ?? false)
+      hooks.onOptimizeStatus(message.running ?? false, message.cancelling ?? false, message.finishing ?? false)
+    } else if (message.type === 'optimize_steps') {
+      hooks.onOptimizeSteps((message.steps ?? []) as OptimizeStepMeta[], message.finishable ?? false)
+    } else if (message.type === 'optimize_step_voxels') {
+      hooks.onOptimizeStepVoxels(message as unknown as OptimizeStepVoxels)
     } else if (message.type === 'optimize_progress') {
       hooks.onOptimizeProgress(message as unknown as OptimizeProgress)
     } else if (message.type === 'optimize_debug') {
@@ -1358,6 +1407,15 @@ export function createSession(hooks: SessionHooks): Session {
     },
     cancelOptimization() {
       send({ cmd: 'cancel_optimization' })
+    },
+    finishOptimization(step) {
+      send(step === null ? { cmd: 'finish_optimization' } : { cmd: 'finish_optimization', step })
+    },
+    optimizeSteps() {
+      send({ cmd: 'optimize_steps' })
+    },
+    optimizeStepVoxels(index) {
+      send({ cmd: 'optimize_step_voxels', index })
     },
     dispose() {
       disposed = true

@@ -1079,7 +1079,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                    single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
                    target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
                    evaluation_error_patience: Optional[int] = DEFAULT_EVALUATION_ERROR_PATIENCE,
-                   min_width_cells: int = 1, on_evaluation=None) -> SearchResult:
+                   min_width_cells: int = 1, on_evaluation=None, on_accept=None) -> SearchResult:
     """`initial.best_feasible` から、ひずみエネルギーの低い材料をまとめて削り続ける(段階4)。
 
     合格形状は1つだけ持つ。1回の試行: 合格形状の要素エネルギー(近傍でならす)の低い順に
@@ -1109,12 +1109,16 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     `event` は素の値だけ: `evaluation`(通算の評価回数)/ `outcome`(`'initial'` / `'accepted'` / `'rejected'`)/ `failed` /
     `candidate_safety_factor`(FEMを解かなかった候補は `None`)/ `candidate_cells` / `safety_factor`・`cells`(その時点の合格形状)/
     `target_safety_factor`。**例外を投げれば探索ごと落ちる**ので、呼び出し側で握ること。
+    `on_accept(shape: AcceptedShape, evaluation: int)` は合格形状が増えるたびに(出発形状を含む)、その `on_evaluation` より前に
+    呼ぶ。並びは `SearchResult.accepted` と同じだが、出る前の再検査に落ちると `accepted` は出発形状だけに縮む(`accepted` が正)。
     """
     _check_stage4_options(single_cell_patience, target_tolerance, evaluation_error_patience)
     identifier = initial.conditions_identifier
     history = list(initial.history)
     best = initial.best_feasible
     accepted_shapes = [AcceptedShape.of(best)]
+    if on_accept is not None:
+        on_accept(accepted_shapes[-1], int(initial.evaluations))
     evaluations = int(initial.evaluations)
     target = float(conditions.target_safety_factor)
     anchor_ids = _anchor_node_ids(conditions)
@@ -1284,6 +1288,8 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
             best = FeasibleModel(mask=survivor, before_mask=candidate, report=report, trial_index=trial.index,
                                  energy=energy)
             accepted_shapes.append(AcceptedShape.of(best))
+            if on_accept is not None:
+                on_accept(accepted_shapes[-1], evaluations)
             walk = None
             step.update(safety_factor=best.safety_factor, material_mm3=best.material_mm3)
             multiplier = min(1.0, 2.0 * multiplier)
@@ -1348,7 +1354,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                        target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
                        evaluation_error_patience: Optional[int] = DEFAULT_EVALUATION_ERROR_PATIENCE,
                        min_width_cells: int = 1,
-                       is_cancelled=None, on_evaluation=None) -> SearchResult:
+                       is_cancelled=None, on_evaluation=None, on_accept=None) -> SearchResult:
     """全材料の評価(段階3)に続けて、ひずみエネルギーの低い材料を削って体積を減らす単一の探索入口(§3)。
 
     `find_initial_feasible` が合格しなければその `SearchResult` をそのまま返し、合格すれば `_reduce_volume` で
@@ -1359,7 +1365,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
 
     `is_cancelled` は引数無しで呼べる callable。段階3は評価の前、段階4は候補を作る前ごとに見る。真を返した時点の
     `best_feasible` を返す(§4.6)。初期合格の前に中断されれば `no_feasible_found` / `cancelled`。
-    `on_evaluation` は段階4へそのまま渡す(`_reduce_volume` docstring)。全材料が不合格なら呼ばれない。
+    `on_evaluation` / `on_accept` は段階4へそのまま渡す(`_reduce_volume` docstring)。全材料が不合格なら呼ばれない。
     """
     _check_stage4_options(single_cell_patience, target_tolerance, evaluation_error_patience)
     identifier = evaluation_identifier(conditions)
@@ -1374,4 +1380,4 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
                           single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
                           evaluation_error_patience=evaluation_error_patience,
-                          min_width_cells=min_width_cells, on_evaluation=on_evaluation)
+                          min_width_cells=min_width_cells, on_evaluation=on_evaluation, on_accept=on_accept)

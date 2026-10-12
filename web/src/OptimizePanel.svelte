@@ -21,6 +21,8 @@
     OptimizeConditionsReport,
     OptimizeProgress,
     OptimizeResolutionPayload,
+    OptimizeStepMeta,
+    OptimizeStepVoxels,
   } from './session'
 
   const {
@@ -36,6 +38,16 @@
     onMinWidth,
     onRun,
     onCancel,
+    searchSteps,
+    stepIndex,
+    stepFollowsLatest,
+    stepsShown,
+    stepVoxels,
+    finishable,
+    finishing,
+    onSelectStep,
+    onShowSteps,
+    onFinish,
   }: {
     conditions: OptimizeConditionsReport | null
     resolution: OptimizeResolutionPayload | null
@@ -51,7 +63,27 @@
     onMinWidth: (value: number | null) => void
     onRun: () => void
     onCancel: () => void
+    /** 探索のステップ(合格形)。走っている間は伸びる。 */
+    searchSteps: OptimizeStepMeta[]
+    /** 見ているステップの番号(0 から)。ステップが無ければ `null`。 */
+    stepIndex: number | null
+    /** 最新のステップを追っているか(走っている間は新しいステップへ進む)。 */
+    stepFollowsLatest: boolean
+    stepsShown: boolean
+    stepVoxels: OptimizeStepVoxels | null
+    /** 走っていないときに、選んだステップを仕上げられるか。 */
+    finishable: boolean
+    finishing: boolean
+    /** `null` は最新を追う。 */
+    onSelectStep: (index: number | null) => void
+    onShowSteps: (shown: boolean) => void
+    onFinish: () => void
   } = $props()
+
+  const stepMeta = $derived(stepIndex === null ? null : (searchSteps[stepIndex] ?? null))
+  const canFinish = $derived(
+    searchSteps.length > 0 && !cancelling && !finishing && (running || finishable),
+  )
 
   const steps = $derived(resolution?.steps ?? [])
   /** 効いている段(`chosenStep`)。入力した値への応答待ち・範囲外なら `null`。 */
@@ -246,6 +278,60 @@
     </p>
   {/if}
 
+  <!-- 探索のステップ(合格形)を切り替えて見る・選んで仕上げる(`duocad/optimize_steps.py`)。番号は 1 から見せる。
+       材料と安全率は探索の格子での値(平滑化・完成形検査の前)。 -->
+  {#if searchSteps.length > 0 && stepIndex !== null}
+    <div id="optimize-steps">
+      <label class="field-row">
+        ステップ
+        <input
+          id="optimize-step"
+          type="range"
+          min="0"
+          max={searchSteps.length - 1}
+          step="1"
+          value={stepIndex}
+          oninput={(event) => {
+            const index = Number(event.currentTarget.value)
+            onSelectStep(running && index === searchSteps.length - 1 ? null : index)
+          }}
+        />
+      </label>
+      {#if stepMeta !== null}
+        <p id="optimize-step-info" class="hint dim">
+          {stepIndex + 1} / {searchSteps.length}{running && stepFollowsLatest ? '(最新を追う)' : ''} ・ 評価 {stepMeta.evaluation}
+          ・ 材料 {Math.round(stepMeta.material_mm3).toLocaleString()}mm^3 ・ 探索の安全率 {stepMeta.safety_factor.toFixed(3)}
+          ・ {Math.round(stepMeta.seconds)}秒
+        </p>
+      {/if}
+      <div class="row">
+        <label class="inline">
+          <input
+            id="optimize-steps-shown"
+            type="checkbox"
+            checked={stepsShown}
+            onchange={(event) => onShowSteps(event.currentTarget.checked)}
+          />
+          ボクセルで見る
+        </label>
+        <button id="optimize-finish" disabled={!canFinish} onclick={onFinish}>
+          {finishing ? '仕上げている…' : 'このステップで仕上げる'}
+        </button>
+      </div>
+      {#if stepsShown && stepVoxels?.error}
+        <p class="hint bad">{stepVoxels.error}</p>
+      {:else if stepsShown && stepVoxels !== null && stepVoxels.index === stepIndex && (stepVoxels.stride ?? 1) > 1}
+        <p class="hint dim">表面のセル {stepVoxels.total?.toLocaleString()} 個のうち {stepVoxels.shown?.toLocaleString()} 個を間引いて描いている</p>
+      {/if}
+      <p class="hint dim">
+        {running
+          ? '押すと、走っている評価が終わった時点で探索を止め、選んだステップ(最新を追っていれば今の形)を完成化して結果を足す。'
+          : '選んだステップを、探索をやり直さずに完成化して、別の結果として足す。'}
+        ボクセルは平滑化する前の探索の形(表面のセルだけ)。
+      </p>
+    </div>
+  {/if}
+
   <!-- 消えない通知(次に走らせるまで残る)。 -->
   {#if notice !== null}
     <ul id="optimize-notice" class={notice.kind === 'bad' ? 'problems' : 'done dim'}>
@@ -317,5 +403,21 @@
 
   #optimize-resolution.invalid {
     border-color: var(--bad);
+  }
+
+  #optimize-steps {
+    margin-top: 8px;
+  }
+
+  #optimize-step {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  label.inline {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 0;
   }
 </style>

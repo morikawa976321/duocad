@@ -493,6 +493,17 @@ class Server:
                 await self._optimize_start(connection, message)
             elif command == "cancel_optimization":
                 await self._optimize_cancel(connection)
+            elif command == "finish_optimization":
+                await self._optimize_finish(connection, message)
+            elif command == "optimize_steps":
+                steps = self.session.steps_for_current()
+                await _send(connection, {
+                    "type": "optimize_steps",
+                    "steps": [] if steps is None else steps.meta(),
+                    "finishable": steps is not None and steps.finisher is not None,
+                })
+            elif command == "optimize_step_voxels":
+                await self._optimize_step_voxels(connection, message)
             # -------------------------------------------------- I: 計算の設定(verbではない。catalog にも MCP にも載せない。CuPy を読む(初回1秒前後)ので実行器で作る)
             elif command == "fem_get_status":
                 status = await asyncio.get_running_loop().run_in_executor(None, self._fem_status)
@@ -859,6 +870,8 @@ class Server:
                 kwargs["debug_kinds"] = kinds
         # 中断の旗を畳むのも文書を閉じるのもここ(イベントループのスレッド)で済ませる。ワーカースレッドの中で畳むと、走り出すまでに届いた中断が消える(issue #35)。
         self.session.begin_optimization()
+        # 前の実行のステップを、新しい実行が最初のステップを足すまで画面へ見せない(ステップは実行のスレッドが作り直す)。
+        self.session.optimization_steps = None
         self._optimize_last_progress = None
         await self._broadcast_optimize_status()
         task = asyncio.get_running_loop().create_task(self._optimize_run(kwargs))
@@ -872,7 +885,64 @@ class Server:
 
         task.add_done_callback(finished)
 
-    async def _optimize_run(self, kwargs: dict) -> None:
+    async def _optimize_finish(self, connection: Any, message: dict) -> None:
+        """「このステップで仕上げる」。走っている間は探索を止めてそのステップを仕上げるよう伝える(降りるのは次の候補を
+        作る前)。走っていなければ、いま開いている文書の直近の実行のステップを、探索をやり直さずに仕上げる(別タスク)。
+        `step` を省くと最新のステップ。"""
+        step = message.get("step")
+        step = None if step is None else int(step)
+        if self.session.optimization_visible:
+            self.session.request_finish(step)
+            await self._broadcast_optimize_status()
+            return
+        if self.session.optimizing:
+            await _send(connection, {
+                "type": "optimize_error",
+                "message": f"{self.session.optimizing_name or '別の文書'} で最適化が走っている(終わるのを待ってから)",
+                "already_running": True,
+            })
+            return
+        steps = self.session.steps_for_current()
+        count = 0 if steps is None else len(steps)
+        if steps is None or steps.finisher is None or count == 0:
+            await _send(connection, {"type": "optimize_error",
+                                     "message": "仕上げられるステップが無い(この文書で探索が合格した形を出していない)"})
+            return
+        index = count - 1 if step is None or step < 0 else step
+        if index >= count:
+            await _send(connection, {"type": "optimize_error", "message": f"ステップ {index} は無い(0〜{count - 1})"})
+            return
+        self.session.begin_optimization()
+        self.session.request_finish(index)  # 画面に「仕上げ中」と出すため(実行の後の仕上げはこの印を見ない)
+        self._optimize_last_progress = None
+        await self._broadcast_optimize_status()
+        task = asyncio.get_running_loop().create_task(self._optimize_run({}, finish_step=index))
+        self._pending_optimize_runs.add(task)
+
+        def finished(done: "asyncio.Task") -> None:
+            self._pending_optimize_runs.discard(done)
+            if not done.cancelled() and done.exception() is not None:
+                error = done.exception()
+                self.session.warnings.append(f"仕上げの後始末に失敗: {type(error).__name__}: {error}")
+
+        task.add_done_callback(finished)
+
+    async def _optimize_step_voxels(self, connection: Any, message: dict) -> None:
+        """ステップ1つの形(表面のセル)を返す。展開と表面の取り出しは数十ms〜かかるので実行器で作る。"""
+        index = message.get("index")
+        steps = self.session.steps_for_current()
+        if steps is None or not isinstance(index, int):
+            await _send(connection, {"type": "optimize_step_voxels", "index": index,
+                                     "error": "この文書の実行のステップが無い"})
+            return
+        try:
+            payload = await asyncio.to_thread(steps.voxels, index)
+        except IndexError as error:
+            await _send(connection, {"type": "optimize_step_voxels", "index": index, "error": str(error)})
+            return
+        await _send(connection, {"type": "optimize_step_voxels", **payload})
+
+    async def _optimize_run(self, kwargs: dict, finish_step: Optional[int] = None) -> None:
         """別スレッドで端から端まで回し、結果を配る。例外を握り潰さない。
 
         `optimize_run.run()` の例外文は「次に何をすればよいか」を持っている(`docs/contracts/ui-optimize-integration.md`「最適化の配線」)ので、
@@ -894,11 +964,12 @@ class Server:
             try:
                 if "debug_kinds" in kwargs:
                     kwargs["debug"] = self._optimize_debug
-                result = await asyncio.to_thread(
-                    functools.partial(
-                        self.session.run_optimization, progress=self._optimize_progress, **kwargs
-                    )
-                )
+                if finish_step is None:
+                    work = functools.partial(self.session.run_optimization, progress=self._optimize_progress, **kwargs)
+                else:
+                    work = functools.partial(self.session.finish_optimization_step, finish_step,
+                                             progress=self._optimize_progress)
+                result = await asyncio.to_thread(work)
                 result = self.session.deliver_optimization_result(result)
                 # 無題の文書の結果を別の文書を開いている間に届けたら、届け先は新しく名前を付けたファイル。
                 name = result.get("file", name)

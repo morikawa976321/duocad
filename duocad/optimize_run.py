@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import time
+import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
@@ -827,8 +828,15 @@ def run(
     should_cancel: Optional[Callable[[], bool]] = None,
     debug: Optional[Callable[[dict], None]] = None,
     debug_kinds: Optional[Any] = None,
+    steps: Optional[Any] = None,
+    finish_request: Optional[Callable[[], Optional[int]]] = None,
 ) -> dict:
-    """実製品の最適化を、成功・失敗・中断を含めて実行ごとに記録する。"""
+    """実製品の最適化を、成功・失敗・中断を含めて実行ごとに記録する。
+
+    `steps`(`optimize_steps.OptimizationSteps`)を渡すと探索の合格形をそこへ足し、探索の後に仕上げの手順を置く
+    (実行の後で別のステップを `finish_step` で仕上げられる)。`finish_request()` が `None` 以外(ステップの番号。
+    負なら最新)を返すと、探索を止めてそのステップを仕上げる(終了理由 `stopped_by_user`)。中断(`should_cancel`)が先。
+    """
     from .topopt import trace
 
     with trace.recording(doc, options or OptimizeOptions()) as recorder:
@@ -838,7 +846,40 @@ def run(
                 progress(dict(event, diagnostic_path=str(recorder.path)))
 
         result = _run(doc, options, progress=report, should_cancel=should_cancel,
-                      debug=debug, debug_kinds=debug_kinds)
+                      debug=debug, debug_kinds=debug_kinds, steps=steps, finish_request=finish_request)
+        result['diagnostic_path'] = str(recorder.path)
+        recorder.snapshot('result', result)
+        recorder.document(doc, 'document_after')
+        recorder.finish(result['state'])
+        return result
+
+
+def finish_step(
+    doc: "Document",
+    steps: Any,
+    index: int,
+    *,
+    progress: Optional[Callable[[dict], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> dict:
+    """終わった実行の `index` 番目のステップ(探索の合格形)を、探索をやり直さずに仕上げて `doc` に足す。
+
+    条件・格子・完成形検査の設定は、その実行のもの(`steps.finisher` が持つ)。戻り値は `run` と同じ形。
+    """
+    from .topopt import trace
+
+    if steps is None or steps.finisher is None:
+        raise OptimizeInputError("仕上げられるステップが無い(探索が合格した形を出す前に終わった実行か、まだ走っていない)")
+    count = len(steps)
+    if not 0 <= int(index) < count:
+        raise OptimizeInputError(f"ステップ {index} は無い(0〜{count - 1})")
+    with trace.recording(doc, OptimizeOptions()) as recorder:
+        def report(event):
+            recorder.snapshot('progress', event)
+            if progress is not None:
+                progress(dict(event, diagnostic_path=str(recorder.path)))
+
+        result = steps.finisher(doc, int(index), report, should_cancel)
         result['diagnostic_path'] = str(recorder.path)
         recorder.snapshot('result', result)
         recorder.document(doc, 'document_after')
@@ -854,6 +895,8 @@ def _run(
     should_cancel: Optional[Callable[[], bool]] = None,
     debug: Optional[Callable[[dict], None]] = None,
     debug_kinds: Optional[Any] = None,
+    steps: Optional[Any] = None,
+    finish_request: Optional[Callable[[], Optional[int]]] = None,
 ) -> dict:
     """入力条件 → 固定設計空間の導出(1回) → 全材料の評価とエネルギー順の削減 → 1×1 の空隙を埋めて6条件を取り直す
     (`thin_voids`)→ 最終確定マスクのメッシュ化 → 保持・除外のメッシュ集合演算 → メッシュボディとして文書へ
@@ -955,6 +998,8 @@ def _run(
     # 塊はここで1回だけ導出し、探索の全候補がこの `space` を使う。
     space = ds.derive(bundle.conditions, spacing=spacing)
     pump.check()
+    if steps is not None:
+        steps.grid = space.grid
     _require_design_elements_within_limit(space.element_count, float(space.grid.spacing))
     pump.emit(
         phase="derive",
@@ -1063,16 +1108,23 @@ def _run(
     pump.check()
 
     def on_evaluation(event: dict) -> None:
+        latest = steps.latest() if steps is not None and event.get("outcome") in ("initial", "accepted") else None
         pump.send(
             phase="search",
             message=_evaluation_message(
                 event, design_elements=int(space.element_count), factor=factor,
                 elapsed_seconds=time.perf_counter() - started),
             **event,
+            **({} if latest is None else {"step": latest}),
         )
 
+    def stop_requested() -> bool:
+        return bool(should_cancel is not None and should_cancel()) or (
+            finish_request is not None and finish_request() is not None)
+
     search_result = binary_search.find_best_feasible(
-        space.mask, conditions, is_cancelled=should_cancel, on_evaluation=on_evaluation, **search_kwargs
+        space.mask, conditions, is_cancelled=stop_requested, on_evaluation=on_evaluation,
+        on_accept=None if steps is None else steps.append, **search_kwargs
     )
     trace.snapshot(
         'search-result',
@@ -1085,9 +1137,14 @@ def _run(
         ),
     )
 
+    requested = None
     if search_result.termination == 'cancelled':
         # 中断時は製品文書へ勝手に結果を追加しない(best_feasible が見つかっていても。トレースには残した)。
-        raise OptimizeCancelled("形状探索を中断した")
+        requested = None if finish_request is None else finish_request()
+        if (should_cancel is not None and should_cancel()) or requested is None:
+            raise OptimizeCancelled("形状探索を中断した")
+        if search_result.status != 'feasible' or not search_result.accepted:
+            raise OptimizeCancelled("合格した形がまだ無いので、仕上げずに探索を止めた")
 
     if search_result.status != 'feasible':
         # `SearchResult.status` が 'feasible' 以外ならそのまま渡す(段階4の契約)。
@@ -1107,7 +1164,6 @@ def _run(
 
     best = search_result.best_feasible
     from .topopt import complete as completion
-    from .topopt import final_check
 
     def place(verts) -> List[float]:
         positions = _mesh_to_world(verts, space.grid)
@@ -1123,14 +1179,56 @@ def _run(
         anchor_soup=space.soup, emit=lambda phase, message: pump.emit(phase=phase, message=message),
         check=pump.check, place=place, search_status=search_result.status,
         search_termination=search_result.termination, passthrough=(OptimizeCancelled,))
-    done = completion.complete(best.mask, float(best.safety_factor), float(best.material_mm3), context)
+    accepted = list(search_result.accepted) or [binary_search.AcceptedShape.of(best)]
+    shared = dict(context=context, accepted=accepted, best=best, common=common,
+                  keep_room_warning=keep_room_warning, unrepresented=unrepresented, mapping=mapping, target=target,
+                  evaluations=int(search_result.evaluations))
+    if steps is not None:
+        steps.keep(len(accepted))
+
+        def finisher(target_doc, index, report, cancel) -> dict:
+            again = _ProgressPump(report, cancel)
+            ctx = dataclasses.replace(context, emit=lambda phase, message: again.emit(phase=phase, message=message),
+                                      check=again.check)
+            return _finish_shape(target_doc, index, dict(shared, context=ctx), pump=again,
+                                 dbg=_DebugSink(None, None), started=time.perf_counter(),
+                                 termination="finished_after_run", chosen_by_user=True)
+
+        steps.finisher = finisher
+    last = len(accepted) - 1
+    if requested is None or not 0 <= requested < last:
+        index = last
+    else:
+        index = int(requested)
+    return _finish_shape(doc, index, shared, pump=pump, dbg=dbg, started=started,
+                         termination="stopped_by_user" if requested is not None else search_result.termination,
+                         chosen_by_user=requested is not None)
+
+
+def _finish_shape(doc: "Document", index: int, shared: dict, *, pump: "_ProgressPump", dbg: "_DebugSink",
+                  started: float, termination: str, chosen_by_user: bool) -> dict:
+    """探索の合格形の列 `shared['accepted']` の `index` 番目を完成化し、完成形検査に割れば列をさかのぼり、通った形を
+    メッシュボディとして `doc` に足す(`run` の探索の後と、実行の後に選んだステップを仕上げる `finish_step` が使う)。"""
+    from .topopt import complete as completion
+    from .topopt import final_check
+
+    context, accepted, best = shared["context"], shared["accepted"], shared["best"]
+    common, keep_room_warning = shared["common"], shared["keep_room_warning"]
+    unrepresented, mapping, target = shared["unrepresented"], shared["mapping"], shared["target"]
+    space_grid = context.grid
+    last = len(accepted) - 1
+    if index == last:
+        done = completion.complete(best.mask, float(best.safety_factor), float(best.material_mm3), context)
+    else:
+        shape = accepted[index]
+        done = completion.complete(shape.mask(), float(shape.safety_factor), float(shape.material_mm3), context)
     backtrack_warning = ""
     backtrack_report = None
     if done.verdict in ("fail", "fill_infeasible"):
         # 完成形が本来の目標を割るか、空隙を埋めた形が6条件に落ちたら、探索の合格形をさかのぼって通る形を足す
         # (2026-10-11・12 本人決定)。通らなければ足さない(#129)
-        back = completion.backtrack(search_result.accepted, done, context)
-        steps_back = None if back.chosen_index is None else len(search_result.accepted) - 1 - back.chosen_index
+        back = completion.backtrack(accepted[:index + 1], done, context)
+        steps_back = None if back.chosen_index is None else index - back.chosen_index
         backtrack_report = dict(reason=back.reason, steps_back=steps_back, checks=back.checks,
                                 first_final_safety_factor=done.final_safety_factor,
                                 first_material_mm3=done.material_mm3)
@@ -1145,13 +1243,14 @@ def _run(
                                        completion.exhausted_note(back)),
                 unrepresented_regions=unrepresented,
                 boundary_mapping=mapping,
-                evaluations=int(search_result.evaluations),
-                termination=search_result.termination,
-            ), final_safety_factor=done.final_safety_factor, final_check=done.checked, backtrack=backtrack_report)
+                evaluations=shared["evaluations"],
+                termination=termination,
+            ), final_safety_factor=done.final_safety_factor, final_check=done.checked, backtrack=backtrack_report,
+                finished_step=index, steps=last + 1)
         backtrack_warning = completion.backtrack_message(done, back.chosen, steps_back, target)
         done = back.chosen
     # 最終確定マスク(0/1のbool)。`_DebugSink.rho` の閾値0.5はboolにも成り立つ。
-    dbg.rho("final", space.grid, done.mask)
+    dbg.rho("final", space_grid, done.mask)
     checked = done.checked
     final_sf = done.final_safety_factor
     final_warning = final_check.neck_warning(checked["neck"])
@@ -1160,10 +1259,12 @@ def _run(
     final_vertices, final_faces, surface = done.final_vertices, done.final_faces, done.surface
     positions = final_vertices.ravel().tolist()
     indices = final_faces.ravel().tolist()
-    trace.final_mesh(surface.verts_raw, surface.verts_smooth, surface.faces, space.grid,
+    from .topopt import trace
+    trace.final_mesh(surface.verts_raw, surface.verts_smooth, surface.faces, space_grid,
                      final_vertices=final_vertices, final_faces=final_faces)
 
-    name = _unique_result_name(doc)
+    # 名前の番号は画面と同じく 1 から(`index` は 0 から)。
+    name = _unique_result_name(doc, f"{RESULT_NAME}-step{index + 1}" if chosen_by_user else RESULT_NAME)
     pump.emit(phase="insert", message="保持・除外を反映した結果をメッシュボディとして足す")
     from .verbs import add_mesh_body
 
@@ -1188,8 +1289,10 @@ def _run(
         backtrack=backtrack_report,
         filled_cells=int(done.fill["cells"]),
         material_mm3=done.material_mm3,
-        evaluations=int(search_result.evaluations),
-        termination=search_result.termination,
+        evaluations=shared["evaluations"],
+        termination=termination,
+        finished_step=index,
+        steps=last + 1,
         triangle_count=len(indices) // 3,
         vertex_count=len(positions) // 3,
         seconds=time.perf_counter() - started,
@@ -1651,15 +1754,15 @@ def _check_mesh_placement(positions: List[float], grid) -> None:
         )
 
 
-def _unique_result_name(doc: "Document") -> str:
+def _unique_result_name(doc: "Document", base: str = RESULT_NAME) -> str:
     """`optimized` / `optimized-2` / ... (作るときに一意にする)。"""
     taken = {body.name for body in doc.bodies}
-    if RESULT_NAME not in taken:
-        return RESULT_NAME
+    if base not in taken:
+        return base
     index = 2
-    while f"{RESULT_NAME}-{index}" in taken:
+    while f"{base}-{index}" in taken:
         index += 1
-    return f"{RESULT_NAME}-{index}"
+    return f"{base}-{index}"
 
 
 # --------------------------------------------------------------------------------------

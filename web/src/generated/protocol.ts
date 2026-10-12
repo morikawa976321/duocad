@@ -60,6 +60,9 @@ export const COMMAND_CATEGORY = {
   optimize_resolution: 'protocol',
   run_optimization: 'protocol',
   cancel_optimization: 'protocol',
+  finish_optimization: 'protocol',
+  optimize_steps: 'protocol',
+  optimize_step_voxels: 'protocol',
   get_edges: 'protocol',
 } as const
 
@@ -123,6 +126,9 @@ export interface CommandArguments {
   optimize_resolution: { element_size_mm?: number }
   run_optimization: { element_size_mm?: number; target_safety_factor?: number; max_evaluations?: number }
   cancel_optimization: Record<string, never>
+  finish_optimization: Record<string, never>
+  optimize_steps: Record<string, never>
+  optimize_step_voxels: Record<string, never>
   get_edges: { body_id: string }
 }
 

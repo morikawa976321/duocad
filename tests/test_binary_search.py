@@ -1357,6 +1357,21 @@ def test_every_adopted_shape_is_kept_in_order_from_the_stage3_shape_to_the_best(
     assert all(a.material_mm3 >= b.material_mm3 for a, b in zip(accepted, accepted[1:]))
 
 
+def test_on_accept_hands_over_every_adopted_shape_in_order_before_its_evaluation_event():
+    """落ちたら、画面が切り替えて見るステップ(合格形)が欠けるか、`accepted` と順・中身がずれるか、評価の進捗より遅れて届く。"""
+    conditions, design, _ = appendage_conditions()
+    seen, order = [], []
+    result = bs.find_best_feasible(
+        design, conditions, max_evaluations=200,
+        on_accept=lambda shape, evaluation: (seen.append((shape, evaluation)), order.append(('accept', evaluation))),
+        on_evaluation=lambda event: order.append((event['outcome'], event['evaluation'])))
+    assert [shape for shape, _ in seen] == result.accepted
+    assert [evaluation for _, evaluation in seen] == sorted(evaluation for _, evaluation in seen)
+    for position, (kind, evaluation) in enumerate(order):
+        if kind in ('initial', 'accepted'):
+            assert order[position - 1] == ('accept', evaluation)
+
+
 def test_a_failed_final_region_recheck_ends_the_reduction_on_the_verified_stage3_shape(monkeypatch):
     conditions, design = partial_region_conditions()
     initial = bs.find_initial_feasible(design, conditions, max_evaluations=60)
