@@ -836,6 +836,7 @@ def run(
     `steps`(`optimize_steps.OptimizationSteps`)を渡すと探索の合格形をそこへ足し、探索の後に仕上げの手順を置く
     (実行の後で別のステップを `finish_step` で仕上げられる)。`finish_request()` が `None` 以外(ステップの番号。
     負なら最新)を返すと、探索を止めてそのステップを仕上げる(終了理由 `stopped_by_user`)。中断(`should_cancel`)が先。
+    探索が終わったら `finish_request(final=True)` を1回呼ぶ(呼び出し側はそれ以降の要求を受け付けない。`Session`)。
     """
     from .topopt import trace
 
@@ -1140,7 +1141,7 @@ def _run(
     )
 
     # 仕上げの要求は探索がどう終わっても読む(予算・枯渇で終わる直前に届いた要求を黙って捨てない)。
-    requested = None if finish_request is None else finish_request()
+    requested = None if finish_request is None else finish_request(final=True)
     if search_result.termination == 'cancelled':
         # 中断時は製品文書へ勝手に結果を追加しない(best_feasible が見つかっていても。トレースには残した)。
         if (should_cancel is not None and should_cancel()) or requested is None:

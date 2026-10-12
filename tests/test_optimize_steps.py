@@ -31,7 +31,7 @@ def test_a_finish_request_stops_the_search_and_finishes_the_chosen_step(session:
     steps = OptimizationSteps()
     events: list = []
     result = optimize_run.run(session.document, OPTIONS, steps=steps, progress=events.append,
-                              finish_request=lambda: 1 if len(steps) >= 3 else None)
+                              finish_request=lambda final=False: 1 if len(steps) >= 3 else None)
     assert result["state"] == "done" and result["termination"] == "stopped_by_user", result.get("warning")
     assert result["finished_step"] == 1 and result["name"] == "optimized-step2"
     assert result["steps"] == len(steps) == 3
@@ -68,9 +68,9 @@ def test_a_cancel_wins_over_a_finish_request_and_nothing_is_finished_before_a_fe
     steps = OptimizationSteps()
     with pytest.raises(optimize_run.OptimizeCancelled, match="中断"):
         optimize_run.run(session.document, OPTIONS, steps=steps, should_cancel=lambda: len(steps) >= 2,
-                         finish_request=lambda: -1 if len(steps) >= 2 else None)
+                         finish_request=lambda final=False: -1 if len(steps) >= 2 else None)
     with pytest.raises(optimize_run.OptimizeCancelled, match="合格した形がまだ無い"):
-        optimize_run.run(session.document, OPTIONS, steps=OptimizationSteps(), finish_request=lambda: -1)
+        optimize_run.run(session.document, OPTIONS, steps=OptimizationSteps(), finish_request=lambda final=False: -1)
     assert len(session.document.bodies) == before
 
 
@@ -78,7 +78,7 @@ def test_a_step_is_shown_by_its_surface_cells_only(session: Session) -> None:
     """落ちたら、ステップの形に内側のセルまで配って重くしているか、表面のセルが欠けている。"""
     four_conditions(session)
     steps = OptimizationSteps()
-    optimize_run.run(session.document, OPTIONS, steps=steps, finish_request=lambda: -1 if len(steps) >= 1 else None)
+    optimize_run.run(session.document, OPTIONS, steps=steps, finish_request=lambda final=False: -1 if len(steps) >= 1 else None)
     payload = steps.voxels(0)
     mask = steps.shapes()[0].mask()
     from scipy import ndimage
@@ -151,14 +151,14 @@ def test_a_finish_request_is_honoured_even_when_the_search_ends_on_its_own(sessi
 
     monkeypatch.setattr(binary_search, "find_best_feasible", deaf)
     steps = OptimizationSteps()
-    result = optimize_run.run(session.document, OPTIONS, steps=steps, finish_request=lambda: 1)
+    result = optimize_run.run(session.document, OPTIONS, steps=steps, finish_request=lambda final=False: 1)
     assert result["state"] == "done" and result["finished_step"] == 1 and result["name"] == "optimized-step2"
     assert result["termination"] != "stopped_by_user" and len(steps) > 2
     assert {row["run"] for row in steps.meta()} == {steps.run}
 
 
 def test_a_finish_after_the_search_has_ended_is_refused_without_clearing_the_running_view(session: Session) -> None:
-    """落ちたら、探索が終わって仕上げている最中の「このステップで仕上げる」を受け付けた顔をして黙って捨てている。"""
+    """落ちたら、実行が探索の後に要求を読み終えた後の「このステップで仕上げる」を受け付けたと答えて黙って捨てている。"""
 
     async def scenario() -> FakeConnection:
         server = Server(session)
@@ -166,11 +166,15 @@ def test_a_finish_after_the_search_has_ended_is_refused_without_clearing_the_run
         connection = FakeConnection()
         server.clients.add(connection)
         session.begin_optimization()
-        server._optimize_last_progress = {"type": "optimize_progress", "phase": "final_check", "message": ""}
+        assert session._read_finish_request() is None  # 探索の途中の読み取りでは閉じない
+        await server._dispatch(connection, json.dumps({"cmd": "finish_optimization", "step": 1}))
+        assert session._read_finish_request(final=True) == 1  # 探索の後の読み取りで閉じる
         await server._dispatch(connection, json.dumps({"cmd": "finish_optimization", "step": 0}))
         return connection
 
     connection = asyncio.run(scenario())
+    statuses = connection.of_type("optimize_status")
+    assert statuses and statuses[-1]["finishing"] is True
     [error] = connection.of_type("optimize_error")
     assert error["already_running"] is True and "探索はもう終わって" in error["message"]
-    assert session._finish_request is None
+    assert session._finish_request == 1  # 閉じた後の要求で書き換わらない

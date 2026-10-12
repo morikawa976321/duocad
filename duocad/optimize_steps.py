@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -23,8 +22,9 @@ class OptimizationSteps:
         self._shapes: list = []
         self._meta: list[dict] = []
         self._started = time.perf_counter()
-        #: 実行の識別子。一覧・進捗・形の各行に載せ、画面が前の実行の遅れた返事を取り違えないようにする。
-        self.run = uuid.uuid4().hex[:12]
+        #: 実行の識別子(作った時刻の16桁の16進。文字列の大小が新旧の順)。一覧・進捗・形の各行に載せ、画面が前の実行の
+        #: 遅れた返事を取り違えないようにする(別の接続への配信待ちで、前の実行の進捗が後から届くことがある)。
+        self.run = f"{time.time_ns():016x}"
         #: 探索の格子(`voxelize.Grid`)。`optimize_run` が塊を導出した直後に置く。
         self.grid: Any = None
         #: `finisher(doc, index, progress, should_cancel, debug, debug_kinds) -> dict`。探索が合格形を出して終わった後に

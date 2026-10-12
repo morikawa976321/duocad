@@ -147,6 +147,10 @@ class Session:
         #: 「探索を止めてこのステップを仕上げる」の要求(ステップの番号。負は最新。`None` は要求なし)。イベントループが書き、
         #: 実行のスレッドが読む(代入1回なので錠は要らない)。次の `begin_optimization` が畳む。
         self._finish_request: Optional[int] = None
+        #: 仕上げの要求を受け付けるか。実行のスレッドが探索の後に要求を最後に読むときに閉じる(`_read_finish_request`)。
+        #: 読んだ後に受け付けると、受け付けたと答えた要求が黙って捨てられる。要求と読み取りは `_finish_lock` で順に並べる。
+        self._finish_open = False
+        self._finish_lock = threading.Lock()
         #: 直近の実行の各ステップ(`optimize_steps.OptimizationSteps`)と、その実行の文書・ファイル名。実行の後も残し、
         #: 画面が切り替えて見て、選んだステップを `finish_optimization_step` で仕上げる。
         self.optimization_steps: Any = None
@@ -566,9 +570,26 @@ class Session:
         return {"cancelled": True}
 
     def request_finish(self, step: Optional[int] = None) -> dict:
-        """走っている探索を止めて、`step` 番目(省くと最新)のステップを仕上げるよう伝える(降りるのは次の候補を作る前)。"""
-        self._finish_request = -1 if step is None else int(step)
-        return {"finishing": True}
+        """走っている探索を止めて、`step` 番目(省くと最新)のステップを仕上げるよう伝える(降りるのは次の候補を作る前)。
+        探索が終わって要求を読み終えた後なら受け付けない(`{"finishing": False}`)。"""
+        with self._finish_lock:
+            if not self._finish_open:
+                return {"finishing": False}
+            self._finish_request = -1 if step is None else int(step)
+            return {"finishing": True}
+
+    def mark_finishing(self, step: int) -> None:
+        """実行の後の仕上げを始めた印(画面に「仕上げ中」と出す)。この仕上げは要求を読まないので、受け付けも閉じる。"""
+        with self._finish_lock:
+            self._finish_open = False
+            self._finish_request = int(step)
+
+    def _read_finish_request(self, final: bool = False) -> Optional[int]:
+        """実行のスレッドが仕上げの要求を読む。`final` で読んだら以後は受け付けない。"""
+        with self._finish_lock:
+            if final:
+                self._finish_open = False
+            return self._finish_request
 
     def steps_for_current(self) -> Any:
         """いま開いている文書の直近の実行のステップ(無ければ None)。同じオブジェクトか同じファイル名で判定する
@@ -626,7 +647,9 @@ class Session:
         if self._optimizing:
             raise ValueError("最適化が既に走っている(中断してから)")
         self._optimize_cancel.clear()
-        self._finish_request = None
+        with self._finish_lock:
+            self._finish_request = None
+            self._finish_open = True
         self._optimize_document = self.document
         self._optimize_name = self._current_name
         self._optimize_created = self._created
@@ -763,7 +786,7 @@ class Session:
                 debug=debug,
                 debug_kinds=debug_kinds,
                 steps=steps,
-                finish_request=lambda: self._finish_request,
+                finish_request=self._read_finish_request,
             )
             if owned:
                 result = self.deliver_optimization_result(result)

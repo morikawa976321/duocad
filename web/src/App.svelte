@@ -408,6 +408,8 @@
       optimizeProgress = event
       const step = event.step
       if (step === undefined) return
+      // 前の実行の進捗が後から届くことがある(別の接続への配信待ち)。識別子は新しいほど大きい(`optimize_steps.py`)。
+      if (step.run === searchStepsStaleRun || (searchStepsRun !== null && step.run < searchStepsRun)) return
       if (step.run !== searchStepsRun) {
         // 新しい実行の最初の進捗(前の実行の一覧が遅れて戻っていても、ここで切り替える)。
         searchSteps = []
@@ -421,7 +423,7 @@
     onOptimizeSteps: (steps, finishable) => {
       const run = steps[0]?.run ?? null
       // 新しい実行を始めた後に届いた、前の実行の一覧は捨てる。
-      if (run !== null && run === searchStepsStaleRun) return
+      if (run !== null && (run === searchStepsStaleRun || (searchStepsRun !== null && run < searchStepsRun))) return
       if (run !== searchStepsRun) {
         searchStepSelected = null
         searchStepVoxels = null
