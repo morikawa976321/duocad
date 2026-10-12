@@ -245,20 +245,46 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
         return True
 
     def descend(high: int, low: int) -> Optional[int]:
-        """`high` から `low` へ向かって安い段を通る形を探す(1, 2, 4, ... 手ずつ飛び、通った形の手前で飛ばした形を軽い側から見直す)。"""
-        step, passed_over, index = 1, high + 1, high
+        """`[low, high]` の中で安い段を通る、なるべく新しい(軽い)形。`high` から 1, 2, 4, ... 手ずつ飛んで通る形を探し、
+        その後で飛ばした区間を、通った形(見つからなければ `low`)に近い区間から見直す(区間の中は軽い側から。見つかった中で
+        最も新しい形を返す)。安い段の上限に達したら見直しをやめて、それまでに通った形を返す。通る形がまだ無いうちに達したら、
+        まだ見ていない最も新しい形を選り分けずに返す(高い段に任せる)。"""
+        if high < low:
+            return None
+        probes: list = []
+        found = None
+        index, step = high, 1
         while True:
             index = max(index, low)
-            if index >= passed_over:
-                return None
-            passed = screen_ok(index)
-            if passed or index == low:
-                # 飛ばした形を軽い側から見直す(下限まで来て落ちたときも)。
-                for between in range(passed_over - 1, index, -1):
-                    if screen_ok(between):
-                        return between
-                return index if passed else None
-            passed_over, index, step = index, index - step, step * 2
+            if counts['screens'] >= MAX_BACKTRACK_SCREENS and index not in screened:
+                return index
+            probes.append(index)
+            if screen_ok(index):
+                found = index
+                break
+            if index == low:
+                break
+            index, step = index - step, step * 2
+        best = found
+        # 飛ばした区間(隣り合う飛び先の間)。通った形・下限に近い区間から見る。
+        windows = [(probes[k] - 1, probes[k + 1] + 1) for k in range(len(probes) - 1)][::-1]
+        for top, bottom in windows:
+            for between in range(top, bottom - 1, -1):
+                if between in screened and screened[between] is None:
+                    continue
+                if counts['screens'] >= MAX_BACKTRACK_SCREENS and between not in screened:
+                    break
+                if screen_ok(between):
+                    best = between if best is None else max(best, between)
+                    break
+            else:
+                continue
+            if counts['screens'] >= MAX_BACKTRACK_SCREENS:
+                break
+        if best is not None:
+            return best
+        unseen = [i for i in range(high, low - 1, -1) if i not in screened]
+        return unseen[0] if unseen else None
 
     def guided(done: Completion, below: int) -> int:
         sf = done.final_safety_factor
@@ -291,7 +317,11 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
             record(probe, shape, None, 'full', f'{type(error).__name__}: {error}')
             done = None
         else:
-            record(probe, shape, done, 'full')
+            # 安い段の上限を超えて選り分けずに回した形が空隙埋めで落ちたら、高い段は走っていない(安い段として数える)。
+            cheap = product and done.fill_failure is not None
+            record(probe, shape, done, 'screen' if cheap else 'full')
+            if cheap:
+                screened[probe] = None
         if done is not None and done.verdict == 'pass':
             pass_lo, result.chosen, result.chosen_index = probe, done, probe
         else:

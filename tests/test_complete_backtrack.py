@@ -184,7 +184,22 @@ def test_shapes_whose_filled_voids_fail_are_skipped_by_the_cheap_stage_without_u
     result = complete.backtrack(accepted, failed, _context(), complete_shape=complete_shape, screen_shape=screen_shape)
     assert result.reason == 'passed' and result.chosen_index == 9 and full == [sfs[9]]
     assert sum(1 for row in result.checks if row['stage'] == 'full') == 1
-    assert len(screened) < 28 - 9  # 1手ずつ全部は見ていない(1, 2, 4, ... 手ずつ飛んでから見直す)
+    assert len(screened) <= (28 - 9) + 2  # 通った形より重い側は、飛び先のほかは見ない
+
+
+def test_a_shape_skipped_by_an_earlier_jump_is_still_found():
+    """落ちたら、飛んで探したときに前に飛ばした区間を見直さず、通る形があるのに何も出さない(sol の再現: 添字 2 だけが通る)。"""
+    sfs = [10.0, 9.0, 8.0, 7.0, 6.0, 5.0]
+    accepted = _accepted(sfs)
+    failed = complete.Completion(mask=accepted[-1].mask(), search_safety_factor=5.0, safety_factor=5.0,
+                                 material_mm3=59.0, fill=dict(cells=3), fill_failure="埋めた形が6条件に不合格")
+    screen_shape, _ = _screened_by({8.0})
+
+    def complete_shape(mask, search_sf, material, ctx):
+        return _completion(mask, search_sf, material, 3.0, 'pass')
+
+    result = complete.backtrack(accepted, failed, _context(), complete_shape=complete_shape, screen_shape=screen_shape)
+    assert result.reason == 'passed' and result.chosen_index == 2
 
 
 def test_the_cheap_stage_falls_back_to_full_checks_when_its_budget_runs_out(monkeypatch):
