@@ -186,7 +186,7 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
     while len(result.checks) < MAX_BACKTRACK_CHECKS:
         ctx.check()
         shape = accepted[probe]
-        ctx.emit('backtrack', f"完成形が目標を割ったので、探索を {last - probe} 手戻した形(探索の安全率 "
+        ctx.emit('backtrack', f"{_why(failed)}ので、探索を {last - probe} 手戻した形(探索の安全率 "
                               f"{shape.safety_factor:.4g})で作り直して検査する({len(result.checks) + 1}/{MAX_BACKTRACK_CHECKS})")
         try:
             done = complete_shape(shape.mask(), shape.safety_factor, shape.material_mm3, ctx)
@@ -228,7 +228,9 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
 def backtrack_message(failed: Completion, chosen: Completion, steps_back: int, target_safety_factor: float) -> str:
     """戻した形を足すときの warning の一文。"""
     added = (chosen.material_mm3 / failed.material_mm3 - 1.0) * 100.0 if failed.material_mm3 > 0 else float('nan')
-    return (f"探索の最終形は完成形の安全率 {failed.final_safety_factor:.4g} で目標 {target_safety_factor:.4g} を割ったので、"
+    why = ("空隙を埋めた形が6条件に落ちた" if failed.fill_failure is not None else
+           f"完成形の安全率 {failed.final_safety_factor:.4g} で目標 {target_safety_factor:.4g} を割った")
+    return (f"探索の最終形は{why}ので、"
             f"探索を {steps_back} 手戻した形を足した(材料 {added:+.1f}%、完成形の安全率 {chosen.final_safety_factor:.4g})")
 
 
@@ -238,4 +240,16 @@ def exhausted_note(result: Backtrack) -> str:
         return ''
     deepest = max(row['steps_back'] for row in result.checks)
     where = '最初の形まで' if result.reason == 'exhausted' else f"最大 {deepest} 手まで"
-    return f"探索の合格形を{where}さかのぼって {len(result.checks)} 形を検査したが、どれも目標を割った"
+    reasons = {row['verdict'] for row in result.checks}
+    failed = '・'.join(text for verdict, text in _VERDICT_TEXT if verdict in reasons) or '通らなかった'
+    return f"探索の合格形を{where}さかのぼって {len(result.checks)} 形を検査したが、どれも通らなかった({failed})"
+
+
+#: さかのぼった形が通らなかった理由の書き方(`Backtrack.checks` の `verdict`)。
+_VERDICT_TEXT = (('fail', '完成形検査で目標を割った'), ('fill_infeasible', '空隙を埋めた形が6条件に落ちた'),
+                 ('unknown', '完成形の安全率を測れなかった'), ('error', '作り直しに失敗した'))
+
+
+def _why(failed: Completion) -> str:
+    """さかのぼり始めた理由(進捗の文面)。"""
+    return "空隙を埋めた形が6条件に落ちた" if failed.fill_failure is not None else "完成形が目標を割った"

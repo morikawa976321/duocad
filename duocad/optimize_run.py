@@ -1046,8 +1046,7 @@ def _run(
     common["anchor_check"] = anchor_check
     dbg.anchors("mapping", space, table=table)
 
-    conditions = _build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping,
-                                          min_width_mm=float(min_width["requested_mm"]))
+    conditions = _build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
     search_kwargs: Dict[str, Any] = {}
     if opts.max_evaluations is not None:
         search_kwargs["max_evaluations"] = int(opts.max_evaluations)
@@ -1125,34 +1124,25 @@ def _run(
         check=pump.check, place=place, search_status=search_result.status,
         search_termination=search_result.termination, passthrough=(OptimizeCancelled,))
     done = completion.complete(best.mask, float(best.safety_factor), float(best.material_mm3), context)
-    if done.fill_failure is not None:
-        return _not_done(
-            common,
-            started,
-            keep_room_warning,
-            state="fill_infeasible",
-            warning=done.fill_failure,
-            unrepresented_regions=unrepresented,
-            boundary_mapping=mapping,
-            evaluations=int(search_result.evaluations),
-            termination=search_result.termination,
-        )
     backtrack_warning = ""
     backtrack_report = None
-    if done.verdict == "fail":
-        # 完成形が本来の目標を割ったら、探索の合格形をさかのぼって通る形を足す(2026-10-11 本人決定)。通らなければ足さない(#129)
+    if done.verdict in ("fail", "fill_infeasible"):
+        # 完成形が本来の目標を割るか、空隙を埋めた形が6条件に落ちたら、探索の合格形をさかのぼって通る形を足す
+        # (2026-10-11・12 本人決定)。通らなければ足さない(#129)
         back = completion.backtrack(search_result.accepted, done, context)
         steps_back = None if back.chosen_index is None else len(search_result.accepted) - 1 - back.chosen_index
         backtrack_report = dict(reason=back.reason, steps_back=steps_back, checks=back.checks,
                                 first_final_safety_factor=done.final_safety_factor,
                                 first_material_mm3=done.material_mm3)
         if back.chosen is None:
+            unsafe = done.verdict == "fail"
             return dict(_not_done(
                 common,
                 started,
                 keep_room_warning,
-                state="final_unsafe",
-                warning=_join_warnings(completion.shortfall_message(done, target), completion.exhausted_note(back)),
+                state="final_unsafe" if unsafe else "fill_infeasible",
+                warning=_join_warnings(completion.shortfall_message(done, target) if unsafe else done.fill_failure,
+                                       completion.exhausted_note(back)),
                 unrepresented_regions=unrepresented,
                 boundary_mapping=mapping,
                 evaluations=int(search_result.evaluations),
@@ -1425,16 +1415,14 @@ def _map_boundary_conditions(space, bundle: ConditionBundle) -> tuple:
 
 
 def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
-                             opts: OptimizeOptions, *, table=None, mapping=None,
-                             min_width_mm: Optional[float] = None) -> Any:
+                             opts: OptimizeOptions, *, table=None, mapping=None) -> Any:
     """`DesignSpace` と `ConditionBundle` から `binary_search.SearchConditions` を組み立てる。
 
     `table` を省くとここで確定表を作る(検査・CLIがこの関数だけを呼んでも製品と同じ入口検査を通る)。
     `preserves`/`excludes` は `(name, shape)` の対(`acceptance.inspect_document` と同じ形)。
     `bbox_cache=doc.bbox_cache` は `_condition_boxes` と同じ理由。探索の目標は実際の目標 × `opts.search_target_factor`
     で、係数を掛けるのはここ1か所(測定は `search_target_factor=1.0` で固定)。安全率の代表応力は部材域の固定物理体積の
-    上位値で、許す超過体積 V = (最小幅 × `stress.MEMBER_VOLUME_WIDTH_RATIO`)³(最小幅は `min_width_mm`、
-    省くと `opts.min_width_mm` を `_resolve_min_width` に通した値)。
+    上位値で、許す超過体積 V = 探索格子の要素 `stress.MEMBER_VOLUME_CELLS` 個分。
     """
     from .topopt import binary_search, stress
 
@@ -1442,8 +1430,6 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
         table, mapping = _map_boundary_conditions(space, bundle)
     preserves = tuple((bid, doc.get_body(bid).shape) for bid in bundle.keep_body_ids)
     excludes = tuple((bid, doc.get_body(bid).shape) for bid in bundle.exclude_body_ids)
-    if min_width_mm is None:
-        min_width_mm = float(_resolve_min_width(space.grid.spacing, opts.min_width_mm)["requested_mm"])
     return binary_search.SearchConditions(
         grid=space.grid,
         table=table,
@@ -1456,7 +1442,7 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
         bbox_cache=doc.bbox_cache,
         mapping=mapping,
         keep_cells=space.keep,
-        member_volume_mm3=(float(min_width_mm) * stress.MEMBER_VOLUME_WIDTH_RATIO) ** 3,
+        member_volume_mm3=stress.MEMBER_VOLUME_CELLS * float(space.grid.element_volume),
     )
 
 

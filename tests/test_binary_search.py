@@ -1050,8 +1050,8 @@ def _full_material_safety_factor():
     return bs.find_initial_feasible(design, conditions).best_feasible.safety_factor
 
 
-def test_the_reduction_stops_at_the_first_adopted_shape_within_the_target_tolerance():
-    """落ちたら、目標の許容内に入った合格形状からさらに候補を評価している、または許容の外で止まっている。"""
+def test_within_the_target_tolerance_the_reduction_stops_at_the_first_single_cell_safety_failure():
+    """落ちたら、許容に入っただけで止めている(V が小さいと削れる材料を残して止まる)か、許容内で1セルが安全率で落ちても続けている。"""
     conditions, design, _ = appendage_conditions(target_safety_factor=_full_material_safety_factor() / 2)
     limit = conditions.target_safety_factor * 1.25
     stopped = bs.find_best_feasible(design, conditions, max_evaluations=400, target_tolerance=.25)
@@ -1059,23 +1059,20 @@ def test_the_reduction_stops_at_the_first_adopted_shape_within_the_target_tolera
     assert stopped.termination == 'converged' and reduction['stop_reason'] == 'within_target_tolerance'
     assert reduction['target_tolerance'] == .25
     assert conditions.target_safety_factor <= stopped.best_feasible.safety_factor <= limit
-    assert all(step['safety_factor_before'] > limit for step in reduction['steps'])
-    assert reduction['steps'][-1]['outcome'] == 'accepted'
+    last = reduction['steps'][-1]
+    assert last['outcome'] == 'rejected' and last['failed'] == ['safety'] and last['peel']['picked'] == 1
+    assert last['safety_factor_before'] <= limit
     unlimited = bs.find_best_feasible(design, conditions, max_evaluations=400, target_tolerance=None)
-    assert unlimited.diagnostics['reduction']['stop_reason'] == 'no_removable_cell'
-    assert [trial.mask_hash for trial in unlimited.history[:len(stopped.history)]] == [
-        trial.mask_hash for trial in stopped.history]
-    assert unlimited.best_feasible.mask.sum() < stopped.best_feasible.mask.sum()
+    assert unlimited.best_feasible.mask.sum() <= stopped.best_feasible.mask.sum()
 
 
-def test_a_starting_shape_within_the_target_tolerance_converges_without_a_candidate_even_when_the_budget_is_spent():
-    """落ちたら、許容内の出発形状から候補を作っている、または予算切れを許容内の収束より先に報告している。"""
+def test_a_starting_shape_within_the_target_tolerance_is_still_reduced():
+    """落ちたら、出発形状(全材料)が許容内というだけで、削れる材料を残したまま全材料で止まっている。"""
     conditions, design, _ = appendage_conditions(target_safety_factor=_full_material_safety_factor() / 1.1)
-    result = bs.find_best_feasible(design, conditions, max_evaluations=1, target_tolerance=.25)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, target_tolerance=.25)
     reduction = result.diagnostics['reduction']
-    assert result.termination == 'converged' and reduction['stop_reason'] == 'within_target_tolerance'
-    assert result.evaluations == 1 and reduction['steps'] == [] and reduction['peel_calls'] == 0
-    assert result.best_feasible.mask.sum() == design.sum()
+    assert result.termination == 'converged' and reduction['steps']
+    assert result.best_feasible.mask.sum() < design.sum()
 
 
 def test_on_evaluation_reports_the_start_and_every_counted_candidate_including_the_one_that_stops_the_search(monkeypatch):

@@ -24,10 +24,11 @@ from . import fem
 # そこで安全率が決まると解像度を上げるほど安全率が下がり続ける(docs/TOPOPT.md「代表応力の規則」)。
 DEFAULT_RHO_MIN = 0.5
 DEFAULT_PERCENTILE = 99.5
-#: 部材域の規則で許す超過体積 V の一辺 = 最小幅 × これ(V = (最小幅 × これ)³)。最小幅に結びつけるのは「最小幅より細かい形は
-#: 探索が作れない」という意味づけで、強度上の根拠ではない。0.5 は小型でピークを少し抑えるが hanger 1000N を入口で断った
-#: (docs/TOPOPT_STRESS_GATE_DILUTION.md 6・10章)。
-MEMBER_VOLUME_WIDTH_RATIO = 1.0
+#: 部材域の規則で許す超過体積 V = 探索格子の要素これ個分(本人決定 2026-10-12)。V = 最小幅³ では付け根の局所集中が探索に
+#: 見えず、hanger 60・120・180N は3荷重とも完成形検査で割ってさかのぼりに頼った。1 個では3荷重とも最終形がそのまま通り、
+#: 材料は −0.1〜−9.8%(docs/TOPOPT_PEAK_GATE.md 4-16・4-17)。V が小さいと安全率が最も熱い1要素で決まり目標の近くに
+#: 張り付くので、段階4を安全率の帯で止めると削れる材料を残す(docs/TOPOPT_STOPPING.md 2節)。
+MEMBER_VOLUME_CELLS = 1
 
 def strain_displacement_center(element_size: float = 1.0) -> np.ndarray:
     """要素**中心**(xi=eta=zeta=0)での B 行列 (6,24)。

@@ -1644,7 +1644,7 @@ def test_a_finished_shape_below_the_target_is_replaced_by_an_earlier_search_shap
     seen = _final_check_by_material(monkeypatch, passes_from_cells=10 ** 9)
     first = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
     assert first["state"] == "final_unsafe" and first["body_id"] is None and len(session.document.bodies) == before
-    assert first["backtrack"]["reason"] == "exhausted" and "どれも目標を割った" in first["warning"]
+    assert first["backtrack"]["reason"] == "exhausted" and "どれも通らなかった(完成形検査で目標を割った)" in first["warning"]
     full = max(seen)
     seen.clear()
     _final_check_by_material(monkeypatch, passes_from_cells=full - 2)  # 2手以上戻せば通る

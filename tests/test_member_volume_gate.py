@@ -92,18 +92,18 @@ def test_the_search_conditions_carry_the_member_rule_into_the_inspection_and_the
     bundle = optimize_run.build_conditions(doc)
     from duocad.topopt import design_space
     space = design_space.derive(bundle.conditions, spacing=8.0)
-    conditions = optimize_run._build_search_conditions(doc, space, bundle, optimize_run.OptimizeOptions(element_size_mm=8.0),
-                                                       min_width_mm=16.0)
-    assert conditions.member_volume_mm3 == 16.0 ** 3
+    conditions = optimize_run._build_search_conditions(doc, space, bundle, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    volume = stress.MEMBER_VOLUME_CELLS * space.grid.element_volume
+    assert conditions.member_volume_mm3 == volume
     kwargs = conditions.inspect_kwargs()
-    assert kwargs['member_volume_mm3'] == 16.0 ** 3 and kwargs['keep_cells'] is conditions.keep_cells
-    other = binary_search.replace(conditions, member_volume_mm3=8.0 ** 3)
+    assert kwargs['member_volume_mm3'] == volume and kwargs['keep_cells'] is conditions.keep_cells
+    other = binary_search.replace(conditions, member_volume_mm3=2 * volume)
     assert binary_search.evaluation_identifier(other) != binary_search.evaluation_identifier(conditions)
     legacy = binary_search.replace(conditions, member_volume_mm3=None)
     assert 'member_volume_mm3' not in legacy.inspect_kwargs()
-    requested = optimize_run._build_search_conditions(
+    wide = optimize_run._build_search_conditions(
         doc, space, bundle, optimize_run.OptimizeOptions(element_size_mm=8.0, min_width_mm=24.0))
-    assert requested.member_volume_mm3 == 24.0 ** 3  # 引数を省いたら利用者の要求した最小幅
+    assert wide.member_volume_mm3 == volume  # V は探索格子の要素で決まり、最小幅に依らない
 
 
 def test_the_member_rule_goes_through_representative_stress_so_it_can_be_replaced(monkeypatch):

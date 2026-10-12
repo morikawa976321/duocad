@@ -544,14 +544,15 @@ DEFAULT_STEP_EXPONENT = 0.5
 DEFAULT_MAX_STEP_RATIO = 0.2
 #: 削る順位に使うエネルギーをならす近傍の一辺(セル)。3 は自身と26近傍の材料平均。
 ENERGY_FILTER_SIZE = 3
-#: 削ったセルが1つで安全率が落ちたとき、順位から外して次のセルを試すのを、採用を挟まず何セル続けたら収束とみなすか
-#: (`None` は順位が尽きるまで)。**8 は本人判断(2026-09-24)で、実測で決めていない。** 旧規則(外したセルを採用のたびに順位へ戻す)で
-#: hanger 4.8mm の 1・4・16・無制限を測り 16 に決めた(docs/TOPOPT.md「段階4: ひずみエネルギーの順位で削る」)。現行規則
-#: (`_reduce_volume` の `poison`)は同じセルを二度数えないので、同じ値でも意味が変わる。
-DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = 8
-#: 合格形状の安全率が 目標 × (1 + これ) 以下になったら収束とみなす(`None` は見ない)。割合なのは r が 目標/安全率 だけで決まるから。
-#: 実測(製品経路 1.87mm): 目標の +0.13% に入った後の FEM 81 回で減ったのは 0.27%(docs/TOPOPT.md「段階4: ひずみエネルギーの順位で削る」。0.01 は本人判断)。
-DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
+#: 削ったセルが1つで安全率が落ちたとき、順位から外して次のセルを試すのを、採用を挟まず何セル続けたら止めるか(`None` は順位が
+#: 尽きるまで)。既定は `None`(本人決定 2026-10-12): 不合格の続きは削り切ったことの証拠にならない(dilution 180N・V=1セルで
+#: 8 は評価 154・材料 +6.5% で発火し、尽きたのは評価 682。docs/TOPOPT_STOPPING.md 3節)。止める時点だけを決めて道を変えないので、
+#: 値を振る実験のつまみとして残す。
+DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = None
+#: 合格形状の安全率が 目標 × (1 + これ) 以下の間に1セルの手が安全率で落ちたら止める(`None` は見ない)。既定は `None`(本人決定
+#: 2026-10-12): V = 1 セルでは安全率が最も熱い1要素で決まり目標の近くに張り付くので、帯は削り切ったことの証拠にならない
+#: (dilution 120N で評価 14 に帯に入り、そこから材料を 18,536 → 12,664 mm³ まで削れた。docs/TOPOPT_STOPPING.md 2節)。つまみとして残す。
+DEFAULT_TARGET_TOLERANCE: Optional[float] = None
 #: 安全率の**評価が落ちた**(`checks['safety']` が `unknown` かつ `reason='evaluation_error'`)候補が何回続いたら段階4を打ち切るか
 #: (`None` は見ない)。`fail` や `prerequisites_failed` とは別に数える(こちらは判定そのものが出ていない)。
 #: **4 は実測で決めていない暫定値**(2026-09-24)。1候補の求解に 35 秒かかる実測がある。
@@ -1091,11 +1092,13 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     外したときの合格形状の安全率と不足分 `目標 − 候補の安全率` を覚え、その後の合格形状の安全率が不足分以上に上がった
     セルだけ順位へ戻す(代表応力がパーセンタイルなので削るほど安全率が上がることがある)。安全率以外で落ちた1セルは
     その形状の間だけ外す。
-    停止: 安全率で落ちたセルが採用を挟まず `single_cell_patience` 個に達したら `safety_at_single_cell` で `converged`。
-    **評価が落ちた候補**(`checks['safety']` が `unknown` かつ `reason='evaluation_error'`。`prerequisites_failed` は
-    形状の不合格なので入らない)が採用を挟まず `evaluation_error_patience` 回続いたら `repeated_evaluation_error` で
-    `evaluation_error`(合格形状は返す)。1セルも抜けなければ `converged`(`no_removable_cell`)。合格形状の安全率が
-    `目標 × (1 + target_tolerance)` 以下なら `converged`(`within_target_tolerance`。出発形状にも当てはめ、予算切れ・中断より先に見る)。
+    停止: 順位を歩いて1セルも抜けなければ `converged`(`no_removable_cell`)。既定ではこれだけが収束で、ほかは
+    評価予算(`evaluation_limit`)・中断(`cancelled`)と、**評価が落ちた候補**(`checks['safety']` が `unknown` かつ
+    `reason='evaluation_error'`。`prerequisites_failed` は形状の不合格なので入らない)が採用を挟まず
+    `evaluation_error_patience` 回続いたときの `evaluation_error`(`repeated_evaluation_error`。合格形状は返す)。
+    つまみ(既定 `None`): 安全率で落ちたセルが採用を挟まず `single_cell_patience` 個に達したら `safety_at_single_cell` で
+    `converged`。合格形状の安全率が `目標 × (1 + target_tolerance)` 以下の間に1セルの手が安全率で落ちたら
+    `within_target_tolerance` で `converged`。どちらも止める時点だけを決め、道を変えない。
     止まった理由は `diagnostics['reduction']['stop_reason']`、試行ごとの記録は `['steps']`、検算で落ちた候補は
     `['geometry_rejections']`、外したままのセル数と順位へ戻した回数は `['poison_cells']` / `['poison_released']`。
 
@@ -1204,9 +1207,6 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     peak_streak = 0
     error_streak = 0
     while True:
-        if target_tolerance is not None and best.safety_factor <= target * (1.0 + target_tolerance):
-            reduction['stop_reason'] = 'within_target_tolerance'
-            return result('converged')
         if evaluations >= max_evaluations:
             return result('evaluation_limit')
         if is_cancelled is not None and is_cancelled():
@@ -1312,6 +1312,9 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                 multiplier /= 2.0
             else:
                 if safety_failed:
+                    if target_tolerance is not None and best.safety_factor <= target * (1.0 + target_tolerance):
+                        reduction['stop_reason'] = 'within_target_tolerance'
+                        return result('converged')
                     safety_streak += 1
                     if single_cell_patience is not None and safety_streak >= single_cell_patience:
                         reduction['stop_reason'] = 'safety_at_single_cell'
