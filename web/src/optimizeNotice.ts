@@ -15,7 +15,11 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
     // 言い直しを重ねず「文書は変わっていない」だけ添える。
     return {
       kind: 'bad',
-      lines: [result.warning ?? '結果を作れなかった', '文書は1ビットも変わっていない(結果のボディは足していない)'],
+      lines: [
+        ...finishedStepLines(result),
+        result.warning ?? '結果を作れなかった',
+        '文書は1ビットも変わっていない(結果のボディは足していない)',
+      ],
     }
   }
   const short = (value: number): string => String(Number(value.toPrecision(3)))
@@ -41,6 +45,7 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
       `結果を「${result.name}」として足した(三角形 ${result.triangle_count} 枚 ・ ` +
         `安全率 ${finalSafety} ・ 体積 ${material}mm^3 ・ 評価 ${result.evaluations}回 ・ ` +
         `終了理由 ${result.termination ?? '—'} ・ ${Math.round(result.seconds)}秒)`,
+      ...finishedStepLines(result),
       `安全率の${searched}`,
       minWidth,
       ...neckLines(result.final_check?.neck ?? null),
@@ -48,6 +53,16 @@ export function optimizeNoticeFor(result: OptimizeResultPayload): OptimizeNotice
       ...(result.warning ? [result.warning] : []),
     ],
   }
+}
+
+/** 利用者が選んだステップを仕上げた結果なら、その番号の行(画面の番号は 1 から。`finished_step` は 0 から)。 */
+function finishedStepLines(result: OptimizeResultPayload): string[] {
+  if (result.finished_step === undefined || result.steps === undefined) return []
+  if (result.termination === 'stopped_by_user')
+    return [`探索を止めて、ステップ ${result.finished_step + 1} / ${result.steps} を仕上げた`]
+  if (result.termination === 'finished_after_run')
+    return [`実行の後に選んだステップ ${result.finished_step + 1} / ${result.steps} を、探索をやり直さずに仕上げた`]
+  return []
 }
 
 /**

@@ -99,6 +99,13 @@ def _edits_document(method: Any) -> Any:
 #: (載せてよい条件は `catalog.Command.previewable`)。
 PREVIEWABLE_VERBS: dict = catalog.previewable_verbs()
 
+
+def _tagged(progress: Any, steps: Any) -> Any:
+    """進捗の各行に実行の識別子 `run` を付ける(画面は後から届いた前の実行の進捗を、表示を変える前に捨てる)。"""
+    if progress is None or steps is None:
+        return progress
+    return lambda event: progress(dict(event, run=steps.run))
+
 class Session:
     """1つの文書を持つサーバ側の状態。WebSocketの接続とは独立(接続が切れても文書は残る)。"""
 
@@ -144,6 +151,18 @@ class Session:
         self._suppress_events = 0  # >0 の間は `_emit` が配らない(プレビュー。`preview` 参照)
         #: 形状最適化の中断の旗。別スレッド(実行はワーカー、`cancel_optimization` はイベントループ)から触るので `Event`。
         self._optimize_cancel = threading.Event()
+        #: 「探索を止めてこのステップを仕上げる」の要求(ステップの番号。負は最新。`None` は要求なし)。イベントループが書き、
+        #: 実行のスレッドが読む(代入1回なので錠は要らない)。次の `begin_optimization` が畳む。
+        self._finish_request: Optional[int] = None
+        #: 仕上げの要求を受け付けるか。実行のスレッドが探索の後に要求を最後に読むときに閉じる(`_read_finish_request`)。
+        #: 読んだ後に受け付けると、受け付けたと答えた要求が黙って捨てられる。要求と読み取りは `_finish_lock` で順に並べる。
+        self._finish_open = False
+        self._finish_lock = threading.Lock()
+        #: 直近の実行の各ステップ(`optimize_steps.OptimizationSteps`)と、その実行の文書・ファイル名。実行の後も残し、
+        #: 画面が切り替えて見て、選んだステップを `finish_optimization_step` で仕上げる。
+        self.optimization_steps: Any = None
+        self._steps_document: Optional[Document] = None
+        self._steps_name: Optional[str] = None
         #: 形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。立っている間は走らせている文書だけを変える操作を断る
         #: (`_edits_document` / `_document_locked`)。イベントループのスレッドだけが書く。
         self._optimizing = False
@@ -557,6 +576,39 @@ class Session:
         self._optimize_cancel.set()
         return {"cancelled": True}
 
+    def request_finish(self, step: Optional[int] = None) -> dict:
+        """走っている探索を止めて、`step` 番目(省くと最新)のステップを仕上げるよう伝える(降りるのは次の候補を作る前)。
+        探索が終わって要求を読み終えた後なら受け付けない(`{"finishing": False}`)。"""
+        with self._finish_lock:
+            if not self._finish_open:
+                return {"finishing": False}
+            self._finish_request = -1 if step is None else int(step)
+            return {"finishing": True}
+
+    def mark_finishing(self, step: int) -> None:
+        """実行の後の仕上げを始めた印(画面に「仕上げ中」と出す)。この仕上げは要求を読まないので、受け付けも閉じる。"""
+        with self._finish_lock:
+            self._finish_open = False
+            self._finish_request = int(step)
+
+    def _read_finish_request(self, final: bool = False) -> Optional[int]:
+        """実行のスレッドが仕上げの要求を読む。`final` で読んだら以後は受け付けない。"""
+        with self._finish_lock:
+            if final:
+                self._finish_open = False
+            return self._finish_request
+
+    def steps_for_current(self) -> Any:
+        """いま開いている文書の直近の実行のステップ(無ければ None)。同じオブジェクトか同じファイル名で判定する
+        (`_document_locked` と同じ理由)。"""
+        if self.optimization_steps is None:
+            return None
+        if self.document is self._steps_document:
+            return self.optimization_steps
+        if self._steps_name is not None and self._current_name == self._steps_name:
+            return self.optimization_steps
+        return None
+
     @property
     def optimizing(self) -> bool:
         """形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。どの文書でかは問わない(同時に走るのは1本だけ。docs/TOPOPT.md)。"""
@@ -591,6 +643,8 @@ class Session:
         status: dict = {"running": visible}
         if visible and self._optimize_cancel.is_set():
             status["cancelling"] = True
+        if visible and self._finish_request is not None:
+            status["finishing"] = True
         return status
 
     def begin_optimization(self) -> None:
@@ -600,6 +654,9 @@ class Session:
         if self._optimizing:
             raise ValueError("最適化が既に走っている(中断してから)")
         self._optimize_cancel.clear()
+        with self._finish_lock:
+            self._finish_request = None
+            self._finish_open = True
         self._optimize_document = self.document
         self._optimize_name = self._current_name
         self._optimize_created = self._created
@@ -722,15 +779,44 @@ class Session:
         if owned:
             self.begin_optimization()
         try:
+            from .optimize_steps import OptimizationSteps
+
+            steps = OptimizationSteps()
+            self.optimization_steps = steps
+            self._steps_document, self._steps_name = self._optimize_document, self._optimize_name
             # **今の文書ではなく、開始時に控えた文書を解く**(途中で別の文書へ切り替えてもよい)。
             result = optimize_run.run(
                 self._optimize_document,
                 options,
-                progress=progress,
+                progress=_tagged(progress, steps),
                 should_cancel=self._optimize_cancel.is_set,
                 debug=debug,
                 debug_kinds=debug_kinds,
+                steps=steps,
+                finish_request=self._read_finish_request,
             )
+            if owned:
+                result = self.deliver_optimization_result(result)
+        finally:
+            if owned:
+                self.end_optimization()
+        return result
+
+    def finish_optimization_step(self, step: int, *, progress: Any = None, debug: Any = None,
+                                 debug_kinds: Any = None) -> dict:
+        """直近の実行の `step` 番目のステップを、探索をやり直さずに仕上げて結果を足す(`optimize_run.finish_step`)。
+
+        `run_optimization` と同じく重いので別スレッドで回し、呼び出し側が `begin_optimization` を済ませていなければここで囲む。
+        仕上げる先は開始時に控えた文書(いま開いている文書が直近の実行の文書であることは `net/ws.py` が確かめる)。
+        """
+        steps = self.optimization_steps
+        owned = not self._optimizing
+        if owned:
+            self.begin_optimization()
+        try:
+            result = optimize_run.finish_step(self._optimize_document, steps, int(step), progress=_tagged(progress, steps),
+                                              should_cancel=self._optimize_cancel.is_set, debug=debug,
+                                              debug_kinds=debug_kinds)
             if owned:
                 result = self.deliver_optimization_result(result)
         finally:

@@ -1,0 +1,189 @@
+"""形状最適化の各ステップ(探索の合格形)を見て、選んで仕上げる(`optimize_steps`・`optimize_run.finish_step`・`net/ws.py`)。"""
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+
+import numpy as np
+import pytest
+
+from duocad import optimize_run
+from duocad.optimize_steps import OptimizationSteps
+from duocad.server import Server, Session
+from session_support import FakeConnection, browser, four_conditions
+
+pytestmark = pytest.mark.usefixtures("finished_shape_check_at_a_third_of_the_test_element")
+
+OPTIONS = optimize_run.OptimizeOptions(element_size_mm=8.0)
+
+
+@pytest.fixture(autouse=True)
+def _coarse_grids_allowed(monkeypatch) -> None:
+    """この題材を 8mm の粗い格子で回すため、要素サイズの上限の固定値と最小幅の上限を緩める(test_optimize_backend と同じ)。"""
+    monkeypatch.setattr(optimize_run, "MAX_ELEMENT_SIZE_MM", math.inf)
+    monkeypatch.setattr(optimize_run, "MIN_WIDTH_CEILING_RATIO", 1.0)
+
+
+def test_a_finish_request_stops_the_search_and_finishes_the_chosen_step(session: Session) -> None:
+    """落ちたら、「このステップで仕上げる」で探索が止まらないか、選んだのと別の形を仕上げるか、中断と同じく何も足さない。"""
+    four_conditions(session)
+    steps = OptimizationSteps()
+    events: list = []
+    result = optimize_run.run(session.document, OPTIONS, steps=steps, progress=events.append,
+                              finish_request=lambda final=False: 1 if len(steps) >= 3 else None)
+    assert result["state"] == "done" and result["termination"] == "stopped_by_user", result.get("warning")
+    assert result["finished_step"] == 1 and result["name"] == "optimized-step2"
+    assert result["steps"] == len(steps) == 3
+    meta = steps.meta()
+    assert [row["index"] for row in meta] == [0, 1, 2]
+    assert meta[0]["material_mm3"] > meta[1]["material_mm3"] > meta[2]["material_mm3"]
+    if result["backtrack"] is None:
+        assert result["search_safety_factor"] == meta[1]["safety_factor"]
+    announced = [event["step"]["index"] for event in events if "step" in event]
+    assert announced == [0, 1, 2]  # 合格形が増えるたびに進捗で画面へ知らせる
+
+
+def test_after_the_run_another_step_is_finished_without_searching_again(session: Session, monkeypatch) -> None:
+    """落ちたら、実行の後に選んだステップを仕上げるのに探索をやり直すか、結果を足さないか、名前で見分けられない。"""
+    from duocad.topopt import binary_search
+
+    four_conditions(session)
+    steps = OptimizationSteps()
+    first = optimize_run.run(session.document, OPTIONS, steps=steps)
+    assert first["state"] == "done" and first["finished_step"] == len(steps) - 1 and first["name"] == "optimized"
+    monkeypatch.setattr(binary_search, "find_best_feasible", lambda *a, **k: pytest.fail("探索をやり直した"))
+    bodies = len(session.document.bodies)
+    again = optimize_run.finish_step(session.document, steps, 0)
+    assert again["state"] == "done" and again["finished_step"] == 0 and again["termination"] == "finished_after_run"
+    assert len(session.document.bodies) == bodies + 1 and again["name"] == "optimized-step1"
+    with pytest.raises(optimize_run.OptimizeInputError):
+        optimize_run.finish_step(session.document, steps, len(steps))
+
+
+def test_a_cancel_wins_over_a_finish_request_and_nothing_is_finished_before_a_feasible_shape(session: Session) -> None:
+    """落ちたら、中断と仕上げが同時に来たとき中断を無視して結果を足すか、合格形が無いのに何かを仕上げようとする。"""
+    four_conditions(session)
+    before = len(session.document.bodies)
+    steps = OptimizationSteps()
+    with pytest.raises(optimize_run.OptimizeCancelled, match="中断"):
+        optimize_run.run(session.document, OPTIONS, steps=steps, should_cancel=lambda: len(steps) >= 2,
+                         finish_request=lambda final=False: -1 if len(steps) >= 2 else None)
+    with pytest.raises(optimize_run.OptimizeCancelled, match="合格した形がまだ無い"):
+        optimize_run.run(session.document, OPTIONS, steps=OptimizationSteps(), finish_request=lambda final=False: -1)
+    assert len(session.document.bodies) == before
+
+
+def test_a_step_is_shown_by_its_surface_cells_only(session: Session) -> None:
+    """落ちたら、ステップの形に内側のセルまで配って重くしているか、表面のセルが欠けている。"""
+    four_conditions(session)
+    steps = OptimizationSteps()
+    optimize_run.run(session.document, OPTIONS, steps=steps, finish_request=lambda final=False: -1 if len(steps) >= 1 else None)
+    payload = steps.voxels(0)
+    mask = steps.shapes()[0].mask()
+    from scipy import ndimage
+
+    surface = mask & ~ndimage.binary_erosion(mask, border_value=0)
+    assert payload["index"] == 0 and payload["total"] == int(surface.sum()) < int(mask.sum())
+    assert payload["stride"] == 1 and sorted(payload["elements"]) == np.flatnonzero(surface.ravel()).tolist()
+    with pytest.raises(IndexError):
+        steps.voxels(len(steps))
+
+
+def test_the_screen_lists_the_steps_shows_one_and_finishes_another_after_the_run(session: Session) -> None:
+    """落ちたら、画面がステップの一覧・形を取れないか、実行の後に選んだステップの仕上げが結果として届かない。"""
+    four_conditions(session)
+
+    async def scenario() -> FakeConnection:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(connection, json.dumps({"cmd": "run_optimization", "element_size_mm": 8.0}))
+        await asyncio.gather(*server._pending_optimize_runs)
+        await server._dispatch(connection, json.dumps({"cmd": "optimize_steps"}))
+        await server._dispatch(connection, json.dumps({"cmd": "optimize_step_voxels", "index": 0}))
+        await server._dispatch(connection, json.dumps({"cmd": "finish_optimization", "step": 0}))
+        await asyncio.gather(*server._pending_optimize_runs)
+        return connection
+
+    connection = asyncio.run(scenario())
+    [listing] = connection.of_type("optimize_steps")
+    assert listing["finishable"] is True and [row["index"] for row in listing["steps"]] == list(range(len(listing["steps"])))
+    [voxels] = connection.of_type("optimize_step_voxels")
+    assert voxels["index"] == 0 and voxels["elements"] and len(voxels["grid"]["shape"]) == 3
+    results = connection.of_type("optimize_result")
+    assert [row["finished_step"] for row in results] == [len(listing["steps"]) - 1, 0]
+    assert results[1]["name"] == "optimized-step1"
+
+
+def test_finish_while_running_sets_the_request_and_tells_the_screen(session: Session) -> None:
+    """落ちたら、走っている間の「このステップで仕上げる」が実行に届かないか、画面が仕上げ待ちを表示できない。"""
+    session.begin_optimization()
+    connection = browser(session, lambda send: send({"cmd": "finish_optimization", "step": 2}), connections=1)[1][0]
+    [status] = connection.of_type("optimize_status")
+    assert status["finishing"] is True and session._finish_request == 2
+    session.end_optimization()
+    session.begin_optimization()
+    assert session._finish_request is None  # 次の実行には持ち越さない
+
+
+def test_finish_without_steps_is_refused_with_a_reason(session: Session) -> None:
+    """落ちたら、探索をしていない文書で仕上げを押したとき黙って何もしないか、別の文書の実行のステップを仕上げる。"""
+    connection = browser(session, lambda send: send({"cmd": "finish_optimization"}), connections=1)[1][0]
+    [error] = connection.of_type("optimize_error")
+    assert "仕上げられるステップが無い" in error["message"]
+    session.optimization_steps = OptimizationSteps()
+    session._steps_name = "another.json"
+    assert session.steps_for_current() is None
+
+
+def test_a_finish_request_is_honoured_even_when_the_search_ends_on_its_own(session: Session, monkeypatch) -> None:
+    """落ちたら、探索が予算・枯渇で終わる直前に届いた「このステップで仕上げる」を黙って捨て、最後の形を仕上げている。"""
+    from duocad.topopt import binary_search
+
+    four_conditions(session)
+    real = binary_search.find_best_feasible
+
+    def deaf(*args, **kwargs):  # 要求を探索の途中で見ない(終わる直前に届いたのと同じ)
+        kwargs["is_cancelled"] = None
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", deaf)
+    steps = OptimizationSteps()
+    result = optimize_run.run(session.document, OPTIONS, steps=steps, finish_request=lambda final=False: 1)
+    assert result["state"] == "done" and result["finished_step"] == 1 and result["name"] == "optimized-step2"
+    assert result["termination"] != "stopped_by_user" and len(steps) > 2
+    assert {row["run"] for row in steps.meta()} == {steps.run}
+
+
+def test_a_finish_after_the_search_has_ended_is_refused_without_clearing_the_running_view(session: Session) -> None:
+    """落ちたら、実行が探索の後に要求を読み終えた後の「このステップで仕上げる」を受け付けたと答えて黙って捨てている。"""
+
+    async def scenario() -> FakeConnection:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        session.begin_optimization()
+        assert session._read_finish_request() is None  # 探索の途中の読み取りでは閉じない
+        await server._dispatch(connection, json.dumps({"cmd": "finish_optimization", "step": 1}))
+        assert session._read_finish_request(final=True) == 1  # 探索の後の読み取りで閉じる
+        await server._dispatch(connection, json.dumps({"cmd": "finish_optimization", "step": 0}))
+        return connection
+
+    connection = asyncio.run(scenario())
+    statuses = connection.of_type("optimize_status")
+    assert statuses and statuses[-1]["finishing"] is True
+    [error] = connection.of_type("optimize_error")
+    assert error["already_running"] is True and "探索はもう終わって" in error["message"]
+    assert session._finish_request == 1  # 閉じた後の要求で書き換わらない
+
+
+def test_every_progress_event_of_a_session_run_carries_the_run_id(session: Session) -> None:
+    """落ちたら、後から届いた前の実行の進捗を画面が見分けられず、新しい実行の表示を上書きする。"""
+    four_conditions(session)
+    events: list = []
+    session.run_optimization(element_size_mm=8.0, progress=events.append)
+    run = session.optimization_steps.run
+    assert events and {event["run"] for event in events} == {run}

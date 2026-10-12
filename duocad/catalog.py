@@ -1825,6 +1825,40 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="finish_optimization",
+        category="protocol",
+        description="",
+        session="request_finish",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "「このステップで仕上げる」。走っている間は探索を止めて `step`(省くと最新)を仕上げるよう伝える(旗だけ)。"
+            "走っていなければ直近の実行のステップを探索をやり直さずに仕上げる(`Session.finish_optimization_step`。重いので別タスク)。"
+            "`docs/contracts/ui-optimize-integration.md`「ステップ」"
+        ),
+    ),
+    Command(
+        name="optimize_steps",
+        category="protocol",
+        description="",
+        session="steps_for_current",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="いま開いている文書の直近の実行のステップ(探索の合格形)の一覧。要求した接続にだけ返す",
+    ),
+    Command(
+        name="optimize_step_voxels",
+        category="protocol",
+        description="",
+        session="steps_for_current",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="ステップ1つの形(表面のセルの通し添字)。要求した接続にだけ返す",
+    ),
+    Command(
         name="get_edges",
         category="protocol",
         description="",

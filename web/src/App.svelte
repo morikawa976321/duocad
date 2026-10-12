@@ -77,6 +77,8 @@
     type OptimizeProgress,
     type OptimizeResolutionPayload,
     type OptimizeResultPayload,
+    type OptimizeStepMeta,
+    type OptimizeStepVoxels,
     type PreviewPayload,
     type SelectionRef,
     type ServerState,
@@ -370,7 +372,12 @@
       const step = chosenStep(payload, optimizeElementSizeMm)
       if (step !== null) optimizeMinWidthMm = snapMinWidth(step.min_width_steps_mm, optimizeMinWidthMm)
     },
-    onOptimizeStatus: (running, cancelling) => {
+    onOptimizeStatus: (running, cancelling, finishing) => {
+      optimizeFinishing = running && finishing
+      // 接続し直すと、待っていた形の返事は来ない。待ちを畳んで頼み直せるようにする(`$state` なので取得の `$effect` が走り直す)。
+      searchStepVoxelsPending = null
+      // 走り終わった・接続し直した・文書を切り替えた後は、その文書のステップを取り直す(走っている間は進捗で増える)。
+      if (!running || searchSteps.length === 0) session.optimizeSteps()
       // 控えの確定はサーバが受け付けてから(押した瞬間だと、断られた押下が走っている実行の控えを上書きする)。
       if (running && optimizeStarting && optimizeStartingSettings !== null) optimizeRunSettings = optimizeStartingSettings
       optimizeStartingSettings = null
@@ -397,12 +404,49 @@
       // 走らせている文書へ戻ったら、実行中の表示が見えるモードへ入る(編集が断られる理由を画面に出す)。
       if (mode.kind === 'idle') setMode({ kind: 'optimize' })
     },
-    onOptimizeProgress: (event) => (optimizeProgress = event),
+    onOptimizeProgress: (event) => {
+      // 前の実行の進捗が後から届くことがある(別の接続への配信待ち)。識別子は新しいほど大きい(`optimize_steps.py`)ので、
+      // 表示を変える前に捨てる(捨てないと「このステップで仕上げる」が受け付けの閉じた後に押せて見える)。
+      const run = event.run ?? event.step?.run
+      if (run !== undefined && (run === searchStepsStaleRun || (searchStepsRun !== null && run < searchStepsRun))) return
+      optimizeProgress = event
+      const step = event.step
+      if (step === undefined) return
+      if (step.run !== searchStepsRun) {
+        // 新しい実行の最初の進捗(前の実行の一覧が遅れて戻っていても、ここで切り替える)。
+        searchSteps = []
+        searchStepsRun = step.run
+        searchStepSelected = null
+        searchStepVoxels = null
+      }
+      if (step.index === searchSteps.length) searchSteps = [...searchSteps, step]
+      else if (step.index > searchSteps.length) session.optimizeSteps() // 取りこぼした(接続し直した直後など)
+    },
+    onOptimizeSteps: (steps, finishable) => {
+      const run = steps[0]?.run ?? null
+      // 新しい実行を始めた後に届いた、前の実行の一覧は捨てる。
+      if (run !== null && (run === searchStepsStaleRun || (searchStepsRun !== null && run < searchStepsRun))) return
+      if (run !== searchStepsRun) {
+        searchStepSelected = null
+        searchStepVoxels = null
+      }
+      searchSteps = steps
+      searchStepsRun = run
+      searchStepsFinishable = finishable
+      if (searchStepSelected !== null && searchStepSelected >= steps.length) searchStepSelected = null
+    },
+    onOptimizeStepVoxels: (payload) => {
+      searchStepVoxelsPending = null
+      // 別の実行の形(遅れて届いた返事)は捨てる。
+      if (payload.run !== undefined && payload.run !== searchStepsRun) return
+      searchStepVoxels = payload
+    },
     onOptimizeDebug: handleOptimizeDebug,
     onOptimizeResult: handleOptimizeResult,
     onOptimizeError: (message, problems, cancelled, alreadyRunning) => {
       optimizeStarting = false
       optimizeStartingSettings = null
+      optimizeFinishing = false
       // 別の実行が走っているという断りは、その実行の表示(進捗の行も通知)を消さない。
       if (alreadyRunning) {
         fail(`最適化: ${message}`)
@@ -450,13 +494,62 @@
   /** いま効いている段(`chosenStep`。入力した値への応答がまだなら `null` で、実行させない)。 */
   const optimizeStep = $derived(chosenStep(optimizeResolution, optimizeElementSizeMm))
 
+  // ---------------------------------------------------------------- H3: 探索のステップを切り替えて見る・選んで仕上げる
+  // 正はサーバ(`duocad/optimize_steps.py`)。一覧は走っている間は進捗の `step` で伸び、終わった後・文書を切り替えた後は
+  // `optimizeSteps()` で取り直す。形(表面のセル)は選んだときだけ1つずつ取りに行く(全部を配ると数十MBになる)。
+  /** いま開いている文書の直近の実行のステップ。 */
+  let searchSteps = $state.raw<OptimizeStepMeta[]>([])
+  /** `searchSteps` の実行の識別子と、新しい実行を始めたときに捨てた前の実行の識別子(遅れて届く返事を見分ける)。 */
+  let searchStepsRun: string | null = null
+  let searchStepsStaleRun: string | null = null
+  /** 実行の後に仕上げられるか(探索が合格形を出して終わった実行)。 */
+  let searchStepsFinishable = $state(false)
+  /** 選んでいるステップ。`null` は最新を追う。 */
+  let searchStepSelected = $state<number | null>(null)
+  /** ステップの形をボクセルで見ているか。 */
+  let searchStepsShown = $state(false)
+  let searchStepVoxels = $state.raw<OptimizeStepVoxels | null>(null)
+  /** 返事を待っている形の番号(待つ間は次を頼まない。返事が来たら下の `$effect` が今の選択と比べ直す)。 */
+  let searchStepVoxelsPending = $state<number | null>(null)
+  /** 「このステップで仕上げる」を伝えた後、結果が届くまで。 */
+  let optimizeFinishing = $state(false)
+  const searchStepShownIndex = $derived(
+    searchSteps.length === 0 ? null : (searchStepSelected ?? searchSteps.length - 1),
+  )
+
+  $effect(() => {
+    const wanted = searchStepsShown ? searchStepShownIndex : null
+    const have = searchStepVoxels !== null && searchStepVoxels.run === searchStepsRun ? searchStepVoxels.index : null
+    if (wanted === null || wanted === have || searchStepVoxelsPending !== null) return
+    searchStepVoxelsPending = wanted
+    session.optimizeStepVoxels(wanted)
+  })
+
+  function clearSearchSteps(): void {
+    searchStepsRun = null
+    searchSteps = []
+    searchStepsFinishable = false
+    searchStepSelected = null
+    searchStepVoxels = null
+    searchStepVoxelsPending = null
+  }
+
+  function finishOptimization(): void {
+    if (searchSteps.length === 0 || optimizeFinishing || optimizeCancelling) return
+    optimizeFinishing = true
+    session.finishOptimization(searchStepSelected, debugKindsFor(debugFlags))
+  }
+
   function runOptimization(): void {
     if (optimizeBusy) return
     optimizeStarting = true
     optimizeProgress = null
     optimizeNotice = null
-    // 前の実行のデバッグ表示を捨ててから走らせる(残すと古い塊が重なって見える)。
+    // 前の実行のデバッグ表示とステップを捨ててから走らせる(残すと古い塊が重なって見える)。
     clearOptimizeDebug()
+    // 前の実行の一覧・形が遅れて届いたら捨てる印(文書を開き直したときに同じ実行の一覧を取り直すのは捨てない)。
+    if (searchStepsRun !== null) searchStepsStaleRun = searchStepsRun
+    clearSearchSteps()
     optimizeStartingSettings = { name: files.currentName, elementSizeMm: optimizeElementSizeMm, minWidthMm: optimizeMinWidthMm }
     session.runOptimization({
       elementSizeMm: optimizeStep?.element_size_mm ?? null,
@@ -485,6 +578,9 @@
     optimizeResolution = null
     optimizeConditions = null
     clearOptimizeDebug()
+    clearSearchSteps()
+    // 開き直した文書の直近の実行のステップを取り直す(走っていない文書では状態の配信が来ないので、ここで頼む)。
+    session.optimizeSteps()
   }
 
   // ---------------------------------------------------------------- H2: 開発用のデバッグ表示
@@ -516,7 +612,23 @@
 
   /** デバッグ表示をビューポートへ当てる。フラグが無ければ呼ばない(既定の画面には触れる経路が無い)。 */
   $effect(() => {
-    if (!anyDebugFlag(debugFlags)) return
+    const step = searchStepsShown ? searchStepVoxels : null
+    const stepVoxels =
+      step?.grid && step.elements
+        ? {
+            grid: step.grid,
+            elements: step.elements,
+            total: step.total ?? step.elements.length,
+            shown: step.shown ?? step.elements.length,
+            stride: step.stride ?? 1,
+          }
+        : null
+    const target = viewport
+    if (!anyDebugFlag(debugFlags)) {
+      // フラグが無い既定の画面では、ステップの形だけを出す(見ていなければ何も出さない)。
+      target?.setOptimizeDebug(stepVoxels === null ? null : { space: null, rho: stepVoxels, anchors: null, hiddenBodyId: null })
+      return
+    }
     // 依存を先に読み切ってから呼ぶ。`viewport?.setOptimizeDebug({...})` と直接書くと、初回に
     // `viewport` が未定義だとオプショナル連鎖が引数の評価ごと飛ばし、依存を1つも登録できず
     // 二度と再実行されない(症状は「何も出ない」で、型検査にもコンソールにも出ない)。
@@ -532,7 +644,7 @@
         : null
     const next = {
       space: voxels(optimizeDebugSpace, debugFlags.space),
-      rho: voxels(optimizeDebugRho, debugFlags.voxel),
+      rho: stepVoxels ?? voxels(optimizeDebugRho, debugFlags.voxel),
       anchors:
         debugFlags.anchors && optimizeDebugAnchors?.fixed && optimizeDebugAnchors.load
           ? {
@@ -544,7 +656,7 @@
           : null,
       hiddenBodyId: optimizeDebugHiddenBodyId,
     }
-    viewport?.setOptimizeDebug(next)
+    target?.setOptimizeDebug(next)
   })
 
   /**
@@ -553,6 +665,7 @@
    */
   function handleOptimizeResult(result: OptimizeResultPayload): void {
     optimizeProgress = null
+    optimizeFinishing = false
     optimizeNotice = optimizeNoticeFor(result) // 文の組み立ては `optimizeNotice.ts`
     if (result.state === 'done') {
       note(`最適化が終わった: ${result.name}`)
@@ -2045,6 +2158,16 @@
           onMinWidth={handleOptimizeMinWidth}
           onRun={runOptimization}
           onCancel={() => session.cancelOptimization()}
+          {searchSteps}
+          stepIndex={searchStepShownIndex}
+          stepFollowsLatest={searchStepSelected === null}
+          stepsShown={searchStepsShown}
+          stepVoxels={searchStepVoxels}
+          finishable={searchStepsFinishable}
+          finishing={optimizeFinishing}
+          onSelectStep={(index) => (searchStepSelected = index)}
+          onShowSteps={(shown) => (searchStepsShown = shown)}
+          onFinish={finishOptimization}
         />
       {/if}
 
