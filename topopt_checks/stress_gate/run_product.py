@@ -16,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import phase_a_fields as pa  # noqa: E402
 
+import numpy as np  # noqa: E402
 import psutil  # noqa: E402
 
 import refine_shape  # noqa: E402
@@ -35,6 +36,11 @@ def main() -> int:
     ap.add_argument("--gpu", action="store_true", help="FEM を GPU で解く(docs/TOPOPT_GPU.md)")
     ap.add_argument("--target-tolerance", default=None,
                     help="探索の target_tolerance(数か none = 許容の止め方を使わない)。省くと製品の既定")
+    ap.add_argument("--patience", default=None,
+                    help="探索の single_cell_patience(整数か none = 1セルの不合格の続きで止めない)。省くと製品の既定")
+    ap.add_argument("--max-evaluations", type=int, default=None, help="探索の評価予算。省くと製品の既定")
+    ap.add_argument("--trace", action="store_true",
+                    help="評価ごとの経過(_trace.json)と合格形の列(_accepted.npz)を残す。止め方の案を後から当てはめるため")
     a = ap.parse_args()
     spec = dict(pa.MODELS[a.model])
     for key, val in (("load_n", a.load), ("h", a.h), ("w", a.w)):
@@ -57,18 +63,33 @@ def main() -> int:
         return built
 
     optimize_run._build_search_conditions = conditions
+    search_kwargs = {}
     if a.target_tolerance is not None:
-        from duocad.topopt import binary_search
-        real_find = binary_search.find_best_feasible
-        tolerance = None if a.target_tolerance == "none" else float(a.target_tolerance)
+        search_kwargs["target_tolerance"] = None if a.target_tolerance == "none" else float(a.target_tolerance)
+    if a.patience is not None:
+        search_kwargs["single_cell_patience"] = None if a.patience == "none" else int(a.patience)
+    from duocad.topopt import binary_search
+    real_find = binary_search.find_best_feasible
+    captured = dict(events=[])
+    clock = {}
 
-        def find(*args, **kwargs):
-            kwargs["target_tolerance"] = tolerance
-            return real_find(*args, **kwargs)
+    def find(*args, **kwargs):
+        kwargs.update(search_kwargs)
+        outer = kwargs.get("on_evaluation")
 
-        binary_search.find_best_feasible = find
-    started = time.perf_counter()
-    options = optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"])
+        def on_evaluation(event):
+            captured["events"].append(dict(event, seconds=round(time.perf_counter() - clock["start"], 2)))
+            if outer is not None:
+                outer(event)
+
+        kwargs["on_evaluation"] = on_evaluation
+        captured["search"] = real_find(*args, **kwargs)
+        return captured["search"]
+
+    binary_search.find_best_feasible = find
+    started = clock["start"] = time.perf_counter()
+    options = optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"],
+                                           max_evaluations=a.max_evaluations)
     if a.legacy:
         with percentile_rule():
             result = optimize_run.run(doc, options)
@@ -97,9 +118,26 @@ def main() -> int:
     (pa.OUT / "product").mkdir(parents=True, exist_ok=True)
     tag = (f"{a.model}_L{spec['load_n']:g}_h{spec['h']:g}_w{spec['w']:g}" + ("_legacy" if a.legacy else "")
            + ("" if a.v_cells is None else f"_V{a.v_cells:g}cells")
-           + ("" if a.target_tolerance is None else f"_tol{a.target_tolerance}"))
+           + ("" if a.target_tolerance is None else f"_tol{a.target_tolerance}")
+           + ("" if a.patience is None else f"_pat{a.patience}")
+           + ("" if a.max_evaluations is None else f"_max{a.max_evaluations}"))
     (pa.OUT / "product" / f"{tag}.json").write_text(json.dumps(row, ensure_ascii=False, indent=1, default=float),
                                                     encoding="utf-8")
+    search = captured.get("search")
+    if a.trace and search is not None:
+        reduction = (search.diagnostics or {}).get("reduction") or {}
+        trace = dict(row=row, stop_reason=reduction.get("stop_reason"), termination=search.termination,
+                     evaluations=search.evaluations, events=captured["events"],
+                     steps=[{k: v for k, v in step.items() if k != "trials"} for step in reduction.get("steps", [])])
+        (pa.OUT / "product" / f"{tag}_trace.json").write_text(json.dumps(trace, ensure_ascii=False, default=float),
+                                                              encoding="utf-8")
+        if search.accepted:
+            np.savez_compressed(pa.OUT / "product" / f"{tag}_accepted.npz",
+                                packed=np.stack([s.packed for s in search.accepted]),
+                                shape=np.array(search.accepted[0].shape),
+                                safety_factor=np.array([s.safety_factor for s in search.accepted]),
+                                material_mm3=np.array([s.material_mm3 for s in search.accepted]),
+                                trial_index=np.array([s.trial_index for s in search.accepted]))
     return 0
 
 
