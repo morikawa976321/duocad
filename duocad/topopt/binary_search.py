@@ -1095,7 +1095,10 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     **評価が落ちた候補**(`checks['safety']` が `unknown` かつ `reason='evaluation_error'`。`prerequisites_failed` は
     形状の不合格なので入らない)が採用を挟まず `evaluation_error_patience` 回続いたら `repeated_evaluation_error` で
     `evaluation_error`(合格形状は返す)。1セルも抜けなければ `converged`(`no_removable_cell`)。合格形状の安全率が
-    `目標 × (1 + target_tolerance)` 以下なら `converged`(`within_target_tolerance`。出発形状にも当てはめ、予算切れ・中断より先に見る)。
+    `目標 × (1 + target_tolerance)` 以下の間は、1セルの手が安全率で落ちた所で `converged`(`within_target_tolerance`)。
+    許容に入っただけでは止めない: V が小さいと1つの熱いセルで許容に入り、他に削れる材料を残して止まる
+    (dilution 120N・V=1セルで材料 +46%。docs/TOPOPT_PEAK_GATE.md 4-16)。許容内では歩幅が小さいので、熱いセルから
+    離れた材料は小さな手で削れ続け、余裕の無い形は最初の1セルの不合格で止まる。
     止まった理由は `diagnostics['reduction']['stop_reason']`、試行ごとの記録は `['steps']`、検算で落ちた候補は
     `['geometry_rejections']`、外したままのセル数と順位へ戻した回数は `['poison_cells']` / `['poison_released']`。
 
@@ -1204,9 +1207,6 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     peak_streak = 0
     error_streak = 0
     while True:
-        if target_tolerance is not None and best.safety_factor <= target * (1.0 + target_tolerance):
-            reduction['stop_reason'] = 'within_target_tolerance'
-            return result('converged')
         if evaluations >= max_evaluations:
             return result('evaluation_limit')
         if is_cancelled is not None and is_cancelled():
@@ -1312,6 +1312,9 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                 multiplier /= 2.0
             else:
                 if safety_failed:
+                    if target_tolerance is not None and best.safety_factor <= target * (1.0 + target_tolerance):
+                        reduction['stop_reason'] = 'within_target_tolerance'
+                        return result('converged')
                     safety_streak += 1
                     if single_cell_patience is not None and safety_streak >= single_cell_patience:
                         reduction['stop_reason'] = 'safety_at_single_cell'
