@@ -32,7 +32,7 @@ def main() -> int:
     ap.add_argument("--w", type=float, default=None)
     ap.add_argument("--legacy", action="store_true", help="探索の代表応力を 2026-10-09 より前の 99.5%% 点にする(完成形検査は今のまま)")
     ap.add_argument("--v-cells", type=float, default=None,
-                    help="探索の部材域の上位値で許す超過体積 V を探索格子のセル数で与える(省くと製品の 最小幅³)")
+                    help="探索の部材域の上位値で許す超過体積 V を探索格子のセル数で与える(省くと製品の値)")
     ap.add_argument("--gpu", action="store_true", help="FEM を GPU で解く(docs/TOPOPT_GPU.md)")
     ap.add_argument("--target-tolerance", default=None,
                     help="探索の target_tolerance(数か none = 許容の止め方を使わない)。省くと製品の既定")

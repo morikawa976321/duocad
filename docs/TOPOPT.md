@@ -38,7 +38,7 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 | 塊(設計空間)の余白比率 `margin_ratio` | **0.20** | `design_space.DEFAULT_MARGIN_RATIO` | 「固定凸包による設計空間(2026-09-16)」(2026-09-16 本人判断で 0.25 → 0.20。0.25 との比較は「余白比率と切り出し方式の比較」) |
 | 塊の導出方式 | 固定凸包(保持・条件面のボディの外接箱の頂点の凸包から距離 `m` 以内 = 球とのミンコフスキー和)。材料量によらず1実行に1回 | `design_space.DERIVATION` | 「固定凸包による設計空間(2026-09-16)」 |
 | 許容応力(PETG の降伏応力 × 造形の低減係数) | **50** MPa × **0.8** | `material.PETG_YIELD_MPA` / `PRINT_DERATE` | 「許容応力の導出」 |
-| 探索の代表応力の規則(製品): 部材域(保持セル以外・拘束/荷重面の節点に接する1層の外)の固定物理体積の上位値。許す超過体積 V の一辺 = 最小幅 × これ | **1.0** | `stress.MEMBER_VOLUME_WIDTH_RATIO`(`member_volume_stress` / `acceptance.member_region` / `optimize_run._build_search_conditions`) | 「代表応力の規則」、[TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md) |
+| 探索の代表応力の規則(製品): 部材域(保持セル以外・拘束/荷重面の節点に接する1層の外)の固定物理体積の上位値。許す超過体積 V = 探索格子の要素これ個分 | **1** | `stress.MEMBER_VOLUME_CELLS`(`member_volume_stress` / `acceptance.member_region` / `optimize_run._build_search_conditions`) | 「代表応力の規則」、[TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md)、[TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 4-16・4-17(本人決定 2026-10-12 で 最小幅³ → 1 要素) |
 | 代表応力の規則(`member_volume_mm3` を渡さない検査・研究の経路) | ρ >= **0.5** の要素の上位 **99.5%** 点 | `stress.DEFAULT_RHO_MIN` / `DEFAULT_PERCENTILE` | 「代表応力の規則」 |
 | 完成形検査の強度: 完成メッシュを間隔 s 以下になる最小の分割数 k で探索格子の 1/k へ占有化し、部材域の露出面の面中心の値を大きい順に並べて面積の合計が A に達する位置の値で安全率を出し、係数なしで利用者の目標と比べる。細かい格子の要素数の上限かメモリの見積もり(要素数 × e + 探索の形のセル数 × k³ × c。占有化した後の材料で数え直す)が空きメモリの f 倍を超えるときは、同じ k で剛性行列を組み立てない解法(係数 e'・c'。CPU では時間が約 2.2 倍、GPU を使う設定なら GPU で解く)に替え、それでも超えるときは k を下げ、s より粗く測った値に (間隔 ÷ s)^p を掛ける | s = **0.67** mm、A = **4** mm²、p = **0.42**、上限 **8000000** 要素、e = **500** B、c = **21000** B、e' = **400** B、c' = **1000** B、f = **0.5** | `final_check.MEASURE_SPACING_MM` / `TOP_AREA_MM2` / `COARSE_PENALTY_EXPONENT` / `MAX_FINE_ELEMENTS` / `FINE_ELEMENT_BYTES` / `MATERIAL_CELL_BYTES` / `MATRIX_FREE_ELEMENT_BYTES` / `MATRIX_FREE_MATERIAL_CELL_BYTES` / `MEMORY_FRACTION` | [TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 4-9〜4-13・6章 |
 | 完成形検査で目標を割ったとき、探索の合格形をさかのぼって完成形検査を回す回数の上限(「完成形 ÷ 探索」の安全率の比で一気に戻り、通った後は二分で材料の少ない側へ寄せる)| **5** 回 | `complete.MAX_BACKTRACK_CHECKS` | [TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 6章 |
@@ -48,8 +48,8 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 | 段階4で1回に削る割合の上限 `DEFAULT_MAX_STEP_RATIO` | **0.2** | `binary_search.DEFAULT_MAX_STEP_RATIO` | 「二値探索の方式と契約」の「段階4」(削減割合) |
 | 段階4の削る割合を安全率の余裕で変える指数 θ(r = min(上限, 1 − (目標/安全率)^θ)) `DEFAULT_STEP_EXPONENT` | **0.5** | `binary_search.DEFAULT_STEP_EXPONENT` | 「二値探索の方式と契約」の「段階4」(削減割合) |
 | 段階4で要素エネルギーをならす近傍の一辺 `ENERGY_FILTER_SIZE` | **3** セル | `binary_search.ENERGY_FILTER_SIZE` | 順位の平滑化(自身と26近傍の材料平均で、1セルごとの値のばらつきによる順位の入れ替わりを抑える)。「二値探索の方式と契約」の「段階4」(方式) |
-| 段階4で、削ったセルが1つで安全率が落ちたとき、順位から外して続けるのを採用を挟まず何セルで収束とみなすか `DEFAULT_SINGLE_CELL_PATIENCE`(`None` は順位が尽きるまで。外したセルは採用をまたいで保つ) | **8** | `binary_search.DEFAULT_SINGLE_CELL_PATIENCE` | 「段階4」の収束規則(本人判断 2026-09-24。実測で決めていない。16 は外したセルを採用で戻す旧規則で測った値) |
-| 段階4で、合格形状の安全率が 目標×(1+これ) 以下になったら収束とみなす許容 `DEFAULT_TARGET_TOLERANCE`(`None` は見ない) | **0.01** | `binary_search.DEFAULT_TARGET_TOLERANCE` | 「段階4」の収束規則(本人判断 2026-09-22。製品経路 1.875mm の記録では、目標の +0.13% に入った後の評価 81 回で減ったのは 0.27%) |
+| 段階4で、削ったセルが1つで安全率が落ちたとき、順位から外して続けるのを採用を挟まず何セルで止めるか `DEFAULT_SINGLE_CELL_PATIENCE`(`None` は順位が尽きるまで。外したセルは採用をまたいで保つ) | **なし**(`None`) | `binary_search.DEFAULT_SINGLE_CELL_PATIENCE` | 「段階4」の収束規則(本人決定 2026-10-12 で 8 → なし。[TOPOPT_STOPPING.md](TOPOPT_STOPPING.md)) |
+| 段階4で、合格形状の安全率が 目標×(1+これ) 以下の間に1セルの手が安全率で落ちたら止める許容 `DEFAULT_TARGET_TOLERANCE`(`None` は見ない) | **なし**(`None`) | `binary_search.DEFAULT_TARGET_TOLERANCE` | 「段階4」の収束規則(本人決定 2026-10-12 で 0.01 → なし。[TOPOPT_STOPPING.md](TOPOPT_STOPPING.md)) |
 | 条件面の作用位置のずれの許容 = 対応付けの探索半径(要素サイズ比。CAD面の面積重心から節点重心まで、モーメント誤差の許容はこの値×荷重の大きさ。`anchor.position_limit`) | **1.0** | `anchor.DEFAULT_RADIUS_RATIO` | 「境界条件の確定(2026-09-17)」 |
 | 要素サイズを指定しないときの最長軸の要素数 `DEFAULT_ELEMENTS_LONG_AXIS` | **40** | `design_space.DEFAULT_ELEMENTS_LONG_AXIS` | 塊の導出(`derive`) |
 | ヤング率の既定 `DEFAULT_YOUNGS_MODULUS_MPA` | **2000** MPa | `material.DEFAULT_YOUNGS_MODULUS_MPA` | 応力の実単位換算(`stress.UnitScale`) |
@@ -140,17 +140,14 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 
 **収束の規則**(`binary_search.py` の docstring が診断キーの正):
 
-- **1セルの安全率不合格は、そのセルを順位から外して次を試す。** 外したセルが採用を挟まず `single_cell_patience` 個に達したら
-  `safety_at_single_cell` で `converged`。順位を歩いて1セルも抜けなければ `no_removable_cell`。**既定8は本人判断(2026-09-24)で
-  実測で決めていない**(hanger 1題材: 忍耐4は8と同じ試行列、1は材料が7%多い)。
-- **安全率が目標の許容内に入ったら、最初の1セルの安全率不合格で止める**(`DEFAULT_TARGET_TOLERANCE=0.01`、`None`は見ない)。
-  合格形状の安全率 S が `T×(1+許容)` 以下の間に、1セルの手が安全率で落ちたら `converged`(`within_target_tolerance`)。
-  2026-10-12 までは許容に入った時点で候補を作らずに止めていたが、探索の V を小さくすると1つの熱いセルで許容に入り、削れる材料を残して
-  止まった(dilution 120N・V=1セルで材料 +46%。[TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 4-16・4-17)ので、許容内でも小さな手で続ける。
-  止まるのは常に合格形状なので、早く止めて失うのは体積だけ。根拠: 製品経路(要素1.875mm・最小幅7.5mm・目標2.0)の1本で、終盤81回の
-  評価は体積を0.27%しか減らさずCG累計時間の72%(4,266秒)を使った。許容を0.005〜0.02に振っても時間はほぼ同じで体積差は2ポイント以内。
-  本人判断(2026-09-22): 終了条件を追加し、値はAIが提案した0.01を採る。未実測: 出発形状が最初から許容内なら全材料のまま止まること、
-  許容内に入った手が荷重を受けた部材を切って片持ちの突起を残す場合。
+- **削れる候補が尽きるまで続ける**(本人決定 2026-10-12、[TOPOPT_STOPPING.md](TOPOPT_STOPPING.md))。順位を歩いて1セルも
+  抜けなければ `no_removable_cell` で `converged`。収束と呼ぶのはこれだけで、評価予算(1000)に達したら `evaluation_limit`、
+  評価失敗が続けば `evaluation_error`、中断は `cancelled`。V = 1 要素では安全率が最も熱い1要素で決まり目標の近くに張り付くので、
+  安全率の帯(`target_tolerance`)も1セルの不合格の続き(`single_cell_patience`)も削り切ったことの証拠にならない
+  (dilution 120N は評価 14 で帯に入り材料 +46% で止まる、dilution 180N は忍耐8が評価 154・+6.5% で発火し尽きたのは 682)。
+  どちらも既定は `None` で、止める時点だけを決めて道を変えないので値を振る実験のつまみとして残す。尽きるまでの評価は6題材の最大 682。
+  忍耐8で止めた場合より探索は dilution で +16〜145 秒、hanger で +3〜6 分長く、納品の材料は −0.1〜−1.5%。
+- **1セルの安全率不合格は、そのセルを順位から外して次を試す。**
 - **外したセルと不合格の形を採用をまたいで覚える**(本人判断 2026-09-24、#22): 安全率で落ちた
   1セル(`poison`)は採用で順位を作り直しても入れない(外したときの合格形状の安全率と不足分 `目標−候補の安全率` を覚え、その後の
   安全率が不足分以上に上がったセルだけ戻す)。不合格の形の内容ハッシュ `rejected` も採用で空にしない(同じ形は同じ答え)。
@@ -159,9 +156,11 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 - **段階4の序盤を縮める案は不採用**(2026-09-24、#22。hanger・合成題材、`target_tolerance` 内で終了した複数本の実測): 大きい手は順位の深くまで届き、害の無い材料を使い切る前に荷重経路の材料へ触れるので、速くなる代わりに最終体積が散らばって重い側に出る。
   上限 `max_step_ratio` 0.3〜0.5 は最終体積が ±10〜20% ばらつく(hanger 1.875mm・0.5 は +22.8%)。上限 0.25 と「最初の1手だけ0.5」は hanger 1.875mm・m=4 で評価が 64→38・20 に減るが体積 +9%(合成 +14〜15%)。
   応力場で危険域を後回しにする2段の順位は10本中3本しか体積が減らず、上限0.5と組むと安全率が 31→4.9 に落ちて体積2〜3倍で窓に入った。本人基準「体積は同等以下」に合わないので**上限0.2を維持**。
-  経路を変えずに費用を下げる策(peel の局所判定、`target_tolerance`)だけが体積を保証できた。
+  経路を変えずに費用を下げる策(peel の局所判定)だけが体積を保証できた。V = 1 要素で歩幅を変える2案(採用の次は直前の削除数 ×2 を
+  試す、歩幅の安全率を V = 最小幅³ で取る)も評価を減らさなかった(dilution、大きい手は不合格と半減の連鎖を足すだけ。[TOPOPT_STOPPING.md](TOPOPT_STOPPING.md) 5節)。
 - **終盤の停滞(速度・採用幅・安全率が窓に近づかない)で打ち切る規則は入れない**(#22、記録済みの軌道への後付け試算): 安全率の停滞は「窓に届かない」の十分条件ではない。
-  合成 2.0mm・m=4 は採用幅・安全率の規則が評価15〜44で発火した後、評価56で窓に入った(打ち切ると材料の1.6〜3.6%を失う)。hanger 1.875mm・m=4 では速度・採用幅の規則が窓の手前で止まり材料の4.6〜5.5%を失う。止める条件は窓(`target_tolerance`)だけにする。
+  合成 2.0mm・m=4 は採用幅・安全率の規則が評価15〜44で発火した後、評価56で窓に入った(打ち切ると材料の1.6〜3.6%を失う)。hanger 1.875mm・m=4 では速度・採用幅の規則が窓の手前で止まり材料の4.6〜5.5%を失う。V = 1 要素で「直近 W 評価の材料の減りが
+  p 未満なら止める」を当てはめても、窓が短いと序盤の停滞で止まる(hanger 120N・180N で W=20・0.5% は材料 +12%・+88%。[TOPOPT_STOPPING.md](TOPOPT_STOPPING.md) 3節)。
 
 ### 中空構造を許容しない(2026-09-19)
 
@@ -345,7 +344,7 @@ u_real[mm]      = u_nd     * (F / F_nd) * (E_nd / E) / L
 ### 代表応力の規則
 
 **製品の探索(2026-10-09〜)**: 代表応力 = **部材域の固定物理体積の上位値** Q_V。部材域は材料のうち、保持セルと、拘束面・荷重面の節点を角に持つ要素(節点から h 以内の1層)を除いた所。Q_V は「これを超える応力を持つ部材域の体積が V 以下」になる最小の応力で、
-V = 最小幅³(`optimize_run._build_search_conditions`)。部材域の体積が V 以下なら部材域の最大を使う(意図的な変則。`stress.member_volume_stress`)。合格は 安全率 = 許容 ÷ Q_V ≥ 探索の目標(利用者目標 × 2.4)。
+V = 探索格子の1要素の体積(`stress.MEMBER_VOLUME_CELLS`。本人決定 2026-10-12 で 最小幅³ から変えた。[TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 4-16・4-17)。部材域の体積が V 以下なら部材域の最大を使う(意図的な変則。`stress.member_volume_stress`)。合格は 安全率 = 許容 ÷ Q_V ≥ 探索の目標(利用者目標 × 2.4)。
 旧規則の 99.5% 点は材料全体の割合なので、**遠くの低応力材料を残すほど高応力部が上位に隠れ、探索がそれを「重り」として残した**([TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md))。V を体積で固定すると部材域の外の材料の量に値が依らない。
 拘束面の1層は細分で最大が発散する所、保持は探索が変えられない所なので判定から外す。根拠・比較・限界は [TOPOPT_STRESS_GATE_DILUTION.md](TOPOPT_STRESS_GATE_DILUTION.md)。V より小さい集中は探索の判定に出ないので、
 **完成形検査**(`final_check`)が完成メッシュを 0.67 mm 以下の格子で解き、部材域の表面の面積 4 mm² の上位値で利用者目標と比べる([TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 6章)。
