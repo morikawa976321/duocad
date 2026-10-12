@@ -70,10 +70,13 @@
   見えないので配らない。形はデバッグ表示の `rho` と同じで、`optimizeDebug.ts` の同じ層で描く)/ `finish_optimization {step?}`。
 - **`finish_optimization` は2通り。** 走っている間は `Session.request_finish(step)` の旗だけ(`optimize_status` に `finishing: true`)。探索は
   次の候補を作る前に止まり(`is_cancelled` に中断と並べて渡す)、そのステップを仕上げる(終了理由 `stopped_by_user`)。**中断が先**(両方立って
-  いれば何も足さない)。合格形がまだ無ければ仕上げずに `OptimizeCancelled`。走っていなければ `Session.finish_optimization_step`
+  いれば何も足さない)。合格形がまだ無ければ仕上げずに `OptimizeCancelled`。旗は探索がどう終わっても読む(予算・枯渇で終わる直前に届いた要求も、
+  終了理由はそのままで選んだステップを仕上げる)。探索が終わった後(進捗の `phase` が `prepare`/`derive`/`search` 以外)の要求は
+  `optimize_error`(`already_running: true`。走っている表示は消させない)で断る(旗は読まれないので)。走っていなければ `Session.finish_optimization_step`
   (`optimize_run.finish_step`。探索はやり直さない。終了理由 `finished_after_run`)を別タスクで回す。結果はどちらも `optimize_result` で、
   `finished_step`(0 から)と `steps` が載る。利用者が選んだステップの結果の名前は `optimized-step<番号>`(番号は画面と同じく 1 から)。
+- 一覧・進捗・形の各行に実行の識別子 `run` が載る。画面は新しい実行を始めたら前の `run` の返事(遅れて届いた一覧・形)を捨てる。
 - 進捗(`optimize_progress`)は合格形が増えたとき `step`(上の一覧の1行)を持つ。画面は一覧をこれで伸ばし、走り終わったとき・接続し直したとき・
-  文書を切り替えたときに `optimize_steps` で取り直す。新しい実行の開始で `Session.optimization_steps` を空にする(前の実行のステップを見せない)。
+  文書を切り替えたとき(`resetOptimizeView`)に `optimize_steps` で取り直す。実行の後の仕上げにも `debug` を渡す(`?voxel=1` の表示を新しい結果に合わせる)。新しい実行の開始で `Session.optimization_steps` を空にする(前の実行のステップを見せない)。
 - 画面(`OptimizePanel.svelte` の `#optimize-steps`): スライダー・「ボクセルで見る」・「このステップで仕上げる」。走っている間に最後のステップを
   選ぶと「最新を追う」(`step` を省いて送る)。形は選んだときだけ1つ取りに行き、返事を待つ間は次を頼まない(`App.svelte` の `searchStepVoxelsPending`)。

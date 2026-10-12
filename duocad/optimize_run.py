@@ -861,6 +861,8 @@ def finish_step(
     *,
     progress: Optional[Callable[[dict], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
+    debug: Optional[Callable[[dict], None]] = None,
+    debug_kinds: Optional[Any] = None,
 ) -> dict:
     """終わった実行の `index` 番目のステップ(探索の合格形)を、探索をやり直さずに仕上げて `doc` に足す。
 
@@ -879,7 +881,7 @@ def finish_step(
             if progress is not None:
                 progress(dict(event, diagnostic_path=str(recorder.path)))
 
-        result = steps.finisher(doc, int(index), report, should_cancel)
+        result = steps.finisher(doc, int(index), report, should_cancel, debug, debug_kinds)
         result['diagnostic_path'] = str(recorder.path)
         recorder.snapshot('result', result)
         recorder.document(doc, 'document_after')
@@ -1137,10 +1139,10 @@ def _run(
         ),
     )
 
-    requested = None
+    # 仕上げの要求は探索がどう終わっても読む(予算・枯渇で終わる直前に届いた要求を黙って捨てない)。
+    requested = None if finish_request is None else finish_request()
     if search_result.termination == 'cancelled':
         # 中断時は製品文書へ勝手に結果を追加しない(best_feasible が見つかっていても。トレースには残した)。
-        requested = None if finish_request is None else finish_request()
         if (should_cancel is not None and should_cancel()) or requested is None:
             raise OptimizeCancelled("形状探索を中断した")
         if search_result.status != 'feasible' or not search_result.accepted:
@@ -1186,12 +1188,12 @@ def _run(
     if steps is not None:
         steps.keep(len(accepted))
 
-        def finisher(target_doc, index, report, cancel) -> dict:
+        def finisher(target_doc, index, report, cancel, debug=None, debug_kinds=None) -> dict:
             again = _ProgressPump(report, cancel)
             ctx = dataclasses.replace(context, emit=lambda phase, message: again.emit(phase=phase, message=message),
                                       check=again.check)
             return _finish_shape(target_doc, index, dict(shared, context=ctx), pump=again,
-                                 dbg=_DebugSink(None, None), started=time.perf_counter(),
+                                 dbg=_DebugSink(debug, debug_kinds), started=time.perf_counter(),
                                  termination="finished_after_run", chosen_by_user=True)
 
         steps.finisher = finisher
@@ -1200,8 +1202,9 @@ def _run(
         index = last
     else:
         index = int(requested)
+    stopped = search_result.termination == 'cancelled'
     return _finish_shape(doc, index, shared, pump=pump, dbg=dbg, started=started,
-                         termination="stopped_by_user" if requested is not None else search_result.termination,
+                         termination="stopped_by_user" if stopped else search_result.termination,
                          chosen_by_user=requested is not None)
 
 

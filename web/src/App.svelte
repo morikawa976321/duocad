@@ -374,7 +374,7 @@
     },
     onOptimizeStatus: (running, cancelling, finishing) => {
       optimizeFinishing = running && finishing
-      // 接続し直すと、待っていた形の返事は来ない。待ちを畳んで頼み直せるようにする。
+      // 接続し直すと、待っていた形の返事は来ない。待ちを畳んで頼み直せるようにする(`$state` なので取得の `$effect` が走り直す)。
       searchStepVoxelsPending = null
       // 走り終わった・接続し直した・文書を切り替えた後は、その文書のステップを取り直す(走っている間は進捗で増える)。
       if (!running || searchSteps.length === 0) session.optimizeSteps()
@@ -408,17 +408,33 @@
       optimizeProgress = event
       const step = event.step
       if (step === undefined) return
+      if (step.run !== searchStepsRun) {
+        // 新しい実行の最初の進捗(前の実行の一覧が遅れて戻っていても、ここで切り替える)。
+        searchSteps = []
+        searchStepsRun = step.run
+        searchStepSelected = null
+        searchStepVoxels = null
+      }
       if (step.index === searchSteps.length) searchSteps = [...searchSteps, step]
       else if (step.index > searchSteps.length) session.optimizeSteps() // 取りこぼした(接続し直した直後など)
     },
     onOptimizeSteps: (steps, finishable) => {
+      const run = steps[0]?.run ?? null
+      // 新しい実行を始めた後に届いた、前の実行の一覧は捨てる。
+      if (run !== null && run === searchStepsStaleRun) return
+      if (run !== searchStepsRun) {
+        searchStepSelected = null
+        searchStepVoxels = null
+      }
       searchSteps = steps
+      searchStepsRun = run
       searchStepsFinishable = finishable
       if (searchStepSelected !== null && searchStepSelected >= steps.length) searchStepSelected = null
-      if (steps.length === 0) searchStepVoxels = null
     },
     onOptimizeStepVoxels: (payload) => {
       searchStepVoxelsPending = null
+      // 別の実行の形(遅れて届いた返事)は捨てる。
+      if (payload.run !== undefined && payload.run !== searchStepsRun) return
       searchStepVoxels = payload
     },
     onOptimizeDebug: handleOptimizeDebug,
@@ -479,6 +495,9 @@
   // `optimizeSteps()` で取り直す。形(表面のセル)は選んだときだけ1つずつ取りに行く(全部を配ると数十MBになる)。
   /** いま開いている文書の直近の実行のステップ。 */
   let searchSteps = $state.raw<OptimizeStepMeta[]>([])
+  /** `searchSteps` の実行の識別子と、新しい実行を始めたときに捨てた前の実行の識別子(遅れて届く返事を見分ける)。 */
+  let searchStepsRun: string | null = null
+  let searchStepsStaleRun: string | null = null
   /** 実行の後に仕上げられるか(探索が合格形を出して終わった実行)。 */
   let searchStepsFinishable = $state(false)
   /** 選んでいるステップ。`null` は最新を追う。 */
@@ -487,7 +506,7 @@
   let searchStepsShown = $state(false)
   let searchStepVoxels = $state.raw<OptimizeStepVoxels | null>(null)
   /** 返事を待っている形の番号(待つ間は次を頼まない。返事が来たら下の `$effect` が今の選択と比べ直す)。 */
-  let searchStepVoxelsPending: number | null = null
+  let searchStepVoxelsPending = $state<number | null>(null)
   /** 「このステップで仕上げる」を伝えた後、結果が届くまで。 */
   let optimizeFinishing = $state(false)
   const searchStepShownIndex = $derived(
@@ -496,13 +515,15 @@
 
   $effect(() => {
     const wanted = searchStepsShown ? searchStepShownIndex : null
-    const have = searchStepVoxels?.index ?? null
+    const have = searchStepVoxels !== null && searchStepVoxels.run === searchStepsRun ? searchStepVoxels.index : null
     if (wanted === null || wanted === have || searchStepVoxelsPending !== null) return
     searchStepVoxelsPending = wanted
     session.optimizeStepVoxels(wanted)
   })
 
   function clearSearchSteps(): void {
+    if (searchStepsRun !== null) searchStepsStaleRun = searchStepsRun
+    searchStepsRun = null
     searchSteps = []
     searchStepsFinishable = false
     searchStepSelected = null
@@ -513,7 +534,7 @@
   function finishOptimization(): void {
     if (searchSteps.length === 0 || optimizeFinishing || optimizeCancelling) return
     optimizeFinishing = true
-    session.finishOptimization(searchStepSelected)
+    session.finishOptimization(searchStepSelected, debugKindsFor(debugFlags))
   }
 
   function runOptimization(): void {
@@ -553,6 +574,8 @@
     optimizeConditions = null
     clearOptimizeDebug()
     clearSearchSteps()
+    // 開き直した文書の直近の実行のステップを取り直す(走っていない文書では状態の配信が来ないので、ここで頼む)。
+    session.optimizeSteps()
   }
 
   // ---------------------------------------------------------------- H2: 開発用のデバッグ表示

@@ -133,6 +133,11 @@ AI_LIMITS: dict = {
 async def _send(connection: Any, payload: dict) -> None:
     await connection.send(json.dumps(payload, ensure_ascii=False))
 
+
+#: 「このステップで仕上げる」を受け付ける局面(`optimize_progress` の `phase`)。探索の後(空隙埋め・メッシュ化・完成形検査・
+#: さかのぼり・追加)では探索はもう止まっていて、旗を立てても読まれない。`None` は進捗がまだ1件も無いとき。
+_BEFORE_SEARCH_ENDS = (None, "prepare", "derive", "search")
+
 class Server:
     """WebSocketの接続集合とコマンドの実行。状態変更は全接続へ配信する。
 
@@ -892,6 +897,15 @@ class Server:
         step = message.get("step")
         step = None if step is None else int(step)
         if self.session.optimization_visible:
+            phase = None if self._optimize_last_progress is None else self._optimize_last_progress.get("phase")
+            if phase not in _BEFORE_SEARCH_ENDS:
+                # 探索はもう終わって仕上げている。旗を立てても読まれないので断る(走っている実行の表示は消させない)。
+                await _send(connection, {
+                    "type": "optimize_error",
+                    "message": "探索はもう終わって仕上げている。終わった後にステップを選んで仕上げること",
+                    "already_running": True,
+                })
+                return
             self.session.request_finish(step)
             await self._broadcast_optimize_status()
             return
@@ -912,11 +926,17 @@ class Server:
         if index >= count:
             await _send(connection, {"type": "optimize_error", "message": f"ステップ {index} は無い(0〜{count - 1})"})
             return
+        kwargs: dict = {}
+        wanted = message.get("debug")
+        if isinstance(wanted, (list, tuple)):
+            kinds = [str(k) for k in wanted if str(k) in optimize_run.DEBUG_KINDS]
+            if kinds:
+                kwargs["debug_kinds"] = kinds
         self.session.begin_optimization()
         self.session.request_finish(index)  # 画面に「仕上げ中」と出すため(実行の後の仕上げはこの印を見ない)
         self._optimize_last_progress = None
         await self._broadcast_optimize_status()
-        task = asyncio.get_running_loop().create_task(self._optimize_run({}, finish_step=index))
+        task = asyncio.get_running_loop().create_task(self._optimize_run(kwargs, finish_step=index))
         self._pending_optimize_runs.add(task)
 
         def finished(done: "asyncio.Task") -> None:
@@ -968,7 +988,7 @@ class Server:
                     work = functools.partial(self.session.run_optimization, progress=self._optimize_progress, **kwargs)
                 else:
                     work = functools.partial(self.session.finish_optimization_step, finish_step,
-                                             progress=self._optimize_progress)
+                                             progress=self._optimize_progress, **kwargs)
                 result = await asyncio.to_thread(work)
                 result = self.session.deliver_optimization_result(result)
                 # 無題の文書の結果を別の文書を開いている間に届けたら、届け先は新しく名前を付けたファイル。

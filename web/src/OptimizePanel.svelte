@@ -81,8 +81,10 @@
   } = $props()
 
   const stepMeta = $derived(stepIndex === null ? null : (searchSteps[stepIndex] ?? null))
+  /** 走っている間に仕上げを受け付けるのは探索が終わるまで(その後は探索が止まっていて、サーバも断る)。 */
+  const searching = $derived(progress === null || ['prepare', 'derive', 'search'].includes(progress.phase))
   const canFinish = $derived(
-    searchSteps.length > 0 && !cancelling && !finishing && (running || finishable),
+    searchSteps.length > 0 && !cancelling && !finishing && (running ? searching : finishable),
   )
 
   const steps = $derived(resolution?.steps ?? [])

@@ -772,7 +772,8 @@ class Session:
                 self.end_optimization()
         return result
 
-    def finish_optimization_step(self, step: int, *, progress: Any = None) -> dict:
+    def finish_optimization_step(self, step: int, *, progress: Any = None, debug: Any = None,
+                                 debug_kinds: Any = None) -> dict:
         """直近の実行の `step` 番目のステップを、探索をやり直さずに仕上げて結果を足す(`optimize_run.finish_step`)。
 
         `run_optimization` と同じく重いので別スレッドで回し、呼び出し側が `begin_optimization` を済ませていなければここで囲む。
@@ -784,7 +785,8 @@ class Session:
             self.begin_optimization()
         try:
             result = optimize_run.finish_step(self._optimize_document, steps, int(step), progress=progress,
-                                              should_cancel=self._optimize_cancel.is_set)
+                                              should_cancel=self._optimize_cancel.is_set, debug=debug,
+                                              debug_kinds=debug_kinds)
             if owned:
                 result = self.deliver_optimization_result(result)
         finally:

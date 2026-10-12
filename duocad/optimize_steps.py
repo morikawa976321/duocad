@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -22,9 +23,12 @@ class OptimizationSteps:
         self._shapes: list = []
         self._meta: list[dict] = []
         self._started = time.perf_counter()
+        #: 実行の識別子。一覧・進捗・形の各行に載せ、画面が前の実行の遅れた返事を取り違えないようにする。
+        self.run = uuid.uuid4().hex[:12]
         #: 探索の格子(`voxelize.Grid`)。`optimize_run` が塊を導出した直後に置く。
         self.grid: Any = None
-        #: `finisher(doc, index, progress, should_cancel) -> dict`。探索が合格形を出して終わった後に `optimize_run` が置く。
+        #: `finisher(doc, index, progress, should_cancel, debug, debug_kinds) -> dict`。探索が合格形を出して終わった後に
+        #: `optimize_run` が置く。
         self.finisher: Optional[Callable[..., dict]] = None
 
     def __len__(self) -> int:
@@ -35,7 +39,7 @@ class OptimizationSteps:
         """合格形を1つ足し、画面に出す数値を返す。"""
         cells = int(round(shape.material_mm3 / float(self.grid.element_volume))) if self.grid is not None else None
         with self._lock:
-            meta = dict(index=len(self._shapes), evaluation=int(evaluation),
+            meta = dict(run=self.run, index=len(self._shapes), evaluation=int(evaluation),
                         seconds=round(time.perf_counter() - self._started, 1), material_mm3=float(shape.material_mm3),
                         safety_factor=float(shape.safety_factor), cells=cells)
             self._shapes.append(shape)

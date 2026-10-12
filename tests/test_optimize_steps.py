@@ -136,3 +136,41 @@ def test_finish_without_steps_is_refused_with_a_reason(session: Session) -> None
     session.optimization_steps = OptimizationSteps()
     session._steps_name = "another.json"
     assert session.steps_for_current() is None
+
+
+def test_a_finish_request_is_honoured_even_when_the_search_ends_on_its_own(session: Session, monkeypatch) -> None:
+    """落ちたら、探索が予算・枯渇で終わる直前に届いた「このステップで仕上げる」を黙って捨て、最後の形を仕上げている。"""
+    from duocad.topopt import binary_search
+
+    four_conditions(session)
+    real = binary_search.find_best_feasible
+
+    def deaf(*args, **kwargs):  # 要求を探索の途中で見ない(終わる直前に届いたのと同じ)
+        kwargs["is_cancelled"] = None
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", deaf)
+    steps = OptimizationSteps()
+    result = optimize_run.run(session.document, OPTIONS, steps=steps, finish_request=lambda: 1)
+    assert result["state"] == "done" and result["finished_step"] == 1 and result["name"] == "optimized-step2"
+    assert result["termination"] != "stopped_by_user" and len(steps) > 2
+    assert {row["run"] for row in steps.meta()} == {steps.run}
+
+
+def test_a_finish_after_the_search_has_ended_is_refused_without_clearing_the_running_view(session: Session) -> None:
+    """落ちたら、探索が終わって仕上げている最中の「このステップで仕上げる」を受け付けた顔をして黙って捨てている。"""
+
+    async def scenario() -> FakeConnection:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        session.begin_optimization()
+        server._optimize_last_progress = {"type": "optimize_progress", "phase": "final_check", "message": ""}
+        await server._dispatch(connection, json.dumps({"cmd": "finish_optimization", "step": 0}))
+        return connection
+
+    connection = asyncio.run(scenario())
+    [error] = connection.of_type("optimize_error")
+    assert error["already_running"] is True and "探索はもう終わって" in error["message"]
+    assert session._finish_request is None

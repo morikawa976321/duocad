@@ -656,6 +656,8 @@ export interface OptimizeProgress {
  * `safety_factor` は探索の格子での値(探索の目標と比べる)、`seconds` は実行の開始からの秒。
  */
 export interface OptimizeStepMeta {
+  /** 実行の識別子。前の実行の遅れた返事を見分ける。 */
+  run: string
   index: number
   evaluation: number
   seconds: number
@@ -997,7 +999,7 @@ export interface Session {
    * 「このステップで仕上げる」。走っている間は探索を止めて `step`(`null` は最新)を仕上げる(降りるのは次の候補を作る前)。
    * 走っていなければ、いま開いている文書の直近の実行のステップを、探索をやり直さずに仕上げて結果を足す。
    */
-  finishOptimization(step: number | null): void
+  finishOptimization(step: number | null, debug?: OptimizeDebugKind[]): void
   /** いま開いている文書の直近の実行のステップの一覧を聞く(応答は `onOptimizeSteps`)。 */
   optimizeSteps(): void
   /** ステップ1つの形を聞く(応答は `onOptimizeStepVoxels`)。 */
@@ -1408,8 +1410,13 @@ export function createSession(hooks: SessionHooks): Session {
     cancelOptimization() {
       send({ cmd: 'cancel_optimization' })
     },
-    finishOptimization(step) {
-      send(step === null ? { cmd: 'finish_optimization' } : { cmd: 'finish_optimization', step })
+    finishOptimization(step, debug) {
+      send({
+        cmd: 'finish_optimization',
+        ...(step === null ? {} : { step }),
+        // 実行の後の仕上げでもデバッグ表示(`?voxel=1` など)を新しい結果に合わせる(`runOptimization` と同じ)。
+        ...(debug && debug.length > 0 ? { debug } : {}),
+      })
     },
     optimizeSteps() {
       send({ cmd: 'optimize_steps' })
