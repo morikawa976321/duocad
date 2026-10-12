@@ -182,7 +182,7 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
     さかのぼって完成形検査に通る形を探す。
 
     検査は2段。安い段(`screen`: 空隙埋めと探索の格子の6条件)で落ちた形は飛ばし、`MAX_BACKTRACK_CHECKS` に数えない
-    (上限は `MAX_BACKTRACK_SCREENS`。超えたら安い段で選り分けずに高い段へ進む)。空隙埋めで落ちた形と通る形は列の中で入り交じる
+    (上限は `MAX_BACKTRACK_SCREENS`。使い切ったら、それまでに完成形検査に通った形で打ち切る。無ければ `screen_limit`)。空隙埋めで落ちた形と通る形は列の中で入り交じる
     (docs/TOPOPT_STOPPING.md 4節)ので、安い段を通る形は 1, 2, 4, ... 手ずつ飛んで探し、通った形が見つかったらその手前で
     飛ばした形を軽い側から見直す(`descend`)。
     最初に失敗した形が空隙埋めで落ちたなら、安い段を通る中で最も新しい形から高い段へ進む。完成形検査で割ったなら、
