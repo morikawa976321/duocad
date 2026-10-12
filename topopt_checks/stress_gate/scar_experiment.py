@@ -5,7 +5,9 @@
     .venv\\Scripts\\python.exe topopt_checks\\stress_gate\\scar_experiment.py --model hanger --load 150 --h 3.29 --w 9.86 --gpu --trace
 
 引数は `run_product.py` と同じ。出力は output/stress_gate_20261008/scar/product/(製品の記録を上書きしない)。
+環境変数 `SCAR_FINAL_RELEASE=1` で、尽きたら傷を外して歩き直す版になる(出力は scar_release/)。
 """
+import os
 import sys
 import time
 from pathlib import Path
@@ -22,9 +24,13 @@ from duocad.topopt.acceptance import NEIGHBOURHOOD_STRUCTURE  # noqa: E402,F401
 from duocad.topopt.binary_search import (_CORNERS, _WINDOW_NEIGHBOURS, _Pick, _mask_satisfies_min_width,  # noqa: E402,F401
                                          _neighbours_stay_connected, _regular_after_removal)
 
-pa.OUT = pa.OUT / "scar"
+#: 環境変数 SCAR_FINAL_RELEASE=1: 尽きたら傷を全部外して歩き直す(毒は残す)。外した後に採用が無いまま尽きたら本当に止める
+#: (astra の「傷を残したまま尽きたと呼ばない」)。出力は scar_release/ へ分ける。
+FINAL_RELEASE = os.environ.get("SCAR_FINAL_RELEASE") == "1"
+pa.OUT = pa.OUT / ("scar_release" if FINAL_RELEASE else "scar")
 #: mask は傷の和集合(None は傷なし)、version は傷が変わるたびに増やす(歩きの使い回しを捨てる合図)。
-SCAR = dict(mask=None, version=0, skips=0, scars=[], recorded=0, released=0)
+SCAR = dict(mask=None, version=0, skips=0, scars=[], recorded=0, released=0, final_releases=0, released_at_end=0,
+            accepted_since_release=True, accepted_after_release=0, cells_at_first_release=None)
 LAST = dict(removed=None, picked=0, shape=None)
 
 
@@ -35,6 +41,18 @@ class ScarWalk(bs.PeelWalk):
             self.picks = []
             self._scar_version = SCAR["version"]
         candidate, stats = super().take(order, count)
+        if FINAL_RELEASE and count > 0 and stats.picked == 0 and SCAR["scars"] and SCAR["accepted_since_release"]:
+            SCAR["final_releases"] += 1
+            SCAR["released_at_end"] += len(SCAR["scars"])
+            if SCAR["cells_at_first_release"] is None:
+                SCAR["cells_at_first_release"] = int(self.parent.sum())
+            SCAR["scars"] = []
+            SCAR["accepted_since_release"] = False
+            _rebuild()
+            self.order = None
+            self.picks = []
+            self._scar_version = SCAR["version"]
+            candidate, stats = super().take(order, count)
         LAST.update(removed=np.flatnonzero(self.parent.ravel() & ~candidate.ravel()), picked=int(stats.picked),
                     shape=self.parent.shape)
         return candidate, stats
@@ -175,14 +193,18 @@ def _rebuild():
 
 
 def on_event(event):
-    if event["outcome"] == "rejected" and "safety" in event["failed"] and LAST["picked"] == 1             and LAST["removed"] is not None and len(LAST["removed"]):
+    if event["outcome"] == "rejected" and "safety" in event["failed"] and LAST["picked"] == 1 \
+            and LAST["removed"] is not None and len(LAST["removed"]):
         cand = event["candidate_safety_factor"]
         target = event["target_safety_factor"]
         shortfall = target - cand if cand is not None and np.isfinite(cand) and cand < target else None
         SCAR["scars"].append((LAST["removed"].copy(), float(event["safety_factor"]), shortfall))
         SCAR["recorded"] += 1
         _rebuild()
-    elif event["outcome"] == "accepted" and SCAR["scars"]:
+    elif event["outcome"] == "accepted" and SCAR["final_releases"]:
+        SCAR["accepted_since_release"] = True
+        SCAR["accepted_after_release"] += 1
+    if event["outcome"] == "accepted" and SCAR["scars"]:
         keep = [s for s in SCAR["scars"] if s[2] is None or event["safety_factor"] - s[1] < s[2]]
         if len(keep) != len(SCAR["scars"]):
             SCAR["released"] += len(SCAR["scars"]) - len(keep)
