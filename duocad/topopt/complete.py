@@ -186,7 +186,7 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
     while len(result.checks) < MAX_BACKTRACK_CHECKS:
         ctx.check()
         shape = accepted[probe]
-        ctx.emit('backtrack', f"完成形が目標を割ったので、探索を {last - probe} 手戻した形(探索の安全率 "
+        ctx.emit('backtrack', f"{_why(failed)}ので、探索を {last - probe} 手戻した形(探索の安全率 "
                               f"{shape.safety_factor:.4g})で作り直して検査する({len(result.checks) + 1}/{MAX_BACKTRACK_CHECKS})")
         try:
             done = complete_shape(shape.mask(), shape.safety_factor, shape.material_mm3, ctx)
@@ -240,4 +240,16 @@ def exhausted_note(result: Backtrack) -> str:
         return ''
     deepest = max(row['steps_back'] for row in result.checks)
     where = '最初の形まで' if result.reason == 'exhausted' else f"最大 {deepest} 手まで"
-    return f"探索の合格形を{where}さかのぼって {len(result.checks)} 形を検査したが、どれも目標を割った"
+    reasons = {row['verdict'] for row in result.checks}
+    failed = '・'.join(text for verdict, text in _VERDICT_TEXT if verdict in reasons) or '通らなかった'
+    return f"探索の合格形を{where}さかのぼって {len(result.checks)} 形を検査したが、どれも通らなかった({failed})"
+
+
+#: さかのぼった形が通らなかった理由の書き方(`Backtrack.checks` の `verdict`)。
+_VERDICT_TEXT = (('fail', '完成形検査で目標を割った'), ('fill_infeasible', '空隙を埋めた形が6条件に落ちた'),
+                 ('unknown', '完成形の安全率を測れなかった'), ('error', '作り直しに失敗した'))
+
+
+def _why(failed: Completion) -> str:
+    """さかのぼり始めた理由(進捗の文面)。"""
+    return "空隙を埋めた形が6条件に落ちた" if failed.fill_failure is not None else "完成形が目標を割った"

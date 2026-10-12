@@ -139,3 +139,18 @@ def test_a_final_shape_whose_filled_voids_fail_is_also_backtracked_and_the_warni
     assert result.reason == 'passed' and result.chosen is not None
     message = complete.backtrack_message(failed, result.chosen, 4 - result.chosen_index, 2.0)
     assert "空隙を埋めた形が6条件に落ちた" in message and "割った" not in message
+
+
+def test_when_every_candidate_fails_only_its_filled_voids_the_note_does_not_claim_the_target_was_missed():
+    """落ちたら、さかのぼった形が空隙埋めで落ちただけなのに、測っていない安全率で「目標を割った」と書いている。"""
+    accepted = _accepted([9.0, 8.0, 7.0])
+    failed = complete.Completion(mask=accepted[-1].mask(), search_safety_factor=7.0, safety_factor=7.0,
+                                 material_mm3=62.0, fill=dict(cells=3), fill_failure="埋めた形が6条件に不合格")
+
+    def filled_voids_fail(mask, search_sf, material, ctx):
+        return complete.Completion(mask=mask, search_safety_factor=search_sf, safety_factor=search_sf,
+                                   material_mm3=material, fill=dict(cells=1), fill_failure="埋めた形が6条件に不合格")
+
+    result = complete.backtrack(accepted, failed, _context(), complete_shape=filled_voids_fail)
+    note = complete.exhausted_note(result)
+    assert result.chosen is None and "空隙を埋めた形が6条件に落ちた" in note and "目標を割った" not in note
