@@ -27,7 +27,10 @@ def load(path):
 
 
 def single_safety_fail(r):
-    return r["outcome"] == "rejected" and r["picked"] == 1 and "safety" in r["failed"]
+    # 製品は安全率の判定が「不合格」の手だけを数える。記録の `failed` には判定不能(評価失敗)も入るので、候補の安全率が
+    # 取れたものに限る(評価失敗は安全率を持たない)。剛体運動で落ちた手(不合格だが安全率なし)は数え漏れる。
+    return (r["outcome"] == "rejected" and r["picked"] == 1 and "safety" in r["failed"]
+            and r["cand_sf"] is not None)
 
 
 def patience(n):
