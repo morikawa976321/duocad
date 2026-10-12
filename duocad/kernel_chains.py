@@ -57,11 +57,12 @@ def blend_chains(shape: TopoDS_Shape) -> Dict[int, int]:
 
 
 def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
-    """連なりが伸びうる辺の添字: **鋭い辺がちょうど2本集まる頂点**の、その2本。
+    """連なりが伸びうる辺の添字: 頂点で伸びを止める鋭い辺が2本以下のとき、その頂点の鋭い辺(2本以上あるとき)。
 
     OCCT 7.9.3 の伝播(`ChFi3d_Builder::PerformElement` と `FaceTangency`、src/ChFi3d/ChFi3d_Builder_1.cxx)は、
     頂点 V で辺 E0 から E1 へ伸ばす条件を「E1 が鋭く、V に集まる他の辺(E0・E1・退化辺・INTERNAL/EXTERNAL を除く)が
-    すべて滑らか」とし、鋭くない辺からは始めない。よって伸びるのは V の鋭い辺が {E0, E1} の2本だけのときに限る。
+    すべて滑らか」とし、鋭くない辺からは始めない。向きによる除外は止める側の辺にだけ効き、E0・E1 は全出現が
+    INTERNAL / EXTERNAL の辺でもよい。よって伸びるのは、V で止める側に数える鋭い辺が {E0, E1} に含まれるときに限る。
     鋭い = 両側の面が2枚で `ChFi3d::IsTangentFaces`(G1。角度の許容 0.1 rad)が偽、または面が2枚でない。
     辺の接線の角度では絞れない: 面の継ぎ目が 0.1 rad 未満なら、辺が5度以上折れていても伸びる(平面図で 5.5° 折れた輪郭の押し出しの底辺)。
     写像は OCCT と同じ `TopExp::MapShapesAndAncestors`(継ぎ目の辺は同じ面が2回入る)。
@@ -78,8 +79,8 @@ def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
         index = edge_map.FindIndex(edge_faces.FindKey(number))
         if faces.Extent() == 2:
             sides[index] = (TopoDS.Edge_s(edge_faces.FindKey(number)), TopoDS.Face_s(faces.First()), TopoDS.Face_s(faces.Last()))
-    # OCCT は頂点に集まる辺を出現ごとに見て INTERNAL / EXTERNAL の出現だけを飛ばす。同じ辺が通常の向きでも
-    # 現れれば数えるので、除くのは全出現が INTERNAL / EXTERNAL の辺だけ(代表キー1つの向きで決めない)。
+    # OCCT は止める側の辺を出現ごとに見て INTERNAL / EXTERNAL の出現だけを飛ばす。同じ辺が通常の向きでも
+    # 現れれば止める側に数えるので、数えないのは全出現が INTERNAL / EXTERNAL の辺だけ(代表キー1つの向きで決めない)。
     regular: set = set()
     explorer = TopExp_Explorer(shape, TopAbs_EDGE)
     while explorer.More():
@@ -89,7 +90,7 @@ def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
     vertex_edges: Dict[int, List[int]] = {}
     for index in range(1, edge_map.Extent() + 1):
         edge = TopoDS.Edge_s(edge_map.FindKey(index))
-        if index not in regular or BRep_Tool.Degenerated_s(edge):
+        if BRep_Tool.Degenerated_s(edge):
             continue
         first, last = TopoDS_Vertex(), TopoDS_Vertex()
         TopExp.Vertices_s(edge, first, last)
@@ -116,6 +117,6 @@ def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
         if len(here) < 2:
             continue
         sharp_here = {index for index in here if sharp(index)}
-        if len(sharp_here) == 2:
+        if len({index for index in sharp_here if index in regular}) <= 2 and len(sharp_here) >= 2:
             found |= sharp_here
     return sorted(found)

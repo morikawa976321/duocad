@@ -152,3 +152,19 @@ def test_an_edge_also_listed_as_internal_still_chains() -> None:
     builder.Add(rebuilt, kernel._edge_map(stepped).FindKey(front[0]).Oriented(TopAbs_INTERNAL))
     builder.Add(rebuilt, indexed_map(solid, TopAbs_SHELL).FindKey(1))
     assert kernel_chains.blend_chains(rebuilt) == _every_edge_chains(rebuilt)
+
+
+def test_an_internal_only_edge_can_start_a_chain() -> None:
+    """落ちたら、全出現が INTERNAL の辺を始点・伸びる先の候補からも除き、OCCT がつなぐ連なりが割れる。"""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopAbs import TopAbs_INTERNAL, TopAbs_SHELL
+    from OCP.TopoDS import TopoDS_Solid
+
+    from duocad.mesh_geometry import indexed_map
+
+    outer = BRepPrimAPI_MakeBox(gp_Pnt(-10, -10, -10), 40, 30, 30).Shape()
+    builder, solid = BRep_Builder(), TopoDS_Solid()
+    builder.MakeSolid(solid)
+    builder.Add(solid, indexed_map(outer, TopAbs_SHELL).FindKey(1))
+    builder.Add(solid, indexed_map(_stepped(), TopAbs_SHELL).FindKey(1).Oriented(TopAbs_INTERNAL))
+    assert kernel_chains.blend_chains(solid) == _every_edge_chains(solid)
