@@ -33,6 +33,8 @@ def main() -> int:
     ap.add_argument("--v-cells", type=float, default=None,
                     help="探索の部材域の上位値で許す超過体積 V を探索格子のセル数で与える(省くと製品の 最小幅³)")
     ap.add_argument("--gpu", action="store_true", help="FEM を GPU で解く(docs/TOPOPT_GPU.md)")
+    ap.add_argument("--target-tolerance", default=None,
+                    help="探索の target_tolerance(数か none = 許容の止め方を使わない)。省くと製品の既定")
     a = ap.parse_args()
     spec = dict(pa.MODELS[a.model])
     for key, val in (("load_n", a.load), ("h", a.h), ("w", a.w)):
@@ -55,6 +57,16 @@ def main() -> int:
         return built
 
     optimize_run._build_search_conditions = conditions
+    if a.target_tolerance is not None:
+        from duocad.topopt import binary_search
+        real_find = binary_search.find_best_feasible
+        tolerance = None if a.target_tolerance == "none" else float(a.target_tolerance)
+
+        def find(*args, **kwargs):
+            kwargs["target_tolerance"] = tolerance
+            return real_find(*args, **kwargs)
+
+        binary_search.find_best_feasible = find
     started = time.perf_counter()
     options = optimize_run.OptimizeOptions(element_size_mm=spec["h"], min_width_mm=spec["w"])
     if a.legacy:
@@ -84,7 +96,8 @@ def main() -> int:
     print(json.dumps(row, ensure_ascii=False, default=float), flush=True)
     (pa.OUT / "product").mkdir(parents=True, exist_ok=True)
     tag = (f"{a.model}_L{spec['load_n']:g}_h{spec['h']:g}_w{spec['w']:g}" + ("_legacy" if a.legacy else "")
-           + ("" if a.v_cells is None else f"_V{a.v_cells:g}cells"))
+           + ("" if a.v_cells is None else f"_V{a.v_cells:g}cells")
+           + ("" if a.target_tolerance is None else f"_tol{a.target_tolerance}"))
     (pa.OUT / "product" / f"{tag}.json").write_text(json.dumps(row, ensure_ascii=False, indent=1, default=float),
                                                     encoding="utf-8")
     return 0

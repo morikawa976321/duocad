@@ -1125,34 +1125,25 @@ def _run(
         check=pump.check, place=place, search_status=search_result.status,
         search_termination=search_result.termination, passthrough=(OptimizeCancelled,))
     done = completion.complete(best.mask, float(best.safety_factor), float(best.material_mm3), context)
-    if done.fill_failure is not None:
-        return _not_done(
-            common,
-            started,
-            keep_room_warning,
-            state="fill_infeasible",
-            warning=done.fill_failure,
-            unrepresented_regions=unrepresented,
-            boundary_mapping=mapping,
-            evaluations=int(search_result.evaluations),
-            termination=search_result.termination,
-        )
     backtrack_warning = ""
     backtrack_report = None
-    if done.verdict == "fail":
-        # 完成形が本来の目標を割ったら、探索の合格形をさかのぼって通る形を足す(2026-10-11 本人決定)。通らなければ足さない(#129)
+    if done.verdict in ("fail", "fill_infeasible"):
+        # 完成形が本来の目標を割るか、空隙を埋めた形が6条件に落ちたら、探索の合格形をさかのぼって通る形を足す
+        # (2026-10-11・12 本人決定)。通らなければ足さない(#129)
         back = completion.backtrack(search_result.accepted, done, context)
         steps_back = None if back.chosen_index is None else len(search_result.accepted) - 1 - back.chosen_index
         backtrack_report = dict(reason=back.reason, steps_back=steps_back, checks=back.checks,
                                 first_final_safety_factor=done.final_safety_factor,
                                 first_material_mm3=done.material_mm3)
         if back.chosen is None:
+            unsafe = done.verdict == "fail"
             return dict(_not_done(
                 common,
                 started,
                 keep_room_warning,
-                state="final_unsafe",
-                warning=_join_warnings(completion.shortfall_message(done, target), completion.exhausted_note(back)),
+                state="final_unsafe" if unsafe else "fill_infeasible",
+                warning=_join_warnings(completion.shortfall_message(done, target) if unsafe else done.fill_failure,
+                                       completion.exhausted_note(back)),
                 unrepresented_regions=unrepresented,
                 boundary_mapping=mapping,
                 evaluations=int(search_result.evaluations),

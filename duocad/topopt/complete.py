@@ -228,7 +228,9 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
 def backtrack_message(failed: Completion, chosen: Completion, steps_back: int, target_safety_factor: float) -> str:
     """戻した形を足すときの warning の一文。"""
     added = (chosen.material_mm3 / failed.material_mm3 - 1.0) * 100.0 if failed.material_mm3 > 0 else float('nan')
-    return (f"探索の最終形は完成形の安全率 {failed.final_safety_factor:.4g} で目標 {target_safety_factor:.4g} を割ったので、"
+    why = ("空隙を埋めた形が6条件に落ちた" if failed.fill_failure is not None else
+           f"完成形の安全率 {failed.final_safety_factor:.4g} で目標 {target_safety_factor:.4g} を割った")
+    return (f"探索の最終形は{why}ので、"
             f"探索を {steps_back} 手戻した形を足した(材料 {added:+.1f}%、完成形の安全率 {chosen.final_safety_factor:.4g})")
 
 
