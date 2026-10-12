@@ -139,6 +139,10 @@ Claude は次を答えた。1: 止め方を変えること自体で hanger 1本�
 >
 > 1-3を実装してください。各ステップでsolレビューをうけてPRにして。合計3つのPR. マージはあなたがやってくれていい。3PRともマージされたら、ここまで使ってこなかった条件(要素サイズや最小幅や荷重)のhangerを何本か回してみてうまくいっているかどうかを調べて。
 
+実装(2026-10-12): 1 は PR #151(`stress.MEMBER_VOLUME_CELLS = 1`、`binary_search.DEFAULT_TARGET_TOLERANCE` /
+`DEFAULT_SINGLE_CELL_PATIENCE` を `None`)、2 は PR #152(`duocad/optimize_steps.py`、最適化パネルの「ステップ」。契約は
+docs/contracts/ui-optimize-integration.md「ステップ」)、3 は PR #154(`complete.backtrack` の2段化、4節)。
+
 ## 8. 再現
 
 ```powershell
