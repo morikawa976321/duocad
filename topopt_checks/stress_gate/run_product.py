@@ -111,7 +111,7 @@ def main() -> int:
                fine_material_cells=safety.get("material_cells"), keep_peak_mpa=safety.get("keep_peak_mpa"),
                boundary_layer_peak_mpa=safety.get("boundary_layer_peak_mpa"), solver=safety.get("solver"),
                member_volume_mm3=used.get("member_volume_mm3"), cell_mm3=used.get("cell_mm3"),
-               backtrack=result.get("backtrack"),
+               backtrack=result.get("backtrack"), diagnostic_path=result.get("diagnostic_path"),
                peak_rss_gb=round(psutil.Process().memory_info().peak_wset / 1e9, 2) if hasattr(psutil.Process().memory_info(), "peak_wset") else None,
                warning=result.get("warning"))
     print(json.dumps(row, ensure_ascii=False, default=float), flush=True)
