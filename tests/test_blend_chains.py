@@ -105,7 +105,20 @@ def _shapes() -> dict:
         for item in kernel.tessellate_edges(box)
         if all(abs(v) < 1e-9 for v in item["points"][0::3] + item["points"][1::3])
     )
+    import math
+
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Vec
+
+    # 平面図で 5.5° 折れた輪郭。側面の継ぎ目が OCCT の接線の許容(0.1 rad)に入り、底辺が折れていても連なる。
+    outline = BRepBuilderAPI_MakePolygon()
+    for x, y in [(0, 0), (10, 0), (20, 10 * math.tan(math.radians(5.5))), (20, 10), (0, 10)]:
+        outline.Add(gp_Pnt(x, y, 0))
+    outline.Close()
+    kinked = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(outline.Wire()).Face(), gp_Vec(0, 0, 5)).Shape()
     return {
+        "kinked_5_5_degrees": kinked,
         "stepped": _stepped(),
         "one_corner_rounded": kernel.fillet_edges(box, {corner: 2.0})["shape"],
         "all_edges_rounded": kernel.fillet_edges(box, every)["shape"],
@@ -114,7 +127,9 @@ def _shapes() -> dict:
     }
 
 
-@pytest.mark.parametrize("name", ["stepped", "one_corner_rounded", "all_edges_rounded", "plate_with_holes", "cylinder"])
+@pytest.mark.parametrize(
+    "name", ["kinked_5_5_degrees", "stepped", "one_corner_rounded", "all_edges_rounded", "plate_with_holes", "cylinder"]
+)
 def test_the_sieve_loses_no_chain(name: str) -> None:
     """落ちたら、`Add` を呼ぶ辺を絞る篩(`_sieve`)が連なりの辺を取りこぼし、画面で連なりが割れる。"""
     shape = _shapes()[name]

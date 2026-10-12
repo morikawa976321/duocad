@@ -4,23 +4,18 @@
 """
 from __future__ import annotations
 
-import math
 from typing import Dict, List
 
-from OCP.BRepAdaptor import BRepAdaptor_Curve
-from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRep import BRep_Tool
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_VERTEX
+from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+from OCP.ChFi3d import ChFi3d
+from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_EXTERNAL, TopAbs_FACE, TopAbs_INTERNAL, TopAbs_VERTEX
 from OCP.TopExp import TopExp
-from OCP.TopoDS import TopoDS, TopoDS_Shape
+from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Vertex
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
-from OCP.gp import gp_Pnt, gp_Vec
 
 from .mesh_geometry import indexed_map
-
-#: 端点で接線が平行とみなす角度(ラジアン)。`MakeFillet.Add` を呼ぶ辺を絞るだけの篩で、連なりそのものは
-#: OCCT が決める。OCCT の接線判定より緩くしておく(取りこぼすと連なりが割れ、余分は `Add` 1回ぶんの時間だけ)。
-SIEVE_ANGLE = math.radians(5.0)
 
 
 def blend_chains(shape: TopoDS_Shape) -> Dict[int, int]:
@@ -31,8 +26,9 @@ def blend_chains(shape: TopoDS_Shape) -> Dict[int, int]:
     全部にかかる。画面の選択をこの単位にしないと「光った1本より広く丸まる」になる。
 
     `Add` 1回は形状全体に比例して重い(実測: 1,212辺で 0.9ms、4,812辺で 3.8ms)ので、全辺に呼ぶと辺数の2乗で
-    伸びる(円柱の穴を400個あけた板の4,812辺で 8.4 秒)。端点で接線が平行な相手を持つ辺だけに呼ぶ(`_sieve`。同じ板で
-    `Add` は0回、篩だけの 1.1 秒)。
+    伸びる(円柱の穴を400個あけた板の4,812辺で 8.4 秒)。伸びうる辺だけに呼ぶ(`_sieve`)。篩を入れた実測: 同じ板 0.09 秒、
+    27部品の PC ケース(`web/scripts/models.mjs` の `PC_CASE_STEP`)で最も重いボディ(471辺・候補256本)0.71 秒、
+    27ボディすべてで全辺に `Add` した結果と一致。
     """
     edge_map = indexed_map(shape, TopAbs_EDGE)
     chains: Dict[int, int] = {index: index for index in range(1, edge_map.Extent() + 1)}
@@ -61,41 +57,57 @@ def blend_chains(shape: TopoDS_Shape) -> Dict[int, int]:
 
 
 def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
-    """端点を共有する別の辺と、その端点での接線が(向きを問わず)平行な辺の添字。"""
-    vertex_edges = TopTools_IndexedDataMapOfShapeListOfShape()
-    TopExp.MapShapesAndAncestors_s(shape, TopAbs_VERTEX, TopAbs_EDGE, vertex_edges)
-    sine_limit = math.sin(SIEVE_ANGLE)
+    """連なりが伸びうる辺の添字: **鋭い辺がちょうど2本集まる頂点**の、その2本。
+
+    OCCT 7.9.3 の伝播(`ChFi3d_Builder::PerformElement` と `FaceTangency`、src/ChFi3d/ChFi3d_Builder_1.cxx)は、
+    頂点 V で辺 E0 から E1 へ伸ばす条件を「E1 が鋭く、V に集まる他の辺(E0・E1・退化辺・INTERNAL/EXTERNAL を除く)が
+    すべて滑らか」とし、鋭くない辺からは始めない。よって伸びるのは V の鋭い辺が {E0, E1} の2本だけのときに限る。
+    鋭い = 両側の面が2枚で `ChFi3d::IsTangentFaces`(G1。角度の許容 0.1 rad)が偽、または面が2枚でない。
+    辺の接線の角度では絞れない: 面の継ぎ目が 0.1 rad 未満なら、辺が5度以上折れていても伸びる(平面図で 5.5° 折れた輪郭の押し出しの底辺)。
+    写像は OCCT と同じ `TopExp::MapShapesAndAncestors`(継ぎ目の辺は同じ面が2回入る)。
+    """
+    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
+    vertex_map = indexed_map(shape, TopAbs_VERTEX)
+
+    # OCP の `TopTools_ListOfShape` を for で回すと1リスト約 0.3ms かかる(4,812辺の板で 2.5 秒)。
+    # 面は `Extent` / `First` / `Last` で読み、頂点に集まる辺は辺の両端から組む。
+    sides: Dict[int, object] = {}
+    for number in range(1, edge_faces.Extent() + 1):
+        faces = edge_faces.FindFromIndex(number)
+        index = edge_map.FindIndex(edge_faces.FindKey(number))
+        if faces.Extent() == 2:
+            sides[index] = (TopoDS.Edge_s(edge_faces.FindKey(number)), TopoDS.Face_s(faces.First()), TopoDS.Face_s(faces.Last()))
+    vertex_edges: Dict[int, List[int]] = {}
+    for index in range(1, edge_map.Extent() + 1):
+        edge = TopoDS.Edge_s(edge_map.FindKey(index))
+        if BRep_Tool.Degenerated_s(edge) or edge.Orientation() in (TopAbs_INTERNAL, TopAbs_EXTERNAL):
+            continue
+        first, last = TopoDS_Vertex(), TopoDS_Vertex()
+        TopExp.Vertices_s(edge, first, last)
+        for vertex in {vertex_map.FindIndex(first), vertex_map.FindIndex(last)} - {0}:
+            vertex_edges.setdefault(vertex, []).append(index)
+
+    def maybe_sharp(index: int) -> bool:
+        """連続性の印が C0 でない辺は滑らか(`IsTangentFaces` が G1 で最初に見る印。標本を取らずに真を返す)。"""
+        side = sides.get(index)
+        return side is None or BRep_Tool.Continuity_s(side[0], side[1], side[2]) == GeomAbs_C0
+
+    sharp_cache: Dict[int, bool] = {}
+
+    def sharp(index: int) -> bool:
+        if index not in sharp_cache:
+            side = sides.get(index)
+            sharp_cache[index] = side is None or not ChFi3d.IsTangentFaces_s(side[0], side[1], side[2], GeomAbs_G1)
+        return sharp_cache[index]
+
     found: set = set()
-    for vertex_number in range(1, vertex_edges.Extent() + 1):
-        vertex = TopoDS.Vertex_s(vertex_edges.FindKey(vertex_number))
-        point = BRep_Tool.Pnt_s(vertex)
-        tangents = []
-        seen: set = set()
-        for ancestor in vertex_edges.FindFromIndex(vertex_number):
-            index = edge_map.FindIndex(ancestor)
-            if index == 0 or index in seen:
-                continue
-            seen.add(index)
-            tangent = _tangent_at(TopoDS.Edge_s(ancestor), point)
-            if tangent is not None:
-                tangents.append((index, tangent))
-        for a in range(len(tangents)):
-            for b in range(a + 1, len(tangents)):
-                if tangents[a][1].Crossed(tangents[b][1]).Magnitude() <= sine_limit:
-                    found.add(tangents[a][0])
-                    found.add(tangents[b][0])
+    for edges in vertex_edges.values():
+        here = [index for index in edges if maybe_sharp(index)]
+        # 印で滑らかと分かった辺を除いて2本未満なら、鋭い辺は2本になりえない(高い `IsTangentFaces` を呼ばない)
+        if len(here) < 2:
+            continue
+        sharp_here = {index for index in here if sharp(index)}
+        if len(sharp_here) == 2:
+            found |= sharp_here
     return sorted(found)
-
-
-def _tangent_at(edge, point: gp_Pnt):
-    """辺の、`point` に近い方の端での単位接線(退化していれば None)。"""
-    if BRep_Tool.Degenerated_s(edge):
-        return None
-    curve = BRepAdaptor_Curve(edge)
-    first, last = curve.FirstParameter(), curve.LastParameter()
-    parameter = first if curve.Value(first).Distance(point) <= curve.Value(last).Distance(point) else last
-    origin, derivative = gp_Pnt(), gp_Vec()
-    curve.D1(parameter, origin, derivative)
-    if derivative.Magnitude() <= 1e-12:
-        return None
-    return derivative.Normalized()
