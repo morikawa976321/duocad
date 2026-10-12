@@ -1,4 +1,4 @@
-"""`kernel.blend_chains`: 画面で1本として選ぶ辺の連なりが、フィレット・面取りが実際にかかる範囲と一致する。"""
+"""`blend_chains.blend_chains`: 画面で1本として選ぶ辺の連なりが、フィレット・面取りが実際にかかる範囲と一致する。"""
 from __future__ import annotations
 
 import pytest
@@ -6,7 +6,7 @@ from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
 
-from duocad import kernel
+from duocad import blend_chains, kernel
 
 
 def _stepped():
@@ -31,7 +31,7 @@ def test_collinear_split_edges_share_one_chain() -> None:
     shape = _stepped()
     front = _bottom_edges_along_x(shape, 0.0)
     assert len(front) == 2
-    chains = kernel.blend_chains(shape)
+    chains = blend_chains.blend_chains(shape)
     assert chains[front[0]] == chains[front[1]] == min(front)
 
 
@@ -62,6 +62,60 @@ def test_tangent_line_arc_line_is_one_chain() -> None:
 
 def test_a_plain_box_has_one_chain_per_edge() -> None:
     """落ちたら、接線で続かない辺(直角の角)までまとめて選ばれる。"""
-    chains = kernel.blend_chains(BRepPrimAPI_MakeBox(10, 10, 5).Shape())
+    chains = blend_chains.blend_chains(BRepPrimAPI_MakeBox(10, 10, 5).Shape())
     assert sorted(chains) == list(range(1, 13))
     assert all(chains[index] == index for index in chains)
+
+
+def _every_edge_chains(shape) -> dict:
+    """篩を通さず全辺に `Add` する素朴な版(`blend_chains` の答え合わせ用)。"""
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+    from OCP.TopoDS import TopoDS
+
+    edge_map = kernel._edge_map(shape)
+    chains = {}
+    for index in range(1, edge_map.Extent() + 1):
+        maker = BRepFilletAPI_MakeFillet(shape)
+        try:
+            maker.Add(1.0, TopoDS.Edge_s(edge_map.FindKey(index)))
+        except Exception:  # noqa: BLE001
+            chains[index] = index
+            continue
+        if maker.NbContours() == 0:
+            chains[index] = index
+            continue
+        members = [edge_map.FindIndex(maker.Edge(1, j)) for j in range(1, maker.NbEdges(1) + 1)]
+        chains[index] = min([index, *members])
+    return chains
+
+
+def _shapes() -> dict:
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+    from OCP.gp import gp_Ax2, gp_Dir
+
+    box = BRepPrimAPI_MakeBox(20, 10, 5).Shape()
+    every = {index: 1.0 for index in range(1, kernel._edge_map(box).Extent() + 1)}
+    plate = BRepPrimAPI_MakeBox(30, 30, 5).Shape()
+    for x in (8, 22):
+        hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x, 15, -1), gp_Dir(0, 0, 1)), 3, 7).Shape()
+        plate = BRepAlgoAPI_Cut(plate, hole).Shape()
+    corner = next(
+        item["index"]
+        for item in kernel.tessellate_edges(box)
+        if all(abs(v) < 1e-9 for v in item["points"][0::3] + item["points"][1::3])
+    )
+    return {
+        "stepped": _stepped(),
+        "one_corner_rounded": kernel.fillet_edges(box, {corner: 2.0})["shape"],
+        "all_edges_rounded": kernel.fillet_edges(box, every)["shape"],
+        "plate_with_holes": plate,
+        "cylinder": BRepPrimAPI_MakeCylinder(5, 10).Shape(),
+    }
+
+
+@pytest.mark.parametrize("name", ["stepped", "one_corner_rounded", "all_edges_rounded", "plate_with_holes", "cylinder"])
+def test_the_sieve_loses_no_chain(name: str) -> None:
+    """落ちたら、`Add` を呼ぶ辺を絞る篩(`_sieve`)が連なりの辺を取りこぼし、画面で連なりが割れる。"""
+    shape = _shapes()[name]
+    assert blend_chains.blend_chains(shape) == _every_edge_chains(shape)

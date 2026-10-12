@@ -47,7 +47,7 @@ from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
-from . import kernel_meshing, meshbody
+from . import blend_chains, kernel_meshing, meshbody
 from .mesh_geometry import compound, indexed_map, subshapes
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
@@ -1108,7 +1108,7 @@ def tessellate_edges(
 
     `index` は `edge_count` / `edge_of` / `fillet(edges=[...])` と**同じ数え方**(`_edge_map` の1始まり)。
     ずれると「指した辺と違う辺が丸まる」静かな事故になるので、添字は必ず `_edge_map` から取る。
-    `chain` は `blend_chains` の値(同じ値の辺は、フィレット・面取りで1本として振る舞う)。
+    `chain` は `blend_chains.blend_chains` の値(同じ値の辺は、フィレット・面取りで1本として振る舞う)。
 
     折れ線は `GCPnts_TangentialDeflection` で `deviation`(mm)と `angular_deflection`(ラジアン)の
     **両方**を満たすまで分割する。**線形偏差だけでは足りない** —— 小半径の円弧は分割数が2〜4点まで
@@ -1123,7 +1123,7 @@ def tessellate_edges(
     )
 
     shape_map = _edge_map(shape)
-    chains = blend_chains(shape)
+    chains = blend_chains.blend_chains(shape)
     described: List[dict] = []
     for index in range(1, shape_map.Extent() + 1):
         edge = TopoDS.Edge_s(shape_map.FindKey(index))
@@ -1155,36 +1155,6 @@ def tessellate_edges(
             }
         )
     return described
-
-
-def blend_chains(shape: "TopoDS_Shape") -> Dict[int, int]:
-    """辺の添字 → その辺が属する連なりの代表(連なりの最小の添字)。
-
-    連なりは OCCT のフィレットが1本の辺から広げる範囲そのもの(`MakeFillet.Add` の輪郭)。
-    実測: 1本を渡すと、一直線上で割れた辺も、直線→円弧→直線の接線連続も、フィレット・面取りとも
-    全部にかかる。画面の選択をこの単位にしないと「光った1本より広く丸まる」になる。
-    `Add` が輪郭を作らない辺は自分だけの連なり。
-    """
-    edge_map = _edge_map(shape)
-    maker = BRepFilletAPI_MakeFillet(shape)
-    chains: Dict[int, int] = {}
-    for index in range(1, edge_map.Extent() + 1):
-        if index in chains:
-            continue
-        contours = maker.NbContours()
-        try:
-            maker.Add(1.0, TopoDS.Edge_s(edge_map.FindKey(index)))
-        except Exception:  # noqa: BLE001  OCCTはかけられない辺で例外を投げることがある
-            pass
-        if maker.NbContours() == contours:
-            chains[index] = index
-            continue
-        contour = contours + 1
-        members = {index} | {edge_map.FindIndex(maker.Edge(contour, j)) for j in range(1, maker.NbEdges(contour) + 1)}
-        members.discard(0)
-        for member in members:
-            chains[member] = min(members)
-    return chains
 
 
 def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:

@@ -3,26 +3,32 @@
  *
  *   node scripts/smoke-fillet-pick.mjs
  *
- *   1. 面を選んだ状態でフィレットを起動すると、面が選択から外れる(辺は残す)
+ *   1. 面を選んだ状態でフィレットを起動すると、面が選択から外れる(辺は残す)。辺はアクティブではない
+ *      その面のボディのものが出る(面を外してもアクティブボディへ戻らない)
  *   2. 起動中に面をクリックしても選択に入らず、ホバーも面を指さない
- *   3. 接線で続く辺(角を丸めた箱の底の直線→円弧→直線)の1本をクリックすると連なりが全部入り、もう一度で全部外れる
+ *   3. 接線で続く辺(角を丸めた箱の底の直線→円弧→直線)の1本をクリックすると連なりが全部入り、もう一度で全部外れる。
+ *      連なりの一部だけが入った状態で連なりの1本を矩形で囲むと全部入り、もう一度で全部外れる
  *   4. 面取りでも 1 と同じ
  *
- * 形は MCP で作る: 箱を作り、縦の辺1本を丸める。一直線上で割れた辺は押し出しの join / union が面ごと
+ * 形は MCP で作る: 箱を2つ作り、アクティブでない方の縦の辺1本を丸める。一直線上で割れた辺は押し出しの join / union が面ごと
  * 統合して1本にするので、画面から作れる連なりの題材はこちら(一直線の連なりは `tests/test_blend_chains.py`)。
  */
-import { assertNoAppErrors, frameAll, openApp, waitFrames, waitOrFail } from './browser.mjs'
+import { assertNoAppErrors, frameAll, openApp, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
 import { fail, ok } from './args.mjs'
 import { runSmoke } from './harness.mjs'
 import { addExtrudedRect } from './mcp-client.mjs'
 import { clickAt, clickFace, faceAt, screenOf } from './pick.mjs'
 
 runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
-  const { bodyId } = await addExtrudedRect(mcp, { corner: [0, 0], width: 20, height: 10, distance: 5 })
-  ok(`箱を作った: ${bodyId}`)
+  const first = await addExtrudedRect(mcp, { corner: [0, 0], width: 20, height: 10, distance: 5 })
+  const second = await addExtrudedRect(mcp, { corner: [40, 0], width: 20, height: 10, distance: 5 })
 
   const { page, consoleErrors } = await openApp(browser, url, { timeout })
   await frameAll(page)
+  const active = await page.evaluate(() => window.__duocad.state?.active_body_id ?? null)
+  // 検査するのはアクティブでない方(面を外したあと辺のボディがアクティブへ戻らないことを見るため)。
+  const bodyId = active === first.bodyId ? second.bodyId : first.bodyId
+  ok(`箱を2つ作った: アクティブ ${active}、検査する方 ${bodyId}`)
 
   const waitFor = (check, what, args = []) => waitOrFail(page, check, what, { args, timeout, polling: 50 })
   const selection = () =>
@@ -49,9 +55,13 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   // ---------------------------------------------------------------- 2. 起動中は面を指せない
   await waitFor(
     (id) => (window.__duocad.edges?.body_id === id) && (window.__duocad.edges?.edges ?? []).length > 0,
-    '辺が届かない',
+    '外した面のボディの辺が出ない(アクティブボディへ戻った)',
     [bodyId],
   )
+  await waitFrames(page, 10)
+  const shown = await page.evaluate(() => window.__duocad.edges?.body_id)
+  if (shown !== bodyId) fail(`辺のボディが ${shown} へ変わった(外した面のボディ ${bodyId} であるべき)`)
+  ok('面を外しても、辺はその面のボディのものが出ている')
   // 面の射影点が辺の近くだと辺が当たるので、辺に当たらない面の点を探す(面に当たらないことはどの点でも見る)。
   let open = null
   for (let index = 1; index <= 20 && open === null; index += 1) {
@@ -88,6 +98,10 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
     '角の丸めが画面に届かない',
     [bodyId, before],
   )
+  // 検査する方はアクティブではないので、その面を選んでから起動する(面は外れ、辺はそのボディのものが出る)。
+  await waitFrames(page, 5)
+  await clickFace(page, bodyId, (await visibleFace()).index)
+  await waitFor(() => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'face'), '面が選ばれない(丸めた後)')
   await page.click('#fillet')
   await waitFor(
     (id) => {
@@ -132,6 +146,57 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   await clickAt(page, await chainTarget())
   await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'もう一度のクリックで連なりが外れない')
   ok('もう一度のクリックで全部外れた')
+
+  // 矩形: 連なりの1本(円弧)だけを囲む。先に連なりの別の1本だけを選んでおく。
+  const arc = await page.evaluate((members) => {
+    const edge = window.__duocad.edges.edges.find((item) => members.includes(item.index) && item.kind === 'circle')
+    return edge ? { index: edge.index, points: Array.from(edge.points) } : null // $state の配列は素では渡らない
+  }, chain)
+  if (arc === null) fail(`連なり ${chain} に円弧が無い`)
+  const other = chain.find((index) => index !== arc.index)
+  await mcp.callTool('set_selection', { refs: [{ body: bodyId, kind: 'edge', index: other }] })
+  await waitFor((index) => {
+    const items = window.__duocad.selection?.items ?? []
+    return items.length === 1 && items[0].index === index
+  }, '連なりの一部だけを選べない', [other])
+  await waitFrames(page, 3)
+  /**
+   * 円弧を囲む矩形(ページ座標)を引く。選択が変わるとビューポートが動くので毎回射影し直す。
+   * ブラウザパネルは畳む(ビューポートの左上に重なり、矩形の始点を吸う)。
+   */
+  const dragAroundArc = () => withoutBrowserPanel(page, dragAroundArcNow)
+  async function dragAroundArcNow() {
+    const corners = []
+    for (let i = 0; i < arc.points.length; i += 3) {
+      const at = await screenOf(page, 'projectPoint', [arc.points[i], arc.points[i + 1], arc.points[i + 2]])
+      if (!at) fail('円弧の点が画面に射影できない')
+      corners.push(at)
+    }
+    const pad = 4
+    const left = Math.min(...corners.map((c) => c.x)) - pad
+    const top = Math.min(...corners.map((c) => c.y)) - pad
+    const right = Math.max(...corners.map((c) => c.x)) + pad
+    const bottom = Math.max(...corners.map((c) => c.y)) + pad
+    await page.mouse.move(left, top)
+    await page.mouse.down()
+    await page.mouse.move((left + right) / 2, (top + bottom) / 2, { steps: 4 })
+    await page.mouse.move(right, bottom, { steps: 4 })
+    await page.mouse.up()
+  }
+  await dragAroundArc()
+  await waitFor(
+    (members) => {
+      const picked = (window.__duocad.selection?.items ?? []).filter((item) => item.kind === 'edge').map((item) => item.index)
+      return members.every((index) => picked.includes(index)) && picked.length === members.length
+    },
+    `一部だけ選んだ連なり ${chain} を矩形で囲んでも全部入らない`,
+    [chain],
+  )
+  ok('一部だけ選んだ連なりの1本を矩形で囲むと、連なりが全部入った')
+  await waitFrames(page, 3)
+  await dragAroundArc()
+  await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'もう一度の矩形で連なりが外れない')
+  ok('もう一度の矩形で全部外れた')
 
   // ---------------------------------------------------------------- 4. 面取りでも面が外れる
   await page.keyboard.press('Escape')
