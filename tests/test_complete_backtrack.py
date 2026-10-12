@@ -202,14 +202,14 @@ def test_a_shape_skipped_by_an_earlier_jump_is_still_found():
     assert result.reason == 'passed' and result.chosen_index == 2
 
 
-def test_the_cheap_stage_falls_back_to_full_checks_when_its_budget_runs_out(monkeypatch):
-    """落ちたら、安い段の回数に上限が無く(hanger では1回 約4秒)、上限を超えた後も止まらない。"""
+def test_the_cheap_stage_stops_at_its_budget_without_sending_unscreened_shapes_to_the_full_check(monkeypatch):
+    """落ちたら、安い段の回数に上限が無い(hanger では1回 約4秒)か、上限の後に選り分けていない形を完成形検査へ回している。"""
     monkeypatch.setattr(complete, "MAX_BACKTRACK_SCREENS", 3)
     sfs = [float(40 - i) for i in range(30)]
     accepted = _accepted(sfs)
     failed = complete.Completion(mask=accepted[-1].mask(), search_safety_factor=sfs[-1], safety_factor=sfs[-1],
                                  material_mm3=35.0, fill=dict(cells=3), fill_failure="埋めた形が6条件に不合格")
-    screen_shape, screened = _screened_by(set())
+    screen_shape, screened = _screened_by({sfs[5]})
     full = []
 
     def complete_shape(mask, search_sf, material, ctx):
@@ -217,7 +217,23 @@ def test_the_cheap_stage_falls_back_to_full_checks_when_its_budget_runs_out(monk
         return _completion(mask, search_sf, material, 3.0, 'pass')
 
     result = complete.backtrack(accepted, failed, _context(), complete_shape=complete_shape, screen_shape=screen_shape)
-    assert len(screened) == 3 and result.chosen is not None and len(full) <= complete.MAX_BACKTRACK_CHECKS
+    assert len(screened) == 3 and full == [] and result.chosen is None and result.reason == 'screen_limit'
+    assert "上限 3 回で打ち切った" in complete.exhausted_note(result)
+
+
+def test_when_no_jump_lands_on_a_passing_shape_the_newest_skipped_shapes_are_looked_at_first():
+    """落ちたら、飛び先がどれも落ちたとき古い側の区間から見直して上限を使い、最後の形に近い通る形に届かない(sol の再現)。"""
+    sfs = [float(200 - i) for i in range(100)]
+    accepted = _accepted(sfs, cells=[2000 - i for i in range(100)])
+    failed = complete.Completion(mask=accepted[-1].mask(), search_safety_factor=sfs[-1], safety_factor=sfs[-1],
+                                 material_mm3=1901.0, fill=dict(cells=3), fill_failure="埋めた形が6条件に不合格")
+    screen_shape, screened = _screened_by({sfs[94]})
+
+    def complete_shape(mask, search_sf, material, ctx):
+        return _completion(mask, search_sf, material, 3.0, 'pass')
+
+    result = complete.backtrack(accepted, failed, _context(), complete_shape=complete_shape, screen_shape=screen_shape)
+    assert result.reason == 'passed' and result.chosen_index == 94 and len(screened) < complete.MAX_BACKTRACK_SCREENS
 
 
 def test_a_bisection_interval_whose_shapes_all_fail_the_cheap_stage_ends_the_search():

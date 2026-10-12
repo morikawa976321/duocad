@@ -26,8 +26,9 @@ MAX_BACKTRACK_CHECKS = 5
 BACKTRACK_MIN_GAIN = 0.03
 #: さかのぼりで、安い段(`screen`: 空隙を埋めて探索の格子で6条件を取り直す)を回す回数の上限。安い段は埋めるセルが無ければ
 #: FEM なし、あれば探索の評価1回分(dilution 約 0.3 秒、hanger 約 4 秒)。安い段で落ちた形は `MAX_BACKTRACK_CHECKS` に数えない。
-#: 置いた値(実測で決めていない)。dilution 180N では探索の最後の形から安い段を通る形まで 99 形あり、その間は通る形と落ちる形が
-#: 入り交じる(docs/TOPOPT_STOPPING.md 4節)ので、1手ずつではなく 1, 2, 4, ... 手ずつ飛んで探す(`backtrack`)。
+#: 使い切ったら、それまでに完成形検査に通った形で打ち切る(無ければ `screen_limit`。高い段も最初に同じ安い段を通るので、
+#: 選り分けずに回しても手間が増えるだけ)。置いた値(実測で決めていない)。dilution 180N では探索の最後の形から安い段を通る形まで
+#: 99 形あり、その間は通る形と落ちる形が入り交じる(docs/TOPOPT_STOPPING.md 4節)ので、1, 2, 4, ... 手ずつ飛んで探す(`backtrack`)。
 MAX_BACKTRACK_SCREENS = 64
 
 
@@ -89,7 +90,8 @@ class Backtrack:
     chosen: Optional[Completion]
     chosen_index: Optional[int]
     checks: list = field(default_factory=list)
-    reason: str = 'nothing_to_go_back'  # 'passed' | 'exhausted'(最初の形まで割った)| 'check_limit' | 'nothing_to_go_back'
+    #: 'passed' | 'exhausted'(最初の形まで割った)| 'check_limit' | 'screen_limit'(安い段の上限で打ち切った)| 'nothing_to_go_back'
+    reason: str = 'nothing_to_go_back'
 
 
 def complete(mask: np.ndarray, search_safety_factor: float, material_mm3: float, ctx: Context, *,
@@ -218,14 +220,15 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
     def full_checks() -> int:
         return sum(1 for row in result.checks if row['stage'] == 'full')
 
-    def screen_ok(index: int) -> bool:
-        """安い段を通るか(落ちたら記録する)。安い段が無いか上限を超えたら、高い段に任せて通す。"""
+    def screen_ok(index: int) -> Optional[bool]:
+        """安い段を通るか(落ちたら記録する)。安い段が無ければ通す。上限を使い切っていて未検査なら None。"""
         if screen_shape is None:
             return True
         if index in screened:
             return screened[index] is not None
         if counts['screens'] >= MAX_BACKTRACK_SCREENS:
-            return True
+            counts['out'] = True
+            return None
         counts['screens'] += 1
         ctx.check()
         shape = accepted[index]
@@ -246,9 +249,9 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
 
     def descend(high: int, low: int) -> Optional[int]:
         """`[low, high]` の中で安い段を通る、なるべく新しい(軽い)形。`high` から 1, 2, 4, ... 手ずつ飛んで通る形を探し、
-        その後で飛ばした区間を、通った形(見つからなければ `low`)に近い区間から見直す(区間の中は軽い側から。見つかった中で
-        最も新しい形を返す)。安い段の上限に達したら見直しをやめて、それまでに通った形を返す。通る形がまだ無いうちに達したら、
-        まだ見ていない最も新しい形を選り分けずに返す(高い段に任せる)。"""
+        その後で飛ばした区間を見直す(区間の中は軽い側から)。通った形が見つかっていればそれに近い区間から見て、見つかった中で
+        最も新しい形を返す。見つかっていなければ新しい側の区間から見て、最初に通った形を返す(それが最も新しい)。
+        安い段の上限を使い切ったら、それまでに通った形を返す(無ければ None)。"""
         if high < low:
             return None
         probes: list = []
@@ -256,35 +259,30 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
         index, step = high, 1
         while True:
             index = max(index, low)
-            if counts['screens'] >= MAX_BACKTRACK_SCREENS and index not in screened:
-                return index
+            verdict = screen_ok(index)
+            if verdict is None:
+                return None
             probes.append(index)
-            if screen_ok(index):
+            if verdict:
                 found = index
                 break
             if index == low:
                 break
             index, step = index - step, step * 2
         best = found
-        # 飛ばした区間(隣り合う飛び先の間)。通った形・下限に近い区間から見る。
-        windows = [(probes[k] - 1, probes[k + 1] + 1) for k in range(len(probes) - 1)][::-1]
-        for top, bottom in windows:
+        # 飛ばした区間(隣り合う飛び先の間。新しい側から並ぶ)。
+        windows = [(probes[k] - 1, probes[k + 1] + 1) for k in range(len(probes) - 1)]
+        for top, bottom in (windows[::-1] if found is not None else windows):
             for between in range(top, bottom - 1, -1):
-                if between in screened and screened[between] is None:
-                    continue
-                if counts['screens'] >= MAX_BACKTRACK_SCREENS and between not in screened:
+                verdict = screen_ok(between)
+                if verdict is None:
+                    return best
+                if verdict:
+                    if found is None:
+                        return between
+                    best = max(best, between)
                     break
-                if screen_ok(between):
-                    best = between if best is None else max(best, between)
-                    break
-            else:
-                continue
-            if counts['screens'] >= MAX_BACKTRACK_SCREENS:
-                break
-        if best is not None:
-            return best
-        unseen = [i for i in range(high, low - 1, -1) if i not in screened]
-        return unseen[0] if unseen else None
+        return best
 
     def guided(done: Completion, below: int) -> int:
         sf = done.final_safety_factor
@@ -299,7 +297,7 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
     else:
         probe = descend(guided(failed, fail_hi), 0)
     if probe is None:
-        result.reason = 'exhausted'
+        result.reason = 'screen_limit' if counts.get('out') else 'exhausted'
     while probe is not None:
         if full_checks() >= MAX_BACKTRACK_CHECKS:
             result.reason = 'check_limit'
@@ -317,11 +315,7 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
             record(probe, shape, None, 'full', f'{type(error).__name__}: {error}')
             done = None
         else:
-            # 安い段の上限を超えて選り分けずに回した形が空隙埋めで落ちたら、高い段は走っていない(安い段として数える)。
-            cheap = product and done.fill_failure is not None
-            record(probe, shape, done, 'screen' if cheap else 'full')
-            if cheap:
-                screened[probe] = None
+            record(probe, shape, done, 'full')
         if done is not None and done.verdict == 'pass':
             pass_lo, result.chosen, result.chosen_index = probe, done, probe
         else:
@@ -332,7 +326,7 @@ def backtrack(accepted: list, failed: Completion, ctx: Context, *, complete_shap
                 break
             probe = descend(fail_hi // 2 if done is None else guided(done, fail_hi), 0)
             if probe is None:
-                result.reason = 'exhausted'
+                result.reason = 'screen_limit' if counts.get('out') else 'exhausted'
             continue
         if fail_hi - pass_lo <= 1:
             break
@@ -366,7 +360,8 @@ def exhausted_note(result: Backtrack) -> str:
     where = '最初の形まで' if result.reason == 'exhausted' else f"最大 {deepest} 手まで"
     reasons = {row['verdict'] for row in result.checks}
     failed = '・'.join(text for verdict, text in _VERDICT_TEXT if verdict in reasons) or '通らなかった'
-    return f"探索の合格形を{where}さかのぼって {len(result.checks)} 形を検査したが、どれも通らなかった({failed})"
+    limited = (f"。空隙埋めの見直しは上限 {MAX_BACKTRACK_SCREENS} 回で打ち切った" if result.reason == 'screen_limit' else '')
+    return f"探索の合格形を{where}さかのぼって {len(result.checks)} 形を検査したが、どれも通らなかった({failed}){limited}"
 
 
 #: さかのぼった形が通らなかった理由の書き方(`Backtrack.checks` の `verdict`)。
