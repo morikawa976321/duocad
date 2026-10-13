@@ -107,7 +107,8 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 
 - 呼ぶ面は `shell_body(thickness)`。抜く面(開口)は確定選択の面から `selection.require_faces` で取る(選択順・1ボディ限定。複数ボディにまたがれば ValueError)。verb は `duocad/verbs/shell_body.py`、幾何は `duocad/kernel_shell.py` の `shell_solid`(依存は kernel_shell → kernel の一方向)。
 - **仕様(2026-10-14 本人判断)**: 抜く面は1枚以上で、**面を選ばない閉じた中空は常に断る**(空の選択は `SelectionEmpty`、ボディだけの選択は `SelectionKindMismatch`)。厚さは外形から内側へ一様(外形寸法を保つ)、内側の角は `GeomAbs_Intersection`(尖ったまま)。後から厚さを変える手段は無い(undo してやり直す)。
-- **合否は `IsDone` と `BRepCheck` だけで決めない**: Solid がちょうど1つ・体積が実際に減ったことまで見る。OCCT は厚すぎるとき・抜く面がフィレット面に接するとき、成功を装って元の形を返す(実測は docs/CAD_LIBRARY_PITFALLS.md)。断り文は原因の候補と「先にシェル、後で丸める」を名指しする。
+- **合否は `IsDone` と `BRepCheck` だけで決めない**: Solid がちょうど1つ・体積が実際に減った・内壁(由来の `new_faces`)と抜かなかった外側の面との最短距離が厚さを割らないことまで見る。OCCT は厚すぎるとき・抜く面がフィレット面に接するとき成功を装って元の形を返し、出っ張りの半径を超える厚さではそこだけ薄い壁で成功を返す(実測は docs/CAD_LIBRARY_PITFALLS.md)。指定より厚い壁は検出しない。断り文は原因の候補と「先にシェル、後で丸める」を名指しする。
+- 許容差は `min(1e-3, 厚さ/1000)`(固定 1e-3 では薄い壁が `IsDone=False`)。
 - Web は `SHELL_BODY`(`commands/features.ts`、`SOLID_FEATURE_COMMANDS`、`#shell-body`、厚さ `#shell-thickness`)。面の選択引数は `min: 1`。プレビューはサーバの投機実行(`preview: 'server'`)。
 
 ## envelope_regions(スケッチの包絡)

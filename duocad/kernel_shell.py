@@ -9,14 +9,19 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, Sequence
+from typing import Any, List, Optional, Sequence
 
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Curve
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepOffset import BRepOffset_Mode
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
 from OCP.GeomAbs import GeomAbs_JoinType
+from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopTools import TopTools_ListOfShape
-from OCP.TopoDS import TopoDS_Shape  # noqa: F401  型注釈だけ
+from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 
 from .kernel import (
     _NO_CHANGE_RTOL,
@@ -31,11 +36,17 @@ from .kernel import (
     normalize_provenance,
     volume,
 )
-from .mesh_geometry import indexed_map
+from .mesh_geometry import compound, indexed_map, subshapes
 
-#: `MakeThickSolidByJoin` の許容差(mm)。2026-10-13 の実測(docs/CAD_LIBRARY_PITFALLS.md)はこの値で取った。
-#: 1e-6 に変えても、抜く面がフィレット面に接するときの失敗は変わらなかった。
+#: `MakeThickSolidByJoin` の許容差(mm)の上限。2026-10-13 の実測(docs/CAD_LIBRARY_PITFALLS.md)はこの値で取った。
+#: 1e-6 に変えても、抜く面がフィレット面に接するときの失敗は変わらなかった。厚さがこれに近いと
+#: `IsDone()=False` になる(箱の上面を抜いて厚さ 0.001 で実測)ので、薄い壁では厚さの 1/1000 まで下げる。
 _TOLERANCE = 1.0e-3
+
+#: 面どうしの距離が測れないとき、内壁の辺1本を何等分した点から測るか。
+_EDGE_SAMPLES = 8
+
+_FILLET_HINT = "抜く面に丸めた面が接しているなら、先にシェルを掛けてから丸める"
 
 
 def shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: float) -> dict:
@@ -44,7 +55,8 @@ def shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: f
     入力の `shape` は変更しない。**抜く面は1枚以上**(空だと OCCT は中空ではなく内側へ縮めた中身を返す)。
 
     **`IsDone()` も `BRepCheck` も真のまま何もしない・別物を返すことがある**(厚すぎる・抜く面が
-    フィレット面に接する。docs/CAD_LIBRARY_PITFALLS.md)ので、Solid がちょうど1つ・体積が減ったことまで見る。
+    フィレット面に接する・出っ張りだけ薄い。docs/CAD_LIBRARY_PITFALLS.md)ので、Solid がちょうど1つ・
+    体積が減った・内壁が外側から `thickness` 以上離れていることまで見る。
 
     戻り値(`"shape"` 以外はJSON化できる素の値):
         {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
@@ -76,7 +88,7 @@ def shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: f
             shape,
             closing,
             -value,
-            _TOLERANCE,
+            min(_TOLERANCE, value * 1.0e-3),
             BRepOffset_Mode.BRepOffset_Skin,
             False,
             False,
@@ -89,7 +101,7 @@ def shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: f
     if not maker.IsDone():
         raise ValueError(
             f"shell failed (IsDone is false) ({context}): "
-            "厚さが丸めた辺の半径以上か、壁どうしがぶつかる厚さ"
+            f"厚さが丸めた辺の半径以上か、壁どうしがぶつかる厚さ。{_FILLET_HINT}"
         )
 
     final = maker.Shape()
@@ -102,16 +114,88 @@ def shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: f
     if not volume_after < volume_before * (1.0 - _NO_CHANGE_RTOL):
         raise ValueError(
             f"shell did not hollow the body (volume {volume_before} -> {volume_after}, {context}): "
-            "厚さが大きすぎるか、抜く面に丸めた面が接している(そのときは先にシェルを掛けてから丸める)"
+            f"厚さが大きすぎる。{_FILLET_HINT}"
         )
     _require_valid(final, "shell", context)
+    provenance = _shell_provenance(maker, shape, final, indices, value)
+    _require_wall_thickness(shape, indices, final, provenance["new_faces"], value, context)
 
     return {
         "shape": final,
-        "provenance": _shell_provenance(maker, shape, final, indices, value),
+        "provenance": provenance,
         "volume_before": float(volume_before),
         "volume_after": float(volume_after),
     }
+
+
+def _require_wall_thickness(
+    shape: "TopoDS_Shape",
+    opened: List[int],
+    final: "TopoDS_Shape",
+    inner_faces: List[int],
+    thickness: float,
+    context: str,
+) -> None:
+    """内側にできた面と、抜かなかった外側の面との最短距離が `thickness` を割れば断る。
+
+    厚さが出っ張りの半径を超えると、OCCT はそこだけ薄い壁のまま成功を返す(40×30×20 の箱に半径3の
+    円柱を足し、底を抜いて厚さ4で、円柱の壁が2になった。2026-10-14 実測)。体積も BRepCheck も通る。
+    抜いた面は内壁の縁と接するので外側に数えない。指定より厚い壁は検出しない。
+    """
+    if not inner_faces:
+        raise ValueError(f"shell made no inner faces ({context})")
+    shape_map = _face_map(shape)
+    final_map = _face_map(final)
+    outer = [shape_map.FindKey(index) for index in range(1, shape_map.Extent() + 1) if index not in opened]
+    inner = [final_map.FindKey(index) for index in inner_faces]
+    thinnest = _distance(compound(inner), compound(outer))
+    if thinnest is None:
+        thinnest = min(_face_distance(face, other, context) for face in inner for other in outer)
+    if thinnest < thickness * (1.0 - 1.0e-6) - Precision.Confusion_s():
+        raise ValueError(
+            f"shell left a wall thinner than requested (thinnest {thinnest:.4g} mm, {context}): "
+            "厚さが出っ張り・細い部分の半径を超えている"
+        )
+
+
+def _distance(first: "TopoDS_Shape", second: "TopoDS_Shape") -> Optional[float]:
+    """最短距離。OCCT が測れなければ None。
+
+    同心の円筒どうし・球と円筒のように最短の組が無数にある面の対では `StdFail_NotDone` を投げる
+    (丸めた箱の内壁と外壁で実測)。対を1つでも含む複合形状も同じく落ちる。
+    """
+    try:
+        measure = BRepExtrema_DistShapeShape(first, second)
+        if not measure.IsDone():
+            return None
+        return float(measure.Value())
+    except Exception:  # noqa: BLE001  StdFail_NotDone は OCP の例外型で、型で絞れない
+        return None
+
+
+def _face_distance(face: "TopoDS_Shape", other: "TopoDS_Shape", context: str) -> float:
+    """面どうしが測れなければ、`face` の縁の上の点(頂点と辺の等分点)から `other` までを測る。"""
+    whole = _distance(face, other)
+    if whole is not None:
+        return whole
+    distances = [_distance(point, other) for point in _boundary_points(face)]
+    if not distances or any(distance is None for distance in distances):
+        raise ValueError(f"shell could not measure the wall thickness ({context})")
+    return min(distances)
+
+
+def _boundary_points(face: "TopoDS_Shape") -> List["TopoDS_Shape"]:
+    points = []
+    for edge_shape in subshapes(face, TopAbs_ShapeEnum.TopAbs_EDGE):
+        edge = TopoDS.Edge_s(edge_shape)
+        if BRep_Tool.Degenerated_s(edge):
+            continue
+        curve = BRepAdaptor_Curve(edge)
+        first, last = curve.FirstParameter(), curve.LastParameter()
+        for step in range(_EDGE_SAMPLES + 1):
+            point = curve.Value(first + (last - first) * step / _EDGE_SAMPLES)
+            points.append(BRepBuilderAPI_MakeVertex(point).Vertex())
+    return points
 
 
 def _shell_provenance(

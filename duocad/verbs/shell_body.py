@@ -56,9 +56,6 @@ def _do_shell_body(document: Document, operation: Operation) -> None:
 register_verb(VERB_SHELL_BODY, do=_do_shell_body, undo=undo_shape)
 
 
-# --------------------------------------------------------------------------------------
-# 入口(`duocad/entry.py`) —— 抜く面を選択から取り、上の verb を掛け、応答に載せるものを返す
-# --------------------------------------------------------------------------------------
 @entry(VERB_SHELL_BODY)
 def _enter_shell_body(document: Document, thickness: float) -> dict:
     faces, body_id = selection.require_faces(document)

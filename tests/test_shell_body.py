@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from duocad import query, selection
+from duocad import kernel_shell, query, selection
 from duocad.document import Document
 from duocad.entry import entry_for
 from duocad.verbs import fillet, shell_body
@@ -177,3 +177,56 @@ def test_the_entry_refuses_faces_of_two_bodies():
     with pytest.raises(ValueError, match="multiple bodies"):
         entry_for("shell_body")(doc, thickness=THICKNESS)
     assert len(doc.log.entries) == log_before
+
+
+# ---------------------------------------------------------------- kernel(壁の厚さの検査)
+def _box_with_boss():
+    """40×30×20 の箱の上面に、半径3・高さ11の円柱を立てた形(sol の再現例)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+
+    boss = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(20, 15, 19), gp_Dir(0, 0, 1)), 3, 11).Shape()
+    fuse = BRepAlgoAPI_Fuse(BRepPrimAPI_MakeBox(WIDTH, DEPTH, HEIGHT).Shape(), boss)
+    fuse.Build()
+    return fuse.Shape()
+
+
+def _bottom(shape) -> list:
+    return [
+        face["index"]
+        for face in query.describe_faces(shape)
+        if face["kind"] == "plane" and face["center"][2] == pytest.approx(0.0)
+    ]
+
+
+def test_a_wall_thinner_than_requested_is_refused():
+    """厚さが出っ張りの半径を超えると OCCT はそこだけ薄い壁で成功を返す(体積も BRepCheck も通る)。"""
+    shape = _box_with_boss()
+    with pytest.raises(ValueError, match="thinner than requested"):
+        kernel_shell.shell_solid(shape, _bottom(shape), 4.0)
+    kernel_shell.shell_solid(shape, _bottom(shape), 2.0)  # 半径未満なら通る
+
+
+def test_a_very_thin_wall_is_not_refused_by_the_tolerance():
+    """許容差を厚さに合わせて下げる(固定 1e-3 では厚さ 0.001 が IsDone=False だった)。"""
+    doc = Document()
+    body_id = _box(doc)
+    shell_body(doc, [_face_where(doc, body_id, 2, HEIGHT)], 0.001, body_id=body_id)
+    assert query.volume(doc.get_body(body_id).shape) > 0
+
+
+def test_the_wall_check_measures_through_concentric_fillets():
+    """上面以外の辺を丸めた箱は内外の丸み(円筒・角の球)が同心で、面どうしの距離を OCCT が測れない
+    (`StdFail_NotDone`。縁の点で測り直す)。"""
+    doc = Document()
+    body_id = _box(doc)
+    below_top = [
+        edge["index"]
+        for edge in query.describe_edges(doc.get_body(body_id).shape)
+        if not (edge["start"][2] == pytest.approx(HEIGHT) and edge["end"][2] == pytest.approx(HEIGHT))
+    ]
+    fillet(doc, below_top, 3.0, body_id=body_id)
+    volume_before = query.volume(doc.get_body(body_id).shape)
+    shell_body(doc, [_face_where(doc, body_id, 2, HEIGHT)], THICKNESS, body_id=body_id)
+    assert query.volume(doc.get_body(body_id).shape) < volume_before
