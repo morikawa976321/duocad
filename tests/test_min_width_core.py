@@ -306,10 +306,10 @@ def test_peel_refuses_the_moves_that_would_split_the_core_and_every_result_keeps
     assert refused > 50 and would_split > 5 and proven_yes > 50 and split_seen > 30  # 芯を割る手が実際に出る入力で、両方の経路を試している
 
 
-@pytest.mark.parametrize('m,kind,limit', [(2, 'bending', 0.3), (3, 'random', 0.45)])
+@pytest.mark.parametrize('m,kind,limit', [(2, 'bending', 0.3), (3, 'random', 0.35)])
 def test_peel_with_min_width_carves_a_box_deeply_with_the_core_connected_at_every_step(m, kind, limit):
     """落ちたら、芯を割る手を断る分だけ削れなくなった(全ステップの不変条件は `peel_box_until_stuck` が見る)。
-    乱数の順は細い継ぎ目の判定で止まりやすい(実測 2026-10-13: m=3 で 0.267 → 0.395。エネルギーの順は 0.162 → 0.147)。"""
+    乱数の順は細い継ぎ目の判定で止まりやすい(実測 2026-10-13: m=3 で判定なし 0.267、余白 2 で 0.296、余白 0 では 0.395)。"""
     assert peel_box_until_stuck(m, kind) < limit
 
 

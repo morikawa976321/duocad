@@ -10,7 +10,7 @@
 - `CoreConnectivity.verdict` は流用しない —— 窓の中で前線が1群でも、保持の結び先が窓外へ伸びると None を返す。
 - **細い継ぎ目**(`creates_thin_joint`): 上のくびれの判定は、窓の中に太い迂回路があれば1セル幅の接触面を通す(折れ目)。その接触面が
   輪の片側に残り、完成形で幅不足になった(hanger、docs/TOPOPT_CONVERGENCE.md 2節)ので、迂回路があっても断る(本人決定 2026-10-13)。
-  手で共通の m 立方を失った6近傍の材料対について、対を覆う芯どうしが対のすぐ周りの窓でつながらなければ断る。
+  手で共通の m 立方を失った6近傍の材料対について、対を覆う芯どうしが対のすぐ周り(余白 `THIN_JOINT_MARGIN`)の窓でつながらなければ断る。
 """
 from __future__ import annotations
 
@@ -22,9 +22,10 @@ from scipy import ndimage
 from .acceptance import NEIGHBOURHOOD_STRUCTURE
 from .min_width import CoreConnectivity, core_cells
 
-#: 細い継ぎ目の判定窓の余白(セル)。窓は対を覆う立方の角の範囲そのもの。迂回路で許さないので広げない。
-#: 合成の L 字・T 字・斜めの階段の部材は共通の m 立方を持たない対を作らず(m=3〜5)、この余白で継ぎ目だけを断つ(2026-10-13 の測定)。
-THIN_JOINT_MARGIN = 0
+#: 細い継ぎ目の判定窓の余白(セル。対を覆う立方の角の範囲の外へ広げる量)。この内に収まる迂回路だけは許す。実測(2026-10-13、
+#: docs/TOPOPT_CONVERGENCE.md 8節): 0 は hanger で探索が 16 評価で止まり材料 +131〜206%。1 は hanger 120N で +42%。2 は
+#: hanger 120N・150N・dilution 60N で −10〜+3% かつ幅不足の疑い0。hanger の継ぎ目の迂回路は余白 m(4・5)で初めてつながるので 2 で断てる。
+THIN_JOINT_MARGIN = 2
 #: 判定窓の余白の初期値(m の倍数)。実測: hanger S2 で余白 m は折れ目3つをくびれと分類し、2m・3m は同じ分類(くびれ1・折れ目4)
 #: (芯を6連結で数えていたとき)。
 START_MARGIN_FACTOR = 2
