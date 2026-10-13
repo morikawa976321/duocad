@@ -623,7 +623,8 @@
     if (armedPick === name) armedPick = null
   }
 
-  function focusFirstNumber(): void {
+  /** `fromSelection`: 選択の配信がきっかけのとき。配信はクリックから遅れて届き、続けて選んだぶんが打っている途中に届くので、この中の欄で打っていても奪わない。 */
+  function focusFirstNumber(fromSelection = false): void {
     // 収集の先頭が打ち込む引数ならそこへ入れる。点を待つ間も空欄の `fromPoints` 欄へ入れる(マウスを3Dに残したまま寸法を打てる。Escは `svelte:window` が拾う)。
     // 揃っていれば `default` で埋まっている空欄へ入れる(移動の dx・包むの R は既定0で揃って見えるが、人が打つのはそこ)。選択・ピック・選択肢を待つときは奪わない。
     queueMicrotask(() => {
@@ -632,7 +633,7 @@
       if (
         active instanceof HTMLElement &&
         (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable) &&
-        !overlayEl?.contains(active)
+        (fromSelection || !overlayEl?.contains(active))
       ) {
         return
       }
@@ -657,7 +658,7 @@
     const clicks = selfSelections
     if (clicks === seenSelfSelections) return
     seenSelfSelections = clicks
-    untrack(focusFirstNumber)
+    untrack(() => focusFirstNumber(true))
   })
 
   /**
