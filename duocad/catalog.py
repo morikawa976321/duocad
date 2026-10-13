@@ -710,6 +710,23 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=True,
     ),
     Command(
+        name="shell_body",
+        returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
+        category="feature",
+        description=(
+            "ボディを中空の殻(箱・ケース・カップの形)にするときに呼ぶ。"
+            "選択の面(1枚以上・1つのボディ)を抜いて開口にし、残りの壁を外形から内側へ同じ厚さで残す"
+            "(外形寸法は変わらない)。面を選ばない閉じた中空は作れない。"
+            "抜く面に丸めた面が接していると失敗するので、そのときは先にシェルを掛けてから丸める。"
+        ),
+        params=(
+            Param("thickness", "number", "壁の厚さ(mm)。外形から内側へ取る", dimension=True),
+        ),
+        session="shell_body",
+        previewable=True,
+        resets_selection=True,
+    ),
+    Command(
         name="boolean_body",
         returns=(
             Result("target_body_id", "string"),

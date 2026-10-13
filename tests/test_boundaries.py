@@ -29,6 +29,7 @@ OCP_ALLOWED = frozenset(
         "kernel_sketch.py",
         "kernel_extrude.py",
         "kernel_chains.py",
+        "kernel_shell.py",
         "mesh_geometry.py",
         "topopt/voxelize.py",
     }

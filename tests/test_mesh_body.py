@@ -12,7 +12,7 @@ from duocad.mcp_server import DocumentTools
 from duocad.oplog import OpLog
 from duocad.server import Session
 from duocad.speculative import speculative
-from duocad.verbs import add_mesh_body, chamfer, delete, extrude_faces, fillet, move_body
+from duocad.verbs import add_mesh_body, chamfer, delete, extrude_faces, fillet, move_body, shell_body
 from duocad.verbs.extrude import _resolve_target
 from document_support import replay_through_json
 from session_support import edit_parameter, session_with_box
@@ -232,6 +232,10 @@ def test_a_mesh_body_can_be_deleted_and_the_delete_can_be_undone():
         pytest.param(
             lambda doc, body_id: chamfer(doc, edges=[1], distance=1.0, body_id=body_id),
             id="chamfer",
+        ),
+        pytest.param(
+            lambda doc, body_id: shell_body(doc, faces=[1], thickness=1.0, body_id=body_id),
+            id="shell_body",
         ),
         pytest.param(
             lambda doc, body_id: move_body(doc, body_ids=[body_id], dx=1.0, dy=0.0, dz=0.0),
