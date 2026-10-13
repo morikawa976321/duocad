@@ -207,8 +207,24 @@
     commandSucceeded(): void
   } | null>(null)
 
-  /** 形状最適化モードか。対応する文書実体が無いので画面側だけの状態(バックエンドには知らせない)。 */
-  const optimizeMode = $derived(mode.kind === 'optimize')
+  /**
+   * この版で形状最適化を使えるか(安定版は使えない。サーバが接続のたびに送る `optimize_status` の `available`)。`null` はまだ聞いていない ——
+   * 入口は出さず、ステップの取り直し(安定版では断られてエラーのトーストになる)も頼まない。聞いた直後の `onOptimizeStatus` が頼み直す。
+   * **接続が切れても `null` に戻さない**: 繋ぎ直しは最初に教わった URL へ行く(`session.ts` の `knownWebSocketUrl`)ので、同じタブで別の版の
+   * サーバに繋がることは無く、答えは変わらない。
+   * 戻すと、繋ぎ直すたびに最適化モードの画面が一度消え、起動中のコマンドの状態と食い違う(sol の指摘で確かめた)。
+   */
+  let shapeOptimizationAvailable = $state<boolean | null>(null)
+  function askOptimizeSteps(): void {
+    if (shapeOptimizationAvailable === true) session.optimizeSteps()
+  }
+  /**
+   * 形状最適化モードの画面を出すか。モードは対応する文書実体が無いので画面側だけの状態(バックエンドには知らせない)。
+   * 使えると聞くまで(接続し直した直後を含む)は、モードを保ったまま画面と問い合わせを止める。
+   */
+  const optimizeMode = $derived(mode.kind === 'optimize' && shapeOptimizationAvailable === true)
+  /** コマンドの行を作り直す鍵。最適化モードでも画面を止めている間は通常の行を出すので、行の顔ぶれが変わるたびに作り直す(起動中のコマンドを別の一覧へ持ち越さない)。 */
+  const commandRowKey = $derived(mode.kind === 'optimize' && !optimizeMode ? 'idle' : mode.kind)
   /**
    * 直近にトーストへ出した `stale` の鍵(`role:body:index:code`)。`code` を含めないと、
    * `hidden`(出さない側)で記録された対象が後で `fingerprint`/`missing`(出す側)に変わっても
@@ -372,12 +388,19 @@
       const step = chosenStep(payload, optimizeElementSizeMm)
       if (step !== null) optimizeMinWidthMm = snapMinWidth(step.min_width_steps_mm, optimizeMinWidthMm)
     },
-    onOptimizeStatus: (running, cancelling, finishing) => {
+    onOptimizeStatus: (running, cancelling, finishing, available) => {
+      shapeOptimizationAvailable = available
+      // 使えないサーバに繋ぎ直したら、最適化モードとステップの表示に居残らない(断られる口を叩き続ける)。
+      // スケッチの戻り先(`resume`)は `exitSketch` が同じ印で見る。
+      if (!available) {
+        if (mode.kind === 'optimize') setMode({ kind: 'idle' })
+        clearSearchSteps()
+      }
       optimizeFinishing = running && finishing
       // 接続し直すと、待っていた形の返事は来ない。待ちを畳んで頼み直せるようにする(`$state` なので取得の `$effect` が走り直す)。
       searchStepVoxelsPending = null
       // 走り終わった・接続し直した・文書を切り替えた後は、その文書のステップを取り直す(走っている間は進捗で増える)。
-      if (!running || searchSteps.length === 0) session.optimizeSteps()
+      if (!running || searchSteps.length === 0) askOptimizeSteps()
       // 控えの確定はサーバが受け付けてから(押した瞬間だと、断られた押下が走っている実行の控えを上書きする)。
       if (running && optimizeStarting && optimizeStartingSettings !== null) optimizeRunSettings = optimizeStartingSettings
       optimizeStartingSettings = null
@@ -518,6 +541,7 @@
   )
 
   $effect(() => {
+    if (shapeOptimizationAvailable !== true) return
     const wanted = searchStepsShown ? searchStepShownIndex : null
     const have = searchStepVoxels !== null && searchStepVoxels.run === searchStepsRun ? searchStepVoxels.index : null
     if (wanted === null || wanted === have || searchStepVoxelsPending !== null) return
@@ -580,7 +604,7 @@
     clearOptimizeDebug()
     clearSearchSteps()
     // 開き直した文書の直近の実行のステップを取り直す(走っていない文書では状態の配信が来ないので、ここで頼む)。
-    session.optimizeSteps()
+    askOptimizeSteps()
   }
 
   // ---------------------------------------------------------------- H2: 開発用のデバッグ表示
@@ -1459,7 +1483,7 @@
    * - 面・辺・頂点・領域はどのモードでも残す(スケッチを抜けてそのまま押し出す等が実際の経路)。
    */
   function setMode(next: Mode): void {
-    // 確定前の姿を持ち越さない。モードが変わると下の `{#key mode.kind}` が `CommandHost` ごと作り直すので
+    // 確定前の姿を持ち越さない。モードが変わると下の `{#key commandRowKey}` が `CommandHost` ごと作り直すので
     // `onCancelPreview` は来ない。ここで消さないと、`move_body` の半透明ボディや `extrude` の投機実行の幽霊が残り続ける。
     clearPreview()
     const nextSketch = next.kind === 'sketch' ? next.id : null
@@ -1514,7 +1538,7 @@
 
   /** スケッチモードを抜ける。戻り先は入る前のモード(通常 or 最適化)。 */
   function exitSketch(): void {
-    setMode(resumeOf(mode) === 'optimize' ? { kind: 'optimize' } : { kind: 'idle' })
+    setMode(resumeOf(mode) === 'optimize' && shapeOptimizationAvailable === true ? { kind: 'optimize' } : { kind: 'idle' })
   }
 
   /** 第3のモード(形状最適化)へ入る。「形状最適化」ボタンから(スケッチと同じ作法)。 */
@@ -1917,7 +1941,7 @@
    */
   $effect(() => {
     void optimize
-    if (!optimizeMode || status !== 'open' || optimizeBusy) return
+    if (!optimizeMode || status !== 'open' || optimizeBusy || shapeOptimizationAvailable !== true) return
     session.optimizeConditions()
     session.optimizeResolution(untrack(() => optimizeElementSizeMm))
   })
@@ -1928,6 +1952,7 @@
    * (割り当てを壊すのは他のverb)。鍵に `code` を含める理由は `seenStaleKeys`。
    */
   $effect(() => {
+    if (shapeOptimizationAvailable !== true) return // 形状最適化を出さない版では、その条件の警告も出さない
     const stale = optimize?.stale ?? []
     const next = new Set<string>()
     for (const item of stale) {
@@ -2065,14 +2090,16 @@
             スケッチ
           </button>
           <!-- 形状最適化(第3のモード)への入口。viewport上に「これをクリックすれば入れる」実物が無いのでボタンを置く(UI指針1の裏返し)。 -->
-          <button
-            id="optimize-enter"
-            class="tag"
-            onclick={enterOptimizeMode}
-            title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
-          >
-            形状最適化
-          </button>
+          {#if shapeOptimizationAvailable === true}
+            <button
+              id="optimize-enter"
+              class="tag"
+              onclick={enterOptimizeMode}
+              title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
+            >
+              形状最適化
+            </button>
+          {/if}
         </div>
       {/if}
       <!-- スケッチモードだが、まだどのスケッチも開いていない(貼る先のクリック待ち)。下の `CommandHost` には `sketch_create` が起動済みで出ている。 -->
@@ -2097,7 +2124,7 @@
           <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
         </div>
       {/if}
-      {#if mode.kind === 'optimize'}
+      {#if optimizeMode}
         <div class="mode-row">
           <span class="label">形状最適化</span>
           <span id="optimize-mode" class="tag on">
@@ -2110,8 +2137,8 @@
           </button>
         </div>
       {/if}
-      <!-- verbの行。鍵はモードのタグそのもの(スケッチAからBへ移るときは作り直さない)。 -->
-      {#key mode.kind}
+      <!-- verbの行。鍵はモードのタグそのもの(スケッチAからBへ移るときは作り直さない。`commandRowKey`)。 -->
+      {#key commandRowKey}
         <CommandHost
           bind:this={host}
           {selection}
@@ -2121,7 +2148,7 @@
             ? SKETCH_MODE_COMMANDS
             : mode.kind === 'sketch-pending'
               ? SKETCH_PENDING_COMMANDS
-              : mode.kind === 'optimize'
+              : optimizeMode
                 ? OPTIMIZE_MODE_COMMANDS
                 : SOLID_COMMANDS}
           defaultCommandId={mode.kind === 'sketch' ? DEFAULT_SKETCH_COMMAND_ID : undefined}
@@ -2260,6 +2287,7 @@
         onSetApiKey={(key) => session.aiSetApiKey(key)}
         {femStatus}
         onFemDevice={(device) => session.femSetDevice(device)}
+        showGpu={shapeOptimizationAvailable === true}
         onClose={() => (settingsOpen = false)}
       />
     </div>

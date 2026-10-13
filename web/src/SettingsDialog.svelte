@@ -18,7 +18,7 @@
   import { fail } from './Toast.svelte'
   import { FOV_DEFAULT, FOV_ORTHO } from './viewport'
 
-  const { open, fov, onFov, aiStatus, onSetApiKey, femStatus, onFemDevice, onClose }: {
+  const { open, fov, onFov, aiStatus, onSetApiKey, femStatus, onFemDevice, showGpu, onClose }: {
     open: boolean
     /** 今の画角[度]。`FOV_ORTHO`(0)なら完全正投影。UIは 0 か `FOV_DEFAULT` しか選べないが、チェックボックスは `fov === FOV_ORTHO` の1点だけで決まる。 */
     fov: number
@@ -31,6 +31,8 @@
     femStatus: FemStatus | null
     /** 装置を選ぶ(**その場で効く**。次に準備する計算から)。 */
     onFemDevice: (device: 'cpu' | 'gpu') => void
+    /** GPU の欄を出すか。GPU で解くのは形状最適化だけなので、形状最適化を使えない版(安定版)と、それをまだ聞いていない間は出さない。 */
+    showGpu: boolean
     onClose: () => void
   } = $props()
 
@@ -153,29 +155,31 @@
   </div>
   <p class="hint dim" data-api-key-status>{keyLine}</p>
 
-  <!-- **答えは変わらない**(GPU の解は CPU とビット一致する。docs/TOPOPT_GPU.md)ので、確認なしでその場で切り替える。 -->
-  <label class="field-row gpu-row">
-    GPU で計算する
-    <input
-      id="settings-gpu"
-      type="checkbox"
-      checked={femStatus?.device === 'gpu'}
-      disabled={!femStatus}
-      onchange={(event) => {
-        onFemDevice(event.currentTarget.checked ? 'gpu' : 'cpu')
-        // 表示はサーバの確定値(`fem_status`)に揃える。拒否されて同じ値が返ると Svelte は checked を
-        // 書き直さないので、押した分はここで戻しておく(受け付けられれば返事で付け直される)。
-        event.currentTarget.checked = femStatus?.device === 'gpu'
-      }}
-    />
-  </label>
-  <p class="hint dim" data-fem-status>{femLine}</p>
-  {#if femStatus?.device === 'gpu' && !femStatus.cupyInstalled && canInstallGpu}
-    <div class="key-actions">
-      <button id="settings-gpu-install" onclick={installGpu} disabled={restart.current !== null}>
-        GPU の部品を入れる(約 2GB・再起動)
-      </button>
-    </div>
+  {#if showGpu}
+    <!-- **答えは変わらない**(GPU の解は CPU とビット一致する。docs/TOPOPT_GPU.md)ので、確認なしでその場で切り替える。 -->
+    <label class="field-row gpu-row">
+      GPU で計算する
+      <input
+        id="settings-gpu"
+        type="checkbox"
+        checked={femStatus?.device === 'gpu'}
+        disabled={!femStatus}
+        onchange={(event) => {
+          onFemDevice(event.currentTarget.checked ? 'gpu' : 'cpu')
+          // 表示はサーバの確定値(`fem_status`)に揃える。拒否されて同じ値が返ると Svelte は checked を
+          // 書き直さないので、押した分はここで戻しておく(受け付けられれば返事で付け直される)。
+          event.currentTarget.checked = femStatus?.device === 'gpu'
+        }}
+      />
+    </label>
+    <p class="hint dim" data-fem-status>{femLine}</p>
+    {#if femStatus?.device === 'gpu' && !femStatus.cupyInstalled && canInstallGpu}
+      <div class="key-actions">
+        <button id="settings-gpu-install" onclick={installGpu} disabled={restart.current !== null}>
+          GPU の部品を入れる(約 2GB・再起動)
+        </button>
+      </div>
+    {/if}
   {/if}
 </dialog>
 

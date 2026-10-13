@@ -890,7 +890,8 @@ export interface SessionHooks {
   /** 解像度の上限・下限・目盛りが返ってきた(要求した接続にだけ届く)。 */
   onOptimizeResolution(payload: OptimizeResolutionPayload): void
   /** 走っているかどうかが変わった(全接続へ配られる)。`finishing` は「このステップで仕上げる」を伝えた後。 */
-  onOptimizeStatus(running: boolean, cancelling: boolean, finishing: boolean): void
+  /** `available` はこの版で形状最適化を使えるか(安定版は false。`duocad/channel.py` の `HIDDEN_IN_STABLE`)。 */
+  onOptimizeStatus(running: boolean, cancelling: boolean, finishing: boolean, available: boolean): void
   /** いま開いている文書の直近の実行のステップの一覧(`optimizeSteps()` の返事)。`finishable` は実行の後に仕上げられるか。 */
   onOptimizeSteps(steps: OptimizeStepMeta[], finishable: boolean): void
   /** ステップ1つの形(`optimizeStepVoxels()` の返事)。 */
@@ -1031,7 +1032,15 @@ const CONNECT_FAILURE_NOTICE_AT = 3
 /** 一度でも繋がったあと、再接続が開けなかったときは1回目で知らせる(初回接続待ちは3回)。 */
 const RECONNECT_FAILURE_NOTICE_AT = 1
 
+/**
+ * 一度サーバから教わった WebSocket の URL。**繋ぎ直しはこれを使い、設定を読み直さない** —— 読み直しに失敗して既定(開発版の 8765)へ
+ * 落ちると、別の版のサーバへ繋ぎに行く(開発版は安定版の画面の Origin を断るので普通は繋がらないが、繋ぎ先が変わりうると
+ * 形状最適化を使えるかの答え(`optimize_status`)を接続をまたいで持てない。sol の指摘)。
+ */
+let knownWebSocketUrl: string | null = null
+
 async function resolveWebSocketUrl(): Promise<string> {
+  if (knownWebSocketUrl !== null) return knownWebSocketUrl
   // サーバが `/duocad-config.json` で自分のWebSocketのURLを教える。
   // ポートを推測しない(静的配信とWebSocketでポートが別であり、既定値を2箇所に書くと必ずずれる)。
   try {
@@ -1040,7 +1049,10 @@ async function resolveWebSocketUrl(): Promise<string> {
     })
     if (response.ok) {
       const config = (await response.json()) as { ws_url?: string }
-      if (config.ws_url) return config.ws_url
+      if (config.ws_url) {
+        knownWebSocketUrl = config.ws_url
+        return config.ws_url
+      }
     }
   } catch {
     // 取れなければ既定へ落ちる(dev サーバから開いた場合など)
@@ -1135,6 +1147,7 @@ export function createSession(hooks: SessionHooks): Session {
       // ここへ書き写すと同じ宣言が2箇所になる)。分岐に要るキーだけをここに置く。
       cancelling?: boolean
       finishing?: boolean
+      available?: boolean
       cancelled?: boolean
       already_running?: boolean
       problems?: string[]
@@ -1255,7 +1268,12 @@ export function createSession(hooks: SessionHooks): Session {
     } else if (message.type === 'optimize_resolution') {
       hooks.onOptimizeResolution(message as unknown as OptimizeResolutionPayload)
     } else if (message.type === 'optimize_status') {
-      hooks.onOptimizeStatus(message.running ?? false, message.cancelling ?? false, message.finishing ?? false)
+      hooks.onOptimizeStatus(
+        message.running ?? false,
+        message.cancelling ?? false,
+        message.finishing ?? false,
+        message.available !== false,
+      )
     } else if (message.type === 'optimize_steps') {
       hooks.onOptimizeSteps((message.steps ?? []) as OptimizeStepMeta[], message.finishable ?? false)
     } else if (message.type === 'optimize_step_voxels') {

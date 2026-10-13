@@ -22,6 +22,10 @@ from .paths import REPO_ROOT
 
 CHANNELS = ("dev", "stable")
 
+#: 安定版(制作用)で出さない機能(`catalog.FEATURES`)。形状最適化は凍結した(本人決定 2026-10-13、
+#: docs/TOPOPT_CONVERGENCE.md 9節)。開発版では今までどおり使える。
+HIDDEN_IN_STABLE = frozenset({"shape_optimization"})
+
 #: 更新元の枝。
 UPDATE_BRANCH = "main"
 
@@ -238,6 +242,11 @@ class StableUpdater:
             self._started = True
         self.on_started()
         return 202, {"started": True}
+
+
+def hidden_features(channel: str) -> frozenset:
+    """その版で隠す機能(`catalog.FEATURES` の部分集合)。"""
+    return HIDDEN_IN_STABLE if channel == "stable" else frozenset()
 
 
 def describe(channel: str, updater: Optional[StableUpdater]) -> dict[str, Any]:

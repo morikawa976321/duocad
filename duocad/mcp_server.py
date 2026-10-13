@@ -70,7 +70,7 @@ from . import (
     selection,
     sketch,
 )
-from .channel import CHANNELS, StableUpdater, describe
+from .channel import CHANNELS, StableUpdater, describe, hidden_features
 from .entry import entry_for
 from .session import DocumentBusy
 from .server import (
@@ -127,8 +127,10 @@ class DocumentTools:
     `isError` の結果へ変換する(黙って空の成功を返さない)。
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, hidden_features: frozenset = frozenset()) -> None:
         self.session = session
+        #: この版で隠す機能(`channel.hidden_features`)。属する道具は一覧にも実体にも入れない。
+        self.hidden_features = frozenset(hidden_features)
         #: ツールの顔ぶれは起動中変わらない(`listChanged` を宣言していない)ので**1度だけ組む**。
         self._descriptors = self._build_descriptors()
         self._descriptor_by_name = {d["name"]: d for d in self._descriptors}
@@ -145,7 +147,7 @@ class DocumentTools:
 
     def _build_descriptors(self) -> list[dict]:
         """中身は `duocad/catalog.py` の宣言そのもの(説明文の書き方は `Command.description` の注記)。"""
-        return catalog.tool_descriptors()
+        return catalog.tool_descriptors(self.hidden_features)
 
     def _build_handlers(self) -> dict:
         """ツール名 -> 実体。同じ綴りのメソッドがあればそれ、無ければ verb の入口
@@ -155,7 +157,7 @@ class DocumentTools:
         (AIがそのツールを呼ぶまで気づかない、という失敗の仕方をしない)。
         """
         handlers = {}
-        for name in catalog.tool_names():
+        for name in catalog.tool_names(self.hidden_features):
             own = getattr(self, name, None)
             if own is None:
                 entry_for(name)
@@ -737,7 +739,7 @@ class McpServer:
             "serverInfo": {"name": self.name, "version": self.version},
             # **アプリ内エージェント(`duocad/agent/`)と同じ文**。手順を2箇所に書くと
             # 片方だけ直った状態に気づけないので、宣言側(catalog.py)の1本から読む。
-            "instructions": catalog.agent_instructions(),
+            "instructions": catalog.agent_instructions(getattr(self.tools, "hidden_features", frozenset())),
         }
 
     def _call_tool(self, params: dict) -> dict:
@@ -885,11 +887,12 @@ def allowed_origins(http_port: int) -> list:
 
 
 async def _run(session: Session, args: argparse.Namespace) -> None:
-    server = Server(session)
+    hidden = hidden_features(args.channel)
+    server = Server(session, hidden_features=hidden)
     server.bind_loop(asyncio.get_running_loop())
     # **同じ `DocumentTools`(= 同じ `Session`)をMCPとアプリ内AIの両方へ渡す**。
     # 状態を持たない薄いラッパなので共有して問題なく、別々に作る理由が無い。
-    tools = DocumentTools(session)
+    tools = DocumentTools(session, hidden_features=hidden)
     server.bind_agent_tools(tools)
 
     ws_url = f"ws://127.0.0.1:{args.port}"

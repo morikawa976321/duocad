@@ -270,7 +270,7 @@ def test_a_cancel_sent_right_after_the_start_is_not_lost(session: Session, monke
     assert seen["cancelled"] is True
     assert connection.of_type("optimize_status")[1]["cancelling"] is True
     assert connection.of_type("optimize_error")[0]["cancelled"] is True
-    assert connection.of_type("optimize_status")[-1] == {"type": "optimize_status", "running": False}
+    assert connection.of_type("optimize_status")[-1] == {"type": "optimize_status", "running": False, "available": True}
 
 
 def test_a_run_that_added_nothing_does_not_overwrite_the_file(session: Session, monkeypatch, tmp_path) -> None:

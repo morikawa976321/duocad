@@ -144,8 +144,11 @@ class Server:
     同時編集を仕様にするなら、まずここへ排他を入れる。
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, hidden_features: frozenset = frozenset()) -> None:
         self.session = session
+        #: この版で隠す機能(`channel.hidden_features`)。属する口は `_dispatch` が断り、アプリ内AIの説明文の道具数からも除く。
+        self.hidden_features = frozenset(hidden_features)
+        self._hidden_commands = catalog.feature_command_names(self.hidden_features)
         self.clients: set = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         # WebSocket経由の操作を処理している最中か(`_on_core_change` の二重配信よけ)。
@@ -297,6 +300,8 @@ class Server:
             return
 
         try:
+            if command in self._hidden_commands:
+                raise ValueError(f"{command!r} はこの版では使えない(安定版では形状最適化を出さない。docs/STABLE.md)")
             if command == "get_state":
                 await self._push(connection, applied=None, only=connection)
             elif command in ("undo", "redo"):
@@ -663,6 +668,7 @@ class Server:
         self._ai_loop = AgentLoop(
             marshaled,
             provider,
+            system=catalog.agent_instructions(self.hidden_features),
             limits=AI_LIMITS.get(kind, Limits()),
             cancellation=self._ai_cancellation,
             progress=self._ai_progress,
@@ -805,8 +811,10 @@ class Server:
 
     # ------------------------------------------------------------------ H: 形状最適化を走らせる
     def _optimize_status(self) -> dict:
-        """画面が実行ボタンと中断ボタンの出し分けに使う最小限(`Session.optimization_status`)。"""
-        return self.session.optimization_status()
+        """画面が実行ボタンと中断ボタンの出し分けに使う最小限(`Session.optimization_status`)。`available` はこの版で形状最適化を
+        使えるか(安定版は false)で、画面は入口とステップの取り直しをこれで決める(口を断るのと同じサーバが答える)。"""
+        return {**self.session.optimization_status(),
+                "available": "shape_optimization" not in self.hidden_features}
 
     async def _broadcast_optimize_status(self) -> None:
         """`optimize_status` を全接続へ配る。中身は接続ごとに送る直前に取り直す(`_broadcast` は接続を1つずつ await するので、作り置きの1通だと配る間に実行が終わったとき後ろの接続が「走っている」のまま固まる)。"""
