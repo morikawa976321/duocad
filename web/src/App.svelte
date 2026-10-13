@@ -337,6 +337,8 @@
     onStatus: (next) => {
       // 切断・再接続の試行は黙る(`session.ts` が「開けなかった試行」だけトーストへ回す)。
       status = next
+      // 形状最適化を使えるかは接続ごとに聞き直す(繋ぎ直した先のサーバが最初の `optimize_status` で答えるまで、前の答えを使わない)。
+      if (next !== 'open') shapeOptimizationAvailable = null
       // (再)接続したら今のAI設定を取り直す(切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
       if (next === 'open') session.femGetStatus()
@@ -382,6 +384,8 @@
     },
     onOptimizeStatus: (running, cancelling, finishing, available) => {
       shapeOptimizationAvailable = available
+      // 使えないサーバに繋ぎ直したら、最適化モードに居残らない(パネルと条件の取り直しが断られる口を叩き続ける)。
+      if (!available && mode.kind === 'optimize') setMode({ kind: 'idle' })
       optimizeFinishing = running && finishing
       // 接続し直すと、待っていた形の返事は来ない。待ちを畳んで頼み直せるようにする(`$state` なので取得の `$effect` が走り直す)。
       searchStepVoxelsPending = null
@@ -1926,7 +1930,7 @@
    */
   $effect(() => {
     void optimize
-    if (!optimizeMode || status !== 'open' || optimizeBusy) return
+    if (!optimizeMode || status !== 'open' || optimizeBusy || shapeOptimizationAvailable !== true) return
     session.optimizeConditions()
     session.optimizeResolution(untrack(() => optimizeElementSizeMm))
   })
