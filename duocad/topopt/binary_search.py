@@ -600,10 +600,9 @@ _WINDOW_CENTRE_VERTICES = (slice(1, 3),) * 3
 class PeelStats:
     """`peel` の実績。`picked` は順位から選んで抜いた手の数、`casualties` は手のたびに一緒に抜いた巻き添え(m=1 では常に0)、
     `islands` は切り離されて消したセル。実際に減ったセル数は `picked + casualties + islands`。
-    `skipped_*` は飛ばした理由ごとの数(支え・表面・傷・多様体・連結性・くびれ・細い継ぎ目・芯の連結の順に判定し、最初に落ちた理由で数える)。
+    `skipped_*` は飛ばした理由ごとの数(支え・表面・傷・多様体・連結性・くびれ・芯の連結の順に判定し、最初に落ちた理由で数える)。
     `skipped_scar` は一口(起点 + 巻き添え)が傷(`scar`。段階4で安全率に落ちた1手の削除セル)と重なった数。
-    `skipped_thickness` は常に0。`skipped_neck` は `neck.NeckJudge` がくびれと判定した数、`skipped_joint` は細い継ぎ目
-    (`neck.NeckJudge.creates_thin_joint`)と判定した数、`neck_full_grid` は材料が格子全体まで
+    `skipped_thickness` は常に0。`skipped_neck` は `neck.NeckJudge` がくびれと判定した数、`neck_full_grid` は材料が格子全体まで
     広げないとつながらなかった判定の数、`skipped_core` は `min_width.CoreConnectivity` が切れるとした数(いずれも m=1 は常に0)。
     保護セル(`protected`)を含む成分を島として切り離す手は `skipped_connectivity` に数える。"""
 
@@ -618,7 +617,6 @@ class PeelStats:
     skipped_neck: int = 0
     skipped_core: int = 0
     skipped_scar: int = 0
-    skipped_joint: int = 0
     already_removed: int = 0
     global_checks: int = 0
     #: 芯の連結の判定を 窓でつながる / 窓で割れる / 大域の数え直し で答えた回数(`min_width.CoreConnectivity.stats`)。
@@ -712,8 +710,6 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
       崩れる手は却下する(`skipped_connectivity`)。
     - くびれ(m>1): 一口を抜くと、材料の前線をつなぎ直す最小の窓の中で芯の前線がつなぎ直されない手は抜かない(`skipped_neck`。
       `neck.NeckJudge`、docs/TOPOPT_MIN_WIDTH.md 2.2節)。S(m) は芯が大域でつながるかしか見ず輪の中のくびれを通すため(#120)。
-    - 細い継ぎ目(m>1): 一口で共通の m 立方を失った6近傍の材料対の芯どうしが、対のすぐ周りでつながらない手は抜かない
-      (`skipped_joint`。`neck.NeckJudge.creates_thin_joint`)。くびれの判定が窓の中の迂回路で通す1セル幅の接触面も断る。
     - 芯の連結(m>1): 一口(と島)を抜くと侵食した芯が割れる手は抜かない(`skipped_core`)。R(m) は m 立方の共有1セルの斜めの
       つなぎ目を許すので、厚みの不変条件だけでは芯は割れうる。窓で言えれば通し、言えなければ大域で数え直す(島を消すときは常に大域)。
     - 表面: x が空の6近傍(格子の外を含む)を持たなければ抜かない。一口の6連結成分もそれぞれ既存の空につながっていること
@@ -726,8 +722,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
 
 #: `PeelStats` のうち歩きの途中で数える欄(`picked_cells`・`seconds` と、判定器の `stats` から写す欄を除く)。
 _WALK_COUNTERS = ('picked', 'casualties', 'islands', 'skipped_support', 'skipped_surface', 'skipped_manifold',
-                  'skipped_connectivity', 'skipped_neck', 'skipped_core', 'skipped_scar', 'skipped_joint', 'already_removed',
-                  'global_checks')
+                  'skipped_connectivity', 'skipped_neck', 'skipped_core', 'skipped_scar', 'already_removed', 'global_checks')
 
 
 @dataclass(frozen=True)
@@ -781,7 +776,7 @@ class PeelWalk:
     def _zero_counters(self) -> tuple:
         return ((0,) * len(_WALK_COUNTERS),
                 None if self.core is None else dict(window_true=0, window_false=0, global_count=0, max_margin=1),
-                None if self.necks is None else dict(rejected=0, full_grid=0, thin_joint=0))
+                None if self.necks is None else dict(rejected=0, full_grid=0))
 
     def _counters(self) -> tuple:
         return (tuple(self.count.values()),
@@ -948,12 +943,6 @@ class PeelWalk:
                 if island_cells:
                     inner[islands] = True
                 tally['skipped_neck'] += 1
-                continue
-            if necks is not None and necks.creates_thin_joint(inner, np.array([[i, j, k]]) if bite is None else bite):
-                inner[cleared] = True
-                if island_cells:
-                    inner[islands] = True
-                tally['skipped_joint'] += 1
                 continue
             if core is not None and not core.after_bite(inner, (i, j, k) if bite is None else bite, island_cells):
                 inner[cleared] = True
