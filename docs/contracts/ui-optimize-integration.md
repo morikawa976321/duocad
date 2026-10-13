@@ -2,7 +2,7 @@
 
 形状最適化の結果を文書に入れる「メッシュボディ」種別、最適化バックエンド(二値探索 `binary_search.find_best_feasible`)を `Session`/WebSocket/画面へつなぐ配線(`duocad/optimize_run.py`)、実行パネル(`OptimizePanel.svelte`)の、ソースから読めない不変条件・依存禁止・罠。
 **いまの挙動の正はコードとテスト**。アルゴリズム本体は [../TOPOPT.md](../TOPOPT.md) と `TOPOPT_*.md`、画面は [../UI.md](../UI.md)。デバッグビュー(`?debug=` `?voxel=1`)は ui-selection-viewport.md。
-**安定版では入口を出さない**(凍結中): `App.svelte` は `/duocad-config.json` の `features.shape_optimization` が false なら「形状最適化」ボタンを、`SettingsDialog.svelte` は GPU の欄を出さない。設定を読む前は出さない(安定版で一瞬見えないように)。接続・文書の切り替えのたびのステップの取り直し(`optimize_steps`)も、設定を読むまで控え(`askOptimizeSteps`)、使えない版では頼まない(断られてエラーのトーストになる)。サーバ側の断り方は [../STABLE.md](../STABLE.md)「安定版で出さない機能」。
+**安定版では入口を出さない**(凍結中): `App.svelte` は WS の `optimize_status` の `available`(`Server._optimize_status`)が false なら「形状最適化」ボタンを、`SettingsDialog.svelte`(`showGpu`)は GPU の欄を出さない。まだ聞いていない間も出さない(安定版で一瞬見えないように)。接続・文書の切り替えのたびのステップの取り直し(`optimize_steps`)も、使えると聞くまで頼まない(`askOptimizeSteps`。断られてエラーのトーストになる)。`/duocad-config.json` には載せない(取得に失敗すると、口を断るサーバと画面の判断が食い違う。sol の指摘)。サーバ側の断り方は [../STABLE.md](../STABLE.md)「安定版で出さない機能」。
 
 ---
 

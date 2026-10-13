@@ -811,8 +811,10 @@ class Server:
 
     # ------------------------------------------------------------------ H: 形状最適化を走らせる
     def _optimize_status(self) -> dict:
-        """画面が実行ボタンと中断ボタンの出し分けに使う最小限(`Session.optimization_status`)。"""
-        return self.session.optimization_status()
+        """画面が実行ボタンと中断ボタンの出し分けに使う最小限(`Session.optimization_status`)。`available` はこの版で形状最適化を
+        使えるか(安定版は false)で、画面は入口とステップの取り直しをこれで決める(口を断るのと同じサーバが答える)。"""
+        return {**self.session.optimization_status(),
+                "available": "shape_optimization" not in self.hidden_features}
 
     async def _broadcast_optimize_status(self) -> None:
         """`optimize_status` を全接続へ配る。中身は接続ごとに送る直前に取り直す(`_broadcast` は接続を1つずつ await するので、作り置きの1通だと配る間に実行が終わったとき後ろの接続が「走っている」のまま固まる)。"""

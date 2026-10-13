@@ -52,6 +52,10 @@ def test_stable_socket_refuses_the_optimization_commands_and_dev_still_answers(t
     assert answered["type"] != "error"
 
 
-def test_the_page_is_told_whether_shape_optimization_is_available():
-    assert channel.describe("stable", None)["features"] == {"shape_optimization": False}
-    assert channel.describe("dev", None)["features"] == {"shape_optimization": True}
+def test_the_page_is_told_over_the_socket_whether_shape_optimization_is_available(tmp_path):
+    """画面は接続のたびに届く `optimize_status` の `available` で入口とステップの取り直しを決める(設定ファイルの取得に依らない)。"""
+    from duocad.server import Server
+
+    session = Session(None, 0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
+    assert Server(session, hidden_features=channel.hidden_features("stable"))._optimize_status()["available"] is False
+    assert Server(session)._optimize_status()["available"] is True

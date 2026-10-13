@@ -890,7 +890,8 @@ export interface SessionHooks {
   /** 解像度の上限・下限・目盛りが返ってきた(要求した接続にだけ届く)。 */
   onOptimizeResolution(payload: OptimizeResolutionPayload): void
   /** 走っているかどうかが変わった(全接続へ配られる)。`finishing` は「このステップで仕上げる」を伝えた後。 */
-  onOptimizeStatus(running: boolean, cancelling: boolean, finishing: boolean): void
+  /** `available` はこの版で形状最適化を使えるか(安定版は false。`duocad/channel.py` の `HIDDEN_IN_STABLE`)。 */
+  onOptimizeStatus(running: boolean, cancelling: boolean, finishing: boolean, available: boolean): void
   /** いま開いている文書の直近の実行のステップの一覧(`optimizeSteps()` の返事)。`finishable` は実行の後に仕上げられるか。 */
   onOptimizeSteps(steps: OptimizeStepMeta[], finishable: boolean): void
   /** ステップ1つの形(`optimizeStepVoxels()` の返事)。 */
@@ -1135,6 +1136,7 @@ export function createSession(hooks: SessionHooks): Session {
       // ここへ書き写すと同じ宣言が2箇所になる)。分岐に要るキーだけをここに置く。
       cancelling?: boolean
       finishing?: boolean
+      available?: boolean
       cancelled?: boolean
       already_running?: boolean
       problems?: string[]
@@ -1255,7 +1257,12 @@ export function createSession(hooks: SessionHooks): Session {
     } else if (message.type === 'optimize_resolution') {
       hooks.onOptimizeResolution(message as unknown as OptimizeResolutionPayload)
     } else if (message.type === 'optimize_status') {
-      hooks.onOptimizeStatus(message.running ?? false, message.cancelling ?? false, message.finishing ?? false)
+      hooks.onOptimizeStatus(
+        message.running ?? false,
+        message.cancelling ?? false,
+        message.finishing ?? false,
+        message.available !== false,
+      )
     } else if (message.type === 'optimize_steps') {
       hooks.onOptimizeSteps((message.steps ?? []) as OptimizeStepMeta[], message.finishable ?? false)
     } else if (message.type === 'optimize_step_voxels') {

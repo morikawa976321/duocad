@@ -59,7 +59,6 @@
     runsWithoutSketchId,
   } from './commands/sketch'
   import ChannelBadge from './ChannelBadge.svelte'
-  import { loadConfig } from './serverRestart.svelte'
   import FilesPanel from './FilesPanel.svelte'
   import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
@@ -211,15 +210,12 @@
   /** 形状最適化モードか。対応する文書実体が無いので画面側だけの状態(バックエンドには知らせない)。 */
   const optimizeMode = $derived(mode.kind === 'optimize')
   /**
-   * この版で形状最適化を使えるか(安定版は使えない。`duocad/channel.py`)。`null` は設定をまだ読んでいない —— 入口は出さず、
-   * サーバへの問い合わせ(安定版では断られてエラーのトーストになる)は読み終わるまで控える(`askOptimizeSteps`)。
+   * この版で形状最適化を使えるか(安定版は使えない。サーバが接続のたびに送る `optimize_status` の `available`)。`null` はまだ聞いていない ——
+   * 入口は出さず、ステップの取り直し(安定版では断られてエラーのトーストになる)も頼まない。聞いた直後の `onOptimizeStatus` が頼み直す。
    */
   let shapeOptimizationAvailable = $state<boolean | null>(null)
-  /** 設定を読む前に頼まれたステップの取り直し(読み終わって使えると分かったら頼む)。 */
-  let optimizeStepsDeferred = false
   function askOptimizeSteps(): void {
-    if (shapeOptimizationAvailable === null) optimizeStepsDeferred = true
-    else if (shapeOptimizationAvailable) session.optimizeSteps()
+    if (shapeOptimizationAvailable === true) session.optimizeSteps()
   }
   /**
    * 直近にトーストへ出した `stale` の鍵(`role:body:index:code`)。`code` を含めないと、
@@ -384,7 +380,8 @@
       const step = chosenStep(payload, optimizeElementSizeMm)
       if (step !== null) optimizeMinWidthMm = snapMinWidth(step.min_width_steps_mm, optimizeMinWidthMm)
     },
-    onOptimizeStatus: (running, cancelling, finishing) => {
+    onOptimizeStatus: (running, cancelling, finishing, available) => {
+      shapeOptimizationAvailable = available
       optimizeFinishing = running && finishing
       // 接続し直すと、待っていた形の返事は来ない。待ちを畳んで頼み直せるようにする(`$state` なので取得の `$effect` が走り直す)。
       searchStepVoxelsPending = null
@@ -1845,11 +1842,6 @@
   }
 
   onMount(() => {
-    void loadConfig().then((config) => {
-      shapeOptimizationAvailable = config?.features?.shape_optimization !== false
-      if (optimizeStepsDeferred && shapeOptimizationAvailable && status === 'open') session.optimizeSteps()
-      optimizeStepsDeferred = false
-    })
     viewport = createViewport(container)
     display.attach(viewport)
     viewport.onPick(onPick)
@@ -2279,6 +2271,7 @@
         onSetApiKey={(key) => session.aiSetApiKey(key)}
         {femStatus}
         onFemDevice={(device) => session.femSetDevice(device)}
+        showGpu={shapeOptimizationAvailable === true}
         onClose={() => (settingsOpen = false)}
       />
     </div>

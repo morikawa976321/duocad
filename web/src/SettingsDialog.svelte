@@ -18,7 +18,7 @@
   import { fail } from './Toast.svelte'
   import { FOV_DEFAULT, FOV_ORTHO } from './viewport'
 
-  const { open, fov, onFov, aiStatus, onSetApiKey, femStatus, onFemDevice, onClose }: {
+  const { open, fov, onFov, aiStatus, onSetApiKey, femStatus, onFemDevice, showGpu, onClose }: {
     open: boolean
     /** 今の画角[度]。`FOV_ORTHO`(0)なら完全正投影。UIは 0 か `FOV_DEFAULT` しか選べないが、チェックボックスは `fov === FOV_ORTHO` の1点だけで決まる。 */
     fov: number
@@ -31,6 +31,8 @@
     femStatus: FemStatus | null
     /** 装置を選ぶ(**その場で効く**。次に準備する計算から)。 */
     onFemDevice: (device: 'cpu' | 'gpu') => void
+    /** GPU の欄を出すか。GPU で解くのは形状最適化だけなので、形状最適化を使えない版(安定版)と、それをまだ聞いていない間は出さない。 */
+    showGpu: boolean
     onClose: () => void
   } = $props()
 
@@ -58,13 +60,8 @@
 
   /** GPU の部品を画面から入れられるか(安定版だけ。開発版は手で `uv sync --extra gpu`)。 */
   let canInstallGpu = $state(false)
-  /** GPU の欄を出すか。GPU で解くのは形状最適化だけなので、形状最適化を出さない版(安定版)では欄ごと出さない。 */
-  let showGpu = $state(false)
   onMount(() => {
-    void loadConfig().then((config) => {
-      canInstallGpu = config?.update_supported === true
-      showGpu = config?.features?.shape_optimization !== false
-    })
+    void loadConfig().then((config) => (canInstallGpu = config?.update_supported === true))
   })
 
   const femLine = $derived.by(() => {
