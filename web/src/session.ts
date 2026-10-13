@@ -860,6 +860,11 @@ export interface SessionHooks {
   onError(message: string, where: string): void
   onWarning(message: string): void
   onStatus(status: ConnectionStatus): void
+  /**
+   * ビューポートの変化を待たせている下りの、いちばん古い送信時刻(`performance.now()`)。無くなれば null。
+   * 待たせるかどうかは送る口ごとに決めてある(`send` の `wait`)。
+   */
+  onWaiting(oldestSentAt: number | null): void
   /** プレビューが返ってきた(状態は変わっていない)。 */
   onPreview(payload: PreviewPayload): void
   /** 頼んだ辺が返ってきた(状態は変わっていない)。 */
@@ -1017,6 +1022,21 @@ export type Point2 = [number, number]
 
 const RECONNECT_DELAY_MS = 2000
 /**
+ * `sendCommand` で送るもののうち、結果がビューポートに出ないもの(待ちバーを出さない)。
+ * ファイルパネル・一覧・書き出し・サムネイルの往復で、人はビューポートの変化を待っていない。
+ */
+const NOT_SHOWN_IN_VIEWPORT = new Set([
+  'list_documents',
+  'save_document',
+  'rename_document',
+  'copy_document',
+  'delete_document',
+  'export_step',
+  'export_stl',
+  'save_thumbnail',
+  'get_thumbnail',
+])
+/**
  * 繋がらないことをトーストで言うまでの連続失敗回数。
  *
  * **試行のたびには出さない**。切断は黙って自動再接続し、**開けなかった試行**だけを数える。
@@ -1068,6 +1088,13 @@ export function createSession(hooks: SessionHooks): Session {
   let failures = 0
   /** このタブで一度でも `open` したか(初回接続待ちと再接続失敗でトーストの出し方を分ける)。 */
   let everOpened = false
+  /** ビューポートの変化を待たせている下り(`ack_id` -> 送った時刻)。挿入順が番号順・時刻順。 */
+  const waits = new Map<number, number>()
+  let lastAckId = 0
+
+  function reportWaits(): void {
+    hooks.onWaiting(waits.size === 0 ? null : waits.values().next().value!)
+  }
 
   /**
    * 1本送る。**繋がっていなければ送らずに、その場でトーストへ回す**。
@@ -1080,12 +1107,19 @@ export function createSession(hooks: SessionHooks): Session {
    * 「同じ文言は積まずに数える」)であって、送る側が黙る話ではない —— ここで最初の1回だけ
    * にすると、**2回目の操作が黙って消える**(押した本人には成功と区別がつかない)。
    */
-  function send(payload: Record<string, unknown>): void {
+  function send(payload: Record<string, unknown>, wait = false): void {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       hooks.onError('サーバに繋がっていないので操作を送れなかった(自動で繋ぎ直しを試みている)', 'send')
       return
     }
-    socket.send(JSON.stringify(payload))
+    if (!wait) {
+      socket.send(JSON.stringify(payload))
+      return
+    }
+    lastAckId += 1
+    socket.send(JSON.stringify({ ...payload, ack_id: lastAckId }))
+    waits.set(lastAckId, performance.now())
+    reportWaits()
   }
 
   function handle(raw: string): void {
@@ -1162,6 +1196,8 @@ export function createSession(hooks: SessionHooks): Session {
       // ---------------------------------------------------------------- 選択情報
       request_id?: number | null
       item?: MeasureItem | null
+      // ---------------------------------------------------------------- 待ちバー
+      ack_id?: number
     }
     try {
       message = JSON.parse(raw)
@@ -1219,6 +1255,11 @@ export function createSession(hooks: SessionHooks): Session {
         thumb: message.thumb,
         saved: message.saved,
       })
+    } else if (message.type === 'done') {
+      // サーバは1接続を直列に捌くので、この番号以下は全部済んでいる。
+      const done = message.ack_id ?? 0
+      for (const ackId of waits.keys()) if (ackId <= done) waits.delete(ackId)
+      reportWaits()
     } else if (message.type === 'error') {
       hooks.onError(message.message ?? '(理由なし)', message.where ?? '?')
     } else if (message.type === 'warning') {
@@ -1315,6 +1356,12 @@ export function createSession(hooks: SessionHooks): Session {
     // 下の `onclose` が1回だけ言う。
     next.onclose = () => {
       hooks.onStatus('closed')
+      // 待たせていた下りの `done` はもう来ない。黙って消すと、押した操作が成功したのか分からないまま終わる。
+      if (waits.size > 0) {
+        waits.clear()
+        reportWaits()
+        if (!disposed) hooks.onError('応答を待っている間にサーバとの接続が切れた(自動で繋ぎ直しを試みている)', 'socket')
+      }
       if (disposed) return
       if (!opened) {
         failures += 1
@@ -1335,31 +1382,31 @@ export function createSession(hooks: SessionHooks): Session {
       void connect()
     },
     sendCommand(cmd, args, clientOp) {
-      send({ cmd, ...args, client_op: clientOp })
+      send({ cmd, ...args, client_op: clientOp }, !NOT_SHOWN_IN_VIEWPORT.has(cmd))
     },
     setVisible(bodyId, visible, clientOp) {
-      send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp })
+      send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp }, true)
     },
     setSketchVisible(sketchId, visible, clientOp) {
-      send({ cmd: 'set_sketch_visible', sketch_id: sketchId, visible, client_op: clientOp })
+      send({ cmd: 'set_sketch_visible', sketch_id: sketchId, visible, client_op: clientOp }, true)
     },
     modifySelection(add, remove, clientOp) {
-      send({ cmd: 'modify_selection', add, remove, client_op: clientOp })
+      send({ cmd: 'modify_selection', add, remove, client_op: clientOp }, true)
     },
     toggleSelection(refs, clientOp) {
-      send({ cmd: 'toggle_selection', refs, client_op: clientOp })
+      send({ cmd: 'toggle_selection', refs, client_op: clientOp }, true)
     },
     clearSelection(clientOp) {
-      send({ cmd: 'clear_selection', client_op: clientOp })
+      send({ cmd: 'clear_selection', client_op: clientOp }, true)
     },
     preview(verb, args, previewId) {
-      send({ cmd: 'preview', verb, args, preview_id: previewId })
+      send({ cmd: 'preview', verb, args, preview_id: previewId }, true)
     },
     getEdges(bodyId) {
-      send({ cmd: 'get_edges', body_id: bodyId })
+      send({ cmd: 'get_edges', body_id: bodyId }, true)
     },
     getVertices(bodyId) {
-      send({ cmd: 'get_vertices', body_id: bodyId })
+      send({ cmd: 'get_vertices', body_id: bodyId }, true)
     },
     inspectSelection(requestId) {
       send({ cmd: 'inspect_selection', request_id: requestId })
@@ -1377,10 +1424,10 @@ export function createSession(hooks: SessionHooks): Session {
       }
     },
     undo() {
-      send({ cmd: 'undo' })
+      send({ cmd: 'undo' }, true)
     },
     redo() {
-      send({ cmd: 'redo' })
+      send({ cmd: 'redo' }, true)
     },
     aiGetStatus() {
       send({ cmd: 'ai_get_status' })
@@ -1444,7 +1491,7 @@ export function createSession(hooks: SessionHooks): Session {
       send({ cmd: 'optimize_steps' })
     },
     optimizeStepVoxels(index) {
-      send({ cmd: 'optimize_step_voxels', index })
+      send({ cmd: 'optimize_step_voxels', index }, true)
     },
     dispose() {
       disposed = true
