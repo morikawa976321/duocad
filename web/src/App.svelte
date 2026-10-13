@@ -384,8 +384,12 @@
     },
     onOptimizeStatus: (running, cancelling, finishing, available) => {
       shapeOptimizationAvailable = available
-      // 使えないサーバに繋ぎ直したら、最適化モードに居残らない(パネルと条件の取り直しが断られる口を叩き続ける)。
-      if (!available && mode.kind === 'optimize') setMode({ kind: 'idle' })
+      // 使えないサーバに繋ぎ直したら、最適化モードとステップの表示に居残らない(断られる口を叩き続ける)。
+      // スケッチの戻り先(`resume`)は `exitSketch` が同じ印で見る。
+      if (!available) {
+        if (mode.kind === 'optimize') setMode({ kind: 'idle' })
+        clearSearchSteps()
+      }
       optimizeFinishing = running && finishing
       // 接続し直すと、待っていた形の返事は来ない。待ちを畳んで頼み直せるようにする(`$state` なので取得の `$effect` が走り直す)。
       searchStepVoxelsPending = null
@@ -531,6 +535,7 @@
   )
 
   $effect(() => {
+    if (shapeOptimizationAvailable !== true) return
     const wanted = searchStepsShown ? searchStepShownIndex : null
     const have = searchStepVoxels !== null && searchStepVoxels.run === searchStepsRun ? searchStepVoxels.index : null
     if (wanted === null || wanted === have || searchStepVoxelsPending !== null) return
@@ -1527,7 +1532,7 @@
 
   /** スケッチモードを抜ける。戻り先は入る前のモード(通常 or 最適化)。 */
   function exitSketch(): void {
-    setMode(resumeOf(mode) === 'optimize' ? { kind: 'optimize' } : { kind: 'idle' })
+    setMode(resumeOf(mode) === 'optimize' && shapeOptimizationAvailable === true ? { kind: 'optimize' } : { kind: 'idle' })
   }
 
   /** 第3のモード(形状最適化)へ入る。「形状最適化」ボタンから(スケッチと同じ作法)。 */
