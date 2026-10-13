@@ -1034,7 +1034,8 @@ const RECONNECT_FAILURE_NOTICE_AT = 1
 
 /**
  * 一度サーバから教わった WebSocket の URL。**繋ぎ直しはこれを使い、設定を読み直さない** —— 読み直しに失敗して既定(開発版の 8765)へ
- * 落ちると、安定版のタブが開発版のサーバの文書を触り、形状最適化を使えるかの答え(`optimize_status`)も別の版のものになる(sol の指摘)。
+ * 落ちると、別の版のサーバへ繋ぎに行く(開発版は安定版の画面の Origin を断るので普通は繋がらないが、繋ぎ先が変わりうると
+ * 形状最適化を使えるかの答え(`optimize_status`)を接続をまたいで持てない。sol の指摘)。
  */
 let knownWebSocketUrl: string | null = null
 
