@@ -8,10 +8,6 @@
 - 芯どうしの結びは S(m) と同じ: 芯の隣接 `CoreConnectivity.structure`(m ≥ 4 は26、m ≤ 3 は6)+ 保持成分ごとの結び(`CoreConnectivity._linked`)。
   材料の前線と材料の連結は6のまま。保持成分は大域のラベルなので、保持の中の経路が窓の外を通っても結ぶ(「保持経由は太い」)。
 - `CoreConnectivity.verdict` は流用しない —— 窓の中で前線が1群でも、保持の結び先が窓外へ伸びると None を返す。
-- **細い継ぎ目**(`creates_thin_joint`): 上のくびれの判定は、窓の中に太い迂回路があれば1セル幅の接触面を通す(折れ目)。その接触面が
-  輪の片側に残り、完成形で幅不足になった(hanger、docs/TOPOPT_CONVERGENCE.md 2節)ので、対のすぐ周りより外の迂回路では許さない
-  (本人決定 2026-10-13「迂回路があっても断る」。余白 0 では探索が早く止まったので、余白 `THIN_JOINT_MARGIN` の内の迂回路だけは許す)。
-  手で共通の m 立方を失った6近傍の材料対について、対を覆う芯どうしがその窓でつながらなければ断る。
 """
 from __future__ import annotations
 
@@ -23,10 +19,6 @@ from scipy import ndimage
 from .acceptance import NEIGHBOURHOOD_STRUCTURE
 from .min_width import CoreConnectivity, core_cells
 
-#: 細い継ぎ目の判定窓の余白(セル。対を覆う立方の角の範囲の外へ広げる量)。この内に収まる迂回路だけは許す。実測(2026-10-13、
-#: docs/TOPOPT_CONVERGENCE.md 8節): 0 は hanger で探索が 16 評価で止まり材料 +131〜206%。1 は hanger 120N で +42%。2 は
-#: hanger 120N・150N・dilution 60N で −10〜+3% かつ幅不足の疑い0。hanger の継ぎ目の迂回路は余白 m(4・5)で初めてつながるので 2 で断てる。
-THIN_JOINT_MARGIN = 2
 #: 判定窓の余白の初期値(m の倍数)。実測: hanger S2 で余白 m は折れ目3つをくびれと分類し、2m・3m は同じ分類(くびれ1・折れ目4)
 #: (芯を6連結で数えていたとき)。
 START_MARGIN_FACTOR = 2
@@ -41,7 +33,7 @@ class NeckJudge:
     def __init__(self, core: CoreConnectivity) -> None:
         self.core = core
         self.m = core.m
-        self.stats = dict(rejected=0, full_grid=0, thin_joint=0)
+        self.stats = dict(rejected=0, full_grid=0)
 
     def creates_neck(self, mask: np.ndarray, removed) -> bool:
         """`removed`(添字 (n,3)。一口と巻き添え。島は含めない)を空にした**後**の `mask` について、その手がくびれを作るか。"""
@@ -95,73 +87,8 @@ class NeckJudge:
                 return False  # 材料が格子全体でもつなぎ直されない = 本体から離す手(既存の連結判定の領分)
             margin *= 2
 
-    def creates_thin_joint(self, mask: np.ndarray, removed) -> bool:
-        """`removed`(添字 (n,3)。一口と巻き添え)を空にした**後**の `mask` について、その手が細い継ぎ目を作るか: 手の前は共通の
-        m 立方を持ち、後は持たない6近傍の材料対(どちらも保持でない)で、対を覆う芯どうしが対のすぐ周り(余白 `THIN_JOINT_MARGIN`)の
-        窓でつながらないものがあれば真。手の前から共通の立方を持たない対は咎めない。"""
-        m = self.m
-        cells = np.atleast_2d(np.asarray(removed))
-        shape = np.asarray(mask.shape)
-        fixed = self.core.exempt
-        # 共通の立方を失う対は、消えた立方(削除セルを含む立方)の中にある。その対を覆う角は全部 [clo, hi) に入る。
-        lo = np.maximum(cells.min(0) - (m - 1), 0)
-        hi = np.minimum(cells.max(0) + m, shape)
-        clo = np.maximum(lo - (m - 1), 0)
-        win = tuple(slice(int(a), int(b)) for a, b in zip(clo, np.minimum(hi + (m - 1), shape)))
-        after = np.array(mask[win], dtype=bool)
-        if fixed is not None:
-            after |= fixed[win]
-        before = after.copy()
-        rel = cells - clo
-        before[rel[:, 0], rel[:, 1], rel[:, 2]] = True
-        crop = tuple(slice(0, int(b - a)) for a, b in zip(clo, hi))
-        core_before = core_cells(before, m)[crop]
-        core_after = core_cells(after, m)[crop]
-        free = after[crop] if fixed is None else after[crop] & ~fixed[win][crop]
-        first = lo - clo
-        for axis in range(3):
-            lengths = tuple(m - 1 if a == axis else m for a in range(3))
-            lead = tuple(slice(None, -1) if a == axis else slice(None) for a in range(3))
-            tail = tuple(slice(1, None) if a == axis else slice(None) for a in range(3))
-            lost = (free[lead] & free[tail] & _spread_up(core_before, lengths)[lead]
-                    & ~_spread_up(core_after, lengths)[lead])
-            for p in np.argwhere(lost):
-                if (p < first).any():
-                    continue  # 覆う角が窓の外にもあるので、失ったかを言えない(その対は別の手の窓で見る)
-                q = p.copy()
-                q[axis] += 1
-                if not self._pair_joined(mask, p + clo, q + clo):
-                    self.stats['thin_joint'] += 1
-                    return True
-        return False
-
-    def _pair_joined(self, mask: np.ndarray, p: np.ndarray, q: np.ndarray) -> bool:
-        """p を覆う芯と q を覆う芯が、対の周り(余白 `THIN_JOINT_MARGIN`)の窓で同じ群か(群の作り方は `_roots`)。"""
-        m = self.m
-        shape = np.asarray(mask.shape)
-        lo = np.maximum(np.minimum(p, q) - (m - 1) - THIN_JOINT_MARGIN, 0)
-        hi = np.minimum(np.maximum(p, q) + 1 + THIN_JOINT_MARGIN, shape)
-        win = tuple(slice(int(a), int(b)) for a, b in zip(lo, np.minimum(hi + (m - 1), shape)))
-        material = np.array(mask[win], dtype=bool)
-        if self.core.exempt is not None:
-            material |= self.core.exempt[win]
-        core = core_cells(material, m)[tuple(slice(0, int(b - a)) for a, b in zip(lo, hi))]
-        covers = []
-        for cell in (p, q):
-            cover = np.zeros_like(core)
-            a = np.maximum(cell - (m - 1) - lo, 0)
-            b = cell + 1 - lo
-            cover[a[0]:b[0], a[1]:b[1], a[2]:b[2]] = True
-            covers.append(cover & core)
-        roots_p, roots_q = self._root_sets(core, covers, lo)
-        return bool(roots_p & roots_q)
-
     def _roots(self, core_after: np.ndarray, front: np.ndarray, lo: np.ndarray) -> set:
         """窓の中で、`front` の芯が属する群(芯の隣接 `core.structure` + 保持成分ごとの結び)の代表の集合。"""
-        return self._root_sets(core_after, [front], lo)[0]
-
-    def _root_sets(self, core_after: np.ndarray, fronts: list, lo: np.ndarray) -> list:
-        """`_roots` を、同じ窓の複数の `fronts` について群を1回だけ作って返す。"""
         labels, count = ndimage.label(core_after, structure=self.core.structure)
         parent = list(range(count + 1))
 
@@ -175,7 +102,7 @@ class NeckJudge:
             hit = [int(v) for v in np.unique(labels[link & core_after])]
             for other in hit[1:]:
                 parent[find(other)] = find(hit[0])
-        return [{find(int(v)) for v in np.unique(labels[front]) if v} for front in fronts]
+        return {find(int(v)) for v in np.unique(labels[front]) if v}
 
 
 def static_necks(mask: np.ndarray, core: CoreConnectivity) -> dict:
