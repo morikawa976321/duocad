@@ -35,7 +35,7 @@
    * 引数が揃ったら `preview` を投げる(サーバがverbを試して形だけ返し、文書は元へ戻す)。押し出しは実測で数百ms〜1秒かかるので、打鍵ごとには投げず、打ち終わり(`PREVIEW_DEBOUNCE_MS`)を待って1回だけ投げる。
    * Enterはプレビューを待たない(プレビューは確認用で、確定の前提ではない)。
    */
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, untrack } from 'svelte'
   import {
     argApplies,
     argKinds,
@@ -574,7 +574,11 @@
     const spec = firstMissingArg(command, values)
     if (spec === null || spec.kind !== 'plane') return false
     planes = { ...planes, [spec.name]: name }
-    if (!needsEnter(command) && firstMissingArg(command, values) === null) commit()
+    if (!needsEnter(command) && firstMissingArg(command, values) === null) {
+      commit()
+      return true
+    }
+    focusFirstNumber()
     return true
   }
 
@@ -592,7 +596,11 @@
     if (command === null || spec === null) return false
     picks = { ...picks, [spec.name]: ref }
     armedPick = null
-    if (!needsEnter(command) && firstMissingArg(command, values) === null) commit()
+    if (!needsEnter(command) && firstMissingArg(command, values) === null) {
+      commit()
+      return true
+    }
+    focusFirstNumber()
     return true
   }
 
@@ -616,19 +624,41 @@
   }
 
   function focusFirstNumber(): void {
-    // 収集の先頭が打ち込む引数ならそこへ入れる。点を待つ間も空欄の `fromPoints` 欄へ入れる(マウスを3Dに残したまま寸法を打てる。Escは `svelte:window` が拾う)。選択待ちのときは奪わない。
+    // 収集の先頭が打ち込む引数ならそこへ入れる。点を待つ間も空欄の `fromPoints` 欄へ入れる(マウスを3Dに残したまま寸法を打てる。Escは `svelte:window` が拾う)。
+    // 揃っていれば `default` で埋まっている空欄へ入れる(移動の dx・包むの R は既定0で揃って見えるが、人が打つのはそこ)。選択・ピック・選択肢を待つときは奪わない。
     queueMicrotask(() => {
+      // 外の入力欄(ブラウザの名前変更など)で打っている最中に、そのクリックが出した選択の配信で奪わない。
+      const active = document.activeElement
+      if (
+        active instanceof HTMLElement &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable) &&
+        !overlayEl?.contains(active)
+      ) {
+        return
+      }
+      // 「指す」で構えた省略可・指し直しのピックは `missing` に出ないので別に見る。
+      if (pendingPick !== null) return
       if (missing?.kind === 'number' || missing?.kind === 'text') {
         document.getElementById(missing.inputId)?.focus()
         return
       }
-      if (missing?.kind !== 'point') return
+      if (missing !== null && missing.kind !== 'point') return
       const spec = numberArgs.find(
-        (candidate) => candidate.fromPoints === true && (numberText[candidate.name] ?? '') === '',
+        (candidate) =>
+          (missing === null || candidate.fromPoints === true) && (numberText[candidate.name] ?? '') === '',
       )
       if (spec !== undefined) document.getElementById(spec.inputId)?.focus()
     })
   }
+
+  /** この画面のクリックで選択が変わったら打つ欄へ入れる(面・辺を選んでそのまま寸法を打てる)。AIが書き換えた選択では動かない(`selfSelections` の数え方)。 */
+  let seenSelfSelections = untrack(() => selfSelections)
+  $effect(() => {
+    const clicks = selfSelections
+    if (clicks === seenSelfSelections) return
+    seenSelfSelections = clicks
+    untrack(focusFirstNumber)
+  })
 
   /**
    * 空欄の `fromPoints` 欄に出す薄字(いまマウスが指している値。無ければ従来のプレースホルダ)。
