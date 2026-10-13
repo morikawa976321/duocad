@@ -245,3 +245,28 @@ def test_the_rim_of_the_opening_is_not_measured_as_an_inner_wall():
     ]
     result = kernel_shell.shell_solid(shape, top, THICKNESS)
     assert result["volume_after"] == pytest.approx(OPEN_TOP_VOLUME)
+
+
+def test_an_inner_wall_whose_rim_lies_on_the_opening_is_still_measured():
+    """半球の球面を抜くと、内壁の円盤は縁の円だけが球面に乗る。縁とみなして外すと「内壁が無い」で断る。"""
+    import math
+
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
+
+    shape = BRepPrimAPI_MakeSphere(10.0, 0.0, math.pi / 2).Shape()
+    sphere = [face["index"] for face in query.describe_faces(shape) if face["kind"] != "plane"]
+    result = kernel_shell.shell_solid(shape, sphere, 1.0)
+    # 残るのは底の厚さ1の板(球で切られた円盤): π∫0..1 (100 - z²) dz
+    assert result["volume_after"] == pytest.approx(math.pi * (100.0 - 1.0 / 3.0))
+
+
+def test_measurement_noise_on_a_nurbs_wall_is_not_a_thin_wall():
+    """NURBS の円筒の内外は 1mm を 0.9999984 と測る。作るときの許容差より小さい誤差で断らない。"""
+    import math
+
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+
+    shape = BRepBuilderAPI_NurbsConvert(BRepPrimAPI_MakeCylinder(10.0, 20.0, math.pi / 2).Shape(), True).Shape()
+    for face in [4, 5]:  # 扇形の柱の両側の平らな側面(片方だけが測定誤差で割った)
+        kernel_shell.shell_solid(shape, [face], 1.0)

@@ -17,9 +17,9 @@ from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepOffset import BRepOffset_Mode
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
+from OCP.BRepTools import BRepTools
 from OCP.GeomAbs import GeomAbs_JoinType
 from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
-from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
@@ -159,7 +159,8 @@ def _require_wall_thickness(
     thinnest = _distance(compound(inner), compound(outer))
     if thinnest is None:
         thinnest = min(_face_distance(face, other, context) for face in inner for other in outer)
-    if thinnest < thickness * (1.0 - 1.0e-6) - Precision.Confusion_s():
+    # 測定の誤差は作るときの許容差より十分小さい(NURBS の円筒で 1mm を 0.9999984 と測った。sol の指摘で実測)。
+    if thinnest < thickness - tolerance:
         raise ValueError(
             f"shell left a wall thinner than requested (thinnest {thinnest:.4g} mm, {context}): "
             "厚さが出っ張り・細い部分の半径を超えている"
@@ -167,12 +168,15 @@ def _require_wall_thickness(
 
 
 def _lies_on(face: "TopoDS_Shape", surfaces: Sequence[Any], tolerance: float) -> bool:
-    """`face` の縁の点がどれか1つの曲面に全部乗っているか(抜いた面の上に残る開口の縁)。
+    """`face` の縁の点と面の中ほどの点が、どれか1つの曲面に全部乗っているか(抜いた面の上に残る開口の縁)。
 
     縁は由来では抜いた面の後継として記録されることも、新しい面として記録されることもある
     (NURBS に変換した箱では後者。sol の指摘で実測)。外側の側面に接するので、内壁に数えると距離0で断ってしまう。
+    縁だけでは足りない: 半球の球面を抜くと、内壁の円盤は縁の円だけが球面に乗る(sol の指摘で実測)。
     """
     points = [BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertex)) for vertex in _boundary_points(face)]
+    u_min, u_max, v_min, v_max = BRepTools.UVBounds_s(TopoDS.Face_s(face))
+    points.append(BRep_Tool.Surface_s(TopoDS.Face_s(face)).Value((u_min + u_max) / 2, (v_min + v_max) / 2))
     for surface in surfaces:
         if all(_on_surface(point, surface, tolerance) for point in points):
             return True
