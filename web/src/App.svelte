@@ -210,6 +210,8 @@
   /**
    * この版で形状最適化を使えるか(安定版は使えない。サーバが接続のたびに送る `optimize_status` の `available`)。`null` はまだ聞いていない ——
    * 入口は出さず、ステップの取り直し(安定版では断られてエラーのトーストになる)も頼まない。聞いた直後の `onOptimizeStatus` が頼み直す。
+   * **接続が切れても `null` に戻さない**: 画面は自分を配ったサーバへ繋ぎ直し、開発版と安定版はポートが違う(docs/STABLE.md)ので答えは変わらない。
+   * 戻すと、繋ぎ直すたびに最適化モードの画面が一度消え、起動中のコマンドの状態と食い違う(sol の指摘で確かめた)。
    */
   let shapeOptimizationAvailable = $state<boolean | null>(null)
   function askOptimizeSteps(): void {
@@ -342,8 +344,6 @@
     onStatus: (next) => {
       // 切断・再接続の試行は黙る(`session.ts` が「開けなかった試行」だけトーストへ回す)。
       status = next
-      // 形状最適化を使えるかは接続ごとに聞き直す(繋ぎ直した先のサーバが最初の `optimize_status` で答えるまで、前の答えを使わない)。
-      if (next !== 'open') shapeOptimizationAvailable = null
       // (再)接続したら今のAI設定を取り直す(切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
       if (next === 'open') session.femGetStatus()
