@@ -713,7 +713,8 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     - くびれ(m>1): 一口を抜くと、材料の前線をつなぎ直す最小の窓の中で芯の前線がつなぎ直されない手は抜かない(`skipped_neck`。
       `neck.NeckJudge`、docs/TOPOPT_MIN_WIDTH.md 2.2節)。S(m) は芯が大域でつながるかしか見ず輪の中のくびれを通すため(#120)。
     - 細い継ぎ目(m>1): 一口で共通の m 立方を失った6近傍の材料対の芯どうしが、対のすぐ周りでつながらない手は抜かない
-      (`skipped_joint`。`neck.NeckJudge.creates_thin_joint`)。くびれの判定が窓の中の迂回路で通す1セル幅の接触面も断る。
+      (`skipped_joint`。`neck.NeckJudge.creates_thin_joint`)。くびれの判定が窓の中の迂回路で通す1セル幅の接触面も、
+      迂回路が対のすぐ周り(余白 `neck.THIN_JOINT_MARGIN`)より外なら断る。
     - 芯の連結(m>1): 一口(と島)を抜くと侵食した芯が割れる手は抜かない(`skipped_core`)。R(m) は m 立方の共有1セルの斜めの
       つなぎ目を許すので、厚みの不変条件だけでは芯は割れうる。窓で言えれば通し、言えなければ大域で数え直す(島を消すときは常に大域)。
     - 表面: x が空の6近傍(格子の外を含む)を持たなければ抜かない。一口の6連結成分もそれぞれ既存の空につながっていること

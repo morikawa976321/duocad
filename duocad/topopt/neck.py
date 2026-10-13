@@ -9,8 +9,9 @@
   材料の前線と材料の連結は6のまま。保持成分は大域のラベルなので、保持の中の経路が窓の外を通っても結ぶ(「保持経由は太い」)。
 - `CoreConnectivity.verdict` は流用しない —— 窓の中で前線が1群でも、保持の結び先が窓外へ伸びると None を返す。
 - **細い継ぎ目**(`creates_thin_joint`): 上のくびれの判定は、窓の中に太い迂回路があれば1セル幅の接触面を通す(折れ目)。その接触面が
-  輪の片側に残り、完成形で幅不足になった(hanger、docs/TOPOPT_CONVERGENCE.md 2節)ので、迂回路があっても断る(本人決定 2026-10-13)。
-  手で共通の m 立方を失った6近傍の材料対について、対を覆う芯どうしが対のすぐ周り(余白 `THIN_JOINT_MARGIN`)の窓でつながらなければ断る。
+  輪の片側に残り、完成形で幅不足になった(hanger、docs/TOPOPT_CONVERGENCE.md 2節)ので、対のすぐ周りより外の迂回路では許さない
+  (本人決定 2026-10-13「迂回路があっても断る」。余白 0 では探索が早く止まったので、余白 `THIN_JOINT_MARGIN` の内の迂回路だけは許す)。
+  手で共通の m 立方を失った6近傍の材料対について、対を覆う芯どうしがその窓でつながらなければ断る。
 """
 from __future__ import annotations
 
@@ -145,17 +146,22 @@ class NeckJudge:
         if self.core.exempt is not None:
             material |= self.core.exempt[win]
         core = core_cells(material, m)[tuple(slice(0, int(b - a)) for a, b in zip(lo, hi))]
-        roots = []
+        covers = []
         for cell in (p, q):
             cover = np.zeros_like(core)
             a = np.maximum(cell - (m - 1) - lo, 0)
             b = cell + 1 - lo
             cover[a[0]:b[0], a[1]:b[1], a[2]:b[2]] = True
-            roots.append(self._roots(core, cover & core, lo))
-        return bool(roots[0] & roots[1])
+            covers.append(cover & core)
+        roots_p, roots_q = self._root_sets(core, covers, lo)
+        return bool(roots_p & roots_q)
 
     def _roots(self, core_after: np.ndarray, front: np.ndarray, lo: np.ndarray) -> set:
         """窓の中で、`front` の芯が属する群(芯の隣接 `core.structure` + 保持成分ごとの結び)の代表の集合。"""
+        return self._root_sets(core_after, [front], lo)[0]
+
+    def _root_sets(self, core_after: np.ndarray, fronts: list, lo: np.ndarray) -> list:
+        """`_roots` を、同じ窓の複数の `fronts` について群を1回だけ作って返す。"""
         labels, count = ndimage.label(core_after, structure=self.core.structure)
         parent = list(range(count + 1))
 
@@ -169,7 +175,7 @@ class NeckJudge:
             hit = [int(v) for v in np.unique(labels[link & core_after])]
             for other in hit[1:]:
                 parent[find(other)] = find(hit[0])
-        return {find(int(v)) for v in np.unique(labels[front]) if v}
+        return [{find(int(v)) for v in np.unique(labels[front]) if v} for front in fronts]
 
 
 def static_necks(mask: np.ndarray, core: CoreConnectivity) -> dict:
