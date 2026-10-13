@@ -59,6 +59,7 @@
     runsWithoutSketchId,
   } from './commands/sketch'
   import ChannelBadge from './ChannelBadge.svelte'
+  import { loadConfig } from './serverRestart.svelte'
   import FilesPanel from './FilesPanel.svelte'
   import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
@@ -209,6 +210,17 @@
 
   /** 形状最適化モードか。対応する文書実体が無いので画面側だけの状態(バックエンドには知らせない)。 */
   const optimizeMode = $derived(mode.kind === 'optimize')
+  /**
+   * この版で形状最適化を使えるか(安定版は使えない。`duocad/channel.py`)。`null` は設定をまだ読んでいない —— 入口は出さず、
+   * サーバへの問い合わせ(安定版では断られてエラーのトーストになる)は読み終わるまで控える(`askOptimizeSteps`)。
+   */
+  let shapeOptimizationAvailable = $state<boolean | null>(null)
+  /** 設定を読む前に頼まれたステップの取り直し(読み終わって使えると分かったら頼む)。 */
+  let optimizeStepsDeferred = false
+  function askOptimizeSteps(): void {
+    if (shapeOptimizationAvailable === null) optimizeStepsDeferred = true
+    else if (shapeOptimizationAvailable) session.optimizeSteps()
+  }
   /**
    * 直近にトーストへ出した `stale` の鍵(`role:body:index:code`)。`code` を含めないと、
    * `hidden`(出さない側)で記録された対象が後で `fingerprint`/`missing`(出す側)に変わっても
@@ -377,7 +389,7 @@
       // 接続し直すと、待っていた形の返事は来ない。待ちを畳んで頼み直せるようにする(`$state` なので取得の `$effect` が走り直す)。
       searchStepVoxelsPending = null
       // 走り終わった・接続し直した・文書を切り替えた後は、その文書のステップを取り直す(走っている間は進捗で増える)。
-      if (!running || searchSteps.length === 0) session.optimizeSteps()
+      if (!running || searchSteps.length === 0) askOptimizeSteps()
       // 控えの確定はサーバが受け付けてから(押した瞬間だと、断られた押下が走っている実行の控えを上書きする)。
       if (running && optimizeStarting && optimizeStartingSettings !== null) optimizeRunSettings = optimizeStartingSettings
       optimizeStartingSettings = null
@@ -580,7 +592,7 @@
     clearOptimizeDebug()
     clearSearchSteps()
     // 開き直した文書の直近の実行のステップを取り直す(走っていない文書では状態の配信が来ないので、ここで頼む)。
-    session.optimizeSteps()
+    askOptimizeSteps()
   }
 
   // ---------------------------------------------------------------- H2: 開発用のデバッグ表示
@@ -1833,6 +1845,11 @@
   }
 
   onMount(() => {
+    void loadConfig().then((config) => {
+      shapeOptimizationAvailable = config?.features?.shape_optimization !== false
+      if (optimizeStepsDeferred && shapeOptimizationAvailable && status === 'open') session.optimizeSteps()
+      optimizeStepsDeferred = false
+    })
     viewport = createViewport(container)
     display.attach(viewport)
     viewport.onPick(onPick)
@@ -2065,14 +2082,16 @@
             スケッチ
           </button>
           <!-- 形状最適化(第3のモード)への入口。viewport上に「これをクリックすれば入れる」実物が無いのでボタンを置く(UI指針1の裏返し)。 -->
-          <button
-            id="optimize-enter"
-            class="tag"
-            onclick={enterOptimizeMode}
-            title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
-          >
-            形状最適化
-          </button>
+          {#if shapeOptimizationAvailable === true}
+            <button
+              id="optimize-enter"
+              class="tag"
+              onclick={enterOptimizeMode}
+              title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
+            >
+              形状最適化
+            </button>
+          {/if}
         </div>
       {/if}
       <!-- スケッチモードだが、まだどのスケッチも開いていない(貼る先のクリック待ち)。下の `CommandHost` には `sketch_create` が起動済みで出ている。 -->

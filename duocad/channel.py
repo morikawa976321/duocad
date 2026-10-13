@@ -18,9 +18,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from . import catalog
 from .paths import REPO_ROOT
 
 CHANNELS = ("dev", "stable")
+
+#: 安定版(制作用)で出さない機能(`catalog.FEATURES`)。形状最適化は凍結した(本人決定 2026-10-13、
+#: docs/TOPOPT_CONVERGENCE.md 9節)。開発版では今までどおり使える。
+HIDDEN_IN_STABLE = frozenset({"shape_optimization"})
 
 #: 更新元の枝。
 UPDATE_BRANCH = "main"
@@ -240,10 +245,17 @@ class StableUpdater:
         return 202, {"started": True}
 
 
+def hidden_features(channel: str) -> frozenset:
+    """その版で隠す機能(`catalog.FEATURES` の部分集合)。"""
+    return HIDDEN_IN_STABLE if channel == "stable" else frozenset()
+
+
 def describe(channel: str, updater: Optional[StableUpdater]) -> dict[str, Any]:
-    """`/duocad-config.json` に載せる分(`ws_url` の隣)。"""
+    """`/duocad-config.json` に載せる分(`ws_url` の隣)。`features` は機能ごとの「この版で使えるか」(画面が入口を隠す)。"""
+    hidden = hidden_features(channel)
     return {
         "channel": channel,
+        "features": {name: name not in hidden for name in catalog.FEATURES},
         "version": version_info(),
         "boot": BOOT_ID,
         "update_supported": updater is not None,

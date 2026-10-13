@@ -28,6 +28,7 @@ class ToolsOnLoop:
     def __init__(self, tools: Any, loop: asyncio.AbstractEventLoop) -> None:
         self._tools = tools
         self._loop = loop
+        self.hidden_features = getattr(tools, "hidden_features", frozenset())
 
     def descriptors(self) -> list:
         # 起動時に組んだ静的なリストを読むだけで文書を触らないので、投げ返さない。

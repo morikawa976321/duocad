@@ -115,11 +115,12 @@ class FakeConnection:
         return found[-1]
 
 
-def browser(session: Session, script, *, connections: int = 2, initial_push: bool = True):
+def browser(session: Session, script, *, connections: int = 2, initial_push: bool = True,
+            hidden_features: frozenset = frozenset()):
     """`script(send)` を1つのイベントループで走らせ、`(script の戻り値, 接続の並び)` を返す。"""
 
     async def scenario():
-        server = Server(session)
+        server = Server(session, hidden_features=hidden_features)
         server.bind_loop(asyncio.get_running_loop())
         clients = [FakeConnection() for _ in range(connections)]
         for client in clients:

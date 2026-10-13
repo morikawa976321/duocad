@@ -75,6 +75,19 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 
 更新元にタグは打たない。mainはPR経由でしか入らない動作確認済みの枝なので(CLAUDE.md)、そこでもう1段の関門を足さない。
 
+## 安定版で出さない機能
+
+**形状最適化は安定版に出さない**(凍結。本人決定 2026-10-13、[TOPOPT_CONVERGENCE.md](TOPOPT_CONVERGENCE.md) 9節)。開発版では今までどおり使える。
+コードは main にも入ったままで、起動の `--channel stable` で隠す(`channel.HIDDEN_IN_STABLE`):
+
+- AIの道具(MCP とアプリ内AI)から、条件を置く5つ(`set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` /
+  `clear_loads`)を外す。説明文の道具の数も外した後の数になる。
+- WebSocket の形状最適化の口(上の5つと、条件の点検・実行・中断・仕上げ・ステップの7つ)を断る。どれが隠れるかは `catalog.Command.feature`。
+- 画面は `/duocad-config.json` の `features.shape_optimization` を読み、「形状最適化」ボタンと設定の GPU の欄を出さない。
+- 最適化の条件や結果のボディが入った文書も、そのまま開いて使える(条件は文書に残り、見えないだけ)。
+
+凍結を解くときは `HIDDEN_IN_STABLE` から外す。
+
 ## 巻き戻し(手動)
 
 直前の更新の前のコミットは `duocad-stable\.git\duocad-previous` に残る。実行するコマンドは

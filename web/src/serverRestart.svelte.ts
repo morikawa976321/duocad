@@ -9,6 +9,8 @@ export type ServerConfig = {
   /** サーバのプロセスの起動ごとに変わる印(`duocad/channel.py` の `BOOT_ID`)。 */
   boot?: string
   update_supported?: boolean
+  /** 機能ごとの「この版で使えるか」(`duocad/channel.py` の `describe`)。安定版では形状最適化が false。 */
+  features?: { shape_optimization?: boolean }
 }
 
 /** 読み直し後に結果を知らせるための `sessionStorage` の印。 */

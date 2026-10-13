@@ -58,6 +58,9 @@ SHAPE_CATEGORIES = ("sketch", "feature", "history")
 #: - `none`    … WebSocketには開けていない(読み取り・述語の語彙など、画面が使わないもの)
 WS_SURFACES = ("table", "special", "none")
 
+#: 版によって隠せる機能(`Command.feature`)。どの版で隠すかは `channel.hidden_features`。
+FEATURES = ("shape_optimization",)
+
 
 @dataclass(frozen=True)
 class Param:
@@ -148,6 +151,8 @@ class Command:
     #: **`SHAPE_CATEGORIES` の verb は書くこと**(`None` のままなら `__post_init__` が落とす)。
     #: それ以外は省略すると false。
     resets_selection: Optional[bool] = None
+    #: この宣言が属する、版によって隠せる機能(`FEATURES`)。隠した版ではMCPの道具にもWSの口にも出さない。
+    feature: Optional[str] = None
     #: 設計上の注記(なぜこの形か)。コードの読み手向けで、AIには渡さない。
     note: str = ""
 
@@ -162,6 +167,8 @@ class Command:
             raise ValueError(f"{self.name}: プレビューは `Session` のメソッドを呼ぶ")
         if self.preview_session is not None and not self.previewable:
             raise ValueError(f"{self.name}: `preview_session` は `previewable=True` と組で使う")
+        if self.feature is not None and self.feature not in FEATURES:
+            raise ValueError(f"{self.name}: 未知の機能 {self.feature!r}({FEATURES})")
         if self.resets_selection is None:
             if self.category in SHAPE_CATEGORIES and self.changes_document:
                 raise ValueError(
@@ -1152,6 +1159,7 @@ COMMANDS: tuple[Command, ...] = (
     # verbの中身と関係なく増える。
     Command(
         name="set_preserve_bodies",
+        feature="shape_optimization",
         returns=(Result("bodies", "string[]"),),
         resets_selection=False,
         category="feature",
@@ -1169,6 +1177,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="set_exclude_bodies",
+        feature="shape_optimization",
         returns=(Result("bodies", "string[]"),),
         resets_selection=False,
         category="feature",
@@ -1183,6 +1192,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="set_fixtures",
+        feature="shape_optimization",
         returns=(Result("face_count", "number"),),
         resets_selection=False,
         category="feature",
@@ -1199,6 +1209,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="set_loads",
+        feature="shape_optimization",
         returns=(
             Result("face_count", "number"),
             Result("applied_count", "number"),
@@ -1242,6 +1253,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="clear_loads",
+        feature="shape_optimization",
         returns=(Result("face_count", "number"),),
         resets_selection=False,
         category="feature",
@@ -1749,6 +1761,7 @@ COMMANDS: tuple[Command, ...] = (
     # 引数しか無い(既定＝いちばん粗い設定で走る)。
     Command(
         name="optimize_conditions",
+        feature="shape_optimization",
         category="protocol",
         description="",
         session="optimize_conditions",
@@ -1763,6 +1776,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="optimize_resolution",
+        feature="shape_optimization",
         category="protocol",
         description="",
         params=(
@@ -1785,6 +1799,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="run_optimization",
+        feature="shape_optimization",
         category="protocol",
         description="",
         params=(
@@ -1813,6 +1828,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="cancel_optimization",
+        feature="shape_optimization",
         category="protocol",
         description="",
         session="cancel_optimization",
@@ -1826,6 +1842,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="finish_optimization",
+        feature="shape_optimization",
         category="protocol",
         description="",
         session="request_finish",
@@ -1840,6 +1857,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="optimize_steps",
+        feature="shape_optimization",
         category="protocol",
         description="",
         session="steps_for_current",
@@ -1850,6 +1868,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="optimize_step_voxels",
+        feature="shape_optimization",
         category="protocol",
         description="",
         session="steps_for_current",
@@ -1953,12 +1972,18 @@ def websocket_command_names() -> set:
     return {command.name for command in COMMANDS if command.ws != "none"}
 
 
-def tool_descriptors() -> list:
-    return [command.descriptor() for command in COMMANDS if command.mcp]
+def tool_descriptors(hidden: frozenset = frozenset()) -> list:
+    """MCPの道具の定義。`hidden` の機能(`Command.feature`)に属するものは除く。"""
+    return [command.descriptor() for command in COMMANDS if command.mcp and command.feature not in hidden]
 
 
-def tool_names() -> tuple:
-    return tuple(command.name for command in COMMANDS if command.mcp)
+def tool_names(hidden: frozenset = frozenset()) -> tuple:
+    return tuple(command.name for command in COMMANDS if command.mcp and command.feature not in hidden)
+
+
+def feature_command_names(hidden: frozenset) -> frozenset:
+    """`hidden` の機能に属する宣言の名前(MCPの道具とWSの口の両方)。"""
+    return frozenset(command.name for command in COMMANDS if command.feature is not None and command.feature in hidden)
 
 
 def dimension_params(name: str) -> tuple[str, ...]:
@@ -1974,7 +1999,7 @@ def dimension_params(name: str) -> tuple[str, ...]:
     return ()
 
 
-def agent_instructions() -> str:
+def agent_instructions(hidden: frozenset = frozenset()) -> str:
     """**道具の使い方をAIへ渡す唯一の文**(MCPの `instructions` とアプリ内エージェントの
     システムプロンプトは同じものを読む)。
 
@@ -1994,7 +2019,7 @@ def agent_instructions() -> str:
     全部は捕まえられない —— 最後の防波堤はこの注意書きである。
     """
     return (
-        f"duocad(自作3DCAD)の開いている文書を操作する。公開ツールは{len(tool_names())}個。"
+        f"duocad(自作3DCAD)の開いている文書を操作する。公開ツールは{len(tool_names(hidden))}個。"
         "面・辺・領域などの形は引数で受けず、選択から取る"
         "（数値・名前・パスだけが引数）。"
         "手順: describe_document で概要を知る → "
