@@ -29,6 +29,7 @@ from .optimize_setup import (  # noqa: F401
 )
 from .pattern import pattern_circular, pattern_rectangular  # noqa: F401
 from .rename import rename  # noqa: F401
+from .shell_body import shell_body  # noqa: F401
 
 __all__ = [
     "add_mesh_body",
@@ -55,4 +56,5 @@ __all__ = [
     "pattern_circular",
     "pattern_rectangular",
     "rename",
+    "shell_body",
 ]

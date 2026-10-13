@@ -19,6 +19,7 @@ export const COMMAND_CATEGORY = {
   extrude: 'feature',
   fillet: 'feature',
   chamfer: 'feature',
+  shell_body: 'feature',
   boolean_body: 'feature',
   move_sketch_entities: 'sketch',
   move_body: 'feature',
@@ -85,6 +86,7 @@ export interface CommandArguments {
   extrude: { distance: number; mode: string }
   fillet: { radius: number | unknown[] }
   chamfer: { distance: number | unknown[] }
+  shell_body: { thickness: number }
   boolean_body: { target_ref: object; mode: string }
   move_sketch_entities: { dx?: number; dy?: number; copy?: boolean; mode?: string; angle?: number; center?: unknown[]; center_entity?: object }
   move_body: { dx?: number; dy?: number; dz?: number; copy?: boolean; mode?: string; angle?: number; axis_edge?: object; axis_point?: unknown[]; axis_dir?: unknown[]; center_vertex?: object }
@@ -160,6 +162,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'extrude'; body_id: string; distance: number; mode: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'shell_body'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'boolean_body'; target_body_id: string; mode: string; removed_bodies: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'move_sketch_entities'; mode: string; dx: number | null; dy: number | null; angle: number | null; center: number[] | null; copy: boolean; created: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'move_body'; mode: string; dx: number | null; dy: number | null; dz: number | null; angle: number | null; axis_point: number[] | null; axis_dir: number[] | null; copy: boolean; created: string[]; changed_bodies: string[] })

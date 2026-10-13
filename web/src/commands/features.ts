@@ -138,6 +138,32 @@ export const CHAMFER: CommandDef<'chamfer'> = {
   },
 }
 
+/** シェル(中空化)。選んだ面を抜き、外形から内側へ同じ厚さの壁を残す。面を選ばない閉じた中空は無い(コアも断る)。 */
+export const SHELL_BODY: CommandDef<'shell_body'> = {
+  id: 'shell_body',
+  label: 'シェル',
+  buttonId: 'shell-body',
+  preview: 'server',
+  args: [
+    { kind: 'selection', name: 'faces', label: '抜く面', shapeKind: 'face', min: 1, max: null },
+    {
+      kind: 'number',
+      name: 'thickness',
+      label: '厚さ',
+      unit: 'mm',
+      inputId: 'shell-thickness',
+      reject: positive('厚さ'),
+    },
+  ],
+  build(values) {
+    const empty = missingSelection(values, 'faces', '面')
+    const thickness = values.thickness
+    if (empty !== null) return { ok: false, reason: empty }
+    if (typeof thickness !== 'number') return { ok: false, reason: '厚さが数値でない' }
+    return { ok: true, args: { thickness } }
+  },
+}
+
 /**
  * ソリッドブーリアン。ターゲットは面1枚を直接ピック(`PickArgSpec`)、ツールは選択(複数)。
  * ターゲットのピックをツール選択より前に置く(`args` の並びが `firstMissingArg` の順序)。ターゲットを選択に入れると `require_bodies` でツールとロールが混ざる。
@@ -459,6 +485,7 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
   EXTRUDE_FACES,
   FILLET,
   CHAMFER,
+  SHELL_BODY,
   BOOLEAN_BODY,
   MOVE_BODY,
   MIRROR_BODY,
