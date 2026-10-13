@@ -10,6 +10,8 @@
 下りコマンドの一覧と引数は `duocad/catalog.py` の `COMMANDS` が正。ソケットが受け取れる名前は、そこから導出した表
 (`SKETCH_COMMANDS` / `FEATURE_COMMANDS` / `FILE_COMMANDS`)と `_dispatch` が個別に捌く分(`catalog` の `ws="special"`)で全部。
 `client_op` はどのクライアントの操作かを返すための添え物で、verbの引数ではない。
+`ack_id` も添え物で、付いていれば処理を終えた後(応答・配信を送り終えた後、失敗でも)に `done` を返す。
+画面はこれで「ビューポートの変化を待たせている」間を数える(`web/src/serverWait.svelte.ts`)。
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
@@ -17,6 +19,7 @@
         {"type": "edges", "body_id": str, "revision": int, "edges": [...]}
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
         {"type": "error", "message": str, "where": str}
+        {"type": "done", "ack_id": int}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "api_key_source",
          "api_key_hint", "running", "providers", "thinking", "thinking_choices"}
@@ -529,6 +532,11 @@ class Server:
                     "message": f"{type(error).__name__}: {error}",
                 },
             )
+        finally:
+            # 1接続は直列に捌くので、`done` が届いた時点でそれより前に送った分も済んでいる(画面は「この番号以下」を消す)。
+            ack_id = message.get("ack_id")
+            if ack_id is not None:
+                await _send(connection, {"type": "done", "ack_id": ack_id})
 
     def _apply(self, call: Any, *args: Any, **kwargs: Any) -> dict:
         """WebSocket経由の変更を実行する。この間だけ `_dispatching` を立てる。

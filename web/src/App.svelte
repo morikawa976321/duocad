@@ -99,6 +99,8 @@
   import { createDocumentFiles } from './documentFiles.svelte'
   import { createMeasurement } from './measurement.svelte'
   import { createSelectionInfo } from './selectionInfo.svelte'
+  import { createServerWait } from './serverWait.svelte'
+  import WaitBar from './WaitBar.svelte'
   import {
     createViewport,
     type BoxSelectEvent,
@@ -319,8 +321,11 @@
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   const ai = createAiChat({ send: (text) => session.aiSend(text), fail })
 
+  const serverWait = createServerWait()
+
   const session = createSession({
     onState: handleState,
+    onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
     onError: (message, where) => {
       // サムネイルは裏の要求。`pendingOp` を解くと、待っていた操作の確定より先に次の Enter が通る。
       if (where === 'save_thumbnail' || where === 'get_thumbnail') {
@@ -1870,6 +1875,7 @@
     session.start()
     return () => {
       session.dispose()
+      serverWait.dispose()
       viewport?.dispose()
       viewport = null
     }
@@ -2198,6 +2204,7 @@
     <div class="stage">
       <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
       <div class="viewport" bind:this={container}></div>
+      <WaitBar visible={serverWait.visible} />
 
       <!-- 最初の状態が届く前も覆う(出さないとグリッドが一瞬見えてから消える)。 -->
       {#if !documentOpen}
