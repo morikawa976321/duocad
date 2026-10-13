@@ -908,7 +908,10 @@ def test_the_streak_is_reset_by_an_adoption_and_a_longer_patience_reaches_a_smal
     assert long.best_feasible.mask.sum() < short.best_feasible.mask.sum()
     assert all(long.best_feasible.mask[cell] for cell in protected)
     assert long_reduction['adopted_after_exclusion'] >= 1
-    assert long_reduction['safety_excluded_cells'] == long_reduction['poison_cells'] >= 1  # 外したセルは採用をまたいで保ち、二度数えない
+    # 外したセルは採用をまたいで保ち、二度数えない。終端の確かめ直しで外した毒と傷は、同じ形の不合格の記録で答えて解き直さない。
+    excluded = long_reduction['safety_excluded_cells']
+    assert excluded >= 1 and long_reduction['poison_cells'] == 0
+    assert long_reduction['scars']['terminal_rounds'] == 1 and long_reduction['scars']['terminal_released'] == 2 * excluded
 
 
 def test_a_cell_that_failed_safety_stays_excluded_across_adoptions_and_is_counted_once(monkeypatch):
@@ -920,14 +923,15 @@ def test_a_cell_that_failed_safety_stays_excluded_across_adoptions_and_is_counte
     reduction = result.diagnostics['reduction']
     assert reduction['stop_reason'] == 'no_removable_cell'
     assert reduction['adopted_after_exclusion'] >= 1  # 外した後に採用が挟まっている
-    assert 1 <= reduction['safety_excluded_cells'] == reduction['poison_cells'] <= len(protected)  # 各セルを一度だけ外す
+    assert 1 <= reduction['safety_excluded_cells'] <= len(protected)  # 各セルを一度だけ外す
+    assert reduction['poison_cells'] == 0 and reduction['scars']['terminal_rounds'] == 1  # 終端で外し、記録で答えて止まる
     assert reduction['poison_released'] == 0  # 見立ての不合格は候補の安全率が目標以上のままなので不足分が取れず、戻さない
     assert all(result.best_feasible.mask[cell] for cell in protected)
     stage4 = result.history[1:]
     assert len({trial.mask_hash for trial in stage4}) == len(stage4)  # 採用をまたいでも同じ形を2度評価しない
 
 
-def _plate_search(monkeypatch, order, verdict, *, max_evaluations, max_step_ratio=.042):
+def _plate_search(monkeypatch, order, verdict, *, max_evaluations, max_step_ratio=.042, min_width_cells=1):
     """6x6x2 の板を、固定した順位 `order`(材料に残るセルだけ)と、候補への見立て `verdict(material)`(不合格なら
     その安全率、合格なら None)で削る。合格の安全率は 10 から合格のたびに 0.2 上がる。FEM・CAD は呼ばない。"""
     shape = (6, 6, 2)
@@ -954,7 +958,8 @@ def _plate_search(monkeypatch, order, verdict, *, max_evaluations, max_step_rati
     _stub_islands(monkeypatch)
     monkeypatch.setattr(acceptance, 'inspect', inspect)
     return bs._reduce_volume(_seeded(plate, 10.0, conditions), conditions, max_evaluations=max_evaluations, is_cancelled=None,
-                             max_step_ratio=max_step_ratio, single_cell_patience=None, target_tolerance=None)
+                             max_step_ratio=max_step_ratio, single_cell_patience=None, target_tolerance=None,
+                             min_width_cells=min_width_cells)
 
 
 def test_a_rejected_bite_that_returns_after_an_adoption_is_not_solved_again(monkeypatch):
@@ -993,6 +998,46 @@ def test_a_poison_cell_returns_to_the_ranking_once_the_safety_factor_rose_by_its
     singles = _single_cell_safety_failures(reduction['steps'])
     assert len(singles) >= 2 and all(step['removed_cells'] == 1 for step in singles)
     assert result.best_feasible.mask[cells['P']]
+
+
+def test_a_bite_that_overlaps_a_failed_bite_is_skipped_across_adoptions_until_the_terminal_check(monkeypatch):
+    """落ちたら、安全率で落ちた1手の一口(傷)と重なる別の起点の手を、採用をまたいで FEM に掛け直している(毒は起点しか覚えない)。
+
+    2セル厚の板を m=2 で削ると、上面と下面のセルは同じ貫通柱を一口にする。柱が欠けた候補だけ落ちる。上面の手が落ちた後、
+    採用を挟んで順位に来る下面の手は(親が変わって形の記録では答えられなくても)傷で飛ぶ。終端の確かめ直しで1回だけ解き直す。
+    傷が無いと、下面の手を新しい親で解いて落ち、1手の不合格は3回になる。"""
+    shape = (6, 6, 2)
+    column = ((3, 3, 1), (3, 3, 0))
+    top, bottom = (int(np.ravel_multi_index(c, shape)) for c in column)
+    rest = [c for c in range(72) if c not in (top, bottom)]
+    order = [top] + rest[:2] + [bottom] + rest[2:]
+    result = _plate_search(monkeypatch, order, lambda m: None if (m[column[0]] and m[column[1]]) else -1000.0,
+                           max_evaluations=400, min_width_cells=2)
+    reduction = result.diagnostics['reduction']
+    assert reduction['stop_reason'] == 'no_removable_cell'
+    assert all(result.best_feasible.mask[c] for c in column)
+    assert any(step['peel']['skipped_scar'] > 0 for step in reduction['steps'])
+    singles = _single_cell_safety_failures(reduction['steps'])
+    assert len(singles) == reduction['scars']['recorded'] == 2  # 最初の1回と、終端の確かめ直しの1回
+    assert reduction['scars']['terminal_rounds'] == 1 and reduction['scars']['accepted_after_terminal'] == 0
+    assert reduction['scars']['remaining'] == 1 and reduction['scars']['released'] == 0
+
+
+def test_the_terminal_check_retries_a_poisoned_cell_that_became_removable_and_keeps_searching(monkeypatch):
+    """落ちたら、終端の確かめ直しで毒を外していないか、外した後の採用で探索を止めている(毒のセルは親が変わると通りうる)。
+
+    P は材料が 45 セルを超える間だけ落ちる。最初に落ちて毒になった P は、削り終えた形の確かめ直しでまた試され、通る。"""
+    shape = (6, 6, 2)
+    P = (3, 4, 1)
+    first = int(np.ravel_multi_index(P, shape))
+    order = [first] + [c for c in range(72) if c != first]
+    result = _plate_search(monkeypatch, order, lambda m: -1000.0 if (not m[P] and m.sum() > 45) else None,
+                           max_evaluations=400)
+    reduction = result.diagnostics['reduction']
+    assert reduction['stop_reason'] == 'no_removable_cell'
+    assert not result.best_feasible.mask[P] and result.best_feasible.mask.sum() <= 45
+    assert reduction['scars']['terminal_rounds'] >= 1 and reduction['scars']['accepted_after_terminal'] >= 1
+    assert reduction['poison_released'] == 0  # 安全率の上がりでは戻らない(不足分が大きい)
 
 
 def test_a_single_cell_failure_that_is_not_a_safety_failure_is_not_counted_toward_patience(monkeypatch):

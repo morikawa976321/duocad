@@ -107,3 +107,25 @@ def test_rewriting_the_order_in_place_and_asking_for_nothing_still_match_a_fresh
         got = walk.take(order, count)
         _same(got, bs.peel(full, order, count, anchors))
         assert np.array_equal(got[0], full) and got[1].picked == 0
+
+
+@pytest.mark.parametrize('m', [1, 2, 3])
+def test_a_bite_that_touches_a_scar_is_skipped_and_a_walk_with_a_scar_matches_a_fresh_peel(m):
+    """落ちたら、傷(段階4で安全率に落ちた1手の削除セル)と重なる一口を抜いているか、傷を持つ歩きの使い回しが `peel` とずれている。"""
+    rng = np.random.default_rng(31 + m)
+    parents, anchors = _parents(rng, m, None)
+    parent = parents[0]
+    order = rng.permutation(parent.size)
+    first, stats = bs.peel(parent, order, 1, anchors, min_width_cells=m)
+    scar = parent & ~first  # 最初の一口(と島)を傷にする
+    count = int(parent.sum()) // 3
+    got = bs.peel(parent, order, count, anchors, min_width_cells=m, scar=scar)
+    assert got[1].skipped_scar >= 1 and got[0].ravel()[stats.picked_cells[0]]
+    assert stats.picked_cells[0] not in got[1].picked_cells
+    walk = bs.PeelWalk(parent, anchors, min_width_cells=m, scar=scar)
+    for n in (count, 1, 5, count // 2):
+        _same(walk.take(order, n), bs.peel(parent, order, n, anchors, min_width_cells=m, scar=scar))
+    empty = np.zeros(parent.shape, bool)
+    _same(bs.peel(parent, order, count, anchors, min_width_cells=m, scar=empty),
+          bs.peel(parent, order, count, anchors, min_width_cells=m))
+
