@@ -1032,7 +1032,14 @@ const CONNECT_FAILURE_NOTICE_AT = 3
 /** 一度でも繋がったあと、再接続が開けなかったときは1回目で知らせる(初回接続待ちは3回)。 */
 const RECONNECT_FAILURE_NOTICE_AT = 1
 
+/**
+ * 一度サーバから教わった WebSocket の URL。**繋ぎ直しはこれを使い、設定を読み直さない** —— 読み直しに失敗して既定(開発版の 8765)へ
+ * 落ちると、安定版のタブが開発版のサーバの文書を触り、形状最適化を使えるかの答え(`optimize_status`)も別の版のものになる(sol の指摘)。
+ */
+let knownWebSocketUrl: string | null = null
+
 async function resolveWebSocketUrl(): Promise<string> {
+  if (knownWebSocketUrl !== null) return knownWebSocketUrl
   // サーバが `/duocad-config.json` で自分のWebSocketのURLを教える。
   // ポートを推測しない(静的配信とWebSocketでポートが別であり、既定値を2箇所に書くと必ずずれる)。
   try {
@@ -1041,7 +1048,10 @@ async function resolveWebSocketUrl(): Promise<string> {
     })
     if (response.ok) {
       const config = (await response.json()) as { ws_url?: string }
-      if (config.ws_url) return config.ws_url
+      if (config.ws_url) {
+        knownWebSocketUrl = config.ws_url
+        return config.ws_url
+      }
     }
   } catch {
     // 取れなければ既定へ落ちる(dev サーバから開いた場合など)
