@@ -326,7 +326,7 @@
   const session = createSession({
     onState: handleState,
     onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
-    onError: (message, where) => {
+    onError: (message, where, clientOp) => {
       // サムネイルは裏の要求。`pendingOp` を解くと、待っていた操作の確定より先に次の Enter が通る。
       if (where === 'save_thumbnail' || where === 'get_thumbnail') {
         files.dropThumbnailRequests()
@@ -336,7 +336,10 @@
       // `send` はverbではなく「繋がっていないので送れなかった」で、繋がっていないことに気づく唯一の札。
       // 内部の語を頭に付けない。
       fail(where === 'send' ? message : `エラー[${where}] ${message}`)
-      pendingOp = null
+      // 待ちを解くのは、待っている操作そのものが失敗したときと、送れなかったときだけ。確定の直前に送った
+      // プレビューなどの失敗で解くと、確定がまだサーバで走っている間に次の Enter が通る。
+      if (where === 'send') pendingOp = null
+      else releasePending(clientOp ?? null)
       if (where === 'preview') clearPreview()
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
       if (where === 'get_edges' || where === 'send') edgesAsked.clear()

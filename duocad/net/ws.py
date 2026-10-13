@@ -18,7 +18,7 @@
         {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
         {"type": "edges", "body_id": str, "revision": int, "edges": [...]}
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
-        {"type": "error", "message": str, "where": str}
+        {"type": "error", "message": str, "where": str, "client_op": int|None}
         {"type": "done", "ack_id": int}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "api_key_source",
@@ -530,6 +530,8 @@ class Server:
                     "type": "error",
                     "where": str(command),
                     "message": f"{type(error).__name__}: {error}",
+                    # 画面は自分が待っている操作の失敗かをこれで見分ける(別の要求の失敗で確定の待ちを解かない)。
+                    "client_op": message.get("client_op"),
                 },
             )
         finally:
