@@ -220,6 +220,8 @@
    * 使えると聞くまで(接続し直した直後を含む)は、モードを保ったまま画面と問い合わせを止める。
    */
   const optimizeMode = $derived(mode.kind === 'optimize' && shapeOptimizationAvailable === true)
+  /** コマンドの行を作り直す鍵。最適化モードでも画面を止めている間は通常の行を出すので、行の顔ぶれが変わるたびに作り直す(起動中のコマンドを別の一覧へ持ち越さない)。 */
+  const commandRowKey = $derived(mode.kind === 'optimize' && !optimizeMode ? 'idle' : mode.kind)
   /**
    * 直近にトーストへ出した `stale` の鍵(`role:body:index:code`)。`code` を含めないと、
    * `hidden`(出さない側)で記録された対象が後で `fingerprint`/`missing`(出す側)に変わっても
@@ -1480,7 +1482,7 @@
    * - 面・辺・頂点・領域はどのモードでも残す(スケッチを抜けてそのまま押し出す等が実際の経路)。
    */
   function setMode(next: Mode): void {
-    // 確定前の姿を持ち越さない。モードが変わると下の `{#key mode.kind}` が `CommandHost` ごと作り直すので
+    // 確定前の姿を持ち越さない。モードが変わると下の `{#key commandRowKey}` が `CommandHost` ごと作り直すので
     // `onCancelPreview` は来ない。ここで消さないと、`move_body` の半透明ボディや `extrude` の投機実行の幽霊が残り続ける。
     clearPreview()
     const nextSketch = next.kind === 'sketch' ? next.id : null
@@ -2134,8 +2136,8 @@
           </button>
         </div>
       {/if}
-      <!-- verbの行。鍵はモードのタグそのもの(スケッチAからBへ移るときは作り直さない)。 -->
-      {#key mode.kind}
+      <!-- verbの行。鍵はモードのタグそのもの(スケッチAからBへ移るときは作り直さない。`commandRowKey`)。 -->
+      {#key commandRowKey}
         <CommandHost
           bind:this={host}
           {selection}
