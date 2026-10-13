@@ -207,8 +207,6 @@
     commandSucceeded(): void
   } | null>(null)
 
-  /** 形状最適化モードか。対応する文書実体が無いので画面側だけの状態(バックエンドには知らせない)。 */
-  const optimizeMode = $derived(mode.kind === 'optimize')
   /**
    * この版で形状最適化を使えるか(安定版は使えない。サーバが接続のたびに送る `optimize_status` の `available`)。`null` はまだ聞いていない ——
    * 入口は出さず、ステップの取り直し(安定版では断られてエラーのトーストになる)も頼まない。聞いた直後の `onOptimizeStatus` が頼み直す。
@@ -217,6 +215,11 @@
   function askOptimizeSteps(): void {
     if (shapeOptimizationAvailable === true) session.optimizeSteps()
   }
+  /**
+   * 形状最適化モードの画面を出すか。モードは対応する文書実体が無いので画面側だけの状態(バックエンドには知らせない)。
+   * 使えると聞くまで(接続し直した直後を含む)は、モードを保ったまま画面と問い合わせを止める。
+   */
+  const optimizeMode = $derived(mode.kind === 'optimize' && shapeOptimizationAvailable === true)
   /**
    * 直近にトーストへ出した `stale` の鍵(`role:body:index:code`)。`code` を含めないと、
    * `hidden`(出さない側)で記録された対象が後で `fingerprint`/`missing`(出す側)に変わっても
@@ -1946,6 +1949,7 @@
    * (割り当てを壊すのは他のverb)。鍵に `code` を含める理由は `seenStaleKeys`。
    */
   $effect(() => {
+    if (shapeOptimizationAvailable !== true) return // 形状最適化を出さない版では、その条件の警告も出さない
     const stale = optimize?.stale ?? []
     const next = new Set<string>()
     for (const item of stale) {
@@ -2117,7 +2121,7 @@
           <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
         </div>
       {/if}
-      {#if mode.kind === 'optimize'}
+      {#if optimizeMode}
         <div class="mode-row">
           <span class="label">形状最適化</span>
           <span id="optimize-mode" class="tag on">
@@ -2141,7 +2145,7 @@
             ? SKETCH_MODE_COMMANDS
             : mode.kind === 'sketch-pending'
               ? SKETCH_PENDING_COMMANDS
-              : mode.kind === 'optimize'
+              : optimizeMode
                 ? OPTIMIZE_MODE_COMMANDS
                 : SOLID_COMMANDS}
           defaultCommandId={mode.kind === 'sketch' ? DEFAULT_SKETCH_COMMAND_ID : undefined}
