@@ -460,6 +460,18 @@ export interface Viewport {
    * スケッチモード中(`setActiveSketch`)はこのゲートに関係なく、そのスケッチの領域だけが対象。
    */
   pickRegions(on: boolean): void
+  /**
+   * 通常モードで面を指せるか(既定 `true`)。`false` の間は `PickEvent.hit` も矩形選択の面も空になり、ホバーも光らない。
+   * 辺だけを食うコマンド(フィレット・面取り)の起動中に閉じる。スケッチモードはもともと面を拾わない。
+   */
+  pickFaces(on: boolean): void
+  /**
+   * 辺のホバーと `edgeChain` を、辺1本ではなく連なり(`EdgeGeometry.chain`)の単位にする(既定 `false`)。
+   * フィレット・面取りの起動中だけ立てる(測定・回転軸は辺を1本ずつ指す)。
+   */
+  groupEdgeChains(on: boolean): void
+  /** その辺と同じ連なりの辺の添字(出している辺の範囲で。`groupEdgeChains(false)` の間はその辺だけ)。 */
+  edgeChain(ref: EdgeRef): number[]
   /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
   highlightEdges(refs: EdgeRef[]): void
   // ------------------------------------------------------------------ 頂点(選択中のものだけ)

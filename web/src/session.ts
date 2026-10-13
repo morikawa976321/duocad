@@ -356,6 +356,8 @@ export interface PreviewPayload {
  */
 export interface EdgeGeometry {
   index: number
+  /** 連なりの代表の添字(`duocad/kernel_chains.py`)。同じ値の辺はフィレット・面取りで1本として振る舞う。 */
+  chain: number
   kind: string
   length: number
   closed: boolean

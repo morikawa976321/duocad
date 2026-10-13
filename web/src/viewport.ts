@@ -992,6 +992,7 @@ export function createViewport(container: HTMLElement): Viewport {
       line.renderOrder = LAYER.edge // 深度を書かないぶん、描く順序で面より手前に出す
       line.userData.bodyId = bodyId
       line.userData.edgeIndex = edge.index
+      line.userData.chain = edge.chain ?? edge.index
       edgeLines.push(edgeBatch.add(line, geometry))
     }
   }
@@ -1003,15 +1004,28 @@ export function createViewport(container: HTMLElement): Viewport {
   function applyEdgeMaterials(): void {
     // 色は材質から読み戻す(`highlightColors()` の検査がこの値を読む)。
     highlightColor.edge = selectedEdgeIndices.size === 0 ? null : edgeMaterials.get('user', false).color.getHex()
+    const hovered = hoverEdge === null || hoverEdge.bodyId !== edgeBodyId ? new Set<number>() : new Set(edgeChain(hoverEdge))
     for (const line of edgeLines) {
       const edgeIndex = line.userData.edgeIndex as number
       const isHit = selectedEdgeIndices.has(edgeIndex)
-      const isHovered =
-        hoverEdge !== null &&
-        hoverEdge.bodyId === (line.userData.bodyId as string) &&
-        hoverEdge.edgeIndex === edgeIndex
-      line.material = edgeMaterials.get(isHit ? 'user' : 'plain', isHovered)
+      line.material = edgeMaterials.get(isHit ? 'user' : 'plain', hovered.has(edgeIndex))
     }
+  }
+
+  /** 辺を連なりの単位で扱うか(`groupEdgeChains`)。 */
+  let edgeChainsWanted = false
+
+  function groupEdgeChains(on: boolean): void {
+    if (edgeChainsWanted === on) return
+    edgeChainsWanted = on
+    applyEdgeMaterials()
+  }
+
+  function edgeChain(ref: EdgeRef): number[] {
+    if (!edgeChainsWanted || ref.bodyId !== edgeBodyId) return [ref.edgeIndex]
+    const chain = edgeLines.find((line) => line.userData.edgeIndex === ref.edgeIndex)?.userData.chain
+    if (typeof chain !== 'number') return [ref.edgeIndex]
+    return edgeLines.filter((line) => line.userData.chain === chain).map((line) => line.userData.edgeIndex as number)
   }
 
   function highlightEdges(refs: EdgeRef[]): void {
@@ -1816,6 +1830,15 @@ export function createViewport(container: HTMLElement): Viewport {
     pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
   }
 
+  /** 面を指せるか(`pickFaces`)。 */
+  let facePickWanted = true
+
+  function pickFaces(on: boolean): void {
+    if (facePickWanted === on) return
+    facePickWanted = on
+    pickChanged()
+  }
+
   /** 頂点を辺より先に見るか(`preferVertices`)。既定は辺が先(`resolveHit` の順序)。 */
   let vertexPickWanted = false
 
@@ -2063,8 +2086,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
     if (activeSketchId === null) {
       const keep = section.keepsFilter()
-      // 面は常に指せる(クリックと同じ)。隠したBodyのメッシュは `visible=false` なので外す。
-      for (const [bodyId, entry] of bodies) {
+      // 面はクリックと同じゲート(`pickFaces`)。隠したBodyのメッシュは `visible=false` なので外す。
+      for (const [bodyId, entry] of facePickWanted ? bodies : []) {
         for (const mesh of entry.faceMeshes) {
           if (!mesh.visible) continue
           if (!band.objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
@@ -2227,7 +2250,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 面に当たる画素では面が勝ち、基準平面は面の無い画素でだけ取れる(レイ距離では競わせない。わざと:
     // 部品のシルエットに重なる部分の基準平面は指せない。#109、本人判断 2026-10-07、docs/VIEWPORT.md「ピック」)。
     // 基準平面は `showBasePlanes(true)` の間しか当たらない。
-    const face = faceHitAt(offsetX, offsetY)
+    const face = facePickWanted ? faceHitAt(offsetX, offsetY) : null
     if (face !== null) return { ...nothing, hit: face.ref }
     return { ...nothing, plane: basePlaneAt(offsetX, offsetY) }
   }
@@ -2466,6 +2489,9 @@ export function createViewport(container: HTMLElement): Viewport {
       return [center.x, center.y, center.z]
     },
     pickRegions,
+    pickFaces,
+    groupEdgeChains,
+    edgeChain,
     preferVertices,
     highlightEdges,
     projectEdge,

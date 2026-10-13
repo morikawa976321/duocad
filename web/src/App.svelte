@@ -977,6 +977,9 @@
    * 辺を出す対象のBody。選んでいる形のBodyを優先し、無ければアクティブボディ
    * (アクティブ固定だと、27部品を読んだ文書で見ていない部品の辺が出る)。
    */
+  /** 辺だけを食うコマンドの起動時に選択の最初の形状が属していたボディ(`onWantsKinds`)。降りたら null。 */
+  let edgeCommandBody = $state<string | null>(null)
+
   const edgeTargetBody = $derived.by(() => {
     // 見えているボディだけを対象にする。AIが述語で提案した集合は隠したボディにまたがりうる、
     // そこを頼むとサーバが「隠れているものの辺は指せない」と断って見えている辺も出なくなる。
@@ -990,6 +993,8 @@
       (item): item is ShapeRef => !('sketch' in item) && visible.has((item as ShapeRef).body),
     )
     if (picked) return picked.body
+    // 辺だけを食うコマンドの起動で外した面のボディ(起動中は面を指せないので、外すと選び直す手が無い)。
+    if (edgeCommandBody !== null && visible.has(edgeCommandBody)) return edgeCommandBody
     // アクティブボディへ落ちるときも同じ判定をする(隠したまま頼むと断られるだけ)。
     const active = model?.active_body_id ?? null
     return active !== null && visible.has(active) ? active : null
@@ -1071,6 +1076,20 @@
   })
 
   /**
+   * 辺だけを食うコマンド(フィレット・面取り)の起動中か。面は指せず(`viewport.pickFaces`)、辺は連なりで選ぶ
+   * (`viewport.groupEdgeChains`。OCCTはこの2つを辺1本から連なり全体へ広げてかけるので、1本ずつだと光った所より広く丸まる)。
+   */
+  const edgeOnlyCommand = $derived(
+    sketchId === null && wantedKinds.length > 0 && wantedKinds.every((kind) => kind === 'edge'),
+  )
+
+  $effect(() => {
+    const on = edgeOnlyCommand
+    viewport?.pickFaces(!on)
+    viewport?.groupEdgeChains(on)
+  })
+
+  /**
    * 回転中心の頂点を待っている間だけ、頂点を辺より先に取る(`viewport.preferVertices`)。
    * `move_body` は辺が常に出ているので、既定順(辺が先)だと角を狙ったクリックが必ず辺に取られる。
    */
@@ -1139,20 +1158,26 @@
 
   function onBoxSelect(event: BoxSelectEvent): void {
     const mode = toggleOnlyMode(event.mode)
-    const picked: SelectionRef[] = [
+    // 辺は連なりごとのまとまり(連なりの辺を2本囲んでも1つ)。トグルはまとまり単位(`toggleUnits`)。
+    const chainUnits = new Map<string, SelectionRef[]>()
+    for (const item of event.edges) {
+      const unit = edgeChainRefs(item.bodyId, item.edgeIndex)
+      chainUnits.set(refKey(unit[0]), unit)
+    }
+    const units: SelectionRef[][] = [
       // 同じボディの面が何枚囲まれても参照は1つ(`refKey` で重複を落とす)。
-      ...dedupeRefs(event.faces.map((item) => optimizeSetFaceRef(item.bodyId, item.faceIndex))),
-      ...event.edges.map((item) => edgeRef(item.bodyId, item.edgeIndex)),
-      ...event.vertices.map((item) => vertexRef(item.bodyId, item.vertexIndex)),
-      ...event.regions.map((item) => regionRef(item.sketchId, item.index)),
-      ...event.sketchEntities.map((item) => sketchEntityRef(item.sketchId, item.entityId, item.point)),
+      ...dedupeRefs(event.faces.map((item) => optimizeSetFaceRef(item.bodyId, item.faceIndex))).map((ref) => [ref]),
+      ...chainUnits.values(),
+      ...event.vertices.map((item) => [vertexRef(item.bodyId, item.vertexIndex)]),
+      ...event.regions.map((item) => [regionRef(item.sketchId, item.index)]),
+      ...event.sketchEntities.map((item) => [sketchEntityRef(item.sketchId, item.entityId, item.point)]),
     ]
+    const picked = units.flat()
     const current = currentItems()
     const currentKeys = new Set(current.map(refKey))
     if (mode === 'toggle') {
-      const already = picked.filter((ref) => currentKeys.has(refKey(ref)))
-      const fresh = picked.filter((ref) => !currentKeys.has(refKey(ref)))
-      modifySelection(fresh, already)
+      const { add, remove } = toggleUnits(units, currentKeys)
+      modifySelection(add, remove)
       return
     }
     if (picked.length === 0) {
@@ -1283,6 +1308,60 @@
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
     if (kinds.length === 0) pendingOptimizePreset = null
+    // 辺だけを食うコマンドが起動したら、選択に残っている面を外す(辺は残す。面は指せなくなるので外す手が無い)。
+    // `untrack`: ここは `CommandHost` の `$effect` の中から呼ばれ、選択を読むとその effect が選択の変化ごとに走り直す。
+    if (kinds.length > 0 && kinds.every((kind) => kind === 'edge')) {
+      untrack(() => {
+        const items = currentItems()
+        const first = items.find((item): item is ShapeRef => !('sketch' in item) && 'kind' in item)
+        if (edgeCommandBody === null) edgeCommandBody = first?.body ?? null
+        modifySelection([], refsOfKind(items, 'face'))
+      })
+    } else {
+      edgeCommandBody = null
+    }
+  }
+
+  /** 辺の参照を、連なり(`viewport.edgeChain`)の全部の参照へ広げる。 */
+  function edgeChainRefs(bodyId: string, edgeIndex: number): SelectionRef[] {
+    const indices = viewport?.edgeChain({ bodyId, edgeIndex }) ?? [edgeIndex]
+    return indices.map((index) => edgeRef(bodyId, index))
+  }
+
+  /**
+   * 参照のまとまり(連なり、または参照1つ)ごとにトグルする。全部入っていれば全部外し、そうでなければ欠けている分を足す
+   * (1本ずつトグルすると、一部だけ入っていた連なりが入れ替わるだけになる)。
+   */
+  function toggleUnits(units: SelectionRef[][], currentKeys: Set<string>): { add: SelectionRef[]; remove: SelectionRef[] } {
+    const add: SelectionRef[] = []
+    const remove: SelectionRef[] = []
+    for (const unit of units) {
+      if (unit.every((ref) => currentKeys.has(refKey(ref)))) remove.push(...unit)
+      else add.push(...unit.filter((ref) => !currentKeys.has(refKey(ref))))
+    }
+    return { add, remove }
+  }
+
+  /** 連なりを1つの単位として選択を編集する(`editSelection` の連なり版。トグルは `toggleUnits`)。 */
+  function editEdgeChain(refs: SelectionRef[], mode: PickEvent['mode']): void {
+    if (refs.length === 1) {
+      editSelection(refs[0], mode)
+      return
+    }
+    const current = currentItems()
+    const currentKeys = new Set(current.map(refKey))
+    const allIn = refs.every((ref) => currentKeys.has(refKey(ref)))
+    if (mode === 'toggle') {
+      const { add, remove } = toggleUnits([refs], currentKeys)
+      modifySelection(add, remove)
+      return
+    }
+    if (allIn && current.length === refs.length) {
+      modifySelection([], refs)
+      return
+    }
+    const keys = new Set(refs.map(refKey))
+    modifySelection(refs, current.filter((item) => !keys.has(refKey(item))))
   }
 
   /** ピックを選択集合の編集へ翻訳する。ここが作るのは「何を足して何を引くか」だけで、結果はコアから返ってくる。 */
@@ -1335,7 +1414,7 @@
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
     // 辺が当たったら辺。フィレット・面取り・測定の起動中だけ来る。
     if (event.edge !== null) {
-      editSelection(edgeRef(event.edge.bodyId, event.edge.edgeIndex), pickMode)
+      editEdgeChain(edgeChainRefs(event.edge.bodyId, event.edge.edgeIndex), pickMode)
       return
     }
     // 頂点が当たったら頂点。ここへ来るのは「AIが選んだ頂点を人がCtrl+クリックで外す」か「測る頂点を指す」のどちらか。
