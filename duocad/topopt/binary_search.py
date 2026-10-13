@@ -600,7 +600,8 @@ _WINDOW_CENTRE_VERTICES = (slice(1, 3),) * 3
 class PeelStats:
     """`peel` の実績。`picked` は順位から選んで抜いた手の数、`casualties` は手のたびに一緒に抜いた巻き添え(m=1 では常に0)、
     `islands` は切り離されて消したセル。実際に減ったセル数は `picked + casualties + islands`。
-    `skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・連結性・くびれ・芯の連結の順に判定し、最初に落ちた理由で数える)。
+    `skipped_*` は飛ばした理由ごとの数(支え・表面・傷・多様体・連結性・くびれ・芯の連結の順に判定し、最初に落ちた理由で数える)。
+    `skipped_scar` は一口(起点 + 巻き添え)が傷(`scar`。段階4で安全率に落ちた1手の削除セル)と重なった数。
     `skipped_thickness` は常に0。`skipped_neck` は `neck.NeckJudge` がくびれと判定した数、`neck_full_grid` は材料が格子全体まで
     広げないとつながらなかった判定の数、`skipped_core` は `min_width.CoreConnectivity` が切れるとした数(いずれも m=1 は常に0)。
     保護セル(`protected`)を含む成分を島として切り離す手は `skipped_connectivity` に数える。"""
@@ -615,6 +616,7 @@ class PeelStats:
     skipped_connectivity: int = 0
     skipped_neck: int = 0
     skipped_core: int = 0
+    skipped_scar: int = 0
     already_removed: int = 0
     global_checks: int = 0
     #: 芯の連結の判定を 窓でつながる / 窓で割れる / 大域の数え直し で答えた回数(`min_width.CoreConnectivity.stats`)。
@@ -685,7 +687,7 @@ def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int, exempt: Op
 
 def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray, *,
         min_width_cells: int = 1, exempt: Optional[np.ndarray] = None,
-        protected: Optional[np.ndarray] = None) -> tuple[np.ndarray, PeelStats]:
+        protected: Optional[np.ndarray] = None, scar: Optional[np.ndarray] = None) -> tuple[np.ndarray, PeelStats]:
     """`order` を先頭から1回だけ歩き、各セルを**その時点のマスク**で判定して通ったらその場で消す。
 
     `count` 個(巻き添え・島として消えたぶんも数える。最後の一口が超えることがある)消えるか順位が尽きたら止める。
@@ -712,13 +714,15 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
       つなぎ目を許すので、厚みの不変条件だけでは芯は割れうる。窓で言えれば通し、言えなければ大域で数え直す(島を消すときは常に大域)。
     - 表面: x が空の6近傍(格子の外を含む)を持たなければ抜かない。一口の6連結成分もそれぞれ既存の空につながっていること
       (閉じた空洞を作らない。中空構造を許容しない製品制約で、`acceptance.boundary_check` の `void_components` が落ちない根拠)。
+    - 傷(`scar`。格子と同じ形の bool 配列): 一口が傷のセルを1つでも含む手は抜かない(`skipped_scar`)。
     """
-    return PeelWalk(mask, anchor_ids, min_width_cells=min_width_cells, exempt=exempt, protected=protected).take(order, count)
+    return PeelWalk(mask, anchor_ids, min_width_cells=min_width_cells, exempt=exempt, protected=protected,
+                    scar=scar).take(order, count)
 
 
 #: `PeelStats` のうち歩きの途中で数える欄(`picked_cells`・`seconds` と、判定器の `stats` から写す欄を除く)。
 _WALK_COUNTERS = ('picked', 'casualties', 'islands', 'skipped_support', 'skipped_surface', 'skipped_manifold',
-                  'skipped_connectivity', 'skipped_neck', 'skipped_core', 'already_removed', 'global_checks')
+                  'skipped_connectivity', 'skipped_neck', 'skipped_core', 'skipped_scar', 'already_removed', 'global_checks')
 
 
 @dataclass(frozen=True)
@@ -744,7 +748,8 @@ class PeelWalk:
     """
 
     def __init__(self, mask: np.ndarray, anchor_ids: np.ndarray, *, min_width_cells: int = 1,
-                 exempt: Optional[np.ndarray] = None, protected: Optional[np.ndarray] = None) -> None:
+                 exempt: Optional[np.ndarray] = None, protected: Optional[np.ndarray] = None,
+                 scar: Optional[np.ndarray] = None) -> None:
         self.parent = np.asarray(mask, dtype=bool)
         self.protected = None if protected is None else np.asarray(protected, dtype=bool)
         if self.protected is not None and min_width_cells > 1 and (exempt is None or (self.protected & ~exempt).any()):
@@ -752,6 +757,7 @@ class PeelWalk:
         self.anchor_ids = anchor_ids
         self.min_width_cells = int(min_width_cells)
         self.exempt = exempt
+        self.scar = None if scar is None or not np.any(scar) else np.asarray(scar, dtype=bool)
         shape = self.parent.shape
         self.node_shape = tuple(n + 1 for n in shape)
         self.is_anchor = np.zeros(self.node_shape, dtype=bool)
@@ -842,7 +848,8 @@ class PeelWalk:
         """今の状態から順位を歩き、消えた数の累計が `count` に届くか順位が尽きたら止める(`peel` の判定そのもの)。"""
         shape = self.parent.shape
         node_shape = self.node_shape
-        order, work, touches, exempt, protected = self.order, self.work, self.touches, self.exempt, self.protected
+        order, work, touches, exempt, protected, scar = (self.order, self.work, self.touches, self.exempt, self.protected,
+                                                         self.scar)
         support_flat, anchor_flat, touches_flat = self.support.ravel(), self.is_anchor.ravel(), touches.ravel()
         plane, row = shape[1] * shape[2], shape[2]
         node_plane, node_row = node_shape[1] * node_shape[2], node_shape[2]
@@ -875,8 +882,11 @@ class PeelWalk:
                 extra = min_width.casualties(inner, (i, j, k), m, exempt)
                 if len(extra):
                     bite = np.vstack(([[i, j, k]], extra))
+            cleared = (i, j, k) if bite is None else tuple(bite.T)
+            if scar is not None and scar[cleared].any():
+                tally['skipped_scar'] += 1
+                continue
             if bite is None:
-                cleared = (i, j, k)
                 window[1, 1, 1] = False
                 if not _regular_after_removal(window):
                     tally['skipped_manifold'] += 1
@@ -886,7 +896,6 @@ class PeelWalk:
                     tally['skipped_connectivity'] += 1
                     continue
             else:
-                cleared = tuple(bite.T)
                 for ci, cj, ck in extra[touches[extra[:, 0], extra[:, 1], extra[:, 2]]]:
                     corners = (corners or []) + [(ci + a) * node_plane + (cj + b) * node_row + (ck + c)
                                                  for a, b, c in _CORNERS]
@@ -1092,7 +1101,12 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     外したときの合格形状の安全率と不足分 `目標 − 候補の安全率` を覚え、その後の合格形状の安全率が不足分以上に上がった
     セルだけ順位へ戻す(代表応力がパーセンタイルなので削るほど安全率が上がることがある)。安全率以外で落ちた1セルは
     その形状の間だけ外す。
-    停止: 順位を歩いて1セルも抜けなければ `converged`(`no_removable_cell`)。既定ではこれだけが収束で、ほかは
+    **傷**: 安全率で落ちた1手は、その一口の削除セル(起点 + 巻き添え + 島)も覚え、以後の歩きで一口がそれと1セルでも重なる手を
+    飛ばす(`peel` の `scar`)。起点だけを外す毒では、同じ部材をかじる別の起点の一口を一つずつ FEM で確かめていた
+    (docs/TOPOPT_CONVERGENCE.md)。戻し方は毒と同じ。2手以上の不合格は傷にしない(どの手が悪いか分からない)。
+    **終端の確かめ直し**: 順位を歩いて1手も抜けないとき、傷か毒が残っていれば両方を外して歩き直す。外した後に採用が無いまま
+    また尽きたら止める(採用があれば探索を続け、次に尽きたらまた外す)。
+    停止: 確かめ直しの後に順位を歩いて1手も抜けなければ `converged`(`no_removable_cell`)。既定ではこれだけが収束で、ほかは
     評価予算(`evaluation_limit`)・中断(`cancelled`)と、**評価が落ちた候補**(`checks['safety']` が `unknown` かつ
     `reason='evaluation_error'`。`prerequisites_failed` は形状の不合格なので入らない)が採用を挟まず
     `evaluation_error_patience` 回続いたときの `evaluation_error`(`repeated_evaluation_error`。合格形状は返す)。
@@ -1100,7 +1114,9 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     `converged`。合格形状の安全率が `目標 × (1 + target_tolerance)` 以下の間に1セルの手が安全率で落ちたら
     `within_target_tolerance` で `converged`。どちらも止める時点だけを決め、道を変えない。
     止まった理由は `diagnostics['reduction']['stop_reason']`、試行ごとの記録は `['steps']`、検算で落ちた候補は
-    `['geometry_rejections']`、外したままのセル数と順位へ戻した回数は `['poison_cells']` / `['poison_released']`。
+    `['geometry_rejections']`、外したままのセル数と順位へ戻した回数は `['poison_cells']` / `['poison_released']`、
+    傷は `['scars']`(`recorded` / `released`(安全率が上がって戻した)/ `remaining` / `terminal_rounds`(確かめ直しの回数)/
+    `terminal_released`(確かめ直しで外した傷と毒の数)/ `accepted_after_terminal`(最初の確かめ直しより後の採用の数))。
 
     評価予算は両段階を通した1本(`initial.evaluations` から数える。削る候補1つが1回)。評価は bbox キャッシュ無しで行うが、
     保持・除外の共通体積は前計算から引く。採用形状は出る前に直接ブーリアンで取り直す(`_recheck_regions_without_precompute`)。
@@ -1127,12 +1143,17 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     steps: list[dict] = []
     # 安全率で落ちた1セル → (外したときの合格形状の安全率, 不足分。取れなければ None = 戻さない)。
     poison: dict[int, tuple[float, Optional[float]]] = {}
+    # 安全率で落ちた1手の一口の削除セル(平坦添字)・記録したときの合格形状の安全率・不足分(戻し方は毒と同じ)。
+    scars: list[tuple[np.ndarray, float, Optional[float]]] = []
+    terminal_unconfirmed = False  # 確かめ直しで傷と毒を外した後、まだ採用が無い
     reduction = dict(step_exponent=float(step_exponent), max_step_ratio=float(max_step_ratio),
                      filter_size=ENERGY_FILTER_SIZE, fem_solves=0, min_width_cells=int(min_width_cells),
                      peel_calls=0, peel_seconds=0.0, peel_seconds_max=0.0, repeated_candidates=0,
                      single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
                      evaluation_error_patience=evaluation_error_patience, evaluation_errors=0,
                      safety_excluded_cells=0, adopted_after_exclusion=0, poison_cells=0, poison_released=0,
+                     scars=dict(recorded=0, released=0, remaining=0, terminal_rounds=0, terminal_released=0,
+                                accepted_after_terminal=0),
                      geometry_rejections=[], stop_reason=None, steps=steps)
     # 形のくびれの静的診断(探索の判定ではない。docs/TOPOPT_MIN_WIDTH.md 2.2節)。
     static_core = min_width.CoreConnectivity(min_width_cells, exempt) if min_width_cells > 1 else None
@@ -1145,6 +1166,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
         if static_core is not None:
             reduction['static_necks']['result'] = neck.static_necks(final.mask, static_core)
         reduction['poison_cells'] = len(poison)
+        reduction['scars']['remaining'] = len(scars)
         shapes = accepted_shapes
         if verdict.startswith('failed'):
             termination = 'evaluation_error'
@@ -1189,6 +1211,9 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
         for cell in released:
             del poison[cell]
         reduction['poison_released'] += len(released)
+        kept = [scar for scar in scars if not (scar[2] is not None and best.safety_factor - scar[1] >= scar[2])]
+        reduction['scars']['released'] += len(scars) - len(kept)
+        scars[:] = kept
         order = ranked_cells(best.mask, energy)
         if poison:
             order = order[~np.isin(order, list(poison))]
@@ -1206,6 +1231,14 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     def near(cells: np.ndarray) -> np.ndarray:
         return ndimage.binary_dilation(cells, structure=np.ones((3, 3, 3), bool), iterations=PEAK_SKIP_RADIUS)
 
+    def scar_mask() -> Optional[np.ndarray]:
+        if not scars:
+            return None
+        mask = np.zeros(best.mask.size, dtype=bool)
+        for cells, _, _ in scars:
+            mask[cells] = True
+        return mask.reshape(best.mask.shape)
+
     order = ranking()
     safety_streak = 0
     peak_streak = 0
@@ -1218,12 +1251,23 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
         gap_ratio = step_ratio(best.safety_factor, target, exponent=step_exponent, max_ratio=max_step_ratio)
         requested = max(1, int(gap_ratio * multiplier * int(best.mask.sum())))
         if walk is None:
-            walk = PeelWalk(best.mask, anchor_ids, min_width_cells=min_width_cells, exempt=exempt, protected=protected)
+            walk = PeelWalk(best.mask, anchor_ids, min_width_cells=min_width_cells, exempt=exempt, protected=protected,
+                            scar=scar_mask())
         candidate, peeled = walk.take(order, requested)
         reduction['peel_calls'] += 1
         reduction['peel_seconds'] += peeled.seconds
         reduction['peel_seconds_max'] = max(reduction['peel_seconds_max'], peeled.seconds)
         if peeled.picked == 0:
+            if (scars or poison) and not terminal_unconfirmed:
+                # 終端の確かめ直し: 傷と毒は同じ親で FEM に落ちた手からの推定を含むので、外して今の形で歩き直す。
+                reduction['scars']['terminal_rounds'] += 1
+                reduction['scars']['terminal_released'] += len(scars) + len(poison)
+                scars.clear()
+                poison.clear()
+                terminal_unconfirmed = True
+                order = ranking()
+                walk = None
+                continue
             reduction['stop_reason'] = 'no_removable_cell'
             return result('converged')
         candidate.setflags(write=False)
@@ -1297,6 +1341,8 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                 peak_near = near(fields['peak_ratio'] >= PEAK_HOT_RATIO)
             order = ranking()
             reduction['adopted_after_exclusion'] += int(safety_streak > 0)
+            reduction['scars']['accepted_after_terminal'] += int(reduction['scars']['terminal_rounds'] > 0)
+            terminal_unconfirmed = False
             safety_streak = 0
             peak_streak = 0
             error_streak = 0
@@ -1331,6 +1377,10 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                                  if candidate_sf is not None and math.isfinite(candidate_sf) and candidate_sf < target
                                  else None)
                     poison[int(peeled.picked_cells[0])] = (float(best.safety_factor), shortfall)
+                    scars.append((np.flatnonzero(best.mask.ravel() & ~candidate.ravel()), float(best.safety_factor),
+                                  shortfall))
+                    reduction['scars']['recorded'] += 1
+                    walk = None
                 elif peak_failed:
                     # ピークだけで落ちた1セルは、この形の間だけ順位から外す(採用で順位を作り直すと戻る)。
                     peak_streak += 1
