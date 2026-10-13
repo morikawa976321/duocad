@@ -18,6 +18,7 @@ from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepOffset import BRepOffset_Mode
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
 from OCP.GeomAbs import GeomAbs_JoinType
+from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
 from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopTools import TopTools_ListOfShape
@@ -80,6 +81,7 @@ def shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: f
 
     volume_before = volume(shape)
     maker = BRepOffsetAPI_MakeThickSolid()
+    tolerance = min(_TOLERANCE, value * 1.0e-3)
     context = f"faces {indices}, thickness={value}"
     try:
         # 負の厚さ = 内側へ取る(外形寸法を保つ)。内側の角は `Intersection`(尖ったまま):
@@ -88,7 +90,7 @@ def shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: f
             shape,
             closing,
             -value,
-            min(_TOLERANCE, value * 1.0e-3),
+            tolerance,
             BRepOffset_Mode.BRepOffset_Skin,
             False,
             False,
@@ -118,7 +120,7 @@ def shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: f
         )
     _require_valid(final, "shell", context)
     provenance = _shell_provenance(maker, shape, final, indices, value)
-    _require_wall_thickness(shape, indices, final, provenance["new_faces"], value, context)
+    _require_wall_thickness(shape, indices, final, provenance["new_faces"], value, tolerance, context)
 
     return {
         "shape": final,
@@ -134,6 +136,7 @@ def _require_wall_thickness(
     final: "TopoDS_Shape",
     inner_faces: List[int],
     thickness: float,
+    tolerance: float,
     context: str,
 ) -> None:
     """内側にできた面と、抜かなかった外側の面との最短距離が `thickness` を割れば断る。
@@ -142,12 +145,17 @@ def _require_wall_thickness(
     円柱を足し、底を抜いて厚さ4で、円柱の壁が2になった。2026-10-14 実測)。体積も BRepCheck も通る。
     抜いた面は内壁の縁と接するので外側に数えない。指定より厚い壁は検出しない。
     """
-    if not inner_faces:
-        raise ValueError(f"shell made no inner faces ({context})")
     shape_map = _face_map(shape)
     final_map = _face_map(final)
     outer = [shape_map.FindKey(index) for index in range(1, shape_map.Extent() + 1) if index not in opened]
-    inner = [final_map.FindKey(index) for index in inner_faces]
+    opened_surfaces = [BRep_Tool.Surface_s(TopoDS.Face_s(shape_map.FindKey(index))) for index in opened]
+    inner = [
+        final_map.FindKey(index)
+        for index in inner_faces
+        if not _lies_on(final_map.FindKey(index), opened_surfaces, tolerance)
+    ]
+    if not inner:
+        raise ValueError(f"shell made no inner faces ({context})")
     thinnest = _distance(compound(inner), compound(outer))
     if thinnest is None:
         thinnest = min(_face_distance(face, other, context) for face in inner for other in outer)
@@ -156,6 +164,24 @@ def _require_wall_thickness(
             f"shell left a wall thinner than requested (thinnest {thinnest:.4g} mm, {context}): "
             "厚さが出っ張り・細い部分の半径を超えている"
         )
+
+
+def _lies_on(face: "TopoDS_Shape", surfaces: Sequence[Any], tolerance: float) -> bool:
+    """`face` の縁の点がどれか1つの曲面に全部乗っているか(抜いた面の上に残る開口の縁)。
+
+    縁は由来では抜いた面の後継として記録されることも、新しい面として記録されることもある
+    (NURBS に変換した箱では後者。sol の指摘で実測)。外側の側面に接するので、内壁に数えると距離0で断ってしまう。
+    """
+    points = [BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertex)) for vertex in _boundary_points(face)]
+    for surface in surfaces:
+        if all(_on_surface(point, surface, tolerance) for point in points):
+            return True
+    return False
+
+
+def _on_surface(point: Any, surface: Any, tolerance: float) -> bool:
+    projection = GeomAPI_ProjectPointOnSurf(point, surface)
+    return projection.NbPoints() > 0 and projection.LowerDistance() <= tolerance
 
 
 def _distance(first: "TopoDS_Shape", second: "TopoDS_Shape") -> Optional[float]:

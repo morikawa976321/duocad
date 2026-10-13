@@ -230,3 +230,18 @@ def test_the_wall_check_measures_through_concentric_fillets():
     volume_before = query.volume(doc.get_body(body_id).shape)
     shell_body(doc, [_face_where(doc, body_id, 2, HEIGHT)], THICKNESS, body_id=body_id)
     assert query.volume(doc.get_body(body_id).shape) < volume_before
+
+
+def test_the_rim_of_the_opening_is_not_measured_as_an_inner_wall():
+    """NURBS にした箱では開口の縁が新しい面として記録される。外側の側面に接するので、内壁に数えると距離0で断る。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+    shape = BRepBuilderAPI_NurbsConvert(BRepPrimAPI_MakeBox(WIDTH, DEPTH, HEIGHT).Shape(), True).Shape()
+    top = [
+        face["index"]
+        for face in query.describe_faces(shape)
+        if face["center"][2] == pytest.approx(HEIGHT) and face["area"] == pytest.approx(WIDTH * DEPTH)
+    ]
+    result = kernel_shell.shell_solid(shape, top, THICKNESS)
+    assert result["volume_after"] == pytest.approx(OPEN_TOP_VOLUME)
