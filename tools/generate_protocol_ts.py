@@ -29,6 +29,7 @@ _TS_TYPES = {
     "boolean": "boolean",
     "array": "unknown[]",
     "object": "object",
+    "null": "null",
 }
 
 

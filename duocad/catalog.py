@@ -285,6 +285,8 @@ def _value_matches_json_type(value: Any, expected: str) -> bool:
         return isinstance(value, list)
     if expected == "object":
         return isinstance(value, dict)
+    if expected == "null":
+        return value is None
     return True
 
 
@@ -1947,7 +1949,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="ai_set_api_key",
         category="protocol",
-        params=(Param("key", "string", "Claude API のキー。値は画面へ戻さず `duocad_secrets.json` へ書く"),),
+        params=(Param("key", ["string", "null"], "Claude API のキー(null で保存済みのキーを消す)。値は画面へ戻さず `duocad_secrets.json` へ書く"),),
         ws="special",
         mcp=False,
         changes_document=False,

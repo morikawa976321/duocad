@@ -144,7 +144,7 @@ export interface CommandArguments {
   ai_get_status: Record<string, never>
   ai_configure: { provider: string; model?: string; base_url?: string }
   ai_set_thinking: { thinking: string }
-  ai_set_api_key: { key: string }
+  ai_set_api_key: { key: string | null }
   ai_prepare: Record<string, never>
   ai_send: { message: string }
   ai_cancel: Record<string, never>

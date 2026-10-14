@@ -72,8 +72,11 @@ def _server_command_names() -> set[str]:
         if node.left.id != "command":
             continue
         for comparator in node.comparators:
-            if isinstance(comparator, ast.Constant) and isinstance(comparator.value, str):
-                names.add(comparator.value)
+            # `command == "x"` と `command in ("x", "y")` の両方(タプルの中の文字列も分岐の名前)。
+            constants = comparator.elts if isinstance(comparator, ast.Tuple) else [comparator]
+            for constant in constants:
+                if isinstance(constant, ast.Constant) and isinstance(constant.value, str):
+                    names.add(constant.value)
     return names
 
 
@@ -116,22 +119,50 @@ def _dispatch_message_keys() -> set[str]:
 #: 一切何もできない」)。ここ以外に `cmd:` が現れたら、ディスパッチャを迂回する送信口ができたということ。
 SENDER_FILES = {"web/src/session.ts"}
 
-_CMD_LITERAL = re.compile(r"cmd: '([a-z_]+)'")
+#: `{cmd: '名前'}` / `{ cmd: "名前" }` / `{cmd:`名前`}`(空白と引用符の違いを許す)。
+_CMD_LITERAL = re.compile(r"\bcmd\s*:\s*[\"'`]([a-z_]+)[\"'`]")
+#: `session.ts` の送信メソッドへ名前を文字列で渡す間接経路(`sendCommand('export_step', …)` / `files.run('import_step', …)`)。
+#: 引数が `string` なので型では守れない。
+_INDIRECT_LITERAL = re.compile(r"\b(?:sendCommand|run)\(\s*[\"'`]([a-z_]+)[\"'`]")
+#: ソケットそのもの。`session.ts` 以外に現れたら、ディスパッチャを迂回する送信口ができた。
+_SOCKET_USE = re.compile(r"new WebSocket\(|\.send\(\s*JSON\.stringify")
+
+
+def _web_sources():
+    for path in (REPO_ROOT / "web" / "src").rglob("*"):
+        if path.suffix in (".ts", ".svelte") and "generated" not in path.parts:
+            yield path.relative_to(REPO_ROOT).as_posix(), path.read_text(encoding="utf-8")
+
+
+def _code_lines(text: str):
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not (stripped.startswith("*") or stripped.startswith("//")):
+            yield line
 
 
 def _commands_sent_by_the_screen() -> dict[str, set[str]]:
     """`web/src` の中で `cmd: '名前'` を書いているファイル -> 名前の集合(コメント行は除く)。"""
     found: dict[str, set[str]] = {}
-    for path in (REPO_ROOT / "web" / "src").rglob("*"):
-        if path.suffix not in (".ts", ".svelte") or "generated" in path.parts:
-            continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("*") or stripped.startswith("//"):
-                continue
+    for where, text in _web_sources():
+        for line in _code_lines(text):
             for name in _CMD_LITERAL.findall(line):
-                found.setdefault(path.relative_to(REPO_ROOT).as_posix(), set()).add(name)
+                found.setdefault(where, set()).add(name)
     return found
+
+
+def _commands_named_indirectly() -> dict[str, set[str]]:
+    """`sendCommand('名前', …)` / `run('名前', …)` の形で名前を渡しているファイル -> 名前の集合。"""
+    found: dict[str, set[str]] = {}
+    for where, text in _web_sources():
+        for line in _code_lines(text):
+            for name in _INDIRECT_LITERAL.findall(line):
+                found.setdefault(where, set()).add(name)
+    return found
+
+
+def _files_touching_the_socket() -> set[str]:
+    return {where for where, text in _web_sources() if any(_SOCKET_USE.search(line) for line in _code_lines(text))}
 
 
 @functools.cache
@@ -186,9 +217,15 @@ def test_every_command_the_screen_sends_is_declared_and_sent_from_one_place():
     assert sent, "画面の送信を読めていない(`cmd: '...'` が1つも無い)"
     strays = {where: sorted(names) for where, names in sent.items() if where not in SENDER_FILES}
     assert not strays, f"`session.ts` 以外がソケットへ送っている: {strays}"
+    sockets = _files_touching_the_socket()
+    assert sockets == SENDER_FILES, f"ソケットを直接使うファイルが増えた/減った: {sorted(sockets)}"
     declared = set(_catalog().websocket_command_names())
     unknown = {name for names in sent.values() for name in names} - declared
     assert not unknown, f"画面が送る名前が宣言に無い: {sorted(unknown)}"
+    indirect = _commands_named_indirectly()
+    assert indirect, "間接経路の送信を読めていない(`sendCommand('…')` / `run('…')` が1つも無い)"
+    unknown = {name for names in indirect.values() for name in names} - declared
+    assert not unknown, f"画面が名前で送る(`sendCommand` / `run`)コマンドが宣言に無い: {sorted(unknown)}"
 
 
 def test_ui_command_ids_are_readable():
