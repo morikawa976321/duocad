@@ -236,6 +236,30 @@ def test_a_mode_change_folds_the_staged_command(session: Session):
     assert mode_of(session) == {"kind": "idle"}
 
 
+def test_a_mode_change_drops_the_selection_that_the_next_mode_cannot_use(session: Session):
+    """別のスケッチの図形とボディ参照は行き先で使えないので外す。面は残す(スケッチを抜けてそのまま押し出す経路)。"""
+    first = session.apply("sketch_create", {"base_plane": "XY"})
+    session.apply("add_line", {"sketch_id": first["sketch_id"], "p0": [0.0, 0.0], "p1": [10.0, 0.0]})
+    line = session.document.sketches[-1].entities[0].id
+    second = session.apply("sketch_create", {"base_plane": "XZ"})
+    session.enter_sketch(first["sketch_id"])
+    body = session.document.bodies[0]
+    session.set_selection(refs=[
+        {"sketch": first["sketch_id"], "entity": line},
+        {"body": body.id, "kind": "face", "index": 1},
+        {"body": body.id, "kind": "body"},
+    ])
+    assert session.get_selection()["count"] == 3
+    session.enter_sketch(second["sketch_id"])
+    kinds = [("sketch" in item, item.get("kind")) for item in session.get_selection()["items"]]
+    assert kinds == [(False, "face")], kinds
+    session.set_selection(refs=[{"body": body.id, "kind": "body"}, {"body": body.id, "kind": "face", "index": 1}])
+    session.enter_optimize()
+    assert session.get_selection()["count"] == 2, "最適化モードではボディ参照を残す"
+    session.leave_optimize()
+    assert [item.get("kind") for item in session.get_selection()["items"]] == ["face"]
+
+
 def test_beginning_a_sketch_verb_with_a_sketch_id_enters_that_sketch(session: Session):
     """AI がスケッチの verb を構えると、人の画面がそのスケッチへ入る。"""
     created = session.apply("sketch_create", {"base_plane": "XY"})

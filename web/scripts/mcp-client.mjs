@@ -123,6 +123,9 @@ export async function addExtrudedCircle(
 async function extrudeFirstRegion(mcp, sketchId, { distance, mode, clear }) {
   await mcp.callTool('set_selection', { refs: [{ sketch: sketchId, index: 1 }] })
   const extruded = await mcp.callTool('extrude', { distance, mode })
+  // スケッチを作ると誰が作っても画面がそのスケッチに入る(issue #153)。部品を作り終えたら通常モードへ戻す
+  // (戻さないと、通常モードの入口 `#sketch-create` が画面に無いまま検査が始まる)。
+  await mcp.callTool('leave_sketch')
   if (clear) await mcp.callTool('clear_selection')
   return { sketchId, bodyId: extruded.bodies[0].body_id }
 }

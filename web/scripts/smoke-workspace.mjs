@@ -13,6 +13,10 @@
  *   6. 人が起動したものを AI が埋めて確定すると、画面の構えも畳まれる
  *   7. 人の Esc で共有の command が畳まれ、選択が空になる
  *   8. 再読み込みしても起動中のコマンドと引数が戻る
+ *   9. AI がスケッチを作ると人の画面がそのスケッチに入り、leave_sketch / enter_sketch に追随する
+ *  10. 人の「抜ける」でサーバのモードも通常へ戻る
+ *  11. AI がスケッチの verb を構えると、画面がそのスケッチに入ってその verb が起動する
+ *  12. 人の「スケッチ」は貼る先待ち(= `sketch_create` を構える)で、「抜ける」で畳まれる
  */
 import { fail, ok } from './args.mjs'
 import { assertNoAppErrors, frameAll, openApp, sleep, typeInto, waitOrFail } from './browser.mjs'
@@ -122,6 +126,61 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   ok('[8] 再読み込みしても起動中のコマンドと引数が戻る')
   await page.keyboard.press('Escape')
   await waitFor(() => window.__duocad.command === null, 'Esc で畳まれない')
+
+  // ================================================================ 9. AI のスケッチ作成・出入りに画面が追随する
+  const created = await mcp.callTool('sketch_create', { base_plane: 'XY' })
+  await waitFor(
+    (id) => window.__duocad.mode === 'sketch' && window.__duocad.activeSketch === id,
+    'AI の sketch_create で画面がそのスケッチに入らない',
+    [created.sketch_id],
+  )
+  await mcp.callTool('leave_sketch')
+  await waitFor(() => window.__duocad.mode === 'idle', 'AI の leave_sketch で通常モードへ戻らない')
+  await mcp.callTool('enter_sketch', { sketch_id: created.sketch_id })
+  await waitFor(
+    (id) => window.__duocad.mode === 'sketch' && window.__duocad.activeSketch === id,
+    'AI の enter_sketch で画面がそのスケッチに入らない',
+    [created.sketch_id],
+  )
+  ok('[9] AI がスケッチを作ると人の画面がそのスケッチに入り、leave_sketch / enter_sketch に追随する')
+
+  // ================================================================ 10. 人の「抜ける」
+  await page.click('#sketch-exit')
+  await waitFor(
+    () => window.__duocad.mode === 'idle' && window.__duocad.serverMode?.kind === 'idle',
+    '人の「抜ける」でサーバのモードが通常へ戻らない',
+  )
+  ok('[10] 人の「抜ける」でサーバのモードも通常へ戻る')
+
+  // ================================================================ 11. AI がスケッチの verb を構える
+  await mcp.callTool('begin_command', { verb: 'add_rectangle', args: { sketch_id: created.sketch_id } })
+  await waitFor(
+    (id) =>
+      window.__duocad.mode === 'sketch' &&
+      window.__duocad.activeSketch === id &&
+      document.querySelector('.command-host')?.dataset.command === 'add_rectangle',
+    'AI が add_rectangle を構えても、画面がそのスケッチに入って長方形が起動しない',
+    [created.sketch_id],
+  )
+  await mcp.callTool('end_command')
+  await waitFor(() => window.__duocad.command === null, 'AI の end_command で畳まれない')
+  if ((await hostCommand()) !== 'select_in_sketch') fail(`畳まれた後の画面が「選ぶ」でない: ${await hostCommand()}`)
+  await page.click('#sketch-exit')
+  await waitFor(() => window.__duocad.mode === 'idle', '人の「抜ける」で通常モードへ戻らない')
+  ok('[11] AI がスケッチの verb を構えると、画面がそのスケッチに入ってその verb が起動する')
+
+  // ================================================================ 12. 人の「スケッチ」は構え、「抜ける」で畳む
+  await page.click('#sketch-create')
+  await waitFor(
+    () => window.__duocad.command?.verb === 'sketch_create' && window.__duocad.mode === 'sketch-pending',
+    '人の「スケッチ」で sketch_create が構わらない / 貼る先待ちにならない',
+  )
+  await page.click('#sketch-exit')
+  await waitFor(
+    () => window.__duocad.command === null && window.__duocad.mode === 'idle',
+    '貼る先待ちの「抜ける」で sketch_create が畳まれない',
+  )
+  ok('[12] 人の「スケッチ」は貼る先待ち(= sketch_create を構える)で、「抜ける」で畳まれる')
 
   await assertNoAppErrors(page, consoleErrors)
 })

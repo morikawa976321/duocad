@@ -14,7 +14,6 @@
     edgeRef,
     faceRef,
     refKey,
-    refKind,
     refsOfKind,
     regionRef,
     sameRef,
@@ -83,7 +82,6 @@
     type SelectionRef,
     type ServerState,
     type ShapeRef,
-    type SketchEntityRef,
     type VerticesPayload,
   } from './session'
   import AiPanel from './AiPanel.svelte'
@@ -176,17 +174,22 @@
    * タグ付きユニオンにしたのは、スケッチと最適化モードが同時に真になる状態を書けなくするため。
    * `sketch-pending` はスケッチモードに入ったが、まだどのスケッチも開いていない状態(貼る先のクリック待ち)。
    *
-   * コアには持ち込まない: `duocad/` 側にモードの概念は無く(`Document` にフラグが無い・verbは
-   * 毎回 `sketch_id` を明示で受ける・MCPのツール一覧はモードによらず固定)、それが人とAIの
-   * 交互操作を成立させている。モード遷移は undo/操作ログ/MCP呼び出しのどれとも一致しないので
-   * verbではなく画面だけの状態。
+   * 正はサーバの作業空間(`state.mode`。issue #153)で、ここは派生。画面はモードを自分で持たず、入る・出るは
+   * `enter_sketch` / `leave_sketch` / `enter_optimize` / `leave_optimize` でサーバへ頼み、配信で変わる(AI の `enter_sketch` や
+   * `sketch_create` でも同じ経路で変わる)。`sketch-pending` はサーバでは「通常モードで `sketch_create` を構えている」。
+   * `Document` にはモードが無く、verb は毎回 `sketch_id` を明示で受け、MCP のツール一覧はモードによらず固定のまま。
+   * モード遷移は undo/操作ログのどれとも一致しない(選択と同じ短命の共有状態)。
    */
-  type Mode =
-    | { kind: 'idle' }
-    | { kind: 'sketch-pending'; resume: ResumeMode }
-    | { kind: 'sketch'; id: string; resume: ResumeMode }
-    | { kind: 'optimize' }
-  let mode = $state<Mode>({ kind: 'idle' })
+  type Mode = { kind: 'idle' } | { kind: 'sketch-pending' } | { kind: 'sketch'; id: string } | { kind: 'optimize' }
+  const mode = $derived.by<Mode>(() => {
+    const server = model?.mode ?? { kind: 'idle' }
+    if (server.kind === 'sketch') return { kind: 'sketch', id: server.sketch_id }
+    if (server.kind === 'optimize') return { kind: 'optimize' }
+    if (model?.command?.verb === 'sketch_create') return { kind: 'sketch-pending' }
+    return { kind: 'idle' }
+  })
+  /** スケッチを抜けたときの戻り先(最適化モードから入ったスケッチを抜けたら最適化モードへ戻る)。サーバは通常へ戻すので、こちらから入り直す。 */
+  let resumeMemory: ResumeMode = 'idle'
 
   /**
    * 今どのスケッチを編集しているか(null なら編集していない)。`mode` からの派生。
@@ -401,7 +404,7 @@
       // 使えないサーバに繋ぎ直したら、最適化モードとステップの表示に居残らない(断られる口を叩き続ける)。
       // スケッチの戻り先(`resume`)は `exitSketch` が同じ印で見る。
       if (!available) {
-        if (mode.kind === 'optimize') setMode({ kind: 'idle' })
+        if (mode.kind === 'optimize') session.leaveOptimize(nextOp())
         clearSearchSteps()
       }
       optimizeFinishing = running && finishing
@@ -433,7 +436,7 @@
         session.optimizeResolution(optimizeElementSizeMm)
       }
       // 走らせている文書へ戻ったら、実行中の表示が見えるモードへ入る(編集が断られる理由を画面に出す)。
-      if (mode.kind === 'idle') setMode({ kind: 'optimize' })
+      if (mode.kind === 'idle') session.enterOptimize(nextOp())
     },
     onOptimizeProgress: (event) => {
       // 前の実行の進捗が後から届くことがある(別の接続への配信待ち)。識別子は新しいほど大きい(`optimize_steps.py`)ので、
@@ -767,12 +770,9 @@
     drawHighlight()
     // スケッチも「コアが持ち、ここは描き直すだけ」。直後の `lookAtSketch` が平面の枠を要るので $effect ではなく同期に描く。
     drawSketches()
-    if (sketchId !== null && !sketches.some((item) => item.sketch_id === sketchId)) {
-      exitSketch() // undoでスケッチごと消えた
-    }
-    // 閉じた(別のタブが閉じた・文書が消された場合も含む)。前の文書のモード・最適化の表示・断面・測定を持ち越さない。
+    // 閉じた(別のタブが閉じた・文書が消された場合も含む)。前の文書の最適化の表示・断面・測定を持ち越さない
+    // (モードはサーバが作業空間ごと空に戻す)。
     if (wasDocumentOpen && !next.document_open) {
-      setMode({ kind: 'idle' })
       resetOptimizeView()
       display.closeSection()
       measure.clear()
@@ -833,8 +833,7 @@
       return
     }
     if (applied) {
-      // 作ったスケッチへはそのまま入る(作ってから改めて「入る」を押させない)
-      if (applied.verb === 'sketch_create' && applied.sketch_id) enterSketch(applied.sketch_id)
+      // 作ったスケッチへはサーバが誰の操作でも入れる(`Session._settle_workspace`)。ここでは入らない。
       if (applied.verb === 'import_step') {
         // 読み込んだモデル全体が入る視点へ合わせ直す。文書のスケールが不連続に変わるのはインポートだけ
         // (実測: 対角約640mmのSTEPで端が画面外に出た)で、ふつうの編集で視点が跳ぶと妨げになるので他へ広げない。
@@ -1568,68 +1567,56 @@
    * - ボディ(`kind:'body'`): 行き先が最適化モードでなければ落とす(保持/除外の割り当てにしか使えない)。
    * - 面・辺・頂点・領域はどのモードでも残す(スケッチを抜けてそのまま押し出す等が実際の経路)。
    */
-  function setMode(next: Mode): void {
-    // サーバの作業空間(`state.mode`)を画面のモードに揃える(issue #153)。モードが変わると集めかけのコマンドは
-    // サーバが畳む(`Session._apply_mode`)。貼る先待ち(`sketch-pending`)はサーバでは「通常モードで `sketch_create` を
-    // 構えている」なので、抜けるときは Esc と同じ `end_command` を送る。既に揃っていれば送らない(自分の `sketch_create`
-    // の成功・undo でスケッチが消えた・文書を閉じた、はサーバが先に動いている)。
-    if (model !== null) {
-      if (mode.kind === 'sketch-pending' && next.kind !== 'sketch-pending' && model.command?.verb === 'sketch_create') {
-        endCommand()
-      }
-      const server = model.mode
-      if (next.kind === 'sketch') {
-        if (server.kind !== 'sketch' || server.sketch_id !== next.id) session.enterSketch(next.id, nextOp())
-      } else if (next.kind === 'optimize') {
-        if (server.kind !== 'optimize') session.enterOptimize(nextOp())
-      } else if (server.kind === 'sketch') {
-        session.leaveSketch(nextOp())
-      } else if (server.kind === 'optimize') {
-        session.leaveOptimize(nextOp())
-      }
-    }
+  /**
+   * モードの入れ替わり(配信に従う)の後始末。以前は `setMode` が同期に行っていた。
+   * 行き先で使えない選択はサーバが外す(`Session._apply_mode`)。
+   */
+  let seenMode: Mode = { kind: 'idle' }
+  $effect(() => {
+    const next = mode
+    const prev = seenMode
+    const same = prev.kind === next.kind && (next.kind !== 'sketch' || (prev.kind === 'sketch' && prev.id === next.id))
+    if (same) return
+    seenMode = next
+    untrack(() => onModeChanged(prev, next))
+  })
+
+  function onModeChanged(prev: Mode, next: Mode): void {
     // 確定前の姿を持ち越さない。モードが変わると下の `{#key commandRowKey}` が `CommandHost` ごと作り直すので
     // `onCancelPreview` は来ない。ここで消さないと、`move_body` の半透明ボディや `extrude` の投機実行の幽霊が残り続ける。
     clearPreview()
     const nextSketch = next.kind === 'sketch' ? next.id : null
-    const unusable = currentItems().filter((item) => {
-      const kind = refKind(item)
-      if (kind === 'sketch_entity') return (item as SketchEntityRef).sketch !== nextSketch
-      if (kind === 'body') return next.kind !== 'optimize'
-      return false
-    })
-    if (unusable.length > 0) modifySelection([], unusable)
-    mode = next
     // `CommandHost` が作り直されるので、起動中だったコマンドは終わりの通知なしに消える。
     activeVerb = null
     hoverPoint = null
     viewport?.setActiveSketch(nextSketch)
     // どの遷移でも同期に描き直す(入る側は直後の `lookAtSketch` が平面の枠を要る。`handleState` と同じ)。
-    // 抜ける側にも要る: 抜けたスケッチの点マーカーが次の状態配信まで残り、手前に浮いてクリックを奪いうる
-    // (選択の掃除が空振りするとWS往復が無く配信も来ない)。
+    // 抜ける側にも要る: 抜けたスケッチの点マーカーが次の状態配信まで残り、手前に浮いてクリックを奪いうる。
     drawSketches()
     if (next.kind === 'sketch') viewport?.lookAtSketch(next.id)
+    // スケッチの戻り先: 最適化モードから入ったら、抜けたときに最適化モードへ入り直す。
+    if (next.kind === 'sketch' || next.kind === 'sketch-pending') {
+      if (prev.kind === 'optimize') resumeMemory = 'optimize'
+      else if (prev.kind === 'idle') resumeMemory = 'idle'
+    } else if (next.kind === 'idle' && prev.kind !== 'optimize' && resumeMemory === 'optimize') {
+      resumeMemory = 'idle'
+      if (shapeOptimizationAvailable === true) session.enterOptimize(nextOp())
+    }
   }
 
-  /** 今のモードから見た「スケッチを抜けたときの戻り先」。 */
-  function resumeOf(current: Mode): ResumeMode {
-    if (current.kind === 'optimize') return 'optimize'
-    if (current.kind === 'sketch' || current.kind === 'sketch-pending') return current.resume
-    return 'idle'
-  }
-
-  /** スケッチモードへ入る(まだ貼る先は決まっていない)。`sketch-pending` では `SKETCH_PENDING_COMMANDS` が起動済みで現れる(`CommandHost` の `startCommandId`)。 */
+  /** スケッチモードへ入る(まだ貼る先は決まっていない)= `sketch_create` を構える。`sketch-pending` では `SKETCH_PENDING_COMMANDS` が起動済みで現れる。 */
   function startSketchMode(): void {
-    setMode({ kind: 'sketch-pending', resume: resumeOf(mode) })
+    beginCommand(SKETCH_CREATE.id, {})
   }
 
-  /** そのスケッチを開く。`sketch_create` の成功(`handleState`)とブラウザパネルのスケッチ名クリックから呼ばれる。戻り先(`resume`)を持って移るので、抜ければ最適化モードへ戻る。 */
+  /** そのスケッチを開く(ブラウザパネルのスケッチ名クリック)。作った直後はサーバが入れるので呼ばれない。 */
   function enterSketch(id: string): void {
     // 隠したスケッチに入るときは先に表示へ戻す(拒否しない)。編集中のスケッチは `buildSketchDraws` が
     // 可視性に関わらず描くので、サーバの往復を待たずに入ってよい。抜けた後も表示のまま。
     const target = sketches.find((item) => item.sketch_id === id)
     if (target !== undefined && !target.visible) setSketchVisible(id, true)
-    setMode({ kind: 'sketch', id, resume: resumeOf(mode) })
+    if (model?.mode.kind === 'sketch' && model.mode.sketch_id === id) return
+    session.enterSketch(id, nextOp())
   }
 
   /** ブラウザパネルのスケッチ名クリック。最適化が走っている間はモードを抜けさせない(パネルごと中断ボタンが消える)。 */
@@ -1641,19 +1628,23 @@
     enterSketch(id)
   }
 
-  /** スケッチモードを抜ける。戻り先は入る前のモード(通常 or 最適化)。 */
+  /** スケッチモードを抜ける。貼る先待ちなら構えた `sketch_create` を畳む(Esc と同じ)。最適化モードへの戻りは `onModeChanged`。 */
   function exitSketch(): void {
-    setMode(resumeOf(mode) === 'optimize' && shapeOptimizationAvailable === true ? { kind: 'optimize' } : { kind: 'idle' })
+    if (mode.kind === 'sketch-pending') {
+      endCommand()
+      return
+    }
+    if (model?.mode.kind === 'sketch') session.leaveSketch(nextOp())
   }
 
   /** 第3のモード(形状最適化)へ入る。「形状最適化」ボタンから(スケッチと同じ作法)。 */
   function enterOptimizeMode(): void {
-    setMode({ kind: 'optimize' })
+    if (model?.mode.kind !== 'optimize') session.enterOptimize(nextOp())
   }
 
   /** 第3のモードを抜けて通常モードへ戻る。 */
   function exitOptimizeMode(): void {
-    setMode({ kind: 'idle' })
+    if (model?.mode.kind === 'optimize') session.leaveOptimize(nextOp())
   }
 
   /**

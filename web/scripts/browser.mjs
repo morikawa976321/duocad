@@ -171,9 +171,11 @@ export async function openApp(
     polling: 100,
   })
   // サーバはトップ画面で起動し、その間は文書を変える操作が断られるので「新規」を押す。
+  // 文書が開いていればモードは問わない(MCP でスケッチを作った後は画面がそのスケッチに入っていて、通常モードの入口
+  // `#sketch-create` が無い。issue #153)。
   if (newDocument) {
     await page.waitForFunction(
-      () => document.querySelector('#start-new') !== null || document.querySelector('#sketch-create') !== null,
+      () => document.querySelector('#start-new') !== null || window.__duocad?.state?.document_open === true,
       { timeout, polling: 100 },
     )
     if ((await page.$('#start-new')) !== null) {
