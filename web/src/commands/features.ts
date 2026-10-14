@@ -421,7 +421,7 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
         { value: 'XZ', label: 'XZ平面', buttonId: 'mirror-body-xz' },
         { value: 'YZ', label: 'YZ平面', buttonId: 'mirror-body-yz' },
         // この値はサーバへ行かない(`base_plane` は XY/XZ/YZ のみ)。`plane_face` を出す印で、`build` が読み替える。
-        { value: 'face', label: '面を選ぶ', buttonId: 'mirror-body-face' },
+        { value: 'face', label: '面を選ぶ', buttonId: 'mirror-body-face', sends: null },
       ],
     },
     {

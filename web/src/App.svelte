@@ -209,6 +209,7 @@
     wantsPick(): PickTarget | null
     setPick(ref: SelectionRef): boolean
     commitFailed(): void
+    reconnected(): void
     commandSucceeded(): void
   } | null>(null)
 
@@ -350,7 +351,7 @@
       // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
       // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
       const category = CATEGORY_OF.get(where)
-      if (category === 'feature' || category === 'sketch') host?.commitFailed()
+      if (category === 'feature' || category === 'sketch' || where === 'send') host?.commitFailed()
     },
     onWarning: (message) => fail(`警告 ${message}`),
     onStatus: (next) => {
@@ -358,7 +359,10 @@
       status = next
       // (再)接続したら今のAI設定を取り直す(切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
-      if (next === 'open') session.femGetStatus()
+      if (next === 'open') {
+        session.femGetStatus()
+        host?.reconnected()
+      }
       // 人が最初の依頼を打っている間に、AIへツール定義を読ませておく(遅い機種で分単位かかる)。
       if (next === 'open') session.aiPrepare()
       // `models/` の一覧も取り直す(サーバの再起動・別セッションの保存で増減しうる)。

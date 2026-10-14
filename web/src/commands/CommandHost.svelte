@@ -41,6 +41,7 @@
     argKinds,
     argSatisfied,
     buildArgs,
+    choiceSends,
     commitsGhost,
     findCommand,
     firstMissingArg,
@@ -442,16 +443,18 @@
       onNote('確定の応答待ち')
       return
     }
-    onRun(command.id, source.args)
     if (sharedId !== null) {
       // 構えた verb: 打った値は消さない(引数はサーバの `shared.args` が持ち、失敗なら構えたまま残るので近い値で打ち直せる)。
       // 成功なら配信で `command` が null になり `ended()` が消す。降ろすのは幽霊と即適用の待ち受け、出しかけの引数だけ。
+      // 印は `onRun` より先に立てる: 繋がっていなくて送れなかったときは `onRun` の中で同期に `commitFailed()` が呼ばれて降りる。
       committed = true
       armedSelections = null
       cancelPublish()
       cancelPreview()
+      onRun(command.id, source.args)
       return
     }
+    onRun(command.id, source.args)
     // ローカルのコマンド(測定・ファイル操作)は従来どおり。無起動へは戻さない(成否が未確定。戻すのは `commandSucceeded()`)。
     resetInputs()
   }
@@ -459,10 +462,15 @@
   /** 確定を送ったが成否が未確定の間。Enter の二度打ちと幽霊の出し直しを止める。失敗(`commitFailed()`)か終わり(`ended()`)で降りる。 */
   let committed = false
 
-  /** 確定した verb がサーバで失敗したときに `App.svelte` が呼ぶ。打った値は残っているので、打ち直せるようにするだけ。 */
+  /** 確定した verb がサーバで失敗した・送れなかったときに `App.svelte` が呼ぶ。打った値は残っているので、打ち直せるようにするだけ。 */
   export function commitFailed(): void {
     committed = false
     focusFirstNumber()
+  }
+
+  /** 繋ぎ直したときに `App.svelte` が呼ぶ。送った確定の返事は来ないので、待っている印を降ろす(構えはサーバの配信が正)。 */
+  export function reconnected(): void {
+    committed = false
   }
 
   /**
@@ -513,6 +521,7 @@
     armedSelections = null
     cancelPublish()
     lastPublished = {}
+    sentKeys = new Set()
     cancelPreview()
   }
 
@@ -591,15 +600,23 @@
   let lastPublished: Record<string, unknown> = {}
   let publishTimer: ReturnType<typeof setTimeout> | null = null
 
-  /** サーバへ出す引数。verb のサーバ側引数名で、宣言(`COMMAND_PARAMS`)にある名前だけ。選択・図形ID・貼る先の面は載せない(対象は共有選択から)。 */
+  /**
+   * サーバへ出す引数。verb のサーバ側引数名で、宣言(`COMMAND_PARAMS`)にある名前だけ。選択・図形ID・貼る先の面は載せない
+   * (対象は共有選択から)。出すのは今要る引数(`liveArgs`。`when` で隠れた欄の値は出さない)で、数値・文字列・点・ピックは
+   * そのまま、選択肢は `sends` でサーバの値に読み替える。
+   */
   const published = $derived.by<Record<string, unknown> | null>(() => {
     if (sharedId === null || command === null) return null
     const allowed = new Set<string>(COMMAND_PARAMS[command.id as keyof typeof COMMAND_PARAMS] ?? [])
     const out: Record<string, unknown> = {}
-    for (const spec of command.args) {
+    for (const spec of liveArgs) {
       if (spec.kind === 'selection' || spec.kind === 'entities' || spec.kind === 'plane') continue
-      const value = values[spec.name]
-      if (value === undefined || value === '' || !allowed.has(spec.name)) continue
+      let value: unknown = values[spec.name]
+      if (spec.kind === 'choice') {
+        const option = spec.options.find((candidate) => candidate.value === value)
+        value = option === undefined ? undefined : choiceSends(option)
+      }
+      if (value === undefined || value === null || value === '' || !allowed.has(spec.name)) continue
       out[spec.name] = value
     }
     // 揃っていれば `build` の結果が勝つ(点から導いた寸法・貼る先の平面名はここでしかサーバ側の名前にならない)。
@@ -629,7 +646,10 @@
     publishTimer = null
   }
 
-  /** `lastPublished` との差分だけ送る(外したキーは null)。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。 */
+  /** 自分がこの起動で出したことのあるキー。これに無いキー(AI が付けた `scale` / サーバが補う `sketch_id`)は、欄に無くても外さない。 */
+  let sentKeys = new Set<string>()
+
+  /** `lastPublished` との差分だけ送る(欄から消えたキーは null で外す)。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。 */
   function flushPublish(next: Record<string, unknown>): void {
     if (sharedId === null || committed) return
     const delta: Record<string, unknown> = {}
@@ -637,10 +657,12 @@
       if (JSON.stringify(value) !== JSON.stringify(lastPublished[name])) delta[name] = value
     }
     for (const name of Object.keys(lastPublished)) {
-      if (!(name in next)) delta[name] = null
+      if (!(name in next) && sentKeys.has(name)) delta[name] = null
     }
     if (Object.keys(delta).length === 0) return
-    lastPublished = { ...next }
+    for (const name of Object.keys(next)) sentKeys.add(name)
+    lastPublished = { ...lastPublished, ...delta }
+    for (const name of Object.keys(delta)) if (delta[name] === null) delete lastPublished[name]
     onSetArgs(delta)
   }
 
@@ -681,7 +703,9 @@
           const { [spec.name]: _removed, ...rest } = choices
           choices = rest
         } else {
-          choices = { ...choices, [spec.name]: String(value) }
+          // サーバの値から選択肢を逆引きする(`copy: true` → 'copy'、`direction: [0,0,-1]` → 'down')。対応が無ければ触らない。
+          const option = spec.options.find((candidate) => JSON.stringify(choiceSends(candidate)) === JSON.stringify(value))
+          if (option !== undefined) choices = { ...choices, [spec.name]: option.value }
         }
       } else if (spec.kind === 'text') {
         textValues = { ...textValues, [spec.name]: value === undefined ? '' : String(value) }
