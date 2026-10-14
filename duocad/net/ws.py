@@ -9,6 +9,7 @@
 
 下りコマンドの一覧と引数は `duocad/catalog.py` の `COMMANDS` が正。ソケットが受け取れる名前は、そこから導出した表
 (`SKETCH_COMMANDS` / `FEATURE_COMMANDS` / `FILE_COMMANDS`)と `_dispatch` が個別に捌く分(`catalog` の `ws="special"`)で全部。
+**宣言に無い名前は `_dispatch` の入口で断る**(`WS_COMMAND_NAMES`。画面でできる操作は全部コマンドとして宣言する。issue #153)。
 `client_op` はどのクライアントの操作かを返すための添え物で、verbの引数ではない。
 `ack_id` も添え物で、付いていれば処理を終えた後(応答・配信を送り終えた後、失敗でも)に `done` を返す。
 画面はこれで「ビューポートの変化を待たせている」間を数える(`web/src/serverWait.svelte.ts`)。
@@ -106,6 +107,10 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: 合わない。`catalog.Param.ws` 参照)は表から外して `_dispatch` で個別に扱う。
 FILE_COMMANDS: dict = catalog.file_table()
 
+#: ソケットが受け取る名前の全体(宣言の `ws != "none"`)。`_dispatch` はこれに無い名前を分岐へ進めない。
+#: 分岐があるのに宣言が無い口は `tests/test_ui_command_wiring.py` が落とす。
+WS_COMMAND_NAMES: frozenset = frozenset(catalog.websocket_command_names())
+
 #: アプリ内AIが繋げるプロバイダ(`ai_configure` が受け付ける綴り・`ai_status.providers`)。画面はこの長さで選択UIの要否を決める。
 #: `anthropic` はキーが無くても並べる(選んで送ると「どこにキーを置くか」がエラーとして返る)。
 AI_PROVIDERS: tuple = ("openai_compat", "anthropic")
@@ -132,6 +137,20 @@ AI_LIMITS: dict = {
         room_tokens=LOCAL_ROOM_TOKENS,
     ),
 }
+
+def _args_object(message: dict, *, required: bool) -> dict:
+    """作業空間の口の `args`(verb の引数の辞書)。**省略(無い・null)と型違いを分ける** —— `[]` / `false` / `0` を
+    `or {}` で空に畳むと、型違いの確定要求がそのまま通って形が変わる(sol の指摘)。
+    """
+    args = message.get("args")
+    if args is None:
+        if required:
+            raise ValueError("args(引数の辞書)が要る")
+        return {}
+    if not isinstance(args, dict):
+        raise ValueError(f"args はオブジェクトで渡す(受け取った型: {type(args).__name__})")
+    return args
+
 
 async def _send(connection: Any, payload: dict) -> None:
     await connection.send(json.dumps(payload, ensure_ascii=False))
@@ -309,6 +328,8 @@ class Server:
             return
 
         try:
+            if command not in WS_COMMAND_NAMES:
+                raise ValueError(f"unknown command: {command!r}")
             if command in self._hidden_commands:
                 raise ValueError(f"{command!r} はこの版では使えない(安定版では形状最適化を出さない。docs/STABLE.md)")
             if command == "get_state":
@@ -352,6 +373,33 @@ class Server:
                 await self._push(connection, applied=applied)
             elif command == "clear_selection":
                 applied = self._apply(self.session.clear_selection, message.get("client_op"))
+                await self._push(connection, applied=applied)
+            # -------------------------------------------------- B2: 作業空間(起動中のコマンド・モード。issue #153)。選択と同じ `change` 系
+            elif command == "begin_command":
+                verb = message.get("verb")
+                if verb in self._hidden_commands:
+                    raise ValueError(f"{verb!r} はこの版では使えない(docs/STABLE.md)")
+                applied = self._apply(
+                    self.session.begin_command, verb, _args_object(message, required=False), message.get("client_op")
+                )
+                await self._push(connection, applied=applied)
+            elif command == "set_command_args":
+                applied = self._apply(
+                    self.session.set_command_args, _args_object(message, required=True), message.get("client_op")
+                )
+                await self._push(connection, applied=applied)
+            elif command == "end_command":
+                applied = self._apply(self.session.end_command, message.get("client_op"))
+                await self._push(connection, applied=applied)
+            elif command == "apply_command":
+                # 応答は構えていた verb の封筒(`client_op` を載せて全接続へ)。
+                applied = self._apply(self.session.apply_command, _args_object(message, required=False))
+                await self._push_applied(connection, applied, message)
+            elif command == "enter_sketch":
+                applied = self._apply(self.session.enter_sketch, message["sketch_id"], message.get("client_op"))
+                await self._push(connection, applied=applied)
+            elif command in ("leave_sketch", "enter_optimize", "leave_optimize"):
+                applied = self._apply(getattr(self.session, command), message.get("client_op"))
                 await self._push(connection, applied=applied)
             # -------------------------------------------------- C/D: スケッチとフィーチャの verb
             # 引数は宣言(`catalog.Command.ws_arguments`)に従って取り出して検査し、`Session.apply` へ渡す(MCP・アプリ内AIと同じ1本)。
@@ -534,6 +582,7 @@ class Server:
                 status = await asyncio.get_running_loop().run_in_executor(None, self._fem_status)
                 await self._broadcast({"type": "fem_status", **status, **({"error": error} if error else {})})
             else:
+                # 宣言はあるが分岐が無い(`tests/test_ui_command_wiring.py` が先に落とす)。
                 raise ValueError(f"unknown command: {command!r}")
         except Exception as error:  # 1つの失敗でサーバを落とさない。必ず画面へ返す
             await _send(

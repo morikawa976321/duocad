@@ -1,6 +1,6 @@
 // 生成物 —— **手で直さない**。正は `duocad/catalog.py` の宣言で、
 // 作り直すのは `python tools/generate_protocol_ts.py`(走らせ忘れは `tests/test_protocol.py` が落とす)。
-import type { SelectionState } from '../session'
+import type { CommandState, ModeState, SelectionState } from '../session'
 
 /** WebSocket から踏めるコマンド -> 分類(`catalog.Command.category`)。 */
 export const COMMAND_CATEGORY = {
@@ -65,9 +65,108 @@ export const COMMAND_CATEGORY = {
   optimize_steps: 'protocol',
   optimize_step_voxels: 'protocol',
   get_edges: 'protocol',
+  ai_get_status: 'protocol',
+  ai_configure: 'protocol',
+  ai_set_thinking: 'protocol',
+  ai_set_api_key: 'protocol',
+  ai_prepare: 'protocol',
+  ai_send: 'protocol',
+  ai_cancel: 'protocol',
+  fem_get_status: 'protocol',
+  fem_set_device: 'protocol',
+  begin_command: 'workspace',
+  set_command_args: 'workspace',
+  end_command: 'workspace',
+  apply_command: 'workspace',
+  enter_sketch: 'workspace',
+  leave_sketch: 'workspace',
+  enter_optimize: 'workspace',
+  leave_optimize: 'workspace',
 } as const
 
 export type CommandName = keyof typeof COMMAND_CATEGORY
+
+/** コマンドが受け取る引数の名前(宣言の全引数)。画面が共有の作業空間へ出す引数をこれで絞る(`CommandHost.svelte`)。 */
+export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
+  set_visible: ['body_id', 'visible'],
+  set_sketch_visible: ['sketch_id', 'visible'],
+  measure: [],
+  modify_selection: ['add', 'remove'],
+  toggle_selection: ['refs'],
+  clear_selection: [],
+  sketch_create: ['base_plane'],
+  sketch_create_offset: ['base_plane', 'distance'],
+  add_line: ['sketch_id', 'p0', 'p1'],
+  add_circle: ['sketch_id', 'center', 'radius'],
+  add_rectangle: ['sketch_id', 'corner', 'width', 'height', 'angle'],
+  add_arc: ['sketch_id', 'center', 'radius', 'start_deg', 'end_deg'],
+  extrude: ['distance', 'mode', 'body_id'],
+  fillet: ['radius'],
+  chamfer: ['distance'],
+  shell_body: ['thickness'],
+  boolean_body: ['target_ref', 'mode'],
+  move_sketch_entities: ['dx', 'dy', 'copy', 'mode', 'angle', 'center', 'center_entity'],
+  move_body: ['dx', 'dy', 'dz', 'copy', 'mode', 'angle', 'axis_edge', 'axis_point', 'axis_dir', 'center_vertex'],
+  mirror_sketch_entities: ['axis'],
+  envelope_regions: ['radius', 'offset'],
+  mirror_body: ['base_plane', 'plane_face'],
+  delete: [],
+  delete_items: ['bodies', 'sketches'],
+  rename: ['target', 'name'],
+  set_preserve_bodies: [],
+  set_exclude_bodies: [],
+  set_fixtures: [],
+  set_loads: ['magnitude', 'direction'],
+  clear_loads: [],
+  pattern_rectangular: ['sketch_id', 'entities', 'dx', 'dy', 'nx', 'ny'],
+  pattern_circular: ['sketch_id', 'entities', 'center', 'count', 'total_angle', 'rotate_copies'],
+  import_svg: ['sketch_id', 'path', 'scale'],
+  import_step: ['path'],
+  export_step: ['path'],
+  export_stl: ['path'],
+  new_document: [],
+  close_document: [],
+  save_document: ['name'],
+  rename_document: ['name'],
+  open_document: ['name'],
+  list_documents: [],
+  copy_document: ['source', 'dest'],
+  delete_document: ['name'],
+  save_thumbnail: ['name', 'png'],
+  get_thumbnail: ['name'],
+  undo: [],
+  redo: [],
+  get_state: [],
+  preview: ['verb', 'args'],
+  inspect_selection: ['request_id'],
+  get_vertices: ['body_id'],
+  set_view_resolution: ['world_per_pixel', 'size_hint'],
+  optimize_conditions: [],
+  optimize_resolution: ['element_size_mm'],
+  run_optimization: ['element_size_mm', 'target_safety_factor', 'max_evaluations'],
+  cancel_optimization: [],
+  finish_optimization: [],
+  optimize_steps: [],
+  optimize_step_voxels: [],
+  get_edges: ['body_id'],
+  ai_get_status: [],
+  ai_configure: ['provider', 'model', 'base_url'],
+  ai_set_thinking: ['thinking'],
+  ai_set_api_key: ['key'],
+  ai_prepare: [],
+  ai_send: ['message'],
+  ai_cancel: [],
+  fem_get_status: [],
+  fem_set_device: ['device'],
+  begin_command: ['verb', 'args'],
+  set_command_args: ['args'],
+  end_command: [],
+  apply_command: ['args'],
+  enter_sketch: ['sketch_id'],
+  leave_sketch: [],
+  enter_optimize: [],
+  leave_optimize: [],
+}
 
 /** コマンドが WebSocket で受け取る引数(`cmd` と `client_op` を除く。`?` は省略できる)。 */
 export interface CommandArguments {
@@ -132,6 +231,23 @@ export interface CommandArguments {
   optimize_steps: Record<string, never>
   optimize_step_voxels: Record<string, never>
   get_edges: { body_id: string }
+  ai_get_status: Record<string, never>
+  ai_configure: { provider: string; model?: string; base_url?: string }
+  ai_set_thinking: { thinking: string }
+  ai_set_api_key: { key: string | null }
+  ai_prepare: Record<string, never>
+  ai_send: { message: string }
+  ai_cancel: Record<string, never>
+  fem_get_status: Record<string, never>
+  fem_set_device: { device: string }
+  begin_command: { verb: string; args?: object }
+  set_command_args: { args: object }
+  end_command: Record<string, never>
+  apply_command: { args?: object }
+  enter_sketch: { sketch_id: string }
+  leave_sketch: Record<string, never>
+  enter_optimize: Record<string, never>
+  leave_optimize: Record<string, never>
 }
 
 /**
@@ -186,6 +302,8 @@ export type Applied =
   | (AppliedChangeBase & { change: 'selection'; selection: SelectionState })
   | (AppliedChangeBase & { change: 'visibility'; body_id?: string; sketch_id?: string; visible: boolean; previous: boolean; changed: boolean })
   | (AppliedChangeBase & { change: 'document'; action: string; path: string | null; name: string | null })
+  | (AppliedChangeBase & { change: 'command'; command: CommandState | null })
+  | (AppliedChangeBase & { change: 'mode'; mode: ModeState })
 
 /** 状態配信(`ServerState`)が持つキー。 */
 export type ServerStateKey =
@@ -204,3 +322,6 @@ export type ServerStateKey =
   | 'current_name'
   | 'saved'
   | 'document_open'
+  | 'command'
+  | 'mode'
+  | 'generation'

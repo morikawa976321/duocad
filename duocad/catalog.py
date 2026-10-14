@@ -40,8 +40,10 @@ from typing import Any, Optional
 #: - `feature`   … ソリッドのverb
 #: - `file`      … ファイル操作(開く・保存・読み込み・書き出し)
 #: - `history`   … undo / redo
-#: - `protocol`  … WebSocketだけの口(verbではない。状態の要求・プレビュー・辺の折れ線)
-CATEGORIES = ("query", "selection", "sketch", "feature", "file", "history", "protocol")
+#: - `protocol`  … WebSocketだけの口(verbではない。状態の要求・プレビュー・辺の折れ線・アプリ内AIと計算の設定)。
+#:                 **ソケットが受け取る名前はこの宣言で全部**(`net/ws.py` の `_dispatch` は宣言に無い名前を断る)
+#: - `workspace` … 作業空間(起動中のコマンド・モード。`duocad/workspace.py`)。選択と同じ共有の短命状態で、人も AI も同じ操作で触る
+CATEGORIES = ("query", "selection", "sketch", "feature", "file", "history", "protocol", "workspace")
 
 #: 形(面・辺・領域の添字)を変えうる verb のカテゴリ。ここに属し文書を変える宣言は、
 #: `resets_selection` を**明示しないと import 時点で落ちる**(既定に頼ると付け忘れが
@@ -128,6 +130,7 @@ class Command:
     returns: tuple[Result, ...] = ()
     #: `Session` のメソッド名(WebSocket側の実体)。WSに開けていないものは None。
     #: **verb名と違ってよい**(`export_step` -> `export_step_file`)。
+    #: `ws="special"` で実体が `Session` でなく `net/ws.py` の `Server` にある口(アプリ内AI・計算の設定)も None。
     session: Optional[str] = None
     #: WebSocketでの露出のしかた(`WS_SURFACES`)。
     ws: str = "table"
@@ -162,8 +165,8 @@ class Command:
             raise ValueError(f"未知のカテゴリ: {self.category!r}({CATEGORIES})")
         if self.ws not in WS_SURFACES:
             raise ValueError(f"未知のWS露出: {self.ws!r}({WS_SURFACES})")
-        if self.ws != "none" and self.session is None:
-            raise ValueError(f"{self.name}: WSに開けるなら `session` が要る")
+        if self.ws == "table" and self.session is None:
+            raise ValueError(f"{self.name}: 表で捌くなら `session` が要る")
         if self.previewable and self.session is None:
             raise ValueError(f"{self.name}: プレビューは `Session` のメソッドを呼ぶ")
         if self.preview_session is not None and not self.previewable:
@@ -212,6 +215,16 @@ class Command:
 
     def input_schema(self) -> dict:
         return _schema(self.params, [p.name for p in self.params if p.required])
+
+    def partial_schema(self) -> dict:
+        """途中入力(`Session.begin_command` / `set_command_args`)の検査: 未知のキーと型だけで、必須は見ない。"""
+        return _schema(self.params, [])
+
+    def staged_schema(self) -> dict:
+        """構えた verb を確定する(`Session.apply_command`)ときの検査。キーは全引数、必須は**画面と同じ厳しさ**
+        (`ws="required"` も省けない)。人と AI が一緒に埋める口なので、MCP の既定値(`extrude.mode` の join)で黙って補わない。
+        """
+        return _schema(self.params, [p.name for p in self.params if p.ws == "required" or (p.ws and p.required)])
 
     def descriptor(self) -> dict:
         return {
@@ -283,6 +296,8 @@ def _value_matches_json_type(value: Any, expected: str) -> bool:
         return isinstance(value, list)
     if expected == "object":
         return isinstance(value, dict)
+    if expected == "null":
+        return value is None
     return True
 
 
@@ -1909,6 +1924,194 @@ COMMANDS: tuple[Command, ...] = (
             "起動している間だけ画面に出る(常時出すと面のクリックが辺に取られる)"
         ),
     ),
+    # アプリ内AI(protocol)。**verbではなく、実体は `net/ws.py` の `Server`**(`session=None`)。
+    # 応答は専用イベント(`ai_status` / `ai_tool_call` / `ai_result` / `ai_error`)で、AIが文書を変えた分は
+    # 通常の状態配信として別途届く。**ここに宣言するのは、ソケットが受け取る名前を宣言で尽くすため**
+    # (画面でできる操作は全部コマンド。issue #153)。AIがAIの設定を触る意味は無いので `mcp=False`。
+    Command(
+        name="ai_get_status",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="プロバイダ・モデル・思考の設定・キーの有無を `ai_status` で要求した接続にだけ返す",
+    ),
+    Command(
+        name="ai_configure",
+        category="protocol",
+        params=(
+            Param("provider", "string", "`Server.ai_providers` の綴り(`openai_compat` / `anthropic`)"),
+            Param("model", "string", "モデル名(省略で既定)", required=False),
+            Param("base_url", "string", "llama-server の URL(`openai_compat` だけ。省略で既定)", required=False),
+        ),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="結果の `ai_status` は全接続へ配る(設定はサーバに1つ)",
+    ),
+    Command(
+        name="ai_set_thinking",
+        category="protocol",
+        params=(Param("thinking", "string", "思考の設定(プロバイダごとの綴り。`Server._ai_set_thinking`)"),),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+    ),
+    Command(
+        name="ai_set_api_key",
+        category="protocol",
+        params=(Param("key", ["string", "null"], "Claude API のキー(null で保存済みのキーを消す)。値は画面へ戻さず `duocad_secrets.json` へ書く"),),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+    ),
+    Command(
+        name="ai_prepare",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="ローカルLLMのプロンプトキャッシュを温める(応答は無い)",
+    ),
+    Command(
+        name="ai_send",
+        category="protocol",
+        params=(Param("message", "string", "人の依頼の本文"),),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="実行器スレッドで `AgentLoop.run()` を走らせる。進みは `ai_tool_call` / `ai_result` / `ai_error`",
+    ),
+    Command(
+        name="ai_cancel",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+    ),
+    # 計算の設定(protocol)。FEM の装置(CPU/GPU)。**verbではなく実体は `Server`**。CuPy を読む(初回1秒前後)ので実行器で作る。
+    Command(
+        name="fem_get_status",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="`fem_status` を要求した接続にだけ返す",
+    ),
+    Command(
+        name="fem_set_device",
+        category="protocol",
+        params=(Param("device", "string", "`cpu` / `gpu`"),),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="結果の `fem_status` は全接続へ配る(設定はサーバに1つ)",
+    ),
+    # 作業空間(workspace)。**起動中のコマンドとモードを共有する口**(issue #153。`duocad/workspace.py`)。選択と同じく
+    # MCP にも WS にも同じ顔で出す(`get_command` は読むだけなので WS には無い: 画面は状態配信で受け取る)。
+    # verb ではなく、操作ログに載らず undo でも戻らない。応答は `change: "command"` / `change: "mode"` のイベント。
+    # 人(画面のツールバー・Esc・Enter・スケッチへの出入り)も AI も同じ操作で触り、出所は持たない。
+    Command(
+        name="get_command",
+        category="workspace",
+        description=(
+            "起動中のコマンド(verb・途中の引数)とモードを読むときに呼ぶ。人が画面で verb を起動して引数を打っている最中か、"
+            "AI が begin_command で構えたものを人が直したかを確かめる。"
+        ),
+        ws="none",
+        mcp=True,
+        changes_document=False,
+    ),
+    Command(
+        name="begin_command",
+        category="workspace",
+        description=(
+            "verb を起動して、対象(選択)と引数を人と一緒に集め始めるときに呼ぶ(画面のツールバーのクリックと同じ)。"
+            "人の画面にその verb が起動して対象の候補が見える。半径などの引数と確定を人に残して止まるならここで止まる。"
+            "別の verb が起動中なら置き換え、そのとき選択は空になる。"
+        ),
+        params=(
+            Param("verb", "string", "起動する verb の名前(スケッチかフィーチャの verb。例: fillet / extrude / add_rectangle)"),
+            Param("args", "object", "最初から入れておく引数(その verb のツールと同じ名前。省略可)", required=False),
+        ),
+        session="begin_command",
+        ws="special",
+        mcp=True,
+    ),
+    Command(
+        name="set_command_args",
+        category="workspace",
+        description=(
+            "起動中の verb の引数を足す・直すときに呼ぶ(人が入力欄に打つのと同じ)。渡したキーだけ変わり、null で外す。"
+            "必須が揃っていなくてよい。起動中のコマンドが無ければ失敗する。"
+        ),
+        params=(Param("args", "object", "その verb のツールと同じ名前の引数。null の値はそのキーを外す"),),
+        session="set_command_args",
+        ws="special",
+        mcp=True,
+    ),
+    Command(
+        name="end_command",
+        category="workspace",
+        description="起動中の verb を確定せずに畳むときに呼ぶ(人の Esc と同じ)。選択も空になる。",
+        session="end_command",
+        ws="special",
+        mcp=True,
+    ),
+    Command(
+        name="apply_command",
+        category="workspace",
+        description=(
+            "起動中の verb を今の選択と引数で確定するときに呼ぶ(人の Enter と同じ)。成功すると起動中のコマンドは無くなり、"
+            "操作ログに1行積まれる。必須の引数が無い・選択が足りないなら失敗し、コマンドは起動したまま残る。"
+        ),
+        params=(Param("args", "object", "確定の直前に併合する引数(省略可)", required=False),),
+        session="apply_command",
+        ws="special",
+        mcp=True,
+        note=(
+            "応答は構えていた verb の封筒そのもの(`change` のイベントではない)。`tests/test_protocol.py` の "
+            "`_change_commands` はこの名前を除く"
+        ),
+    ),
+    Command(
+        name="enter_sketch",
+        category="workspace",
+        description=(
+            "既存のスケッチを編集するモードに入るときに呼ぶ(人の画面もそのスケッチに入る)。"
+            "スケッチを作った直後は呼ばなくてよい(作った人が誰でも入る)。起動中のコマンドは畳まれる。"
+        ),
+        params=(Param("sketch_id", "string", "describe_document が返した sketch_id"),),
+        session="enter_sketch",
+        ws="special",
+        mcp=True,
+    ),
+    Command(
+        name="leave_sketch",
+        category="workspace",
+        description="スケッチの編集を終えて通常のモードへ戻るときに呼ぶ。起動中のコマンドは畳まれる。",
+        session="leave_sketch",
+        ws="special",
+        mcp=True,
+    ),
+    Command(
+        name="enter_optimize",
+        category="workspace",
+        feature="shape_optimization",
+        description="形状最適化のモードに入るときに呼ぶ(条件の verb はモードに関わらず使える。画面の出し分けだけが変わる)。",
+        session="enter_optimize",
+        ws="special",
+        mcp=True,
+    ),
+    Command(
+        name="leave_optimize",
+        category="workspace",
+        feature="shape_optimization",
+        description="形状最適化のモードから通常のモードへ戻るときに呼ぶ。",
+        session="leave_optimize",
+        ws="special",
+        mcp=True,
+    ),
 )
 
 #: verb ではない変更イベント(操作ログに載らない)。`change` の値 -> 載せる値。
@@ -1917,6 +2120,8 @@ COMMANDS: tuple[Command, ...] = (
 #: - `selection`  … `set_selection` / `modify_selection` / `toggle_selection` / `clear_selection`
 #: - `visibility` … `set_visible`(`body_id`)/ `set_sketch_visible`(`sketch_id`)。どちらか片方が載る
 #: - `document`   … `open_document` / `new_document` / `close_document`(新規と閉じるは開いたファイルが無いので `path` / `name` が null)
+#: - `command`    … `begin_command` / `set_command_args` / `end_command`(起動中のコマンド。null は無起動)
+#: - `mode`       … `enter_sketch` / `leave_sketch` / `enter_optimize` / `leave_optimize`
 CHANGE_EVENTS: dict = {
     "selection": (Result("selection", "SelectionState"),),
     "visibility": (
@@ -1931,6 +2136,8 @@ CHANGE_EVENTS: dict = {
         Result("path", "string | null"),
         Result("name", "string | null"),
     ),
+    "command": (Result("command", "CommandState | null"),),
+    "mode": (Result("mode", "ModeState"),),
 }
 
 #: 状態配信(`Session.state_meta()`)が持つキー。`web/src/session.ts` の `ServerState` と
@@ -1951,6 +2158,11 @@ STATE_KEYS: tuple[str, ...] = (
     "current_name",
     "saved",
     "document_open",
+    # 作業空間(`duocad/workspace.py`)。起動中のコマンドとモード
+    "command",
+    "mode",
+    # 文書の世代(`Session.generation`。開く・新規・閉じるで進む)。画面が「同じ文書のままか」を見る(スケッチの戻り先の記憶を捨てる判定)
+    "generation",
 )
 
 BY_NAME: dict = {command.name: command for command in COMMANDS}
@@ -2048,6 +2260,15 @@ def agent_instructions(hidden: frozenset = frozenset()) -> str:
         "選択だけで止めるか verb まで進めるかは、人の指示の文面からその都度判断する。"
         "選択だけで止めたときは、何を選んだかを述べる"
         "（人は画面で見て、そのまま採用するか、直すよう頼むか、自分でトグルして直す）。"
+        "人と一緒に1つの verb を進めるには、begin_command(verb) で起動して対象を選び、半径などの引数と確定を人に残して"
+        "止まる（人の画面にその verb が起動し、選んだ対象が見える）。人が画面で起動した verb と途中の引数は "
+        "describe_document / get_command の command に見える。その verb の引数は set_command_args で足し、確定は "
+        "apply_command で行う（確定まで進めるかも人の指示の文面から判断する）。人が打っている途中の引数を上書きしない。"
+        "辺は、辺を使う verb(fillet / chamfer / move_body など)を起動している間だけ人の画面に出る。verb を起動せずに辺だけ"
+        "選んでも人には見えないので、辺を人と一緒に直すなら先に begin_command する(測定 measure は起動せず、選択から直接測る)。"
+        "非表示のボディ・非表示のスケッチは選べず、メッシュのボディは面・辺・頂点を指せない(ボディ丸ごとなら指せる)。"
+        "enter_sketch / leave_sketch で人の画面のモードが切り替わる（スケッチを作ると誰が作ってもそこへ入るので、"
+        "描き終えて押し出したら leave_sketch で通常へ戻す）。"
         "形を変える verb が確定すると選択は空になるので、次の対象は選び直す。"
         "寸法の差が0.01mm以内、体積や面積の差が0.1%以内なら指示どおりにできているとみなし、"
         "それ以上の微調整や作り直しはしないこと。"

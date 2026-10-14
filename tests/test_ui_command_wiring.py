@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import functools
 import importlib.util
+import re
 import sys
 
 from duocad.paths import REPO_ROOT
@@ -71,8 +72,11 @@ def _server_command_names() -> set[str]:
         if node.left.id != "command":
             continue
         for comparator in node.comparators:
-            if isinstance(comparator, ast.Constant) and isinstance(comparator.value, str):
-                names.add(comparator.value)
+            # `command == "x"` と `command in ("x", "y")` の両方(タプルの中の文字列も分岐の名前)。
+            constants = comparator.elts if isinstance(comparator, ast.Tuple) else [comparator]
+            for constant in constants:
+                if isinstance(constant, ast.Constant) and isinstance(constant.value, str):
+                    names.add(constant.value)
     return names
 
 
@@ -111,6 +115,108 @@ def _dispatch_message_keys() -> set[str]:
     return keys
 
 
+#: 画面がソケットへ送る `{cmd: '...'}` の綴りを持ってよいファイル。**1つだけ**(issue #153「それ以外の経路では
+#: 一切何もできない」)。ここ以外に `cmd:` が現れたら、ディスパッチャを迂回する送信口ができたということ。
+SENDER_FILES = {"web/src/session.ts"}
+
+#: `{cmd: '名前'}` / `{ cmd: "名前" }` / `{cmd:`名前`}`(空白・改行・引用符の違いを許す)。
+_CMD_LITERAL = re.compile(r"\bcmd\s*:\s*[\"'`]([a-z_]+)[\"'`]")
+#: `session.ts` の送信メソッドへ名前を文字列で渡す間接経路(`sendCommand('export_step', …)` / `files.run('import_step', …)`)。
+#: 引数が `string` なので型では守れない。
+_INDIRECT_LITERAL = re.compile(r"\b(?:sendCommand|run)\s*\(\s*[\"'`]([a-z_]+)[\"'`]")
+#: ソケットそのもの。`session.ts` 以外に現れたら、ディスパッチャを迂回する送信口ができた。
+_SOCKET_USE = re.compile(r"new\s+WebSocket\s*\(|\.send\s*\(\s*JSON\s*\.\s*stringify")
+
+
+def _web_sources():
+    for path in (REPO_ROOT / "web" / "src").rglob("*"):
+        if path.suffix in (".ts", ".svelte") and "generated" not in path.parts:
+            yield path.relative_to(REPO_ROOT).as_posix(), _without_comments(path.read_text(encoding="utf-8"))
+
+
+def _without_comments(text: str) -> str:
+    """TS / Svelte の `//` 行コメントと `/* */` ブロックコメントを空白に置き換える(文字列リテラルの中の `//` は残す)。
+
+    行単位の除外では、インラインコメントの中の例を本物の送信と読み、改行をまたぐ本物の送信を見落とす
+    (sol の指摘)。文字列(' " `)の中では何もしないので `'ws://…'` を壊さない。正規表現も `<script>` の外も見ない
+    素朴な走査だが、ここで要るのは「コメントでない場所の `cmd:` / ソケット」だけ。
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    quote: str | None = None
+    while i < n:
+        ch = text[i]
+        if quote is not None:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(" " * (end - i))
+            i = end
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            out.append("".join("\n" if c == "\n" else " " for c in text[i:end]))
+            i = end
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _commands_sent_by_the_screen() -> dict[str, set[str]]:
+    """`web/src` の中で `cmd: '名前'` を書いているファイル -> 名前の集合(コメントは除く)。"""
+    found: dict[str, set[str]] = {}
+    for where, text in _web_sources():
+        names = set(_CMD_LITERAL.findall(text))
+        if names:
+            found[where] = names
+    return found
+
+
+def _commands_named_indirectly() -> dict[str, set[str]]:
+    """`sendCommand('名前', …)` / `run('名前', …)` の形で名前を渡しているファイル -> 名前の集合。"""
+    found: dict[str, set[str]] = {}
+    for where, text in _web_sources():
+        names = set(_INDIRECT_LITERAL.findall(text))
+        if names:
+            found[where] = names
+    return found
+
+
+def _files_touching_the_socket() -> set[str]:
+    return {where for where, text in _web_sources() if _SOCKET_USE.search(text)}
+
+
+def test_the_comment_stripper_keeps_code_and_drops_comments():
+    """門の下敷き。落ちたら、上の3つの走査がコメントの例を本物と読む/本物を見落とす。"""
+    source = (
+        "const a = 'ws://x' // files.run('qa_in_line_comment', {})\n"
+        "/** new WebSocket('ws://y') */\n"
+        "files.run(\n  'qa_real', {})\n"
+        "const s = new WebSocket ('ws://z'); s.send (JSON.stringify({ cmd }))\n"
+    )
+    stripped = _without_comments(source)
+    assert "qa_in_line_comment" not in stripped and "WebSocket('ws://y')" not in stripped
+    assert "'ws://x'" in stripped, "文字列の中の // はコメントではない"
+    assert _INDIRECT_LITERAL.findall(stripped) == ["qa_real"]
+    assert len(_SOCKET_USE.findall(stripped)) == 2
+
+
 @functools.cache
 def _ui_commands() -> tuple:
     """`web/src/commands/*.ts` の `CommandDef` を Node で読み込んだもの(`tests/eval_command_defs.mjs`)。"""
@@ -140,6 +246,38 @@ def test_every_hand_dispatched_command_has_a_branch():
         if command.ws == "special" and f'"{command.name}"' not in dispatch
     ]
     assert not missing, f"`_dispatch` に分岐が無い(宣言だけある): {missing}"
+
+
+def test_every_name_dispatched_by_hand_is_declared():
+    """**`_dispatch` が分岐で捌く名前は、全部宣言にある**(サーバ側の門。`WS_COMMAND_NAMES` が宣言に無い名前を断る)。
+
+    ここが落ちるのは「`_dispatch` に分岐を足したが `catalog.COMMANDS` に宣言しなかった」とき。宣言に無い名前は
+    `WS_COMMAND_NAMES` の入口で断られるので、分岐があっても誰も呼べない。
+    """
+    declared = set(_catalog().websocket_command_names())
+    by_hand = _server_command_names() - declared
+    assert not by_hand, f"`_dispatch` に分岐があるのに宣言が無い: {sorted(by_hand)}"
+
+
+def test_every_command_the_screen_sends_is_declared_and_sent_from_one_place():
+    """**画面がソケットへ送る名前は全部宣言にあり、送る口は `session.ts` 1つ**(画面側の門)。
+
+    ここが落ちるのは (1) `session.ts` に新しい `cmd` を足したが宣言していない、(2) `session.ts` 以外から
+    直接ソケットへ送り始めた、のどちらか。どちらも「画面でできる操作は全部コマンド」(issue #153)の破れ。
+    """
+    sent = _commands_sent_by_the_screen()
+    assert sent, "画面の送信を読めていない(`cmd: '...'` が1つも無い)"
+    strays = {where: sorted(names) for where, names in sent.items() if where not in SENDER_FILES}
+    assert not strays, f"`session.ts` 以外がソケットへ送っている: {strays}"
+    sockets = _files_touching_the_socket()
+    assert sockets == SENDER_FILES, f"ソケットを直接使うファイルが増えた/減った: {sorted(sockets)}"
+    declared = set(_catalog().websocket_command_names())
+    unknown = {name for names in sent.values() for name in names} - declared
+    assert not unknown, f"画面が送る名前が宣言に無い: {sorted(unknown)}"
+    indirect = _commands_named_indirectly()
+    assert indirect, "間接経路の送信を読めていない(`sendCommand('…')` / `run('…')` が1つも無い)"
+    unknown = {name for names in indirect.values() for name in names} - declared
+    assert not unknown, f"画面が名前で送る(`sendCommand` / `run`)コマンドが宣言に無い: {sorted(unknown)}"
 
 
 def test_ui_command_ids_are_readable():
@@ -206,20 +344,23 @@ def test_body_id_survives_only_where_it_is_not_a_target_set():
     )
 
 
-def test_ai_commands_are_not_verbs():
-    """`ai_*`(G・アプリ内AIエージェントの配線)はWebSocketから踏めるが、
-    「MCPツール名==WSコマンド名==UIコマンドID==verb名」の一致規律の対象集合には入らない。
+def test_ai_commands_are_declared_but_are_neither_tools_nor_verbs():
+    """`ai_*`(G・アプリ内AIエージェントの配線)は宣言にある(ソケットの名前は宣言で尽くす)が、
+    MCPの道具にも UI の CommandDef にも verb にもならない(`mcp=False` / `changes_document=False` / `protocol`)。
     """
+    catalog = _catalog()
     ai_names = {name for name in _server_command_names() if name.startswith("ai_")}
     assert ai_names == {
         "ai_get_status", "ai_configure", "ai_set_thinking", "ai_set_api_key", "ai_prepare", "ai_send", "ai_cancel"
     }, (
         f"ai_* の顔ぶれが変わった(このテストを更新すること): {sorted(ai_names)}"
     )
-    declared = {command.name for command in _catalog().COMMANDS}
-    assert not ai_names & declared, (
-        f"ai_* は verb ではないので catalog.COMMANDS に入れない(混入: {sorted(ai_names & declared)})"
-    )
+    for name in sorted(ai_names):
+        command = catalog.BY_NAME[name]
+        assert command.category == "protocol" and not command.mcp and not command.changes_document, (
+            f"{name} は protocol / mcp=False / changes_document=False で宣言する"
+        )
+    assert not ai_names & set(catalog.tool_names()), "ai_* が MCP の道具として出ている"
     # UIのコマンドID(`web/src/commands/*.ts`)にも現れない —— AIパネルは
     # `session.ts` の専用メソッドから直接送る(引数の集め方を持つ CommandDef の対象ではない)。
     assert not ai_names & set(_ui_command_ids()), (

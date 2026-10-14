@@ -99,8 +99,9 @@ ProgressCallback = Callable[[str, dict, Any, bool], None]
 class ToolSurface(Protocol):
     """ループが道具に要求する面(`DocumentTools` がこれを満たす)。公開APIの5つだけに依存する(内部には触らない)。
 
-    `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は `(文書の世代, ログの本数, 選択の指紋, 可視性の指紋)`。
-    可視性は操作ログに載らないので、指紋が無いと「AIが考えている間に人がボディを隠した」が版に出ない)。
+    `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は `(文書の世代, ログの本数, 選択の指紋, 可視性の指紋,
+    作業空間の版)`。可視性も起動中のコマンドも操作ログに載らないので、無いと「AIが考えている間に人がボディを隠した / 半径を打ち直した」が
+    版に出ない)。
     `call_and_seq` は実行と直後の版を `(結果, 例外, 版)` で返す(例外は上げない)。本番の覆い(`ToolsOnLoop`)はこれを
     イベントループへの1回の投げ返しで走らせるので、実行の完了と版の読み取りの間に人の操作が挟まらない。
     `expected_seq` を渡すと、同じ1手の中で実行の直前に版を照合し、違えば走らせずに例外の位置へ `VersionChanged` を返す。
@@ -445,9 +446,9 @@ class AgentLoop:
                 results.extend(
                     self._unrun_results(
                         reply.tool_calls[stale_at:],
-                        "文書または選択が変わったため実行しなかった"
+                        "文書または選択が変わった(起動中のコマンドや引数の変更を含む)ため実行しなかった"
                         f"(seq {expected_seq!r} -> {stale_seq!r})。"
-                        "describe_document / get_selection で最新の状態を確認し、"
+                        "describe_document / get_selection / get_command で最新の状態を確認し、"
                         "選択をやり直してから再試行すること。",
                     )
                 )
@@ -529,16 +530,32 @@ class AgentLoop:
         印が無いverb(`catalog.dimension_params` が空)は素通しする。`set_visible` の `visible` や `extrude` の `mode` のような
         言葉で指定される how は見ない(理由は `Param.dimension`)。
         """
-        names = catalog.dimension_params(call.name)
+        verb, arguments = call.name, call.arguments
+        if call.name in ("begin_command", "set_command_args", "apply_command"):
+            # 作業空間の口は `args` の中に verb の引数を持つ。構えた verb の名前は `begin_command` なら引数、それ以外は読む。
+            # 構えるだけでも止める: 人が見て直す前に AI 自身が `apply_command` まで進む経路があるので、寸法の捏造は入口で止める。
+            verb = call.arguments.get("verb") if call.name == "begin_command" else self._staged_verb()
+            arguments = call.arguments.get("args") or {}
+            if not isinstance(verb, str) or not isinstance(arguments, dict):
+                return ()
+        names = catalog.dimension_params(verb)
         if not names:
             return ()
-        filled = tuple(name for name in names if call.arguments.get(name) is not None)
+        filled = tuple(name for name in names if arguments.get(name) is not None)
         if not filled:
             return ()
         said = " ".join(
             turn.text for turn in self.turns if isinstance(turn, UserTurn)
         )
         return () if _mentions_a_quantity(said) else filled
+
+    def _staged_verb(self) -> Optional[str]:
+        """構えている verb の名前(無ければ None)。`get_command` を読むだけ(文書を変えない)。"""
+        try:
+            command = self.tools.call("get_command", {}).get("command")
+        except Exception:  # noqa: BLE001 —— 読めなければガードは掛けない(知らないものを止めない。`dimension_params` と同じ線)
+            return None
+        return command.get("verb") if isinstance(command, dict) else None
 
     def _unrun_results(self, calls: Sequence[ToolCall], why: str) -> tuple[ToolResult, ...]:
         """走らせなかったツール呼び出しにも結果を積む(中断・出力上限で打ち切ったとき)。

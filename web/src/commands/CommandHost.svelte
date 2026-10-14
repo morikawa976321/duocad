@@ -41,6 +41,7 @@
     argKinds,
     argSatisfied,
     buildArgs,
+    choiceSends,
     commitsGhost,
     findCommand,
     firstMissingArg,
@@ -64,11 +65,13 @@
   } from './command'
   import { categoryOf } from './category'
   import { evaluateExpression, isPlainNumber } from '../expression'
-  import type { SelectionRef, SelectionState } from '../session'
+  import type { CommandState, SelectionRef, SelectionState } from '../session'
+  import { COMMAND_CATEGORY, COMMAND_PARAMS } from '../generated/protocol'
 
   let {
     selection,
     busy,
+    shared = null,
     selfSelections = 0,
     commands,
     defaultCommandId,
@@ -77,6 +80,9 @@
     entities = [],
     onStart = () => {},
     onEnd = () => {},
+    onBegin = () => {},
+    onSetArgs = () => {},
+    onEndShared = () => {},
     onRun,
     onPreview,
     onCancelPreview,
@@ -91,6 +97,12 @@
     selection: SelectionState | null
     /** 直前の操作の応答待ち。待っている間は確定を受け付けない。 */
     busy: boolean
+    /**
+     * 配信された起動中のコマンド(`state.command`。issue #153)。スケッチ・フィーチャの verb はここが正で、このコンポーネントは
+     * 起動中の verb も引数も自分で持たない: ツールバーのクリックは `onBegin`、入力欄は `onSetArgs`、Esc は `onEndShared` で
+     * サーバへ頼み、配信で `shared` が変わってから欄を描く。AI が起動・入力したものも同じ経路で届く。
+     */
+    shared?: CommandState | null
     /**
      * この画面のクリックで選択が変わった回数(`App.svelte` が数える)。Enterの要らないコマンドの即適用は、これが起動後に増えたときにだけ発火する。
      * 選択の中身を見て発火させるとAIの `modify_selection` でも走る。数以外の意味を持たせない(誰が変えたかの判断は `App.svelte`)。
@@ -114,6 +126,12 @@
     onStart?: (verb: string) => void
     /** 起動中のコマンドが終わった(Esc・中断ボタン・確定成功)ときに呼ばれる。無起動・既定「選ぶ」のEscでは呼ばない。アプリ層が選択を全解除するための知らせ。 */
     onEnd?: (verb: string) => void
+    /** 構える対象の verb を起動する(サーバの `begin_command`)。 */
+    onBegin?: (verb: string, args: Record<string, unknown>) => void
+    /** 起動中の verb の引数を併合する(サーバの `set_command_args`。`null` の値はそのキーを外す)。 */
+    onSetArgs?: (args: Record<string, unknown>) => void
+    /** 起動中の verb を畳む(サーバの `end_command`)。 */
+    onEndShared?: () => void
     onRun: (verb: string, args: Record<string, unknown>) => void
     /** `mode` は `CommandDef.preview`。`local` はブラウザだけで描く(サーバへ投げない)。 */
     onPreview: (verb: string, args: Record<string, unknown>, mode: 'server' | 'local') => void
@@ -133,15 +151,30 @@
 
   /** 打ち終わってからプレビューを投げるまでの待ち[ms]。 */
   const PREVIEW_DEBOUNCE_MS = 250
+  /** 打ってからサーバの作業空間へ出すまでの待ち[ms]。打鍵のたびに送らない(AI には落ち着いた値だけ見える)。 */
+  const PUBLISH_DEBOUNCE_MS = 250
+
+  /** 構える対象(サーバの作業空間に載る verb)か。スケッチとフィーチャの verb(`duocad/workspace.py` の `stageable` と同じ線)。 */
+  function isStageable(verb: string): boolean {
+    const category = (COMMAND_CATEGORY as Record<string, string>)[verb]
+    return category === 'sketch' || category === 'feature'
+  }
 
   // 初期値を1回だけ捕まえるのが正しい: モードが変わるときは `App.svelte` が `{#key}` でこのコンポーネントごと作り直す(集めかけの引数を持ち越さない)。
   // svelte-ignore state_referenced_locally
-  let commandId = $state<string | null>(defaultCommandId ?? null)
+  const idleCommandId = defaultCommandId ?? null
+  /** 構える対象でないコマンド(測定・ファイル操作・スケッチの「選ぶ」)の起動。構える対象はサーバの `shared` が正で、ここには持たない。 */
+  let localCommandId = $state<string | null>(idleCommandId)
+  /** 配信された起動中の verb のうち、このモードの一覧にあるもの(別のモードの verb は、モードが追随してから出る)。 */
+  const sharedId = $derived<string | null>(
+    shared !== null && isStageable(shared.verb) && commands.some((candidate) => candidate.id === shared.verb)
+      ? shared.verb
+      : null,
+  )
+  const commandId = $derived<string | null>(sharedId ?? localCommandId)
   const command = $derived<CommandDef | null>(commandId === null ? null : findCommand(commandId, commands))
 
   /** verb が実際に走っているか。無起動と、スケッチの既定「選ぶ」(`command !== null` だが待機状態)は除く。 */
-  // svelte-ignore state_referenced_locally
-  const idleCommandId = defaultCommandId ?? null
   const commandActive = $derived(commandId !== null && commandId !== idleCommandId)
 
   /** 数値引数の生の入力(引数名 -> 打った文字列)。確定・中断のたびに空へ戻す。 */
@@ -333,7 +366,8 @@
   $effect(() => {
     // `cmd` へ一度だけ束ねる(`$derived` の読み直しは同じ値でも別の式として扱われ、TSのnarrowingが効かない)。
     const cmd = command
-    const source = cmd === null || cmd.preview === 'none' ? null : ghostBuilt
+    // 確定を送った後は出さない(打った値は残すので、消した幽霊を同じ引数で出し直してしまう)。
+    const source = cmd === null || cmd.preview === 'none' || committed ? null : ghostBuilt
     const key = source ? JSON.stringify([cmd!.id, source.args, selectionPrint]) : null
     if (key === previewedKey) return
     if (previewTimer) clearTimeout(previewTimer)
@@ -405,22 +439,38 @@
       onNote(source.reason)
       return
     }
-    lastInputs = {
-      numbers: { ...numberText },
-      points: { ...points },
-      choices: { ...choices },
-      picks: { ...picks },
+    if (committed) {
+      onNote('確定の応答待ち')
+      return
+    }
+    if (sharedId !== null) {
+      // 構えた verb: 打った値は消さない(引数はサーバの `shared.args` が持ち、失敗なら構えたまま残るので近い値で打ち直せる)。
+      // 成功なら配信で `command` が null になり `ended()` が消す。降ろすのは幽霊と即適用の待ち受け、出しかけの引数だけ。
+      // 印は `onRun` より先に立てる: 繋がっていなくて送れなかったときは `onRun` の中で同期に `commitFailed()` が呼ばれて降りる。
+      committed = true
+      armedSelections = null
+      cancelPublish()
+      cancelPreview()
+      onRun(command.id, source.args)
+      return
     }
     onRun(command.id, source.args)
-    reset()
-    // ここでは無起動へ戻さない: `onRun` は楽観的な発火で成否が未確定。OCCTのフィレットは半径次第で `IsDone()=False` に落ち、
-    // 先に無起動にすると `restoreLastInputs()` が半径を戻しても入力欄ごと消え、「失敗したら近くの値で打ち直す」が壊れる
-    // (実機smoke `smoke-features.mjs` で踏んだ)。戻すのは確定成功が返ったとき(`commandSucceeded()`)だけ。
+    // ローカルのコマンド(測定・ファイル操作)は従来どおり。無起動へは戻さない(成否が未確定。戻すのは `commandSucceeded()`)。
+    resetInputs()
   }
 
-  /** 無起動(通常モードは`null`・スケッチモードは「選ぶ」)へ戻す。`abort()` と `commandSucceeded()` が呼ぶ。 */
-  function returnToIdle(): void {
-    if (commandId !== idleCommandId) commandId = idleCommandId
+  /** 確定を送ったが成否が未確定の間。Enter の二度打ちと幽霊の出し直しを止める。失敗(`commitFailed()`)か終わり(`ended()`)で降りる。 */
+  let committed = false
+
+  /** 確定した verb がサーバで失敗した・送れなかったときに `App.svelte` が呼ぶ。打った値は残っているので、打ち直せるようにするだけ。 */
+  export function commitFailed(): void {
+    committed = false
+    focusFirstNumber()
+  }
+
+  /** 繋ぎ直したときに `App.svelte` が呼ぶ。送った確定の返事は来ないので、待っている印を降ろす(構えはサーバの配信が正)。 */
+  export function reconnected(): void {
+    committed = false
   }
 
   /**
@@ -428,29 +478,12 @@
    * 呼び出し側は自分が出した操作(`client_op`)の応答だと確認してから呼ぶこと: AIが別の対象へ実行したverbの成功で人の入力中のコマンドを畳んではならない。
    */
   export function commandSucceeded(): void {
-    const ended = commandActive ? commandId : null
-    returnToIdle()
-    if (ended !== null) onEnd(ended)
+    // 構えた verb はサーバが畳み、配信で `command` が null になって `ended()` が走る。ここで畳むのはローカルのコマンド(測定)だけ。
+    if (sharedId !== null) return
+    localCommandId = idleCommandId
   }
 
-  /** 直前に確定したときの入力(失敗したときだけ戻す)。OCCTのフィレットは半径に対して単調でない(§7: r=10.0 失敗 / r=10.5 成功)ので、失敗したら近くの値で打ち直すのが実際の使い方。選択はコア側にあるので戻すのは打った値だけ。 */
-  let lastInputs: {
-    numbers: Record<string, string>
-    points: Record<string, Point2>
-    choices: Record<string, string>
-    picks: Record<string, SelectionRef>
-  } | null = null
-
-  export function restoreLastInputs(): void {
-    if (lastInputs === null) return
-    numberText = { ...lastInputs.numbers }
-    points = { ...lastInputs.points }
-    choices = { ...lastInputs.choices }
-    picks = { ...lastInputs.picks }
-    focusFirstNumber()
-  }
-
-  /** 中断。プレビューは投機的実行でサーバ側に何も残らないので、消すのは画面の幽霊と打ちかけの数値だけ。選択は消さない(`onEnd` でアプリ層が全解除する)。戻り先は `defaultCommandId ?? null`(`commandSucceeded()` と同じ `returnToIdle()`)。 */
+  /** 中断。プレビューは投機的実行でサーバ側に何も残らないので、消すのは画面の幽霊と打ちかけの数値だけ。選択は消さない(構えた verb はサーバが、ローカルのものは `onEnd` でアプリ層が全解除する)。 */
   function abort(): void {
     const wasArmed =
       Object.values(numberText).some((text) => text !== '') ||
@@ -459,26 +492,78 @@
       Object.keys(planes).length > 0 ||
       Object.keys(picks).length > 0 ||
       ready
-    const ended = commandActive ? commandId : null
-    reset()
-    returnToIdle()
-    if (ended !== null) onEnd(ended)
+    if (sharedId !== null) {
+      onEndShared() // 配信で `command` が null になり `ended()` が走る
+    } else {
+      localCommandId = idleCommandId // 入れ替わりを `ended()` が拾う
+    }
     if (wasArmed) onNote('中断した(文書は変わっていない)')
   }
 
-  function reset(): void {
+  /** 幽霊を消す(投げかけも止める)。 */
+  function cancelPreview(): void {
+    if (previewTimer) clearTimeout(previewTimer)
+    previewTimer = null
+    previewedKey = null
+    onCancelPreview()
+  }
+
+  /** 集めかけの引数を全部捨てる。起動の入れ替わり(`entered()` / `ended()`)とローカルのコマンドの確定が呼ぶ。 */
+  function resetInputs(): void {
     numberText = {}
     points = {}
     choices = {}
     planes = {}
     picks = {}
     armedPick = null
-    // 即適用の待ち受けも降ろす。構え直すのは `start()` だけ。
+    committed = false
+    // 即適用の待ち受けも降ろす。構え直すのは `entered()` / `restart()` だけ。
     armedSelections = null
-    if (previewTimer) clearTimeout(previewTimer)
-    previewTimer = null
-    previewedKey = null
-    onCancelPreview()
+    cancelPublish()
+    lastPublished = {}
+    sentKeys = new Set()
+    unmapped = new Set()
+    everLive = new Set()
+    cancelPreview()
+  }
+
+  /**
+   * 起動中のコマンドの入れ替わりを1箇所で捕まえる(配信された `shared` とローカルの両方)。
+   * 入ったら引数を空にして即適用の待ち受けを構え、配信された引数(AI が付けて起動した半径)を欄へ写す。
+   * 作り直しの直後に既に起動していれば(再読み込み・モードの作り直し)それも「入った」として扱う。
+   */
+  let seenCommandId: string | null = idleCommandId
+  $effect(() => {
+    const now = commandId
+    if (now === seenCommandId) return
+    const before = seenCommandId
+    seenCommandId = now
+    untrack(() => {
+      if (before !== null && before !== idleCommandId) ended(before)
+      if (now !== null && now !== idleCommandId) entered(now)
+    })
+  })
+
+  function entered(verb: string): void {
+    restart()
+    onStart(verb)
+    syncFromShared()
+    focusFirstNumber()
+    // 読み取り専用(`query`)だけは、起動時に揃っていればその場で走らせる(`needsEnter` のdocstring末尾の例外)。測るだけなら取り返しのつかないものが無い。
+    if (command !== null && categoryOf(command) === 'query' && !needsEnter(command) && missing === null) {
+      commit()
+    }
+  }
+
+  function ended(verb: string): void {
+    resetInputs()
+    onEnd(verb)
+  }
+
+  /** 引数を空にして即適用の待ち受けを構える。ここで控えた数より後のクリックだけが即適用の引き金になる(起動前から揃っていた選択では発火せず、Enterかボタンの押し直しが適用の1手)。 */
+  function restart(): void {
+    resetInputs()
+    armedSelections = selfSelections
   }
 
   /** 起動中のコマンドのボタンをもう一度押したとき。揃っていれば確定、揃っていなければ構え直す(即適用は1起動につき1回なので、続けてやるための1手がここに要る)。 */
@@ -488,27 +573,207 @@
       commit()
       return
     }
-    start(command.id)
+    restart()
+    onStart(command.id)
+    // 構えた verb は引数もサーバで置き直す(同じ verb の起動し直しは選択を残す)。
+    if (sharedId !== null) onBegin(command.id, {})
+    focusFirstNumber()
   }
 
   // 外から呼ばれない(ツールバーのボタンがこの中から呼ぶだけ)。
   function start(nextId: string): void {
-    reset()
-    commandId = nextId
-    // ここで控えた数より後のクリックだけが即適用の引き金になる(起動前から揃っていた選択では発火せず、Enterかボタンの押し直しが適用の1手)。
-    armedSelections = selfSelections
-    onStart(nextId)
-    focusFirstNumber()
-    // 読み取り専用(`query`)だけは、起動時に揃っていればその場で走らせる(`needsEnter` のdocstring末尾の例外)。測るだけなら取り返しのつかないものが無い。
-    if (command !== null && categoryOf(command) === 'query' && !needsEnter(command) && missing === null) {
-      commit()
+    if (isStageable(nextId)) {
+      // 構える対象はサーバへ頼むだけ。配信された `shared` で `entered()` が走る(起動の瞬間に自分で状態を持たない)。
+      localCommandId = idleCommandId
+      onBegin(nextId, {})
+      return
     }
+    if (sharedId !== null) onEndShared() // 別の verb へ移るのは前の verb の終わり
+    localCommandId = nextId // 入れ替わりを `entered()` が拾う
   }
 
-  /** モードに入った瞬間から起動しておく(`startCommandId`)。`start()` を通すのが要点: 即適用の待ち受け(`armedSelections`)を構えるのは `start()` だけで、代入だと「面をクリックしてスケッチを貼る」経路が死ぬ。`onMount` で1回だけ(モード変更は `App.svelte` が `{#key}` で作り直す)。 */
+  /** モードに入った瞬間から起動しておく(`startCommandId`)。既に同じ verb が構えてあれば(作り直し)頼み直さない。`onMount` で1回だけ(モード変更は `App.svelte` が `{#key}` で作り直す)。 */
   onMount(() => {
-    if (startCommandId !== undefined) start(startCommandId)
+    if (startCommandId !== undefined && shared?.verb !== startCommandId) start(startCommandId)
   })
+
+  // ---------------------------------------------------------------- サーバの作業空間との同期(issue #153)
+  /** サーバが持っていると信じている引数(自分の送信と配信の写し)。配信がこれと同じなら自分の送信の返りなので欄に触らない。 */
+  let lastPublished: Record<string, unknown> = {}
+  let publishTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * サーバへ出す引数。verb のサーバ側引数名で、宣言(`COMMAND_PARAMS`)にある名前だけ。選択・図形ID・貼る先の面は載せない
+   * (対象は共有選択から)。出すのは今要る引数(`liveArgs`。`when` で隠れた欄の値は出さない)で、数値・文字列・点・ピックは
+   * そのまま、選択肢は `sends` でサーバの値に読み替える。
+   */
+  const published = $derived.by<Record<string, unknown> | null>(() => {
+    if (sharedId === null || command === null) return null
+    const allowed = new Set<string>(COMMAND_PARAMS[command.id as keyof typeof COMMAND_PARAMS] ?? [])
+    const out: Record<string, unknown> = {}
+    for (const spec of liveArgs) {
+      if (spec.kind === 'selection' || spec.kind === 'entities' || spec.kind === 'plane') continue
+      let value: unknown = values[spec.name]
+      if (spec.kind === 'choice') {
+        const option = spec.options.find((candidate) => candidate.value === value)
+        value = option === undefined ? undefined : choiceSends(option)
+      }
+      if (value === undefined || value === null || value === '' || !allowed.has(spec.name)) continue
+      out[spec.name] = value
+    }
+    // 揃っていれば `build` の結果が勝つ(点から導いた寸法・貼る先の平面名はここでしかサーバ側の名前にならない)。
+    if (built?.ok) {
+      for (const [name, value] of Object.entries(built.args)) {
+        if (allowed.has(name) && value !== undefined && value !== null) out[name] = value
+      }
+    }
+    return out
+  })
+
+  $effect(() => {
+    const next = published
+    if (next === null) return
+    const snapshot = { ...next }
+    untrack(() => {
+      if (publishTimer) clearTimeout(publishTimer)
+      publishTimer = setTimeout(() => {
+        publishTimer = null
+        flushPublish(snapshot)
+      }, PUBLISH_DEBOUNCE_MS)
+    })
+  })
+
+  function cancelPublish(): void {
+    if (publishTimer) clearTimeout(publishTimer)
+    publishTimer = null
+  }
+
+  /** 自分がこの起動で実際に出したことのあるキー(`build` が作る `base_plane` / `mode` のように欄の名前と違うものを含む)。 */
+  let sentKeys = new Set<string>()
+  /** 配信された値を欄へ写せなかったキー(3択に無い荷重の向き・`sends: null` の選択肢に紐づく値など)。欄が空でも「人が消した」ではない。 */
+  let unmapped = new Set<string>()
+  /** この起動で一度でも画面に出た欄の名前。出たことのある欄が `when` で隠れたら、その値は人が切り替えで捨てたもの(回転→並進の `angle`)。 */
+  let everLive = new Set<string>()
+  $effect(() => {
+    for (const spec of liveArgs) everLive.add(spec.name)
+  })
+
+  /**
+   * `lastPublished` との差分だけ送る。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。
+   * 欄から消えたキーを null で外すのは、**自分が出したことのあるキー**か、**一度でも画面に出た欄のキーで、配信を欄へ写せなかった
+   * ものでない**ものだけ: 人が欄を空にした・モードを切り替えて欄を隠したのは「まだ決めていない」へ戻す意思で、AI が付けた値でも
+   * 外す(残すと AI の `apply_command` が並進に回転の引数を併合して断られる)。一度も出ていない欄(再読み込みで
+   * `base_plane: 'face'` が戻らず隠れたままの `plane_face`)・欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)・
+   * 写せなかった値は触らない。
+   */
+  function flushPublish(next: Record<string, unknown>): void {
+    if (sharedId === null || committed) return
+    const fields = new Set(
+      (command?.args ?? [])
+        .filter((spec) => spec.kind === 'number' || spec.kind === 'text' || spec.kind === 'point' || spec.kind === 'pick' || spec.kind === 'choice')
+        .map((spec) => spec.name),
+    )
+    const delta: Record<string, unknown> = {}
+    for (const [name, value] of Object.entries(next)) {
+      if (JSON.stringify(value) !== JSON.stringify(lastPublished[name])) delta[name] = value
+    }
+    for (const name of Object.keys(lastPublished)) {
+      if (name in next) continue
+      const cleared = fields.has(name) && everLive.has(name) && !unmapped.has(name)
+      if (cleared || sentKeys.has(name)) delta[name] = null
+    }
+    if (Object.keys(delta).length === 0) return
+    for (const [name, value] of Object.entries(delta)) {
+      if (value !== null) sentKeys.add(name)
+      unmapped.delete(name)
+    }
+    lastPublished = { ...lastPublished, ...delta }
+    for (const name of Object.keys(delta)) if (delta[name] === null) delete lastPublished[name]
+    onSetArgs(delta)
+  }
+
+  /** 欄を離れたら待たずに出す(打鍵中に外から来た値を欄に写さなかったぶんを、ここで自分の値で上書きする)。 */
+  function flushNow(): void {
+    cancelPublish()
+    if (published !== null) flushPublish(published)
+  }
+
+  $effect(() => {
+    const remote = shared?.args
+    if (sharedId === null || remote === undefined) return
+    untrack(() => syncFromShared())
+  })
+
+  /**
+   * 配信された引数を欄へ写す(AI か別の画面が触ったぶん)。自分の送信の返り(`lastPublished` と同じ)なら何もしない。
+   * 打っている最中の欄は奪わず(サーバの値は後勝ちだが、打ち終わりの blur / Enter で自分の値が勝つ)、札で知らせる。
+   */
+  function syncFromShared(): void {
+    if (shared === null || command === null || sharedId === null) return
+    const remote = shared.args
+    if (JSON.stringify(remote) === JSON.stringify(lastPublished)) return
+    const active = document.activeElement
+    const kept: string[] = []
+    unmapped = new Set()
+    for (const spec of command.args) {
+      const value = remote[spec.name]
+      if (spec.kind === 'number') {
+        const text = value === undefined ? '' : String(value)
+        if ((numberText[spec.name] ?? '') === text) continue
+        if (active instanceof HTMLElement && active.id === spec.inputId) {
+          kept.push(`${spec.label}=${text === '' ? '(空)' : text}`)
+          continue
+        }
+        numberText = { ...numberText, [spec.name]: text }
+      } else if (spec.kind === 'choice') {
+        if (value === undefined) {
+          // サーバの値にならない選択肢(鏡映面の「面を選ぶ」。`sends: null`)は、サーバに無いことが「選んでいない」を意味しない。
+          const current = spec.options.find((candidate) => candidate.value === choices[spec.name])
+          if (current === undefined || choiceSends(current) !== null) {
+            const { [spec.name]: _removed, ...rest } = choices
+            choices = rest
+          }
+        } else {
+          // サーバの値から選択肢を逆引きする(`copy: true` → 'copy'、`direction: [0,0,-1]` → 'down')。対応が無ければ触らず、消しもしない。
+          const option = spec.options.find((candidate) => JSON.stringify(choiceSends(candidate)) === JSON.stringify(value))
+          if (option !== undefined) choices = { ...choices, [spec.name]: option.value }
+          else unmapped.add(spec.name)
+        }
+      } else if (spec.kind === 'text') {
+        const text = value === undefined ? '' : String(value)
+        if ((textValues[spec.name] ?? '') === text) continue
+        if (active instanceof HTMLElement && active.id === spec.inputId) {
+          kept.push(`${spec.label}=${text === '' ? '(空)' : text}`)
+          continue
+        }
+        textValues = { ...textValues, [spec.name]: text }
+      } else if (spec.kind === 'pick') {
+        if (value !== null && typeof value === 'object') {
+          picks = { ...picks, [spec.name]: value as SelectionRef }
+        } else if (value === undefined) {
+          const { [spec.name]: _removed, ...rest } = picks
+          picks = rest
+        } else {
+          unmapped.add(spec.name)
+        }
+      } else if (spec.kind === 'point') {
+        if (Array.isArray(value) && value.length === 2) {
+          points = { ...points, [spec.name]: [Number(value[0]), Number(value[1])] }
+        } else if (value === undefined) {
+          const { [spec.name]: _removed, ...rest } = points
+          points = rest
+        } else {
+          unmapped.add(spec.name)
+        }
+      } else if (spec.kind === 'plane') {
+        // サーバ側の名前は `base_plane`(面は載らない: 面は選択にあるので、無ければ局所の値をそのまま保つ)。
+        const base = remote.base_plane
+        if (typeof base === 'string') planes = { ...planes, [spec.name]: base }
+      }
+    }
+    lastPublished = { ...remote }
+    if (kept.length > 0) onNote(`外から ${kept.join(' / ')} に変わったが、打っている途中なので欄は変えていない`)
+  }
 
   /** verb 引数 overlay の実高さ。`.app` の `--toolbar-overlay-h` とサイドバー位置に渡す。 */
   let overlayEl = $state<HTMLDivElement | null>(null)
@@ -541,6 +806,7 @@
   onDestroy(() => {
     overlayObserver?.disconnect()
     syncOverlayHeight(null)
+    cancelPublish()
   })
 
   /** スケッチ平面のクリックを、待っている点引数へ入れる。待っている点が無ければ何もしない(上書きすると、揃った後のクリックで図形が動いて見える)。 */
@@ -814,6 +1080,7 @@
           oninput={(event) => {
             textValues = { ...textValues, [spec.name]: (event.target as HTMLInputElement).value }
           }}
+          onblur={flushNow}
           onkeydown={(event) => onNumberKeydown(event, spec)}
         />
       {/each}
@@ -835,6 +1102,7 @@
           oninput={(event) => {
             numberText = { ...numberText, [spec.name]: (event.target as HTMLInputElement).value }
           }}
+          onblur={flushNow}
           onkeydown={(event) => onNumberKeydown(event, spec)}
         />
       {/each}

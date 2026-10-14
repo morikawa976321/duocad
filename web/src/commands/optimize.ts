@@ -12,16 +12,16 @@ import type { BuildResult, CommandDef } from './command'
 const sendNothing = (): BuildResult<Record<string, never>> => ({ ok: true, args: {} })
 
 /** 荷重の向きの選択肢。`down` はUI専用の言い回しで、送るのは `[0, 0, -1]`(`duocad/optimize.py` は世界軸を vector で表す)。 */
-const LOAD_DIRECTION_OPTIONS = [
-  { value: 'normal', label: '面の外向き法線', buttonId: 'load-direction-normal' },
-  { value: '-normal', label: '面を押し込む向き', buttonId: 'load-direction-negnormal' },
-  { value: 'down', label: '下向き(-Z)', buttonId: 'load-direction-down' },
-] as const
-
 function directionArg(value: string): 'normal' | '-normal' | [number, number, number] {
   if (value === 'down') return [0, 0, -1]
   return value as 'normal' | '-normal'
 }
+
+const LOAD_DIRECTION_OPTIONS = [
+  { value: 'normal', label: '面の外向き法線', buttonId: 'load-direction-normal', sends: directionArg('normal') },
+  { value: '-normal', label: '面を押し込む向き', buttonId: 'load-direction-negnormal', sends: directionArg('-normal') },
+  { value: 'down', label: '下向き(-Z)', buttonId: 'load-direction-down', sends: directionArg('down') },
+] as const
 
 export const SET_PRESERVE_BODIES: CommandDef<'set_preserve_bodies'> = {
   id: 'set_preserve_bodies',

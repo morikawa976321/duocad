@@ -76,6 +76,20 @@ export interface SelectionState {
   count: number
 }
 
+/**
+ * 起動中のコマンド(`duocad/workspace.py`)。`null` は無起動。人の画面もAIも同じ操作(`begin_command` /
+ * `set_command_args` / `end_command` / `apply_command`)で触り、出所を持たない。`args` は verb のサーバ側引数名で、
+ * 入っているキーだけ。`revision` は作業空間の版(変更のたびに進む)。
+ */
+export interface CommandState {
+  verb: string
+  args: Record<string, unknown>
+  revision: number
+}
+
+/** モード(`duocad/workspace.py`)。画面はこれに従う(`enter_sketch` / `leave_sketch` …)。 */
+export type ModeState = { kind: 'idle' } | { kind: 'sketch'; sketch_id: string } | { kind: 'optimize' }
+
 /** 1Bodyぶんの軽量な状態(geometryを含まない)。パーツ一覧はこれだけで描ける。 */
 export interface BodyMeta {
   body_id: string
@@ -254,6 +268,12 @@ export interface ServerState {
   document_open: boolean
   /** 形状最適化の条件(第3のモード)。verb起動時のプリセレクトと役割の色はここが正。 */
   optimize: OptimizeState
+  /** 起動中のコマンド(作業空間)。`null` は無起動。 */
+  command: CommandState | null
+  /** モード(作業空間)。 */
+  mode: ModeState
+  /** 文書の世代(`Session.generation`。開く・新規・閉じるで進む)。変わったら前の文書の記憶(スケッチの戻り先)を捨てる。 */
+  generation: number
 }
 
 /**
@@ -932,6 +952,21 @@ export interface Session {
   /** 参照ごとに、あれば外し無ければ足す(素のクリック。AI の `toggle_selection` と同じ操作)。 */
   toggleSelection(refs: SelectionRef[], clientOp: number): void
   clearSelection(clientOp: number): void
+  // ---------------------------------------------------------------- B2: 作業空間(起動中のコマンド・モード。issue #153)
+  /**
+   * verb を起動して引数を集め始める(ツールバーのクリック)。応答は状態配信の `command`。AI の `begin_command` と同じ操作で、
+   * 画面は起動中の verb を自分で持たず、配信された `command` に従う(`CommandHost.svelte`)。
+   */
+  beginCommand(verb: string, args: Record<string, unknown>, clientOp: number): void
+  /** 起動中の verb の引数を併合する(入力欄の値。`null` で外す)。 */
+  setCommandArgs(args: Record<string, unknown>, clientOp: number): void
+  /** 起動中の verb を確定せずに畳む(Esc)。選択も空になる(サーバの規則)。 */
+  endCommand(clientOp: number): void
+  /** 既存のスケッチの編集モードへ入る(応答は状態配信の `mode`)。 */
+  enterSketch(sketchId: string, clientOp: number): void
+  leaveSketch(clientOp: number): void
+  enterOptimize(clientOp: number): void
+  leaveOptimize(clientOp: number): void
   /**
    * verbを投機的に実行して形だけ測らせる。文書は変わらない(サーバが元へ戻す)。
    * 応答は `onPreview` へ。`previewId` は古い応答を捨てるための番号。
@@ -1400,6 +1435,27 @@ export function createSession(hooks: SessionHooks): Session {
     clearSelection(clientOp) {
       send({ cmd: 'clear_selection', client_op: clientOp }, true)
     },
+    beginCommand(verb, args, clientOp) {
+      send({ cmd: 'begin_command', verb, args, client_op: clientOp })
+    },
+    setCommandArgs(args, clientOp) {
+      send({ cmd: 'set_command_args', args, client_op: clientOp })
+    },
+    endCommand(clientOp) {
+      send({ cmd: 'end_command', client_op: clientOp })
+    },
+    enterSketch(sketchId, clientOp) {
+      send({ cmd: 'enter_sketch', sketch_id: sketchId, client_op: clientOp })
+    },
+    leaveSketch(clientOp) {
+      send({ cmd: 'leave_sketch', client_op: clientOp })
+    },
+    enterOptimize(clientOp) {
+      send({ cmd: 'enter_optimize', client_op: clientOp })
+    },
+    leaveOptimize(clientOp) {
+      send({ cmd: 'leave_optimize', client_op: clientOp })
+    },
     preview(verb, args, previewId) {
       send({ cmd: 'preview', verb, args, preview_id: previewId }, true)
     },
@@ -1434,7 +1490,7 @@ export function createSession(hooks: SessionHooks): Session {
       send({ cmd: 'ai_get_status' })
     },
     aiConfigure(provider, baseUrl) {
-      send({ cmd: 'ai_configure', provider, base_url: baseUrl ?? null })
+      send({ cmd: 'ai_configure', provider, ...(baseUrl === undefined ? {} : { base_url: baseUrl }) })
     },
     aiSetThinking(thinking) {
       send({ cmd: 'ai_set_thinking', thinking })

@@ -195,10 +195,20 @@ export interface PointArgSpec extends ArgSpecCommon {
   kind: 'point'
 }
 
-/** 2つ以上から1つ選ぶ引数(今は押し出しの結合/切り取りだけ)。既定値を持たない(`join` 既定だと「切り取るつもりで足した」が黙って通る。サーバ側も `mode` を必須にしてある)。 */
+/**
+ * 2つ以上から1つ選ぶ引数。既定値を持たない(`join` 既定だと「切り取るつもりで足した」が黙って通る。サーバ側も `mode` を必須にしてある)。
+ * `sends` は共有の作業空間(`state.command.args`)へ出すサーバ側の値(省略なら `value` そのまま。`build` と同じ読み替えをここにも
+ * 書く: `copy` の 'copy' → true、荷重の 'down' → [0,0,-1])。サーバの値にならない選択肢(鏡映面の「面を選ぶ」)は `null`。
+ * 配信された値を欄へ戻すときも同じ対応で引く(`CommandHost.svelte` の `syncFromShared`)。
+ */
 export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
-  options: Array<{ value: string; label: string; buttonId: string }>
+  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown }>
+}
+
+/** 選択肢がサーバへ出す値(`sends` が無ければ `value`)。`null` は「出さない」。 */
+export function choiceSends(option: ChoiceArgSpec['options'][number]): unknown {
+  return option.sends === undefined ? option.value : option.sends
 }
 
 /** スケッチの図形を選ぶ引数(反復のverb)。選択引数と別物: スケッチの図形は共有選択集合に入らない(コアの `SELECTABLE_KINDS`)。値はスケッチパネルで選んだ図形のIDで、`CommandHost` へは `entities` プロパティで渡る。 */

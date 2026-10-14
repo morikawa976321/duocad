@@ -31,6 +31,7 @@ from . import (
     selection,
     sketch,
 )
+from .workspace import CommandState, NoCommand, Workspace, merge_args, stageable, stageable_verb_names
 from .document import Document
 from .entry import entries, entry_for
 from .measure import inspect_selection, measure_selection
@@ -151,6 +152,8 @@ class Session:
         self.view = DocumentView(self.document, self.deviation, self.warnings)
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
+        #: 作業空間(起動中のコマンド・モード。issue #153)。選択・可視性と同じ共有の短命状態で、文書の差し替えで空に戻る。
+        self.workspace = Workspace()
         self._suppress_events = 0  # >0 の間は `_emit` が配らない(プレビュー。`preview` 参照)
         #: 形状最適化の中断の旗。別スレッド(実行はワーカー、`cancel_optimization` はイベントループ)から触るので `Event`。
         self._optimize_cancel = threading.Event()
@@ -302,6 +305,8 @@ class Session:
         state["current_name"] = self._current_name
         state["saved"] = self.saved
         state["document_open"] = self._open
+        state["generation"] = self._generation
+        state.update(self.workspace.to_state())
         return state
 
     def delta(self, known_revisions: dict) -> dict:
@@ -436,6 +441,167 @@ class Session:
             "client_op": client_op,
         }
 
+    # ---------------------------------------------------------------- 作業空間(起動中のコマンド・モード。issue #153)
+    # 選択・可視性と同じ共有の短命状態(`duocad/workspace.py`)。verb ではないので操作ログに載らず undo でも戻らない。
+    # 人(画面のツールバー・入力欄・Esc・Enter・スケッチへの出入り)も AI も同じメソッドを通り、出所は持たない。
+    def begin_command(self, verb: Any, args: Optional[dict] = None, client_op: Optional[int] = None) -> dict:
+        """verb を起動して how を集め始める(画面のツールバーのクリックと同じ)。変更イベント `change: "command"` を返す。
+
+        起動できるのはスケッチとフィーチャの verb(`workspace.stageable`)。別の verb が起動中なら置き換え、そのとき選択を
+        空にする(別の verb へ移るのは前の verb の終わり。docs/DESIGN_DECISIONS.md「隠したボディ・選択・可視性」)。同じ verb
+        の起動し直しは引数を置き直すだけで選択は残す。`args` に `sketch_id` があれば、そのスケッチの編集モードへ入る
+        (AI がスケッチの verb を構えたとき、人の画面がそのスケッチへ入るため)。
+        """
+        self._require_open()
+        command = catalog.BY_NAME.get(verb)
+        if command is None or not stageable(command):
+            raise ValueError(
+                f"{verb!r} は起動できる verb ではない(起動して引数を集めるのはスケッチとフィーチャの verb: "
+                f"{', '.join(stageable_verb_names())})"
+            )
+        staged = merge_args(command, {}, args or {})
+        sketch_id = staged.get("sketch_id")
+        if sketch_id is not None and not self._has_sketch(sketch_id):
+            raise KeyError(f"no such sketch: {sketch_id!r}")
+        # ここから下は失敗しない(検査を全部済ませてから状態を変える。途中で落ちると選択だけ消えて配信もされない)。
+        current = self.workspace.command
+        if current is not None and current.verb != verb:
+            selection.clear_selection(self.document)
+        if sketch_id is not None:
+            self._apply_mode({"kind": "sketch", "sketch_id": sketch_id})
+        self.workspace.command = CommandState(verb=verb, args=staged)
+        self.workspace.bump()
+        return self._emit(self._command_event(client_op))
+
+    def set_command_args(self, args: Optional[dict] = None, client_op: Optional[int] = None) -> dict:
+        """起動中の verb の引数を併合する(入力欄に打つのと同じ)。`None` の値はそのキーを外す。必須は見ない。"""
+        current = self._require_command()
+        current.args = merge_args(catalog.BY_NAME[current.verb], current.args, args or {})
+        self.workspace.bump()
+        return self._emit(self._command_event(client_op))
+
+    def end_command(self, client_op: Optional[int] = None) -> dict:
+        """起動中の verb を確定せずに畳む(Esc)。**コマンドが終わったら選択も全解除**(2026-10-03 本人決定。誰が終えても同じに
+        するためここ1箇所で行う)。無起動なら何もせずイベントだけ返す。
+        """
+        if self.workspace.command is not None:
+            self.workspace.command = None
+            selection.clear_selection(self.document)
+            self.workspace.bump()
+        return self._emit(self._command_event(client_op))
+
+    def apply_command(self, args: Optional[dict] = None) -> dict:
+        """起動中の verb を今の選択と引数で確定する(Enter)。応答は verb の封筒(`apply` と同じ)。
+
+        必須は画面と同じ厳しさ(`Command.staged_schema`)。スケッチの verb で `sketch_id` が無ければ編集中のスケッチを入れる
+        (画面が自分のモードから補っていた分をここへ寄せる)。成功すれば `_settle_workspace` がコマンドを畳み、失敗すれば
+        構えたまま残る(OCCT のフィレットは半径次第で失敗するので「近くの値で打ち直す」が要る)。
+        """
+        current = self._require_command()
+        command = catalog.BY_NAME[current.verb]
+        merged = merge_args(command, current.args, args or {})
+        if (
+            "sketch_id" not in merged
+            and any(p.name == "sketch_id" for p in command.params)
+            and self.workspace.editing_sketch() is not None
+        ):
+            merged["sketch_id"] = self.workspace.editing_sketch()
+        problem = catalog.check_arguments(command.staged_schema(), merged)
+        if problem is not None:
+            raise ValueError(problem)
+        return self.apply(current.verb, merged)
+
+    def enter_sketch(self, sketch_id: Any, client_op: Optional[int] = None) -> dict:
+        """既存のスケッチの編集モードへ入る。変更イベント `change: "mode"` を返す。無いスケッチは KeyError。"""
+        self._require_open()
+        if not self._has_sketch(sketch_id):
+            raise KeyError(f"no such sketch: {sketch_id!r}")
+        self._apply_mode({"kind": "sketch", "sketch_id": sketch_id})
+        return self._emit(self._mode_event(client_op))
+
+    def leave_sketch(self, client_op: Optional[int] = None) -> dict:
+        """スケッチの編集モードから通常へ戻る(他のモードなら何もしない)。"""
+        self._require_open()
+        if self.workspace.mode.get("kind") == "sketch":
+            self._apply_mode({"kind": "idle"})
+        return self._emit(self._mode_event(client_op))
+
+    def enter_optimize(self, client_op: Optional[int] = None) -> dict:
+        self._require_open()
+        self._apply_mode({"kind": "optimize"})
+        return self._emit(self._mode_event(client_op))
+
+    def leave_optimize(self, client_op: Optional[int] = None) -> dict:
+        self._require_open()
+        if self.workspace.mode.get("kind") == "optimize":
+            self._apply_mode({"kind": "idle"})
+        return self._emit(self._mode_event(client_op))
+
+    def _require_command(self) -> CommandState:
+        current = self.workspace.command
+        if current is None:
+            raise NoCommand("起動中のコマンドが無い(begin_command で verb を起動してから)")
+        return current
+
+    def _has_sketch(self, sketch_id: Any) -> bool:
+        return any(item.id == sketch_id for item in self.document.sketches)
+
+    def _apply_mode(self, mode: dict) -> None:
+        """モードを置き換える。変わるときは集めかけのコマンドを畳み(モードをまたいで引数を持ち越さない。画面の
+        `{#key mode.kind}` と同じ)、行き先で使えない選択を外す: 別のスケッチの図形(点・線)と、最適化モード以外での
+        ボディ参照(保持/除外の割り当てにしか使えない)。面・辺・頂点・領域はどのモードでも残す(スケッチを抜けて
+        そのまま押し出す等が実際の経路)。
+        """
+        if self.workspace.mode == mode:
+            return
+        next_sketch = mode.get("sketch_id")
+        unusable = [
+            item
+            for item in selection.get_selection(self.document).items
+            if ("sketch" in item and "entity" in item and item["sketch"] != next_sketch)
+            or (item.get("kind") == "body" and mode.get("kind") != "optimize")
+        ]
+        if unusable:
+            selection.modify_selection(self.document, add=(), remove=unusable)
+        self.workspace.mode = dict(mode)
+        self.workspace.command = None
+        self.workspace.bump()
+
+    def _settle_workspace(self, verb: Optional[str], extra: Optional[dict]) -> None:
+        """verb の適用・undo・redo の後で作業空間を整える(配る前に呼ぶ: 配信する状態に反映させる)。
+
+        - 構えていた verb が確定したら畳む。一発の verb(`fillet(radius)` / 画面の Enter)が同じ名前で通ったときも同じ。
+          別の verb なら触らない(その verb の選択リセットで対象は消えるが、起動は人の意思なので勝手に閉じない)
+        - スケッチを作ったら**誰が作っても**そのスケッチへ入る(画面が自分の操作の成功でだけ入っていた分をここへ寄せる)
+        - 編集中のスケッチが消えたら(削除・undo)通常へ戻る
+
+        プレビュー(投機実行)の間は触らない —— 投機的に通った verb で構えを畳むと、確定していないのに画面の欄が消える。
+        """
+        if self._suppress_events:
+            return
+        changed = False
+        if self.workspace.command is not None and self.workspace.command.verb == verb:
+            self.workspace.command = None
+            changed = True
+        created = (extra or {}).get("sketch_id") if verb in ("sketch_create", "sketch_create_offset") else None
+        if created is not None and self.workspace.mode != {"kind": "sketch", "sketch_id": created}:
+            self.workspace.mode = {"kind": "sketch", "sketch_id": created}
+            self.workspace.command = None
+            changed = True
+        editing = self.workspace.editing_sketch()
+        if editing is not None and not self._has_sketch(editing):
+            self.workspace.mode = {"kind": "idle"}
+            self.workspace.command = None
+            changed = True
+        if changed:
+            self.workspace.bump()
+
+    def _command_event(self, client_op: Optional[int]) -> dict:
+        return {"change": "command", "command": self.workspace.command_state(), "client_op": client_op}
+
+    def _mode_event(self, client_op: Optional[int]) -> dict:
+        return {"change": "mode", "mode": dict(self.workspace.mode), "client_op": client_op}
+
     # ---------------------------------------------------------------- B: プレビュー(投機的実行)
     @_edits_document
     def preview(self, verb: str, args: Optional[dict] = None) -> dict:
@@ -510,6 +676,7 @@ class Session:
         if operation is None:
             raise ValueError("取り消せる操作が無い")
         self._reset_selection_if_needed("undo")
+        self._settle_workspace(None, None)
         return self._emit({"verb": "undo", "seq": operation.seq, "undone": operation.verb})
 
     @_edits_document
@@ -518,6 +685,7 @@ class Session:
         if operation is None:
             raise ValueError("やり直せる操作が無い")
         self._reset_selection_if_needed("redo")
+        self._settle_workspace(None, None)
         return self._emit({"verb": "redo", "seq": operation.seq, "redone": operation.verb})
 
     # ---------------------------------------------------------------- verb の適用
@@ -542,6 +710,7 @@ class Session:
         operation = self.document.log.entries[-1]
         self._applied_count += 1
         self._reset_selection_if_needed(operation.verb)
+        self._settle_workspace(operation.verb, extra)
         payload: dict[str, Any] = {"verb": operation.verb, "seq": operation.seq}
         if extra:
             payload.update(extra)
@@ -1119,6 +1288,7 @@ class Session:
         self._setup_floor_seq = 0
         self._applied_count += 1
         self._generation += 1
+        self.workspace.reset()
 
     def list_documents(self) -> dict:
         """`models_dir` の中身を一覧にする(名前/更新日時/作成日時/サムネイルの版)。verbではない。

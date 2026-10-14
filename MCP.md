@@ -19,7 +19,8 @@
 | スケッチ | `sketch_create` / `sketch_create_offset` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` —— 最後の1つは選択の複数の領域を、へこみに沿って包む**単一の領域線**（線分と円弧だけ）を同じスケッチへ足す。`radius`（追従半径 R）と `offset`（d・負で内へ）は省略で 0。1つの領域にならないと失敗して何も変わらない |
 | フィーチャ | `extrude` / `fillet` / `chamfer` / `shell_body` / `boolean_body` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `delete` / `delete_items` / `rename` |
 | 可視性 | `set_visible` / `set_sketch_visible` —— ボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない。**名前つき寸法の打ち直し（`set_parameter`）は公開していない**（人間側に口が無いため。口ができたら人とAIの両方へ同時に出す。`describe_document` はパラメータ名と値を返す） |
-| 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` —— 保持/除外ソリッド・拘束面・荷重面の条件を置く（ボディと拘束は集合代入。荷重は大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`）。**安定版には出さない**（凍結中。docs/STABLE.md「安定版で出さない機能」） |
+| 作業空間 | `get_command` / `begin_command` / `set_command_args` / `end_command` / `apply_command` / `enter_sketch` / `leave_sketch` —— **起動中の verb と途中の引数・モードを人の画面と共有する**(issue #153)。`begin_command(verb)` で起動すると人の画面にその verb が起動し、対象の候補(辺など)が見える。人が画面で起動した verb と打ちかけの引数は `describe_document` / `get_command` の `command` に見え、`set_command_args` で引数を足し、`apply_command` で確定する(人の Enter と同じ)。`end_command` は人の Esc。起動・引数・畳む・モードの操作は操作ログに載らず undo では戻らない（`apply_command` が確定した形の変更はログに載り、undo で戻る）。スケッチを作ると誰が作ってもそのスケッチへ入り、`enter_sketch` / `leave_sketch` で出入りする |
+| 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` / `enter_optimize` / `leave_optimize` —— 保持/除外ソリッド・拘束面・荷重面の条件を置く（ボディと拘束は集合代入。荷重は大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`）。**安定版には出さない**（凍結中。docs/STABLE.md「安定版で出さない機能」） |
 | 入出力 | `import_step` / `export_step` / `export_stl` / `add_mesh_body` —— 最後の1つは**計算で作った三角形メッシュ**をボディとして足す（表示とSTL書き出しだけ。編集verbは断られる） |
 | 履歴 | `undo` / `redo` |
 
@@ -47,13 +48,16 @@
 5. `import_svg(sketch_id, path)` はSVGの図形を**いま開いているスケッチへ**足す（新しいスケッチは作らない —— 無ければ先に
    `sketch_create`）。戻り値は足した `entity_ids` と `region_count`。**領域は1枚のSVGに複数あるのが普通**（文字の内側の穴・離れた
    図形）なので、押し出す前に `describe_document(include_regions=True)` で面積を見て選ぶ
-6. 取り消すのは `undo`（UIと同じ履歴）。**戻せるのは形を変えた操作だけ**で、可視性の切り替えと選択の変更は履歴に載っていない
+6. 取り消すのは `undo`（UIと同じ履歴）。**戻せるのは形を変えた操作だけ**で、可視性の切り替え・選択の変更・起動中のコマンドは履歴に載っていない
+7. 人と一緒に1つの verb を進めるなら `begin_command(verb)` → `set_selection` で止める（半径と確定は人に残す）。人が起動した verb は
+   `get_command` に見えるので、引数を `set_command_args` で足し、確定は `apply_command`。`no_command` は起動中のコマンドが無いときの失敗
 
 ## AIはどこまで自分でやるか
 
 **選択だけで止めるか verb まで進めるかは、人からの指示の文面から AI がその都度判断する**（本人の決定）。固定の規則（「曖昧なら止める」
 等）は置かない。選択だけで止めたときは**何を選んだかを述べる**。人は画面でその選択を見て、そのまま採用するか、AIに直しを頼むか、
-自分でトグルして直す。AIへ渡す文（MCPの `instructions` とアプリ内AIパネルのシステムプロンプト）は `catalog.agent_instructions()` の
+自分でトグルして直す。起動中の verb と途中の引数も同じ共有物（`begin_command` / `set_command_args` / `apply_command`。issue #153）で、
+AI が起動して対象まで選び how と確定を人に残す、人が起動したものを AI が埋める、のどちらの向きもできる。確定まで進めるかも指示の文面から判断する。AIへ渡す文（MCPの `instructions` とアプリ内AIパネルのシステムプロンプト）は `catalog.agent_instructions()` の
 1本で、この方針もそこに入っている。
 
 ## 起動
@@ -143,7 +147,7 @@ Claude Desktopはstdioで繋ぐので、**あちらがduocadのプロセスを�
   （`duocad/agent/`・README §4）と共有する。ツール数も宣言から数えるので、verbを足しても古くならない。
 - ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
   （`not_found` / `invalid_argument` / `selection_empty` /
-  `selection_kind_mismatch` / `invalid_predicate` / `busy` / `document_changed` / `internal` / `dimension_not_given`）。
+  `selection_kind_mismatch` / `invalid_predicate` / `busy` / `document_changed` / `no_command` / `internal` / `dimension_not_given`）。
   `dimension_not_given` は**アプリ内AIの経路だけ**の語（`duocad/agent/loop.py` が、人が量を言っていないのにモデルが埋めた寸法を実行前に
   止めるときに返す。MCP にはこのガードが無い）。`busy` は形状最適化の実行中に文書を変えるツールを呼んだとき（選択・表示の切り替え・
   書き出しは通る）。`selection_empty` は選択が**丸ごと空**のとき、`selection_kind_mismatch` は**空ではないが要求した種別が無い**とき

@@ -30,8 +30,8 @@ export function rejectAngle(value: number): string | null {
 // `buttonId` / `inputId` は `prefix`(`move-body` / `sketch-move`)から作る。実機検査が叩く id(`#move-body-dx` 等)はここで決まる。
 export function copyOptions(prefix: string): ChoiceArgSpec['options'] {
   return [
-    { value: 'move', label: '動かす', buttonId: `${prefix}-move` },
-    { value: 'copy', label: '複製する', buttonId: `${prefix}-copy` },
+    { value: 'move', label: '動かす', buttonId: `${prefix}-move`, sends: false },
+    { value: 'copy', label: '複製する', buttonId: `${prefix}-copy`, sends: true },
   ]
 }
 

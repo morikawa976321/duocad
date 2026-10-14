@@ -14,7 +14,6 @@
     edgeRef,
     faceRef,
     refKey,
-    refKind,
     refsOfKind,
     regionRef,
     sameRef,
@@ -83,7 +82,6 @@
     type SelectionRef,
     type ServerState,
     type ShapeRef,
-    type SketchEntityRef,
     type VerticesPayload,
   } from './session'
   import AiPanel from './AiPanel.svelte'
@@ -176,17 +174,22 @@
    * タグ付きユニオンにしたのは、スケッチと最適化モードが同時に真になる状態を書けなくするため。
    * `sketch-pending` はスケッチモードに入ったが、まだどのスケッチも開いていない状態(貼る先のクリック待ち)。
    *
-   * コアには持ち込まない: `duocad/` 側にモードの概念は無く(`Document` にフラグが無い・verbは
-   * 毎回 `sketch_id` を明示で受ける・MCPのツール一覧はモードによらず固定)、それが人とAIの
-   * 交互操作を成立させている。モード遷移は undo/操作ログ/MCP呼び出しのどれとも一致しないので
-   * verbではなく画面だけの状態。
+   * 正はサーバの作業空間(`state.mode`。issue #153)で、ここは派生。画面はモードを自分で持たず、入る・出るは
+   * `enter_sketch` / `leave_sketch` / `enter_optimize` / `leave_optimize` でサーバへ頼み、配信で変わる(AI の `enter_sketch` や
+   * `sketch_create` でも同じ経路で変わる)。`sketch-pending` はサーバでは「通常モードで `sketch_create` を構えている」。
+   * `Document` にはモードが無く、verb は毎回 `sketch_id` を明示で受け、MCP のツール一覧はモードによらず固定のまま。
+   * モード遷移は undo/操作ログのどれとも一致しない(選択と同じ短命の共有状態)。
    */
-  type Mode =
-    | { kind: 'idle' }
-    | { kind: 'sketch-pending'; resume: ResumeMode }
-    | { kind: 'sketch'; id: string; resume: ResumeMode }
-    | { kind: 'optimize' }
-  let mode = $state<Mode>({ kind: 'idle' })
+  type Mode = { kind: 'idle' } | { kind: 'sketch-pending' } | { kind: 'sketch'; id: string } | { kind: 'optimize' }
+  const mode = $derived.by<Mode>(() => {
+    const server = model?.mode ?? { kind: 'idle' }
+    if (server.kind === 'sketch') return { kind: 'sketch', id: server.sketch_id }
+    if (server.kind === 'optimize') return { kind: 'optimize' }
+    if (model?.command?.verb === 'sketch_create') return { kind: 'sketch-pending' }
+    return { kind: 'idle' }
+  })
+  /** スケッチを抜けたときの戻り先(最適化モードから入ったスケッチを抜けたら最適化モードへ戻る)。サーバは通常へ戻すので、こちらから入り直す。 */
+  let resumeMemory: ResumeMode = 'idle'
 
   /**
    * 今どのスケッチを編集しているか(null なら編集していない)。`mode` からの派生。
@@ -205,7 +208,8 @@
     useSelectedFaceAsPlane(): boolean
     wantsPick(): PickTarget | null
     setPick(ref: SelectionRef): boolean
-    restoreLastInputs(): void
+    commitFailed(): void
+    reconnected(): void
     commandSucceeded(): void
   } | null>(null)
 
@@ -344,10 +348,10 @@
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
       if (where === 'get_edges' || where === 'send') edgesAsked.clear()
       if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
-      // 失敗してもやり直せる状態にして返す。OCCTのフィレットは半径に対して単調でなく
-      // (§7: r=10.0 失敗 / r=10.5 成功)、近い値で打ち直すのが実際の使い方。
-      // 選択はコア側にあるので失敗では消えず、戻すのは打った値だけ。
-      if (CATEGORY_OF.get(where) === 'feature') host?.restoreLastInputs()
+      // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
+      // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
+      const category = CATEGORY_OF.get(where)
+      if (category === 'feature' || category === 'sketch' || where === 'send') host?.commitFailed()
     },
     onWarning: (message) => fail(`警告 ${message}`),
     onStatus: (next) => {
@@ -355,7 +359,10 @@
       status = next
       // (再)接続したら今のAI設定を取り直す(切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
-      if (next === 'open') session.femGetStatus()
+      if (next === 'open') {
+        session.femGetStatus()
+        host?.reconnected()
+      }
       // 人が最初の依頼を打っている間に、AIへツール定義を読ませておく(遅い機種で分単位かかる)。
       if (next === 'open') session.aiPrepare()
       // `models/` の一覧も取り直す(サーバの再起動・別セッションの保存で増減しうる)。
@@ -401,7 +408,7 @@
       // 使えないサーバに繋ぎ直したら、最適化モードとステップの表示に居残らない(断られる口を叩き続ける)。
       // スケッチの戻り先(`resume`)は `exitSketch` が同じ印で見る。
       if (!available) {
-        if (mode.kind === 'optimize') setMode({ kind: 'idle' })
+        if (mode.kind === 'optimize') session.leaveOptimize(nextOp())
         clearSearchSteps()
       }
       optimizeFinishing = running && finishing
@@ -433,7 +440,7 @@
         session.optimizeResolution(optimizeElementSizeMm)
       }
       // 走らせている文書へ戻ったら、実行中の表示が見えるモードへ入る(編集が断られる理由を画面に出す)。
-      if (mode.kind === 'idle') setMode({ kind: 'optimize' })
+      if (mode.kind === 'idle') session.enterOptimize(nextOp())
     },
     onOptimizeProgress: (event) => {
       // 前の実行の進捗が後から届くことがある(別の接続への配信待ち)。識別子は新しいほど大きい(`optimize_steps.py`)ので、
@@ -738,7 +745,15 @@
 
   // ---------------------------------------------------------------- コアからの状態
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
+    const previous = model
     model = next
+    // 文書が替わったら(開く・新規・閉じる。別のタブの操作も含む)、前の文書のスケッチの戻り先と「前のモード」を捨てる。
+    // 捨てないと、最適化モードから入ったスケッチのまま文書を切り替えたときに、新しい文書を最適化モードへ入れてしまう
+    // (`seenMode` が前の文書の最適化モードのままだと `onModeChanged` が戻り先を書き直す)。
+    if (previous !== null && previous.generation !== next.generation) {
+      resumeMemory = 'idle'
+      modeCrossedDocument = true
+    }
     files.onState(next)
     // 状態が1通届くたびに1つ増える番号(実機検査用の穴。`__duocad.stateEpoch`)。無いと
     // 「往復が終わっていない」と「もう変わらない」を外から区別できない。
@@ -766,18 +781,23 @@
     drawHighlight()
     // スケッチも「コアが持ち、ここは描き直すだけ」。直後の `lookAtSketch` が平面の枠を要るので $effect ではなく同期に描く。
     drawSketches()
-    if (sketchId !== null && !sketches.some((item) => item.sketch_id === sketchId)) {
-      exitSketch() // undoでスケッチごと消えた
-    }
-    // 閉じた(別のタブが閉じた・文書が消された場合も含む)。前の文書のモード・最適化の表示・断面・測定を持ち越さない。
+    // 閉じた(別のタブが閉じた・文書が消された場合も含む)。前の文書の最適化の表示・断面・測定を持ち越さない
+    // (モードはサーバが作業空間ごと空に戻す)。
     if (wasDocumentOpen && !next.document_open) {
-      setMode({ kind: 'idle' })
       resetOptimizeView()
       display.closeSection()
       measure.clear()
     }
     wasDocumentOpen = next.document_open
 
+    // 作業空間(起動中のコマンド・モード)は画面が自分で持たず配信に従う(issue #153)。外(AI か別の画面)からの変更は
+    // 札で知らせる: 自分の操作の応答(`client_op` が自分のもの)でなければ外からの変更。
+    const own = applied !== null && applied.client_op !== null && myClientOps.has(applied.client_op)
+    if (!own && previous !== null) noteWorkspaceChange(previous, next)
+    if (applied && (applied.change === 'command' || applied.change === 'mode')) {
+      releasePending(applied.client_op)
+      return
+    }
     // 選択の変更イベントはverbの適用ではない(`change: "selection"`。session.ts の `Applied`)。
     if (applied && applied.change === 'selection') {
       // この画面が出した選択変更だけを数える(`selfSelections`)。AIが書き換えた選択は即適用の引き金にならない。
@@ -824,8 +844,7 @@
       return
     }
     if (applied) {
-      // 作ったスケッチへはそのまま入る(作ってから改めて「入る」を押させない)
-      if (applied.verb === 'sketch_create' && applied.sketch_id) enterSketch(applied.sketch_id)
+      // 作ったスケッチへはサーバが誰の操作でも入れる(`Session._settle_workspace`)。ここでは入らない。
       if (applied.verb === 'import_step') {
         // 読み込んだモデル全体が入る視点へ合わせ直す。文書のスケールが不連続に変わるのはインポートだけ
         // (実測: 対角約640mmのSTEPで端が画面外に出た)で、ふつうの編集で視点が跳ぶと妨げになるので他へ広げない。
@@ -1174,9 +1193,12 @@
     return commandClickToggles() ? 'toggle' : mode
   }
 
-  /** コマンド起動中の素のクリックをトグルにするか(`activeVerb`)。 */
+  /**
+   * コマンド起動中の素のクリックをトグルにするか。構えた verb はサーバの `state.command` が正(モードの作り直しで
+   * `activeVerb` が null に戻った後も、構えが残っていればトグル)。`activeVerb` はローカルのコマンド(測定)の分。
+   */
   function commandClickToggles(): boolean {
-    return activeVerb !== null
+    return activeVerb !== null || (model?.command ?? null) !== null
   }
 
   /**
@@ -1302,6 +1324,75 @@
 
   function clearSelectionIfAny(): void {
     if (currentItems().length > 0) clearSelection()
+  }
+
+  // ---------------------------------------------------------------- 作業空間(起動中のコマンド・モード。issue #153)
+  // 画面は起動中の verb と引数を自分で持たず、サーバへ送って配信された `state.command` に従う(`CommandHost.svelte`)。
+  // 応答待ち(`pendingOp`)にはしない: 文書もビューポートも変わらない。
+  function beginCommand(verb: string, args: Record<string, unknown>): void {
+    session.beginCommand(verb, args, nextOp())
+  }
+
+  function setCommandArgs(args: Record<string, unknown>): void {
+    session.setCommandArgs(args, nextOp())
+  }
+
+  function endCommand(): void {
+    session.endCommand(nextOp())
+  }
+
+  /** 全モードのコマンド定義から表示名を引く(無ければ verb 名のまま)。 */
+  function commandLabel(verb: string): string {
+    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
+      (command) => command.id === verb,
+    )
+    return found?.label ?? verb
+  }
+
+  function argLabel(verb: string, name: string): string {
+    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
+      (command) => command.id === verb,
+    )
+    return found?.args.find((spec) => spec.name === name)?.label ?? name
+  }
+
+  /** 外(AI か別の画面)が作業空間を変えたら1行で知らせる。自分の操作の応答では呼ばない(`handleState`)。 */
+  function noteWorkspaceChange(before: ServerState, after: ServerState): void {
+    const was = before.command
+    const now = after.command
+    if (was === null && now !== null) {
+      note(`外から「${commandLabel(now.verb)}」が起動された(AI か別の画面)`)
+    } else if (was !== null && now === null) {
+      note(
+        after.applied_count > before.applied_count
+          ? `外から「${commandLabel(was.verb)}」が確定された(AI か別の画面)`
+          : `外から「${commandLabel(was.verb)}」が畳まれた(AI か別の画面)`,
+      )
+    } else if (was !== null && now !== null) {
+      if (was.verb !== now.verb) {
+        note(`外から「${commandLabel(now.verb)}」に切り替えられた(AI か別の画面)`)
+      } else {
+        const changed = [...new Set([...Object.keys(was.args), ...Object.keys(now.args)])].filter(
+          (name) => JSON.stringify(was.args[name]) !== JSON.stringify(now.args[name]),
+        )
+        if (changed.length > 0) {
+          const shown = changed
+            .map((name) => `${argLabel(now.verb, name)}=${now.args[name] === undefined ? '(空)' : JSON.stringify(now.args[name])}`)
+            .join(' / ')
+          note(`外から「${commandLabel(now.verb)}」の引数が変わった: ${shown}`)
+        }
+      }
+    }
+    if (JSON.stringify(before.mode) !== JSON.stringify(after.mode)) {
+      const target = after.mode
+      note(
+        target.kind === 'sketch'
+          ? `外からスケッチ ${sketches.find((item) => item.sketch_id === target.sketch_id)?.name ?? target.sketch_id} の編集に移った`
+          : target.kind === 'optimize'
+            ? '外から形状最適化モードに移った'
+            : '外から通常モードに戻った',
+      )
+    }
   }
 
   /** 選択を全解除する。配信が届くまでの判定は `currentItems()` が空として扱う。 */
@@ -1490,49 +1581,62 @@
    * - ボディ(`kind:'body'`): 行き先が最適化モードでなければ落とす(保持/除外の割り当てにしか使えない)。
    * - 面・辺・頂点・領域はどのモードでも残す(スケッチを抜けてそのまま押し出す等が実際の経路)。
    */
-  function setMode(next: Mode): void {
+  /**
+   * モードの入れ替わり(配信に従う)の後始末。以前は `setMode` が同期に行っていた。
+   * 行き先で使えない選択はサーバが外す(`Session._apply_mode`)。
+   */
+  let seenMode: Mode = { kind: 'idle' }
+  /** 文書が替わった直後の配信(`handleState` が立てる)。前の文書のモードと同じ種類でも後始末(活性スケッチの解除など)を走らせ、戻り先は書き直さない。 */
+  let modeCrossedDocument = false
+  $effect(() => {
+    const next = mode
+    const prev = seenMode
+    const crossed = modeCrossedDocument
+    const same = prev.kind === next.kind && (next.kind !== 'sketch' || (prev.kind === 'sketch' && prev.id === next.id))
+    if (same && !crossed) return
+    modeCrossedDocument = false
+    seenMode = next
+    untrack(() => onModeChanged(prev, next, crossed))
+  })
+
+  function onModeChanged(prev: Mode, next: Mode, crossedDocument: boolean): void {
     // 確定前の姿を持ち越さない。モードが変わると下の `{#key commandRowKey}` が `CommandHost` ごと作り直すので
     // `onCancelPreview` は来ない。ここで消さないと、`move_body` の半透明ボディや `extrude` の投機実行の幽霊が残り続ける。
     clearPreview()
     const nextSketch = next.kind === 'sketch' ? next.id : null
-    const unusable = currentItems().filter((item) => {
-      const kind = refKind(item)
-      if (kind === 'sketch_entity') return (item as SketchEntityRef).sketch !== nextSketch
-      if (kind === 'body') return next.kind !== 'optimize'
-      return false
-    })
-    if (unusable.length > 0) modifySelection([], unusable)
-    mode = next
     // `CommandHost` が作り直されるので、起動中だったコマンドは終わりの通知なしに消える。
     activeVerb = null
     hoverPoint = null
     viewport?.setActiveSketch(nextSketch)
     // どの遷移でも同期に描き直す(入る側は直後の `lookAtSketch` が平面の枠を要る。`handleState` と同じ)。
-    // 抜ける側にも要る: 抜けたスケッチの点マーカーが次の状態配信まで残り、手前に浮いてクリックを奪いうる
-    // (選択の掃除が空振りするとWS往復が無く配信も来ない)。
+    // 抜ける側にも要る: 抜けたスケッチの点マーカーが次の状態配信まで残り、手前に浮いてクリックを奪いうる。
     drawSketches()
     if (next.kind === 'sketch') viewport?.lookAtSketch(next.id)
+    // スケッチの戻り先: 最適化モードから入ったら、抜けたときに最適化モードへ入り直す。文書をまたいだ遷移では前の文書の
+    // モードを「前」として読まない(`handleState` が戻り先を捨てた直後に、ここで書き直さない)。
+    if (crossedDocument) return
+    if (next.kind === 'sketch' || next.kind === 'sketch-pending') {
+      if (prev.kind === 'optimize') resumeMemory = 'optimize'
+      else if (prev.kind === 'idle') resumeMemory = 'idle'
+    } else if (next.kind === 'idle' && prev.kind !== 'optimize' && resumeMemory === 'optimize') {
+      resumeMemory = 'idle'
+      if (shapeOptimizationAvailable === true) session.enterOptimize(nextOp())
+    }
   }
 
-  /** 今のモードから見た「スケッチを抜けたときの戻り先」。 */
-  function resumeOf(current: Mode): ResumeMode {
-    if (current.kind === 'optimize') return 'optimize'
-    if (current.kind === 'sketch' || current.kind === 'sketch-pending') return current.resume
-    return 'idle'
-  }
-
-  /** スケッチモードへ入る(まだ貼る先は決まっていない)。`sketch-pending` では `SKETCH_PENDING_COMMANDS` が起動済みで現れる(`CommandHost` の `startCommandId`)。 */
+  /** スケッチモードへ入る(まだ貼る先は決まっていない)= `sketch_create` を構える。`sketch-pending` では `SKETCH_PENDING_COMMANDS` が起動済みで現れる。 */
   function startSketchMode(): void {
-    setMode({ kind: 'sketch-pending', resume: resumeOf(mode) })
+    beginCommand(SKETCH_CREATE.id, {})
   }
 
-  /** そのスケッチを開く。`sketch_create` の成功(`handleState`)とブラウザパネルのスケッチ名クリックから呼ばれる。戻り先(`resume`)を持って移るので、抜ければ最適化モードへ戻る。 */
+  /** そのスケッチを開く(ブラウザパネルのスケッチ名クリック)。作った直後はサーバが入れるので呼ばれない。 */
   function enterSketch(id: string): void {
     // 隠したスケッチに入るときは先に表示へ戻す(拒否しない)。編集中のスケッチは `buildSketchDraws` が
     // 可視性に関わらず描くので、サーバの往復を待たずに入ってよい。抜けた後も表示のまま。
     const target = sketches.find((item) => item.sketch_id === id)
     if (target !== undefined && !target.visible) setSketchVisible(id, true)
-    setMode({ kind: 'sketch', id, resume: resumeOf(mode) })
+    if (model?.mode.kind === 'sketch' && model.mode.sketch_id === id) return
+    session.enterSketch(id, nextOp())
   }
 
   /** ブラウザパネルのスケッチ名クリック。最適化が走っている間はモードを抜けさせない(パネルごと中断ボタンが消える)。 */
@@ -1544,19 +1648,23 @@
     enterSketch(id)
   }
 
-  /** スケッチモードを抜ける。戻り先は入る前のモード(通常 or 最適化)。 */
+  /** スケッチモードを抜ける。貼る先待ちなら構えた `sketch_create` を畳む(Esc と同じ)。最適化モードへの戻りは `onModeChanged`。 */
   function exitSketch(): void {
-    setMode(resumeOf(mode) === 'optimize' && shapeOptimizationAvailable === true ? { kind: 'optimize' } : { kind: 'idle' })
+    if (mode.kind === 'sketch-pending') {
+      endCommand()
+      return
+    }
+    if (model?.mode.kind === 'sketch') session.leaveSketch(nextOp())
   }
 
   /** 第3のモード(形状最適化)へ入る。「形状最適化」ボタンから(スケッチと同じ作法)。 */
   function enterOptimizeMode(): void {
-    setMode({ kind: 'optimize' })
+    if (model?.mode.kind !== 'optimize') session.enterOptimize(nextOp())
   }
 
   /** 第3のモードを抜けて通常モードへ戻る。 */
   function exitOptimizeMode(): void {
-    setMode({ kind: 'idle' })
+    if (model?.mode.kind === 'optimize') session.leaveOptimize(nextOp())
   }
 
   /**
@@ -1992,6 +2100,7 @@
     stateEpoch: () => stateEpoch,
     optimizeMode: () => optimizeMode,
     modeKind: () => mode.kind,
+    clickToggles: () => commandClickToggles(),
     wantedKinds: () => wantedKinds,
     optimizeRunning: () => optimizeRunning,
     optimizeCancelling: () => optimizeCancelling,
@@ -2164,6 +2273,10 @@
           startCommandId={mode.kind === 'sketch-pending' ? SKETCH_CREATE.id : undefined}
           hover={hoverPoint}
           entities={selectedEntities}
+          shared={model?.command ?? null}
+          onBegin={beginCommand}
+          onSetArgs={setCommandArgs}
+          onEndShared={endCommand}
           onRun={runCommand}
           onPreview={requestPreview}
           onCancelPreview={clearPreview}

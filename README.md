@@ -216,6 +216,9 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 - **選択集合はアプリ層ではなくコアにある。** 出所（AIか人か）を区別しない1つの集合で、人もAIも同じ操作
   （`modify_selection` / `toggle_selection` / `clear_selection`。AIだけ述語を書ける `set_selection`）で触る。
   **verbが食う面・辺・領域は、MCPからもWebSocketからも引数で渡さない** —— この集合から取る。
+- **起動中のコマンド（verb と途中の引数）とモードもコアにある**（`Session.workspace`。issue #153）。選択と同じく操作ログに
+  載らず undo でも戻らず保存もされない短命の共有状態で、人（画面）も AI も同じ操作（`begin_command` / `set_command_args` /
+  `end_command` / `apply_command` / `enter_sketch` / `leave_sketch`）で触る。画面は従うだけで、自分では持たない。
 - **verbのメタ情報は1箇所にしか書かない。** `duocad/catalog.py` の `COMMANDS` が唯一の宣言で、WebSocketの許可リストも
   MCPのツール定義も導出。verbを1つ足すときに書くのはverbのモジュールと宣言1エントリの2箇所だけ（手順は `catalog.py` 冒頭docstring）。
 - **verbを掛ける経路は1本。** verbのモジュールは純関数と**入口**（`@entry`）を持ち、`Session.apply(verb, args)` が
@@ -351,8 +354,8 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](docs/WEB_PITFALLS.md)�
 - **済んだ依頼は「人の発話 + AIの最終返答」だけを残す**（`AgentLoop._settle_history`）。文脈長に当たったら古い依頼を半分捨てる
 - **ツール定義は先に読ませておく**（`ai_prepare`。llama-server の `--slot-save-path` があればスロット保存を使う）
 - **文書と選択は先に見ておく** —— `describe_document` / `get_selection` をループが代わりに呼んで履歴へ置く（`AgentLoop._look_first`）
-- **同時編集は楽観ロックで守る** —— 版は「ログの本数・選択の指紋・可視性の指紋」の3つ組（`DocumentTools.current_seq()`）。
-  可視性は操作ログに載らないので指紋が要る
+- **同時編集は楽観ロックで守る** —— 版は「文書の世代・ログの本数・選択の指紋・可視性の指紋・作業空間の版」の5つ組
+  （`DocumentTools.current_seq()`）。可視性も起動中のコマンドも操作ログに載らないので、それぞれの印が要る
 - **Claude APIのキーは画面の「設定」で置ける**（`ai_set_api_key`。`duocad_secrets.json` に書く。gitignore済み。画面へ値は返さない）。
   手で置くなら環境変数 `DUOCAD_ANTHROPIC_API_KEY` か同じファイル（`{"DUOCAD_ANTHROPIC_API_KEY": "sk-ant-..."}`）。環境変数が優先。
   **`ANTHROPIC_API_KEY` は読まない** —— その名前をユーザー環境に置くと、同じマシンの Claude Code がサブスクではなくそのキーで課金する。

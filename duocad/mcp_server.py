@@ -74,6 +74,7 @@ from .channel import CHANNELS, StableUpdater, describe, hidden_features
 from .agent.loop import VersionChanged
 from .entry import entry_for
 from .session import DocumentBusy
+from .workspace import NoCommand
 from .server import (
     DEFAULT_WEB_DIST,
     MCP_HTTP_PATH,
@@ -218,14 +219,14 @@ class DocumentTools:
         except Exception as error:  # noqa: BLE001 — 封筒にするのは呼び手(`error_envelope`)
             return None, error, self.current_seq()
 
-    def current_seq(self) -> tuple[int, int, str, str]:
-        """文書+選択の版。**モデルには見せない** —— `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
+    def current_seq(self) -> tuple[int, int, str, str, int]:
+        """文書+選択+作業空間の版。**モデルには見せない** —— `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
 
         `AgentLoop.run()` はモデルへの1往復・ツール1実行のたびにこれを控え、値が変わっていたら
         残りのツール呼び出しを構造化エラーへ差し替える(楽観ロック)。
 
         戻り値は `(Session.generation, len(document.log.entries), selection.fingerprint(document),
-        selection.visibility_fingerprint(document))`。**4つとも要る**:
+        selection.visibility_fingerprint(document), Session.workspace.revision)`。**5つとも要る**:
 
         - 世代が無いと文書の切り替えを見逃す。新規→新規は残り3つが `(0, 空, 空)` のまま一致する(実測)。
         - ログの本数だけでは足りない。選択の変更は操作ログに乗らないので、辺Aを外して辺Bを
@@ -234,6 +235,8 @@ class DocumentTools:
         - 選択の指紋だけでも足りない(形状が変わっても選択の中身が同じままのことがある)。
         - 可視性の指紋も要る。`set_visible` はログに載らないので、抜けると「考えている間に人が
           隠したボディ」をAIが黙って表示に戻す(逆も同じ)。
+        - 作業空間の版も要る(issue #153)。起動中のコマンドと引数はログに載らないので、抜けると「考えている間に
+          人が半径を打ち直した / Esc で畳んだ」を見ずに AI が古い引数で `apply_command` する。
 
         **塞ぎきれない範囲**: 選択を経由せず body_id 等で直接効くverbは、版がABAで偶然一致しても
         別の対象へ効くことはない(IDは不変)。残るのは「人が既に同じ変更をしていたら上書きが
@@ -244,6 +247,7 @@ class DocumentTools:
             len(self.session.document.log.entries),
             selection.fingerprint(self.session.document),
             selection.visibility_fingerprint(self.session.document),
+            self.session.workspace.revision,
         )
 
     def describe_document(
@@ -325,6 +329,8 @@ class DocumentTools:
             # **`Session.applied_count` を使う**(`len(log.entries)` ではない)。ログの長さは
             # undoで減り、AIが見る数とブラウザが見る数がundoの後でずれる。
             "applied_count": self.session.applied_count,
+            # 作業空間(issue #153)。人が画面で起動した verb と途中の引数、編集中のスケッチ。AI が「人と一緒に進める」ときの出発点。
+            **self._workspace_payload(),
         }
 
     def set_visible(self, body_id: str, visible: bool) -> dict:
@@ -515,6 +521,9 @@ class DocumentTools:
                 "required_kind": error.kind,
                 "selection": self._selection_summary(),
             }
+        # 起動中のコマンドが無い(`ValueError` の派生なので先に見る)。引数を直しても通らない —— 先に `begin_command`。
+        if isinstance(error, NoCommand):
+            return {**base, "code": "no_command", "hint": "begin_command(verb) で起動してから set_command_args / apply_command を呼ぶ"}
         if isinstance(error, ValueError):
             return {**base, "code": "invalid_argument"}
         return {**base, "code": "internal"}
@@ -583,6 +592,55 @@ class DocumentTools:
     def clear_selection(self) -> dict:
         event = self.session.clear_selection()
         return self._as_selection_payload(event["selection"])
+
+    # ---------------------------------------------------------------- 作業空間(起動中のコマンド・モード。issue #153)
+    # 選択と同じく **コアを経由する**(`Session.begin_command` 等)ので、人の画面が追随する。応答は `{"command", "mode"}`。
+    def _workspace_payload(self) -> dict:
+        state = self.session.workspace.to_state()
+        return {"command": state["command"], "mode": state["mode"]}
+
+    def get_command(self) -> dict:
+        return self._workspace_payload()
+
+    def begin_command(self, verb: str, args: Optional[dict] = None) -> dict:
+        if verb in catalog.feature_command_names(self.hidden_features):
+            raise ToolError("not_found", f"{verb!r} はこの版では使えない(docs/STABLE.md)")
+        self.session.begin_command(verb, args)
+        return self._workspace_payload()
+
+    def set_command_args(self, args: dict) -> dict:
+        self.session.set_command_args(args)
+        return self._workspace_payload()
+
+    def end_command(self) -> dict:
+        self.session.end_command()
+        return self._workspace_payload()
+
+    def apply_command(self, args: Optional[dict] = None) -> dict:
+        """構えた verb の確定。封筒は `_apply_verb` と同じ(ログに1行積むツールの形)。"""
+        before = self._revision_snapshot()
+        applied = self.session.apply_command(args)
+        envelope = self._verb_envelope(applied["verb"], int(applied["seq"]), before)
+        envelope.update(
+            {key: value for key, value in applied.items() if key not in _ENVELOPE_OWNED_KEYS}
+        )
+        return envelope
+
+    def enter_sketch(self, sketch_id: str) -> dict:
+        self.session.enter_sketch(sketch_id)
+        return self._workspace_payload()
+
+    def leave_sketch(self) -> dict:
+        self.session.leave_sketch()
+        return self._workspace_payload()
+
+    def enter_optimize(self) -> dict:
+        self.session.enter_optimize()
+        return self._workspace_payload()
+
+    def leave_optimize(self) -> dict:
+        self.session.leave_optimize()
+        return self._workspace_payload()
 
     def describe_predicates(self) -> dict:
         """述語の語彙をAIへ自己記述する。**`predicates.describe_ops()` をそのまま出す**

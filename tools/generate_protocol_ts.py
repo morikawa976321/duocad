@@ -29,6 +29,7 @@ _TS_TYPES = {
     "boolean": "boolean",
     "array": "unknown[]",
     "object": "object",
+    "null": "null",
 }
 
 
@@ -72,7 +73,7 @@ def render() -> str:
     lines = [
         "// 生成物 —— **手で直さない**。正は `duocad/catalog.py` の宣言で、",
         "// 作り直すのは `python tools/generate_protocol_ts.py`(走らせ忘れは `tests/test_protocol.py` が落とす)。",
-        "import type { SelectionState } from '../session'",
+        "import type { CommandState, ModeState, SelectionState } from '../session'",
         "",
         "/** WebSocket から踏めるコマンド -> 分類(`catalog.Command.category`)。 */",
         "export const COMMAND_CATEGORY = {",
@@ -80,6 +81,11 @@ def render() -> str:
         "} as const",
         "",
         "export type CommandName = keyof typeof COMMAND_CATEGORY",
+        "",
+        "/** コマンドが受け取る引数の名前(宣言の全引数)。画面が共有の作業空間へ出す引数をこれで絞る(`CommandHost.svelte`)。 */",
+        "export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {",
+        *[f"  {command.name}: [{', '.join(repr(p.name) for p in command.params)}]," for command in commands],
+        "}",
         "",
         "/** コマンドが WebSocket で受け取る引数(`cmd` と `client_op` を除く。`?` は省略できる)。 */",
         "export interface CommandArguments {",

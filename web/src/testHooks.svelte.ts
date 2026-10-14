@@ -41,6 +41,8 @@ export interface TestHookContext {
   stateEpoch: () => number
   optimizeMode: () => boolean
   modeKind: () => string
+  /** コマンド起動中の素のクリックがトグルになるか(`App.svelte` の `commandClickToggles`)。 */
+  clickToggles: () => boolean
   wantedKinds: () => SelectableKind[]
   optimizeRunning: () => boolean
   optimizeCancelling: () => boolean
@@ -87,6 +89,9 @@ export function installTestHooks(ctx: TestHookContext): void {
       getGeometry: (bodyId: string) => viewport()?.getGeometry(bodyId) ?? null,
       // 選択の正はコア。ここは共有集合の写し。
       selection: model?.selection ?? null,
+      // 作業空間(起動中のコマンド・モード)もコアが正(issue #153)。画面はこれに従う。
+      command: model?.command ?? null,
+      serverMode: model?.mode ?? null,
       selected: firstFace === null ? null : { bodyId: firstFace.body, faceIndex: firstFace.index },
       previewing: ctx.previewing(),
       // いま出ている幽霊の中身。`previewing` はサーバ投機実行側だけを表すので、ローカル方式はこちらを見る。
@@ -127,6 +132,7 @@ export function installTestHooks(ctx: TestHookContext): void {
       // 今のモード(`'idle' | 'sketch-pending' | 'sketch' | 'optimize'`)。`optimizeMode` と `activeSketch`
       // だけでは貼る先待ちが通常モードと同じ見え方になる。
       mode: ctx.modeKind(),
+      clickToggles: ctx.clickToggles(),
       wantedKinds: ctx.wantedKinds(),
       faceColor: (bodyId: string, faceIndex: number) => viewport()?.faceColor({ bodyId, faceIndex }) ?? null,
       optimizeAnnotationCount: () => viewport()?.optimizeAnnotationCount() ?? 0,
