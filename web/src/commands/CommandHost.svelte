@@ -522,6 +522,7 @@
     cancelPublish()
     lastPublished = {}
     sentKeys = new Set()
+    unmapped = new Set()
     cancelPreview()
   }
 
@@ -648,16 +649,20 @@
 
   /** 自分がこの起動で実際に出したことのあるキー(`build` が作る `base_plane` / `mode` のように欄の名前と違うものを含む)。 */
   let sentKeys = new Set<string>()
+  /** 配信された値を欄へ写せなかったキー(3択に無い荷重の向き・`sends: null` の選択肢に紐づく値など)。欄が空でも「人が消した」ではない。 */
+  let unmapped = new Set<string>()
 
   /**
    * `lastPublished` との差分だけ送る。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。
-   * 欄から消えたキーを null で外すのは、**この画面に欄があるキーと、自分が出したことのあるキーだけ**: 人が欄を空にしたのは
-   * 「まだ決めていない」へ戻す意思で、AI が付けた値でも外す。欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)は触らない。
+   * 欄から消えたキーを null で外すのは、**いま出ている欄(`liveArgs`)のキーで、配信を欄へ写せなかったものでないか、
+   * 自分が出したことのあるキーだけ**: 人が欄を空にしたのは「まだ決めていない」へ戻す意思で、AI が付けた値でも外す。
+   * `when` で隠れている欄・欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)・写せなかった値は触らない
+   * (再読み込みで `base_plane: 'face'` が戻らず隠れた `plane_face` を消していた)。
    */
   function flushPublish(next: Record<string, unknown>): void {
     if (sharedId === null || committed) return
     const fields = new Set(
-      (command?.args ?? [])
+      liveArgs
         .filter((spec) => spec.kind === 'number' || spec.kind === 'text' || spec.kind === 'point' || spec.kind === 'pick' || spec.kind === 'choice')
         .map((spec) => spec.name),
     )
@@ -666,10 +671,13 @@
       if (JSON.stringify(value) !== JSON.stringify(lastPublished[name])) delta[name] = value
     }
     for (const name of Object.keys(lastPublished)) {
-      if (!(name in next) && (fields.has(name) || sentKeys.has(name))) delta[name] = null
+      if (!(name in next) && ((fields.has(name) && !unmapped.has(name)) || sentKeys.has(name))) delta[name] = null
     }
     if (Object.keys(delta).length === 0) return
-    for (const [name, value] of Object.entries(delta)) if (value !== null) sentKeys.add(name)
+    for (const [name, value] of Object.entries(delta)) {
+      if (value !== null) sentKeys.add(name)
+      unmapped.delete(name)
+    }
     lastPublished = { ...lastPublished, ...delta }
     for (const name of Object.keys(delta)) if (delta[name] === null) delete lastPublished[name]
     onSetArgs(delta)
@@ -697,6 +705,7 @@
     if (JSON.stringify(remote) === JSON.stringify(lastPublished)) return
     const active = document.activeElement
     const kept: string[] = []
+    unmapped = new Set()
     for (const spec of command.args) {
       const value = remote[spec.name]
       if (spec.kind === 'number') {
@@ -716,9 +725,10 @@
             choices = rest
           }
         } else {
-          // サーバの値から選択肢を逆引きする(`copy: true` → 'copy'、`direction: [0,0,-1]` → 'down')。対応が無ければ触らない。
+          // サーバの値から選択肢を逆引きする(`copy: true` → 'copy'、`direction: [0,0,-1]` → 'down')。対応が無ければ触らず、消しもしない。
           const option = spec.options.find((candidate) => JSON.stringify(choiceSends(candidate)) === JSON.stringify(value))
           if (option !== undefined) choices = { ...choices, [spec.name]: option.value }
+          else unmapped.add(spec.name)
         }
       } else if (spec.kind === 'text') {
         const text = value === undefined ? '' : String(value)
@@ -731,16 +741,20 @@
       } else if (spec.kind === 'pick') {
         if (value !== null && typeof value === 'object') {
           picks = { ...picks, [spec.name]: value as SelectionRef }
-        } else {
+        } else if (value === undefined) {
           const { [spec.name]: _removed, ...rest } = picks
           picks = rest
+        } else {
+          unmapped.add(spec.name)
         }
       } else if (spec.kind === 'point') {
         if (Array.isArray(value) && value.length === 2) {
           points = { ...points, [spec.name]: [Number(value[0]), Number(value[1])] }
-        } else {
+        } else if (value === undefined) {
           const { [spec.name]: _removed, ...rest } = points
           points = rest
+        } else {
+          unmapped.add(spec.name)
         }
       } else if (spec.kind === 'plane') {
         // サーバ側の名前は `base_plane`(面は載らない: 面は選択にあるので、無ければ局所の値をそのまま保つ)。

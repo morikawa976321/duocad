@@ -747,9 +747,13 @@
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
     const previous = model
     model = next
-    // 文書が替わったら(開く・新規・閉じる。別のタブの操作も含む)、前の文書のスケッチの戻り先を捨てる。
-    // 捨てないと、最適化モードから入ったスケッチのまま文書を切り替えたときに、新しい文書を最適化モードへ入れてしまう。
-    if (previous !== null && previous.generation !== next.generation) resumeMemory = 'idle'
+    // 文書が替わったら(開く・新規・閉じる。別のタブの操作も含む)、前の文書のスケッチの戻り先と「前のモード」を捨てる。
+    // 捨てないと、最適化モードから入ったスケッチのまま文書を切り替えたときに、新しい文書を最適化モードへ入れてしまう
+    // (`seenMode` が前の文書の最適化モードのままだと `onModeChanged` が戻り先を書き直す)。
+    if (previous !== null && previous.generation !== next.generation) {
+      resumeMemory = 'idle'
+      seenMode = { kind: 'idle' }
+    }
     files.onState(next)
     // 状態が1通届くたびに1つ増える番号(実機検査用の穴。`__duocad.stateEpoch`)。無いと
     // 「往復が終わっていない」と「もう変わらない」を外から区別できない。
