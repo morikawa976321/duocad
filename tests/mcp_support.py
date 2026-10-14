@@ -16,6 +16,7 @@ ERROR_CODES = {
     "selection_kind_mismatch",  # 空ではないが要求した種別が無い
     "invalid_predicate",    # 述語が不正(有効なopの一覧を必ず添える)
     "busy",                 # 形状最適化の実行中に文書を変えようとした(DocumentBusy)
+    "document_changed",     # MCP の経路だけ(人が文書を切り替えた後、describe_document で確かめる前のツール)
     "internal",             # 上記以外(黙って握りつぶさないための受け皿)
     "dimension_not_given",  # アプリ内AIの経路だけ(人が量を言っていないのに寸法を埋めた。MCP は返さない)
 }

@@ -407,6 +407,7 @@ class Server:
                     # 開いている文書を消すと閉じる(`Session.delete_document`)。文書が替わったので
                     # 全接続へ配る —— 封筒だけだと、他のタブは消えた文書を出したまま編集を断られ続ける。
                     if applied.get("closed"):
+                        self._stop_ai_on_switch()
                         await self._push(connection, applied=None)
             # 保存は表に載らない(`name` が任意引数で、表の「引数は全部必須」の規律に合わない。`catalog.Param.ws`)。
             # 契約は `Session.save_document`: 引数なし=編集中のファイルへ上書き / `name` あり=新しい名前でのみ保存(既存名は拒否)。
@@ -436,15 +437,18 @@ class Server:
                         "(そちらのタブを使うか、閉じてから開き直す)"
                     )
                 applied = self._apply(self.session.open_document, name)
+                self._stop_ai_on_switch()
                 await self._push_applied(connection, applied, message)
                 await self._announce_optimization()
             # **新規も文書ごと差し替える**ので開くと同じ扱い(全接続へ配る)。引数は無い。
             elif command == "new_document":
                 applied = self._apply(self.session.new_document)
+                self._stop_ai_on_switch()
                 await self._push_applied(connection, applied, message)
                 await self._announce_optimization()
             elif command == "close_document":
                 applied = self._apply(self.session.close_document)
+                self._stop_ai_on_switch()
                 await self._push_applied(connection, applied, message)
                 await self._announce_optimization()
             # -------------------------------------------------- B: プレビュー(投機的実行)
@@ -789,6 +793,15 @@ class Server:
     def _ai_cancel(self) -> None:
         """中断フラグを立てる。ループはモデルへ投げる前とツール1件ごとに見る(`duocad/agent/loop.py` の `Cancellation`)。走っているHTTPはプロバイダが接続を閉じて止める。"""
         self._ai_cancellation.cancel()
+
+    def _stop_ai_on_switch(self) -> None:
+        """人が文書を切り替えたら、走っているアプリ内AIを止める(issue #102)。
+
+        版の照合(`current_seq` の世代)だけでは足りない: 照合はツールを差し替えるだけでループを続けるので、
+        モデルは新しい文書を読み直して前の依頼をそこで続ける。人の操作をAIより優先する(切り替えを断らない)。
+        """
+        if self._ai_running:
+            self._ai_cancel()
 
     # ------------------------------------------------------------------ I: 計算の設定
     def _fem_status(self) -> dict:

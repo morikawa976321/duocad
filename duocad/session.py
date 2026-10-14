@@ -139,6 +139,9 @@ class Session:
         #: None のまま上書きされ続ける(理由は docs/UI.md のファイル一覧の項)。
         self._created: Optional[float] = None
         self._applied_count = 0
+        #: 文書を差し替えた回数(`_replace_document` だけが進める)。AI が「前に見た文書と同じか」を確かめる唯一の手がかり
+        #: (issue #102)。ファイル名では足りない: 新規→新規・A→B→A・同名の開き直しで名前が一致する。
+        self._generation = 0
         #: 自動保存で書けなかった変更があるか(issue #5)。通常は常に False で、書き込み失敗(ディスク・権限)のときだけ True。
         self._unsaved = False
         #: 保存の書き込みを直列にする。アプリ内AIの道具はワーカースレッドで動き(`net/ws.py` の `_ai_start`)、`apply` → `_emit` → 自動保存へ来るので、
@@ -214,6 +217,11 @@ class Session:
     def current_name(self) -> Optional[str]:
         """いま編集中のファイル名(`models_dir` 配下、無ければ `None`)。`state()["current_name"]` と同じ値。"""
         return self._current_name
+
+    @property
+    def generation(self) -> int:
+        """文書の世代(開く・新規・閉じる・削除で閉じる・最適化結果の差し替えで1つ進む。verb・undo では動かない)。"""
+        return self._generation
 
     @property
     def document_open(self) -> bool:
@@ -1110,6 +1118,7 @@ class Session:
         # 土台の下限は引き継がない(読み込んだログはすべてその文書の操作で、起動時の `load_step` の土台とは別物)。
         self._setup_floor_seq = 0
         self._applied_count += 1
+        self._generation += 1
 
     def list_documents(self) -> dict:
         """`models_dir` の中身を一覧にする(名前/更新日時/作成日時/サムネイルの版)。verbではない。

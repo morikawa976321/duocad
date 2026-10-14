@@ -99,7 +99,7 @@ ProgressCallback = Callable[[str, dict, Any, bool], None]
 class ToolSurface(Protocol):
     """ループが道具に要求する面(`DocumentTools` がこれを満たす)。公開APIの5つだけに依存する(内部には触らない)。
 
-    `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は `(ログの本数, 選択の指紋, 可視性の指紋)`。
+    `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は `(文書の世代, ログの本数, 選択の指紋, 可視性の指紋)`。
     可視性は操作ログに載らないので、指紋が無いと「AIが考えている間に人がボディを隠した」が版に出ない)。
     `call_and_seq` は実行と直後の版を `(結果, 例外, 版)` で返す(例外は上げない)。本番の覆い(`ToolsOnLoop`)はこれを
     イベントループへの1回の投げ返しで走らせるので、実行の完了と版の読み取りの間に人の操作が挟まらない。

@@ -143,9 +143,14 @@ Claude Desktopはstdioで繋ぐので、**あちらがduocadのプロセスを�
   （`duocad/agent/`・README §4）と共有する。ツール数も宣言から数えるので、verbを足しても古くならない。
 - ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
   （`not_found` / `invalid_argument` / `selection_empty` /
-  `selection_kind_mismatch` / `invalid_predicate` / `busy` / `internal` / `dimension_not_given`）。
+  `selection_kind_mismatch` / `invalid_predicate` / `busy` / `document_changed` / `internal` / `dimension_not_given`）。
   `dimension_not_given` は**アプリ内AIの経路だけ**の語（`duocad/agent/loop.py` が、人が量を言っていないのにモデルが埋めた寸法を実行前に
   止めるときに返す。MCP にはこのガードが無い）。`busy` は形状最適化の実行中に文書を変えるツールを呼んだとき（選択・表示の切り替え・
   書き出しは通る）。`selection_empty` は選択が**丸ごと空**のとき、`selection_kind_mismatch` は**空ではないが要求した種別が無い**とき
   （例: フィレットを呼んだが面3枚が選ばれている）で、実際に選ばれている種別と件数を `present_kinds` で返す。
+- **人は画面で文書を切り替えられ、AIには知らせない**（issue #102）。`describe_document` は今のファイル名 `current_name` と世代
+  `generation`（開く・新規・閉じるで進む）を返す。MCP は最後に `describe_document` で見た世代を覚え、違っていれば
+  `describe_document` 以外のツールを `document_changed` で止める（解くのは `describe_document` だけ。まだ一度も見ていなければ照合しない）。
+  **覚える場所はトランスポートごとに1つ**で、HTTP に2クライアントを繋ぐと片方の確認でもう片方も通る（`Mcp-Session-Id` 未実装。
+  2本目を繋ぐときに要る）。アプリ内AIは別の仕組みで、実行中の切り替えで中断する（`docs/AI_INTEGRATION.md`）。
 - 契約は `tests/test_mcp.py` / `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py`。
