@@ -297,7 +297,7 @@
    */
   let dataPanelOpen = $state(true)
   /** 右サイドバー(`AiPanel` だけ)を開いているか。`{#if}` で `<aside>` ごと出し分け。`.viewport` のサイズ指定は動かさず、flex の配分だけが変わる(左と同じ)。 */
-  let sidebarOpen = $state(true)
+  let sidebarOpen = $state(false)
   /** 設定ダイアログ(`SettingsDialog.svelte`)を出しているか。見た目だけの状態。 */
   let settingsOpen = $state(false)
   /** 形状最適化の CG を解く装置の設定(サーバの `fem_status`)。 */
@@ -2180,7 +2180,8 @@
     </section>
   {/if}
 
-  <div class="main">
+  <!-- 右サイドバーを閉じている間は `--sidebar-w` を0にする(トーストが右端へ寄る。`Toast.svelte`)。 -->
+  <div class="main" style:--sidebar-w={sidebarOpen ? null : '0px'}>
     <!-- 左サイドバー: 保存済みファイルの一覧。開閉で変わるのは flex の配分だけで、`.viewport` 自身のサイズ指定は動かない(styles.css の不変条件)。 -->
     {#if dataPanelOpen}
       <aside class="data-panel">
