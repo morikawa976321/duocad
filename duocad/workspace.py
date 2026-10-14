@@ -43,6 +43,11 @@ def merge_args(command: catalog.Command, current: dict, update: dict) -> dict:
     検査は未知のキーと型だけ(`Command.partial_schema`)。必須は見ない —— 途中入力を置く口なので、欠けているのが普通。
     違反は ValueError(引数名を含む)。
     """
+    known = {param.name for param in command.params}
+    unknown = sorted(name for name in update if name not in known)
+    if unknown:
+        # 外すだけのキー(`None`)も名前を見る: 誤記(`radios: null`)や添え物(`client_op`)を黙って通すと、消したつもりの値が残る。
+        raise ValueError(f"unknown argument(s): {unknown} (expected: {sorted(known)})")
     merged = dict(current)
     for name, value in update.items():
         if value is None:

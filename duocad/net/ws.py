@@ -138,6 +138,20 @@ AI_LIMITS: dict = {
     ),
 }
 
+def _args_object(message: dict, *, required: bool) -> dict:
+    """作業空間の口の `args`(verb の引数の辞書)。**省略(無い・null)と型違いを分ける** —— `[]` / `false` / `0` を
+    `or {}` で空に畳むと、型違いの確定要求がそのまま通って形が変わる(sol の指摘)。
+    """
+    args = message.get("args")
+    if args is None:
+        if required:
+            raise ValueError("args(引数の辞書)が要る")
+        return {}
+    if not isinstance(args, dict):
+        raise ValueError(f"args はオブジェクトで渡す(受け取った型: {type(args).__name__})")
+    return args
+
+
 async def _send(connection: Any, payload: dict) -> None:
     await connection.send(json.dumps(payload, ensure_ascii=False))
 
@@ -366,12 +380,12 @@ class Server:
                 if verb in self._hidden_commands:
                     raise ValueError(f"{verb!r} はこの版では使えない(docs/STABLE.md)")
                 applied = self._apply(
-                    self.session.begin_command, verb, message.get("args") or {}, message.get("client_op")
+                    self.session.begin_command, verb, _args_object(message, required=False), message.get("client_op")
                 )
                 await self._push(connection, applied=applied)
             elif command == "set_command_args":
                 applied = self._apply(
-                    self.session.set_command_args, message.get("args") or {}, message.get("client_op")
+                    self.session.set_command_args, _args_object(message, required=True), message.get("client_op")
                 )
                 await self._push(connection, applied=applied)
             elif command == "end_command":
@@ -379,7 +393,7 @@ class Server:
                 await self._push(connection, applied=applied)
             elif command == "apply_command":
                 # 応答は構えていた verb の封筒(`client_op` を載せて全接続へ)。
-                applied = self._apply(self.session.apply_command, message.get("args") or {})
+                applied = self._apply(self.session.apply_command, _args_object(message, required=False))
                 await self._push_applied(connection, applied, message)
             elif command == "enter_sketch":
                 applied = self._apply(self.session.enter_sketch, message["sketch_id"], message.get("client_op"))

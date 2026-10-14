@@ -82,6 +82,30 @@ def test_staged_args_are_checked_for_keys_and_types_but_not_for_required(session
         session.begin_command("fillet", {"radios": 1.0})
 
 
+def test_a_failed_begin_leaves_everything_as_it_was(session: Session):
+    """検査は状態を変える前に済ませる(途中で落ちると選択だけ消え、配信もされない。sol の指摘)。"""
+    select_vertical_edges(session)
+    session.begin_command("fillet", {"radius": 1.0})
+    staged = command_of(session)
+    with pytest.raises(KeyError):
+        session.begin_command("add_line", {"sketch_id": "no-such-sketch"})
+    with pytest.raises(ValueError):
+        session.begin_command("chamfer", {"nope": 1.0})
+    assert session.get_selection()["count"] == 4
+    assert command_of(session) == staged
+    assert mode_of(session) == {"kind": "idle"}
+
+
+def test_unsetting_an_unknown_key_is_rejected_too(session: Session):
+    """外すだけのキーも名前を見る(`radios: null` を黙って通すと、消したつもりの半径が残ったまま確定される。sol の指摘)。"""
+    session.begin_command("fillet", {"radius": 2.0})
+    with pytest.raises(ValueError, match="radios"):
+        session.set_command_args({"radios": None})
+    with pytest.raises(ValueError, match="client_op"):
+        session.set_command_args({"client_op": None})
+    assert command_of(session)["args"] == {"radius": 2.0}
+
+
 def test_set_and_apply_need_a_command(session: Session):
     with pytest.raises(NoCommand):
         session.set_command_args({"radius": 1.0})
@@ -283,6 +307,26 @@ def test_errors_keep_the_workspace_and_reach_the_screen(session: Session):
     assert unknown["type"] == "error" and "no_such_verb" in unknown["message"]
     assert nothing["type"] == "error" and "起動中のコマンドが無い" in nothing["message"]
     assert command_of(session) is None
+
+
+def test_args_of_the_wrong_type_are_refused_over_websocket(session: Session):
+    """`args` の型違い(`[]` / `false` / `0`)を省略と読んで確定しない(sol の指摘)。"""
+    select_vertical_edges(session)
+    session.begin_command("fillet", {"radius": 2.0})
+    log_before = len(session.document.log.entries)
+
+    async def script(send):
+        results = []
+        for bad in ([], False, 0, ""):
+            results.append(await send({"cmd": "apply_command", "args": bad}))
+        results.append(await send({"cmd": "set_command_args"}))
+        results.append(await send({"cmd": "set_command_args", "args": "radius=3"}))
+        return results
+
+    results, _clients = browser(session, script, connections=1)
+    assert [payload["type"] for payload in results] == ["error"] * 6, results
+    assert len(session.document.log.entries) == log_before
+    assert command_of(session)["args"] == {"radius": 2.0}
 
 
 def test_hidden_features_cannot_be_begun_or_entered(session: Session):

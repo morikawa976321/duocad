@@ -459,13 +459,14 @@ class Session:
                 f"{', '.join(stageable_verb_names())})"
             )
         staged = merge_args(command, {}, args or {})
+        sketch_id = staged.get("sketch_id")
+        if sketch_id is not None and not self._has_sketch(sketch_id):
+            raise KeyError(f"no such sketch: {sketch_id!r}")
+        # ここから下は失敗しない(検査を全部済ませてから状態を変える。途中で落ちると選択だけ消えて配信もされない)。
         current = self.workspace.command
         if current is not None and current.verb != verb:
             selection.clear_selection(self.document)
-        sketch_id = staged.get("sketch_id")
         if sketch_id is not None:
-            if not self._has_sketch(sketch_id):
-                raise KeyError(f"no such sketch: {sketch_id!r}")
             self._apply_mode({"kind": "sketch", "sketch_id": sketch_id})
         self.workspace.command = CommandState(verb=verb, args=staged)
         self.workspace.bump()
