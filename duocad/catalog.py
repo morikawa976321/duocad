@@ -2262,6 +2262,8 @@ def agent_instructions(hidden: frozenset = frozenset()) -> str:
         "止まる（人の画面にその verb が起動し、選んだ対象が見える）。人が画面で起動した verb と途中の引数は "
         "describe_document / get_command の command に見える。その verb の引数は set_command_args で足し、確定は "
         "apply_command で行う（確定まで進めるかも人の指示の文面から判断する）。人が打っている途中の引数を上書きしない。"
+        "辺は、辺を使う verb(fillet / chamfer など)を起動している間だけ人の画面に出る。verb を起動せずに辺だけ選んでも"
+        "人には見えないので、辺を選ぶなら先に begin_command する。非表示のボディ・メッシュのボディ・非表示のスケッチは選べない。"
         "enter_sketch / leave_sketch で人の画面のモードが切り替わる（スケッチを作ると誰が作ってもそこへ入るので、"
         "描き終えて押し出したら leave_sketch で通常へ戻す）。"
         "形を変える verb が確定すると選択は空になるので、次の対象は選び直す。"
