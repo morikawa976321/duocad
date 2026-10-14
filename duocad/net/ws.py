@@ -403,11 +403,13 @@ class Server:
                     await self._push_applied(connection, applied, message)
                 else:
                     applied = self._apply(getattr(self.session, method), **arguments)
+                    # AI の中断は送信より前(送信が切断で失敗しても、文書は既に閉じている)。
+                    if applied.get("closed"):
+                        self._stop_ai_on_switch()
                     await _send(connection, {"type": "file", **applied})
                     # 開いている文書を消すと閉じる(`Session.delete_document`)。文書が替わったので
                     # 全接続へ配る —— 封筒だけだと、他のタブは消えた文書を出したまま編集を断られ続ける。
                     if applied.get("closed"):
-                        self._stop_ai_on_switch()
                         await self._push(connection, applied=None)
             # 保存は表に載らない(`name` が任意引数で、表の「引数は全部必須」の規律に合わない。`catalog.Param.ws`)。
             # 契約は `Session.save_document`: 引数なし=編集中のファイルへ上書き / `name` あり=新しい名前でのみ保存(既存名は拒否)。

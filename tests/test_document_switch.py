@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from duocad.agent.loop import AgentLoop
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
@@ -96,8 +98,18 @@ def test_a_switch_between_the_check_and_the_call_does_not_reach_the_new_document
     assert run.tool_calls == ()
 
 
-def test_switching_documents_stops_a_running_in_app_ai(monkeypatch, box_session: Session):
+@pytest.mark.parametrize(
+    "switch",
+    [
+        {"cmd": "new_document"},
+        {"cmd": "close_document"},
+        {"cmd": "delete_document", "name": "box.json"},
+    ],
+    ids=["new", "close", "delete-current"],
+)
+def test_switching_documents_stops_a_running_in_app_ai(monkeypatch, box_session: Session, switch: dict):
     """落ちたら、アプリ内AIが前の依頼を切り替え後の文書で続ける。"""
+    box_session.save_document("box.json")
     monkeypatch.setattr(
         "duocad.server.build_provider",
         lambda *a, **k: RecordedProvider(
@@ -116,7 +128,7 @@ def test_switching_documents_stops_a_running_in_app_ai(monkeypatch, box_session:
         server.clients.add(watcher)
         await server._dispatch(watcher, json.dumps({"cmd": "ai_send", "message": "スケッチを作って"}))
         await _wait_until(lambda: watcher.of_type("ai_tool_call"))
-        await server._dispatch(watcher, json.dumps({"cmd": "new_document"}))
+        await server._dispatch(watcher, json.dumps(switch))
         await _wait_until(lambda: watcher.of_type("ai_result"))
         await _settle(server)
         return watcher
