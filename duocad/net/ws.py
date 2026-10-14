@@ -152,6 +152,10 @@ class Server:
         #: この版で隠す機能(`channel.hidden_features`)。属する口は `_dispatch` が断り、アプリ内AIの説明文の道具数からも除く。
         self.hidden_features = frozenset(hidden_features)
         self._hidden_commands = catalog.feature_command_names(self.hidden_features)
+        #: この版で選べるプロバイダ(`ai_configure` が受け付ける綴り・`ai_status.providers`)。
+        self.ai_providers: tuple = tuple(
+            kind for kind in AI_PROVIDERS if not (kind == "openai_compat" and "local_ai" in self.hidden_features)
+        )
         self.clients: set = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         # WebSocket経由の操作を処理している最中か(`_on_core_change` の二重配信よけ)。
@@ -169,7 +173,9 @@ class Server:
         # `mcp_server.DocumentTools` を作れない(循環)。`ToolSurface`(`descriptors`/`call`/`error_envelope`)を満たせば何でもよい。
         self._ai_tools: Optional[Any] = None
         # キーが置いてあれば Claude から始める(選び直しはサーバを立て直すたびに消える)。
-        self._ai_provider_kind = "anthropic" if api_key_configured() else "openai_compat"
+        self._ai_provider_kind = (
+            "anthropic" if "openai_compat" not in self.ai_providers or api_key_configured() else "openai_compat"
+        )
         self._ai_model: Optional[str] = None
         self._ai_base_url: Optional[str] = None
         # llama-server へ送る思考の設定(`THINKING_CHOICES`)。プロバイダを切り替えても保つ(Claude には送らない)。
@@ -574,7 +580,7 @@ class Server:
             "api_key_source": key["source"],
             "api_key_hint": key["hint"],
             "running": self._ai_running,
-            "providers": list(AI_PROVIDERS),
+            "providers": list(self.ai_providers),
             "thinking": self._ai_thinking,
             "thinking_choices": list(THINKING_CHOICES),
         }
@@ -612,6 +618,8 @@ class Server:
             return {**self._ai_status(), "error": "AI応答中は設定を変更できない(中断してから)"}
         if provider is not None and provider not in AI_PROVIDERS:
             return {**self._ai_status(), "error": f"未知のプロバイダ: {provider!r}"}
+        if provider is not None and provider not in self.ai_providers:
+            return {**self._ai_status(), "error": f"{provider!r} はこの版では使えない(安定版のAIはClaudeだけ。docs/STABLE.md)"}
         if (provider or self._ai_provider_kind) == "anthropic" and base_url:
             return {
                 **self._ai_status(),

@@ -57,6 +57,8 @@
 
   /** 送り先を選べるのは鍵を持たないプロバイダだけ(Claudeは固定。`Server._ai_configure` が拒否する)。 */
   const canPickEndpoint = $derived(providerDraft !== 'anthropic')
+  /** Claudeしか選べない版(安定版。`Server.ai_providers`)では設定フォームに出すものが無いので、開く口ごと出さない。 */
+  const hasSettings = $derived(canPickProvider || status?.provider !== 'anthropic')
   const keyMissing = $derived(status?.provider === 'anthropic' && !status.apiKeyConfigured)
 
   function openSettings(): void {
@@ -166,13 +168,15 @@
     {#if running}
       <button id="ai-cancel" onclick={onCancel}>中断</button>
     {/if}
-    <button id="ai-settings-toggle" onclick={() => (settingsOpen ? (settingsOpen = false) : openSettings())}>
-      設定
-    </button>
+    {#if hasSettings}
+      <button id="ai-settings-toggle" onclick={() => (settingsOpen ? (settingsOpen = false) : openSettings())}>
+        設定
+      </button>
+    {/if}
   </div>
 
   {#if open}
-    {#if settingsOpen}
+    {#if settingsOpen && hasSettings}
       <div class="ai-settings">
         {#if canPickProvider}
           <label class="field-row">

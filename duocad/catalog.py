@@ -59,7 +59,8 @@ SHAPE_CATEGORIES = ("sketch", "feature", "history")
 WS_SURFACES = ("table", "special", "none")
 
 #: 版によって隠せる機能(`Command.feature`)。どの版で隠すかは `channel.hidden_features`。
-FEATURES = ("shape_optimization",)
+#: `local_ai` は宣言に属さない(アプリ内AIのプロバイダ `openai_compat` を隠す。`net/ws.py` の `Server.ai_providers`)。
+FEATURES = ("shape_optimization", "local_ai")
 
 
 @dataclass(frozen=True)

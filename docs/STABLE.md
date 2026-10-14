@@ -89,6 +89,14 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 
 凍結を解くときは `HIDDEN_IN_STABLE` から外す。
 
+**アプリ内AIは Claude API だけにする**(本人指示 2026-10-14)。ローカルAI(llama-server、`openai_compat`)は機能 `local_ai` として
+同じ `HIDDEN_IN_STABLE` で隠す:
+
+- `ai_status.providers` が `["anthropic"]` だけになり、APIキーが無くても Claude から始まる(画面は「APIキーが未設定」と言う)。
+- `ai_configure` で `openai_compat` を選ぶと断る。
+- 選ぶものが無いので、AIパネルの「設定」(プロバイダとエンドポイントの欄)を出さない。キーはヘッダーの「設定」から置く。
+- MCP(Claude Code から操作する口)は関係しない —— 隠すのはアプリ内AIの相手だけ。
+
 ## 巻き戻し(手動)
 
 直前の更新の前のコミットは `duocad-stable\.git\duocad-previous` に残る。実行するコマンドは
