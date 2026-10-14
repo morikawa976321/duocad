@@ -4,12 +4,26 @@ from __future__ import annotations
 import asyncio
 import json
 
+from duocad.agent.loop import AgentLoop
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
 from agent_support import RecordedProvider, spoke, tool_use
 from mcp_support import call, call_error
 from session_support import FakeConnection
+from test_agent_loop import SpyTools
 from test_agent_ws import _settle, _wait_until, build_server
+
+
+class SwitchingJustBeforeTheCall(SpyTools):
+    """ループの直前チェックを通った後、ツール実行の投げ返しが走る前に人が新規を押す。"""
+
+    def __init__(self, inner: DocumentTools, session: Session) -> None:
+        super().__init__(inner)
+        self.session = session
+
+    def call_and_seq(self, name, arguments, expected_seq=None):
+        self.session.new_document()
+        return super().call_and_seq(name, arguments, expected_seq)
 
 
 def test_generation_moves_on_switch_but_not_on_verbs(session: Session):
@@ -67,6 +81,19 @@ def test_mcp_does_not_check_before_the_client_has_looked(session: Session):
     server = McpServer(DocumentTools(session))
     session.new_document()
     call(server, "sketch_create", {"base_plane": "XY"})
+
+
+def test_a_switch_between_the_check_and_the_call_does_not_reach_the_new_document(session: Session):
+    """落ちたら、ループの照合とツール実行の隙間に入った切り替えで、古い前提の verb が新しい文書に効く(sol の指摘)。"""
+    session.new_document()
+    tools = SwitchingJustBeforeTheCall(DocumentTools(session), session)
+    provider = RecordedProvider(
+        [tool_use("sketch_create", {"base_plane": "XY"}, call_id="call_1"), spoke("止まった")]
+    )
+    run = AgentLoop(tools, provider).run("スケッチを作って")
+
+    assert session.document.sketches == []
+    assert run.tool_calls == ()
 
 
 def test_switching_documents_stops_a_running_in_app_ai(monkeypatch, box_session: Session):

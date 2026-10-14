@@ -71,6 +71,7 @@ from . import (
     sketch,
 )
 from .channel import CHANNELS, StableUpdater, describe, hidden_features
+from .agent.loop import VersionChanged
 from .entry import entry_for
 from .session import DocumentBusy
 from .server import (
@@ -200,11 +201,18 @@ class DocumentTools:
             return "文書が閉じられている"
         return self.session.current_name or "保存前の新規文書"
 
-    def call_and_seq(self, name: str, arguments: dict) -> tuple:
+    def call_and_seq(self, name: str, arguments: dict, expected_seq: Any = None) -> tuple:
         """`call` と**直後の** `current_seq` を返す: `(結果, 例外, 版)`。例外は上げずに返す。
         `ToolsOnLoop` はこれを1回の投げ返しで走らせる —— 2回に分けると、間に入った人の操作が
         版に吸われて検出できない(issue #48)。
+
+        `expected_seq` と今の版が違えば走らせず、例外の位置に `VersionChanged` を返す。照合をここに入れるのは、
+        呼び手の照合とこの実行の間に人が文書を切り替えると、古い前提の verb が新しい文書に効くため(issue #102)。
         """
+        if expected_seq is not None:
+            seq = self.current_seq()
+            if seq != expected_seq:
+                return None, VersionChanged(seq), seq
         try:
             return self.call(name, arguments), None, self.current_seq()
         except Exception as error:  # noqa: BLE001 — 封筒にするのは呼び手(`error_envelope`)
