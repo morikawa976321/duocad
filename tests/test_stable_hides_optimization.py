@@ -9,11 +9,11 @@ from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
 from session_support import browser
 
-OPTIMIZATION_TOOLS = {"set_preserve_bodies", "set_exclude_bodies", "set_fixtures", "set_loads", "clear_loads"}
+OPTIMIZATION_TOOLS = {"set_preserve_bodies", "set_exclude_bodies", "set_fixtures", "set_loads", "clear_loads",
+                      # 作業空間の最適化モードへの出入り(issue #153)。モードが無い版では入れない
+                      "enter_optimize", "leave_optimize"}
 OPTIMIZATION_SOCKET_ONLY = {"optimize_conditions", "optimize_resolution", "run_optimization", "cancel_optimization",
-                            "finish_optimization", "optimize_steps", "optimize_step_voxels",
-                            # 作業空間の最適化モードへの出入り(issue #153)。モードが無い版では入れない
-                            "enter_optimize", "leave_optimize"}
+                            "finish_optimization", "optimize_steps", "optimize_step_voxels"}
 
 
 def test_only_the_shape_optimization_commands_are_hidden_in_stable():

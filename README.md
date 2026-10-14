@@ -351,8 +351,8 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](docs/WEB_PITFALLS.md)�
 - **済んだ依頼は「人の発話 + AIの最終返答」だけを残す**（`AgentLoop._settle_history`）。文脈長に当たったら古い依頼を半分捨てる
 - **ツール定義は先に読ませておく**（`ai_prepare`。llama-server の `--slot-save-path` があればスロット保存を使う）
 - **文書と選択は先に見ておく** —— `describe_document` / `get_selection` をループが代わりに呼んで履歴へ置く（`AgentLoop._look_first`）
-- **同時編集は楽観ロックで守る** —— 版は「ログの本数・選択の指紋・可視性の指紋」の3つ組（`DocumentTools.current_seq()`）。
-  可視性は操作ログに載らないので指紋が要る
+- **同時編集は楽観ロックで守る** —— 版は「文書の世代・ログの本数・選択の指紋・可視性の指紋・作業空間の版」の5つ組
+  （`DocumentTools.current_seq()`）。可視性も起動中のコマンドも操作ログに載らないので、それぞれの印が要る
 - **Claude APIのキーは画面の「設定」で置ける**（`ai_set_api_key`。`duocad_secrets.json` に書く。gitignore済み。画面へ値は返さない）。
   手で置くなら環境変数 `DUOCAD_ANTHROPIC_API_KEY` か同じファイル（`{"DUOCAD_ANTHROPIC_API_KEY": "sk-ant-..."}`）。環境変数が優先。
   **`ANTHROPIC_API_KEY` は読まない** —— その名前をユーザー環境に置くと、同じマシンの Claude Code がサブスクではなくそのキーで課金する。

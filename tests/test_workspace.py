@@ -7,9 +7,14 @@ from __future__ import annotations
 
 import pytest
 
+from duocad.agent import AgentLoop
+from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
 from duocad.workspace import NoCommand
+from agent_support import spoke, tool_use
+from mcp_support import call, call_error
 from session_support import browser, session_with_box
+from test_agent_concurrency import ConcurrentEditProvider
 
 #: 30×30×40 の直方体で Z に平行な辺(ちょうど4本)。
 VERTICAL_EDGES = {"kind": "edge", "where": [{"op": "parallel_to", "axis": "Z"}]}
@@ -293,3 +298,116 @@ def test_hidden_features_cannot_be_begun_or_entered(session: Session):
     )
     assert begun["type"] == "error" and entered["type"] == "error"
     assert command_of(session) is None and mode_of(session) == {"kind": "idle"}
+
+
+# ---------------------------------------------------------------- MCP(AI の側)
+def test_the_ai_begins_a_verb_and_leaves_the_how_and_the_enter_to_the_human(session: Session):
+    """AI が起動して対象まで選び、半径と確定を人に残す。人の Enter(一発の verb)で AI の構えが畳まれる。"""
+    server = McpServer(DocumentTools(session))
+    begun = call(server, "begin_command", {"verb": "fillet"})
+    assert begun == {"command": command_of(session), "mode": {"kind": "idle"}}
+    assert begun["command"]["verb"] == "fillet" and begun["command"]["args"] == {}
+    call(server, "set_selection", {"predicate": VERTICAL_EDGES})
+    described = call(server, "describe_document")
+    assert described["command"]["verb"] == "fillet" and described["mode"] == {"kind": "idle"}
+
+    session.apply("fillet", {"radius": 2.0})  # 人が半径を打って Enter
+    assert call(server, "get_command") == {"command": None, "mode": {"kind": "idle"}}
+
+
+def test_the_ai_fills_the_how_of_a_verb_the_human_began_and_applies_it(session: Session):
+    select_vertical_edges(session)
+    session.begin_command("fillet")  # 人がツールバーで起動
+    server = McpServer(DocumentTools(session))
+    assert call(server, "get_command")["command"]["verb"] == "fillet"
+    assert call(server, "set_command_args", {"args": {"radius": 2.0}})["command"]["args"] == {"radius": 2.0}
+    applied = call(server, "apply_command")
+    assert applied["verb"] == "fillet" and applied["changed_bodies"] and "seq" in applied
+    assert call(server, "get_command")["command"] is None
+
+
+def test_without_a_command_the_failure_is_no_command(session: Session):
+    server = McpServer(DocumentTools(session))
+    for name, arguments in (("apply_command", {}), ("set_command_args", {"args": {"radius": 1.0}}), ("end_command", {})):
+        if name == "end_command":
+            assert call(server, name, arguments)["command"] is None, "無起動の Esc は失敗ではない"
+            continue
+        error = call_error(server, name, arguments)
+        assert error["code"] == "no_command", error
+
+
+def test_beginning_an_unknown_or_hidden_verb_fails_cleanly(session: Session):
+    server = McpServer(DocumentTools(session))
+    assert call_error(server, "begin_command", {"verb": "no_such_verb"})["code"] == "invalid_argument"
+    assert call_error(server, "begin_command", {"verb": "fillet", "args": {"radios": 1.0}})["code"] == "invalid_argument"
+    stable = McpServer(DocumentTools(session, hidden_features=frozenset({"shape_optimization"})))
+    assert call_error(stable, "begin_command", {"verb": "set_fixtures"})["code"] == "not_found"
+    assert command_of(session) is None
+
+
+def test_the_ai_enters_and_leaves_sketches(session: Session):
+    server = McpServer(DocumentTools(session))
+    created = call(server, "sketch_create", {"base_plane": "XY"})
+    assert call(server, "get_command")["mode"] == {"kind": "sketch", "sketch_id": created["sketch_id"]}
+    assert call(server, "leave_sketch")["mode"] == {"kind": "idle"}
+    assert call(server, "enter_sketch", {"sketch_id": created["sketch_id"]})["mode"]["sketch_id"] == created["sketch_id"]
+    assert call_error(server, "enter_sketch", {"sketch_id": "no-such-sketch"})["code"] == "not_found"
+
+
+# ---------------------------------------------------------------- アプリ内AI(楽観ロック・寸法ガード)
+def test_the_workspace_is_part_of_the_optimistic_lock(session: Session):
+    """人が半径を打ち直した / Esc で畳んだ、を AI が見ずに古い引数で確定しない。"""
+    tools = DocumentTools(session)
+    before = tools.current_seq()
+    session.begin_command("fillet")
+    assert tools.current_seq() != before
+
+    def human_retypes_the_radius() -> None:
+        session.set_command_args({"radius": 3.0})
+
+    provider = ConcurrentEditProvider(
+        [
+            (tool_use("set_command_args", {"args": {"radius": 2.0}}), human_retypes_the_radius),
+            (spoke("人が 3 にしたのでそのままにします"), None),
+        ]
+    )
+    run = AgentLoop(tools, provider).run("半径を2にして")
+    assert run.status == "completed"
+    assert run.tool_calls == (), "版が動いた呼び出しは走らない"
+    assert command_of(session)["args"] == {"radius": 3.0}, "人の値が残る"
+
+
+def test_a_dimension_nobody_asked_for_is_stopped_on_the_workspace_tools_too(session: Session):
+    """寸法の捏造は `fillet(radius)` と同じく、構える口(`begin_command` / `set_command_args` / `apply_command`)でも止める。"""
+    tools = DocumentTools(session)
+    provider = ConcurrentEditProvider(
+        [
+            (tool_use("begin_command", {"verb": "fillet", "args": {"radius": 1.5}}), None),
+            (spoke("半径を教えてください"), None),
+        ]
+    )
+    run = AgentLoop(tools, provider).run("角をいい感じに丸めて")
+    assert run.status == "completed"
+    assert run.tool_calls[0].ok is False and run.tool_calls[0].result["error"]["code"] == "dimension_not_given"
+    assert command_of(session) is None
+
+    session.begin_command("fillet")
+    provider = ConcurrentEditProvider(
+        [
+            (tool_use("set_command_args", {"args": {"radius": 1.5}}), None),
+            (spoke("半径を教えてください"), None),
+        ]
+    )
+    run = AgentLoop(tools, provider).run("角を丸めて")
+    assert run.tool_calls[0].result["error"]["code"] == "dimension_not_given"
+    assert command_of(session)["args"] == {}
+
+    provider = ConcurrentEditProvider(
+        [
+            (tool_use("set_command_args", {"args": {"radius": 2.0}}), None),
+            (spoke("半径 2 を入れました"), None),
+        ]
+    )
+    run = AgentLoop(tools, provider).run("半径を2にして")
+    assert run.tool_calls[0].ok is True
+    assert command_of(session)["args"] == {"radius": 2.0}

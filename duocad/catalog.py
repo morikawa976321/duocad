@@ -2008,6 +2008,7 @@ COMMANDS: tuple[Command, ...] = (
         note="結果の `fem_status` は全接続へ配る(設定はサーバに1つ)",
     ),
     # 作業空間(workspace)。**起動中のコマンドとモードを共有する口**(issue #153。`duocad/workspace.py`)。選択と同じく
+    # MCP にも WS にも同じ顔で出す(`get_command` は読むだけなので WS には無い: 画面は状態配信で受け取る)。
     # verb ではなく、操作ログに載らず undo でも戻らない。応答は `change: "command"` / `change: "mode"` のイベント。
     # 人(画面のツールバー・Esc・Enter・スケッチへの出入り)も AI も同じ操作で触り、出所は持たない。
     Command(
@@ -2018,7 +2019,7 @@ COMMANDS: tuple[Command, ...] = (
             "AI が begin_command で構えたものを人が直したかを確かめる。"
         ),
         ws="none",
-        mcp=False,
+        mcp=True,
         changes_document=False,
     ),
     Command(
@@ -2035,7 +2036,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         session="begin_command",
         ws="special",
-        mcp=False,
+        mcp=True,
     ),
     Command(
         name="set_command_args",
@@ -2047,7 +2048,7 @@ COMMANDS: tuple[Command, ...] = (
         params=(Param("args", "object", "その verb のツールと同じ名前の引数。null の値はそのキーを外す"),),
         session="set_command_args",
         ws="special",
-        mcp=False,
+        mcp=True,
     ),
     Command(
         name="end_command",
@@ -2055,7 +2056,7 @@ COMMANDS: tuple[Command, ...] = (
         description="起動中の verb を確定せずに畳むときに呼ぶ(人の Esc と同じ)。選択も空になる。",
         session="end_command",
         ws="special",
-        mcp=False,
+        mcp=True,
     ),
     Command(
         name="apply_command",
@@ -2067,7 +2068,7 @@ COMMANDS: tuple[Command, ...] = (
         params=(Param("args", "object", "確定の直前に併合する引数(省略可)", required=False),),
         session="apply_command",
         ws="special",
-        mcp=False,
+        mcp=True,
         note=(
             "応答は構えていた verb の封筒そのもの(`change` のイベントではない)。`tests/test_protocol.py` の "
             "`_change_commands` はこの名前を除く"
@@ -2083,7 +2084,7 @@ COMMANDS: tuple[Command, ...] = (
         params=(Param("sketch_id", "string", "describe_document が返した sketch_id"),),
         session="enter_sketch",
         ws="special",
-        mcp=False,
+        mcp=True,
     ),
     Command(
         name="leave_sketch",
@@ -2091,7 +2092,7 @@ COMMANDS: tuple[Command, ...] = (
         description="スケッチの編集を終えて通常のモードへ戻るときに呼ぶ。起動中のコマンドは畳まれる。",
         session="leave_sketch",
         ws="special",
-        mcp=False,
+        mcp=True,
     ),
     Command(
         name="enter_optimize",
@@ -2100,7 +2101,7 @@ COMMANDS: tuple[Command, ...] = (
         description="形状最適化のモードに入るときに呼ぶ(条件の verb はモードに関わらず使える。画面の出し分けだけが変わる)。",
         session="enter_optimize",
         ws="special",
-        mcp=False,
+        mcp=True,
     ),
     Command(
         name="leave_optimize",
@@ -2109,7 +2110,7 @@ COMMANDS: tuple[Command, ...] = (
         description="形状最適化のモードから通常のモードへ戻るときに呼ぶ。",
         session="leave_optimize",
         ws="special",
-        mcp=False,
+        mcp=True,
     ),
 )
 
@@ -2257,6 +2258,11 @@ def agent_instructions(hidden: frozenset = frozenset()) -> str:
         "選択だけで止めるか verb まで進めるかは、人の指示の文面からその都度判断する。"
         "選択だけで止めたときは、何を選んだかを述べる"
         "（人は画面で見て、そのまま採用するか、直すよう頼むか、自分でトグルして直す）。"
+        "人と一緒に1つの verb を進めるには、begin_command(verb) で起動して対象を選び、半径などの引数と確定を人に残して"
+        "止まる（人の画面にその verb が起動し、選んだ対象が見える）。人が画面で起動した verb と途中の引数は "
+        "describe_document / get_command の command に見える。その verb の引数は set_command_args で足し、確定は "
+        "apply_command で行う（確定まで進めるかも人の指示の文面から判断する）。人が打っている途中の引数を上書きしない。"
+        "enter_sketch / leave_sketch で人の画面のモードが切り替わる（スケッチを作ると誰が作ってもそこへ入る）。"
         "形を変える verb が確定すると選択は空になるので、次の対象は選び直す。"
         "寸法の差が0.01mm以内、体積や面積の差が0.1%以内なら指示どおりにできているとみなし、"
         "それ以上の微調整や作り直しはしないこと。"

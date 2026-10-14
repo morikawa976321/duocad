@@ -17,6 +17,7 @@ ERROR_CODES = {
     "invalid_predicate",    # 述語が不正(有効なopの一覧を必ず添える)
     "busy",                 # 形状最適化の実行中に文書を変えようとした(DocumentBusy)
     "document_changed",     # MCP の経路だけ(人が文書を切り替えた後、describe_document で確かめる前のツール)
+    "no_command",           # 起動中のコマンドが無いのに set_command_args / apply_command を呼んだ(NoCommand)
     "internal",             # 上記以外(黙って握りつぶさないための受け皿)
     "dimension_not_given",  # アプリ内AIの経路だけ(人が量を言っていないのに寸法を埋めた。MCP は返さない)
 }
