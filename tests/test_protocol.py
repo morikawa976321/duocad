@@ -36,11 +36,17 @@ def _verbs() -> list[str]:
 
 
 def _change_commands() -> list[str]:
-    """ブラウザから踏めて文書・選択・可視性を変えるが、verb ではないもの(応答は `change` のイベント)。"""
+    """ブラウザから踏めて文書・選択・可視性・作業空間を変えるが、verb ではないもの(応答は `change` のイベント)。
+
+    `apply_command` は除く: 構えていた verb の封筒をそのまま返す(verb 側の検査が形を見る。`catalog` の note)。
+    """
     return [
         command.name
         for command in catalog.COMMANDS
-        if command.ws != "none" and command.changes_document and not command.returns
+        if command.ws != "none"
+        and command.changes_document
+        and not command.returns
+        and command.name != "apply_command"
     ]
 
 
@@ -395,6 +401,55 @@ def _run_toggle_selection(session: Session, tmp_path: Path) -> dict:
 @_runner("clear_selection")
 def _run_clear_selection(session: Session, tmp_path: Path) -> dict:
     return session.clear_selection()
+
+
+@_runner("begin_command")
+def _run_begin_command(session: Session, tmp_path: Path) -> dict:
+    _box(session)
+    return session.begin_command("fillet", {"radius": 1.0})
+
+
+@_runner("set_command_args")
+def _run_set_command_args(session: Session, tmp_path: Path) -> dict:
+    _box(session)
+    session.begin_command("fillet")
+    return session.set_command_args({"radius": 1.0})
+
+
+@_runner("end_command")
+def _run_end_command(session: Session, tmp_path: Path) -> dict:
+    """`change: 'command'` の `command` が null で来る経路。"""
+    _box(session)
+    session.begin_command("fillet")
+    return session.end_command()
+
+
+@_runner("enter_sketch")
+def _run_enter_sketch(session: Session, tmp_path: Path) -> dict:
+    _box(session)
+    created = session.apply("sketch_create", {"base_plane": "XY"})
+    session.leave_sketch()
+    return session.enter_sketch(created["sketch_id"])
+
+
+@_runner("leave_sketch")
+def _run_leave_sketch(session: Session, tmp_path: Path) -> dict:
+    _box(session)
+    session.apply("sketch_create", {"base_plane": "XY"})
+    return session.leave_sketch()
+
+
+@_runner("enter_optimize")
+def _run_enter_optimize(session: Session, tmp_path: Path) -> dict:
+    _box(session)
+    return session.enter_optimize()
+
+
+@_runner("leave_optimize")
+def _run_leave_optimize(session: Session, tmp_path: Path) -> dict:
+    _box(session)
+    session.enter_optimize()
+    return session.leave_optimize()
 
 
 @_runner("new_document")

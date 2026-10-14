@@ -1,6 +1,6 @@
 // 生成物 —— **手で直さない**。正は `duocad/catalog.py` の宣言で、
 // 作り直すのは `python tools/generate_protocol_ts.py`(走らせ忘れは `tests/test_protocol.py` が落とす)。
-import type { SelectionState } from '../session'
+import type { CommandState, ModeState, SelectionState } from '../session'
 
 /** WebSocket から踏めるコマンド -> 分類(`catalog.Command.category`)。 */
 export const COMMAND_CATEGORY = {
@@ -74,6 +74,14 @@ export const COMMAND_CATEGORY = {
   ai_cancel: 'protocol',
   fem_get_status: 'protocol',
   fem_set_device: 'protocol',
+  begin_command: 'workspace',
+  set_command_args: 'workspace',
+  end_command: 'workspace',
+  apply_command: 'workspace',
+  enter_sketch: 'workspace',
+  leave_sketch: 'workspace',
+  enter_optimize: 'workspace',
+  leave_optimize: 'workspace',
 } as const
 
 export type CommandName = keyof typeof COMMAND_CATEGORY
@@ -150,6 +158,14 @@ export interface CommandArguments {
   ai_cancel: Record<string, never>
   fem_get_status: Record<string, never>
   fem_set_device: { device: string }
+  begin_command: { verb: string; args?: object }
+  set_command_args: { args: object }
+  end_command: Record<string, never>
+  apply_command: { args?: object }
+  enter_sketch: { sketch_id: string }
+  leave_sketch: Record<string, never>
+  enter_optimize: Record<string, never>
+  leave_optimize: Record<string, never>
 }
 
 /**
@@ -204,6 +220,8 @@ export type Applied =
   | (AppliedChangeBase & { change: 'selection'; selection: SelectionState })
   | (AppliedChangeBase & { change: 'visibility'; body_id?: string; sketch_id?: string; visible: boolean; previous: boolean; changed: boolean })
   | (AppliedChangeBase & { change: 'document'; action: string; path: string | null; name: string | null })
+  | (AppliedChangeBase & { change: 'command'; command: CommandState | null })
+  | (AppliedChangeBase & { change: 'mode'; mode: ModeState })
 
 /** 状態配信(`ServerState`)が持つキー。 */
 export type ServerStateKey =
@@ -222,3 +240,5 @@ export type ServerStateKey =
   | 'current_name'
   | 'saved'
   | 'document_open'
+  | 'command'
+  | 'mode'

@@ -360,6 +360,33 @@ class Server:
             elif command == "clear_selection":
                 applied = self._apply(self.session.clear_selection, message.get("client_op"))
                 await self._push(connection, applied=applied)
+            # -------------------------------------------------- B2: 作業空間(起動中のコマンド・モード。issue #153)。選択と同じ `change` 系
+            elif command == "begin_command":
+                verb = message.get("verb")
+                if verb in self._hidden_commands:
+                    raise ValueError(f"{verb!r} はこの版では使えない(docs/STABLE.md)")
+                applied = self._apply(
+                    self.session.begin_command, verb, message.get("args") or {}, message.get("client_op")
+                )
+                await self._push(connection, applied=applied)
+            elif command == "set_command_args":
+                applied = self._apply(
+                    self.session.set_command_args, message.get("args") or {}, message.get("client_op")
+                )
+                await self._push(connection, applied=applied)
+            elif command == "end_command":
+                applied = self._apply(self.session.end_command, message.get("client_op"))
+                await self._push(connection, applied=applied)
+            elif command == "apply_command":
+                # 応答は構えていた verb の封筒(`client_op` を載せて全接続へ)。
+                applied = self._apply(self.session.apply_command, message.get("args") or {})
+                await self._push_applied(connection, applied, message)
+            elif command == "enter_sketch":
+                applied = self._apply(self.session.enter_sketch, message["sketch_id"], message.get("client_op"))
+                await self._push(connection, applied=applied)
+            elif command in ("leave_sketch", "enter_optimize", "leave_optimize"):
+                applied = self._apply(getattr(self.session, command), message.get("client_op"))
+                await self._push(connection, applied=applied)
             # -------------------------------------------------- C/D: スケッチとフィーチャの verb
             # 引数は宣言(`catalog.Command.ws_arguments`)に従って取り出して検査し、`Session.apply` へ渡す(MCP・アプリ内AIと同じ1本)。
             # 省略された引数は渡さない: 既定値を埋めると、`move_body` のようにモードで要る引数が入れ替わる verb で、

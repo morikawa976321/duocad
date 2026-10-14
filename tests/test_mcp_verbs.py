@@ -93,7 +93,9 @@ def test_tool_names_match_the_verb_names_in_the_operation_log():
         for command in COMMANDS
         if command.category in ("sketch", "feature")
         or (command.category == "file" and command.changes_document and command.mcp)
-        or (not command.mcp and command.ws == "none")
+        # 公開面に無いが保存済みログの再生のために verb として残るもの(`add_solid_body`)。文書を変えない読み取り
+        # (作業空間の `get_command`)は含めない。
+        or (not command.mcp and command.ws == "none" and command.changes_document)
     }
     assert registered == expected, {
         "catalog に同じ綴りの宣言が無いverb": sorted(registered - expected),

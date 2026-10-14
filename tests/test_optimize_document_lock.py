@@ -18,7 +18,11 @@ from session_support import browser
 #: 文書を変えるが、実行中も通してよいもの(操作ログに載らず、最適化が読む条件にも形にも触れない)。
 _ALLOWED_WHILE_RUNNING = {"set_visible", "set_sketch_visible", "modify_selection", "toggle_selection",
                           "clear_selection",
-                          "set_selection"}
+                          "set_selection",
+                          # 作業空間(起動中のコマンド・モード)は選択と同じで文書に触れない。`apply_command` だけは中で
+                          # `apply` を呼ぶので、そちらの断りが効く(下の `test_document_changes_are_refused_while_running`)。
+                          "begin_command", "set_command_args", "end_command", "apply_command",
+                          "enter_sketch", "leave_sketch", "enter_optimize", "leave_optimize"}
 #: 文書を差し替えるもの。実行中も通す —— 実行は開始時の文書を持ったまま走り続ける。
 _SWITCHES_DOCUMENT = {"open_document", "new_document", "close_document"}
 
@@ -72,7 +76,8 @@ def test_every_method_that_changes_the_document_is_guarded() -> None:
     lambda s: s.undo(),
     lambda s: s.sketch_create("XY"),
     lambda s: s.preview("sketch_create", {"base_plane": "XY"}),
-], ids=["undo", "verb", "preview"])
+    lambda s: (s.begin_command("sketch_create", {"base_plane": "XY"}), s.apply_command()),
+], ids=["undo", "verb", "preview", "apply_command"])
 def test_document_changes_are_refused_while_running(running: Session, call) -> None:
     """落ちたら、走らせている文書に Undo・verb・プレビューが通り、終わった結果が古い条件の上に足される。"""
     document, entries = running.document, len(running.document.log.entries)

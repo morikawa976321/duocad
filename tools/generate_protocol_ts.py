@@ -73,7 +73,7 @@ def render() -> str:
     lines = [
         "// 生成物 —— **手で直さない**。正は `duocad/catalog.py` の宣言で、",
         "// 作り直すのは `python tools/generate_protocol_ts.py`(走らせ忘れは `tests/test_protocol.py` が落とす)。",
-        "import type { SelectionState } from '../session'",
+        "import type { CommandState, ModeState, SelectionState } from '../session'",
         "",
         "/** WebSocket から踏めるコマンド -> 分類(`catalog.Command.category`)。 */",
         "export const COMMAND_CATEGORY = {",

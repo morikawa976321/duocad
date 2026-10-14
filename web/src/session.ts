@@ -76,6 +76,20 @@ export interface SelectionState {
   count: number
 }
 
+/**
+ * 起動中のコマンド(`duocad/workspace.py`)。`null` は無起動。人の画面もAIも同じ操作(`begin_command` /
+ * `set_command_args` / `end_command` / `apply_command`)で触り、出所を持たない。`args` は verb のサーバ側引数名で、
+ * 入っているキーだけ。`revision` は作業空間の版(変更のたびに進む)。
+ */
+export interface CommandState {
+  verb: string
+  args: Record<string, unknown>
+  revision: number
+}
+
+/** モード(`duocad/workspace.py`)。画面はこれに従う(`enter_sketch` / `leave_sketch` …)。 */
+export type ModeState = { kind: 'idle' } | { kind: 'sketch'; sketch_id: string } | { kind: 'optimize' }
+
 /** 1Bodyぶんの軽量な状態(geometryを含まない)。パーツ一覧はこれだけで描ける。 */
 export interface BodyMeta {
   body_id: string
@@ -254,6 +268,10 @@ export interface ServerState {
   document_open: boolean
   /** 形状最適化の条件(第3のモード)。verb起動時のプリセレクトと役割の色はここが正。 */
   optimize: OptimizeState
+  /** 起動中のコマンド(作業空間)。`null` は無起動。 */
+  command: CommandState | null
+  /** モード(作業空間)。 */
+  mode: ModeState
 }
 
 /**
