@@ -950,6 +950,21 @@ export interface Session {
   /** 参照ごとに、あれば外し無ければ足す(素のクリック。AI の `toggle_selection` と同じ操作)。 */
   toggleSelection(refs: SelectionRef[], clientOp: number): void
   clearSelection(clientOp: number): void
+  // ---------------------------------------------------------------- B2: 作業空間(起動中のコマンド・モード。issue #153)
+  /**
+   * verb を起動して引数を集め始める(ツールバーのクリック)。応答は状態配信の `command`。AI の `begin_command` と同じ操作で、
+   * 画面は起動中の verb を自分で持たず、配信された `command` に従う(`CommandHost.svelte`)。
+   */
+  beginCommand(verb: string, args: Record<string, unknown>, clientOp: number): void
+  /** 起動中の verb の引数を併合する(入力欄の値。`null` で外す)。 */
+  setCommandArgs(args: Record<string, unknown>, clientOp: number): void
+  /** 起動中の verb を確定せずに畳む(Esc)。選択も空になる(サーバの規則)。 */
+  endCommand(clientOp: number): void
+  /** 既存のスケッチの編集モードへ入る(応答は状態配信の `mode`)。 */
+  enterSketch(sketchId: string, clientOp: number): void
+  leaveSketch(clientOp: number): void
+  enterOptimize(clientOp: number): void
+  leaveOptimize(clientOp: number): void
   /**
    * verbを投機的に実行して形だけ測らせる。文書は変わらない(サーバが元へ戻す)。
    * 応答は `onPreview` へ。`previewId` は古い応答を捨てるための番号。
@@ -1417,6 +1432,27 @@ export function createSession(hooks: SessionHooks): Session {
     },
     clearSelection(clientOp) {
       send({ cmd: 'clear_selection', client_op: clientOp }, true)
+    },
+    beginCommand(verb, args, clientOp) {
+      send({ cmd: 'begin_command', verb, args, client_op: clientOp })
+    },
+    setCommandArgs(args, clientOp) {
+      send({ cmd: 'set_command_args', args, client_op: clientOp })
+    },
+    endCommand(clientOp) {
+      send({ cmd: 'end_command', client_op: clientOp })
+    },
+    enterSketch(sketchId, clientOp) {
+      send({ cmd: 'enter_sketch', sketch_id: sketchId, client_op: clientOp })
+    },
+    leaveSketch(clientOp) {
+      send({ cmd: 'leave_sketch', client_op: clientOp })
+    },
+    enterOptimize(clientOp) {
+      send({ cmd: 'enter_optimize', client_op: clientOp })
+    },
+    leaveOptimize(clientOp) {
+      send({ cmd: 'leave_optimize', client_op: clientOp })
     },
     preview(verb, args, previewId) {
       send({ cmd: 'preview', verb, args, preview_id: previewId }, true)

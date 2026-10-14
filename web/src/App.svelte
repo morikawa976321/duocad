@@ -205,7 +205,7 @@
     useSelectedFaceAsPlane(): boolean
     wantsPick(): PickTarget | null
     setPick(ref: SelectionRef): boolean
-    restoreLastInputs(): void
+    commitFailed(): void
     commandSucceeded(): void
   } | null>(null)
 
@@ -344,10 +344,10 @@
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
       if (where === 'get_edges' || where === 'send') edgesAsked.clear()
       if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
-      // 失敗してもやり直せる状態にして返す。OCCTのフィレットは半径に対して単調でなく
-      // (§7: r=10.0 失敗 / r=10.5 成功)、近い値で打ち直すのが実際の使い方。
-      // 選択はコア側にあるので失敗では消えず、戻すのは打った値だけ。
-      if (CATEGORY_OF.get(where) === 'feature') host?.restoreLastInputs()
+      // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
+      // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
+      const category = CATEGORY_OF.get(where)
+      if (category === 'feature' || category === 'sketch') host?.commitFailed()
     },
     onWarning: (message) => fail(`警告 ${message}`),
     onStatus: (next) => {
@@ -738,6 +738,7 @@
 
   // ---------------------------------------------------------------- コアからの状態
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
+    const previous = model
     model = next
     files.onState(next)
     // 状態が1通届くたびに1つ増える番号(実機検査用の穴。`__duocad.stateEpoch`)。無いと
@@ -778,6 +779,14 @@
     }
     wasDocumentOpen = next.document_open
 
+    // 作業空間(起動中のコマンド・モード)は画面が自分で持たず配信に従う(issue #153)。外(AI か別の画面)からの変更は
+    // 札で知らせる: 自分の操作の応答(`client_op` が自分のもの)でなければ外からの変更。
+    const own = applied !== null && applied.client_op !== null && myClientOps.has(applied.client_op)
+    if (!own && previous !== null) noteWorkspaceChange(previous, next)
+    if (applied && (applied.change === 'command' || applied.change === 'mode')) {
+      releasePending(applied.client_op)
+      return
+    }
     // 選択の変更イベントはverbの適用ではない(`change: "selection"`。session.ts の `Applied`)。
     if (applied && applied.change === 'selection') {
       // この画面が出した選択変更だけを数える(`selfSelections`)。AIが書き換えた選択は即適用の引き金にならない。
@@ -1304,6 +1313,75 @@
     if (currentItems().length > 0) clearSelection()
   }
 
+  // ---------------------------------------------------------------- 作業空間(起動中のコマンド・モード。issue #153)
+  // 画面は起動中の verb と引数を自分で持たず、サーバへ送って配信された `state.command` に従う(`CommandHost.svelte`)。
+  // 応答待ち(`pendingOp`)にはしない: 文書もビューポートも変わらない。
+  function beginCommand(verb: string, args: Record<string, unknown>): void {
+    session.beginCommand(verb, args, nextOp())
+  }
+
+  function setCommandArgs(args: Record<string, unknown>): void {
+    session.setCommandArgs(args, nextOp())
+  }
+
+  function endCommand(): void {
+    session.endCommand(nextOp())
+  }
+
+  /** 全モードのコマンド定義から表示名を引く(無ければ verb 名のまま)。 */
+  function commandLabel(verb: string): string {
+    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
+      (command) => command.id === verb,
+    )
+    return found?.label ?? verb
+  }
+
+  function argLabel(verb: string, name: string): string {
+    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
+      (command) => command.id === verb,
+    )
+    return found?.args.find((spec) => spec.name === name)?.label ?? name
+  }
+
+  /** 外(AI か別の画面)が作業空間を変えたら1行で知らせる。自分の操作の応答では呼ばない(`handleState`)。 */
+  function noteWorkspaceChange(before: ServerState, after: ServerState): void {
+    const was = before.command
+    const now = after.command
+    if (was === null && now !== null) {
+      note(`外から「${commandLabel(now.verb)}」が起動された(AI か別の画面)`)
+    } else if (was !== null && now === null) {
+      note(
+        after.applied_count > before.applied_count
+          ? `外から「${commandLabel(was.verb)}」が確定された(AI か別の画面)`
+          : `外から「${commandLabel(was.verb)}」が畳まれた(AI か別の画面)`,
+      )
+    } else if (was !== null && now !== null) {
+      if (was.verb !== now.verb) {
+        note(`外から「${commandLabel(now.verb)}」に切り替えられた(AI か別の画面)`)
+      } else {
+        const changed = [...new Set([...Object.keys(was.args), ...Object.keys(now.args)])].filter(
+          (name) => JSON.stringify(was.args[name]) !== JSON.stringify(now.args[name]),
+        )
+        if (changed.length > 0) {
+          const shown = changed
+            .map((name) => `${argLabel(now.verb, name)}=${now.args[name] === undefined ? '(空)' : JSON.stringify(now.args[name])}`)
+            .join(' / ')
+          note(`外から「${commandLabel(now.verb)}」の引数が変わった: ${shown}`)
+        }
+      }
+    }
+    if (JSON.stringify(before.mode) !== JSON.stringify(after.mode)) {
+      const target = after.mode
+      note(
+        target.kind === 'sketch'
+          ? `外からスケッチ ${sketches.find((item) => item.sketch_id === target.sketch_id)?.name ?? target.sketch_id} の編集に移った`
+          : target.kind === 'optimize'
+            ? '外から形状最適化モードに移った'
+            : '外から通常モードに戻った',
+      )
+    }
+  }
+
   /** 選択を全解除する。配信が届くまでの判定は `currentItems()` が空として扱う。 */
   function clearSelection(): void {
     clearingOp = nextOp()
@@ -1491,6 +1569,25 @@
    * - 面・辺・頂点・領域はどのモードでも残す(スケッチを抜けてそのまま押し出す等が実際の経路)。
    */
   function setMode(next: Mode): void {
+    // サーバの作業空間(`state.mode`)を画面のモードに揃える(issue #153)。モードが変わると集めかけのコマンドは
+    // サーバが畳む(`Session._apply_mode`)。貼る先待ち(`sketch-pending`)はサーバでは「通常モードで `sketch_create` を
+    // 構えている」なので、抜けるときは Esc と同じ `end_command` を送る。既に揃っていれば送らない(自分の `sketch_create`
+    // の成功・undo でスケッチが消えた・文書を閉じた、はサーバが先に動いている)。
+    if (model !== null) {
+      if (mode.kind === 'sketch-pending' && next.kind !== 'sketch-pending' && model.command?.verb === 'sketch_create') {
+        endCommand()
+      }
+      const server = model.mode
+      if (next.kind === 'sketch') {
+        if (server.kind !== 'sketch' || server.sketch_id !== next.id) session.enterSketch(next.id, nextOp())
+      } else if (next.kind === 'optimize') {
+        if (server.kind !== 'optimize') session.enterOptimize(nextOp())
+      } else if (server.kind === 'sketch') {
+        session.leaveSketch(nextOp())
+      } else if (server.kind === 'optimize') {
+        session.leaveOptimize(nextOp())
+      }
+    }
     // 確定前の姿を持ち越さない。モードが変わると下の `{#key commandRowKey}` が `CommandHost` ごと作り直すので
     // `onCancelPreview` は来ない。ここで消さないと、`move_body` の半透明ボディや `extrude` の投機実行の幽霊が残り続ける。
     clearPreview()
@@ -2164,6 +2261,10 @@
           startCommandId={mode.kind === 'sketch-pending' ? SKETCH_CREATE.id : undefined}
           hover={hoverPoint}
           entities={selectedEntities}
+          shared={model?.command ?? null}
+          onBegin={beginCommand}
+          onSetArgs={setCommandArgs}
+          onEndShared={endCommand}
           onRun={runCommand}
           onPreview={requestPreview}
           onCancelPreview={clearPreview}
