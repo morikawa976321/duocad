@@ -65,6 +65,15 @@ export const COMMAND_CATEGORY = {
   optimize_steps: 'protocol',
   optimize_step_voxels: 'protocol',
   get_edges: 'protocol',
+  ai_get_status: 'protocol',
+  ai_configure: 'protocol',
+  ai_set_thinking: 'protocol',
+  ai_set_api_key: 'protocol',
+  ai_prepare: 'protocol',
+  ai_send: 'protocol',
+  ai_cancel: 'protocol',
+  fem_get_status: 'protocol',
+  fem_set_device: 'protocol',
 } as const
 
 export type CommandName = keyof typeof COMMAND_CATEGORY
@@ -132,6 +141,15 @@ export interface CommandArguments {
   optimize_steps: Record<string, never>
   optimize_step_voxels: Record<string, never>
   get_edges: { body_id: string }
+  ai_get_status: Record<string, never>
+  ai_configure: { provider: string; model?: string; base_url?: string }
+  ai_set_thinking: { thinking: string }
+  ai_set_api_key: { key: string }
+  ai_prepare: Record<string, never>
+  ai_send: { message: string }
+  ai_cancel: Record<string, never>
+  fem_get_status: Record<string, never>
+  fem_set_device: { device: string }
 }
 
 /**

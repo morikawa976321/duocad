@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import functools
 import importlib.util
+import re
 import sys
 
 from duocad.paths import REPO_ROOT
@@ -111,6 +112,28 @@ def _dispatch_message_keys() -> set[str]:
     return keys
 
 
+#: 画面がソケットへ送る `{cmd: '...'}` の綴りを持ってよいファイル。**1つだけ**(issue #153「それ以外の経路では
+#: 一切何もできない」)。ここ以外に `cmd:` が現れたら、ディスパッチャを迂回する送信口ができたということ。
+SENDER_FILES = {"web/src/session.ts"}
+
+_CMD_LITERAL = re.compile(r"cmd: '([a-z_]+)'")
+
+
+def _commands_sent_by_the_screen() -> dict[str, set[str]]:
+    """`web/src` の中で `cmd: '名前'` を書いているファイル -> 名前の集合(コメント行は除く)。"""
+    found: dict[str, set[str]] = {}
+    for path in (REPO_ROOT / "web" / "src").rglob("*"):
+        if path.suffix not in (".ts", ".svelte") or "generated" in path.parts:
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("*") or stripped.startswith("//"):
+                continue
+            for name in _CMD_LITERAL.findall(line):
+                found.setdefault(path.relative_to(REPO_ROOT).as_posix(), set()).add(name)
+    return found
+
+
 @functools.cache
 def _ui_commands() -> tuple:
     """`web/src/commands/*.ts` の `CommandDef` を Node で読み込んだもの(`tests/eval_command_defs.mjs`)。"""
@@ -140,6 +163,32 @@ def test_every_hand_dispatched_command_has_a_branch():
         if command.ws == "special" and f'"{command.name}"' not in dispatch
     ]
     assert not missing, f"`_dispatch` に分岐が無い(宣言だけある): {missing}"
+
+
+def test_every_name_dispatched_by_hand_is_declared():
+    """**`_dispatch` が分岐で捌く名前は、全部宣言にある**(サーバ側の門。`WS_COMMAND_NAMES` が宣言に無い名前を断る)。
+
+    ここが落ちるのは「`_dispatch` に分岐を足したが `catalog.COMMANDS` に宣言しなかった」とき。宣言に無い名前は
+    `WS_COMMAND_NAMES` の入口で断られるので、分岐があっても誰も呼べない。
+    """
+    declared = set(_catalog().websocket_command_names())
+    by_hand = _server_command_names() - declared
+    assert not by_hand, f"`_dispatch` に分岐があるのに宣言が無い: {sorted(by_hand)}"
+
+
+def test_every_command_the_screen_sends_is_declared_and_sent_from_one_place():
+    """**画面がソケットへ送る名前は全部宣言にあり、送る口は `session.ts` 1つ**(画面側の門)。
+
+    ここが落ちるのは (1) `session.ts` に新しい `cmd` を足したが宣言していない、(2) `session.ts` 以外から
+    直接ソケットへ送り始めた、のどちらか。どちらも「画面でできる操作は全部コマンド」(issue #153)の破れ。
+    """
+    sent = _commands_sent_by_the_screen()
+    assert sent, "画面の送信を読めていない(`cmd: '...'` が1つも無い)"
+    strays = {where: sorted(names) for where, names in sent.items() if where not in SENDER_FILES}
+    assert not strays, f"`session.ts` 以外がソケットへ送っている: {strays}"
+    declared = set(_catalog().websocket_command_names())
+    unknown = {name for names in sent.values() for name in names} - declared
+    assert not unknown, f"画面が送る名前が宣言に無い: {sorted(unknown)}"
 
 
 def test_ui_command_ids_are_readable():
@@ -206,20 +255,23 @@ def test_body_id_survives_only_where_it_is_not_a_target_set():
     )
 
 
-def test_ai_commands_are_not_verbs():
-    """`ai_*`(G・アプリ内AIエージェントの配線)はWebSocketから踏めるが、
-    「MCPツール名==WSコマンド名==UIコマンドID==verb名」の一致規律の対象集合には入らない。
+def test_ai_commands_are_declared_but_are_neither_tools_nor_verbs():
+    """`ai_*`(G・アプリ内AIエージェントの配線)は宣言にある(ソケットの名前は宣言で尽くす)が、
+    MCPの道具にも UI の CommandDef にも verb にもならない(`mcp=False` / `changes_document=False` / `protocol`)。
     """
+    catalog = _catalog()
     ai_names = {name for name in _server_command_names() if name.startswith("ai_")}
     assert ai_names == {
         "ai_get_status", "ai_configure", "ai_set_thinking", "ai_set_api_key", "ai_prepare", "ai_send", "ai_cancel"
     }, (
         f"ai_* の顔ぶれが変わった(このテストを更新すること): {sorted(ai_names)}"
     )
-    declared = {command.name for command in _catalog().COMMANDS}
-    assert not ai_names & declared, (
-        f"ai_* は verb ではないので catalog.COMMANDS に入れない(混入: {sorted(ai_names & declared)})"
-    )
+    for name in sorted(ai_names):
+        command = catalog.BY_NAME[name]
+        assert command.category == "protocol" and not command.mcp and not command.changes_document, (
+            f"{name} は protocol / mcp=False / changes_document=False で宣言する"
+        )
+    assert not ai_names & set(catalog.tool_names()), "ai_* が MCP の道具として出ている"
     # UIのコマンドID(`web/src/commands/*.ts`)にも現れない —— AIパネルは
     # `session.ts` の専用メソッドから直接送る(引数の集め方を持つ CommandDef の対象ではない)。
     assert not ai_names & set(_ui_command_ids()), (

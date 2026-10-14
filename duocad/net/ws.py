@@ -9,6 +9,7 @@
 
 下りコマンドの一覧と引数は `duocad/catalog.py` の `COMMANDS` が正。ソケットが受け取れる名前は、そこから導出した表
 (`SKETCH_COMMANDS` / `FEATURE_COMMANDS` / `FILE_COMMANDS`)と `_dispatch` が個別に捌く分(`catalog` の `ws="special"`)で全部。
+**宣言に無い名前は `_dispatch` の入口で断る**(`WS_COMMAND_NAMES`。画面でできる操作は全部コマンドとして宣言する。issue #153)。
 `client_op` はどのクライアントの操作かを返すための添え物で、verbの引数ではない。
 `ack_id` も添え物で、付いていれば処理を終えた後(応答・配信を送り終えた後、失敗でも)に `done` を返す。
 画面はこれで「ビューポートの変化を待たせている」間を数える(`web/src/serverWait.svelte.ts`)。
@@ -105,6 +106,10 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: `rename_document`(`file` の封筒 + 状態の配り直し。`save_document` は `name` が任意で、表の「引数は全部必須」の規律に
 #: 合わない。`catalog.Param.ws` 参照)は表から外して `_dispatch` で個別に扱う。
 FILE_COMMANDS: dict = catalog.file_table()
+
+#: ソケットが受け取る名前の全体(宣言の `ws != "none"`)。`_dispatch` はこれに無い名前を分岐へ進めない。
+#: 分岐があるのに宣言が無い口は `tests/test_ui_command_wiring.py` が落とす。
+WS_COMMAND_NAMES: frozenset = frozenset(catalog.websocket_command_names())
 
 #: アプリ内AIが繋げるプロバイダ(`ai_configure` が受け付ける綴り・`ai_status.providers`)。画面はこの長さで選択UIの要否を決める。
 #: `anthropic` はキーが無くても並べる(選んで送ると「どこにキーを置くか」がエラーとして返る)。
@@ -309,6 +314,8 @@ class Server:
             return
 
         try:
+            if command not in WS_COMMAND_NAMES:
+                raise ValueError(f"unknown command: {command!r}")
             if command in self._hidden_commands:
                 raise ValueError(f"{command!r} はこの版では使えない(安定版では形状最適化を出さない。docs/STABLE.md)")
             if command == "get_state":
@@ -534,6 +541,7 @@ class Server:
                 status = await asyncio.get_running_loop().run_in_executor(None, self._fem_status)
                 await self._broadcast({"type": "fem_status", **status, **({"error": error} if error else {})})
             else:
+                # 宣言はあるが分岐が無い(`tests/test_ui_command_wiring.py` が先に落とす)。
                 raise ValueError(f"unknown command: {command!r}")
         except Exception as error:  # 1つの失敗でサーバを落とさない。必ず画面へ返す
             await _send(

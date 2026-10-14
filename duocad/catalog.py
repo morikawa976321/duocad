@@ -40,7 +40,8 @@ from typing import Any, Optional
 #: - `feature`   … ソリッドのverb
 #: - `file`      … ファイル操作(開く・保存・読み込み・書き出し)
 #: - `history`   … undo / redo
-#: - `protocol`  … WebSocketだけの口(verbではない。状態の要求・プレビュー・辺の折れ線)
+#: - `protocol`  … WebSocketだけの口(verbではない。状態の要求・プレビュー・辺の折れ線・アプリ内AIと計算の設定)。
+#:                 **ソケットが受け取る名前はこの宣言で全部**(`net/ws.py` の `_dispatch` は宣言に無い名前を断る)
 CATEGORIES = ("query", "selection", "sketch", "feature", "file", "history", "protocol")
 
 #: 形(面・辺・領域の添字)を変えうる verb のカテゴリ。ここに属し文書を変える宣言は、
@@ -128,6 +129,7 @@ class Command:
     returns: tuple[Result, ...] = ()
     #: `Session` のメソッド名(WebSocket側の実体)。WSに開けていないものは None。
     #: **verb名と違ってよい**(`export_step` -> `export_step_file`)。
+    #: `ws="special"` で実体が `Session` でなく `net/ws.py` の `Server` にある口(アプリ内AI・計算の設定)も None。
     session: Optional[str] = None
     #: WebSocketでの露出のしかた(`WS_SURFACES`)。
     ws: str = "table"
@@ -162,8 +164,8 @@ class Command:
             raise ValueError(f"未知のカテゴリ: {self.category!r}({CATEGORIES})")
         if self.ws not in WS_SURFACES:
             raise ValueError(f"未知のWS露出: {self.ws!r}({WS_SURFACES})")
-        if self.ws != "none" and self.session is None:
-            raise ValueError(f"{self.name}: WSに開けるなら `session` が要る")
+        if self.ws == "table" and self.session is None:
+            raise ValueError(f"{self.name}: 表で捌くなら `session` が要る")
         if self.previewable and self.session is None:
             raise ValueError(f"{self.name}: プレビューは `Session` のメソッドを呼ぶ")
         if self.preview_session is not None and not self.previewable:
@@ -1908,6 +1910,89 @@ COMMANDS: tuple[Command, ...] = (
             "**配信しない**(`preview` と同じ)。辺は、辺を要求しているコマンドを"
             "起動している間だけ画面に出る(常時出すと面のクリックが辺に取られる)"
         ),
+    ),
+    # アプリ内AI(protocol)。**verbではなく、実体は `net/ws.py` の `Server`**(`session=None`)。
+    # 応答は専用イベント(`ai_status` / `ai_tool_call` / `ai_result` / `ai_error`)で、AIが文書を変えた分は
+    # 通常の状態配信として別途届く。**ここに宣言するのは、ソケットが受け取る名前を宣言で尽くすため**
+    # (画面でできる操作は全部コマンド。issue #153)。AIがAIの設定を触る意味は無いので `mcp=False`。
+    Command(
+        name="ai_get_status",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="プロバイダ・モデル・思考の設定・キーの有無を `ai_status` で要求した接続にだけ返す",
+    ),
+    Command(
+        name="ai_configure",
+        category="protocol",
+        params=(
+            Param("provider", "string", "`Server.ai_providers` の綴り(`openai_compat` / `anthropic`)"),
+            Param("model", "string", "モデル名(省略で既定)", required=False),
+            Param("base_url", "string", "llama-server の URL(`openai_compat` だけ。省略で既定)", required=False),
+        ),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="結果の `ai_status` は全接続へ配る(設定はサーバに1つ)",
+    ),
+    Command(
+        name="ai_set_thinking",
+        category="protocol",
+        params=(Param("thinking", "string", "思考の設定(プロバイダごとの綴り。`Server._ai_set_thinking`)"),),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+    ),
+    Command(
+        name="ai_set_api_key",
+        category="protocol",
+        params=(Param("key", "string", "Claude API のキー。値は画面へ戻さず `duocad_secrets.json` へ書く"),),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+    ),
+    Command(
+        name="ai_prepare",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="ローカルLLMのプロンプトキャッシュを温める(応答は無い)",
+    ),
+    Command(
+        name="ai_send",
+        category="protocol",
+        params=(Param("message", "string", "人の依頼の本文"),),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="実行器スレッドで `AgentLoop.run()` を走らせる。進みは `ai_tool_call` / `ai_result` / `ai_error`",
+    ),
+    Command(
+        name="ai_cancel",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+    ),
+    # 計算の設定(protocol)。FEM の装置(CPU/GPU)。**verbではなく実体は `Server`**。CuPy を読む(初回1秒前後)ので実行器で作る。
+    Command(
+        name="fem_get_status",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="`fem_status` を要求した接続にだけ返す",
+    ),
+    Command(
+        name="fem_set_device",
+        category="protocol",
+        params=(Param("device", "string", "`cpu` / `gpu`"),),
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note="結果の `fem_status` は全接続へ配る(設定はサーバに1つ)",
     ),
 )
 

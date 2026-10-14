@@ -1434,7 +1434,7 @@ export function createSession(hooks: SessionHooks): Session {
       send({ cmd: 'ai_get_status' })
     },
     aiConfigure(provider, baseUrl) {
-      send({ cmd: 'ai_configure', provider, base_url: baseUrl ?? null })
+      send({ cmd: 'ai_configure', provider, ...(baseUrl === undefined ? {} : { base_url: baseUrl }) })
     },
     aiSetThinking(thinking) {
       send({ cmd: 'ai_set_thinking', thinking })
