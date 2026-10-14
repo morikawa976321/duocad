@@ -523,6 +523,7 @@
     lastPublished = {}
     sentKeys = new Set()
     unmapped = new Set()
+    everLive = new Set()
     cancelPreview()
   }
 
@@ -651,18 +652,24 @@
   let sentKeys = new Set<string>()
   /** 配信された値を欄へ写せなかったキー(3択に無い荷重の向き・`sends: null` の選択肢に紐づく値など)。欄が空でも「人が消した」ではない。 */
   let unmapped = new Set<string>()
+  /** この起動で一度でも画面に出た欄の名前。出たことのある欄が `when` で隠れたら、その値は人が切り替えで捨てたもの(回転→並進の `angle`)。 */
+  let everLive = new Set<string>()
+  $effect(() => {
+    for (const spec of liveArgs) everLive.add(spec.name)
+  })
 
   /**
    * `lastPublished` との差分だけ送る。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。
-   * 欄から消えたキーを null で外すのは、**いま出ている欄(`liveArgs`)のキーで、配信を欄へ写せなかったものでないか、
-   * 自分が出したことのあるキーだけ**: 人が欄を空にしたのは「まだ決めていない」へ戻す意思で、AI が付けた値でも外す。
-   * `when` で隠れている欄・欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)・写せなかった値は触らない
-   * (再読み込みで `base_plane: 'face'` が戻らず隠れた `plane_face` を消していた)。
+   * 欄から消えたキーを null で外すのは、**自分が出したことのあるキー**か、**一度でも画面に出た欄のキーで、配信を欄へ写せなかった
+   * ものでない**ものだけ: 人が欄を空にした・モードを切り替えて欄を隠したのは「まだ決めていない」へ戻す意思で、AI が付けた値でも
+   * 外す(残すと AI の `apply_command` が並進に回転の引数を併合して断られる)。一度も出ていない欄(再読み込みで
+   * `base_plane: 'face'` が戻らず隠れたままの `plane_face`)・欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)・
+   * 写せなかった値は触らない。
    */
   function flushPublish(next: Record<string, unknown>): void {
     if (sharedId === null || committed) return
     const fields = new Set(
-      liveArgs
+      (command?.args ?? [])
         .filter((spec) => spec.kind === 'number' || spec.kind === 'text' || spec.kind === 'point' || spec.kind === 'pick' || spec.kind === 'choice')
         .map((spec) => spec.name),
     )
@@ -671,7 +678,9 @@
       if (JSON.stringify(value) !== JSON.stringify(lastPublished[name])) delta[name] = value
     }
     for (const name of Object.keys(lastPublished)) {
-      if (!(name in next) && ((fields.has(name) && !unmapped.has(name)) || sentKeys.has(name))) delta[name] = null
+      if (name in next) continue
+      const cleared = fields.has(name) && everLive.has(name) && !unmapped.has(name)
+      if (cleared || sentKeys.has(name)) delta[name] = null
     }
     if (Object.keys(delta).length === 0) return
     for (const [name, value] of Object.entries(delta)) {

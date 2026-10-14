@@ -752,7 +752,7 @@
     // (`seenMode` が前の文書の最適化モードのままだと `onModeChanged` が戻り先を書き直す)。
     if (previous !== null && previous.generation !== next.generation) {
       resumeMemory = 'idle'
-      seenMode = { kind: 'idle' }
+      modeCrossedDocument = true
     }
     files.onState(next)
     // 状態が1通届くたびに1つ増える番号(実機検査用の穴。`__duocad.stateEpoch`)。無いと
@@ -1586,16 +1586,20 @@
    * 行き先で使えない選択はサーバが外す(`Session._apply_mode`)。
    */
   let seenMode: Mode = { kind: 'idle' }
+  /** 文書が替わった直後の配信(`handleState` が立てる)。前の文書のモードと同じ種類でも後始末(活性スケッチの解除など)を走らせ、戻り先は書き直さない。 */
+  let modeCrossedDocument = false
   $effect(() => {
     const next = mode
     const prev = seenMode
+    const crossed = modeCrossedDocument
     const same = prev.kind === next.kind && (next.kind !== 'sketch' || (prev.kind === 'sketch' && prev.id === next.id))
-    if (same) return
+    if (same && !crossed) return
+    modeCrossedDocument = false
     seenMode = next
-    untrack(() => onModeChanged(prev, next))
+    untrack(() => onModeChanged(prev, next, crossed))
   })
 
-  function onModeChanged(prev: Mode, next: Mode): void {
+  function onModeChanged(prev: Mode, next: Mode, crossedDocument: boolean): void {
     // 確定前の姿を持ち越さない。モードが変わると下の `{#key commandRowKey}` が `CommandHost` ごと作り直すので
     // `onCancelPreview` は来ない。ここで消さないと、`move_body` の半透明ボディや `extrude` の投機実行の幽霊が残り続ける。
     clearPreview()
@@ -1608,7 +1612,9 @@
     // 抜ける側にも要る: 抜けたスケッチの点マーカーが次の状態配信まで残り、手前に浮いてクリックを奪いうる。
     drawSketches()
     if (next.kind === 'sketch') viewport?.lookAtSketch(next.id)
-    // スケッチの戻り先: 最適化モードから入ったら、抜けたときに最適化モードへ入り直す。
+    // スケッチの戻り先: 最適化モードから入ったら、抜けたときに最適化モードへ入り直す。文書をまたいだ遷移では前の文書の
+    // モードを「前」として読まない(`handleState` が戻り先を捨てた直後に、ここで書き直さない)。
+    if (crossedDocument) return
     if (next.kind === 'sketch' || next.kind === 'sketch-pending') {
       if (prev.kind === 'optimize') resumeMemory = 'optimize'
       else if (prev.kind === 'idle') resumeMemory = 'idle'
