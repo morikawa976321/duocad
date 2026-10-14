@@ -71,6 +71,7 @@ from . import (
     sketch,
 )
 from .channel import CHANNELS, StableUpdater, describe, hidden_features
+from .agent.loop import VersionChanged
 from .entry import entry_for
 from .session import DocumentBusy
 from .server import (
@@ -165,13 +166,16 @@ class DocumentTools:
             handlers[name] = own
         return handlers
 
-    def call(self, name: str, arguments: dict) -> dict:
+    def call(self, name: str, arguments: dict, expected_generation: Optional[int] = None) -> dict:
         """ツールを実行して結果の辞書を返す。未知の名前は KeyError。
 
         **引数はスキーマと突き合わせてから渡す**(必須・未知キー・型)。MCP は `McpServer._call_tool`
         が同じ検査を -32602 で先に弾くが、アプリ内AIの経路はここが唯一の門 —— 通すと
         `radius: "12"` が1文字ずつ読まれて辺2本に半径1と2が付くように、黙って別の値になる。
         違反は `invalid_argument` の封筒(引数名つき)で返す。
+
+        `expected_generation` を渡すと、文書の世代が違えば実行せず `document_changed` で返す。照合をここ(実行と
+        同じ1手)で行うのは、`ToolsOnLoop` で照合と実行を別の投げ返しにすると、その間に人の切り替えが入るため。
         """
         try:
             handler = self._handlers[name]
@@ -179,30 +183,51 @@ class DocumentTools:
             raise KeyError(
                 f"unknown tool: {name!r} (available: {sorted(self._handlers)})"
             ) from None
+        if expected_generation is not None and expected_generation != self.session.generation:
+            raise ToolError(
+                "document_changed",
+                f"人が画面で文書を切り替えた(今は {self._document_label()})。前の文書のつもりの操作は実行しなかった。"
+                "describe_document で今の文書を確かめてから続けること。",
+                current_name=self.session.current_name,
+                generation=self.session.generation,
+            )
         problem = catalog.check_arguments(self._descriptor_by_name[name]["inputSchema"], arguments)
         if problem is not None:
             raise ToolError("invalid_argument", problem)
         return handler(**arguments)
 
-    def call_and_seq(self, name: str, arguments: dict) -> tuple:
+    def _document_label(self) -> str:
+        if not self.session.document_open:
+            return "文書が閉じられている"
+        return self.session.current_name or "保存前の新規文書"
+
+    def call_and_seq(self, name: str, arguments: dict, expected_seq: Any = None) -> tuple:
         """`call` と**直後の** `current_seq` を返す: `(結果, 例外, 版)`。例外は上げずに返す。
         `ToolsOnLoop` はこれを1回の投げ返しで走らせる —— 2回に分けると、間に入った人の操作が
         版に吸われて検出できない(issue #48)。
+
+        `expected_seq` と今の版が違えば走らせず、例外の位置に `VersionChanged` を返す。照合をここに入れるのは、
+        呼び手の照合とこの実行の間に人が文書を切り替えると、古い前提の verb が新しい文書に効くため(issue #102)。
         """
+        if expected_seq is not None:
+            seq = self.current_seq()
+            if seq != expected_seq:
+                return None, VersionChanged(seq), seq
         try:
             return self.call(name, arguments), None, self.current_seq()
         except Exception as error:  # noqa: BLE001 — 封筒にするのは呼び手(`error_envelope`)
             return None, error, self.current_seq()
 
-    def current_seq(self) -> tuple[int, str, str]:
+    def current_seq(self) -> tuple[int, int, str, str]:
         """文書+選択の版。**モデルには見せない** —— `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
 
         `AgentLoop.run()` はモデルへの1往復・ツール1実行のたびにこれを控え、値が変わっていたら
         残りのツール呼び出しを構造化エラーへ差し替える(楽観ロック)。
 
-        戻り値は `(len(document.log.entries), selection.fingerprint(document),
-        selection.visibility_fingerprint(document))`。**3つとも要る**:
+        戻り値は `(Session.generation, len(document.log.entries), selection.fingerprint(document),
+        selection.visibility_fingerprint(document))`。**4つとも要る**:
 
+        - 世代が無いと文書の切り替えを見逃す。新規→新規は残り3つが `(0, 空, 空)` のまま一致する(実測)。
         - ログの本数だけでは足りない。選択の変更は操作ログに乗らないので、辺Aを外して辺Bを
           選び直す**入れ替え**を検出できず、`fillet(radius)`(選択から対象を取る)は辺Aの
           つもりのAIに辺Bを黙って丸めさせる。
@@ -215,6 +240,7 @@ class DocumentTools:
         起こりうる」程度の意図の陳腐化である。
         """
         return (
+            self.session.generation,
             len(self.session.document.log.entries),
             selection.fingerprint(self.session.document),
             selection.visibility_fingerprint(self.session.document),
@@ -280,6 +306,10 @@ class DocumentTools:
             # AI は文書を開けない(`open_document` / `new_document` は `mcp=False`)ので、
             # False なら空の文書を相手に操作せず、人に開いてもらうよう伝える。
             "document_open": self.session.document_open,
+            # 人は画面で文書を切り替えられる(issue #102)。名前は人に伝える用、世代は同一性の判定用
+            # (名前は新規→新規や開き直しで一致する)。
+            "current_name": self.session.current_name,
+            "generation": self.session.generation,
             "units": document.units,
             "active_body_id": active.id if active is not None else None,
             "body_count": len(bodies),
@@ -671,6 +701,10 @@ class McpServer:
         self.tools = tools
         self.name = name
         self.version = version
+        #: このクライアントが最後に `describe_document` で見た文書の世代(issue #102)。None = まだ見ていない(照合しない)。
+        #: **インスタンスに1つ**: HTTP の全クライアントがこれを共有するので、2つ繋ぐと片方の確認でもう片方も通る
+        #: (`Mcp-Session-Id` 未実装。限界は `MCP.md`「実装のメモ」)。
+        self._seen_generation: Optional[int] = None
 
     # ------------------------------------------------------------------ 入口
     def handle(self, message: Any) -> Optional[dict]:
@@ -765,7 +799,14 @@ class McpServer:
         try:
             # stdout は起動時に `_claim_stdout` が fd ごと stderr へ退避済みなので、
             # ここで囲み直さない(囲んでも stderr を stderr に振り替えるだけになる)。
-            payload = self.tools.call(name, arguments)
+            # 切り替えの後は `describe_document` 以外を止める。解くのは `describe_document` だけ(止めた時点で解くと、
+            # 確かめずに打ち直した verb が新しい文書に効く)。
+            looks = name == "describe_document"
+            payload = self.tools.call(
+                name, arguments, expected_generation=None if looks else self._seen_generation
+            )
+            if looks:
+                self._seen_generation = payload["generation"]
         except Exception as error:
             # **ツールの実行時エラーはプロトコルエラーにしない**(仕様)。決定3の封筒へ畳む。
             # 例外テキストを素で返すと `json.loads` できず、AIが機械可読に直せない。

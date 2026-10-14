@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Optional
 
 class ToolsOnLoop:
     """`ToolSurface`(`descriptors`/`descriptor`/`call`/`error_envelope`/`current_seq`)を
@@ -38,13 +38,14 @@ class ToolsOnLoop:
         # `descriptors()` と同じく静的な引き当てなので投げ返さない。
         return self._tools.descriptor(name)
 
-    def call(self, name: str, arguments: dict) -> dict:
-        return self._run_on_loop(self._tools.call, name, arguments)
+    def call(self, name: str, arguments: dict, expected_generation: Optional[int] = None) -> dict:
+        # 世代の照合も実行と同じ1回の投げ返しに入れる(`DocumentTools.call` の docstring)。
+        return self._run_on_loop(self._tools.call, name, arguments, expected_generation)
 
-    def call_and_seq(self, name: str, arguments: dict) -> tuple:
+    def call_and_seq(self, name: str, arguments: dict, expected_seq: Any = None) -> tuple:
         # 実行と直後の版の読み取りを1回の投げ返しで行う。別々だと間に人の操作が割り込み、その変更が
         # 「実行直後の版」に吸われて次のツールの直前チェックで見えなくなる(楽観ロックの時間窓。issue #48)。
-        return self._run_on_loop(self._tools.call_and_seq, name, arguments)
+        return self._run_on_loop(self._tools.call_and_seq, name, arguments, expected_seq)
 
     def error_envelope(self, tool: str, error: Exception) -> dict:
         return self._run_on_loop(self._tools.error_envelope, tool, error)

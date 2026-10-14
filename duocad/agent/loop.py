@@ -99,21 +99,30 @@ ProgressCallback = Callable[[str, dict, Any, bool], None]
 class ToolSurface(Protocol):
     """ループが道具に要求する面(`DocumentTools` がこれを満たす)。公開APIの5つだけに依存する(内部には触らない)。
 
-    `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は `(ログの本数, 選択の指紋, 可視性の指紋)`。
+    `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は `(文書の世代, ログの本数, 選択の指紋, 可視性の指紋)`。
     可視性は操作ログに載らないので、指紋が無いと「AIが考えている間に人がボディを隠した」が版に出ない)。
     `call_and_seq` は実行と直後の版を `(結果, 例外, 版)` で返す(例外は上げない)。本番の覆い(`ToolsOnLoop`)はこれを
     イベントループへの1回の投げ返しで走らせるので、実行の完了と版の読み取りの間に人の操作が挟まらない。
+    `expected_seq` を渡すと、同じ1手の中で実行の直前に版を照合し、違えば走らせずに例外の位置へ `VersionChanged` を返す。
     """
 
     def descriptors(self) -> list: ...
 
     def call(self, name: str, arguments: dict) -> dict: ...
 
-    def call_and_seq(self, name: str, arguments: dict) -> tuple: ...
+    def call_and_seq(self, name: str, arguments: dict, expected_seq: Any = None) -> tuple: ...
 
     def error_envelope(self, tool: str, error: Exception) -> dict: ...
 
     def current_seq(self) -> Any: ...
+
+
+class VersionChanged(Exception):
+    """`call_and_seq(..., expected_seq)` が実行の直前に版の食い違いを見つけた(ツールは走っていない)。`seq` は今の版。"""
+
+    def __init__(self, seq: Any) -> None:
+        super().__init__(f"version changed to {seq!r}")
+        self.seq = seq
 
 
 class Cancellation:
@@ -398,7 +407,13 @@ class AgentLoop:
                     stale_at = index
                     stale_seq = observed_seq
                     break
-                payload, ok, seq_after = self._execute(call, expected_seq)
+                # 上の照合と実行は別の投げ返しなので、その間に入った人の操作(文書の切り替えを含む)はここで実行と同じ1手の照合が拾う。
+                try:
+                    payload, ok, seq_after = self._execute(call, expected_seq)
+                except VersionChanged as changed:
+                    stale_at = index
+                    stale_seq = changed.seq
+                    break
                 outcomes.append(
                     ToolOutcome(name=call.name, arguments=call.arguments, result=payload, ok=ok)
                 )
@@ -542,7 +557,7 @@ class AgentLoop:
         )
 
     def _execute(self, call: ToolCall, seq_before: Any) -> tuple[Any, bool, Any]:
-        """ツールを1つ実行する。失敗しても例外を上げない(封筒にして返す)。
+        """ツールを1つ実行する。失敗しても例外を上げない(封筒にして返す)。例外は実行直前に版が動いていたときの `VersionChanged` だけ。
 
         戻りは `(結果, 成否, 実行直後の版)`。走らせなかったとき(引数が壊れている・寸法の捏造)の版は `seq_before` のまま。
         """
@@ -569,7 +584,9 @@ class AgentLoop:
                 False,
                 seq_before,
             )
-        payload, error, seq_after = self.tools.call_and_seq(call.name, call.arguments)
+        payload, error, seq_after = self.tools.call_and_seq(call.name, call.arguments, seq_before)
+        if isinstance(error, VersionChanged):
+            raise error
         if error is None:
             return payload, True, seq_after
         if isinstance(error, TypeError):

@@ -239,9 +239,9 @@ class InterferingTools:
     def call(self, name, arguments):
         return self.inner.call(name, arguments)
 
-    def call_and_seq(self, name, arguments):
+    def call_and_seq(self, name, arguments, expected_seq=None):
         # 直後の版の読み取りもこの覆いの `current_seq` を通す(呼び出し回数の数え方を保つ)。
-        payload, error, _ = self.inner.call_and_seq(name, arguments)
+        payload, error, _ = self.inner.call_and_seq(name, arguments, expected_seq)
         return payload, error, self.current_seq()
 
     def error_envelope(self, tool, error):

@@ -43,9 +43,9 @@ class SpyTools:
         self.calls.append((name, dict(arguments)))
         return self.inner.call(name, arguments)
 
-    def call_and_seq(self, name, arguments):
+    def call_and_seq(self, name, arguments, expected_seq=None):
         self.calls.append((name, dict(arguments)))
-        return self.inner.call_and_seq(name, arguments)
+        return self.inner.call_and_seq(name, arguments, expected_seq)
 
     def error_envelope(self, tool, error):
         return self.inner.error_envelope(tool, error)
