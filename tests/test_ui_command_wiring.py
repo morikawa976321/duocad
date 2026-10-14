@@ -119,35 +119,72 @@ def _dispatch_message_keys() -> set[str]:
 #: 一切何もできない」)。ここ以外に `cmd:` が現れたら、ディスパッチャを迂回する送信口ができたということ。
 SENDER_FILES = {"web/src/session.ts"}
 
-#: `{cmd: '名前'}` / `{ cmd: "名前" }` / `{cmd:`名前`}`(空白と引用符の違いを許す)。
+#: `{cmd: '名前'}` / `{ cmd: "名前" }` / `{cmd:`名前`}`(空白・改行・引用符の違いを許す)。
 _CMD_LITERAL = re.compile(r"\bcmd\s*:\s*[\"'`]([a-z_]+)[\"'`]")
 #: `session.ts` の送信メソッドへ名前を文字列で渡す間接経路(`sendCommand('export_step', …)` / `files.run('import_step', …)`)。
 #: 引数が `string` なので型では守れない。
-_INDIRECT_LITERAL = re.compile(r"\b(?:sendCommand|run)\(\s*[\"'`]([a-z_]+)[\"'`]")
+_INDIRECT_LITERAL = re.compile(r"\b(?:sendCommand|run)\s*\(\s*[\"'`]([a-z_]+)[\"'`]")
 #: ソケットそのもの。`session.ts` 以外に現れたら、ディスパッチャを迂回する送信口ができた。
-_SOCKET_USE = re.compile(r"new WebSocket\(|\.send\(\s*JSON\.stringify")
+_SOCKET_USE = re.compile(r"new\s+WebSocket\s*\(|\.send\s*\(\s*JSON\s*\.\s*stringify")
 
 
 def _web_sources():
     for path in (REPO_ROOT / "web" / "src").rglob("*"):
         if path.suffix in (".ts", ".svelte") and "generated" not in path.parts:
-            yield path.relative_to(REPO_ROOT).as_posix(), path.read_text(encoding="utf-8")
+            yield path.relative_to(REPO_ROOT).as_posix(), _without_comments(path.read_text(encoding="utf-8"))
 
 
-def _code_lines(text: str):
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not (stripped.startswith("*") or stripped.startswith("//")):
-            yield line
+def _without_comments(text: str) -> str:
+    """TS / Svelte の `//` 行コメントと `/* */` ブロックコメントを空白に置き換える(文字列リテラルの中の `//` は残す)。
+
+    行単位の除外では、インラインコメントの中の例を本物の送信と読み、改行をまたぐ本物の送信を見落とす
+    (sol の指摘)。文字列(' " `)の中では何もしないので `'ws://…'` を壊さない。正規表現も `<script>` の外も見ない
+    素朴な走査だが、ここで要るのは「コメントでない場所の `cmd:` / ソケット」だけ。
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    quote: str | None = None
+    while i < n:
+        ch = text[i]
+        if quote is not None:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(" " * (end - i))
+            i = end
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            out.append("".join("\n" if c == "\n" else " " for c in text[i:end]))
+            i = end
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _commands_sent_by_the_screen() -> dict[str, set[str]]:
-    """`web/src` の中で `cmd: '名前'` を書いているファイル -> 名前の集合(コメント行は除く)。"""
+    """`web/src` の中で `cmd: '名前'` を書いているファイル -> 名前の集合(コメントは除く)。"""
     found: dict[str, set[str]] = {}
     for where, text in _web_sources():
-        for line in _code_lines(text):
-            for name in _CMD_LITERAL.findall(line):
-                found.setdefault(where, set()).add(name)
+        names = set(_CMD_LITERAL.findall(text))
+        if names:
+            found[where] = names
     return found
 
 
@@ -155,14 +192,29 @@ def _commands_named_indirectly() -> dict[str, set[str]]:
     """`sendCommand('名前', …)` / `run('名前', …)` の形で名前を渡しているファイル -> 名前の集合。"""
     found: dict[str, set[str]] = {}
     for where, text in _web_sources():
-        for line in _code_lines(text):
-            for name in _INDIRECT_LITERAL.findall(line):
-                found.setdefault(where, set()).add(name)
+        names = set(_INDIRECT_LITERAL.findall(text))
+        if names:
+            found[where] = names
     return found
 
 
 def _files_touching_the_socket() -> set[str]:
-    return {where for where, text in _web_sources() if any(_SOCKET_USE.search(line) for line in _code_lines(text))}
+    return {where for where, text in _web_sources() if _SOCKET_USE.search(text)}
+
+
+def test_the_comment_stripper_keeps_code_and_drops_comments():
+    """門の下敷き。落ちたら、上の3つの走査がコメントの例を本物と読む/本物を見落とす。"""
+    source = (
+        "const a = 'ws://x' // files.run('qa_in_line_comment', {})\n"
+        "/** new WebSocket('ws://y') */\n"
+        "files.run(\n  'qa_real', {})\n"
+        "const s = new WebSocket ('ws://z'); s.send (JSON.stringify({ cmd }))\n"
+    )
+    stripped = _without_comments(source)
+    assert "qa_in_line_comment" not in stripped and "WebSocket('ws://y')" not in stripped
+    assert "'ws://x'" in stripped, "文字列の中の // はコメントではない"
+    assert _INDIRECT_LITERAL.findall(stripped) == ["qa_real"]
+    assert len(_SOCKET_USE.findall(stripped)) == 2
 
 
 @functools.cache
