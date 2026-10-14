@@ -23,8 +23,8 @@ from .paths import REPO_ROOT
 CHANNELS = ("dev", "stable")
 
 #: 安定版(制作用)で出さない機能(`catalog.FEATURES`)。形状最適化は凍結した(本人決定 2026-10-13、
-#: docs/TOPOPT_CONVERGENCE.md 9節)。開発版では今までどおり使える。
-HIDDEN_IN_STABLE = frozenset({"shape_optimization"})
+#: docs/TOPOPT_CONVERGENCE.md 9節)。アプリ内AIはClaude APIだけにする(本人指示 2026-10-14)。開発版では今までどおり使える。
+HIDDEN_IN_STABLE = frozenset({"shape_optimization", "local_ai"})
 
 #: 更新元の枝。
 UPDATE_BRANCH = "main"
