@@ -646,21 +646,30 @@
     publishTimer = null
   }
 
-  /** 自分がこの起動で出したことのあるキー。これに無いキー(AI が付けた `scale` / サーバが補う `sketch_id`)は、欄に無くても外さない。 */
+  /** 自分がこの起動で実際に出したことのあるキー(`build` が作る `base_plane` / `mode` のように欄の名前と違うものを含む)。 */
   let sentKeys = new Set<string>()
 
-  /** `lastPublished` との差分だけ送る(欄から消えたキーは null で外す)。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。 */
+  /**
+   * `lastPublished` との差分だけ送る。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。
+   * 欄から消えたキーを null で外すのは、**この画面に欄があるキーと、自分が出したことのあるキーだけ**: 人が欄を空にしたのは
+   * 「まだ決めていない」へ戻す意思で、AI が付けた値でも外す。欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)は触らない。
+   */
   function flushPublish(next: Record<string, unknown>): void {
     if (sharedId === null || committed) return
+    const fields = new Set(
+      (command?.args ?? [])
+        .filter((spec) => spec.kind === 'number' || spec.kind === 'text' || spec.kind === 'point' || spec.kind === 'pick' || spec.kind === 'choice')
+        .map((spec) => spec.name),
+    )
     const delta: Record<string, unknown> = {}
     for (const [name, value] of Object.entries(next)) {
       if (JSON.stringify(value) !== JSON.stringify(lastPublished[name])) delta[name] = value
     }
     for (const name of Object.keys(lastPublished)) {
-      if (!(name in next) && sentKeys.has(name)) delta[name] = null
+      if (!(name in next) && (fields.has(name) || sentKeys.has(name))) delta[name] = null
     }
     if (Object.keys(delta).length === 0) return
-    for (const name of Object.keys(next)) sentKeys.add(name)
+    for (const [name, value] of Object.entries(delta)) if (value !== null) sentKeys.add(name)
     lastPublished = { ...lastPublished, ...delta }
     for (const name of Object.keys(delta)) if (delta[name] === null) delete lastPublished[name]
     onSetArgs(delta)
@@ -700,15 +709,25 @@
         numberText = { ...numberText, [spec.name]: text }
       } else if (spec.kind === 'choice') {
         if (value === undefined) {
-          const { [spec.name]: _removed, ...rest } = choices
-          choices = rest
+          // サーバの値にならない選択肢(鏡映面の「面を選ぶ」。`sends: null`)は、サーバに無いことが「選んでいない」を意味しない。
+          const current = spec.options.find((candidate) => candidate.value === choices[spec.name])
+          if (current === undefined || choiceSends(current) !== null) {
+            const { [spec.name]: _removed, ...rest } = choices
+            choices = rest
+          }
         } else {
           // サーバの値から選択肢を逆引きする(`copy: true` → 'copy'、`direction: [0,0,-1]` → 'down')。対応が無ければ触らない。
           const option = spec.options.find((candidate) => JSON.stringify(choiceSends(candidate)) === JSON.stringify(value))
           if (option !== undefined) choices = { ...choices, [spec.name]: option.value }
         }
       } else if (spec.kind === 'text') {
-        textValues = { ...textValues, [spec.name]: value === undefined ? '' : String(value) }
+        const text = value === undefined ? '' : String(value)
+        if ((textValues[spec.name] ?? '') === text) continue
+        if (active instanceof HTMLElement && active.id === spec.inputId) {
+          kept.push(`${spec.label}=${text === '' ? '(空)' : text}`)
+          continue
+        }
+        textValues = { ...textValues, [spec.name]: text }
       } else if (spec.kind === 'pick') {
         if (value !== null && typeof value === 'object') {
           picks = { ...picks, [spec.name]: value as SelectionRef }
@@ -1038,6 +1057,7 @@
           oninput={(event) => {
             textValues = { ...textValues, [spec.name]: (event.target as HTMLInputElement).value }
           }}
+          onblur={flushNow}
           onkeydown={(event) => onNumberKeydown(event, spec)}
         />
       {/each}

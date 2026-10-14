@@ -324,3 +324,4 @@ export type ServerStateKey =
   | 'document_open'
   | 'command'
   | 'mode'
+  | 'generation'

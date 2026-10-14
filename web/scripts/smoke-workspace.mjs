@@ -120,8 +120,11 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await page.reload({ waitUntil: 'load' })
   await waitFor(() => window.__duocad?.ready === true && (window.__duocad.parts ?? []).length >= 2, '再読み込み後に画面が立ち上がらない')
   await waitFor(
-    () => document.querySelector('.command-host')?.dataset.command === 'fillet' && document.querySelector('#fillet-radius')?.value === '2.5',
-    '再読み込みで起動中のコマンドと引数が戻らない',
+    () =>
+      document.querySelector('.command-host')?.dataset.command === 'fillet' &&
+      document.querySelector('#fillet-radius')?.value === '2.5' &&
+      window.__duocad.clickToggles === true,
+    '再読み込みで起動中のコマンドと引数が戻らない(または素のクリックがトグルにならない)',
   )
   ok('[8] 再読み込みしても起動中のコマンドと引数が戻る')
   await page.keyboard.press('Escape')
@@ -158,8 +161,9 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     (id) =>
       window.__duocad.mode === 'sketch' &&
       window.__duocad.activeSketch === id &&
-      document.querySelector('.command-host')?.dataset.command === 'add_rectangle',
-    'AI が add_rectangle を構えても、画面がそのスケッチに入って長方形が起動しない',
+      document.querySelector('.command-host')?.dataset.command === 'add_rectangle' &&
+      window.__duocad.clickToggles === true,
+    'AI が add_rectangle を構えても、画面がそのスケッチに入って長方形が起動しない(または素のクリックがトグルにならない)',
     [created.sketch_id],
   )
   await mcp.callTool('end_command')

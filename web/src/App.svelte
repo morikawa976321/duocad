@@ -747,6 +747,9 @@
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
     const previous = model
     model = next
+    // 文書が替わったら(開く・新規・閉じる。別のタブの操作も含む)、前の文書のスケッチの戻り先を捨てる。
+    // 捨てないと、最適化モードから入ったスケッチのまま文書を切り替えたときに、新しい文書を最適化モードへ入れてしまう。
+    if (previous !== null && previous.generation !== next.generation) resumeMemory = 'idle'
     files.onState(next)
     // 状態が1通届くたびに1つ増える番号(実機検査用の穴。`__duocad.stateEpoch`)。無いと
     // 「往復が終わっていない」と「もう変わらない」を外から区別できない。
@@ -1186,9 +1189,12 @@
     return commandClickToggles() ? 'toggle' : mode
   }
 
-  /** コマンド起動中の素のクリックをトグルにするか(`activeVerb`)。 */
+  /**
+   * コマンド起動中の素のクリックをトグルにするか。構えた verb はサーバの `state.command` が正(モードの作り直しで
+   * `activeVerb` が null に戻った後も、構えが残っていればトグル)。`activeVerb` はローカルのコマンド(測定)の分。
+   */
   function commandClickToggles(): boolean {
-    return activeVerb !== null
+    return activeVerb !== null || (model?.command ?? null) !== null
   }
 
   /**
@@ -2084,6 +2090,7 @@
     stateEpoch: () => stateEpoch,
     optimizeMode: () => optimizeMode,
     modeKind: () => mode.kind,
+    clickToggles: () => commandClickToggles(),
     wantedKinds: () => wantedKinds,
     optimizeRunning: () => optimizeRunning,
     optimizeCancelling: () => optimizeCancelling,

@@ -305,6 +305,7 @@ class Session:
         state["current_name"] = self._current_name
         state["saved"] = self.saved
         state["document_open"] = self._open
+        state["generation"] = self._generation
         state.update(self.workspace.to_state())
         return state
 

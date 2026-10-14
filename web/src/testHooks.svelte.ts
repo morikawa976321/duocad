@@ -41,6 +41,8 @@ export interface TestHookContext {
   stateEpoch: () => number
   optimizeMode: () => boolean
   modeKind: () => string
+  /** コマンド起動中の素のクリックがトグルになるか(`App.svelte` の `commandClickToggles`)。 */
+  clickToggles: () => boolean
   wantedKinds: () => SelectableKind[]
   optimizeRunning: () => boolean
   optimizeCancelling: () => boolean
@@ -130,6 +132,7 @@ export function installTestHooks(ctx: TestHookContext): void {
       // 今のモード(`'idle' | 'sketch-pending' | 'sketch' | 'optimize'`)。`optimizeMode` と `activeSketch`
       // だけでは貼る先待ちが通常モードと同じ見え方になる。
       mode: ctx.modeKind(),
+      clickToggles: ctx.clickToggles(),
       wantedKinds: ctx.wantedKinds(),
       faceColor: (bodyId: string, faceIndex: number) => viewport()?.faceColor({ bodyId, faceIndex }) ?? null,
       optimizeAnnotationCount: () => viewport()?.optimizeAnnotationCount() ?? 0,

@@ -272,6 +272,8 @@ export interface ServerState {
   command: CommandState | null
   /** モード(作業空間)。 */
   mode: ModeState
+  /** 文書の世代(`Session.generation`。開く・新規・閉じるで進む)。変わったら前の文書の記憶(スケッチの戻り先)を捨てる。 */
+  generation: number
 }
 
 /**
