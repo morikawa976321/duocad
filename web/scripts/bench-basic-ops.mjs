@@ -191,15 +191,20 @@ async function wsRoundTrips(url, count = 20, makeMessage = (op) => ({ cmd: 'clea
 
 async function frameStats(page, scenario, label, during) {
   const before = await page.metrics()
+  const rendersBefore = await page.evaluate(() => window.__duocad.renderCount?.() ?? null)
   await page.evaluate(() => window.__bench.startFrames())
   await during()
   const stats = await page.evaluate(() => window.__bench.stopFrames())
   const after = await page.metrics()
+  // 描画呼び出しの数(issue #171)と、その間に本描画した回数(必要なときだけ描くなら静止中は 0 に近い)
+  const drawCalls = await page.evaluate(() => window.__duocad.drawCalls?.() ?? null)
+  const rendersAfter = await page.evaluate(() => window.__duocad.renderCount?.() ?? null)
   // メインスレッドの CPU 時間(JS + レイアウト + 描画の投入。GPU の時間は含まない)を1フレームあたりに割る。
   const frames = Math.max(1, stats?.frames ?? 1)
   const cpuPerFrame = ((after.TaskDuration - before.TaskDuration) * 1000) / frames
   const scriptPerFrame = ((after.ScriptDuration - before.ScriptDuration) * 1000) / frames
-  return record(scenario, label, stats?.p50 ?? null, { p95: stats?.p95, max: stats?.max, frames: stats?.frames, over33: stats?.over33, cpu_ms_per_frame: cpuPerFrame, script_ms_per_frame: scriptPerFrame, heap_mb: after.JSHeapUsedSize / 1e6 })
+  const renders = rendersBefore === null || rendersAfter === null ? null : rendersAfter - rendersBefore
+  return record(scenario, label, stats?.p50 ?? null, { p95: stats?.p95, max: stats?.max, frames: stats?.frames, over33: stats?.over33, cpu_ms_per_frame: cpuPerFrame, script_ms_per_frame: scriptPerFrame, heap_mb: after.JSHeapUsedSize / 1e6, draw_calls: drawCalls, renders })
 }
 
 /** `openApp` と同じ流れだが、ページを作る前に計測の穴を仕込み、読み込みの所要も測る。 */
@@ -344,7 +349,7 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius, url }) {
   )
   // 同じボディでもう一度起動(辺はサーバのキャッシュから)
   await page.keyboard.press('Escape')
-  await page.waitForFunction(() => window.__duocad.command === null && window.__duocad.edges === null, { timeout: 30000, polling: 'raf' })
+  await page.waitForFunction(() => window.__duocad.command === null && window.__duocad.wantsEdges === false, { timeout: 30000, polling: 'raf' })
   await clickAt(page, face.at)
   await page.waitForFunction((id) => (window.__duocad.selection?.items ?? []).some((i) => i.body === id), { timeout: 30000, polling: 'raf' }, bodyId)
   await measure(

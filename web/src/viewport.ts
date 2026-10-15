@@ -41,6 +41,7 @@ import { createViewCubeOverlay } from './viewCubeOverlay'
 import { createVertexMarkers } from './vertexMarkers'
 import { createMeasureAnnotation } from './measureAnnotation'
 import { createThumbnailer } from './thumbnail'
+import { buildBodyMesh } from './bodyMesh'
 import type { BasePlaneName, EdgeGeometry } from './session'
 import {
   type BodyGeometryUpdate, type BodyGhostRotation, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
@@ -125,12 +126,27 @@ export function createViewport(container: HTMLElement): Viewport {
   const sketchRoot = new THREE.Group()
   scene.add(sketchRoot)
 
+  // ------------------------------------------------------------------ 必要なときだけ描く(issue #171)
+  //
+  // 描くのは、公開口が呼ばれた(`invalidating`)・ポインタが動いた・ホバーや姿勢の解決が何かを変えた・カメラが
+  // 動いた(減衰・ビューキューブの回転を含む。`cameraMovedSinceRender`)フレームだけ。何もしていない間は描かない
+  // (常時描くと、27 部品で静止中も主スレッドが 12 ms/フレーム埋まり、ラップトップの電池も減る)。
+  // 公開口を通らずに見た目を変える経路を足したら、そこで `invalidate()` を呼ぶこと。
+  let needsRender = true
+  function invalidate(): void {
+    needsRender = true
+  }
+
   // ------------------------------------------------------------------ 形状最適化(第3のモード)の注記
   //
   // 拘束の固定記号・荷重の矢印+ラベル。`root` に入れない(外接直方体に混ざると初回フレーミングや
   // near/far計算を歪める)。装飾なのでピック対象にも足さない。`setOptimizeState` が唯一の書き手。
   const annotations = createOptimizeAnnotations({
-    faceMeshes: () => allFaceMeshes,
+    faceVertices: (bodyId, faceIndex) => {
+      const body = bodies.get(bodyId)?.body
+      const positions = body?.facePositions(faceIndex) ?? null
+      return body === undefined || positions === null ? null : { positions, normals: body.faceNormals(faceIndex) }
+    },
     contentDiagonal: () => contentDiagonal,
   })
   annotations.object.renderOrder = LAYER.optimize
@@ -156,10 +172,7 @@ export function createViewport(container: HTMLElement): Viewport {
   // `root` / `sketchRoot` を作った後で呼ぶ(最初の描画で `contentBoxForGrid` を読む)。
   const grid = createGridPlanes({
     contentBox: contentBoxForGrid,
-    faceMesh: (bodyId, faceIndex) =>
-      allFaceMeshes.find(
-        (candidate) => candidate.userData.bodyId === bodyId && candidate.userData.faceIndex === faceIndex,
-      ),
+    facePositions: (bodyId, faceIndex) => bodies.get(bodyId)?.body.facePositions(faceIndex) ?? null,
     worldPerPixel,
     camera: () => camera,
     onExtentChange: updateClipPlanes,
@@ -216,14 +229,7 @@ export function createViewport(container: HTMLElement): Viewport {
       return material?.color ? material.color.getHex() : null
     }
     const face = hoverFace
-    if (face !== null) {
-      return pick(
-        allFaceMeshes.find(
-          (mesh) =>
-            mesh.userData.bodyId === face.bodyId && mesh.userData.faceIndex === face.faceIndex,
-        ),
-      )
-    }
+    if (face !== null) return paintedFaceColor(face)
     const edge = hoverEdge
     if (edge !== null) {
       return pick(edgeLines.find((line) => line.userData.edgeIndex === edge.edgeIndex))
@@ -264,29 +270,43 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 面の材質は (役割 × 状態 × ホバー × 平面陰影) の遅延生成のキャッシュから取る(`variantCache`)。
-   * 選択は役割に勝つ: `state !== 'plain'` のときは役割の色を見ない(保持ソリッドを選ぶとハイライト色になる)。
+   * ボディの材質は2つだけ(面の色は頂点色。`bodyMesh.ts`)。平らな陰影はメッシュボディ用(三角形がそのまま形で、
+   * 頂点法線を平均すると元に無い滑らかさが出る)。
    */
-  const faceMaterials = variantCache(
-    (role: OptimizeFaceRole, state: FaceMaterialState, hovered: boolean, flat: boolean) =>
-      `${state === 'plain' ? role : 'none'}:${state}:${hovered ? 1 : 0}:${flat ? 1 : 0}`,
-    (role, state, hovered, flat) => {
-      const base = state === 'user' ? HIGHLIGHT_COLOR : roleBaseColor(role)
-      return new THREE.MeshLambertMaterial({
-        color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
-        side: THREE.DoubleSide,
-        flatShading: flat,
-        clippingPlanes: section.clipPlanes,
-      })
-    },
-  )
-  function faceMaterialFor(
-    role: OptimizeFaceRole,
-    state: FaceMaterialState,
-    hovered: boolean,
-    flat = false,
-  ): THREE.MeshLambertMaterial {
-    return faceMaterials.get(role, state, hovered, flat)
+  const bodyMaterials = {
+    smooth: new THREE.MeshLambertMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      clippingPlanes: section.clipPlanes,
+    }),
+    flat: new THREE.MeshLambertMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      flatShading: true,
+      clippingPlanes: section.clipPlanes,
+    }),
+  }
+  const lightenedColors = new Map<number, number>()
+  /**
+   * 面の色(16進)。選択は役割に勝つ: `state !== 'plain'` のときは役割の色を見ない(保持ソリッドを選ぶとハイライト色になる)。
+   * ホバーは明度だけを上げる。
+   */
+  function faceColorFor(role: OptimizeFaceRole, state: FaceMaterialState, hovered: boolean): number {
+    const base = state === 'user' ? HIGHLIGHT_COLOR : roleBaseColor(role)
+    if (!hovered) return base
+    let light = lightenedColors.get(base)
+    if (light === undefined) {
+      light = lighten(base, HOVER_LIGHTEN)
+      lightenedColors.set(base, light)
+    }
+    return light
+  }
+  /** 塗っている色を、材質の色を読み戻したのと同じ値で返す(sRGB の16進 → 線形 → 16進。実機検査のフックが比べる)。 */
+  function paintedFaceColor(ref: FaceRef): number | null {
+    const hex = bodies.get(ref.bodyId)?.body.faceColor(ref.faceIndex)
+    return hex === undefined ? null : new THREE.Color(hex).getHex()
   }
   const previewMaterial = new THREE.MeshLambertMaterial({
     color: PREVIEW_COLOR,
@@ -309,8 +329,8 @@ export function createViewport(container: HTMLElement): Viewport {
   const faceSamples = new Map<string, BodySamples>()
   /** `faceSamples` が変わった印。姿勢が止まっていても形が届けば `computeFocus` をやり直す。 */
   let focusGeneration = 0
-  /** 全Body分の面メッシュを1本にまとめたもの(ピック用)。update() のたびに作り直す。 */
-  let allFaceMeshes: THREE.Mesh[] = []
+  /** 全Bodyのメッシュ(1ボディ1つ。ピック用)。update() のたびに作り直す。 */
+  let pickMeshes: THREE.Mesh[] = []
   let pickListener: ((event: PickEvent) => void) | null = null
   let boxSelectListener: ((event: BoxSelectEvent) => void) | null = null
   let sectionDragListener: ((position: number) => void) | null = null
@@ -410,7 +430,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const existing = bodies.get(bodyId)
     if (!existing) return
     for (const object of existing.sceneObjects) root.remove(object)
-    for (const item of existing.disposables) item.dispose()
+    existing.body.dispose()
     section.removeBody(bodyId)
     bodies.delete(bodyId)
     rawGeometry.delete(bodyId)
@@ -435,47 +455,24 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function buildBody(bodyId: string, payload: GeometryPayload): void {
-    const faceMeshes: THREE.Mesh[] = []
-    const faceGeometries: THREE.BufferGeometry[] = []
-    const sceneObjects: THREE.Object3D[] = []
-    const disposables: Array<{ dispose(): void }> = []
-    for (const face of payload.faces) {
-      if (face.indices.length === 0) continue // 三角形が取れなかった面(サーバが警告を出す)
-      const geometry = faceGeometry(face)
-      faceGeometries.push(geometry)
-      // メッシュボディは面1つ・`kind: "mesh"` で届く(`duocad/meshbody.py` の `tessellate`)。
-      // 三角形がそのまま形なので、頂点法線を平均すると元に無い滑らかさが出る。
-      const flat = face.kind === 'mesh'
-      // 素の材質で生む(役割・選択・ホバーは `rebuildPickIndex()` 経由の `applyFaceMaterials()` が塗り直す)
-      const mesh = new THREE.Mesh(geometry, faceMaterialFor('none', 'plain', false, flat))
-      mesh.userData.bodyId = bodyId
-      mesh.userData.faceIndex = face.index
-      mesh.userData.flatShaded = flat // `applyFaceMaterials` は `GeometryPayload` を見ない
-      root.add(mesh)
-      faceMeshes.push(mesh)
-      sceneObjects.push(mesh)
-      disposables.push(geometry)
-
-      // 面の境界線(隣り合う同色の面を狙い分けるため)。メッシュボディには出さない
-      // (面が1つで、三角形の稜線がそのまま線になって形が潰れる)。
-      if (!flat) {
-        const edges = new THREE.EdgesGeometry(geometry, 20)
-        const line = new THREE.LineSegments(edges, edgeMaterial)
-        root.add(line)
-        sceneObjects.push(line)
-        disposables.push(edges)
-      }
+    // 素の色で生む(役割・選択・ホバーは `rebuildPickIndex()` 経由の `applyFaceMaterials()` が塗り直す)。
+    // 面の境界線は隣り合う同色の面を狙い分けるため。メッシュボディには出さない(`bodyMesh.ts`)。
+    const body = buildBodyMesh(bodyId, payload, bodyMaterials, edgeMaterial, BASE_COLOR)
+    const sceneObjects: THREE.Object3D[] = [body.mesh]
+    root.add(body.mesh)
+    if (body.lines !== null) {
+      root.add(body.lines)
+      sceneObjects.push(body.lines)
     }
-    section.setBody(bodyId, faceGeometries)
-    bodies.set(bodyId, { faceMeshes, sceneObjects, disposables })
+    section.setBody(bodyId, [body.mesh.geometry])
+    bodies.set(bodyId, { body, sceneObjects })
     rawGeometry.set(bodyId, payload)
     faceSamples.set(bodyId, sampleFaces(payload))
     focusGeneration += 1
   }
 
   function rebuildPickIndex(): void {
-    allFaceMeshes = []
-    for (const entry of bodies.values()) allFaceMeshes.push(...entry.faceMeshes)
+    pickMeshes = [...bodies.values()].map((entry) => entry.body.mesh)
     invalidateHover() // 作り直した面は素の材質で生まれる(`invalidateHover` のコメント)
   }
 
@@ -733,21 +730,18 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   function applyFaceMaterials(): void {
     highlightColor.face =
-      selectedFaceKeys.size === 0 && selectedBodyIds.size === 0
-        ? null
-        : faceMaterialFor('none', 'user', false).color.getHex()
-    for (const mesh of allFaceMeshes) {
-      const bodyId = mesh.userData.bodyId as string
-      const faceIndex = mesh.userData.faceIndex as number
-      const hitAsFace = selectedFaceKeys.has(refKey(bodyId, faceIndex))
+      selectedFaceKeys.size === 0 && selectedBodyIds.size === 0 ? null : new THREE.Color(HIGHLIGHT_COLOR).getHex()
+    // 塗るのは色が変わった面の頂点だけ(`BodyMesh.setFaceColor`)。全面を舐めるのは鍵の計算だけ。
+    for (const [bodyId, entry] of bodies) {
       const hitAsBody = selectedBodyIds.has(bodyId)
-      const state: FaceMaterialState = hitAsFace || hitAsBody ? 'user' : 'plain'
-      const role: OptimizeFaceRole = fixtureFaceKeys.has(refKey(bodyId, faceIndex))
-        ? 'fixture'
-        : (bodyRoles.get(bodyId) ?? 'none')
-      const isHovered =
-        hoverFace !== null && hoverFace.bodyId === bodyId && hoverFace.faceIndex === faceIndex
-      mesh.material = faceMaterialFor(role, state, isHovered, mesh.userData.flatShaded === true)
+      const bodyRole: OptimizeFaceRole = bodyRoles.get(bodyId) ?? 'none'
+      for (const face of entry.body.faces) {
+        const key = refKey(bodyId, face.index)
+        const state: FaceMaterialState = hitAsBody || selectedFaceKeys.has(key) ? 'user' : 'plain'
+        const role: OptimizeFaceRole = fixtureFaceKeys.has(key) ? 'fixture' : bodyRole
+        const isHovered = hoverFace !== null && hoverFace.bodyId === bodyId && hoverFace.faceIndex === face.index
+        if (entry.body.setFaceColor(face.index, faceColorFor(role, state, isHovered))) invalidate()
+      }
     }
   }
 
@@ -791,7 +785,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function faceRefOf(hit: THREE.Intersection): FaceRef | null {
     const bodyId = hit.object.userData.bodyId
-    const faceIndex = hit.object.userData.faceIndex
+    // 当たりの `faceIndex` は三角形の通し番号。面の添字へは三角形ごとの表で戻す(`bodyMesh.ts`)。
+    const triangleFaces = hit.object.userData.triangleFaces as Int32Array | undefined
+    const faceIndex = triangleFaces !== undefined && typeof hit.faceIndex === 'number' ? triangleFaces[hit.faceIndex] : undefined
     if (typeof bodyId !== 'string' || typeof faceIndex !== 'number') return null
     return { bodyId, faceIndex }
   }
@@ -810,7 +806,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const ray = rayAt(offsetX, offsetY)
     // 隠しているメッシュは指せない(Raycaster は `visible` を見ないので明示的に外す)。
     const hits = raycaster.intersectObjects(
-      allFaceMeshes.filter((mesh) => mesh.visible),
+      pickMeshes.filter((mesh) => mesh.visible),
       false,
     )
     const cut = section.cut(ray)
@@ -904,10 +900,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function project(bodyId: string, faceIndex: number): { x: number; y: number } | null {
     const entry = bodies.get(bodyId)
-    const mesh = entry?.faceMeshes.find(
-      (candidate) => candidate.userData.faceIndex === faceIndex,
-    )
-    if (!mesh || !mesh.visible) return null
+    const span = entry?.body.faceOf(faceIndex)
+    if (!entry || !span || !entry.body.mesh.visible) return null
+    const mesh = entry.body.mesh
     const position = mesh.geometry.getAttribute('position')
     const index = mesh.geometry.getIndex()
     if (!position || !index) return null
@@ -915,8 +910,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const point = new THREE.Vector3()
     const corner = new THREE.Vector3()
 
-    const triangleCount = index.count / 3
-    for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+    for (let triangle = span.triangleStart; triangle < span.triangleStart + span.triangleCount; triangle += 1) {
       point.set(0, 0, 0)
       for (let vertex = 0; vertex < 3; vertex += 1) {
         const at = index.getX(triangle * 3 + vertex)
@@ -1454,6 +1448,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 控えた指示で描き直す(`resolutionTracker` が解像度を採り直したときに呼ぶ)。中身が無ければ何もしない。 */
   function redrawSketches(): void {
+    invalidate()
     if (lastSketchDraws.length > 0) showSketches(lastSketchDraws, true)
   }
 
@@ -2151,11 +2146,13 @@ export function createViewport(container: HTMLElement): Viewport {
       const keep = section.keepsFilter()
       // 面はクリックと同じゲート(`pickFaces`)。隠したBodyのメッシュは `visible=false` なので外す。
       for (const [bodyId, entry] of facePickWanted ? bodies : []) {
-        for (const mesh of entry.faceMeshes) {
-          if (!mesh.visible) continue
-          if (!band.objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
-          const faceIndex = mesh.userData.faceIndex
-          if (typeof faceIndex === 'number') faces.push({ bodyId, faceIndex })
+        const mesh = entry.body.mesh
+        if (!mesh.visible) continue
+        mesh.updateWorldMatrix(true, false)
+        for (const face of entry.body.faces) {
+          const positions = entry.body.facePositions(face.index)
+          if (positions === null || !band.positionsInside(positions, mesh.matrixWorld, rect, width, height, keep)) continue
+          faces.push({ bodyId, faceIndex: face.index })
         }
       }
       // 辺・頂点は「出している間だけ」(クリックの `edgeAt` / `vertexAt` と同じゲート)
@@ -2397,7 +2394,24 @@ export function createViewport(container: HTMLElement): Viewport {
   // ドラッグがOSに横取りされた場合(`pointerup` が来ない)。`pointerleave` と同じ後始末でよい。
   renderer.domElement.addEventListener('pointercancel', onPointerLeave)
 
-  const observer = new ResizeObserver(() => applySize())
+  // ポインタ・ホイールは公開口を通らずに見た目(ホバー・ビューキューブ・断面のつまみ・グリッド)を変える
+  for (const type of ['pointerdown', 'pointerup', 'pointermove', 'pointerleave', 'pointercancel', 'wheel'] as const) {
+    renderer.domElement.addEventListener(type, invalidate, { passive: true })
+  }
+  controls.addEventListener('change', invalidate)
+  // 描画バッファが失われた後(GPU のリセット・タブの復帰)は、何も変わっていなくても描き直す
+  renderer.domElement.addEventListener('webglcontextrestored', invalidate)
+  document.addEventListener('visibilitychange', invalidate)
+  // ビューキューブはツールバーの引数欄の高さ(`CommandHost` が `.app` の style へ書く `--toolbar-overlay-h`)だけ下がる。
+  // 公開口を通らずに変わるので、書き換えを見張って描き直す(描かないとキューブの絵と当たり判定がずれる)。
+  const overlayWatcher = new MutationObserver(invalidate)
+  const appElement = container.closest('.app')
+  if (appElement instanceof HTMLElement) overlayWatcher.observe(appElement, { attributes: true, attributeFilter: ['style'] })
+
+  const observer = new ResizeObserver(() => {
+    invalidate()
+    applySize()
+  })
   observer.observe(container)
   applySize()
 
@@ -2407,11 +2421,14 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   function updateHover(): void {
     const point = orbiting ? null : hoverAt
+    // カメラの値は丸めて鍵にする: 真上から見る極の近く(スケッチ中)では `OrbitControls` が毎フレーム位置と姿勢を
+    // 1e-8 ほど揺らし続け、そのままだと止まっていても毎フレーム当たりを解き直す(`cameraMovedSinceRender` と同じ揺れ)。
+    const fixed = (values: number[]) => values.map((value) => value.toFixed(6)).join(',')
     const probe =
       point === null
         ? ''
         : `${pickGeneration},${point.x},${point.y},` +
-          `${camera.position.toArray().join(',')},${camera.quaternion.toArray().join(',')},` +
+          `${fixed(camera.position.toArray())},${fixed(camera.quaternion.toArray())},` +
           // `zoom` も入れる: 正投影のドリーは `zoom` だけを動かすので、無いとホイールで寄っても当たるものが変わらない。
           `${camera.zoom}`
     if (probe === hoverProbe) return
@@ -2431,17 +2448,20 @@ export function createViewport(container: HTMLElement): Viewport {
       hoverFace = face
       applyFaceMaterials()
     }
+    // 面は `applyFaceMaterials` が色を変えたときに描き直しを頼む。それ以外は当たりが変わったら頼む。
     const nextEdgeKey = edge === null ? '' : refKey(edge.bodyId, edge.edgeIndex)
     if (nextEdgeKey !== hoverEdgeKey) {
       hoverEdgeKey = nextEdgeKey
       hoverEdge = edge
       applyEdgeMaterials()
+      invalidate()
     }
     const nextRegionKey = region === null ? '' : refKey(region.sketchId, region.index)
     if (nextRegionKey !== hoverRegionKey) {
       hoverRegionKey = nextRegionKey
       hoverRegion = region
       applyRegionMaterials()
+      invalidate()
     }
     const sketchEntity = next?.sketchEntity ?? null
     const nextSketchKey =
@@ -2450,10 +2470,12 @@ export function createViewport(container: HTMLElement): Viewport {
       hoverSketchKey = nextSketchKey
       hoverSketchEntity = sketchEntity
       applySketchHoverMaterials()
+      invalidate()
     }
     if (plane !== hoverPlane) {
       hoverPlane = plane
       applyBasePlaneHover()
+      invalidate()
     }
   }
 
@@ -2478,6 +2500,35 @@ export function createViewport(container: HTMLElement): Viewport {
     camera.lookAt(controls.target)
   }
 
+  /** 直近の本描画(ビューキューブを除く)の描画呼び出しの数と、本描画の累計回数(物差し用。issue #171)。 */
+  let lastDrawCalls = 0
+  let renderCount = 0
+  /** 最後に描いたときのカメラ(`cameraMovedSinceRender`)。 */
+  let renderedCamera: THREE.Camera | null = null
+  const renderedView = new THREE.Matrix4()
+  const renderedProjection = new THREE.Matrix4()
+
+  /**
+   * 最後に描いた後にカメラが動いたか(減衰・ビューキューブの回転・投影の切り替え・寸法の変更を含む)。
+   * 完全一致では比べない: 真上から見る極の近く(スケッチ中)では `OrbitControls` が毎フレーム姿勢を計算し直し、
+   * 行列が 1e-8 ほど揺れ続ける(実測。画素には出ない)。
+   */
+  function cameraMovedSinceRender(): boolean {
+    camera.updateMatrixWorld()
+    return (
+      camera !== renderedCamera ||
+      !matricesClose(camera.matrixWorld, renderedView) ||
+      !matricesClose(camera.projectionMatrix, renderedProjection)
+    )
+  }
+
+  function matricesClose(a: THREE.Matrix4, b: THREE.Matrix4): boolean {
+    for (let i = 0; i < 16; i += 1) {
+      if (Math.abs(a.elements[i] - b.elements[i]) > 1e-6) return false
+    }
+    return true
+  }
+
   function tick(): void {
     if (!alive) return
     cube.stepSnap(performance.now())
@@ -2487,7 +2538,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 動き続けるので、「止まったか」はフレーム側でしか分からない。
     resolution.update(performance.now())
     updateHover()
-    cube.updateHover()
+    if (cube.updateHover()) invalidate()
     // カーソル追従もフレームごとに引き直す(`onPointerMove` だけに任せない): ホイールでズームすると `hoverAt` は
     // 動かないがレイと平面frameの交点(`planePointAt`)は変わり、カーソルを動かさず寄せ引きするだけではグリッドが
     // 追従しない(本人報告2026-09-11)。スケッチ非活性なら `planePointAt`/`grid.followCursor` は即 `null`/no-op。
@@ -2495,13 +2546,22 @@ export function createViewport(container: HTMLElement): Viewport {
     // グリッドは毎フレームここだけを更新する(段の不透明度とカメラ行列。ジオメトリは無い)。
     grid.updateUniforms()
     section.update()
-    renderer.render(scene, camera)
-    cube.render()
+    if (needsRender || cameraMovedSinceRender()) {
+      needsRender = false
+      renderer.render(scene, camera)
+      lastDrawCalls = renderer.info.render.calls
+      renderCount += 1
+      // ビューキューブは本描画の後に同じ描画バッファへ重ねる(色を消さない)ので、本描画と同じフレームでだけ描く
+      cube.render()
+      renderedCamera = camera
+      renderedView.copy(camera.matrixWorld)
+      renderedProjection.copy(camera.projectionMatrix)
+    }
     frameHandle = requestAnimationFrame(tick)
   }
   frameHandle = requestAnimationFrame(tick)
 
-  return {
+  const api: Viewport = {
     update,
     getGeometry(bodyId) {
       return rawGeometry.get(bodyId) ?? null
@@ -2566,16 +2626,12 @@ export function createViewport(container: HTMLElement): Viewport {
     showMeasurement: measureAnnotation.show,
     measurementInfo: measureAnnotation.info,
     sketchRebuilds: () => sketchRebuildCount,
+    drawCalls: () => lastDrawCalls,
+    renderCount: () => renderCount,
     highlightColors() {
       return { ...highlightColor }
     },
-    faceColor(ref) {
-      const mesh = allFaceMeshes.find(
-        (candidate) => candidate.userData.bodyId === ref.bodyId && candidate.userData.faceIndex === ref.faceIndex,
-      )
-      const material = mesh?.material as THREE.MeshLambertMaterial | undefined
-      return material?.color ? material.color.getHex() : null
-    },
+    faceColor: paintedFaceColor,
     optimizeAnnotationCount: annotations.count,
     optimizeAnnotations: annotations.info,
     hoveredRef() {
@@ -2636,6 +2692,8 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
       renderer.domElement.removeEventListener('pointercancel', onPointerLeave)
+      document.removeEventListener('visibilitychange', invalidate)
+      overlayWatcher.disconnect()
       cube.dispose()
       sketchCursor.dispose()
       ghostLayer.clearPreview()
@@ -2655,7 +2713,8 @@ export function createViewport(container: HTMLElement): Viewport {
       originGizmo.dispose()
       section.dispose()
       controls.dispose()
-      faceMaterials.dispose()
+      bodyMaterials.smooth.dispose()
+      bodyMaterials.flat.dispose()
       previewMaterial.dispose()
       edgeMaterial.dispose()
       annotations.clear()
@@ -2664,4 +2723,21 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.remove()
     },
   }
+  return invalidating(api, invalidate, ['drawCalls', 'renderCount'])
+}
+
+/**
+ * 公開口のどれかが呼ばれたら次のフレームで描き直させる(必要なときだけ描く。`createViewport` の「必要なときだけ描く」)。
+ * 見た目を変える口を1つずつ印すと付け忘れる(付け忘れた口は「画面が変わらない」になる)ので、読むだけの口も含めて全部。
+ * 除くのは描画の物差し(`except`)だけ: 毎フレーム読むと、読むこと自体が描き続けさせる。
+ */
+function invalidating<T extends object>(api: T, invalidate: () => void, except: readonly string[]): T {
+  for (const [key, value] of Object.entries(api)) {
+    if (typeof value !== 'function' || except.includes(key)) continue
+    ;(api as Record<string, unknown>)[key] = (...args: unknown[]) => {
+      invalidate()
+      return (value as (...rest: unknown[]) => unknown).apply(api, args)
+    }
+  }
+  return api
 }

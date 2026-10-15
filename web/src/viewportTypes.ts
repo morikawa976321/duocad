@@ -502,6 +502,10 @@ export interface Viewport {
   highlightColors(): { face: number | null; edge: number | null; vertex: number | null }
   /** スケッチを作り直した回数の累計(実機検査・物差し用。選択だけが変わった配信では増えない)。 */
   sketchRebuilds(): number
+  /** 直近の本描画の描画呼び出しの数(`renderer.info.render.calls`。ビューキューブを除く)。物差し用。 */
+  drawCalls(): number
+  /** 本描画を行った累計回数(静止中に描いていないかを見る物差し)。 */
+  renderCount(): number
   /**
    * 指した面がいま実際に塗られている色(16進。無ければ null)。実機検査フック専用。
    * 形状最適化の役割色は、選択の色しか見ない `highlightColors` では確かめられない。
