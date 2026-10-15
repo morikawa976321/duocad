@@ -466,12 +466,19 @@ export interface Viewport {
    */
   pickFaces(on: boolean): void
   /**
-   * 辺のホバーと `edgeChain` を、辺1本ではなく連なり(`EdgeGeometry.chain`)の単位にする(既定 `false`)。
+   * 辺のホバーと `edgeChain` を、辺1本ではなく連なり(`setEdgeChains`)の単位にする(既定 `false`)。
    * フィレット・面取りの起動中だけ立てる(測定・回転軸は辺を1本ずつ指す)。
    */
   groupEdgeChains(on: boolean): void
-  /** その辺と同じ連なりの辺の添字(出している辺の範囲で。`groupEdgeChains(false)` の間はその辺だけ)。 */
-  edgeChain(ref: EdgeRef): number[]
+  /**
+   * その辺と同じ連なりの辺の添字(出している辺の範囲で。`groupEdgeChains(false)` の間はその辺だけ)。
+   * 連なりの単位で扱っているのに、その辺の連なりがまだ届いていなければ `null`。
+   */
+  edgeChain(ref: EdgeRef): number[] | null
+  /** 届いた連なり(各要素が1つの連なりの添字の全部)を、今出している辺(`bodyId` のもの)に覚えさせる。 */
+  setEdgeChains(bodyId: string, chains: number[][]): void
+  /** 連なりの単位で扱っている間に、連なりの分からない辺へホバーが乗った(取り寄せの合図。重複して呼ばれうる)。 */
+  onEdgeChainWanted(listener: (ref: EdgeRef) => void): void
   /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
   highlightEdges(refs: EdgeRef[]): void
   // ------------------------------------------------------------------ 頂点(選択中のものだけ)

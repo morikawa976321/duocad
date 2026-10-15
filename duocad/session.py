@@ -321,6 +321,10 @@ class Session:
         """1Bodyの辺の折れ線(`DocumentView.edges`)。"""
         return self.view.edges(body_id)
 
+    def edge_chains(self, body_id: str, edge_indices: list) -> dict:
+        """1Bodyの辺の連なり(`DocumentView.edge_chains`)。"""
+        return self.view.edge_chains(body_id, edge_indices)
+
     def vertices(self, body_id: str) -> dict:
         """1Bodyの頂点の座標(`DocumentView.vertices`)。"""
         return self.view.vertices(body_id)

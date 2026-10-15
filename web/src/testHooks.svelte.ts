@@ -194,6 +194,8 @@ export function installTestHooks(ctx: TestHookContext): void {
       selectedEntities: ctx.selectedEntities(),
       projectEdge: (bodyId: string, edgeIndex: number) =>
         viewport()?.projectEdge(bodyId, edgeIndex) ?? null,
+      // 画面が知っているその辺の連なり(フィレット・面取りの間だけ。届いていなければ null)。
+      edgeChain: (bodyId: string, edgeIndex: number) => viewport()?.edgeChain({ bodyId, edgeIndex }) ?? null,
       vertexMarkers: ctx.vertexMarkers(),
       // 測定(issue #10)。`$state.snapshot` で素のオブジェクトにして出す: プロキシのままだと
       // puppeteer の `evaluate` が値を持ち帰れず `{}` になる(実測)。

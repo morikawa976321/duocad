@@ -1924,6 +1924,25 @@ COMMANDS: tuple[Command, ...] = (
             "起動している間だけ画面に出る(常時出すと面のクリックが辺に取られる)"
         ),
     ),
+    Command(
+        name="get_edge_chains",
+        category="protocol",
+        description="",
+        params=(
+            Param("body_id", "string", "連なりが要る辺のボディ"),
+            # `edges` と綴らない: 対象集合の名前(`tests/test_ui_command_wiring.py` の `TARGET_SET_ARGS`)はソケットで読まない。
+            # これは連なりを調べる読み取りで、verb の対象ではない。
+            Param("chain_of", "array", "連なりが要る辺の添字(1始まり)の配列"),
+        ),
+        session="edge_chains",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**配信しない**(`get_edges` と同じ)。フィレット・面取りで1本として振る舞う辺の組を、"
+            "画面がホバー・クリックした辺の分だけ返す(全辺ぶんは大きな部品で 0.5 秒かかる)"
+        ),
+    ),
     # アプリ内AI(protocol)。**verbではなく、実体は `net/ws.py` の `Server`**(`session=None`)。
     # 応答は専用イベント(`ai_status` / `ai_tool_call` / `ai_result` / `ai_error`)で、AIが文書を変えた分は
     # 通常の状態配信として別途届く。**ここに宣言するのは、ソケットが受け取る名前を宣言で尽くすため**

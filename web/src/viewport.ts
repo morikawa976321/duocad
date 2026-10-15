@@ -314,6 +314,7 @@ export function createViewport(container: HTMLElement): Viewport {
   let pickListener: ((event: PickEvent) => void) | null = null
   let boxSelectListener: ((event: BoxSelectEvent) => void) | null = null
   let sectionDragListener: ((position: number) => void) | null = null
+  let edgeChainWantedListener: ((ref: EdgeRef) => void) | null = null
   let planeMoveListener:
     | ((point: { u: number; v: number } | null, sketchEntity: SketchEntityHit | null) => void)
     | null = null
@@ -959,6 +960,8 @@ export function createViewport(container: HTMLElement): Viewport {
   let edgeBodyId: string | null = null
   /** 今出している辺の元になった配列(同じものを渡されたら作り直さない印)。 */
   let edgeSource: EdgeGeometry[] | null = null
+  /** 今出している辺のうち連なりが分かっているもの(辺の添字 -> その連なりの添字の全部。`setEdgeChains`)。 */
+  let edgeChainOf = new Map<number, number[]>()
   /** 辺の除去と破棄の束(ピックは `edgeLines` から)。 */
   const edgeBatch = createBatch(edgeRoot)
 
@@ -967,6 +970,7 @@ export function createViewport(container: HTMLElement): Viewport {
     edgeLines = []
     edgeBodyId = null
     edgeSource = null
+    edgeChainOf = new Map()
     invalidateHover()
   }
 
@@ -992,7 +996,6 @@ export function createViewport(container: HTMLElement): Viewport {
       line.renderOrder = LAYER.edge // 深度を書かないぶん、描く順序で面より手前に出す
       line.userData.bodyId = bodyId
       line.userData.edgeIndex = edge.index
-      line.userData.chain = edge.chain ?? edge.index
       edgeLines.push(edgeBatch.add(line, geometry))
     }
   }
@@ -1004,7 +1007,13 @@ export function createViewport(container: HTMLElement): Viewport {
   function applyEdgeMaterials(): void {
     // 色は材質から読み戻す(`highlightColors()` の検査がこの値を読む)。
     highlightColor.edge = selectedEdgeIndices.size === 0 ? null : edgeMaterials.get('user', false).color.getHex()
-    const hovered = hoverEdge === null || hoverEdge.bodyId !== edgeBodyId ? new Set<number>() : new Set(edgeChain(hoverEdge))
+    let hovered = new Set<number>()
+    if (hoverEdge !== null && hoverEdge.bodyId === edgeBodyId) {
+      const chain = edgeChain(hoverEdge)
+      // 連なりがまだ分からない間はその1本だけ光らせ、取り寄せを頼む(届くと `setEdgeChains` が塗り直す)。
+      if (chain === null) edgeChainWantedListener?.(hoverEdge)
+      hovered = new Set(chain ?? [hoverEdge.edgeIndex])
+    }
     for (const line of edgeLines) {
       const edgeIndex = line.userData.edgeIndex as number
       const isHit = selectedEdgeIndices.has(edgeIndex)
@@ -1021,11 +1030,17 @@ export function createViewport(container: HTMLElement): Viewport {
     applyEdgeMaterials()
   }
 
-  function edgeChain(ref: EdgeRef): number[] {
+  function edgeChain(ref: EdgeRef): number[] | null {
     if (!edgeChainsWanted || ref.bodyId !== edgeBodyId) return [ref.edgeIndex]
-    const chain = edgeLines.find((line) => line.userData.edgeIndex === ref.edgeIndex)?.userData.chain
-    if (typeof chain !== 'number') return [ref.edgeIndex]
-    return edgeLines.filter((line) => line.userData.chain === chain).map((line) => line.userData.edgeIndex as number)
+    return edgeChainOf.get(ref.edgeIndex) ?? null
+  }
+
+  function setEdgeChains(bodyId: string, chains: number[][]): void {
+    if (bodyId !== edgeBodyId) return
+    for (const members of chains) {
+      for (const index of members) edgeChainOf.set(index, members)
+    }
+    applyEdgeMaterials()
   }
 
   function highlightEdges(refs: EdgeRef[]): void {
@@ -2492,6 +2507,10 @@ export function createViewport(container: HTMLElement): Viewport {
     pickFaces,
     groupEdgeChains,
     edgeChain,
+    setEdgeChains,
+    onEdgeChainWanted(listener) {
+      edgeChainWantedListener = listener
+    },
     preferVertices,
     highlightEdges,
     projectEdge,

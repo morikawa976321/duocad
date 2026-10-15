@@ -107,10 +107,11 @@ class DocumentView:
         self._revision_counter: dict = {}  # body_id -> 現在の版(int)
         # sketch_id -> (署名, 領域つきペイロード)。領域の計算が重いので内容で引く(C)
         self._sketch_cache: dict = {}
-        # 4つとも body_id -> (source, key, result)(`_memo`)。source は shape か mesh、key は
+        # 5つとも body_id -> (source, key, result)(`_memo`)。source は shape か mesh、key は
         # geometry が `body_recipe`、edges が (偏差, 角度偏差)、他は None
         self._geometry_cache: dict = {}    # tessellate結果
         self._edge_cache: dict = {}        # tessellate_edges結果(D)
+        self._chain_cache: dict = {}       # 辺の連なりの器(`kernel.edge_chain_finder`)。粗さに依らない
         self._vertex_cache: dict = {}      # vertex_positions結果
         self._volume_cache: dict = {}      # query.volume結果
         #: 形状最適化の条件の配りもの(`optimize.state_payload`)の増分維持。
@@ -265,6 +266,7 @@ class DocumentView:
         self.document = document
         self._geometry_cache.clear()
         self._edge_cache.clear()
+        self._chain_cache.clear()
         self._vertex_cache.clear()
         self._volume_cache.clear()
         self._sketch_cache.clear()
@@ -489,6 +491,22 @@ class DocumentView:
         )
         return {"body_id": body_id, "revision": revision, "edges": described}
 
+    def edge_chains(self, body_id: str, edge_indices: list) -> dict:
+        """頼まれた辺それぞれが属する連なり(フィレット・面取りで1本として振る舞う辺の組)を返す。
+
+        戻り値: `{"body_id", "revision", "chains": [[連なりの辺の添字(昇順)], ...]}`(頼んだ辺の順。同じ連なりは1つにまとめる)
+
+        `edges()` に入れない理由: 連なりは `MakeFillet.Add` で求め、大きな部品では折れ線の数十倍かかる(PC ケースの
+        最大ボディで折れ線 13ms・全辺の連なり 0.5 秒)。画面はホバー・クリックした辺の分だけ頼む(辺1本で `Add` 1回)。
+        連なりは形にだけ依存するので、鍵は形の同一性だけ(ズームで粗さが変わっても求め直さない)。
+        """
+        body = self._visible_brep(body_id, "辺")
+        revision = self.body_revision(body_id)
+        finder = _memo(self._chain_cache, body_id, body.shape, None, lambda: kernel.edge_chain_finder(body.shape))
+        groups = finder.of(edge_indices)
+        chains = list(dict.fromkeys(groups[int(index)] for index in edge_indices))
+        return {"body_id": body_id, "revision": revision, "chains": [list(group) for group in chains]}
+
     def vertices(self, body_id: str) -> dict:
         """1Bodyの頂点を1始まりの添字つきの3D座標で返す(キャッシュ付き)。
 
@@ -519,7 +537,7 @@ class DocumentView:
         return body
 
     def _prune_body_caches(self, previewing: bool) -> None:
-        """undoで消えたBodyのキャッシュを4つのdictから落とす。
+        """undoで消えたBodyのキャッシュを5つのdictから落とす。
 
         **`_revision_counter` は絶対に剪定しない**(版が1へ戻ると前の文書の形を描き続ける。`reset()`)。
         **プレビュー中(`previewing`)は何も落とさない** —— `Session.preview()` は文書を投機的に書き換えて
@@ -528,7 +546,7 @@ class DocumentView:
         if previewing:
             return
         alive = {body.id for body in self.document.bodies}
-        for cache in (self._geometry_cache, self._edge_cache, self._vertex_cache, self._volume_cache):
+        for cache in (self._geometry_cache, self._edge_cache, self._chain_cache, self._vertex_cache, self._volume_cache):
             for body_id in [key for key in cache if key not in alive]:
                 cache.pop(body_id, None)
 

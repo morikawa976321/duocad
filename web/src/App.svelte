@@ -69,6 +69,7 @@
     type BodyGeometry,
     type BodyRef,
     type ConnectionStatus,
+    type EdgeChainsPayload,
     type EdgesPayload,
     type FemStatus,
     type OptimizeConditionsReport,
@@ -265,6 +266,15 @@
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
   let edgesAsked = new Set<string>()
+  /** 取り寄せた辺の連なり(body_id -> その版の連なりの全部)。辺を出し直したら覚えさせ直す。描画の依存ではないので `$state` にしない。 */
+  let edgeChains: Record<string, { revision: number; chains: number[][] }> = {}
+  /** 連なりを頼んだ辺(`${body_id}:${revision}:${辺の添字}`)。 */
+  let edgeChainsAsked = new Set<string>()
+  /**
+   * 連なりが届くまで待たせているクリック・矩形選択(新しいものが古いものを置き換える)。待たせている間は確定させない
+   * (`CommandHost` の `busy`。確定が先に届くと、待たせたクリックの辺を入れずに丸める)。
+   */
+  let pendingChainPick = $state<(() => boolean) | null>(null)
   /** 頂点の座標(選択に頂点が入っているBodyの分だけ取り寄せる)。 */
   let vertices = $state<Record<string, VerticesPayload>>({})
   /** 取り寄せ中のもの(辺と同じ形の印)。 */
@@ -347,6 +357,10 @@
       if (where === 'preview') clearPreview()
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
       if (where === 'get_edges' || where === 'send') edgesAsked.clear()
+      if (where === 'get_edge_chains' || where === 'send') {
+        edgeChainsAsked.clear()
+        pendingChainPick = null
+      }
       if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
       // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
       // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
@@ -379,6 +393,8 @@
       // 「もう頼んだ」と判断して二度と取りに行かず、そのBodyの辺が出ないままになる。
       if (next !== 'open') {
         edgesAsked.clear()
+        edgeChainsAsked.clear()
+        pendingChainPick = null
         verticesAsked.clear()
         files.dropThumbnailRequests()
         // 実行の押下への返事はもう来ない。走っているかは繋ぎ直したときの `optimize_status` で取り直す。
@@ -387,6 +403,7 @@
     },
     onPreview: handlePreview,
     onEdges: handleEdges,
+    onEdgeChains: handleEdgeChains,
     onVertices: handleVertices,
     onMeasure: handleMeasure,
     onSelectionInfo: (payload) => selectionInfo.onResult(payload),
@@ -755,6 +772,9 @@
       modeCrossedDocument = true
     }
     files.onState(next)
+    // 待たせたクリックの状況(コマンド・ボディの版)が変わっていれば捨てる(古い版の連なりは届いても使わないので、
+    // ここで捨てないと確定が待たされ続ける)。
+    if (pendingChainPick?.()) pendingChainPick = null
     // 状態が1通届くたびに1つ増える番号(実機検査用の穴。`__duocad.stateEpoch`)。無いと
     // 「往復が終わっていない」と「もう変わらない」を外から区別できない。
     stateEpoch += 1
@@ -884,6 +904,29 @@
 
   function handleEdges(payload: EdgesPayload): void {
     edges = { ...edges, [payload.body_id]: payload }
+  }
+
+  function handleEdgeChains(payload: EdgeChainsPayload): void {
+    const body = model?.bodies.find((item) => item.body_id === payload.body_id)
+    if (body === undefined || body.revision !== payload.revision) {
+      if (pendingChainPick?.()) pendingChainPick = null
+      return // 古い形の連なりは使わない(辺と同じ §7)
+    }
+    const known = edgeChains[payload.body_id]
+    const chains = known?.revision === payload.revision ? [...known.chains, ...payload.chains] : payload.chains
+    edgeChains[payload.body_id] = { revision: payload.revision, chains }
+    viewport?.setEdgeChains(payload.body_id, payload.chains)
+    if (pendingChainPick?.()) pendingChainPick = null
+  }
+
+  /** 辺の連なりを頼む(同じ版の同じ辺は2度頼まない)。版の分からないボディは頼まない。 */
+  function requestEdgeChains(bodyId: string, indices: number[]): void {
+    const revision = model?.bodies.find((item) => item.body_id === bodyId)?.revision
+    if (revision === undefined) return
+    const missing = indices.filter((index) => !edgeChainsAsked.has(`${bodyId}:${revision}:${index}`))
+    if (missing.length === 0) return
+    for (const index of missing) edgeChainsAsked.add(`${bodyId}:${revision}:${index}`)
+    session.getEdgeChains(bodyId, missing)
   }
 
   function handleVertices(payload: VerticesPayload): void {
@@ -1090,6 +1133,8 @@
     const known = freshPayload(edges, edgeTargetBody)
     if (known !== null) {
       viewport?.showEdges(edgeTargetBody, known.edges)
+      const chains = edgeChains[edgeTargetBody]
+      if (chains?.revision === known.revision) viewport?.setEdgeChains(edgeTargetBody, chains.chains)
       drawHighlight()
       return
     }
@@ -1213,9 +1258,15 @@
   function onBoxSelect(event: BoxSelectEvent): void {
     const mode = toggleOnlyMode(event.mode)
     // 辺は連なりごとのまとまり(連なりの辺を2本囲んでも1つ)。トグルはまとまり単位(`toggleUnits`)。
+    // 連なりの分からない辺があれば、届くまで選択ごと待たせる(1本だけ入れると連なりが割れる)。
+    const unknown = event.edges.filter((item) => edgeChainRefs(item.bodyId, item.edgeIndex) === null)
+    if (unknown.length > 0) {
+      deferUntilChains(unknown, () => onBoxSelect(event))
+      return
+    }
     const chainUnits = new Map<string, SelectionRef[]>()
     for (const item of event.edges) {
-      const unit = edgeChainRefs(item.bodyId, item.edgeIndex)
+      const unit = edgeChainRefs(item.bodyId, item.edgeIndex) ?? [edgeRef(item.bodyId, item.edgeIndex)]
       chainUnits.set(refKey(unit[0]), unit)
     }
     const units: SelectionRef[][] = [
@@ -1330,6 +1381,7 @@
   // 画面は起動中の verb と引数を自分で持たず、サーバへ送って配信された `state.command` に従う(`CommandHost.svelte`)。
   // 応答待ち(`pendingOp`)にはしない: 文書もビューポートも変わらない。
   function beginCommand(verb: string, args: Record<string, unknown>): void {
+    pendingChainPick = null // 前のコマンドで待たせたクリックを次のコマンドへ持ち越さない
     session.beginCommand(verb, args, nextOp())
   }
 
@@ -1338,6 +1390,8 @@
   }
 
   function endCommand(): void {
+    // 中断を送った時点で捨てる(連なりの応答は中断の配信より先に届くので、届いてからでは起動中に見える)。
+    pendingChainPick = null
     session.endCommand(nextOp())
   }
 
@@ -1445,10 +1499,33 @@
     }
   }
 
-  /** 辺の参照を、連なり(`viewport.edgeChain`)の全部の参照へ広げる。 */
-  function edgeChainRefs(bodyId: string, edgeIndex: number): SelectionRef[] {
-    const indices = viewport?.edgeChain({ bodyId, edgeIndex }) ?? [edgeIndex]
-    return indices.map((index) => edgeRef(bodyId, index))
+  /** 辺の参照を、連なり(`viewport.edgeChain`)の全部の参照へ広げる。連なりがまだ届いていなければ null。 */
+  function edgeChainRefs(bodyId: string, edgeIndex: number): SelectionRef[] | null {
+    if (viewport === null) return [edgeRef(bodyId, edgeIndex)]
+    const indices = viewport.edgeChain({ bodyId, edgeIndex })
+    return indices === null ? null : indices.map((index) => edgeRef(bodyId, index))
+  }
+
+  /**
+   * 連なりの分からない辺を指したクリック・矩形選択を、連なりが届くまで待たせる。待たせるのは最後の1件だけ。
+   * 届いたとき、指した時点の状況(辺の連なりの単位で扱うコマンドの起動中・出している辺のボディ・その版)が
+   * 変わっていれば捨てる(別の形の同じ添字の辺や、画面から消えた辺を選ばない)。
+   */
+  function deferUntilChains(items: Array<{ bodyId: string; edgeIndex: number }>, run: () => void): void {
+    const revisionOf = (bodyId: string) => model?.bodies.find((body) => body.body_id === bodyId)?.revision
+    const pickedAt = new Map(items.map((item) => [item.bodyId, revisionOf(item.bodyId)]))
+    pendingChainPick = () => {
+      if (!edgeOnlyCommand) return true
+      for (const [bodyId, revision] of pickedAt) {
+        if (edgeTargetBody !== bodyId || revisionOf(bodyId) !== revision) return true
+      }
+      if (items.some((item) => edgeChainRefs(item.bodyId, item.edgeIndex) === null)) return false
+      run()
+      return true
+    }
+    for (const bodyId of new Set(items.map((item) => item.bodyId))) {
+      requestEdgeChains(bodyId, items.filter((item) => item.bodyId === bodyId).map((item) => item.edgeIndex))
+    }
   }
 
   /**
@@ -1537,7 +1614,10 @@
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
     // 辺が当たったら辺。フィレット・面取り・測定の起動中だけ来る。
     if (event.edge !== null) {
-      editEdgeChain(edgeChainRefs(event.edge.bodyId, event.edge.edgeIndex), pickMode)
+      const edge = event.edge
+      const refs = edgeChainRefs(edge.bodyId, edge.edgeIndex)
+      if (refs === null) deferUntilChains([edge], () => editEdgeChain(edgeChainRefs(edge.bodyId, edge.edgeIndex)!, pickMode))
+      else editEdgeChain(refs, pickMode)
       return
     }
     // 頂点が当たったら頂点。ここへ来るのは「AIが選んだ頂点を人がCtrl+クリックで外す」か「測る頂点を指す」のどちらか。
@@ -1977,6 +2057,7 @@
     display.attach(viewport)
     viewport.onPick(onPick)
     viewport.onBoxSelect(onBoxSelect)
+    viewport.onEdgeChainWanted((ref) => requestEdgeChains(ref.bodyId, [ref.edgeIndex]))
     viewport.onPlaneMove((point, hit) => {
       hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit)
     })
@@ -2260,7 +2341,7 @@
         <CommandHost
           bind:this={host}
           {selection}
-          busy={pendingOp !== null || optimizeBusy}
+          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null}
           {selfSelections}
           commands={mode.kind === 'sketch'
             ? SKETCH_MODE_COMMANDS

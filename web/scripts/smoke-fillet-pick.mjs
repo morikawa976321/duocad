@@ -111,14 +111,21 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
     '丸めた後の辺が届かない',
     [bodyId],
   )
-  const chain = await page.evaluate(() => {
-    const groups = new Map()
-    for (const edge of window.__duocad.edges.edges) {
-      groups.set(edge.chain, [...(groups.get(edge.chain) ?? []), edge.index])
+  // 連なりは辺の折れ線に入っておらず、ホバーした辺の分だけ届く(`get_edge_chains`)。円弧に乗せて取り寄せさせる。
+  const arcs = await page.evaluate(() => window.__duocad.edges.edges.filter((edge) => edge.kind === 'circle').map((edge) => edge.index))
+  let chain = null
+  for (const index of arcs) {
+    const at = await screenOf(page, 'projectEdge', bodyId, index)
+    if (!at) continue
+    await page.mouse.move(at.x, at.y)
+    await page.waitForFunction((id, i) => window.__duocad.edgeChain(id, i) !== null, { timeout: 15000, polling: 'raf' }, bodyId, index).catch(() => {})
+    const members = await page.evaluate((id, i) => window.__duocad.edgeChain(id, i), bodyId, index)
+    if (members?.length === 3) {
+      chain = members
+      break
     }
-    return [...groups.values()].find((members) => members.length === 3) ?? null
-  })
-  if (chain === null) fail('直線→円弧→直線の連なり(3本)が届いていない(kernel.blend_chains)')
+  }
+  if (chain === null) fail('直線→円弧→直線の連なり(3本)が届いていない(kernel_chains.BlendChains)')
   /** 連なりのどれかの辺の画面座標。選択が変わるとコマンド欄の行が変わってビューポートが動くので、押す直前に取る。 */
   async function chainTarget() {
     for (const index of chain) {
@@ -197,6 +204,36 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   await dragAroundArc()
   await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'もう一度の矩形で連なりが外れない')
   ok('もう一度の矩形で全部外れた')
+
+  // 連なりがまだ届いていない辺のクリック(ホバーより先に押した)は、連なりが届くまで待ってから全部入れる。
+  // 押す・離すを1回の evaluate で送り、間にホバーの更新(毎フレーム)を挟ませない。
+  const unknownArc = await page.evaluate(
+    (id, members) =>
+      window.__duocad.edges.edges.find(
+        (edge) => edge.kind === 'circle' && !members.includes(edge.index) && window.__duocad.edgeChain(id, edge.index) === null,
+      )?.index ?? null,
+    bodyId,
+    chain,
+  )
+  if (unknownArc === null) fail('連なりの届いていない円弧が無い(もう一方の底・天井の輪郭)')
+  const unknownAt = await screenOf(page, 'projectEdge', bodyId, unknownArc)
+  if (!unknownAt) fail(`円弧 ${unknownArc} が画面で指せない`)
+  await page.evaluate((at) => {
+    const canvas = document.querySelector('canvas')
+    for (const type of ['pointerdown', 'pointerup']) {
+      canvas.dispatchEvent(new PointerEvent(type, { clientX: at.x, clientY: at.y, button: 0, pointerId: 1, isPrimary: true, bubbles: true }))
+    }
+  }, unknownAt)
+  await waitFor(
+    (id, index) => {
+      const members = window.__duocad.edgeChain(id, index)
+      const picked = (window.__duocad.selection?.items ?? []).filter((item) => item.kind === 'edge').map((item) => item.index)
+      return members !== null && members.length === 3 && picked.length === 3 && members.every((member) => picked.includes(member))
+    },
+    `連なりの届く前にクリックした円弧 ${unknownArc} の連なりが全部入らない`,
+    [bodyId, unknownArc],
+  )
+  ok('連なりの届く前のクリックでも、届いてから連なりが全部入った')
 
   // ---------------------------------------------------------------- 4. 面取りでも面が外れる
   await page.keyboard.press('Escape')

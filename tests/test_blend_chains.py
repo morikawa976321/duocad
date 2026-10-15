@@ -54,9 +54,10 @@ def test_tangent_line_arc_line_is_one_chain() -> None:
     )
     rounded = kernel.fillet_edges(box, {vertical: 2.0})["shape"]
     described = kernel.tessellate_edges(rounded)
+    chains = kernel_chains.blend_chains(rounded)
     bottom = [item for item in described if all(abs(v) < 1e-9 for v in item["points"][2::3])]
     arc = next(item for item in bottom if item["kind"] == "circle")
-    together = [item["index"] for item in bottom if item["chain"] == arc["chain"]]
+    together = [item["index"] for item in bottom if chains[item["index"]] == chains[arc["index"]]]
     assert len(together) == 3
 
 
@@ -168,3 +169,27 @@ def test_an_internal_only_edge_can_start_a_chain() -> None:
     builder.Add(solid, indexed_map(outer, TopAbs_SHELL).FindKey(1))
     builder.Add(solid, indexed_map(_stepped(), TopAbs_SHELL).FindKey(1).Oriented(TopAbs_INTERNAL))
     assert kernel_chains.blend_chains(solid) == _every_edge_chains(solid)
+
+
+@pytest.mark.parametrize(
+    "name", ["kinked_5_5_degrees", "stepped", "one_corner_rounded", "all_edges_rounded", "plate_with_holes", "cylinder"]
+)
+def test_asking_one_edge_at_a_time_gives_the_same_chains(name: str) -> None:
+    """落ちたら、画面がホバーした辺1本ずつ頼む連なり(篩を通さない `Add` 1回)が、全辺ぶんを一度に求めた連なりと食い違う。"""
+    shape = _shapes()[name]
+    whole = kernel_chains.blend_chains(shape)
+    finder = kernel_chains.BlendChains(shape)
+    for index in reversed(sorted(whole)):  # 頼む順に依らない(連なりの後ろの辺から先に頼む)
+        group = finder.of([index])[index]
+        assert index in group
+        assert {member: whole[member] for member in group} == {member: whole[index] for member in group}
+        assert sorted(member for member in whole if whole[member] == whole[index]) == list(group)
+
+
+def test_out_of_range_edges_are_refused() -> None:
+    """落ちたら、存在しない辺の連なりを頼むと黙って空や別の辺が返り、画面が別の辺を選ぶ。"""
+    finder = kernel_chains.BlendChains(BRepPrimAPI_MakeBox(10, 10, 5).Shape())
+    with pytest.raises(ValueError):
+        finder.of([13])
+    with pytest.raises(ValueError):
+        finder.of([0])
