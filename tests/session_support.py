@@ -6,6 +6,7 @@ import json
 
 from duocad import parameters, query
 from duocad.document import Body
+from duocad.net import wire
 from duocad.server import Server, Session
 from document_support import BOX_X, BOX_Y, BOX_Z, box_shape
 
@@ -98,13 +99,63 @@ def four_conditions(session: Session, magnitude: float = 500.0):
 
 
 class FakeConnection:
-    """`Server` が使うのは `send` だけ(配信の出口)。届いた封筒を `payloads` に溜める。"""
+    """`Server` が使うのは `send` だけ(配信の出口)。届いた封筒を `payloads` に溜める。
+
+    `state` / `preview` は1枚のバイナリフレームで届く(`duocad/net/wire.py`)。画面(`web/src/wire.ts`)と同じく、省かれた
+    面・操作ログ・スケッチを前回の写しで埋め戻してから溜める(届いたままのフレームは `raw`)。埋め戻せない省き方は
+    サーバの記録と画面の写しの食い違いなので、その場で落とす。
+    """
 
     def __init__(self) -> None:
         self.payloads: list = []
+        self.raw: list = []
+        self._log = None
+        self._sketches: dict = {}
+        self._faces: dict = {}
 
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
+    async def send(self, raw) -> None:
+        self.raw.append(raw)
+        payload = wire.decode(raw) if isinstance(raw, (bytes, bytearray)) else json.loads(raw)
+        if payload.get("type") == "state":
+            self._restore(payload)
+        self.payloads.append(payload)
+
+    def _restore(self, payload: dict) -> None:
+        state = payload["state"]
+        if "log" in state:
+            self._log = state["log"]
+        else:
+            assert self._log is not None and state.get("log_keep", 0) <= len(self._log), "受け取っていない操作ログを省かれた"
+            if "log_keep" in state:
+                self._log = self._log[:state.pop("log_keep")] + state.pop("log_tail")
+            state["log"] = self._log
+        sketches = []
+        for sketch in state["sketches"]:
+            if sketch.get("unchanged"):
+                assert sketch["sketch_id"] in self._sketches, f"受け取っていないスケッチを省かれた: {sketch}"
+                sketch = self._sketches[sketch["sketch_id"]]
+            sketches.append(sketch)
+        state["sketches"] = sketches
+        self._sketches = {sketch["sketch_id"]: sketch for sketch in sketches}
+        for body in payload["delta"]["bodies"]:
+            geometry = body.get("geometry")
+            if not geometry:
+                self._faces.pop(body["body_id"], None)
+                continue
+            known = self._faces.get(body["body_id"], {})
+            faces = []
+            for face in geometry["faces"]:
+                if "positions" not in face:
+                    previous = known.get(face["index"])
+                    assert previous is not None and previous.get("serial") == face["serial"], (
+                        f"受け取っていない面を省かれた: {body['body_id']} {face}"
+                    )
+                    face = dict(previous, detail=face["detail"])
+                faces.append(face)
+            geometry["faces"] = faces
+            self._faces[body["body_id"]] = {face["index"]: face for face in faces}
+        alive = {body["body_id"] for body in state["bodies"]}
+        self._faces = {body_id: faces for body_id, faces in self._faces.items() if body_id in alive}
 
     def of_type(self, type_: str) -> list:
         return [payload for payload in self.payloads if payload.get("type") == type_]

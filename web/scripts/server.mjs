@@ -94,6 +94,7 @@ export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir
 /** WebSocket で `new_document` を送り、開いた状態が配られるまで待つ。 */
 async function sendNewDocument(wsPort, timeout) {
   const socket = new WebSocket(`ws://127.0.0.1:${wsPort}`)
+  socket.binaryType = 'arraybuffer'
   try {
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`new_document の応答が ${timeout}ms 以内に来なかった`)), timeout)
@@ -103,7 +104,13 @@ async function sendNewDocument(wsPort, timeout) {
       })
       socket.addEventListener('open', () => socket.send(JSON.stringify({ cmd: 'new_document', client_op: 1 })))
       socket.addEventListener('message', (event) => {
-        const message = JSON.parse(String(event.data))
+        // 状態は1枚のバイナリフレーム(`duocad/net/wire.py`): [u32 ヘッダ長][JSON ヘッダ][配列]。ヘッダだけ読む
+        const data = event.data
+        const message = JSON.parse(
+          data instanceof ArrayBuffer
+            ? new TextDecoder().decode(new Uint8Array(data, 4, new DataView(data).getUint32(0, true)))
+            : String(data),
+        )
         if (message.type === 'error' && message.where !== 'initial_state') {
           clearTimeout(timer)
           reject(new Error(`new_document が断られた: ${message.message}`))

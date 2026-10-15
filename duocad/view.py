@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import itertools
 import json
 from collections import OrderedDict
 from typing import Any, Callable, Optional
@@ -73,6 +74,12 @@ def _memo(cache: dict, body_id: str, source: Any, key: Any, compute: Callable[[]
     return result
 
 
+#: 面の三角形の通し番号(`_FaceTessellations.remember` が測った面に振る)。文書・形をまたいで重ならない:
+#: 配信は「接続が前回受け取った面と serial が同じなら三角形を省く」(`net/wire.Delivered`)ので、別の形の同じ添字の面と
+#: 取り違えない。
+_FACE_SERIALS = itertools.count(1)
+
+
 class _FaceTessellations:
     """1つの形の面ごとの三角形を、測り方(`(偏差, 角度偏差)`)ごとに覚える(`DocumentView._face_cache`)。
 
@@ -113,7 +120,7 @@ class _FaceTessellations:
             batch = self.batch_of.setdefault(recipe, {})
             for index in indices:
                 if index in measured["faces"]:
-                    faces[index] = measured["faces"][index]
+                    faces[index] = dict(measured["faces"][index], serial=next(_FACE_SERIALS))
                 if index in newly_failed:
                     failed.add(index)
                 else:

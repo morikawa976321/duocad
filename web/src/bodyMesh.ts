@@ -49,6 +49,48 @@ export interface BodyMesh {
 /** 面の境界線を `EdgesGeometry` と同じ規則(閾値角 20 度)で、面ごとに求める(面をまたいだ辺はどれも境界)。 */
 const EDGE_THRESHOLD_DEGREES = 20
 
+/**
+ * 面ごとの外接球と境界線を、面の頂点の配列(`positions`)ごとに覚える。カメラで測り直した面だけが新しい配列で届き、
+ * 残りの面は前回と同じ配列のまま使い回される(`wire.ts`)ので、ボディを作り直しても変わらない面の計算を繰り返さない。
+ */
+const perFace = new WeakMap<object, { sphere: THREE.Sphere; edges: Float32Array | null }>()
+
+function float32(values: Float32Array | number[]): Float32Array {
+  return values instanceof Float32Array ? values : new Float32Array(values)
+}
+
+/** 面の外接球(ローカル座標。ピックの絞り込み)。 */
+function faceSphere(face: FaceGeometry): THREE.Sphere {
+  const known = perFace.get(face.positions)
+  if (known !== undefined) return known.sphere
+  const positions = float32(face.positions)
+  const center = new THREE.Box3().setFromArray(positions).getCenter(new THREE.Vector3())
+  let farthest = 0
+  for (let at = 0; at < positions.length; at += 3) {
+    const dx = positions[at] - center.x
+    const dy = positions[at + 1] - center.y
+    const dz = positions[at + 2] - center.z
+    farthest = Math.max(farthest, dx * dx + dy * dy + dz * dz)
+  }
+  const sphere = new THREE.Sphere(center, Math.sqrt(farthest))
+  perFace.set(face.positions, { sphere, edges: null })
+  return sphere
+}
+
+/** 面の境界線の線分(`faceSphere` の後に呼ぶ。メッシュボディは求めない)。 */
+function faceEdges(face: FaceGeometry): Float32Array {
+  const known = perFace.get(face.positions) as { sphere: THREE.Sphere; edges: Float32Array | null }
+  if (known.edges !== null) return known.edges
+  const part = new THREE.BufferGeometry()
+  part.setAttribute('position', new THREE.BufferAttribute(float32(face.positions), 3))
+  part.setIndex(new THREE.BufferAttribute(face.indices instanceof Uint32Array ? face.indices : Uint32Array.from(face.indices), 1))
+  const edgesGeometry = new THREE.EdgesGeometry(part, EDGE_THRESHOLD_DEGREES)
+  known.edges = edgesGeometry.getAttribute('position').array as Float32Array
+  edgesGeometry.dispose()
+  part.dispose()
+  return known.edges
+}
+
 export function buildBodyMesh(
   bodyId: string,
   payload: GeometryPayload,
@@ -81,7 +123,7 @@ export function buildBodyMesh(
     const triangleStart = indexAt / 3
     const triangleCount = face.indices.length / 3
     triangleFaces.fill(face.index, triangleStart, triangleStart + triangleCount)
-    const sphere = new THREE.Sphere().setFromPoints(pointsOf(positions, vertexAt, vertexCount))
+    const sphere = faceSphere(face)
     const span: FaceSpan = { index: face.index, vertexStart: vertexAt, vertexCount, triangleStart, triangleCount, sphere }
     spans.push(span)
     byIndex.set(face.index, span)
@@ -130,19 +172,9 @@ export function buildBodyMesh(
     const segments: Float32Array[] = []
     let segmentTotal = 0
     for (const face of faces) {
-      const span = byIndex.get(face.index) as FaceSpan
-      const part = new THREE.BufferGeometry()
-      part.setAttribute(
-        'position',
-        new THREE.BufferAttribute(positions.subarray(span.vertexStart * 3, (span.vertexStart + span.vertexCount) * 3), 3),
-      )
-      part.setIndex(face.indices)
-      const edges = new THREE.EdgesGeometry(part, EDGE_THRESHOLD_DEGREES)
-      const array = edges.getAttribute('position').array as Float32Array
+      const array = faceEdges(face)
       segments.push(array)
       segmentTotal += array.length
-      edges.dispose()
-      part.dispose()
     }
     const linePositions = new Float32Array(segmentTotal)
     let at = 0
@@ -181,14 +213,6 @@ export function buildBodyMesh(
       lines?.geometry.dispose()
     },
   }
-}
-
-function pointsOf(positions: Float32Array, start: number, count: number): THREE.Vector3[] {
-  const out: THREE.Vector3[] = []
-  for (let at = start; at < start + count; at += 1) {
-    out.push(new THREE.Vector3(positions[at * 3], positions[at * 3 + 1], positions[at * 3 + 2]))
-  }
-  return out
 }
 
 /**

@@ -6,13 +6,15 @@
  * `modify_selection` / `toggle_selection` / `clear_selection` / `set_visible` を送るだけで、状態は覚えない。
  *
  * `state.bodies` は軽量(geometryを含まない)で、形状は `delta.bodies`(版が変わったBodyだけ)で届く
- * (`duocad/server.py` のモジュールdocstring参照)。
+ * (`duocad/server.py` のモジュールdocstring参照)。`state` と `preview` は1枚のバイナリフレームで届き、前回受け取った面・
+ * 操作ログ・スケッチは省かれている(`wire.ts` が埋め戻す)。
  * `preview`(投機的実行)は状態を配信しないので、応答は `onState` ではなく `onPreview` へ来る。
  */
 /** 図形の種別。唯一の正は `entityKinds.ts` の表。 */
 import type { EntityKind } from './entityKinds'
 import type { Applied, ServerStateKey } from './generated/protocol'
 import type { GeometryPayload } from './viewport'
+import { createDelivered, decodeFrame, DeliveryMismatch, type WireState } from './wire'
 
 export type { Applied, EntityKind }
 
@@ -148,8 +150,8 @@ export interface SketchRegion {
   index: number
   area: number
   centroid: number[]
-  positions: number[]
-  indices: number[]
+  positions: Float32Array | number[]
+  indices: Uint32Array | number[]
 }
 
 /** 反復の種別。`Pattern.kind`(コア)と同じ語彙。 */
@@ -1146,6 +1148,8 @@ export function createSession(hooks: SessionHooks): Session {
   /** ビューポートの変化を待たせている下り(`ack_id` -> 送った時刻)。挿入順が番号順・時刻順。 */
   const waits = new Map<number, number>()
   let lastAckId = 0
+  /** この接続で受け取ったもの(省かれて届いた面・ログ・スケッチの埋め戻し)。繋ぎ直すたびに作り直す(サーバも忘れる)。 */
+  let delivered = createDelivered()
 
   function reportWaits(): void {
     hooks.onWaiting(waits.size === 0 ? null : waits.values().next().value!)
@@ -1177,10 +1181,10 @@ export function createSession(hooks: SessionHooks): Session {
     reportWaits()
   }
 
-  function handle(raw: string): void {
+  function handle(raw: string | ArrayBuffer): void {
     let message: {
       type?: string
-      state?: ServerState
+      state?: WireState
       delta?: { bodies?: BodyGeometry[] }
       applied?: Applied
       message?: string
@@ -1256,13 +1260,24 @@ export function createSession(hooks: SessionHooks): Session {
       ack_id?: number
     }
     try {
-      message = JSON.parse(raw)
+      message = typeof raw === 'string' ? JSON.parse(raw) : (decodeFrame(raw) as typeof message)
     } catch (error) {
       hooks.onError(String(error), 'parse')
       return
     }
     if (message.type === 'state' && message.state) {
-      hooks.onState(message.state, message.delta?.bodies ?? [], message.applied ?? null)
+      const bodies = message.delta?.bodies ?? []
+      let state: ServerState
+      try {
+        state = delivered.restore(message.state, bodies)
+      } catch (error) {
+        if (!(error instanceof DeliveryMismatch)) throw error
+        // 起きないはずの食い違い。繋ぎ直せばサーバも写しも忘れ、全部を送り直してもらえる
+        hooks.onError(`${error.message}(繋ぎ直す)`, 'wire')
+        socket?.close()
+        return
+      }
+      hooks.onState(state, bodies, message.applied ?? null)
     } else if (message.type === 'preview') {
       hooks.onPreview({
         preview_id: message.preview_id ?? null,
@@ -1402,7 +1417,9 @@ export function createSession(hooks: SessionHooks): Session {
     hooks.onStatus('connecting')
     const url = await resolveWebSocketUrl()
     const next = new WebSocket(url)
+    next.binaryType = 'arraybuffer'
     socket = next
+    delivered = createDelivered()
     // このソケットが開いたか。開いてから切れたときは `failures` を増やさない(キープアライブ等)。
     let opened = false
     next.onopen = () => {
@@ -1411,7 +1428,7 @@ export function createSession(hooks: SessionHooks): Session {
       failures = 0
       hooks.onStatus('open')
     }
-    next.onmessage = (event) => handle(String(event.data))
+    next.onmessage = (event) => handle(event.data instanceof ArrayBuffer ? event.data : String(event.data))
     // **`onerror` にトーストを繋がない。** 繋ぐと再接続の試行1回につき1枚出ることになり、
     // 「試行は毎回トーストにしない」という規律が、その規律が対象にしていた経路そのものに
     // 破られる(サーバより先にタブを開いていて15回ぶん数え上がった)。繋がらないことは
