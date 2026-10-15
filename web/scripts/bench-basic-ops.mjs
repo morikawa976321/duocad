@@ -146,7 +146,7 @@ const now = (page) => page.evaluate(() => performance.now())
 const wsSince = (page, since) => page.evaluate((s) => window.__bench.ws.filter((e) => e.t >= s), since)
 const longtasksSince = (page, since) => page.evaluate((s) => window.__bench.longtasks.filter((e) => e.t >= s), since)
 
-function summarizeWs(entries) {
+function summarizeWs(entries, t0 = null) {
   const inbound = entries.filter((e) => e.dir === 'in')
   const states = inbound.filter((e) => e.type === 'state')
   const firstOut = entries.find((e) => e.dir === 'out' && e.type !== 'set_view_resolution')
@@ -157,6 +157,8 @@ function summarizeWs(entries) {
   const parsed = inbound.filter((e) => e.parse_ms !== undefined)
   return {
     rtt_ms: firstOut && firstState ? Math.round((firstState.t - firstOut.t) * 10) / 10 : null,
+    // 操作の始まりから、その state を呼んだ要求を送るまで(カメラの行は減衰が収まって静止と判定されるまでの待ち)
+    ...(t0 !== null && lastOut ? { out_at_ms: Math.round((lastOut.t - t0) * 10) / 10 } : {}),
     out_to_state_ms: lastOut ? Math.round((anyState.t - lastOut.t) * 10) / 10 : null,
     ...(parsed.length ? { parse_ms: Math.round(parsed.reduce((a, e) => a + e.parse_ms, 0) * 10) / 10 } : {}),
     in_msgs: inbound.length,
@@ -180,7 +182,7 @@ async function measure(page, scenario, label, action, until, { args = [], timeou
   }
   await waitFrames(page, 1)
   const t1 = await now(page)
-  const ws = summarizeWs(await wsSince(page, t0))
+  const ws = summarizeWs(await wsSince(page, t0), t0)
   const lt = await longtasksSince(page, t0)
   return record(scenario, label, t1 - t0, { ...ws, longtasks: lt.length, longtask_ms: Math.round(lt.reduce((a, e) => a + e.d, 0)), ...extra })
 }

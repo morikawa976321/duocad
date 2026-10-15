@@ -125,7 +125,9 @@ class FakeConnection:
         if "log" in state:
             self._log = state["log"]
         else:
-            assert self._log is not None, "受け取っていない操作ログを省かれた"
+            assert self._log is not None and state.get("log_keep", 0) <= len(self._log), "受け取っていない操作ログを省かれた"
+            if "log_keep" in state:
+                self._log = self._log[:state.pop("log_keep")] + state.pop("log_tail")
             state["log"] = self._log
         sketches = []
         for sketch in state["sketches"]:

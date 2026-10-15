@@ -2,7 +2,7 @@
  * 状態とプレビューの配信を読む: 1枚のバイナリフレームと、省かれて届いたものの埋め戻し(issue #166・#170)。
  * 形と省く規則の正はサーバの `duocad/net/wire.py`(ヘッダの JSON の数の並びが `{"$f32": [バイト位置, 個数]}` /
  * `{"$u32": ...}` に置き換わっている。省かれた面は `{index, serial, detail}`、スケッチは `{sketch_id, unchanged}`、
- * 操作ログは `log` ごと無い)。
+ * 操作ログは `log` が無く、変わったときだけ `log_keep`(前回の先頭から残す件数)と `log_tail`(後ろに足す分)がある)。
  */
 import type { BodyGeometry, ServerState, SketchState } from './session'
 import type { FaceGeometry } from './viewportTypes'
@@ -40,9 +40,11 @@ interface OmittedSketch {
   unchanged: true
 }
 
-/** 届いたままの `state`(操作ログが無いことがあり、スケッチが省かれていることがある)。 */
+/** 届いたままの `state`(操作ログが無いか末尾だけのことがあり、スケッチが省かれていることがある)。 */
 export type WireState = Omit<ServerState, 'log' | 'sketches'> & {
   log?: ServerState['log']
+  log_keep?: number
+  log_tail?: ServerState['log']
   sketches: Array<SketchState | OmittedSketch>
 }
 
@@ -60,8 +62,11 @@ export function createDelivered(): { restore(state: WireState, bodies: BodyGeome
 
   function restore(state: WireState, bodies: BodyGeometry[]): ServerState {
     if (state.log === undefined) {
-      if (log === null) throw new DeliveryMismatch('受け取っていない操作ログを省かれた')
+      if (log === null || (state.log_keep ?? 0) > log.length) throw new DeliveryMismatch('受け取っていない操作ログを省かれた')
+      if (state.log_keep !== undefined) log = [...log.slice(0, state.log_keep), ...(state.log_tail ?? [])]
       state.log = log
+      delete state.log_keep
+      delete state.log_tail
     } else {
       log = state.log
     }

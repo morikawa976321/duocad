@@ -88,7 +88,17 @@ def test_an_unchanged_log_and_sketch_are_left_out() -> None:
 
 def test_the_browser_decoder_restores_what_the_server_meant() -> None:
     """落ちたら、画面の読み方(`web/src/wire.ts`)がサーバの省き方・フレームの形と食い違い、面が欠けるか別の面の三角形を描く。"""
-    client = _camera_then_selection(_with_sketch())
+    session = _with_sketch()
+    sketch_id = session.document.sketches[0].id
+
+    async def script(send):
+        await send(dict(CAMERA, focus={"box": [1, 2]}))
+        await send(dict(CAMERA, focus={"box": [1, 3]}))
+        await send({"cmd": "modify_selection", "add": [{"body": "box", "kind": "face", "index": 1}], "remove": []})
+        await send({"cmd": "add_rectangle", "sketch_id": sketch_id, "corner": [60.0, 0.0], "width": 5.0, "height": 5.0})
+        await send({"cmd": "undo"})
+
+    client = browser(session, script, connections=1)[1][0]
     frames = [
         {"binary": True, "data": base64.b64encode(raw).decode("ascii")} if isinstance(raw, bytes)
         else {"binary": False, "data": raw}
@@ -123,3 +133,22 @@ def test_a_new_connection_receives_everything_again() -> None:
     fresh = wire.decode(second.raw[-1])
     assert "log" in fresh["state"]
     assert all("positions" in face for face in fresh["delta"]["bodies"][0]["geometry"]["faces"])
+
+
+def test_an_operation_sends_only_the_end_of_the_log() -> None:
+    """落ちたら、操作1回ごとに全操作ログが流れる(長方形 150 個のスケッチで 1 回 33 KB)か、undo で消えた末尾が画面に残る。"""
+    session = _with_sketch()
+    sketch_id = session.document.sketches[0].id
+    before = len(session.state_meta()["log"])
+
+    async def script(send):
+        await send({"cmd": "add_rectangle", "sketch_id": sketch_id, "corner": [60.0, 0.0], "width": 5.0, "height": 5.0})
+        await send({"cmd": "undo"})
+
+    client = browser(session, script, connections=1)[1][0]
+    added, undone = _state_frames(client)[-2:]
+    assert added["state"]["log_keep"] == before and len(added["state"]["log_tail"]) == 1
+    assert undone["state"]["log_keep"] == before and undone["state"]["log_tail"] == []
+    restored = [payload for payload in client.payloads if payload["type"] == "state"]
+    assert len(restored[-2]["state"]["log"]) == before + 1
+    assert restored[-1]["state"]["log"] == session.state_meta()["log"]

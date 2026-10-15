@@ -16,7 +16,9 @@ JSON テキストのままだと PC ケース(27 部品)の初回配信が 6.1 M
 
 - 面: 版の変わったボディでも、前回送った面と同じもの(`serial` が同じ。`view._FaceTessellations` が測るたびに振る)は
   `{"index", "serial", "detail"}` だけにする。カメラを動かして測り方の変わる面は一部なので、残りを送らずに済む
-- 操作ログ: 前回と同じなら `state` から `log` を落とす(長方形 150 個のスケッチで領域を1つ選ぶたびに 33 KB 流れていた)
+- 操作ログ: 前回と同じなら `state` から `log` を落とす(長方形 150 個のスケッチで領域を1つ選ぶたびに 33 KB 流れていた)。
+  変わったときも前回と同じ先頭は省き、`log_keep`(前回の先頭から残す件数)と `log_tail`(その後ろに足す分)だけ送る
+  (操作は末尾に足すか、undo で末尾を削るので、ふつうは数件)
 - スケッチ: 前回と同じなら `{"sketch_id", "unchanged": true}` だけにする(同 78 KB)
 
 **層をまたぐ契約**: 読む側は `web/src/wire.ts`(画面。省かれたものを前回の写しで埋め戻す)と `tests/session_support.py`
@@ -92,6 +94,14 @@ def decode(frame: bytes) -> dict:
     return json.loads(frame[4:base].decode("utf-8"), object_hook=revive)
 
 
+def _common_prefix(before: list, after: list) -> int:
+    """2つの操作ログの、先頭から同じ件数。"""
+    for at, (old, new) in enumerate(zip(before, after)):
+        if old != new:
+            return at
+    return min(len(before), len(after))
+
+
 class Delivered:
     """1つの接続へ送り届けたもの(`Server._push` が接続ごとに持つ)。次の配信で、同じものを省く。"""
 
@@ -107,8 +117,12 @@ class Delivered:
     def compose(self, meta: dict, bodies: list) -> dict:
         """`state` メッセージの中身(`{"state", "delta"}`)。送り届けたものと同じ部分を省く。`meta` / `bodies` は書き換えない。"""
         state = dict(meta)
-        if self.log is not None and self.log == meta["log"]:
+        if self.log is not None:
+            keep = _common_prefix(self.log, meta["log"])
             del state["log"]
+            if keep < len(self.log) or keep < len(meta["log"]):
+                state["log_keep"] = keep
+                state["log_tail"] = meta["log"][keep:]
         state["sketches"] = [
             {"sketch_id": sketch["sketch_id"], "unchanged": True}
             if self.sketches.get(sketch["sketch_id"]) == sketch else sketch
