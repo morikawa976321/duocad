@@ -155,7 +155,7 @@ async function measure(page, scenario, label, action, until, { args = [], timeou
 }
 
 /** node から別の WebSocket で繋ぎ、サーバがほぼ何もしないコマンド(`clear_selection`)の往復時間を測る(ブラウザ抜きの素の往復)。 */
-async function wsRoundTrips(url, count = 20, makeMessage = (op) => ({ cmd: 'clear_selection', client_op: op })) {
+async function wsRoundTrips(url, count = 20, makeMessage = (op) => ({ cmd: 'clear_selection', client_op: op }), { beforeTrips = async () => {} } = {}) {
   const config = await fetch(new URL('/duocad-config.json', url)).then((r) => r.json())
   const socket = new WebSocket(config.ws_url ?? config.wsUrl ?? `ws://127.0.0.1:${config.ws_port ?? config.port}`)
   await new Promise((resolve, reject) => {
@@ -180,10 +180,13 @@ async function wsRoundTrips(url, count = 20, makeMessage = (op) => ({ cmd: 'clea
     })
   // 最初の state(接続時の配信)を読み捨てる
   await new Promise((resolve) => socket.addEventListener('message', resolve, { once: true }))
+  // 接続を確立してから測りたい状況を作る(接続の成立を待つ間に重い処理が終わってしまうと、塞がりが測れない)
+  await beforeTrips()
   for (let i = 0; i < count; i += 1) samples.push(await roundTrip())
   socket.close()
+  const first = samples[0]
   samples.sort((a, b) => a - b)
-  return { p50: samples[Math.floor(samples.length / 2)], min: samples[0], max: samples[samples.length - 1] }
+  return { p50: samples[Math.floor(samples.length / 2)], min: samples[0], max: samples[samples.length - 1], first }
 }
 
 async function frameStats(page, scenario, label, during) {
@@ -287,7 +290,7 @@ async function visibleFace(page, bodyId, { from = 1, limit = 300 } = {}) {
 }
 
 /** 選択・フィレット・undo の一連(箱でも PC ケースでも同じ手)。 */
-async function selectFilletUndo(page, mcp, scenario, bodyId, { radius }) {
+async function selectFilletUndo(page, mcp, scenario, bodyId, { radius, url }) {
   // 全体表示に戻してから(ズーム後は対象ボディが画面に無いことがある)
   await page.evaluate(() => window.__duocad.frameAll())
   await waitFrames(page, 3)
@@ -411,6 +414,24 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius }) {
     const resent = (await wsSince(page, t0)).filter((e) => e.dir === 'out' && e.type === 'preview').length
     record(scenario, 'ゴースト表示中にカメラを回す→プレビューを投げ直した回数', resent)
     await page.waitForFunction(() => window.__duocad.previewing === true, { timeout: 60000, polling: 'raf' })
+  }
+  {
+    // 重い処理中の入力待ち(issue #168): 半径を打ち直してプレビューを計算させている間に、別の接続から軽い要求(状態の取り直し)を
+    // 投げた往復。計測用の接続を先に開き、打ってからデバウンス(250 ms)を待って測る。確定は打ち直した半径で行う。
+    const t0 = await now(page)
+    const trips = await wsRoundTrips(url, 5, (op) => ({ cmd: 'get_state', client_op: op }), {
+      beforeTrips: async () => {
+        await typeInto(page, '#fillet-radius', String(radius * 1.5))
+        await sleep(320)
+      },
+    })
+    // 最大を値にする: ループが塞がっていれば最初の往復がその終わりまで待たされ、残りは速く返るので中央値では見逃す
+    record(scenario, 'プレビュー計算中の軽い要求の往復(別の接続から get_state 5 回の最大)', trips.max, { first: trips.first, p50: trips.p50, min: trips.min })
+    await page.waitForFunction(
+      (since) => window.__bench.ws.some((e) => e.t >= since && e.dir === 'in' && e.type === 'preview'),
+      { timeout: 60000, polling: 'raf' },
+      t0,
+    )
   }
   const revisionBefore = await page.evaluate((id) => window.__duocad.parts.find((p) => p.body_id === id)?.revision ?? null, bodyId)
   await measure(
@@ -557,7 +578,7 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
     await waitFrames(page, 3)
     await frameStats(page, 'A', '静止時のフレーム間隔 2秒', () => sleep(2000))
     await frameStats(page, 'A', '右ドラッグ回転中のフレーム間隔', () => orbit(page))
-    await selectFilletUndo(page, ctx.mcp, 'A', bodyId, { radius: 2 })
+    await selectFilletUndo(page, ctx.mcp, 'A', bodyId, { radius: 2, url: ctx.url })
     await page.close()
   }
 
@@ -614,7 +635,7 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
       record('B', 'ズームアウト8段(元へ)→形が要求に揃うまで', settled2, summarizeWs(await wsSince(page, t1)))
     }
     await frameStats(page, 'B', 'ズーム後・静止時のフレーム間隔 2秒', () => sleep(2000))
-    await selectFilletUndo(page, ctx.mcp, 'B', bigId, { radius: 0.5 })
+    await selectFilletUndo(page, ctx.mcp, 'B', bigId, { radius: 0.5, url: ctx.url })
     await page.close()
   }
 

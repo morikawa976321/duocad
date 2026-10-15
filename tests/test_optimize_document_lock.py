@@ -67,7 +67,7 @@ def test_every_method_that_changes_the_document_is_guarded() -> None:
     names = {command.session for command in catalog.COMMANDS
              if command.changes_document and command.session
              and command.session not in _ALLOWED_WHILE_RUNNING | _SWITCHES_DOCUMENT}
-    names |= {"preview", "load_step"}
+    names |= {"preview", "preview_job", "load_step"}
     unguarded = sorted(name for name in names if not getattr(getattr(Session, name), "edits_document", False))
     assert not unguarded, unguarded
 
