@@ -97,6 +97,8 @@ export interface BodyMeta {
   kind: string
   visible: boolean
   revision: number
+  /** 形の版(`DocumentView.shape_revision`)。`revision` と違い粗さでは上がらない(形の差し替えと可視性でだけ上がる)。 */
+  shape_revision: number
   face_count: number
   volume: number
 }

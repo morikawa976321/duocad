@@ -232,12 +232,21 @@ const center = async (page) => {
   return { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2, w: rect.w, h: rect.h, left: rect.x, top: rect.y }
 }
 
-/** 届いた形が今の要求(`viewResolution`)と一致した状態が `stableMs` 続くまで待ち、最初に一致した時刻までの経過を返す。 */
-async function waitMatched(page, startedAt, { timeout = 120000, stableMs = 600 } = {}) {
+/** いまの要求(`viewResolution`)の指紋(`waitMatched` の `changedFrom`)。 */
+const resolutionPrint = (page) => page.evaluate(() => JSON.stringify(window.__duocad.viewResolution?.() ?? null))
+
+/**
+ * 届いた形が今の要求(`viewResolution`)と一致した状態が `stableMs` 続くまで待ち、最初に一致した時刻までの経過を返す。
+ * `changedFrom` を渡すと、要求がその指紋から変わるまで(最大 `changeTimeout`)は一致と見なさない: 回転を離した後も
+ * 減衰で 600 ms 以上動き続けることがあり、その間は要求が古いまま「揃っている」に見える(1 ms と 2.4 秒に割れていた)。
+ */
+async function waitMatched(page, startedAt, { timeout = 120000, stableMs = 600, changedFrom = null, changeTimeout = 5000 } = {}) {
   const deadline = Date.now() + timeout
   let matchedSince = null
   for (;;) {
-    const mismatched = await page.evaluate(() => {
+    const waitingForChange =
+      changedFrom !== null && Date.now() - startedAt < changeTimeout && (await resolutionPrint(page)) === changedFrom
+    const mismatched = waitingForChange ? 1 : await page.evaluate(() => {
       const hook = window.__duocad
       const resolution = hook.viewResolution?.() ?? null
       const focus = resolution?.focus ?? null
@@ -392,6 +401,17 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius }) {
     () => window.__duocad.previewing === true,
     { timeout: 60000 },
   )
+  {
+    // カメラ由来の再配信(粗さだけ変わる)で、起動中のプレビューを投げ直すか(issue #169。0 が目標)
+    const t0 = await now(page)
+    const before = await resolutionPrint(page)
+    await orbit(page)
+    await waitMatched(page, Date.now(), { changedFrom: before }).catch(() => null)
+    await sleep(600) // 投げ直しの待ち(`PREVIEW_REFIRE_MS` 250)より長く
+    const resent = (await wsSince(page, t0)).filter((e) => e.dir === 'out' && e.type === 'preview').length
+    record(scenario, 'ゴースト表示中にカメラを回す→プレビューを投げ直した回数', resent)
+    await page.waitForFunction(() => window.__duocad.previewing === true, { timeout: 60000, polling: 'raf' })
+  }
   const revisionBefore = await page.evaluate((id) => window.__duocad.parts.find((p) => p.body_id === id)?.revision ?? null, bodyId)
   await measure(
     page,
@@ -565,9 +585,10 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
     await frameStats(page, 'B', '静止時のフレーム間隔 2秒', () => sleep(2000))
     {
       const t0 = await now(page)
+      const before = await resolutionPrint(page)
       await frameStats(page, 'B', '右ドラッグ回転中のフレーム間隔', () => orbit(page))
       const released = Date.now()
-      const settled = await waitMatched(page, released)
+      const settled = await waitMatched(page, released, { changedFrom: before })
       const ws2 = summarizeWs(await wsSince(page, t0))
       record('B', '回転を離してから形が要求に揃うまで(再テセレーション往復)', settled, ws2)
     }

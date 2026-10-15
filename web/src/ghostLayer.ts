@@ -35,8 +35,11 @@ export interface GhostLayer {
   showBodyGhosts(entries: BodyGhost[]): void
   /** 投機実行の幽霊とローカル幽霊を消して本物を戻す。 */
   clearPreview(): void
-  /** 幽霊の指示を掴んで全部消し、`rebuild()` で本物を作り直してから、掴んだ指示でローカル幽霊を組み直す。 */
-  rebuildAround(rebuild: () => void): void
+  /**
+   * 幽霊の指示を掴んで全部消し、`rebuild()` で本物を作り直してから、掴んだ指示でローカル幽霊を組み直す。
+   * `keepPreview` ならサーバ投機実行の幽霊は消さずに残し、作り直した本物を隠し直す。
+   */
+  rebuildAround(rebuild: () => void, keepPreview?: boolean): void
   info(): Array<BodyGhost & { matrix: number[] }>
 }
 
@@ -130,11 +133,19 @@ export function createGhostLayer(deps: GhostLayerDeps): GhostLayer {
     previewMeshes.clear()
   }
 
-  function rebuildAround(rebuild: () => void): void {
+  function rebuildAround(rebuild: () => void, keepPreview = false): void {
     // ローカル幽霊の指示だけ控える(`clearPreview()` は `bodyGhostInfo` を新しい配列へ差し替えるので巻き添えにならない)。
     const ghosts = bodyGhostInfo
-    clearPreview()
-    rebuild()
+    if (keepPreview && previewMeshes.size > 0) {
+      // 形の変わらない再配信(粗さだけ)ではサーバの幽霊を残し、作り直した本物を隠し直す(`showPreview` と同じ見え方)。
+      clearBodyGhosts()
+      rebuild()
+      for (const bodyId of previewMeshes.keys()) setBodyVisible(bodyId, false)
+      pickChanged()
+    } else {
+      clearPreview()
+      rebuild()
+    }
     // ローカル幽霊は消して終わりにせず、届いたばかりの形で組み直す。消すだけだと形の変わらない再配信でも落ちたまま戻らない:
     // カメラを動かすと可変解像度の `focus` が変わり、幽霊が乗っているボディ自身が測り直されて届く
     // (2026-09-06実測: 右ドラッグ1回でそのボディの版が 2→3)。呼び直す側の `CommandHost` は引数が変わっていないと見て再発火しない(`previewedKey`)。

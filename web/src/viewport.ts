@@ -479,10 +479,10 @@ export function createViewport(container: HTMLElement): Viewport {
     invalidateHover() // 作り直した面は素の材質で生まれる(`invalidateHover` のコメント)
   }
 
-  function update(entries: BodyGeometryUpdate[]): void {
+  function update(entries: BodyGeometryUpdate[], options: { keepPreview?: boolean } = {}): void {
     if (entries.length === 0) return
     // 確定前の幽霊を消して本物を作り直し、ローカル幽霊は届いた形で組み直す(`rebuildAround`)。
-    ghostLayer.rebuildAround(() => rebuildBodies(entries))
+    ghostLayer.rebuildAround(() => rebuildBodies(entries), options.keepPreview === true)
   }
 
   function rebuildBodies(entries: BodyGeometryUpdate[]): void {

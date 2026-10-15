@@ -366,9 +366,10 @@ export interface Viewport {
    * 確定前の姿の扱いは2種類で違う: サーバ投機実行のプレビュー(`showPreview`)は落ちるが、
    * ローカル幽霊(`showBodyGhosts`)は届いた形で組み直して出し直す。呼び直す側
    * (`CommandHost` の `previewedKey`)は引数が変わらない限り再発火しないので、
-   * ここで出し直さないと幽霊は消えたまま戻らない。
+   * ここで出し直さないと幽霊は消えたまま戻らない。`keepPreview` は形の変わらない(粗さだけの)再配信で、
+   * サーバ投機実行の幽霊も残す(本物は隠し直す)。
    */
-  update(bodies: BodyGeometryUpdate[]): void
+  update(bodies: BodyGeometryUpdate[], options?: { keepPreview?: boolean }): void
   /** 直近に `update()` で渡した生の `GeometryPayload`(無ければ null)。実機検査フック専用。 */
   getGeometry(bodyId: string): GeometryPayload | null
   /**

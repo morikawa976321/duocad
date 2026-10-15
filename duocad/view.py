@@ -105,6 +105,9 @@ class DocumentView:
         # body_id -> (id(shape), visible, 目標精度) 直近の状態(`body_revision`)
         self._revision_state: dict = {}
         self._revision_counter: dict = {}  # body_id -> 現在の版(int)
+        #: 形の版(`shape_revision`)。`_revision_*` と同じ持ち方で、鍵に粗さを入れない。
+        self._shape_state: dict = {}
+        self._shape_counter: dict = {}
         # sketch_id -> (署名, 領域つきペイロード)。領域の計算が重いので内容で引く(C)
         self._sketch_cache: dict = {}
         #: sketch_id -> (描くものの指紋, 版)。版は画面がスケッチを作り直すかの印(`_sketch_state` の `revision`)。
@@ -277,6 +280,7 @@ class DocumentView:
         self._sketch_revisions.clear()
         self._optimize_cache.clear()
         self._revision_state.clear()
+        self._shape_state.clear()
         # **どの面を細かく測るかも捨てる**。面の添字は文書が変われば別のものを指す。
         self._view_focus = None
 
@@ -456,6 +460,19 @@ class DocumentView:
             self._revision_counter[body_id] = self._revision_counter.get(body_id, 0) + 1
         return self._revision_counter[body_id]
 
+    def shape_revision(self, body_id: str) -> int:
+        """そのBodyの**形**の版。`body_revision` から粗さ(`body_recipe`)を除いたもので、形の差し替えと可視性でだけ上がる。
+
+        画面はこれで「形が変わった配信」と「粗さだけ変わった配信(カメラ由来)」を見分ける。プレビューを投げ直すのは
+        形が変わったときだけでよい(カメラを回すたびに投機実行が走っていた。issue #169)。
+        """
+        body = self.document.get_body(body_id)
+        key = (id(body.shape), id(body.mesh), body.visible)
+        if self._shape_state.get(body_id) != key:
+            self._shape_state[body_id] = key
+            self._shape_counter[body_id] = self._shape_counter.get(body_id, 0) + 1
+        return self._shape_counter[body_id]
+
     def geometry(self, body_id: str) -> dict:
         """1Bodyのテセレーション結果(キャッシュ付き)。不可視Bodyは ValueError。
         キャッシュは**形状の同一性**で判定する(版ではない。可視性だけ変えたときに測り直さないため)。
@@ -602,6 +619,7 @@ class DocumentView:
             "kind": body.kind,
             "visible": body.visible,
             "revision": self.body_revision(body.id),
+            "shape_revision": self.shape_revision(body.id),
             "face_count": _face_count(body),
             "volume": self._body_volume(body),
         }

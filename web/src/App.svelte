@@ -157,7 +157,7 @@
   let previewing = $state(false)
   /**
    * いま構えているサーバ投機実行(`clearPreview` で null)。無関係な再配信のあと投げ直すために控える:
-   * `viewport.update()` は届いた本物で幽霊を落とすが、`CommandHost` は引数が変わらない限り
+   * `viewport.update()` は形の変わった配信で幽霊を落とすが、`CommandHost` は引数が変わらない限り
    * 再発火しない(`previewedKey`)ので、投げ直さないと消えたまま戻らない。
    */
   let serverPreview: { verb: string; args: Record<string, unknown> } | null = null
@@ -761,6 +761,13 @@
   }
 
   // ---------------------------------------------------------------- コアからの状態
+  /** 前の状態から、ボディの形(`shape_revision`)・顔ぶれが変わったか。粗さだけの配信(カメラ由来)では偽。 */
+  function shapesChanged(previous: ServerState | null, next: ServerState): boolean {
+    if (previous === null || previous.bodies.length !== next.bodies.length) return true
+    const before = new Map(previous.bodies.map((body) => [body.body_id, body.shape_revision]))
+    return next.bodies.some((body) => before.get(body.body_id) !== body.shape_revision)
+  }
+
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
     const previous = model
     model = next
@@ -779,16 +786,21 @@
     // 「往復が終わっていない」と「もう変わらない」を外から区別できない。
     stateEpoch += 1
 
-    // 差分更新: 版が変わったBodyだけを渡す(§2)。
-    viewport?.update(changed.map((body) => ({ bodyId: body.body_id, geometry: body.geometry })))
+    // 差分更新: 版が変わったBodyだけを渡す(§2)。カメラ由来の配信(形の版 `shape_revision` が同じで粗さだけ変わった)では
+    // サーバ投機実行の幽霊を残す: 投機実行の結果は粗さに依らず、投げ直すと大きな部品では1回1秒かかる(issue #169)。
+    const shapesMoved = shapesChanged(previous, next)
+    viewport?.update(
+      changed.map((body) => ({ bodyId: body.body_id, geometry: body.geometry })),
+      { keepPreview: !shapesMoved },
+    )
     // 文書から消えたBodyはビューポートからも取り除く。
     viewport?.prune(next.bodies.map((body) => body.body_id))
-    // サーバ投機実行のプレビュー(`showPreview`)だけの話。本物が届くと `viewport.update()` が落とすので待っている印も降ろす。
+    // サーバ投機実行のプレビュー(`showPreview`)だけの話。形が変わって本物が届くと `viewport.update()` が落とすので待っている印も降ろす。
     // ローカル幽霊(`showBodyGhosts`)は `update()` の中で組み直されて出続ける(`viewportTypes.ts` の `update` の項)。
-    if (changed.length > 0) {
+    if (changed.length > 0 && shapesMoved) {
       previewing = false
       // 自分の確定ならここは null(`commit()` が先に `onCancelPreview` を呼ぶ)。残っているのは
-      // 他の操作やカメラによる再配信なので同じ引数で投げ直す。ドラッグ中は続けて来るので落ち着くまで待つ。
+      // 他の操作による再配信なので同じ引数で投げ直す。続けて来ることがあるので落ち着くまで待つ。
       if (serverPreview !== null) {
         if (refireTimer) clearTimeout(refireTimer)
         refireTimer = setTimeout(() => {
