@@ -414,10 +414,11 @@ class DocumentTools:
 
     def _body_summary(self, body) -> dict:
         """封筒の `bodies[]` 1要素(キーは `BODY_KEYS` の6つ)。`Session.body_meta` から、
-        MCP封筒の契約に無い `revision` を落とす。
+        MCP封筒の契約に無い `revision` / `shape_revision`(画面の差分配信の印)を落とす。
         """
         meta = self.session.body_meta(body)
         del meta["revision"]
+        del meta["shape_revision"]
         return meta
 
     def _verb_envelope(self, verb: str, seq: int, before: dict[str, int]) -> dict:

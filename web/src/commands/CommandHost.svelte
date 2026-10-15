@@ -151,6 +151,13 @@
 
   /** 打ち終わってからプレビューを投げるまでの待ち[ms]。 */
   const PREVIEW_DEBOUNCE_MS = 250
+  /**
+   * 打ち続けていても、最初の打鍵からこれだけ経てば途中の値で投げる[ms]。末尾だけのデバウンスは、打鍵の間隔が
+   * `PREVIEW_DEBOUNCE_MS` 空かない限り何も出さない(issue #169)。古い要求はサーバが捨てる(`net/ws.py` の集約)。
+   */
+  const PREVIEW_MAX_WAIT_MS = 750
+  /** 投げていない打ち直しの最初の時刻(`PREVIEW_MAX_WAIT_MS` の起点)。投げたら・取り消したら null。 */
+  let previewWaitingSince: number | null = null
   /** 打ってからサーバの作業空間へ出すまでの待ち[ms]。打鍵のたびに送らない(AI には落ち着いた値だけ見える)。 */
   const PUBLISH_DEBOUNCE_MS = 250
 
@@ -373,6 +380,7 @@
     if (previewTimer) clearTimeout(previewTimer)
     previewedKey = key
     if (key === null || source === null || cmd === null) {
+      previewWaitingSince = null
       onCancelPreview()
       return
     }
@@ -380,13 +388,18 @@
     const args = source.args
     // ブラウザだけで描ける幽霊はデバウンスしない(デバウンスは投機実行が重いことへの対処)。
     if (mode === 'local') {
+      previewWaitingSince = null
       onPreview(cmd.id, args, mode)
       return
     }
+    const now = performance.now()
+    previewWaitingSince ??= now
+    const wait = Math.max(0, Math.min(PREVIEW_DEBOUNCE_MS, previewWaitingSince + PREVIEW_MAX_WAIT_MS - now))
     previewTimer = setTimeout(() => {
       previewTimer = null
+      previewWaitingSince = null
       onPreview(cmd.id, args, mode)
-    }, PREVIEW_DEBOUNCE_MS)
+    }, wait)
   })
 
   // ---------------------------------------------------------------- 即適用(Enterが要らないもの)

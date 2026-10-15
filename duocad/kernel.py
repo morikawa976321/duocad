@@ -15,7 +15,9 @@ from __future__ import annotations
 import math
 import os
 import tempfile
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+import threading
+from collections import OrderedDict
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Tool
@@ -995,6 +997,13 @@ def is_solid(shape: Any) -> bool:
 
 
 def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> dict:
+    """ターゲットとツール群で union/cut/intersect する(`_boolean_bodies`。結果は `remembered`)。"""
+    return remembered(
+        "boolean", (target_shape, *tool_shapes), str(mode), lambda: _boolean_bodies(target_shape, tool_shapes, mode)
+    )
+
+
+def _boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> dict:
     """ターゲットとツール群で union/cut/intersect する。
 
     ツールは先に `BRepAlgoAPI_Fuse` で1つにまとめてからターゲットへ作用する
@@ -1194,6 +1203,42 @@ def vertex_positions(shape: "TopoDS_Shape") -> List[dict]:
     return described
 
 
+#: 直前の重い形状演算の結果(`remembered`)。鍵は (演算, 入力の形の id 列, 引数)、値は (入力の形, 結果)。
+_RESULTS: "OrderedDict[tuple, tuple]" = OrderedDict()
+#: 覚える件数。プレビューの打ち直し(半径を変えるたびに1件)と、確定・undo・redo の行き来が収まる数。
+_RESULTS_LIMIT = 8
+_RESULTS_LOCK = threading.Lock()
+
+
+def remembered(name: str, shapes: tuple, arguments: Any, compute: Callable[[], dict]) -> dict:
+    """重い形状演算(フィレット・面取り・ブーリアン・シェル)の結果を、入力の形の同一性と引数が同じなら使い回す。
+
+    プレビュー(`Session.preview`)は verb を投機的に掛けて形を測り、文書を戻す。確定(`apply`)は同じ形に同じ引数で
+    同じ verb を掛けるので、ここで覚えた結果がそのまま当たる(PC ケースの最大ボディのフィレットで 0.88 秒。issue #169)。
+    redo も undo で戻した同じ形へ掛け直すので当たる。入力の形は差し替えであって書き換えではない(`duocad/speculative.py`)
+    ので、同じ物なら答えも同じ。id の使い回しで別の形に当たらないよう、入力の形そのものを持って `is` で比べる。
+    失敗(例外)は覚えない。返す辞書は呼ぶたびに新しい(中の `shape` と `provenance` は同じ物)。
+    """
+    key = (name, tuple(id(shape) for shape in shapes), arguments)
+    with _RESULTS_LOCK:
+        hit = _RESULTS.get(key)
+        if hit is not None and all(old is new for old, new in zip(hit[0], shapes)):
+            _RESULTS.move_to_end(key)
+            return dict(hit[1])
+    result = compute()
+    with _RESULTS_LOCK:
+        _RESULTS[key] = (tuple(shapes), result)
+        while len(_RESULTS) > _RESULTS_LIMIT:
+            _RESULTS.popitem(last=False)
+    return dict(result)
+
+
+def _value_key(values: dict) -> tuple:
+    """`{辺の添字: 値}` を `remembered` の鍵へ。**順序を保つ**: OCCT は辺を足す順で結果が変わる(接線で続く辺。
+    sol の再現: 同じ辺・半径の組でも [1, 5] と [5, 1] で体積が 23336.71 と 23409.17 mm³)。"""
+    return tuple((int(index), float(value)) for index, value in values.items())
+
+
 def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
     """辺(1始まりの添字)を丸めた**新しい形状**と由来の射影を返す。
 
@@ -1212,7 +1257,7 @@ def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
         {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
          "volume_after": float}
     """
-    return _blend_edges(shape, radii, verb="fillet")
+    return remembered("fillet", (shape,), _value_key(radii), lambda: _blend_edges(shape, radii, verb="fillet"))
 
 
 def chamfer_edges(shape: "TopoDS_Shape", distances: dict) -> dict:
@@ -1220,7 +1265,7 @@ def chamfer_edges(shape: "TopoDS_Shape", distances: dict) -> dict:
 
     `distances` は `{辺の添字: 距離}`。`fillet_edges` と同じ契約(`MakeChamfer` も黙って失敗する)。
     """
-    return _blend_edges(shape, distances, verb="chamfer")
+    return remembered("chamfer", (shape,), _value_key(distances), lambda: _blend_edges(shape, distances, verb="chamfer"))
 
 
 def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:

@@ -37,6 +37,7 @@ from .kernel import (
     normalize_provenance,
     volume,
 )
+from . import kernel
 from .mesh_geometry import compound, indexed_map, subshapes
 
 #: `MakeThickSolidByJoin` の許容差(mm)の上限。2026-10-13 の実測(docs/CAD_LIBRARY_PITFALLS.md)はこの値で取った。
@@ -51,6 +52,16 @@ _FILLET_HINT = "抜く面に丸めた面が接しているなら、先にシェ�
 
 
 def shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: float) -> dict:
+    """殻にする(`_shell_solid`。結果は `kernel.remembered`)。"""
+    return kernel.remembered(
+        "shell",
+        (shape,),
+        (tuple(int(index) for index in face_indices), float(thickness)),
+        lambda: _shell_solid(shape, face_indices, thickness),
+    )
+
+
+def _shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: float) -> dict:
     """`face_indices`(1始まり)の面を抜き、外形から内側へ `thickness` の殻にした**新しい形状**を返す。
 
     入力の `shape` は変更しない。**抜く面は1枚以上**(空だと OCCT は中空ではなく内側へ縮めた中身を返す)。
