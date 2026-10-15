@@ -46,7 +46,8 @@ export interface GridPlanesDeps {
    */
   contentBox(): THREE.Box3
   /** その面のメッシュ(貼った面の範囲を測る。見つからなければ undefined)。 */
-  faceMesh(bodyId: string, faceIndex: number): THREE.Mesh | undefined
+  /** その面の頂点位置(xyz の並び。見つからなければ null)。 */
+  facePositions(bodyId: string, faceIndex: number): ArrayLike<number> | null
   /** 画面1画素ぶんの世界座標の長さ(本編の `worldPerPixel`)。 */
   worldPerPixel(): number
   /** 今のカメラ(透視/正投影の切り替えで差し替わるので getter)。 */
@@ -97,7 +98,7 @@ export interface GridPlanes {
 }
 
 export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
-  const { contentBox, faceMesh, worldPerPixel, camera, onExtentChange } = deps
+  const { contentBox, facePositions, worldPerPixel, camera, onExtentChange } = deps
 
   const gridRoot = new THREE.Group()
   /** 基準平面のホバー板(除去と破棄の束。ピックは `basePlaneHoverMeshes` から)。 */
@@ -247,17 +248,15 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
    * 見つからなければ `null`(範囲で切らずに描く)。面の実際の輪郭では切らない(ステンシルが要り費用に見合わない)。
    */
   function faceUvBoxOnly(face: SketchFace, frame: PlaneFrame): UvBox | null {
-    const mesh = faceMesh(face.bodyId, face.faceIndex)
-    if (!mesh) return null
-    const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute
-    if (!position || position.count === 0) return null
+    const position = facePositions(face.bodyId, face.faceIndex)
+    if (position === null || position.length < 3) return null
     const origin = frameVector(frame.origin)
     const axisU = frameVector(frame.u).normalize()
     const axisV = frameVector(frame.v).normalize()
     const rel = new THREE.Vector3()
     let uv: UvBox | null = null
-    for (let i = 0; i < position.count; i++) {
-      rel.set(position.getX(i), position.getY(i), position.getZ(i)).sub(origin)
+    for (let i = 0; i + 2 < position.length; i += 3) {
+      rel.set(position[i], position[i + 1], position[i + 2]).sub(origin)
       uv = extendUvBoxToPoint(uv, { u: rel.dot(axisU), v: rel.dot(axisV) })
     }
     if (uv === null) return null

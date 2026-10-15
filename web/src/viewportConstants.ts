@@ -1,6 +1,7 @@
 /** ビューポートのモジュール定数(色・層番号・画角・当たり判定の画素数)と純粋ヘルパー。 */
 import * as THREE from 'three'
 
+import type { BodyMesh } from './bodyMesh'
 import type { BasePlaneName } from './session'
 
 /**
@@ -311,14 +312,12 @@ export function lighten(hex: number, amount: number): number {
   return color.getHex()
 }
 
-/** 1個のBodyが画面に持つメッシュ(面ごとの三角形メッシュ+境界線)。 */
+/** 1個のBodyが画面に持つもの(全面をまとめた三角形メッシュ1つ+境界線1つ。`bodyMesh.ts`)。 */
 export interface BodyMeshes {
-  /** ピック判定の対象(面の三角形メッシュだけ)。 */
-  faceMeshes: THREE.Mesh[]
+  body: BodyMesh
   /** `root` に足した全オブジェクト(面メッシュ+境界線)。clearBody はこれを取り除く
    * (面メッシュだけを外すと境界線がシーンに残り、dispose済みジオメトリを参照するゴースト線になる)。 */
   sceneObjects: THREE.Object3D[]
-  disposables: Array<{ dispose(): void }>
 }
 
 /**

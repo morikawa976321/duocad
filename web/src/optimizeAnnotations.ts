@@ -10,7 +10,8 @@ import type { FaceRef, OptimizeVisualState } from './viewportTypes'
 
 export interface OptimizeAnnotationsDeps {
   /** いま画面にある面メッシュ。**`update()` のたびに作り直される**ので毎回読み直す。 */
-  faceMeshes(): THREE.Mesh[]
+  /** その面の頂点位置と頂点法線(xyz の並び。見つからなければ null)。 */
+  faceVertices(bodyId: string, faceIndex: number): { positions: ArrayLike<number>; normals: ArrayLike<number> | null } | null
   /** 内容の外接直方体の対角[mm]。装飾の大きさをこれへ追随させる。 */
   contentDiagonal(): number
 }
@@ -57,27 +58,22 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
     bodyId: string,
     faceIndex: number,
   ): { center: THREE.Vector3; normal: THREE.Vector3 } | null {
-    const allFaceMeshes = deps.faceMeshes()
-    const mesh = allFaceMeshes.find(
-      (candidate) => candidate.userData.bodyId === bodyId && candidate.userData.faceIndex === faceIndex,
-    )
-    if (!mesh) return null
-    const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute
-    const normalAttr = mesh.geometry.getAttribute('normal') as THREE.BufferAttribute
-    if (!position || position.count === 0) return null
+    const vertices = deps.faceVertices(bodyId, faceIndex)
+    if (vertices === null || vertices.positions.length < 3) return null
+    const { positions, normals } = vertices
     const center = new THREE.Vector3()
     const normal = new THREE.Vector3()
-    for (let i = 0; i < position.count; i++) {
-      center.x += position.getX(i)
-      center.y += position.getY(i)
-      center.z += position.getZ(i)
-      if (normalAttr) {
-        normal.x += normalAttr.getX(i)
-        normal.y += normalAttr.getY(i)
-        normal.z += normalAttr.getZ(i)
+    for (let i = 0; i + 2 < positions.length; i += 3) {
+      center.x += positions[i]
+      center.y += positions[i + 1]
+      center.z += positions[i + 2]
+      if (normals) {
+        normal.x += normals[i]
+        normal.y += normals[i + 1]
+        normal.z += normals[i + 2]
       }
     }
-    center.divideScalar(position.count)
+    center.divideScalar(positions.length / 3)
     if (normal.lengthSq() < 1e-12) normal.set(0, 0, 1)
     else normal.normalize()
     return { center, normal }

@@ -84,7 +84,8 @@ export interface ViewCubeOverlay {
   setHoverAt(point: { x: number; y: number } | null): void
   /** 視点アニメーションを1フレームぶん進める。 */
   stepSnap(now: number): void
-  updateHover(): void
+  /** ホバーの当たりを解き直す。強調する面が変わったら true(呼び手は描き直しを頼む)。 */
+  updateHover(): boolean
   /** 第2パスを描く(本編の描画のあと)。 */
   render(): void
   dispose(): void
@@ -243,12 +244,13 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
     }
   }
 
-  function updateCubeHover(): void {
+  function updateCubeHover(): boolean {
     const hit = cubeHoverAt === null ? null : cubeHitAt(cubeHoverAt.x, cubeHoverAt.y)
     const key = hit === null ? '' : `${hit.i},${hit.j},${hit.k}`
-    if (key === cubeHoverKey) return
+    if (key === cubeHoverKey) return false
     cubeHoverKey = key
     applyCubeMaterials()
+    return true
   }
 
   // ---------------------------------------------------------------- クリック=スナップ(視点アニメーション)

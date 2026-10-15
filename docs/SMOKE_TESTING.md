@@ -177,8 +177,9 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
   SwiftShader が 0.7fps、D3D11 が 36fps だが、**検査の所要時間はほぼ変わらない**（smoke.mjs 163→150秒。律速は
   OCCT/Python 側と WS 往復）。変わるのは CPU 消費だけ。どちらで描いたかは起動時の `GL :` 行に出る
   （黙ってソフト GL へ落ちても検査は通る）。
-- **`viewport.ts` の `tick()` は変化が無くても毎フレーム描き**、puppeteer は既定で
-  `--disable-background-timer-throttling` を付けるので画面が無くても 60fps で回る。
+- **`viewport.ts` の `tick()` は毎フレーム回るが、描くのは何かが変わったフレームだけ**(公開口の呼び出し・ポインタ・
+  カメラの移動。issue #171)。puppeteer は既定で `--disable-background-timer-throttling` を付けるので画面が無くても
+  60fps で回る。公開口を通らずに見た目を変える経路を足すと、検査は緑のまま絵だけが古くなる(`invalidate()` を呼ぶ)。
 - **`getBoundingClientRect()` を `page.evaluate` 単体で返すとフィールドが消える**（DOMRect のプロパティはプロトタイプの
   getter で構造化複製に乗らない）。`rect.left` が `undefined` → `page.mouse.click(NaN, NaN)` で落ちる。rect の取得と
   それを使う計算を同じ `page.evaluate` の中で行い、プレーンオブジェクトで返す（`pick.mjs` の `screenOf`）。

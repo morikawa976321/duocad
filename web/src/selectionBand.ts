@@ -38,6 +38,15 @@ export interface SelectionBand {
     height: number,
     keep?: ((point: THREE.Vector3) => boolean) | null,
   ): boolean
+  /** `positions`(xyz の並び。ボディの1面ぶん)の全頂点が矩形の中か(`objectInside` の頂点配列版)。 */
+  positionsInside(
+    positions: ArrayLike<number>,
+    matrix: THREE.Matrix4,
+    rect: BandRect,
+    width: number,
+    height: number,
+    keep?: ((point: THREE.Vector3) => boolean) | null,
+  ): boolean
   dispose(): void
 }
 
@@ -125,6 +134,27 @@ export function createSelectionBand(deps: SelectionBandDeps): SelectionBand {
     return kept
   }
 
+  /** `geometryInside` の頂点配列版(ボディをまとめたジオメトリの1面ぶん。`bodyMesh.ts`)。 */
+  function positionsInside(
+    positions: ArrayLike<number>,
+    matrix: THREE.Matrix4,
+    box: BandRect,
+    width: number,
+    height: number,
+    keep: ((point: THREE.Vector3) => boolean) | null = null,
+  ): boolean {
+    const world = new THREE.Vector3()
+    let kept = false
+    for (let at = 0; at + 2 < positions.length; at += 3) {
+      world.set(positions[at], positions[at + 1], positions[at + 2]).applyMatrix4(matrix)
+      if (keep !== null && !keep(world)) continue
+      kept = true
+      const screen = projectRaw(world, width, height)
+      if (screen === null || !inside(box, screen)) return false
+    }
+    return kept
+  }
+
   function objectInside(
     object: THREE.Object3D & { geometry: THREE.BufferGeometry },
     box: BandRect,
@@ -143,6 +173,7 @@ export function createSelectionBand(deps: SelectionBandDeps): SelectionBand {
     active: () => boxActive,
     polylineWorldInside,
     objectInside,
+    positionsInside,
     dispose() {
       bandElement.remove()
     },
