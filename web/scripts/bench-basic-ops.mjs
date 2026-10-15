@@ -71,9 +71,20 @@ function installBench() {
       desc.set.call(this, typeof fn === 'function' ? wrap(fn) : fn)
     },
   })
+  const wrapped = new WeakMap()
   const add = WebSocket.prototype.addEventListener
+  const remove = WebSocket.prototype.removeEventListener
   WebSocket.prototype.addEventListener = function (type, fn, ...rest) {
-    return add.call(this, type, type === 'message' && typeof fn === 'function' ? wrap(fn) : fn, ...rest)
+    if (type !== 'message' || typeof fn !== 'function') return add.call(this, type, fn, ...rest)
+    let w = wrapped.get(fn)
+    if (!w) {
+      w = wrap(fn)
+      wrapped.set(fn, w)
+    }
+    return add.call(this, type, w, ...rest)
+  }
+  WebSocket.prototype.removeEventListener = function (type, fn, ...rest) {
+    return remove.call(this, type, (type === 'message' && wrapped.get(fn)) || fn, ...rest)
   }
   try {
     new PerformanceObserver((list) => {
@@ -144,7 +155,7 @@ async function measure(page, scenario, label, action, until, { args = [], timeou
 }
 
 /** node から別の WebSocket で繋ぎ、サーバがほぼ何もしないコマンド(`clear_selection`)の往復時間を測る(ブラウザ抜きの素の往復)。 */
-async function wsRoundTrips(url, count = 20) {
+async function wsRoundTrips(url, count = 20, makeMessage = (op) => ({ cmd: 'clear_selection', client_op: op })) {
   const config = await fetch(new URL('/duocad-config.json', url)).then((r) => r.json())
   const socket = new WebSocket(config.ws_url ?? config.wsUrl ?? `ws://127.0.0.1:${config.ws_port ?? config.port}`)
   await new Promise((resolve, reject) => {
@@ -165,7 +176,7 @@ async function wsRoundTrips(url, count = 20) {
         }
       }
       socket.addEventListener('message', onMessage)
-      socket.send(JSON.stringify({ cmd: 'clear_selection', client_op: op }))
+      socket.send(JSON.stringify(makeMessage(op)))
     })
   // 最初の state(接続時の配信)を読み捨てる
   await new Promise((resolve) => socket.addEventListener('message', resolve, { once: true }))
@@ -287,6 +298,7 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius }) {
     const face = await visibleFace(page, bodyId, { from })
     if (!face) break
     from = face.index + 1
+    const t0 = await now(page)
     await measure(
       page,
       scenario,
@@ -295,6 +307,10 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius }) {
       (id, index) => (window.__duocad.selection?.items ?? []).some((i) => i.body === id && i.kind === 'face' && i.index === index),
       { args: [bodyId, face.index] },
     )
+    if (k === 0) {
+      const seq = await wsSince(page, t0)
+      console.log('      WS の並び: ' + seq.map((e) => `${e.dir === 'out' ? '→' : '←'}${e.type}@${(e.t - t0).toFixed(1)}ms${e.dir === 'in' ? `(${e.size}B, handler ${e.handler_ms.toFixed(1)})` : ''}`).join('  '))
+    }
   }
   // 選択を解いて、面を1つ選び直してからフィレットを起動(辺はそのボディのものが届く)
   await mcp.callTool('clear_selection')
@@ -419,6 +435,9 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
     try {
       const rtt = await wsRoundTrips(ctx.url)
       record('A', 'WS 素の往復(node→clear_selection→state) p50', rtt.p50, { min: rtt.min, max: rtt.max })
+      const rttSel = await wsRoundTrips(ctx.url, 20, (op) => ({ cmd: 'modify_selection', add: [{ body: bodyId, kind: 'face', index: 1 + (op % 6) }], remove: [], client_op: op, ack_id: op }))
+      record('A', 'WS 素の往復(node→modify_selection 面1件+ack_id→state) p50', rttSel.p50, { min: rttSel.min, max: rttSel.max })
+      await ctx.mcp.callTool('clear_selection')
       const inPage = await page.evaluate(async () => {
         const config = await fetch('duocad-config.json', { cache: 'no-store' }).then((r) => r.json())
         const socket = new WebSocket(config.ws_url)
@@ -449,6 +468,47 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
         return { p50: samples[10], min: samples[0], max: samples[19] }
       })
       record('A', 'WS 素の往復(ページ内の別ソケット→clear_selection→state) p50', inPage.p50, { min: inPage.min, max: inPage.max })
+      // 入力イベントの中から送ると往復が延びるか(ブラウザの入力→描画の優先スケジューリングの切り分け)
+      await page.evaluate(async () => {
+        const config = await fetch('duocad-config.json', { cache: 'no-store' }).then((r) => r.json())
+        const socket = new WebSocket(config.ws_url)
+        await new Promise((resolve, reject) => {
+          socket.addEventListener('open', resolve)
+          socket.addEventListener('error', () => reject(new Error('WS に繋がらない')))
+        })
+        await new Promise((resolve) => socket.addEventListener('message', resolve, { once: true }))
+        window.__benchInputSocket = socket
+        window.__benchInputSamples = []
+        let seq = 7000
+        document.addEventListener(
+          'pointerup',
+          () => {
+            const t0 = performance.now()
+            const onMessage = (event) => {
+              if (String(event.data).includes('"type": "state"')) {
+                socket.removeEventListener('message', onMessage)
+                window.__benchInputSamples.push(performance.now() - t0)
+              }
+            }
+            socket.addEventListener('message', onMessage)
+            socket.send(JSON.stringify({ cmd: 'clear_selection', client_op: (seq += 1) }))
+          },
+          true,
+        )
+      })
+      for (let i = 0; i < 10; i += 1) {
+        const c = await center(page)
+        await page.mouse.move(c.x + 30 + i, c.y + 30)
+        await page.mouse.down({ button: 'right' })
+        await page.mouse.up({ button: 'right' })
+        await sleep(100)
+      }
+      const viaInput = await page.evaluate(() => {
+        const s = window.__benchInputSamples.slice().sort((a, b) => a - b)
+        window.__benchInputSocket.close()
+        return { p50: s[Math.floor(s.length / 2)] ?? null, min: s[0] ?? null, max: s[s.length - 1] ?? null, n: s.length }
+      })
+      record('A', 'WS 素の往復(別ソケット・pointerup の中から送る→state) p50', viaInput.p50, { min: viaInput.min, max: viaInput.max, n: viaInput.n })
     } catch (error) {
       record('A', `WS 素の往復 [失敗: ${error.message}]`, null)
     }
@@ -536,13 +596,14 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
     for (let k = 0; k < 3; k += 1) {
       const at = await sketchPointAt(page, (k % 15) * 12 + 5, Math.floor(k / 15) * 12 + 5)
       if (!at) break
+      const epoch = await page.evaluate(() => window.__duocad.stateEpoch)
       await measure(
         page,
         'C',
         `領域を選ぶ(クリック→選択が返る→1フレーム) #${k + 1}`,
         () => clickAt(page, at),
-        (n) => (window.__duocad.selection?.count ?? 0) === n,
-        { args: [k + 1] },
+        (n) => window.__duocad.stateEpoch > n && (window.__duocad.selection?.count ?? 0) > 0,
+        { args: [epoch] },
       )
     }
     await ctx.mcp.callTool('clear_selection')
@@ -553,14 +614,23 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
       await page.waitForFunction(() => (window.__duocad.selection?.count ?? 0) === 60, { timeout: 60000, polling: 'raf' })
       record('C', 'MCP で60領域を選ぶ→画面に選択が映る', (await now(page)) - t1, summarizeWs(await wsSince(page, t1)))
       const t2 = await now(page)
+      const partsBefore = await page.evaluate(() => (window.__duocad.parts ?? []).length)
       const started = Date.now()
-      await ctx.mcp.callTool('extrude', { distance: 5, mode: 'new' })
+      let extruded = null
+      try {
+        extruded = await ctx.mcp.callTool('extrude', { distance: 5, mode: 'new' })
+      } catch (error) {
+        record('C', `MCP extrude 60領域 [失敗: ${String(error.message ?? error).slice(0, 80)}]`, null)
+      }
       const mcpMs = Date.now() - started
-      await page.waitForFunction(() => (window.__duocad.parts ?? []).length >= 60 && window.__duocad.parts.every((p) => window.__duocad.getGeometry(p.body_id) !== null), { timeout: 120000, polling: 'raf' })
-      await waitFrames(page, 1)
-      record('C', 'MCP extrude 60領域→60ボディが描ける', (await now(page)) - t2, { mcp_ms: mcpMs, ...summarizeWs(await wsSince(page, t2)) })
+      if (extruded !== null) {
+        await page.waitForFunction((n) => (window.__duocad.parts ?? []).length > n && window.__duocad.parts.every((p) => window.__duocad.getGeometry(p.body_id) !== null), { timeout: 60000, polling: 'raf' }, partsBefore)
+        await waitFrames(page, 1)
+        const parts = await page.evaluate(() => (window.__duocad.parts ?? []).length)
+        record('C', `MCP extrude 60領域→${parts}ボディが描ける`, (await now(page)) - t2, { mcp_ms: mcpMs, bodies: extruded.bodies?.length ?? null, ...summarizeWs(await wsSince(page, t2)) })
+      }
     }
-    await frameStats(page, 'C', '60ボディ・静止時のフレーム間隔 2秒', () => sleep(2000))
+    await frameStats(page, 'C', '押し出し後・静止時のフレーム間隔 2秒', () => sleep(2000))
     await page.close()
   }
 
