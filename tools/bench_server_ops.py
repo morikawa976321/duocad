@@ -277,6 +277,14 @@ def bench_mesh_doc(models_dir: Path, doc: Path) -> None:
     known = known_of(s)
     timed("D 変化なし配信 state_meta+delta(known)", lambda: push_payload(s, known), repeat=5, bytes=jsize(push_payload(s, known)))
     timed("D autosave() 単体", lambda: s.autosave(), repeat=3, file_bytes=(models_dir / s.current_name).stat().st_size)
+
+    def ui_verb():
+        with s.background_autosave():
+            s.apply("sketch_create", {"base_plane": "XY"})
+
+    timed("D 画面の verb 1回(書き込みは書き手スレッドへ。応答まで)", ui_verb, repeat=3)
+    s._drain_writes()
+    timed("D 同じ verb をその場で保存(MCP の経路)", lambda: s.apply("sketch_create", {"base_plane": "XY"}), repeat=3)
     solid = next((b for b in s.document.bodies if b.shape is not None and b.visible), None)
     if solid is not None:
         timed("D modify_selection(面1 of solid) + 配信", lambda: (s.modify_selection(add=[{"body": solid.id, "kind": "face", "index": 1}]), push_payload(s, known)), repeat=5)

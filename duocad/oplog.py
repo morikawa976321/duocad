@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
@@ -88,6 +89,8 @@ class OpLog:
         #: 自動で振った名前の通し番号の、種類(`naming.BODY` 等)ごとの最大値。一度振った番号は
         #: 再利用しないので undo でも戻さず、保存にも載せる(載せないと開き直した文書が同じ番号をもう一度振る)。
         self._numbering: Dict[str, int] = {}
+        #: 大きな操作の JSON(`_operation_json`)。id(操作) -> (操作, args, provenance, 文字列, ファイルに書くバイト列)。
+        self._serialized: Dict[int, tuple] = {}
 
     @property
     def entries(self) -> list[Operation]:
@@ -181,13 +184,74 @@ class OpLog:
         None なら載せない。ファイルシステムの作成時刻は保存のたびに上書きされ代わりにならない
         (実測は docs/UI.md のファイル一覧の項)。版は上げていない(`from_payload` は未知のキーを読まない)。
         """
+        # 出力は `json.dumps({..., "operations": [asdict(op), ...]}, ensure_ascii=False, indent=2)` とバイト単位で
+        # 同じ(`tests/test_oplog.py`)。操作を1件ずつ文字列にして、入れ物の2段の字下げ(4桁)で繋ぐ。
+        head, operations = self._json_parts(created)
+        body = "[\n    " + ",\n    ".join(text for text, _ in operations) + "\n  ]" if operations else "[]"
+        return head[:-2] + ',\n  "operations": ' + body + "\n}"
+
+    def to_file_bytes(self, created: Optional[float] = None) -> bytes:
+        """`Path.write_text(self.to_json(created), encoding="utf-8")` が書くのと同じバイト列(改行は `os.linesep`)。"""
+        return b"".join(self.to_file_chunks(created))
+
+    def to_file_chunks(self, created: Optional[float] = None) -> List[bytes]:
+        """`to_file_bytes` を前から順に並べた断片(繋がずにそのまま順に書く。自動保存の口 `Session._write_document_file`)。
+
+        文字列で組むと、日本語を含む小さな操作と ASCII だけの巨大な操作(STEP 本文・三角形)を繋いだ瞬間に全体が1文字2〜4バイトへ
+        広がって写し直され、さらに書き込みで改行を変換する(14.9 MB の文書で連結 16 ms・書き込み 26 ms)。バイト列で繋いでも
+        14 MB の確保と写しが連結1回ごとに 5 ms かかる(実測)。操作ごとに変換済みのバイト列を覚え、繋がずに渡す。
+        """
+        head, operations = self._json_parts(created)
+
+        def encoded(text: str) -> bytes:
+            return text.replace("\n", os.linesep).encode("utf-8")
+
+        if not operations:
+            return [encoded(head[:-2] + ',\n  "operations": []\n}')]
+        chunks = [encoded(head[:-2] + ',\n  "operations": [\n    ')]
+        separator = encoded(",\n    ")
+        for number, (_, data) in enumerate(operations):
+            if number:
+                chunks.append(separator)
+            chunks.append(data)
+        chunks.append(encoded("\n  ]\n}"))
+        return chunks
+
+    def _json_parts(self, created: Optional[float]) -> tuple:
+        """入れ物の頭(`operations` 抜きの JSON)と、操作ごとの (文字列, ファイルに書くバイト列)。"""
         payload: dict = {"version": self.FORMAT_VERSION}
         if created is not None:
             payload["created"] = created
         if self._numbering:
             payload["numbering"] = dict(self._numbering)
-        payload["operations"] = [asdict(operation) for operation in self.entries]
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+        head = json.dumps(payload, ensure_ascii=False, indent=2)
+        if self._serialized:
+            # 新しい操作で捨てられた redo の山の分を手放す(STEP 本文のような大きな文字列を持ち続けない)。
+            alive = {id(entry) for entry in self._entries}
+            for key in [key for key in self._serialized if key not in alive]:
+                del self._serialized[key]
+        return head, [self._operation_json(operation) for operation in self.entries]
+
+    #: これより長い操作の JSON は覚えておく。自動保存は操作のたびに全ログを書くので、STEP 本文(4.6 MB)・
+    #: メッシュボディの三角形(6.9 MB)のような大きな操作を毎回 `asdict` + `json.dumps` し直すと、14.9 MB の文書で
+    #: 1回 117 ms かかる(実測)。小さな操作は作り直しても安いので覚えない。
+    SERIALIZED_CACHE_MIN = 32 * 1024
+
+    def _operation_json(self, operation: Operation) -> tuple:
+        """1件の操作の (JSON 文字列(入れ物の中の字下げ済み), ファイルに書くバイト列)。
+
+        大きなものは、操作・`args`・`provenance` が同じ物である限り使い回す。操作の `args` はその場で書き換えられない
+        (`append` が写しを持ち、verb は読むだけ)。`provenance` は再生のたびに新しい物へ差し替わる
+        (`operation.provenance = ...`)ので、同一性で見れば足りる。
+        """
+        cached = self._serialized.get(id(operation))
+        if cached is not None and cached[0] is operation and cached[1] is operation.args and cached[2] is operation.provenance:
+            return cached[3], cached[4]
+        text = json.dumps(asdict(operation), ensure_ascii=False, indent=2).replace("\n", "\n    ")
+        data = text.replace("\n", os.linesep).encode("utf-8")
+        if len(text) >= self.SERIALIZED_CACHE_MIN:
+            self._serialized[id(operation)] = (operation, operation.args, operation.provenance, text, data)
+        return text, data
 
     @classmethod
     def from_json(cls, data: str) -> "OpLog":

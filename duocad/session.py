@@ -9,6 +9,8 @@ verbの呼び出し・選択・パラメータ・操作ログ・保存/開くを
 """
 from __future__ import annotations
 
+import concurrent.futures
+import contextlib
 import functools
 import inspect
 import base64
@@ -148,6 +150,15 @@ class Session:
         #: 保存の書き込みを直列にする。アプリ内AIの道具はワーカースレッドで動き(`net/ws.py` の `_ai_start`)、`apply` → `_emit` → 自動保存へ来るので、
         #: イベントループ側の保存と同じ一時ファイルへ同時に書く経路がある。
         self._save_lock = threading.Lock()
+        #: >0 の間、編集中のファイルへの自動保存は JSON 化までをその場で行い、書き込みを1本の書き手スレッドへ回す
+        #: (`background_autosave`。画面の操作の応答に書き込みの時間を乗せない。issue #173)。
+        self._background_autosave = 0
+        #: 書き手スレッド(初めて使うときに作る)。1本なので頼んだ順に書く。
+        self._writer: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        #: 最後に頼んだ書き込み。結果(書けたか)は `settle_autosave` が読む。
+        self._pending_write: Optional[concurrent.futures.Future] = None
+        #: 頼んだ書き込みの通し番号。新しいものが控えていれば、古い書き込みは書かずに降りる(新しい方が今の文書を書く)。
+        self._write_seq = 0
         #: 配りもの。文書を差し替えたら `view.reset()` を呼ぶ(`_replace_document`)。
         self.view = DocumentView(self.document, self.deviation, self.warnings)
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
@@ -251,7 +262,7 @@ class Session:
         # 選択・可視性(`change` キー)は載らない。WebSocket・MCP・形状最適化のどの経路も通る唯一の合流点。
         # 配る前に書くのは、配りもの(`state.saved` / `current_name`)が保存の結果を含むため。
         if "verb" in applied:
-            self.autosave()
+            self.autosave()  # 画面の操作では書き込みだけ後ろへ回る(`background_autosave`)
         for callback in list(self._listeners):
             try:
                 callback(applied)
@@ -1057,13 +1068,78 @@ class Session:
         return resolved
 
     @staticmethod
-    def _write_document_file(target: Path, payload: str) -> None:
+    def _write_document_file(target: Path, payload: Any) -> None:
         """一時ファイルへ書いてから差し替える(呼び手が `_save_lock` を持つ)。素の上書きは既存の中身を先に切り詰めるので、
         途中で落ちると唯一の永続形式である前回の保存が半端なJSONで潰れる。`os.replace` は同じディレクトリ内なら不可分。
+        `payload` は文字列か、`OpLog.to_file_chunks` の断片の並び(同じ中身。文字列の改行は書き込みで `os.linesep` になる)。
         """
         staging = target.with_name(target.name + ".writing")
-        staging.write_text(payload, encoding="utf-8")
+        if isinstance(payload, list):
+            with open(staging, "wb") as stream:
+                stream.writelines(payload)
+        else:
+            staging.write_text(payload, encoding="utf-8")
         os.replace(staging, target)
+
+    @contextlib.contextmanager
+    def background_autosave(self):
+        """この中で掛けた verb の自動保存は、JSON 化までをその場で済ませ、ファイルへの書き込みを書き手スレッドへ回す。
+
+        画面の操作(`net/ws.py` の `_apply`)だけが使う。書く回数・書く時点(配る前に中身を確定する)は変わらず、
+        落ちたとき最後の変更を失いうる間(書き込みが終わるまで)も同じ長さのまま、応答から書き込みの時間だけが外れる
+        (14.9 MB の文書で 22 ms。issue #173)。呼び手は配った後に `pending_write` を待って `settle_autosave()` を呼ぶ。
+        無題の文書の最初の保存は名前(`current_name`)が配りものに載るので、その場で書く。
+        """
+        self._background_autosave += 1
+        try:
+            yield
+        finally:
+            self._background_autosave -= 1
+
+    @property
+    def pending_write(self) -> Optional[concurrent.futures.Future]:
+        """書き手スレッドへ回して、まだ結果を読んでいない書き込み(`background_autosave`)。"""
+        return self._pending_write
+
+    def settle_autosave(self) -> bool:
+        """回した書き込みが済んでいれば結果を `saved` と警告へ写す。書けなかったときだけ False。済んでいなければ何もしない。"""
+        future = self._pending_write
+        if future is None or not future.done():
+            return True
+        self._pending_write = None
+        error = future.exception()
+        if error is None:
+            self._unsaved = False
+            return True
+        self._unsaved = True
+        self.warnings.append(f"自動保存できなかった: {type(error).__name__}: {error}")
+        return False
+
+    def _drain_writes(self) -> None:
+        """回した書き込みが終わるまで待ち、結果を写す。ファイルを書く・読む・消す・移す口の先頭で呼ぶ
+        (待たないと、遅れて着いた古い書き込みが新しい保存を上書きする・消したファイルを書き戻す・最後の変更の無いファイルを読む)。
+        """
+        future = self._pending_write
+        if future is not None:
+            concurrent.futures.wait([future])
+            self.settle_autosave()
+
+    def _queue_write(self) -> None:
+        """編集中のファイルへの自動保存を書き手スレッドへ回す(中身はここで確定する)。"""
+        target = self._resolve_document_name(self._current_name)
+        data = self.document.log.to_file_chunks(created=self._created)
+        self._write_seq += 1
+        seq = self._write_seq
+        if self._writer is None:
+            self._writer = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="duocad-autosave")
+        self._pending_write = self._writer.submit(self._write_queued, target, data, seq)
+
+    def _write_queued(self, target: Path, data: list, seq: int) -> None:
+        """書き手スレッドの1件。後から頼んだ書き込みが控えていれば書かない(そちらが新しい文書を書く)。"""
+        if seq != self._write_seq:
+            return
+        with self._save_lock:
+            self._write_document_file(target, data)
 
     def save_document(self, name: Any = None) -> dict:
         """操作ログをJSONで書き出す。verbではない(ログに載らない)。
@@ -1083,6 +1159,8 @@ class Session:
         呼び手は自動保存が主(issue #5、2026-09-16): 文書が変わるたび `autosave()` が引数なしで呼び、無題なら
         `untitled-<n>.json` を `name` に渡す。人が名前を決める口は `rename_document`。
         """
+        self._drain_writes()
+        self._write_seq += 1  # 待っても間に合わなかった古い書き込みが後から着いたら、書かずに降りる(`_write_queued`)
         if name is None:
             if self._current_name is None:
                 raise ValueError(
@@ -1107,7 +1185,7 @@ class Session:
                 f"形状最適化の実行中は別名で保存できない({self._optimize_name} の実行が終わるか中断してから)"
             )
         created = self._created if name is None else time.time()
-        payload = self.document.log.to_json(created=created)
+        payload = self.document.log.to_file_chunks(created=created)
         with self._save_lock:
             self._write_document_file(target, payload)
             if name is not None:
@@ -1147,11 +1225,15 @@ class Session:
         失敗しても例外にしない(文書の変更は確定済みで巻き戻せない)。書けなかったことは警告と `saved=False` で知らせ、
         戻り値は書けたか。捕まえるのは種類を問わない: Windows では別のプログラムがファイルを開いているだけで
         `os.replace` が `PermissionError` になり(実測)、漏れると最適化の経路で結果も終了の `optimize_status` も配られず画面が実行中のまま固まる。
-        費用は操作ログ全体のJSON化と書き込み。実測は 4.8MB の文書で 0.02秒なので debounce も差分保存も入れていない。
+        費用は操作ログ全体のJSON化と書き込み。大きな操作の JSON は `OpLog` が覚えていて(`to_file_bytes`)、14.9 MB の文書で
+        JSON 化 4 ms・書き込み 22 ms(実測)。画面の操作では書き込みを書き手スレッドへ回す(`background_autosave`)。
+        debounce は入れない(落ちたとき最後の変更が残る保証が崩れる。issue #5 の本人決定)。
         """
         try:
             if self._current_name is None:
                 self.save_document(self._unused_untitled_name())
+            elif self._background_autosave:
+                self._queue_write()
             else:
                 self.save_document()
         except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ画面へ出す
@@ -1177,6 +1259,7 @@ class Session:
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
         if self._current_name is None:
             return dict(self.save_document(target.name), action="rename", previous=None)
+        self._drain_writes()
         with self._save_lock:
             previous = self._current_name
             source = self._resolve_document_name(previous)
@@ -1205,6 +1288,7 @@ class Session:
         差し替えの後始末は `_replace_document`(`new_document` と共通)。
         """
         source = self._resolve_document_name(name)
+        self._drain_writes()  # 同じ名前を開き直すとき、書きかけの最後の変更を読み落とさない
         if source.name in self._undelivered:
             return self._open_undelivered(source.name)
         if not source.exists():
@@ -1281,6 +1365,7 @@ class Session:
         配りものは `view.reset()` で作り直す(Bodyのidは再生で作り直されるが同じidが再び現れうる。古い形状を指したキャッシュが
         残ると別の文書の形を配る)。選択集合は `Document` が持つので、差し替えた時点で空になっている。
         """
+        self._drain_writes()  # 回した書き込みは前の文書のもの。書き終えてから差し替える(結果の `saved` を新しい文書へ持ち越さない)
         self.document = document
         self._open = True  # 閉じる側(`close_document`)は差し替えの後で False に戻す
         self._current_name = current_name
@@ -1329,6 +1414,7 @@ class Session:
         """
         origin = self._resolve_document_name(source)
         target = self._resolve_document_name(dest)
+        self._drain_writes()  # 書きかけの最後の変更の無いファイルを写さない
         if not origin.exists():
             raise FileNotFoundError(f"複製元が無い: {origin.name}")
         if target.exists():
@@ -1360,6 +1446,7 @@ class Session:
             raise ValueError(
                 f"{target.name} は形状最適化の実行中(終わるか、開いて中断してから削除する)"
             )
+        self._drain_writes()  # 書きかけの書き込みが、消した後のファイルを書き戻さないように
         if not target.exists():
             raise FileNotFoundError(f"削除するファイルが無い: {target.name}")
         target.unlink()
