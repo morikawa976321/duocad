@@ -191,6 +191,9 @@ def bench_pc_case(models_dir: Path, step: Path) -> None:
     timed("C clear_selection + 配信", lambda: (s.clear_selection(), push_payload(s, known)), repeat=5)
     once("C edges(最大ボディ) 初回", lambda: s.edges(big.id)); ROWS[-1]["bytes"] = jsize(s.edges(big.id))
     timed("C edges(最大ボディ) キャッシュ", lambda: s.edges(big.id), repeat=5)
+    once("C edge_chains(最大ボディ 辺1本) 初回", lambda: s.edge_chains(big.id, [1]))
+    timed("C edge_chains(最大ボディ 辺1本) 次の辺", lambda: s.edge_chains(big.id, [len(ROWS) % nedges + 1]), repeat=5)
+    once("C edge_chains(最大ボディ 全辺) 初回", lambda: s.edge_chains(big.id, list(range(1, nedges + 1))))
     once("C vertices(最大ボディ) 初回", lambda: s.vertices(big.id)); ROWS[-1]["bytes"] = jsize(s.vertices(big.id))
     per_body = []
     for b in s.document.bodies:

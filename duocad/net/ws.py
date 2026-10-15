@@ -18,6 +18,7 @@
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
         {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
         {"type": "edges", "body_id": str, "revision": int, "edges": [...]}
+        {"type": "edge_chains", "body_id": str, "revision": int, "chains": [[int, ...], ...]}
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
         {"type": "error", "message": str, "where": str, "client_op": int|None}
         {"type": "done", "ack_id": int}
@@ -415,6 +416,9 @@ class Server:
             elif command == "get_edges":
                 result = self.session.edges(message["body_id"])
                 await _send(connection, {"type": "edges", **result})
+            elif command == "get_edge_chains":
+                result = self.session.edge_chains(message["body_id"], list(message["chain_of"]))
+                await _send(connection, {"type": "edge_chains", **result})
             # -------------------------------------------------- D: 頂点の座標(`get_edges` と同じく要求した接続にだけ返す)
             elif command == "get_vertices":
                 result = self.session.vertices(message["body_id"])

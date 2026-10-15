@@ -1103,12 +1103,13 @@ def tessellate_edges(
     `tessellate` の辺版(画面の輪郭線は three.js の `EdgesGeometry` で、コアの辺の添字とは対応しない)。
 
     戻り値(素の値だけ):
-        [{"index": int, "chain": int, "kind": "line"|"circle"|"other", "length": float,
+        [{"index": int, "kind": "line"|"circle"|"other", "length": float,
           "closed": bool, "points": [x,y,z, x,y,z, ...]}, ...]
 
     `index` は `edge_count` / `edge_of` / `fillet(edges=[...])` と**同じ数え方**(`_edge_map` の1始まり)。
     ずれると「指した辺と違う辺が丸まる」静かな事故になるので、添字は必ず `_edge_map` から取る。
-    `chain` は `kernel_chains.blend_chains` の値(同じ値の辺は、フィレット・面取りで1本として振る舞う)。
+    連なり(フィレット・面取りで1本として振る舞う辺の組)は入れない。大きな部品で折れ線の数十倍かかるので、
+    画面は指した辺の分だけ別に取り寄せる(`kernel_chains.BlendChains`)。
 
     折れ線は `GCPnts_TangentialDeflection` で `deviation`(mm)と `angular_deflection`(ラジアン)の
     **両方**を満たすまで分割する。**線形偏差だけでは足りない** —— 小半径の円弧は分割数が2〜4点まで
@@ -1123,7 +1124,6 @@ def tessellate_edges(
     )
 
     shape_map = _edge_map(shape)
-    chains = kernel_chains.blend_chains(shape)
     described: List[dict] = []
     for index in range(1, shape_map.Extent() + 1):
         edge = TopoDS.Edge_s(shape_map.FindKey(index))
@@ -1147,7 +1147,6 @@ def tessellate_edges(
         described.append(
             {
                 "index": index,
-                "chain": chains[index],
                 "kind": classify_edge(edge),
                 "length": float(GCPnts_AbscissaPoint.Length_s(adaptor)),
                 "closed": bool(edge.Closed()),
@@ -1155,6 +1154,11 @@ def tessellate_edges(
             }
         )
     return described
+
+
+def edge_chain_finder(shape: "TopoDS_Shape") -> "kernel_chains.BlendChains":
+    """形の辺の連なりを、頼まれた辺の分だけ求めて覚える器(`kernel_chains.BlendChains`)。形ごとに1つ作って使い回す。"""
+    return kernel_chains.BlendChains(shape)
 
 
 def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:

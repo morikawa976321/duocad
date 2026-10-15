@@ -376,8 +376,6 @@ export interface PreviewPayload {
  */
 export interface EdgeGeometry {
   index: number
-  /** 連なりの代表の添字(`duocad/kernel_chains.py`)。同じ値の辺はフィレット・面取りで1本として振る舞う。 */
-  chain: number
   kind: string
   length: number
   closed: boolean
@@ -392,6 +390,16 @@ export interface EdgesPayload {
   body_id: string
   revision: number
   edges: EdgeGeometry[]
+}
+
+/**
+ * 辺の連なりの応答(`get_edge_chains`)。頼んだ辺それぞれが属する連なりの添字の全部(昇順)。
+ * 連なりはフィレット・面取りで1本として振る舞う辺の組(`duocad/kernel_chains.py`)。`revision` の意味は辺と同じ。
+ */
+export interface EdgeChainsPayload {
+  body_id: string
+  revision: number
+  chains: number[][]
 }
 
 /**
@@ -890,6 +898,8 @@ export interface SessionHooks {
   onPreview(payload: PreviewPayload): void
   /** 頼んだ辺が返ってきた(状態は変わっていない)。 */
   onEdges(payload: EdgesPayload): void
+  /** 頼んだ辺の連なりが返ってきた(状態は変わっていない)。 */
+  onEdgeChains(payload: EdgeChainsPayload): void
   /** 頼んだ頂点が返ってきた(状態は変わっていない)。 */
   onVertices(payload: VerticesPayload): void
   /** 測った(状態は変わっていない)。要求した接続にだけ届く。 */
@@ -978,6 +988,11 @@ export interface Session {
    * フィレット・面取りを起動している間だけ呼ぶ(常時配ると27部品ぶんの辺が乗る。`Session.edges` のdocstring)。
    */
   getEdges(bodyId: string): void
+  /**
+   * 辺の連なりを取りに行く(応答は `onEdgeChains`)。状態配信ではない。連なりは辺の折れ線に入れず、
+   * フィレット・面取りで指した辺の分だけ頼む(全辺ぶんは大きな部品で 0.5 秒かかる。`DocumentView.edge_chains`)。
+   */
+  getEdgeChains(bodyId: string, edges: number[]): void
   /**
    * 1Bodyの頂点の座標を取りに行く(応答は `onVertices`)。状態配信ではない。
    * 呼ぶのは選択に頂点が入っているときだけ(`duocad/server.py` の `Session.vertices`)。
@@ -1173,6 +1188,7 @@ export function createSession(hooks: SessionHooks): Session {
       body_id?: string
       revision?: number
       edges?: EdgeGeometry[]
+      chains?: number[][]
       vertices?: VertexGeometry[]
       action?: string
       path?: string
@@ -1255,6 +1271,12 @@ export function createSession(hooks: SessionHooks): Session {
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
         edges: message.edges ?? [],
+      })
+    } else if (message.type === 'edge_chains') {
+      hooks.onEdgeChains({
+        body_id: message.body_id ?? '',
+        revision: message.revision ?? 0,
+        chains: message.chains ?? [],
       })
     } else if (message.type === 'vertices') {
       hooks.onVertices({
@@ -1461,6 +1483,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     getEdges(bodyId) {
       send({ cmd: 'get_edges', body_id: bodyId }, true)
+    },
+    getEdgeChains(bodyId, edges) {
+      send({ cmd: 'get_edge_chains', body_id: bodyId, chain_of: edges })
     },
     getVertices(bodyId) {
       send({ cmd: 'get_vertices', body_id: bodyId }, true)

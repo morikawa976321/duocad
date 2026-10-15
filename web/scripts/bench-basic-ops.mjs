@@ -330,6 +330,19 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius }) {
     (id) => window.__duocad.edges !== null && window.__duocad.edges?.body_id === id && (window.__duocad.edges?.edges ?? []).length > 0,
     { args: [bodyId], timeout: 60000 },
   )
+  // 同じボディでもう一度起動(辺はサーバのキャッシュから)
+  await page.keyboard.press('Escape')
+  await page.waitForFunction(() => window.__duocad.command === null && window.__duocad.edges === null, { timeout: 30000, polling: 'raf' })
+  await clickAt(page, face.at)
+  await page.waitForFunction((id) => (window.__duocad.selection?.items ?? []).some((i) => i.body === id), { timeout: 30000, polling: 'raf' }, bodyId)
+  await measure(
+    page,
+    scenario,
+    'フィレット起動→辺が届いて描ける(再取得: 同じボディをもう一度)',
+    () => page.click('#fillet'),
+    (id) => window.__duocad.edges !== null && window.__duocad.edges?.body_id === id && (window.__duocad.edges?.edges ?? []).length > 0,
+    { args: [bodyId], timeout: 60000 },
+  )
   const candidates = await page.evaluate(() => {
     const edges = window.__duocad.edges?.edges ?? []
     return edges
@@ -354,6 +367,14 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius }) {
     await page.keyboard.press('Escape')
     return
   }
+  await measure(
+    page,
+    scenario,
+    '辺に乗せる→連なりが届く(get_edge_chains 往復)',
+    () => page.mouse.move(edge.at.x, edge.at.y),
+    (id, index) => window.__duocad.edgeChain(id, index) !== null,
+    { args: [bodyId, edge.index], timeout: 60000 },
+  )
   await measure(
     page,
     scenario,

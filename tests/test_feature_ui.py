@@ -162,6 +162,42 @@ def test_edges_are_sent_only_to_the_connection_that_asked(session: Session) -> N
     assert clients[1].payloads == [], "辺は全接続へ配らない(要求した接続だけ)"
 
 
+def test_edge_chains_are_sent_only_to_the_connection_that_asked(session: Session) -> None:
+    """`get_edge_chains` は要求した接続にだけ、頼んだ辺の連なりを返す(連なりは辺の折れ線に入れない)。"""
+    body, _ = _box(session)
+    _select(session, _edges(body, [1]))
+    session.fillet(RADIUS_THAT_WORKS)
+    arc = next(item["index"] for item in session.edges(body.id)["edges"] if item["kind"] == "circle")
+
+    async def script(send):
+        return await send({"cmd": "get_edge_chains", "body_id": body.id, "chain_of": [arc, arc]})
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "edge_chains"
+    assert answer["revision"] == session.edges(body.id)["revision"]
+    assert len(answer["chains"]) == 1, "同じ連なりは1つにまとめる"
+    assert arc in answer["chains"][0] and len(answer["chains"][0]) == 3, "直線→円弧→直線が1つの連なり"
+    assert "chain" not in session.edges(body.id)["edges"][0]
+    assert clients[1].payloads == [], "連なりは全接続へ配らない(要求した接続だけ)"
+
+
+def test_edge_chains_survive_a_zoom(session: Session, monkeypatch) -> None:
+    """落ちたら、ズームで粗さが変わるたびに連なりを求め直す(連なりは形にだけ依存する。大きな部品で辺1本 10ms)。"""
+    body, _ = _box(session)
+    made = []
+    real = kernel.edge_chain_finder
+    monkeypatch.setattr(kernel, "edge_chain_finder", lambda shape: made.append(shape) or real(shape))
+    session.edge_chains(body.id, [1])
+    session.set_view_resolution(0.01, 40.0)
+    session.edge_chains(body.id, [2])
+    assert len(made) == 1
+    _select(session, _edges(body, [1]))
+    session.fillet(RADIUS_THAT_WORKS)
+    session.edge_chains(body.id, [1])
+    assert len(made) == 2, "形が変われば求め直す"
+
+
 def test_the_edge_revision_follows_the_shape(session: Session) -> None:
     """形が変われば `revision` が上がる。**古い辺の添字を持ち越させない**ための番号。"""
     body, _ = _box(session)

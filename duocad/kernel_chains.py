@@ -1,10 +1,11 @@
 """辺の連なり: フィレット・面取りで1本として振る舞う辺の組(画面の辺の選択単位)。
 
-`kernel.tessellate_edges` が各辺の `chain` に使う。添字は `kernel._edge_map` と同じ数え方(`indexed_map` の1始まり)。
+画面は辺の折れ線(`kernel.tessellate_edges`)とは別に、指した辺の分だけ取り寄せる(`BlendChains`。`view.DocumentView.edge_chains`)。
+添字は `kernel._edge_map` と同じ数え方(`indexed_map` の1始まり)。
 """
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
@@ -19,41 +20,78 @@ from .mesh_geometry import indexed_map
 
 
 def blend_chains(shape: TopoDS_Shape) -> Dict[int, int]:
-    """辺の添字 → その辺が属する連なりの代表(連なりの最小の添字)。
+    """辺の添字 → その辺が属する連なりの代表(連なりの最小の添字)。全辺ぶんを一度に求める(`BlendChains` の全部)。
 
     連なりは OCCT のフィレットが1本の辺から広げる範囲そのもの(`MakeFillet.Add` の輪郭)。
     実測: 1本を渡すと、一直線上で割れた辺も、直線→円弧→直線の接線連続も、フィレット・面取りとも
     全部にかかる。画面の選択をこの単位にしないと「光った1本より広く丸まる」になる。
-
-    `Add` 1回は形状全体に比例して重い(実測: 1,212辺で 0.9ms、4,812辺で 3.8ms)ので、全辺に呼ぶと辺数の2乗で
-    伸びる(円柱の穴を400個あけた板の4,812辺で 8.4 秒)。伸びうる辺だけに呼ぶ(`_sieve`)。篩を入れた実測: 同じ板 0.09 秒、
-    27部品の PC ケース(`web/scripts/models.mjs` の `PC_CASE_STEP`)で最も重いボディ(471辺・候補256本)0.71 秒、
-    27ボディすべてで全辺に `Add` した結果と一致。
     """
-    edge_map = indexed_map(shape, TopAbs_EDGE)
-    chains: Dict[int, int] = {index: index for index in range(1, edge_map.Extent() + 1)}
-    candidates = _sieve(shape, edge_map)
-    if not candidates:
-        return chains
-    maker = BRepFilletAPI_MakeFillet(shape)
-    done: set = set()
-    for index in candidates:
-        if index in done:
-            continue
+    edge_count = indexed_map(shape, TopAbs_EDGE).Extent()
+    groups = BlendChains(shape).of(range(1, edge_count + 1))
+    return {index: group[0] for index, group in groups.items()}
+
+
+class BlendChains:
+    """1つの形の辺の連なりを、頼まれた辺の分だけ求めて覚える。形は不変(差し替えは別の形)なので、作り直すのは形が変わったときだけ。
+
+    `Add` 1回は形の複雑さに比例して重い(実測: 1,212辺で 0.9ms、4,812辺で 3.8ms、27部品の PC ケース
+    (`web/scripts/models.mjs` の `PC_CASE_STEP`)の最大ボディ 645辺で 9.5ms)ので、全辺に呼ぶと辺数の2乗で伸びる
+    (円柱の穴を400個あけた板の4,812辺で 8.4 秒)。全辺ぶんを求めるときは伸びうる辺だけに呼ぶ(`_sieve`)。篩を入れた実測:
+    同じ板 0.09 秒、PC ケースで最も重いボディ(471辺・候補256本)0.71 秒、27ボディすべてで全辺に `Add` した結果と一致。
+    篩そのものも重い(最大ボディで 0.12 秒。`IsTangentFaces` が大半)ので、辺1本なら篩を通さず `Add` 1回で求める。
+    """
+
+    #: 一度に頼まれた未知の辺がこれより多ければ、先に篩で伸びうる辺を絞る(篩 0.12 秒 ≒ `Add` 12回ぶん。上の実測)。
+    SIEVE_ABOVE = 12
+
+    def __init__(self, shape: TopoDS_Shape) -> None:
+        self._shape = shape
+        self._edge_map = indexed_map(shape, TopAbs_EDGE)
+        self._maker: Optional[BRepFilletAPI_MakeFillet] = None
+        self._candidates: Optional[set] = None
+        self._groups: Dict[int, Tuple[int, ...]] = {}
+
+    def of(self, indices: Iterable[int]) -> Dict[int, Tuple[int, ...]]:
+        """頼まれた辺それぞれ → その辺が属する連なりの添字の全部(昇順。連なりの無い辺は自分1本)。範囲外は ValueError。"""
+        wanted = [int(index) for index in indices]
+        extent = self._edge_map.Extent()
+        for index in wanted:
+            if not 1 <= index <= extent:
+                raise ValueError(f"edge index out of range: {index} (1..{extent})")
+        unknown = [index for index in dict.fromkeys(wanted) if index not in self._groups]
+        if len(unknown) > self.SIEVE_ABOVE and self._candidates is None:
+            self._candidates = set(_sieve(self._shape, self._edge_map))
+        for index in unknown:
+            if index in self._groups:
+                continue
+            if self._candidates is not None and index not in self._candidates:
+                self._groups[index] = (index,)
+                continue
+            self._spread(index)
+        return {index: self._groups[index] for index in wanted}
+
+    def _spread(self, index: int) -> None:
+        """`Add` 1回でその辺の連なりを求め、連なりの全部の辺に覚えさせる。"""
+        if self._maker is None:
+            self._maker = BRepFilletAPI_MakeFillet(self._shape)
+        maker = self._maker
         contours = maker.NbContours()
         try:
-            maker.Add(1.0, TopoDS.Edge_s(edge_map.FindKey(index)))
+            maker.Add(1.0, TopoDS.Edge_s(self._edge_map.FindKey(index)))
         except Exception:  # noqa: BLE001  OCCTはかけられない辺で例外を投げることがある
-            continue
+            self._groups[index] = (index,)
+            return
         if maker.NbContours() == contours:
-            continue
+            self._groups[index] = (index,)
+            return
         contour = contours + 1
-        members = {index} | {edge_map.FindIndex(maker.Edge(contour, j)) for j in range(1, maker.NbEdges(contour) + 1)}
+        members = {index} | {
+            self._edge_map.FindIndex(maker.Edge(contour, j)) for j in range(1, maker.NbEdges(contour) + 1)
+        }
         members.discard(0)
-        for member in members:
-            chains[member] = min(members)
-        done |= members
-    return chains
+        group = tuple(sorted(members))
+        for member in group:
+            self._groups[member] = group
 
 
 def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
