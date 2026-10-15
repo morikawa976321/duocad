@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from . import (
@@ -72,6 +73,82 @@ def _memo(cache: dict, body_id: str, source: Any, key: Any, compute: Callable[[]
     return result
 
 
+class _FaceTessellations:
+    """1つの形の面ごとの三角形を、測り方(`(偏差, 角度偏差)`)ごとに覚える(`DocumentView._face_cache`)。
+
+    カメラが動いて細かく測る面(focus)が1面でも変わると、ボディを丸ごと測り直していた(PC ケースでズームの行き来が
+    1 回 1.3〜1.4 秒。issue #166)。面ごとに覚えれば、測るのは測り方の変わった面だけになる。測り方は細かい側(ズームで
+    変わる)と粗い側の数通りしか無いので、`LIMIT` 通りまで覚える(ズームの行き来で同じ測り方へ戻ったときに測り直さない)。
+    """
+
+    #: 覚える測り方の数。細かい側はズームの段ごとに変わる(行き来する2段 + 粗い側 + 余裕)。
+    LIMIT = 4
+
+    def __init__(self) -> None:
+        self.by_recipe: "OrderedDict[tuple, dict]" = OrderedDict()  # (偏差, 角度偏差) -> {面の添字: 面の三角形}
+        self.untriangulated: "OrderedDict[tuple, set]" = OrderedDict()
+        #: (偏差, 角度偏差) -> {面の添字: 測った回の番号}(`one_batch`)
+        self.batch_of: "OrderedDict[tuple, dict]" = OrderedDict()
+        self._batches = 0
+        self.closed: Optional[bool] = None
+        #: まだ警告していない取れなかった面と、解消できなかった境界(`seed_faces` で覚えさせた分。配るときに1回だけ出す)
+        self.unwarned_failed: set = set()
+        self.unwarned_boundary: list = []
+
+    def missing(self, wanted: dict) -> dict:
+        """`{面の添字: 測り方}` のうち覚えていない面を、測り方ごとにまとめる。"""
+        groups: dict = {}
+        for index, recipe in wanted.items():
+            if index not in self.by_recipe.get(recipe, {}):
+                groups.setdefault(recipe, []).append(index)
+        return groups
+
+    def remember(self, groups: dict, measured: dict) -> None:
+        """測った結果を覚える。`groups` の測り方1つが1回の測定(`kernel.tessellate_faces` は組ごとに測る)。"""
+        newly_failed = set(measured["untriangulated"])
+        for recipe, indices in groups.items():
+            self._batches += 1
+            faces = self.by_recipe.setdefault(recipe, {})
+            failed = self.untriangulated.setdefault(recipe, set())
+            batch = self.batch_of.setdefault(recipe, {})
+            for index in indices:
+                if index in measured["faces"]:
+                    faces[index] = measured["faces"][index]
+                if index in newly_failed:
+                    failed.add(index)
+                else:
+                    failed.discard(index)
+                batch[index] = self._batches
+        self.closed = measured["closed"]
+
+    def one_batch(self, recipe: tuple, indices: list) -> bool:
+        """その測り方の `indices` を全部覚えていて、全部が同じ回に測ったものか。"""
+        batch = self.batch_of.get(recipe, {})
+        batches = {batch.get(index) for index in indices}
+        return len(batches) == 1 and None not in batches and all(
+            index in self.by_recipe.get(recipe, {}) for index in indices
+        )
+
+    def take(self, wanted: dict) -> list:
+        """覚えた面を添字の順に返す(使った測り方を新しい側へ寄せ、`LIMIT` を超えた古い測り方を捨てる)。"""
+        for recipe in dict.fromkeys(wanted.values()):
+            self.by_recipe.move_to_end(recipe)
+            self.untriangulated.move_to_end(recipe)
+            self.batch_of.move_to_end(recipe)
+        while len(self.by_recipe) > self.LIMIT:
+            stale, _ = self.by_recipe.popitem(last=False)
+            self.untriangulated.pop(stale, None)
+            self.batch_of.pop(stale, None)
+        return [self.by_recipe[wanted[index]][index] for index in sorted(wanted)]
+
+    def failed(self, wanted: dict) -> list:
+        return sorted(index for index, recipe in wanted.items() if index in self.untriangulated.get(recipe, set()))
+
+
+#: ボディごとに面の三角形を覚えておく形の数(今の形・undo で戻る前の形・プレビューで測った確定前の形)。
+FACE_STORES_PER_BODY = 3
+
+
 class DocumentView:
     """1つの文書の「配りもの」。**文書を変えない読み取り + キャッシュ**だけを持つ。
 
@@ -99,6 +176,9 @@ class DocumentView:
         #: **どの面を細かく測るか**(`{body_id: frozenset(1始まりの面添字)}`)。`None` = 全Body全面を細かく。
         #: dictに居ないBodyも全面細かく。空のfrozensetは「そのBodyは全面粗く」。画面の設定で文書の状態ではない。
         self._view_focus: Optional[dict] = None
+        #: 細かい側の偏差が下限に張り付いているか(`resolution.deviation_floored`)。張り付いている間は、細かく測る面の組を
+        #: 同じ回に測ったものだけで組む(`_tessellate_body`)。測り方が変わるのでレシピに入れる(`body_recipe`)。
+        self._view_floored = False
         #: **`Session.warnings` と同じリストオブジェクト**を共有する。`Session.take_warnings()` は
         #: 中身を空にする(束ね直すと、ここが古いリストへ書き続ける)。
         self.warnings = warnings
@@ -121,6 +201,9 @@ class DocumentView:
         self._chain_cache: dict = {}       # 辺の連なりの器(`kernel.edge_chain_finder`)。粗さに依らない
         self._vertex_cache: dict = {}      # vertex_positions結果
         self._volume_cache: dict = {}      # query.volume結果
+        #: body_id -> OrderedDict[id(形) -> (形, `_FaceTessellations`)]。形ごとに `FACE_STORES_PER_BODY` 世代まで覚える
+        #: (undo で元の形へ戻ったとき・プレビューで測った新しい形を確定したときに測り直さない)。
+        self._face_cache: dict = {}
         self._face_count_cache: dict = {}  # kernel.face_count結果(`body_meta`)
         #: 形状最適化の条件の配りもの(`optimize.state_payload`)の増分維持。
         #: 作り直すのは「条件が変わった」か「条件が指しているボディの形が差し替わった」ときだけ。
@@ -154,7 +237,7 @@ class DocumentView:
         """
         fine = self._body_focus(body_id)
         if fine is None:
-            return ("all", self._view_resolution)
+            return ("all", self._view_resolution, self._view_floored)
         if not fine:
             return ("coarse", self._view_coarse_resolution or self._view_resolution)
         return (
@@ -162,6 +245,7 @@ class DocumentView:
             self._view_resolution,
             self._view_coarse_resolution,
             tuple(sorted(fine)),
+            self._view_floored,
         )
 
     def _tessellation_args(self, body_id: str) -> tuple:
@@ -244,16 +328,19 @@ class DocumentView:
         if coarse == target:
             coarse = None  # 分ける意味が無い(`size_hint` が無い/引ききっている)
         normalized = self._normalize_focus(focus)
+        floored = resolution.deviation_floored(world_per_pixel, size_hint)
         if (
             self._view_resolution == target
             and self._view_coarse_resolution == coarse
             and self._view_focus == normalized
+            and self._view_floored == floored
         ):
             return False
         resolution_changed = self._view_resolution != target
         self._view_resolution = target
         self._view_coarse_resolution = coarse
         self._view_focus = normalized
+        self._view_floored = floored
         # geometry / edges のキャッシュは捨てない(`set_view_resolution` のdocstring)。
         if resolution_changed:
             # スケッチはブラウザ側で折るので面ごとの粗さを持たない(細かい側で1つ)。
@@ -273,6 +360,7 @@ class DocumentView:
         """
         self.document = document
         self._geometry_cache.clear()
+        self._face_cache.clear()
         self._edge_cache.clear()
         self._chain_cache.clear()
         self._vertex_cache.clear()
@@ -490,17 +578,95 @@ class DocumentView:
         recipe = self.body_recipe(body_id)
         return _memo(self._geometry_cache, body_id, body.shape, recipe, lambda: self._tessellate_body(body))
 
+    def _face_store(self, body_id: str, shape: Any) -> "_FaceTessellations":
+        """その形の面の三角形の控え(無ければ作る)。ボディごとに `FACE_STORES_PER_BODY` 個の形まで覚える。"""
+        stores = self._face_cache.setdefault(body_id, OrderedDict())
+        held = stores.get(id(shape))
+        if held is not None and held[0] is shape:
+            stores.move_to_end(id(shape))
+            return held[1]
+        store = _FaceTessellations()
+        stores[id(shape)] = (shape, store)
+        while len(stores) > FACE_STORES_PER_BODY:
+            stores.popitem(last=False)
+        return store
+
+    def seed_faces(self, body_id: str, shape: Any, deviation: float, angular: float, geometry: dict) -> None:
+        """全面を同じ測り方で測った結果(`kernel.tessellate` の戻り値)を、その形の面の三角形として覚えさせる。
+
+        プレビュー(`Session.preview_job`)は確定後の形そのものを画面の粗さで全面測っている(確定は覚えた結果の形を
+        使い回す。`kernel.remembered`)ので、確定後の配信で同じ形を測り直さない(PC ケースの最大ボディで 0.15 秒)。
+        """
+        recipe = (float(deviation), float(angular))
+        indices = [face["index"] for face in geometry["faces"]]
+        measured = {
+            "faces": {face["index"]: face for face in geometry["faces"]},
+            "untriangulated": list(geometry.get("untriangulated", [])),
+            "closed": kernel.is_closed_shell(shape),
+        }
+        store = self._face_store(body_id, shape)
+        store.remember({recipe: indices}, measured)
+        # プレビューは警告を積まない。確定後に配るとき1回だけ出す(`_tessellate_body`)
+        store.unwarned_failed |= set(measured["untriangulated"])
+        store.unwarned_boundary.extend((geometry.get("boundary") or {}).get("unresolved") or [])
+
     def _tessellate_body(self, body) -> dict:
-        """B-rep を測り、取れなかった面・解消できなかった境界の警告を積む(**測ったときだけ**出す)。"""
+        """B-rep を測り、取れなかった面・解消できなかった境界の警告を積む(**測ったときだけ**出す)。
+
+        面ごとに測り方(細かい側・粗い側)を決め、覚えていない面だけを測る(`_FaceTessellations`)。測り方の決め方と
+        戻り値の形は `kernel.tessellate_selective` と同じ。
+        """
         fine, deviation, angular, coarse_deviation, coarse_angular = self._tessellation_args(body.id)
-        result = kernel.tessellate_selective(
-            body.shape, fine, deviation, angular, coarse_deviation, coarse_angular
+        total = self._body_face_count(body)
+        coarse = (
+            max(float(deviation if coarse_deviation is None else coarse_deviation), float(deviation)),
+            max(float(angular if coarse_angular is None else coarse_angular), float(angular)),
         )
-        if result["untriangulated"]:
+        detailed = (float(deviation), float(angular))
+        fine_set = set(range(1, total + 1)) if fine is None else {int(i) for i in fine if 1 <= int(i) <= total}
+        # 細かい面が1つでもあり、粗い側が細かい側と同じなら全面を細かい側で測る(報告する `detail` と数は求められた面のまま)
+        everything_detailed = bool(fine_set) and (len(fine_set) == total or coarse == detailed)
+        wanted = {
+            index: detailed if everything_detailed or index in fine_set else coarse for index in range(1, total + 1)
+        }
+        store = self._face_store(body.id, body.shape)
+        groups = store.missing(wanted)
+        if self._view_floored:
+            # 別々の回に測った面の境目の隙間は偏差の2倍程度で、偏差が画素から決まっていれば1画素未満だが、
+            # 下限に張り付くと画素に対して大きくなる(再現: 1画素 1e-6 mm で 40 画素)。細かい面の組は1回で測ったものだけを使う
+            fine_group = [index for index, recipe in wanted.items() if recipe == detailed]
+            if fine_group and not store.one_batch(detailed, fine_group):
+                groups[detailed] = fine_group
+        measured = None
+        if groups:
+            measured = kernel.tessellate_faces(body.shape, groups)
+            store.remember(groups, measured)
+        faces = [dict(face, detail="fine" if face["index"] in fine_set else "coarse") for face in store.take(wanted)]
+        untriangulated = store.failed(wanted)
+        if faces and len(untriangulated) == len(faces):
+            raise ValueError(f"三角形分割が1面も取れなかった(deviation={deviation}, coarse={coarse[0]})")
+        result = {
+            "deviation": detailed[0] if fine_set else coarse[0],
+            "face_count": len(faces),
+            "bbox": kernel.bounding_box_of_faces(faces),
+            "faces": faces,
+            "untriangulated": untriangulated,
+            "coarse_deviation": coarse[0],
+            "fine_face_count": len(fine_set),
+            "closed": bool(store.closed),
+            # 診断は測ったときだけ(覚えていた面には無い)
+            "boundary": measured["boundary"] if measured is not None else {},
+        }
+        # 警告は測ったとき(と、プレビューで測って覚えさせた形を初めて配るとき)だけ出す
+        fresh_failed = set(measured["untriangulated"]) if measured is not None else set()
+        newly_failed = sorted(set(untriangulated) & (fresh_failed | store.unwarned_failed))
+        store.unwarned_failed -= set(untriangulated)
+        if newly_failed:
             self.warnings.append(
-                f"三角形分割が取れなかった面({body.name}): {result['untriangulated']}(画面に出ません)"
+                f"三角形分割が取れなかった面({body.name}): {newly_failed}(画面に出ません)"
             )
-        unresolved = (result.get("boundary") or {}).get("unresolved") or []
+        unresolved = ((result.get("boundary") or {}).get("unresolved") or []) + store.unwarned_boundary
+        store.unwarned_boundary = []
         if unresolved:
             # 境界折れ線の交差を再分割で解消できなかった面は分割していない(kernel_meshing)。
             described = [f"{entry['face']}:{','.join(sorted({i['kind'] for i in entry['issues']}))}" for entry in unresolved]
@@ -584,7 +750,7 @@ class DocumentView:
         alive = {body.id for body in self.document.bodies}
         for cache in (
             self._geometry_cache, self._edge_cache, self._chain_cache, self._vertex_cache, self._volume_cache,
-            self._face_count_cache,
+            self._face_count_cache, self._face_cache,
         ):
             for body_id in [key for key in cache if key not in alive]:
                 cache.pop(body_id, None)

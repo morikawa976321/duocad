@@ -93,15 +93,45 @@ def angular_for_deviation(deviation: float) -> float:
     return min(ANGULAR_MAX, max(ANGULAR_MIN, scaled))
 
 
+#: 目標偏差を丸める段の細かさ(1オクターブあたりの段数。`quantize_deviation`)。
+DEVIATION_STEPS_PER_OCTAVE = 4
+
+
+def quantize_deviation(deviation: float) -> float:
+    """目標偏差を `2 ** (k / DEVIATION_STEPS_PER_OCTAVE)` の段へ**細かい側に**切り捨てる(角を出さない側へ倒す)。
+
+    画面1画素の長さはカメラを戻しても浮動小数の最後の桁で変わる(実測: 1.1022631871338904 と 1.102263187133815)ので、
+    そのまま偏差にするとサーバの面の三角形のキャッシュ(`view._FaceTessellations`)の鍵が毎回外れ、カメラを動かすたびに
+    27 部品の全面を測り直していた(1回 1.2〜1.35 秒。issue #166)。段は 2^(1/4) ≈ 1.19 倍刻みで、
+    `resolutionTracker.ts` の作り直しの閾値(1.25 倍)より細かい。
+    """
+    if not math.isfinite(deviation) or deviation <= 0.0:
+        return deviation
+    return 2.0 ** (math.floor(math.log2(deviation) * DEVIATION_STEPS_PER_OCTAVE) / DEVIATION_STEPS_PER_OCTAVE)
+
+
+def deviation_floored(world_per_pixel: float, size_hint: float = 0.0) -> bool:
+    """目標偏差が画素から決まらず、下限(`clamp_deviation`)まで引き上げられているか。
+
+    引き上げられている間は偏差が画素に対して大きく、別々の回に測った面どうしの境目の隙間(偏差の2倍程度)が
+    1画素を超えうる(`view.DocumentView._tessellate_body` が細かい面の組を同じ回に測ったものだけで組む)。
+    """
+    if not math.isfinite(world_per_pixel) or world_per_pixel <= 0.0:
+        return False
+    wanted = quantize_deviation(TOLERANCE_PIXELS * float(world_per_pixel))
+    return clamp_deviation(wanted, size_hint) > wanted
+
+
 def view_resolution(world_per_pixel: float, size_hint: float = 0.0) -> tuple:
     """`(deviation[mm], angular_deflection[rad])` を返す。**変換式の唯一の入口**。
 
     `world_per_pixel` は「画面1画素ぶんの世界長さ[mm]」(注視点の面で測る)。
     非有限・0以下なら既定値の組を返す(ズーム連動を入れる前と同じ粗さ)。
+    目標偏差は段に丸めてから上下限を掛ける(`quantize_deviation`)。
     """
     if not math.isfinite(world_per_pixel) or world_per_pixel <= 0.0:
         return (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)
-    deviation = clamp_deviation(TOLERANCE_PIXELS * float(world_per_pixel), size_hint)
+    deviation = clamp_deviation(quantize_deviation(TOLERANCE_PIXELS * float(world_per_pixel)), size_hint)
     return (deviation, angular_for_deviation(deviation))
 
 

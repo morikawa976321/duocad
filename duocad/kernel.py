@@ -924,6 +924,63 @@ def tessellate_selective(
     return result
 
 
+def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], Iterable[int]]) -> dict:
+    """指定した面だけを、`(偏差, 角度偏差)` の組ごとに三角形分割する(面単位のキャッシュ `view.DocumentView` の口)。
+
+    戻り値: `{"faces": {面の添字: tessellate() の faces[i] と同じ形}, "untriangulated": [...], "boundary": {...},
+    "closed": bool}`。組ごとに compound にして測る(`_tessellate_split` と同じ測り方)。組が全面なら形状そのものを測る
+    (`tessellate()` と同じ結果)。組の間で共有する辺の分割は伝わらない(`tessellate_selective` の「分かっている代償」と同じ)。
+    """
+    _check_tessellation_args(shape, *next(iter(groups), (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)))
+    shape_map = _face_map(shape)
+    total = shape_map.Extent()
+    described: Dict[int, dict] = {}
+    untriangulated: List[int] = []
+    passes: List[dict] = []
+    for (deviation, angular), indices in groups.items():
+        wanted = sorted({int(index) for index in indices if 1 <= int(index) <= total})
+        if not wanted:
+            continue
+        if len(wanted) == total:
+            passes.append(kernel_meshing.mesh_shape(shape, float(deviation), float(angular)))
+        else:
+            group = compound([shape_map.FindKey(index) for index in wanted])
+            BRepTools.Clean_s(shape)
+            passes.append(_renumber_faces(kernel_meshing.mesh_shape(group, float(deviation), float(angular)), wanted))
+        # 次の組の Clean_s で消える前に抜き出す。
+        for index in wanted:
+            payload = _describe_face(TopoDS.Face_s(shape_map.FindKey(index)), index)
+            if not payload["indices"]:
+                untriangulated.append(index)
+            described[index] = payload
+    return {
+        "faces": described,
+        "untriangulated": sorted(untriangulated),
+        "boundary": kernel_meshing.merge_diagnostics(passes),
+        "closed": _is_closed_shell(shape),
+    }
+
+
+def _renumber_faces(diagnostic: dict, wanted: List[int]) -> dict:
+    """面を集めた compound を測った診断の面番号(compound の中で1始まり)を、元の形状の面番号へ直す。
+
+    compound の面は `wanted` の順に並ぶ。直さないと、警告(`view._tessellate_body`)が別の面の番号を出す。
+    """
+    diagnostic["unresolved"] = [dict(entry, face=wanted[entry["face"] - 1]) for entry in diagnostic["unresolved"]]
+    diagnostic["reinstated"] = [wanted[face - 1] for face in diagnostic["reinstated"]]
+    return diagnostic
+
+
+def is_closed_shell(shape: "TopoDS_Shape") -> bool:
+    """閉じた立体か(`_is_closed_shell`。`tessellate_selective` の `closed`)。"""
+    return _is_closed_shell(shape)
+
+
+def bounding_box_of_faces(faces: List[dict]) -> dict:
+    """`tessellate()` の `bbox` と同じものを、面の三角形の並びから求める(面単位のキャッシュから組み直すとき)。"""
+    return _bounding_box(faces)
+
+
 def _tessellate_split(
     shape: "TopoDS_Shape",
     shape_map: "TopTools_IndexedMapOfShape",
@@ -948,7 +1005,7 @@ def _tessellate_split(
             continue
         group = compound([shape_map.FindKey(index) for index in sorted(group_indices)])
         BRepTools.Clean_s(shape)
-        passes.append(kernel_meshing.mesh_shape(group, float(dev), float(angle)))
+        passes.append(_renumber_faces(kernel_meshing.mesh_shape(group, float(dev), float(angle)), sorted(group_indices)))
         # 次のパスの Clean_s で消える前に抜き出す。
         for index in sorted(group_indices):
             face = TopoDS.Face_s(shape_map.FindKey(index))

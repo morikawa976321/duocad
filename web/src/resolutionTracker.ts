@@ -6,7 +6,7 @@
  */
 import * as THREE from 'three'
 
-import { DEFAULT_RESOLUTION, viewResolution } from './adaptiveResolution'
+import { DEFAULT_RESOLUTION, deviationFloored, viewResolution } from './adaptiveResolution'
 import { selectFineFaces, type BodySamples } from './faceCulling'
 import type { ViewportResolution } from './viewportTypes'
 
@@ -74,6 +74,7 @@ export function createResolutionTracker(deps: ResolutionTrackerDeps): Resolution
   let lastFocusComputeGeneration = -1
   let faceCullingEnabled = true
   let lastAppliedFocus: Focus | null = null
+  let lastAppliedFloored = false
 
   /**
    * カメラが意味のある幅で動いたか(位置・姿勢・正投影の倍率)。
@@ -183,16 +184,20 @@ export function createResolutionTracker(deps: ResolutionTrackerDeps): Resolution
     const target = viewResolution(perPixel, diagonal)
     const ratio = target.deviation / appliedResolution.deviation
     const focusChanged = !focusEqual(focus, lastAppliedFocus)
+    // 下限に張り付いた・離れたことは偏差の比に出ない(張り付いた先の偏差が今の偏差の 1.25 倍以内に収まりうる)
+    const floored = deviationFloored(perPixel, diagonal)
     if (
       resolutionApplied &&
       ratio < RESOLUTION_CHANGE_RATIO &&
       ratio > 1 / RESOLUTION_CHANGE_RATIO &&
-      !focusChanged
+      !focusChanged &&
+      floored === lastAppliedFloored
     ) {
       return
     }
     resolutionApplied = true
     lastAppliedFocus = focus
+    lastAppliedFloored = floored
     appliedResolution = { ...target, worldPerPixel: perPixel, sizeHint: diagonal, focus }
     onApplied()
     resolutionListener?.(appliedResolution)

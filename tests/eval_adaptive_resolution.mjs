@@ -13,14 +13,14 @@
  * Pythonの `json` が書く `NaN` を `JSON.parse` は受け取らない。
  *
  * 出力は入力と同じ並びの
- * `[deviation, angularDeflection, clampDeviation(w, s), angularForDeviation(w)]`。
- * **3つの公開関数すべてを通す**(`viewResolution` だけだと、寄り道の2つが式を変えても分からない)。
+ * `[deviation, angularDeflection, clampDeviation(w, s), angularForDeviation(w), deviationFloored(w, s)]`。
+ * **公開関数すべてを通す**(`viewResolution` だけだと、寄り道の関数が式を変えても分からない)。
  *
  * Node は `.ts` をそのまま読める(型注釈の除去。Node 23.6以降は既定で有効。v24で実測)。
  * 読めない場合は呼び出し側の検査が**理由を添えて落ちる**(skipしない —— skipは無人実行では
  * 緑と区別が付かない)。
  */
-import { angularForDeviation, clampDeviation, viewResolution } from '../web/src/adaptiveResolution.ts'
+import { angularForDeviation, clampDeviation, deviationFloored, viewResolution } from '../web/src/adaptiveResolution.ts'
 
 const chunks = []
 for await (const chunk of process.stdin) chunks.push(chunk)
@@ -38,6 +38,7 @@ const results = cases.map(([rawPerPixel, rawSize]) => {
     resolution.angularDeflection,
     clampDeviation(perPixel, size),
     angularForDeviation(perPixel),
+    deviationFloored(perPixel, size),
   ]
 })
 
