@@ -11,20 +11,33 @@ const decoder = new TextDecoder()
 
 /**
  * フレームを配りものに戻す。数の並びは型付き配列の**写し**にする(フレームの `ArrayBuffer` のビューのままだと、
- * 省かれて使い回される面が1つでも残る限り、そのフレーム全体(初回は 6 MB)を手放せない)。
+ * 省かれて使い回される面が1つでも残る限り、そのフレーム全体を手放せない)。
+ *
+ * `JSON.parse` の reviver は使わない: 全部の値(面の重心・法線の数まで)で呼ばれ、PC ケースの初回(2.8 MB)で
+ * 21 ms かかった。読んでから物と配列だけを辿って置き換えると 5.5 ms(実測。写しを含む)。
  */
 export function decodeFrame(buffer: ArrayBuffer): unknown {
   const headerLength = new DataView(buffer).getUint32(0, true)
   const base = 4 + headerLength
-  const header = decoder.decode(new Uint8Array(buffer, 4, headerLength))
-  return JSON.parse(header, (_key, value) => {
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) return value
-    const f32 = (value as { $f32?: [number, number] }).$f32
-    if (f32 !== undefined) return new Float32Array(buffer.slice(base + f32[0], base + f32[0] + f32[1] * 4))
-    const u32 = (value as { $u32?: [number, number] }).$u32
-    if (u32 !== undefined) return new Uint32Array(buffer.slice(base + u32[0], base + u32[0] + u32[1] * 4))
-    return value
-  })
+  const root: unknown = JSON.parse(decoder.decode(new Uint8Array(buffer, 4, headerLength)))
+  const bytes = (marker: [number, number]) => buffer.slice(base + marker[0], base + marker[0] + marker[1] * 4)
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      if (value.length > 0 && typeof value[0] === 'object') for (const item of value) visit(item)
+      return
+    }
+    if (value === null || typeof value !== 'object') return
+    const record = value as Record<string, unknown>
+    for (const key in record) {
+      const item = record[key] as { $f32?: [number, number]; $u32?: [number, number] } | null
+      if (item === null || typeof item !== 'object') continue
+      if (item.$f32 !== undefined) record[key] = new Float32Array(bytes(item.$f32))
+      else if (item.$u32 !== undefined) record[key] = new Uint32Array(bytes(item.$u32))
+      else visit(item)
+    }
+  }
+  visit(root)
+  return root
 }
 
 /** 省かれて届いた面(前回このボディで受け取った同じ `serial` の面を使う)。 */

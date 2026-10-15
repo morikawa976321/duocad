@@ -57,12 +57,24 @@ function installBench() {
     if (!(data instanceof ArrayBuffer)) return JSON.parse(String(data))
     const length = new DataView(data).getUint32(0, true)
     const base = 4 + length
-    return JSON.parse(new TextDecoder().decode(new Uint8Array(data, 4, length)), (_key, value) => {
-      if (value === null || typeof value !== 'object' || Array.isArray(value)) return value
-      if (value.$f32) return new Float32Array(data.slice(base + value.$f32[0], base + value.$f32[0] + value.$f32[1] * 4))
-      if (value.$u32) return new Uint32Array(data.slice(base + value.$u32[0], base + value.$u32[0] + value.$u32[1] * 4))
-      return value
-    })
+    const root = JSON.parse(new TextDecoder().decode(new Uint8Array(data, 4, length)))
+    const bytes = (m) => data.slice(base + m[0], base + m[0] + m[1] * 4)
+    const visit = (value) => {
+      if (Array.isArray(value)) {
+        if (value.length > 0 && typeof value[0] === 'object') for (const item of value) visit(item)
+        return
+      }
+      if (value === null || typeof value !== 'object') return
+      for (const key in value) {
+        const item = value[key]
+        if (item === null || typeof item !== 'object') continue
+        if (item.$f32 !== undefined) value[key] = new Float32Array(bytes(item.$f32))
+        else if (item.$u32 !== undefined) value[key] = new Uint32Array(bytes(item.$u32))
+        else visit(item)
+      }
+    }
+    visit(root)
+    return root
   }
   const send = WebSocket.prototype.send
   WebSocket.prototype.send = function (data) {
