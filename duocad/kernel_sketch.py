@@ -17,6 +17,7 @@ from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import (
+    BRepBuilderAPI_Copy,
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakeWire,
@@ -95,6 +96,16 @@ def offset_plane_frame(frame: dict, distance: float) -> dict:
         "v": [float(value) for value in frame["v"]],
         "normal": [float(value) for value in normal],
     }
+
+
+def copy_face(face: Any) -> Any:
+    """領域の面の写し(形も三角形分割も元と共有しない)。
+
+    `region` は検出結果を入力の署名で共有する(`region._DETECTED`)。面は三角形分割を自分に持ち(`kernel.tessellate` が
+    張り替える)、押し出したソリッドの底面にもそのまま入るので、共有した面を外へ渡すと、別の粗さの分割が混ざる・
+    同じ領域を2回押し出した2つのボディが同じ面を共有してブーリアンの結果が変わる。外へ渡すのは必ずこの写し。
+    """
+    return TopoDS.Face_s(BRepBuilderAPI_Copy(face, True, False).Shape())
 
 
 def sketch_regions(

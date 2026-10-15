@@ -1391,6 +1391,8 @@ export function createViewport(container: HTMLElement): Viewport {
   )
 
   interface SketchScene {
+    /** 作ったときの鍵(`sketchBuildKey`)。同じ鍵の指示が来たら作り直さず、選択の印だけ付け直す。 */
+    builtKey: string
     frame: SketchDraw['frame']
     plane: SketchDraw['plane']
     /** シーンに足したもの(除去と破棄のため。ピック用の配列は別に持つ)。 */
@@ -1452,14 +1454,54 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 控えた指示で描き直す(`resolutionTracker` が解像度を採り直したときに呼ぶ)。中身が無ければ何もしない。 */
   function redrawSketches(): void {
-    if (lastSketchDraws.length > 0) showSketches(lastSketchDraws)
+    if (lastSketchDraws.length > 0) showSketches(lastSketchDraws, true)
   }
 
-  function showSketches(entries: SketchDraw[]): void {
+  /**
+   * スケッチを作り直すかの鍵: コアの版(描くものが変わると上がる)と、点・辺の取っ手を出しているか(編集中だけ出す)。
+   * 選択はここに入れない(作り直さずに `restyleSketch` で塗り直す)。
+   */
+  function sketchBuildKey(entry: SketchDraw): string {
+    return `${entry.revision}|${entry.handles.length > 0 ? 'edit' : ''}`
+  }
+
+  /** 作り直さずに選択の印(`userData.selected` と点の見え方)だけを付け直す。材質は呼び手が塗る。 */
+  function restyleSketch(scene: SketchScene, entry: SketchDraw): void {
+    const selected = new Set(entry.selectedRegions)
+    for (const mesh of scene.regionMeshes) mesh.userData.selected = selected.has(mesh.userData.regionIndex as number)
+    const pickedWhole = new Set(entry.selectedHandles.filter((item) => item.point === null).map((item) => item.entityId))
+    const pickedPoints = new Set(
+      entry.selectedHandles.filter((item) => item.point !== null).map((item) => `${item.entityId}|${item.point}`),
+    )
+    for (const line of scene.handleLines) line.userData.selected = pickedWhole.has(line.userData.entityId as string)
+    for (const mesh of scene.handleMeshes) {
+      const entityId = mesh.userData.entityId as string
+      mesh.userData.selected = pickedWhole.has(entityId) || pickedPoints.has(`${entityId}|${mesh.userData.point as string}`)
+    }
+  }
+
+  /** 実機検査の数え上げ(`sketchRebuilds`): スケッチを作り直した回数。選択だけの配信で増えないことを見る。 */
+  let sketchRebuildCount = 0
+
+  /** `force` は版が同じでも作り直す(画面の粗さが変わって折り直すとき)。 */
+  function showSketches(entries: SketchDraw[], force = false): void {
     lastSketchDraws = entries
     const keep = new Set(entries.map((entry) => entry.sketchId))
-    for (const sketchId of [...sketches.keys()]) if (!keep.has(sketchId)) clearSketch(sketchId)
+    // 消した・隠したスケッチも変化に数える(ホバーの印・内容の大きさ・視錐台を引き直す)。
+    let rebuilt = false
+    for (const sketchId of [...sketches.keys()]) {
+      if (keep.has(sketchId)) continue
+      clearSketch(sketchId)
+      rebuilt = true
+    }
     for (const entry of entries) {
+      const existing = sketches.get(entry.sketchId)
+      if (!force && existing !== undefined && existing.builtKey === sketchBuildKey(entry)) {
+        restyleSketch(existing, entry)
+        continue
+      }
+      rebuilt = true
+      sketchRebuildCount += 1
       clearSketch(entry.sketchId)
       const batch = createBatch(sketchRoot)
       const regionMeshes: THREE.Mesh[] = []
@@ -1549,6 +1591,7 @@ export function createViewport(container: HTMLElement): Viewport {
         }
       }
       sketches.set(entry.sketchId, {
+        builtKey: sketchBuildKey(entry),
         frame: entry.frame,
         plane: entry.plane,
         batch,
@@ -1560,6 +1603,11 @@ export function createViewport(container: HTMLElement): Viewport {
         handles: entry.handles,
         intersections: sketchIntersections(entry.handles),
       })
+    }
+    if (!rebuilt) {
+      applyRegionMaterials()
+      applySketchHoverMaterials()
+      return
     }
     invalidateHover() // 領域のメッシュを作り直したので印を捨てる
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
@@ -2517,6 +2565,7 @@ export function createViewport(container: HTMLElement): Viewport {
     showVertices: vertexMarkers.show,
     showMeasurement: measureAnnotation.show,
     measurementInfo: measureAnnotation.info,
+    sketchRebuilds: () => sketchRebuildCount,
     highlightColors() {
       return { ...highlightColor }
     },

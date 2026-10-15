@@ -14,6 +14,9 @@
 """
 from __future__ import annotations
 
+import json
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
@@ -75,7 +78,7 @@ def regions(doc: Document, sketch_id: SketchId) -> List[Region]:
     """
     return [
         Region(index=item["index"], area=item["area"], centroid=tuple(item["centroid"]))
-        for item in _regions_detailed(doc, sketch_id)
+        for item in _detected(doc, sketch_id)
     ]
 
 
@@ -195,18 +198,50 @@ def regions_with_geometry(doc: Document, sketch_id: SketchId, deviation: float) 
     return out
 
 
+#: 領域検出(`kernel_sketch.sketch_regions`)の結果を、入力そのもの(姿勢と展開した図形)の署名で引く表。
+#: 検出は `BRepAlgoAPI_Splitter` で、長方形 150 個(線 600 本)のスケッチで 1 回 39 ms(初回 200 ms)かかり、
+#: 選択の範囲検査(`selection.select_region` は参照 1 件ごと)・配信・押し出しが同じスケッチに何度も呼ぶ。
+#: 署名(`json.dumps`)は同じスケッチで 0.2 ms。入力が同じなら結果も同じ(決定的)なので、文書をまたいで共有してよい。
+#: 中の `face` は不変の形(差し替えはあっても書き換えは無い。`duocad.speculative` の docstring)。
+_DETECTED: "OrderedDict[str, List[dict]]" = OrderedDict()
+#: 表に残す件数。超えたら古いものから捨てる(編集中は図形を足すたびに署名が変わるので、寿命の管理が要る)。
+_DETECTED_LIMIT = 32
+#: アプリ内AI・形状最適化のスレッドからも読まれうるので、表の出し入れだけを直列にする。
+_DETECTED_LOCK = threading.Lock()
+
+
 def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
-    """`kernel_sketch.sketch_regions` の結果をそのまま返す(面つき。`verbs/extrude.py` が使う)。
+    """`kernel_sketch.sketch_regions` の結果を返す(面つき。`verbs/extrude.py` が使う)。同じ入力なら検出し直さない(`_DETECTED`)。
 
     **verb層と共有する内部API**。`regions()`(公開API)は面を落として `Region` だけを返す
     (押し出しには `TopoDS_Face` が要るが、選択集合や操作ログへ出てよいのは添字と面積だけ)。
+    返すリスト・辞書・重心・面は呼ぶたびに新しい(面は写し。理由は `kernel_sketch.copy_face`)。
     """
+    return [
+        dict(item, centroid=list(item["centroid"]), face=kernel_sketch.copy_face(item["face"]))
+        for item in _detected(doc, sketch_id)
+    ]
+
+
+def _detected(doc: Document, sketch_id: SketchId) -> List[dict]:
+    """表(`_DETECTED`)が持つ検出結果そのもの。**面を外へ出さない**呼び手(添字・面積・重心だけを読む)専用。"""
     sketch = get_sketch(doc, sketch_id)
     if not sketch.entities:
         return []
     entities = expanded_entities(doc, sketch_id)
     if not entities:
         return []
-    # 面に貼ったスケッチでも `TopoDS_Face` は渡さない。使うのは無限平面としての姿勢だけで、
-    # それは `plane["frame"]` が持つ(`plane_frame` のdocstring)。
-    return kernel_sketch.sketch_regions(sketch.plane, entities)
+    signature = json.dumps([sketch.plane, entities], sort_keys=True, default=str)
+    with _DETECTED_LOCK:
+        cached = _DETECTED.get(signature)
+        if cached is not None:
+            _DETECTED.move_to_end(signature)
+    if cached is None:
+        # 面に貼ったスケッチでも `TopoDS_Face` は渡さない。使うのは無限平面としての姿勢だけで、
+        # それは `plane["frame"]` が持つ(`plane_frame` のdocstring)。
+        cached = kernel_sketch.sketch_regions(sketch.plane, entities)
+        with _DETECTED_LOCK:
+            _DETECTED[signature] = cached
+            while len(_DETECTED) > _DETECTED_LIMIT:
+                _DETECTED.popitem(last=False)
+    return cached

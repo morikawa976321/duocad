@@ -203,6 +203,7 @@ export function installTestHooks(ctx: TestHookContext): void {
       wantedVertices: ctx.wantedVertices(),
       measurementInfo: () => viewport()?.measurementInfo() ?? null,
       highlightColors: () => viewport()?.highlightColors() ?? null,
+      sketchRebuilds: () => viewport()?.sketchRebuilds() ?? 0,
       // ホバー強調で今明るくしているもの(明度しか変えないので highlightColors では読めない)。
       hoveredRef: () => viewport()?.hoveredRef() ?? null,
       projectVertex: (bodyId: string, vertexIndex: number) =>

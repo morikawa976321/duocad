@@ -16,6 +16,7 @@ export function buildSketchDraws(
     .filter((item) => item.frame !== null && (item.visible || item.sketch_id === editingId))
     .map((item) => ({
       sketchId: item.sketch_id,
+      revision: item.revision,
       frame: item.frame as NonNullable<typeof item.frame>,
       // `offset` も `base` 扱い(`SketchPlaneRef` 参照)。離れた位置には実物の境界が無く、
       // 面の実寸で絞る `faceUvBoxOnly` の対象にできない。

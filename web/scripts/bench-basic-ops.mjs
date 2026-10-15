@@ -618,7 +618,8 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
       const at = await sketchPointAt(page, (k % 15) * 12 + 5, Math.floor(k / 15) * 12 + 5)
       if (!at) break
       const epoch = await page.evaluate(() => window.__duocad.stateEpoch)
-      await measure(
+      const rebuildsBefore = await page.evaluate(() => window.__duocad.sketchRebuilds?.() ?? null)
+      const row = await measure(
         page,
         'C',
         `領域を選ぶ(クリック→選択が返る→1フレーム) #${k + 1}`,
@@ -626,6 +627,11 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
         (n) => window.__duocad.stateEpoch > n && (window.__duocad.selection?.count ?? 0) > 0,
         { args: [epoch] },
       )
+      const rebuildsAfter = await page.evaluate(() => window.__duocad.sketchRebuilds?.() ?? null)
+      if (rebuildsBefore !== null && rebuildsAfter !== null) {
+        row.sketch_rebuilds = rebuildsAfter - rebuildsBefore
+        console.log(`      スケッチの作り直し: ${row.sketch_rebuilds} 回`)
+      }
     }
     await ctx.mcp.callTool('clear_selection')
     await page.waitForFunction(() => (window.__duocad.selection?.count ?? 0) === 0, { timeout: 30000, polling: 'raf' })

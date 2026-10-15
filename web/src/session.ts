@@ -183,6 +183,8 @@ export interface SketchState {
   /** 反復(間隔・個数)。 */
   patterns: SketchPattern[]
   regions: SketchRegion[]
+  /** 描くもの(枠・図形・領域・取っ手)が変わったら上がる版(`DocumentView._sketch_state`)。選択・表示・名前では上がらない。 */
+  revision: number
 }
 
 /**

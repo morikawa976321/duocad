@@ -20,7 +20,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from duocad import kernel  # noqa: E402
+from duocad import kernel, kernel_sketch  # noqa: E402
 from duocad.session import Session  # noqa: E402
 
 PC_CASE = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_20251122.step")
@@ -147,6 +147,16 @@ def bench_sketch_heavy(models_dir: Path, n_rect: int = 150) -> None:
     timed("B modify_selection(領域1) 単体", lambda: s.modify_selection(add=[{"sketch": sid, "index": 1}]), repeat=5)
     timed("B 選択変更の直後の state_meta()", lambda: (s.modify_selection(add=[{"sketch": sid, "index": 2}]), s.state_meta()), repeat=5)
     timed("B 連続2回目の state_meta()", lambda: s.state_meta(), repeat=5)
+    detections: list = []
+    real_detect = kernel_sketch.sketch_regions
+    kernel_sketch.sketch_regions = lambda *a, **k: detections.append(1) or real_detect(*a, **k)
+    try:
+        for index in range(3, 8):
+            s.modify_selection(add=[{"sketch": sid, "index": index}])
+            s.state_meta()
+    finally:
+        kernel_sketch.sketch_regions = real_detect
+    record("B 領域検出の回数(領域クリック5回+各回の配信)", float(len(detections)))
     s.clear_selection()
     n_sel = min(n_rect, 60)
     s.modify_selection(add=[{"sketch": sid, "index": i} for i in range(1, n_sel + 1)])
