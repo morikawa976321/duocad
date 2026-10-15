@@ -602,8 +602,11 @@ class Server:
         finally:
             # 1接続は直列に捌くので、`done` が届いた時点でそれより前に送った分も済んでいる(画面は「この番号以下」を消す)。
             ack_id = message.get("ack_id")
-            if ack_id is not None:
-                await _send(connection, {"type": "done", "ack_id": ack_id})
+            try:
+                if ack_id is not None:
+                    await _send(connection, {"type": "done", "ack_id": ack_id})
+            finally:
+                await self._settle_autosave(connection)
 
     def _apply(self, call: Any, *args: Any, **kwargs: Any) -> dict:
         """WebSocket経由の変更を実行する。この間だけ `_dispatching` を立てる。
@@ -612,9 +615,26 @@ class Server:
         """
         self._dispatching += 1
         try:
-            return call(*args, **kwargs)
+            # verb の自動保存は中身だけ確定し、書き込みは配った後に待つ(`_settle_autosave`。issue #173)。
+            with self.session.background_autosave():
+                return call(*args, **kwargs)
         finally:
             self._dispatching -= 1
+
+    async def _settle_autosave(self, connection: Any) -> None:
+        """書き手スレッドへ回した自動保存を待ち、保存の状態(`saved`)が変わったら配り直す(`_dispatch` の最後)。
+
+        変わるのは、書けなかったとき(警告も届く)と、前に書けなかった文書が書けたとき(配ったのは書く前の `saved=False`)。
+        待つのは応答・配信・`done` を送った後なので、画面の待ちには乗らない。同じ接続の次の要求は書き終えてから捌く。
+        """
+        future = self.session.pending_write
+        if future is None:
+            return
+        await asyncio.wait([asyncio.wrap_future(future)])
+        saved = self.session.saved
+        self.session.settle_autosave()
+        if self.session.saved != saved:
+            await self._push(connection, applied=None)
 
     # ------------------------------------------------------------------ G: アプリ内AIエージェント
     def _ai_status(self) -> dict:
