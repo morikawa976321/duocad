@@ -84,6 +84,7 @@ def test_the_conversion_formula_matches_between_python_and_typescript() -> None:
             angular,
             resolution.clamp_deviation(per_pixel, size),
             resolution.angular_for_deviation(per_pixel),
+            resolution.deviation_floored(per_pixel, size),
         ]
         if python_values != ts_values:
             mismatched.append((raw_per_pixel, raw_size, python_values, ts_values))

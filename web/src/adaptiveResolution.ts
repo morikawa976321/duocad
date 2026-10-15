@@ -87,13 +87,36 @@ export function angularForDeviation(deviation: number): number {
   )
 }
 
+/** 目標偏差を丸める段の細かさ(1オクターブあたりの段数。`duocad/resolution.py` の同名の定数と同じ)。 */
+export const DEVIATION_STEPS_PER_OCTAVE = 4
+
+/**
+ * 目標偏差を `2 ** (k / DEVIATION_STEPS_PER_OCTAVE)` の段へ細かい側に切り捨てる。理由は `duocad/resolution.py` の
+ * `quantize_deviation`(画素の長さの最後の桁の揺れでサーバの面の三角形のキャッシュが外れ続けていた)。
+ */
+export function quantizeDeviation(deviation: number): number {
+  if (!Number.isFinite(deviation) || deviation <= 0) return deviation
+  return 2 ** (Math.floor(Math.log2(deviation) * DEVIATION_STEPS_PER_OCTAVE) / DEVIATION_STEPS_PER_OCTAVE)
+}
+
+/**
+ * 目標偏差が画素から決まらず、下限(`clampDeviation`)まで引き上げられているか(`duocad/resolution.py` の
+ * `deviation_floored`)。サーバはこの間だけ細かい面の組を1回で測る(別々に測った面の境目の隙間が画素より大きくなる)ので、
+ * 画面は偏差が変わらなくてもこれが変われば知らせる(`resolutionTracker.ts`)。
+ */
+export function deviationFloored(worldPerPixel: number, sizeHint = 0): boolean {
+  if (!Number.isFinite(worldPerPixel) || worldPerPixel <= 0) return false
+  const wanted = quantizeDeviation(TOLERANCE_PIXELS * worldPerPixel)
+  return clampDeviation(wanted, sizeHint) > wanted
+}
+
 /**
  * **変換式の唯一の入口**。`worldPerPixel` は画面1画素ぶんの世界長さ[mm](注視点の面)。
- * 非有限・0以下なら既定値の組を返す。
+ * 非有限・0以下なら既定値の組を返す。目標偏差は段に丸めてから上下限を掛ける(`quantizeDeviation`)。
  */
 export function viewResolution(worldPerPixel: number, sizeHint = 0): ViewResolution {
   if (!Number.isFinite(worldPerPixel) || worldPerPixel <= 0) return DEFAULT_RESOLUTION
-  const deviation = clampDeviation(TOLERANCE_PIXELS * worldPerPixel, sizeHint)
+  const deviation = clampDeviation(quantizeDeviation(TOLERANCE_PIXELS * worldPerPixel), sizeHint)
   return { deviation, angularDeflection: angularForDeviation(deviation) }
 }
 

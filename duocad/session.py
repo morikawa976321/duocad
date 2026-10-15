@@ -709,6 +709,8 @@ class Session:
         angular = self.view.view_angular_deflection
         function = entry_for(verb)
 
+        measured: list = []  # (ボディ, 形, 三角形) — 確定後の配信で使い回す(`adopt`)
+
         def run() -> dict:
             function(twin, **values)
             bodies_out: list[dict] = []
@@ -717,16 +719,24 @@ class Session:
                     continue
                 if copies.get(id(body.shape)) is body.shape:
                     continue  # 形が変わっていないBodyは送らない(`preview` と同じ)
+                geometry = kernel.tessellate(body.shape, deviation, angular)
+                measured.append((body.id, body.shape, geometry))
                 bodies_out.append({
                     "body_id": body.id,
                     "name": body.name,
                     "face_count": kernel.face_count(body.shape),
                     "volume": query.volume(body.shape),
-                    "geometry": kernel.tessellate(body.shape, deviation, angular),
+                    "geometry": geometry,
                 })
             return {"verb": verb, "bodies": bodies_out}
 
-        return PreviewJob(run, lambda: kernel.adopt_results(pairs))
+        def adopt() -> None:
+            kernel.adopt_results(pairs)
+            # 確定は覚えた結果の形そのものを使う(`kernel.remembered`)ので、その形の三角形として覚えさせる
+            for body_id, shape, geometry in measured:
+                self.view.seed_faces(body_id, shape, deviation, angular, geometry)
+
+        return PreviewJob(run, adopt)
 
     @_edits_document
     def undo(self) -> dict:
