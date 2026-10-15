@@ -107,6 +107,10 @@ class DocumentView:
         self._revision_counter: dict = {}  # body_id -> 現在の版(int)
         # sketch_id -> (署名, 領域つきペイロード)。領域の計算が重いので内容で引く(C)
         self._sketch_cache: dict = {}
+        #: sketch_id -> (描くものの指紋, 版)。版は画面がスケッチを作り直すかの印(`_sketch_state` の `revision`)。
+        #: 番号は文書をまたいで単調に増やす(`reset()` で数え直すと、別の文書の同じ id・同じ番号のスケッチを描き直さない)。
+        self._sketch_revisions: dict = {}
+        self._sketch_revision_seq = 0
         # 5つとも body_id -> (source, key, result)(`_memo`)。source は shape か mesh、key は
         # geometry が `body_recipe`、edges が (偏差, 角度偏差)、他は None
         self._geometry_cache: dict = {}    # tessellate結果
@@ -270,6 +274,7 @@ class DocumentView:
         self._vertex_cache.clear()
         self._volume_cache.clear()
         self._sketch_cache.clear()
+        self._sketch_revisions.clear()
         self._optimize_cache.clear()
         self._revision_state.clear()
         # **どの面を細かく測るかも捨てる**。面の添字は文書が変われば別のものを指す。
@@ -329,7 +334,8 @@ class DocumentView:
              "entities": [{"entity_id","kind","params","refs"}],   # 打ち直し用(名前つき)
              "patterns": [{"pattern_id","kind","sources","params","refs","options"}],  # 反復の打ち直し用
              "drawn":    [{"kind","params"}],                      # 反復を展開した描画用
-             "regions":  [{"index","area","centroid","positions","indices"}]}
+             "regions":  [{"index","area","centroid","positions","indices"}],
+             "revision": int}                                          # 描くものが変わったら上がる版
 
         `entities` は**指せるもの**(点・辺の選択と `move_sketch_entities` の対象)、`drawn` は反復を展開した
         「実際に見えるもの」。描画は `drawn`、ピックは `entities`(複製は導出物なので指せない)。
@@ -342,6 +348,8 @@ class DocumentView:
         alive = {item.id for item in self.document.sketches}
         for sketch_id in [key for key in self._sketch_cache if key not in alive]:
             self._sketch_cache.pop(sketch_id, None)
+        for sketch_id in [key for key in self._sketch_revisions if key not in alive]:
+            self._sketch_revisions.pop(sketch_id, None)
         return [self._sketch_state(item) for item in self.document.sketches]
 
     def _sketch_state(self, item) -> dict:
@@ -422,6 +430,15 @@ class DocumentView:
                 f"スケッチ {item.id} の反復を読めない: {type(error).__name__}: {error}"
             )
             payload["patterns"] = []
+        # 版: 画面が描くもの(枠・展開した図形・領域 = 署名、点と辺の取っ手 = `entities`)が変わったときだけ上がる。
+        # 選択・表示・名前では上がらない(画面は版が同じスケッチを作り直さず、選択の色だけ塗り直す)。
+        fingerprint = (signature, json.dumps(payload["entities"], sort_keys=True, default=str))
+        known = self._sketch_revisions.get(item.id)
+        if known is None or known[0] != fingerprint:
+            self._sketch_revision_seq += 1
+            known = (fingerprint, self._sketch_revision_seq)
+            self._sketch_revisions[item.id] = known
+        payload["revision"] = known[1]
         return payload
 
     # ---------------------------------------------------------------- M3.5: 差分送信

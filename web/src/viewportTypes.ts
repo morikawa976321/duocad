@@ -314,6 +314,8 @@ export type SketchPlaneRef = { kind: 'base' } | ({ kind: 'face' } & FaceRef)
 /** 1枚のスケッチの描画指示(three.js の型は出さない)。 */
 export interface SketchDraw {
   sketchId: string
+  /** コアのスケッチの版(`SketchState.revision`)。同じ版なら作り直さない(選択の色だけ塗り直す)。 */
+  revision: number
   /** `p = origin + u*uAxis + v*vAxis`(コアが配る枠。session.ts の `SketchFrame`)。 */
   frame: { origin: number[]; u: number[]; v: number[]; normal: number[] }
   /** 貼った平面(基準面か、既存ソリッドの面か)。 */
@@ -497,6 +499,8 @@ export interface Viewport {
   measurementInfo(): MeasurementVisual | null
   /** 今そのハイライトに使っている色(16進)。出していない種別は null。実機検査フック専用。 */
   highlightColors(): { face: number | null; edge: number | null; vertex: number | null }
+  /** スケッチを作り直した回数の累計(実機検査・物差し用。選択だけが変わった配信では増えない)。 */
+  sketchRebuilds(): number
   /**
    * 指した面がいま実際に塗られている色(16進。無ければ null)。実機検査フック専用。
    * 形状最適化の役割色は、選択の色しか見ない `highlightColors` では確かめられない。

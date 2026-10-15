@@ -604,12 +604,17 @@ export function sketchIntersections(
   handles: ReadonlyArray<{ entityId: string; kind: string; params: Record<string, number> }>,
 ): Array<{ u: number; v: number; entityIds: readonly [string, string] }> {
   const points: Array<{ u: number; v: number; entityIds: readonly [string, string] }> = []
+  // 図形ごとの区間と外接矩形を先に1回だけ作り、外接矩形が離れている組は解かない(長方形 150 個で全組 11,175)。
+  const prepared = handles.map((handle) => {
+    const curves = entityIntersectables(handle.kind, handle.params)
+    return { curves, box: curvesBox(curves) }
+  })
   for (let i = 0; i < handles.length; i += 1) {
-    const curvesA = entityIntersectables(handles[i].kind, handles[i].params)
+    const { curves: curvesA, box: boxA } = prepared[i]
     if (curvesA.length === 0) continue
     for (let j = i + 1; j < handles.length; j += 1) {
-      const curvesB = entityIntersectables(handles[j].kind, handles[j].params)
-      if (curvesB.length === 0) continue
+      const { curves: curvesB, box: boxB } = prepared[j]
+      if (curvesB.length === 0 || !boxesTouch(boxA, boxB)) continue
       for (const curveA of curvesA) {
         for (const curveB of curvesB) {
           for (const hit of curveIntersections(curveA, curveB)) {
@@ -620,6 +625,37 @@ export function sketchIntersections(
     }
   }
   return points
+}
+
+/** 区間の外接矩形 `[minU, minV, maxU, maxV]`(円・円弧は円全体)。 */
+function curvesBox(curves: readonly IntersectableCurve[]): [number, number, number, number] {
+  let minU = Infinity
+  let minV = Infinity
+  let maxU = -Infinity
+  let maxV = -Infinity
+  for (const curve of curves) {
+    if (curve.kind === 'segment') {
+      minU = Math.min(minU, curve.a[0], curve.b[0])
+      maxU = Math.max(maxU, curve.a[0], curve.b[0])
+      minV = Math.min(minV, curve.a[1], curve.b[1])
+      maxV = Math.max(maxV, curve.a[1], curve.b[1])
+    } else {
+      minU = Math.min(minU, curve.center[0] - curve.radius)
+      maxU = Math.max(maxU, curve.center[0] + curve.radius)
+      minV = Math.min(minV, curve.center[1] - curve.radius)
+      maxV = Math.max(maxV, curve.center[1] + curve.radius)
+    }
+  }
+  return [minU, minV, maxU, maxV]
+}
+
+/**
+ * 外接矩形が重なるか接するか。交点の式(`curveIntersections`)は区間の端を含み許容を持たないので、
+ * 丸め誤差で端がわずかに外れた接触を落とさないよう 1e-9 mm 広げて比べる。
+ */
+function boxesTouch(a: readonly number[], b: readonly number[]): boolean {
+  const slack = 1e-9
+  return a[0] <= b[2] + slack && b[0] <= a[2] + slack && a[1] <= b[3] + slack && b[1] <= a[3] + slack
 }
 
 /**
