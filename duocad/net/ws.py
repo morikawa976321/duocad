@@ -68,8 +68,11 @@ OCPを直接importしない(境界はkernel.pyだけ)。
 from __future__ import annotations
 
 import asyncio
+import collections
+import concurrent.futures
 import functools
 import json
+import re
 import threading
 from typing import Any, Optional  # Any: listeners / 接続
 
@@ -157,6 +160,75 @@ async def _send(connection: Any, payload: dict) -> None:
     await connection.send(json.dumps(payload, ensure_ascii=False))
 
 
+#: 接続ごとの受信待ち行列(`_Inbox`)で、まだ捌いていない古いものを新しいもので置き換える要求。どちらも最新だけが意味を持つ:
+#: プレビューは半径を打ち直すたびに来て大きな部品で1回1秒かかり、解像度はカメラを止めるたびに来て 27 部品を測り直す
+#: (issue #168)。古い方の `ack_id` は捨ててよい(画面は `done` の番号「以下」をまとめて消す。新しい方の番号が大きい。`_Acks`)。
+COALESCED_COMMANDS = frozenset({"preview", "set_view_resolution"})
+
+#: 下りの先頭の `"cmd"`(画面の `session.ts` は `cmd` を先頭に書く)。集約の判定だけに使い、読めなければ集約しない。
+_COMMAND_PREFIX = re.compile(r'\{\s*"cmd"\s*:\s*"([a-z_]+)"')
+
+
+class _Acks:
+    """1接続の `done`(`ack_id` の済み)。画面は届いた番号「以下」の待ちをまとめて消すので、その番号より前に始めた要求が
+    全部済むまで出さない(ワーカーで計算するプレビューは、後から来た要求より後に済む)。集約で捨てた要求は始めていないので数えない。
+    """
+
+    def __init__(self) -> None:
+        self._open: set = set()
+        self._finished: set = set()
+
+    def start(self, ack_id: Any) -> None:
+        self._open.add(ack_id)
+
+    def finish(self, ack_id: Any) -> Optional[Any]:
+        """`ack_id` を済みにし、いま送ってよい `done` の番号(前が全部済んだ中で最大のもの。無ければ None)を返す。"""
+        self._finished.add(ack_id)
+        ready = None
+        while self._open:
+            smallest = min(self._open)
+            if smallest not in self._finished:
+                break
+            self._open.discard(smallest)
+            self._finished.discard(smallest)
+            ready = smallest
+        return ready
+
+
+class _Inbox:
+    """1接続の受信待ち行列。届いた順に捌くが、`COALESCED_COMMANDS` は未着手の同じ名前の要求を新しい方で置き換える。
+
+    受信(`Server._receive`)と処理(`Server.handle` のループ)を分けるのは、処理が塞がっている間に届いた要求を見渡すため。
+    順序は変えない(置き換えは古い方を抜くだけ)。
+    """
+
+    def __init__(self) -> None:
+        self._items: collections.deque = collections.deque()
+        self._ready = asyncio.Event()
+        self._closed = False
+
+    def put(self, raw: Any) -> None:
+        match = _COMMAND_PREFIX.match(raw) if isinstance(raw, str) else None
+        command = match.group(1) if match else None
+        if command in COALESCED_COMMANDS:
+            self._items = collections.deque(item for item in self._items if item[0] != command)
+        self._items.append((command, raw))
+        self._ready.set()
+
+    def close(self) -> None:
+        self._closed = True
+        self._ready.set()
+
+    async def get(self) -> Optional[Any]:
+        """次の要求。閉じていて残りが無ければ None。"""
+        while not self._items:
+            if self._closed:
+                return None
+            self._ready.clear()
+            await self._ready.wait()
+        return self._items.popleft()[1]
+
+
 class Server:
     """WebSocketの接続集合とコマンドの実行。状態変更は全接続へ配信する。
 
@@ -206,6 +278,11 @@ class Server:
         #: ウォームアップを始めた会話と、その終わりを待つための印(`_ai_prepare`)。
         self._ai_prepared_loop: Optional[AgentLoop] = None
         self._ai_prepare_done: Optional[threading.Event] = None
+        #: プレビューを計算するワーカー(1本。`_start_preview`)と、接続ごとの最新のプレビューの番号・計算(新しいものが来たら古い方の結果は送らない)。
+        self._preview_worker: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._preview_seq: dict = {}  # connection -> int
+        self._preview_futures: dict = {}  # connection -> asyncio.Future
+        self._acks: dict = {}  # connection -> _Acks
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
         self._pending_ai_runs: set = set()
         # -------------------------------------------------- H: 形状最適化(重い=数十秒〜数分なので別スレッドで回す。走行中・中断の旗は `Session` が持つ)
@@ -293,13 +370,33 @@ class Server:
                         "message": f"{type(error).__name__}: {error}",
                     },
                 )
-            async for raw in connection:
-                await self._dispatch(connection, raw)
+            inbox = _Inbox()
+            receiver = asyncio.ensure_future(self._receive(connection, inbox))
+            try:
+                while (raw := await inbox.get()) is not None:
+                    await self._dispatch(connection, raw)
+            finally:
+                receiver.cancel()
         finally:
             self.clients.discard(connection)
             self._known_revisions.pop(connection, None)
             self._send_locks.pop(connection, None)
+            self._preview_seq.pop(connection, None)
+            self._acks.pop(connection, None)
+            pending = self._preview_futures.pop(connection, None)
+            if pending is not None:
+                pending.cancel()
             self._on_disconnect(connection)
+
+    async def _receive(self, connection: Any, inbox: "_Inbox") -> None:
+        """届いた要求を待ち行列へ積む(処理は `handle` のループ。塞がっている間に届いた古い要求を置き換えられるように分ける)。"""
+        try:
+            async for raw in connection:
+                inbox.put(raw)
+        except Exception:  # noqa: BLE001  切断(ConnectionClosedError など)。残りを捌いてから閉じる
+            pass
+        finally:
+            inbox.close()
 
     def _on_disconnect(self, connection: Any) -> None:
         """1接続が切れた後の後始末(`handle()` の `finally` から呼ぶ)。
@@ -327,6 +424,10 @@ class Server:
         except (TypeError, ValueError) as error:
             await _send(connection, {"type": "error", "where": "parse", "message": str(error)})
             return
+        # 応答をこの要求の処理の外で送るもの(ワーカーで計算するプレビュー)は、`done` もその応答の後に送る。
+        ack_later = False
+        if message.get("ack_id") is not None:
+            self._acks.setdefault(connection, _Acks()).start(message.get("ack_id"))
 
         try:
             if command not in WS_COMMAND_NAMES:
@@ -516,15 +617,21 @@ class Server:
             # `_apply` で囲まない: プレビュー中の発火は `Session._suppress_events` が止めており、ここで `_dispatching` まで立てると、
             # 計算中(押し出しなら約1秒)にMCPから届いた本物の変更まで誤判定で捨てる。
             elif command == "preview":
-                result = self.session.preview(message["verb"], message.get("args") or {})
-                await _send(
-                    connection,
-                    {
-                        "type": "preview",
-                        "preview_id": message.get("preview_id"),
-                        **result,
-                    },
-                )
+                seq = self._supersede_previews(connection)
+                job = self.session.preview_job(message["verb"], message.get("args") or {})
+                if job is None:
+                    result = self.session.preview(message["verb"], message.get("args") or {})
+                    await _send(
+                        connection,
+                        {
+                            "type": "preview",
+                            "preview_id": message.get("preview_id"),
+                            **result,
+                        },
+                    )
+                else:
+                    self._start_preview(connection, message, job, seq)
+                    ack_later = True
             # -------------------------------------------------- G: アプリ内AI(verbではない。応答は専用イベント `ai_status` / `ai_tool_call` / `ai_result` / `ai_error`。AIが文書を変えた分は通常のverb配信として `_on_core_change` 経由で別途届く)
             elif command == "ai_get_status":
                 await _send(connection, {"type": "ai_status", **self._ai_status()})
@@ -600,13 +707,76 @@ class Server:
                 },
             )
         finally:
-            # 1接続は直列に捌くので、`done` が届いた時点でそれより前に送った分も済んでいる(画面は「この番号以下」を消す)。
+            # `done` が届いた時点でそれより前に送った分も済んでいる(画面は「この番号以下」を消す。`_Acks`)。
             ack_id = message.get("ack_id")
             try:
-                if ack_id is not None:
-                    await _send(connection, {"type": "done", "ack_id": ack_id})
+                if ack_id is not None and not ack_later:
+                    await self._finish_ack(connection, ack_id)
             finally:
                 await self._settle_autosave(connection)
+
+    async def _finish_ack(self, connection: Any, ack_id: Any) -> None:
+        """`ack_id` を済みにし、前に始めた要求が全部済んでいれば `done` を送る(`_Acks`)。
+        切れた接続は登録し直さない(ワーカーのプレビューは切断の後に済むことがあり、`handle` が消した表を作り直すと残り続ける)。
+        """
+        if connection not in self.clients:
+            return
+        ready = self._acks.setdefault(connection, _Acks()).finish(ack_id)
+        if ready is not None:
+            await _send(connection, {"type": "done", "ack_id": ready})
+
+    def _supersede_previews(self, connection: Any) -> int:
+        """この接続の新しいプレビューの番号を振り、前のプレビューを古くする(始まっていない計算は取り消し、済んだ結果は送らない)。
+        その場で計算するプレビュー(`preview_session`)・断られたプレビューも古い方を古くする(後から古い結果や失敗が届くと、
+        画面は新しいゴーストまで消す)。
+        """
+        seq = self._preview_seq.get(connection, 0) + 1
+        self._preview_seq[connection] = seq
+        previous = self._preview_futures.pop(connection, None)
+        if previous is not None:
+            previous.cancel()  # 始まっていなければ取り消せる(始まっていれば結果を送らないだけ)
+        return seq
+
+    def _start_preview(self, connection: Any, message: dict, job: Any, seq: int) -> None:
+        """プレビューをワーカースレッドで計算させ、この要求の処理はすぐ抜ける(計算中もこの接続の次の要求を捌く。issue #168)。
+
+        ワーカーは1本で、届いた順に計算する。古いプレビューの扱いは `_supersede_previews`。`done` は結果(か失敗)の後。
+        """
+        if self._preview_worker is None:
+            self._preview_worker = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="duocad-preview")
+        future = asyncio.get_running_loop().run_in_executor(self._preview_worker, job.run)
+        self._preview_futures[connection] = future
+
+        async def deliver() -> None:
+            latest = lambda: self._preview_seq.get(connection) == seq  # noqa: E731
+            try:
+                try:
+                    result = await future
+                except asyncio.CancelledError:
+                    return
+                except Exception as error:  # 1つの失敗でサーバを落とさない。必ず画面へ返す(`_dispatch` と同じ封筒)
+                    if latest():
+                        await _send(connection, {
+                            "type": "error",
+                            "where": "preview",
+                            "message": f"{type(error).__name__}: {error}",
+                            "client_op": message.get("client_op"),
+                        })
+                    return
+                job.adopt()  # 古くても覚え直す(確定が同じ形・同じ引数なら使い回す)
+                if latest() and connection in self.clients:
+                    await _send(connection, {"type": "preview", "preview_id": message.get("preview_id"), **result})
+            finally:
+                if self._preview_futures.get(connection) is future:
+                    self._preview_futures.pop(connection, None)
+                ack_id = message.get("ack_id")
+                if ack_id is not None:
+                    try:
+                        await self._finish_ack(connection, ack_id)
+                    except Exception:  # noqa: BLE001  切れた接続へは送らない
+                        pass
+
+        self._spawn(deliver(), "プレビューの応答に失敗")
 
     def _apply(self, call: Any, *args: Any, **kwargs: Any) -> dict:
         """WebSocket経由の変更を実行する。この間だけ `_dispatching` を立てる。

@@ -121,6 +121,7 @@ class DocumentView:
         self._chain_cache: dict = {}       # 辺の連なりの器(`kernel.edge_chain_finder`)。粗さに依らない
         self._vertex_cache: dict = {}      # vertex_positions結果
         self._volume_cache: dict = {}      # query.volume結果
+        self._face_count_cache: dict = {}  # kernel.face_count結果(`body_meta`)
         #: 形状最適化の条件の配りもの(`optimize.state_payload`)の増分維持。
         #: 作り直すのは「条件が変わった」か「条件が指しているボディの形が差し替わった」ときだけ。
         self._optimize_cache = optimize.OptimizeStateCache()
@@ -276,6 +277,7 @@ class DocumentView:
         self._chain_cache.clear()
         self._vertex_cache.clear()
         self._volume_cache.clear()
+        self._face_count_cache.clear()
         self._sketch_cache.clear()
         self._sketch_revisions.clear()
         self._optimize_cache.clear()
@@ -571,7 +573,7 @@ class DocumentView:
         return body
 
     def _prune_body_caches(self, previewing: bool) -> None:
-        """undoで消えたBodyのキャッシュを5つのdictから落とす。
+        """undoで消えたBodyのキャッシュを6つのdictから落とす。
 
         **`_revision_counter` は絶対に剪定しない**(版が1へ戻ると前の文書の形を描き続ける。`reset()`)。
         **プレビュー中(`previewing`)は何も落とさない** —— `Session.preview()` は文書を投機的に書き換えて
@@ -580,7 +582,10 @@ class DocumentView:
         if previewing:
             return
         alive = {body.id for body in self.document.bodies}
-        for cache in (self._geometry_cache, self._edge_cache, self._chain_cache, self._vertex_cache, self._volume_cache):
+        for cache in (
+            self._geometry_cache, self._edge_cache, self._chain_cache, self._vertex_cache, self._volume_cache,
+            self._face_count_cache,
+        ):
             for body_id in [key for key in cache if key not in alive]:
                 cache.pop(body_id, None)
 
@@ -610,8 +615,9 @@ class DocumentView:
         """1Bodyぶんの軽量な状態(geometryを含まない。state_metaとの共有部分)。
 
         **公開メソッド**: `DocumentTools._body_summary`(mcp_server.py)がMCP封筒の `bodies[]` 要素にも使う
-        (MCP側は封筒の契約に合わせて `revision` キーを落とす)。`volume` はキャッシュ付き(`_body_volume`)、
-        `face_count` は合計2msと軽いので毎回測る。
+        (MCP側は封筒の契約に合わせて `revision` キーを落とす)。`volume` と `face_count` はキャッシュ付き(`_memo`)。
+        `face_count` は 27 部品で合計 2 ms だが、配信のたびに OCP を 27 回呼ぶと、ワーカーでプレビューを計算している間は
+        1回ごとに GIL の受け渡しを待つ(軽い要求の往復が 84 ms になっていた。issue #168)。
         """
         return {
             "body_id": body.id,
@@ -620,9 +626,14 @@ class DocumentView:
             "visible": body.visible,
             "revision": self.body_revision(body.id),
             "shape_revision": self.shape_revision(body.id),
-            "face_count": _face_count(body),
+            "face_count": self._body_face_count(body),
             "volume": self._body_volume(body),
         }
+
+    def _body_face_count(self, body) -> int:
+        """`_face_count` のキャッシュ付き(形・メッシュの同一性で引く)。"""
+        source = body.mesh if body.mesh is not None else body.shape
+        return _memo(self._face_count_cache, body.id, source, None, lambda: _face_count(body))
 
     def _body_volume(self, body) -> float:
         """bodyの体積(キャッシュ付き。`geometry()` と同じ `_memo`)。
