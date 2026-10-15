@@ -1233,6 +1233,38 @@ def remembered(name: str, shapes: tuple, arguments: Any, compute: Callable[[], d
     return dict(result)
 
 
+def copy_shape(shape: Any) -> Any:
+    """形の深い写し(幾何も写し、三角形分割は写さない)。面・辺・頂点の添字の数え方は元と同じ
+    (PC ケースの 27 部品すべてで面・辺・頂点の対応を確認。最大ボディ 233 面で 4 ms)。
+
+    別スレッドで形を扱うとき(`Session.preview_job`)に、イベントループ側と同じ `TShape` を共有しないために使う
+    (OCCT の三角形分割は面に書き込まれ、`BRepTools.Clean_s` + 面分割が同じ面を別スレッドから書き換えると壊れる)。
+    """
+    return BRepBuilderAPI_Copy(shape, True, False).Shape()
+
+
+def adopt_results(pairs: Sequence[Tuple[Any, Any]]) -> None:
+    """`(元の形, 写し)` の組について、写しを入力として覚えた結果(`remembered`)を、元の形を入力とした結果として覚え直す。
+
+    プレビューはワーカースレッドで写しの上で計算する(`Session.preview_job`)。確定は元の形に同じ演算を掛けるので、
+    覚え直さないと同じ計算をもう一度する(issue #169 の使い回しが効かなくなる)。写しと元の形は添字の数え方も幾何も
+    同じなので、結果(新しい形・由来の添字)はそのまま元の形の結果として使える。
+    """
+    originals = {id(copy): (copy, original) for original, copy in pairs}
+
+    def swap(shape: Any) -> Any:
+        hit = originals.get(id(shape))
+        return hit[1] if hit is not None and hit[0] is shape else shape
+
+    with _RESULTS_LOCK:
+        for key, (shapes, result) in list(_RESULTS.items()):
+            swapped = tuple(swap(shape) for shape in shapes)
+            if all(new is old for new, old in zip(swapped, shapes)):
+                continue
+            del _RESULTS[key]
+            _RESULTS[(key[0], tuple(id(shape) for shape in swapped), key[2])] = (swapped, result)
+
+
 def _value_key(values: dict) -> tuple:
     """`{辺の添字: 値}` を `remembered` の鍵へ。**順序を保つ**: OCCT は辺を足す順で結果が変わる(接線で続く辺。
     sol の再現: 同じ辺・半径の組でも [1, 5] と [5, 1] で体積が 23336.71 と 23409.17 mm³)。"""

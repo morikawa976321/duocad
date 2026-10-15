@@ -20,8 +20,9 @@ kernelに無い)。参照を控えて戻すだけで巻き戻せ、深いコピ�
 from __future__ import annotations
 
 import copy
+import dataclasses
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Any, Callable, Iterator, List, Tuple
 
 from .document import Document
 
@@ -73,3 +74,28 @@ def _restore(doc: Document, snapshot: dict) -> None:
     doc.parameters.update(snapshot["parameters"])
     doc.log._restore(snapshot["log"])
     doc.selection.items = snapshot["selection_items"]
+
+
+def fork(doc: Document, copy_shape: Callable[[Any], Any]) -> Tuple[Document, List[Tuple[Any, Any]]]:
+    """投機的実行を**別スレッドで**行うための文書の写し。戻り値は `(写し, [(元の形, 写した形), ...])`。
+
+    `speculative` が文書そのものを書き換えて戻すのに対し、こちらは元の文書に一切触らない(イベントループは写しの計算中も
+    元の文書で要求を捌き続ける。issue #168)。ボディの形は `copy_shape` で深く写す: 同じ `TShape` を2つのスレッドが
+    使うと、三角形分割の書き換え(`kernel.tessellate`)が競合する。巻き戻しの対象と同じもの(`_snapshot`)を写す
+    (スケッチ・パラメータ・選択・操作ログ・アクティブなボディ)。形状最適化の条件は写すだけ(投機的に変える verb は無い)。
+    """
+    twin = Document()
+    pairs: List[Tuple[Any, Any]] = []
+    for body in doc.bodies:
+        shape = body.shape
+        if shape is not None:
+            shape = copy_shape(body.shape)
+            pairs.append((body.shape, shape))
+        twin.bodies.append(dataclasses.replace(body, shape=shape))
+    twin._active_body_id = doc._active_body_id
+    twin.sketches[:] = copy.deepcopy(doc.sketches)
+    twin.parameters.update(copy.deepcopy(doc.parameters))
+    twin.log._restore(doc.log._snapshot())
+    twin.selection.items = list(doc.selection.items)
+    twin.optimize = copy.deepcopy(doc.optimize)
+    return twin, pairs

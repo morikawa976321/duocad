@@ -39,7 +39,7 @@ from .entry import entries, entry_for
 from .measure import inspect_selection, measure_selection
 from .oplog import OpLog
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
-from .speculative import speculative
+from .speculative import fork, speculative
 from .verbs import import_step as import_step_verb
 from .verbs.envelope_regions import envelope_pieces, selected_regions
 from .view import DocumentView
@@ -108,6 +108,15 @@ def _tagged(progress: Any, steps: Any) -> Any:
     if progress is None or steps is None:
         return progress
     return lambda event: progress(dict(event, run=steps.run))
+
+class PreviewJob:
+    """別スレッドで走らせるプレビュー1件(`Session.preview_job`)。`run()` はワーカーで、`adopt()` は結果を受け取った後に
+    イベントループで呼ぶ。"""
+
+    def __init__(self, run: Any, adopt: Any) -> None:
+        self.run = run
+        self.adopt = adopt
+
 
 class Session:
     """1つの文書を持つサーバ側の状態。WebSocketの接続とは独立(接続が切れても文書は残る)。"""
@@ -632,16 +641,7 @@ class Session:
         `_applied_count` は自分で退避する(`speculative` が戻すのは文書だけ)。テセレーションは `view` を通さず
         `kernel.tessellate` を直に呼ぶ(`view` のキャッシュを投機的な形で汚さないため)。剪定は `_view_inputs()` の `previewing` が止める。
         """
-        if verb not in PREVIEWABLE_VERBS:
-            raise ValueError(
-                f"verb {verb!r} はプレビューできない"
-                f"(登録済み: {sorted(PREVIEWABLE_VERBS)})"
-            )
-        method_name, allowed = PREVIEWABLE_VERBS[verb]
-        values = dict(args or {})
-        unknown = sorted(set(values) - set(allowed))
-        if unknown:
-            raise ValueError(f"verb {verb!r} が受け取らない引数: {unknown}(受け取るのは {list(allowed)})")
+        method_name, values = self._preview_arguments(verb, args)
         if catalog.BY_NAME[verb].preview_session is not None:
             # 文書を変えずに結果だけ計算するメソッドなので投機実行で包まない。
             return {"verb": verb, "bodies": [], **getattr(self, method_name)(**values)}
@@ -674,6 +674,59 @@ class Session:
             self._suppress_events -= 1
             self._applied_count = applied_count
         return {"verb": verb, "bodies": bodies_out}
+
+    @staticmethod
+    def _preview_arguments(verb: str, args: Optional[dict]) -> tuple:
+        """プレビューできる verb か・受け取る引数かを確かめ、`(Session のメソッド名, 引数)` を返す。"""
+        if verb not in PREVIEWABLE_VERBS:
+            raise ValueError(
+                f"verb {verb!r} はプレビューできない"
+                f"(登録済み: {sorted(PREVIEWABLE_VERBS)})"
+            )
+        method_name, allowed = PREVIEWABLE_VERBS[verb]
+        values = dict(args or {})
+        unknown = sorted(set(values) - set(allowed))
+        if unknown:
+            raise ValueError(f"verb {verb!r} が受け取らない引数: {unknown}(受け取るのは {list(allowed)})")
+        return method_name, values
+
+    @_edits_document
+    def preview_job(self, verb: str, args: Optional[dict] = None) -> Optional["PreviewJob"]:
+        """`preview` を**別スレッドで**計算する形(`net/ws.py`。issue #168)。文書の写し(`speculative.fork`。形は深い写し)を
+        いまここで作り、`PreviewJob.run()` がその写しへ verb を掛けて `preview` と同じ戻り値を返す。元の文書には触らないので、
+        計算中もイベントループは他の要求を捌ける。
+
+        文書を変えずに結果だけ計算する verb(`preview_session`。軽い)は `None` を返す(呼び手が `preview` をその場で呼ぶ)。
+        粗さ(偏差・角度偏差)はいまの値を控える。投機実行の結果は `PreviewJob.adopt()` で元の形の結果として覚え直す
+        (確定が同じ計算をしない。`kernel.adopt_results`)。
+        """
+        _method_name, values = self._preview_arguments(verb, args)
+        if catalog.BY_NAME[verb].preview_session is not None:
+            return None
+        twin, pairs = fork(self.document, kernel.copy_shape)
+        copies = {id(copy): copy for _original, copy in pairs}
+        deviation = self.view.view_deviation
+        angular = self.view.view_angular_deflection
+        function = entry_for(verb)
+
+        def run() -> dict:
+            function(twin, **values)
+            bodies_out: list[dict] = []
+            for body in twin.bodies:
+                if not body.visible or body.shape is None:
+                    continue
+                if copies.get(id(body.shape)) is body.shape:
+                    continue  # 形が変わっていないBodyは送らない(`preview` と同じ)
+                bodies_out.append({
+                    "body_id": body.id,
+                    "name": body.name,
+                    "face_count": kernel.face_count(body.shape),
+                    "volume": query.volume(body.shape),
+                    "geometry": kernel.tessellate(body.shape, deviation, angular),
+                })
+            return {"verb": verb, "bodies": bodies_out}
+
+        return PreviewJob(run, lambda: kernel.adopt_results(pairs))
 
     @_edits_document
     def undo(self) -> dict:
