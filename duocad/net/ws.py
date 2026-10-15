@@ -2,7 +2,7 @@
 
 アプリ層(ブラウザ)とコアの唯一の接点。コアはこのサーバが無くても機能的に完全で、ここには「文書を持つ」以外の機能を置かない。
 
-プロトコル(JSON文字列):
+プロトコル(JSON文字列。上りの `state` と `preview` だけは1枚のバイナリフレーム: 形は `duocad/net/wire.py`):
 
     下り(client -> server)
         {"cmd": <コマンド名>, <引数>..., "client_op": int}
@@ -46,6 +46,7 @@ verbの入口(`duocad/entry.py`)がコアの選択から取る(`selection.requir
     `state.bodies` は `geometry` を含まない(name/kind/visible/face_count/volume/revisionのみ)。形状は `delta.bodies`
     (接続ごとに版が変わったBodyだけ、`geometry` 付き)で届く。毎回全部品のテセレーション結果(27部品で実測6MB超)を
     送り直すと、クライアント側の描画でサーバ側の高速化が消える。接続直後は「知っている版」が空なので全Bodyが入る。
+    版の変わったBodyでも、その接続へ前回送った面と同じ面・同じ操作ログ・同じスケッチは省く(`wire.Delivered`)。
 
 状態変更は接続している全クライアントへ配信する。操作を出したクライアントにだけ `applied` を付け、それ以外には同じ `state` だけを送る。
 
@@ -93,6 +94,7 @@ from ..agent.providers import (
 )
 from ..session import Session
 from ..topopt import fem, gpu_cg
+from . import wire
 from .tools_on_loop import ToolsOnLoop
 
 # ソケットから踏める口は `duocad/catalog.py` の宣言からの導出。登録制は変わらない: ここに現れない名前は
@@ -157,7 +159,10 @@ def _args_object(message: dict, *, required: bool) -> dict:
 
 
 async def _send(connection: Any, payload: dict) -> None:
-    await connection.send(json.dumps(payload, ensure_ascii=False))
+    if payload.get("type") in wire.BINARY_TYPES:
+        await connection.send(wire.encode(payload))
+    else:
+        await connection.send(json.dumps(payload, ensure_ascii=False))
 
 
 #: 接続ごとの受信待ち行列(`_Inbox`)で、まだ捌いていない古いものを新しいもので置き換える要求。どちらも最新だけが意味を持つ:
@@ -232,7 +237,7 @@ class _Inbox:
 class Server:
     """WebSocketの接続集合とコマンドの実行。状態変更は全接続へ配信する。
 
-    接続ごとに「知っている版」を覚え(`_known_revisions`)、差分(`Session.delta`)はそれを基準に計算する。
+    接続ごとに送り届けたもの(版・面・操作ログ・スケッチ)を覚え(`_delivered`)、差分(`Session.delta`)はそれを基準に計算する。
 
     同時編集は前提にしない: 想定は「1人が1つのブラウザ」だけで、`Session` 全体を守る排他は無い。verbの適用は同期で
     形状は壊れないが、`_push` のawait中に別接続の操作が先に処理されうる(操作ログ・選択状態の反映順が意図と違いうる)。
@@ -256,7 +261,7 @@ class Server:
         self._pending_pushes: set = set()
         # WebSocket以外の主体(MCPサーバ)が文書を変えたとき、`_on_core_change` が全接続へ配信する。
         session.add_listener(self._on_core_change)
-        self._known_revisions: dict = {}  # connection -> {body_id: revision}
+        self._delivered: dict = {}  # connection -> `wire.Delivered`
         # 接続ごとの送信ロック。無いと2つの `_push` が同じ接続への配信で競合し、(a)古い版のペイロードが後から届く、
         # (b)送っていない版を「知っている」ことにされ以後の差分が欠落する。
         self._send_locks: dict = {}  # connection -> asyncio.Lock
@@ -379,7 +384,7 @@ class Server:
                 receiver.cancel()
         finally:
             self.clients.discard(connection)
-            self._known_revisions.pop(connection, None)
+            self._delivered.pop(connection, None)
             self._send_locks.pop(connection, None)
             self._preview_seq.pop(connection, None)
             self._acks.pop(connection, None)
@@ -1389,25 +1394,20 @@ class Server:
             lock = self._send_locks.setdefault(target, asyncio.Lock())
             async with lock:
                 meta = self.session.state_meta()
-                known = self._known_revisions.get(target, {})
-                delta = self.session.delta(known)
-                payload = {
-                    "type": "state",
-                    "state": meta,
-                    "delta": {"bodies": delta["bodies"]},
-                }
+                delivered = self._delivered.get(target) or wire.Delivered()
+                delta = self.session.delta(delivered.revisions)
+                payload = {"type": "state", **delivered.compose(meta, delta["bodies"])}
                 if applied is not None and target is origin:
                     payload["applied"] = applied
                 try:
                     await _send(target, payload)
-                    # **送信が成功してから**版を記録する(送信前に記録すると、失敗時や
-                    # 割り込み時に「送っていない版を知っている」ことになってしまう)。
-                    self._known_revisions[target] = {
-                        body["body_id"]: body["revision"] for body in meta["bodies"]
-                    }
+                    # **送信が成功してから**記録する(送信前に記録すると、失敗時や
+                    # 割り込み時に「送っていない版・面を知っている」ことになってしまう)。
+                    delivered.record(meta, delta["bodies"])
+                    self._delivered[target] = delivered
                 except Exception:  # 落ちた接続のために他へ配れないことを避ける
                     self.clients.discard(target)
-                    self._known_revisions.pop(target, None)
+                    self._delivered.pop(target, None)
                     self._send_locks.pop(target, None)
 
         # 警告は delta() が呼ぶ geometry() の中で積まれる(deliver() の内側)ので、全ターゲットの配信を終えてから取り出す(1回のpushで複数回積まれても束ねて1回出す)。

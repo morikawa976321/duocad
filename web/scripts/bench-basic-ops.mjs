@@ -1,7 +1,7 @@
 /**
  * 実測 — 基本操作のブラウザ側の所要時間(WebSocket 往復・JSON 解析と幾何の作り直し・描画のフレーム間隔)。
  *
- *   node scripts/bench-basic-ops.mjs [--step <STEP>] [--out <json>] [--skip <A,B,C>]
+ *   node scripts/bench-basic-ops.mjs [--step <STEP>] [--out <json>] [--skip <A,B,C>] [--split-parse]
  *
  * 検査ではなく物差し。合否は出さず、数値を表と JSON(`output/bench_basic_ops/client_ops.json`、git 管理外)に残す。
  * サーバ単体の費用は `tools/bench_server_ops.py` が別に測る。
@@ -10,8 +10,9 @@
  *   B. PC ケース STEP(27部品 2835面。回転・ズーム・ホバー・選択・フィレット・undo)
  *   C. 長方形 150 個のスケッチ(スケッチ中のホバーと領域の選択、60領域の押し出しの描画)
  *
- * 測り方: ページに入る前に WebSocket を包んで、上り下りの時刻・大きさ・受信ハンドラの所要(JSON.parse と幾何の作り直しを含む)を
- * 控える。フレーム間隔は requestAnimationFrame の刻みで、PerformanceObserver の longtask(50ms超)も拾う。
+ * 測り方: ページに入る前に WebSocket を包んで、上り下りの時刻・大きさ・受信ハンドラの所要(解析と幾何の作り直しを含む)を
+ * 控える。`--split-parse` を付けると、受信1件ごとに画面と同じ解析をもう一度行ってその所要を `parse_ms` に出す(作り直しは
+ * `handler_ms - parse_ms`。解析を2回するぶん操作の ms が伸びるので、ms を比べる回では付けない)。フレーム間隔は requestAnimationFrame の刻みで、PerformanceObserver の longtask(50ms超)も拾う。
  * headless Chrome は実 GPU を掴む(docs/SMOKE_TESTING.md「環境」)ので、描画の数字はこのデスクトップの GPU のもの。
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -43,6 +44,26 @@ function installBench() {
     const m = new RegExp(`"${key}":\\s*"([a-z_]+)"`).exec(text.slice(0, 200))
     return m ? m[1] : '?'
   }
+  // 状態とプレビューは1枚のバイナリフレーム(`duocad/net/wire.py`。[u32 ヘッダ長][JSON ヘッダ][配列])
+  const headOf = (data) => {
+    if (!(data instanceof ArrayBuffer)) return String(data)
+    const length = new DataView(data).getUint32(0, true)
+    return new TextDecoder().decode(new Uint8Array(data, 4, Math.min(length, 200)))
+  }
+  const sizeOf = (data) => (data instanceof ArrayBuffer ? data.byteLength : String(data).length)
+  window.__benchFrameType = (data) => typeOf(headOf(data), 'type')
+  /** 画面(`web/src/wire.ts` の `decodeFrame` / `JSON.parse`)と同じ解析。 */
+  const parseOnly = (data) => {
+    if (!(data instanceof ArrayBuffer)) return JSON.parse(String(data))
+    const length = new DataView(data).getUint32(0, true)
+    const base = 4 + length
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(data, 4, length)), (_key, value) => {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return value
+      if (value.$f32) return new Float32Array(data.slice(base + value.$f32[0], base + value.$f32[0] + value.$f32[1] * 4))
+      if (value.$u32) return new Uint32Array(data.slice(base + value.$u32[0], base + value.$u32[0] + value.$u32[1] * 4))
+      return value
+    })
+  }
   const send = WebSocket.prototype.send
   WebSocket.prototype.send = function (data) {
     const text = String(data)
@@ -51,8 +72,12 @@ function installBench() {
   }
   const wrap = (fn) =>
     function (event) {
-      const text = String(event.data)
-      const entry = { t: performance.now(), dir: 'in', size: text.length, type: typeOf(text, 'type'), handler_ms: 0 }
+      const entry = { t: performance.now(), dir: 'in', size: sizeOf(event.data), type: typeOf(headOf(event.data), 'type'), handler_ms: 0 }
+      if (window.__benchSplitParse) {
+        const p0 = performance.now()
+        parseOnly(event.data)
+        entry.parse_ms = performance.now() - p0
+      }
       const t0 = performance.now()
       try {
         return fn.call(this, event)
@@ -126,8 +151,14 @@ function summarizeWs(entries) {
   const states = inbound.filter((e) => e.type === 'state')
   const firstOut = entries.find((e) => e.dir === 'out' && e.type !== 'set_view_resolution')
   const firstState = firstOut ? states.find((e) => e.t >= firstOut.t) : null
+  // 最初の state の直前に送った要求から、その state が届くまで(サーバの計算 + 送受。カメラの行は set_view_resolution から)
+  const anyState = states[0] ?? null
+  const lastOut = anyState ? entries.filter((e) => e.dir === 'out' && e.t <= anyState.t).at(-1) : null
+  const parsed = inbound.filter((e) => e.parse_ms !== undefined)
   return {
     rtt_ms: firstOut && firstState ? Math.round((firstState.t - firstOut.t) * 10) / 10 : null,
+    out_to_state_ms: lastOut ? Math.round((anyState.t - lastOut.t) * 10) / 10 : null,
+    ...(parsed.length ? { parse_ms: Math.round(parsed.reduce((a, e) => a + e.parse_ms, 0) * 10) / 10 } : {}),
     in_msgs: inbound.length,
     in_bytes: inbound.reduce((a, e) => a + e.size, 0),
     state_msgs: states.length,
@@ -158,6 +189,7 @@ async function measure(page, scenario, label, action, until, { args = [], timeou
 async function wsRoundTrips(url, count = 20, makeMessage = (op) => ({ cmd: 'clear_selection', client_op: op }), { beforeTrips = async () => {} } = {}) {
   const config = await fetch(new URL('/duocad-config.json', url)).then((r) => r.json())
   const socket = new WebSocket(config.ws_url ?? config.wsUrl ?? `ws://127.0.0.1:${config.ws_port ?? config.port}`)
+  socket.binaryType = 'arraybuffer'
   await new Promise((resolve, reject) => {
     socket.addEventListener('open', resolve)
     socket.addEventListener('error', () => reject(new Error('WS に繋がらない')))
@@ -169,8 +201,7 @@ async function wsRoundTrips(url, count = 20, makeMessage = (op) => ({ cmd: 'clea
       const op = (seq += 1)
       const t0 = performance.now()
       const onMessage = (event) => {
-        const text = String(event.data)
-        if (text.includes('"type": "state"') || text.includes('"type":"state"')) {
+        if (frameType(event.data) === 'state') {
           socket.removeEventListener('message', onMessage)
           resolve(performance.now() - t0)
         }
@@ -187,6 +218,15 @@ async function wsRoundTrips(url, count = 20, makeMessage = (op) => ({ cmd: 'clea
   const first = samples[0]
   samples.sort((a, b) => a - b)
   return { p50: samples[Math.floor(samples.length / 2)], min: samples[0], max: samples[samples.length - 1], first }
+}
+
+/** node 側のソケットで受けたフレームの種類(状態とプレビューはバイナリ。`installBench` の `headOf` と同じ読み方)。 */
+function frameType(data) {
+  const text =
+    data instanceof ArrayBuffer
+      ? new TextDecoder().decode(new Uint8Array(data, 4, Math.min(new DataView(data).getUint32(0, true), 200)))
+      : String(data)
+  return /"type":\s*"([a-z_]+)"/.exec(text.slice(0, 200))?.[1] ?? '?'
 }
 
 async function frameStats(page, scenario, label, during) {
@@ -208,11 +248,12 @@ async function frameStats(page, scenario, label, during) {
 }
 
 /** `openApp` と同じ流れだが、ページを作る前に計測の穴を仕込み、読み込みの所要も測る。 */
-async function openBenchPage(browser, url, { timeout, expectParts }) {
+async function openBenchPage(browser, url, { timeout, expectParts, splitParse = false }) {
   const page = await browser.newPage()
   await page.setViewport({ width: 1280, height: 860 })
   const consoleErrors = watchErrors(page, { watchHttp: true })
   await page.evaluateOnNewDocument(installBench)
+  if (splitParse) await page.evaluateOnNewDocument(() => (window.__benchSplitParse = true))
   const started = Date.now()
   await page.goto(url, { waitUntil: 'load', timeout })
   await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), { timeout, polling: 100 })
@@ -492,12 +533,13 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
   const skip = new Set((options.skip ?? '').split(',').filter(Boolean))
   const stepPath = options.step ?? PC_CASE_STEP
   const out = options.out ?? resolve(REPO_ROOT, 'output', 'bench_basic_ops', 'client_ops.json')
+  const splitParse = options['split-parse'] === 'true'
 
   // ---------------------------------------------------------------- A. 箱
   if (!skip.has('A')) {
     console.log('\n## A. 20mm 角の箱')
     const { bodyId } = await addExtrudedRect(ctx.mcp, { corner: [0, 0], width: 20, height: 20, distance: 20 })
-    const { page, loadMs, ws } = await openBenchPage(ctx.browser, ctx.url, { timeout, expectParts: 1 })
+    const { page, loadMs, ws } = await openBenchPage(ctx.browser, ctx.url, { timeout, expectParts: 1, splitParse })
     record('A', '読み込み(goto→全ボディが描ける)', loadMs, ws)
     try {
       const rtt = await wsRoundTrips(ctx.url)
@@ -508,6 +550,7 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
       const inPage = await page.evaluate(async () => {
         const config = await fetch('duocad-config.json', { cache: 'no-store' }).then((r) => r.json())
         const socket = new WebSocket(config.ws_url)
+        socket.binaryType = 'arraybuffer'
         await new Promise((resolve, reject) => {
           socket.addEventListener('open', resolve)
           socket.addEventListener('error', () => reject(new Error('WS に繋がらない')))
@@ -520,7 +563,7 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
             await new Promise((resolve) => {
               const t0 = performance.now()
               const onMessage = (event) => {
-                if (String(event.data).includes('"type": "state"')) {
+                if (window.__benchFrameType(event.data) === 'state') {
                   socket.removeEventListener('message', onMessage)
                   resolve(performance.now() - t0)
                 }
@@ -539,6 +582,7 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
       await page.evaluate(async () => {
         const config = await fetch('duocad-config.json', { cache: 'no-store' }).then((r) => r.json())
         const socket = new WebSocket(config.ws_url)
+        socket.binaryType = 'arraybuffer'
         await new Promise((resolve, reject) => {
           socket.addEventListener('open', resolve)
           socket.addEventListener('error', () => reject(new Error('WS に繋がらない')))
@@ -552,7 +596,7 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
           () => {
             const t0 = performance.now()
             const onMessage = (event) => {
-              if (String(event.data).includes('"type": "state"')) {
+              if (window.__benchFrameType(event.data) === 'state') {
                 socket.removeEventListener('message', onMessage)
                 window.__benchInputSamples.push(performance.now() - t0)
               }
@@ -599,7 +643,7 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
     })
     const bigId = big?.body_id ?? bodyIds[0]
     ok(`STEP を読んだ: ${bodyIds.length} 部品。最大ボディ ${bigId}(${big?.face_count ?? '?'} 面)`)
-    const { page, loadMs, ws } = await openBenchPage(ctx.browser, ctx.url, { timeout, expectParts: bodyIds.length })
+    const { page, loadMs, ws } = await openBenchPage(ctx.browser, ctx.url, { timeout, expectParts: bodyIds.length, splitParse })
     record('B', '読み込み(goto→全27部品が描ける)', loadMs, ws)
     await page.evaluate(() => window.__duocad.frameAll())
     await waitFrames(page, 3)
@@ -655,7 +699,7 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
       await ctx.mcp.callTool('add_rectangle', { sketch_id: sid, corner: [(i % 15) * 12, Math.floor(i / 15) * 12], width: 10, height: 10 })
     }
     record('C', 'MCP add_rectangle x150(往復込み合計)', Date.now() - t0)
-    const { page, loadMs, ws } = await openBenchPage(ctx.browser, ctx.url, { timeout, expectParts: 0 })
+    const { page, loadMs, ws } = await openBenchPage(ctx.browser, ctx.url, { timeout, expectParts: 0, splitParse })
     record('C', '読み込み(goto→スケッチが描ける)', loadMs, ws)
     await page.evaluate(() => window.__duocad.frameAll())
     await waitFrames(page, 3)

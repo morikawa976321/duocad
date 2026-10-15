@@ -12,10 +12,12 @@ export interface FaceGeometry {
   area: number
   centroid: number[]
   normal: number[]
-  positions: number[]
-  indices: number[]
+  positions: Float32Array | number[]
+  indices: Uint32Array | number[]
   /** この面を細かく測ったか粗く測ったか(サーバが付与。古いサーバは無い)。 */
   detail?: 'fine' | 'coarse'
+  /** 三角形の通し番号(サーバの `view._FaceTessellations`)。次の配信で同じ面が省かれたとき、これで引き当てる(`wire.ts`)。 */
+  serial?: number
 }
 
 export interface GeometryPayload {
@@ -322,7 +324,7 @@ export interface SketchDraw {
   plane: SketchPlaneRef
   /** 反復を展開した描画対象。`params` はコアの `Entity.params` と同じキー。 */
   entities: Array<{ kind: string; params: Record<string, number> }>
-  regions: Array<{ index: number; positions: number[]; indices: number[] }>
+  regions: Array<{ index: number; positions: Float32Array | number[]; indices: Uint32Array | number[] }>
   /** 選択中の領域の添字(強調して描く)。 */
   selectedRegions: number[]
   /**
