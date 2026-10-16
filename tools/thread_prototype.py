@@ -2,6 +2,7 @@
 
     .venv/Scripts/python.exe tools/thread_prototype.py            # 採用する方式(面から直接組む)の全ケース
     .venv/Scripts/python.exe tools/thread_prototype.py --rejected # 採らなかった方式(歯と芯の和)
+    .venv/Scripts/python.exe tools/thread_prototype.py --round    # 半円の山
 
 duocad 本体からは import しない。実装は `duocad/kernel_thread.py` に書き直す。
 """
@@ -280,5 +281,35 @@ def rejected():
         report(f"歯∪芯 M{d}x{p}", fused, time.perf_counter() - t0, volume_eps(core) + tooth_exp)
 
 
+def round_profile(r_core: float, pitch: float, rho: float, n: int) -> list:
+    """平らな谷と、芯の面に中心を置いた半径 rho の半円の山(Fusion のコイルの円断面・中心配置)。半円は n 本の折れ線。"""
+    c = pitch / 2
+    pts = [(0.0, r_core), (c - rho, r_core)]
+    for i in range(1, n):
+        a = math.pi - math.pi * i / n
+        pts.append((c + rho * math.cos(a), r_core + rho * math.sin(a)))
+    return pts + [(c + rho, r_core), (pitch, r_core)]
+
+
+def round_cases():
+    print("== 半円の山(折れ線近似): 軸だけ / 板の上の円柱に立てる ==")
+    for d, p, rho, n, L in ((3, 1.0, 0.4, 16, 8), (3, 1.0, 0.4, 32, 8), (5, 1.5, 0.6, 16, 12), (8, 2.0, 0.8, 16, 20)):
+        prof = round_profile(d / 2 - 0.15 - rho / 2, p, rho, n)
+        t0 = time.perf_counter()
+        seg = threaded_segment(prof, p, L)
+        report(f"半円 d{d} P{p} 折れ線{n}", seg, time.perf_counter() - t0, expected_volume(prof, p, L))
+        a = d * 3
+        body = BRepAlgoAPI_Fuse(BRepPrimAPI_MakeBox(gp_Pnt(-a / 2, -a / 2, -3), a, a, 3).Shape(), cylinder(d / 2, 0, L)).Shape()
+        t0 = time.perf_counter()
+        out = BRepAlgoAPI_Fuse(BRepAlgoAPI_Cut(body, cylinder(d / 2 + 0.01, 0, L + 0.01)).Shape(), seg).Shape()
+        report(f"  板の上 d{d} 折れ線{n}", out, time.perf_counter() - t0, a * a * 3 + expected_volume(prof, p, L))
+        print(f"  半円の矢高 {rho * (1 - math.cos(math.pi / n / 2)):.4f} mm")
+
+
 if __name__ == "__main__":
-    rejected() if "--rejected" in sys.argv else adopted()
+    if "--rejected" in sys.argv:
+        rejected()
+    elif "--round" in sys.argv:
+        round_cases()
+    else:
+        adopted()
