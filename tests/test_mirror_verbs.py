@@ -58,13 +58,13 @@ def test_mirroring_a_line_reflects_its_endpoints(session: Session) -> None:
 def test_mirroring_a_circle_moves_only_its_center(session: Session) -> None:
     sketch_id = session.sketch_create("XY")["sketch_id"]
     axis_id = session.add_line(sketch_id, [0.0, 5.0], [10.0, 5.0])["entity_id"]
-    entity_id = session.add_circle(sketch_id, [3.0, 0.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [3.0, 0.0], 4.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 
     applied = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
 
     mirrored = _params(session, sketch_id, applied["created"][0])
-    assert mirrored == pytest.approx({"cx": 3.0, "cy": 10.0, "radius": 2.0})
+    assert mirrored == pytest.approx({"cx": 3.0, "cy": 10.0, "diameter": 4.0})
 
 
 def test_mirroring_an_arc_keeps_its_sweep_and_flips_its_position(session: Session) -> None:
@@ -209,7 +209,7 @@ def test_a_rectangle_from_a_log_without_angle_still_refuses_a_self_overlapping_c
 
 def test_the_axis_must_be_a_line_entity(session: Session) -> None:
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    circle_id = session.add_circle(sketch_id, [0.0, 0.0], 3.0)["entity_id"]
+    circle_id = session.add_circle(sketch_id, [0.0, 0.0], 6.0)["entity_id"]
     entity_id = session.add_line(sketch_id, [1.0, 2.0], [3.0, 4.0])["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 
@@ -473,8 +473,8 @@ def test_a_duplicate_copy_id_leaves_no_entity_and_no_parameter_behind(session: S
     from duocad.verbs import mirror_sketch as verb
 
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    first = session.add_circle(sketch_id, [1.0, 2.0], 1.0)["entity_id"]
-    second = session.add_circle(sketch_id, [3.0, 4.0], 1.0)["entity_id"]
+    first = session.add_circle(sketch_id, [1.0, 2.0], 2.0)["entity_id"]
+    second = session.add_circle(sketch_id, [3.0, 4.0], 2.0)["entity_id"]
     doc = session.document
     entities_before = len(doc.sketches[0].entities)
     parameters_before = len(doc.parameters)

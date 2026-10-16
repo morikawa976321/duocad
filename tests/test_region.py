@@ -28,7 +28,7 @@ AREA_REL_TOL = 1.0e-6
 def circle_sketch(document: Document, lines: tuple = ()) -> str:
     """半径20の円と、必要なら y=`lines` の水平線を持つスケッチを作って返す。"""
     sketch_id = sketch_create(document, "XY")
-    add_circle(document, sketch_id, (0.0, 0.0), CIRCLE_RADIUS)
+    add_circle(document, sketch_id, (0.0, 0.0), 2 * CIRCLE_RADIUS)
     for y in lines:
         add_line(document, sketch_id, (-30.0, y), (30.0, y))
     return sketch_id

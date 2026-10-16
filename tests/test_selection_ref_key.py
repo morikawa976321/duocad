@@ -216,7 +216,7 @@ def sketch_refs() -> List[dict]:
     """領域とスケッチ図形の参照(実在の文書は要らない —— 鍵は形だけを見る)。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    entity_id = add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    entity_id = add_circle(document, sketch_id, (0.0, 0.0), 40.0)
     return [
         {"sketch": sketch_id, "index": 1},
         {"sketch": sketch_id, "index": 2},

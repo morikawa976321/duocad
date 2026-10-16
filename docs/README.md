@@ -38,7 +38,7 @@
 | [TOPOPT_CONVERGENCE.md](TOPOPT_CONVERGENCE.md) | 段階4を予算の内で尽きさせる傷の毒（実測・終端の確かめ直し・3者の相談）と、hanger の新条件の警告・低応力の部材・くびれの穴の調査 |
 | [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) | 最適化の途中記録（毎回自動で作る診断記録の中身） |
 | [THREAD.md](THREAD.md) | ねじ verb の設計（3Dプリント前提・未実装）: 範囲・3Dプリント前提の4つの決め・引数・形の作り方の実測（螺旋の歯の和が壊れる・面から直接組む）・門と検査。試作は `tools/thread_prototype.py` |
-| [ELLIPSE.md](ELLIPSE.md) | 楕円 verb の設計（未実装）: 直径で入れる・円も直径入力へ・回転角・3クリック・SVG の扱い・`gp_Elips` の長短の罠 |
+| [ELLIPSE.md](ELLIPSE.md) | 楕円 verb（`add_ellipse`）と円の直径化: 本人の決定・`gp_Elips` の長短の罠・保存形式 version 3 と移行・吸着と交点の作り |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
 | [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md) | 穴口の微細隙間とメッシュ欠損の因果調査（境界交差・最小再現・OCCT内部検査）と、案A（境界交差の検出・共有辺再分割）の設計・実装・実測 |
 

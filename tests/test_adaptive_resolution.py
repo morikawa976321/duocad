@@ -151,7 +151,7 @@ def cylinder_session() -> tuple:
     """円(半径10mm)を押し出した円柱を1つ持つセッション。**曲面と円い辺の両方がある**。"""
     session = Session(None, DEVIATION)
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], RADIUS)
+    session.add_circle(sketch_id, [0.0, 0.0], 2 * RADIUS)
     session.clear_selection()
     session.modify_selection([{"sketch": sketch_id, "index": 1}], [])
     session.extrude(SIDE, mode="new")

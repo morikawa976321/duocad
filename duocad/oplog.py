@@ -79,9 +79,10 @@ class OpLog:
     保存形式はJSON(gitで差分が読める・AIが全履歴を読める・1モデル=1ファイルでコピーできる)。
     """
 
-    #: to_json が出す入れ物のバージョン。**2 = 読み込んだSTEPの本文がログに入っている**。
-    #: 版1(外部STEPのパスだけを持つ)で保存されたファイルは実在しないので、移行は実装しない。
-    FORMAT_VERSION = 2
+    #: to_json が出す入れ物のバージョン。**2 = 読み込んだSTEPの本文がログに入っている**、**3 = 円を直径で持つ**。
+    #: 版2は読むときに今の版へ書き換える(`oplog_upgrade`)。版1(外部STEPのパスだけを持つ)で保存されたファイルは
+    #: 実在しないので、移行は実装しない。
+    FORMAT_VERSION = 3
 
     def __init__(self) -> None:
         self._entries: list[Operation] = []
@@ -272,7 +273,8 @@ class OpLog:
     def from_payload(cls, payload: Any) -> "OpLog":
         """`json.loads` 済みの入れ物から復元する(`from_json` の本体)。
 
-        版の検査が先: `FORMAT_VERSION` と違えば操作を読まずに ValueError。未知のキーは無視する。
+        版の検査が先: 読めない版なら操作を読まずに ValueError。古い版は `oplog_upgrade` で今の版へ写してから読む。
+        未知のキーは無視する。
         """
         raw_operations = cls._extract_operations(payload)
 
@@ -313,6 +315,11 @@ class OpLog:
             cls._check_version(payload)
             operations = payload.get("operations")
             if isinstance(operations, list):
+                version = payload.get("version", cls.FORMAT_VERSION)
+                if version != cls.FORMAT_VERSION:
+                    from .oplog_upgrade import upgrade_operations
+
+                    return upgrade_operations(version, operations)
                 return operations
             raise ValueError("JSON object must contain an 'operations' array")
         raise ValueError(f"unsupported oplog JSON payload: {type(payload).__name__}")
@@ -326,7 +333,7 @@ class OpLog:
         if "version" not in payload:
             return
         version = payload["version"]
-        if version == cls.FORMAT_VERSION:
+        if version in (2, cls.FORMAT_VERSION):
             return
         if version == 1:
             raise ValueError(
@@ -337,7 +344,7 @@ class OpLog:
             )
         raise ValueError(
             f"未知の保存形式 version {version!r}(このduocadが読めるのは "
-            f"version {cls.FORMAT_VERSION})"
+            f"version 2〜{cls.FORMAT_VERSION})"
         )
 
     def replay(self, document: "Document") -> None:

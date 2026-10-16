@@ -105,7 +105,7 @@ function sketch(seed, count) {
     } else if (pick < 0.8) {
       handles.push({ entityId: `e${i}`, kind: 'rectangle', params: { x, y, width: 1 + Math.round(rand() * 10), height: 1 + Math.round(rand() * 10) } })
     } else {
-      handles.push({ entityId: `e${i}`, kind: 'circle', params: { cx: x, cy: y, radius: 1 + Math.round(rand() * 6) } })
+      handles.push({ entityId: `e${i}`, kind: 'circle', params: { cx: x, cy: y, diameter: 2 * (1 + Math.round(rand() * 6)) } })
     }
   }
   return handles
@@ -115,7 +115,7 @@ function sketch(seed, count) {
 const touching = [
   { entityId: 'r', kind: 'rectangle', params: { x: 0, y: 0, width: 10, height: 10 } },
   { entityId: 'l', kind: 'line', params: { x0: 10, y0: 5, x1: 20, y1: 5 } },
-  { entityId: 'c', kind: 'circle', params: { cx: 30, cy: 0, radius: 5 } },
+  { entityId: 'c', kind: 'circle', params: { cx: 30, cy: 0, diameter: 10 } },
   { entityId: 't', kind: 'line', params: { x0: 20, y0: 5, x1: 40, y1: 5 } },
 ]
 for (const handles of [touching, sketch(1, 40), sketch(7, 80), sketch(42, 120)]) {
@@ -126,4 +126,34 @@ for (const handles of [touching, sketch(1, 40), sketch(7, 80), sketch(42, 120)])
 }
 assert.ok(sketchIntersections(touching).some((p) => p.entityIds.includes('r') && p.entityIds.includes('l')), '端で接する長方形と線の交点が無い')
 assert.ok(sketchIntersections(touching).some((p) => p.entityIds.includes('c') && p.entityIds.includes('t')), '円に接する線の交点が無い')
+// 楕円と線分: 交点が楕円と線分の両方に乗る。軸に平行な線は手計算値と一致する。楕円と曲線の組は求めない。
+{
+  const ellipse = { entityId: 'e', kind: 'ellipse', params: { cx: 10, cy: 5, width: 20, height: 8, angle: 30 } }
+  const rad = (30 * Math.PI) / 180
+  const onEllipse = ([u, v]) => {
+    const x = (u - 10) * Math.cos(rad) + (v - 5) * Math.sin(rad)
+    const y = -(u - 10) * Math.sin(rad) + (v - 5) * Math.cos(rad)
+    return Math.abs((x / 10) ** 2 + (y / 4) ** 2 - 1) < 1e-9
+  }
+  const lines = [
+    { entityId: 'a', kind: 'line', params: { x0: -5, y0: 5, x1: 25, y1: 5 } },
+    { entityId: 'b', kind: 'line', params: { x0: 10, y0: 5, x1: 30, y1: 20 } },
+    { entityId: 'f', kind: 'line', params: { x0: 40, y0: 40, x1: 50, y1: 41 } },
+  ]
+  const hits = sketchIntersections([ellipse, ...lines]).filter((p) => p.entityIds.includes('e'))
+  assert.equal(hits.filter((p) => p.entityIds.includes('a')).length, 2, '楕円を横切る線の交点は2つ')
+  assert.equal(hits.filter((p) => p.entityIds.includes('b')).length, 1, '中心から出る線の交点は1つ')
+  assert.equal(hits.filter((p) => p.entityIds.includes('f')).length, 0, '離れた線に交点は無い')
+  for (const hit of hits) assert.ok(onEllipse([hit.u, hit.v]), `交点が楕円に乗らない: (${hit.u}, ${hit.v})`)
+
+  const level = { entityId: 'g', kind: 'ellipse', params: { cx: 0, cy: 0, width: 20, height: 8, angle: 0 } }
+  const vertical = { entityId: 'v', kind: 'line', params: { x0: 6, y0: -10, x1: 6, y1: 10 } }
+  const expected = 4 * Math.sqrt(1 - 0.36)
+  const vs = sketchIntersections([level, vertical]).map((p) => p.v).sort((a, b) => a - b)
+  assert.ok(Math.abs(vs[0] + expected) < 1e-12 && Math.abs(vs[1] - expected) < 1e-12, `x=6 の交点が ±${expected} でない: ${vs}`)
+
+  const circle = { entityId: 'c', kind: 'circle', params: { cx: 0, cy: 0, diameter: 12 } }
+  const other = { entityId: 'h', kind: 'ellipse', params: { cx: 3, cy: 0, width: 20, height: 4, angle: 90 } }
+  assert.equal(sketchIntersections([level, circle, other]).length, 0, '楕円と曲線の交点は求めない(docs/ELLIPSE.md)')
+}
 console.log('ok sketchIntersections')

@@ -116,7 +116,7 @@ export async function addExtrudedCircle(
   { center, radius, distance, mode = 'new', clear = true, basePlane = 'XY' },
 ) {
   const sketch = await mcp.callTool('sketch_create', { base_plane: basePlane })
-  await mcp.callTool('add_circle', { sketch_id: sketch.sketch_id, center, radius })
+  await mcp.callTool('add_circle', { sketch_id: sketch.sketch_id, center, diameter: 2 * radius })
   return extrudeFirstRegion(mcp, sketch.sketch_id, { distance, mode, clear })
 }
 

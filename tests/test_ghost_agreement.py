@@ -59,7 +59,7 @@ def _pattern_agrees(session: Session, sketch_id: str, source: str, verb: str, ar
 
 def test_a_rectangular_pattern_ghost_lands_where_the_copies_do(session: Session) -> None:
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    circle = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    circle = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
     count = _pattern_agrees(
         session, sketch_id, circle, "pattern_rectangular", {"dx": 10.0, "dy": 8.0, "nx": 3, "ny": 2},
         lambda: pattern_rectangular(session.document, sketch_id, [circle], 10.0, 8.0, 3, 2),
@@ -73,7 +73,7 @@ def test_a_rectangular_pattern_ghost_lands_where_the_copies_do(session: Session)
 )
 def test_a_circular_pattern_ghost_uses_the_same_step_as_the_core(session: Session, count: int, total_angle: float) -> None:
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    circle = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    circle = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
     made = _pattern_agrees(
         session, sketch_id, circle, "pattern_circular",
         {"center": [20.0, 0.0], "count": count, "total_angle": total_angle},

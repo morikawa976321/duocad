@@ -216,7 +216,7 @@ def test_sketch_region_with_a_line_ending_inside_a_circle_meshes_like_the_standa
     session = Session(None, 0.2)
     sketch_id = session.sketch_create('XY')['sketch_id']
     session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])
-    session.add_circle(sketch_id, [10.0, 0.0], 2.0)
+    session.add_circle(sketch_id, [10.0, 0.0], 4.0)
     faces = [item['face'] for item in region._regions_detailed(session.document, sketch_id)]
     assert faces
     for face in faces:

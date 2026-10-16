@@ -30,7 +30,7 @@ def draw_three_verbs(tools: DocumentTools) -> str:
     """スケッチ1つ＋図形2つ = 3回のverb。**形状を作らない**ので体積計算に依存しない。"""
     sketch_id = tools.call("sketch_create", {"base_plane": "XY"})["sketch_id"]
     tools.call("add_line", {"sketch_id": sketch_id, "p0": [0, 0], "p1": [30, 0]})
-    tools.call("add_circle", {"sketch_id": sketch_id, "center": [60, 0], "radius": 10})
+    tools.call("add_circle", {"sketch_id": sketch_id, "center": [60, 0], "diameter": 20})
     return sketch_id
 
 
@@ -46,7 +46,7 @@ def test_both_paths_report_the_same_count_after_applying_verbs(
     tools.call("add_line", {"sketch_id": sketch_id, "p0": [0, 0], "p1": [30, 0]})
     assert_agree(session, tools, 2, "add_line の直後")
 
-    tools.call("add_circle", {"sketch_id": sketch_id, "center": [60, 0], "radius": 10})
+    tools.call("add_circle", {"sketch_id": sketch_id, "center": [60, 0], "diameter": 20})
     assert_agree(session, tools, 3, "add_circle の直後")
 
 
@@ -96,7 +96,7 @@ def test_a_new_verb_after_undo_increases_the_count_on_both_paths(
     tools.undo()
     assert_agree(session, tools, 3, "undo の直後")
 
-    tools.call("add_circle", {"sketch_id": sketch_id, "center": [90, 0], "radius": 5})
+    tools.call("add_circle", {"sketch_id": sketch_id, "center": [90, 0], "diameter": 10})
     assert_agree(session, tools, 4, "undoしてから別のverbを打ったあと")
 
     log_length = len(session.document.log.entries)

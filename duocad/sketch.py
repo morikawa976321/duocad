@@ -52,8 +52,16 @@ def _validate_line(params: Dict[str, float]) -> None:
 
 
 def _validate_circle(params: Dict[str, float]) -> None:
-    if not params["radius"] > 0:
-        raise ValueError(f"circle radius must be positive, got {params['radius']!r}")
+    if not params["diameter"] > 0:
+        raise ValueError(f"circle diameter must be positive, got {params['diameter']!r}")
+
+
+def _validate_ellipse(params: Dict[str, float]) -> None:
+    if not (params["width"] > 0 and params["height"] > 0):
+        raise ValueError(
+            f"ellipse width/height must be positive, got "
+            f"{params['width']!r} x {params['height']!r}"
+        )
 
 
 def _validate_rectangle(params: Dict[str, float]) -> None:
@@ -90,7 +98,7 @@ def _translate_line(params: Dict[str, float], dx: float, dy: float) -> Dict[str,
 
 
 def _translate_cxcy(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
-    """中心 `cx`/`cy` だけで位置が決まる種別(円・円弧)の平行移動。"""
+    """中心 `cx`/`cy` だけで位置が決まる種別(円・楕円・円弧)の平行移動。"""
     moved = dict(params)
     moved["cx"] = params["cx"] + dx
     moved["cy"] = params["cy"] + dy
@@ -141,7 +149,20 @@ def _rotate_circle(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
 ) -> Dict[str, float]:
     nx, ny = rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
-    return {"cx": nx, "cy": ny, "radius": params["radius"]}
+    turned = dict(params)
+    turned["cx"] = nx
+    turned["cy"] = ny
+    return turned
+
+
+def _rotate_ellipse(
+    params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
+) -> Dict[str, float]:
+    """`rotate_copies` が偽なら向きを保って中心だけ回す(長方形と同じ)。"""
+    turned = _rotate_circle(params, cx, cy, angle_deg, rotate_copies)
+    if rotate_copies:
+        turned["angle"] = params["angle"] + angle_deg
+    return turned
 
 
 def _rotate_arc(
@@ -211,7 +232,19 @@ def _mirror_circle(
     params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
 ) -> Dict[str, float]:
     cx, cy = _mirror_point(params["cx"], params["cy"], ax, ay, ux, uy)
-    return {"cx": cx, "cy": cy, "radius": params["radius"]}
+    mirrored = dict(params)
+    mirrored["cx"] = cx
+    mirrored["cy"] = cy
+    return mirrored
+
+
+def _mirror_ellipse(
+    params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
+) -> Dict[str, float]:
+    """楕円は自分の軸について対称なので、`width` 側の軸の向きを映すだけでよい(`2φ - angle`)。"""
+    mirrored = _mirror_circle(params, ax, ay, ux, uy)
+    mirrored["angle"] = 2.0 * math.degrees(math.atan2(uy, ux)) - params["angle"]
+    return mirrored
 
 
 def _mirror_arc(
@@ -322,6 +355,10 @@ _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
         _validate_circle, _translate_cxcy, _rotate_circle, _center_cxcy, _mirror_circle,
         points=(("cx", "cy"),),
     ),
+    "ellipse": EntityKindOps(
+        _validate_ellipse, _translate_cxcy, _rotate_ellipse, _center_cxcy, _mirror_ellipse,
+        points=(("cx", "cy"),),
+    ),
     "rectangle": EntityKindOps(
         _validate_rectangle, _translate_rectangle, _rotate_rectangle, _center_rectangle,
         _mirror_rectangle,
@@ -385,6 +422,7 @@ VERB_SKETCH_CREATE = "sketch_create"
 VERB_SKETCH_CREATE_OFFSET = "sketch_create_offset"
 VERB_ADD_LINE = "add_line"
 VERB_ADD_CIRCLE = "add_circle"
+VERB_ADD_ELLIPSE = "add_ellipse"
 VERB_ADD_RECTANGLE = "add_rectangle"
 VERB_ADD_ARC = "add_arc"
 
@@ -447,7 +485,8 @@ class Entity:
     キーは図形ごとに固定する(スカラー1個 = 将来のパラメータ1個になるよう平らに持つ):
 
         line      : x0, y0, x1, y1
-        circle    : cx, cy, radius
+        circle    : cx, cy, diameter
+        ellipse   : cx, cy, width, height, angle         (width は angle 方向の直径、height はそれに直交する直径)
         rectangle : x, y, width, height, angle           (度・反時計回り。基準の角 (x,y) まわり)
         arc       : cx, cy, radius, start_deg, end_deg   (度・反時計回り・X軸から。0度をまたいでよい)
         bezier    : x0, y0, cx1, cy1, cx2, cy2, x1, y1   (始点・制御点1・制御点2・終点)
@@ -551,15 +590,36 @@ def add_line(doc: Document, sketch_id: SketchId, p0: Any, p1: Any) -> EntityId:
 
 
 def add_circle(
-    doc: Document, sketch_id: SketchId, center: Any, radius: float
+    doc: Document, sketch_id: SketchId, center: Any, diameter: float
 ) -> EntityId:
-    """スケッチ平面上の `center` を中心とする半径 `radius` の円を足して EntityId を返す。"""
+    """スケッチ平面上の `center` を中心とする直径 `diameter` の円を足して EntityId を返す。"""
     params = {
         "cx": float(center[0]),
         "cy": float(center[1]),
-        "radius": float(radius),
+        "diameter": float(diameter),
     }
     return _add_entity(doc, sketch_id, "circle", params, VERB_ADD_CIRCLE)
+
+
+def add_ellipse(
+    doc: Document,
+    sketch_id: SketchId,
+    center: Any,
+    width: float,
+    height: float,
+    angle: float = 0.0,
+) -> EntityId:
+    """`center` を中心とし、`angle` 度(反時計回り・X軸から)の向きに直径 `width`、それに直交する向きに直径 `height` の
+    楕円を足して EntityId を返す。どちらが長くてもよい(長軸・短軸の意味は持たせない)。
+    """
+    params = {
+        "cx": float(center[0]),
+        "cy": float(center[1]),
+        "width": float(width),
+        "height": float(height),
+        "angle": float(angle),
+    }
+    return _add_entity(doc, sketch_id, "ellipse", params, VERB_ADD_ELLIPSE)
 
 
 def add_rectangle(
@@ -795,7 +855,7 @@ def _undo_add_entity(document: Document, operation: Operation) -> None:
 register_verb(VERB_SKETCH_CREATE, do=_do_sketch_create, undo=_undo_sketch_create)
 # `sketch_create_offset` は do/undoの実体が `plane["kind"]` を見ない(`sketch_create` のdocstring)。
 register_verb(VERB_SKETCH_CREATE_OFFSET, do=_do_sketch_create, undo=_undo_sketch_create)
-for _verb in (VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_RECTANGLE, VERB_ADD_ARC):
+for _verb in (VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_ELLIPSE, VERB_ADD_RECTANGLE, VERB_ADD_ARC):
     # do/undo の実体は args["kind"] で分かれない。verb名を分けているのは操作ログとMCPの粒度のため。
     register_verb(_verb, do=_do_add_entity, undo=_undo_add_entity)
 del _verb
@@ -837,8 +897,15 @@ def _enter_add_line(document: Document, sketch_id: str, p0: Any, p1: Any) -> dic
 
 
 @entry(VERB_ADD_CIRCLE)
-def _enter_add_circle(document: Document, sketch_id: str, center: Any, radius: float) -> dict:
-    return {"entity_id": add_circle(document, sketch_id, center, radius)}
+def _enter_add_circle(document: Document, sketch_id: str, center: Any, diameter: float) -> dict:
+    return {"entity_id": add_circle(document, sketch_id, center, diameter)}
+
+
+@entry(VERB_ADD_ELLIPSE)
+def _enter_add_ellipse(
+    document: Document, sketch_id: str, center: Any, width: float, height: float, angle: float = 0.0
+) -> dict:
+    return {"entity_id": add_ellipse(document, sketch_id, center, width, height, angle)}
 
 
 @entry(VERB_ADD_RECTANGLE)

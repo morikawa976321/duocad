@@ -43,7 +43,7 @@ def plate(document: Document) -> None:
 
 def hole_pattern(document: Document) -> tuple:
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, FIRST_HOLE, HOLE_RADIUS)
+    circle = add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
     pattern_id = pattern_rectangular(
         document, sketch_id, [circle], SPACING_X, SPACING_Y, COLUMNS, ROWS
     )
@@ -119,7 +119,7 @@ def test_pattern_rejects_counts_that_are_not_positive_integers(dx, dy, nx, ny):
     """個数は1以上の整数。0・負数・非整数は ValueError で、文書にもログにも残さない。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, FIRST_HOLE, HOLE_RADIUS)
+    circle = add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
     entries_before = len(document.log.entries)
 
     with pytest.raises(ValueError):
@@ -133,9 +133,9 @@ def test_pattern_rejects_an_empty_or_foreign_entity_list():
     """反復する図形が無い / 別スケッチの図形は失敗する(黙って空の反復を作らない)。"""
     document = Document()
     first = sketch_create(document, "XY")
-    add_circle(document, first, FIRST_HOLE, HOLE_RADIUS)
+    add_circle(document, first, FIRST_HOLE, 2 * HOLE_RADIUS)
     second = sketch_create(document, "XY")
-    foreign = add_circle(document, second, FIRST_HOLE, HOLE_RADIUS)
+    foreign = add_circle(document, second, FIRST_HOLE, 2 * HOLE_RADIUS)
     entries_before = len(document.log.entries)
 
     with pytest.raises(ValueError):
@@ -238,7 +238,7 @@ def test_editing_one_radius_moves_every_hole():
     drill_all(document, sketch_id)
 
     set_parameter(
-        document, parameter_of(document, sketch_id, circle, "radius"), HOLE_RADIUS_AFTER
+        document, parameter_of(document, sketch_id, circle, "diameter"), 2 * HOLE_RADIUS_AFTER
     )
 
     shape = document.active_body().shape
@@ -260,7 +260,7 @@ def test_pattern_survives_save_load_and_replay():
     sketch_id, circle, _ = hole_pattern(document)
     drill_all(document, sketch_id)
     set_parameter(
-        document, parameter_of(document, sketch_id, circle, "radius"), HOLE_RADIUS_AFTER
+        document, parameter_of(document, sketch_id, circle, "diameter"), 2 * HOLE_RADIUS_AFTER
     )
     expected_volume = query.volume(document.active_body().shape)
     expected_axes = hole_axes(document.active_body().shape)

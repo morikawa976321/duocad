@@ -93,9 +93,9 @@ def test_extrude_rejects_regions_from_two_different_sketches():
 @pytest.mark.parametrize(
     "add",
     [
-        lambda doc, sk: add_circle(doc, sk, (0.0, 0.0), float("nan")),
+        lambda doc, sk: add_circle(doc, sk, (0.0, 0.0), 2 * (float("nan"))),
         lambda doc, sk: add_circle(doc, sk, (0.0, 0.0), 0.0),
-        lambda doc, sk: add_circle(doc, sk, (0.0, 0.0), -5.0),
+        lambda doc, sk: add_circle(doc, sk, (0.0, 0.0), -10.0),
         lambda doc, sk: add_rectangle(doc, sk, (0.0, 0.0), 0.0, 5.0),
         lambda doc, sk: add_rectangle(doc, sk, (float("inf"), 0.0), 5.0, 5.0),
     ],

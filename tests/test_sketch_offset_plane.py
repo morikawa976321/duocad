@@ -74,7 +74,7 @@ def test_a_later_fillet_does_not_move_an_offset_from_face_sketch():
     sketch_id = sketch_create(
         document, offset_plane(face_plane(body_id, TOP_FACE_INDEX), 3.0)
     )
-    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
+    add_circle(document, sketch_id, (0.0, 0.0), 8.0)
     frame_before = region.plane_frame(document, sketch_id)
 
     from duocad.verbs import fillet
@@ -161,7 +161,7 @@ def test_a_log_round_trip_reproduces_the_same_frame():
     sketch_id = sketch_create(
         document, offset_plane(face_plane(body_id, TOP_FACE_INDEX), 4.0)
     )
-    add_circle(document, sketch_id, (0.0, 0.0), 2.0)
+    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
     expected = region.plane_frame(document, sketch_id)
 
     restored = replay_through_json(document)

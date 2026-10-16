@@ -133,7 +133,7 @@ def two_body_session() -> tuple:
     ids = []
     for offset in (0.0, 100.0):
         sketch_id = session.sketch_create("XY")["sketch_id"]
-        session.add_circle(sketch_id, [offset, 0.0], RADIUS)
+        session.add_circle(sketch_id, [offset, 0.0], 2 * RADIUS)
         session.clear_selection()
         session.modify_selection([{"sketch": sketch_id, "index": 1}], [])
         session.extrude(SIDE, mode="new")

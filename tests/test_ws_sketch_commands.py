@@ -29,7 +29,7 @@ def _draw_four_kinds(sketch_id: str) -> list:
     """4種の図形を1つずつ足す(実際のブラウザと同じ順序)。"""
     return [
         {"cmd": "add_line", "sketch_id": sketch_id, "p0": [-30.0, 5.0], "p1": [30.0, 5.0], "client_op": 2},
-        {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": RADIUS, "client_op": 3},
+        {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 2 * RADIUS, "client_op": 3},
         {"cmd": "add_rectangle", "sketch_id": sketch_id, "corner": [40.0, 0.0], "width": 10.0, "height": 4.0, "client_op": 4},
         {"cmd": "add_arc", "sketch_id": sketch_id, "center": [-40.0, 0.0], "radius": 8.0, "start_deg": 0.0, "end_deg": 90.0, "client_op": 5},
     ]
@@ -50,10 +50,39 @@ def test_the_browser_can_draw_all_four_kinds(session: Session) -> None:
     entities = _sketches(clients[0])[0]["entities"]
     assert [entity["kind"] for entity in entities] == ["line", "circle", "rectangle", "arc"]
     circle = entities[1]["params"]
-    assert math.isclose(circle["radius"], RADIUS) and (circle["cx"], circle["cy"]) == (0.0, 0.0)
+    assert math.isclose(circle["diameter"], 2 * RADIUS) and (circle["cx"], circle["cy"]) == (0.0, 0.0)
     arc = entities[3]["params"]
     assert (arc["start_deg"], arc["end_deg"]) == (0.0, 90.0)
     assert clients[1].payloads[-1]["state"]["sketches"] == _sketches(clients[0]), "2本目の接続にも同じ図形が届く"
+
+
+def test_the_browser_draws_an_ellipse_and_must_send_its_angle(session: Session) -> None:
+    """楕円は WS から足せる。角度は MCP では省略できるが、画面は必ず送る(`ws="required"`)。"""
+
+    async def script(send):
+        sketch_id = await _new_sketch(send)
+        missing = await send(
+            {"cmd": "add_ellipse", "sketch_id": sketch_id, "center": [0.0, 0.0], "width": 20.0, "height": 8.0, "client_op": 2}
+        )
+        added = await send(
+            {
+                "cmd": "add_ellipse",
+                "sketch_id": sketch_id,
+                "center": [0.0, 0.0],
+                "width": 20.0,
+                "height": 8.0,
+                "angle": 30.0,
+                "client_op": 3,
+            }
+        )
+        return missing, added
+
+    (missing, added), clients = browser(session, script)
+
+    assert missing["type"] == "error", "角度の打ち忘れが既定の 0 で黙って通った"
+    assert added["applied"]["verb"] == "add_ellipse"
+    params = _sketches(clients[0])[0]["entities"][0]["params"]
+    assert params == {"cx": 0.0, "cy": 0.0, "width": 20.0, "height": 8.0, "angle": 30.0}
 
 
 def test_entities_carry_parameter_names(session: Session) -> None:
@@ -62,18 +91,18 @@ def test_entities_carry_parameter_names(session: Session) -> None:
     async def script(send):
         sketch_id = await _new_sketch(send)
         added = await send(
-            {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": RADIUS, "client_op": 2}
+            {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 2 * RADIUS, "client_op": 2}
         )
-        name = added["state"]["sketches"][0]["entities"][0]["refs"]["radius"]
+        name = added["state"]["sketches"][0]["entities"][0]["refs"]["diameter"]
         refused = await send({"cmd": "set_parameter", "name": name, "value": 7.5, "client_op": 3})
         return name, refused
 
-    (radius_name, refused), clients = browser(session, script)
+    (diameter_name, refused), clients = browser(session, script)
 
-    assert isinstance(radius_name, str) and radius_name
+    assert isinstance(diameter_name, str) and diameter_name
     assert refused["type"] == "error" and "unknown command" in refused["message"]
-    radius = session.state_meta()["sketches"][0]["entities"][0]["params"]["radius"]
-    assert math.isclose(radius, RADIUS)
+    diameter = session.state_meta()["sketches"][0]["entities"][0]["params"]["diameter"]
+    assert math.isclose(diameter, 2 * RADIUS)
 
 
 def test_undo_removes_one_entity_at_a_time(session: Session) -> None:
@@ -129,7 +158,7 @@ def test_mirror_sketch_entities_is_reachable_from_the_socket(session: Session) -
     async def script(send):
         sketch_id = await _new_sketch(send)
         await send({"cmd": "add_line", "sketch_id": sketch_id, "p0": [0.0, -30.0], "p1": [0.0, 30.0], "client_op": 2})
-        await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [15.0, 0.0], "radius": 5.0, "client_op": 3})
+        await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [15.0, 0.0], "diameter": 10.0, "client_op": 3})
         axis_id, circle_id = [entity.id for entity in session.document.sketches[0].entities]
         await send({"cmd": "modify_selection", "add": [{"sketch": sketch_id, "entity": circle_id}], "remove": []})
         return await send(

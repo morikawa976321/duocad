@@ -39,7 +39,7 @@ def new_box_with_hole(doc: Document, size: float = 20.0, radius: float = 4.0) ->
     """`new_box` の中央に半径 `radius` の貫通穴を切った立方体(円筒面1・平面6)。"""
     body_id = new_box(doc, size)
     sketch_id = sketch_create(doc, base_plane("XY"))
-    add_circle(doc, sketch_id, (size / 2, size / 2), radius)
+    add_circle(doc, sketch_id, (size / 2, size / 2), 2 * radius)
     extrude(doc, [region_ref(sketch_id, 1)], size, mode="cut", body_id=body_id)
     return body_id
 

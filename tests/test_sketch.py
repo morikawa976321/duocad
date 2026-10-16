@@ -128,7 +128,7 @@ def test_line_circle_and_rectangle_are_kept_in_the_sketch():
     sketch_id = sketch_create(document, "XY")
 
     line = add_line(document, sketch_id, (0.0, 0.0), (40.0, 0.0))
-    circle = add_circle(document, sketch_id, (20.0, 15.0), 3.0)
+    circle = add_circle(document, sketch_id, (20.0, 15.0), 6.0)
     rectangle = add_rectangle(document, sketch_id, (0.0, 0.0), 40.0, 30.0)
 
     entities = get_sketch(document, sketch_id).entities
@@ -139,7 +139,7 @@ def test_line_circle_and_rectangle_are_kept_in_the_sketch():
         "x0": 0.0, "y0": 0.0, "x1": 40.0, "y1": 0.0,
     }
     assert entity_params(document, sketch_id, circle) == {
-        "cx": 20.0, "cy": 15.0, "radius": 3.0,
+        "cx": 20.0, "cy": 15.0, "diameter": 6.0,
     }
     assert entity_params(document, sketch_id, rectangle) == {
         "x": 0.0, "y": 0.0, "width": 40.0, "height": 30.0, "angle": 0.0,
@@ -151,7 +151,7 @@ def test_adding_an_entity_to_an_unknown_sketch_fails():
     document = Document()
 
     with pytest.raises(KeyError):
-        add_circle(document, "sketch-does-not-exist", (0.0, 0.0), 5.0)
+        add_circle(document, "sketch-does-not-exist", (0.0, 0.0), 10.0)
 
     assert document.log.entries == []
 
@@ -160,7 +160,7 @@ def test_sketch_and_entities_are_logged_and_undoable():
     """スケッチの作成・図形の追加が操作ログに1行ずつ載り、undoで1つずつ戻る。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    circle_id = add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    circle_id = add_circle(document, sketch_id, (0.0, 0.0), 40.0)
     line_id = add_line(document, sketch_id, (-30.0, 5.0), (30.0, 5.0))
     rectangle_id = add_rectangle(document, sketch_id, (0.0, 0.0), 40.0, 30.0)
 
@@ -173,7 +173,7 @@ def test_sketch_and_entities_are_logged_and_undoable():
         "sketch_id": sketch_id,
         "entity_id": circle_id,
         "kind": "circle",
-        "params": {"cx": 0.0, "cy": 0.0, "radius": 20.0},
+        "params": {"cx": 0.0, "cy": 0.0, "diameter": 40.0},
     }
     assert entries[2].args == {
         "sketch_id": sketch_id,

@@ -36,7 +36,7 @@ def sketch_doc():
     """半径20の円を1つ持つスケッチの文書と、その sketch_id(領域はちょうど1個)。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    add_circle(document, sketch_id, (0.0, 0.0), 40.0)
     return document, sketch_id
 
 

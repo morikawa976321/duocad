@@ -28,7 +28,8 @@ export async function resolve(specifier, context, next) {
 const { entityHandles, snapSketchPoint } = await import(new URL('../web/src/entityKinds.ts', import.meta.url).href)
 
 const ENTITIES = {
-  circle: { kind: 'circle', params: { cx: 60, cy: 20, radius: 10 } },
+  circle: { kind: 'circle', params: { cx: 60, cy: 20, diameter: 20 } },
+  ellipse: { kind: 'ellipse', params: { cx: -40, cy: 15, width: 30, height: 12, angle: 25 } },
   rectangle: { kind: 'rectangle', params: { x: 10, y: 10, width: 30, height: 20 } },
   tilted: { kind: 'rectangle', params: { x: 85, y: 5, width: 24, height: 12, angle: 35 } },
   line: { kind: 'line', params: { x0: 0, y0: 0, x1: 10, y1: 0 } },
@@ -62,7 +63,8 @@ assert.deepEqual(
 
 // ============================================================== 円の線の上は半径ちょうど
 {
-  const { cx, cy, radius } = ENTITIES.circle.params
+  const { cx, cy, diameter } = ENTITIES.circle.params
+  const radius = diameter / 2
   for (const [u, v] of [[cx + radius + 0.4, cy + 0.4], [cx - 6.8, cy + 7.9], [cx + 0.2, cy - radius + 0.5]]) {
     const [su, sv] = snap(u, v, { entityId: 'circle', point: null })
     assert.ok(
@@ -90,6 +92,27 @@ assert.deepEqual(
   const along = ((su - start[0]) * du + (sv - start[1]) * dv) / width
   assert.ok(off < 1e-9, `傾いた辺に乗らない: 辺からの距離 ${off}mm`)
   assert.ok(along > 0 && along < width, `辺の範囲の外へ落ちた: 辺に沿う位置 ${along}mm`)
+}
+
+// ============================================================== 楕円の線の上は楕円そのもの(折れ線の上ではない)
+{
+  const { cx, cy, width, height, angle } = ENTITIES.ellipse.params
+  const rad = (angle * Math.PI) / 180
+  const local = (u, v) => [(u - cx) * Math.cos(rad) + (v - cy) * Math.sin(rad), -(u - cx) * Math.sin(rad) + (v - cy) * Math.cos(rad)]
+  for (const [u, v] of [[cx + 16, cy + 7], [cx - 3, cy + 6.5], [cx + 1, cy - 9], [cx - 14, cy - 4]]) {
+    for (const resolution of [undefined, { angularDeflection: 0.6, chordTolerance: 2 }]) {
+      const [su, sv] = snapSketchPoint(u, v, { entityId: 'ellipse', point: null }, entityOf, resolution, true)
+      const [x, y] = local(su, sv)
+      const residual = Math.abs((x / (width / 2)) ** 2 + (y / (height / 2)) ** 2 - 1)
+      assert.ok(residual < 1e-9, `楕円の上に落ちない: (${u}, ${v}) → (${su}, ${sv}) 残差 ${residual}`)
+      // 最近点なら、落ちた点からカーソルへの向きは楕円の接線に直交する。
+      const tx = -(width / 2) * (y / (height / 2))
+      const ty = (height / 2) * (x / (width / 2))
+      const [qx, qy] = local(u, v)
+      const dot = ((qx - x) * tx + (qy - y) * ty) / (Math.hypot(qx - x, qy - y) * Math.hypot(tx, ty))
+      assert.ok(Math.abs(dot) < 1e-9, `楕円の最近点でない: (${u}, ${v}) → (${su}, ${sv}) cos ${dot}`)
+    }
+  }
 }
 
 console.log('ok')

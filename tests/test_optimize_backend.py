@@ -1034,7 +1034,7 @@ def test_face_centroid_is_the_area_centroid_not_the_geometry_center() -> None:
     add_rectangle(doc, sketch, (0.0, 0.0), 20.0, 20.0)
     body_id = extrude(doc, [region_ref(sketch, 1)], 20.0, mode="join").args["body_id"]
     hole = sketch_create(doc, base_plane("XY"))
-    add_circle(doc, hole, (10.0, 10.0), 4.0)
+    add_circle(doc, hole, (10.0, 10.0), 8.0)
     extrude(doc, [region_ref(hole, 1)], 20.0, mode="cut", body_id=body_id)
     circles = [
         edge["index"]

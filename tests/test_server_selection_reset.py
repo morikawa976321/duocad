@@ -56,7 +56,7 @@ def test_add_shape_verbs_clear_a_pre_existing_3d_selection(session: Session) -> 
     # sketch_create 自体は形を変えないので、まだ何も起きていないはず。
     assert session.get_selection()["count"] == 1
 
-    session.add_circle(sketch_id, [0.0, 0.0], 5.0)
+    session.add_circle(sketch_id, [0.0, 0.0], 10.0)
 
     _assert_cleared(session)
 
@@ -67,8 +67,8 @@ def test_a_move_clears_a_selected_region_that_the_edit_makes_vanish(
     """落ちたら、図形を動かして消えた領域を選んだままになり、`App.svelte` の `regionsStillExist` の
     分岐へ届く(`web/scripts/smoke-regions.mjs` 検証5と同じシナリオ)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 15.0)
-    session.add_circle(sketch_id, [20.0, 0.0], 15.0)
+    session.add_circle(sketch_id, [0.0, 0.0], 30.0)
+    session.add_circle(sketch_id, [20.0, 0.0], 30.0)
     sketch_obj = session.document.sketches[-1]
     assert sketch_obj.id == sketch_id
     second_circle = sketch_obj.entities[1].id

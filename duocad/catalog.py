@@ -433,7 +433,7 @@ COMMANDS: tuple[Command, ...] = (
             "重心に穴をあける・重心に合わせて置くときは、重心を公式から自分で計算せず、"
             "領域・面・ボディを選んでこれで読む(押し出す前の位置決めは領域で読む)。"
             "面は種類を `surface_kind` に、円(円弧)の辺は `radius` と `center` を、"
-            "スケッチの線分は `length` を返す。"
+            "スケッチの線分は長さ、楕円は周長を `length` に返す。"
             "ちょうど2項目(頂点・直線の辺・平らな面)なら、そのあいだの距離が `between` に"
             "返る(直線・平面は無限に延ばして測る。平行でない線・面どうしは距離の代わりに"
             "角度)。verb ではないので、選んだ対象を確かめる往復に使う。"
@@ -595,9 +595,31 @@ COMMANDS: tuple[Command, ...] = (
         params=(
             _SKETCH_ID,
             Param("center", "array", "中心 [u, v]"),
-            Param("radius", "number", "半径(mm)", dimension=True),
+            Param("diameter", "number", "直径(mm)", dimension=True),
         ),
         session="add_circle",
+        resets_selection=True,
+    ),
+    Command(
+        name="add_ellipse",
+        returns=(Result("entity_id", "string"),),
+        category="sketch",
+        description="スケッチに楕円を足すときに呼ぶ(中心・2方向の直径・傾き)。",
+        params=(
+            _SKETCH_ID,
+            Param("center", "array", "中心 [u, v]"),
+            Param("width", "number", "angle の向きの直径(mm)", dimension=True),
+            Param("height", "number", "width に直交する向きの直径(mm)", dimension=True),
+            Param(
+                "angle",
+                "number",
+                "width の向き(度・反時計・X軸から。省略で0)",
+                required=False,
+                ws="required",
+                dimension=True,
+            ),
+        ),
+        session="add_ellipse",
         resets_selection=True,
     ),
     Command(

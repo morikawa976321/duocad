@@ -144,7 +144,12 @@ def _run_add_line(session: Session, tmp_path: Path) -> dict:
 
 @_runner("add_circle")
 def _run_add_circle(session: Session, tmp_path: Path) -> dict:
-    return session.add_circle(_sketch(session), [0.0, 0.0], 5.0)
+    return session.add_circle(_sketch(session), [0.0, 0.0], 10.0)
+
+
+@_runner("add_ellipse")
+def _run_add_ellipse(session: Session, tmp_path: Path) -> dict:
+    return session.add_ellipse(_sketch(session), [0.0, 0.0], 10.0, 4.0, 30.0)
 
 
 @_runner("add_rectangle")
@@ -159,7 +164,7 @@ def _run_add_arc(session: Session, tmp_path: Path) -> dict:
 
 @_runner("set_parameter")
 def _run_set_parameter(session: Session, tmp_path: Path) -> dict:
-    session.add_circle(_sketch(session), [1.0, 2.0], 3.0)
+    session.add_circle(_sketch(session), [1.0, 2.0], 6.0)
     name = sorted(session.document.parameters)[0]
     return session.set_parameter(name, 4.0)
 
@@ -167,14 +172,14 @@ def _run_set_parameter(session: Session, tmp_path: Path) -> dict:
 @_runner("pattern_rectangular")
 def _run_pattern_rectangular(session: Session, tmp_path: Path) -> dict:
     sketch_id = _sketch(session)
-    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
     return session.pattern_rectangular(sketch_id, [entity_id], 10.0, 10.0, 2, 2)
 
 
 @_runner("pattern_circular")
 def _run_pattern_circular(session: Session, tmp_path: Path) -> dict:
     sketch_id = _sketch(session)
-    entity_id = session.add_circle(sketch_id, [10.0, 0.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [10.0, 0.0], 4.0)["entity_id"]
     return session.pattern_circular(sketch_id, [entity_id], [0.0, 0.0], 4)
 
 
@@ -258,7 +263,7 @@ def _run_mirror_sketch_entities(session: Session, tmp_path: Path) -> dict:
     """軸の線分は**対象に入れない**(入れるとverbが黙って外し、`created` が空になりうる)。"""
     sketch_id = _sketch(session)
     axis_id = session.add_line(sketch_id, [0.0, 0.0], [0.0, 10.0])["entity_id"]
-    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 4.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
     return session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
 
@@ -283,7 +288,7 @@ def _run_delete(session: Session, tmp_path: Path) -> dict:
     """**ボディと図形を混ぜて**走らせる —— 片方だけで走らせると、宣言の
     `bodies` / `entities` / `sketch_ids` のどれかが一度も中身を持たないまま緑になる。"""
     body, sketch_id = _box(session)
-    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 4.0)["entity_id"]
     _select(
         session,
         [
@@ -362,13 +367,13 @@ def _run_import_step(session: Session, tmp_path: Path) -> dict:
 
 @_runner("undo")
 def _run_undo(session: Session, tmp_path: Path) -> dict:
-    session.add_circle(_sketch(session), [0.0, 0.0], 5.0)
+    session.add_circle(_sketch(session), [0.0, 0.0], 10.0)
     return session.undo()
 
 
 @_runner("redo")
 def _run_redo(session: Session, tmp_path: Path) -> dict:
-    session.add_circle(_sketch(session), [0.0, 0.0], 5.0)
+    session.add_circle(_sketch(session), [0.0, 0.0], 10.0)
     session.undo()
     return session.redo()
 
@@ -470,7 +475,7 @@ def _run_close_document(session: Session, tmp_path: Path) -> dict:
 
 @_runner("open_document")
 def _run_open_document(session: Session, tmp_path: Path) -> dict:
-    session.add_circle(_sketch(session), [0.0, 0.0], 5.0)
+    session.add_circle(_sketch(session), [0.0, 0.0], 10.0)
     session.save_document("applied-type-sync.json")
     return session.open_document("applied-type-sync.json")
 

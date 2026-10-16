@@ -57,7 +57,7 @@ def pad(session: Session, width: float, depth: float, height: float, corner=(0.0
 def cylinder(session: Session, radius: float, height: float, *, center=(0.0, 0.0), mode: str = "join"):
     """スケッチ→円→領域押し出しで円柱を作り、そのBodyを返す(半径は名前つきの値になる)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, list(center), radius)
+    session.add_circle(sketch_id, list(center), 2 * radius)
     select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude(height, mode=mode)
     session.clear_selection()

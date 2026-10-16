@@ -18,10 +18,10 @@ from duocad.verbs import extrude, pattern_rectangular
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("radius", float("nan")),
-        ("radius", float("inf")),
-        ("radius", 0.0),
-        ("radius", -5.0),
+        ("diameter", float("nan")),
+        ("diameter", float("inf")),
+        ("diameter", 0.0),
+        ("diameter", -5.0),
     ],
     ids=["nan", "inf", "zero", "negative"],
 )
@@ -29,14 +29,14 @@ def test_set_parameter_rejects_values_that_add_circle_would_reject(key, value):
     """`add_circle` が作成時に弾く値は、`set_parameter` からも書き込めない。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, (10.0, 10.0), 2.0)
+    circle = add_circle(document, sketch_id, (10.0, 10.0), 4.0)
     name = parameter_of(document, sketch_id, circle, key)
     entries_before = len(document.log.entries)
 
     with pytest.raises(ValueError):
         set_parameter(document, name, value)
 
-    assert document.parameters[name] == 2.0
+    assert document.parameters[name] == 4.0
     assert len(document.log.entries) == entries_before
     assert len(regions(document, sketch_id)) == 1
     json.loads(document.log.to_json())  # 裸のNaN/Infが混ざっていたら落ちる
@@ -47,7 +47,7 @@ def test_set_parameter_rejects_pattern_counts_that_are_not_positive_integers(cou
     """反復の個数も、`pattern_rectangular` と同じ規則で後から書き換えられない。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, (10.0, 10.0), 2.0)
+    circle = add_circle(document, sketch_id, (10.0, 10.0), 4.0)
     pattern_id = pattern_rectangular(document, sketch_id, [circle], 10.0, 10.0, 3, 2)
     name = parameter_of(document, sketch_id, pattern_id, "nx")
 
@@ -62,9 +62,9 @@ def test_replaying_a_foreign_log_fails_loudly_instead_of_emptying_the_document()
     """`set_parameter` を含むログを**別の文書へ直接** `replay` したら、黙って空にせず止まる。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    circle = add_circle(document, sketch_id, (0.0, 0.0), 40.0)
     extrude(document, [region_ref(sketch_id, regions(document, sketch_id)[0].index)], 10.0)
-    set_parameter(document, parameter_of(document, sketch_id, circle, "radius"), 10.0)
+    set_parameter(document, parameter_of(document, sketch_id, circle, "diameter"), 20.0)
     expected = query.volume(document.active_body().shape)
 
     stray = Document()
@@ -84,7 +84,7 @@ def test_set_parameter_keeps_the_active_body():
     """`set_parameter` を1回打っても、作業対象(アクティブボディ)が移らない。"""
     document = Document()
     first_sketch = sketch_create(document, "XY")
-    circle = add_circle(document, first_sketch, (0.0, 0.0), 5.0)
+    circle = add_circle(document, first_sketch, (0.0, 0.0), 10.0)
     first = extrude(
         document,
         [region_ref(first_sketch, regions(document, first_sketch)[0].index)],
@@ -93,7 +93,7 @@ def test_set_parameter_keeps_the_active_body():
     ).args["body_id"]
 
     second_sketch = sketch_create(document, "XY")
-    add_circle(document, second_sketch, (100.0, 0.0), 5.0)
+    add_circle(document, second_sketch, (100.0, 0.0), 10.0)
     second = extrude(
         document,
         [region_ref(second_sketch, regions(document, second_sketch)[0].index)],
@@ -103,7 +103,7 @@ def test_set_parameter_keeps_the_active_body():
     assert document.active_body().id == second
 
     document.set_active_body(first)
-    set_parameter(document, parameter_of(document, first_sketch, circle, "radius"), 7.0)
+    set_parameter(document, parameter_of(document, first_sketch, circle, "diameter"), 14.0)
 
     assert document.active_body().id == first, "作り直しで作業対象が黙って移っている"
     assert math.isclose(
@@ -123,13 +123,13 @@ def test_a_rebuild_that_fails_leaves_the_document_as_it_was():
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, (10.0, 10.0), 2.0)
+    circle = add_circle(document, sketch_id, (10.0, 10.0), 4.0)
     pattern_id = pattern_rectangular(document, sketch_id, [circle], 10.0, 10.0, 3, 2)
     found = regions(document, sketch_id)
     assert len(found) == 6
     extrude(document, [region_ref(sketch_id, found[-1].index)], 5.0, mode="new")
     later = sketch_create(document, "XY")
-    add_circle(document, later, (50.0, 50.0), 1.0)
+    add_circle(document, later, (50.0, 50.0), 2.0)
 
     name = parameter_of(document, sketch_id, pattern_id, "nx")
     bodies_before = list(document.bodies)

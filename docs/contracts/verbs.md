@@ -86,7 +86,7 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 
 - **`ws="none"`(MCP 専用)の verb は画面の `Applied` 型に載らない**(`add_mesh_body` 等。ログには載る)。`Applied` は `web/src/generated/protocol.ts` の生成物で、同期の検査は `tests/test_protocol.py`。`mirror_sketch_entities` は `ws="table"` で生成の対象に入れてある。MCP 専用 verb を足すときの扱いは docs/DEV_NOTES.md の「`ws="none"`(MCP 専用)の verb は画面の `Applied` に載らない」項。
 - **`#sketch-look` が合わせる視野は「そのとき見えているもの」に依る。** 板だけがあるスケッチへ入り直して押すと原点付近の (0,-20) が画面外になり `projectSketchPoint` が null を返す。スケッチの図形は入った直後に全部描く順序にする。
-- **円の半径の params キーは `radius`**(`r` ではない)、中心は `cx`/`cy`。円も領域を作る。押し出す領域は面積最大(`regions` の `index/area/centroid`)で選ぶ。
+- **円は直径で持つ。params キーは `diameter`**(`radius` ではない。円弧は `radius` のまま)、中心は `cx`/`cy`。楕円は `cx`/`cy`/`width`/`height`/`angle`(`width` が `angle` の向きの直径)。円も楕円も領域を作る。押し出す領域は面積最大(`regions` の `index/area/centroid`)で選ぶ。
 - **`pytest.approx(0.0)` は絶対許容差がほぼ 0。** `kernel.bounding_box` を鏡映(x=0)で検算すると OCCT の境界箱が許容差ぶん膨らんで 1e-7 程度の誤差が乗るので、0 との比較には `abs=1e-4` を明示。
 - **`smoke-mirror.mjs` の円を描く手順が 11 回中 1 回だけ落ちた**(原因未確定、再現せず)。描く 4 verb は点を 1 つずつ食うので、クリックが早すぎると図形が出ないのに理由も出ない。1 手ごとに `#command-prompt` の待ち受け(`awaitPrompt`)で確かめ、失敗時にスケッチの図形・選択・トーストを出す。
 

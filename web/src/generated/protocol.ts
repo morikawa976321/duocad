@@ -14,6 +14,7 @@ export const COMMAND_CATEGORY = {
   sketch_create_offset: 'sketch',
   add_line: 'sketch',
   add_circle: 'sketch',
+  add_ellipse: 'sketch',
   add_rectangle: 'sketch',
   add_arc: 'sketch',
   extrude: 'feature',
@@ -98,7 +99,8 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   sketch_create: ['base_plane'],
   sketch_create_offset: ['base_plane', 'distance'],
   add_line: ['sketch_id', 'p0', 'p1'],
-  add_circle: ['sketch_id', 'center', 'radius'],
+  add_circle: ['sketch_id', 'center', 'diameter'],
+  add_ellipse: ['sketch_id', 'center', 'width', 'height', 'angle'],
   add_rectangle: ['sketch_id', 'corner', 'width', 'height', 'angle'],
   add_arc: ['sketch_id', 'center', 'radius', 'start_deg', 'end_deg'],
   extrude: ['distance', 'mode', 'body_id'],
@@ -181,7 +183,8 @@ export interface CommandArguments {
   sketch_create: { base_plane?: string }
   sketch_create_offset: { base_plane?: string; distance: number }
   add_line: { sketch_id: string; p0: unknown[]; p1: unknown[] }
-  add_circle: { sketch_id: string; center: unknown[]; radius: number }
+  add_circle: { sketch_id: string; center: unknown[]; diameter: number }
+  add_ellipse: { sketch_id: string; center: unknown[]; width: number; height: number; angle: number }
   add_rectangle: { sketch_id: string; corner: unknown[]; width: number; height: number }
   add_arc: { sketch_id: string; center: unknown[]; radius: number; start_deg: number; end_deg: number }
   extrude: { distance: number; mode: string }
@@ -276,6 +279,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'sketch_create_offset'; sketch_id: string; frame: { origin: number[]; u: number[]; v: number[]; normal: number[] } })
   | (AppliedVerbBase & { verb: 'add_line'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_circle'; entity_id: string })
+  | (AppliedVerbBase & { verb: 'add_ellipse'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_rectangle'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_arc'; entity_id: string })
   | (AppliedVerbBase & { verb: 'extrude'; body_id: string; distance: number; mode: string; changed_bodies: string[] })

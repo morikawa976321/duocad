@@ -31,7 +31,7 @@ def boxed() -> tuple:
     """円柱(曲面1・平面2)と直方体(平面6)を持つセッション。"""
     session = Session(None, DEVIATION)
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], RADIUS)
+    session.add_circle(sketch_id, [0.0, 0.0], 2 * RADIUS)
     session.add_rectangle(sketch_id, [40.0, -10.0], 30.0, 20.0)
     session.modify_selection([{"sketch": sketch_id, "index": 1}, {"sketch": sketch_id, "index": 2}], [])
     session.extrude(SIDE, mode="new")

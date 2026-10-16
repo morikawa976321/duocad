@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import {
   arcFromPoints,
   circleFromPoints,
+  ellipseFromPoints,
   lineFromPoints,
   rectFromPoints,
 } from '../web/src/commands/sketchGeometry.ts'
@@ -88,13 +89,32 @@ function close(actual, expected, what) {
 // ============================================================== 円
 {
   const dragged = circleFromPoints([1, 1], [4, 5], undefined)
-  close(dragged.radius, 5, '円周の点までの半径')
+  close(dragged.diameter, 10, '円周の点までの距離の2倍が直径')
 
   const keyed = circleFromPoints([0, 0], [0, 0], 20)
-  close(keyed.radius, 20, '打った半径')
+  close(keyed.diameter, 20, '打った直径')
 
-  assert.equal(circleFromPoints([0, 0], [0, 0], undefined), null, '半径0の円は作れない')
-  assert.equal(circleFromPoints([0, 0], [1, 0], -1), null, '負の半径は作れない')
+  assert.equal(circleFromPoints([0, 0], [0, 0], undefined), null, '直径0の円は作れない')
+  assert.equal(circleFromPoints([0, 0], [1, 0], -1), null, '負の直径は作れない')
+}
+
+// ============================================================== 楕円
+{
+  // 1本目の軸の端 (3,4) → 向き atan2(4,3)、横の直径 10。3点目は1本目の軸の直線から 2 離れている → 縦の直径 4。
+  const dragged = ellipseFromPoints([0, 0], [3, 4], [-1.6 + 0.6, 1.2 + 0.8], {})
+  close(dragged.width, 10, '中心から軸の端までの2倍が横の直径')
+  close(dragged.angle, (Math.atan2(4, 3) * 180) / Math.PI, '軸の端の向きが角度')
+  close(dragged.height, 4, '1本目の軸の直線からの距離の2倍が縦の直径')
+
+  const keyed = ellipseFromPoints([5, 5], undefined, undefined, { width: 30, height: 12, angle: 20 })
+  assert.deepEqual(keyed, { center: [5, 5], width: 30, height: 12, angle: 20 }, '3つとも打てば点は要らない')
+
+  const tall = ellipseFromPoints([0, 0], [2, 0], [0, 9], {})
+  close(tall.height, 18, '縦の方が長くてよい')
+
+  assert.equal(ellipseFromPoints([0, 0], [3, 0], [5, 0], {}), null, '3点目が1本目の軸の上なら縦の直径0')
+  assert.equal(ellipseFromPoints([0, 0], undefined, [0, 3], { angle: 0 }), null, '横の直径を決めるものが無い')
+  assert.equal(ellipseFromPoints([0, 0], [3, 0], [0, 3], { width: -1 }), null, '負の直径は作れない')
 }
 
 // ============================================================== 円弧(手計算値)

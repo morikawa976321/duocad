@@ -499,7 +499,7 @@ def test_a_dimension_derived_from_what_the_person_said_passes_through():
     """**厳密な照合にしない** —— 「直径8mm」から `radius: 4` を導くのは正しい。"""
     surface = tools()
     provider = RecordedProvider(
-        [tool_use("add_circle", {"sketch_id": "s", "center": [0, 0], "radius": 4}, "c0"),
+        [tool_use("add_circle", {"sketch_id": "s", "center": [0, 0], "diameter": 8}, "c0"),
          spoke("done")]
     )
 

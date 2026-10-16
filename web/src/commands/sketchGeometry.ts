@@ -1,5 +1,5 @@
 /**
- * スケッチの描く4verbが、集めた点と打った寸法から形を出す純関数。`sketch.ts` から切り出してあるのは、
+ * スケッチの描く5verbが、集めた点と打った寸法から形を出す純関数。`sketch.ts` から切り出してあるのは、
  * ここだけが `import type` しか持たず `node` で直接評価できるため(`tests/eval_sketch_geometry.mjs`)。
  * 打った寸法が優先で、空欄は集めた点から導く。作れない形は `null`(呼び出し側が理由を出す)。
  */
@@ -69,11 +69,33 @@ export function rectFromPoints(
 export function circleFromPoints(
   center: Point2,
   rim: Point2,
-  typedRadius: number | undefined,
-): { center: Point2; radius: number } | null {
-  const radius = dimension(typedRadius, Math.hypot(rim[0] - center[0], rim[1] - center[1]))
-  if (!(radius > 0)) return null
-  return { center, radius }
+  typedDiameter: number | undefined,
+): { center: Point2; diameter: number } | null {
+  const diameter = dimension(typedDiameter, 2 * Math.hypot(rim[0] - center[0], rim[1] - center[1]))
+  if (!(diameter > 0)) return null
+  return { center, diameter }
+}
+
+/**
+ * 中心・1本目の軸の端・2本目の軸の長さを決める点から `add_ellipse` の引数を出す。
+ * 1本目の軸の端が向き(`angle`)と `width`(中心までの距離の2倍)を、3点目が `height`(1本目の軸の直線からの距離の2倍)を決める。
+ * 打った寸法が優先で、寸法を打ってあれば対応する点は無くてよい(`sketch.ts` の `when`)。点も寸法も無い寸法があれば `null`。
+ */
+export function ellipseFromPoints(
+  center: Point2,
+  axisEnd: Point2 | undefined,
+  via: Point2 | undefined,
+  typed: { width?: number; height?: number; angle?: number },
+): { center: Point2; width: number; height: number; angle: number } | null {
+  const axisAngle = axisEnd ? Math.atan2(axisEnd[1] - center[1], axisEnd[0] - center[0]) * DEG : 0
+  const angle = dimension(typed.angle, axisAngle)
+  const width = typed.width ?? (axisEnd ? 2 * Math.hypot(axisEnd[0] - center[0], axisEnd[1] - center[1]) : NaN)
+  const rad = angle / DEG
+  const height =
+    typed.height ??
+    (via ? 2 * Math.abs(cross(Math.cos(rad), Math.sin(rad), via[0] - center[0], via[1] - center[1])) : NaN)
+  if (!(width > 0) || !(height > 0)) return null
+  return { center, width, height, angle }
 }
 
 function circumcenter(a: Point2, b: Point2, c: Point2): Point2 | null {
