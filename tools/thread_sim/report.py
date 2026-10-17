@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parents[2] / "output" / "thread_sim"
-MODE_JA = dict(core="芯の層間", strip_bolt="雄の山", strip_nut="雌の山", tcd="TCD")
+MODE_JA = dict(core="芯の層間", core_slice="芯(上限)", strip_bolt="雄の山", strip_nut="雌の山", tcd="FEA(芯の層間ほか)", tighten="締め付け")
 
 
 def load(study: str):
@@ -24,9 +24,11 @@ def load(study: str):
 
 
 def fmin(row):
+    """引張で保持できる荷重(締め付けの判定は除く)。"""
     F = row.get("F")
     if not F:
         return None, None
+    F = {k: v for k, v in F.items() if k in ("tcd", "strip_bolt", "strip_nut", "core")}
     k = min(F, key=F.get)
     return F[k], k
 
@@ -39,7 +41,8 @@ def cell_F(r, e):
             v, k = fmin(row)
             if v is None:
                 return f"掛からず({row.get('engagement', 0):+.2f})"
-            return f"{v:.0f} {MODE_JA.get(k, k)} (掛{row['engagement']:.2f})"
+            tight = row["F"].get("tighten")
+            return f"{v:.0f} {MODE_JA.get(k, k)} / 締{tight:.0f} (掛{row['engagement']:.2f})" if tight else f"{v:.0f} {MODE_JA.get(k, k)} (掛{row['engagement']:.2f})"
     return ""
 
 

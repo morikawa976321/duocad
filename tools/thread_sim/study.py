@@ -72,7 +72,8 @@ def run_one(spec: dict, printer_kw: dict, e_list, mat_kw: dict) -> dict:
                 r = ee.strength
                 row.update(F=r.F, mode=r.mode, tcd_mode=r.detail["tcd_mode"], tcd_where=r.detail["tcd_where"],
                            share=r.detail["share"], F_yield_contact=r.detail["F_yield_contact"],
-                           initial_penetration=r.detail["initial_penetration"])
+                           initial_penetration=r.detail["initial_penetration"], beta_eff=r.detail["beta_eff"],
+                           jump_ratio=r.detail["jump_ratio"])
             else:
                 row["error"] = ee.extra.get("strength_error")
         else:
@@ -81,6 +82,95 @@ def run_one(spec: dict, printer_kw: dict, e_list, mat_kw: dict) -> dict:
     out["rows"] = rows
     out["seconds"] = time.perf_counter() - t0
     return out
+
+
+def _sim(des, pr):
+    """誤差なしの印刷で、余り(はまる余裕、半径)と掛かり代。"""
+    e = ev.evaluate(des, pr, with_strength=False)
+    return e
+
+
+def _strength_row(des, pr, mat, eps):
+    """実際の誤差 eps(雌雄の和・半径。+で雄が太り穴が痩せる)で刷ったときの掛かり代と強さ。"""
+    prb = pr.with_(contour_bias=pr.contour_bias + eps / 2, hole_bias=pr.hole_bias - eps / 2)
+    e = ev.evaluate(des, prb, with_strength=False)
+    row = dict(eps=eps, engagement=e.engagement, margin=e.margin, play=e.play)
+    if e.margin < -0.005:
+        row["error"] = "はまらない"
+        return row
+    if e.engagement <= 0.02:
+        row["F"] = None
+        return row
+    s = ev.strength_of(e, mat)
+    if s is None:
+        row["error"] = e.extra.get("strength_error")
+        return row
+    row.update(F=s.F, mode=s.mode, tcd_where=s.detail["tcd_where"], share=s.detail["share"],
+               beta_eff=s.detail["beta_eff"], jump_ratio=s.detail["jump_ratio"], F_yield_contact=s.detail["F_yield_contact"])
+    return row
+
+
+def run_window(spec: dict, printer_kw: dict, opts, mat_kw: dict) -> dict:
+    """設計の隙間を1つに決め、印刷の誤差を外形と穴の系統誤差として与えて評価する(astra の指摘)。
+
+    誤差 ε は外形と穴の半径を一様にずらすので、余りも掛かり代もちょうど ε だけ動く。だから
+    誤差を吸収できる幅 W = 余り + 掛かり代 − 掛かりの下限 は誤差なしの模擬1回から出る。
+    半径方向の隙間なら W は隙間によらず一定、法線方向なら隙間を振って W の窓の中心が ε=0 に来る隙間を選ぶ。
+    強さは窓の中心(ε=0)と緩い端(掛かり代 = 下限)と固い端(余り 0)で見る。"""
+    t0 = time.perf_counter()
+    e_req = opts.get("e_req", 0.1) if isinstance(opts, dict) else 0.1
+    pr = DEFAULT.with_(**printer_kw)
+    mat = st.PrintedPLA(**mat_kw)
+    prof = make_profile(spec)
+    des = ev.Design(spec["name"], prof, 0.3, mode=spec["mode"], L_nut=spec["L_nut"], R_out=spec["R_out"],
+                    bolt_flipped=spec.get("bolt_flipped", False), nut_flipped=spec.get("nut_flipped", False))
+    out = dict(spec, printer=printer_kw, mat=mat_kw, e_req=e_req, depth=prof.depth, flank=prof.flank_angles())
+    if des.mode == "radial":
+        e1 = _sim(des, pr)
+        c_geo = des.clearance - e1.margin
+        e_g = _sim(replace(des, clearance=c_geo), pr)
+        W = e_g.margin + e_g.engagement - e_req
+        c_center = c_geo + W / 2
+        scan = [(c_geo, e_g.margin, e_g.engagement)]
+    else:
+        c_geo = ev.c_required(des, pr)
+        if not math.isfinite(c_geo):
+            out["error"] = "どの隙間でも包絡が通らない"
+            return out
+        scan = []
+        for dc in (0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.45):
+            try:
+                e_c = _sim(replace(des, clearance=c_geo + dc), pr)
+            except ValueError:
+                break
+            scan.append((c_geo + dc, e_c.margin, e_c.engagement))
+        # 窓の中心 = (余り − 掛かり代 + 下限)/2 が 0 になる隙間を線形補間で
+        cen = [(c, (m - g + e_req) / 2, m + g - e_req) for c, m, g in scan]
+        c_center, W = cen[0][0], cen[0][2]
+        for (c0, z0, w0), (c1, z1, w1) in zip(cen, cen[1:]):
+            if z0 <= 0 <= z1:
+                a = (0 - z0) / (z1 - z0) if z1 != z0 else 0.0
+                c_center, W = c0 + a * (c1 - c0), w0 + a * (w1 - w0)
+                break
+        else:
+            c_center, W = (cen[-1][0], cen[-1][2]) if cen[-1][1] < 0 else (cen[0][0], cen[0][2])
+    e_g0 = _sim(replace(des, clearance=c_geo), pr)
+    out.update(c_geo=c_geo, c_center=c_center, W=W, scan=scan, over_bolt=e_g0.over_bolt, over_nut=e_g0.over_nut,
+               depth_kept=e_g0.depth_kept, rms_dev=e_g0.rms_dev, engagement_at_cgeo=e_g0.engagement)
+    if W <= 0:
+        out["rows"] = []
+        out["seconds"] = time.perf_counter() - t0
+        return out
+    dc = replace(des, clearance=c_center)
+    out["rows"] = [_strength_row(dc, pr, mat, eps) for eps in (0.0, -W / 2, +W / 2 - 1e-3)]
+    out["seconds"] = time.perf_counter() - t0
+    return out
+
+
+def study4():
+    """study1 と同じ設計を、窓の幅 W と、窓の中心・緩い端・固い端での強さ(壁と充填のモデル)で評価し直す。"""
+    specs, _, _, _ = study1()
+    return specs, {}, dict(e_req=0.1, runner="window"), {}
 
 
 def study1():
@@ -130,7 +220,31 @@ def study2():
     return [(dict(s, name=f"{s['name']} | {vn}", variant=vn), pk, mk) for s in base for vn, pk, mk in variants], [0.1], None
 
 
-STUDIES = {"study1": study1, "study2": study2}
+def flats_trapezoid(D, beta, depth, crest, root):
+    """斜面の角・深さ・山頂の平坦・谷の平坦からピッチが決まる対称台形の仕様。"""
+    P = round(2 * depth * math.tan(math.radians(beta)) + crest + root, 4)
+    return dict(family="trap", D=D, P=P, depth=depth, b_lo=beta, b_up=beta, crest_share=crest / (crest + root))
+
+
+def study3():
+    """改良の探索(格子): 対称台形の角・深さ・山頂/谷の平坦。隙間は半径方向(THREAD.md の定義)。
+    誤差 e は 0.05/0.15/0.25 で評価し、目的は e=0.15 での破断荷重(掛かり代 ≥ 0.1 を条件)。"""
+    specs = []
+    for D in (3, 4, 5, 6, 8):
+        base = dict(L_nut=float(D), R_out=0.9 * D, mode="radial")
+        for beta in (40, 45, 50):
+            for depth in (0.25, 0.35, 0.5, 0.7):
+                if depth > 0.25 * D:
+                    continue
+                for crest in (0.2, 0.4):
+                    for root in (0.2, 0.4):
+                        s = dict(base, **flats_trapezoid(D, beta, depth, crest, root))
+                        s["name"] = f"台形{beta} D{D} h{depth} 山{crest} 谷{root}"
+                        specs.append(s)
+    return specs, {}, [0.05, 0.15, 0.25], {}
+
+
+STUDIES = {"study1": study1, "study2": study2, "study3": study3, "study4": study4}
 
 
 def main():
@@ -161,7 +275,8 @@ def main():
     print(f"{a.study}: {len(specs)} 設計、済み {len(done)}、残り {len(todo)}", flush=True)
     t0 = time.perf_counter()
     with ProcessPoolExecutor(max_workers=a.workers) as pool, path.open("a", encoding="utf-8") as fh:
-        futs = {pool.submit(run_one, s, pk, e_list, mk): s for s, pk, mk in todo}
+        runner = run_window if isinstance(e_list, dict) and e_list.get("runner") == "window" else run_one
+        futs = {pool.submit(runner, s, pk, e_list, mk): s for s, pk, mk in todo}
         for i, fu in enumerate(as_completed(futs), 1):
             s = futs[fu]
             try:

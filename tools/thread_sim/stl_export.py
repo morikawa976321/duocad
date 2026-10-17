@@ -52,18 +52,19 @@ def simplify_profile(p: Profile, tol: float = 0.003):
     return out
 
 
-def _hex_prism(across_flats: float, z0: float, h: float):
-    R = across_flats / math.sqrt(3)
+def _hex_prism(across_flats: float, z0: float, h: float, sides: int = 6):
+    """正多角柱(既定は六角)。across_flats は対辺の距離。"""
+    R = across_flats / 2 / math.cos(math.pi / sides)
     poly = BRepBuilderAPI_MakePolygon()
-    for i in range(6):
-        a = math.pi / 6 + i * math.pi / 3
+    for i in range(sides):
+        a = math.pi / sides + i * 2 * math.pi / sides
         poly.Add(gp_Pnt(R * math.cos(a), R * math.sin(a), z0))
     poly.Close()
     face = BRepBuilderAPI_MakeFace(poly.Wire(), True).Face()
     return BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, h)).Shape()
 
 
-def bolt(profile: Profile, length: float, head_af: float, head_h: float, chamfer: float | None = None):
+def bolt(profile: Profile, length: float, head_af: float, head_h: float, chamfer: float | None = None, sides: int = 6):
     """六角頭のボルト。頭の上面 z=0 から軸が z=length まで。先端に 45° の面取り(深さ = 山の高さ + 0.1P)。"""
     prof = simplify_profile(profile)
     P = profile.pitch
@@ -73,11 +74,11 @@ def bolt(profile: Profile, length: float, head_af: float, head_h: float, chamfer
     c = (r_maj - r_min) + 0.1 * P if chamfer is None else chamfer
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
     seg = BRepAlgoAPI_Common(seg, tp.revolve([(0, -1), (r_maj + 1, -1), (r_maj + 1, length - c - 1), (r_maj - c, length), (0, length)])).Shape()
-    head = _hex_prism(head_af, -head_h, head_h)
+    head = _hex_prism(head_af, -head_h, head_h, sides)
     return BRepAlgoAPI_Fuse(head, seg).Shape()
 
 
-def nut(profile: Profile, height: float, af: float):
+def nut(profile: Profile, height: float, af: float, sides: int = 6):
     """六角ナット。穴の両端を山の高さだけ 45° で面取りしてから、ねじを切る(THREAD.md の雌の手順)。
     profile は雌の穴の面の山形(nut_of で作ったもの)。"""
     prof = simplify_profile(profile)
@@ -87,7 +88,7 @@ def nut(profile: Profile, height: float, af: float):
     # 下穴と埋める円柱を谷と同じ半径にすると、谷の帯(r 一定の線織面)が円筒面と重なり、山形によっては
     # 三角形に分割できない面が残る(実測: 45° 台形 d6 P1.5)。谷より 0.01mm 大きくして重ねない
     r_bore_max = r_root + 0.01
-    body = BRepAlgoAPI_Cut(_hex_prism(af, 0.0, height), tp.cylinder(r_bore_max, 0.0, height)).Shape()
+    body = BRepAlgoAPI_Cut(_hex_prism(af, 0.0, height, sides), tp.cylinder(r_bore_max, 0.0, height)).Shape()
     ch = BRepFilletAPI_MakeChamfer(body)
     for e in tp._circles_at(body, 0.0) + tp._circles_at(body, height):
         ch.Add(depth, e)

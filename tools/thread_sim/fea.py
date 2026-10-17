@@ -124,9 +124,17 @@ class BodyResult:
 
 
 class Body:
-    def __init__(self, mesh: Mesh, material: Material, conditions=(), loads=(), *, plane_strain=False):
+    def __init__(self, mesh: Mesh, material, conditions=(), loads=(), *, plane_strain=False, groups=None):
+        """material は Material 1つか、その列。列のときは groups(要素ごとの添字)で要素の材料を選ぶ
+        (印刷の壁の帯と疎な充填を分けるため)。"""
         self.mesh, self.material = mesh, material
-        self.D = material.stiffness()
+        mats = list(material) if isinstance(material, (list, tuple)) else [material]
+        Ds = np.stack([m.stiffness() for m in mats])
+        g = np.zeros(len(mesh.tris), int) if groups is None else np.asarray(groups, int)
+        if len(g) != len(mesh.tris) or g.min() < 0 or g.max() >= len(mats):
+            raise ValueError("groups must index the material list, one per element")
+        self.D = Ds[0]
+        self.De = Ds[g]  # (要素, 4, 4)
         ndof = 2 * len(mesh.nodes)
         started = perf_counter()
         rows, cols, values = [], [], []
@@ -134,7 +142,7 @@ class Body:
             ids = np.arange(start, min(start + 512, len(mesh.tris)))
             b, pos, det = _kinematics(mesh, ids)
             w = det[:, None] * WEIGHTS * 2 * np.pi * pos[:, :, 0]
-            ke = np.einsum('eqai,ab,eqbj,eq->eij', b, self.D, b, w, optimize=True)
+            ke = np.einsum('eqai,eab,eqbj,eq->eij', b, self.De[ids], b, w, optimize=True)
             dofs = _dofs(mesh.tris[ids])
             rows.append(np.broadcast_to(dofs[:, :, None], ke.shape).ravel().copy())
             cols.append(np.broadcast_to(dofs[:, None, :], ke.shape).ravel().copy())
@@ -215,7 +223,7 @@ class Body:
             ids = np.arange(start, min(start + 512, len(self.mesh.tris)))
             b, pos, det = _kinematics(self.mesh, ids)
             strain = np.einsum('eqai,ei->eqa', b, u[_dofs(self.mesh.tris[ids])])
-            stress.append(strain @ self.D.T)
+            stress.append(np.einsum('eab,eqb->eqa', self.De[ids], strain))
             positions.append(pos)
             areas.append(det[:, None] * WEIGHTS)
         pos, area = np.concatenate(positions), np.concatenate(areas)
@@ -227,7 +235,7 @@ class Body:
         ids = np.asarray(elements, dtype=int)
         b, pos, _ = _kinematics(self.mesh, ids, np.asarray(natural))
         strain = np.einsum('eqai,ei->eqa', b, np.asarray(displacement).ravel()[_dofs(self.mesh.tris[ids])])
-        return strain @ self.D.T, pos
+        return np.einsum('eab,eqb->eqa', self.De[ids], strain), pos
 
 
 @dataclass(frozen=True)

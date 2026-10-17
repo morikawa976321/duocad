@@ -40,10 +40,24 @@ class PrintedPLA:
     S_il: float = 25.0  # 層間・ビード間のせん断
     C: float = 70.0  # 圧縮(圧潰)
     L: float = 0.5  # TCD の臨界距離。面積法の半径 R_A = 1.32·L(Taylor)
+    mu: float = 0.3  # 印刷面どうしの摩擦係数(Santana 2021 の 0.12〜0.38 の中ほど)。FEA は摩擦なしで、締め付けの判定だけに使う
+    # 既定の印刷(壁2周・zig-zag 充填15%)の構造: 表面から t_wall までは中実の壁、その内側は疎な充填。
+    # 充填は層ごとに向きが変わり層間は線の交点でしか接しないので、剛性も層間の強さもごく小さい(AI の仮置き)
+    walls: bool = True
+    t_wall: float = 0.83  # 外壁 0.42 + 内壁 0.45 − 重なり h(1−π/4)
+    shell_bottom: float = 0.6  # 下面の中実層 3層
+    shell_top: float = 1.0  # 上面の中実層 5層
+    infill_E: float = 0.06  # 充填の剛性(中実比)
+    infill_Z: float = 0.03  # 充填の層間の引張・せん断の強さ(中実比)
 
     def material(self) -> Material:
         G = self.E_p / (2 * (1 + self.nu_p))
         return Material(self.E_p, self.E_z, self.nu_p, self.nu_zp, G)
+
+    def infill_material(self) -> Material:
+        f = self.infill_E
+        G = self.E_p / (2 * (1 + self.nu_p))
+        return Material(f * self.E_p, f * self.E_z, self.nu_p, self.nu_zp, f * G)
 
 
 @dataclass
@@ -163,9 +177,13 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     size = _size_fn(surf_pts, j.h_surf, j.h_core)
     bmesh = _mesh_or_dump(bpoly, size, j, "bolt")
     nmesh = _mesh_or_dump(npoly, size, j, "nut")
-    mat = m.material()
-    bolt = Body(bmesh, mat, [Dirichlet(bid["bottom"], uz=-1.0)])
-    nut = Body(nmesh, mat, [Dirichlet(nid["bearing"], uz=0.0)])
+    mats = [m.material(), m.infill_material()]
+    bwall = _wall_rule(jj, m, "bolt")
+    nwall = _wall_rule(jj, m, "nut")
+    bg = np.where(bwall(bmesh.nodes[bmesh.tris[:, :3]].mean(axis=1)), 0, 1)
+    ng = np.where(nwall(nmesh.nodes[nmesh.tris[:, :3]].mean(axis=1)), 0, 1)
+    bolt = Body(bmesh, mats, [Dirichlet(bid["bottom"], uz=-1.0)], groups=bg)
+    nut = Body(nmesh, mats, [Dirichlet(nid["bearing"], uz=0.0)], groups=ng)
     system = ContactSystem([bolt, nut], [ContactPair(0, bid["surface"], 1, nid["surface"])], search_distance=0.15,
                            allow_penetration=True)
     # 節点から最寄りの辺へ測る隙間は、軸に直角に近い棚の角で数µm 負になる(重なっていなくても。実測で最小 -0.004mm)。
@@ -179,7 +197,7 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     probe = 1e-3
     r = system.solve(probe)
     F_probe = _axial_force(bolt, r.bodies[0], bid["bottom"])
-    tcd = _TcdAverager([bpoly, npoly], [bolt, nut], [r.bodies[0], r.bodies[1]], [m.L * 1.32], exclude=dict(
+    tcd = _TcdAverager([bpoly, npoly], [bolt, nut], [r.bodies[0], r.bodies[1]], [m.L * 1.32], walls=[bwall, nwall], exclude=dict(
         bolt=lambda p: p[:, 1] < -j.L_below + 1.5 * j.pitch, nut=lambda p: np.hypot(p[:, 0] - j.r_bear, p[:, 1]) < 0.3))
     fi_probe, _, _ = tcd.index(r, m)
     # 破壊指数は応力の2次なので、だいたい Δ ∝ 1/√FI。そこを中心に走査する(単調とは限らないので二分探索はしない)
@@ -210,8 +228,15 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     # 平均化しない接触圧が C に届く荷重は、局所の降伏の始まりの目安(メッシュに依存する)。破断の判定には入れない
     F_yield_contact = rows[-1][1] * m.C / max(pressure, 1e-9)
     Fs = dict(tcd=F_tcd, **net)
-    mode = min(Fs, key=Fs.get)
-    detail = dict(initial_penetration=pen_info, F_yield_contact=F_yield_contact, tcd_mode=mode_tcd, tcd_where=where_tcd, share=share, offset=(t_lo, t_hi), nodes=(len(bmesh.nodes), len(nmesh.nodes)),
+    beta_eff, slip = _contact_angle_and_slip(system, last, jj)
+    # 引張で保持できる荷重の判定は下限側(リングの FEA と山のせん断)で取る。芯の上限 core_slice と締め付けは別に持つ
+    mode = min(("tcd", "strip_bolt", "strip_nut"), key=Fs.get)
+    Fs["tighten"] = _tighten(jj, m, beta_eff)
+    # 乗り越えの目安: 破断荷重まで線形に伸ばしたときの、接触点での雄と雌の半径方向の相対変位 ÷ 掛かり代
+    F_last = rows[-1][1]
+    engagement = float(jj.bolt_r(np.linspace(0, j.pitch, 2000)).max() - jj.nut_r(np.linspace(0, j.pitch, 2000)).min())
+    jump_ratio = slip * (Fs[mode] / max(F_last, 1e-9)) / max(engagement, 1e-9)
+    detail = dict(beta_eff=beta_eff, jump_ratio=jump_ratio, initial_penetration=pen_info, F_yield_contact=F_yield_contact, tcd_mode=mode_tcd, tcd_where=where_tcd, share=share, offset=(t_lo, t_hi), nodes=(len(bmesh.nodes), len(nmesh.nodes)),
                   rows=[(d, F, fi, w, mo) for d, F, fi, w, mo, _ in rows], max_pressure_at_last=pressure,
                   min_angle=(float(bmesh.min_angles().min()), float(nmesh.min_angles().min())))
     if verbose:
@@ -230,6 +255,61 @@ def _mesh_or_dump(poly, size, j: Joint, name):
         d.mkdir(parents=True, exist_ok=True)
         np.save(d / f"{name}_{time.time_ns()}.npy", poly)
         raise
+
+
+def _contact_angle_and_slip(system: ContactSystem, res, j: Joint):
+    """接触力で重みを付けた実効の斜面角 β(度、水平から)と、接触点での半径方向の相対変位(雌の外向き − 雄の外向き、mm)。"""
+    lam = res.multipliers
+    act = lam > lam.max() * 1e-6
+    if not act.any():
+        return float("nan"), 0.0
+    n = res.normals[act]
+    w = lam[act]
+    beta = float(np.degrees(np.arctan2(np.abs(n[:, 0]), np.abs(n[:, 1]))) @ w / w.sum())
+    # 接触点の近くの節点の半径方向の変位(雄は内へ縮み、雌は外へ広がると乗り越えに近づく)
+    pts = res.points[act]
+    du = []
+    for body, br in zip(system.bodies, res.bodies):
+        tree = cKDTree(body.mesh.nodes)
+        _, idx = tree.query(pts)
+        du.append(br.displacement[idx, 0])
+    rel = (du[1] - du[0]) @ w / w.sum()
+    return beta, float(rel)
+
+
+def _tighten(j: Joint, m: PrintedPLA, beta_eff: float) -> float:
+    """締め付けのとき芯が層間で切れる軸力: 引張 σ = F/(π r1²) と、ねじ山の摩擦トルク T = F·r2·(tanλ + μ/cosβ)
+    によるねじり τ = 2T/(π r1³) を、層間の (σ/Z_t)² + (τ/S)² = 1 で組み合わせる(座面の摩擦は頭の側で受けるので芯に載せない)。"""
+    z = np.linspace(0, j.pitch, 4000, endpoint=False)
+    rb = j.bolt_r(z)
+    r1, r_crest = float(rb.min()), float(rb.max())
+    r2 = 0.5 * (r1 + r_crest)
+    lam = math.atan(j.pitch / (2 * math.pi * r2))
+    b = math.radians(beta_eff if math.isfinite(beta_eff) else 30.0)
+    K = math.tan(lam) + m.mu / max(math.cos(b), 1e-6)
+    if m.walls:
+        zz = np.linspace(0, j.pitch, 4000, endpoint=False)
+        f = j.bolt_r(zz)
+        fin = np.maximum(f - m.t_wall, 0.0)
+        A = math.pi * (np.mean(f ** 2) - np.mean(fin ** 2))  # 壁の帯(水平断面)
+        Am = math.pi * np.mean((f - m.t_wall / 2) ** 2)  # 帯の中心線が囲む面積
+        a = 1 / (m.Z_t * A)
+        c = r2 * K / (2 * Am * m.t_wall * m.S_il)  # τ = T/(2·Am·t)
+        return 1 / math.hypot(a, c)
+    a = 1 / (m.Z_t * math.pi * r1 ** 2)
+    c = 2 * r2 * K / (m.S_il * math.pi * r1 ** 3)
+    return 1 / math.hypot(a, c)
+
+
+def _wall_rule(j: Joint, m: PrintedPLA, which: str):
+    """(r, z) が中実の壁(と上下の中実層)に入るかの判定。印刷では壁は XY の断面の輪郭に沿うが、
+    ほぼ円の断面なので半径方向に t_wall とみなす。"""
+    if not m.walls:
+        return lambda p: np.ones(len(p), bool)
+    if which == "bolt":
+        return lambda p: p[:, 0] > j.bolt_r(p[:, 1]) - m.t_wall
+    return lambda p: ((p[:, 0] < j.nut_r(p[:, 1]) + m.t_wall) | (p[:, 0] > j.R_out - m.t_wall)
+                      | (p[:, 1] < m.shell_bottom) | (p[:, 1] > j.L_nut - m.shell_top))
 
 
 def _axial_force(body: Body, res, edges):
@@ -277,10 +357,19 @@ def _net_section(j: Joint, m: PrintedPLA) -> dict:
     frac_b = float((rb > r_crest_n).mean())
     frac_n = float((rn < r_crest_b).mean())
     n_threads = j.L_nut / P
-    A_core = math.pi * r_root_b ** 2
+    # 芯: 螺旋の水平断面(どの高さでも同じ形が回るだけ)の面積で、応力が一様とみた上限の見積もり。
+    # 壁のモデルでは、断面の輪郭に沿ってカム形に回る壁の帯 + 内側の充填(強さ infill_Z)。
+    # 軸対称のリング模型(FEA)は全周が同時に谷になる断面を作るので下限側になる。真の値はその間
+    zz = np.linspace(0, P, 4000, endpoint=False)
+    f = j.bolt_r(zz)
+    if m.walls:
+        fin = np.maximum(f - m.t_wall, 0.0)
+        A_core = math.pi * (np.mean(f ** 2) - np.mean(fin ** 2)) + m.infill_Z * math.pi * np.mean(fin ** 2)
+    else:
+        A_core = math.pi * float(np.mean(f ** 2))
     A_sb = 2 * math.pi * r_crest_n * P * frac_b * n_threads
     A_sn = 2 * math.pi * r_crest_b * P * frac_n * n_threads
-    return dict(core=m.Z_t * A_core, strip_bolt=m.S_il * A_sb, strip_nut=m.S_il * A_sn)
+    return dict(core_slice=m.Z_t * A_core, strip_bolt=m.S_il * A_sb, strip_nut=m.S_il * A_sn)
 
 
 class _TcdAverager:
@@ -289,13 +378,13 @@ class _TcdAverager:
     物体ごとに r-z の正方格子を張り、ガウス点の応力を最近傍で格子へ写し、材料の指示関数と一緒に円板で畳み込む
     (平均 = conv(σ·χ) / conv(χ))。格子の間隔は R/6 と 0.02mm の小さい方。"""
 
-    def __init__(self, polys, bodies, results, radii, exclude):
+    def __init__(self, polys, bodies, results, radii, exclude, walls=(None, None)):
         from scipy.signal import fftconvolve  # noqa: F401  (使えることを先に確かめる)
         from .mesh import _inside, _ring
         self.radii = list(radii)
         self.grids = []
         g = min(0.02, min(self.radii) / 6)
-        for name, poly, res in zip(("bolt", "nut"), polys, results):
+        for name, poly, res, wall in zip(("bolt", "nut"), polys, results, walls):
             ring = _ring(poly)
             r0, z0 = ring.min(axis=0)
             r1, z1 = ring.max(axis=0)
@@ -303,7 +392,10 @@ class _TcdAverager:
             zz = np.arange(z0 + g / 2, z1, g)
             Rg, Zg = np.meshgrid(rr, zz, indexing="ij")
             pts = np.column_stack([Rg.ravel(), Zg.ravel()])
-            mask = _inside(pts, [ring]).reshape(Rg.shape)
+            inside = _inside(pts, [ring])
+            if wall is not None:  # 平均は中実の壁の中だけで取る(充填の強さは見込まない)
+                inside &= wall(pts)
+            mask = inside.reshape(Rg.shape)
             gp = res.position.reshape(-1, 2)
             _, nn = cKDTree(gp).query(pts[mask.ravel()])
             ex = exclude[name](pts[mask.ravel()])
