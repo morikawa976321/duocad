@@ -29,6 +29,7 @@ from .optimize_setup import (  # noqa: F401
 )
 from .pattern import pattern_circular, pattern_rectangular  # noqa: F401
 from .rename import rename  # noqa: F401
+from .revolve import revolve  # noqa: F401
 from .shell_body import shell_body  # noqa: F401
 
 __all__ = [
@@ -56,5 +57,6 @@ __all__ = [
     "pattern_circular",
     "pattern_rectangular",
     "rename",
+    "revolve",
     "shell_body",
 ]

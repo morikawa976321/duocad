@@ -708,6 +708,68 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="revolve",
+        returns=(
+            Result("body_id", "string"),
+            Result("angle", "number"),
+            Result("mode", "string"),
+            Result("changed_bodies", "string[]"),
+        ),
+        category="feature",
+        description=(
+            "選択の領域(1つのスケッチの、何個でも)を、同じスケッチ平面上の軸のまわりに回して"
+            "回転体(軸・瓶・プーリーなど軸対称の形、外周の溝や皿穴の切り取り)を作るときに呼ぶ。"
+            "ボディを回して置き直すのは move_body で、これではない。"
+            "対象は選択から取る(引数では受けない)。"
+            'スケッチの領域は set_selection(refs=[{"sketch": sketch_id, "index": 番号}]) で先に選ぶ。'
+            "軸が領域を横切る(領域が軸の両側にまたがる)と失敗する。軸が領域の辺に重なるのはよい。"
+        ),
+        params=(
+            Param(
+                "axis",
+                ["string", "object"],
+                '回転軸。"x" / "y"(スケッチの原点を通る x / y 軸)か、領域と同じスケッチの線分への参照 '
+                '{"sketch": sketch_id, "entity": entity_id}(線分を延ばした直線が軸)',
+            ),
+            Param(
+                "angle",
+                "number",
+                "回す角度(度・0 < |angle| <= 360・既定 360)。正は軸の向き(線分の始点→終点、x / y 軸は正の向き)"
+                "まわりの右ねじ、負は逆向き",
+                required=False,
+                dimension=True,
+            ),
+            Param(
+                "mode",
+                "string",
+                "join(足す・既定) / cut(切る) / new(独立した新しいボディを作る)",
+                required=False,
+                ws="required",
+            ),
+            Param(
+                "symmetric",
+                "boolean",
+                "true ならスケッチ平面から両側へ angle の半分ずつ回す(既定 false)",
+                required=False,
+            ),
+            Param(
+                "body_id",
+                "string",
+                "対象ボディ。省略時はアクティブ(無ければ新規作成)。mode='new' では指定できない(行き先を持たない)",
+                required=False,
+                ws=False,
+            ),
+        ),
+        session="revolve",
+        previewable=True,
+        resets_selection=True,
+        note=(
+            "**`mode` はWSでだけ必須**(`extrude` と同じ理由)。**`body_id` はWSのコマンドには無い**(`extrude` と同じ)。"
+            "軸は選択ではなく引数 —— `mirror_sketch_entities` の `axis` と同じ別チャンネルで、共有選択集合に"
+            "線分を入れると領域の選択と混ざる。"
+        ),
+    ),
+    Command(
         name="fillet",
         returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
         category="feature",

@@ -59,6 +59,7 @@ TARGET_SET_ARGS = {
 #: 引数は名前であって対象集合ではない。MCPの `extrude` も同じ `body_id` を持つ。
 BODY_ID_IS_A_NAME_HERE = {
     "extrude": "どのBodyへ足す / から引くか(押し出す領域そのものは選択から取る)",
+    "revolve": "どのBodyへ足す / から引くか(回す領域そのものは選択から取る)",
 }
 
 

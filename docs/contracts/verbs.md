@@ -1,6 +1,6 @@
 # 移動・鏡映・ブーリアン・押し出し系 verb の契約
 
-pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビュー(幽霊)・引数収集 UI の契約。
+pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプレビュー(幽霊)・引数収集 UI の契約。
 いまの挙動の正はコードとテスト。ここはソースから読めない不変条件・依存禁止・罠だけ。
 
 ## ローカル幽霊(確定前のプレビュー)の層
@@ -136,3 +136,11 @@ pattern/move/mirror/boolean/envelope/extrude 系の verb と、そのプレビ�
 
 - **面の押し出しでは溝の底のような窪みの面は視点から見えず選べない。** 2 枚の同一平面の面を押す smoke の題材は溝を浅く広く(幅 24・深さ 3)した(平面の違う面を混ぜるとトーストに「同一平面上にない」)。ログの `args.faces` は配信で件数の文字列に畳まれる。
 
+## 回転体(revolve)
+
+- **幾何は `kernel_extrude.revolve_regions`**(OCP を触るカーネル層を7本目に増やさないため同居)。領域の立体を束ねて相手へ join / cut する後半は `extrude_regions` と共有(`_combine_region_solids`。統合・由来の射影も押し出しと同じ規則)。verb 側は `verbs/extrude.py` の `_resolve_faces_and_normal` / `_resolve_target` / `_editable_target` を `what="revolve"` で使う。
+- **軸は `"x"` / `"y"`(スケッチの原点を通る軸)か、領域と同じスケッチの線分 `{"sketch", "entity"}`。** ソリッドの辺・基準軸はまだ受けない。ログには**参照のまま**載せ、再生で引き直す(線分の寸法を後から変えると追従する)。鏡映が数値へ解決して載せるのは、軸自身が複製の対象に混ざりうるからで、回転体にはその事情が無い。
+- **角度は度で `0 < |angle| <= 360`、負は逆向き**(押し出しの距離の符号と同じ扱い)。正は軸の向き(線分の始点→終点)まわりの右ねじ。`symmetric` は両側へ半分ずつ。360° は角度なしの `BRepPrimAPI_MakeRevol` で作る。
+- **軸が領域を横切るのは ValueError**(`_require_one_side_of_axis`)。軸の両側に半平面を置いて共通部分の面積で決める(辺が軸上にあるのは面積0なので通る)。境界を折れ線で拾う判定は、軸をわずかにまたぐ円弧を取りこぼす。
+- **360° の回転体のシーム(継ぎ目の辺)をフィレットに渡すと、OCCT が「適した辺が無い」で断り、verb は例外で何も変えない**(`tests/test_revolve.py` が固定)。ピックからは外していない。
+- **画面(`REVOLVE`、スケッチモード)は 軸の3択(x軸 / y軸 / 線分を選ぶ)+ 線分のピック(`axis_line`。共有選択に入れない)+ 角度(既定 360)+ 種別。** 「線分を選ぶ」は `sends: null` でサーバへ行かず、`build` が線分の参照へ読み替える(`MIRROR_BODY` の「面を選ぶ」と同じ形)。**両側(`symmetric`)は画面から送らない**(選択肢は既定値を持てず、毎回1クリック増えるため)。プレビューは押し出しと同じサーバの投機実行。実機検査は `web/scripts/smoke-revolve.mjs`。

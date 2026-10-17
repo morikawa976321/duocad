@@ -18,6 +18,7 @@ export const COMMAND_CATEGORY = {
   add_rectangle: 'sketch',
   add_arc: 'sketch',
   extrude: 'feature',
+  revolve: 'feature',
   fillet: 'feature',
   chamfer: 'feature',
   shell_body: 'feature',
@@ -104,6 +105,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   add_rectangle: ['sketch_id', 'corner', 'width', 'height', 'angle'],
   add_arc: ['sketch_id', 'center', 'radius', 'start_deg', 'end_deg'],
   extrude: ['distance', 'mode', 'body_id'],
+  revolve: ['axis', 'angle', 'mode', 'symmetric', 'body_id'],
   fillet: ['radius'],
   chamfer: ['distance'],
   shell_body: ['thickness'],
@@ -188,6 +190,7 @@ export interface CommandArguments {
   add_rectangle: { sketch_id: string; corner: unknown[]; width: number; height: number }
   add_arc: { sketch_id: string; center: unknown[]; radius: number; start_deg: number; end_deg: number }
   extrude: { distance: number; mode: string }
+  revolve: { axis: string | object; angle?: number; mode: string; symmetric?: boolean }
   fillet: { radius: number | unknown[] }
   chamfer: { distance: number | unknown[] }
   shell_body: { thickness: number }
@@ -283,6 +286,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'add_rectangle'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_arc'; entity_id: string })
   | (AppliedVerbBase & { verb: 'extrude'; body_id: string; distance: number; mode: string; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'revolve'; body_id: string; angle: number; mode: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'shell_body'; body_id: string; changed_bodies: string[] })
