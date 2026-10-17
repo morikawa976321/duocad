@@ -124,7 +124,9 @@ def write_page(groups, path: Path, title: str):
 
     blocks = []
     legend = {}
-    for head, desc, items in groups:
+    for g in groups:
+        head, desc, items = g[:3]
+        svg = g[3] if len(g) > 3 else ""
         rows = []
         for iid, name, opts, flags in items:
             cells = "".join(
@@ -134,7 +136,7 @@ def write_page(groups, path: Path, title: str):
                          for k, o in enumerate(flags))
             rows.append(f'<div class="row"><div class="name">{esc(name)}</div><div class="opts">{cells}{fl}</div></div>')
             legend[iid] = [name, opts, flags]
-        blocks.append(f'<section><h2>{esc(head)}</h2><p class="desc">{esc(desc)}</p>{"".join(rows)}</section>')
+        blocks.append(f'<section><h2>{esc(head)}</h2><div class="head"><p class="desc">{esc(desc)}</p>{svg}</div>{"".join(rows)}</section>')
     css = """
 :root { --bg:#fafaf8; --fg:#222; --muted:#666; --line:#ddd; --chip:#eee; --on:#2b6cb0; --onfg:#fff; --flag:#b7791f; }
 @media (prefers-color-scheme: dark) { :root { --bg:#1b1b1d; --fg:#e8e8e8; --muted:#aaa; --line:#333; --chip:#2a2a2e; --on:#5a9be0; --onfg:#111; --flag:#d69e2e; } }
@@ -148,6 +150,9 @@ label.flag span { border:1px dashed var(--flag); } label.flag input:checked + sp
 #out { width:100%; height:90px; font:13px/1.4 ui-monospace, monospace; background:var(--chip); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px; box-sizing:border-box; }
 button { margin:8px 0; padding:8px 16px; border-radius:6px; border:0; background:var(--on); color:var(--onfg); font-size:15px; cursor:pointer; }
 .sticky { position:sticky; bottom:0; background:var(--bg); padding:8px 0; border-top:2px solid var(--line); }
+.head { display:flex; flex-wrap:wrap; gap:12px; align-items:center; } .head .desc { flex:1 1 300px; }
+svg.prof { width:260px; height:auto; max-width:100%; } svg.prof .b { fill:var(--on); opacity:.75; } svg.prof .n { fill:var(--flag); opacity:.6; }
+svg.prof text { fill:var(--muted); font-size:10px; }
 """
     js = """
 function update() {
@@ -179,6 +184,29 @@ update();
               '<span id="msg" class="desc"></span></div>'
             + f"<script>const LEGEND = {json.dumps(legend, ensure_ascii=False)};{js}</script></body></html>")
     path.write_text(page, encoding="utf-8")
+
+
+def profile_svg(bolt: pf.Profile, nut: pf.Profile, pitches: float = 2.0) -> str:
+    """ボルト(青)とナット(橙)の山形の断面を、軸を縦にして2ピッチ分描く。半径は山の付近だけを拡大。"""
+    P = bolt.pitch
+    s = np.linspace(0, pitches * P, 400)
+    rb, rn = bolt(s), nut(s)
+    r0 = min(rb.min(), rn.min()) - 0.35 * bolt.depth - 0.1
+    r1 = max(rb.max(), rn.max()) + 0.35 * bolt.depth + 0.1
+    W, H = 260, 200
+    sx_ = (W - 40) / (r1 - r0)
+    sz_ = (H - 20) / (pitches * P)
+    k = min(sx_, sz_)
+    X = lambda r: 30 + (r - r0) * k
+    Y = lambda z: H - 10 - z * k
+    pb = " ".join(f"{X(r):.1f},{Y(z):.1f}" for z, r in zip(s, rb))
+    pn = " ".join(f"{X(r):.1f},{Y(z):.1f}" for z, r in zip(s, rn))
+    zt = pitches * P
+    bolt_poly = f"{X(r0):.1f},{Y(0):.1f} {pb} {X(r0):.1f},{Y(zt):.1f}"
+    nut_poly = f"{X(r1):.1f},{Y(0):.1f} {pn} {X(r1):.1f},{Y(zt):.1f}"
+    return (f'<svg class="prof" viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="山形の断面">'
+            f'<polygon class="b" points="{bolt_poly}"/><polygon class="n" points="{nut_poly}"/>'
+            f'<text x="2" y="12">軸↑</text><text x="{W - 60}" y="{H - 2}">外側→</text></svg>')
 
 
 # ---------- 一式 ----------
@@ -222,8 +250,10 @@ def build(out: Path = OUT, only=None):
                                 dict(D=D, mode=mode, clearance=c, series=sid)))
             items.append((f"{sid}{i}", f"ナット{i}(上面の凹み{i}個)", OUTCOMES_THREAD, FLAGS_THREAD))
         shape_ja = {4: "四角", 5: "五角", 6: "六角", 8: "八角"}[sides]
+        mid = sorted(cs)[len(cs) // 2]
         groups.append((f"{sid}: {name}", f"頭とナットが{shape_ja}の組。ナットはボルトの先から手で回し、凹み1個のナットから順に試す。"
-                       "1つ試したら外してから次へ。工具は使わない。", items))
+                       "1つ試したら外してから次へ。工具は使わない。(図: 青がボルト、橙がナット)", items,
+                       profile_svg(prof, pf.nut_of(prof, mid, mode))))
     gitems = []
     for gid, d, holes in GAUGES:
         if only and gid not in only:
