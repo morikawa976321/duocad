@@ -6,7 +6,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,7 @@ from duocad import io_step, kernel, query
 from duocad.oplog import OpLog
 from duocad.server import Session
 from duocad.session import NoDocument
-from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, edit_parameter, select as _select, send_one
+from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, edit_parameter, send_one
 
 DEVIATION = 0.2
 
@@ -277,8 +276,10 @@ def test_resolved_path_must_stay_inside_models_dir_even_past_a_symlink(
     outside = tmp_path / "outside"
     link = session.models_dir / "escape.json"
     if os.name == "nt":
+        import _winapi
+
         outside.mkdir()
-        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True, capture_output=True)
+        _winapi.CreateJunction(str(outside), str(link))  # `cmd /c mklink /J` は一時パスの `&` などで壊れる
         outside.rmdir()
     else:
         link.symlink_to(outside)

@@ -26,7 +26,7 @@ def _random_rule_mask(rng, m, *, exempt=None, density=(0.7, 0.95)):
     shape = exempt.shape if exempt is not None else tuple(int(x) for x in rng.integers(8, 13, size=3))
     mask = ndimage.binary_opening(rng.random(shape) < rng.uniform(*density), structure=np.ones((m,) * 3, bool))
     if exempt is not None:
-        mask = mask & ~exempt  # 製品が渡す材料は exempt を含まない(物差しは和集合で数えるので真値は変わらない)
+        mask = mask & ~exempt  # `verdict` の契約は exempt を除いた材料を受ける(物差しは和集合で数えるので真値は変わらない)
     if not mask.any() or core_groups_oracle(mask, m, exempt) != 1:
         return None
     return mask

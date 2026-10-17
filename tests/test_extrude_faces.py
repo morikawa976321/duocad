@@ -12,9 +12,7 @@ from OCP.gp import gp_Pnt
 
 from duocad import kernel, kernel_extrude, query
 from duocad.document import Body, Document
-from duocad.region import region_ref
-from duocad.sketch import add_rectangle, sketch_create
-from duocad.verbs import extrude, extrude_faces
+from duocad.verbs import extrude_faces
 from duocad.mcp_server import DocumentTools, McpServer
 from document_support import replay_through_json
 from mcp_support import call
