@@ -343,11 +343,16 @@ class ContactSystem:
                     np.add.at(sn, sedges[:, j], sout)
                 for node in np.unique(sedges):
                     p = sm.nodes[node]
-                    t = np.clip(np.sum((p-mm.nodes[medges[:, 0]])*v, axis=1)/vv, 0, 1)
+                    raw = np.sum((p-mm.nodes[medges[:, 0]])*v, axis=1)/vv
+                    t = np.clip(raw, 0, 1)
                     projections = mm.nodes[medges[:, 0]] + t[:, None] * v
                     distance2 = np.sum((p-projections)**2, axis=1)
                     # Reject back-facing facets before choosing nearest projection.
                     distance2[mn @ sn[node] >= -1e-10] = np.inf
+                    # 射影が辺の外へはみ出して端点に丸められた組は、その辺の法線で測ると符号が逆になりうる
+                    # (実測: ナットの上端より上のボルトの節点が穴の端の頂点へ射影され、重なり0なのに g=-0.4mm)。
+                    # 両方向から見る接触なので、凸の角はもう一方の向きの制約が受け持つ
+                    distance2[(raw < -1e-9) | (raw > 1 + 1e-9)] = np.inf
                     j = int(np.argmin(distance2))
                     if not np.isfinite(distance2[j]):
                         continue

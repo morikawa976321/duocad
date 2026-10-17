@@ -215,7 +215,7 @@ def simulate(part: Part, pr: Printer, n_theta: int = N_THETA, seed: int = 0) -> 
         sel = np.nonzero((z_field >= kk * h) & (z_field < (kk + 1) * h))[0]
         for j in sel:
             t = (z_field[j] - zc) / half
-            shrink = half * (1 - math.sqrt(max(0.0, 1 - t * t)))
+            shrink = pr.bead_round * half * (1 - math.sqrt(max(0.0, 1 - t * t)))
             # 雄は材料を、雌は穴を広げる向き(=雌の材料の侵食)に、円板で厳密に縮める
             Rz = erode(contour[i], shrink) if is_bolt else dilate(contour[i], shrink)
             F[:, j] = np.maximum(F[:, j], Rz) if is_bolt else np.minimum(F[:, j], Rz)
@@ -228,7 +228,7 @@ def simulate(part: Part, pr: Printer, n_theta: int = N_THETA, seed: int = 0) -> 
                 ok = (np.abs(t) <= 1) & (sag[i] > 0)
                 if not ok.any():
                     continue
-                shrink = half * (1 - np.sqrt(np.clip(1 - t * t, 0.0, None)))
+                shrink = pr.bead_round * half * (1 - np.sqrt(np.clip(1 - t * t, 0.0, None)))
                 lip = contour[i] - shrink if is_bolt else contour[i] + shrink
                 if is_bolt:
                     F[ok, j] = np.maximum(F[ok, j], lip[ok])

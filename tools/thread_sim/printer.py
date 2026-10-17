@@ -37,6 +37,8 @@ class Printer:
     sag_phi_ok: float = 0.5
     sag_amp: float = 1.0
     sag_exp: float = 1.5
+    # --- ビードの側面の丸み: 1 で半径 h/2 の半円、0 で角の立った矩形(層の段がそのまま出る) ---
+    bead_round: float = 1.0
 
     def with_(self, **kw) -> "Printer":
         return replace(self, **kw)

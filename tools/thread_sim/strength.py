@@ -152,8 +152,8 @@ class Result:
 def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, verbose=False) -> Result:
     t_lo, t_hi = nominal_offset(j)
     # 多角形は z を dz 刻みで取るので、軸に直角に近い面は dz の幅の斜面になり、t_hi ちょうどでは数µm 食い込む(実測)。
-    # dz だけ下げて置く(荷重の最初の dz ぶんで閉じる)
-    shift = t_hi - j.dz
+    # dz だけ下げて置く(荷重の最初の dz ぶんで閉じる)。遊びが dz より狭いときは区間の中央まで
+    shift = t_hi - min(j.dz, 0.5 * (t_hi - t_lo))
     nut_r0 = j.nut_r
     jj = Joint(j.bolt_r, lambda z: nut_r0(z - shift), j.pitch, j.L_nut, j.R_out, j.r_bear, j.L_below, j.L_above,
                j.dz, j.h_surf, j.h_core)
@@ -161,8 +161,8 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     npoly, nid = _nut_poly(jj)
     surf_pts = np.vstack([bpoly[1:-1], npoly[4:]])
     size = _size_fn(surf_pts, j.h_surf, j.h_core)
-    bmesh = mesh_polygon(bpoly, size, j.h_surf * 0.5, j.h_core)
-    nmesh = mesh_polygon(npoly, size, j.h_surf * 0.5, j.h_core)
+    bmesh = _mesh_or_dump(bpoly, size, j, "bolt")
+    nmesh = _mesh_or_dump(npoly, size, j, "nut")
     mat = m.material()
     bolt = Body(bmesh, mat, [Dirichlet(bid["bottom"], uz=-1.0)])
     nut = Body(nmesh, mat, [Dirichlet(nid["bearing"], uz=0.0)])
@@ -217,6 +217,19 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     if verbose:
         print(detail)
     return Result(Fs, mode, detail)
+
+
+def _mesh_or_dump(poly, size, j: Joint, name):
+    """メッシュに失敗したら、再現用に多角形を output/thread_sim/mesh_fail/ へ残して投げ直す。"""
+    try:
+        return mesh_polygon(poly, size, j.h_surf * 0.5, j.h_core)
+    except ValueError:
+        import time
+        from pathlib import Path
+        d = Path(__file__).resolve().parents[2] / "output" / "thread_sim" / "mesh_fail"
+        d.mkdir(parents=True, exist_ok=True)
+        np.save(d / f"{name}_{time.time_ns()}.npy", poly)
+        raise
 
 
 def _axial_force(body: Body, res, edges):
