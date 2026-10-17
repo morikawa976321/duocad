@@ -28,19 +28,24 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
   半円は小径で W が小さい(垂れが無ければ D6 では並ぶ)。
 - 試し刷り一式 TP1(30部品、`plate.stl`・結果ページ・事前の予測)は `output/thread_sim/testprint/`(git 管理外。`python -m tools.thread_sim.testprint` で作り直せる)。
   本人へのカードは decisions.md の「本人待ち」。
-- study1〜4 は手元で完了(`output/thread_sim/study*.jsonl`)。第2段 study5(小径 D2〜6、858 件)を手元で計算中。
-  クラウドのセッション3本(study2・3・5)は結果がまだ届いていない(届いたら W の一致を突き合わせるだけでよい。手元で同じものを回した)。
+- Codex のレビューの重い指摘3件(法線方向の窓の中心、強度の走査の起点、片方向の接触圧)と、緩い端でメッシュが発散する件を直した
+  (e21b6e0。decisions.md「レビューの重い指摘3件」)。**5章の表は直す前の数値**なので、study2〜5 を全件回し直している:
+  - 手元: study4(168 件、2 並列。空き RAM が 6GB を切っているので 2 に絞った)。直す前の結果は `output/thread_sim/pre_review_fix/`。
+  - クラウド: study2・3・4・5 を1本ずつ(結果は `thread-sim/<study>-v2-results` ブランチの `tools/thread_sim/results/`)。
+    直す前のコードで出した study2 のクラウドの結果は、手元と W が 238 件すべて一致した。
 
 ### 次にやること
 
-1. study5 の結果で、最小径(W ≥ 0.2 が残る最小の D)と、非対称・山頂の取り分の効きを THREAD_SIM.md 5.4 に書く。
+1. 回し直した study4・2・3 で THREAD_SIM.md 5.1〜5.3 の表と数値を置き換え、結論(40〜50° の台形が上位、W ≈ 山の高さ − 0.2mm)が残るか確かめる。
+   study5 で最小径(W ≥ 0.2 が残る最小の D)と、非対称・山頂の取り分の効きを 5.4 に書く。
 2. 本人が試し刷りの結果を返したら: `python -m tools.thread_sim.calibrate "<1行>"` で予測と比べ、本人の言葉を decisions.md と記憶系に記録し、
    垂れ・段の鼻・寸法誤差の扱いを直して、ねじ verb(THREAD.md)の「印刷どうし」の山形・ピッチ・既定の隙間を決める。
 
 ### 再開の手順
 
-- 走っている計算は、同じコマンドで続きから回る(済んだ行は飛ばす): `.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study study4 --workers 4`
-- クラウドの結果: `git fetch origin thread-sim/study3-results` → `git show origin/thread-sim/study3-results:tools/thread_sim/results/study3.jsonl > output/thread_sim/study3.jsonl`
+- 走っている計算は、同じコマンドで続きから回る(済んだ行は飛ばす): `.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study study4 --workers 2`
+- クラウドの結果: `git fetch origin thread-sim/study3-v2-results` → `git show origin/thread-sim/study3-v2-results:tools/thread_sim/results/study3.jsonl > output/thread_sim/study3.jsonl`
+  (`-v2` の無いブランチは直す前のコードの結果なので使わない)
 - 表: `.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.report study1`(study4 用の表は report.py に足す)
 
 
