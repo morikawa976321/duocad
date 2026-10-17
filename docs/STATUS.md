@@ -19,6 +19,29 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 
 本人に残りそうな判断: 試し刷り(身体が要る)。OrcaSlicer の追加ダウンロードの可否(自前の模擬の突き合わせ用。無くても進む)。
 
+### どこまで来たか(2026-10-17 夕)
+
+- 評価方法の道具は [tools/thread_sim/](../tools/thread_sim/) にそろった(説明は [THREAD_SIM.md](THREAD_SIM.md))。FEA は解析解で検証済み。
+- 指標は「誤差を吸収できる幅 W(雌雄の和・半径)」と、窓の中心・緩い端での破断荷重(壁2周+疎な充填のモデル)、締め付けの限界、乗り越えの目安。
+- 中間の結論(D6・P1.5・深さ0.6): W は 45° 台形 0.37、30° 台形 0.08、ISO M6 0.01、半円 0.10。強さはどれも 280〜330N で差が小さい。
+- 試し刷り一式(30部品、STL・結果を返すページ・事前の予測)は `output/thread_sim/testprint/`(git 管理外。`python -m tools.thread_sim.testprint` で作り直せる)。
+- 走っているもの: study4(全設計を窓の指標で、手元4並列、`output/thread_sim/study4.jsonl`)、study3(探索 436 設計、クラウドのセッション
+  「Thread_sim study3 格子探索」。結果はブランチ `thread-sim/study3-results` の `tools/thread_sim/results/study3.jsonl`)、
+  Codex の 3D 周期 FEA(リング模型との比較。`tools/thread_sim/fea3d.py` を作らせている)。
+
+### 次にやること
+
+1. study4 の表を読み、THREAD_SIM.md に結果を書く。study2(感度)を回す。
+2. study3 の結果を取り込み、径ごとのパレート(W と強さ)から候補を選ぶ。
+3. 3D 周期 FEA でリング模型の偏りを確かめ、強さの下限と上限のどちらに寄るかを決める。
+4. 本人への出し方(試し刷りのページ・カード)をまとめる。
+
+### 再開の手順
+
+- 走っている計算は、同じコマンドで続きから回る(済んだ行は飛ばす): `.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study study4 --workers 4`
+- クラウドの結果: `git fetch origin thread-sim/study3-results` → `git show origin/thread-sim/study3-results:tools/thread_sim/results/study3.jsonl > output/thread_sim/study3.jsonl`
+- 表: `.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.report study1`(study4 用の表は report.py に足す)
+
 
 ## 実装(2026-10-16 完了。本人の指示「#165〜#173 をすべて完了させる」)
 
