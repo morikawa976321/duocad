@@ -213,6 +213,22 @@ def table_robust(rows, out=sys.stdout):
                       f"{(r.get('F_rob') or float('nan')):.0f} |\n")
 
 
+def table_split(rows, out=sys.stdout):
+    """study7: 隙間の雌雄の分け方(雄が受け持つ割合)ごとの、窓の中心と緩い端の保持。"""
+    by = defaultdict(dict)
+    for r in rows:
+        by[r["name"].rsplit(" 雄", 1)[0]][r["split"]] = r
+    splits = sorted({r["split"] for r in rows})
+    out.write("| 設計 | W | 中心の保持 N(雄 " + " / ".join(f"{s:g}" for s in splits) + ") | 緩い端の保持 N(同) | 壊れる所(雄 0) |\n")
+    out.write("|---|---|---|---|---|\n")
+    for name, d in by.items():
+        f = lambda k: " / ".join(f"{_lower(d[s], k):.0f}" if s in d and _lower(d[s], k) is not None else "—" for s in splits)
+        r0 = d.get(min(splits), {})
+        mode = (r0.get("rows") or [{}])[0].get("mode", "")
+        W = next(iter(d.values())).get("W", float("nan"))
+        out.write(f"| {name} | {W:.3f} | {f(0)} | {f(1)} | {MODE_JA.get(mode, mode)} |\n")
+
+
 if __name__ == "__main__":
     st = sys.argv[1]
     rows = load(st)
@@ -227,5 +243,7 @@ if __name__ == "__main__":
         table_window(rows, key=lambda r: (r["D"], r.get("pitch_ratio", 0), r.get("mode", "")))
     elif st == "study6":
         table_robust(rows)
+    elif st == "study7":
+        table_split(rows)
     else:
         table_study2(rows)
