@@ -496,14 +496,14 @@ def test_a_dimension_the_person_gave_passes_through():
 
 
 def test_a_dimension_derived_from_what_the_person_said_passes_through():
-    """**厳密な照合にしない** —— 「直径8mm」から `radius: 4` を導くのは正しい。"""
+    """**厳密な照合にしない** —— 「半径4mm」から `diameter: 8` を導くのは正しい。"""
     surface = tools()
     provider = RecordedProvider(
         [tool_use("add_circle", {"sketch_id": "s", "center": [0, 0], "diameter": 8}, "c0"),
          spoke("done")]
     )
 
-    run = AgentLoop(surface, provider).run("原点に直径8mmの円を描いて")
+    run = AgentLoop(surface, provider).run("原点に半径4mmの円を描いて")
 
     assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
 

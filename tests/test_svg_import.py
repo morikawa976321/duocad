@@ -429,3 +429,13 @@ def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:
 
     stored = session.document.log.entries[-1].args["entities"]
     assert isinstance(stored, list) and stored and isinstance(stored[0], dict)
+
+
+def test_too_many_ellipse_elements_are_refused(tmp_path: Path) -> None:
+    """落ちたら、`<ellipse>` だけのSVGが図形数の上限(`MAX_ENTITIES`)を素通りする。"""
+    ellipses = "".join(
+        f'<ellipse cx="{i % 100}" cy="{i // 100}" rx="0.4" ry="0.2"/>' for i in range(svg_import.MAX_ENTITIES + 1)
+    )
+    body = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">{ellipses}</svg>'
+    with pytest.raises(ValueError, match="多すぎる"):
+        svg_import.read_svg_entities(write_svg(tmp_path, "many.svg", body))

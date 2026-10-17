@@ -26,6 +26,7 @@ export async function resolve(specifier, context, next) {
 }`),
 )
 const { entityHandles, snapSketchPoint } = await import(new URL('../web/src/entityKinds.ts', import.meta.url).href)
+const { viewResolution } = await import(new URL('../web/src/adaptiveResolution.ts', import.meta.url).href)
 
 const ENTITIES = {
   circle: { kind: 'circle', params: { cx: 60, cy: 20, diameter: 20 } },
@@ -111,6 +112,30 @@ assert.deepEqual(
       const [qx, qy] = local(u, v)
       const dot = ((qx - x) * tx + (qy - y) * ty) / (Math.hypot(qx - x, qy - y) * Math.hypot(tx, ty))
       assert.ok(Math.abs(dot) < 1e-9, `楕円の最近点でない: (${u}, ${v}) → (${su}, ${sv}) cos ${dot}`)
+    }
+  }
+}
+
+// 極端に細い楕円を強く拡大しても最近点に落ちる(ニュートン法は反対側の根へ飛んだ。sol レビュー 2026-10-17 の再現値)。
+// 答え合わせは楕円を細かく刻んだ点のうち最も近いもの(刻み 2π/2e6 → 最近点の距離の誤差は 1e-9mm 級)。
+{
+  const flat = { kind: 'ellipse', params: { cx: 0, cy: 0, width: 20, height: 0.002, angle: 0 } }
+  const nearest = (u, v) => {
+    let best = Infinity
+    const steps = 2_000_000
+    for (let i = 0; i < steps; i += 1) {
+      const t = (2 * Math.PI * i) / steps
+      best = Math.min(best, Math.hypot(10 * Math.cos(t) - u, 0.001 * Math.sin(t) - v))
+    }
+    return best
+  }
+  const onCurve = [9.999, -0.000014141782065918276]
+  for (const [u, v] of [[9.999, -0.00008], onCurve, [3.2, 0.0004], [-9.9995, 0.0002]]) {
+    for (const worldPerPixel of [0.0001, 0.00001]) {
+      const [su, sv] = snapSketchPoint(u, v, { entityId: 'flat', point: null }, () => flat, viewResolution(worldPerPixel, 20), true)
+      const got = Math.hypot(su - u, sv - v)
+      const best = nearest(u, v)
+      assert.ok(got <= best + 1e-9, `細い楕円で最近点に落ちない: (${u}, ${v}) → (${su}, ${sv}) 距離 ${got} / 最近 ${best}`)
     }
   }
 }

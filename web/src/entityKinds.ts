@@ -265,33 +265,61 @@ function ellipsePoints(params: Record<string, number>, resolution: ViewResolutio
 }
 
 /**
- * (u,v) から楕円上の最近点。折れ線への射影で初期値を取り、ニュートン法で楕円そのものへ詰める
+ * 第1象限の点 (y0, y1) から、半径 e0 >= e1 の軸平行な楕円の上の最近点(D. Eberly "Distance from a Point to an Ellipse")。
+ * 最近点の条件を1変数 s の単調な式 G(s) = 0 にして二分法で解くので、どんなに細い楕円でも反対側の根へ飛ばない
+ * (ニュートン法は直径 20×0.002 で約 20mm 先の点を返した。sol レビュー 2026-10-17)。
+ */
+function closestOnQuarterEllipse(e0: number, e1: number, y0: number, y1: number): [number, number] {
+  if (y1 > 0) {
+    if (y0 > 0) {
+      const z0 = y0 / e0
+      const z1 = y1 / e1
+      const g = z0 * z0 + z1 * z1 - 1
+      if (g === 0) return [y0, y1]
+      const r0 = (e0 / e1) * (e0 / e1)
+      const n0 = r0 * z0
+      let s0 = z1 - 1
+      let s1 = g < 0 ? 0 : Math.hypot(n0, z1) - 1
+      let s = 0
+      for (let iteration = 0; iteration < 1100; iteration += 1) {
+        s = (s0 + s1) / 2
+        if (s === s0 || s === s1) break
+        const ratio0 = n0 / (s + r0)
+        const ratio1 = z1 / (s + 1)
+        const value = ratio0 * ratio0 + ratio1 * ratio1 - 1
+        if (value > 0) s0 = s
+        else if (value < 0) s1 = s
+        else break
+      }
+      return [(r0 * y0) / (s + r0), y1 / (s + 1)]
+    }
+    return [0, e1]
+  }
+  const numer = e0 * y0
+  const denom = e0 * e0 - e1 * e1
+  if (numer < denom) {
+    const ratio = numer / denom
+    return [e0 * ratio, e1 * Math.sqrt(1 - ratio * ratio)]
+  }
+  return [e0, 0]
+}
+
+/**
+ * (u,v) から楕円上の最近点。折れ線の上ではなく楕円そのものに落とす
  * (折れ線の上に落とすと、その点を端にした線分が楕円の内側で止まり、領域が割れない)。
  */
-function projectToEllipse(
-  params: Record<string, number>,
-  u: number,
-  v: number,
-  resolution: ViewResolution,
-): [number, number] {
+function projectToEllipse(params: Record<string, number>, u: number, v: number): [number, number] {
   const frame = ellipseFrame(params)
   const [x, y] = frame.local(u, v)
-  const [gu, gv] = projectToPolyline(u, v, ellipsePoints(params, resolution))
-  const [gx, gy] = frame.local(gu, gv)
-  let t = Math.atan2(gy / frame.b, gx / frame.a)
-  const d = frame.a * frame.a - frame.b * frame.b
-  for (let iteration = 0; iteration < 8; iteration += 1) {
-    // f(t) = (P(t) - Q)・P'(t) の根。P(t) = (a cos t, b sin t)、Q = (x, y)。
-    const cos = Math.cos(t)
-    const sin = Math.sin(t)
-    const f = -d * sin * cos + x * frame.a * sin - y * frame.b * cos
-    const df = -d * (cos * cos - sin * sin) + x * frame.a * cos + y * frame.b * sin
-    if (df === 0) break
-    const step = f / df
-    t -= step
-    if (Math.abs(step) < 1e-14) break
-  }
-  return frame.at(t)
+  // 長い方を第1軸にして第1象限で解き、符号を戻す。
+  const swapped = frame.b > frame.a
+  const [e0, e1] = swapped ? [frame.b, frame.a] : [frame.a, frame.b]
+  const [p0, p1] = swapped ? [y, x] : [x, y]
+  const [q0, q1] = closestOnQuarterEllipse(e0, e1, Math.abs(p0), Math.abs(p1))
+  const lx = Math.sign(p0 || 1) * q0
+  const ly = Math.sign(p1 || 1) * q1
+  const [cx, cy] = swapped ? [ly, lx] : [lx, ly]
+  return frame.at(Math.atan2(cy / frame.b, cx / frame.a))
 }
 
 const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {

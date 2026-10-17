@@ -34,7 +34,7 @@ from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型�
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.GCPnts import GCPnts_AbscissaPoint
-from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt
+from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt
 
 from .kernel import _BASE_PLANE_AXES, _face_map, _face_props, classify_face, face_of
 from .mesh_geometry import compound, indexed_map
@@ -543,13 +543,31 @@ def _edges_line(ax3: "gp_Ax3", params: dict) -> List[Any]:
     return [maker.Edge()]
 
 
+def _curve_axis(ax3: "gp_Ax3", center: "gp_Pnt", angle_deg: float = 0.0) -> "gp_Ax2":
+    """円・円弧・楕円の軸。第1軸はスケッチの X から `angle_deg` 度、パラメータが増える向きはスケッチの反時計回り。
+
+    外部の罠: 面に貼ったスケッチの `ax3` は左手系でありうる(`ZReverse` は X/Y を据え置く。`_ax3_from_frame`)。
+    `ax3.Direction()` を法線に使うと、`gp_Ax2` が Y を N×X で作り直すのでスケッチの Y と逆になり、
+    円弧は時計回りに・楕円は角度が逆向きに出る(2026-10-17 実測: 立方体6面のうち5面で四分円の領域が閉じない)。
+    法線はスケッチの X×Y から作る。
+    """
+    radians = math.radians(angle_deg)
+    x_dir = ax3.XDirection()
+    y_dir = ax3.YDirection()
+    first = gp_Dir(
+        math.cos(radians) * x_dir.X() + math.sin(radians) * y_dir.X(),
+        math.cos(radians) * x_dir.Y() + math.sin(radians) * y_dir.Y(),
+        math.cos(radians) * x_dir.Z() + math.sin(radians) * y_dir.Z(),
+    )
+    return gp_Ax2(center, x_dir.Crossed(y_dir), first)
+
+
 def _edges_circle(ax3: "gp_Ax3", params: dict) -> List[Any]:
     center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
     diameter = float(params["diameter"])
     if diameter <= 0:
         raise ValueError(f"circle diameter must be positive, got {diameter}")
-    axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
-    maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, diameter / 2.0))
+    maker = BRepBuilderAPI_MakeEdge(gp_Circ(_curve_axis(ax3, center), diameter / 2.0))
     if not maker.IsDone():
         raise ValueError("failed to build a circle edge")
     return [maker.Edge()]
@@ -591,9 +609,7 @@ def _ellipse_gp(ax3: "gp_Ax3", params: dict) -> "gp_Elips":
     if semi_height > semi_width:
         semi_width, semi_height = semi_height, semi_width
         angle_deg += 90.0
-    axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
-    axis.Rotate(gp_Ax1(center, ax3.Direction()), math.radians(angle_deg))
-    return gp_Elips(axis, semi_width, semi_height)
+    return gp_Elips(_curve_axis(ax3, center, angle_deg), semi_width, semi_height)
 
 
 def _edges_ellipse(ax3: "gp_Ax3", params: dict) -> List[Any]:
@@ -623,9 +639,7 @@ def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:
     sweep_deg = (end_deg - start_deg) % 360.0
     start_rad = math.radians(start_deg)
     end_rad = start_rad + math.radians(sweep_deg)
-    # gp_Ax2(center, N, X): U=0 がスケッチX、U増加が反時計回り(右手系)。
-    axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
-    maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius), start_rad, end_rad)
+    maker = BRepBuilderAPI_MakeEdge(gp_Circ(_curve_axis(ax3, center), radius), start_rad, end_rad)
     if not maker.IsDone():
         raise ValueError("failed to build an arc edge")
     return [maker.Edge()]

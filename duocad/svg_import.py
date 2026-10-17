@@ -64,11 +64,11 @@ def read_svg_entities(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dic
     entities: List[dict] = []
     for element in _shapes(svg):
         whole = _ellipse_entity(element, height, scale)
-        if whole is not None:
-            entities.append(whole)
-            continue
-        for segment in _segments(element):
-            entities.extend(_translate_segment(segment, height, scale))
+        pieces = [[whole]] if whole is not None else (
+            _translate_segment(segment, height, scale) for segment in _segments(element)
+        )
+        for piece in pieces:
+            entities.extend(piece)
             if len(entities) > MAX_ENTITIES:
                 raise ValueError(
                     f"{source_name}: 図形が多すぎる(上限 {MAX_ENTITIES})。"

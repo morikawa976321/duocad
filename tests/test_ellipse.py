@@ -13,14 +13,16 @@ from duocad import kernel, kernel_sketch
 from duocad.document import Document
 from duocad.region import region_ref, regions
 from duocad.sketch import (
+    add_arc,
     add_ellipse,
     add_line,
+    face_plane,
     entity_kind_ops,
     entity_params,
     sketch_create,
 )
 from duocad.verbs import extrude
-from document_support import replay_through_json
+from document_support import new_box, replay_through_json
 
 
 def _ellipse(width: float, height: float, angle: float = 0.0):
@@ -104,3 +106,25 @@ def test_an_ellipse_survives_save_and_replay():
     doc, sketch_id, entity_id = _ellipse(9.0, 4.0, 33.0)
     restored = replay_through_json(doc)
     assert entity_params(restored, sketch_id, entity_id) == entity_params(doc, sketch_id, entity_id)
+
+
+@pytest.mark.parametrize("face_index", range(1, 7))
+def test_ellipses_and_arcs_keep_their_turn_on_every_face_of_a_box(face_index):
+    """落ちたら、面に貼ったスケッチ(左手系の枠がある)で楕円の向き・円弧の回り方が画面と逆になる
+    (`kernel_sketch._curve_axis`。立方体の6面のうち5面が左手系)。"""
+    doc = Document()
+    body_id = new_box(doc, 40.0)
+    plane = face_plane(body_id, face_index)
+
+    ellipse_sketch = sketch_create(doc, plane)
+    add_ellipse(doc, ellipse_sketch, (0.0, 0.0), 20.0, 8.0, 30.0)
+    direction = (math.cos(math.radians(30.0)), math.sin(math.radians(30.0)))
+    add_line(doc, ellipse_sketch, (-7.0 * direction[0], -7.0 * direction[1]), (7.0 * direction[0], 7.0 * direction[1]))
+    assert len(regions(doc, ellipse_sketch)) == 1, "横の直径の軸が angle の向きに無い(線が楕円を突き抜けた)"
+
+    arc_sketch = sketch_create(doc, plane)
+    add_arc(doc, arc_sketch, (0.0, 0.0), 5.0, 0.0, 90.0)
+    add_line(doc, arc_sketch, (5.0, 0.0), (0.0, 0.0))
+    add_line(doc, arc_sketch, (0.0, 0.0), (0.0, 5.0))
+    found = regions(doc, arc_sketch)
+    assert [round(region.area, 6) for region in found] == [round(math.pi * 25.0 / 4.0, 6)], "四分円が閉じない(円弧が逆回り)"
