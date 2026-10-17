@@ -261,6 +261,8 @@ export interface TextArgSpec extends ArgSpecCommon {
   placeholder: string
   /** 使えない値なら理由を返す(使えるなら null)。空文字の拒否くらいにとどめる。 */
   reject(value: string): string | null
+  /** 空欄のままでよい引数(既定はコア側にある)。空欄なら `build` は引数ごと送らない。 */
+  optional?: boolean
 }
 
 /**
@@ -497,6 +499,7 @@ export function argSatisfied(spec: ArgSpec, values: ArgValues): boolean {
   }
   if (spec.kind === 'text') {
     const text = values[spec.name]
+    if (spec.optional === true && (text === undefined || text === '')) return true
     return typeof text === 'string' && spec.reject(text) === null
   }
   if (spec.kind === 'plane') {

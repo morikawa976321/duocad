@@ -1838,7 +1838,7 @@
           fail('スケッチモードに入っていない(反復はスケッチの図形が対象)')
           return
         }
-        if ((verb === 'extrude' || verb === 'revolve') && !regionsStillExist(selection, sketches)) {
+        if ((verb === 'extrude' || verb === 'revolve' || verb === 'loft') && !regionsStillExist(selection, sketches)) {
           // 領域はパラメータ編集で分裂・消失しうる(§7)。消えた領域を送るとサーバは添字が範囲外と言うだけ。
           fail('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
           return
