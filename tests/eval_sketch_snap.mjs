@@ -130,13 +130,34 @@ assert.deepEqual(
     return best
   }
   const onCurve = [9.999, -0.000014141782065918276]
-  for (const [u, v] of [[9.999, -0.00008], onCurve, [3.2, 0.0004], [-9.9995, 0.0002]]) {
+  // 長軸のごく近くの内側の点(s + 1 の桁落ち・0 除算。sol レビュー 2026-10-17)も入れる。
+  for (const [u, v] of [[9.999, -0.00008], onCurve, [3.2, 0.0004], [-9.9995, 0.0002], [3.2, 1e-18], [3.2, 1e-20], [-3.2, -1e-20]]) {
     for (const worldPerPixel of [0.0001, 0.00001]) {
       const [su, sv] = snapSketchPoint(u, v, { entityId: 'flat', point: null }, () => flat, viewResolution(worldPerPixel, 20), true)
       const got = Math.hypot(su - u, sv - v)
       const best = nearest(u, v)
       assert.ok(got <= best + 1e-9, `細い楕円で最近点に落ちない: (${u}, ${v}) → (${su}, ${sv}) 距離 ${got} / 最近 ${best}`)
     }
+  }
+}
+
+// 回した細い楕円の長軸の上の点(局所座標へ戻す丸めで短軸の座標が 0 近くの微小値になる)。
+{
+  const turned = { kind: 'ellipse', params: { cx: 1, cy: 2, width: 20, height: 0.002, angle: 30 } }
+  const rad = (30 * Math.PI) / 180
+  for (const along of [3.2, -7.5, 0.4]) {
+    const u = 1 + along * Math.cos(rad)
+    const v = 2 + along * Math.sin(rad)
+    const [su, sv] = snapSketchPoint(u, v, { entityId: 'turned', point: null }, () => turned, viewResolution(0.00001, 20), true)
+    let best = Infinity
+    for (let i = 0; i < 2_000_000; i += 1) {
+      const t = (2 * Math.PI * i) / 2_000_000
+      const x = 10 * Math.cos(t)
+      const y = 0.001 * Math.sin(t)
+      best = Math.min(best, Math.hypot(1 + x * Math.cos(rad) - y * Math.sin(rad) - u, 2 + x * Math.sin(rad) + y * Math.cos(rad) - v))
+    }
+    const got = Math.hypot(su - u, sv - v)
+    assert.ok(got <= best + 1e-9, `回した細い楕円で最近点に落ちない: 長軸上 ${along} → 距離 ${got} / 最近 ${best}`)
   }
 }
 

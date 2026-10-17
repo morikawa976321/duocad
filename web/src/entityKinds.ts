@@ -236,14 +236,12 @@ function ellipseFrame(params: Record<string, number>) {
   const sin = Math.sin(radians)
   const a = params.width / 2
   const b = params.height / 2
+  const world = (x: number, y: number): [number, number] => [params.cx + x * cos - y * sin, params.cy + x * sin + y * cos]
   return {
     a,
     b,
-    at(t: number): [number, number] {
-      const x = a * Math.cos(t)
-      const y = b * Math.sin(t)
-      return [params.cx + x * cos - y * sin, params.cy + x * sin + y * cos]
-    },
+    world,
+    at: (t: number): [number, number] => world(a * Math.cos(t), b * Math.sin(t)),
     local(u: number, v: number): [number, number] {
       const dx = u - params.cx
       const dy = v - params.cy
@@ -278,20 +276,23 @@ function closestOnQuarterEllipse(e0: number, e1: number, y0: number, y1: number)
       if (g === 0) return [y0, y1]
       const r0 = (e0 / e1) * (e0 / e1)
       const n0 = r0 * z0
-      let s0 = z1 - 1
-      let s1 = g < 0 ? 0 : Math.hypot(n0, z1) - 1
-      let s = 0
+      // 論文の s ではなく w = s + 1 で解く: 長軸の近くの内側の点では s が -1 に寄り、s + 1 が桁落ちする
+      // (直径 20×0.002 の (3.2, 1e-18) で 0.15mm ずれ、1e-20 で 0 除算になった。sol レビュー 2026-10-17)。
+      const shift = r0 - 1
+      let w0 = z1
+      let w1 = g < 0 ? 1 : Math.hypot(n0, z1)
+      let w = 1
       for (let iteration = 0; iteration < 1100; iteration += 1) {
-        s = (s0 + s1) / 2
-        if (s === s0 || s === s1) break
-        const ratio0 = n0 / (s + r0)
-        const ratio1 = z1 / (s + 1)
+        w = (w0 + w1) / 2
+        if (w === w0 || w === w1) break
+        const ratio0 = n0 / (w + shift)
+        const ratio1 = z1 / w
         const value = ratio0 * ratio0 + ratio1 * ratio1 - 1
-        if (value > 0) s0 = s
-        else if (value < 0) s1 = s
+        if (value > 0) w0 = w
+        else if (value < 0) w1 = w
         else break
       }
-      return [(r0 * y0) / (s + r0), y1 / (s + 1)]
+      return [(r0 * y0) / (w + shift), y1 / w]
     }
     return [0, e1]
   }
@@ -318,8 +319,7 @@ function projectToEllipse(params: Record<string, number>, u: number, v: number):
   const [q0, q1] = closestOnQuarterEllipse(e0, e1, Math.abs(p0), Math.abs(p1))
   const lx = Math.sign(p0 || 1) * q0
   const ly = Math.sign(p1 || 1) * q1
-  const [cx, cy] = swapped ? [ly, lx] : [lx, ly]
-  return frame.at(Math.atan2(cy / frame.b, cx / frame.a))
+  return swapped ? frame.world(ly, lx) : frame.world(lx, ly)
 }
 
 const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
