@@ -59,6 +59,7 @@ TARGET_SET_ARGS = {
 #: 引数は名前であって対象集合ではない。MCPの `extrude` も同じ `body_id` を持つ。
 BODY_ID_IS_A_NAME_HERE = {
     "extrude": "どのBodyへ足す / から引くか(押し出す領域そのものは選択から取る)",
+    "revolve": "どのBodyへ足す / から引くか(回す領域そのものは選択から取る)",
 }
 
 
@@ -404,3 +405,20 @@ def test_the_transform_verbs_are_not_added_to_speculative_execution():
     previewable = set(_catalog().previewable_verbs())
     leaked = sorted(TRANSFORM_PREVIEW_VERBS & previewable)
     assert not leaked, f"ローカル方式のverbが `previewable=True` になっている: {leaked}"
+
+
+def test_every_unsent_choice_can_be_restored_from_the_shared_args():
+    """サーバへ行かない選択肢(`sends: null`)は、配信のどの引数から戻すかを `impliedBy` で名指しする。
+
+    落ちたら、その選択肢で出るピックの値は作業空間に載るのに、再読み込みや AI の引数変更のあと選択肢が戻らず、
+    ピックの欄が隠れたまま確定できない(回転体の「線分を選ぶ」・鏡映の「面を選ぶ」)。
+    `impliedBy` はその verb のピック引数で、サーバの宣言にある名前であること。
+    """
+    server = _server_command_args()
+    problems = []
+    for command in _ui_commands():
+        for option in command["unsent"]:
+            implied = option["impliedBy"]
+            if implied is None or implied not in command["picks"] or implied not in server.get(command["id"], ()):
+                problems.append((command["id"], option["arg"], option["value"], implied))
+    assert problems == [], f"sends: null の選択肢を配信から戻せない: {problems}"

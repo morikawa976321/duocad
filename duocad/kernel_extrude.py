@@ -1,6 +1,6 @@
-"""押し出しの幾何(OCPを触るカーネル層)。
+"""押し出し・回転体の幾何(OCPを触るカーネル層)。
 
-面の押し出し(`extrude_faces`)と、スケッチの領域の押し出し(`extrude_regions`)を持つ。
+面の押し出し(`extrude_faces`)、スケッチの領域の押し出し(`extrude_regions`)と回転体(`revolve_regions`)を持つ。
 面の数え方(`_face_map` の1始まりの添字)・ブーリアンの検査(`_checked_volume` / `_require_valid`)・
 由来の射影(`_target_successors` / `_face_map_projection`)は `kernel` の側にあり、ここはそれを読むだけ ——
 依存は kernel_extrude → kernel の一方向。
@@ -13,12 +13,17 @@ from __future__ import annotations
 import math
 from typing import Any, List, Optional, Sequence
 
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
-from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+from OCP.BRepBndLib import BRepBndLib
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon, BRepBuilderAPI_Transform
+from OCP.BRepGProp import BRepGProp
+from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
+from OCP.Bnd import Bnd_Box
+from OCP.GProp import GProp_GProps
 from OCP.Precision import Precision
 from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
-from OCP.gp import gp_Vec
+from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 from .kernel import (
     _checked_volume,
@@ -38,6 +43,9 @@ from .kernel import (
 #: 面の同一性を「重心の一致」で判定するときの相対許容差(after_face_index の探索)。
 _MATCH_TOL = 1.0e-6
 
+#: 軸の両側にまたがるかの判定で、少ない側の面積が全体のこの割合を超えたら「横切る」(軸上の辺の共通部分は面積0)。
+_AXIS_SIDE_TOL = 1.0e-9
+
 
 def extrude_regions(
     faces: Sequence[Any],
@@ -46,9 +54,7 @@ def extrude_regions(
     normal: Sequence[float],
     target_shape: Any = None,
 ) -> dict:
-    """領域の面群を法線方向へ押し出し、join/cut/new した形状を返す。
-
-    同一平面の面の統合(`_unify_same_domain`)は、join / new で柱を束ねたとき(柱が複数か、相手への join)にだけ掛ける。
+    """領域の面群を法線方向へ押し出し、join/cut/new した形状を返す(束ね方は `_combine_region_solids`)。
 
     戻り値(`"shape"` 以外はJSON化できる素の値):
         {"shape", "unified": bool, "volume_before": float | None, "volume_after": float,
@@ -61,13 +67,7 @@ def extrude_regions(
     distance = float(distance)
     if distance == 0.0:
         raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
-    if mode not in ("join", "cut", "new"):
-        raise ValueError(f"unknown extrude mode: {mode!r}")
-    if mode == "cut" and (target_shape is None or target_shape.IsNull()):
-        raise ValueError("cut requires a target shape")
-    if mode == "new" and target_shape is not None and not target_shape.IsNull():
-        # 相手を黙って無視すると「足したつもりが別ボディ」が成功として通る。
-        raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
+    _check_region_mode(mode, target_shape)
 
     nx, ny, nz = float(normal[0]), float(normal[1]), float(normal[2])
     offset = gp_Vec(nx * distance, ny * distance, nz * distance)
@@ -89,7 +89,138 @@ def extrude_regions(
             )
         prisms.append(prism_shape)
 
-    combined = _fuse_all(prisms, "region prisms")
+    return _combine_region_solids(
+        prisms, mode, target_shape, {"verb": "extrude", "mode": mode, "distance": distance}
+    )
+
+
+def revolve_regions(
+    faces: Sequence[Any],
+    axis_point: Sequence[float],
+    axis_dir: Sequence[float],
+    normal: Sequence[float],
+    angle: float,
+    mode: str,
+    target_shape: Any = None,
+    symmetric: bool = False,
+) -> dict:
+    """領域の面群を、スケッチ平面上の軸(`axis_point` を通り `axis_dir` 向き)のまわりに `angle` 度回し、
+    join/cut/new した形状を返す(束ね方は `_combine_region_solids`)。
+
+    `angle` の正は `axis_dir` まわりの右ねじの向き、負はその逆。`0 < |angle| <= 360`。`symmetric` なら
+    スケッチ平面から両側へ `|angle|/2` ずつ回す(符号は効かない)。`normal` はスケッチ平面の法線で、
+    軸が領域を横切るかの判定にだけ使う。
+
+    戻り値は `extrude_regions` と同じ形。provenance の `verb` は `"revolve"`、`distance` の代わりに `angle`。
+    """
+    if not faces:
+        raise ValueError("revolve_regions requires at least one face")
+    angle = float(angle)
+    if not math.isfinite(angle) or angle == 0.0 or abs(angle) > 360.0:
+        raise ValueError(f"angle must satisfy 0 < |angle| <= 360 (got {angle})")
+    _check_region_mode(mode, target_shape)
+
+    direction = gp_Dir(*(float(value) for value in axis_dir))
+    origin = gp_Pnt(*(float(value) for value in axis_point))
+    axis = gp_Ax1(origin, direction)
+    plane_normal = gp_Dir(*(float(value) for value in normal))
+    if abs(direction.Dot(plane_normal)) > Precision.Angular_s():
+        raise ValueError("revolve axis must lie in the sketch plane")
+
+    sweep = math.radians(abs(angle) if symmetric else angle)
+    full = abs(angle) == 360.0
+    solids: List[TopoDS_Shape] = []
+    for position, face in enumerate(faces, start=1):
+        profile = TopoDS.Face_s(face)
+        _require_one_side_of_axis(profile, origin, direction, plane_normal, position)
+        if symmetric and not full:
+            turn = gp_Trsf()
+            turn.SetRotation(axis, -sweep / 2.0)
+            profile = TopoDS.Face_s(BRepBuilderAPI_Transform(profile, turn, True).Shape())
+        # 360° は角度なしの形で作る(角度 2π を渡すと始端と終端の面が重なった閉じていない形になりうる)。
+        maker = BRepPrimAPI_MakeRevol(profile, axis) if full else BRepPrimAPI_MakeRevol(profile, axis, sweep)
+        if not maker.IsDone():
+            raise ValueError(f"failed to revolve region #{position}")
+        solid = maker.Shape()
+        if solid is None or solid.IsNull() or volume(solid) <= 0:
+            raise ValueError(f"revolving region #{position} produced no volume")
+        solids.append(solid)
+
+    return _combine_region_solids(
+        solids,
+        mode,
+        target_shape,
+        {"verb": "revolve", "mode": mode, "angle": angle, "symmetric": bool(symmetric)},
+    )
+
+
+def _require_one_side_of_axis(
+    face: Any, origin: "gp_Pnt", direction: "gp_Dir", normal: "gp_Dir", position: int
+) -> None:
+    """面が軸の片側だけにあることを確かめる(軸上の辺・点で接するのは可)。横切れば ValueError。
+
+    軸の両側に半平面を置き、面との共通部分の面積で決める。境界を折れ線で拾う方法は、軸をまたいで
+    わずかに膨らむ円弧を取りこぼす。横切った面の回転体は自己交差し、`IsDone()` も体積検査も通りうる。
+    """
+    total, _ = _face_props(face)
+    box = Bnd_Box()
+    BRepBndLib.Add_s(face, box)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    reach = 10.0 * (
+        math.dist((xmin, ymin, zmin), (xmax, ymax, zmax))
+        + math.dist((origin.X(), origin.Y(), origin.Z()), (xmin, ymin, zmin))
+        + 1.0
+    )
+    along = gp_Vec(direction).Multiplied(reach)
+    across = gp_Vec(normal).Crossed(gp_Vec(direction)).Multiplied(reach)
+    sides = []
+    for sign in (1.0, -1.0):
+        corners = [
+            origin.Translated(along.Reversed()),
+            origin.Translated(along),
+            origin.Translated(along).Translated(across.Multiplied(sign)),
+            origin.Translated(along.Reversed()).Translated(across.Multiplied(sign)),
+        ]
+        polygon = BRepBuilderAPI_MakePolygon(*corners, True)
+        half = BRepBuilderAPI_MakeFace(polygon.Wire(), True).Face()
+        common = BRepAlgoAPI_Common(face, half)
+        common.Build()
+        if not common.IsDone():
+            raise ValueError(f"failed to test region #{position} against the revolve axis")
+        sides.append(_shape_area(common.Shape()))
+    if min(sides) > _AXIS_SIDE_TOL * total:
+        raise ValueError(
+            f"revolve axis crosses region #{position}: 軸の両側にまたがる領域は回せない"
+            "(回転体が自己交差する)。軸の片側の領域だけを選ぶか、軸を領域の外か辺の上へ置くこと"
+        )
+
+
+def _shape_area(shape: Any) -> float:
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(shape, props)
+    return props.Mass()
+
+
+def _check_region_mode(mode: str, target_shape: Any) -> None:
+    """領域の押し出し・回転体に共通する mode と相手の組の検査。"""
+    if mode not in ("join", "cut", "new"):
+        raise ValueError(f"unknown mode: {mode!r} (one of ['join', 'cut', 'new'])")
+    if mode == "cut" and (target_shape is None or target_shape.IsNull()):
+        raise ValueError("cut requires a target shape")
+    if mode == "new" and target_shape is not None and not target_shape.IsNull():
+        # 相手を黙って無視すると「足したつもりが別ボディ」が成功として通る。
+        raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
+
+
+def _combine_region_solids(
+    solids: Sequence[TopoDS_Shape], mode: str, target_shape: Any, head: dict
+) -> dict:
+    """領域から作った立体(柱・回転体)を束ね、相手へ join / cut する(new は束ねたものを返す)。
+
+    同一平面の面の統合(`_unify_same_domain`)は、join / new で立体を束ねたとき(複数か、相手への join)にだけ掛ける。
+    戻り値は `extrude_regions` の docstring の形。`head` は provenance の先頭に置く(`verb` ほか)。
+    """
+    combined = _fuse_all(solids, "region solids")
 
     volume_before: Optional[float] = None
     builder = None
@@ -115,7 +246,7 @@ def extrude_regions(
     final, history, unified = result, None, False
     # 柱1本の new は束ねていないので統合しない。統合すると輪郭の分割で割れた側面までまとまり、
     # 後の操作が記録した面・辺の番号がずれる(実測: SVG を取り込んだ輪郭の柱1本で 38面 -> 26面)。
-    if mode in ("join", "new") and (len(prisms) > 1 or builder is not None):
+    if mode in ("join", "new") and (len(solids) > 1 or builder is not None):
         final, history, unified = _unify_same_domain(result, volume_after)
     _require_valid(final, mode)
     final_map = _face_map(final)
@@ -127,9 +258,7 @@ def extrude_regions(
         "volume_before": volume_before,
         "volume_after": volume(final),
         "provenance": {
-            "verb": "extrude",
-            "mode": mode,
-            "distance": distance,
+            **head,
             "unified": unified,
             **_face_map_projection(successors, final_map.Extent()),
         },

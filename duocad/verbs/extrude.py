@@ -163,7 +163,7 @@ def _resolve_face_source(doc: Document, faces: Sequence[Any]) -> tuple[Body, Lis
 
 
 def _resolve_target(
-    doc: Document, mode: str, body_id: Optional[BodyId]
+    doc: Document, mode: str, body_id: Optional[BodyId], what: str = VERB_EXTRUDE
 ) -> tuple[Optional[Body], Optional[BodyId]]:
     """対象ボディを決める。cut で対象が無い・reference は ValueError。
 
@@ -194,12 +194,13 @@ def _resolve_target(
 
     # 対象ボディ(既定はアクティブ)は選択の外から来る。人が隠した後にAIが押し出すと見えないボディが
     # 黙って変わる(`editable_body` と同じ穴)ので `require_visible=True`。
-    return _editable_target(doc, body_id), body_id
+    return _editable_target(doc, body_id, what), body_id
 
 
-def _editable_target(doc: Document, body_id: BodyId) -> Body:
-    """押し出しの対象にできるボディ(編集可・可視・形状あり。メッシュは「押し出しの対象にする」ことを断る)。"""
-    return editable_body(doc, body_id, what="extrude", require_visible=True, reject_as="押し出しの対象にする")
+def _editable_target(doc: Document, body_id: BodyId, what: str = VERB_EXTRUDE) -> Body:
+    """押し出し・回転体の対象にできるボディ(編集可・可視・形状あり。メッシュは「足す/引く対象にする」ことを断る)。"""
+    reject_as = "押し出しの対象にする" if what == VERB_EXTRUDE else "足す/引く対象にする"
+    return editable_body(doc, body_id, what=what, require_visible=True, reject_as=reject_as)
 
 
 def _add_numbered_body(doc: Document, body_id: BodyId, shape: Any) -> dict:
@@ -220,20 +221,20 @@ def _recorded_name(document: Document, args: dict) -> str:
 
 
 def _resolve_faces_and_normal(
-    doc: Document, refs: Sequence[RegionRef]
+    doc: Document, refs: Sequence[RegionRef], what: str = VERB_EXTRUDE
 ) -> tuple[List[Any], tuple]:
     """領域参照から面と、スケッチ平面の法線を取り出す。範囲外は ValueError。
 
     **1回の押し出しが対象にできるのは1つのスケッチの領域だけ**。向きはスケッチ平面の法線で決まり、
     別平面の領域を混ぜると最初のスケッチの法線で全部押すことになって、方向がその面に寝た領域は
     体積0の退化ソリッドになる。`IsDone()` も `BRepCheck_Analyzer` も通ってしまうので、ここで弾くのが
-    唯一の関門。
+    唯一の関門。回転体(`revolve`)も軸がそのスケッチの平面上にあるので同じ制約を持つ。
     """
     sketch_ids = {ref.sketch for ref in refs}
     if len(sketch_ids) > 1:
         raise ValueError(
-            f"extrude takes regions of a single sketch, got {sorted(sketch_ids)!r} "
-            "(押し出しの向きはスケッチ平面の法線で決まるため)"
+            f"{what} takes regions of a single sketch, got {sorted(sketch_ids)!r} "
+            "(向きと軸はスケッチ平面で決まるため)"
         )
 
     sketch_id = refs[0].sketch

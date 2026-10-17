@@ -200,15 +200,51 @@ export interface PointArgSpec extends ArgSpecCommon {
  * `sends` は共有の作業空間(`state.command.args`)へ出すサーバ側の値(省略なら `value` そのまま。`build` と同じ読み替えをここにも
  * 書く: `copy` の 'copy' → true、荷重の 'down' → [0,0,-1])。サーバの値にならない選択肢(鏡映面の「面を選ぶ」)は `null`。
  * 配信された値を欄へ戻すときも同じ対応で引く(`CommandHost.svelte` の `syncFromShared`)。
+ * `impliedBy` は `sends: null` の選択肢だけが持つ、配信からその選択肢を戻す手がかり: 配信にこの名前の引数があれば、
+ * 自分の引数が配信に無くてもこの選択肢を選び直す(再読み込みで回転体の「線分を選ぶ」が戻らず `axis_line` が隠れたままになるのを防ぐ)。
  */
 export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
-  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown }>
+  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string }>
 }
 
 /** 選択肢がサーバへ出す値(`sends` が無ければ `value`)。`null` は「出さない」。 */
 export function choiceSends(option: ChoiceArgSpec['options'][number]): unknown {
   return option.sends === undefined ? option.value : option.sends
+}
+
+/**
+ * 配信された引数(`remote`)から、選択肢の欄の値を決める(`CommandHost.svelte` の `syncFromShared`)。
+ * `previous` はこの画面がサーバにあると信じている引数(`lastPublished`)、`current` は欄のいまの値。
+ * 戻りは `{ value }`(`undefined` は「選んでいない」)か、配信の値に対応する選択肢が無いときの `{ unmapped: true }`(欄は触らない)。
+ *
+ * `impliedBy` で選択肢を戻すのは、**その引数か自分の引数を配信が変えたときだけ**: 人が x 軸へ切り替えてまだ送っていない間に
+ * AI が角度だけ直すと、配信には古い `axis_line` が残ったまま届く。それを手がかりに「線分」へ戻すと、人の切り替えが消えて
+ * 古い線分の軸で確定される(sol レビューで再現)。
+ */
+export function syncedChoice(
+  spec: ChoiceArgSpec,
+  remote: Record<string, unknown>,
+  previous: Record<string, unknown>,
+  current: string | undefined,
+): { value: string | undefined } | { unmapped: true } {
+  const value = remote[spec.name]
+  if (value !== undefined) {
+    // サーバの値から選択肢を逆引きする(`copy: true` → 'copy'、`direction: [0,0,-1]` → 'down')。
+    const option = spec.options.find((candidate) => JSON.stringify(choiceSends(candidate)) === JSON.stringify(value))
+    return option === undefined ? { unmapped: true } : { value: option.value }
+  }
+  const changed = (name: string) => JSON.stringify(remote[name]) !== JSON.stringify(previous[name])
+  const implied = spec.options.find(
+    (candidate) =>
+      candidate.impliedBy !== undefined &&
+      remote[candidate.impliedBy] !== undefined &&
+      (changed(candidate.impliedBy) || changed(spec.name)),
+  )
+  if (implied !== undefined) return { value: implied.value }
+  // サーバの値にならない選択肢(`sends: null`)は、サーバに無いことが「選んでいない」を意味しない。
+  const option = spec.options.find((candidate) => candidate.value === current)
+  return option !== undefined && choiceSends(option) === null ? { value: current } : { value: undefined }
 }
 
 /** スケッチの図形を選ぶ引数(反復のverb)。選択引数と別物: スケッチの図形は共有選択集合に入らない(コアの `SELECTABLE_KINDS`)。値はスケッチパネルで選んだ図形のIDで、`CommandHost` へは `entities` プロパティで渡る。 */

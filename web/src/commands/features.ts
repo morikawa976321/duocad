@@ -83,6 +83,76 @@ export const EXTRUDE_REGIONS: CommandDef = makeExtrude('region')
 export const EXTRUDE_FACES: CommandDef = makeExtrude('face')
 
 /**
+ * 回転体(verb `revolve`)。スケッチ編集中に閉領域を選び、軸をスケッチの x / y 軸か同じスケッチの線分から選ぶ。
+ * 線分は共有選択に入れずピックで指す(`MIRROR_SKETCH_ENTITIES` の軸と同じ。選択に入れると領域の選択と混ざる)。
+ * 角度は既定 360 で、負なら逆向き。両側(`symmetric`)は画面からは送らない(コアの既定 false)。
+ */
+export const REVOLVE: CommandDef<'revolve'> = {
+  id: 'revolve',
+  label: '回転体',
+  buttonId: 'revolve',
+  preview: 'server',
+  args: [
+    { kind: 'selection', name: 'regions', label: '回す領域', shapeKind: 'region', min: 1, max: null },
+    {
+      kind: 'choice',
+      name: 'axis',
+      label: '回転軸',
+      options: [
+        { value: 'x', label: 'x軸', buttonId: 'revolve-axis-x' },
+        { value: 'y', label: 'y軸', buttonId: 'revolve-axis-y' },
+        // この値はサーバへ行かない(`axis` は x / y のみ)。`axis_line` を出す印で、配信に `axis_line` があれば欄へ戻る。
+        { value: 'line', label: '線分を選ぶ', buttonId: 'revolve-axis-line', sends: null, impliedBy: 'axis_line' },
+      ],
+    },
+    {
+      kind: 'pick',
+      name: 'axis_line',
+      label: '回転軸の線分',
+      target: 'sketchEntity',
+      buttonId: 'revolve-axis-line-pick',
+      when: (values) => values.axis === 'line',
+    },
+    {
+      kind: 'number',
+      name: 'angle',
+      label: '角度(負=逆向き)',
+      unit: '°',
+      inputId: 'revolve-angle',
+      default: 360,
+      reject: (value) => (value !== 0 && Math.abs(value) <= 360 ? null : '角度は0より大きく360以下(負は逆向き)'),
+    },
+    {
+      kind: 'choice',
+      name: 'mode',
+      label: '種別',
+      options: [
+        { value: 'join', label: '結合', buttonId: 'revolve-mode-join' },
+        { value: 'cut', label: '切り取り', buttonId: 'revolve-mode-cut' },
+        { value: 'new', label: '新規ボディ', buttonId: 'revolve-mode-new' },
+      ],
+    },
+  ],
+  build(values) {
+    const empty = missingSelection(values, 'regions', '領域')
+    if (empty !== null) return { ok: false, reason: empty }
+    const axisKind = values.axis
+    if (typeof axisKind !== 'string') return { ok: false, reason: '回転軸が選ばれていない' }
+    const angle = values.angle
+    const mode = values.mode
+    if (typeof angle !== 'number') return { ok: false, reason: '角度が数値でない' }
+    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    if (axisKind === 'line') {
+      // 参照のまま送る(鏡映の軸と同じ)。線分であることの検査はコアに任せる。
+      const line = pickedRefOf(values.axis_line)
+      if (line === null) return { ok: false, reason: '回転軸の線分が指されていない' }
+      return { ok: true, args: { axis_line: line, angle, mode } }
+    }
+    return { ok: true, args: { axis: axisKind, angle, mode } }
+  },
+}
+
+/**
  * フィレット。半径は1つで全辺に効く。
  * OCCTのフィレットは例外を投げず `IsDone()=False` で失敗し、半径に対して単調でない(§7。r=10.0 失敗 / r=10.5 成功)。
  * コアが例外へ変換し、`App.svelte` が選択を保持したまま打った値を戻す。
@@ -421,7 +491,7 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
         { value: 'XZ', label: 'XZ平面', buttonId: 'mirror-body-xz' },
         { value: 'YZ', label: 'YZ平面', buttonId: 'mirror-body-yz' },
         // この値はサーバへ行かない(`base_plane` は XY/XZ/YZ のみ)。`plane_face` を出す印で、`build` が読み替える。
-        { value: 'face', label: '面を選ぶ', buttonId: 'mirror-body-face', sends: null },
+        { value: 'face', label: '面を選ぶ', buttonId: 'mirror-body-face', sends: null, impliedBy: 'plane_face' },
       ],
     },
     {
@@ -495,6 +565,7 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
 /** スケッチモードで足すぶん。押し出しは領域版(同じ id `extrude`・ボタン `#extrude`)。 */
 export const SKETCH_FEATURE_COMMANDS: CommandDef[] = [
   EXTRUDE_REGIONS,
+  REVOLVE,
   PATTERN_RECTANGULAR,
   PATTERN_CIRCULAR,
   DELETE_SELECTION,
