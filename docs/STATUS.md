@@ -25,9 +25,10 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 - 指標は「誤差を吸収できる幅 W(雌雄の和・半径)」と、窓の中心・緩い端での破断荷重(壁2周+疎な充填のモデル)、締め付けの限界、乗り越えの目安。
 - 中間の結論(D6・P1.5・深さ0.6): W は 45° 台形 0.37、30° 台形 0.08、ISO M6 0.01、半円 0.10。強さはどれも 280〜330N で差が小さい。
 - 試し刷り一式(30部品、STL・結果を返すページ・事前の予測)は `output/thread_sim/testprint/`(git 管理外。`python -m tools.thread_sim.testprint` で作り直せる)。
-- 走っているもの: study4(全設計を窓の指標で、手元4並列、`output/thread_sim/study4.jsonl`)、study3(探索 436 設計、クラウドのセッション
-  「Thread_sim study3 格子探索」。結果はブランチ `thread-sim/study3-results` の `tools/thread_sim/results/study3.jsonl`)、
-  Codex の 3D 周期 FEA(リング模型との比較。`tools/thread_sim/fea3d.py` を作らせている)。
+- 3D の周期模型(`fea3d.py`)で、強度のリング模型が螺旋と ±10% で合うことを確かめた。締め付けの判定は 3D で補正した。
+- 走っているもの: study4 の失敗した行の回し直し(手元)。クラウドのセッション3本 — 「Thread_sim study3 格子探索」(探索 436 件)、
+  「thread_sim study2 感度計算」(238 件)、「Thread_sim study5 小径ねじ計算」(第2段 858 件)。結果はブランチ
+  `thread-sim/study{2,3,5}-results` の `tools/thread_sim/results/study{2,3,5}.jsonl`。
 
 ### 次にやること
 
