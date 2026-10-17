@@ -32,7 +32,7 @@ def _log_with_a_big_operation() -> OpLog:
     log = OpLog()
     log.append("sketch_create", {"base_plane": "XY", "name": "スケッチ"})
     log.append("import_step", {"step": "ISO-10303-21;\n" + "x" * (OpLog.SERIALIZED_CACHE_MIN * 2), "names": ["部品"]})
-    log.append("add_circle", {"sketch_id": "s1", "center": [0.0, 1.5], "radius": 2.0})
+    log.append("add_circle", {"sketch_id": "s1", "center": [0.0, 1.5], "diameter": 4.0})
     log.allocate_number("body")
     return log
 
@@ -72,8 +72,8 @@ def test_the_file_is_written_in_the_background_and_settles(session: Session) -> 
     sketch_id = session.sketch_create("XY")["sketch_id"]  # 無題の最初の保存はその場で書く(名前が配りものに載る)
     assert session.pending_write is None and _ops_on_disk(session) == 1
     with session.background_autosave():
-        session.add_circle(sketch_id, [0.0, 0.0], 5.0)
-        session.add_circle(sketch_id, [9.0, 0.0], 2.0)
+        session.add_circle(sketch_id, [0.0, 0.0], 10.0)
+        session.add_circle(sketch_id, [9.0, 0.0], 4.0)
     future = session.pending_write
     assert future is not None
     concurrent.futures.wait([future])
@@ -90,7 +90,7 @@ def test_a_failed_background_write_marks_the_document_unsaved(session: Session, 
 
     monkeypatch.setattr("duocad.session.os.replace", broken)
     with session.background_autosave():
-        applied = session.add_circle(sketch_id, [0.0, 0.0], 5.0)
+        applied = session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     assert applied["verb"] == "add_circle"
     concurrent.futures.wait([session.pending_write])
     assert session.settle_autosave() is False
@@ -112,13 +112,13 @@ def test_file_operations_wait_for_the_queued_write(session: Session, monkeypatch
 
     monkeypatch.setattr(Session, "_write_document_file", staticmethod(slow))
     with session.background_autosave():
-        session.add_circle(sketch_id, [0.0, 0.0], 5.0)
+        session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     queued = session.pending_write
     assert queued is not None and not queued.done()
     # 書き手を止めたままファイルの口へ入る。待たない口は先に済ませてしまい、後から着いた書き込みが結果を壊す。
     threading.Timer(0.3, gate.set_result, [None]).start()
     if act == "save":
-        session.add_circle(sketch_id, [5.0, 5.0], 1.0)  # 画面の外(MCP)の操作はその場で書く
+        session.add_circle(sketch_id, [5.0, 5.0], 2.0)  # 画面の外(MCP)の操作はその場で書く
     elif act == "delete":
         session.delete_document(name)
     elif act == "open_again":
@@ -149,7 +149,7 @@ def test_a_browser_verb_replies_before_the_write_and_the_file_follows(session: S
     monkeypatch.setattr(Session, "_write_document_file", staticmethod(watched))
 
     async def script(send):
-        reply = await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": 3.0, "client_op": 7})
+        reply = await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 6.0, "client_op": 7})
         order.append(f"after:{_ops_on_disk(session)}")
         return reply
 
@@ -169,7 +169,7 @@ def test_a_browser_verb_whose_write_fails_is_pushed_again_as_unsaved(session: Se
     monkeypatch.setattr("duocad.session.os.replace", broken)
 
     async def script(send):
-        await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": 3.0, "client_op": 8})
+        await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 6.0, "client_op": 8})
         return None
 
     (_reply, clients) = _browser(session, script, connections=1)
@@ -193,8 +193,8 @@ def test_a_browser_verb_whose_write_recovers_is_pushed_again_as_saved(session: S
     monkeypatch.setattr("duocad.session.os.replace", flaky)
 
     async def script(send):
-        await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": 3.0, "client_op": 9})
-        await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [9.0, 0.0], "radius": 1.0, "client_op": 10})
+        await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 6.0, "client_op": 9})
+        await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [9.0, 0.0], "diameter": 2.0, "client_op": 10})
         return None
 
     (_reply, clients) = _browser(session, script, connections=1)

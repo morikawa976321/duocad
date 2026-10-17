@@ -32,6 +32,7 @@ const EDGE_NAMES: Record<string, string> = { line: '直線', circle: '円・円�
 const ENTITY_NAMES: Record<EntityKind, string> = {
   line: '線分',
   circle: '円',
+  ellipse: '楕円',
   rectangle: '長方形',
   arc: '円弧',
   bezier: 'ベジェ曲線',
@@ -128,7 +129,15 @@ function entityRows(kind: EntityKind, p: Record<string, number>, length: number 
     case 'circle':
       return [
         { label: '中心', value: uv(p.cx, p.cy) },
-        { label: '半径', value: mm(p.radius) },
+        { label: '直径', value: mm(p.diameter) },
+      ]
+    case 'ellipse':
+      return [
+        { label: '中心', value: uv(p.cx, p.cy) },
+        { label: '横の直径', value: mm(p.width) },
+        { label: '縦の直径', value: mm(p.height) },
+        { label: '角度', value: `${fixed3(p.angle)}°` },
+        ...(length !== undefined ? [{ label: '周長', value: mm(length) }] : []),
       ]
     case 'arc':
       return [

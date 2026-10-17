@@ -19,7 +19,7 @@ CYLINDER_CHAMFER_KINDS = {"plane": 2, "cylinder_full": 1, "cone": 1}
 
 def new_cylinder(doc: Document, radius: float = 10.0, height: float = 5.0) -> str:
     sketch_id = sketch_create(doc, base_plane("XY"))
-    add_circle(doc, sketch_id, (0.0, 0.0), radius)
+    add_circle(doc, sketch_id, (0.0, 0.0), 2 * radius)
     return extrude(doc, [region_ref(sketch_id, 1)], height, mode="join").args["body_id"]
 
 

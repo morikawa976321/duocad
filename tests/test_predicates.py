@@ -182,7 +182,7 @@ def test_the_boundary_excludes_the_rim_of_a_hole():
     body_id = extrude(document, [region_ref(sketch_id, 1)], size, mode="join").args["body_id"]
 
     hole_sketch = sketch_create(document, base_plane("XY"))
-    add_circle(document, hole_sketch, (size / 2, size / 2), hole_radius)
+    add_circle(document, hole_sketch, (size / 2, size / 2), 2 * hole_radius)
     extrude(document, [region_ref(hole_sketch, 1)], size, mode="cut", body_id=body_id)
 
     shape = next(body for body in document.bodies if body.id == body_id).shape

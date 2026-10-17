@@ -46,7 +46,7 @@ def test_a_later_fillet_does_not_move_a_face_sketch_even_when_the_index_now_land
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
-    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
+    add_circle(document, sketch_id, (0.0, 0.0), 8.0)
     frame_before = region.plane_frame(document, sketch_id)
 
     from duocad.verbs import fillet
@@ -76,7 +76,7 @@ def test_a_face_sketch_survives_the_referenced_face_disappearing_completely():
     document = Document()
     body_id = new_box(document, BOX)
     kept = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
-    add_circle(document, kept, (0.0, 0.0), 4.0)
+    add_circle(document, kept, (0.0, 0.0), 8.0)
     frame_before = region.plane_frame(document, kept)
     assert top_plane_indices(document, body_id, BOX) == [TOP_FACE_INDEX]
 
@@ -106,7 +106,7 @@ def test_extrude_takes_its_direction_from_the_frozen_frame():
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
-    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
+    add_circle(document, sketch_id, (0.0, 0.0), 8.0)
 
     from duocad.verbs import fillet
 
@@ -124,7 +124,7 @@ def test_a_face_sketch_follows_a_parameter_edit_that_precedes_it():
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, PLUS_X_FACE_INDEX))
-    add_circle(document, sketch_id, (0.0, 0.0), 3.0)
+    add_circle(document, sketch_id, (0.0, 0.0), 6.0)
     before = region.plane_frame(document, sketch_id)
     assert before["origin"][0] == pytest.approx(BOX)
 
@@ -193,7 +193,7 @@ def test_a_log_round_trip_reproduces_the_same_frames():
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
-    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
+    add_circle(document, sketch_id, (0.0, 0.0), 8.0)
 
     from duocad.verbs import fillet
 
@@ -213,7 +213,7 @@ def test_undo_and_redo_of_the_fillet_leave_the_sketch_pose_alone():
     document = Document()
     body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
-    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
+    add_circle(document, sketch_id, (0.0, 0.0), 8.0)
     expected = region.plane_frame(document, sketch_id)
 
     from duocad.verbs import fillet

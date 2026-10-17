@@ -96,7 +96,7 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
                   item.kind === 'circle' &&
                   Math.abs(item.params.cx - x) < 1e-6 &&
                   Math.abs(item.params.cy - y) < 1e-6 &&
-                  Math.abs(item.params.radius - radius) < 1e-6,
+                  Math.abs(item.params.diameter - 2 * radius) < 1e-6,
               ),
           )
         },

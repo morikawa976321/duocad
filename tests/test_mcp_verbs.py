@@ -262,7 +262,7 @@ def test_every_sketch_verb_is_reachable_and_returns_its_id(empty_session: Sessio
             server, "add_line", {"sketch_id": sketch_id, "p0": [0, 0], "p1": [30, 0]}
         ),
         "add_circle": call(
-            server, "add_circle", {"sketch_id": sketch_id, "center": [60, 0], "radius": 10}
+            server, "add_circle", {"sketch_id": sketch_id, "center": [60, 0], "diameter": 20}
         ),
         "add_rectangle": call(
             server,
@@ -299,10 +299,10 @@ def test_both_patterns_are_reachable_and_return_their_id(empty_session: Session)
     """反復2verb(矩形・円形)も1回ずつ成功し `pattern_id` が返る。1つの図形を2つの反復で使い回せない(コアが ValueError)ので図形を2つ作る。"""
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
-    first = call(server, "add_circle", {"sketch_id": sketch_id, "center": [10, 0], "radius": 2})[
+    first = call(server, "add_circle", {"sketch_id": sketch_id, "center": [10, 0], "diameter": 4})[
         "entity_id"
     ]
-    second = call(server, "add_circle", {"sketch_id": sketch_id, "center": [0, 10], "radius": 2})[
+    second = call(server, "add_circle", {"sketch_id": sketch_id, "center": [0, 10], "diameter": 4})[
         "entity_id"
     ]
 
@@ -342,7 +342,7 @@ def test_an_unknown_entity_id_shows_the_real_ones(empty_session: Session):
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     real = call(
-        server, "add_circle", {"sketch_id": sketch_id, "center": [0, 0], "radius": 2}
+        server, "add_circle", {"sketch_id": sketch_id, "center": [0, 0], "diameter": 4}
     )["entity_id"]
 
     error = call_error(
@@ -362,7 +362,7 @@ def test_an_unknown_sketch_id_shows_the_real_ones(empty_session: Session):
     real = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
 
     error = call_error(
-        server, "add_circle", {"sketch_id": "sk_ghost", "center": [0, 0], "radius": 2}
+        server, "add_circle", {"sketch_id": "sk_ghost", "center": [0, 0], "diameter": 4}
     )
 
     assert error["code"] == "not_found"
@@ -427,7 +427,7 @@ def test_extrude_can_cut(empty_session: Session):
     call(server, "extrude", {"distance": BOX_Z, "mode": "join"})
 
     hole = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
-    call(server, "add_circle", {"sketch_id": hole, "center": [15, 15], "radius": 5})
+    call(server, "add_circle", {"sketch_id": hole, "center": [15, 15], "diameter": 10})
     select_refs(server, [{"sketch": hole, "index": 1}])
     payload = call(server, "extrude", {"distance": BOX_Z, "mode": "cut"})
 
@@ -527,7 +527,7 @@ def test_a_hole_drawn_in_the_returned_frame_lands_where_intended(empty_session: 
     frame = payload["frame"]
     described = call(server, "describe_document")["sketches"]
     assert next(s for s in described if s["sketch_id"] == payload["sketch_id"])["plane"]["frame"] == frame
-    call(server, "add_circle", {"sketch_id": payload["sketch_id"], "center": _to_uv(frame, target), "radius": 2})
+    call(server, "add_circle", {"sketch_id": payload["sketch_id"], "center": _to_uv(frame, target), "diameter": 4})
     select_refs(server, [{"sketch": payload["sketch_id"], "index": 1}])
     call(server, "extrude", {"distance": -5, "mode": "cut"})
 
@@ -796,7 +796,7 @@ def test_describe_document_lists_sketches_and_their_entities(empty_session: Sess
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     entity_id = call(
-        server, "add_circle", {"sketch_id": sketch_id, "center": [0, 0], "radius": 10.0}
+        server, "add_circle", {"sketch_id": sketch_id, "center": [0, 0], "diameter": 20.0}
     )["entity_id"]
 
     payload = call(server, "describe_document")
@@ -808,16 +808,16 @@ def test_describe_document_lists_sketches_and_their_entities(empty_session: Sess
     assert [entity["entity_id"] for entity in entities] == [entity_id]
     assert entities[0]["kind"] == "circle"
     # # 解決済みの数値とパラメータ名の両方を出す(数値だけだと `set_parameter` の引数が作れず、名前だけだと今の値が分からない)。
-    assert entities[0]["params"]["radius"] == 10.0
-    assert entities[0]["parameters"]["radius"] in payload["parameters"]
-    assert payload["parameters"][entities[0]["parameters"]["radius"]] == 10.0
+    assert entities[0]["params"]["diameter"] == 20.0
+    assert entities[0]["parameters"]["diameter"] in payload["parameters"]
+    assert payload["parameters"][entities[0]["parameters"]["diameter"]] == 20.0
 
 
 def test_region_counts_are_opt_in(empty_session: Session):
     """領域の数え上げは**計算**(splitter)なので既定では出さない。要るときだけ true。"""
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
-    call(server, "add_circle", {"sketch_id": sketch_id, "center": [0, 0], "radius": 10.0})
+    call(server, "add_circle", {"sketch_id": sketch_id, "center": [0, 0], "diameter": 20.0})
 
     assert "region_count" not in call(server, "describe_document")["sketches"][0]
     with_regions = call(server, "describe_document", {"include_regions": True})

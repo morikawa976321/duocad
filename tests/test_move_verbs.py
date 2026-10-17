@@ -59,8 +59,8 @@ def test_a_sketch_entity_can_be_selected_as_a_point_or_as_a_whole(session: Sessi
 def test_a_point_that_the_kind_does_not_have_is_refused(session: Session) -> None:
     """半径・幅高さ・yキーは点ではない(寸法の編集は今回のスコープ外)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 5.0)["entity_id"]
-    for bad in ("radius", "cy", "x0"):
+    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 10.0)["entity_id"]
+    for bad in ("diameter", "cy", "x0"):
         with pytest.raises(ValueError):
             selection.select_sketch_entity(session.document, sketch_id, entity_id, bad)
 
@@ -80,7 +80,7 @@ def test_every_kind_has_points_and_a_translation_moves_all_of_them(session: Sess
         assert sketch.entity_point_keys(kind), f"{kind} に動かせる点が1つも無い"
 
     sketch_id, _ = _line(session)
-    session.add_circle(sketch_id, [0.0, 0.0], 2.0)
+    session.add_circle(sketch_id, [0.0, 0.0], 4.0)
     session.add_rectangle(sketch_id, [0.0, 0.0], 4.0, 2.0)
     session.add_arc(sketch_id, [0.0, 0.0], 3.0, 0.0, 90.0)
     _add_bezier(session, sketch_id)
@@ -113,14 +113,14 @@ def test_moving_a_whole_entity_moves_every_point(session: Session) -> None:
     }
 
 
-def test_moving_a_circle_leaves_its_radius_alone(session: Session) -> None:
+def test_moving_a_circle_leaves_its_diameter_alone(session: Session) -> None:
     """寸法は動かさない(平行移動で形は変わらない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [1.0, 2.0], 5.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [1.0, 2.0], 10.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
     session.move_sketch_entities(10.0, 0.0)
 
-    assert _params(session, sketch_id, entity_id) == {"cx": 11.0, "cy": 2.0, "radius": 5.0}
+    assert _params(session, sketch_id, entity_id) == {"cx": 11.0, "cy": 2.0, "diameter": 10.0}
 
 
 def test_a_whole_entity_wins_over_its_own_points(session: Session) -> None:
@@ -213,8 +213,8 @@ def test_a_copy_whose_second_id_collides_adds_nothing(session: Session) -> None:
     from duocad.verbs.move_sketch import _do_move_sketch_entities
 
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    first = session.add_circle(session.document.sketches[0].id, [0.0, 0.0], 2.0)["entity_id"]
-    second = session.add_circle(sketch_id, [10.0, 0.0], 2.0)["entity_id"]
+    first = session.add_circle(session.document.sketches[0].id, [0.0, 0.0], 4.0)["entity_id"]
+    second = session.add_circle(sketch_id, [10.0, 0.0], 4.0)["entity_id"]
     before_ids = [entity.id for entity in sketch.get_sketch(session.document, sketch_id).entities]
     before_parameters = dict(session.document.parameters)
 
@@ -244,8 +244,8 @@ def test_a_copy_whose_second_id_collides_adds_nothing(session: Session) -> None:
 
 def test_moving_two_entities_moves_both(session: Session) -> None:
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    first = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
-    second = session.add_circle(sketch_id, [10.0, 0.0], 2.0)["entity_id"]
+    first = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
+    second = session.add_circle(sketch_id, [10.0, 0.0], 4.0)["entity_id"]
     _select(session, [
         {"sketch": sketch_id, "entity": first, "point": None},
         {"sketch": sketch_id, "entity": second, "point": None},
@@ -347,7 +347,7 @@ def test_copying_two_points_of_one_entity_makes_one_copy(session: Session) -> No
 def test_the_copy_is_not_part_of_a_pattern(session: Session) -> None:
     """反復の元を複製しても、複製は素の図形になる(反復には入らない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
     session.pattern_rectangular(sketch_id, [entity_id], 10.0, 10.0, 2, 2)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
     applied = session.move_sketch_entities(0.0, 30.0, copy=True)
@@ -701,7 +701,7 @@ def test_an_edge_axis_and_the_same_axis_in_numbers_agree(session: Session) -> No
 def test_a_curved_edge_cannot_be_an_axis(session: Session) -> None:
     """円い辺を軸に読み替えない(人が指した辺と回る軸が食い違うのは例外の出ない事故)。"""
     body, sketch_id = _box(session)
-    session.add_circle(sketch_id, [50.0, 50.0], 5.0)
+    session.add_circle(sketch_id, [50.0, 50.0], 10.0)
     _select(session, [{"sketch": sketch_id, "index": 2}])
     session.extrude(5.0, mode="new")
     cylinder = session.document.bodies[-1]
@@ -1023,7 +1023,7 @@ def test_the_default_sketch_centre_is_the_average_of_the_targets(session: Sessio
 def test_a_centre_entity_names_an_existing_point(session: Session) -> None:
     """既存の点を中心に指せる(円の中心を指して、その円のまわりに線を回す)。"""
     sketch_id, entity_id = _line(session)
-    circle_id = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    circle_id = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
     session.move_sketch_entities(
         mode="rotate",
@@ -1142,8 +1142,8 @@ def test_a_rectangle_corner_can_still_be_rotated(session: Session) -> None:
 def test_rotating_two_entities_uses_one_centre(session: Session) -> None:
     """2つの円を180度回すと**入れ替わる**(平均が中心だから)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    first = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
-    second = session.add_circle(sketch_id, [10.0, 0.0], 2.0)["entity_id"]
+    first = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
+    second = session.add_circle(sketch_id, [10.0, 0.0], 4.0)["entity_id"]
     _select(session, [
         {"sketch": sketch_id, "entity": first, "point": None},
         {"sketch": sketch_id, "entity": second, "point": None},
@@ -1174,7 +1174,7 @@ def test_copying_a_sketch_entity_by_rotation(session: Session) -> None:
 def test_a_copy_that_lands_on_its_source_is_refused(session: Session) -> None:
     """円をその中心まわりに回した複製は元と完全に重なる(領域検出が同じ辺を2本見る)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [3.0, 4.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [3.0, 4.0], 4.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
     with pytest.raises(ValueError):
         session.move_sketch_entities(
@@ -1358,7 +1358,7 @@ def test_the_browser_cannot_mix_the_two_modes(session: Session) -> None:
 def test_the_browser_rotates_sketch_entities_around_a_picked_point(session: Session) -> None:
     """スケッチ側は**図形の点への参照**(`center_entity`)で中心を指す。"""
     sketch_id, entity_id = _line(session)
-    anchor = session.add_circle(sketch_id, [10.0, 0.0], 2.0)["entity_id"]
+    anchor = session.add_circle(sketch_id, [10.0, 0.0], 4.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 
     answer = send_one(

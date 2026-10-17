@@ -45,7 +45,7 @@ def plate(document: Document) -> None:
 
 def hole_ring(document: Document, count: int = COUNT, total_angle: float = 360.0) -> tuple:
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, FIRST_HOLE, HOLE_RADIUS)
+    circle = add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
     pattern_id = pattern_circular(
         document, sketch_id, [circle], CENTER, count, total_angle=total_angle
     )
@@ -291,7 +291,7 @@ def test_count_must_be_a_positive_integer(count):
     """`count < 1` や非整数は ValueError。**文書にもログにも残さない**。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, FIRST_HOLE, HOLE_RADIUS)
+    circle = add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
     log_before = len(document.log.entries)
 
     with pytest.raises(ValueError):
@@ -307,7 +307,7 @@ def test_total_angle_must_be_usable(total_angle):
     """`total_angle` は 0 < angle <= 360。0・負・360超・NaNは ValueError。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, FIRST_HOLE, HOLE_RADIUS)
+    circle = add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
     log_before = len(document.log.entries)
 
     with pytest.raises(ValueError):
@@ -321,7 +321,7 @@ def test_unknown_entity_is_refused():
     """存在しない図形IDは KeyError（矩形反復と同じ契約）。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    add_circle(document, sketch_id, FIRST_HOLE, HOLE_RADIUS)
+    add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
     log_before = len(document.log.entries)
 
     with pytest.raises(KeyError):
@@ -355,7 +355,7 @@ def test_a_shape_centred_on_the_pivot_is_refused():
     """回転中心と図形の中心が一致する場合は拒否する。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, CENTER, HOLE_RADIUS)  # 中心が回転中心と一致
+    circle = add_circle(document, sketch_id, CENTER, 2 * HOLE_RADIUS)  # 中心が回転中心と一致
     log_before = len(document.log.entries)
 
     with pytest.raises(ValueError):

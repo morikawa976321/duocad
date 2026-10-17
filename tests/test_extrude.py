@@ -50,7 +50,7 @@ LARGER_HALF_AREA = 826.215
 
 def split_circle_sketch(document: Document) -> str:
     sketch_id = sketch_create(document, "XY")
-    add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    add_circle(document, sketch_id, (0.0, 0.0), 40.0)
     add_line(document, sketch_id, (-30.0, 5.0), (30.0, 5.0))
     return sketch_id
 
@@ -67,7 +67,7 @@ def plate_document() -> Document:
 
 def drill(document: Document) -> None:
     sketch_id = sketch_create(document, "XY")
-    add_circle(document, sketch_id, HOLE_CENTER, HOLE_RADIUS)
+    add_circle(document, sketch_id, HOLE_CENTER, 2 * HOLE_RADIUS)
     hole = regions(document, sketch_id)
     assert len(hole) == 1
     extrude(document, [region_ref(sketch_id, hole[0].index)], HOLE_DEPTH, mode="cut")
@@ -278,7 +278,7 @@ def test_extrude_without_an_existing_region_fails_and_changes_nothing():
     """押し出し対象の領域が存在しない場合は失敗し、文書が変更されない。"""
     document = plate_document()
     sketch_id = sketch_create(document, "XY")
-    add_circle(document, sketch_id, HOLE_CENTER, HOLE_RADIUS)
+    add_circle(document, sketch_id, HOLE_CENTER, 2 * HOLE_RADIUS)
     before_volume = query.volume(document.active_body().shape)
     entries_before = len(document.log.entries)
     bodies_before = len(document.bodies)

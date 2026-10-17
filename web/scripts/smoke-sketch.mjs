@@ -26,7 +26,7 @@ runSmoke('smoke-sketch', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
   await mcp.callTool('add_rectangle', { sketch_id: sketchA, corner: [0, 0], width: 40, height: 30 })
   // 円の中心は**わざと格子から外す** —— 格子の上の点では、点へのスナップが効かなくても 1mm の丸めが
   // 同じ座標を返し、2 の検査が素通りする(実測: 角が (0,0) の長方形で試して、壊しても緑だった)。
-  await mcp.callTool('add_circle', { sketch_id: sketchA, center: [60.4, 10.3], radius: 10 })
+  await mcp.callTool('add_circle', { sketch_id: sketchA, center: [60.4, 10.3], diameter: 20 })
   await mcp.callTool('add_rectangle', { sketch_id: sketchA, corner: [85, 0], width: 24, height: 10, angle: 35 })
   const sketchB = (await mcp.callTool('sketch_create', { base_plane: 'XZ' })).sketch_id
 

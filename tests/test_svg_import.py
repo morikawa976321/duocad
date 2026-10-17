@@ -39,6 +39,13 @@ SVG_MIXED = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
 """
 
 
+#: path の楕円弧(cx=90, cy=30, rx=20, ry=10 の上半分と下半分)。`<ellipse>` 要素は `ellipse` 図形になるので、近似はこちらで見る。
+SVG_ELLIPTICAL_ARC = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <path d="M 70 30 A 20 10 0 0 1 110 30 A 20 10 0 0 1 70 30 Z"/>
+</svg>
+"""
+
+
 def write_svg(directory: Path, name: str, body: str) -> Path:
     path = directory / name
     path.write_text(body, encoding="utf-8")
@@ -121,13 +128,41 @@ def test_scale_rejects_unusable_values(tmp_path: Path, bad: float) -> None:
 
 
 def test_shapes_map_to_the_expected_entity_kinds(tmp_path: Path) -> None:
-    """真円は `arc`、楕円と2次ベジエは `bezier`、直線は `line`。"""
+    """真円は `arc`、`<ellipse>` は `ellipse`、2次ベジエは `bezier`、直線は `line`。"""
     _name, entities = svg_import.read_svg_entities(
         write_svg(tmp_path, "mixed.svg", SVG_MIXED)
     )
     kinds = {entity["kind"] for entity in entities}
-    assert kinds == {"line", "arc", "bezier"}
+    assert kinds == {"line", "arc", "bezier", "ellipse"}
     assert all(entity["kind"] in sketch_module.ENTITY_KINDS for entity in entities)
+
+
+@pytest.mark.parametrize(
+    "transform,angle",
+    [("", 0.0), (' transform="rotate(30 90 30)"', -30.0)],
+)
+def test_an_ellipse_element_becomes_one_ellipse(tmp_path: Path, transform: str, angle: float) -> None:
+    """落ちたら、`<ellipse>` が楕円図形にならないか、Y反転で向き(SVG の時計回りはスケッチの反時計回りの逆)を取り違えている。"""
+    body = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <ellipse cx="90" cy="30" rx="20" ry="10"{transform}/>
+</svg>
+'''
+    _name, entities = svg_import.read_svg_entities(write_svg(tmp_path, "one.svg", body))
+    assert [entity["kind"] for entity in entities] == ["ellipse"]
+    params = entities[0]["params"]
+    assert (params["cx"], params["cy"], params["width"], params["height"]) == pytest.approx((90.0, 70.0, 40.0, 20.0), rel=1e-5)
+    assert params["angle"] == pytest.approx(angle, abs=1e-6)
+
+
+def test_a_skewed_ellipse_element_stays_curves(tmp_path: Path) -> None:
+    """斜めに歪めた `<ellipse>` は軸が直交しないので、楕円図形にせず楕円弧(ベジエ近似)のまま取り込む。"""
+    body = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <ellipse cx="90" cy="30" rx="20" ry="10" transform="skewX(20)"/>
+</svg>
+"""
+    _name, entities = svg_import.read_svg_entities(write_svg(tmp_path, "skew.svg", body))
+    assert "ellipse" not in {entity["kind"] for entity in entities}
+    assert "bezier" in {entity["kind"] for entity in entities}
 
 
 def test_the_extruded_side_of_a_curve_stays_one_face(tmp_path: Path) -> None:
@@ -151,9 +186,9 @@ def test_the_extruded_side_of_a_curve_stays_one_face(tmp_path: Path) -> None:
 def test_an_elliptical_arc_is_within_a_tenth_of_a_percent(tmp_path: Path) -> None:
     """落ちたら、楕円を含むSVGの寸法が曲線の途中で黙ってずれている(標準の係数なら半径の0.027%)。"""
     _name, entities = svg_import.read_svg_entities(
-        write_svg(tmp_path, "ellipse.svg", SVG_MIXED)
+        write_svg(tmp_path, "ellipse.svg", SVG_ELLIPTICAL_ARC)
     )
-    # 楕円(cx=90, cy=30, rx=20, ry=10 / 高さ100 → v=70)由来のベジエ
+    # 楕円弧(cx=90, cy=30, rx=20, ry=10 / 高さ100 → v=70)由来のベジエ
     arcs = [
         entity["params"]
         for entity in entities
@@ -394,3 +429,13 @@ def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:
 
     stored = session.document.log.entries[-1].args["entities"]
     assert isinstance(stored, list) and stored and isinstance(stored[0], dict)
+
+
+def test_too_many_ellipse_elements_are_refused(tmp_path: Path) -> None:
+    """落ちたら、`<ellipse>` だけのSVGが図形数の上限(`MAX_ENTITIES`)を素通りする。"""
+    ellipses = "".join(
+        f'<ellipse cx="{i % 100}" cy="{i // 100}" rx="0.4" ry="0.2"/>' for i in range(svg_import.MAX_ENTITIES + 1)
+    )
+    body = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">{ellipses}</svg>'
+    with pytest.raises(ValueError, match="多すぎる"):
+        svg_import.read_svg_entities(write_svg(tmp_path, "many.svg", body))

@@ -19,6 +19,7 @@ import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg 
 import {
   arcFromPoints,
   circleFromPoints,
+  ellipseFromPoints,
   lineAngleDeg,
   lineFromPoints,
   lineLength,
@@ -93,11 +94,11 @@ export const ADD_CIRCLE: CommandDef<'add_circle'> = {
     { kind: 'point', name: 'rim', label: '円周の1点' },
     {
       kind: 'number',
-      name: 'radius',
-      label: '半径',
+      name: 'diameter',
+      label: '直径',
       unit: 'mm',
-      inputId: 'sketch-radius',
-      reject: positive('半径'),
+      inputId: 'sketch-diameter',
+      reject: positive('直径'),
       fromPoints: true,
     },
   ],
@@ -105,9 +106,73 @@ export const ADD_CIRCLE: CommandDef<'add_circle'> = {
     const center = values.center as Point2 | undefined
     const rim = values.rim as Point2 | undefined
     if (!center || !rim) return { ok: false, reason: '中心と円周の点が要る' }
-    const circle = circleFromPoints(center, rim, typed(values, 'radius'))
-    if (circle === null) return { ok: false, reason: '半径は0より大きい値' }
-    return { ok: true, args: { center: circle.center, radius: circle.radius } }
+    const circle = circleFromPoints(center, rim, typed(values, 'diameter'))
+    if (circle === null) return { ok: false, reason: '直径は0より大きい値' }
+    return { ok: true, args: { center: circle.center, diameter: circle.diameter } }
+  },
+}
+
+/**
+ * 楕円。中心 → 1本目の軸の端 → 2本目の軸の長さの3クリック(幾何は `sketchGeometry.ts` の `ellipseFromPoints`)。
+ * 寸法を打ってあれば、それで決まる点はもう待たない(横の直径と角度を打てば2点目、縦の直径を打てば3点目が要らない)。
+ */
+export const ADD_ELLIPSE: CommandDef<'add_ellipse'> = {
+  id: 'add_ellipse',
+  label: '楕円',
+  buttonId: 'sketch-ellipse',
+  preview: 'local',
+  args: [
+    { kind: 'point', name: 'center', label: '中心' },
+    {
+      kind: 'point',
+      name: 'axis_end',
+      label: '1本目の軸の端',
+      when: (values) => typed(values, 'width') === undefined || typed(values, 'angle') === undefined,
+    },
+    {
+      kind: 'point',
+      name: 'via',
+      label: '2本目の軸の長さ',
+      when: (values) => typed(values, 'height') === undefined,
+    },
+    {
+      kind: 'number',
+      name: 'width',
+      label: '横の直径',
+      unit: 'mm',
+      inputId: 'sketch-ellipse-width',
+      reject: positive('横の直径'),
+      fromPoints: true,
+    },
+    {
+      kind: 'number',
+      name: 'height',
+      label: '縦の直径',
+      unit: 'mm',
+      inputId: 'sketch-ellipse-height',
+      reject: positive('縦の直径'),
+      fromPoints: true,
+    },
+    {
+      kind: 'number',
+      name: 'angle',
+      label: '角度',
+      unit: '度',
+      inputId: 'sketch-ellipse-angle',
+      reject: () => null,
+      fromPoints: true,
+    },
+  ],
+  build(values) {
+    const center = values.center as Point2 | undefined
+    if (!center) return { ok: false, reason: '中心が要る' }
+    const ellipse = ellipseFromPoints(center, values.axis_end as Point2 | undefined, values.via as Point2 | undefined, {
+      width: typed(values, 'width'),
+      height: typed(values, 'height'),
+      angle: typed(values, 'angle'),
+    })
+    if (ellipse === null) return { ok: false, reason: '縦と横の直径は0より大きい値' }
+    return { ok: true, args: ellipse }
   },
 }
 
@@ -433,6 +498,7 @@ export const SKETCH_COMMANDS: CommandDef[] = [
   SELECT_IN_SKETCH,
   ADD_LINE,
   ADD_CIRCLE,
+  ADD_ELLIPSE,
   ADD_RECTANGLE,
   ADD_ARC,
   MOVE_SKETCH_ENTITIES,

@@ -498,7 +498,7 @@ export function commitsGhost(command: CommandDef): boolean {
  * per-commandのフラグを置かず `args` から導出する(後から足すverbが何も書かなくても同じ規則に従い、書き忘れで黙って別の挙動にならない)。
  *
  * 次のどちらかに当たれば Enter が要る: (1) 対象を複数取りうる(`takesManyTargets`) (2) howの入力がある(`isHowInput`)。
- * どちらでもないのは、スケッチの描く4verb(`add_line`/`add_circle`/`add_rectangle`/`add_arc`。寸法欄は `fromPoints` なので
+ * どちらでもないのは、スケッチの描く5verb(`add_line`/`add_circle`/`add_ellipse`/`add_rectangle`/`add_arc`。寸法欄は `fromPoints` なので
  * how に数えない)と `sketch_create` だけ。列挙していない種別は即適用の側に落ちる(意図した既定)ので、新しい how を足すときは
  * `isHowInput` へ足すこと(忘れると、打っている途中の値で適用される)。
  *

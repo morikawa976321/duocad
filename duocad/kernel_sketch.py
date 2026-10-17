@@ -33,7 +33,8 @@ from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pln, gp_Pnt
+from OCP.GCPnts import GCPnts_AbscissaPoint
+from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt
 
 from .kernel import _BASE_PLANE_AXES, _face_map, _face_props, classify_face, face_of
 from .mesh_geometry import compound, indexed_map
@@ -341,9 +342,9 @@ def _faces_from_wires(ax3: "gp_Ax3", wires: Sequence[Any]) -> List[Any]:
 
 
 def face_boundary_entities(plane: dict, face: Any) -> List[dict]:
-    """面の境界(外周と穴)を、スケッチ図形 `{"kind", "params"}` の並びにする。**線分・円弧・円だけ**。
+    """面の境界(外周と穴)を、スケッチ図形 `{"kind", "params"}` の並びにする。**線分・円弧・円・閉じた楕円だけ**。
 
-    辺がそれ以外(ベジエなど)なら ValueError。ベジエの領域を包むと、オフセットは元の曲線の
+    辺がそれ以外(ベジエ・楕円弧など)なら ValueError。ベジエの領域を包むと、オフセットは元の曲線の
     近似曲線を返し、線分と円弧だけという指定を満たせないため。
     """
     ax3 = _ax3_from_plane(plane)
@@ -368,7 +369,7 @@ def face_boundary_entities(plane: dict, face: Any) -> List[dict]:
             radius = circle.Radius()
             (sx, sy), (ex, ey) = uv(first), uv(last)
             if math.hypot(ex - sx, ey - sy) <= _ENVELOPE_TOLERANCE:
-                entities.append({"kind": "circle", "params": {"cx": cx, "cy": cy, "radius": radius}})
+                entities.append({"kind": "circle", "params": {"cx": cx, "cy": cy, "diameter": 2.0 * radius}})
                 continue
             mx, my = uv((first + last) / 2.0)
             start = math.degrees(math.atan2(sy - cy, sx - cx))
@@ -389,10 +390,12 @@ def face_boundary_entities(plane: dict, face: Any) -> List[dict]:
                     },
                 }
             )
+        elif kind == GeomAbs_CurveType.GeomAbs_Ellipse and _closed_edge(uv, first, last):
+            entities.append({"kind": "ellipse", "params": _ellipse_params(ax3, curve.Ellipse())})
         else:
             raise ValueError(
-                f"包んだ結果に線分・円弧以外の辺({kind.name})が出る"
-                "(ベジエ曲線を含む領域は包めない)"
+                f"包んだ結果に線分・円弧・閉じた楕円以外の辺({kind.name})が出る"
+                "(ベジエ曲線を含む領域・楕円を丸めた領域は包めない)"
             )
     return entities
 
@@ -540,16 +543,90 @@ def _edges_line(ax3: "gp_Ax3", params: dict) -> List[Any]:
     return [maker.Edge()]
 
 
+def _curve_axis(ax3: "gp_Ax3", center: "gp_Pnt", angle_deg: float = 0.0) -> "gp_Ax2":
+    """円・円弧・楕円の軸。第1軸はスケッチの X から `angle_deg` 度、パラメータが増える向きはスケッチの反時計回り。
+
+    外部の罠: 面に貼ったスケッチの `ax3` は左手系でありうる(`ZReverse` は X/Y を据え置く。`_ax3_from_frame`)。
+    `ax3.Direction()` を法線に使うと、`gp_Ax2` が Y を N×X で作り直すのでスケッチの Y と逆になり、
+    円弧は時計回りに・楕円は角度が逆向きに出る(2026-10-17 実測: 立方体6面のうち5面で四分円の領域が閉じない)。
+    法線はスケッチの X×Y から作る。
+    """
+    radians = math.radians(angle_deg)
+    x_dir = ax3.XDirection()
+    y_dir = ax3.YDirection()
+    first = gp_Dir(
+        math.cos(radians) * x_dir.X() + math.sin(radians) * y_dir.X(),
+        math.cos(radians) * x_dir.Y() + math.sin(radians) * y_dir.Y(),
+        math.cos(radians) * x_dir.Z() + math.sin(radians) * y_dir.Z(),
+    )
+    return gp_Ax2(center, x_dir.Crossed(y_dir), first)
+
+
 def _edges_circle(ax3: "gp_Ax3", params: dict) -> List[Any]:
     center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
-    radius = float(params["radius"])
-    if radius <= 0:
-        raise ValueError(f"circle radius must be positive, got {radius}")
-    axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
-    maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius))
+    diameter = float(params["diameter"])
+    if diameter <= 0:
+        raise ValueError(f"circle diameter must be positive, got {diameter}")
+    maker = BRepBuilderAPI_MakeEdge(gp_Circ(_curve_axis(ax3, center), diameter / 2.0))
     if not maker.IsDone():
         raise ValueError("failed to build a circle edge")
     return [maker.Edge()]
+
+
+def _closed_edge(uv: Callable[[float], Tuple[float, float]], first: float, last: float) -> bool:
+    (sx, sy), (ex, ey) = uv(first), uv(last)
+    return math.hypot(ex - sx, ey - sy) <= _ENVELOPE_TOLERANCE
+
+
+def _ellipse_params(ax3: "gp_Ax3", ellipse: "gp_Elips") -> dict:
+    """OCCT の楕円を `ellipse` の params へ(長軸を `width` にする)。"""
+    centre = ellipse.Location()
+    cx, cy = _to_uv(ax3, centre.X(), centre.Y(), centre.Z())
+    major = ellipse.XAxis().Direction()
+    du = major.Dot(ax3.XDirection())
+    dv = major.Dot(ax3.YDirection())
+    return {
+        "cx": cx,
+        "cy": cy,
+        "width": 2.0 * ellipse.MajorRadius(),
+        "height": 2.0 * ellipse.MinorRadius(),
+        "angle": math.degrees(math.atan2(dv, du)),
+    }
+
+
+def _ellipse_gp(ax3: "gp_Ax3", params: dict) -> "gp_Elips":
+    """`ellipse` の params を OCCT の楕円へ。
+
+    外部の罠: `gp_Elips` は長半径 >= 短半径でないと `Standard_ConstructionError` になる
+    (2026-10-17 実測: (5,10) で失敗、(5,5) は通る)。`height` の方が長いときは2つを入れ替え、軸を 90° 回して渡す。
+    """
+    center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
+    semi_width = float(params["width"]) / 2.0
+    semi_height = float(params["height"]) / 2.0
+    if semi_width <= 0 or semi_height <= 0:
+        raise ValueError(f"ellipse width/height must be positive, got {params['width']} x {params['height']}")
+    angle_deg = float(params["angle"])
+    if semi_height > semi_width:
+        semi_width, semi_height = semi_height, semi_width
+        angle_deg += 90.0
+    return gp_Elips(_curve_axis(ax3, center, angle_deg), semi_width, semi_height)
+
+
+def _edges_ellipse(ax3: "gp_Ax3", params: dict) -> List[Any]:
+    maker = BRepBuilderAPI_MakeEdge(_ellipse_gp(ax3, params))
+    if not maker.IsDone():
+        raise ValueError("failed to build an ellipse edge")
+    return [maker.Edge()]
+
+
+def ellipse_perimeter(params: dict) -> float:
+    """楕円の周長[mm]。閉じた式が無いので OCCT に辺の長さを測らせる。
+
+    外部の罠: `Length_s` の既定の許容差は粗い(2026-10-17 実測: 直径 20×10 で既定 48.5059、
+    許容差 1e-9 と数値積分は 48.4422。+0.13%)。許容差を必ず渡す。
+    """
+    edge = _edges_ellipse(gp_Ax3(), params)[0]
+    return float(GCPnts_AbscissaPoint.Length_s(BRepAdaptor_Curve(edge), 1.0e-9))
 
 
 def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:
@@ -562,9 +639,7 @@ def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:
     sweep_deg = (end_deg - start_deg) % 360.0
     start_rad = math.radians(start_deg)
     end_rad = start_rad + math.radians(sweep_deg)
-    # gp_Ax2(center, N, X): U=0 がスケッチX、U増加が反時計回り(右手系)。
-    axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
-    maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius), start_rad, end_rad)
+    maker = BRepBuilderAPI_MakeEdge(gp_Circ(_curve_axis(ax3, center), radius), start_rad, end_rad)
     if not maker.IsDone():
         raise ValueError("failed to build an arc edge")
     return [maker.Edge()]
@@ -639,14 +714,32 @@ def _bbox_line(params: dict) -> Tuple[float, float, float, float]:
     return (min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1))
 
 
+def _bbox_around(cx: float, cy: float, half_u: float, half_v: float) -> Tuple[float, float, float, float]:
+    return (cx - half_u, cx + half_u, cy - half_v, cy + half_v)
+
+
 def _bbox_circle(params: dict) -> Tuple[float, float, float, float]:
-    cx, cy, radius = float(params["cx"]), float(params["cy"]), float(params["radius"])
-    return (cx - radius, cx + radius, cy - radius, cy + radius)
+    radius = float(params["diameter"]) / 2.0
+    return _bbox_around(float(params["cx"]), float(params["cy"]), radius, radius)
+
+
+def _bbox_ellipse(params: dict) -> Tuple[float, float, float, float]:
+    a = float(params["width"]) / 2.0
+    b = float(params["height"]) / 2.0
+    radians = math.radians(float(params["angle"]))
+    cos_a, sin_a = math.cos(radians), math.sin(radians)
+    return _bbox_around(
+        float(params["cx"]),
+        float(params["cy"]),
+        math.hypot(a * cos_a, b * sin_a),
+        math.hypot(a * sin_a, b * cos_a),
+    )
 
 
 def _bbox_arc(params: dict) -> Tuple[float, float, float, float]:
-    # 安全側: 円と同じ外接箱で囲む（補助面が少し大きくなるだけ）。
-    return _bbox_circle(params)
+    # 安全側: 円全体の外接箱で囲む（補助面が少し大きくなるだけ）。
+    radius = float(params["radius"])
+    return _bbox_around(float(params["cx"]), float(params["cy"]), radius, radius)
 
 
 def _bbox_bezier(params: dict) -> Tuple[float, float, float, float]:
@@ -678,6 +771,7 @@ class _KernelEntityKindOps:
 _KERNEL_ENTITY_KIND_TABLE: Dict[str, _KernelEntityKindOps] = {
     "line": _KernelEntityKindOps(_edges_line, _bbox_line),
     "circle": _KernelEntityKindOps(_edges_circle, _bbox_circle),
+    "ellipse": _KernelEntityKindOps(_edges_ellipse, _bbox_ellipse),
     "arc": _KernelEntityKindOps(_edges_arc, _bbox_arc),
     "rectangle": _KernelEntityKindOps(_edges_rectangle, _bbox_rectangle),
     "bezier": _KernelEntityKindOps(_edges_bezier, _bbox_bezier),

@@ -376,6 +376,7 @@ def test_which_commands_apply_without_enter():
     assert immediate == [
         "add_arc",
         "add_circle",
+        "add_ellipse",
         "add_line",
         "add_rectangle",
         "measure",

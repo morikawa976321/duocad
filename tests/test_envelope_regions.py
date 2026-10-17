@@ -123,7 +123,7 @@ def test_zero_r_and_zero_d_give_the_union_and_reject_separate_regions(session: S
 def test_tangent_circle_and_rectangle_never_crash(session: Session, radius: float, offset: float) -> None:
     """辺に1点で接する円と長方形でも、例外で落ちずに単一か分裂かが判定できる。落ちたら縮退のブーリアンが破綻している。"""
     sketch_id = _sketch_with_rects(session, [(0, 0, 10, 10)])
-    session.add_circle(sketch_id, [15.0, 5.0], 5.0)
+    session.add_circle(sketch_id, [15.0, 5.0], 10.0)
     try:
         applied = _envelope(session, sketch_id, radius, offset)
     except ValueError as error:
@@ -135,13 +135,13 @@ def test_tangent_circle_and_rectangle_never_crash(session: Session, radius: floa
 def test_region_with_a_hole_counts_as_a_single_region(session: Session) -> None:
     """円環(穴つき1枚)は単一の領域として通り、外周と穴の2つの円が出る。落ちたら穴つきの面を分裂と数えている。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 20.0)
-    session.add_circle(sketch_id, [0.0, 0.0], 4.0)
+    session.add_circle(sketch_id, [0.0, 0.0], 40.0)
+    session.add_circle(sketch_id, [0.0, 0.0], 8.0)
 
     applied = _envelope(session, sketch_id, 1.0, -1.0, regions=[1])
 
-    radii = sorted(entity["params"]["radius"] for entity in _created_entities(session, sketch_id, applied["created"]))
-    assert radii == pytest.approx([5.0, 19.0])
+    diameters = sorted(entity["params"]["diameter"] for entity in _created_entities(session, sketch_id, applied["created"]))
+    assert diameters == pytest.approx([10.0, 38.0])
 
 
 def test_selection_across_sketches_and_negative_r_are_rejected(session: Session) -> None:

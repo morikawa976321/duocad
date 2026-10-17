@@ -90,7 +90,7 @@ def _box(session: Session, w: float, d: float, h: float, corner=(0.0, 0.0), body
 def _drill_through(session: Session, body, radius: float, center, depth: float):
     """`body` へ円筒の穴を`mode="cut"`で貫通させる(深さは板厚+余裕、面添字は再取得で拾う)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, list(center), radius)
+    session.add_circle(sketch_id, list(center), 2 * radius)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude(depth, mode="cut", body_id=body.id)
     session.clear_selection()

@@ -23,7 +23,7 @@ def _entity_ids(session: Session, sketch_id: str) -> list:
 def test_a_face_a_body_and_an_entity_all_resolve_in_one_call(session: Session) -> None:
     """面はボディへ逆引きされ、図形はそのまま。**両方あれば両方返る**。"""
     body, sketch_id = _box(session)
-    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 4.0)["entity_id"]
     _select(
         session,
         [
@@ -58,7 +58,7 @@ def test_a_point_reference_folds_into_the_whole_entity(session: Session) -> None
 def test_only_sketch_entities_is_a_valid_selection(session: Session) -> None:
     """**ボディが0件でも通る** —— `require_bodies` を素で呼んでいたらここで壊れる。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 3.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 6.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 
     targets = selection.require_deletable(session.document)
@@ -114,8 +114,8 @@ def test_deleting_a_body_and_an_entity_is_one_operation_and_one_undo(session: Se
     """**混在した選択でも1回のverb呼び出し・1行のログ・1回のundo**。"""
     body, sketch_id = _box(session)
     base = _entity_ids(session, sketch_id)  # `_box` が引いた長方形
-    kept = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
-    doomed = session.add_circle(sketch_id, [12.0, 12.0], 3.0)["entity_id"]
+    kept = session.add_circle(sketch_id, [5.0, 5.0], 4.0)["entity_id"]
+    doomed = session.add_circle(sketch_id, [12.0, 12.0], 6.0)["entity_id"]
     _select(
         session,
         [
@@ -185,7 +185,7 @@ def test_deleting_an_entity_releases_its_parameters_and_undo_restores_the_names(
     """**`release_param_refs` を対にする** —— 忘れると名前つきの値が誰にも参照されず残る。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     kept = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
-    doomed = session.add_circle(sketch_id, [4.0, 4.0], 2.0)["entity_id"]
+    doomed = session.add_circle(sketch_id, [4.0, 4.0], 4.0)["entity_id"]
     before = dict(session.document.parameters)
     doomed_names = set(
         sketch.get_sketch(session.document, sketch_id).entities[1].params.values()
@@ -203,7 +203,7 @@ def test_deleting_an_entity_releases_its_parameters_and_undo_restores_the_names(
     assert sketch.entity_params(session.document, sketch_id, doomed) == {
         "cx": 4.0,
         "cy": 4.0,
-        "radius": 2.0,
+        "diameter": 4.0,
     }
 
 
@@ -252,7 +252,7 @@ def test_a_hidden_body_is_refused(session: Session) -> None:
 def test_the_document_survives_save_reopen_and_can_still_be_undone(session: Session) -> None:
     """再生が同じ結果を作り、**再生後は undo も通る**(スナップショットは再生が埋める)。"""
     body, sketch_id = _box(session)
-    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 4.0)["entity_id"]
     _select(
         session,
         [
@@ -287,23 +287,23 @@ def test_undo_without_replay_fails_loudly_for_bodies(session: Session) -> None:
 def test_a_parameter_edit_after_a_delete_replays_the_delete(session: Session) -> None:
     """`set_parameter` はログを頭から再生する。**削除も再生される**(消したものは戻らない)。"""
     body, sketch_id = _box(session)
-    session.add_circle(sketch_id, [5.0, 5.0], 2.0)
+    session.add_circle(sketch_id, [5.0, 5.0], 4.0)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     session.delete()
 
-    radius = next(
-        name for name, value in session.document.parameters.items() if value == 2.0
+    diameter = next(
+        name for name, value in session.document.parameters.items() if value == 4.0
     )
-    edit_parameter(session, radius, 3.0)
+    edit_parameter(session, diameter, 6.0)
 
     assert _body_ids(session) == []
-    assert session.document.parameters[radius] == 3.0
+    assert session.document.parameters[diameter] == 6.0
 
 
 def test_deleting_the_source_of_a_pattern_does_not_break_the_state(session: Session) -> None:
     """反復の元を消しても落ちない(依存グラフは作らない。undoで元どおり展開される)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
     session.pattern_rectangular(sketch_id, [entity_id], 10.0, 10.0, 2, 2)
     assert len(region.regions(session.document, sketch_id)) == 4
 
@@ -322,7 +322,7 @@ def test_deleting_a_body_leaves_a_sketch_pasted_on_its_face_alone(session: Sessi
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     on_face = session.sketch_create()["sketch_id"]
-    session.add_circle(on_face, [3.0, 3.0], 1.0)
+    session.add_circle(on_face, [3.0, 3.0], 2.0)
 
     _select(session, [{"body": body.id, "kind": "body", "index": None}])
     session.delete()

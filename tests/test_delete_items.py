@@ -20,7 +20,7 @@ def _body_ids(session: Session) -> list:
 
 def _sketch_with_pattern(session: Session) -> str:
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
     session.pattern_rectangular(sketch_id, [entity_id], 10.0, 10.0, 2, 2)
     return sketch_id
 

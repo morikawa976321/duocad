@@ -355,7 +355,7 @@ def test_measure_reports_the_area_of_a_region(tmp_path: Path):
 
     empty = Session(None, 0.2)
     sketch_id = sketch_create(empty.document, "XY")
-    add_circle(empty.document, sketch_id, (0.0, 0.0), 10.0)
+    add_circle(empty.document, sketch_id, (0.0, 0.0), 20.0)
     mcp = McpServer(DocumentTools(empty))
     call(mcp, "set_selection", {"refs": [{"sketch": sketch_id, "index": 1}]})
 

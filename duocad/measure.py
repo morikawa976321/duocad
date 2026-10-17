@@ -27,7 +27,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Union
 
-from . import kernel, meshbody, query, region, selection, sketch
+from . import kernel, kernel_sketch, meshbody, query, region, selection, sketch
 
 #: 2本の単位ベクトルを「平行」とみなす sin θ の上限(1e-6 rad ≈ 0.00006度)。
 PARALLEL_SIN_TOLERANCE = 1e-6
@@ -291,7 +291,7 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
         return item, "ボディそのものは2項目の測定に使えない(頂点・辺・面を指す)"
 
     if kind == selection.SKETCH_ENTITY_KIND:
-        # スケッチの図形。点なら (u, v) を、辺なら解決済みの `params` をそのまま返す(線分だけ長さも)。
+        # スケッチの図形。点なら (u, v) を、辺なら解決済みの `params` をそのまま返す(線分は長さ、楕円は周長も `length` に)。
         sketch_id = ref["sketch"]
         entity_id = ref["entity"]
         target = sketch.get_entity(sketch.get_sketch(session.document, sketch_id), entity_id)
@@ -307,6 +307,8 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             item["params"] = resolved
             if target.kind == "line":
                 item["length"] = math.hypot(resolved["x1"] - resolved["x0"], resolved["y1"] - resolved["y0"])
+            elif target.kind == "ellipse":
+                item["length"] = kernel_sketch.ellipse_perimeter(resolved)
         else:
             x_key, y_key = sketch.entity_point_pair(target.kind, str(ref["point"]))
             item["position"] = [resolved[x_key], resolved[y_key]]

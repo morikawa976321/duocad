@@ -113,7 +113,7 @@ def test_every_document_change_is_autosaved_and_undo_redo_follow(session: Sessio
         return len(json.loads(target.read_text(encoding="utf-8"))["operations"])
 
     assert ops() == 1 and session.state_meta()["saved"] is True
-    session.add_circle(sketch_id, [0.0, 0.0], 5.0)
+    session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     assert ops() == 2
     session.undo()
     assert ops() == 1
@@ -288,9 +288,9 @@ def test_resolved_path_must_stay_inside_models_dir_even_past_a_symlink(
 
 def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> None:
     """落ちたら: `set_parameter` を含むログが開けない(再生前にログを文書へ束ねていないと `parameters.rebuild` が拒否する)。"""
-    _cylinder(session, 5.0, 10.0)
-    radius = next(name for name, value in session.document.parameters.items() if value == 5.0)
-    edit_parameter(session, radius, 7.0)
+    _cylinder(session, 5.0, 12.0)
+    diameter = next(name for name, value in session.document.parameters.items() if value == 10.0)
+    edit_parameter(session, diameter, 14.0)
     volume = query.volume(session.document.bodies[-1].shape)
     session.save_document("with-parameters.json")
 
@@ -298,7 +298,7 @@ def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> 
     fresh.open_document("with-parameters.json")
 
     assert query.volume(fresh.document.bodies[-1].shape) == pytest.approx(volume, rel=1e-9)
-    assert fresh.document.parameters[radius] == pytest.approx(7.0)
+    assert fresh.document.parameters[diameter] == pytest.approx(14.0)
 
 
 def test_opening_rebuilds_the_same_shape_and_reaches_every_connection(session: Session) -> None:
@@ -875,17 +875,17 @@ def _triangle_count(shape, deviation: float) -> int:
 
 def test_named_values_are_published_and_drive_the_shape(session: Session) -> None:
     """**名前つきの値が配られ、打ち直すと形が追随する**(タスクEの検証1の実体)。"""
-    body = _cylinder(session, 5.0, 10.0)
+    body = _cylinder(session, 5.0, 12.0)
     volume_before = query.volume(body.shape)
 
     published = session.state_meta()["parameters"]
-    radius_name = next(
-        name for name, value in published.items() if value == pytest.approx(5.0)
+    diameter_name = next(
+        name for name, value in published.items() if value == pytest.approx(10.0)
     )
 
-    edit_parameter(session, radius_name, 8.0)
+    edit_parameter(session, diameter_name, 16.0)
 
-    assert session.state_meta()["parameters"][radius_name] == pytest.approx(8.0)
+    assert session.state_meta()["parameters"][diameter_name] == pytest.approx(16.0)
     assert query.volume(session.document.bodies[-1].shape) > volume_before
 
 

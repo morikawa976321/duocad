@@ -82,7 +82,7 @@ def test_the_polyline_index_is_the_index_fillet_takes(session: Session) -> None:
 def test_a_round_edge_comes_back_curved_and_closed(session: Session) -> None:
     """円い辺は**折れ線として曲がって**届き、閉じた辺には `closed` が立つ。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 10.0)
+    session.add_circle(sketch_id, [0.0, 0.0], 20.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude(SIDE, mode="join")
     cylinder = session.document.bodies[-1]
@@ -113,7 +113,7 @@ def test_small_radius_circle_still_gets_enough_points_from_angular_deflection(
     counts_by_radius: dict[float, int] = {}
     for radius in (1.0, 10.0):
         sketch_id = session.sketch_create("XY")["sketch_id"]
-        session.add_circle(sketch_id, [0.0, 0.0], radius)
+        session.add_circle(sketch_id, [0.0, 0.0], 2 * radius)
         _select(session, [{"sketch": sketch_id, "index": 1}])
         session.extrude(SIDE, mode="new")
         cylinder = session.document.bodies[-1]
@@ -234,7 +234,7 @@ def test_extrude_without_a_mode_is_refused(session: Session) -> None:
     """落ちたら、WSの表が欠けた `mode` を既定(join)で埋めている(切り取るつもりの押し出しが黙って足す)。"""
     _box(session)
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [40.0, 40.0], 4.0)
+    session.add_circle(sketch_id, [40.0, 40.0], 8.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     before = _fingerprint(session)
 

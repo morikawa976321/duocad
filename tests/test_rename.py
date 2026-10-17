@@ -25,14 +25,14 @@ def test_body_and_sketch_rename_undo_redo(session: Session) -> None:
 
 def test_the_name_survives_save_reopen_and_a_parameter_rebuild(session: Session) -> None:
     body, sketch_id = box(session)
-    session.add_circle(sketch_id, [5.0, 5.0], 2.0)
+    session.add_circle(sketch_id, [5.0, 5.0], 4.0)
     session.rename(body.id, "台座")
     session.save_document("renamed.json")
     session.open_document("renamed.json")
     assert session.document.bodies[0].name == "台座"
 
-    radius = next(name for name, value in session.document.parameters.items() if value == 2.0)
-    edit_parameter(session, radius, 3.0)
+    diameter = next(name for name, value in session.document.parameters.items() if value == 4.0)
+    edit_parameter(session, diameter, 6.0)
     assert session.document.bodies[0].name == "台座"
 
 

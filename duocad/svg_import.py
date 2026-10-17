@@ -17,6 +17,7 @@ dictのリストで、`duocad.sketch` の `Entity` と同じ語彙・同じキ�
 **真円の弧は start/end を入れ替える**(中点の角度で判定)。
 
 **曲線は曲線のまま渡す。** 3次ベジエ(C/S)は1:1、2次ベジエ(Q/T)は次数上げで**厳密に**3次へ。
+`<ellipse>` 要素は1つの `ellipse` 図形にする(斜めに歪めた変換が掛かって軸が直交しないものは下の楕円弧の扱い)。
 楕円弧(rx≠ry)だけは90度以下に割ってベジエ近似する(**最大誤差は半径の0.027%**。半径50mmで
 13.6um)。折れ線には落とさない —— 押し出した側面が線分の数だけ平面に割れる
 (`kernel_sketch._edges_bezier` のdocstring)。
@@ -62,8 +63,12 @@ def read_svg_entities(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dic
 
     entities: List[dict] = []
     for element in _shapes(svg):
-        for segment in _segments(element):
-            entities.extend(_translate_segment(segment, height, scale))
+        whole = _ellipse_entity(element, height, scale)
+        pieces = [[whole]] if whole is not None else (
+            _translate_segment(segment, height, scale) for segment in _segments(element)
+        )
+        for piece in pieces:
+            entities.extend(piece)
             if len(entities) > MAX_ENTITIES:
                 raise ValueError(
                     f"{source_name}: 図形が多すぎる(上限 {MAX_ENTITIES})。"
@@ -123,6 +128,41 @@ def _segments(element: Any) -> List[Any]:
         return list(SvgPath(element).segments())
     except Exception:
         return []  # 幾何に落とせない要素(空のpath等)は黙って飛ばす
+
+
+def _ellipse_entity(element: Any, height: float, scale: float) -> Any:
+    """`<ellipse>` 要素を `ellipse` 図形1つへ。`<ellipse>` でないか、変換で軸が直交しなくなったものは None。
+
+    svgelements の `Circle` は `Ellipse` の派生ではないので `<circle>` はここを通らない(今までどおり円弧になる)。
+    """
+    from svgelements import Arc, Ellipse
+
+    if not isinstance(element, Ellipse):
+        return None
+    arcs = [segment for segment in _segments(element) if isinstance(segment, Arc)]
+    if not arcs:
+        return None
+    center = _point(arcs[0].center, height, scale)
+    end_x = _point(arcs[0].prx, height, scale)
+    end_y = _point(arcs[0].pry, height, scale)
+    axis_x = (end_x[0] - center[0], end_x[1] - center[1])
+    axis_y = (end_y[0] - center[0], end_y[1] - center[1])
+    width = 2.0 * math.hypot(*axis_x)
+    height_mm = 2.0 * math.hypot(*axis_y)
+    if width <= 0 or height_mm <= 0:
+        return None
+    if abs(axis_x[0] * axis_y[0] + axis_x[1] * axis_y[1]) > _CIRCULAR_TOLERANCE * width * height_mm:
+        return None
+    return {
+        "kind": "ellipse",
+        "params": {
+            "cx": center[0],
+            "cy": center[1],
+            "width": width,
+            "height": height_mm,
+            "angle": math.degrees(math.atan2(axis_x[1], axis_x[0])),
+        },
+    }
 
 
 # --------------------------------------------------------------------------------------

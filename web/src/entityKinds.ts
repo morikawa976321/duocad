@@ -12,16 +12,17 @@ import {
 } from './adaptiveResolution'
 
 /** 図形の種別。この表のキーが唯一の正。 */
-export type EntityKind = 'line' | 'circle' | 'rectangle' | 'arc' | 'bezier'
+export type EntityKind = 'line' | 'circle' | 'ellipse' | 'rectangle' | 'arc' | 'bezier'
 
 /**
- * 交点探索用の幾何プリミティブ。直線区間・円・円弧の3種(`EntityKindSpec.intersectables`)。
- * 角度は度(コアの `Entity.params` と同じ単位)。
+ * 交点探索用の幾何プリミティブ。直線区間・円・円弧・楕円の4種(`EntityKindSpec.intersectables`)。
+ * 角度は度(コアの `Entity.params` と同じ単位)。楕円の `semiU` は `angleDeg` の向きの半径、`semiV` はそれに直交する向きの半径。
  */
 export type IntersectableCurve =
   | { kind: 'segment'; a: readonly [number, number]; b: readonly [number, number] }
   | { kind: 'circle'; center: readonly [number, number]; radius: number }
   | { kind: 'arc'; center: readonly [number, number]; radius: number; startDeg: number; endDeg: number }
+  | { kind: 'ellipse'; center: readonly [number, number]; semiU: number; semiV: number; angleDeg: number }
 
 interface EntityKindSpec {
   /** この種別を作るverb名(`add_*`。`ghostEntity` の逆引きに使う)。`bezier` は作るverbが無い(`import_svg` だけが作る)ので省略でき、verbが無い種別は幽霊も持たない。 */
@@ -228,6 +229,99 @@ function rectangleCorners(params: Record<string, number>): Array<[number, number
   return offsets.map(([ox, oy]) => [x + ox * cosA - oy * sinA, y + ox * sinA + oy * cosA])
 }
 
+/** 楕円の局所座標(中心を原点、`angle` の向きを第1軸)と (u,v) の行き来。 */
+function ellipseFrame(params: Record<string, number>) {
+  const radians = (params.angle * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const a = params.width / 2
+  const b = params.height / 2
+  const world = (x: number, y: number): [number, number] => [params.cx + x * cos - y * sin, params.cy + x * sin + y * cos]
+  return {
+    a,
+    b,
+    world,
+    at: (t: number): [number, number] => world(a * Math.cos(t), b * Math.sin(t)),
+    local(u: number, v: number): [number, number] {
+      const dx = u - params.cx
+      const dy = v - params.cy
+      return [dx * cos + dy * sin, -dx * sin + dy * cos]
+    },
+  }
+}
+
+/**
+ * 楕円を折れ線へ。分割数は4の倍数にして、軸の端4点(`visualCorners`)が必ず頂点に来るようにする
+ * (当たり判定の折れ線上で角に吸い付いたとき、角そのものの座標と食い違わない)。
+ */
+function ellipsePoints(params: Record<string, number>, resolution: ViewResolution): Array<[number, number]> {
+  const frame = ellipseFrame(params)
+  const steps = Math.max(4, Math.ceil(arcSegments(Math.max(frame.a, frame.b), 2 * Math.PI, resolution) / 4) * 4)
+  const points: Array<[number, number]> = []
+  for (let step = 0; step <= steps; step += 1) points.push(frame.at((2 * Math.PI * step) / steps))
+  return points
+}
+
+/**
+ * 第1象限の点 (y0, y1) から、半径 e0 >= e1 の軸平行な楕円の上の最近点(D. Eberly "Distance from a Point to an Ellipse")。
+ * 最近点の条件を1変数 s の単調な式 G(s) = 0 にして二分法で解くので、どんなに細い楕円でも反対側の根へ飛ばない
+ * (ニュートン法は直径 20×0.002 で約 20mm 先の点を返した。sol レビュー 2026-10-17)。
+ */
+function closestOnQuarterEllipse(e0: number, e1: number, y0: number, y1: number): [number, number] {
+  if (y1 > 0) {
+    if (y0 > 0) {
+      const z0 = y0 / e0
+      const z1 = y1 / e1
+      const g = z0 * z0 + z1 * z1 - 1
+      if (g === 0) return [y0, y1]
+      const r0 = (e0 / e1) * (e0 / e1)
+      const n0 = r0 * z0
+      // 論文の s ではなく w = s + 1 で解く: 長軸の近くの内側の点では s が -1 に寄り、s + 1 が桁落ちする
+      // (直径 20×0.002 の (3.2, 1e-18) で 0.15mm ずれ、1e-20 で 0 除算になった。sol レビュー 2026-10-17)。
+      const shift = r0 - 1
+      let w0 = z1
+      let w1 = g < 0 ? 1 : Math.hypot(n0, z1)
+      let w = 1
+      for (let iteration = 0; iteration < 1100; iteration += 1) {
+        w = (w0 + w1) / 2
+        if (w === w0 || w === w1) break
+        const ratio0 = n0 / (w + shift)
+        const ratio1 = z1 / w
+        const value = ratio0 * ratio0 + ratio1 * ratio1 - 1
+        if (value > 0) w0 = w
+        else if (value < 0) w1 = w
+        else break
+      }
+      return [(r0 * y0) / (w + shift), y1 / w]
+    }
+    return [0, e1]
+  }
+  const numer = e0 * y0
+  const denom = e0 * e0 - e1 * e1
+  if (numer < denom) {
+    const ratio = numer / denom
+    return [e0 * ratio, e1 * Math.sqrt(1 - ratio * ratio)]
+  }
+  return [e0, 0]
+}
+
+/**
+ * (u,v) から楕円上の最近点。折れ線の上ではなく楕円そのものに落とす
+ * (折れ線の上に落とすと、その点を端にした線分が楕円の内側で止まり、領域が割れない)。
+ */
+function projectToEllipse(params: Record<string, number>, u: number, v: number): [number, number] {
+  const frame = ellipseFrame(params)
+  const [x, y] = frame.local(u, v)
+  // 長い方を第1軸にして第1象限で解き、符号を戻す。
+  const swapped = frame.b > frame.a
+  const [e0, e1] = swapped ? [frame.b, frame.a] : [frame.a, frame.b]
+  const [p0, p1] = swapped ? [y, x] : [x, y]
+  const [q0, q1] = closestOnQuarterEllipse(e0, e1, Math.abs(p0), Math.abs(p1))
+  const lx = Math.sign(p0 || 1) * q0
+  const ly = Math.sign(p1 || 1) * q1
+  return swapped ? frame.world(ly, lx) : frame.world(lx, ly)
+}
+
 const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   line: {
     pointKeys: [['x0', 'y0'], ['x1', 'y1']],
@@ -264,29 +358,66 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   },
   circle: {
     pointKeys: [['cx', 'cy']],
-    intersectables: (params) => [{ kind: 'circle', center: [params.cx, params.cy], radius: params.radius }],
+    intersectables: (params) => [{ kind: 'circle', center: [params.cx, params.cy], radius: params.diameter / 2 }],
     verb: 'add_circle',
     translate: (params, dx, dy) => translateAtCenter(params, 'cx', 'cy', dx, dy),
     rotate(params, cx, cy, angleDeg) {
       // 円は `rotateCopies` を見ない(向きの無い図形。コアの `_rotate_circle`)。
       const [nx, ny] = rotatePoint(params.cx, params.cy, cx, cy, angleDeg)
-      return { cx: nx, cy: ny, radius: params.radius }
+      return { ...params, cx: nx, cy: ny }
     },
     fromArgs(args) {
       const center = args.center as [number, number]
-      return { cx: center[0], cy: center[1], radius: args.radius as number }
+      return { cx: center[0], cy: center[1], diameter: args.diameter as number }
     },
     toPoints(params, resolution) {
-      return arcPoints(params.cx, params.cy, params.radius, 0, 360, resolution)
+      return arcPoints(params.cx, params.cy, params.diameter / 2, 0, 360, resolution)
     },
     snap(params, u, v) {
+      const radius = params.diameter / 2
       const dx = u - params.cx
       const dy = v - params.cy
       const dist = Math.hypot(dx, dy)
-      if (dist === 0) return [params.cx + params.radius, params.cy]
-      const scale = params.radius / dist
+      if (dist === 0) return [params.cx + radius, params.cy]
+      const scale = radius / dist
       return [params.cx + dx * scale, params.cy + dy * scale]
     },
+  },
+  ellipse: {
+    pointKeys: [['cx', 'cy']],
+    // 軸の端4点。中心から見て `angle`・+90°・+180°・+270° の順。
+    visualCorners: (params) => {
+      const frame = ellipseFrame(params)
+      return [0, 1, 2, 3].map((quarter) => frame.at((quarter * Math.PI) / 2))
+    },
+    intersectables: (params) => [
+      {
+        kind: 'ellipse',
+        center: [params.cx, params.cy],
+        semiU: params.width / 2,
+        semiV: params.height / 2,
+        angleDeg: params.angle,
+      },
+    ],
+    verb: 'add_ellipse',
+    translate: (params, dx, dy) => translateAtCenter(params, 'cx', 'cy', dx, dy),
+    rotate(params, cx, cy, angleDeg, rotateCopies) {
+      // 向きを回すときだけ `angle` も回す(コアの `_rotate_ellipse`)。
+      const [nx, ny] = rotatePoint(params.cx, params.cy, cx, cy, angleDeg)
+      return { ...params, cx: nx, cy: ny, angle: rotateCopies ? params.angle + angleDeg : params.angle }
+    },
+    fromArgs(args) {
+      const center = args.center as [number, number]
+      return {
+        cx: center[0],
+        cy: center[1],
+        width: args.width as number,
+        height: args.height as number,
+        angle: (args.angle as number | undefined) ?? 0,
+      }
+    },
+    toPoints: ellipsePoints,
+    snap: projectToEllipse,
   },
   rectangle: {
     pointKeys: [['x', 'y']],
@@ -574,8 +705,41 @@ function angleWithinArc(point: readonly [number, number], center: readonly [numb
 
 type ArcCurve = Extract<IntersectableCurve, { kind: 'arc' }>
 
-/** 2つの幾何プリミティブ(直線区間・円・円弧)の交点。どちらが先でも同じ結果になる。 */
+type EllipseCurve = Extract<IntersectableCurve, { kind: 'ellipse' }>
+
+/**
+ * 線分と楕円の交点(0〜2個)。楕円を単位円へ写す変換(平行移動・回転・軸ごとの縮尺)は線分を線分へ写すので、
+ * 線分と円の交点に帰着して元へ戻す。線分のパラメータ t は変換で変わらないので区間の判定もそのまま効く。
+ */
+function segmentEllipseIntersections(
+  a0: readonly [number, number],
+  a1: readonly [number, number],
+  ellipse: EllipseCurve,
+): Array<[number, number]> {
+  const radians = (ellipse.angleDeg * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const toUnit = (point: readonly [number, number]): [number, number] => {
+    const dx = point[0] - ellipse.center[0]
+    const dy = point[1] - ellipse.center[1]
+    return [(dx * cos + dy * sin) / ellipse.semiU, (-dx * sin + dy * cos) / ellipse.semiV]
+  }
+  const fromUnit = ([x, y]: [number, number]): [number, number] => {
+    const lx = x * ellipse.semiU
+    const ly = y * ellipse.semiV
+    return [ellipse.center[0] + lx * cos - ly * sin, ellipse.center[1] + lx * sin + ly * cos]
+  }
+  return segmentCircleIntersections(toUnit(a0), toUnit(a1), [0, 0], 1).map(fromUnit)
+}
+
+/**
+ * 2つの幾何プリミティブ(直線区間・円・円弧・楕円)の交点。どちらが先でも同じ結果になる。
+ * 楕円と曲線(円・円弧・楕円)の組は求めない(4次方程式になる。2026-10-17 本人判断で対象外。`docs/ELLIPSE.md`)。
+ */
 function curveIntersections(a: IntersectableCurve, b: IntersectableCurve): Array<[number, number]> {
+  if (a.kind === 'segment' && b.kind === 'ellipse') return segmentEllipseIntersections(a.a, a.b, b)
+  if (a.kind === 'ellipse' && b.kind === 'segment') return segmentEllipseIntersections(b.a, b.b, a)
+  if (a.kind === 'ellipse' || b.kind === 'ellipse') return []
   if (a.kind === 'segment' && b.kind === 'segment') return segmentSegmentIntersection(a.a, a.b, b.a, b.b)
   if (a.kind === 'segment' && b.kind === 'circle') return segmentCircleIntersections(a.a, a.b, b.center, b.radius)
   if (a.kind === 'circle' && b.kind === 'segment') return segmentCircleIntersections(b.a, b.b, a.center, a.radius)
@@ -593,7 +757,7 @@ function curveIntersections(a: IntersectableCurve, b: IntersectableCurve): Array
 
 /**
  * スケッチ内の**異なる図形どうし**の交点を全部列挙する(直線区間・円・円弧の任意の
- * 組み合わせ。`viewport.ts` の `sketchCornerAt` が本物の点・`visualCorners` と
+ * 組み合わせと、楕円と直線区間。`viewport.ts` の `sketchCornerAt` が本物の点・`visualCorners` と
  * 同じ優先度で拾うために読む)。
  *
  * 同じ図形どうしのペアは見ない —— 長方形自身の隣り合う辺が作る交点(=自分の角)は
@@ -627,7 +791,7 @@ export function sketchIntersections(
   return points
 }
 
-/** 区間の外接矩形 `[minU, minV, maxU, maxV]`(円・円弧は円全体)。 */
+/** 区間の外接矩形 `[minU, minV, maxU, maxV]`(円・円弧は円全体、楕円は楕円全体)。 */
 function curvesBox(curves: readonly IntersectableCurve[]): [number, number, number, number] {
   let minU = Infinity
   let minV = Infinity
@@ -639,6 +803,14 @@ function curvesBox(curves: readonly IntersectableCurve[]): [number, number, numb
       maxU = Math.max(maxU, curve.a[0], curve.b[0])
       minV = Math.min(minV, curve.a[1], curve.b[1])
       maxV = Math.max(maxV, curve.a[1], curve.b[1])
+    } else if (curve.kind === 'ellipse') {
+      const radians = (curve.angleDeg * Math.PI) / 180
+      const halfU = Math.hypot(curve.semiU * Math.cos(radians), curve.semiV * Math.sin(radians))
+      const halfV = Math.hypot(curve.semiU * Math.sin(radians), curve.semiV * Math.cos(radians))
+      minU = Math.min(minU, curve.center[0] - halfU)
+      maxU = Math.max(maxU, curve.center[0] + halfU)
+      minV = Math.min(minV, curve.center[1] - halfV)
+      maxV = Math.max(maxV, curve.center[1] + halfV)
     } else {
       minU = Math.min(minU, curve.center[0] - curve.radius)
       maxU = Math.max(maxU, curve.center[0] + curve.radius)
