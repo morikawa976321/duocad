@@ -45,7 +45,8 @@ def run_one(spec: dict, printer_kw: dict, e_list, mat_kw: dict) -> dict:
     mat = st.PrintedPLA(**mat_kw)
     prof = make_profile(spec)
     des = ev.Design(spec["name"], prof, 0.3, mode=spec["mode"], L_nut=spec["L_nut"], R_out=spec["R_out"],
-                    bolt_flipped=spec.get("bolt_flipped", False), nut_flipped=spec.get("nut_flipped", False))
+                    bolt_flipped=spec.get("bolt_flipped", False), nut_flipped=spec.get("nut_flipped", False),
+                    split=spec.get("split", 0.5))
     out = dict(spec, printer=printer_kw, mat=mat_kw, depth=prof.depth, flank=prof.flank_angles())
     c_geo = ev.c_required(des, pr) if des.mode == "normal" else None
     if c_geo is None:
@@ -166,7 +167,8 @@ def run_window(spec: dict, printer_kw: dict, opts, mat_kw: dict) -> dict:
     mat = st.PrintedPLA(**mat_kw)
     prof = make_profile(spec)
     des = ev.Design(spec["name"], prof, 0.3, mode=spec["mode"], L_nut=spec["L_nut"], R_out=spec["R_out"],
-                    bolt_flipped=spec.get("bolt_flipped", False), nut_flipped=spec.get("nut_flipped", False))
+                    bolt_flipped=spec.get("bolt_flipped", False), nut_flipped=spec.get("nut_flipped", False),
+                    split=spec.get("split", 0.5))
     out = dict(spec, printer=printer_kw, mat=mat_kw, e_req=e_req, depth=prof.depth, flank=prof.flank_angles())
     try:
         c_geo, c_center, W, scan, found = _window_center(des, pr, e_req)
@@ -204,7 +206,8 @@ def run_robust(spec: dict, printer_kw: dict, opts, mat_kw: dict) -> dict:
     mat = st.PrintedPLA(**mat_kw)
     prof = make_profile(spec)
     des = ev.Design(spec["name"], prof, 0.3, mode=spec["mode"], L_nut=spec["L_nut"], R_out=spec["R_out"],
-                    bolt_flipped=spec.get("bolt_flipped", False), nut_flipped=spec.get("nut_flipped", False))
+                    bolt_flipped=spec.get("bolt_flipped", False), nut_flipped=spec.get("nut_flipped", False),
+                    split=spec.get("split", 0.5))
     out = dict(spec, printer=printer_kw, mat=mat_kw, e_req=e_req, depth=prof.depth, flank=prof.flank_angles())
     try:
         c_geo, c_center, W, _, found = _window_center(des, pr, e_req)
@@ -394,7 +397,21 @@ def study6():
     return specs, {}, dict(e_req=0.1, runner="robust", scenarios=ROBUST_SCENARIOS), {}
 
 
-STUDIES = {"study1": study1, "study2": study2, "study3": study3, "study4": study4, "study5": study5, "study6": study6}
+def study7():
+    """隙間を雌雄にどう分けるか(split = 雄が受け持つ割合。0 = 雄は呼び寸法のまま穴だけ広げる)。改良の候補(半径方向の隙間)で、
+    W は分け方によらないので、強さだけが動く。芯が弱い小径ほど、穴の側に持たせると強い(手元の4設計で D3 +30%、D8 +6%)。"""
+    specs = []
+    for D, picks in ROBUST_PARETO.items():
+        base = dict(D=D, L_nut=float(D), R_out=0.9 * D)
+        for beta, P, depth in picks:
+            for split in (0.0, 0.25, 0.5, 1.0):
+                specs.append(dict(base, family="trap", P=P, depth=depth, b_lo=beta, b_up=beta, crest_share=0.65, mode="radial",
+                                  split=split, name=f"台形{beta} D{D} P{P:g} h{depth:g} 山0.65 radial 雄{split:g}"))
+    return specs, {}, dict(e_req=0.1, runner="window"), {}
+
+
+STUDIES = {"study1": study1, "study2": study2, "study3": study3, "study4": study4, "study5": study5, "study6": study6,
+           "study7": study7}
 
 
 def main():
