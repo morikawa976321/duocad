@@ -6,20 +6,8 @@
  * 解決に失敗したときだけ `.ts` を補う resolve フックを先に登録する。
  */
 import { readdirSync } from 'node:fs'
-import { register } from 'node:module'
 
-register(
-  'data:text/javascript,' +
-    encodeURIComponent(`
-export async function resolve(specifier, context, next) {
-  try {
-    return await next(specifier, context)
-  } catch (error) {
-    if (!specifier.startsWith('.') || specifier.endsWith('.ts')) throw error
-    return next(specifier + '.ts', context)
-  }
-}`),
-)
+import './ts_resolve_hook.mjs'
 
 const directory = new URL('../web/src/commands/', import.meta.url)
 const { needsEnter } = await import(new URL('command.ts', directory).href)

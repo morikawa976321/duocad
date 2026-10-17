@@ -62,19 +62,21 @@ def test_callers_get_their_own_copies(counted) -> None:
 
 
 def test_extruding_selected_regions_matches_the_uncached_answer(counted) -> None:
-    """落ちたら、共有した検出結果で押し出した形が、その場で検出した形と食い違う。"""
-    cached = Session(None, 0.2)
-    sketch_id = _grid(cached, 3)
-    cached.modify_selection([{"sketch": sketch_id, "index": 2}], [])
-    cached.extrude(4.0, mode="new")
+    """落ちたら、共有した検出結果で押し出した形が、その場で検出した形と食い違う(領域 2 = 2 番目に大きい 110mm² の長方形)。"""
+
+    def extrude_second(session: Session) -> list[float]:
+        sketch_id = session.sketch_create("XY")["sketch_id"]
+        for i, width in enumerate((10.0, 11.0, 12.0)):
+            session.add_rectangle(sketch_id, [i * 20.0, 0.0], width, 10.0)
+        session.modify_selection([{"sketch": sketch_id, "index": 2}], [])
+        session.extrude(4.0, mode="new")
+        return [body["volume"] for body in session.state_meta()["bodies"]]
+
+    cached = extrude_second(Session(None, 0.2))
     region._DETECTED.clear()
-    fresh = Session(None, 0.2)
-    other = _grid(fresh, 3)
-    fresh.modify_selection([{"sketch": other, "index": 2}], [])
-    fresh.extrude(4.0, mode="new")
-    assert [body["volume"] for body in cached.state_meta()["bodies"]] == pytest.approx(
-        [body["volume"] for body in fresh.state_meta()["bodies"]]
-    )
+    fresh = extrude_second(Session(None, 0.2))
+    assert cached == pytest.approx([440.0])
+    assert fresh == pytest.approx([440.0])
 
 
 def test_the_sketch_revision_moves_only_with_what_is_drawn() -> None:

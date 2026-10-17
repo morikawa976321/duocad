@@ -13,6 +13,9 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeTorus
 from duocad import kernel
 
 DEVIATION = kernel.DEFAULT_DEVIATION
+#: 三角形の箱との許容(mm)。軸に揃えた形では実測の膨らみは0(三角形の節点が極値に乗る)。`DEVIATION` を許容にすると、
+#: 全辺を 0.15mm 膨らませる退行も通る。
+TOLERANCE = 1e-3
 
 
 def _torus_segment():
@@ -65,15 +68,15 @@ def test_the_bounding_box_contains_every_triangle_vertex(name: str) -> None:
 def test_the_bounding_box_is_as_tight_as_the_triangulation_without_trimmed_curved_faces(
     name: str,
 ) -> None:
-    """落ちたら: トリムされた曲面が無い形でも bbox が膨らんでいる(実測の膨らみは0.013mm)。"""
+    """落ちたら: トリムされた曲面が無い形でも bbox が膨らんでいる(実測の膨らみは0)。"""
     outward = _outward_mm(SHAPES[name]())
-    assert max(outward) <= DEVIATION, f"{name}: 最大の膨らみ {max(outward):.6f}mm"
+    assert max(outward) <= TOLERANCE, f"{name}: 最大の膨らみ {max(outward):.6f}mm"
 
 
 def test_the_bounding_box_is_as_tight_as_the_triangulation_for_a_trimmed_torus_segment() -> None:
     """落ちたら: bbox が面のトリムを見なくなっている(トーラス片が実寸より 9.06mm 大きく出る)。"""
     outward = _outward_mm(_torus_segment())
-    assert max(outward) <= DEVIATION, f"最大の膨らみ {max(outward):.6f}mm"
+    assert max(outward) <= TOLERANCE, f"最大の膨らみ {max(outward):.6f}mm"
 
 
 # 呼び出し側が `cache=` を渡しているか

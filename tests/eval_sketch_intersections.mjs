@@ -7,21 +7,8 @@
  * 答え合わせの全組版は製品の `entityIntersectables` から区間を借りる(近道だけを外した版)。
  */
 import assert from 'node:assert/strict'
-import { register } from 'node:module'
 
-// Node の型除去は拡張子の無い相対 import を解決しない(`eval_command_defs.mjs` と同じフック)。
-register(
-  'data:text/javascript,' +
-    encodeURIComponent(`
-export async function resolve(specifier, context, next) {
-  try {
-    return await next(specifier, context)
-  } catch (error) {
-    if (!specifier.startsWith('.') || specifier.endsWith('.ts')) throw error
-    return next(specifier + '.ts', context)
-  }
-}`),
-)
+import './ts_resolve_hook.mjs'
 const { entityIntersectables, sketchIntersections } = await import(new URL('../web/src/entityKinds.ts', import.meta.url).href)
 
 /** 線分どうし・線分と円の交点を全組で素朴に解く(近道なし)。製品の式と同じ規則(端を含む・許容なし)。 */

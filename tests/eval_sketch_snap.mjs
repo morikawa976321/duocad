@@ -10,21 +10,8 @@
  * 両側で共有して素通りする)。
  */
 import assert from 'node:assert/strict'
-import { register } from 'node:module'
 
-// Node の型除去は拡張子の無い相対 import を解決しない(`eval_command_defs.mjs` と同じフック)。
-register(
-  'data:text/javascript,' +
-    encodeURIComponent(`
-export async function resolve(specifier, context, next) {
-  try {
-    return await next(specifier, context)
-  } catch (error) {
-    if (!specifier.startsWith('.') || specifier.endsWith('.ts')) throw error
-    return next(specifier + '.ts', context)
-  }
-}`),
-)
+import './ts_resolve_hook.mjs'
 const { entityHandles, snapSketchPoint } = await import(new URL('../web/src/entityKinds.ts', import.meta.url).href)
 const { viewResolution } = await import(new URL('../web/src/adaptiveResolution.ts', import.meta.url).href)
 
