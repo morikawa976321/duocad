@@ -206,6 +206,16 @@ def _run_revolve(session: Session, tmp_path: Path) -> dict:
     return session.revolve(axis="x", angle=90.0, mode="join")
 
 
+@_runner("loft")
+def _run_loft(session: Session, tmp_path: Path) -> dict:
+    bottom = _sketch(session)
+    session.add_rectangle(bottom, [0.0, 0.0], SIDE, SIDE)
+    top = session.sketch_create_offset(SIDE, "XY")["sketch_id"]
+    session.add_circle(top, [SIDE / 2, SIDE / 2], SIDE)
+    _select(session, [{"sketch": bottom, "index": 1}, {"sketch": top, "index": 1}])
+    return session.loft(mode="join")
+
+
 @_runner("fillet")
 def _run_fillet(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)

@@ -1,6 +1,47 @@
-# duocad — autopilot の進行状況(基本操作の高速化)
+# duocad — autopilot の進行状況
 
-autopilot(本人の指示 2026-10-16)で親セッションが進めた作業の現在地。判断の記録は [decisions.md](decisions.md)。
+autopilot で親セッションが進めた作業の現在地。判断の記録は [decisions.md](decisions.md)(見出しの頭に `[ねじ]` が付いた節がねじ山形の作業)。
+
+## ねじ山形のシミュレーション(2026-10-17〜、進行中)
+
+ゴール(本人の指示の原文):
+
+> 調査はここで打ち切って、コンピューター内でのシミュレションを行いたい。あなたがさまざまなモデルを作成し、プリントのしやすさと壊れにくさをシミュレーションしてほしい。これを何度も反復してで改良と試作を重ねてより良い形状を模索する作業をしてほしい。まずはプリントのしやすさと壊れにくさの評価を行う方法を確立する必要がある。その作業を行ってほしい
+
+前提になる本人の基準: 「初期設定でプリントできることが重要である」([THREAD.md](THREAD.md)「山形の調査」の末尾)。
+
+計画(親の案に astra の反論を入れたもの。経緯は decisions.md):
+
+1. 評価方法を作る: 山形の族([tools/thread_sim/profiles.py](../tools/thread_sim/profiles.py))、Centauri Carbon の既定プロファイルでの印刷の模擬(層の断面・XY の法線での張り出しと支持・垂れ・ビードの形)、螺旋位相の包絡による嵌合の十分条件+直接の干渉計算、軸対称 FEA(2物体・摩擦なし接触)による強度の比較。
+2. 方法を検証する: 数値の検算(解析解)、既知の観測(本人の経験・公開された隙間の値)との突き合わせ、未知の係数の感度解析。
+3. 反復: 外形(ナット外径・はめあい長)を固定して、族ごとに最適化。最小径・隙間の窓の幅・強度で比べる。
+4. 本人の試し刷り1回分(STL と結果を返すページ)を用意する。
+
+本人に残りそうな判断: 試し刷り(身体が要る)。OrcaSlicer の追加ダウンロードの可否(自前の模擬の突き合わせ用。無くても進む)。
+
+### どこまで来たか(2026-10-17 夕)
+
+- 評価方法の道具は [tools/thread_sim/](../tools/thread_sim/) にそろった(説明は [THREAD_SIM.md](THREAD_SIM.md))。FEA は解析解で検証済み。
+- 指標は「誤差を吸収できる幅 W(雌雄の和・半径)」と、窓の中心・緩い端での破断荷重(壁2周+疎な充填のモデル)、締め付けの限界、乗り越えの目安。
+- 中間の結論(D6・P1.5・深さ0.6): W は 45° 台形 0.37、30° 台形 0.08、ISO M6 0.01、半円 0.10。強さはどれも 280〜330N で差が小さい。
+- 試し刷り一式(30部品、STL・結果を返すページ・事前の予測)は `output/thread_sim/testprint/`(git 管理外。`python -m tools.thread_sim.testprint` で作り直せる)。
+- 走っているもの: study4(全設計を窓の指標で、手元4並列、`output/thread_sim/study4.jsonl`)、study3(探索 436 設計、クラウドのセッション
+  「Thread_sim study3 格子探索」。結果はブランチ `thread-sim/study3-results` の `tools/thread_sim/results/study3.jsonl`)、
+  Codex の 3D 周期 FEA(リング模型との比較。`tools/thread_sim/fea3d.py` を作らせている)。
+
+### 次にやること
+
+1. study4 の表を読み、THREAD_SIM.md に結果を書く。study2(感度)を回す。
+2. study3 の結果を取り込み、径ごとのパレート(W と強さ)から候補を選ぶ。
+3. 3D 周期 FEA でリング模型の偏りを確かめ、強さの下限と上限のどちらに寄るかを決める。
+4. 本人への出し方(試し刷りのページ・カード)をまとめる。
+
+### 再開の手順
+
+- 走っている計算は、同じコマンドで続きから回る(済んだ行は飛ばす): `.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study study4 --workers 4`
+- クラウドの結果: `git fetch origin thread-sim/study3-results` → `git show origin/thread-sim/study3-results:tools/thread_sim/results/study3.jsonl > output/thread_sim/study3.jsonl`
+- 表: `.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.report study1`(study4 用の表は report.py に足す)
+
 
 ## 実装(2026-10-16 完了。本人の指示「#165〜#173 をすべて完了させる」)
 

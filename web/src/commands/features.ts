@@ -152,6 +152,67 @@ export const REVOLVE: CommandDef<'revolve'> = {
   },
 }
 
+/** 始点のずらし(`shifts`)の欄の文字列を整数の並びへ。空白かカンマ区切り。読めなければ null。 */
+export function parseShifts(text: string): number[] | null {
+  const parts = text.split(/[\s,]+/).filter((part) => part !== '')
+  const values = parts.map(Number)
+  return values.every(Number.isInteger) ? values : null
+}
+
+/**
+ * ロフト(verb `loft`)。通常モードで、別々のスケッチの領域を**つなぐ順に**選ぶ(共有選択は追加順を保ち、コアはその順で使う)。
+ * スケッチ編集中に出さないのは、編集中は開いているスケッチの領域しか指せないため(`viewport.regionPickTargets`)。
+ * 通常モードで領域を要求するのはこのコマンドだけで、起動中だけ全スケッチの領域が当たる(`App.svelte` の `wantsRegions`)。
+ * 始点・終点の点(`start_point` / `end_point`)は画面からは送らない: スケッチの点のハンドルは編集中のスケッチにしか無い。
+ * 始点のずらし(`shifts`)は断面の数と同じ個数の整数をカンマ区切りで打つ(空欄はずらさない)。
+ */
+export const LOFT: CommandDef<'loft'> = {
+  id: 'loft',
+  label: 'ロフト',
+  buttonId: 'loft',
+  preview: 'server',
+  args: [
+    { kind: 'selection', name: 'regions', label: 'つなぐ断面(順に)', shapeKind: 'region', min: 2, max: null },
+    {
+      kind: 'choice',
+      name: 'mode',
+      label: '種別',
+      options: [
+        { value: 'join', label: '結合', buttonId: 'loft-mode-join' },
+        { value: 'cut', label: '切り取り', buttonId: 'loft-mode-cut' },
+        { value: 'new', label: '新規ボディ', buttonId: 'loft-mode-new' },
+      ],
+    },
+    {
+      kind: 'text',
+      name: 'shifts',
+      label: '始点のずらし(断面ごと)',
+      inputId: 'loft-shifts',
+      placeholder: '0, 1, 0',
+      optional: true,
+      reject: (value) => (parseShifts(value) === null ? '始点のずらしは整数をカンマ区切りで' : null),
+      toShared: (value) => {
+        const shifts = parseShifts(value)
+        return shifts === null || shifts.length === 0 ? undefined : shifts
+      },
+    },
+  ],
+  build(values) {
+    const regions = (values.regions ?? []) as SelectionRef[]
+    if (regions.length < 2) return { ok: false, reason: '断面を2つ以上選ぶ(つなぐ順に)' }
+    const mode = values.mode
+    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    const text = typeof values.shifts === 'string' ? values.shifts.trim() : ''
+    if (text === '') return { ok: true, args: { mode } }
+    const shifts = parseShifts(text)
+    if (shifts === null) return { ok: false, reason: '始点のずらしは整数をカンマ区切りで' }
+    if (shifts.length !== regions.length) {
+      return { ok: false, reason: `始点のずらしは断面の数(${regions.length})だけ並べる` }
+    }
+    return { ok: true, args: { mode, shifts } }
+  },
+}
+
 /**
  * フィレット。半径は1つで全辺に効く。
  * OCCTのフィレットは例外を投げず `IsDone()=False` で失敗し、半径に対して単調でない(§7。r=10.0 失敗 / r=10.5 成功)。
@@ -559,6 +620,7 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
   BOOLEAN_BODY,
   MOVE_BODY,
   MIRROR_BODY,
+  LOFT,
   DELETE_SELECTION,
 ]
 

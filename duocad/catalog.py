@@ -779,6 +779,69 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="loft",
+        returns=(
+            Result("body_id", "string"),
+            Result("sections", "number"),
+            Result("mode", "string"),
+            Result("changed_bodies", "string[]"),
+        ),
+        category="feature",
+        description=(
+            "別々の平面にある断面(スケッチの領域)を、選んだ順になめらかにつないで立体(ロフト)を作るときに呼ぶ。"
+            "四角から丸へ変わる継手・ノズル・断面が変わりながら細る形など。断面ごとに形も大きさも違ってよい。"
+            "対象は選択から取る(引数では受けない)。断面の領域を、つなぐ順に "
+            'set_selection(refs=[{"sketch": sketch_id, "index": 番号}, ...]) で先に選ぶ(1断面につき1領域、'
+            "隣り合う断面は別の平面)。穴のある領域は断面にできない —— 外周を join でロフトし、内側の領域を cut で"
+            "ロフトする。断面2つの間は直線的につながる(曲げたいなら間に断面を足す)。"
+        ),
+        params=(
+            Param(
+                "mode",
+                "string",
+                "join(足す・既定) / cut(切る) / new(独立した新しいボディを作る)",
+                required=False,
+                ws="required",
+            ),
+            Param(
+                "start_point",
+                "object",
+                "最初の断面の前を収束させる点(尖らせる)。スケッチの図形の点 "
+                '{"sketch": sketch_id, "entity": entity_id, "point": "x0"}(線分の端点 x0 / x1、円・楕円・円弧の中心 cx など)',
+                required=False,
+            ),
+            Param(
+                "end_point",
+                "object",
+                "最後の断面の後を収束させる点。形は start_point と同じ。断面1つと点1つでもロフトになる",
+                required=False,
+            ),
+            Param(
+                "shifts",
+                "array",
+                "断面ごとの整数(選んだ順・断面の数と同じ長さ・省略は全部0)。自動で揃えた始点を頂点 k 個ぶん進める"
+                "(負は戻す。頂点の無い円・楕円は 90° 単位)。結果がねじれた・潰れたときに隣の断面との対応をずらす",
+                required=False,
+            ),
+            Param(
+                "body_id",
+                "string",
+                "対象ボディ。省略時はアクティブ(無ければ新規作成)。mode='new' では指定できない(行き先を持たない)",
+                required=False,
+                ws=False,
+            ),
+        ),
+        session="loft",
+        previewable=True,
+        resets_selection=True,
+        note=(
+            "**`mode` はWSでだけ必須**、**`body_id` はWSのコマンドには無い**(`extrude` と同じ)。"
+            "断面は選択の領域を**選んだ順**に使う(選択集合は追加順を保つ)。点と `shifts` は選択ではなく引数。"
+            "向き・始点・辺の数は OCCT の自動の揃え(`CheckCompatibility`)に任せず `kernel_extrude.loft_regions` が"
+            "揃える(任せると 90° の平面どうしや楕円で黙って潰れる。docs/CAD_LIBRARY_PITFALLS.md「ロフト」)。"
+        ),
+    ),
+    Command(
         name="fillet",
         returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
         category="feature",

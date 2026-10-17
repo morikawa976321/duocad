@@ -1,6 +1,7 @@
-"""押し出し・回転体の幾何(OCPを触るカーネル層)。
+"""押し出し・回転体・ロフトの幾何(OCPを触るカーネル層)。
 
-面の押し出し(`extrude_faces`)、スケッチの領域の押し出し(`extrude_regions`)と回転体(`revolve_regions`)を持つ。
+面の押し出し(`extrude_faces`)、スケッチの領域の押し出し(`extrude_regions`)・回転体(`revolve_regions`)・
+ロフト(`loft_regions`)を持つ。
 面の数え方(`_face_map` の1始まりの添字)・ブーリアンの検査(`_checked_volume` / `_require_valid`)・
 由来の射影(`_target_successors` / `_face_map_projection`)は `kernel` の側にあり、ここはそれを読むだけ ——
 依存は kernel_extrude → kernel の一方向。
@@ -11,16 +12,32 @@ document.Body.shape になる値)。
 from __future__ import annotations
 
 import math
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Tuple
 
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Curve
+
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Check, BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBndLib import BRepBndLib
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon, BRepBuilderAPI_Transform
+from OCP.BRepBuilderAPI import (
+    BRepBuilderAPI_MakeEdge,
+    BRepBuilderAPI_MakeFace,
+    BRepBuilderAPI_MakePolygon,
+    BRepBuilderAPI_MakeVertex,
+    BRepBuilderAPI_MakeWire,
+    BRepBuilderAPI_Transform,
+)
+from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
+from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
+from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
 from OCP.Bnd import Bnd_Box
+from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.GProp import GProp_GProps
 from OCP.Precision import Precision
+from OCP.TopAbs import TopAbs_REVERSED, TopAbs_WIRE
+from OCP.TopExp import TopExp_Explorer
 from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
@@ -462,3 +479,575 @@ def _find_translated_face(
         if distance <= tolerance and (best is None or distance < best[0]):
             best = (distance, index)
     return None if best is None else best[1]
+
+# ======================================================================================
+# ロフト
+# ======================================================================================
+# 別々の平面にある断面を順につなぐ立体(`loft_regions`)。
+#
+# `BRepOffsetAPI_ThruSections` の自動の揃え(`CheckCompatibility`)には任せない。断面の向き・始点・辺の数を
+# ここで揃えてから渡す(任せたときに壊れる条件の実測は docs/CAD_LIBRARY_PITFALLS.md「ロフト」)。
+#
+# - 向き: 各断面の法線を進む向き(隣の断面・点へ)に合わせ、外周の線をその法線について反時計回りにする
+# - 始点: 前の断面の始点の向きを、前の法線 → この法線の最小回転で運び、それに最も近い向きの点を始点にする
+# - 辺の数: 全断面を、どれかの断面の頂点がある向き(始点からの極角)すべてで割る。極角が線に沿って
+#   単調でない断面(重心から見て裏に回り込む凹み)があれば、長さの割合で割る
+# - `shifts`: 揃えた後の始点を断面ごとに頂点 k 個ぶん進める(負は戻す。頂点の無い閉曲線は 90° 単位)
+
+Vec = Tuple[float, float, float]
+
+#: 極角の比較(度)。これより近い向きは同じ頂点とみなす。
+_ANGLE_TOL = 1.0e-4
+
+#: 線に沿った極角を測る刻み(辺1本あたり)。始点の探索・単調性の判定・割る位置の二分法の初期区間に使う。
+_SAMPLES_PER_EDGE = 64
+
+#: 2つの平面を「同じ平面」とみなす距離(mm)。
+_PLANE_TOL = 1.0e-7
+
+
+def loft_regions(
+    sections: Sequence[Tuple[Any, Sequence[float]]],
+    mode: str,
+    target_shape: Any = None,
+    start_point: Optional[Sequence[float]] = None,
+    end_point: Optional[Sequence[float]] = None,
+    shifts: Optional[Sequence[int]] = None,
+) -> dict:
+    """断面(`(面, スケッチ平面の法線)` の並び)を順につないだ立体を作り、join/cut/new した形状を返す。
+
+    `start_point` / `end_point` を渡すと、最初の断面の前・最後の断面の後をその点へ収束させる(尖らせる)。
+    断面1つでも点が1つあればよい。穴のある面は拒む。`shifts` は断面ごとの整数(省略は全部0)。
+
+    戻り値は `kernel_extrude.extrude_regions` と同じ形。provenance の `verb` は `"loft"`。
+    """
+    faces = [TopoDS.Face_s(face) for face, _ in sections]
+    normals = [_unit(tuple(float(v) for v in normal)) for _, normal in sections]
+    start = None if start_point is None else tuple(float(v) for v in start_point)
+    end = None if end_point is None else tuple(float(v) for v in end_point)
+    if not faces:
+        raise ValueError("loft requires at least one section")
+    if len(faces) + (start is not None) + (end is not None) < 2:
+        raise ValueError("loft requires at least two sections, or one section and a point")
+    shifts = [0] * len(faces) if shifts is None else [int(k) for k in shifts]
+    if len(shifts) != len(faces):
+        raise ValueError(f"shifts must have one entry per section ({len(faces)}), got {len(shifts)}")
+    _check_region_mode(mode, target_shape)
+
+    wires = []
+    centroids = []
+    for position, face in enumerate(faces, start=1):
+        if _wire_count(face) > 1:
+            raise ValueError(
+                f"loft section #{position} has a hole: 穴のある領域は断面にできない"
+                "(外周をロフトしてから、内側の領域を cut でロフトする)"
+            )
+        wires.append(BRepTools.OuterWire_s(face))
+        centroids.append(_area_centroid(face))
+    _require_separate_planes(centroids, normals, start, end)
+
+    oriented = _oriented_normals(centroids, normals, start, end)
+    aligned = _aligned_wires(wires, centroids, oriented, shifts)
+    failure: Optional[ValueError] = None
+    candidates = _matched_candidates(aligned, centroids, oriented)
+    for matched, own in candidates:
+        try:
+            solid = _thru_sections(matched, start, end, own)
+            _require_sound_loft(solid, faces)
+        except ValueError as error:
+            failure = failure or error
+            continue
+        break
+    else:
+        if len(candidates) > 1:
+            raise ValueError(
+                f"{failure} —— 重心から見て裏に回り込む凹みのある断面(U字など)は対応が決まらないことがある。"
+                "shifts でその断面の始点をずらすか、断面を凹みの無い形に分けること"
+            )
+        raise failure
+
+    return _combine_region_solids(
+        [solid], mode, target_shape, {"verb": "loft", "mode": mode, "sections": len(faces)}
+    )
+
+
+def _thru_sections(wires: Sequence[Any], start: Optional[Vec], end: Optional[Vec], own: bool) -> Any:
+    """断面(と端の点)を `ThruSections` でつなぐ。`own` なら揃えは済んでいる(OCCT の揃えを切る)。"""
+    maker = BRepOffsetAPI_ThruSections(True, False, 1.0e-6)
+    maker.CheckCompatibility(not own)
+    if start is not None:
+        maker.AddVertex(BRepBuilderAPI_MakeVertex(gp_Pnt(*start)).Vertex())
+    for wire in wires:
+        maker.AddWire(wire)
+    if end is not None:
+        maker.AddVertex(BRepBuilderAPI_MakeVertex(gp_Pnt(*end)).Vertex())
+    maker.Build()
+    if not maker.IsDone():
+        raise ValueError("failed to loft the sections (OCCT ThruSections)")
+    return maker.Shape()
+
+
+def _require_sound_loft(solid: Any, faces: Sequence[Any]) -> None:
+    """潰れ・裏返り・自己交差を拒む。
+
+    実測: 始点がずれて潰れた・裏返ったロフトは `BRepCheck_Analyzer` を通す。`BRepAlgoAPI_Check` は第3引数
+    `bTestSI`(自己干渉)を True にしたときだけ捕まえる(25〜80 ms)。体積は断面の最大面積^1.5 を目安に比べる。
+    """
+    if solid is None or solid.IsNull():
+        raise ValueError("loft produced an empty shape")
+    scale = max(_shape_area(face) for face in faces) ** 1.5
+    if not volume(solid) > 1.0e-6 * scale:
+        raise ValueError(
+            "loft collapsed (体積が0か負): 断面どうしの対応がねじれて潰れている。"
+            "shifts で断面の始点をずらすか、断面の間に断面を足すこと"
+        )
+    if not BRepCheck_Analyzer(solid).IsValid():
+        raise ValueError("loft produced an invalid shape (BRepCheck)")
+    if not BRepAlgoAPI_Check(solid, True, True).IsValid():
+        raise ValueError(
+            "loft intersects itself (自己交差): 断面の順番・置き場所か、shifts を見直すこと"
+        )
+
+
+# --------------------------------------------------------------------------------------
+# 断面の置き場所
+# --------------------------------------------------------------------------------------
+def _require_separate_planes(
+    centroids: Sequence[Vec], normals: Sequence[Vec], start: Optional[Vec], end: Optional[Vec]
+) -> None:
+    for i in range(len(centroids) - 1):
+        if _same_plane(centroids[i], normals[i], centroids[i + 1], normals[i + 1]):
+            raise ValueError(
+                f"loft sections #{i + 1} and #{i + 2} lie on the same plane: 隣り合う断面は別の平面に置くこと"
+            )
+    for point, index, label in ((start, 0, "start_point"), (end, len(centroids) - 1, "end_point")):
+        if point is not None and abs(_dot(_sub(point, centroids[index]), normals[index])) <= _PLANE_TOL:
+            raise ValueError(f"loft {label} lies on the plane of section #{index + 1}: 点は断面の平面の外に置くこと")
+
+
+def _same_plane(c1: Vec, n1: Vec, c2: Vec, n2: Vec) -> bool:
+    if _length(_cross(n1, n2)) > 1.0e-9:
+        return False
+    return abs(_dot(_sub(c2, c1), n1)) <= _PLANE_TOL
+
+
+def _oriented_normals(
+    centroids: Sequence[Vec], normals: Sequence[Vec], start: Optional[Vec], end: Optional[Vec]
+) -> List[Vec]:
+    """各断面の法線を進む向き(次の断面・終点へ。最後の断面は前から来る向き)にそろえる。
+
+    進む向きが平面に寝ていて決まらないときは、前の断面の法線と同じ側を取る。
+    """
+    count = len(centroids)
+    out: List[Vec] = []
+    for i in range(count):
+        if i + 1 < count:
+            travel = _sub(centroids[i + 1], centroids[i])
+        elif end is not None:
+            travel = _sub(end, centroids[i])
+        elif i > 0:
+            travel = _sub(centroids[i], centroids[i - 1])
+        else:
+            travel = _sub(centroids[i], start)
+        side = _dot(normals[i], _unit(travel)) if _length(travel) > 0.0 else 0.0
+        if abs(side) < 1.0e-6:
+            side = _dot(normals[i], out[-1]) if out else 1.0
+        out.append(normals[i] if side >= 0.0 else _scale(normals[i], -1.0))
+    return out
+
+
+# --------------------------------------------------------------------------------------
+# 始点と向き
+# --------------------------------------------------------------------------------------
+def _aligned_wires(
+    wires: Sequence[Any], centroids: Sequence[Vec], normals: Sequence[Vec], shifts: Sequence[int]
+) -> List[Any]:
+    """向きを法線に合わせ、始点を前の断面から運んだ向きに合わせ、`shifts` だけ進めた線の並び。
+
+    辺の数が全断面で同じなら始点は頂点から選ぶ(角どうしがつながる)。違うなら運んだ向きのちょうどの点で
+    辺を割って始点にする(三角形 → 正方形で、角を最寄りの角へ寄せると 45° ねじれる)。
+    """
+    same_count = len({len(_edges(wire)) for wire in wires}) == 1
+    out: List[Any] = []
+    reference: Optional[Vec] = None
+    for i, wire in enumerate(wires):
+        if _dot(_newell(_wire_points(wire)), normals[i]) < 0.0:
+            wire = _reversed(wire)
+        if i == 0:
+            reference = _sub(_start(wire), centroids[0])
+        else:
+            reference = _rotate_between(reference, normals[i - 1], normals[i])
+        wire = _start_toward(wire, centroids[i], normals[i], reference, shifts[i], vertex_only=same_count or i == 0)
+        reference = _sub(_start(wire), centroids[i])
+        out.append(wire)
+    return out
+
+
+def _start_toward(wire: Any, centre: Vec, normal: Vec, reference: Vec, shift: int, vertex_only: bool) -> Any:
+    """`reference` の向き(`centre` から見た極角)に最も近い点を始点にし、そこから `shift` 頂点進めた線。"""
+    edges = _edges(wire)
+    if len(edges) == 1:
+        turned = reference
+        for _ in range(shift % 4):
+            turned = _cross(normal, turned)
+        return _closed_from(edges[0], _nearest_parameter(edges[0], centre, normal, turned))
+    starts = [_point_on(edge, _traversal_parameters(edge)[0]) for edge in edges]
+    nearest = min(range(len(edges)), key=lambda k: abs(_angle(_sub(starts[k], centre), normal, reference)))
+    if not vertex_only and abs(_angle(_sub(starts[nearest], centre), normal, reference)) > _ANGLE_TOL:
+        rotated = _split_at_direction(wire, centre, normal, reference)
+        if rotated is not None:
+            return _rolled(rotated, _shift_from_split(len(rotated), shift))
+    return _rolled(edges, (nearest + shift) % len(edges))
+
+
+def _shift_from_split(split_count: int, shift: int) -> int:
+    """割って始点にした点から数えて shift 番目の元の頂点の添字(割った点は頂点に数えない)。
+
+    割った線の辺は [割った点から, 元の頂点1から, 元の頂点2から, ..., 割った点の直前の元の頂点から] の順。
+    """
+    originals = split_count - 1
+    if shift == 0:
+        return 0
+    if shift > 0:
+        return (shift - 1) % originals + 1
+    return originals - (-shift - 1) % originals
+
+
+def _split_at_direction(wire: Any, centre: Vec, normal: Vec, reference: Vec) -> Optional[List[Any]]:
+    """`reference` の向きの点で辺を割り、その点から始まる辺の並びを返す。その向きに線が無ければ None。"""
+    edges = _edges(wire)
+    for index, edge in enumerate(edges):
+        params = _traversal_parameters(edge)
+        angles = [_angle(_sub(_point_on(edge, t), centre), normal, reference) for t in params]
+        for k in range(len(params) - 1):
+            a, b = angles[k], angles[k + 1]
+            if a <= 0.0 <= b and b - a < 90.0:
+                t = _bisect_angle(edge, centre, normal, reference, params[k], params[k + 1], a, b, 0.0)
+                head, tail = _split_edge(edge, [t])
+                return [tail] + edges[index + 1:] + edges[:index] + [head]
+    return None
+
+
+def _rolled(edges: Sequence[Any], start: int) -> Any:
+    return _make_wire(list(edges[start:]) + list(edges[:start]))
+
+
+# --------------------------------------------------------------------------------------
+# 辺の数をそろえる
+# --------------------------------------------------------------------------------------
+def _matched_candidates(
+    wires: Sequence[Any], centroids: Sequence[Vec], normals: Sequence[Vec]
+) -> List[Tuple[List[Any], bool]]:
+    """辺の数をそろえた断面の並びの候補 `(線の並び, 自前で揃えたか)` を、試す順に返す。
+
+    極角が単調でない断面(重心から見て裏に回り込む凹み)があるときだけ候補が2つになる: 長さの割合で割ったもの、
+    だめなら OCCT の揃え(`CheckCompatibility`)。実測: U字 → 正方形は長さの割合だと側面が自己交差し OCCT の揃えなら
+    通る。U字 → 円は逆で、OCCT の揃えは `IsDone()=False`。OCCT の揃えでは `shifts` が効かないことがある。
+    """
+    counts = {len(_edges(wire)) for wire in wires}
+    if len(counts) == 1:
+        return [(list(wires), True)]
+    profiles = [_polar_profile(w, c, n) for w, c, n in zip(wires, centroids, normals)]
+    if all(profile is not None for profile in profiles):
+        angles = _merged([row[0][1] for profile in profiles for row in profile if row[0][1] > _ANGLE_TOL])
+        matched = [
+            _split_at_angles(w, c, n, profile, angles)
+            for w, c, n, profile in zip(wires, centroids, normals, profiles)
+        ]
+        candidates = [(matched, True)]
+    else:
+        fractions = _merged([f for wire in wires for f in _vertex_fractions(wire)], tol=1.0e-9)
+        candidates = [([_split_at_fractions(wire, fractions) for wire in wires], True), (list(wires), False)]
+    usable = [(ws, own) for ws, own in candidates if not own or len({len(_edges(w)) for w in ws}) == 1]
+    if not usable:
+        raise ValueError("failed to match the number of edges between loft sections")
+    return usable
+
+
+def _polar_profile(wire: Any, centre: Vec, normal: Vec) -> Optional[List[List[Tuple[float, float]]]]:
+    """辺ごとの `[(パラメータ, 始点からの極角(巻き戻し済み・0..360))]`(走査順)。単調でなければ None。"""
+    reference = _sub(_start(wire), centre)
+    out: List[List[Tuple[float, float]]] = []
+    previous: Optional[float] = None
+    for edge in _edges(wire):
+        row = []
+        for t in _traversal_parameters(edge):
+            raw = _angle(_sub(_point_on(edge, t), centre), normal, reference) % 360.0
+            if previous is None:
+                value = 0.0 if raw > 360.0 - _ANGLE_TOL else raw
+            else:
+                value = raw + 360.0 * round((previous - raw) / 360.0)
+                if value < previous - 1.0e-7:
+                    value += 360.0
+                if value < previous - 1.0e-7:
+                    return None
+            row.append((t, value))
+            previous = value
+        out.append(row)
+    if previous is None or abs(previous - 360.0) > 1.0e-3:
+        return None
+    return out
+
+
+def _split_at_angles(
+    wire: Any, centre: Vec, normal: Vec, profile: Sequence[Sequence[Tuple[float, float]]], angles: Sequence[float]
+) -> Any:
+    reference = _sub(_start(wire), centre)
+    vertices = [row[0][1] for row in profile] + [360.0]
+    out: List[Any] = []
+    for edge, row in zip(_edges(wire), profile):
+        low, high = row[0][1], row[-1][1]
+        cuts = [
+            a for a in angles
+            if low + _ANGLE_TOL < a < high - _ANGLE_TOL and all(abs(a - v) > _ANGLE_TOL for v in vertices)
+        ]
+        if not cuts:
+            out.append(edge)
+            continue
+        params = []
+        for a in cuts:
+            k = next(k for k in range(len(row) - 1) if row[k][1] <= a <= row[k + 1][1])
+            params.append(
+                _bisect_angle(edge, centre, normal, reference, row[k][0], row[k + 1][0], row[k][1], row[k + 1][1], a)
+            )
+        out += _split_edge(edge, params)
+    return _make_wire(out)
+
+
+def _bisect_angle(
+    edge: Any, centre: Vec, normal: Vec, reference: Vec, t_low: float, t_high: float, a_low: float, a_high: float,
+    target: float,
+) -> float:
+    """辺の上で、極角が `target` になるパラメータを二分法で求める(区間の両端の極角は巻き戻し済み)。"""
+    for _ in range(60):
+        t_mid = (t_low + t_high) / 2.0
+        guess = (a_low + a_high) / 2.0
+        raw = _angle(_sub(_point_on(edge, t_mid), centre), normal, reference)
+        value = raw + 360.0 * round((guess - raw) / 360.0)
+        if value < target:
+            t_low, a_low = t_mid, value
+        else:
+            t_high, a_high = t_mid, value
+    return (t_low + t_high) / 2.0
+
+
+def _vertex_fractions(wire: Any) -> List[float]:
+    lengths = [_edge_length(edge) for edge in _edges(wire)]
+    total = sum(lengths)
+    out, acc = [], 0.0
+    for length in lengths[:-1]:
+        acc += length
+        out.append(acc / total)
+    return out
+
+
+def _split_at_fractions(wire: Any, fractions: Sequence[float]) -> Any:
+    """線を、始点からの長さの割合 `fractions` の位置で割る(既にある頂点の位置は割らない)。"""
+    edges = _edges(wire)
+    lengths = [_edge_length(edge) for edge in edges]
+    total = sum(lengths)
+    out: List[Any] = []
+    acc = 0.0
+    for edge, length in zip(edges, lengths):
+        low, high = acc / total, (acc + length) / total
+        inner = [f for f in fractions if low + 1.0e-6 < f < high - 1.0e-6]
+        if not inner:
+            out.append(edge)
+        else:
+            curve = BRepAdaptor_Curve(edge)
+            first, last = curve.FirstParameter(), curve.LastParameter()
+            if edge.Orientation() == TopAbs_REVERSED:
+                params = [GCPnts_AbscissaPoint(curve, -(f - low) * total, last).Parameter() for f in inner]
+            else:
+                params = [GCPnts_AbscissaPoint(curve, (f - low) * total, first).Parameter() for f in inner]
+            out += _split_edge(edge, params)
+        acc += length
+    return _make_wire(out)
+
+
+def _merged(values: Sequence[float], tol: float = _ANGLE_TOL) -> List[float]:
+    out: List[float] = []
+    for value in sorted(values):
+        if not out or value - out[-1] > tol:
+            out.append(value)
+    return out
+
+
+# --------------------------------------------------------------------------------------
+# 辺と線の小道具
+# --------------------------------------------------------------------------------------
+def _edges(wire: Any) -> List[Any]:
+    explorer = BRepTools_WireExplorer(TopoDS.Wire_s(wire))
+    out = []
+    while explorer.More():
+        out.append(TopoDS.Edge_s(explorer.Current()))
+        explorer.Next()
+    return out
+
+
+def _make_wire(edges: Sequence[Any]) -> Any:
+    builder = BRepBuilderAPI_MakeWire()
+    for edge in edges:
+        builder.Add(TopoDS.Edge_s(edge))
+    if not builder.IsDone():
+        raise ValueError("failed to rebuild a loft section wire")
+    return builder.Wire()
+
+
+def _reversed(wire: Any) -> Any:
+    return _make_wire([TopoDS.Edge_s(edge.Reversed()) for edge in reversed(_edges(wire))])
+
+
+def _traversal_parameters(edge: Any, count: int = _SAMPLES_PER_EDGE) -> List[float]:
+    curve = BRepAdaptor_Curve(edge)
+    first, last = curve.FirstParameter(), curve.LastParameter()
+    params = [first + (last - first) * i / count for i in range(count + 1)]
+    return params[::-1] if edge.Orientation() == TopAbs_REVERSED else params
+
+
+def _point_on(edge: Any, t: float) -> Vec:
+    p = BRepAdaptor_Curve(edge).Value(t)
+    return (p.X(), p.Y(), p.Z())
+
+
+def _start(wire: Any) -> Vec:
+    edge = _edges(wire)[0]
+    return _point_on(edge, _traversal_parameters(edge, 1)[0])
+
+
+def _wire_points(wire: Any) -> List[Vec]:
+    points: List[Vec] = []
+    for edge in _edges(wire):
+        points += [_point_on(edge, t) for t in _traversal_parameters(edge, 24)[:-1]]
+    return points
+
+
+def _split_edge(edge: Any, params: Sequence[float]) -> List[Any]:
+    """辺を `params`(どの順でもよい)で割り、走査順の辺の並びを返す。"""
+    curve = BRepAdaptor_Curve(edge)
+    first, last = curve.FirstParameter(), curve.LastParameter()
+    geometry = BRep_Tool.Curve_s(edge, first, last)
+    bounds = [first] + sorted(params) + [last]
+    pieces = [BRepBuilderAPI_MakeEdge(geometry, bounds[k], bounds[k + 1]).Edge() for k in range(len(bounds) - 1)]
+    if edge.Orientation() == TopAbs_REVERSED:
+        pieces = [TopoDS.Edge_s(piece.Reversed()) for piece in reversed(pieces)]
+    return pieces
+
+
+def _nearest_parameter(edge: Any, centre: Vec, normal: Vec, reference: Vec) -> float:
+    params = _traversal_parameters(edge, 720)
+    best = min(params, key=lambda t: abs(_angle(_sub(_point_on(edge, t), centre), normal, reference)))
+    step = abs(params[1] - params[0])
+    return _bisect_toward(edge, centre, normal, reference, best - step, best + step)
+
+
+def _bisect_toward(edge: Any, centre: Vec, normal: Vec, reference: Vec, low: float, high: float) -> float:
+    for _ in range(60):
+        third = (high - low) / 3.0
+        a = abs(_angle(_sub(_point_on(edge, low + third), centre), normal, reference))
+        b = abs(_angle(_sub(_point_on(edge, high - third), centre), normal, reference))
+        if a < b:
+            high -= third
+        else:
+            low += third
+    return (low + high) / 2.0
+
+
+def _closed_from(edge: Any, t: float) -> Any:
+    """閉じた1辺(周期曲線)を、パラメータ `t` の点から1周する辺の線に作り直す(向きは保つ)。"""
+    curve = BRepAdaptor_Curve(edge)
+    first, last = curve.FirstParameter(), curve.LastParameter()
+    geometry = BRep_Tool.Curve_s(edge, first, last)
+    if not geometry.IsPeriodic():
+        # 周期でない閉曲線(閉じたベジエ等)は継ぎ目を動かせないので、その点で2本に割る。
+        if abs(t - first) < 1.0e-9 or abs(t - last) < 1.0e-9:
+            return _make_wire([edge])
+        head, tail = _split_edge(edge, [t])
+        return _make_wire([tail, head])
+    period = geometry.Period()
+    rebuilt = BRepBuilderAPI_MakeEdge(geometry, t, t + period).Edge()
+    if edge.Orientation() == TopAbs_REVERSED:
+        rebuilt = TopoDS.Edge_s(rebuilt.Reversed())
+    return _make_wire([rebuilt])
+
+
+def _edge_length(edge: Any) -> float:
+    return GCPnts_AbscissaPoint.Length_s(BRepAdaptor_Curve(edge))
+
+
+def _wire_count(face: Any) -> int:
+    explorer = TopExp_Explorer(face, TopAbs_WIRE)
+    count = 0
+    while explorer.More():
+        count += 1
+        explorer.Next()
+    return count
+
+
+def _area_centroid(face: Any) -> Vec:
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(face, props)
+    c = props.CentreOfMass()
+    return (c.X(), c.Y(), c.Z())
+
+
+# --------------------------------------------------------------------------------------
+# ベクトル
+# --------------------------------------------------------------------------------------
+def _sub(a: Vec, b: Vec) -> Vec:
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _scale(a: Vec, s: float) -> Vec:
+    return (a[0] * s, a[1] * s, a[2] * s)
+
+
+def _dot(a: Vec, b: Vec) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _cross(a: Vec, b: Vec) -> Vec:
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _length(a: Vec) -> float:
+    return math.sqrt(_dot(a, a))
+
+
+def _unit(a: Vec) -> Vec:
+    length = _length(a)
+    if not length > 0.0:
+        raise ValueError("loft section normal has zero length")
+    return _scale(a, 1.0 / length)
+
+
+def _newell(points: Sequence[Vec]) -> Vec:
+    total = (0.0, 0.0, 0.0)
+    for i in range(len(points)):
+        c = _cross(points[i], points[(i + 1) % len(points)])
+        total = (total[0] + c[0], total[1] + c[1], total[2] + c[2])
+    return total
+
+
+def _angle(vector: Vec, normal: Vec, reference: Vec) -> float:
+    """法線 `normal` の平面で、`reference` から `vector` への反時計回りの角度(度、-180..180)。"""
+    v = _sub(vector, _scale(normal, _dot(vector, normal)))
+    r = _sub(reference, _scale(normal, _dot(reference, normal)))
+    return math.degrees(math.atan2(_dot(_cross(r, v), normal), _dot(r, v)))
+
+
+def _rotate_between(vector: Vec, n1: Vec, n2: Vec) -> Vec:
+    """`n1` を `n2` へ運ぶ最小回転を `vector` に施す(ロドリゲス)。"""
+    axis = _cross(n1, n2)
+    s = _length(axis)
+    c = _dot(n1, n2)
+    if s < 1.0e-12:
+        return vector if c > 0.0 else _scale(vector, -1.0)
+    k = _scale(axis, 1.0 / s)
+    kv = _cross(k, vector)
+    kd = _dot(k, vector) * (1.0 - c)
+    return (
+        vector[0] * c + kv[0] * s + k[0] * kd,
+        vector[1] * c + kv[1] * s + k[1] * kd,
+        vector[2] * c + kv[2] * s + k[2] * kd,
+    )

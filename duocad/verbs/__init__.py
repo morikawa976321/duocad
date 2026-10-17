@@ -16,6 +16,7 @@ from . import extrude_face as _extrude_face_replay  # noqa: F401  再生専用ve
 from .fillet import fillet  # noqa: F401
 from .import_editable import import_step  # noqa: F401
 from .import_svg import import_svg  # noqa: F401
+from .loft import loft  # noqa: F401
 from .mirror_body import mirror_body  # noqa: F401
 from .mirror_sketch import mirror_sketch_entities  # noqa: F401
 from .move_body import move_body  # noqa: F401
@@ -45,6 +46,7 @@ __all__ = [
     "fillet",
     "import_step",
     "import_svg",
+    "loft",
     "clear_loads",
     "mirror_body",
     "mirror_sketch_entities",

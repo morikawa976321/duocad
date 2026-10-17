@@ -60,6 +60,7 @@ TARGET_SET_ARGS = {
 BODY_ID_IS_A_NAME_HERE = {
     "extrude": "どのBodyへ足す / から引くか(押し出す領域そのものは選択から取る)",
     "revolve": "どのBodyへ足す / から引くか(回す領域そのものは選択から取る)",
+    "loft": "どのBodyへ足す / から引くか(断面の領域そのものは選択から取る)",
 }
 
 
