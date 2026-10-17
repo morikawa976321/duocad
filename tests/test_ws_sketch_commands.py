@@ -99,7 +99,7 @@ def test_entities_carry_parameter_names(session: Session) -> None:
 
     (diameter_name, refused), clients = browser(session, script)
 
-    assert isinstance(diameter_name, str) and diameter_name
+    assert diameter_name in session.document.parameters, "届いた名前が文書のパラメータに実在しない"
     assert refused["type"] == "error" and "unknown command" in refused["message"]
     diameter = session.state_meta()["sketches"][0]["entities"][0]["params"]["diameter"]
     assert math.isclose(diameter, 2 * RADIUS)

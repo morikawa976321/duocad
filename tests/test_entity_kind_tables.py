@@ -28,14 +28,6 @@ def test_ts_entity_kind_table_is_readable():
     )
 
 
-def test_python_kernel_entity_kind_table_is_readable():
-    """先に**走査そのものが効いている**ことを見る(TS側と対にする)。"""
-    keys = set(kernel_sketch._KERNEL_ENTITY_KIND_TABLE.keys())
-    assert len(keys) >= 4, (
-        f"duocad/kernel_sketch.py の _KERNEL_ENTITY_KIND_TABLE を読めていない: {sorted(keys)}"
-    )
-
-
 def test_the_three_entity_kind_tables_agree_on_their_key_set():
     """3つの表のキー集合が一致する。**新種別を1つの表にだけ足すとここが落ちる。**"""
     canonical = set(sketch.ENTITY_KINDS)

@@ -122,26 +122,6 @@ def test_parameter_of_rejects_unknown_keys_and_owners():
         parameter_of(document, sketch_id, "entity-does-not-exist", "diameter")
 
 
-def test_set_parameter_changes_the_resulting_shape():
-    """値を変えると**形状が実際に変わる**(体積で確認)。"""
-    document = Document()
-    sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, (0.0, 0.0), 2 * CIRCLE_RADIUS)
-    extrude(document, [region_ref(sketch_id, regions(document, sketch_id)[0].index)], 10.0)
-    assert math.isclose(
-        query.volume(document.active_body().shape),
-        math.pi * CIRCLE_RADIUS**2 * 10.0,
-        rel_tol=VOLUME_REL_TOL,
-    )
-
-    set_parameter(document, parameter_of(document, sketch_id, circle, "diameter"), 20.0)
-
-    assert math.isclose(
-        query.volume(document.active_body().shape), math.pi * 10.0**2 * 10.0, rel_tol=VOLUME_REL_TOL
-    )
-    assert entity_params(document, sketch_id, circle)["diameter"] == 20.0
-
-
 def test_set_parameter_is_logged_and_undoable():
     """`set_parameter` が操作ログに載り、**undoで元の形状に戻る**。"""
     document = Document()

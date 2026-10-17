@@ -18,7 +18,6 @@ CUBE_MM = 20.0
 RADIUS_OK = 3.0
 RADIUS_FAILS_LOW = 10.0
 RADIUS_ODD_BUT_OK = 10.5
-RADIUS_FAILS_HIGH = 30.0
 
 FILLET_R3_KINDS = {"plane": 6, "cylinder_partial": 12, "other": 8}
 #: 半径を 1.0 + 0.25*i でバラバラにしたときの実測

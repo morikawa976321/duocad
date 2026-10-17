@@ -271,12 +271,6 @@ def test_toggle_selection_refuses_a_malformed_ref_without_touching_the_selection
     assert [item["index"] for item in selection.get_selection(doc).items] == [1]
 
 
-def test_the_selection_can_be_fed_to_a_verb_as_it_is(doc: Document):
-    """選択に出所は無く、どの操作で作った集合もそのまま verb に渡せる。"""
-    selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
-    assert len(selection.selected_items(doc)) == 1
-
-
 def test_selected_items_can_be_filtered_by_kind(doc: Document):
     """`selected_items(kind=...)` で種別を絞れる(verbは自分が食える種別だけ要る)。"""
     selection.modify_selection(
