@@ -112,76 +112,86 @@ def make_hole_plate(diams, thickness: float, pitch: float):
     return BRepAlgoAPI_Cut(plate, tri).Shape()
 
 
-OUTCOMES_THREAD = ["入らない", "途中で止まる", "全長回るが固い", "手で軽く回る", "ガタが大きい", "山を飛ぶ・抜ける", "試していない"]
-OUTCOMES_GAUGE = ["入らない", "押せば入る", "すっと入る", "ガタつく", "試していない"]
+OUTCOMES_THREAD = ["入らない", "途中で止まる", "全長回るが固い", "手で軽く回る", "試していない"]
+FLAGS_THREAD = ["ガタが大きい", "山を飛ぶ・抜ける"]
 
 
 def write_page(groups, path: Path, title: str):
-    """groups: [(見出し, 説明, [(id, 表示名, 選択肢)])]。結果は 'id=選択肢の番号' を並べた1行のテキストになる。"""
+    """groups: [(見出し, 説明, [(id, 表示名, 選択肢, 追加のチェック)])]。
+    結果は 'id=選択肢[+チェック]' を並べた1行のテキストになる。"""
     def esc(s):
         return html.escape(str(s))
 
     blocks = []
+    legend = {}
     for head, desc, items in groups:
         rows = []
-        for iid, name, opts in items:
+        for iid, name, opts, flags in items:
             cells = "".join(
-                f'<label><input type="radio" name="{esc(iid)}" value="{k}"{" checked" if o == "試していない" else ""}>'
+                f'<label><input type="radio" name="{esc(iid)}" value="{k}"{" checked" if o in ("試していない", "未回答") else ""}>'
                 f"<span>{esc(o)}</span></label>" for k, o in enumerate(opts))
-            rows.append(f'<div class="row"><div class="name">{esc(name)}</div><div class="opts">{cells}</div></div>')
+            fl = "".join(f'<label class="flag"><input type="checkbox" name="{esc(iid)}_f" value="{k}"><span>{esc(o)}</span></label>'
+                         for k, o in enumerate(flags))
+            rows.append(f'<div class="row"><div class="name">{esc(name)}</div><div class="opts">{cells}{fl}</div></div>')
+            legend[iid] = [name, opts, flags]
         blocks.append(f'<section><h2>{esc(head)}</h2><p class="desc">{esc(desc)}</p>{"".join(rows)}</section>')
-    legend = json.dumps({iid: [name, opts] for _, _, items in groups for iid, name, opts in items}, ensure_ascii=False)
-    page = f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>{esc(title)}</title>
-<style>
-:root {{ --bg:#fafaf8; --fg:#222; --muted:#666; --line:#ddd; --chip:#eee; --on:#2b6cb0; --onfg:#fff; }}
-@media (prefers-color-scheme: dark) {{ :root {{ --bg:#1b1b1d; --fg:#e8e8e8; --muted:#aaa; --line:#333; --chip:#2a2a2e; --on:#5a9be0; --onfg:#111; }} }}
-body {{ background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; margin:0 auto; max-width:980px; padding:16px; }}
-h1 {{ font-size:20px; }} h2 {{ font-size:17px; margin:24px 0 4px; }} .desc {{ color:var(--muted); margin:0 0 8px; }}
-.row {{ display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }}
-.name {{ min-width:240px; flex:1 1 240px; }} .opts {{ display:flex; flex-wrap:wrap; gap:4px; flex:3 1 480px; }}
-label input {{ display:none; }} label span {{ display:inline-block; padding:4px 10px; border-radius:14px; background:var(--chip); cursor:pointer; user-select:none; }}
-label input:checked + span {{ background:var(--on); color:var(--onfg); }}
-#out {{ width:100%; height:90px; font:13px/1.4 ui-monospace, monospace; background:var(--chip); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px; box-sizing:border-box; }}
-button {{ margin:8px 0; padding:8px 16px; border-radius:6px; border:0; background:var(--on); color:var(--onfg); font-size:15px; cursor:pointer; }}
-.sticky {{ position:sticky; bottom:0; background:var(--bg); padding:8px 0; border-top:2px solid var(--line); }}
-</style></head><body>
-<h1>{esc(title)}</h1>
-<p class="desc">刷った部品を組んで、各行の結果を1つクリックしてください。最後に「コピー」を押し、出てきた文字列を次のメッセージに貼れば終わりです。</p>
-{"".join(blocks)}
-<div class="sticky"><textarea id="out" readonly></textarea><br><button id="copy">コピー</button> <span id="msg" class="desc"></span></div>
-<script>
-const LEGEND = {legend};
-function update() {{
+    css = """
+:root { --bg:#fafaf8; --fg:#222; --muted:#666; --line:#ddd; --chip:#eee; --on:#2b6cb0; --onfg:#fff; --flag:#b7791f; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1b1b1d; --fg:#e8e8e8; --muted:#aaa; --line:#333; --chip:#2a2a2e; --on:#5a9be0; --onfg:#111; --flag:#d69e2e; } }
+body { background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; margin:0 auto; max-width:1000px; padding:16px; }
+h1 { font-size:20px; } h2 { font-size:17px; margin:24px 0 4px; } .desc { color:var(--muted); margin:0 0 8px; }
+.row { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
+.name { min-width:220px; flex:1 1 220px; } .opts { display:flex; flex-wrap:wrap; gap:4px; flex:3 1 520px; }
+label input { display:none; } label span { display:inline-block; padding:4px 10px; border-radius:14px; background:var(--chip); cursor:pointer; user-select:none; }
+label input:checked + span { background:var(--on); color:var(--onfg); }
+label.flag span { border:1px dashed var(--flag); } label.flag input:checked + span { background:var(--flag); color:var(--onfg); }
+#out { width:100%; height:90px; font:13px/1.4 ui-monospace, monospace; background:var(--chip); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px; box-sizing:border-box; }
+button { margin:8px 0; padding:8px 16px; border-radius:6px; border:0; background:var(--on); color:var(--onfg); font-size:15px; cursor:pointer; }
+.sticky { position:sticky; bottom:0; background:var(--bg); padding:8px 0; border-top:2px solid var(--line); }
+"""
+    js = """
+function update() {
   const parts = [];
-  for (const id of Object.keys(LEGEND)) {{
+  for (const id of Object.keys(LEGEND)) {
     const el = document.querySelector('input[name="' + id + '"]:checked');
-    const k = el ? +el.value : -1;
-    parts.push(id + '=' + (k >= 0 ? LEGEND[id][1][k] : '?'));
-  }}
+    let s = id + '=' + (el ? LEGEND[id][1][+el.value] : '?');
+    document.querySelectorAll('input[name="' + id + '_f"]:checked').forEach(f => { s += '+' + LEGEND[id][2][+f.value]; });
+    parts.push(s);
+  }
   document.getElementById('out').value = 'ねじ試し刷り結果 ' + parts.join(' ');
-}}
-document.querySelectorAll('input[type=radio]').forEach(e => e.addEventListener('change', update));
-document.getElementById('copy').addEventListener('click', async () => {{
+}
+document.querySelectorAll('input').forEach(e => e.addEventListener('change', update));
+document.getElementById('copy').addEventListener('click', async () => {
   update(); const t = document.getElementById('out');
-  try {{ await navigator.clipboard.writeText(t.value); document.getElementById('msg').textContent = 'コピーしました'; }}
-  catch (e) {{ t.select(); document.execCommand('copy'); document.getElementById('msg').textContent = 'コピーしました'; }}
-}});
+  try { await navigator.clipboard.writeText(t.value); document.getElementById('msg').textContent = 'コピーしました'; }
+  catch (e) { t.select(); document.execCommand('copy'); document.getElementById('msg').textContent = 'コピーしました'; }
+});
 update();
-</script></body></html>"""
+"""
+    page = ('<!doctype html><html lang="ja"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f"<title>{esc(title)}</title><style>{css}</style></head><body>"
+            f"<h1>{esc(title)}</h1>"
+            '<p class="desc">刷った部品を組んで、各行の結果を1つクリックしてください(点線の枠は、当てはまるときだけ追加で押す)。'
+            "最後に「コピー」を押し、出てきた文字列を次のメッセージに貼れば終わりです。</p>"
+            + "".join(blocks)
+            + '<div class="sticky"><textarea id="out" readonly></textarea><br><button id="copy">コピー</button> '
+              '<span id="msg" class="desc"></span></div>'
+            + f"<script>const LEGEND = {json.dumps(legend, ensure_ascii=False)};{js}</script></body></html>")
     path.write_text(page, encoding="utf-8")
 
 
 # ---------- 一式 ----------
 
 SERIES = [
-    # (系列の記号, 表示名, 呼び径, 山形を作る関数, 隙間の付け方, 頭とナットの角の数, ナットの隙間の列)
-    ("A", "ISO M6×1", 6, lambda: pf.iso(6, 1.0), "radial", 6, [0.2, 0.3, 0.4, 0.5, 0.6]),
-    ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.05, 0.15, 0.25, 0.35, 0.45]),
-    ("C", "半円 D6 P2 ρ0.6(法線の隙間)", 6, lambda: pf.coil(6, 2.0, 0.6), "normal", 8, [0.1, 0.2, 0.3, 0.4]),
+    # (記号, 表示名, 呼び径, 山形, 隙間の付け方, 頭とナットの角の数, ナットの隙間(雌雄の和。ボルトは呼び寸法のまま))
+    # 隙間は、剛体の予測(c_geo + 寸法誤差 0〜0.3)の両側を覆い、予測より十分小さい側も入れる(astra の指摘)
+    ("A", "ISO M6×1", 6, lambda: pf.iso(6, 1.0), "radial", 6, [0.1, 0.2, 0.3, 0.4]),
+    ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.05, 0.15, 0.25, 0.35]),
+    ("K", "30°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 30, 30), "radial", 5, [0.15, 0.3, 0.45]),
+    ("C", "半円 D6 P2 ρ0.6(法線の隙間)", 6, lambda: pf.coil(6, 2.0, 0.6), "normal", 8, [0.1, 0.2, 0.3]),
     ("D", "45°台形 D3 P1.0 深さ0.3", 3, lambda: pf.trapezoid(3, 1.0, 0.3, 45, 45), "radial", 4, [0.05, 0.15, 0.25]),
-    ("E", "ISO M3×0.5", 3, lambda: pf.iso(3, 0.5), "radial", 6, [0.1, 0.2]),
-    ("F", "半円 D3 P1.2 ρ0.4(法線の隙間)", 3, lambda: pf.coil(3, 1.2, 0.4), "normal", 8, [0.1, 0.2]),
+    ("F", "半円 D3 P1.2 ρ0.4(法線の隙間)", 3, lambda: pf.coil(3, 1.2, 0.4), "normal", 8, [0.05, 0.12, 0.2]),
 ]
 GAUGES = [("G", 6.0, [6.0, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6]), ("H", 3.0, [3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6])]
 
@@ -192,6 +202,7 @@ def _sizes(D):
 
 
 def build(out: Path = OUT, only=None):
+    """ナットは隙間の大きい順に 1,2,3…(緩い順に試すとボルトを先に傷めない)。"""
     out.mkdir(parents=True, exist_ok=True)
     pieces, groups = [], []
     for sid, name, D, mk, mode, sides, cs in SERIES:
@@ -201,16 +212,19 @@ def build(out: Path = OUT, only=None):
         sz = _sizes(D)
         f = f"{sid}0_bolt.stl"
         sx.write_stl(make_bolt(prof, 0, sz["length"], sz["af"], sz["head_h"], sides), out / f)
-        pieces.append(Piece(f"{sid}0", "bolt", f"{name} のボルト", f, dict(D=D, mode=mode)))
+        pieces.append(Piece(f"{sid}0", "bolt", f"{name} のボルト", f, dict(D=D, mode=mode, series=sid)))
         items = []
-        for i, c in enumerate(cs, 1):
+        for i, c in enumerate(sorted(cs, reverse=True), 1):
             nut_prof = pf.nut_of(prof, c, mode)
             f = f"{sid}{i}_nut_c{c:g}.stl"
             sx.write_stl(make_nut(nut_prof, i, sz["nut_h"], sz["af"], sides), out / f)
-            pieces.append(Piece(f"{sid}{i}", "nut", f"{name} のナット{i}(凹み{i}個)", f, dict(D=D, mode=mode, clearance=c)))
-            items.append((f"{sid}{i}", f"ナット{i}(上面の凹み{i}個)", OUTCOMES_THREAD))
-        shape_ja = {4: "四角", 6: "六角", 8: "八角"}[sides]
-        groups.append((f"{sid}: {name}", f"頭とナットが{shape_ja}の組。ボルト1本に、凹みの数が違うナットを順にねじ込む。", items))
+            pieces.append(Piece(f"{sid}{i}", "nut", f"{name} のナット{i}(凹み{i}個)", f,
+                                dict(D=D, mode=mode, clearance=c, series=sid)))
+            items.append((f"{sid}{i}", f"ナット{i}(上面の凹み{i}個)", OUTCOMES_THREAD, FLAGS_THREAD))
+        shape_ja = {4: "四角", 5: "五角", 6: "六角", 8: "八角"}[sides]
+        groups.append((f"{sid}: {name}", f"頭とナットが{shape_ja}の組。ナットはボルトの先から手で回し、凹み1個のナットから順に試す。"
+                       "1つ試したら外してから次へ。工具は使わない。", items))
+    gitems = []
     for gid, d, holes in GAUGES:
         if only and gid not in only:
             continue
@@ -221,8 +235,11 @@ def build(out: Path = OUT, only=None):
         f = f"{gid}_holes.stl"
         sx.write_stl(make_hole_plate(holes, sz["nut_h"], d + 4.0), out / f)
         pieces.append(Piece(f"{gid}_holes", "holes", f"穴の板 D{d:g}({holes[0]:g}〜{holes[-1]:g})", f, dict(holes=holes)))
-        items = [(f"{gid}{k + 1}", f"穴{k + 1}(角を切った端から{k + 1}番目)", OUTCOMES_GAUGE) for k in range(len(holes))]
-        groups.append((f"{gid}: ねじ無しのピン D{d:g} と穴の板", "ピンを、穴の板の穴へ端から順に差し込む(穴は端ほど小さい)。", items))
+        opts = [f"穴{k + 1}" for k in range(len(holes))] + ["どれも入らない", "未回答"]
+        gitems.append((gid, f"ピン D{d:g}: すっと入る一番小さい穴", opts, []))
+    if gitems:
+        groups.append(("G・H: ねじ無しのピンと穴の板", "穴は角を切った端から順に1番、2番…で、端ほど小さい。"
+                       "ピンが引っかからずにすっと入る一番小さい穴を選ぶ。", gitems))
     (out / "manifest.json").write_text(json.dumps([p.__dict__ for p in pieces], ensure_ascii=False, indent=1), encoding="utf-8")
     write_page(groups, out / "index.html", "ねじ試し刷りの結果")
     return pieces

@@ -26,6 +26,7 @@ class Design:
     R_out: float | None = None  # ナットの外半径(既定は呼び径の 0.9 倍 = 外径 1.8d)
     bolt_flipped: bool = False
     nut_flipped: bool = False
+    split: float = 0.5  # 隙間のうち雄に持たせる割合(0 = 雄は呼び寸法のままで雌だけ広げる。試し刷りの形)
 
     @property
     def d(self) -> float:
@@ -33,13 +34,11 @@ class Design:
 
     def parts(self, c: float | None = None):
         c = self.clearance if c is None else c
+        cb, cn = self.split * c, (1 - self.split) * c
         if self.mode == "radial":
-            b = self.bolt.shifted(-c / 2)
-            n = self.bolt.shifted(+c / 2)
-        else:
-            b = self.bolt.offset_normal(-c / 2)
-            n = self.bolt.offset_normal(+c / 2)
-        return b, n
+            return self.bolt.shifted(-cb), self.bolt.shifted(+cn)
+        b = self.bolt.offset_normal(-cb) if cb > 0 else self.bolt
+        return b, self.bolt.offset_normal(+cn)
 
 
 @dataclass
