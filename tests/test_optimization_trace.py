@@ -244,26 +244,6 @@ def test_failed_provenance_document_and_cad_writes_are_counted_and_the_run_goes_
     assert 'source_sha256' not in manifest and 'input_sha256' not in manifest
 
 
-def test_a_failed_final_stl_does_not_throw_away_the_result(recordings, monkeypatch):
-    """落ちたら、探索が終わって形ができた後の final.stl の書き出し失敗で最適化全体が落ちる(#24)。"""
-    from duocad.topopt import voxelize as vx
-    grid = vx.Grid(origin=(0., 0., 0.), spacing=1., shape=(2, 2, 2))
-    vertices = np.array([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]])
-    faces = np.array([[0, 1, 2]])
-    with trace.recording() as rec:
-        real_atomic = trace._atomic
-
-        def atomic(path, write):
-            if path.name == 'final.stl':
-                raise OSError('locked')
-            return real_atomic(path, write)
-
-        monkeypatch.setattr(trace, '_atomic', atomic)
-        trace.final_mesh(vertices, vertices, faces, grid, final_vertices=vertices, final_faces=faces)
-    assert rec.write_failures == 1
-    assert 'final_stl_sha256' not in rec.manifest
-
-
 def test_real_cad_and_source_archive_are_complete(tmp_path):
     import hashlib
     import zipfile

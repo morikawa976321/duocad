@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import functools
 import json
 import threading
 import time
@@ -60,7 +61,7 @@ def serving(script, *, status: int = 200, content_type: str = "text/event-stream
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=functools.partial(server.serve_forever, poll_interval=0.01), daemon=True)
     thread.start()
     try:
         server.received, server.first_sent, server.gone = received, first_sent, gone

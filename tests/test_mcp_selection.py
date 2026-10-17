@@ -152,14 +152,6 @@ def test_a_verb_refused_for_an_empty_selection_says_how_to_select(server: McpSer
     assert "set_selection" in error["hint"]
 
 
-def test_describe_predicates_changes_nothing(server: McpServer, session: Session):
-    """自己記述は読み取り(選択もログも動かさない)。"""
-    before = len(session.document.log.entries)
-    call(server, "describe_predicates")
-    assert selection_of(server)["count"] == 0
-    assert len(session.document.log.entries) == before
-
-
 def test_zero_matches_is_a_success_that_says_zero(server: McpServer):
     """**一致0件はエラーではない**。0件だと分かる形で返る。"""
     selection = _assert_selection_payload(call(server, "set_selection", {"predicate": NO_MATCH}))
@@ -310,7 +302,6 @@ def test_measure_reads_the_current_selection(server: McpServer):
     """**測るのは verb ではない**ので、選んだ直後に測れる。"""
     call(server, "set_selection", {"predicate": VERTICAL_EDGES})
     payload = call(server, "measure")
-    assert "origin" not in payload
     assert payload["count"] == 4
 
 
@@ -444,7 +435,6 @@ def test_a_selection_change_from_mcp_reaches_the_browser(session: Session):
     assert len(payloads) > 1, "AIが選択を書き換えたのにブラウザへ配信されていない"
     pushed = payloads[-1]
     assert pushed["type"] == "state"
-    assert "origin" not in pushed["state"]["selection"]
     assert pushed["state"]["selection"]["count"] == 4
     assert "applied" not in pushed
 

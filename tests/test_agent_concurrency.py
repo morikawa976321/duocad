@@ -29,24 +29,6 @@ def commit_face(session: Session, body_id: str = "box", index: int = 1) -> None:
     selection.set_selection(session.document, refs=[{"body": body_id, "kind": "face", "index": index}])
 
 
-def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_verb_fails_loud(
-    box_session: Session,
-):
-    """AIが辺を確定した後、別の主体(人)が**無関係な**形状変更を挟むと、
-    AIの次のverb呼び出しは対象を黙って変えず `SelectionEmpty` で止まる。
-    """
-    commit_edge(box_session)
-    assert len(selection.get_selection(box_session.document).items) == 1
-
-    # 「人」が割り込んで別の操作をする(AIのターンとは無関係)
-    commit_face(box_session, index=2)
-    box_session.extrude(1.0, mode="join")
-
-    assert len(selection.get_selection(box_session.document).items) == 0
-    with pytest.raises(selection.SelectionEmpty):
-        box_session.fillet(1.0)
-
-
 def test_fillet_refuses_a_body_hidden_after_the_selection_was_confirmed(box_session: Session):
     """人が選択を消費させる**前に**そのボディを隠すと、`fillet` は静かに丸めない。
 

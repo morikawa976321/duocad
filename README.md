@@ -372,8 +372,8 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](docs/WEB_PITFALLS.md)�
 - **`Session` に触るのはイベントループのスレッドだけ** —— `ToolsOnLoop`(`duocad/net/tools_on_loop.py`)が `.call()` 等をイベントループへ投げ返す
 - 中断は `ai_cancel`。反映は次のチェックポイントまで遅れうる。「どこまでやったか」は `ai_result.tool_calls`
 
-契約は `tests/test_agent_*.py`（偽プロバイダで決定的に検査）。実機は `tests/test_agent_llama_server.py`（8080に居なければskip）と
-`tests/test_agent_claude_api.py`（課金されるので `DUOCAD_LIVE_CLAUDE=1` のときだけ）。
+契約は `tests/test_agent_*.py`（偽プロバイダで決定的に検査）。実機のClaudeは `tests/test_agent_claude_api.py`（課金されるので
+`DUOCAD_LIVE_CLAUDE=1` のときだけ）、llama-server は `tools/llm_probe.py` と `tools/llm_tasks.py` で測る。
 
 ---
 

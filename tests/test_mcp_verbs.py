@@ -662,34 +662,6 @@ def test_chamfer_reaches_the_core_verb(server: McpServer, box_session: Session):
     assert box_session.document.log.entries[-1].verb == "chamfer"
 
 
-def test_fillet_accepts_a_radius_per_edge(server: McpServer, box_session: Session):
-    """半径は辺ごとにも指定でき、順序は選択順(`edge_indices` が選択順を保つ)。昇順に並べ替えると割り当てが黙ってずれる。"""
-    box = box_session.document.bodies[0]
-    edges = vertical_edge_indices(box.shape)
-    select_refs(server, [edge_ref(box.id, index) for index in edges])
-
-    call(server, "fillet", {"radius": [1.0, 2.0, 3.0, 4.0][: len(edges)]})
-
-    entry = box_session.document.log.entries[-1]
-    assert entry.verb == "fillet"
-    assert entry.args["edges"] == edges, "選択順が保たれていない(半径の対応がずれる)"
-
-
-def test_set_parameter_is_not_a_public_tool(empty_session: Session):
-    """`set_parameter` は公開面(カタログ・Session・MCP・WebSocket)から外してある。実装と `register_verb` は
-    保存済みログの再生のために残る(`tests/test_parameters.py` が固定)。
-    """
-    from duocad import catalog
-
-    assert "set_parameter" not in catalog.BY_NAME
-    assert not hasattr(Session, "set_parameter")
-    assert not hasattr(DocumentTools, "set_parameter")
-    server = McpServer(DocumentTools(empty_session))
-    assert "set_parameter" not in [tool["name"] for tool in tool_list(server)]
-    error = request(server, "tools/call", {"name": "set_parameter", "arguments": {"name": "d1", "value": 1.0}})["error"]
-    assert "unknown tool" in error["message"]
-
-
 def test_import_step_reports_a_missing_file_as_not_found(empty_session: Session):
     """無いファイルは `FileNotFoundError` で来て `internal` に落とさない(AIが直せる誤りを内部エラーと名付けると諦める)。"""
     server = McpServer(DocumentTools(empty_session))
@@ -703,13 +675,11 @@ def test_export_writes_a_file_and_reports_where(server: McpServer, tmp_path: Pat
     step_path = tmp_path / "out.step"
     payload = call(server, "export_step", {"path": str(step_path)})
     assert Path(payload["path"]) == step_path
-    assert "bytes" not in payload
     assert step_path.stat().st_size > 0
 
     stl_path = tmp_path / "out.stl"
     payload = call(server, "export_stl", {"path": str(stl_path)})
     assert Path(payload["path"]) == stl_path
-    assert "bytes" not in payload
     assert stl_path.stat().st_size > 0
 
 

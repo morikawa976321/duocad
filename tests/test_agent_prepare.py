@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import functools
 import json
 import threading
 from contextlib import contextmanager
@@ -64,7 +65,7 @@ def llama_server(*, restore_ok: bool, read: int, slot_endpoints: bool = True):
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=functools.partial(server.serve_forever, poll_interval=0.01), daemon=True).start()
     try:
         server.calls, server.bodies = calls, bodies
         yield server

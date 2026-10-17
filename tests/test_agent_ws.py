@@ -9,7 +9,13 @@ import time
 from duocad.mcp_server import DocumentTools
 from duocad.server import Server, Session
 from duocad.net.ws import AI_LIMITS
-from duocad.agent.providers import ANTHROPIC_API_KEY_ENV, ANTHROPIC_MAX_TOKENS, load_api_key, save_api_key
+from duocad.agent.providers import (
+    ANTHROPIC_API_KEY_ENV,
+    ANTHROPIC_MAX_TOKENS,
+    DEFAULT_ANTHROPIC_MODEL,
+    load_api_key,
+    save_api_key,
+)
 from agent_support import FAKE_KEY, RecordedProvider, spoke, tool_use
 from session_support import FakeConnection
 
@@ -371,7 +377,7 @@ def test_with_a_key_the_server_starts_on_claude_and_shows_the_model_but_not_the_
 
     status = asyncio.run(scenario())
     assert status["provider"] == "anthropic"
-    assert status["model"] == "claude-haiku-5-5"
+    assert status["model"] == DEFAULT_ANTHROPIC_MODEL
     assert status["base_url"] is None
     assert status["api_key_configured"] is True
     assert FAKE_KEY not in json.dumps(status)
@@ -464,7 +470,7 @@ def test_saving_a_key_does_not_carry_the_local_model_name_over_to_claude(box_ses
 
     status = asyncio.run(scenario())
     assert status["provider"] == "anthropic"
-    assert status["model"] == "claude-haiku-5-5"
+    assert status["model"] == DEFAULT_ANTHROPIC_MODEL
 
 
 def test_a_broken_key_is_refused_without_echoing_it(box_session: Session):

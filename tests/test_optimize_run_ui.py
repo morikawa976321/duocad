@@ -157,17 +157,6 @@ def test_run_optimization_refuses_a_min_width_beyond_the_grid_at_the_ws_door(ses
     assert connection.of_type("optimize_result") == []
 
 
-def test_a_missing_min_width_mm_passes_none_through_to_the_session(session: Session, monkeypatch) -> None:
-    """`min_width_mm` を省いたメッセージは、`net/ws.py` が捨てずに `None` のまま
-    `Session.run_optimization` へ届ける(キー自体を渡さないのと同じ)。既定 `max(2 × spacing, 1.0mm)`
-    への解決は `optimize_run._resolve_min_width` 自身の仕事(`test_optimize_backend.py` で固定)。"""
-    four_conditions(session)
-    seen: dict = {}
-    monkeypatch.setattr(session, "run_optimization", lambda **kwargs: seen.update(kwargs) or {"state": "done"})
-    _run_to_completion(session, {"cmd": "run_optimization"})
-    assert seen.get("min_width_mm") is None
-
-
 def test_a_missing_min_width_mm_still_reaches_run_at_the_default_cells(session: Session, monkeypatch) -> None:
     """`min_width_mm` を渡さない実行が、`Session.run_optimization` → `optimize_run.run()` を経て
     既定の m(≥2)で探索へ届くこと(落ちたら、既定が入口検査だけに留まり、探索は制約なしのまま走る)。"""

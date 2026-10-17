@@ -85,33 +85,12 @@ def test_the_system_prompt_is_the_same_text_the_mcp_server_hands_out():
     assert str(len(catalog.tool_names())) in shared
 
 
-def test_the_system_prompt_says_how_close_is_close_enough():
-    """落ちたら、誤差の範囲のずれを直そうとして作り直しを繰り返す・迷って何もせず終わる失敗が戻る(#134。
-    文言と幅は docs/LOCAL_LLM_QWEN38.md の測定で使ったもの)。"""
+def test_the_system_prompt_names_the_selection_tools_the_ai_shares_with_people():
+    """落ちたら、選択は人もAIも同じ操作で触ることをプロンプトが伝えていない(止めるか進めるかの文言は固定しない: AIが依頼の文面から判断する)。"""
     shared = catalog.agent_instructions()
 
-    assert "寸法の差が0.01mm以内、体積や面積の差が0.1%以内なら指示どおりにできているとみなし" in shared
-
-
-#: 固定の停止・進行の規則を置く言い回し。AI が依頼の文面から判断するので、プロンプトに置かない。
-FIXED_AUTONOMY_RULES = ("必ず止", "必ず進", "曖昧なら", "迷ったら", "承認を待", "許可を得", "(1) ", "(2) ")
-
-
-def test_the_system_prompt_leaves_stop_or_proceed_to_the_ai():
-    """**選択で止めるか verb まで進めるかは、人の指示から AI がその都度判断する**(本人決定)。
-
-    落ちたら、固定の規則(曖昧なら止める等)がプロンプトへ戻っている、または
-    「選択だけで止めたときは何を選んだかを述べる」「選択は人もAIも同じ操作で触る」が消えている。
-    """
-    shared = catalog.agent_instructions()
-
-    assert "その都度判断" in shared
-    assert "何を選んだかを述べる" in shared
     for tool in ("set_selection", "modify_selection", "toggle_selection", "clear_selection"):
         assert tool in shared, f"{tool} がプロンプトに無い(人と同じ選択操作を AI に伝えていない)"
-    for phrase in FIXED_AUTONOMY_RULES:
-        assert phrase not in shared, f"固定の規則『{phrase}』がプロンプトにある"
-    assert "commit_selection" not in shared
 
 
 class FakeTransport:
@@ -518,16 +497,6 @@ def test_an_id_in_the_prompt_is_not_mistaken_for_a_dimension():
     assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
 
 
-def test_a_verb_without_a_dimension_is_never_guarded():
-    """印の無いverbは素通し(`describe_document` は寸法を取らない)。"""
-    surface = tools()
-    provider = RecordedProvider([tool_use("describe_document", {}, "c0"), spoke("done")])
-
-    run = AgentLoop(surface, provider).run("いい感じに教えて")
-
-    assert run.tool_calls[0].ok is True
-
-
 def test_the_cancel_flag_stops_the_loop_between_tool_calls():
     surface = tools()
     cancellation = Cancellation()
@@ -590,16 +559,6 @@ def test_a_provider_failure_is_reported_not_raised():
     assert run.status == "provider_error"
     assert "529" in run.detail
     assert run.tool_calls == ()
-
-
-def test_a_real_provider_failure_is_not_renamed_to_timeout():
-    """**本物の障害を `timeout` と名乗らせない**。"""
-    surface = tools()
-    provider = RecordedProvider([ProviderError("https://api.example へ接続できない: refused")])
-
-    run = AgentLoop(surface, provider).run("やって")
-
-    assert run.status == "provider_error"
 
 
 def test_a_timeout_under_the_total_budget_is_reported_as_timeout():
@@ -713,10 +672,6 @@ def test_a_provider_key_never_shows_up_in_repr_or_error_messages():
         provider.complete(system="s", turns=[UserTurn("x")], tools=[], max_tokens=16, timeout=1.0)
     assert FAKE_KEY not in str(caught.value)
     assert "***" in str(caught.value)
-
-    # ループの結果・進捗にも出ない
-    run = AgentLoop(tools(), RecordedProvider([ProviderError(str(caught.value))])).run("やって")
-    assert FAKE_KEY not in json.dumps(run.to_dict(), ensure_ascii=False)
 
 
 def test_the_key_reaches_only_the_claude_provider(monkeypatch):

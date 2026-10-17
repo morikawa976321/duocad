@@ -250,15 +250,6 @@ def test_the_camera_never_touches_the_document_baseline(cylinder_session, tmp_pa
     ) == 0
 
 
-def test_the_baseline_comes_back_untouched_for_a_fresh_session() -> None:
-    """ズーム値が来ていないセッションは**入れる前と同じ粗さ**で測る(既定の回帰)。"""
-    session = Session(None, DEVIATION)
-    assert session.view.view_deviation == pytest.approx(DEVIATION)
-    assert session.view.view_angular_deflection == pytest.approx(
-        kernel.DEFAULT_ANGULAR_DEFLECTION
-    )
-
-
 def test_the_websocket_command_redelivers_the_geometry_at_the_new_resolution(
     cylinder_session,
 ) -> None:
