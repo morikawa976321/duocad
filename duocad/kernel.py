@@ -1129,6 +1129,17 @@ def edge_count(shape: "TopoDS_Shape") -> int:
     return _edge_map(shape).Extent()
 
 
+def edge_length(edge: Any) -> float:
+    """辺の長さ[mm]。辺の長さを出すところは全部ここを通す(画面の辺・`measure`・述語の `length_lt` / `length_gt`)。
+
+    外部の罠: `GCPnts_AbscissaPoint.Length_s` の既定の許容差も build123d の `Edge.length`
+    (`BRepGProp.LinearProperties_s`)も、楕円・B-spline の辺で粗い(2026-10-17 実測: 楕円の柱の辺で
+    直径 20×10 は +0.13%、直径 40×2 は +1.74%。ベジエの辺は 1e-5。円・直線は厳密)。許容差 1e-9 なら数値積分と
+    1e-11 まで一致し、時間は細い楕円の辺1本で 0.04ms(ベジエ 0.004ms)。
+    """
+    return float(GCPnts_AbscissaPoint.Length_s(BRepAdaptor_Curve(edge), 1.0e-9))
+
+
 def classify_edge(edge: Any) -> str:
     """1つの辺を EDGE_KINDS のいずれかへ分類する。
 
@@ -1214,7 +1225,7 @@ def tessellate_edges(
             {
                 "index": index,
                 "kind": classify_edge(edge),
-                "length": float(GCPnts_AbscissaPoint.Length_s(adaptor)),
+                "length": edge_length(edge),
                 "closed": bool(edge.Closed()),
                 "points": points,
             }
