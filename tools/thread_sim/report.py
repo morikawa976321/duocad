@@ -125,12 +125,50 @@ def table_window(rows, out=sys.stdout, key=lambda r: (r["D"], r.get("pitch_ratio
                       f"{_wrow(r, 0)} | {_wrow(r, 1)} |\n")
 
 
+def _lower(r, k=0):
+    rows = r.get("rows") or []
+    if len(rows) <= k or not rows[k].get("F"):
+        return None
+    return fmin(rows[k])[0]
+
+
+def table_pareto(rows, out=sys.stdout, w_min=0.2):
+    """径ごとに、(誤差を吸収できる幅 W, 窓の中心での保持の下限) の両方でほかに負けない設計(パレート)と、
+    W ≥ w_min の中で保持の下限が最大の設計。"""
+    by = defaultdict(list)
+    for r in rows:
+        if r.get("W") is not None and _lower(r) is not None:
+            by[r["D"]].append(r)
+    for D in sorted(by):
+        rs = sorted(by[D], key=lambda r: -r["W"])
+        front, best_f = [], -1.0
+        for r in rs:  # W の大きい順に、それまでの最大より強いものだけ残す
+            f = _lower(r)
+            if f > best_f:
+                front.append(r)
+                best_f = f
+        ok = [r for r in rs if r["W"] >= w_min]
+        pick = max(ok, key=_lower) if ok else None
+        out.write(f"\n### D{D}(パレート {len(front)} 件 / 全 {len(rs)} 件)\n\n")
+        out.write("| 設計 | P | 深さ | β | c_geo | 幅 W | 保持の下限〜上限 N | 締め付け N | 緩い端の保持 N | 乗り越え |\n|---|---|---|---|---|---|---|---|---|---|\n")
+        for r in front:
+            x = r["rows"][0]
+            mark = " **(W≥%.2f で最強)**" % w_min if r is pick else ""
+            out.write(f"| {r['name']}{mark} | {r.get('P', '')} | {r.get('depth', ''):.3g} | {r.get('b_lo', '')} | {r['c_geo']:.3f} | {r['W']:.3f} | "
+                      f"{_lower(r):.0f}〜{x['F'].get('core_slice', float('nan')):.0f} | {x['F'].get('tighten', float('nan')):.0f} | "
+                      f"{(_lower(r, 1) or float('nan')):.0f} | {x.get('jump_ratio', float('nan')):.2f} |\n")
+        if pick is not None and pick not in front:
+            out.write(f"\nW≥{w_min} で最強: {pick['name']}(W {pick['W']:.3f}、保持の下限 {_lower(pick):.0f} N)\n")
+
+
 if __name__ == "__main__":
     st = sys.argv[1]
     rows = load(st)
     if st == "study1":
         table_study1(rows)
-    elif st in ("study4", "study3"):
+    elif st == "study4":
         table_window(rows)
+    elif st == "study3":
+        table_pareto(rows)
     else:
         table_study2(rows)
