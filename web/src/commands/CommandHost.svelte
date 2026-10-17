@@ -42,6 +42,7 @@
     argSatisfied,
     buildArgs,
     choiceSends,
+    syncedChoice,
     commitsGhost,
     findCommand,
     firstMissingArg,
@@ -739,23 +740,14 @@
         }
         numberText = { ...numberText, [spec.name]: text }
       } else if (spec.kind === 'choice') {
-        if (value === undefined) {
-          // サーバの値にならない選択肢(鏡映面の「面を選ぶ」。`sends: null`)は、サーバに無いことが「選んでいない」を意味しない。
-          const implied = spec.options.find(
-            (candidate) => candidate.impliedBy !== undefined && remote[candidate.impliedBy] !== undefined,
-          )
-          const current = spec.options.find((candidate) => candidate.value === choices[spec.name])
-          if (implied !== undefined) {
-            choices = { ...choices, [spec.name]: implied.value }
-          } else if (current === undefined || choiceSends(current) !== null) {
-            const { [spec.name]: _removed, ...rest } = choices
-            choices = rest
-          }
+        const synced = syncedChoice(spec, remote, lastPublished, choices[spec.name])
+        if ('unmapped' in synced) {
+          unmapped.add(spec.name)
+        } else if (synced.value === undefined) {
+          const { [spec.name]: _removed, ...rest } = choices
+          choices = rest
         } else {
-          // サーバの値から選択肢を逆引きする(`copy: true` → 'copy'、`direction: [0,0,-1]` → 'down')。対応が無ければ触らず、消しもしない。
-          const option = spec.options.find((candidate) => JSON.stringify(choiceSends(candidate)) === JSON.stringify(value))
-          if (option !== undefined) choices = { ...choices, [spec.name]: option.value }
-          else unmapped.add(spec.name)
+          choices = { ...choices, [spec.name]: synced.value }
         }
       } else if (spec.kind === 'text') {
         const text = value === undefined ? '' : String(value)

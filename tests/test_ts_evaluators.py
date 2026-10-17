@@ -16,6 +16,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 @pytest.mark.parametrize(
     "evaluator",
     [
+        "eval_choice_sync.mjs",
         "eval_expression.mjs",
         "eval_grid_scale.mjs",
         "eval_min_width.mjs",
