@@ -323,7 +323,7 @@ class ContactSystem:
     memory_mb bounds dense contact work, not the separate sparse LU factors.
     """
     def __init__(self, bodies, pairs, search_distance, *, allow_penetration=False,
-                 max_candidates=2400, memory_mb=768, max_penetration=None):
+                 max_candidates=2400, memory_mb=768, max_penetration=None, two_pass=True):
         self.bodies = list(bodies)
         if not np.isfinite(search_distance) or search_distance <= 0:
             raise ValueError("search_distance must be positive")
@@ -332,8 +332,10 @@ class ContactSystem:
         vals = [[] for _ in bodies]
         gaps, points, normals, records = [], [], [], []
         for pair in pairs:
-            for si, se, mi, me in ((pair.a, pair.edges_a, pair.b, pair.edges_b),
-                                    (pair.b, pair.edges_b, pair.a, pair.edges_a)):
+            passes = ((pair.a, pair.edges_a, pair.b, pair.edges_b),
+                      (pair.b, pair.edges_b, pair.a, pair.edges_a))
+            # two_pass=False は a の節点 → b の辺の片方向だけ(両方向の制約がほぼ重複して LCP が収束しないときの逃げ道)
+            for si, se, mi, me in (passes if two_pass else passes[:1]):
                 if si == mi:
                     raise ValueError("Self-contact is not supported")
                 sm, mm = bodies[si].mesh, bodies[mi].mesh
