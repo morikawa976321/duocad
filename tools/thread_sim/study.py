@@ -199,25 +199,27 @@ def study1():
 
 
 def study2():
-    """感度: 垂れ・ビードの丸み(印刷の模擬)と、材料・臨界距離(強度)。代表の設計だけ。"""
+    """感度(窓の評価): 垂れ・ビードの丸み(W に効く)と、材料・充填・臨界距離(F に効く)。代表の設計だけ。"""
     base = []
     for D in (4, 6):
-        P = round(0.4 * D / 0.05) * 0.05
+        P = round(0.25 * D / 0.05) * 0.05
         dep = round(0.4 * P, 4)
-        b = dict(D=D, L_nut=float(D), R_out=0.9 * D, P=P, depth=dep, pitch_ratio=0.4)
-        base += [dict(b, name=f"台形30 D{D} normal", family="trap", b_lo=30, b_up=30, mode="normal"),
-                 dict(b, name=f"台形45 D{D} radial", family="trap", b_lo=45, b_up=45, mode="radial"),
-                 dict(b, name=f"台形45 D{D} normal", family="trap", b_lo=45, b_up=45, mode="normal"),
-                 dict(b, name=f"半円 D{D} normal", family="coil", rho=dep, mode="normal"),
-                 dict(b, name=f"バットレス5/45 D{D} normal", family="trap", b_lo=5, b_up=45, mode="normal", bolt_flipped=True)]
+        b = dict(D=D, L_nut=float(D), R_out=0.9 * D, P=P, depth=dep, pitch_ratio=0.25)
+        for beta in (30, 40, 45, 50):
+            base.append(dict(b, name=f"台形{beta} D{D} radial", family="trap", b_lo=beta, b_up=beta, mode="radial"))
+        base += [dict(b, name=f"半円 D{D} normal", family="coil", rho=dep, mode="normal"),
+                 dict(b, name=f"バットレス5/45 D{D} radial", family="trap", b_lo=5, b_up=45, mode="radial", bolt_flipped=True)]
         base.append(dict(D=D, L_nut=float(D), R_out=0.9 * D, name=f"ISO M{D} radial", family="iso", P=ISO_COARSE[D], mode="radial"))
     variants = [("基準", {}, {}),
                 ("垂れ無し", dict(sag_amp=0.0), {}), ("垂れ半分", dict(sag_amp=0.5), {}), ("垂れ2倍", dict(sag_amp=2.0), {}),
                 ("垂れ始めφ0.3", dict(sag_phi_ok=0.3), {}), ("垂れ始めφ0.7", dict(sag_phi_ok=0.7), {}),
                 ("ビード角立ち", dict(bead_round=0.0), {}), ("ビード丸み半分", dict(bead_round=0.5), {}),
                 ("層間弱 Zt15 S12", {}, dict(Z_t=15.0, S_il=12.0)), ("層間強 Zt35 S25", {}, dict(Z_t=35.0, S_il=25.0)),
-                ("せん断だけ弱 S10", {}, dict(S_il=10.0)), ("L0.25", {}, dict(L=0.25)), ("L1.0", {}, dict(L=1.0))]
-    return [(dict(s, name=f"{s['name']} | {vn}", variant=vn), pk, mk) for s in base for vn, pk, mk in variants], [0.1], None
+                ("充填ほぼ無し", {}, dict(infill_E=0.02, infill_Z=0.0)), ("充填強め", {}, dict(infill_E=0.15, infill_Z=0.1)),
+                ("中実とみなす", {}, dict(walls=False)), ("摩擦0.12", {}, dict(mu=0.12)), ("摩擦0.38", {}, dict(mu=0.38)),
+                ("L0.25", {}, dict(L=0.25)), ("L1.0", {}, dict(L=1.0))]
+    items = [(dict(s, name=f"{s['name']} | {vn}", variant=vn), pk, mk) for s in base for vn, pk, mk in variants]
+    return items, None, dict(e_req=0.1, runner="window"), None
 
 
 def flats_trapezoid(D, beta, depth, crest, root):
@@ -227,21 +229,25 @@ def flats_trapezoid(D, beta, depth, crest, root):
 
 
 def study3():
-    """改良の探索(格子): 対称台形の角・深さ・山頂/谷の平坦。隙間は半径方向(THREAD.md の定義)。
-    誤差 e は 0.05/0.15/0.25 で評価し、目的は e=0.15 での破断荷重(掛かり代 ≥ 0.1 を条件)。"""
+    """改良の探索(格子、窓の評価): 対称台形の角 β・ピッチ P・深さ・平坦の配分(山頂の取り分)。隙間は半径方向。
+    目的は (誤差を吸収できる幅 W, 窓の中心での強さ) のパレート。"""
     specs = []
     for D in (3, 4, 5, 6, 8):
-        base = dict(L_nut=float(D), R_out=0.9 * D, mode="radial")
-        for beta in (40, 45, 50):
-            for depth in (0.25, 0.35, 0.5, 0.7):
-                if depth > 0.25 * D:
-                    continue
-                for crest in (0.2, 0.4):
-                    for root in (0.2, 0.4):
-                        s = dict(base, **flats_trapezoid(D, beta, depth, crest, root))
-                        s["name"] = f"台形{beta} D{D} h{depth} 山{crest} 谷{root}"
+        base = dict(L_nut=float(D), R_out=0.9 * D, mode="radial", family="trap", D=D)
+        for pr_ in (0.2, 0.3, 0.4, 0.5):
+            P = round(pr_ * D / 0.05) * 0.05
+            for beta in (40, 45, 50):
+                for depth in (0.2, 0.3, 0.45, 0.65, 0.9):
+                    if depth > 0.25 * D:
+                        continue
+                    flats = P - 2 * depth * math.tan(math.radians(beta))
+                    if flats < 0.2:
+                        continue
+                    for share in (0.35, 0.65):
+                        s = dict(base, P=P, depth=depth, b_lo=beta, b_up=beta, crest_share=share, pitch_ratio=pr_,
+                                 name=f"台形{beta} D{D} P{P:g} h{depth} 山{share}")
                         specs.append(s)
-    return specs, {}, [0.05, 0.15, 0.25], {}
+    return specs, {}, dict(e_req=0.1, runner="window"), {}
 
 
 STUDIES = {"study1": study1, "study2": study2, "study3": study3, "study4": study4}
