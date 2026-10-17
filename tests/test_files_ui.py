@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -268,23 +270,26 @@ def test_a_drive_relative_escape_never_touches_the_drive(session: Session) -> No
 def test_resolved_path_must_stay_inside_models_dir_even_past_a_symlink(
     session: Session, tmp_path: Path
 ) -> None:
-    """判定は解決後のパスで行う: `models_dir` 内の既存シンボリックリンクが外を指す場合を塞ぐ(`_resolve_document_name` の最終判定)。
-    Windowsはシンボリックリンクに開発者モードか管理者権限が要るので、無ければ明示的にskipする。
+    """判定は解決後のパスで行う: `models_dir` 内の既存リンクが外を指す場合を塞ぐ(`_resolve_document_name` の最終判定)。
+    リンク先は**無い**ものにする(あると `save_document` の「既にある」拒否が先に断り、最終判定が効いているか見えない)。
+    Windowsのシンボリックリンクは権限が要るので、権限の要らないジャンクションを張ってから先を消す。
     """
     _box(session)
     session.models_dir.mkdir(parents=True, exist_ok=True)
     outside = tmp_path / "outside"
-    outside.mkdir()
     link = session.models_dir / "escape.json"
-    try:
-        link.symlink_to(outside / "target.json")
-    except OSError as error:
-        pytest.skip(f"このマシンではシンボリックリンクを作れない: {error}")
+    if os.name == "nt":
+        outside.mkdir()
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True, capture_output=True)
+        outside.rmdir()
+    else:
+        link.symlink_to(outside)
 
     with pytest.raises(ValueError):
         session.save_document("escape.json")
 
-    assert not (outside / "target.json").exists(), "リンクの先(models_dirの外)に書けてしまった"
+    assert not outside.exists(), "リンクの先(models_dirの外)に書けてしまった"
+
 
 def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> None:
     """落ちたら: `set_parameter` を含むログが開けない(再生前にログを文書へ束ねていないと `parameters.rebuild` が拒否する)。"""
