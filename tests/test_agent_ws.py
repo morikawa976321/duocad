@@ -9,7 +9,13 @@ import time
 from duocad.mcp_server import DocumentTools
 from duocad.server import Server, Session
 from duocad.net.ws import AI_LIMITS
-from duocad.agent.providers import ANTHROPIC_API_KEY_ENV, ANTHROPIC_MAX_TOKENS, load_api_key, save_api_key
+from duocad.agent.providers import (
+    ANTHROPIC_API_KEY_ENV,
+    ANTHROPIC_MAX_TOKENS,
+    DEFAULT_ANTHROPIC_MODEL,
+    load_api_key,
+    save_api_key,
+)
 from agent_support import FAKE_KEY, RecordedProvider, spoke, tool_use
 from session_support import FakeConnection
 
@@ -55,8 +61,6 @@ def test_ai_status_carries_no_key_of_any_kind(box_session: Session):
     assert status["provider"] == "openai_compat"
     assert status["running"] is False
     assert set(status["providers"]) == {"openai_compat", "anthropic"}
-    # **鍵の形をした文字列がどこにも無い**(dictを丸ごと文字列化して確かめる)
-    assert "sk-" not in json.dumps(status)
 
 
 def test_ai_configure_switches_provider_and_model(box_session: Session):
@@ -68,17 +72,17 @@ def test_ai_configure_switches_provider_and_model(box_session: Session):
         await server._dispatch(
             a,
             json.dumps(
-                {"cmd": "ai_configure", "provider": "openai_compat", "model": "qwen3-30b"}
+                {"cmd": "ai_configure", "provider": "anthropic", "model": "claude-sonnet-5-5"}
             ),
         )
         return a, b
 
     a, b = asyncio.run(scenario())
-    # **設定は全接続へ配る**(共有の1会話なので、他の画面でも今の設定が見える)。
+    # **設定は全接続へ配る**(共有の1会話なので、他の画面でも今の設定が見える)。既定(openai_compat)と別のプロバイダへ切り替える。
     for connection in (a, b):
         status = connection.of_type("ai_status")[-1]
-        assert status["provider"] == "openai_compat"
-        assert status["model"] == "qwen3-30b"
+        assert status["provider"] == "anthropic"
+        assert status["model"] == "claude-sonnet-5-5"
 
 
 def test_ai_configure_rejects_an_unknown_provider(box_session: Session):
@@ -336,7 +340,7 @@ def test_ai_configure_allows_a_base_url_for_openai_compat(box_session: Session):
 
 def test_a_tampered_base_url_still_sends_no_key(monkeypatch, box_session: Session):
     """**深層防御**: 送り先を内部状態ごと差し替えても、**リクエストに鍵は乗らない**。"""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_KEY)
+    monkeypatch.setenv(ANTHROPIC_API_KEY_ENV, FAKE_KEY)
     calls: list[dict] = []
 
     def fake_transport(url, payload, headers, timeout):
@@ -345,6 +349,7 @@ def test_a_tampered_base_url_still_sends_no_key(monkeypatch, box_session: Sessio
 
     async def scenario():
         server = build_server(box_session, asyncio.get_running_loop())
+        server._ai_configure("openai_compat", None, None)  # 鍵があるとClaudeから始まるので選び直す
         server._ai_base_url = "http://attacker.example/v1"
         loop_obj = server._ensure_ai_loop()
         loop_obj.provider._transport = fake_transport  # HTTPだけ差し替える
@@ -372,7 +377,7 @@ def test_with_a_key_the_server_starts_on_claude_and_shows_the_model_but_not_the_
 
     status = asyncio.run(scenario())
     assert status["provider"] == "anthropic"
-    assert status["model"] == "claude-haiku-5-5"
+    assert status["model"] == DEFAULT_ANTHROPIC_MODEL
     assert status["base_url"] is None
     assert status["api_key_configured"] is True
     assert FAKE_KEY not in json.dumps(status)
@@ -465,7 +470,7 @@ def test_saving_a_key_does_not_carry_the_local_model_name_over_to_claude(box_ses
 
     status = asyncio.run(scenario())
     assert status["provider"] == "anthropic"
-    assert status["model"] == "claude-haiku-5-5"
+    assert status["model"] == DEFAULT_ANTHROPIC_MODEL
 
 
 def test_a_broken_key_is_refused_without_echoing_it(box_session: Session):

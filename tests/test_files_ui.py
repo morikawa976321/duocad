@@ -5,14 +5,16 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from duocad import io_step, kernel, query
+from duocad.oplog import OpLog
 from duocad.server import Session
 from duocad.session import NoDocument
-from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, edit_parameter, select as _select, send_one
+from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, edit_parameter, send_one
 
 DEVIATION = 0.2
 
@@ -200,8 +202,6 @@ def test_rename_on_an_untitled_empty_document_creates_the_file(session: Session)
 
 def test_rename_is_a_file_envelope_followed_by_a_state_push(session: Session) -> None:
     """`save_document` と同じ形: `file` の封筒 + 状態の配り直し。全接続へ届く。"""
-    from duocad import catalog
-
     _box(session)
 
     async def script(send):
@@ -213,7 +213,6 @@ def test_rename_is_a_file_envelope_followed_by_a_state_push(session: Session) ->
     assert last["state"]["saved"] is True
     assert clients[0].last("file")["action"] == "rename"
     assert clients[1].last("state")["state"]["current_name"] == "renamed.json"
-    assert "rename_document" not in catalog.tool_names()
 
 
 @pytest.mark.parametrize(
@@ -268,23 +267,28 @@ def test_a_drive_relative_escape_never_touches_the_drive(session: Session) -> No
 def test_resolved_path_must_stay_inside_models_dir_even_past_a_symlink(
     session: Session, tmp_path: Path
 ) -> None:
-    """判定は解決後のパスで行う: `models_dir` 内の既存シンボリックリンクが外を指す場合を塞ぐ(`_resolve_document_name` の最終判定)。
-    Windowsはシンボリックリンクに開発者モードか管理者権限が要るので、無ければ明示的にskipする。
+    """判定は解決後のパスで行う: `models_dir` 内の既存リンクが外を指す場合を塞ぐ(`_resolve_document_name` の最終判定)。
+    リンク先は**無い**ものにする(あると `save_document` の「既にある」拒否が先に断り、最終判定が効いているか見えない)。
+    Windowsのシンボリックリンクは権限が要るので、権限の要らないジャンクションを張ってから先を消す。
     """
     _box(session)
     session.models_dir.mkdir(parents=True, exist_ok=True)
     outside = tmp_path / "outside"
-    outside.mkdir()
     link = session.models_dir / "escape.json"
-    try:
-        link.symlink_to(outside / "target.json")
-    except OSError as error:
-        pytest.skip(f"このマシンではシンボリックリンクを作れない: {error}")
+    if os.name == "nt":
+        import _winapi
+
+        outside.mkdir()
+        _winapi.CreateJunction(str(outside), str(link))  # `cmd /c mklink /J` は一時パスの `&` などで壊れる
+        outside.rmdir()
+    else:
+        link.symlink_to(outside)
 
     with pytest.raises(ValueError):
         session.save_document("escape.json")
 
-    assert not (outside / "target.json").exists(), "リンクの先(models_dirの外)に書けてしまった"
+    assert not outside.exists(), "リンクの先(models_dirの外)に書けてしまった"
+
 
 def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> None:
     """落ちたら: `set_parameter` を含むログが開けない(再生前にログを文書へ束ねていないと `parameters.rebuild` が拒否する)。"""
@@ -346,12 +350,12 @@ def test_a_failed_open_leaves_the_current_document_alone(session: Session) -> No
     volume = query.volume(body.shape)
     session.models_dir.mkdir(parents=True, exist_ok=True)
     broken = session.models_dir / "broken.json"
-    # # 版は現行(2)にする(1だと旧形式で先に断られ、未知verbの再生失敗の経路に届かない)。
+    # 版は現行にする(古い版だと版の検査で先に断られ、未知verbの再生失敗の経路に届かない)。
     broken.write_text(
-        '{"version": 2, "operations": [{"seq": 1, "verb": "no_such_verb"}]}', encoding="utf-8"
+        f'{{"version": {OpLog.FORMAT_VERSION}, "operations": [{{"seq": 1, "verb": "no_such_verb"}}]}}', encoding="utf-8"
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(KeyError, match="no_such_verb"):
         session.open_document("broken.json")
 
     assert session.document.bodies[-1] is body
@@ -421,36 +425,6 @@ def test_new_document_empties_the_document_and_reaches_every_connection(session:
     assert session.document.sketches == []
     assert answer["state"]["bodies"] == []
     assert clients[1].payloads, "新規にした文書が他の接続へ届いていない"
-
-
-def test_new_document_is_not_a_verb_and_leaves_nothing_to_undo(session: Session) -> None:
-    """新規は操作ログに載らず、undoでは戻らない(新しい文書のログは空)。"""
-    _box(session)
-
-    session.new_document()
-
-    assert session.document.log.entries == []
-    with pytest.raises(ValueError):
-        session.undo()
-
-
-def test_new_document_clears_the_selection(session: Session) -> None:
-    """新規で選択は空になる(面・辺・領域の添字は文書が変われば意味を失う)。"""
-    body, _ = _box(session)
-    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    assert session.document.selection.items
-
-    session.new_document()
-
-    assert session.document.selection.items == []
-
-
-def test_new_document_is_not_exposed_to_ai(session: Session) -> None:
-    """新規はAIには開けていない(今の文書を丸ごと捨て、undoでも戻せないため)。"""
-    from duocad import catalog
-
-    assert "new_document" not in catalog.tool_names()
-    assert "new_document" in catalog.websocket_command_names()
 
 
 def test_copy_document_duplicates_the_file_and_leaves_the_document_alone(session: Session) -> None:
@@ -577,13 +551,16 @@ def test_closed_document_refuses_edits_and_writes_nothing(session: Session) -> N
     _box(session)
 
 
-def test_copy_and_delete_are_not_exposed_to_ai(session: Session) -> None:
-    """ファイルの出し入れは人の操作(`save_document` 等と同じ線)。削除は不可逆でもある。"""
+@pytest.mark.parametrize(
+    "name",
+    ["new_document", "copy_document", "delete_document", "rename_document", "save_thumbnail", "get_thumbnail"],
+)
+def test_file_commands_are_for_people_not_for_the_ai(name: str) -> None:
+    """ファイルの出し入れは人の操作(`save_document` 等と同じ線。新規・削除は文書を捨てる不可逆な操作でもある)。"""
     from duocad import catalog
 
-    for name in ("copy_document", "delete_document"):
-        assert name not in catalog.tool_names()
-        assert name in catalog.websocket_command_names()
+    assert name not in catalog.tool_names()
+    assert name in catalog.websocket_command_names()
 
 
 def test_list_documents_reports_names_and_dates_only(session: Session) -> None:
@@ -654,7 +631,7 @@ def test_created_is_stamped_once_and_survives_autosave_rename_and_reopen(session
 def test_an_untitled_document_is_stamped_by_its_first_autosave(session: Session) -> None:
     _box(session)
     assert session.current_name == "untitled-1.json"
-    assert _created(session, "untitled-1.json") is not None
+    assert _created(session, "untitled-1.json") > 0
 
 
 def test_a_file_without_created_keeps_none_instead_of_borrowing_the_mtime(session: Session) -> None:
@@ -795,6 +772,32 @@ def test_renaming_onto_a_stale_thumbnail_drops_it(session: Session) -> None:
     assert session.get_thumbnail("gone.json")["png"] is None
 
 
+def test_saving_under_a_stale_thumbnails_name_drops_it(session: Session) -> None:
+    """落ちたら: 外で消された文書の絵が、同じ名前で別名保存した文書の絵として出る(改名の経路は上のテストが見ている)。"""
+    _box(session)
+    session.save_document("gone.json")
+    session.save_thumbnail("gone.json", _PNG)
+    session.new_document()
+    (session.models_dir / "gone.json").unlink()
+    _box(session)
+    session.save_document("gone.json")
+    assert session.get_thumbnail("gone.json")["png"] is None
+
+
+def test_renaming_a_document_whose_file_was_deleted_outside_writes_it_again(session: Session) -> None:
+    """落ちたら: 編集中のファイルが外で消された後の改名で、新しい名前のファイルができない/中身が空になる(中身は文書が持っている)。"""
+    body, _ = _box(session)
+    session.save_document("a.json")
+    (session.models_dir / "a.json").unlink()
+
+    session.rename_document("b.json")
+
+    assert not (session.models_dir / "a.json").exists()
+    reopened = Session(None, DEVIATION, models_dir=session.models_dir)
+    reopened.open_document("b.json")
+    assert query.volume(reopened.document.bodies[-1].shape) == pytest.approx(query.volume(body.shape))
+
+
 def test_a_thumbnail_that_cannot_be_written_is_reported_not_raised(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -811,14 +814,6 @@ def test_a_thumbnail_that_cannot_be_written_is_reported_not_raised(
     answer = session.save_thumbnail("a.json", _PNG)
     assert answer["saved"] is False and answer["thumb"] is None
     assert any("サムネイル" in warning for warning in session.warnings)
-
-
-def test_thumbnails_are_not_exposed_to_ai(session: Session) -> None:
-    from duocad import catalog
-
-    for name in ("save_thumbnail", "get_thumbnail"):
-        assert name not in catalog.tool_names()
-        assert name in catalog.websocket_command_names()
 
 
 def test_relative_export_paths_go_under_exports_dir(session: Session) -> None:

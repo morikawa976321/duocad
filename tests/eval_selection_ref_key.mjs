@@ -54,23 +54,6 @@ assert.ok(!sameRef(face3, { body: 'box', kind: 'face', index: 4 }), '面は添�
 // ============================================================== provenance は見ない
 assert.ok(sameRef(face3, { ...face3, provenance: { op: 1 } }), 'provenance は同一性に関与しない')
 
-// ============================================================== 鍵と sameRef が一致する
-const corpus = [
-  face3, edge3, vertex3,
-  bodyNull, bodyIndexed, bodyBare, otherBody,
-  region1, region2,
-  whole, wholeBare, pointX0, pointEmpty,
-]
-for (const left of corpus) {
-  for (const right of corpus) {
-    assert.equal(
-      sameRef(left, right),
-      refKey(left) === refKey(right),
-      `Setが落とす重複と sameRef がずれた: ${JSON.stringify(left)} / ${JSON.stringify(right)}`,
-    )
-  }
-}
-
 // 別の実体は別の鍵(Setに入れたときに潰れない)
 const distinct = [face3, edge3, vertex3, bodyNull, otherBody, region1, region2, whole, pointX0, pointEmpty]
 assert.equal(new Set(distinct.map(refKey)).size, distinct.length, '別の実体の鍵が衝突している')

@@ -61,12 +61,14 @@ def table_study1(rows, out=sys.stdout):
                 out.write(f"| {r['name']} | エラー | | | | | | |\n")
                 continue
             ob, on = r.get("over_bolt", {}), r.get("over_nut", {})
-            out.write(f"| {r['name']} | {r['c_geo']:.3f} | {ob.get('lack_ge_50', float('nan')):.2f}/{on.get('lack_ge_50', float('nan')):.2f} | "
+            mark = " ※窓の中心が見つからない" if r.get("center_not_found") and r.get("W", 0) > 0 else ""
+            out.write(f"| {r['name']}{mark} | {r['c_geo']:.3f} | {ob.get('lack_ge_50', float('nan')):.2f}/{on.get('lack_ge_50', float('nan')):.2f} | "
                       f"{ob.get('sag_max', float('nan')):.3f}/{on.get('sag_max', float('nan')):.3f} | {r.get('depth_kept', float('nan')):.2f} | "
                       f"{cell_F(r, 0.0)} | {cell_F(r, 0.1)} | {cell_F(r, 0.2)} |\n")
 
 
 def table_study2(rows, out=sys.stdout):
+    """感度(窓の評価): 係数を振ったときの W・窓の中心での保持・締め付け。設計ごとの行、係数ごとの列。"""
     by = defaultdict(dict)
     for r in rows:
         base, var = r["name"].split(" | ")
@@ -76,24 +78,46 @@ def table_study2(rows, out=sys.stdout):
         for v in d:
             if v not in variants:
                 variants.append(v)
-    out.write("\n必要な隙間 c_geo(mm)\n\n| 設計 | " + " | ".join(variants) + " |\n|---|" + "---|" * len(variants) + "\n")
-    for base, d in by.items():
-        out.write(f"| {base} | " + " | ".join(f"{d[v]['c_geo']:.3f}" if v in d and "c_geo" in d[v] else "" for v in variants) + " |\n")
-    out.write("\n破断荷重 F(N、誤差 0.1)\n\n| 設計 | " + " | ".join(variants) + " |\n|---|" + "---|" * len(variants) + "\n")
-    for base, d in by.items():
-        cells = []
-        for v in variants:
-            r = d.get(v)
-            if not r or not r.get("rows"):
-                cells.append("")
-                continue
-            val, k = fmin(r["rows"][0])
-            cells.append(f"{val:.0f} {MODE_JA.get(k, k)}" if val else "掛からず")
-        out.write(f"| {base} | " + " | ".join(cells) + " |\n")
+
+    def table(title, cell):
+        out.write(f"\n{title}\n\n| 設計 | " + " | ".join(variants) + " |\n|---|" + "---|" * len(variants) + "\n")
+        for base, d in by.items():
+            out.write(f"| {base} | " + " | ".join(cell(d.get(v)) if d.get(v) else "" for v in variants) + " |\n")
+
+    table("誤差を吸収できる幅 W(mm)", lambda r: f"{r['W']:+.2f}" if "W" in r else "—")
+    table("必要な隙間 c_geo(mm)", lambda r: f"{r['c_geo']:.2f}" if "c_geo" in r else "—")
+
+    def hold(r):
+        x = (r.get("rows") or [{}])[0]
+        if not x.get("F"):
+            return "—"
+        v, k = fmin(x)
+        return f"{v:.0f}"
+    table("窓の中心での保持(N)", hold)
+
+    def tight(r):
+        x = (r.get("rows") or [{}])[0]
+        return f"{tighten_posthoc(r, x):.0f}" if x.get("F") else "—"
+    table("窓の中心での締め付け(N)", tight)
+
+
+def tighten_posthoc(r, x):
+    """記録済みの行に、いまの締め付けの判定(strength.tighten_force)を当て直す。雄の山形は設計の山形を
+    窓の中心の隙間の半分と誤差の半分だけ半径方向にずらしたもの(印刷の丸みは入らない近似)。"""
+    from . import strength as st
+    from .study import make_profile
+    F = x.get("F") or {}
+    if "tcd" not in F:
+        return float("nan")
+    prof = make_profile(r)
+    f = prof.dense(4000)[1] - r.get("c_center", 0.0) / 2 + x.get("eps", 0.0) / 2
+    m = st.PrintedPLA(**(r.get("mat") or {}))
+    return st.tighten_force(f, prof.pitch, x.get("beta_eff", float("nan")), F["tcd"], m)
 
 
 def _wrow(r, k):
-    """run_window の rows[k](0=中心、1=緩い端、2=固い端)を「保持(下限〜上限) 締め付け 乗り越え」に。"""
+    """run_window の rows[k](0=中心、1=緩い端、2=固い端)を「保持 締め付け 乗り越え」に。
+    保持はリング模型の FEA と山のせん断の小さい方(3D の周期模型と ±10% で一致。THREAD_SIM.md 4章)。"""
     rows = r.get("rows") or []
     if len(rows) <= k:
         return "—"
@@ -101,9 +125,7 @@ def _wrow(r, k):
     if not x.get("F"):
         return "—" if "error" in x else "掛からず"
     v, mode = fmin(x)
-    F = x["F"]
-    return (f"{v:.0f}〜{F.get('core_slice', float('nan')):.0f} {MODE_JA.get(mode, mode)} / 締{F.get('tighten', float('nan')):.0f}"
-            f" / 越{x.get('jump_ratio', float('nan')):.2f}")
+    return f"{v:.0f} {MODE_JA.get(mode, mode)} / 締{tighten_posthoc(r, x):.0f} / 越{x.get('jump_ratio', float('nan')):.2f}"
 
 
 def table_window(rows, out=sys.stdout, key=lambda r: (r["D"], r.get("pitch_ratio", 0))):
@@ -112,17 +134,99 @@ def table_window(rows, out=sys.stdout, key=lambda r: (r["D"], r.get("pitch_ratio
         groups[key(r)].append(r)
     for gk in sorted(groups, key=lambda k: tuple(str(x) for x in k) if not isinstance(k, tuple) else k):
         out.write(f"\n### {gk}\n\n")
-        out.write("| 設計 | c_geo | 幅 W | 欠け≥50% 雄/雌 | 垂れ最大 雄/雌 | 山の保持 | 窓の中心: 保持 N(下限〜上限) / 締め付け / 乗り越え | 緩い端 |\n")
+        out.write("| 設計 | c_geo | 幅 W | 欠け≥50% 雄/雌 | 垂れ最大 雄/雌 | 山の保持 | 窓の中心: 保持 N / 締め付け N / 乗り越え | 緩い端 |\n")
         out.write("|---|---|---|---|---|---|---|---|\n")
         for r in sorted(groups[gk], key=lambda r: -r.get("W", -9)):
             if "c_geo" not in r:
                 out.write(f"| {r['name']} | エラー {str(r.get('error', ''))[:40]} | | | | | | |\n")
                 continue
             ob, on = r.get("over_bolt", {}), r.get("over_nut", {})
-            out.write(f"| {r['name']} | {r['c_geo']:.3f} | {r.get('W', float('nan')):+.3f} | "
+            mark = " ※窓の中心が見つからない" if r.get("center_not_found") and r.get("W", 0) > 0 else ""
+            out.write(f"| {r['name']}{mark} | {r['c_geo']:.3f} | {r.get('W', float('nan')):+.3f} | "
                       f"{ob.get('lack_ge_50', float('nan')):.2f}/{on.get('lack_ge_50', float('nan')):.2f} | "
                       f"{ob.get('sag_max', float('nan')):.3f}/{on.get('sag_max', float('nan')):.3f} | {r.get('depth_kept', float('nan')):.2f} | "
                       f"{_wrow(r, 0)} | {_wrow(r, 1)} |\n")
+
+
+def _lower(r, k=0):
+    rows = r.get("rows") or []
+    if len(rows) <= k or not rows[k].get("F"):
+        return None
+    return fmin(rows[k])[0]
+
+
+def table_pareto(rows, out=sys.stdout, w_min=0.2):
+    """径ごとに、(誤差を吸収できる幅 W, 窓の中心での保持の下限) の両方でほかに負けない設計(パレート)と、
+    W ≥ w_min の中で保持の下限が最大の設計。"""
+    by = defaultdict(list)
+    for r in rows:
+        if r.get("W") is not None and _lower(r) is not None:
+            by[r["D"]].append(r)
+    for D in sorted(by):
+        rs = sorted(by[D], key=lambda r: -r["W"])
+        front, best_f = [], -1.0
+        for r in rs:  # W の大きい順に、それまでの最大より強いものだけ残す
+            f = _lower(r)
+            if f > best_f:
+                front.append(r)
+                best_f = f
+        ok = [r for r in rs if r["W"] >= w_min]
+        pick = max(ok, key=_lower) if ok else None
+        out.write(f"\n### D{D}(パレート {len(front)} 件 / 全 {len(rs)} 件)\n\n")
+        out.write("| 設計 | P | 深さ | β | c_geo | 幅 W | 保持 N | 締め付け N | 緩い端の保持 N | 乗り越え |\n|---|---|---|---|---|---|---|---|---|---|\n")
+        for r in front:
+            x = r["rows"][0]
+            mark = " **(W≥%.2f で最強)**" % w_min if r is pick else ""
+            out.write(f"| {r['name']}{mark} | {float(r.get('P', 0)):.3g} | {r.get('depth', 0):.3g} | {r.get('b_lo', '')} | {r['c_geo']:.3f} | {r['W']:.3f} | "
+                      f"{_lower(r):.0f} | {tighten_posthoc(r, x):.0f} | "
+                      f"{(_lower(r, 1) or float('nan')):.0f} | {x.get('jump_ratio', float('nan')):.2f} |\n")
+        if pick is not None and pick not in front:
+            out.write(f"\nW≥{w_min} で最強: {pick['name']}(W {pick['W']:.3f}、保持の下限 {_lower(pick):.0f} N)\n")
+
+
+def center_residual(r):
+    """窓の中心での強さの行(ε=0)の余りと掛かり代から、中心の残差 z = (余り − 掛かり代 + 下限)/2。0 なら誤差 0 が窓の真ん中。"""
+    rows = r.get("rows") or []
+    if not rows or "margin" not in rows[0]:
+        return None
+    return (rows[0]["margin"] - rows[0]["engagement"] + r.get("e_req", 0.1)) / 2
+
+
+def table_robust(rows, out=sys.stdout):
+    """study6: 隙間を基準の係数での窓の中心に固定し、係数の場面すべてで通る誤差の共通部分 W_rob と、その端での保持。"""
+    by = defaultdict(list)
+    for r in rows:
+        by[r["D"]].append(r)
+    for D in sorted(by):
+        out.write(f"\n### D{D}\n\n")
+        out.write("| 設計 | 隙間 | W(基準) | W_rob | 通る誤差 ε | 狭める場面 緩/固 | 中心の保持 N | 緩い端 半々/雄だけ/雌だけ N | 固い端 N | 最弱 N |\n")
+        out.write("|---|---|---|---|---|---|---|---|---|---|\n")
+        for r in sorted(by[D], key=lambda r: -r.get("W_rob", -9)):
+            if "W_rob" not in r:
+                out.write(f"| {r['name']} | エラー {str(r.get('error', ''))[:40]} | | | | | | | | |\n")
+                continue
+            h = {x["at"]: _lower(dict(rows=[x])) for x in r.get("rows", [])}
+            f = lambda k: f"{h[k]:.0f}" if h.get(k) is not None else "—"
+            loose = "/".join(f(k) for k in ("緩い端 半々", "緩い端 雄だけ", "緩い端 雌だけ"))
+            out.write(f"| {r['name']} | {r['c_center']:.3f} | {r['W']:+.3f} | {r['W_rob']:+.3f} | "
+                      f"{r['eps_lo']:+.3f}〜{r['eps_hi']:+.3f} | {r['worst_lo']} / {r['worst_hi']} | {f('中心')} | {loose} | {f('固い端')} | "
+                      f"{(r.get('F_rob') or float('nan')):.0f} |\n")
+
+
+def table_split(rows, out=sys.stdout):
+    """study7: 隙間の雌雄の分け方(雄が受け持つ割合)ごとの、窓の中心と緩い端の保持。"""
+    by = defaultdict(dict)
+    for r in rows:
+        by[r["name"].rsplit(" 雄", 1)[0]][r["split"]] = r
+    splits = sorted({r["split"] for r in rows})
+    out.write("| 設計 | W | 中心の保持 N(雄 " + " / ".join(f"{s:g}" for s in splits) + ") | 緩い端の保持 N(同) | 壊れる所(雄 0) |\n")
+    out.write("|---|---|---|---|---|\n")
+    for name, d in by.items():
+        f = lambda k: " / ".join(f"{_lower(d[s], k):.0f}" if s in d and _lower(d[s], k) is not None else "—" for s in splits)
+        r0 = d.get(min(splits), {})
+        mode = (r0.get("rows") or [{}])[0].get("mode", "")
+        W = next(iter(d.values())).get("W", float("nan"))
+        out.write(f"| {name} | {W:.3f} | {f(0)} | {f(1)} | {MODE_JA.get(mode, mode)} |\n")
 
 
 if __name__ == "__main__":
@@ -130,7 +234,16 @@ if __name__ == "__main__":
     rows = load(st)
     if st == "study1":
         table_study1(rows)
-    elif st in ("study4", "study3"):
+    elif st == "study4":
         table_window(rows)
+    elif st == "study3":
+        table_pareto(rows)
+    elif st == "study5":
+        table_pareto(rows)
+        table_window(rows, key=lambda r: (r["D"], r.get("pitch_ratio", 0), r.get("mode", "")))
+    elif st == "study6":
+        table_robust(rows)
+    elif st == "study7":
+        table_split(rows)
     else:
         table_study2(rows)

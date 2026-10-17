@@ -139,8 +139,7 @@ def test_tool_call_from_a_worker_thread_changes_the_same_document(http_mcp):
 @pytest.mark.parametrize(
     "headers, why",
     [
-        ({"Origin": "https://evil.example"}, "他オリジンのページからのPOST"),
-        ({"Origin": "http://127.0.0.1:8766"}, "duocad自身のページを騙っても通さない"),
+        ({"Origin": "https://evil.example"}, "Origin を名乗るPOSTは値を問わず断る(自分のページを名乗っても同じ)"),
         ({"Host": "evil.example"}, "DNSリバインディング"),
     ],
 )

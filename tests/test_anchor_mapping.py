@@ -10,7 +10,6 @@ from build123d import Box, Pos, Rotation
 
 from duocad.topopt import acceptance, anchor, voxelize
 from duocad.topopt import binary_search as bs
-from duocad.topopt.acceptance import active_nodes as acceptance_active_nodes
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'topopt_checks'))
 import _fixtures  # noqa: E402  合成題材(build123d を直接使うので duocad/ の外にある)
@@ -47,10 +46,6 @@ def _face_facing(soup, direction):
 
 def _off_plane_box():
     return Pos(0.0, 0.0, 0.3) * Box(20.0, 10.0, 10.0)
-
-
-def test_the_shared_active_node_definition_is_one_function():
-    assert acceptance_active_nodes is anchor.active_nodes
 
 
 @pytest.mark.parametrize('seed', range(6))
@@ -140,7 +135,7 @@ def test_samples_without_an_allowed_node_in_the_sphere_are_reported_not_moved():
     assert 'unmapped_samples' in load['reasons']
     assert load['resultant_error_n'] <= 1e-12  # 合力は残った節点で保存される —— それでも成功扱いしない
     warning = anchor.format_mapping_warning(report)
-    assert f'面{top}' in warning and '対応' not in warning[:0]
+    assert f'面{top}' in warning
     assert '予算' not in warning
 
 
@@ -282,3 +277,28 @@ def test_the_moment_gate_catches_a_load_vector_that_does_not_follow_the_assigned
     load = next(row for row in report['faces'] if row['condition'] == f'load_face_{top}')
     assert load['reasons'] == ['moment']
     assert load['moment_error_nmm'] > load['moment_limit_nmm'] == pytest.approx(table.radius * 100.0)
+
+
+def test_the_resultant_gate_fails_a_load_vector_that_loses_force(monkeypatch):
+    """合力の門: 節点荷重の合計が入力の力と違えば `resultant` で不成立(合力は他の検査では正常系の等号でしか見ていない)。"""
+    soup, grid, design = _setup(_off_plane_box())
+    top, bottom = _face_facing(soup, (0, 0, 1)), _face_facing(soup, (0, 0, -1))
+    table = anchor.build_anchors(soup, grid, allowed_nodes=anchor.active_nodes(design))
+    real = table.load_vector
+    monkeypatch.setattr(table, 'load_vector', lambda faces, total_force, **kwargs: 0.5 * real(faces, total_force, **kwargs))
+    report = anchor.condition_mapping(table, [bottom], [top], [(0.0, 0.0, -100.0)], material=design)
+    load = next(row for row in report['faces'] if row['condition'] == f'load_face_{top}')
+    assert report['status'] == 'fail' and 'resultant' in load['reasons']
+    assert load['resultant_error_n'] == pytest.approx(50.0)
+
+
+def test_the_coverage_gate_fails_nodes_that_no_longer_touch_material():
+    """材料に接しない節点の門: 表を作った後で材料を減らすと、面の節点が `uncovered_nodes` で不成立になる(表の側の門とは別経路)。"""
+    soup, grid, design = _setup(_off_plane_box())
+    top, bottom = _face_facing(soup, (0, 0, 1)), _face_facing(soup, (0, 0, -1))
+    table = anchor.build_anchors(soup, grid, allowed_nodes=anchor.active_nodes(design))
+    cut = design.copy()
+    cut[grid.centers_1d(0) > 0.0, :, :] = False
+    report = anchor.condition_mapping(table, [bottom], [top], [(0.0, 0.0, -100.0)], material=cut)
+    load = next(row for row in report['faces'] if row['condition'] == f'load_face_{top}')
+    assert report['status'] == 'fail' and load['uncovered_nodes'] > 0 and 'uncovered_nodes' in load['reasons']

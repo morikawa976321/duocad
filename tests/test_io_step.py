@@ -102,7 +102,12 @@ def test_export_excludes_a_hidden_solid_from_step_and_stl(tmp_path):
 
     stl_path = tmp_path / "visible_only.stl"
     export_stl(doc, stl_path)
-    assert stl_path.exists() and stl_path.stat().st_size > 0
+    only_shown = Document()
+    _add_solid_body(only_shown, "shown", shown)
+    _add_solid_body(only_shown, "also_shown", also_shown)
+    reference_path = tmp_path / "reference.stl"
+    export_stl(only_shown, reference_path)
+    assert stl_path.read_bytes() == reference_path.read_bytes(), "非表示のソリッドがSTLに入っている"
 
     assert export_body_ids(doc) == shown_ids
     assert export_skipped_hidden(doc) == [hidden_id]

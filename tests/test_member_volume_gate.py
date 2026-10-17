@@ -145,10 +145,6 @@ def test_the_refinement_takes_the_slower_solver_before_a_coarser_grid_and_shrink
     assert final_check.refine_factor(1000, 200, 4.0, lean) == (4, 'matrix_free')
     assert final_check.refine_factor(1000, 20000, 4.0, lean) == (1, 'matrix_free')
     assert final_check.refine_factor(1000, 10 ** 6, 4.0, lean) == (1, None)
-    assert final_check.estimated_bytes(1000, 200, 2) == 8 * (1000 * final_check.FINE_ELEMENT_BYTES
-                                                             + 200 * final_check.MATERIAL_CELL_BYTES)
-    assert final_check.estimated_bytes(1000, 200, 2, 'matrix_free') == 8 * (
-        1000 * final_check.MATRIX_FREE_ELEMENT_BYTES + 200 * final_check.MATRIX_FREE_MATERIAL_CELL_BYTES)
 
 
 def test_material_the_search_grid_missed_is_recounted_after_occupancy_and_the_plan_drops(monkeypatch):

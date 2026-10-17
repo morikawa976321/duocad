@@ -40,8 +40,8 @@ def test_to_json_from_json_roundtrip_matches_exactly():
 
 
 def test_from_json_ignores_unknown_operation_keys():
-    """`Operation` に無いキー(かつて存在した `selection` 等)が入っていても読み込みが
-    壊れず、値は単に無視されること。
+    """`Operation` に無いキーが入っていても読み込みが壊れず、値は単に無視されること
+    (過去のファイルに残る、いまは使わないキーを開けなくしない)。
     """
     legacy_json = json.dumps({
         "version": OpLog.FORMAT_VERSION,
@@ -50,7 +50,7 @@ def test_from_json_ignores_unknown_operation_keys():
                 "seq": 1,
                 "verb": "import_step",
                 "args": {"path": "x.step", "body_id": "b1"},
-                "selection": [{"body": "b1", "kind": "face", "index": 3}],
+                "no_longer_used": [{"body": "b1", "kind": "face", "index": 3}],
                 "provenance": None,
             }
         ],
@@ -63,15 +63,7 @@ def test_from_json_ignores_unknown_operation_keys():
     assert operation.seq == 1
     assert operation.verb == "import_step"
     assert operation.args == {"path": "x.step", "body_id": "b1"}
-    assert not hasattr(operation, "selection")
-
-
-
-def test_to_json_stamps_the_current_format_version():
-    """`to_json` が出す入れ物には現在の版が入る(読み手が版で判断できること)。"""
-    payload = json.loads(OpLog().to_json())
-
-    assert payload["version"] == OpLog.FORMAT_VERSION
+    assert not hasattr(operation, "no_longer_used")
 
 
 def test_from_json_refuses_the_old_format_version_explicitly():

@@ -9,7 +9,6 @@ import pytest
 
 from duocad import kernel_sketch, query
 from duocad.document import Document
-from duocad.oplog import OpLog
 from duocad.parameters import parameter_of, set_parameter
 from duocad.region import expanded_entities, region_ref, regions
 from duocad.sketch import (
@@ -20,7 +19,7 @@ from duocad.sketch import (
     sketch_create,
 )
 from duocad.verbs import extrude, pattern_circular
-from document_support import corner_set as _corner_set, drill_all, hole_axes
+from document_support import corner_set as _corner_set, drill_all, hole_axes, replay_through_json
 
 PLATE_SIZE = 60.0
 PLATE_THICKNESS = 10.0
@@ -269,18 +268,17 @@ def test_changing_the_center_moves_the_whole_ring():
 
 
 def test_pattern_survives_save_load_and_replay():
-    """保存→再生で反復がそのまま復元される（`args` に数値が載っていること）。"""
+    """保存→再生で穴の位置がそのまま復元される(`args` に数値が載っていること。個数だけでは角度の落ちを見逃す)。"""
     document = Document()
+    plate(document)
     sketch_id, _, _ = hole_ring(document)
-    saved = document.log.to_json()
+    drill_all(document, sketch_id)
+    expected_axes = hole_axes(document.active_body().shape)
 
-    restored = Document()
-    log = OpLog.from_json(saved)
-    log.replay(restored)
-    restored.log = log
+    restored = replay_through_json(document)
 
-    restored_sketch_id = restored.sketches[0].id
-    assert len(regions(restored, restored_sketch_id)) == COUNT
+    assert len(expected_axes) == COUNT
+    assert hole_axes(restored.active_body().shape) == expected_axes
 
 
 # 失敗を黙って通さない

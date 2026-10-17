@@ -79,6 +79,42 @@ def test_kind_is_actually_filters_by_the_classified_kind(doc: Document):
     ) == []
 
 
+def test_kind_and_area_conditions_tell_a_cylinder_from_its_caps():
+    """箱は平面と直線しか持たないので `kind_is` の非該当も `area_gt` の該当も見えない。円柱(側面 1885 / 底 314 mm²)で見る。"""
+    document = Document()
+    sketch_id = sketch_create(document, base_plane("XY"))
+    add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    extrude(document, [region_ref(sketch_id, 1)], 30.0, mode="join")
+
+    def faces(*where):
+        return predicates.evaluate(document, {"kind": "face", "where": list(where)})
+
+    def edges(*where):
+        return predicates.evaluate(document, {"kind": "edge", "where": list(where)})
+
+    assert len(faces({"op": "kind_is", "value": "plane"})) == 2
+    assert len(faces({"op": "kind_is", "value": "cylinder_full"})) == 1
+    assert len(faces({"op": "area_gt", "value": 1000})) == 1
+    assert len(faces({"op": "area_gt", "value": 100})) == 3
+    assert faces({"op": "area_gt", "value": 2000}) == []
+    assert len(edges({"op": "kind_is", "value": "circle"})) == 2
+    assert len(edges({"op": "kind_is", "value": "line"})) == 1
+
+
+def test_a_vector_axis_is_normalized_before_the_dot_product(doc: Document):
+    """軸ベクトルの長さは結果に効かない(箱の +X・+Z 面の法線と斜め軸 [1,0,1] の内積は 0.707)。"""
+
+    def upward(axis, value):
+        return predicates.evaluate(
+            doc, {"kind": "face", "where": [{"op": "normal_dot_gt", "axis": axis, "value": value}]}
+        )
+
+    assert len(upward([1, 0, 1], 0.7)) == 2
+    assert upward([1, 0, 1], 0.8) == []
+    assert upward([0, 0, 5], 1.5) == []
+    assert len(upward([0, 0, 5], 0.9)) == 1
+
+
 def test_an_empty_where_matches_everything_of_that_kind(doc: Document):
     """`where: []` はその種別の全部(「全面を選ぶ」を特別扱いしないで書けるように)。"""
     matched = predicates.evaluate(doc, {"kind": "face", "where": []})

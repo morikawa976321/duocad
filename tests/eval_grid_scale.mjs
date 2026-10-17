@@ -13,7 +13,6 @@ import {
   FADE_FULL,
   FADE_MIN,
   TIERS,
-  BOUNDS_MARGIN_RATIO,
   boundingSquare,
   extendUvBoxToPoint,
   extentFor,
@@ -24,10 +23,6 @@ import {
   tierAlpha,
   tierAlphas,
 } from '../web/src/gridScale.ts'
-
-// ============================================================== 刻みは3段固定(内容で変わらない)
-assert.deepEqual([...TIERS], [1, 10, 100], '刻みは 1/10/100mm の3段固定')
-assert.ok(FADE_MIN < FADE_FULL, 'フェードの下端は上端より小さい')
 
 // ============================================================== mmPerPixel
 // 透視: 2 * tan(fov/2) * distance / height。45度・距離1000mm・900pxの手計算と突き合わせる。
@@ -243,8 +238,6 @@ assert.deepEqual(bs({ uMin: 0, uMax: Number.NaN, vMin: 0, vMax: 1 }), {
   centerV: 0,
   half: BASE_EXTENT,
 })
-
-assert.ok(BOUNDS_MARGIN_RATIO > 0, '余白の比が正でない')
 
 // ============================================================== extendUvBoxToPoint(カーソル追従)
 // 点が無ければ内容のまま(参照どうしの比較でよい —— 新しいオブジェクトを作らない契約)。

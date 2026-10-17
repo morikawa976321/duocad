@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import functools
 import http.client
 import json
 import threading
@@ -69,7 +70,7 @@ def test_the_request_is_in_claude_shape_and_caches_the_fixed_prefix():
     payload = sent["payload"]
 
     assert sent["url"] == "https://api.anthropic.com/v1/messages"
-    assert payload["model"] == "claude-haiku-5-5"
+    assert payload["model"] == providers.DEFAULT_ANTHROPIC_MODEL
     assert payload["stream"] is True
     assert payload["tools"] == [
         {"name": "describe_document", "description": "文書を見る", "input_schema": {"type": "object"}}
@@ -216,7 +217,7 @@ def answering(responses):
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=functools.partial(server.serve_forever, poll_interval=0.01), daemon=True).start()
     try:
         server.received = received
         yield server
@@ -454,7 +455,7 @@ def test_the_key_never_shows_up_in_errors_even_after_retries():
 
 def test_the_model_can_be_swapped_by_environment_variable(monkeypatch):
     monkeypatch.setenv(providers.ANTHROPIC_API_KEY_ENV, FAKE_KEY)
-    assert build_provider("anthropic").model == "claude-haiku-5-5"
+    assert build_provider("anthropic").model == providers.DEFAULT_ANTHROPIC_MODEL
     monkeypatch.setenv(providers.ANTHROPIC_MODEL_ENV, "claude-sonnet-5-5")
     assert build_provider("anthropic").model == "claude-sonnet-5-5"
     assert build_provider("anthropic", model="claude-opus-5-5").model == "claude-opus-5-5"

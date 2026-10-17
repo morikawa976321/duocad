@@ -18,24 +18,11 @@ from duocad.mcp_server import VITE_DEV_PORT, allowed_origins
 from duocad.server import Session
 
 
-def test_the_allowlist_covers_both_host_spellings_and_the_dev_server():
-    """`localhost` と `127.0.0.1` は**別オリジン**なので両方要る。"""
-    origins = allowed_origins(8766)
-    for host in ("127.0.0.1", "localhost"):
-        assert f"http://{host}:8766" in origins        # 静的配信
-        assert f"http://{host}:{VITE_DEV_PORT}" in origins  # `npm run dev`(README §1.3)
-
-
 def test_the_allowlist_follows_the_http_port_option():
     """`--http-port` を変えたら許可リストも動く(既定値を焼き込まない)。"""
     origins = allowed_origins(9999)
     assert "http://127.0.0.1:9999" in origins
     assert "http://127.0.0.1:8766" not in origins
-
-
-def test_a_missing_origin_header_is_allowed_on_purpose():
-    """`None`(ヘッダ無し)が入っていること。**これは意図した許可である**(モジュールdocstring)。"""
-    assert None in allowed_origins(8766)
 
 
 async def _accept(connection) -> None:

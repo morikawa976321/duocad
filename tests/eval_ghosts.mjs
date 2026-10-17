@@ -17,20 +17,8 @@
  * Node の型除去は拡張子の無い相対 import を解決しない(Vite は補う)ので、解決に失敗したときだけ
  * `.ts` を補う resolve フックを先に登録する(`eval_command_defs.mjs` と同じ)。
  */
-import { register } from 'node:module'
 
-register(
-  'data:text/javascript,' +
-    encodeURIComponent(`
-export async function resolve(specifier, context, next) {
-  try {
-    return await next(specifier, context)
-  } catch (error) {
-    if (!specifier.startsWith('.') || specifier.endsWith('.ts')) throw error
-    return next(specifier + '.ts', context)
-  }
-}`),
-)
+import './ts_resolve_hook.mjs'
 
 const source = new URL('../web/src/', import.meta.url)
 const { ghostCopies } = await import(new URL('entityKinds.ts', source).href)

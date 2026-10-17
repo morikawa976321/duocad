@@ -67,18 +67,19 @@ def test_mirroring_a_circle_moves_only_its_center(session: Session) -> None:
     assert mirrored == pytest.approx({"cx": 3.0, "cy": 10.0, "diameter": 4.0})
 
 
-def test_mirroring_an_arc_keeps_its_sweep_and_flips_its_position(session: Session) -> None:
+def test_mirroring_an_arc_reflects_its_centre_and_angles(session: Session) -> None:
+    """斜めの軸 y=x に映すと、中心 (0,5)→(5,0)、角度 θ→90°-θ(始点と終点が入れ替わり、反時計回りは保たれる)。
+    水平な軸では角度の項が恒等になり見えない。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    axis_id = session.add_line(sketch_id, [0.0, 0.0], [1.0, 0.0])["entity_id"]
-    entity_id = session.add_arc(sketch_id, [0.0, 5.0], 2.0, 0.0, 90.0)["entity_id"]
+    axis_id = session.add_line(sketch_id, [0.0, 0.0], [1.0, 1.0])["entity_id"]
+    entity_id = session.add_arc(sketch_id, [0.0, 5.0], 2.0, 10.0, 50.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 
     applied = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
 
     mirrored = _params(session, sketch_id, applied["created"][0])
-    assert mirrored["cy"] == pytest.approx(-5.0)
-    # 掃引量(終角 - 始角)は保たれる(向きの反転は始点・終点の入れ替えで表す)
-    assert mirrored["end_deg"] - mirrored["start_deg"] == pytest.approx(90.0)
+    assert (mirrored["cx"], mirrored["cy"]) == pytest.approx((5.0, 0.0))
+    assert (mirrored["start_deg"] % 360.0, mirrored["end_deg"] % 360.0) == pytest.approx((40.0, 80.0))
 
 
 def _add_bezier(session: Session, sketch_id: str, params: dict) -> str:
@@ -117,24 +118,6 @@ def test_mirroring_a_bezier_reflects_all_its_control_points(session: Session) ->
     assert _params(session, sketch_id, entity_id) == pytest.approx(
         {"x0": 0.0, "y0": 1.0, "cx1": 1.0, "cy1": 2.0, "cx2": 3.0, "cy2": 4.0, "x1": 5.0, "y1": 6.0}
     )
-
-
-def test_mirroring_a_bezier_twice_returns_to_the_original(session: Session) -> None:
-    """鏡映は対合(同じ軸に2回かけると元に戻る)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    axis_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
-    original = {"x0": 0.0, "y0": 1.0, "cx1": 1.0, "cy1": 2.0, "cx2": 3.0, "cy2": 4.0, "x1": 5.0, "y1": 6.0}
-    entity_id = _add_bezier(session, sketch_id, original)
-
-    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
-    once = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
-    once_id = once["created"][0]
-
-    _select(session, [{"sketch": sketch_id, "entity": once_id, "point": None}])
-    twice = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
-    twice_id = twice["created"][0]
-
-    assert _params(session, sketch_id, twice_id) == pytest.approx(original)
 
 
 @pytest.mark.parametrize(
@@ -419,19 +402,19 @@ def test_mirroring_without_a_body_selection_is_refused(session: Session) -> None
 
 
 def test_a_mirror_survives_save_and_replay(session: Session) -> None:
+    """鏡映は体積を変えないので、再生で位置がずれても体積では分からない。境界箱で見る。"""
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     applied = session.mirror_body(base_plane="XY")
     created_id = applied["created"][0]
-    volume_before = query.volume(session.document.get_body(created_id).shape)
-
-    from duocad.document import Document
-    from duocad.oplog import OpLog
+    box_before = kernel.bounding_box(session.document.get_body(created_id).shape)
 
     replayed = replay_through_json(session.document)
 
-    volume_after = query.volume(replayed.get_body(created_id).shape)
-    assert volume_after == pytest.approx(volume_before)
+    box_after = kernel.bounding_box(replayed.get_body(created_id).shape)
+    assert box_after["min"] == pytest.approx(box_before["min"])
+    assert box_after["max"] == pytest.approx(box_before["max"])
+    assert box_after["min"] != pytest.approx(kernel.bounding_box(body.shape)["min"]), "鏡映先が元と同じ位置にある(検査の前提)"
 
 
 def test_redo_of_a_two_body_mirror_leaves_nothing_behind_when_the_second_copy_fails(

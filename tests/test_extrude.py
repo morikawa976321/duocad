@@ -327,11 +327,9 @@ def test_cut_without_a_target_body_fails():
 def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
     """長方形を押し出して板にし、円を `cut` で押し出して穴を開けられる。
 
-    受入対象の `shelf_attachment_GD.step` は56面 = 平面34 + 全周円筒22(穴)、トーラス0・
-    円錐0・spline0(実測)。ここではその最小形(平面6 + 全周円筒1 = 7面)を作れることを
-    確かめる。面の構成と体積はOCPで直接実測した値(box40×30×10からr=3の円柱を引き、
-    `query.describe_shape` で数えた)。体積が穴の分だけ減ることも見る(面の構成だけだと、
-    半径違いの穴でも7面のまま通ってしまう)。
+    最小形(平面6 + 全周円筒1 = 7面)を作れることを確かめる。面の構成と体積はOCPで直接実測した値
+    (box40×30×10からr=3の円柱を引き、`query.describe_shape` で数えた)。体積が穴の分だけ減ることも見る
+    (面の構成だけだと、半径違いの穴でも7面のまま通ってしまう)。
     """
     document = plate_document()
     assert math.isclose(

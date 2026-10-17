@@ -323,7 +323,7 @@ class ContactSystem:
     memory_mb bounds dense contact work, not the separate sparse LU factors.
     """
     def __init__(self, bodies, pairs, search_distance, *, allow_penetration=False,
-                 max_candidates=2400, memory_mb=768):
+                 max_candidates=2400, memory_mb=768, max_penetration=None, two_pass=True):
         self.bodies = list(bodies)
         if not np.isfinite(search_distance) or search_distance <= 0:
             raise ValueError("search_distance must be positive")
@@ -332,8 +332,10 @@ class ContactSystem:
         vals = [[] for _ in bodies]
         gaps, points, normals, records = [], [], [], []
         for pair in pairs:
-            for si, se, mi, me in ((pair.a, pair.edges_a, pair.b, pair.edges_b),
-                                    (pair.b, pair.edges_b, pair.a, pair.edges_a)):
+            passes = ((pair.a, pair.edges_a, pair.b, pair.edges_b),
+                      (pair.b, pair.edges_b, pair.a, pair.edges_a))
+            # two_pass=False は a の節点 → b の辺の片方向だけ(両方向の制約がほぼ重複して LCP が収束しないときの逃げ道)
+            for si, se, mi, me in (passes if two_pass else passes[:1]):
                 if si == mi:
                     raise ValueError("Self-contact is not supported")
                 sm, mm = bodies[si].mesh, bodies[mi].mesh
@@ -367,7 +369,10 @@ class ContactSystem:
                     normal, xi = mn[j], t[j]
                     g = float((p-projections[j]) @ normal)
                     tangential = np.linalg.norm(p-projections[j]-g*normal)
-                    if g >= search_distance or tangential >= search_distance:
+                    # 辺の裏側から深く射影された組(実測: ナットより下のボルトの節点が、軸に直角に近いナットの斜面へ
+                    # g=-7mm で射影された)は接触ではない。max_penetration より深い負の隙間は候補にしない
+                    deep = max_penetration is not None and g < -max_penetration
+                    if g >= search_distance or tangential >= search_distance or deep:
                         continue
                     row = len(gaps)
                     gaps.append(g)

@@ -7,6 +7,7 @@ import math
 
 import numpy as np
 import pytest
+from scipy import ndimage
 
 from duocad import optimize_run
 from duocad.optimize_steps import OptimizationSteps
@@ -26,7 +27,8 @@ def _coarse_grids_allowed(monkeypatch) -> None:
 
 
 def test_a_finish_request_stops_the_search_and_finishes_the_chosen_step(session: Session) -> None:
-    """落ちたら、「このステップで仕上げる」で探索が止まらないか、選んだのと別の形を仕上げるか、中断と同じく何も足さない。"""
+    """落ちたら、「このステップで仕上げる」で探索が止まらないか、選んだのと別の形を仕上げるか、中断と同じく何も足さない。
+    ステップの形は表面のセルだけで配る(`steps.voxels`)ことも、この実走で見る。"""
     four_conditions(session)
     steps = OptimizationSteps()
     events: list = []
@@ -42,6 +44,14 @@ def test_a_finish_request_stops_the_search_and_finishes_the_chosen_step(session:
         assert result["search_safety_factor"] == meta[1]["safety_factor"]
     announced = [event["step"]["index"] for event in events if "step" in event]
     assert announced == [0, 1, 2]  # 合格形が増えるたびに進捗で画面へ知らせる
+    # 画面へ配るのは表面のセルだけ(内側まで配って重くしていない・表面が欠けていない)
+    payload = steps.voxels(0)
+    mask = steps.shapes()[0].mask()
+    surface = mask & ~ndimage.binary_erosion(mask, border_value=0)
+    assert payload["index"] == 0 and payload["total"] == int(surface.sum()) < int(mask.sum())
+    assert payload["stride"] == 1 and sorted(payload["elements"]) == np.flatnonzero(surface.ravel()).tolist()
+    with pytest.raises(IndexError):
+        steps.voxels(len(steps))
 
 
 def test_after_the_run_another_step_is_finished_without_searching_again(session: Session, monkeypatch) -> None:
@@ -74,24 +84,8 @@ def test_a_cancel_wins_over_a_finish_request_and_nothing_is_finished_before_a_fe
     assert len(session.document.bodies) == before
 
 
-def test_a_step_is_shown_by_its_surface_cells_only(session: Session) -> None:
-    """落ちたら、ステップの形に内側のセルまで配って重くしているか、表面のセルが欠けている。"""
-    four_conditions(session)
-    steps = OptimizationSteps()
-    optimize_run.run(session.document, OPTIONS, steps=steps, finish_request=lambda final=False: -1 if len(steps) >= 1 else None)
-    payload = steps.voxels(0)
-    mask = steps.shapes()[0].mask()
-    from scipy import ndimage
-
-    surface = mask & ~ndimage.binary_erosion(mask, border_value=0)
-    assert payload["index"] == 0 and payload["total"] == int(surface.sum()) < int(mask.sum())
-    assert payload["stride"] == 1 and sorted(payload["elements"]) == np.flatnonzero(surface.ravel()).tolist()
-    with pytest.raises(IndexError):
-        steps.voxels(len(steps))
-
-
 def test_the_screen_lists_the_steps_shows_one_and_finishes_another_after_the_run(session: Session) -> None:
-    """落ちたら、画面がステップの一覧・形を取れないか、実行の後に選んだステップの仕上げが結果として届かない。"""
+    """落ちたら、画面がステップの一覧・形を取れないか、実行の後に選んだステップの仕上げが結果として届かない。進捗は実行の識別子を持つ。"""
     four_conditions(session)
 
     async def scenario() -> FakeConnection:
@@ -115,6 +109,9 @@ def test_the_screen_lists_the_steps_shows_one_and_finishes_another_after_the_run
     results = connection.of_type("optimize_result")
     assert [row["finished_step"] for row in results] == [len(listing["steps"]) - 1, 0]
     assert results[1]["name"] == "optimized-step1"
+    # 後から届いた前の実行の進捗を画面が見分けられるよう、進捗はどれも実行の識別子を持つ
+    progress = connection.of_type("optimize_progress")
+    assert progress and {event["run"] for event in progress} == {session.optimization_steps.run}
 
 
 def test_finish_while_running_sets_the_request_and_tells_the_screen(session: Session) -> None:
@@ -178,12 +175,3 @@ def test_a_finish_after_the_search_has_ended_is_refused_without_clearing_the_run
     [error] = connection.of_type("optimize_error")
     assert error["already_running"] is True and "探索はもう終わって" in error["message"]
     assert session._finish_request == 1  # 閉じた後の要求で書き換わらない
-
-
-def test_every_progress_event_of_a_session_run_carries_the_run_id(session: Session) -> None:
-    """落ちたら、後から届いた前の実行の進捗を画面が見分けられず、新しい実行の表示を上書きする。"""
-    four_conditions(session)
-    events: list = []
-    session.run_optimization(element_size_mm=8.0, progress=events.append)
-    run = session.optimization_steps.run
-    assert events and {event["run"] for event in events} == {run}

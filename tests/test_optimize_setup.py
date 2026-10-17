@@ -9,7 +9,6 @@ import pytest
 from duocad import optimize, selection
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
-from document_support import replay_through_json
 from session_support import SIDE, pad, select as _select, send_one
 
 from duocad.paths import REPO_ROOT
@@ -377,25 +376,6 @@ def test_the_fingerprint_check_names_what_changed(session: Session) -> None:
     assert reason is not None and "面積" in reason, reason
 
 
-def test_the_setup_survives_a_save_and_reopen(session: Session) -> None:
-    """**保存の実体は操作ログのJSON**なので、条件も往復する。
-
-    落ちるのは「条件をログではなくセッション状態に置いた」とき —— 開き直すと黙って消える。
-    """
-    body = _box(session)
-    _select(session, _body_refs(body))
-    session.set_preserve_bodies()
-    _select(session, _face_refs(body, [1, 2]))
-    session.set_fixtures()
-    _select(session, _face_refs(body, [3]))
-    session.set_loads(120.0, [1.0, 0.0, 0.0])
-    before = _optimize(session)
-
-    reopened = replay_through_json(session.document)
-
-    assert optimize.state_payload(reopened) == before
-
-
 def test_the_setup_survives_a_real_save_and_open(tmp_path) -> None:
     """落ちたら、`save_document` → `new_document` → `open_document` の実APIの往復(ファイルI/Oと
     文書の差し替えを通る)で条件が戻らないか、差し替え後に前の文書の割り当てを配っている。"""
@@ -634,24 +614,9 @@ def test_clearing_a_face_that_has_no_load_is_not_an_error(session: Session) -> N
     assert _specs(session) == []
 
 
-@pytest.mark.parametrize(
-    "verb", ["set_preserve_bodies", "set_exclude_bodies", "set_fixtures", "set_loads"]
-)
-def test_every_verb_is_reachable_from_all_three_surfaces(verb: str) -> None:
-    """**宣言は1箇所**(`catalog.py`)で、WSの表もMCPのツールもそこからの導出である。"""
-    from duocad import catalog
-    from duocad.server import FEATURE_COMMANDS
-
-    command = catalog.BY_NAME[verb]
-    assert not command.resets_selection, "形を変えるverbではないので選択をリセットしない"
-    assert verb in FEATURE_COMMANDS, "WebSocketの表に無い"
-    assert verb in catalog.tool_names(), "MCPのツールに無い"
-
-
 #: verb名 -> (対象の選び方, WSへ送る引数, MCPラッパへ渡す引数, 結果を確かめる読み取り)。
 #:
-#: **4 verb 全部をWSとMCPの両方で実際に走らせる**ための表。宣言の照合(下の
-#: `test_every_verb_is_reachable_from_all_three_surfaces`)だけでは、
+#: **4 verb 全部をWSとMCPの両方で実際に走らせる**ための表。宣言の照合だけでは、
 #: **引数の受け渡しが繋がっているか**は分からない —— WSもMCPも、宣言の引数名のまま
 #: 入口(`duocad/entry.py`)へ渡すので、宣言と入口の引数名が食い違えば `TypeError` になる。
 #: **その経路を1回走らせるまで誰も気づかない**。
@@ -688,7 +653,10 @@ _ROUTES = {
 
 @pytest.mark.parametrize("verb", sorted(_ROUTES))
 def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
-    """**4 verb とも、WS経由とMCP経由で実際に走って同じ結果になる。**"""
+    """**4 verb とも、WS経由とMCP経由で実際に走って同じ結果になる。**(形を変える verb ではないので選択をリセットしない)"""
+    from duocad import catalog
+
+    assert not catalog.BY_NAME[verb].resets_selection
     picker, arguments, read = _ROUTES[verb]
 
     def run(use_websocket: bool):

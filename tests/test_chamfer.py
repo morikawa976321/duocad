@@ -80,8 +80,7 @@ def test_chamfer_records_provenance_through_the_normalizing_adapter():
 
     operation = chamfer(doc, circular[:1], 1.0, body_id=body_id)
 
-    assert operation.provenance is not None
     assert operation.provenance["verb"] == "chamfer"
-    # フィレットと同じキーを要求する（片方だけ緩いと、面取りだけ由来が空でも緑になる）
-    assert "face_map" in operation.provenance
+    # 面取りだけ由来の写像が空でも緑にならない(フィレットは `test_fillet_shifts_face_indices` が中身まで見ている)
+    assert operation.provenance["face_map"]
     doc.log.to_json()  # JSON化できない値が混ざっていればここで落ちる

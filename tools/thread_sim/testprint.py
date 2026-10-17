@@ -113,10 +113,20 @@ def make_hole_plate(diams, thickness: float, pitch: float):
 
 
 OUTCOMES_THREAD = ["入らない", "途中で止まる", "全長回るが固い", "手で軽く回る", "試していない"]
-FLAGS_THREAD = ["ガタが大きい", "山を飛ぶ・抜ける"]
+FLAGS_THREAD = ["ガタが大きい", "山を飛ぶ・抜ける", "ねじ山の印刷が崩れている"]
 
 
-def write_page(groups, path: Path, title: str):
+INTRO = (
+    '<div class="intro"><p><b>刷り方</b>: <code>plate.stl</code> を ElegooSlicer で開き、プリンター「Elegoo Centauri Carbon 0.4 nozzle」・'
+    'プロセス「0.20mm Standard @Elegoo CC 0.4 nozzle」・PLA のまま、設定は何も変えずに刷る(並べ替え・サポート不要)。</p>'
+    '<p><b>試し方</b>: 冷めてから、工具・潤滑・削りなしで、ナットをボルトの先から手で回す。<b>初回のねじ込みで判定</b>し、固くなったら無理に進めず外す'
+    '(軽くするための往復はしない)。締め付けずに、ナットがボルトの頭に当たるところまで進めば「全長」。'
+    '<b>凹み1個(一番緩い)のナットから順に</b>試し、その系列で「入らない」か「途中で止まる」が出たら、残りは試さず「試していない」のままでよい。</p>'
+    '<p><b>返し方</b>: 各行を1つクリック(点線の枠は当てはまるときだけ追加)。下の「コピー」を押し、出てきた1行を次のメッセージに貼る。途中で閉じても選択は残る。</p></div>'
+)
+
+
+def write_page(groups, path: Path, title: str, intro: str = INTRO, test_id: str = "TP1"):
     """groups: [(見出し, 説明, [(id, 表示名, 選択肢, 追加のチェック)])]。
     結果は 'id=選択肢[+チェック]' を並べた1行のテキストになる。"""
     def esc(s):
@@ -124,7 +134,9 @@ def write_page(groups, path: Path, title: str):
 
     blocks = []
     legend = {}
-    for head, desc, items in groups:
+    for g in groups:
+        head, desc, items = g[:3]
+        svg = g[3] if len(g) > 3 else ""
         rows = []
         for iid, name, opts, flags in items:
             cells = "".join(
@@ -134,7 +146,7 @@ def write_page(groups, path: Path, title: str):
                          for k, o in enumerate(flags))
             rows.append(f'<div class="row"><div class="name">{esc(name)}</div><div class="opts">{cells}{fl}</div></div>')
             legend[iid] = [name, opts, flags]
-        blocks.append(f'<section><h2>{esc(head)}</h2><p class="desc">{esc(desc)}</p>{"".join(rows)}</section>')
+        blocks.append(f'<section><h2>{esc(head)}</h2><div class="head"><p class="desc">{esc(desc)}</p>{svg}</div>{"".join(rows)}</section>')
     css = """
 :root { --bg:#fafaf8; --fg:#222; --muted:#666; --line:#ddd; --chip:#eee; --on:#2b6cb0; --onfg:#fff; --flag:#b7791f; }
 @media (prefers-color-scheme: dark) { :root { --bg:#1b1b1d; --fg:#e8e8e8; --muted:#aaa; --line:#333; --chip:#2a2a2e; --on:#5a9be0; --onfg:#111; --flag:#d69e2e; } }
@@ -148,8 +160,27 @@ label.flag span { border:1px dashed var(--flag); } label.flag input:checked + sp
 #out { width:100%; height:90px; font:13px/1.4 ui-monospace, monospace; background:var(--chip); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px; box-sizing:border-box; }
 button { margin:8px 0; padding:8px 16px; border-radius:6px; border:0; background:var(--on); color:var(--onfg); font-size:15px; cursor:pointer; }
 .sticky { position:sticky; bottom:0; background:var(--bg); padding:8px 0; border-top:2px solid var(--line); }
+.intro { background:var(--chip); border-radius:8px; padding:8px 12px; } .intro p { margin:6px 0; }
+.head { display:flex; flex-wrap:wrap; gap:12px; align-items:center; } .head .desc { flex:1 1 300px; }
+svg.prof { width:260px; height:auto; max-width:100%; } svg.prof .b { fill:var(--on); opacity:.75; } svg.prof .n { fill:var(--flag); opacity:.6; }
+svg.prof text { fill:var(--muted); font-size:10px; }
 """
     js = """
+const KEY = 'thread-testprint-' + TEST_ID;
+function save() {
+  try {
+    const st = {};
+    document.querySelectorAll('input').forEach(e => { if (e.checked) st[e.name + '|' + e.value] = 1; });
+    localStorage.setItem(KEY, JSON.stringify(st));
+  } catch (e) {}
+}
+function restore() {
+  try {
+    const st = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (!st) return;
+    document.querySelectorAll('input').forEach(e => { e.checked = !!st[e.name + '|' + e.value]; });
+  } catch (e) {}
+}
 function update() {
   const parts = [];
   for (const id of Object.keys(LEGEND)) {
@@ -158,41 +189,70 @@ function update() {
     document.querySelectorAll('input[name="' + id + '_f"]:checked').forEach(f => { s += '+' + LEGEND[id][2][+f.value]; });
     parts.push(s);
   }
-  document.getElementById('out').value = 'ねじ試し刷り結果 ' + parts.join(' ');
+  document.getElementById('out').value = 'ねじ試し刷り結果 ' + TEST_ID + ' ' + parts.join(' ');
 }
-document.querySelectorAll('input').forEach(e => e.addEventListener('change', update));
+document.querySelectorAll('input').forEach(e => e.addEventListener('change', () => { update(); save(); }));
 document.getElementById('copy').addEventListener('click', async () => {
   update(); const t = document.getElementById('out');
   try { await navigator.clipboard.writeText(t.value); document.getElementById('msg').textContent = 'コピーしました'; }
-  catch (e) { t.select(); document.execCommand('copy'); document.getElementById('msg').textContent = 'コピーしました'; }
+  catch (e) {
+    t.focus(); t.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (e2) {}
+    document.getElementById('msg').textContent = ok ? 'コピーしました' : '文字列を選んだ状態にしました。Ctrl+C でコピーしてください';
+  }
 });
+restore();
 update();
 """
     page = ('<!doctype html><html lang="ja"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{esc(title)}</title><style>{css}</style></head><body>"
             f"<h1>{esc(title)}</h1>"
-            '<p class="desc">刷った部品を組んで、各行の結果を1つクリックしてください(点線の枠は、当てはまるときだけ追加で押す)。'
-            "最後に「コピー」を押し、出てきた文字列を次のメッセージに貼れば終わりです。</p>"
+            + intro
             + "".join(blocks)
             + '<div class="sticky"><textarea id="out" readonly></textarea><br><button id="copy">コピー</button> '
               '<span id="msg" class="desc"></span></div>'
-            + f"<script>const LEGEND = {json.dumps(legend, ensure_ascii=False)};{js}</script></body></html>")
+            + f"<script>const TEST_ID = {json.dumps(test_id)}; const LEGEND = {json.dumps(legend, ensure_ascii=False)};{js}</script></body></html>")
     path.write_text(page, encoding="utf-8")
+
+
+def profile_svg(bolt: pf.Profile, nut: pf.Profile, pitches: float = 2.0) -> str:
+    """ボルト(青)とナット(橙)の山形の断面を、軸を縦にして2ピッチ分描く。半径は山の付近だけを拡大。"""
+    P = bolt.pitch
+    s = np.linspace(0, pitches * P, 400)
+    rb, rn = bolt(s), nut(s)
+    r0 = min(rb.min(), rn.min()) - 0.35 * bolt.depth - 0.1
+    r1 = max(rb.max(), rn.max()) + 0.35 * bolt.depth + 0.1
+    W, H = 260, 200
+    sx_ = (W - 40) / (r1 - r0)
+    sz_ = (H - 20) / (pitches * P)
+    k = min(sx_, sz_)
+    X = lambda r: 30 + (r - r0) * k
+    Y = lambda z: H - 10 - z * k
+    pb = " ".join(f"{X(r):.1f},{Y(z):.1f}" for z, r in zip(s, rb))
+    pn = " ".join(f"{X(r):.1f},{Y(z):.1f}" for z, r in zip(s, rn))
+    zt = pitches * P
+    bolt_poly = f"{X(r0):.1f},{Y(0):.1f} {pb} {X(r0):.1f},{Y(zt):.1f}"
+    nut_poly = f"{X(r1):.1f},{Y(0):.1f} {pn} {X(r1):.1f},{Y(zt):.1f}"
+    return (f'<svg class="prof" viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="山形の断面">'
+            f'<polygon class="b" points="{bolt_poly}"/><polygon class="n" points="{nut_poly}"/>'
+            f'<text x="2" y="12">軸↑</text><text x="{W - 60}" y="{H - 2}">外側→</text></svg>')
 
 
 # ---------- 一式 ----------
 
 SERIES = [
     # (記号, 表示名, 呼び径, 山形, 隙間の付け方, 頭とナットの角の数, ナットの隙間(雌雄の和。ボルトは呼び寸法のまま))
-    # 隙間は、剛体の予測(c_geo + 寸法誤差 0〜0.3)の両側を覆い、予測より十分小さい側も入れる(astra の指摘)
-    ("A", "ISO M6×1", 6, lambda: pf.iso(6, 1.0), "radial", 6, [0.1, 0.2, 0.3, 0.4]),
-    ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.05, 0.15, 0.25, 0.35]),
-    ("K", "30°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 30, 30), "radial", 5, [0.15, 0.3, 0.45]),
-    ("C", "半円 D6 P2 ρ0.6(法線の隙間)", 6, lambda: pf.coil(6, 2.0, 0.6), "normal", 8, [0.1, 0.2, 0.3]),
-    ("D", "45°台形 D3 P1.0 深さ0.3", 3, lambda: pf.trapezoid(3, 1.0, 0.3, 45, 45), "radial", 4, [0.05, 0.15, 0.25]),
-    ("F", "半円 D3 P1.2 ρ0.4(法線の隙間)", 3, lambda: pf.coil(3, 1.2, 0.4), "normal", 8, [0.05, 0.12, 0.2]),
+    # 隙間は、剛体の予測 c_geo + 寸法誤差(0〜0.3)の範囲を覆い、予測より小さい側も1つ入れる(astra の指摘)。
+    # 半円は法線の隙間で谷が重なるまで(2(ρ+c) ≤ P)しか広げられないので、上端が足りないことがある
+    ("A", "ISO M6×1", 6, lambda: pf.iso(6, 1.0), "radial", 6, [0.15, 0.3, 0.45, 0.6]),
+    ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.05, 0.15, 0.3, 0.45]),
+    ("K", "30°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 30, 30), "radial", 5, [0.2, 0.4, 0.6]),
+    ("C", "半円 D6 P2 ρ0.6(法線の隙間)", 6, lambda: pf.coil(6, 2.0, 0.6), "normal", 8, [0.15, 0.27, 0.4]),
+    ("D", "45°台形 D3 P1.2 深さ0.48", 3, lambda: pf.trapezoid(3, 1.2, 0.48, 45, 45), "radial", 4, [0.05, 0.2, 0.35]),
+    ("F", "半円 D3 P1.2 ρ0.4(法線の隙間)", 3, lambda: pf.coil(3, 1.2, 0.4), "normal", 8, [0.08, 0.14, 0.2]),
 ]
+TEST_ID = "TP1"  # 一式の版。部品や隙間を変えたら上げる(結果の1行に入る)
 GAUGES = [("G", 6.0, [6.0, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6]), ("H", 3.0, [3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6])]
 
 
@@ -222,8 +282,10 @@ def build(out: Path = OUT, only=None):
                                 dict(D=D, mode=mode, clearance=c, series=sid)))
             items.append((f"{sid}{i}", f"ナット{i}(上面の凹み{i}個)", OUTCOMES_THREAD, FLAGS_THREAD))
         shape_ja = {4: "四角", 5: "五角", 6: "六角", 8: "八角"}[sides]
+        mid = sorted(cs)[len(cs) // 2]
         groups.append((f"{sid}: {name}", f"頭とナットが{shape_ja}の組。ナットはボルトの先から手で回し、凹み1個のナットから順に試す。"
-                       "1つ試したら外してから次へ。工具は使わない。", items))
+                       "1つ試したら外してから次へ。工具は使わない。(図: 青がボルト、橙がナット)", items,
+                       profile_svg(prof, pf.nut_of(prof, mid, mode))))
     gitems = []
     for gid, d, holes in GAUGES:
         if only and gid not in only:
@@ -240,9 +302,88 @@ def build(out: Path = OUT, only=None):
     if gitems:
         groups.append(("G・H: ねじ無しのピンと穴の板", "穴は角を切った端から順に1番、2番…で、端ほど小さい。"
                        "ピンが引っかからずにすっと入る一番小さい穴を選ぶ。", gitems))
-    (out / "manifest.json").write_text(json.dumps([p.__dict__ for p in pieces], ensure_ascii=False, indent=1), encoding="utf-8")
-    write_page(groups, out / "index.html", "ねじ試し刷りの結果")
+    plate = make_plate(out, pieces)
+    (out / "manifest.json").write_text(json.dumps(dict(test_id=TEST_ID, pieces=[p.__dict__ for p in pieces], plate=plate),
+                                                  ensure_ascii=False, indent=1), encoding="utf-8")
+    write_page(groups, out / "index.html", "ねじ試し刷りの結果", test_id=TEST_ID)
+    if not only:
+        predict(out)
     return pieces
+
+
+PRED_VARIANTS = {"基準": {}, "垂れ無し": dict(sag_amp=0.0), "垂れ2倍": dict(sag_amp=2.0), "垂れ始めφ0.3": dict(sag_phi_ok=0.3),
+                 "垂れ始めφ0.7": dict(sag_phi_ok=0.7), "ビード角立ち": dict(bead_round=0.0), "ビード丸み半分": dict(bead_round=0.5)}
+
+
+def predict(out: Path = OUT) -> dict:
+    """事前の予測(試し刷りの結果を見る前に固定する): 系列ごとの必要な隙間 c_geo と、その印刷の模擬の係数による幅、
+    ナットごとの誤差なしの余り・掛かり代・遊び。ボルトは呼び寸法のまま(split=0)。"""
+    from dataclasses import replace
+    from . import evaluate as ev
+    from .printer import DEFAULT
+    res = {}
+    for sid, name, D, mk, mode, _, cs in SERIES:
+        prof = mk()
+        des = ev.Design(name, prof, max(cs), mode=mode, L_nut=float(D), R_out=0.9 * D, split=0.0)
+
+        def c_geo(pr):
+            if mode == "normal":
+                return ev.c_required(des, pr)
+            return des.clearance - ev.evaluate(des, pr, with_strength=False).margin
+
+        nuts = []
+        for c in sorted(cs, reverse=True):
+            e = ev.evaluate(replace(des, clearance=c), DEFAULT, with_strength=False)
+            nuts.append(dict(c=c, margin=round(e.margin, 3), engagement=round(e.engagement, 3), play=round(e.play, 3)))
+        res[sid] = dict(name=name, mode=mode, c_geo=round(c_geo(DEFAULT), 3), nuts=nuts,
+                        c_geo_variants={k: round(c_geo(DEFAULT.with_(**kw)), 3) for k, kw in PRED_VARIANTS.items()})
+    (out / "predictions.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+    return res
+
+
+def _read_stl(path: Path) -> np.ndarray:
+    d = np.fromfile(path, dtype=np.uint8)
+    rec = np.frombuffer(d[84:].tobytes(), dtype=[("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")])
+    return rec["v"].astype(float)  # (三角形, 3, 3)
+
+
+def make_plate(out: Path, pieces, bed: float = 256.0, margin: float = 8.0, gap: float = 5.0) -> dict:
+    """部品をベッドに並べた1つの STL(plate.stl)。系列ごとに1列(ボルト、ナット1,2,…の順)、ゲージは最後の列。
+    各部品の底を z=0 に置く。並べ終えた範囲がベッドに収まらなければ断る。"""
+    rows, order = [], []
+    for p in pieces:
+        key = p.id[0] if p.kind in ("bolt", "nut") else "G"
+        if not rows or rows[-1][0] != key:
+            rows.append((key, []))
+        rows[-1][1].append(p)
+    tris, y, placed = [], margin, []
+    for key, ps in rows:
+        x, row_h = margin, 0.0
+        for p in ps:
+            T = _read_stl(out / p.file)
+            lo, hi = T.reshape(-1, 3).min(0), T.reshape(-1, 3).max(0)
+            w, h = hi[0] - lo[0], hi[1] - lo[1]
+            if x + w > bed - margin:  # 列が溢れたら折り返す
+                x, y = margin, y + row_h + gap
+                row_h = 0.0
+            T = T - lo + np.array([x, y, 0.0])
+            tris.append(T)
+            placed.append(dict(id=p.id, x=float(x), y=float(y), w=float(w), h=float(h)))
+            x += w + gap
+            row_h = max(row_h, h)
+        y += row_h + gap
+    if y - gap > bed - margin:
+        raise ValueError(f"ベッドに収まらない(奥行き {y:.0f}mm)")
+    T = np.concatenate(tris)
+    n = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-30)
+    rec = np.zeros(len(T), dtype=[("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")])
+    rec["n"], rec["v"] = n, T
+    with (out / "plate.stl").open("wb") as fh:
+        fh.write(b"duocad thread_sim plate".ljust(80, b" "))
+        fh.write(np.uint32(len(T)).tobytes())
+        fh.write(rec.tobytes())
+    return dict(depth=float(y - gap), placed=placed)
 
 
 if __name__ == "__main__":
