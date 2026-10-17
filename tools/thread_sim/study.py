@@ -250,7 +250,28 @@ def study3():
     return specs, {}, dict(e_req=0.1, runner="window"), {}
 
 
-STUDIES = {"study1": study1, "study2": study2, "study3": study3, "study4": study4}
+def study5():
+    """改良の第2段(小径に絞る): 斜面の角(対称・非対称)・山頂の取り分・ピッチ/径・深さ/ピッチ、隙間は法線方向と半径方向。
+    D2 まで下げて、W ≥ 0.2 が残る最小の径を探す。"""
+    specs = []
+    for D in (2.0, 2.5, 3.0, 4.0, 5.0, 6.0):
+        base = dict(L_nut=float(D), R_out=0.9 * D, family="trap", D=D)
+        for pr_ in (0.3, 0.4, 0.5):
+            P = round(pr_ * D / 0.05) * 0.05
+            for dr in (0.3, 0.4):
+                depth = round(dr * P, 3)
+                for b_lo, b_up in ((40, 40), (45, 45), (45, 40), (40, 45)):
+                    flats = P - depth * (math.tan(math.radians(b_lo)) + math.tan(math.radians(b_up)))
+                    if flats < 0.15:
+                        continue
+                    for share in (0.3, 0.5, 0.7):
+                        for mode in ("normal", "radial"):
+                            specs.append(dict(base, P=P, depth=depth, b_lo=b_lo, b_up=b_up, crest_share=share, mode=mode,
+                                              pitch_ratio=pr_, name=f"台形{b_lo}/{b_up} D{D:g} P{P:g} h{depth:g} 山{share} {mode}"))
+    return specs, {}, dict(e_req=0.1, runner="window"), {}
+
+
+STUDIES = {"study1": study1, "study2": study2, "study3": study3, "study4": study4, "study5": study5}
 
 
 def main():
