@@ -377,6 +377,19 @@ def geometry():
                       retained_error=thread_retained, edge_length_error=thread_length_error,
                       area=thread_area, exact_area=exact_thread_area,
                       boundary_matches=thread_boundary_matches, pass_=bool(thread_passed)))
+    # Nut section whose bore root lies outside the bearing radius: the bottom edge doubles
+    # back on itself. Boundary recovery used to split forever; it must be refused at once.
+    t0 = perf_counter()
+    try:
+        mesh_polygon([[5.732, 0.], [5.7, 0.], [9., 0.], [9., 1.], [5.732, 1.]],
+                     lambda p: np.full(len(p), .045), .0225, .35)
+        back_message = ''
+    except ValueError as ex:
+        back_message = str(ex)
+    back_seconds = perf_counter() - t0
+    back_passed = 'doubles back' in back_message and back_seconds < 5
+    rows.append(dict(name='doubled_back_edge', message=back_message, seconds=back_seconds,
+                     pass_=bool(back_passed)))
     # Penetration rejection and immutable normal/gap for a pair of sloping faces.
     lower = mesh([[0, -1], [1, -1], [1, .2], [0, 0]], .2, 'inclined_lower')
     upper = mesh([[0, -.001], [1, .199], [1, 1], [0, 1]], .2, 'inclined_upper')
@@ -395,7 +408,7 @@ def geometry():
                                  detected=detected, message=message))
     return dict(meshes=rows, penetration=penetration,
                 pass_=retained<1e-12 and length_error<1e-10
-                and abs(hole_area-7.4)<1e-10 and sloped_passed and thread_passed
+                and abs(hole_area-7.4)<1e-10 and sloped_passed and thread_passed and back_passed
                 and all(p['detected'] for p in penetration))
 
 
