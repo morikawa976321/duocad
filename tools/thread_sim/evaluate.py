@@ -124,6 +124,9 @@ def strength_of(ev: Evaluation, mat: st.PrintedPLA) -> st.Result | None:
     nut_r = lambda z: np.interp(np.mod(z, P), ss, mn2)
     R_out = des.R_out if des.R_out is not None else 0.9 * des.d
     r_bear = min(0.55 * des.d + 0.2, 0.5 * (des.d / 2 + R_out))
+    # 穴が大きく刷れた側(法線方向の隙間が大きい設計の緩い端)では穴の谷が座面の内径を越え、ナットの下面の辺が折り返して
+    # メッシュの境界の回復が発散する(実測: 台形45 D10 P4 normal、谷 5.732 > 座面 5.70)。座面は穴の縁から始める
+    r_bear = min(max(r_bear, float(mn.max()) + 0.2), R_out - 0.3)
     j = st.Joint(bolt_r, nut_r, P, des.L_nut, R_out, r_bear)
     try:
         return st.analyze(j, mat)

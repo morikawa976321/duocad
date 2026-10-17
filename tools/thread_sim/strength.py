@@ -195,22 +195,52 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
             raise ValueError(f"初期の重なり {system.g0.min():.4f}mm")
         pen_info = (int(pen.sum()), float(system.g0.min()) if pen.any() else 0.0)
         system.g0 = np.maximum(system.g0, 0.0)
-        # 1回の解で荷重のおおよその剛性を取り、破壊までの範囲を走査する
-        probe = 1e-3
-        r = system.solve(probe)
-        F_probe = _axial_force(bolt, r.bodies[0], bid["bottom"])
-        tcd = _TcdAverager([bpoly, npoly], [bolt, nut], [r.bodies[0], r.bodies[1]], [m.L * 1.32], walls=[bwall, nwall], exclude=dict(
+        # 走査の起点: 置き方の初期の隙間(最大 dz)を閉じて接触が起きるまで試しの変位を倍々にする
+        # (0.001mm では接触が無く、そこから推定した走査が極端な変位になっていた。Codex のレビュー)
+        def solve_at(d):
+            rr = system.solve(float(d))
+            return rr, _axial_force(bolt, rr.bodies[0], bid["bottom"])
+
+        d1 = 0.002
+        while True:
+            r1, F1 = solve_at(d1)
+            if F1 > 1e-6 and (r1.multipliers > 0).any():
+                break
+            d1 *= 2
+            if d1 > 1.0:
+                raise ValueError("試しの変位を 1mm にしても接触しない")
+        tcd = _TcdAverager([bpoly, npoly], [bolt, nut], [r1.bodies[0], r1.bodies[1]], [m.L * 1.32], walls=[bwall, nwall], exclude=dict(
             bolt=lambda p: p[:, 1] < -j.L_below + 1.5 * j.pitch, nut=lambda p: np.hypot(p[:, 0] - j.r_bear, p[:, 1]) < 0.3))
-        fi_probe, _, _ = tcd.index(r, m)
-        # 破壊指数は応力の2次なので、だいたい Δ ∝ 1/√FI。そこを中心に走査する(単調とは限らないので二分探索はしない)
-        d_est = probe / math.sqrt(max(fi_probe, 1e-30))
-        deltas = np.linspace(0.25, 1.6, n_steps) * d_est if delta_max is None else np.linspace(delta_max / n_steps, delta_max, n_steps)
+        d2 = 2 * d1
+        r2, F2 = solve_at(d2)
+        k_ax = max((F2 - F1) / (d2 - d1), 1e-12)  # 接触が閉じた後の軸方向の剛性
+        d_close = d1 - F1 / k_ax  # 接触が閉じる変位
+        fi2, _, _ = tcd.index(r2, m)
+        # 接触が閉じた後は応力 ∝ 荷重で、破壊指数は応力の2次。だいたい F_fail ≈ F2/√FI2。その前後を走査し、FI=1 を挟むまで広げる
+        if delta_max is None:
+            F_est = F2 / math.sqrt(max(fi2, 1e-30))
+            span = F_est / k_ax
+            deltas = list(d_close + np.linspace(0.4, 1.6, n_steps) * span)
+        else:
+            deltas = list(np.linspace(delta_max / n_steps, delta_max, n_steps))
         rows = []
         for d in deltas:
-            rr = system.solve(float(d))
-            F = _axial_force(bolt, rr.bodies[0], bid["bottom"])
+            rr, F = solve_at(d)
             fi, where, mode = tcd.index(rr, m)
             rows.append((float(d), F, fi, where, mode, rr))
+        for _ in range(4):
+            if rows[0][2] >= 1:  # 最初の段で既に壊れている: 手前へ広げる
+                d = d_close + 0.5 * (rows[0][0] - d_close)
+                rr, F = solve_at(d)
+                fi, where, mode = tcd.index(rr, m)
+                rows.insert(0, (float(d), F, fi, where, mode, rr))
+            elif rows[-1][2] < 1:  # 最後の段でもまだ壊れない: 先へ広げる
+                d = d_close + 1.5 * (rows[-1][0] - d_close)
+                rr, F = solve_at(d)
+                fi, where, mode = tcd.index(rr, m)
+                rows.append((float(d), F, fi, where, mode, rr))
+            else:
+                break
         return system, pen_info, tcd, rows
 
     # 両方向の接触の制約がほぼ重複すると、LCP が収束しないことがある(実測 436 設計中 2 件)。そのときは片方向で解き直す
@@ -235,7 +265,7 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     last = rows[-1][5]
     share = _thread_share(last, j)
     net = _net_section(jj, m)
-    pressure = _contact_pressure(system, last)
+    pressure = _contact_pressure(system, last, halve=not lcp_fallback)
     # 平均化しない接触圧が C に届く荷重は、局所の降伏の始まりの目安(メッシュに依存する)。破断の判定には入れない
     F_yield_contact = rows[-1][1] * m.C / max(pressure, 1e-9)
     Fs = dict(tcd=F_tcd, **net)
@@ -336,7 +366,7 @@ def _thread_share(res: "ContactResult", j: Joint):
     return (tot / max(tot.sum(), 1e-30)).tolist()
 
 
-def _contact_pressure(system: ContactSystem, res) -> float:
+def _contact_pressure(system: ContactSystem, res, halve: bool = True) -> float:
     """接触力(リングの力)を、接触点の間隔と 2πr で割った最大の面圧(MPa)。"""
     lam = res.multipliers
     act = lam > lam.max() * 1e-6
@@ -348,8 +378,8 @@ def _contact_pressure(system: ContactSystem, res) -> float:
     seg = np.hypot(np.gradient(pts[:, 0]), np.gradient(pts[:, 1]))
     seg = np.maximum(seg, 1e-3)
     press = lam[act][order] / (2 * math.pi * np.maximum(pts[:, 0], 1e-6) * seg)
-    # 両方向の制約で同じ接触が2回数えられるので半分にする
-    return float(np.percentile(press, 99) / 2)
+    # 両方向の制約で同じ接触が2回数えられるので半分にする(片方向に切り替えたときは割らない)
+    return float(np.percentile(press, 99) / (2 if halve else 1))
 
 
 def _net_section(j: Joint, m: PrintedPLA) -> dict:

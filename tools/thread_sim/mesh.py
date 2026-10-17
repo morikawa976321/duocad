@@ -36,6 +36,14 @@ def _ring(poly):
         p = p[:-1]
     if len(p) < 3 or np.any(np.linalg.norm(np.roll(p, -1, axis=0) - p, axis=1) == 0):
         raise ValueError("At least three vertices and no zero-length edges required")
+    # An edge that doubles back along its predecessor overlaps it collinearly; boundary
+    # recovery then splits forever (measured: 48 rounds of doubling, hours per call).
+    e0, e1 = p - np.roll(p, 1, axis=0), np.roll(p, -1, axis=0) - p
+    cross = e0[:, 0] * e1[:, 1] - e0[:, 1] * e1[:, 0]
+    dot = np.sum(e0 * e1, axis=1)
+    scale = np.linalg.norm(e0, axis=1) * np.linalg.norm(e1, axis=1)
+    if np.any((dot < 0) & (np.abs(cross) <= 1e-9 * scale)):
+        raise ValueError("Polygon doubles back on itself (collinear overlapping edges)")
     return p.copy()
 
 
@@ -151,7 +159,10 @@ def mesh_polygon(poly, size_fn, h_min, h_max, holes=()):
         points = np.vstack((points, seeds))
 
     def triangulate(p, seg, src):
+        n_start = len(p)
         for _ in range(48):
+            if len(p) > 4 * n_start + 1000:
+                raise ValueError("Boundary recovery diverges (touching or overlapping boundary?)")
             dt = Delaunay(p)
             # Qhull can triangulate nominally collinear boundary subdivisions
             # into roundoff-area triangles. Their centroids have no reliable

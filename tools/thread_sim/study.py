@@ -137,23 +137,32 @@ def run_window(spec: dict, printer_kw: dict, opts, mat_kw: dict) -> dict:
         if not math.isfinite(c_geo):
             out["error"] = "どの隙間でも包絡が通らない"
             return out
-        scan = []
-        for dc in (0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.45):
+        # 窓の中心 z(c) = (余り − 掛かり代 + 下限)/2 は c とともに増える。z が 0 をまたぐまで c を広げ、
+        # 線形補間した c で W を測り直す(範囲の端を中心として採っていた。Codex のレビュー)
+        scan, cen = [], []
+        found = False
+        for dc in (0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.45, 0.6, 0.8, 1.0, 1.3, 1.7):
             try:
                 e_c = _sim(replace(des, clearance=c_geo + dc), pr)
             except ValueError:
                 break
-            scan.append((c_geo + dc, e_c.margin, e_c.engagement))
-        # 窓の中心 = (余り − 掛かり代 + 下限)/2 が 0 になる隙間を線形補間で
-        cen = [(c, (m - g + e_req) / 2, m + g - e_req) for c, m, g in scan]
-        c_center, W = cen[0][0], cen[0][2]
-        for (c0, z0, w0), (c1, z1, w1) in zip(cen, cen[1:]):
-            if z0 <= 0 <= z1:
-                a = (0 - z0) / (z1 - z0) if z1 != z0 else 0.0
-                c_center, W = c0 + a * (c1 - c0), w0 + a * (w1 - w0)
+            m_, g_ = e_c.margin, e_c.engagement
+            scan.append((c_geo + dc, m_, g_))
+            cen.append((c_geo + dc, (m_ - g_ + e_req) / 2))
+            if len(cen) >= 2 and cen[-2][1] <= 0 <= cen[-1][1]:
+                found = True
                 break
+            if len(cen) == 1 and cen[0][1] >= 0:  # c_geo で既に中心より緩い(掛かり代 < 下限 + 余り): 窓が開かない
+                break
+        if found:
+            (c0, z0), (c1, z1) = cen[-2], cen[-1]
+            c_center = c0 + (0 - z0) / (z1 - z0) * (c1 - c0) if z1 != z0 else c0
+            e_c = _sim(replace(des, clearance=c_center), pr)
+            W = e_c.margin + e_c.engagement - e_req
         else:
-            c_center, W = (cen[-1][0], cen[-1][2]) if cen[-1][1] < 0 else (cen[0][0], cen[0][2])
+            c_center, m_, g_ = scan[0] if cen and cen[0][1] >= 0 else scan[-1]
+            W = m_ + g_ - e_req
+            out["center_not_found"] = True
     e_g0 = _sim(replace(des, clearance=c_geo), pr)
     out.update(c_geo=c_geo, c_center=c_center, W=W, scan=scan, over_bolt=e_g0.over_bolt, over_nut=e_g0.over_nut,
                depth_kept=e_g0.depth_kept, rms_dev=e_g0.rms_dev, engagement_at_cgeo=e_g0.engagement)
