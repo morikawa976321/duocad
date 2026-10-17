@@ -548,33 +548,50 @@ def loft_regions(
 
     oriented = _oriented_normals(centroids, normals, start, end)
     aligned = _aligned_wires(wires, centroids, oriented, shifts)
-    matched = _matched_wires(aligned, centroids, oriented)
-
-    maker = BRepOffsetAPI_ThruSections(True, False, 1.0e-6)
-    maker.CheckCompatibility(False)
-    if start is not None:
-        maker.AddVertex(BRepBuilderAPI_MakeVertex(gp_Pnt(*start)).Vertex())
-    for wire in matched:
-        maker.AddWire(wire)
-    if end is not None:
-        maker.AddVertex(BRepBuilderAPI_MakeVertex(gp_Pnt(*end)).Vertex())
-    maker.Build()
-    if not maker.IsDone():
-        raise ValueError("failed to loft the sections (OCCT ThruSections)")
-    solid = maker.Shape()
-    _require_sound_loft(solid, faces)
-    _require_simple_slices(matched, start, end, faces)
+    failure: Optional[ValueError] = None
+    candidates = _matched_candidates(aligned, centroids, oriented)
+    for matched, own in candidates:
+        try:
+            solid = _thru_sections(matched, start, end, own)
+            _require_sound_loft(solid, faces)
+        except ValueError as error:
+            failure = failure or error
+            continue
+        break
+    else:
+        if len(candidates) > 1:
+            raise ValueError(
+                f"{failure} —— 重心から見て裏に回り込む凹みのある断面(U字など)は対応が決まらないことがある。"
+                "shifts でその断面の始点をずらすか、断面を凹みの無い形に分けること"
+            )
+        raise failure
 
     return _combine_region_solids(
         [solid], mode, target_shape, {"verb": "loft", "mode": mode, "sections": len(faces)}
     )
 
 
+def _thru_sections(wires: Sequence[Any], start: Optional[Vec], end: Optional[Vec], own: bool) -> Any:
+    """断面(と端の点)を `ThruSections` でつなぐ。`own` なら揃えは済んでいる(OCCT の揃えを切る)。"""
+    maker = BRepOffsetAPI_ThruSections(True, False, 1.0e-6)
+    maker.CheckCompatibility(not own)
+    if start is not None:
+        maker.AddVertex(BRepBuilderAPI_MakeVertex(gp_Pnt(*start)).Vertex())
+    for wire in wires:
+        maker.AddWire(wire)
+    if end is not None:
+        maker.AddVertex(BRepBuilderAPI_MakeVertex(gp_Pnt(*end)).Vertex())
+    maker.Build()
+    if not maker.IsDone():
+        raise ValueError("failed to loft the sections (OCCT ThruSections)")
+    return maker.Shape()
+
+
 def _require_sound_loft(solid: Any, faces: Sequence[Any]) -> None:
     """潰れ・裏返り・自己交差を拒む。
 
-    実測: 始点がずれて潰れた・裏返ったロフトは `BRepCheck_Analyzer` も `BRepAlgoAPI_Check` も通し、
-    体積が 0・負・極端に小さく出るだけ。体積は断面の最大面積 × 断面間の距離の目安と比べる。
+    実測: 始点がずれて潰れた・裏返ったロフトは `BRepCheck_Analyzer` を通す。`BRepAlgoAPI_Check` は第3引数
+    `bTestSI`(自己干渉)を True にしたときだけ捕まえる(25〜80 ms)。体積は断面の最大面積^1.5 を目安に比べる。
     """
     if solid is None or solid.IsNull():
         raise ValueError("loft produced an empty shape")
@@ -586,86 +603,10 @@ def _require_sound_loft(solid: Any, faces: Sequence[Any]) -> None:
         )
     if not BRepCheck_Analyzer(solid).IsValid():
         raise ValueError("loft produced an invalid shape (BRepCheck)")
-    if not BRepAlgoAPI_Check(solid, True, False).IsValid():
+    if not BRepAlgoAPI_Check(solid, True, True).IsValid():
         raise ValueError(
             "loft intersects itself (自己交差): 断面の順番・置き場所か、shifts を見直すこと"
         )
-
-
-#: 断面の間を輪切りにして調べる位置(隣り合う断面の間の割合)と、1辺あたりの点の数。
-_SLICE_FRACTIONS = tuple(i / 10.0 for i in range(1, 10))
-_SLICE_SAMPLES = 16
-
-
-def _require_simple_slices(
-    wires: Sequence[Any], start: Optional[Vec], end: Optional[Vec], sections: Sequence[Any]
-) -> None:
-    """隣り合う断面の対応点を結んだ線の上で輪切りにし、輪郭が交差せず・潰れず・向きを保つことを確かめる。
-
-    実測: 長方形 → 円を 180° ずらしたロフトは、体積が正のまま側面が軸を横切って自己交差し、
-    `BRepCheck_Analyzer` も `BRepAlgoAPI_Check` も通した。中央が1点にすぼまる(正方形を 180° ずらす)形も同じ。
-    輪切りは OCCT の側面の (u, v) ではなく対応点の直線補間で取る(平らな側面の (u, v) は面の外へはみ出す。
-    断面2つなら側面そのもの、3つ以上では断面の間のなめらかな膨らみを無視した近似)。
-    """
-    rings = [_ring_points(wire) for wire in wires]
-    count = len(rings[0])
-    chain = ([[start] * count] if start is not None else []) + rings + ([[end] * count] if end is not None else [])
-    floor = 1.0e-4 * min(_shape_area(face) for face in sections)
-    previous: Optional[Vec] = None
-    for a, b in zip(chain, chain[1:]):
-        for fraction in (0.0,) + _SLICE_FRACTIONS:
-            points = [_lerp(p, q, fraction) for p, q in zip(a, b)]
-            normal = _newell(points)
-            area = _length(normal) / 2.0
-            if area <= floor:
-                if fraction == 0.0:
-                    continue
-                raise ValueError(
-                    "loft pinches to a line or point (途中で潰れる): shifts で断面の始点をずらすか、断面の間に断面を足すこと"
-                )
-            normal = _scale(normal, 1.0 / (2.0 * area))
-            if previous is not None and _dot(normal, previous) <= 0.0:
-                raise ValueError("loft turns inside out (途中で裏返る): shifts か断面の順番を見直すこと")
-            if _polygon_crosses_itself(points, normal):
-                raise ValueError("loft intersects itself (自己交差): 断面の順番・置き場所か、shifts を見直すこと")
-            previous = normal
-
-
-def _ring_points(wire: Any) -> List[Vec]:
-    """線を辺ごとに同じ数のパラメータ等分点で並べた閉じた点列(辺の数をそろえた断面どうしで対応がとれる)。"""
-    points: List[Vec] = []
-    for edge in _edges(wire):
-        points += [_point_on(edge, t) for t in _traversal_parameters(edge, _SLICE_SAMPLES)[:-1]]
-    return points
-
-
-def _lerp(a: Vec, b: Vec, t: float) -> Vec:
-    return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
-
-
-def _polygon_crosses_itself(points: Sequence[Vec], normal: Vec) -> bool:
-    """法線 `normal` の平面へ投影した閉じた折れ線が、隣り合わない辺どうしで交わるか。"""
-    seed = (1.0, 0.0, 0.0) if abs(normal[0]) < 0.9 else (0.0, 1.0, 0.0)
-    x_axis = _unit(_sub(seed, _scale(normal, _dot(seed, normal))))
-    y_axis = _cross(normal, x_axis)
-    flat = [(_dot(p, x_axis), _dot(p, y_axis)) for p in points]
-    count = len(flat)
-    span = max(max(abs(a), abs(b)) for a, b in flat) or 1.0
-    tol = 1.0e-9 * span * span
-
-    def orient(a, b, c):
-        value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-        return 0 if abs(value) <= tol else (1 if value > 0 else -1)
-
-    for i in range(count):
-        a, b = flat[i], flat[(i + 1) % count]
-        for j in range(i + 2, count):
-            if i == 0 and j == count - 1:
-                continue
-            c, d = flat[j], flat[(j + 1) % count]
-            if orient(a, b, c) * orient(a, b, d) < 0 and orient(c, d, a) * orient(c, d, b) < 0:
-                return True
-    return False
 
 
 # --------------------------------------------------------------------------------------
@@ -794,10 +735,18 @@ def _rolled(edges: Sequence[Any], start: int) -> Any:
 # --------------------------------------------------------------------------------------
 # 辺の数をそろえる
 # --------------------------------------------------------------------------------------
-def _matched_wires(wires: Sequence[Any], centroids: Sequence[Vec], normals: Sequence[Vec]) -> List[Any]:
+def _matched_candidates(
+    wires: Sequence[Any], centroids: Sequence[Vec], normals: Sequence[Vec]
+) -> List[Tuple[List[Any], bool]]:
+    """辺の数をそろえた断面の並びの候補 `(線の並び, 自前で揃えたか)` を、試す順に返す。
+
+    極角が単調でない断面(重心から見て裏に回り込む凹み)があるときだけ候補が2つになる: 長さの割合で割ったもの、
+    だめなら OCCT の揃え(`CheckCompatibility`)。実測: U字 → 正方形は長さの割合だと側面が自己交差し OCCT の揃えなら
+    通る。U字 → 円は逆で、OCCT の揃えは `IsDone()=False`。OCCT の揃えでは `shifts` が効かないことがある。
+    """
     counts = {len(_edges(wire)) for wire in wires}
     if len(counts) == 1:
-        return list(wires)
+        return [(list(wires), True)]
     profiles = [_polar_profile(w, c, n) for w, c, n in zip(wires, centroids, normals)]
     if all(profile is not None for profile in profiles):
         angles = _merged([row[0][1] for profile in profiles for row in profile if row[0][1] > _ANGLE_TOL])
@@ -805,12 +754,14 @@ def _matched_wires(wires: Sequence[Any], centroids: Sequence[Vec], normals: Sequ
             _split_at_angles(w, c, n, profile, angles)
             for w, c, n, profile in zip(wires, centroids, normals, profiles)
         ]
+        candidates = [(matched, True)]
     else:
         fractions = _merged([f for wire in wires for f in _vertex_fractions(wire)], tol=1.0e-9)
-        matched = [_split_at_fractions(wire, fractions) for wire in wires]
-    if len({len(_edges(wire)) for wire in matched}) != 1:
+        candidates = [([_split_at_fractions(wire, fractions) for wire in wires], True), (list(wires), False)]
+    usable = [(ws, own) for ws, own in candidates if not own or len({len(_edges(w)) for w in ws}) == 1]
+    if not usable:
         raise ValueError("failed to match the number of edges between loft sections")
-    return matched
+    return usable
 
 
 def _polar_profile(wire: Any, centre: Vec, normal: Vec) -> Optional[List[List[Tuple[float, float]]]]:

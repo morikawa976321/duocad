@@ -22,7 +22,7 @@ from document_support import replay_through_json
 from duocad.server import Session
 from session_support import select
 from duocad.region import region_ref, regions
-from duocad.sketch import add_circle, add_ellipse, add_rectangle, sketch_create
+from duocad.sketch import add_circle, add_ellipse, add_line, add_rectangle, sketch_create
 from duocad.verbs import extrude, loft
 
 VOLUME_REL_TOL = 1.0e-9
@@ -152,7 +152,8 @@ def test_shifts_move_the_correspondence_and_a_collapse_is_rejected():
     """shifts で始点を1頂点ずらすと 90° ねじれて体積が減る。180° ずらすと、正方形どうしは中央が1点にすぼまり、
     長方形 → 円は側面が軸を横切って自己交差する。どちらも例外で、何も変えない。
 
-    落ちたら、体積が正のまま壊れた形が通っている(どちらも BRepCheck と自己干渉の検査は通す)。
+    落ちたら、体積が正のまま壊れた形が通っている(どちらも BRepCheck は通す。`BRepAlgoAPI_Check` の自己干渉を
+    切っていないか)。
     """
     document = Document()
     bottom, top = _square(document, "XY"), _square(document, _offset("XY", 30.0))
@@ -162,13 +163,60 @@ def test_shifts_move_the_correspondence_and_a_collapse_is_rejected():
     assert _valid(document)
 
     document.log.undo(document)
-    with pytest.raises(ValueError, match="pinches"):
+    with pytest.raises(ValueError, match="intersects"):
         loft(document, [bottom, top], shifts=[0, 2])
     long = _section(document, "XY", "rect", (-20.0, -5.0), 40.0, 10.0)[2]
     _, _, circle = _section(document, _offset("XY", 30.0), "circle", (0.0, 0.0), 20.0)
+    large, small = _square(document, _offset("XY", 60.0)), _square(document, _offset("XY", 90.0), 10.0)
     before = len(document.log.entries)
     with pytest.raises(ValueError, match="collapsed|intersects"):
         loft(document, [long, circle], shifts=[0, 2])
+    with pytest.raises(ValueError, match="intersects"):
+        loft(document, [large, small], shifts=[0, 2])
+    assert document.bodies == []
+    assert len(document.log.entries) == before
+
+
+def test_a_smooth_loft_that_pinches_between_sections_is_rejected():
+    """半径 10・1・1 の円を順につなぐと、なめらかな補間が断面の間で軸まで食い込んで潰れる。断面の上ではどこも正常。
+
+    落ちたら、断面の間だけで起きる自己交差を見逃している(sol レビューの例)。
+    """
+    document = Document()
+    sections = [
+        _section(document, _offset("XY", z), "circle", (0.0, 0.0), diameter)[2]
+        for z, diameter in ((0.0, 20.0), (30.0, 2.0), (60.0, 2.0))
+    ]
+    with pytest.raises(ValueError, match="intersects"):
+        loft(document, sections)
+    assert document.bodies == []
+
+
+def test_a_section_curling_behind_its_centre_needs_a_shift_or_is_explained():
+    """重心から見て裏に回り込む凹み(U字)は極角で対応が決まらない。U字 → 円は始点をずらすと通り、
+    U字 → 正方形はどうずらしても自己交差するので、凹みのせいだと分かる文言の例外で何も変えない。
+
+    落ちたら、凹んだ断面の扱い(長さの割合で割る → OCCT の揃え)か、その失敗の説明が変わった。
+    """
+    u_shape = [(-10, -10), (10, -10), (10, 10), (4, 10), (4, -4), (-4, -4), (-4, 10), (-10, 10)]
+
+    def u_and(kind, *args):
+        document = Document()
+        bottom = sketch_create(document, "XY")
+        for p0, p1 in zip(u_shape, u_shape[1:] + u_shape[:1]):
+            add_line(document, bottom, p0, p1)
+        _, _, top = _section(document, _offset("XY", 30.0), kind, *args)
+        return document, [region_ref(bottom, 1), top]
+
+    document, sections = u_and("circle", (0.0, 0.0), 20.0)
+    loft(document, sections, shifts=[1, 0])
+    assert _volume(document) > 0.0
+    assert _valid(document)
+
+    document, sections = u_and("rect", (-10.0, -10.0), 20.0, 20.0)
+    before = len(document.log.entries)
+    with pytest.raises(ValueError, match="凹み"):
+        loft(document, sections)
     assert document.bodies == []
     assert len(document.log.entries) == before
 
@@ -250,8 +298,6 @@ def test_bad_arguments_are_rejected(case, message):
 
 def _point_on_plane_of(document: Document) -> dict:
     """断面と同じ平面(XY)に置いた点(線分の端点)。"""
-    from duocad.sketch import add_line
-
     sketch_id = sketch_create(document, "XY")
     line = add_line(document, sketch_id, (30.0, 0.0), (35.0, 0.0))
     return {"sketch": sketch_id, "entity": line, "point": "x1"}

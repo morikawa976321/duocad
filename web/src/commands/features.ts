@@ -191,6 +191,10 @@ export const LOFT: CommandDef<'loft'> = {
       placeholder: '0, 1, 0',
       optional: true,
       reject: (value) => (parseShifts(value) === null ? '始点のずらしは整数をカンマ区切りで' : null),
+      toShared: (value) => {
+        const shifts = parseShifts(value)
+        return shifts === null || shifts.length === 0 ? undefined : shifts
+      },
     },
   ],
   build(values) {

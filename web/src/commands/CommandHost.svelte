@@ -632,6 +632,9 @@
         const option = spec.options.find((candidate) => candidate.value === value)
         value = option === undefined ? undefined : choiceSends(option)
       }
+      if (spec.kind === 'text' && spec.toShared !== undefined && typeof value === 'string') {
+        value = spec.toShared(value)
+      }
       if (value === undefined || value === null || value === '' || !allowed.has(spec.name)) continue
       out[spec.name] = value
     }
