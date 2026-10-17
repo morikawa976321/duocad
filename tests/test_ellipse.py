@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from duocad import kernel, kernel_sketch
+from duocad import kernel, kernel_sketch, query
 from duocad.document import Document
 from duocad.region import region_ref, regions
 from duocad.sketch import (
@@ -128,3 +128,26 @@ def test_ellipses_and_arcs_keep_their_turn_on_every_face_of_a_box(face_index):
     add_line(doc, arc_sketch, (0.0, 0.0), (0.0, 5.0))
     found = regions(doc, arc_sketch)
     assert [round(region.area, 6) for region in found] == [round(math.pi * 25.0 / 4.0, 6)], "四分円が閉じない(円弧が逆回り)"
+
+
+def test_the_edges_of_an_ellipse_prism_report_the_true_length():
+    """落ちたら、画面の辺(`tessellate_edges`)か `measure`・述語の辺(`query.describe_edges`)の長さが、
+    楕円の辺で粗い既定の積分に戻っている(直径 40×2 で +1.74%)。`kernel.edge_length` を通すこと。"""
+    doc = Document()
+    sketch_id = sketch_create(doc, "XY")
+    add_ellipse(doc, sketch_id, (0.0, 0.0), 40.0, 2.0)
+    extrude(doc, [region_ref(sketch_id, 1)], 5.0, mode="new")
+    shape = doc.bodies[0].shape
+
+    steps = 200_000
+    perimeter = sum(
+        math.hypot(20.0 * math.sin(2 * math.pi * (i + 0.5) / steps), 1.0 * math.cos(2 * math.pi * (i + 0.5) / steps))
+        for i in range(steps)
+    ) * 2 * math.pi / steps
+    curved = [edge for edge in query.describe_edges(shape) if edge["kind"] != "line"]
+    assert len(curved) == 2
+    for edge in curved:
+        assert edge["length"] == pytest.approx(perimeter, rel=1e-9)
+    for edge in kernel.tessellate_edges(shape, kernel.DEFAULT_DEVIATION, kernel.DEFAULT_ANGULAR_DEFLECTION):
+        if edge["kind"] != "line":
+            assert edge["length"] == pytest.approx(perimeter, rel=1e-9)

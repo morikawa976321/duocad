@@ -33,10 +33,9 @@ from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt
 
-from .kernel import _BASE_PLANE_AXES, _face_map, _face_props, classify_face, face_of
+from .kernel import _BASE_PLANE_AXES, _face_map, _face_props, classify_face, edge_length, face_of
 from .mesh_geometry import compound, indexed_map
 
 
@@ -620,13 +619,8 @@ def _edges_ellipse(ax3: "gp_Ax3", params: dict) -> List[Any]:
 
 
 def ellipse_perimeter(params: dict) -> float:
-    """楕円の周長[mm]。閉じた式が無いので OCCT に辺の長さを測らせる。
-
-    外部の罠: `Length_s` の既定の許容差は粗い(2026-10-17 実測: 直径 20×10 で既定 48.5059、
-    許容差 1e-9 と数値積分は 48.4422。+0.13%)。許容差を必ず渡す。
-    """
-    edge = _edges_ellipse(gp_Ax3(), params)[0]
-    return float(GCPnts_AbscissaPoint.Length_s(BRepAdaptor_Curve(edge), 1.0e-9))
+    """楕円の周長[mm]。閉じた式が無いので OCCT に辺の長さを測らせる(許容差の罠は `kernel.edge_length`)。"""
+    return edge_length(_edges_ellipse(gp_Ax3(), params)[0])
 
 
 def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:

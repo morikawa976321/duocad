@@ -73,7 +73,7 @@ def _describe_edge(edge: Any, index: int) -> dict:
     return {
         "index": index,
         "kind": kernel.classify_edge(edge),
-        "length": float(wrapped.length),
+        "length": kernel.edge_length(edge),
         "start": [float(start.X), float(start.Y), float(start.Z)],
         "end": [float(end.X), float(end.Y), float(end.Z)],
     }
