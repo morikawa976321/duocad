@@ -153,12 +153,21 @@ def mesh_polygon(poly, size_fn, h_min, h_max, holes=()):
     def triangulate(p, seg, src):
         for _ in range(48):
             dt = Delaunay(p)
-            all_edges = _edges(dt.simplices)
+            # Qhull can triangulate nominally collinear boundary subdivisions
+            # into roundoff-area triangles. Their centroids have no reliable
+            # inside/outside classification and can create a spurious exterior
+            # chord. Exclude them from both recovery and domain classification.
+            v = p[dt.simplices]
+            a, b = v[:, 1] - v[:, 0], v[:, 2] - v[:, 0]
+            cross = a[:, 0]*b[:, 1] - a[:, 1]*b[:, 0]
+            edge2 = np.sum((np.roll(v, -1, axis=1) - v)**2, axis=2).max(axis=1)
+            simplices = dt.simplices[cross > 32*np.finfo(float).eps*edge2]
+            all_edges = _edges(simplices)
             keys = all_edges[:, 0] * len(p) + all_edges[:, 1]
             s = np.sort(seg, axis=1)
             missing = ~np.isin(s[:, 0] * len(p) + s[:, 1], keys)
             if not np.any(missing):
-                t = dt.simplices[_inside(p[dt.simplices].mean(axis=1), rings)]
+                t = simplices[_inside(p[simplices].mean(axis=1), rings)]
                 # Every recovered boundary must occur exactly once in the domain.
                 te = np.sort(t[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
                 u, counts = np.unique(te, axis=0, return_counts=True)

@@ -57,7 +57,7 @@ class Joint:
     L_below: float = None
     L_above: float = None
     dz: float = 0.01
-    h_surf: float = 0.03
+    h_surf: float = 0.045  # 0.045〜0.02 で破断荷重が 1N も変わらない(実測、M6 相当の2例)
     h_core: float = 0.35
 
     def __post_init__(self):
@@ -151,7 +151,9 @@ class Result:
 
 def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, verbose=False) -> Result:
     t_lo, t_hi = nominal_offset(j)
-    shift = t_hi - 1e-4
+    # 多角形は z を dz 刻みで取るので、軸に直角に近い面は dz の幅の斜面になり、t_hi ちょうどでは数µm 食い込む(実測)。
+    # dz だけ下げて置く(荷重の最初の dz ぶんで閉じる)
+    shift = t_hi - j.dz
     nut_r0 = j.nut_r
     jj = Joint(j.bolt_r, lambda z: nut_r0(z - shift), j.pitch, j.L_nut, j.R_out, j.r_bear, j.L_below, j.L_above,
                j.dz, j.h_surf, j.h_core)
@@ -164,12 +166,20 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     mat = m.material()
     bolt = Body(bmesh, mat, [Dirichlet(bid["bottom"], uz=-1.0)])
     nut = Body(nmesh, mat, [Dirichlet(nid["bearing"], uz=0.0)])
-    system = ContactSystem([bolt, nut], [ContactPair(0, bid["surface"], 1, nid["surface"])], search_distance=0.15)
+    system = ContactSystem([bolt, nut], [ContactPair(0, bid["surface"], 1, nid["surface"])], search_distance=0.15,
+                           allow_penetration=True)
+    # 節点から最寄りの辺へ測る隙間は、軸に直角に近い棚の角で数µm 負になる(重なっていなくても。実測で最小 -0.004mm)。
+    # 10µm までは「最初から接している」として 0 に丸め、件数と量を残す。それより深いものは本当の重なりとして断る
+    pen = system.g0 < 0
+    if pen.any() and system.g0.min() < -0.01:
+        raise ValueError(f"初期の重なり {system.g0.min():.4f}mm")
+    pen_info = (int(pen.sum()), float(system.g0.min()) if pen.any() else 0.0)
+    system.g0 = np.maximum(system.g0, 0.0)
     # 1回の解で荷重のおおよその剛性を取り、破壊までの範囲を走査する
     probe = 1e-3
     r = system.solve(probe)
     F_probe = _axial_force(bolt, r.bodies[0], bid["bottom"])
-    tcd = _TcdAverager([bolt, nut], [r.bodies[0], r.bodies[1]], m.L * 1.32, j, exclude=dict(
+    tcd = _TcdAverager([bpoly, npoly], [bolt, nut], [r.bodies[0], r.bodies[1]], [m.L * 1.32], exclude=dict(
         bolt=lambda p: p[:, 1] < -j.L_below + 1.5 * j.pitch, nut=lambda p: np.hypot(p[:, 0] - j.r_bear, p[:, 1]) < 0.3))
     fi_probe, _, _ = tcd.index(r, m)
     # 破壊指数は応力の2次なので、だいたい Δ ∝ 1/√FI。そこを中心に走査する(単調とは限らないので二分探索はしない)
@@ -197,10 +207,11 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     share = _thread_share(last, j)
     net = _net_section(jj, m)
     pressure = _contact_pressure(system, last)
-    F_crush = rows[-1][1] * m.C / max(pressure, 1e-9)
-    Fs = dict(tcd=F_tcd, **net, crush=F_crush)
+    # 平均化しない接触圧が C に届く荷重は、局所の降伏の始まりの目安(メッシュに依存する)。破断の判定には入れない
+    F_yield_contact = rows[-1][1] * m.C / max(pressure, 1e-9)
+    Fs = dict(tcd=F_tcd, **net)
     mode = min(Fs, key=Fs.get)
-    detail = dict(tcd_mode=mode_tcd, tcd_where=where_tcd, share=share, offset=(t_lo, t_hi), nodes=(len(bmesh.nodes), len(nmesh.nodes)),
+    detail = dict(initial_penetration=pen_info, F_yield_contact=F_yield_contact, tcd_mode=mode_tcd, tcd_where=where_tcd, share=share, offset=(t_lo, t_hi), nodes=(len(bmesh.nodes), len(nmesh.nodes)),
                   rows=[(d, F, fi, w, mo) for d, F, fi, w, mo, _ in rows], max_pressure_at_last=pressure,
                   min_angle=(float(bmesh.min_angles().min()), float(nmesh.min_angles().min())))
     if verbose:
@@ -260,48 +271,62 @@ def _net_section(j: Joint, m: PrintedPLA) -> dict:
 
 
 class _TcdAverager:
-    """面積法の TCD: 各中心点のまわり半径 R の円内(同じ物体の材料だけ)で応力テンソルを面積で平均する。"""
+    """面積法の TCD: 各点のまわり半径 R の円内(同じ物体の材料だけ)で応力テンソルを面積で平均する。
 
-    def __init__(self, bodies, results, R, j: Joint, exclude):
-        self.R = R
-        self.mats = []
-        self.centers = []
-        for name, body, res in zip(("bolt", "nut"), bodies, results):
-            pos = res.position.reshape(-1, 2)
-            area = res.area.reshape(-1)
-            tree = cKDTree(pos)
-            # 中心は表面から R 以内のガウス点を間引いたもの + 芯の中央の列
-            cand = pos[::3]
-            ex = exclude[name](cand)
-            cand = cand[~ex]
-            nb = tree.query_ball_point(cand, R)
-            rows, cols, vals = [], [], []
-            for i, ids in enumerate(nb):
-                w = area[ids]
-                rows += [i] * len(ids)
-                cols += ids
-                vals += (w / w.sum()).tolist()
-            W = csr_matrix((vals, (rows, cols)), shape=(len(cand), len(pos)))
-            self.mats.append(W)
-            self.centers.append(cand)
+    物体ごとに r-z の正方格子を張り、ガウス点の応力を最近傍で格子へ写し、材料の指示関数と一緒に円板で畳み込む
+    (平均 = conv(σ·χ) / conv(χ))。格子の間隔は R/6 と 0.02mm の小さい方。"""
 
-    def index(self, contact_result, m: PrintedPLA):
+    def __init__(self, polys, bodies, results, radii, exclude):
+        from scipy.signal import fftconvolve  # noqa: F401  (使えることを先に確かめる)
+        from .mesh import _inside, _ring
+        self.radii = list(radii)
+        self.grids = []
+        g = min(0.02, min(self.radii) / 6)
+        for name, poly, res in zip(("bolt", "nut"), polys, results):
+            ring = _ring(poly)
+            r0, z0 = ring.min(axis=0)
+            r1, z1 = ring.max(axis=0)
+            rr = np.arange(r0 + g / 2, r1, g)
+            zz = np.arange(z0 + g / 2, z1, g)
+            Rg, Zg = np.meshgrid(rr, zz, indexing="ij")
+            pts = np.column_stack([Rg.ravel(), Zg.ravel()])
+            mask = _inside(pts, [ring]).reshape(Rg.shape)
+            gp = res.position.reshape(-1, 2)
+            _, nn = cKDTree(gp).query(pts[mask.ravel()])
+            ex = exclude[name](pts[mask.ravel()])
+            self.grids.append(dict(name=name, shape=Rg.shape, mask=mask, nn=nn, ex=ex, pts=pts[mask.ravel()], g=g))
+
+    def index(self, contact_result, m: PrintedPLA, R=None):
+        from scipy.signal import fftconvolve
+        R = self.radii[0] if R is None else R
         best, where, mode = -1.0, None, None
-        for k, (name, W, cen, res) in enumerate(zip(("bolt", "nut"), self.mats, self.centers, contact_result.bodies)):
-            s = W @ res.stress.reshape(-1, 4)
-            sr, sz, st, trz = s.T
+        for G, res in zip(self.grids, contact_result.bodies):
+            g = G["g"]
+            k = int(math.ceil(R / g))
+            yy, xx = np.mgrid[-k:k + 1, -k:k + 1]
+            K = ((xx * g) ** 2 + (yy * g) ** 2 <= R * R).astype(float)
+            chi = G["mask"].astype(float)
+            den = fftconvolve(chi, K, mode="same")[G["mask"]]
+            s_gp = res.stress.reshape(-1, 4)[G["nn"]]
+            avg = np.empty_like(s_gp)
+            for c in range(4):
+                F = np.zeros(G["shape"])
+                F[G["mask"]] = s_gp[:, c]
+                avg[:, c] = fftconvolve(F, K, mode="same")[G["mask"]] / den
+            sr, sz, st_, trz = avg.T
             pos = lambda x: np.maximum(x, 0.0)
             fi = dict(
                 interlayer=(pos(sz) / m.Z_t) ** 2 + (trz / m.S_il) ** 2,
                 interbead=(pos(sr) / m.Y_t) ** 2 + (trz / m.S_il) ** 2,
-                hoop=(pos(st) / m.X_t) ** 2,
+                hoop=(pos(st_) / m.X_t) ** 2,
             )
-            c = 0.5 * (sr + sz)
+            c_ = 0.5 * (sr + sz)
             rad = np.hypot(0.5 * (sr - sz), trz)
-            smin = np.minimum(c - rad, st)
+            smin = np.minimum(c_ - rad, st_)
             fi["crush"] = (pos(-smin) / m.C) ** 2
             for md, v in fi.items():
+                v = np.where(G["ex"], -1.0, v)
                 i = int(np.argmax(v))
                 if v[i] > best:
-                    best, where, mode = float(v[i]), (name, float(cen[i, 0]), float(cen[i, 1])), md
+                    best, where, mode = float(v[i]), (G["name"], float(G["pts"][i, 0]), float(G["pts"][i, 1])), md
         return best, where, mode

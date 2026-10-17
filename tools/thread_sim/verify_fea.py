@@ -313,6 +313,32 @@ def geometry():
                           -(p[:, 1, 1]-p[:, 0, 1])*(p[:, 2, 0]-p[:, 0, 0]))
     rows.append(dict(name='hole', area=float(hole_area), exact_area=7.4,
                       hole_source_ids=sorted(set(m.edge_src[m.edge_src>=4].tolist()))))
+    # Sloping boundary subdivisions can produce roundoff-area Qhull triangles.
+    # This compact trapezoid reproduces the nut cross-section boundary failure.
+    sloped = np.array([[2.9343705525967674, 0], [4, 0], [4, .04],
+                       [2.8644555090154356, .04]])
+    m = mesh(sloped, .03, 'collinear_boundary_subdivisions')
+    sloped_retained = float(cKDTree(m.nodes).query(sloped)[0].max())
+    length = np.linalg.norm(m.nodes[m.boundary_edges[:, 2]]-m.nodes[m.boundary_edges[:, 0]], axis=1)
+    recovered = np.bincount(m.edge_src, weights=length, minlength=len(sloped))
+    expected = np.linalg.norm(np.roll(sloped, -1, axis=0)-sloped, axis=1)
+    sloped_length_error = float(np.max(np.abs(recovered-expected)))
+    p = m.nodes[m.tris[:, :3]]
+    double_area = ((p[:, 1, 0]-p[:, 0, 0])*(p[:, 2, 1]-p[:, 0, 1])
+                   -(p[:, 1, 1]-p[:, 0, 1])*(p[:, 2, 0]-p[:, 0, 0]))
+    sloped_area = float(.5*double_area.sum())
+    exact_sloped_area = .5*((4-sloped[0, 0])+(4-sloped[-1, 0]))*.04
+    edges = np.sort(m.tris[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
+    edges, counts = np.unique(edges, axis=0, return_counts=True)
+    boundary_matches = (set(map(tuple, edges[counts == 1]))
+                        == set(map(tuple, np.sort(m.boundary_edges[:, [0, 2]], axis=1))))
+    sloped_passed = (sloped_retained == 0 and sloped_length_error < 1e-12
+                     and abs(sloped_area-exact_sloped_area) < 1e-12
+                     and np.all(double_area > 0) and boundary_matches)
+    rows.append(dict(name='collinear_boundary_subdivisions', nodes=len(m.nodes),
+                      retained_error=sloped_retained, edge_length_error=sloped_length_error,
+                      area=sloped_area, exact_area=exact_sloped_area,
+                      boundary_matches=boundary_matches, pass_=bool(sloped_passed)))
     # Penetration rejection and immutable normal/gap for a pair of sloping faces.
     lower = mesh([[0, -1], [1, -1], [1, .2], [0, 0]], .2, 'inclined_lower')
     upper = mesh([[0, -.001], [1, .199], [1, 1], [0, 1]], .2, 'inclined_upper')
@@ -331,7 +357,8 @@ def geometry():
                                  detected=detected, message=message))
     return dict(meshes=rows, penetration=penetration,
                 pass_=retained<1e-12 and length_error<1e-10
-                and abs(hole_area-7.4)<1e-10 and all(p['detected'] for p in penetration))
+                and abs(hole_area-7.4)<1e-10 and sloped_passed
+                and all(p['detected'] for p in penetration))
 
 
 CASES = dict(cylinder=cylinder, lame=lame, notch=notch, hertz=hertz, patch=patch,
