@@ -67,6 +67,7 @@ def table_study1(rows, out=sys.stdout):
 
 
 def table_study2(rows, out=sys.stdout):
+    """感度(窓の評価): 係数を振ったときの W・窓の中心での保持・締め付け。設計ごとの行、係数ごとの列。"""
     by = defaultdict(dict)
     for r in rows:
         base, var = r["name"].split(" | ")
@@ -76,20 +77,27 @@ def table_study2(rows, out=sys.stdout):
         for v in d:
             if v not in variants:
                 variants.append(v)
-    out.write("\n必要な隙間 c_geo(mm)\n\n| 設計 | " + " | ".join(variants) + " |\n|---|" + "---|" * len(variants) + "\n")
-    for base, d in by.items():
-        out.write(f"| {base} | " + " | ".join(f"{d[v]['c_geo']:.3f}" if v in d and "c_geo" in d[v] else "" for v in variants) + " |\n")
-    out.write("\n破断荷重 F(N、誤差 0.1)\n\n| 設計 | " + " | ".join(variants) + " |\n|---|" + "---|" * len(variants) + "\n")
-    for base, d in by.items():
-        cells = []
-        for v in variants:
-            r = d.get(v)
-            if not r or not r.get("rows"):
-                cells.append("")
-                continue
-            val, k = fmin(r["rows"][0])
-            cells.append(f"{val:.0f} {MODE_JA.get(k, k)}" if val else "掛からず")
-        out.write(f"| {base} | " + " | ".join(cells) + " |\n")
+
+    def table(title, cell):
+        out.write(f"\n{title}\n\n| 設計 | " + " | ".join(variants) + " |\n|---|" + "---|" * len(variants) + "\n")
+        for base, d in by.items():
+            out.write(f"| {base} | " + " | ".join(cell(d.get(v)) if d.get(v) else "" for v in variants) + " |\n")
+
+    table("誤差を吸収できる幅 W(mm)", lambda r: f"{r['W']:+.2f}" if "W" in r else "—")
+    table("必要な隙間 c_geo(mm)", lambda r: f"{r['c_geo']:.2f}" if "c_geo" in r else "—")
+
+    def hold(r):
+        x = (r.get("rows") or [{}])[0]
+        if not x.get("F"):
+            return "—"
+        v, k = fmin(x)
+        return f"{v:.0f}"
+    table("窓の中心での保持(N)", hold)
+
+    def tight(r):
+        x = (r.get("rows") or [{}])[0]
+        return f"{tighten_posthoc(r, x):.0f}" if x.get("F") else "—"
+    table("窓の中心での締め付け(N)", tight)
 
 
 def tighten_posthoc(r, x):
