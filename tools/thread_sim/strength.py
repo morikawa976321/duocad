@@ -185,7 +185,7 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     bolt = Body(bmesh, mats, [Dirichlet(bid["bottom"], uz=-1.0)], groups=bg)
     nut = Body(nmesh, mats, [Dirichlet(nid["bearing"], uz=0.0)], groups=ng)
     system = ContactSystem([bolt, nut], [ContactPair(0, bid["surface"], 1, nid["surface"])], search_distance=0.15,
-                           allow_penetration=True)
+                           allow_penetration=True, max_penetration=0.05, max_candidates=6000)
     # 節点から最寄りの辺へ測る隙間は、軸に直角に近い棚の角で数µm 負になる(重なっていなくても。実測で最小 -0.004mm)。
     # 10µm までは「最初から接している」として 0 に丸め、件数と量を残す。それより深いものは本当の重なりとして断る
     pen = system.g0 < 0
@@ -231,7 +231,7 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     beta_eff, slip = _contact_angle_and_slip(system, last, jj)
     # 引張で保持できる荷重の判定は下限側(リングの FEA と山のせん断)で取る。芯の上限 core_slice と締め付けは別に持つ
     mode = min(("tcd", "strip_bolt", "strip_nut"), key=Fs.get)
-    Fs["tighten"] = _tighten(jj, m, beta_eff)
+    Fs["tighten"] = tighten_force(jj.bolt_r(np.linspace(0, j.pitch, 4000, endpoint=False)), j.pitch, beta_eff, F_tcd, m)
     # 乗り越えの目安: 破断荷重まで線形に伸ばしたときの、接触点での雄と雌の半径方向の相対変位 ÷ 掛かり代
     F_last = rows[-1][1]
     engagement = float(jj.bolt_r(np.linspace(0, j.pitch, 2000)).max() - jj.nut_r(np.linspace(0, j.pitch, 2000)).min())
@@ -277,28 +277,25 @@ def _contact_angle_and_slip(system: ContactSystem, res, j: Joint):
     return beta, float(rel)
 
 
-def _tighten(j: Joint, m: PrintedPLA, beta_eff: float) -> float:
-    """締め付けのとき芯が層間で切れる軸力: 引張 σ = F/(π r1²) と、ねじ山の摩擦トルク T = F·r2·(tanλ + μ/cosβ)
-    によるねじり τ = 2T/(π r1³) を、層間の (σ/Z_t)² + (τ/S)² = 1 で組み合わせる(座面の摩擦は頭の側で受けるので芯に載せない)。"""
-    z = np.linspace(0, j.pitch, 4000, endpoint=False)
-    rb = j.bolt_r(z)
-    r1, r_crest = float(rb.min()), float(rb.max())
-    r2 = 0.5 * (r1 + r_crest)
-    lam = math.atan(j.pitch / (2 * math.pi * r2))
+def tighten_force(f: np.ndarray, pitch: float, beta_eff: float, F_tension: float, m: PrintedPLA) -> float:
+    """締め付けのとき芯が層間で切れる軸力。ねじ山の摩擦トルク T = F·r2·(tanλ + μ/cosβ)(座面の摩擦は頭の側で受けるので芯に載せない)
+    によるねじりと引張を (F/F_tension)² + (T/T_allow)² = 1 で組み合わせる。f は1ピッチの雄の山形の半径の標本。
+
+    F_tension は引張だけで壊れる荷重(リングの FEA)。T_allow は壁の帯を薄肉閉断面とみたねじりの強さ 2·Am·t·S に、
+    3D の周期模型との比で決めた補正 k = min(1, 1.14 − 0.36·深さ/t_wall) を掛けたもの(D6 の 45° 台形 P1.5/P2.4 と ISO M6 で
+    3D/薄肉管 = 0.88・0.72・0.89。深い山ほど壁の帯が波打ってねじりに弱い。docs/THREAD_SIM.md 4章)。"""
+    r1, rc = float(f.min()), float(f.max())
+    r2 = 0.5 * (r1 + rc)
+    lam = math.atan(pitch / (2 * math.pi * r2))
     b = math.radians(beta_eff if math.isfinite(beta_eff) else 30.0)
     K = math.tan(lam) + m.mu / max(math.cos(b), 1e-6)
     if m.walls:
-        zz = np.linspace(0, j.pitch, 4000, endpoint=False)
-        f = j.bolt_r(zz)
-        fin = np.maximum(f - m.t_wall, 0.0)
-        A = math.pi * (np.mean(f ** 2) - np.mean(fin ** 2))  # 壁の帯(水平断面)
-        Am = math.pi * np.mean((f - m.t_wall / 2) ** 2)  # 帯の中心線が囲む面積
-        a = 1 / (m.Z_t * A)
-        c = r2 * K / (2 * Am * m.t_wall * m.S_il)  # τ = T/(2·Am·t)
-        return 1 / math.hypot(a, c)
-    a = 1 / (m.Z_t * math.pi * r1 ** 2)
-    c = 2 * r2 * K / (m.S_il * math.pi * r1 ** 3)
-    return 1 / math.hypot(a, c)
+        Am = math.pi * float(np.mean((f - m.t_wall / 2) ** 2))
+        k = min(1.0, 1.14 - 0.36 * (rc - r1) / m.t_wall)
+        T_allow = k * 2 * Am * m.t_wall * m.S_il
+    else:
+        T_allow = m.S_il * math.pi * r1 ** 3 / 2
+    return 1 / math.hypot(1 / F_tension, r2 * K / T_allow)
 
 
 def _wall_rule(j: Joint, m: PrintedPLA, which: str):

@@ -92,8 +92,23 @@ def table_study2(rows, out=sys.stdout):
         out.write(f"| {base} | " + " | ".join(cells) + " |\n")
 
 
+def tighten_posthoc(r, x):
+    """記録済みの行に、いまの締め付けの判定(strength.tighten_force)を当て直す。雄の山形は設計の山形を
+    窓の中心の隙間の半分と誤差の半分だけ半径方向にずらしたもの(印刷の丸みは入らない近似)。"""
+    from . import strength as st
+    from .study import make_profile
+    F = x.get("F") or {}
+    if "tcd" not in F:
+        return float("nan")
+    prof = make_profile(r)
+    f = prof.dense(4000)[1] - r.get("c_center", 0.0) / 2 + x.get("eps", 0.0) / 2
+    m = st.PrintedPLA(**(r.get("mat") or {}))
+    return st.tighten_force(f, prof.pitch, x.get("beta_eff", float("nan")), F["tcd"], m)
+
+
 def _wrow(r, k):
-    """run_window の rows[k](0=中心、1=緩い端、2=固い端)を「保持(下限〜上限) 締め付け 乗り越え」に。"""
+    """run_window の rows[k](0=中心、1=緩い端、2=固い端)を「保持 締め付け 乗り越え」に。
+    保持はリング模型の FEA と山のせん断の小さい方(3D の周期模型と ±10% で一致。THREAD_SIM.md 4章)。"""
     rows = r.get("rows") or []
     if len(rows) <= k:
         return "—"
@@ -101,9 +116,7 @@ def _wrow(r, k):
     if not x.get("F"):
         return "—" if "error" in x else "掛からず"
     v, mode = fmin(x)
-    F = x["F"]
-    return (f"{v:.0f}〜{F.get('core_slice', float('nan')):.0f} {MODE_JA.get(mode, mode)} / 締{F.get('tighten', float('nan')):.0f}"
-            f" / 越{x.get('jump_ratio', float('nan')):.2f}")
+    return f"{v:.0f} {MODE_JA.get(mode, mode)} / 締{tighten_posthoc(r, x):.0f} / 越{x.get('jump_ratio', float('nan')):.2f}"
 
 
 def table_window(rows, out=sys.stdout, key=lambda r: (r["D"], r.get("pitch_ratio", 0))):
@@ -112,7 +125,7 @@ def table_window(rows, out=sys.stdout, key=lambda r: (r["D"], r.get("pitch_ratio
         groups[key(r)].append(r)
     for gk in sorted(groups, key=lambda k: tuple(str(x) for x in k) if not isinstance(k, tuple) else k):
         out.write(f"\n### {gk}\n\n")
-        out.write("| 設計 | c_geo | 幅 W | 欠け≥50% 雄/雌 | 垂れ最大 雄/雌 | 山の保持 | 窓の中心: 保持 N(下限〜上限) / 締め付け / 乗り越え | 緩い端 |\n")
+        out.write("| 設計 | c_geo | 幅 W | 欠け≥50% 雄/雌 | 垂れ最大 雄/雌 | 山の保持 | 窓の中心: 保持 N / 締め付け N / 乗り越え | 緩い端 |\n")
         out.write("|---|---|---|---|---|---|---|---|\n")
         for r in sorted(groups[gk], key=lambda r: -r.get("W", -9)):
             if "c_geo" not in r:
@@ -150,12 +163,12 @@ def table_pareto(rows, out=sys.stdout, w_min=0.2):
         ok = [r for r in rs if r["W"] >= w_min]
         pick = max(ok, key=_lower) if ok else None
         out.write(f"\n### D{D}(パレート {len(front)} 件 / 全 {len(rs)} 件)\n\n")
-        out.write("| 設計 | P | 深さ | β | c_geo | 幅 W | 保持の下限〜上限 N | 締め付け N | 緩い端の保持 N | 乗り越え |\n|---|---|---|---|---|---|---|---|---|---|\n")
+        out.write("| 設計 | P | 深さ | β | c_geo | 幅 W | 保持 N | 締め付け N | 緩い端の保持 N | 乗り越え |\n|---|---|---|---|---|---|---|---|---|---|\n")
         for r in front:
             x = r["rows"][0]
             mark = " **(W≥%.2f で最強)**" % w_min if r is pick else ""
-            out.write(f"| {r['name']}{mark} | {r.get('P', '')} | {r.get('depth', ''):.3g} | {r.get('b_lo', '')} | {r['c_geo']:.3f} | {r['W']:.3f} | "
-                      f"{_lower(r):.0f}〜{x['F'].get('core_slice', float('nan')):.0f} | {x['F'].get('tighten', float('nan')):.0f} | "
+            out.write(f"| {r['name']}{mark} | {float(r.get('P', 0)):.3g} | {r.get('depth', 0):.3g} | {r.get('b_lo', '')} | {r['c_geo']:.3f} | {r['W']:.3f} | "
+                      f"{_lower(r):.0f} | {tighten_posthoc(r, x):.0f} | "
                       f"{(_lower(r, 1) or float('nan')):.0f} | {x.get('jump_ratio', float('nan')):.2f} |\n")
         if pick is not None and pick not in front:
             out.write(f"\nW≥{w_min} で最強: {pick['name']}(W {pick['W']:.3f}、保持の下限 {_lower(pick):.0f} N)\n")
