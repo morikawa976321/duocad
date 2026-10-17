@@ -32,6 +32,8 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
   (e21b6e0。decisions.md「レビューの重い指摘3件」)。**5章の表は直す前の数値**なので、study2〜5 を全件回し直している:
   - 手元: study4(168 件、2 並列。空き RAM が 6GB を切っているので 2 に絞った)。直す前の結果は `output/thread_sim/pre_review_fix/`。
   - クラウド: study2・3・4・5 を1本ずつ(結果は `thread-sim/<study>-v2-results` ブランチの `tools/thread_sim/results/`)。
+  - 新しい study もクラウドで回している: study6(固定した設計の頑健さ、`thread-sim/study6-v2-results`)と
+    study7(隙間の雌雄の分け方、`thread-sim/study7-results`)。どちらも decisions.md に判断の理由。
     直す前のコードで出した study2 のクラウドの結果は、手元と W が 238 件すべて一致した。
 
 ### 次にやること
