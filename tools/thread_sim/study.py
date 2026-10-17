@@ -258,6 +258,8 @@ def main():
     ap.add_argument("study")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--only", default=None, help="名前にこの文字列を含む設計だけ")
+    ap.add_argument("--redo-errors", action="store_true",
+                    help="計算の失敗(メッシュ・接触・例外)を含む行を消して回し直す。「はまらない」は失敗ではないので残す")
     a = ap.parse_args()
     got = STUDIES[a.study]()
     if got[3] is None:  # 設計ごとに (spec, printer_kw, mat_kw)
@@ -271,6 +273,21 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     path = OUT / f"{a.study}.jsonl"
     done = set()
+    if path.exists() and a.redo_errors:
+        keep, dropped = [], 0
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            bad = "error" in d and "c_geo" not in d and "包絡が通らない" not in str(d.get("error"))
+            bad |= any("error" in r and r["error"] != "はまらない" for r in d.get("rows", []))
+            if bad:
+                dropped += 1
+            else:
+                keep.append(line)
+        path.write_text("".join(x + "\n" for x in keep), encoding="utf-8")
+        print(f"失敗を含む {dropped} 行を消した", flush=True)
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
             try:
