@@ -306,7 +306,39 @@ def build(out: Path = OUT, only=None):
     (out / "manifest.json").write_text(json.dumps(dict(test_id=TEST_ID, pieces=[p.__dict__ for p in pieces], plate=plate),
                                                   ensure_ascii=False, indent=1), encoding="utf-8")
     write_page(groups, out / "index.html", "ねじ試し刷りの結果", test_id=TEST_ID)
+    if not only:
+        predict(out)
     return pieces
+
+
+PRED_VARIANTS = {"基準": {}, "垂れ無し": dict(sag_amp=0.0), "垂れ2倍": dict(sag_amp=2.0), "垂れ始めφ0.3": dict(sag_phi_ok=0.3),
+                 "垂れ始めφ0.7": dict(sag_phi_ok=0.7), "ビード角立ち": dict(bead_round=0.0), "ビード丸み半分": dict(bead_round=0.5)}
+
+
+def predict(out: Path = OUT) -> dict:
+    """事前の予測(試し刷りの結果を見る前に固定する): 系列ごとの必要な隙間 c_geo と、その印刷の模擬の係数による幅、
+    ナットごとの誤差なしの余り・掛かり代・遊び。ボルトは呼び寸法のまま(split=0)。"""
+    from dataclasses import replace
+    from . import evaluate as ev
+    from .printer import DEFAULT
+    res = {}
+    for sid, name, D, mk, mode, _, cs in SERIES:
+        prof = mk()
+        des = ev.Design(name, prof, max(cs), mode=mode, L_nut=float(D), R_out=0.9 * D, split=0.0)
+
+        def c_geo(pr):
+            if mode == "normal":
+                return ev.c_required(des, pr)
+            return des.clearance - ev.evaluate(des, pr, with_strength=False).margin
+
+        nuts = []
+        for c in sorted(cs, reverse=True):
+            e = ev.evaluate(replace(des, clearance=c), DEFAULT, with_strength=False)
+            nuts.append(dict(c=c, margin=round(e.margin, 3), engagement=round(e.engagement, 3), play=round(e.play, 3)))
+        res[sid] = dict(name=name, mode=mode, c_geo=round(c_geo(DEFAULT), 3), nuts=nuts,
+                        c_geo_variants={k: round(c_geo(DEFAULT.with_(**kw)), 3) for k, kw in PRED_VARIANTS.items()})
+    (out / "predictions.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+    return res
 
 
 def _read_stl(path: Path) -> np.ndarray:
