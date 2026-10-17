@@ -92,7 +92,45 @@ def table_study2(rows, out=sys.stdout):
         out.write(f"| {base} | " + " | ".join(cells) + " |\n")
 
 
+def _wrow(r, k):
+    """run_window の rows[k](0=中心、1=緩い端、2=固い端)を「保持(下限〜上限) 締め付け 乗り越え」に。"""
+    rows = r.get("rows") or []
+    if len(rows) <= k:
+        return "—"
+    x = rows[k]
+    if not x.get("F"):
+        return "—" if "error" in x else "掛からず"
+    v, mode = fmin(x)
+    F = x["F"]
+    return (f"{v:.0f}〜{F.get('core_slice', float('nan')):.0f} {MODE_JA.get(mode, mode)} / 締{F.get('tighten', float('nan')):.0f}"
+            f" / 越{x.get('jump_ratio', float('nan')):.2f}")
+
+
+def table_window(rows, out=sys.stdout, key=lambda r: (r["D"], r.get("pitch_ratio", 0))):
+    groups = defaultdict(list)
+    for r in rows:
+        groups[key(r)].append(r)
+    for gk in sorted(groups, key=lambda k: tuple(str(x) for x in k) if not isinstance(k, tuple) else k):
+        out.write(f"\n### {gk}\n\n")
+        out.write("| 設計 | c_geo | 幅 W | 欠け≥50% 雄/雌 | 垂れ最大 雄/雌 | 山の保持 | 窓の中心: 保持 N(下限〜上限) / 締め付け / 乗り越え | 緩い端 |\n")
+        out.write("|---|---|---|---|---|---|---|---|\n")
+        for r in sorted(groups[gk], key=lambda r: -r.get("W", -9)):
+            if "c_geo" not in r:
+                out.write(f"| {r['name']} | エラー {str(r.get('error', ''))[:40]} | | | | | | |\n")
+                continue
+            ob, on = r.get("over_bolt", {}), r.get("over_nut", {})
+            out.write(f"| {r['name']} | {r['c_geo']:.3f} | {r.get('W', float('nan')):+.3f} | "
+                      f"{ob.get('lack_ge_50', float('nan')):.2f}/{on.get('lack_ge_50', float('nan')):.2f} | "
+                      f"{ob.get('sag_max', float('nan')):.3f}/{on.get('sag_max', float('nan')):.3f} | {r.get('depth_kept', float('nan')):.2f} | "
+                      f"{_wrow(r, 0)} | {_wrow(r, 1)} |\n")
+
+
 if __name__ == "__main__":
     st = sys.argv[1]
     rows = load(st)
-    (table_study1 if st == "study1" else table_study2)(rows)
+    if st == "study1":
+        table_study1(rows)
+    elif st in ("study4", "study3"):
+        table_window(rows)
+    else:
+        table_study2(rows)
