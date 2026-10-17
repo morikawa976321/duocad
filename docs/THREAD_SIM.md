@@ -303,9 +303,16 @@ D4・D6(ピッチ 0.25D・深さ 0.4P)の代表7設計で、印刷の模擬の�
 .venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study study4 --workers 4      # 山形の比較(窓の指標)
 .venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study study2 --workers 4      # 感度
 .venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study study3 --workers 4      # 改良の探索
-.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.report study4                 # 表
+.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study study6 --workers 4      # 固定した設計の頑健さ
+.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study study7 --workers 4      # 隙間の雌雄の分け方
+.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.report study4                 # 表(study3・5・6・7 も同じ形)
 .venv/Scripts/python.exe -X utf8 -m tools.thread_sim.testprint                     # 試し刷り一式
 ```
+
+1 設計 1 行で、止めても同じコマンドで続きから回る。重いもの(study2・3・5)は `claude --cloud` のセッションで回し、
+結果を `thread-sim/<study>-…-results` ブランチの `tools/thread_sim/results/` で受け取った(decisions.md「長い計算はクラウドのセッションへ」)。
+**計算は環境によらず再現する**(実測): study2(直す前のコード)は 238 件の W がすべて一致、study6 は 51 件の W_rob が一致し、
+保持の差は 0.21% 以内(クラウドの Linux と手元の Windows)。
 
 ## 8. この版でやっていないこと
 
