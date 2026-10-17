@@ -339,6 +339,44 @@ def geometry():
                       retained_error=sloped_retained, edge_length_error=sloped_length_error,
                       area=sloped_area, exact_area=exact_sloped_area,
                       boundary_matches=boundary_matches, pass_=bool(sloped_passed)))
+    # Reduced from a failing bolt section, without perturbing its coordinates.
+    # Nearly aligned crests on different input edges form a spurious exterior
+    # triangle whose roundoff area exceeds a cutoff based on edge length alone.
+    thread = np.array([[0., 9.069999999999638],
+                       [4.697106657987173, 9.069999999999638],
+                       [4.697291974169071, 9.259999999999632],
+                       [4.697291974169064, 9.399999999999629],
+                       [4.697291974169069, 9.439999999999628],
+                       [4.6971066579872005, 9.569999999999624],
+                       [4.697291974169067, 9.579999999999625],
+                       [4.697056682390878, 9.599999999999625],
+                       [0., 9.599999999999625]])
+    tree = cKDTree(thread[1:-1])
+    m = mesh(thread, .0225, 'near_collinear_thread_crests',
+             lambda p: .045+.25*tree.query(p)[0], .35)
+    thread_retained = float(cKDTree(m.nodes).query(thread)[0].max())
+    length = np.linalg.norm(m.nodes[m.boundary_edges[:, 2]]-m.nodes[m.boundary_edges[:, 0]], axis=1)
+    recovered = np.bincount(m.edge_src, weights=length, minlength=len(thread))
+    expected = np.linalg.norm(np.roll(thread, -1, axis=0)-thread, axis=1)
+    thread_length_error = float(np.max(np.abs(recovered-expected)))
+    p = m.nodes[m.tris[:, :3]]
+    double_area = ((p[:, 1, 0]-p[:, 0, 0])*(p[:, 2, 1]-p[:, 0, 1])
+                   -(p[:, 1, 1]-p[:, 0, 1])*(p[:, 2, 0]-p[:, 0, 0]))
+    thread_area = float(.5*double_area.sum())
+    q = thread-thread[0]
+    exact_thread_area = float(.5*np.sum(q[:, 0]*np.roll(q[:, 1], -1)
+                                       - q[:, 1]*np.roll(q[:, 0], -1)))
+    edges = np.sort(m.tris[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
+    edges, counts = np.unique(edges, axis=0, return_counts=True)
+    thread_boundary_matches = (set(map(tuple, edges[counts == 1]))
+                               == set(map(tuple, np.sort(m.boundary_edges[:, [0, 2]], axis=1))))
+    thread_passed = (thread_retained == 0 and thread_length_error < 1e-12
+                     and abs(thread_area-exact_thread_area) < 1e-12
+                     and np.all(double_area > 0) and thread_boundary_matches)
+    rows.append(dict(name='near_collinear_thread_crests', nodes=len(m.nodes),
+                      retained_error=thread_retained, edge_length_error=thread_length_error,
+                      area=thread_area, exact_area=exact_thread_area,
+                      boundary_matches=thread_boundary_matches, pass_=bool(thread_passed)))
     # Penetration rejection and immutable normal/gap for a pair of sloping faces.
     lower = mesh([[0, -1], [1, -1], [1, .2], [0, 0]], .2, 'inclined_lower')
     upper = mesh([[0, -.001], [1, .199], [1, 1], [0, 1]], .2, 'inclined_upper')
@@ -357,7 +395,7 @@ def geometry():
                                  detected=detected, message=message))
     return dict(meshes=rows, penetration=penetration,
                 pass_=retained<1e-12 and length_error<1e-10
-                and abs(hole_area-7.4)<1e-10 and sloped_passed
+                and abs(hole_area-7.4)<1e-10 and sloped_passed and thread_passed
                 and all(p['detected'] for p in penetration))
 
 

@@ -161,7 +161,12 @@ def mesh_polygon(poly, size_fn, h_min, h_max, holes=()):
             a, b = v[:, 1] - v[:, 0], v[:, 2] - v[:, 0]
             cross = a[:, 0]*b[:, 1] - a[:, 1]*b[:, 0]
             edge2 = np.sum((np.roll(v, -1, axis=1) - v)**2, axis=2).max(axis=1)
-            simplices = dt.simplices[cross > 32*np.finfo(float).eps*edge2]
+            # Rounding of coordinates (including interpolated boundary points)
+            # scales with their absolute magnitude, not just local edge length.
+            # A cutoff using edge2 alone misses short, translated flat triangles
+            # both along one input edge and between nearly aligned thread crests.
+            scale = np.maximum(edge2, np.abs(v).max(axis=(1, 2))*np.sqrt(edge2))
+            simplices = dt.simplices[cross > 32*np.finfo(float).eps*scale]
             all_edges = _edges(simplices)
             keys = all_edges[:, 0] * len(p) + all_edges[:, 1]
             s = np.sort(seg, axis=1)
