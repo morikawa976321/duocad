@@ -61,7 +61,8 @@ def table_study1(rows, out=sys.stdout):
                 out.write(f"| {r['name']} | エラー | | | | | | |\n")
                 continue
             ob, on = r.get("over_bolt", {}), r.get("over_nut", {})
-            out.write(f"| {r['name']} | {r['c_geo']:.3f} | {ob.get('lack_ge_50', float('nan')):.2f}/{on.get('lack_ge_50', float('nan')):.2f} | "
+            mark = " ※窓の中心が見つからない" if r.get("center_not_found") and r.get("W", 0) > 0 else ""
+            out.write(f"| {r['name']}{mark} | {r['c_geo']:.3f} | {ob.get('lack_ge_50', float('nan')):.2f}/{on.get('lack_ge_50', float('nan')):.2f} | "
                       f"{ob.get('sag_max', float('nan')):.3f}/{on.get('sag_max', float('nan')):.3f} | {r.get('depth_kept', float('nan')):.2f} | "
                       f"{cell_F(r, 0.0)} | {cell_F(r, 0.1)} | {cell_F(r, 0.2)} |\n")
 
@@ -140,7 +141,8 @@ def table_window(rows, out=sys.stdout, key=lambda r: (r["D"], r.get("pitch_ratio
                 out.write(f"| {r['name']} | エラー {str(r.get('error', ''))[:40]} | | | | | | |\n")
                 continue
             ob, on = r.get("over_bolt", {}), r.get("over_nut", {})
-            out.write(f"| {r['name']} | {r['c_geo']:.3f} | {r.get('W', float('nan')):+.3f} | "
+            mark = " ※窓の中心が見つからない" if r.get("center_not_found") and r.get("W", 0) > 0 else ""
+            out.write(f"| {r['name']}{mark} | {r['c_geo']:.3f} | {r.get('W', float('nan')):+.3f} | "
                       f"{ob.get('lack_ge_50', float('nan')):.2f}/{on.get('lack_ge_50', float('nan')):.2f} | "
                       f"{ob.get('sag_max', float('nan')):.3f}/{on.get('sag_max', float('nan')):.3f} | {r.get('depth_kept', float('nan')):.2f} | "
                       f"{_wrow(r, 0)} | {_wrow(r, 1)} |\n")
@@ -182,6 +184,35 @@ def table_pareto(rows, out=sys.stdout, w_min=0.2):
             out.write(f"\nW≥{w_min} で最強: {pick['name']}(W {pick['W']:.3f}、保持の下限 {_lower(pick):.0f} N)\n")
 
 
+def center_residual(r):
+    """窓の中心での強さの行(ε=0)の余りと掛かり代から、中心の残差 z = (余り − 掛かり代 + 下限)/2。0 なら誤差 0 が窓の真ん中。"""
+    rows = r.get("rows") or []
+    if not rows or "margin" not in rows[0]:
+        return None
+    return (rows[0]["margin"] - rows[0]["engagement"] + r.get("e_req", 0.1)) / 2
+
+
+def table_robust(rows, out=sys.stdout):
+    """study6: 隙間を基準の係数での窓の中心に固定し、係数の場面すべてで通る誤差の共通部分 W_rob と、その端での保持。"""
+    by = defaultdict(list)
+    for r in rows:
+        by[r["D"]].append(r)
+    for D in sorted(by):
+        out.write(f"\n### D{D}\n\n")
+        out.write("| 設計 | 隙間 | W(基準) | W_rob | 通る誤差 ε | 狭める場面 緩/固 | 中心の保持 N | 緩い端 半々/雄だけ/雌だけ N | 固い端 N | 最弱 N |\n")
+        out.write("|---|---|---|---|---|---|---|---|---|---|\n")
+        for r in sorted(by[D], key=lambda r: -r.get("W_rob", -9)):
+            if "W_rob" not in r:
+                out.write(f"| {r['name']} | エラー {str(r.get('error', ''))[:40]} | | | | | | | | |\n")
+                continue
+            h = {x["at"]: _lower(dict(rows=[x])) for x in r.get("rows", [])}
+            f = lambda k: f"{h[k]:.0f}" if h.get(k) is not None else "—"
+            loose = "/".join(f(k) for k in ("緩い端 半々", "緩い端 雄だけ", "緩い端 雌だけ"))
+            out.write(f"| {r['name']} | {r['c_center']:.3f} | {r['W']:+.3f} | {r['W_rob']:+.3f} | "
+                      f"{r['eps_lo']:+.3f}〜{r['eps_hi']:+.3f} | {r['worst_lo']} / {r['worst_hi']} | {f('中心')} | {loose} | {f('固い端')} | "
+                      f"{(r.get('F_rob') or float('nan')):.0f} |\n")
+
+
 if __name__ == "__main__":
     st = sys.argv[1]
     rows = load(st)
@@ -191,5 +222,10 @@ if __name__ == "__main__":
         table_window(rows)
     elif st == "study3":
         table_pareto(rows)
+    elif st == "study5":
+        table_pareto(rows)
+        table_window(rows, key=lambda r: (r["D"], r.get("pitch_ratio", 0), r.get("mode", "")))
+    elif st == "study6":
+        table_robust(rows)
     else:
         table_study2(rows)
