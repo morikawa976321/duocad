@@ -245,21 +245,22 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
 
     # 両方向の接触の制約がほぼ重複すると、LCP が収束しないことがある(実測 436 設計中 2 件)。そのときは片方向で解き直す
     # 遊びが狭い(固い端)と荷重の掛からない側の斜面も探索距離に入り、接触の候補が上限 6000 を越える(実測: 台形45 D8 P2 normal)。
-    # 荷重面の初期の隙間は dz 程度なので、探索距離を縮めて解き直す
+    # 荷重面の初期の隙間は dz 程度なので、探索距離を縮めて解き直す。遊びがほぼ 0 だと 0.03 でも越える(同、掛かり代 0.70)ので、最後は片方向にする
     def attempt(two_pass):
         for search in (0.15, 0.07, 0.03):
             try:
-                return solve_all(two_pass, search) + (search,)
+                return solve_all(two_pass, search) + (search, two_pass)
             except MemoryError:
                 if search == 0.03:
+                    if two_pass:
+                        return attempt(False)
                     raise
 
     try:
-        system, pen_info, tcd, rows, search_used = attempt(True)
-        lcp_fallback = False
+        system, pen_info, tcd, rows, search_used, two_pass_used = attempt(True)
     except RuntimeError:
-        system, pen_info, tcd, rows, search_used = attempt(False)
-        lcp_fallback = True
+        system, pen_info, tcd, rows, search_used, two_pass_used = attempt(False)
+    lcp_fallback = not two_pass_used
     # FI=1 を線形補間で(FI の平方根は荷重にほぼ比例)
     F_tcd, mode_tcd, where_tcd = None, None, None
     for (d0, F0, fi0, *_), (d1, F1, fi1, w1, mo1, _) in zip(rows, rows[1:]):
