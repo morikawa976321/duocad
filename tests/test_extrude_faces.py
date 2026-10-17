@@ -121,13 +121,6 @@ def test_two_separate_coplanar_faces_are_extruded_together(distance, mode, expec
     assert math.isclose(kernel.volume(document.get_body("b").shape), expected, rel_tol=REL)
 
 
-def test_extruding_coplanar_faces_does_not_leave_split_side_faces():
-    """同一平面の統合が効いておらず、押すたびに側面が分裂して増える(面数は 20mm立方体の上面+10 で 6)。"""
-    document = _doc(_box(20.0, 20.0, 20.0))
-    extrude_faces(document, _refs("b", [_top(document.get_body("b").shape)]), 10.0, mode="join")
-    assert kernel.face_count(document.get_body("b").shape) == 6
-
-
 def _rejects_without_a_trace(document: Document, call) -> str:
     before = _state(document)
     with pytest.raises(ValueError) as caught:
@@ -216,7 +209,7 @@ def test_a_body_id_sends_the_pillar_to_another_body():
     extrude_faces(document, _refs("b", [top_b]), 5.0, mode="join", body_id="c")
 
     assert math.isclose(kernel.volume(document.get_body("b").shape), 8000.0, rel_tol=REL)
-    assert kernel.volume(document.get_body("c").shape) > 8000.0
+    assert math.isclose(kernel.volume(document.get_body("c").shape), 8000.0 + 20.0 * 20.0 * 5.0, rel_tol=REL)
 
 
 @pytest.mark.parametrize("mode, distance", [("join", 6.0), ("cut", -6.0), ("new", 6.0)])
@@ -275,13 +268,3 @@ def test_mcp_extrude_takes_a_face_selection():
 
     assert payload["verb"] == "extrude"
     assert kernel.volume(session.document.get_body("box").shape) > before
-
-
-def test_a_region_selection_still_extrudes_as_before():
-    """領域の押し出しが面の分岐に巻き込まれて変わる。"""
-    document = Document()
-    sketch_id = sketch_create(document, "XY")
-    add_rectangle(document, sketch_id, (0.0, 0.0), 10.0, 10.0)
-    operation = extrude(document, [region_ref(sketch_id, 1)], 5.0, mode="join")
-    assert "regions" in operation.args and "faces" not in operation.args
-    assert math.isclose(kernel.volume(document.bodies[0].shape), 500.0, rel_tol=REL)

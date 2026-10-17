@@ -211,7 +211,8 @@ def test_the_seam_edge_of_a_full_revolution_does_not_break_fillet():
         before = len(document.log.entries)
         try:
             fillet(document, [seam], 0.5)
-        except ValueError:
+        except ValueError as error:
+            assert "fillet failed while building" in str(error), "引数の検査ではなく OCCT の構築失敗で断られる題材"
             assert len(document.log.entries) == before
             continue
         assert BRepCheck_Analyzer(document.active_body().shape).IsValid() is True

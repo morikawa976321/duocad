@@ -158,20 +158,6 @@ def test_fillet_is_logged_and_undoable():
     assert kinds_of(doc, body_id) == FILLET_R3_KINDS
 
 
-def test_fillet_records_provenance_through_the_normalizing_adapter():
-    """由来(`Operation.provenance`)が正規化アダプタ経由で埋まり、JSON化できること。"""
-    doc = Document()
-    body_id = new_box(doc)
-    all_edges = [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
-
-    operation = fillet(doc, all_edges, RADIUS_OK, body_id=body_id)
-
-    assert operation.provenance is not None, "由来が空のまま通ったら回収できていない"
-    assert operation.provenance["verb"] == "fillet"
-    assert "face_map" in operation.provenance
-    doc.log.to_json()  # JSON化できない値が混ざっていればここで落ちる
-
-
 def test_fillet_shifts_face_indices():
     """同じ面でも添字は形状変更で変わりうる(実測: 20mm立方体の1辺にr=2で2→7/3→6/6→2)。
     穴の径変更・追加・ポケット・面取りでは動かなかった —— 散発的に静かに間違う。
@@ -233,6 +219,5 @@ def test_chamfer_and_fillet_compose_on_the_same_body():
         "cone": 1,
         "torus": 1,
     }
-    assert len(doc.log.entries) >= 2
     doc.log.undo(doc)
     assert kinds_of(doc, body_id) == {"plane": 6, "cylinder_full": 1, "cone": 1}

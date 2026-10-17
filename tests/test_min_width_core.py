@@ -25,6 +25,8 @@ def _random_rule_mask(rng, m, *, exempt=None, density=(0.7, 0.95)):
     """規則 R(m)(`exempt` を除く)と S(m) を満たす乱数のマスク。満たす形が取れなければ None。"""
     shape = exempt.shape if exempt is not None else tuple(int(x) for x in rng.integers(8, 13, size=3))
     mask = ndimage.binary_opening(rng.random(shape) < rng.uniform(*density), structure=np.ones((m,) * 3, bool))
+    if exempt is not None:
+        mask = mask & ~exempt  # 製品が渡す材料は exempt を含まない(物差しは和集合で数えるので真値は変わらない)
     if not mask.any() or core_groups_oracle(mask, m, exempt) != 1:
         return None
     return mask
@@ -152,6 +154,7 @@ def test_the_core_count_matches_the_independent_count_on_random_masks_with_exemp
             for _ in range(int(rng.integers(1, 4))):
                 c = [int(rng.integers(0, n)) for n in shape]
                 exempt[c[0]:c[0] + int(rng.integers(1, 3)), c[1]:c[1] + int(rng.integers(1, 3)), c[2]] = True
+            mask = mask & ~exempt
         want = core_groups_oracle(mask, m, exempt)
         assert min_width.CoreConnectivity(m, exempt).groups(mask) == want
         split += want > 1
@@ -213,6 +216,7 @@ def test_the_window_verdict_is_exact_on_grids_larger_than_the_window_and_rarely_
             exempt = np.zeros(shape, bool)
             c = np.argwhere(mask)[int(rng.integers(int(mask.sum())))]
             exempt[c[0]:c[0] + 2, c[1]:c[1] + 2, c[2]] = True
+            mask = mask & ~exempt
         if core_groups_oracle(mask, m, exempt) != 1:
             continue
         core = min_width.CoreConnectivity(m, exempt)
