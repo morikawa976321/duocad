@@ -13,6 +13,7 @@
 | [LOCAL_LLM_QWEN38.md](LOCAL_LLM_QWEN38.md) | Qwen3.8-27B を dGPU 無しのラップトップで動かしたアプリ内 AI の実測（思考の設定・依頼文・失敗の型・ばらつき対策・スロット保存が効かない理由・測定の運用） |
 | [UI.md](UI.md) | 画面と操作の判断（方針・パネル配置・コマンド層・スケッチ入力・見た目） |
 | [VIEWPORT.md](VIEWPORT.md) | 3D ビューポート（深度の規約・カメラ・ピック・グリッド・可変解像度と面カリング・ビューキューブ・断面） |
+| [PICK_EVERYTHING.md](PICK_EVERYTHING.md) | 「見えるものはすべてさわれる」の実装方針（未実装）: ピックの3段・遮蔽・描画・辺のデータ・選択の規則・段の切り方 |
 | [PERFORMANCE.md](PERFORMANCE.md) | 基本操作の速さ（1 操作の経路・サーバ単体とブラウザの実測・読み取れること）。物差しは `tools/bench_server_ops.py` と `web/scripts/bench-basic-ops.mjs`。方針は GitHub の `performance` ラベルの Issue |
 | [STATUS.md](STATUS.md) / [decisions.md](decisions.md) | autopilot（本人の時間を奪わずに進める作業）の現在地と判断の記録。再開するときに読む |
 | [SMOKE_TESTING.md](SMOKE_TESTING.md) | 実機検査（puppeteer）の書き方: 座標・待機・選択・fixture・環境 |
