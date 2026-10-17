@@ -184,8 +184,8 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     ng = np.where(nwall(nmesh.nodes[nmesh.tris[:, :3]].mean(axis=1)), 0, 1)
     bolt = Body(bmesh, mats, [Dirichlet(bid["bottom"], uz=-1.0)], groups=bg)
     nut = Body(nmesh, mats, [Dirichlet(nid["bearing"], uz=0.0)], groups=ng)
-    def solve_all(two_pass):
-        system = ContactSystem([bolt, nut], [ContactPair(0, bid["surface"], 1, nid["surface"])], search_distance=0.15,
+    def solve_all(two_pass, search):
+        system = ContactSystem([bolt, nut], [ContactPair(0, bid["surface"], 1, nid["surface"])], search_distance=search,
                                allow_penetration=True, max_penetration=0.05, max_candidates=6000,
                                two_pass=two_pass)
         # 節点から最寄りの辺へ測る隙間は、軸に直角に近い棚の角で数µm 負になる(重なっていなくても。実測で最小 -0.004mm)。
@@ -244,11 +244,21 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
         return system, pen_info, tcd, rows
 
     # 両方向の接触の制約がほぼ重複すると、LCP が収束しないことがある(実測 436 設計中 2 件)。そのときは片方向で解き直す
+    # 遊びが狭い(固い端)と荷重の掛からない側の斜面も探索距離に入り、接触の候補が上限 6000 を越える(実測: 台形45 D8 P2 normal)。
+    # 荷重面の初期の隙間は dz 程度なので、探索距離を縮めて解き直す
+    def attempt(two_pass):
+        for search in (0.15, 0.07, 0.03):
+            try:
+                return solve_all(two_pass, search) + (search,)
+            except MemoryError:
+                if search == 0.03:
+                    raise
+
     try:
-        system, pen_info, tcd, rows = solve_all(True)
+        system, pen_info, tcd, rows, search_used = attempt(True)
         lcp_fallback = False
     except RuntimeError:
-        system, pen_info, tcd, rows = solve_all(False)
+        system, pen_info, tcd, rows, search_used = attempt(False)
         lcp_fallback = True
     # FI=1 を線形補間で(FI の平方根は荷重にほぼ比例)
     F_tcd, mode_tcd, where_tcd = None, None, None
@@ -277,7 +287,7 @@ def analyze(j: Joint, m: PrintedPLA, n_steps: int = 6, delta_max: float = None, 
     F_last = rows[-1][1]
     engagement = float(jj.bolt_r(np.linspace(0, j.pitch, 2000)).max() - jj.nut_r(np.linspace(0, j.pitch, 2000)).min())
     jump_ratio = slip * (Fs[mode] / max(F_last, 1e-9)) / max(engagement, 1e-9)
-    detail = dict(lcp_fallback=lcp_fallback, beta_eff=beta_eff, jump_ratio=jump_ratio, initial_penetration=pen_info, F_yield_contact=F_yield_contact, tcd_mode=mode_tcd, tcd_where=where_tcd, share=share, offset=(t_lo, t_hi), nodes=(len(bmesh.nodes), len(nmesh.nodes)),
+    detail = dict(lcp_fallback=lcp_fallback, search_distance=search_used, beta_eff=beta_eff, jump_ratio=jump_ratio, initial_penetration=pen_info, F_yield_contact=F_yield_contact, tcd_mode=mode_tcd, tcd_where=where_tcd, share=share, offset=(t_lo, t_hi), nodes=(len(bmesh.nodes), len(nmesh.nodes)),
                   rows=[(d, F, fi, w, mo) for d, F, fi, w, mo, _ in rows], max_pressure_at_last=pressure,
                   min_angle=(float(bmesh.min_angles().min()), float(nmesh.min_angles().min())))
     if verbose:

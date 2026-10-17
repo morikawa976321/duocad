@@ -130,6 +130,6 @@ def strength_of(ev: Evaluation, mat: st.PrintedPLA) -> st.Result | None:
     j = st.Joint(bolt_r, nut_r, P, des.L_nut, R_out, r_bear)
     try:
         return st.analyze(j, mat)
-    except ValueError as e:
-        ev.extra["strength_error"] = str(e)
+    except (ValueError, MemoryError, RuntimeError) as e:  # メッシュ・接触の候補数・LCP の失敗は、その点の強さが出ないだけにする
+        ev.extra["strength_error"] = f"{type(e).__name__}: {e}"
         return None
