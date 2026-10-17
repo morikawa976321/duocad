@@ -84,6 +84,15 @@
   `AcquiredSelfIntersection`・`FaceBuilderUnusedEdges`・`SolidBuilderUnusedFaces` の警告のあと `BadOrientationOfSubshape` が出る(メッシュ次第で出たり出なかったりする)。
   片方を軸まわりに ×0.999(面が約13 µm離れる)にすると警告0、×1.001 では `FaceBuilderUnusedEdges` が2件残る。fuzzy 1e-4 / 1e-3 mm は警告が6 / 5件に減るだけで、cut と union の順の入れ替え・先に道具を fuse・2回に分けた cut でも警告は残る
   (推定: 辺が二重になって部品をツール経由でつながったと見なす)。製品の最終処理はこの経路を持たない(メッシュ集合演算。[TOPOPT.md](TOPOPT.md)「最終処理はメッシュ集合演算」)。
+- **テーパー付き押し出しの2経路は、どちらも単独では足りない**(2026-10-17 実測、issue #182。長方形 20×10・円 r5・
+  直線+円弧+ベジエ・楕円 6×3・円穴 r2 の板、高さ 10、角度 ±5° ほか):
+  - **`LocOpe_DPrism(face, h, angle)` の `h` は側面に沿った斜めの長さ**(上面の z = h·cos(angle))。正の角度が細る向き。
+    ベジエ・楕円の辺も通る。ただし**穴のある面は穴を無視した体積を返し**(0° で 2000 = 穴なしと同じ。-5° は `BRepCheck` 偽)、
+    **太る向きでは角が円錐面で丸まる**(長方形 -5° で円錐面4枚)。**断面が潰れる角度でも例外を出さず、潰れた高さで
+    打ち切った形を `BRepCheck` 真のまま返す**(長方形 40°・60°、円 40°)。
+  - **素の柱を `BRepOffsetAPI_DraftAngle` で傾ける**(側面を `Add(face, 押し出し方向, angle, 底面の平面)`)と、高さは垂直のまま、
+    太る向きでも角は尖ったまま(平面6枚)、円は円錐1枚で解析体積と一致、穴は同じ向き指定で外形が細り穴が広がる(抜き勾配)。
+    潰れる角度(長方形 40°)は `IsDone()=False`。**ただしベジエ・楕円を押し出した側面(`SurfaceOfExtrusion`)は `AddDone()=False`**。
 
 ## 複数面の押し出し（`kernel_extrude.extrude_faces`）
 
