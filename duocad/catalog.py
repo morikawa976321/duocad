@@ -727,9 +727,16 @@ COMMANDS: tuple[Command, ...] = (
         params=(
             Param(
                 "axis",
-                ["string", "object"],
-                '回転軸。"x" / "y"(スケッチの原点を通る x / y 軸)か、領域と同じスケッチの線分への参照 '
-                '{"sketch": sketch_id, "entity": entity_id}(線分を延ばした直線が軸)',
+                "string",
+                '回転軸がスケッチの原点を通る軸のとき "x" / "y"。axis_line と排他(どちらか一方を必ず渡す)',
+                required=False,
+            ),
+            Param(
+                "axis_line",
+                "object",
+                "回転軸にする、領域と同じスケッチの線分への参照 "
+                '{"sketch": sketch_id, "entity": entity_id}(線分を延ばした直線が軸)。axis と排他',
+                required=False,
             ),
             Param(
                 "angle",
@@ -766,7 +773,9 @@ COMMANDS: tuple[Command, ...] = (
         note=(
             "**`mode` はWSでだけ必須**(`extrude` と同じ理由)。**`body_id` はWSのコマンドには無い**(`extrude` と同じ)。"
             "軸は選択ではなく引数 —— `mirror_sketch_entities` の `axis` と同じ別チャンネルで、共有選択集合に"
-            "線分を入れると領域の選択と混ざる。"
+            "線分を入れると領域の選択と混ざる。**`axis` と `axis_line` を1つの引数にしない** —— 画面の欄(軸の3択と"
+            "線分のピック)と作業空間の引数が名前で1対1に往復できないと、再読み込みや AI の引数変更で指した線分が消える"
+            "(`mirror_body` の `base_plane` / `plane_face` と同じ形)。"
         ),
     ),
     Command(

@@ -101,8 +101,8 @@ export const REVOLVE: CommandDef<'revolve'> = {
       options: [
         { value: 'x', label: 'x軸', buttonId: 'revolve-axis-x' },
         { value: 'y', label: 'y軸', buttonId: 'revolve-axis-y' },
-        // この値はサーバへ行かない。`axis_line` を出す印で、`build` が線分の参照へ読み替える。
-        { value: 'line', label: '線分を選ぶ', buttonId: 'revolve-axis-line', sends: null },
+        // この値はサーバへ行かない(`axis` は x / y のみ)。`axis_line` を出す印で、配信に `axis_line` があれば欄へ戻る。
+        { value: 'line', label: '線分を選ぶ', buttonId: 'revolve-axis-line', sends: null, impliedBy: 'axis_line' },
       ],
     },
     {
@@ -138,18 +138,17 @@ export const REVOLVE: CommandDef<'revolve'> = {
     if (empty !== null) return { ok: false, reason: empty }
     const axisKind = values.axis
     if (typeof axisKind !== 'string') return { ok: false, reason: '回転軸が選ばれていない' }
-    let axis: string | object = axisKind
-    if (axisKind === 'line') {
-      // 参照のまま送る(鏡映の軸と同じ)。線分であることの検査はコアに任せる。
-      const line = pickedRefOf(values.axis_line)
-      if (line === null) return { ok: false, reason: '回転軸の線分が指されていない' }
-      axis = line
-    }
     const angle = values.angle
     const mode = values.mode
     if (typeof angle !== 'number') return { ok: false, reason: '角度が数値でない' }
     if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
-    return { ok: true, args: { axis, angle, mode } }
+    if (axisKind === 'line') {
+      // 参照のまま送る(鏡映の軸と同じ)。線分であることの検査はコアに任せる。
+      const line = pickedRefOf(values.axis_line)
+      if (line === null) return { ok: false, reason: '回転軸の線分が指されていない' }
+      return { ok: true, args: { axis_line: line, angle, mode } }
+    }
+    return { ok: true, args: { axis: axisKind, angle, mode } }
   },
 }
 
@@ -492,7 +491,7 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
         { value: 'XZ', label: 'XZ平面', buttonId: 'mirror-body-xz' },
         { value: 'YZ', label: 'YZ平面', buttonId: 'mirror-body-yz' },
         // この値はサーバへ行かない(`base_plane` は XY/XZ/YZ のみ)。`plane_face` を出す印で、`build` が読み替える。
-        { value: 'face', label: '面を選ぶ', buttonId: 'mirror-body-face', sends: null },
+        { value: 'face', label: '面を選ぶ', buttonId: 'mirror-body-face', sends: null, impliedBy: 'plane_face' },
       ],
     },
     {

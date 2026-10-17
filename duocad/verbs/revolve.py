@@ -205,16 +205,31 @@ register_verb(VERB_REVOLVE, do=_do_revolve, undo=_undo_revolve)
 @entry(VERB_REVOLVE)
 def _enter_revolve(
     document: Document,
-    axis: Any,
+    axis: Optional[str] = None,
+    axis_line: Optional[dict] = None,
     angle: float = 360.0,
     mode: str = "join",
     symmetric: bool = False,
     body_id: Optional[BodyId] = None,
 ) -> dict:
-    """選択の領域を回す。軸は選択ではなく引数(`mirror_sketch_entities` の軸と同じ別チャンネル)。"""
+    """選択の領域を回す。軸は選択ではなく引数(`mirror_sketch_entities` の軸と同じ別チャンネル)。
+
+    公開面では軸を `axis`("x" / "y")と `axis_line`(線分の参照)に分けて受け、verb とログでは1つの `axis` に畳む。
+    """
+    if (axis is None) == (axis_line is None):
+        raise ValueError(
+            "revolve takes exactly one of axis ('x' / 'y') or axis_line (a line reference), "
+            f"got axis={axis!r}, axis_line={axis_line!r}"
+        )
     refs = [RegionRef.from_dict(item) for item in selection.require_selected(document, selection.REGION_KIND)]
     operation = revolve(
-        document, refs, axis, float(angle), mode=str(mode), body_id=body_id, symmetric=bool(symmetric)
+        document,
+        refs,
+        axis if axis_line is None else axis_line,
+        float(angle),
+        mode=str(mode),
+        body_id=body_id,
+        symmetric=bool(symmetric),
     )
     changed = operation.args["body_id"]
     return {

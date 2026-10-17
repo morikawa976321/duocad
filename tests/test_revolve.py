@@ -18,6 +18,8 @@ from OCP.TopoDS import TopoDS
 from duocad import kernel, query
 from duocad.document import Document
 from document_support import replay_through_json
+from duocad.server import Session
+from session_support import select
 from duocad.region import region_ref, regions
 from duocad.sketch import add_arc, add_line, add_rectangle, sketch_create
 from duocad.verbs import extrude, fillet, revolve
@@ -225,3 +227,34 @@ def _seam_edge_indices(shape) -> list:
         if any(BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(faces.FindKey(f))) for f in range(1, faces.Extent() + 1)):
             found.append(index)
     return found
+
+
+@pytest.mark.parametrize(
+    "axis_args",
+    [{}, {"axis": "x", "axis_line": {"sketch": "s", "entity": "e"}}],
+    ids=["neither", "both"],
+)
+def test_the_public_entry_takes_exactly_one_of_axis_and_axis_line(tmp_path, axis_args):
+    """公開面(MCP・WS)は軸を `axis` と `axis_line` に分けて受ける。どちらも無い・両方あるは例外で何も変えない。"""
+    session = Session(None, 0.2, models_dir=tmp_path)
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [0.0, 3.0], 10.0, 2.0)
+    select(session, [{"sketch": sketch_id, "index": 1}])
+
+    with pytest.raises(ValueError, match="exactly one"):
+        session.revolve(mode="join", **axis_args)
+    assert session.document.bodies == []
+
+
+def test_the_public_entry_revolves_around_a_picked_line(tmp_path):
+    """`axis_line` で渡した線分が、verb の `axis` として記録される。"""
+    session = Session(None, 0.2, models_dir=tmp_path)
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [0.0, 3.0], 10.0, 2.0)
+    line = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
+    select(session, [{"sketch": sketch_id, "index": 1}])
+
+    session.revolve(axis_line={"sketch": sketch_id, "entity": line, "point": None}, mode="join")
+
+    assert math.isclose(_volume(session.document), math.pi * 16.0 * 10.0, rel_tol=VOLUME_REL_TOL)
+    assert session.document.log.entries[-1].args["axis"] == {"sketch": sketch_id, "entity": line}

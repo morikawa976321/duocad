@@ -200,10 +200,12 @@ export interface PointArgSpec extends ArgSpecCommon {
  * `sends` は共有の作業空間(`state.command.args`)へ出すサーバ側の値(省略なら `value` そのまま。`build` と同じ読み替えをここにも
  * 書く: `copy` の 'copy' → true、荷重の 'down' → [0,0,-1])。サーバの値にならない選択肢(鏡映面の「面を選ぶ」)は `null`。
  * 配信された値を欄へ戻すときも同じ対応で引く(`CommandHost.svelte` の `syncFromShared`)。
+ * `impliedBy` は `sends: null` の選択肢だけが持つ、配信からその選択肢を戻す手がかり: 配信にこの名前の引数があれば、
+ * 自分の引数が配信に無くてもこの選択肢を選び直す(再読み込みで回転体の「線分を選ぶ」が戻らず `axis_line` が隠れたままになるのを防ぐ)。
  */
 export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
-  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown }>
+  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string }>
 }
 
 /** 選択肢がサーバへ出す値(`sends` が無ければ `value`)。`null` は「出さない」。 */

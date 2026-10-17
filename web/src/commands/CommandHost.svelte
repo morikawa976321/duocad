@@ -675,8 +675,8 @@
    * `lastPublished` との差分だけ送る。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。
    * 欄から消えたキーを null で外すのは、**自分が出したことのあるキー**か、**一度でも画面に出た欄のキーで、配信を欄へ写せなかった
    * ものでない**ものだけ: 人が欄を空にした・モードを切り替えて欄を隠したのは「まだ決めていない」へ戻す意思で、AI が付けた値でも
-   * 外す(残すと AI の `apply_command` が並進に回転の引数を併合して断られる)。一度も出ていない欄(再読み込みで
-   * `base_plane: 'face'` が戻らず隠れたままの `plane_face`)・欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)・
+   * 外す(残すと AI の `apply_command` が並進に回転の引数を併合して断られる)。一度も出ていない欄(`when` で
+   * 隠れたままの欄)・欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)・
    * 写せなかった値は触らない。
    */
   function flushPublish(next: Record<string, unknown>): void {
@@ -741,8 +741,13 @@
       } else if (spec.kind === 'choice') {
         if (value === undefined) {
           // サーバの値にならない選択肢(鏡映面の「面を選ぶ」。`sends: null`)は、サーバに無いことが「選んでいない」を意味しない。
+          const implied = spec.options.find(
+            (candidate) => candidate.impliedBy !== undefined && remote[candidate.impliedBy] !== undefined,
+          )
           const current = spec.options.find((candidate) => candidate.value === choices[spec.name])
-          if (current === undefined || choiceSends(current) !== null) {
+          if (implied !== undefined) {
+            choices = { ...choices, [spec.name]: implied.value }
+          } else if (current === undefined || choiceSends(current) !== null) {
             const { [spec.name]: _removed, ...rest } = choices
             choices = rest
           }

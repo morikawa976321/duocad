@@ -203,7 +203,7 @@ def _run_revolve(session: Session, tmp_path: Path) -> dict:
     sketch_id = _sketch(session)
     session.add_rectangle(sketch_id, [0.0, 1.0], SIDE, SIDE)
     _select(session, [{"sketch": sketch_id, "index": 1}])
-    return session.revolve("x", 90.0, mode="join")
+    return session.revolve(axis="x", angle=90.0, mode="join")
 
 
 @_runner("fillet")
