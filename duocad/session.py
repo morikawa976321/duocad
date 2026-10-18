@@ -561,7 +561,8 @@ class Session:
             or (item.get("kind") == "body" and mode.get("kind") != "optimize")
         ]
         if unusable:
-            selection.modify_selection(self.document, add=(), remove=unusable)
+            # 内部データを外すだけ。`modify_selection` は隠したボディ/スケッチを指す項目で検査が落ち、モードが切り替わらない。
+            selection.remove_items(self.document, unusable)
         self.workspace.mode = dict(mode)
         self.workspace.command = None
         self.workspace.bump()
