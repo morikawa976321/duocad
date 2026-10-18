@@ -69,7 +69,7 @@
     section: SectionState
     onSectionToggle: (on: boolean) => void
     onSectionPlane: (plane: BasePlaneName) => void
-    /** 数式のまま渡す(評価と失敗のトーストは App)。受け付けたら true。 */
+    /** 数式のまま渡す(評価と失敗のトーストは App)。受け付けたら true。欄は結果によらず状態に戻す(`commitPosition`)。 */
     onSectionPosition: (text: string) => boolean
     onSectionInvert: (inverted: boolean) => void
   } = $props()
@@ -86,8 +86,10 @@
 
   function commitPosition(event: Event): void {
     const input = event.target as HTMLInputElement
-    // 同じ値に評価される式(`10/2` → 5 のまま)では Svelte が欄を書き直さないので、自分で戻す。
-    if (onSectionPosition(input.value)) input.value = formatPosition(section.position)
+    onSectionPosition(input.value)
+    // 欄を状態に戻す。同じ値に評価される式(`10/2` → 5 のまま)では Svelte が欄を書き直さないのでここで戻す。
+    // 読めない式(`abc`・`1/0`)は位置が変わらない(理由はトーストが言う)ので、不正な文字を欄に残さず直前の位置に戻す。
+    input.value = formatPosition(section.position)
   }
 
   function blurOnEnter(event: KeyboardEvent): void {
