@@ -55,7 +55,7 @@ import {
 } from './viewportTypes'
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
-  DEPTH_BIAS_LAYER, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
+  BOX_SEEN_MAX_STEPS, BOX_SEEN_STEP_PX, DEPTH_BIAS_LAYER, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
   HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS, PREVIEW_COLOR,
   REGION_COLOR, REGION_SELECTED_COLOR, SKETCH_COLOR, SKETCH_FIT_MARGIN, SKETCH_GHOST_COLOR, SKETCH_GHOST_WARN_COLOR, SKETCH_HANDLE_COLOR,
   SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, VERTEX_PIXELS, WORLD_UP, isSelectableFov, lighten, withDepthBias, type BodyMeshes,
@@ -941,7 +941,7 @@ export function createViewport(container: HTMLElement): Viewport {
   // ソリッドともスケッチとも別のグループに持つ(`update()`/`prune()` は `root` しか触らない)。
   const features = createSolidFeatures({
     clipPlanes: section.clipPlanes,
-    pixelAt: (point) => occlusion.pixelAt(point),
+    sphereNear: (sphere, x, y, radiusPx, project) => occlusion.sphereNear(sphere, x, y, radiusPx, project),
     invalidate,
   })
   scene.add(features.object)
@@ -1830,18 +1830,6 @@ export function createViewport(container: HTMLElement): Viewport {
     slack: number
   }
 
-  const projectedSphere = { x: 0, y: 0, w: 1 }
-
-  /** その球が画面でカーソルから `radiusPx` 以内に掛かりうるか(掛からないスケッチ・ボディは歩かない)。 */
-  function sphereNearCursor(sphere: THREE.Sphere, x: number, y: number, radiusPx: number, project: ScreenProjector): boolean {
-    if (sphere.radius < 0) return false
-    if (!project.project(sphere.center, projectedSphere)) return true // 中心がカメラの裏でも一部は見えうる
-    const reach = sphere.radius / Math.max(occlusion.pixelAt(sphere.center), 1e-12) + radiusPx
-    const dx = projectedSphere.x - x
-    const dy = projectedSphere.y - y
-    return dx * dx + dy * dy <= reach * reach
-  }
-
   /** 編集していないスケッチの点・線のうち、当たり半径に入るもの(通常モード)。 */
   function sketchPickCandidates(
     x: number,
@@ -1857,7 +1845,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const lineLimit = EDGE_PICK_PIXELS * EDGE_PICK_PIXELS
     for (const [sketchId, scene] of sketches) {
       if (scene.editing) continue
-      if (!sphereNearCursor(scene.sphere, x, y, SKETCH_HANDLE_PIXELS, project)) continue
+      if (!occlusion.sphereNear(scene.sphere, x, y, SKETCH_HANDLE_PIXELS, project)) continue
       if (wantPoints) {
         for (const item of scene.pickPoints) {
           const hit = screenHitOfPoint(x, y, item.point, project)
@@ -1913,7 +1901,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const mesh = entry.body.mesh
       if (!mesh.visible || mesh.geometry.boundingSphere === null) continue
       sphere.copy(mesh.geometry.boundingSphere).applyMatrix4(mesh.matrixWorld)
-      if (sphereNearCursor(sphere, x, y, EDGE_PICK_PIXELS, project)) near.push(bodyId)
+      if (occlusion.sphereNear(sphere, x, y, EDGE_PICK_PIXELS, project)) near.push(bodyId)
     }
     return near
   }
@@ -2139,10 +2127,38 @@ export function createViewport(container: HTMLElement): Viewport {
       const keep = section.keepsFilter()
       camera.updateMatrixWorld()
       const depth = occlusion.snapshot()
-      const seen = (point: THREE.Vector3, deviation = 0): boolean =>
-        depth === null || depth.visible(point, occlusion.slack(point, deviation))
+      // 断面の ON の間は、奥行きの読み出しで見えた点を視線でも確かめる(読み出しは切り口の蓋を描かず、蓋の奥の裏の面で
+      // 遮る。蓋に隠れた中身を見えていると読む。視線の判定 `surfaceAlong` は蓋で遮る)
+      const sectionOn = keep !== null
+      const seen = (point: THREE.Vector3, deviation = 0): boolean => {
+        const slack = occlusion.slack(point, deviation)
+        if (depth !== null && !depth.visible(point, slack)) return false
+        return !sectionOn || occlusion.visible(point, slack)
+      }
       const identity = new THREE.Matrix4()
-      const scratch = new THREE.Vector3()
+      const along = new THREE.Vector3()
+      /** 折れ線の上を画面で `BOX_SEEN_STEP_PX` おきに見て、どこか1点でも見えているか(頂点だけだと、両端が隠れて中ほどが見える線を落とす)。 */
+      const polylineSeen = (count: number, at: (index: number, out: THREE.Vector3) => void, deviation = 0): boolean => {
+        const a = new THREE.Vector3()
+        const b = new THREE.Vector3()
+        for (let index = 0; index < count; index += 1) {
+          at(index, b)
+          if (index === 0) {
+            if (seen(b, deviation)) return true
+            a.copy(b)
+            continue
+          }
+          const sa = projectRaw(a, width, height)
+          const sb = projectRaw(b, width, height)
+          const length = sa !== null && sb !== null ? Math.hypot(sb.x - sa.x, sb.y - sa.y) : 0
+          const steps = Math.min(BOX_SEEN_MAX_STEPS, Math.max(1, Math.ceil(length / BOX_SEEN_STEP_PX)))
+          for (let step = 1; step <= steps; step += 1) {
+            if (seen(along.lerpVectors(a, b, step / steps), deviation)) return true
+          }
+          a.copy(b)
+        }
+        return false
+      }
 
       // 面。隠したBodyのメッシュは `visible=false` なので外す。
       for (const [bodyId, entry] of pickKinds.has('face') ? bodies : []) {
@@ -2160,12 +2176,12 @@ export function createViewport(container: HTMLElement): Viewport {
       if (pickKinds.has('edge')) {
         features.forEachEdge((ref, points, deviation) => {
           if (!band.positionsInside(points, identity, rect, width, height, keep)) return
-          for (let at = 0; at + 2 < points.length; at += 3) {
-            if (seen(scratch.set(points[at], points[at + 1], points[at + 2]), deviation)) {
-              edges.push(ref)
-              return
-            }
-          }
+          const visible = polylineSeen(
+            Math.floor(points.length / 3),
+            (index, out) => out.set(points[index * 3], points[index * 3 + 1], points[index * 3 + 2]),
+            deviation,
+          )
+          if (visible) edges.push(ref)
         })
       }
       if (pickKinds.has('vertex')) {
@@ -2194,7 +2210,7 @@ export function createViewport(container: HTMLElement): Viewport {
             const entityId = line.userData.entityId
             if (!worldPoints || typeof entityId !== 'string') continue
             if (!band.polylineWorldInside(worldPoints, rect, width, height)) continue
-            if (!worldPoints.some((point) => seen(point))) continue
+            if (!polylineSeen(worldPoints.length, (index, out) => out.copy(worldPoints[index]))) continue
             whole.add(entityId)
             sketchEntities.push({ sketchId, entityId, point: null })
           }
@@ -2211,11 +2227,8 @@ export function createViewport(container: HTMLElement): Viewport {
       // 領域
       for (const mesh of regionPickTargets()) {
         if (!band.objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
-        const position = mesh.geometry.getAttribute('position')
-        let visible = false
-        for (let at = 0; at < position.count && !visible; at += 1) {
-          visible = seen(scratch.set(position.getX(at), position.getY(at), position.getZ(at)))
-        }
+        const triangles = (mesh.geometry.getIndex()?.count ?? 0) / 3
+        const visible = faceSeen(mesh, { triangleStart: 0, triangleCount: triangles }, seen)
         const { sketchId, regionIndex } = mesh.userData
         if (visible && typeof sketchId === 'string' && typeof regionIndex === 'number') {
           regions.push({ sketchId, index: regionIndex })
@@ -2283,7 +2296,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const sphere = mesh.geometry.boundingSphere.clone().applyMatrix4(mesh.matrixWorld)
     const center = projectRaw(sphere.center, width, height)
     if (center === null) return true
-    const radius = sphere.radius / Math.max(occlusion.pixelAt(sphere.center), 1e-12)
+    const radius = occlusion.screenRadius(sphere)
     const nearestX = Math.min(Math.max(center.x, rect.left), rect.right)
     const nearestY = Math.min(Math.max(center.y, rect.top), rect.bottom)
     return (nearestX - center.x) ** 2 + (nearestY - center.y) ** 2 <= radius * radius

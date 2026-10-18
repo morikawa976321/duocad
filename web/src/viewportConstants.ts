@@ -94,6 +94,12 @@ export const VERTEX_PIXELS = 4
  * 押し出した元のスケッチの線は押し出した辺とぴったり重なる(差 0)ので、線の太さ程度あれば足りる。
  */
 export const PICK_OVERLAP_PIXELS = 2
+/**
+ * 矩形選択で線(辺・スケッチの線)が見えているかを見る間隔[CSS px]と、線分1本あたりの上限。間隔は当たり半径
+ * (`EDGE_PICK_PIXELS`)と同じ: それより短く見えている部分は、クリックでもほぼ狙えない。
+ */
+export const BOX_SEEN_STEP_PX = 6
+export const BOX_SEEN_MAX_STEPS = 64
 export const BACKGROUND_COLOR = 0x161a1f
 /**
  * 平面グリッドの格子線。刻みは 1/10/100mm の3段固定(`gridScale.ts` の `TIERS`)で、
@@ -261,8 +267,10 @@ export const DEPTH_BIAS_LAYER = {
   /**
    * 編集していないスケッチの線・領域(立体の裏に回ったら隠れる。docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」)。
    * 面に貼ったスケッチ・押し出した元のスケッチは面と厳密に同一平面で、寄せないと面と奥行きを争う。
+   * **遮蔽の許し(`occlusion.ts` の `slack`)より小さく保つ**: 寄せた量より薄い板の裏の線は板の手前に描かれるので、
+   * 許しが寄せた量より狭いと「見えているのに指せない」になる(`slack` はこの量 + 1画素を下限に持つ)。
    */
-  sketch: 7,
+  sketch: 1,
 } as const
 
 /**

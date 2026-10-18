@@ -43,8 +43,8 @@ export interface VertexCandidate extends ScreenHit {
 export interface SolidFeaturesDeps {
   /** 断面のクリップ平面(共有配列)。描く辺・頂点も切る。 */
   clipPlanes: THREE.Plane[]
-  /** その点の奥行きでの画面1画素の長さ[mm](画面の外接円で候補を絞る)。 */
-  pixelAt(point: THREE.Vector3): number
+  /** その球が画面でカーソルに掛かりうるか(`occlusion.sphereNear`。掛からないボディ・辺は折れ線を歩かない)。 */
+  sphereNear(sphere: THREE.Sphere, x: number, y: number, radiusPx: number, projector: ScreenProjector): boolean
   /** 描くものが変わった(描き直しを頼む)。 */
   invalidate(): void
 }
@@ -135,17 +135,7 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
   const vertexData = new Map<string, BodyVertexEntry>()
 
   // ------------------------------------------------------------ 当たり
-  const projectedCenter = { x: 0, y: 0, w: 1 }
-
-  /** その球が画面でカーソルから `radiusPx` 以内に掛かりうるか(掛からないものは折れ線を歩かない)。 */
-  function sphereNear(sphere: THREE.Sphere, x: number, y: number, radiusPx: number, projector: ScreenProjector): boolean {
-    if (sphere.radius < 0) return false
-    if (!projector.project(sphere.center, projectedCenter)) return true // 中心がカメラの裏でも一部は見えうる
-    const reach = sphere.radius / Math.max(deps.pixelAt(sphere.center), 1e-12) + radiusPx
-    const dx = projectedCenter.x - x
-    const dy = projectedCenter.y - y
-    return dx * dx + dy * dy <= reach * reach
-  }
+  const sphereNear = deps.sphereNear
 
   function edgeCandidates(
     x: number,

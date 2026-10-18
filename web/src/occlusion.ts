@@ -14,6 +14,8 @@
 import * as THREE from 'three'
 
 import { DEVIATION_MIN_ABS, DEVIATION_MIN_RELATIVE } from './adaptiveResolution'
+import type { ProjectedPoint, ScreenProjector } from './polylinePick'
+import { DEPTH_BIAS_LAYER, DEPTH_BIAS_UNIT } from './viewportConstants'
 
 /** 遮るもの(見えているボディのメッシュ)だけを描くための layer。`viewport.ts` がボディのメッシュに立てる。 */
 export const OCCLUDER_LAYER = 5
@@ -50,6 +52,14 @@ export interface Occlusion {
   visible(point: THREE.Vector3, slack: number): boolean
   /** その点の奥行きでの画面1画素の長さ[mm]。 */
   pixelAt(point: THREE.Vector3): number
+  /**
+   * 球が画面で中心の射影から広がりうる半径[px]の上限(候補を画面の距離で絞るのに使う)。透視では手前の点ほど大きく映るので、
+   * 中心の奥行きの1画素で割ると小さく見積もる(画角90度・距離50mmの40mm立方体の角が実際の 471px に対し 353px)。
+   * 手前の端の奥行き d−r で割り、中心が視線から外れている分(|xy|/d)を足す。カメラが球に近い・中に入っていれば Infinity。
+   */
+  screenRadius(sphere: THREE.Sphere): number
+  /** その球が画面でカーソル (x, y) から `radiusPx` 以内に掛かりうるか(掛からないボディ・辺・スケッチは歩かない)。 */
+  sphereNear(sphere: THREE.Sphere, x: number, y: number, radiusPx: number, projector: ScreenProjector): boolean
   /** その点に置く許し[mm]。`deviation` は的の折れ線の偏差(分かっていれば)。 */
   slack(point: THREE.Vector3, deviation?: number): number
   /** 遮るものの奥行きを今のカメラで1回描いて読み出す(描けなければ null。そのときは遮蔽を見ない)。 */
@@ -92,9 +102,39 @@ export function createOcclusion(deps: OcclusionDeps): Occlusion {
     return 0
   }
 
+  function screenRadius(sphere: THREE.Sphere): number {
+    const camera = deps.camera()
+    const { height } = deps.size()
+    if (sphere.radius < 0) return 0
+    if (camera instanceof THREE.OrthographicCamera) {
+      return (sphere.radius * camera.zoom * Math.max(height, 1)) / (camera.top - camera.bottom)
+    }
+    if (!(camera instanceof THREE.PerspectiveCamera)) return Infinity
+    const view = scratch.copy(sphere.center).applyMatrix4(camera.matrixWorldInverse)
+    const depth = -view.z
+    const nearest = depth - sphere.radius
+    if (nearest <= camera.near) return Infinity
+    const pixelsPerMm = (camera.zoom * Math.max(height, 1)) / (2 * nearest * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2))
+    return sphere.radius * pixelsPerMm * (1 + Math.hypot(view.x, view.y) / depth)
+  }
+
+  const projectedCenter: ProjectedPoint = { x: 0, y: 0, w: 1 }
+
+  function sphereNear(sphere: THREE.Sphere, x: number, y: number, radiusPx: number, projector: ScreenProjector): boolean {
+    if (sphere.radius < 0) return false
+    if (!projector.project(sphere.center, projectedCenter)) return true // 中心がカメラの裏でも一部は見えうる
+    const reach = screenRadius(sphere) + radiusPx
+    const dx = projectedCenter.x - x
+    const dy = projectedCenter.y - y
+    return dx * dx + dy * dy <= reach * reach
+  }
+
   function slack(point: THREE.Vector3, deviation = 0): number {
     const floor = Math.max(DEVIATION_MIN_ABS, deps.contentDiagonal() * DEVIATION_MIN_RELATIVE)
-    return Math.max(SLACK_PIXELS * pixelAt(point), SLACK_FLOOR_DEVIATIONS * floor, SLACK_EDGE_DEVIATIONS * deviation)
+    // 編集していないスケッチを手前へ寄せて描く量(画面の高さに対する比)より狭いと、寄せて見えているものが指せない
+    const biasPixels = DEPTH_BIAS_LAYER.sketch * DEPTH_BIAS_UNIT * deps.size().height
+    const pixels = Math.max(SLACK_PIXELS, biasPixels + 1)
+    return Math.max(pixels * pixelAt(point), SLACK_FLOOR_DEVIATIONS * floor, SLACK_EDGE_DEVIATIONS * deviation)
   }
 
   // ------------------------------------------------------------ 奥行きの読み出し(矩形選択)
@@ -211,6 +251,8 @@ export function createOcclusion(deps: OcclusionDeps): Occlusion {
   return {
     visible,
     pixelAt,
+    screenRadius,
+    sphereNear,
     slack,
     snapshot,
     dispose() {

@@ -267,11 +267,6 @@
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
   let edgesAsked = new Set<string>()
-  /**
-   * 頼んだ時点の形の版(`${body_id}:${revision}` -> `shape_revision`)。届いた辺・頂点が今の形のものかを見る:
-   * 版(`revision`)は粗さ(カメラ)でも上がるので、版が違っても形が同じなら添字はそのまま使える。
-   */
-  const askedShape = new Map<string, number>()
   /** 取り寄せた辺の連なり(body_id -> その版の連なりの全部)。辺を出し直したら覚えさせ直す。描画の依存ではないので `$state` にしない。 */
   let edgeChains: Record<string, { revision: number; chains: number[][] }> = {}
   /** 連なりを頼んだ辺(`${body_id}:${revision}:${辺の添字}`)。 */
@@ -1029,13 +1024,12 @@
   const selectedVertices = $derived(refsOfKind(selection?.items ?? [], 'vertex'))
 
   /**
-   * 届いた辺・頂点(版 `revision` のもの)が今の形のものか。版は粗さ(カメラ)でも上がるので、版が違っても
-   * 頼んだ時点の形の版(`askedShape`)が今と同じなら添字はそのまま使える。形が違う添字は別の辺・頂点を指す(§7)。
+   * 届いた辺・頂点が今の形のものか(サーバが応答に載せた形の版 `shape_revision` で見る)。版 `revision` は粗さ(カメラ)でも
+   * 上がるので、版が違っても形が同じなら添字はそのまま使える。形が違う添字は別の辺・頂点を指す(§7)。
    */
-  function sameShape(bodyId: string, revision: number): boolean {
+  function sameShape(bodyId: string, payload: { shape_revision: number }): boolean {
     const body = model?.bodies.find((item) => item.body_id === bodyId)
-    if (!body) return false
-    return revision === body.revision || askedShape.get(`${bodyId}:${revision}`) === body.shape_revision
+    return body !== undefined && payload.shape_revision === body.shape_revision
   }
 
   /**
@@ -1043,7 +1037,7 @@
    * `requireVisible` は頂点の側だけ(隠れたボディの頂点はサーバが断る)。
    * `$effect` の中から呼ぶと `model` と手元の値の両方が依存に入る(`?.` で短絡する前に読む)。
    */
-  function freshPayload<T extends { revision: number }>(
+  function freshPayload<T extends { revision: number; shape_revision: number }>(
     cache: Record<string, T>,
     bodyId: string,
     options: { requireVisible?: boolean } = {},
@@ -1051,7 +1045,7 @@
     const body = model?.bodies.find((item) => item.body_id === bodyId)
     const known = cache[bodyId]
     if (!body || (options.requireVisible === true && !body.visible)) return null
-    return known !== undefined && sameShape(bodyId, known.revision) ? known : null
+    return known !== undefined && sameShape(bodyId, known) ? known : null
   }
 
   /** 同じ鍵(`${body}:${revision}`)で2度頼まない(`edgesAsked` / `verticesAsked`)。 */
@@ -1084,12 +1078,10 @@
       if (!body || !body.visible || body.kind === 'mesh') continue
       const key = `${bodyId}:${body.revision}`
       if (edges[bodyId]?.revision !== body.revision) {
-        askedShape.set(key, body.shape_revision)
         requestOnce(edgesAsked, key, () => session.getEdges(bodyId))
       }
       const knownVertices = vertices[bodyId]
-      if (knownVertices === undefined || !sameShape(bodyId, knownVertices.revision)) {
-        askedShape.set(key, body.shape_revision)
+      if (knownVertices === undefined || !sameShape(bodyId, knownVertices)) {
         requestOnce(verticesAsked, `${bodyId}:shape:${body.shape_revision}`, () => session.getVertices(bodyId))
       }
     }
@@ -1122,12 +1114,12 @@
         continue
       }
       const edgesOfBody = knownEdges[bodyId]
-      const usableEdges = edgesOfBody !== undefined && sameShape(bodyId, edgesOfBody.revision) ? edgesOfBody : null
+      const usableEdges = edgesOfBody !== undefined && sameShape(bodyId, edgesOfBody) ? edgesOfBody : null
       viewport.setBodyEdges(bodyId, usableEdges)
       const verticesOfBody = knownVertices[bodyId]
       viewport.setBodyVertices(
         bodyId,
-        verticesOfBody !== undefined && sameShape(bodyId, verticesOfBody.revision) ? verticesOfBody : null,
+        verticesOfBody !== undefined && sameShape(bodyId, verticesOfBody) ? verticesOfBody : null,
       )
       const chains = edgeChains[bodyId]
       if (usableEdges !== null && chains?.revision === usableEdges.revision) viewport.setEdgeChains(bodyId, chains.chains)
@@ -1202,13 +1194,21 @@
     viewport?.setPickKinds(kinds)
   })
 
-  /** 辺・頂点が届くのを待っている矩形選択(新しいものが古いものを置き換える。`onBoxSelect`)。 */
-  let pendingBox = $state<BoxSelectEvent | null>(null)
+  /**
+   * 辺・頂点が届くのを待っている矩形選択(`onBoxSelect`)と、引いたときの視点。新しいクリック・矩形選択・コマンドの起動で
+   * 捨てる(後の操作の結果を古い矩形が上書きしない)。視点が動いていたら集め直さずに捨てる(画面の矩形は引いたときの視点のもの)。
+   */
+  let pendingBox = $state<{ event: BoxSelectEvent; pose: string } | null>(null)
+
+  function cameraKey(): string {
+    const pose = viewport?.cameraPose()
+    return pose === undefined ? '' : JSON.stringify([pose.position, pose.target, pose.up])
+  }
 
   $effect(() => {
     const waiting = pendingBox
     if (waiting === null) return
-    const ready = waiting.pendingBodies.every((bodyId) => {
+    const ready = waiting.event.pendingBodies.every((bodyId) => {
       const body = model?.bodies.find((item) => item.body_id === bodyId)
       if (!body || !body.visible || body.kind === 'mesh') return true
       return freshPayload(edges, bodyId) !== null && freshPayload(vertices, bodyId) !== null
@@ -1218,8 +1218,8 @@
     // 画面へ渡す側の `$effect` が先に走り終えてから集め直す(同じ配信で両方が走る順序は決まっていない)。
     // 集め直しで新たに足りないボディが出ても待たない(届かないボディで矩形選択が止まり続けないように)。
     setTimeout(() => {
-      if (viewport === null) return
-      onBoxSelect({ ...viewport.collectInBox(waiting.rect), pendingBodies: [], mode: waiting.mode })
+      if (viewport === null || cameraKey() !== waiting.pose) return
+      onBoxSelect({ ...viewport.collectInBox(waiting.event.rect), pendingBodies: [], mode: waiting.event.mode })
     }, 0)
   })
 
@@ -1299,9 +1299,10 @@
   function onBoxSelect(event: BoxSelectEvent): void {
     // 辺・頂点がまだ届いていないボディが矩形に掛かっていたら、届いてから同じ矩形で集め直す(`pendingBox`)
     if (event.pendingBodies.length > 0) {
-      pendingBox = event
+      pendingBox = { event, pose: cameraKey() }
       return
     }
+    pendingBox = null
     const mode = toggleOnlyMode(event.mode)
     // 辺は連なりごとのまとまり(連なりの辺を2本囲んでも1つ)。トグルはまとまり単位(`toggleUnits`)。
     // 連なりの分からない辺があれば、届くまで選択ごと待たせる(1本だけ入れると連なりが割れる)。
@@ -1607,6 +1608,7 @@
 
   /** ピックを選択集合の編集へ翻訳する。ここが作るのは「何を足して何を引くか」だけで、結果はコアから返ってくる。 */
   function onPick(event: PickEvent): void {
+    pendingBox = null // 待たせた矩形選択が、後のクリックの結果を上書きしない
     if (sketchId !== null) {
       onSketchPick(event)
       return

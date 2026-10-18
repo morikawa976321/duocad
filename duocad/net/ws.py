@@ -17,7 +17,7 @@
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
         {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
-        {"type": "edges", "body_id": str, "revision": int, "deviation": float, "edges": [...]}
+        {"type": "edges", "body_id": str, "revision": int, "shape_revision": int, "deviation": float, "edges": [...]}
         {"type": "edge_chains", "body_id": str, "revision": int, "chains": [[int, ...], ...]}
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
         {"type": "error", "message": str, "where": str, "client_op": int|None}

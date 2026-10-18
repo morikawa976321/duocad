@@ -59,6 +59,21 @@ def test_the_vertex_revision_follows_the_shape(session: Session) -> None:
     assert len(after["vertices"]) != len(before["vertices"])
 
 
+def test_edges_and_vertices_carry_the_shape_revision(session: Session) -> None:
+    """辺・頂点の応答に形の版が載り、形が変わったときだけ上がる。落ちたら、画面が粗さだけ変わった版(カメラ由来)で
+    取り寄せた添字を古い形のものと取り違える(または形の変わった古い添字を使い続ける)。"""
+    body, _ = _box(session)
+    edges = session.edges(body.id)
+    vertices = session.vertices(body.id)
+    assert edges["shape_revision"] == vertices["shape_revision"] == session.view.shape_revision(body.id)
+
+    session.modify_selection([{"body": body.id, "kind": "edge", "index": 1}], [])
+    session.fillet(3.0)
+
+    assert session.edges(body.id)["shape_revision"] > edges["shape_revision"]
+    assert session.vertices(body.id)["shape_revision"] > vertices["shape_revision"]
+
+
 def test_the_vertices_of_a_hidden_body_are_refused(session: Session) -> None:
     """隠したBodyの頂点は配らない(`edges()` / `geometry()` と同じ規律)。"""
     body, _ = _box(session)

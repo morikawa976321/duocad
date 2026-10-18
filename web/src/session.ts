@@ -395,6 +395,8 @@ export interface EdgeGeometry {
 export interface EdgesPayload {
   body_id: string
   revision: number
+  /** 頼んだ時点の形の版(`BodyMeta.shape_revision`)。添字が今の形のものかはこれで見る(`revision` は粗さでも上がる)。 */
+  shape_revision: number
   /** 折れ線の弦の偏差[mm](`DocumentView.edges`)。遮蔽判定がこの分の奥行きの差を許す。 */
   deviation: number
   edges: EdgeGeometry[]
@@ -428,6 +430,8 @@ export interface VertexGeometry {
 export interface VerticesPayload {
   body_id: string
   revision: number
+  /** 頼んだ時点の形の版(`EdgesPayload.shape_revision` と同じ)。 */
+  shape_revision: number
   vertices: VertexGeometry[]
 }
 
@@ -1197,6 +1201,7 @@ export function createSession(hooks: SessionHooks): Session {
       sketch_ghost?: PreviewPayload['sketch_ghost']
       body_id?: string
       revision?: number
+      shape_revision?: number
       edges?: EdgeGeometry[]
       chains?: number[][]
       vertices?: VertexGeometry[]
@@ -1291,6 +1296,7 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onEdges({
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
+        shape_revision: message.shape_revision ?? -1,
         deviation: message.deviation ?? 0,
         edges: message.edges ?? [],
       })
@@ -1304,6 +1310,7 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onVertices({
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
+        shape_revision: message.shape_revision ?? -1,
         vertices: message.vertices ?? [],
       })
     } else if (message.type === 'measure') {
