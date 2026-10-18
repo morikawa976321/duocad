@@ -2186,20 +2186,15 @@
     stateEpoch: () => stateEpoch,
     modeKind: () => mode.kind,
     clickToggles: () => commandClickToggles(),
-    wantedKinds: () => wantedKinds,
     sketches: () => sketches,
     sketchId: () => sketchId,
     hoverPoint: () => hoverPoint,
     wantsBasePlanes: () => wantsBasePlanes,
-    wantsRegions: () => wantsRegions,
     edges: () => edges,
     edgeTargetBody: () => edgeTargetBody,
     wantsEdges: () => wantsEdges,
     wantedPick: () => wantedPick,
-    vertexCandidateBody: () => vertexCandidateBody,
     selectedEntities: () => selectedEntities,
-    vertexMarkers: () => vertexMarkers,
-    wantedVertices: () => wantedVertices,
   })
 </script>
 

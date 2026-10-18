@@ -53,7 +53,6 @@
             {@const url = thumbnailUrl(file.name)}
             <button
               class="start-card"
-              data-name={file.name}
               onclick={() => onOpen(file.name)}
               title={`${file.name} を開く`}
             >

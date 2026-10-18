@@ -266,7 +266,6 @@
         class="files-row"
         class:active={file.name === currentName}
         class:row-active={file.name === currentName}
-        data-name={file.name}
         use:whenVisible={{ name: file.name, thumb: file.thumb }}
       >
         <button
@@ -326,7 +325,7 @@
         </span>
       </div>
       {#if deletingName === file.name}
-        <div class="new-row confirm-row" data-delete-of={file.name}>
+        <div class="new-row confirm-row">
           <!-- 幅240pxの行に収まる長さにする(長いと末尾が切れて「戻せない」が読めない)。 -->
           <span class="confirm-text" title={file.name === currentName ? '開いている文書。消すと閉じて戻せない' : undefined}>
             {file.name === currentName ? '閉じて消す' : '消すと戻せない'}
@@ -338,7 +337,7 @@
         </div>
       {/if}
       {#if copyingFrom === file.name}
-        <div class="new-row copy-row" data-copy-of={file.name}>
+        <div class="new-row copy-row">
           <SuffixField
             id="file-copy-name"
             suffix=".json"

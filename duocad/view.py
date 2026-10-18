@@ -17,7 +17,6 @@ from . import (
     kernel,
     meshbody,
     optimize,
-    parameters,
     query,
     region,
     resolution,
@@ -433,7 +432,6 @@ class DocumentView:
             {"sketch_id", "name": <str|None>, "plane": <PlaneRef>,
              "frame": {"origin","u","v","normal"},          # (u,v) と3Dの往復の規則
              "entities": [{"entity_id","kind","params","refs"}],   # 打ち直し用(名前つき)
-             "patterns": [{"pattern_id","kind","sources","params","refs","options"}],  # 反復の打ち直し用
              "drawn":    [{"kind","params"}],                      # 反復を展開した描画用
              "regions":  [{"index","area","centroid","positions","indices"}],
              "revision": int}                                          # 描くものが変わったら上がる版
@@ -514,28 +512,6 @@ class DocumentView:
                 f"スケッチ {item.id} の図形を読めない: {type(error).__name__}: {error}"
             )
             payload["entities"] = []
-        # 反復もキャッシュしない・try で包む(`entities` と同じ)。SketchPanelの反復の行用で、
-        # `entities` と同じ形にしてフロントの `commitParam` を使い回す。
-        try:
-            payload["patterns"] = [
-                {
-                    "pattern_id": pattern.id,
-                    "kind": pattern.kind,
-                    "sources": list(pattern.sources),
-                    "params": parameters.resolve_all(self.document, pattern.params),
-                    "refs": {
-                        key: ref if isinstance(ref, str) else None
-                        for key, ref in pattern.params.items()
-                    },
-                    "options": dict(pattern.options),
-                }
-                for pattern in item.patterns
-            ]
-        except Exception as error:
-            self.warnings.append(
-                f"スケッチ {item.id} の反復を読めない: {type(error).__name__}: {error}"
-            )
-            payload["patterns"] = []
         # 版: 画面が描くもの(枠・展開した図形・領域 = 署名、点と辺の取っ手 = `entities`)が変わったときだけ上がる。
         # 選択・表示・名前では上がらない(画面は版が同じスケッチを作り直さず、選択の色だけ塗り直す)。
         fingerprint = (signature, json.dumps(payload["entities"], sort_keys=True, default=str))

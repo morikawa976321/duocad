@@ -154,23 +154,6 @@ export interface SketchRegion {
   indices: Uint32Array | number[]
 }
 
-/** 反復の種別。`Pattern.kind`(コア)と同じ語彙。 */
-export type PatternKind = 'rectangular' | 'circular'
-
-/**
- * スケッチ上の1反復。`params`/`refs` は `SketchEntity` と同じ形(打ち直しの対象)。
- * `sources` は元にした図形のID(反復そのものは反復の対象に取れない)。
- * `options` は寸法ではない設定(円形反復の `rotate_copies` 等。打ち直せない)。
- */
-export interface SketchPattern {
-  pattern_id: string
-  kind: PatternKind
-  sources: string[]
-  params: Record<string, number>
-  refs: Record<string, string | null>
-  options: Record<string, unknown>
-}
-
 export interface SketchState {
   sketch_id: string
   /** 表示名(作成時の通し番号か `rename` で付けた名前)。番号の記録が無い古い文書のスケッチだけ null。 */
@@ -184,8 +167,6 @@ export interface SketchState {
   drawn: Array<{ kind: EntityKind; params: Record<string, number> }>
   /** 人が値を打ち直す対象(反復は展開しない)。 */
   entities: SketchEntity[]
-  /** 反復(間隔・個数)。 */
-  patterns: SketchPattern[]
   regions: SketchRegion[]
   /** 描くもの(枠・図形・領域・取っ手)が変わったら上がる版(`DocumentView._sketch_state`)。選択・表示・名前では上がらない。 */
   revision: number

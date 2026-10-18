@@ -132,11 +132,11 @@
     </button>
     <strong>AI</strong>
     {#if status}
-      <span class="value" data-provider={status.provider}>
+      <span class="value">
         {PROVIDER_LABEL[status.provider] ?? status.provider}
       </span>
       {#if status.provider === 'anthropic' && status.model}
-        <span class="dim" data-ai-model>{status.model}</span>
+        <span class="dim">{status.model}</span>
       {/if}
       {#if canPickThinking}
         <!-- 適用ボタンを待たずに送る(会話は作り直されず、次の往復から効く。`Server._ai_set_thinking`)。値の正は `ai_status.thinking`。 -->
@@ -203,10 +203,10 @@
     {/if}
 
     {#if blockedReason}
-      <p class="hint dim" data-ai-blocked>{blockedReason}</p>
+      <p class="hint dim">{blockedReason}</p>
     {/if}
     {#if keyMissing}
-      <p class="hint dim" data-ai-key-missing>
+      <p class="hint dim">
         APIキーが未設定(ヘッダーの「設定」から置ける)
       </p>
     {/if}
@@ -216,18 +216,18 @@
         {#if entry.kind === 'user'}
           <p class="line user">{entry.text}</p>
         {:else if entry.kind === 'tool'}
-          <p class="line tool" class:tool-fail={!entry.call.ok} data-tool={entry.call.name}>
+          <p class="line tool" class:tool-fail={!entry.call.ok}>
             {entry.call.ok ? '✓' : '✗'} {toolLine(entry)}
           </p>
         {:else if entry.kind === 'result'}
-          <p class="line result" data-status={entry.result.status}>
+          <p class="line result">
             {resultLine(entry.result)}
           </p>
           {#if resultDetail(entry.result)}
             <p class="hint dim" data-ai-detail>{resultDetail(entry.result)}</p>
           {/if}
           {#if usageLine(entry.result.usage)}
-            <p class="hint dim" data-ai-usage>{usageLine(entry.result.usage)}</p>
+            <p class="hint dim">{usageLine(entry.result.usage)}</p>
           {/if}
         {:else}
           <p class="line error">{entry.message}</p>
