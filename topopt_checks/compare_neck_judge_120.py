@@ -23,6 +23,7 @@ import _bootstrap  # noqa: E402,F401
 
 import numpy as np  # noqa: E402
 
+from _peel_stats import collecting_peel_stats  # noqa: E402
 from duocad.topopt import binary_search, neck  # noqa: E402
 
 OUT = REPO / 'output' / 'neck_judge_120'
@@ -41,22 +42,15 @@ def _setup(subject, size):
 
 
 def _run(space, cond, cells, *, rule, name):
-    stats = []
-    real_peel = binary_search.peel
-
-    def peel(*args, **kwargs):
-        after, s = real_peel(*args, **kwargs)
-        stats.append(s)
-        return after, s
-
-    patches = [mock.patch.object(binary_search, 'peel', peel)]
+    patches = []
     if not rule:
         patches.append(mock.patch.object(neck.NeckJudge, 'creates_neck', lambda self, mask, removed: False))
     started = time.perf_counter()
     for p in patches:
         p.start()
     try:
-        result = binary_search.find_best_feasible(space.mask, cond, max_evaluations=1000, min_width_cells=cells)
+        with collecting_peel_stats() as stats:
+            result = binary_search.find_best_feasible(space.mask, cond, max_evaluations=1000, min_width_cells=cells)
     finally:
         for p in patches:
             p.stop()

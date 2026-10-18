@@ -275,7 +275,7 @@ def test_human_and_ai_have_the_same_selection_operations():
 @pytest.mark.parametrize("tool,arguments", [("fillet", {"radius": 2.0}), ("chamfer", {"distance": 2.0})])
 def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, arguments: dict):
     """**選択が指しているBodyに当たること**(アクティブなBodyへ誤って当たる穴の再発防止)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     # **選択する側を先に足す** —— `add_body` は足したBodyをアクティブにするので、
     # 後から足した `other` がアクティブになる。アクティブでないほうを狙うのが試験の要点。
     session.document.add_body(
@@ -344,7 +344,7 @@ def test_measure_reports_the_area_of_a_region(tmp_path: Path):
     """領域も測れる(§5の面積側。`region.regions` が既に面積を持っている)。"""
     from duocad.sketch import add_circle, sketch_create
 
-    empty = Session(None, 0.2)
+    empty = Session(0.2)
     sketch_id = sketch_create(empty.document, "XY")
     add_circle(empty.document, sketch_id, (0.0, 0.0), 20.0)
     mcp = McpServer(DocumentTools(empty))

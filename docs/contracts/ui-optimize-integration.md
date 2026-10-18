@@ -49,13 +49,13 @@
 - WebSocket に4つ(と、下の「ステップ」の3つ。`catalog` の `category="protocol"`=verb ではない、`ws="special"`/`mcp=False`/`changes_document=False`、実体は `duocad/net/ws.py` の `_dispatch`): `optimize_conditions`(要求した接続にだけ返す)／`optimize_resolution`(`OptimizeInputError` は `type:"error"` にせず `{"error": 文}` に畳む。条件面がまだ無いのは「設定の途中」)／`run_optimization`(**待たずに返り**、`optimize_status`→`optimize_progress`(多数)→`optimize_result` か `optimize_error`→`optimize_status` の順で**全接続へ**配る)／`cancel_optimization`(`optimize_status {running, cancelling}`)。**`optimize_error` には `cancelled: bool` が載り**、中断は失敗ではないので画面はトーストを出さない。`problems` は条件が足りないときだけ入る。`Server` の配信ヘルパは `_emit_event`/`_spawn_broadcast`/`_broadcast`。
 - **重い処理は `run_in_executor` で回す。** `_dispatch` の中で待つと `handle()` が1接続を直列処理する以上、同じ接続から届く `cancel_optimization` が読めなくなる。`_ai_start` と同じ形。
 - **解像度の目盛りは粗い側へ動かさない。** 粗い側の端は「正しさ」の境界(割ると条件面から節点が消え最小部材幅が表現できず、しかも silent)、細かい側の端は「都合」の境界(遅い・落ちるだけ)。**時間を入力にしない**(時間から解像度を逆算すると最小部材幅と条件面の要求を黙って割る)。段(`resolution_limits()["steps"]`、`optimize_run.RESOLUTION_STEPS`=6の等比、添字0が最粗=既定、最後の段は下限そのもの、上限が下限を下回るときは空)は**サーバが作る**(`_resolution_steps`。要素数の数え方(余白比率0.25と `voxelize.DEFAULT_PAD`)を画面が持つと必ずずれる)。同じ要素数になる段は畳むので `steps.length` が `RESOLUTION_STEPS` と一致することに依存しない。
-- 画面の口: `session.ts` の `optimizeConditions/optimizeResolution/runOptimization/cancelOptimization` と hooks 6本(`onOptimizeConditions/Resolution/Status/Progress/Result/Error`)。`OptimizePanel.svelte`(`App.svelte` が状態を持ち、パネルは値と口だけ受け取る。`SettingsDialog.svelte` と同じ規律)。パネルの id: `#optimize-panel/#optimize-conditions/#optimize-resolution/#optimize-resolution-note/#optimize-estimate/#optimize-min-width/#optimize-run/#optimize-cancel/#optimize-progress/#optimize-notice`。`window.__duocad`(`testHooks.svelte.ts`)の読むだけの穴: `optimizeRunning/optimizeCancelling/optimizeConditions/optimizeResolution/optimizeElementSizeMm/optimizeProgress/optimizeNotice`。
+- 画面の口: `session.ts` の `optimizeConditions/optimizeResolution/runOptimization/cancelOptimization` と hooks 6本(`onOptimizeConditions/Resolution/Status/Progress/Result/Error`)。`OptimizePanel.svelte`(`App.svelte` が状態を持ち、パネルは値と口だけ受け取る。`SettingsDialog.svelte` と同じ規律)。パネルの id: `#optimize-panel/#optimize-conditions/#optimize-resolution/#optimize-resolution-note/#optimize-estimate/#optimize-min-width/#optimize-run/#optimize-cancel/#optimize-progress/`#optimize-notice`。
 - **結果が信用できない意味の通知をトーストだけで流さない。** トーストは自然に消える(`Toast.svelte` の `LIFETIME_MS`)。`#optimize-notice` は**次に走らせるまで残る**。
 - **`Session._optimize_cancel` の旗を畳むのは `begin_optimization` だけ**(ワーカースレッドの中で畳まない。投げてから走り出すまでに届いた中断が消える)。ws 側の `_optimize_cancel` は**走っていないときは旗を立てない**(「中断中」が出ると次の実行が中断表示から始まって見える)。
 - **メッシュボディのピックはボディ参照へ畳む**(`App.svelte` の `pickedRef`。畳まないと `select_face` が断り、ドラッグの一括選択が丸ごと落ちる。畳むと編集 verb は選択要件を満たせず「押せるのに断られる」が画面から消える。`move_body`/`fillet`/`chamfer`/領域押し出しは `kinds` にボディを持たない)。**スケッチを貼る先だけは畳まずに断る**。**`dedupeRefs` を外さない。** ツールバーを選択に応じて出し分けない(コマンド一覧はモードの持ち物で、選択のたびに作り直すと集めかけの引数が落ちる。`{#key mode.kind}`)。
 - **依存禁止**: MCP から最適化を走らせられることに依存しない(`mcp=False`。数分かかる同期呼び出しは進捗も中断も運べずタイムアウトする。開けるなら進捗と中断を MCP で運ぶ形を先に決める)／実行中に MCP・アプリ内 AI からの編集が止まることに依存しない(止めているのは画面の操作だけ)／**最後の接続が切れても最適化は止まらない**(AI の実行は止まる。リロードだけで数分の実行が消える方を避けた。`_on_disconnect` の docstring)／目標安全率の入力欄は画面に無い(口 `target_safety_factor` は開いており、画面は既定 `DEFAULT_TARGET_SAFETY_FACTOR`=2.0 を送る)。
 - **罠(浮かせるパネル)**: 画面に帯を1枚足すと、その下のボディの面が指せなくなる。`viewport.project()` は三角形ごとに `clickable(x,y)`(浮いている DOM パネルに覆われていないか)を見るので、覆った帯の下は「指せる画素がゼロ」になり、原因を名指ししない「ボディ X に画面から指せる面が無い」で落ちる。実行パネルをブラウザ右(幅320px)に置いて踏み、**ブラウザと同じ列の下端へ移して解決**。モードの間出しっぱなしのパネルはモデルを覆う位置に置けない(一時的なダイアログは別の帯でよい)。
-- **罠(検査)**: 事後検出(`unrepresented_regions`)はボクセル化の時点で分かって短時間で戻るので、`optimizeRunning === true` の立ち上がりをポーリングで待つと**取り逃す**。結果(通知の中身)で待つ。`tests/test_ui_command_wiring.py::test_every_hand_dispatched_command_has_a_branch` が番人(`catalog` に `ws="special"` を足して `_dispatch` に分岐が無いと落ちる)。
+- **罠(検査)**: 事後検出(`unrepresented_regions`)はボクセル化の時点で分かって短時間で戻るので、「実行中」の立ち上がりをポーリングで待つと**取り逃す**。結果(通知の中身)で待つ。`tests/test_ui_command_wiring.py::test_every_hand_dispatched_command_has_a_branch` が番人(`catalog` に `ws="special"` を足して `_dispatch` に分岐が無いと落ちる)。
 - **罠(Svelte)**: runes モードのインスタンススクリプトは `export` を持てない(`OptimizeNotice` 型は `optimizeNotice.ts`)。画面に出す文字列に markdown の `**` を書かない(`.svelte` のテンプレートは markdown を解釈しない。強調は `<strong>`)。
 - `web/dist` は `.gitignore` 対象。`web/src` を触ったら `npm run build` が要るが、コミットには現れない(緑の git status は「ビルドした」の証拠にならない)。
 
@@ -66,6 +66,12 @@
   `on_accept`(`binary_search.find_best_feasible`)が合格形(`AcceptedShape`、1セル1ビット)を足し、探索が合格形を出して終わると
   `optimize_run` が `finisher`(選んだステップを完成化・完成形検査・さかのぼり・追加まで進める手順。条件・格子はその実行のもの)を置く。
   実行の後も、次に走らせるまで残る。いま開いている文書の実行のものだけを返す(`Session.steps_for_current`。同じオブジェクトか同じファイル名)。
+  **実行の後で文書が変わっていれば仕上げは断る**(`Session.finish_optimization_step` が `OptimizeInputError`)。仕上げは実行したときの条件・格子・
+  保持形状で作るので、条件や形を変えた文書へ足すと古い前提の結果が入る。変わったかは、実行を始めたときの操作ログと、実行とその後の仕上げが
+  足した結果の操作を除いた今のログの比べで決める(結果を取り消す・やり直すのは変えたと数えない。結果を消す `delete` は数える)。一覧(`optimize_steps`)の
+  `finishable` はこれを見ない。
+- **実行のスレッドは文書の写しを読む**(`Session.begin_optimization` が `speculative.fork` で形を `kernel.copy_shape` した写しを作る。画面のズームがループ側で
+  同じ形を測り直す三角形分割と競合しないため)。実行が写しに足した結果は `deliver_optimization_result` が走らせた文書へ同じ内容で足す。
 - WebSocket に3つ(`catalog` は `protocol`・`ws="special"`・`mcp=False`): `optimize_steps`(一覧 `{steps:[{index, evaluation, seconds,
   material_mm3, safety_factor, cells}], finishable}`)/ `optimize_step_voxels {index}`(その形の**表面のセルだけ**の通し添字。内側は画面から
   見えないので配らない。形はデバッグ表示の `rho` と同じで、`optimizeDebug.ts` の同じ層で描く)/ `finish_optimization {step?}`。

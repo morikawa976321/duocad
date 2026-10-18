@@ -19,7 +19,7 @@ from duocad.sketch import (
     get_sketch,
     sketch_create,
 )
-from duocad.verbs import extrude
+from duocad.verbs import extrude, fillet
 
 CIRCLE_RADIUS = 20.0
 SPLIT_LINE_Y = 5.0
@@ -180,3 +180,59 @@ def test_parameters_survive_save_load_and_replay():
     assert replayed.parameters == document.parameters
     assert replayed.parameters[name] == 30.0
     assert regions(replayed, sketch_id) == expected_regions
+
+
+def _filleted_cylinder(document: Document) -> tuple:
+    """直径20・高さ10の円柱の上縁を R0.5、続けて下縁を R4 で丸めた文書。`(body_id, 直径の名前)` を返す。"""
+    sketch_id = sketch_create(document, "XY")
+    circle = add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    extrude(document, [region_ref(sketch_id, 1)], 10.0, mode="new")
+    body_id = document.bodies[0].id
+
+    def circular_edge_at(height: float) -> int:
+        return next(
+            edge["index"]
+            for edge in query.describe_edges(document.get_body(body_id).shape)
+            if edge["kind"] == "circle" and abs(edge["start"][2] - height) < 1e-6
+        )
+
+    fillet(document, [circular_edge_at(10.0)], 0.5)
+    fillet(document, [circular_edge_at(0.0)], 4.0)
+    return body_id, parameter_of(document, sketch_id, circle, "diameter")
+
+
+def test_a_set_parameter_that_fails_to_rebuild_leaves_the_undo_snapshots_alone():
+    """落ちたら: 失敗した再生が undo 用スナップショットを「直径6の形」で上書きしたまま残り、
+    あとの undo が直径20の円柱ではなく直径6の円柱を復元する。"""
+    document = Document()
+    body_id, diameter = _filleted_cylinder(document)
+
+    with pytest.raises(ValueError, match="fillet failed"):
+        set_parameter(document, diameter, 6.0)  # R4 が成り立たなくなる直径
+    document.log.undo(document)
+    document.log.undo(document)
+
+    assert math.isclose(
+        query.volume(document.get_body(body_id).shape), math.pi * 10.0**2 * 10.0, rel_tol=VOLUME_REL_TOL
+    )
+
+
+def test_rebuilding_keeps_hidden_bodies_and_sketches_hidden():
+    """落ちたら: 作り直した Body / Sketch が既定の可視に戻り、隠していたものが set_parameter の undo / redo で現れる
+    (可視性はログに載らない状態)。"""
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    circle = add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    extrude(document, [region_ref(sketch_id, 1)], 10.0, mode="new")
+    body_id = document.bodies[0].id
+    set_parameter(document, parameter_of(document, sketch_id, circle, "diameter"), 30.0)
+    document.get_body(body_id).visible = False
+    get_sketch(document, sketch_id).visible = False
+
+    document.log.undo(document)
+    assert not document.get_body(body_id).visible
+    assert not get_sketch(document, sketch_id).visible
+    document.log.redo(document)
+
+    assert not document.get_body(body_id).visible
+    assert not get_sketch(document, sketch_id).visible

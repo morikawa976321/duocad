@@ -1,7 +1,6 @@
 """CAD の**面**と、格子の**節点**の対応表(面アンカー)。
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_anchor.py     # 受入検査
-    .\\.venv\\Scripts\\python.exe -m duocad.topopt.anchor           # 合成ブラケットの面アンカー表を作って要約する
 
 これは `duocad.topopt` の **stage2**。stage1(`voxelize.py`)が作った格子の上に、
 「ボディXの面#42」→「これらの格子節点」の翻訳を載せる(固定面・荷重面の指定に必要)。
@@ -261,13 +260,6 @@ class FaceAnchor:
         vec = (self.normals * self.areas[:, None]).sum(axis=0) / self.areas.sum()
         return np.asarray(vec)
 
-    def weights(self) -> np.ndarray:
-        """担当面積を合計1に正規化した重み。**荷重はこれで配る。**"""
-        total = self.areas.sum()
-        if not total > 0.0:
-            raise ValueError(f"face {self.face_index}: 担当面積が 0 で荷重を配れない")
-        return self.areas / total
-
 
 @dataclass
 class AnchorTable:
@@ -396,19 +388,11 @@ class AnchorTable:
         return self.node_grid.positions_of(self.nodes(faces))
 
     # -- 境界条件 -----------------------------------------------------------
-    def fixed_dofs(
-        self, faces: Iterable[int] | int, axes: Sequence[int] = (0, 1, 2)
-    ) -> np.ndarray:
-        """固定面 → 拘束する自由度番号。`axes` を絞ればすべり支持になる。"""
-        return self.node_grid.dofs_of(self.node_ids(faces), axes=axes)
+    def fixed_dofs(self, faces: Iterable[int] | int) -> np.ndarray:
+        """固定面 → 拘束する自由度番号(全成分)。"""
+        return self.node_grid.dofs_of(self.node_ids(faces))
 
-    def load_vector(
-        self,
-        faces: Iterable[int] | int,
-        total_force: Sequence[float],
-        *,
-        out: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
+    def load_vector(self, faces: Iterable[int] | int, total_force: Sequence[float]) -> np.ndarray:
         """荷重面 → 荷重ベクトル (ndof,)。**合計は `total_force` に厳密に一致する**(面の担当面積の合計比で面へ配り、面内でも担当面積の比で配る)。"""
         picked = self._selected(faces)
         force = np.asarray(total_force, dtype=float).reshape(3)
@@ -421,7 +405,7 @@ class AnchorTable:
                 f"担当面積の合計が 0 で荷重を配れない(節点は {ids.size} 個ある)"
             )
         weights = areas / total
-        f = np.zeros(self.node_grid.ndof) if out is None else out
+        f = np.zeros(self.node_grid.ndof)
         for axis in range(3):
             if force[axis] == 0.0:
                 continue
@@ -463,8 +447,6 @@ def _iter_samples(
     b: np.ndarray,
     c: np.ndarray,
     target: float,
-    max_subdivision: int = MAX_SUBDIVISION,
-    batch: int = SAMPLE_BATCH,
 ):
     """三角形群を細分して、(点 (P,3), 面積 (P,), 親三角形の添字 (P,)) をまとめて返す。
 
@@ -478,12 +460,12 @@ def _iter_samples(
         np.linalg.norm(c - b, axis=1),
     )
     k = np.ceil(np.where(target > 0, edge / target, 1.0) - 1e-9).astype(np.int64)
-    k = np.clip(k, 1, int(max_subdivision))
+    k = np.clip(k, 1, MAX_SUBDIVISION)
     for kv in np.unique(k):
         members = np.flatnonzero(k == kv)
         uv = _unit_triangle_centroids(int(kv))
         per = uv.shape[0]
-        step = max(1, int(batch) // max(per, 1))
+        step = max(1, SAMPLE_BATCH // max(per, 1))
         for s in range(0, members.size, step):
             grp = members[s : s + step]
             pts = (
@@ -500,28 +482,20 @@ def build_anchors(
     soup: vx.TriangleSoup,
     grid: vx.Grid,
     *,
-    faces: Optional[Iterable[int]] = None,
-    radius_ratio: float = DEFAULT_RADIUS_RATIO,
-    sample_ratio: float = DEFAULT_SAMPLE_RATIO,
     allowed_nodes: Optional[np.ndarray] = None,
 ) -> AnchorTable:
-    """面添字 → 節点の対応表を作る。
+    """面添字 → 節点の対応表を作る(全面。球の半径は `DEFAULT_RADIUS_RATIO`、細分の目標辺長は `DEFAULT_SAMPLE_RATIO`、いずれも要素サイズ比)。
 
-    `faces` を渡すとその面だけを対象にする(既定は全面)。`radius_ratio` は球の半径、`sample_ratio` は細分の目標辺長(いずれも要素サイズ比)。
     `allowed_nodes`(節点格子と同じ形か平坦な bool)を渡すと、標本ごとに球内の許可節点だけへ重みを配る探索用の確定表になり、
     球内に許可節点が無い標本は対応不能として数える(最近傍への退避はしない。`stats["mapping"] == "material"`)。
     渡さなければ材料を見ない幾何の表(`stats["mapping"] == "geometry"`)。
     """
     started = time.perf_counter()
-    if not radius_ratio > 0:
-        raise ValueError(f"radius_ratio must be positive, got {radius_ratio!r}")
-    if not sample_ratio > 0:
-        raise ValueError(f"sample_ratio must be positive, got {sample_ratio!r}")
 
     node_grid = NodeGrid(grid)
     h = float(grid.spacing)
-    radius = float(radius_ratio) * h
-    offsets = _candidate_offsets(radius_ratio)
+    radius = DEFAULT_RADIUS_RATIO * h
+    offsets = _candidate_offsets(DEFAULT_RADIUS_RATIO)
     origin = np.asarray(grid.origin, dtype=float)
     n_shape = np.asarray(node_grid.shape, dtype=np.int64)
     ny1, nz1 = int(n_shape[1]), int(n_shape[2])
@@ -542,16 +516,7 @@ def build_anchors(
             tri_len[:, None] > 0, tri_normal / np.where(tri_len[:, None] > 0, tri_len[:, None], 1.0), 0.0
         )
 
-    if faces is None:
-        wanted = sorted({int(v) for v in np.unique(soup.face_index)})
-    else:
-        wanted = sorted({int(v) for v in faces})
-        missing = [f for f in wanted if not np.any(soup.face_index == f)]
-        if missing:
-            raise ValueError(
-                f"三角形を1枚も持たない面が指定された: {missing}。"
-                f"ある面: {sorted({int(v) for v in np.unique(soup.face_index)})}"
-            )
+    wanted = sorted({int(v) for v in np.unique(soup.face_index)})
 
     # 節点ごとの累積用の作業領域(面ごとに使い回し、触った所だけ戻す)。
     n_nodes = node_grid.count
@@ -579,7 +544,7 @@ def build_anchors(
         unmapped_area = 0.0
         unmapped_pos: list[np.ndarray] = []
         max_distance = 0.0
-        for pts, areas, parents in _iter_samples(a, b, c, target=sample_ratio * h):
+        for pts, areas, parents in _iter_samples(a, b, c, target=DEFAULT_SAMPLE_RATIO * h):
             sample_total += pts.shape[0]
             # 標本の重心は対応の成否によらず全標本で取る(対応後の節点重心と比べる基準)。
             sample_area += float(areas.sum())
@@ -700,8 +665,8 @@ def build_anchors(
         "seconds": time.perf_counter() - started,
         "faces": len(anchors),
         "radius": radius,
-        "radius_ratio": float(radius_ratio),
-        "sample_ratio": float(sample_ratio),
+        "radius_ratio": float(DEFAULT_RADIUS_RATIO),
+        "sample_ratio": float(DEFAULT_SAMPLE_RATIO),
         "samples": int(sample_total),
         "fallback_samples": int(fallback_samples),
         "contested_assignments": int(contested),

@@ -228,17 +228,9 @@ def test_undo_and_redo_of_the_fillet_leave_the_sketch_pose_alone():
     assert_same_frame(region.plane_frame(document, sketch_id), expected)
 
 
-def test_a_face_plane_without_a_frame_still_resolves_from_the_given_face():
-    """枠を持たない面参照は、渡された面から解く(後方互換の経路)。"""
-    document = Document()
-    body_id = new_box(document, BOX)
-    shape = document.get_body(body_id).shape
-    bare = {"kind": "face", "body": body_id, "index": TOP_FACE_INDEX, "provenance": None}
-
-    assert_same_frame(
-        kernel_sketch.sketch_plane_frame(bare, face=kernel.face_of(shape, TOP_FACE_INDEX)),
-        kernel_sketch.face_frame(shape, TOP_FACE_INDEX),
-    )
+def test_a_face_plane_without_a_frame_is_rejected():
+    """枠を持たない面参照は解けない(姿勢は作成時に焼き付けた枠が唯一の正)。"""
+    bare = {"kind": "face", "body": "b", "index": TOP_FACE_INDEX, "provenance": None}
     with pytest.raises(ValueError):
         kernel_sketch.sketch_plane_frame(bare)
 
@@ -276,3 +268,63 @@ def test_a_broken_frame_is_rejected_instead_of_silently_mirroring_the_plane(fram
     plane = {"kind": "face", "body": "b", "index": 1, "provenance": None, "frame": frame}
     with pytest.raises(ValueError):
         kernel_sketch.sketch_plane_frame(plane)
+
+
+def _bodies_to_check():
+    """面に貼るスケッチの法線を確かめるボディ: 通常 / 回転体 / 鏡映1回 / 鏡映2回(`(名前, 文書, body_id)`)。"""
+    from duocad.region import regions
+    from duocad.sketch import add_line
+    from duocad.verbs import mirror_body, revolve
+
+    document = Document()
+    box_id = new_box(document, BOX)
+    once = mirror_body(document, [box_id], base_plane="YZ").args["created"][0]
+    twice = mirror_body(document, [once], base_plane="XZ").args["created"][0]
+
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (50.0, 0.0), 10.0, 5.0)
+    axis = add_line(document, sketch_id, (50.0, 0.0), (60.0, 0.0))
+    revolved = revolve(
+        document, [region_ref(sketch_id, regions(document, sketch_id)[0].index)], {"sketch": sketch_id, "entity": axis},
+        mode="new",
+    ).args["body_id"]
+    return document, {"plain": box_id, "revolved": revolved, "mirrored_once": once, "mirrored_twice": twice}
+
+
+@pytest.mark.parametrize("name", ["plain", "revolved", "mirrored_once", "mirrored_twice"])
+def test_a_face_sketch_normal_points_out_of_the_body_on_every_planar_face(name):
+    """面に貼ったスケッチの法線(押し出し・オフセットの正の向き)は面の外向き法線と一致する。
+    落ちたら、向きの反転を `Orientation()` で決めている(奇数回鏡映したボディの面は平面の Position が左手系で、全面で逆になる)。"""
+    document, body_ids = _bodies_to_check()
+    shape = document.get_body(body_ids[name]).shape
+
+    checked = 0
+    for face in query.describe_faces(shape):
+        if face["kind"] != "plane":
+            continue
+        frame = kernel_sketch.face_frame(shape, face["index"])
+        assert frame["normal"] == pytest.approx(face["normal"], abs=1.0e-9), f"{name} face {face['index']}"
+        checked += 1
+    assert checked >= 2
+
+
+def test_a_region_on_a_mirrored_bodys_face_extrudes_outward_with_a_positive_distance():
+    """鏡映したボディの面の上の領域を正の距離で押し出して join すると、材料が外へ伸びる。
+    落ちたら押し出しが面の内側へ向かい、`join did not change the shape` で断られる。"""
+    from duocad.verbs import mirror_body
+
+    document = Document()
+    box_id = new_box(document, BOX)
+    mirrored = mirror_body(document, [box_id], base_plane="YZ").args["created"][0]
+    before = query.volume(document.get_body(mirrored).shape)
+    top = next(face for face in query.describe_faces(document.get_body(mirrored).shape) if face["normal"][2] > 0.99)
+
+    sketch_id = sketch_create(document, face_plane(mirrored, top["index"]))
+    frame = region.plane_frame(document, sketch_id)
+    offset = [top["center"][i] - frame["origin"][i] for i in range(3)]
+    u = sum(offset[i] * frame["u"][i] for i in range(3))
+    v = sum(offset[i] * frame["v"][i] for i in range(3))
+    add_rectangle(document, sketch_id, (u - 5.0, v - 5.0), 10.0, 10.0)
+    extrude(document, [region_ref(sketch_id, 1)], 5.0, mode="join", body_id=mirrored)
+
+    assert query.volume(document.get_body(mirrored).shape) == pytest.approx(before + 10.0 * 10.0 * 5.0)

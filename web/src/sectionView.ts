@@ -26,7 +26,7 @@ import {
   lighten,
   withDepthBias,
 } from './viewportConstants'
-import type { SectionInfo, SectionState } from './viewportTypes'
+import type { SectionState } from './viewportTypes'
 
 export interface SectionViewDeps {
   /** その画素を通るレイ。使い回しの実体なので受け取ったらすぐ読む。 */
@@ -53,7 +53,6 @@ export interface SectionView {
   /** ボディ側の材質に渡す共有配列。ON のあいだだけ平面が1枚入る。 */
   readonly clipPlanes: THREE.Plane[]
   setState(state: SectionState): void
-  info(): SectionInfo
   /** 枠・切り口・ハンドルの置き場を決める内容の外接箱。 */
   setContent(box: THREE.Box3): void
   /** ボディの面ジオメトリ(切り口の判定用。ON のときだけ結合メッシュを作る)。 */
@@ -402,23 +401,6 @@ export function createSectionView(deps: SectionViewDeps): SectionView {
         }
       }
       refresh()
-    },
-    info() {
-      const segment = handleSegment()
-      let handleInfo: SectionInfo['handle'] = null
-      if (segment !== null) {
-        const grab = deps.project(
-          scratchB.copy(base).addScaledVector(arrowDir, SECTION_HANDLE.shaftLength * 0.6 * segment.scale),
-        )
-        const tip = deps.project(scratchA.copy(base).addScaledVector(axisUnit, SECTION_HANDLE.shaftLength * segment.scale))
-        if (grab !== null && tip !== null) {
-          const dx = tip.x - segment.a.x
-          const dy = tip.y - segment.a.y
-          const length = Math.hypot(dx, dy)
-          if (length > 1) handleInfo = { x: grab.x, y: grab.y, dir: { x: dx / length, y: dy / length } }
-        }
-      }
-      return { ...state, keepSign, handle: handleInfo, stencilBodies: stencilMeshes.size }
     },
     setContent(box) {
       if (box.equals(content)) return

@@ -142,7 +142,7 @@ def describe_ops() -> dict:
             {
                 "op": "parallel_to",
                 "args": {"axis": "X|Y|Z|[x,y,z]"},
-                "doc": "辺が軸に平行(単位方向の内積の絶対値が 1±PARALLEL_TOLERANCE)",
+                "doc": "直線の辺が軸に平行(単位方向の内積の絶対値が 1±PARALLEL_TOLERANCE)。円弧・B-spline など直線でない辺は対象外",
             },
             {
                 "op": "length_gt",
@@ -217,10 +217,20 @@ def _normalize_condition(kind: str, condition: dict) -> dict:
 def _require_number(condition: dict, name: str) -> float:
     if name not in condition:
         raise ValueError(f"condition is missing '{name}'")
-    value = condition[name]
+    return _finite_number(condition[name], f"'{name}'")
+
+
+def _finite_number(value, what: str) -> float:
+    """真偽値・文字列でない有限の数だけを通す(`float()` 任せだと `"1"`・`True` が数として通り、`inf`・`nan` は比較が常に偽/真になる)。"""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"'{name}' must be a number, got {type(value).__name__}")
-    return float(value)
+        raise ValueError(f"{what} must be a number, got {type(value).__name__}")
+    try:
+        number = float(value)
+    except OverflowError:
+        raise ValueError(f"{what} is too large to be a number: {value!r}") from None
+    if not math.isfinite(number):
+        raise ValueError(f"{what} must be finite, got {value!r}")
+    return number
 
 
 def _normalize_axis(axis) -> Tuple[float, float, float]:
@@ -229,13 +239,13 @@ def _normalize_axis(axis) -> Tuple[float, float, float]:
             raise ValueError(f"unknown axis: {axis!r}")
         return AXES[axis]
     if isinstance(axis, (list, tuple)) and len(axis) == 3:
-        try:
-            vector = (float(axis[0]), float(axis[1]), float(axis[2]))
-        except (TypeError, ValueError) as error:
-            raise ValueError(f"axis vector must be 3 numbers, got {axis!r}") from error
-        magnitude = math.sqrt(vector[0] ** 2 + vector[1] ** 2 + vector[2] ** 2)
+        vector = tuple(_finite_number(component, "axis component") for component in axis)
+        # 2乗の和は 1e154 を超える成分で溢れる(OverflowError)。`hypot` は溢れない。
+        magnitude = math.hypot(*vector)
         if magnitude <= 0:
             raise ValueError("axis vector must be non-zero")
+        if not math.isfinite(magnitude):
+            raise ValueError(f"axis vector is too large to normalize: {axis!r}")
         return (vector[0] / magnitude, vector[1] / magnitude, vector[2] / magnitude)
     raise ValueError(f"axis must be X/Y/Z or a 3-vector, got {axis!r}")
 
@@ -363,6 +373,9 @@ def _edge_matches(edge: dict, condition: dict, boundary_sets: dict) -> bool:
 
 
 def _is_parallel(edge: dict, axis: Sequence[float]) -> bool:
+    # 弦(始点→終点)は直線のときだけ辺の向き。半円・アーチは弦が軸に揃っても直線の辺ではない。
+    if edge["kind"] != "line":
+        return False
     start, end = edge["start"], edge["end"]
     direction = (end[0] - start[0], end[1] - start[1], end[2] - start[2])
     magnitude = math.sqrt(direction[0] ** 2 + direction[1] ** 2 + direction[2] ** 2)

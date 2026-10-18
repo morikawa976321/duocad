@@ -40,11 +40,11 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
-def server_config(http_port: int, timeout: float = 1.0) -> Optional[dict]:
+def server_config(http_port: int) -> Optional[dict]:
     """立っているサーバの `/duocad-config.json`。応答が無ければ None。"""
     try:
         with urllib.request.urlopen(
-            f"http://127.0.0.1:{http_port}/duocad-config.json", timeout=timeout
+            f"http://127.0.0.1:{http_port}/duocad-config.json", timeout=1.0
         ) as response:
             return json.loads(response.read().decode("utf-8"))
     except (OSError, ValueError):
@@ -94,8 +94,8 @@ def spawn_server(channel: str, port: int, http_port: int, data_dir: Path) -> Non
         log.close()
 
 
-def wait_for_server(http_port: int, timeout: float = START_TIMEOUT_SECONDS) -> bool:
-    deadline = time.monotonic() + timeout
+def wait_for_server(http_port: int) -> bool:
+    deadline = time.monotonic() + START_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if server_config(http_port) is not None:
             return True

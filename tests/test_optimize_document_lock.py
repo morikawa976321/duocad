@@ -67,7 +67,7 @@ def test_every_method_that_changes_the_document_is_guarded() -> None:
     names = {command.session for command in catalog.COMMANDS
              if command.changes_document and command.session
              and command.session not in _ALLOWED_WHILE_RUNNING | _SWITCHES_DOCUMENT}
-    names |= {"preview", "preview_job", "load_step"}
+    names |= {"preview", "preview_job"}
     unguarded = sorted(name for name in names if not getattr(getattr(Session, name), "edits_document", False))
     assert not unguarded, unguarded
 
@@ -262,3 +262,48 @@ def test_the_ai_is_refused_on_a_reopened_copy(running: Session) -> None:
     tools = DocumentTools(running)
     with pytest.raises(DocumentBusy):
         tools.call("sketch_create", {"base_plane": "XY"})
+
+
+def test_the_optimizer_reads_copies_of_the_shapes_and_its_result_reaches_the_documents_own_log_once(
+    running: Session, monkeypatch
+) -> None:
+    """落ちたら、実行のスレッドが文書の生の形を三角形分割して画面側の再分割と競合する、または写しに足した結果が
+    走らせた文書へ届かない / 二重に届く。"""
+    seen: dict = {}
+
+    def fake_run(document, options, **kwargs):
+        seen["document"] = document
+        seen["shapes"] = {body.id: body.shape for body in document.bodies}
+        body_id = add_mesh_body(document, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [0, 1, 2], name="結果")
+        return {"state": "done", "body_id": body_id, "name": "結果", "triangle_count": 1}
+
+    monkeypatch.setattr(optimize_run, "run", fake_run)
+    live = running.document
+    entries = len(live.log.entries)
+
+    result = running.deliver_optimization_result(running.run_optimization())
+    running.deliver_optimization_result(result)
+
+    assert seen["document"] is not live
+    assert seen["shapes"] and all(shape is not live.get_body(key).shape for key, shape in seen["shapes"].items())
+    assert len(live.log.entries) == entries + 1, "結果の操作が走らせた文書のログへ1回だけ入る"
+    assert [body.name for body in live.bodies].count("結果") == 1
+    assert live.get_body(result["body_id"]).mesh is not None
+
+
+def test_the_first_autosave_of_an_untitled_document_is_not_refused_while_its_optimization_runs(session: Session) -> None:
+    """落ちたら、無題の文書(ファイルがまだ無い)の最初の自動保存が「別名で保存できない」で落ち、最適化の結果が足されたのに
+    ファイルへ書かれない。拒否の文に「None」と出る。"""
+    from document_support import box_shape
+    from duocad.document import Body
+
+    session.document.add_body(Body(id="box", name="box", kind="solid", shape=box_shape()))
+    assert session.current_name is None
+    session.begin_optimization()
+
+    assert session.autosave() is True
+    assert session.current_name == "untitled-1.json" and (session.models_dir / "untitled-1.json").exists()
+    with pytest.raises(ValueError, match="名前を変えられない") as refusal:
+        session.rename_document("renamed.json")
+    assert "None" not in str(refusal.value)
+    session.end_optimization()

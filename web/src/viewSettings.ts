@@ -37,8 +37,8 @@ export function saveFov(deg: number): void {
 export function loadOriginVisible(): boolean {
   try {
     const raw = window.localStorage.getItem(ORIGIN_VISIBLE_KEY)
-    if (raw === null) return true
-    return raw === 'true'
+    // 'true'/'false' 以外(手で壊した値・別のコードが書いた値)は既定へ倒す。`false` に倒すと原点・軸・平面が黙って消える。
+    return raw === 'false' ? false : true
   } catch {
     return true
   }

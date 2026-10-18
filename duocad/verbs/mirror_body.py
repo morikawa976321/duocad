@@ -70,22 +70,21 @@ def mirror_body(
     body_ids: Sequence[BodyId],
     base_plane: Any = None,
     plane_face: Any = None,
-    created_ids: Optional[Sequence[BodyId]] = None,
 ) -> Operation:
     """選択の面/辺/頂点が属するボディを、鏡映面に対して鏡映複製する(常に複製)。
 
-    `created_ids` は再生用(省略すると新しいIDを振る)。失敗したときは文書にもログにも何も残さない。
+    失敗したときは文書にもログにも何も残さない。
     """
     bodies = editable_bodies(doc, list(body_ids), verb="mirror_body", what="mirror")
     plane_args = _mirror_plane(doc, base_plane, plane_face)
     point = plane_args["plane_point"]
     normal = plane_args["plane_normal"]
 
-    new_ids = copy_ids(len(bodies), created_ids, verb="mirror_body")
+    new_ids = copy_ids(len(bodies), None, verb="mirror_body")
     numbers = add_transformed_copies(
         doc,
         bodies,
-        lambda shape: kernel.mirror_shape(shape, point, normal, copy=True),
+        lambda shape: kernel.mirror_shape(shape, point, normal),
         new_ids,
         allocate=True,
     )
@@ -111,7 +110,7 @@ def _do_mirror_body(document: Document, operation: Operation) -> None:
     add_transformed_copies(
         document,
         bodies,
-        lambda shape: kernel.mirror_shape(shape, point, normal, copy=True),
+        lambda shape: kernel.mirror_shape(shape, point, normal),
         new_ids,
         args.get("numbers"),
     )

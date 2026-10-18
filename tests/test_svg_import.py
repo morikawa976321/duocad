@@ -8,7 +8,9 @@ import pytest
 
 from duocad import kernel, region, sketch as sketch_module, svg_import
 from duocad.document import Document
+from duocad.mcp_server import DocumentTools, McpServer
 from document_support import replay_through_json
+from mcp_support import call_error
 from duocad.region import RegionRef
 from duocad.server import Session
 from duocad.verbs import import_svg
@@ -403,7 +405,7 @@ def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
 
 
 def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
-    session = Session(None, 0.2, models_dir=tmp_path)
+    session = Session(0.2, models_dir=tmp_path)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     applied = session.import_svg(
         sketch_id, str(write_svg(tmp_path, "session.svg", SVG_MIXED))
@@ -419,7 +421,7 @@ def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
 
 def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:
     """状態配信の射影で図形を伏せる。"""
-    session = Session(None, 0.2, models_dir=tmp_path)
+    session = Session(0.2, models_dir=tmp_path)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.import_svg(sketch_id, str(write_svg(tmp_path, "feed.svg", SVG_MIXED)))
 
@@ -439,3 +441,365 @@ def test_too_many_ellipse_elements_are_refused(tmp_path: Path) -> None:
     body = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">{ellipses}</svg>'
     with pytest.raises(ValueError, match="多すぎる"):
         svg_import.read_svg_entities(write_svg(tmp_path, "many.svg", body))
+
+
+# --------------------------------------------------------------------------------------
+# 非相似な変換の下の円・楕円弧・角丸(輪郭が閉じ、面積が行列式どおりになる)
+# --------------------------------------------------------------------------------------
+def _stretch_after_rotation(sx: float, sy: float, degrees: float) -> tuple:
+    """`scale(sx,sy) rotate(degrees)` の `matrix(a b c d e f)`。"""
+    c, s = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+    return (sx * c, sy * s, -sx * s, sy * c, 0.0, 0.0)
+
+
+#: svgelements の変換済み楕円弧(共役半径)が主軸に見えなくなる変換。
+NON_SIMILARITY = {
+    "skew": (1.0, 0.0, math.tan(math.radians(20.0)), 1.0, 0.0, 0.0),
+    "stretch-after-rotation": _stretch_after_rotation(2.0, 1.0, 45.0),
+    "stretch-after-rotation-2": _stretch_after_rotation(1.5, 0.7, 30.0),
+    "shear": (1.0, 0.0, 0.6, 0.8, 10.0, 10.0),
+    "general": (-0.5, 0.3, 0.4, 0.9, 80.0, 20.0),
+}
+#: 円は円のまま(相似)だが、反転は svgelements の t の向きを裏返す。
+SIMILARITY = {
+    "flip-y": (1.0, 0.0, 0.0, -1.0, 0.0, 200.0),
+    "mirror-x": (-1.0, 0.0, 0.0, 1.0, 200.0, 0.0),
+    "rotate": (math.cos(0.7), math.sin(0.7), -math.sin(0.7), math.cos(0.7), 20.0, 10.0),
+    "mirror-scale": (-2.0, 0.0, 0.0, 2.0, 220.0, 0.0),
+}
+
+
+def _matrix_attribute(values: tuple) -> str:
+    return "matrix(" + " ".join(repr(value) for value in values) + ")"
+
+
+def _determinant(values: tuple) -> float:
+    a, b, c, d = values[:4]
+    return abs(a * d - b * c)
+
+
+def _apply(values: tuple, x: float, y: float) -> tuple:
+    a, b, c, d, e, f = values
+    return (a * x + c * y + e, b * x + d * y + f)
+
+
+def _import_regions(tmp_path: Path, inner: str, transform: tuple) -> list:
+    """viewBox 200x200 の SVG に `inner` を変換つきの `<g>` で置いて取り込み、領域を返す。"""
+    body = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+        f'<g transform="{_matrix_attribute(transform)}">{inner}</g></svg>'
+    )
+    document = Document()
+    sketch_id = new_sketch(document)
+    import_svg(document, sketch_id, write_svg(tmp_path, "affine.svg", body))
+    return region.regions(document, sketch_id)
+
+
+@pytest.mark.parametrize("name", sorted(NON_SIMILARITY))
+@pytest.mark.parametrize(
+    "shape,area",
+    [
+        ('<circle cx="30" cy="40" r="10"/>', math.pi * 100.0),
+        ('<ellipse cx="30" cy="40" rx="20" ry="10"/>', math.pi * 200.0),
+    ],
+    ids=["circle", "ellipse"],
+)
+def test_a_circle_or_ellipse_under_a_non_similarity_transform_is_the_transformed_ellipse(
+    tmp_path: Path, name: str, shape: str, area: float
+) -> None:
+    """落ちたら、円が真円として取り込まれて面積が合わない(`matrix(1 0 0.6 0.8 ..)` で約25%過大)か、輪郭が閉じず領域が出ない。"""
+    matrix = NON_SIMILARITY[name]
+    regions = _import_regions(tmp_path, shape, matrix)
+    assert len(regions) == 1
+    assert regions[0].area == pytest.approx(area * _determinant(matrix), rel=2e-3)
+    center = _apply(matrix, 30.0, 40.0)
+    assert regions[0].centroid[:2] == pytest.approx((center[0], 200.0 - center[1]), abs=0.05)
+
+
+@pytest.mark.parametrize("name", sorted(SIMILARITY))
+def test_a_circle_under_a_similarity_transform_stays_an_arc(tmp_path: Path, name: str) -> None:
+    """相似変換(回転・等倍・反転)では円は円のまま `arc` で取り込む。"""
+    matrix = SIMILARITY[name]
+    body = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">'
+        f'<g transform="{_matrix_attribute(matrix)}"><circle cx="30" cy="40" r="10"/></g></svg>'
+    )
+    _name, entities = svg_import.read_svg_entities(write_svg(tmp_path, "similar.svg", body))
+    assert {entity["kind"] for entity in entities} == {"arc"}
+    scale = math.sqrt(_determinant(matrix))
+    for entity in entities:
+        assert entity["params"]["radius"] == pytest.approx(10.0 * scale, rel=1e-6)
+    regions = _import_regions(tmp_path, '<circle cx="30" cy="40" r="10"/>', matrix)
+    assert [round(item.area, 3) for item in regions] == [round(math.pi * 100.0 * _determinant(matrix), 3)]
+
+
+def _elliptical_arc(center: tuple, rx: float, ry: float, phi: float, start_t: float, sweep: float) -> tuple:
+    """媒介変数 t の区間 [start_t, start_t + sweep] の楕円弧を `(始点, "A ...")` で返す(向きと大きさは解析的に決まる)。"""
+    def point(t: float) -> tuple:
+        x, y = rx * math.cos(t), ry * math.sin(t)
+        return (
+            center[0] + x * math.cos(phi) - y * math.sin(phi),
+            center[1] + x * math.sin(phi) + y * math.cos(phi),
+        )
+
+    end = point(start_t + sweep)
+    large = 1 if abs(sweep) > math.pi else 0
+    positive = 1 if sweep > 0 else 0
+    command = f"A {rx!r} {ry!r} {math.degrees(phi)!r} {large} {positive} {end[0]!r} {end[1]!r}"
+    return point(start_t), command
+
+
+ELLIPSE = {"center": (100.0, 90.0), "rx": 40.0, "ry": 15.0, "phi": math.radians(30.0)}
+
+
+@pytest.mark.parametrize("name", sorted({**NON_SIMILARITY, **SIMILARITY}))
+def test_an_ellipse_made_of_two_arcs_keeps_its_area_and_position(tmp_path: Path, name: str) -> None:
+    """落ちたら、楕円弧の端点が変換後にずれて(せん断で最大数mm)隣の弧と離れ、輪郭が閉じず領域が出ない。"""
+    matrix = {**NON_SIMILARITY, **SIMILARITY}[name]
+    start, first = _elliptical_arc(**{**ELLIPSE, "start_t": 0.4, "sweep": 3.0})
+    _start, second = _elliptical_arc(**{**ELLIPSE, "start_t": 3.4, "sweep": 2.0 * math.pi - 3.0})
+    regions = _import_regions(tmp_path, f'<path d="M {start[0]!r} {start[1]!r} {first} {second} Z"/>', matrix)
+    assert len(regions) == 1
+    assert regions[0].area == pytest.approx(
+        math.pi * ELLIPSE["rx"] * ELLIPSE["ry"] * _determinant(matrix), rel=2e-3
+    )
+    moved = _apply(matrix, *ELLIPSE["center"])
+    assert regions[0].centroid[:2] == pytest.approx((moved[0], 200.0 - moved[1]), abs=0.1)
+
+
+@pytest.mark.parametrize("name", ["skew", "general", "flip-y", "stretch-after-rotation"])
+@pytest.mark.parametrize("start_t,sweep", [(0.3, 1.2), (0.3, 4.4), (0.3, -1.2), (1.0, -4.4)])
+def test_an_elliptical_sector_keeps_its_sweep(tmp_path: Path, name: str, start_t: float, sweep: float) -> None:
+    """落ちたら、弧の掃引の向きか大きさ(大弧か小弧か)が変換後に取り違えられている(扇形の面積が合わない)。"""
+    matrix = {**NON_SIMILARITY, **SIMILARITY}[name]
+    start, command = _elliptical_arc(**{**ELLIPSE, "start_t": start_t, "sweep": sweep})
+    center = ELLIPSE["center"]
+    d = f"M {center[0]!r} {center[1]!r} L {start[0]!r} {start[1]!r} {command} Z"
+    regions = _import_regions(tmp_path, f'<path d="{d}"/>', matrix)
+    assert len(regions) == 1
+    expected = 0.5 * ELLIPSE["rx"] * ELLIPSE["ry"] * abs(sweep) * _determinant(matrix)
+    assert regions[0].area == pytest.approx(expected, rel=2e-3)
+
+
+@pytest.mark.parametrize("name", sorted({**NON_SIMILARITY, **SIMILARITY}))
+def test_a_rounded_rectangle_with_unequal_radii_keeps_its_area(tmp_path: Path, name: str) -> None:
+    """落ちたら、角丸 `<rect>`(rx≠ry の楕円弧)の輪郭が変換後に開く(反転グループ下で領域が出ない)。"""
+    matrix = {**NON_SIMILARITY, **SIMILARITY}[name]
+    rect = '<rect x="10" y="10" width="60" height="40" rx="12" ry="5"/>'
+    regions = _import_regions(tmp_path, rect, matrix)
+    assert len(regions) == 1
+    expected = (60.0 * 40.0 - (4.0 - math.pi) * 12.0 * 5.0) * _determinant(matrix)
+    assert regions[0].area == pytest.approx(expected, rel=2e-3)
+
+
+# --------------------------------------------------------------------------------------
+# 長さ0の曲線・半径0の弧
+# --------------------------------------------------------------------------------------
+def _triangle_with(segment: str) -> str:
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+        f'<path d="M 5 5 L 10 10 {segment} L 20 5 Z"/></svg>'
+    )
+
+
+@pytest.mark.parametrize("segment", ["c 0 0 0 0 0 0", "C 10 10 10 10 10 10", "q 0 0 0 0", "s 0 0 0 0", "t 0 0"])
+def test_a_zero_length_curve_is_dropped_like_a_zero_length_line(tmp_path: Path, segment: str) -> None:
+    """落ちたら、長さ0のベジエが1つあるだけでSVG全体の取り込みが ValueError になる(線分・弧は黙って捨てるのに)。"""
+    document = Document()
+    sketch_id = new_sketch(document)
+    import_svg(document, sketch_id, write_svg(tmp_path, "zero.svg", _triangle_with(segment)))
+    kinds = [entity.kind for entity in sketch_module.get_sketch(document, sketch_id).entities]
+    assert kinds == ["line", "line", "line"]
+    assert [round(item.area, 6) for item in region.regions(document, sketch_id)] == [37.5]
+
+
+def test_a_closed_curve_with_distinct_control_points_is_kept(tmp_path: Path) -> None:
+    """始点=終点でも制御点が離れていれば長さのある曲線(長さ0の判定は4点が全部同じ点のときだけ)。"""
+    _name, entities = svg_import.read_svg_entities(
+        write_svg(tmp_path, "loop.svg", _triangle_with("c 3 0 -3 0 0 0"))
+    )
+    assert [entity["kind"] for entity in entities] == ["line", "bezier", "line", "line"]
+
+
+@pytest.mark.parametrize("radii", ["0 0", "0 5", "5 0"])
+def test_a_zero_radius_arc_is_a_straight_line(tmp_path: Path, radii: str) -> None:
+    """落ちたら、半径0の弧(SVG では端点を結ぶ直線)が捨てられて輪郭に穴が空く。"""
+    body = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+        f'<path d="M 10 10 A {radii} 0 0 1 50 10 L 50 50 Z"/></svg>'
+    )
+    document = Document()
+    sketch_id = new_sketch(document)
+    import_svg(document, sketch_id, write_svg(tmp_path, "zero-radius.svg", body))
+    assert [entity.kind for entity in sketch_module.get_sketch(document, sketch_id).entities] == ["line"] * 3
+    assert [round(item.area, 6) for item in region.regions(document, sketch_id)] == [800.0]
+
+
+# --------------------------------------------------------------------------------------
+# 描かれない定義
+# --------------------------------------------------------------------------------------
+SYMBOL = '<symbol id="s" viewBox="0 0 10 10"><rect x="0" y="0" width="10" height="10"/></symbol>'
+VISIBLE = '<rect x="50" y="50" width="5" height="5"/>'
+VISIBLE_CORNERS = {(50, 50), (55, 50), (55, 45), (50, 45)}
+
+
+def _drawn_corners(tmp_path: Path, inner: str) -> set:
+    """取り込んだ図形の始点 (x0, y0) の集合(丸め済み)。"""
+    body = (
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        f'viewBox="0 0 100 100">{inner}</svg>'
+    )
+    _name, entities = svg_import.read_svg_entities(write_svg(tmp_path, "defs.svg", body))
+    assert {entity["kind"] for entity in entities} == {"line"}
+    return {(round(entity["params"]["x0"]), round(entity["params"]["y0"])) for entity in entities}
+
+
+def test_a_symbol_outside_defs_is_drawn_only_where_it_is_used(tmp_path: Path) -> None:
+    """落ちたら、`<defs>` の外の `<symbol>` が定義位置でも図形になる(`<use>` の分と二重に入る)。"""
+    use = '<use xlink:href="#s" x="30" y="30" width="10" height="10"/>'
+    only_use = _drawn_corners(tmp_path, SYMBOL + use)
+    assert only_use == {(30, 70), (40, 70), (40, 60), (30, 60)}
+    assert _drawn_corners(tmp_path, f"<defs>{SYMBOL}</defs>" + use) == only_use
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        '<mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>',
+        '<marker id="k"><path d="M 0 0 L 5 5 L 0 5 Z"/></marker>',
+        SYMBOL,
+        '<g><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask></g>',
+    ],
+)
+def test_undrawn_definitions_add_no_shapes(tmp_path: Path, definition: str) -> None:
+    """`<mask>` `<marker>` `<symbol>` の中身は、参照されない限り取り込まない(隣の描かれる図形だけが入る)。"""
+    assert _drawn_corners(tmp_path, definition + VISIBLE) == VISIBLE_CORNERS
+
+
+@pytest.mark.parametrize(
+    "definitions",
+    [
+        # `<defs>` の中の `<g>` を `<use>` が展開するとき、その中の `<mask>` の図形まで平らに並んで描かれていた
+        f'<defs><g id="t"><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>{VISIBLE}</g></defs>',
+        # `<symbol>` の中の `<mask>`(defs の中でも外でも)
+        f'<defs><symbol id="t"><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>{VISIBLE}</symbol></defs>',
+        f'<symbol id="t"><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>{VISIBLE}</symbol>',
+        f'<defs><g id="t"><symbol id="x"><rect x="0" y="0" width="9" height="9"/></symbol>{VISIBLE}</g></defs>',
+    ],
+)
+def test_a_definition_inside_a_used_definition_is_not_drawn(tmp_path: Path, definitions: str) -> None:
+    """`<use>` が参照する `<g>` `<symbol>` の中の、描かれない定義(`<mask>` など)は取り込まない。
+    落ちたら、defs や symbol の中へ入れた mask の図形が、参照した分だけ余計に入る。"""
+    corners = _drawn_corners(tmp_path, definitions + '<use xlink:href="#t"/>')
+    assert corners == VISIBLE_CORNERS
+
+
+def test_a_file_with_only_undrawn_definitions_is_refused(tmp_path: Path) -> None:
+    """描かれる図形が無ければ、空のスケッチを作らず断る。"""
+    body = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">{SYMBOL}</svg>'
+    with pytest.raises(ValueError, match="取り込める図形が無い"):
+        svg_import.read_svg_entities(write_svg(tmp_path, "only-symbol.svg", body))
+
+
+@pytest.mark.parametrize(
+    "switch",
+    [
+        # Illustrator の書き出し: foreignObject は requiredExtensions つきで選ばれず、絵は2つ目の <g>
+        '<switch><foreignObject requiredExtensions="http://ns.adobe.com/AdobeIllustrator/10.0/" width="1" height="1"/>'
+        f"<g>{VISIBLE}</g></switch>",
+        f'<switch><g systemLanguage="ja"><rect x="5" y="5" width="9" height="9"/></g><g>{VISIBLE}</g></switch>',
+        f"<switch><title>t</title><g>{VISIBLE}</g></switch>",
+    ],
+)
+def test_a_switch_draws_only_its_first_unconditional_branch(tmp_path: Path, switch: str) -> None:
+    """`<switch>` は描かれる枝が1つ。条件属性つきの枝は条件が評価できないので選ばない。
+    落ちたら、選ばれない枝まで取り込む、または選ぶ枝を誤って絵が丸ごと消える(Illustrator の書き出し)。"""
+    assert _drawn_corners(tmp_path, switch) == VISIBLE_CORNERS
+
+
+# --------------------------------------------------------------------------------------
+# Y反転の基準(viewport の高さ)
+# --------------------------------------------------------------------------------------
+def _lines(tmp_path: Path, svg_attributes: str, d: str = "M 0 0 L 200 0 L 200 100") -> list:
+    body = f'<svg xmlns="http://www.w3.org/2000/svg" {svg_attributes}><path d="{d}"/></svg>'
+    _name, entities = svg_import.read_svg_entities(write_svg(tmp_path, "viewport.svg", body))
+    return [
+        (entity["params"]["x0"], entity["params"]["y0"], entity["params"]["x1"], entity["params"]["y1"])
+        for entity in entities
+    ]
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        'width="100mm" height="50mm" viewBox="0 0 200 100"',
+        'width="100mm" viewBox="0 0 200 100"',
+        'height="50mm" viewBox="0 0 200 100"',
+        'width="100mm" height="100%" viewBox="0 0 200 100"',
+    ],
+)
+def test_a_missing_side_follows_the_view_box_aspect_ratio(tmp_path: Path, attributes: str) -> None:
+    """落ちたら、片方の辺だけ書かれた SVG が縦(横)にずれる(viewBox を縦横比の違う viewport に中央寄せしている)。"""
+    got = [value for line in _lines(tmp_path, attributes) for value in line]
+    assert got == pytest.approx([0.0, 50.0, 100.0, 50.0, 100.0, 50.0, 100.0, 0.0], rel=1e-5, abs=1e-4)
+
+
+@pytest.mark.parametrize("attributes", ["", 'width="100mm"'])
+def test_without_a_height_the_lowest_point_sits_on_v_zero(tmp_path: Path, attributes: str) -> None:
+    """サイズも viewBox も無い SVG は高さの情報が無い。図形の下端(y 最大)を v=0 に置く(1000mm 離れない)。"""
+    lines = _lines(tmp_path, attributes, "M 1 2 L 3 2 L 3 4 Z")
+    assert lines == [(1.0, 2.0, 3.0, 2.0), (3.0, 2.0, 3.0, 0.0), (3.0, 0.0, 1.0, 2.0)]
+
+
+@pytest.mark.parametrize("height", ["0", "-5", "auto"])
+def test_an_unusable_height_is_refused_by_name(tmp_path: Path, height: str) -> None:
+    """0以下・読めない高さは Y 反転の基準にできない。『図形が無い』ではなく height が原因だと断る。"""
+    with pytest.raises(ValueError, match="height"):
+        _lines(tmp_path, f'height="{height}" viewBox="0 0 200 100"')
+
+
+def test_a_hidden_root_is_refused_as_value_error(tmp_path: Path) -> None:
+    """ルートが描画されない(`display:none`)SVG は AttributeError ではなく ValueError で断る。"""
+    with pytest.raises(ValueError, match="描画される"):
+        _lines(tmp_path, 'style="display:none" viewBox="0 0 200 100"')
+
+
+# --------------------------------------------------------------------------------------
+# 失敗は何も残さない(領域が計算できない取り込み)
+# --------------------------------------------------------------------------------------
+HUGE_SCALE = 1.0e300
+
+
+def test_an_import_whose_regions_cannot_be_computed_leaves_nothing(tmp_path: Path) -> None:
+    """落ちたら、取り込んだ図形とログが残ったまま、以後 `regions()` が毎回失敗するスケッチになる。"""
+    document = Document()
+    sketch_id = new_sketch(document)
+    sketch_module.add_circle(document, sketch_id, [0.0, 0.0], 5.0)
+    entities_before = [e.id for e in sketch_module.get_sketch(document, sketch_id).entities]
+    log_before = len(document.log.entries)
+    parameters_before = dict(document.parameters)
+
+    with pytest.raises(ValueError, match="領域を計算できない"):
+        import_svg(document, sketch_id, write_svg(tmp_path, "huge.svg", SVG_MIXED), scale=HUGE_SCALE)
+
+    assert [e.id for e in sketch_module.get_sketch(document, sketch_id).entities] == entities_before
+    assert len(document.log.entries) == log_before
+    assert document.parameters == parameters_before
+    assert len(region.regions(document, sketch_id)) == 1  # 元のスケッチは今までどおり使える
+
+
+def test_a_failed_mcp_import_leaves_the_document_untouched(session: Session, tmp_path: Path) -> None:
+    """MCP の `import_svg` は verb の後で領域数を数える。失敗の封筒を返すなら文書は変わっていない。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    log_before = len(session.document.log.entries)
+    server = McpServer(DocumentTools(session))
+
+    error = call_error(
+        server,
+        "import_svg",
+        {"sketch_id": sketch_id, "path": str(write_svg(tmp_path, "huge.svg", SVG_MIXED)), "scale": HUGE_SCALE},
+    )
+
+    assert error["code"] == "invalid_argument"
+    assert len(session.document.log.entries) == log_before
+    assert session.document.sketches[0].entities == []

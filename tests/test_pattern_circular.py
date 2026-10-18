@@ -350,7 +350,7 @@ def test_patterning_the_same_entity_twice_is_refused():
 
 
 def test_a_shape_centred_on_the_pivot_is_refused():
-    """回転中心と図形の中心が一致する場合は拒否する。"""
+    """回転中心と図形の中心が一致する円は、どの個数でも全複製が元と重なるので拒否する。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, CENTER, 2 * HOLE_RADIUS)  # 中心が回転中心と一致
@@ -384,3 +384,61 @@ def test_changing_the_total_angle_to_an_unusable_value_is_refused():
         with pytest.raises(ValueError):
             set_parameter(document, name, bad)
     assert len(regions(document, sketch_id)) == COUNT
+
+
+def _centred(kind: str):
+    """回転中心 (0, 0) に中心がある図形を1つ持つスケッチ。"""
+    from duocad.sketch import add_arc, add_ellipse, add_line, add_rectangle
+
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    entity = {
+        "arc": lambda: add_arc(document, sketch_id, (0.0, 0.0), 10.0, 0.0, 20.0),
+        "line": lambda: add_line(document, sketch_id, (-10.0, 0.0), (10.0, 0.0)),
+        "rectangle": lambda: add_rectangle(document, sketch_id, (-5.0, -2.0), 10.0, 4.0),
+        "square": lambda: add_rectangle(document, sketch_id, (-3.0, -3.0), 6.0, 6.0),
+        "ellipse": lambda: add_ellipse(document, sketch_id, (0.0, 0.0), 20.0, 8.0, 0.0),
+        "round_ellipse": lambda: add_ellipse(document, sketch_id, (0.0, 0.0), 8.0, 8.0, 0.0),
+        "full_arc": lambda: add_arc(document, sketch_id, (0.0, 0.0), 10.0, 0.0, 360.0),
+    }[kind]()
+    return document, sketch_id, entity
+
+
+@pytest.mark.parametrize(
+    "kind, count, total_angle",
+    [
+        ("arc", 4, 120.0),         # 0〜20 度の円弧を 40 度刻みで 4 本: どれも重ならない
+        ("line", 3, 360.0),        # 線分を 120 度刻み: 180 度でないので重ならない
+        ("rectangle", 3, 360.0),   # 10×4 の長方形を 120 度刻み
+        ("ellipse", 3, 360.0),
+    ],
+)
+def test_a_shape_centred_on_the_pivot_whose_copies_do_not_coincide_is_repeated(kind, count, total_angle):
+    """落ちたら、中心が回転中心と一致するだけで、重ならない複製まで「全複製が元と重なる」と断っている。"""
+    document, sketch_id, entity = _centred(kind)
+    pattern_circular(document, sketch_id, [entity], (0.0, 0.0), count, total_angle)
+    assert len(get_sketch(document, sketch_id).patterns) == 1
+
+
+@pytest.mark.parametrize(
+    "kind, count, total_angle",
+    [
+        ("line", 2, 360.0),       # 180 度で線分が自分に重なる
+        ("rectangle", 2, 360.0),  # 長方形は 180 度回すと自分に重なる
+        ("square", 4, 360.0),     # 正方形は 90 度で自分に重なる
+        ("ellipse", 2, 360.0),
+        ("round_ellipse", 3, 360.0),  # 縦横が同じ楕円は円
+        ("full_arc", 2, 360.0),       # 始終の角が同じ(0〜360 度)円弧は全周で、円と同じ
+    ],
+)
+def test_a_copy_that_lands_on_the_original_is_still_refused(kind, count, total_angle):
+    document, sketch_id, entity = _centred(kind)
+    with pytest.raises(ValueError, match="coincide"):
+        pattern_circular(document, sketch_id, [entity], (0.0, 0.0), count, total_angle)
+    assert get_sketch(document, sketch_id).patterns == []
+
+
+def test_without_rotating_the_copies_a_centred_shape_always_coincides():
+    document, sketch_id, entity = _centred("arc")
+    with pytest.raises(ValueError, match="coincide"):
+        pattern_circular(document, sketch_id, [entity], (0.0, 0.0), 4, 120.0, rotate_copies=False)

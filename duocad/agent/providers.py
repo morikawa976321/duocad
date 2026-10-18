@@ -537,10 +537,7 @@ def post_json(url: str, payload: Optional[dict], headers: dict, timeout: float) 
 # アダプタ
 # --------------------------------------------------------------------------------------
 class Provider:
-    """プロバイダ1つ。**ループが使うのは `name` / `model` / `complete` / `abort` だけ**。"""
-
-    #: `openai_compat` / `anthropic`
-    name = "provider"
+    """プロバイダ1つ。**ループが使うのは `model` / `complete` / `abort` だけ**。"""
 
     def abort(self) -> None:
         """走っている往復を捨てる(中断フラグが立ったとき**別スレッドから**呼ばれる)。既定は何もしない。"""
@@ -581,8 +578,6 @@ class OpenAICompatProvider(Provider):
     **`build_provider` は渡さない**(送り先を画面から変えられるので、鍵を乗せると外へ出る)。値は
     `repr()` にも例外にも出さない(`_redact()`)。
     """
-
-    name = "openai_compat"
 
     def __init__(
         self,
@@ -885,6 +880,10 @@ def key_problem(key: str) -> Optional[str]:
         return "APIキーが空"
     if any(ch.isspace() or not ch.isprintable() for ch in key):
         return "APIキーに空白か改行が混じっている(貼り付けを確かめる)"
+    if not key.isascii():
+        # http.client はヘッダ値を latin-1 で符号化する。全角などが混じると保存・採用された後の全リクエストが
+        # 1バイトも送られないまま UnicodeEncodeError になり、画面には「キーが原因」と読めない文が出る。
+        return "APIキーに ASCII 以外の文字が混じっている(貼り付けを確かめる)"
     return None
 
 
@@ -958,8 +957,6 @@ class AnthropicProvider(Provider):
 
     一時的な失敗(429・529・5xx)は、合計時間の残りに収まる範囲で `MAX_RETRIES` 回までやり直す。
     """
-
-    name = "anthropic"
 
     def __init__(
         self,

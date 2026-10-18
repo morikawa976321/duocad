@@ -30,13 +30,13 @@ DEFAULT_PERCENTILE = 99.5
 #: 張り付くので、段階4を安全率の帯で止めると削れる材料を残す(docs/TOPOPT_STOPPING.md 2節)。
 MEMBER_VOLUME_CELLS = 1
 
-def strain_displacement_center(element_size: float = 1.0) -> np.ndarray:
+def strain_displacement_center() -> np.ndarray:
     """要素**中心**(xi=eta=zeta=0)での B 行列 (6,24)。
 
     中心1点だけを見るのは意図した平滑化(8つの角で評価すると階段状境界の離散化のスパイクが増える)。
     trilinear hex では中心が最も精度の良い点でもある(梁理論と 0.2〜0.9% で一致)。
     """
-    return fem.strain_displacement(0.25 * fem.NODE_SIGNS / float(element_size))
+    return fem.strain_displacement(0.25 * fem.NODE_SIGNS)
 
 
 def von_mises(tensor: np.ndarray) -> np.ndarray:
@@ -168,7 +168,6 @@ def element_stress(model: fem.Model, u: np.ndarray) -> StressField:
 def solve_displacement(
     model: fem.Model,
     rho: np.ndarray,
-    penal: float = PENAL,
     *,
     solver: str = "cg",
     cg_rtol: float = 1e-9,
@@ -176,7 +175,7 @@ def solve_displacement(
 ) -> np.ndarray:
     """最終 ρ でもう一度 K U = F を解く。`info` に dict を渡すと、実際に使った解法(`"auto"` の解決後)を
     `info['solver']` に入れる —— 解く前に入れるので、解けずに落ちたときも呼び出し側に残る。"""
-    prepared = model.prepare(np.asarray(rho, dtype=float), penal, solver=solver)
+    prepared = model.prepare(np.asarray(rho, dtype=float), PENAL, solver=solver)
     if info is not None:
         info["solver"] = prepared.solver
     return prepared.solve(model.f[None, :], cg_rtol=cg_rtol)[0]

@@ -42,7 +42,7 @@ SHAPE_VERB_TOOLS = {
 
 @pytest.fixture()
 def empty_session(tmp_path: Path) -> Session:
-    return Session(None, 0.2)
+    return Session(0.2)
 
 
 @pytest.fixture()

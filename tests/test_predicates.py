@@ -372,3 +372,50 @@ def test_the_op_catalogue_covers_every_supported_op():
     assert set(catalogue) == set(predicates.PREDICATE_KINDS)
     assert {entry["op"] for entry in catalogue["face"]} == set(predicates.FACE_OPS)
     assert {entry["op"] for entry in catalogue["edge"]} == set(predicates.EDGE_OPS)
+
+
+def test_parallel_to_selects_straight_edges_only_not_arcs_whose_chord_is_parallel(session):
+    """落ちたら、半円・アーチの弦が軸に揃うだけで曲線の辺まで「軸に平行な辺」として選ばれ、そのまま fillet/chamfer に渡る。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [0.0, 1.0], 10.0, 2.0)
+    session.modify_selection([{"sketch": sketch_id, "index": 1}], [])
+    session.revolve(axis="x", angle=180.0)
+    document = session.document
+    shape = document.bodies[-1].shape
+
+    chord_parallel_arcs = [
+        edge["index"]
+        for edge in query.describe_edges(shape)
+        if edge["kind"] != "line" and edge["length"] > 0
+        and abs(edge["end"][0] - edge["start"][0]) < 1e-6 and abs(edge["end"][2] - edge["start"][2]) < 1e-6
+        and abs(edge["end"][1] - edge["start"][1]) > 1e-6
+    ]
+    assert chord_parallel_arcs, "検査の前提: 弦が Y に平行な円弧がある"
+
+    picked = predicates.evaluate(document, {"kind": "edge", "where": [{"op": "parallel_to", "axis": "Y"}]})
+
+    kinds = {edge["index"]: edge["kind"] for edge in query.describe_edges(shape)}
+    assert picked and {kinds[ref["index"]] for ref in picked} == {"line"}
+    assert not set(chord_parallel_arcs) & {ref["index"] for ref in picked}
+
+
+@pytest.mark.parametrize(
+    "axis",
+    [[float("inf"), 0.0, 0.0], [float("nan"), 0.0, 0.0], ["1", "0", "0"], [True, 0, 0], [0, 0, 0]],
+)
+def test_a_degenerate_or_non_numeric_axis_vector_is_a_value_error(axis):
+    """落ちたら、無限大は NaN の軸で成功(0件)になり、文字列・真偽値は数として通る。"""
+    with pytest.raises(ValueError):
+        predicates.validate({"kind": "edge", "where": [{"op": "parallel_to", "axis": axis}]})
+
+
+def test_a_large_but_finite_axis_vector_is_normalized():
+    """落ちたら、成分の2乗が溢れて OverflowError になる(MCP では internal で返り、AI が直せない)。"""
+    normalized = predicates.validate({"kind": "edge", "where": [{"op": "parallel_to", "axis": [1e308, 1e308, 0.0]}]})
+    assert normalized["where"][0]["axis"] == pytest.approx([2 ** -0.5, 2 ** -0.5, 0.0])
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), True, "3"])
+def test_a_threshold_that_is_not_a_finite_number_is_a_value_error(value):
+    with pytest.raises(ValueError):
+        predicates.validate({"kind": "edge", "where": [{"op": "length_gt", "value": value}]})

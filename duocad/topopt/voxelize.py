@@ -143,11 +143,10 @@ def grid_for_bbox(
     bbox_min: Iterable[float],
     bbox_max: Iterable[float],
     elements_long_axis: int,
-    pad: int = DEFAULT_PAD,
 ) -> Grid:
     """バウンディングボックスから立方体格子を起こす。
 
-    要素サイズは `最長辺 / elements_long_axis`。各軸の要素数は `ceil(辺長 / spacing) + 2*pad` で、
+    要素サイズは `最長辺 / elements_long_axis`。各軸の要素数は `ceil(辺長 / spacing) + 2*DEFAULT_PAD` で、
     形状は格子の**中央**に置く(低い側の角に合わせると軸ごとに余白の配分が変わる)。
     """
     lo = np.asarray(list(bbox_min), dtype=float)
@@ -165,13 +164,11 @@ def grid_for_bbox(
     n_long = int(elements_long_axis)
     if n_long < 1:
         raise ValueError(f"elements_long_axis must be >= 1, got {elements_long_axis!r}")
-    if int(pad) < 0:
-        raise ValueError(f"pad must be >= 0, got {pad!r}")
 
     spacing = longest / n_long
     # 浮動小数の丸めで最長軸が n_long+1 になるのを避ける。
     counts = np.ceil(extent / spacing - 1e-9).astype(int)
-    counts = np.maximum(counts, 1) + 2 * int(pad)
+    counts = np.maximum(counts, 1) + 2 * DEFAULT_PAD
     center = 0.5 * (lo + hi)
     origin = center - 0.5 * spacing * counts.astype(float)
     return Grid(
@@ -313,7 +310,7 @@ def weld_vertices(positions: np.ndarray, tolerance: float) -> np.ndarray:
     return labels.astype(np.int64).ravel()
 
 
-def inspect_soup(soup: TriangleSoup, weld_tolerance: Optional[float] = None) -> dict:
+def inspect_soup(soup: TriangleSoup) -> dict:
     """三角形群が「閉じていて外向きに揃った表面」かを調べる。壊れていたら `ValueError`。
 
     検査するのは、有向辺の対(辺 (u,v) と逆向き (v,u) がちょうど1回ずつ。片方だけなら穴、同じ向きが2回なら向きの不整合)、
@@ -326,7 +323,7 @@ def inspect_soup(soup: TriangleSoup, weld_tolerance: Optional[float] = None) -> 
     diagonal = float(np.linalg.norm(hi - lo))
     if not diagonal > 0:
         raise ValueError("形状の大きさがゼロ(退化した入力)")
-    tol = float(weld_tolerance) if weld_tolerance else max(diagonal * 1e-7, 1e-9)
+    tol = max(diagonal * 1e-7, 1e-9)
     solids = None if soup.solid_index is None else np.unique(soup.solid_index)
     if solids is None or solids.size <= 1:
         return _inspect_closed(soup, tol)
@@ -836,7 +833,6 @@ def model_from_design_mask(
     keep: Any = None,
     obstacle: Any = None,
     deviation: Optional[float] = None,
-    deviation_ratio: float = DEFAULT_DEVIATION_RATIO,
     angular_deflection: float = DEFAULT_ANGULAR_DEFLECTION,
 ) -> VoxelModel:
     """塊(設計空間)を bool マスクで、面アンカーの対象ソリッドを別に受け取って組み立てる。
@@ -859,7 +855,7 @@ def model_from_design_mask(
             f"塊(設計空間)が空。格子 {tuple(grid.shape)} の全要素が False では最適化する場所が無い。"
         )
 
-    dev = float(deviation) if deviation else max(grid.spacing * deviation_ratio, 1e-6)
+    dev = float(deviation) if deviation else max(grid.spacing * DEFAULT_DEVIATION_RATIO, 1e-6)
     if isinstance(anchor_shape, TriangleSoup):
         soup = anchor_shape
     else:

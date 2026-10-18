@@ -12,9 +12,12 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import re
+import shutil
 import sys
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,7 +54,10 @@ class World:
 
 
 def build_world() -> World:
-    session = Session(None, 0.2)
+    # 保存先を渡さない Session は、操作のたびの自動保存でリポジトリの models/ へ untitled-<n>.json を溜める。
+    scratch = Path(tempfile.mkdtemp(prefix="duocad-llm-tasks-"))
+    atexit.register(shutil.rmtree, scratch, True)
+    session = Session(0.2, models_dir=scratch / "models", exports_dir=scratch / "export")
     for corner, width, depth, height in (PLATE, POST):
         sketch_id = session.sketch_create("XY")["sketch_id"]
         session.add_rectangle(sketch_id, list(corner), width, depth)
@@ -162,6 +168,8 @@ def run_task(task: Task, provider: OpenAICompatProvider) -> dict:
 
 
 def main() -> None:
+    # 失敗した呼び出しの印「✗」は cp932 に無い。標準出力がパイプだと日本語 Windows では cp932 で書かれ、落ちる。
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
     parser.add_argument("--repeat", type=int, default=3, help="課題ごとの試行回数(モデルの揺れを見るため)")

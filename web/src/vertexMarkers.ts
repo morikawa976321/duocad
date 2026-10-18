@@ -29,8 +29,6 @@ export interface VertexMarkersDeps {
   toScreen(point: THREE.Vector3): { x: number; y: number } | null
   /** 「指せるもの」が増減したことを本編へ知らせる。 */
   pickChanged(): void
-  /** 実機検査フックが読む強調色の表。`vertex` だけをここが書く。 */
-  highlightColor: { vertex: number | null }
   /** 断面のクリップ平面(共有配列。`sectionView.ts`)。マーカーもボディと一緒に切る。 */
   clipPlanes: THREE.Plane[]
   /** その点が断面で残る側か(OFF なら常に true)。切られたマーカーは指せない。 */
@@ -43,7 +41,6 @@ export interface VertexMarkers {
   /** 今出しているマーカー(ウィンドウ選択が中身を見る)。 */
   meshes(): THREE.Points[]
   show(markers: VertexMarker[]): void
-  clear(): void
   /** その画素で取れる頂点(無ければ null)。 */
   at(offsetX: number, offsetY: number): VertexRef | null
   /** その頂点が今いる画素(取れない画素なら null)。 */
@@ -52,7 +49,7 @@ export interface VertexMarkers {
 }
 
 export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
-  const { pickPointsAt, toScreen, pickChanged, highlightColor, clipPlanes, sectionKeeps } = deps
+  const { pickPointsAt, toScreen, pickChanged, clipPlanes, sectionKeeps } = deps
 
   const vertexRoot = new THREE.Group()
 
@@ -85,7 +82,6 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
     clearVertices()
     vertexKey = key
     pickChanged()
-    highlightColor.vertex = markers.length === 0 ? null : vertexMaterial.color.getHex()
     if (markers.length === 0) return
     for (const marker of markers) {
       if (marker.point.length < 3) continue
@@ -141,7 +137,6 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
       return vertexMeshes
     },
     show: showVertices,
-    clear: clearVertices,
     at: vertexAt,
     project: projectVertex,
     dispose() {

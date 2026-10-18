@@ -25,6 +25,7 @@ import _bootstrap  # noqa: E402,F401
 
 import numpy as np  # noqa: E402
 
+from _peel_stats import collecting_peel_stats  # noqa: E402
 from duocad import optimize_run  # noqa: E402
 from duocad.topopt import binary_search, final_check, mesh, min_width, thin_voids  # noqa: E402
 from duocad.topopt.acceptance import NEIGHBOURHOOD_STRUCTURE  # noqa: E402
@@ -66,22 +67,15 @@ def _final(mask0, space, cond, doc, bundle, width_mm):
 
 
 def _run(space, cond, cells, *, adj, name, doc, bundle, width_mm):
-    stats = []
-    real_peel = binary_search.peel
-
-    def peel(*args, **kwargs):
-        after, s = real_peel(*args, **kwargs)
-        stats.append(s)
-        return after, s
-
-    patches = [mock.patch.object(binary_search, 'peel', peel)]
+    patches = []
     if adj == 6:
         patches.append(mock.patch.object(min_width, 'core_structure', lambda m: NEIGHBOURHOOD_STRUCTURE))
     started = time.perf_counter()
     for p in patches:
         p.start()
     try:
-        result = binary_search.find_best_feasible(space.mask, cond, max_evaluations=1000, min_width_cells=cells)
+        with collecting_peel_stats() as stats:
+            result = binary_search.find_best_feasible(space.mask, cond, max_evaluations=1000, min_width_cells=cells)
     finally:
         for p in patches:
             p.stop()

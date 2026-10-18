@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import shutil
 import statistics
@@ -103,7 +104,7 @@ def sketch_id_of(session: Session) -> str:
 
 def bench_small_box(models_dir: Path) -> None:
     section("A. 小さな文書(20mm 角の箱を作ってフィレット)")
-    s = Session(None, kernel.DEFAULT_DEVIATION, models_dir=models_dir)
+    s = Session(kernel.DEFAULT_DEVIATION, models_dir=models_dir)
     s.apply("sketch_create", {"base_plane": "XY"})
     sid = sketch_id_of(s)
     s.apply("add_rectangle", {"sketch_id": sid, "corner": [0, 0], "width": 20, "height": 20})
@@ -140,7 +141,7 @@ def bench_small_box(models_dir: Path) -> None:
 
 def bench_sketch_heavy(models_dir: Path, n_rect: int = 150) -> None:
     section(f"B. スケッチが重い文書(長方形 {n_rect} 個 = 線 {n_rect * 4} 本)")
-    s = Session(None, kernel.DEFAULT_DEVIATION, models_dir=models_dir)
+    s = Session(kernel.DEFAULT_DEVIATION, models_dir=models_dir)
     s.apply("sketch_create", {"base_plane": "XY"})
     sid = sketch_id_of(s)
     t0 = time.perf_counter()
@@ -181,9 +182,16 @@ def bench_sketch_heavy(models_dir: Path, n_rect: int = 150) -> None:
     timed("B 変化なし配信 state_meta+delta(known)", lambda: push_payload(s, known), repeat=5, bytes=fsize(push_payload(s, known)))
 
 
+def bench_edge_chains(s, body_id: str, nedges: int) -> None:
+    """初回(辺1本)と、辺ごとに違う辺を呼ぶ「次の辺」。同じ辺を繰り返すと2回目以降は形ごとのキャッシュに当たり、中央値が次の辺の費用にならない。"""
+    once("C edge_chains(最大ボディ 辺1本) 初回", lambda: s.edge_chains(body_id, [1]))
+    fresh = itertools.count()
+    timed("C edge_chains(最大ボディ 辺1本) 次の辺", lambda: s.edge_chains(body_id, [2 + next(fresh) % (nedges - 1)]), repeat=5)
+
+
 def bench_pc_case(models_dir: Path, step: Path) -> None:
     section(f"C. PCケース STEP(27部品 2835面): {step.name}")
-    s = Session(None, kernel.DEFAULT_DEVIATION, models_dir=models_dir)
+    s = Session(kernel.DEFAULT_DEVIATION, models_dir=models_dir)
     once("C import_step apply (読込+autosave)", lambda: s.apply("import_step", {"path": str(step)})); ROWS[-1]["bodies"] = len(s.document.bodies)
     timed("C autosave() 単体", lambda: s.autosave(), repeat=3, file_bytes=(models_dir / s.current_name).stat().st_size)
     # 全体表示の解像度(1280x860 で対角 640mm ≒ 0.75mm/px)
@@ -214,8 +222,7 @@ def bench_pc_case(models_dir: Path, step: Path) -> None:
     timed("C clear_selection + 配信", lambda: (s.clear_selection(), push_payload(s, known)), repeat=5)
     once("C edges(最大ボディ) 初回", lambda: s.edges(big.id)); ROWS[-1]["bytes"] = jsize(s.edges(big.id))
     timed("C edges(最大ボディ) キャッシュ", lambda: s.edges(big.id), repeat=5)
-    once("C edge_chains(最大ボディ 辺1本) 初回", lambda: s.edge_chains(big.id, [1]))
-    timed("C edge_chains(最大ボディ 辺1本) 次の辺", lambda: s.edge_chains(big.id, [len(ROWS) % nedges + 1]), repeat=5)
+    bench_edge_chains(s, big.id, nedges)
     once("C edge_chains(最大ボディ 全辺) 初回", lambda: s.edge_chains(big.id, list(range(1, nedges + 1))))
     once("C vertices(最大ボディ) 初回", lambda: s.vertices(big.id)); ROWS[-1]["bytes"] = jsize(s.vertices(big.id))
     per_body = []
@@ -281,7 +288,7 @@ def bench_pc_case(models_dir: Path, step: Path) -> None:
 def bench_mesh_doc(models_dir: Path, doc: Path) -> None:
     section(f"D. メッシュボディ入りの文書を開く: {doc.name} ({doc.stat().st_size / 1e6:.1f} MB)")
     shutil.copy(doc, models_dir / doc.name)
-    s = Session(None, kernel.DEFAULT_DEVIATION, models_dir=models_dir, opened=False)
+    s = Session(kernel.DEFAULT_DEVIATION, models_dir=models_dir, opened=False)
     once("D open_document (ログ再生)", lambda: s.open_document(doc.name))
     s.set_view_resolution(0.3, 200.0)
     full = once("D 初回配信 state_meta+delta({})", lambda: push_payload(s, None))

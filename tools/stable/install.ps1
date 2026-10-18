@@ -87,10 +87,16 @@ foreach ($sub in 'models', 'export', 'logs') {
     New-Item -ItemType Directory -Force -Path (Join-Path $DataDir $sub) | Out-Null
 }
 if ($ImportModelsFrom) {
-    Get-ChildItem -Path $ImportModelsFrom -Filter '*.json' -File | ForEach-Object {
+    # -Path はワイルドカード解釈なので、名前に [ ] を含む文書(part[1].json)は写されず Test-Path も偽になる。
+    # Copy-Item は一致なしでもエラーにしないので、写した後に宛先を確かめる。
+    Get-ChildItem -LiteralPath $ImportModelsFrom -Filter '*.json' -File | ForEach-Object {
         $dest = Join-Path (Join-Path $DataDir 'models') $_.Name
-        if (Test-Path $dest) { Write-Host "skip (既にある): $($_.Name)" }
-        else { Copy-Item $_.FullName $dest; Write-Host "copied: $($_.Name)" }
+        if (Test-Path -LiteralPath $dest) { Write-Host "skip (既にある): $($_.Name)" }
+        else {
+            Copy-Item -LiteralPath $_.FullName -Destination $dest
+            if (-not (Test-Path -LiteralPath $dest)) { throw "写せなかった: $($_.Name)" }
+            Write-Host "copied: $($_.Name)"
+        }
     }
 }
 

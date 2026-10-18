@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url'
 
 import { parseArgs } from './args.mjs'
 import { findBrowser, launchBrowser } from './browser.mjs'
+import { distanceFor } from './framing.mjs'
 import { PYTHON, REPO_ROOT } from './server.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -72,6 +73,11 @@ if (options.dir) {
   VIEWS.custom = {
     dir: options.dir.split(',').map((v) => Number.parseFloat(v)),
     zoom: Number.parseFloat(options.zoom ?? '1'),
+  }
+  const { dir } = VIEWS.custom
+  if (dir.length !== 3 || !dir.every(Number.isFinite) || Math.hypot(...dir) === 0) {
+    console.error(`--dir は零でない x,y,z の3つの数で渡すこと(いま: ${options.dir})`)
+    process.exit(1)
   }
 }
 const wantViews = (options.views ?? (options.dir ? 'custom' : 'iso,side,threeq,zoom'))
@@ -157,41 +163,6 @@ function commonCentre() {
     }
   }
   return [0, 1, 2].map((a) => (lo[a] + hi[a]) / 2)
-}
-
-/**
- * その視線方向で**全部の面が画面に収まる**距離を1つ決める。
- * 外接球ではなく実際の投影から決める —— 外接球だと細長い題材が画面の3分の1にしか映らない。
- */
-function distanceFor(dir, centre) {
-  const n = Math.hypot(...dir)
-  const d = dir.map((v) => v / n)
-  const f = d.map((v) => -v)
-  const up = [0, 0, 1]
-  const cross = (a, b) => [
-    a[1] * b[2] - a[2] * b[1],
-    a[2] * b[0] - a[0] * b[2],
-    a[0] * b[1] - a[1] * b[0],
-  ]
-  const norm = (a) => {
-    const len = Math.hypot(...a)
-    return a.map((v) => v / len)
-  }
-  const right = norm(cross(f, up))
-  const upv = cross(right, f)
-  const tanV = Math.tan((FOV * Math.PI) / 180 / 2)
-  const tanH = tanV * (WIDTH / HEIGHT)
-  let dist = 0
-  for (const verts of allVerts) {
-    for (let i = 0; i < verts.length; i += 3) {
-      const p = [verts[i] - centre[0], verts[i + 1] - centre[1], verts[i + 2] - centre[2]]
-      const along = p[0] * d[0] + p[1] * d[1] + p[2] * d[2]
-      const x = Math.abs(p[0] * right[0] + p[1] * right[1] + p[2] * right[2])
-      const y = Math.abs(p[0] * upv[0] + p[1] * upv[1] + p[2] * upv[2])
-      dist = Math.max(dist, along + x / tanH, along + y / tanV)
-    }
-  }
-  return dist * 1.06
 }
 
 const CANVAS_W = WIDTH * PANEL_COUNT + GAP * (PANEL_COUNT - 1)
@@ -352,7 +323,7 @@ try {
   const centre = commonCentre()
   for (const name of wantViews) {
     const view = VIEWS[name]
-    const dist = distanceFor(view.dir, centre) * view.zoom
+    const dist = distanceFor(view.dir, centre, allVerts, FOV, WIDTH / HEIGHT) * view.zoom
     const triangles = await page.evaluate(
       (d, r, c) => window.__render(d, r, c),
       view.dir,

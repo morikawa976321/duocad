@@ -2,7 +2,6 @@
 import * as THREE from 'three'
 
 import { type ViewResolution } from './adaptiveResolution'
-import { type UvBounds } from './gridScale'
 import type { BasePlaneName, EdgeGeometry, OptimizeDebugGrid } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
@@ -80,18 +79,6 @@ export interface OptimizeLoadVisual extends FaceRef {
  * セル中心の規約の変換点は `optimizeDebug.ts` の `buildDebugVoxels` だけ(サーバ側は素の添字を送る)。
  */
 export type { OptimizeDebugGrid }
-
-/** 実機検査フック(`optimizeDebugCounts`)が読む、デバッグ表示の数。 */
-export interface OptimizeDebugCounts {
-  space: number
-  rho: number
-  fixed: number
-  load: number
-  spaceStride: number
-  rhoStride: number
-  anchorsDepthTest: boolean | null
-  hiddenBodyId: string | null
-}
 
 /** 立方体で描く要素の集合。`elements` はC順の通し添字 `i*(ny*nz) + j*nz + k`。 */
 export interface OptimizeDebugVoxels {
@@ -204,7 +191,7 @@ export function usableRotation(rotate: BodyGhostRotation | null | undefined): ro
  * 幽霊のグループに掛ける変換 `T(p) · R(axis, θ) · T(-p)`。three.js の `makeRotationAxis` は
  * 原点まわりなので、軸の位置は平行移動の挟み込みでしか入らない。コア
  * (`gp_Trsf.SetRotation(gp_Ax1(点, 向き), θ)`)と同じ変換。
- * `export` してあるのは検算のため(`ghostInfo` が返す行列と同じものを外から組める)。
+ * `export` してあるのは検算のため(`tests/eval_ghosts.mjs` が掛かる行列を外から組んで突き合わせる)。
  */
 export function bodyGhostMatrix(entry: BodyGhost): THREE.Matrix4 {
   const matrix = new THREE.Matrix4().makeTranslation(
@@ -347,19 +334,6 @@ export interface SectionState {
   inverted: boolean
 }
 
-/** 実機検査フックが読む断面の情報(`Viewport.sectionInfo`)。 */
-export interface SectionInfo extends SectionState {
-  /** 残す側(+1: 法線軸の正側 / -1: 負側)。 */
-  keepSign: 1 | -1
-  /**
-   * ハンドル(矢印)の掴める画素と、法線軸の正方向が画面でどちらを向くか(単位ベクトル)。
-   * OFF・カメラの裏なら null。
-   */
-  handle: { x: number; y: number; dir: { x: number; y: number } } | null
-  /** 切り口の判定メッシュを持つボディの数(OFF では 0)。 */
-  stencilBodies: number
-}
-
 export interface Viewport {
   /**
    * Bodyの形状をまとめて反映する。初回(まだ何も描いていない状態)だけ、反映後の
@@ -412,8 +386,6 @@ export interface Viewport {
    * (形状の裏側の節点も見えないと「見えているつもりで見えていない」になる)。
    */
   setOptimizeDebug(state: OptimizeDebugState | null): void
-  /** デバッグ表示のいまの数え(実機検査用)。`anchorsDepthTest` が `false` であることの見張りを兼ねる。 */
-  optimizeDebugCounts(): OptimizeDebugCounts
   // ------------------------------------------------------------------ D: 辺
   /**
    * 辺の折れ線を出す(`bodyId` に null を渡すと消える)。出している間だけ辺を指せる。
@@ -449,7 +421,6 @@ export interface Viewport {
   setSection(state: SectionState): void
   /** ハンドルのドラッグで位置が動いた(App が状態を更新し `setSection` で書き戻す)。 */
   onSectionDrag(listener: (position: number) => void): void
-  sectionInfo(): SectionInfo
   /** 表示中のボディ(幽霊を含む)の外接箱の中心。空なら null。 */
   contentCenter(): [number, number, number] | null
   /**
@@ -498,39 +469,13 @@ export interface Viewport {
    * 点から面へ下ろした垂線の足は面の裏やソリッドの内側に落ちうるので、深度検査をしない。
    */
   showMeasurement(visual: MeasurementVisual | null): void
-  /** いま出している測定の線(実機検査用)。 */
-  measurementInfo(): MeasurementVisual | null
-  /** 今そのハイライトに使っている色(16進)。出していない種別は null。実機検査フック専用。 */
-  highlightColors(): { face: number | null; edge: number | null; vertex: number | null }
   /** スケッチを作り直した回数の累計(実機検査・物差し用。選択だけが変わった配信では増えない)。 */
   sketchRebuilds(): number
   /** 直近の本描画の描画呼び出しの数(`renderer.info.render.calls`。ビューキューブを除く)。物差し用。 */
   drawCalls(): number
   /** 本描画を行った累計回数(静止中に描いていないかを見る物差し)。 */
   renderCount(): number
-  /**
-   * 指した面がいま実際に塗られている色(16進。無ければ null)。実機検査フック専用。
-   * 形状最適化の役割色は、選択の色しか見ない `highlightColors` では確かめられない。
-   */
-  faceColor(ref: FaceRef): number | null
-  /**
-   * 形状最適化の装飾(拘束記号+荷重矢印・ラベル)の数。実機検査フック専用。
-   * 種別を区別しない粗い数なので、取り違え・向きの逆転・ラベル欠落の検出には `optimizeAnnotations()` を使うこと。
-   */
-  optimizeAnnotationCount(): number
-  /**
-   * 形状最適化の装飾の中身。実機検査フック専用。
-   * `fixtures` は固定記号を置いた面の参照、`loads` は矢印ごとの単位ベクトルとラベル文字列
-   * (`"250N"` のような表示テキストそのもの)。
-   */
-  optimizeAnnotations(): {
-    fixtures: FaceRef[]
-    loads: Array<{ bodyId: string; faceIndex: number; direction: [number, number, number]; label: string }>
-  }
-  /**
-   * 今ホバーで明るくしているもの(実機検査フック専用)。ホバーは色を足さず明度だけを上げるので
-   * `highlightColors` では読めない。頂点は対象外。
-   */
+  /** 今ホバーで明るくしているもの(実機検査フック専用)。ホバーは色を足さず明度だけを上げる。頂点は対象外。 */
   hoveredRef(): {
     face: FaceRef | null
     edge: EdgeRef | null
@@ -571,14 +516,6 @@ export interface Viewport {
    * ピックの対象にしない。まだ形が届いていないボディ(非表示など)は黙って落ちる。空配列で消える。
    */
   showBodyGhosts(entries: BodyGhost[]): void
-  /**
-   * いま出ている幽霊の中身(実機検査用)。`matrix` はそのグループに実際に掛かっている行列
-   * (three.js の列優先16要素)。行列を組む式の正しさは、掛かった結果そのものでしか検算できない。
-   */
-  ghostInfo(): {
-    sketch: Array<{ kind: string; params: Record<string, number> }>
-    bodies: Array<BodyGhost & { matrix: number[] }>
-  }
   /**
    * 面の表面上の点の画面座標(コンテナ内のCSSピクセル)。無理なら null。
    * 自動テスト(`scripts/smoke.mjs`)が本物のクリックで面を選ぶための穴。
@@ -662,29 +599,6 @@ export interface Viewport {
     far: number
   }
   /**
-   * 基準平面のピック範囲の今の半幅[mm](`gridScale.ts` の `extentFor` の値)。実機検査フック専用。
-   * near/farの下限と面外の軸線の長さも同じ値から引く。描画の範囲ではない(格子はシェーダーで無限に描く)。
-   */
-  gridScale(): { extent: number }
-  /**
-   * グリッドの3段(1/10/100mm)の今の見え方。実機検査フック専用。
-   * `planes` は表示中の平面の名前で、基準平面(`XY`/`XZ`/`YZ`)か、任意面へのスケッチ中は
-   * `sketch-face`(`desiredGridPlanes` が付ける)。`axis` は面外に線として描いている軸。
-   * `sketchFaceExtent` は任意面グリッドの枠の半径[mm](`faceUvBoxOnly`。測れない・任意面でないときは null)。
-   * `planeBounds` と `depthBiasLayers`(`DEPTH_BIAS_LAYER`)は `planes` と同じ並び。
-   * `depthBiasLayers` は、frameが基準平面と数値的に一致する実ジオメトリの面でも
-   * `sketchFaceGrid` の別枠を使っていることの検査用。
-   */
-  gridTiers(): {
-    mmPerPixel: number
-    tiers: Array<{ step: number; alpha: number }>
-    planes: string[]
-    axis: 'X' | 'Y' | 'Z' | null
-    sketchFaceExtent: number | null
-    depthBiasLayers: number[]
-    planeBounds: Array<UvBounds | null>
-  }
-  /**
    * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
    * カメラの前後のクリップ範囲の外なら null。
    * `project*` と違い遮蔽は見ず、投影そのものを問う(「+Zが画面で上か」は遮蔽と無関係に決まる)。
@@ -703,8 +617,6 @@ export interface Viewport {
    * (返す前に `regionAt` で当たることを確かめる。通常モードでは `pickRegions(true)` の間しか返らない)。
    */
   projectRegion(sketchId: string, index: number): { x: number; y: number } | null
-  /** ビューポート右上に常設するビューキューブの矩形(コンテナ内のCSSピクセル、左上原点)。実機検査フック専用。 */
-  viewCubeRect(): { x: number; y: number; w: number; h: number }
   /**
    * 見えている立体だけを撮ったファイル一覧のサムネイル(PNGのbase64。`thumbnail.ts`)。
    * 見えている立体が無ければ空文字。

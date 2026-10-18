@@ -16,7 +16,7 @@ SIDE = 20.0
 
 def session_with_box(dx: float = BOX_X, dy: float = BOX_Y, dz: float = BOX_Z, **options) -> Session:
     """`id="box"` の直方体を1つ直に置いたセッション(操作ログは空)。"""
-    session = Session(None, 0.2, **options)
+    session = Session(0.2, **options)
     session.document.add_body(Body(id="box", name="box", kind="solid", shape=box_shape(dx, dy, dz)))
     return session
 

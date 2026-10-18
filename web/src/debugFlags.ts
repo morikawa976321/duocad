@@ -4,8 +4,7 @@
  * ビルドで落とさない: 利用者の環境で起きた問題を、その画面にフラグを付けて調べるための口だから。
  * フラグが無いときの画面は1ピクセルも変えない(既定はすべて `false`/空で、`App.svelte` は
  * `setOptimizeDebug(null)` すら呼ばない。既存の実機smokeが番人)。
- * 画面にフラグの状態は出さない(出すとフラグ無しの画面と差が出る)。確認は `location.search` と
- * `window.__duocad.optimizeDebugCounts()` で行う。
+ * 画面にフラグの状態は出さない(出すとフラグ無しの画面と差が出る)。確認は `location.search` で行う。
  */
 import type { OptimizeDebugKind } from './session'
 

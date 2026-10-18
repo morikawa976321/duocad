@@ -65,8 +65,6 @@ export interface ViewCubeDeps {
 }
 
 export interface ViewCubeOverlay {
-  /** ビューポート右上の矩形(コンテナ内のCSSピクセル、左上原点)。 */
-  rect(): { x: number; y: number; w: number; h: number }
   /** その画素が矩形の内側か。 */
   inside(x: number, y: number): boolean
   /** ポインタを引き取っている(クリックかドラッグか未確定・またはドラッグ中)。 */
@@ -75,6 +73,8 @@ export interface ViewCubeOverlay {
   snapping(): boolean
   /** 視点アニメーションを打ち切る。 */
   cancelSnap(): void
+  /** 押下・ドラッグを打ち切る(`pointercancel`: `pointerup` が来ない)。何もしていなければ何もしない。 */
+  cancel(): void
   /** キューブが引き取ったら `true`(メインのピック・矩形選択へ流さない)。 */
   pointerDown(event: PointerEvent): boolean
   /** キューブが処理したら `true`。 */
@@ -374,6 +374,8 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
     const locked = document.pointerLockElement === renderer.domElement
     if (locked) {
       cubeLocked = true
+      // ロックの成立は要求より遅れる。その間に離した・打ち切ったなら、ドラッグはもう終わっている(`endCubeDrag` はロックが無いと外せない)。
+      if (!cubeDragging) document.exitPointerLock()
       return
     }
     if (cubeLocked) {
@@ -432,7 +434,6 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
   }
 
   return {
-    rect: viewCubeRect,
     inside: insideCubeRect,
     capturing() {
       return cubePointerActive || cubeDragging
@@ -442,6 +443,10 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
     },
     cancelSnap() {
       cubeSnap = null
+    },
+    cancel() {
+      if (!(cubePointerActive || cubeDragging)) return
+      endCubeDrag()
     },
     pointerDown(event) {
       if (!insideCubeRect(event.offsetX, event.offsetY)) return false

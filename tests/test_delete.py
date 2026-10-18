@@ -279,7 +279,7 @@ def test_undo_without_replay_fails_loudly_for_bodies(session: Session) -> None:
     session.delete()
 
     log = OpLog.from_json(session.document.log.to_json())
-    fresh = Session(None, DEVIATION).document
+    fresh = Session(DEVIATION).document
     with pytest.raises(KeyError):
         log.undo(fresh)
 

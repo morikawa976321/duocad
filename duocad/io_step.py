@@ -17,6 +17,8 @@ TransferRoots() を呼ぶと、Python例外にはならず**プロセスごと�
 
 失敗は黙って通さない: パス無し=FileNotFoundError / 壊れている=ValueError / 書き出す形状が
 無い=ValueError(**ファイルを作らない**)。いずれも doc.bodies / doc.log に変更を残さない。
+取り込みは、**黙って欠ける STEP**(転送に失敗した要素・ソリッドの外の面)も ValueError で断る
+(`read_step_source`。再生は検査しない)。
 
 **書き出し対象は「いま表示中(`visible=True`)のBody」に固定**(対象を選ぶ引数は無い)。候補は形状を持つ
 全Body。含めたくないBodyは `set_visible` で隠してから書き出す。
@@ -43,12 +45,18 @@ def read_step_source(path: PathLike) -> tuple[str, str]:
     """STEPファイルを読み、`(source_name, text)` を返す。`source_name` は**ファイル名だけ**。
 
     ヘッダや説明文字列にASCII外のバイトが入った実ファイルがあるため、バイト列で読み、UTF-8で読めなければ latin-1 へ落とす。
+
+    **黙って欠ける STEP は ValueError で断る**(転送に失敗した要素・ソリッドの外の面。`kernel.step_import_problems`)。
+    断るのは取り込み(この関数を呼ぶ `import_step`)だけで、ログの再生は検査しない: 検査を足す前に取り込んだ文書を開けなくしない。
     """
     data = Path(path).read_bytes()  # 無ければ FileNotFoundError
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         text = data.decode("latin-1")
+    problems = kernel.step_import_problems(text)
+    if problems:
+        raise ValueError(f"cannot import {Path(path).name}: " + " / ".join(problems))
     return Path(path).name, text
 
 
@@ -78,7 +86,8 @@ def export_stl(doc: Document, path: PathLike) -> None:
     """粗さは `STL_DEVIATION` 固定。対象は export_step と同じ。
 
     B-repは画面と同じ三角形を書く(`_triangles_of`。`StlAPI_Writer` で別計算にすると画面で確かめた形との一致が
-    保証されない)。B-repとメッシュが混ざった文書は両方を1本のSTLへ書き、メッシュの三角形はそのまま書く。
+    保証されない)。ただし面積0の三角形(球の極など)は除く。B-repとメッシュが混ざった文書は両方を1本のSTLへ書き、
+    メッシュの三角形はそのまま書く。
     """
     meshbody.write_stl(str(path), [_triangles_of(b) for b in _bodies_to_export(doc)])
 
@@ -91,6 +100,9 @@ def _triangles_of(body: Body):
     `kernel.DEFAULT_ANGULAR_DEFLECTION`。線形偏差が固定された後も角度偏差は既定のまま: 0.01mmでは
     半径1.5mm超の曲面は線形側が支配し、1.5mm以下でも弦のずれは0.006mm以下(2026-09-24実測)。
     ズーム中の画面の粗さには合わせない(`tests/test_adaptive_resolution.py`)。
+
+    **面積が float64 の時点で0の三角形は除く**(球の極・円錐の頂点・角のフィレット球面片。OCCT が標準で出す)。
+    残すと `meshbody.write_stl` の float32 検査が必ず断り、これらの形が書き出せない。
     """
     if body.mesh is not None:
         return meshbody.triangles(body.mesh)
@@ -100,7 +112,7 @@ def _triangles_of(body: Body):
     if missing or unresolved:
         raise ValueError(f'cannot write STL: {body.name} に分割できない面がある: '
                          f'untriangulated={missing[:20]}, unresolved={unresolved[:5]}')
-    return meshbody.triangles(meshbody.from_tessellation(payload))
+    return meshbody.triangles_with_area(meshbody.from_tessellation(payload))
 
 
 def export_body_ids(doc: Document) -> list[BodyId]:

@@ -124,7 +124,6 @@ def _role_conflict(listed: str, role: str, other: str, conflicts: List[dict]) ->
         f"{listed} は既に{optimize.ROLE_LABEL[other]}に割り当てられている"
         f"({optimize.ROLE_LABEL[role]}にはできない)。"
         f"先に{optimize.ROLE_LABEL[other]}のverbで外してから割り当て直すこと",
-        role,
         conflicts,
     )
 

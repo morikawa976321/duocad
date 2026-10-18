@@ -62,9 +62,20 @@ interface EntityKindSpec {
 }
 
 /**
+ * 円弧の掃引量[度](反時計回り、(0, 360])。コアは `(end_deg - start_deg) % 360` で掃く(`duocad/kernel_sketch.py` の `_edges_arc`。
+ * `sketch.add_arc` は角度を正規化せず格納するので、差が 360 以上や負でも届く)。描画・当たり判定・吸着・交点はこれ1本を通す:
+ * 別々の式だと、差が 360 を超える弧で画面とコアが別の弧になる。差が 360 の倍数(0 を含む)は一周として描く(コアは長さ0の辺を作れず拒む)。
+ */
+export function arcSweepDeg(startDeg: number, endDeg: number): number {
+  let sweep = (endDeg - startDeg) % 360
+  if (sweep < 0) sweep += 360
+  return sweep === 0 ? 360 : sweep
+}
+
+/**
  * 円弧を折れ線へ。`start` / `end` は度(コアの `Entity.params`)、分割数の計算はラジアン(`adaptiveResolution.ts` の単位)。
- * 掃引の規約がコアと違う: ここは `end - start` の符号どおりに描くが、`duocad/kernel.py` は `(end_deg - start_deg) % 360` で必ず反時計回りに掃く(`sketch.add_arc` は角度を正規化せず格納する)。
- * `end < start` だと幽霊と確定結果が別の弧になるので、角度を作る側(`commands/sketch.ts` の `arcFromPoints`)は常に `start_deg <= end_deg` を出すこと。
+ * ここの `end` は `start` から反時計回りに `arcSweepDeg` 掃いた先の角度(呼ぶ側 `toPoints` が `start + 掃引量` を渡す)。
+ * 角度を作る側(`commands/sketch.ts` の `arcFromPoints`)は常に `start_deg <= end_deg` で差が 360 未満を出す。
  */
 function arcPoints(
   cx: number,
@@ -156,12 +167,12 @@ function projectToPolyline(u: number, v: number, points: Array<[number, number]>
 }
 
 /**
- * 角度(度)を弧 `[startDeg, endDeg]`(反時計回り。`endDeg <= startDeg` は0度またぎ)へクランプする。弧の外なら円周上で近いほうの端へ寄せる。
+ * 角度(度)を弧 `[startDeg, endDeg]`(`startDeg` から反時計回りに `arcSweepDeg` 掃く。0度またぎ可)へクランプする。弧の外なら円周上で近いほうの端へ寄せる。
  * `%` で正規化する: SVG取り込みなどで角度が異常値になると、反復加算のwhileループは停止しない(`angleWithinArc` のdocstring)。
  */
 function clampAngleToArc(angle: number, startDeg: number, endDeg: number): number {
   if (!Number.isFinite(startDeg) || !Number.isFinite(endDeg)) return startDeg
-  const span = endDeg <= startDeg ? endDeg + 360 - startDeg : endDeg - startDeg
+  const span = arcSweepDeg(startDeg, endDeg)
   let offset = (angle - startDeg) % 360
   if (offset < 0) offset += 360
   if (offset <= span) return startDeg + offset
@@ -503,10 +514,14 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
       }
     },
     toPoints(params, resolution) {
-      // end<=start は一周分足す(`add_arc` の契約)。
-      let end = params.end_deg
-      if (end <= params.start_deg) end += 360
-      return arcPoints(params.cx, params.cy, params.radius, params.start_deg, end, resolution)
+      return arcPoints(
+        params.cx,
+        params.cy,
+        params.radius,
+        params.start_deg,
+        params.start_deg + arcSweepDeg(params.start_deg, params.end_deg),
+        resolution,
+      )
     },
     snap(params, u, v) {
       const dx = u - params.cx
@@ -691,13 +706,13 @@ function circleCircleIntersections(
 }
 
 /**
- * 点が中心から見て弧 `[startDeg,endDeg]`(反時計回り。0度またぎ可)の範囲内にあるか。
+ * 点が中心から見て弧 `[startDeg,endDeg]`(`startDeg` から反時計回りに `arcSweepDeg` 掃く。0度またぎ可)の範囲内にあるか。
  * `%` で正規化する: 反復加算のwhileループは `start_deg`/`end_deg` が異常値(非常に大きい値・`Infinity`)だと停止しない(実測: `smoke-svg.mjs` がハングした)。`Infinity`/`NaN` は比較が全部falseで範囲外に落ちる。
  */
 function angleWithinArc(point: readonly [number, number], center: readonly [number, number], startDeg: number, endDeg: number): boolean {
   if (!Number.isFinite(startDeg) || !Number.isFinite(endDeg)) return false
   const angle = (Math.atan2(point[1] - center[1], point[0] - center[0]) * 180) / Math.PI
-  const span = endDeg <= startDeg ? endDeg + 360 - startDeg : endDeg - startDeg
+  const span = arcSweepDeg(startDeg, endDeg)
   let offset = (angle - startDeg) % 360
   if (offset < 0) offset += 360
   return offset <= span
@@ -947,11 +962,9 @@ export function ghostEntity(
  * **1本も描かない**(途中まで描くと「間隔は合っているのに個数が足りない」に見え、
  * 打ち間違いなのか不具合なのか人には区別できない)。
  *
- * **コア側に同じ上限は無い**。ここは画面が固まらないためだけの値で、確定結果は
- * いつもどおり打った個数どおりに作られる —— **上限を超えた個数でも Enter は通り、
- * 幽霊を見ないまま大量の複製ができる**。それでよいとした理由は、上限を verb 側へ
- * 持ち込むと「画面が重い」というブラウザ側の都合が文書の作れる形を決めてしまうためで、
- * ここは表示の都合として閉じてある。
+ * **コア側の上限(`duocad/verbs/pattern.py` の `MAX_PATTERN_COPIES` = 2500)とは別の値**。ここは画面が固まらない
+ * ためだけの表示の値で、これを超えても Enter は通り、幽霊を見ないまま複製ができる。コアは複製の総数が
+ * 2500 を超える入力を ValueError で断る(桁の取り違えでイベントループが数十秒〜無限に止まるため)。
  */
 export const GHOST_COPY_LIMIT = 2000
 

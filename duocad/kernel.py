@@ -89,7 +89,11 @@ def read_step(path: str) -> "TopoDS_Shape":
     存在検査は「どちらの例外を投げるか」を決めるためだけに使い、続行の判断には使わない
     (Path.exists() だけでは壊れたファイルを止められない)。
     """
-    filename = os.fspath(path)
+    return _load_step(os.fspath(path))[1]
+
+
+def _load_step(filename: str) -> tuple:
+    """STEPリーダを立てる**唯一の場所**。`(リーダ, 形)` を返す。検査の中身は `read_step` のdocstring。"""
     reader = STEPControl_Reader()
     status = reader.ReadFile(filename)
     if status != IFSelect_ReturnStatus.IFSelect_RetDone:
@@ -105,7 +109,7 @@ def read_step(path: str) -> "TopoDS_Shape":
     shape = reader.OneShape()
     if shape is None or shape.IsNull():
         raise ValueError(f"STEP file produced an empty shape: {filename}")
-    return shape
+    return reader, shape
 
 
 def read_step_text(text: str) -> "TopoDS_Shape":
@@ -119,6 +123,11 @@ def read_step_text(text: str) -> "TopoDS_Shape":
     書き出しは**バイト列で行う**(`write_text` は Windows で `\\n` を `\\r\\n` へ
     書き換えるため、`\\r\\n` を含む元のSTEPが `\\r\\r\\n` に化ける)。
     """
+    return _load_step_text(text)[1]
+
+
+def _load_step_text(text: str) -> tuple:
+    """`_load_step` を、本文を一時ファイルへ書いて通す。`(リーダ, 形)`。"""
     if not isinstance(text, str):
         raise TypeError(f"STEP本文は文字列で渡すこと: {type(text).__name__}")
     if text.strip() == "":
@@ -129,12 +138,57 @@ def read_step_text(text: str) -> "TopoDS_Shape":
         with open(staging, "wb") as handle:
             handle.write(text.encode("utf-8"))
         try:
-            return read_step(staging)
+            return _load_step(staging)
         except (FileNotFoundError, ValueError) as error:
             # 一時パスをそのまま見せない(利用者にとって意味の無い場所を指すため)。
             raise ValueError(
                 f"埋め込まれたSTEP本文をSTEPとして読めない({len(text)}文字): {error}"
             ) from error
+
+
+def step_import_problems(text: str) -> List[str]:
+    """STEP本文を取り込むと**黙って欠ける**ものを、人が読む文の一覧にする。欠けなければ空。
+
+    1. **転送に失敗した要素**: 一部の面・要素(例: 未対応の面種、存在しない面への参照)の転送が失敗しても、ルートが
+       1つでも転送できれば `read_step` は成功を返し、面が落ちた開いたシェルが solid として入る。`NbRootsForTransfer` との
+       比較では見えない(失敗はルートの中の面で起きる)。転送のチェック一覧(`TransientProcess.CheckList`)の失敗が空でなければ数える。
+    2. **ソリッドの外の面**: ソリッドを1つでも含むと `split_solids` はソリッドしか返さず、ほかの面・シェルは捨てられる。
+       全面数のうちソリッドに入らない面を数える(各ボディの面数の合計が分解前の全面数に合わない)。
+       ソリッドが無い形は形全体を1ボディにするので数えない。ワイヤ・辺だけのものは面が無いので見えない。
+
+    **取り込み(`io_step.read_step_source`)でだけ呼ぶ。再生は呼ばない**: 検査を足す前に取り込んだ形を含む保存済みの文書を、
+    そのまま開けなければならない。形は読み直す(`read_step_text` と別の読み込みになる)。
+    """
+    reader, shape = _load_step_text(text)
+    problems: List[str] = []
+
+    failures = reader.WS().TransferReader().TransientProcess().CheckList(True)
+    count, reasons = 0, []
+    failures.Start()
+    while failures.More():
+        check = failures.Value()
+        count += check.NbFails()
+        reasons.extend(check.CFail(index) for index in range(1, check.NbFails() + 1))
+        failures.Next()
+    if count:
+        shown = "; ".join(dict.fromkeys(reason.strip() for reason in reasons if reason.strip()))
+        problems.append(f"STEP の要素 {count} 件を転送できず、取り込むと面が欠けた形になる({shown[:200]})")
+
+    solids = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
+    if solids.Extent() > 0:
+        faces = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+        inside = set()
+        for index in range(1, solids.Extent() + 1):
+            solid_faces = indexed_map(solids.FindKey(index), TopAbs_ShapeEnum.TopAbs_FACE)
+            inside.update(faces.FindIndex(solid_faces.FindKey(number)) for number in range(1, solid_faces.Extent() + 1))
+        inside.discard(0)
+        loose = faces.Extent() - len(inside)
+        if loose > 0:
+            problems.append(
+                f"ソリッド {solids.Extent()} 個の外に面が {loose} 枚ある(全体 {faces.Extent()} 面のうちソリッドに入るのは "
+                f"{faces.Extent() - loose} 面)。取り込むとそれらは黙って落ちる"
+            )
+    return problems
 
 
 def write_step(shape: "TopoDS_Shape", path: str) -> None:
@@ -295,9 +349,6 @@ class BoundingBoxCache:
 
     def __len__(self) -> int:
         return len(self._extents)
-
-    def clear(self) -> None:
-        self._extents.clear()
 
     def extents(self, shape: "TopoDS_Shape") -> Tuple[float, float, float, float, float, float]:
         """`(x_min, y_min, z_min, x_max, y_max, z_max)`。無ければ測って覚える。"""
@@ -658,12 +709,11 @@ def _transformed(
 
 
 def mirror_shape(
-    shape: "TopoDS_Shape", point: Sequence[float], normal: Sequence[float], *, copy: bool = True
+    shape: "TopoDS_Shape", point: Sequence[float], normal: Sequence[float]
 ) -> "TopoDS_Shape":
     """形状を、点 `point` を通り法線 `normal` の平面に対して鏡映した形状を返す(元は変えない)。
 
-    **鏡映は向きを反転する変換**(行列式が負)。`mirror_body` は常に複製を作るので `copy` の既定は `True`
-    (`copy=False` も `gp_Trsf` が向きの反転を保持するので壊れない)。
+    **鏡映は向きを反転する変換**(行列式が負)。`mirror_body` は常に複製を作るので、常に独立した形状を返す。
 
     点・法線が3要素でない/非有限、または法線が零ベクトルなら ValueError。
     """
@@ -673,7 +723,7 @@ def mirror_shape(
 
     trsf = gp_Trsf()
     trsf.SetMirror(gp_Ax2(gp_Pnt(*origin), gp_Dir(*axis)))
-    return _transformed(shape, trsf, copy=copy, what="鏡映")
+    return _transformed(shape, trsf, copy=True, what="鏡映")
 
 
 def edge_axis(shape: "TopoDS_Shape", edge_index: int) -> tuple:
@@ -1353,6 +1403,11 @@ def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
     0にする状況はフィレット・面取りでは作れない** —— 回帰題材が要るなら切削(対象面より大きい
     領域で切り下げる)で作る。
 
+    **薄肉では限界値ちょうどの半径が `IsDone()=False` でなく access violation になる**(`BRepPrimAPI_MakeBox` の箱を
+    厚さ 2 で抜き、縁の辺を半径 2 で丸める。Python の例外にならず `except` で捕まらない)。辺から同じ平面の面の
+    別の辺までの距離と半径が一致するフィレットは、事前に ValueError で断る(`kernel_chains.fillet_consumes_face`)。
+    これで守れるのは実測した範囲だけで、他の形の同種の異常終了を防ぐ保証は無い。
+
     戻り値(`"shape"` 以外はJSON化できる素の値):
         {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
          "volume_after": float}
@@ -1387,6 +1442,16 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         index = int(raw_index)
         maker.Add(float(raw_value), _edge_at(edge_map, index))
         edge_indices.append(index)
+
+    if verb == "fillet":
+        radii = {int(i): float(v) for i, v in values.items()}
+        clash = kernel_chains.fillet_consumes_face(shape, edge_map, radii)
+        if clash is not None:
+            raise ValueError(
+                f"fillet radius {radii[clash[0]]:g} on edge {clash[0]} would consume the whole planar face next to it "
+                f"(it reaches exactly as far as the face's edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと"
+                "落ちることがある。半径をわずかにずらすこと"
+            )
 
     try:
         maker.Build()

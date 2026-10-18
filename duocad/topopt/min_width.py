@@ -158,7 +158,7 @@ class CoreConnectivity:
         self.stats = dict(window_true=0, window_false=0, global_count=0, max_margin=1)
         if self.exempt is None or not self.exempt.any():
             return
-        labels, count = ndimage.label(self.exempt, structure=NEIGHBOURHOOD_STRUCTURE)
+        labels, _ = ndimage.label(self.exempt, structure=NEIGHBOURHOOD_STRUCTURE)
         for j, box in enumerate(ndimage.find_objects(labels), start=1):
             lo = tuple(max(s.start - self.m, 0) for s in box)  # E_j の外周1セル + 立方が下へ伸びる m-1
             crop = tuple(slice(l, s.stop + 1) for l, s in zip(lo, box))

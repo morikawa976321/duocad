@@ -17,7 +17,6 @@ export interface MeasureAnnotation {
   /** `scene` へ足すのは呼び出し側。 */
   object: THREE.Group
   show(visual: MeasurementVisual | null): void
-  info(): MeasurementVisual | null
   dispose(): void
 }
 
@@ -36,14 +35,12 @@ export function createMeasureAnnotation(deps: MeasureAnnotationDeps): MeasureAnn
     depthTest: false,
     depthWrite: false,
   })
-  let current: MeasurementVisual | null = null
   let disposables: Array<{ dispose(): void }> = []
 
   function clear(): void {
     for (const child of [...root.children]) root.remove(child)
     for (const item of disposables) item.dispose()
     disposables = []
-    current = null
   }
 
   function show(visual: MeasurementVisual | null): void {
@@ -71,15 +68,11 @@ export function createMeasureAnnotation(deps: MeasureAnnotationDeps): MeasureAnn
     root.add(sprite)
     disposables.push(...spriteDisposables)
 
-    current = { from: [...visual.from], to: [...visual.to], label: visual.label }
   }
 
   return {
     object: root,
     show,
-    info() {
-      return current === null ? null : { from: [...current.from], to: [...current.to], label: current.label }
-    },
     dispose() {
       clear()
       lineMaterial.dispose()

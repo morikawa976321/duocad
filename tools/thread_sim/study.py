@@ -12,7 +12,8 @@ import math
 import sys
 import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import replace
 from pathlib import Path
 
@@ -414,14 +415,92 @@ STUDIES = {"study1": study1, "study2": study2, "study3": study3, "study4": study
            "study7": study7}
 
 
-def main():
+#: worker が異常終了した設計に書く行の説明。`--redo-errors` が回し直す(`c_geo` を持たない error 行)。
+WORKER_DIED = ("worker プロセスが異常終了した(BrokenProcessPool。メモリ不足やネイティブ部品の異常終了)。"
+               "同時に動いていた設計のどれかが原因で、どれかは分からない")
+
+
+def _settle(fu, spec: dict):
+    """終わった future の `(結果, プールが壊れたか)`。計算の例外は error 行にして返す。"""
+    try:
+        return fu.result(), False
+    except BrokenProcessPool:
+        return None, True
+    except Exception:
+        return dict(spec, error=traceback.format_exc(limit=3)), False
+
+
+def run_pool(todo, runner, e_list, workers: int):
+    """`todo` を worker に配り、終わった順に `(設計, 結果の行)` を返す。
+
+    worker が1つ落ちるとプールが壊れ、未完了の future は全部同じ例外で終わる。**同時に動いていた設計(最大 `workers` 個)だけ**を
+    error 行にして、新しいプールで残りを続ける。まだ配っていない設計には何も書かない(書くと再開で「済み」になり回らない)。
+    """
+    queue = list(todo)
+    while queue:
+        crashed: list = []
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            inflight: dict = {}
+            pool_broken = False
+            while queue or inflight:
+                while queue and not crashed and not pool_broken and len(inflight) < workers:
+                    item = queue.pop(0)
+                    try:
+                        inflight[pool.submit(runner, item[0], item[1], e_list, item[2])] = item[0]
+                    except BrokenProcessPool:
+                        # 動いていた設計が落ちたのを、結果を受け取る前に管理スレッドが先に見つけたとき。配れなかった設計は
+                        # 戻して(何も書かない)、動いていた分を回収して新しいプールへ移る。
+                        queue.insert(0, item)
+                        pool_broken = True
+                if inflight:
+                    finished, _ = wait(inflight, return_when=FIRST_COMPLETED)
+                    for fu in finished:
+                        s = inflight.pop(fu)
+                        res, broken = _settle(fu, s)
+                        if broken:
+                            crashed.append(s)
+                        else:
+                            yield s, res
+                if crashed or pool_broken:
+                    # 壊れたプールは動いていた分を一斉に失敗させる。残りを回収してから新しいプールへ移る。
+                    finished, _ = wait(inflight)
+                    for fu in finished:
+                        s = inflight.pop(fu)
+                        res, broken = _settle(fu, s)
+                        if broken:
+                            crashed.append(s)
+                        else:
+                            yield s, res
+                    break
+        for s in crashed:
+            yield s, dict(s, error=WORKER_DIED)
+
+
+def _read_lines(path: Path) -> list:
+    """JSONL の行。書き込み途中で止まった末尾が UTF-8 の文字の途中で切れていても読める(切れた行は壊れた JSON になり、
+    呼び手の `json.loads` が捨てて、その設計は未完了として回し直される)。"""
+    return path.read_bytes().decode("utf-8", errors="replace").splitlines()
+
+
+def ensure_final_newline(path: Path) -> None:
+    """末尾が改行で終わらない JSONL(書き込み途中で止まった跡)に改行を足す。足さないと次の追記が断片に連結され、その設計が読めなくなる。"""
+    if path.exists() and path.stat().st_size:
+        with path.open("rb") as fh:
+            fh.seek(-1, 2)
+            last = fh.read(1)
+        if last != b"\n":
+            with path.open("ab") as fh:
+                fh.write(b"\n")
+
+
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("study")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--only", default=None, help="名前にこの文字列を含む設計だけ")
     ap.add_argument("--redo-errors", action="store_true",
                     help="計算の失敗(メッシュ・接触・例外)を含む行を消して回し直す。「はまらない」は失敗ではないので残す")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     got = STUDIES[a.study]()
     if got[3] is None:  # 設計ごとに (spec, printer_kw, mat_kw)
         items, e_list = got[0], got[2]
@@ -436,7 +515,7 @@ def main():
     done = set()
     if path.exists() and a.redo_errors:
         keep, dropped = [], 0
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _read_lines(path):
             try:
                 d = json.loads(line)
             except json.JSONDecodeError:
@@ -450,7 +529,7 @@ def main():
         path.write_text("".join(x + "\n" for x in keep), encoding="utf-8")
         print(f"失敗を含む {dropped} 行を消した", flush=True)
     if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _read_lines(path):
             try:
                 done.add(json.loads(line)["name"])
             except (json.JSONDecodeError, KeyError):
@@ -458,20 +537,20 @@ def main():
     todo = [(s, pk, mk) for s, pk, mk in items if s["name"] not in done and (not a.only or a.only in s["name"])]
     print(f"{a.study}: {len(specs)} 設計、済み {len(done)}、残り {len(todo)}", flush=True)
     t0 = time.perf_counter()
-    with ProcessPoolExecutor(max_workers=a.workers) as pool, path.open("a", encoding="utf-8") as fh:
+    died = 0
+    ensure_final_newline(path)
+    with path.open("a", encoding="utf-8") as fh:
         runner = {"window": run_window, "robust": run_robust}.get(e_list.get("runner") if isinstance(e_list, dict) else None, run_one)
-        futs = {pool.submit(runner, s, pk, e_list, mk): s for s, pk, mk in todo}
-        for i, fu in enumerate(as_completed(futs), 1):
-            s = futs[fu]
-            try:
-                res = fu.result()
-            except Exception:
-                res = dict(s, error=traceback.format_exc(limit=3))
+        for i, (s, res) in enumerate(run_pool(todo, runner, e_list, a.workers), 1):
+            died += res.get("error") == WORKER_DIED
             fh.write(json.dumps(res, ensure_ascii=False) + "\n")
             fh.flush()
             print(f"[{i}/{len(todo)}] {s['name']} {res.get('seconds', 0):.0f}s {'ERR' if 'error' in res else ''}"
                   f"  経過 {time.perf_counter() - t0:.0f}s", flush=True)
+    if died:
+        print(f"worker が異常終了して {died} 設計をエラー行にした。同じコマンドに --redo-errors を付けると回し直す", flush=True)
+    return 1 if died else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

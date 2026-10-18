@@ -2,8 +2,8 @@
  * MCP(stdio・JSON-RPC 2.0)のクライアント(MCP を叩く smoke が共有する)。
  *
  * サーバの stdout に出てよいのは JSON-RPC の行だけという契約の検査点でもある(OCCT が C++ から
- * 実fdへ吐く統計が混ざると接続が壊れる)。JSONにならない行は捨てず `onNoise` で受ける:
- * `smoke-mcp` は既定(例外で止める)、`acceptance` は記録して続ける。
+ * 実fdへ吐く統計が混ざると接続が壊れる)。JSONにならない行は捨てず `onNoise` で受ける。既定は例外で、
+ * 待っている呼び出しと以降の `send` が、その例外で落ちる(呼び手の catch に届く)。
  */
 export class McpClient {
   /**
@@ -20,6 +20,8 @@ export class McpClient {
       })
     this.nextId = 1
     this.pending = new Map()
+    /** 失敗したら最初の1件を覚える。以降の `send` はこれで即座に落ちる。 */
+    this.failure = null
     this.buffer = ''
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk) => this.onData(chunk))
@@ -41,16 +43,30 @@ export class McpClient {
     try {
       message = JSON.parse(line)
     } catch {
-      this.onNoise(line)
+      // ここは stdout の `data` イベントの中: 投げると Promise ではなく uncaughtException になり、`runSmoke` の
+      // catch / finally を通らずに node が落ちる。待っている呼び出しを落として、呼び手の catch に届ける。
+      try {
+        this.onNoise(line)
+      } catch (error) {
+        this.fail(error)
+      }
       return
     }
-    const resolver = this.pending.get(message.id)
-    if (!resolver) return
+    const waiting = this.pending.get(message.id)
+    if (!waiting) return
     this.pending.delete(message.id)
-    resolver(message)
+    waiting.resolve(message)
+  }
+
+  /** 待っている呼び出しをすべて落とし、以降の `send` も落とす。 */
+  fail(error) {
+    this.failure ??= error
+    for (const waiting of this.pending.values()) waiting.reject(error)
+    this.pending.clear()
   }
 
   send(method, params) {
+    if (this.failure !== null) return Promise.reject(this.failure)
     const id = this.nextId
     this.nextId += 1
     const promise = new Promise((resolvePending, rejectPending) => {
@@ -58,9 +74,15 @@ export class McpClient {
         this.pending.delete(id)
         rejectPending(new Error(`MCPの応答が来ない: ${method}`))
       }, this.timeout)
-      this.pending.set(id, (message) => {
-        clearTimeout(timer)
-        resolvePending(message)
+      this.pending.set(id, {
+        resolve: (message) => {
+          clearTimeout(timer)
+          resolvePending(message)
+        },
+        reject: (error) => {
+          clearTimeout(timer)
+          rejectPending(error)
+        },
       })
     })
     this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)

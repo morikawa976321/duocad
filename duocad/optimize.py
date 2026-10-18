@@ -62,9 +62,8 @@ class RoleConflict(ValueError):
     「元の役割のverbで外す → 新しい役割のverbで付ける」の2手で、**自動的に奪い取らない**(意図した仕様)。
     """
 
-    def __init__(self, message: str, role: str, conflicts: Sequence[dict]) -> None:
+    def __init__(self, message: str, conflicts: Sequence[dict]) -> None:
         super().__init__(message)
-        self.role = role
         self.conflicts = [dict(item) for item in conflicts]
 
 
@@ -290,7 +289,7 @@ class OptimizeStateCache:
     """`state_payload()` の増分維持(`DocumentView` が1つ持つ)。
 
     作り直すのは、条件が変わった(`OptimizeSetup.revision`)・条件が指しているボディの形状が
-    差し替わった(`is` で判定)・そのボディの可視性が変わった・まだ作っていない、のどれかのときだけ。
+    差し替わった(`is` で判定)・そのボディの可視性か名前が変わった(理由文が名前を含む)・まだ作っていない、のどれかのときだけ。
     定常状態ではOCCTを呼ばない。形状は `id()` ではなく参照ごと控える(解放後のアドレス再利用で偽ヒットしうる)。
     """
 
@@ -306,7 +305,7 @@ class OptimizeStateCache:
         self._payload = None
 
     def fresh_for(self, revision: int, referenced: dict) -> bool:
-        """`(形状, 可視性)` の表が前回と同じか(形状は `is`、可視性は `==`)。"""
+        """`(形状, (可視性, 名前))` の表が前回と同じか(形状は `is`、残りは `==`)。"""
         if self._payload is None or self._revision != revision:
             return False
         if set(self._referenced) != set(referenced):
@@ -457,9 +456,9 @@ def _body_trouble(doc: "Document", body_id: str) -> Optional[tuple]:
 
 
 def _referenced_state(doc: "Document", setup: OptimizeSetup) -> dict:
-    """条件が指しているボディの `(形状, 可視性)` だけを集める。消えたボディは `(None, False)`。
+    """条件が指しているボディの `(形状, (可視性, 名前))` だけを集める。消えたボディは `(None, (False, None))`。
 
-    可視性は形状の同一性を動かさないので、形だけを鍵にすると取りこぼす。
+    可視性と名前は形状の同一性を動かさないので、形だけを鍵にすると取りこぼす(名前は非表示の理由文に入る)。
     """
     referenced: dict = {}
     for role in BODY_ROLES:
@@ -477,5 +476,5 @@ def _body_state(doc: "Document", body_id: str) -> tuple:
     try:
         body = doc.get_body(body_id)
     except KeyError:
-        return (None, False)
-    return (body.shape, body.visible)
+        return (None, (False, None))
+    return (body.shape, (body.visible, body.name))

@@ -129,7 +129,7 @@ def test_a_solid_is_closed_and_a_lone_face_is_not(cylinder_shape) -> None:
 @pytest.fixture()
 def two_body_session() -> tuple:
     """円柱を2つ持つセッション(片方を「画面外」に見立てる)。"""
-    session = Session(None, DEVIATION)
+    session = Session(DEVIATION)
     ids = []
     for offset in (0.0, 100.0):
         sketch_id = session.sketch_create("XY")["sketch_id"]

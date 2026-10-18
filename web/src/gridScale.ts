@@ -43,7 +43,7 @@ export function mmPerPixel(cam: CameraProjection, viewportHeightPx: number): num
  * 線間隔[px]から不透明度。3段に共通する唯一の規則で、段ごとの特例は無い。
  * smoothstep で値も傾きも連続・常に [0, 1] —— 閾値を跨ぐ点滅を原理的に無くす(ヒステリシス不要)。
  *
- * **フラグメントシェーダー側も同じ式を持つ**(`viewport.ts` の `fadeFromSpacingPx` のGLSL版)。
+ * **フラグメントシェーダー側も同じ式を持つ**(`planeGrid.ts` の `fadeFromSpacingPx` のGLSL版)。
  * あちらは1画素ごとの局所的な線間隔に、こちらは注視点での代表値に適用する。
  * 定数は両方ともここから注入する。
  */
@@ -148,6 +148,25 @@ export interface UvBox {
   uMax: number
   vMin: number
   vMax: number
+}
+
+/**
+ * 点列の外接UV矩形(点が無ければ `null`)。`Math.min(...us)` のように配列を引数へ展開しない:
+ * 引数が約12万を超えると RangeError になる(反復や取り込んだSVGで折れ線の点が増えたスケッチ)。
+ */
+export function uvBoxOfPoints(points: ReadonlyArray<readonly [number, number]>): UvBox | null {
+  if (points.length === 0) return null
+  let uMin = Infinity
+  let uMax = -Infinity
+  let vMin = Infinity
+  let vMax = -Infinity
+  for (const [u, v] of points) {
+    if (u < uMin) uMin = u
+    if (u > uMax) uMax = u
+    if (v < vMin) vMin = v
+    if (v > vMax) vMax = v
+  }
+  return { uMin, uMax, vMin, vMax }
 }
 
 /**

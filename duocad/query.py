@@ -2,9 +2,10 @@
 
 **build123dをimportしてよいのはこのモジュールだけ**(OCPを直接叩くのは kernel.py の責務)。
 
-トポロジの走査(面・辺の列挙と数え上げ)は build123d に任せる。build123d の `.faces()` /
-`.edges()` は内部で `TopExp.MapShapes_s` を使うため**重複除去済み**で、kernel の
-`count_subshapes` と一致する。一方、次の2つは**OCCTの値そのものが契約**なので kernel へ委譲する:
+面の列挙は build123d に任せる。build123d の `.faces()` は内部で `TopExp.MapShapes_s` を使うため**重複除去済み**で、
+kernel の `face_count` と一致する。**辺は一致しない**: `.edges()` は縮退辺(球の極・円錐の頂点・フィレットの角。長さ0)を除くので、
+辺の数と添字は kernel の `edge_count` / `edge_of`(選択・フィレット・`describe_edges` が共有する添字の体系)から取る。
+一方、次の2つは**OCCTの値そのものが契約**なので kernel へ委譲する:
 
 - 体積は `BRepGProp.VolumeProperties_s`(Eps無し)で求める。build123d の `Compound.volume` は
   ソリッドごとの合計を取る別経路なので使わない。
@@ -25,11 +26,11 @@ from . import kernel
 def describe_shape(shape: Any) -> dict:
     """形状の面・辺の数と種別内訳(平面/全周円筒/部分円筒/トーラス/円錐/spline)を返す。
 
-    `faces_by_type` の全キーの合計は常に `face_count` と一致する。
+    `faces_by_type` の全キーの合計は常に `face_count` と一致する。`edge_count` は縮退辺を含み、`describe_edges` の件数・
+    辺の選択で指せる添字の上限と同じ(build123d の `.edges()` の件数ではない)。
     """
     wrapped = _wrap(shape)
     faces = wrapped.faces()
-    edges = wrapped.edges()
 
     faces_by_type = {kind: 0 for kind in kernel.FACE_KINDS}
     for face in faces:
@@ -37,7 +38,7 @@ def describe_shape(shape: Any) -> dict:
 
     return {
         "face_count": len(faces),
-        "edge_count": len(edges),
+        "edge_count": kernel.edge_count(_unwrap(shape)),
         "faces_by_type": faces_by_type,
     }
 

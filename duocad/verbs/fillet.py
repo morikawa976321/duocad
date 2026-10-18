@@ -20,7 +20,7 @@ from .. import kernel
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
 from ..entry import entry
-from ._common import edge_entry, editable_body, normalize_values, reapply_shape, remember, undo_shape
+from ._common import edge_entry, editable_body, normalize_values, reapply_shape, remember, replayed_body, undo_shape
 
 VERB_FILLET = "fillet"
 
@@ -35,7 +35,7 @@ def fillet(
     if not edge_list:
         raise ValueError("fillet requires at least one edge")
 
-    body = editable_body(doc, body_id, what="fillet", require_visible=True)
+    body = editable_body(doc, body_id, what="fillet")
     values, stored_radius = normalize_values(edge_list, radius, label="radius")
     result = kernel.fillet_edges(body.shape, dict(zip(edge_list, values)))
 
@@ -55,7 +55,7 @@ def _do_fillet(document: Document, operation: Operation) -> None:
     args = operation.args
     edge_list = [int(index) for index in args["edges"]]
     values, _ = normalize_values(edge_list, args["radius"], label="radius")
-    body = editable_body(document, args["body_id"], what="fillet", require_visible=True)
+    body = replayed_body(document, args["body_id"], what="fillet")
     result = kernel.fillet_edges(body.shape, dict(zip(edge_list, values)))
     reapply_shape(document, body, result, operation)
 

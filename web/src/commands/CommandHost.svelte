@@ -65,7 +65,8 @@
     type TextArgSpec,
   } from './command'
   import { categoryOf } from './category'
-  import { evaluateExpression, isPlainNumber } from '../expression'
+  import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../expression'
+  import { isImeKey, ownsEnterKey } from '../keys'
   import type { CommandState, SelectionRef, SelectionState } from '../session'
   import { COMMAND_CATEGORY, COMMAND_PARAMS } from '../generated/protocol'
 
@@ -267,9 +268,6 @@
     built ?? (command !== null && commitsGhost(command) ? ghostBuilt : null),
   )
 
-  /** Enter・ボタン押し直しで確定できるか(`ready` か、幽霊が出ているか)。 */
-  const canCommit = $derived(commitSource !== null && overflow === '')
-
   /** いま要る引数だけ(`when` が偽のものを落とす)。入力欄・ボタンの描画はこれを通す。 */
   const liveArgs = $derived((command?.args ?? []).filter((spec: ArgSpec) => argApplies(spec, values)))
 
@@ -286,15 +284,12 @@
   )
 
   /** 打ってあるのに読めない式の理由(無ければ null)。読めない式は `values` に載らないので、生の文字列を見て打ち間違いと未入力を区別する。 */
-  const expressionError = $derived.by<string | null>(() => {
-    for (const spec of numberArgs) {
-      const raw = rawNumber(spec)
-      if (raw === '') continue
-      const evaluated = evaluateExpression(raw)
-      if (!evaluated.ok) return `${spec.label}: ${evaluated.reason}`
-    }
-    return null
-  })
+  const expressionError = $derived(
+    firstUnreadableExpression(numberArgs.map((spec) => ({ label: spec.label, raw: rawNumber(spec) }))),
+  )
+
+  /** Enter・ボタン押し直し・最後のクリックで確定できるか(`ready` か、幽霊が出ているか。読めない式が残っていれば確定しない)。 */
+  const canCommit = $derived(commitSource !== null && overflow === '' && expressionError === null)
 
   /** 式を打った欄の評価結果(素の数値だけなら空)。 */
   const expressionEcho = $derived.by(() => {
@@ -820,6 +815,10 @@
     overlayObserver?.disconnect()
     syncOverlayHeight(null)
     cancelPublish()
+    // 破棄後に満了すると、破棄済みのクロージャが `onPreview` を呼んで幽霊が新しいモードに残る(消す者がいない)。
+    // 幽霊自体は `App.svelte` の `onModeChanged` が消すので、ここでは止めるだけ。
+    if (previewTimer) clearTimeout(previewTimer)
+    previewTimer = null
   })
 
   /** スケッチ平面のクリックを、待っている点引数へ入れる。待っている点が無ければ何もしない(上書きすると、揃った後のクリックで図形が動いて見える)。 */
@@ -954,7 +953,7 @@
   }
 
   function placeholderFor(spec: NumberArgSpec): string {
-    const resting = spec.placeholder ?? spec.unit
+    const resting = spec.unit
     if (spec.fromPoints !== true || (numberText[spec.name] ?? '') !== '') return resting
     const named = ghostBuilt?.args[spec.name]
     const live =
@@ -965,6 +964,8 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
+    // IME の変換中の Esc(変換の取り消し)・Enter(候補の確定)はコマンドの中断・確定ではない。
+    if (isImeKey(event)) return
     if (event.key === 'Escape') {
       if (!commandActive) return
       event.preventDefault()
@@ -974,8 +975,8 @@
     // 点だけで引数が揃うコマンド(線分など)はEnterの受け皿が無いので、数値欄にフォーカスが無いときのEnterをここで拾う(欄にあるときは `onNumberKeydown` が拾う)。
     if (event.key !== 'Enter' || !canCommit) return
     const target = event.target as HTMLElement | null
-    // ボタンも除く: フォーカスの残ったボタン(undo等)のEnterを奪うと、そのボタンでなくコマンドが確定する。
-    if (target && ['INPUT', 'TEXTAREA', 'BUTTON'].includes(target.tagName)) return
+    // ボタン・選択肢も除く: フォーカスの残ったボタン(undo等)のEnterを奪うと、そのボタンでなくコマンドが確定する。
+    if (ownsEnterKey(target)) return
     event.preventDefault()
     commit()
   }
@@ -983,6 +984,7 @@
   /** 打ち込む欄(数値・文字列)でのEnter(確定)とTab(次の引数へ)。 */
   function onNumberKeydown(event: KeyboardEvent, spec: NumberArgSpec | TextArgSpec): void {
     if (event.key === 'Enter') {
+      if (isImeKey(event)) return
       event.preventDefault()
       commit()
       return

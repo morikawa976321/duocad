@@ -90,7 +90,7 @@ python topopt_checks/check_pre_smoothing.py --fields fields.npz --document model
 python -m pytest tests/test_pre_smoothing.py -q
 ```
 
-- `--run` は `selected-result` に記録された採用候補の `rho_clean` を読む(最後に評価した候補ではない)。除去前の場は同候補の密度へ保存済みの保持・除外マスクを
+- **`--run` は旧SIMP記録(2026-09-16 以前の密度場の記録)専用。今の記録には使えない**(今の `selected-result` は `status`・`termination`・`material_mm3`・`safety_factor`・`filled_cells` のスカラーだけで `rho_clean` を持たず、`KeyError` で終了コード2=判定不能になる)。今の記録には `--fields` で NPZ を渡す。旧記録では `selected-result` に記録された採用候補の `rho_clean` を読む(最後に評価した候補ではない)。除去前の場は同候補の密度へ保存済みの保持・除外マスクを
   製品と同じ順序で適用して復元し、目標安全率・閾値・許容応力・ヤング率・パーセンタイルも保存値を使う。採用記録がなければ推測せず判定不能。
 - `--fields` の npz は `rho_clean`・`rho_before`(保持・除外の塗り直し後、島除去前)・`origin`・`spacing`(同じ格子上の有限な0〜1の密度)。
   `--level`/`--allowable-mpa`/`--youngs-modulus-mpa`/`--percentile`/`--solver`(`cg` 既定か `direct`)で明示指定もできる。
@@ -298,8 +298,8 @@ F2000_h2.0_w2 の `finalize` の入力を書き出し、製品と同じ集合演
 ## ビューア表示とSTLエクスポートの同一性
 
 三角形分割の経路は3つ: (1) ビューア表示(`DocumentView.geometry` が `kernel.tessellate_selective`。ズームも注視面の指定も無い土台の粗さは `kernel.tessellate(shape, Session.deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)` と同じ)、
-(2) 記録用STL `final.stl`(`finalize.solid_mesh()` が `kernel.tessellate(shape, 0.2)` で作った配列をそのまま書く)、(3) `export_stl` MCPツール(`io_step.export_stl`)。
+(2) 記録用STL `final.stl`(`trace.final_mesh` が、`finalize` が合格させた最終メッシュ(manifold3d の集合演算の結果)の三角形を書く。`kernel.tessellate` は通らない)、(3) `export_stl` MCPツール(`io_step.export_stl`)。
 **(3)は全B-repで(1)の土台と同じ `kernel.tessellate` の三角形をそのまま書く**(本人判断: 適用範囲は最適化の結果に絞らず全B-rep)。OCCT純正の `StlAPI_Writer` で測り直す経路(`kernel.write_stl`)は削除した。
-一致は `tests/test_stl_export.py` がビット単位で固定する(曲面を持つ形・複数Body)。ズーム中の画面の粗さには合わせない(書き出しの粗さはカメラで変わらない。`tests/test_adaptive_resolution.py`)。
+一致は `tests/test_stl_export.py` がビット単位で固定する(曲面を持つ形・複数Body。面積0の三角形だけは書き出しで除く)。ズーム中の画面の粗さには合わせない(書き出しの粗さはカメラで変わらない。`tests/test_adaptive_resolution.py`)。
 **旧経路との差の実体は並列フラグではなく角度偏差だった**(旧0.5 rad、画面0.35 rad)。最適化の結果はマーチングキューブ由来の平面だけなので旧経路でも三角形は一致していた。
 変わったのは曲面を持つB-repで、同じ偏差でも細かくなる(hanger のB-rep 12 Body・63面、偏差0.2 mmで 9,460枚 → 13,508枚)。書き出し時間は旧経路の1.4〜2.7倍(いずれも0.5秒未満)。

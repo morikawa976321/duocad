@@ -19,9 +19,9 @@
 
 ## 面数・辺数のカウントのキャッシュ(`selection._coerce_refs`)
 
-- `_coerce_refs(doc, refs, *, bodies=None, counts=None)` は face/edge/vertex 参照を `(body_id, kind)` ごとに `kernel.face_count` / `edge_count` / `count_subshapes` を1回だけ呼んで使い回す。戻り値・例外の型とメッセージは `_coerce_ref` を1件ずつ呼んだときと同じ。モジュール内部関数(外から直接呼ぶ経路を増やさない)。戻りは入力 `refs` と1対1・同順。
+- `_coerce_refs(doc, refs, *, bodies=None, counts=None, allow_hidden=False)` は face/edge/vertex 参照を `(body_id, kind)` ごとに `kernel.face_count` / `edge_count` / `count_subshapes` を1回だけ呼んで使い回す。戻り値・例外の型とメッセージは `_coerce_ref` を1件ずつ呼んだときと同じ。モジュール内部関数(外から直接呼ぶ経路を増やさない)。戻りは入力 `refs` と1対1・同順。
 - **`modify_selection` は `add` 用・`remove` 用の2回の `_coerce_refs` 呼び出しへ同じ `bodies`/`counts` 辞書を渡す**(引数の副作用で共有)。新しい辞書だと同じボディの面が混ざったとき最大2回数える(実物27ボディで `_face_map` 42回→27回)。`set_selection` は単発なので既定でよい。
-- **可視性の門番 `_visible_body` は body_id ごとに最低1回は必ず通す**。キャッシュしてよいのは数え上げであって門番ではない(不可視ボディへの参照が通ると AI が人の隠したものを黙って選ぶ)。`tests/test_face_count_once_per_body.py` の `test_hidden_body_face_ref_is_refused_through_{modify,propose}_selection` が押さえる。
+- **可視性の門番は参照ごとに必ず通す**(`bodies` に入っているボディでも `visible` を見る。辞書は `allow_hidden` の違う呼び出しの間で共有されうる)。キャッシュしてよいのは数え上げであって門番ではない(不可視ボディへの参照が通ると AI が人の隠したものを黙って選ぶ)。門を外すのは外す側(`modify_selection` の `remove`・`toggle_selection` で選択に入っている参照)だけ: 隠したボディの項目は選択に残るので、外せないと「いまの選択を外して新しく選ぶ」が丸ごと拒否される。`tests/test_face_count_once_per_body.py` の `test_hidden_body_face_ref_is_refused_through_{modify,propose}_selection` が押さえる。
 - **キャッシュ鍵は `(body_id, kind)` の両方**。`kind` を落とすと面数と辺数が入れ替わる(既存 pytest が捕まえる)。`body_id` を落とすと違うボディの面数が使い回される(**`two_shapes` fixture(箱+円柱)でしか捕まらない**)。
 - **キャッシュの寿命は「1回の呼び出し」のローカル変数**。`kernel.py`・モジュールレベル・`Document`/`Body` レベルへ持ち出さない。
 - **検査設計の罠**: 既存 pytest は全 fixture が同一寸法の箱(面6/辺12/頂点8)で、違うボディの面数の取り違えを検出できなかった。fixture を増やすなら**形状の種類まで変える**(寸法違いの箱では検出力は上がらない)。「1回の呼び出しで」という条件があるときは、内部で同じ処理を複数回行う経路(`add`/`remove` の2回)を洗い出して検証する。
@@ -51,7 +51,7 @@
 ## ピックの優先順位・頂点待ち(`preferVertices`)
 
 - **角の頂点は既定のピック順序では取れない**。`resolveHit` は辺を頂点より先に見る(フィレット中に辺の端を掴むため)ので、辺が常に出ていると頂点狙いのクリックが100%辺に取られる(症状は「クリックしても何も起きない」だけ)。待っている間だけ `viewport.preferVertices(true)` で順序を入れ替える。**出しっぱなしにしない**(戻す責任は要求側)。
-- 頂点マーカーは選択に入ったものしか出ない=指せる的が画面に無いので、待っている間だけ対象ボディの全頂点を候補として出す(`vertexCandidateBody`、`__duocad.wantedPick` とともに実機検査用の穴。製品の分岐に使わない)。待ち受けが降りた瞬間に消える。
+- 頂点マーカーは選択に入ったものしか出ない=指せる的が画面に無いので、待っている間だけ対象ボディの全頂点を候補として出す(`vertexCandidateBody`。`__duocad.wantedPick` は実機検査用の穴で、製品の分岐に使わない)。待ち受けが降りた瞬間に消える。
 - メッシュボディのピックは `App.svelte` の `pickedRef` でボディ参照へ畳む(畳まないと `select_face` が断り、ドラッグの一括選択が丸ごと落ちる)。`dedupeRefs` を外さない(重複 `{kind:"body"}` が `modify_selection` へ並ぶ)。**スケッチを貼る先だけは畳まず断る**。詳細は ui-optimize-integration.md。
 
 ## 頂点マーカー・分割モジュール(`viewport.ts` と兄弟)
@@ -61,7 +61,7 @@
 - **公開面を増やさない**: `viewport.ts` の `export` は `createViewport` + `Viewport` + 型 + `FOV_DEFAULT/FOV_ORTHO` + `isSelectableFov`。新モジュールの `create*`/`*Deps` を再エクスポートしない。`viewportConstants.ts` を `App.svelte` から import しない。three.js の型を Svelte 層へ出さない不変条件は「`viewport.ts` とその兄弟群の外へ出さない」。
 - **`camera` は `let` で、投影切替(`activateCamera`)のたびに差し替わる**。`viewCubeOverlay` と `vertexMarkers` は値ではなく `camera()` ゲッターで受け、各関数の先頭で `const camera = deps.camera()` を取る。値で渡すと正投影へ切り替えた後も古いカメラを使い続け、**型検査も実機 smoke も通ったまま**「見えている角をクリックしたのに隣が取れる」になる。
 - **`THREE.Object3D.DEFAULT_UP.copy(WORLD_UP)` はモジュール読み込み時の副作用**で `viewportConstants.ts` にある。`OrbitControls` は生成時の `object.up` を焼き込み、`HemisphereLight` は `position` に `DEFAULT_UP` を複写するので、**この行より前にカメラ・controls・ライトを `new` してはいけない**。`viewportConstants.ts` を `import type` だけにすると `verbatimModuleSyntax` で丸ごと消えこの副作用も消える(いまは値 `LAYER` 等を import しているので生きている)。
-- `highlightColor` は共有オブジェクトの参照渡し(`vertexMarkers` が `highlightColor.vertex` を書き、`viewport.ts` の `highlightColors()` が読む。値渡しにすると色の検査だけが静かに古い値で通る)。`VertexMarkersDeps` は `pickPointsAt` を使い、`size`/`camera`/`raycaster`/`worldPerPixel` は持たない。
+- `VertexMarkersDeps` は `pickPointsAt` を使い、`size`/`camera`/`raycaster`/`worldPerPixel` は持たない。
 - `setOptimizeState` は2箇所: 役割の表(`bodyRoles`/`fixtureFaceKeys`→`applyFaceMaterials`)は `viewport.ts`、装飾の生成は `optimizeAnnotations.draw(state)`。**`clear()`→役割→`applyFaceMaterials()`→`draw()` の順序に意味がある**(`draw` を先に呼ぶと役割色が1フレーム遅れる)。
 - `pointerDown`/`pointerUp` は**キューブが引き取ったら `true`** を返し、`viewport.ts` の `onPointerDown`/`onPointerUp` がその戻り値で早期 return する。`optimizeAnnotations`/`optimizeDebug`/`vertexMarkers` にグループを自分で `scene` へ足す実装へ変えない(初回フレーミングと near/far の計算対象が変わる)。
 - 分割が純粋な移設であることは、テキスト一致(連結差分ゼロ。挿入した `const camera = deps.camera()` 等を除く)と公開面差分ゼロで機械確認する。
@@ -87,9 +87,9 @@
 
 - サーバ: `optimize_run.run(..., debug=None, debug_kinds=None)`(`Session.run_optimization` が素通し)。`debug` は `Callable[[dict], None]`、`debug_kinds` は `DEBUG_KINDS=("space","anchors","rho")` の部分集合。**頼まなければ配列を1本も作らない**。形は素の値のみ(`json.dumps` が通る): `{"kind":"space"|"rho","stage":"derive"|"mapping"|"final","grid":{origin,spacing,shape},"elements":[C順の通し添字],"total","shown","stride"}`(`rho` は `"threshold":0.5`)／`{"kind":"anchors","stage","grid","fixed":{face,count,points,area_mm2},"load":{...}}`(`points` はワールド mm の平坦配列)。定数 `DEBUG_VOXEL_LIMIT`(15万)/`DEBUG_KINDS`/`DEBUG_RHO_THRESHOLD`(0.5)。**`run()` の戻り値にデバッグの中身は入っていない**(`debug` コールバックだけで配る)。
 - **`stage`**: `"derive"`(塊の導出直後)／`"mapping"`(`anchors`=境界条件の確定直後。探索・FEM が使う確定表の節点)／`"final"`(`rho`=探索後の最終確定マスク。0/1 の二値)。塊(`space`)は探索を通して1つ。
-- WS: `run_optimization` メッセージの `debug: [...]`。`DEBUG_KINDS` に無い文字列は落とす。頼まれたときだけ `{"type":"optimize_debug",...}` を配る(**進捗とは別の口**。進捗に混ぜない)。画面: `debugFlags.ts` の `readDebugFlags(location.search)`(`?debug=space` / `?debug=anchors`、カンマでも `&` でも複数指定可、`?voxel=1`)、`viewport.setOptimizeDebug(state | null)`(まるごと差し替え。`anchors` には `grid` を必ず入れる=球半径 `spacing*0.34` の基準)。検査の穴 `__duocad.debugFlags/optimizeDebugCounts/optimizeDebugPayloads`。
+- WS: `run_optimization` メッセージの `debug: [...]`。`DEBUG_KINDS` に無い文字列は落とす。頼まれたときだけ `{"type":"optimize_debug",...}` を配る(**進捗とは別の口**。進捗に混ぜない)。画面: `debugFlags.ts` の `readDebugFlags(location.search)`(`?debug=space` / `?debug=anchors`、カンマでも `&` でも複数指定可、`?voxel=1`)、`viewport.setOptimizeDebug(state | null)`(まるごと差し替え。`anchors` には `grid` を必ず入れる=球半径 `spacing*0.34` の基準)。
 - **フラグが無いときの画面は1ピクセルも変わらない**: `App.svelte` はフラグが1つも立っていなければ `setOptimizeDebug(null)` すら呼ばない。**デモ題材に固定しない**(材料はいま走らせた最適化から取る)。
-- **面アンカーの球は `depthTest: false`**(落とすと裏側の節点が見えない)。見張りは固定と荷重の**両方**の材質を見る。
+- **面アンカーの球は `depthTest: false`**(落とすと裏側の節点が見えない)。
 - **セル中心の規約**(`duocad/topopt/mesh.py` 付近): 要素 (i,j,k) の中心は `origin + spacing*(i+0.5,...)`、節点は `origin + spacing*(i,...)`。**変換点は `optimizeDebug.ts` の `buildDebugVoxels` の1箇所だけ**(サーバは素の添字を送る)。両側で足すと半要素ずれる(絵は出るので目視で気づけない)。上限超過は**間引いて** `stride/total/shown` を payload に出す(黙って全部送らず、黙って切り捨てない)。
 - **罠**: `viewport?.setOptimizeDebug({...})` と直接書くと、この `$effect` は二度と再実行されない(初回 `viewport` が `null` でオプショナル連鎖が引数評価ごと短絡し依存を1つも登録できない。症状は「フラグを付けても何も出ない」で `npm run check` にもコンソールにも出ない)。**依存を先にローカルへ読み切ってから呼ぶ**。`$state` は入れ子まで Proxy なので、素のスプレッドで `window.__duocad` へ出すと puppeteer の `evaluate` で入れ子だけ `{}` になる。`$state.snapshot()` を通す。
 - 失敗・中断のあともデバッグ表示を消さない(失敗したときこそ塊を見たい。次の実行が `runOptimization()` の先頭で消す)。`?voxel=1` で結果メッシュとボクセルが数十ms重なるのは過渡として受容。

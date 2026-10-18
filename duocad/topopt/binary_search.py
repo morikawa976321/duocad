@@ -136,10 +136,7 @@ def _boundary_signature(conditions: SearchConditions) -> dict:
 
 
 def evaluation_identifier(conditions: SearchConditions) -> str:
-    """格子・境界条件・物性・応力規則・検査許容差から評価条件の識別子を作る(§4.1)。
-
-    `visited` はこの識別子とマスクハッシュの組をキーにする(形状ハッシュだけでは別入力の同形の合否を再利用してしまう)。
-    """
+    """格子・境界条件・物性・応力規則・検査許容差から評価条件の識別子を作る(§4.1)。"""
     payload = dict(
         grid=conditions.grid.as_dict(),
         fixed_faces=sorted(conditions.fixed_faces),

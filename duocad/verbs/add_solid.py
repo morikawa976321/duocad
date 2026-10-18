@@ -20,7 +20,7 @@ def _do(document, operation):
 
 
 def _undo(document, operation):
-    document.remove_body(operation.args['body_id'])
+    document.remove_added_body(operation.args['body_id'])
 
 
 register_verb('add_solid_body', do=_do, undo=_undo)

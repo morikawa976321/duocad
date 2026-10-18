@@ -10,7 +10,7 @@ import pytest
 
 from duocad.document import Document
 from duocad.region import regions
-from duocad.sketch import add_circle, add_line, sketch_create
+from duocad.sketch import add_circle, add_ellipse, add_line, add_rectangle, sketch_create
 
 CIRCLE_RADIUS = 20.0
 #: 実測値。真値は π·20² = 1256.6370614… で、下の許容差の中に入る
@@ -101,3 +101,56 @@ def test_regions_of_an_unknown_sketch_fails():
 
     with pytest.raises(KeyError):
         regions(document, "sketch-does-not-exist")
+
+
+def test_a_region_that_cannot_be_tessellated_does_not_empty_the_sketch(monkeypatch):
+    """1領域の三角形化の失敗は、その領域だけを空にして警告に残し、ほかの領域は配る。落ちたら、1領域の失敗でスケッチ全体の
+    領域が一覧から消える(領域ピックが使えなくなる)。"""
+    import tempfile
+
+    from duocad import kernel, region
+    from duocad.server import Session
+
+    session = Session(0.2, models_dir=tempfile.mkdtemp())
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 10.0)
+    session.add_rectangle(sketch_id, [20.0, 0.0], 5.0, 5.0)
+
+    real = kernel.tessellate
+    calls = []
+
+    def flaky(face, deviation, *args):
+        calls.append(face)
+        if len(calls) == 1:
+            raise ValueError("三角形分割が1面も取れなかった")
+        return real(face, deviation, *args)
+
+    monkeypatch.setattr(kernel, "tessellate", flaky)
+
+    listed = next(item for item in session.state_meta()["sketches"] if item["sketch_id"] == sketch_id)["regions"]
+
+    assert [item["index"] for item in listed] == [1, 2]
+    assert [bool(item["indices"]) for item in listed] == [False, True]
+    assert listed[0]["area"] == pytest.approx(100.0) and listed[1]["area"] == pytest.approx(25.0)
+    assert any("領域 1 を三角形にできない" in warning for warning in session.warnings)
+    with pytest.raises(ValueError):
+        calls.clear()
+        region.regions_with_geometry(session.document, sketch_id, 0.2)
+
+
+@pytest.mark.parametrize("kind", ["rotated_rectangle", "ellipse"])
+def test_equal_area_regions_stacked_at_one_x_are_ordered_by_v_whatever_the_integration_noise(kind):
+    """同じ形の領域を同じ x に縦に積むと、重心の u は理論上等しいが OCCT の積分で 1ulp ずれる。ずれが v より先に効くと
+    添字が (u, v) の昇順にならず、`move_sketch_entities` の undo のように座標が bit 単位で戻らない編集で添字が入れ替わる。
+    落ちたら、順序のタイブレークが丸めていない u で決まっている。"""
+    for step in range(60):
+        x = 5.36144545611692 + 0.0137 * step
+        document = Document()
+        sketch_id = sketch_create(document, "XY")
+        for k in range(3):
+            if kind == "rotated_rectangle":
+                add_rectangle(document, sketch_id, (x, 30.0 * k + 0.7), 10.3, 7.1, 33.0)
+            else:
+                add_ellipse(document, sketch_id, (x, 30.0 * k + 0.7), 10.3, 7.1, 33.0)
+        ys = [item.centroid[1] for item in regions(document, sketch_id)]
+        assert ys == sorted(ys) and len(ys) == 3, f"x={x!r}: {ys}"

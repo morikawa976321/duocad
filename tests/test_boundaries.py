@@ -20,7 +20,7 @@ DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 # `kernel_sketch.py`(スケッチ平面の枠・図形の辺・領域検出)・
 # `kernel_extrude.py`(面と領域の押し出し)は
 # **カーネル層の一部**であって verb 層ではない —— `kernel.py` が大きいので
-# 役割ごとに分けてあるだけである。この6本の外でOCPを叩いたら落ちる。
+# 役割ごとに分けてあるだけである。この一覧の外でOCPを叩いたら落ちる。
 OCP_ALLOWED = frozenset(
     {
         "kernel.py",
@@ -34,9 +34,7 @@ OCP_ALLOWED = frozenset(
         "topopt/voxelize.py",
     }
 )
-BUILD123D_ALLOWED = frozenset(
-    {"query.py", "topopt/voxelize.py", "topopt/anchor.py", "topopt/design_space.py"}
-)
+BUILD123D_ALLOWED = frozenset({"query.py"})
 # 「実際に import している」ことを確かめる本体側の1本(境界検査が機能する前提)
 OCP_CORE = "kernel.py"
 

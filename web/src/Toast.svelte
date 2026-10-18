@@ -128,7 +128,7 @@
      同じクラスにすると知らせの札で検査が赤くなる。 -->
 <div id="toasts" class="toasts" role="log" aria-live="assertive" aria-relevant="additions">
   {#each items as item (item.id)}
-    <div class="toast" class:info={item.kind === 'info'} data-toast-id={item.id} data-toast-kind={item.kind}>
+    <div class="toast" class:info={item.kind === 'info'}>
       <span class={item.kind === 'info' ? 'toast-info-text' : 'toast-text'}>{item.message}</span>
       {#if item.count > 1}
         <span class="toast-count">{item.count}回</span>

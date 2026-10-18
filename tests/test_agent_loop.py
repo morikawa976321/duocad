@@ -55,7 +55,7 @@ class SpyTools:
 
 
 def tools() -> DocumentTools:
-    return DocumentTools(Session(None, 0.2))
+    return DocumentTools(Session(0.2))
 
 
 def envelope_code(result) -> str:
@@ -497,6 +497,67 @@ def test_an_id_in_the_prompt_is_not_mistaken_for_a_dimension():
     assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
 
 
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "boxをZ-5mm下げて",
+        "M8-30のボルト穴を開けて",
+        "t-2mmの板になるよう押し出して",
+        "x_10だけずらして",
+        "R3-R5で丸めて",
+        "wall-5ミリにして",
+        "半径は三ミリで角を丸めて",
+        "直径を十ミリにして",
+        "五十mmで押し出して",
+        "九十度回転して",
+        "二点五ミリ丸めて",
+    ],
+)
+def test_a_quantity_written_as_a_notation_or_in_kanji_is_not_taken_for_none_given(prompt: str):
+    """落ちたら、数量を言った依頼が `dimension_not_given` で止まり、人が言い直すまで進まない。
+    英字+区切り+数値の寸法の書き方を識別子として消す、または数字を含まない漢数字の量を見落とす。"""
+    provider = RecordedProvider([tool_use("fillet", {"radius": 3}, "c0"), spoke("done")])
+
+    run = AgentLoop(tools(), provider).run(prompt)
+
+    assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "sketch-1c72a3c7ab12の角を丸めておいて",
+        "entity-75aaを丸めて",
+        "Bracket-2の角を丸めて",
+        "二度と同じ失敗をしないように角を処理して",
+        "四角いボディの角を処理して",
+        "一番上の角をいい感じに丸めて",
+    ],
+)
+def test_a_name_or_a_kanji_word_that_is_not_a_quantity_still_stops_the_guess(prompt: str):
+    """落ちたら、識別子の数字や「四角」「二度と」の漢数字を量と読んで、人が寸法を言っていない依頼の捏造を通す。"""
+    provider = RecordedProvider([tool_use("fillet", {"radius": 2}, "c0"), spoke("やめた")])
+
+    run = AgentLoop(tools(), provider).run(prompt)
+
+    assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
+
+
+@pytest.mark.parametrize("unit", ["a", "a-", "一", "a_1"])
+def test_the_quantity_check_takes_time_in_proportion_to_the_length(unit: str):
+    """落ちたら、貼り付けた長い英数字の連続(base64・16進ダンプ)が、寸法付きツールを呼ぶたびに数秒の二乗時間を食う
+    (区切りの無い5万文字で約8秒だった。比例なら数ミリ秒)。"""
+    import time
+
+    from duocad.agent.loop import _mentions_a_quantity
+
+    filler = unit * (50_000 // len(unit))
+    started = time.perf_counter()
+    _mentions_a_quantity(filler)
+
+    assert time.perf_counter() - started < 1.0
+
+
 def test_the_cancel_flag_stops_the_loop_between_tool_calls():
     surface = tools()
     cancellation = Cancellation()
@@ -640,6 +701,26 @@ def test_a_truncated_turn_stops_before_running_its_tool_calls():
     assert [r.call_id for r in results] == ["c1", "c2"]
     assert all(r.ok is False for r in results)
     assert "上限" in json.loads(results[0].content)["error"]["message"]
+
+
+def test_a_refused_turn_stops_before_running_its_tool_calls():
+    """落ちたら、プロバイダが断った応答に付いてきたツール呼び出しが走り、断られたはずの依頼が `completed` で文書を変える。"""
+    surface = SpyTools(tools())
+    refused = ProviderReply(
+        tool_calls=(ToolCall(id="c1", name="describe_document", arguments={}),),
+        stop_reason="refusal",
+        stop="refusal",
+    )
+    provider = RecordedProvider([refused, spoke("ここへは来ない")])
+    loop = AgentLoop(surface, provider)
+    run = loop.run("なにか")
+
+    assert surface.calls == []
+    assert run.status == "refusal" and run.tool_calls == ()
+    assert len(provider.requests) == 1
+    results = loop.turns[-1].results
+    assert [r.call_id for r in results] == ["c1"] and all(r.ok is False for r in results)
+    assert "断った" in json.loads(results[0].content)["error"]["message"]
 
 
 def test_the_conversation_continues_across_runs_until_reset():

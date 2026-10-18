@@ -47,8 +47,10 @@ from ._common import (
     finite_numbers,
     inverse_move_args,
     is_rotation,
+    overlaps_original,
     reject_foreign_args,
     require_move_mode,
+    require_same_uv_plane,
     rotation_degrees,
 )
 
@@ -98,7 +100,7 @@ def _write_params(doc: Document, entity: Entity, values: Dict[str, float]) -> No
     名前つきの値なら文書のパラメータ表を書き換える(`d3` を 12.0 にする)。素の数値のまま持つ図形
     (取り込んだベジエ)は `Entity.params` を直接書き換える。まだ持っていないキーは名前つきの値として
     新しく登録する(`angle` を持たない時代のログから再生した長方形を回すとここへ来る。再生でも同じ
-    順序で起きるので `d<n>` の割り当ては変わらない)。
+    順序で起きるので `d<n>` の割り当ては変わらない。undo は `_restore_previous` がそのキーと名前を外す)。
     """
     for key, value in values.items():
         ref = entity.params.get(key)
@@ -184,6 +186,8 @@ def _rotation_args(
             str(center_entity["entity"]),
             center_entity.get("point"),
         )
+        for target_sketch in {item["sketch"] for item in targets}:
+            require_same_uv_plane(doc, str(center_entity["sketch"]), target_sketch, what="回転中心")
     elif center is not None:
         numbers = finite_numbers(center, 2, what="center", form="[u, v]")
         resolved = (numbers[0], numbers[1])
@@ -278,14 +282,14 @@ def _apply(doc: Document, targets: Sequence[dict], transform: Callable) -> None:
 
 
 def _copy(
-    doc: Document, targets: Sequence[dict], transform: Callable, new_ids: Sequence[str]
+    doc: Document, targets: Sequence[dict], transform: Callable, new_ids: Sequence[str], *, fresh: bool
 ) -> List[str]:
     """`copy=True` の本体。対象が属する**図形をまるごと**複製して EntityId を返す。
 
     `new_ids` は作るIDの並び(再生では記録したものを渡す)。同じ図形を指す対象が複数あっても複製は1つ。
 
     **元と完全に重なる複製は作らない**(ValueError。円をその中心まわりに回すと起きる。領域検出が
-    同じ辺を2本見る)。
+    同じ辺を2本見る)。重なりの判定は `overlaps_original`(`fresh` は新しく作る複製)。
     """
     plan = _entities_to_copy(targets)
     if len(new_ids) != len(plan):
@@ -299,7 +303,7 @@ def _copy(
         entity = get_entity(sketch, entity_id)
         current = parameters.resolve_all(doc, entity.params)
         values = transform(entity.kind, current, None)
-        if values == current:
+        if overlaps_original(values, current, fresh=fresh):
             raise ValueError(
                 f"move_sketch_entities: 複製 {entity_id!r} が元と完全に重なる"
                 "(回転中心が図形の中心と一致している)"
@@ -379,21 +383,18 @@ def move_sketch_entities(
     }
     transform = _params_transform(args)
 
+    logged = {**args}
     if copy:
         new_ids = [new_entity_id() for _ in _entities_to_copy(normalized)]
-        created = _copy(doc, normalized, transform, new_ids)
+        created = _copy(doc, normalized, transform, new_ids, fresh=True)
     else:
         created = []
+        previous = _previous_params(doc, normalized)
         _apply(doc, normalized, transform)
+        logged["previous"] = previous
 
-    return doc.log.append(
-        VERB_MOVE_SKETCH_ENTITIES,
-        {
-            **args,
-            # 複製したIDはログが持つ(再生で同じIDになる)。
-            "created": list(created),
-        },
-    )
+    # 複製したIDはログが持つ(再生で同じIDになる)。
+    return doc.log.append(VERB_MOVE_SKETCH_ENTITIES, {**logged, "created": list(created)})
 
 
 # --------------------------------------------------------------------------------------
@@ -405,20 +406,52 @@ def _do_move_sketch_entities(document: Document, operation: Operation) -> None:
     targets = [dict(item) for item in args["targets"]]
     transform = _params_transform(args)
     if args.get("copy"):
-        _copy(document, targets, transform, list(args.get("created") or []))
+        _copy(document, targets, transform, list(args.get("created") or []), fresh=False)
     else:
         _apply(document, targets, transform)
 
 
-def _undo_move_sketch_entities(document: Document, operation: Operation) -> None:
-    """undo: 複製なら作った図形を消し、移動なら逆向きに同じ量を動かす(回転は逆角度)。
+def _previous_params(doc: Document, targets: Sequence[dict]) -> List[dict]:
+    """動かす前の、対象の図形ごとの解決済みの `params`(undo が書き戻す。図形ごとに1件、出現順)。"""
+    previous: List[dict] = []
+    seen: set = set()
+    for item in targets:
+        key = (item["sketch"], item["entity"])
+        if key in seen:
+            continue
+        seen.add(key)
+        entity = get_entity(get_sketch(doc, item["sketch"]), item["entity"])
+        previous.append(
+            {"sketch": item["sketch"], "entity": item["entity"], "params": parameters.resolve_all(doc, entity.params)}
+        )
+    return previous
 
-    移動前の値を args に控えて書き戻す形にしないのは、`rebuild()` で土台の値が変わると控えが
-    古いまま復元されうるため。丸めで1ulpずれうるが、幾何の許容差(1e-9mm未満)よりはるかに小さい。
+
+def _restore_previous(doc: Document, previous: Sequence[dict]) -> None:
+    """動かす前の値をそのまま書き戻す。動かしたときに新しく足したキー(`angle` を持たない旧い長方形の回転)は、
+    名前つきの値ごと外す。"""
+    entities = [
+        (get_entity(get_sketch(doc, item["sketch"]), item["entity"]), item["params"]) for item in previous
+    ]
+    for entity, saved in entities:
+        _write_params(doc, entity, saved)
+        for key in [key for key in entity.params if key not in saved]:
+            parameters.release_param_refs(doc, {key: entity.params.pop(key)})
+
+
+def _undo_move_sketch_entities(document: Document, operation: Operation) -> None:
+    """undo: 複製なら作った図形を消し、移動なら動かす前の値(`previous`)を書き戻す。
+
+    逆向きに同じ量を動かすと `x + dx - dx != x` で1ulpずれ、領域の並び(同面積の領域の添字)が再生した
+    文書と食い違う。`previous` を持たない旧ログだけ逆向きに動かす(回転は逆角度。この経路は書き戻しが
+    ずれうるうえ、足したキーを外せない)。
     """
     args = operation.args
     if args.get("copy"):
         remove_entities(document, args.get("created") or [])
+        return
+    if args.get("previous") is not None:
+        _restore_previous(document, args["previous"])
         return
     _apply(
         document,

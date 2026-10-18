@@ -114,6 +114,6 @@ def test_the_running_server_applies_the_allowlist(monkeypatch, tmp_path):
     args = mcp_server.parse_args(
         ["--port", str(port), "--http-port", str(_free_port()), "--web-dist", str(tmp_path / "no-dist")]
     )
-    asyncio.run(mcp_server._run(Session(None, 0.2), args))
+    asyncio.run(mcp_server._run(Session(0.2), args))
 
     assert outcomes == {"http://evil.example.com": False, None: True}

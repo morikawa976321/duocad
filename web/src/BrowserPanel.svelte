@@ -19,6 +19,8 @@
    * `position: absolute` で `.stage` の上に浮くので、開閉してもカメラのアスペクトは変わらない
    * (`Toast.svelte` と同じ。`styles.css` の「ビューポートのサイズを変えるのは .viewport だけ」)。
    */
+  import { isImeKey } from './keys'
+  import { renameTarget } from './renameDraft'
   import type { BasePlaneName, BodyMeta } from './session'
   import type { SectionState } from './viewport'
 
@@ -67,7 +69,7 @@
     section: SectionState
     onSectionToggle: (on: boolean) => void
     onSectionPlane: (plane: BasePlaneName) => void
-    /** 数式のまま渡す(評価と失敗のトーストは App)。受け付けたら true。 */
+    /** 数式のまま渡す(評価と失敗のトーストは App)。受け付けたら true。欄は結果によらず状態に戻す(`commitPosition`)。 */
     onSectionPosition: (text: string) => boolean
     onSectionInvert: (inverted: boolean) => void
   } = $props()
@@ -84,12 +86,14 @@
 
   function commitPosition(event: Event): void {
     const input = event.target as HTMLInputElement
-    // 同じ値に評価される式(`10/2` → 5 のまま)では Svelte が欄を書き直さないので、自分で戻す。
-    if (onSectionPosition(input.value)) input.value = formatPosition(section.position)
+    onSectionPosition(input.value)
+    // 欄を状態に戻す。同じ値に評価される式(`10/2` → 5 のまま)では Svelte が欄を書き直さないのでここで戻す。
+    // 読めない式(`abc`・`1/0`)は位置が変わらない(理由はトーストが言う)ので、不正な文字を欄に残さず直前の位置に戻す。
+    input.value = formatPosition(section.position)
   }
 
   function blurOnEnter(event: KeyboardEvent): void {
-    if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+    if (event.key === 'Enter' && !isImeKey(event)) (event.target as HTMLInputElement).blur()
   }
 
   let open = $state(true)
@@ -104,17 +108,19 @@
     renamingId = id
   }
 
-  /** 空・今と同じなら送らずに閉じる。`id` で自分の行かを確かめる: Enter で閉じた欄の blur は DOM から外れるときに遅れて届き、
+  /** 空・今と同じなら送らずに閉じる(前後の空白は落として送る。`renameTarget`)。`id` で自分の行かを確かめる: Enter で閉じた欄の blur は DOM から外れるときに遅れて届き、
    *  その間に別の行の ✎ が押されていると、相手の行の下書きを自分の名前で確定してしまう。 */
   function commitRename(id: string, current: string): void {
     if (renamingId !== id) return
     renamingId = null
-    if (draft.trim() === '' || draft === current) return
-    onRename(id, draft)
+    const next = renameTarget(draft, current)
+    if (next !== null) onRename(id, next)
   }
 
   /** Esc は窓まで届かせない: `CommandHost` の窓の keydown が入力欄の Esc も拾って、起動中のコマンドまで中断する。 */
   function renameKey(event: KeyboardEvent, id: string, current: string): void {
+    // IME の変換中の Enter(候補の確定)・Esc(変換の取り消し)は名前の確定・取り消しではない。
+    if (isImeKey(event)) return
     if (event.key === 'Enter') commitRename(id, current)
     else if (event.key === 'Escape') {
       event.stopPropagation()
@@ -158,7 +164,6 @@
           <input
             id="origin-visible-toggle"
             type="checkbox"
-            class="visible-toggle"
             checked={originVisible}
             onchange={(event) => onToggleOrigin((event.target as HTMLInputElement).checked)}
             title={originVisible ? '原点・軸・平面を隠す' : '原点・軸・平面を表示'}
@@ -172,7 +177,6 @@
           <input
             id="section-toggle"
             type="checkbox"
-            class="visible-toggle"
             checked={section.on}
             onchange={(event) => onSectionToggle((event.target as HTMLInputElement).checked)}
             title={section.on ? '断面をやめる' : '断面で切る'}
@@ -209,7 +213,6 @@
               <input
                 id="section-invert"
                 type="checkbox"
-                class="visible-toggle"
                 checked={section.inverted}
                 onchange={(event) => onSectionInvert((event.target as HTMLInputElement).checked)}
               />
@@ -233,7 +236,7 @@
             <li class="empty dim">ボディが無い</li>
           {/if}
           {#each bodies as body (body.body_id)}
-            <li class="parts-row" class:hidden-row={!body.visible} data-body-id={body.body_id}>
+            <li class="parts-row" class:hidden-row={!body.visible}>
               {#if renamingId === body.body_id}
                 <input
                   class="rename-input"
@@ -247,7 +250,6 @@
                 <label class="parts-name">
                   <input
                     type="checkbox"
-                    class="visible-toggle"
                     checked={body.visible}
                     onchange={(event) =>
                       onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
@@ -256,12 +258,12 @@
                 </label>
                 <span class="dim parts-count">{body.face_count}面</span>
                 <button
-                  class="row-action rename-button"
+                  class="row-action"
                   onclick={() => startRename(body.body_id, body.name)}
                   title="名前を変える">✎</button
                 >
                 <button
-                  class="row-action delete-button"
+                  class="row-action"
                   onclick={() => onDeleteBody(body.body_id)}
                   title="このボディを消す(Ctrl+Zで戻る)">✕</button
                 >
@@ -295,7 +297,6 @@
               <!-- 編集中のスケッチは隠せない(トグルを無効にする): 描いている最中に自分の図形が消えると、次のクリックが何を指すか分からなくなる。 -->
               <input
                 type="checkbox"
-                class="visible-toggle"
                 checked={sketch.visible}
                 disabled={sketch.sketch_id === activeSketchId}
                 onchange={(event) =>
@@ -332,12 +333,12 @@
                   <span class="dim sketch-count">図形{sketch.entities.length}</span>
                 {/if}
                 <button
-                  class="row-action rename-button"
+                  class="row-action"
                   onclick={() => startRename(sketch.sketch_id, sketch.name ?? sketchLabel(sketch))}
                   title="名前を変える">✎</button
                 >
                 <button
-                  class="row-action delete-button"
+                  class="row-action"
                   onclick={() => onDeleteSketch(sketch.sketch_id)}
                   title="このスケッチを図形ごと消す(押し出したボディは残る。Ctrl+Zで戻る)">✕</button
                 >

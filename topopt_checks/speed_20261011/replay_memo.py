@@ -1,5 +1,7 @@
-r"""終盤の再現で peel を PeelMemo に替える。--verify なら毎回本物の peel も呼んで候補・手を突き合わせる。
-探索の軌道(各評価の候補セル数・安全率)を JSON に残し、memo なしの軌道と比べられるようにする。
+r"""終盤の再現で、段階4の `PeelWalk.take` の呼び出し回数と秒を数え、探索の軌道(各評価の候補セル数・安全率)を JSON に残す。
+
+段階4は `PeelWalk` を直接使い `binary_search.peel()` を呼ばないので、`peel` の差し替えは効かない。PeelMemo(`peel_resume.py`)との
+新旧の突き合わせはここではしない(PeelMemo は `scar` を持たず、現行の探索とは突き合わせられない)。
 """
 from __future__ import annotations
 
@@ -17,52 +19,27 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--eval", type=int, default=96)
     p.add_argument("--budget", type=int, default=20)
-    p.add_argument("--mode", choices=("real", "memo", "verify"), default="memo")
     p.add_argument("--out", required=True)
     a = p.parse_args()
     import _bootstrap  # noqa
-    import numpy as np
     from duocad import optimize_run
     from duocad.topopt import binary_search, fem
     from _documents import open_session
     from sweep_smoothing_corpus import MODEL, _set_load
-    import peel_resume
 
     fem.FEM_DEVICE = "cpu"
     seed = tp.load_eval_mask(a.eval)
-    real_peel = binary_search.peel
-    state = dict(memo=None, calls=0, mismatches=0, peel_seconds=0.0)
+    real_take = binary_search.PeelWalk.take
+    state = dict(calls=0, peel_seconds=0.0)
 
-    def memo_peel(mask, order, count, anchor_ids, *, min_width_cells=1, exempt=None, protected=None):
+    def timed_take(self, order, count):
         t = time.perf_counter()
-        memo = state["memo"]
-        if memo is None or memo.parent is not mask:
-            memo = peel_resume.PeelMemo(mask, anchor_ids, min_width_cells=min_width_cells, exempt=exempt,
-                                        protected=protected)
-            memo.parent = mask  # 同一性で親を見分ける
-            state["memo"] = memo
-        cand, picked, cells, total = memo.peel(order, count)
-        stats = binary_search.PeelStats(picked=picked, casualties=int(mask.sum() - cand.sum()) - picked)
-        stats.picked_cells = cells
-        stats.seconds = time.perf_counter() - t
-        state["calls"] += 1
-        state["peel_seconds"] += stats.seconds
-        if a.mode == "verify":
-            ref, rs = real_peel(mask, order, count, anchor_ids, min_width_cells=min_width_cells, exempt=exempt,
-                                protected=protected)
-            if not (np.array_equal(ref, cand) and np.array_equal(rs.picked_cells, cells)):
-                state["mismatches"] += 1
-                print("MISMATCH", state["calls"], count, rs.picked, picked, flush=True)
-        return np.ascontiguousarray(cand), stats
-
-    def timed_real(*args, **kw):
-        t = time.perf_counter()
-        out = real_peel(*args, **kw)
+        out = real_take(self, order, count)
         state["calls"] += 1
         state["peel_seconds"] += time.perf_counter() - t
         return out
 
-    binary_search.peel = timed_real if a.mode == "real" else memo_peel
+    binary_search.PeelWalk.take = timed_take
     events = []
     real_find = binary_search.find_best_feasible
 
@@ -88,8 +65,7 @@ def main():
         optimize_run.run(doc, opts)
     except tp.Stop:
         pass
-    state.pop("memo")
-    out = dict(mode=a.mode, **state, events=events)
+    out = dict(**state, events=events)
     Path(a.out).write_text(json.dumps(out, default=float, indent=0), encoding="utf-8")
     print(json.dumps({k: v for k, v in out.items() if k != "events"}, default=float))
 

@@ -8,6 +8,9 @@ from __future__ import annotations
 import math
 
 import pytest
+from OCP.BRepAdaptor import BRepAdaptor_Curve
+from OCP.GeomAbs import GeomAbs_CurveType
+from OCP.gp import gp_Ax3
 
 from duocad import kernel, kernel_sketch, query
 from duocad.document import Document
@@ -39,6 +42,20 @@ def test_an_ellipse_region_has_the_ellipse_area_whichever_side_is_longer(width, 
     found = regions(doc, sketch_id)
     assert len(found) == 1
     assert found[0].area == pytest.approx(math.pi * width * height / 4.0, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    "width,height,expected",
+    [
+        (12.0, 12.0, GeomAbs_CurveType.GeomAbs_Circle),
+        (12.0, 12.0 + 1.0e-7, GeomAbs_CurveType.GeomAbs_Circle),
+        (12.0, 12.001, GeomAbs_CurveType.GeomAbs_Ellipse),
+    ],
+)
+def test_an_ellipse_with_equal_axes_becomes_a_circle_edge(width, height, expected):
+    """落ちたら、離心率0の `gp_Elips` の辺が `BRepOffsetAPI_MakeOffset`(包み込み)に渡り、access violation でプロセスが落ちる。"""
+    edge = kernel_sketch._edges_ellipse(gp_Ax3(), {"cx": 1.0, "cy": 2.0, "width": width, "height": height, "angle": 30.0})[0]
+    assert BRepAdaptor_Curve(edge).GetType() == expected
 
 
 def test_the_angle_turns_the_width_axis_counterclockwise():

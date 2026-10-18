@@ -35,13 +35,13 @@ _CROSSING_ROUNDS = 8
 _NO_ERROR = manifold3d.Error.NoError
 
 
-def tessellate_body(shape, *, deviation=CAD_DEVIATION_MM):
+def tessellate_body(shape):
     """CAD 1体を三角形分割し、座標が完全一致する頂点だけを共有した (vertices, faces, boundary) を返す。
 
     三角形分割できない面・解消できない境界交差は例外(黙って穴の空いたメッシュを返さない)。
     `boundary` は面分割の直前の境界交差検査の要約(`kernel.tessellate`)。
     """
-    payload = kernel.tessellate(shape, deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)
+    payload = kernel.tessellate(shape, CAD_DEVIATION_MM, kernel.DEFAULT_ANGULAR_DEFLECTION)
     boundary = payload['boundary']
     if payload['untriangulated'] or boundary['unresolved']:
         raise ValueError(

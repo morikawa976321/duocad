@@ -30,7 +30,6 @@ export interface DocumentFiles {
   readonly list: DocumentInfo[]
   /** いま編集しているファイル名(無題なら null)。 */
   readonly currentName: string | null
-  readonly lastFile: FilePayload | null
   onFile(payload: FilePayload): void
   onState(next: ServerState): void
   refresh(): void
@@ -73,7 +72,6 @@ const CAPTURE_DELAY_MS = 500
 const PNG_DATA_URL = 'data:image/png;base64,'
 
 export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
-  let lastFile = $state<FilePayload | null>(null)
   let list = $state<DocumentInfo[]>([])
   let currentName = $state<string | null>(null)
   let lastOp: number | null = null
@@ -201,9 +199,6 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     get currentName() {
       return currentName
     },
-    get lastFile() {
-      return lastFile
-    },
     onFile(payload) {
       // **`list_documents` の応答は通知を出さずここで抜ける**(保存/開くのたびに裏で走る)。
       if (payload.action === 'list') {
@@ -215,7 +210,6 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
         onThumbnail(payload)
         return
       }
-      lastFile = payload
       // **応答が `file` で返ったなら、その操作の待ちはここで解く。** 「文書を変えるか」の判定はブラウザと
       // サーバで別々に持つので、片方だけ直すと状態配信を待ち続けて確定が永久に拒否される。番号が一致するときだけ解く。
       deps.release(lastOp)

@@ -21,7 +21,7 @@
 | 可視性 | `set_visible` / `set_sketch_visible` —— ボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない。**名前つき寸法の打ち直し（`set_parameter`）は公開していない**（人間側に口が無いため。口ができたら人とAIの両方へ同時に出す。`describe_document` はパラメータ名と値を返す） |
 | 作業空間 | `get_command` / `begin_command` / `set_command_args` / `end_command` / `apply_command` / `enter_sketch` / `leave_sketch` —— **起動中の verb と途中の引数・モードを人の画面と共有する**(issue #153)。`begin_command(verb)` で起動すると人の画面にその verb が起動し、対象の候補(辺など)が見える。人が画面で起動した verb と打ちかけの引数は `describe_document` / `get_command` の `command` に見え、`set_command_args` で引数を足し、`apply_command` で確定する(人の Enter と同じ)。`end_command` は人の Esc。起動・引数・畳む・モードの操作は操作ログに載らず undo では戻らない（`apply_command` が確定した形の変更はログに載り、undo で戻る）。スケッチを作ると誰が作ってもそのスケッチへ入り、`enter_sketch` / `leave_sketch` で出入りする |
 | 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` / `enter_optimize` / `leave_optimize` —— 保持/除外ソリッド・拘束面・荷重面の条件を置く（ボディと拘束は集合代入。荷重は大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`）。**安定版には出さない**（凍結中。docs/STABLE.md「安定版で出さない機能」） |
-| 入出力 | `import_step` / `export_step` / `export_stl` / `add_mesh_body` —— 最後の1つは**計算で作った三角形メッシュ**をボディとして足す（表示とSTL書き出しだけ。編集verbは断られる） |
+| 入出力 | `import_step` / `export_step` / `export_stl` / `add_mesh_body` —— `export_*` の書き出し先は拡張子が形式（`.step`/`.stp`・`.stl`）と一致するものに限り、保存済みの文書（`models` の `*.json`）は上書きしない。最後の1つは**計算で作った三角形メッシュ**をボディとして足す（表示とSTL書き出しだけ。編集verbは断られる） |
 | 履歴 | `undo` / `redo` |
 
 > **ツール名は操作ログのverb名と同じ綴りである**（例外なし。WebSocketのコマンド名とUIのコマンドIDも同じ）。ログに出ている名前を

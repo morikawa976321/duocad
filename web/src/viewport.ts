@@ -22,8 +22,11 @@ import {
 } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { sampleFaces, type BodySamples } from './faceCulling'
+import { startFrameLoop } from './frameLoop'
+import { createHeadlight } from './headlight'
+import { cappedPixelRatio, nextPixelRatio } from './pixelRatio'
 import { createResolutionTracker } from './resolutionTracker'
-import { BASE_EXTENT, mmPerPixel, type CameraProjection } from './gridScale'
+import { BASE_EXTENT, mmPerPixel, uvBoxOfPoints, type CameraProjection } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
 import { createGhostLayer } from './ghostLayer'
 import { createSectionView } from './sectionView'
@@ -44,7 +47,7 @@ import { createThumbnailer } from './thumbnail'
 import { buildBodyMesh } from './bodyMesh'
 import type { BasePlaneName, EdgeGeometry } from './session'
 import {
-  type BodyGeometryUpdate, type BodyGhostRotation, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
+  type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
   type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickMode, type SectionState,
   type SketchDraw, type SketchEntityHit, type VertexMarker, type VertexRef, type Viewport,
 } from './viewportTypes'
@@ -58,7 +61,7 @@ import {
 
 export { FOV_DEFAULT, FOV_ORTHO, isSelectableFov }
 export type {
-  BodyGhostRotation, BoxSelectEvent, GeometryPayload, PickEvent, SectionState, SketchDraw, SketchEntityHit,
+  BoxSelectEvent, GeometryPayload, PickEvent, SectionState, SketchEntityHit,
   VertexMarker, Viewport,
 }
 
@@ -67,7 +70,7 @@ export function createViewport(container: HTMLElement): Viewport {
   const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true })
   // 断面は材質ごとのクリップ平面で切る(`renderer.clippingPlanes` はグリッド・スケッチ・キューブまで切る)
   renderer.localClippingEnabled = true
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+  renderer.setPixelRatio(cappedPixelRatio(window.devicePixelRatio))
   renderer.domElement.style.display = 'block'
   renderer.domElement.style.width = '100%'
   renderer.domElement.style.height = '100%'
@@ -97,9 +100,10 @@ export function createViewport(container: HTMLElement): Viewport {
     camera.position.copy(HOME_VIEW_OFFSET).multiplyScalar(distance)
   }
   scene.add(camera)
-  const headlight = new THREE.DirectionalLight(0xffffff, 1.6)
-  headlight.position.set(0.4, 0.7, 1)
+  const headlightRig = createHeadlight()
+  const headlight = headlightRig.light
   camera.add(headlight)
+  scene.add(headlightRig.aim)
   scene.add(new THREE.HemisphereLight(0xdfe7f2, 0x191c21, 1.0))
 
   // 型引数を明示する: 省くと `perspective` で固まり、正投影へ差し替えるとき
@@ -219,10 +223,7 @@ export function createViewport(container: HTMLElement): Viewport {
     grid.setHoverPlane(hoverPlane)
   }
 
-  /**
-   * 今ホバーで当てている色(実機検査フック専用)。ホバーは明度だけを上げ、
-   * `highlightColors` には変化が出ないので、材質から読み戻す。
-   */
+  /** 今ホバーで当てている色(実機検査フック専用)。ホバーは明度だけを上げるので、材質から読み戻す。 */
   function hoverColorNow(): number | null {
     const pick = (object: THREE.Object3D | undefined): number | null => {
       const material = (object as { material?: { color?: THREE.Color } } | undefined)?.material
@@ -392,8 +393,6 @@ export function createViewport(container: HTMLElement): Viewport {
     applySketchHoverMaterials()
   }
   let framed = false
-  let alive = true
-  let frameHandle = 0
 
   function size(): { width: number; height: number } {
     return {
@@ -411,14 +410,24 @@ export function createViewport(container: HTMLElement): Viewport {
     return Number.isFinite(px) ? px : 0
   }
 
+  /** 画素比が変わっていたら描画バッファへ反映する(`applySize` と毎フレームの `tick` が呼ぶ)。変えたら true。 */
+  function syncPixelRatio(): boolean {
+    const next = nextPixelRatio(renderer.getPixelRatio(), window.devicePixelRatio)
+    if (next === null) return false
+    renderer.setPixelRatio(next)
+    return true
+  }
+
   function applySize(): void {
     pickChanged() // 寸法が変わると同じ画素が別のものを指す
     const { width, height } = size()
+    // ブラウザのズーム・別モニタへの移動で画素比が変わったら追従する(作成時の1回だけだと、バッファの解像度が起動時のまま引き伸ばされる)。
+    syncPixelRatio()
     renderer.setSize(width, height, false)
     const aspect = width / height
     perspective.aspect = aspect
     perspective.updateProjectionMatrix()
-    // 正投影は縦(`top`/`bottom`)を正として横を作り直す(`smoke-features.mjs` がv方向を基準にする)。
+    // 正投影は縦(`top`/`bottom`)を正として横を作り直す。
     // `zoom` は OrbitControls のドリーの持ち物なので触らない。
     orthographic.right = orthographic.top * aspect
     orthographic.left = -orthographic.top * aspect
@@ -703,13 +712,6 @@ export function createViewport(container: HTMLElement): Viewport {
     return projectRaw(frameVector(point), width, height)
   }
 
-  /** 直近に使ったハイライト色(`highlightColors`)。出していない種別は null。 */
-  const highlightColor: { face: number | null; edge: number | null; vertex: number | null } = {
-    face: null,
-    edge: null,
-    vertex: null,
-  }
-
   /** 「持ち主+添字」の1本の鍵(面・辺・領域で共通)。 */
   function refKey(owner: string, index: number): string {
     return `${owner}\u0000${index}`
@@ -729,8 +731,6 @@ export function createViewport(container: HTMLElement): Viewport {
    * (別々に `mesh.material` を書くと次の `highlight()` の全走査に消される)。
    */
   function applyFaceMaterials(): void {
-    highlightColor.face =
-      selectedFaceKeys.size === 0 && selectedBodyIds.size === 0 ? null : new THREE.Color(HIGHLIGHT_COLOR).getHex()
     // 塗るのは色が変わった面の頂点だけ(`BodyMesh.setFaceColor`)。全面を舐めるのは鍵の計算だけ。
     for (const [bodyId, entry] of bodies) {
       const hitAsBody = selectedBodyIds.has(bodyId)
@@ -999,8 +999,6 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 辺の材質を決める。選択とホバーの両方を見る唯一の場所。 */
   function applyEdgeMaterials(): void {
-    // 色は材質から読み戻す(`highlightColors()` の検査がこの値を読む)。
-    highlightColor.edge = selectedEdgeIndices.size === 0 ? null : edgeMaterials.get('user', false).color.getHex()
     let hovered = new Set<number>()
     if (hoverEdge !== null && hoverEdge.bodyId === edgeBodyId) {
       const chain = edgeChain(hoverEdge)
@@ -1320,7 +1318,6 @@ export function createViewport(container: HTMLElement): Viewport {
     pickPointsAt,
     toScreen,
     pickChanged,
-    highlightColor,
     clipPlanes: section.clipPlanes,
     sectionKeeps: (point) => section.keeps(point),
   })
@@ -1410,8 +1407,6 @@ export function createViewport(container: HTMLElement): Viewport {
   }
   const sketches = new Map<string, SketchScene>()
   let ghost: SceneBatch | null = null
-  /** いま描けているスケッチの幽霊の中身(`ghostInfo` が返す。実機検査用の穴)。 */
-  let sketchGhostInfo: Array<{ kind: string; params: Record<string, number> }> = []
   let activeSketchId: string | null = null
   /** 通常モードで領域を指せるか(`pickRegions`)。スケッチモード中は見ない(常にそのスケッチの領域が対象)。 */
   let regionPickWanted = false
@@ -1673,7 +1668,6 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function clearGhost(): void {
-    sketchGhostInfo = []
     if (!ghost) return
     ghost.clear()
     ghost = null
@@ -1693,8 +1687,6 @@ export function createViewport(container: HTMLElement): Viewport {
       const built = buildEntityLine(target.frame, entity, material)
       if (!built) continue
       batch.add(built.object, built.geometry)
-      // 実際に描けたものだけ控える(折れ線化できなかった図形を数えると検査が「出ている」と誤判断する)
-      sketchGhostInfo.push({ kind: entity.kind, params: { ...entity.params } })
     }
     if (batch.objects.length === 0) return
     ghost = batch
@@ -1938,13 +1930,10 @@ export function createViewport(container: HTMLElement): Viewport {
     // 中心は描いてあるものの真ん中(何も無ければ平面の原点)
     let center = toWorld(frame, 0, 0)
     let radius = 0
-    if (target.points.length > 0) {
-      const us = target.points.map(([u]) => u)
-      const vs = target.points.map(([, v]) => v)
-      const midU = (Math.min(...us) + Math.max(...us)) / 2
-      const midV = (Math.min(...vs) + Math.max(...vs)) / 2
-      center = toWorld(frame, midU, midV)
-      radius = Math.max(Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs)) / 2
+    const box = uvBoxOfPoints(target.points)
+    if (box !== null) {
+      center = toWorld(frame, (box.uMin + box.uMax) / 2, (box.vMin + box.vMax) / 2)
+      radius = Math.max(box.uMax - box.uMin, box.vMax - box.vMin) / 2
     }
     const previous = camera.position.distanceTo(controls.target)
     const distance = radius > 0 ? Math.max(fitDistance(radius * SKETCH_FIT_MARGIN), 1) : Math.max(previous, 1)
@@ -2051,7 +2040,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * `snapDirection`((u,v)空間の単位ベクトル)を画面上の角度(度)へ変換する。カーソル強調のティック
-   * (`sketchCursorOverlay.ts`)専用。方向だけ要るので `projectForPick` を使う(`toScreen` はDOM被覆を見るため、
+   * (`sketchCursorOverlay.ts`)専用。方向だけ要るので `projectRaw` を使う(`toScreen` はDOM被覆を見るため、
    * 補助点が覆われた画素に落ちると角度だけ消える)。
    */
   function tickAngleForDirection(
@@ -2077,7 +2066,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 面の `project` と同じ流儀: 三角形の内側の点を狙い、実際にその領域へ当たる点を返す。
     // 1つの三角形につき4点試す(重心 + 各頂点へ寄せた3点): 重心1点だと、スケッチモードで点・辺が手前で
     // 拾われる画素に当たったとき候補が尽きる(ベジエの制御点は領域の内側にも立ち、細長い三角形の
-    // 重心がその近くに来る。`smoke-svg` の丘の領域で実際に踏んだ)。
+    // 重心がその近くに来る)。
     const weights: ReadonlyArray<readonly [number, number, number]> = [
       [1 / 3, 1 / 3, 1 / 3],
       [0.5, 0.25, 0.25],
@@ -2374,8 +2363,11 @@ export function createViewport(container: HTMLElement): Viewport {
     hoverAt = null
     orbiting = false
     section.setHover(false)
-    // ハンドルのドラッグは `pointercancel` でだけ打ち切る(`pointerleave` は `setPointerCapture` 中には来ず、来ても座標は届き続ける。キューブと同じ)。
-    if (event.type === 'pointercancel') section.pointerUp()
+    // ハンドルとキューブのドラッグは `pointercancel` でだけ打ち切る(`pointerleave` は `setPointerCapture` 中には来ず、来ても座標は届き続ける)。
+    if (event.type === 'pointercancel') {
+      section.pointerUp()
+      cube.cancel()
+    }
     if (!section.dragging()) renderer.domElement.style.cursor = ''
     sketchCursor.update(null, 'free', null)
     // 追従すべき位置が無いので「カーソル無し」(`point: null`)へ戻す(`sketchCursor` と同じ。さもないと直前の拡大状態が残る)。
@@ -2530,7 +2522,11 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function tick(): void {
-    if (!alive) return
+    // 画素比はイベントで待たず毎フレーム見る(同じ CSS 寸法のまま別モニタへ移ったときは `ResizeObserver` も発火しない)。
+    if (syncPixelRatio()) {
+      invalidate()
+      applySize()
+    }
     cube.stepSnap(performance.now())
     controls.update()
     syncCameraUp()
@@ -2548,6 +2544,7 @@ export function createViewport(container: HTMLElement): Viewport {
     section.update()
     if (needsRender || cameraMovedSinceRender()) {
       needsRender = false
+      headlightRig.follow(controls.target)
       renderer.render(scene, camera)
       lastDrawCalls = renderer.info.render.calls
       renderCount += 1
@@ -2557,9 +2554,12 @@ export function createViewport(container: HTMLElement): Viewport {
       renderedView.copy(camera.matrixWorld)
       renderedProjection.copy(camera.projectionMatrix)
     }
-    frameHandle = requestAnimationFrame(tick)
   }
-  frameHandle = requestAnimationFrame(tick)
+  const frameLoop = startFrameLoop(tick, {
+    request: (callback) => requestAnimationFrame(callback),
+    cancel: (handle) => cancelAnimationFrame(handle),
+    report: (error) => reportError(error),
+  })
 
   const api: Viewport = {
     update,
@@ -2596,7 +2596,6 @@ export function createViewport(container: HTMLElement): Viewport {
     highlightBodies,
     setOptimizeState,
     setOptimizeDebug: optimizeDebug.setState,
-    optimizeDebugCounts: optimizeDebug.counts,
     showEdges,
     showBasePlanes,
     setOriginVisible: originGizmo.setVisible,
@@ -2604,7 +2603,6 @@ export function createViewport(container: HTMLElement): Viewport {
     onSectionDrag(listener) {
       sectionDragListener = listener
     },
-    sectionInfo: section.info,
     contentCenter() {
       const box = new THREE.Box3().setFromObject(root)
       if (box.isEmpty()) return null
@@ -2624,16 +2622,9 @@ export function createViewport(container: HTMLElement): Viewport {
     projectEdge,
     showVertices: vertexMarkers.show,
     showMeasurement: measureAnnotation.show,
-    measurementInfo: measureAnnotation.info,
     sketchRebuilds: () => sketchRebuildCount,
     drawCalls: () => lastDrawCalls,
     renderCount: () => renderCount,
-    highlightColors() {
-      return { ...highlightColor }
-    },
-    faceColor: paintedFaceColor,
-    optimizeAnnotationCount: annotations.count,
-    optimizeAnnotations: annotations.info,
     hoveredRef() {
       return {
         face: hoverFace,
@@ -2648,12 +2639,6 @@ export function createViewport(container: HTMLElement): Viewport {
     showPreview: ghostLayer.showPreview,
     clearPreview: ghostLayer.clearPreview,
     showBodyGhosts: ghostLayer.showBodyGhosts,
-    ghostInfo() {
-      return {
-        sketch: sketchGhostInfo.map((item) => ({ kind: item.kind, params: { ...item.params } })),
-        bodies: ghostLayer.info(),
-      }
-    },
     project,
     showSketches,
     showSketchGhosts,
@@ -2666,25 +2651,19 @@ export function createViewport(container: HTMLElement): Viewport {
     resetGrid() {
       grid.rescale(contentBoxForGrid(), true)
     },
-    gridScale() {
-      return { extent: grid.extent() }
-    },
-    gridTiers: grid.info,
     setFov,
     cameraPose,
     projectPoint,
     projectSketchPoint,
     projectBasePlane,
     projectRegion,
-    viewCubeRect: cube.rect,
     captureThumbnail() {
       // `object.visible` は見ない: 文書で非表示の立体は `bodies` にキーごと無く、`visible=false` はプレビュー中の
       // 一時的な非表示(`setBodyVisible`)。見るとプレビュー中に撮った絵から立体が欠ける。
       return thumbnailer.capture([...bodies.values()].flatMap((entry) => entry.sceneObjects))
     },
     dispose() {
-      alive = false
-      cancelAnimationFrame(frameHandle)
+      frameLoop.stop()
       observer.disconnect()
       thumbnailer.dispose()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
@@ -2718,6 +2697,7 @@ export function createViewport(container: HTMLElement): Viewport {
       previewMaterial.dispose()
       edgeMaterial.dispose()
       annotations.clear()
+      measureAnnotation.dispose()
       optimizeDebug.clear()
       renderer.dispose()
       renderer.domElement.remove()

@@ -213,7 +213,7 @@ def test_sketch_region_with_a_line_ending_inside_a_circle_meshes_like_the_standa
     CAD 頂点の共有で正当な接続と判定し、標準メッシャーと同じ三角形になる(以前は 12 巡回って面が消えた)。"""
     from duocad import region
     from duocad.server import Session
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = session.sketch_create('XY')['sketch_id']
     session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])
     session.add_circle(sketch_id, [10.0, 0.0], 4.0)
@@ -227,3 +227,41 @@ def test_sketch_region_with_a_line_ending_inside_a_circle_meshes_like_the_standa
         assert diagnostics['endpoint']['mismatches'] >= 1
         assert per_face_triangles(face) == reference
     assert region.regions_with_geometry(session.document, sketch_id, 0.2)[0]['indices']
+
+
+def _lines(*segments):
+    return [{'kind': 'line', 'params': {'x0': a[0], 'y0': a[1], 'x1': b[0], 'y1': b[1]}} for a, b in segments]
+
+
+_RECTANGLE_20_10 = {'kind': 'rectangle', 'params': {'x': 0.0, 'y': 0.0, 'width': 20.0, 'height': 10.0, 'angle': 0.0}}
+
+#: 長方形(または円)の内側に置いた孤立線のスケッチ。以前は偽の touch / cross で領域が三角形にならなかった。
+_ISOLATED_LINES = {
+    'L': [_RECTANGLE_20_10, *_lines(((2, 5), (10, 5)), ((10, 5), (10, 2)))],
+    'Y': [_RECTANGLE_20_10, *_lines(((10, 5), (5, 5)), ((10, 5), (15, 5)), ((10, 5), (10, 2)))],
+    'X': [_RECTANGLE_20_10, *_lines(((5, 3), (15, 7)), ((5, 7), (15, 3)))],
+    'circle_cross': [{'kind': 'circle', 'params': {'cx': 10.0, 'cy': 10.0, 'diameter': 16.0}},
+                     *_lines(((5, 10), (15, 10)), ((10, 5), (10, 15)))],
+    'two_sides_of_a_triangle': [_RECTANGLE_20_10, *_lines(((3, 3), (8, 3)), ((8, 3), (5, 7)))],
+    'integer_slant_to_the_top_edge': [_RECTANGLE_20_10, *_lines(((3, 4), (13, 10)))],
+    'shallow_slant': [{'kind': 'rectangle', 'params': {'x': 0.0, 'y': 0.0, 'width': 20.0, 'height': 7.3, 'angle': 0.0}},
+                      *_lines(((1.1785053404777324, 4.978862320621157), (9.86522085500276, 7.3)))],
+}
+
+
+@pytest.mark.parametrize('name', _ISOLATED_LINES)
+def test_a_sketch_region_with_isolated_lines_meshes_like_the_standard_mesher(name):
+    """孤立線を含む領域は標準メッシャーが正常に分割する。落ちたら段階制御が偽の touch / cross で面を落とし、
+    スケッチの領域が一覧から消える(`kernel_sketch.sketch_regions` の面を `kernel.tessellate` に渡す)。"""
+    from duocad import kernel_sketch
+    found = kernel_sketch.sketch_regions({'kind': 'base', 'name': 'XY'}, _ISOLATED_LINES[name])
+    assert found
+    for item in found:
+        face = item['face']
+        standard_mesh(face, 0.2)
+        reference = per_face_triangles(face)
+        assert reference, 'この題材は標準メッシャーでも分割できていない(題材の誤り)'
+        diagnostics = kernel_meshing.mesh_shape(face, 0.2, 0.35)
+        assert diagnostics['termination'] == 'resolved' and diagnostics['unresolved'] == [], diagnostics['unresolved']
+        assert per_face_triangles(face) == reference
+        assert kernel.tessellate(face, 0.2)['faces'][0]['indices']

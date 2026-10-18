@@ -68,6 +68,8 @@ export function createResolutionTracker(deps: ResolutionTrackerDeps): Resolution
   const lastCameraPosition = new THREE.Vector3(NaN, NaN, NaN)
   const lastCameraQuaternion = new THREE.Quaternion(0, 0, 0, 1)
   let lastCameraZoom = -1
+  /** 投影行列の x の倍率(`elements[0]`)。幅だけが変わるリサイズ(左右パネルの開閉)は位置・姿勢・ズーム・`worldPerPixel` のどれも動かさず、これだけが動く。 */
+  let lastProjectionScaleX = NaN
   let cameraEpoch = 0
   let steadySince = 0
   let lastFocusComputeEpoch = -1
@@ -77,7 +79,7 @@ export function createResolutionTracker(deps: ResolutionTrackerDeps): Resolution
   let lastAppliedFloored = false
 
   /**
-   * カメラが意味のある幅で動いたか(位置・姿勢・正投影の倍率)。
+   * カメラが意味のある幅で動いたか(位置・姿勢・正投影の倍率・投影の横倍率)。
    * 一致ではなく閾値で見る: `OrbitControls` の減衰は指数で近づき完全には止まらないので、
    * 一致を条件にすると `steadySince` が毎フレーム振り出しに戻り、解像度が二度と採り直されない
    * (実測: ホイールを回しても目標偏差が動かなくなった)。閾値は画面の画素で決める
@@ -91,7 +93,10 @@ export function createResolutionTracker(deps: ResolutionTrackerDeps): Resolution
     }
     // 四元数の内積は向きの近さ(1で一致)。符号は向きに影響しないので絶対値で見る。
     if (Math.abs(current.quaternion.dot(lastCameraQuaternion)) < 1 - CAMERA_STILL_ANGLE) return true
-    return Math.abs(current.zoom - lastCameraZoom) > Math.abs(lastCameraZoom) * RESOLUTION_STILL_EPSILON
+    if (Math.abs(current.zoom - lastCameraZoom) > Math.abs(lastCameraZoom) * RESOLUTION_STILL_EPSILON) return true
+    // 視錐台が横に広がる/狭まると、新しく画面に入った面を細かく測り直す必要がある。
+    const scaleX = current.projectionMatrix.elements[0]
+    return Math.abs(scaleX - lastProjectionScaleX) > Math.abs(lastProjectionScaleX) * RESOLUTION_STILL_EPSILON
   }
 
   function rememberCamera(): void {
@@ -99,6 +104,7 @@ export function createResolutionTracker(deps: ResolutionTrackerDeps): Resolution
     lastCameraPosition.copy(current.position)
     lastCameraQuaternion.copy(current.quaternion)
     lastCameraZoom = current.zoom
+    lastProjectionScaleX = current.projectionMatrix.elements[0]
   }
 
   function focusEqual(a: Focus | null, b: Focus | null): boolean {

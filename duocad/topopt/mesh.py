@@ -83,8 +83,6 @@ def build_adjacency(n_verts: int, faces: np.ndarray) -> sp.csr_matrix:
     data = np.ones(rows.size, dtype=np.float64)
     a = sp.coo_matrix((data, (rows, cols)), shape=(n_verts, n_verts)).tocsr()
     a.data[:] = 1.0  # 同じ辺が複数三角形で重複しても重みは1のまま(隣接の有無だけを見る)
-    a.sum_duplicates()
-    a.data[:] = 1.0
     return a
 
 

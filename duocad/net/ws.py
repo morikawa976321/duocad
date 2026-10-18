@@ -33,7 +33,7 @@
 `ai_*` はverbではない(`ai_get_status` / `ai_configure` / `ai_set_thinking` / `ai_set_api_key` / `ai_prepare` / `ai_send` /
 `ai_cancel`)。
 文書を直接は変えず(操作ログに載らず、undoの単位でもない)、文書を変えるのはエージェントが呼ぶ既存ツール側で、それは通常のverb配信として後から届く。
-したがって `catalog.COMMANDS` には入れず、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
+したがって `catalog.COMMANDS` には `category="protocol"`・`ws="special"`・`mcp=False` で宣言するだけで(ソケットが受け取る名前を宣言で尽くす)、verb にも対応するMCPツールにもしない(AIがAIを起動する口は要らない)。
 
 verbコマンドは対象集合(面・辺・領域)を引数で受けない。数値・名前・パスだけを送り、押す面も丸める辺も押し出す領域も
 verbの入口(`duocad/entry.py`)がコアの選択から取る(`selection.require_selected` / `require_edges`)。
@@ -77,7 +77,7 @@ import re
 import threading
 from typing import Any, Optional  # Any: listeners / 接続
 
-from .. import catalog, local_settings, optimize_run, selection
+from .. import catalog, local_settings, optimize_run
 from ..agent import AgentLoop, Cancellation, Limits, ProviderError
 from ..agent.loop import FIRST_LOOK
 from ..agent.providers import (
@@ -109,8 +109,7 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: ブラウザから踏めるファイル操作 -> (`Session` のメソッド名, 必須の引数名, 文書を変えるか)。
 #: 文書を変えるもの(`import_step`)の応答は状態配信、変えないもの(`export_step` / `export_stl`)は書いた先のパスだけを
 #: 要求した接続にだけ返す(`preview` と同じ扱い)。`open_document`(文書を差し替えるので全接続へ配る)・`save_document`・
-#: `rename_document`(`file` の封筒 + 状態の配り直し。`save_document` は `name` が任意で、表の「引数は全部必須」の規律に
-#: 合わない。`catalog.Param.ws` 参照)は表から外して `_dispatch` で個別に扱う。
+#: `rename_document`(`file` の封筒 + 状態の配り直し)は表から外して `_dispatch` で個別に扱う(`file` の封筒を返し、状態を配り直すため)。
 FILE_COMMANDS: dict = catalog.file_table()
 
 #: ソケットが受け取る名前の全体(宣言の `ws != "none"`)。`_dispatch` はこれに無い名前を分岐へ進めない。
@@ -158,11 +157,18 @@ def _args_object(message: dict, *, required: bool) -> dict:
     return args
 
 
+def _visible_flag(value: Any) -> bool:
+    """`set_visible` / `set_sketch_visible` の `visible`。`bool()` で丸めると `"false"` が表示になる。"""
+    if not isinstance(value, bool):
+        raise ValueError(f"visible は true か false で送る(受け取った値: {value!r})")
+    return value
+
+
 async def _send(connection: Any, payload: dict) -> None:
     if payload.get("type") in wire.BINARY_TYPES:
         await connection.send(wire.encode(payload))
     else:
-        await connection.send(json.dumps(payload, ensure_ascii=False))
+        await connection.send(wire.dumps(payload))
 
 
 #: 接続ごとの受信待ち行列(`_Inbox`)で、まだ捌いていない古いものを新しいもので置き換える要求。どちらも最新だけが意味を持つ:
@@ -391,7 +397,7 @@ class Server:
             pending = self._preview_futures.pop(connection, None)
             if pending is not None:
                 pending.cancel()
-            self._on_disconnect(connection)
+            self._on_disconnect()
 
     async def _receive(self, connection: Any, inbox: "_Inbox") -> None:
         """届いた要求を待ち行列へ積む(処理は `handle` のループ。塞がっている間に届いた古い要求を置き換えられるように分ける)。"""
@@ -403,7 +409,7 @@ class Server:
         finally:
             inbox.close()
 
-    def _on_disconnect(self, connection: Any) -> None:
+    def _on_disconnect(self) -> None:
         """1接続が切れた後の後始末(`handle()` の `finally` から呼ぶ)。
 
         最後の1接続が切れたときだけAIの実行(=文書の変更)を中断する(他の画面が見ている間は続ける。`ai_*` は共有の1会話)。
@@ -425,10 +431,22 @@ class Server:
     async def _dispatch(self, connection: Any, raw: Any) -> None:
         try:
             message = json.loads(raw)
-            command = message.get("cmd")
-        except (TypeError, ValueError) as error:
-            await _send(connection, {"type": "error", "where": "parse", "message": str(error)})
+        except (TypeError, ValueError, RecursionError) as error:  # 深すぎる入れ子は RecursionError
+            await _send(connection, {"type": "error", "where": "parse", "message": f"{type(error).__name__}: {error}"})
             return
+        # 配列・数値・null など object でない JSON は、`cmd` を読む前に断る(読むと AttributeError が受信ループを抜けて接続が切れる)。
+        # `ack_id` は集合に入れるので、unhashable(配列・辞書)や bool は同じく断る。
+        problem = None
+        if not isinstance(message, dict):
+            problem = "メッセージは JSON のオブジェクトで送る"
+        else:
+            ack = message.get("ack_id")
+            if ack is not None and (isinstance(ack, bool) or not isinstance(ack, int)):
+                problem = "ack_id は整数で送る(画面は通し番号。済みの番号『以下』をまとめて消すので大小を比べる)"
+        if problem is not None:
+            await _send(connection, {"type": "error", "where": "parse", "message": problem})
+            return
+        command = message.get("cmd")
         # 応答をこの要求の処理の外で送るもの(ワーカーで計算するプレビュー)は、`done` もその応答の後に送る。
         ack_later = False
         if message.get("ack_id") is not None:
@@ -450,7 +468,7 @@ class Server:
                 applied = self._apply(
                     self.session.set_visible,
                     message["body_id"],
-                    bool(message["visible"]),
+                    _visible_flag(message["visible"]),
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
@@ -458,7 +476,7 @@ class Server:
                 applied = self._apply(
                     self.session.set_sketch_visible,
                     message["sketch_id"],
-                    bool(message["visible"]),
+                    _visible_flag(message["visible"]),
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
@@ -575,7 +593,7 @@ class Server:
                     # 全接続へ配る —— 封筒だけだと、他のタブは消えた文書を出したまま編集を断られ続ける。
                     if applied.get("closed"):
                         await self._push(connection, applied=None)
-            # 保存は表に載らない(`name` が任意引数で、表の「引数は全部必須」の規律に合わない。`catalog.Param.ws`)。
+            # 保存は表に載らない(`file` の封筒を返し、状態も配り直すため)。
             # 契約は `Session.save_document`: 引数なし=編集中のファイルへ上書き / `name` あり=新しい名前でのみ保存(既存名は拒否)。
             # 書いた後に状態も配り直す: `state.current_name` が変わるので、`file` の封筒だけだとヘッダが「(無題)」のまま
             # Ctrl+S と自動保存が現在のファイルへ書き続ける食い違いが残る。文書は変わらないので `applied` は付けない。
@@ -650,7 +668,10 @@ class Server:
             elif command == "ai_set_thinking":
                 await self._broadcast({"type": "ai_status", **self._ai_set_thinking(message.get("thinking"))})
             elif command == "ai_set_api_key":
-                await self._broadcast({"type": "ai_status", **self._ai_set_api_key(message.get("key"))})
+                # `key` を付け忘れたメッセージを「消す」と読まない: 消すのは明示の null だけ(special の口は宣言の必須を検査されない)。
+                if "key" not in message:
+                    raise ValueError("ai_set_api_key には key が要る(消すときは key: null を明示する)")
+                await self._broadcast({"type": "ai_status", **self._ai_set_api_key(message["key"])})
             elif command == "ai_prepare":
                 self._ai_prepare()
             elif command == "ai_send":
@@ -685,7 +706,7 @@ class Server:
                 await _send(connection, {
                     "type": "optimize_steps",
                     "steps": [] if steps is None else steps.meta(),
-                    "finishable": steps is not None and steps.finisher is not None,
+                    "finishable": self.session.steps_finishable(),
                 })
             elif command == "optimize_step_voxels":
                 await self._optimize_step_voxels(connection, message)

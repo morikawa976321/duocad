@@ -149,7 +149,7 @@ def test_the_deviation_is_clamped_both_absolutely_and_relative_to_the_model() ->
 @pytest.fixture()
 def cylinder_session() -> tuple:
     """円(半径10mm)を押し出した円柱を1つ持つセッション。**曲面と円い辺の両方がある**。"""
-    session = Session(None, DEVIATION)
+    session = Session(DEVIATION)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 2 * RADIUS)
     session.clear_selection()
@@ -295,3 +295,15 @@ def test_the_size_hint_may_be_omitted(cylinder_session) -> None:
     errors = [payload for payload in client.payloads if payload.get("type") == "error"]
     assert not errors, f"省略できるはずの引数でエラー: {errors}"
     assert session.view.view_deviation < DEVIATION
+
+
+def test_a_mesh_body_is_not_sent_again_when_only_the_zoom_changes(session: Session) -> None:
+    """落ちたら、ズームのたびに変わっていないメッシュボディ(形状最適化の結果。数万三角形)の全体を配り直す。"""
+    from duocad.verbs.add_mesh import add_mesh_body
+
+    body_id = add_mesh_body(session.document, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [0, 1, 2], name="m")
+    known = {body_id: session.view.body_revision(body_id)}
+
+    assert session.set_view_resolution(0.002, SIDE) is True
+
+    assert session.delta(known) == {"bodies": [], "unchanged": [body_id]}

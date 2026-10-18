@@ -41,6 +41,7 @@ import time
 import numpy as np
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _documents import scratch_session
 from _harness import Checker, run
 from duocad import optimize_run, query
 from duocad.server import Session
@@ -88,7 +89,7 @@ def _face_with_normal(body, nx: float, ny: float, nz: float) -> int:
 
 def build_case(extra_tiny_keep: bool = False) -> tuple:
     """離れた2つのパッドに4条件を置いた文書。`extra_tiny_keep` で極小の保持ソリッドを足す。"""
-    session = Session(None, DEVIATION)
+    session = scratch_session(DEVIATION)
     left = _box(session, 10.0, 40.0, 40.0)                      # x 0..10
     right = _box(session, 10.0, 40.0, 10.0, corner=(60.0, 0.0))  # x 60..70
     _select(session, [{"body": right.id, "kind": "body"}])

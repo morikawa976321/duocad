@@ -10,7 +10,6 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-import numpy as np
 from scipy import ndimage
 
 

@@ -13,16 +13,29 @@ from node_support import run_node
 TESTS_DIR = Path(__file__).resolve().parent
 
 EVALUATORS = [
+    "eval_ai_result.mjs",
+    "eval_arc_sweep.mjs",
     "eval_choice_sync.mjs",
     "eval_expression.mjs",
+    "eval_frame_loop.mjs",
+    "eval_grid_planes.mjs",
     "eval_grid_scale.mjs",
+    "eval_headlight.mjs",
+    "eval_keys.mjs",
     "eval_min_width.mjs",
+    "eval_pixel_ratio.mjs",
+    "eval_rename_draft.mjs",
+    "eval_resolution_tracker.mjs",
     "eval_screen_pick.mjs",
     "eval_selection_ref_key.mjs",
+    "eval_session_dispose.mjs",
     "eval_sketch_geometry.mjs",
     "eval_sketch_intersections.mjs",
     "eval_sketch_snap.mjs",
+    "eval_text_sprite.mjs",
     "eval_view_cube.mjs",
+    "eval_view_cube_overlay.mjs",
+    "eval_view_settings.mjs",
 ]
 
 

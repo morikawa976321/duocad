@@ -115,10 +115,6 @@ class Recorder:
     def _dumps(value):
         return json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False).encode('utf-8')
 
-    def _json(self, path, value):
-        data = self._dumps(value)
-        _atomic(path, lambda stream: stream.write(data))
-
     def _submit(self, job):
         def guarded():
             try:
@@ -185,7 +181,7 @@ class Recorder:
             self.manifest['last_event'] = json.loads(line)
             self._manifest()
 
-    def _encode(self, value, seen, arrays):
+    def _encode(self, value, arrays):
         """`value` を JSON にできる形へ直し、参照する配列を `arrays` へ `(鍵, パス, 写し)` で足す。書き出しスレッドが書けたと
         確かめた配列で、ファイルも残っているものは写しを取らない(写しは None。書けなかった・消えた配列は次の記録で書き直す)。"""
         if isinstance(value, np.ndarray):
@@ -202,7 +198,7 @@ class Recorder:
             arrays.append((key, path, None if written and path.exists() else np.array(array, copy=True)))
             return {'$array':relative, 'shape':list(value.shape), 'dtype':value.dtype.str}
         if isinstance(value, np.generic):
-            return self._encode(value.item(), seen, arrays)
+            return self._encode(value.item(),arrays)
         if isinstance(value, float) and not math.isfinite(value):
             return {'$float':str(value)}
         if value is None or isinstance(value, (str, bool, int, float)):
@@ -210,18 +206,18 @@ class Recorder:
         if isinstance(value, Path):
             return str(value)
         if isinstance(value, dict):
-            return {str(k):self._encode(v, seen, arrays) for k,v in value.items()}
+            return {str(k):self._encode(v,arrays) for k,v in value.items()}
         if isinstance(value, (tuple, list)):
-            return [self._encode(v, seen, arrays) for v in value]
+            return [self._encode(v,arrays) for v in value]
         if is_dataclass(value):
-            return {'$type':type(value).__name__, **{f.name:self._encode(getattr(value,f.name),seen,arrays)
+            return {'$type':type(value).__name__, **{f.name:self._encode(getattr(value,f.name),arrays)
                     for f in fields(value) if f.name != 'cache'}}
         if type(value).__name__ == 'Model' and hasattr(value, 'ndof'):
             names = ('nelx','nely','nelz','ndof','E','nu','emin','fixed','free','f','active','ke')
-            return {'$type':'FEMModel', **{n:self._encode(getattr(value,n),seen,arrays) for n in names}}
+            return {'$type':'FEMModel', **{n:self._encode(getattr(value,n),arrays) for n in names}}
         if isinstance(value, BaseException):
             return {'$error':type(value).__name__, 'message':str(value),
-                    'details':self._encode(vars(value),seen,arrays)}
+                    'details':self._encode(vars(value),arrays)}
         return {'$omitted_type':f'{type(value).__module__}.{type(value).__name__}'}
 
     def snapshot(self, name, value):
@@ -231,7 +227,7 @@ class Recorder:
         self.sequence += 1
         filename = f'{self.sequence:06d}-{name}.json'
         arrays = []
-        data = self._dumps(self._encode(value, {}, arrays))
+        data = self._dumps(self._encode(value, arrays))
         line = json.dumps(dict(kind='snapshot', elapsed_seconds=time.perf_counter()-self.started,
                                phase=self.stack[-1] if self.stack else None, name=name, file=filename),
                           ensure_ascii=False, allow_nan=False)
@@ -469,10 +465,9 @@ class RunArchive:
             except json.JSONDecodeError:
                 self.incomplete_event_line = True
 
-    def snapshots(self, name=None, phase=None):
-        """`kind == 'snapshot'` の event(名前・段階で絞れる)。"""
-        return [e for e in self.events if e['kind'] == 'snapshot'
-                and (name is None or e['name'] == name) and (phase is None or e['phase'] == phase)]
+    def snapshots(self, name=None):
+        """`kind == 'snapshot'` の event(名前で絞れる)。"""
+        return [e for e in self.events if e['kind'] == 'snapshot' and (name is None or e['name'] == name)]
 
     def begins(self, name=None):
         return [e for e in self.events if e['kind'] == 'begin' and (name is None or e['name'] == name)]
@@ -485,8 +480,8 @@ class RunArchive:
         """snapshot の event の素の JSON(配列は `$array` の参照のまま)。"""
         return json.loads((self.path / event['file']).read_text(encoding='utf-8'))
 
-    def records(self, name, phase=None):
-        return [self.load(e) for e in self.snapshots(name, phase)]
+    def records(self, name):
+        return [self.load(e) for e in self.snapshots(name)]
 
     def last(self, name):
         """その名前の最後の snapshot(無ければ None)。"""

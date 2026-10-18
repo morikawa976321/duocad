@@ -5,7 +5,7 @@
  * Node は `.ts` をそのまま読める(型注釈の除去。Node 23.6以降は既定で有効)。
  */
 import assert from 'node:assert/strict'
-import { evaluateExpression, isPlainNumber } from '../web/src/expression.ts'
+import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../web/src/expression.ts'
 
 function expressionValue(text) {
   const result = evaluateExpression(text)
@@ -95,6 +95,16 @@ assert.equal(value('１＋２'), 3, '全角の数字と演算子')
 assert.equal(value('（２＋３）×４'), 20, '全角の括弧と×')
 assert.equal(value('10÷4'), 2.5)
 assert.equal(value('10−4'), 6, 'U+2212 のマイナス記号')
+assert.equal(value('ｓｑｒｔ（４）'), 2, '全角の英字も畳む')
+assert.equal(value('10 +　5'), 15, 'NBSP・全角空白は空白として読む')
+assert.equal(value('10‑4'), 6, 'U+2011(改行しないハイフン)はマイナス記号として読む')
+
+// 互換文字(NFKC が別の字へ畳むもの)を黙って数字にしない: べき乗のつもりの `10²` が 102 になる。
+for (const text of ['10²', '9⁹', '①', '⑩', '5₂', '𝟏', '½', '⁻3']) {
+  assert.ok(reason(text).includes('使えない文字'), `互換文字が通った: ${text}`)
+  assert.ok(!isPlainNumber(text), `素の数値と判定された: ${text}`)
+  assert.equal(expressionValue(text), null)
+}
 
 // ====================================================== 拒む側(黙って数を作らない)
 assert.equal(reason(''), '式が空')
@@ -145,5 +155,18 @@ for (const text of ['', '5*2', 'sqrt(4)', '50mm', '(5)', '1+', '- 3']) {
 // ====================================================== expressionValue(理由の要らない口)
 assert.equal(expressionValue('2*3'), 6)
 assert.equal(expressionValue('50mm'), null)
+
+// ====================================================== firstUnreadableExpression(打ち間違いを黙って捨てない)
+// 点から寸法を導く欄(`fromPoints`)は空欄でも揃うので、読めない式は値にならず空欄と見分けがつかない。確定する側がこれで止める。
+assert.equal(firstUnreadableExpression([{ label: '幅', raw: '5x' }]), `幅: ${reason('5x')}`)
+assert.equal(firstUnreadableExpression([{ label: '長さ', raw: '50mm' }]), `長さ: ${reason('50mm')}`)
+assert.equal(firstUnreadableExpression([{ label: '直径', raw: '1/0' }]), `直径: ${reason('1/0')}`)
+assert.equal(firstUnreadableExpression([{ label: '幅', raw: '' }, { label: '高さ', raw: '5*2' }]), null, '空欄と読める式は止めない')
+assert.equal(
+  firstUnreadableExpression([{ label: '幅', raw: '5' }, { label: '高さ', raw: 'abc' }, { label: '角度', raw: '1+' }]),
+  `高さ: ${reason('abc')}`,
+  '複数あれば先頭の1つ',
+)
+assert.equal(firstUnreadableExpression([]), null)
 
 console.log('expression.ts: 全ての想定を満たした')

@@ -100,7 +100,6 @@ class StableUpdater:
         update_blocker: Callable[[], Optional[str]],
         on_started: Callable[[], None],
         repo_root: Path = REPO_ROOT,
-        branch: str = UPDATE_BRANCH,
     ) -> None:
         self.log_dir = Path(log_dir)
         #: 立て直すときに `duocad.launcher` へ渡すもの(`channel` / `port` / `http_port` / `data_dir`)。
@@ -108,7 +107,7 @@ class StableUpdater:
         self.update_blocker = update_blocker
         self.on_started = on_started
         self.repo_root = Path(repo_root)
-        self.branch = branch
+        self.branch = UPDATE_BRANCH
         self._lock = threading.Lock()
         self._cached: Optional[dict] = None
         self._cached_at = 0.0
