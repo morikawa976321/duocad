@@ -148,10 +148,13 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
   点の分類だと半円の円弧の端で太る向きを細る向きと取り違える。どれも sol レビューで再現)、
   傾けた殻の `BRepCheck`、ふたが面1枚で穴の数が底と同じ・立体が1つ、`BRepAlgoAPI_Check` の自己交差。どれが何を捕まえるかは
   `tests/test_extrude_taper.py::test_a_collapsing_section_is_refused` の7例。
-- **端の制御点が重なったベジエ・B スプライン**(SVG の `C 0 0 0 0 20 0` など)は、重なった制御点を次の別の制御点の方へ 1e-7 mm
+- **制御点がすべて弦の上のベジエ・B スプライン**(形は線分。SVG の `C0 0 20 0 20 0` など)は線分に置き換えてから傾ける。
+- **端の制御点が重なった曲がったベジエ・B スプライン**は、重なった制御点を次の別の制御点の方へ 1e-7 mm
   ずらしてから傾ける(`_regular_wire`。そのままだと `MakeDraft` が Standard_ConstructionError)。曲がった曲線で端の極が重なると
   その端で曲率半径が0へ向かうので、**細る向きは潰れとして断る**(角で切り落とされて実害が無い場合も断る。慎重側)。
   OCCT の例外は `_tapered_prism` で ValueError に変える。
+- 傾けた殻・底・ふたは許容差 1e-6 → 1e-5 → 1e-4 mm の順に縫い、自由辺が残らず正しい立体になった最初の値を使う(`_SEW_TOLS`)。
+  楕円を短く押すと 1e-6 では閉じない。
 - **テーパー付きの押し出しは `|distance| >= kernel_extrude.MIN_TAPER_DISTANCE`(1e-3 mm)。** `MakeDraft` は 7e-5 mm 以下で
   プロセスごと落ちる(docs/CAD_LIBRARY_PITFALLS.md)。taper 0 の下限は今までどおり `MIN_DISTANCE`。
 - **taper 0 は今までの `MakePrism` の経路を通る**(形も面の数も変わらない)。ログの args には 0 でないときだけ `taper` を記録し、

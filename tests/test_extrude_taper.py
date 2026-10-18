@@ -36,7 +36,7 @@ from duocad import kernel, kernel_extrude, query
 from duocad.document import Body, Document
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.paths import REPO_ROOT
-from duocad.region import region_ref, regions
+from duocad.region import _regions_detailed, region_ref, regions
 from duocad.server import Session
 from duocad.sketch import add_circle, add_ellipse, add_rectangle, sketch_create
 from duocad.verbs import chamfer, extrude, extrude_faces, fillet
@@ -516,3 +516,47 @@ def test_a_curved_bezier_with_a_coincident_end_pole_grows_and_refuses_cleanly_wh
     assert BRepCheck_Analyzer(grown["shape"]).IsValid()
     with pytest.raises(ValueError, match="collapses"):
         _new(face, 1.0, -1.0)
+
+
+# ======================================================================================
+# sol レビューの指摘(3回目)
+# ======================================================================================
+def _sketch_ellipse_face(width: float, height: float):
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_ellipse(document, sketch_id, (0.0, 0.0), width, height)
+    return _regions_detailed(document, sketch_id)[0]["face"]
+
+
+def _ellipse_parallel_volume(a: float, b: float, height: float, taper: float) -> float:
+    """半径 a・b の楕円を傾けた立体の体積。滑らかな凸の輪郭の断面積は A0 + P·t + π·t²(Steiner。尖点ができない範囲で
+    内側にも成り立つ)で、t = tan(taper)·z を 0..H で積分する。周長 P は数値積分で出す(OCCT の長さは精度を渡さないと
+    この楕円で 0.13% 大きい)。"""
+    steps = 4096
+    perimeter = sum(
+        math.hypot(a * math.sin(2 * math.pi * (k + 0.5) / steps), b * math.cos(2 * math.pi * (k + 0.5) / steps))
+        for k in range(steps)
+    ) * 2 * math.pi / steps
+    slope = _slope(taper)
+    return math.pi * a * b * height + perimeter * slope * height**2 / 2.0 + math.pi * slope**2 * height**3 / 3.0
+
+
+@pytest.mark.parametrize("distance, taper", [(0.1, 5.0), (0.1, -5.0), (0.01, 5.0), (1.0, -5.0), (10.0, 20.0), (10.0, -8.0)])
+def test_a_short_ellipse_extrusion_is_not_refused(distance, taper):
+    """楕円を傾けた側面(B スプラインの近似)と、ふた・底の縫い目が 1e-6 で閉じず、短い押し出しが潰れとして断られる。"""
+    face = _sketch_ellipse_face(12.0, 6.0)
+
+    result = _new(face, distance, taper)
+
+    assert math.isclose(result["volume_after"], _ellipse_parallel_volume(6.0, 3.0, distance, taper), rel_tol=1e-5)
+    assert BRepCheck_Analyzer(result["shape"]).IsValid()
+
+
+@pytest.mark.parametrize("distance, taper", [(1.0, -1.0), (10.0, 5.0)])
+def test_a_straight_bezier_with_both_end_poles_doubled_is_a_line(distance, taper):
+    """両端の極が重なった直線のベジエ(SVG の `C0 0 20 0 20 0`)で、断られるか、体積が 2.4% ずれる(曲面の積分が不正確)。"""
+    face = _bezier_face([(0.0, 0.0), (0.0, 0.0), (20.0, 0.0), (20.0, 0.0)], [(20.0, 10.0), (0.0, 10.0)])
+
+    result = _new(face, distance, taper)
+
+    assert math.isclose(result["volume_after"], _frustum(20.0, 10.0, distance, taper), rel_tol=1e-9)

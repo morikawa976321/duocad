@@ -183,8 +183,9 @@ def extrude_regions(
 # 穴の立体を cut する。`LocOpe_DPrism` は穴を無視し、`BRepOffsetAPI_DraftAngle` はベジエ・楕円の側面を
 # 傾けられない(実測は docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」)。
 
-#: 輪郭を縫い合わせる許容差(mm)。
-_SEW_TOL = 1.0e-6
+#: 輪郭を縫い合わせる許容差(mm)。細かい順に試す。楕円を傾けた側面(B スプラインの近似)は、押し出し量 0.1 mm で
+#: ふた・底との縫い目が 1e-6 では閉じず 1e-5 で閉じる(殻の `Tolerance` は 1e-7 と答えるので当てにならない。2026-10-19 実測)。
+_SEW_TOLS = (1.0e-6, 1.0e-5, 1.0e-4)
 
 #: 曲線の辺の曲率半径を測る刻み(辺1本あたり)。最小の曲率半径はこの標本の極小のまわりを詰めて求める。
 _CURVATURE_SAMPLES = 64
@@ -268,19 +269,28 @@ def _drafted_solid(
     if not top.IsDone():
         raise ValueError(_collapse_message(label))
 
-    sewing = BRepBuilderAPI_Sewing(_SEW_TOL)
-    for part in (base.Face(), shell, top.Face()):
+    for tolerance in _SEW_TOLS:
+        solid = _sewn_solid((base.Face(), shell, top.Face()), tolerance)
+        if solid is not None:
+            return solid
+    raise ValueError(_collapse_message(label))
+
+
+def _sewn_solid(parts: Sequence[Any], tolerance: float) -> Optional[Any]:
+    """面を縫って閉じた立体にする。自由辺が残るか、体積が無いか、`BRepCheck` が偽なら None。"""
+    sewing = BRepBuilderAPI_Sewing(tolerance)
+    for part in parts:
         sewing.Add(part)
     sewing.Perform()
     shells = TopExp_Explorer(sewing.SewedShape(), TopAbs_SHELL)
-    if not shells.More():
-        raise ValueError(f"failed to close the tapered {label}")
+    if sewing.NbFreeEdges() or not shells.More():
+        return None
     solid = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(shells.Current())).Solid()
     fix = ShapeFix_Solid(solid)
     fix.Perform()
     solid = fix.Solid()
     if not volume(solid) > 0 or not BRepCheck_Analyzer(solid).IsValid():
-        raise ValueError(_collapse_message(label))
+        return None
     return solid
 
 
@@ -314,6 +324,13 @@ def _regular_edge(edge: Any) -> Any:
         return edge  # 曲線の一部だけを使う辺は、端の制御点と辺の端が一致しない
     copy = geometry.Copy()
     poles = [copy.Pole(i) for i in range(1, copy.NbPoles() + 1)]
+    first = TopExp.FirstVertex_s(edge)
+    last = TopExp.LastVertex_s(edge)
+    if _on_chord(poles):
+        # 制御点がすべて弦の上なら形は線分そのもの。極をずらすと、両端の極が重なった直線(SVG の `C0 0 20 0 20 0`)で
+        # 傾けた面の体積の積分が 2.4% ずれる(sol レビューで再現)ので、線分に置き換える。
+        line = BRepBuilderAPI_MakeEdge(first, last).Edge()
+        return TopoDS.Edge_s(line.Reversed()) if edge.Orientation() == TopAbs_REVERSED else line
     changed = False
     for end, step in ((0, 1), (len(poles) - 1, -1)):
         nearest = end + step
@@ -330,16 +347,32 @@ def _regular_edge(edge: Any) -> Any:
         changed = True
     if not changed:
         return edge
-    first = TopExp.FirstVertex_s(edge)
-    last = TopExp.LastVertex_s(edge)
     rebuilt = BRepBuilderAPI_MakeEdge(copy, first, last).Edge()
     return TopoDS.Edge_s(rebuilt.Reversed()) if edge.Orientation() == TopAbs_REVERSED else rebuilt
+
+
+def _on_chord(poles: Sequence[Any]) -> bool:
+    """制御点がすべて始点と終点を結ぶ線分の上(線分の外へ出ない)にあるか。"""
+    start, end = poles[0], poles[-1]
+    chord = gp_Vec(start, end)
+    length = chord.Magnitude()
+    if length <= Precision.Confusion_s():
+        return False
+    chord.Divide(length)
+    for pole in poles:
+        offset = gp_Vec(start, pole)
+        along = offset.Dot(chord)
+        if offset.Crossed(chord).Magnitude() > Precision.Confusion_s():
+            return False
+        if along < -Precision.Confusion_s() or along > length + Precision.Confusion_s():
+            return False
+    return True
 
 
 def _far_closed_wires(shell: Any, base: Any, height: float) -> List[Any]:
     """殻の自由境界の閉じた線のうち、底面の平面から `height/2` より離れたもの(ふたの輪郭)。"""
     plane = BRepAdaptor_Surface(base).Plane()
-    bounds = ShapeAnalysis_FreeBounds(shell, _SEW_TOL, False, False)
+    bounds = ShapeAnalysis_FreeBounds(shell, _SEW_TOLS[0], False, False)
     explorer = TopExp_Explorer(bounds.GetClosedWires(), TopAbs_WIRE)
     out = []
     while explorer.More():

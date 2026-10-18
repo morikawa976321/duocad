@@ -121,6 +121,11 @@
     同じ点で `BRepLProp_CLProps` は接線ありと答えるのに `Normal` が LProp_NotDefined を投げる。
   - **曲率の極値は `Geom2dLProp_CurAndInf2d.PerformCurExt` で式で取れる**(曲率半径 0.001 mm の鋭いベジエの山を t=0.507 ちょうどで返す。
     極が重なった直線状のベジエでは `IsDone()=False`)。OCP の例外は共通の基底を持たず `Exception` を直に継ぐ。
+  - **楕円を傾けた側面と底・ふたの縫い目は、押し出し量 0.1 mm だと許容差 1e-6 で閉じない**(自由辺2本・`BRepCheck` 偽。1e-5 で閉じる)。
+    殻の `ShapeAnalysis_ShapeTolerance` は 1e-7 と答えるので当てにならない。両端の極が重なった直線のベジエを極をずらして傾けると、
+    体積の積分が 2.4% ずれる(sol レビューで再現。線分に置き換えれば正確)。
+- **`BRepGProp.LinearProperties` と `GCPnts_AbscissaPoint.Length` は、精度を渡さないと半径 6・3 の楕円の周長を 29.1035 と返す**
+  (真の値 29.0653。0.13% 大きい。`Length_s(curve, 1e-9)` なら 29.065345。2026-10-19 実測)。検算に使うなら精度を渡す。
 
 ## 複数面の押し出し（`kernel_extrude.extrude_faces`）
 
