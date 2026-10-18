@@ -2727,6 +2727,7 @@ export function createViewport(container: HTMLElement): Viewport {
       previewMaterial.dispose()
       edgeMaterial.dispose()
       annotations.clear()
+      measureAnnotation.dispose()
       optimizeDebug.clear()
       renderer.dispose()
       renderer.domElement.remove()
