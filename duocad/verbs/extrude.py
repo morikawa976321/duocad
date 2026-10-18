@@ -39,9 +39,7 @@ def extrude(
     mode: str = "join",
     body_id: Optional[BodyId] = None,
 ) -> Operation:
-    distance = float(distance)
-    if distance == 0.0:
-        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    distance = kernel_extrude.check_distance(distance)
     if mode not in MODES:
         raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
 
@@ -94,9 +92,7 @@ def extrude_faces(
 
     失敗時は例外を送出し、**documentにもログにも変更を残さない**(幾何計算をログの append より先に済ませる)。
     """
-    distance = float(distance)
-    if distance == 0.0:
-        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    distance = kernel_extrude.check_distance(distance)
     if mode not in MODES:
         raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
 

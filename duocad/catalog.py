@@ -30,6 +30,7 @@ WebSocket・MCP・アプリ内AIはどれも `Session.apply` を通って入口�
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Optional
 
 #: `Command.category` に書ける値。
@@ -279,6 +280,44 @@ def check_arguments(schema: dict, arguments: dict) -> Optional[str]:
             continue
         if not _value_matches_json_type(value, expected):
             return f"argument {key!r} must be a {expected}, got {value!r}"
+    for key, value in arguments.items():
+        problem = _unusable_value(value)
+        if problem is not None:
+            return f"argument {key!r} has {problem}"
+    return None
+
+
+def _unusable_value(value: Any) -> Optional[str]:
+    """値(配列・辞書は入れ子の中まで)に、受け取ってはいけない数・文字列があればその説明を返す(無ければ None)。
+
+    - **非有限の数**(NaN / ±inf / `1e999`): Python の `json.loads` は非標準の `NaN` `Infinity` と、標準の `1e999` を
+      `float` にする。通すと `extrude` はプロセスごと落ち、他の verb は文書・状態配信・保存ファイルに裸の `NaN` を入れて
+      ブラウザの `JSON.parse` が状態フレームを読めなくなる。`float` の範囲を超える整数(`10**400`)も同じく断る。
+    - **UTF-8 に符号化できない文字列**(孤立サロゲート JSON の `\\ud800` 表記): 状態配信・自動保存・応答の符号化が失敗する。
+    """
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                return f"a non-finite number ({item!r}); numbers must be finite"
+        elif isinstance(item, int):
+            try:
+                float(item)
+            except OverflowError:
+                return "a number out of range"
+        elif isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                return "a string with characters that cannot be encoded as UTF-8 (lone surrogate)"
+        elif isinstance(item, list):
+            pending.extend(item)
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
     return None
 
 
@@ -330,7 +369,7 @@ PREDICATE_HELP = (
     "(外向き法線と軸の内積が value より大きい。上面なら axis Z・value 0.9) / "
     '{"op": "area_gt", "value": 数} / '
     '{"op": "kind_is", "value": "plane"|"cylinder_full"|"cylinder_partial"|"torus"|"cone"|"bspline"|"other"}。'
-    '辺の条件: {"op": "parallel_to", "axis": 軸} / {"op": "length_gt", "value": 数} / '
+    '辺の条件: {"op": "parallel_to", "axis": 軸}(直線の辺だけ。円弧などは選ばない) / {"op": "length_gt", "value": 数} / '
     '{"op": "length_lt", "value": 数} / {"op": "kind_is", "value": "line"|"circle"|"other"} / '
     '{"op": "on_boundary_of_face", "face": 面の番号}(その面の外周の辺。body が要る)。'
     "refs とは同時に渡せない"
