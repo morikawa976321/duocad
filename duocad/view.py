@@ -690,11 +690,13 @@ class DocumentView:
     def edges(self, body_id: str) -> dict:
         """1Bodyの辺を折れ線で返す(キャッシュ付き)。
 
-        戻り値: `{"body_id", "revision", "edges": [kernel.tessellate_edges の1件, ...]}`
+        戻り値: `{"body_id", "revision", "deviation", "edges": [kernel.tessellate_edges の1件, ...]}`
 
-        **`state` にも `delta` にも入れない**(辺が要るのはフィレット・面取り中だけで、常時配ると
+        **`state` にも `delta` にも入れない**(画面はカーソルの近くのボディの分だけ頼む。常時配ると
         27部品(2835面)の初回配信にその数倍の折れ線が乗る)。`revision` は、クライアントが「今の形の辺か」
         を判定するためで、古い辺を指したままフィレットをかける(別の辺が丸まる)経路を閉じる。
+        `deviation` は折れ線の弦の偏差[mm]: 曲面の上の辺は面の三角形と別々に弦へ寄るので、画面の遮蔽判定が
+        この分の奥行きの差を許す(`web/src/occlusion.ts`)。
         """
         body = self._visible_brep(body_id, "辺")
         revision = self.body_revision(body_id)
@@ -703,7 +705,7 @@ class DocumentView:
             self._edge_cache, body_id, body.shape, (edge_deviation, edge_angular),
             lambda: kernel.tessellate_edges(body.shape, edge_deviation, edge_angular),
         )
-        return {"body_id": body_id, "revision": revision, "edges": described}
+        return {"body_id": body_id, "revision": revision, "deviation": edge_deviation, "edges": described}
 
     def edge_chains(self, body_id: str, edge_indices: list) -> dict:
         """頼まれた辺それぞれが属する連なり(フィレット・面取りで1本として振る舞う辺の組)を返す。

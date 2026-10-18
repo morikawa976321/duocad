@@ -395,6 +395,8 @@ export interface EdgeGeometry {
 export interface EdgesPayload {
   body_id: string
   revision: number
+  /** 折れ線の弦の偏差[mm](`DocumentView.edges`)。遮蔽判定がこの分の奥行きの差を許す。 */
+  deviation: number
   edges: EdgeGeometry[]
 }
 
@@ -421,7 +423,7 @@ export interface VertexGeometry {
 
 /**
  * 頂点の応答。状態の配信ではない(要求した接続にだけ届く)。
- * 全頂点が入っているが、画面に出るのは選択に入った添字だけ。`revision` の意味は `EdgesPayload` と同じ。
+ * 全頂点が入っているが、画面に印が出るのはホバー中と選択中の添字だけ。`revision` の意味は `EdgesPayload` と同じ。
  */
 export interface VerticesPayload {
   body_id: string
@@ -1289,6 +1291,7 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onEdges({
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
+        deviation: message.deviation ?? 0,
         edges: message.edges ?? [],
       })
     } else if (message.type === 'edge_chains') {

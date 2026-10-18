@@ -470,7 +470,10 @@ COMMANDS: tuple[Command, ...] = (
                 "array",
                 "明示参照の配列。面・辺・頂点は "
                 '{"body": body_id, "kind": "face"|"edge"|"vertex", "index": 番号}、'
-                'スケッチの領域は {"sketch": sketch_id, "index": 番号}(番号は1始まり)。'
+                'ボディ丸ごとは {"body": body_id, "kind": "body"}、'
+                'スケッチの領域は {"sketch": sketch_id, "index": 番号}(番号は1始まり)、'
+                'スケッチの図形は {"sketch": sketch_id, "entity": entity_id, "point": null}'
+                "(point に x0 などの点の名前を入れるとその点だけ)。"
                 "predicate とは同時に渡せない",
                 required=False,
                 ws=False,
@@ -2445,8 +2448,8 @@ def agent_instructions(hidden: frozenset = frozenset()) -> str:
         "止まる（人の画面にその verb が起動し、選んだ対象が見える）。人が画面で起動した verb と途中の引数は "
         "describe_document / get_command の command に見える。その verb の引数は set_command_args で足し、確定は "
         "apply_command で行う（確定まで進めるかも人の指示の文面から判断する）。人が打っている途中の引数を上書きしない。"
-        "辺は、辺を使う verb(fillet / chamfer / move_body など)を起動している間だけ人の画面に出る。verb を起動せずに辺だけ"
-        "選んでも人には見えないので、辺を人と一緒に直すなら先に begin_command する(測定 measure は起動せず、選択から直接測る)。"
+        "人は画面に見えている面・辺・頂点・スケッチの点・線・領域をクリックで選べ、選択は種類を問わず画面に強調して出る"
+        "(verb の起動中は、人が選べるのはその verb が受け付ける種類だけ)。AI は見えていないものも参照で選べる。"
         "非表示のボディ・非表示のスケッチは選べず、メッシュのボディは面・辺・頂点を指せない(ボディ丸ごとなら指せる)。"
         "enter_sketch / leave_sketch で人の画面のモードが切り替わる（スケッチを作ると誰が作ってもそこへ入るので、"
         "描き終えて押し出したら leave_sketch で通常へ戻す）。"
