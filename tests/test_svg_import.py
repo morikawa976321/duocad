@@ -11,6 +11,7 @@ from duocad.document import Document
 from duocad.mcp_server import DocumentTools, McpServer
 from document_support import replay_through_json
 from mcp_support import call_error
+from session_support import select
 from duocad.region import RegionRef
 from duocad.server import Session
 from duocad.verbs import import_svg
@@ -747,7 +748,7 @@ def test_a_hidden_root_is_refused_as_value_error(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 失敗は何も残さない(領域が計算できない取り込み)
+# 失敗は何も残さない(領域が計算できない取り込み)・取り込んだ曲線の鏡映と複製
 # --------------------------------------------------------------------------------------
 HUGE_SCALE = 1.0e300
 
@@ -785,3 +786,27 @@ def test_a_failed_mcp_import_leaves_the_document_untouched(session: Session, tmp
     assert error["code"] == "invalid_argument"
     assert len(session.document.log.entries) == log_before
     assert session.document.sketches[0].entities == []
+
+
+def test_mirroring_and_copying_an_imported_curve_adds_no_named_values(session: Session, tmp_path: Path) -> None:
+    """落ちたら、取り込んだ曲線の鏡映・複製が制御点ごとに `d<n>` を登録する(1本8個。千本を超えると二乗時間で固まる)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.import_svg(sketch_id, str(write_svg(tmp_path, "curve.svg", SVG_WITH_UNITS)))
+    axis_id = session.add_line(sketch_id, [0.0, -100.0], [0.0, 100.0])["entity_id"]
+    names_before = set(session.document.parameters)
+    curves = [entity.id for entity in session.document.sketches[0].entities if entity.kind == "bezier"]
+    assert curves
+
+    select(session, [{"sketch": sketch_id, "entity": curve, "point": None} for curve in curves])
+    mirrored = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})["created"]
+    select(session, [{"sketch": sketch_id, "entity": curve, "point": None} for curve in curves])
+    copied = session.move_sketch_entities(0.0, 5.0, copy=True)["created"]
+
+    assert len(mirrored) == len(copied) == len(curves)
+    assert set(session.document.parameters) == names_before
+    by_id = {entity.id: entity for entity in session.document.sketches[0].entities}
+    for created in (*mirrored, *copied):
+        assert all(isinstance(value, float) for value in by_id[created].params.values())
+    first = sketch_module.entity_params(session.document, sketch_id, curves[0])
+    moved = sketch_module.entity_params(session.document, sketch_id, copied[0])
+    assert moved["y0"] == pytest.approx(first["y0"] + 5.0)
