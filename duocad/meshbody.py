@@ -40,6 +40,24 @@ def triangles(mesh: Mesh) -> Iterator[tuple]:
         )
 
 
+def triangles_with_area(mesh: Mesh) -> Iterator[tuple]:
+    """`triangles` から、面積が float64 の時点で厳密に0の三角形を除いたもの。
+
+    OCCT は球の極・円錐の頂点・3辺が集まる角のフィレット球面片に、2頂点の座標が一致する三角形を出す。
+    座標で溶接すると隣の三角形と辺が重なるだけで体積に寄与せず、除くと辺は2枚ずつの組に揃う(実測)。
+    判定は `validate_float32` と同じ厳密な向き判定(`boundary_check.degenerate_mask`)。
+    """
+    import numpy as np
+
+    from .boundary_check import degenerate_mask  # 素の numpy 実装。OCCT は使わない
+
+    points = np.asarray(mesh.positions, dtype=np.float64).reshape(-1, 3)
+    corners = points[np.asarray(mesh.indices, dtype=np.int64).reshape(-1, 3)]
+    keep = ~degenerate_mask(corners)
+    for (a, b, c) in corners[keep].tolist():
+        yield (tuple(a), tuple(b), tuple(c))
+
+
 def bbox_payload(lows, highs, *, size: bool = False) -> dict:
     """外接直方体の配りもの `{"min", "max", "center", ("size",) "diagonal"}`。
 
@@ -158,7 +176,8 @@ def write_stl(path, sources: Iterable[Iterable[tuple]]) -> None:
 
     **書く前に float32 に丸めた実際の座標を検証する**(`validate_float32`): float64 で正常な三角形が
     丸めで潰れる(2頂点が一致・共線)ことがある。不正なら ValueError で止め、既存の出力ファイルには
-    触らない(検証は open の前)。頂点を動かしたり三角形を捨てて通すことはしない。
+    触らない(検証は open の前)。頂点を動かしたり三角形を捨てて通すことはしない —— メッシュボディの三角形は
+    元から縮退していても断る。B-rep の極の三角形だけは、呼び出し側が先に除く(`triangles_with_area`)。
     """
     body = bytearray()
     rounded = []
@@ -182,7 +201,11 @@ def write_stl(path, sources: Iterable[Iterable[tuple]]) -> None:
         raise ValueError("cannot write an empty mesh to STL")
     problems = validate_float32(rounded)
     if problems:
-        raise ValueError("cannot write STL: float32 に丸めた三角形が不正 " + json.dumps(problems, ensure_ascii=False))
+        raise ValueError(
+            "cannot write STL: float32 の座標に不正な三角形がある"
+            "(degenerate=面積0。元の座標で縮退しているか float32 への丸めで潰れた) "
+            + json.dumps(problems, ensure_ascii=False)
+        )
     filename = os.fspath(path)
     try:
         with open(filename, "wb") as handle:

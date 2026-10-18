@@ -300,6 +300,6 @@ F2000_h2.0_w2 の `finalize` の入力を書き出し、製品と同じ集合演
 三角形分割の経路は3つ: (1) ビューア表示(`DocumentView.geometry` が `kernel.tessellate_selective`。ズームも注視面の指定も無い土台の粗さは `kernel.tessellate(shape, Session.deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)` と同じ)、
 (2) 記録用STL `final.stl`(`finalize.solid_mesh()` が `kernel.tessellate(shape, 0.2)` で作った配列をそのまま書く)、(3) `export_stl` MCPツール(`io_step.export_stl`)。
 **(3)は全B-repで(1)の土台と同じ `kernel.tessellate` の三角形をそのまま書く**(本人判断: 適用範囲は最適化の結果に絞らず全B-rep)。OCCT純正の `StlAPI_Writer` で測り直す経路(`kernel.write_stl`)は削除した。
-一致は `tests/test_stl_export.py` がビット単位で固定する(曲面を持つ形・複数Body)。ズーム中の画面の粗さには合わせない(書き出しの粗さはカメラで変わらない。`tests/test_adaptive_resolution.py`)。
+一致は `tests/test_stl_export.py` がビット単位で固定する(曲面を持つ形・複数Body。面積0の三角形だけは書き出しで除く)。ズーム中の画面の粗さには合わせない(書き出しの粗さはカメラで変わらない。`tests/test_adaptive_resolution.py`)。
 **旧経路との差の実体は並列フラグではなく角度偏差だった**(旧0.5 rad、画面0.35 rad)。最適化の結果はマーチングキューブ由来の平面だけなので旧経路でも三角形は一致していた。
 変わったのは曲面を持つB-repで、同じ偏差でも細かくなる(hanger のB-rep 12 Body・63面、偏差0.2 mmで 9,460枚 → 13,508枚)。書き出し時間は旧経路の1.4〜2.7倍(いずれも0.5秒未満)。
