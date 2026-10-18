@@ -88,7 +88,10 @@ def test_a_pool_that_breaks_while_the_consumer_is_busy_is_replaced_not_raised() 
 def test_a_last_line_cut_inside_a_utf8_character_does_not_stop_the_resume(fake_study) -> None:
     """落ちたら、日本語を含む行が文字の途中で切れた JSONL を読む段が UnicodeDecodeError で止まり、再開できない。"""
     whole = json.dumps(dict(name="A", ok=True), ensure_ascii=False).encode("utf-8")
-    cut = json.dumps(dict(name="B", note="日本語の備考"), ensure_ascii=False).encode("utf-8")[:-5]  # 文字の途中で切る
+    line = json.dumps(dict(name="B", note="日本語の備考"), ensure_ascii=False).encode("utf-8")
+    cut = line[: line.index("備".encode("utf-8")) + 1]  # 「備」の3バイトのうち最初の1バイトで切る
+    with pytest.raises(UnicodeDecodeError):
+        cut.decode("utf-8")  # 通常の復号では読めない切り方になっている
     fake_study.write_bytes(whole + b"\n" + cut)
 
     assert S.main(["fake", "--workers", "1"]) == 0

@@ -319,6 +319,32 @@ def test_the_guard_does_not_stop_a_fillet_on_an_obtuse_edge_whose_radius_equals_
     assert kernel.fillet_edges(shape, {index: 5.0})["shape"] is not None
 
 
+def _drilled_cone():
+    """下の半径 20・上の半径 10・高さ 20 の円錐台から、半径 5 の円柱を抜いた形(上面は幅 5 の平面の環、外周の隣は円錐面)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCone, BRepPrimAPI_MakeCylinder
+
+    cone = BRepPrimAPI_MakeCone(20.0, 10.0, 20.0).Shape()
+    return BRepAlgoAPI_Cut(cone, BRepPrimAPI_MakeCylinder(5.0, 20.0).Shape()).Shape()
+
+
+def test_the_guard_does_not_stop_a_fillet_between_a_plane_and_a_cone_whose_radius_equals_the_ring_width():
+    """上面の環(幅 5)の外周を半径 5 で丸める。隣が円錐面でも、面の中へ使う幅は `5·tan(φ/2)`(φ=63 度)で幅 5 に届かず、
+    OCCT は正常な形を作る。落ちたら、隣が曲面だと法線を取らず半径そのものを幅とみなして、正しく丸められる形を断っている。"""
+    import math
+
+    shape = _drilled_cone()
+    edge_map = kernel._edge_map(shape)
+    (outer,) = [
+        edge["index"]
+        for edge in query.describe_edges(shape)
+        if edge["kind"] == "circle" and abs(edge["length"] - 2 * math.pi * 10.0) < 1e-6 and abs(edge["start"][2] - 20.0) < 1e-6
+    ]
+
+    assert kernel_chains.fillet_consumes_face(shape, edge_map, {outer: 5.0}) is None
+    assert kernel.fillet_edges(shape, {outer: 5.0})["shape"] is not None
+
+
 def test_the_guard_still_finds_the_radius_that_consumes_the_slanted_face():
     """同じ辺は、使う幅 `R·tan(φ/2)` が斜めの面の幅 5 と一致する R = 10 で止める(OCCT は `IsDone()=False`)。"""
     shape = _parallelogram_prism()

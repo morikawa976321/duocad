@@ -399,6 +399,7 @@ def _centred(kind: str):
         "square": lambda: add_rectangle(document, sketch_id, (-3.0, -3.0), 6.0, 6.0),
         "ellipse": lambda: add_ellipse(document, sketch_id, (0.0, 0.0), 20.0, 8.0, 0.0),
         "round_ellipse": lambda: add_ellipse(document, sketch_id, (0.0, 0.0), 8.0, 8.0, 0.0),
+        "full_arc": lambda: add_arc(document, sketch_id, (0.0, 0.0), 10.0, 0.0, 360.0),
     }[kind]()
     return document, sketch_id, entity
 
@@ -427,6 +428,7 @@ def test_a_shape_centred_on_the_pivot_whose_copies_do_not_coincide_is_repeated(k
         ("square", 4, 360.0),     # 正方形は 90 度で自分に重なる
         ("ellipse", 2, 360.0),
         ("round_ellipse", 3, 360.0),  # 縦横が同じ楕円は円
+        ("full_arc", 2, 360.0),       # 始終の角が同じ(0〜360 度)円弧は全周で、円と同じ
     ],
 )
 def test_a_copy_that_lands_on_the_original_is_still_refused(kind, count, total_angle):

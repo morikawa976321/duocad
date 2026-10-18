@@ -176,6 +176,9 @@ def _geometry_signature(kind: str, params: Dict[str, float]) -> tuple:
     if kind == "rectangle":
         return ("rectangle", *sorted((r(x), r(y)) for x, y in kernel_sketch.rectangle_corners(params)))
     if kind == "arc":
+        sweep = (float(params["end_deg"]) - float(params["start_deg"])) % 360.0
+        if sweep < 1e-9 or sweep > 360.0 - 1e-9:  # 始終の角が同じ(0〜360 度など)円弧は全周で、円と同じ
+            return ("circle", r(params["cx"]), r(params["cy"]), r(2.0 * float(params["radius"])))
         return (
             "arc", r(params["cx"]), r(params["cy"]), r(params["radius"]),
             r(params["start_deg"] % 360.0) % 360.0, r(params["end_deg"] % 360.0) % 360.0,
