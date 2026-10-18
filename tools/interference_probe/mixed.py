@@ -57,7 +57,8 @@ def main(argv=None):
     for i, j in combinations(range(len(bodies)), 2):
         if M.bbox_gap(boxes[i], boxes[j]) > args.clearance + args.deviation * 2:
             continue
-        r = M.manifold_pair(mfs[i], mfs[j], search=args.clearance * 2)
+        # min_gap は [0, search] に丸める。search を 0 にすると全部 0(=接触)になる。
+        r = M.manifold_pair(mfs[i], mfs[j], search=max(args.clearance * 2, 1.0))
         inter = mfs[i] ^ mfs[j]
         area = inter.surface_area()
         thick = 2 * r["volume"] / area if area else 0.0

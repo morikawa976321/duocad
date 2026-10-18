@@ -58,6 +58,11 @@ def main(argv=None):
         row.update(checker_kinds=k["kinds"], checker_warn=k["warnings"], checker_s=k["seconds"])
         g = M.gf_pairs([case.a, case.b])
         row.update(gf_volume=g["pairs"].get((0, 1), 0.0), gf_warn=g["warnings"], gf_s=g["seconds"])
+        from .pipeline import relation_of
+        gr = M.gf_relations([case.a, case.b])
+        rel = gr["relations"].get((0, 1), dict(kind="unknown"))
+        row.update(gf_relation=relation_of(rel) if not gr["errors"] else "unknown", gf_detail=rel,
+                   gf_rel_s=gr["seconds"])
         try:
             ta = M.tessellated(case.a, args.deviation)
             tb = M.tessellated(case.b, args.deviation)
@@ -72,9 +77,12 @@ def main(argv=None):
         row.update(prox_pairs=p.get("face_pairs"), prox_value=p.get("proximity"), prox_s=p["seconds"],
                    prox_err=p.get("proximity_error"))
         rows.append(row)
+        expect_rel = dict(overlap="overlap", contact="contact", clear="separated")[case.expect]
+        row["gf_ok"] = row["gf_relation"] == expect_rel
         ok_e = "OK" if row["exact_class"] == case.expect else "NG"
         ok_m = "OK" if row.get("mf_class") == case.expect else "NG"
-        print(f"{case.name:28s} expect={case.expect:8s} exact={row['exact_class']:8s}{ok_e} "
+        print(f"{case.name:28s} expect={case.expect:8s} gf={row['gf_relation']:9s}{'OK' if row['gf_ok'] else 'NG'} "
+              f"exact={row['exact_class']:8s}{ok_e} "
               f"mf={row.get('mf_class'):8s}{ok_m} | Vexp={case.volume!s:>10.10} Vcom={c['volume']:.6g} "
               f"Vgf={row['gf_volume']:.6g} Vmf={row.get('mf_volume', float('nan')):.6g} | "
               f"gexp={case.gap:.6g} d={row['dist'] if row['dist'] is not None else float('nan'):.6g} "

@@ -1,27 +1,33 @@
-"""らせんのねじ山(B-spline の線織面)どうしで、厳密経路とメッシュ経路の精度・時間を比べる。
+r"""らせんのねじ山(B-spline の線織面)どうしで、方式ごとの精度・時間を比べる。
 
-    .\\.venv\\Scripts\\python.exe -m tools.interference_probe.threads
+    .\.venv\Scripts\python.exe -m tools.interference_probe.threads [--timeout 300]
 
 ねじ山は tools/thread_prototype.py の `threaded_segment`(ねじ verb の採用方式)で作る。雄と雌の山形を
 半径方向に ±off ずらすと、60° の山形では斜面どうしの隙間は約 2·off·sin30° = off、山頂・谷は 2·off になる。
 off < 0 は雄が太い(食い込む)。
+
+方式ごとに子プロセスで走らせ、--timeout 秒で打ち切る(OCCT の呼び出しは Python から中断できない。
+1回目はプロセス1本で全部を回し、最初の組の途中で 20 分の打ち切りに掛かった)。
 """
 from __future__ import annotations
 
-import math
+import argparse
+import json
+import subprocess
 import sys
 import time
+from pathlib import Path
 
-from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
-from OCP.gp import gp_Trsf, gp_Vec
-
-from tools.thread_prototype import iso_profile, threaded_segment
-
-from . import methods as M
-from .cases import box, cut
+OUT = Path("output/interference_probe/threads")
 
 
-def pair(d: float, pitch: float, off: float, length: float = 10.0):
+def build(d, pitch, off, length=10.0):
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.gp import gp_Trsf, gp_Vec
+
+    from tools.thread_prototype import iso_profile, threaded_segment
+
+    from .cases import box, cut
     male = threaded_segment(iso_profile(d / 2 - off, pitch), pitch, length)
     void = threaded_segment(iso_profile(d / 2 + off, pitch), pitch, length + 4 * pitch)
     shift = gp_Trsf()
@@ -32,31 +38,71 @@ def pair(d: float, pitch: float, off: float, length: float = 10.0):
     return male, nut
 
 
-def main():
-    rows = []
+def run_one(method, male_path, nut_path):
+    """子プロセス側: 1方式だけ測って JSON を1行出す。"""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepTools import BRepTools
+    from OCP.TopoDS import TopoDS_Shape
+
+    from . import methods as M
+
+    def read(p):
+        s = TopoDS_Shape()
+        BRepTools.Read_s(s, str(p), BRep_Builder())
+        return s
+    male, nut = read(male_path), read(nut_path)
+    t0 = time.perf_counter()
+    if method == "dist":
+        r = M.dist(male, nut, parallel=True)
+        out = dict(distance=r.get("distance"), inner=r.get("inner"))
+    elif method == "gf":
+        r = M.gf_relations([male, nut])
+        rel = r["relations"].get((0, 1), {})
+        out = dict(kind=rel.get("kind"), volume=rel.get("volume"), thickness=rel.get("thickness"),
+                   errors=r["errors"], warnings=r["warnings"])
+    elif method.startswith("mf"):
+        dev = float(method[2:])
+        ma, mb = M.to_manifold(*M.tessellated(male, dev)), M.to_manifold(*M.tessellated(nut, dev))
+        t_tess = time.perf_counter() - t0
+        r = M.manifold_pair(ma, mb, search=1.0)
+        out = dict(gap=r["min_gap"], volume=r["volume"], tris=ma.num_tri() + mb.num_tri(), tess_s=t_tess)
+    else:
+        raise ValueError(method)
+    out["seconds"] = time.perf_counter() - t0
+    print(json.dumps(out))
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--timeout", type=float, default=300)
+    ap.add_argument("--one", nargs=3, help=argparse.SUPPRESS)
+    args = ap.parse_args(argv)
+    if args.one:
+        run_one(*args.one)
+        return 0
+    from OCP.BRepTools import BRepTools
+
+    OUT.mkdir(parents=True, exist_ok=True)
     for d, pitch in [(8.0, 1.25), (20.0, 2.5)]:
         for off in (0.1, 0.05, 0.0, -0.05):
             t0 = time.perf_counter()
-            male, nut = pair(d, pitch, off)
+            male, nut = build(d, pitch, off)
             t_build = time.perf_counter() - t0
-            dd = M.dist(male, nut)
-            c = M.common(male, nut)
-            g = M.gf_pairs([male, nut])
-            line = (f"M{d:g}x{pitch:g} off={off:+.2f} build={t_build:.2f}s | exact d={dd.get('distance', float('nan')):.5f} "
-                    f"inner={dd.get('inner')} ({dd['seconds']:.2f}s) common V={c['volume']:.4f} warn={c['warnings']} "
-                    f"err={c['errors']} ({c['seconds']:.2f}s) gf V={g['pairs'].get((0, 1), 0.0):.4f} ({g['seconds']:.2f}s)")
-            for dev in (0.2, 0.05, 0.01):
+            tag = f"M{d:g}x{pitch:g}_off{off:+.2f}"
+            mp, np_ = OUT / f"{tag}_male.brep", OUT / f"{tag}_nut.brep"
+            BRepTools.Write_s(male, str(mp))
+            BRepTools.Write_s(nut, str(np_))
+            line = f"{tag} build={t_build:.1f}s"
+            for method in ("gf", "dist", "mf0.2", "mf0.05", "mf0.01"):
                 try:
-                    t1 = time.perf_counter()
-                    ma, mb = M.to_manifold(*M.tessellated(male, dev)), M.to_manifold(*M.tessellated(nut, dev))
-                    t_tess = time.perf_counter() - t1
-                    mr = M.manifold_pair(ma, mb, search=1.0)
-                    line += (f" | mf{dev:g} gap={mr['min_gap']:.5f} V={mr['volume']:.4f} "
-                             f"(tess {t_tess:.2f}s + {mr['seconds']:.3f}s, {ma.num_tri() + mb.num_tri()} tris)")
-                except Exception as exc:
-                    line += f" | mf{dev:g} error {exc!r:.80}"
+                    proc = subprocess.run([sys.executable, "-X", "utf8", "-m", "tools.interference_probe.threads",
+                                           "--one", method, str(mp), str(np_)],
+                                          capture_output=True, text=True, timeout=args.timeout)
+                    last = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else f"rc={proc.returncode}"
+                    line += f" | {method} {last}"
+                except subprocess.TimeoutExpired:
+                    line += f" | {method} timeout>{args.timeout:g}s"
             print(line, flush=True)
-            rows.append(line)
     return 0
 
 

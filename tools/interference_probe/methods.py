@@ -22,6 +22,7 @@ from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Builder, BOPAlgo_CheckerSI, BOPAlgo
 from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Builder
 from OCP.BRepBndLib import BRepBndLib
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape, BRepExtrema_ShapeProximity
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
@@ -82,6 +83,7 @@ def common(a: TopoDS_Shape, b: TopoDS_Shape, fuzzy: float = 0.0, parallel: bool 
     op.SetOperation(BOPAlgo_Operation.BOPAlgo_COMMON)
     op.SetFuzzyValue(fuzzy)
     op.SetRunParallel(parallel)
+    op.SetNonDestructive(True)
     op.Perform()
     out = dict(errors=bool(op.HasErrors()), warnings=bool(op.HasWarnings()))
     shape = op.Shape()
@@ -138,6 +140,7 @@ def gf_pairs(shapes: Sequence[TopoDS_Shape], fuzzy: float = 0.0, parallel: bool 
     gf.SetArguments(args)
     gf.SetFuzzyValue(fuzzy)
     gf.SetRunParallel(parallel)
+    gf.SetNonDestructive(True)
     gf.Perform()
     # TopoDS_Shape の Python ラッパは __hash__ が形状の同一性を返すが、__eq__ は Python の同一性なので
     # 形状そのものを辞書のキーにすると共有された破片が別のキーになる(実測)。hash で引いて IsSame で確かめる。
@@ -146,7 +149,7 @@ def gf_pairs(shapes: Sequence[TopoDS_Shape], fuzzy: float = 0.0, parallel: bool 
         exp = TopExp_Explorer(s, TopAbs_SOLID)
         while exp.More():
             solid = exp.Current()
-            pieces = list(gf.Modified(solid)) or [solid]
+            pieces = list(gf.Modified(solid)) or ([] if gf.IsDeleted(solid) else [solid])
             for piece in pieces:
                 if piece.ShapeType() != TopAbs_SOLID:
                     continue
@@ -245,15 +248,51 @@ def _hashes(shape, kind) -> Dict[int, TopoDS_Shape]:
     return out
 
 
+def _shared(a: Dict[int, TopoDS_Shape], b: Dict[int, TopoDS_Shape]) -> List[TopoDS_Shape]:
+    """hash で引き、IsSame で確かめる(hash の衝突で別の形状を共有と読まない)。"""
+    return [a[h] for h in a.keys() & b.keys() if a[h].IsSame(b[h])]
+
+
+def _area(shape) -> float:
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(shape, props)
+    return props.Mass()
+
+
+def obb_min_side(shape) -> float:
+    from OCP.Bnd import Bnd_OBB
+    obb = Bnd_OBB()
+    BRepBndLib.AddOBB_s(shape, obb, False, True, False)
+    return 2 * min(obb.XHSize(), obb.YHSize(), obb.ZHSize())
+
+
+def overlap_measures(pieces: Sequence[TopoDS_Shape]) -> Dict:
+    """重なりの立体片の体積・外側の面積・厚さの目安 2V/A・片ごとの有向境界箱の最小辺の最大。
+
+    2つの片に共有される面(第三のボディや GF の分割でできた内部の面)は面積から除く。除かないと
+    同じ重なりでも分割のされ方で 2V/A が下がる(実測: 2.22 → 1.67)。
+    """
+    v = sum(volume(p) for p in pieces)
+    faces: Dict[int, list] = {}
+    for p in pieces:
+        for h, f in _hashes(p, TopAbs_FACE).items():
+            slot = faces.setdefault(h, [f, 0])
+            slot[1] += 1
+    a = sum(_area(f) for f, n in faces.values() if n == 1)
+    return dict(volume=v, area=a, thickness=2 * v / a if a else 0.0,
+                obb_min=max(obb_min_side(p) for p in pieces), pieces=len(pieces))
+
+
 def gf_relations(shapes: Sequence[TopoDS_Shape], fuzzy: float = 0.0, parallel: bool = True,
-                 pairs: Sequence[tuple] = None) -> Dict:
+                 pairs: Sequence[tuple] = None, nondestructive: bool = True) -> Dict:
     """General Fuse を1回かけ、組ごとの関係を像の共有から読む。
 
     GF は一致する部分(重なりの立体・接する面・辺・点)を両方の像で同じ形状として共有する。
-    共有された立体があれば重なり(体積と厚さ 2V/A)、無くて共有された面があれば面の接触(面積)、
-    辺なら線の接触、頂点なら点の接触。どれも無ければ GF の許容差の範囲で触れていない。
+    共有された立体があれば重なり、無くて共有された面があれば面の接触(面積)、辺なら線の接触、
+    頂点なら点の接触。どれも無ければ GF の許容差の範囲で触れていない。
+
+    既定の破壊モードは入力の形状許容差を書き換える(実測: PC ケースで 27 体中 11 体)ので非破壊にする。
     """
-    from OCP.BRepGProp import BRepGProp as _G
     t0 = time.perf_counter()
     gf = BOPAlgo_Builder()
     args = TopTools_ListOfShape()
@@ -262,14 +301,24 @@ def gf_relations(shapes: Sequence[TopoDS_Shape], fuzzy: float = 0.0, parallel: b
     gf.SetArguments(args)
     gf.SetFuzzyValue(fuzzy)
     gf.SetRunParallel(parallel)
+    gf.SetNonDestructive(nondestructive)
     gf.Perform()
     t_gf = time.perf_counter() - t0
+    out = dict(errors=bool(gf.HasErrors()), warnings=bool(gf.HasWarnings()), gf_seconds=t_gf)
+    if gf.HasErrors():
+        out.update(relations={}, seconds=time.perf_counter() - t0)
+        return out
     images = []
     for s in shapes:
         pieces = []
         exp = TopExp_Explorer(s, TopAbs_SOLID)
         while exp.More():
-            pieces.extend(list(gf.Modified(exp.Current())) or [exp.Current()])
+            solid = exp.Current()
+            modified = list(gf.Modified(solid))
+            if modified:
+                pieces.extend(modified)
+            elif not gf.IsDeleted(solid):
+                pieces.append(solid)
             exp.Next()
         comp = compound(pieces)
         images.append({k: _hashes(comp, k) for k in (TopAbs_SOLID, TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX)})
@@ -278,28 +327,19 @@ def gf_relations(shapes: Sequence[TopoDS_Shape], fuzzy: float = 0.0, parallel: b
     rel = {}
     for i, j in pairs:
         a, b = images[i], images[j]
-        shared = {k: [a[k][h] for h in a[k].keys() & b[k].keys()] for k in a}
-        if shared[TopAbs_SOLID]:
-            v = sum(volume(s) for s in shared[TopAbs_SOLID])
-            area = 0.0
-            for s in shared[TopAbs_SOLID]:
-                props = GProp_GProps()
-                _G.SurfaceProperties_s(s, props)
-                area += props.Mass()
-            rel[(i, j)] = dict(kind="overlap", volume=v, thickness=2 * v / area if area else 0.0,
-                               pieces=len(shared[TopAbs_SOLID]))
-        elif shared[TopAbs_FACE]:
-            area = 0.0
-            for f in shared[TopAbs_FACE]:
-                props = GProp_GProps()
-                _G.SurfaceProperties_s(f, props)
-                area += props.Mass()
-            rel[(i, j)] = dict(kind="face", area=area)
-        elif shared[TopAbs_EDGE]:
-            rel[(i, j)] = dict(kind="edge", edges=len(shared[TopAbs_EDGE]))
-        elif shared[TopAbs_VERTEX]:
-            rel[(i, j)] = dict(kind="vertex", vertices=len(shared[TopAbs_VERTEX]))
-        else:
-            rel[(i, j)] = dict(kind="none")
-    return dict(errors=bool(gf.HasErrors()), warnings=bool(gf.HasWarnings()), relations=rel,
-                gf_seconds=t_gf, seconds=time.perf_counter() - t0)
+        solids = _shared(a[TopAbs_SOLID], b[TopAbs_SOLID])
+        if solids:
+            rel[(i, j)] = dict(kind="overlap", **overlap_measures(solids))
+            continue
+        faces = _shared(a[TopAbs_FACE], b[TopAbs_FACE])
+        if faces:
+            rel[(i, j)] = dict(kind="face", area=sum(_area(f) for f in faces))
+            continue
+        edges = _shared(a[TopAbs_EDGE], b[TopAbs_EDGE])
+        if edges:
+            rel[(i, j)] = dict(kind="edge", edges=len(edges))
+            continue
+        vertices = _shared(a[TopAbs_VERTEX], b[TopAbs_VERTEX])
+        rel[(i, j)] = dict(kind="vertex", vertices=len(vertices)) if vertices else dict(kind="none")
+    out.update(relations=rel, seconds=time.perf_counter() - t0)
+    return out
