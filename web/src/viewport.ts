@@ -2376,8 +2376,11 @@ export function createViewport(container: HTMLElement): Viewport {
     hoverAt = null
     orbiting = false
     section.setHover(false)
-    // ハンドルのドラッグは `pointercancel` でだけ打ち切る(`pointerleave` は `setPointerCapture` 中には来ず、来ても座標は届き続ける。キューブと同じ)。
-    if (event.type === 'pointercancel') section.pointerUp()
+    // ハンドルとキューブのドラッグは `pointercancel` でだけ打ち切る(`pointerleave` は `setPointerCapture` 中には来ず、来ても座標は届き続ける)。
+    if (event.type === 'pointercancel') {
+      section.pointerUp()
+      cube.cancel()
+    }
     if (!section.dragging()) renderer.domElement.style.cursor = ''
     sketchCursor.update(null, 'free', null)
     // 追従すべき位置が無いので「カーソル無し」(`point: null`)へ戻す(`sketchCursor` と同じ。さもないと直前の拡大状態が残る)。
