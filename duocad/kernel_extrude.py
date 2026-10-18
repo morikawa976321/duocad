@@ -39,7 +39,9 @@ from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
 from OCP.Bnd import Bnd_Box
 from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.GProp import GProp_GProps
-from OCP.GeomAbs import GeomAbs_Line, GeomAbs_Plane
+from OCP.Geom2dLProp import Geom2dLProp_CurAndInf2d
+from OCP.LProp import LProp_NotDefined
+from OCP.GeomAbs import GeomAbs_BezierCurve, GeomAbs_BSplineCurve, GeomAbs_Line, GeomAbs_Plane
 from OCP.Precision import Precision
 from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
 from OCP.ShapeFix import ShapeFix_Solid
@@ -52,7 +54,7 @@ from OCP.TopAbs import (
     TopAbs_VERTEX,
     TopAbs_WIRE,
 )
-from OCP.TopExp import TopExp_Explorer
+from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
@@ -103,15 +105,17 @@ def check_distance(distance: Any) -> float:
     return value
 
 
-#: テーパー角の絶対値の上限(度、含まない)。90° で側面が底面の平面に寝る。
-MAX_TAPER = 90.0
+#: テーパー角の絶対値の上限(度、含む)。`BRepOffsetAPI_MakeDraft` は 89.5° まで正しい形を作り、89.6〜89.7° は
+#: 断り、89.8° 以上は別の形(20×10 を 89.9° で体積 2000)を成功として返す(角度だけで決まり、距離・輪郭の大きさによらない。
+#: 2026-10-18 実測)。
+MAX_TAPER = 89.0
 
 
 def check_taper(taper: Any) -> float:
-    """テーパー角(度。正で太る・負で細る)を数にして検査する。非有限・`|taper| >= 90` は ValueError。"""
+    """テーパー角(度。正で太る・負で細る)を数にして検査する。非有限・`|taper| > 89` は ValueError。"""
     value = float(taper)
-    if not math.isfinite(value) or abs(value) >= MAX_TAPER:
-        raise ValueError(f"taper must satisfy |taper| < {MAX_TAPER:g} degrees, got {taper!r}")
+    if not math.isfinite(value) or abs(value) > MAX_TAPER:
+        raise ValueError(f"taper must satisfy |taper| <= {MAX_TAPER:g} degrees, got {taper!r}")
     return value
 
 
@@ -193,8 +197,20 @@ MIN_TAPER_DISTANCE = 1.0e-3
 def _tapered_prism(face: Any, offset: "gp_Vec", taper: float, label: str) -> Any:
     """平面の面 `face` を `offset` へ押し出し、側面を `taper` 度傾けた立体。潰れる組み合わせは ValueError。
 
-    `offset` は面に垂直であること(領域はスケッチの法線、面は面の法線へ押す)。
+    `offset` は面に垂直であること(領域はスケッチの法線、面は面の法線へ押す)。OCCT の例外も ValueError にする
+    (OCP の例外は共通の基底を持たず `Exception` を直に継ぐので、型のモジュールで見分ける)。
     """
+    try:
+        return _build_tapered_prism(face, offset, taper, label)
+    except ValueError:
+        raise
+    except Exception as error:
+        if not type(error).__module__.startswith("OCP"):
+            raise
+        raise ValueError(f"failed to taper {label}: {type(error).__name__}: {error}") from error
+
+
+def _build_tapered_prism(face: Any, offset: "gp_Vec", taper: float, label: str) -> Any:
     height = offset.Magnitude()
     if height < MIN_TAPER_DISTANCE:
         raise ValueError(
@@ -229,6 +245,7 @@ def _drafted_solid(
 ) -> Any:
     """閉じた輪郭線 `wire` の囲む領域を `axis` へ `height` 押し出し、側面を `angle`(ラジアン)だけ
     内向き(`inward`)か外向きに傾けた立体。"""
+    wire = _regular_wire(wire)
     _require_curvature_room(wire, reach, inward, label)
     draft = BRepOffsetAPI_MakeDraft(wire, axis, angle)
     draft.SetOptions(BRepBuilderAPI_RightCorner)
@@ -267,6 +284,58 @@ def _drafted_solid(
     return solid
 
 
+#: 端で重なった制御点をずらす量(mm)。ベジエ・B スプラインの形は端点を保ったままこれ未満しか動かない。
+_POLE_NUDGE = 1.0e-7
+
+
+def _regular_wire(wire: Any) -> Any:
+    """端の制御点が重なったベジエ・B スプラインの辺を、重なった制御点を次の別の制御点の方へ `_POLE_NUDGE` だけ
+    ずらした辺に置き換えた線(該当する辺が無ければ `wire` のまま)。
+
+    端の1階微分が0の辺(SVG の `C 0 0 0 0 20 0` など。書き出しでよく出る)は `MakeDraft` が
+    `gp_Vec::Normalize` の Standard_ConstructionError で失敗する(sol レビューで再現)。
+    """
+    edges = _edges(wire)
+    rebuilt = [_regular_edge(edge) for edge in edges]
+    if all(new is old for new, old in zip(rebuilt, edges)):
+        return wire
+    return _make_wire(rebuilt)
+
+
+def _regular_edge(edge: Any) -> Any:
+    curve = BRepAdaptor_Curve(edge)
+    kind = curve.GetType()
+    if kind not in (GeomAbs_BezierCurve, GeomAbs_BSplineCurve):
+        return edge
+    geometry = BRep_Tool.Curve_s(edge, curve.FirstParameter(), curve.LastParameter())
+    if abs(curve.FirstParameter() - geometry.FirstParameter()) > 1e-12 or abs(
+        curve.LastParameter() - geometry.LastParameter()
+    ) > 1e-12:
+        return edge  # 曲線の一部だけを使う辺は、端の制御点と辺の端が一致しない
+    copy = geometry.Copy()
+    poles = [copy.Pole(i) for i in range(1, copy.NbPoles() + 1)]
+    changed = False
+    for end, step in ((0, 1), (len(poles) - 1, -1)):
+        nearest = end + step
+        if poles[end].Distance(poles[nearest]) > Precision.Confusion_s():
+            continue
+        other = nearest
+        while 0 <= other < len(poles) and poles[other].Distance(poles[end]) <= Precision.Confusion_s():
+            other += step
+        if not 0 <= other < len(poles):
+            continue
+        toward = gp_Vec(poles[end], poles[other])
+        toward.Normalize()
+        copy.SetPole(nearest + 1, poles[end].Translated(toward.Multiplied(_POLE_NUDGE)))
+        changed = True
+    if not changed:
+        return edge
+    first = TopExp.FirstVertex_s(edge)
+    last = TopExp.LastVertex_s(edge)
+    rebuilt = BRepBuilderAPI_MakeEdge(copy, first, last).Edge()
+    return TopoDS.Edge_s(rebuilt.Reversed()) if edge.Orientation() == TopAbs_REVERSED else rebuilt
+
+
 def _far_closed_wires(shell: Any, base: Any, height: float) -> List[Any]:
     """殻の自由境界の閉じた線のうち、底面の平面から `height/2` より離れたもの(ふたの輪郭)。"""
     plane = BRepAdaptor_Surface(base).Plane()
@@ -301,13 +370,20 @@ def _require_curvature_room(wire: Any, reach: float, inward: bool, label: str) -
         curve = BRepAdaptor_Curve(edge)
         if curve.GetType() == GeomAbs_Line:
             continue
-        for t in _sharpest_parameters(curve):
+        for t in _sharpest_parameters(edge, region, curve):
             props = BRepLProp_CLProps(curve, t, 2, Precision.Confusion_s())
+            # 極が重なったベジエ(形は直線)の端は1階微分が0で、接線は定まるが `Normal` が LProp_NotDefined を投げる。
+            # その点は曲がっていないものとして飛ばす(近くの標本が実際の曲率を拾う)。
+            if not props.IsTangentDefined():
+                continue
             curvature = props.Curvature()
-            if curvature <= 0.0 or 1.0 / curvature > reach:
+            if not math.isfinite(curvature) or curvature <= 0.0 or 1.0 / curvature > reach:
                 continue
             towards, tangent = gp_Dir(), gp_Dir()
-            props.Normal(towards)
+            try:
+                props.Normal(towards)
+            except LProp_NotDefined:
+                continue
             props.Tangent(tangent)
             if edge.Orientation() == TopAbs_REVERSED:
                 tangent.Reverse()
@@ -316,21 +392,39 @@ def _require_curvature_room(wire: Any, reach: float, inward: bool, label: str) -
                 raise ValueError(_collapse_message(label))
 
 
-def _sharpest_parameters(curve: Any) -> List[float]:
-    """曲率を見るパラメータ: 等間隔の標本と、標本の曲率の極大のまわりを黄金分割で詰めた点。
+def _sharpest_parameters(edge: Any, region: Any, curve: Any) -> List[float]:
+    """曲率を見るパラメータ: 曲率の極値(`Geom2dLProp_CurAndInf2d` で面の上の2次元曲線から式で求める)、
+    等間隔の標本、標本の曲率の極大のまわりを黄金分割で詰めた点。
 
-    等間隔の標本だけでは、楕円の継ぎ目をずらすと最小の曲率半径(長軸の端)が標本の間に落ちて見逃す(sol レビューで再現)。
+    標本だけでは継ぎ目をずらした楕円の長軸の端を、黄金分割だけでは区間に極大が複数ある鋭いベジエの山(曲率半径 0.001 mm)を
+    見逃す(どちらも sol レビューで再現)。極値が求まらない曲線(極が重なった直線状のベジエ)は標本と黄金分割に任せる。
     """
     first, last = curve.FirstParameter(), curve.LastParameter()
     params = [first + (last - first) * k / _CURVATURE_SAMPLES for k in range(_CURVATURE_SAMPLES + 1)]
     values = [_curvature(curve, t) for t in params]
-    out = list(params)
+    out = list(params) + _curvature_extrema(edge, region, first, last)
     for k, value in enumerate(values):
         low = values[k - 1] if k > 0 else -1.0
         high = values[k + 1] if k < _CURVATURE_SAMPLES else -1.0
         if value >= low and value >= high and (value > low or value > high):
             out.append(_golden_max(curve, params[max(k - 1, 0)], params[min(k + 1, _CURVATURE_SAMPLES)]))
     return out
+
+
+def _curvature_extrema(edge: Any, region: Any, first: float, last: float) -> List[float]:
+    """辺の面の上の2次元曲線(平面の面では3次元の辺とパラメータが一致する)の曲率の極値のパラメータ。"""
+    pcurve = BRep_Tool.CurveOnSurface_s(edge, region, first, last)
+    if pcurve is None:
+        return []
+    finder = Geom2dLProp_CurAndInf2d()
+    finder.PerformCurExt(pcurve)
+    if not finder.IsDone():
+        return []
+    return [
+        finder.Parameter(i)
+        for i in range(1, finder.NbPoints() + 1)
+        if first <= finder.Parameter(i) <= last
+    ]
 
 
 def _golden_max(curve: Any, low: float, high: float) -> float:
@@ -351,7 +445,9 @@ def _golden_max(curve: Any, low: float, high: float) -> float:
 
 
 def _curvature(curve: Any, t: float) -> float:
-    return BRepLProp_CLProps(curve, t, 2, Precision.Confusion_s()).Curvature()
+    props = BRepLProp_CLProps(curve, t, 2, Precision.Confusion_s())
+    curvature = props.Curvature() if props.IsTangentDefined() else 0.0
+    return curvature if math.isfinite(curvature) else 0.0
 
 
 def _require_uncollapsed(body: Any, face: Any, offset: "gp_Vec", holes: int, label: str) -> None:

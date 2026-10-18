@@ -211,10 +211,16 @@ def test_the_same_outlines_pass_before_they_collapse(face, taper):
     assert BRepCheck_Analyzer(result["shape"]).IsValid()
 
 
-@pytest.mark.parametrize("taper", [90.0, -90.0, 120.0, float("nan"), float("inf")])
-def test_taper_must_be_below_90_degrees(taper):
-    with pytest.raises(ValueError, match="taper"):
+@pytest.mark.parametrize("taper", [89.5, -89.5, 89.9, -89.9, 90.0, -90.0, 120.0, float("nan"), float("inf")])
+def test_taper_must_be_at_most_89_degrees(taper):
+    """89.8° 以上で MakeDraft が別の形を成功として返す(89.9° で体積 2000)。上限 89° を越える角度が通る。"""
+    with pytest.raises(ValueError, match="taper must satisfy"):
         _new(_rect(), 10.0, taper)
+
+
+def test_the_steepest_allowed_taper_builds_the_right_shape():
+    result = _new(_rect(), 10.0, kernel_extrude.MAX_TAPER)
+    assert math.isclose(result["volume_after"], _frustum(20.0, 10.0, 10.0, kernel_extrude.MAX_TAPER), rel_tol=REL)
 
 
 def test_zero_taper_is_the_plain_extrusion():
@@ -449,3 +455,64 @@ def test_a_growing_half_disk_is_not_refused(taper):
     box = kernel.bounding_box(result["shape"])
     assert box["min"][0] == pytest.approx(-10.0 * _slope(taper), abs=1e-6)
     assert box["max"][0] == pytest.approx(5.0 + 10.0 * _slope(taper), abs=1e-6)
+
+
+def _bezier_face(poles, closing):
+    """3次ベジエ `poles` の終点から `closing` の点を線分でたどって始点へ戻る領域。"""
+    array = TColgp_Array1OfPnt(1, len(poles))
+    for i, (x, y) in enumerate(poles, 1):
+        array.SetValue(i, gp_Pnt(x, y, 0.0))
+    wire = BRepBuilderAPI_MakeWire()
+    wire.Add(BRepBuilderAPI_MakeEdge(Geom_BezierCurve(array)).Edge())
+    points = [poles[-1], *closing, poles[0]]
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        wire.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(x0, y0, 0.0), gp_Pnt(x1, y1, 0.0)).Edge())
+    return BRepBuilderAPI_MakeFace(wire.Wire(), True).Face()
+
+
+def _cubic_poles(coefficients_x, coefficients_y):
+    """べき基底 a0 + a1·t + a2·t² + a3·t³ の係数から3次ベジエの極。"""
+    def poles(a):
+        return (a[0], a[0] + a[1] / 3.0, a[0] + 2.0 * a[1] / 3.0 + a[2] / 3.0, a[0] + a[1] + a[2] + a[3])
+    return list(zip(poles(coefficients_x), poles(coefficients_y)))
+
+
+def _sharp_bezier():
+    """x = 1e5·(u³/3 + 1e-5·u)、y = 500·u²(u = t − 0.507)。t = 0.507 で曲率半径 0.001 mm の鋭い山を持つ。"""
+    c = 0.507
+    x = [1e5 * (-(c**3) / 3.0 - 1e-5 * c), 1e5 * (c * c + 1e-5), 1e5 * -c, 1e5 / 3.0]
+    y = [500.0 * c * c, -1000.0 * c, 500.0, 0.0]
+    poles = _cubic_poles(x, y)
+    return _bezier_face(poles, [(poles[-1][0], 10000.0), (poles[0][0], 10000.0)])
+
+
+def test_a_sharp_curvature_peak_between_golden_section_probes_is_refused():
+    """曲率半径 0.001 mm の山を内向きに 0.0015 mm ずらすと輪郭が折り返すのに、成功として通る(黄金分割が別の極大へ寄る)。"""
+    with pytest.raises(ValueError, match="collapses"):
+        _new(_sharp_bezier(), 1.0, -0.08594360481195855)
+
+
+@pytest.mark.parametrize("taper", [1.0, -1.0])
+def test_a_straight_bezier_with_coincident_poles_tapers(taper):
+    """極が重なり端で曲率が定まらない直線状のベジエ(SVG の `C 0 0 0 0 20 0`)で、OCCT の例外が漏れる。"""
+    face = _bezier_face([(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (20.0, 0.0)], [(20.0, 10.0), (0.0, 10.0)])
+
+    result = _new(face, 1.0, taper)
+
+    assert math.isclose(result["volume_after"], _frustum(20.0, 10.0, 1.0, taper), rel_tol=1e-6)
+
+
+def test_a_curved_bezier_with_a_coincident_end_pole_grows_and_refuses_cleanly_when_shrunk():
+    """端の極が重なった曲がったベジエで OCCT の例外が漏れる、または太る向きまで断る。
+
+    端の極が重なると、その端で曲率半径が0へ向かう(y ∝ x^1.5 の形)。細る向きでは曲線だけ見れば輪郭が折り返すので
+    潰れとして断る(角で切り落とされて実害が無い場合も断る。慎重側に倒している)。
+    """
+    face = _bezier_face([(0.0, 0.0), (0.0, 0.0), (10.0, -4.0), (20.0, 0.0)], [(20.0, 10.0), (0.0, 10.0)])
+    straight = _new(face, 1.0, 0.0)["volume_after"]
+
+    grown = _new(face, 1.0, 1.0)
+    assert grown["volume_after"] > straight
+    assert BRepCheck_Analyzer(grown["shape"]).IsValid()
+    with pytest.raises(ValueError, match="collapses"):
+        _new(face, 1.0, -1.0)

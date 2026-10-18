@@ -135,7 +135,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 ### テーパー(`taper`。issue #182)
 
 - **挙動は Autodesk Fusion の押し出しのテーパーに揃える**(2026-10-18 本人決定。片側の角度1つだけで、両側・対称は持たない)。
-  度で `|taper| < 90`、既定 0。**正で押し出すにつれて太り、負で細る**(Fusion の API 文書 `ExtrudeFeatureInput.taperAngle` と同じ符号)。
+  度で `|taper| <= 89`(2026-10-19 本人決定。`MakeDraft` が 89.8° 以上で別の形を成功として返すため)、既定 0。**正で押し出すにつれて太り、負で細る**(Fusion の API 文書 `ExtrudeFeatureInput.taperAngle` と同じ符号)。
 - 距離 z の断面は「元の領域を z·tan(taper) だけ外へずらしたもの」で角は尖ったまま。**穴は外周と逆に動く**(正で狭まり、負で広がる。
   Fusion も同じ: Autodesk Community「Extrude Taper option odd behavior!」)。距離が負でも「進むにつれて」で、cut では掘る側の立体に掛かる
   (負なら穴が奥ほど狭まる)。領域・面の両方、join / cut / new のすべてで効く。
@@ -143,10 +143,15 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
   `LocOpe_DPrism` / `BRepOffsetAPI_DraftAngle` を使わない理由と、潰れを OCCT が見逃す実測は docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」。
 - **潰れ(壁どうしの衝突・穴が閉じる・辺が消える・円錐が頂点を越える)は ValueError**(文言に `collapses`)。検出は4段:
   曲線の辺の曲率半径とずらす量(`_require_curvature_room`。円の頂点越えは `BRepCheck` も自己交差の検査も通すのでこれが唯一の関門。
-  最小の曲率半径は等間隔の標本の極大のまわりを黄金分割で詰めて求め、中心が内か外かは面の上での辺の向きで決める。
-  標本だけだと継ぎ目をずらした楕円の潰れを見逃し、点の分類だと半円の円弧の端で太る向きを細る向きと取り違える。どちらも sol レビューで再現)、
+  最小の曲率半径は `Geom2dLProp_CurAndInf2d` の曲率の極値・等間隔の標本・標本の極大のまわりの黄金分割で求め、中心が内か外かは
+  面の上での辺の向きで決める。標本だけだと継ぎ目をずらした楕円を、黄金分割だけだと区間に極大が複数ある鋭いベジエの山を見逃し、
+  点の分類だと半円の円弧の端で太る向きを細る向きと取り違える。どれも sol レビューで再現)、
   傾けた殻の `BRepCheck`、ふたが面1枚で穴の数が底と同じ・立体が1つ、`BRepAlgoAPI_Check` の自己交差。どれが何を捕まえるかは
   `tests/test_extrude_taper.py::test_a_collapsing_section_is_refused` の7例。
+- **端の制御点が重なったベジエ・B スプライン**(SVG の `C 0 0 0 0 20 0` など)は、重なった制御点を次の別の制御点の方へ 1e-7 mm
+  ずらしてから傾ける(`_regular_wire`。そのままだと `MakeDraft` が Standard_ConstructionError)。曲がった曲線で端の極が重なると
+  その端で曲率半径が0へ向かうので、**細る向きは潰れとして断る**(角で切り落とされて実害が無い場合も断る。慎重側)。
+  OCCT の例外は `_tapered_prism` で ValueError に変える。
 - **テーパー付きの押し出しは `|distance| >= kernel_extrude.MIN_TAPER_DISTANCE`(1e-3 mm)。** `MakeDraft` は 7e-5 mm 以下で
   プロセスごと落ちる(docs/CAD_LIBRARY_PITFALLS.md)。taper 0 の下限は今までどおり `MIN_DISTANCE`。
 - **taper 0 は今までの `MakePrism` の経路を通る**(形も面の数も変わらない)。ログの args には 0 でないときだけ `taper` を記録し、

@@ -61,7 +61,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
         unit: '°',
         inputId: 'extrude-taper',
         default: 0,
-        reject: (value) => (Math.abs(value) < 90 ? null : 'テーパー角は-90より大きく90より小さい'),
+        reject: (value) => (Math.abs(value) <= 89 ? null : 'テーパー角は-89以上89以下'),
       },
       {
         kind: 'choice',

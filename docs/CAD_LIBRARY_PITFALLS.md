@@ -114,6 +114,13 @@
   - **`MakeDraft` は `Perform` の長さが 7e-5 mm 以下だと access violation でプロセスごと落ちる**(1e-4 は通る。角度 0.01°〜45°・
     輪郭の大きさ 0.01〜1万倍によらない。2026-10-18 実測、sol レビューで発覚)。円・楕円は 1e-5 で `IsDone()=False` を返す。
     `kernel_extrude.MIN_TAPER_DISTANCE` で先に断る。
+  - **`MakeDraft` は角度 89.8° 以上で別の形を成功として返す**(20×10・高さ 10・89.9° で体積 2000、期待は約 4.4 億)。89.5° までは正しく、
+    89.6〜89.7° は `BRepCheck` 偽で断られる。距離・輪郭の大きさによらず角度だけで決まる(2026-10-18 実測)。上限は `MAX_TAPER` = 89°。
+  - **端の1階微分が0のベジエ(端の制御点が重なる)で `MakeDraft` は `gp_Vec::Normalize` の Standard_ConstructionError を投げる**。
+    `Approx_CurvilinearParameter` で付け直すと NaN になる。重なった制御点を 1e-7 mm ずらせば通る(端点は動かない)。
+    同じ点で `BRepLProp_CLProps` は接線ありと答えるのに `Normal` が LProp_NotDefined を投げる。
+  - **曲率の極値は `Geom2dLProp_CurAndInf2d.PerformCurExt` で式で取れる**(曲率半径 0.001 mm の鋭いベジエの山を t=0.507 ちょうどで返す。
+    極が重なった直線状のベジエでは `IsDone()=False`)。OCP の例外は共通の基底を持たず `Exception` を直に継ぐ。
 
 ## 複数面の押し出し（`kernel_extrude.extrude_faces`）
 
