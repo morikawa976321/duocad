@@ -31,7 +31,6 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Transform,
 )
 from OCP.BRepCheck import BRepCheck_Analyzer
-from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepLProp import BRepLProp_CLProps
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeDraft, BRepOffsetAPI_ThruSections
@@ -45,8 +44,8 @@ from OCP.Precision import Precision
 from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
 from OCP.ShapeFix import ShapeFix_Solid
 from OCP.TopAbs import (
+    TopAbs_EDGE,
     TopAbs_FACE,
-    TopAbs_IN,
     TopAbs_REVERSED,
     TopAbs_SHELL,
     TopAbs_SOLID,
@@ -183,8 +182,12 @@ def extrude_regions(
 #: 輪郭を縫い合わせる許容差(mm)。
 _SEW_TOL = 1.0e-6
 
-#: 曲線の辺の曲率半径を測る刻み(辺1本あたり)。
+#: 曲線の辺の曲率半径を測る刻み(辺1本あたり)。最小の曲率半径はこの標本の極小のまわりを詰めて求める。
 _CURVATURE_SAMPLES = 64
+
+#: テーパー付きの押し出し量の絶対値の下限(mm)。`BRepOffsetAPI_MakeDraft` は押し出し量 7e-5 mm 以下で
+#: access violation を起こしプロセスごと落ちる(1e-4 は通る。角度・輪郭の大きさ 0.01〜1万倍によらない。2026-10-18 実測)。
+MIN_TAPER_DISTANCE = 1.0e-3
 
 
 def _tapered_prism(face: Any, offset: "gp_Vec", taper: float, label: str) -> Any:
@@ -193,6 +196,11 @@ def _tapered_prism(face: Any, offset: "gp_Vec", taper: float, label: str) -> Any
     `offset` は面に垂直であること(領域はスケッチの法線、面は面の法線へ押す)。
     """
     height = offset.Magnitude()
+    if height < MIN_TAPER_DISTANCE:
+        raise ValueError(
+            f"a tapered extrusion needs |distance| >= {MIN_TAPER_DISTANCE:g} mm, got {height:g} "
+            "(それより短いテーパーは OCCT がプロセスごと落ちる)"
+        )
     axis = gp_Dir(offset)
     angle = math.radians(abs(taper))
     reach = height * math.tan(angle)
@@ -279,28 +287,71 @@ def _require_curvature_room(wire: Any, reach: float, inward: bool, label: str) -
     """曲線の辺が、曲率の中心の側へ曲率半径以上ずれるなら ValueError(輪郭が尖点で折り返す)。
 
     円が頂点を越えて細ると砂時計形の円錐ができ、`BRepCheck` も自己交差の検査も通す(実測)ので、
-    曲率で先に断る。中心が輪郭の内か外かは、輪郭の面に中心寄りの点を分類させて決める。
+    曲率で先に断る。中心が輪郭の内か外かは、面の上での辺の向き(面の法線について左が内側)で決める。
+    中心寄りの点を面に分類させると、半円の円弧の端で点が直径の上に乗り「外」になる。
     """
     region = BRepBuilderAPI_MakeFace(wire, True).Face()
-    for edge in _edges(wire):
+    up = BRepAdaptor_Surface(region).Plane().Axis().Direction()
+    if region.Orientation() == TopAbs_REVERSED:
+        up.Reverse()
+    explorer = TopExp_Explorer(region, TopAbs_EDGE)
+    while explorer.More():
+        edge = TopoDS.Edge_s(explorer.Current())
+        explorer.Next()
         curve = BRepAdaptor_Curve(edge)
         if curve.GetType() == GeomAbs_Line:
             continue
-        first, last = curve.FirstParameter(), curve.LastParameter()
-        for k in range(_CURVATURE_SAMPLES + 1):
-            t = first + (last - first) * k / _CURVATURE_SAMPLES
+        for t in _sharpest_parameters(curve):
             props = BRepLProp_CLProps(curve, t, 2, Precision.Confusion_s())
             curvature = props.Curvature()
             if curvature <= 0.0 or 1.0 / curvature > reach:
                 continue
-            towards = gp_Dir()
+            towards, tangent = gp_Dir(), gp_Dir()
             props.Normal(towards)
-            point = curve.Value(t)
-            step = min(1.0 / curvature, 1.0) * 1.0e-3
-            probe = point.Translated(gp_Vec(towards).Multiplied(step))
-            inside = BRepClass_FaceClassifier(region, probe, Precision.Confusion_s()).State() == TopAbs_IN
+            props.Tangent(tangent)
+            if edge.Orientation() == TopAbs_REVERSED:
+                tangent.Reverse()
+            inside = up.Crossed(tangent).Dot(towards) > 0.0
             if inside == inward:
                 raise ValueError(_collapse_message(label))
+
+
+def _sharpest_parameters(curve: Any) -> List[float]:
+    """曲率を見るパラメータ: 等間隔の標本と、標本の曲率の極大のまわりを黄金分割で詰めた点。
+
+    等間隔の標本だけでは、楕円の継ぎ目をずらすと最小の曲率半径(長軸の端)が標本の間に落ちて見逃す(sol レビューで再現)。
+    """
+    first, last = curve.FirstParameter(), curve.LastParameter()
+    params = [first + (last - first) * k / _CURVATURE_SAMPLES for k in range(_CURVATURE_SAMPLES + 1)]
+    values = [_curvature(curve, t) for t in params]
+    out = list(params)
+    for k, value in enumerate(values):
+        low = values[k - 1] if k > 0 else -1.0
+        high = values[k + 1] if k < _CURVATURE_SAMPLES else -1.0
+        if value >= low and value >= high and (value > low or value > high):
+            out.append(_golden_max(curve, params[max(k - 1, 0)], params[min(k + 1, _CURVATURE_SAMPLES)]))
+    return out
+
+
+def _golden_max(curve: Any, low: float, high: float) -> float:
+    """区間 [low, high] で曲率が最大になるパラメータ(黄金分割)。"""
+    ratio = (math.sqrt(5.0) - 1.0) / 2.0
+    a, b = low + (1.0 - ratio) * (high - low), low + ratio * (high - low)
+    fa, fb = _curvature(curve, a), _curvature(curve, b)
+    for _ in range(60):
+        if fa >= fb:
+            high, b, fb = b, a, fa
+            a = low + (1.0 - ratio) * (high - low)
+            fa = _curvature(curve, a)
+        else:
+            low, a, fa = a, b, fb
+            b = low + ratio * (high - low)
+            fb = _curvature(curve, b)
+    return (low + high) / 2.0
+
+
+def _curvature(curve: Any, t: float) -> float:
+    return BRepLProp_CLProps(curve, t, 2, Precision.Confusion_s()).Curvature()
 
 
 def _require_uncollapsed(body: Any, face: Any, offset: "gp_Vec", holes: int, label: str) -> None:

@@ -142,9 +142,13 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - 幾何は `kernel_extrude._tapered_prism`(輪郭ごとに `BRepOffsetAPI_MakeDraft` → 底とふたで閉じる → 外周の立体から穴の立体を cut)。
   `LocOpe_DPrism` / `BRepOffsetAPI_DraftAngle` を使わない理由と、潰れを OCCT が見逃す実測は docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」。
 - **潰れ(壁どうしの衝突・穴が閉じる・辺が消える・円錐が頂点を越える)は ValueError**(文言に `collapses`)。検出は4段:
-  曲線の辺の曲率半径とずらす量(`_require_curvature_room`。円の頂点越えは `BRepCheck` も自己交差の検査も通すのでこれが唯一の関門)、
+  曲線の辺の曲率半径とずらす量(`_require_curvature_room`。円の頂点越えは `BRepCheck` も自己交差の検査も通すのでこれが唯一の関門。
+  最小の曲率半径は等間隔の標本の極大のまわりを黄金分割で詰めて求め、中心が内か外かは面の上での辺の向きで決める。
+  標本だけだと継ぎ目をずらした楕円の潰れを見逃し、点の分類だと半円の円弧の端で太る向きを細る向きと取り違える。どちらも sol レビューで再現)、
   傾けた殻の `BRepCheck`、ふたが面1枚で穴の数が底と同じ・立体が1つ、`BRepAlgoAPI_Check` の自己交差。どれが何を捕まえるかは
   `tests/test_extrude_taper.py::test_a_collapsing_section_is_refused` の7例。
+- **テーパー付きの押し出しは `|distance| >= kernel_extrude.MIN_TAPER_DISTANCE`(1e-3 mm)。** `MakeDraft` は 7e-5 mm 以下で
+  プロセスごと落ちる(docs/CAD_LIBRARY_PITFALLS.md)。taper 0 の下限は今までどおり `MIN_DISTANCE`。
 - **taper 0 は今までの `MakePrism` の経路を通る**(形も面の数も変わらない)。ログの args には 0 でないときだけ `taper` を記録し、
   再生は `args.get("taper", 0.0)`(テーパーの無い古いログはそのまま再生される。形式の版は上げていない)。
   画面(`#extrude-taper`、既定 0)も 0 のときは送らない。

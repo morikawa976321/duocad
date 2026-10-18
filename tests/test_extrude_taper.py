@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import math
+import subprocess
+import sys
 
 import pytest
 # 断面の面を直に作るためだけに OCP を使う(境界検査は `duocad/` 配下だけが対象)
@@ -33,6 +35,7 @@ from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Elips, gp_Pnt
 from duocad import kernel, kernel_extrude, query
 from duocad.document import Body, Document
 from duocad.mcp_server import DocumentTools, McpServer
+from duocad.paths import REPO_ROOT
 from duocad.region import region_ref, regions
 from duocad.server import Session
 from duocad.sketch import add_circle, add_ellipse, add_rectangle, sketch_create
@@ -367,3 +370,82 @@ def test_an_ellipse_sketch_region_tapers():
 
     box = kernel.bounding_box(document.bodies[0].shape)
     assert box["max"][0] == pytest.approx(6.0 + 5.0 * _slope(5.0), abs=1e-6)
+
+
+# ======================================================================================
+# sol レビューの指摘(2026-10-18)
+# ======================================================================================
+_TINY_CHILD = """
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+from OCP.gp import gp_Pnt
+from duocad import kernel_extrude
+
+polygon = BRepBuilderAPI_MakePolygon(gp_Pnt(0, 0, 0), gp_Pnt(20, 0, 0), gp_Pnt(20, 10, 0), gp_Pnt(0, 10, 0), True)
+face = BRepBuilderAPI_MakeFace(polygon.Wire(), True).Face()
+for distance in (1e-5, -5e-5):
+    try:
+        kernel_extrude.extrude_regions([face], distance, "new", (0.0, 0.0, 1.0), None, taper=5.0)
+    except ValueError as error:
+        print("refused", str(error)[:30])
+    else:
+        print("built")
+print("survived")
+"""
+
+
+def test_a_very_short_tapered_extrusion_is_refused_without_killing_the_process():
+    """距離 1e-4 mm 未満のテーパーで `BRepOffsetAPI_MakeDraft` が access violation を起こす(実測。別プロセスで試す)。"""
+    done = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", _TINY_CHILD],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
+    )
+    assert done.returncode == 0, (done.returncode, done.stderr[-800:])
+    assert done.stdout.split()[-1] == "survived"
+    assert done.stdout.count("refused") == 2, done.stdout
+
+
+def test_the_shortest_allowed_tapered_extrusion_builds():
+    result = _new(_rect(), kernel_extrude.MIN_TAPER_DISTANCE, 5.0)
+    assert BRepCheck_Analyzer(result["shape"]).IsValid()
+
+
+def _shifted_ellipse():
+    """継ぎ目を π/64 ずらした楕円 6×3(曲率半径の最小 1.5 が等間隔の標本の間に落ちる)。"""
+    curve = gp_Elips(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)), 6.0, 3.0)
+    start = math.pi / 64.0
+    edge = BRepBuilderAPI_MakeEdge(curve, start, start + 2.0 * math.pi).Edge()
+    return BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(edge).Wire(), True).Face()
+
+
+def test_a_cusp_between_curvature_samples_is_refused():
+    """内向きのずれ 1.5015 が最小曲率半径 1.5 を超えて輪郭が折り返すのに、標本の間なので成功として通る。"""
+    with pytest.raises(ValueError, match="collapses"):
+        _new(_shifted_ellipse(), 10.0, -8.539170673763662)
+
+
+def test_the_shifted_ellipse_passes_just_before_its_cusp():
+    """曲率の最小値を詰めた結果、潰れていない側まで断っている。"""
+    reach = 1.49
+    result = _new(_shifted_ellipse(), 10.0, -math.degrees(math.atan(reach / 10.0)))
+    assert BRepCheck_Analyzer(result["shape"]).IsValid()
+
+
+def _half_disk():
+    """半径 5 の右半分の円(円弧の端で直径と直角に交わる)。"""
+    arc = GC_MakeArcOfCircle(gp_Circ(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 5.0), -math.pi / 2, math.pi / 2, True)
+    wire = BRepBuilderAPI_MakeWire(
+        BRepBuilderAPI_MakeEdge(arc.Value()).Edge(),
+        BRepBuilderAPI_MakeEdge(gp_Pnt(0, 5, 0), gp_Pnt(0, -5, 0)).Edge(),
+    ).Wire()
+    return BRepBuilderAPI_MakeFace(wire, True).Face()
+
+
+@pytest.mark.parametrize("taper", [math.degrees(math.atan(0.55)), 5.0])
+def test_a_growing_half_disk_is_not_refused(taper):
+    """円弧の端で、曲率の中心へ寄せた点が直径の上(境界)に乗り、外向きを内向きと取り違えて断る。"""
+    result = _new(_half_disk(), 10.0, taper)
+
+    assert BRepCheck_Analyzer(result["shape"]).IsValid()
+    box = kernel.bounding_box(result["shape"])
+    assert box["min"][0] == pytest.approx(-10.0 * _slope(taper), abs=1e-6)
+    assert box["max"][0] == pytest.approx(5.0 + 10.0 * _slope(taper), abs=1e-6)

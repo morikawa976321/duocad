@@ -111,6 +111,9 @@
     潰れる角度は長方形・L字では殻が `BRepCheck` 偽になるが、**円は頂点を越えて砂時計形の円錐を返し、`BRepCheck` も
     `BOPAlgo_ArgumentAnalyzer` の自己交差検査も通る**(円 r5・高さ 10・40°)。潰れの検出は自前で要る。
     楕円 6×3 を高さ 10 で 5° 細らせると先端の曲率半径が約 0.6 になり、全辺 r1 のフィレットは失敗する(r0.5 や高さ 5 なら通る)。
+  - **`MakeDraft` は `Perform` の長さが 7e-5 mm 以下だと access violation でプロセスごと落ちる**(1e-4 は通る。角度 0.01°〜45°・
+    輪郭の大きさ 0.01〜1万倍によらない。2026-10-18 実測、sol レビューで発覚)。円・楕円は 1e-5 で `IsDone()=False` を返す。
+    `kernel_extrude.MIN_TAPER_DISTANCE` で先に断る。
 
 ## 複数面の押し出し（`kernel_extrude.extrude_faces`）
 
