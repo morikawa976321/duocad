@@ -81,6 +81,14 @@ def main(argv=None):
             agree = set(gf_over) == set(overlaps) and all(abs(gf_over[k] - overlaps[k]) <= 1e-6 * max(1, overlaps[k])
                                                           for k in overlaps)
             line += f" | gf={g['seconds']:.2f}s overlaps={len(gf_over)} agree={agree} warn={g['warnings']}"
+            # 採用する流れ(2体ずつの GF)と全体1回の GF で、relation と clearance が全組一致するか
+            from .pipeline import classify
+            two = classify(shapes, args.clearance, whole=False)
+            whole = classify(shapes, args.clearance, whole=True)
+            key = lambda res: {(p["a"], p["b"]): (p["relation"], p.get("clearance")) for p in res["pairs"]}  # noqa: E731
+            same = key(two) == key(whole)
+            line += (f" | 2体GF流れ={two['total_s']:.2f}s(GF {two['gf_s']:.2f}s, 距離 {two['dist_s']:.2f}s) "
+                     f"全体GF流れ={whole['total_s']:.2f}s 全relation一致={same}")
         print(line, flush=True)
     return 0
 

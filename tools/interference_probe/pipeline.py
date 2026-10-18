@@ -30,12 +30,19 @@ GAP_TOL = 1e-6         # mm。0.2 で設計した隙間は 0.19999999999908〜0.
 
 
 def relation_of(r) -> str:
-    if r["kind"] == "overlap":
+    """GF の読み取り結果から relation。知らない kind を separated へ落とさない。"""
+    kind = r["kind"]
+    if kind == "overlap":
+        # 領域ごとの最大(どれか1つでも厚ければ overlap)。thickness / obb_min は overlap_measures が領域の最大を返す
         thin = r["thickness"] <= THICKNESS_TOL and r["obb_min"] <= THICKNESS_TOL
         return "tiny_overlap" if thin else "overlap"
-    if r["kind"] in ("face", "edge", "vertex"):
+    if kind in ("face", "edge", "vertex"):
         return "contact"
-    return "separated"
+    if kind == "none":
+        return "separated"
+    if kind == "unknown":
+        return "unknown"
+    raise ValueError(f"知らない kind: {kind!r}")
 
 
 def classify(shapes, clearance, names=None, parallel=True, whole=False):
@@ -43,10 +50,13 @@ def classify(shapes, clearance, names=None, parallel=True, whole=False):
     shapes = [M.BRepBuilderAPI_Copy(s, True, False).Shape() for s in shapes]   # 文書の形状に触れない
     t_copy = time.perf_counter() - t0
     boxes = [M.bbox(s, optimal=False) for s in shapes]
+    # 候補の幅は比較帯まで含める(clearance < d <= clearance + GAP_TOL の「at」を落とさない)
+    reach = clearance + GAP_TOL if clearance > 0 else 0.0
     cand = [(i, j) for i, j in combinations(range(len(shapes)), 2)
-            if M.bbox_gap(boxes[i], boxes[j]) <= clearance]
+            if M.bbox_gap(boxes[i], boxes[j]) <= reach]
     # 箱が触れている組だけ GF に回す。clearance だけで候補になった組は最短距離だけでよい。
     touching = [p for p in cand if M.bbox_gap(boxes[p[0]], boxes[p[1]]) <= 0.0]
+    outside = len(shapes) * (len(shapes) - 1) // 2 - len(cand)   # 箱の段で separated(clearance なら ok)と決まった組
     t_broad = time.perf_counter() - t0
     rel = {}
     t1 = time.perf_counter()
@@ -67,20 +77,24 @@ def classify(shapes, clearance, names=None, parallel=True, whole=False):
     out, n_dist = [], 0
     for i, j in cand:
         r = dict(rel.get((i, j), dict(kind="none")))
-        r["relation"] = "unknown" if r["kind"] == "unknown" else relation_of(r)
+        r["relation"] = relation_of(r)
         if clearance > 0:
             if r["relation"] in ("overlap", "tiny_overlap", "contact"):
                 r["clearance"] = "short"
-            elif r["relation"] == "separated":
+            else:  # separated と unknown は最短距離で隙間だけでも決める
                 d = M.dist(shapes[i], shapes[j], parallel=parallel)
                 n_dist += 1
                 r["dist"] = d["distance"]
-                r["clearance"] = ("short" if d["distance"] < clearance - GAP_TOL
-                                  else "at" if d["distance"] <= clearance + GAP_TOL else "ok")
+                if d["distance"] is None:
+                    r["clearance"], r["clearance_reason"] = None, "最短距離が測れなかった"
+                else:
+                    r["clearance"] = ("short" if d["distance"] < clearance - GAP_TOL
+                                      else "at" if d["distance"] <= clearance + GAP_TOL else "ok")
         r["a"], r["b"] = (names[i], names[j]) if names else (i, j)
         out.append(r)
     t_dist = time.perf_counter() - t2
-    return dict(bodies=len(shapes), cand=len(cand), gf_pairs=len(touching), copy_s=t_copy, broad_s=t_broad,
+    return dict(bodies=len(shapes), all_pairs=len(shapes) * (len(shapes) - 1) // 2, outside=outside,
+                cand=len(cand), gf_pairs=len(touching), copy_s=t_copy, broad_s=t_broad,
                 gf_s=t_gf, dist_pairs=n_dist, dist_s=t_dist, total_s=time.perf_counter() - t0, pairs=out)
 
 

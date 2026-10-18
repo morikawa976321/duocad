@@ -30,6 +30,7 @@ class Case:
     volume: float = 0.0            # 期待する重なり体積(mm^3)
     gap: float = 0.0               # 期待する最短距離(mm)
     note: str = ""
+    relation: str = ""             # pipeline の relation の期待値(空なら expect から: overlap/contact/separated)
 
 
 def box(x0, y0, z0, dx, dy, dz) -> TopoDS_Shape:
@@ -97,9 +98,9 @@ def build_cases() -> List[Case]:
     add(Case("box_gap_1e-8", A, box(10.00000001, 0, 0, 10, 10, 10), "contact",
              note="Confusion(1e-7)未満のずれ。接触とみなすのが期待"))
     add(Case("box_overlap_1e-3", A, box(9.999, 0, 0, 10, 10, 10), "overlap", volume=0.1,
-             note="0.001mm の食い込み"))
+             note="0.001mm の食い込み", relation="tiny_overlap"))
     add(Case("box_overlap_1e-5", A, box(9.99999, 0, 0, 10, 10, 10), "overlap", volume=1e-3,
-             note="0.00001mm の食い込み(許容差の境目)"))
+             note="0.00001mm の食い込み(許容差の境目)", relation="tiny_overlap"))
     add(Case("box_gap_far", A, box(50, 50, 50, 10, 10, 10), "clear", gap=math.sqrt(3) * 40))
     # 回転した箱(境界箱が緩む)。対角 45° 回転で、箱 A の角から離して置く。
     rot = rotated(box(-5, -5, 0, 10, 10, 10), deg=45.0)

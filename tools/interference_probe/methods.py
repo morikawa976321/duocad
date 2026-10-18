@@ -103,7 +103,7 @@ def dist(a: TopoDS_Shape, b: TopoDS_Shape, parallel: bool = False) -> Dict:
     d.LoadS1(a)
     d.LoadS2(b)
     d.Perform()
-    out = dict(done=bool(d.IsDone()))
+    out = dict(done=bool(d.IsDone()), distance=None)
     if d.IsDone():
         out.update(distance=d.Value(), inner=bool(d.InnerSolution()), solutions=d.NbSolution())
         if d.NbSolution():
@@ -240,17 +240,22 @@ def manifold_pair(ma, mb, search: float) -> Dict:
                 seconds=time.perf_counter() - t0)
 
 
-def _hashes(shape, kind) -> Dict[int, TopoDS_Shape]:
-    out, exp = {}, TopExp_Explorer(shape, kind)
+def _hashes(shape, kind) -> Dict[int, List[TopoDS_Shape]]:
+    """hash ごとに形状の列を持つ(同じ hash の別の形状を上書きで落とさない)。"""
+    out: Dict[int, List[TopoDS_Shape]] = {}
+    exp = TopExp_Explorer(shape, kind)
     while exp.More():
-        out[hash(exp.Current())] = exp.Current()
+        cur = exp.Current()
+        bucket = out.setdefault(hash(cur), [])
+        if not any(cur.IsSame(s) for s in bucket):
+            bucket.append(cur)
         exp.Next()
     return out
 
 
-def _shared(a: Dict[int, TopoDS_Shape], b: Dict[int, TopoDS_Shape]) -> List[TopoDS_Shape]:
-    """hash で引き、IsSame で確かめる(hash の衝突で別の形状を共有と読まない)。"""
-    return [a[h] for h in a.keys() & b.keys() if a[h].IsSame(b[h])]
+def _shared(a: Dict[int, List[TopoDS_Shape]], b: Dict[int, List[TopoDS_Shape]]) -> List[TopoDS_Shape]:
+    """hash で引き、IsSame で確かめる(hash の衝突で別の形状を共有と読まず、取り落としもしない)。"""
+    return [x for h in a.keys() & b.keys() for x in a[h] if any(x.IsSame(y) for y in b[h])]
 
 
 def _area(shape) -> float:
@@ -266,21 +271,58 @@ def obb_min_side(shape) -> float:
     return 2 * min(obb.XHSize(), obb.YHSize(), obb.ZHSize())
 
 
-def overlap_measures(pieces: Sequence[TopoDS_Shape]) -> Dict:
-    """重なりの立体片の体積・外側の面積・厚さの目安 2V/A・片ごとの有向境界箱の最小辺の最大。
+def _regions(pieces: Sequence[TopoDS_Shape]) -> List[List[int]]:
+    """面を共有する片をつないだ連結領域(片の添字の列)。"""
+    parent = list(range(len(pieces)))
 
-    2つの片に共有される面(第三のボディや GF の分割でできた内部の面)は面積から除く。除かないと
-    同じ重なりでも分割のされ方で 2V/A が下がる(実測: 2.22 → 1.67)。
-    """
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    owner: Dict[int, List[tuple]] = {}
+    for k, p in enumerate(pieces):
+        for h, faces in _hashes(p, TopAbs_FACE).items():
+            for f in faces:
+                for other_k, other_f in owner.get(h, []):
+                    if other_f.IsSame(f):
+                        parent[find(k)] = find(other_k)
+                owner.setdefault(h, []).append((k, f))
+    groups: Dict[int, List[int]] = {}
+    for k in range(len(pieces)):
+        groups.setdefault(find(k), []).append(k)
+    return list(groups.values())
+
+
+def _region_measures(pieces: Sequence[TopoDS_Shape]) -> Dict:
     v = sum(volume(p) for p in pieces)
-    faces: Dict[int, list] = {}
+    faces: List[list] = []   # [face, count]
     for p in pieces:
-        for h, f in _hashes(p, TopAbs_FACE).items():
-            slot = faces.setdefault(h, [f, 0])
-            slot[1] += 1
-    a = sum(_area(f) for f, n in faces.values() if n == 1)
-    return dict(volume=v, area=a, thickness=2 * v / a if a else 0.0,
-                obb_min=max(obb_min_side(p) for p in pieces), pieces=len(pieces))
+        for bucket in _hashes(p, TopAbs_FACE).values():
+            for f in bucket:
+                for slot in faces:
+                    if slot[0].IsSame(f):
+                        slot[1] += 1
+                        break
+                else:
+                    faces.append([f, 1])
+    a = sum(_area(f) for f, n in faces if n == 1)
+    if not (a > 0) or not (v >= 0):
+        raise ValueError(f"重なりの面積・体積が不正: V={v} A={a}")
+    return dict(volume=v, area=a, thickness=2 * v / a, obb_min=obb_min_side(compound(pieces)))
+
+
+def overlap_measures(pieces: Sequence[TopoDS_Shape]) -> Dict:
+    """重なりの立体片を、面を共有する連結領域にまとめ、領域ごとに体積・外側の面積・2V/A・有向境界箱の最小辺を測る。
+
+    2つの片に共有される面(GF の分割でできた内部の面)は面積から除く。除かないと同じ重なりでも分割のされ方で
+    2V/A が下がる(実測: 2.22 → 1.67)。有向境界箱も片ごとではなく領域ごと(厚い領域が薄い片に割れても薄く見せない)。
+    戻り値の thickness / obb_min は領域の中で最も厚いもの(どれか1つでも厚ければ tiny ではない)。
+    """
+    regions = [_region_measures([pieces[k] for k in g]) for g in _regions(pieces)]
+    return dict(volume=sum(r["volume"] for r in regions), regions=len(regions), pieces=len(pieces),
+                thickness=max(r["thickness"] for r in regions), obb_min=max(r["obb_min"] for r in regions),
+                region_detail=regions)
 
 
 def gf_relations(shapes: Sequence[TopoDS_Shape], fuzzy: float = 0.0, parallel: bool = True,
@@ -329,7 +371,10 @@ def gf_relations(shapes: Sequence[TopoDS_Shape], fuzzy: float = 0.0, parallel: b
         a, b = images[i], images[j]
         solids = _shared(a[TopAbs_SOLID], b[TopAbs_SOLID])
         if solids:
-            rel[(i, j)] = dict(kind="overlap", **overlap_measures(solids))
+            try:
+                rel[(i, j)] = dict(kind="overlap", **overlap_measures(solids))
+            except ValueError as exc:
+                rel[(i, j)] = dict(kind="unknown", reason=str(exc))
             continue
         faces = _shared(a[TopAbs_FACE], b[TopAbs_FACE])
         if faces:

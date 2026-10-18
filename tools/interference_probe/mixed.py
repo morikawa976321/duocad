@@ -72,7 +72,8 @@ def main(argv=None):
     if len(solids) >= 2:
         res = classify([b.shape for b in solids], args.clearance, [b.name for b in solids])
         print("exact B-rep pairs:", {k: res[k] for k in ("cand", "gf_s", "dist_s", "total_s")},
-              [(p["a"], p["b"], p["class"]) for p in res["pairs"] if p["class"] != "clear"], flush=True)
+              [(p["a"], p["b"], p["relation"], p.get("clearance")) for p in res["pairs"]
+               if p["relation"] != "separated" or p.get("clearance") not in (None, "ok")], flush=True)
 
     if args.to_brep:
         from duocad.mesh_geometry import make_material, topology

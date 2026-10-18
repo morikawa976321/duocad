@@ -77,7 +77,7 @@ def main(argv=None):
         row.update(prox_pairs=p.get("face_pairs"), prox_value=p.get("proximity"), prox_s=p["seconds"],
                    prox_err=p.get("proximity_error"))
         rows.append(row)
-        expect_rel = dict(overlap="overlap", contact="contact", clear="separated")[case.expect]
+        expect_rel = case.relation or dict(overlap="overlap", contact="contact", clear="separated")[case.expect]
         row["gf_ok"] = row["gf_relation"] == expect_rel
         ok_e = "OK" if row["exact_class"] == case.expect else "NG"
         ok_m = "OK" if row.get("mf_class") == case.expect else "NG"

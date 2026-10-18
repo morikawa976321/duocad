@@ -137,6 +137,14 @@ def main(argv=None):
           f"obb_min={[round(obb_min(p), 6) for p in pcs]} 片ごとの2V/A={[round(thickness([p])['t_external'], 6) for p in pcs]}",
           flush=True)
 
+    # 3b. OBB を足した効果を示す形(2V/A だけなら tiny、OBB で overlap): 板を 200×200 に広げる
+    from .pipeline import relation_of
+    base = box(0, 0, 0, 200, 200, 10)
+    lid = BRepAlgoAPI_Fuse(box(0, 0, 9.999999, 200, 200, 5), cyl(100, 100, 5, 1.0, 6)).Shape()
+    rel = M.gf_relations([base, lid])["relations"][(0, 1)]
+    print(f"[3b] 薄片 200x200 + ピン: 2V/A={rel['thickness']:.3g} obb_min={rel['obb_min']:.3g} 領域={rel['regions']} "
+          f"→ relation={relation_of(rel)}(2V/A だけなら {'tiny_overlap' if rel['thickness'] <= 1e-3 else 'overlap'})", flush=True)
+
     # 4. PC ケース: 組ごとの2体 GF と全体1回
     step = Path(args.step)
     if step.exists():
