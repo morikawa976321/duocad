@@ -814,6 +814,10 @@
     overlayObserver?.disconnect()
     syncOverlayHeight(null)
     cancelPublish()
+    // 破棄後に満了すると、破棄済みのクロージャが `onPreview` を呼んで幽霊が新しいモードに残る(消す者がいない)。
+    // 幽霊自体は `App.svelte` の `onModeChanged` が消すので、ここでは止めるだけ。
+    if (previewTimer) clearTimeout(previewTimer)
+    previewTimer = null
   })
 
   /** スケッチ平面のクリックを、待っている点引数へ入れる。待っている点が無ければ何もしない(上書きすると、揃った後のクリックで図形が動いて見える)。 */
