@@ -281,6 +281,55 @@ def test_the_guard_does_not_stop_edges_whose_faces_are_wider_than_the_radius():
     kernel.fillet_edges(shape, {index: WALL for index in vertical})
 
 
+def _parallelogram_prism():
+    """XY 平面の平行四辺形 (0,0)(10,0)(13,4)(3,4) を高さ 30 で押し出した柱(押し出しで作るので落ちない側の作り方)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Pnt, gp_Vec
+
+    polygon = BRepBuilderAPI_MakePolygon()
+    for x, y in [(0.0, 0.0), (10.0, 0.0), (13.0, 4.0), (3.0, 4.0)]:
+        polygon.Add(gp_Pnt(x, y, 0.0))
+    polygon.Close()
+    face = BRepBuilderAPI_MakeFace(polygon.Wire()).Face()
+    return BRepPrimAPI_MakePrism(face, gp_Vec(0.0, 0.0, 30.0)).Shape()
+
+
+def _vertical_edge_at(shape, x: float, y: float) -> int:
+    (found,) = [
+        edge["index"]
+        for edge in query.describe_edges(shape)
+        if edge["kind"] == "line"
+        and edge["start"][2] != edge["end"][2]
+        and abs(edge["start"][0] - x) < 1e-6
+        and abs(edge["start"][1] - y) < 1e-6
+    ]
+    return found
+
+
+def test_the_guard_does_not_stop_a_fillet_on_an_obtuse_edge_whose_radius_equals_the_face_width():
+    """鈍角の辺(平行四辺形の(10,0)の縦辺、内角 126.9 度)は、半径 5 が隣の斜めの面の幅 5 と一致しても、面の中へ使う幅は
+    `5·tan(φ/2)` = 2.5 で、面は食い尽くされない(OCCT は体積 1172.7 の正常な形を作る)。落ちたら、角度を見ずに半径だけで
+    比べていて、正しく丸められる形を断っている。"""
+    shape = _parallelogram_prism()
+    edge_map = kernel._edge_map(shape)
+    index = _vertical_edge_at(shape, 10.0, 0.0)
+
+    assert kernel_chains.fillet_consumes_face(shape, edge_map, {index: 5.0}) is None
+    assert kernel.fillet_edges(shape, {index: 5.0})["shape"] is not None
+
+
+def test_the_guard_still_finds_the_radius_that_consumes_the_slanted_face():
+    """同じ辺は、使う幅 `R·tan(φ/2)` が斜めの面の幅 5 と一致する R = 10 で止める(OCCT は `IsDone()=False`)。"""
+    shape = _parallelogram_prism()
+    edge_map = kernel._edge_map(shape)
+    index = _vertical_edge_at(shape, 10.0, 0.0)
+
+    found = kernel_chains.fillet_consumes_face(shape, edge_map, {index: 10.0})
+
+    assert found is not None and found[0] == index
+
+
 _CONSUME_CHILD = """
 import sys
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox

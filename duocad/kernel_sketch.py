@@ -438,14 +438,20 @@ def _entities_of_offset_curve(uv: Callable[[float], Tuple[float, float]], first:
 
 
 def _circle_through(a: Tuple[float, float], b: Tuple[float, float], c: Tuple[float, float]) -> Any:
-    """3点を通る円 `(cx, cy, radius)`。共線なら None。"""
-    d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]))
+    """3点を通る円 `(cx, cy, radius)`。共線なら None。
+
+    最初の点を原点とする局所座標で解く。絶対座標の二乗を差し引く解き方だと、図形が原点から離れる(1000 mm など)と
+    0.01〜0.1 mm の短い弧で桁が落ち、当てはめを検査する残差の許容を超えて包み込みを断ってしまう。
+    """
+    bx, by = b[0] - a[0], b[1] - a[1]
+    px, py = c[0] - a[0], c[1] - a[1]
+    d = 2.0 * (bx * py - by * px)
     if d == 0.0:
         return None
-    sa, sb, sc = a[0] ** 2 + a[1] ** 2, b[0] ** 2 + b[1] ** 2, c[0] ** 2 + c[1] ** 2
-    cx = (sa * (b[1] - c[1]) + sb * (c[1] - a[1]) + sc * (a[1] - b[1])) / d
-    cy = (sa * (c[0] - b[0]) + sb * (a[0] - c[0]) + sc * (b[0] - a[0])) / d
-    return cx, cy, math.hypot(a[0] - cx, a[1] - cy)
+    sb, sc = bx * bx + by * by, px * px + py * py
+    ux = (py * sb - by * sc) / d
+    uy = (bx * sc - px * sb) / d
+    return a[0] + ux, a[1] + uy, math.hypot(ux, uy)
 
 
 def _ax3_from_plane(plane: dict) -> "gp_Ax3":

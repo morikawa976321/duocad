@@ -676,6 +676,24 @@ def test_undrawn_definitions_add_no_shapes(tmp_path: Path, definition: str) -> N
     assert _drawn_corners(tmp_path, definition + VISIBLE) == VISIBLE_CORNERS
 
 
+@pytest.mark.parametrize(
+    "definitions",
+    [
+        # `<defs>` の中の `<g>` を `<use>` が展開するとき、その中の `<mask>` の図形まで平らに並んで描かれていた
+        f'<defs><g id="t"><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>{VISIBLE}</g></defs>',
+        # `<symbol>` の中の `<mask>`(defs の中でも外でも)
+        f'<defs><symbol id="t"><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>{VISIBLE}</symbol></defs>',
+        f'<symbol id="t"><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>{VISIBLE}</symbol>',
+        f'<defs><g id="t"><symbol id="x"><rect x="0" y="0" width="9" height="9"/></symbol>{VISIBLE}</g></defs>',
+    ],
+)
+def test_a_definition_inside_a_used_definition_is_not_drawn(tmp_path: Path, definitions: str) -> None:
+    """`<use>` が参照する `<g>` `<symbol>` の中の、描かれない定義(`<mask>` など)は取り込まない。
+    落ちたら、defs や symbol の中へ入れた mask の図形が、参照した分だけ余計に入る。"""
+    corners = _drawn_corners(tmp_path, definitions + '<use xlink:href="#t"/>')
+    assert corners == VISIBLE_CORNERS
+
+
 def test_a_file_with_only_undrawn_definitions_is_refused(tmp_path: Path) -> None:
     """描かれる図形が無ければ、空のスケッチを作らず断る。"""
     body = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">{SYMBOL}</svg>'
