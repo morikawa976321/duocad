@@ -295,3 +295,15 @@ def test_the_size_hint_may_be_omitted(cylinder_session) -> None:
     errors = [payload for payload in client.payloads if payload.get("type") == "error"]
     assert not errors, f"省略できるはずの引数でエラー: {errors}"
     assert session.view.view_deviation < DEVIATION
+
+
+def test_a_mesh_body_is_not_sent_again_when_only_the_zoom_changes(session: Session) -> None:
+    """落ちたら、ズームのたびに変わっていないメッシュボディ(形状最適化の結果。数万三角形)の全体を配り直す。"""
+    from duocad.verbs.add_mesh import add_mesh_body
+
+    body_id = add_mesh_body(session.document, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [0, 1, 2], name="m")
+    known = {body_id: session.view.body_revision(body_id)}
+
+    assert session.set_view_resolution(0.002, SIDE) is True
+
+    assert session.delta(known) == {"bodies": [], "unchanged": [body_id]}

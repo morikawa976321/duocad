@@ -532,7 +532,10 @@ class DocumentView:
         # 粗さも「状態」のうち。入れないと、ズームで目標精度が変わっても差分配信が「版が同じ」と
         # 判断して古い粗さのメッシュが画面に残る。メッシュボディは `shape` が常に None なので
         # **メッシュの同一性も鍵に入れる**(`id(None)` は常に同じ値で、版が二度と上がらない)。
-        key = (id(body.shape), id(body.mesh), body.visible, self.body_recipe(body_id))
+        # メッシュボディは持っている三角形をそのまま配り粗さが効かないので、粗さは入れない(入れると、ズームのたびに
+        # 変わっていないメッシュ全体を配り直す)。
+        recipe = None if body.mesh is not None else self.body_recipe(body_id)
+        key = (id(body.shape), id(body.mesh), body.visible, recipe)
         if self._revision_state.get(body_id) != key:
             self._revision_state[body_id] = key
             self._revision_counter[body_id] = self._revision_counter.get(body_id, 0) + 1
