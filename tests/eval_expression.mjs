@@ -95,6 +95,16 @@ assert.equal(value('１＋２'), 3, '全角の数字と演算子')
 assert.equal(value('（２＋３）×４'), 20, '全角の括弧と×')
 assert.equal(value('10÷4'), 2.5)
 assert.equal(value('10−4'), 6, 'U+2212 のマイナス記号')
+assert.equal(value('ｓｑｒｔ（４）'), 2, '全角の英字も畳む')
+assert.equal(value('10 +　5'), 15, 'NBSP・全角空白は空白として読む')
+assert.equal(value('10‑4'), 6, 'U+2011(改行しないハイフン)はマイナス記号として読む')
+
+// 互換文字(NFKC が別の字へ畳むもの)を黙って数字にしない: べき乗のつもりの `10²` が 102 になる。
+for (const text of ['10²', '9⁹', '①', '⑩', '5₂', '𝟏', '½', '⁻3']) {
+  assert.ok(reason(text).includes('使えない文字'), `互換文字が通った: ${text}`)
+  assert.ok(!isPlainNumber(text), `素の数値と判定された: ${text}`)
+  assert.equal(expressionValue(text), null)
+}
 
 // ====================================================== 拒む側(黙って数を作らない)
 assert.equal(reason(''), '式が空')

@@ -81,8 +81,20 @@ const NAME_HEAD = /[A-Za-z_]/
 const SPACE = /\s/
 const OPERATORS = '+-*/^'
 
-/** 日本語IME入力の式を読めるようにする。NFKC が全角を畳み、NFKC が触らない数学記号だけ個別に置き換える。 */
+const FULLWIDTH_ASCII = /[！-～]/
+const DASH_LIKE = /^[‐-―]$/
+
+/**
+ * 日本語IME入力の式を読めるようにする。NFKC が全角を畳み、NFKC が触らない数学記号だけ個別に置き換える。
+ * NFKC は互換文字も別の字へ畳む(`²` → `2`、`①` → `1`)ので、べき乗のつもりの `10²` が黙って 102 になる。
+ * 畳んでよいのは全角の英数字・記号(U+FF01-FF5E)、空白、横棒だけ。ほかの互換文字は畳む前に拒む。
+ */
 function normalize(text: string): string {
+  for (const char of text) {
+    if (FULLWIDTH_ASCII.test(char) || SPACE.test(char)) continue
+    const folded = char.normalize('NFKC')
+    if (folded !== char && !DASH_LIKE.test(folded)) throw new ExpressionError(`使えない文字: ${char}`)
+  }
   return text
     .normalize('NFKC')
     .replace(/[−‐-―]/g, '-')
@@ -237,14 +249,19 @@ function expectClose(cursor: Cursor): void {
 const PLAIN_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/
 
 export function isPlainNumber(text: string): boolean {
-  return PLAIN_NUMBER.test(normalize(text))
+  try {
+    return PLAIN_NUMBER.test(normalize(text))
+  } catch (error) {
+    if (error instanceof ExpressionError) return false
+    throw error
+  }
 }
 
 /** 打った文字列を数にする。末尾のゴミは捨てず理由を返して拒む(`parseFloat('50mm')` は 50 を返す)。 */
 export function evaluateExpression(text: string): ExpressionResult {
-  const source = normalize(text)
-  if (source === '') return { ok: false, reason: '式が空' }
   try {
+    const source = normalize(text)
+    if (source === '') return { ok: false, reason: '式が空' }
     const cursor: Cursor = { tokens: tokenize(source), index: 0 }
     const value = parseSum(cursor)
     if (cursor.index !== cursor.tokens.length) throw new ExpressionError('余分な文字がある')
