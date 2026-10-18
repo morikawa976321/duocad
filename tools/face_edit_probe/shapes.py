@@ -367,6 +367,14 @@ def move_cases() -> List[Case]:
         Case("m_fillet_nonadj_bottom3", "move", s, pick(s, plane_at(2, 0.0)), bottom_down, 3.0, note="丸めに接しない面", tags=["fillet"])
     )
 
+    s = fillet(fillet(base, _top_front, 5), lambda m: abs(m[1] - D) < 1e-6 and abs(m[2] - H) < 1e-6, 3)
+    two = fillet(fillet(box(W, D, H + 2), lambda m: abs(m[1]) < 1e-6 and abs(m[2] - H - 2) < 1e-6, 5),
+                 lambda m: abs(m[1] - D) < 1e-6 and abs(m[2] - H - 2) < 1e-6, 3)
+    cases.append(
+        Case("m_fillet_two_radii_top_up2", "move", s, pick(s, plane_at(2, H)), two, 2.0,
+             note="前 r5・後 r3 の丸めに挟まれた上面。半径を取り違えない", tags=["fillet", "blend"])
+    )
+
     s = fillet(base, lambda m: True, 3)
     follow_all = fillet(box(W, D, H + 2), lambda m: True, 3)
     cases.append(
@@ -393,7 +401,7 @@ def move_cases() -> List[Case]:
     two = pick(base, plane_at(2, H)) + pick(base, plane_at(1, 0.0))
     cases.append(Case("m_box_two_faces", "move", base, two, box(W, D + 3, H + 3, 0, -3, 0), 3.0, note="2面を同時に", tags=["multi"]))
 
-    for name in ("m_hole_shrink1", "m_wedge_top_up4", "m_box_top_up5", "m_fillet_adj_top_up3"):
+    for name in ("m_hole_shrink1", "m_wedge_top_up4", "m_box_top_up5", "m_fillet_adj_top_up3", "m_fillet_two_radii_top_up2"):
         original = next(c for c in cases if c.name == name)
         cases.append(_via_step(original))
     return cases

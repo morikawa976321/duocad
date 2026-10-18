@@ -34,7 +34,7 @@ from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_Ind
 from . import geometry as g
 from . import methods, shapes
 from .methods import FaceEditError
-from .worker import MIN_FACE_AREA, as_solid
+from .worker import MIN_FACE_AREA
 
 #: 曲面の定義を比べる許容差[mm]と角度の許容差(cos の 1 からのずれ)。置いた値
 LINEAR_TOL = 1e-6
@@ -209,6 +209,38 @@ def structural_gate(result):
         raise FaceEditError(f"{len(tiny)} face(s) with area < {MIN_FACE_AREA:g}")
 
 
+def wrap_checked(raw):
+    """MakeOffset の生の結果を1ソリッドにする。**包む前に**、ソリッド1つか閉じたシェル1つだけで、その外に面が無いことを見る
+    (シェルだけを包むと、外に付いた独立の面が後の検査から見えなくなる。astra の2回目の指摘)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid
+    from OCP.BRepCheck import BRepCheck_Shell, BRepCheck_Status
+    from OCP.BRepLib import BRepLib
+
+    if raw is None or raw.IsNull():
+        raise FaceEditError("empty result")
+    solids = g.solids_of(raw)
+    if solids:
+        if len(solids) != 1 or len(g.faces_of(raw)) != len(g.faces_of(solids[0])):
+            raise FaceEditError("raw result is not exactly one solid")
+        return raw
+    shells = _subshapes(raw, TopAbs_ShapeEnum.TopAbs_SHELL)
+    if len(shells) != 1 or len(g.faces_of(raw)) != len(g.faces_of(shells[0])):
+        raise FaceEditError("raw result is not exactly one shell")
+    shell = TopoDS.Shell_s(shells[0])
+    if BRepCheck_Shell(shell).Closed() != BRepCheck_Status.BRepCheck_NoError:
+        raise FaceEditError("raw shell is not closed")
+    solid = BRepBuilderAPI_MakeSolid(shell).Solid()
+    if not BRepLib.OrientClosedSolid_s(solid):
+        raise FaceEditError("could not orient the closed shell")
+    return solid
+
+
+def _subshapes(shape, kind):
+    m = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, kind, m)
+    return [m.FindKey(i) for i in range(1, m.Extent() + 1)]
+
+
 def _positions(final_map, shapes_):
     return sorted({final_map.FindIndex(s) for s in shapes_} - {0})
 
@@ -251,7 +283,7 @@ def strict_delete(shape, faces):
 # --------------------------------------------------------------------------------------
 def strict_offset(shape, faces, distance):
     raw, algo = methods.offset_faces(shape, faces, distance)
-    result = as_solid(raw)
+    result = wrap_checked(raw)
     structural_gate(result)
     return result, check_offset_correspondence(shape, faces, distance, result, lambda old: list(algo.Generated(old)))
 
@@ -345,7 +377,7 @@ def find_structural_blends(shape, faces):
     blends, supports_of = [], {}
     frontier = list(faces)
     seen = list(faces)
-    own_supports = {}
+    own_supports, radius_of = {}, {}
     while frontier:
         current = frontier.pop(0)
         for edge in g.edges_of(current):
@@ -356,6 +388,10 @@ def find_structural_blends(shape, faces):
                 continue  # 丸めの支えの面(たどらない)
             kind = g.surface_type(other)
             if kind == "sphere" and any(current.IsSame(b) for b in blends):
+                current_radius = radius_of.get(id(current))
+                if current_radius is None or abs(describe_surface(other)[2] - current_radius) > LINEAR_TOL:
+                    raise FaceEditError("a sphere next to a blend has a different radius (not a corner of the blend)")
+                radius_of[id(other)] = current_radius
                 seen.append(other)
                 blends.append(other)
                 frontier.append(other)
@@ -369,6 +405,7 @@ def find_structural_blends(shape, faces):
             blends.append(other)
             supports_of[len(blends) - 1] = signature
             own_supports[id(other)] = signature[1:]
+            radius_of[id(other)] = signature[0]
             frontier.append(other)
     return blends, [s for s in supports_of.values()]
 
@@ -393,7 +430,7 @@ def strict_follow(shape, faces, distance):
 
     moved_faces = [through_removal(f) for f in faces]
     raw, offset = methods.offset_faces(sharp, moved_faces, distance)
-    moved = as_solid(raw)
+    moved = wrap_checked(raw)
     structural_gate(moved)
     sharp_table = check_offset_correspondence(sharp, moved_faces, distance, moved, lambda old: list(offset.Generated(old)))
     sharp_map, moved_map = _face_map(sharp), _face_map(moved)
@@ -404,7 +441,7 @@ def strict_follow(shape, faces, distance):
 
     edge_faces = _edge_faces(moved)
     maker = BRepFilletAPI_MakeFillet(moved)
-    rebuilt_edges = []
+    rebuilt_edges, rebuilt_edges_with_supports = [], []
     for radius, a, b in supports:
         fa, fb = to_moved(a), to_moved(b)
         common = []
@@ -415,6 +452,7 @@ def strict_follow(shape, faces, distance):
         if len(common) != 1:
             raise FaceEditError(f"supports of a blend share {len(common)} edges after the move")
         rebuilt_edges.append((common[0], radius))
+        rebuilt_edges_with_supports.append((common[0], radius, fa, fb))
     for edge, radius in rebuilt_edges:
         maker.Add(radius, edge)
     maker.Build()
@@ -424,17 +462,42 @@ def strict_follow(shape, faces, distance):
     structural_gate(final)
 
     final_map = _face_map(final)
-    # 角の球は辺でなく頂点から生まれる(全辺丸めの上面で実測)
-    sources = [e for e, _ in rebuilt_edges] + [v for e, _ in rebuilt_edges for v in _vertices(e)]
-    regenerated = sorted({final_map.FindIndex(x) for src in sources for x in maker.Generated(src)} - {0})
-    for position in regenerated:
-        face = TopoDS.Face_s(final_map.FindKey(position))
-        definition = describe_surface(face)
-        if definition is None or definition[0] not in ("cylinder", "torus", "sphere"):
-            raise FaceEditError("a re-blended face is not a cylinder, torus or sphere")
-        r = {"cylinder": lambda d: d[3], "torus": lambda d: d[4], "sphere": lambda d: d[2]}[definition[0]](definition)
-        if not any(abs(r - radius) < LINEAR_TOL for _, radius in rebuilt_edges):
-            raise FaceEditError("a re-blended face has a different radius")
+    final_edge_faces = _edge_faces(final)
+    regenerated = []
+    for edge, radius, fa, fb in rebuilt_edges_with_supports:
+        made = sorted({final_map.FindIndex(x) for x in maker.Generated(edge)} - {0})
+        if not made:
+            raise FaceEditError("re-blending produced no face for an edge")
+        supports_after = [x for f in (fa, fb) for x in (list(maker.Modified(f)) or [f])]
+        for position in made:
+            face = TopoDS.Face_s(final_map.FindKey(position))
+            definition = describe_surface(face)
+            if definition is None or definition[0] not in ("cylinder", "torus"):
+                raise FaceEditError("a re-blended face is not a cylinder or torus")
+            r = definition[3] if definition[0] == "cylinder" else definition[4]
+            if abs(r - radius) > LINEAR_TOL:
+                raise FaceEditError("a re-blended face has the radius of another blend")
+            touching = 0
+            for spring in g.edges_of(face):
+                if not _is_spring_edge(spring, definition):
+                    continue
+                neighbour = _other_face(final_edge_faces, spring, face)
+                if neighbour is None or not any(neighbour.IsSame(x) for x in supports_after) or not _tangent(spring, face, neighbour):
+                    raise FaceEditError("a re-blended face is not tangent to its supports")
+                touching += 1
+            if touching < 2:
+                raise FaceEditError("a re-blended face does not rest on both supports")
+        regenerated += made
+    # 角の球は辺でなく頂点から生まれる(全辺丸めの上面で実測)。頂点に集まる丸めの半径がそろっているときだけ認める
+    for edge, radius, _, _ in rebuilt_edges_with_supports:
+        for vertex in _vertices(edge):
+            made = sorted({final_map.FindIndex(x) for x in maker.Generated(vertex)} - {0})
+            for position in made:
+                definition = describe_surface(TopoDS.Face_s(final_map.FindKey(position)))
+                if definition is None or definition[0] != "sphere" or abs(definition[2] - radius) > LINEAR_TOL:
+                    raise FaceEditError("a corner made by re-blending is not a sphere of the blend radius")
+            regenerated += made
+    regenerated = sorted(set(regenerated))
     # 由来: 元の面 → 丸めを外した形 → 動かした形 → 丸め直した形。旧丸めは deleted、丸め直した面は new_faces
     before = _face_map(shape)
     table = {}
@@ -452,7 +515,11 @@ def strict_follow(shape, faces, distance):
         if not lies_on(TopoDS.Face_s(final_map.FindKey(positions[0])), old, distance if selected else 0.0):
             raise FaceEditError(f"face {i} is not where it should be after re-blending")
         table[i] = positions
-    covered = {p for v in table.values() for p in v}
+    covered = [p for v in table.values() for p in v]
+    if len(set(covered)) != len(covered):
+        raise FaceEditError("two old faces map to the same final face")
+    if set(covered) & set(regenerated):
+        raise FaceEditError("a kept face is also counted as re-blended")
     stray = [j for j in range(1, final_map.Extent() + 1) if j not in covered and j not in regenerated]
     if stray:
         raise FaceEditError(f"faces {stray} come from nowhere")
