@@ -23,6 +23,7 @@ import {
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { sampleFaces, type BodySamples } from './faceCulling'
 import { startFrameLoop } from './frameLoop'
+import { createHeadlight } from './headlight'
 import { createResolutionTracker } from './resolutionTracker'
 import { BASE_EXTENT, mmPerPixel, type CameraProjection } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
@@ -98,9 +99,10 @@ export function createViewport(container: HTMLElement): Viewport {
     camera.position.copy(HOME_VIEW_OFFSET).multiplyScalar(distance)
   }
   scene.add(camera)
-  const headlight = new THREE.DirectionalLight(0xffffff, 1.6)
-  headlight.position.set(0.4, 0.7, 1)
+  const headlightRig = createHeadlight()
+  const headlight = headlightRig.light
   camera.add(headlight)
+  scene.add(headlightRig.aim)
   scene.add(new THREE.HemisphereLight(0xdfe7f2, 0x191c21, 1.0))
 
   // 型引数を明示する: 省くと `perspective` で固まり、正投影へ差し替えるとき
@@ -2546,6 +2548,7 @@ export function createViewport(container: HTMLElement): Viewport {
     section.update()
     if (needsRender || cameraMovedSinceRender()) {
       needsRender = false
+      headlightRig.follow(controls.target)
       renderer.render(scene, camera)
       lastDrawCalls = renderer.info.render.calls
       renderCount += 1

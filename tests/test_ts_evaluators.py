@@ -19,6 +19,7 @@ EVALUATORS = [
     "eval_frame_loop.mjs",
     "eval_grid_planes.mjs",
     "eval_grid_scale.mjs",
+    "eval_headlight.mjs",
     "eval_min_width.mjs",
     "eval_screen_pick.mjs",
     "eval_selection_ref_key.mjs",
