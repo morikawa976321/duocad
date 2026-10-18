@@ -29,8 +29,8 @@ from .extrude import (
     MODES,
     _add_new_body,
     _add_numbered_body,
-    _editable_target,
     _recorded_name,
+    _replayed_target,
     _resolve_faces_and_normal,
     _resolve_target,
 )
@@ -171,7 +171,7 @@ def _do_loft(document: Document, operation: Operation) -> None:
         _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
         remember(document, body_id, operation.seq, None)
     else:
-        target = _editable_target(document, body_id, what=VERB_LOFT)
+        target = _replayed_target(document, body_id, what=VERB_LOFT)
         previous_shape = target.shape
         result = _loft_shape(document, *shape_args, previous_shape)
         target.shape = result["shape"]

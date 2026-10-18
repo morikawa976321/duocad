@@ -241,13 +241,14 @@ def _remove(
 # verbの登録
 # --------------------------------------------------------------------------------------
 def _do_delete(document: Document, operation: Operation) -> None:
-    """redo / replay: 記録した対象を消し直す(ログには触らない)。スナップショットは毎回取り直す(理由は `_common.reapply_shape`)。"""
+    """redo / replay: 記録した対象を消し直す(ログには触らない)。スナップショットは毎回取り直す(理由は `_common.reapply_shape`)。
+    隠したボディも消し直す(可視性の門は新しく選択から消す `delete` の入口だけ。理由は `_common.replayed_body`)。"""
     args = operation.args
     body_ids = [str(body_id) for body_id in args["bodies"]]
     entity_specs = [dict(spec) for spec in args["entities"]]
     sketch_ids = [str(spec["sketch_id"]) for spec in args.get("sketches") or ()]
     for body_id in body_ids:
-        deletable_body(document, body_id, require_visible=operation.verb == VERB_DELETE)
+        deletable_body(document, body_id, require_visible=False)
     removed = _remove(document, body_ids, entity_specs, sketch_ids)
     if body_ids:
         remember(document, _SNAPSHOT_KEY, operation.seq, removed)

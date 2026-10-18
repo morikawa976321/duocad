@@ -79,8 +79,37 @@ def editable_body(
     **選択側の門番(`selection._visible_body`)だけでは足りない**。AIと人が並行して動くと、
     選択した後・verbを呼ぶ前に人がそのボディを隠す順序が起きる。`fillet`/`chamfer` がこの順序で
     隠したボディを黙って丸めることを実測した(`tests/test_agent_concurrency.py`)ので、
-    見えないボディは常に断る(面・辺どちらを取るverbも同じ)。
+    見えないボディは常に断る(面・辺どちらを取るverbも同じ)。**新しく掛ける操作の入口だけの門**で、
+    redo / 再生は `replayed_body`。
     """
+    return _checked_body(doc, body_id, what=what, reject_as=reject_as, require_visible=True)
+
+
+def replayed_body(
+    doc: Document,
+    body_id: BodyId,
+    *,
+    what: str,
+    reject_as: Optional[str] = None,
+) -> Body:
+    """redo / 再生で操作を掛け直すボディ。`editable_body` と同じ検査(無い・編集できない・形状が無い)から、
+    **「見えないものは指せない」だけを外したもの**。
+
+    可視性は操作ログに載らず undo / redo でも戻らない状態なので、undo の後に人がボディを隠しただけで
+    redo が通らなくなり、ログの再生の成否が画面の状態に左右される(`Body.visible`)。可視性の門が守るのは
+    「選択した後・verbを呼ぶ前に隠された」新規の操作で、ログにある操作はその門を通っている。
+    """
+    return _checked_body(doc, body_id, what=what, reject_as=reject_as, require_visible=False)
+
+
+def _checked_body(
+    doc: Document,
+    body_id: Optional[BodyId],
+    *,
+    what: str,
+    reject_as: Optional[str],
+    require_visible: bool,
+) -> Body:
     if body_id is None:
         active = doc.active_body()
         if active is None:
@@ -95,7 +124,7 @@ def editable_body(
             f"body {body_id!r} is not editable (kind={body.kind!r})"
         )
     body = doc.get_body(body_id)
-    if not body.visible:
+    if require_visible and not body.visible:
         raise ValueError(
             f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
         )

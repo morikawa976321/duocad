@@ -10,7 +10,7 @@ from __future__ import annotations
 from .. import kernel_extrude
 from ..document import Document
 from ..oplog import Operation, register_verb
-from ._common import editable_body, reapply_shape, undo_shape
+from ._common import reapply_shape, replayed_body, undo_shape
 
 VERB_EXTRUDE_FACE = "extrude_face"
 
@@ -18,7 +18,7 @@ VERB_EXTRUDE_FACE = "extrude_face"
 def _do_extrude_face(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された添字と距離で押し出し直す(ログには触らない)。"""
     args = operation.args
-    body = editable_body(document, args["body_id"], what="extrude")
+    body = replayed_body(document, args["body_id"], what="extrude")
     distance = float(args["distance"])
     result = kernel_extrude.extrude_faces(
         body.shape,

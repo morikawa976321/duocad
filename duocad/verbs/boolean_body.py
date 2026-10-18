@@ -13,7 +13,15 @@ from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
 from .. import selection
 from ..entry import entry
-from ._common import detach_bodies, editable_body, reattach_bodies, recall, remember, resolve_shape_ref
+from ._common import (
+    detach_bodies,
+    editable_body,
+    reattach_bodies,
+    recall,
+    remember,
+    replayed_body,
+    resolve_shape_ref,
+)
 
 VERB_BOOLEAN_BODY = "boolean_body"
 _SNAPSHOT_KEY = "boolean_body:removed"
@@ -32,9 +40,11 @@ def _validate_target_ref(doc: Document, target_ref: Any) -> BodyId:
 
 
 def _validate_participants(
-    doc: Document, target_body_id: BodyId, tool_body_ids: Sequence[BodyId]
+    doc: Document, target_body_id: BodyId, tool_body_ids: Sequence[BodyId], *, replay: bool
 ) -> tuple:
-    """全部検査してから1つも変えない —— 途中で落ちると半端な文書が残る。"""
+    """全部検査してから1つも変えない —— 途中で落ちると半端な文書が残る。redo / 再生(`replay`)は、隠れたボディも
+    通す(`_common.replayed_body`)。"""
+    find = replayed_body if replay else editable_body
     if not tool_body_ids:
         raise ValueError(
             "boolean_body requires at least one tool body "
@@ -48,13 +58,13 @@ def _validate_participants(
             f"boolean_body: target body {target_body_id!r} cannot also be a tool"
         )
 
-    target_body = editable_body(doc, target_body_id, what="boolean_body")
+    target_body = find(doc, target_body_id, what="boolean_body")
     if not kernel.is_solid(target_body.shape):
         raise ValueError(f"boolean_body: target body {target_body.id!r} is not a solid")
 
     tools = []
     for tool_id in tool_ids:
-        tool = editable_body(doc, tool_id, what="boolean_body")
+        tool = find(doc, tool_id, what="boolean_body")
         if not kernel.is_solid(tool.shape):
             raise ValueError(f"boolean_body: tool body {tool_id!r} is not a solid")
         tools.append(tool)
@@ -83,7 +93,7 @@ def boolean_body(
 ) -> Operation:
     """ターゲットにツール群を作用させる。`target_ref` は面1枚への参照、ツールは BodyId の並び。"""
     target_body_id = _validate_target_ref(doc, target_ref)
-    target_body, tools = _validate_participants(doc, target_body_id, tool_body_ids)
+    target_body, tools = _validate_participants(doc, target_body_id, tool_body_ids, replay=False)
     previous_shape, detached, provenance = _apply(doc, target_body, tools, str(mode))
     operation = doc.log.append(
         VERB_BOOLEAN_BODY,
@@ -102,7 +112,7 @@ def _do_boolean_body(document: Document, operation: Operation) -> None:
     """redo / replay: 記録どおりにもう一度演算する(ログには触らない)。"""
     args = operation.args
     target_body, tools = _validate_participants(
-        document, args["target_body_id"], [str(body_id) for body_id in args["tool_bodies"]]
+        document, args["target_body_id"], [str(body_id) for body_id in args["tool_bodies"]], replay=True
     )
     previous_shape, detached, provenance = _apply(document, target_body, tools, str(args["mode"]))
     if operation.provenance is None:

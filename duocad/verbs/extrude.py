@@ -22,7 +22,7 @@ from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from .. import selection
 from ..entry import entry
-from ._common import editable_body, recall, remember, resolve_shape_ref
+from ._common import editable_body, recall, remember, replayed_body, resolve_shape_ref
 from ..region import RegionRef, _regions_detailed
 from ..sketch import get_sketch
 
@@ -100,7 +100,7 @@ def extrude_faces(
     if mode not in MODES:
         raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
 
-    source, indices = _resolve_face_source(doc, faces)
+    source, indices = _resolve_face_source(doc, faces, require_visible=True)
     if mode != "new" and body_id is None:
         body_id = source.id
     target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
@@ -134,9 +134,12 @@ def extrude_faces(
     return operation
 
 
-def _resolve_face_source(doc: Document, faces: Sequence[Any]) -> tuple[Body, List[int]]:
+def _resolve_face_source(
+    doc: Document, faces: Sequence[Any], *, require_visible: bool
+) -> tuple[Body, List[int]]:
     """面の参照から (面を持つボディ, 添字の並び) を取る。**別のボディにまたがる選択は ValueError**。
-    面の持ち主は「見えないものは指せない」を課す(`editable_body` と同じ理由)。"""
+    新しい押し出しは面の持ち主に「見えないものは指せない」を課す(`editable_body` と同じ理由)。redo / 再生は課さない
+    (`replayed_body`)。"""
     refs = list(faces)
     if not refs:
         raise ValueError("extrude requires at least one face")
@@ -155,7 +158,7 @@ def _resolve_face_source(doc: Document, faces: Sequence[Any]) -> tuple[Body, Lis
             )
         indices.append(index)
     assert source is not None
-    if not source.visible:
+    if require_visible and not source.visible:
         raise ValueError(
             f"body {source.id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
         )
@@ -199,8 +202,16 @@ def _resolve_target(
 
 def _editable_target(doc: Document, body_id: BodyId, what: str = VERB_EXTRUDE) -> Body:
     """押し出し・回転体の対象にできるボディ(編集可・可視・形状あり。メッシュは「足す/引く対象にする」ことを断る)。"""
-    reject_as = "押し出しの対象にする" if what == VERB_EXTRUDE else "足す/引く対象にする"
-    return editable_body(doc, body_id, what=what, reject_as=reject_as)
+    return editable_body(doc, body_id, what=what, reject_as=_reject_as(what))
+
+
+def _replayed_target(doc: Document, body_id: BodyId, what: str = VERB_EXTRUDE) -> Body:
+    """redo / 再生で足す・引く対象。`_editable_target` から可視性の門だけを外したもの(`_common.replayed_body`)。"""
+    return replayed_body(doc, body_id, what=what, reject_as=_reject_as(what))
+
+
+def _reject_as(what: str) -> str:
+    return "押し出しの対象にする" if what == VERB_EXTRUDE else "足す/引く対象にする"
 
 
 def _add_numbered_body(doc: Document, body_id: BodyId, shape: Any) -> dict:
@@ -287,7 +298,7 @@ def _do_extrude(document: Document, operation: Operation) -> None:
         _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
         remember(document, body_id, operation.seq, None)
     else:
-        target = _editable_target(document, body_id)
+        target = _replayed_target(document, body_id)
         previous_shape = target.shape
         result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=target.shape)
         target.shape = result["shape"]
@@ -300,7 +311,7 @@ def _redo_faces(
     document: Document, operation: Operation, faces: Sequence[Any], distance: float, mode: str, body_id: BodyId
 ) -> None:
     """面のログの再適用。記録した添字で面を引き直す(形が決定的なので同じ面を指す)。"""
-    source, indices = _resolve_face_source(document, faces)
+    source, indices = _resolve_face_source(document, faces, require_visible=False)
     existing = next((body for body in document.bodies if body.id == body_id), None)
     if mode == "new":
         if existing is not None:
@@ -311,7 +322,7 @@ def _redo_faces(
     else:
         if existing is None:
             raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
-        target = _editable_target(document, body_id)
+        target = _replayed_target(document, body_id)
         previous_shape = target.shape
         result = kernel_extrude.extrude_faces(
             source.shape, indices, distance, mode, target_shape=previous_shape
