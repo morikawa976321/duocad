@@ -13,10 +13,7 @@ from duocad.entry import entry
 from duocad.oplog import register_verb
 from duocad.verbs._common import editable_body, reapply_shape, remember, undo_shape
 
-from . import blend, methods
-from .provenance import successors
-from .shapes import Case
-from .worker import as_solid, gate
+from . import strict
 
 
 def _faces(shape, indices):
@@ -24,51 +21,26 @@ def _faces(shape, indices):
 
 
 def _projection(verb, indices, table, final_count):
-    return {"verb": verb, "faces": list(indices), **kernel._face_map_projection({str(k): v[0] for k, v in table.items()}, final_count)}
+    return {"verb": verb, "faces": list(indices), **kernel._face_map_projection({str(k): v for k, v in table.items()}, final_count)}
 
 
 def kernel_delete_faces(shape, indices):
-    faces = _faces(shape, indices)
-    result, algo = methods.defeature(shape, faces)
-    reason = gate(Case("shim", "delete", shape, faces, None), result)
-    if reason:
-        raise ValueError(f"delete_faces: {reason}")
-    table, unresolved, _ = successors(algo.History(), shape, result)
-    if unresolved:
-        raise ValueError(f"delete_faces: lost track of faces {unresolved}")
+    """A(`BOPAlgo_RemoveFeatures`)+厳しい版の関門(strict.py)。"""
+    try:
+        result, table, _ = strict.strict_delete(shape, _faces(shape, indices))
+    except strict.FaceEditError as error:
+        raise ValueError(f"delete_faces: {error}") from error
     return {"shape": result, "provenance": _projection("delete_faces", indices, table, kernel.face_count(result))}
 
 
-class _Generated:
-    """MakeOffset の由来は Modified でなく Generated に1対1で入る(docs/FACE_EDIT.md で実測)。"""
-
-    def __init__(self, algo):
-        self.algo = algo
-
-    def Modified(self, face):
-        return self.algo.Generated(face)
-
-    def IsDeleted(self, face):
-        return False
-
-
 def kernel_offset_faces(shape, indices, distance):
+    """B(全体0・選んだ面だけ距離)。接線でつながる丸めがあれば D(外す→動かす→丸め直す)。厳しい版の関門(strict.py)。"""
     if distance == 0:
         raise ValueError("offset_faces: distance must not be 0")
-    faces = _faces(shape, indices)
-    blends, _ = blend.find_blends(shape, faces)
-    if blends:
-        result = blend.move_following_blends(shape, faces, distance, mover="B")
-        table = {i: ([i], True, False, 1) for i in range(1, kernel.face_count(shape) + 1)}  # 仮: D の由来は未実装
-    else:
-        raw, algo = methods.offset_faces(shape, faces, distance)
-        result = as_solid(raw)
-        table, unresolved, _ = successors(_Generated(algo), shape, result)
-        if unresolved:
-            raise ValueError(f"offset_faces: lost track of faces {unresolved}")
-    reason = gate(Case("shim", "move", shape, faces, None, distance), result, following_blends=bool(blends))
-    if reason:
-        raise ValueError(f"offset_faces: {reason}")
+    try:
+        result, table, _ = strict.strict_follow(shape, _faces(shape, indices), distance)
+    except strict.FaceEditError as error:
+        raise ValueError(f"offset_faces: {error}") from error
     return {"shape": result, "provenance": _projection("offset_faces", indices, table, kernel.face_count(result))}
 
 

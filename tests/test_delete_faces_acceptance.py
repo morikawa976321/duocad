@@ -1,13 +1,14 @@
 """面の削除 `delete_faces`(#190)の受入条件(docs/FACE_EDIT.md「受入条件」)。
 
-**verb `delete_faces` が登録されるまでは xfail(strict)**。登録されると印は自動で外れ、本物の検査になる
-(実装の途中で落ちる検査が黙って xfail に紛れない)。落ちたら、受入条件のどれが満たされていないかを意味する。
+**モジュール `duocad/verbs/delete_faces.py` ができるまでは xfail(strict)**。できると印は自動で外れ、本物の検査になる
+(登録を忘れても xfail に紛れずに落ちる)。実装の PR でこの印を消す。落ちたら、受入条件のどれが満たされていないかを意味する。
 
 期待値の出どころ(tools/face_edit_probe で 40×30×20 の箱を実測、2026-10-18): フィレット・面取り・穴の面を
 消すと元の箱(24000 mm³・平面6枚)に戻る。箱の上面は周りが平行で閉じない。
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 
 import pytest
@@ -21,10 +22,12 @@ from duocad.entry import entry_for
 from duocad.verbs import chamfer, fillet
 from duocad.verbs.import_editable import import_step
 from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json, second_body
+from mcp_support import call
+from session_support import session_with_box
 
 pytestmark = pytest.mark.xfail(
-    "delete_faces" not in oplog.registered_verbs(),
-    reason="受入条件(#190)。verb delete_faces の実装前",
+    importlib.util.find_spec("duocad.verbs.delete_faces") is None and "delete_faces" not in oplog.registered_verbs(),
+    reason="受入条件(#190)。verb delete_faces の実装前(実装の PR でこの印を消す)",
     strict=True,
 )
 
@@ -217,15 +220,21 @@ def test_provenance_lists_the_deleted_faces_and_maps_every_other_face():
     doc = Document()
     body_id, cylinder = _filleted_box(doc)
     faces_before = kernel.face_count(doc.get_body(body_id).shape)
+    before = {face["index"]: face for face in query.describe_faces(doc.get_body(body_id).shape)}
 
     operation = _delete_faces(doc, [cylinder], body_id)
 
     provenance = operation.provenance
     assert provenance["deleted"] == [cylinder]
     assert provenance["new_faces"] == []
-    survivors = {old: new for old, new in provenance["face_map"].items() if int(old) != cylinder}
+    survivors = {int(old): new for old, new in provenance["face_map"].items() if int(old) != cylinder}
     assert len(survivors) == faces_before - 1
     assert all(len(new) == 1 for new in survivors.values())
+    # 並べ替えでも通らないように、対応先が同じ向きの平面であることまで見る
+    after = {face["index"]: face for face in query.describe_faces(doc.get_body(body_id).shape)}
+    for old, (new,) in survivors.items():
+        assert after[new]["kind"] == before[old]["kind"]
+        assert after[new]["normal"] == pytest.approx(before[old]["normal"], abs=1e-9)
     json.dumps(doc.log.to_json())
 
 
@@ -257,5 +266,22 @@ def test_the_entry_refuses_faces_of_two_bodies():
 
 def test_ai_can_call_it_over_mcp():
     """AI(MCP)からも呼べる。対象は選択から取り、引数は持たない(target set を引数にしない契約)。"""
+    from duocad.mcp_server import DocumentTools, McpServer
+
     descriptor = next(d for d in catalog.tool_descriptors() if d["name"] == "delete_faces")
     assert descriptor["inputSchema"].get("required", []) == []
+    session = session_with_box()
+    document = session.document
+    edge = next(
+        e["index"] for e in query.describe_edges(document.get_body("box").shape)
+        if e["kind"] == "line" and all(abs(p[0]) < 1e-6 and abs(p[2] - 40.0) < 1e-6 for p in (e["start"], e["end"]))
+    )
+    fillet(document, [edge], 3.0, body_id="box")
+    (cylinder,) = _faces_of_kind(document, "box", "cylinder_partial")
+    server = McpServer(DocumentTools(session))
+    call(server, "set_selection", {"refs": [{"body": "box", "kind": "face", "index": cylinder}]})
+
+    payload = call(server, "delete_faces", {})
+
+    assert payload["verb"] == "delete_faces"
+    assert query.volume(document.get_body("box").shape) == pytest.approx(30.0 * 30.0 * 40.0, rel=1e-9)

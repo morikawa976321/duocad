@@ -1,20 +1,23 @@
 """面のオフセット `offset_faces`(#183)の受入条件(docs/FACE_EDIT.md「受入条件」)。
 
-**verb `offset_faces` が登録されるまでは xfail(strict)**。登録されると印は自動で外れ、本物の検査になる。
-落ちたら、受入条件のどれが満たされていないかを意味する。
+**モジュール `duocad/verbs/offset_faces.py` ができるまでは xfail(strict)**。できると印は自動で外れ、本物の検査になる
+(登録を忘れても xfail に紛れずに落ちる)。実装の PR でこの印を消す。落ちたら、受入条件のどれが満たされていないかを意味する。
 
 期待値の出どころ(tools/face_edit_probe で実測、2026-10-18): 40×30×20 の箱の上面 ±5 → 30000 / 18000 mm³。
 面取り 5 の箱の上面 +3 → 断面 30×23 から 8×8 の三角を引いて ×40 = 26320 mm³。
+丸め r5 の箱の上面 +3 → 40×30×23 から丸めの欠け (25 − 25π/4)×40 を引いた 27385.40 mm³(丸めが付いてくる形)。
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import math
 
 import pytest
+from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-from OCP.gp import gp_Pnt
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
+from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 
 import duocad.verbs as verbs
@@ -23,10 +26,12 @@ from duocad.document import Body, Document
 from duocad.entry import entry_for
 from duocad.verbs import chamfer, fillet
 from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json
+from mcp_support import call
+from session_support import session_with_box
 
 pytestmark = pytest.mark.xfail(
-    "offset_faces" not in oplog.registered_verbs(),
-    reason="受入条件(#183)。verb offset_faces の実装前",
+    importlib.util.find_spec("duocad.verbs.offset_faces") is None and "offset_faces" not in oplog.registered_verbs(),
+    reason="受入条件(#183)。verb offset_faces の実装前(実装の PR でこの印を消す)",
     strict=True,
 )
 
@@ -182,27 +187,48 @@ def test_a_face_that_would_vanish_is_refused():
     assert _state(doc) == before
 
 
-def test_unselected_faces_keep_their_own_surfaces_next_to_a_fillet():
-    """隣接面は自分の幾何のまま(Issue の要件)。丸めに接する面を動かしても、選んでいない平面はずれない。
-    MakeOffset は接線でつながる面(丸めとその先の前面)まで同じ距離ずらした形を有効な形として返す(実測)。
-    丸めを付いてこさせるか断るかは本人判断(docs/FACE_EDIT.md)なので、どちらでも通るように書く。"""
+def test_a_fillet_next_to_the_moved_face_follows_it():
+    """フィレットを含む形の寸法直し: 丸めに接する面を動かすと、丸めは同じ半径のまま付いてきて、選んでいない平面はずれない。
+    MakeOffset だけでは、接線でつながる面(丸めとその先の前面)まで同じ距離ずらした形を有効な形として返す(実測)。
+    由来では、旧い丸めは `deleted`、作り直した丸めは `new_faces`(旧と新を対応させる根拠を持たない)。"""
     doc = Document()
     body_id = _box(doc)
     fillet(doc, [_top_front_edge(doc, body_id)], 5.0, body_id=body_id)
+    (old_round,) = [f["index"] for f in query.describe_faces(doc.get_body(body_id).shape) if f["kind"] == "cylinder_partial"]
+
+    operation = _offset_faces(doc, [_plane_at(doc, body_id, 2, H)], 3.0, body_id)
+
+    shape = doc.get_body(body_id).shape
+    assert query.volume(shape) == pytest.approx(W * D * (H + 3.0) - (25.0 - 25.0 * math.pi / 4) * W, rel=1e-9)
+    assert kinds_of(doc, body_id) == {"plane": 6, "cylinder_partial": 1}
+    (new_round,) = [f["index"] for f in query.describe_faces(shape) if f["kind"] == "cylinder_partial"]
+    assert BRepAdaptor_Surface(kernel.face_of(shape, new_round)).Cylinder().Radius() == pytest.approx(5.0, abs=1e-9)
+    for axis, value in ((1, 0.0), (1, D), (0, 0.0), (0, W), (2, 0.0), (2, H + 3.0)):
+        _plane_at(doc, body_id, axis, value)  # 前面は y=0 のまま、上面は z=23
+    assert operation.provenance["deleted"] == [old_round]
+    assert operation.provenance["new_faces"] == [new_round]
+
+
+def _full_round_plate(doc: Document) -> str:
+    """40×10×15 の板の上を半円筒(r5)にした全丸め。上の曲面は両側の面に接線でつながり、外す(延ばして閉じる)ことができない。"""
+    plate = BRepPrimAPI_MakeBox(40.0, 10.0, 15.0).Shape()
+    rod = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 5, 15), gp_Dir(1, 0, 0)), 5.0, 40.0).Shape()
+    unifier = ShapeUpgrade_UnifySameDomain(BRepAlgoAPI_Fuse(plate, rod).Shape(), True, True, False)
+    unifier.Build()
+    doc.add_body(Body(id="round", name="round", kind="solid", shape=unifier.Shape()))
+    return "round"
+
+
+def test_a_tangent_neighbour_that_cannot_follow_is_refused():
+    """丸めとして付いてこさせられない接線の隣(外せない全丸め)なら、接線でつながる面ごと動かして通さずに例外にし、文書もログも変えない。"""
+    doc = Document()
+    body_id = _full_round_plate(doc)
     before = _state(doc)
 
-    try:
-        _offset_faces(doc, [_plane_at(doc, body_id, 2, H)], 3.0, body_id)
-    except ValueError:
-        assert _state(doc) == before
-        return
+    with pytest.raises(ValueError):
+        _offset_faces(doc, [_plane_at(doc, body_id, 1, 0.0)], 1.0, body_id)
 
-    _plane_at(doc, body_id, 1, 0.0)  # 前面は y=0 のまま
-    _plane_at(doc, body_id, 1, D)
-    _plane_at(doc, body_id, 0, 0.0)
-    _plane_at(doc, body_id, 0, W)
-    _plane_at(doc, body_id, 2, 0.0)
-    assert _bbox(doc, body_id)[5] == pytest.approx(H + 3.0)
+    assert _state(doc) == before
 
 
 def test_two_faces_move_together():
@@ -237,6 +263,7 @@ def test_provenance_maps_every_face_one_to_one():
     doc = Document()
     body_id = new_box_with_hole(doc, 20.0, 4.0)
     count = kernel.face_count(doc.get_body(body_id).shape)
+    before = {face["index"]: face for face in query.describe_faces(doc.get_body(body_id).shape)}
 
     operation = _offset_faces(doc, [_hole(doc, body_id)], -1.0, body_id)
 
@@ -244,6 +271,12 @@ def test_provenance_maps_every_face_one_to_one():
     assert provenance["deleted"] == []
     assert provenance["new_faces"] == []
     assert sorted(new[0] for new in provenance["face_map"].values()) == list(range(1, count + 1))
+    # 並べ替えでも通らないように、対応先の面の種類と向き(穴は穴のまま)まで見る
+    after = {face["index"]: face for face in query.describe_faces(doc.get_body(body_id).shape)}
+    for old, (new,) in provenance["face_map"].items():
+        assert after[new]["kind"] == before[int(old)]["kind"]
+        if before[int(old)]["kind"] == "plane":
+            assert after[new]["normal"] == pytest.approx(before[int(old)]["normal"], abs=1e-9)
     json.dumps(doc.log.to_json())
 
 
@@ -260,6 +293,17 @@ def test_the_entry_takes_the_faces_from_the_selection():
 
 def test_ai_can_call_it_over_mcp():
     """AI(MCP)からも呼べる。面は選択から取り、引数は距離だけ(寸法の印つき)。"""
+    from duocad.mcp_server import DocumentTools, McpServer
+
     descriptor = next(d for d in catalog.tool_descriptors() if d["name"] == "offset_faces")
     assert descriptor["inputSchema"].get("required", []) == ["distance"]
     assert catalog.dimension_params("offset_faces") == ("distance",)
+    session = session_with_box()
+    top = _plane_at(session.document, "box", 2, 40.0)
+    server = McpServer(DocumentTools(session))
+    call(server, "set_selection", {"refs": [{"body": "box", "kind": "face", "index": top}]})
+
+    payload = call(server, "offset_faces", {"distance": 5.0})
+
+    assert payload["verb"] == "offset_faces"
+    assert query.volume(session.document.get_body("box").shape) == pytest.approx(30.0 * 30.0 * 45.0, rel=1e-9)
