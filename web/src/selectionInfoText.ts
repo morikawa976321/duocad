@@ -30,6 +30,7 @@ const SURFACE_NAMES: Record<string, string> = {
 const EDGE_NAMES: Record<string, string> = { line: '直線', circle: '円・円弧' }
 
 const ENTITY_NAMES: Record<EntityKind, string> = {
+  point: '点',
   line: '線分',
   circle: '円',
   ellipse: '楕円',
@@ -74,7 +75,8 @@ export function selectionInfoTitle(item: MeasureItem, names: InfoNames): string 
       return `領域 · ${names.sketch(item.sketch)} #${item.index}`
     case 'sketch_entity': {
       const shape = `${ENTITY_NAMES[item.entity_kind] ?? item.entity_kind} ${names.entity(item.sketch, item.entity)}`
-      if (item.point === null) return `${shape} · ${names.sketch(item.sketch)}`
+      // 点の図形はそれ自体が点(選択は `point: 'cx'` で来る。「点の中心」とは書かない)
+      if (item.point === null || item.entity_kind === 'point') return `${shape} · ${names.sketch(item.sketch)}`
       return `点 · ${names.sketch(item.sketch)} / ${shape}の${POINT_NAMES[item.point] ?? item.point}`
     }
   }
@@ -120,6 +122,8 @@ export function selectionInfoRows(item: MeasureItem): InfoRow[] {
 
 function entityRows(kind: EntityKind, p: Record<string, number>, length: number | undefined): InfoRow[] {
   switch (kind) {
+    case 'point':
+      return [{ label: '座標', value: uv(p.cx, p.cy) }]
     case 'line':
       return [
         ...(length !== undefined ? [{ label: '長さ', value: mm(length) }] : []),

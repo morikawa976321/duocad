@@ -7,7 +7,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 
 - **入口は `App.svelte` の `showLocalGhost(verb, args)` 1つで、3経路に振る。** (a) `ghostEntity`(これから打つ `add_*` の図形)、(b) `ghostCopies(verb, args, sources)`(`web/src/entityKinds.ts`。既存スケッチ図形の反復・移動・回転後の姿)、(c) `viewport.showBodyGhosts(entries)`(既存ボディの変換後の姿。実体は `web/src/ghostLayer.ts`、型 `BodyGhost`/`BodyGhostRotation`/`bodyGhostMatrix` は `web/src/viewportTypes.ts`)。新しい verb にプレビューを足すときは `CommandDef.preview: 'local'` にしてこの3つのどれかへ乗せる。
 - **ローカル方式はサーバへ何も送らない**(Esc で中断しても文書が変わらないことを「送らない」で成立させる)。投機実行へ寄せない。
-- **TS の変換規則はコアの写しで、片方だけ変えてはならない**(幽霊と確定結果が別の場所に出る)。`entityKinds.ts` の `translate`/`rotate` ← `duocad/sketch.py` の `_translate_*`/`_rotate_*`、円形反復の刻み角 ← `duocad/region.py` の `expanded_entities`、点だけ動かすか図形全体か ← `duocad/verbs/move_sketch.py` の `_normalize_targets`/`_moved_params`、`rotatedTargets` ← 同 `_rotation_args`/`_rotated_params`/`_apply`/`_copy`。一致は `tests/test_ghost_agreement.py` と `tests/eval_ghosts.mjs` が突き合わせる。
+- **TS の変換規則はコアの写しで、片方だけ変えてはならない**(幽霊と確定結果が別の場所に出る)。`entityKinds.ts` の `translate`/`rotate` ← `duocad/sketch.py` の `_translate_*`/`_rotate_*`、円形反復の刻み角 ← `duocad/sketch.py` の `circular_pattern_step`、点だけ動かすか図形全体か ← `duocad/verbs/move_sketch.py` の `_normalize_targets`/`_moved_params`、`rotatedTargets` ← 同 `_rotation_args`/`_rotated_params`/`_apply`/`_copy`。一致は `tests/test_ghost_agreement.py` と `tests/eval_ghosts.mjs` が突き合わせる。
 - **`showBodyGhosts` は本物を隠さない**(`showPreview` は隠す)。幽霊は 1 ボディ = 1 `THREE.Group` で `group.matrixAutoUpdate = false` にして行列を直に置く(`group.position` は効かない)。行列は `T(offset)·T(p)·R·T(-p)`。
 - **幽霊が消える場面は `viewport.clearPreview()` に集約**(`update`/`prune`/`showPreview`/`App.clearPreview`/モードが変わったときの `onModeChanged` がすべてここを通る)。別の消し口を作らない。
 - **幽霊は「解決済みの数値」でしか描かない。** 中心・軸を省略したときのコアの既定(スケッチ=対象の代表点の平均 / ソリッド=体積重心)はブラウザへ写さない(規則が2箇所に増える。体積重心は三角形分割からの近似にしかならない)。UI で軸・中心を指させるときも画面側が数値へ解決してから渡す(辺の参照をそのまま `showLocalGhost` へ渡さない。実装は `App.svelte` の `resolvePicksForGhost`)。
@@ -28,6 +28,15 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **原点を通る軸で回転行列を検算しても意味が薄い**(`T(p)·R·T(-p)` の平行移動2項が恒等になり、軸位置を落とした実装でも通る)。非原点の軸、Y軸・負角度・非単位ベクトルで検算する。
 - **`onBoxSelect` はスケッチの領域も拾う。** 長方形をウィンドウ選択すると領域参照が混ざる。「図形まるごと1つ」の判定は `item.entity !== undefined` で絞る。
 - **選択の正はコア**。クリック/ドラッグ直後に `page.evaluate` で選択を読むと往復前の値を見る(必ず `waitFor`)。
+
+## 反復(pattern_rectangular / pattern_circular)
+
+- **複製は実行時に独立した図形として作る**(2026-10-18、本人。DESIGN_DECISIONS「見えるものはすべてさわれる」)。
+  返り値もログの行も `created`(作った図形 ID の並び)。元の図形とは繋がらない。
+- **旧形式の行(`pattern_id` を持ち `created` が無い)は再生専用。** 振り分けは `created` の有無だけで、旧形式は
+  スケッチに `Pattern` を置き、描くときに `region.expanded_entities` が展開する(複製に図形 ID は無い)。
+  旧形式を新しい規則で再生すると以後の `d<n>` がずれる。番人は `tests/test_pattern_live_replay.py`。
+- 複製が1つもできない指定(`nx*ny < 2`・`count < 2`)と、元と完全に重なる複製ができる指定は ValueError。
 
 ## move_body / move_sketch_entities の回転モード
 
@@ -69,13 +78,13 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **軸(`mirror_sketch_entities`)・回転中心(`move_sketch_entities` の `center_entity`)に別のスケッチの図形を指すときは、対象と (u, v) が同じ平面上の同じ点を指すこと**(`_common.require_same_uv_plane`)。数値の (u, v) を対象の座標へそのまま当てるので、平面が違うと黙って別の場所に映る・回る。向きが同じで原点が法線方向にずれただけのオフセットしたスケッチは通す。
 - **長方形は軸が斜めでも長方形のまま鏡映される**(`sketch._mirror_rectangle` が向きを `2φ - angle`、基準の角を元の「height 側の隣の角」の鏡像にして1つの長方形を返す)。
 - **円弧の鏡映は始点・終点を入れ替えてから角度を映す**(`new_start = 2*axis_angle - end`、`new_end = 2*axis_angle - start`)。鏡映は向きを反転するので別々に映すと掃引方向が壊れる。掃引量(`end-start`)は保たれる。
-- `EntityKindOps.mirror`(6種別とも実装。`mirror(params, ax, ay, ux, uy) -> Dict[str, float]`、rotate と同じく**同じ種別の `params` を1つ返す**)、`kernel.mirror_shape(shape, point, normal)`(`gp_Trsf.SetMirror`。常に独立した複製を返す)。
+- `EntityKindOps.mirror`(7種別とも実装。`mirror(params, ax, ay, ux, uy) -> Dict[str, float]`、rotate と同じく**同じ種別の `params` を1つ返す**)、`kernel.mirror_shape(shape, point, normal)`(`gp_Trsf.SetMirror`。常に独立した複製を返す)。
 - **鏡映基準の指し方は既存の `PickArgSpec`(対象とは別チャンネルで図形を1つ直接ピック)に種別を足して実現。** `PickTarget = 'edge'|'vertex'|'face'|'sketchPoint'|'sketchEntity'`。`face` は `PickEvent.hit`、`sketchEntity` は `PickEvent.sketchEntity`(点は落とす)から拾う。種別は `PickEvent` が既に持つものから選ぶ(新しい当たり判定を作らない)。
 - **`MIRROR_SKETCH_ENTITIES`**(`commands/sketch.ts`): 対象は選択、`axis` は `sketchEntity` ピック(必須・自動で構える)。`build` は `{axis}` だけを送り、`runsWithoutSketchId` は true。`catalog.py` は `ws="table"`(必須の引数1つなので表の規約に合う。`special` は `_dispatch` に手書き分岐を増やす)。
 - **`MIRROR_BODY`**(`commands/features.ts`): `base_plane` の choice は XY/XZ/YZ + 4つめ `'face'`(「面を選ぶ」)。`'face'` はサーバへ行かず、`build` が `plane_face` へ読み替える印(コアの `base_plane` は XY/XZ/YZ のみ)。面ピックは `when: base_plane==='face'` で開く(外すと起動した瞬間に面ピックが開いて対象を選び直せない)。`mirror_body` は `ws="special"` で `plane_face` も WS に開いている(`_dispatch` が `plane_face=message.get("plane_face")` を渡す)。
 - **ピックの分岐は `onPick`/`onSketchPick` で選択の編集より前に置く**(`tests/test_ui_command_wiring.py` が `wantsPick` の分岐を固定する)。
 - **修飾キー(Shift/Ctrl)付きクリックはピックへ行かない**(`event.mode === 'replace'` だけがピックに食われる)。必須ピックは対象が1つ揃った瞬間に自動で構えるので、素のクリックを全部食うと2つ目の対象が選べない。`move_body.axis_edge`/`center_vertex` にも同じ分岐が効く。
-- **面を1つ指させている間は辺を出さない**(`App.svelte` の `wantsEdges` に `wantedPick !== 'face'`)。辺は面より先に拾われ、出すと鏡映面を狙った素のクリックが辺に取られて対象選択を置き換える。面ピックを持つ verb を新設するなら同じ配慮が要る。
+- **面を1つ指させている間は、面より細かい的(辺・頂点・スケッチの点と線)を指せない**(`App.svelte` の `pickKinds` の `FINER_THAN`)。細かい的は面より先に拾われ、鏡映面を狙った素のクリックが辺に取られて対象選択を置き換える。辺を待つ間(回転軸)は頂点を外す。直接ピックを持つ verb を新設するなら `FINER_THAN` に足す。
 - **軸は図形そのもの**: 端点付近を押しても `point` を落として `{sketch, entity, point: null}` に畳む。
 - **`pickedLabel(value, target)` は `target` を渡す。** 同じ `{sketch, entity, point:null}` でも `sketchPoint` は「図形の最初の点」、`sketchEntity` は「図形1つ」。TS 上は省略できるが第1引数だけで呼ぶと表示が誤る。
 - **幽霊は無い**(`preview: 'none'`/`previewable=False` を両方維持。`resolvePicksForGhost` 経路には繋がっていない)。Enter で確定する(`needsEnter` が真)。
@@ -125,7 +134,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **OCP を import してよいカーネル層は `kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` の8本と `topopt/voxelize.py`**(`tests/test_boundaries.py` の `OCP_ALLOWED` が正。押し出しを切り出した当時は 6 本だった)。
 - **UI から `extrude_face` を呼ぶ経路は無い。** ツールバーの「押し出す」は 1 つ(`#extrude`)。`features.ts` の `makeExtrude('region'|'face')` が同じ id `extrude` の 2 定義を作り、`EXTRUDE_REGIONS`(`SKETCH_FEATURE_COMMANDS`、選択引数名 `regions`)と `EXTRUDE_FACES`(通常モードの `SOLID_FEATURE_COMMANDS`、`faces`)として出す(どちらも min 1・max null)。距離 `#distance`、種別 `#extrude-mode-join/cut/new`。サーバへ送るのは両方 `{distance, mode}` だけ(対象はコアの確定選択)。旧 UI id `extrude_face`、`#extrude-regions`、`#regions-distance` は廃止。
 - 同じ id `extrude` が 2 つの一覧に居ても、`CATEGORY_OF`(`App.svelte`)は id→category で両方 `feature` なので壊れない。`findCommand(id, list)` の `list`、`CommandHost` の `commands` プロップは必須(既定なし)。
-- `App.svelte` の `verb === 'extrude' && !regionsStillExist(...)` は変更不要(面の選択なら領域参照が空集合で true)。通常モードの押し出しは領域を要求しないので、押し出しの起動中は `wantsRegions` が立たない(通常モードで領域を要求するのはロフトだけ。下の「ロフト」)。通常モードでは領域を押し出せない(スケッチ編集中に行う)。
+- `App.svelte` の `verb === 'extrude' && !regionsStillExist(...)` は変更不要(面の選択なら領域参照が空集合で true)。通常モードの押し出しは面か1つのスケッチの領域を受け付ける(2026-10-18 本人決定。`EXTRUDE_FACES` の選択引数は `kinds: ['face', 'region']`)。面と領域の混在・別スケッチの領域は画面が先に断る(`makeExtrude` の `build`。コアの `require_extrude_targets` と同じ断り方)。
 - **押し出しの公開 verb は `extrude` だけ**(領域は `regions`、面は `faces`)。`extrude_face` はカタログ・`Session`・MCP・WebSocket・`duocad.verbs.__all__` に無い。`verbs/__init__.py` は `extrude_face` モジュールを import して `register_verb` の登録だけを残す(再生専用)。`extrude_face` を新しい操作の記録に使わず、新しい verb の形の手本にしない。
 - **古い保存ログの `extrude_face`(args: `body_id`/`face_index`/`distance`)は再生される。** 中身は `kernel_extrude.extrude_faces(body.shape, [face_index], distance, "join" if distance > 0 else "cut", target_shape=body.shape)`、undo は `undo_shape`。再生した `extrude_face` の `provenance` は保存時のまま(キーは `verb`/`face_index`/`after_face_index`)。
 - **`tests/fixtures/extrude_face_log.json` は削除前の実装で作った保存ログ(体積 12240・6 面)で、`tests/test_extrude_face_replay.py` が再生して固定する。作り直さない**(「従来と同じ形」の根拠が失われる)。
@@ -153,7 +162,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **壊れた結果は例外**: 体積が断面の最大面積^1.5 の 1e-6 倍以下(潰れ・裏返り)、`BRepCheck`、**`BRepAlgoAPI_Check(solid, True, True)`(第3引数 `bTestSI` が自己干渉。False で呼ぶと潰れ・蝶ネクタイ形・180° のねじれを全部通す。sol レビューで発覚)**。断面3つ以上のなめらかな補間が断面の間で食い込む形もこれで捕まる。はみ出し(自己交差しない膨らみ)は通す。
 - **重心から見て裏に回り込む凹み(U字)のある断面は、極角で割れないので候補を2つ試す**: 長さの割合で割る → だめなら OCCT の揃え(`CheckCompatibility(True)`。ここでは `shifts` が効かないことがある)。両方だめなら「凹み」を名指す例外(`shifts` でずらすか、断面を分ける)。U字 → 円は始点をずらすと通り、U字 → 正方形は通らない(`tests/test_loft.py`)。
 - **断面は選択の領域を選んだ順**(`selection.require_selected` は追加順を保つ)。1断面1領域、隣り合う断面は別の平面。**穴のある領域は拒む**(外周を join、内側の領域を cut で2回ロフトする。本人判断 2026-10-17)。断面の平面が同じ・点が隣の断面の平面上は ValueError。
-- **点への収束は `start_point` / `end_point`(スケッチの図形の点 `{"sketch","entity","point"}`)。** ログには参照のまま載せ、再生で引き直す。断面1つ+点1つでもよい。**画面からは送らない** —— 通常モードではスケッチの点のハンドルが無い(`viewport.sketchEntityAt` は編集中のスケッチしか見ない)。AI(MCP)からだけ指せる。
-- **画面(`LOFT`)は通常モード(`SOLID_FEATURE_COMMANDS`)に置く。** 通常モードで領域を要求する唯一のコマンドで、起動中だけ `wantsRegions` が立ち、全スケッチの領域が当たる(スケッチ編集中は開いているスケッチの領域しか当たらないので、そちらには置かない)。選択は断面2つ以上・種別・始点のずらし(文字欄 `#loft-shifts`、カンマ区切り、空欄で省略。`TextArgSpec.optional`)。**作業空間へは整数の配列で出す**(`TextArgSpec.toShared`。打った文字列のまま出すと、サーバの型(array)違いで `set_command_args` が拒む。sol レビューで発覚)。実機検査は `web/scripts/smoke-loft.mjs`。
+- **点への収束は `start_point` / `end_point`(スケッチの図形の点 `{"sketch","entity","point"}`)。** ログには参照のまま載せ、再生で引き直す。断面1つ+点1つでもよい。**画面からは送らない** —— 画面のロフトは点の引数を持たない(起動中は領域だけを指せる)。AI(MCP)からだけ指せる。
+- **画面(`LOFT`)は通常モード(`SOLID_FEATURE_COMMANDS`)に置く。** 起動中は全スケッチの領域だけを指せる(`pickKinds`。スケッチ編集中は開いているスケッチの領域しか当たらないので、そちらには置かない)。選択は断面2つ以上・種別・始点のずらし(文字欄 `#loft-shifts`、カンマ区切り、空欄で省略。`TextArgSpec.optional`)。**作業空間へは整数の配列で出す**(`TextArgSpec.toShared`。打った文字列のまま出すと、サーバの型(array)違いで `set_command_args` が拒む。sol レビューで発覚)。実機検査は `web/scripts/smoke-loft.mjs`。
 - 2断面の間は直線的につながる(`ruled=True` と同体積)。傾いた平面でも曲がった継手にはならない —— 曲げたいなら間に断面を足す。端の接線・案内線(レール)は持たない(`ThruSections` に無い機能)。
 

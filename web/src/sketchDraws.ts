@@ -24,18 +24,18 @@ export function buildSketchDraws(
         item.plane.kind === 'face'
           ? { kind: 'face' as const, bodyId: item.plane.body, faceIndex: item.plane.index }
           : { kind: 'base' as const },
+      editing: item.sketch_id === editingId,
+      // 旧形式の反復の複製は展開した `drawn` にだけ入る(配信は反復そのものを載せない)
+      livePatterns: item.drawn.length > item.entities.length,
       entities: item.drawn,
       regions: item.regions,
       selectedRegions: selectedRegions.filter((ref) => ref.sketch === item.sketch_id).map((ref) => ref.index),
-      // 点・辺を出すのは編集中のスケッチだけ。
-      handles:
-        item.sketch_id === editingId
-          ? item.entities.map((entity) => ({
-              entityId: entity.entity_id,
-              kind: entity.kind as string,
-              params: entity.params,
-            }))
-          : [],
+      // 点・辺は全スケッチで指せる(スケッチモードの外。docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」)。
+      handles: item.entities.map((entity) => ({
+        entityId: entity.entity_id,
+        kind: entity.kind as string,
+        params: entity.params,
+      })),
       selectedHandles: selectedHandles
         .filter((ref) => ref.sketch === item.sketch_id)
         .map((ref) => ({ entityId: ref.entity, point: ref.point })),

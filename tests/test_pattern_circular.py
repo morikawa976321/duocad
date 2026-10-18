@@ -9,7 +9,6 @@ import pytest
 
 from duocad import kernel_sketch, query
 from duocad.document import Document
-from duocad.parameters import parameter_of, set_parameter
 from duocad.region import expanded_entities, region_ref, regions
 from duocad.sketch import (
     add_circle,
@@ -45,10 +44,10 @@ def plate(document: Document) -> None:
 def hole_ring(document: Document, count: int = COUNT, total_angle: float = 360.0) -> tuple:
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
-    pattern_id = pattern_circular(
+    created = pattern_circular(
         document, sketch_id, [circle], CENTER, count, total_angle=total_angle
     )
-    return sketch_id, circle, pattern_id
+    return sketch_id, circle, created
 
 
 def angles_from_center(points: list) -> list:
@@ -70,17 +69,15 @@ def test_pattern_multiplies_the_entity_into_count_regions():
         assert math.isclose(region.area, math.pi * HOLE_RADIUS**2, rel_tol=1e-6)
 
 
-def test_pattern_is_one_operation_and_is_not_expanded_into_entities():
-    """反復は操作ログに1行で載り、図形はN個に展開されない。"""
+def test_copies_are_independent_entities_made_by_one_operation():
+    """反復は count−1 個の複製を独立した図形として作り、ログには作ったIDを持つ1行だけ載る。"""
     document = Document()
-    sketch_id, entity_id, pattern_id = hole_ring(document)
+    sketch_id, entity_id, created = hole_ring(document)
 
     sketch = get_sketch(document, sketch_id)
-    assert len(sketch.entities) == 1, "図形がN個に展開されている"
-    assert len(sketch.patterns) == 1
-    assert sketch.patterns[0].id == pattern_id
-    assert sketch.patterns[0].sources == [entity_id]
-    assert sketch.patterns[0].kind == "circular", "矩形反復と区別できないと展開を分けられない"
+    assert [entity.id for entity in sketch.entities] == [entity_id, *created]
+    assert len(set(created)) == COUNT - 1
+    assert sketch.patterns == [], "旧形式の Pattern を置いている"
 
     circular = [op for op in document.log.entries if op.verb == "pattern_circular"]
     assert len(circular) == 1, "1つの反復が複数行に分かれている"
@@ -90,6 +87,7 @@ def test_pattern_is_one_operation_and_is_not_expanded_into_entities():
     assert args["total_angle"] == 360.0
     assert args["center"] == list(CENTER)
     assert args["rotate_copies"] is True, "既定はTrue（Fusionの挙動に合わせる）"
+    assert args["created"] == created
 
 
 def test_pattern_can_be_undone():
@@ -101,7 +99,6 @@ def test_pattern_can_be_undone():
     document.log.undo(document)
 
     sketch = get_sketch(document, sketch_id)
-    assert sketch.patterns == []
     assert [entity.id for entity in sketch.entities] == [entity_id], "元の図形まで消えた"
     assert len(regions(document, sketch_id)) == 1
 
@@ -156,12 +153,16 @@ def test_a_partial_angle_includes_both_ends():
         assert math.isclose(angle, index * 90.0, abs_tol=1e-4), f"{angles}"
 
 
-def test_a_single_copy_needs_no_step():
-    """`count=1` は複製が無い（元だけ）。刻み角を計算しようとして0除算しないこと。"""
+def test_a_single_copy_is_refused():
+    """`count=1` は複製ができないので ValueError(刻み角の0除算にも行き着かない)。"""
     document = Document()
-    sketch_id, _, _ = hole_ring(document, count=1, total_angle=180.0)
+    sketch_id = sketch_create(document, "XY")
+    circle = add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
 
-    assert len(regions(document, sketch_id)) == 1
+    with pytest.raises(ValueError):
+        pattern_circular(document, sketch_id, [circle], CENTER, 1, total_angle=180.0)
+
+    assert [entity.id for entity in get_sketch(document, sketch_id).entities] == [circle]
 
 
 def test_rotate_copies_false_keeps_the_original_orientation():
@@ -217,56 +218,6 @@ def test_rotated_copies_of_a_rectangle_are_all_rectangles():
         assert _corner_set(item["params"]) == pytest.approx(sorted(turned), abs=1e-9)
 
 
-def test_changing_the_count_changes_the_number_of_holes():
-    """`count` は名前つきの値。変更すると穴の数が追随する。"""
-    document = Document()
-    sketch_id, _, pattern_id = hole_ring(document)
-    pattern = get_sketch(document, sketch_id).patterns[0]
-    name = pattern.params["count"]
-    assert isinstance(name, str), "素の数値を持っていたら後から変えられない"
-    # `parameter_of` は (doc, sketch_id, owner_id, key) — 矩形反復のテストと同じ引き方
-    assert parameter_of(document, sketch_id, pattern_id, "count") == name
-
-    set_parameter(document, name, 3.0)
-
-    assert len(regions(document, sketch_id)) == 3
-
-
-def test_changing_the_total_angle_moves_the_copies():
-    """`total_angle` を変更すると配置角度が追随する。"""
-    document = Document()
-    plate(document)
-    sketch_id, _, _ = hole_ring(document, count=3, total_angle=180.0)
-    name = get_sketch(document, sketch_id).patterns[0].params["total_angle"]
-
-    set_parameter(document, name, 90.0)
-    drill_all(document, sketch_id)
-
-    angles = angles_from_center(hole_axes(document.active_body().shape))
-    assert len(angles) == 3
-    for index, angle in enumerate(angles):
-        assert math.isclose(angle, index * 45.0, abs_tol=1e-4), f"{angles}"
-
-
-def test_changing_the_center_moves_the_whole_ring():
-    """`center` を変更すると配置全体が移動する（中心も名前つきの値）。"""
-    document = Document()
-    plate(document)
-    sketch_id, _, _ = hole_ring(document)
-    params = get_sketch(document, sketch_id).patterns[0].params
-    assert isinstance(params["cx"], str) and isinstance(params["cy"], str)
-
-    set_parameter(document, params["cx"], CENTER[0] + 5.0)
-    drill_all(document, sketch_id)
-
-    axes = hole_axes(document.active_body().shape)
-    assert len(axes) == COUNT
-    mean_x = sum(x for x, _ in axes) / len(axes)
-    mean_y = sum(y for _, y in axes) / len(axes)
-    assert math.isclose(mean_x, CENTER[0] + 5.0, abs_tol=1e-4), "中心を動かしても配置が動いていない"
-    assert math.isclose(mean_y, CENTER[1], abs_tol=1e-4)
-
-
 def test_pattern_survives_save_load_and_replay():
     """保存→再生で穴の位置がそのまま復元される(`args` に数値が載っていること。個数だけでは角度の落ちを見逃す)。"""
     document = Document()
@@ -295,7 +246,7 @@ def test_count_must_be_a_positive_integer(count):
     with pytest.raises(ValueError):
         pattern_circular(document, sketch_id, [circle], CENTER, count)
 
-    assert get_sketch(document, sketch_id).patterns == []
+    assert len(get_sketch(document, sketch_id).entities) == 1
     assert len(document.log.entries) == log_before
 
 
@@ -311,7 +262,7 @@ def test_total_angle_must_be_usable(total_angle):
     with pytest.raises(ValueError):
         pattern_circular(document, sketch_id, [circle], CENTER, COUNT, total_angle=total_angle)
 
-    assert get_sketch(document, sketch_id).patterns == []
+    assert len(get_sketch(document, sketch_id).entities) == 1
     assert len(document.log.entries) == log_before
 
 
@@ -325,7 +276,7 @@ def test_unknown_entity_is_refused():
     with pytest.raises(KeyError):
         pattern_circular(document, sketch_id, ["entity-ghost"], CENTER, COUNT)
 
-    assert get_sketch(document, sketch_id).patterns == []
+    assert len(get_sketch(document, sketch_id).entities) == 1
     assert len(document.log.entries) == log_before
 
 
@@ -336,17 +287,15 @@ def test_empty_entity_list_is_refused():
         pattern_circular(document, sketch_id, [], CENTER, COUNT)
 
 
-def test_patterning_the_same_entity_twice_is_refused():
-    """1つの図形を2つの反復に使わない（矩形反復と同じ。二重に展開されるため）。"""
+def test_the_same_entity_can_be_patterned_twice():
+    """反復の元は使い回せる(複製は独立した図形なので二重に展開されることが無い)。"""
     document = Document()
-    sketch_id, entity_id, _ = hole_ring(document)
-    log_before = len(document.log.entries)
+    sketch_id, entity_id, created = hole_ring(document)
 
-    with pytest.raises(ValueError):
-        pattern_circular(document, sketch_id, [entity_id], CENTER, 3)
+    again = pattern_circular(document, sketch_id, [entity_id], CENTER, 3, total_angle=90.0)
 
-    assert len(get_sketch(document, sketch_id).patterns) == 1
-    assert len(document.log.entries) == log_before
+    assert len(again) == 2
+    assert len(get_sketch(document, sketch_id).entities) == 1 + len(created) + len(again)
 
 
 def test_a_shape_centred_on_the_pivot_is_refused():
@@ -359,31 +308,8 @@ def test_a_shape_centred_on_the_pivot_is_refused():
     with pytest.raises(ValueError):
         pattern_circular(document, sketch_id, [circle], CENTER, COUNT)
 
-    assert get_sketch(document, sketch_id).patterns == []
+    assert len(get_sketch(document, sketch_id).entities) == 1
     assert len(document.log.entries) == log_before
-
-
-def test_reducing_the_count_below_one_is_refused_afterwards_too():
-    """`set_parameter` 経由でも `count` の検査が効く。"""
-    document = Document()
-    sketch_id, _, _ = hole_ring(document)
-    name = get_sketch(document, sketch_id).patterns[0].params["count"]
-
-    with pytest.raises(ValueError):
-        set_parameter(document, name, 0.0)
-    assert len(regions(document, sketch_id)) == COUNT
-
-
-def test_changing_the_total_angle_to_an_unusable_value_is_refused():
-    """`total_angle` も `set_parameter` 経由で検査する。"""
-    document = Document()
-    sketch_id, _, _ = hole_ring(document)
-    name = get_sketch(document, sketch_id).patterns[0].params["total_angle"]
-
-    for bad in (0.0, -90.0, 361.0):
-        with pytest.raises(ValueError):
-            set_parameter(document, name, bad)
-    assert len(regions(document, sketch_id)) == COUNT
 
 
 def _centred(kind: str):
@@ -416,8 +342,8 @@ def _centred(kind: str):
 def test_a_shape_centred_on_the_pivot_whose_copies_do_not_coincide_is_repeated(kind, count, total_angle):
     """落ちたら、中心が回転中心と一致するだけで、重ならない複製まで「全複製が元と重なる」と断っている。"""
     document, sketch_id, entity = _centred(kind)
-    pattern_circular(document, sketch_id, [entity], (0.0, 0.0), count, total_angle)
-    assert len(get_sketch(document, sketch_id).patterns) == 1
+    created = pattern_circular(document, sketch_id, [entity], (0.0, 0.0), count, total_angle)
+    assert len(created) == count - 1
 
 
 @pytest.mark.parametrize(
@@ -435,7 +361,7 @@ def test_a_copy_that_lands_on_the_original_is_still_refused(kind, count, total_a
     document, sketch_id, entity = _centred(kind)
     with pytest.raises(ValueError, match="coincide"):
         pattern_circular(document, sketch_id, [entity], (0.0, 0.0), count, total_angle)
-    assert get_sketch(document, sketch_id).patterns == []
+    assert len(get_sketch(document, sketch_id).entities) == 1
 
 
 def test_without_rotating_the_copies_a_centred_shape_always_coincides():

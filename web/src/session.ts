@@ -376,6 +376,10 @@ export interface EdgeGeometry {
 export interface EdgesPayload {
   body_id: string
   revision: number
+  /** 頼んだ時点の形の版(`BodyMeta.shape_revision`)。添字が今の形のものかはこれで見る(`revision` は粗さでも上がる)。 */
+  shape_revision: number
+  /** 折れ線の弦の偏差[mm](`DocumentView.edges`)。遮蔽判定がこの分の奥行きの差を許す。 */
+  deviation: number
   edges: EdgeGeometry[]
 }
 
@@ -386,6 +390,8 @@ export interface EdgesPayload {
 export interface EdgeChainsPayload {
   body_id: string
   revision: number
+  /** 頼んだ時点の形の版(連なりは形にだけ依存する。`EdgesPayload.shape_revision` と同じ見方)。 */
+  shape_revision: number
   chains: number[][]
 }
 
@@ -402,11 +408,13 @@ export interface VertexGeometry {
 
 /**
  * 頂点の応答。状態の配信ではない(要求した接続にだけ届く)。
- * 全頂点が入っているが、画面に出るのは選択に入った添字だけ。`revision` の意味は `EdgesPayload` と同じ。
+ * 全頂点が入っているが、画面に印が出るのはホバー中と選択中の添字だけ。`revision` の意味は `EdgesPayload` と同じ。
  */
 export interface VerticesPayload {
   body_id: string
   revision: number
+  /** 頼んだ時点の形の版(`EdgesPayload.shape_revision` と同じ)。 */
+  shape_revision: number
   vertices: VertexGeometry[]
 }
 
@@ -1176,6 +1184,7 @@ export function createSession(hooks: SessionHooks): Session {
       sketch_ghost?: PreviewPayload['sketch_ghost']
       body_id?: string
       revision?: number
+      shape_revision?: number
       edges?: EdgeGeometry[]
       chains?: number[][]
       vertices?: VertexGeometry[]
@@ -1270,18 +1279,22 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onEdges({
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
+        shape_revision: message.shape_revision ?? -1,
+        deviation: message.deviation ?? 0,
         edges: message.edges ?? [],
       })
     } else if (message.type === 'edge_chains') {
       hooks.onEdgeChains({
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
+        shape_revision: message.shape_revision ?? -1,
         chains: message.chains ?? [],
       })
     } else if (message.type === 'vertices') {
       hooks.onVertices({
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
+        shape_revision: message.shape_revision ?? -1,
         vertices: message.vertices ?? [],
       })
     } else if (message.type === 'measure') {

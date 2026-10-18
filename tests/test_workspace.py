@@ -260,6 +260,21 @@ def test_a_mode_change_drops_the_selection_that_the_next_mode_cannot_use(session
     assert [item.get("kind") for item in session.get_selection()["items"]] == ["face"]
 
 
+def test_leaving_a_sketch_keeps_its_entities_selected(session: Session):
+    """スケッチの外(通常モード)では全スケッチの図形を指せるので、抜けても図形の選択は残る。"""
+    sketch_id = session.apply("sketch_create", {"base_plane": "XY"})["sketch_id"]
+    session.apply("add_line", {"sketch_id": sketch_id, "p0": [0.0, 0.0], "p1": [10.0, 0.0]})
+    line = session.document.sketches[-1].entities[0].id
+    session.enter_sketch(sketch_id)
+    session.set_selection(refs=[{"sketch": sketch_id, "entity": line, "point": "x0"}])
+
+    session.leave_sketch()
+
+    assert mode_of(session) == {"kind": "idle"}
+    (item,) = session.get_selection()["items"]
+    assert (item["sketch"], item["entity"], item["point"]) == (sketch_id, line, "x0")
+
+
 def test_beginning_a_sketch_verb_with_a_sketch_id_enters_that_sketch(session: Session):
     """AI がスケッチの verb を構えると、人の画面がそのスケッチへ入る。"""
     created = session.apply("sketch_create", {"base_plane": "XY"})
@@ -499,7 +514,9 @@ def test_leaving_a_mode_works_when_the_selected_body_or_sketch_was_hidden(sessio
     session.set_sketch_visible(created["sketch_id"], False)
     session.leave_sketch()
     assert mode_of(session) == {"kind": "idle"}
-    assert session.get_selection()["count"] == 0
+    assert session.get_selection()["count"] == 1, "スケッチの外へ出るときは図形の選択を残す(隠していても)"
+    session.apply("sketch_create", {"base_plane": "XZ"})
+    assert session.get_selection()["count"] == 0, "別のスケッチに入るときは、隠したスケッチの図形も外れる"
 
 
 def test_creating_a_sketch_while_editing_another_drops_the_entities_of_the_old_one(session: Session):

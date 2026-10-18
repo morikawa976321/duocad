@@ -217,6 +217,8 @@ def toggle_selection(doc: Document, refs: Iterable[dict]) -> Selection:
     ref_list = list(refs)
     for ref in ref_list:
         _check_form(ref)
+    # 選択の中を鍵で引くのは正規化(`_coerce_refs`)より前なので、点の図形の2つの書き方をここで揃える
+    ref_list = [_as_point_of_point_entity(doc, ref) for ref in ref_list]
     selection = get_selection(doc)
     items = list(selection.items)
     present = {ref_key(item) for item in items}
@@ -233,6 +235,20 @@ def toggle_selection(doc: Document, refs: Iterable[dict]) -> Selection:
     items.extend(coerced[key] for key in absent if odd[key])
     selection.items = items
     return selection
+
+
+def _as_point_of_point_entity(doc: Document, ref: dict) -> dict:
+    """点の図形を `point` 無しで指す参照を `point: "cx"` の形にする(`select_sketch_entity` と同じ正規化)。
+    スケッチ・図形が無ければそのまま返す(存在の検査は後の門が持つ)。"""
+    if "sketch" not in ref or "entity" not in ref or ref.get("point") is not None:
+        return ref
+    from .sketch import get_entity, get_sketch
+
+    try:
+        kind = get_entity(get_sketch(doc, ref["sketch"]), ref["entity"]).kind
+    except KeyError:
+        return ref
+    return {**ref, "point": "cx"} if kind == "point" else ref
 
 
 def remove_items(doc: Document, items: Iterable[dict]) -> Selection:
@@ -670,11 +686,15 @@ def select_sketch_entity(
     `point` を省く(None)と**図形全体 = 辺**、文字列ならその点で、`sketch.entity_point_keys(kind)` の**xキー**でなければ
     ValueError(yキーや寸法キーは通さない)。存在しないスケッチ・図形は KeyError。**添字ではなく `entity_id` で指す**ので
     他の図形を足しても平行移動しても指す先が変わらない(`duocad-selection-resets-on-shape-change` の根拠が当たらない)。
+    **点の図形は辺を持たないので、`point` を省いても点 `cx` を指す**(選択は点として扱う。docs/DESIGN_DECISIONS.md。
+    2つの形を許すと同じ点が別の項目として2度選ばれる)。
     """
     from .sketch import entity_point_pair, get_entity
 
     sketch = _visible_sketch(doc, sketch_id, allow_hidden=allow_hidden)
     entity = get_entity(sketch, entity_id)
+    if point is None and entity.kind == "point":
+        point = "cx"
     if point is not None:
         entity_point_pair(entity.kind, str(point))
     return {

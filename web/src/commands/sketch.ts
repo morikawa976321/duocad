@@ -84,6 +84,20 @@ export const ADD_LINE: CommandDef<'add_line'> = {
   },
 }
 
+/** 点。1クリックで置く(引数が点1つだけなので Enter を待たない)。 */
+export const ADD_POINT: CommandDef<'add_point'> = {
+  id: 'add_point',
+  label: '点',
+  buttonId: 'sketch-point',
+  preview: 'none',
+  args: [{ kind: 'point', name: 'point', label: '位置' }],
+  build(values) {
+    const point = values.point as Point2 | undefined
+    if (!point) return { ok: false, reason: '置く位置をクリックする' }
+    return { ok: true, args: { point } }
+  },
+}
+
 export const ADD_CIRCLE: CommandDef<'add_circle'> = {
   id: 'add_circle',
   label: '円',
@@ -501,6 +515,7 @@ export const SKETCH_COMMANDS: CommandDef[] = [
   ADD_ELLIPSE,
   ADD_RECTANGLE,
   ADD_ARC,
+  ADD_POINT,
   MOVE_SKETCH_ENTITIES,
   MIRROR_SKETCH_ENTITIES,
   ENVELOPE_REGIONS,

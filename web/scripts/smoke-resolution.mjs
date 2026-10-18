@@ -29,9 +29,7 @@ runSmoke('smoke-resolution', { timeout: 60000, mcp: true }, async ({ mcp, browse
     const { page, consoleErrors } = await openApp(browser, url, { timeout })
     await frameAll(page)
 
-    // 辺オーバーレイを出す(フィレットを起動している間だけ辺が届く契約)。
-    await page.click('#fillet')
-
+    // 辺はカーソルの近くのボディの分が届く(版が上がるたびに頼み直す)。カーソルは円柱の上に置いたままにする。
     const center = await viewportCenter(page)
     await page.mouse.move(center.x, center.y)
 
@@ -42,7 +40,7 @@ runSmoke('smoke-resolution', { timeout: 60000, mcp: true }, async ({ mcp, browse
         const resolution = hook.viewResolution?.() ?? null
         const geometry = hook.getGeometry(bodyId)
         const body = (hook.state?.bodies ?? []).find((item) => item.body_id === bodyId) ?? null
-        const edges = hook.edges
+        const edges = hook.edges?.[bodyId] ?? null
         const circles = (edges?.edges ?? []).filter((edge) => edge.kind === 'circle')
         const counts = Object.values(hook.sketchPolylineCounts?.() ?? {}).flat()
         return {
@@ -168,7 +166,7 @@ runSmoke('smoke-resolution', { timeout: 60000, mcp: true }, async ({ mcp, browse
     const stale = await page.evaluate((id) => {
       const hook = window.__duocad
       const body = (hook.state?.bodies ?? []).find((item) => item.body_id === id)
-      return { known: hook.edges?.revision ?? null, current: body?.revision ?? null }
+      return { known: hook.edges?.[id]?.revision ?? null, current: body?.revision ?? null }
     }, bodyId)
     if (stale.known !== stale.current) {
       fail(`ズームの後に古い版の辺が残っている: 辺=${stale.known} / Body=${stale.current}`)

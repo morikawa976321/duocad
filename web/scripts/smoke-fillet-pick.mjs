@@ -3,14 +3,13 @@
  *
  *   node scripts/smoke-fillet-pick.mjs
  *
- *   1. 面を選んだ状態でフィレットを起動すると、面が選択から外れる(辺は残す)。辺はアクティブではない
- *      その面のボディのものが出る(面を外してもアクティブボディへ戻らない)
- *   2. 起動中に面をクリックしても選択に入らず、ホバーも面を指さない
+ *   1. 面を選んだ状態でフィレットを起動すると、面が選択から外れる(辺は残す)
+ *   2. 起動中は辺だけを指せる(`pickKinds`)。面をクリックしても選択に入らず、ホバーも面を指さない
  *   3. 接線で続く辺(角を丸めた箱の底の直線→円弧→直線)の1本をクリックすると連なりが全部入り、もう一度で全部外れる。
  *      連なりの一部だけが入った状態で連なりの1本を矩形で囲むと全部入り、もう一度で全部外れる
  *   4. 面取りでも 1 と同じ
  *
- * 形は MCP で作る: 箱を2つ作り、アクティブでない方の縦の辺1本を丸める。一直線上で割れた辺は押し出しの join / union が面ごと
+ * 形は MCP で作る: 箱を2つ作り、アクティブでない方の対角の縦の辺2本を丸める。一直線上で割れた辺は押し出しの join / union が面ごと
  * 統合して1本にするので、画面から作れる連なりの題材はこちら(一直線の連なりは `tests/test_blend_chains.py`)。
  */
 import { assertNoAppErrors, frameAll, openApp, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
@@ -53,19 +52,22 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   ok('面を選んだままフィレットを起動したら、面が外れた')
 
   // ---------------------------------------------------------------- 2. 起動中は面を指せない
+  // 辺はカーソルの近くのボディの分が届く(面を押したカーソルはそのボディの上にある)
   await waitFor(
-    (id) => (window.__duocad.edges?.body_id === id) && (window.__duocad.edges?.edges ?? []).length > 0,
-    '外した面のボディの辺が出ない(アクティブボディへ戻った)',
+    (id) => (window.__duocad.edges?.[id]?.edges ?? []).length > 0,
+    '面を外したボディの辺が届かない',
     [bodyId],
   )
-  await waitFrames(page, 10)
-  const shown = await page.evaluate(() => window.__duocad.edges?.body_id)
-  if (shown !== bodyId) fail(`辺のボディが ${shown} へ変わった(外した面のボディ ${bodyId} であるべき)`)
-  ok('面を外しても、辺はその面のボディのものが出ている')
-  // 面の射影点が辺の近くだと辺が当たるので、辺に当たらない面の点を探す(面に当たらないことはどの点でも見る)。
+  if (JSON.stringify(await page.evaluate(() => window.__duocad.pickKinds)) !== '["edge"]') {
+    fail(`フィレット中に辺以外も指せる: ${JSON.stringify(await page.evaluate(() => window.__duocad.pickKinds))}`)
+  }
+  ok('起動中は辺だけを指せ、面を外したボディの辺が届いている')
+  // 面の重心が辺の近くだと辺が当たるので、辺に当たらない面の点を探す(面に当たらないことはどの点でも見る)。
+  // `projectFace` は使えない: 起動中は面が取れないので、取れる画素を返す約束どおり null になる。
+  const centroids = await page.evaluate((id) => (window.__duocad.getGeometry(id)?.faces ?? []).map((face) => [...face.centroid]), bodyId)
   let open = null
-  for (let index = 1; index <= 20 && open === null; index += 1) {
-    const at = await faceAt(page, bodyId, index)
+  for (let index = 1; index <= centroids.length && open === null; index += 1) {
+    const at = await screenOf(page, 'projectPoint', centroids[index - 1])
     if (!at) continue
     await page.mouse.move(at.x, at.y)
     await waitFrames(page, 3)
@@ -80,39 +82,47 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   ok('起動中は面がホバーもクリックもされない')
 
   // ---------------------------------------------------------------- 3. 連なりで選ぶ
-  const vertical = await page.evaluate(() => {
+  // 対角の縦の辺2本を丸める: 上面の輪郭に「直線→円弧→直線」の連なりが2つでき、どちらの円弧も上から見える
+  // (裏に回った円弧は指せないので、連なりの届く前のクリックを見る円弧が上面に要る)
+  const verticals = await page.evaluate((id) => {
     const same = (values) => values.every((value) => Math.abs(value - values[0]) < 1e-6)
-    const edge = window.__duocad.edges.edges.find(
-      (item) => same(item.points.filter((_, i) => i % 3 === 0)) && same(item.points.filter((_, i) => i % 3 === 1)),
-    )
-    return edge?.index ?? null
-  })
-  if (vertical === null) fail('縦の辺が見つからない')
+    const found = window.__duocad.edges[id].edges
+      .filter((item) => same(item.points.filter((_, i) => i % 3 === 0)) && same(item.points.filter((_, i) => i % 3 === 1)))
+      .map((item) => ({ index: item.index, x: item.points[0], y: item.points[1] }))
+    for (const a of found) {
+      const b = found.find((other) => Math.abs(other.x - a.x) > 1e-6 && Math.abs(other.y - a.y) > 1e-6)
+      if (b) return [a.index, b.index]
+    }
+    return null
+  }, bodyId)
+  if (verticals === null) fail('対角の縦の辺が見つからない')
   await page.keyboard.press('Escape')
   const revisionOf = (id) => (window.__duocad.state?.bodies ?? []).find((body) => body.body_id === id)?.revision
   const before = await page.evaluate(revisionOf, bodyId)
-  await mcp.callTool('set_selection', { refs: [{ body: bodyId, kind: 'edge', index: vertical }] })
+  await mcp.callTool('set_selection', { refs: verticals.map((index) => ({ body: bodyId, kind: 'edge', index })) })
   await mcp.callTool('fillet', { radius: 2 })
   await waitFor(
     (id, previous) => (window.__duocad.state?.bodies ?? []).find((body) => body.body_id === id)?.revision !== previous,
     '角の丸めが画面に届かない',
     [bodyId, before],
   )
+  const filleted = await page.evaluate(revisionOf, bodyId)
   // 検査する方はアクティブではないので、その面を選んでから起動する(面は外れ、辺はそのボディのものが出る)。
   await waitFrames(page, 5)
   await clickFace(page, bodyId, (await visibleFace()).index)
   await waitFor(() => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'face'), '面が選ばれない(丸めた後)')
   await page.click('#fillet')
+  // 丸めた形の辺(丸めた後の版以降)。版はその後も粗さで上がりうるが、形が同じなら添字はそのまま使える(`sameShape`)
   await waitFor(
-    (id) => {
-      const body = (window.__duocad.state?.bodies ?? []).find((item) => item.body_id === id)
-      return window.__duocad.edges?.body_id === id && window.__duocad.edges.revision === body?.revision
-    },
+    (id, revision) => (window.__duocad.edges?.[id]?.revision ?? -1) >= revision,
     '丸めた後の辺が届かない',
-    [bodyId],
+    [bodyId, filleted],
   )
   // 連なりは辺の折れ線に入っておらず、ホバーした辺の分だけ届く(`get_edge_chains`)。円弧に乗せて取り寄せさせる。
-  const arcs = await page.evaluate(() => window.__duocad.edges.edges.filter((edge) => edge.kind === 'circle').map((edge) => edge.index))
+  const arcs = await page.evaluate(
+    (id) => window.__duocad.edges[id].edges.filter((edge) => edge.kind === 'circle').map((edge) => edge.index),
+    bodyId,
+  )
   let chain = null
   for (const index of arcs) {
     const at = await screenOf(page, 'projectEdge', bodyId, index)
@@ -155,10 +165,10 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   ok('もう一度のクリックで全部外れた')
 
   // 矩形: 連なりの1本(円弧)だけを囲む。先に連なりの別の1本だけを選んでおく。
-  const arc = await page.evaluate((members) => {
-    const edge = window.__duocad.edges.edges.find((item) => members.includes(item.index) && item.kind === 'circle')
+  const arc = await page.evaluate((id, members) => {
+    const edge = window.__duocad.edges[id].edges.find((item) => members.includes(item.index) && item.kind === 'circle')
     return edge ? { index: edge.index, points: Array.from(edge.points) } : null // $state の配列は素では渡らない
-  }, chain)
+  }, bodyId, chain)
   if (arc === null) fail(`連なり ${chain} に円弧が無い`)
   const other = chain.find((index) => index !== arc.index)
   await mcp.callTool('set_selection', { refs: [{ body: bodyId, kind: 'edge', index: other }] })
@@ -209,13 +219,17 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   // 押す・離すを1回の evaluate で送り、間にホバーの更新(毎フレーム)を挟ませない。
   const unknownArc = await page.evaluate(
     (id, members) =>
-      window.__duocad.edges.edges.find(
-        (edge) => edge.kind === 'circle' && !members.includes(edge.index) && window.__duocad.edgeChain(id, edge.index) === null,
+      window.__duocad.edges[id].edges.find(
+        (edge) =>
+          edge.kind === 'circle' &&
+          !members.includes(edge.index) &&
+          window.__duocad.edgeChain(id, edge.index) === null &&
+          window.__duocad.projectEdge(id, edge.index) !== null,
       )?.index ?? null,
     bodyId,
     chain,
   )
-  if (unknownArc === null) fail('連なりの届いていない円弧が無い(もう一方の底・天井の輪郭)')
+  if (unknownArc === null) fail('連なりの届いていない見えている円弧が無い(もう一方の角の上面の輪郭)')
   const unknownAt = await screenOf(page, 'projectEdge', bodyId, unknownArc)
   if (!unknownAt) fail(`円弧 ${unknownArc} が画面で指せない`)
   await page.evaluate((at) => {
@@ -237,7 +251,7 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
 
   // ---------------------------------------------------------------- 4. 面取りでも面が外れる
   await page.keyboard.press('Escape')
-  await waitFor(() => window.__duocad.edges === null || (window.__duocad.selection?.items ?? []).length === 0, 'Esc で降りない')
+  await waitFor(() => window.__duocad.command === null, 'Esc で降りない')
   await waitFrames(page, 5)
   await clickFace(page, bodyId, (await visibleFace()).index) // 角を丸めたので面の添字は付け直し
   await waitFor(() => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'face'), '面が選ばれない(面取りの前)')

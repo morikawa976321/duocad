@@ -1,0 +1,349 @@
+{
+  "version": 3,
+  "created": 0.0,
+  "numbering": {
+    "sketch": 3,
+    "body": 1
+  },
+  "operations": [
+    {
+      "seq": 1,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-87658c9e4c59",
+        "plane": {
+          "kind": "base",
+          "name": "XY",
+          "provenance": null
+        },
+        "number": 1
+      },
+      "provenance": null
+    },
+    {
+      "seq": 2,
+      "verb": "add_rectangle",
+      "args": {
+        "sketch_id": "sketch-87658c9e4c59",
+        "entity_id": "entity-f882c4d8d0b5",
+        "kind": "rectangle",
+        "params": {
+          "x": 0.0,
+          "y": 0.0,
+          "width": 80.0,
+          "height": 60.0,
+          "angle": 0.0
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 3,
+      "verb": "extrude",
+      "args": {
+        "regions": [
+          {
+            "sketch": "sketch-87658c9e4c59",
+            "index": 1,
+            "provenance": null
+          }
+        ],
+        "distance": 10.0,
+        "mode": "join",
+        "body_id": "body-074963b22d8d",
+        "number": 1
+      },
+      "provenance": {
+        "verb": "extrude",
+        "mode": "join",
+        "distance": 10.0,
+        "unified": false,
+        "face_map": {},
+        "deleted": [],
+        "new_faces": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    },
+    {
+      "seq": 4,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-0121ca51aa3c",
+        "plane": {
+          "kind": "base",
+          "name": "XY",
+          "provenance": null
+        },
+        "number": 2
+      },
+      "provenance": null
+    },
+    {
+      "seq": 5,
+      "verb": "add_circle",
+      "args": {
+        "sketch_id": "sketch-0121ca51aa3c",
+        "entity_id": "entity-cd348ce37b49",
+        "kind": "circle",
+        "params": {
+          "cx": 10.0,
+          "cy": 10.0,
+          "diameter": 4.0
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 6,
+      "verb": "pattern_rectangular",
+      "args": {
+        "sketch_id": "sketch-0121ca51aa3c",
+        "pattern_id": "pattern-513407bc21ef",
+        "entities": [
+          "entity-cd348ce37b49"
+        ],
+        "dx": 10.0,
+        "dy": 10.0,
+        "nx": 3,
+        "ny": 2
+      },
+      "provenance": null
+    },
+    {
+      "seq": 7,
+      "verb": "set_parameter",
+      "args": {
+        "name": "d9",
+        "value": 12.0,
+        "previous": 10.0
+      },
+      "provenance": null
+    },
+    {
+      "seq": 8,
+      "verb": "extrude",
+      "args": {
+        "regions": [
+          {
+            "sketch": "sketch-0121ca51aa3c",
+            "index": 1,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-0121ca51aa3c",
+            "index": 2,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-0121ca51aa3c",
+            "index": 3,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-0121ca51aa3c",
+            "index": 4,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-0121ca51aa3c",
+            "index": 5,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-0121ca51aa3c",
+            "index": 6,
+            "provenance": null
+          }
+        ],
+        "distance": 20.0,
+        "mode": "cut",
+        "body_id": "body-074963b22d8d"
+      },
+      "provenance": {
+        "verb": "extrude",
+        "mode": "cut",
+        "distance": 20.0,
+        "unified": false,
+        "face_map": {
+          "1": [
+            1
+          ],
+          "2": [
+            2
+          ],
+          "3": [
+            6
+          ],
+          "4": [
+            3
+          ],
+          "5": [
+            4
+          ],
+          "6": [
+            5
+          ]
+        },
+        "deleted": [],
+        "new_faces": [
+          7,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      }
+    },
+    {
+      "seq": 9,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-53a5940d9224",
+        "plane": {
+          "kind": "base",
+          "name": "XY",
+          "provenance": null
+        },
+        "number": 3
+      },
+      "provenance": null
+    },
+    {
+      "seq": 10,
+      "verb": "add_rectangle",
+      "args": {
+        "sketch_id": "sketch-53a5940d9224",
+        "entity_id": "entity-f5376e214100",
+        "kind": "rectangle",
+        "params": {
+          "x": 58.0,
+          "y": 28.0,
+          "width": 8.0,
+          "height": 4.0,
+          "angle": 0.0
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 11,
+      "verb": "pattern_circular",
+      "args": {
+        "sketch_id": "sketch-53a5940d9224",
+        "pattern_id": "pattern-d0286eaeda7b",
+        "entities": [
+          "entity-f5376e214100"
+        ],
+        "center": [
+          50.0,
+          30.0
+        ],
+        "count": 4,
+        "total_angle": 360.0,
+        "rotate_copies": true
+      },
+      "provenance": null
+    },
+    {
+      "seq": 12,
+      "verb": "extrude",
+      "args": {
+        "regions": [
+          {
+            "sketch": "sketch-53a5940d9224",
+            "index": 1,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-53a5940d9224",
+            "index": 2,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-53a5940d9224",
+            "index": 3,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-53a5940d9224",
+            "index": 4,
+            "provenance": null
+          }
+        ],
+        "distance": 20.0,
+        "mode": "cut",
+        "body_id": "body-074963b22d8d"
+      },
+      "provenance": {
+        "verb": "extrude",
+        "mode": "cut",
+        "distance": 20.0,
+        "unified": false,
+        "face_map": {
+          "1": [
+            1
+          ],
+          "2": [
+            2
+          ],
+          "3": [
+            3
+          ],
+          "4": [
+            4
+          ],
+          "5": [
+            5
+          ],
+          "6": [
+            6
+          ],
+          "7": [
+            7
+          ],
+          "8": [
+            8
+          ],
+          "9": [
+            9
+          ],
+          "10": [
+            10
+          ],
+          "11": [
+            11
+          ],
+          "12": [
+            12
+          ]
+        },
+        "deleted": [],
+        "new_faces": [
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28
+        ]
+      }
+    }
+  ]
+}

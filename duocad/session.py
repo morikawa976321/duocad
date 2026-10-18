@@ -560,9 +560,10 @@ class Session:
 
     def _apply_mode(self, mode: dict) -> None:
         """モードを置き換える。変わるときは集めかけのコマンドを畳み(モードをまたいで引数を持ち越さない。画面の
-        `{#key mode.kind}` と同じ)、行き先で使えない選択を外す: 別のスケッチの図形(点・線)と、最適化モード以外での
-        ボディ参照(保持/除外の割り当てにしか使えない)。面・辺・頂点・領域はどのモードでも残す(スケッチを抜けて
-        そのまま押し出す等が実際の経路)。
+        `{#key mode.kind}` と同じ)、行き先で使えない選択を外す: スケッチに入るときの別のスケッチの図形(点・線)と、
+        最適化モード以外でのボディ参照(保持/除外の割り当てにしか使えない)。面・辺・頂点・領域はどのモードでも残し、
+        スケッチの図形もスケッチの外へ出るときは残す(通常モードでは全スケッチの図形を指せる。docs/DESIGN_DECISIONS.md
+        「見えるものはすべてさわれる」)。
         """
         if self.workspace.mode == mode:
             return
@@ -570,7 +571,7 @@ class Session:
         unusable = [
             item
             for item in selection.get_selection(self.document).items
-            if ("sketch" in item and "entity" in item and item["sketch"] != next_sketch)
+            if ("sketch" in item and "entity" in item and next_sketch is not None and item["sketch"] != next_sketch)
             or (item.get("kind") == "body" and mode.get("kind") != "optimize")
         ]
         if unusable:
