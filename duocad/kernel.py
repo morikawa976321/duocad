@@ -44,6 +44,7 @@ from OCP.STEPControl import (
     STEPControl_Writer,
 )
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
+from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
@@ -220,24 +221,55 @@ def _unlink_quietly(filename: str) -> None:
 # --------------------------------------------------------------------------------------
 # 計測・分類(query.py から使う。OCPを触るのでここに置く)
 # --------------------------------------------------------------------------------------
+#: 解析的な曲面の種類。これ以外(B スプライン・ベジエ・押し出し面など)を含む形の体積は精度を指定して積分する。
+_ANALYTIC_SURFACES = (
+    GeomAbs_SurfaceType.GeomAbs_Plane,
+    GeomAbs_SurfaceType.GeomAbs_Cylinder,
+    GeomAbs_SurfaceType.GeomAbs_Cone,
+    GeomAbs_SurfaceType.GeomAbs_Sphere,
+    GeomAbs_SurfaceType.GeomAbs_Torus,
+)
+
+#: 自由曲面を含む形の体積の積分の相対精度。
+_FREEFORM_VOLUME_EPS = 1.0e-9
+
+
 def volume(shape: "TopoDS_Shape") -> float:
     """形状の体積(mm^3)。
 
-    `BRepGProp.VolumeProperties_s(shape, props)` の**既定の積分**を使う(`Eps` を渡さない)。
-    `Eps` 付きの適応積分にすると精度が落ちる(Eps=1e-9で相対1.8e-10、Eps=1e-6で相対3.7e-8)。
+    解析的な面(平面・円筒・円錐・球・トーラス)だけの形は `BRepGProp.VolumeProperties_s(shape, props)` の
+    **既定の積分**を使う(`Eps` を渡さない)。`Eps` 付きの適応積分にすると精度が落ちる(Eps=1e-9で相対1.8e-10、
+    Eps=1e-6で相対3.7e-8)。**自由曲面を含む形は `Eps=1e-9` の適応積分**にする: 既定の積分は、細い楕円を傾けた
+    B スプラインの側面で 3〜152% ずれる(幅12・高さ1・距離10・5° で 215.53 対 208.48。2026-10-19 実測、sol レビュー)。
 
     STEP往復を挟んだ体積は**bit-exactではない**(実測相対誤差 約8e-16)。比較には
     `math.isclose(rel_tol=1e-6)` を使う。面数は往復後も厳密一致(`==`)でよい。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the volume of an empty shape")
+    return _volume_props(shape).Mass()
+
+
+def _volume_props(shape: "TopoDS_Shape") -> "GProp_GProps":
     props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props)
-    return props.Mass()
+    if _has_freeform_face(shape):
+        BRepGProp.VolumeProperties_s(shape, props, _FREEFORM_VOLUME_EPS, False)
+    else:
+        BRepGProp.VolumeProperties_s(shape, props)
+    return props
+
+
+def _has_freeform_face(shape: "TopoDS_Shape") -> bool:
+    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+    while explorer.More():
+        if BRepAdaptor_Surface(TopoDS.Face_s(explorer.Current())).GetType() not in _ANALYTIC_SURFACES:
+            return True
+        explorer.Next()
+    return False
 
 
 def centroid(shape: "TopoDS_Shape") -> List[float]:
-    """形状の**体積重心**(mm)。`volume` と同じ `VolumeProperties_s` の既定積分を使う。
+    """形状の**体積重心**(mm)。`volume` と同じ積分(自由曲面を含むときだけ適応積分)を使う。
 
     `move_body` の回転の既定の中心。境界箱の中心は軸の向きで動くので使わない。
 
@@ -245,8 +277,7 @@ def centroid(shape: "TopoDS_Shape") -> List[float]:
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the centroid of an empty shape")
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props)
+    props = _volume_props(shape)
     if not props.Mass() > 0.0:
         raise ValueError("cannot compute the centroid of a zero-volume shape")
     point = props.CentreOfMass()

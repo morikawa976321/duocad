@@ -560,3 +560,46 @@ def test_a_straight_bezier_with_both_end_poles_doubled_is_a_line(distance, taper
     result = _new(face, distance, taper)
 
     assert math.isclose(result["volume_after"], _frustum(20.0, 10.0, distance, taper), rel_tol=1e-9)
+
+
+# ======================================================================================
+# sol レビューの指摘(4回目)
+# ======================================================================================
+@pytest.mark.parametrize("width, height, distance", [(12.0, 1.0, 10.0), (12.0, 0.1, 1.0)])
+def test_the_volume_of_a_thin_tapered_ellipse_is_accurate(width, height, distance):
+    """細い楕円を傾けた B スプラインの側面で、既定の体積の積分が 3〜152% ずれる(形は正しい)。"""
+    face = _sketch_ellipse_face(width, height)
+
+    result = _new(face, distance, 5.0)
+
+    expected = _ellipse_parallel_volume(width / 2.0, height / 2.0, distance, 5.0)
+    assert math.isclose(result["volume_after"], expected, rel_tol=1e-5)
+    assert math.isclose(kernel.volume(result["shape"]), expected, rel_tol=1e-5)
+
+
+def _short_chamfer():
+    """長方形 20×10 の角を 0.1 mm 面取りした凸の五角形(面取り辺の長さ 0.141)。"""
+    return _polygon((0.0, 10.0), (20.0, 10.0), (20.0, 0.1), (19.9, 0.0), (0.0, 0.0))
+
+
+def _convex_polygon_volume(area, perimeter, corner_factor, height, taper):
+    """凸多角形を角を尖らせたまま t だけずらした面積は A0 + P·t + K·t²(K = Σ tan(外角/2))。t = tan(taper)·z を積分する。"""
+    a = _slope(taper)
+    return area * height + perimeter * a * height**2 / 2.0 + corner_factor * a * a * height**3 / 3.0
+
+
+@pytest.mark.parametrize("taper", [-0.3, 0.3, 5.0])
+def test_a_short_chamfer_edge_tapers(taper):
+    """0.1 mm の面取り辺があると `MakeDraft` が Standard_OutOfRange で失敗し、潰れない角度まで断る。"""
+    result = _new(_short_chamfer(), 10.0, taper)
+
+    corner = 3.0 + 2.0 * math.tan(math.radians(22.5))
+    perimeter = 20.0 + 9.9 + math.hypot(0.1, 0.1) + 19.9 + 10.0
+    expected = _convex_polygon_volume(200.0 - 0.005, perimeter, corner, 10.0, taper)
+    assert math.isclose(result["volume_after"], expected, rel_tol=1e-9)
+
+
+def test_a_short_chamfer_edge_that_vanishes_is_refused():
+    """細る向きの移動量 0.1745 mm は面取り辺が消える 0.1707 mm を越える。"""
+    with pytest.raises(ValueError, match="collapses"):
+        _new(_short_chamfer(), 10.0, -1.0)

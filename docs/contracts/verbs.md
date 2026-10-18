@@ -139,7 +139,9 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - 距離 z の断面は「元の領域を z·tan(taper) だけ外へずらしたもの」で角は尖ったまま。**穴は外周と逆に動く**(正で狭まり、負で広がる。
   Fusion も同じ: Autodesk Community「Extrude Taper option odd behavior!」)。距離が負でも「進むにつれて」で、cut では掘る側の立体に掛かる
   (負なら穴が奥ほど狭まる)。領域・面の両方、join / cut / new のすべてで効く。
-- 幾何は `kernel_extrude._tapered_prism`(輪郭ごとに `BRepOffsetAPI_MakeDraft` → 底とふたで閉じる → 外周の立体から穴の立体を cut)。
+- 幾何は `kernel_extrude._tapered_prism`(輪郭ごとに傾けた立体を作り、外周の立体から穴の立体を cut)。輪郭の立体は、
+  直線と円弧だけなら柱の側面を `BRepOffsetAPI_DraftAngle` で傾け(面は平面・円錐のまま)、楕円・ベジエ・B スプラインを含むなら
+  `BRepOffsetAPI_MakeDraft` で側面を作って底とふたで閉じる。`MakeDraft` は 0.1 mm の面取り辺を持つ多角形で失敗する(sol レビュー)。
   `LocOpe_DPrism` / `BRepOffsetAPI_DraftAngle` を使わない理由と、潰れを OCCT が見逃す実測は docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」。
 - **潰れ(壁どうしの衝突・穴が閉じる・辺が消える・円錐が頂点を越える)は ValueError**(文言に `collapses`)。検出は4段:
   曲線の辺の曲率半径とずらす量(`_require_curvature_room`。円の頂点越えは `BRepCheck` も自己交差の検査も通すのでこれが唯一の関門。

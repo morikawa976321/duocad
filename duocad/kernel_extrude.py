@@ -33,7 +33,7 @@ from OCP.BRepBuilderAPI import (
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepLProp import BRepLProp_CLProps
-from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeDraft, BRepOffsetAPI_ThruSections
+from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle, BRepOffsetAPI_MakeDraft, BRepOffsetAPI_ThruSections
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
 from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
 from OCP.Bnd import Bnd_Box
@@ -41,7 +41,7 @@ from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.GProp import GProp_GProps
 from OCP.Geom2dLProp import Geom2dLProp_CurAndInf2d
 from OCP.LProp import LProp_NotDefined
-from OCP.GeomAbs import GeomAbs_BezierCurve, GeomAbs_BSplineCurve, GeomAbs_Line, GeomAbs_Plane
+from OCP.GeomAbs import GeomAbs_BezierCurve, GeomAbs_BSplineCurve, GeomAbs_Circle, GeomAbs_Line, GeomAbs_Plane
 from OCP.Precision import Precision
 from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
 from OCP.ShapeFix import ShapeFix_Solid
@@ -57,7 +57,7 @@ from OCP.TopAbs import (
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
-from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 
 from .kernel import (
     _checked_volume,
@@ -245,9 +245,17 @@ def _drafted_solid(
     wire: Any, axis: "gp_Dir", height: float, angle: float, reach: float, inward: bool, label: str
 ) -> Any:
     """閉じた輪郭線 `wire` の囲む領域を `axis` へ `height` 押し出し、側面を `angle`(ラジアン)だけ
-    内向き(`inward`)か外向きに傾けた立体。"""
+    内向き(`inward`)か外向きに傾けた立体。
+
+    直線と円弧だけの輪郭は `_analytic_drafted_solid`(柱の側面を `BRepOffsetAPI_DraftAngle` で傾ける。面は平面と円錐の
+    ままで体積も正確)。楕円・ベジエ・B スプラインを含む輪郭は `DraftAngle` が傾けられないので `MakeDraft` で側面を作る。
+    `MakeDraft` は長さ 0.14 mm の辺(0.1 mm の面取り)を持つ多角形で、角度によらず Standard_OutOfRange を投げる
+    (sol レビューで再現。同じ輪郭を `DraftAngle` は作れ、面取り辺が消える角度では `IsDone()=False` を返す)。
+    """
     wire = _regular_wire(wire)
     _require_curvature_room(wire, reach, inward, label)
+    if all(BRepAdaptor_Curve(edge).GetType() in (GeomAbs_Line, GeomAbs_Circle) for edge in _edges(wire)):
+        return _analytic_drafted_solid(wire, axis, height, angle, inward, label)
     draft = BRepOffsetAPI_MakeDraft(wire, axis, angle)
     draft.SetOptions(BRepBuilderAPI_RightCorner)
     # 内か外かは角度の符号でも線の向きでもなく、この指定で決まる(既定は外)。Perform の長さは斜辺。
@@ -274,6 +282,40 @@ def _drafted_solid(
         if solid is not None:
             return solid
     raise ValueError(_collapse_message(label))
+
+
+def _analytic_drafted_solid(
+    wire: Any, axis: "gp_Dir", height: float, angle: float, inward: bool, label: str
+) -> Any:
+    """直線と円弧だけの輪郭の柱を作り、上下のふた以外の面を底の平面を中立面として `angle` だけ傾ける。
+
+    `DraftAngle.Add` の角度は正で押し出す向きに細る(実測)。
+    """
+    base = BRepBuilderAPI_MakeFace(wire, True)
+    if not base.IsDone():
+        raise ValueError(f"failed to rebuild the base of the tapered {label}")
+    prism = BRepPrimAPI_MakePrism(base.Face(), gp_Vec(axis).Multiplied(height))
+    if not prism.IsDone():
+        raise ValueError(f"failed to build the prism of the tapered {label}")
+    neutral = gp_Pln(BRepAdaptor_Surface(base.Face()).Plane().Location(), axis)
+    draft = BRepOffsetAPI_DraftAngle(prism.Shape())
+    explorer = TopExp_Explorer(prism.Shape(), TopAbs_FACE)
+    while explorer.More():
+        side = TopoDS.Face_s(explorer.Current())
+        explorer.Next()
+        surface = BRepAdaptor_Surface(side)
+        if surface.GetType() == GeomAbs_Plane and surface.Plane().Axis().Direction().IsParallel(axis, Precision.Angular_s()):
+            continue
+        draft.Add(side, axis, angle if inward else -angle, neutral)
+        if not draft.AddDone():
+            raise ValueError(_collapse_message(label))
+    draft.Build()
+    if not draft.IsDone():
+        raise ValueError(_collapse_message(label))
+    solid = draft.Shape()
+    if _count(solid, TopAbs_SOLID) != 1 or not volume(solid) > 0 or not BRepCheck_Analyzer(solid).IsValid():
+        raise ValueError(_collapse_message(label))
+    return TopoDS.Solid_s(TopExp_Explorer(solid, TopAbs_SOLID).Current())
 
 
 def _sewn_solid(parts: Sequence[Any], tolerance: float) -> Optional[Any]:
