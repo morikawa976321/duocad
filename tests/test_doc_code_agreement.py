@@ -67,7 +67,7 @@ def _table_rows(section: str) -> list[list[str]]:
 
 
 def _published_tool_names() -> set[str]:
-    server = McpServer(DocumentTools(Session(None, 0.2)))
+    server = McpServer(DocumentTools(Session(0.2)))
     response = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     return {tool["name"] for tool in response["result"]["tools"]}
 

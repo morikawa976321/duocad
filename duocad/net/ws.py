@@ -391,7 +391,7 @@ class Server:
             pending = self._preview_futures.pop(connection, None)
             if pending is not None:
                 pending.cancel()
-            self._on_disconnect(connection)
+            self._on_disconnect()
 
     async def _receive(self, connection: Any, inbox: "_Inbox") -> None:
         """届いた要求を待ち行列へ積む(処理は `handle` のループ。塞がっている間に届いた古い要求を置き換えられるように分ける)。"""
@@ -403,7 +403,7 @@ class Server:
         finally:
             inbox.close()
 
-    def _on_disconnect(self, connection: Any) -> None:
+    def _on_disconnect(self) -> None:
         """1接続が切れた後の後始末(`handle()` の `finally` から呼ぶ)。
 
         最後の1接続が切れたときだけAIの実行(=文書の変更)を中断する(他の画面が見ている間は続ける。`ai_*` は共有の1会話)。

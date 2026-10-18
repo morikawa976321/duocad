@@ -68,20 +68,18 @@ def editable_body(
     body_id: Optional[BodyId],
     *,
     what: str,
-    require_visible: bool = False,
     reject_as: Optional[str] = None,
 ) -> Body:
     """操作対象のボディ。**編集できないもの・形状の無いものは例外**(黙って無視しない)。
 
     `what` は失敗のメッセージに入る動詞(`"fillet"` / `"extrude"` 等)。
-    `require_visible` は「見えないものは指せない」を課すかどうか。
     `reject_as` はメッシュボディを断る文に入れる言い方(省略時は `what`。`extrude` は
     「押し出しの対象にする」と言う)。
 
     **選択側の門番(`selection._visible_body`)だけでは足りない**。AIと人が並行して動くと、
     選択した後・verbを呼ぶ前に人がそのボディを隠す順序が起きる。`fillet`/`chamfer` がこの順序で
     隠したボディを黙って丸めることを実測した(`tests/test_agent_concurrency.py`)ので、
-    面・辺どちらを取るverbも True にする。
+    見えないボディは常に断る(面・辺どちらを取るverbも同じ)。
     """
     if body_id is None:
         active = doc.active_body()
@@ -97,7 +95,7 @@ def editable_body(
             f"body {body_id!r} is not editable (kind={body.kind!r})"
         )
     body = doc.get_body(body_id)
-    if require_visible and not body.visible:
+    if not body.visible:
         raise ValueError(
             f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
         )
@@ -126,10 +124,10 @@ def deletable_body(doc: Document, body_id: BodyId, *, require_visible: bool = Tr
 
 def editable_bodies(doc: Document, body_ids: Sequence[BodyId], *, verb: str, what: str) -> List[Body]:
     """動かす・鏡映するボディの並び(1つも無ければ ValueError)。編集できないもの・隠したものは例外
-    (`require_visible=True` の理由は `editable_body`)。"""
+    (隠したものを断る理由は `editable_body`)。"""
     if not body_ids:
         raise ValueError(f"{verb} requires at least one body")
-    return [editable_body(doc, body_id, what=what, require_visible=True) for body_id in body_ids]
+    return [editable_body(doc, body_id, what=what) for body_id in body_ids]
 
 
 def resolve_shape_ref(doc: Document, ref: Any, *, kind: str, what: str, mesh_hint: str) -> tuple:

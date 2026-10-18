@@ -149,7 +149,7 @@ def test_the_deviation_is_clamped_both_absolutely_and_relative_to_the_model() ->
 @pytest.fixture()
 def cylinder_session() -> tuple:
     """円(半径10mm)を押し出した円柱を1つ持つセッション。**曲面と円い辺の両方がある**。"""
-    session = Session(None, DEVIATION)
+    session = Session(DEVIATION)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 2 * RADIUS)
     session.clear_selection()

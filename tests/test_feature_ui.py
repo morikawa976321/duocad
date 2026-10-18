@@ -287,8 +287,8 @@ def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:
 
 def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:
     """**同じ操作をUIからとMCPからで行い、結果が一致する**(タスクDの検証6)。"""
-    from_ui = Session(None, DEVIATION)
-    from_ai = Session(None, DEVIATION)
+    from_ui = Session(DEVIATION)
+    from_ai = Session(DEVIATION)
     ui_body, _ = _box(from_ui)
     ai_body, _ = _box(from_ai)
 

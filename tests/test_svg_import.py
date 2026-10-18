@@ -406,7 +406,7 @@ def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
 
 
 def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
-    session = Session(None, 0.2, models_dir=tmp_path)
+    session = Session(0.2, models_dir=tmp_path)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     applied = session.import_svg(
         sketch_id, str(write_svg(tmp_path, "session.svg", SVG_MIXED))
@@ -422,7 +422,7 @@ def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
 
 def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:
     """状態配信の射影で図形を伏せる。"""
-    session = Session(None, 0.2, models_dir=tmp_path)
+    session = Session(0.2, models_dir=tmp_path)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.import_svg(sketch_id, str(write_svg(tmp_path, "feed.svg", SVG_MIXED)))
 

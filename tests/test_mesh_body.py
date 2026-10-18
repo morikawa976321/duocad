@@ -43,7 +43,7 @@ def _tetra_doc():
 def _tetra_session():
     """メッシュボディを1つ持つ `Session`。**`Session` 越しに作る** —— `session.document` へ
     代入しても `session.view` は古い文書を握ったままで、配りものが別の文書を見る。"""
-    session = Session(None, DEVIATION)
+    session = Session(DEVIATION)
     body_id = session.add_mesh_body(TETRA_POSITIONS, TETRA_INDICES, "tetra")["body_id"]
     return session, body_id
 

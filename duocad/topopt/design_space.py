@@ -453,18 +453,17 @@ def offset_hull_volume(corners: np.ndarray, margin: float) -> float:
     return float(hull.volume + hull.area * m + 0.5 * edge_term * m * m + 4.0 / 3.0 * math.pi * m ** 3)
 
 
-def obstacle_free_fraction(corners: np.ndarray, obstacle: Any, *, margin_ratio: float = DEFAULT_MARGIN_RATIO,
-                           elements_long_axis: int = 60) -> float:
-    """余白付き凸包のセルのうち、除外ソリッドに食われずに残る割合(`derive` と同じ判定を `elements_long_axis` 分割の粗い格子で数えた値)。
+def obstacle_free_fraction(corners: np.ndarray, obstacle: Any) -> float:
+    """余白付き凸包のセルのうち、除外ソリッドに食われずに残る割合(`derive` と同じ判定を 60 分割の粗い格子で数えた値)。
     粗いので揺れる(hanger で分割数 40〜240 の実測 0.810〜0.828)。除外が無ければ 1。"""
     if obstacle is None:
         return 1.0
     pts = np.asarray(corners, dtype=float).reshape(-1, 3)
     lo, hi = pts.min(axis=0), pts.max(axis=0)
-    margin = float(margin_ratio) * float(np.max(hi - lo))
-    box_lo, box_hi = frame_box(lo, hi, margin_ratio=margin_ratio)
+    margin = DEFAULT_MARGIN_RATIO * float(np.max(hi - lo))
+    box_lo, box_hi = frame_box(lo, hi)
     planes, triangles, _info = convex_hull(pts)
-    grid = grid_for_frame(box_lo, box_hi, elements_long_axis=elements_long_axis)
+    grid = grid_for_frame(box_lo, box_hi, elements_long_axis=60)
     candidate = box_mask(grid, box_lo, box_hi) & offset_hull_mask(grid, planes, margin)
     candidate &= hull_distance_mask(grid, planes, triangles, margin)
     total = int(np.count_nonzero(candidate))
@@ -572,9 +571,6 @@ def derive(
     margin_ratio: float = DEFAULT_MARGIN_RATIO,
     elements_long_axis: int = DEFAULT_ELEMENTS_LONG_AXIS,
     spacing: Optional[float] = None,
-    deviation: Optional[float] = None,
-    deviation_ratio: float = vx.DEFAULT_DEVIATION_RATIO,
-    angular_deflection: float = vx.DEFAULT_ANGULAR_DEFLECTION,
 ) -> DesignSpace:
     """4条件から塊(設計空間)を1回で導出する。**材料量は受け取らない。**
 
@@ -603,7 +599,8 @@ def derive(
     # 実際に使った最長軸の分割数。
     n_long = int(round(float(np.max(box_hi - box_lo)) / grid.spacing))
     # **保持/除外を格子に載せるときの三角形分割は要素サイズから決める**(下の `model_from_design_mask` が既定の deviation で呼ぶので、揃えないと通した保持がそこで通らない)。
-    dev = float(deviation) if deviation else max(grid.spacing * deviation_ratio, 1e-6)
+    dev = max(grid.spacing * vx.DEFAULT_DEVIATION_RATIO, 1e-6)
+    angular_deflection = vx.DEFAULT_ANGULAR_DEFLECTION
 
     frame = box_mask(grid, box_lo, box_hi)
     # 塊にするのは距離のほう(平面のオフセットは外側の当たり)。

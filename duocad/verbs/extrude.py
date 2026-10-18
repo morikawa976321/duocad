@@ -193,14 +193,14 @@ def _resolve_target(
         return None, None
 
     # 対象ボディ(既定はアクティブ)は選択の外から来る。人が隠した後にAIが押し出すと見えないボディが
-    # 黙って変わる(`editable_body` と同じ穴)ので `require_visible=True`。
+    # 黙って変わる(`editable_body` と同じ穴)ので、`editable_body` が見えないボディを断る。
     return _editable_target(doc, body_id, what), body_id
 
 
 def _editable_target(doc: Document, body_id: BodyId, what: str = VERB_EXTRUDE) -> Body:
     """押し出し・回転体の対象にできるボディ(編集可・可視・形状あり。メッシュは「足す/引く対象にする」ことを断る)。"""
     reject_as = "押し出しの対象にする" if what == VERB_EXTRUDE else "足す/引く対象にする"
-    return editable_body(doc, body_id, what=what, require_visible=True, reject_as=reject_as)
+    return editable_body(doc, body_id, what=what, reject_as=reject_as)
 
 
 def _add_numbered_body(doc: Document, body_id: BodyId, shape: Any) -> dict:

@@ -55,7 +55,7 @@ class SpyTools:
 
 
 def tools() -> DocumentTools:
-    return DocumentTools(Session(None, 0.2))
+    return DocumentTools(Session(0.2))
 
 
 def envelope_code(result) -> str:

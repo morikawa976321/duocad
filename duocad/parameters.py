@@ -150,7 +150,6 @@ def rebuild(
     doc: Document,
     upto_seq: int,
     overrides: Optional[Dict[str, float]] = None,
-    log: Optional[Any] = None,
 ) -> None:
     """`seq <= upto_seq` のログから文書(bodies / sketches / parameters)を作り直す。
 
@@ -163,7 +162,7 @@ def rebuild(
     パラメータ名は決定的に振り直されるので、表の名前は再生後の同じスカラーを指す。
     """
     global _REBUILDING
-    source = doc.log if log is None else log
+    source = doc.log
 
     values: Dict[str, float] = {}
     # その名前を最後に書いた `set_parameter` の seq。値の強制はこの seq より前の操作にだけ効かせる。

@@ -320,9 +320,6 @@ class DocumentTools:
             "bodies": bodies,
             "sketches": sketches_out,
             "parameters": dict(document.parameters),
-            # **`Session.can_undo` を使う**(生の `log.can_undo` ではない)。文書の土台
-            # (部品の読み込み・編集用ボディ)は取り消せず、素のログを見ると
-            # 「undoできる」と答えたのに拒否される食い違いが出る。
             "can_undo": self.session.can_undo,
             "can_redo": document.log.can_redo,
             # **`Session.applied_count` を使う**(`len(log.entries)` ではない)。ログの長さは
@@ -755,10 +752,8 @@ class McpServer:
     返したら「返事を書いてはいけない」(通知・レスポンスの受信)という意味。
     """
 
-    def __init__(self, tools: DocumentTools, name: str = SERVER_NAME, version: str = SERVER_VERSION) -> None:
+    def __init__(self, tools: DocumentTools) -> None:
         self.tools = tools
-        self.name = name
-        self.version = version
         #: このクライアントが最後に `describe_document` で見た文書の世代(issue #102)。None = まだ見ていない(照合しない)。
         #: **インスタンスに1つ**: HTTP の全クライアントがこれを共有するので、2つ繋ぐと片方の確認でもう片方も通る
         #: (`Mcp-Session-Id` 未実装。限界は `MCP.md`「実装のメモ」)。
@@ -828,7 +823,7 @@ class McpServer:
             # ツールしか持たず、**変更通知は出さない**(顔ぶれは起動中変わらない)ので
             # listChanged は宣言しない。
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": self.name, "version": self.version},
+            "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
             # **アプリ内エージェント(`duocad/agent/`)と同じ文**。手順を2箇所に書くと
             # 片方だけ直った状態に気づけないので、宣言側(catalog.py)の1本から読む。
             "instructions": catalog.agent_instructions(getattr(self.tools, "hidden_features", frozenset())),
@@ -1165,7 +1160,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     # **何も開いていない状態(トップ画面)で起動する**。人が画面で「新規」か既存の文書を選ぶまで、
     # 文書を変える操作は断られる(`Session.NoDocument`)。
     session = Session(
-        None,
         args.deviation,
         models_dir=args.models_dir,
         exports_dir=args.exports_dir,

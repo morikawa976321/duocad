@@ -12,7 +12,7 @@ from duocad.session import Session
 def open_session(path) -> Session:
     """`path` の文書(JSON)を開いた `Session`。`models_dir` はその親で、偏差は画面の既定 `kernel.DEFAULT_DEVIATION`。"""
     path = Path(path).resolve()
-    session = Session(None, kernel.DEFAULT_DEVIATION, models_dir=path.parent)
+    session = Session(kernel.DEFAULT_DEVIATION, models_dir=path.parent)
     session.open_document(path.name)
     return session
 
@@ -26,4 +26,4 @@ def scratch_session(deviation: float) -> Session:
     """
     root = Path(tempfile.mkdtemp(prefix="duocad-checks-"))
     atexit.register(shutil.rmtree, root, True)
-    return Session(None, deviation, models_dir=root / "models", exports_dir=root / "export")
+    return Session(deviation, models_dir=root / "models", exports_dir=root / "export")

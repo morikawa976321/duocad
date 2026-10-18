@@ -43,7 +43,7 @@ def measure_one(session: Session, ref: dict) -> dict:
 @pytest.mark.parametrize("plane", ["XY", "XZ", "YZ"])
 def test_a_region_reports_its_area_centroid_in_sketch_and_world_coordinates(plane: str):
     """落ちたら、押し出す前に重心で位置を決める手段が無い(または (u, v) とワールドの対応がずれた)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = trapezoid_sketch(session, plane)
 
     item = measure_one(session, {"sketch": sketch_id, "index": 1})
@@ -59,7 +59,7 @@ def test_a_region_reports_its_area_centroid_in_sketch_and_world_coordinates(plan
 
 def test_a_planar_face_and_the_body_report_their_centroids():
     """落ちたら、押し出した台形の上面やボディの重心を AI が自分で計算することになる。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = trapezoid_sketch(session, "XY")
     extrude(session.document, [region_ref(sketch_id, 1)], THICKNESS)
     body = session.document.bodies[0]
@@ -78,7 +78,7 @@ def test_a_planar_face_and_the_body_report_their_centroids():
 
 def test_a_curved_face_reports_its_area_centroid_not_a_point_on_the_surface():
     """円柱の側面の面積重心は軸の上。落ちたら `center` が面の種類で意味を変えている(UV 範囲の中点に戻った)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     session.document.add_body(
         Body(id="cyl", name="cyl", kind="solid", shape=BRepPrimAPI_MakeCylinder(10.0, 20.0).Shape())
     )
@@ -96,7 +96,7 @@ def test_a_curved_face_reports_its_area_centroid_not_a_point_on_the_surface():
 
 def test_a_mesh_body_reports_its_volume_centroid():
     """落ちたら、メッシュボディだけ重心が返らない(B-rep と別の計算経路)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     body_id = session.add_mesh_body(TETRA_POSITIONS, TETRA_INDICES, "tetra")["body_id"]
 
     item = measure_one(session, {"body": body_id, "kind": "body", "index": None})

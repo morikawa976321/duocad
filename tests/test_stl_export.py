@@ -34,7 +34,7 @@ def test_unresolved_face_prevents_partial_stl_export(tmp_path, existing):
     wire.Close()
     broken = BRepBuilderAPI_MakeFace(wire.Wire(), True).Face()
     shape = kernel.make_compound([broken, BRepPrimAPI_MakeBox(5., 5., 5.).Shape()])
-    session = Session(None, 0.2)
+    session = Session(0.2)
     session.document.add_body(Body(id='part', name='part', kind='solid', shape=shape))
     path = tmp_path / 'part.stl'
     if existing:
@@ -56,7 +56,7 @@ def test_each_incomplete_tessellation_diagnostic_blocks_export(tmp_path, monkeyp
     payload['untriangulated'] = [1] if field == 'untriangulated' else []
     payload['boundary']['unresolved'] = [dict(face=1, issues=[])] if field == 'boundary' else []
     monkeypatch.setattr(kernel, 'tessellate', lambda *args: payload)
-    session = Session(None, 0.2)
+    session = Session(0.2)
     session.document.add_body(Body(id='part', name='part', kind='solid', shape=shape))
     path = tmp_path / 'part.stl'
     with pytest.raises(ValueError, match='cannot write STL'):
@@ -94,7 +94,7 @@ def _view_triangles(session: Session, body_id: str) -> np.ndarray:
 
 def test_the_stl_holds_exactly_the_triangles_the_view_shows(tmp_path):
     """**土台を書き出しの固定値に合わせれば**、画面の三角形とSTLはビット単位で同じ。"""
-    session = Session(None, io_step.STL_DEVIATION)
+    session = Session(io_step.STL_DEVIATION)
     session.document.add_body(Body(id="part", name="part", kind="solid", shape=_holed_box()))
     view = _view_triangles(session, "part")
 
@@ -109,7 +109,7 @@ def test_the_stl_does_not_follow_the_session_baseline(tmp_path):
 
     落ちたら、書き出しが画面の設定を見に行っている(曲面のある形で三角形数が土台に追随する)。
     """
-    session = Session(None, 0.2)
+    session = Session(0.2)
     session.document.add_body(Body(id="part", name="part", kind="solid", shape=_holed_box()))
 
     path = tmp_path / "part.stl"
@@ -120,7 +120,7 @@ def test_the_stl_does_not_follow_the_session_baseline(tmp_path):
 
 def test_several_b_rep_bodies_are_written_one_by_one_as_the_view_measures_them(tmp_path):
     """画面はBodyごとに測る。書き出しも1つのcompoundへまとめて測り直さない。"""
-    session = Session(None, io_step.STL_DEVIATION)
+    session = Session(io_step.STL_DEVIATION)
     session.document.add_body(Body(id="a", name="a", kind="solid", shape=_holed_box()))
     moved = kernel.translate_shape(_holed_box(), 60.0, 0.0, 0.0)
     session.document.add_body(Body(id="b", name="b", kind="solid", shape=moved))
@@ -136,7 +136,7 @@ def test_stl_export_refuses_a_triangle_that_collapses_in_float32(tmp_path):
     """float64 では面積のある三角形でも float32 に丸めると2頂点が同じ値になる(1000 付近の刻みは約6e-5)。
     書き出しを理由つきで止め、既存のファイルには触らない。頂点を動かして通すことはしない。"""
     from duocad.document import make_mesh
-    session = Session(None, 0.2)
+    session = Session(0.2)
     mesh = make_mesh([1000.0, 0.0, 0.0, 1000.00001, 0.0, 0.0, 1000.0, 1.0, 0.0], [0, 1, 2])
     session.document.add_body(Body(id="m", name="m", kind="mesh", mesh=mesh))
     path = tmp_path / "m.stl"
@@ -184,7 +184,7 @@ def test_a_b_rep_with_pole_triangles_is_written_without_the_zero_area_ones(tmp_p
     """OCCT は球の極・円錐の頂点・角のフィレットの球面片に面積0の三角形を出す。落ちたら、それが float32 検査に
     拒まれてこれらの形が書き出せない(ファイルが作られない)か、除いたことで STL が閉じなくなっている。"""
     shape = _POLE_SHAPES[name]()
-    session = Session(None, io_step.STL_DEVIATION)
+    session = Session(io_step.STL_DEVIATION)
     session.document.add_body(Body(id="part", name="part", kind="solid", shape=shape))
     view = _view_triangles(session, "part")
     zero_area = degenerate_mask(view.astype(np.float64))
@@ -204,7 +204,7 @@ def test_a_b_rep_with_pole_triangles_is_written_without_the_zero_area_ones(tmp_p
 def test_stl_export_still_refuses_a_mesh_body_with_a_zero_area_triangle(tmp_path):
     """面積0の三角形を除くのは B-rep の分割結果だけ。メッシュボディは持っている三角形のまま検査し、断る。"""
     from duocad.document import make_mesh
-    session = Session(None, 0.2)
+    session = Session(0.2)
     mesh = make_mesh([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 1, 2])
     session.document.add_body(Body(id="m", name="m", kind="mesh", mesh=mesh))
     path = tmp_path / "m.stl"

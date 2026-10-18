@@ -18,7 +18,7 @@ VERB_EXTRUDE_FACE = "extrude_face"
 def _do_extrude_face(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された添字と距離で押し出し直す(ログには触らない)。"""
     args = operation.args
-    body = editable_body(document, args["body_id"], what="extrude", require_visible=True)
+    body = editable_body(document, args["body_id"], what="extrude")
     distance = float(args["distance"])
     result = kernel_extrude.extrude_faces(
         body.shape,

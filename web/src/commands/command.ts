@@ -167,8 +167,6 @@ export interface NumberArgSpec extends ArgSpecCommon {
   unit: string
   /** 入力欄の `id`(実機検査がここを叩く)。 */
   inputId: string
-  /** 空欄の薄字。省略時は `unit`(`CommandHost.placeholderFor`)。 */
-  placeholder?: string
   /**
    * 空欄なら集めた点から導く寸法(スケッチの長さ・幅・高さ・半径)。`default` と違って値を作らず、`build` が点から計算する。
    * この印が付いた数値は how に数えない(`isHowInput`)ので、引数を完成させる最後のクリックでそのまま適用される。

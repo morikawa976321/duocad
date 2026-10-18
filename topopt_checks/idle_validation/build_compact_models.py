@@ -198,7 +198,7 @@ def main() -> int:
 
     # 往復検査: 保存した操作ログを新しいSessionで開き直し、条件が消えていないことを確認する。
     for name in ("topopt_idle_dilution_small.json", "topopt_idle_path_small.json"):
-        reopened = Session(None, 0.2, models_dir=args.out_dir)
+        reopened = Session(0.2, models_dir=args.out_dir)
         reopened.open_document(name)
         doc = reopened.document
         assert doc.optimize.fixtures, f"{name}: 拘束面が往復で消えた"

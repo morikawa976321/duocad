@@ -513,7 +513,7 @@ def applied_by_command(tmp_path_factory) -> dict[str, Any]:
         if runner is None:
             continue  # `test_every_target_command_has_a_runner` が落とす
         try:
-            session = Session(None, DEVIATION, models_dir=tmp_path_factory.mktemp(name))
+            session = Session(DEVIATION, models_dir=tmp_path_factory.mktemp(name))
             results[name] = runner(session, tmp_path_factory.mktemp(f"{name}-files"))
         except Exception as error:  # noqa: BLE001 —— 受け側で赤くする
             results[name] = error
@@ -579,7 +579,7 @@ def test_every_declared_change_is_actually_emitted(applied_by_command: dict) -> 
 def test_state_keys_match_the_runtime_state(tmp_path) -> None:
     """`Session.state_meta()` が実際に返すキーと `catalog.STATE_KEYS` が一致する(画面の `ServerState` は
     型検査がこの宣言と突き合わせる)。"""
-    session = Session(None, DEVIATION, models_dir=tmp_path / "models")
+    session = Session(DEVIATION, models_dir=tmp_path / "models")
     _box(session)
     assert set(session.state_meta()) == set(catalog.STATE_KEYS)
     assert len(catalog.STATE_KEYS) == len(set(catalog.STATE_KEYS))

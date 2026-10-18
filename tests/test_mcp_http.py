@@ -66,7 +66,7 @@ def http_mcp(tmp_path_factory):
     thread.start()
     assert running.wait(10), "イベントループが立たなかった"
 
-    session = Session(None, kernel.DEFAULT_DEVIATION, models_dir=tmp_path / "models")
+    session = Session(kernel.DEFAULT_DEVIATION, models_dir=tmp_path / "models")
     tools = DocumentTools(session)
     port = _free_port()
     httpd = start_http_server(

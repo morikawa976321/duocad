@@ -379,7 +379,7 @@ def test_the_fingerprint_check_names_what_changed(session: Session) -> None:
 def test_the_setup_survives_a_real_save_and_open(tmp_path) -> None:
     """落ちたら、`save_document` → `new_document` → `open_document` の実APIの往復(ファイルI/Oと
     文書の差し替えを通る)で条件が戻らないか、差し替え後に前の文書の割り当てを配っている。"""
-    made = Session(None, DEVIATION, models_dir=tmp_path / "models")
+    made = Session(DEVIATION, models_dir=tmp_path / "models")
     body = _box(made)
     _select(made, _body_refs(body))
     made.set_preserve_bodies()
@@ -409,7 +409,7 @@ def test_clearing_every_role_survives_a_real_save_and_open(tmp_path) -> None:
     ボディ・拘束は集合代入なので「空を代入した」が外し方、荷重だけは上書き代入なので
     `clear_loads` が外し方である(`duocad/verbs/optimize_setup.py`)。
     """
-    made = Session(None, DEVIATION, models_dir=tmp_path / "models")
+    made = Session(DEVIATION, models_dir=tmp_path / "models")
     body = _box(made)
     _select(made, _body_refs(body))
     made.set_preserve_bodies()
@@ -660,7 +660,7 @@ def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
     picker, arguments, read = _ROUTES[verb]
 
     def run(use_websocket: bool):
-        made = Session(None, DEVIATION)
+        made = Session(DEVIATION)
         body = _box(made)
         if picker == "face":
             _preserve(made, body)

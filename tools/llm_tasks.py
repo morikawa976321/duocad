@@ -57,7 +57,7 @@ def build_world() -> World:
     # 保存先を渡さない Session は、操作のたびの自動保存でリポジトリの models/ へ untitled-<n>.json を溜める。
     scratch = Path(tempfile.mkdtemp(prefix="duocad-llm-tasks-"))
     atexit.register(shutil.rmtree, scratch, True)
-    session = Session(None, 0.2, models_dir=scratch / "models", exports_dir=scratch / "export")
+    session = Session(0.2, models_dir=scratch / "models", exports_dir=scratch / "export")
     for corner, width, depth, height in (PLATE, POST):
         sketch_id = session.sketch_create("XY")["sketch_id"]
         session.add_rectangle(sketch_id, list(corner), width, depth)

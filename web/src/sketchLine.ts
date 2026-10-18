@@ -7,14 +7,10 @@ import { SKETCH_LINE_WIDTH_PX } from './viewportConstants'
 
 export type SketchFatLine = Line2
 
-export function createSketchLineMaterial(
-  color: number,
-  resolution: THREE.Vector2,
-  linewidth = SKETCH_LINE_WIDTH_PX,
-): LineMaterial {
+export function createSketchLineMaterial(color: number, resolution: THREE.Vector2): LineMaterial {
   return new LineMaterial({
     color,
-    linewidth,
+    linewidth: SKETCH_LINE_WIDTH_PX,
     resolution,
     depthTest: false,
   })

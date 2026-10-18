@@ -1839,7 +1839,7 @@ COMMANDS: tuple[Command, ...] = (
         category="history",
         description=(
             "直前の操作を取り消すときに呼ぶ。"
-            "UIと同じ履歴。土台(読み込み等)は取り消せない。"
+            "UIと同じ履歴。"
         ),
         session="undo",
         ws="special",

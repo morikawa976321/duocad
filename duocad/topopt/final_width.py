@@ -40,26 +40,24 @@ def _sampling_grid(vertices: np.ndarray, spacing: float, max_samples: int) -> vo
     raise AssertionError('unreachable')
 
 
-def measure(vertices, faces, *, spacing: float, required_mm: float,
-            exempt: Optional[tuple] = None, max_samples: int = MAX_SAMPLES) -> dict:
+def measure(vertices, faces, *, spacing: float, required_mm: float) -> dict:
     """完成メッシュの中軸上の太さを測り、`required_mm` を割る所を数える。
 
-    `spacing` は探索格子の要素サイズ(標本格子はその 1/k)。`exempt=(mask, grid)` を渡すと、その格子で
-    True のセルに入る中軸点を対象外にする(保持セル。探索の最小幅規則と同じ免除)。戻り値は `measure_samples`。
+    `spacing` は探索格子の要素サイズ(標本格子はその 1/k)。戻り値は `measure_samples`。
     """
     vertices = np.asarray(vertices, dtype=float)
     faces = np.asarray(faces)
-    grid = _sampling_grid(vertices, float(spacing), max_samples)
+    grid = _sampling_grid(vertices, float(spacing), MAX_SAMPLES)
     soup = voxelize.TriangleSoup(positions=vertices, triangles=faces,
                                  face_index=np.zeros(len(faces), dtype=np.int64))
     inside = voxelize.occupancy(soup, grid, allow_empty=True)[0]
-    return measure_samples(inside, grid, required_mm=required_mm, exempt=exempt)
+    return measure_samples(inside, grid, required_mm=required_mm)
 
 
-def measure_voxels(mask: np.ndarray, grid: voxelize.Grid, *, required_mm: float, subdivision: int = 3,
+def measure_voxels(mask: np.ndarray, grid: voxelize.Grid, *, required_mm: float,
                    exempt: Optional[np.ndarray] = None) -> dict:
-    """ボクセル形状(探索格子の0/1マスク)を各軸 `subdivision` 等分して同じ方法で測る。`exempt` は `mask` と同じ格子。"""
-    k = int(subdivision)
+    """ボクセル形状(探索格子の0/1マスク)を各軸 3 等分して同じ方法で測る。`exempt` は `mask` と同じ格子。"""
+    k = 3
     fine = np.pad(np.asarray(mask, dtype=bool), 1)
     for axis in range(3):
         fine = np.repeat(fine, k, axis=axis)

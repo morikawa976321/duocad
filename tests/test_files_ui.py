@@ -298,7 +298,7 @@ def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> 
     volume = query.volume(session.document.bodies[-1].shape)
     session.save_document("with-parameters.json")
 
-    fresh = Session(None, DEVIATION, models_dir=session.models_dir)
+    fresh = Session(DEVIATION, models_dir=session.models_dir)
     fresh.open_document("with-parameters.json")
 
     assert query.volume(fresh.document.bodies[-1].shape) == pytest.approx(volume, rel=1e-9)
@@ -312,7 +312,7 @@ def test_opening_rebuilds_the_same_shape_and_reaches_every_connection(session: S
     faces = kernel.face_count(body.shape)
     session.save_document("model.json")
 
-    fresh = Session(None, DEVIATION, models_dir=session.models_dir)
+    fresh = Session(DEVIATION, models_dir=session.models_dir)
 
     async def script(send):
         return await send({"cmd": "open_document", "name": "model.json", "client_op": 3})
@@ -793,7 +793,7 @@ def test_renaming_a_document_whose_file_was_deleted_outside_writes_it_again(sess
     session.rename_document("b.json")
 
     assert not (session.models_dir / "a.json").exists()
-    reopened = Session(None, DEVIATION, models_dir=session.models_dir)
+    reopened = Session(DEVIATION, models_dir=session.models_dir)
     reopened.open_document("b.json")
     assert query.volume(reopened.document.bodies[-1].shape) == pytest.approx(query.volume(body.shape))
 
@@ -926,7 +926,7 @@ def test_a_saved_document_opens_after_the_imported_step_is_renamed(
     step_path.rename(tmp_path / "somewhere_else.step")
     assert not step_path.exists()
 
-    fresh = Session(None, DEVIATION, models_dir=session.models_dir)
+    fresh = Session(DEVIATION, models_dir=session.models_dir)
     fresh.open_document("imported.json")
 
     assert [

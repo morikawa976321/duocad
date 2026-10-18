@@ -528,12 +528,12 @@ def test_last_client_disconnecting_cancels_a_running_ai_run(monkeypatch, box_ses
 
         # 1つ目が切れても、もう1つ見ているので中断しない。
         server.clients.discard(first)
-        server._on_disconnect(first)
+        server._on_disconnect()
         assert server._ai_cancellation.cancelled is False
 
         # 最後の1つも切れたら中断する。
         server.clients.discard(second)
-        server._on_disconnect(second)
+        server._on_disconnect()
         assert server._ai_cancellation.cancelled is True
 
         await _wait_until(lambda: not server._ai_running)

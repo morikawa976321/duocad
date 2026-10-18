@@ -20,7 +20,7 @@ BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 @pytest.fixture()
 def session() -> Session:
     """30×30×40 の直方体(id "box")と、半径10・高さ20の円柱(id "cyl")を持つセッション。"""
-    made = Session(None, 0.2)
+    made = Session(0.2)
     made.document.add_body(
         Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
     )

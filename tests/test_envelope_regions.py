@@ -231,7 +231,7 @@ from session_support import select
 from duocad.server import Session
 
 for radius, offset in ((0.0, 2.0), (3.0, 0.0), (0.0, -1.0), (1.0, -0.5)):
-    session = Session(None, 0.2, models_dir=tempfile.mkdtemp(), exports_dir=tempfile.mkdtemp())
+    session = Session(0.2, models_dir=tempfile.mkdtemp(), exports_dir=tempfile.mkdtemp())
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_ellipse(sketch_id, [12.0, -12.0], 7.0, 7.0, 45.0)
     select(session, [{"sketch": sketch_id, "index": 1}])

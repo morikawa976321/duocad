@@ -51,7 +51,7 @@ def test_shoot_export_leaves_the_opened_document_alone(tmp_path, monkeypatch) ->
     export = importlib.import_module("shoot_topopt_export")
     models = tmp_path / "user-models"
     models.mkdir()
-    maker = Session(None, 0.2, models_dir=tmp_path / "maker", exports_dir=tmp_path / "maker-export")
+    maker = Session(0.2, models_dir=tmp_path / "maker", exports_dir=tmp_path / "maker-export")
     sketch_id = maker.sketch_create("XY")["sketch_id"]
     maker.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 10.0)
     maker.clear_selection()

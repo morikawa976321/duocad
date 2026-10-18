@@ -48,15 +48,13 @@ def _validate_participants(
             f"boolean_body: target body {target_body_id!r} cannot also be a tool"
         )
 
-    target_body = editable_body(
-        doc, target_body_id, what="boolean_body", require_visible=True
-    )
+    target_body = editable_body(doc, target_body_id, what="boolean_body")
     if not kernel.is_solid(target_body.shape):
         raise ValueError(f"boolean_body: target body {target_body.id!r} is not a solid")
 
     tools = []
     for tool_id in tool_ids:
-        tool = editable_body(doc, tool_id, what="boolean_body", require_visible=True)
+        tool = editable_body(doc, tool_id, what="boolean_body")
         if not kernel.is_solid(tool.shape):
             raise ValueError(f"boolean_body: tool body {tool_id!r} is not a solid")
         tools.append(tool)

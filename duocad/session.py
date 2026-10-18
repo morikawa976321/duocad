@@ -40,7 +40,6 @@ from .measure import inspect_selection, measure_selection
 from .oplog import OpLog
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import fork, speculative
-from .verbs import import_step as import_step_verb
 from .verbs.envelope_regions import envelope_pieces, selected_regions
 from .view import DocumentView
 
@@ -123,7 +122,6 @@ class Session:
 
     def __init__(
         self,
-        step_path: Optional[Path],
         deviation: float,
         models_dir: Optional[Path] = None,
         exports_dir: Optional[Path] = None,
@@ -170,7 +168,6 @@ class Session:
         self._write_seq = 0
         #: 配りもの。文書を差し替えたら `view.reset()` を呼ぶ(`_replace_document`)。
         self.view = DocumentView(self.document, self.deviation, self.warnings)
-        self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
         #: 作業空間(起動中のコマンド・モード。issue #153)。選択・可視性と同じ共有の短命状態で、文書の差し替えで空に戻る。
         self.workspace = Workspace()
@@ -201,8 +198,6 @@ class Session:
         self._undelivered: dict[str, tuple[Document, Optional[float]]] = {}
         #: 別の文書を開いている間に終わった実行の、画面へまだ見せていない結果/失敗の封筒(ファイル名 -> 封筒。作って配るのは `net/ws.py`)。
         self.unseen_optimize_results: dict[str, dict] = {}
-        if step_path is not None:
-            self.load_step(step_path)
 
     # ---------------------------------------------------------------- 変更イベント(上り方向)
     def add_listener(self, callback: Any) -> None:
@@ -220,10 +215,8 @@ class Session:
 
     @property
     def can_undo(self) -> bool:
-        """次のundoが通るか。土台(部品の読み込み・編集用ボディ)は取り消せない。
-        `state_meta()` と MCP の `describe_document` が同じ答えを返すための唯一の出どころ。
-        """
-        return self.document.log.can_undo and not self._at_setup_floor()
+        """次のundoが通るか。`state_meta()` と MCP の `describe_document` が同じ答えを返すための唯一の出どころ。"""
+        return self.document.log.can_undo
 
     @property
     def applied_count(self) -> int:
@@ -278,24 +271,6 @@ class Session:
             except Exception as error:
                 self.warnings.append(f"変更イベントの配信に失敗: {type(error).__name__}: {error}")
         return applied
-
-    # ---------------------------------------------------------------- 文書の組み立て
-    @_edits_document
-    def load_step(self, path: Path) -> list:
-        """STEPを読み、ソリッドごとに参照ボディ+編集用コピーを作る(中身は verb `import_step`。pytestが直に呼ぶときだけ通る)。
-
-        土台(undoの対象外)はverb名でなくseqの下限で区切る(`_setup_floor_seq`)。verb名で判定すると、後から
-        ユーザー操作としても呼ばれうるverbが末尾に来た瞬間に以後の `undo` が誤って拒否される。
-        """
-        editable_ids = import_step_verb(self.document, str(path))
-        entries = self.document.log.entries
-        self._setup_floor_seq = entries[-1].seq if entries else 0
-        return editable_ids
-
-    def _at_setup_floor(self) -> bool:
-        """次のundoが文書の土台(部品の読み込み・編集用ボディ)に当たるか。"""
-        entries = self.document.log.entries
-        return bool(entries) and entries[-1].seq <= self._setup_floor_seq
 
     # ---------------------------------------------------------------- 配りもの(`DocumentView` への委譲)
     # 実体は `duocad/view.py`。ここは1行の委譲だけ。`can_undo` / `applied_count` / 「プレビュー中か」の持ち主は
@@ -740,16 +715,9 @@ class Session:
 
     @_edits_document
     def undo(self) -> dict:
-        """直前の操作を取り消す。文書の土台を作った操作は取り消させない
-        (1回多く押すと編集用ボディを作った操作まで取り消され、`active_body` が消えて以後の画面更新が全部落ちる)。
-        """
+        """直前の操作を取り消す。"""
         if not self.document.log.entries:
             raise ValueError("取り消せる操作が無い")
-        if self._at_setup_floor():
-            raise ValueError(
-                f"{self.document.log.entries[-1].verb} は取り消せない"
-                "(部品の読み込みと編集用ボディは計測の土台)"
-            )
         operation = self.document.log.undo(self.document)
         if operation is None:
             raise ValueError("取り消せる操作が無い")
@@ -1436,8 +1404,6 @@ class Session:
         self._unsaved = False  # 開いた/空にした文書に、書けなかった変更は無い
         # キャッシュの破棄は `view` の1呼び出し(とくに版の数え上げを消さない理由は `DocumentView.reset` の docstring)。
         self.view.reset(document)
-        # 土台の下限は引き継がない(読み込んだログはすべてその文書の操作で、起動時の `load_step` の土台とは別物)。
-        self._setup_floor_seq = 0
         self._applied_count += 1
         self._generation += 1
         self.workspace.reset()

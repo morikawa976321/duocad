@@ -29,7 +29,7 @@ def counted(monkeypatch):
 @pytest.fixture()
 def boxed() -> tuple:
     """円柱(曲面1・平面2)と直方体(平面6)を持つセッション。"""
-    session = Session(None, DEVIATION)
+    session = Session(DEVIATION)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 2 * RADIUS)
     session.add_rectangle(sketch_id, [40.0, -10.0], 30.0, 20.0)
@@ -71,7 +71,7 @@ def test_the_first_measurement_matches_the_selective_tessellation(boxed) -> None
     session, body = boxed
     # 最後の2つは引ききった姿(粗い側が細かい側と同じ。全面を細かく測るが、報告は求められた面のまま)
     for world_per_pixel, focus in ((0.02, None), (0.02, {body: [1]}), (0.02, {body: []}), (50.0, {body: [1]}), (50.0, {body: []})):
-        fresh = Session(None, DEVIATION)
+        fresh = Session(DEVIATION)
         fresh.document = session.document
         fresh.view.reset(session.document)
         fresh.set_view_resolution(world_per_pixel, 400.0, focus)
@@ -164,7 +164,7 @@ def test_faces_seeded_by_the_preview_still_warn_once_when_delivered() -> None:
     from duocad.document import Body
 
     shape = _bowtie_beside_a_box(bowtie_first=True)
-    session = Session(None, DEVIATION)
+    session = Session(DEVIATION)
     session.document.add_body(Body(id="odd", name="odd", kind="solid", shape=shape))
     measured = kernel.tessellate(shape, session.view.view_deviation, session.view.view_angular_deflection)
     assert measured["untriangulated"], "題材の前提(面が取れない)が崩れた"

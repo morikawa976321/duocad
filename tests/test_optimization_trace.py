@@ -171,7 +171,7 @@ def test_the_final_stl_write_failure_does_not_lose_the_solved_shape(recordings,m
 def test_a_failed_input_json_does_not_stop_the_run_from_starting(recordings,monkeypatch):
     """落ちたら、記録の開始時の書き込み失敗だけで実行が始まらない(方針が snapshot と食い違っている)。"""
     from duocad.session import Session
-    session=Session(None,.2)
+    session=Session(.2)
     real=trace._atomic
     def fail(path,write):
         if path.name=='input.json': raise OSError('disk full')
@@ -188,7 +188,7 @@ def test_a_failed_input_json_does_not_stop_the_run_from_starting(recordings,monk
 def test_product_input_error_is_archived(recordings):
     from duocad.session import Session
     from duocad import optimize_run
-    s=Session(None,.2)
+    s=Session(.2)
     with pytest.raises(optimize_run.OptimizeInputError): optimize_run.run(s.document)
     run=next(recordings.iterdir())
     assert (run/'input.json').exists()
@@ -219,7 +219,7 @@ def test_failed_provenance_document_and_cad_writes_are_counted_and_the_run_goes_
     """落ちたら、記録の開始時の source.zip・入力JSON・STEP の書き出し失敗で実行ごと止まる。"""
     from duocad import kernel
     from duocad.session import Session
-    s=Session(None,.2)
+    s=Session(.2)
     sketch=s.sketch_create('XY')['sketch_id']
     s.add_rectangle(sketch,[0.,0.],2.,3.)
     s.modify_selection([{'sketch':sketch,'index':1}],[])
@@ -249,7 +249,7 @@ def test_real_cad_and_source_archive_are_complete(tmp_path):
     import zipfile
     from duocad.session import Session
     from duocad import kernel
-    s=Session(None,.2)
+    s=Session(.2)
     sketch=s.sketch_create('XY')['sketch_id']
     s.add_rectangle(sketch,[0.,0.],2.,3.)
     s.modify_selection([{'sketch':sketch,'index':1}],[])

@@ -46,7 +46,7 @@ def _sketch_with_region(session: Session) -> str:
 
 def test_hiding_a_sketch_is_not_undoable_and_is_not_saved():
     """落ちたら: スケッチの可視性が操作ログに乗っている(undoで戻る / 保存に残る)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = _sketch_with_region(session)
     entries_before = len(session.document.log.entries)
 
@@ -62,7 +62,7 @@ def test_hiding_a_sketch_is_not_undoable_and_is_not_saved():
 
 def test_a_hidden_sketch_cannot_be_pointed_at():
     """落ちたら: 見えないスケッチの領域・図形が選べる(見えないものは指せない、の破れ)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = _sketch_with_region(session)
     entity_id = sketch.get_sketch(session.document, sketch_id).entities[0].id
     session.set_sketch_visible(sketch_id, False)
@@ -79,7 +79,7 @@ def test_a_hidden_sketch_cannot_be_pointed_at():
 def test_sketch_visibility_reaches_the_state_and_the_fingerprint():
     """落ちたら: 画面が非表示を知れない(`sketches[].visible` が無い)か、AIの楽観ロックが
     「人がスケッチを隠した」を見逃す(`visibility_fingerprint` が動かない)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = _sketch_with_region(session)
     before = selection.visibility_fingerprint(session.document)
     assert session.state_meta()["sketches"][0]["visible"] is True

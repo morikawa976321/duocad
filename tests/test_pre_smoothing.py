@@ -258,7 +258,7 @@ def _beam_document(tmp_path):
     `inspect_document` の入口(CADの拘束・荷重面)を作るための共通fixture。"""
     from duocad.session import Session
     from duocad import query
-    session = Session(None, .2, models_dir=tmp_path)
+    session = Session(.2, models_dir=tmp_path)
     sketch = session.sketch_create('XY')['sketch_id']
     session.add_rectangle(sketch, [0., 0.], 4., 2.)
     session.modify_selection([{'sketch': sketch, 'index': 1}], [])
