@@ -611,6 +611,11 @@ export interface Viewport {
    * `position.z - target.z` が変わらないこと(回転の極が+Z)。後者は `OrbitControls` が
    * 生成時の up を `_quat` へ焼き込む仕様のせいで静かに壊れる。
    */
+  /**
+   * 画面の画素と世界を結ぶ写像の鍵(カメラの姿勢・投影・正投影のズーム・画面の寸法)。同じ鍵なら、前に引いた画面の矩形が
+   * 同じものを囲む(届くのを待たせた矩形選択を集め直してよいかの判定)。
+   */
+  viewSignature(): string
   cameraPose(): {
     position: [number, number, number]
     target: [number, number, number]

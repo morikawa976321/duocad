@@ -1200,8 +1200,7 @@
   let pendingBox = $state<{ event: BoxSelectEvent; pose: string } | null>(null)
 
   function cameraKey(): string {
-    const pose = viewport?.cameraPose()
-    return pose === undefined ? '' : JSON.stringify([pose.position, pose.target, pose.up])
+    return viewport?.viewSignature() ?? ''
   }
 
   $effect(() => {

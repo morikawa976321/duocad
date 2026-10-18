@@ -95,11 +95,10 @@ export const VERTEX_PIXELS = 4
  */
 export const PICK_OVERLAP_PIXELS = 2
 /**
- * 矩形選択で線(辺・スケッチの線)が見えているかを見る間隔[CSS px]と、線分1本あたりの上限。間隔は当たり半径
- * (`EDGE_PICK_PIXELS`)と同じ: それより短く見えている部分は、クリックでもほぼ狙えない。
+ * 矩形選択で線(辺・スケッチの線)が見えているかを見る間隔[CSS px]。当たり半径(`EDGE_PICK_PIXELS`)と同じ:
+ * それより短く見えている部分は、クリックでもほぼ狙えない。
  */
 export const BOX_SEEN_STEP_PX = 6
-export const BOX_SEEN_MAX_STEPS = 64
 export const BACKGROUND_COLOR = 0x161a1f
 /**
  * 平面グリッドの格子線。刻みは 1/10/100mm の3段固定(`gridScale.ts` の `TIERS`)で、

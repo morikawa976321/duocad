@@ -34,7 +34,7 @@ import { createSelectionBand, type BandRect } from './selectionBand'
 import { createGridPlanes } from './gridPlanes'
 import { frameVector, planePoint } from './planeMath'
 import { createBatch, type SceneBatch } from './sceneBatch'
-import { distSq, pickNearestWithinRadius, rankByOverlap, type RankedCandidate, type ScreenPickCandidate } from './screenPick'
+import { distSq, perspectiveParam, pickNearestWithinRadius, rankByOverlap, type RankedCandidate, type ScreenPickCandidate } from './screenPick'
 import { variantCache } from './viewportMaterials'
 import { buildSketchLine, createSketchLineMaterial, withLineDepthBias, type SketchFatLine } from './sketchLine'
 import { POLE_Z, upForDirection } from './viewCube'
@@ -55,7 +55,7 @@ import {
 } from './viewportTypes'
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
-  BOX_SEEN_MAX_STEPS, BOX_SEEN_STEP_PX, DEPTH_BIAS_LAYER, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
+  BOX_SEEN_STEP_PX, DEPTH_BIAS_LAYER, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
   HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS, PREVIEW_COLOR,
   REGION_COLOR, REGION_SELECTED_COLOR, SKETCH_COLOR, SKETCH_FIT_MARGIN, SKETCH_GHOST_COLOR, SKETCH_GHOST_WARN_COLOR, SKETCH_HANDLE_COLOR,
   SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, VERTEX_PIXELS, WORLD_UP, isSelectableFov, lighten, withDepthBias, type BodyMeshes,
@@ -710,6 +710,12 @@ export function createViewport(container: HTMLElement): Viewport {
       near: camera.near,
       far: camera.far,
     }
+  }
+
+  function viewSignature(): string {
+    camera.updateMatrixWorld()
+    const { width, height } = size()
+    return [...camera.matrixWorld.elements, ...camera.projectionMatrix.elements, width, height].join(',')
   }
 
   function projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null {
@@ -2135,25 +2141,43 @@ export function createViewport(container: HTMLElement): Viewport {
         if (depth !== null && !depth.visible(point, slack)) return false
         return !sectionOn || occlusion.visible(point, slack)
       }
+      // 立体の点は断面で切り落とした側なら見えていない(描かれていない。切り落とした側から見ると蓋より手前にあり、
+      // 奥行きでも視線でも見えていると読む)。スケッチは断面で切らない
+      const seenOnSolid = (point: THREE.Vector3, deviation = 0): boolean =>
+        (keep === null || keep(point)) && seen(point, deviation)
       const identity = new THREE.Matrix4()
-      const along = new THREE.Vector3()
-      /** 折れ線の上を画面で `BOX_SEEN_STEP_PX` おきに見て、どこか1点でも見えているか(頂点だけだと、両端が隠れて中ほどが見える線を落とす)。 */
-      const polylineSeen = (count: number, at: (index: number, out: THREE.Vector3) => void, deviation = 0): boolean => {
+      const projector = createProjector(camera, width, height)
+      // 線分1本を見る点の数の上限。画面に収まる線分なら画面の対角を超えない(超えるのは画面の外へはみ出す線分だけ)
+      const maxSteps = Math.ceil(Math.hypot(width, height) / BOX_SEEN_STEP_PX)
+      /**
+       * 折れ線の上を画面で `BOX_SEEN_STEP_PX` おきに見て、どこか1点でも見えているか(頂点だけだと、両端が隠れて中ほどが
+       * 見える線を落とす)。画面での等間隔を透視補正で3Dの位置へ戻す(3Dで等間隔に取ると手前で間隔が開く)。
+       */
+      const polylineSeen = (
+        count: number,
+        at: (index: number, out: THREE.Vector3) => void,
+        test: (point: THREE.Vector3, deviation?: number) => boolean,
+        deviation = 0,
+      ): boolean => {
         const a = new THREE.Vector3()
         const b = new THREE.Vector3()
+        const along = new THREE.Vector3()
+        const sa = { x: 0, y: 0, w: 1 }
+        const sb = { x: 0, y: 0, w: 1 }
         for (let index = 0; index < count; index += 1) {
           at(index, b)
           if (index === 0) {
-            if (seen(b, deviation)) return true
+            if (test(b, deviation)) return true
             a.copy(b)
             continue
           }
-          const sa = projectRaw(a, width, height)
-          const sb = projectRaw(b, width, height)
-          const length = sa !== null && sb !== null ? Math.hypot(sb.x - sa.x, sb.y - sa.y) : 0
-          const steps = Math.min(BOX_SEEN_MAX_STEPS, Math.max(1, Math.ceil(length / BOX_SEEN_STEP_PX)))
+          const projected = projector.project(a, sa) && projector.project(b, sb)
+          const length = projected ? Math.hypot(sb.x - sa.x, sb.y - sa.y) : 0
+          const steps = Math.min(maxSteps, Math.max(1, Math.ceil(length / BOX_SEEN_STEP_PX)))
           for (let step = 1; step <= steps; step += 1) {
-            if (seen(along.lerpVectors(a, b, step / steps), deviation)) return true
+            const s = step / steps
+            const t = projected ? perspectiveParam(s, sa.w, sb.w) : s
+            if (test(along.lerpVectors(a, b, t), deviation)) return true
           }
           a.copy(b)
         }
@@ -2168,7 +2192,7 @@ export function createViewport(container: HTMLElement): Viewport {
         for (const face of entry.body.faces) {
           const positions = entry.body.facePositions(face.index)
           if (positions === null || !band.positionsInside(positions, mesh.matrixWorld, rect, width, height, keep)) continue
-          if (!faceSeen(entry.body.mesh, face, seen)) continue
+          if (!faceSeen(entry.body.mesh, face, seenOnSolid)) continue
           faces.push({ bodyId, faceIndex: face.index })
         }
       }
@@ -2179,6 +2203,7 @@ export function createViewport(container: HTMLElement): Viewport {
           const visible = polylineSeen(
             Math.floor(points.length / 3),
             (index, out) => out.set(points[index * 3], points[index * 3 + 1], points[index * 3 + 2]),
+            seenOnSolid,
             deviation,
           )
           if (visible) edges.push(ref)
@@ -2210,7 +2235,7 @@ export function createViewport(container: HTMLElement): Viewport {
             const entityId = line.userData.entityId
             if (!worldPoints || typeof entityId !== 'string') continue
             if (!band.polylineWorldInside(worldPoints, rect, width, height)) continue
-            if (!polylineSeen(worldPoints.length, (index, out) => out.copy(worldPoints[index]))) continue
+            if (!polylineSeen(worldPoints.length, (index, out) => out.copy(worldPoints[index]), seen)) continue
             whole.add(entityId)
             sketchEntities.push({ sketchId, entityId, point: null })
           }
@@ -2804,6 +2829,7 @@ export function createViewport(container: HTMLElement): Viewport {
     },
     setFov,
     cameraPose,
+    viewSignature,
     projectPoint,
     projectSketchPoint,
     projectBasePlane,
