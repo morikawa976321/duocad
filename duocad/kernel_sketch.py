@@ -593,17 +593,26 @@ def _ellipse_params(ax3: "gp_Ax3", ellipse: "gp_Elips") -> dict:
     }
 
 
-def _ellipse_gp(ax3: "gp_Ax3", params: dict) -> "gp_Elips":
-    """`ellipse` の params を OCCT の楕円へ。
+#: 長半径と短半径の差がこれ以下の楕円は、辺を円にする[mm]。OCCT の `Precision::Confusion`(1e-7)の10倍。
+_CIRCULAR_ELLIPSE_TOLERANCE = 1.0e-6
+
+
+def _ellipse_gp(ax3: "gp_Ax3", params: dict) -> Any:
+    """`ellipse` の params を OCCT の楕円(`gp_Elips`)へ。縦横がほぼ等しいときは円(`gp_Circ`)。
 
     外部の罠: `gp_Elips` は長半径 >= 短半径でないと `Standard_ConstructionError` になる
     (2026-10-17 実測: (5,10) で失敗、(5,5) は通る)。`height` の方が長いときは2つを入れ替え、軸を 90° 回して渡す。
+    離心率0の `gp_Elips`(長半径と短半径の差が 5e-8 以下)の辺は、`BRepOffsetAPI_MakeOffset` に渡すと
+    例外にならず access violation でプロセスごと落ちる(差が 1e-7 以上なら ValueError)。
+    縦横が等しい楕円は docs/ELLIPSE.md が「真円になるだけ」と許すので、辺を円にする。
     """
     center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
     semi_width = float(params["width"]) / 2.0
     semi_height = float(params["height"]) / 2.0
     if semi_width <= 0 or semi_height <= 0:
         raise ValueError(f"ellipse width/height must be positive, got {params['width']} x {params['height']}")
+    if abs(semi_width - semi_height) <= _CIRCULAR_ELLIPSE_TOLERANCE:
+        return gp_Circ(_curve_axis(ax3, center), (semi_width + semi_height) / 2.0)
     angle_deg = float(params["angle"])
     if semi_height > semi_width:
         semi_width, semi_height = semi_height, semi_width

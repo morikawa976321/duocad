@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 
 import pytest
 
 from duocad import kernel_sketch, sketch
+from duocad.paths import REPO_ROOT
 from duocad.server import Session
 from document_support import replay_through_json
 from session_support import select as _select
@@ -219,3 +222,31 @@ def test_preview_draws_what_the_verb_would_add(session: Session) -> None:
     ghost = _preview(session, sketch_id, 10.0, 2.0)["sketch_ghost"]
     applied = _envelope(session, sketch_id, 10.0, 2.0)
     assert ghost["entities"] == _created_entities(session, sketch_id, applied["created"])
+
+
+_EQUAL_AXIS_ELLIPSE_CHILD = """
+import sys, tempfile
+sys.path.insert(0, "tests")
+from session_support import select
+from duocad.server import Session
+
+for radius, offset in ((0.0, 2.0), (3.0, 0.0), (0.0, -1.0), (1.0, -0.5)):
+    session = Session(None, 0.2, models_dir=tempfile.mkdtemp(), exports_dir=tempfile.mkdtemp())
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_ellipse(sketch_id, [12.0, -12.0], 7.0, 7.0, 45.0)
+    select(session, [{"sketch": sketch_id, "index": 1}])
+    ghost = session.preview("envelope_regions", {"radius": radius, "offset": offset})["sketch_ghost"]
+    assert ghost["pieces"] == 1, ghost["pieces"]
+    session.envelope_regions(radius, offset)
+print("survived")
+"""
+
+
+def test_enveloping_an_equal_axis_ellipse_does_not_kill_the_process() -> None:
+    """縦横が等しい楕円(`docs/ELLIPSE.md` が許す)を包んでも、確定もプレビューも通る。落ちたら離心率0の楕円の辺が
+    `BRepOffsetAPI_MakeOffset` に渡り access violation でプロセスごと死ぬ(Python の例外にならないので別プロセスで試す)。"""
+    done = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", _EQUAL_AXIS_ELLIPSE_CHILD],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
+    )
+    assert done.returncode == 0 and done.stdout.strip() == "survived", (done.returncode, done.stderr[-800:])
