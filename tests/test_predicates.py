@@ -398,3 +398,24 @@ def test_parallel_to_selects_straight_edges_only_not_arcs_whose_chord_is_paralle
     assert picked and {kinds[ref["index"]] for ref in picked} == {"line"}
     assert not set(chord_parallel_arcs) & {ref["index"] for ref in picked}
 
+
+@pytest.mark.parametrize(
+    "axis",
+    [[float("inf"), 0.0, 0.0], [float("nan"), 0.0, 0.0], ["1", "0", "0"], [True, 0, 0], [0, 0, 0]],
+)
+def test_a_degenerate_or_non_numeric_axis_vector_is_a_value_error(axis):
+    """落ちたら、無限大は NaN の軸で成功(0件)になり、文字列・真偽値は数として通る。"""
+    with pytest.raises(ValueError):
+        predicates.validate({"kind": "edge", "where": [{"op": "parallel_to", "axis": axis}]})
+
+
+def test_a_large_but_finite_axis_vector_is_normalized():
+    """落ちたら、成分の2乗が溢れて OverflowError になる(MCP では internal で返り、AI が直せない)。"""
+    normalized = predicates.validate({"kind": "edge", "where": [{"op": "parallel_to", "axis": [1e308, 1e308, 0.0]}]})
+    assert normalized["where"][0]["axis"] == pytest.approx([2 ** -0.5, 2 ** -0.5, 0.0])
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), True, "3"])
+def test_a_threshold_that_is_not_a_finite_number_is_a_value_error(value):
+    with pytest.raises(ValueError):
+        predicates.validate({"kind": "edge", "where": [{"op": "length_gt", "value": value}]})
