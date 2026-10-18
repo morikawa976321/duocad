@@ -500,3 +500,17 @@ def test_leaving_a_mode_works_when_the_selected_body_or_sketch_was_hidden(sessio
     session.leave_sketch()
     assert mode_of(session) == {"kind": "idle"}
     assert session.get_selection()["count"] == 0
+
+
+def test_creating_a_sketch_while_editing_another_drops_the_entities_of_the_old_one(session: Session):
+    """落ちたら、スケッチ作成だけが `enter_sketch` と違って前のスケッチの図形の選択を残し、以後の図形の移動が前のスケッチの図形を取る。"""
+    first = session.apply("sketch_create", {"base_plane": "XY"})
+    session.apply("add_line", {"sketch_id": first["sketch_id"], "p0": [0.0, 0.0], "p1": [10.0, 0.0]})
+    line = session.document.sketches[-1].entities[0].id
+    session.set_selection(refs=[{"sketch": first["sketch_id"], "entity": line}])
+    assert session.get_selection()["count"] == 1
+
+    second = session.apply("sketch_create", {"base_plane": "XZ"})
+
+    assert mode_of(session) == {"kind": "sketch", "sketch_id": second["sketch_id"]}
+    assert session.get_selection()["count"] == 0

@@ -584,10 +584,9 @@ class Session:
             self.workspace.command = None
             changed = True
         created = (extra or {}).get("sketch_id") if verb in ("sketch_create", "sketch_create_offset") else None
-        if created is not None and self.workspace.mode != {"kind": "sketch", "sketch_id": created}:
-            self.workspace.mode = {"kind": "sketch", "sketch_id": created}
-            self.workspace.command = None
-            changed = True
+        if created is not None:
+            # 編集中だった別のスケッチの図形の選択は、`enter_sketch` と同じくここで外れる。
+            self._apply_mode({"kind": "sketch", "sketch_id": created})
         editing = self.workspace.editing_sketch()
         if editing is not None and not self._has_sketch(editing):
             self.workspace.mode = {"kind": "idle"}
