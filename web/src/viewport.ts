@@ -24,6 +24,7 @@ import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOve
 import { sampleFaces, type BodySamples } from './faceCulling'
 import { startFrameLoop } from './frameLoop'
 import { createHeadlight } from './headlight'
+import { cappedPixelRatio, watchPixelRatio } from './pixelRatio'
 import { createResolutionTracker } from './resolutionTracker'
 import { BASE_EXTENT, mmPerPixel, uvBoxOfPoints, type CameraProjection } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
@@ -69,7 +70,7 @@ export function createViewport(container: HTMLElement): Viewport {
   const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true })
   // 断面は材質ごとのクリップ平面で切る(`renderer.clippingPlanes` はグリッド・スケッチ・キューブまで切る)
   renderer.localClippingEnabled = true
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+  renderer.setPixelRatio(cappedPixelRatio(window.devicePixelRatio))
   renderer.domElement.style.display = 'block'
   renderer.domElement.style.width = '100%'
   renderer.domElement.style.height = '100%'
@@ -415,6 +416,9 @@ export function createViewport(container: HTMLElement): Viewport {
   function applySize(): void {
     pickChanged() // 寸法が変わると同じ画素が別のものを指す
     const { width, height } = size()
+    // ブラウザのズーム・別モニタへの移動で画素比が変わったら追従する(作成時の1回だけだと、バッファの解像度が起動時のまま引き伸ばされる)。
+    const pixelRatio = cappedPixelRatio(window.devicePixelRatio)
+    if (renderer.getPixelRatio() !== pixelRatio) renderer.setPixelRatio(pixelRatio)
     renderer.setSize(width, height, false)
     const aspect = width / height
     perspective.aspect = aspect
@@ -2412,6 +2416,10 @@ export function createViewport(container: HTMLElement): Viewport {
   })
   observer.observe(container)
   applySize()
+  const stopWatchingPixelRatio = watchPixelRatio(window, () => {
+    invalidate()
+    applySize()
+  })
 
   /**
    * ホバー強調を1フレームぶん更新する。毎フレーム解決し直す(視点を回すとポインタが動かなくても
@@ -2686,6 +2694,7 @@ export function createViewport(container: HTMLElement): Viewport {
     dispose() {
       frameLoop.stop()
       observer.disconnect()
+      stopWatchingPixelRatio()
       thumbnailer.dispose()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
