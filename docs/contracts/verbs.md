@@ -141,7 +141,9 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
   (負なら穴が奥ほど狭まる)。領域・面の両方、join / cut / new のすべてで効く。
 - 幾何は `kernel_extrude._tapered_prism`(輪郭ごとに傾けた立体を作り、外周の立体から穴の立体を cut)。輪郭の立体は、
   直線と円弧だけなら柱の側面を `BRepOffsetAPI_DraftAngle` で傾け(面は平面・円錐のまま)、楕円・ベジエ・B スプラインを含むなら
-  `BRepOffsetAPI_MakeDraft` で側面を作って底とふたで閉じる。`MakeDraft` は 0.1 mm の面取り辺を持つ多角形で失敗する(sol レビュー)。
+  `BRepOffsetAPI_MakeDraft` で側面を作って底とふたで閉じる(1本の辺で閉じた輪郭は先に4本に分ける)。`MakeDraft` は 0.1 mm の面取り辺を
+  持つ多角形と、継ぎ目が曲率のきつい点にある楕円で失敗する(sol レビュー)。傾けた B スプラインの面の体積は既定の積分では合わないので、
+  `kernel.volume` / `centroid` は面ごとに積分を選ぶ(docs/CAD_LIBRARY_PITFALLS.md)。
   `LocOpe_DPrism` / `BRepOffsetAPI_DraftAngle` を使わない理由と、潰れを OCCT が見逃す実測は docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」。
 - **潰れ(壁どうしの衝突・穴が閉じる・辺が消える・円錐が頂点を越える)は ValueError**(文言に `collapses`)。検出は4段:
   曲線の辺の曲率半径とずらす量(`_require_curvature_room`。円の頂点越えは `BRepCheck` も自己交差の検査も通すのでこれが唯一の関門。

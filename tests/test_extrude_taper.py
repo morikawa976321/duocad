@@ -603,3 +603,45 @@ def test_a_short_chamfer_edge_that_vanishes_is_refused():
     """細る向きの移動量 0.1745 mm は面取り辺が消える 0.1707 mm を越える。"""
     with pytest.raises(ValueError, match="collapses"):
         _new(_short_chamfer(), 10.0, -1.0)
+
+
+# ======================================================================================
+# sol レビューの指摘(5回目)
+# ======================================================================================
+def test_an_untapered_elliptic_cylinder_keeps_its_centroid():
+    """押し出し面(SurfaceOfExtrusion)まで適応積分にすると、楕円柱の重心が 0.02 mm ずれ、既定の中心で回すと形が動く。"""
+    face = _sketch_ellipse_face(120.0, 60.0)
+    shape = _new(face, 10.0, 0.0)["shape"]
+
+    assert kernel.volume(shape) == pytest.approx(math.pi * 60.0 * 30.0 * 10.0, rel=1e-12)
+    assert kernel.centroid(shape) == pytest.approx([0.0, 0.0, 5.0], abs=1e-9)
+
+
+def test_a_shape_mixing_extrusion_and_bspline_faces_measures_both_exactly():
+    """押し出し面(既定の積分が正確)と傾けた B スプラインの面(適応積分が正確)を併せ持つ形の体積・重心。"""
+    cylinder = _new(_sketch_ellipse_face(120.0, 60.0), 10.0, 0.0)["shape"]
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_ellipse(document, sketch_id, (200.0, 0.0), 12.0, 6.0)
+    tapered = _regions_detailed(document, sketch_id)[0]["face"]
+
+    joined = kernel_extrude.extrude_regions([tapered], 10.0, "join", UP, cylinder, taper=5.0)["shape"]
+
+    expected = math.pi * 60.0 * 30.0 * 10.0 + _ellipse_parallel_volume(6.0, 3.0, 10.0, 5.0)
+    assert kernel.volume(joined) == pytest.approx(expected, rel=1e-7)
+    assert kernel.centroid(joined)[1] == pytest.approx(0.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("distance, taper", [(1.0, 5.0), (1.0, 0.3), (-1.0, 5.0), (10.0, 5.0)])
+def test_a_very_thin_ellipse_grows(distance, taper):
+    """幅120・高さ1 の楕円(先端の曲率半径 0.004 mm)は、継ぎ目が先端にあると MakeDraft が Standard_OutOfRange を投げる。"""
+    result = _new(_sketch_ellipse_face(120.0, 1.0), distance, taper)
+
+    expected = _ellipse_parallel_volume(60.0, 0.5, abs(distance), taper)
+    assert math.isclose(result["volume_after"], expected, rel_tol=1e-6)
+
+
+def test_a_very_thin_ellipse_refuses_to_shrink_past_its_tip():
+    """細る向きの移動量 0.0052 mm は先端の曲率半径 0.0042 mm を越え、先端で輪郭が折り返す。"""
+    with pytest.raises(ValueError, match="collapses"):
+        _new(_sketch_ellipse_face(120.0, 1.0), 1.0, -0.3)

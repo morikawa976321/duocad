@@ -256,6 +256,7 @@ def _drafted_solid(
     _require_curvature_room(wire, reach, inward, label)
     if all(BRepAdaptor_Curve(edge).GetType() in (GeomAbs_Line, GeomAbs_Circle) for edge in _edges(wire)):
         return _analytic_drafted_solid(wire, axis, height, angle, inward, label)
+    wire = _split_closed_edge(wire)
     draft = BRepOffsetAPI_MakeDraft(wire, axis, angle)
     draft.SetOptions(BRepBuilderAPI_RightCorner)
     # 内か外かは角度の符号でも線の向きでもなく、この指定で決まる(既定は外)。Perform の長さは斜辺。
@@ -316,6 +317,26 @@ def _analytic_drafted_solid(
     if _count(solid, TopAbs_SOLID) != 1 or not volume(solid) > 0 or not BRepCheck_Analyzer(solid).IsValid():
         raise ValueError(_collapse_message(label))
     return TopoDS.Solid_s(TopExp_Explorer(solid, TopAbs_SOLID).Current())
+
+
+#: 1本の辺で閉じた輪郭を `MakeDraft` に渡す前に分ける数。
+_CLOSED_EDGE_PIECES = 4
+
+
+def _split_closed_edge(wire: Any) -> Any:
+    """1本の辺だけで閉じた輪郭(楕円・閉じたベジエ)を、パラメータで等分した `_CLOSED_EDGE_PIECES` 本の辺に分けた線。
+
+    継ぎ目が曲率のきつい点にあると `MakeDraft` が Standard_OutOfRange を投げる(幅120・高さ1 の楕円は長軸の端が継ぎ目で、
+    角度・距離によらず失敗した。継ぎ目を短軸の端へ移すか、4本に分ければ通り、体積は Steiner の式と相対 1e-7 で合う。
+    2026-10-19 実測、sol レビュー)。
+    """
+    edges = _edges(wire)
+    if len(edges) != 1:
+        return wire
+    curve = BRepAdaptor_Curve(edges[0])
+    first, last = curve.FirstParameter(), curve.LastParameter()
+    cuts = [first + (last - first) * k / _CLOSED_EDGE_PIECES for k in range(1, _CLOSED_EDGE_PIECES)]
+    return _make_wire(_split_edge(edges[0], cuts))
 
 
 def _sewn_solid(parts: Sequence[Any], tolerance: float) -> Optional[Any]:
