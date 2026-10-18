@@ -34,7 +34,9 @@ undo の仕組みが対象によって別物になる
   飛び、保存して再生したとき `set_parameter` の記録した名前が別の値を指す)。
 
 **素の数値のまま持つ図形がある**(`import_svg` の取り込んだベジエ)。undo でそれを `register_value` へ
-通すとロゴ1枚で数千個の `d1` が生えるので、どの鍵が名前つきだったかを `named` に控えて元と同じ形で戻す。
+通すとロゴ1枚で数千個の `d1` が生えるので、どの鍵が名前つきだったかを `named` に、その名前を `names` に
+控えて元と同じ形・同じ名前で戻す。`register_value` で振り直すと、先に別の削除が低い番号を空けているとき
+元と別の名前を取り、ログの再生と食い違う(以後のスケッチ復元が「名前が使用中」で止まる)。
 
 --------------------------------------------------------------------------------------
 やらないこと(意図的な線引き)
@@ -75,15 +77,17 @@ _SNAPSHOT_KEY = "delete:removed"
 def _entity_snapshots(doc: Document, entities: Sequence[dict]) -> List[dict]:
     """消す図形をJSON安全な値だけで記録する(undoはこの記録だけから作り直す)。
 
-    `params` は解決済みの数値で、鍵の順序は作ったときに `register_value` を呼んだ順序。同じ順に
-    登録し直すと同じ名前(`d3` 等)が振り直される(最小の未使用番号を使うため)。`named` は名前つきの
-    値を持っていた鍵(取り込んだベジエは空)。存在しないスケッチ・図形は KeyError(文書は変わらない)。
+    `params` は解決済みの数値。`named` は名前つきの値を持っていた鍵(取り込んだベジエは空)で、`names` は
+    その鍵ごとの元の名前(`d3` 等)。undo は名前ごと直に戻す(`register_value` の「最小の空き番号」は、先に
+    別の削除が低い番号を空けていると元と別の名前を取る)。`names` を持たない旧ログの undo だけは、
+    `named` の鍵を `register_value` で登録し直す。存在しないスケッチ・図形は KeyError(文書は変わらない)。
     """
     specs: List[dict] = []
     for ref in entities:
         sketch_id = ref["sketch"]
         sketch = get_sketch(doc, sketch_id)
         entity = get_entity(sketch, ref["entity"])
+        names = {key: value for key, value in entity.params.items() if isinstance(value, str)}
         specs.append(
             {
                 "sketch_id": sketch_id,
@@ -92,9 +96,8 @@ def _entity_snapshots(doc: Document, entities: Sequence[dict]) -> List[dict]:
                 # undoで元の位置へ差し戻すための並びの位置。
                 "index": sketch.entities.index(entity),
                 "params": parameters.resolve_all(doc, entity.params),
-                "named": [
-                    key for key, value in entity.params.items() if isinstance(value, str)
-                ],
+                "named": list(names),
+                "names": names,
             }
         )
     return specs
@@ -254,45 +257,75 @@ def _undo_delete(document: Document, operation: Operation) -> None:
     """undo: 図形は args から作り直し、ボディはスナップショット表から戻す。
 
     図形の側は args だけで戻せる。ボディの側は再生が要り、控えが無ければ `recall` が KeyError で止まる。
+    **戻す前に全部検査する**(スケッチを戻してから図形やボディで落ちると、履歴が動かないのに文書だけ
+    部分的に戻った状態が残り、以後の undo が「sketch id already exists」で止まる)。
     """
     args = operation.args
-    # 0. スケッチを入れ物ごと作り直す。元の添字の昇順に差し込むと元の並びが再現する。
-    for spec in sorted(args.get("sketches") or (), key=lambda item: int(item["index"])):
-        _restore_sketch(document, spec)
+    sketch_specs = sorted(args.get("sketches") or (), key=lambda item: int(item["index"]))
+    entity_specs = sorted(args["entities"], key=lambda item: int(item["index"]))
+    _require_restorable(document, sketch_specs, entity_specs)
+    detached = recall(document, _SNAPSHOT_KEY, operation.seq) if args["bodies"] else None
 
-    # 1. 図形を作り直す(`sketch._do_add_entity` の写し)。元の添字の昇順に差し込むと並びが再現し、
-    #    `register_value` の順序も作ったときと同じになるので同じ名前が振り直される。
-    for spec in sorted(args["entities"], key=lambda item: int(item["index"])):
+    # 0. スケッチを入れ物ごと作り直す。元の添字の昇順に差し込むと元の並びが再現する。
+    for spec in sketch_specs:
+        _restore_sketch(document, spec)
+    # 1. 図形を作り直す(`sketch._do_add_entity` の写し)。元の添字の昇順に差し込むと並びが再現する。
+    for spec in entity_specs:
+        _restore_entity(document, spec)
+    # 2. ボディを戻す(元の添字と active も戻す)。
+    if detached is not None:
+        reattach_bodies(document, detached)
+
+
+def _require_restorable(
+    document: Document, sketch_specs: Sequence[dict], entity_specs: Sequence[dict]
+) -> None:
+    """undo で戻すスケッチ・図形の ID と名前が衝突しないことを、文書を変える前に確かめる(衝突は ValueError)。"""
+    sketch_ids = {sketch.id for sketch in document.sketches}
+    claimed: set = set(document.parameters)
+    for spec in sketch_specs:
+        sketch_id = spec["sketch_id"]
+        if sketch_id in sketch_ids:
+            raise ValueError(f"sketch id already exists: {sketch_id!r}")
+        sketch_ids.add(sketch_id)
+        taken = [name for name in spec["values"] if name in claimed]
+        if taken:
+            raise ValueError(f"parameter names still in use when restoring sketch {sketch_id!r}: {taken!r}")
+        claimed.update(spec["values"])
+    for spec in entity_specs:
         sketch = get_sketch(document, spec["sketch_id"])
         entity_id = spec["entity_id"]
         if any(entity.id == entity_id for entity in sketch.entities):
             raise ValueError(f"entity id already exists: {entity_id!r}")
-        named = set(spec.get("named") or ())
-        refs: Dict[str, Any] = {}
-        for key, value in spec["params"].items():
-            refs[key] = (
-                parameters.register_value(document, float(value))
-                if key in named
-                else float(value)
-            )
-        sketch.entities.insert(
-            int(spec["index"]), Entity(id=entity_id, kind=spec["kind"], params=refs)
-        )
+        taken = [name for name in (spec.get("names") or {}).values() if name in claimed]
+        if taken:
+            raise ValueError(f"parameter names still in use when restoring entity {entity_id!r}: {taken!r}")
+        claimed.update((spec.get("names") or {}).values())
 
-    # 2. ボディを戻す(元の添字と active も戻す)。
-    if not args["bodies"]:
-        return
-    reattach_bodies(document, recall(document, _SNAPSHOT_KEY, operation.seq))
+
+def _restore_entity(document: Document, spec: dict) -> None:
+    """undo: `_entity_snapshots` の1件から図形を戻す。名前つきの値は元の名前ごと直に戻す(`names` が無い旧ログだけ
+    `register_value` で登録し直す)。"""
+    sketch = get_sketch(document, spec["sketch_id"])
+    names = spec.get("names")
+    named = set(spec.get("named") or ())
+    refs: Dict[str, Any] = {}
+    for key, value in spec["params"].items():
+        if names is not None and key in names:
+            document.parameters[names[key]] = float(value)
+            refs[key] = names[key]
+        elif key in named:
+            refs[key] = parameters.register_value(document, float(value))
+        else:
+            refs[key] = float(value)
+    sketch.entities.insert(
+        int(spec["index"]), Entity(id=spec["entity_id"], kind=spec["kind"], params=refs)
+    )
 
 
 def _restore_sketch(document: Document, spec: dict) -> None:
-    """undo: `_sketch_snapshots` の1件から、名前つきの値・図形・反復・平面・名前をそのまま戻す。"""
+    """undo: `_sketch_snapshots` の1件から、名前つきの値・図形・反復・平面・名前をそのまま戻す(衝突の検査は `_require_restorable`)。"""
     sketch_id = spec["sketch_id"]
-    if any(item.id == sketch_id for item in document.sketches):
-        raise ValueError(f"sketch id already exists: {sketch_id!r}")
-    taken = [name for name in spec["values"] if name in document.parameters]
-    if taken:
-        raise ValueError(f"parameter names still in use when restoring sketch {sketch_id!r}: {taken!r}")
     for name, value in spec["values"].items():
         document.parameters[name] = float(value)
     restored = Sketch(

@@ -35,7 +35,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **`axis_edge`/`center_vertex`/`center_entity` は `commit_selection` を介さない参照**で受ける(確定選択は「動かす対象」の解決に使われ、軸を載せると対象と区別が付かず軸の辺のボディまで回る。`pattern_circular` の `entities` と同方式)。形は `{"body","index"}`(`kind` は任意、付けるなら `edge`/`vertex` と一致)、`center_entity` は `{"sketch","entity","point"}`(`point` 省略=その種別の最初の点。並びの正は `sketch.entity_point_keys`)。
 - **軸の位置の解決順は `center_vertex` → `axis_point` → 辺の位置 → 対象の合成重心。** `axis_point` と `center_vertex`、`axis_edge` と `axis_point`/`axis_dir` は同時に渡せない。`axis_edge` + `center_vertex` は許す(辺が向き・頂点が位置)。
 - **`angle` は度。** スケッチは u→v 反時計が正(`pattern_circular` の `total_angle` と同じ)、ソリッドは軸に対し右ねじが正。**360の倍数は ValueError**(UI 側は `commands/moveMode.ts` の `rejectAngle`)。
-- **操作ログに載るのは解決済みの数値だけ。** undo は「逆向きに同じ角度」で戻すが、軸に使った辺は対象ボディに属していれば既に回った後にいるので、参照を引き直すと別の軸で戻る。`_rotation_args` が入口で数値へ潰し、`_do_*`/`_undo_*` は数値しか見ない。
+- **操作ログに載るのは解決済みの数値だけ。** undo は「逆向きに同じ角度」で戻すが、軸に使った辺は対象ボディに属していれば既に回った後にいるので、参照を引き直すと別の軸で戻る。`_rotation_args` が入口で数値へ潰し、`_do_*`/`_undo_*` は数値しか見ない。ただし `move_sketch_entities` の undo は逆向きに動かさず、args の `previous`(動かす前の `params`)を書き戻す。逆向きだと `x + dx - dx != x` で1ulpずれ、同面積の領域の並びが再生した文書と食い違う。`previous` は旧ログに無く、その undo だけ逆向きに動かす。
 - **`mode` キーの無いログは並進として読む**(`args.get("mode", MODE_TRANSLATE)`)。2026-09-05 より前の保存文書には `mode` が無く、この既定を消すと開けなくなる。
 - **添字は回転でも変わらない**(`copy=False` は `TopoDS_Shape.Moved` で位置だけ差し替え、下層の形状を共有)。`resets_selection` は他の形状変更 verb と同じ既定で、回転が壊すからではない。
 - **長方形をまるごと回すのは ValueError**(仕様)。回すと線分4本に変わり、「undo = 逆向きに同じ角度」も元の図形 ID と `dN` の名前つき寸法の復元も成り立たない。`pattern_circular` は複製を展開時に作るので落とせる。長方形の1点(左下)を回すのはできる。
