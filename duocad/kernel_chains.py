@@ -10,16 +10,13 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
-from OCP.BRepGProp import BRepGProp_Face
 from OCP.ChFi3d import ChFi3d
-from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
 from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1, GeomAbs_SurfaceType
-from OCP.gp import gp_Pnt, gp_Vec
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_EXTERNAL, TopAbs_FACE, TopAbs_INTERNAL, TopAbs_VERTEX
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_EXTERNAL, TopAbs_FACE, TopAbs_INTERNAL, TopAbs_REVERSED, TopAbs_VERTEX
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Vertex
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
@@ -172,33 +169,31 @@ def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
 _COINCIDENT = 1.0e-7
 
 
-def _outward_normal_at(face: TopoDS_Shape, point) -> Optional[Tuple[float, float, float]]:
-    """面の `point`(面の縁の上の点)での外向き単位法線。取れなければ None。`BRepGProp_Face` は面の向きを見る。"""
-    face = TopoDS.Face_s(face)
-    projection = GeomAPI_ProjectPointOnSurf(point, BRep_Tool.Surface_s(face))
-    if projection.NbPoints() == 0:
+def _outward_plane_normal(face: TopoDS_Shape) -> Optional[Tuple[float, float, float]]:
+    """平面の面の外向き単位法線。平面でなければ None。"""
+    surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
+    if surface.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
         return None
-    u, v = projection.LowerDistanceParameters()
-    foot, normal = gp_Pnt(), gp_Vec()
-    BRepGProp_Face(face).Normal(u, v, foot, normal)
-    if normal.Magnitude() <= 0.0:
-        return None
-    normal.Normalize()
-    return normal.X(), normal.Y(), normal.Z()
+    direction = surface.Plane().Axis().Direction()
+    sign = -1.0 if face.Orientation() == TopAbs_REVERSED else 1.0
+    return sign * direction.X(), sign * direction.Y(), sign * direction.Z()
 
 
-def _fillet_reach(radius: float, edge: TopoDS_Shape, faces: list) -> float:
+def _fillet_reach(radius: float, faces: list) -> float:
     """半径 `radius` のフィレットが、辺の両側の面の中へ使う幅(接線までの距離)。
 
-    辺をはさむ2つの面の、辺の中点での外向き法線のなす角を φ とすると `radius * tan(φ/2)`(直角の辺は φ=90 度で
-    `radius`、鈍角の辺は `radius` より短く、鋭角の辺は長い)。隣の面が曲面でも法線は取れる(平面と円錐面の組で
-    実測)。法線が取れない(面が1枚)ときは `radius` とみなす。
+    辺をはさむ2つの**平面**の外向き法線のなす角を φ とすると `radius * tan(φ/2)`(直角の辺は φ=90 度で `radius`、
+    鈍角の辺は `radius` より短く、鋭角の辺は長い)。辺は直線で角度は辺に沿って一定。
+
+    **どちらかが曲面(面が1枚のときも)なら `radius` とみなす**。曲面では接線の位置が曲率に依り、辺の1点の法線角
+    からは決まらない: 辺の中点の法線で `radius * tan(φ/2)` を当てはめると、球を抜いた環の内周(R=2、環の幅 4)や斜めに
+    切った円管の切断面の外周が、幅が偶然一致して正当なフィレットまで断られた(OCCT は `IsDone()=True`、2026-10-18 実測)。
+    半径をそのまま使う側は、平面と円錐面の環の外周(R=5、環の幅 5)のように幅と半径がちょうど一致すると、OCCT が通す
+    丸めも断る。落ちる窓を塞ぐ側に倒した安全側の判断で、半径をわずかにずらせば通る。
     """
     if len(faces) != 2:
         return radius
-    curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
-    middle = curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2.0)
-    first, second = _outward_normal_at(faces[0], middle), _outward_normal_at(faces[1], middle)
+    first, second = _outward_plane_normal(faces[0]), _outward_plane_normal(faces[1])
     if first is None or second is None:
         return radius
     cosine = max(-1.0, min(1.0, sum(a * b for a, b in zip(first, second))))
@@ -215,8 +210,7 @@ def fillet_consumes_face(shape: TopoDS_Shape, edge_map, radii: Dict[int, float])
     (縁の外側4辺・縁の8辺・X に平行な辺全部・Y に平行な辺全部・全辺)。半径が 2 の 1.000000001 倍・0.999999999 倍では
     落ちない(窓は 2e-9 mm 未満)。同じ形を押し出しで作ると `IsDone()=False`。
     鈍角の辺は幅が半径より短いので、半径が面の幅と一致しても面は食い尽くされない(平行四辺形(0,0)(10,0)(13,4)(3,4)の
-    柱の(10,0)の縦辺は R=5 で体積 1172.7 の正常な形になり、幅 5 を食い尽くす R=10 で `IsDone()=False`。円錐台の
-    穴あきの上面の外周(平面の環の幅 5、隣は円錐面)も R=5 で `IsDone()=True`。2026-10-18 実測)。
+    柱の(10,0)の縦辺は R=5 で体積 1172.7 の正常な形になり、幅 5 を食い尽くす R=10 で `IsDone()=False`、2026-10-18 実測)。
     **平面の面でだけ測る**(曲面の面は実測していない)。面取りは同じ距離で落ちなかったので対象にしない。
     """
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
@@ -257,7 +251,7 @@ def fillet_consumes_face(shape: TopoDS_Shape, edge_map, radii: Dict[int, float])
         box = Bnd_Box()
         BRepBndLib.Add_s(edge, box)
         mine = vertices_of(edge)
-        reach = _fillet_reach(float(radius), edge, faces)
+        reach = _fillet_reach(float(radius), faces)
         for face in faces:
             if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
                 continue

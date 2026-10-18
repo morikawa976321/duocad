@@ -1448,9 +1448,9 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         clash = kernel_chains.fillet_consumes_face(shape, edge_map, radii)
         if clash is not None:
             raise ValueError(
-                f"fillet radius {radii[clash[0]]:g} equals the width of the planar face next to edge {clash[0]} "
-                f"(the distance to its edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと落ちることがある。"
-                "半径をわずかにずらすこと"
+                f"fillet radius {radii[clash[0]]:g} on edge {clash[0]} would consume the whole planar face next to it "
+                f"(it reaches exactly as far as the face's edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと"
+                "落ちることがある。半径をわずかにずらすこと"
             )
 
     try:
