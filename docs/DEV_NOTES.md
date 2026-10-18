@@ -1,6 +1,6 @@
 # duocad — 開発環境と運用のメモ
 
-**読むとき**: 環境（venv・行末・git）でつまずいたとき、コメントや文書を減量するとき、タスクを切るとき。
+**読むとき**: 環境（venv・行末・git）でつまずいたとき、コメントや文書を減量するとき、デッドコードを洗い出すとき、タスクを切るとき。
 
 ## 環境
 
@@ -89,6 +89,23 @@
   しない。**
 - 率・行数の門は作らない（本人 2026-09-05「価値あるコメントが増える類のタスクもある」）。門を作ると実測値の1行メモが経緯の
   語りより先に消える。`tools/measure_bloat.py` は報告専用。
+
+## デッドコードの洗い出し（`tools/dead_code/`）
+
+vulture 等は入れていない。標準ライブラリの `ast` と TypeScript の AST で作った**候補の生成器**を置いてある（結果は `output/dead_code/`、git 管理外）:
+
+```powershell
+.\.venv\Scripts\python.exe tools\dead_code\sweep.py     # Python: 名前ベースの到達性（固定点）・未使用 import/引数/ローカル・孤立モジュール
+node tools\dead_code\ts_sweep.mjs                        # web/src・web/scripts・tests/*.mjs の宣言とメンバの到達性
+.\.venv\Scripts\python.exe tools\dead_code\dangling.py  # 存在しない名前・モジュールへの import
+npm run check --prefix web                               # tsc と svelte-check（noUnusedLocals）
+```
+
+エージェントに精読と反証をさせるなら、`areas.py` で領域ごとの brief を作り、`workflow.js` を Workflow ツールへ渡す（`args` の形は脚本の冒頭）。
+
+- **候補は確定ではない。** 2026-10-18 の初回は機械候補の約7割が誤検出だった。型: 同名の別実体への参照（`weights`・`render`・`flat`）／`@entry`・`register_verb`・`getattr(self, ツール名)`・catalog の文字列がメソッド名・dataclass の `asdict` と trace の `_encode` で動的に生きる／呼び元が1か所でも、その呼び元が生きている private ヘルパ／基底クラスのフック（`WebHandler.log_message`）やコールバック型に合わせた未使用引数／Svelte のテンプレートからの参照。
+- **消す前に独立に反証させる。** 「意図的な残置」は docs やコメントに書かれていることが多い（`window.__duocad` のキーは docs が実機検査の穴として名指し、旧 SIMP 引数の拒否は `docs/TOPOPT.md` が契約、`server.py` の再輸出はコメントが「名前を減らさない」と明言）。動的参照の視点と履歴・意図の視点の2つを通ったものだけを確定にした。
+- **線引き**: 本番・テスト・検査スクリプトのどこからも参照されないものだけを消す。テストだけ／検査スクリプトだけが使うもの、docs が名指しするもの、保存形式・WebSocket の payload・trace の記録に載るフィールド、既定値のまま誰も変えない引数（設定の口でありデッドコードではない）は本人判断。
 
 ## 測定記録（`output/`）の書き方
 
