@@ -3,9 +3,9 @@
  *
  * 対象集合(領域・辺)はサーバへ送らない。サーバ側の `Session` が自分の選択集合から取る(`selection.require_*`)。
  * 選択引数の定義(`kind: 'selection'`)が残るのは、人がまだ選んでいないことを画面に出し、辺のピッキングを起動するため(`CommandHost` の `onWants`)。
- * スケッチの図形(反復の対象)はコアの選択集合に入らないので、スケッチパネルで選び `entities` 引数として渡る。
+ * スケッチの図形(反復の対象)は、共有選択集合のうち編集中スケッチの図形から `entities` 引数として渡る(`App.svelte` の `selectedEntities`)。
  *
- * 反復にはサーバのプレビューを出さない: 展開規則(全周は `360/count` の刻み角、など)はコアが持っており、ブラウザへ二重実装すると画面の予想と実際が食い違う。
+ * 反復にはサーバのプレビューを出さない(変わるのはスケッチの図形でソリッドではない)。幽霊はブラウザだけで描き、規則はコアの写し(docs/contracts/verbs.md)。
  */
 import { pickedRefOf, positive, type ArgValues, type CommandDef, type Point2 } from './command'
 import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg } from './moveMode'

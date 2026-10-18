@@ -247,7 +247,7 @@ export function syncedChoice(
   return option !== undefined && choiceSends(option) === null ? { value: current } : { value: undefined }
 }
 
-/** スケッチの図形を選ぶ引数(反復のverb)。選択引数と別物: スケッチの図形は共有選択集合に入らない(コアの `SELECTABLE_KINDS`)。値はスケッチパネルで選んだ図形のIDで、`CommandHost` へは `entities` プロパティで渡る。 */
+/** スケッチの図形を選ぶ引数(反復のverb)。値は共有選択集合のうち編集中スケッチの図形のID(`App.svelte` の `selectedEntities`)で、`CommandHost` へは `entities` プロパティで渡る。 */
 export interface EntitiesArgSpec extends ArgSpecCommon {
   kind: 'entities'
   min: number

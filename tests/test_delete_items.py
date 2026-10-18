@@ -7,6 +7,7 @@ import pytest
 from duocad import region, sketch
 from duocad.server import Session
 from duocad.verbs import delete_items
+from document_support import install_live_pattern
 from session_support import box, pad
 
 
@@ -19,9 +20,12 @@ def _body_ids(session: Session) -> list:
 
 
 def _sketch_with_pattern(session: Session) -> str:
+    """旧形式の反復(保存済みの古い文書に残る)を持つスケッチ。消して戻すと反復も戻ること。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
-    session.pattern_rectangular(sketch_id, [entity_id], 10.0, 10.0, 2, 2)
+    install_live_pattern(
+        session.document, "pattern_rectangular", sketch_id, [entity_id], dx=10.0, dy=10.0, nx=2, ny=2
+    )
     return sketch_id
 
 

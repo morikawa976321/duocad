@@ -1,80 +1,126 @@
 """verb `pattern_rectangular` / `pattern_circular` — スケッチの図形を反復する。
 
-**反復は1つのverbとして持つ**。N個の独立した図形へ展開すると個数や間隔を後から変えられなくなる。
-スケッチが持つのは `Pattern` 1個で、nx×ny の図形は幾何を作るときに展開される導出物。ログも1行だけ。
+**複製は実行時に独立した図形として作る**(本人判断 2026-10-18。docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」):
+複製は1つずつ図形 ID を持ち、選択・移動・削除ができる。元の図形との繋がりは残らない(元を後から動かしても
+複製は付いてこない。拘束ソルバが無いのと同じ流儀)。ログは1行で、作った ID を `created` に持つ(再生で同じ ID になる)。
+複製の数値は `add_entities` が名前つきの値に登録する(`move_sketch_entities` の複製と同じ)。
 
-`nx` / `ny` / `count` は元を含めた個数。数値はすべて `parameters.register_value` で名前つきの値になり、
-後から `set_parameter` で変えられる。
+`nx` / `ny` / `count` は元を含めた個数で、複製が1つもできない指定・元と重なる複製ができる指定は ValueError。
 
-失敗は例外を送出し、`doc` にもログにも変更を残さない: `nx` / `ny` は1以上の整数 / `entities` が空、
-または同じスケッチに無いIDを含むと ValueError・KeyError / 既に別の反復に使われている図形は不可。
-
-**元の図形は反復に吸収される**: 格子は (i, j) = (0, 0) を含み、そこが元の位置になる。領域検出のとき、
-反復に参照されている図形は単独では描かない((0,0) の辺が二重になる)。
+**旧形式(`pattern_id` を持つ行)は再生専用で残す**: 以前は `Pattern` 1個をスケッチに置き、描くたびに展開していた
+(`region.expanded_entities`)。その行を新しい規則で再生すると、複製ぶんの名前つきの値が増えて以後の `d<n>` が
+全部ずれる(記録済みの `set_parameter` が別の値を指す)ので、行の形(`created` の有無)で振り分ける。
+番人は `tests/test_pattern_live_replay.py`。
 """
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Optional, Sequence
-from uuid import uuid4
+from typing import Any, Callable, Dict, List, Sequence
 
 from .. import parameters
 from ..document import Document, unknown_id_message
 from ..oplog import Operation, register_verb
 from ..entry import entry
-from ..sketch import Entity, Pattern, entity_kind_ops, get_sketch
+from ..sketch import (
+    Entity,
+    Pattern,
+    add_entities,
+    circular_pattern_step,
+    entity_kind_ops,
+    get_sketch,
+    new_entity_id,
+    remove_entities,
+    require_valid_params,
+)
 
 VERB_PATTERN_RECTANGULAR = "pattern_rectangular"
 VERB_PATTERN_CIRCULAR = "pattern_circular"
 
+#: 複製の params を作る関数: (種別, 元の解決済み params) -> 複製の params の並び(元の位置は含めない)
+Placement = Callable[[str, Dict[str, float]], List[Dict[str, float]]]
 
-def _check_sources(sketch, sketch_id: str, entity_ids: Sequence[str]) -> Dict[str, Entity]:
-    """反復の元にする図形の検査(同じスケッチにあるか → 既に別の反復に使われていないか)。
-    未知の図形は KeyError、使用済みは ValueError。戻りは ID → 図形(円形反復が中心の一致検査に使う)。"""
+
+def _source_entities(sketch, sketch_id: str, entity_ids: Sequence[str]) -> List[Entity]:
+    """反復の元にする図形を並び順に引く。未知の図形は KeyError。"""
     by_id = {entity.id: entity for entity in sketch.entities}
     for entity_id in entity_ids:
         if entity_id not in by_id:
             raise KeyError(
                 unknown_id_message("entity", entity_id, [entity.id for entity in sketch.entities], where=f"sketch {sketch_id!r}")
             )
-    already_used = {source for pattern in sketch.patterns for source in pattern.sources}
-    for entity_id in entity_ids:
-        if entity_id in already_used:
-            raise ValueError(f"entity {entity_id!r} is already used by another pattern")
-    return by_id
+    return [by_id[entity_id] for entity_id in entity_ids]
 
 
-def _append_pattern(
+def _make_copies(
     document: Document,
     sketch_id: str,
-    pattern_id: str,
-    entities: Sequence[str],
-    values: Dict[str, float],
+    entity_ids: Sequence[str],
+    place: Placement,
+    new_ids: Sequence[str],
     *,
-    kind: str = "rectangular",
-    options: Optional[dict] = None,
-) -> None:
-    """Pattern をスケッチへ足し、`values` を名前つきの値として登録する(**キーの並び**が `d<n>` の振り順。
-    矩形は `dx, dy, nx, ny`、円形は `cx, cy, count, total_angle`)。ログには触らない。"""
+    verb: str,
+) -> List[str]:
+    """元の図形ごとに `place` の並びで複製を作り、ID の並びを返す。全部検査してから足す
+    (足しながら検査すると、途中で元と重なる複製が分かったとき一部だけ増えた文書が残る)。
+    `new_ids` は作る ID の並び(再生では記録したものを渡す)。"""
     sketch = get_sketch(document, sketch_id)
-    if any(pattern.id == pattern_id for pattern in sketch.patterns):
-        raise ValueError(f"pattern id already exists: {pattern_id!r}")
-    refs = parameters.register_all(document, {key: float(value) for key, value in values.items()})
-    extra = {} if kind == "rectangular" else {"kind": kind, "options": dict(options or {})}
-    sketch.patterns.append(Pattern(id=pattern_id, sources=list(entities), params=refs, **extra))
+    planned: List[tuple] = []
+    for entity in _source_entities(sketch, sketch_id, entity_ids):
+        base = parameters.resolve_all(document, entity.params)
+        for values in place(entity.kind, base):
+            if values == base:
+                raise ValueError(f"{verb}: 複製が元の図形 {entity.id!r} と完全に重なる(間隔か角度が0)")
+            require_valid_params(entity.kind, values)
+            planned.append((entity.kind, values))
+    if len(new_ids) != len(planned):
+        raise ValueError(f"{verb}: {len(planned)} copies planned but {len(new_ids)} ids recorded")
+    return add_entities(
+        document, [(sketch, new_id, kind, values) for new_id, (kind, values) in zip(new_ids, planned)]
+    )
 
 
-def _install_pattern(
-    document: Document,
-    sketch_id: str,
-    pattern_id: str,
-    entities: Sequence[str],
-    dx: float,
-    dy: float,
-    nx: int,
-    ny: int,
-) -> None:
-    _append_pattern(document, sketch_id, pattern_id, entities, {"dx": dx, "dy": dy, "nx": nx, "ny": ny})
+def _require_entities(entity_ids: Sequence[str], verb: str) -> List[str]:
+    ids = [str(entity_id) for entity_id in entity_ids]
+    if not ids:
+        raise ValueError(f"{verb} requires at least one entity")
+    return ids
+
+
+def _count_copies(document: Document, sketch_id: str, entity_ids: Sequence[str], place: Placement) -> int:
+    sketch = get_sketch(document, sketch_id)
+    return sum(
+        len(place(entity.kind, parameters.resolve_all(document, entity.params)))
+        for entity in _source_entities(sketch, sketch_id, entity_ids)
+    )
+
+
+def _bake(document: Document, verb: str, sketch_id: str, entity_ids: List[str], place: Placement, shaped: dict) -> List[str]:
+    """新しい ID で複製を作り、ログに1行足す。"""
+    new_ids = [new_entity_id() for _ in range(_count_copies(document, sketch_id, entity_ids, place))]
+    created = _make_copies(document, sketch_id, entity_ids, place, new_ids, verb=verb)
+    document.log.append(verb, {"sketch_id": sketch_id, "entities": list(entity_ids), **shaped, "created": list(created)})
+    return created
+
+
+# --------------------------------------------------------------------------------------
+# 矩形反復
+# --------------------------------------------------------------------------------------
+def _rectangular_placement(dx: float, dy: float, nx: int, ny: int) -> Placement:
+    """格子 (i, j) の (0, 0) が元の位置。並びは j の外側・i の内側(旧形式の展開と同じ)。"""
+
+    def place(kind: str, base: Dict[str, float]) -> List[Dict[str, float]]:
+        ops = entity_kind_ops(kind)
+        copies = []
+        for j in range(ny):
+            for i in range(nx):
+                if i == 0 and j == 0:
+                    continue
+                values = dict(base)
+                values.update(ops.translate(base, i * dx, j * dy))
+                copies.append(values)
+        return copies
+
+    return place
 
 
 def pattern_rectangular(
@@ -85,62 +131,43 @@ def pattern_rectangular(
     dy: float,
     nx: int,
     ny: int,
-) -> str:
-    """図形群を nx × ny の矩形状に反復し、PatternId を返す。"""
+) -> List[str]:
+    """図形群を nx × ny の矩形状に反復し、作った複製の EntityId を返す。"""
     if not parameters.is_positive_int(nx) or not parameters.is_positive_int(ny):
-        raise ValueError(
-            f"nx/ny must be integers >= 1, got nx={nx!r}, ny={ny!r}"
-        )
-    nx_i = int(nx)
-    ny_i = int(ny)
-    entity_ids = list(entities)
-    if not entity_ids:
-        raise ValueError("pattern_rectangular requires at least one entity")
-
-    _check_sources(get_sketch(doc, sketch_id), sketch_id, entity_ids)
-
-    pattern_id = f"pattern-{uuid4().hex[:12]}"
-    _install_pattern(
-        doc, sketch_id, pattern_id, entity_ids, float(dx), float(dy), nx_i, ny_i
-    )
-    doc.log.append(
+        raise ValueError(f"nx/ny must be integers >= 1, got nx={nx!r}, ny={ny!r}")
+    nx_i, ny_i = int(nx), int(ny)
+    if nx_i * ny_i < 2:
+        raise ValueError(f"pattern_rectangular makes no copies with nx={nx_i}, ny={ny_i}")
+    delta_x, delta_y = float(dx), float(dy)
+    if not math.isfinite(delta_x) or not math.isfinite(delta_y):
+        raise ValueError(f"dx/dy must be finite numbers, got dx={dx!r}, dy={dy!r}")
+    entity_ids = _require_entities(entities, VERB_PATTERN_RECTANGULAR)
+    return _bake(
+        doc,
         VERB_PATTERN_RECTANGULAR,
-        {
-            "sketch_id": sketch_id,
-            "pattern_id": pattern_id,
-            "entities": list(entity_ids),
-            "dx": float(dx),
-            "dy": float(dy),
-            "nx": nx_i,
-            "ny": ny_i,
-        },
+        sketch_id,
+        entity_ids,
+        _rectangular_placement(delta_x, delta_y, nx_i, ny_i),
+        {"dx": delta_x, "dy": delta_y, "nx": nx_i, "ny": ny_i},
     )
-    return pattern_id
 
 
 # --------------------------------------------------------------------------------------
 # 円形反復
 # --------------------------------------------------------------------------------------
-def _install_pattern_circular(
-    document: Document,
-    sketch_id: str,
-    pattern_id: str,
-    entities: Sequence[str],
-    cx: float,
-    cy: float,
-    count: int,
-    total_angle: float,
-    rotate_copies: bool,
-) -> None:
-    _append_pattern(
-        document,
-        sketch_id,
-        pattern_id,
-        entities,
-        {"cx": cx, "cy": cy, "count": count, "total_angle": total_angle},
-        kind="circular",
-        options={"rotate_copies": bool(rotate_copies)},
-    )
+def _circular_placement(cx: float, cy: float, count: int, total_angle: float, rotate_copies: bool) -> Placement:
+    step = circular_pattern_step(count, total_angle)
+
+    def place(kind: str, base: Dict[str, float]) -> List[Dict[str, float]]:
+        ops = entity_kind_ops(kind)
+        copies = []
+        for i in range(1, count):
+            values = dict(base)
+            values.update(ops.rotate(base, cx, cy, i * step, rotate_copies))
+            copies.append(values)
+        return copies
+
+    return place
 
 
 def pattern_circular(
@@ -151,96 +178,115 @@ def pattern_circular(
     count: int,
     total_angle: float = 360.0,
     rotate_copies: bool = True,
-) -> str:
-    """図形群をスケッチ平面の法線まわりに円形反復し、PatternId を返す。
+) -> List[str]:
+    """図形群をスケッチ平面の法線まわりに円形反復し、作った複製の EntityId を返す。
 
-    - `count` は**元を含めた総数**(矩形反復の `nx`/`ny` と同じ流儀)。
-    - **刻み角の場合分け**: 全周(`total_angle == 360`)は `360/count`、全周未満は端点を含むので
-      `total_angle/(count-1)`。全周を `count-1` で割ると最後の複製が最初と重なる。
-    - `cx` / `cy` / `count` / `total_angle` は名前つきの値にする(後から編集できる)。
-      **`rotate_copies` は `params` に入れない** — 寸法ではないので `Pattern.options` へ。
-      混ぜると `set_parameter` で `0.5` を書き込める余地ができる。
+    - `count` は**元を含めた総数**(矩形反復の `nx`/`ny` と同じ流儀)。2未満は複製ができないので ValueError。
     - `total_angle` は `0 < angle <= 360`。360超は複製が必ず重なるので受け取らない。
     - **回転中心と図形の中心が一致する場合は ValueError**(全複製が元と重なり、「反復したのに
       何も増えない」が成功として通ってしまう)。
-
-    同じ `Pattern` を使い、`kind="circular"` で区別する。
     """
     if not parameters.is_positive_int(count):
         raise ValueError(f"count must be an integer >= 1, got {count!r}")
     count_i = int(count)
+    if count_i < 2:
+        raise ValueError("pattern_circular makes no copies with count=1")
     angle = float(total_angle)
     if not math.isfinite(angle) or not (0.0 < angle <= 360.0):
-        raise ValueError(
-            f"total_angle must satisfy 0 < angle <= 360, got {total_angle!r}"
-        )
-    cx = float(center[0])
-    cy = float(center[1])
-    entity_ids = list(entities)
-    if not entity_ids:
-        raise ValueError("pattern_circular requires at least one entity")
+        raise ValueError(f"total_angle must satisfy 0 < angle <= 360, got {total_angle!r}")
+    cx, cy = float(center[0]), float(center[1])
+    if not math.isfinite(cx) or not math.isfinite(cy):
+        raise ValueError(f"center must be finite numbers, got {center!r}")
+    entity_ids = _require_entities(entities, VERB_PATTERN_CIRCULAR)
 
-    by_id = _check_sources(get_sketch(doc, sketch_id), sketch_id, entity_ids)
-
-    for entity_id in entity_ids:
-        entity = by_id[entity_id]
+    sketch = get_sketch(doc, sketch_id)
+    for entity in _source_entities(sketch, sketch_id, entity_ids):
         resolved = parameters.resolve_all(doc, entity.params)
         ecx, ecy = entity_kind_ops(entity.kind).center_2d(resolved)
         if abs(ecx - cx) <= 1e-9 and abs(ecy - cy) <= 1e-9:
             raise ValueError(
-                f"entity {entity_id!r} is centred on the pattern pivot "
+                f"entity {entity.id!r} is centred on the pattern pivot "
                 f"({cx}, {cy}); all copies would coincide with the original"
             )
 
-    pattern_id = f"pattern-{uuid4().hex[:12]}"
-    _install_pattern_circular(
+    return _bake(
         doc,
-        sketch_id,
-        pattern_id,
-        entity_ids,
-        cx,
-        cy,
-        count_i,
-        angle,
-        bool(rotate_copies),
-    )
-    doc.log.append(
         VERB_PATTERN_CIRCULAR,
-        {
-            "sketch_id": sketch_id,
-            "pattern_id": pattern_id,
-            "entities": list(entity_ids),
-            "center": [cx, cy],
-            "count": count_i,
-            "total_angle": angle,
-            "rotate_copies": bool(rotate_copies),
-        },
+        sketch_id,
+        entity_ids,
+        _circular_placement(cx, cy, count_i, angle, bool(rotate_copies)),
+        {"center": [cx, cy], "count": count_i, "total_angle": angle, "rotate_copies": bool(rotate_copies)},
     )
-    return pattern_id
 
 
-def _do_pattern_circular(document: Document, operation: Operation) -> None:
-    """redo / replay: 記録された PatternId と参照で反復を作り直す。ログには触らない。"""
+# --------------------------------------------------------------------------------------
+# 再生・undo
+# --------------------------------------------------------------------------------------
+def _placement_of(operation: Operation) -> Placement:
     args = operation.args
-    center = args["center"]
-    _install_pattern_circular(
+    if operation.verb == VERB_PATTERN_CIRCULAR:
+        center = args["center"]
+        return _circular_placement(
+            float(center[0]), float(center[1]), int(args["count"]), float(args["total_angle"]), bool(args["rotate_copies"])
+        )
+    return _rectangular_placement(float(args["dx"]), float(args["dy"]), int(args["nx"]), int(args["ny"]))
+
+
+def _is_live_form(operation: Operation) -> bool:
+    """旧形式(スケッチに `Pattern` を置く)の行か。新形式は `created` を持つ。"""
+    return "created" not in operation.args
+
+
+def _do_pattern(document: Document, operation: Operation) -> None:
+    """redo / replay: 記録した ID で複製を作り直す(旧形式の行は `Pattern` を置き直す)。ログには触らない。"""
+    if _is_live_form(operation):
+        _install_live_pattern(document, operation)
+        return
+    args = operation.args
+    _make_copies(
         document,
         args["sketch_id"],
-        args["pattern_id"],
-        args["entities"],
-        float(center[0]),
-        float(center[1]),
-        int(args["count"]),
-        float(args["total_angle"]),
-        bool(args["rotate_copies"]),
+        list(args["entities"]),
+        _placement_of(operation),
+        list(args["created"]),
+        verb=operation.verb,
     )
 
 
 def _undo_pattern(document: Document, operation: Operation) -> None:
-    """undo(矩形・円形の両方): 反復を取り除く(元の図形は残る)。そのパラメータも文書から消す。"""
+    """undo: 作った複製を消す(元の図形は残る。旧形式の行は `Pattern` とそのパラメータを消す)。"""
+    args = operation.args
+    if _is_live_form(operation):
+        _remove_live_pattern(document, args["sketch_id"], args["pattern_id"])
+        return
+    remove_entities(document, args["created"], sketch_id=args["sketch_id"])
+
+
+# 旧形式の行の再生。名前つきの値の振り順(矩形は dx, dy, nx, ny、円形は cx, cy, count, total_angle)が
+# 保存済みの `set_parameter` の名前を決めているので、並びを変えない。
+def _install_live_pattern(document: Document, operation: Operation) -> None:
     args = operation.args
     sketch = get_sketch(document, args["sketch_id"])
-    pattern_id = args["pattern_id"]
+    if operation.verb == VERB_PATTERN_CIRCULAR:
+        center = args["center"]
+        values = {
+            "cx": float(center[0]),
+            "cy": float(center[1]),
+            "count": int(args["count"]),
+            "total_angle": float(args["total_angle"]),
+        }
+        extra = {"kind": "circular", "options": {"rotate_copies": bool(args["rotate_copies"])}}
+    else:
+        values = {"dx": float(args["dx"]), "dy": float(args["dy"]), "nx": int(args["nx"]), "ny": int(args["ny"])}
+        extra = {}
+    if any(pattern.id == args["pattern_id"] for pattern in sketch.patterns):
+        raise ValueError(f"pattern id already exists: {args['pattern_id']!r}")
+    refs = parameters.register_all(document, {key: float(value) for key, value in values.items()})
+    sketch.patterns.append(Pattern(id=args["pattern_id"], sources=list(args["entities"]), params=refs, **extra))
+
+
+def _remove_live_pattern(document: Document, sketch_id: str, pattern_id: str) -> None:
+    sketch = get_sketch(document, sketch_id)
     remaining = []
     for pattern in sketch.patterns:
         if pattern.id == pattern_id:
@@ -250,36 +296,8 @@ def _undo_pattern(document: Document, operation: Operation) -> None:
     sketch.patterns = remaining
 
 
-register_verb(
-    VERB_PATTERN_CIRCULAR,
-    do=_do_pattern_circular,
-    undo=_undo_pattern,
-)
-
-
-# --------------------------------------------------------------------------------------
-# verbの登録
-# --------------------------------------------------------------------------------------
-def _do_pattern_rectangular(document: Document, operation: Operation) -> None:
-    """redo / replay: 記録された PatternId と参照でパターンを作り直す。ログには触らない。"""
-    args = operation.args
-    _install_pattern(
-        document,
-        args["sketch_id"],
-        args["pattern_id"],
-        args["entities"],
-        float(args["dx"]),
-        float(args["dy"]),
-        int(args["nx"]),
-        int(args["ny"]),
-    )
-
-
-register_verb(
-    VERB_PATTERN_RECTANGULAR,
-    do=_do_pattern_rectangular,
-    undo=_undo_pattern,
-)
+register_verb(VERB_PATTERN_RECTANGULAR, do=_do_pattern, undo=_undo_pattern)
+register_verb(VERB_PATTERN_CIRCULAR, do=_do_pattern, undo=_undo_pattern)
 
 
 # --------------------------------------------------------------------------------------
@@ -289,7 +307,7 @@ register_verb(
 def _enter_pattern_rectangular(
     document: Document, sketch_id: str, entities: Any, dx: float, dy: float, nx: int, ny: int
 ) -> dict:
-    return {"pattern_id": pattern_rectangular(document, sketch_id, entities, dx, dy, nx, ny)}
+    return {"created": pattern_rectangular(document, sketch_id, entities, dx, dy, nx, ny)}
 
 
 @entry(VERB_PATTERN_CIRCULAR)
@@ -302,7 +320,7 @@ def _enter_pattern_circular(
     total_angle: float = 360.0,
     rotate_copies: bool = True,
 ) -> dict:
-    pattern_id = pattern_circular(
+    created = pattern_circular(
         document, sketch_id, entities, center, count, total_angle=total_angle, rotate_copies=rotate_copies
     )
-    return {"pattern_id": pattern_id}
+    return {"created": created}

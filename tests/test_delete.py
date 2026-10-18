@@ -7,6 +7,7 @@ from duocad import region, selection, sketch
 from duocad.oplog import OpLog
 from duocad.server import Session
 from duocad.verbs import delete as delete_verb
+from document_support import install_live_pattern
 from session_support import SIDE, box as _box, edit_parameter, select as _select, send_one
 
 DEVIATION = 0.2
@@ -301,10 +302,12 @@ def test_a_parameter_edit_after_a_delete_replays_the_delete(session: Session) ->
 
 
 def test_deleting_the_source_of_a_pattern_does_not_break_the_state(session: Session) -> None:
-    """反復の元を消しても落ちない(依存グラフは作らない。undoで元どおり展開される)。"""
+    """旧形式の反復(保存済みの古い文書に残る)の元を消しても落ちない(依存グラフは作らない。undoで元どおり展開される)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
-    session.pattern_rectangular(sketch_id, [entity_id], 10.0, 10.0, 2, 2)
+    install_live_pattern(
+        session.document, "pattern_rectangular", sketch_id, [entity_id], dx=10.0, dy=10.0, nx=2, ny=2
+    )
     assert len(region.regions(session.document, sketch_id)) == 4
 
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])

@@ -40,6 +40,17 @@ BASE_PLANES = ("XY", "XZ", "YZ")
 PATTERN_KINDS = ("rectangular", "circular")
 
 
+def circular_pattern_step(count: int, total_angle: float) -> float:
+    """円形反復の刻み角[度]。全周(`total_angle == 360`)は `360/count`、全周未満は端点を含むので
+    `total_angle/(count-1)`(全周を `count-1` で割ると最後の複製が最初と重なる)。`count == 1` は0除算を避けて 0。
+    画面の幽霊(`web/src/entityKinds.ts`)が同じ規則を持つ。"""
+    if count == 1:
+        return 0.0
+    if total_angle == 360:
+        return 360.0 / count
+    return total_angle / (count - 1)
+
+
 # --------------------------------------------------------------------------------------
 # 図形種別ごとの純幾何演算(表)
 # --------------------------------------------------------------------------------------

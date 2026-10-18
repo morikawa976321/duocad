@@ -23,7 +23,7 @@ from typing import Any, Callable, List, Optional
 from . import kernel, kernel_sketch
 from . import parameters
 from .document import Document
-from .sketch import SketchId, entity_kind_ops, get_sketch
+from .sketch import SketchId, circular_pattern_step, entity_kind_ops, get_sketch
 
 
 @dataclass(frozen=True)
@@ -118,13 +118,7 @@ def expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
             count = int(parameters.resolve(doc, pattern.params["count"]))
             total_angle = parameters.resolve(doc, pattern.params["total_angle"])
             rotate_copies = bool(pattern.options.get("rotate_copies", True))
-            # count==1 は total_angle/(count-1) の0除算を避ける(場合分けは `pattern_circular` のdocstring参照)。
-            if count == 1:
-                step = 0.0
-            elif total_angle == 360:
-                step = 360.0 / count
-            else:
-                step = total_angle / (count - 1)
+            step = circular_pattern_step(count, total_angle)
             for source_id in pattern.sources:
                 entity = by_id.get(source_id)
                 if entity is None:  # 元が消えている(docstring)

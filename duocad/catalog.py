@@ -1460,9 +1460,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="pattern_rectangular",
-        returns=(Result("pattern_id", "string"),),
+        returns=(Result("created", "string[]"),),
         category="feature",
-        description="スケッチ上の図形を矩形に反復するときに呼ぶ。",
+        description=(
+            "スケッチ上の図形を矩形に反復するときに呼ぶ。複製は独立した図形として作られ、"
+            "作った図形IDの配列が返る(元の図形は残り、元を後から動かしても複製は付いてこない)。"
+        ),
         params=(
             Param(
                 "sketch_id",
@@ -1484,8 +1487,8 @@ COMMANDS: tuple[Command, ...] = (
         session="pattern_rectangular",
         resets_selection=True,
         note=(
-            "**スケッチの図形は選択集合の項目ではない**(選べるのは面・辺・頂点・領域)ので、"
-            "`entities` は対象集合ではなく引数で受ける。**投機実行(`previewable`)には載せない**のは"
+            "`entities` は図形IDの並びを引数で受ける(画面は共有選択の図形から作る)。"
+            "**投機実行(`previewable`)には載せない**のは"
             "安全のためではなく、変わるのがスケッチの図形でソリッドではないため —— "
             "`preview` が返すのは形が変わったBodyだけなので、載せても常に空になる。"
             "画面のプレビューは**ブラウザだけで描く**(2026-09-05に実装) —— 増える複製の座標は"
@@ -1494,9 +1497,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="pattern_circular",
-        returns=(Result("pattern_id", "string"),),
+        returns=(Result("created", "string[]"),),
         category="feature",
-        description="スケッチ上の図形を円形に反復するときに呼ぶ。",
+        description=(
+            "スケッチ上の図形を円形に反復するときに呼ぶ。複製は独立した図形として作られ、"
+            "作った図形IDの配列が返る(元の図形は残り、元を後から動かしても複製は付いてこない)。"
+        ),
         params=(
             Param(
                 "sketch_id",

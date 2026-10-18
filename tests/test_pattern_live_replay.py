@@ -4,10 +4,15 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import pytest
+
 from duocad import kernel, query
 from duocad.document import Document
 from duocad.oplog import OpLog
+from duocad.parameters import parameter_of, set_parameter
 from duocad.region import expanded_entities, regions
+from duocad.sketch import add_circle, sketch_create
+from document_support import install_live_pattern
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "pattern_live_log.json"
 
@@ -57,3 +62,29 @@ def test_undo_and_redo_of_a_replayed_live_pattern_remove_and_restore_the_copies(
 
     document.log.redo(document)
     assert len(regions(document, ring.id)) == 4
+
+
+def _live_ring(document: Document, count: int = 6) -> tuple:
+    sketch_id = sketch_create(document, "XY")
+    circle = add_circle(document, sketch_id, (48.0, 30.0), 6.0)
+    pattern_id = install_live_pattern(
+        document, "pattern_circular", sketch_id, [circle],
+        center=[30.0, 30.0], count=count, total_angle=360.0, rotate_copies=True,
+    )
+    return sketch_id, pattern_id
+
+
+def test_the_count_of_a_live_circular_pattern_is_still_a_named_value():
+    """旧形式の円形反復の個数・全角度は名前つきの値のまま: 書き換えれば複製の数が追随し、使えない値は断る。"""
+    document = Document()
+    sketch_id, pattern_id = _live_ring(document)
+
+    set_parameter(document, parameter_of(document, sketch_id, pattern_id, "count"), 3.0)
+    assert len(regions(document, sketch_id)) == 3
+
+    with pytest.raises(ValueError):
+        set_parameter(document, parameter_of(document, sketch_id, pattern_id, "count"), 0.0)
+    for bad in (0.0, -90.0, 361.0):
+        with pytest.raises(ValueError):
+            set_parameter(document, parameter_of(document, sketch_id, pattern_id, "total_angle"), bad)
+    assert len(regions(document, sketch_id)) == 3

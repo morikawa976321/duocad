@@ -7,11 +7,11 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 
 - **入口は `App.svelte` の `showLocalGhost(verb, args)` 1つで、3経路に振る。** (a) `ghostEntity`(これから打つ `add_*` の図形)、(b) `ghostCopies(verb, args, sources)`(`web/src/entityKinds.ts`。既存スケッチ図形の反復・移動・回転後の姿)、(c) `viewport.showBodyGhosts(entries)`(既存ボディの変換後の姿。実体は `web/src/ghostLayer.ts`、型 `BodyGhost`/`BodyGhostRotation`/`bodyGhostMatrix` は `web/src/viewportTypes.ts`)。新しい verb にプレビューを足すときは `CommandDef.preview: 'local'` にしてこの3つのどれかへ乗せる。
 - **ローカル方式はサーバへ何も送らない**(Esc で中断しても文書が変わらないことを「送らない」で成立させる)。投機実行へ寄せない。
-- **TS の変換規則はコアの写しで、片方だけ変えてはならない**(幽霊と確定結果が別の場所に出る)。`entityKinds.ts` の `translate`/`rotate` ← `duocad/sketch.py` の `_translate_*`/`_rotate_*`、円形反復の刻み角 ← `duocad/region.py` の `expanded_entities`、点だけ動かすか図形全体か ← `duocad/verbs/move_sketch.py` の `_normalize_targets`/`_moved_params`、`rotatedTargets` ← 同 `_rotation_args`/`_rotated_params`/`_apply`/`_copy`。一致は `tests/test_ghost_agreement.py` と `tests/eval_ghosts.mjs` が突き合わせる。
+- **TS の変換規則はコアの写しで、片方だけ変えてはならない**(幽霊と確定結果が別の場所に出る)。`entityKinds.ts` の `translate`/`rotate` ← `duocad/sketch.py` の `_translate_*`/`_rotate_*`、円形反復の刻み角 ← `duocad/sketch.py` の `circular_pattern_step`、点だけ動かすか図形全体か ← `duocad/verbs/move_sketch.py` の `_normalize_targets`/`_moved_params`、`rotatedTargets` ← 同 `_rotation_args`/`_rotated_params`/`_apply`/`_copy`。一致は `tests/test_ghost_agreement.py` と `tests/eval_ghosts.mjs` が突き合わせる。
 - **`showBodyGhosts` は本物を隠さない**(`showPreview` は隠す)。幽霊は 1 ボディ = 1 `THREE.Group` で `group.matrixAutoUpdate = false` にして行列を直に置く(`group.position` は効かない)。行列は `T(offset)·T(p)·R·T(-p)`。
 - **幽霊が消える場面は `viewport.clearPreview()` に集約**(`update`/`prune`/`showPreview`/`App.clearPreview`/`setMode` がすべてここを通る)。別の消し口を作らない。
 - **幽霊は「解決済みの数値」でしか描かない。** 中心・軸を省略したときのコアの既定(スケッチ=対象の代表点の平均 / ソリッド=体積重心)はブラウザへ写さない(規則が2箇所に増える。体積重心は三角形分割からの近似にしかならない)。UI で軸・中心を指させるときも画面側が数値へ解決してから渡す(辺の参照をそのまま `showLocalGhost` へ渡さない。実装は `App.svelte` の `resolvePicksForGhost`)。
-- **長方形をまるごと回す指定が1つでも混ざったら、幽霊を1つも描かない**(コアは呼び出し全体を ValueError にする)。`pattern_circular` は逆に4本の線分へ落とすのが正しく、幽霊も同じ落とし方をする。番人は `tests/test_ghost_agreement.py::test_a_rotated_rectangle_ghost_is_still_the_same_rectangle`。
+- **長方形は回しても長方形のまま**(`angle` が同じだけ回る。`pattern_circular` の複製も同じ)。幽霊も同じ形で描く。番人は `tests/test_ghost_agreement.py::test_a_rotated_rectangle_ghost_is_still_the_same_rectangle`。
 - スケッチ回転の幽霊は `ghostCopies` の `args.mode === 'rotate'` 分岐(引数は `angle`(度)・`center: [u, v]` の数値・任意で `copy`)。`rotateCopies` は **`true`** を渡す(対象そのものを回す。`false` は反復の複製用で向きを変えず位置だけ回す)。
 
 ### 依存してはいけないもの
@@ -29,6 +29,15 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **`onBoxSelect` はスケッチの領域も拾う。** 長方形をウィンドウ選択すると領域参照が混ざる。「図形まるごと1つ」の判定は `item.entity !== undefined` で絞る。
 - **選択の正はコア**。クリック/ドラッグ直後に `page.evaluate` で選択を読むと往復前の値を見る(必ず `waitFor`)。
 
+## 反復(pattern_rectangular / pattern_circular)
+
+- **複製は実行時に独立した図形として作る**(2026-10-18、本人。DESIGN_DECISIONS「見えるものはすべてさわれる」)。
+  返り値もログの行も `created`(作った図形 ID の並び)。元の図形とは繋がらない。
+- **旧形式の行(`pattern_id` を持ち `created` が無い)は再生専用。** 振り分けは `created` の有無だけで、旧形式は
+  スケッチに `Pattern` を置き、描くときに `region.expanded_entities` が展開する(複製に図形 ID は無い)。
+  旧形式を新しい規則で再生すると以後の `d<n>` がずれる。番人は `tests/test_pattern_live_replay.py`。
+- 複製が1つもできない指定(`nx*ny < 2`・`count < 2`)と、元と完全に重なる複製ができる指定は ValueError。
+
 ## move_body / move_sketch_entities の回転モード
 
 - **両 verb とも `mode`(`translate`/`rotate`。宣言の正は `duocad/verbs/_common.py` の `MOVE_MODES`)で分岐する。モードが取らない引数を渡すと必ず ValueError**(黙って無視も両方適用もしない)。
@@ -38,7 +47,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **操作ログに載るのは解決済みの数値だけ。** undo は「逆向きに同じ角度」で戻すが、軸に使った辺は対象ボディに属していれば既に回った後にいるので、参照を引き直すと別の軸で戻る。`_rotation_args` が入口で数値へ潰し、`_do_*`/`_undo_*` は数値しか見ない。
 - **`mode` キーの無いログは並進として読む**(`args.get("mode", MODE_TRANSLATE)`)。2026-09-05 より前の保存文書には `mode` が無く、この既定を消すと開けなくなる。
 - **添字は回転でも変わらない**(`copy=False` は `TopoDS_Shape.Moved` で位置だけ差し替え、下層の形状を共有)。`resets_selection` は他の形状変更 verb と同じ既定で、回転が壊すからではない。
-- **長方形をまるごと回すのは ValueError**(仕様)。回すと線分4本に変わり、「undo = 逆向きに同じ角度」も元の図形 ID と `dN` の名前つき寸法の復元も成り立たない。`pattern_circular` は複製を展開時に作るので落とせる。長方形の1点(左下)を回すのはできる。
+- **長方形をまるごと回すと `angle` も同じだけ回る**(1つの図形のまま。線分4本へは落とさない)。長方形の1点(左下)だけを回すこともできる。
 - **`Session` の戻り値(= `Applied`)はモードによらずキーが同じで、使わない側が `null`。** `move_body`: `mode/dx/dy/dz/angle/axis_point/axis_dir/copy/created/changed_bodies`、`move_sketch_entities`: `mode/dx/dy/angle/center/copy/created/sketch_ids`。
 - **回転の引数の WS 露出は `ws="special"`**(省略できる引数があるので `ws="table"` は不可。表は載せた引数を全部必須にするため並進の UI が送れなくなる)。画面は `mode` の選択(`commands/moveMode.ts`)を持ち、回転軸を辺クリック・中心を頂点クリックで指す(`PickArgSpec`、共有選択集合には入れない)。詳細は `duocad/catalog.py` の `move_body`/`move_sketch_entities` の note。
 - kernel の面: `kernel.rotate_shape`/`kernel.edge_axis(shape, edge_index)`/`kernel.centroid`(体積重心)、`sketch.rotate_point`。
