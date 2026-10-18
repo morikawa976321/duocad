@@ -16,7 +16,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 
 ### 依存してはいけないもの
 
-- **`GHOST_COPY_LIMIT`(2000)を仕様と読まない。** 画面が固まらないための表示上限でコア側には無い。超えても Enter は通る(幽霊が出ないだけ)。
+- **`GHOST_COPY_LIMIT`(2000)を仕様と読まない。** 画面が固まらないための表示上限で、コア側の上限は別に `verbs/pattern.py` の `MAX_PATTERN_COPIES`(5000。反復1回で増える図形の総数。再生には掛けない)。2000 を超えて 5000 以下なら Enter は通る(幽霊が出ないだけ)。5000 を超えるとコアが ValueError で断り、画面はトーストに出す。
 - **`previewing`(`App.svelte` の `$state`)はサーバ投機実行側だけを表す。** ローカル幽霊が出ていても `false`。
 - `showSketchGhosts` は描けた図形だけ数える(折れ線化できない図形は黙って落ちる)。
 

@@ -579,14 +579,27 @@ def sketch_create(doc: Document, plane: Any, *, verb: str = VERB_SKETCH_CREATE) 
     return sketch_id
 
 
+def point_2d(value: Any, what: str) -> Tuple[float, float]:
+    """スケッチ平面の点 `[u, v]` を読む。**数がちょうど2つの配列だけ**を受ける: 長さの違う配列(3次元の `[x, y, z]` の z を
+    黙って捨てない)・数でない要素(文字列 "1.5"、bool、null)・非有限の数は ValueError(`IndexError` / `TypeError` が
+    internal の封筒になって「直せる誤り」に見えなくなるのを避ける)。
+    """
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"{what} must be two numbers [u, v], got {value!r}")
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ValueError(f"{what} must be two numbers [u, v], got {value!r}")
+    u, v = float(value[0]), float(value[1])
+    if not (math.isfinite(u) and math.isfinite(v)):
+        raise ValueError(f"{what} must be two finite numbers [u, v], got {value!r}")
+    return u, v
+
+
 def add_line(doc: Document, sketch_id: SketchId, p0: Any, p1: Any) -> EntityId:
     """スケッチ平面上の2点 `p0`/`p1` を結ぶ線分を足して EntityId を返す。"""
-    params = {
-        "x0": float(p0[0]),
-        "y0": float(p0[1]),
-        "x1": float(p1[0]),
-        "y1": float(p1[1]),
-    }
+    x0, y0 = point_2d(p0, "p0")
+    x1, y1 = point_2d(p1, "p1")
+    params = {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
     return _add_entity(doc, sketch_id, "line", params, VERB_ADD_LINE)
 
 
@@ -594,11 +607,8 @@ def add_circle(
     doc: Document, sketch_id: SketchId, center: Any, diameter: float
 ) -> EntityId:
     """スケッチ平面上の `center` を中心とする直径 `diameter` の円を足して EntityId を返す。"""
-    params = {
-        "cx": float(center[0]),
-        "cy": float(center[1]),
-        "diameter": float(diameter),
-    }
+    cx, cy = point_2d(center, "center")
+    params = {"cx": cx, "cy": cy, "diameter": float(diameter)}
     return _add_entity(doc, sketch_id, "circle", params, VERB_ADD_CIRCLE)
 
 
@@ -613,13 +623,8 @@ def add_ellipse(
     """`center` を中心とし、`angle` 度(反時計回り・X軸から)の向きに直径 `width`、それに直交する向きに直径 `height` の
     楕円を足して EntityId を返す。どちらが長くてもよい(長軸・短軸の意味は持たせない)。
     """
-    params = {
-        "cx": float(center[0]),
-        "cy": float(center[1]),
-        "width": float(width),
-        "height": float(height),
-        "angle": float(angle),
-    }
+    cx, cy = point_2d(center, "center")
+    params = {"cx": cx, "cy": cy, "width": float(width), "height": float(height), "angle": float(angle)}
     return _add_entity(doc, sketch_id, "ellipse", params, VERB_ADD_ELLIPSE)
 
 
@@ -635,9 +640,10 @@ def add_rectangle(
     `angle`(度・反時計回り)は基準の角まわりの傾き。**`angle` は params の最後に置くこと**(`_add_entity` はこの順に
     `register_value` を呼ぶので、順序を変えると再生で `d<n>` の割り当てが変わる)。
     """
+    x, y = point_2d(corner, "corner")
     params = {
-        "x": float(corner[0]),
-        "y": float(corner[1]),
+        "x": x,
+        "y": y,
         "width": float(width),
         "height": float(height),
         "angle": float(angle),
@@ -659,9 +665,10 @@ def add_arc(
     `start_deg` / `end_deg`。角度は度・反時計回り・X軸から。**0度をまたいでよい**(`start_deg=350, end_deg=10` は20度の円弧。
     掃引量は `(end_deg - start_deg) % 360`。`kernel_sketch` 側の実装)。
     """
+    cx, cy = point_2d(center, "center")
     params = {
-        "cx": float(center[0]),
-        "cy": float(center[1]),
+        "cx": cx,
+        "cy": cy,
         "radius": float(radius),
         "start_deg": float(start_deg),
         "end_deg": float(end_deg),

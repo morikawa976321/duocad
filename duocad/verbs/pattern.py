@@ -22,10 +22,25 @@ from .. import parameters
 from ..document import Document, unknown_id_message
 from ..oplog import Operation, register_verb
 from ..entry import entry
-from ..sketch import Entity, Pattern, entity_kind_ops, get_sketch
+from ..sketch import Entity, Pattern, entity_kind_ops, get_sketch, point_2d
 
 VERB_PATTERN_RECTANGULAR = "pattern_rectangular"
 VERB_PATTERN_CIRCULAR = "pattern_circular"
+
+
+#: 反復1回で増やせる図形の数(元を除く複製の総数)の上限。状態配信の領域検出は図形数にほぼ比例して重く
+#: (2026-10-18 実測: 1図形あたり約 2 ms。100×100 で約 22 秒、nx=20000 で約 44 秒)、桁の取り違えが
+#: イベントループを数十秒〜事実上無限に止める。保存済みの文書の再生(`_do_*`)にはこの上限を掛けない。
+MAX_PATTERN_COPIES = 5000
+
+
+def _check_copy_count(sources: int, copies_per_source: int) -> None:
+    total = sources * copies_per_source
+    if total > MAX_PATTERN_COPIES:
+        raise ValueError(
+            f"反復で増える図形が多すぎる({sources}個 × {copies_per_source}複製 = {total} > {MAX_PATTERN_COPIES})。"
+            "個数か反復する図形を減らす"
+        )
 
 
 def _check_sources(sketch, sketch_id: str, entity_ids: Sequence[str]) -> Dict[str, Entity]:
@@ -96,6 +111,7 @@ def pattern_rectangular(
     entity_ids = list(entities)
     if not entity_ids:
         raise ValueError("pattern_rectangular requires at least one entity")
+    _check_copy_count(len(entity_ids), nx_i * ny_i - 1)
 
     _check_sources(get_sketch(doc, sketch_id), sketch_id, entity_ids)
 
@@ -174,11 +190,11 @@ def pattern_circular(
         raise ValueError(
             f"total_angle must satisfy 0 < angle <= 360, got {total_angle!r}"
         )
-    cx = float(center[0])
-    cy = float(center[1])
+    cx, cy = point_2d(center, "center")
     entity_ids = list(entities)
     if not entity_ids:
         raise ValueError("pattern_circular requires at least one entity")
+    _check_copy_count(len(entity_ids), count_i - 1)
 
     by_id = _check_sources(get_sketch(doc, sketch_id), sketch_id, entity_ids)
 
@@ -187,9 +203,11 @@ def pattern_circular(
         resolved = parameters.resolve_all(doc, entity.params)
         ecx, ecy = entity_kind_ops(entity.kind).center_2d(resolved)
         if abs(ecx - cx) <= 1e-9 and abs(ecy - cy) <= 1e-9:
+            # 円と rotate_copies=False は全複製が元と重なる。それ以外(円弧・線分・長方形・楕円を回す反復)は重ならない角度もあるが、
+            # 対称な形(正方形の90度刻み、線分の180度)で元と重なるかを種別ごとに判定しないので、中心が一致するものは断る。
             raise ValueError(
-                f"entity {entity_id!r} is centred on the pattern pivot "
-                f"({cx}, {cy}); all copies would coincide with the original"
+                f"entity {entity_id!r} is centred on the pattern pivot ({cx}, {cy}); "
+                "copies would coincide with the original (move the pivot or the entity slightly off-centre)"
             )
 
     pattern_id = f"pattern-{uuid4().hex[:12]}"

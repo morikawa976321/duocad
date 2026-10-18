@@ -37,6 +37,11 @@ from ..sketch import (
 
 VERB_ENVELOPE_REGIONS = "envelope_regions"
 
+#: `radius` と `offset` の絶対値の上限[mm]。OCCT の2Dオフセットは距離に比例して重く(2026-10-18 実測: 1e6 で約 1.7 秒、
+#: 1e7 で約 17〜28 秒、1e8 は 70 秒でも戻らない)、`radius` が 2 の冪の巨大値(2^49・2^50・2^51・2^53)だと
+#: `BRepOffsetAPI_MakeOffset` が access violation でプロセスごと落ちる。100 km は実用の寸法をはるかに超える。
+MAX_DISTANCE = 1e5
+
 
 def envelope_pieces(
     doc: Document,
@@ -53,6 +58,10 @@ def envelope_pieces(
         raise ValueError(f"envelope_regions: radius と offset は有限の数値(radius={radius!r}, offset={offset!r})")
     if radius < 0.0:
         raise ValueError(f"envelope_regions: radius は 0 以上(追従半径。got {radius!r})")
+    if radius > MAX_DISTANCE or abs(offset) > MAX_DISTANCE:
+        raise ValueError(
+            f"envelope_regions: radius と offset の絶対値は {MAX_DISTANCE:g} mm 以下(radius={radius!r}, offset={offset!r})"
+        )
     refs = list(regions)
     if not refs:
         raise ValueError("envelope_regions requires at least one region")
