@@ -75,7 +75,7 @@ def _do_add_mesh_body(document: Document, operation: Operation) -> None:
 
 
 def _undo_add_mesh_body(document: Document, operation: Operation) -> None:
-    document.remove_body(str(operation.args["body_id"]))
+    document.remove_added_body(str(operation.args["body_id"]))
 
 
 register_verb(

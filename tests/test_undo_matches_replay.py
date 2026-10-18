@@ -9,12 +9,25 @@ import json
 
 import pytest
 
-from duocad import region
+from duocad import kernel
 from duocad.document import Document
 from duocad.oplog import OpLog, verb_handler
+from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_line, add_rectangle, get_sketch, sketch_create
-from duocad.verbs import delete, delete_items, move_sketch_entities
-from document_support import assert_matches_replay, document_state, replay_through_json
+from duocad.verbs import (
+    add_mesh_body,
+    add_solid_body,
+    delete,
+    delete_items,
+    extrude,
+    import_step,
+    loft,
+    mirror_body,
+    move_body,
+    move_sketch_entities,
+    revolve,
+)
+from document_support import assert_matches_replay, box_shape, document_state, new_box, second_body
 
 
 def _reload_with(document: Document, edit) -> Document:
@@ -247,3 +260,128 @@ def test_a_move_logged_without_previous_values_still_undoes_by_moving_back():
 
     restored = {key: legacy.parameters[ref] for key, ref in _entity_params(legacy, sketch_id, line).items()}
     assert restored == pytest.approx({"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 0.0}, abs=1e-12)
+
+
+# --------------------------------------------------------------------------------------
+# ボディを足す操作の undo は、active ボディを足す前の値へ戻す
+# --------------------------------------------------------------------------------------
+def _active_id(document: Document) -> str | None:
+    active = document.active_body()
+    return None if active is None else active.id
+
+
+def _extrude_a_new_body(document: Document, base: str, tmp_path) -> None:
+    second_body(document)
+
+
+def _revolve_a_new_body(document: Document, base: str, tmp_path) -> None:
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (30.0, 3.0), 10.0, 2.0)
+    revolve(document, [region_ref(sketch_id, regions(document, sketch_id)[0].index)], "x", mode="new")
+
+
+def _loft_a_new_body(document: Document, base: str, tmp_path) -> None:
+    sections = []
+    for plane in ("XY", {"kind": "offset", "base": {"kind": "base", "name": "XY"}, "distance": 30.0}):
+        sketch_id = sketch_create(document, plane)
+        add_rectangle(document, sketch_id, (40.0, 40.0), 10.0, 10.0)
+        sections.append(region_ref(sketch_id, regions(document, sketch_id)[0].index))
+    loft(document, sections, mode="new")
+
+
+def _mirror_the_body(document: Document, base: str, tmp_path) -> None:
+    mirror_body(document, [base], base_plane="YZ")
+
+
+def _copy_the_body(document: Document, base: str, tmp_path) -> None:
+    move_body(document, [base], dx=50.0, dy=0.0, dz=0.0, copy=True)
+
+
+def _add_a_mesh_body(document: Document, base: str, tmp_path) -> None:
+    add_mesh_body(document, [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3])
+
+
+def _add_a_solid_body(document: Document, base: str, tmp_path) -> None:
+    add_solid_body(document, box_shape(), "solid")
+
+
+def _import_a_step(document: Document, base: str, tmp_path) -> None:
+    path = tmp_path / "part.step"
+    kernel.write_step(box_shape(), str(path))
+    import_step(document, path)
+
+
+BODY_ADDING_OPERATIONS = [
+    _extrude_a_new_body,
+    _revolve_a_new_body,
+    _loft_a_new_body,
+    _mirror_the_body,
+    _copy_the_body,
+    _add_a_mesh_body,
+    _add_a_solid_body,
+    _import_a_step,
+]
+
+
+@pytest.mark.parametrize("operation", BODY_ADDING_OPERATIONS, ids=lambda function: function.__name__)
+def test_undoing_an_operation_that_adds_a_body_restores_the_active_body(operation, tmp_path):
+    """落ちたら: undo が active を None にするだけで、直後の extrude(join) が元のボディに足されず別のボディを作る
+    (保存して開き直すと元のボディに足されるので、同じ文書が開き直すと挙動が変わる)。"""
+    document = Document()
+    base = new_box(document, 20.0)
+    assert _active_id(document) == base
+
+    operation(document, base, tmp_path)
+    assert _active_id(document) != base
+    document.log.undo(document)
+
+    assert _active_id(document) == base
+    assert_matches_replay(document)
+    document.log.redo(document)
+    assert _active_id(document) != base
+    assert_matches_replay(document)
+
+
+def test_undoing_an_operation_that_adds_several_bodies_restores_the_active_body(tmp_path):
+    """落ちたら: 複製を足した順に消すと、途中の複製が active に戻って最後に None が残る。"""
+    document = Document()
+    first = new_box(document, 20.0)
+    second = second_body(document)
+    assert _active_id(document) == second
+
+    mirror_body(document, [first, second], base_plane="YZ")
+    assert len(document.bodies) == 4
+    document.log.undo(document)
+
+    assert _active_id(document) == second
+    assert_matches_replay(document)
+
+
+def test_a_join_after_undoing_a_new_body_goes_to_the_body_that_was_active():
+    document = Document()
+    base = new_box(document, 20.0)
+    second_body(document)
+    document.log.undo(document)
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (40.0, 0.0), 5.0, 5.0)
+
+    extrude(document, [region_ref(sketch_id, 1)], 8.0, mode="join")
+
+    assert [body.id for body in document.bodies] == [base]
+
+
+def test_undoing_a_deletion_then_the_creation_behind_it_keeps_the_active_body():
+    """消したボディを戻してから、そのボディを作った操作を undo しても、足す前の active が正しく戻る
+    (復元の `add_body` が足す前の active の控えを上書きしない)。"""
+    document = Document()
+    base = new_box(document, 20.0)
+    second_body(document)
+    created = _active_id(document)
+    delete(document, bodies=[created])
+    document.log.undo(document)
+    assert _active_id(document) == created
+
+    document.log.undo(document)
+
+    assert _active_id(document) == base
+    assert_matches_replay(document)

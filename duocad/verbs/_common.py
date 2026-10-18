@@ -203,10 +203,11 @@ def add_transformed_copies(
 
 
 def remove_created_bodies(doc: Document, body_ids: Sequence[BodyId]) -> None:
-    """undo: 作った複製を消す。既に消えている(別のundoが先に消した)場合は空振りでよい。"""
-    for body_id in body_ids:
+    """undo: 作った複製を消す(active は複製を足す前の値へ戻る。`Document.remove_added_body`)。
+    既に消えている(別のundoが先に消した)場合は空振りでよい。足した順の逆に消す。"""
+    for body_id in reversed(list(body_ids)):
         try:
-            doc.remove_body(body_id)
+            doc.remove_added_body(body_id)
         except KeyError:
             pass
 

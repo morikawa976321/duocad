@@ -6,7 +6,7 @@
   両方を持つBodyは作れない(`__post_init__` が弾く)。混ぜると `body.shape is None` で分岐している
   既存の経路が判定できなくなる。
 
-存在しないBodyIdを渡された `remove_body` / `set_active_body` / `is_editable` は KeyError、
+存在しないBodyIdを渡された `remove_body` / `remove_added_body` / `set_active_body` / `is_editable` は KeyError、
 ID重複の `add_body` は ValueError(黙って無視すると取り消しや再生の空振りが文書を静かに壊す)。
 """
 from __future__ import annotations
@@ -145,6 +145,8 @@ class Document:
         # 名前つきの寸法値。書き換えは `duocad.parameters.set_parameter` を通す(直接代入は操作ログに載らない)。
         self.parameters: dict = {}
         self._active_body_id: Optional[BodyId] = None
+        #: ボディ -> それを `add_body` する直前の active(`remove_added_body` が戻す先)。保存されない。
+        self._active_before_add: dict[BodyId, Optional[BodyId]] = {}
         # 遅延import: 循環importを避ける(oplog / selection / optimize は document.py を読む側)。
         from .oplog import OpLog
 
@@ -173,11 +175,13 @@ class Document:
         同じIDのボディが既にある場合は ValueError(黙って上書き・重複させない)。
 
         `index` を渡すとその位置へ差し込む(既定は末尾)。使うのは削除のundoだけ(パーツ一覧の順序を元へ戻す)。
+        その場合は active も呼び出し側が戻す(`_common.reattach_bodies`)ので、足す直前の active は控えない。
         """
         if self._find(body.id) is not None:
             raise ValueError(f"body id already exists: {body.id!r}")
         if index is None:
             self.bodies.append(body)
+            self._active_before_add[body.id] = self._active_body_id
         else:
             self.bodies.insert(int(index), body)
         self._active_body_id = body.id
@@ -186,12 +190,25 @@ class Document:
     def remove_body(self, body_id: BodyId) -> None:
         """指定IDのボディをbodiesから取り除く。activeだった場合はactiveをNoneに戻す。
 
-        存在しないIDは KeyError。
+        存在しないIDは KeyError。ボディを足した操作の undo は `remove_added_body`。
         """
         body = self.get_body(body_id)
         self.bodies.remove(body)
         if self._active_body_id == body_id:
             self._active_body_id = None
+
+    def remove_added_body(self, body_id: BodyId) -> None:
+        """`add_body` した操作の undo: ボディを取り除き、それが active だったなら足す直前の active へ戻す。
+
+        `remove_body` だけだと active が None になり、undo した後の join / cut の行き先が、同じログを
+        再生した文書(足す前の active のまま)と食い違う。直前の active が既にいなければ None のまま。
+        1回の操作が複数のボディを足したときは、**足した順の逆に**呼ぶ(最後に足したものから戻す)。
+        """
+        was_active = self._active_body_id == body_id
+        before = self._active_before_add.get(body_id)
+        self.remove_body(body_id)
+        if was_active and before is not None and self._find(before) is not None:
+            self._active_body_id = before
 
     def active_body(self) -> Optional[Body]:
         if self._active_body_id is None:

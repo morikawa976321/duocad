@@ -191,7 +191,7 @@ def _undo_revolve(document: Document, operation: Operation) -> None:
     body_id = operation.args["body_id"]
     previous = recall(document, body_id, operation.seq)
     if previous is None:
-        document.remove_body(body_id)
+        document.remove_added_body(body_id)
         return
     document.get_body(body_id).shape = previous
 
