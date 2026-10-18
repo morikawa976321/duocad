@@ -262,3 +262,21 @@ def test_the_ai_is_refused_on_a_reopened_copy(running: Session) -> None:
     tools = DocumentTools(running)
     with pytest.raises(DocumentBusy):
         tools.call("sketch_create", {"base_plane": "XY"})
+
+
+def test_the_first_autosave_of_an_untitled_document_is_not_refused_while_its_optimization_runs(session: Session) -> None:
+    """落ちたら、無題の文書(ファイルがまだ無い)の最初の自動保存が「別名で保存できない」で落ち、最適化の結果が足されたのに
+    ファイルへ書かれない。拒否の文に「None」と出る。"""
+    from document_support import box_shape
+    from duocad.document import Body
+
+    session.document.add_body(Body(id="box", name="box", kind="solid", shape=box_shape()))
+    assert session.current_name is None
+    session.begin_optimization()
+
+    assert session.autosave() is True
+    assert session.current_name == "untitled-1.json" and (session.models_dir / "untitled-1.json").exists()
+    with pytest.raises(ValueError, match="名前を変えられない") as refusal:
+        session.rename_document("renamed.json")
+    assert "None" not in str(refusal.value)
+    session.end_optimization()

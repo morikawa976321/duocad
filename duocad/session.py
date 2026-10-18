@@ -1172,7 +1172,7 @@ class Session:
         with self._save_lock:
             self._write_document_file(target, data)
 
-    def save_document(self, name: Any = None) -> dict:
+    def save_document(self, name: Any = None, *, autosave_untitled: bool = False) -> dict:
         """操作ログをJSONで書き出す。verbではない(ログに載らない)。
 
         契約は2つに割れている:
@@ -1188,7 +1188,9 @@ class Session:
         `name` はファイル名だけ(`_resolve_document_name` が区切り文字・絶対パス・`..` を拒否する)。
         その検査を先に通す(models/ の外を指す名前は、存在の有無を問う前に断る)。
         呼び手は自動保存が主(issue #5、2026-09-16): 文書が変わるたび `autosave()` が引数なしで呼び、無題なら
-        `untitled-<n>.json` を `name` に渡す。人が名前を決める口は `rename_document`。
+        `untitled-<n>.json` を `name` に渡す(`autosave_untitled`)。人が名前を決める口は `rename_document`。
+        `autosave_untitled` は最適化の実行中の別名保存の拒否を外す: 拒否が守るのは「実行の対象の写しを別名で編集できる
+        文書にしない」ことで、無題の文書自身を初めて書く自動保存(結果の届け)はそれに当たらない。
         """
         self._drain_writes()
         self._write_seq += 1  # 待っても間に合わなかった古い書き込みが後から着いたら、書かずに降りる(`_write_queued`)
@@ -1209,11 +1211,11 @@ class Session:
                     if target.name == self._current_name
                     else f"{target.name} は編集中ではない(先に開けば上書きできる)"
                 )
-        if name is not None and self._document_locked():
+        if name is not None and not autosave_untitled and self._document_locked():
             # 名前を変えて書くと、編集を断っている写しが別名で編集できる文書になり、結果は
             # 元の名前へ届く(写しには入らない)。
             raise ValueError(
-                f"形状最適化の実行中は別名で保存できない({self._optimize_name} の実行が終わるか中断してから)"
+                f"形状最適化の実行中は別名で保存できない({self._optimize_name or '無題の文書'} の実行が終わるか中断してから)"
             )
         created = self._created if name is None else time.time()
         payload = self.document.log.to_file_chunks(created=created)
@@ -1262,7 +1264,7 @@ class Session:
         """
         try:
             if self._current_name is None:
-                self.save_document(self._unused_untitled_name())
+                self.save_document(self._unused_untitled_name(), autosave_untitled=True)
             elif self._background_autosave:
                 self._queue_write()
             else:
@@ -1284,7 +1286,7 @@ class Session:
         if self._document_locked():
             # 移すと、終わった結果が元の名前で新しいファイルとして書かれる。
             raise ValueError(
-                f"形状最適化の実行中は名前を変えられない({self._optimize_name} の実行が終わるか中断してから)"
+                f"形状最適化の実行中は名前を変えられない({self._optimize_name or '無題の文書'} の実行が終わるか中断してから)"
             )
         if target.exists():
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
