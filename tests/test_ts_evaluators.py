@@ -14,6 +14,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 
 EVALUATORS = [
     "eval_ai_result.mjs",
+    "eval_arc_sweep.mjs",
     "eval_choice_sync.mjs",
     "eval_expression.mjs",
     "eval_frame_loop.mjs",
