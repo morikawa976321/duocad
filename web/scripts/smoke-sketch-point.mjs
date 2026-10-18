@@ -10,6 +10,7 @@
  *   3. 矩形選択で点の図形が点として入る
  *   4. AI が `point` を省いて選んでも点 `cx` として入る
  *   5. スケッチモードで「点」を押して1クリックで置ける(Enter 無し)。置いた点はすぐ指せる
+ *   6. 「正面から見る」は点の図形にも合わせる(点だけのスケッチの遠くの点が画面に入る)
  */
 import { fail, ok } from './args.mjs'
 import { assertNoAppErrors, frameAll, openApp, viewportCenter, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
@@ -20,6 +21,7 @@ import { clickAt, sketchPointAt } from './pick.mjs'
 const P1 = [30, 5]
 const P2 = [10, 10]
 const P3 = [40, 5]
+const FAR = [300, 0]
 
 runSmoke('smoke-sketch-point', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
   const { bodyId } = await addExtrudedRect(mcp, { corner: [0, 0], width: 20, height: 20, distance: 10 })
@@ -148,6 +150,15 @@ runSmoke('smoke-sketch-point', { timeout: 60000, mcp: true }, async ({ mcp, brow
   )
   if (!(await hasPoint(placed.id))) fail('置いた点が点として選ばれていない')
   ok(`point: スケッチモードで「点」を押して1クリックで置け(${placed.params.cx.toFixed(2)}, ${placed.params.cy.toFixed(2)})、すぐ指せる`)
+
+  // ================================================================ 6. 正面から見るは点の図形にも合わせる
+  await mcp.callTool('add_point', { sketch_id: sketch, point: FAR })
+  await waitFor((count) => window.__duocad.sketch?.entities.length === count, '遠くの点が届かない', [before + 2])
+  await page.click('#sketch-look')
+  await waitFrames(page, 60)
+  const far = await withoutBrowserPanel(page, () => sketchPointAt(page, ...FAR, { settle: true }))
+  if (!far) fail(`正面から見ても、点だけのスケッチの遠くの点 ${JSON.stringify(FAR)} が画面の外`)
+  ok('point: 正面から見ると点の図形まで画面に入る(点だけのスケッチでも)')
 
   await assertNoAppErrors(page, consoleErrors)
 })

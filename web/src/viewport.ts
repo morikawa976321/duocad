@@ -1132,6 +1132,11 @@ export function createViewport(container: HTMLElement): Viewport {
   const sketchMaterial = createSketchLineMaterial(SKETCH_COLOR, sketchLineResolution)
   const sketchGhostMaterial = createSketchLineMaterial(SKETCH_GHOST_COLOR, sketchLineResolution)
   const sketchGhostWarnMaterial = createSketchLineMaterial(SKETCH_GHOST_WARN_COLOR, sketchLineResolution)
+  // 点の図形の幽霊(折れ線を持たないので取っ手と同じ大きさの印で描く)
+  const ghostPointMaterialOf = (color: number) =>
+    new THREE.PointsMaterial({ color, size: SKETCH_HANDLE_PIXELS * 2, sizeAttenuation: false, depthTest: false })
+  const sketchGhostPointMaterial = ghostPointMaterialOf(SKETCH_GHOST_COLOR)
+  const sketchGhostWarnPointMaterial = ghostPointMaterialOf(SKETCH_GHOST_WARN_COLOR)
 
   /**
    * スケッチの線・点の材質は (選択状態 × ホバー × 描き方) のキャッシュから取る(`faceMaterialFor` と同じ形)。
@@ -1209,7 +1214,7 @@ export function createViewport(container: HTMLElement): Viewport {
     /** シーンに足したもの(除去と破棄のため。ピック用の配列は別に持つ)。 */
     batch: SceneBatch
     regionMeshes: THREE.Mesh[]
-    /** 図形の (u,v) の折れ線(視点合わせの中心を出すのに使う)。 */
+    /** 図形の (u,v) の折れ線と点の図形の位置(視点合わせの中心を出すのに使う)。 */
     points: Array<[number, number]>
     /** 図形1本ごとの折れ線の点数(実機検査の `sketchPolylineCounts` が読む)。 */
     polylineCounts: number[]
@@ -1440,6 +1445,8 @@ export function createViewport(container: HTMLElement): Viewport {
             polylineCounts.push(built.points.length)
           }
         }
+        // 点の図形は折れ線を持たないので、視点合わせの範囲へ位置そのものを入れる
+        if (handle.kind === 'point') points.push([handle.params.cx, handle.params.cy])
         if (!editing) {
           // 点は普段描かない(ホバー中・選択中だけ `replaceMark`)。点の図形だけは編集していないスケッチでも常に描く
           // (本人決定 2026-10-18。docs/DESIGN_DECISIONS.md)。
@@ -1624,10 +1631,24 @@ export function createViewport(container: HTMLElement): Viewport {
     if (entities.length === 0 || !target) return
     const batch = createBatch(sketchRoot)
     const material = tone === 'warn' ? sketchGhostWarnMaterial : sketchGhostMaterial
+    const pointPositions: number[] = []
     for (const entity of entities) {
+      if (entity.kind === 'point') {
+        const world = toWorld(target.frame, entity.params.cx, entity.params.cy)
+        pointPositions.push(world.x, world.y, world.z)
+        continue
+      }
       const built = buildEntityLine(target.frame, entity, material)
       if (!built) continue
       batch.add(built.object, built.geometry)
+    }
+    if (pointPositions.length > 0) {
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pointPositions), 3))
+      geometry.computeBoundingSphere()
+      const mesh = new THREE.Points(geometry, tone === 'warn' ? sketchGhostWarnPointMaterial : sketchGhostPointMaterial)
+      mesh.renderOrder = LAYER.sketchPoint
+      batch.add(mesh, geometry)
     }
     if (batch.objects.length === 0) return
     ghost = batch

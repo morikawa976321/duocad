@@ -132,3 +132,19 @@ def test_selecting_a_point_entity_always_means_its_point(session: Session):
     items = selection.get_selection(session.document).items
     assert len(items) == 1
     assert items[0]["point"] == "cx"
+
+
+def test_toggling_a_point_entity_without_its_point_key_removes_it(session: Session):
+    """落ちたら、`point` を省いた参照で `toggle_selection` すると、選択済みの点が外れずに同じ点がもう1件入る。"""
+    created = session.apply("sketch_create", {"base_plane": "XY"})
+    sketch_id = created["sketch_id"]
+    point = session.apply("add_point", {"sketch_id": sketch_id, "point": [1.0, 1.0]})["entity_id"]
+    bare = {"sketch": sketch_id, "entity": point}
+
+    session.set_selection(refs=[bare])
+    session.toggle_selection([bare])
+    assert selection.get_selection(session.document).items == []
+
+    session.toggle_selection([bare])
+    session.toggle_selection([_point_ref(sketch_id, point)])
+    assert selection.get_selection(session.document).items == []
