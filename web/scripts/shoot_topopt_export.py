@@ -9,7 +9,9 @@
 
 題材は`--model <ファイル名>` —— **利用者が実際に作った文書**(`--models-dir` 配下の
 操作ログ)。条件は文書に置いてあるものをそのまま使い、製品が実際に持っている
-つまみ(`element_mm`)だけを面ごとに変える。
+つまみ(`element_mm`)だけを面ごとに変える。**文書は面ごとに使い捨てのフォルダへ写してから開く**:
+最適化の結果は自動保存で開いている文書に書き足されるので、元のフォルダ(既定は実 `models/`)を
+開いたまま走らせると本人の文書に結果ボディが残り、次の面の始まりにも混ざる。
 
 出力は `<out>/panel-<i>.json`(頂点は**mm**)と `<out>/manifest.json`。
 
@@ -24,7 +26,9 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -63,49 +67,56 @@ def export_model(name: str, models_dir: Path, panels: list[dict], out: Path) -> 
     from duocad.server import Session
 
     known = {"label", "element_mm"}
-    written: list[dict] = []
-    for index, panel in enumerate(panels):
+    for panel in panels:
         unknown = set(panel) - known
         if unknown:
             raise SystemExit(
                 f"--model で使えないつまみ: {', '.join(sorted(unknown))}"
                 "(製品の経路には二値探索の内部パラメータのつまみが無い)"
             )
-        started = time.perf_counter()
-        # 面ごとに開き直す: 前の面が足した結果ボディが次の面の条件(保持ソリッドの体積)に混ざる。
-        session = Session(None, 0.2, models_dir=models_dir)
-        session.open_document(name)
-        report = session.optimize_conditions()
-        if not report["ready"]:
-            raise SystemExit(
-                f"文書 {name!r} は条件がそろっていない:\n  " + "\n  ".join(report["problems"])
-            )
-        result = session.run_optimization(element_size_mm=panel.get("element_mm"))
-        if result["state"] != "done":
-            raise SystemExit(f"panel-{index} [{panel['label']}]: {result['warning']}")
-        body = session.document.get_body(result["body_id"])
-        verts = np.asarray(body.mesh.positions, dtype=np.float32).reshape(-1, 3)
-        faces = np.asarray(body.mesh.indices, dtype=np.uint32).reshape(-1, 3)
+    source = Path(models_dir) / name
+    if not source.is_file():
+        raise SystemExit(f"文書が無い: {source}")
+    written: list[dict] = []
+    with tempfile.TemporaryDirectory(prefix="duocad-shoot-") as scratch:
+        scratch_dir = Path(scratch)
+        for index, panel in enumerate(panels):
+            started = time.perf_counter()
+            # 面ごとに元の文書から開き直す: 前の面が足した結果ボディが次の面の条件(保持ソリッドの体積)に混ざる。
+            shutil.copy2(source, scratch_dir / name)
+            session = Session(None, 0.2, models_dir=scratch_dir, exports_dir=scratch_dir / "export")
+            session.open_document(name)
+            report = session.optimize_conditions()
+            if not report["ready"]:
+                raise SystemExit(
+                    f"文書 {name!r} は条件がそろっていない:\n  " + "\n  ".join(report["problems"])
+                )
+            result = session.run_optimization(element_size_mm=panel.get("element_mm"))
+            if result["state"] != "done":
+                raise SystemExit(f"panel-{index} [{panel['label']}]: {result['warning']}")
+            body = session.document.get_body(result["body_id"])
+            verts = np.asarray(body.mesh.positions, dtype=np.float32).reshape(-1, 3)
+            faces = np.asarray(body.mesh.indices, dtype=np.uint32).reshape(-1, 3)
 
-        payload = dict(
-            {
-                "index": index,
-                "label": panel["label"],
-                "subject": name,
-                "element_mm": float(result["element_size_mm"]),
-                "grid": [int(v) for v in result["grid"]["shape"]],
-                "safety_factor": result["safety_factor"],
-                "seconds": time.perf_counter() - started,
-            },
-            **_encode(verts, faces),
-        )
-        (out / f"panel-{index}.json").write_text(json.dumps(payload), encoding="utf-8")
-        written.append(payload)
-        print(
-            f"  panel-{index} [{panel['label']}]: {payload['n_faces']} 三角形 "
-            f"({payload['seconds']:.1f}秒)",
-            flush=True,
-        )
+            payload = dict(
+                {
+                    "index": index,
+                    "label": panel["label"],
+                    "subject": name,
+                    "element_mm": float(result["element_size_mm"]),
+                    "grid": [int(v) for v in result["grid"]["shape"]],
+                    "safety_factor": result["safety_factor"],
+                    "seconds": time.perf_counter() - started,
+                },
+                **_encode(verts, faces),
+            )
+            (out / f"panel-{index}.json").write_text(json.dumps(payload), encoding="utf-8")
+            written.append(payload)
+            print(
+                f"  panel-{index} [{panel['label']}]: {payload['n_faces']} 三角形 "
+                f"({payload['seconds']:.1f}秒)",
+                flush=True,
+            )
     return written
 
 

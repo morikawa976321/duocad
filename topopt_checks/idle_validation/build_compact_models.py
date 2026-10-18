@@ -7,6 +7,7 @@
 (原因2=経路喪失)を書く。どちらも `Session` の verb(スケッチ→押し出し→`set_preserve_bodies`/
 `set_fixtures`/`set_loads`)だけで組み、`save_document`/`open_document` の操作ログ往復を経る
 (手動Body挿入だけの模型は操作ログ再生で消えるので使わない —— タスクの完了条件)。
+組み立て中の自動保存は使い捨ての置き場へ落ち(`_documents.scratch_session`)、`models/` へ書くのは `save_document` の2本だけ。
 
 パラメータは本ファイル冒頭の定数(`DILUTION_*`/`PATH_*`)。値の根拠(荷重・要素サイズの選定過程、
 不採用候補)は `docs/topopt_idle_validation/00_COMPACT_MODELS.md` の「パラメータ探索」節。
@@ -21,6 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "topopt_checks"))
 import _bootstrap  # noqa: E402,F401
 
+from _documents import scratch_session  # noqa: E402
 from duocad import optimize_run, query  # noqa: E402
 from duocad.server import Session  # noqa: E402
 from duocad.topopt import design_space as ds  # noqa: E402
@@ -120,7 +122,7 @@ def build_dilution_model(
     load_n: float = DILUTION_LOAD_N,
 ) -> Session:
     """保持リング(拘束)+離れた荷重パッド。`(session)` を返す(呼び出し側で save_document)。"""
-    session = Session(None, 0.2)
+    session = scratch_session(0.2)
     boss = _box(session, boss_w, boss_d, boss_h, corner=(0.0, 0.0))
     boss = _drill_through(session, boss, hole_r, (boss_w / 2, boss_d / 2), boss_h + 2.0)
     pad = _box(session, pad_w, pad_d, pad_h, corner=(boss_w + gap, (boss_d - pad_d) / 2))
@@ -145,7 +147,7 @@ def build_path_model(
     load_n: float = PATH_LOAD_N,
 ) -> Session:
     """離れた2支持パッド(拘束)+偏心荷重パッド。`(session)` を返す。"""
-    session = Session(None, 0.2)
+    session = scratch_session(0.2)
     left = _box(session, support_w, support_d, support_h, corner=(0.0, 0.0))
     right = _box(session, support_w, support_d, support_h, corner=(span, 0.0))
     load = _box(session, load_w, load_d, load_h, corner=(load_x, 0.0))
