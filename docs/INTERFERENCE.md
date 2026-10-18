@@ -416,8 +416,10 @@ astra の意見（要旨）と AI の採否:
 .\.venv\Scripts\python.exe -m tools.interference_probe.pipeline <PC ケースの STEP> --clearance 0.2 [--whole] --compare output\interference_probe\pc_case.json
 .\.venv\Scripts\python.exe -m tools.interference_probe.astra_checks
 .\.venv\Scripts\python.exe -m tools.interference_probe.scale --n 30 100 300
-.\.venv\Scripts\python.exe -m tools.interference_probe.mixed <形状最適化の結果入りの文書.json> [--to-brep]
-.\.venv\Scripts\python.exe -m tools.interference_probe.threads --timeout 300
+.\.venv\Scripts\python.exe -m tools.interference_probe.mixed <形状最適化の結果入りの文書.json> [--to-brep [--no-gf]]
+.\.venv\Scripts\python.exe -m tools.interference_probe.threads --timeout 240
+.\.venv\Scripts\python.exe -m tools.interference_probe.tolerance_check <PC ケースの STEP>
+.\.venv\Scripts\python.exe -m tools.interference_probe.subprocess_cost <PC ケースの STEP>
 ```
 
 `-m` で走らせる（cwd が sys.path の先頭に入り、ワークツリーの `duocad` を読む。[DEV_NOTES.md](DEV_NOTES.md)「ワークツリー」）。
