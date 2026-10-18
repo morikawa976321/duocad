@@ -196,3 +196,20 @@ def test_a_step_is_not_finished_into_a_document_that_changed_after_the_run(sessi
     with pytest.raises(optimize_run.OptimizeInputError, match="変わった"):
         session.finish_optimization_step(0)
     assert len(session.document.log.entries) == entries and not session.optimizing
+
+
+def test_the_finish_button_is_offered_only_while_the_document_is_as_it_was_at_the_run(session: Session) -> None:
+    """落ちたら、実行の後に文書を変えても画面の「このステップで仕上げる」が出たままで、押すと optimize_error になる。"""
+    left, _right, _fixed, _load = four_conditions(session)
+    assert session.steps_finishable() is False  # 実行する前はステップが無い
+    first = session.run_optimization(element_size_mm=8.0)
+    assert first["state"] == "done", first.get("warning")
+    assert session.steps_finishable() is True
+
+    session.undo()  # 結果を取り消すだけでは「変わった」と数えない
+    assert session.steps_finishable() is True
+
+    session.modify_selection([{"body": left.id, "kind": "body"}], [])
+    session.move_body(0.0, 0.0, 100.0)
+    session.clear_selection()
+    assert session.steps_finishable() is False

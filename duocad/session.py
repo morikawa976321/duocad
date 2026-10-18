@@ -845,6 +845,18 @@ class Session:
             return self.optimization_steps
         return None
 
+    def steps_finishable(self) -> bool:
+        """直近の実行のステップを選んで仕上げられるか: ステップがあり、仕上げる手段が残っていて、実行の後で文書が変わっていない
+        (`finish_optimization_step` が断る条件と同じ。画面の「このステップで仕上げる」ボタンの出し分けに使う)。"""
+        steps = self.steps_for_current()
+        if steps is None or steps.finisher is None:
+            return False
+        try:
+            self._require_unchanged_since_run(self.document)
+        except optimize_run.OptimizeInputError:
+            return False
+        return True
+
     @property
     def optimizing(self) -> bool:
         """形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。どの文書でかは問わない(同時に走るのは1本だけ。docs/TOPOPT.md)。"""
@@ -985,15 +997,14 @@ class Session:
             verb_handler(operation.verb).do(document, moved)
             self._steps_results.append(moved)
 
-    def _require_unchanged_since_run(self) -> None:
+    def _require_unchanged_since_run(self, document: Optional[Document] = None) -> None:
         """直近の実行の後で文書が変わっていたら断る。仕上げは実行したときの条件・格子・保持形状で作るので、その後に条件や形を
         変えた文書へ足すと、古い前提の結果が黙って入る。実行(と仕上げ)が足した結果の操作は変えたと数えない
-        (結果を取り消す・やり直すのも同じ)。"""
+        (結果を取り消す・やり直すのも同じ)。`document` は比べる文書(既定は実行中の文書。実行の外から問うときは開いている文書)。"""
         if self._steps_inputs is None:
             return
-        current = tuple(
-            operation for operation in self._optimize_document.log.entries if operation not in self._steps_results
-        )
+        document = document if document is not None else self._optimize_document
+        current = tuple(operation for operation in document.log.entries if operation not in self._steps_results)
         if current != self._steps_inputs:
             raise optimize_run.OptimizeInputError(
                 "文書が最適化の実行の後で変わった。実行したときの条件で作った結果は、いまの文書へ足せない"
