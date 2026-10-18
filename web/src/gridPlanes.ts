@@ -189,14 +189,14 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
   }
 
   /**
-   * frameがどの基準平面のものか(u/vの一致で見る)。基準平面でなければ null。
+   * frameの向き(u/v)がどの基準平面と一致するか。基準平面でなければ null。
+   * 原点は見ない: 基準平面からのオフセット(原点が法線方向にずれる)も同じ向きの平面として答える。
    * 「基準平面か任意面か」の判定には使わない(`sketchGridIsFacePlane` 参照)。
-   * `plane.kind==='base'` のときにXY/XZ/YZのどれを表示するかだけを答える。
+   * `plane.kind==='base'` のときにXY/XZ/YZのどの軸の色・面外の軸を出すかだけを答える。
    */
   function basePlaneForFrame(frame: PlaneFrame): BasePlaneName | null {
     const same = (a: readonly number[], b: readonly number[]): boolean =>
       Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6 && Math.abs(a[2] - b[2]) < 1e-6
-    if (!same(frame.origin, [0, 0, 0])) return null
     for (const spec of BASE_PLANES) {
       if (same(frame.u, spec.u) && same(frame.v, spec.v)) return spec.name
     }
@@ -282,6 +282,8 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
    * | 通常(スケッチ外) | XY平面 + Z軸 |
    * | スケッチ起動中(対象待ち・`setArmed(true)`) | 3平面すべて |
    * | 基準平面へのスケッチ中 | その平面 + それに直交する軸 |
+   * | 基準平面からのオフセットへのスケッチ中 | スケッチ平面(原点がずれたframe) + 直交する軸(ワールド原点を通る) |
+   * | 面からのオフセットへのスケッチ中 | スケッチ平面のframeのグリッドのみ(直交軸なし) |
    * | 任意面へのスケッチ中 | その面のframeのグリッドのみ(直交軸なし) |
    *
    * 対象待ちは基準平面もクリックして指すので3平面のまま(3本の軸が全部どれかの面内に出るので面外の軸は要らない)。
@@ -317,29 +319,41 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
         axis: null,
       }
     }
-    // ここへ来るのはスケッチ外か `plane.kind==='base'` のスケッチ中だけ。万一frameが不一致なら 'XY' へ落とす。
-    const sketchPlane = sketchGridFrame === null ? null : basePlaneForFrame(sketchGridFrame)
-    const name: BasePlaneName = sketchPlane ?? 'XY'
-    const axes = BASE_PLANE_AXES[name]
-    // 基準平面スケッチ中だけ `sketchContentUvBox` を入れ直す(内容が変わるたびに
-    // `rescale`/`setSketchFrame` 経由で通る)。通常表示は追従の対象外なので触らない。
-    let bounds: UvBounds
     if (sketchGridFrame !== null) {
-      sketchContentUvBox = contentUvBoxForFrame(baseFrame(name))
+      // 基準平面・そこからのオフセット・面からのオフセットへのスケッチ中。スケッチ自身のframeで描く
+      // (オフセットは原点が法線方向にずれていて、原点を通る基準平面のframeではスケッチ平面に出ない)。
+      // 向きが基準平面と一致するときだけ、その平面の軸の色と面外の軸を出す。
+      // `sketchContentUvBox` を入れ直す(内容が変わるたびに `rescale`/`setSketchFrame` 経由で通る)。
+      const aligned = basePlaneForFrame(sketchGridFrame)
+      const axes = aligned === null ? null : BASE_PLANE_AXES[aligned]
+      sketchContentUvBox = contentUvBoxForFrame(sketchGridFrame)
       sketchContentIncludeOrigin = true
-      bounds = boundingSquare(sketchContentUvBox, { includeOrigin: true })
+      const bounds = boundingSquare(sketchContentUvBox, { includeOrigin: true })
       sketchGridBounds = bounds
-    } else {
-      bounds = contentBoundsForPlane(baseFrame(name))
+      return {
+        planes: [
+          {
+            name: aligned ?? 'sketch-plane',
+            frame: sketchGridFrame,
+            uColor: axes?.uColor ?? null,
+            vColor: axes?.vColor ?? null,
+            bounds,
+            depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid,
+          },
+        ],
+        axis: axes?.outOfPlane ?? null,
+      }
     }
+    // スケッチ外の通常表示。通常表示は追従の対象外なので `sketchContentUvBox` には触らない。
+    const axes = BASE_PLANE_AXES.XY
     return {
       planes: [
         {
-          name,
-          frame: baseFrame(name),
+          name: 'XY',
+          frame: baseFrame('XY'),
           uColor: axes.uColor,
           vColor: axes.vColor,
-          bounds,
+          bounds: contentBoundsForPlane(baseFrame('XY')),
           depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid,
         },
       ],
@@ -427,8 +441,15 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
     gridPlanesShown = wanted.planes.map((spec) => spec.name)
     gridDepthBiasLayers = wanted.planes.map((spec) => spec.depthBiasLayer)
     gridPlaneBounds = wanted.planes.map((spec) => spec.bounds)
-    // 面外の軸線は格子の枠と同じ長さにする。
-    rebuildGridAxisLine(wanted.axis, wanted.planes[0]?.bounds?.half ?? gridExtent)
+    // 面外の軸線は格子の枠と同じ長さにする。ワールド原点を通る線なので、オフセット平面まで届くようにその分を足す。
+    const first = wanted.planes[0]
+    let reach = first?.bounds?.half ?? gridExtent
+    if (wanted.axis !== null && first !== undefined) {
+      const [ox, oy, oz] = first.frame.origin
+      const [dx, dy, dz] = wanted.axis.dir
+      reach += Math.abs(ox * dx + oy * dy + oz * dz)
+    }
+    rebuildGridAxisLine(wanted.axis, reach)
   }
 
   function setSketchFrame(frame: PlaneFrame | null, face: SketchFace | null): void {

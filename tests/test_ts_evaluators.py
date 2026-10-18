@@ -15,6 +15,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 EVALUATORS = [
     "eval_choice_sync.mjs",
     "eval_expression.mjs",
+    "eval_grid_planes.mjs",
     "eval_grid_scale.mjs",
     "eval_min_width.mjs",
     "eval_screen_pick.mjs",
