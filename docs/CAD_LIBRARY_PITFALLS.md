@@ -104,6 +104,13 @@
   - **素の柱を `BRepOffsetAPI_DraftAngle` で傾ける**(側面を `Add(face, 押し出し方向, angle, 底面の平面)`)と、高さは垂直のまま、
     太る向きでも角は尖ったまま(平面6枚)、円は円錐1枚で解析体積と一致、穴は同じ向き指定で外形が細り穴が広がる(抜き勾配)。
     潰れる角度(長方形 40°)は `IsDone()=False`。**ただしベジエ・楕円を押し出した側面(`SurfaceOfExtrusion`)は `AddDone()=False`**。
+  - **輪郭線ごとに `BRepOffsetAPI_MakeDraft(wire, 方向, |angle|)` + `SetOptions(BRepBuilderAPI_RightCorner)` で側面の殻を作り、
+    底面と上の自由境界から張った面を縫う**と、ベジエ・楕円・L字の凹角まで角が尖ったまま通り、長方形・円は DraftAngle と体積が一致する。
+    **細る/太るは角度の符号でも輪郭の向きでもなく `SetDraft(True)` で内向きになる**(既定は外向き。`Perform(L)` の L は斜辺の長さ)。
+    穴は穴の輪郭を逆向きに傾けた立体を外周の立体から cut すれば、外周が太ると穴が狭まる(DraftAngle の穴あき板と体積一致)。
+    潰れる角度は長方形・L字では殻が `BRepCheck` 偽になるが、**円は頂点を越えて砂時計形の円錐を返し、`BRepCheck` も
+    `BOPAlgo_ArgumentAnalyzer` の自己交差検査も通る**(円 r5・高さ 10・40°)。潰れの検出は自前で要る。
+    楕円 6×3 を高さ 10 で 5° 細らせると先端の曲率半径が約 0.6 になり、全辺 r1 のフィレットは失敗する(r0.5 や高さ 5 なら通る)。
 
 ## 複数面の押し出し（`kernel_extrude.extrude_faces`）
 
