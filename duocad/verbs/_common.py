@@ -10,9 +10,10 @@ import math
 from typing import Any, List, Optional, Sequence, Union
 from weakref import WeakKeyDictionary
 
-from .. import meshbody, naming, selection
+from .. import kernel_sketch, meshbody, naming, selection
 from ..document import MESH_KIND, Body, BodyId, Document, new_body_id
 from ..oplog import Operation
+from ..sketch import get_sketch
 
 #: undo用のスナップショット。`(body_id, seq) -> 直前の形状`。
 #:
@@ -296,6 +297,33 @@ def reject_foreign_args(mode: str, given: dict, *, verb: str) -> None:
     foreign = sorted(name for name, value in given.items() if value is not None)
     if foreign:
         raise ValueError(f"{verb}(mode={mode!r}) does not take {foreign} (mode を切り替えるか、その引数を外すこと)")
+
+
+#: 別のスケッチの図形を軸・中心に使うとき、2つのスケッチの (u, v) が同じ点を指すとみなす差(枠の向きは単位ベクトル、原点は mm)。
+FRAME_TOLERANCE = 1.0e-9
+
+
+def require_same_uv_plane(doc: Document, reference_sketch_id: str, target_sketch_id: str, *, what: str) -> None:
+    """`what`(鏡映軸・回転中心)に使う図形のスケッチの (u, v) と、動かす・鏡映する図形のスケッチの (u, v) が、
+    同じ平面上の同じ点を指すことを確かめる(違えば ValueError)。軸・中心は (u, v) の数値にして対象の座標へそのまま当てるので、
+    平面が違うと別の場所に黙って鏡映・回転される。向きが同じで原点が法線方向にずれただけの平行な平面(オフセットしたスケッチ)は通す。
+    """
+    if reference_sketch_id == target_sketch_id:
+        return
+    reference = kernel_sketch.sketch_plane_frame(get_sketch(doc, reference_sketch_id).plane)
+    target = kernel_sketch.sketch_plane_frame(get_sketch(doc, target_sketch_id).plane)
+    same_axes = all(
+        abs(a - b) <= FRAME_TOLERANCE for key in ("u", "v") for a, b in zip(reference[key], target[key])
+    )
+    shift = [a - b for a, b in zip(reference["origin"], target["origin"])]
+    in_plane_shift = any(
+        abs(sum(delta * axis for delta, axis in zip(shift, reference[key]))) > FRAME_TOLERANCE for key in ("u", "v")
+    )
+    if not same_axes or in_plane_shift:
+        raise ValueError(
+            f"{what}の図形のスケッチ {reference_sketch_id!r} と対象のスケッチ {target_sketch_id!r} は平面が違う"
+            "((u, v) が同じ点を指さない。同じ平面のスケッチの図形を指すこと)"
+        )
 
 
 def overlaps_original(values: dict, current: dict, *, fresh: bool) -> bool:

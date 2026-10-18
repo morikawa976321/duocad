@@ -66,6 +66,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **どちらも常に複製を作る**(in-place 反転も `copy` 引数も無い)。
 - **軸・鏡映面は数値へ解決してからログに載せる**(`axis_p0`/`axis_dir`、`plane_point`/`plane_normal`)。対象に軸の図形/面自身が混ざる場合、複製後に参照を引き直すと別物を指すため(`move_body.axis_edge` と同じ)。
 - **軸に使った線分自身が対象に混ざっていたら、対象から黙って外す**(`mirror_sketch.py`。直線は自分自身へ映り元と重なる複製にしかならない)。対象が軸だけになったら ValueError。
+- **軸(`mirror_sketch_entities`)・回転中心(`move_sketch_entities` の `center_entity`)に別のスケッチの図形を指すときは、対象と (u, v) が同じ平面上の同じ点を指すこと**(`_common.require_same_uv_plane`)。数値の (u, v) を対象の座標へそのまま当てるので、平面が違うと黙って別の場所に映る・回る。向きが同じで原点が法線方向にずれただけのオフセットしたスケッチは通す。
 - **長方形は軸が水平・垂直のときだけ種別を保てる。** 斜めの軸では `sketch._mirror_rectangle` が4本の線分へ分解した結果を返し、`mirror_sketch_entities` 側が検査して ValueError にする(回転と同じ二段構え)。この分解は ValueError へ変換するための中間表現で、戻り値に線分が出ることはない。
 - **円弧の鏡映は始点・終点を入れ替えてから角度を映す**(`new_start = 2*axis_angle - end`、`new_end = 2*axis_angle - start`)。鏡映は向きを反転するので別々に映すと掃引方向が壊れる。掃引量(`end-start`)は保たれる。
 - `EntityKindOps.mirror`(5種別とも実装。`mirror(params, ax, ay, ux, uy) -> List[dict]`、rotate と同じ「種別が変わりうる」形)、`kernel.mirror_shape(shape, point, normal)`(`gp_Trsf.SetMirror`。常に独立した複製を返す)。

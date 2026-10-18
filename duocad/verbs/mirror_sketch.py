@@ -28,7 +28,7 @@ from ..sketch import (
     remove_entities,
     require_valid_params,
 )
-from ._common import overlaps_original
+from ._common import overlaps_original, require_same_uv_plane
 
 VERB_MIRROR_SKETCH_ENTITIES = "mirror_sketch_entities"
 
@@ -137,6 +137,8 @@ def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) ->
             "mirror_sketch_entities: 対象が鏡映軸自身しか無い"
             "(軸に使った図形は対象から自動的に外れるので、他に対象が要る)"
         )
+    for sketch_id, _ in normalized:
+        require_same_uv_plane(doc, axis_sketch, sketch_id, what="鏡映軸")
     new_ids = [new_entity_id() for _ in normalized]
     created = _create_mirrors(doc, normalized, ax, ay, ux, uy, new_ids, fresh=True)
 

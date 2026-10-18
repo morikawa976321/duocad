@@ -50,6 +50,7 @@ from ._common import (
     overlaps_original,
     reject_foreign_args,
     require_move_mode,
+    require_same_uv_plane,
     rotation_degrees,
 )
 
@@ -185,6 +186,8 @@ def _rotation_args(
             str(center_entity["entity"]),
             center_entity.get("point"),
         )
+        for target_sketch in {item["sketch"] for item in targets}:
+            require_same_uv_plane(doc, str(center_entity["sketch"]), target_sketch, what="回転中心")
     elif center is not None:
         numbers = finite_numbers(center, 2, what="center", form="[u, v]")
         resolved = (numbers[0], numbers[1])
