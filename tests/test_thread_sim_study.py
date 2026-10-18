@@ -66,3 +66,37 @@ def test_a_cut_off_last_line_does_not_swallow_the_next_result(fake_study) -> Non
         except json.JSONDecodeError:
             continue  # 書きかけの断片
     assert sorted(parsed) == list(NAMES)
+
+
+def test_a_pool_that_breaks_while_the_consumer_is_busy_is_replaced_not_raised() -> None:
+    """落ちたら、結果を保存している間に別の設計の worker が落ちると、次の設計を配る段が BrokenProcessPool で例外終了し、
+    落ちた設計のエラー行も、残りの設計の結果も得られない。"""
+    import time
+
+    todo = [(dict(name=name), {}, {}) for name in "ABCD"]
+    results = {}
+    for design, row in S.run_pool(todo, study_support.dies_late_on_b, [0.0], 2):
+        results[design["name"]] = row
+        if design["name"] == "A":
+            time.sleep(1.0)  # 受け取る側が遅い間に B が落ちる
+
+    assert set(results) == set("ABCD")
+    assert results["B"]["error"] == S.WORKER_DIED
+    assert all(results[name].get("ok") for name in "ACD")
+
+
+def test_a_last_line_cut_inside_a_utf8_character_does_not_stop_the_resume(fake_study) -> None:
+    """落ちたら、日本語を含む行が文字の途中で切れた JSONL を読む段が UnicodeDecodeError で止まり、再開できない。"""
+    whole = json.dumps(dict(name="A", ok=True), ensure_ascii=False).encode("utf-8")
+    cut = json.dumps(dict(name="B", note="日本語の備考"), ensure_ascii=False).encode("utf-8")[:-5]  # 文字の途中で切る
+    fake_study.write_bytes(whole + b"\n" + cut)
+
+    assert S.main(["fake", "--workers", "1"]) == 0
+
+    done = set()
+    for line in fake_study.read_bytes().decode("utf-8", errors="replace").splitlines():
+        try:
+            done.add(json.loads(line)["name"])
+        except (json.JSONDecodeError, KeyError):
+            pass
+    assert done >= set(NAMES)

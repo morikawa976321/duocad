@@ -441,19 +441,27 @@ def run_pool(todo, runner, e_list, workers: int):
         crashed: list = []
         with ProcessPoolExecutor(max_workers=workers) as pool:
             inflight: dict = {}
+            pool_broken = False
             while queue or inflight:
-                while queue and not crashed and len(inflight) < workers:
-                    s, pk, mk = queue.pop(0)
-                    inflight[pool.submit(runner, s, pk, e_list, mk)] = s
-                finished, _ = wait(inflight, return_when=FIRST_COMPLETED)
-                for fu in finished:
-                    s = inflight.pop(fu)
-                    res, broken = _settle(fu, s)
-                    if broken:
-                        crashed.append(s)
-                    else:
-                        yield s, res
-                if crashed:
+                while queue and not crashed and not pool_broken and len(inflight) < workers:
+                    item = queue.pop(0)
+                    try:
+                        inflight[pool.submit(runner, item[0], item[1], e_list, item[2])] = item[0]
+                    except BrokenProcessPool:
+                        # 動いていた設計が落ちたのを、結果を受け取る前に管理スレッドが先に見つけたとき。配れなかった設計は
+                        # 戻して(何も書かない)、動いていた分を回収して新しいプールへ移る。
+                        queue.insert(0, item)
+                        pool_broken = True
+                if inflight:
+                    finished, _ = wait(inflight, return_when=FIRST_COMPLETED)
+                    for fu in finished:
+                        s = inflight.pop(fu)
+                        res, broken = _settle(fu, s)
+                        if broken:
+                            crashed.append(s)
+                        else:
+                            yield s, res
+                if crashed or pool_broken:
                     # 壊れたプールは動いていた分を一斉に失敗させる。残りを回収してから新しいプールへ移る。
                     finished, _ = wait(inflight)
                     for fu in finished:
@@ -466,6 +474,12 @@ def run_pool(todo, runner, e_list, workers: int):
                     break
         for s in crashed:
             yield s, dict(s, error=WORKER_DIED)
+
+
+def _read_lines(path: Path) -> list:
+    """JSONL の行。書き込み途中で止まった末尾が UTF-8 の文字の途中で切れていても読める(切れた行は壊れた JSON になり、
+    呼び手の `json.loads` が捨てて、その設計は未完了として回し直される)。"""
+    return path.read_bytes().decode("utf-8", errors="replace").splitlines()
 
 
 def ensure_final_newline(path: Path) -> None:
@@ -501,7 +515,7 @@ def main(argv=None) -> int:
     done = set()
     if path.exists() and a.redo_errors:
         keep, dropped = [], 0
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _read_lines(path):
             try:
                 d = json.loads(line)
             except json.JSONDecodeError:
@@ -515,7 +529,7 @@ def main(argv=None) -> int:
         path.write_text("".join(x + "\n" for x in keep), encoding="utf-8")
         print(f"失敗を含む {dropped} 行を消した", flush=True)
     if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _read_lines(path):
             try:
                 done.add(json.loads(line)["name"])
             except (json.JSONDecodeError, KeyError):
