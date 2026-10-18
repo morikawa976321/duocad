@@ -1294,6 +1294,7 @@ class Session:
         with self._save_lock:
             previous = self._current_name
             source = self._resolve_document_name(previous)
+            stale = source.exists() and self._unsaved
             if source.exists():
                 os.replace(source, target)
             else:
@@ -1303,6 +1304,14 @@ class Session:
             self._carry_thumbnail(source, target, move=True)
             self._current_name = target.name
             self._unsaved = False
+            if stale:
+                # 直前の自動保存が書けなかったので、移したファイルは最後の変更を持っていない。文書を書き直す。
+                # 書けなければ未保存のまま残す(`autosave` と同じく、例外にせず警告と `saved=False` で知らせる)。
+                try:
+                    self._write_document_file(target, self.document.log.to_file_chunks(created=self._created))
+                except Exception as error:  # noqa: BLE001
+                    self._unsaved = True
+                    self.warnings.append(f"自動保存できなかった: {type(error).__name__}: {error}")
         return {
             "action": "rename",
             "path": str(target),
@@ -1417,13 +1426,17 @@ class Session:
         「一覧に出ないだけで理由が分からない」になる)。
         `created` は入れ物の作成日時(無いファイルは None)。`thumb` はサムネイルの更新日時で、画像そのものは載せない
         (一覧は自動保存のたびに取り直されるので、載せると全件の画像を毎回送る)。画像は `get_thumbnail` で1件ずつ取る。
+        ファイルは1件ずつ `_save_lock` を持って読む: 編集中のファイルを書き手スレッド(や実行器スレッドの自動保存)が
+        `os.replace` している間に開くと、Windows では書く側が `PermissionError` になり、自動保存が失敗する。
         """
         self.models_dir.mkdir(parents=True, exist_ok=True)
+        self._drain_writes()
         files = []
         for path in sorted(self.models_dir.glob("*.json")):
             try:
-                mtime = path.stat().st_mtime
-                payload = json.loads(path.read_text(encoding="utf-8"))
+                with self._save_lock:
+                    mtime = path.stat().st_mtime
+                    payload = json.loads(path.read_text(encoding="utf-8"))
                 OpLog.from_payload(payload)
             except (OSError, ValueError, KeyError, TypeError):
                 continue

@@ -955,3 +955,63 @@ def test_the_state_does_not_ship_the_embedded_step_text(session: Session, tmp_pa
     session.save_document("with-step.json")
     saved = json.loads((session.models_dir / "with-step.json").read_text(encoding="utf-8"))
     assert saved["operations"][-1]["args"]["step"] == step_text, "保存側は本文を書くこと"
+
+
+def test_renaming_after_a_failed_autosave_writes_the_document_again_instead_of_calling_it_saved(
+    session: Session, monkeypatch
+) -> None:
+    """落ちたら: 自動保存が書けなかった後の改名が、古いままのファイルを移しただけで「保存済み」に戻す(最後の変更がファイルに無い)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+
+    def broken(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("duocad.session.os.replace", broken)
+        session.add_circle(sketch_id, [0.0, 0.0], 10.0)
+    assert session.state_meta()["saved"] is False
+
+    session.rename_document("renamed.json")
+
+    assert session.state_meta()["saved"] is True
+    written = json.loads((session.models_dir / "renamed.json").read_text(encoding="utf-8"))["operations"]
+    assert len(written) == len(session.document.log.entries)
+
+
+def test_renaming_when_the_rewrite_fails_too_stays_unsaved_and_warns(session: Session, monkeypatch) -> None:
+    """落ちたら: 書き直しも失敗したのに「保存済み」と表示する、または改名そのものが例外で落ちて移した後の状態が食い違う。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+
+    def broken(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("duocad.session.os.replace", broken)
+        session.add_circle(sketch_id, [0.0, 0.0], 10.0)
+    with monkeypatch.context() as patch:
+        patch.setattr(Session, "_write_document_file", staticmethod(broken))
+        session.rename_document("renamed.json")
+
+    assert session.current_name == "renamed.json" and (session.models_dir / "renamed.json").exists()
+    assert session.state_meta()["saved"] is False
+    assert any("自動保存できなかった" in line for line in session.warnings)
+
+
+def test_listing_documents_waits_for_a_save_in_progress(session: Session) -> None:
+    """落ちたら: 一覧が書き込み中のファイルを錠なしで開く。Windows では開いている間の `os.replace` が PermissionError になり、
+    書き手の自動保存が失敗して `saved=False` が点滅する。"""
+    import threading
+
+    _box(session)
+    finished = threading.Event()
+
+    def list_it() -> None:
+        session.list_documents()
+        finished.set()
+
+    with session._save_lock:
+        thread = threading.Thread(target=list_it)
+        thread.start()
+        assert not finished.wait(0.3), "書き込み中(錠を持っている間)に一覧がファイルを読んでいる"
+    thread.join(10)
+    assert finished.is_set()
