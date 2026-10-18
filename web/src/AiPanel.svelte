@@ -11,11 +11,12 @@
    * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
    * 既定は開いている(再読込をまたいで保持しない)。「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
-  import { resultDetail, resultLine } from './aiResult'
-  import type { AiProviderKind, AiStatus, AiThinking, AiTranscriptEntry } from './session'
+  import { inputBlockedReason, resultDetail, resultLine } from './aiResult'
+  import type { AiProviderKind, AiStatus, AiThinking, AiTranscriptEntry, ConnectionStatus } from './session'
 
   let {
     status,
+    connection,
     transcript,
     onSend,
     onCancel,
@@ -23,6 +24,8 @@
     onSetThinking,
   }: {
     status: AiStatus | null
+    /** サーバとのWebSocketの状態。`status`(`ai_status`)は切断後も残るので、繋がっているかはこちらで見る。 */
+    connection: ConnectionStatus
     transcript: AiTranscriptEntry[]
     onSend: (message: string) => void
     onCancel: () => void
@@ -38,7 +41,7 @@
   let baseUrlDraft = $state('')
 
   const running = $derived(status?.running ?? false)
-  const blockedReason = $derived(status ? null : '接続を待っている')
+  const blockedReason = $derived(inputBlockedReason(connection, status !== null))
   const canPickProvider = $derived((status?.providers?.length ?? 0) > 1)
 
   const PROVIDER_LABEL: Record<string, string> = {

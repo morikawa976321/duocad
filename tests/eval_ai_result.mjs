@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 
 import './ts_resolve_hook.mjs'
 
-const { resultDetail, resultLine } = await import('../web/src/aiResult.ts')
+const { inputBlockedReason, resultDetail, resultLine } = await import('../web/src/aiResult.ts')
 
 // 接続の失敗: 固定文に理由(接続できなかったURLとOSのエラー)を添える。
 const providerError = { status: 'provider_error', text: '', detail: 'HTTP 401: invalid x-api-key' }
@@ -40,5 +40,13 @@ assert.ok(long.length <= 241 && long.endsWith('…'), `折りたたまれてい�
 
 // 知らない状態は状態名をそのまま出す(空行にしない)。
 assert.equal(resultLine({ status: 'brand_new', text: '', detail: '' }), 'brand_new')
+
+// 入力を止める理由: 切断中は(ai_status が残っていても)送らせない。送れなかった発話が会話欄に残り、入力欄だけ空になる。
+assert.equal(inputBlockedReason('open', true), null)
+assert.equal(inputBlockedReason('open', false), '接続を待っている')
+for (const connection of ['connecting', 'closed']) {
+  assert.ok(inputBlockedReason(connection, true) !== null, `${connection} の間は送れないはず`)
+  assert.ok(inputBlockedReason(connection, false) !== null)
+}
 
 console.log('aiResult.ts: 全ての想定を満たした')

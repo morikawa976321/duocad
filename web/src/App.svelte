@@ -2506,6 +2506,7 @@
       <aside class="sidebar">
         <AiPanel
           status={ai.status}
+          connection={status}
           transcript={ai.transcript}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}

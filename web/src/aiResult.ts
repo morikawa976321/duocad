@@ -1,5 +1,5 @@
 /** AIパネルが `ai_result` の1件をどう文字にするか(`AiPanel.svelte`)。Svelte に依存しない純粋な部分。 */
-import type { AiRunResult } from './session'
+import type { AiRunResult, ConnectionStatus } from './session'
 
 /** 本文(`text`)が空のときに出す固定文。 */
 const STATUS_LABEL: Record<string, string> = {
@@ -34,4 +34,13 @@ export function resultDetail(result: Pick<AiRunResult, 'status' | 'detail'>): st
   if (!STATUSES_WITH_DETAIL.has(result.status)) return ''
   const folded = (result.detail ?? '').replace(/\s+/g, ' ').trim()
   return folded.length > DETAIL_LIMIT ? `${folded.slice(0, DETAIL_LIMIT)}…` : folded
+}
+
+/**
+ * 入力を止める理由(送れるなら null)。繋がっていないときに送らせない: 送れなかった発話が会話欄に残り、
+ * 打った文だけが入力欄から消える。`aiStatusKnown` はサーバから `ai_status` が届いたか(届くまで何に繋ぐか分からない)。
+ */
+export function inputBlockedReason(connection: ConnectionStatus, aiStatusKnown: boolean): string | null {
+  if (connection !== 'open') return 'サーバに繋がっていない(繋ぎ直している)'
+  return aiStatusKnown ? null : '接続を待っている'
 }
