@@ -178,7 +178,7 @@ class CannedTools:
     def call(self, name: str, arguments: dict) -> dict:
         return canned(name, arguments)
 
-    def call_and_seq(self, name: str, arguments: dict) -> tuple:
+    def call_and_seq(self, name: str, arguments: dict, expected_seq=None) -> tuple:
         return canned(name, arguments), None, 0
 
     def error_envelope(self, tool: str, error: Exception) -> dict:

@@ -19,14 +19,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from duocad.oplog import OpLog  # noqa: E402
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    # 「——」は cp932 に無い。標準出力がパイプだと日本語 Windows では cp932 で書かれ、読めないファイルに当たった時点で落ちる。
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("models_dir", type=Path)
     parser.add_argument("--write", action="store_true")
-    options = parser.parse_args()
+    options = parser.parse_args(argv)
 
     for path in sorted(options.models_dir.glob("*.json")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            # 途中で切れた・空のファイル(JSONDecodeError)や文字化け(UnicodeDecodeError)も ValueError。ここで止めると、
+            # 手前のファイルだけが書き換わって版が混在したまま終わる。
+            print(f"{path.name}: 読めない —— {error}")
+            continue
         version = payload.get("version") if isinstance(payload, dict) else None
         if version == OpLog.FORMAT_VERSION:
             print(f"{path.name}: 今の版(version {version})")

@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import ast
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,22 +59,31 @@ def projection(src: str) -> str:
     return ast.dump(ast.fix_missing_locations(StripDocstrings().visit(tree)))
 
 
+def git_run(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, check=False)
+
+
 def git(*args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=ROOT, capture_output=True, check=False
-    ).stdout.decode("utf-8", "replace")
+    """標準出力だけ。失敗しても空を返す(`git show` が新規ファイルで失敗するのは正常)。"""
+    return git_run(*args).stdout.decode("utf-8", "replace")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ref", help="比較元のgit ref（例: HEAD, be2444e）")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    changed = [
-        line
-        for line in git("diff", "--name-only", args.ref, "--", *TARGETS).split()
-        if line.endswith(".py")
-    ]
+    # 解決できない ref で `git diff` が失敗しても標準出力は空になり、「差分が無い」と見分けがつかない。
+    resolved = git_run("rev-parse", "--verify", "--quiet", f"{args.ref}^{{commit}}")
+    if resolved.returncode != 0:
+        print(f"git ref を解決できない: {args.ref}", file=sys.stderr)
+        return 2
+    diff = git_run("diff", "--name-only", args.ref, "--", *TARGETS)
+    if diff.returncode != 0:
+        print(f"git diff が失敗: {diff.stderr.decode('utf-8', 'replace').strip()}", file=sys.stderr)
+        return 2
+
+    changed = [line for line in diff.stdout.decode("utf-8", "replace").split() if line.endswith(".py")]
     if not changed:
         print(f"{args.ref} との差分に .py は無い")
         return 0
