@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import pytest
 
-from duocad import parameters, selection
+from duocad import parameters, query, selection
 from duocad.document import Document
-from duocad.region import regions
+from duocad.region import region_ref, regions
 from duocad.server import Session
 from duocad.sketch import add_line, add_point, add_rectangle, get_sketch, sketch_create
-from duocad.verbs import mirror_sketch_entities, move_sketch_entities, pattern_circular, pattern_rectangular
+from duocad.verbs import loft, mirror_sketch_entities, move_sketch_entities, pattern_circular, pattern_rectangular
 from document_support import replay_through_json
 
 
@@ -105,6 +105,19 @@ def test_a_point_on_the_pivot_is_refused_by_a_circular_pattern():
     with pytest.raises(ValueError, match="coincide"):
         pattern_circular(document, sketch_id, [point], (0.0, 0.0), 4)
     assert len(get_sketch(document, sketch_id).entities) == 1
+
+
+def test_a_point_entity_is_the_apex_of_a_loft():
+    """落ちたら、点の図形をロフトの収束点に使えない(四角錐 20×20×30 の体積 4000 にならない)。"""
+    document = Document()
+    base = sketch_create(document, "XY")
+    add_rectangle(document, base, (-10.0, -10.0), 20.0, 20.0)
+    top = sketch_create(document, {"kind": "offset", "base": {"kind": "base", "name": "XY"}, "distance": 30.0})
+    apex = add_point(document, top, (0.0, 0.0))
+
+    loft(document, [region_ref(base, regions(document, base)[0].index)], end_point=_point_ref(top, apex))
+
+    assert query.volume(document.active_body().shape) == pytest.approx(4000.0, rel=1.0e-9)
 
 
 def test_selecting_a_point_entity_always_means_its_point(session: Session):
