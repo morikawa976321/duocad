@@ -962,9 +962,9 @@ export function ghostEntity(
  * **1本も描かない**(途中まで描くと「間隔は合っているのに個数が足りない」に見え、
  * 打ち間違いなのか不具合なのか人には区別できない)。
  *
- * **コア側の上限(`duocad/verbs/pattern.py` の `MAX_PATTERN_COPIES` = 5000)とは別の値**。ここは画面が固まらない
+ * **コア側の上限(`duocad/verbs/pattern.py` の `MAX_PATTERN_COPIES` = 2500)とは別の値**。ここは画面が固まらない
  * ためだけの表示の値で、これを超えても Enter は通り、幽霊を見ないまま複製ができる。コアは複製の総数が
- * 5000 を超える入力を ValueError で断る(桁の取り違えでイベントループが数十秒〜無限に止まるため)。
+ * 2500 を超える入力を ValueError で断る(桁の取り違えでイベントループが数十秒〜無限に止まるため)。
  */
 export const GHOST_COPY_LIMIT = 2000
 

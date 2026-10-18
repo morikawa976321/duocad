@@ -99,3 +99,16 @@ def test_a_saved_rotated_copy_next_to_the_original_still_replays():
     replayed = replay_through_json(document)
 
     assert _entity_count(replayed, sketch_id) == 2
+
+
+def test_a_rotated_copy_of_a_rectangle_without_angle_is_not_taken_for_an_overlap():
+    """落ちたら、`angle` を持たない旧い長方形(キーが4個)の回転コピーを、元のキーだけで比べて「元と完全に重なる」と
+    誤って断る(保存済みのログの再生も止まる)。"""
+    from duocad.verbs._common import overlaps_original
+
+    old_rectangle = {"x": 0.0, "y": 0.0, "width": 10.0, "height": 4.0}
+    rotated = {**old_rectangle, "angle": 30.0}
+    assert not overlaps_original(rotated, old_rectangle, fresh=True)
+    assert not overlaps_original(rotated, old_rectangle, fresh=False)
+    # 向きが同じ(angle=0)なら、無いキーは 0.0 として重なる
+    assert overlaps_original({**old_rectangle, "angle": 0.0}, old_rectangle, fresh=False)

@@ -28,7 +28,7 @@ def _sketch_with_circle() -> tuple[Document, str, str]:
 
 def test_a_rectangular_pattern_may_add_up_to_the_limit_and_not_one_more():
     doc, sketch_id, circle = _sketch_with_circle()
-    pattern_rectangular(doc, sketch_id, [circle], 1.0, 1.0, MAX_PATTERN_COPIES + 1, 1)  # 複製 5000 個ちょうど
+    pattern_rectangular(doc, sketch_id, [circle], 1.0, 1.0, MAX_PATTERN_COPIES + 1, 1)  # 複製が上限ちょうど
     with pytest.raises(ValueError, match="多すぎる"):
         pattern_rectangular(doc, sketch_id, [circle], 1.0, 1.0, MAX_PATTERN_COPIES + 2, 1)
 
@@ -38,7 +38,7 @@ def test_the_limit_counts_copies_of_every_source_not_just_the_grid():
     sketch_id = sketch_create(doc, "XY")
     ids = [add_circle(doc, sketch_id, (10.0 * k, 0.0), 2.0) for k in range(3)]
     with pytest.raises(ValueError, match="多すぎる"):
-        pattern_rectangular(doc, sketch_id, ids, 1.0, 1.0, 50, 50)  # 3 × 2499 = 7497 > 5000
+        pattern_rectangular(doc, sketch_id, ids, 1.0, 1.0, 50, 50)  # 3 × 2499 = 7497 > 2500
     assert not get_sketch(doc, sketch_id).patterns
 
 

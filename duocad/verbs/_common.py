@@ -327,15 +327,21 @@ def require_same_uv_plane(doc: Document, reference_sketch_id: str, target_sketch
 
 
 def overlaps_original(values: dict, current: dict, *, fresh: bool) -> bool:
-    """複製の `values` が、元の `current` が持つキーのすべてで元と同じ値か(重なる複製。領域検出が同じ辺を2本見る)。
+    """複製の `values` が元の `current` と全部のキーで同じ値か(重なる複製。領域検出が同じ辺を2本見る)。
+
+    **キーは両方の和集合で、無いキーは 0.0 として比べる**: `angle` を持たない旧い長方形(キーが4個)の回転コピーは `angle` が
+    増えるので、元が持つキーだけで比べると、向きが違う複製を「元と完全に重なる」と誤って断り、保存済みのログも再生できなくなる。
+    旧い長方形の `angle` の既定は 0 度。
 
     新しく作る複製(`fresh`)は座標の丸め誤差(斜めの軸への鏡映は 1ulp ずれる)を許して重なりとみなす。
     redo / 再生は厳密一致だけ —— 許容差で弾くと、重なる複製を断る前に作られた複製を含む保存済みの文書が開けなくなる。
     """
+    keys = set(values) | set(current)
     if not fresh:
-        return all(values[key] == current[key] for key in current)
+        return all(values.get(key, 0.0) == current.get(key, 0.0) for key in keys)
     return all(
-        math.isclose(values[key], current[key], rel_tol=1.0e-12, abs_tol=OVERLAP_TOLERANCE) for key in current
+        math.isclose(values.get(key, 0.0), current.get(key, 0.0), rel_tol=1.0e-12, abs_tol=OVERLAP_TOLERANCE)
+        for key in keys
     )
 
 
