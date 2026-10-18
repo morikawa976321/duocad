@@ -21,6 +21,7 @@ import json
 import math
 import os
 import struct
+import uuid
 from typing import Iterable, Iterator, NoReturn
 
 from .document import Mesh, make_mesh
@@ -172,7 +173,8 @@ def geometry(mesh: Mesh) -> dict:
 def write_stl(path, sources: Iterable[Iterable[tuple]]) -> None:
     """バイナリSTLを1本書く。`sources` は「三角形の並び」の並び(複数ボディを1本へ連結する)。B-repもメッシュもここを通る(`io_step.export_stl`)。
 
-    三角形が1枚も無ければ ValueError で、ファイルを作らない。
+    三角形が1枚も無ければ ValueError で、ファイルを作らない。書き込みに失敗(OSError)しても既存の出力ファイルは
+    そのまま残る(一時ファイルへ書いてから置き換える)。
 
     **書く前に float32 に丸めた実際の座標を検証する**(`validate_float32`): float64 で正常な三角形が
     丸めで潰れる(2頂点が一致・共線)ことがある。不正なら ValueError で止め、既存の出力ファイルには
@@ -207,13 +209,17 @@ def write_stl(path, sources: Iterable[Iterable[tuple]]) -> None:
             + json.dumps(problems, ensure_ascii=False)
         )
     filename = os.fspath(path)
+    # 同じフォルダの一時ファイルへ書いて置き換える。保存先へ直接書くと、open が失敗しても書き込みが途中で
+    # 止まっても前回の正常な出力が失われる。
+    temporary = f"{filename}.{uuid.uuid4().hex[:8]}.tmp"
     try:
-        with open(filename, "wb") as handle:
+        with open(temporary, "xb") as handle:
             handle.write(_STL_HEADER.ljust(80, b"\0"))
             handle.write(struct.pack("<I", count))
             handle.write(body)
+        os.replace(temporary, filename)
     except OSError:
-        _unlink_quietly(filename)
+        _unlink_quietly(temporary)
         raise
 
 

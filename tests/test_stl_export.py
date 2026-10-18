@@ -211,3 +211,29 @@ def test_stl_export_still_refuses_a_mesh_body_with_a_zero_area_triangle(tmp_path
     with pytest.raises(ValueError, match="cannot write STL.*degenerate"):
         DocumentTools(session).call("export_stl", {"path": str(path)})
     assert not path.exists()
+
+
+_ONE_TRIANGLE = [[((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))]]
+
+
+@pytest.mark.parametrize("failing", ["open", "replace"])
+def test_a_failed_write_leaves_the_previous_stl_and_no_temporary_file(tmp_path, monkeypatch, failing):
+    """落ちたら、書き込みの失敗が保存先を消す・切り詰める(前回の正常な出力が失われる)か、一時ファイルが残る。"""
+    from duocad import meshbody
+
+    path = tmp_path / "x.stl"
+    meshbody.write_stl(path, _ONE_TRIANGLE)
+    previous = path.read_bytes()
+
+    def refuse(*args, **kwargs):
+        raise PermissionError("refused")
+
+    if failing == "open":
+        monkeypatch.setattr(meshbody, "open", refuse, raising=False)
+    else:
+        monkeypatch.setattr(meshbody.os, "replace", refuse)
+    with pytest.raises(PermissionError):
+        meshbody.write_stl(path, [[((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 2.0, 0.0))]])
+
+    assert path.read_bytes() == previous
+    assert [entry.name for entry in tmp_path.iterdir()] == ["x.stl"]
