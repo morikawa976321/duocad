@@ -13,6 +13,7 @@ from node_support import run_node
 TESTS_DIR = Path(__file__).resolve().parent
 
 EVALUATORS = [
+    "eval_ai_result.mjs",
     "eval_choice_sync.mjs",
     "eval_expression.mjs",
     "eval_grid_planes.mjs",

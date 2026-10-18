@@ -11,6 +11,7 @@
    * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
    * 既定は開いている(再読込をまたいで保持しない)。「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
+  import { resultDetail, resultLine } from './aiResult'
   import type { AiProviderKind, AiStatus, AiThinking, AiTranscriptEntry } from './session'
 
   let {
@@ -95,19 +96,6 @@
   function toolLine(call: AiTranscriptEntry & { kind: 'tool' }): string {
     const args = Object.keys(call.call.arguments).length ? JSON.stringify(call.call.arguments) : ''
     return `${call.call.name}${args ? ` ${args}` : ''}`
-  }
-
-  const STATUS_LABEL: Record<string, string> = {
-    completed: '完了',
-    empty_reply: 'AIが結論を出さずに止まった(ここまでの操作は残っている。言い方を変えてもう一度どうぞ)',
-    max_turns: '往復の上限に達した(続けるにはもう一度どうぞ)',
-    cancelled: '中断した',
-    max_tokens: '出力の上限に達した(このターンのツールは実行していない。もう一度どうぞ)',
-    refusal: 'AIが断った',
-    provider_error: '接続に失敗した',
-    timeout: '時間切れで止めた(ここまでの操作は残っている)',
-    context_overflow: 'この依頼だけでAIの文脈長を超えた(依頼を分けるか、llama-server の -c を増やす)',
-    stopped: '止まった(理由不明)',
   }
 
   /** llama-server の `timings` を往復ぶん足した値。Claudeは時間ではなくトークン数(課金の単位)を出す。どちらも返さないサーバでは空文字(行ごと出さない)。 */
@@ -229,8 +217,11 @@
           </p>
         {:else if entry.kind === 'result'}
           <p class="line result" data-status={entry.result.status}>
-            {entry.result.text || STATUS_LABEL[entry.result.status] || entry.result.status}
+            {resultLine(entry.result)}
           </p>
+          {#if resultDetail(entry.result)}
+            <p class="hint dim" data-ai-detail>{resultDetail(entry.result)}</p>
+          {/if}
           {#if usageLine(entry.result.usage)}
             <p class="hint dim" data-ai-usage>{usageLine(entry.result.usage)}</p>
           {/if}
