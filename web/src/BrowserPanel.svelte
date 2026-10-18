@@ -20,6 +20,7 @@
    * (`Toast.svelte` と同じ。`styles.css` の「ビューポートのサイズを変えるのは .viewport だけ」)。
    */
   import { isImeKey } from './keys'
+  import { renameTarget } from './renameDraft'
   import type { BasePlaneName, BodyMeta } from './session'
   import type { SectionState } from './viewport'
 
@@ -105,13 +106,13 @@
     renamingId = id
   }
 
-  /** 空・今と同じなら送らずに閉じる。`id` で自分の行かを確かめる: Enter で閉じた欄の blur は DOM から外れるときに遅れて届き、
+  /** 空・今と同じなら送らずに閉じる(前後の空白は落として送る。`renameTarget`)。`id` で自分の行かを確かめる: Enter で閉じた欄の blur は DOM から外れるときに遅れて届き、
    *  その間に別の行の ✎ が押されていると、相手の行の下書きを自分の名前で確定してしまう。 */
   function commitRename(id: string, current: string): void {
     if (renamingId !== id) return
     renamingId = null
-    if (draft.trim() === '' || draft === current) return
-    onRename(id, draft)
+    const next = renameTarget(draft, current)
+    if (next !== null) onRename(id, next)
   }
 
   /** Esc は窓まで届かせない: `CommandHost` の窓の keydown が入力欄の Esc も拾って、起動中のコマンドまで中断する。 */
