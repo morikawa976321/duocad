@@ -475,7 +475,12 @@ class DocumentView:
                 frame = region.plane_frame(self.document, item.id)
                 if drawn:
                     regions = region.regions_with_geometry(
-                        self.document, item.id, self.view_deviation
+                        self.document,
+                        item.id,
+                        self.view_deviation,
+                        on_error=lambda index, error, sketch_id=item.id: self.warnings.append(
+                            f"スケッチ {sketch_id} の領域 {index} を三角形にできない: {type(error).__name__}: {error}"
+                        ),
                     )
             except Exception as error:
                 self.warnings.append(

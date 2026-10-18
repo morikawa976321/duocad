@@ -176,3 +176,62 @@ def test_shared_vertex_does_not_hide_overlap_beyond_the_endpoint_gap():
     uses = [dict(edge=1, points=[[0, 0], [1, 0]], forward=True, internal=True, vertices=(0, 1)),
             dict(edge=2, points=[[1 - 1e-8, 0], [0.5, 0]], forward=True, internal=True, vertices=(1, 2))]
     assert kinds(bc.check(bc.pack([[[uses[0]], [uses[1]]]]))) == [('overlap', (1, 2))]
+
+
+OUTER_RECTANGLE = [dict(edge=1, points=[[0, 0], [20, 0]], forward=True, vertices=(1, 2)),
+                   dict(edge=2, points=[[20, 0], [20, 10]], forward=True, vertices=(2, 3)),
+                   dict(edge=3, points=[[20, 10], [0, 10]], forward=True, vertices=(3, 4)),
+                   dict(edge=4, points=[[0, 10], [0, 0]], forward=True, vertices=(4, 1))]
+
+
+def internal_wire(*segments):
+    """面の内側に置かれた孤立線(OCCT は1本の INTERNAL wire にまとめる)。`segments` は `(始点, 終点, 始点の頂点, 終点の頂点)`。"""
+    return [dict(edge=10 + k, points=[a, b], forward=True, internal=True, vertices=(va, vb))
+            for k, (a, b, va, vb) in enumerate(segments)]
+
+
+@pytest.mark.parametrize('name, segments', [
+    ('L', [([2, 5], [10, 5], 20, 21), ([10, 5], [10, 2], 21, 22)]),
+    ('Y', [([10, 5], [5, 5], 21, 20), ([10, 5], [15, 5], 21, 22), ([10, 5], [10, 2], 21, 23)]),
+    ('cross', [([5, 5], [10, 5], 20, 21), ([10, 5], [15, 5], 21, 22), ([10, 2], [10, 5], 23, 21), ([10, 5], [10, 8], 21, 24)]),
+])
+def test_internal_edges_of_one_wire_sharing_a_cad_vertex_are_connected(name, segments):
+    """L字・Y字・十字の孤立線は同じ INTERNAL wire の中で頂点を共有する。落ちたら (c) が同じ wire の INTERNAL どうしを
+    接続に数えず、偽の touch になって面が三角形にならない(スケッチの領域が一覧から消える)。"""
+    result = bc.check(bc.pack([[OUTER_RECTANGLE, internal_wire(*segments)]]))
+    assert result['issues'] == [], name
+
+
+def test_internal_edges_sharing_a_cad_vertex_but_crossing_elsewhere_are_still_reported():
+    """頂点を共有しない2本が内側で交差するなら、INTERNAL でも交差として報告する(接続の扱いが交差の検出を弱めない)。"""
+    crossing = internal_wire(([2, 2], [8, 8], 20, 21), ([2, 8], [8, 2], 22, 23))
+    assert [i['kind'] for i in bc.check(bc.pack([[OUTER_RECTANGLE, crossing]]))['issues']] == ['cross']
+
+
+def test_internal_edges_sharing_a_vertex_do_not_hide_an_overlap():
+    """同じ頂点に着く INTERNAL の2本が互いに重なっているなら、頂点の共有は重なりを隠さない。"""
+    overlapping = internal_wire(([2, 5], [10, 5], 20, 21), ([10, 5], [4, 5], 21, 22))
+    assert ('fold', (10, 11)) in kinds(bc.check(bc.pack([[OUTER_RECTANGLE, overlapping]])))
+
+
+@pytest.mark.parametrize('run, rise', [(10.0, 6.0), (3.0, 1.0), (10.0, 9.0), (9.0, 1.0)])
+def test_endpoint_jitter_on_a_slanted_edge_is_not_a_crossing(run, rise):
+    """上辺の途中で終わる孤立線は、上辺を割った頂点に 1ulp ずれて着く。辺とのなす角が 45 度未満だと交点が端点から
+    ずれの 1 倍を超えて離れる。落ちたら許容域が交差角を考慮せず、評価誤差だけの偽の cross になる。"""
+    low = float(np.nextafter(10.0, 0.0))
+    top = [dict(edge=3, points=[[20, 10], [13, 10]], forward=True, vertices=(3, 7)),
+           dict(edge=5, points=[[13, low], [0, 10]], forward=True, vertices=(7, 4))]
+    outer = [OUTER_RECTANGLE[0], OUTER_RECTANGLE[1], *top, OUTER_RECTANGLE[3]]
+    line = [dict(edge=10, points=[[13 - run, 10.0 - rise], [13, 10]], forward=True, internal=True, vertices=(20, 7))]
+    result = bc.check(bc.pack([[outer, line]]))
+    assert result['issues'] == [], result['issues']
+    assert result['endpoint_mismatches'] >= 1
+
+
+def test_the_angle_allowance_does_not_apply_to_a_mismatch_larger_than_evaluation_noise():
+    """端点のずれが評価誤差でなく 1e-6 なら、角度で許容域を広げない(本物の交差を隠さない)。"""
+    top = [dict(edge=3, points=[[20, 10], [13, 10]], forward=True, vertices=(3, 7)),
+           dict(edge=5, points=[[13, 10 - 1e-6], [0, 10]], forward=True, vertices=(7, 4))]
+    outer = [OUTER_RECTANGLE[0], OUTER_RECTANGLE[1], *top, OUTER_RECTANGLE[3]]
+    line = [dict(edge=10, points=[[3, 4], [13, 10]], forward=True, internal=True, vertices=(20, 7))]
+    assert [i['kind'] for i in bc.check(bc.pack([[outer, line]]))['issues']] == ['cross']

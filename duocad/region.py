@@ -18,7 +18,7 @@ import json
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from . import kernel, kernel_sketch
 from . import parameters
@@ -174,17 +174,28 @@ def plane_frame(doc: Document, sketch_id: SketchId) -> dict:
     return kernel_sketch.sketch_plane_frame(sketch.plane)
 
 
-def regions_with_geometry(doc: Document, sketch_id: SketchId, deviation: float) -> List[dict]:
+def regions_with_geometry(
+    doc: Document, sketch_id: SketchId, deviation: float, on_error: Optional[Callable[[int, Exception], None]] = None
+) -> List[dict]:
     """領域を**画面へ描ける三角形つき**で返す。
 
     戻り値: [{"index", "area", "centroid", "positions", "indices"}, ...]
 
     アプリ層で図形から領域を組み直すと、コアが選択集合で指している添字と食い違う
     (順序は面積とu,vで決まる。`kernel_sketch.sketch_regions`)。**描くものも添字もコアが配る**。
+
+    **三角形にできない領域があっても、ほかの領域を落とさない**: `on_error(領域の添字, 例外)` を渡すと、その領域は
+    三角形が空のまま一覧に残し(添字と面積は有効)、理由を `on_error` へ渡す。渡さなければ例外をそのまま上げる。
     """
     out: List[dict] = []
     for item in _regions_detailed(doc, sketch_id):
-        mesh = kernel.tessellate(item["face"], deviation)
+        try:
+            mesh = kernel.tessellate(item["face"], deviation)
+        except Exception as error:  # noqa: BLE001  OCCT 由来の失敗は型で絞れない。領域ごとに隔離する
+            if on_error is None:
+                raise
+            on_error(item["index"], error)
+            mesh = {"faces": []}
         first = mesh["faces"][0] if mesh["faces"] else None
         out.append(
             {

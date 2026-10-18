@@ -103,6 +103,41 @@ def test_regions_of_an_unknown_sketch_fails():
         regions(document, "sketch-does-not-exist")
 
 
+def test_a_region_that_cannot_be_tessellated_does_not_empty_the_sketch(monkeypatch):
+    """1領域の三角形化の失敗は、その領域だけを空にして警告に残し、ほかの領域は配る。落ちたら、1領域の失敗でスケッチ全体の
+    領域が一覧から消える(領域ピックが使えなくなる)。"""
+    import tempfile
+
+    from duocad import kernel, region
+    from duocad.server import Session
+
+    session = Session(None, 0.2, models_dir=tempfile.mkdtemp())
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 10.0)
+    session.add_rectangle(sketch_id, [20.0, 0.0], 5.0, 5.0)
+
+    real = kernel.tessellate
+    calls = []
+
+    def flaky(face, deviation, *args):
+        calls.append(face)
+        if len(calls) == 1:
+            raise ValueError("三角形分割が1面も取れなかった")
+        return real(face, deviation, *args)
+
+    monkeypatch.setattr(kernel, "tessellate", flaky)
+
+    listed = next(item for item in session.state_meta()["sketches"] if item["sketch_id"] == sketch_id)["regions"]
+
+    assert [item["index"] for item in listed] == [1, 2]
+    assert [bool(item["indices"]) for item in listed] == [False, True]
+    assert listed[0]["area"] == pytest.approx(100.0) and listed[1]["area"] == pytest.approx(25.0)
+    assert any("領域 1 を三角形にできない" in warning for warning in session.warnings)
+    with pytest.raises(ValueError):
+        calls.clear()
+        region.regions_with_geometry(session.document, sketch_id, 0.2)
+
+
 @pytest.mark.parametrize("kind", ["rotated_rectangle", "ellipse"])
 def test_equal_area_regions_stacked_at_one_x_are_ordered_by_v_whatever_the_integration_noise(kind):
     """同じ形の領域を同じ x に縦に積むと、重心の u は理論上等しいが OCCT の積分で 1ulp ずれる。ずれが v より先に効くと

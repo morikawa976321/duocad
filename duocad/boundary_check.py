@@ -13,7 +13,9 @@ OCP に依存しない。入力は「面 → wire → 辺の利用箇所(use)」
   同一視しない。(a) 同じ use で隣り合う線分、(b) wire で連続する use の接続端点(OCCT の healer が
   厳密一致させる)、(c) 同じ面の**別の wire** で同じ CAD 頂点に着く use の終端どうし(面の内側に置かれた
   辺が外周の頂点に着く場合など。healer はこれを揃えないので pcurve の評価誤差ぶん、例えば 1e-16 だけ
-  ずれることがある。同じ wire の連続しない use の頂点共有は周期面の seam・u=0/2π の両端なので数えない)。
+  ずれることがある。同じ wire の連続しない use の頂点共有は周期面の seam・u=0/2π の両端なので数えないが、
+  **両方が INTERNAL の別の use どうしは数える**: 面の内側に置かれた孤立線は OCCT が1本の INTERNAL wire に
+  まとめるので、L字・Y字・十字の枝は同じ wire で頂点を共有する)。
   座標が一致しない組は端点のずれに見合う範囲の接触だけを許し、件数と最大のずれを診断に残す。
   (b) の端点が厳密一致せず CAD 頂点も共有しなければ `open` として報告する(成功にしない)。
 - 面積や角度の小ささを理由に交差を捨てない(OCCT の FaceChecker は捨てる。docs/TOPOPT_GAP_CAUSALITY.md)。
@@ -311,8 +313,11 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
         a, b = _group_pairs(packed.use_face[ends_use] * vertex_span + ends_vertex)
         # 同じ wire の中は (b) が扱う。同じ wire で連続しない use が頂点を共有するのは周期面の seam や
         # u=0/2π の両端で、UV では周期ぶん離れていて接続ではない(閉じた辺の自分自身の両端も同じ)。
+        # ただし (b) は INTERNAL の use を扱わないので、INTERNAL どうし(別の use)の頂点共有はここで接続に数える。
         different_wire = packed.use_wire[ends_use[a]] != packed.use_wire[ends_use[b]]
-        a, b = a[different_wire], b[different_wire]
+        both_internal = (packed.use_internal[ends_use[a]] & packed.use_internal[ends_use[b]]
+                         & (ends_use[a] != ends_use[b]))
+        a, b = a[different_wire | both_internal], b[different_wire | both_internal]
         equal_point = (packed.points[ends_point[a]] == packed.points[ends_point[b]]).all(axis=1)
         conn_a = np.concatenate((conn_a, np.minimum(ends_row[a], ends_row[b])))
         conn_b = np.concatenate((conn_b, np.maximum(ends_row[a], ends_row[b])))
@@ -403,11 +408,22 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
     return result
 
 
+#: 共有CAD端点のずれが pcurve の評価誤差とみなせる上限(座標の大きさに対する比)。2^-40(約 4096 ulp)。
+#: 実測のずれは 2.4e-16〜1e-15(座標 20 以下)で、これより 4 桁以上小さい。これを超えるずれは評価誤差でなく
+#: 本物の食い違いとして、交点の許容域を広げない。
+_NOISE_RTOL_DENOMINATOR = 2 ** 40
+
+
 def _intersection_near_endpoints(p1, p2, p3, p4, endpoints):
     """共有CAD端点の評価ずれと同じ範囲の接触だけを許す。浅い交差の遠方への増幅は許さない。
 
-    許容域は2端点の外接矩形を最大座標差だけ広げたもの。固定epsilonも点列の移動も使わない。
+    許容域は2端点の外接矩形を最大座標差だけ広げたもの。点列の移動はしない。
     交点の計算をfloatで丸めると端点へ吸着して見逃すため、この少数の組だけ有理数で評価する。
+
+    **ずれが評価誤差の大きさ(`_NOISE_RTOL_DENOMINATOR`)なら、広げる幅を交差角で増やす**: 一方の線が端点 E を、
+    他方が E からずれた F を通るとき、2直線の交点は E から最大 |E−F|/sinθ 離れる(θ は2線分のなす角)。
+    広げる幅が最大座標差のままだと、辺から斜めに引いた線(45度未満)で本物でない交差を報告する。
+    ずれが評価誤差より大きければ角度で広げない(浅い角度の本物の交差を端点のずれで隠さない)。
     """
     from fractions import Fraction
 
@@ -423,10 +439,16 @@ def _intersection_near_endpoints(p1, p2, p3, p4, endpoints):
     a, b, c, d = map(point, (p1, p2, p3, p4))
     e, f = map(point, endpoints)
     gap = max(abs(e[k] - f[k]) for k in range(2))
-    low = [min(e[k], f[k]) - gap for k in range(2)]
-    high = [max(e[k], f[k]) + gap for k in range(2)]
     v, w = sub(b, a), sub(d, c)
     det = cross(v, w)
+    scale = max(abs(x) for x in (*e, *f))
+    if det and gap * _NOISE_RTOL_DENOMINATOR <= scale:
+        # 交点から E までの座標差は gap · |w|₁ · |v|∞ / |det| 以下(F までは v と w を入れ替えた式)。大きい方を採る。
+        norm_v = max(abs(v[0]), abs(v[1]))
+        norm_w = max(abs(w[0]), abs(w[1]))
+        gap = gap * max(norm_v * (abs(w[0]) + abs(w[1])), norm_w * (abs(v[0]) + abs(v[1]))) / abs(det)
+    low = [min(e[k], f[k]) - gap for k in range(2)]
+    high = [max(e[k], f[k]) + gap for k in range(2)]
     hits = []
     if det:
         t, u = cross(sub(c, a), w) / det, cross(sub(c, a), v) / det
