@@ -257,3 +257,17 @@ export function evaluateExpression(text: string): ExpressionResult {
     throw error
   }
 }
+
+/**
+ * 打ってある欄のうち、読めない式があれば最初の1つの理由(`ラベル: 理由`。無ければ null。空欄は読まない)。
+ * 読めない式は値にならないので、点から寸法を導く欄(`fromPoints`)では空欄と見分けがつかず、打ち間違いが黙って捨てられる。
+ * 確定する側がこれを見て止める。
+ */
+export function firstUnreadableExpression(fields: ReadonlyArray<{ label: string; raw: string }>): string | null {
+  for (const { label, raw } of fields) {
+    if (raw === '') continue
+    const evaluated = evaluateExpression(raw)
+    if (!evaluated.ok) return `${label}: ${evaluated.reason}`
+  }
+  return null
+}

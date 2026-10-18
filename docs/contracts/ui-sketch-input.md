@@ -27,7 +27,7 @@
 - **`fromPoints` の `name` は `build` が出す引数のキーと同じにする。** `placeholderFor` がその名前で `ghostBuilt.args` を引いて「いまマウスが指す値」を薄字に出す。ずれても型検査は通り、**プレースホルダが黙って静的に戻るだけ**。
 - **円弧の `build` は常に `start_deg <= end_deg` を出す。** `duocad/kernel.py` は `(end_deg - start_deg) % 360` で必ず反時計回りに掃くが `entityKinds.ts` の `arcPoints` は差の符号どおりに描く。負の掃引を送ると**幽霊と確定結果が別の弧になる**。`end_deg` が360超は正常(差だけを見る)。
 - **円弧の向きは「弧の中点が `via` と同じ側か」で決める**(優弧/劣弧の大小比較では**ちょうど半円のとき破れる**)。回帰検査の円弧の節はどちらも意図的にちょうど半円の配置。
-- **`fromPoints` の数値は `isHowInput` に数えない**(数えると5 verb が Enter 必須へ戻り `test_which_commands_apply_without_enter` が落ちる)。**`argSatisfied` は `fromPoints` の空欄を「揃っている」側に倒す**(判定は `command.ts` の1箇所。呼び出し側で `spec.fromPoints` を書き直さない)。
+- **`fromPoints` の数値は `isHowInput` に数えない**(数えると5 verb が Enter 必須へ戻り `test_which_commands_apply_without_enter` が落ちる)。**`argSatisfied` は `fromPoints` の空欄を「揃っている」側に倒す**(判定は `command.ts` の1箇所。呼び出し側で `spec.fromPoints` を書き直さない)。**ただし、打ってあるのに読めない式(`50mm`・`1/0`)が残っている間は `canCommit` を偽にする**(`expression.ts` の `firstUnreadableExpression`。読めない式は値にならず空欄と見分けがつかないので、止めないと打ち間違いが黙って捨てられ、点から導いた別の寸法で確定される。理由は prompt に出る)。
 - **`hover`(`App.svelte` の `hoverPoint`)はポインタが canvas から出ても消えない**(`viewport.ts` の `onPointerLeave` は `planeMoveListener` を呼ばない)。「角をクリック→寸法を打つ→Enter」はこの性質に乗っている。`onPointerLeave` で `hoverPoint` を `null` にするとその経路が全部落ちる。
 - **楕円の点は打った寸法で要らなくなる**(`when`)。`axis_end` は `width` と `angle` を両方打てば、`via` は `height` を打てば待たない。2点目を待つ間は幽霊が出ない(幽霊は待っている点が最後の1つのときだけ組む。円弧と同じ)。
 - **長方形の入力に角度欄は無い**(マウスで置く長方形は軸平行。コアは `angle` を持つが WS/画面は送らない `ws=False`)。

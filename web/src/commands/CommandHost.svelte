@@ -65,7 +65,7 @@
     type TextArgSpec,
   } from './command'
   import { categoryOf } from './category'
-  import { evaluateExpression, isPlainNumber } from '../expression'
+  import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../expression'
   import type { CommandState, SelectionRef, SelectionState } from '../session'
   import { COMMAND_CATEGORY, COMMAND_PARAMS } from '../generated/protocol'
 
@@ -267,9 +267,6 @@
     built ?? (command !== null && commitsGhost(command) ? ghostBuilt : null),
   )
 
-  /** Enter・ボタン押し直しで確定できるか(`ready` か、幽霊が出ているか)。 */
-  const canCommit = $derived(commitSource !== null && overflow === '')
-
   /** いま要る引数だけ(`when` が偽のものを落とす)。入力欄・ボタンの描画はこれを通す。 */
   const liveArgs = $derived((command?.args ?? []).filter((spec: ArgSpec) => argApplies(spec, values)))
 
@@ -286,15 +283,12 @@
   )
 
   /** 打ってあるのに読めない式の理由(無ければ null)。読めない式は `values` に載らないので、生の文字列を見て打ち間違いと未入力を区別する。 */
-  const expressionError = $derived.by<string | null>(() => {
-    for (const spec of numberArgs) {
-      const raw = rawNumber(spec)
-      if (raw === '') continue
-      const evaluated = evaluateExpression(raw)
-      if (!evaluated.ok) return `${spec.label}: ${evaluated.reason}`
-    }
-    return null
-  })
+  const expressionError = $derived(
+    firstUnreadableExpression(numberArgs.map((spec) => ({ label: spec.label, raw: rawNumber(spec) }))),
+  )
+
+  /** Enter・ボタン押し直し・最後のクリックで確定できるか(`ready` か、幽霊が出ているか。読めない式が残っていれば確定しない)。 */
+  const canCommit = $derived(commitSource !== null && overflow === '' && expressionError === null)
 
   /** 式を打った欄の評価結果(素の数値だけなら空)。 */
   const expressionEcho = $derived.by(() => {

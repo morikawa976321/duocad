@@ -5,7 +5,7 @@
  * Node は `.ts` をそのまま読める(型注釈の除去。Node 23.6以降は既定で有効)。
  */
 import assert from 'node:assert/strict'
-import { evaluateExpression, isPlainNumber } from '../web/src/expression.ts'
+import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../web/src/expression.ts'
 
 function expressionValue(text) {
   const result = evaluateExpression(text)
@@ -145,5 +145,18 @@ for (const text of ['', '5*2', 'sqrt(4)', '50mm', '(5)', '1+', '- 3']) {
 // ====================================================== expressionValue(理由の要らない口)
 assert.equal(expressionValue('2*3'), 6)
 assert.equal(expressionValue('50mm'), null)
+
+// ====================================================== firstUnreadableExpression(打ち間違いを黙って捨てない)
+// 点から寸法を導く欄(`fromPoints`)は空欄でも揃うので、読めない式は値にならず空欄と見分けがつかない。確定する側がこれで止める。
+assert.equal(firstUnreadableExpression([{ label: '幅', raw: '5x' }]), `幅: ${reason('5x')}`)
+assert.equal(firstUnreadableExpression([{ label: '長さ', raw: '50mm' }]), `長さ: ${reason('50mm')}`)
+assert.equal(firstUnreadableExpression([{ label: '直径', raw: '1/0' }]), `直径: ${reason('1/0')}`)
+assert.equal(firstUnreadableExpression([{ label: '幅', raw: '' }, { label: '高さ', raw: '5*2' }]), null, '空欄と読める式は止めない')
+assert.equal(
+  firstUnreadableExpression([{ label: '幅', raw: '5' }, { label: '高さ', raw: 'abc' }, { label: '角度', raw: '1+' }]),
+  `高さ: ${reason('abc')}`,
+  '複数あれば先頭の1つ',
+)
+assert.equal(firstUnreadableExpression([]), null)
 
 console.log('expression.ts: 全ての想定を満たした')
