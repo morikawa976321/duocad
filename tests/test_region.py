@@ -10,7 +10,7 @@ import pytest
 
 from duocad.document import Document
 from duocad.region import regions
-from duocad.sketch import add_circle, add_line, sketch_create
+from duocad.sketch import add_circle, add_ellipse, add_line, add_rectangle, sketch_create
 
 CIRCLE_RADIUS = 20.0
 #: 実測値。真値は π·20² = 1256.6370614… で、下の許容差の中に入る
@@ -101,3 +101,21 @@ def test_regions_of_an_unknown_sketch_fails():
 
     with pytest.raises(KeyError):
         regions(document, "sketch-does-not-exist")
+
+
+@pytest.mark.parametrize("kind", ["rotated_rectangle", "ellipse"])
+def test_equal_area_regions_stacked_at_one_x_are_ordered_by_v_whatever_the_integration_noise(kind):
+    """同じ形の領域を同じ x に縦に積むと、重心の u は理論上等しいが OCCT の積分で 1ulp ずれる。ずれが v より先に効くと
+    添字が (u, v) の昇順にならず、`move_sketch_entities` の undo のように座標が bit 単位で戻らない編集で添字が入れ替わる。
+    落ちたら、順序のタイブレークが丸めていない u で決まっている。"""
+    for step in range(60):
+        x = 5.36144545611692 + 0.0137 * step
+        document = Document()
+        sketch_id = sketch_create(document, "XY")
+        for k in range(3):
+            if kind == "rotated_rectangle":
+                add_rectangle(document, sketch_id, (x, 30.0 * k + 0.7), 10.3, 7.1, 33.0)
+            else:
+                add_ellipse(document, sketch_id, (x, 30.0 * k + 0.7), 10.3, 7.1, 33.0)
+        ys = [item.centroid[1] for item in regions(document, sketch_id)]
+        assert ys == sorted(ys) and len(ys) == 3, f"x={x!r}: {ys}"

@@ -114,7 +114,8 @@ def sketch_regions(
     """スケッチの閉領域を返す。
 
     戻り値: [{"index": int, "area": float, "face": <TopoDS_Face>, "centroid": [x,y,z]}, ...]
-    添字は1始まり。順序は面積の降順、同値なら重心の (u, v) の昇順(決定的)。
+    添字は1始まり。順序は面積の降順、同値なら重心の (u, v) の昇順(決定的)。比べる値は面積・u・v とも小数6桁に丸めたもの
+    (1ulp の差で順序が変わらないように)。丸めの境目をまたぐ差は割れうる。
     """
     if not entities:
         return []
@@ -166,10 +167,11 @@ def sketch_regions(
         if area <= 0:
             continue
         u, v = _to_uv(ax3, centroid[0], centroid[1], centroid[2])
-        # 第1キーは**丸めた**面積。生の面積だと等しい2領域でも1e-16級の積分残差で先に決着し、
+        # 3つのキーとも**丸めた**値。生の面積だと等しい2領域でも1e-16級の積分残差で先に決着し、
         # docstringが約束するタイブレーク(重心の u,v)が発火しない(y=0で割った半円が
-        # 628.3185307179587 と ...584 になる)。
-        kept.append((-round(area, 6), u, v, area, centroid, region_face))
+        # 628.3185307179587 と ...584 になる)。重心の u も同じ: 同じ x に縦に積んだ同じ形の領域は u が
+        # 1ulp ずれ、v より先に効いて順序が入れ替わる(`move_sketch_entities` の undo は座標が bit 単位では戻らない)。
+        kept.append((-round(area, 6), round(u, 6), round(v, 6), area, centroid, region_face))
 
     kept.sort(key=lambda item: (item[0], item[1], item[2]))
     regions: List[dict] = []
