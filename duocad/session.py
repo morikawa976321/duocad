@@ -37,7 +37,7 @@ from .workspace import CommandState, NoCommand, Workspace, merge_args, stageable
 from .document import Document
 from .entry import entries, entry_for
 from .measure import inspect_selection, measure_selection
-from .oplog import OpLog
+from .oplog import OpLog, verb_handler
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import fork, speculative
 from .verbs.envelope_regions import envelope_pieces, selected_regions
@@ -194,6 +194,10 @@ class Session:
         self._optimize_document: Optional[Document] = None
         self._optimize_name: Optional[str] = None
         self._optimize_created: Optional[float] = None
+        #: 実行のスレッドが読む文書の写し(形は深く写してある。`begin_optimization`)と、その時点の操作ログの長さ。
+        #: 実行が足した結果は写しに入り、`deliver_optimization_result` が走らせた文書へ移す。
+        self._optimize_work: Optional[Document] = None
+        self._optimize_work_entries = 0
         #: ファイルへ書けなかった結果(ファイル名 -> (文書, 作成日時))。次にその名前を開いたときディスクでなくこちらを開く。
         self._undelivered: dict[str, tuple[Document, Optional[float]]] = {}
         #: 別の文書を開いている間に終わった実行の、画面へまだ見せていない結果/失敗の封筒(ファイル名 -> 封筒。作って配るのは `net/ws.py`)。
@@ -876,10 +880,16 @@ class Session:
         """
         if self._optimizing:
             raise ValueError("最適化が既に走っている(中断してから)")
+        # 実行のスレッドには文書そのものでなく形を写した文書を渡す(`speculative.fork`)。文書の形を一緒に使うと、実行が測る
+        # 三角形分割と、画面のズームがループ側で測り直す三角形分割が同じ面に書き込んで競合する(`kernel.copy_shape`)。
+        # 写しは失敗しうるので、「走っている」状態にする前に作る。
+        work, _ = fork(self.document, kernel.copy_shape)
         self._optimize_cancel.clear()
         with self._finish_lock:
             self._finish_request = None
             self._finish_open = True
+        self._optimize_work = work
+        self._optimize_work_entries = len(work.log.entries)
         self._optimize_document = self.document
         self._optimize_name = self._current_name
         self._optimize_created = self._created
@@ -889,6 +899,7 @@ class Session:
         """`begin_optimization` の対。文書を変える操作をまた受け付ける。"""
         self._optimizing = False
         self._optimize_document = None
+        self._optimize_work = None
         self._optimize_name = None
         self._optimize_created = None
 
@@ -896,7 +907,7 @@ class Session:
         """足し終えた結果を、走らせた文書のファイルへ届ける。`end_optimization` より前に、イベントループのスレッドで呼ぶ
         (ワーカースレッドで文書を差し替えると、同時に届いた「開く」と入れ違う)。
 
-        結果は実行が持っていた `Document` に足されている(`optimize_run.run`)。届け先は3通り:
+        結果は実行が読んでいた文書の写しに足されている(`optimize_run.run`)ので、まず走らせた文書へ移す。届け先は3通り:
 
         - その文書を開いたまま … 変更イベントを発火し、自動保存する。
         - 同じファイルを開き直していた … 開き直した写し(編集を断られていたので捨てて失うものは無い)を実行の文書へ差し替える。
@@ -906,6 +917,7 @@ class Session:
         結果の警告(`warning`)を `Session.warnings` へ積むのは、その文書を開いているときだけ。離れている間の分は結果の
         `warning` に載せ、戻ってきたときにパネルの通知で読ませる(`net/ws.py`)。`state != "done"` のときは警告の行き先を決めるだけ。
         """
+        self._adopt_optimization_results()
         document = self._optimize_document
         name = self._optimize_name
         here = document is None or self.document is document or (
@@ -950,6 +962,18 @@ class Session:
             )
             result = dict(result, warning=f"{result['warning']}\n{note}" if result.get("warning") else note)
         return dict(result, elsewhere=True, file=label)
+
+    def _adopt_optimization_results(self) -> None:
+        """実行(と仕上げ)が写しの文書に足した操作を、走らせた文書へ同じ内容で足す(ボディのIDも記録されているので同じIDで入る)。
+        2回呼んでも、足した分を二重に移さない。"""
+        work, document = self._optimize_work, self._optimize_document
+        if work is None or document is None:
+            return
+        added = work.log.entries[self._optimize_work_entries:]
+        self._optimize_work_entries += len(added)
+        for operation in added:
+            moved = document.log.append(operation.verb, operation.args)
+            verb_handler(operation.verb).do(document, moved)
 
     def run_optimization(
         self,
@@ -1007,9 +1031,9 @@ class Session:
             steps = OptimizationSteps()
             self.optimization_steps = steps
             self._steps_document, self._steps_name = self._optimize_document, self._optimize_name
-            # **今の文書ではなく、開始時に控えた文書を解く**(途中で別の文書へ切り替えてもよい)。
+            # **今の文書ではなく、開始時に控えた文書の写しを解く**(途中で別の文書へ切り替えてもよい)。
             result = optimize_run.run(
-                self._optimize_document,
+                self._optimize_work,
                 options,
                 progress=_tagged(progress, steps),
                 should_cancel=self._optimize_cancel.is_set,
@@ -1037,7 +1061,7 @@ class Session:
         if owned:
             self.begin_optimization()
         try:
-            result = optimize_run.finish_step(self._optimize_document, steps, int(step), progress=_tagged(progress, steps),
+            result = optimize_run.finish_step(self._optimize_work, steps, int(step), progress=_tagged(progress, steps),
                                               should_cancel=self._optimize_cancel.is_set, debug=debug,
                                               debug_kinds=debug_kinds)
             if owned:
