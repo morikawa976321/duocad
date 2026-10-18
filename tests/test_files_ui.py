@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -238,9 +239,21 @@ def test_rename_is_a_file_envelope_followed_by_a_state_push(session: Session) ->
         "model.json.",
         "model.json ",
         " model.json",
+        "CON .json",
         # 拡張子違いは一覧(*.jsonだけを見る)から二度と開けなくなる。
         "model",
         "model.txt",
+        # Windowsが作れない文字・制御文字・UTF-8に符号化できない文字は、一時ファイルを開く段で絶対パス入りの OSError になる。
+        "a*b.json",
+        "a?b.json",
+        'a"b.json',
+        "a<b.json",
+        "a>b.json",
+        "a|b.json",
+        "a\x01b.json",
+        "a\tb.json",
+        "a\nb.json",
+        "a\ud800b.json",
     ],
 )
 def test_save_and_open_reject_anything_but_a_bare_filename(session: Session, bad_name: str) -> None:
@@ -250,6 +263,77 @@ def test_save_and_open_reject_anything_but_a_bare_filename(session: Session, bad
         session.save_document(bad_name)
     with pytest.raises(ValueError):
         session.open_document(bad_name)
+
+
+def test_rename_and_copy_refuse_names_the_filesystem_cannot_hold_without_a_raw_oserror(session: Session) -> None:
+    """落ちたら: 改名・複製先に `* ?` や制御文字を打つと、一時ファイルの絶対パス入りの OSError がトーストに出る。
+    断りは ValueError で、文書も現在名も、ディスク上のファイルも動かない。"""
+    _box(session)
+    before = sorted(path.name for path in session.models_dir.iterdir())
+    for bad in ("a*b.json", 'q"x.json', "a\x01b.json", "a\ud800b.json"):
+        with pytest.raises(ValueError) as renamed:
+            session.rename_document(bad)
+        with pytest.raises(ValueError) as copied:
+            session.copy_document("untitled-1.json", bad)
+        for error in (renamed.value, copied.value):
+            assert str(session.models_dir) not in str(error), "断りの文に内部の絶対パスが出ている"
+
+    assert session.current_name == "untitled-1.json"
+    assert sorted(path.name for path in session.models_dir.iterdir()) == before
+
+
+def test_a_name_whose_temporary_files_would_overflow_the_limit_is_refused_where_it_is_written(
+    session: Session,
+) -> None:
+    """落ちたら: 改名が通った名前で、保存の一時ファイル(`.writing`)かサムネイルの一時ファイル(`.png.writing`)が
+    ファイル名の上限を超え、以後その文書は自動保存も Ctrl+S もできなくなる。限ちょうどの名前は全部通る。"""
+    from duocad.document_name import MAX_NAME_UNITS
+
+    _box(session)
+    fits = "n" * (MAX_NAME_UNITS - len(".json")) + ".json"
+    too_long = "n" * (MAX_NAME_UNITS - len(".json") + 1) + ".json"
+    for refused in (
+        lambda: session.rename_document(too_long),
+        lambda: session.save_document(too_long),
+        lambda: session.copy_document("untitled-1.json", too_long),
+    ):
+        with pytest.raises(ValueError, match="長すぎる"):
+            refused()
+    assert session.current_name == "untitled-1.json"
+    assert not (session.models_dir / too_long).exists()
+
+    session.rename_document(fits)
+    assert session.autosave() is True and session.state_meta()["saved"] is True
+    session.save_document()
+    assert session.save_thumbnail(fits, _PNG)["saved"] is True
+
+
+def test_the_name_field_uses_the_same_length_limit_as_the_server() -> None:
+    """落ちたら: 画面の名前欄の上限(`FilesPanel.svelte` の `MAX_NAME_UNITS`)がサーバとずれ、通すべき名前を弾く・弾くべき名前を通す。"""
+    from duocad.document_name import MAX_NAME_UNITS
+    from duocad.paths import REPO_ROOT
+
+    source = (REPO_ROOT / "web" / "src" / "FilesPanel.svelte").read_text(encoding="utf-8")
+    match = re.search(r"const MAX_NAME_UNITS = (\d+)", source)
+    assert match is not None and int(match.group(1)) == MAX_NAME_UNITS
+
+
+def test_an_existing_long_named_file_can_still_be_opened_and_renamed_away_from(session: Session) -> None:
+    """落ちたら: 長さの検査を読む側にも掛けて、いまある長い名前のファイルが開けない・短い名前へ戻せない。"""
+    from duocad.document_name import MAX_NAME_UNITS
+
+    _box(session)
+    long_name = "m" * (MAX_NAME_UNITS + 8 - len(".json")) + ".json"
+    (session.models_dir / long_name).write_bytes((session.models_dir / "untitled-1.json").read_bytes())
+    session.new_document()
+
+    session.open_document(long_name)
+    assert session.current_name == long_name
+    session.rename_document("short.json")
+
+    assert session.current_name == "short.json" and not (session.models_dir / long_name).exists()
+    session.sketch_create("XY")
+    assert session.state_meta()["saved"] is True
 
 
 def test_a_drive_relative_escape_never_touches_the_drive(session: Session) -> None:
@@ -841,6 +925,40 @@ def test_relative_export_paths_cannot_escape_exports_dir(session: Session) -> No
     for path in escapes:
         with pytest.raises(ValueError, match="export/の外"):
             session.export_step_file(path)
+
+
+def test_export_never_overwrites_a_saved_document_or_writes_a_wrong_extension(
+    session: Session, tmp_path: Path
+) -> None:
+    """落ちたら: 絶対パスで保存済みの `models/*.json`(か、それへのハードリンク)を指す書き出しが文書を STEP/STL で潰す。
+    形式と合わない拡張子(`.json` / `.txt` / 拡張子なし)も断る。絶対パスそのものは許す(MCPの明示パス)。"""
+    _box(session)
+    session.save_document("precious.json")
+    precious = session.models_dir / "precious.json"
+    before = precious.read_bytes()
+    alias = tmp_path / "alias.step"
+    os.link(precious, alias)
+
+    for path in (precious, tmp_path / "x.txt", tmp_path / "noext", "relative.json", alias):
+        with pytest.raises(ValueError):
+            session.export_step_file(str(path))
+        with pytest.raises(ValueError):
+            session.export_stl_file(str(path))
+    with pytest.raises(ValueError, match="拡張子"):
+        session.export_step_file(str(tmp_path / "part.stl"))
+    with pytest.raises(ValueError, match="拡張子"):
+        session.export_stl_file(str(tmp_path / "part.step"))
+    with pytest.raises(ValueError):
+        session.export_stl_file(str(tmp_path / "a*b.stl"))
+
+    assert precious.read_bytes() == before, "保存済みの文書が書き出しで書き換わった"
+    assert not (session.exports_dir / "relative.json").exists()
+    for good, exporter in (
+        ("a.STEP", session.export_step_file),
+        ("b.stp", session.export_step_file),
+        ("c.stl", session.export_stl_file),
+    ):
+        assert Path(exporter(str(tmp_path / good))["path"]).is_file()
 
 
 def test_stl_export_always_uses_the_fixed_deviation(session: Session, tmp_path: Path) -> None:

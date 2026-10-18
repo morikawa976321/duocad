@@ -35,6 +35,7 @@ from . import (
 )
 from .workspace import CommandState, NoCommand, Workspace, merge_args, stageable, stageable_verb_names
 from .document import Document
+from .document_name import check_characters, check_writable_length
 from .entry import entries, entry_for
 from .measure import inspect_selection, measure_selection
 from .oplog import OpLog, verb_handler
@@ -64,6 +65,10 @@ class NoDocument(ValueError):
     素通しすると最初の変更で自動保存が `untitled-<n>.json` を作り、「何も開いていない」が黙って「無題の文書」になる。
     """
 
+
+#: 書き出し先に認める拡張子(小文字。`Session._resolve_export_path`)。
+_STEP_SUFFIXES = (".step", ".stp")
+_STL_SUFFIXES = (".stl",)
 
 THUMBNAIL_DIR = ".thumbnails"
 #: 受け取るPNGの上限[バイト]。画面が撮るのは128px四方で、RGBAを圧縮せず持っても64KiB。
@@ -1107,6 +1112,8 @@ class Session:
         - 予約デバイス名(`CON`/`COM1`等、拡張子を付けても特別扱い)・末尾のドット/空白(Windowsが黙って落とすため
           `foo.json.` と `foo.json` が同じ実体になりうる)。
         - 既存のシンボリックリンク/ジャンクションを指すファイル名は、文字列検査では `models_dir` の外へ解決されるのを塞げない。
+        - 制御文字・`<>"|?*`・孤立サロゲートは `document_name.check_characters` が断る(通すと一時ファイルを開く段で、
+          絶対パス入りの OSError になる)。書き込む名前の長さは `_resolve_writable_name`。
 
         判定は2段: ①明らかに拒まれる形を早く言う文字列検査、②解決後のパスが `models_dir` 配下か(`is_relative_to`。
         `resolve()` はリンクを辿る)。①だけに頼らない。
@@ -1127,13 +1134,14 @@ class Session:
             raise ValueError(f"ファイル名として使えない: {text!r}")
         if text.endswith(".") or text.endswith(" "):
             raise ValueError(f"末尾のドット/空白は不可(Windowsが黙って落とすため): {text!r}")
-        base_name = text.split(".", 1)[0].upper()
+        base_name = text.split(".", 1)[0].rstrip(" ").upper()
         if base_name in _RESERVED_WINDOWS_NAMES:
             raise ValueError(f"予約されたデバイス名は使えない: {text!r}")
         if not text.lower().endswith(".json"):
             # 一覧(`list_documents`)は `*.json` しか見ない。拡張子違いを受理すると、保存はできるのに一覧から二度と開けないファイルができる。
             # 黙って `.json` を補うより、打ち間違いをその場で返す。
             raise ValueError(f"拡張子は.json(一覧はモデルの*.jsonだけを見る): {text!r}")
+        check_characters(text)
         candidate = Path(text)
         if candidate.is_absolute():
             raise ValueError(f"ファイル名だけを受け取る(絶対パスは不可): {text!r}")
@@ -1144,6 +1152,14 @@ class Session:
         if not resolved.is_relative_to(root):
             raise ValueError(f"models/の外を指している: {text!r} -> {resolved}")
         return resolved
+
+    def _resolve_writable_name(self, name: Any) -> Path:
+        """`_resolve_document_name` に、書き込む名前だけへ掛ける長さの検査を足したもの(保存・改名・複製先・自動保存)。
+        開く・消す・サムネイルは今ある名前を扱うので掛けない(長い名前のファイルを開けなくしない)。
+        """
+        target = self._resolve_document_name(name)
+        check_writable_length(target.name)
+        return target
 
     @staticmethod
     def _write_document_file(target: Path, payload: Any) -> None:
@@ -1204,7 +1220,7 @@ class Session:
 
     def _queue_write(self) -> None:
         """編集中のファイルへの自動保存を書き手スレッドへ回す(中身はここで確定する)。"""
-        target = self._resolve_document_name(self._current_name)
+        target = self._resolve_writable_name(self._current_name)
         data = self.document.log.to_file_chunks(created=self._created)
         self._write_seq += 1
         seq = self._write_seq
@@ -1247,9 +1263,9 @@ class Session:
                     "編集中のファイルが無い"
                     "(ファイルパネルで名前を付けて保存すれば、以後はそこへ上書きできる)"
                 )
-            target = self._resolve_document_name(self._current_name)
+            target = self._resolve_writable_name(self._current_name)
         else:
-            target = self._resolve_document_name(name)
+            target = self._resolve_writable_name(name)
             self._require_open()  # 閉じている間の空の文書を、新しい名前のファイルにしない
             if target.exists():
                 # どちらの枝も拒否する(分かれるのは「次に何をすればよいか」の文言だけ)。
@@ -1327,7 +1343,7 @@ class Session:
         人が名前を付ける口(ファイルパネルの名前欄。issue #5)。`name` が既に在れば拒否(上書きの口は持たない。`copy_document` と同じ)。
         無題で何も変えていない文書(ファイルがまだ無い)は、その名前で空の文書を書く。
         """
-        target = self._resolve_document_name(name)
+        target = self._resolve_writable_name(name)
         # 閉じている間に通すと、空の文書がその名前で書かれる(トップ画面のまま新規ファイルが増える)。
         self._require_open()
         if self._document_locked():
@@ -1504,7 +1520,7 @@ class Session:
         複製は新しいファイルなので作成日時を今にする(バイト列を写さず、読んで書き直す)。サムネイルは写す。
         """
         origin = self._resolve_document_name(source)
-        target = self._resolve_document_name(dest)
+        target = self._resolve_writable_name(dest)
         self._drain_writes()  # 書きかけの最後の変更の無いファイルを写さない
         if not origin.exists():
             raise FileNotFoundError(f"複製元が無い: {origin.name}")
@@ -1629,10 +1645,16 @@ class Session:
 
     def export_step_file(self, path: Any) -> dict:
         """STEPを書き出す。ログに載らない。対象はいま表示中のBodyだけ。非表示で除外した件数は `skipped_hidden` として必ず応答に載る。"""
-        return {"action": "export_step", **io_step.export(self.document, self._resolve_export_path(path), "step")}
+        target = self._resolve_export_path(path, _STEP_SUFFIXES)
+        return {"action": "export_step", **io_step.export(self.document, target, "step")}
 
-    def _resolve_export_path(self, path: Any) -> Path:
-        """書き出し先を絶対パスにする。相対は `exports_dir` 基準(その外へ逃げる経路は拒否)。絶対パスはそのまま(テスト・MCPの明示パス用)。"""
+    def _resolve_export_path(self, path: Any, suffixes: tuple[str, ...]) -> Path:
+        """書き出し先を絶対パスにする。相対は `exports_dir` 基準(その外へ逃げる経路は拒否)。絶対パスはそのまま(テスト・MCPの明示パス用)。
+
+        絶対パスは自由だが、書き出しは既存の中身を黙って潰すので、**形式の拡張子(`suffixes`)以外は断り、保存済みの文書
+        (`models_dir` の `*.json`)を指す先も断る**。拡張子は解決後のパスで見る(リンク越しに `*.json` を指す名前も止まる)。
+        画面の書き出しは必ず拡張子を付けて送るので、人の操作には当たらない。
+        """
         text = str(path)
         stripped = text.strip()
         if stripped == "":
@@ -1644,20 +1666,39 @@ class Session:
             target = candidate.resolve()
             if not target.parent.exists():
                 raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
-            return target
-        self.exports_dir.mkdir(parents=True, exist_ok=True)
-        root = self.exports_dir.resolve()
-        resolved = (root / text).resolve()
-        if not resolved.is_relative_to(root):
-            raise ValueError(f"export/の外を指している: {text!r} -> {resolved}")
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        return resolved
+        else:
+            self.exports_dir.mkdir(parents=True, exist_ok=True)
+            root = self.exports_dir.resolve()
+            target = (root / text).resolve()
+            if not target.is_relative_to(root):
+                raise ValueError(f"export/の外を指している: {text!r} -> {target}")
+        check_characters(target.name)
+        if target.suffix.lower() not in suffixes:
+            raise ValueError(
+                f"書き出し先の拡張子は {' か '.join(suffixes)} にする(保存済みの文書などを潰さないため): {text!r}"
+            )
+        self._refuse_overwriting_a_document(target)
+        if not candidate.is_absolute():
+            target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def _refuse_overwriting_a_document(self, target: Path) -> None:
+        """`target` が保存済みの文書(`models_dir` の `*.json`)と同じファイルなら断る。拡張子の検査をすり抜ける
+        ハードリンクでも、書けば文書の中身を書き換えてしまう。"""
+        if not target.exists():
+            return
+        try:
+            for document in self.models_dir.glob("*.json"):
+                if target.samefile(document):
+                    raise ValueError(f"保存済みの文書 {document.name} は書き出しで上書きできない: {str(target)!r}")
+        except OSError:
+            return
 
     def export_stl_file(self, path: Any) -> dict:
         """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定で、人にもAIにも選ばせない。
         対象はいま表示中のBodyだけ。非表示で除外した件数は `skipped_hidden` として必ず応答に載る。応答の `deviation` は書いた粗さの記録で入力ではない。
         """
-        exported = io_step.export(self.document, self._resolve_export_path(path), "stl")
+        exported = io_step.export(self.document, self._resolve_export_path(path, _STL_SUFFIXES), "stl")
         return {
             "action": "export_stl",
             "path": exported["path"],
