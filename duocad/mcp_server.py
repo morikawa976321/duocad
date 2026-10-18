@@ -218,17 +218,21 @@ class DocumentTools:
         except Exception as error:  # noqa: BLE001 — 封筒にするのは呼び手(`error_envelope`)
             return None, error, self.current_seq()
 
-    def current_seq(self) -> tuple[int, int, str, str, int]:
+    def current_seq(self) -> tuple[int, int, int, str, str, int]:
         """文書+選択+作業空間の版。**モデルには見せない** —— `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
 
         `AgentLoop.run()` はモデルへの1往復・ツール1実行のたびにこれを控え、値が変わっていたら
         残りのツール呼び出しを構造化エラーへ差し替える(楽観ロック)。
 
-        戻り値は `(Session.generation, len(document.log.entries), selection.fingerprint(document),
-        selection.visibility_fingerprint(document), Session.workspace.revision)`。**5つとも要る**:
+        戻り値は `(Session.generation, len(document.log.entries), Session.applied_count, selection.fingerprint(document),
+        selection.visibility_fingerprint(document), Session.workspace.revision)`。**6つとも要る**:
 
         - 世代が無いと文書の切り替えを見逃す。新規→新規は残り3つが `(0, 空, 空)` のまま一致する(実測)。
-        - ログの本数だけでは足りない。選択の変更は操作ログに乗らないので、辺Aを外して辺Bを
+        - ログの本数は undo / redo で動く。無いと undo / redo 単独を見逃す。
+        - 適用回数(`applied_count`)は undo / redo で動かず、verb を適用するたびに進む。ログの本数だけでは、undo してから
+          同じ本数になる別の verb を打つと版が戻って見逃す(面・辺の添字が差し替わった形へ、古い前提の `set_selection` が効く)。
+          逆に適用回数だけでは undo / redo 単独が出ないので、両方持つ。
+        - ログと適用回数だけでは足りない。選択の変更は操作ログに乗らないので、辺Aを外して辺Bを
           選び直す**入れ替え**を検出できず、`fillet(radius)`(選択から対象を取る)は辺Aの
           つもりのAIに辺Bを黙って丸めさせる。
         - 選択の指紋だけでも足りない(形状が変わっても選択の中身が同じままのことがある)。
@@ -244,6 +248,7 @@ class DocumentTools:
         return (
             self.session.generation,
             len(self.session.document.log.entries),
+            self.session.applied_count,
             selection.fingerprint(self.session.document),
             selection.visibility_fingerprint(self.session.document),
             self.session.workspace.revision,

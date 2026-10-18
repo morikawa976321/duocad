@@ -307,3 +307,18 @@ def test_a_human_edit_landing_right_after_a_tool_call_is_not_absorbed_into_the_n
     assert error is None and payload["body_count"] == 1
     assert box_session.document.get_body("box").visible is False, "人の操作が走っていない(検査の前提)"
     assert seq_after != seq_now, "実行直後の版に、その後に入った人の操作が吸われている"
+
+
+def test_undo_followed_by_another_verb_of_the_same_length_changes_the_version(box_session: Session):
+    """落ちたら、人が undo してログの本数が同じになる別の verb を打つと版が元に戻り、AI が古い面・辺の添字の前提のまま別の文書へ効く。"""
+    tools = DocumentTools(box_session)
+    sketch_id = box_session.sketch_create("XY")["sketch_id"]
+    box_session.add_circle(sketch_id, [0.0, 0.0], 10.0)
+    seen = tools.current_seq()
+
+    box_session.undo()
+    assert tools.current_seq() != seen, "undo 単独が版に出ない"
+    box_session.add_circle(sketch_id, [50.0, 0.0], 4.0)
+
+    assert len(box_session.document.log.entries) == seen[1], "検査の前提: ログの本数は元と同じ"
+    assert tools.current_seq() != seen
