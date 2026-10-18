@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 
-import { cappedPixelRatio, watchPixelRatio } from '../web/src/pixelRatio.ts'
+import { cappedPixelRatio, nextPixelRatio } from '../web/src/pixelRatio.ts'
 
 assert.equal(cappedPixelRatio(1), 1)
 assert.equal(cappedPixelRatio(1.5), 1.5)
@@ -14,50 +14,16 @@ assert.equal(cappedPixelRatio(3), 2, '3倍以上はバッファが大きくな�
 assert.equal(cappedPixelRatio(undefined), 1)
 assert.equal(cappedPixelRatio(0), 1)
 
-/** `matchMedia` の最小の偽物。クエリごとの 'change' リスナーを持ち、`fire(query)` で一致が外れたことにする。 */
-function fakeWindow(initial) {
-  const listeners = new Map()
-  const win = {
-    devicePixelRatio: initial,
-    queries: [],
-    matchMedia(query) {
-      win.queries.push(query)
-      const entry = { query, set: new Set() }
-      listeners.set(query, entry)
-      return {
-        addEventListener: (_type, listener) => entry.set.add(listener),
-        removeEventListener: (_type, listener) => entry.set.delete(listener),
-      }
-    },
-    /** いまの `devicePixelRatio` のクエリに張られているリスナーの数。 */
-    watching: () => listeners.get(`(resolution: ${win.devicePixelRatio}dppx)`)?.set.size ?? 0,
-    /** 値が変わった(ブラウザは古い値のクエリの一致が外れたことを知らせる)。 */
-    change(next) {
-      const old = listeners.get(`(resolution: ${win.devicePixelRatio}dppx)`)
-      win.devicePixelRatio = next
-      for (const listener of [...old.set]) listener()
-    },
-  }
-  return win
-}
+// 変わっていなければ null(毎フレーム呼ぶので、何もしない側が既定)。
+assert.equal(nextPixelRatio(1, 1), null)
+assert.equal(nextPixelRatio(2, 2), null)
+assert.equal(nextPixelRatio(2, 3), null, '上限で頭打ちの値が同じなら変わっていない')
+assert.equal(nextPixelRatio(1, undefined), null)
 
-{
-  const win = fakeWindow(1)
-  let calls = 0
-  const stop = watchPixelRatio(win, () => (calls += 1))
-  assert.deepEqual(win.queries, ['(resolution: 1dppx)'])
-  assert.equal(win.watching(), 1)
-
-  win.change(2) // ズームや別モニタ
-  assert.equal(calls, 1, '画素比が変わったのに知らせない')
-  assert.equal(win.queries.at(-1), '(resolution: 2dppx)', '新しい値で張り直していない(次の変化に気づけない)')
-  assert.equal(win.watching(), 1)
-
-  win.change(1.25) // もう一度変わっても気づく
-  assert.equal(calls, 2)
-
-  stop()
-  assert.equal(win.watching(), 0, '止めたのにリスナーが残っている')
-}
+// 変わったら新しい値(上限をかけた後)。ズームで上がる・高DPIから等倍へ下がる・上限を超える。
+assert.equal(nextPixelRatio(1, 2), 2, '100%で開いて拡大した')
+assert.equal(nextPixelRatio(2, 1), 1, '高DPIモニタから等倍へ移った')
+assert.equal(nextPixelRatio(2, 1.25), 1.25)
+assert.equal(nextPixelRatio(1, 3), 2, '上限をかけた値')
 
 console.log('pixelRatio.ts: 全ての想定を満たした')

@@ -8,33 +8,12 @@ export function cappedPixelRatio(devicePixelRatio: number | undefined): number {
   return Math.min(devicePixelRatio || 1, MAX_PIXEL_RATIO)
 }
 
-interface PixelRatioWindow {
-  readonly devicePixelRatio: number
-  matchMedia(query: string): Pick<MediaQueryList, 'addEventListener' | 'removeEventListener'>
-}
-
 /**
- * `devicePixelRatio` が変わるたびに `onChange` を呼ぶ。止める関数を返す。
- * 値が変わったことを知る標準の口は無く、`(resolution: Ndppx)` の一致が外れるのを見張る。変わったら新しい値で張り直す。
- * (ブラウザのズームは CSS 寸法も変えるので `ResizeObserver` でも気づけるが、同じ寸法のまま別モニタへ移ると気づけない。)
+ * 画素比が変わっていれば新しい値、同じなら `null`。描画ループが毎フレーム `renderer.getPixelRatio()` と
+ * `window.devicePixelRatio` を比べて呼ぶ。イベントで待たない: ズームは `ResizeObserver` で気づけるが、同じ CSS 寸法のまま
+ * 別モニタへ移ると気づけず、`matchMedia` の resolution の change は実機でしか確かめられない(headless のエミュレーションでは発火しない)。
  */
-export function watchPixelRatio(win: PixelRatioWindow, onChange: () => void): () => void {
-  let query: ReturnType<PixelRatioWindow['matchMedia']> | null = null
-
-  function changed(): void {
-    onChange()
-    arm()
-  }
-
-  function arm(): void {
-    query?.removeEventListener('change', changed)
-    query = win.matchMedia(`(resolution: ${win.devicePixelRatio}dppx)`)
-    query.addEventListener('change', changed)
-  }
-
-  arm()
-  return () => {
-    query?.removeEventListener('change', changed)
-    query = null
-  }
+export function nextPixelRatio(current: number, devicePixelRatio: number | undefined): number | null {
+  const wanted = cappedPixelRatio(devicePixelRatio)
+  return wanted === current ? null : wanted
 }

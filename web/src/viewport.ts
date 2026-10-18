@@ -24,7 +24,7 @@ import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOve
 import { sampleFaces, type BodySamples } from './faceCulling'
 import { startFrameLoop } from './frameLoop'
 import { createHeadlight } from './headlight'
-import { cappedPixelRatio, watchPixelRatio } from './pixelRatio'
+import { cappedPixelRatio, nextPixelRatio } from './pixelRatio'
 import { createResolutionTracker } from './resolutionTracker'
 import { BASE_EXTENT, mmPerPixel, uvBoxOfPoints, type CameraProjection } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
@@ -413,12 +413,19 @@ export function createViewport(container: HTMLElement): Viewport {
     return Number.isFinite(px) ? px : 0
   }
 
+  /** 画素比が変わっていたら描画バッファへ反映する(`applySize` と毎フレームの `tick` が呼ぶ)。変えたら true。 */
+  function syncPixelRatio(): boolean {
+    const next = nextPixelRatio(renderer.getPixelRatio(), window.devicePixelRatio)
+    if (next === null) return false
+    renderer.setPixelRatio(next)
+    return true
+  }
+
   function applySize(): void {
     pickChanged() // 寸法が変わると同じ画素が別のものを指す
     const { width, height } = size()
     // ブラウザのズーム・別モニタへの移動で画素比が変わったら追従する(作成時の1回だけだと、バッファの解像度が起動時のまま引き伸ばされる)。
-    const pixelRatio = cappedPixelRatio(window.devicePixelRatio)
-    if (renderer.getPixelRatio() !== pixelRatio) renderer.setPixelRatio(pixelRatio)
+    syncPixelRatio()
     renderer.setSize(width, height, false)
     const aspect = width / height
     perspective.aspect = aspect
@@ -2419,10 +2426,6 @@ export function createViewport(container: HTMLElement): Viewport {
   })
   observer.observe(container)
   applySize()
-  const stopWatchingPixelRatio = watchPixelRatio(window, () => {
-    invalidate()
-    applySize()
-  })
 
   /**
    * ホバー強調を1フレームぶん更新する。毎フレーム解決し直す(視点を回すとポインタが動かなくても
@@ -2539,6 +2542,11 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function tick(): void {
+    // 画素比はイベントで待たず毎フレーム見る(同じ CSS 寸法のまま別モニタへ移ったときは `ResizeObserver` も発火しない)。
+    if (syncPixelRatio()) {
+      invalidate()
+      applySize()
+    }
     cube.stepSnap(performance.now())
     controls.update()
     syncCameraUp()
@@ -2697,7 +2705,6 @@ export function createViewport(container: HTMLElement): Viewport {
     dispose() {
       frameLoop.stop()
       observer.disconnect()
-      stopWatchingPixelRatio()
       thumbnailer.dispose()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
