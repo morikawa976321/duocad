@@ -21,6 +21,7 @@ EVALUATORS = [
     "eval_grid_scale.mjs",
     "eval_headlight.mjs",
     "eval_min_width.mjs",
+    "eval_resolution_tracker.mjs",
     "eval_screen_pick.mjs",
     "eval_selection_ref_key.mjs",
     "eval_sketch_geometry.mjs",
