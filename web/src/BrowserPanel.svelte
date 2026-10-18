@@ -19,6 +19,7 @@
    * `position: absolute` で `.stage` の上に浮くので、開閉してもカメラのアスペクトは変わらない
    * (`Toast.svelte` と同じ。`styles.css` の「ビューポートのサイズを変えるのは .viewport だけ」)。
    */
+  import { isImeKey } from './keys'
   import type { BasePlaneName, BodyMeta } from './session'
   import type { SectionState } from './viewport'
 
@@ -89,7 +90,7 @@
   }
 
   function blurOnEnter(event: KeyboardEvent): void {
-    if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+    if (event.key === 'Enter' && !isImeKey(event)) (event.target as HTMLInputElement).blur()
   }
 
   let open = $state(true)
@@ -115,6 +116,8 @@
 
   /** Esc は窓まで届かせない: `CommandHost` の窓の keydown が入力欄の Esc も拾って、起動中のコマンドまで中断する。 */
   function renameKey(event: KeyboardEvent, id: string, current: string): void {
+    // IME の変換中の Enter(候補の確定)・Esc(変換の取り消し)は名前の確定・取り消しではない。
+    if (isImeKey(event)) return
     if (event.key === 'Enter') commitRename(id, current)
     else if (event.key === 'Escape') {
       event.stopPropagation()

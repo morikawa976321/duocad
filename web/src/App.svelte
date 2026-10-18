@@ -33,6 +33,7 @@
   } from './commands/features'
   import { ghostCopies, snapSketchPoint } from './entityKinds'
   import { IMPORT_STEP } from './commands/files'
+  import { isImeKey } from './keys'
   import { MEASURE } from './commands/measure'
   import type { MeasurePayload } from './session'
   import {
@@ -1963,7 +1964,7 @@
   function onWindowKeydown(event: KeyboardEvent): void {
     // Esc は測定の札を消す(コマンドの中断は `CommandHost` が同じキーで別に見る)。
     if (event.key === 'Escape') {
-      measure.clear()
+      if (!isImeKey(event)) measure.clear()
       return
     }
     if (!(event.ctrlKey || event.metaKey)) return

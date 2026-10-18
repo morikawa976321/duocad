@@ -66,6 +66,7 @@
   } from './command'
   import { categoryOf } from './category'
   import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../expression'
+  import { isImeKey, ownsEnterKey } from '../keys'
   import type { CommandState, SelectionRef, SelectionState } from '../session'
   import { COMMAND_CATEGORY, COMMAND_PARAMS } from '../generated/protocol'
 
@@ -963,6 +964,8 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
+    // IME の変換中の Esc(変換の取り消し)・Enter(候補の確定)はコマンドの中断・確定ではない。
+    if (isImeKey(event)) return
     if (event.key === 'Escape') {
       if (!commandActive) return
       event.preventDefault()
@@ -972,8 +975,8 @@
     // 点だけで引数が揃うコマンド(線分など)はEnterの受け皿が無いので、数値欄にフォーカスが無いときのEnterをここで拾う(欄にあるときは `onNumberKeydown` が拾う)。
     if (event.key !== 'Enter' || !canCommit) return
     const target = event.target as HTMLElement | null
-    // ボタンも除く: フォーカスの残ったボタン(undo等)のEnterを奪うと、そのボタンでなくコマンドが確定する。
-    if (target && ['INPUT', 'TEXTAREA', 'BUTTON'].includes(target.tagName)) return
+    // ボタン・選択肢も除く: フォーカスの残ったボタン(undo等)のEnterを奪うと、そのボタンでなくコマンドが確定する。
+    if (ownsEnterKey(target)) return
     event.preventDefault()
     commit()
   }
@@ -981,6 +984,7 @@
   /** 打ち込む欄(数値・文字列)でのEnter(確定)とTab(次の引数へ)。 */
   function onNumberKeydown(event: KeyboardEvent, spec: NumberArgSpec | TextArgSpec): void {
     if (event.key === 'Enter') {
+      if (isImeKey(event)) return
       event.preventDefault()
       commit()
       return

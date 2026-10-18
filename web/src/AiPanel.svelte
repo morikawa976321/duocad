@@ -12,6 +12,7 @@
    * 既定は開いている(再読込をまたいで保持しない)。「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
   import { inputBlockedReason, resultDetail, resultLine } from './aiResult'
+  import { isImeKey } from './keys'
   import type { AiProviderKind, AiStatus, AiThinking, AiTranscriptEntry, ConnectionStatus } from './session'
 
   let {
@@ -245,7 +246,7 @@
         disabled={running || !!blockedReason}
         bind:value={draft}
         onkeydown={(event) => {
-          if (event.key !== 'Enter') return
+          if (event.key !== 'Enter' || isImeKey(event)) return
           event.preventDefault()
           send()
         }}

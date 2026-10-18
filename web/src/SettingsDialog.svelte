@@ -13,6 +13,7 @@
    * APIキーは書くだけで値は画面へ戻らない(サーバが返すのは置いてあるか・どこから読んだか・末尾4文字)。打ちかけは送ったら捨てる。
    */
   import { onMount } from 'svelte'
+  import { isImeKey } from './keys'
   import type { AiStatus, FemStatus } from './session'
   import { loadConfig, restart, restartServer } from './serverRestart.svelte'
   import { fail } from './Toast.svelte'
@@ -99,7 +100,7 @@
    * (`CommandHost.svelte` の `onKeydown`)。
    */
   function onWindowKeydown(event: KeyboardEvent): void {
-    if (!open || event.key !== 'Escape') return
+    if (!open || event.key !== 'Escape' || isImeKey(event)) return
     onClose()
   }
 </script>
@@ -141,7 +142,7 @@
       bind:value={keyDraft}
       disabled={!aiStatus || keyFromEnv}
       onkeydown={(event) => {
-        if (event.key === 'Enter') saveKey()
+        if (event.key === 'Enter' && !isImeKey(event)) saveKey()
       }}
     />
   </label>

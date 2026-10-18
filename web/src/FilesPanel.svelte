@@ -28,6 +28,7 @@
    */
   import { tick } from 'svelte'
   import { pathLike } from './commands/command'
+  import { isImeKey } from './keys'
   import type { DocumentInfo } from './session'
   import SuffixField, { withSuffix, withoutSuffix } from './SuffixField.svelte'
 
@@ -214,7 +215,7 @@
   }
 
   function onRowEnter(event: KeyboardEvent, submit: () => void): void {
-    if (event.key !== 'Enter') return
+    if (event.key !== 'Enter' || isImeKey(event)) return
     event.preventDefault()
     submit()
   }
@@ -343,7 +344,7 @@
             suffix=".json"
             bind:value={copyName}
             onkeydown={(event) => {
-              if (event.key === 'Escape') {
+              if (event.key === 'Escape' && !isImeKey(event)) {
                 event.preventDefault()
                 cancelRowActions()
                 return
