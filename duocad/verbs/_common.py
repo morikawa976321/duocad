@@ -281,6 +281,9 @@ MODE_TRANSLATE = "translate"
 MODE_ROTATE = "rotate"
 MOVE_MODES = (MODE_TRANSLATE, MODE_ROTATE)
 
+#: 複製が元と重なるとみなす座標の差[mm]。幾何の許容差(1e-9mm)と同じ。
+OVERLAP_TOLERANCE = 1.0e-9
+
 
 def require_move_mode(mode: str, *, verb: str) -> None:
     if mode not in MOVE_MODES:
@@ -293,6 +296,19 @@ def reject_foreign_args(mode: str, given: dict, *, verb: str) -> None:
     foreign = sorted(name for name, value in given.items() if value is not None)
     if foreign:
         raise ValueError(f"{verb}(mode={mode!r}) does not take {foreign} (mode を切り替えるか、その引数を外すこと)")
+
+
+def overlaps_original(values: dict, current: dict, *, fresh: bool) -> bool:
+    """複製の `values` が、元の `current` が持つキーのすべてで元と同じ値か(重なる複製。領域検出が同じ辺を2本見る)。
+
+    新しく作る複製(`fresh`)は座標の丸め誤差(斜めの軸への鏡映は 1ulp ずれる)を許して重なりとみなす。
+    redo / 再生は厳密一致だけ —— 許容差で弾くと、重なる複製を断る前に作られた複製を含む保存済みの文書が開けなくなる。
+    """
+    if not fresh:
+        return all(values[key] == current[key] for key in current)
+    return all(
+        math.isclose(values[key], current[key], rel_tol=1.0e-12, abs_tol=OVERLAP_TOLERANCE) for key in current
+    )
 
 
 def rotation_degrees(angle: Any, *, verb: str, noun: str) -> float:

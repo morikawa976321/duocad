@@ -463,7 +463,7 @@ def test_a_duplicate_copy_id_leaves_no_entity_and_no_parameter_behind(session: S
     parameters_before = len(doc.parameters)
 
     with pytest.raises(ValueError, match="already exists"):
-        verb._create_mirrors(doc, [(sketch_id, first), (sketch_id, second)], 0.0, 0.0, 1.0, 0.0, ["fresh", first])
+        verb._create_mirrors(doc, [(sketch_id, first), (sketch_id, second)], 0.0, 0.0, 1.0, 0.0, ["fresh", first], fresh=True)
 
     assert len(doc.sketches[0].entities) == entities_before
     assert len(doc.parameters) == parameters_before

@@ -28,6 +28,7 @@ from ..sketch import (
     remove_entities,
     require_valid_params,
 )
+from ._common import overlaps_original
 
 VERB_MIRROR_SKETCH_ENTITIES = "mirror_sketch_entities"
 
@@ -78,7 +79,7 @@ def _axis_line(doc: Document, axis: Any) -> tuple:
 
 
 def _mirrored_plan(
-    doc: Document, normalized: Sequence[tuple], ax: float, ay: float, ux: float, uy: float
+    doc: Document, normalized: Sequence[tuple], ax: float, ay: float, ux: float, uy: float, *, fresh: bool
 ) -> List[tuple]:
     """検査してから返す計画 `[(sketch, kind, values), ...]`(対象と同じ順序。書き込みより前に全部検査する)。"""
     planned: List[tuple] = []
@@ -90,7 +91,7 @@ def _mirrored_plan(
         values.update(entity_kind_ops(entity.kind).mirror(current, ax, ay, ux, uy))
         # 元が持っているキーだけで比べる(`angle` を持たない時代のログから再生した長方形は
         # `values` のほうがキーが1つ多く、素の辞書比較では常に不一致になる)。
-        if all(values[key] == current[key] for key in current):
+        if overlaps_original(values, current, fresh=fresh):
             # 対象が軸の上に乗っている。元と重なる複製は作らない(領域検出が同じ辺を2本見る)。
             raise ValueError(
                 f"mirror_sketch_entities: 複製 {entity_id!r} が元と完全に重なる"
@@ -109,9 +110,11 @@ def _create_mirrors(
     ux: float,
     uy: float,
     new_ids: Sequence[str],
+    *,
+    fresh: bool,
 ) -> List[str]:
     """検査済みの計画から複製を作って追加し、作った entity_id の並びを返す(do も redo/replay もここを通る)。"""
-    plan = _mirrored_plan(doc, normalized, ax, ay, ux, uy)
+    plan = _mirrored_plan(doc, normalized, ax, ay, ux, uy, fresh=fresh)
     if len(new_ids) != len(plan):
         raise ValueError(
             f"mirror_sketch_entities: {len(plan)} copies planned but "
@@ -135,7 +138,7 @@ def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) ->
             "(軸に使った図形は対象から自動的に外れるので、他に対象が要る)"
         )
     new_ids = [new_entity_id() for _ in normalized]
-    created = _create_mirrors(doc, normalized, ax, ay, ux, uy, new_ids)
+    created = _create_mirrors(doc, normalized, ax, ay, ux, uy, new_ids, fresh=True)
 
     return doc.log.append(
         VERB_MIRROR_SKETCH_ENTITIES,
@@ -154,7 +157,7 @@ def _do_mirror_sketch_entities(document: Document, operation: Operation) -> None
     ax, ay = (float(value) for value in args["axis_p0"])
     ux, uy = (float(value) for value in args["axis_dir"])
     normalized = [(item["sketch"], item["entity"]) for item in args["targets"]]
-    _create_mirrors(document, normalized, ax, ay, ux, uy, list(args.get("created") or []))
+    _create_mirrors(document, normalized, ax, ay, ux, uy, list(args.get("created") or []), fresh=False)
 
 
 def _undo_mirror_sketch_entities(document: Document, operation: Operation) -> None:

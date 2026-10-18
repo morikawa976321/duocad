@@ -47,6 +47,7 @@ from ._common import (
     finite_numbers,
     inverse_move_args,
     is_rotation,
+    overlaps_original,
     reject_foreign_args,
     require_move_mode,
     rotation_degrees,
@@ -278,14 +279,14 @@ def _apply(doc: Document, targets: Sequence[dict], transform: Callable) -> None:
 
 
 def _copy(
-    doc: Document, targets: Sequence[dict], transform: Callable, new_ids: Sequence[str]
+    doc: Document, targets: Sequence[dict], transform: Callable, new_ids: Sequence[str], *, fresh: bool
 ) -> List[str]:
     """`copy=True` の本体。対象が属する**図形をまるごと**複製して EntityId を返す。
 
     `new_ids` は作るIDの並び(再生では記録したものを渡す)。同じ図形を指す対象が複数あっても複製は1つ。
 
     **元と完全に重なる複製は作らない**(ValueError。円をその中心まわりに回すと起きる。領域検出が
-    同じ辺を2本見る)。
+    同じ辺を2本見る)。重なりの判定は `overlaps_original`(`fresh` は新しく作る複製)。
     """
     plan = _entities_to_copy(targets)
     if len(new_ids) != len(plan):
@@ -299,7 +300,7 @@ def _copy(
         entity = get_entity(sketch, entity_id)
         current = parameters.resolve_all(doc, entity.params)
         values = transform(entity.kind, current, None)
-        if values == current:
+        if overlaps_original(values, current, fresh=fresh):
             raise ValueError(
                 f"move_sketch_entities: 複製 {entity_id!r} が元と完全に重なる"
                 "(回転中心が図形の中心と一致している)"
@@ -382,7 +383,7 @@ def move_sketch_entities(
     logged = {**args}
     if copy:
         new_ids = [new_entity_id() for _ in _entities_to_copy(normalized)]
-        created = _copy(doc, normalized, transform, new_ids)
+        created = _copy(doc, normalized, transform, new_ids, fresh=True)
     else:
         created = []
         previous = _previous_params(doc, normalized)
@@ -402,7 +403,7 @@ def _do_move_sketch_entities(document: Document, operation: Operation) -> None:
     targets = [dict(item) for item in args["targets"]]
     transform = _params_transform(args)
     if args.get("copy"):
-        _copy(document, targets, transform, list(args.get("created") or []))
+        _copy(document, targets, transform, list(args.get("created") or []), fresh=False)
     else:
         _apply(document, targets, transform)
 
