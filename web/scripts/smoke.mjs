@@ -4,7 +4,7 @@
  *
  *   web> node scripts/smoke.mjs
  *
- *   1. 何も起動していない間は辺を要求しない(要求すると、使わない辺の折れ線が毎回サーバから届く)
+ *   1. 辺はカーソルの近くのボディの分だけ頼む(全ボディの辺を頼むと、使わない折れ線が毎回サーバから届く)
  *   2. 全解除の配信が届く前のクリックを、配信前の選択で判定しない(タイミングでしか出ない)
  *   3. AI が選択を書き換えても、人が起動した即適用のコマンドは走らない(人が指したときだけ走る)
  *   4. 基準平面を指せる間も、原点をはさんでカメラの反対側にある面が取れる(#109)
@@ -56,14 +56,20 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   const top = await planarFace(page, bodyId, [0, 0, 1])
   const wall = await planarFace(page, bodyId, [0, -1, 0])
 
-  // ================================================================ 1. 無起動では辺を要求しない
-  const idle = await page.evaluate(() => ({
-    wants: window.__duocad.wantsEdges,
-    edges: (window.__duocad.edges?.edges ?? []).length,
-  }))
-  if (idle.wants) fail('起動していないのに辺を要求している')
-  if (idle.edges !== 0) fail(`要求していないのに辺のジオメトリが届いている: ${idle.edges}本`)
-  ok('[1] 何も起動していない間は辺を要求せず、辺のジオメトリも届いていない')
+  // ================================================================ 1. 辺はカーソルの近くのボディの分だけ
+  const fetched = () => page.evaluate(() => Object.keys(window.__duocad.edges ?? {}))
+  const fetchedBefore = await fetched()
+  if (fetchedBefore.length !== 0) fail(`カーソルを置く前から辺のジオメトリが届いている: ${JSON.stringify(fetchedBefore)}`)
+  const farTop = await planarFace(page, far.bodyId, [0, 0, 1])
+  await withoutBrowserPanel(page, async () => {
+    const at = await faceAt(page, far.bodyId, farTop)
+    if (!at) fail('向こう側の板の上面が画面の中に無い')
+    await page.mouse.move(at.x, at.y)
+  })
+  await waitFor((id) => window.__duocad.edges?.[id] !== undefined, 'カーソルを置いた板の辺が届かない', [far.bodyId])
+  await waitFrames(page, 6)
+  if ((await fetched()).includes(bodyId)) fail('カーソルから離れた板の辺まで取り寄せている')
+  ok('[1] 辺はカーソルを置いたボディの分だけ届き、離れたボディの分は頼まない')
 
   // ================================================================ 2. 全解除の配信前のクリック
   // 本物の入力では WS の往復に勝てないので、Esc と押下・離しを**ページの1タスクの中で**続けて
@@ -136,7 +142,6 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   // ================================================================ 4. 原点の向こう側の面
   // 面と基準平面をレイ距離で競わせる実装に戻ると、上面は YZ 平面に、手前の壁は同着で XZ 平面に
   // 取られて赤になる(理由は docs/VIEWPORT.md「ピック」)。
-  const farTop = await planarFace(page, far.bodyId, [0, 0, 1])
   const cameraX = await page.evaluate(() => window.__duocad.cameraPose().position[0])
   if (!(cameraX > 0)) fail(`この検査の前提が崩れた: カメラが x>0 に無い(x=${cameraX})`)
   for (const [target, index, what] of [

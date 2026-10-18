@@ -131,10 +131,18 @@ export interface VertexRef {
   vertexIndex: number
 }
 
-/** 画面に出す頂点1個。参照と座標を一緒に渡す(頂点は選択に入っているものしか描かない)。 */
-export interface VertexMarker extends VertexRef {
-  /** 世界座標 [x, y, z](`kernel.vertex_positions` の `point`)。 */
-  point: number[]
+/** 1ボディぶんの辺(`EdgesPayload` の中身。`setBodyEdges`)。 */
+export interface BodyEdgesPayload {
+  revision: number
+  /** 折れ線の弦の偏差[mm](遮蔽の判定がこの分の奥行きの差を許す)。 */
+  deviation: number
+  edges: EdgeGeometry[]
+}
+
+/** 1ボディぶんの頂点(`VerticesPayload` の中身。`setBodyVertices`)。座標は世界座標 [x, y, z]。 */
+export interface BodyVerticesPayload {
+  revision: number
+  vertices: Array<{ index: number; point: number[] }>
 }
 
 /**
@@ -224,22 +232,29 @@ export interface BodyGeometryUpdate {
  */
 export type PickMode = 'replace' | 'toggle'
 
+/**
+ * スケッチモードの外で指せるものの種類(`Viewport.setPickKinds`)。コマンドを起動していなければ全部、起動中は
+ * そのコマンドが受け付けるものだけ(docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」)。
+ * スケッチモード中は見ない(編集中のスケッチの中身だけを指す)。基準平面は `showBasePlanes` が決める。
+ */
+export type PickKind = 'face' | 'edge' | 'vertex' | 'region' | 'sketchPoint' | 'sketchLine'
+
+/**
+ * 1つのクリックで取れるもの。通常モードの優先は細かさが先(点 → 線 → 面)、同じ細かさならソリッドが先
+ * (重なって見えるとき。`PICK_OVERLAP_PIXELS`)。見えないもの(非表示・立体の裏)は取れない(`occlusion.ts`)。
+ * 当たった1つだけが非null(スケッチモードの `sketchEntity`・`region`・`point` は一緒に返り、優先は `App.svelte` が決める)。
+ */
 export interface PickEvent {
   /** 当たった面(Body+添字)。外したら null。スケッチモード中は常に null。 */
   hit: FaceRef | null
-  /** 当たった辺。`showEdges` で出しているときだけ非null。辺が当たったときは `hit` を見ない。 */
+  /** 当たった辺。 */
   edge: EdgeRef | null
-  /**
-   * 当たった頂点。`showVertices` でマーカーを出しているときだけ非null。
-   * 既定の順序は辺より後・面より先 —— 辺より先だとフィレット中に辺の端が掴めず、
-   * 面より後だと最小の的である頂点マーカーが面に取られて外せない。
-   * `preferVertices(true)` の間だけ頂点が辺より先に入れ替わる。
-   */
+  /** 当たった頂点。 */
   vertex: VertexRef | null
   /** Shift / Ctrl(Mac は Meta)=トグル / 修飾なし=置き換え。 */
   mode: PickMode
   /**
-   * 当たったスケッチの図形(点または辺)。スケッチモード中だけ非null。
+   * 当たったスケッチの図形(点または辺)。スケッチモード中は編集中のスケッチだけ、通常モードでは見えている全スケッチ。
    * `point` が文字列ならその点(コアの参照が持つ `point` と同じxキー)、`null` なら図形全体(= 辺)。
    * 点は辺より先に見る(点は必ず辺の上に乗っていて、後だと端点を掴めない)。
    */
@@ -247,9 +262,8 @@ export interface PickEvent {
   /** スケッチモード中の、クリックした点のスケッチ平面上の座標。平面がカメラの裏なら null。 */
   point: { sketchId: string; u: number; v: number } | null
   /**
-   * 当たった領域(スケッチ+添字)。スケッチモード中は常に(そのスケッチの領域だけ。
-   * 領域は面より手前で拾う)、通常モードでは `pickRegions(true)` の間だけ(全スケッチの領域)非null。
-   * 常時指せるとスケッチ平面と重なる面のクリックが領域に取られる。
+   * 当たった領域(スケッチ+添字)。スケッチモード中はそのスケッチの領域、通常モードでは見えている全スケッチの領域。
+   * 通常モードで領域と面が重なる画素は面が勝つ(同じ細かさならソリッドが先)。
    */
   region: { sketchId: string; index: number } | null
   /**
@@ -280,7 +294,7 @@ export interface SketchEntityHit {
 }
 
 /**
- * 左ドラッグのウィンドウ選択の結果(矩形に完全包含されたものだけ)。
+ * 左ドラッグのウィンドウ選択の結果(矩形に完全包含され、一部でも見えているものだけ)。
  * 何も囲まなかったドラッグも空配列で呼ぶ(修飾なしなら選択を空にする)。
  */
 export interface BoxSelectEvent {
@@ -290,6 +304,18 @@ export interface BoxSelectEvent {
   regions: Array<{ sketchId: string; index: number }>
   sketchEntities: SketchEntityHit[]
   mode: PickMode
+  /** 引いた矩形(辺・頂点がまだ届いていなかったとき、届いてから `Viewport.collectInBox` で集め直す)。 */
+  rect: BoxRect
+  /** 矩形に掛かるのに辺・頂点がまだ届いていないボディ(空なら集め終わっている)。 */
+  pendingBodies: string[]
+}
+
+/** コンテナ内の画素の矩形(左上原点)。 */
+export interface BoxRect {
+  left: number
+  top: number
+  right: number
+  bottom: number
 }
 
 /**
@@ -309,14 +335,21 @@ export interface SketchDraw {
   frame: { origin: number[]; u: number[]; v: number[]; normal: number[] }
   /** 貼った平面(基準面か、既存ソリッドの面か)。 */
   plane: SketchPlaneRef
+  /** 編集中のスケッチか(編集中は線・点を立体に透かして描き、作図の吸着を出す。それ以外は立体の裏に回ると隠れる)。 */
+  editing: boolean
+  /**
+   * 旧形式の反復(描くたびに複製を作る。今の verb は作らない)を持つか。持つときだけ `entities` を描く:
+   * 複製は `entities` にしか無い。持たなければ `entities` と `handles` は同じ形なので、`handles` だけ描く。
+   */
+  livePatterns: boolean
   /** 反復を展開した描画対象。`params` はコアの `Entity.params` と同じキー。 */
   entities: Array<{ kind: string; params: Record<string, number> }>
   regions: Array<{ index: number; positions: Float32Array | number[]; indices: Uint32Array | number[] }>
   /** 選択中の領域の添字(強調して描く)。 */
   selectedRegions: number[]
   /**
-   * 反復を展開していない図形(`entity_id` つき)。点・辺のピックと点の表示に使う。
-   * `entities`(= コアの `drawn`)は展開済みで `entity_id` を持たないので、指せるのはここだけ。
+   * 文書の図形(`entity_id` つき)。点・辺のピックと点の表示に使う。旧形式の反復の複製は `entities`(= コアの `drawn`)に
+   * しか無く `entity_id` を持たないので指せない。
    */
   handles: Array<{ entityId: string; kind: string; params: Record<string, number> }>
   /** 選択中の図形(強調して描く)。`point` が null なら図形全体。 */
@@ -386,16 +419,22 @@ export interface Viewport {
    * (形状の裏側の節点も見えないと「見えているつもりで見えていない」になる)。
    */
   setOptimizeDebug(state: OptimizeDebugState | null): void
-  // ------------------------------------------------------------------ D: 辺
+  // ------------------------------------------------------------------ 何を指せるか
+  /** スケッチモードの外で指せる種類(`PickKind`)。既定は全部。 */
+  setPickKinds(kinds: readonly PickKind[]): void
+  // ------------------------------------------------------------------ D: 辺・頂点
   /**
-   * 辺の折れ線を出す(`bodyId` に null を渡すと消える)。出している間だけ辺を指せる。
-   * 常時出さないのは、27部品ぶんの辺はサーバから取るだけでも重く(`Session.edges` のdocstring)、
-   * 辺は面の手前に重なるので常時だと面を狙うクリックが辺に取られるため。
-   *
-   * 奥の辺も見え、指せる(深度検査をしない)。three.js の線のレイキャストは面による遮蔽を
-   * 見ないので、見えるものと指せるものを一致させるにはこちらに揃えるしかない。
+   * そのボディの辺の折れ線(null で捨てる)。届いたボディの辺だけが指せる。描くのはホバー中・選択中の辺だけで、
+   * 見た目の辺はボディの境界線が受け持つ。呼び手は「今の形の辺」だけを渡す(古い添字は別の辺を指す)。
    */
-  showEdges(bodyId: string | null, edges: EdgeGeometry[]): void
+  setBodyEdges(bodyId: string, edges: BodyEdgesPayload | null): void
+  /** そのボディの頂点の座標(null で捨てる)。描くのはホバー中・選択中の頂点だけ。 */
+  setBodyVertices(bodyId: string, vertices: BodyVerticesPayload | null): void
+  /**
+   * 辺・頂点がまだ無いボディがカーソルの近く(または矩形選択の中)にある(取り寄せの合図。重複して呼ばれうる)。
+   * 辺・頂点を指せる間だけ呼ぶ。
+   */
+  onPickDataWanted(listener: (bodyIds: string[]) => void): void
   // ------------------------------------------------------------------ 基準3平面(スケッチを貼る先)
   /**
    * 基準3平面(XY/XZ/YZ)を指せるようにする(`false` で指せなくなる)。
@@ -424,45 +463,25 @@ export interface Viewport {
   /** 表示中のボディ(幽霊を含む)の外接箱の中心。空なら null。 */
   contentCenter(): [number, number, number] | null
   /**
-   * 頂点を辺より先に見る(`false` で既定の順序へ戻す)。理由は `PickEvent.vertex`。
-   * 頂点そのものを指させたいコマンド(`move_body` の回転中心)で、待っている間だけ入れ替える。
-   */
-  preferVertices(on: boolean): void
-  // ------------------------------------------------------------------ 通常モードの領域
-  /**
-   * 通常モードでスケッチの領域を指せるようにする(`false` で指せなくなる)。
-   * 辺・基準平面と同じ規律で、要求しているコマンドを起動している間だけ指せる
-   * (常時だとスケッチ平面と重なる面のクリックが領域に取られる)。
-   * スケッチモード中(`setActiveSketch`)はこのゲートに関係なく、そのスケッチの領域だけが対象。
-   */
-  pickRegions(on: boolean): void
-  /**
-   * 通常モードで面を指せるか(既定 `true`)。`false` の間は `PickEvent.hit` も矩形選択の面も空になり、ホバーも光らない。
-   * 辺だけを食うコマンド(フィレット・面取り)の起動中に閉じる。スケッチモードはもともと面を拾わない。
-   */
-  pickFaces(on: boolean): void
-  /**
    * 辺のホバーと `edgeChain` を、辺1本ではなく連なり(`setEdgeChains`)の単位にする(既定 `false`)。
    * フィレット・面取りの起動中だけ立てる(測定・回転軸は辺を1本ずつ指す)。
    */
   groupEdgeChains(on: boolean): void
   /**
-   * その辺と同じ連なりの辺の添字(出している辺の範囲で。`groupEdgeChains(false)` の間はその辺だけ)。
+   * その辺と同じ連なりの辺の添字(`groupEdgeChains(false)` の間はその辺だけ)。
    * 連なりの単位で扱っているのに、その辺の連なりがまだ届いていなければ `null`。
    */
   edgeChain(ref: EdgeRef): number[] | null
-  /** 届いた連なり(各要素が1つの連なりの添字の全部)を、今出している辺(`bodyId` のもの)に覚えさせる。 */
+  /** 届いた連なり(各要素が1つの連なりの添字の全部)を、そのボディの辺に覚えさせる。 */
   setEdgeChains(bodyId: string, chains: number[][]): void
   /** 連なりの単位で扱っている間に、連なりの分からない辺へホバーが乗った(取り寄せの合図。重複して呼ばれうる)。 */
   onEdgeChainWanted(listener: (ref: EdgeRef) => void): void
-  /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
+  /** 選択中の辺を強調する(面の `highlight` と同じ規律)。裏に回っても透かして描く。 */
   highlightEdges(refs: EdgeRef[]): void
-  // ------------------------------------------------------------------ 頂点(選択中のものだけ)
-  /**
-   * 選択に入っている頂点だけを点(画面上で一定の大きさ)で出す(空配列で消える)。色は面・辺と同じ橙。
-   * 奥のマーカーも見え、指せる(辺と同じく深度検査をしない)。
-   */
-  showVertices(markers: VertexMarker[]): void
+  /** 選択中の頂点を点(画面上で一定の大きさ)で出す。色は面・辺と同じ橙。裏に回っても透かして描く。 */
+  highlightVertices(refs: VertexRef[]): void
+  /** 矩形を今のカメラで集め直す(`BoxSelectEvent.pendingBodies` の辺・頂点が届いた後)。 */
+  collectInBox(rect: BoxRect): Omit<BoxSelectEvent, 'mode'>
   // ------------------------------------------------------------------ 測定(issue #10)
   /**
    * 測った2点を結ぶ線・両端の点・数値の札を出す(`null` で消す)。指せない装飾。
@@ -475,25 +494,26 @@ export interface Viewport {
   drawCalls(): number
   /** 本描画を行った累計回数(静止中に描いていないかを見る物差し)。 */
   renderCount(): number
-  /** 今ホバーで明るくしているもの(実機検査フック専用)。ホバーは色を足さず明度だけを上げる。頂点は対象外。 */
+  /** 今ホバーで明るくしているもの(実機検査フック専用)。ホバーは色を足さず明度だけを上げる。 */
   hoveredRef(): {
     face: FaceRef | null
     edge: EdgeRef | null
+    vertex: VertexRef | null
     region: { sketchId: string; index: number } | null
     plane: BasePlaneName | null
-    /** 当たったスケッチの図形(点または辺)。スケッチモード中だけ null 以外。 */
+    /** 当たったスケッチの図形(点または辺)。 */
     sketchEntity: SketchEntityHit | null
     /** そのものに今実際に当たっている色(16進)。何も指していなければ null。 */
     color: number | null
   }
   /**
-   * 頂点マーカーの画面座標(無理なら null)。実機検査が本物のクリックで頂点を外すための穴で、
-   * 返す前にその画素からのレイが実際にその頂点へ当たることを確かめる。
+   * 頂点の画面座標(無理なら null)。実機検査が本物のクリックで頂点を選ぶための穴で、返す前にクリックと同じ判定
+   * (`resolveHit`)でその頂点が取れることを確かめる。そのボディの頂点が届いていなければ null。
    */
   projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null
   /**
-   * 辺の上の点の画面座標(無理なら null)。実機検査が本物のクリックで辺を選ぶための穴で、
-   * 返す前にその画素からのレイが実際にこの辺へ当たることを確かめる。
+   * 辺の上の点の画面座標(無理なら null)。実機検査が本物のクリックで辺を選ぶための穴で、返す前にクリックと同じ判定
+   * (`resolveHit`)でこの辺が取れることを確かめる。そのボディの辺が届いていなければ null。
    */
   projectEdge(bodyId: string, edgeIndex: number): { x: number; y: number } | null
   /**
@@ -591,6 +611,11 @@ export interface Viewport {
    * `position.z - target.z` が変わらないこと(回転の極が+Z)。後者は `OrbitControls` が
    * 生成時の up を `_quat` へ焼き込む仕様のせいで静かに壊れる。
    */
+  /**
+   * 画面の画素と世界を結ぶ写像の鍵(カメラの姿勢・投影・正投影のズーム・画面の寸法)。同じ鍵なら、前に引いた画面の矩形が
+   * 同じものを囲む(届くのを待たせた矩形選択を集め直してよいかの判定)。
+   */
+  viewSignature(): string
   cameraPose(): {
     position: [number, number, number]
     target: [number, number, number]
@@ -614,7 +639,7 @@ export interface Viewport {
   projectBasePlane(name: BasePlaneName): { x: number; y: number } | null
   /**
    * 領域の画面座標(実機検査用)。今その領域が指せる状態でなければ null
-   * (返す前に `regionAt` で当たることを確かめる。通常モードでは `pickRegions(true)` の間しか返らない)。
+   * (返す前にクリックと同じ判定 `resolveHit` でその領域が取れることを確かめる)。
    */
   projectRegion(sketchId: string, index: number): { x: number; y: number } | null
   /**

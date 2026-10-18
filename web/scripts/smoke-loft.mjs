@@ -3,10 +3,9 @@
  *
  *   web> node scripts/smoke-loft.mjs
  *
- * 通常モードで領域を要求するのはロフトだけ。起動していないときは領域が当たらず(面の選択だけ)、
- * 起動中だけ全スケッチの領域が当たる(`App.svelte` の `wantsRegions` → `viewport.pickRegions`)。
+ * 通常モードでは全スケッチの領域を指せる。ロフトの起動中は領域だけを指せる(`App.svelte` の `pickKinds`)。
  *
- *   1. ロフトを起動する前は、通常モードで領域を押しても選択に入らない
+ *   1. 起動中は領域だけを指せる(スケッチの線を押しても選択に入らない)
  *   2. 起動すると、XY の正方形と 30 上の円を順にクリックでき、選んだ順で選択に入る
  *   3. 始点のずらしを打つと、作業空間には整数の配列で載る(打ちかけの文字列を出すとサーバが型違いで拒む。sol レビュー)
  *   4. Enter で確定すると、四角から丸へ変わる立体ができる。円の側を 90° ずらしたのでねじれて細り、体積は
@@ -43,15 +42,18 @@ runSmoke('smoke-loft', { timeout: 60000, mcp: true }, async ({ mcp, browser, url
   await frameAll(page)
   await waitFrames(page, 8)
 
-  // ================================================================ 1. 起動前は領域が当たらない
-  await clickSketchPoint(page, 5, -5, { sketchId: bottom })
-  await waitFrames(page, 6)
-  if ((await regionItems()).length !== 0) fail('ロフトを起動する前に、通常モードで領域が選べてしまう')
-  ok('loft: 起動前は通常モードで領域が当たらない')
-
-  // ================================================================ 2. 起動して、2つのスケッチの領域を順に選ぶ
+  // ================================================================ 1. 起動中は領域だけ
   await page.click('#loft')
   await page.waitForSelector('#loft-mode-join', { timeout })
+  await waitFor(() => JSON.stringify(window.__duocad.pickKinds) === '["region"]', 'ロフトの起動中に領域だけを指せる状態にならない')
+  await clickSketchPoint(page, 10.2, 0, { sketchId: bottom }) // 正方形の右の辺のすぐ外(線の当たり半径の内、領域の外)
+  await waitFrames(page, 6)
+  if ((await page.evaluate(() => (window.__duocad.selection?.items ?? []).length)) !== 0) {
+    fail('ロフトの起動中にスケッチの線が選べてしまう')
+  }
+  ok('loft: 起動中は領域だけを指せ、スケッチの線を押しても選択に入らない')
+
+  // ================================================================ 2. 2つのスケッチの領域を順に選ぶ
   await clickSketchPoint(page, 5, -5, { sketchId: bottom })
   await waitFor((id) => (window.__duocad.selection?.items ?? []).some((item) => item.sketch === id), '下の正方形を押しても領域が選べない', [bottom])
   await clickSketchPoint(page, 0, 0, { sketchId: top })

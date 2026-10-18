@@ -39,7 +39,7 @@ def test_the_limit_counts_copies_of_every_source_not_just_the_grid():
     ids = [add_circle(doc, sketch_id, (10.0 * k, 0.0), 2.0) for k in range(3)]
     with pytest.raises(ValueError, match="多すぎる"):
         pattern_rectangular(doc, sketch_id, ids, 1.0, 1.0, 50, 50)  # 3 × 2499 = 7497 > 2500
-    assert not get_sketch(doc, sketch_id).patterns
+    assert len(get_sketch(doc, sketch_id).entities) == 3
 
 
 def test_a_circular_pattern_is_limited_the_same_way():
@@ -54,15 +54,18 @@ def test_a_refused_pattern_leaves_the_document_and_the_log_unchanged():
     before = len(doc.log.entries)
     with pytest.raises(ValueError):
         pattern_rectangular(doc, sketch_id, [circle], 1.0, 1.0, 10_000, 10_000)
-    assert len(doc.log.entries) == before and not get_sketch(doc, sketch_id).patterns
+    assert len(doc.log.entries) == before and len(get_sketch(doc, sketch_id).entities) == 1
 
 
 def test_a_saved_pattern_above_the_limit_still_replays():
-    """上限は新しく作る入口だけに掛け、保存済みの文書の再生は止めない(上限の前に作られた文書を開けなくしない)。"""
+    """上限は新しく作る入口だけに掛け、保存済みの文書の再生は止めない(上限の前に作られた文書を開けなくしない)。
+    上限より前の文書の反復は旧形式(`pattern_id` を持ち、描くたびに展開する行)。"""
     doc, sketch_id, circle = _sketch_with_circle()
     pattern_rectangular(doc, sketch_id, [circle], 1.0, 1.0, 2, 1)
     raw = json.loads(doc.log.to_json())
     entry = next(e for e in raw["operations"] if e["verb"] == "pattern_rectangular")
+    del entry["args"]["created"]
+    entry["args"]["pattern_id"] = "pattern-saved"
     entry["args"]["nx"] = MAX_PATTERN_COPIES + 1000
     restored = Document()
     restored.log = OpLog.from_json(json.dumps(raw))
@@ -148,4 +151,4 @@ def test_the_replayed_document_matches_after_a_refused_call():
         pattern_rectangular(doc, sketch_id, [circle], 1.0, 1.0, 9999, 9999)
     pattern_rectangular(doc, sketch_id, [circle], 5.0, 5.0, 3, 2)
     restored = replay_through_json(doc)
-    assert [p.kind for p in get_sketch(restored, sketch_id).patterns] == ["rectangular"]
+    assert len(get_sketch(restored, sketch_id).entities) == len(get_sketch(doc, sketch_id).entities) == 1 + 5

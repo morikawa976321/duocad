@@ -8,7 +8,7 @@ from duocad.document import Body
 from duocad.oplog import verb_handler
 from duocad.server import Session
 from duocad.verbs import move_sketch_entities as move_sketch_entities_verb
-from document_support import replay_through_json
+from document_support import install_live_pattern, replay_through_json
 from session_support import SIDE, box as _box, edit_parameter, select as _select, send_one
 
 DEVIATION = 0.2
@@ -348,10 +348,12 @@ def test_copying_two_points_of_one_entity_makes_one_copy(session: Session) -> No
 
 
 def test_the_copy_is_not_part_of_a_pattern(session: Session) -> None:
-    """反復の元を複製しても、複製は素の図形になる(反復には入らない)。"""
+    """旧形式の反復(保存済みの古い文書に残る)の元を複製しても、複製は素の図形になる(反復には入らない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_circle(sketch_id, [0.0, 0.0], 4.0)["entity_id"]
-    session.pattern_rectangular(sketch_id, [entity_id], 10.0, 10.0, 2, 2)
+    install_live_pattern(
+        session.document, "pattern_rectangular", sketch_id, [entity_id], dx=10.0, dy=10.0, nx=2, ny=2
+    )
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
     applied = session.move_sketch_entities(0.0, 30.0, copy=True)
 
