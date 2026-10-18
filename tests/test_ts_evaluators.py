@@ -33,6 +33,7 @@ EVALUATORS = [
     "eval_text_sprite.mjs",
     "eval_view_cube.mjs",
     "eval_view_cube_overlay.mjs",
+    "eval_view_settings.mjs",
 ]
 
 
