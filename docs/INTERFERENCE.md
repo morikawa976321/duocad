@@ -220,6 +220,19 @@ hanger の文書（B-rep 12 体 + 形状最適化の結果のメッシュ 136,56
 - **最短距離は「最短箇所」1点。** 「隙間が足りない範囲」ではない。ピンと穴が一か所で接していれば距離は 0 になり、別の場所のはめ合いは
   見えない（astra の指摘）。範囲を出すには面ごとの距離か点群が要る（後の段）。
 - **同心のピンと穴の最短距離は半径方向の隙間**で、直径の差ではない（ねじ verb の `clearance` も半径方向。[THREAD.md](THREAD.md)）。
+- **角を丸めた箱に角を丸めた中子・蓋を入れる形では、形全体の最短距離が例外で落ちる。** 3D プリントの蓋のはめ合いの典型で、
+  丸めの面が同心に向かい合い、最短の組が無数にあるため（[CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) の既知の罠）。実測
+  （`concentric.py`、外箱 40×30×20・壁 2、中子は丸めを同心にして隙間 c だけ小さく）:
+
+  | 形 | 形全体（並列 / 直列） | 面の対ごと＋落ちた対は縁の点から | メッシュ 0.01 mm |
+  |---|---|---|---|
+  | 丸め r=3、隙間 0.2 | 例外 / 例外 | 0.19999997（233 対、縁の点 8 対、0.26 秒） | 0.1955 |
+  | 丸め r=3、隙間 0.1 | 0.09999997 / 同 | 0.09999997（縁の点 0 対、0.34 秒） | 0.0955 |
+  | 丸め r=2、隙間 0.2 | 例外 / 例外 | 0.19999997（縁の点 16 対、0.47 秒） | 0.1941 |
+
+  **形全体で落ちたら、面の対ごとに測る。** 面の対を境界箱の距離の順に並べ、今の最小より遠い対は飛ばす。対で落ちたものだけ、片方の面の縁の
+  点（頂点と辺の等分点）から相手の面へ測る（`kernel_shell._face_distance` と同じ考え）。縁の点からの値は真の最小以上で、同心の面なら一致する。
+  縁の点に頼った組は結果に印を付ける（「上界」）。0.19999997 は 0.2 との差 2.8e-8 で、ε（1e-6）の中なので at になる。
 
 ## 返すもの
 
@@ -340,7 +353,7 @@ astra の意見（要旨）と AI の採否:
 
 1. **カーネル**: `duocad/kernel_interference.py` を足す（OCP を import してよい一覧 `tests/test_boundaries.py` に加える。`kernel.py` は
    1,682 行で、足さない）。`pair_relation(a, b) -> dict`（2体 GF・非破壊・像の共有・重なりの体積と厚さと有向箱・接触の種類と面積・警告の
-   名前）、`min_distance(a, b) -> dict`（`SetMultiThread(True)`）、`loose_bbox(shape)`、`overlap_triangles(pieces, deviation)`。
+   名前）、`min_distance(a, b) -> dict`（`SetMultiThread(True)`。形全体で落ちたら面の対ごと、対で落ちたら縁の点から。どの段で測ったかを返す）、`loose_bbox(shape)`、`overlap_triangles(pieces, deviation)`。
    `BOPAlgo_BOP.PDS()` / `PPaveFiller().DS()` に触らないことをコメントに書く。
 2. **メッシュ**: `duocad/interference_mesh.py`（manifold3d。OCP なし）。B-rep の0.01 mm分割は `topopt.finalize.tessellate_body` を使う。
 3. **組み立て**: `duocad/interference.py`（OCP なし）。開始時に「文書の版・対象のボディ ID・可視性・選択・形の写し」を1つのスナップショットに
@@ -382,6 +395,7 @@ astra の意見（要旨）と AI の採否:
 - 第三のボディが重なりを横切っても、2体の結果（体積・厚さ）が変わらない。
 - 200×200 の薄い一致面と深いピンがつながった形が tiny_overlap にならない（2V/A は 0.00039、有向境界箱で overlap）。
 - 境界箱の距離が clearance と clearance + ε の間の組が at になる（候補の幅の確認）。
+- 角を丸めた箱に丸めを同心にした中子を隙間 0.2 で入れた組で、最短距離が例外で落ちずに 0.2（at）と出て、縁の点に頼った印が付く。
 - 半径 30 のピンと穴の隙間 0.1（位相をずらす）を 0.1 と測る（メッシュ経路の誤りを B-rep で再現しない確認）。
 - 共有の判定: 同じ hash を返す別の形状の束（偽の形の型で作る単体テスト）を取り落とさず、取り違えもしない。
 - 知らない種類・面積 0 は relation が unknown と理由に、距離の失敗は clearance が null と理由になり、separated や 0 にならない。GF が
@@ -396,16 +410,15 @@ astra の意見（要旨）と AI の採否:
 
 ## 試作で踏んだ落とし穴
 
-- **`TopoDS_Shape` の Python ラッパは `__hash__` が形状の同一性を返すが、`__eq__` は Python の同一性。** 形状を辞書のキーにすると、
-  GF が共有した片が別のキーになり、重なりを全部見落とす（試作の最初の版で GF の体積が全件 0 になった）。hash で引いて `IsSame` で確かめる。
-- **`BOPAlgo_BOP.PDS()` や `PPaveFiller().DS()` が返す DS に Python から触るとプロセスが落ちる**（終了コード 127。小さな形では終了時に落ちる）。
-  ラッパがポインタの持ち主のつもりで解放する。DS を読むなら `BOPAlgo_PaveFiller` を自分で作って `DS()`（参照）を読む。
-- **BOP の DS の FF 干渉は接触ではない。** 隙間 0.2 の組でも面の組が 114 件記録される（境界箱が重なる面の組の記録）。
-- **`BRepExtrema_DistShapeShape.InnerSolution()` は当てにしない。** 内包で True になる一方、体積 0 の接触の組でも True が出た。
-- **manifold3d の `min_gap(other, search)` は [0, search] に丸める。** search を 0 にすると全組 0（接触）になる。
-- **ねじの試作を1プロセスで回すと、3組目（山形が一致）の GF で 20 分の打ち切りに掛かった。** OCCT の呼び出しは Python から中断
-  できない: `BOPAlgo_Builder.Perform(theRange)` は進捗の範囲を受け取るが、止める側の `Message_ProgressIndicator` は OCP で構築子が無く、
-  Python で継承できない（`TypeError: No constructor defined!`）。方式ごとに子プロセスで時間の上限を付ける（`threads.py`）。
+OCP・manifold3d 一般の罠（BOP の破壊モード・`PDS()` で落ちる・FF 干渉は接触ではない・OCCT を途中で止められない・`InnerSolution()`・
+`ShapeProximity` の未登録の型・`min_gap` の丸め・入れ子の丸めた箱で最短距離が落ちる）は [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md)
+「build123d / OCP」に移した。`TopoDS_Shape` の `hash` と `__eq__` の食い違いは同じ文書の表にある（試作の最初の版はこれで GF の体積が
+全件 0 になった。形状を辞書のキーにせず、hash で束ねて `IsSame` で確かめる）。干渉チェック固有のもの:
+
+- **メッシュ経路は位相が揃うと誤差が打ち消されて正しく見える**（「方式の比較」）。精度を測るケースは回転して位相をずらす。
+- **ねじの試作を1プロセスで回すと、3組目（山形が一致）の GF で 20 分の打ち切りに掛かった。** 方式ごとに子プロセスで時間の上限を
+  付ける（`threads.py`）。
+- **直列の GF はねじ山で 12〜15 秒**、`SetRunParallel(True)` で 2〜5 秒。試作の関数ごとに並列の設定が違い、最初の比較を誤りかけた。
 
 ## 再現コマンド
 
