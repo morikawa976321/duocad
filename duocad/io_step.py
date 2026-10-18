@@ -17,6 +17,8 @@ TransferRoots() を呼ぶと、Python例外にはならず**プロセスごと�
 
 失敗は黙って通さない: パス無し=FileNotFoundError / 壊れている=ValueError / 書き出す形状が
 無い=ValueError(**ファイルを作らない**)。いずれも doc.bodies / doc.log に変更を残さない。
+取り込みは、**黙って欠ける STEP**(転送に失敗した要素・ソリッドの外の面)も ValueError で断る
+(`read_step_source`。再生は検査しない)。
 
 **書き出し対象は「いま表示中(`visible=True`)のBody」に固定**(対象を選ぶ引数は無い)。候補は形状を持つ
 全Body。含めたくないBodyは `set_visible` で隠してから書き出す。
@@ -43,12 +45,18 @@ def read_step_source(path: PathLike) -> tuple[str, str]:
     """STEPファイルを読み、`(source_name, text)` を返す。`source_name` は**ファイル名だけ**。
 
     ヘッダや説明文字列にASCII外のバイトが入った実ファイルがあるため、バイト列で読み、UTF-8で読めなければ latin-1 へ落とす。
+
+    **黙って欠ける STEP は ValueError で断る**(転送に失敗した要素・ソリッドの外の面。`kernel.step_import_problems`)。
+    断るのは取り込み(この関数を呼ぶ `import_step`)だけで、ログの再生は検査しない: 検査を足す前に取り込んだ文書を開けなくしない。
     """
     data = Path(path).read_bytes()  # 無ければ FileNotFoundError
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         text = data.decode("latin-1")
+    problems = kernel.step_import_problems(text)
+    if problems:
+        raise ValueError(f"cannot import {Path(path).name}: " + " / ".join(problems))
     return Path(path).name, text
 
 
