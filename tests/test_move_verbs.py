@@ -686,7 +686,7 @@ def test_an_edge_axis_and_the_same_axis_in_numbers_agree(session: Session) -> No
     )
     by_edge = _bbox(session.document.get_body(body.id))
 
-    other = Session(None, DEVIATION)
+    other = Session(DEVIATION)
     twin, _ = _box(other)
     _select(other, [{"body": twin.id, "kind": "face", "index": 1}])
     other.move_body(

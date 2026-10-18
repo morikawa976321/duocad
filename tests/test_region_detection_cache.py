@@ -30,7 +30,7 @@ def _revision(session: Session, sketch_id: str) -> int:
 
 def test_selecting_many_regions_detects_once(counted) -> None:
     """落ちたら、領域の参照1件ごとに `BRepAlgoAPI_Splitter` を走らせ直す(60 領域で 2.4 秒かかっていた形)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = _grid(session, 10)
     session.state_meta()
     before = len(counted)
@@ -41,7 +41,7 @@ def test_selecting_many_regions_detects_once(counted) -> None:
 
 def test_a_changed_sketch_is_detected_again(counted) -> None:
     """落ちたら、図形を足しても前の領域が返り、新しい領域が指せない・押し出せない。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = _grid(session, 2)
     assert len(region.regions(session.document, sketch_id)) == 2
     session.add_rectangle(sketch_id, [100.0, 0.0], 5.0, 5.0)
@@ -50,7 +50,7 @@ def test_a_changed_sketch_is_detected_again(counted) -> None:
 
 def test_callers_get_their_own_copies(counted) -> None:
     """落ちたら、呼び手が結果を書き換えると表に残った結果まで変わり、次の呼び手が壊れた領域を受け取る。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = _grid(session, 2)
     first = region._regions_detailed(session.document, sketch_id)
     first[0]["index"] = 99
@@ -72,16 +72,16 @@ def test_extruding_selected_regions_matches_the_uncached_answer(counted) -> None
         session.extrude(4.0, mode="new")
         return [body["volume"] for body in session.state_meta()["bodies"]]
 
-    cached = extrude_second(Session(None, 0.2))
+    cached = extrude_second(Session(0.2))
     region._DETECTED.clear()
-    fresh = extrude_second(Session(None, 0.2))
+    fresh = extrude_second(Session(0.2))
     assert cached == pytest.approx([440.0])
     assert fresh == pytest.approx([440.0])
 
 
 def test_the_sketch_revision_moves_only_with_what_is_drawn() -> None:
     """落ちたら、選択を変えるだけで画面が全スケッチを作り直す(版が上がる)か、図形を足しても作り直さない(版が上がらない)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = _grid(session, 3)
     first = _revision(session, sketch_id)
     session.modify_selection([{"sketch": sketch_id, "index": 1}], [])
@@ -97,7 +97,7 @@ def test_the_sketch_revision_moves_only_with_what_is_drawn() -> None:
 
 def test_sketch_revisions_never_repeat_across_documents(tmp_path) -> None:
     """落ちたら、文書を開き直した後の同じ id のスケッチが前の文書と同じ版を名乗り、画面が古いスケッチを描き続ける。"""
-    session = Session(None, 0.2, models_dir=tmp_path)
+    session = Session(0.2, models_dir=tmp_path)
     sketch_id = _grid(session, 1)
     before = _revision(session, sketch_id)
     session.new_document()
@@ -108,7 +108,7 @@ def test_sketch_revisions_never_repeat_across_documents(tmp_path) -> None:
 def test_faces_handed_out_are_never_shared(counted) -> None:
     """落ちたら、共有した検出結果の面がそのまま外へ出て、別の粗さの三角形分割が混ざる・同じ領域を2回押し出した
     ボディどうしが同じ面を共有する(ブーリアンが共有面として扱う)。"""
-    session = Session(None, 0.2)
+    session = Session(0.2)
     sketch_id = _grid(session, 1)
     first = region._regions_detailed(session.document, sketch_id)[0]["face"]
     again = region._regions_detailed(session.document, sketch_id)[0]["face"]

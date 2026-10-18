@@ -53,7 +53,7 @@ def test_extrude_face_is_not_a_public_verb():
     assert "extrude_face" not in catalog.BY_NAME
     assert not hasattr(Session, "extrude_face")
     assert not hasattr(DocumentTools, "extrude_face")
-    server = McpServer(DocumentTools(Session(None, 0.2)))
+    server = McpServer(DocumentTools(Session(0.2)))
     listed = request(server, "tools/list")["result"]["tools"]
     assert "extrude_face" not in [tool["name"] for tool in listed]
     error = request(server, "tools/call", {"name": "extrude_face", "arguments": {"distance": 1.0}})["error"]

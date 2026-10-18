@@ -7,22 +7,18 @@ import { DEPTH_BIAS_UNIT, SKETCH_LINE_WIDTH_PX } from './viewportConstants'
 
 export type SketchFatLine = Line2
 
-export function createSketchLineMaterial(
-  color: number,
-  resolution: THREE.Vector2,
-  linewidth = SKETCH_LINE_WIDTH_PX,
-): LineMaterial {
+export function createSketchLineMaterial(color: number, resolution: THREE.Vector2): LineMaterial {
   return new LineMaterial({
     color,
-    linewidth,
+    linewidth: SKETCH_LINE_WIDTH_PX,
     resolution,
     depthTest: false,
   })
 }
 
 /**
- * 太線の材質を「立体に隠れる」描き方にする: 深度検査をし(書き込みはしない)、線の両端をクリップ空間の深度バイアスの
- * 量だけカメラ側へ寄せる(`viewportConstants.ts` の `withDepthBias` と同じ量。`LineMaterial` の頂点シェーダーは
+ * 太線の材質を「立体に隠れる」描き方にする: 深度検査をし(書き込みはしない)、線の両端を視線方向へ深度バイアスの
+ * 量だけカメラ側へ寄せる(`viewportConstants.ts` の `DEPTH_BIAS_UNIT` と同じ量。`LineMaterial` の頂点シェーダーは
  * `project_vertex` を通らないので、両端を視点座標へ移した直後に寄せる)。寄せないと、面に貼ったスケッチの線が
  * 面と奥行きを争って明滅する。
  */

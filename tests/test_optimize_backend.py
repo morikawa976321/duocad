@@ -1669,3 +1669,14 @@ def test_a_suspected_thin_joint_is_a_warning_not_a_silent_success(session: Sessi
         material_cells=1, neck=dict(status="suspect", events=[event], required_mm=16.0)))
     result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
     assert result["state"] == "done" and "つなぎ目: 幅不足の疑い 1 か所" in result["warning"]
+
+
+@pytest.mark.parametrize("target", [0.0, -1.0, math.nan, math.inf])
+def test_a_target_safety_factor_that_is_not_positive_and_finite_is_refused_at_the_entrance(session: Session, target) -> None:
+    """落ちたら、0・負・NaN・inf の目標安全率が塊の導出と境界の確定が済むまで通り、素の英語の ValueError で落ちる。"""
+    four_conditions(session)
+    options = optimize_run.OptimizeOptions(target_safety_factor=target)
+    with pytest.raises(optimize_run.OptimizeInputError, match="目標安全率"):
+        optimize_run._search_target_safety_factor(options)
+    with pytest.raises(optimize_run.OptimizeInputError, match="目標安全率"):
+        optimize_run.run(session.document, options)

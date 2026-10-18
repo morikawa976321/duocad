@@ -236,7 +236,7 @@
             <li class="empty dim">ボディが無い</li>
           {/if}
           {#each bodies as body (body.body_id)}
-            <li class="parts-row" class:hidden-row={!body.visible} data-body-id={body.body_id}>
+            <li class="parts-row" class:hidden-row={!body.visible}>
               {#if renamingId === body.body_id}
                 <input
                   class="rename-input"

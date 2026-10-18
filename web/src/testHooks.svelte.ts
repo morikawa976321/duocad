@@ -3,7 +3,7 @@
  * **キー名は1つも変えない**(`web/scripts/*.mjs` が読む)。読む本の無いキーは置かない(足すときは読む本と一緒に)。下の `$effect` が `ctx` の getter を読み、値が変わるたびに組み直す。
  * **`installTestHooks` は App の `<script>` 最上位(コンポーネント初期化中)で呼ぶ。** `onMount` の中だと `$effect` の持ち主が変わる。
  */
-import type { PickTarget, Point2, SelectableKind } from './commands/command'
+import type { PickTarget, Point2 } from './commands/command'
 import type { Applied, BasePlaneName, ConnectionStatus, EdgesPayload, ServerState, SketchState } from './session'
 import type { Viewport } from './viewport'
 import type { PickKind } from './viewportTypes'
@@ -21,7 +21,6 @@ export interface TestHookContext {
   modeKind: () => string
   /** コマンド起動中の素のクリックがトグルになるか(`App.svelte` の `commandClickToggles`)。 */
   clickToggles: () => boolean
-  wantedKinds: () => SelectableKind[]
   sketches: () => SketchState[]
   sketchId: () => string | null
   hoverPoint: () => Point2 | null
@@ -31,7 +30,6 @@ export interface TestHookContext {
   edges: () => Record<string, EdgesPayload>
   wantedPick: () => PickTarget | null
   selectedEntities: () => string[]
-  wantedVertices: () => boolean
 }
 
 export function installTestHooks(ctx: TestHookContext): void {
@@ -71,7 +69,6 @@ export function installTestHooks(ctx: TestHookContext): void {
       // だけでは貼る先待ちが通常モードと同じ見え方になる。
       mode: ctx.modeKind(),
       clickToggles: ctx.clickToggles(),
-      wantedKinds: ctx.wantedKinds(),
       sketches: ctx.sketches(),
       activeSketch: ctx.sketchId(),
       sketch: ctx.sketches().find((item) => item.sketch_id === ctx.sketchId()) ?? null,
@@ -102,7 +99,6 @@ export function installTestHooks(ctx: TestHookContext): void {
         viewport()?.projectEdge(bodyId, edgeIndex) ?? null,
       // 画面が知っているその辺の連なり(フィレット・面取りの間だけ。届いていなければ null)。
       edgeChain: (bodyId: string, edgeIndex: number) => viewport()?.edgeChain({ bodyId, edgeIndex }) ?? null,
-      wantedVertices: ctx.wantedVertices(),
       sketchRebuilds: () => viewport()?.sketchRebuilds() ?? 0,
       drawCalls: () => viewport()?.drawCalls() ?? null,
       renderCount: () => viewport()?.renderCount() ?? null,

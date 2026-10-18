@@ -64,6 +64,30 @@ _MATCH_TOL = 1.0e-6
 _AXIS_SIDE_TOL = 1.0e-9
 
 
+#: 押し出し量の絶対値の下限・上限[mm]。下限は OCCT の `Precision.Confusion`(1e-7)の10倍で、これ以下は
+#: `BRepSweep_*` が `Standard_ConstructionError` を投げる(1e-7 以下)か体積0(1.1e-7)になる。上限は 1 km で、
+#: 1e300 級は `gp_Dir` が `Standard_ConstructionError` を投げる。
+MIN_DISTANCE = 1e-6
+MAX_DISTANCE = 1e6
+
+
+def check_distance(distance: Any) -> float:
+    """押し出し量を数にして検査する。0・非有限・下限未満・上限超過は ValueError。
+
+    NaN / ±inf は `BRepPrimAPI_MakePrism` が NaN 座標の形を返し、直後の体積計算 `kernel.volume` が native のスタック
+    オーバーフローで **プロセスごと落ちる**(Python の except では捕まらない)。入口の型検査 `catalog.check_arguments`
+    が先に断るが、WebSocket の `preview` はそれを通らないので、ここでも断る。
+    """
+    value = float(distance)
+    if not math.isfinite(value):
+        raise ValueError(f"distance must be a finite number, got {distance!r}")
+    if value == 0.0:
+        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    if not MIN_DISTANCE <= abs(value) <= MAX_DISTANCE:
+        raise ValueError(f"|distance| must be between {MIN_DISTANCE} and {MAX_DISTANCE:g} mm, got {distance!r}")
+    return value
+
+
 def extrude_regions(
     faces: Sequence[Any],
     distance: float,
@@ -81,9 +105,7 @@ def extrude_regions(
     """
     if not faces:
         raise ValueError("extrude_regions requires at least one face")
-    distance = float(distance)
-    if distance == 0.0:
-        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    distance = check_distance(distance)
     _check_region_mode(mode, target_shape)
 
     nx, ny, nz = float(normal[0]), float(normal[1]), float(normal[2])
@@ -317,9 +339,7 @@ def extrude_faces(
         raise ValueError("extrude_faces requires at least one face")
     if len(set(indices)) != len(indices):
         raise ValueError(f"face indices must be distinct, got {indices}")
-    distance = float(distance)
-    if distance == 0.0:
-        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    distance = check_distance(distance)
     if mode not in ("join", "cut", "new"):
         raise ValueError(f"unknown extrude mode: {mode!r}")
     has_target = target_shape is not None and not target_shape.IsNull()

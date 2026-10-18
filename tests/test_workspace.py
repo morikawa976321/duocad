@@ -494,3 +494,40 @@ def test_a_dimension_nobody_asked_for_is_stopped_on_the_workspace_tools_too(sess
     run = AgentLoop(tools, provider).run("半径を2にして")
     assert run.tool_calls[0].ok is True
     assert command_of(session)["args"] == {"radius": 2.0}
+
+
+def test_leaving_a_mode_works_when_the_selected_body_or_sketch_was_hidden(session: Session):
+    """落ちたら、選択に残った隠したボディ/スケッチの項目が、モード切替の「使えない選択を外す」を ValueError で止め、モードが動かない。"""
+    body = session.document.bodies[0]
+    session.enter_optimize()
+    session.set_selection(refs=[{"body": body.id, "kind": "body"}])
+    session.set_visible(body.id, False)
+    session.leave_optimize()
+    assert mode_of(session) == {"kind": "idle"}
+    assert session.get_selection()["count"] == 0, "待機中に使えないボディ参照は外れる"
+    session.set_visible(body.id, True)
+
+    created = session.apply("sketch_create", {"base_plane": "XY"})
+    session.apply("add_line", {"sketch_id": created["sketch_id"], "p0": [0.0, 0.0], "p1": [10.0, 0.0]})
+    line = session.document.sketches[-1].entities[0].id
+    session.set_selection(refs=[{"sketch": created["sketch_id"], "entity": line}])
+    session.set_sketch_visible(created["sketch_id"], False)
+    session.leave_sketch()
+    assert mode_of(session) == {"kind": "idle"}
+    assert session.get_selection()["count"] == 1, "スケッチの外へ出るときは図形の選択を残す(隠していても)"
+    session.apply("sketch_create", {"base_plane": "XZ"})
+    assert session.get_selection()["count"] == 0, "別のスケッチに入るときは、隠したスケッチの図形も外れる"
+
+
+def test_creating_a_sketch_while_editing_another_drops_the_entities_of_the_old_one(session: Session):
+    """落ちたら、スケッチ作成だけが `enter_sketch` と違って前のスケッチの図形の選択を残し、以後の図形の移動が前のスケッチの図形を取る。"""
+    first = session.apply("sketch_create", {"base_plane": "XY"})
+    session.apply("add_line", {"sketch_id": first["sketch_id"], "p0": [0.0, 0.0], "p1": [10.0, 0.0]})
+    line = session.document.sketches[-1].entities[0].id
+    session.set_selection(refs=[{"sketch": first["sketch_id"], "entity": line}])
+    assert session.get_selection()["count"] == 1
+
+    second = session.apply("sketch_create", {"base_plane": "XZ"})
+
+    assert mode_of(session) == {"kind": "sketch", "sketch_id": second["sketch_id"]}
+    assert session.get_selection()["count"] == 0

@@ -84,7 +84,7 @@ def export_model(name: str, models_dir: Path, panels: list[dict], out: Path) -> 
             started = time.perf_counter()
             # 面ごとに元の文書から開き直す: 前の面が足した結果ボディが次の面の条件(保持ソリッドの体積)に混ざる。
             shutil.copy2(source, scratch_dir / name)
-            session = Session(None, 0.2, models_dir=scratch_dir, exports_dir=scratch_dir / "export")
+            session = Session(0.2, models_dir=scratch_dir, exports_dir=scratch_dir / "export")
             session.open_document(name)
             report = session.optimize_conditions()
             if not report["ready"]:

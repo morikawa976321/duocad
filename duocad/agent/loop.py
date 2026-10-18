@@ -98,7 +98,7 @@ ProgressCallback = Callable[[str, dict, Any, bool], None]
 class ToolSurface(Protocol):
     """ループが道具に要求する面(`DocumentTools` がこれを満たす)。公開APIの5つだけに依存する(内部には触らない)。
 
-    `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は `(文書の世代, ログの本数, 選択の指紋, 可視性の指紋,
+    `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は `(文書の世代, ログの本数, 適用回数, 選択の指紋, 可視性の指紋,
     作業空間の版)`。可視性も起動中のコマンドも操作ログに載らないので、無いと「AIが考えている間に人がボディを隠した / 半径を打ち直した」が
     版に出ない)。
     `call_and_seq` は実行と直後の版を `(結果, 例外, 版)` で返す(例外は上げない)。本番の覆い(`ToolsOnLoop`)はこれを
@@ -353,20 +353,24 @@ class AgentLoop:
                 )
             )
 
-            if reply.stop == "max_tokens" and reply.tool_calls:
+            if reply.stop in ("max_tokens", "refusal") and reply.tool_calls:
                 # 上限で切られたターンのツールは走らせない: 引数のJSONが途中で切れている可能性があり(半径が "12" のはずが "1" で届く類)、
                 # duocadのツールは文書を変える。止めて上限に当たったことを返すほうが安い。
+                # 断られた(refusal)応答も同じ: 付いてきたツール呼び出しを走らせると、断られたはずの依頼が completed で文書を変える。
                 # 呼ばれたぶんには実行しなかった旨の結果を積む(履歴を再送できる形に保つ。中断と同じ扱い)。
+                refused = reply.stop == "refusal"
                 self.turns.append(
                     ToolResultTurn(
                         self._unrun_results(
-                            reply.tool_calls, "出力上限で応答が切れたため実行しなかった"
+                            reply.tool_calls,
+                            "プロバイダが断った応答のため実行しなかった" if refused else "出力上限で応答が切れたため実行しなかった",
                         )
                     )
                 )
                 return self._result(
-                    "max_tokens",
-                    f"stop_reason={reply.stop_reason!r}(切れた引数のままツールを実行しない)",
+                    reply.stop,
+                    f"stop_reason={reply.stop_reason!r}"
+                    + ("(断られた応答のツールを実行しない)" if refused else "(切れた引数のままツールを実行しない)"),
                     turn,
                     outcomes,
                     usage,
@@ -696,21 +700,59 @@ def _failure(tool: str, code: str, message: str, exception: str) -> dict:
     return {"error": {"code": code, "message": message, "tool": tool, "exception": exception}}
 
 
-#: 識別子らしいかたまり(`body_1` / `sketch-1c72a3c7` / `entity-75aa`)。区切り(`-` か `_`)を含むものだけを識別子とみなす:
-#: `[A-Za-z]\w*` で広く取ると `R3` や `M8` まで消えて、「上面をR3で丸めて」が「数量を言っていない」と読まれる。
-#: duocadのIDは `body-` / `sketch-` / `entity-` / `pattern-` の接頭辞を持つので区切りの有無で足りる。
-_IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9]*[-_][A-Za-z0-9_.-]*")
+#: 識別子らしいかたまり(`body_1` / `sketch-1c72a3c7` / `entity-75aa`): 英字で始まる語と、`-` か `_` で続く英数字の並び。
+#: 区切りを含むものだけを取る(`[A-Za-z]\w*` で広く取ると `R3` や `M8` まで消えて、「上面をR3で丸めて」が「数量を言っていない」と読まれる)。
+#: 語頭の直前を英数字でないことに限るのは、英数字が長く続く入力(base64 の貼り付けなど)に開始位置ごとの走査をさせず、
+#: 時間を入力の長さに比例させるため(2026-10-18 実測: 区切りの無い5万文字が約8秒)。
+_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]*)((?:[-_][A-Za-z0-9]+)+)")
+#: 寸法の書き方(`Z-5mm` / `M8-30` / `R3-R5` / `t-2mm`)は識別子ではない。語頭が英字1字か英字+数字(`M8`)なら寸法の記号、
+#: 区切りの後ろの数字に単位が付いていても寸法(`wall-5mm`。`ミリ` などの日本語の単位は名前の外に出るので続きを見る)。
+#: duocad が採番する ID の接頭辞(`body` / `sketch` / `entity` / `pattern`)は2字以上で、後ろは16進なので当たらない。
+#: どちらとも決めがたいものは識別子として消す側に倒す(止めて人に尋ねるのは安全側の失敗)。
+_NOTATION_HEAD = re.compile(r"[A-Za-z]\d*")
+_ASCII_UNIT_AFTER_DIGIT = re.compile(r"\d(?:mm|cm|deg|m)(?![A-Za-z])")
+_UNIT_WORDS = ("ミリ", "センチ", "メートル", "メーター", "度", "°")
 _DIGIT = re.compile(r"\d")
+
+#: 漢数字だけで書いた量(「三ミリ」「五十mm」「九十度」)。数字を含まないので `_DIGIT` では見えない。
+#: 単位が付くものだけを量とする(「四角」「一番上」「二度と」の漢数字は量ではない)。
+#: 「度」は十・百・千を含む数に限る(「九十度回転」は角度、「二度」「三度目」は回数)。
+_KANJI_DIGITS = "〇零一二三四五六七八九十百千"
+_KANJI_NUMBER = re.compile(rf"[{_KANJI_DIGITS}]+(?:点[{_KANJI_DIGITS}]+)?")
+_KANJI_LENGTH_UNITS = ("mm", "cm", "m", "ミリ", "センチ", "メートル", "メーター", "°")
+_KANJI_PLACE = re.compile("[十百千]")
+
+
+def _identifier_or_notation(match: re.Match[str]) -> str:
+    head, tail = match.group(1), match.group(2)
+    if (
+        _NOTATION_HEAD.fullmatch(head)
+        or _ASCII_UNIT_AFTER_DIGIT.search(tail)
+        or match.string.startswith(_UNIT_WORDS, match.end())
+    ):
+        return match.group(0)
+    return " "
+
+
+def _says_a_kanji_quantity(text: str) -> bool:
+    for number in _KANJI_NUMBER.finditer(text):
+        if text.startswith(_KANJI_LENGTH_UNITS, number.end()):
+            return True
+        if text.startswith("度", number.end()) and _KANJI_PLACE.search(number.group()):
+            return True
+    return False
 
 
 def _mentions_a_quantity(text: str) -> bool:
     """人が数量を口にしたか。識別子の中の数字は数えない(`body_1` を「寸法を言った」と読むとガードが素通りする)。全角は NFKC で寄せてから見る。
+    `Z-5mm` や `M8-30` のような寸法の書き方は識別子に数えず、漢数字に単位の付いた量(「三ミリ」)は数字がなくても量と読む。
 
     厳密な照合(渡した値がそのまま本文にあるか)にはしない: 「半径4mmの円」に `diameter: 8` は正しい導出で、弾くと普通の依頼が通らない。
     見るのは人が量を与えたかどうかだけ(与えていないなら、モデルが埋めた寸法は必ず捏造)。
     """
-    plain = _IDENTIFIER.sub(" ", unicodedata.normalize("NFKC", text))
-    return bool(_DIGIT.search(plain))
+    normalized = unicodedata.normalize("NFKC", text)
+    plain = _IDENTIFIER.sub(_identifier_or_notation, normalized)
+    return bool(_DIGIT.search(plain)) or _says_a_kanji_quantity(plain)
 
 
 def _merge_usage(total: dict, latest: dict) -> dict:

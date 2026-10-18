@@ -11,7 +11,6 @@ from duocad.document import Document
 from duocad.mcp_server import DocumentTools, McpServer
 from document_support import replay_through_json
 from mcp_support import call_error
-from session_support import select
 from duocad.region import RegionRef
 from duocad.server import Session
 from duocad.verbs import import_svg
@@ -406,7 +405,7 @@ def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
 
 
 def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
-    session = Session(None, 0.2, models_dir=tmp_path)
+    session = Session(0.2, models_dir=tmp_path)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     applied = session.import_svg(
         sketch_id, str(write_svg(tmp_path, "session.svg", SVG_MIXED))
@@ -422,7 +421,7 @@ def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
 
 def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:
     """状態配信の射影で図形を伏せる。"""
-    session = Session(None, 0.2, models_dir=tmp_path)
+    session = Session(0.2, models_dir=tmp_path)
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.import_svg(sketch_id, str(write_svg(tmp_path, "feed.svg", SVG_MIXED)))
 
@@ -677,6 +676,24 @@ def test_undrawn_definitions_add_no_shapes(tmp_path: Path, definition: str) -> N
     assert _drawn_corners(tmp_path, definition + VISIBLE) == VISIBLE_CORNERS
 
 
+@pytest.mark.parametrize(
+    "definitions",
+    [
+        # `<defs>` の中の `<g>` を `<use>` が展開するとき、その中の `<mask>` の図形まで平らに並んで描かれていた
+        f'<defs><g id="t"><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>{VISIBLE}</g></defs>',
+        # `<symbol>` の中の `<mask>`(defs の中でも外でも)
+        f'<defs><symbol id="t"><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>{VISIBLE}</symbol></defs>',
+        f'<symbol id="t"><mask id="m"><rect x="0" y="0" width="10" height="10"/></mask>{VISIBLE}</symbol>',
+        f'<defs><g id="t"><symbol id="x"><rect x="0" y="0" width="9" height="9"/></symbol>{VISIBLE}</g></defs>',
+    ],
+)
+def test_a_definition_inside_a_used_definition_is_not_drawn(tmp_path: Path, definitions: str) -> None:
+    """`<use>` が参照する `<g>` `<symbol>` の中の、描かれない定義(`<mask>` など)は取り込まない。
+    落ちたら、defs や symbol の中へ入れた mask の図形が、参照した分だけ余計に入る。"""
+    corners = _drawn_corners(tmp_path, definitions + '<use xlink:href="#t"/>')
+    assert corners == VISIBLE_CORNERS
+
+
 def test_a_file_with_only_undrawn_definitions_is_refused(tmp_path: Path) -> None:
     """描かれる図形が無ければ、空のスケッチを作らず断る。"""
     body = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">{SYMBOL}</svg>'
@@ -748,7 +765,7 @@ def test_a_hidden_root_is_refused_as_value_error(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 失敗は何も残さない(領域が計算できない取り込み)・取り込んだ曲線の鏡映と複製
+# 失敗は何も残さない(領域が計算できない取り込み)
 # --------------------------------------------------------------------------------------
 HUGE_SCALE = 1.0e300
 
@@ -786,27 +803,3 @@ def test_a_failed_mcp_import_leaves_the_document_untouched(session: Session, tmp
     assert error["code"] == "invalid_argument"
     assert len(session.document.log.entries) == log_before
     assert session.document.sketches[0].entities == []
-
-
-def test_mirroring_and_copying_an_imported_curve_adds_no_named_values(session: Session, tmp_path: Path) -> None:
-    """落ちたら、取り込んだ曲線の鏡映・複製が制御点ごとに `d<n>` を登録する(1本8個。千本を超えると二乗時間で固まる)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.import_svg(sketch_id, str(write_svg(tmp_path, "curve.svg", SVG_WITH_UNITS)))
-    axis_id = session.add_line(sketch_id, [0.0, -100.0], [0.0, 100.0])["entity_id"]
-    names_before = set(session.document.parameters)
-    curves = [entity.id for entity in session.document.sketches[0].entities if entity.kind == "bezier"]
-    assert curves
-
-    select(session, [{"sketch": sketch_id, "entity": curve, "point": None} for curve in curves])
-    mirrored = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})["created"]
-    select(session, [{"sketch": sketch_id, "entity": curve, "point": None} for curve in curves])
-    copied = session.move_sketch_entities(0.0, 5.0, copy=True)["created"]
-
-    assert len(mirrored) == len(copied) == len(curves)
-    assert set(session.document.parameters) == names_before
-    by_id = {entity.id: entity for entity in session.document.sketches[0].entities}
-    for created in (*mirrored, *copied):
-        assert all(isinstance(value, float) for value in by_id[created].params.values())
-    first = sketch_module.entity_params(session.document, sketch_id, curves[0])
-    moved = sketch_module.entity_params(session.document, sketch_id, copied[0])
-    assert moved["y0"] == pytest.approx(first["y0"] + 5.0)

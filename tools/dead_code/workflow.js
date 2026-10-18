@@ -251,9 +251,9 @@ function classify(items) {
       const base = Object.assign({}, f, { area: it.area })
       if (!it.testable.includes(f.index)) { review.push(base); continue }
       const vs = it.votes[f.index] || []
-      if (vs.length === 0) unverified.push(base)
-      else if (vs.some((v) => v.refuted)) contested.push(Object.assign({}, base, { votes: vs }))
-      else confirmed.push(Object.assign({}, base, { votes: vs, full_vote: vs.length >= 2 }))
+      if (vs.some((v) => v.refuted)) contested.push(Object.assign({}, base, { votes: vs }))
+      else if (new Set(vs.map((v) => v.lens)).size < 2) unverified.push(Object.assign({}, base, { votes: vs }))
+      else confirmed.push(Object.assign({}, base, { votes: vs }))
     }
   }
   return { confirmed, contested, unverified, review }

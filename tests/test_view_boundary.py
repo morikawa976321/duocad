@@ -64,13 +64,3 @@ def test_the_view_does_not_prune_while_a_preview_is_running(tmp_path) -> None:
     assert created_id not in session.view._volume_cache
 
 
-def test_state_meta_reports_the_sessions_can_undo_not_the_raw_log(tmp_path) -> None:
-    """配る `can_undo` は `Session.can_undo`(土台の下限つき)であって、素のログではない。"""
-    session = session_with_box(SIDE, SIDE, SIDE, models_dir=tmp_path)
-    second_body(session.document)
-    assert session.document.log.can_undo
-
-    session._setup_floor_seq = session.document.log.entries[-1].seq
-    assert session.document.log.can_undo, "素のログのほうは True のまま(でないと変異が見えない)"
-    assert session.can_undo is False
-    assert session.state_meta()["can_undo"] is False

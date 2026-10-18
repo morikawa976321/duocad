@@ -64,6 +64,32 @@ def replay_through_json(document: Document, into: Document | None = None) -> Doc
     return restored
 
 
+def document_state(doc: Document) -> dict:
+    """undo 直後の文書と、同じログを再生した文書を `==` で比べるための写し。
+    active ボディ・ボディの並び・名前つきの値の表・図形と反復の `params`(名前つきの値への参照のまま)。"""
+    active = doc.active_body()
+    return {
+        "active": None if active is None else active.id,
+        "bodies": [(body.id, body.name) for body in doc.bodies],
+        "parameters": dict(doc.parameters),
+        "sketches": [
+            (
+                sketch.id,
+                sketch.name,
+                [(entity.id, entity.kind, dict(entity.params)) for entity in sketch.entities],
+                [(pattern.id, dict(pattern.params)) for pattern in sketch.patterns],
+            )
+            for sketch in doc.sketches
+        ],
+    }
+
+
+def assert_matches_replay(doc: Document, into: Document | None = None) -> None:
+    """生きている文書の状態が、同じ操作ログを JSON へ往復させて頭から再生した文書の状態と(座標は bit 単位で)一致する。
+    undo は「その操作が無かった文書」へ戻すので、undo の直後に呼ぶ。"""
+    assert document_state(doc) == document_state(replay_through_json(doc, into))
+
+
 def kinds_of(doc: Document, body_id: str) -> dict:
     """面の種別ごとの枚数(0枚の種別は落とす)。"""
     described = query.describe_shape(doc.get_body(body_id).shape)

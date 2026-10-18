@@ -13,7 +13,10 @@ OPTIMIZATION_TOOLS = {"set_preserve_bodies", "set_exclude_bodies", "set_fixtures
                       # 作業空間の最適化モードへの出入り(issue #153)。モードが無い版では入れない
                       "enter_optimize", "leave_optimize"}
 OPTIMIZATION_SOCKET_ONLY = {"optimize_conditions", "optimize_resolution", "run_optimization", "cancel_optimization",
-                            "finish_optimization", "optimize_steps", "optimize_step_voxels"}
+                            "finish_optimization", "optimize_steps", "optimize_step_voxels",
+                            # FEM の装置(CPU/GPU)を書き換える口。clone の設定ファイルを書き、次の更新で GPU の部品を入れさせる。
+                            # 読むだけの `fem_get_status` は画面が接続のたびに呼ぶので隠さない。
+                            "fem_set_device"}
 
 
 def test_only_the_shape_optimization_commands_are_hidden_in_stable():
@@ -40,7 +43,7 @@ def test_stable_ai_tools_leave_out_the_optimization_conditions_and_count_what_is
 
 def test_stable_socket_refuses_the_optimization_commands_and_dev_still_answers(tmp_path):
     def session() -> Session:
-        return Session(None, 0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
+        return Session(0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
 
     async def script(send):
         refused = await send({"cmd": "optimize_conditions"})
@@ -58,6 +61,6 @@ def test_the_page_is_told_over_the_socket_whether_shape_optimization_is_availabl
     """画面は接続のたびに届く `optimize_status` の `available` で入口とステップの取り直しを決める(設定ファイルの取得に依らない)。"""
     from duocad.server import Server
 
-    session = Session(None, 0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
+    session = Session(0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
     assert Server(session, hidden_features=channel.hidden_features("stable"))._optimize_status()["available"] is False
     assert Server(session)._optimize_status()["available"] is True

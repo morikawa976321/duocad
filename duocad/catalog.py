@@ -30,6 +30,7 @@ WebSocket・MCP・アプリ内AIはどれも `Session.apply` を通って入口�
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Optional
 
 #: `Command.category` に書ける値。
@@ -279,6 +280,44 @@ def check_arguments(schema: dict, arguments: dict) -> Optional[str]:
             continue
         if not _value_matches_json_type(value, expected):
             return f"argument {key!r} must be a {expected}, got {value!r}"
+    for key, value in arguments.items():
+        problem = _unusable_value(value)
+        if problem is not None:
+            return f"argument {key!r} has {problem}"
+    return None
+
+
+def _unusable_value(value: Any) -> Optional[str]:
+    """値(配列・辞書は入れ子の中まで)に、受け取ってはいけない数・文字列があればその説明を返す(無ければ None)。
+
+    - **非有限の数**(NaN / ±inf / `1e999`): Python の `json.loads` は非標準の `NaN` `Infinity` と、標準の `1e999` を
+      `float` にする。通すと `extrude` はプロセスごと落ち、他の verb は文書・状態配信・保存ファイルに裸の `NaN` を入れて
+      ブラウザの `JSON.parse` が状態フレームを読めなくなる。`float` の範囲を超える整数(`10**400`)も同じく断る。
+    - **UTF-8 に符号化できない文字列**(孤立サロゲート JSON の `\\ud800` 表記): 状態配信・自動保存・応答の符号化が失敗する。
+    """
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                return f"a non-finite number ({item!r}); numbers must be finite"
+        elif isinstance(item, int):
+            try:
+                float(item)
+            except OverflowError:
+                return "a number out of range"
+        elif isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                return "a string with characters that cannot be encoded as UTF-8 (lone surrogate)"
+        elif isinstance(item, list):
+            pending.extend(item)
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
     return None
 
 
@@ -330,7 +369,7 @@ PREDICATE_HELP = (
     "(外向き法線と軸の内積が value より大きい。上面なら axis Z・value 0.9) / "
     '{"op": "area_gt", "value": 数} / '
     '{"op": "kind_is", "value": "plane"|"cylinder_full"|"cylinder_partial"|"torus"|"cone"|"bspline"|"other"}。'
-    '辺の条件: {"op": "parallel_to", "axis": 軸} / {"op": "length_gt", "value": 数} / '
+    '辺の条件: {"op": "parallel_to", "axis": 軸}(直線の辺だけ。円弧などは選ばない) / {"op": "length_gt", "value": 数} / '
     '{"op": "length_lt", "value": 数} / {"op": "kind_is", "value": "line"|"circle"|"other"} / '
     '{"op": "on_boundary_of_face", "face": 面の番号}(その面の外周の辺。body が要る)。'
     "refs とは同時に渡せない"
@@ -1021,9 +1060,8 @@ COMMANDS: tuple[Command, ...] = (
             "配られた `params` から [u, v] へ解決してから渡す。**省略時の既定**"
             "(対象の代表点の平均)だけは規則がコアにしか無く、画面側へ写すと片方だけ"
             "変わったときに幽霊と確定結果が別の場所へ出るため、描かないほうを選んである。"
-            "**回転の引数はWSにも開いている**(2026-09-06。`ws=\"special\"`) —— 表(`ws=table`)は"
-            "載せた引数を全部必須にする規律なので、`mode` で要る引数が入れ替わり中心も省略できる"
-            "このverbは表に置けない。`_dispatch` が個別に捌き、**省略された引数は None のまま**"
+            "**回転の引数はWSの表にも開いている**(`required=False` の引数は省略できる。`mode` で要る引数が"
+            "入れ替わり中心も省略できるので、どれも任意にしてある)。**省略された引数は None のまま**"
             "verbへ渡す(既定で埋めると、モード違いの引数が黙って効く)。"
             "画面は「並進 / 回転」のボタンでモードを選ばせ、回転中心は**スケッチの点を"
             "直接クリック**して `center_entity` の参照で送る(`web/src/commands/command.ts` の"
@@ -1142,7 +1180,7 @@ COMMANDS: tuple[Command, ...] = (
             "**「軸の位置を省略 → 対象の合成重心」だけはブラウザ側では解けない**"
             "(体積重心は三角形分割の近似からしか出ない)ので、近似で置かずに描かない。"
             "曲線の辺も同じで、まっすぐでなければ幽霊を出さずコアの拒否を人に見せる。"
-            "**回転の引数はWSにも開いている**(2026-09-06。`ws=\"special\"`。表に置けない理由は"
+            "**回転の引数はWSの表にも開いている**(`required=False`。省略の扱いは"
             " move_sketch_entities の note と同じ)。画面は回転軸を**3Dビューで辺をクリック**して"
             "`axis_edge` の参照で送り、中心は任意で頂点をクリックして `center_vertex` で送る ——"
             "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
@@ -1224,7 +1262,7 @@ COMMANDS: tuple[Command, ...] = (
         preview_session="preview_envelope_regions",
         resets_selection=True,
         note=(
-            "**WSでは R・d ともに必須**(表は載せた引数を全部必須にする)。UIは空欄を 0 として送る"
+            "**WSでは R・d ともに必須**(`ws=\"required\"`)。UIは空欄を 0 として送る"
             "(`NumberArgSpec.default`)ので、人が空欄のまま確定しても届く。MCPは省略=0。"
             "**必要な R・d の最小値は計算しない**(本人の決定。分裂したら個数を添えて失敗するだけ)。"
             "プレビューは投機実行でなく `preview_envelope_regions` で、分裂しても失敗にせず全部の線と"
@@ -1717,8 +1755,7 @@ COMMANDS: tuple[Command, ...] = (
             "2026-08-22に引数を `path`(サーバのCWD基準の任意パス)から `name`"
             "(`models_dir` 配下のファイル名だけ)へ締めた。"
             "**2026-08-30に `name` を任意引数にし、表(`ws=\"table\"`)から外して "
-            "`_dispatch` の個別分岐へ移した** —— 表は載せた引数を全部必須にする規律なので"
-            "(`Param.ws` のdocstring)、省略を許すコマンドは表に置けない。"
+            "`_dispatch` の個別分岐へ移した**(`file` の封筒を返し、状態も配り直すため)。"
             "契約は `Session.save_document`: 引数なし=編集中のファイルへ上書き / "
             "`name` あり=**新しい名前でのみ**保存(既存名は拒否)。"
             "**2026-09-16の自動保存化(issue #5)以後、UIが送るのは引数なし(Ctrl+S)だけ** —— "
@@ -1848,7 +1885,7 @@ COMMANDS: tuple[Command, ...] = (
         category="history",
         description=(
             "直前の操作を取り消すときに呼ぶ。"
-            "UIと同じ履歴。土台(読み込み等)は取り消せない。"
+            "UIと同じ履歴。"
         ),
         session="undo",
         ws="special",
@@ -2189,6 +2226,7 @@ COMMANDS: tuple[Command, ...] = (
         ws="special",
         mcp=False,
         changes_document=False,
+        feature="shape_optimization",  # clone の設定ファイルを書き、次の更新で GPU の部品(約2GB)を入れさせる。`fem_get_status` は読むだけで、画面が接続のたびに呼ぶので隠さない
         note="結果の `fem_status` は全接続へ配る(設定はサーバに1つ)",
     ),
     # 作業空間(workspace)。**起動中のコマンドとモードを共有する口**(issue #153。`duocad/workspace.py`)。選択と同じく

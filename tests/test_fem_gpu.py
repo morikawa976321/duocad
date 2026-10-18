@@ -43,7 +43,7 @@ def test_the_device_setting_defaults_to_cpu_and_survives_a_restart(tmp_path):
     local_settings.PATH.write_text('{"other": 1}', encoding='utf-8')
     local_settings.update(fem_device='gpu')
     assert local_settings.read() == {'other': 1, 'fem_device': 'gpu'}
-    Server(Session(None, 0.2, models_dir=tmp_path / 'models', exports_dir=tmp_path / 'export'))
+    Server(Session(0.2, models_dir=tmp_path / 'models', exports_dir=tmp_path / 'export'))
     assert fem.FEM_DEVICE == 'gpu'
     with pytest.raises(ValueError, match='未知の装置'):
         fem.Model(4, 2, 2).prepare(np.ones((4, 2, 2)), 3.0, device='cuda')
@@ -56,7 +56,7 @@ def test_the_settings_dialog_switches_the_device_for_every_screen(tmp_path, monk
     monkeypatch.setattr(gpu_cg, 'describe', lambda: described.append(1) or {'name': 'テストGPU', 'problem': None})
     monkeypatch.setattr(gpu_cg, 'cupy_installed', lambda: True)
     gpu_cg._disabled = 'cupy: 前に失敗した'
-    server = Server(Session(None, 0.2, models_dir=tmp_path / 'models', exports_dir=tmp_path / 'export'))
+    server = Server(Session(0.2, models_dir=tmp_path / 'models', exports_dir=tmp_path / 'export'))
 
     async def scenario():
         a, b = FakeConnection(), FakeConnection()

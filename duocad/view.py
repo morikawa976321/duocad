@@ -17,7 +17,6 @@ from . import (
     kernel,
     meshbody,
     optimize,
-    parameters,
     query,
     region,
     resolution,
@@ -433,7 +432,6 @@ class DocumentView:
             {"sketch_id", "name": <str|None>, "plane": <PlaneRef>,
              "frame": {"origin","u","v","normal"},          # (u,v) と3Dの往復の規則
              "entities": [{"entity_id","kind","params","refs"}],   # 打ち直し用(名前つき)
-             "patterns": [{"pattern_id","kind","sources","params","refs","options"}],  # 反復の打ち直し用
              "drawn":    [{"kind","params"}],                      # 反復を展開した描画用
              "regions":  [{"index","area","centroid","positions","indices"}],
              "revision": int}                                          # 描くものが変わったら上がる版
@@ -514,28 +512,6 @@ class DocumentView:
                 f"スケッチ {item.id} の図形を読めない: {type(error).__name__}: {error}"
             )
             payload["entities"] = []
-        # 反復もキャッシュしない・try で包む(`entities` と同じ)。SketchPanelの反復の行用で、
-        # `entities` と同じ形にしてフロントの `commitParam` を使い回す。
-        try:
-            payload["patterns"] = [
-                {
-                    "pattern_id": pattern.id,
-                    "kind": pattern.kind,
-                    "sources": list(pattern.sources),
-                    "params": parameters.resolve_all(self.document, pattern.params),
-                    "refs": {
-                        key: ref if isinstance(ref, str) else None
-                        for key, ref in pattern.params.items()
-                    },
-                    "options": dict(pattern.options),
-                }
-                for pattern in item.patterns
-            ]
-        except Exception as error:
-            self.warnings.append(
-                f"スケッチ {item.id} の反復を読めない: {type(error).__name__}: {error}"
-            )
-            payload["patterns"] = []
         # 版: 画面が描くもの(枠・展開した図形・領域 = 署名、点と辺の取っ手 = `entities`)が変わったときだけ上がる。
         # 選択・表示・名前では上がらない(画面は版が同じスケッチを作り直さず、選択の色だけ塗り直す)。
         fingerprint = (signature, json.dumps(payload["entities"], sort_keys=True, default=str))
@@ -556,7 +532,10 @@ class DocumentView:
         # 粗さも「状態」のうち。入れないと、ズームで目標精度が変わっても差分配信が「版が同じ」と
         # 判断して古い粗さのメッシュが画面に残る。メッシュボディは `shape` が常に None なので
         # **メッシュの同一性も鍵に入れる**(`id(None)` は常に同じ値で、版が二度と上がらない)。
-        key = (id(body.shape), id(body.mesh), body.visible, self.body_recipe(body_id))
+        # メッシュボディは持っている三角形をそのまま配り粗さが効かないので、粗さは入れない(入れると、ズームのたびに
+        # 変わっていないメッシュ全体を配り直す)。
+        recipe = None if body.mesh is not None else self.body_recipe(body_id)
+        key = (id(body.shape), id(body.mesh), body.visible, recipe)
         if self._revision_state.get(body_id) != key:
             self._revision_state[body_id] = key
             self._revision_counter[body_id] = self._revision_counter.get(body_id, 0) + 1

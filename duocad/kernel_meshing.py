@@ -56,13 +56,13 @@ _SELF_INTERSECTING = IMeshData_Status.IMeshData_SelfIntersectingWire
 _FORWARD = TopAbs_Orientation.TopAbs_FORWARD
 
 
-def _parameters(deviation: float, angular_deflection: float, parallel: bool) -> IMeshTools_Parameters:
+def _parameters(deviation: float, angular_deflection: float) -> IMeshTools_Parameters:
     """`BRepMesh_IncrementalMesh(shape, dev, False, ang, parallel)` が `initParameters` で補う値まで揃える。"""
     p = IMeshTools_Parameters()
     p.Deflection = float(deviation)
     p.Angle = float(angular_deflection)
     p.Relative = False
-    p.InParallel = bool(parallel)
+    p.InParallel = True
     confusion = Precision.Confusion_s()
     if p.DeflectionInterior < confusion:
         p.DeflectionInterior = p.Deflection
@@ -251,8 +251,7 @@ def _issue_summary(issues: List[dict]) -> List[dict]:
                  **({'gap': i['gap']} if 'gap' in i else {})) for i in issues]
 
 
-def mesh_shape(shape, deviation: float, angular_deflection: float, *, parallel: bool = True,
-               max_rounds: int = DEFAULT_MAX_ROUNDS, max_points: int = DEFAULT_MAX_POINTS) -> dict:
+def mesh_shape(shape, deviation: float, angular_deflection: float, *, max_rounds: int = DEFAULT_MAX_ROUNDS) -> dict:
     """形状を三角形分割し(結果は形状に付く)、境界検査・再分割の診断を返す。
 
     戻り値(JSON 化できる値だけ):
@@ -273,7 +272,7 @@ def mesh_shape(shape, deviation: float, angular_deflection: float, *, parallel: 
     seconds: Dict[str, float] = {}
     clock = time.perf_counter
     BRepTools.Clean_s(shape)
-    parameters = _parameters(deviation, angular_deflection, parallel)
+    parameters = _parameters(deviation, angular_deflection)
     context = IMeshTools_Context()
     context.SetModelBuilder(BRepMesh_ModelBuilder())
     context.SetEdgeDiscret(BRepMesh_EdgeDiscret())
@@ -296,13 +295,13 @@ def mesh_shape(shape, deviation: float, angular_deflection: float, *, parallel: 
     model = _Model(context, shape)
     seconds['extract'] = clock() - started
     try:
-        return _mesh_with_model(model, context, parameters, deviation, max_rounds, max_points, seconds)
+        return _mesh_with_model(model, context, parameters, deviation, max_rounds, seconds)
     finally:
         model.close()
         context = None
 
 
-def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, max_points, seconds) -> dict:
+def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, seconds) -> dict:
     clock = time.perf_counter
     # OCCT の healer が 5 回で解消できず Failure にした面(SelfIntersectingWire を伴う)。独自検査で
     # 解消できたら分割対象に戻す。それ以外の Failure(wire の構築失敗・例外)は触らない。
@@ -368,7 +367,7 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         if not changed:
             termination = 'no_change'
             break
-        if model.points_total() > max_points:
+        if model.points_total() > DEFAULT_MAX_POINTS:
             termination = 'budget'
             break
         dirty = model.faces_of_edges(edges)

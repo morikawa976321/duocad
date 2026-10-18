@@ -204,7 +204,7 @@ def test_a_browser_verb_whose_write_recovers_is_pushed_again_as_saved(session: S
 
 def test_the_bytes_written_match_what_write_text_wrote(tmp_path) -> None:
     """落ちたら、書き方をバイト列に変えたせいで改行(`os.linesep`)や文字コードが変わり、既存のファイルと差分が出る。"""
-    session = Session(None, 0.2, models_dir=tmp_path / "models")
+    session = Session(0.2, models_dir=tmp_path / "models")
     session.sketch_create("XY")
     on_disk = (session.models_dir / session.current_name).read_bytes()
     assert on_disk.count(os.linesep.encode()) == session.document.log.to_json(session._created).count("\n")

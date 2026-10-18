@@ -82,30 +82,38 @@ def inspect_samples(inside: np.ndarray, grid: voxelize.Grid, *, required_mm: flo
 
     events, thinning = [], []
     micro = 0
-    labels_at: dict = {}
-    for dim, pairs in enumerate(regular[:2]):
-        for birth, death in np.asarray(pairs, dtype=np.int64).reshape(-1, 2):
-            b, dv = flat[birth], flat[death]
-            if b <= _KEEP_VALUE:
-                continue
-            r_birth = -b
-            if dim == 1 and math.isinf(dv):
-                # 材料の輪: 輪が閉じる半径 = くびれの半径。寿命の閾値なし。
-                if 2 * (r_birth - eps) < d:
-                    events.append(_event('loop_neck', r_birth, None, eps, d, position(birth)))
-            elif dim == 1:
-                r_death = -dv
-                if 2 * r_death < d:
-                    thinning.append(dict(diameter_mm=2 * r_death, position_mm=position(death)))
-            elif dim == 0 and not math.isinf(dv) and dv > _KEEP_VALUE:
-                r_death = -dv
-                if 2 * (r_death - eps) >= d:
-                    continue
-                lifetime = r_birth - r_death
-                if lifetime <= 2 * eps and _younger_volume(f, inside, zone, r_death, birth, labels_at) < MICRO_PIECE_SAMPLES:
-                    micro += 1
-                    continue
-                events.append(_event('tree_neck', r_death, lifetime, eps, d, position(death)))
+    pairs_by_dim = [np.asarray(pairs, dtype=np.int64).reshape(-1, 2) for pairs in regular[:2]]
+    # 木のくびれの候補: 次元0の組のうち、保持の外で、有限の死を持ち、要求幅に届かないもの。
+    tree = []
+    for birth, death in pairs_by_dim[0] if pairs_by_dim else ():
+        b, dv = flat[birth], flat[death]
+        if b <= _KEEP_VALUE or math.isinf(dv) or dv <= _KEEP_VALUE:
+            continue
+        r_birth, r_death = -b, -dv
+        if 2 * (r_death - eps) < d:
+            tree.append((birth, death, r_birth, r_death))
+    volumes = _younger_volumes(
+        f, inside, zone, [(r_death, birth) for birth, _, r_birth, r_death in tree if r_birth - r_death <= 2 * eps]
+    )
+    for birth, death, r_birth, r_death in tree:
+        lifetime = r_birth - r_death
+        if lifetime <= 2 * eps and volumes[(r_death, birth)] < MICRO_PIECE_SAMPLES:
+            micro += 1
+            continue
+        events.append(_event('tree_neck', r_death, lifetime, eps, d, position(death)))
+    for birth, death in pairs_by_dim[1] if len(pairs_by_dim) > 1 else ():
+        b, dv = flat[birth], flat[death]
+        if b <= _KEEP_VALUE:
+            continue
+        r_birth = -b
+        if math.isinf(dv):
+            # 材料の輪: 輪が閉じる半径 = くびれの半径。寿命の閾値なし。
+            if 2 * (r_birth - eps) < d:
+                events.append(_event('loop_neck', r_birth, None, eps, d, position(birth)))
+        else:
+            r_death = -dv
+            if 2 * r_death < d:
+                thinning.append(dict(diameter_mm=2 * r_death, position_mm=position(death)))
     if any(e['verdict'] == 'suspect' for e in events):
         status = 'suspect'
     elif events or micro:
@@ -127,16 +135,23 @@ def _event(kind: str, r: float, lifetime: Optional[float], eps: float, d: float,
     return dict(kind=kind, diameter_mm=[low, high], lifetime_mm=lifetime, verdict=verdict, reason=reason, position_mm=position)
 
 
-def _younger_volume(f, inside, zone, r_death, birth, cache) -> int:
-    """合流の直前({f > r_death})に、`birth` の標本を含む成分の標本数。"""
-    if r_death not in cache:
+def _younger_volumes(f, inside, zone, requests) -> dict:
+    """合流の直前({f > r_death})に、`birth` の標本を含む成分の標本数を、`(r_death, birth)` ごとに返す。
+    ラベル配列は r_death ごとに1枚ずつ作って捨てる(全部残すと、標本数 × r_death の種類数のメモリになる)。"""
+    by_death: dict = {}
+    for r_death, birth in requests:
+        by_death.setdefault(r_death, []).append(birth)
+    volumes = {}
+    for r_death, births in by_death.items():
         present = inside & (f > r_death)
         if zone is not None:
             present |= zone & inside
-        cache[r_death] = ndimage.label(present)[0]
-    labels = cache[r_death]
-    label = labels.ravel(order='F')[birth]
-    return int((labels == label).sum()) if label else 0
+        labels = ndimage.label(present)[0]
+        sizes = np.bincount(labels.ravel())
+        for birth in births:
+            label = labels[np.unravel_index(birth, labels.shape, order='F')]
+            volumes[(r_death, birth)] = int(sizes[label]) if label else 0
+    return volumes
 
 
 def _keep_zone(grid, shape, keep, m):

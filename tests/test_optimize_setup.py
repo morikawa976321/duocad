@@ -379,7 +379,7 @@ def test_the_fingerprint_check_names_what_changed(session: Session) -> None:
 def test_the_setup_survives_a_real_save_and_open(tmp_path) -> None:
     """落ちたら、`save_document` → `new_document` → `open_document` の実APIの往復(ファイルI/Oと
     文書の差し替えを通る)で条件が戻らないか、差し替え後に前の文書の割り当てを配っている。"""
-    made = Session(None, DEVIATION, models_dir=tmp_path / "models")
+    made = Session(DEVIATION, models_dir=tmp_path / "models")
     body = _box(made)
     _select(made, _body_refs(body))
     made.set_preserve_bodies()
@@ -409,7 +409,7 @@ def test_clearing_every_role_survives_a_real_save_and_open(tmp_path) -> None:
     ボディ・拘束は集合代入なので「空を代入した」が外し方、荷重だけは上書き代入なので
     `clear_loads` が外し方である(`duocad/verbs/optimize_setup.py`)。
     """
-    made = Session(None, DEVIATION, models_dir=tmp_path / "models")
+    made = Session(DEVIATION, models_dir=tmp_path / "models")
     body = _box(made)
     _select(made, _body_refs(body))
     made.set_preserve_bodies()
@@ -660,7 +660,7 @@ def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
     picker, arguments, read = _ROUTES[verb]
 
     def run(use_websocket: bool):
-        made = Session(None, DEVIATION)
+        made = Session(DEVIATION)
         body = _box(made)
         if picker == "face":
             _preserve(made, body)
@@ -788,3 +788,16 @@ def test_the_typescript_selectable_kinds_match_the_core() -> None:
         "TSのみ": sorted(declared - set(selection.SELECTABLE_KINDS)),
         "コアのみ": sorted(set(selection.SELECTABLE_KINDS) - declared),
     }
+
+
+def test_renaming_a_hidden_body_updates_the_reason_in_stale(session: Session) -> None:
+    """落ちたら、非表示のまま改名しても増分維持の鍵が動かず、`stale` の理由文に古い名前が残り続ける。"""
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+    session.set_visible(body.id, False)
+    assert body.name in _optimize(session)["stale"][0]["reason"]
+
+    session.apply("rename", {"target": body.id, "name": "renamed-body"})
+
+    assert "renamed-body" in _optimize(session)["stale"][0]["reason"]

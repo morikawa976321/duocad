@@ -11,7 +11,7 @@ from duocad.server import Server, Session
 
 
 def _server(tmp_path, channel_name: str) -> Server:
-    session = Session(None, 0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
+    session = Session(0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
     return Server(session, hidden_features=channel.hidden_features(channel_name))
 
 

@@ -66,8 +66,9 @@ _SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 #: `<use>` などから呼ばれる定義。`<defs>` の外に書かれていても、そこでは描かれない。
 _UNDRAWN_DEFINITIONS = frozenset({"symbol", "mask", "marker"})
 
-#: svgelements が最初から描画対象にしない入れ物(中身を調べる必要が無い)。
-_NON_RENDERING = frozenset({"defs", "clipPath", "pattern"})
+#: svgelements が最初から描画対象にせず、`<use>` からも中身が展開されない入れ物(中身を調べる必要が無い)。
+#: `<defs>` はここに入れない: `<use>` は `<defs>` の中の `<g>` や `<symbol>` を展開するので、その中の描かれない定義を調べる。
+_NON_RENDERING = frozenset({"clipPath", "pattern"})
 
 #: `<switch>` が選ぶ候補になる要素(`<title>` `<desc>` などは候補にならない)。
 _SWITCH_CANDIDATES = frozenset(
@@ -173,7 +174,11 @@ def _prepare(data: bytes) -> Tuple[bytes, Optional[float], Optional[float]]:
 
 
 def _undrawn_children(root: Any) -> List[Tuple[Any, Any]]:
-    """描かれない定義・選ばれなかった `<switch>` の枝を `(親, 子)` で集める(最も外側だけ)。"""
+    """描かれない定義・選ばれなかった `<switch>` の枝を `(親, 子)` で集める。
+
+    `<defs>` 直下の定義は集めない(そこは元から描かれない)が、その中身は調べる。集めた定義の中にさらに描かれない
+    定義があるときも集める(`<use>` が外側を展開すると、内側も平らに並んで描かれてしまう)。
+    """
     found: List[Tuple[Any, Any]] = []
     stack = [root]
     while stack:
@@ -195,10 +200,9 @@ def _undrawn_children(root: Any) -> List[Tuple[Any, Any]]:
             if name in _NON_RENDERING:
                 continue
             passed_over = in_switch and name in _SWITCH_CANDIDATES and child is not selected
-            if name in _UNDRAWN_DEFINITIONS or passed_over:
+            if (name in _UNDRAWN_DEFINITIONS or passed_over) and _local_name(parent.tag) != "defs":
                 found.append((parent, child))
-            else:
-                stack.append(child)
+            stack.append(child)
     return found
 
 

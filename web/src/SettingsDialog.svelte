@@ -154,7 +154,7 @@
       <button id="settings-api-key-delete" onclick={() => onSetApiKey(null)}>削除</button>
     {/if}
   </div>
-  <p class="hint dim" data-api-key-status>{keyLine}</p>
+  <p class="hint dim">{keyLine}</p>
 
   {#if showGpu}
     <!-- **答えは変わらない**(GPU の解は CPU とビット一致する。docs/TOPOPT_GPU.md)ので、確認なしでその場で切り替える。 -->
@@ -173,7 +173,7 @@
         }}
       />
     </label>
-    <p class="hint dim" data-fem-status>{femLine}</p>
+    <p class="hint dim">{femLine}</p>
     {#if femStatus?.device === 'gpu' && !femStatus.cupyInstalled && canInstallGpu}
       <div class="key-actions">
         <button id="settings-gpu-install" onclick={installGpu} disabled={restart.current !== null}>

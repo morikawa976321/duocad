@@ -19,9 +19,9 @@
 
 ## 面数・辺数のカウントのキャッシュ(`selection._coerce_refs`)
 
-- `_coerce_refs(doc, refs, *, bodies=None, counts=None)` は face/edge/vertex 参照を `(body_id, kind)` ごとに `kernel.face_count` / `edge_count` / `count_subshapes` を1回だけ呼んで使い回す。戻り値・例外の型とメッセージは `_coerce_ref` を1件ずつ呼んだときと同じ。モジュール内部関数(外から直接呼ぶ経路を増やさない)。戻りは入力 `refs` と1対1・同順。
+- `_coerce_refs(doc, refs, *, bodies=None, counts=None, allow_hidden=False)` は face/edge/vertex 参照を `(body_id, kind)` ごとに `kernel.face_count` / `edge_count` / `count_subshapes` を1回だけ呼んで使い回す。戻り値・例外の型とメッセージは `_coerce_ref` を1件ずつ呼んだときと同じ。モジュール内部関数(外から直接呼ぶ経路を増やさない)。戻りは入力 `refs` と1対1・同順。
 - **`modify_selection` は `add` 用・`remove` 用の2回の `_coerce_refs` 呼び出しへ同じ `bodies`/`counts` 辞書を渡す**(引数の副作用で共有)。新しい辞書だと同じボディの面が混ざったとき最大2回数える(実物27ボディで `_face_map` 42回→27回)。`set_selection` は単発なので既定でよい。
-- **可視性の門番 `_visible_body` は body_id ごとに最低1回は必ず通す**。キャッシュしてよいのは数え上げであって門番ではない(不可視ボディへの参照が通ると AI が人の隠したものを黙って選ぶ)。`tests/test_face_count_once_per_body.py` の `test_hidden_body_face_ref_is_refused_through_{modify,propose}_selection` が押さえる。
+- **可視性の門番は参照ごとに必ず通す**(`bodies` に入っているボディでも `visible` を見る。辞書は `allow_hidden` の違う呼び出しの間で共有されうる)。キャッシュしてよいのは数え上げであって門番ではない(不可視ボディへの参照が通ると AI が人の隠したものを黙って選ぶ)。門を外すのは外す側(`modify_selection` の `remove`・`toggle_selection` で選択に入っている参照)だけ: 隠したボディの項目は選択に残るので、外せないと「いまの選択を外して新しく選ぶ」が丸ごと拒否される。`tests/test_face_count_once_per_body.py` の `test_hidden_body_face_ref_is_refused_through_{modify,propose}_selection` が押さえる。
 - **キャッシュ鍵は `(body_id, kind)` の両方**。`kind` を落とすと面数と辺数が入れ替わる(既存 pytest が捕まえる)。`body_id` を落とすと違うボディの面数が使い回される(**`two_shapes` fixture(箱+円柱)でしか捕まらない**)。
 - **キャッシュの寿命は「1回の呼び出し」のローカル変数**。`kernel.py`・モジュールレベル・`Document`/`Body` レベルへ持ち出さない。
 - **検査設計の罠**: 既存 pytest は全 fixture が同一寸法の箱(面6/辺12/頂点8)で、違うボディの面数の取り違えを検出できなかった。fixture を増やすなら**形状の種類まで変える**(寸法違いの箱では検出力は上がらない)。「1回の呼び出しで」という条件があるときは、内部で同じ処理を複数回行う経路(`add`/`remove` の2回)を洗い出して検証する。

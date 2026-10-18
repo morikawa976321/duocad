@@ -86,3 +86,37 @@ def test_too_many_samples_is_undetermined_not_coarsened():
     faces = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
     result = neck_persistence.inspect_mesh(vertices, faces, spacing=1.0, required_mm=4.0, min_width_cells=4)
     assert result['status'] == 'undetermined' and result['reason']
+
+
+def test_younger_volumes_match_a_direct_count_and_never_keep_more_than_one_older_label_array(monkeypatch):
+    """落ちたら、微小片の判定が成分の体積と食い違うか、距離の種類ごとにラベル配列を残し続けてメモリが標本数 × 種類数になる。"""
+    import gc
+    import weakref
+
+    from scipy import ndimage
+
+    rng = np.random.default_rng(3)
+    inside = ndimage.gaussian_filter(rng.random((22, 22, 22)), 1.5) > 0.5
+    f = ndimage.distance_transform_edt(inside)
+    flat_inside = np.flatnonzero(inside.ravel(order='F'))
+    deaths = sorted({round(float(v), 3) for v in f[inside]})[:6]
+    assert len(deaths) >= 4
+    requests = [(r, int(b)) for r in deaths for b in rng.choice(flat_inside, 3, replace=False)]
+
+    alive, real_label = [], ndimage.label
+
+    def watching_label(array, *args, **kwargs):
+        gc.collect()
+        assert sum(ref() is not None for ref in alive) <= 1, "古いラベル配列が2枚以上残っている"
+        out = real_label(array, *args, **kwargs)
+        alive.append(weakref.ref(out[0]))
+        return out
+
+    monkeypatch.setattr(neck_persistence.ndimage, 'label', watching_label)
+    got = neck_persistence._younger_volumes(f, inside, None, requests)
+    monkeypatch.undo()
+
+    for r_death, birth in requests:
+        labels = real_label(inside & (f > r_death))[0]
+        label = labels[np.unravel_index(birth, labels.shape, order='F')]
+        assert got[(r_death, birth)] == (int((labels == label).sum()) if label else 0)

@@ -709,12 +709,11 @@ def _transformed(
 
 
 def mirror_shape(
-    shape: "TopoDS_Shape", point: Sequence[float], normal: Sequence[float], *, copy: bool = True
+    shape: "TopoDS_Shape", point: Sequence[float], normal: Sequence[float]
 ) -> "TopoDS_Shape":
     """形状を、点 `point` を通り法線 `normal` の平面に対して鏡映した形状を返す(元は変えない)。
 
-    **鏡映は向きを反転する変換**(行列式が負)。`mirror_body` は常に複製を作るので `copy` の既定は `True`
-    (`copy=False` も `gp_Trsf` が向きの反転を保持するので壊れない)。
+    **鏡映は向きを反転する変換**(行列式が負)。`mirror_body` は常に複製を作るので、常に独立した形状を返す。
 
     点・法線が3要素でない/非有限、または法線が零ベクトルなら ValueError。
     """
@@ -724,7 +723,7 @@ def mirror_shape(
 
     trsf = gp_Trsf()
     trsf.SetMirror(gp_Ax2(gp_Pnt(*origin), gp_Dir(*axis)))
-    return _transformed(shape, trsf, copy=copy, what="鏡映")
+    return _transformed(shape, trsf, copy=True, what="鏡映")
 
 
 def edge_axis(shape: "TopoDS_Shape", edge_index: int) -> tuple:
@@ -1449,9 +1448,9 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         clash = kernel_chains.fillet_consumes_face(shape, edge_map, radii)
         if clash is not None:
             raise ValueError(
-                f"fillet radius {radii[clash[0]]:g} equals the width of the planar face next to edge {clash[0]} "
-                f"(the distance to its edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと落ちることがある。"
-                "半径をわずかにずらすこと"
+                f"fillet radius {radii[clash[0]]:g} on edge {clash[0]} would consume the whole planar face next to it "
+                f"(it reaches exactly as far as the face's edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと"
+                "落ちることがある。半径をわずかにずらすこと"
             )
 
     try:

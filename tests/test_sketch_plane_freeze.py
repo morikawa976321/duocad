@@ -228,17 +228,9 @@ def test_undo_and_redo_of_the_fillet_leave_the_sketch_pose_alone():
     assert_same_frame(region.plane_frame(document, sketch_id), expected)
 
 
-def test_a_face_plane_without_a_frame_still_resolves_from_the_given_face():
-    """枠を持たない面参照は、渡された面から解く(後方互換の経路)。"""
-    document = Document()
-    body_id = new_box(document, BOX)
-    shape = document.get_body(body_id).shape
-    bare = {"kind": "face", "body": body_id, "index": TOP_FACE_INDEX, "provenance": None}
-
-    assert_same_frame(
-        kernel_sketch.sketch_plane_frame(bare, face=kernel.face_of(shape, TOP_FACE_INDEX)),
-        kernel_sketch.face_frame(shape, TOP_FACE_INDEX),
-    )
+def test_a_face_plane_without_a_frame_is_rejected():
+    """枠を持たない面参照は解けない(姿勢は作成時に焼き付けた枠が唯一の正)。"""
+    bare = {"kind": "face", "body": "b", "index": TOP_FACE_INDEX, "provenance": None}
     with pytest.raises(ValueError):
         kernel_sketch.sketch_plane_frame(bare)
 

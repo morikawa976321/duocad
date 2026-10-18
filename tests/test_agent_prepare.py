@@ -150,7 +150,7 @@ class NotedProvider(Provider):
 
 
 def test_the_loop_warms_with_exactly_what_run_will_send():
-    surface = DocumentTools(Session(None, 0.2))
+    surface = DocumentTools(Session(0.2))
     provider = NotedProvider()
     loop = AgentLoop(surface, provider)
 
@@ -161,6 +161,6 @@ def test_the_loop_warms_with_exactly_what_run_will_send():
 
 def test_a_failed_warm_up_is_reported_not_raised():
     """相手がまだ居ないのは事故ではない(最初の依頼がそれを言う)。"""
-    loop = AgentLoop(DocumentTools(Session(None, 0.2)), NotedProvider(ProviderError("接続できない")))
+    loop = AgentLoop(DocumentTools(Session(0.2)), NotedProvider(ProviderError("接続できない")))
 
     assert loop.prepare() == {"error": "接続できない"}

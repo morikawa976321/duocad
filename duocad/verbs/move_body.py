@@ -165,7 +165,6 @@ def move_body(
     dy: Optional[float] = None,
     dz: Optional[float] = None,
     copy: bool = False,
-    created_ids: Optional[Sequence[BodyId]] = None,
     *,
     mode: str = MODE_TRANSLATE,
     axis_edge: Any = None,
@@ -184,7 +183,6 @@ def move_body(
       90度など)を指すと、元と完全に重なる複製ができる。境界箱の一致では L字を180度回した場合まで
       誤って弾き、ブーリアンの共通部分は大きなモデルで重いので、不健全な判定を入れず通す。
     - モードが取らない引数を渡すと ValueError。
-    - `created_ids` は再生用。省略すると新しいIDを振る。
     - 失敗したときは文書にもログにも何も残さない。
     """
     require_move_mode(mode, verb="move_body")
@@ -216,7 +214,7 @@ def move_body(
 
     numbered: dict = {}
     if copy:
-        new_ids = copy_ids(len(bodies), created_ids, verb="move_body")
+        new_ids = copy_ids(len(bodies), None, verb="move_body")
         numbers = add_transformed_copies(
             doc, bodies, lambda shape: transform(shape, True), new_ids, allocate=True
         )

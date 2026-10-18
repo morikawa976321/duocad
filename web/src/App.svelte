@@ -2217,7 +2217,6 @@
     stateEpoch: () => stateEpoch,
     modeKind: () => mode.kind,
     clickToggles: () => commandClickToggles(),
-    wantedKinds: () => wantedKinds,
     sketches: () => sketches,
     sketchId: () => sketchId,
     hoverPoint: () => hoverPoint,
@@ -2226,7 +2225,6 @@
     edges: () => edges,
     wantedPick: () => wantedPick,
     selectedEntities: () => selectedEntities,
-    wantedVertices: () => wantedVertices,
   })
 </script>
 

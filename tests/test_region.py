@@ -111,7 +111,7 @@ def test_a_region_that_cannot_be_tessellated_does_not_empty_the_sketch(monkeypat
     from duocad import kernel, region
     from duocad.server import Session
 
-    session = Session(None, 0.2, models_dir=tempfile.mkdtemp())
+    session = Session(0.2, models_dir=tempfile.mkdtemp())
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 10.0)
     session.add_rectangle(sketch_id, [20.0, 0.0], 5.0, 5.0)

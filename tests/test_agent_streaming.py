@@ -202,7 +202,7 @@ def test_cancelling_in_the_middle_of_a_request_ends_the_run_as_cancelled():
     """往復の最中の中断が、接続を閉じたうえで `cancelled` として返ること(`provider_error` ではない)。"""
     provider = BlockingProvider()
     cancellation = Cancellation()
-    loop = AgentLoop(DocumentTools(Session(None, 0.2)), provider, cancellation=cancellation)
+    loop = AgentLoop(DocumentTools(Session(0.2)), provider, cancellation=cancellation)
     threading.Thread(target=lambda: (provider.entered.wait(5.0), cancellation.cancel())).start()
 
     run = loop.run("長い話をして")

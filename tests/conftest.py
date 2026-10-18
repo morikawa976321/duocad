@@ -62,7 +62,7 @@ def _local_settings_in_tmp(tmp_path, monkeypatch):
 @pytest.fixture()
 def session(tmp_path) -> Session:
     """STEPを読まない空の文書。`models_dir` を使い捨てにしないと、保存がリポジトリの `duocad/models/` を汚す。"""
-    return Session(None, 0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
+    return Session(0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
 
 
 @pytest.fixture()

@@ -30,7 +30,7 @@ class SizedProvider(RecordedProvider):
 
 
 def tools() -> DocumentTools:
-    return DocumentTools(Session(None, 0.2))
+    return DocumentTools(Session(0.2))
 
 
 def shape(request: dict) -> list[str]:

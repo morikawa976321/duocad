@@ -67,20 +67,20 @@ def face_frame(shape: "TopoDS_Shape", face_index: int) -> dict:
     return _frame_from_ax3(_ax3_from_face(require_planar_face(shape, face_index)))
 
 
-def sketch_plane_normal(plane: dict, face: Any = None) -> Tuple[float, float, float]:
+def sketch_plane_normal(plane: dict) -> Tuple[float, float, float]:
     """スケッチ平面の法線(単位)。押し出し方向の正の向き。"""
-    ax3 = _ax3_from_plane(plane, face=face)
+    ax3 = _ax3_from_plane(plane)
     direction = ax3.Direction()
     return (direction.X(), direction.Y(), direction.Z())
 
 
-def sketch_plane_frame(plane: dict, face: Any = None) -> dict:
+def sketch_plane_frame(plane: dict) -> dict:
     """スケッチ平面の3Dの枠 {"origin", "u", "v", "normal"}(各 [x,y,z])を素の数値で返す。
 
     (u, v) と3D座標を行き来する規則そのもの(`p = origin + u*u_axis + v*v_axis`)。アプリ層が
     独自に持つと基準平面の軸の取り方と `ZReverse` の扱いがずれるので、**枠はコアが配る**。
     """
-    return _frame_from_ax3(_ax3_from_plane(plane, face=face))
+    return _frame_from_ax3(_ax3_from_plane(plane))
 
 
 def offset_plane_frame(frame: dict, distance: float) -> dict:
@@ -108,9 +108,7 @@ def copy_face(face: Any) -> Any:
     return TopoDS.Face_s(BRepBuilderAPI_Copy(face, True, False).Shape())
 
 
-def sketch_regions(
-    plane: dict, entities: list, face: Any = None
-) -> List[dict]:
+def sketch_regions(plane: dict, entities: list) -> List[dict]:
     """スケッチの閉領域を返す。
 
     戻り値: [{"index": int, "area": float, "face": <TopoDS_Face>, "centroid": [x,y,z]}, ...]
@@ -120,7 +118,7 @@ def sketch_regions(
     if not entities:
         return []
 
-    ax3 = _ax3_from_plane(plane, face=face)
+    ax3 = _ax3_from_plane(plane)
     edges = []
     for entity in entities:
         edges.extend(_entity_edges(ax3, entity))
@@ -440,23 +438,27 @@ def _entities_of_offset_curve(uv: Callable[[float], Tuple[float, float]], first:
 
 
 def _circle_through(a: Tuple[float, float], b: Tuple[float, float], c: Tuple[float, float]) -> Any:
-    """3点を通る円 `(cx, cy, radius)`。共線なら None。"""
-    d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]))
+    """3点を通る円 `(cx, cy, radius)`。共線なら None。
+
+    最初の点を原点とする局所座標で解く。絶対座標の二乗を差し引く解き方だと、図形が原点から離れる(1000 mm など)と
+    0.01〜0.1 mm の短い弧で桁が落ち、当てはめを検査する残差の許容を超えて包み込みを断ってしまう。
+    """
+    bx, by = b[0] - a[0], b[1] - a[1]
+    px, py = c[0] - a[0], c[1] - a[1]
+    d = 2.0 * (bx * py - by * px)
     if d == 0.0:
         return None
-    sa, sb, sc = a[0] ** 2 + a[1] ** 2, b[0] ** 2 + b[1] ** 2, c[0] ** 2 + c[1] ** 2
-    cx = (sa * (b[1] - c[1]) + sb * (c[1] - a[1]) + sc * (a[1] - b[1])) / d
-    cy = (sa * (c[0] - b[0]) + sb * (a[0] - c[0]) + sc * (b[0] - a[0])) / d
-    return cx, cy, math.hypot(a[0] - cx, a[1] - cy)
+    sb, sc = bx * bx + by * by, px * px + py * py
+    ux = (py * sb - by * sc) / d
+    uy = (bx * sc - px * sb) / d
+    return a[0] + ux, a[1] + uy, math.hypot(ux, uy)
 
 
-def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
-    """PlaneRef から gp_Ax3 を作る。面参照で平面でなければ ValueError。
+def _ax3_from_plane(plane: dict) -> "gp_Ax3":
+    """PlaneRef から gp_Ax3 を作る。
 
-    **`kind` を問わず `plane["frame"]`(作成時に焼き付けた姿勢)が最優先**で、枠がある限り
-    `face` は見ない(`face_frame` のdocstring)。`sketch.resolve_plane` が必ず `frame` を焼き付けて
-    渡すので、新しい `kind` が増えても無改修で通る。枠を持たない面参照は `face` から解決する
-    (古い操作ログ・手組みの PlaneRef のための後方互換)。
+    **`kind` を問わず `plane["frame"]`(作成時に焼き付けた姿勢。`face_frame` のdocstring)が最優先**。
+    `sketch.resolve_plane` が必ず `frame` を焼き付けて渡すので、新しい `kind` が増えても無改修で通る。
     """
     kind = plane.get("kind")
     if kind == "base":
@@ -468,10 +470,6 @@ def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
     frame = plane.get("frame")
     if frame is not None:
         return _ax3_from_frame(frame)
-    if kind == "face":
-        if face is None:
-            raise ValueError("face plane requires a TopoDS_Face")
-        return _ax3_from_face(face)
     raise ValueError(f"invalid sketch plane: {plane!r}")
 
 

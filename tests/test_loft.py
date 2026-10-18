@@ -328,7 +328,7 @@ def test_the_public_entry_takes_sections_in_selection_order(tmp_path):
     """公開面(MCP・WS)は選択の領域を選んだ順に断面にし、その順でログに載せる(逆順に選べば同じ形を逆から作る)。"""
     volumes = []
     for reverse in (False, True):
-        session = Session(None, 0.2, models_dir=tmp_path / str(reverse))
+        session = Session(0.2, models_dir=tmp_path / str(reverse))
         refs = []
         for z, kind in ((0.0, "circle"), (30.0, "rect"), (60.0, "circle")):
             sketch_id = session.sketch_create_offset(z, "XY")["sketch_id"] if z else session.sketch_create("XY")["sketch_id"]

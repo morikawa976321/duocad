@@ -16,7 +16,7 @@ from .. import kernel_shell, selection
 from ..document import BodyId, Document
 from ..entry import entry
 from ..oplog import Operation, register_verb
-from ._common import editable_body, reapply_shape, remember, undo_shape
+from ._common import editable_body, reapply_shape, remember, replayed_body, undo_shape
 
 VERB_SHELL_BODY = "shell_body"
 
@@ -29,7 +29,7 @@ def shell_body(
 ) -> Operation:
     face_list = [int(index) for index in faces]
     value = float(thickness)
-    body = editable_body(doc, body_id, what="shell", require_visible=True)
+    body = editable_body(doc, body_id, what="shell")
     result = kernel_shell.shell_solid(body.shape, face_list, value)
 
     previous_shape = body.shape
@@ -46,7 +46,7 @@ def shell_body(
 def _do_shell_body(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された面と厚さで殻にし直す(ログには触らない)。"""
     args = operation.args
-    body = editable_body(document, args["body_id"], what="shell", require_visible=True)
+    body = replayed_body(document, args["body_id"], what="shell")
     result = kernel_shell.shell_solid(
         body.shape, [int(index) for index in args["faces"]], float(args["thickness"])
     )

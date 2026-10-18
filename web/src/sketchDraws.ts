@@ -25,7 +25,8 @@ export function buildSketchDraws(
           ? { kind: 'face' as const, bodyId: item.plane.body, faceIndex: item.plane.index }
           : { kind: 'base' as const },
       editing: item.sketch_id === editingId,
-      livePatterns: item.patterns.length > 0,
+      // 旧形式の反復の複製は展開した `drawn` にだけ入る(配信は反復そのものを載せない)
+      livePatterns: item.drawn.length > item.entities.length,
       entities: item.drawn,
       regions: item.regions,
       selectedRegions: selectedRegions.filter((ref) => ref.sketch === item.sketch_id).map((ref) => ref.index),

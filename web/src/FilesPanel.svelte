@@ -70,9 +70,12 @@
 
   let draftName = $state('')
 
+  /** `duocad/document_name.py` の `MAX_NAME_UNITS`(ファイル名の上限255から、書き込みが足す `.png.writing` の12を引いた値)の写し。 */
+  const MAX_NAME_UNITS = 243
+
   /**
-   * 打った名前(拡張子 `.json` は欄の外で付く)が使える形か。最終判定はサーバ(`Session._resolve_document_name` の `is_relative_to` 検査)で、
-   * ここは明らかに拒まれる形を早く言う入力補助。実在・既存名は見ない: `documents` は `list_documents` を最後に呼んだ時点の写しでしかなく、
+   * 打った名前(拡張子 `.json` は欄の外で付く)が使える形か。最終判定はサーバ(`Session._resolve_document_name` の `is_relative_to` 検査と
+   * `duocad/document_name.py` の文字・長さの検査)で、ここは明らかに拒まれる形を早く言う入力補助。実在・既存名は見ない: `documents` は `list_documents` を最後に呼んだ時点の写しでしかなく、
    * 正はサーバの `rename_document`(拒否は `onError` -> `fail()` のトースト1枚。新しい通知経路を作らない)。
    */
   function nameProblem(text: string): string | null {
@@ -81,8 +84,15 @@
     if (trimmed !== text) return '前後の空白は使えない'
     if (trimmed.includes('/') || trimmed.includes('\\')) return '区切り文字は使えない(ファイル名だけ)'
     if (trimmed.includes(':')) return "':' は使えない(ドライブ指定・代替ストリームの入口になる)"
+    const forbidden = [...trimmed].find((char) => '<>"|?*'.includes(char) || char.charCodeAt(0) < 0x20)
+    if (forbidden !== undefined) {
+      return forbidden.charCodeAt(0) < 0x20 ? '制御文字は使えない' : `'${forbidden}' は使えない(Windowsのファイル名に使えない文字)`
+    }
     if (trimmed === '.' || trimmed === '..') return '使えないファイル名'
     if (withoutSuffix(trimmed, '.json') === '') return 'ファイル名を打つ(例: model)'
+    if (withSuffix(trimmed, '.json').length > MAX_NAME_UNITS) {
+      return `名前が長すぎる(拡張子込みで${MAX_NAME_UNITS}文字まで。保存の一時ファイルの名前が上限を超える)`
+    }
     return null
   }
 
@@ -266,7 +276,6 @@
         class="files-row"
         class:active={file.name === currentName}
         class:row-active={file.name === currentName}
-        data-name={file.name}
         use:whenVisible={{ name: file.name, thumb: file.thumb }}
       >
         <button
@@ -326,7 +335,7 @@
         </span>
       </div>
       {#if deletingName === file.name}
-        <div class="new-row confirm-row" data-delete-of={file.name}>
+        <div class="new-row confirm-row">
           <!-- 幅240pxの行に収まる長さにする(長いと末尾が切れて「戻せない」が読めない)。 -->
           <span class="confirm-text" title={file.name === currentName ? '開いている文書。消すと閉じて戻せない' : undefined}>
             {file.name === currentName ? '閉じて消す' : '消すと戻せない'}
@@ -338,7 +347,7 @@
         </div>
       {/if}
       {#if copyingFrom === file.name}
-        <div class="new-row copy-row" data-copy-of={file.name}>
+        <div class="new-row copy-row">
           <SuffixField
             id="file-copy-name"
             suffix=".json"

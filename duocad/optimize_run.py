@@ -1554,13 +1554,18 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
 
 
 def _search_target_safety_factor(opts: OptimizeOptions) -> float:
-    """探索(と6条件の `safety`)に渡す目標安全率 = 実際の目標 × `search_target_factor`。係数の不正は入口で断る。"""
+    """探索(と6条件の `safety`)に渡す目標安全率 = 実際の目標 × `search_target_factor`。目標と係数の不正は入口で断る
+    (通すと、塊の導出と境界の確定が済んだ後の最初の `acceptance.inspect` が素の `ValueError` で落ちる)。"""
     factor = float(opts.search_target_factor)
     if not (math.isfinite(factor) and factor >= 1.0):
         raise OptimizeInputError(
             f"search_target_factor は 1.0 以上の有限の数でなければならない(渡された値: {opts.search_target_factor!r})")
-    target, searched = float(opts.target_safety_factor), float(opts.target_safety_factor) * factor
-    if math.isfinite(target) and not math.isfinite(searched):
+    target = float(opts.target_safety_factor)
+    if not (math.isfinite(target) and target > 0.0):
+        raise OptimizeInputError(
+            f"目標安全率は 0 より大きい有限の数でなければならない(渡された値: {opts.target_safety_factor!r})")
+    searched = target * factor
+    if not math.isfinite(searched):
         raise OptimizeInputError(f"目標安全率 {target:.4g} × search_target_factor {factor:.4g} が有限の数にならない")
     return searched
 

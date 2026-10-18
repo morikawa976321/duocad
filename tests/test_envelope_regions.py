@@ -231,7 +231,7 @@ from session_support import select
 from duocad.server import Session
 
 for radius, offset in ((0.0, 2.0), (3.0, 0.0), (0.0, -1.0), (1.0, -0.5)):
-    session = Session(None, 0.2, models_dir=tempfile.mkdtemp(), exports_dir=tempfile.mkdtemp())
+    session = Session(0.2, models_dir=tempfile.mkdtemp(), exports_dir=tempfile.mkdtemp())
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_ellipse(sketch_id, [12.0, -12.0], 7.0, 7.0, 45.0)
     select(session, [{"sketch": sketch_id, "index": 1}])
@@ -252,18 +252,19 @@ def test_enveloping_an_equal_axis_ellipse_does_not_kill_the_process() -> None:
     assert done.returncode == 0 and done.stdout.strip() == "survived", (done.returncode, done.stderr[-800:])
 
 
-def _circles_and_rectangles(session: Session) -> str:
-    """長方形2つと円2つが重なるスケッチ(領域2番と4番を包むと、円の頂点まわりに `GeomAbs_OffsetCurve` の辺が出る組がある)。"""
+def _circles_and_rectangles(session: Session, shift: float = 0.0) -> str:
+    """長方形2つと円2つが重なるスケッチ(領域2番と4番を包むと、円の頂点まわりに `GeomAbs_OffsetCurve` の辺が出る組がある)。
+    `shift` は全体を (shift, shift) だけ平行移動する(図形の位置によらず同じ結果になるべき)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [9.8689, -8.6363], 10.4716, 5.6985)
-    session.add_rectangle(sketch_id, [1.978, 5.1147], 12.6231, 7.2368)
-    session.add_circle(sketch_id, [3.7041, 1.6792], 8.6522)
-    session.add_circle(sketch_id, [-2.3877, 4.8011], 12.9946)
+    session.add_rectangle(sketch_id, [9.8689 + shift, -8.6363 + shift], 10.4716, 5.6985)
+    session.add_rectangle(sketch_id, [1.978 + shift, 5.1147 + shift], 12.6231, 7.2368)
+    session.add_circle(sketch_id, [3.7041 + shift, 1.6792 + shift], 8.6522)
+    session.add_circle(sketch_id, [-2.3877 + shift, 4.8011 + shift], 12.9946)
     return sketch_id
 
 
-def _enveloped_area(session: Session, radius: float, offset: float) -> float:
-    sketch_id = _circles_and_rectangles(session)
+def _enveloped_area(session: Session, radius: float, offset: float, shift: float = 0.0) -> float:
+    sketch_id = _circles_and_rectangles(session, shift)
     applied = _envelope(session, sketch_id, radius, offset, regions=[2, 4])
     kinds = {entity["kind"] for entity in _created_entities(session, sketch_id, applied["created"])}
     assert kinds <= {"line", "arc", "circle"}
@@ -280,3 +281,10 @@ def test_circles_and_rectangles_are_enveloped_where_offset_curve_edges_appear(se
     above = _enveloped_area(session, radius, offset + 5.0e-4)
     assert area == pytest.approx((below + above) / 2.0, abs=1.0e-3)
     assert below < area < above
+
+
+@pytest.mark.parametrize("shift", [1000.0, -1000.0])
+def test_the_offset_curve_fit_does_not_depend_on_where_the_shapes_are(session: Session, shift: float) -> None:
+    """同じ図形を原点から (±1000, ±1000) mm 離しても包める。落ちたら、3点を通る円を絶対座標の二乗の差で解いていて、
+    0.01〜0.1 mm の短い弧で桁が落ち、「標本点が直線にも円にも乗らない」で拒む(原点付近では通る)。"""
+    assert _enveloped_area(session, 0.5, -0.5, shift) == pytest.approx(_enveloped_area(session, 0.5, -0.5), abs=1.0e-3)

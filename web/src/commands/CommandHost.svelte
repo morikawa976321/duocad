@@ -953,7 +953,7 @@
   }
 
   function placeholderFor(spec: NumberArgSpec): string {
-    const resting = spec.placeholder ?? spec.unit
+    const resting = spec.unit
     if (spec.fromPoints !== true || (numberText[spec.name] ?? '') !== '') return resting
     const named = ghostBuilt?.args[spec.name]
     const live =
