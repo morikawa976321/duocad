@@ -13,7 +13,10 @@ OPTIMIZATION_TOOLS = {"set_preserve_bodies", "set_exclude_bodies", "set_fixtures
                       # 作業空間の最適化モードへの出入り(issue #153)。モードが無い版では入れない
                       "enter_optimize", "leave_optimize"}
 OPTIMIZATION_SOCKET_ONLY = {"optimize_conditions", "optimize_resolution", "run_optimization", "cancel_optimization",
-                            "finish_optimization", "optimize_steps", "optimize_step_voxels"}
+                            "finish_optimization", "optimize_steps", "optimize_step_voxels",
+                            # FEM の装置(CPU/GPU)を書き換える口。clone の設定ファイルを書き、次の更新で GPU の部品を入れさせる。
+                            # 読むだけの `fem_get_status` は画面が接続のたびに呼ぶので隠さない。
+                            "fem_set_device"}
 
 
 def test_only_the_shape_optimization_commands_are_hidden_in_stable():

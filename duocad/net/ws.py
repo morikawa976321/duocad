@@ -158,11 +158,18 @@ def _args_object(message: dict, *, required: bool) -> dict:
     return args
 
 
+def _visible_flag(value: Any) -> bool:
+    """`set_visible` / `set_sketch_visible` の `visible`。`bool()` で丸めると `"false"` が表示になる。"""
+    if not isinstance(value, bool):
+        raise ValueError(f"visible は true か false で送る(受け取った値: {value!r})")
+    return value
+
+
 async def _send(connection: Any, payload: dict) -> None:
     if payload.get("type") in wire.BINARY_TYPES:
         await connection.send(wire.encode(payload))
     else:
-        await connection.send(json.dumps(payload, ensure_ascii=False))
+        await connection.send(wire.dumps(payload))
 
 
 #: 接続ごとの受信待ち行列(`_Inbox`)で、まだ捌いていない古いものを新しいもので置き換える要求。どちらも最新だけが意味を持つ:
@@ -425,10 +432,22 @@ class Server:
     async def _dispatch(self, connection: Any, raw: Any) -> None:
         try:
             message = json.loads(raw)
-            command = message.get("cmd")
-        except (TypeError, ValueError) as error:
-            await _send(connection, {"type": "error", "where": "parse", "message": str(error)})
+        except (TypeError, ValueError, RecursionError) as error:  # 深すぎる入れ子は RecursionError
+            await _send(connection, {"type": "error", "where": "parse", "message": f"{type(error).__name__}: {error}"})
             return
+        # 配列・数値・null など object でない JSON は、`cmd` を読む前に断る(読むと AttributeError が受信ループを抜けて接続が切れる)。
+        # `ack_id` は集合に入れるので、unhashable(配列・辞書)や bool は同じく断る。
+        problem = None
+        if not isinstance(message, dict):
+            problem = "メッセージは JSON のオブジェクトで送る"
+        else:
+            ack = message.get("ack_id")
+            if ack is not None and (isinstance(ack, bool) or not isinstance(ack, (int, str))):
+                problem = "ack_id は整数か文字列で送る"
+        if problem is not None:
+            await _send(connection, {"type": "error", "where": "parse", "message": problem})
+            return
+        command = message.get("cmd")
         # 応答をこの要求の処理の外で送るもの(ワーカーで計算するプレビュー)は、`done` もその応答の後に送る。
         ack_later = False
         if message.get("ack_id") is not None:
@@ -450,7 +469,7 @@ class Server:
                 applied = self._apply(
                     self.session.set_visible,
                     message["body_id"],
-                    bool(message["visible"]),
+                    _visible_flag(message["visible"]),
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
@@ -458,7 +477,7 @@ class Server:
                 applied = self._apply(
                     self.session.set_sketch_visible,
                     message["sketch_id"],
-                    bool(message["visible"]),
+                    _visible_flag(message["visible"]),
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
@@ -650,7 +669,10 @@ class Server:
             elif command == "ai_set_thinking":
                 await self._broadcast({"type": "ai_status", **self._ai_set_thinking(message.get("thinking"))})
             elif command == "ai_set_api_key":
-                await self._broadcast({"type": "ai_status", **self._ai_set_api_key(message.get("key"))})
+                # `key` を付け忘れたメッセージを「消す」と読まない: 消すのは明示の null だけ(special の口は宣言の必須を検査されない)。
+                if "key" not in message:
+                    raise ValueError("ai_set_api_key には key が要る(消すときは key: null を明示する)")
+                await self._broadcast({"type": "ai_status", **self._ai_set_api_key(message["key"])})
             elif command == "ai_prepare":
                 self._ai_prepare()
             elif command == "ai_send":
@@ -685,7 +707,7 @@ class Server:
                 await _send(connection, {
                     "type": "optimize_steps",
                     "steps": [] if steps is None else steps.meta(),
-                    "finishable": steps is not None and steps.finisher is not None,
+                    "finishable": self.session.steps_finishable(),
                 })
             elif command == "optimize_step_voxels":
                 await self._optimize_step_voxels(connection, message)

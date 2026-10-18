@@ -2219,6 +2219,7 @@ COMMANDS: tuple[Command, ...] = (
         ws="special",
         mcp=False,
         changes_document=False,
+        feature="shape_optimization",  # clone の設定ファイルを書き、次の更新で GPU の部品(約2GB)を入れさせる。`fem_get_status` は読むだけで、画面が接続のたびに呼ぶので隠さない
         note="結果の `fem_status` は全接続へ配る(設定はサーバに1つ)",
     ),
     # 作業空間(workspace)。**起動中のコマンドとモードを共有する口**(issue #153。`duocad/workspace.py`)。選択と同じく

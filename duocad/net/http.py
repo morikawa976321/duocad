@@ -6,12 +6,15 @@ WebSocket側は `duocad/net/ws.py`。
 from __future__ import annotations
 
 import json
+import os
 import threading
 import urllib.parse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
+
+from . import wire
 
 #: MCPのHTTPトランスポートの口。ブラウザが開くページと同じポートに生やす。
 MCP_HTTP_PATH = "/mcp"
@@ -75,7 +78,7 @@ class WebHandler(SimpleHTTPRequestHandler):
 
         try:
             message = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             # JSON-RPCのパースエラー封筒(-32700)は返さない: `mcp_server.py` の定数を写すと同じ番号が
             # 2箇所になり、逆向きのimportは循環する。素の400で足りる。
             self.send_error(400)
@@ -125,7 +128,7 @@ class WebHandler(SimpleHTTPRequestHandler):
         self._send_json(status, payload)
 
     def _send_json(self, status: int, payload: Any) -> None:
-        body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body = b"" if payload is None else wire.dumps(payload).encode("utf-8")
         self.send_response(status)
         if body:
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -185,6 +188,15 @@ def mcp_http_hosts(port: int) -> frozenset:
     return frozenset(f"{host}:{port}" for host in ("127.0.0.1", "localhost"))
 
 
+class _ExclusiveHTTPServer(ThreadingHTTPServer):
+    """使用中のポートへ2つ目を bind させない。標準の `HTTPServer` は `SO_REUSEADDR` を立てるが、Windows では
+    それが「リッスン中のポートへの二重 bind」を許す(Unix の TIME_WAIT の再利用とは意味が違う)。2026-10-18 実測:
+    後から立てた側は起動成功と表示するのに HTTP を1つも受けず、`WebSocket` の二重起動の検出(bind 失敗)が `HTTP` には効かなかった。
+    """
+
+    allow_reuse_address = os.name != "nt"
+
+
 def start_http_server(
     dist_dir: Path,
     port: int,
@@ -212,7 +224,7 @@ def start_http_server(
     WebHandler.mcp_server = mcp
     WebHandler.mcp_hosts = mcp_http_hosts(port)
     handler = partial(WebHandler, directory=str(dist_dir))
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    httpd = _ExclusiveHTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=httpd.serve_forever, name="duocad-http", daemon=True)
     thread.start()
     return httpd

@@ -189,3 +189,28 @@ def test_static_serving_still_works(http_mcp):
     status, raw = http.request("GET", "/duocad-config.json")
     assert status == 200
     assert json.loads(raw)["ws_url"].startswith("ws://127.0.0.1:")
+
+
+def test_a_deeply_nested_body_is_a_400_and_the_server_keeps_answering(http_mcp):
+    http, _, _ = http_mcp
+    """深すぎる入れ子の本文は RecursionError になる。ハンドラスレッドが例外で終わって応答なしで接続が切れない。"""
+    deep = ("[" * 200_000 + "]" * 200_000).encode("utf-8")
+    status, _ = http.request("POST", "/mcp", body=deep, headers={"Content-Type": "application/json"})
+    assert status == 400
+    status, answer = http.rpc({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    assert status == 200 and answer["result"] == {}
+
+
+def test_a_second_http_server_cannot_bind_a_port_that_is_in_use(tmp_path):
+    """Windows の `SO_REUSEADDR` は二重 bind を許す。後から立てた側が起動成功と表示して何も受けないのを防ぐ。"""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    port = _free_port()
+    first = start_http_server(dist, port, f"ws://127.0.0.1:{port}")
+    try:
+        with pytest.raises(OSError):
+            start_http_server(dist, port, f"ws://127.0.0.1:{port}")
+    finally:
+        first.shutdown()
+        first.server_close()

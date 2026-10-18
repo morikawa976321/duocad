@@ -880,6 +880,10 @@ def key_problem(key: str) -> Optional[str]:
         return "APIキーが空"
     if any(ch.isspace() or not ch.isprintable() for ch in key):
         return "APIキーに空白か改行が混じっている(貼り付けを確かめる)"
+    if not key.isascii():
+        # http.client はヘッダ値を latin-1 で符号化する。全角などが混じると保存・採用された後の全リクエストが
+        # 1バイトも送られないまま UnicodeEncodeError になり、画面には「キーが原因」と読めない文が出る。
+        return "APIキーに ASCII 以外の文字が混じっている(貼り付けを確かめる)"
     return None
 
 

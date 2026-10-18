@@ -69,6 +69,7 @@ from . import (
     selection,
     sketch,
 )
+from .net import wire
 from .channel import CHANNELS, StableUpdater, describe, hidden_features
 from .agent.loop import VersionChanged
 from .entry import entry_for
@@ -790,8 +791,14 @@ class McpServer:
             self._handle_notification(str(method))
             return None
 
+        params = message.get("params")
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            # MCP の params は object。object でない値を各メソッドに渡すと AttributeError が -32603 で返る。
+            return _error(request_id, INVALID_PARAMS, f"params must be a JSON object, got {type(params).__name__}")
         try:
-            result = self._handle_request(str(method), message.get("params") or {})
+            result = self._handle_request(str(method), params)
         except _RpcError as error:
             return _error(request_id, error.code, error.message)
         except Exception as error:  # プロトコル層で死なない(上記docstring)
@@ -871,13 +878,13 @@ class McpServer:
             envelope = {"error": self.tools.error_envelope(name, error)}
             return {
                 "content": [
-                    {"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}
+                    {"type": "text", "text": wire.dumps(envelope)}
                 ],
                 "isError": True,
             }
         return {
             "content": [
-                {"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)}
+                {"type": "text", "text": wire.dumps(payload, indent=2)}
             ],
             "isError": False,
         }
@@ -940,12 +947,12 @@ async def serve_stdio(server: McpServer, reader: Any = None, writer: Any = None)
             continue
         try:
             message = json.loads(text)
-        except ValueError as error:
-            response: Optional[dict] = _error(None, PARSE_ERROR, str(error))
+        except (ValueError, RecursionError) as error:  # 深すぎる入れ子の1行でサーバ全体(画面を含む)が落ちない
+            response: Optional[dict] = _error(None, PARSE_ERROR, f"{type(error).__name__}: {error}")
         else:
             response = server.handle(message)
         if response is not None:
-            writer.write(json.dumps(response, ensure_ascii=False).encode("utf-8") + b"\n")
+            writer.write(wire.dumps(response).encode("utf-8") + b"\n")
             writer.flush()
 
 
@@ -1019,6 +1026,11 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
     except (FileNotFoundError, OSError) as error:
         # ブラウザへ配れなくてもstdioのMCPは動く。**黙って落とさず**理由を残して続ける。
         # ただし `/mcp` も同じサーバに載っているので、**この経路ではHTTPのMCPも立たない**。
+        if args.no_stdio:
+            # stdio を使わない起動(安定版の launcher)では、静的配信と `/mcp` が立たない時点で誰とも話せない。
+            # 居座ると画面も MCP も繋がらないまま、再起動も WebSocket の bind で落ちる。
+            _log(f"error: 静的配信を立てられず --no-stdio なので、誰とも話せない。終了する: {error}")
+            raise SystemExit(1)
         _log(f"warning: 静的配信を立てられなかった(stdioのMCPだけで続行): {error}")
         served = False
 
