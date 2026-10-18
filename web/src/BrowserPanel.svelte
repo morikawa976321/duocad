@@ -158,7 +158,6 @@
           <input
             id="origin-visible-toggle"
             type="checkbox"
-            class="visible-toggle"
             checked={originVisible}
             onchange={(event) => onToggleOrigin((event.target as HTMLInputElement).checked)}
             title={originVisible ? '原点・軸・平面を隠す' : '原点・軸・平面を表示'}
@@ -172,7 +171,6 @@
           <input
             id="section-toggle"
             type="checkbox"
-            class="visible-toggle"
             checked={section.on}
             onchange={(event) => onSectionToggle((event.target as HTMLInputElement).checked)}
             title={section.on ? '断面をやめる' : '断面で切る'}
@@ -209,7 +207,6 @@
               <input
                 id="section-invert"
                 type="checkbox"
-                class="visible-toggle"
                 checked={section.inverted}
                 onchange={(event) => onSectionInvert((event.target as HTMLInputElement).checked)}
               />
@@ -247,7 +244,6 @@
                 <label class="parts-name">
                   <input
                     type="checkbox"
-                    class="visible-toggle"
                     checked={body.visible}
                     onchange={(event) =>
                       onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
@@ -256,12 +252,12 @@
                 </label>
                 <span class="dim parts-count">{body.face_count}面</span>
                 <button
-                  class="row-action rename-button"
+                  class="row-action"
                   onclick={() => startRename(body.body_id, body.name)}
                   title="名前を変える">✎</button
                 >
                 <button
-                  class="row-action delete-button"
+                  class="row-action"
                   onclick={() => onDeleteBody(body.body_id)}
                   title="このボディを消す(Ctrl+Zで戻る)">✕</button
                 >
@@ -295,7 +291,6 @@
               <!-- 編集中のスケッチは隠せない(トグルを無効にする): 描いている最中に自分の図形が消えると、次のクリックが何を指すか分からなくなる。 -->
               <input
                 type="checkbox"
-                class="visible-toggle"
                 checked={sketch.visible}
                 disabled={sketch.sketch_id === activeSketchId}
                 onchange={(event) =>
@@ -332,12 +327,12 @@
                   <span class="dim sketch-count">図形{sketch.entities.length}</span>
                 {/if}
                 <button
-                  class="row-action rename-button"
+                  class="row-action"
                   onclick={() => startRename(sketch.sketch_id, sketch.name ?? sketchLabel(sketch))}
                   title="名前を変える">✎</button
                 >
                 <button
-                  class="row-action delete-button"
+                  class="row-action"
                   onclick={() => onDeleteSketch(sketch.sketch_id)}
                   title="このスケッチを図形ごと消す(押し出したボディは残る。Ctrl+Zで戻る)">✕</button
                 >

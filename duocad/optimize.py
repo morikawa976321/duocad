@@ -62,9 +62,8 @@ class RoleConflict(ValueError):
     「元の役割のverbで外す → 新しい役割のverbで付ける」の2手で、**自動的に奪い取らない**(意図した仕様)。
     """
 
-    def __init__(self, message: str, role: str, conflicts: Sequence[dict]) -> None:
+    def __init__(self, message: str, conflicts: Sequence[dict]) -> None:
         super().__init__(message)
-        self.role = role
         self.conflicts = [dict(item) for item in conflicts]
 
 

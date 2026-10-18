@@ -1,6 +1,6 @@
 /**
  * 当たり判定の距離計算(画面上のCSSピクセル空間)。three.js を持ち込まない —— Node からこのファイルだけを
- * 読んで検査できる(`tests/eval_screen_pick.mjs`)。world → screen の射影は `viewport.ts` の `projectForPick`。
+ * 読んで検査できる(`tests/eval_screen_pick.mjs`)。world → screen の射影は `viewport.ts` の `projectRaw`。
  *
  * 半径は inclusive(距離ちょうど `radiusPx` は hit)。同着は先に来た候補が勝つ
  * (呼び出し側が優先順位の順で渡すため)。

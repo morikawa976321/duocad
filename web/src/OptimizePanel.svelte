@@ -158,7 +158,7 @@
   {#if conditions === null}
     <p id="optimize-conditions" class="hint dim">条件を確認している…</p>
   {:else if conditions.ready}
-    <p id="optimize-conditions" class="hint ok dim">
+    <p id="optimize-conditions" class="hint dim">
       条件はそろっている(保持 {conditions.preserve_bodies.length} ・除外
       {conditions.exclude_bodies.length} ・拘束 {conditions.fixtures.length} ・荷重
       {conditions.loads.length})
@@ -347,7 +347,7 @@
 <style>
   /* ビューポート左のブラウザ(`BrowserPanel.svelte`)と同じ列の下端。新しい帯を画面に取らない:
      `viewport.project()` は `clickable(x, y)` で浮いているパネルに覆われていないかを見ており、
-     ブラウザの右に320pxの帯を足した版では左のボディの面が1つも指せなくなった(`smoke-optimize-mode.mjs` が検出)。
+     ブラウザの右に320pxの帯を足した版では左のボディの面が1つも指せなくなった。
      `position: absolute` なので `.viewport` の寸法に触れない(styles.css の不変条件)。重なり順はブラウザ(5)より上、設定(10)より下。 */
   #optimize-panel {
     position: absolute;

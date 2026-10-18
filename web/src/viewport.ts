@@ -44,7 +44,7 @@ import { createThumbnailer } from './thumbnail'
 import { buildBodyMesh } from './bodyMesh'
 import type { BasePlaneName, EdgeGeometry } from './session'
 import {
-  type BodyGeometryUpdate, type BodyGhostRotation, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
+  type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
   type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickMode, type SectionState,
   type SketchDraw, type SketchEntityHit, type VertexMarker, type VertexRef, type Viewport,
 } from './viewportTypes'
@@ -58,7 +58,7 @@ import {
 
 export { FOV_DEFAULT, FOV_ORTHO, isSelectableFov }
 export type {
-  BodyGhostRotation, BoxSelectEvent, GeometryPayload, PickEvent, SectionState, SketchDraw, SketchEntityHit,
+  BoxSelectEvent, GeometryPayload, PickEvent, SectionState, SketchEntityHit,
   VertexMarker, Viewport,
 }
 
@@ -418,7 +418,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const aspect = width / height
     perspective.aspect = aspect
     perspective.updateProjectionMatrix()
-    // 正投影は縦(`top`/`bottom`)を正として横を作り直す(`smoke-features.mjs` がv方向を基準にする)。
+    // 正投影は縦(`top`/`bottom`)を正として横を作り直す。
     // `zoom` は OrbitControls のドリーの持ち物なので触らない。
     orthographic.right = orthographic.top * aspect
     orthographic.left = -orthographic.top * aspect
@@ -2051,7 +2051,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * `snapDirection`((u,v)空間の単位ベクトル)を画面上の角度(度)へ変換する。カーソル強調のティック
-   * (`sketchCursorOverlay.ts`)専用。方向だけ要るので `projectForPick` を使う(`toScreen` はDOM被覆を見るため、
+   * (`sketchCursorOverlay.ts`)専用。方向だけ要るので `projectRaw` を使う(`toScreen` はDOM被覆を見るため、
    * 補助点が覆われた画素に落ちると角度だけ消える)。
    */
   function tickAngleForDirection(
@@ -2077,7 +2077,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 面の `project` と同じ流儀: 三角形の内側の点を狙い、実際にその領域へ当たる点を返す。
     // 1つの三角形につき4点試す(重心 + 各頂点へ寄せた3点): 重心1点だと、スケッチモードで点・辺が手前で
     // 拾われる画素に当たったとき候補が尽きる(ベジエの制御点は領域の内側にも立ち、細長い三角形の
-    // 重心がその近くに来る。`smoke-svg` の丘の領域で実際に踏んだ)。
+    // 重心がその近くに来る)。
     const weights: ReadonlyArray<readonly [number, number, number]> = [
       [1 / 3, 1 / 3, 1 / 3],
       [0.5, 0.25, 0.25],

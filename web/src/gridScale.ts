@@ -43,7 +43,7 @@ export function mmPerPixel(cam: CameraProjection, viewportHeightPx: number): num
  * 線間隔[px]から不透明度。3段に共通する唯一の規則で、段ごとの特例は無い。
  * smoothstep で値も傾きも連続・常に [0, 1] —— 閾値を跨ぐ点滅を原理的に無くす(ヒステリシス不要)。
  *
- * **フラグメントシェーダー側も同じ式を持つ**(`viewport.ts` の `fadeFromSpacingPx` のGLSL版)。
+ * **フラグメントシェーダー側も同じ式を持つ**(`planeGrid.ts` の `fadeFromSpacingPx` のGLSL版)。
  * あちらは1画素ごとの局所的な線間隔に、こちらは注視点での代表値に適用する。
  * 定数は両方ともここから注入する。
  */

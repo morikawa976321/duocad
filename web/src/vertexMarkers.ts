@@ -43,7 +43,6 @@ export interface VertexMarkers {
   /** 今出しているマーカー(ウィンドウ選択が中身を見る)。 */
   meshes(): THREE.Points[]
   show(markers: VertexMarker[]): void
-  clear(): void
   /** その画素で取れる頂点(無ければ null)。 */
   at(offsetX: number, offsetY: number): VertexRef | null
   /** その頂点が今いる画素(取れない画素なら null)。 */
@@ -141,7 +140,6 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
       return vertexMeshes
     },
     show: showVertices,
-    clear: clearVertices,
     at: vertexAt,
     project: projectVertex,
     dispose() {

@@ -45,7 +45,7 @@
 <div class="start-screen" id="start-screen">
   {#if !waiting}
     <div class="start-column">
-      <span class="start-lead dim">文書を開いていない</span>
+      <span class="dim">文書を開いていない</span>
 
       {#if recent.length > 0}
         <div class="start-cards" id="start-recent">

@@ -273,7 +273,7 @@
           onclick={() => onOpen(file.name)}
           title={`${file.name} を開く`}
         >
-          <span class="files-thumb" class:empty-thumb={url === null}>
+          <span class="files-thumb">
             {#if url !== null}
               <img src={url} alt="" draggable="false" />
             {:else}
@@ -296,7 +296,7 @@
         </button>
         <span class="files-actions">
           <button
-            class="files-copy row-action"
+            class="row-action"
             onclick={() => startCopy(file.name)}
             title="別名で複製"
             aria-label="{file.name} を別名で複製"
@@ -307,7 +307,7 @@
             </svg>
           </button>
           <button
-            class="files-delete row-action"
+            class="row-action"
             onclick={() => startDelete(file.name)}
             title="ディスクから削除"
             aria-label="{file.name} をディスクから削除"

@@ -537,10 +537,7 @@ def post_json(url: str, payload: Optional[dict], headers: dict, timeout: float) 
 # アダプタ
 # --------------------------------------------------------------------------------------
 class Provider:
-    """プロバイダ1つ。**ループが使うのは `name` / `model` / `complete` / `abort` だけ**。"""
-
-    #: `openai_compat` / `anthropic`
-    name = "provider"
+    """プロバイダ1つ。**ループが使うのは `model` / `complete` / `abort` だけ**。"""
 
     def abort(self) -> None:
         """走っている往復を捨てる(中断フラグが立ったとき**別スレッドから**呼ばれる)。既定は何もしない。"""
@@ -581,8 +578,6 @@ class OpenAICompatProvider(Provider):
     **`build_provider` は渡さない**(送り先を画面から変えられるので、鍵を乗せると外へ出る)。値は
     `repr()` にも例外にも出さない(`_redact()`)。
     """
-
-    name = "openai_compat"
 
     def __init__(
         self,
@@ -958,8 +953,6 @@ class AnthropicProvider(Provider):
 
     一時的な失敗(429・529・5xx)は、合計時間の残りに収まる範囲で `MAX_RETRIES` 回までやり直す。
     """
-
-    name = "anthropic"
 
     def __init__(
         self,

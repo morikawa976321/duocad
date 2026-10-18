@@ -77,7 +77,7 @@ import re
 import threading
 from typing import Any, Optional  # Any: listeners / 接続
 
-from .. import catalog, local_settings, optimize_run, selection
+from .. import catalog, local_settings, optimize_run
 from ..agent import AgentLoop, Cancellation, Limits, ProviderError
 from ..agent.loop import FIRST_LOOK
 from ..agent.providers import (

@@ -171,7 +171,7 @@ export function installTestHooks(ctx: TestHookContext): void {
       sketch: ctx.sketches().find((item) => item.sketch_id === ctx.sketchId()) ?? null,
       hoverPoint: ctx.hoverPoint(),
       // 第2引数でスケッチを指定すると通常モードでも射影できる。コマンドを移るとツールバーの高さが変わり
-      // 画素は持ち越せないので、同じ世界座標を指し直すのに使う(`smoke-regions`)。
+      // 画素は持ち越せないので、同じ世界座標を指し直すのに使う。
       projectSketchPoint: (u: number, v: number, targetSketchId?: string) => {
         const target = targetSketchId ?? ctx.sketchId()
         return target === null ? null : (viewport()?.projectSketchPoint(target, u, v) ?? null)

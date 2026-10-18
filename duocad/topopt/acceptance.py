@@ -267,15 +267,6 @@ class RegionOverlaps:
     def __len__(self):
         return len(self._entries)
 
-    @property
-    def nbytes(self):
-        """保持している値の大きさ(byte)。"""
-        return sum(entry.values.nbytes for entry in self._entries.values() if entry is not None)
-
-    def clear(self):
-        self._entries.clear()
-        self.fallbacks.clear()
-
     def overlap_volume(self, material, grid, shape, *, cache=None):
         """`intersection_volume` と同じ `(ソリッドの体積, 材料との共通体積)`。"""
         raw = voxelize.unwrap(shape)

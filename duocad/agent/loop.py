@@ -30,7 +30,7 @@ import threading
 import unicodedata
 from time import monotonic
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, Sequence
 
 from .. import catalog
 from .providers import (
@@ -95,7 +95,6 @@ FIRST_LOOK_MAX_CHARS = 4000
 ProgressCallback = Callable[[str, dict, Any, bool], None]
 
 
-@runtime_checkable
 class ToolSurface(Protocol):
     """ループが道具に要求する面(`DocumentTools` がこれを満たす)。公開APIの5つだけに依存する(内部には触らない)。
 

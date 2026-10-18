@@ -1,7 +1,6 @@
 """CAD の**面**と、格子の**節点**の対応表(面アンカー)。
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_anchor.py     # 受入検査
-    .\\.venv\\Scripts\\python.exe -m duocad.topopt.anchor           # 合成ブラケットの面アンカー表を作って要約する
 
 これは `duocad.topopt` の **stage2**。stage1(`voxelize.py`)が作った格子の上に、
 「ボディXの面#42」→「これらの格子節点」の翻訳を載せる(固定面・荷重面の指定に必要)。
@@ -260,13 +259,6 @@ class FaceAnchor:
             raise ValueError(f"face {self.face_index}: 担当面積が 0 で法線を出せない")
         vec = (self.normals * self.areas[:, None]).sum(axis=0) / self.areas.sum()
         return np.asarray(vec)
-
-    def weights(self) -> np.ndarray:
-        """担当面積を合計1に正規化した重み。**荷重はこれで配る。**"""
-        total = self.areas.sum()
-        if not total > 0.0:
-            raise ValueError(f"face {self.face_index}: 担当面積が 0 で荷重を配れない")
-        return self.areas / total
 
 
 @dataclass

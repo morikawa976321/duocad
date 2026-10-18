@@ -9,7 +9,6 @@ import { OPTIMIZE_FIXTURE_MARK_COLOR, OPTIMIZE_LOAD_COLOR } from './viewportCons
 import type { FaceRef, OptimizeVisualState } from './viewportTypes'
 
 export interface OptimizeAnnotationsDeps {
-  /** いま画面にある面メッシュ。**`update()` のたびに作り直される**ので毎回読み直す。 */
   /** その面の頂点位置と頂点法線(xyz の並び。見つからなければ null)。 */
   faceVertices(bodyId: string, faceIndex: number): { positions: ArrayLike<number>; normals: ArrayLike<number> | null } | null
   /** 内容の外接直方体の対角[mm]。装飾の大きさをこれへ追随させる。 */

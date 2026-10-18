@@ -29,12 +29,8 @@ export interface BodyMesh {
   mesh: THREE.Mesh
   /** 面の境界線(メッシュボディは持たない)。 */
   lines: THREE.LineSegments | null
-  /** メッシュボディ(三角形がそのまま形。平らな陰影で、境界線を出さない)。 */
-  flat: boolean
   faces: FaceSpan[]
   faceOf(faceIndex: number): FaceSpan | undefined
-  /** 三角形の通し番号(レイキャストの `faceIndex`)から面の添字へ。 */
-  faceIndexOfTriangle(triangle: number): number | undefined
   /** その面のいまの色(`setFaceColor` で塗ったもの)。 */
   faceColor(faceIndex: number): number | undefined
   /** その面を塗る。同じ色なら何もしない。塗ったら true(呼び手は描き直しを頼む)。 */
@@ -193,10 +189,8 @@ export function buildBodyMesh(
     bodyId,
     mesh,
     lines,
-    flat,
     faces: spans,
     faceOf: (faceIndex) => byIndex.get(faceIndex),
-    faceIndexOfTriangle: (triangle) => (triangle >= 0 && triangle < triangleFaces.length ? triangleFaces[triangle] : undefined),
     faceColor: (faceIndex) => painted.get(faceIndex),
     setFaceColor,
     facePositions(faceIndex) {

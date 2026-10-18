@@ -244,7 +244,7 @@
   let wantedKinds = $state<SelectableKind[]>([])
   /**
    * 起動中のコマンド(無起動・スケッチの既定「選ぶ」は null)。`CommandHost` の
-   * `onStart` / `onEnd` と `setMode` だけが書く。描画に使わない。
+   * `onStart` / `onEnd` と `onModeChanged` だけが書く。描画に使わない。
    *
    * 起動中は素のクリックが選択のトグルになり(`toggleOnlyMode`)、終わると選択を全解除する
    * (`onCommandEnd`)。保持/除外ソリッド・拘束面の集合 verb は既存の割り当てが選択状態で現れ、
@@ -731,7 +731,7 @@
     }
   }
 
-  /** 情報を1行、ステータスバーへ出す。エラーは `fail()` を使う(Toast.svelte のdocstring)。 */
+  /** 情報を1行、`messages` に積む(画面には出さず、`window.__duocad.messages` で読めるだけ)。エラーは `fail()` を使う(Toast.svelte のdocstring)。 */
   function note(message: string): void {
     if (!message) return
     messages = [message, ...messages].slice(0, 4)
@@ -1481,7 +1481,7 @@
    * コマンドが終わった(`CommandHost.onEnd`: Esc・中断ボタン・確定成功)。選択を全解除する。
    * 形を変えるverbの確定ではコアが先に空にしているので効くのは中断と、形を変えない確定(集合代入・測定の失敗等)。
    * 測定の成功だけは残す(読み札と3Dの線は測った選択が変わるまで残る。`measurement.svelte.ts`)。
-   * `activeVerb === null` は、`setMode` が先に起動を畳んだ後に遅れて届いた通知で、選択に触らない。
+   * `activeVerb === null` は、`onModeChanged` が先に起動を畳んだ後に遅れて届いた通知で、選択に触らない。
    */
   function onCommandEnd(verb: string): void {
     if (activeVerb === null) return
@@ -1666,15 +1666,7 @@
   }
 
   /**
-   * モード遷移はここ1本だけ。掃除の規則は「行き先が使えない参照を落とす」の1つ(経路が増えても書き忘れが無い):
-   *
-   * - スケッチの図形: 行き先のスケッチのものでなければ落とす。混ざったまま持ち越すと、Bで
-   *   `move_sketch_entities` を実行したときにAの図形が動く(サーバは `entity_id` を素直に解決して黙って通る)。
-   * - ボディ(`kind:'body'`): 行き先が最適化モードでなければ落とす(保持/除外の割り当てにしか使えない)。
-   * - 面・辺・頂点・領域はどのモードでも残す(スケッチを抜けてそのまま押し出す等が実際の経路)。
-   */
-  /**
-   * モードの入れ替わり(配信に従う)の後始末。以前は `setMode` が同期に行っていた。
+   * モードの入れ替わり(配信に従う)の後始末。
    * 行き先で使えない選択はサーバが外す(`Session._apply_mode`)。
    */
   let seenMode: Mode = { kind: 'idle' }
@@ -2321,7 +2313,7 @@
           <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
         </div>
       {/if}
-      <!-- スケッチモードの札とモード操作。idは `SketchPanel.svelte` にあった頃と同じ(実機検査が叩く口)。 -->
+      <!-- スケッチモードの札とモード操作。idは実機検査が叩く口。 -->
       {#if mode.kind === 'sketch' && activeSketch}
         <div class="mode-row">
           <span class="label">スケッチ</span>

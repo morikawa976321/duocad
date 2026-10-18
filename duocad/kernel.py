@@ -296,9 +296,6 @@ class BoundingBoxCache:
     def __len__(self) -> int:
         return len(self._extents)
 
-    def clear(self) -> None:
-        self._extents.clear()
-
     def extents(self, shape: "TopoDS_Shape") -> Tuple[float, float, float, float, float, float]:
         """`(x_min, y_min, z_min, x_max, y_max, z_max)`。無ければ測って覚える。"""
         key = _ShapeKey(shape)

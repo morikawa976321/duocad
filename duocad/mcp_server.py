@@ -61,7 +61,6 @@ from websockets.asyncio.server import serve
 
 from . import (
     catalog,
-    io_step,
     kernel,
     meshbody,
     predicates,

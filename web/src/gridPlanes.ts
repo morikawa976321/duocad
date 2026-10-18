@@ -45,7 +45,6 @@ export interface GridPlanesDeps {
    * `createGridPlanes` を呼ぶこと(docs/WEB_PITFALLS.md の TDZ)。
    */
   contentBox(): THREE.Box3
-  /** その面のメッシュ(貼った面の範囲を測る。見つからなければ undefined)。 */
   /** その面の頂点位置(xyz の並び。見つからなければ null)。 */
   facePositions(bodyId: string, faceIndex: number): ArrayLike<number> | null
   /** 画面1画素ぶんの世界座標の長さ(本編の `worldPerPixel`)。 */
@@ -65,8 +64,6 @@ export interface SketchFace {
 export interface GridPlanes {
   /** グリッドを入れるグループ。`scene` へ足すのは呼び出し側。`root` には入れない(初回の `frameToContent` がグリッドの箱に引っ張られる)。 */
   object: THREE.Group
-  /** 出す平面・面内の軸・色・面外の軸線を、いまの状態から入れ直す。 */
-  apply(): void
   /** 基準3平面を指せるか(本編の `showBasePlanes`)。 */
   setArmed(on: boolean): void
   armed(): boolean
@@ -515,7 +512,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
 
   return {
     object: gridRoot,
-    apply: applyGridPlanes,
     setArmed(on) {
       basePlanesOn = on
       applyGridPlanes()

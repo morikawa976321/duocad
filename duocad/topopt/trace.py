@@ -115,10 +115,6 @@ class Recorder:
     def _dumps(value):
         return json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False).encode('utf-8')
 
-    def _json(self, path, value):
-        data = self._dumps(value)
-        _atomic(path, lambda stream: stream.write(data))
-
     def _submit(self, job):
         def guarded():
             try:

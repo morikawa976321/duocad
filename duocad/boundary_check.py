@@ -28,8 +28,7 @@ _EPS = np.finfo(np.float64).eps
 #: Shewchuk, "Adaptive Precision Floating-Point Arithmetic", orient2d の ccwerrboundA。
 _ORIENT2D_BOUND = (3.0 + 16.0 * _EPS) * _EPS
 
-#: 報告する種類。`open` 以外は共有辺の再分割で解消しうる(`open` は CAD 側の接続が無い)。
-KINDS = ('cross', 'touch', 'overlap', 'fold', 'open')
+#: 報告する種類のうち、`open` 以外は共有辺の再分割で解消しうる(`open` は CAD 側の接続が無い)。
 FIXABLE_KINDS = frozenset(('cross', 'touch', 'overlap', 'fold'))
 
 
@@ -78,9 +77,6 @@ class Packed:
     @property
     def use_count(self) -> int:
         return len(self.use_face)
-
-    def use_points(self, use: int) -> np.ndarray:
-        return self.points[self.use_offset[use]:self.use_offset[use + 1]]
 
 
 def pack(faces: Iterable[Sequence[Sequence[dict]]], face_ids: Sequence[int] | None = None) -> Packed:
