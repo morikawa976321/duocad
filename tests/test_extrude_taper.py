@@ -645,3 +645,24 @@ def test_a_very_thin_ellipse_refuses_to_shrink_past_its_tip():
     """細る向きの移動量 0.0052 mm は先端の曲率半径 0.0042 mm を越え、先端で輪郭が折り返す。"""
     with pytest.raises(ValueError, match="collapses"):
         _new(_sketch_ellipse_face(120.0, 1.0), 1.0, -0.3)
+
+
+# ======================================================================================
+# sol レビューの指摘(6回目)
+# ======================================================================================
+@pytest.mark.parametrize("lift, distance", [(100.0, 0.001), (1000.0, 0.1)])
+def test_a_tapered_ellipse_far_from_the_origin_measures_its_volume_and_centroid(lift, distance):
+    """面ごとの積分の基準点を原点に固定すると、原点から遠い小さな形で桁が落ち、体積が 1.3% ずれ重心が立体の外へ出る。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.gp import gp_Trsf, gp_Vec
+
+    move = gp_Trsf()
+    move.SetTranslation(gp_Vec(0.0, 0.0, lift))
+    face = TopoDS.Face_s(BRepBuilderAPI_Transform(_sketch_ellipse_face(12.0, 6.0), move, True).Shape())
+
+    result = _new(face, distance, 5.0)
+
+    assert math.isclose(kernel.volume(result["shape"]), _ellipse_parallel_volume(6.0, 3.0, distance, 5.0), rel_tol=1e-5)
+    centre = kernel.centroid(result["shape"])
+    assert centre[0] == pytest.approx(0.0, abs=1e-6 * distance + 1e-9)
+    assert abs(centre[2] - (lift + distance / 2.0)) < 0.01 * distance

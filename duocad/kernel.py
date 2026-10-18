@@ -256,7 +256,9 @@ def volume(shape: "TopoDS_Shape") -> float:
 
 def _volume_props(shape: "TopoDS_Shape") -> "GProp_GProps":
     """体積の積分(質量 = 体積、重心)。適応積分の要る面が無ければ形全体を既定の積分で1回、あれば面ごとに積分を選び、
-    共通の基準点(原点)に対する寄与を足す(`BRepGProp.VolumeProperties_s` の内側と同じ組み立て)。
+    共通の基準点(形の境界箱の中心)に対する寄与を足す(`BRepGProp.VolumeProperties_s` の内側と同じ組み立て)。
+    基準点を原点にすると、原点から遠い小さな形で桁が落ちる(Z=100 の 12×6 の楕円を 0.001 mm 押して体積 1.3% ずれ、
+    重心が立体の外へ出た。sol レビューで再現)。
 
     面を1枚ずつ `VolumeProperties_s` に渡してはいけない: 基準点が面の位置変換に合わせて動き、寄与を足しても体積にならない
     (傾けた楕円の上下の平面のふたが 0 を返した。実測)。
@@ -271,7 +273,10 @@ def _volume_props(shape: "TopoDS_Shape") -> "GProp_GProps":
         props = GProp_GProps()
         BRepGProp.VolumeProperties_s(shape, props)
         return props
-    origin = gp_Pnt(0.0, 0.0, 0.0)
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    origin = gp_Pnt((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0)
     props = GProp_GProps(origin)
     for face, precise in zip(faces, adaptive):
         surface = BRepGProp_Face(face)
