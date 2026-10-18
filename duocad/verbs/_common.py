@@ -213,10 +213,15 @@ def add_transformed_copies(
     名前は、作成時(`allocate=True`)は新しく振った番号、redo / 再生では記録した `numbers`。
     番号の記録が無い古いログ(`None`)だけ元の名前を引き継ぐ。
 
-    **全部の形状を作ってから番号を振って足す** —— 途中で落ちても1体目だけ足された文書が残らず、
-    番号も飛ばない。
+    **形状を作り、ID の衝突を調べてから、番号を振って足す** —— 途中で落ちても1体目だけ足された文書が残らず、
+    番号も飛ばない(`new_ids` が既存のIDや互いに重なるのは、壊れたログの再生だけ)。
     """
     shapes = [transform(body.shape) for body in bodies]
+    taken = {existing.id for existing in doc.bodies}
+    for new_id in new_ids:
+        if new_id in taken:
+            raise ValueError(f"body id already exists: {new_id!r}")
+        taken.add(new_id)
     if allocate:
         numbers = [naming.allocate(doc, naming.BODY) for _ in bodies]
     if numbers is None:
@@ -226,7 +231,6 @@ def add_transformed_copies(
     if len(names) != len(bodies):
         raise ValueError(f"{len(bodies)} bodies but {len(names)} numbers recorded")
     for body, new_id, name, shape in zip(bodies, new_ids, names, shapes):
-        # 同じIDが既にあれば ValueError(黙って重複させない)
         doc.add_body(Body(id=new_id, name=name, kind=body.kind, shape=shape, visible=body.visible))
     return None if numbers is None else list(numbers)
 
