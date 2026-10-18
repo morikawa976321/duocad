@@ -8,7 +8,9 @@ import pytest
 
 from duocad import kernel, region, sketch as sketch_module, svg_import
 from duocad.document import Document
+from duocad.mcp_server import DocumentTools, McpServer
 from document_support import replay_through_json
+from mcp_support import call_error
 from duocad.region import RegionRef
 from duocad.server import Session
 from duocad.verbs import import_svg
@@ -742,3 +744,44 @@ def test_a_hidden_root_is_refused_as_value_error(tmp_path: Path) -> None:
     """ルートが描画されない(`display:none`)SVG は AttributeError ではなく ValueError で断る。"""
     with pytest.raises(ValueError, match="描画される"):
         _lines(tmp_path, 'style="display:none" viewBox="0 0 200 100"')
+
+
+# --------------------------------------------------------------------------------------
+# 失敗は何も残さない(領域が計算できない取り込み)
+# --------------------------------------------------------------------------------------
+HUGE_SCALE = 1.0e300
+
+
+def test_an_import_whose_regions_cannot_be_computed_leaves_nothing(tmp_path: Path) -> None:
+    """落ちたら、取り込んだ図形とログが残ったまま、以後 `regions()` が毎回失敗するスケッチになる。"""
+    document = Document()
+    sketch_id = new_sketch(document)
+    sketch_module.add_circle(document, sketch_id, [0.0, 0.0], 5.0)
+    entities_before = [e.id for e in sketch_module.get_sketch(document, sketch_id).entities]
+    log_before = len(document.log.entries)
+    parameters_before = dict(document.parameters)
+
+    with pytest.raises(ValueError, match="領域を計算できない"):
+        import_svg(document, sketch_id, write_svg(tmp_path, "huge.svg", SVG_MIXED), scale=HUGE_SCALE)
+
+    assert [e.id for e in sketch_module.get_sketch(document, sketch_id).entities] == entities_before
+    assert len(document.log.entries) == log_before
+    assert document.parameters == parameters_before
+    assert len(region.regions(document, sketch_id)) == 1  # 元のスケッチは今までどおり使える
+
+
+def test_a_failed_mcp_import_leaves_the_document_untouched(session: Session, tmp_path: Path) -> None:
+    """MCP の `import_svg` は verb の後で領域数を数える。失敗の封筒を返すなら文書は変わっていない。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    log_before = len(session.document.log.entries)
+    server = McpServer(DocumentTools(session))
+
+    error = call_error(
+        server,
+        "import_svg",
+        {"sketch_id": sketch_id, "path": str(write_svg(tmp_path, "huge.svg", SVG_MIXED)), "scale": HUGE_SCALE},
+    )
+
+    assert error["code"] == "invalid_argument"
+    assert len(session.document.log.entries) == log_before
+    assert session.document.sketches[0].entities == []

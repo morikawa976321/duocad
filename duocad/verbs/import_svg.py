@@ -20,13 +20,17 @@
 寸法ではなく、`register_value` に通すとロゴ1枚で数千個の `d1` が生まれる。`parameters.resolve` は
 素の数値をそのまま返すので通る(`sketch.Entity` のdocstring)。
 
-失敗: パス無し=FileNotFoundError / 壊れている・図形が無い・多すぎる=ValueError / 貼る先のスケッチが
-実在しない=KeyError。いずれも `doc.sketches` にもログにも何も残さない。
+失敗: パス無し=FileNotFoundError / 壊れている・図形が無い・多すぎる・領域が計算できない=ValueError /
+貼る先のスケッチが実在しない=KeyError。いずれも `doc.sketches` にもログにも何も残さない。
+**領域が計算できるかまで見る**: 座標が大きすぎる(`scale` が極端など)と有限の数値でも `regions()` が毎回失敗する。
+入れてから弾くと「エラーを返したのに図形とログが残る」ので、入れた直後に領域を一度計算して、失敗したら取り除く
+(計算結果は `region` のキャッシュに残るので、MCP の `region_count` の計算は再計算しない)。
 """
 from __future__ import annotations
 
 from typing import List, Optional
 
+from .. import region
 from ..document import Document
 from ..oplog import Operation, register_verb
 from ..entry import entry
@@ -65,6 +69,13 @@ def import_svg(
         for shape in shapes
     ]
     _apply_to(doc, sketch_id, entities)
+    try:
+        region.regions(doc, sketch_id)
+    except Exception as error:  # 領域検出(OCCT)の失敗は例外種別が揃わない
+        remove_entities(doc, [entity["entity_id"] for entity in entities], sketch_id=sketch_id)
+        raise ValueError(
+            f"{source_name}: 取り込んだ図形で領域を計算できない(座標が大きすぎる等): {error}"
+        ) from error
     doc.log.append(
         VERB_IMPORT_SVG,
         {
