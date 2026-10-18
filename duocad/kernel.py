@@ -1350,6 +1350,11 @@ def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
     0にする状況はフィレット・面取りでは作れない** —— 回帰題材が要るなら切削(対象面より大きい
     領域で切り下げる)で作る。
 
+    **薄肉では限界値ちょうどの半径が `IsDone()=False` でなく access violation になる**(`BRepPrimAPI_MakeBox` の箱を
+    厚さ 2 で抜き、縁の辺を半径 2 で丸める。Python の例外にならず `except` で捕まらない)。辺から同じ平面の面の
+    別の辺までの距離と半径が一致するフィレットは、事前に ValueError で断る(`kernel_chains.fillet_consumes_face`)。
+    これで守れるのは実測した範囲だけで、他の形の同種の異常終了を防ぐ保証は無い。
+
     戻り値(`"shape"` 以外はJSON化できる素の値):
         {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
          "volume_after": float}
@@ -1384,6 +1389,16 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         index = int(raw_index)
         maker.Add(float(raw_value), _edge_at(edge_map, index))
         edge_indices.append(index)
+
+    if verb == "fillet":
+        radii = {int(i): float(v) for i, v in values.items()}
+        clash = kernel_chains.fillet_consumes_face(shape, edge_map, radii)
+        if clash is not None:
+            raise ValueError(
+                f"fillet radius {radii[clash[0]]:g} equals the width of the planar face next to edge {clash[0]} "
+                f"(the distance to its edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと落ちることがある。"
+                "半径をわずかにずらすこと"
+            )
 
     try:
         maker.Build()

@@ -1,4 +1,4 @@
-"""辺の連なり: フィレット・面取りで1本として振る舞う辺の組(画面の辺の選択単位)。
+"""辺の連なり: フィレット・面取りで1本として振る舞う辺の組(画面の辺の選択単位)と、フィレットの事前検査。
 
 画面は辺の折れ線(`kernel.tessellate_edges`)とは別に、指した辺の分だけ取り寄せる(`BlendChains`。`view.DocumentView.edge_chains`)。
 添字は `kernel._edge_map` と同じ数え方(`indexed_map` の1始まり)。
@@ -7,10 +7,14 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepBndLib import BRepBndLib
+from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.ChFi3d import ChFi3d
-from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1
+from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1, GeomAbs_SurfaceType
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_EXTERNAL, TopAbs_FACE, TopAbs_INTERNAL, TopAbs_VERTEX
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Vertex
@@ -158,3 +162,70 @@ def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
         if len({index for index in sharp_here if index in regular}) <= 2 and len(sharp_here) >= 2:
             found |= sharp_here
     return sorted(found)
+
+
+#: フィレットの半径と、辺から同じ面の別の辺までの距離が「一致」とみなす差[mm]。OCCT の `Precision::Confusion`。
+_COINCIDENT = 1.0e-7
+
+
+def fillet_consumes_face(shape: TopoDS_Shape, edge_map, radii: Dict[int, float]) -> Optional[Tuple[int, int]]:
+    """半径が辺の隣の平面の面の幅とちょうど一致するフィレットを探す。あれば `(辺の添字, 反対側の辺の添字)`。
+
+    フィレットは辺から面の中へ幅 `r` を使う。その幅が、同じ面の別の辺(辺と頂点を共有しない辺)までの距離と
+    一致すると面を過不足なく食い尽くし、OCCT は `IsDone()=False` で断るか、**ネイティブの access violation で
+    プロセスごと落ちる**(Python の例外にならず `except` で捕まらない)。落ちる実測: `BRepPrimAPI_MakeBox` の箱の上面を
+    厚さ 2 で抜き、縁(厚さ 2 の環状の面)の外側の辺を半径 2 で丸める(縁の外側4辺・縁の8辺・X に平行な辺全部・Y に平行な辺全部・全辺)。
+    半径が 2 の 1.000000001 倍・0.999999999 倍では落ちない(窓は 2e-9 mm 未満)。同じ形を押し出しで作ると `IsDone()=False`。
+    **平面の面でだけ測る**(曲面の面は実測していない)。面取りは同じ距離で落ちなかったので対象にしない。
+    """
+    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
+    vertex_map = indexed_map(shape, TopAbs_VERTEX)
+    face_map = indexed_map(shape, TopAbs_FACE)
+    boundaries: Dict[int, List[tuple]] = {}
+
+    def vertices_of(edge: TopoDS_Shape) -> set:
+        first, last = TopoDS_Vertex(), TopoDS_Vertex()
+        TopExp.Vertices_s(TopoDS.Edge_s(edge), first, last)
+        return {vertex_map.FindIndex(first), vertex_map.FindIndex(last)} - {0}
+
+    def boundary_of(face: TopoDS_Shape) -> List[tuple]:
+        """面の縁の辺ごとの `(辺の添字, 辺, 外接箱, 頂点の添字の集合)`(面ごとに1回だけ求める)。"""
+        key = face_map.FindIndex(face)
+        if key not in boundaries:
+            entries = []
+            face_edges = indexed_map(face, TopAbs_EDGE)
+            for number in range(1, face_edges.Extent() + 1):
+                edge = face_edges.FindKey(number)
+                if BRep_Tool.Degenerated_s(TopoDS.Edge_s(edge)):
+                    continue
+                box = Bnd_Box()
+                BRepBndLib.Add_s(edge, box)
+                entries.append((edge_map.FindIndex(edge), edge, box, vertices_of(edge)))
+            boundaries[key] = entries
+        return boundaries[key]
+
+    for index, radius in radii.items():
+        edge = edge_map.FindKey(int(index))
+        if not edge_faces.Contains(edge):
+            continue
+        ancestors = edge_faces.FindFromKey(edge)
+        if ancestors.Extent() == 0:
+            continue
+        faces = [ancestors.First(), ancestors.Last()] if ancestors.Extent() > 1 else [ancestors.First()]
+        box = Bnd_Box()
+        BRepBndLib.Add_s(edge, box)
+        mine = vertices_of(edge)
+        for face in faces:
+            if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
+                continue
+            for other_index, other, other_box, theirs in boundary_of(face):
+                if other_index == int(index) or mine & theirs:
+                    continue
+                # 外接箱の距離は真の距離以下。半径より遠い辺は、正確な距離を測らずに除く。
+                if box.Distance(other_box) > float(radius) + _COINCIDENT:
+                    continue
+                measure = BRepExtrema_DistShapeShape(edge, other)
+                if measure.IsDone() and abs(measure.Value() - float(radius)) <= _COINCIDENT:
+                    return int(index), other_index
+    return None

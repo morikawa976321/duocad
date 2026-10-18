@@ -6,9 +6,14 @@
 """
 from __future__ import annotations
 
-import pytest
+import subprocess
+import sys
 
-from duocad import query
+import pytest
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+from duocad import kernel, kernel_chains, kernel_shell, query
+from duocad.paths import REPO_ROOT
 from duocad.document import Document
 from duocad.verbs import fillet
 from document_support import edges_of_kind, kinds_of, new_box, new_box_with_hole
@@ -220,3 +225,93 @@ def test_chamfer_and_fillet_compose_on_the_same_body():
     }
     doc.log.undo(doc)
     assert kinds_of(doc, body_id) == {"plane": 6, "cylinder_full": 1, "cone": 1}
+
+
+#: 壁厚。`_open_box` の縁(厚さ `WALL` の環状の面)を、半径 `WALL` のフィレットが過不足なく食い尽くす。
+WALL = 2.0
+
+
+def _open_box():
+    """`BRepPrimAPI_MakeBox` の箱の上面を厚さ `WALL` で抜いた形(押し出しで作った箱では `IsDone()=False` で済み、落ちない)。"""
+    shape = BRepPrimAPI_MakeBox(30.0, 30.0, 40.0).Shape()
+    top = [face["index"] for face in query.describe_faces(shape) if face["normal"][2] > 0.9]
+    return kernel_shell.shell_solid(shape, top, WALL)["shape"]
+
+
+def _edges_where(shape, keep):
+    return [edge for edge in query.describe_edges(shape) if keep(edge)]
+
+
+def _is_rim(edge) -> bool:
+    return abs(edge["start"][2] - 40.0) < 1e-6 and abs(edge["end"][2] - 40.0) < 1e-6
+
+
+def test_the_guard_finds_a_fillet_radius_equal_to_the_rim_width():
+    """縁(幅 `WALL`)の辺を半径 `WALL` で丸めると面を食い尽くす。落ちたら、その半径で OCCT の `Build()` がプロセスごと落ちる
+    (`test_a_fillet_that_consumes_a_face_exactly_is_refused_without_killing_the_process`)。"""
+    shape = _open_box()
+    edge_map = kernel._edge_map(shape)
+    rim = [edge["index"] for edge in _edges_where(shape, _is_rim)]
+    assert len(rim) == 8
+
+    found = kernel_chains.fillet_consumes_face(shape, edge_map, {index: WALL for index in rim})
+
+    assert found is not None and found[0] in rim and found[1] in rim
+
+
+@pytest.mark.parametrize("radius", [0.25 * WALL, 0.999 * WALL, 1.001 * WALL, 1.5 * WALL])
+def test_the_guard_leaves_every_other_radius_to_occt(radius):
+    """半径が縁の幅と 1e-7 mm より離れていれば止めない(止めるのは落ちる半径だけ。ほかは従来どおり OCCT の判定)。"""
+    shape = _open_box()
+    edge_map = kernel._edge_map(shape)
+    rim = [edge["index"] for edge in _edges_where(shape, _is_rim)]
+
+    assert kernel_chains.fillet_consumes_face(shape, edge_map, {index: radius for index in rim}) is None
+
+
+def test_the_guard_does_not_stop_edges_whose_faces_are_wider_than_the_radius():
+    """縦辺(隣の面は幅 30)・底の辺は半径 `WALL` で止めない。落ちたら、実測で通る丸めまで断っている。"""
+    shape = _open_box()
+    edge_map = kernel._edge_map(shape)
+    vertical = [edge["index"] for edge in _edges_where(shape, lambda e: e["kind"] == "line" and e["start"][2] != e["end"][2])]
+    bottom = [edge["index"] for edge in _edges_where(shape, lambda e: abs(e["start"][2]) < 1e-6 and abs(e["end"][2]) < 1e-6)]
+    assert vertical and bottom
+
+    assert kernel_chains.fillet_consumes_face(shape, edge_map, {index: WALL for index in vertical + bottom}) is None
+    kernel.fillet_edges(shape, {index: WALL for index in vertical})
+
+
+_CONSUME_CHILD = """
+import sys
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+from duocad import kernel, kernel_shell, query
+
+shape = BRepPrimAPI_MakeBox(30.0, 30.0, 40.0).Shape()
+top = [face["index"] for face in query.describe_faces(shape) if face["normal"][2] > 0.9]
+shaped = kernel_shell.shell_solid(shape, top, 2.0)["shape"]
+edges = query.describe_edges(shaped)
+selections = {
+    "all": edges,
+    "rim": [e for e in edges if abs(e["start"][2] - 40.0) < 1e-6 and abs(e["end"][2] - 40.0) < 1e-6],
+    "x": [e for e in edges if abs(e["end"][0] - e["start"][0]) > 1e-6 and abs(e["end"][1] - e["start"][1]) < 1e-6 and abs(e["end"][2] - e["start"][2]) < 1e-6],
+}
+for name, chosen in selections.items():
+    try:
+        kernel.fillet_edges(shaped, {e["index"]: 2.0 for e in chosen})
+    except ValueError as error:
+        print(name, "refused", str(error)[:40])
+    else:
+        print(name, "built")
+print("survived")
+"""
+
+
+def test_a_fillet_that_consumes_a_face_exactly_is_refused_without_killing_the_process():
+    """薄肉の箱で半径 = 壁厚のフィレットは ValueError で断る(以前は access violation でプロセスごと死んだ。別プロセスで試す)。"""
+    done = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", _CONSUME_CHILD],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
+    )
+    assert done.returncode == 0, (done.returncode, done.stderr[-800:])
+    assert done.stdout.split()[-1] == "survived"
+    assert done.stdout.count("refused") == 3, done.stdout
