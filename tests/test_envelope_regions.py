@@ -250,3 +250,33 @@ def test_enveloping_an_equal_axis_ellipse_does_not_kill_the_process() -> None:
         cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
     )
     assert done.returncode == 0 and done.stdout.strip() == "survived", (done.returncode, done.stderr[-800:])
+
+
+def _circles_and_rectangles(session: Session) -> str:
+    """長方形2つと円2つが重なるスケッチ(領域2番と4番を包むと、円の頂点まわりに `GeomAbs_OffsetCurve` の辺が出る組がある)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [9.8689, -8.6363], 10.4716, 5.6985)
+    session.add_rectangle(sketch_id, [1.978, 5.1147], 12.6231, 7.2368)
+    session.add_circle(sketch_id, [3.7041, 1.6792], 8.6522)
+    session.add_circle(sketch_id, [-2.3877, 4.8011], 12.9946)
+    return sketch_id
+
+
+def _enveloped_area(session: Session, radius: float, offset: float) -> float:
+    sketch_id = _circles_and_rectangles(session)
+    applied = _envelope(session, sketch_id, radius, offset, regions=[2, 4])
+    kinds = {entity["kind"] for entity in _created_entities(session, sketch_id, applied["created"])}
+    assert kinds <= {"line", "arc", "circle"}
+    return _area_of_created(session, sketch_id, applied["created"])
+
+
+@pytest.mark.parametrize("radius, offset", [(0.5, -0.5), (0.5, -0.25), (0.5, -0.6)])
+def test_circles_and_rectangles_are_enveloped_where_offset_curve_edges_appear(session: Session, radius: float, offset: float) -> None:
+    """円と長方形だけの領域は、R と d が円の頂点まわりに `GeomAbs_OffsetCurve` の辺を出す組でも包める。落ちたら
+    その辺を円弧へ直せず、ベジエも楕円も無いのに「ベジエ曲線を含む領域・楕円を丸めた領域は包めない」と拒む。
+    正しさは d をわずかにずらした両側の面積の中間に入ることで見る(円弧の直し方を間違えると面積が飛ぶ)。"""
+    area = _enveloped_area(session, radius, offset)
+    below = _enveloped_area(session, radius, offset - 5.0e-4)
+    above = _enveloped_area(session, radius, offset + 5.0e-4)
+    assert area == pytest.approx((below + above) / 2.0, abs=1.0e-3)
+    assert below < area < above

@@ -346,7 +346,8 @@ def face_boundary_entities(plane: dict, face: Any) -> List[dict]:
     """面の境界(外周と穴)を、スケッチ図形 `{"kind", "params"}` の並びにする。**線分・円弧・円・閉じた楕円だけ**。
 
     辺がそれ以外(ベジエ・楕円弧など)なら ValueError。ベジエの領域を包むと、オフセットは元の曲線の
-    近似曲線を返し、線分と円弧だけという指定を満たせないため。
+    近似曲線を返し、線分と円弧だけという指定を満たせないため。円・直線を B-スプラインに直した辺のオフセット
+    (`GeomAbs_OffsetCurve`)は、標本点が直線・円に乗っていれば元の型の図形に直す(`_entities_of_offset_curve`)。
     """
     ax3 = _ax3_from_plane(plane)
     entities: List[dict] = []
@@ -367,38 +368,86 @@ def face_boundary_entities(plane: dict, face: Any) -> List[dict]:
             circle = curve.Circle()
             centre = circle.Location()
             cx, cy = _to_uv(ax3, centre.X(), centre.Y(), centre.Z())
-            radius = circle.Radius()
-            (sx, sy), (ex, ey) = uv(first), uv(last)
-            if math.hypot(ex - sx, ey - sy) <= _ENVELOPE_TOLERANCE:
-                entities.append({"kind": "circle", "params": {"cx": cx, "cy": cy, "diameter": 2.0 * radius}})
-                continue
-            mx, my = uv((first + last) / 2.0)
-            start = math.degrees(math.atan2(sy - cy, sx - cx))
-            end = math.degrees(math.atan2(ey - cy, ex - cx))
-            middle = math.degrees(math.atan2(my - cy, mx - cx))
-            # 辺の向きと円の軸の向きは独立なので、始点→中点→終点の回り方から反時計回りの端点を決める。
-            if (middle - start) % 360.0 > (end - start) % 360.0:
-                start, end = end, start
-            entities.append(
-                {
-                    "kind": "arc",
-                    "params": {
-                        "cx": cx,
-                        "cy": cy,
-                        "radius": radius,
-                        "start_deg": start,
-                        "end_deg": end,
-                    },
-                }
-            )
+            entities.append(_circular_entity(uv, first, last, cx, cy, circle.Radius()))
         elif kind == GeomAbs_CurveType.GeomAbs_Ellipse and _closed_edge(uv, first, last):
             entities.append({"kind": "ellipse", "params": _ellipse_params(ax3, curve.Ellipse())})
+        elif kind == GeomAbs_CurveType.GeomAbs_OffsetCurve:
+            entities.extend(_entities_of_offset_curve(uv, first, last))
         else:
             raise ValueError(
-                f"包んだ結果に線分・円弧・閉じた楕円以外の辺({kind.name})が出る"
-                "(ベジエ曲線を含む領域・楕円を丸めた領域は包めない)"
+                f"包んだ結果に線分・円弧・円・閉じた楕円に直せない辺({kind.name})が出る"
+                "(ベジエ曲線や楕円を含む領域を丸めると近似曲線になるので包めない)"
             )
     return entities
+
+
+def _circular_entity(
+    uv: Callable[[float], Tuple[float, float]], first: float, last: float, cx: float, cy: float, radius: float
+) -> dict:
+    """中心と半径の円の、辺 `[first, last]` にあたる円弧(閉じた辺は円)のスケッチ図形。"""
+    (sx, sy), (ex, ey) = uv(first), uv(last)
+    if math.hypot(ex - sx, ey - sy) <= _ENVELOPE_TOLERANCE:
+        return {"kind": "circle", "params": {"cx": cx, "cy": cy, "diameter": 2.0 * radius}}
+    mx, my = uv((first + last) / 2.0)
+    start = math.degrees(math.atan2(sy - cy, sx - cx))
+    end = math.degrees(math.atan2(ey - cy, ex - cx))
+    middle = math.degrees(math.atan2(my - cy, mx - cx))
+    # 辺の向きと円の軸の向きは独立なので、始点→中点→終点の回り方から反時計回りの端点を決める。
+    if (middle - start) % 360.0 > (end - start) % 360.0:
+        start, end = end, start
+    return {
+        "kind": "arc",
+        "params": {"cx": cx, "cy": cy, "radius": radius, "start_deg": start, "end_deg": end},
+    }
+
+
+#: オフセット曲線の辺を線分・円に直すとき、標本点が直線・円に乗っているとみなす距離[mm]。
+#: 実測の残差は 1e-10 以下(基礎曲線が円を B-スプラインに直したもの)。
+_OFFSET_FIT_TOLERANCE = 1.0e-8
+_OFFSET_FIT_SAMPLES = 9
+
+
+def _entities_of_offset_curve(uv: Callable[[float], Tuple[float, float]], first: float, last: float) -> List[dict]:
+    """`GeomAbs_OffsetCurve` の辺を、線分・円弧・円のスケッチ図形にする(点にまで縮んだ辺は図形なし)。
+
+    外部の罠: 円や直線を B-スプラインに直した辺(ブーリアンやオフセットの途中で出る)を、さらにオフセットすると、
+    OCCT は辺を元の円・直線の型に戻さず `GeomAbs_OffsetCurve` のまま返す(2026-10-18 実測: 円と長方形だけの領域を
+    R=0.5, d=-0.5 で包むと、円の頂点まわりの長さ 0.01〜0.1 mm の2辺が出た)。曲線そのものは元の円と同心の円で、
+    標本点の円への残差は 1e-10 以下。標本点を直線・円へ当てはめ、残差が `_OFFSET_FIT_TOLERANCE` を超えるなら直さずに断る。
+    """
+    params = [first + (last - first) * k / (_OFFSET_FIT_SAMPLES - 1) for k in range(_OFFSET_FIT_SAMPLES)]
+    points = [uv(parameter) for parameter in params]
+    start, middle, end = points[0], points[len(points) // 2], points[-1]
+    extent = max(math.dist(start, point) for point in points)
+    if extent <= _ENVELOPE_TOLERANCE:
+        return []
+
+    chord = math.dist(start, end)
+    if chord > _ENVELOPE_TOLERANCE:
+        along = ((end[0] - start[0]) / chord, (end[1] - start[1]) / chord)
+        if all(abs((p[0] - start[0]) * along[1] - (p[1] - start[1]) * along[0]) <= _OFFSET_FIT_TOLERANCE for p in points):
+            return [{"kind": "line", "params": {"x0": start[0], "y0": start[1], "x1": end[0], "y1": end[1]}}]
+
+    fitted = _circle_through(start, middle, end)
+    if fitted is not None:
+        cx, cy, radius = fitted
+        if all(abs(math.hypot(p[0] - cx, p[1] - cy) - radius) <= _OFFSET_FIT_TOLERANCE for p in points):
+            return [_circular_entity(uv, first, last, cx, cy, radius)]
+    raise ValueError(
+        "包んだ結果に線分・円弧・円・閉じた楕円に直せない辺(GeomAbs_OffsetCurve)が出る"
+        "(標本点が直線にも円にも乗らない)"
+    )
+
+
+def _circle_through(a: Tuple[float, float], b: Tuple[float, float], c: Tuple[float, float]) -> Any:
+    """3点を通る円 `(cx, cy, radius)`。共線なら None。"""
+    d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]))
+    if d == 0.0:
+        return None
+    sa, sb, sc = a[0] ** 2 + a[1] ** 2, b[0] ** 2 + b[1] ** 2, c[0] ** 2 + c[1] ** 2
+    cx = (sa * (b[1] - c[1]) + sb * (c[1] - a[1]) + sc * (a[1] - b[1])) / d
+    cy = (sa * (c[0] - b[0]) + sb * (a[0] - c[0]) + sc * (b[0] - a[0])) / d
+    return cx, cy, math.hypot(a[0] - cx, a[1] - cy)
 
 
 def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
