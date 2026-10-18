@@ -28,6 +28,7 @@ EVALUATORS = [
     "eval_resolution_tracker.mjs",
     "eval_screen_pick.mjs",
     "eval_selection_ref_key.mjs",
+    "eval_session_dispose.mjs",
     "eval_sketch_geometry.mjs",
     "eval_sketch_intersections.mjs",
     "eval_sketch_snap.mjs",

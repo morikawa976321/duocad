@@ -1416,6 +1416,8 @@ export function createSession(hooks: SessionHooks): Session {
     if (disposed) return
     hooks.onStatus('connecting')
     const url = await resolveWebSocketUrl()
+    // 待っている間に破棄された(初回の設定取得中の再マウントなど)。作ると、閉じる者のいないソケットがフックを呼び続ける。
+    if (disposed) return
     const next = new WebSocket(url)
     next.binaryType = 'arraybuffer'
     socket = next
