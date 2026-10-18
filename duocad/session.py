@@ -1698,12 +1698,15 @@ class Session:
         ハードリンクでも、書けば文書の中身を書き換えてしまう。"""
         if not target.exists():
             return
-        try:
-            for document in self.models_dir.glob("*.json"):
-                if target.samefile(document):
-                    raise ValueError(f"保存済みの文書 {document.name} は書き出しで上書きできない: {str(target)!r}")
-        except OSError:
-            return
+        for document in self.models_dir.glob("*.json"):
+            try:
+                same = target.samefile(document)
+            except OSError:
+                # 照合できないのはその文書(壊れたジャンクション・消えかけのファイル)だけ。検査全体を打ち切ると、
+                # 後ろに並ぶ本物の文書へのハードリンクを素通しする。
+                continue
+            if same:
+                raise ValueError(f"保存済みの文書 {document.name} は書き出しで上書きできない: {str(target)!r}")
 
     def export_stl_file(self, path: Any) -> dict:
         """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定で、人にもAIにも選ばせない。

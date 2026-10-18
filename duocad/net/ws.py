@@ -441,8 +441,8 @@ class Server:
             problem = "メッセージは JSON のオブジェクトで送る"
         else:
             ack = message.get("ack_id")
-            if ack is not None and (isinstance(ack, bool) or not isinstance(ack, (int, str))):
-                problem = "ack_id は整数か文字列で送る"
+            if ack is not None and (isinstance(ack, bool) or not isinstance(ack, int)):
+                problem = "ack_id は整数で送る(画面は通し番号。済みの番号『以下』をまとめて消すので大小を比べる)"
         if problem is not None:
             await _send(connection, {"type": "error", "where": "parse", "message": problem})
             return

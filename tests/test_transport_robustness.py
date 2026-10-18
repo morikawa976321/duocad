@@ -52,7 +52,7 @@ def test_a_deeply_nested_message_is_a_parse_error():
     assert answers[1]["type"] == "state"
 
 
-@pytest.mark.parametrize("ack", [[1], {"a": 1}, True, 1.5])
+@pytest.mark.parametrize("ack", [[1], {"a": 1}, True, 1.5, "2", "x"])
 def test_an_ack_id_that_cannot_be_a_key_is_refused(ack):
     answers = _scenario(session_with_box(), json.dumps({"cmd": "get_state", "ack_id": ack}))
     assert answers[0]["type"] == "error" and "ack_id" in answers[0]["message"]
@@ -156,3 +156,68 @@ def test_stdio_survives_a_deeply_nested_line_and_answers_the_next_one():
     answers = [json.loads(line) for line in out.getvalue().decode("utf-8").splitlines()]
     assert answers[0]["error"]["code"] == -32700
     assert answers[1] == {"jsonrpc": "2.0", "id": 2, "result": {}}
+
+
+def test_an_unencodable_string_echoed_in_a_response_does_not_stop_stdio():
+    """要求の `id` や未知の `method` は応答にそのまま写る。孤立サロゲートが紛れても、応答を符号化できず後続の要求まで
+    巻き込んでサーバが終わる、ということが起きない(JSON のエスケープ表記で送る)。"""
+    server = McpServer(DocumentTools(session_with_box()))
+    first = b'{"jsonrpc": "2.0", "id": "\\ud800", "method": "ping"}'
+    second = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"}).encode("utf-8")
+    out = io.BytesIO()
+    asyncio.run(serve_stdio(server, io.BytesIO(first + b"\n" + second + b"\n"), out))
+    answers = [json.loads(line) for line in out.getvalue().decode("utf-8").splitlines()]
+    assert answers[0]["id"] == "\ud800" and answers[0]["result"] == {}
+    assert answers[1]["id"] == 2
+
+
+def test_wire_dumps_falls_back_to_escapes_for_a_string_utf8_cannot_hold():
+    text = wire.dumps({"id": "\ud800", "name": "日本語"})
+    text.encode("utf-8")  # 符号化できる
+    assert json.loads(text) == {"id": "\ud800", "name": "日本語"}
+    assert wire.dumps({"name": "日本語"}) == json.dumps({"name": "日本語"}, ensure_ascii=False)
+
+
+def test_mixing_integer_and_string_ack_ids_cannot_break_the_done_bookkeeping():
+    """整数と文字列の `ack_id` が混ざると、済みの番号を比べる段が TypeError で接続を終わらせていた。"""
+    async def run() -> list:
+        server = Server(session_with_box())
+        server.bind_loop(asyncio.get_running_loop())
+        client = FakeConnection()
+        server.clients.add(client)
+        await server._push(client, applied=None, only=client)
+        client.payloads.clear()
+        await _send_raw(server, client, json.dumps({"cmd": "get_state", "ack_id": 1}))
+        await _send_raw(server, client, json.dumps({"cmd": "get_state", "ack_id": "2"}))
+        await _send_raw(server, client, json.dumps({"cmd": "get_state", "ack_id": 3}))
+        return client.of_type("done")
+
+    done = asyncio.run(run())
+    assert [d["ack_id"] for d in done] == [1, 3]
+
+
+def test_a_document_that_cannot_be_compared_does_not_open_the_door_to_a_hard_link(tmp_path, monkeypatch):
+    """壊れたジャンクションのように照合が OSError になる文書が先に並ぶと、検査全体が打ち切られ、後ろの本物の文書への
+    ハードリンクを書き出しで潰せた(保存済みの文書が STEP の本文に置き換わる)。"""
+    import os
+    from pathlib import Path
+
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "aaa-broken.json").write_text("{}", encoding="utf-8")
+    (models / "precious.json").write_text("{}", encoding="utf-8")
+    alias = tmp_path / "alias.step"
+    os.link(models / "precious.json", alias)
+    session = Session(0.2, models_dir=models, exports_dir=tmp_path / "exports")
+
+    real = Path.samefile
+
+    def flaky(self, other):
+        if Path(other).name == "aaa-broken.json":
+            raise OSError("照合できない")
+        return real(self, other)
+
+    monkeypatch.setattr(Path, "samefile", flaky)
+    with pytest.raises(ValueError, match="precious.json"):
+        session._resolve_export_path(str(alias), (".step",))
+    assert (models / "precious.json").read_text(encoding="utf-8") == "{}"

@@ -92,9 +92,17 @@ def dumps(payload: Any, **options: Any) -> str:
     厳密に符号化し、失敗したときだけ(普通は走らない)全体を走査して直す。
     """
     try:
-        return json.dumps(payload, ensure_ascii=False, allow_nan=False, **options)
+        text = json.dumps(payload, ensure_ascii=False, allow_nan=False, **options)
     except ValueError:
-        return json.dumps(_without_non_finite(payload), ensure_ascii=False, allow_nan=False, **options)
+        payload = _without_non_finite(payload)
+        text = json.dumps(payload, ensure_ascii=False, allow_nan=False, **options)
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        # 要求の `id` や未知の `method` を応答にそのまま写す口などに、UTF-8 に符号化できない孤立サロゲートが紛れたとき。
+        # `\uXXXX` の書き方なら JSON として有効で、送る段(`.encode` / WebSocket)で落ちない。
+        text = json.dumps(payload, ensure_ascii=True, allow_nan=False, **options)
+    return text
 
 
 def decode(frame: bytes) -> dict:
