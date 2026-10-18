@@ -1,4 +1,6 @@
-r"""tail_profile と同じ再現で、peel の呼び出しごとに「順位の何番目まで歩いたか・何手抜いたか・秒」を記録する(cProfile なし)。"""
+r"""tail_profile と同じ再現で、段階4の `PeelWalk.take` の呼び出しごとに「順位の何番目まで歩いたか・何手抜いたか・秒」を記録する(cProfile なし)。
+
+`binary_search.peel()` は段階4が呼ばない。`PeelWalk` が前の歩きを使い回すので、秒は `peel` を毎回呼んだ場合より短い。"""
 from __future__ import annotations
 import argparse, json, sys, time
 from pathlib import Path
@@ -20,10 +22,11 @@ def main():
     fem.FEM_DEVICE = "cpu"
     seed = tp.load_eval_mask(a.eval)
     calls = []
-    real_peel = binary_search.peel
-    def peel(mask, order, count, anchor_ids, **kw):
+    real_take = binary_search.PeelWalk.take
+    def take(self, order, count):
+        mask = self.parent
         t = time.perf_counter()
-        cand, st = real_peel(mask, order, count, anchor_ids, **kw)
+        cand, st = real_take(self, order, count)
         dt = time.perf_counter() - t
         pos = {int(c): i for i, c in enumerate(order[: min(len(order), 2_000_000)].tolist())}
         last = max((pos.get(int(c), -1) for c in st.picked_cells), default=-1)
@@ -33,7 +36,7 @@ def main():
                           islands=st.islands, last_pick_pos=last, examined=examined, seconds=dt,
                           mask_hash=hash(mask.tobytes()) , stats=st.as_dict()))
         return cand, st
-    binary_search.peel = peel
+    binary_search.PeelWalk.take = take
     real = binary_search.find_best_feasible
     def patched(dsm, conditions, **kw):
         kw["max_evaluations"] = a.budget

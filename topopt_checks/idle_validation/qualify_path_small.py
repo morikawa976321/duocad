@@ -189,7 +189,7 @@ def _tracer_config(seed: int = 0, max_evaluations: int = 1000) -> sm.AdaptiveCon
     """`_reduce_volume` と同じ受理条件・停止条件になるよう、adaptive方式固有の機構
     (ロールバック・復帰・仕上げ局面)を実質無効化した設定(04aの対照実験用)。"""
     return sm.AdaptiveConfig(
-        gate="percentile", stop_policy="legacy", legacy_target_tolerance=binary_search.DEFAULT_TARGET_TOLERANCE,
+        gate="percentile", stop_policy="legacy", legacy_target_tolerance=0.01,
         step_exponent=binary_search.DEFAULT_STEP_EXPONENT, max_step_ratio=binary_search.DEFAULT_MAX_STEP_RATIO,
         min_step_ratio=0.0, max_evaluations=max_evaluations,
         stagnation_patience=10**9,  # revert_restartを起こさせない(製品にこの機構は無い)

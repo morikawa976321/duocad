@@ -413,8 +413,9 @@ class AdaptiveConfig:
     finish_max_evaluations: int = 200
     finish_patience: int = 8  # 仕上げ局面でbest_ever不変が何連続で続いたら打ち切るか
     stop_policy: str = "adaptive_finish"  # 'adaptive_finish' | 'legacy'(target_tolerance方式との対照)
-    legacy_target_tolerance: float = binary_search.DEFAULT_TARGET_TOLERANCE if hasattr(
-        binary_search, "DEFAULT_TARGET_TOLERANCE") else 0.02
+    #: `stop_policy="legacy"` の許容。研究の対照が使った旧製品の既定 0.01 に固定する。製品の
+    #: `binary_search.DEFAULT_TARGET_TOLERANCE` は `None`(見ない)なので、連動させると `1 + None` で落ちる。
+    legacy_target_tolerance: float = 0.01
     seed: Optional[int] = 0
 
 

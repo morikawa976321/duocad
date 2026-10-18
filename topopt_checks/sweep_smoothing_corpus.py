@@ -14,7 +14,8 @@
   sweep.lock / sweep.log / progress.json
 
 **マスクは製品の実行 `optimize_run.run` の中で捕まえる**: `mesh.build_surface_from_mask` を差し替え、渡された
-マスクを控えて例外で降りる(平滑化・finalize は回さない)。探索・島除去はそのまま製品のもの。
+マスクを控えて例外で降りる(平滑化・finalize は回さない)。探索・島除去・空隙埋めはそのまま製品のもの。
+保存するのは**メッシュ化へ渡った形**(探索の採用マスクに空隙埋めを掛けたもの)で、埋めたセル数を記録に残す。
 1条件 = 1子プロセス(メモリを持ち越さず、ピークメモリをその条件だけで測る)。
 `ok` と `no_solution` の条件は再実行で飛ばす。`error` は次の実行で再挑戦する。
 """
@@ -102,6 +103,14 @@ def _peak_memory_mb() -> dict:
     return {"peak_working_set_mb": round(info.peak_wset / 2**20, 1), "peak_commit_mb": round(info.peak_pagefile / 2**20, 1)}
 
 
+def filled_cells_of(mask, search_mask) -> int:
+    """捕まえたマスク(メッシュ化へ渡った形)が探索の採用マスクに空隙埋め(`thin_voids.fill_tubes`)を掛けた形か確かめ、
+    埋めたセル数を返す。埋めるのは材料を足すだけなので、採用マスクの材料は残り、増えた分が埋めたセルになる。"""
+    assert tuple(mask.shape) == tuple(search_mask.shape), "捕まえたマスクと探索の採用マスクの形が違う"
+    assert not (search_mask & ~mask).any(), "捕まえたマスクが探索の採用マスクの材料を欠いている"
+    return int(mask.sum()) - int(search_mask.sum())
+
+
 def run_condition(spec: dict) -> dict:
     """1条件を製品経路で回し、記録(dict)を返す。成功なら voxel/ に stl・npz を確定させる。"""
     import numpy as np
@@ -181,7 +190,7 @@ def run_condition(spec: dict) -> dict:
     mask = captured.get("mask")
     if mask is not None:
         assert search_result.status == "feasible" and tuple(mask.shape) == tuple(space.grid.shape)
-        assert np.array_equal(mask, search_result.best_feasible.mask), "捕まえたマスクが探索の採用マスクと違う"
+        filled_cells = filled_cells_of(mask, search_result.best_feasible.mask)
         name = spec["name"]
         verts, faces = voxel_surface(mask, space.grid.origin, space.grid.spacing)
         voxel = OUT / "voxel"
@@ -194,7 +203,8 @@ def run_condition(spec: dict) -> dict:
         os.replace(stl_tmp, voxel / f"{name}.stl")
         os.replace(npz_tmp, voxel / f"{name}.npz")
         record.update(status="ok", stl=f"voxel/{name}.stl", npz=f"voxel/{name}.npz", stl_triangles=int(len(faces)),
-                      stl_bytes=(voxel / f"{name}.stl").stat().st_size, mask_cells=int(mask.sum()))
+                      stl_bytes=(voxel / f"{name}.stl").stat().st_size, mask_cells=int(mask.sum()),
+                      search_mask_cells=int(mask.sum()) - filled_cells, filled_cells=filled_cells)
     elif result is not None:
         state = result.get("state")
         reason = result.get("warning") or state

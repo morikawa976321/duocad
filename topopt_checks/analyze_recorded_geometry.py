@@ -12,6 +12,12 @@ import check_final_shape as check
 from duocad.topopt.trace import load_snapshot
 
 
+def load_world(run: Path) -> dict:
+    """平滑化の前後の頂点(`raw_vertices` / `vertices`)と面を持つ記録。集合演算の前に記録される
+    (`final-mesh-world` は集合演算後の最終メッシュで `raw_vertices` を持たない)。"""
+    return load_snapshot(next(run.glob('*-pre-boolean-mesh-world.json')))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run', type=Path)
@@ -19,7 +25,7 @@ def main():
     run = args.run
     out = run/'analysis'
     out.mkdir(exist_ok=True)
-    world = load_snapshot(next(run.glob('*-final-mesh-world.json')))
+    world = load_world(run)
     session = open_session(run / 'input.json')
     doc = session.document
     def save(name, data):
