@@ -17,6 +17,7 @@ from duocad.sketch import add_circle, add_line, add_rectangle, get_sketch, sketc
 from duocad.verbs import (
     add_mesh_body,
     add_solid_body,
+    boolean_body,
     delete,
     delete_items,
     extrude,
@@ -384,4 +385,36 @@ def test_undoing_a_deletion_then_the_creation_behind_it_keeps_the_active_body():
     document.log.undo(document)
 
     assert _active_id(document) == base
+    assert_matches_replay(document)
+
+
+def test_boolean_body_hands_the_active_body_to_the_target_when_it_consumes_the_active_tool():
+    """落ちたら: active だったツールが消えて active が無くなり、直後の extrude(join) がターゲットに足されず別のボディを作る。
+    undo は退避した active(ツール)を戻し、redo は引き渡し直す。"""
+    document = Document()
+    target = new_box(document, 20.0)
+    tool = second_body(document)
+    assert _active_id(document) == tool
+
+    boolean_body(document, {"body": target, "kind": "face", "index": 1}, [tool], mode="union")
+
+    assert _active_id(document) == target
+    assert_matches_replay(document)
+    document.log.undo(document)
+    assert _active_id(document) == tool
+    assert_matches_replay(document)
+    document.log.redo(document)
+    assert _active_id(document) == target
+
+
+def test_boolean_body_leaves_the_active_body_alone_when_the_tool_was_not_active():
+    document = Document()
+    target = new_box(document, 20.0)
+    tool = second_body(document)
+    last = second_body(document)
+    assert _active_id(document) == last
+
+    boolean_body(document, {"body": target, "kind": "face", "index": 1}, [tool], mode="union")
+
+    assert _active_id(document) == last
     assert_matches_replay(document)
