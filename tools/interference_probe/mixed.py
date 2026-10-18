@@ -34,6 +34,7 @@ def main(argv=None):
     ap.add_argument("--clearance", type=float, default=0.2)
     ap.add_argument("--deviation", type=float, default=0.01)
     ap.add_argument("--to-brep", action="store_true")
+    ap.add_argument("--no-gf", action="store_true", help="--to-brep で変換だけ測り、GF に入れない")
     args = ap.parse_args(argv)
     doc, t_replay = load(Path(args.doc))
     bodies = list(doc.bodies)
@@ -88,6 +89,10 @@ def main(argv=None):
                 if solid is None:
                     raise RuntimeError(f"make_material が立体を返さない: {info}")
                 t_conv = time.perf_counter() - t0
+                print(f"  to-brep {b.name}: convert {t_conv:.1f}s faces={M.count(solid, M.TopAbs_FACE)} "
+                      f"V={M.volume(solid):.1f}(メッシュ {vols[bodies.index(b)]:.1f})", flush=True)
+                if args.no_gf:
+                    continue
                 others = [s.shape for s in solids]
                 t1 = time.perf_counter()
                 g = M.gf_relations([solid, *others], pairs=[(0, k + 1) for k in range(len(others))])
