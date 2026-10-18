@@ -491,9 +491,8 @@ class Entity:
         arc       : cx, cy, radius, start_deg, end_deg   (度・反時計回り・X軸から。0度をまたいでよい)
         bezier    : x0, y0, cx1, cy1, cx2, cy2, x1, y1   (始点・制御点1・制御点2・終点)
 
-    **bezier だけは値が素の数値のまま**(`import_svg` が作り、その鏡映・複製も `add_entities` が同じく素のまま持つ。
-    制御点座標は人が打ち直す寸法ではなく、ロゴ1枚で数千個の `d1` が SketchPanel の一覧を埋める)。
-    `parameters.resolve` は素の数値をそのまま返す。
+    **bezier だけは値が素の数値のままでありうる**(`import_svg` だけが作る。制御点座標は人が打ち直す寸法ではなく、
+    ロゴ1枚で数千個の `d1` が SketchPanel の一覧を埋める)。`parameters.resolve` は素の数値をそのまま返す。
     """
 
     id: EntityId
@@ -817,8 +816,6 @@ def add_entities(document: Document, planned: Sequence[tuple]) -> List[EntityId]
     """図形を足す。`planned` は `(Sketch, EntityId, 種別, 解決済みの params)` の並びで、作った ID の並びを返す。
     **全部の ID を先に検査してから**1件ずつ名前つきの値を登録(`parameters.register_all`。キーの並びが `d<n>` の振り順)して足す
     (足しながら検査すると、2件目で重複したとき1件目だけ書いた文書が残る)。
-    ベジエは登録しない(`Entity` のdocstring。登録は `register_value` が最小の空き番号を線形に探すので、
-    取り込んだロゴを全部複製すると二乗時間になり、パラメータ表が数万件に膨らむ)。
     """
     seen: set = set()
     for sketch, entity_id, _kind, _values in planned:
@@ -827,11 +824,7 @@ def add_entities(document: Document, planned: Sequence[tuple]) -> List[EntityId]
         seen.add(entity_id)
     created: List[EntityId] = []
     for sketch, entity_id, kind, values in planned:
-        refs = (
-            {key: float(value) for key, value in values.items()}
-            if kind == "bezier"
-            else parameters.register_all(document, dict(values))
-        )
+        refs = parameters.register_all(document, dict(values))
         sketch.entities.append(Entity(id=entity_id, kind=kind, params=refs))
         created.append(entity_id)
     return created
