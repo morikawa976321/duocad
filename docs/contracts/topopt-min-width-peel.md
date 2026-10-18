@@ -6,7 +6,7 @@
 
 ## 規則と用語（R(m)・S(m)）
 
-- **R(m)**: 全材料セル（`exempt` を除く）が、m 立方の材料だけのブロックのどれかに属する。大域判定は `binary_search._mask_satisfies_min_width`。**S(m)**: 芯 K（セル c を最小の角とする m 立方が全部材料）の6連結成分を、保持セルで結んでなお1塊。判定は `min_width.CoreConnectivity` に集まっている。`_mask_satisfies_min_width` は R(m) のみで S を含まない。合格候補の大域検査は `_mask_satisfies_min_width` と `CoreConnectivity.connected` の2つを見る。
+- **R(m)**: 全材料セル（`exempt` を除く）が、m 立方の材料だけのブロックのどれかに属する。大域判定は `binary_search._mask_satisfies_min_width`。**S(m)**: 芯 K（セル c を最小の角とする m 立方が全部材料）の連結成分(m が 4 未満は6連結、`CORE_26_MIN_M`=4 以上は26連結)を、保持セルで結んでなお1塊。判定は `min_width.CoreConnectivity` に集まっている。`_mask_satisfies_min_width` は R(m) のみで S を含まない。合格候補の大域検査は `_mask_satisfies_min_width` と `CoreConnectivity.connected` の2つを見る。
 - `min_width_mm` 指定（m>1）の探索の採用形状は R(m) **と** S(m) を満たす。`peel` の各手・合格候補の大域検査がこれを守る。保持セルを介した芯の結びは、保持セルが細い橋でも S(m) を満たす（保証しない）。
 - 規則を満たす形は、絞った設計空間（設計空間の m 立方 opening）の部分集合。**絞ることで失われる解は無い**ので、絞った空間での入口検査の拒否は「規則を満たす形が存在しない」と同じ意味。
 
@@ -20,10 +20,10 @@
 
 ## 入力検査と既定（optimize_run）
 
-- **既定**: `OptimizeOptions(min_width_mm=None)` で `_resolve_min_width` が `max(2.0 * spacing, 1.0)` を返す（2026-09-22 本人決定。1.0mm が効くのは spacing<0.5mm のときだけ）。戻り値 dict に `"source"`（`"default"` | `"requested"`）があり、**`requested_mm` は `None` にならない**（既定のときも実際に使った値）。`run()` の結果 `min_width` dict・trace の `resolved-conditions`・画面の結果通知（`web/src/App.svelte` の `handleOptimizeResult`）は同じ dict 経由なので、既定/明示は `_resolve_min_width` 1箇所を見ればよい。
+- **既定**: `OptimizeOptions(min_width_mm=None)` で `_resolve_min_width` が**選べるいちばん細い段**(`min_width_cell_range` の下限 m = `ceil(MIN_WIDTH_FLOOR_MM / spacing)` か 2 の大きい方)の `m × spacing` を返す(`MIN_WIDTH_FLOOR_MM` = 2.0 mm。2026-10-09 の変更で `max(2.0 * spacing, 1.0)` から替えた)。戻り値 dict に `"source"`(`"default"` | `"requested"`)があり、**`requested_mm` は `None` にならない**(既定のときも実際に使った値。`None` だと呼び出し側が「未指定=制約なし」と読みうる)。
 - 既定は常に `cells >= 2` を返す（m=1 は返らない）。`binary_search.find_best_feasible` 自身の既定（`min_width_cells` 省略時は1=制約なし）は**意図的に変えていない**: 製品の入口 `run()` は必ず `_resolve_min_width` を経由して明示で渡し、内部既定は `topopt_checks/` のスクリプトと `binary_search` 単体テストが使う。
-- **`_resolve_min_width(spacing, requested, max_cells=None)`**: `max_cells`（格子の最短辺のセル数。`run()` は `_grid_shape(limits bbox, spacing)` から渡す）を渡すと `max_cells × spacing` を超える値を `OptimizeInputError`（文面に「上限」）で断り、m を `max_cells` で頭打ちにする。上限は「立方が格子に入る最大」= 原理的に不可能な値だけを断る。**太すぎて削れないのは利用者の選択**（「上限は設けない」の方針）。上限ちょうどの値は `値 / spacing` の丸めで m が1つ跳ねうるので、mm で比べて m を頭打ちにする（画面と同じ比較）。既定採用時に上限を超えたときの文面は「最小幅を下げよ」ではなく「要素サイズを下げよ」。
-- 下限は `2 × spacing`（8等分した評価格子で4セル分が見える最小の幅）。これ未満の明示値も `OptimizeInputError`。`resolution_limits()["steps"][i]` には `min_width_ceiling_mm`（= 最短辺セル数 × その段の要素サイズ）と `min_width_steps_mm`（m=2..最短辺のセル数の値の配列）が付く。
+- **`_resolve_min_width(spacing, requested, max_cells=None)`**: `max_cells`(格子の最短辺のセル数。`run()` は `_grid_shape(limits bbox, spacing)` から渡す)を渡すと、上限(上の `MIN_WIDTH_CEILING_RATIO` 倍)を超える値を `OptimizeInputError`(文面に「上限」)で断り、m を上限で頭打ちにする。
+- 下限は `MIN_WIDTH_FLOOR_MM`(2.0 mm)以上でいちばん細い m(2 セル未満にはしない)。これ未満の明示値は `OptimizeInputError`。上限は格子の最短辺のセル数の `MIN_WIDTH_CEILING_RATIO`(0.25)倍(切り捨て)で、これを超える値も同じ例外。`resolution_limits()["steps"][i]` には `min_width_ceiling_mm`(= 上限の m × その段の要素サイズ)と `min_width_steps_mm`(下限〜上限の m の値の一覧)が載る。
 - **`min_width_steps_mm(spacing, max_cells)`**: 各値を `_resolve_min_width` に渡すとちょうどその m になる。`m*s/s` が丸めで m を超えるとき（0.1×3/0.1 → 4）は1ulpずつ下げてある。段の値をそのまま `m * spacing` にすると、画面が示した段を入力しても m が1つ飛ぶ。
 - `optimize_run._search_failure_warning(search_result, min_width=None, ...)`: 最小幅が有効（`cells>1`）のとき、入口で止まった（`input_contradiction` / `boundary_mapping_failed`）なら「絞ったセル数を除いた後の空間に対する検査」、予算などで止まったなら「予算より先に最小幅を疑う」を末尾に添える。
 - `topopt_checks/measure_min_width_floor.py --cells 1` は測れない（m=1 は既定からも到達不能で `out["error"]` を返すだけ）。係数 `SEARCH_TARGET_FACTOR = 2.4` と規則 R(m)・S(m) は既定変更では変えていない。
@@ -51,7 +51,7 @@
 
 ## 芯の連結 S(m)（CoreConnectivity）
 
-- `CoreConnectivity(m, exempt=None)`（`exempt` は保持セルの真偽配列）。`.groups(mask)`: 芯 K の6連結成分を保持セルで結んだ塊の数（K が空なら 0）。`.connected(mask)` = 塊 ≤ 1（大域。`exempt` は `mask` に無くても材料に数える）。`.window(changed_lo, changed_hi, shape)` → `(lo, hi, ext)` と `.proven(before, after, lo, hi) -> bool`: 窓の判定。**真 = 「抜く前に S(m) を満たしていれば、抜いた後も満たす」と窓の中で言えた。偽 = 言えなかっただけで破れるとは限らない**（呼び出し側が `.connected` で大域を数え直す）。`.after_bite(inner, bite, island_cells)`（`peel` 用）は、窓で言えなければ大域で数え直すところまで含む。`min_width.core_cells(material, m)`: m 立方が軸に収まらない格子では全部偽。
+- `CoreConnectivity(m, exempt=None)`（`exempt` は保持セルの真偽配列）。`.groups(mask)`: 芯 K の連結成分（m が4未満は6連結、`CORE_26_MIN_M`＝4 以上は26連結）を保持セルで結んだ塊の数（K が空なら 0）。`.connected(mask)` = 塊 ≤ 1（大域。`exempt` は `mask` に無くても材料に数える）。`.window(changed_lo, changed_hi, shape)` → `(lo, hi, ext)` と `.proven(before, after, lo, hi) -> bool`: 窓の判定。**真 = 「抜く前に S(m) を満たしていれば、抜いた後も満たす」と窓の中で言えた。偽 = 言えなかっただけで破れるとは限らない**（呼び出し側が `.connected` で大域を数え直す）。`.after_bite(inner, bite, island_cells)`（`peel` 用）は、窓で言えなければ大域で数え直すところまで含む。`min_width.core_cells(material, m)`: m 立方が軸に収まらない格子では全部偽。
 - 診断: `PeelStats.skipped_core`（`as_dict` に出る。m=1 は常に0）・`diagnostics['min_width']['design_core_groups']`。
 - **`peel` の前提: 入力 `mask` が S(m) を満たす**（窓の判定は「抜く前に満たす」を前提にした十分条件）。`_reduce_volume` は段階3の合格候補（大域検査を通ったもの）から始まるので満たす。
 - 窓判定 `proven` の健全性（真なら大域でも真）は `tests/test_min_width_core.py` が独立な物差し（`tests/topopt_support.py` の `core_groups_oracle`）と突き合わせて固定している。**`window` の範囲を変えるときはそのテストを通すこと。**

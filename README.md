@@ -91,7 +91,7 @@ claude mcp remove duocad -s local
 cd web; npm run dev                                 # 画面(5173)
 ```
 
-`http://127.0.0.1:5173/` を開く。devサーバは `/duocad-config.json` を返さないので、
+`http://localhost:5173/` を開く（`127.0.0.1` だと、`localhost` を IPv6 の `::1` へ先に解決する環境で Vite が繋がらない）。devサーバは `/duocad-config.json` を返さないので、
 画面は既定の `ws://127.0.0.1:8765` へ落ちて繋がる（Pythonサーバは立てておくこと）。
 このときだけは `web/dist` の作り直しが要らない。
 型検査は `npm run check`（`tsc --noEmit` ＋ `svelte-check`。`.svelte` の中も見る）。
@@ -129,7 +129,7 @@ cd web; npm run dev                                 # 画面(5173)
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-サーバもブラウザも要らない。実STEPを読む重いテストは含まない。
+サーバもブラウザも要らない。実STEPを読む重いテストは含まない。ただし `tests/eval_*.mjs` を走らせる検査と `tests/test_protocol.py` の型検査は Node 23.6 以上と `web/node_modules` を使うので、先に §1.1 の `npm install --prefix web` を済ませる（無いと素の clone で20件余りが落ちる）。
 
 ### 形状最適化の受入検査
 
@@ -167,13 +167,14 @@ cd web; npm run dev                                 # 画面(5173)
 & .\.venv\Scripts\python.exe topopt_checks\check_parallel.py
 
 # 保存済み最終ソリッドの三角形分割: 境界交差の検出・共有辺再分割・接続6項目・自己交差・float32(実モデル。--compare で標準メッシャーと並べる)
-& .\.venv\Scripts\python.exe topopt_checks\check_boundary_meshing.py --brep-json output\finalization_checks\<run>\000021-final-solid.json --out output\gap_causality_20260923\robust_meshing_final.json --compare
+# 入力の `*-final-solid.json` は 2026-10-06 以前の実行記録にだけある（現行の製品は作らない）。--out は既存のデータを上書きするので使い捨ての場所にする
+& .\.venv\Scripts\python.exe topopt_checks\check_boundary_meshing.py --brep-json output\optimization_runs\<古い実行>\<連番>-final-solid.json --out $env:TEMP\robust_meshing_final.json --compare
 
 # duocad本体への配線(4条件 -> 塊 -> 二値探索 -> メッシュボディ)
 & .\.venv\Scripts\python.exe topopt_checks\check_optimize_wiring.py
 ```
 
-**どれも最後の行が `OK:` で、終了コードが 0 なら合格。** 何を守っている検査かは
+**終了コードが 0 で、最後の行が `OK:` なら合格**（例外: `check_trace.py` は最後が `PASS:` と `Archive:` の行、`check_boundary_meshing.py` は結果の JSON の行で、どちらも終了コード 0 が合格）。`check_optimize_wiring.py` と `check_trace.py` は完成形検査まで通すので1回に約9分かかる（他の処理で混んだ機械ではもっと）。 何を守っている検査かは
 [docs/TOPOPT.md](docs/TOPOPT.md)「受入検査が見ているもの」。
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
@@ -267,7 +268,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層の6本と `topopt/voxelize.py` だけ、`build123d` は `query.py` と `topopt/` の3本だけ。**
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` の8本）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
 `tests/test_boundaries.py` がソースを静的走査して検査する（動的importも検出）。
 
 | モジュール | 役割 | OCP | build123d |
@@ -287,6 +288,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
 | `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
 | `duocad/kernel_brep.py` | BRep保存・`inspect_solid`・箱/格子との共通体積 | **○** | ✗ |
+| `duocad/kernel_chains.py` | 辺の連なり（フィレット・面取りで1本として振る舞う辺の組）と、フィレットの事前検査 | **○** | ✗ |
 | `duocad/mesh_geometry.py` | 三角形境界の接続検査、CADソリッド化、位相の列挙 | **○** | ✗ |
 | `duocad/kernel_sketch.py` | スケッチ平面の枠・図形種別ごとの辺・閉領域の検出。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_extrude.py` | 押し出し・回転体・ロフトの幾何（`extrude_faces` / `extrude_regions` / `revolve_regions` / `loft_regions`）。kernel を読むだけの一方向 | **○** | ✗ |
@@ -366,8 +368,8 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](docs/WEB_PITFALLS.md)�
 
 **WebSocketへの配線**: `duocad/net/ws.py` の `ai_get_status` / `ai_configure` / `ai_set_thinking` / `ai_set_api_key` / `ai_prepare` / `ai_send` / `ai_cancel`。
 
-- **`ai_*` はverbではない**（操作ログに載らずundoの単位でもない）ので `COMMANDS` に入れず、MCPツールも作らない。
-  `tests/test_ui_command_wiring.py::test_ai_commands_are_not_verbs` が固定する
+- **`ai_*` はverbではない**（操作ログに載らずundoの単位でもない）ので、`catalog.COMMANDS` には `category="protocol"`・`ws="special"`・`mcp=False` で宣言する（ソケットが受け取る名前を宣言で尽くすため）が、verb にも MCPツールにもしない。
+  `tests/test_ui_command_wiring.py::test_ai_commands_are_declared_but_are_neither_tools_nor_verbs` が固定する
 - **`ai_send` はモデルへのHTTPを待たずに返る**（`run_in_executor`）。進捗 `ai_tool_call` と最終 `ai_result` は別イベント
 - **`Session` に触るのはイベントループのスレッドだけ** —— `ToolsOnLoop`(`duocad/net/tools_on_loop.py`)が `.call()` 等をイベントループへ投げ返す
 - 中断は `ai_cancel`。反映は次のチェックポイントまで遅れうる。「どこまでやったか」は `ai_result.tool_calls`

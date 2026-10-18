@@ -33,7 +33,7 @@
 `ai_*` はverbではない(`ai_get_status` / `ai_configure` / `ai_set_thinking` / `ai_set_api_key` / `ai_prepare` / `ai_send` /
 `ai_cancel`)。
 文書を直接は変えず(操作ログに載らず、undoの単位でもない)、文書を変えるのはエージェントが呼ぶ既存ツール側で、それは通常のverb配信として後から届く。
-したがって `catalog.COMMANDS` には入れず、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
+したがって `catalog.COMMANDS` には `category="protocol"`・`ws="special"`・`mcp=False` で宣言するだけで(ソケットが受け取る名前を宣言で尽くす)、verb にも対応するMCPツールにもしない(AIがAIを起動する口は要らない)。
 
 verbコマンドは対象集合(面・辺・領域)を引数で受けない。数値・名前・パスだけを送り、押す面も丸める辺も押し出す領域も
 verbの入口(`duocad/entry.py`)がコアの選択から取る(`selection.require_selected` / `require_edges`)。
@@ -109,8 +109,7 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: ブラウザから踏めるファイル操作 -> (`Session` のメソッド名, 必須の引数名, 文書を変えるか)。
 #: 文書を変えるもの(`import_step`)の応答は状態配信、変えないもの(`export_step` / `export_stl`)は書いた先のパスだけを
 #: 要求した接続にだけ返す(`preview` と同じ扱い)。`open_document`(文書を差し替えるので全接続へ配る)・`save_document`・
-#: `rename_document`(`file` の封筒 + 状態の配り直し。`save_document` は `name` が任意で、表の「引数は全部必須」の規律に
-#: 合わない。`catalog.Param.ws` 参照)は表から外して `_dispatch` で個別に扱う。
+#: `rename_document`(`file` の封筒 + 状態の配り直し)は表から外して `_dispatch` で個別に扱う(`file` の封筒を返し、状態を配り直すため)。
 FILE_COMMANDS: dict = catalog.file_table()
 
 #: ソケットが受け取る名前の全体(宣言の `ws != "none"`)。`_dispatch` はこれに無い名前を分岐へ進めない。
@@ -594,7 +593,7 @@ class Server:
                     # 全接続へ配る —— 封筒だけだと、他のタブは消えた文書を出したまま編集を断られ続ける。
                     if applied.get("closed"):
                         await self._push(connection, applied=None)
-            # 保存は表に載らない(`name` が任意引数で、表の「引数は全部必須」の規律に合わない。`catalog.Param.ws`)。
+            # 保存は表に載らない(`file` の封筒を返し、状態も配り直すため)。
             # 契約は `Session.save_document`: 引数なし=編集中のファイルへ上書き / `name` あり=新しい名前でのみ保存(既存名は拒否)。
             # 書いた後に状態も配り直す: `state.current_name` が変わるので、`file` の封筒だけだとヘッダが「(無題)」のまま
             # Ctrl+S と自動保存が現在のファイルへ書き続ける食い違いが残る。文書は変わらないので `applied` は付けない。
