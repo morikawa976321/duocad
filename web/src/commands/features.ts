@@ -7,7 +7,7 @@
  *
  * 反復にはサーバのプレビューを出さない(変わるのはスケッチの図形でソリッドではない)。幽霊はブラウザだけで描き、規則はコアの写し(docs/contracts/verbs.md)。
  */
-import { pickedRefOf, positive, type ArgValues, type CommandDef, type Point2 } from './command'
+import { pickedRefOf, positive, refKind, type ArgValues, type CommandDef, type Point2 } from './command'
 import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg } from './moveMode'
 import type { SelectionRef } from '../session'
 
@@ -30,28 +30,31 @@ function missingSelection(values: ArgValues, name: string, label: string): strin
 }
 
 /**
- * 押し出し(verb `extrude`)。スケッチ編集中は閉領域、通常モードはソリッドの面を選ぶ2つの定義を作る(サーバは選択の種別で分岐し、混在は断る)。
+ * 押し出し(verb `extrude`)。スケッチ編集中は閉領域、通常モードはソリッドの面か領域を選ぶ2つの定義を作る
+ * (サーバは選択の種別で分岐し、混在は断る。通常モードの領域は 2026-10-18 本人決定。docs/DESIGN_DECISIONS.md)。
  * 種別(join/cut/new)は人に選ばせる: 既定の join に落ちると「切り取るつもりで足した」が黙って通る。
  * 面の距離は外向きが正(削るには負)。領域の距離は0だけが無効。
  */
 function makeExtrude(kind: 'region' | 'face'): CommandDef {
   const isFace = kind === 'face'
   const selectionName = isFace ? 'faces' : 'regions'
-  const selectionLabel = isFace ? '押し出す面' : '押し出す領域'
+  const selectionLabel = isFace ? '押し出す面・領域' : '押し出す領域'
   return {
     id: 'extrude',
     label: '押し出す',
     buttonId: 'extrude',
     preview: 'server',
     args: [
-      { kind: 'selection', name: selectionName, label: selectionLabel, shapeKind: kind, min: 1, max: null },
+      isFace
+        ? { kind: 'selection', name: selectionName, label: selectionLabel, shapeKind: 'face', kinds: ['face', 'region'], min: 1, max: null }
+        : { kind: 'selection', name: selectionName, label: selectionLabel, shapeKind: 'region', min: 1, max: null },
       {
         kind: 'number',
         name: 'distance',
-        label: isFace ? '距離(正=面の外向き)' : '距離',
+        label: isFace ? '距離(面は正=外向き)' : '距離',
         unit: 'mm',
         inputId: 'distance',
-        reject: (value) => (value === 0 ? (isFace ? '距離が0(正=面の外向き / 負=削る)' : '距離が0(形が変わらない)') : null),
+        reject: (value) => (value === 0 ? (isFace ? '距離が0(面は正=外向き / 負=削る)' : '距離が0(形が変わらない)') : null),
       },
       {
         kind: 'choice',
@@ -65,10 +68,17 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
       },
     ],
     build(values) {
-      const empty = missingSelection(values, selectionName, isFace ? '面' : '領域')
+      const empty = missingSelection(values, selectionName, isFace ? '面か領域' : '領域')
       const distance = values.distance
       const mode = values.mode
       if (empty !== null) return { ok: false, reason: empty }
+      // コアの `selection.require_extrude_targets` と同じ断り方を先に出す(押せるのにサーバで断られる、をなくす)
+      const targets = (values[selectionName] ?? []) as SelectionRef[]
+      const regions = targets.filter((ref) => refKind(ref) === 'region')
+      if (regions.length > 0 && regions.length < targets.length) return { ok: false, reason: '面と領域は一緒に押し出せない' }
+      if (new Set(regions.map((ref) => ('sketch' in ref ? ref.sketch : ''))).size > 1) {
+        return { ok: false, reason: '別々のスケッチの領域は一緒に押し出せない' }
+      }
       if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
       if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
       return { ok: true, args: { distance, mode } }
@@ -79,7 +89,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
 /** スケッチモードの押し出し(閉領域を選ぶ)。 */
 export const EXTRUDE_REGIONS: CommandDef = makeExtrude('region')
 
-/** 通常モードの押し出し(ソリッドの面を選ぶ。同一平面・同一ボディなら何枚でも)。 */
+/** 通常モードの押し出し(ソリッドの面を選ぶ。同一平面・同一ボディなら何枚でも。または1つのスケッチの領域)。 */
 export const EXTRUDE_FACES: CommandDef = makeExtrude('face')
 
 /**
@@ -162,8 +172,8 @@ export function parseShifts(text: string): number[] | null {
 /**
  * ロフト(verb `loft`)。通常モードで、別々のスケッチの領域を**つなぐ順に**選ぶ(共有選択は追加順を保ち、コアはその順で使う)。
  * スケッチ編集中に出さないのは、編集中は開いているスケッチの領域しか指せないため(`viewport.regionPickTargets`)。
- * 通常モードで領域を要求するのはこのコマンドだけで、起動中だけ全スケッチの領域が当たる(`App.svelte` の `wantsRegions`)。
- * 始点・終点の点(`start_point` / `end_point`)は画面からは送らない: スケッチの点のハンドルは編集中のスケッチにしか無い。
+ * 起動中は領域だけが指せる(`App.svelte` の `pickKinds`)。
+ * 始点・終点の点(`start_point` / `end_point`)は画面からは送らない(画面の選択に点の引数を持たない。AI(MCP)からだけ指せる)。
  * 始点のずらし(`shifts`)は断面の数と同じ個数の整数をカンマ区切りで打つ(空欄はずらさない)。
  */
 export const LOFT: CommandDef<'loft'> = {

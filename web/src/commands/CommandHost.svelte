@@ -323,7 +323,7 @@
     return missing !== null && missing.kind === 'pick' ? missing : null
   })
 
-  /** このコマンドが選択から取る種別をアプリ層へ知らせる。無起動では `[]`(面・頂点は常に指せる)。`argKinds` を通す: `shapeKind` だけだと複数種別を食う引数(`move_body` の面/辺/頂点)で辺が指せなくなる。 */
+  /** このコマンドが選択から取る種別をアプリ層へ知らせる(起動中はこれだけが指せる。無起動では `[]` で、見えているもの全部が指せる)。`argKinds` を通す: `shapeKind` だけだと複数種別を食う引数(`move_body` の面/辺/頂点)で辺が指せなくなる。 */
   $effect(() => {
     onWants(
       (command?.args ?? [])

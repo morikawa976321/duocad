@@ -106,9 +106,9 @@
     type BoxSelectEvent,
     type PickEvent,
     type SketchEntityHit,
-    type VertexMarker,
     type Viewport,
   } from './viewport'
+  import type { PickKind } from './viewportTypes'
 
   /**
    * ツールバーの中身(モードごと)。領域押し出しはソリッド側・スケッチ側の両方に載る。
@@ -196,7 +196,7 @@
   /**
    * 今どのスケッチを編集しているか(null なら編集していない)。`mode` からの派生。
    * `sketch-pending` では null のままなので、「基準平面を指せるのは `sketchId === null` のときだけ」
-   * 等の規律(`wantsBasePlanes` / `wantsEdges` / `wantsRegions`)がそのまま貼る先待ちに効く。
+   * 等の規律(`wantsBasePlanes`)がそのまま貼る先待ちに効く。
    */
   const sketchId = $derived(mode.kind === 'sketch' ? mode.id : null)
   /** ポインタが指しているスケッチ平面上の点(確定前の線を見せるためだけ)。 */
@@ -263,10 +263,15 @@
    * `wantedPick === 'vertex'` と同じ扱いで、対象ボディの頂点を候補に出し、辺より先に取る。
    */
   let wantedVertices = $state(false)
-  /** 取り寄せた辺(body_id -> その版の折れ線)。版が変われば捨てる。 */
+  /** 取り寄せた辺(body_id -> その版の折れ線)。カーソルの近くのボディから頼む(`requestPickData`)。 */
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
   let edgesAsked = new Set<string>()
+  /**
+   * 頼んだ時点の形の版(`${body_id}:${revision}` -> `shape_revision`)。届いた辺・頂点が今の形のものかを見る:
+   * 版(`revision`)は粗さ(カメラ)でも上がるので、版が違っても形が同じなら添字はそのまま使える。
+   */
+  const askedShape = new Map<string, number>()
   /** 取り寄せた辺の連なり(body_id -> その版の連なりの全部)。辺を出し直したら覚えさせ直す。描画の依存ではないので `$state` にしない。 */
   let edgeChains: Record<string, { revision: number; chains: number[][] }> = {}
   /** 連なりを頼んだ辺(`${body_id}:${revision}:${辺の添字}`)。 */
@@ -276,7 +281,7 @@
    * (`CommandHost` の `busy`。確定が先に届くと、待たせたクリックの辺を入れずに丸める)。
    */
   let pendingChainPick = $state<(() => boolean) | null>(null)
-  /** 頂点の座標(選択に頂点が入っているBodyの分だけ取り寄せる)。 */
+  /** 頂点の座標(カーソルの近くのボディと、選択に頂点が入っているボディの分だけ取り寄せる)。 */
   let vertices = $state<Record<string, VerticesPayload>>({})
   /** 取り寄せ中のもの(辺と同じ形の印)。 */
   let verticesAsked = new Set<string>()
@@ -1017,15 +1022,24 @@
         .map((item) => item.body),
     ),
   ])
-  /** 選択中の辺(辺を出している間だけ3Dで色が変わる)。 */
+  /** 選択中の辺(裏に回っても透かして強調する)。 */
   const selectedEdges = $derived(refsOfKind(selection?.items ?? [], 'edge'))
 
   /** 選択中の頂点(3Dにマーカーで出る)。 */
   const selectedVertices = $derived(refsOfKind(selection?.items ?? [], 'vertex'))
 
   /**
-   * 取り寄せた辺・頂点(`edges` / `vertices`)のうち、ボディの版(`revision`)が今と同じもの(§7)だけを返す。
-   * 古い座標・添字は、実物に無い所にマーカーが浮く・別の辺を指す。
+   * 届いた辺・頂点(版 `revision` のもの)が今の形のものか。版は粗さ(カメラ)でも上がるので、版が違っても
+   * 頼んだ時点の形の版(`askedShape`)が今と同じなら添字はそのまま使える。形が違う添字は別の辺・頂点を指す(§7)。
+   */
+  function sameShape(bodyId: string, revision: number): boolean {
+    const body = model?.bodies.find((item) => item.body_id === bodyId)
+    if (!body) return false
+    return revision === body.revision || askedShape.get(`${bodyId}:${revision}`) === body.shape_revision
+  }
+
+  /**
+   * 取り寄せた辺・頂点(`edges` / `vertices`)のうち、今の形のもの(`sameShape`)だけを返す。
    * `requireVisible` は頂点の側だけ(隠れたボディの頂点はサーバが断る)。
    * `$effect` の中から呼ぶと `model` と手元の値の両方が依存に入る(`?.` で短絡する前に読む)。
    */
@@ -1037,7 +1051,7 @@
     const body = model?.bodies.find((item) => item.body_id === bodyId)
     const known = cache[bodyId]
     if (!body || (options.requireVisible === true && !body.visible)) return null
-    return known !== undefined && known.revision === body.revision ? known : null
+    return known !== undefined && sameShape(bodyId, known.revision) ? known : null
   }
 
   /** 同じ鍵(`${body}:${revision}`)で2度頼まない(`edgesAsked` / `verticesAsked`)。 */
@@ -1047,122 +1061,82 @@
     send()
   }
 
-  /**
-   * 画面に出す頂点マーカー(参照 + 座標)。版が合っている座標しか使わない(辺と同じ §7)。
-   * 座標がまだ届いていないBodyは黙って落ち、下の `$effect` が取りに行くので次の配信で出る。
-   */
-  const vertexMarkers = $derived.by(() => {
-    const markers: VertexMarker[] = []
-    for (const item of selectedVertices) {
-      const known = freshPayload(vertices, item.body, { requireVisible: true })
-      if (known === null) continue
-      const point = known.vertices.find((candidate) => candidate.index === item.index)?.point
-      if (point) markers.push({ bodyId: item.body, vertexIndex: item.index, point })
-    }
-    // 頂点を直接ピックさせている間だけ候補を全部出す(`vertexCandidateBody`)。選ばれた頂点しか出ない
-    // 既定のままだと、回転中心に使う頂点を指せる的が無い。辺の折れ線と同じく、要求するコマンドの起動中だけ。
-    if (vertexCandidateBody !== null) {
-      const known = freshPayload(vertices, vertexCandidateBody, { requireVisible: true })
-      if (known !== null) {
-        const shown = new Set(markers.map((marker) => marker.vertexIndex))
-        for (const item of known.vertices) {
-          if (shown.has(item.index)) continue
-          markers.push({ bodyId: vertexCandidateBody, vertexIndex: item.index, point: item.point })
-        }
-      }
-    }
-    return markers
-  })
-
   function drawHighlight(): void {
     viewport?.highlight(selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
     // 選択が勝つ: ボディが選ばれているあいだは保持/除外の役割色より優先(`viewport.applyFaceMaterials` が実体)。
     viewport?.highlightBodies(selectedBodies.map((item) => item.body))
     viewport?.highlightEdges(selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
-    viewport?.showVertices(vertexMarkers)
+    viewport?.highlightVertices(selectedVertices.map((item) => ({ bodyId: item.body, vertexIndex: item.index })))
   }
 
-  // 頂点の取り寄せは候補のボディと1本の `$effect` で行う(`vertexCandidateBody` の下)。
-  // ---------------------------------------------------------------- D: 辺を取りに行く
+  // ---------------------------------------------------------------- D: 辺・頂点を取りに行く
+  /** メッシュボディは辺も頂点も持たない(サーバが「mesh body」と断る)。空で渡して「届いている」扱いにする。 */
+  const NO_EDGES = { revision: 0, deviation: 0, edges: [] }
+  const NO_VERTICES = { revision: 0, vertices: [] }
+
   /**
-   * 辺を出す対象のBody。選んでいる形のBodyを優先し、無ければアクティブボディ
-   * (アクティブ固定だと、27部品を読んだ文書で見ていない部品の辺が出る)。
+   * カーソルの近く(または矩形選択の中)のボディの辺・頂点を頼む(`viewport.onPickDataWanted`)。見えているボディだけ
+   * (隠れているものはサーバが断る)。辺は版ごと(粗さがズームで変わる)、頂点は形の版ごとに頼む(座標は粗さで変わらない)。
    */
-  /** 辺だけを食うコマンドの起動時に選択の最初の形状が属していたボディ(`onWantsKinds`)。降りたら null。 */
-  let edgeCommandBody = $state<string | null>(null)
+  function requestPickData(bodyIds: readonly string[]): void {
+    for (const bodyId of bodyIds) {
+      const body = model?.bodies.find((item) => item.body_id === bodyId)
+      if (!body || !body.visible || body.kind === 'mesh') continue
+      const key = `${bodyId}:${body.revision}`
+      if (edges[bodyId]?.revision !== body.revision) {
+        askedShape.set(key, body.shape_revision)
+        requestOnce(edgesAsked, key, () => session.getEdges(bodyId))
+      }
+      const knownVertices = vertices[bodyId]
+      if (knownVertices === undefined || !sameShape(bodyId, knownVertices.revision)) {
+        askedShape.set(key, body.shape_revision)
+        requestOnce(verticesAsked, `${bodyId}:shape:${body.shape_revision}`, () => session.getVertices(bodyId))
+      }
+    }
+  }
 
-  const edgeTargetBody = $derived.by(() => {
-    // 見えているボディだけを対象にする。AIが述語で提案した集合は隠したボディにまたがりうる、
-    // そこを頼むとサーバが「隠れているものの辺は指せない」と断って見えている辺も出なくなる。
-    // メッシュボディも外す(辺も頂点も持たず、サーバが「mesh body」と断る)。
-    const visible = new Set(
-      (model?.bodies ?? [])
-        .filter((body) => body.visible && body.kind !== 'mesh')
-        .map((body) => body.body_id),
-    )
-    const picked = (selection?.items ?? []).find(
-      (item): item is ShapeRef => !('sketch' in item) && visible.has((item as ShapeRef).body),
-    )
-    if (picked) return picked.body
-    // 辺だけを食うコマンドの起動で外した面のボディ(起動中は面を指せないので、外すと選び直す手が無い)。
-    if (edgeCommandBody !== null && visible.has(edgeCommandBody)) return edgeCommandBody
-    // アクティブボディへ落ちるときも同じ判定をする(隠したまま頼むと断られるだけ)。
-    const active = model?.active_body_id ?? null
-    return active !== null && visible.has(active) ? active : null
+  /** 選択に入った辺・頂点のボディの分も頼む(強調して描くのに座標が要る。AI が選んだものはカーソルが近くにない)。 */
+  $effect(() => {
+    requestPickData([...new Set([...selectedEdges, ...selectedVertices].map((item) => item.body))])
   })
 
   /**
-   * 回転中心の頂点を指させている間、または頂点そのものを対象にするコマンド(測定)の起動中に、
-   * 候補を出すボディ(出さないなら null)。対象は辺と同じ1つ(`edgeTargetBody`): 全ボディだと
-   * 27部品の文書で数千個の的が画面を覆う。
+   * 届いた辺・頂点を画面へ渡す。今の形のもの(`sameShape`)だけ: 形が変わったボディは捨て、カーソルが近づけば
+   * 頼み直す。辺を渡し直すと連なりも忘れるので、同じ版の連なりを覚えさせ直す。
    */
-  const vertexCandidateBody = $derived(
-    sketchId === null && (wantedPick === 'vertex' || wantedVertices) ? edgeTargetBody : null,
-  )
-
-  /** 選択に入った頂点のボディと、候補として出すボディの頂点の座標を取りに行く。見えているBodyだけに頼む(隠れているものはサーバが断る)。 */
   $effect(() => {
-    const targets = new Set(selectedVertices.map((item) => item.body))
-    if (vertexCandidateBody !== null) targets.add(vertexCandidateBody)
-    for (const target of targets) {
-      const body = model?.bodies.find((item) => item.body_id === target)
-      if (!body || !body.visible) continue
-      if (vertices[target]?.revision === body.revision) continue
-      requestOnce(verticesAsked, `${target}:${body.revision}`, () => session.getVertices(target))
+    const bodies = model?.bodies ?? []
+    const knownEdges = edges
+    const knownVertices = vertices
+    if (viewport === null) return
+    for (const body of bodies) {
+      const bodyId = body.body_id
+      if (!body.visible) {
+        viewport.setBodyEdges(bodyId, null)
+        viewport.setBodyVertices(bodyId, null)
+        continue
+      }
+      if (body.kind === 'mesh') {
+        viewport.setBodyEdges(bodyId, NO_EDGES)
+        viewport.setBodyVertices(bodyId, NO_VERTICES)
+        continue
+      }
+      const edgesOfBody = knownEdges[bodyId]
+      const usableEdges = edgesOfBody !== undefined && sameShape(bodyId, edgesOfBody.revision) ? edgesOfBody : null
+      viewport.setBodyEdges(bodyId, usableEdges)
+      const verticesOfBody = knownVertices[bodyId]
+      viewport.setBodyVertices(
+        bodyId,
+        verticesOfBody !== undefined && sameShape(bodyId, verticesOfBody.revision) ? verticesOfBody : null,
+      )
+      const chains = edgeChains[bodyId]
+      if (usableEdges !== null && chains?.revision === usableEdges.revision) viewport.setEdgeChains(bodyId, chains.chains)
     }
-  })
-
-  /** 今のコマンドが辺を要求しているか(スケッチモード中は出さない)。直接ピック(回転軸)も同じ口を通す。 */
-  const wantsEdges = $derived(
-    sketchId === null &&
-      // 面を1つ指させている間は辺を出さない。辺は面より先に拾われるので、鏡映面を狙ったクリックが
-      // 辺に取られ、その辺が対象の選択へ入ってしまう。
-      wantedPick !== 'face' &&
-      (wantedKinds.includes('edge') || wantedPick === 'edge'),
-  )
-
-  $effect(() => {
-    if (!wantsEdges || edgeTargetBody === null) {
-      viewport?.showEdges(null, [])
-      return
-    }
-    // 版が違う辺は使わない(§7)。可視性は見ない(`edgeTargetBody` が見えているボディしか返さない)。
-    const known = freshPayload(edges, edgeTargetBody)
-    if (known !== null) {
-      viewport?.showEdges(edgeTargetBody, known.edges)
-      const chains = edgeChains[edgeTargetBody]
-      if (chains?.revision === known.revision) viewport?.setEdgeChains(edgeTargetBody, chains.chains)
-      drawHighlight()
-      return
-    }
-    viewport?.showEdges(null, []) // 古い線を先に消してから頼む
-    // `model.bodies` にボディが見つからないときも `'?'` の鍵で1回だけ頼む。
-    const body = model?.bodies.find((item) => item.body_id === edgeTargetBody)
-    requestOnce(edgesAsked, `${edgeTargetBody}:${body?.revision ?? '?'}`, () => session.getEdges(edgeTargetBody))
+    drawHighlight()
   })
 
   /**
-   * 基準3平面を指せるのはスケッチのコマンドを起動している間だけ(辺と同じ)。
+   * 基準3平面を指せるのはスケッチのコマンドを起動している間だけ。
    * スケッチモード中は、奥の基準平面を掴むと線が引けなくなるので出さない。
    */
   const wantsBasePlanes = $derived(sketchId === null && wantedPlane)
@@ -1175,22 +1149,83 @@
     viewport?.showBasePlanes(on)
   })
 
+  /** 選択の種類から画面で指す種類へ(ボディ参照は面のクリックを畳んで作る。`optimizeSetFaceRef`)。 */
+  const PICK_KINDS_OF: Record<SelectableKind, PickKind[]> = {
+    face: ['face'],
+    edge: ['edge'],
+    vertex: ['vertex'],
+    region: ['region'],
+    sketch_entity: ['sketchPoint', 'sketchLine'],
+    body: ['face'],
+  }
+  const PICK_TARGET_KINDS: Record<PickTarget, PickKind[]> = {
+    face: ['face'],
+    edge: ['edge'],
+    vertex: ['vertex'],
+    sketchPoint: ['sketchPoint'],
+    sketchEntity: ['sketchLine', 'sketchPoint'],
+  }
+  const EVERY_PICK_KIND: PickKind[] = ['face', 'edge', 'vertex', 'region', 'sketchPoint', 'sketchLine']
+  /** 直接ピックで待っているものより細かい的(`pickKinds` が待っている間だけ外す)。 */
+  const FINER_THAN: Record<PickTarget, PickKind[]> = {
+    face: ['edge', 'vertex', 'sketchPoint', 'sketchLine'],
+    edge: ['vertex', 'sketchPoint'],
+    vertex: [],
+    sketchPoint: [],
+    sketchEntity: ['sketchPoint', 'vertex'],
+  }
+
   /**
-   * 通常モードで領域を指せるのは、領域を要求しているコマンドの起動中だけ。常時指せると、スケッチ平面と
-   * 重なる面を狙うクリックが手前の領域に取られる。スケッチモード中はゲートを立てない: そこの領域ピックは
-   * `setActiveSketch` 側の規律(そのスケッチの領域だけ)で動いており、触ると別スケッチの領域まで拾う。
+   * スケッチモードの外で指せる種類(docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」)。コマンドを起動していなければ
+   * 見えているもの全部、起動中はそのコマンドが受け付ける種類だけ(選択の引数と直接ピックの待ちの和)。スケッチを貼る先
+   * 待ちは面だけ(基準平面は `wantsBasePlanes`)。最適化モードで何も起動していなければ面だけ(保持・拘束を選ぶ場)。
+   * スケッチモード中は見ない(編集中のスケッチの中身だけを指す。`viewport.setActiveSketch`)。
    */
-  const wantsRegions = $derived(sketchId === null && wantedKinds.includes('region'))
+  const pickKinds = $derived.by((): PickKind[] => {
+    if (wantedPlane) return ['face']
+    // ローカルのコマンド(測定)は `model.command` に現れないが、受け付ける種類は `wantedKinds` で届く
+    const commandActive =
+      (model?.command ?? null) !== null || wantedKinds.length > 0 || wantedPick !== null || wantedVertices
+    if (!commandActive) return mode.kind === 'optimize' ? ['face'] : EVERY_PICK_KIND
+    const kinds = new Set<PickKind>()
+    for (const kind of wantedKinds) for (const pick of PICK_KINDS_OF[kind]) kinds.add(pick)
+    if (wantedPick !== null) for (const pick of PICK_TARGET_KINDS[wantedPick]) kinds.add(pick)
+    if (wantedVertices) kinds.add('vertex')
+    // 直接ピックを待っている間は、待っているものより細かい的を外す: 細かい方が先に取られ(`resolveHit`)、鏡映面を
+    // 狙った素のクリックが辺に、回転軸を狙ったクリックが辺の端の頂点に取られて対象の選択を置き換える
+    for (const finer of wantedPick === null ? [] : FINER_THAN[wantedPick]) kinds.delete(finer)
+    return [...kinds]
+  })
 
   $effect(() => {
-    // 先に読んでから渡す(上と同じ理由)。
-    const on = wantsRegions
-    viewport?.pickRegions(on)
+    const kinds = pickKinds
+    viewport?.setPickKinds(kinds)
+  })
+
+  /** 辺・頂点が届くのを待っている矩形選択(新しいものが古いものを置き換える。`onBoxSelect`)。 */
+  let pendingBox = $state<BoxSelectEvent | null>(null)
+
+  $effect(() => {
+    const waiting = pendingBox
+    if (waiting === null) return
+    const ready = waiting.pendingBodies.every((bodyId) => {
+      const body = model?.bodies.find((item) => item.body_id === bodyId)
+      if (!body || !body.visible || body.kind === 'mesh') return true
+      return freshPayload(edges, bodyId) !== null && freshPayload(vertices, bodyId) !== null
+    })
+    if (!ready) return
+    pendingBox = null
+    // 画面へ渡す側の `$effect` が先に走り終えてから集め直す(同じ配信で両方が走る順序は決まっていない)。
+    // 集め直しで新たに足りないボディが出ても待たない(届かないボディで矩形選択が止まり続けないように)。
+    setTimeout(() => {
+      if (viewport === null) return
+      onBoxSelect({ ...viewport.collectInBox(waiting.rect), pendingBodies: [], mode: waiting.mode })
+    }, 0)
   })
 
   /**
-   * 辺だけを食うコマンド(フィレット・面取り)の起動中か。面は指せず(`viewport.pickFaces`)、辺は連なりで選ぶ
-   * (`viewport.groupEdgeChains`。OCCTはこの2つを辺1本から連なり全体へ広げてかけるので、1本ずつだと光った所より広く丸まる)。
+   * 辺だけを食うコマンド(フィレット・面取り)の起動中か。辺は連なりで選ぶ(`viewport.groupEdgeChains`。
+   * OCCTはこの2つを辺1本から連なり全体へ広げてかけるので、1本ずつだと光った所より広く丸まる)。
    */
   const edgeOnlyCommand = $derived(
     sketchId === null && wantedKinds.length > 0 && wantedKinds.every((kind) => kind === 'edge'),
@@ -1198,19 +1233,8 @@
 
   $effect(() => {
     const on = edgeOnlyCommand
-    viewport?.pickFaces(!on)
     viewport?.groupEdgeChains(on)
   })
-
-  /**
-   * 回転中心の頂点を待っている間だけ、頂点を辺より先に取る(`viewport.preferVertices`)。
-   * `move_body` は辺が常に出ているので、既定順(辺が先)だと角を狙ったクリックが必ず辺に取られる。
-   */
-  $effect(() => {
-    const on = wantedPick === 'vertex' || wantedVertices
-    viewport?.preferVertices(on)
-  })
-
   function modifySelection(add: SelectionRef[], remove: SelectionRef[]): void {
     if (add.length === 0 && remove.length === 0) return
     session.modifySelection(add, remove, nextOp())
@@ -1273,6 +1297,11 @@
   }
 
   function onBoxSelect(event: BoxSelectEvent): void {
+    // 辺・頂点がまだ届いていないボディが矩形に掛かっていたら、届いてから同じ矩形で集め直す(`pendingBox`)
+    if (event.pendingBodies.length > 0) {
+      pendingBox = event
+      return
+    }
     const mode = toggleOnlyMode(event.mode)
     // 辺は連なりごとのまとまり(連なりの辺を2本囲んでも1つ)。トグルはまとまり単位(`toggleUnits`)。
     // 連なりの分からない辺があれば、届くまで選択ごと待たせる(1本だけ入れると連なりが割れる)。
@@ -1399,6 +1428,7 @@
   // 応答待ち(`pendingOp`)にはしない: 文書もビューポートも変わらない。
   function beginCommand(verb: string, args: Record<string, unknown>): void {
     pendingChainPick = null // 前のコマンドで待たせたクリックを次のコマンドへ持ち越さない
+    pendingBox = null
     session.beginCommand(verb, args, nextOp())
   }
 
@@ -1409,6 +1439,7 @@
   function endCommand(): void {
     // 中断を送った時点で捨てる(連なりの応答は中断の配信より先に届くので、届いてからでは起動中に見える)。
     pendingChainPick = null
+    pendingBox = null
     session.endCommand(nextOp())
   }
 
@@ -1505,14 +1536,7 @@
     // 辺だけを食うコマンドが起動したら、選択に残っている面を外す(辺は残す。面は指せなくなるので外す手が無い)。
     // `untrack`: ここは `CommandHost` の `$effect` の中から呼ばれ、選択を読むとその effect が選択の変化ごとに走り直す。
     if (kinds.length > 0 && kinds.every((kind) => kind === 'edge')) {
-      untrack(() => {
-        const items = currentItems()
-        const first = items.find((item): item is ShapeRef => !('sketch' in item) && 'kind' in item)
-        if (edgeCommandBody === null) edgeCommandBody = first?.body ?? null
-        modifySelection([], refsOfKind(items, 'face'))
-      })
-    } else {
-      edgeCommandBody = null
+      untrack(() => modifySelection([], refsOfKind(currentItems(), 'face')))
     }
   }
 
@@ -1525,8 +1549,8 @@
 
   /**
    * 連なりの分からない辺を指したクリック・矩形選択を、連なりが届くまで待たせる。待たせるのは最後の1件だけ。
-   * 届いたとき、指した時点の状況(辺の連なりの単位で扱うコマンドの起動中・出している辺のボディ・その版)が
-   * 変わっていれば捨てる(別の形の同じ添字の辺や、画面から消えた辺を選ばない)。
+   * 届いたとき、指した時点の状況(辺の連なりの単位で扱うコマンドの起動中・そのボディの版)が
+   * 変わっていれば捨てる(別の形の同じ添字の辺や、隠して画面から消えた辺を選ばない。版は可視性でも上がる)。
    */
   function deferUntilChains(items: Array<{ bodyId: string; edgeIndex: number }>, run: () => void): void {
     const revisionOf = (bodyId: string) => model?.bodies.find((body) => body.body_id === bodyId)?.revision
@@ -1534,7 +1558,7 @@
     pendingChainPick = () => {
       if (!edgeOnlyCommand) return true
       for (const [bodyId, revision] of pickedAt) {
-        if (edgeTargetBody !== bodyId || revisionOf(bodyId) !== revision) return true
+        if (revisionOf(bodyId) !== revision) return true
       }
       if (items.some((item) => edgeChainRefs(item.bodyId, item.edgeIndex) === null)) return false
       run()
@@ -1627,9 +1651,10 @@
         return
       }
     }
-    // 素クリックのトグル(`toggleOnlyMode`)は面・辺・頂点・領域のすべてに効かせる(測定は辺・頂点でも測る)。
+    // 素クリックのトグル(`toggleOnlyMode`)はどの種類にも効かせる(測定は辺・頂点でも測る)。
+    // 来るのは今指せる種類(`pickKinds`)だけ: コマンドの起動中はそのコマンドが受け付けるものに絞られている。
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
-    // 辺が当たったら辺。フィレット・面取り・測定の起動中だけ来る。
+    // 辺は連なりで扱うコマンド(フィレット・面取り)の起動中だけ連なりの単位(`edgeChainRefs`)、それ以外は1本。
     if (event.edge !== null) {
       const edge = event.edge
       const refs = edgeChainRefs(edge.bodyId, edge.edgeIndex)
@@ -1637,12 +1662,16 @@
       else editEdgeChain(refs, pickMode)
       return
     }
-    // 頂点が当たったら頂点。ここへ来るのは「AIが選んだ頂点を人がCtrl+クリックで外す」か「測る頂点を指す」のどちらか。
     if (event.vertex !== null) {
       editSelection(vertexRef(event.vertex.bodyId, event.vertex.vertexIndex), pickMode)
       return
     }
-    // 領域が当たったら領域。領域を要求するコマンドの起動中(スケッチ編集中を除く)だけ来る(`wantsRegions`)。
+    // スケッチの図形(点・線)。通常モードでは見えている全スケッチの図形が来る(スケッチモードは `onSketchPick`)。
+    if (event.sketchEntity !== null) {
+      const hit = event.sketchEntity
+      editSelection(sketchEntityRef(hit.sketchId, hit.entityId, hit.point), pickMode)
+      return
+    }
     if (event.region !== null) {
       editSelection(regionRef(event.region.sketchId, event.region.index), pickMode)
       return
@@ -2067,6 +2096,7 @@
     viewport.onPick(onPick)
     viewport.onBoxSelect(onBoxSelect)
     viewport.onEdgeChainWanted((ref) => requestEdgeChains(ref.bodyId, [ref.edgeIndex]))
+    viewport.onPickDataWanted(requestPickData)
     viewport.onPlaneMove((point, hit) => {
       hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit)
     })
@@ -2191,14 +2221,10 @@
     sketchId: () => sketchId,
     hoverPoint: () => hoverPoint,
     wantsBasePlanes: () => wantsBasePlanes,
-    wantsRegions: () => wantsRegions,
+    pickKinds: () => pickKinds,
     edges: () => edges,
-    edgeTargetBody: () => edgeTargetBody,
-    wantsEdges: () => wantsEdges,
     wantedPick: () => wantedPick,
-    vertexCandidateBody: () => vertexCandidateBody,
     selectedEntities: () => selectedEntities,
-    vertexMarkers: () => vertexMarkers,
     wantedVertices: () => wantedVertices,
   })
 </script>

@@ -105,7 +105,7 @@ npm run check --prefix web                               # tsc と svelte-check�
 
 - **候補は確定ではない。** 2026-10-18 の初回は機械候補の約7割が誤検出だった。型: 同名の別実体への参照（`weights`・`render`・`flat`）／`@entry`・`register_verb`・`getattr(self, ツール名)`・catalog の文字列がメソッド名・dataclass の `asdict` と trace の `_encode` で動的に生きる／呼び元が1か所でも、その呼び元が生きている private ヘルパ／基底クラスのフック（`WebHandler.log_message`）やコールバック型に合わせた未使用引数／Svelte のテンプレートからの参照。
 - **消す前に独立に反証させる。** 「意図的な残置」は docs やコメントに書かれていることが多い（旧 SIMP 引数の拒否は `docs/TOPOPT.md` が契約、`server.py` の再輸出はコメントが「名前を減らさない」と明言）。動的参照の視点と履歴・意図の視点の2つを通ったものだけを確定にした。
-- **`window.__duocad` のキー（`web/src/testHooks.svelte.ts`）は、`web/scripts/*.mjs` と `tests/` が読むものだけを置く**（2026-10-18 本人決定: 読み手の無いキーは docs が名指ししていても消す。足すときは読む本と一緒に足す）。ピックの常時化（`docs/PICK_EVERYTHING.md`）が使う `project*`・`hoveredRef`・`sketchRebuilds` と、ピックの待ち受けを見る `wanted*`・`wants*`・`vertexCandidateBody`・`vertexMarkers`・`edgeTargetBody` は、読み手が無くても残してある。
+- **`window.__duocad` のキー（`web/src/testHooks.svelte.ts`）は、`web/scripts/*.mjs` と `tests/` が読むものだけを置く**（2026-10-18 本人決定: 読み手の無いキーは docs が名指ししていても消す。足すときは読む本と一緒に足す）。ピックを見る `project*`・`hoveredRef`・`pickKinds`・`edges` と、待ち受けを見る `wanted*`・`wantsBasePlanes` は `web/scripts/smoke-pick-everything.mjs` ほかが読む。
 - **線引き**: 本番・テスト・検査スクリプトのどこからも参照されないものだけを消す。テストだけ／検査スクリプトだけが使うもの、docs が名指しするもの、保存形式・WebSocket の payload・trace の記録に載るフィールド、既定値のまま誰も変えない引数（設定の口でありデッドコードではない）は本人判断。
 
 ## 測定記録（`output/`）の書き方

@@ -83,7 +83,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **`MIRROR_BODY`**(`commands/features.ts`): `base_plane` の choice は XY/XZ/YZ + 4つめ `'face'`(「面を選ぶ」)。`'face'` はサーバへ行かず、`build` が `plane_face` へ読み替える印(コアの `base_plane` は XY/XZ/YZ のみ)。面ピックは `when: base_plane==='face'` で開く(外すと起動した瞬間に面ピックが開いて対象を選び直せない)。`mirror_body` は `ws="special"` で `plane_face` も WS に開いている(`_dispatch` が `plane_face=message.get("plane_face")` を渡す)。
 - **ピックの分岐は `onPick`/`onSketchPick` で `editSelection` より前に置く**(`tests/test_ui_command_wiring.py` が静的に固定)。
 - **修飾キー(Shift/Ctrl)付きクリックはピックへ行かない**(`event.mode === 'replace'` だけがピックに食われる)。必須ピックは対象が1つ揃った瞬間に自動で構えるので、素のクリックを全部食うと2つ目の対象が選べない。`move_body.axis_edge`/`center_vertex` にも同じ分岐が効く。
-- **面を1つ指させている間は辺を出さない**(`App.svelte` の `wantsEdges` に `wantedPick !== 'face'`)。辺は面より先に拾われ、出すと鏡映面を狙った素のクリックが辺に取られて対象選択を置き換える。面ピックを持つ verb を新設するなら同じ配慮が要る。
+- **面を1つ指させている間は、面より細かい的(辺・頂点・スケッチの点と線)を指せない**(`App.svelte` の `pickKinds` の `FINER_THAN`)。細かい的は面より先に拾われ、鏡映面を狙った素のクリックが辺に取られて対象選択を置き換える。辺を待つ間(回転軸)は頂点を外す。直接ピックを持つ verb を新設するなら `FINER_THAN` に足す。
 - **軸は図形そのもの**: 端点付近を押しても `point` を落として `{sketch, entity, point: null}` に畳む。
 - **`pickedLabel(value, target)` は `target` を渡す。** 同じ `{sketch, entity, point:null}` でも `sketchPoint` は「図形の最初の点」、`sketchEntity` は「図形1つ」。TS 上は省略できるが第1引数だけで呼ぶと表示が誤る。
 - **幽霊は無い**(`preview: 'none'`/`previewable=False` を両方維持。`resolvePicksForGhost` 経路には繋がっていない)。Enter で確定する(`needsEnter` が真)。
@@ -133,7 +133,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **OCP を import してよいカーネル層は 6 本**(`tests/test_boundaries.py` の `OCP_ALLOWED` と README の表に `kernel_extrude.py`)。
 - **UI から `extrude_face` を呼ぶ経路は無い。** ツールバーの「押し出す」は 1 つ(`#extrude`)。`features.ts` の `makeExtrude('region'|'face')` が同じ id `extrude` の 2 定義を作り、`EXTRUDE_REGIONS`(`SKETCH_FEATURE_COMMANDS`、選択引数名 `regions`)と `EXTRUDE_FACES`(通常モードの `SOLID_FEATURE_COMMANDS`、`faces`)として出す(どちらも min 1・max null)。距離 `#distance`、種別 `#extrude-mode-join/cut/new`。サーバへ送るのは両方 `{distance, mode}` だけ(対象はコアの確定選択)。旧 UI id `extrude_face`、`#extrude-regions`、`#regions-distance` は廃止。
 - 同じ id `extrude` が 2 つの一覧に居ても、`CATEGORY_OF`(`App.svelte`)は id→category で両方 `feature` なので壊れない。`findCommand(id, list)` の `list`、`CommandHost` の `commands` プロップは必須(既定なし)。
-- `App.svelte` の `verb === 'extrude' && !regionsStillExist(...)` は変更不要(面の選択なら領域参照が空集合で true)。通常モードの押し出しは領域を要求しないので、押し出しの起動中は `wantsRegions` が立たない(通常モードで領域を要求するのはロフトだけ。下の「ロフト」)。通常モードでは領域を押し出せない(スケッチ編集中に行う)。
+- `App.svelte` の `verb === 'extrude' && !regionsStillExist(...)` は変更不要(面の選択なら領域参照が空集合で true)。通常モードの押し出しは面か1つのスケッチの領域を受け付ける(2026-10-18 本人決定。`EXTRUDE_FACES` の選択引数は `kinds: ['face', 'region']`)。面と領域の混在・別スケッチの領域は画面が先に断る(`makeExtrude` の `build`。コアの `require_extrude_targets` と同じ断り方)。
 - **押し出しの公開 verb は `extrude` だけ**(領域は `regions`、面は `faces`)。`extrude_face` はカタログ・`Session`・MCP・WebSocket・`duocad.verbs.__all__` に無い。`verbs/__init__.py` は `extrude_face` モジュールを import して `register_verb` の登録だけを残す(再生専用)。`extrude_face` を新しい操作の記録に使わず、新しい verb の形の手本にしない。
 - **古い保存ログの `extrude_face`(args: `body_id`/`face_index`/`distance`)は再生される。** 中身は `kernel_extrude.extrude_faces(body.shape, [face_index], distance, "join" if distance > 0 else "cut", target_shape=body.shape)`、undo は `undo_shape`。再生した `extrude_face` の `provenance` は保存時のまま(キーは `verb`/`face_index`/`after_face_index`)。
 - **`tests/fixtures/extrude_face_log.json` は削除前の実装で作った保存ログ(体積 12240・6 面)で、`tests/test_extrude_face_replay.py` が再生して固定する。作り直さない**(「従来と同じ形」の根拠が失われる)。
@@ -161,7 +161,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **壊れた結果は例外**: 体積が断面の最大面積^1.5 の 1e-6 倍以下(潰れ・裏返り)、`BRepCheck`、**`BRepAlgoAPI_Check(solid, True, True)`(第3引数 `bTestSI` が自己干渉。False で呼ぶと潰れ・蝶ネクタイ形・180° のねじれを全部通す。sol レビューで発覚)**。断面3つ以上のなめらかな補間が断面の間で食い込む形もこれで捕まる。はみ出し(自己交差しない膨らみ)は通す。
 - **重心から見て裏に回り込む凹み(U字)のある断面は、極角で割れないので候補を2つ試す**: 長さの割合で割る → だめなら OCCT の揃え(`CheckCompatibility(True)`。ここでは `shifts` が効かないことがある)。両方だめなら「凹み」を名指す例外(`shifts` でずらすか、断面を分ける)。U字 → 円は始点をずらすと通り、U字 → 正方形は通らない(`tests/test_loft.py`)。
 - **断面は選択の領域を選んだ順**(`selection.require_selected` は追加順を保つ)。1断面1領域、隣り合う断面は別の平面。**穴のある領域は拒む**(外周を join、内側の領域を cut で2回ロフトする。本人判断 2026-10-17)。断面の平面が同じ・点が隣の断面の平面上は ValueError。
-- **点への収束は `start_point` / `end_point`(スケッチの図形の点 `{"sketch","entity","point"}`)。** ログには参照のまま載せ、再生で引き直す。断面1つ+点1つでもよい。**画面からは送らない** —— 通常モードではスケッチの点のハンドルが無い(`viewport.sketchEntityAt` は編集中のスケッチしか見ない)。AI(MCP)からだけ指せる。
-- **画面(`LOFT`)は通常モード(`SOLID_FEATURE_COMMANDS`)に置く。** 通常モードで領域を要求する唯一のコマンドで、起動中だけ `wantsRegions` が立ち、全スケッチの領域が当たる(スケッチ編集中は開いているスケッチの領域しか当たらないので、そちらには置かない)。選択は断面2つ以上・種別・始点のずらし(文字欄 `#loft-shifts`、カンマ区切り、空欄で省略。`TextArgSpec.optional`)。**作業空間へは整数の配列で出す**(`TextArgSpec.toShared`。打った文字列のまま出すと、サーバの型(array)違いで `set_command_args` が拒む。sol レビューで発覚)。実機検査は `web/scripts/smoke-loft.mjs`。
+- **点への収束は `start_point` / `end_point`(スケッチの図形の点 `{"sketch","entity","point"}`)。** ログには参照のまま載せ、再生で引き直す。断面1つ+点1つでもよい。**画面からは送らない** —— 画面のロフトは点の引数を持たない(起動中は領域だけを指せる)。AI(MCP)からだけ指せる。
+- **画面(`LOFT`)は通常モード(`SOLID_FEATURE_COMMANDS`)に置く。** 起動中は全スケッチの領域だけを指せる(`pickKinds`。スケッチ編集中は開いているスケッチの領域しか当たらないので、そちらには置かない)。選択は断面2つ以上・種別・始点のずらし(文字欄 `#loft-shifts`、カンマ区切り、空欄で省略。`TextArgSpec.optional`)。**作業空間へは整数の配列で出す**(`TextArgSpec.toShared`。打った文字列のまま出すと、サーバの型(array)違いで `set_command_args` が拒む。sol レビューで発覚)。実機検査は `web/scripts/smoke-loft.mjs`。
 - 2断面の間は直線的につながる(`ruled=True` と同体積)。傾いた平面でも曲がった継手にはならない —— 曲げたいなら間に断面を足す。端の接線・案内線(レール)は持たない(`ThruSections` に無い機能)。
 

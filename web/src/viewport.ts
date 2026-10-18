@@ -34,35 +34,37 @@ import { createSelectionBand, type BandRect } from './selectionBand'
 import { createGridPlanes } from './gridPlanes'
 import { frameVector, planePoint } from './planeMath'
 import { createBatch, type SceneBatch } from './sceneBatch'
-import { distSq, distSqPointSegment, pickNearestWithinRadius, type ScreenPickCandidate } from './screenPick'
+import { distSq, pickNearestWithinRadius, rankByOverlap, type RankedCandidate, type ScreenPickCandidate } from './screenPick'
 import { variantCache } from './viewportMaterials'
-import { buildSketchLine, createSketchLineMaterial, type SketchFatLine } from './sketchLine'
+import { buildSketchLine, createSketchLineMaterial, withLineDepthBias, type SketchFatLine } from './sketchLine'
 import { POLE_Z, upForDirection } from './viewCube'
 import { createOptimizeAnnotations } from './optimizeAnnotations'
 import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
-import { createVertexMarkers } from './vertexMarkers'
 import { createMeasureAnnotation } from './measureAnnotation'
 import { createThumbnailer } from './thumbnail'
 import { buildBodyMesh } from './bodyMesh'
-import type { BasePlaneName, EdgeGeometry } from './session'
+import { OCCLUDER_LAYER, createOcclusion } from './occlusion'
+import { closestOnPolyline, createProjector, screenHitOfPoint, type PickPolyline, type ScreenProjector } from './polylinePick'
+import { createSolidFeatures, type BodyEdges, type BodyVertices } from './solidFeatures'
+import type { BasePlaneName } from './session'
 import {
   type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
-  type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickMode, type SectionState,
-  type SketchDraw, type SketchEntityHit, type VertexMarker, type VertexRef, type Viewport,
+  type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type SectionState,
+  type SketchDraw, type SketchEntityHit, type VertexRef, type Viewport,
 } from './viewportTypes'
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
-  EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET, HOVER_LIGHTEN, LAYER,
-  OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_EDGE_COLOR, PREVIEW_COLOR,
+  DEPTH_BIAS_LAYER, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
+  HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS, PREVIEW_COLOR,
   REGION_COLOR, REGION_SELECTED_COLOR, SKETCH_COLOR, SKETCH_FIT_MARGIN, SKETCH_GHOST_COLOR, SKETCH_GHOST_WARN_COLOR, SKETCH_HANDLE_COLOR,
-  SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, WORLD_UP, isSelectableFov, lighten, type BodyMeshes,
+  SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, VERTEX_PIXELS, WORLD_UP, isSelectableFov, lighten, withDepthBias, type BodyMeshes,
 } from './viewportConstants'
 
 export { FOV_DEFAULT, FOV_ORTHO, isSelectableFov }
 export type {
   BoxSelectEvent, GeometryPayload, PickEvent, SectionState, SketchEntityHit,
-  VertexMarker, Viewport,
+  Viewport,
 }
 
 export function createViewport(container: HTMLElement): Viewport {
@@ -231,10 +233,8 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     const face = hoverFace
     if (face !== null) return paintedFaceColor(face)
-    const edge = hoverEdge
-    if (edge !== null) {
-      return pick(edgeLines.find((line) => line.userData.edgeIndex === edge.edgeIndex))
-    }
+    if (hoverEdge !== null) return features.drawnColor(hoverEdge)
+    if (hoverVertex !== null) return features.drawnColor(hoverVertex)
     const region = hoverRegion
     if (region !== null) {
       return pick(
@@ -247,6 +247,8 @@ export function createViewport(container: HTMLElement): Viewport {
     if (sketchEntity !== null) {
       const entry = sketches.get(sketchEntity.sketchId)
       if (sketchEntity.point !== null) {
+        // 編集していないスケッチの点は、ホバー中の点だけを印(`markHovered`)で描く
+        if (entry !== undefined && !entry.editing) return pick(entry.markHovered ?? undefined)
         return pick(
           entry?.handleMeshes.find(
             (mesh) => mesh.userData.entityId === sketchEntity.entityId && mesh.userData.point === sketchEntity.point,
@@ -335,15 +337,15 @@ export function createViewport(container: HTMLElement): Viewport {
   let pickListener: ((event: PickEvent) => void) | null = null
   let boxSelectListener: ((event: BoxSelectEvent) => void) | null = null
   let sectionDragListener: ((position: number) => void) | null = null
-  let edgeChainWantedListener: ((ref: EdgeRef) => void) | null = null
+  let pickDataWantedListener: ((bodyIds: string[]) => void) | null = null
   let planeMoveListener:
     | ((point: { u: number; v: number } | null, sketchEntity: SketchEntityHit | null) => void)
     | null = null
 
   // ---------------------------------------------------------------- ホバー強調
   //
-  // 「そのままクリックしたら取れるもの」を1つだけ明るくする。対象は面・辺・領域・基準平面・
-  // スケッチの図形/点。頂点は出さない(選択に入っている頂点しかマーカーが無い)。
+  // 「そのままクリックしたら取れるもの」を1つだけ明るくする。対象は面・辺・頂点・領域・基準平面・
+  // スケッチの図形/点(部品ごと。辺・頂点・編集していないスケッチの点は、ホバー中だけ描く)。
   // 当たり判定は `resolveHit` をクリックと共有する(優先順位を2箇所に書くとプレビューが嘘をつく)。
   /** ポインタの現在位置(canvasの外なら null)。解決はフレームに1回(`tick`)。 */
   let hoverAt: { x: number; y: number } | null = null
@@ -351,12 +353,12 @@ export function createViewport(container: HTMLElement): Viewport {
   let orbiting = false
   let hoverFace: FaceRef | null = null
   let hoverEdge: EdgeRef | null = null
+  let hoverVertex: VertexRef | null = null
   let hoverPlane: BasePlaneName | null = null
   let hoverRegion: { sketchId: string; index: number } | null = null
   let hoverSketchEntity: SketchEntityHit | null = null
   // 「変わったときだけ材質を書き換える」ための印(毎フレーム全メッシュを走査しない)。
   let hoverFaceKey = ''
-  let hoverEdgeKey = ''
   let hoverRegionKey = ''
   let hoverSketchKey = ''
   /** 直近にホバーを解決したときの「ポインタ位置+視点+`pickGeneration`」。同じならレイキャストごと省く。 */
@@ -377,17 +379,17 @@ export function createViewport(container: HTMLElement): Viewport {
   function invalidateHover(): void {
     hoverFace = null
     hoverEdge = null
+    hoverVertex = null
     hoverRegion = null
     hoverSketchEntity = null
     hoverFaceKey = ''
-    hoverEdgeKey = ''
     hoverRegionKey = ''
     hoverSketchKey = ''
     hoverPlane = null
     pickChanged()
     // 材質まで戻す(印を捨てるだけだと、作り直していない対象の明るい材質が居座る)
     applyFaceMaterials()
-    applyEdgeMaterials()
+    features.setHover(null, null)
     applyRegionMaterials()
     applyBasePlaneHover()
     applySketchHoverMaterials()
@@ -468,6 +470,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 面の境界線は隣り合う同色の面を狙い分けるため。メッシュボディには出さない(`bodyMesh.ts`)。
     const body = buildBodyMesh(bodyId, payload, bodyMaterials, edgeMaterial, BASE_COLOR)
     const sceneObjects: THREE.Object3D[] = [body.mesh]
+    body.mesh.layers.enable(OCCLUDER_LAYER) // 矩形選択の遮蔽(`occlusion.ts` の奥行きの読み出し)が描くのはこれだけ
     root.add(body.mesh)
     if (body.lines !== null) {
       root.add(body.lines)
@@ -492,12 +495,11 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function rebuildBodies(entries: BodyGeometryUpdate[]): void {
+    // 辺・頂点は捨てない: 粗さだけ変わった配信(カメラ由来)でも作り直しが走る。形が変わったら呼び手
+    // (`App.svelte`)が形の版を見て差し替える(古い添字の線は違う辺を指す)。
     for (const entry of entries) {
       clearBody(entry.bodyId)
       if (entry.geometry) buildBody(entry.bodyId, entry.geometry)
-      // 形が変わったBodyの辺はその場で消す(古い添字の線は違う辺を指す)。要るなら
-      // 呼び出し側が版の変化を見て取り直す(`App.svelte`)。
-      if (entry.bodyId === edgeBodyId) clearEdges()
     }
     rebuildPickIndex()
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
@@ -536,8 +538,11 @@ export function createViewport(container: HTMLElement): Viewport {
     const stale = [...bodies.keys()].filter((bodyId) => !valid.has(bodyId))
     if (stale.length === 0) return
     ghostLayer.clearPreview() // 消えるBodyの幽霊が取り残されないように(update と同じ理由)
-    if (edgeBodyId !== null && stale.includes(edgeBodyId)) clearEdges()
-    for (const bodyId of stale) clearBody(bodyId)
+    for (const bodyId of stale) {
+      features.setEdges(bodyId, null)
+      features.setVertices(bodyId, null)
+      clearBody(bodyId)
+    }
     rebuildPickIndex()
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
     updateClipPlanes() // 内容が変わった → 視錐台を引き直す
@@ -793,8 +798,8 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 面のピック(`pickAt` は切り口を区別しない呼び出し側向けの薄い覆い)。`ref` が null の当たりは
-   * 断面の切り口: 指せないが実体なので、その画素の基準平面を塞ぐ(`resolveHit`)。
+   * 面のピック。`ref` が null の当たりは断面の切り口: 指せないが実体なので、その画素の基準平面と
+   * 奥の領域を塞ぐ(`resolveHit`)。
    * レイキャストはクリップ平面を見ないので、断面が ON のときは平面をよぎる位置(`section.cut`)を
    * 境に当たりを捨てる。切られた側からレイが入る場合は、同じボディの表面をそれまでに奇数回
    * またいだかで中身かどうかを決める(描画のステンシルの偶奇と同じ。`sectionView.ts`)。
@@ -802,25 +807,32 @@ export function createViewport(container: HTMLElement): Viewport {
   function faceHitAt(
     offsetX: number,
     offsetY: number,
-  ): { ref: FaceRef | null } | null {
-    const ray = rayAt(offsetX, offsetY)
+  ): { ref: FaceRef | null; distance: number } | null {
+    return surfaceAlong(rayAt(offsetX, offsetY))
+  }
+
+  /**
+   * 視線で最初に当たる面(`faceHitAt` の中身)。遮蔽の判定(`occlusion.ts`)も同じ関数で引く: 面を指せないコマンドの
+   * 起動中も、切り口(`ref: null`)も、遮るものであることは変わらない。`raycaster.ray` を書き換える。
+   */
+  function surfaceAlong(ray: THREE.Ray): { ref: FaceRef | null; distance: number } | null {
+    if (raycaster.ray !== ray) raycaster.ray.copy(ray)
     // 隠しているメッシュは指せない(Raycaster は `visible` を見ないので明示的に外す)。
     const hits = raycaster.intersectObjects(
       pickMeshes.filter((mesh) => mesh.visible),
       false,
     )
-    const cut = section.cut(ray)
+    const cut = section.cut(raycaster.ray)
     if (cut === 'cut') return null
     if (cut === 'kept') {
-      const ref = hits.length === 0 ? null : faceRefOf(hits[0])
-      return ref === null ? null : { ref }
+      if (hits.length === 0) return null
+      return { ref: faceRefOf(hits[0]), distance: hits[0].distance }
     }
     if (cut.originKept) {
       // 残る側から切られた側へ向かうレイ: 平面の手前までしか見えない(切り口は裏から見えない)
       const first = hits[0]
       if (!first || first.distance >= cut.t) return null
-      const ref = faceRefOf(first)
-      return ref === null ? null : { ref }
+      return { ref: faceRefOf(first), distance: first.distance }
     }
     const crossings = new Map<string, number>()
     let first: THREE.Intersection | null = null
@@ -833,15 +845,10 @@ export function createViewport(container: HTMLElement): Viewport {
       if (typeof bodyId === 'string') crossings.set(bodyId, (crossings.get(bodyId) ?? 0) + 1)
     }
     for (const count of crossings.values()) {
-      if (count % 2 === 1) return { ref: null }
+      if (count % 2 === 1) return { ref: null, distance: cut.t }
     }
     if (first === null) return null
-    const ref = faceRefOf(first)
-    return ref === null ? null : { ref }
-  }
-
-  function pickAt(offsetX: number, offsetY: number): FaceRef | null {
-    return faceHitAt(offsetX, offsetY)?.ref ?? null
+    return { ref: faceRefOf(first), distance: first.distance }
   }
 
   // ------------------------------------------------------------------ 基準3平面(スケッチを貼る先)
@@ -921,126 +928,33 @@ export function createViewport(container: HTMLElement): Viewport {
       mesh.localToWorld(point)
       const screen = screenOf(point, width, height) // 画面の外・浮いているパネルの下は次の三角形を試す
       if (screen === null) continue
-      const hit = pickAt(screen.x, screen.y)
+      // 判定はクリックと同じ `resolveHit`(辺・頂点・スケッチの線が近くて取られる画素は返さない)
+      const hit = resolveHit(screen.x, screen.y).hit
       if (hit && hit.bodyId === bodyId && hit.faceIndex === faceIndex) return screen
     }
     return null
   }
 
-  // ------------------------------------------------------------------ D: 辺(選べる線)
+  // ------------------------------------------------------------------ D: 辺・頂点(`solidFeatures.ts`)と遮蔽(`occlusion.ts`)
   //
-  // 輪郭線の `EdgesGeometry`(`buildBody` 参照)はコアの辺の添字と対応しない。ここで描くのは
-  // サーバが配る `kernel.tessellate_edges` の折れ線で、1本ごとにコアの添字を持つ。
+  // 辺・頂点はサーバから取り寄せたボディの分だけ指せる(`onPickDataWanted` で頼む)。描くのはホバー中・選択中だけ。
   // ソリッドともスケッチとも別のグループに持つ(`update()`/`prune()` は `root` しか触らない)。
-  const edgeRoot = new THREE.Group()
-  scene.add(edgeRoot)
+  const features = createSolidFeatures({
+    clipPlanes: section.clipPlanes,
+    pixelAt: (point) => occlusion.pixelAt(point),
+    invalidate,
+  })
+  scene.add(features.object)
 
-  type EdgeMaterialState = 'plain' | 'user'
-  /** 辺の材質は (状態 × ホバー) のキャッシュから取る。深度検査はしない(奥の辺も見え、指せる)。 */
-  const edgeMaterials = variantCache(
-    (state: EdgeMaterialState, hovered: boolean) => `${state}:${hovered ? 1 : 0}`,
-    (state, hovered) => {
-      const base = state === 'user' ? HIGHLIGHT_COLOR : PICK_EDGE_COLOR
-      return new THREE.LineBasicMaterial({
-        color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
-        depthTest: false,
-        clippingPlanes: section.clipPlanes,
-      })
-    },
-  )
-
-  /** 今出している辺(1つのBodyぶんだけ)。空なら辺モードではない。 */
-  let edgeLines: THREE.Line[] = []
-  let edgeBodyId: string | null = null
-  /** 今出している辺の元になった配列(同じものを渡されたら作り直さない印)。 */
-  let edgeSource: EdgeGeometry[] | null = null
-  /** 今出している辺のうち連なりが分かっているもの(辺の添字 -> その連なりの添字の全部。`setEdgeChains`)。 */
-  let edgeChainOf = new Map<number, number[]>()
-  /** 辺の除去と破棄の束(ピックは `edgeLines` から)。 */
-  const edgeBatch = createBatch(edgeRoot)
-
-  function clearEdges(): void {
-    edgeBatch.clear()
-    edgeLines = []
-    edgeBodyId = null
-    edgeSource = null
-    edgeChainOf = new Map()
-    invalidateHover()
-  }
-
-  function showEdges(bodyId: string | null, edges: EdgeGeometry[]): void {
-    // 同じものを渡されたら何もしない(`App.svelte` は選択が変わるたびに呼び直すので、毎回
-    // 作り直すと辺のクリックのたびに数百本の BufferGeometry を作り直す。27部品で1Bodyに600本超)。
-    if (bodyId !== null && bodyId === edgeBodyId && edges === edgeSource) return
-    clearEdges()
-    if (bodyId === null || edges.length === 0) return
-    edgeBodyId = bodyId
-    edgeSource = edges
-    for (const edge of edges) {
-      // 2点(=6要素)未満は線にならない。`kernel.tessellate_edges` は失敗時も端点2点を返す契約なので
-      // 届かないはずだが、壊れた線を作らないための番人。
-      if (edge.points.length < 6) continue
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(new Float32Array(edge.points), 3),
-      )
-      geometry.computeBoundingSphere()
-      const line = new THREE.Line(geometry, edgeMaterials.get('plain', false))
-      line.renderOrder = LAYER.edge // 深度を書かないぶん、描く順序で面より手前に出す
-      line.userData.bodyId = bodyId
-      line.userData.edgeIndex = edge.index
-      edgeLines.push(edgeBatch.add(line, geometry))
-    }
-  }
-
-  /** 今出している辺のうち選択に入っているもの(面の `selectedFaceKeys` と同じ役目)。 */
-  let selectedEdgeIndices = new Set<number>()
-
-  /** 辺の材質を決める。選択とホバーの両方を見る唯一の場所。 */
-  function applyEdgeMaterials(): void {
-    let hovered = new Set<number>()
-    if (hoverEdge !== null && hoverEdge.bodyId === edgeBodyId) {
-      const chain = edgeChain(hoverEdge)
-      // 連なりがまだ分からない間はその1本だけ光らせ、取り寄せを頼む(届くと `setEdgeChains` が塗り直す)。
-      if (chain === null) edgeChainWantedListener?.(hoverEdge)
-      hovered = new Set(chain ?? [hoverEdge.edgeIndex])
-    }
-    for (const line of edgeLines) {
-      const edgeIndex = line.userData.edgeIndex as number
-      const isHit = selectedEdgeIndices.has(edgeIndex)
-      line.material = edgeMaterials.get(isHit ? 'user' : 'plain', hovered.has(edgeIndex))
-    }
-  }
-
-  /** 辺を連なりの単位で扱うか(`groupEdgeChains`)。 */
-  let edgeChainsWanted = false
-
-  function groupEdgeChains(on: boolean): void {
-    if (edgeChainsWanted === on) return
-    edgeChainsWanted = on
-    applyEdgeMaterials()
-  }
-
-  function edgeChain(ref: EdgeRef): number[] | null {
-    if (!edgeChainsWanted || ref.bodyId !== edgeBodyId) return [ref.edgeIndex]
-    return edgeChainOf.get(ref.edgeIndex) ?? null
-  }
-
-  function setEdgeChains(bodyId: string, chains: number[][]): void {
-    if (bodyId !== edgeBodyId) return
-    for (const members of chains) {
-      for (const index of members) edgeChainOf.set(index, members)
-    }
-    applyEdgeMaterials()
-  }
-
-  function highlightEdges(refs: EdgeRef[]): void {
-    selectedEdgeIndices = new Set(
-      refs.filter((ref) => ref.bodyId === edgeBodyId).map((ref) => ref.edgeIndex),
-    )
-    applyEdgeMaterials()
-  }
+  const occlusion = createOcclusion({
+    camera: () => camera,
+    renderer,
+    scene,
+    size,
+    surfaceDistance: (ray) => surfaceAlong(ray)?.distance ?? null,
+    contentDiagonal: () => contentDiagonal,
+    clipPlanes: section.clipPlanes,
+  })
 
   /** いまのカメラを投影の種類ごとの最小限の形へ落とす(`gridScale.ts` の純関数へ渡す用)。 */
   function cameraProjection(): CameraProjection {
@@ -1092,101 +1006,15 @@ export function createViewport(container: HTMLElement): Viewport {
   // 当たり半径の定数(`EDGE_PICK_PIXELS` / `SKETCH_HANDLE_PIXELS` / `VERTEX_PIXELS`)は画面上の
   // 半径[CSS px]として使う。Raycaster の world threshold だと注視点と対象の奥行き差で
   // 実際の screen 半径が変わり、斜めから見た線は 3D 垂線距離ぶん楕円状に当たる。
+  // 折れ線の歩き方と、狙われた3Dの点(遮蔽の判定に使う)は `polylinePick.ts`。
 
   const pickScratch = new THREE.Vector3()
 
-  /** 折れ線1本ぶんの world 座標の読み口(配列は作らない)。 */
-  interface PickPolyline {
-    count: number
-    at(index: number, out: THREE.Vector3): void
-  }
-
-  /** 折れ線を screen 上で歩き、カーソルまでの距離²[px²]の最小を返す。射影できた隣り合う2点だけを線分と見る。見えなければ null。 */
-  function polylineScreenDistSq(
-    offsetX: number,
-    offsetY: number,
-    polyline: PickPolyline,
-    width: number,
-    height: number,
-    clip: ((point: THREE.Vector3) => number) | null = null,
-  ): number | null {
-    if (clip !== null) return clippedPolylineScreenDistSq(offsetX, offsetY, polyline, width, height, clip)
-    let best = Infinity
-    let previousX = 0
-    let previousY = 0
-    let hasPrevious = false
-    for (let at = 0; at < polyline.count; at += 1) {
-      polyline.at(at, pickScratch)
-      const screen = projectRaw(pickScratch, width, height)
-      if (screen === null) {
-        hasPrevious = false
-        continue
-      }
-      if (hasPrevious) {
-        const distSq = distSqPointSegment(offsetX, offsetY, previousX, previousY, screen.x, screen.y)
-        if (distSq < best) best = distSq
-      }
-      previousX = screen.x
-      previousY = screen.y
-      hasPrevious = true
-    }
-    return best === Infinity ? null : best
-  }
-
-  const clipScratchPrevious = new THREE.Vector3()
-  const clipScratchA = new THREE.Vector3()
-  const clipScratchB = new THREE.Vector3()
-
-  /**
-   * `polylineScreenDistSq` の断面つき版。`clip`(残る側が正の符号付き距離)で切られた線分は落とし、
-   * 平面をまたぐ線分は交点で切り詰めてから測る(端点を落とすだけだと切り口手前の見えている部分が指せない)。
-   */
-  function clippedPolylineScreenDistSq(
-    offsetX: number,
-    offsetY: number,
-    polyline: PickPolyline,
-    width: number,
-    height: number,
-    clip: (point: THREE.Vector3) => number,
-  ): number | null {
-    let best = Infinity
-    let previousDistance = 0
-    let hasPrevious = false
-    for (let at = 0; at < polyline.count; at += 1) {
-      polyline.at(at, pickScratch)
-      const distance = clip(pickScratch)
-      if (hasPrevious && (previousDistance >= 0 || distance >= 0)) {
-        clipScratchA.copy(clipScratchPrevious)
-        clipScratchB.copy(pickScratch)
-        const crossing = previousDistance / (previousDistance - distance)
-        if (previousDistance < 0) clipScratchA.lerpVectors(clipScratchPrevious, pickScratch, crossing)
-        else if (distance < 0) clipScratchB.lerpVectors(clipScratchPrevious, pickScratch, crossing)
-        const a = projectRaw(clipScratchA, width, height)
-        const b = projectRaw(clipScratchB, width, height)
-        if (a !== null && b !== null) {
-          const distSq = distSqPointSegment(offsetX, offsetY, a.x, a.y, b.x, b.y)
-          if (distSq < best) best = distSq
-        }
-      }
-      clipScratchPrevious.copy(pickScratch)
-      previousDistance = distance
-      hasPrevious = true
-    }
-    return best === Infinity ? null : best
-  }
-
-  /** 素の `THREE.Line`(ソリッドの辺)の折れ線。position 属性 × `matrixWorld`。 */
-  function bufferPolyline(line: THREE.Line): PickPolyline | null {
-    const position = line.geometry.getAttribute('position')
-    if (!position || position.count < 2) return null
-    line.updateWorldMatrix(true, false)
-    const matrix = line.matrixWorld
-    return {
-      count: position.count,
-      at(index, out) {
-        out.set(position.getX(index), position.getY(index), position.getZ(index)).applyMatrix4(matrix)
-      },
-    }
+  /** 今のカメラと寸法の射影(1回の当たり判定のあいだ使い回す)。 */
+  function projector(): ScreenProjector {
+    const { width, height } = size()
+    camera.updateMatrixWorld()
+    return createProjector(camera, width, height)
   }
 
   /**
@@ -1249,79 +1077,45 @@ export function createViewport(container: HTMLElement): Viewport {
     lines: readonly L[],
     readItem: (line: L) => T | null,
     polylineOf: (line: L) => PickPolyline | null,
-    clip: ((point: THREE.Vector3) => number) | null = null,
   ): T | null {
     if (lines.length === 0) return null
-    const { width, height } = size()
+    const project = projector()
     const candidates: Array<ScreenPickCandidate<T>> = []
     for (const line of lines) {
       const item = readItem(line)
       if (item === null) continue
       const polyline = polylineOf(line)
       if (polyline === null) continue
-      const distSq = polylineScreenDistSq(offsetX, offsetY, polyline, width, height, clip)
-      if (distSq === null) continue
-      candidates.push({ item, distSq })
+      const hit = closestOnPolyline(offsetX, offsetY, polyline, project)
+      if (hit === null) continue
+      candidates.push({ item, distSq: hit.distSq })
     }
     return pickNearestWithinRadius(radiusPx, candidates)
   }
 
-  function edgeAt(offsetX: number, offsetY: number): EdgeRef | null {
-    return pickLinesAt(
-      offsetX,
-      offsetY,
-      EDGE_PICK_PIXELS,
-      edgeLines,
-      (line) => {
-        const { bodyId, edgeIndex } = line.userData
-        if (typeof bodyId !== 'string' || typeof edgeIndex !== 'number') return null
-        return { bodyId, edgeIndex }
-      },
-      bufferPolyline,
-      section.signedDistance(),
-    )
-  }
-
-  /** 折れ線の道のりの `fraction` の位置(0=始点 1=終点)。 */
-  function pointAlong(line: THREE.Line, fraction: number): THREE.Vector3 | null {
-    const position = line.geometry.getAttribute('position')
-    if (!position || position.count < 2) return null
-    const at = fraction * (position.count - 1)
-    const first = Math.min(Math.floor(at), position.count - 2)
-    const t = at - first
-    const a = new THREE.Vector3(position.getX(first), position.getY(first), position.getZ(first))
-    const b = new THREE.Vector3(
-      position.getX(first + 1),
-      position.getY(first + 1),
-      position.getZ(first + 1),
-    )
-    return a.lerp(b, t)
-  }
-
+  /** 辺の上の点の画面座標(実際にその画素でその辺が取れるものだけ)。 */
   function projectEdge(bodyId: string, edgeIndex: number): { x: number; y: number } | null {
-    if (edgeBodyId !== bodyId) return null
-    const line = edgeLines.find((candidate) => candidate.userData.edgeIndex === edgeIndex)
-    if (!line) return null
-    // 端点は避ける(隣の辺と共有していて隣が取れることがある)。中ほどから順に試し、実際にその辺へ当たる画素だけを返す。
+    // 端点は避ける(隣の辺と共有していて隣が取れることがある)。中ほどから順に試す。
     for (const fraction of [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9]) {
-      const point = pointAlong(line, fraction)
-      if (point === null) continue
+      const point = features.edgePoint({ bodyId, edgeIndex }, fraction)
+      if (point === null) return null
       const screen = toScreen(point)
       if (screen === null) continue
-      const hit = edgeAt(screen.x, screen.y)
+      const hit = resolveHit(screen.x, screen.y).edge
       if (hit && hit.bodyId === bodyId && hit.edgeIndex === edgeIndex) return screen
     }
     return null
   }
 
-  const vertexMarkers = createVertexMarkers({
-    pickPointsAt,
-    toScreen,
-    pickChanged,
-    clipPlanes: section.clipPlanes,
-    sectionKeeps: (point) => section.keeps(point),
-  })
-  scene.add(vertexMarkers.object)
+  /** 頂点の画面座標(実際にその画素でその頂点が取れるときだけ)。 */
+  function projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null {
+    const point = features.vertexPoint({ bodyId, vertexIndex })
+    if (point === null) return null
+    const screen = toScreen(point)
+    if (screen === null) return null
+    const hit = resolveHit(screen.x, screen.y).vertex
+    return hit && hit.bodyId === bodyId && hit.vertexIndex === vertexIndex ? screen : null
+  }
 
   // ------------------------------------------------------------------ C: スケッチ
   //
@@ -1334,23 +1128,27 @@ export function createViewport(container: HTMLElement): Viewport {
   const sketchGhostWarnMaterial = createSketchLineMaterial(SKETCH_GHOST_WARN_COLOR, sketchLineResolution)
 
   /**
-   * スケッチの線・点の材質は (選択状態 × ホバー) のキャッシュから取る(`faceMaterialFor` と同じ形)。
-   * 反復を展開した `entities` 側の描画は通らない(`sketchMaterial` を直接使う。ピック対象外)。
+   * スケッチの線・点の材質は (選択状態 × ホバー × 描き方) のキャッシュから取る(`faceMaterialFor` と同じ形)。
+   * 描き方: 編集中のスケッチ(作図のため)と選択中の図形(AI が選んだ裏のものも人に見える)は立体に透かす(`'xray'`)。
+   * それ以外は立体の裏に回ると隠れる(`'depth'`。docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」。
+   * 指せるかの判定 `occlusion.ts` と揃う)。
    */
   type SketchMaterialState = 'plain' | 'selected'
+  type SketchDepth = 'xray' | 'depth'
   type SketchLineMaterial = ReturnType<typeof createSketchLineMaterial>
   const sketchStateKey = (state: SketchMaterialState, hovered: boolean): string => `${state}:${hovered ? 1 : 0}`
-  // `plain` の非ホバーは既存の `sketchMaterial` を種にする(インスタンスを分裂させない)。
+  // `plain` の非ホバーの透かしは既存の `sketchMaterial` を種にする(インスタンスを分裂させない)。
   const sketchLineMaterials = variantCache(
-    sketchStateKey,
-    (state, hovered) => {
+    (state: SketchMaterialState, hovered: boolean, depth: SketchDepth) => `${sketchStateKey(state, hovered)}:${depth}`,
+    (state, hovered, depth) => {
       const base = state === 'selected' ? SKETCH_SELECTED_COLOR : SKETCH_COLOR
-      return createSketchLineMaterial(hovered ? lighten(base, HOVER_LIGHTEN) : base, sketchLineResolution)
+      const material = createSketchLineMaterial(hovered ? lighten(base, HOVER_LIGHTEN) : base, sketchLineResolution)
+      return depth === 'depth' ? withLineDepthBias(material, DEPTH_BIAS_LAYER.sketch) : material
     },
-    [['plain:0', sketchMaterial]],
+    [['plain:0:xray', sketchMaterial]],
   )
-  function sketchLineMaterialFor(state: SketchMaterialState, hovered: boolean): SketchLineMaterial {
-    return sketchLineMaterials.get(state, hovered)
+  function sketchLineMaterialFor(state: SketchMaterialState, hovered: boolean, depth: SketchDepth = 'xray'): SketchLineMaterial {
+    return sketchLineMaterials.get(state, hovered, depth)
   }
 
   // 深度を書かない(頂点マーカーと同じ。線の上に必ず出す)。
@@ -1366,18 +1164,24 @@ export function createViewport(container: HTMLElement): Viewport {
   function sketchHandleMaterialFor(state: SketchMaterialState, hovered: boolean): THREE.PointsMaterial {
     return sketchHandleMaterials.get(state, hovered)
   }
-  /** 領域の材質は (選択 × ホバー) のキャッシュから取る。不透明度は選択で変わる(非選択 0.35 / 選択 0.55)。 */
+  /**
+   * 領域の材質は (選択 × ホバー) のキャッシュから取る。不透明度は選択で変わる(非選択 0.35 / 選択 0.55)。
+   * 選択中は立体に透かし、それ以外は立体の裏に回ると隠れる(線と同じ。押し出した元の領域は押し出した面と
+   * 厳密に同一平面なので、深度バイアスで手前へ寄せる)。
+   */
   const regionMaterials = variantCache(
     (selected: boolean, hovered: boolean) => `${selected ? 1 : 0}:${hovered ? 1 : 0}`,
     (selected, hovered) => {
       const base = selected ? REGION_SELECTED_COLOR : REGION_COLOR
-      return new THREE.MeshBasicMaterial({
+      const material = new THREE.MeshBasicMaterial({
         color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
         side: THREE.DoubleSide,
         transparent: true,
         opacity: selected ? 0.55 : 0.35,
+        depthTest: !selected,
         depthWrite: false,
       })
+      return selected ? material : withDepthBias(material, DEPTH_BIAS_LAYER.sketch)
     },
   )
 
@@ -1393,23 +1197,47 @@ export function createViewport(container: HTMLElement): Viewport {
     points: Array<[number, number]>
     /** 図形1本ごとの折れ線の点数(実機検査の `sketchPolylineCounts` が読む)。 */
     polylineCounts: number[]
-    /** 点のマーカー(1点1オブジェクト)。当たった点からコアの参照へ戻すため `userData` に `entityId` と `point`(xキー)を持つ(まとめて1つの `Points` にすると戻れない)。 */
+    /** 編集中のスケッチとして作ったか(`SketchDraw.editing`)。 */
+    editing: boolean
+    /**
+     * 点のマーカー(編集中のスケッチだけ。1点1オブジェクト)。当たった点からコアの参照へ戻すため `userData` に `entityId` と
+     * `point`(xキー)を持つ(まとめて1つの `Points` にすると戻れない)。
+     */
     handleMeshes: THREE.Points[]
-    /** 図形の折れ線(元の図形だけ。`userData.entityId` を持つ)。辺のピック対象。 */
+    /**
+     * 編集していないスケッチの点(ピックの候補だけ。オブジェクトは作らない: 取り込んだ SVG はベジエの制御点が数千あり、
+     * 全スケッチに1点1オブジェクトを置くと毎フレームの走査が重い)。描くのは選択中(`markSelected`)とホバー中(`markHovered`)だけ。
+     */
+    pickPoints: Array<{ point: THREE.Vector3; entityId: string; key: string }>
+    /** 選択中の点(`entityId|xキー`)。 */
+    selectedPointKeys: Set<string>
+    markSelected: THREE.Points | null
+    markHovered: THREE.Points | null
+    /** 図形の折れ線(文書の図形だけ。`userData.entityId` を持つ)。辺のピック対象。 */
     handleLines: SketchFatLine[]
-    /** 元の図形(`handles`)。スナップ座標の解決に使う。 */
+    /** 文書の図形(`handles`)。スナップ座標の解決に使う。 */
     handles: SketchDraw['handles']
     /**
      * 直線区間(line/rectangleの辺)どうしの交点(`sketchIntersections`。曲線は対象外)。
      * `sketchCornerAt` が本物の点・`visualCorners` と同じ優先度で拾うために持つ。
      */
     intersections: ReturnType<typeof sketchIntersections>
+    /** 線・点・領域の外接球(世界座標。画面でカーソルから遠いスケッチを歩かない)。 */
+    sphere: THREE.Sphere
   }
   const sketches = new Map<string, SketchScene>()
   let ghost: SceneBatch | null = null
   let activeSketchId: string | null = null
-  /** 通常モードで領域を指せるか(`pickRegions`)。スケッチモード中は見ない(常にそのスケッチの領域が対象)。 */
-  let regionPickWanted = false
+
+  /** スケッチモードの外で指せる種類(`setPickKinds`)。既定は全部。 */
+  let pickKinds = new Set<PickKind>(['face', 'edge', 'vertex', 'region', 'sketchPoint', 'sketchLine'])
+
+  function setPickKinds(kinds: readonly PickKind[]): void {
+    const next = new Set(kinds)
+    if (next.size === pickKinds.size && [...next].every((kind) => pickKinds.has(kind))) return
+    pickKinds = next
+    pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
+  }
 
   /** スケッチ平面上の (u,v) を3Dの点へ(コアの `kernel_sketch._to_pnt` と同じ規則)。 */
   function toWorld(frame: SketchDraw['frame'], u: number, v: number): THREE.Vector3 {
@@ -1435,6 +1263,8 @@ export function createViewport(container: HTMLElement): Viewport {
     const existing = sketches.get(sketchId)
     if (!existing) return
     existing.batch.clear()
+    existing.markSelected = replaceMark(existing, existing.markSelected, new Set(), sketchHandleMaterialFor('selected', false))
+    existing.markHovered = replaceMark(existing, existing.markHovered, new Set(), sketchHandleMaterialFor('plain', true))
     sketches.delete(sketchId)
   }
 
@@ -1448,11 +1278,11 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * スケッチを作り直すかの鍵: コアの版(描くものが変わると上がる)と、点・辺の取っ手を出しているか(編集中だけ出す)。
+   * スケッチを作り直すかの鍵: コアの版(描くものが変わると上がる)と、編集中か(描き方と点のマーカーが変わる)。
    * 選択はここに入れない(作り直さずに `restyleSketch` で塗り直す)。
    */
   function sketchBuildKey(entry: SketchDraw): string {
-    return `${entry.revision}|${entry.handles.length > 0 ? 'edit' : ''}`
+    return `${entry.revision}|${entry.editing ? 'edit' : ''}`
   }
 
   /** 作り直さずに選択の印(`userData.selected` と点の見え方)だけを付け直す。材質は呼び手が塗る。 */
@@ -1468,6 +1298,38 @@ export function createViewport(container: HTMLElement): Viewport {
       const entityId = mesh.userData.entityId as string
       mesh.userData.selected = pickedWhole.has(entityId) || pickedPoints.has(`${entityId}|${mesh.userData.point as string}`)
     }
+    scene.selectedPointKeys = pickedPoints
+    if (!scene.editing) {
+      scene.markSelected = replaceMark(scene, scene.markSelected, pickedPoints, sketchHandleMaterialFor('selected', false))
+    }
+  }
+
+  /**
+   * 編集していないスケッチの点の印を差し替える(`keys` は `entityId|xキー`)。空なら消す。印は立体に透かす
+   * (選択中の点は裏でも見え、ホバー中の点は見えている点にしか乗らない)。
+   */
+  function replaceMark(
+    scene: SketchScene,
+    previous: THREE.Points | null,
+    keys: ReadonlySet<string>,
+    material: THREE.PointsMaterial,
+  ): THREE.Points | null {
+    if (previous !== null) {
+      sketchRoot.remove(previous)
+      previous.geometry.dispose()
+    }
+    const positions: number[] = []
+    for (const item of scene.pickPoints) {
+      if (keys.has(`${item.entityId}|${item.key}`)) positions.push(item.point.x, item.point.y, item.point.z)
+    }
+    if (positions.length === 0) return null
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
+    geometry.computeBoundingSphere()
+    const mark = new THREE.Points(geometry, material)
+    mark.renderOrder = LAYER.sketchPoint
+    sketchRoot.add(mark)
+    return mark
   }
 
   /** 実機検査の数え上げ(`sketchRebuilds`): スケッチを作り直した回数。選択だけの配信で増えないことを見る。 */
@@ -1528,22 +1390,27 @@ export function createViewport(container: HTMLElement): Viewport {
         regionMeshes.push(batch.add(mesh, geometry))
       }
 
-      for (const entity of entry.entities) {
-        const built = buildEntityLine(entry.frame, entity, sketchMaterial)
-        if (!built) continue
-        batch.add(built.object, built.geometry)
-        points.push(...built.points)
-        polylineCounts.push(built.points.length)
+      const editing = entry.editing
+      // 旧形式の反復の複製は `entities` にしか無い(持つときだけ描く。`SketchDraw.livePatterns`)
+      if (entry.livePatterns) {
+        const material = editing ? sketchMaterial : sketchLineMaterialFor('plain', false, 'depth')
+        for (const entity of entry.entities) {
+          const built = buildEntityLine(entry.frame, entity, material)
+          if (!built) continue
+          batch.add(built.object, built.geometry)
+          points.push(...built.points)
+          polylineCounts.push(built.points.length)
+        }
       }
 
-      // 元の図形(`handles`)を展開した描画の上に重ねる: ここに置くのは「指せるもの」
-      // (反復の複製は導出物で `entity_id` を持たず、指す対象にならない)。
+      // 文書の図形(`handles`)。ここに置くのは「指せるもの」(旧形式の反復の複製は `entity_id` を持たず指せない)。
+      const pickPoints: SketchScene['pickPoints'] = []
       for (const handle of entry.handles) {
         const selected = pickedWhole.has(handle.entityId)
         const built = buildEntityLine(
           entry.frame,
           handle,
-          sketchLineMaterialFor(selected ? 'selected' : 'plain', false),
+          sketchLineMaterialFor(selected ? 'selected' : 'plain', false, editing || selected ? 'xray' : 'depth'),
         )
         if (built) {
           built.object.renderOrder = LAYER.sketchLine
@@ -1551,6 +1418,19 @@ export function createViewport(container: HTMLElement): Viewport {
           // 選択かどうかの印(領域の `userData.selected` と同じ理由)
           built.object.userData.selected = selected
           handleLines.push(batch.add(built.object, built.geometry))
+          if (!entry.livePatterns) {
+            points.push(...built.points)
+            polylineCounts.push(built.points.length)
+          }
+        }
+        if (!editing) {
+          // 点は普段描かない(ホバー中・選択中だけ `replaceMark`)。独立した点の図形(未実装の `add_point`)は
+          // 編集していないスケッチでも常に描く(本人決定 2026-10-18。docs/DESIGN_DECISIONS.md)ので、種別を足すときはここで分ける。
+          for (const point of entityHandles(handle.kind, handle.params)) {
+            if (!Number.isFinite(point.u) || !Number.isFinite(point.v)) continue
+            pickPoints.push({ point: toWorld(entry.frame, point.u, point.v), entityId: handle.entityId, key: point.key })
+          }
+          continue
         }
         // 点が互いに独立して動く種別だけ常時表示する(entityHasIndependentPoints)。
         // rectangle/circle/arc は点が1個で、その点だけ動かすのと図形全体を動かすのが
@@ -1580,7 +1460,13 @@ export function createViewport(container: HTMLElement): Viewport {
           handleMeshes.push(batch.add(mesh, geometry))
         }
       }
-      sketches.set(entry.sketchId, {
+      const bounds = new THREE.Box3()
+      for (const line of handleLines) {
+        for (const point of line.userData.polylineWorld as THREE.Vector3[]) bounds.expandByPoint(point)
+      }
+      for (const mesh of regionMeshes) bounds.expandByObject(mesh)
+      for (const item of pickPoints) bounds.expandByPoint(item.point)
+      const scene: SketchScene = {
         builtKey: sketchBuildKey(entry),
         frame: entry.frame,
         plane: entry.plane,
@@ -1588,11 +1474,19 @@ export function createViewport(container: HTMLElement): Viewport {
         regionMeshes,
         points,
         polylineCounts,
+        editing,
         handleMeshes,
+        pickPoints,
+        selectedPointKeys: pickedPoints,
+        markSelected: null,
+        markHovered: null,
         handleLines,
         handles: entry.handles,
         intersections: sketchIntersections(entry.handles),
-      })
+        sphere: bounds.isEmpty() ? new THREE.Sphere(new THREE.Vector3(), -1) : bounds.getBoundingSphere(new THREE.Sphere()),
+      }
+      if (!editing) scene.markSelected = replaceMark(scene, null, pickedPoints, sketchHandleMaterialFor('selected', false))
+      sketches.set(entry.sketchId, scene)
     }
     if (!rebuilt) {
       applyRegionMaterials()
@@ -1635,7 +1529,26 @@ export function createViewport(container: HTMLElement): Viewport {
           hoverSketchEntity.sketchId === sketchId &&
           hoverSketchEntity.entityId === entityId &&
           hoverSketchEntity.point === null
-        line.material = sketchLineMaterialFor(selected ? 'selected' : 'plain', hovered)
+        line.material = sketchLineMaterialFor(
+          selected ? 'selected' : 'plain',
+          hovered,
+          entry.editing || selected ? 'xray' : 'depth',
+        )
+      }
+      if (!entry.editing) {
+        const hoveredPoint =
+          hoverSketchEntity !== null && hoverSketchEntity.sketchId === sketchId && hoverSketchEntity.point !== null
+            ? new Set([`${hoverSketchEntity.entityId}|${hoverSketchEntity.point}`])
+            : new Set<string>()
+        if (hoveredPoint.size > 0 || entry.markHovered !== null) {
+          const selected = [...hoveredPoint].some((key) => entry.selectedPointKeys.has(key))
+          entry.markHovered = replaceMark(
+            entry,
+            entry.markHovered,
+            hoveredPoint,
+            sketchHandleMaterialFor(selected ? 'selected' : 'plain', true),
+          )
+        }
       }
       for (const mesh of entry.handleMeshes) {
         const entityId = mesh.userData.entityId as string
@@ -1874,52 +1787,135 @@ export function createViewport(container: HTMLElement): Viewport {
     )
   }
 
-  function pickRegions(on: boolean): void {
-    if (regionPickWanted === on) return
-    regionPickWanted = on
-    pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
-  }
-
-  /** 面を指せるか(`pickFaces`)。 */
-  let facePickWanted = true
-
-  function pickFaces(on: boolean): void {
-    if (facePickWanted === on) return
-    facePickWanted = on
-    pickChanged()
-  }
-
-  /** 頂点を辺より先に見るか(`preferVertices`)。既定は辺が先(`resolveHit` の順序)。 */
-  let vertexPickWanted = false
-
-  function preferVertices(on: boolean): void {
-    if (vertexPickWanted === on) return
-    vertexPickWanted = on
-    pickChanged() // ゲートの開閉で「指せるもの」が変わる(`pickRegions` と同じ)
-  }
-
   /**
-   * 今クリックで当たってよい領域メッシュ。スケッチモード中はそのスケッチの領域だけ(ゲートは見ない)。
-   * 通常モードは `pickRegions(true)` の間だけ全スケッチの領域で、出していない間は空配列(面のピックはそのまま動く)。
+   * 今クリックで当たってよい領域メッシュ。スケッチモード中はそのスケッチの領域だけ、通常モードは指せる間
+   * (`setPickKinds` に `'region'`)だけ見えている全スケッチの領域。
    */
   function regionPickTargets(): THREE.Mesh[] {
     if (activeSketchId !== null) return sketches.get(activeSketchId)?.regionMeshes ?? []
-    if (!regionPickWanted) return []
+    if (!pickKinds.has('region')) return []
     const meshes: THREE.Mesh[] = []
     for (const target of sketches.values()) meshes.push(...target.regionMeshes)
     return meshes
   }
 
-  function regionAt(offsetX: number, offsetY: number): { sketchId: string; index: number } | null {
+  /** その画素の視線が当たる領域(近い順)と、当たった点・距離。 */
+  function regionHitsAt(
+    offsetX: number,
+    offsetY: number,
+  ): Array<{ region: { sketchId: string; index: number }; point: THREE.Vector3; distance: number }> {
     const targets = regionPickTargets()
-    if (targets.length === 0) return null
+    if (targets.length === 0) return []
     rayAt(offsetX, offsetY)
+    const found = []
+    for (const hit of raycaster.intersectObjects(targets, false)) {
+      const { sketchId, regionIndex } = hit.object.userData
+      if (typeof sketchId !== 'string' || typeof regionIndex !== 'number') continue
+      found.push({ region: { sketchId, index: regionIndex }, point: hit.point, distance: hit.distance })
+    }
+    return found
+  }
+
+  function regionAt(offsetX: number, offsetY: number): { sketchId: string; index: number } | null {
     // 近い方が勝つ(`intersectObjects` は距離順)
-    const hits = raycaster.intersectObjects(targets, false)
-    if (hits.length === 0) return null
-    const { sketchId, regionIndex } = hits[0].object.userData
-    if (typeof sketchId !== 'string' || typeof regionIndex !== 'number') return null
-    return { sketchId, index: regionIndex }
+    return regionHitsAt(offsetX, offsetY)[0]?.region ?? null
+  }
+
+  /** 通常モードの的の候補1件(`resolveHit` の点・線の段)。 */
+  interface PickCandidate {
+    hit: Partial<Omit<PickEvent, 'mode'>>
+    /** 狙われている3Dの点(遮蔽の判定がここへ視線を引く)。 */
+    point: THREE.Vector3
+    /** 遮蔽の許し[mm](`occlusion.slack`)。 */
+    slack: number
+  }
+
+  const projectedSphere = { x: 0, y: 0, w: 1 }
+
+  /** その球が画面でカーソルから `radiusPx` 以内に掛かりうるか(掛からないスケッチ・ボディは歩かない)。 */
+  function sphereNearCursor(sphere: THREE.Sphere, x: number, y: number, radiusPx: number, project: ScreenProjector): boolean {
+    if (sphere.radius < 0) return false
+    if (!project.project(sphere.center, projectedSphere)) return true // 中心がカメラの裏でも一部は見えうる
+    const reach = sphere.radius / Math.max(occlusion.pixelAt(sphere.center), 1e-12) + radiusPx
+    const dx = projectedSphere.x - x
+    const dy = projectedSphere.y - y
+    return dx * dx + dy * dy <= reach * reach
+  }
+
+  /** 編集していないスケッチの点・線のうち、当たり半径に入るもの(通常モード)。 */
+  function sketchPickCandidates(
+    x: number,
+    y: number,
+    project: ScreenProjector,
+  ): { points: Array<RankedCandidate<PickCandidate>>; lines: Array<RankedCandidate<PickCandidate>> } {
+    const points: Array<RankedCandidate<PickCandidate>> = []
+    const lines: Array<RankedCandidate<PickCandidate>> = []
+    const wantPoints = pickKinds.has('sketchPoint')
+    const wantLines = pickKinds.has('sketchLine')
+    if (!wantPoints && !wantLines) return { points, lines }
+    const pointLimit = SKETCH_HANDLE_PIXELS * SKETCH_HANDLE_PIXELS
+    const lineLimit = EDGE_PICK_PIXELS * EDGE_PICK_PIXELS
+    for (const [sketchId, scene] of sketches) {
+      if (scene.editing) continue
+      if (!sphereNearCursor(scene.sphere, x, y, SKETCH_HANDLE_PIXELS, project)) continue
+      if (wantPoints) {
+        for (const item of scene.pickPoints) {
+          const hit = screenHitOfPoint(x, y, item.point, project)
+          if (hit === null || hit.distSq > pointLimit) continue
+          points.push({
+            item: {
+              hit: { sketchEntity: { sketchId, entityId: item.entityId, point: item.key } },
+              point: hit.point,
+              slack: occlusion.slack(hit.point),
+            },
+            distSq: hit.distSq,
+            solid: false,
+            key: `s|${sketchId}|${item.entityId}|${item.key}`,
+          })
+        }
+      }
+      if (wantLines) {
+        for (const line of scene.handleLines) {
+          const entityId = line.userData.entityId
+          const polyline = sketchPolyline(line)
+          if (typeof entityId !== 'string' || polyline === null) continue
+          const hit = closestOnPolyline(x, y, polyline, project)
+          if (hit === null || hit.distSq > lineLimit) continue
+          lines.push({
+            item: {
+              hit: { sketchEntity: { sketchId, entityId, point: null } },
+              point: hit.point,
+              slack: occlusion.slack(hit.point),
+            },
+            distSq: hit.distSq,
+            solid: false,
+            key: `s|${sketchId}|${entityId}`,
+          })
+        }
+      }
+    }
+    return { points, lines }
+  }
+
+  /** 並べた候補のうち最初の見えているもの(`occlusion.ts`)。 */
+  function firstVisible(ranked: Array<RankedCandidate<PickCandidate>>): PickCandidate | null {
+    for (const candidate of ranked) {
+      if (occlusion.visible(candidate.item.point, candidate.item.slack)) return candidate.item
+    }
+    return null
+  }
+
+  /** カーソルの近くにある見えているボディ(辺・頂点の取り寄せの合図に使う)。 */
+  function bodiesNearCursor(x: number, y: number, project: ScreenProjector): string[] {
+    const near: string[] = []
+    const sphere = new THREE.Sphere()
+    for (const [bodyId, entry] of bodies) {
+      const mesh = entry.body.mesh
+      if (!mesh.visible || mesh.geometry.boundingSphere === null) continue
+      sphere.copy(mesh.geometry.boundingSphere).applyMatrix4(mesh.matrixWorld)
+      if (sphereNearCursor(sphere, x, y, EDGE_PICK_PIXELS, project)) near.push(bodyId)
+    }
+    return near
   }
 
   function lookAtSketch(sketchId: string): void {
@@ -2086,12 +2082,13 @@ export function createViewport(container: HTMLElement): Viewport {
       }
       const screen = toScreen(point.clone())
       if (screen === null) continue
-      // スケッチも一致を見る(通常モードは全スケッチの領域が対象で、添字だけだと別スケッチの同じ添字を当たりと読む)
-      const hit = regionAt(screen.x, screen.y)
+      // 判定はクリックと同じ `resolveHit`。スケッチも一致を見る(通常モードは全スケッチの領域が対象で、添字だけだと
+      // 別スケッチの同じ添字を当たりと読む)
+      const resolved = resolveHit(screen.x, screen.y)
+      const hit = resolved.region
       if (!hit || hit.sketchId !== sketchId || hit.index !== index) continue
-      // スケッチの図形が勝つ画素は返さない(スケッチモードでは点・辺が領域より手前で拾われ、`project*` の約束が破れる)。
-      // 判定はクリックと同じ `sketchEntityAt`。
-      if (sketchEntityAt(screen.x, screen.y) !== null) continue
+      // スケッチの図形が勝つ画素は返さない(スケッチモードでは点・辺が領域より手前で拾われ、`project*` の約束が破れる)
+      if (resolved.sketchEntity !== null) continue
       return screen
     }
     return null
@@ -2121,39 +2118,108 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
+  /**
+   * 矩形に完全に入り、一部でも見えているもの(docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」:
+   * 矩形選択は全種別を集める・一部でも見えていれば入れる)。通常モードの種類はクリックと同じ(`pickKinds`)。
+   * 見えているかは遮るものの奥行きを1回描いて引く(`occlusion.snapshot`)。辺・頂点がまだ届いていないボディが
+   * 矩形に掛かれば `pendingBodies` に入れて取り寄せを頼む(呼び手は届いてから集め直す)。
+   */
   function collectInBox(rect: BandRect): Omit<BoxSelectEvent, 'mode'> {
     const faces: FaceRef[] = []
     const edges: EdgeRef[] = []
     const vertices: VertexRef[] = []
     const regions: Array<{ sketchId: string; index: number }> = []
     const sketchEntities: SketchEntityHit[] = []
+    const pendingBodies: string[] = []
 
     // 寸法はこの呼び出しの間不変なので1回だけ読んで使い回す(`projectRaw` 参照)
     const { width, height } = size()
 
     if (activeSketchId === null) {
       const keep = section.keepsFilter()
-      // 面はクリックと同じゲート(`pickFaces`)。隠したBodyのメッシュは `visible=false` なので外す。
-      for (const [bodyId, entry] of facePickWanted ? bodies : []) {
+      camera.updateMatrixWorld()
+      const depth = occlusion.snapshot()
+      const seen = (point: THREE.Vector3, deviation = 0): boolean =>
+        depth === null || depth.visible(point, occlusion.slack(point, deviation))
+      const identity = new THREE.Matrix4()
+      const scratch = new THREE.Vector3()
+
+      // 面。隠したBodyのメッシュは `visible=false` なので外す。
+      for (const [bodyId, entry] of pickKinds.has('face') ? bodies : []) {
         const mesh = entry.body.mesh
         if (!mesh.visible) continue
         mesh.updateWorldMatrix(true, false)
         for (const face of entry.body.faces) {
           const positions = entry.body.facePositions(face.index)
           if (positions === null || !band.positionsInside(positions, mesh.matrixWorld, rect, width, height, keep)) continue
+          if (!faceSeen(entry.body.mesh, face, seen)) continue
           faces.push({ bodyId, faceIndex: face.index })
         }
       }
-      // 辺・頂点は「出している間だけ」(クリックの `edgeAt` / `vertexAt` と同じゲート)
-      for (const line of edgeLines) {
-        if (!band.objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
-        const { bodyId, edgeIndex } = line.userData
-        if (typeof bodyId === 'string' && typeof edgeIndex === 'number') edges.push({ bodyId, edgeIndex })
+      // 辺・頂点(届いたボディの分)
+      if (pickKinds.has('edge')) {
+        features.forEachEdge((ref, points, deviation) => {
+          if (!band.positionsInside(points, identity, rect, width, height, keep)) return
+          for (let at = 0; at + 2 < points.length; at += 3) {
+            if (seen(scratch.set(points[at], points[at + 1], points[at + 2]), deviation)) {
+              edges.push(ref)
+              return
+            }
+          }
+        })
       }
-      for (const mesh of vertexMarkers.meshes()) {
-        if (!band.objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
-        const { bodyId, vertexIndex } = mesh.userData
-        if (typeof bodyId === 'string' && typeof vertexIndex === 'number') vertices.push({ bodyId, vertexIndex })
+      if (pickKinds.has('vertex')) {
+        features.forEachVertex((ref, point) => {
+          if (keep !== null && !keep(point)) return
+          const screen = projectRaw(point, width, height)
+          if (screen === null || !band.pointInside(screen, rect)) return
+          if (seen(point)) vertices.push(ref)
+        })
+      }
+      if (pickKinds.has('edge') || pickKinds.has('vertex')) {
+        for (const [bodyId, entry] of bodies) {
+          const lacking =
+            (pickKinds.has('edge') && !features.hasEdges(bodyId)) || (pickKinds.has('vertex') && !features.hasVertices(bodyId))
+          if (lacking && entry.body.mesh.visible && bodyTouchesRect(entry.body.mesh, rect, width, height)) pendingBodies.push(bodyId)
+        }
+        if (pendingBodies.length > 0) pickDataWantedListener?.(pendingBodies)
+      }
+      // 編集していないスケッチの図形。図形全体が入っていればその図形を、入っていなければ矩形に入った点だけを返す。
+      for (const [sketchId, scene] of sketches) {
+        if (scene.editing) continue
+        const whole = new Set<string>()
+        if (pickKinds.has('sketchLine')) {
+          for (const line of scene.handleLines) {
+            const worldPoints = line.userData.polylineWorld as readonly THREE.Vector3[] | undefined
+            const entityId = line.userData.entityId
+            if (!worldPoints || typeof entityId !== 'string') continue
+            if (!band.polylineWorldInside(worldPoints, rect, width, height)) continue
+            if (!worldPoints.some((point) => seen(point))) continue
+            whole.add(entityId)
+            sketchEntities.push({ sketchId, entityId, point: null })
+          }
+        }
+        if (pickKinds.has('sketchPoint')) {
+          for (const item of scene.pickPoints) {
+            if (whole.has(item.entityId)) continue
+            const screen = projectRaw(item.point, width, height)
+            if (screen === null || !band.pointInside(screen, rect) || !seen(item.point)) continue
+            sketchEntities.push({ sketchId, entityId: item.entityId, point: item.key })
+          }
+        }
+      }
+      // 領域
+      for (const mesh of regionPickTargets()) {
+        if (!band.objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
+        const position = mesh.geometry.getAttribute('position')
+        let visible = false
+        for (let at = 0; at < position.count && !visible; at += 1) {
+          visible = seen(scratch.set(position.getX(at), position.getY(at), position.getZ(at)))
+        }
+        const { sketchId, regionIndex } = mesh.userData
+        if (visible && typeof sketchId === 'string' && typeof regionIndex === 'number') {
+          regions.push({ sketchId, index: regionIndex })
+        }
       }
     } else {
       // スケッチモードでは図形だけ。図形全体が入っていればその図形を、入っていなければ矩形に入った点だけを返す。
@@ -2175,19 +2241,53 @@ export function createViewport(container: HTMLElement): Viewport {
         if (!band.objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
         sketchEntities.push({ sketchId: activeSketchId, entityId, point })
       }
-    }
-
-    // 領域はクリックと同じゲート(`regionPickTargets`)。スケッチモード中はそのスケッチだけ。
-    for (const mesh of regionPickTargets()) {
-      if (!band.objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
-      const { sketchId, regionIndex } = mesh.userData
-      if (typeof sketchId === 'string' && typeof regionIndex === 'number') {
-        regions.push({ sketchId, index: regionIndex })
+      // 領域はクリックと同じ(そのスケッチの領域だけ)
+      for (const mesh of regionPickTargets()) {
+        if (!band.objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
+        const { sketchId, regionIndex } = mesh.userData
+        if (typeof sketchId === 'string' && typeof regionIndex === 'number') {
+          regions.push({ sketchId, index: regionIndex })
+        }
       }
     }
-    return { faces, edges, vertices, regions, sketchEntities }
+    return { faces, edges, vertices, regions, sketchEntities, rect, pendingBodies }
   }
 
+  /** 面の三角形の重心と頂点のどれかが見えているか(一部でも見えていれば入れる)。 */
+  function faceSeen(
+    mesh: THREE.Mesh,
+    face: { triangleStart: number; triangleCount: number },
+    seen: (point: THREE.Vector3) => boolean,
+  ): boolean {
+    const position = mesh.geometry.getAttribute('position')
+    const index = mesh.geometry.getIndex()
+    if (!position || !index) return true
+    const corner = new THREE.Vector3()
+    const centroid = new THREE.Vector3()
+    for (let triangle = face.triangleStart; triangle < face.triangleStart + face.triangleCount; triangle += 1) {
+      centroid.set(0, 0, 0)
+      for (let vertex = 0; vertex < 3; vertex += 1) {
+        const at = index.getX(triangle * 3 + vertex)
+        corner.set(position.getX(at), position.getY(at), position.getZ(at)).applyMatrix4(mesh.matrixWorld)
+        if (seen(corner)) return true
+        centroid.addScaledVector(corner, 1 / 3)
+      }
+      if (seen(centroid)) return true
+    }
+    return false
+  }
+
+  /** そのボディの外接球が画面で矩形に掛かるか(辺・頂点の取り寄せを頼むかの判定)。 */
+  function bodyTouchesRect(mesh: THREE.Mesh, rect: BandRect, width: number, height: number): boolean {
+    if (mesh.geometry.boundingSphere === null) return false
+    const sphere = mesh.geometry.boundingSphere.clone().applyMatrix4(mesh.matrixWorld)
+    const center = projectRaw(sphere.center, width, height)
+    if (center === null) return true
+    const radius = sphere.radius / Math.max(occlusion.pixelAt(sphere.center), 1e-12)
+    const nearestX = Math.min(Math.max(center.x, rect.left), rect.right)
+    const nearestY = Math.min(Math.max(center.y, rect.top), rect.bottom)
+    return (nearestX - center.x) ** 2 + (nearestY - center.y) ** 2 <= radius * radius
+  }
   // クリック(押した位置からほとんど動いていない)だけを選択として扱う。
   // 動いた場合は OrbitControls の視点回転であって選択ではない。
   let downAt = 0
@@ -2277,30 +2377,56 @@ export function createViewport(container: HTMLElement): Viewport {
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
       }
     }
-    // 頂点を直接ピックさせている間だけ、頂点が辺より先(`preferVertices`)。既定の順序では角の頂点は取れない
-    // (頂点は辺の端点に乗っており、`move_body` のように辺を出しているコマンドでは `edgeAt` が必ず先に当たる)。
-    // ゲートを閉じている間は既定の順序で、フィレット中に辺の端を掴めることは変わらない。
-    if (vertexPickWanted) {
-      const wanted = vertexMarkers.at(offsetX, offsetY)
-      if (wanted !== null) return { ...nothing, vertex: wanted }
+    // 通常モード: 細かいものから(点 → 線 → 面・領域)。同じ細かさで重なって見えるときはソリッドが先
+    // (`rankByOverlap`)。見えないもの(立体の裏)は飛ばして次の候補へ(`occlusion.ts`)。
+    // 細かさを先に見るのは、点は線の端に、線は面の縁に必ず乗っていて、広いものを先に見ると細かいものが一生取れないため
+    // (docs/VIEWPORT.md「固定の優先順位の下では…」)。docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」。
+    const project = projector()
+    const sketchCandidates = sketchPickCandidates(offsetX, offsetY, project)
+    const points: Array<RankedCandidate<PickCandidate>> = [...sketchCandidates.points]
+    if (pickKinds.has('vertex')) {
+      for (const candidate of features.vertexCandidates(offsetX, offsetY, VERTEX_PIXELS, project, section.keepsFilter())) {
+        points.push({
+          item: { hit: { vertex: candidate.ref }, point: candidate.point, slack: occlusion.slack(candidate.point) },
+          distSq: candidate.distSq,
+          solid: true,
+          key: `v|${candidate.ref.bodyId}|${candidate.ref.vertexIndex}`,
+        })
+      }
     }
-    // 辺を出しているときは辺が先(辺は面の上に重なり、面より後に見ると必ず面が勝つ)。出していないときは
-    // `edgeAt` が即 null を返す。この順序は変えない(基準平面を足しても辺→面は同じ)。
-    const edge = edgeAt(offsetX, offsetY)
-    if (edge !== null) return { ...nothing, edge }
-    // 領域を要求しているときは領域が先(辺と同じ「要求中のものが勝つ」)。領域はスケッチ平面の上に浮いて
-    // 押し出した板の底面と重なるので、面より後だと視点によって面が勝つ。`pickRegions(false)` の間は `regionAt` が即 null。
-    const region = regionAt(offsetX, offsetY)
-    if (region !== null) return { ...nothing, region }
-    // 頂点マーカーは面より先(最小の的なので当たったなら狙い)。辺・領域より後なのは、頂点が辺の端点に
-    // 乗っており、先に見るとフィレット起動中に辺の端が掴めなくなるため。出していない間は `vertexAt` が即 null。
-    const vertex = vertexMarkers.at(offsetX, offsetY)
-    if (vertex !== null) return { ...nothing, vertex }
-    // 面に当たる画素では面が勝ち、基準平面は面の無い画素でだけ取れる(レイ距離では競わせない。わざと:
-    // 部品のシルエットに重なる部分の基準平面は指せない。#109、本人判断 2026-10-07、docs/VIEWPORT.md「ピック」)。
-    // 基準平面は `showBasePlanes(true)` の間しか当たらない。
-    const face = facePickWanted ? faceHitAt(offsetX, offsetY) : null
-    if (face !== null) return { ...nothing, hit: face.ref }
+    const pointHit = firstVisible(rankByOverlap(Math.max(VERTEX_PIXELS, SKETCH_HANDLE_PIXELS), PICK_OVERLAP_PIXELS, points))
+    if (pointHit !== null) return { ...nothing, ...pointHit.hit }
+
+    const lines: Array<RankedCandidate<PickCandidate>> = [...sketchCandidates.lines]
+    if (pickKinds.has('edge')) {
+      for (const candidate of features.edgeCandidates(offsetX, offsetY, EDGE_PICK_PIXELS, project, section.signedDistance())) {
+        lines.push({
+          item: {
+            hit: { edge: candidate.ref },
+            point: candidate.point,
+            slack: occlusion.slack(candidate.point, candidate.deviation),
+          },
+          distSq: candidate.distSq,
+          solid: true,
+          key: `e|${candidate.ref.bodyId}|${candidate.ref.edgeIndex}`,
+        })
+      }
+    }
+    const lineHit = firstVisible(rankByOverlap(EDGE_PICK_PIXELS, PICK_OVERLAP_PIXELS, lines))
+    if (lineHit !== null) return { ...nothing, ...lineHit.hit }
+
+    // 面と領域。面に当たる画素では面が勝つ(同じ細かさならソリッドが先。押し出した元のスケッチの領域は押し出した面と
+    // 厳密に同一平面で重なる)。面を指せない間(領域だけを受け付けるコマンドの起動中)も、面は遮るものとして残る。
+    // 断面の切り口(`ref: null`)も遮る。
+    const surface = faceHitAt(offsetX, offsetY)
+    if (surface !== null && surface.ref !== null && pickKinds.has('face')) return { ...nothing, hit: surface.ref }
+    for (const candidate of regionHitsAt(offsetX, offsetY)) {
+      if (surface !== null && candidate.distance > surface.distance + occlusion.slack(candidate.point)) break
+      return { ...nothing, region: candidate.region }
+    }
+    // 基準平面は面の無い画素でだけ取れる(レイ距離では競わせない。わざと: 部品のシルエットに重なる部分の基準平面は
+    // 指せない。#109、本人判断 2026-10-07、docs/VIEWPORT.md「ピック」)。`showBasePlanes(true)` の間しか当たらない。
+    if (surface !== null) return nothing
     return { ...nothing, plane: basePlaneAt(offsetX, offsetY) }
   }
 
@@ -2411,6 +2537,13 @@ export function createViewport(container: HTMLElement): Viewport {
    * ホバー強調を1フレームぶん更新する。毎フレーム解決し直す(視点を回すとポインタが動かなくても
    * 当たるものが変わる)。材質の書き換えは変わったときだけ。
    */
+  /** カーソルの近くのボディのうち辺・頂点を頼むもの(辺・頂点を指せる間だけ。古い版かは呼び手が決める)。 */
+  function requestPickData(x: number, y: number): void {
+    if (pickDataWantedListener === null || !(pickKinds.has('edge') || pickKinds.has('vertex'))) return
+    const near = bodiesNearCursor(x, y, projector())
+    if (near.length > 0) pickDataWantedListener(near)
+  }
+
   function updateHover(): void {
     const point = orbiting ? null : hoverAt
     // カメラの値は丸めて鍵にする: 真上から見る極の近く(スケッチ中)では `OrbitControls` が毎フレーム位置と姿勢を
@@ -2425,12 +2558,13 @@ export function createViewport(container: HTMLElement): Viewport {
           `${camera.zoom}`
     if (probe === hoverProbe) return
     hoverProbe = probe
+    if (point !== null && activeSketchId === null) requestPickData(point.x, point.y)
     const next = point === null ? null : resolveHit(point.x, point.y)
-    // 頂点は出さない: 頂点が取れる画素では面も辺も光らない(クリックしても面は選ばれない)。
-    // スケッチの点・辺も同じ扱い: 予告の色は付けないが、そこが取れるときは領域を光らせない
+    // スケッチモードでは図形と領域が一緒に返る: 図形が取れるときは領域を光らせない
     // (点・辺は領域より手前で拾われ、光らせると予告が嘘になる)。
     const face = next?.hit ?? null
     const edge = next?.edge ?? null
+    const vertex = next?.vertex ?? null
     const region = next?.sketchEntity ? null : (next?.region ?? null)
     const plane = next?.plane ?? null
 
@@ -2440,14 +2574,10 @@ export function createViewport(container: HTMLElement): Viewport {
       hoverFace = face
       applyFaceMaterials()
     }
-    // 面は `applyFaceMaterials` が色を変えたときに描き直しを頼む。それ以外は当たりが変わったら頼む。
-    const nextEdgeKey = edge === null ? '' : refKey(edge.bodyId, edge.edgeIndex)
-    if (nextEdgeKey !== hoverEdgeKey) {
-      hoverEdgeKey = nextEdgeKey
-      hoverEdge = edge
-      applyEdgeMaterials()
-      invalidate()
-    }
+    // 面は `applyFaceMaterials` が色を変えたときに描き直しを頼む。辺・頂点は `features` が頼む。
+    hoverEdge = edge
+    hoverVertex = vertex
+    features.setHover(edge, vertex)
     const nextRegionKey = region === null ? '' : refKey(region.sketchId, region.index)
     if (nextRegionKey !== hoverRegionKey) {
       hoverRegionKey = nextRegionKey
@@ -2596,7 +2726,16 @@ export function createViewport(container: HTMLElement): Viewport {
     highlightBodies,
     setOptimizeState,
     setOptimizeDebug: optimizeDebug.setState,
-    showEdges,
+    setPickKinds,
+    setBodyEdges(bodyId, edges) {
+      if (features.setEdges(bodyId, edges as BodyEdges | null)) pickChanged()
+    },
+    setBodyVertices(bodyId, vertices) {
+      if (features.setVertices(bodyId, vertices as BodyVertices | null)) pickChanged()
+    },
+    onPickDataWanted(listener) {
+      pickDataWantedListener = listener
+    },
     showBasePlanes,
     setOriginVisible: originGizmo.setVisible,
     setSection: section.setState,
@@ -2609,18 +2748,16 @@ export function createViewport(container: HTMLElement): Viewport {
       const center = box.getCenter(new THREE.Vector3())
       return [center.x, center.y, center.z]
     },
-    pickRegions,
-    pickFaces,
-    groupEdgeChains,
-    edgeChain,
-    setEdgeChains,
-    onEdgeChainWanted(listener) {
-      edgeChainWantedListener = listener
+    groupEdgeChains(on) {
+      features.groupChains(on)
     },
-    preferVertices,
-    highlightEdges,
+    edgeChain: features.chainOf,
+    setEdgeChains: features.setChains,
+    onEdgeChainWanted: features.onChainWanted,
+    highlightEdges: features.highlightEdges,
+    highlightVertices: features.highlightVertices,
+    collectInBox,
     projectEdge,
-    showVertices: vertexMarkers.show,
     showMeasurement: measureAnnotation.show,
     sketchRebuilds: () => sketchRebuildCount,
     drawCalls: () => lastDrawCalls,
@@ -2629,13 +2766,14 @@ export function createViewport(container: HTMLElement): Viewport {
       return {
         face: hoverFace,
         edge: hoverEdge,
+        vertex: hoverVertex,
         region: hoverRegion,
         plane: hoverPlane,
         sketchEntity: hoverSketchEntity,
         color: hoverColorNow(),
       }
     },
-    projectVertex: vertexMarkers.project,
+    projectVertex,
     showPreview: ghostLayer.showPreview,
     clearPreview: ghostLayer.clearPreview,
     showBodyGhosts: ghostLayer.showBodyGhosts,
@@ -2677,9 +2815,8 @@ export function createViewport(container: HTMLElement): Viewport {
       sketchCursor.dispose()
       ghostLayer.clearPreview()
       clearGhost()
-      clearEdges()
-      vertexMarkers.dispose()
-      edgeMaterials.dispose()
+      features.dispose()
+      occlusion.dispose()
       for (const sketchId of [...sketches.keys()]) clearSketch(sketchId)
       band.dispose()
       sketchGhostMaterial.dispose()

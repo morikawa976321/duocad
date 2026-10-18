@@ -88,6 +88,12 @@ export const SKETCH_CURSOR_SNAP_COLOR = '#5fd97a'
 export const BOX_SELECT_MIN_PX = 6
 /** 頂点マーカーの半径[CSS px]。`EDGE_PICK_PIXELS` より細くする(太いと、辺を狙うクリックが端点のマーカーに吸われる)。 */
 export const VERTEX_PIXELS = 4
+/**
+ * 同じ細かさのソリッドの的とスケッチの的(辺とスケッチ線、頂点とスケッチの点)が「重なって見える」とみなす画面距離の差
+ * [CSS px]。差がこれ以内ならソリッドが勝ち、離れていれば近い方が勝つ(`screenPick.ts` の `rankByOverlap`)。
+ * 押し出した元のスケッチの線は押し出した辺とぴったり重なる(差 0)ので、線の太さ程度あれば足りる。
+ */
+export const PICK_OVERLAP_PIXELS = 2
 export const BACKGROUND_COLOR = 0x161a1f
 /**
  * 平面グリッドの格子線。刻みは 1/10/100mm の3段固定(`gridScale.ts` の `TIERS`)で、
@@ -252,6 +258,11 @@ export const DEPTH_BIAS_LAYER = {
   originGizmo: 5,
   /** 断面の枠。原点を通る断面では床のグリッド・原点ギズモの平面と同じ平面に乗る。 */
   sectionFrame: 6,
+  /**
+   * 編集していないスケッチの線・領域(立体の裏に回ったら隠れる。docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」)。
+   * 面に貼ったスケッチ・押し出した元のスケッチは面と厳密に同一平面で、寄せないと面と奥行きを争う。
+   */
+  sketch: 7,
 } as const
 
 /**

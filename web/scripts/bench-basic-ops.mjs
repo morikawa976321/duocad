@@ -397,26 +397,32 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius, url }) {
   await measure(
     page,
     scenario,
-    'フィレット起動→辺が届いて描ける(get_edges 往復)',
+    'フィレット起動→そのボディの今の版の辺が使える(取り寄せはカーソルの近さで先に始まる)',
     () => page.click('#fillet'),
-    (id) => window.__duocad.edges !== null && window.__duocad.edges?.body_id === id && (window.__duocad.edges?.edges ?? []).length > 0,
+    (id) => {
+      const body = (window.__duocad.state?.bodies ?? []).find((item) => item.body_id === id)
+      return window.__duocad.edges?.[id]?.revision === body?.revision && window.__duocad.edges[id].edges.length > 0
+    },
     { args: [bodyId], timeout: 60000 },
   )
   // 同じボディでもう一度起動(辺はサーバのキャッシュから)
   await page.keyboard.press('Escape')
-  await page.waitForFunction(() => window.__duocad.command === null && window.__duocad.wantsEdges === false, { timeout: 30000, polling: 'raf' })
+  await page.waitForFunction(() => window.__duocad.command === null, { timeout: 30000, polling: 'raf' })
   await clickAt(page, face.at)
   await page.waitForFunction((id) => (window.__duocad.selection?.items ?? []).some((i) => i.body === id), { timeout: 30000, polling: 'raf' }, bodyId)
   await measure(
     page,
     scenario,
-    'フィレット起動→辺が届いて描ける(再取得: 同じボディをもう一度)',
+    'フィレット起動→そのボディの今の版の辺が使える(再取得: 同じボディをもう一度)',
     () => page.click('#fillet'),
-    (id) => window.__duocad.edges !== null && window.__duocad.edges?.body_id === id && (window.__duocad.edges?.edges ?? []).length > 0,
+    (id) => {
+      const body = (window.__duocad.state?.bodies ?? []).find((item) => item.body_id === id)
+      return window.__duocad.edges?.[id]?.revision === body?.revision && window.__duocad.edges[id].edges.length > 0
+    },
     { args: [bodyId], timeout: 60000 },
   )
-  const candidates = await page.evaluate(() => {
-    const edges = window.__duocad.edges?.edges ?? []
+  const candidates = await page.evaluate((id) => {
+    const edges = window.__duocad.edges?.[id]?.edges ?? []
     return edges
       .filter((e) => e.kind === 'line' && e.length > 3)
       .sort((a, b) => b.length - a.length)
@@ -425,7 +431,7 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius, url }) {
         const n = e.points.length / 3
         return { index: e.index, mid: [(e.points[0] + e.points[(n - 1) * 3]) / 2, (e.points[1] + e.points[(n - 1) * 3 + 1]) / 2, (e.points[2] + e.points[(n - 1) * 3 + 2]) / 2] }
       })
-  })
+  }, bodyId)
   let edge = null
   for (const c of candidates) {
     const at = await screenOf(page, 'projectPoint', c.mid)

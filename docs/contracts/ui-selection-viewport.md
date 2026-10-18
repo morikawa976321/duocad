@@ -32,38 +32,39 @@
 - **`size()` の結果をモジュール側の変数へキャッシュしない**(リサイズで同じ画素が別のものを指す)。巻き上げてよいのは「1回の呼び出しの中だけ」。画面ピックの `pickPointsAt` / `pickLinesAt` も同じ。
 - **罠**: `web/dist` は `.gitignore` 対象のビルド成果物。`web/src` を編集しても `npm run build` を挟まないと実機 smoke・計測に反映されない(計測フックが「見つからない」で timeout する偽の失敗。`git status` は「ビルドした」の証拠にならない)。A/B で別サーバ起動をまたいで選択結果を比べるときは、`bodyId` がインポートごとに非決定的なので**ボディごとの面インデックス集合に正規化**してから比較する。
 
-## 画面ピック(`web/src/screenPick.ts` / `viewport.ts` / `vertexMarkers.ts`)
+## 画面ピック(`web/src/screenPick.ts` / `polylinePick.ts` / `occlusion.ts` / `solidFeatures.ts` / `viewport.ts`)
 
-- `screenPick.ts` は three.js 非依存の純関数。`distSqPointSegment`(t を [0,1] に clamp、長さ0でも0除算しない)と `pickNearestWithinRadius`(**半径は inclusive**、**同着は先に来た候補が勝つ**、`NaN` の `distSq` は最短を横取りしない)。`viewport.ts` 内部の `projectForPick`(当たり判定専用の射影。`toScreen` と別物で viewport 矩形でも `clickable()` でも切らない)/ `pickPointsAt` / `pickLinesAt`(`polylineOf` は `{count, at(index,out)}` を返し world 座標配列を作らせない。実体は `bufferPolyline` と `sketchPolyline`)。
-- **当たり半径は画面上の CSS px**。`EDGE_PICK_PIXELS`=6 / `VERTEX_PIXELS`=4 / `SKETCH_HANDLE_PIXELS`=7。world 空間の threshold を Raycaster へ渡す形へ戻さない(`tests/eval_screen_pick.mjs` 等が視点を動かしても 2px hit / 12px miss が変わらないことを固定)。
-- 優先順位: スケッチは点→線、`resolveHit` は `preferVertices`→辺→領域→頂点→面。ゲート(出していないものは指せない)も維持。**tie-break は screen 距離最小**(Raycaster の3D距離順ではない。意図的変更)ので、重なって見える辺で以前と違う辺が取れうる。
-- **依存禁止**: `Line2`(スケッチの図形)の `geometry.getAttribute('position')` を折れ線だと思わない(太線描画用の箱テンプレート8頂点)。world 座標の点列は `buildEntityLine` が入れる `userData.polylineWorld: THREE.Vector3[]`(矩形選択も同じものを読む)。`worldPerPixel()` は当たり判定の正ではない(残る用途はグリッド段・可変解像度・clip・カメラ静止判定・`resolveHit` の「面と基準平面の同着は面が勝つ」1画素しきい値)。`edgeAt` はホバーから毎フレーム走る。
-- **Raycaster を粗い broad phase に降格する案は入れない**: 27部品 mATX PC ケース(`web/scripts/models.mjs` の `PC_CASE_STEP`)の最大ボディ(233面・辺645本・折れ線点1,768)、1280×860 で `edgeAt` 1回が p50 0.2ms／p95 0.7ms／最大1.4ms(基準 p95>16ms に20倍以上の余裕)。`edgeLines` は常に1ボディぶん(`showEdges` の契約)。
-- **未確認の手動受入**: 斜め視点で bezier に沿ったホバー、27部品モデルで狙った辺が取れること、`preferVertices` を通る実機 smoke(`vertexAt` 単体の検査しか無く退行を捕まえない)。
+規則(何をどの順で指せるか・遮蔽・矩形選択)の正は docs/VIEWPORT.md「ピック」。ここは作りの約束だけ。
+
+- `screenPick.ts` は three.js 非依存の純関数。`distSqPointSegment`(t を [0,1] に clamp、長さ0でも0除算しない)・`pickNearestWithinRadius`(**半径は inclusive**、**同着は先に来た候補が勝つ**、`NaN` の `distSq` は最短を横取りしない)・`perspectiveParam`(画面上の位置を3Dの位置へ戻す透視補正)・`rankByOverlap`(同じ細かさの候補を並べる。スケッチの的に重なりの幅を足し、同着は鍵の順)。`polylinePick.ts` が world → screen の射影と折れ線の歩き方を持ち、距離と一緒に狙われた3Dの点を返す(`closestOnPolyline`。遮蔽の判定がその点へ視線を引く)。`polylineOf` は `{count, at(index,out)}` を返し world 座標配列を作らせない。
+- **当たり半径は画面上の CSS px**。`EDGE_PICK_PIXELS`=6 / `VERTEX_PIXELS`=4 / `SKETCH_HANDLE_PIXELS`=7、重なりの幅 `PICK_OVERLAP_PIXELS`=2。world 空間の threshold を Raycaster へ渡す形へ戻さない(`tests/eval_screen_pick.mjs` 等が視点を動かしても 2px hit / 12px miss が変わらないことを固定)。
+- **ホバー・クリック・`project*`・矩形選択は同じ種類(`pickKinds`)と同じ遮蔽で判定する**。`project*` は `resolveHit` で「その画素で本当にそれが取れるか」を確かめてから返す(面の `project` も。辺・頂点・スケッチの線が近くて取られる画素は返さない)。矩形選択だけは遮蔽を奥行きの読み出し(`occlusion.snapshot`)で引く。
+- **依存禁止**: `Line2`(スケッチの図形)の `geometry.getAttribute('position')` を折れ線だと思わない(太線描画用の箱テンプレート8頂点)。world 座標の点列は `buildEntityLine` が入れる `userData.polylineWorld: THREE.Vector3[]`(矩形選択も同じものを読む)。`worldPerPixel()` は当たり判定の正ではない(遮蔽の許しは `occlusion.pixelAt` = その点の奥行きでの1画素)。`resolveHit` はホバーから毎フレーム走る(ポインタ・カメラ・世代が変わったときだけ)。
+- **辺・頂点のデータはボディごと**(`viewport.setBodyEdges` / `setBodyVertices`)。渡すのは今の形のものだけ(`App.svelte` の `sameShape`: 版 `revision` は粗さでも上がるので、頼んだ時点の形の版 `shape_revision` で照らす)。メッシュボディは空で渡す(辺・頂点を持たない。待ち続けないため)。
+- **未確認の手動受入**: 斜め視点で bezier に沿ったホバー、27部品モデルで狙った辺が取れること。
 - **罠**: ズーム直後に判定を読むと時々落ちる(ズームが可変解像度の測り直しを起こし、スケッチの折れ線が作り直される)。`stateEpoch` が止まるまで待ってから測る。pytest は `.venv\Scripts\python.exe` で(素の `python` は `OCP` 無しで51件が収集エラー)。
 
 ## 辺だけを食うコマンド(フィレット・面取り)
 
-- 起動中(`App.svelte` の `edgeOnlyCommand` = 選択引数の種別が辺だけ)は**面を指せない**(`viewport.pickFaces(false)`。クリック・ホバー・矩形選択のすべて)。起動した時点で選択に残っている**面だけを外す**(辺・頂点などは残す。本人判断 2026-10-13)。外した面のボディは起動中の辺の対象として覚える(`edgeCommandBody`。覚えないと辺がアクティブボディへ戻り、面を指せないので選び直せない)。起動中に面で辺のボディを切り替える手は無い。矩形選択のトグルも連なり単位(`toggleUnits`)。
+- 起動中は辺だけを指せる(`pickKinds`。クリック・ホバー・矩形選択のすべて)。起動した時点で選択に残っている**面だけを外す**(辺・頂点などは残す。本人判断 2026-10-13)。矩形選択のトグルも連なり単位(`toggleUnits`)。
 - 辺は**連なり**で選ぶ(`viewport.groupEdgeChains(true)`)。連なりは `duocad/kernel_chains.py` = OCCT のフィレットが辺1本から広げる範囲(一直線上で割れた辺・直線→円弧の接線連続)で、辺の折れ線には入れず、ホバー・クリック・矩形で囲んだ辺の分だけ `get_edge_chains` で取り寄せる(全辺ぶんは大きな部品で 0.5 秒。issue #167)。1本ずつ選ばせると、光った1本より広く丸まる(実測: 1本を `Add` すると連なり全部にフィレット・面取りがかかる)。連なりの届く前のクリック・矩形選択は、届くまで待ってから連なりで入れる(1本だけ入れない)。届くまでのホバーはその1本だけ光る。トグルは「全部入っていれば全部外す、そうでなければ欠けている分を足す」。矩形選択も連なりへ広げる。
 - 選択・操作ログに入るのは辺1本ずつの添字のまま(カーネルの辺は統合しない。辺には面の `face_map` にあたる由来が無く、統合で添字が変わると保存済みログの再生が別の辺を指す)。測定・回転軸は連なりにしない(辺を1本として指す)。
 
-## ピックの優先順位・頂点待ち(`preferVertices`)
+## 直接ピックの待ち(回転軸・回転中心・鏡映面)
 
-- **角の頂点は既定のピック順序では取れない**。`resolveHit` は辺を頂点より先に見る(フィレット中に辺の端を掴むため)ので、辺が常に出ていると頂点狙いのクリックが100%辺に取られる(症状は「クリックしても何も起きない」だけ)。待っている間だけ `viewport.preferVertices(true)` で順序を入れ替える。**出しっぱなしにしない**(戻す責任は要求側)。
-- 頂点マーカーは選択に入ったものしか出ない=指せる的が画面に無いので、待っている間だけ対象ボディの全頂点を候補として出す(`vertexCandidateBody`、`__duocad.wantedPick` とともに実機検査用の穴。製品の分岐に使わない)。待ち受けが降りた瞬間に消える。
+- 待っている種類は起動中に指せる種類へ足す(`pickKinds` = 選択の引数の種類 ∪ 待っている種類)。待ち受けは素のクリックだけを食い、修飾キー付きのクリックは対象の選択を足し外しする(`onPick`)。
 - メッシュボディのピックは `App.svelte` の `pickedRef` でボディ参照へ畳む(畳まないと `select_face` が断り、ドラッグの一括選択が丸ごと落ちる)。`dedupeRefs` を外さない(重複 `{kind:"body"}` が `modify_selection` へ並ぶ)。**スケッチを貼る先だけは畳まず断る**。詳細は ui-optimize-integration.md。
 
-## 頂点マーカー・分割モジュール(`viewport.ts` と兄弟)
+## 分割モジュール(`viewport.ts` と兄弟)
 
 - 分割の形は `planeGrid.ts` と同じ: `create*(deps)` がハンドルを返し、three.js オブジェクトは `object` として渡すだけ。`scene.add` と `renderOrder` は `viewport.ts` 側が行う。分割先から `viewport.ts` を import しない(逆向き依存ゼロ)。`viewCubeOverlay.ts` だけは同一 canvas に第2パスを描くので `renderer` を直接受け取る。
-  - 兄弟: `viewportTypes.ts`(App に見せる型と `Viewport` IF)/ `viewportConstants.ts`(色・`LAYER`・深度バイアス・`FOV_*`・当たり判定画素・基準平面表)/ `viewCubeOverlay.ts` / `optimizeAnnotations.ts` / `optimizeDebug.ts` / `vertexMarkers.ts` / `selectionBand.ts` / `ghostLayer.ts` / `gridPlanes.ts` / `sketchCursorOverlay.ts`。`viewport.ts` は約2,900行。足す前に切れ目を探す(CLAUDE.md「ファイルの大きさ」)。
+  - 兄弟: `viewportTypes.ts`(App に見せる型と `Viewport` IF)/ `viewportConstants.ts`(色・`LAYER`・深度バイアス・`FOV_*`・当たり判定画素・基準平面表)/ `viewCubeOverlay.ts` / `optimizeAnnotations.ts` / `optimizeDebug.ts` / `solidFeatures.ts`(ボディの辺・頂点の当たりと描画)/ `occlusion.ts`(遮蔽)/ `polylinePick.ts` / `selectionBand.ts` / `ghostLayer.ts` / `gridPlanes.ts` / `sketchCursorOverlay.ts`。`viewport.ts` は約2,900行。足す前に切れ目を探す(CLAUDE.md「ファイルの大きさ」)。
 - **公開面を増やさない**: `viewport.ts` の `export` は `createViewport` + `Viewport` + 型 + `FOV_DEFAULT/FOV_ORTHO` + `isSelectableFov`。新モジュールの `create*`/`*Deps` を再エクスポートしない。`viewportConstants.ts` を `App.svelte` から import しない。three.js の型を Svelte 層へ出さない不変条件は「`viewport.ts` とその兄弟群の外へ出さない」。
-- **`camera` は `let` で、投影切替(`activateCamera`)のたびに差し替わる**。`viewCubeOverlay` と `vertexMarkers` は値ではなく `camera()` ゲッターで受け、各関数の先頭で `const camera = deps.camera()` を取る。値で渡すと正投影へ切り替えた後も古いカメラを使い続け、**型検査も実機 smoke も通ったまま**「見えている角をクリックしたのに隣が取れる」になる。
+- **`camera` は `let` で、投影切替(`activateCamera`)のたびに差し替わる**。`viewCubeOverlay` と `occlusion` は値ではなく `camera()` ゲッターで受け、各関数の先頭で `const camera = deps.camera()` を取る。値で渡すと正投影へ切り替えた後も古いカメラを使い続け、**型検査も実機 smoke も通ったまま**「見えている角をクリックしたのに隣が取れる」になる。
 - **`THREE.Object3D.DEFAULT_UP.copy(WORLD_UP)` はモジュール読み込み時の副作用**で `viewportConstants.ts` にある。`OrbitControls` は生成時の `object.up` を焼き込み、`HemisphereLight` は `position` に `DEFAULT_UP` を複写するので、**この行より前にカメラ・controls・ライトを `new` してはいけない**。`viewportConstants.ts` を `import type` だけにすると `verbatimModuleSyntax` で丸ごと消えこの副作用も消える(いまは値 `LAYER` 等を import しているので生きている)。
-- `VertexMarkersDeps` は `pickPointsAt` を使い、`size`/`camera`/`raycaster`/`worldPerPixel` は持たない。
+- `SolidFeaturesDeps` は `pixelAt`(遮蔽の `occlusion.pixelAt`)だけを借り、射影は呼び手が渡す `ScreenProjector`(1回の当たり判定で固定したカメラ)を使う。`OcclusionDeps.surfaceDistance` は `viewport.ts` の `surfaceAlong`(面と断面の切り口。`faceHitAt` と同じ判定)。
 - `setOptimizeState` は2箇所: 役割の表(`bodyRoles`/`fixtureFaceKeys`→`applyFaceMaterials`)は `viewport.ts`、装飾の生成は `optimizeAnnotations.draw(state)`。**`clear()`→役割→`applyFaceMaterials()`→`draw()` の順序に意味がある**(`draw` を先に呼ぶと役割色が1フレーム遅れる)。
-- `pointerDown`/`pointerUp` は**キューブが引き取ったら `true`** を返し、`viewport.ts` の `onPointerDown`/`onPointerUp` がその戻り値で早期 return する。`optimizeAnnotations`/`optimizeDebug`/`vertexMarkers` にグループを自分で `scene` へ足す実装へ変えない(初回フレーミングと near/far の計算対象が変わる)。
+- `pointerDown`/`pointerUp` は**キューブが引き取ったら `true`** を返し、`viewport.ts` の `onPointerDown`/`onPointerUp` がその戻り値で早期 return する。`optimizeAnnotations`/`optimizeDebug`/`solidFeatures` にグループを自分で `scene` へ足す実装へ変えない(初回フレーミングと near/far の計算対象が変わる)。
 - 分割が純粋な移設であることは、テキスト一致(連結差分ゼロ。挿入した `const camera = deps.camera()` 等を除く)と公開面差分ゼロで機械確認する。
 
 ## ビューキューブ(`viewCubeOverlay.ts`)

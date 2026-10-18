@@ -2,7 +2,7 @@
  * 測定(issue #10)—— verb ではない唯一のコマンド。文書もログも変えない。
  * 対象は共有選択集合から**ちょうど2つ**取るので Enter は要らない。送るのは `{cmd:'measure'}` だけ(対象はコアの選択)で、
  * 応答は状態配信ではなく `{type:'measure', client_op, between, ...}`(`App.svelte` の `handleMeasure`)。
- * 辺・頂点を指せるのは対象ボディ1つぶん(`App.svelte` の `edgeTargetBody`)。面は全ボディを指せる。
+ * 起動中は面・辺・頂点を全ボディで指せる(`App.svelte` の `pickKinds`)。
  */
 import type { SelectionRef } from '../session'
 import type { CommandDef } from './command'

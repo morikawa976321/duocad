@@ -153,9 +153,8 @@ export interface SelectionArgSpec extends ArgSpecCommon {
    */
   kinds?: SelectableKind[]
   /**
-   * 頂点そのものを対象にする引数(測定)。起動中は対象ボディの頂点を候補として全部出し、辺より先に取る
-   * (`App.svelte` の `vertexCandidateBody` / `viewport.preferVertices`)。`kinds` に `'vertex'` があるだけでは出さない
-   * (`move_body` / `mirror_body` の頂点はボディを名指しする手の1つでしかない)。
+   * 頂点そのものを対象にする引数(測定)。起動中は頂点を指せる種類に入れる(`App.svelte` の `wantedVertices` → `pickKinds`)。
+   * `kinds` に `'vertex'` があれば同じく指せる(`move_body` / `mirror_body` の頂点はボディを名指しする手の1つ)。
    */
   pickVertices?: true
   min: number
