@@ -190,7 +190,19 @@ async function measure(page, scenario, label, action, until, { args = [], timeou
   } catch (error) {
     const ws = summarizeWs(await wsSince(page, t0))
     const reason = String(error.message ?? error).split(/\r?\n/)[0].slice(0, 60)
-    return record(scenario, `${label} [失敗: ${reason}]`, null, ws)
+    // 物差しは合否を出さないが、失敗の理由(画面のエラーの控え)は残す。無いと何が届いたかが分からない
+    const seen = await page
+      .evaluate(() =>
+        JSON.parse(
+          JSON.stringify({
+            errors: window.__duocad.errors ?? [],
+            selection: window.__duocad.selection?.items ?? [],
+            hovered: window.__duocad.hoveredRef(),
+          }),
+        ),
+      )
+      .catch(() => ({}))
+    return record(scenario, `${label} [失敗: ${reason}]`, null, { ...ws, ...seen })
   }
   await waitFrames(page, 1)
   const t1 = await now(page)
@@ -427,14 +439,12 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius, url }) {
       .filter((e) => e.kind === 'line' && e.length > 3)
       .sort((a, b) => b.length - a.length)
       .slice(0, 40)
-      .map((e) => {
-        const n = e.points.length / 3
-        return { index: e.index, mid: [(e.points[0] + e.points[(n - 1) * 3]) / 2, (e.points[1] + e.points[(n - 1) * 3 + 1]) / 2, (e.points[2] + e.points[(n - 1) * 3 + 2]) / 2] }
-      })
+      .map((e) => ({ index: e.index }))
   }, bodyId)
   let edge = null
   for (const c of candidates) {
-    const at = await screenOf(page, 'projectPoint', c.mid)
+    // その画素で本当にその辺が取れるか(立体の裏の辺は取れない)を確かめた座標
+    const at = await screenOf(page, 'projectEdge', bodyId, c.index)
     if (at) {
       edge = { index: c.index, at }
       break
@@ -445,21 +455,29 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius, url }) {
     await page.keyboard.press('Escape')
     return
   }
+  // 押す直前に射影し直す(コマンドの欄の行が増えるとビューポートの高さが変わり、先に取った画素は隣の辺を指しうる)
+  const edgeAt = async () => (await screenOf(page, 'projectEdge', bodyId, edge.index)) ?? edge.at
   await measure(
     page,
     scenario,
     '辺に乗せる→連なりが届く(get_edge_chains 往復)',
-    () => page.mouse.move(edge.at.x, edge.at.y),
-    (id, index) => window.__duocad.edgeChain(id, index) !== null,
-    { args: [bodyId, edge.index], timeout: 60000 },
+    async () => {
+      const at = await edgeAt()
+      await page.mouse.move(at.x, at.y)
+    },
+    () => {
+      const hovered = window.__duocad.hoveredRef()?.edge
+      return hovered != null && window.__duocad.edgeChain(hovered.bodyId, hovered.edgeIndex) !== null
+    },
+    { timeout: 60000 },
   )
   await measure(
     page,
     scenario,
     '辺を選ぶ(クリック→選択が返る→1フレーム)',
-    () => clickAt(page, edge.at),
-    (id) => (window.__duocad.selection?.items ?? []).some((i) => i.body === id && i.kind === 'edge'),
-    { args: [bodyId] },
+    async () => clickAt(page, await edgeAt()),
+    // 隣の部品の辺がぴったり重なっていればそちらが取れうる(カーソルが近づいてからその部品の辺が届く)ので、辺ならどれでもよい
+    () => (window.__duocad.selection?.items ?? []).some((i) => i.kind === 'edge'),
   )
   await typeInto(page, '#fillet-radius', String(radius))
   await measure(
@@ -499,7 +517,10 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius, url }) {
       t0,
     )
   }
-  const revisionBefore = await page.evaluate((id) => window.__duocad.parts.find((p) => p.body_id === id)?.revision ?? null, bodyId)
+  // 丸めるのは選んだ辺のボディ(隣の部品の辺が取れていればそちら)
+  const filletBody =
+    (await page.evaluate(() => (window.__duocad.selection?.items ?? []).find((i) => i.kind === 'edge')?.body ?? null)) ?? bodyId
+  const revisionBefore = await page.evaluate((id) => window.__duocad.parts.find((p) => p.body_id === id)?.revision ?? null, filletBody)
   await measure(
     page,
     scenario,
@@ -510,9 +531,9 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius, url }) {
       const part = hook.parts.find((p) => p.body_id === id)
       return part && part.revision !== rev && hook.command === null && hook.getGeometry(id) !== null
     },
-    { args: [bodyId, revisionBefore], timeout: 120000 },
+    { args: [filletBody, revisionBefore], timeout: 120000 },
   )
-  const revisionAfter = await page.evaluate((id) => window.__duocad.parts.find((p) => p.body_id === id)?.revision ?? null, bodyId)
+  const revisionAfter = await page.evaluate((id) => window.__duocad.parts.find((p) => p.body_id === id)?.revision ?? null, filletBody)
   await measure(
     page,
     scenario,
@@ -522,7 +543,7 @@ async function selectFilletUndo(page, mcp, scenario, bodyId, { radius, url }) {
       const part = window.__duocad.parts.find((p) => p.body_id === id)
       return part && part.revision !== rev && window.__duocad.getGeometry(id) !== null
     },
-    { args: [bodyId, revisionAfter], timeout: 120000 },
+    { args: [filletBody, revisionAfter], timeout: 120000 },
   )
   await page.keyboard.press('Escape')
 }

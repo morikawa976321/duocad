@@ -267,9 +267,9 @@
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
   let edgesAsked = new Set<string>()
-  /** 取り寄せた辺の連なり(body_id -> その版の連なりの全部)。辺を出し直したら覚えさせ直す。描画の依存ではないので `$state` にしない。 */
-  let edgeChains: Record<string, { revision: number; chains: number[][] }> = {}
-  /** 連なりを頼んだ辺(`${body_id}:${revision}:${辺の添字}`)。 */
+  /** 取り寄せた辺の連なり(body_id -> その形の連なりの全部)。辺を渡し直したら覚えさせ直す。描画の依存ではないので `$state` にしない。 */
+  let edgeChains: Record<string, { shape_revision: number; chains: number[][] }> = {}
+  /** 連なりを頼んだ辺(`${body_id}:${shape_revision}:${辺の添字}`)。 */
   let edgeChainsAsked = new Set<string>()
   /**
    * 連なりが届くまで待たせているクリック・矩形選択(新しいものが古いものを置き換える)。待たせている間は確定させない
@@ -924,25 +924,24 @@
   }
 
   function handleEdgeChains(payload: EdgeChainsPayload): void {
-    const body = model?.bodies.find((item) => item.body_id === payload.body_id)
-    if (body === undefined || body.revision !== payload.revision) {
+    if (!sameShape(payload.body_id, payload)) {
       if (pendingChainPick?.()) pendingChainPick = null
       return // 古い形の連なりは使わない(辺と同じ §7)
     }
     const known = edgeChains[payload.body_id]
-    const chains = known?.revision === payload.revision ? [...known.chains, ...payload.chains] : payload.chains
-    edgeChains[payload.body_id] = { revision: payload.revision, chains }
+    const chains = known?.shape_revision === payload.shape_revision ? [...known.chains, ...payload.chains] : payload.chains
+    edgeChains[payload.body_id] = { shape_revision: payload.shape_revision, chains }
     viewport?.setEdgeChains(payload.body_id, payload.chains)
     if (pendingChainPick?.()) pendingChainPick = null
   }
 
-  /** 辺の連なりを頼む(同じ版の同じ辺は2度頼まない)。版の分からないボディは頼まない。 */
+  /** 辺の連なりを頼む(同じ形の同じ辺は2度頼まない。連なりは形にだけ依存する)。形の版の分からないボディは頼まない。 */
   function requestEdgeChains(bodyId: string, indices: number[]): void {
-    const revision = model?.bodies.find((item) => item.body_id === bodyId)?.revision
-    if (revision === undefined) return
-    const missing = indices.filter((index) => !edgeChainsAsked.has(`${bodyId}:${revision}:${index}`))
+    const shape = model?.bodies.find((item) => item.body_id === bodyId)?.shape_revision
+    if (shape === undefined) return
+    const missing = indices.filter((index) => !edgeChainsAsked.has(`${bodyId}:${shape}:${index}`))
     if (missing.length === 0) return
-    for (const index of missing) edgeChainsAsked.add(`${bodyId}:${revision}:${index}`)
+    for (const index of missing) edgeChainsAsked.add(`${bodyId}:${shape}:${index}`)
     session.getEdgeChains(bodyId, missing)
   }
 
@@ -1122,7 +1121,7 @@
         verticesOfBody !== undefined && sameShape(bodyId, verticesOfBody) ? verticesOfBody : null,
       )
       const chains = edgeChains[bodyId]
-      if (usableEdges !== null && chains?.revision === usableEdges.revision) viewport.setEdgeChains(bodyId, chains.chains)
+      if (usableEdges !== null && chains?.shape_revision === usableEdges.shape_revision) viewport.setEdgeChains(bodyId, chains.chains)
     }
     drawHighlight()
   })
@@ -1550,11 +1549,12 @@
 
   /**
    * 連なりの分からない辺を指したクリック・矩形選択を、連なりが届くまで待たせる。待たせるのは最後の1件だけ。
-   * 届いたとき、指した時点の状況(辺の連なりの単位で扱うコマンドの起動中・そのボディの版)が
-   * 変わっていれば捨てる(別の形の同じ添字の辺や、隠して画面から消えた辺を選ばない。版は可視性でも上がる)。
+   * 届いたとき、指した時点の状況(辺の連なりの単位で扱うコマンドの起動中・そのボディの形の版)が
+   * 変わっていれば捨てる(別の形の同じ添字の辺や、隠して画面から消えた辺を選ばない。形の版は可視性でも上がる。
+   * 粗さだけの版(カメラ由来)では捨てない: 添字は変わらない)。
    */
   function deferUntilChains(items: Array<{ bodyId: string; edgeIndex: number }>, run: () => void): void {
-    const revisionOf = (bodyId: string) => model?.bodies.find((body) => body.body_id === bodyId)?.revision
+    const revisionOf = (bodyId: string) => model?.bodies.find((body) => body.body_id === bodyId)?.shape_revision
     const pickedAt = new Map(items.map((item) => [item.bodyId, revisionOf(item.bodyId)]))
     pendingChainPick = () => {
       if (!edgeOnlyCommand) return true

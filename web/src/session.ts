@@ -409,6 +409,8 @@ export interface EdgesPayload {
 export interface EdgeChainsPayload {
   body_id: string
   revision: number
+  /** 頼んだ時点の形の版(連なりは形にだけ依存する。`EdgesPayload.shape_revision` と同じ見方)。 */
+  shape_revision: number
   chains: number[][]
 }
 
@@ -1304,6 +1306,7 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onEdgeChains({
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
+        shape_revision: message.shape_revision ?? -1,
         chains: message.chains ?? [],
       })
     } else if (message.type === 'vertices') {

@@ -1854,7 +1854,7 @@ export function createViewport(container: HTMLElement): Viewport {
             item: {
               hit: { sketchEntity: { sketchId, entityId: item.entityId, point: item.key } },
               point: hit.point,
-              slack: occlusion.slack(hit.point),
+              slack: occlusion.slack(hit.point, project.height),
             },
             distSq: hit.distSq,
             solid: false,
@@ -1873,7 +1873,7 @@ export function createViewport(container: HTMLElement): Viewport {
             item: {
               hit: { sketchEntity: { sketchId, entityId, point: null } },
               point: hit.point,
-              slack: occlusion.slack(hit.point),
+              slack: occlusion.slack(hit.point, project.height),
             },
             distSq: hit.distSq,
             solid: false,
@@ -2131,7 +2131,7 @@ export function createViewport(container: HTMLElement): Viewport {
       // 遮る。蓋に隠れた中身を見えていると読む。視線の判定 `surfaceAlong` は蓋で遮る)
       const sectionOn = keep !== null
       const seen = (point: THREE.Vector3, deviation = 0): boolean => {
-        const slack = occlusion.slack(point, deviation)
+        const slack = occlusion.slack(point, height, deviation)
         if (depth !== null && !depth.visible(point, slack)) return false
         return !sectionOn || occlusion.visible(point, slack)
       }
@@ -2296,7 +2296,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const sphere = mesh.geometry.boundingSphere.clone().applyMatrix4(mesh.matrixWorld)
     const center = projectRaw(sphere.center, width, height)
     if (center === null) return true
-    const radius = occlusion.screenRadius(sphere)
+    const radius = occlusion.screenRadius(sphere, height)
     const nearestX = Math.min(Math.max(center.x, rect.left), rect.right)
     const nearestY = Math.min(Math.max(center.y, rect.top), rect.bottom)
     return (nearestX - center.x) ** 2 + (nearestY - center.y) ** 2 <= radius * radius
@@ -2400,7 +2400,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (pickKinds.has('vertex')) {
       for (const candidate of features.vertexCandidates(offsetX, offsetY, VERTEX_PIXELS, project, section.keepsFilter())) {
         points.push({
-          item: { hit: { vertex: candidate.ref }, point: candidate.point, slack: occlusion.slack(candidate.point) },
+          item: { hit: { vertex: candidate.ref }, point: candidate.point, slack: occlusion.slack(candidate.point, project.height) },
           distSq: candidate.distSq,
           solid: true,
           key: `v|${candidate.ref.bodyId}|${candidate.ref.vertexIndex}`,
@@ -2417,7 +2417,7 @@ export function createViewport(container: HTMLElement): Viewport {
           item: {
             hit: { edge: candidate.ref },
             point: candidate.point,
-            slack: occlusion.slack(candidate.point, candidate.deviation),
+            slack: occlusion.slack(candidate.point, project.height, candidate.deviation),
           },
           distSq: candidate.distSq,
           solid: true,
@@ -2434,7 +2434,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const surface = faceHitAt(offsetX, offsetY)
     if (surface !== null && surface.ref !== null && pickKinds.has('face')) return { ...nothing, hit: surface.ref }
     for (const candidate of regionHitsAt(offsetX, offsetY)) {
-      if (surface !== null && candidate.distance > surface.distance + occlusion.slack(candidate.point)) break
+      if (surface !== null && candidate.distance > surface.distance + occlusion.slack(candidate.point, project.height)) break
       return { ...nothing, region: candidate.region }
     }
     // 基準平面は面の無い画素でだけ取れる(レイ距離では競わせない。わざと: 部品のシルエットに重なる部分の基準平面は

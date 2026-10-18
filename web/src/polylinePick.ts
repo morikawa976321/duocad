@@ -20,8 +20,21 @@ export interface ScreenHit {
   point: THREE.Vector3
 }
 
-/** 1回の当たり判定のあいだ使い回す射影(カメラの行列と寸法を固定する)。 */
+/**
+ * 1回の当たり判定のあいだ使い回す射影(カメラの行列と寸法を固定する)。寸法は作るときに1回だけ読んだもの
+ * (`viewport.ts` の `size()` は DOM の寸法を読むので、候補ごとに呼ぶと強制レイアウトがホバーの時間の4割を占めた。実測)。
+ */
 export interface ScreenProjector {
+  readonly width: number
+  readonly height: number
+  /**
+   * 球の画面の半径を見積もる定数。透視では「奥行き1mmあたりの画素」(`height / (2·tan(fov/2))`。奥行き d の1mmは
+   * `focalPx / d` 画素)、正投影では1mmあたりの画素(奥行きに依らない)。
+   */
+  readonly focalPx: number
+  readonly orthographic: boolean
+  /** 透視の near(これより手前に掛かる球は画面での広がりを見積もれない)。 */
+  readonly near: number
   /** 世界座標 → 画素。カメラの裏・視錐台の奥行きの外は false。`out.w` はクリップ空間の w。 */
   project(point: THREE.Vector3, out: ProjectedPoint): boolean
 }
@@ -35,7 +48,21 @@ export interface ProjectedPoint {
 export function createProjector(camera: THREE.Camera, width: number, height: number): ScreenProjector {
   const scratch = new THREE.Vector4()
   const viewProjection = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+  const orthographic = camera instanceof THREE.OrthographicCamera
+  let focalPx = 0
+  let near = 0
+  if (camera instanceof THREE.OrthographicCamera) {
+    focalPx = (camera.zoom * height) / (camera.top - camera.bottom)
+  } else if (camera instanceof THREE.PerspectiveCamera) {
+    focalPx = (camera.zoom * height) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2))
+    near = camera.near
+  }
   return {
+    width,
+    height,
+    focalPx,
+    orthographic,
+    near,
     project(point, out) {
       scratch.set(point.x, point.y, point.z, 1).applyMatrix4(viewProjection)
       if (scratch.w === 0) return false

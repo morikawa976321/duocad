@@ -51,17 +51,17 @@ export interface DepthSnapshot {
 export interface Occlusion {
   visible(point: THREE.Vector3, slack: number): boolean
   /** その点の奥行きでの画面1画素の長さ[mm]。 */
-  pixelAt(point: THREE.Vector3): number
+  pixelAt(point: THREE.Vector3, height: number): number
   /**
    * 球が画面で中心の射影から広がりうる半径[px]の上限(候補を画面の距離で絞るのに使う)。透視では手前の点ほど大きく映るので、
    * 中心の奥行きの1画素で割ると小さく見積もる(画角90度・距離50mmの40mm立方体の角が実際の 471px に対し 353px)。
    * 手前の端の奥行き d−r で割り、中心が視線から外れている分(|xy|/d)を足す。カメラが球に近い・中に入っていれば Infinity。
    */
-  screenRadius(sphere: THREE.Sphere): number
+  screenRadius(sphere: THREE.Sphere, height: number): number
   /** その球が画面でカーソル (x, y) から `radiusPx` 以内に掛かりうるか(掛からないボディ・辺・スケッチは歩かない)。 */
   sphereNear(sphere: THREE.Sphere, x: number, y: number, radiusPx: number, projector: ScreenProjector): boolean
   /** その点に置く許し[mm]。`deviation` は的の折れ線の偏差(分かっていれば)。 */
-  slack(point: THREE.Vector3, deviation?: number): number
+  slack(point: THREE.Vector3, height: number, deviation?: number): number
   /** 遮るものの奥行きを今のカメラで1回描いて読み出す(描けなければ null。そのときは遮蔽を見ない)。 */
   snapshot(): DepthSnapshot | null
   dispose(): void
@@ -89,9 +89,8 @@ export function createOcclusion(deps: OcclusionDeps): Occlusion {
   }
 
   /** その点の奥行きでの画面1画素の長さ[mm]。 */
-  function pixelAt(point: THREE.Vector3): number {
+  function pixelAt(point: THREE.Vector3, height: number): number {
     const camera = deps.camera()
-    const { height } = deps.size()
     if (camera instanceof THREE.PerspectiveCamera) {
       const depth = Math.max(-scratch.copy(point).applyMatrix4(camera.matrixWorldInverse).z, 1e-9)
       return (2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) / camera.zoom / Math.max(height, 1)
@@ -102,9 +101,8 @@ export function createOcclusion(deps: OcclusionDeps): Occlusion {
     return 0
   }
 
-  function screenRadius(sphere: THREE.Sphere): number {
+  function screenRadius(sphere: THREE.Sphere, height: number): number {
     const camera = deps.camera()
-    const { height } = deps.size()
     if (sphere.radius < 0) return 0
     if (camera instanceof THREE.OrthographicCamera) {
       return (sphere.radius * camera.zoom * Math.max(height, 1)) / (camera.top - camera.bottom)
@@ -120,21 +118,31 @@ export function createOcclusion(deps: OcclusionDeps): Occlusion {
 
   const projectedCenter: ProjectedPoint = { x: 0, y: 0, w: 1 }
 
+  /** `screenRadius` と同じ見積もりを、射影1回(と、その射影の定数)から出す。辺1本ごとに呼ぶのでホバーの時間に効く。 */
   function sphereNear(sphere: THREE.Sphere, x: number, y: number, radiusPx: number, projector: ScreenProjector): boolean {
     if (sphere.radius < 0) return false
     if (!projector.project(sphere.center, projectedCenter)) return true // 中心がカメラの裏でも一部は見えうる
-    const reach = screenRadius(sphere) + radiusPx
+    let reach = sphere.radius * projector.focalPx
+    if (!projector.orthographic) {
+      const nearest = projectedCenter.w - sphere.radius
+      if (nearest <= projector.near) return true
+      // 中心が視線から外れている分(|xy|/d)は、画面の中心からの画素を focalPx で割ったもの
+      const offAxis =
+        Math.hypot(projectedCenter.x - projector.width / 2, projectedCenter.y - projector.height / 2) / projector.focalPx
+      reach = (reach / nearest) * (1 + offAxis)
+    }
+    reach += radiusPx
     const dx = projectedCenter.x - x
     const dy = projectedCenter.y - y
     return dx * dx + dy * dy <= reach * reach
   }
 
-  function slack(point: THREE.Vector3, deviation = 0): number {
+  function slack(point: THREE.Vector3, height: number, deviation = 0): number {
     const floor = Math.max(DEVIATION_MIN_ABS, deps.contentDiagonal() * DEVIATION_MIN_RELATIVE)
     // 編集していないスケッチを手前へ寄せて描く量(画面の高さに対する比)より狭いと、寄せて見えているものが指せない
-    const biasPixels = DEPTH_BIAS_LAYER.sketch * DEPTH_BIAS_UNIT * deps.size().height
+    const biasPixels = DEPTH_BIAS_LAYER.sketch * DEPTH_BIAS_UNIT * height
     const pixels = Math.max(SLACK_PIXELS, biasPixels + 1)
-    return Math.max(pixels * pixelAt(point), SLACK_FLOOR_DEVIATIONS * floor, SLACK_EDGE_DEVIATIONS * deviation)
+    return Math.max(pixels * pixelAt(point, height), SLACK_FLOOR_DEVIATIONS * floor, SLACK_EDGE_DEVIATIONS * deviation)
   }
 
   // ------------------------------------------------------------ 奥行きの読み出し(矩形選択)

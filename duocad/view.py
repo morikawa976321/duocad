@@ -717,7 +717,8 @@ class DocumentView:
     def edge_chains(self, body_id: str, edge_indices: list) -> dict:
         """頼まれた辺それぞれが属する連なり(フィレット・面取りで1本として振る舞う辺の組)を返す。
 
-        戻り値: `{"body_id", "revision", "chains": [[連なりの辺の添字(昇順)], ...]}`(頼んだ辺の順。同じ連なりは1つにまとめる)
+        戻り値: `{"body_id", "revision", "shape_revision", "chains": [[連なりの辺の添字(昇順)], ...]}`(頼んだ辺の順。同じ連なりは
+        1つにまとめる。今の形のものかは `shape_revision` で見る: 連なりは形にだけ依存し、`revision` は粗さでも上がる)
 
         `edges()` に入れない理由: 連なりは `MakeFillet.Add` で求め、大きな部品では折れ線の数十倍かかる(PC ケースの
         最大ボディで折れ線 13ms・全辺の連なり 0.5 秒)。画面はホバー・クリックした辺の分だけ頼む(辺1本で `Add` 1回)。
@@ -728,7 +729,12 @@ class DocumentView:
         finder = _memo(self._chain_cache, body_id, body.shape, None, lambda: kernel.edge_chain_finder(body.shape))
         groups = finder.of(edge_indices)
         chains = list(dict.fromkeys(groups[int(index)] for index in edge_indices))
-        return {"body_id": body_id, "revision": revision, "chains": [list(group) for group in chains]}
+        return {
+            "body_id": body_id,
+            "revision": revision,
+            "shape_revision": self.shape_revision(body_id),
+            "chains": [list(group) for group in chains],
+        }
 
     def vertices(self, body_id: str) -> dict:
         """1Bodyの頂点を1始まりの添字つきの3D座標で返す(キャッシュ付き)。
