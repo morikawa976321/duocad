@@ -378,6 +378,7 @@ def test_which_commands_apply_without_enter():
         "add_circle",
         "add_ellipse",
         "add_line",
+        "add_point",
         "add_rectangle",
         "measure",
         "select_in_sketch",

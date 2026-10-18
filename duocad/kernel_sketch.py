@@ -585,6 +585,11 @@ def _to_uv(ax3: "gp_Ax3", x: float, y: float, z: float) -> Tuple[float, float]:
     return u, v
 
 
+def _edges_point(ax3: "gp_Ax3", params: dict) -> List[Any]:
+    """点の図形は辺を持たない(領域を割らない)。"""
+    return []
+
+
 def _edges_line(ax3: "gp_Ax3", params: dict) -> List[Any]:
     p0 = _to_pnt(ax3, float(params["x0"]), float(params["y0"]))
     p1 = _to_pnt(ax3, float(params["x1"]), float(params["y1"]))
@@ -764,6 +769,11 @@ def _edges_rectangle(ax3: "gp_Ax3", params: dict) -> List[Any]:
     return edges
 
 
+def _bbox_point(params: dict) -> Tuple[float, float, float, float]:
+    cx, cy = float(params["cx"]), float(params["cy"])
+    return (cx, cx, cy, cy)
+
+
 def _bbox_line(params: dict) -> Tuple[float, float, float, float]:
     x0, y0, x1, y1 = float(params["x0"]), float(params["y0"]), float(params["x1"]), float(params["y1"])
     return (min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1))
@@ -824,6 +834,7 @@ class _KernelEntityKindOps:
 
 
 _KERNEL_ENTITY_KIND_TABLE: Dict[str, _KernelEntityKindOps] = {
+    "point": _KernelEntityKindOps(_edges_point, _bbox_point),
     "line": _KernelEntityKindOps(_edges_line, _bbox_line),
     "circle": _KernelEntityKindOps(_edges_circle, _bbox_circle),
     "ellipse": _KernelEntityKindOps(_edges_ellipse, _bbox_ellipse),

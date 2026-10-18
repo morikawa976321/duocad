@@ -670,11 +670,15 @@ def select_sketch_entity(
     `point` を省く(None)と**図形全体 = 辺**、文字列ならその点で、`sketch.entity_point_keys(kind)` の**xキー**でなければ
     ValueError(yキーや寸法キーは通さない)。存在しないスケッチ・図形は KeyError。**添字ではなく `entity_id` で指す**ので
     他の図形を足しても平行移動しても指す先が変わらない(`duocad-selection-resets-on-shape-change` の根拠が当たらない)。
+    **点の図形は辺を持たないので、`point` を省いても点 `cx` を指す**(選択は点として扱う。docs/DESIGN_DECISIONS.md。
+    2つの形を許すと同じ点が別の項目として2度選ばれる)。
     """
     from .sketch import entity_point_pair, get_entity
 
     sketch = _visible_sketch(doc, sketch_id, allow_hidden=allow_hidden)
     entity = get_entity(sketch, entity_id)
+    if point is None and entity.kind == "point":
+        point = "cx"
     if point is not None:
         entity_point_pair(entity.kind, str(point))
     return {

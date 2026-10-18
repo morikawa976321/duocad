@@ -12,7 +12,7 @@ import {
 } from './adaptiveResolution'
 
 /** 図形の種別。この表のキーが唯一の正。 */
-export type EntityKind = 'line' | 'circle' | 'ellipse' | 'rectangle' | 'arc' | 'bezier'
+export type EntityKind = 'point' | 'line' | 'circle' | 'ellipse' | 'rectangle' | 'arc' | 'bezier'
 
 /**
  * 交点探索用の幾何プリミティブ。直線区間・円・円弧・楕円の4種(`EntityKindSpec.intersectables`)。
@@ -334,6 +334,26 @@ function projectToEllipse(params: Record<string, number>, u: number, v: number):
 }
 
 const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
+  // 点は辺を持たない: 折れ線は1点だけで線にならず(`viewport.ts` は点の印で描く)、交点も持たない
+  point: {
+    pointKeys: [['cx', 'cy']],
+    verb: 'add_point',
+    translate: (params, dx, dy) => translateAtCenter(params, 'cx', 'cy', dx, dy),
+    rotate(params, cx, cy, angleDeg) {
+      const [nx, ny] = rotatePoint(params.cx, params.cy, cx, cy, angleDeg)
+      return { ...params, cx: nx, cy: ny }
+    },
+    fromArgs(args) {
+      const point = args.point as [number, number]
+      return { cx: point[0], cy: point[1] }
+    },
+    toPoints(params) {
+      return [[params.cx, params.cy]]
+    },
+    snap(params) {
+      return [params.cx, params.cy]
+    },
+  },
   line: {
     pointKeys: [['x0', 'y0'], ['x1', 'y1']],
     intersectables: (params) => [

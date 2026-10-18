@@ -84,6 +84,7 @@ def test_every_kind_has_points_and_a_translation_moves_all_of_them(session: Sess
     session.add_rectangle(sketch_id, [0.0, 0.0], 4.0, 2.0)
     session.add_arc(sketch_id, [0.0, 0.0], 3.0, 0.0, 90.0)
     session.add_ellipse(sketch_id, [0.0, 0.0], 6.0, 4.0, 30.0)
+    session.add_point(sketch_id, [2.0, 1.0])
     _add_bezier(session, sketch_id)
     entities = sketch.get_sketch(session.document, sketch_id).entities
     assert {entity.kind for entity in entities} == set(sketch.ENTITY_KINDS), "題材が全種別を含まない(種別を足したらここにも足す)"
