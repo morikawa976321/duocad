@@ -13,12 +13,7 @@ import {
   DEBUG_SPACE_COLOR,
   LAYER,
 } from './viewportConstants'
-import type { OptimizeDebugCounts, OptimizeDebugState, OptimizeDebugVoxels } from './viewportTypes'
-
-/** 何も出していないときの数(`counts()` の戻り値の形。`hiddenBodyId` は実機検査フックの既定にだけ要る)。 */
-export function emptyDebugCounts(): OptimizeDebugCounts {
-  return { space: 0, rho: 0, fixed: 0, load: 0, spaceStride: 1, rhoStride: 1, anchorsDepthTest: null, hiddenBodyId: null }
-}
+import type { OptimizeDebugState, OptimizeDebugVoxels } from './viewportTypes'
 
 export interface OptimizeDebugDeps {
   setBodyVisible(bodyId: string, visible: boolean): void
@@ -30,13 +25,11 @@ export interface OptimizeDebug {
   clear(): void
   /** 隠している結果ボディの表示を当て直す(`update()` が作り直した後にも要る)。 */
   applyHidden(): void
-  counts(): OptimizeDebugCounts
 }
 
 export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
   const debugRoot = new THREE.Group()
   let debugDisposables: Array<{ dispose(): void }> = []
-  let debugCounts: Omit<OptimizeDebugCounts, 'hiddenBodyId'> = emptyDebugCounts()
   /** `?voxel=1` で隠している結果ボディ。**表示だけ**(文書には触れない)。 */
   let debugHiddenBodyId: string | null = null
 
@@ -44,7 +37,6 @@ export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
     debugRoot.clear()
     for (const item of debugDisposables) item.dispose()
     debugDisposables = []
-    debugCounts = emptyDebugCounts()
   }
 
   /**
@@ -139,8 +131,6 @@ export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
       )
       mesh.renderOrder = LAYER.debug
       debugRoot.add(mesh)
-      debugCounts.space = state.space.elements.length
-      debugCounts.spaceStride = state.space.stride
     }
 
     if (state.rho !== null && state.rho.elements.length > 0) {
@@ -151,8 +141,6 @@ export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
         new THREE.MeshLambertMaterial({ color: DEBUG_RHO_COLOR }),
       )
       debugRoot.add(mesh)
-      debugCounts.rho = state.rho.elements.length
-      debugCounts.rhoStride = state.rho.stride
     }
 
     if (state.anchors !== null) {
@@ -163,13 +151,6 @@ export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
       const load = buildDebugNodes(state.anchors.load.points, radius, DEBUG_ANCHOR_LOAD_COLOR)
       debugRoot.add(fixed)
       debugRoot.add(load)
-      debugCounts.fixed = fixed.count
-      debugCounts.load = load.count
-      // 材質から読み直す(定数を写さない): 写すと材質側だけ直したときに検査が古い値で合格し続ける。
-      // 両方の OR にしてあるのは、片方だけ深度検査を戻した退化を見逃さないため。
-      debugCounts.anchorsDepthTest =
-        (fixed.material as THREE.Material).depthTest ||
-        (load.material as THREE.Material).depthTest
     }
 
     debugHiddenBodyId = state.hiddenBodyId
@@ -181,8 +162,5 @@ export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
     setState: setOptimizeDebug,
     clear: clearOptimizeDebug,
     applyHidden: applyDebugHidden,
-    counts() {
-      return { ...debugCounts, hiddenBodyId: debugHiddenBodyId }
-    },
   }
 }

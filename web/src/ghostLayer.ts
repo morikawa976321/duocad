@@ -40,7 +40,6 @@ export interface GhostLayer {
    * `keepPreview` ならサーバ投機実行の幽霊は消さずに残し、作り直した本物を隠し直す。
    */
   rebuildAround(rebuild: () => void, keepPreview?: boolean): void
-  info(): Array<BodyGhost & { matrix: number[] }>
 }
 
 export function createGhostLayer(deps: GhostLayerDeps): GhostLayer {
@@ -72,8 +71,8 @@ export function createGhostLayer(deps: GhostLayerDeps): GhostLayer {
   /** body_id -> ローカル幽霊(変換後の姿)。`previewMeshes` とは別のMap(あちらは本物を隠す)。 */
   const bodyGhosts = new Map<string, { group: THREE.Group; meshes: SceneBatch }>()
   /**
-   * いま出しているローカル幽霊の指示そのもの。`info` が返すほか、**`rebuildAround` が届いた形で組み直すための
-   * 入力でもある**(消したり形を変えたりすると製品の挙動が変わる)。
+   * いま出しているローカル幽霊の指示そのもの。**`rebuildAround` が届いた形で組み直すための
+   * 入力**(消したり形を変えたりすると製品の挙動が変わる)。
    * 差し替え(`bodyGhostInfo = []`)で空にすること(`clearBodyGhosts` の契約)。
    */
   let bodyGhostInfo: BodyGhost[] = []
@@ -157,14 +156,5 @@ export function createGhostLayer(deps: GhostLayerDeps): GhostLayer {
     showBodyGhosts,
     clearPreview,
     rebuildAround,
-    info() {
-      return bodyGhostInfo.map((item) => ({
-        bodyId: item.bodyId,
-        offset: [...item.offset] as [number, number, number],
-        rotate: item.rotate ?? null,
-        // グループに乗っている行列そのものを読む(`bodyGhostMatrix` を呼び直さない): 掛け忘れも検出するため。
-        matrix: bodyGhosts.get(item.bodyId)?.group.matrix.toArray() ?? [],
-      }))
-    },
   }
 }

@@ -17,7 +17,6 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 ### 依存してはいけないもの
 
 - **`GHOST_COPY_LIMIT`(2000)を仕様と読まない。** 画面が固まらないための表示上限でコア側には無い。超えても Enter は通る(幽霊が出ないだけ)。
-- **`ghostInfo()`(と `bodies[].matrix`)・`window.__duocad.showLocalGhost` は実機検査用の穴**で画面状態の正ではない。製品の分岐から呼ばない(`web/src/testHooks.svelte.ts`)。
 - **`previewing`(`App.svelte` の `$state`)はサーバ投機実行側だけを表す。** ローカル幽霊が出ていても `false`。
 - `showSketchGhosts` は描けた図形だけ数える(折れ線化できない図形は黙って落ちる)。
 

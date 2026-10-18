@@ -6,7 +6,7 @@ import * as THREE from 'three'
 
 import { makeTextSprite } from './textSprite'
 import { OPTIMIZE_FIXTURE_MARK_COLOR, OPTIMIZE_LOAD_COLOR } from './viewportConstants'
-import type { FaceRef, OptimizeVisualState } from './viewportTypes'
+import type { OptimizeVisualState } from './viewportTypes'
 
 export interface OptimizeAnnotationsDeps {
   /** その面の頂点位置と頂点法線(xyz の並び。見つからなければ null)。 */
@@ -21,32 +21,16 @@ export interface OptimizeAnnotations {
   clear(): void
   /** 拘束記号・荷重矢印+ラベルを作り直す。`clear()` を先に呼ぶこと。`contentDiagonal()` が0なら文書が空なので何も描けない。 */
   draw(state: OptimizeVisualState): void
-  count(): number
-  /** いま描いている装飾の中身(実機検査フック専用)。 */
-  info(): {
-    fixtures: FaceRef[]
-    loads: Array<{ bodyId: string; faceIndex: number; direction: [number, number, number]; label: string }>
-  }
 }
 
 export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): OptimizeAnnotations {
   const optimizeRoot = new THREE.Group()
   let optimizeDisposables: Array<{ dispose(): void }> = []
 
-  /**
-   * いま描いている装飾の中身(実機検査フック専用)。子の総数だけでは拘束と荷重の取り違え・矢印の逆向き・空ラベルを
-   * 検出できないので、種別ごとの中身を控えて `optimizeAnnotations()` で読めるようにする。
-   */
-  let optimizeAnnotationInfo: {
-    fixtures: FaceRef[]
-    loads: Array<{ bodyId: string; faceIndex: number; direction: [number, number, number]; label: string }>
-  } = { fixtures: [], loads: [] }
-
   function clearOptimizeAnnotations(): void {
     optimizeRoot.clear()
     for (const item of optimizeDisposables) item.dispose()
     optimizeDisposables = []
-    optimizeAnnotationInfo = { fixtures: [], loads: [] }
   }
 
   /**
@@ -107,7 +91,6 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
         cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), measured.normal.clone().negate())
         cone.position.copy(measured.center).addScaledVector(measured.normal, markSize * 0.6)
         optimizeRoot.add(cone)
-        optimizeAnnotationInfo.fixtures.push({ bodyId: ref.bodyId, faceIndex: ref.faceIndex })
       }
     }
 
@@ -141,12 +124,6 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
         sprite.position.copy(measured.center).addScaledVector(dir, pushes ? -length * 1.15 : length * 1.15)
         optimizeRoot.add(sprite)
         optimizeDisposables.push(...disposables)
-        optimizeAnnotationInfo.loads.push({
-          bodyId: ref.bodyId,
-          faceIndex: ref.faceIndex,
-          direction: [dir.x, dir.y, dir.z],
-          label: labelText,
-        })
       }
     }
   }
@@ -155,17 +132,5 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
     object: optimizeRoot,
     clear: clearOptimizeAnnotations,
     draw,
-    count() {
-      return optimizeRoot.children.length
-    },
-    info() {
-      return {
-        fixtures: optimizeAnnotationInfo.fixtures.map((ref) => ({ ...ref })),
-        loads: optimizeAnnotationInfo.loads.map((item) => ({
-          ...item,
-          direction: [...item.direction] as [number, number, number],
-        })),
-      }
-    },
   }
 }

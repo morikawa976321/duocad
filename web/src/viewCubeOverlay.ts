@@ -65,8 +65,6 @@ export interface ViewCubeDeps {
 }
 
 export interface ViewCubeOverlay {
-  /** ビューポート右上の矩形(コンテナ内のCSSピクセル、左上原点)。 */
-  rect(): { x: number; y: number; w: number; h: number }
   /** その画素が矩形の内側か。 */
   inside(x: number, y: number): boolean
   /** ポインタを引き取っている(クリックかドラッグか未確定・またはドラッグ中)。 */
@@ -436,7 +434,6 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
   }
 
   return {
-    rect: viewCubeRect,
     inside: insideCubeRect,
     capturing() {
       return cubePointerActive || cubeDragging

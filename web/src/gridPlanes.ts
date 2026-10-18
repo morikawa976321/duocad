@@ -10,7 +10,6 @@ import * as THREE from 'three'
 
 import {
   BASE_EXTENT,
-  TIERS,
   boundingSquare,
   extendUvBoxToPoint,
   extentFor,
@@ -81,16 +80,6 @@ export interface GridPlanes {
   setHoverPlane(name: BasePlaneName | null): void
   /** その平面のホバー板(ホバー色を読む検査フック用)。 */
   hoverMesh(name: BasePlaneName): THREE.Mesh | undefined
-  /** 実機検査フック `gridTiers()` の中身。 */
-  info(): {
-    mmPerPixel: number
-    tiers: Array<{ step: number; alpha: number }>
-    planes: string[]
-    axis: 'X' | 'Y' | 'Z' | null
-    sketchFaceExtent: number | null
-    depthBiasLayers: number[]
-    planeBounds: Array<UvBounds | null>
-  }
   dispose(): void
 }
 
@@ -142,14 +131,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
    */
   let sketchGridIsFacePlane = false
 
-  /** 実機検査フック(`gridTiers`)へ出す、いま表示している平面の名前。 */
-  let gridPlanesShown: string[] = []
-  /** `gridPlanesShown` と対の、各グリッドの深度バイアス層番号(実機検査フック専用。z-fightingは静止画では機械判定できないため数値を検査する)。 */
-  let gridDepthBiasLayers: number[] = []
-
-  /** `gridPlanesShown` と対で持つ、各グリッドに適用中の描画範囲(実機検査フック `gridTiers`)。 */
-  let gridPlaneBounds: Array<UvBounds | null> = []
-
   /** 同時に出しうる平面は最大3枚(対象待ちの XY/XZ/YZ)。作り直さず、frameを差し替えて使い回す。 */
   const planeGrids: PlaneGrid[] = [createPlaneGrid(), createPlaneGrid(), createPlaneGrid()]
   for (const grid of planeGrids) {
@@ -170,7 +151,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
     DEPTH_BIAS_LAYER.gridAxisLine,
   )
   let gridAxisLine: THREE.Line | null = null
-  let gridAxisShown: 'X' | 'Y' | 'Z' | null = null
 
   /** ホバー中の基準平面に重ねる半透明の板(同時に見えるのは多くても1枚)。ピック範囲が変わるたびに作り直す(`rebuildBasePlaneHover`)。当たり判定には使わない。 */
   const basePlaneHoverMeshes = new Map<BasePlaneName, THREE.Mesh>()
@@ -262,8 +242,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
   }
 
   interface GridPlaneSpec {
-    /** 実機検査フック(`gridTiers`)へ出す名前。 */
-    name: string
     frame: PlaneFrame
     /** 面内の軸の色。`null` の側は描かない(同じ世界軸を2枚が二重に描かないため)。 */
     uColor: number | null
@@ -295,9 +273,9 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
     if (basePlanesOn) {
       return {
         planes: [
-          { name: 'XY', frame: baseFrame('XY'), uColor: AXIS_X_COLOR, vColor: AXIS_Y_COLOR, bounds: contentBoundsForPlane(baseFrame('XY')), depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
-          { name: 'XZ', frame: baseFrame('XZ'), uColor: null, vColor: AXIS_Z_COLOR, bounds: contentBoundsForPlane(baseFrame('XZ')), depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
-          { name: 'YZ', frame: baseFrame('YZ'), uColor: null, vColor: null, bounds: contentBoundsForPlane(baseFrame('YZ')), depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
+          { frame: baseFrame('XY'), uColor: AXIS_X_COLOR, vColor: AXIS_Y_COLOR, bounds: contentBoundsForPlane(baseFrame('XY')), depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
+          { frame: baseFrame('XZ'), uColor: null, vColor: AXIS_Z_COLOR, bounds: contentBoundsForPlane(baseFrame('XZ')), depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
+          { frame: baseFrame('YZ'), uColor: null, vColor: null, bounds: contentBoundsForPlane(baseFrame('YZ')), depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
         ],
         axis: null,
       }
@@ -308,7 +286,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
       return {
         planes: [
           {
-            name: 'sketch-face',
             frame: sketchGridFrame,
             uColor: null,
             vColor: null,
@@ -333,7 +310,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
       return {
         planes: [
           {
-            name: aligned ?? 'sketch-plane',
             frame: sketchGridFrame,
             uColor: axes?.uColor ?? null,
             vColor: axes?.vColor ?? null,
@@ -349,7 +325,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
     return {
       planes: [
         {
-          name: 'XY',
           frame: baseFrame('XY'),
           uColor: axes.uColor,
           vColor: axes.vColor,
@@ -370,7 +345,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
       gridAxisLine.geometry.dispose()
       gridAxisLine = null
     }
-    gridAxisShown = axis === null ? null : axis.name
     if (axis === null) return
     gridAxisMaterial.color.setHex(axis.color)
     const geometry = new THREE.BufferGeometry().setFromPoints([
@@ -438,9 +412,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
       grid.setDepthBias(spec.depthBiasLayer * DEPTH_BIAS_UNIT)
       grid.setVisible(true)
     })
-    gridPlanesShown = wanted.planes.map((spec) => spec.name)
-    gridDepthBiasLayers = wanted.planes.map((spec) => spec.depthBiasLayer)
-    gridPlaneBounds = wanted.planes.map((spec) => spec.bounds)
     // 面外の軸線は格子の枠と同じ長さにする。ワールド原点を通る線なので、オフセット平面まで届くようにその分を足す。
     const first = wanted.planes[0]
     let reach = first?.bounds?.half ?? gridExtent
@@ -483,7 +454,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
     const merged = extendUvBoxToPoint(sketchContentUvBox, point)
     const bounds = boundingSquare(merged, { includeOrigin: sketchContentIncludeOrigin })
     sketchGridBounds = bounds
-    gridPlaneBounds = [bounds]
     planeGrids[0].setBounds(bounds)
   }
 
@@ -548,18 +518,6 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
       applyBasePlaneHover()
     },
     hoverMesh: (name) => basePlaneHoverMeshes.get(name),
-    info() {
-      return {
-        mmPerPixel: gridMmPerPixel,
-        tiers: TIERS.map((step, index) => ({ step, alpha: gridTierAlphaValues[index] })),
-        planes: [...gridPlanesShown],
-        axis: gridAxisShown,
-        sketchFaceExtent:
-          sketchGridFrame !== null && sketchGridIsFacePlane ? (sketchGridBounds?.half ?? null) : null,
-        depthBiasLayers: [...gridDepthBiasLayers],
-        planeBounds: gridPlaneBounds.map((bounds) => (bounds === null ? null : { ...bounds })),
-      }
-    },
     dispose() {
       basePlaneHoverBatch.clear()
       for (const grid of planeGrids) grid.dispose()

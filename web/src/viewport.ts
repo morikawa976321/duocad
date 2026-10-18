@@ -223,10 +223,7 @@ export function createViewport(container: HTMLElement): Viewport {
     grid.setHoverPlane(hoverPlane)
   }
 
-  /**
-   * 今ホバーで当てている色(実機検査フック専用)。ホバーは明度だけを上げ、
-   * `highlightColors` には変化が出ないので、材質から読み戻す。
-   */
+  /** 今ホバーで当てている色(実機検査フック専用)。ホバーは明度だけを上げるので、材質から読み戻す。 */
   function hoverColorNow(): number | null {
     const pick = (object: THREE.Object3D | undefined): number | null => {
       const material = (object as { material?: { color?: THREE.Color } } | undefined)?.material
@@ -715,13 +712,6 @@ export function createViewport(container: HTMLElement): Viewport {
     return projectRaw(frameVector(point), width, height)
   }
 
-  /** 直近に使ったハイライト色(`highlightColors`)。出していない種別は null。 */
-  const highlightColor: { face: number | null; edge: number | null; vertex: number | null } = {
-    face: null,
-    edge: null,
-    vertex: null,
-  }
-
   /** 「持ち主+添字」の1本の鍵(面・辺・領域で共通)。 */
   function refKey(owner: string, index: number): string {
     return `${owner}\u0000${index}`
@@ -741,8 +731,6 @@ export function createViewport(container: HTMLElement): Viewport {
    * (別々に `mesh.material` を書くと次の `highlight()` の全走査に消される)。
    */
   function applyFaceMaterials(): void {
-    highlightColor.face =
-      selectedFaceKeys.size === 0 && selectedBodyIds.size === 0 ? null : new THREE.Color(HIGHLIGHT_COLOR).getHex()
     // 塗るのは色が変わった面の頂点だけ(`BodyMesh.setFaceColor`)。全面を舐めるのは鍵の計算だけ。
     for (const [bodyId, entry] of bodies) {
       const hitAsBody = selectedBodyIds.has(bodyId)
@@ -1011,8 +999,6 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 辺の材質を決める。選択とホバーの両方を見る唯一の場所。 */
   function applyEdgeMaterials(): void {
-    // 色は材質から読み戻す(`highlightColors()` の検査がこの値を読む)。
-    highlightColor.edge = selectedEdgeIndices.size === 0 ? null : edgeMaterials.get('user', false).color.getHex()
     let hovered = new Set<number>()
     if (hoverEdge !== null && hoverEdge.bodyId === edgeBodyId) {
       const chain = edgeChain(hoverEdge)
@@ -1332,7 +1318,6 @@ export function createViewport(container: HTMLElement): Viewport {
     pickPointsAt,
     toScreen,
     pickChanged,
-    highlightColor,
     clipPlanes: section.clipPlanes,
     sectionKeeps: (point) => section.keeps(point),
   })
@@ -1422,8 +1407,6 @@ export function createViewport(container: HTMLElement): Viewport {
   }
   const sketches = new Map<string, SketchScene>()
   let ghost: SceneBatch | null = null
-  /** いま描けているスケッチの幽霊の中身(`ghostInfo` が返す。実機検査用の穴)。 */
-  let sketchGhostInfo: Array<{ kind: string; params: Record<string, number> }> = []
   let activeSketchId: string | null = null
   /** 通常モードで領域を指せるか(`pickRegions`)。スケッチモード中は見ない(常にそのスケッチの領域が対象)。 */
   let regionPickWanted = false
@@ -1685,7 +1668,6 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function clearGhost(): void {
-    sketchGhostInfo = []
     if (!ghost) return
     ghost.clear()
     ghost = null
@@ -1705,8 +1687,6 @@ export function createViewport(container: HTMLElement): Viewport {
       const built = buildEntityLine(target.frame, entity, material)
       if (!built) continue
       batch.add(built.object, built.geometry)
-      // 実際に描けたものだけ控える(折れ線化できなかった図形を数えると検査が「出ている」と誤判断する)
-      sketchGhostInfo.push({ kind: entity.kind, params: { ...entity.params } })
     }
     if (batch.objects.length === 0) return
     ghost = batch
@@ -2616,7 +2596,6 @@ export function createViewport(container: HTMLElement): Viewport {
     highlightBodies,
     setOptimizeState,
     setOptimizeDebug: optimizeDebug.setState,
-    optimizeDebugCounts: optimizeDebug.counts,
     showEdges,
     showBasePlanes,
     setOriginVisible: originGizmo.setVisible,
@@ -2624,7 +2603,6 @@ export function createViewport(container: HTMLElement): Viewport {
     onSectionDrag(listener) {
       sectionDragListener = listener
     },
-    sectionInfo: section.info,
     contentCenter() {
       const box = new THREE.Box3().setFromObject(root)
       if (box.isEmpty()) return null
@@ -2644,16 +2622,9 @@ export function createViewport(container: HTMLElement): Viewport {
     projectEdge,
     showVertices: vertexMarkers.show,
     showMeasurement: measureAnnotation.show,
-    measurementInfo: measureAnnotation.info,
     sketchRebuilds: () => sketchRebuildCount,
     drawCalls: () => lastDrawCalls,
     renderCount: () => renderCount,
-    highlightColors() {
-      return { ...highlightColor }
-    },
-    faceColor: paintedFaceColor,
-    optimizeAnnotationCount: annotations.count,
-    optimizeAnnotations: annotations.info,
     hoveredRef() {
       return {
         face: hoverFace,
@@ -2668,12 +2639,6 @@ export function createViewport(container: HTMLElement): Viewport {
     showPreview: ghostLayer.showPreview,
     clearPreview: ghostLayer.clearPreview,
     showBodyGhosts: ghostLayer.showBodyGhosts,
-    ghostInfo() {
-      return {
-        sketch: sketchGhostInfo.map((item) => ({ kind: item.kind, params: { ...item.params } })),
-        bodies: ghostLayer.info(),
-      }
-    },
     project,
     showSketches,
     showSketchGhosts,
@@ -2686,17 +2651,12 @@ export function createViewport(container: HTMLElement): Viewport {
     resetGrid() {
       grid.rescale(contentBoxForGrid(), true)
     },
-    gridScale() {
-      return { extent: grid.extent() }
-    },
-    gridTiers: grid.info,
     setFov,
     cameraPose,
     projectPoint,
     projectSketchPoint,
     projectBasePlane,
     projectRegion,
-    viewCubeRect: cube.rect,
     captureThumbnail() {
       // `object.visible` は見ない: 文書で非表示の立体は `bodies` にキーごと無く、`visible=false` はプレビュー中の
       // 一時的な非表示(`setBodyVisible`)。見るとプレビュー中に撮った絵から立体が欠ける。

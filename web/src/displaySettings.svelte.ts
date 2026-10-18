@@ -22,7 +22,7 @@ export interface DisplaySettings {
   attach(viewport: Viewport): void
   /**
    * その場で効かせて、そのまま覚える。「戻る先の角度」は覚えない:
-   * `window.__duocad.setFov(70)` のようにUIで選べない値でも、正投影を入切すれば `FOV_DEFAULT` へ落ちる。
+   * `setFov(70)` のようにUIで選べない値が渡っても、正投影を入切すれば `FOV_DEFAULT` へ落ちる。
    */
   applyFov(deg: number): void
   applyOriginVisible(visible: boolean): void
