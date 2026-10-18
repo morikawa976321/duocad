@@ -49,6 +49,13 @@
 - **build123d 0.11.1 は推移依存で SVG 一式を連れてくる**: svgelements 1.9.6(`transform` 解決済み座標で
   Move/Line/Arc/CubicBezier/QuadraticBezier/Close に正規化。`Arc` は rx/ry/center/theta/delta を持つ)・
   svgpathtools 1.7.2・ocpsvg 0.6.0・svgwrite 1.4.3。`duocad/svg_import.py` は追加依存ゼロでこれを前提にしている。
+- **svgelements の変換済み `Arc` は `rx` `ry` `theta` `delta` `point()` が信用できない**: 実体は center / prx / pry
+  (元の楕円の t=0・π/2 の点)と start / end と sweep で、変換は5点にそのまま掛かる。`rx` `ry` `theta` `get_rotation`
+  は prx ⊥ pry を仮定して3点から作り直す値なので、せん断・回転後の非等倍スケールでは主軸でなく共役半径が入り
+  (端点が数mmずれる)、反転(行列式が負)では sweep の符号だけが裏返る。`point(0.5)` もせん断で外れる(実測で7mm)。
+  使えるのは center / prx / pry / start / end と |sweep|(`svg_import._arc_frame`)。
+  同じライブラリは `<symbol>` `<mask>` `<marker>` `<switch>` の子を親の列へ平らに並べるので、読んだ後では描かれない定義を
+  見分けられない(読む前に `<defs>` で包む。`svg_import._prepare`)。
 - **OCCT の面分割の内部モデル(`IMeshData_Model`)から取ったハンドルは、モデルより長生きさせるとプロセスごと落ちる**
   (0xC0000005。モジュール変数に残す・context を先に捨てる、で再現)。寿命規則と解放順は
   `duocad/kernel_meshing.py` のモジュール docstring と `_Model.close()`。`BRepMesh_Context` は OCP に無いので
