@@ -666,3 +666,21 @@ def test_a_tapered_ellipse_far_from_the_origin_measures_its_volume_and_centroid(
     centre = kernel.centroid(result["shape"])
     assert centre[0] == pytest.approx(0.0, abs=1e-6 * distance + 1e-9)
     assert abs(centre[2] - (lift + distance / 2.0)) < 0.01 * distance
+
+
+def test_a_body_of_two_distant_thin_tapered_solids_has_the_right_centroid():
+    """ボディ全体の境界箱の中心を基準点にすると、離れた薄いソリッドを2つ持つボディで桁が落ち、重心が 0.24 mm ずれる(7回目)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.gp import gp_Trsf, gp_Vec
+
+    near = _sketch_ellipse_face(12.0, 6.0)
+    move = gp_Trsf()
+    move.SetTranslation(gp_Vec(0.0, 0.0, 100.0))
+    far = TopoDS.Face_s(BRepBuilderAPI_Transform(_sketch_ellipse_face(12.0, 6.0), move, True).Shape())
+    first = _new(near, 0.001, 5.0)["shape"]
+
+    both = kernel_extrude.extrude_regions([far], 0.001, "join", UP, first, taper=5.0)["shape"]
+
+    one = _ellipse_parallel_volume(6.0, 3.0, 0.001, 5.0)
+    assert math.isclose(kernel.volume(both), 2.0 * one, rel_tol=1e-5)
+    assert kernel.centroid(both)[2] == pytest.approx(50.0005, abs=1e-6)

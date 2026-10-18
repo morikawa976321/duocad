@@ -255,37 +255,54 @@ def volume(shape: "TopoDS_Shape") -> float:
 
 
 def _volume_props(shape: "TopoDS_Shape") -> "GProp_GProps":
-    """体積の積分(質量 = 体積、重心)。適応積分の要る面が無ければ形全体を既定の積分で1回、あれば面ごとに積分を選び、
-    共通の基準点(形の境界箱の中心)に対する寄与を足す(`BRepGProp.VolumeProperties_s` の内側と同じ組み立て)。
-    基準点を原点にすると、原点から遠い小さな形で桁が落ちる(Z=100 の 12×6 の楕円を 0.001 mm 押して体積 1.3% ずれ、
-    重心が立体の外へ出た。sol レビューで再現)。
+    """体積の積分(質量 = 体積、重心)。適応積分の要る面が無ければ形全体を既定の積分で1回、あれば**閉じた殻ごとに**
+    その殻の境界箱の中心を基準点として面ごとに積分を選び、寄与を足す(`BRepGProp.VolumeProperties_s` の内側と同じ組み立て。
+    体積の積分は閉じた殻ごとに成り立つ)。
 
-    面を1枚ずつ `VolumeProperties_s` に渡してはいけない: 基準点が面の位置変換に合わせて動き、寄与を足しても体積にならない
-    (傾けた楕円の上下の平面のふたが 0 を返した。実測)。
+    - 面を1枚ずつ `VolumeProperties_s` に渡してはいけない: 基準点が面の位置変換に合わせて動き、寄与を足しても体積に
+      ならない(傾けた楕円の上下の平面のふたが 0 を返した。実測)。
+    - 基準点を原点や形全体の境界箱の中心にすると、そこから遠い薄い殻で桁が落ちる(Z=100 の 12×6 の楕円を 0.001 mm 押して
+      体積 1.3% ずれ、離れた2つの殻を持つボディで重心が 0.24 mm ずれた。どちらも sol レビューで再現)。
     """
-    faces = []
-    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
-    while explorer.More():
-        faces.append(TopoDS.Face_s(explorer.Current()))
-        explorer.Next()
-    adaptive = [_needs_adaptive(face) for face in faces]
-    if not any(adaptive):
+    faces = _faces_of(shape)
+    if not any(_needs_adaptive(face) for face in faces):
         props = GProp_GProps()
         BRepGProp.VolumeProperties_s(shape, props)
         return props
+    shells = []
+    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_SHELL)
+    while explorer.More():
+        shells.append(explorer.Current())
+        explorer.Next()
+    props = GProp_GProps(_box_centre(shape))
+    for shell in shells or [shape]:
+        centre = _box_centre(shell)
+        part = GProp_GProps(centre)
+        for face in _faces_of(shell):
+            surface = BRepGProp_Face(face)
+            domain = BRepGProp_Domain(face)
+            if _needs_adaptive(face):
+                part.Add(BRepGProp_Vinert(surface, domain, centre, _ADAPTIVE_VOLUME_EPS))
+            else:
+                part.Add(BRepGProp_Vinert(surface, domain, centre))
+        props.Add(part)
+    return props
+
+
+def _faces_of(shape: Any) -> List[Any]:
+    out = []
+    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+    while explorer.More():
+        out.append(TopoDS.Face_s(explorer.Current()))
+        explorer.Next()
+    return out
+
+
+def _box_centre(shape: Any) -> "gp_Pnt":
     box = Bnd_Box()
     BRepBndLib.Add_s(shape, box)
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
-    origin = gp_Pnt((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0)
-    props = GProp_GProps(origin)
-    for face, precise in zip(faces, adaptive):
-        surface = BRepGProp_Face(face)
-        domain = BRepGProp_Domain(face)
-        if precise:
-            props.Add(BRepGProp_Vinert(surface, domain, origin, _ADAPTIVE_VOLUME_EPS))
-        else:
-            props.Add(BRepGProp_Vinert(surface, domain, origin))
-    return props
+    return gp_Pnt((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0)
 
 
 def _needs_adaptive(face: Any) -> bool:
