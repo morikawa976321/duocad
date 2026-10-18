@@ -138,8 +138,8 @@ def deletable_body(doc: Document, body_id: BodyId, *, require_visible: bool = Tr
     """削除の対象になるボディ。**編集できるかは問わない**(メッシュボディも消せる)。
 
     `editable_body` と分けてあるのは、削除だけは種別に関係なく通すため(間違えて入れた形を
-    取り除けなくしない)。可視性の門番は**選択から取る `delete` だけ**に課す(理由は
-    `editable_body`)。ID で名指しする `delete_items` は `require_visible=False` —— ブラウザでは
+    取り除けなくしない)。可視性の門番は**選択から新しく消す `delete` だけ**に課す(理由は
+    `editable_body`。redo / 再生は課さない)。ID で名指しする `delete_items` は `require_visible=False` —— ブラウザでは
     隠したボディの行も ✕ で消せる。
     """
     body = doc.get_body(body_id)  # 存在しないIDは KeyError(document側の契約)
