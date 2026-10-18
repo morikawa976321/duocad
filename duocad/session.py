@@ -186,6 +186,10 @@ class Session:
         self.optimization_steps: Any = None
         self._steps_document: Optional[Document] = None
         self._steps_name: Optional[str] = None
+        #: 直近の実行を始めたときの文書の操作ログ(`run_optimization`)と、実行とその後の仕上げが足した結果の操作(`_adopt_optimization_results`)。
+        #: 仕上げは実行したときの条件・形で作るので、結果の操作を除いたログがこれと違う文書へは足さない(`_require_unchanged_since_run`)。
+        self._steps_inputs: Optional[tuple] = None
+        self._steps_results: list = []
         #: 形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。立っている間は走らせている文書だけを変える操作を断る
         #: (`_edits_document` / `_document_locked`)。イベントループのスレッドだけが書く。
         self._optimizing = False
@@ -974,6 +978,22 @@ class Session:
         for operation in added:
             moved = document.log.append(operation.verb, operation.args)
             verb_handler(operation.verb).do(document, moved)
+            self._steps_results.append(moved)
+
+    def _require_unchanged_since_run(self) -> None:
+        """直近の実行の後で文書が変わっていたら断る。仕上げは実行したときの条件・格子・保持形状で作るので、その後に条件や形を
+        変えた文書へ足すと、古い前提の結果が黙って入る。実行(と仕上げ)が足した結果の操作は変えたと数えない
+        (結果を取り消す・やり直すのも同じ)。"""
+        if self._steps_inputs is None:
+            return
+        current = tuple(
+            operation for operation in self._optimize_document.log.entries if operation not in self._steps_results
+        )
+        if current != self._steps_inputs:
+            raise optimize_run.OptimizeInputError(
+                "文書が最適化の実行の後で変わった。実行したときの条件で作った結果は、いまの文書へ足せない"
+                "(変更を元に戻すか、最適化をやり直してください)"
+            )
 
     def run_optimization(
         self,
@@ -1031,6 +1051,7 @@ class Session:
             steps = OptimizationSteps()
             self.optimization_steps = steps
             self._steps_document, self._steps_name = self._optimize_document, self._optimize_name
+            self._steps_inputs, self._steps_results = tuple(self._optimize_document.log.entries), []
             # **今の文書ではなく、開始時に控えた文書の写しを解く**(途中で別の文書へ切り替えてもよい)。
             result = optimize_run.run(
                 self._optimize_work,
@@ -1055,12 +1076,14 @@ class Session:
 
         `run_optimization` と同じく重いので別スレッドで回し、呼び出し側が `begin_optimization` を済ませていなければここで囲む。
         仕上げる先は開始時に控えた文書(いま開いている文書が直近の実行の文書であることは `net/ws.py` が確かめる)。
+        その文書が実行の後で変わっていたら `OptimizeInputError` で断る(`_require_unchanged_since_run`)。
         """
         steps = self.optimization_steps
         owned = not self._optimizing
         if owned:
             self.begin_optimization()
         try:
+            self._require_unchanged_since_run()
             result = optimize_run.finish_step(self._optimize_work, steps, int(step), progress=_tagged(progress, steps),
                                               should_cancel=self._optimize_cancel.is_set, debug=debug,
                                               debug_kinds=debug_kinds)

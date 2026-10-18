@@ -66,6 +66,10 @@
   `on_accept`(`binary_search.find_best_feasible`)が合格形(`AcceptedShape`、1セル1ビット)を足し、探索が合格形を出して終わると
   `optimize_run` が `finisher`(選んだステップを完成化・完成形検査・さかのぼり・追加まで進める手順。条件・格子はその実行のもの)を置く。
   実行の後も、次に走らせるまで残る。いま開いている文書の実行のものだけを返す(`Session.steps_for_current`。同じオブジェクトか同じファイル名)。
+  **実行の後で文書が変わっていれば仕上げは断る**(`Session.finish_optimization_step` が `OptimizeInputError`)。仕上げは実行したときの条件・格子・
+  保持形状で作るので、条件や形を変えた文書へ足すと古い前提の結果が入る。変わったかは、実行を始めたときの操作ログと、実行とその後の仕上げが
+  足した結果の操作を除いた今のログの比べで決める(結果を取り消す・やり直すのは変えたと数えない。結果を消す `delete` は数える)。一覧(`optimize_steps`)の
+  `finishable` はこれを見ない。
 - **実行のスレッドは文書の写しを読む**(`Session.begin_optimization` が `speculative.fork` で形を `kernel.copy_shape` した写しを作る。画面のズームがループ側で
   同じ形を測り直す三角形分割と競合しないため)。実行が写しに足した結果は `deliver_optimization_result` が走らせた文書へ同じ内容で足す。
 - WebSocket に3つ(`catalog` は `protocol`・`ws="special"`・`mcp=False`): `optimize_steps`(一覧 `{steps:[{index, evaluation, seconds,
