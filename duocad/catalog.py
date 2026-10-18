@@ -722,6 +722,14 @@ COMMANDS: tuple[Command, ...] = (
                 dimension=True,
             ),
             Param(
+                "taper",
+                "number",
+                "テーパー角(度・|角| < 90。省略で0)。正で押し出すにつれて太り、負で細る。"
+                "穴は外周と逆に動く(正で狭まる)。cut では掘る側の立体に掛かる。断面が潰れる組み合わせは失敗する",
+                required=False,
+                dimension=True,
+            ),
+            Param(
                 "mode",
                 "string",
                 "join(足す・既定) / cut(切る) / new(独立した新しいボディを作る)",

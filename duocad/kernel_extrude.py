@@ -15,7 +15,7 @@ import math
 from typing import Any, List, Optional, Sequence, Tuple
 
 from OCP.BRep import BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Curve
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Check, BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBndLib import BRepBndLib
@@ -23,20 +23,36 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakePolygon,
+    BRepBuilderAPI_MakeSolid,
     BRepBuilderAPI_MakeVertex,
     BRepBuilderAPI_MakeWire,
+    BRepBuilderAPI_RightCorner,
+    BRepBuilderAPI_Sewing,
     BRepBuilderAPI_Transform,
 )
 from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+from OCP.BRepLProp import BRepLProp_CLProps
+from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeDraft, BRepOffsetAPI_ThruSections
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
 from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
 from OCP.Bnd import Bnd_Box
 from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.GProp import GProp_GProps
+from OCP.GeomAbs import GeomAbs_Line, GeomAbs_Plane
 from OCP.Precision import Precision
-from OCP.TopAbs import TopAbs_REVERSED, TopAbs_WIRE
+from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
+from OCP.ShapeFix import ShapeFix_Solid
+from OCP.TopAbs import (
+    TopAbs_FACE,
+    TopAbs_IN,
+    TopAbs_REVERSED,
+    TopAbs_SHELL,
+    TopAbs_SOLID,
+    TopAbs_VERTEX,
+    TopAbs_WIRE,
+)
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
@@ -88,31 +104,51 @@ def check_distance(distance: Any) -> float:
     return value
 
 
+#: テーパー角の絶対値の上限(度、含まない)。90° で側面が底面の平面に寝る。
+MAX_TAPER = 90.0
+
+
+def check_taper(taper: Any) -> float:
+    """テーパー角(度。正で太る・負で細る)を数にして検査する。非有限・`|taper| >= 90` は ValueError。"""
+    value = float(taper)
+    if not math.isfinite(value) or abs(value) >= MAX_TAPER:
+        raise ValueError(f"taper must satisfy |taper| < {MAX_TAPER:g} degrees, got {taper!r}")
+    return value
+
+
 def extrude_regions(
     faces: Sequence[Any],
     distance: float,
     mode: str,
     normal: Sequence[float],
     target_shape: Any = None,
+    taper: float = 0.0,
 ) -> dict:
     """領域の面群を法線方向へ押し出し、join/cut/new した形状を返す(束ね方は `_combine_region_solids`)。
+
+    `taper` は側面の傾き(度)。正で押し出すにつれて領域が外へ太り、負で細る(`_tapered_prism`)。
 
     戻り値(`"shape"` 以外はJSON化できる素の値):
         {"shape", "unified": bool, "volume_before": float | None, "volume_after": float,
          "provenance": {"verb": "extrude", "mode": str, "distance": float, "unified": bool,
                         "face_map": {"<旧添字>": [新添字, ...]}, "deleted": [...], "new_faces": [...]}}
+    `taper` が 0 でなければ provenance に `"taper"` も入る。
     `face_map` の旧添字は `target_shape` の面(相手が無ければ空)。
     """
     if not faces:
         raise ValueError("extrude_regions requires at least one face")
     distance = check_distance(distance)
+    taper = check_taper(taper)
     _check_region_mode(mode, target_shape)
 
     nx, ny, nz = float(normal[0]), float(normal[1]), float(normal[2])
     offset = gp_Vec(nx * distance, ny * distance, nz * distance)
 
     prisms: List[TopoDS_Shape] = []
-    for face in faces:
+    for position, face in enumerate(faces, start=1):
+        if taper:
+            prisms.append(_tapered_prism(TopoDS.Face_s(face), offset, taper, f"region #{position}"))
+            continue
         prism = BRepPrimAPI_MakePrism(TopoDS.Face_s(face), offset)
         if not prism.IsDone():
             raise ValueError("failed to build a prism from a region face")
@@ -128,8 +164,185 @@ def extrude_regions(
             )
         prisms.append(prism_shape)
 
-    return _combine_region_solids(
-        prisms, mode, target_shape, {"verb": "extrude", "mode": mode, "distance": distance}
+    head = {"verb": "extrude", "mode": mode, "distance": distance}
+    if taper:
+        head["taper"] = taper
+    return _combine_region_solids(prisms, mode, target_shape, head)
+
+
+# --------------------------------------------------------------------------------------
+# テーパー
+# --------------------------------------------------------------------------------------
+# 押し出した距離 z の断面は「元の領域を z·tan(taper) だけ外へずらした領域」(正で外へ。角は尖ったまま)。
+# 外周も穴も領域の縁として動くので、正なら外周は広がり穴は狭まる(Autodesk Fusion の押し出しのテーパーと同じ)。
+#
+# 輪郭線ごとに `BRepOffsetAPI_MakeDraft` で傾いた側面を作り、底とふたで閉じた立体にして、外周の立体から
+# 穴の立体を cut する。`LocOpe_DPrism` は穴を無視し、`BRepOffsetAPI_DraftAngle` はベジエ・楕円の側面を
+# 傾けられない(実測は docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」)。
+
+#: 輪郭を縫い合わせる許容差(mm)。
+_SEW_TOL = 1.0e-6
+
+#: 曲線の辺の曲率半径を測る刻み(辺1本あたり)。
+_CURVATURE_SAMPLES = 64
+
+
+def _tapered_prism(face: Any, offset: "gp_Vec", taper: float, label: str) -> Any:
+    """平面の面 `face` を `offset` へ押し出し、側面を `taper` 度傾けた立体。潰れる組み合わせは ValueError。
+
+    `offset` は面に垂直であること(領域はスケッチの法線、面は面の法線へ押す)。
+    """
+    height = offset.Magnitude()
+    axis = gp_Dir(offset)
+    angle = math.radians(abs(taper))
+    reach = height * math.tan(angle)
+    grow = taper > 0
+    outer = BRepTools.OuterWire_s(face)
+    body = _drafted_solid(outer, axis, height, angle, reach, inward=not grow, label=label)
+    explorer = TopExp_Explorer(face, TopAbs_WIRE)
+    holes = []
+    while explorer.More():
+        wire = TopoDS.Wire_s(explorer.Current())
+        if not wire.IsSame(outer):
+            holes.append(_drafted_solid(wire, axis, height, angle, reach, inward=grow, label=label))
+        explorer.Next()
+    for hole in holes:
+        cut = BRepAlgoAPI_Cut(body, hole)
+        cut.Build()
+        if not cut.IsDone():
+            raise ValueError(f"failed to cut a hole out of the tapered {label}")
+        body = cut.Shape()
+    _require_uncollapsed(body, face, offset, len(holes), label)
+    return body
+
+
+def _drafted_solid(
+    wire: Any, axis: "gp_Dir", height: float, angle: float, reach: float, inward: bool, label: str
+) -> Any:
+    """閉じた輪郭線 `wire` の囲む領域を `axis` へ `height` 押し出し、側面を `angle`(ラジアン)だけ
+    内向き(`inward`)か外向きに傾けた立体。"""
+    _require_curvature_room(wire, reach, inward, label)
+    draft = BRepOffsetAPI_MakeDraft(wire, axis, angle)
+    draft.SetOptions(BRepBuilderAPI_RightCorner)
+    # 内か外かは角度の符号でも線の向きでもなく、この指定で決まる(既定は外)。Perform の長さは斜辺。
+    draft.SetDraft(inward)
+    draft.Perform(height / math.cos(angle))
+    if not draft.IsDone():
+        raise ValueError(_collapse_message(label))
+    shell = draft.Shell()
+    if not BRepCheck_Analyzer(shell).IsValid():
+        raise ValueError(_collapse_message(label))
+
+    base = BRepBuilderAPI_MakeFace(wire, True)
+    if not base.IsDone():
+        raise ValueError(f"failed to rebuild the base of the tapered {label}")
+    tops = _far_closed_wires(shell, base.Face(), height)
+    if len(tops) != 1:
+        raise ValueError(_collapse_message(label))
+    top = BRepBuilderAPI_MakeFace(tops[0], True)
+    if not top.IsDone():
+        raise ValueError(_collapse_message(label))
+
+    sewing = BRepBuilderAPI_Sewing(_SEW_TOL)
+    for part in (base.Face(), shell, top.Face()):
+        sewing.Add(part)
+    sewing.Perform()
+    shells = TopExp_Explorer(sewing.SewedShape(), TopAbs_SHELL)
+    if not shells.More():
+        raise ValueError(f"failed to close the tapered {label}")
+    solid = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(shells.Current())).Solid()
+    fix = ShapeFix_Solid(solid)
+    fix.Perform()
+    solid = fix.Solid()
+    if not volume(solid) > 0 or not BRepCheck_Analyzer(solid).IsValid():
+        raise ValueError(_collapse_message(label))
+    return solid
+
+
+def _far_closed_wires(shell: Any, base: Any, height: float) -> List[Any]:
+    """殻の自由境界の閉じた線のうち、底面の平面から `height/2` より離れたもの(ふたの輪郭)。"""
+    plane = BRepAdaptor_Surface(base).Plane()
+    bounds = ShapeAnalysis_FreeBounds(shell, _SEW_TOL, False, False)
+    explorer = TopExp_Explorer(bounds.GetClosedWires(), TopAbs_WIRE)
+    out = []
+    while explorer.More():
+        wire = TopoDS.Wire_s(explorer.Current())
+        vertex = TopExp_Explorer(wire, TopAbs_VERTEX)
+        point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertex.Current()))
+        if plane.Distance(point) > height / 2.0:
+            out.append(wire)
+        explorer.Next()
+    return out
+
+
+def _require_curvature_room(wire: Any, reach: float, inward: bool, label: str) -> None:
+    """曲線の辺が、曲率の中心の側へ曲率半径以上ずれるなら ValueError(輪郭が尖点で折り返す)。
+
+    円が頂点を越えて細ると砂時計形の円錐ができ、`BRepCheck` も自己交差の検査も通す(実測)ので、
+    曲率で先に断る。中心が輪郭の内か外かは、輪郭の面に中心寄りの点を分類させて決める。
+    """
+    region = BRepBuilderAPI_MakeFace(wire, True).Face()
+    for edge in _edges(wire):
+        curve = BRepAdaptor_Curve(edge)
+        if curve.GetType() == GeomAbs_Line:
+            continue
+        first, last = curve.FirstParameter(), curve.LastParameter()
+        for k in range(_CURVATURE_SAMPLES + 1):
+            t = first + (last - first) * k / _CURVATURE_SAMPLES
+            props = BRepLProp_CLProps(curve, t, 2, Precision.Confusion_s())
+            curvature = props.Curvature()
+            if curvature <= 0.0 or 1.0 / curvature > reach:
+                continue
+            towards = gp_Dir()
+            props.Normal(towards)
+            point = curve.Value(t)
+            step = min(1.0 / curvature, 1.0) * 1.0e-3
+            probe = point.Translated(gp_Vec(towards).Multiplied(step))
+            inside = BRepClass_FaceClassifier(region, probe, Precision.Confusion_s()).State() == TopAbs_IN
+            if inside == inward:
+                raise ValueError(_collapse_message(label))
+
+
+def _require_uncollapsed(body: Any, face: Any, offset: "gp_Vec", holes: int, label: str) -> None:
+    """壁どうしがぶつかった形を断る: 立体が1つ、ふたが面1枚で穴の数が底と同じ、自己交差が無いこと。"""
+    if _count(body, TopAbs_SOLID) != 1:
+        raise ValueError(_collapse_message(label))
+    lids = _lids(body, face, offset)
+    if len(lids) != 1 or _count(lids[0], TopAbs_WIRE) != holes + 1:
+        raise ValueError(_collapse_message(label))
+    if not BRepAlgoAPI_Check(body, True, True).IsValid():
+        raise ValueError(_collapse_message(label))
+
+
+def _lids(body: Any, face: Any, offset: "gp_Vec") -> List[Any]:
+    """`body` の平面の面のうち、重心が `face` の平面から `offset` の長さだけ離れたもの(押し出した先のふた)。"""
+    plane = BRepAdaptor_Surface(face).Plane()
+    height = offset.Magnitude()
+    out = []
+    explorer = TopExp_Explorer(body, TopAbs_FACE)
+    while explorer.More():
+        candidate = TopoDS.Face_s(explorer.Current())
+        if BRepAdaptor_Surface(candidate).GetType() == GeomAbs_Plane:
+            centre = _face_props(candidate)[1]
+            if abs(plane.Distance(gp_Pnt(*centre)) - height) <= _MATCH_TOL * max(1.0, height):
+                out.append(candidate)
+        explorer.Next()
+    return out
+
+
+def _count(shape: Any, kind: Any) -> int:
+    explorer = TopExp_Explorer(shape, kind)
+    count = 0
+    while explorer.More():
+        count += 1
+        explorer.Next()
+    return count
+
+
+def _collapse_message(label: str) -> str:
+    return (
+        f"taper collapses {label} (断面が潰れる): 側面どうしがぶつかるか、穴が閉じるか、輪郭が頂点を越える。"
+        "テーパー角か押し出し量を小さくすること"
     )
 
 
@@ -310,12 +523,14 @@ def extrude_faces(
     distance: float,
     mode: str,
     target_shape: Any = None,
+    taper: float = 0.0,
 ) -> dict:
     """`source_shape` の**同一平面・同じ向きの平面の面**を `face_indices`(1始まり・選択順)で
     まとめて法線方向へ押し出し、`target_shape` へ join / cut する(`new` は柱だけを返す)。
 
     `distance > 0` が面の外向き法線方向。`mode` は符号と独立なので、面から削るには**負の距離で `cut`**
     (正で cut すると外側を削るだけで何も変わらず、「変化なし」の例外になる)。
+    `taper` は `extrude_regions` と同じ(押し出す柱そのものが進むにつれて太る/細る)。
 
     許容値は OCCT の `Precision`(kernel に押し出し用の定数は無い。`_MATCH_TOL` は重心の突き合わせ用で
     桁が緩い): 法線のずれは `Precision.Angular_s`、平面までの距離は `Precision.Confusion_s`。
@@ -340,6 +555,7 @@ def extrude_faces(
     if len(set(indices)) != len(indices):
         raise ValueError(f"face indices must be distinct, got {indices}")
     distance = check_distance(distance)
+    taper = check_taper(taper)
     if mode not in ("join", "cut", "new"):
         raise ValueError(f"unknown extrude mode: {mode!r}")
     has_target = target_shape is not None and not target_shape.IsNull()
@@ -353,10 +569,17 @@ def extrude_faces(
     normal, centroids = _check_coplanar_planes(faces, indices)
 
     prisms: List[TopoDS_Shape] = []
-    for index, face in zip(indices, faces):
-        prism = BRepPrimAPI_MakePrism(
-            face, gp_Vec(normal[0] * distance, normal[1] * distance, normal[2] * distance)
-        )
+    # 押した面の行き先(ふたの重心)。テーパーではふたの重心が底の重心の平行移動にならない(L字など)。
+    lid_centroids: List[tuple] = []
+    for index, face, centroid in zip(indices, faces, centroids):
+        offset = gp_Vec(normal[0] * distance, normal[1] * distance, normal[2] * distance)
+        if taper:
+            prism_shape = _tapered_prism(face, offset, taper, f"face {index}")
+            prisms.append(prism_shape)
+            lid_centroids.append(_face_props(_lids(prism_shape, face, offset)[0])[1])
+            continue
+        lid_centroids.append(tuple(centroid[axis] + normal[axis] * distance for axis in range(3)))
+        prism = BRepPrimAPI_MakePrism(face, offset)
         if not prism.IsDone():
             raise ValueError(f"failed to build the prism for face {index} (distance={distance})")
         prism_shape = prism.Shape()
@@ -403,23 +626,15 @@ def extrude_faces(
     successors = {} if builder is None else _target_successors(builder, target_shape, history, final_map)
 
     after_face_indices = [
-        _find_translated_face(
-            final_map,
-            target=(
-                centroid[0] + normal[0] * distance,
-                centroid[1] + normal[1] * distance,
-                centroid[2] + normal[2] * distance,
-            ),
-            normal=normal,
-            scale=abs(distance),
-        )
-        for centroid in centroids
+        _find_translated_face(final_map, target=target, normal=normal, scale=abs(distance))
+        for target in lid_centroids
     ]
     provenance = {
         "verb": "extrude",
         "faces": indices,
         "mode": mode,
         "distance": distance,
+        **({"taper": taper} if taper else {}),
         "unified": unified,
         **_face_map_projection(successors, final_map.Extent()),
         "after_face_indices": after_face_indices,

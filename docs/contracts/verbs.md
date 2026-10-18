@@ -123,7 +123,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **押し出しの幾何は `duocad/kernel_extrude.py`**(`extrude_regions(faces, distance, mode, normal, target_shape=None)` と `extrude_faces`。mode は join/cut/new)。`verbs/extrude.py` が直接呼ぶ。`kernel.py` に再エクスポートは無く、`kernel.extrude_regions`/`kernel.extrude_face_on_shape` は存在しない(AttributeError)。`mcp_server.py` から `kernel_extrude.*` を直接呼ばない(`tests/test_mcp_verbs.py` が検査)。
 - **依存は `kernel_extrude` → `kernel` の一方向。** `kernel.py` から `kernel_extrude` を import しない(循環)。`kernel_extrude` は kernel の private 補助(`_face_map`・`_face_at`・`_face_normal`・`_face_props`・`_checked_volume`・`_require_valid`・`_unify_same_domain`・`_fuse_all`・`_target_successors`・`_face_map_projection`)を import している。これらの名前・シグネチャを `kernel.py` 側で変えるなら `kernel_extrude` も直す。`face_of`/`_face_at` は `query.py`・`kernel_sketch.py`・テストが使うので `kernel` に残す。
 - **OCP を import してよいカーネル層は `kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` の8本と `topopt/voxelize.py`**(`tests/test_boundaries.py` の `OCP_ALLOWED` が正。押し出しを切り出した当時は 6 本だった)。
-- **UI から `extrude_face` を呼ぶ経路は無い。** ツールバーの「押し出す」は 1 つ(`#extrude`)。`features.ts` の `makeExtrude('region'|'face')` が同じ id `extrude` の 2 定義を作り、`EXTRUDE_REGIONS`(`SKETCH_FEATURE_COMMANDS`、選択引数名 `regions`)と `EXTRUDE_FACES`(通常モードの `SOLID_FEATURE_COMMANDS`、`faces`)として出す(どちらも min 1・max null)。距離 `#distance`、種別 `#extrude-mode-join/cut/new`。サーバへ送るのは両方 `{distance, mode}` だけ(対象はコアの確定選択)。旧 UI id `extrude_face`、`#extrude-regions`、`#regions-distance` は廃止。
+- **UI から `extrude_face` を呼ぶ経路は無い。** ツールバーの「押し出す」は 1 つ(`#extrude`)。`features.ts` の `makeExtrude('region'|'face')` が同じ id `extrude` の 2 定義を作り、`EXTRUDE_REGIONS`(`SKETCH_FEATURE_COMMANDS`、選択引数名 `regions`)と `EXTRUDE_FACES`(通常モードの `SOLID_FEATURE_COMMANDS`、`faces`)として出す(どちらも min 1・max null)。距離 `#distance`、テーパー角 `#extrude-taper`、種別 `#extrude-mode-join/cut/new`。サーバへ送るのは両方 `{distance, mode}` と、0 でないときの `taper` だけ(対象はコアの確定選択)。旧 UI id `extrude_face`、`#extrude-regions`、`#regions-distance` は廃止。
 - 同じ id `extrude` が 2 つの一覧に居ても、`CATEGORY_OF`(`App.svelte`)は id→category で両方 `feature` なので壊れない。`findCommand(id, list)` の `list`、`CommandHost` の `commands` プロップは必須(既定なし)。
 - `App.svelte` の `verb === 'extrude' && !regionsStillExist(...)` は変更不要(面の選択なら領域参照が空集合で true)。通常モードの押し出しは領域を要求しないので、押し出しの起動中は `wantsRegions` が立たない(通常モードで領域を要求するのはロフトだけ。下の「ロフト」)。通常モードでは領域を押し出せない(スケッチ編集中に行う)。
 - **押し出しの公開 verb は `extrude` だけ**(領域は `regions`、面は `faces`)。`extrude_face` はカタログ・`Session`・MCP・WebSocket・`duocad.verbs.__all__` に無い。`verbs/__init__.py` は `extrude_face` モジュールを import して `register_verb` の登録だけを残す(再生専用)。`extrude_face` を新しい操作の記録に使わず、新しい verb の形の手本にしない。
@@ -131,6 +131,25 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **`tests/fixtures/extrude_face_log.json` は削除前の実装で作った保存ログ(体積 12240・6 面)で、`tests/test_extrude_face_replay.py` が再生して固定する。作り直さない**(「従来と同じ形」の根拠が失われる)。
 - 再生専用 verb(`extrude_face`・`set_parameter`)はカタログに無いので、`tests/test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log` は登録済み verb からこの2つを除いて突き合わせる。
 - 曲面を掃引すると壊れた形になる実測は docs/CAD_LIBRARY_PITFALLS.md の表が `kernel_extrude._check_coplanar_planes` を指す。
+
+### テーパー(`taper`。issue #182)
+
+- **挙動は Autodesk Fusion の押し出しのテーパーに揃える**(2026-10-18 本人決定。片側の角度1つだけで、両側・対称は持たない)。
+  度で `|taper| < 90`、既定 0。**正で押し出すにつれて太り、負で細る**(Fusion の API 文書 `ExtrudeFeatureInput.taperAngle` と同じ符号)。
+- 距離 z の断面は「元の領域を z·tan(taper) だけ外へずらしたもの」で角は尖ったまま。**穴は外周と逆に動く**(正で狭まり、負で広がる。
+  Fusion も同じ: Autodesk Community「Extrude Taper option odd behavior!」)。距離が負でも「進むにつれて」で、cut では掘る側の立体に掛かる
+  (負なら穴が奥ほど狭まる)。領域・面の両方、join / cut / new のすべてで効く。
+- 幾何は `kernel_extrude._tapered_prism`(輪郭ごとに `BRepOffsetAPI_MakeDraft` → 底とふたで閉じる → 外周の立体から穴の立体を cut)。
+  `LocOpe_DPrism` / `BRepOffsetAPI_DraftAngle` を使わない理由と、潰れを OCCT が見逃す実測は docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」。
+- **潰れ(壁どうしの衝突・穴が閉じる・辺が消える・円錐が頂点を越える)は ValueError**(文言に `collapses`)。検出は4段:
+  曲線の辺の曲率半径とずらす量(`_require_curvature_room`。円の頂点越えは `BRepCheck` も自己交差の検査も通すのでこれが唯一の関門)、
+  傾けた殻の `BRepCheck`、ふたが面1枚で穴の数が底と同じ・立体が1つ、`BRepAlgoAPI_Check` の自己交差。どれが何を捕まえるかは
+  `tests/test_extrude_taper.py::test_a_collapsing_section_is_refused` の7例。
+- **taper 0 は今までの `MakePrism` の経路を通る**(形も面の数も変わらない)。ログの args には 0 でないときだけ `taper` を記録し、
+  再生は `args.get("taper", 0.0)`(テーパーの無い古いログはそのまま再生される。形式の版は上げていない)。
+  画面(`#extrude-taper`、既定 0)も 0 のときは送らない。
+- 実機検査は `web/scripts/smoke-taper.mjs`(欄の既定 0 と、打った角度で角錐台の体積になること)。
+- 面の押し出しの `after_face_indices` は、テーパーではふたの重心が底の重心の平行移動にならない(L字など)ので、作った柱のふたの重心で探す。
 
 ### 踏んだ罠
 

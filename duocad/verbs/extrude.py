@@ -10,7 +10,10 @@
 - `"new"` … 対象が何であっても常に新しいソリッドを作る(これが無いと既存部品がいる文書で2つ目の板が
   作れない)。`body_id` は受け付けない。
 
-失敗(領域が空・添字が範囲外・`mode` が未知・距離0・ブーリアン失敗)は例外を送出し、documentにも
+`taper`(度)は側面の傾き。正で押し出すにつれて太り、負で細る(Autodesk Fusion と同じ符号。穴は外周と逆に動く)。
+0 は今までの押し出しで、ログの args には 0 でないときだけ `taper` を記録する(無ければ 0 として再生する)。
+
+失敗(領域が空・添字が範囲外・`mode` が未知・距離0・ブーリアン失敗・テーパーで断面が潰れる)は例外を送出し、documentにも
 ログにも変更を残さない。「切り取ったのに穴が1つも開いていない」を成功として通さないこと。
 """
 from __future__ import annotations
@@ -38,8 +41,10 @@ def extrude(
     distance: float,
     mode: str = "join",
     body_id: Optional[BodyId] = None,
+    taper: float = 0.0,
 ) -> Operation:
     distance = kernel_extrude.check_distance(distance)
+    taper = kernel_extrude.check_taper(taper)
     if mode not in MODES:
         raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
 
@@ -52,7 +57,7 @@ def extrude(
     target_shape = None if target_body is None else target_body.shape
 
     result = kernel_extrude.extrude_regions(
-        faces, distance, mode, normal, target_shape=target_shape
+        faces, distance, mode, normal, target_shape=target_shape, taper=taper
     )
 
     created_new = False
@@ -71,6 +76,7 @@ def extrude(
         {
             "regions": [ref.to_dict() for ref in refs],
             "distance": distance,
+            **_taper_arg(taper),
             "mode": mode,
             "body_id": resolved_body_id,
             **numbered,
@@ -87,12 +93,14 @@ def extrude_faces(
     distance: float,
     mode: str = "join",
     body_id: Optional[BodyId] = None,
+    taper: float = 0.0,
 ) -> Operation:
     """同一ボディの平面の面群(`{"body", "index"}` の並び)を押し出す。
 
     失敗時は例外を送出し、**documentにもログにも変更を残さない**(幾何計算をログの append より先に済ませる)。
     """
     distance = kernel_extrude.check_distance(distance)
+    taper = kernel_extrude.check_taper(taper)
     if mode not in MODES:
         raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
 
@@ -103,7 +111,7 @@ def extrude_faces(
     target_shape = None if target_body is None else target_body.shape
 
     result = kernel_extrude.extrude_faces(
-        source.shape, indices, distance, mode, target_shape=target_shape
+        source.shape, indices, distance, mode, target_shape=target_shape, taper=taper
     )
 
     previous_shape: Any = None
@@ -120,6 +128,7 @@ def extrude_faces(
         {
             "faces": [{"body": source.id, "index": index} for index in indices],
             "distance": distance,
+            **_taper_arg(taper),
             "mode": mode,
             "body_id": resolved_body_id,
             **numbered,
@@ -128,6 +137,11 @@ def extrude_faces(
     operation.provenance = result["provenance"]
     remember(doc, resolved_body_id, operation.seq, previous_shape)
     return operation
+
+
+def _taper_arg(taper: float) -> dict:
+    """ログの args へ足すテーパー。0 は記録しない(テーパーの無い古いログと同じ args になる)。"""
+    return {"taper": taper} if taper else {}
 
 
 def _resolve_face_source(
@@ -273,8 +287,9 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     body_id = args["body_id"]
     mode = args["mode"]
     distance = float(args["distance"])
+    taper = float(args.get("taper", 0.0))
     if "faces" in args:
-        _redo_faces(document, operation, args["faces"], distance, mode, body_id)
+        _redo_faces(document, operation, args["faces"], distance, mode, body_id, taper)
         return
     refs = [RegionRef.from_dict(item) for item in args["regions"]]
     faces, normal = _resolve_faces_and_normal(document, refs)
@@ -290,13 +305,15 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     if existing is None and mode == "cut":
         raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
     if mode == "new" or existing is None:
-        result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=None)
+        result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=None, taper=taper)
         _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
         remember(document, body_id, operation.seq, None)
     else:
         target = _replayed_target(document, body_id)
         previous_shape = target.shape
-        result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=target.shape)
+        result = kernel_extrude.extrude_regions(
+            faces, distance, mode, normal, target_shape=target.shape, taper=taper
+        )
         target.shape = result["shape"]
         remember(document, body_id, operation.seq, previous_shape)
     if operation.provenance is None:
@@ -304,7 +321,13 @@ def _do_extrude(document: Document, operation: Operation) -> None:
 
 
 def _redo_faces(
-    document: Document, operation: Operation, faces: Sequence[Any], distance: float, mode: str, body_id: BodyId
+    document: Document,
+    operation: Operation,
+    faces: Sequence[Any],
+    distance: float,
+    mode: str,
+    body_id: BodyId,
+    taper: float,
 ) -> None:
     """面のログの再適用。記録した添字で面を引き直す(形が決定的なので同じ面を指す)。"""
     source, indices = _resolve_face_source(document, faces, require_visible=False)
@@ -312,7 +335,7 @@ def _redo_faces(
     if mode == "new":
         if existing is not None:
             raise ValueError(f"cannot replay new: body {body_id!r} already exists")
-        result = kernel_extrude.extrude_faces(source.shape, indices, distance, mode)
+        result = kernel_extrude.extrude_faces(source.shape, indices, distance, mode, taper=taper)
         _add_new_body(document, body_id, result["shape"], _recorded_name(document, operation.args))
         remember(document, body_id, operation.seq, None)
     else:
@@ -321,7 +344,7 @@ def _redo_faces(
         target = _replayed_target(document, body_id)
         previous_shape = target.shape
         result = kernel_extrude.extrude_faces(
-            source.shape, indices, distance, mode, target_shape=previous_shape
+            source.shape, indices, distance, mode, target_shape=previous_shape, taper=taper
         )
         target.shape = result["shape"]
         remember(document, body_id, operation.seq, previous_shape)
@@ -347,7 +370,11 @@ register_verb(VERB_EXTRUDE, do=_do_extrude, undo=_undo_extrude)
 # --------------------------------------------------------------------------------------
 @entry(VERB_EXTRUDE)
 def _enter_extrude(
-    document: Document, distance: float, mode: str = "join", body_id: Optional[BodyId] = None
+    document: Document,
+    distance: float,
+    mode: str = "join",
+    body_id: Optional[BodyId] = None,
+    taper: float = 0.0,
 ) -> dict:
     """選択の領域、または同一平面・同一ボディの面を押し出す(混在は ValueError)。
 
@@ -355,10 +382,12 @@ def _enter_extrude(
     """
     kind, items = selection.require_extrude_targets(document)
     if kind == "face":
-        operation = extrude_faces(document, items, float(distance), mode=str(mode), body_id=body_id)
+        operation = extrude_faces(
+            document, items, float(distance), mode=str(mode), body_id=body_id, taper=float(taper)
+        )
     else:
         refs = [RegionRef.from_dict(item) for item in items]
-        operation = extrude(document, refs, float(distance), mode=str(mode), body_id=body_id)
+        operation = extrude(document, refs, float(distance), mode=str(mode), body_id=body_id, taper=float(taper))
     changed = operation.args["body_id"]
     return {
         "body_id": changed,
