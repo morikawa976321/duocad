@@ -352,8 +352,12 @@
       fail(where === 'send' ? message : `エラー[${where}] ${message}`)
       // 待ちを解くのは、待っている操作そのものが失敗したときと、送れなかったときだけ。確定の直前に送った
       // プレビューなどの失敗で解くと、確定がまだサーバで走っている間に次の Enter が通る。
-      if (where === 'send') pendingOp = null
-      else releasePending(clientOp ?? null)
+      if (where === 'send') {
+        pendingOp = null
+        // 送れなかった全解除の配信は来ない。残すと、繋ぎ直しの試行中に送って失敗しその試行が成功したとき、
+        // `clearingOp` が残って以後の選択の差分が空の選択に対して組まれ続ける(`onStatus` の切断時だけでは捨てられない)。
+        clearingOp = null
+      } else releasePending(clientOp ?? null)
       if (where === 'preview') clearPreview()
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
       if (where === 'get_edges' || where === 'send') edgesAsked.clear()
