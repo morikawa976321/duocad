@@ -29,13 +29,13 @@ from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffset
 from OCP.Geom import Geom_BezierCurve
 from OCP.GeomAbs import GeomAbs_Arc, GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
-from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_State
+from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt
 
-from .kernel import _BASE_PLANE_AXES, _face_map, _face_props, classify_face, edge_length, face_of
+from .kernel import _BASE_PLANE_AXES, _face_map, _face_normal, _face_props, classify_face, edge_length, face_of
 from .mesh_geometry import compound, indexed_map
 
 
@@ -492,7 +492,7 @@ def _dot3(direction: "gp_Dir", vector: Sequence[float]) -> float:
 
 
 def _ax3_from_face(face: Any) -> "gp_Ax3":
-    """平面の面から gp_Ax3 を取る。平面でなければ ValueError。REVERSED なら法線を反転。"""
+    """平面の面から gp_Ax3 を取る。平面でなければ ValueError。法線は面の外向きにそろえる。"""
     face = TopoDS.Face_s(face)
     adaptor = BRepAdaptor_Surface(face)
     if adaptor.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
@@ -500,10 +500,13 @@ def _ax3_from_face(face: Any) -> "gp_Ax3":
             f"face is {classify_face(face)}: スケッチ平面にできるのは平面だけ"
         )
     # OCP には gp_Ax3(gp_Ax3) のコンストラクタが無いので位置・法線・X方向から組み直す。
-    # 反転面は `ZReverse`(`ReverseZ` は存在しない)で法線だけを裏返す(X/Y は変わらない)。
+    # 外向きと逆なら `ZReverse`(`ReverseZ` は存在しない)で法線だけを裏返す(X/Y は変わらない)。
     position = adaptor.Plane().Position()
     ax3 = gp_Ax3(position.Location(), position.Direction(), position.XDirection())
-    if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
+    # 外部の罠: 向きが REVERSED かどうかで反転を決めてはいけない。奇数回鏡映したボディの面は平面の Position が
+    # 左手系で、REVERSED のときに Direction がすでに外を向いている(実測: 鏡映した直方体の6面すべてで法線が逆になった)。
+    # `BRepGProp_Face` の外向き法線(`kernel._face_normal`)と突き合わせる。
+    if _dot3(ax3.Direction(), _face_normal(face)) < 0.0:
         ax3.ZReverse()
     return ax3
 
