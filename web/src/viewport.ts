@@ -22,6 +22,7 @@ import {
 } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { sampleFaces, type BodySamples } from './faceCulling'
+import { startFrameLoop } from './frameLoop'
 import { createResolutionTracker } from './resolutionTracker'
 import { BASE_EXTENT, mmPerPixel, type CameraProjection } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
@@ -392,8 +393,6 @@ export function createViewport(container: HTMLElement): Viewport {
     applySketchHoverMaterials()
   }
   let framed = false
-  let alive = true
-  let frameHandle = 0
 
   function size(): { width: number; height: number } {
     return {
@@ -2530,7 +2529,6 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function tick(): void {
-    if (!alive) return
     cube.stepSnap(performance.now())
     controls.update()
     syncCameraUp()
@@ -2557,9 +2555,12 @@ export function createViewport(container: HTMLElement): Viewport {
       renderedView.copy(camera.matrixWorld)
       renderedProjection.copy(camera.projectionMatrix)
     }
-    frameHandle = requestAnimationFrame(tick)
   }
-  frameHandle = requestAnimationFrame(tick)
+  const frameLoop = startFrameLoop(tick, {
+    request: (callback) => requestAnimationFrame(callback),
+    cancel: (handle) => cancelAnimationFrame(handle),
+    report: (error) => reportError(error),
+  })
 
   const api: Viewport = {
     update,
@@ -2683,8 +2684,7 @@ export function createViewport(container: HTMLElement): Viewport {
       return thumbnailer.capture([...bodies.values()].flatMap((entry) => entry.sceneObjects))
     },
     dispose() {
-      alive = false
-      cancelAnimationFrame(frameHandle)
+      frameLoop.stop()
       observer.disconnect()
       thumbnailer.dispose()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
