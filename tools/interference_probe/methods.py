@@ -264,11 +264,16 @@ def _area(shape) -> float:
     return props.Mass()
 
 
-def obb_min_side(shape) -> float:
+def obb_sides(shape) -> List[float]:
+    """有向境界箱の3辺(短い順)。"""
     from OCP.Bnd import Bnd_OBB
     obb = Bnd_OBB()
     BRepBndLib.AddOBB_s(shape, obb, False, True, False)
-    return 2 * min(obb.XHSize(), obb.YHSize(), obb.ZHSize())
+    return sorted(2 * x for x in (obb.XHSize(), obb.YHSize(), obb.ZHSize()))
+
+
+def obb_min_side(shape) -> float:
+    return obb_sides(shape)[0]
 
 
 def _regions(pieces: Sequence[TopoDS_Shape]) -> List[List[int]]:
@@ -309,7 +314,8 @@ def _region_measures(pieces: Sequence[TopoDS_Shape]) -> Dict:
     a = sum(_area(f) for f, n in faces if n == 1)
     if not (a > 0) or not (v >= 0):
         raise ValueError(f"重なりの面積・体積が不正: V={v} A={a}")
-    return dict(volume=v, area=a, thickness=2 * v / a, obb_min=obb_min_side(compound(pieces)))
+    sides = obb_sides(compound(pieces))
+    return dict(volume=v, area=a, thickness=2 * v / a, obb_min=sides[0], obb_sides=sides)
 
 
 def overlap_measures(pieces: Sequence[TopoDS_Shape]) -> Dict:
