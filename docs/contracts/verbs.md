@@ -68,7 +68,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **軸に使った線分自身が対象に混ざっていたら、対象から黙って外す**(`mirror_sketch.py`。直線は自分自身へ映り元と重なる複製にしかならない)。対象が軸だけになったら ValueError。
 - **長方形は軸が水平・垂直のときだけ種別を保てる。** 斜めの軸では `sketch._mirror_rectangle` が4本の線分へ分解した結果を返し、`mirror_sketch_entities` 側が検査して ValueError にする(回転と同じ二段構え)。この分解は ValueError へ変換するための中間表現で、戻り値に線分が出ることはない。
 - **円弧の鏡映は始点・終点を入れ替えてから角度を映す**(`new_start = 2*axis_angle - end`、`new_end = 2*axis_angle - start`)。鏡映は向きを反転するので別々に映すと掃引方向が壊れる。掃引量(`end-start`)は保たれる。
-- `EntityKindOps.mirror`(5種別とも実装。`mirror(params, ax, ay, ux, uy) -> List[dict]`、rotate と同じ「種別が変わりうる」形)、`kernel.mirror_shape(shape, point, normal, *, copy=True)`(`gp_Trsf.SetMirror`)。
+- `EntityKindOps.mirror`(5種別とも実装。`mirror(params, ax, ay, ux, uy) -> List[dict]`、rotate と同じ「種別が変わりうる」形)、`kernel.mirror_shape(shape, point, normal)`(`gp_Trsf.SetMirror`。常に独立した複製を返す)。
 - **鏡映基準の指し方は既存の `PickArgSpec`(対象とは別チャンネルで図形を1つ直接ピック)に種別を足して実現。** `PickTarget = 'edge'|'vertex'|'face'|'sketchPoint'|'sketchEntity'`。`face` は `PickEvent.hit`、`sketchEntity` は `PickEvent.sketchEntity`(点は落とす)から拾う。種別は `PickEvent` が既に持つものから選ぶ(新しい当たり判定を作らない)。
 - **`MIRROR_SKETCH_ENTITIES`**(`commands/sketch.ts`): 対象は選択、`axis` は `sketchEntity` ピック(必須・自動で構える)。`build` は `{axis}` だけを送り、`runsWithoutSketchId` は true。`catalog.py` は `ws="table"`(必須の引数1つなので表の規約に合う。`special` は `_dispatch` に手書き分岐を増やす)。
 - **`MIRROR_BODY`**(`commands/features.ts`): `base_plane` の choice は XY/XZ/YZ + 4つめ `'face'`(「面を選ぶ」)。`'face'` はサーバへ行かず、`build` が `plane_face` へ読み替える印(コアの `base_plane` は XY/XZ/YZ のみ)。面ピックは `when: base_plane==='face'` で開く(外すと起動した瞬間に面ピックが開いて対象を選び直せない)。`mirror_body` は `ws="special"` で `plane_face` も WS に開いている(`_dispatch` が `plane_face=message.get("plane_face")` を渡す)。
