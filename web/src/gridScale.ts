@@ -151,6 +151,25 @@ export interface UvBox {
 }
 
 /**
+ * 点列の外接UV矩形(点が無ければ `null`)。`Math.min(...us)` のように配列を引数へ展開しない:
+ * 引数が約12万を超えると RangeError になる(反復や取り込んだSVGで折れ線の点が増えたスケッチ)。
+ */
+export function uvBoxOfPoints(points: ReadonlyArray<readonly [number, number]>): UvBox | null {
+  if (points.length === 0) return null
+  let uMin = Infinity
+  let uMax = -Infinity
+  let vMin = Infinity
+  let vMax = -Infinity
+  for (const [u, v] of points) {
+    if (u < uMin) uMin = u
+    if (u > uMax) uMax = u
+    if (v < vMin) vMin = v
+    if (v > vMax) vMax = v
+  }
+  return { uMin, uMax, vMin, vMax }
+}
+
+/**
  * 内容のUV矩形へカーソル点を合成する(カーソル追従)。`boundingSquare` の前に「内容 ∪ カーソル」を
  * 作れば、余白もスナップも触らずに済む。状態を持たない: 呼び出し側が毎回、内容だけの矩形と
  * いまのカーソル位置を渡す。

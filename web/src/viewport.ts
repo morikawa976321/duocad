@@ -25,7 +25,7 @@ import { sampleFaces, type BodySamples } from './faceCulling'
 import { startFrameLoop } from './frameLoop'
 import { createHeadlight } from './headlight'
 import { createResolutionTracker } from './resolutionTracker'
-import { BASE_EXTENT, mmPerPixel, type CameraProjection } from './gridScale'
+import { BASE_EXTENT, mmPerPixel, uvBoxOfPoints, type CameraProjection } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
 import { createGhostLayer } from './ghostLayer'
 import { createSectionView } from './sectionView'
@@ -1939,13 +1939,10 @@ export function createViewport(container: HTMLElement): Viewport {
     // 中心は描いてあるものの真ん中(何も無ければ平面の原点)
     let center = toWorld(frame, 0, 0)
     let radius = 0
-    if (target.points.length > 0) {
-      const us = target.points.map(([u]) => u)
-      const vs = target.points.map(([, v]) => v)
-      const midU = (Math.min(...us) + Math.max(...us)) / 2
-      const midV = (Math.min(...vs) + Math.max(...vs)) / 2
-      center = toWorld(frame, midU, midV)
-      radius = Math.max(Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs)) / 2
+    const box = uvBoxOfPoints(target.points)
+    if (box !== null) {
+      center = toWorld(frame, (box.uMin + box.uMax) / 2, (box.vMin + box.vMax) / 2)
+      radius = Math.max(box.uMax - box.uMin, box.vMax - box.vMin) / 2
     }
     const previous = camera.position.distanceTo(controls.target)
     const distance = radius > 0 ? Math.max(fitDistance(radius * SKETCH_FIT_MARGIN), 1) : Math.max(previous, 1)

@@ -22,6 +22,7 @@ import {
   snapForSpan,
   tierAlpha,
   tierAlphas,
+  uvBoxOfPoints,
 } from '../web/src/gridScale.ts'
 
 // ============================================================== mmPerPixel
@@ -285,6 +286,17 @@ assert.deepEqual(
   for (const edge of [far.centerU - far.half, far.centerU + far.half, far.centerV - far.half, far.centerV + far.half]) {
     assert.equal(Math.round(edge / step) * step, edge, `縁 ${edge} が ${step}mm の倍数に載っていない`)
   }
+}
+
+// ============================================================== uvBoxOfPoints(視点合わせの外接矩形)
+assert.equal(uvBoxOfPoints([]), null, '点が無ければ null')
+assert.deepEqual(uvBoxOfPoints([[3, -4]]), { uMin: 3, uMax: 3, vMin: -4, vMax: -4 })
+assert.deepEqual(uvBoxOfPoints([[0, 0], [10, -5], [-2, 7]]), { uMin: -2, uMax: 10, vMin: -5, vMax: 7 })
+// **引数展開で落ちない**: V8 は引数が約12.5万を超えると RangeError を出す。大径の円300〜400個ぶんの折れ線で届く点数。
+{
+  const many = Array.from({ length: 400_000 }, (_, i) => [i % 1000, (i % 777) - 776])
+  assert.throws(() => Math.min(...many.map(([u]) => u)), RangeError, '前提: 展開は桁違いの点数で落ちる')
+  assert.deepEqual(uvBoxOfPoints(many), { uMin: 0, uMax: 999, vMin: -776, vMax: 0 })
 }
 
 console.log('grid scale: all assertions passed')
