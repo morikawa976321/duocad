@@ -49,31 +49,9 @@ export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir
   child.stderr.on('data', (chunk) => chunks.push(chunk))
   const log = () => chunks.join('')
 
-  let exited = null
-  child.on('exit', (code) => (exited = code))
-
-  const url = `http://127.0.0.1:${httpPort}/`
-  const deadline = Date.now() + timeout
-  for (;;) {
-    if (exited !== null) {
-      throw new Error(`サーバが起動直後に終了した(code ${exited}):\n${log()}`)
-    }
-    try {
-      const response = await fetch(url, { cache: 'no-store' })
-      if (response.ok) break
-    } catch {
-      // まだ listen していない
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`サーバが ${timeout}ms 以内に応答しなかった(${url}):\n${log()}`)
-    }
-    await new Promise((done) => setTimeout(done, 200))
-  }
-  // サーバはトップ画面で起動し、その間は MCP からの操作も断られる。
-  if (newDocument) await sendNewDocument(wsPort, timeout)
-
+  const exited = () => child.exitCode !== null || child.signalCode !== null
   const stop = async () => {
-    if (exited !== null) return
+    if (exited()) return
     // stdinを閉じて終わらせる(MCPのクライアントが切れたときと同じ経路)。
     child.stdin.end()
     await new Promise((done) => {
@@ -86,6 +64,33 @@ export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir
         done()
       })
     })
+  }
+
+  const url = `http://127.0.0.1:${httpPort}/`
+  // 起動の途中で失敗したら、呼び手は `stop` を受け取れない。子を止めてから投げる(止めないと python のサーバとポートが
+  // 残り、子のパイプが node のイベントループを生かし続けて、検査が FAIL を出した後も終了しない)。
+  try {
+    const deadline = Date.now() + timeout
+    for (;;) {
+      if (exited()) {
+        throw new Error(`サーバが起動直後に終了した(code ${child.exitCode ?? child.signalCode}):\n${log()}`)
+      }
+      try {
+        const response = await fetch(url, { cache: 'no-store' })
+        if (response.ok) break
+      } catch {
+        // まだ listen していない
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`サーバが ${timeout}ms 以内に応答しなかった(${url}):\n${log()}`)
+      }
+      await new Promise((done) => setTimeout(done, 200))
+    }
+    // サーバはトップ画面で起動し、その間は MCP からの操作も断られる。
+    if (newDocument) await sendNewDocument(wsPort, timeout)
+  } catch (error) {
+    await stop()
+    throw error
   }
 
   return { url, child, stop, log }
