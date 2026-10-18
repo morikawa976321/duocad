@@ -12,6 +12,7 @@ export const COMMAND_CATEGORY = {
   clear_selection: 'selection',
   sketch_create: 'sketch',
   sketch_create_offset: 'sketch',
+  add_point: 'sketch',
   add_line: 'sketch',
   add_circle: 'sketch',
   add_ellipse: 'sketch',
@@ -100,6 +101,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   clear_selection: [],
   sketch_create: ['base_plane'],
   sketch_create_offset: ['base_plane', 'distance'],
+  add_point: ['sketch_id', 'point'],
   add_line: ['sketch_id', 'p0', 'p1'],
   add_circle: ['sketch_id', 'center', 'diameter'],
   add_ellipse: ['sketch_id', 'center', 'width', 'height', 'angle'],
@@ -186,6 +188,7 @@ export interface CommandArguments {
   clear_selection: Record<string, never>
   sketch_create: { base_plane?: string }
   sketch_create_offset: { base_plane?: string; distance: number }
+  add_point: { sketch_id: string; point: unknown[] }
   add_line: { sketch_id: string; p0: unknown[]; p1: unknown[] }
   add_circle: { sketch_id: string; center: unknown[]; diameter: number }
   add_ellipse: { sketch_id: string; center: unknown[]; width: number; height: number; angle: number }
@@ -283,6 +286,7 @@ interface AppliedChangeBase {
 export type Applied =
   | (AppliedVerbBase & { verb: 'sketch_create'; sketch_id: string; frame: { origin: number[]; u: number[]; v: number[]; normal: number[] } })
   | (AppliedVerbBase & { verb: 'sketch_create_offset'; sketch_id: string; frame: { origin: number[]; u: number[]; v: number[]; normal: number[] } })
+  | (AppliedVerbBase & { verb: 'add_point'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_line'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_circle'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_ellipse'; entity_id: string })

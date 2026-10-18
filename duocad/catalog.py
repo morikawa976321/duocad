@@ -617,6 +617,18 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="add_point",
+        returns=(Result("entity_id", "string"),),
+        category="sketch",
+        description="スケッチに点を足すときに呼ぶ(作図の目印・吸着先。辺を持たないので領域は割らない)。",
+        params=(
+            _SKETCH_ID,
+            Param("point", "array", "位置 [u, v]"),
+        ),
+        session="add_point",
+        resets_selection=True,
+    ),
+    Command(
         name="add_line",
         returns=(Result("entity_id", "string"),),
         category="sketch",
@@ -849,7 +861,7 @@ COMMANDS: tuple[Command, ...] = (
                 "start_point",
                 "object",
                 "最初の断面の前を収束させる点(尖らせる)。スケッチの図形の点 "
-                '{"sketch": sketch_id, "entity": entity_id, "point": "x0"}(線分の端点 x0 / x1、円・楕円・円弧の中心 cx など)',
+                '{"sketch": sketch_id, "entity": entity_id, "point": "x0"}(点の図形 cx、線分の端点 x0 / x1、円・楕円・円弧の中心 cx など)',
                 required=False,
             ),
             Param(

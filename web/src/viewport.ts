@@ -1132,6 +1132,11 @@ export function createViewport(container: HTMLElement): Viewport {
   const sketchMaterial = createSketchLineMaterial(SKETCH_COLOR, sketchLineResolution)
   const sketchGhostMaterial = createSketchLineMaterial(SKETCH_GHOST_COLOR, sketchLineResolution)
   const sketchGhostWarnMaterial = createSketchLineMaterial(SKETCH_GHOST_WARN_COLOR, sketchLineResolution)
+  // 点の図形の幽霊(折れ線を持たないので取っ手と同じ大きさの印で描く)
+  const ghostPointMaterialOf = (color: number) =>
+    new THREE.PointsMaterial({ color, size: SKETCH_HANDLE_PIXELS * 2, sizeAttenuation: false, depthTest: false })
+  const sketchGhostPointMaterial = ghostPointMaterialOf(SKETCH_GHOST_COLOR)
+  const sketchGhostWarnPointMaterial = ghostPointMaterialOf(SKETCH_GHOST_WARN_COLOR)
 
   /**
    * スケッチの線・点の材質は (選択状態 × ホバー × 描き方) のキャッシュから取る(`faceMaterialFor` と同じ形)。
@@ -1170,6 +1175,16 @@ export function createViewport(container: HTMLElement): Viewport {
   function sketchHandleMaterialFor(state: SketchMaterialState, hovered: boolean): THREE.PointsMaterial {
     return sketchHandleMaterials.get(state, hovered)
   }
+  // 編集していないスケッチの点の図形: 取っ手と同じ見た目で、立体の裏に回ると隠れる(線と同じ深度バイアス)
+  const sketchPointEntityMaterial = withDepthBias(
+    new THREE.PointsMaterial({
+      color: SKETCH_HANDLE_COLOR,
+      size: SKETCH_HANDLE_PIXELS * 2,
+      sizeAttenuation: false,
+      depthWrite: false,
+    }),
+    DEPTH_BIAS_LAYER.sketch,
+  )
   /**
    * 領域の材質は (選択 × ホバー) のキャッシュから取る。不透明度は選択で変わる(非選択 0.35 / 選択 0.55)。
    * 選択中は立体に透かし、それ以外は立体の裏に回ると隠れる(線と同じ。押し出した元の領域は押し出した面と
@@ -1199,7 +1214,7 @@ export function createViewport(container: HTMLElement): Viewport {
     /** シーンに足したもの(除去と破棄のため。ピック用の配列は別に持つ)。 */
     batch: SceneBatch
     regionMeshes: THREE.Mesh[]
-    /** 図形の (u,v) の折れ線(視点合わせの中心を出すのに使う)。 */
+    /** 図形の (u,v) の折れ線と点の図形の位置(視点合わせの中心を出すのに使う)。 */
     points: Array<[number, number]>
     /** 図形1本ごとの折れ線の点数(実機検査の `sketchPolylineCounts` が読む)。 */
     polylineCounts: number[]
@@ -1411,6 +1426,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
       // 文書の図形(`handles`)。ここに置くのは「指せるもの」(旧形式の反復の複製は `entity_id` を持たず指せない)。
       const pickPoints: SketchScene['pickPoints'] = []
+      const pointEntityPositions: number[] = []
       for (const handle of entry.handles) {
         const selected = pickedWhole.has(handle.entityId)
         const built = buildEntityLine(
@@ -1429,12 +1445,16 @@ export function createViewport(container: HTMLElement): Viewport {
             polylineCounts.push(built.points.length)
           }
         }
+        // 点の図形は折れ線を持たないので、視点合わせの範囲へ位置そのものを入れる
+        if (handle.kind === 'point') points.push([handle.params.cx, handle.params.cy])
         if (!editing) {
-          // 点は普段描かない(ホバー中・選択中だけ `replaceMark`)。独立した点の図形(未実装の `add_point`)は
-          // 編集していないスケッチでも常に描く(本人決定 2026-10-18。docs/DESIGN_DECISIONS.md)ので、種別を足すときはここで分ける。
+          // 点は普段描かない(ホバー中・選択中だけ `replaceMark`)。点の図形だけは編集していないスケッチでも常に描く
+          // (本人決定 2026-10-18。docs/DESIGN_DECISIONS.md)。
           for (const point of entityHandles(handle.kind, handle.params)) {
             if (!Number.isFinite(point.u) || !Number.isFinite(point.v)) continue
-            pickPoints.push({ point: toWorld(entry.frame, point.u, point.v), entityId: handle.entityId, key: point.key })
+            const world = toWorld(entry.frame, point.u, point.v)
+            pickPoints.push({ point: world, entityId: handle.entityId, key: point.key })
+            if (handle.kind === 'point') pointEntityPositions.push(world.x, world.y, world.z)
           }
           continue
         }
@@ -1442,7 +1462,8 @@ export function createViewport(container: HTMLElement): Viewport {
         // rectangle/circle/arc は点が1個で、その点だけ動かすのと図形全体を動かすのが
         // move_sketch_entities 内で同じ処理になるため、ホバー/選択のときだけ見せる
         // (ピック可能な座標は変えない。`pickPointsAt` は mesh.visible を見ない)。
-        const showPointsAtRest = entityHasIndependentPoints(handle.kind)
+        // 点の図形は点の印のほかに描くものが無いので常に見せる。
+        const showPointsAtRest = handle.kind === 'point' || entityHasIndependentPoints(handle.kind)
         for (const point of entityHandles(handle.kind, handle.params)) {
           if (!Number.isFinite(point.u) || !Number.isFinite(point.v)) continue
           const world = toWorld(entry.frame, point.u, point.v)
@@ -1465,6 +1486,14 @@ export function createViewport(container: HTMLElement): Viewport {
           mesh.userData.showAtRest = showPointsAtRest
           handleMeshes.push(batch.add(mesh, geometry))
         }
+      }
+      if (pointEntityPositions.length > 0) {
+        const geometry = new THREE.BufferGeometry()
+        geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pointEntityPositions), 3))
+        geometry.computeBoundingSphere()
+        const mesh = new THREE.Points(geometry, sketchPointEntityMaterial)
+        mesh.renderOrder = LAYER.sketchPoint
+        batch.add(mesh, geometry)
       }
       const bounds = new THREE.Box3()
       for (const line of handleLines) {
@@ -1602,10 +1631,24 @@ export function createViewport(container: HTMLElement): Viewport {
     if (entities.length === 0 || !target) return
     const batch = createBatch(sketchRoot)
     const material = tone === 'warn' ? sketchGhostWarnMaterial : sketchGhostMaterial
+    const pointPositions: number[] = []
     for (const entity of entities) {
+      if (entity.kind === 'point') {
+        const world = toWorld(target.frame, entity.params.cx, entity.params.cy)
+        pointPositions.push(world.x, world.y, world.z)
+        continue
+      }
       const built = buildEntityLine(target.frame, entity, material)
       if (!built) continue
       batch.add(built.object, built.geometry)
+    }
+    if (pointPositions.length > 0) {
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pointPositions), 3))
+      geometry.computeBoundingSphere()
+      const mesh = new THREE.Points(geometry, tone === 'warn' ? sketchGhostWarnPointMaterial : sketchGhostPointMaterial)
+      mesh.renderOrder = LAYER.sketchPoint
+      batch.add(mesh, geometry)
     }
     if (batch.objects.length === 0) return
     ghost = batch

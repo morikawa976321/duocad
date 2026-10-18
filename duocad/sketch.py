@@ -55,8 +55,13 @@ def circular_pattern_step(count: int, total_angle: float) -> float:
 # 図形種別ごとの純幾何演算(表)
 # --------------------------------------------------------------------------------------
 # **図形種別ごとに1行**(`EntityKindOps`)。OCPに依存する処理(辺の生成・2D bbox)は import境界のためここに置けず、
-# `kernel_sketch.py` に姉妹の表がある。新しい種別を足すときに触るのは「ここ」と「kernel_sketch.py」の各1行(+TS側1箇所)。
+# `kernel_sketch.py` に姉妹の表がある。新しい種別を足すときに触るのは「ここ」と「kernel_sketch.py」の各1行と、TS側の
+# `entityKinds.ts` の表・`selectionInfoText.ts` の名前(どれも漏れると `tests/test_entity_kind_tables.py` か型検査が落ちる)。
 # **表に無い種別は即時 ValueError**(`entity_kind_ops`)。silent defaultは無い。
+def _validate_point(params: Dict[str, float]) -> None:
+    """点は位置だけを持つので、座標が有限であればよい(有限かは `require_valid_params` が見る)。"""
+
+
 def _validate_line(params: Dict[str, float]) -> None:
     if (params["x0"], params["y0"]) == (params["x1"], params["y1"]):
         raise ValueError("line endpoints must differ (長さ0の線分は領域を割らない)")
@@ -109,7 +114,7 @@ def _translate_line(params: Dict[str, float], dx: float, dy: float) -> Dict[str,
 
 
 def _translate_cxcy(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
-    """中心 `cx`/`cy` だけで位置が決まる種別(円・楕円・円弧)の平行移動。"""
+    """中心 `cx`/`cy` だけで位置が決まる種別(点・円・楕円・円弧)の平行移動。"""
     moved = dict(params)
     moved["cx"] = params["cx"] + dx
     moved["cy"] = params["cy"] + dy
@@ -358,6 +363,11 @@ class EntityKindOps:
 
 
 _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
+    # 点は円と同じく `cx`/`cy` だけで位置が決まる(回転・鏡映も円の式がそのまま使える)
+    "point": EntityKindOps(
+        _validate_point, _translate_cxcy, _rotate_circle, _center_cxcy, _mirror_circle,
+        points=(("cx", "cy"),),
+    ),
     "line": EntityKindOps(
         _validate_line, _translate_line, _rotate_line, _center_line, _mirror_line,
         points=(("x0", "y0"), ("x1", "y1")),
@@ -431,6 +441,7 @@ def get_entity(sketch: "Sketch", entity_id: EntityId) -> "Entity":
 
 VERB_SKETCH_CREATE = "sketch_create"
 VERB_SKETCH_CREATE_OFFSET = "sketch_create_offset"
+VERB_ADD_POINT = "add_point"
 VERB_ADD_LINE = "add_line"
 VERB_ADD_CIRCLE = "add_circle"
 VERB_ADD_ELLIPSE = "add_ellipse"
@@ -495,6 +506,7 @@ class Entity:
 
     キーは図形ごとに固定する(スカラー1個 = 将来のパラメータ1個になるよう平らに持つ):
 
+        point     : cx, cy                               (辺を持たない。領域を割らない)
         line      : x0, y0, x1, y1
         circle    : cx, cy, diameter
         ellipse   : cx, cy, width, height, angle         (width は angle 方向の直径、height はそれに直交する直径)
@@ -603,6 +615,12 @@ def point_2d(value: Any, what: str) -> Tuple[float, float]:
     if not (math.isfinite(u) and math.isfinite(v)):
         raise ValueError(f"{what} must be two finite numbers [u, v], got {value!r}")
     return u, v
+
+
+def add_point(doc: Document, sketch_id: SketchId, point: Any) -> EntityId:
+    """スケッチ平面上の `point` に点の図形を足して EntityId を返す。"""
+    cx, cy = point_2d(point, "point")
+    return _add_entity(doc, sketch_id, "point", {"cx": cx, "cy": cy}, VERB_ADD_POINT)
 
 
 def add_line(doc: Document, sketch_id: SketchId, p0: Any, p1: Any) -> EntityId:
@@ -873,7 +891,7 @@ def _undo_add_entity(document: Document, operation: Operation) -> None:
 register_verb(VERB_SKETCH_CREATE, do=_do_sketch_create, undo=_undo_sketch_create)
 # `sketch_create_offset` は do/undoの実体が `plane["kind"]` を見ない(`sketch_create` のdocstring)。
 register_verb(VERB_SKETCH_CREATE_OFFSET, do=_do_sketch_create, undo=_undo_sketch_create)
-for _verb in (VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_ELLIPSE, VERB_ADD_RECTANGLE, VERB_ADD_ARC):
+for _verb in (VERB_ADD_POINT, VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_ELLIPSE, VERB_ADD_RECTANGLE, VERB_ADD_ARC):
     # do/undo の実体は args["kind"] で分かれない。verb名を分けているのは操作ログとMCPの粒度のため。
     register_verb(_verb, do=_do_add_entity, undo=_undo_add_entity)
 del _verb
@@ -907,6 +925,11 @@ def _enter_sketch_create_offset(
 ) -> dict:
     plane = offset_plane(plane_from_selection(document, base_plane), distance)
     return _created(document, sketch_create(document, plane, verb=VERB_SKETCH_CREATE_OFFSET))
+
+
+@entry(VERB_ADD_POINT)
+def _enter_add_point(document: Document, sketch_id: str, point: Any) -> dict:
+    return {"entity_id": add_point(document, sketch_id, point)}
 
 
 @entry(VERB_ADD_LINE)

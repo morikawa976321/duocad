@@ -23,6 +23,10 @@
 
 - 描く5 verb(`add_line` / `add_rectangle` / `add_circle` / `add_ellipse` / `add_arc`)は**クリックだけでも打鍵だけでも**置ける。寸法欄は `NumberArgSpec.fromPoints?: true`(空欄なら集めた点から導く寸法。値は作らず `build` が点から計算する)で、`commitsGhost(command)`(`fromPoints` 寸法を1つ以上持つか)が「見えている幽霊をそのまま確定してよい」を決める。`CommandHost` は `commitSource`(`built ?? ghostBuilt`)/ `canCommit` を見て、Enter・ボタン押し直しは `ready` ではなく `canCommit` を見る。**サーバの verb 契約は変えない。**
   - 対応: `add_line` = 点 `p0/p1`、寸法 `length`(`sketch-line-length`)/`angle_deg`(`sketch-line-angle`)。`add_rectangle` = `corner/opposite`、`width`/`height`。`add_circle` = `center/rim`、`diameter`(`sketch-diameter`)。`add_ellipse` = `center/axis_end/via`、`width`(`sketch-ellipse-width`)/`height`(`sketch-ellipse-height`)/`angle`(`sketch-ellipse-angle`)。`add_arc` = `p0/p1/via`、`radius`(`sketch-arc-radius`)。`#sketch-arc-start`/`#sketch-arc-end` は無い(角度は始点・終点のクリックで決まる)。
+- `add_point`(`#sketch-point`)は点 `point` の1クリックだけで置く(寸法を持たないので Enter も幽霊も無い)。点の図形は辺を持たず
+  領域を割らない。描き方は線の端点の取っ手と同じ印で、編集中も編集していないスケッチでも常に描く(編集していないスケッチでは
+  立体の裏に回ると隠れる。`viewport.ts` の `sketchPointEntityMaterial`)。選択は常に点 `{sketch, entity, point: "cx"}`
+  (`point` を省いた参照もコアが `cx` にする。`selection.select_sketch_entity`)。
 - 幾何は `sketchGeometry.ts`(純関数のみ・`import type` しか持たない): `lineFromPoints` / `rectFromPoints` / `circleFromPoints` / `ellipseFromPoints` / `arcFromPoints` / `lineLength` / `lineAngleDeg`(規約 [0,360))。**`sketch.ts` は `node` から直接読めない**(拡張子なしの実行時 import)ので、幾何を `sketchGeometry.ts` に置き `tests/eval_sketch_geometry.mjs` が直に読む。`sketch.ts` へ幾何を戻すと検査が死ぬ。
 - **`fromPoints` の `name` は `build` が出す引数のキーと同じにする。** `placeholderFor` がその名前で `ghostBuilt.args` を引いて「いまマウスが指す値」を薄字に出す。ずれても型検査は通り、**プレースホルダが黙って静的に戻るだけ**。
 - **円弧の `build` は常に `start_deg <= end_deg` を出す。** `duocad/kernel_sketch.py` は `(end_deg - start_deg) % 360` で必ず反時計回りに掃き、`entityKinds.ts` も同じ式(`arcSweepDeg`。折れ線・吸着・当たり・交点が全部これを通す)で描くので、差が負や360以上の弧(MCP の `add_arc` は範囲を制限しない)でも画面とコアは同じ弧になる。差が360の倍数は画面では一周に描く(コアは長さ0の辺を作れず拒む)。`end_deg` が360超は正常(差だけを見る)。
