@@ -142,7 +142,7 @@ def describe_ops() -> dict:
             {
                 "op": "parallel_to",
                 "args": {"axis": "X|Y|Z|[x,y,z]"},
-                "doc": "辺が軸に平行(単位方向の内積の絶対値が 1±PARALLEL_TOLERANCE)",
+                "doc": "直線の辺が軸に平行(単位方向の内積の絶対値が 1±PARALLEL_TOLERANCE)。円弧・B-spline など直線でない辺は対象外",
             },
             {
                 "op": "length_gt",
@@ -363,6 +363,9 @@ def _edge_matches(edge: dict, condition: dict, boundary_sets: dict) -> bool:
 
 
 def _is_parallel(edge: dict, axis: Sequence[float]) -> bool:
+    # 弦(始点→終点)は直線のときだけ辺の向き。半円・アーチは弦が軸に揃っても直線の辺ではない。
+    if edge["kind"] != "line":
+        return False
     start, end = edge["start"], edge["end"]
     direction = (end[0] - start[0], end[1] - start[1], end[2] - start[2])
     magnitude = math.sqrt(direction[0] ** 2 + direction[1] ** 2 + direction[2] ** 2)
