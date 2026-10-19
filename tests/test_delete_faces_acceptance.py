@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 
 import pytest
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
@@ -156,6 +157,35 @@ def test_a_fillet_of_a_step_body_can_be_deleted(tmp_path):
     _delete_faces(doc, cylinders, body_id)
 
     _assert_box(doc, body_id)
+
+
+def test_a_hole_of_a_step_body_whose_round_end_crosses_the_cylinder_seam_can_be_deleted(tmp_path):
+    """STEP で取り込んだボディの、消さずに残す円筒面の角度の範囲が継ぎ目(2π)をまたいでいても、穴を消せる。
+    円筒へ射影した角度が面の範囲から一周ずれて返るのを寄せずに判定すると、残す面の内側の点を「外」とみなして断る
+    (実物の fan_120mm_stand で実測し、この形で再現した。板の端の半円は、円筒の基準の向きを板の外へ向けると継ぎ目をまたぐ)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+    from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+
+    def unify(shape):
+        unifier = ShapeUpgrade_UnifySameDomain(shape, True, True, False)
+        unifier.Build()
+        return unifier.Shape()
+
+    plate = BRepPrimAPI_MakeBox(40.0, 20.0, 10.0).Shape()
+    round_end = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(40, 10, 0), gp_Dir(0, 0, 1), gp_Dir(1, 0, 0)), 10.0, 10.0).Shape()
+    hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(15, 10, -1), gp_Dir(0, 0, 1)), 3.0, 12.0).Shape()
+    shape = unify(BRepAlgoAPI_Cut(unify(BRepAlgoAPI_Fuse(plate, round_end).Shape()), hole).Shape())
+    step_path = tmp_path / "round_end.step"
+    kernel.write_step(shape, str(step_path))
+    doc = Document()
+    (body_id,) = import_step(doc, step_path)
+    (hole_face,) = _faces_of_kind(doc, body_id, "cylinder_full")
+
+    _delete_faces(doc, [hole_face], body_id)
+
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(40 * 20 * 10 + math.pi * 10**2 / 2 * 10, rel=1e-9)
 
 
 def test_faces_that_cannot_close_raise_and_leave_document_and_log_unchanged():
