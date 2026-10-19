@@ -32,7 +32,9 @@ def classify(reason) -> str:
         return "OCCT の例外"
     if "MakeOffset" in reason or "MakerVolume" in reason or "re-blending failed" in reason:
         return "作れない"
-    if any(key in reason for key in ("blend", "tangent neighbour", "sphere", "supports", "corner")):
+    # 入力が丸め追従の認識規則に当てはまらない(計算する前に断る)ときだけ「対象外」。丸め直した後の検査落ちは関門で断ったもの
+    if any(key in reason for key in ("tangent neighbour", "rests on another blend", "blend of kind", "blend has", "sphere next to a blend",
+                                     "supports of a blend share")):
         return "丸め追従の対象外"
     return "関門で断る"
 
@@ -49,9 +51,9 @@ def markdown(models) -> str:
             key = (row["kind"], row["method"])
             cells[key]["件数"] += 1
             cells[key][classify(row["reason"])] += 1
-            if row["ms"] == row["ms"]:
+            if row["ok"] and row["ms"] == row["ms"]:
                 times[key].append(row["ms"])
-    out = ["| 試行 | 方式 | 件数 | " + " | ".join(COLUMNS) + " | 時間 中央値 / 最大 |", "|---|---|---:|" + "---:|" * len(COLUMNS) + "---|"]
+    out = ["| 試行 | 方式 | 件数 | " + " | ".join(COLUMNS) + " | 通ったものの時間 中央値 / 最大 |", "|---|---|---:|" + "---:|" * len(COLUMNS) + "---|"]
     for kind, label in KINDS.items():
         for (k, method), cell in sorted(cells.items()):
             if k != kind:

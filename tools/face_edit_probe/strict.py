@@ -161,10 +161,48 @@ def _interior_points(face, count):
                 p = a.Value(u, v)
                 found.append((p.X(), p.Y(), p.Z()))
     if not found:
+        found = _points_from_mesh(face)
+    if not found:
         raise FaceEditError("could not find an interior point of a face")
     if len(found) <= count:
         return found
     return [found[round(k * (len(found) - 1) / max(1, count - 1))] for k in range(count)]
+
+
+def _points_from_mesh(face):
+    """細い帯状の面では UV の格子が内側を1点も拾えない(PC ケースで 27 件の削除を断った)。面だけを三角形に分け、
+    三角形の重心を面の曲面へ射影して、面の内側にあるものを使う。"""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.TopLoc import TopLoc_Location
+
+    copy = TopoDS.Face_s(BRepBuilderAPI_Copy(face).Shape())
+    box = Bnd_Box()
+    BRepBndLib.Add_s(copy, box)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    size = max(xmax - xmin, ymax - ymin, zmax - zmin, 1e-3)
+    BRepMesh_IncrementalMesh(copy, size / 50.0, False, 0.2, True)
+    location = TopLoc_Location()
+    triangulation = BRep_Tool.Triangulation_s(copy, location)
+    if triangulation is None:
+        return []
+    trsf = location.Transformation()
+    surface = BRep_Tool.Surface_s(face)
+    found = []
+    for t in range(1, triangulation.NbTriangles() + 1):
+        a, b, c = triangulation.Triangle(t).Get()
+        pts = [triangulation.Node(k).Transformed(trsf) for k in (a, b, c)]
+        centre = gp_Pnt(sum(p.X() for p in pts) / 3, sum(p.Y() for p in pts) / 3, sum(p.Z() for p in pts) / 3)
+        projector = GeomAPI_ProjectPointOnSurf(centre, surface)
+        if projector.NbPoints() == 0:
+            continue
+        u, v = _into_face_period(face, *projector.LowerDistanceParameters())
+        if BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State() == TopAbs_State.TopAbs_IN:
+            p = projector.NearestPoint()
+            found.append((p.X(), p.Y(), p.Z()))
+    return found
 
 
 def lies_on(face, source_face, distance=0.0):
@@ -221,12 +259,14 @@ def wrap_checked(raw):
         raise FaceEditError("empty result")
     solids = g.solids_of(raw)
     if solids:
-        if len(solids) != 1 or len(g.faces_of(raw)) != len(g.faces_of(solids[0])):
+        if len(solids) != 1 or len(g.faces_of(raw)) != len(g.faces_of(solids[0])) or len(g.edges_of(raw)) != len(g.edges_of(solids[0])):
             raise FaceEditError("raw result is not exactly one solid")
         return raw
     shells = _subshapes(raw, TopAbs_ShapeEnum.TopAbs_SHELL)
     if len(shells) != 1 or len(g.faces_of(raw)) != len(g.faces_of(shells[0])):
         raise FaceEditError("raw result is not exactly one shell")
+    if len(g.edges_of(raw)) != len(g.edges_of(shells[0])):  # シェルの外の独立した辺も包むと見えなくなる(astra の3回目の指摘)
+        raise FaceEditError("raw result has edges outside its shell")
     shell = TopoDS.Shell_s(shells[0])
     if BRepCheck_Shell(shell).Closed() != BRepCheck_Status.BRepCheck_NoError:
         raise FaceEditError("raw shell is not closed")
@@ -284,9 +324,9 @@ def strict_delete(shape, faces):
 def _region_kept(old, images):
     """残した面の元の範囲(内部の点)が、どれかの像の面の上に残っているか。
 
-    面の削除は残す面を延ばすだけで削らないはずなので、元の範囲は結果の表面に残る。残らないのは、残した面の反対側が
-    つぶれて別の閉じ方になったとき(フィレット1辺の箱で下面と奥面を消すと 23785 → 214.6 mm³ の破片になり、
-    ほかの検査は全部通った。viz.py の全組み合わせで実測)。"""
+    初版の面の削除は「残す面を延ばすだけで削らない」閉じ方に限る。この検査はそれを最大49点の標本で確かめるだけで、面全体が残る
+    ことの証明ではない(標本の間の細い欠けは見逃し、残す面を正当に削る閉じ方は断る)。これで断れたのは、残した面の反対側がつぶれた
+    破片(フィレット1辺の箱で下面と奥面を消すと 23785 → 214.6 mm³。ほかの検査は全部通った。viz.py の全組み合わせで実測)。"""
     from OCP.BRepClass import BRepClass_FaceClassifier
 
     # 点は面全体に散らす(`_interior_points` の先頭の数点は UV の片側に寄り、段の削除で上半分が消えたのを見逃した)
@@ -450,6 +490,15 @@ def find_structural_blends(shape, faces):
             own_supports[id(other)] = signature[1:]
             radius_of[id(other)] = signature[0]
             frontier.append(other)
+    for sphere in [b for b in blends if g.surface_type(b) == "sphere"]:
+        radius = describe_surface(sphere)[2]
+        for edge in g.edges_of(sphere):
+            other = _other_face(edge_faces, edge, sphere)
+            if other is None or not any(other.IsSame(b) for b in blends) or g.surface_type(other) == "sphere":
+                continue
+            signature = blend_signature(shape, other, edge_faces)
+            if signature is None or abs(signature[0] - radius) > LINEAR_TOL:
+                raise FaceEditError("a sphere next to a blend has a different radius (not a corner of the blend)")
     return blends, [s for s in supports_of.values()]
 
 
@@ -511,7 +560,9 @@ def strict_follow(shape, faces, distance):
         made = sorted({final_map.FindIndex(x) for x in maker.Generated(edge)} - {0})
         if not made:
             raise FaceEditError("re-blending produced no face for an edge")
-        supports_after = [x for f in (fa, fb) for x in (list(maker.Modified(f)) or [f])]
+        support_a = list(maker.Modified(fa)) or [fa]
+        support_b = list(maker.Modified(fb)) or [fb]
+        supports_after = support_a + support_b
         for position in made:
             face = TopoDS.Face_s(final_map.FindKey(position))
             definition = describe_surface(face)
@@ -520,15 +571,16 @@ def strict_follow(shape, faces, distance):
             r = definition[3] if definition[0] == "cylinder" else definition[4]
             if abs(r - radius) > LINEAR_TOL:
                 raise FaceEditError("a re-blended face has the radius of another blend")
-            touching = 0
+            touched_a = touched_b = False
             for spring in g.edges_of(face):
                 if not _is_spring_edge(spring, definition):
                     continue
                 neighbour = _other_face(final_edge_faces, spring, face)
                 if neighbour is None or not any(neighbour.IsSame(x) for x in supports_after) or not _tangent(spring, face, neighbour):
                     raise FaceEditError("a re-blended face is not tangent to its supports")
-                touching += 1
-            if touching < 2:
+                touched_a = touched_a or any(neighbour.IsSame(x) for x in support_a)
+                touched_b = touched_b or any(neighbour.IsSame(x) for x in support_b)
+            if not (touched_a and touched_b):  # 長手の2辺が同じ支えに接するだけでは通さない(astra の3回目の指摘)
                 raise FaceEditError("a re-blended face does not rest on both supports")
         regenerated += made
     # 角の球は辺でなく頂点から生まれる(全辺丸めの上面で実測)。頂点に集まる丸めの半径がそろっているときだけ認める
