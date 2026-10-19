@@ -10,7 +10,7 @@ import math
 import os
 import tempfile
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, List
 
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeFace
@@ -25,7 +25,6 @@ from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Vec
 from OCP.IFSelect import IFSelect_ReturnStatus
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import STEPControl_AsIs, STEPControl_Reader, STEPControl_Writer
-from OCP.TopAbs import TopAbs_ShapeEnum
 
 from .geometry import edge_midpoint, edges_of, face_centroid, face_normal, faces_of, solids_of, surface_type
 
