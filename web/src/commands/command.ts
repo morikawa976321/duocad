@@ -266,6 +266,11 @@ export interface TextArgSpec extends ArgSpecCommon {
    * 配信から欄へ戻すときは `String(値)` なので、配列はカンマ区切りの文字列に戻る。
    */
   toShared?(value: string): unknown
+  /**
+   * 確定・起動し直しの後も欄の値を残すか(既定は残す: ファイルのパスは同じ場所へ保存し直すのが普通の使い方)。
+   * 選んだ対象と対になる値(ロフトの `shifts` は断面ごと)は `false`: 残すと次の起動で断面の数と合わず確定できない。
+   */
+  remember?: boolean
 }
 
 /**
