@@ -107,7 +107,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   add_ellipse: ['sketch_id', 'center', 'width', 'height', 'angle'],
   add_rectangle: ['sketch_id', 'corner', 'width', 'height', 'angle'],
   add_arc: ['sketch_id', 'center', 'radius', 'start_deg', 'end_deg'],
-  extrude: ['distance', 'mode', 'body_id'],
+  extrude: ['distance', 'taper', 'mode', 'body_id'],
   revolve: ['axis', 'axis_line', 'angle', 'mode', 'symmetric', 'body_id'],
   loft: ['mode', 'start_point', 'end_point', 'shifts', 'body_id'],
   fillet: ['radius'],
@@ -194,7 +194,7 @@ export interface CommandArguments {
   add_ellipse: { sketch_id: string; center: unknown[]; width: number; height: number; angle: number }
   add_rectangle: { sketch_id: string; corner: unknown[]; width: number; height: number }
   add_arc: { sketch_id: string; center: unknown[]; radius: number; start_deg: number; end_deg: number }
-  extrude: { distance: number; mode: string }
+  extrude: { distance: number; taper?: number; mode: string }
   revolve: { axis?: string; axis_line?: object; angle?: number; mode: string; symmetric?: boolean }
   loft: { mode: string; start_point?: object; end_point?: object; shifts?: unknown[] }
   fillet: { radius: number | unknown[] }

@@ -34,6 +34,7 @@ function missingSelection(values: ArgValues, name: string, label: string): strin
  * (サーバは選択の種別で分岐し、混在は断る。通常モードの領域は 2026-10-18 本人決定。docs/DESIGN_DECISIONS.md)。
  * 種別(join/cut/new)は人に選ばせる: 既定の join に落ちると「切り取るつもりで足した」が黙って通る。
  * 面の距離は外向きが正(削るには負)。領域の距離は0だけが無効。
+ * テーパー角は正で太る・負で細る(Fusion と同じ符号)。0 のときは送らない(テーパーの無い押し出しと同じ args になる)。
  */
 function makeExtrude(kind: 'region' | 'face'): CommandDef {
   const isFace = kind === 'face'
@@ -57,6 +58,15 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
         reject: (value) => (value === 0 ? (isFace ? '距離が0(面は正=外向き / 負=削る)' : '距離が0(形が変わらない)') : null),
       },
       {
+        kind: 'number',
+        name: 'taper',
+        label: 'テーパー角(正=太る / 負=細る)',
+        unit: '°',
+        inputId: 'extrude-taper',
+        default: 0,
+        reject: (value) => (Math.abs(value) <= 89 ? null : 'テーパー角は-89以上89以下'),
+      },
+      {
         kind: 'choice',
         name: 'mode',
         label: '種別',
@@ -70,6 +80,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
     build(values) {
       const empty = missingSelection(values, selectionName, isFace ? '面か領域' : '領域')
       const distance = values.distance
+      const taper = values.taper
       const mode = values.mode
       if (empty !== null) return { ok: false, reason: empty }
       // コアの `selection.require_extrude_targets` と同じ断り方を先に出す(押せるのにサーバで断られる、をなくす)
@@ -80,8 +91,9 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
         return { ok: false, reason: '別々のスケッチの領域は一緒に押し出せない' }
       }
       if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
+      if (typeof taper !== 'number') return { ok: false, reason: 'テーパー角が数値でない' }
       if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
-      return { ok: true, args: { distance, mode } }
+      return { ok: true, args: taper === 0 ? { distance, mode } : { distance, taper, mode } }
     },
   }
 }

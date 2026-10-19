@@ -31,7 +31,7 @@ from OCP.BRepAlgoAPI import (
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_Transform
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
-from OCP.BRepGProp import BRepGProp, BRepGProp_Face
+from OCP.BRepGProp import BRepGProp, BRepGProp_Domain, BRepGProp_Face, BRepGProp_Vinert
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_TangentialDeflection
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
@@ -44,6 +44,7 @@ from OCP.STEPControl import (
     STEPControl_Writer,
 )
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
+from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
@@ -220,24 +221,108 @@ def _unlink_quietly(filename: str) -> None:
 # --------------------------------------------------------------------------------------
 # 計測・分類(query.py から使う。OCPを触るのでここに置く)
 # --------------------------------------------------------------------------------------
+#: 体積・重心を精度指定の適応積分で測る面: 曲面がこれらの種類か、境界の辺がこれらの種類の平面(`_needs_adaptive`)。既定の積分は
+#: 細い楕円を傾けた B スプラインの側面と、B スプラインの曲線で囲まれた平面のふたで 3〜152% ずれ、適応積分は押し出し面
+#: (楕円柱の側面)で重心を 0.02 mm ずらす(どちらも 2026-10-19 実測、sol レビュー)。
+_ADAPTIVE_SURFACES = (
+    GeomAbs_SurfaceType.GeomAbs_BSplineSurface,
+    GeomAbs_SurfaceType.GeomAbs_BezierSurface,
+)
+_ADAPTIVE_CURVES = (
+    GeomAbs_CurveType.GeomAbs_BSplineCurve,
+    GeomAbs_CurveType.GeomAbs_BezierCurve,
+    GeomAbs_CurveType.GeomAbs_OffsetCurve,
+    GeomAbs_CurveType.GeomAbs_OtherCurve,
+)
+
+#: 適応積分の相対精度。
+_ADAPTIVE_VOLUME_EPS = 1.0e-9
+
+
 def volume(shape: "TopoDS_Shape") -> float:
     """形状の体積(mm^3)。
 
-    `BRepGProp.VolumeProperties_s(shape, props)` の**既定の積分**を使う(`Eps` を渡さない)。
-    `Eps` 付きの適応積分にすると精度が落ちる(Eps=1e-9で相対1.8e-10、Eps=1e-6で相対3.7e-8)。
+    `BRepGProp.VolumeProperties_s(shape, props)` の**既定の積分**を使う(`Eps` を渡さない)。`Eps` 付きの適応積分に
+    すると精度が落ちる(Eps=1e-9で相対1.8e-10、Eps=1e-6で相対3.7e-8)。**ただし B スプライン・ベジエの面か辺を含む形は、
+    面ごとに積分を選んで足す**(`_needs_adaptive` の面だけ `Eps=1e-9` の適応積分。`_volume_props`)。
 
     STEP往復を挟んだ体積は**bit-exactではない**(実測相対誤差 約8e-16)。比較には
     `math.isclose(rel_tol=1e-6)` を使う。面数は往復後も厳密一致(`==`)でよい。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the volume of an empty shape")
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props)
-    return props.Mass()
+    return _volume_props(shape).Mass()
+
+
+def _volume_props(shape: "TopoDS_Shape") -> "GProp_GProps":
+    """体積の積分(質量 = 体積、重心)。適応積分の要る面が無ければ形全体を既定の積分で1回、あれば**閉じた殻ごとに**
+    その殻の境界箱の中心を基準点として面ごとに積分を選び、寄与を足す(`BRepGProp.VolumeProperties_s` の内側と同じ組み立て。
+    体積の積分は閉じた殻ごとに成り立つ)。
+
+    - 面を1枚ずつ `VolumeProperties_s` に渡してはいけない: 基準点が面の位置変換に合わせて動き、寄与を足しても体積に
+      ならない(傾けた楕円の上下の平面のふたが 0 を返した。実測)。
+    - 基準点を原点や形全体の境界箱の中心にすると、そこから遠い薄い殻で桁が落ちる(Z=100 の 12×6 の楕円を 0.001 mm 押して
+      体積 1.3% ずれ、離れた2つの殻を持つボディで重心が 0.24 mm ずれた。どちらも sol レビューで再現)。
+    """
+    faces = _faces_of(shape)
+    if not any(_needs_adaptive(face) for face in faces):
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(shape, props)
+        return props
+    shells = []
+    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_SHELL)
+    while explorer.More():
+        shells.append(explorer.Current())
+        explorer.Next()
+    props = GProp_GProps(_box_centre(shape))
+    for shell in shells or [shape]:
+        centre = _box_centre(shell)
+        part = GProp_GProps(centre)
+        for face in _faces_of(shell):
+            surface = BRepGProp_Face(face)
+            domain = BRepGProp_Domain(face)
+            if _needs_adaptive(face):
+                part.Add(BRepGProp_Vinert(surface, domain, centre, _ADAPTIVE_VOLUME_EPS))
+            else:
+                part.Add(BRepGProp_Vinert(surface, domain, centre))
+        props.Add(part)
+    return props
+
+
+def _faces_of(shape: Any) -> List[Any]:
+    out = []
+    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+    while explorer.More():
+        out.append(TopoDS.Face_s(explorer.Current()))
+        explorer.Next()
+    return out
+
+
+def _box_centre(shape: Any) -> "gp_Pnt":
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    return gp_Pnt((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0)
+
+
+def _needs_adaptive(face: Any) -> bool:
+    """B スプライン・ベジエの曲面か、自由曲線で囲まれた平面(実測で既定の積分が外れた面)。押し出し面などの
+    他の曲面は既定のまま(適応積分は楕円柱の側面で重心をずらす)。"""
+    kind = BRepAdaptor_Surface(face).GetType()
+    if kind in _ADAPTIVE_SURFACES:
+        return True
+    if kind != GeomAbs_SurfaceType.GeomAbs_Plane:
+        return False
+    explorer = TopExp_Explorer(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+    while explorer.More():
+        if BRepAdaptor_Curve(TopoDS.Edge_s(explorer.Current())).GetType() in _ADAPTIVE_CURVES:
+            return True
+        explorer.Next()
+    return False
 
 
 def centroid(shape: "TopoDS_Shape") -> List[float]:
-    """形状の**体積重心**(mm)。`volume` と同じ `VolumeProperties_s` の既定積分を使う。
+    """形状の**体積重心**(mm)。`volume` と同じ積分(`_volume_props`)を使う。
 
     `move_body` の回転の既定の中心。境界箱の中心は軸の向きで動くので使わない。
 
@@ -245,8 +330,7 @@ def centroid(shape: "TopoDS_Shape") -> List[float]:
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the centroid of an empty shape")
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props)
+    props = _volume_props(shape)
     if not props.Mass() > 0.0:
         raise ValueError("cannot compute the centroid of a zero-volume shape")
     point = props.CentreOfMass()
