@@ -290,13 +290,50 @@ def scenes():
     wedge = prism_yz([(0, 0), (30, 0), (30, 20), (10, 20), (0, 8)], W)
     out.append(("off_wedge", "offset", "斜面のある形", "上面を動かすと斜面が同じ傾きのまま延びる・縮む。", wedge, 1))
     s = fillet(base, _top_front, 5)
-    out.append(("off_fillet", "offset", "フィレット1辺の箱", "上面・前面を動かすと丸めが付いてくる。「OCCT のまま」を見ると、丸めの先の面まで動いている。", s, 1))
+    out.append(("off_fillet", "offset", "フィレット1辺の箱", "上面・手前の面を動かすと丸めが付いてくる。「関門なしの OCCT の答え」を見ると、丸めの先の面まで動いている。", s, 1))
     s = fillet(fillet(base, _top_front, 5), lambda m: abs(m[1] - D) < 1e-6 and abs(m[2] - H) < 1e-6, 3)
     out.append(("off_two", "offset", "前 r5・後 r3 のフィレット", "上面を動かすと、半径の違う2つの丸めがそれぞれの半径で付いてくる。", s, 1))
     out.append(("off_step", "offset", "段(L字)", "蹴上げを右へ 20 動かすと踏み面の幅が0になるので断る。", lblock, 1))
     round_top = fuse(box(40, 10, 15), cylinder(5, 40, (0, 5, 15), (1, 0, 0)))
     out.append(("off_round", "offset", "上が全丸めの板", "側面に接する半円筒は外せない丸めなので、側面は動かせず断る。", round_top, 1))
     return out
+
+
+def suggestions(scene):
+    """ページの「試してみる」: 通る操作と、断る操作のうち見どころのあるもの(関門なしの答えが別の形になるもの)。"""
+    labels = scene["labels"]
+    out = []
+    if scene["kind"] == "delete":
+        oks = sorted((k for k, r in scene["results"].items() if r["ok"]), key=lambda k: (k.count(","), k))
+        for key in oks[:4]:
+            out.append({"faces": [int(i) for i in key.split(",")], "ok": True})
+        refused = [k for k, r in scene["results"].items() if not r["ok"] and r.get("raw")]
+        interesting = [k for k in refused if "つぶれ" in scene["results"][k]["why"]]
+        interesting += [k for k in refused if k not in interesting and "," not in k]
+        for key in interesting[:3]:
+            out.append({"faces": [int(i) for i in key.split(",")], "ok": False})
+    else:
+        seen = set()
+        for key, r in scene["results"].items():
+            index, d = (int(x) for x in key.split(":"))
+            follow = r["ok"] and r["hl"].get("regenerated")
+            if follow and index not in seen and d == 3:
+                out.append({"faces": [index], "d": d, "ok": True})
+                seen.add(index)
+        for key, r in scene["results"].items():
+            index, d = (int(x) for x in key.split(":"))
+            if not r["ok"] and index not in seen:
+                out.append({"faces": [index], "d": d, "ok": False})
+                seen.add(index)
+        for key, r in scene["results"].items():
+            index, d = (int(x) for x in key.split(":"))
+            if r["ok"] and index not in seen and d == 3 and len(out) < 6:
+                out.append({"faces": [index], "d": d, "ok": True})
+                seen.add(index)
+    for item in out:
+        names = "・".join(labels[i - 1] for i in item["faces"])
+        item["label"] = f"{names} を消す" if scene["kind"] == "delete" else f"{names} を {item['d']:+d}"
+    return out[:7]
 
 
 def build():
@@ -323,6 +360,7 @@ def build():
                     results[f"{index}:{d}"] = do_offset(shape, index, d, meshes)
             scene["results"] = results
             scene["max_pick"] = 1
+        scene["try"] = suggestions(scene)
         data["scenes"].append(scene)
         ok = sum(1 for r in scene["results"].values() if r["ok"])
         print(f"{key:12s} faces={len(faces):3d} results={len(scene['results']):4d} ok={ok:4d} {time.perf_counter() - started:5.1f}s", file=sys.stderr)

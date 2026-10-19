@@ -197,6 +197,9 @@ A は一度に消す特徴の数に対して急に遅くなる(1個なら形の�
 7. **履歴の像は、結果のシェルの中での向きを持たないことがある。** 像の面の法線でずらす向きを決めると逆へ動く(D で前面が内へ動いた)。結果の形を走査して同じ面(`IsSame`)の出現を取り直す。
 8. **OCP の `Message_ProgressIndicator` は Python から継承できない**(`No constructor defined`)。進捗通知の `UserBreak` で長い計算を止める手は使えない。
 9. **BinTools の往復は厳密、テキスト BRep は 1e-14 ずれる**(上「由来」)。プロセス間の受け渡しは BinTools にする。
+10. **面の削除で、残した面の反対側がつぶれた形が、警告もなく返る。** フィレット1辺の箱で下面と奥の面を消すと、丸めの外側の隙間だけを閉じた破片
+    (23785 → 214.6 mm³)になる。残した面は自分の曲面のまま、BRepCheck も通り、ここまでの関門を全部通った(2026-10-19、`viz.py` で全組み合わせを計算して発見)。
+    面取りの箱・段でも同じ型が出る。残した面の元の範囲が結果の表面に残るかを見て断る(下「関門」)。
 
 ## 相談役の意見と食い違い
 
@@ -276,6 +279,8 @@ A は一度に消す特徴の数に対して急に遅くなる(1個なら形の�
 削除の意味:
 - 選んだ面がすべて `History().IsRemoved`。残る面はすべて結果に像があり、**解析曲面(平面・円筒・円錐・球・トーラス)は像の曲面の定義が元と同じ**。
   結果の面はすべて残る面の像(新しい面は無い)。B-spline の隣は延ばすと曲面そのものが作り直されるので、定義の比較から外す(意味の検証ができていない範囲として明示する)。
+- **残した面の元の範囲は、結果の表面に残る**(延びるだけで削られない)。元の面の内側から面全体に散らした点(最大49点)が、どれかの像の面の上にあることを見る。
+  これが無いと、残した面の反対側がつぶれた破片を通す(罠の10)。点を格子の先頭から取ると UV の片側に寄り、段で面の上半分が消えたのを見逃した。
 
 移動の意味:
 - 旧面 → 新面が `Generated` で**1対1に全部を覆う**(面の数が同じでも、別の面が消えて別の面ができる形を通さない)。
@@ -408,11 +413,11 @@ A は一度に消す特徴の数に対して急に遅くなる(1個なら形の�
 
 ## 受入条件(テスト)
 
-`tests/test_delete_faces_acceptance.py`(12件)と `tests/test_offset_faces_acceptance.py`(18件)。Issue の受入条件(案)に、要件から足した検査を加えた。
+`tests/test_delete_faces_acceptance.py`(13件)と `tests/test_offset_faces_acceptance.py`(18件)。Issue の受入条件(案)に、要件から足した検査を加えた。
 
 - **印**: モジュール `duocad/verbs/delete_faces.py` / `offset_faces.py` が無く、かつ verb の登録も無い間は `xfail(strict=True)`。モジュールを作ると印が外れ、
-  登録を忘れても xfail に紛れずに落ちる。**実装の PR で `pytestmark` を消す。** いまの全体のテストは落とさない(30 xfailed)。
-- **検算**: 試作を verb の作法で包んだ仮の verb(`tools/face_edit_probe/verb_shim.py`、pytest のプラグイン)を読み込むと 30 passed。
+  登録を忘れても xfail に紛れずに落ちる。**実装の PR で `pytestmark` を消す。** いまの全体のテストは落とさない(31 xfailed)。
+- **検算**: 試作を verb の作法で包んだ仮の verb(`tools/face_edit_probe/verb_shim.py`、pytest のプラグイン)を読み込むと 31 passed。
   守りを外した仮の verb では該当のテストが落ちる: 削除の警告の検査と残存の検査を両方外す → 2件(閉じない面・一部だけ消せる組)、
   D を外す → 1件(丸めが付いてくる)、対応の検査と D を外す → 2件。**片方の守りだけ外しても落ちない**(もう片方が同じ罠を止める)。
 
@@ -430,7 +435,7 @@ A は一度に消す特徴の数に対して急に遅くなる(1個なら形の�
 | #183 成り立たない距離はエラー・変更なし | `test_impossible_distances_raise_and_leave_document_and_log_unchanged`(底を越える・厚み0・穴の半径0・穴が壁を破る) |
 | #183 ログを再生すると同じ形 | `test_replaying_the_log_gives_the_same_shape` |
 
-足したもの: 一部だけ消せる組を全体として断る、undo / redo とログの args、由来(対応先の面の種類・向きまで)、選択から取る入口、2ボディにまたがる選択を断る、
+足したもの: 残した面がつぶれる組を断る(罠の10)、一部だけ消せる組を全体として断る、undo / redo とログの args、由来(対応先の面の種類・向きまで)、選択から取る入口、2ボディにまたがる選択を断る、
 MCP の記述と実際の呼び出し、面が消える移動を断る、**丸めが付いてくる**(半径・選んでいない平面・由来の deleted / new_faces まで)、
 付いてこさせられない接線の隣(外せない全丸め)を断る、2面同時。
 
@@ -448,7 +453,10 @@ SNAPSHOTS が変わらず次の操作が通るか、BinTools の往復・プレ�
 .venv/Scripts/python.exe -m tools.face_edit_probe.isolation <file.step>     # BRep の往復
 .venv/Scripts/python.exe -m tools.face_edit_probe.realworld <file.step> ... # 実物(厳しい版。--methods legacy で緩い版)
 .venv/Scripts/python.exe -m pytest -q -p tools.face_edit_probe.verb_shim tests/test_delete_faces_acceptance.py tests/test_offset_faces_acceptance.py
+.venv/Scripts/python.exe -m tools.face_edit_probe.viz out.json                 # 触れる模型のデータ(13 場面・1,456 通り。約1分)
 ```
+
+触れる模型(本人向けの説明ページ、claude.ai の Artifact「面編集の模型」)は、`viz.py` の出力を three.js で表示したもの。ページ本体はリポジトリに置かない。
 
 試作は duocad 本体から import されない(`verb_shim.py` だけが pytest のプラグインとして duocad の verb の作法を借りる)。Windows では子プロセスの出力の
 文字コードを `PYTHONIOENCODING=utf-8` にそろえる(`run.py` と `realworld.py` は子に渡している)。
