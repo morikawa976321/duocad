@@ -1651,6 +1651,17 @@
         host.setPick(faceRef(event.hit.bodyId, event.hit.faceIndex))
         return
       }
+      // スケッチの点・図形を待つ通常モードのコマンド(ロフトの収束点)。読み方はスケッチモードの `onSketchPick` と同じ:
+      // 点は当たった点をそのまま、図形は点を落として図形1つに畳む。
+      const sketchHit = event.sketchEntity
+      if (wants === 'sketchPoint' && sketchHit !== null && sketchHit.point !== null) {
+        host.setPick(sketchEntityRef(sketchHit.sketchId, sketchHit.entityId, sketchHit.point))
+        return
+      }
+      if (wants === 'sketchEntity' && sketchHit !== null) {
+        host.setPick(sketchEntityRef(sketchHit.sketchId, sketchHit.entityId, null))
+        return
+      }
     }
     // 素クリックのトグル(`toggleOnlyMode`)はどの種類にも効かせる(測定は辺・頂点でも測る)。
     // 来るのは今指せる種類(`pickKinds`)だけ: コマンドの起動中はそのコマンドが受け付けるものに絞られている。
