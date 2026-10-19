@@ -172,8 +172,9 @@ export function parseShifts(text: string): number[] | null {
 /**
  * ロフト(verb `loft`)。通常モードで、別々のスケッチの領域を**つなぐ順に**選ぶ(共有選択は追加順を保ち、コアはその順で使う)。
  * スケッチ編集中に出さないのは、編集中は開いているスケッチの領域しか指せないため(`viewport.regionPickTargets`)。
- * 起動中は領域だけが指せる(`App.svelte` の `pickKinds`)。
- * 始点・終点の点(`start_point` / `end_point`)は画面からは送らない(画面の選択に点の引数を持たない。AI(MCP)からだけ指せる)。
+ * 起動中は領域だけが指せる(`App.svelte` の `pickKinds`)。収束点の「指す」を押している間だけ、スケッチの点も当たる。
+ * 収束点(`start_point` / `end_point`)は共有選択に入れずピックで指す(回転体の軸と同じ別チャンネル。点の図形のほか、
+ * 線分の端・円や円弧の中心など図形の点ならどれでもよい。断面と同じ平面の点はコアが断る)。断面1つと点1つでもロフトになる。
  * 始点のずらし(`shifts`)は断面の数と同じ個数の整数をカンマ区切りで打つ(空欄はずらさない)。
  */
 export const LOFT: CommandDef<'loft'> = {
@@ -182,7 +183,7 @@ export const LOFT: CommandDef<'loft'> = {
   buttonId: 'loft',
   preview: 'server',
   args: [
-    { kind: 'selection', name: 'regions', label: 'つなぐ断面(順に)', shapeKind: 'region', min: 2, max: null },
+    { kind: 'selection', name: 'regions', label: 'つなぐ断面(順に)', shapeKind: 'region', min: 1, max: null },
     {
       kind: 'choice',
       name: 'mode',
@@ -193,6 +194,8 @@ export const LOFT: CommandDef<'loft'> = {
         { value: 'new', label: '新規ボディ', buttonId: 'loft-mode-new' },
       ],
     },
+    { kind: 'pick', name: 'start_point', label: '始端を収束させる点', target: 'sketchPoint', buttonId: 'loft-start-point', optional: true },
+    { kind: 'pick', name: 'end_point', label: '終端を収束させる点', target: 'sketchPoint', buttonId: 'loft-end-point', optional: true },
     {
       kind: 'text',
       name: 'shifts',
@@ -200,6 +203,7 @@ export const LOFT: CommandDef<'loft'> = {
       inputId: 'loft-shifts',
       placeholder: '0, 1, 0',
       optional: true,
+      remember: false,
       reject: (value) => (parseShifts(value) === null ? '始点のずらしは整数をカンマ区切りで' : null),
       toShared: (value) => {
         const shifts = parseShifts(value)
@@ -209,17 +213,24 @@ export const LOFT: CommandDef<'loft'> = {
   ],
   build(values) {
     const regions = (values.regions ?? []) as SelectionRef[]
-    if (regions.length < 2) return { ok: false, reason: '断面を2つ以上選ぶ(つなぐ順に)' }
+    const start = pickedRefOf(values.start_point)
+    const end = pickedRefOf(values.end_point)
+    // 断面2つか、断面1つと収束点(コアの `loft_regions` と同じ条件。断面0は選択引数の min が止める)。
+    if (regions.length + (start === null ? 0 : 1) + (end === null ? 0 : 1) < 2) {
+      return { ok: false, reason: '断面をもう1つ選ぶか、収束点を指す(断面1つなら点が要る)' }
+    }
     const mode = values.mode
     if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    // 指していない点は引数ごと送らない(省略は「収束させない」)。
+    const points = { ...(start === null ? {} : { start_point: start }), ...(end === null ? {} : { end_point: end }) }
     const text = typeof values.shifts === 'string' ? values.shifts.trim() : ''
-    if (text === '') return { ok: true, args: { mode } }
+    if (text === '') return { ok: true, args: { mode, ...points } }
     const shifts = parseShifts(text)
     if (shifts === null) return { ok: false, reason: '始点のずらしは整数をカンマ区切りで' }
     if (shifts.length !== regions.length) {
       return { ok: false, reason: `始点のずらしは断面の数(${regions.length})だけ並べる` }
     }
-    return { ok: true, args: { mode, shifts } }
+    return { ok: true, args: { mode, ...points, shifts } }
   },
 }
 
