@@ -86,7 +86,27 @@
   由来で新しい面として記録されることがある(NURBS にした箱)ので、内壁から外す。
 - **`BRepExtrema_DistShapeShape` は同心の円筒どうし・球と円筒の面の対で `StdFail_NotDone` を投げる**(最短の組が
   無数にある。丸めた箱の内壁と外壁で実測)。その対を1つでも含む複合形状どうしも同じく落ちる。
-  面の縁の上の点から測れば測れる(`kernel_shell._face_distance`)。
+  面の縁の上の点から測れば測れる(`kernel_shell._face_distance`)。**角を丸めた箱に、丸めを同心にした中子を隙間 0.2 で入れた形でも落ち**
+  (r=3 と r=2 で再現、隙間 0.1 の r=3 では落ちない。`SetMultiThread(True)` だと `Standard_ProgramError: Multiple exceptions` で上がる)、
+  面の対ごとに測って落ちた対だけ縁の点から測ると 0.1999999718 と測れる(Issue #186 の試作 `tools/interference_probe/concentric.py`)。
+  全周の同心円筒(ピンと穴)と、円筒の穴の中の球は落ちなかった。
+- **`BRepExtrema_DistShapeShape.InnerSolution()` は当てにしない**: 片方がもう片方の中にあるとき True になる一方、体積の重なりが 0 の
+  接触の組でも True が出た(Issue #186 の試作、PC ケースの STEP)。
+- **General Fuse / BOP は既定の破壊モードで入力の形状許容差を書き換える**: PC ケースの STEP 27 体に `BOPAlgo_Builder` を掛けると、
+  11 体の最大許容差が変わった(例 1e-7 → 1.5e-7)。`SetNonDestructive(True)` で 0 体、時間は同じ。文書の形に結果を残さない計算
+  (問い合わせ・プレビュー)では非破壊にするか写し(`kernel.copy_shape`)に掛ける(Issue #186 の試作 `astra_checks.py`)。
+- **`BOPAlgo_BOP.PDS()` や `PPaveFiller().DS()` が返す DS に Python から触るとプロセスが落ちる**(終了コード 127。小さな形では
+  インタプリタの終了時に落ちる)。ラッパがポインタの持ち主のつもりで解放する。DS を読むなら `BOPAlgo_PaveFiller` を自分で作り
+  `DS()`(参照)を読む(`kernel_brep.inspect_solid` の `BOPAlgo_CheckerSI.DS()` も参照なので安全)。
+- **BOP の DS の FF 干渉は「面が触れている」ではない**: 隙間 0.2 で離れた2部品でも面の組が 114 件記録される(境界箱が重なる面の
+  組の記録)。接触は GF の像の共有(両方の像に同じ面・辺・頂点があるか)で読む([INTERFERENCE.md](INTERFERENCE.md))。
+- **OCP からは OCCT の計算を途中で止められない**: `BOPAlgo_Builder.Perform(theRange)` は進捗の範囲を受け取るが、止める側の
+  `Message_ProgressIndicator` は OCP で構築子が無く Python で継承できない(`TypeError: No constructor defined!`)。山形が一致した
+  ねじ山(M8×1.25、らせんの B-spline 面どうしが重なる)の2体 GF は 240 秒で終わらなかった(M20×2.5 では 4.2 秒で終わる)。
+  時間の上限が要る計算は子プロセスで走らせて止める。
+- **`BRepExtrema_ShapeProximity.OverlapSubShapes1/2()` は OCP 7.9.3 で戻り値の型(`NCollection_DataMap<int, TColStd_PackedMapOfInteger>`)が
+  登録されておらず `TypeError` になる。**
+- **manifold3d の `Manifold.min_gap(other, search)` は結果を [0, search] に丸める**: search を 0 にすると全部 0(接触)になる。
 - **R と d の円弧が同じ点で接する結果の結合は、既定の許容差(1e-7)だと取りこぼしうる**ので、ブーリアンに
   1e-6 のファジー値を付ける(`_ENVELOPE_TOLERANCE`)。ベジエ辺の領域は、オフセットが元の曲線の近似曲線を返し
   線分・円弧だけという指定を満たせないので拒む。
@@ -104,6 +124,13 @@
   - **素の柱を `BRepOffsetAPI_DraftAngle` で傾ける**(側面を `Add(face, 押し出し方向, angle, 底面の平面)`)と、高さは垂直のまま、
     太る向きでも角は尖ったまま(平面6枚)、円は円錐1枚で解析体積と一致、穴は同じ向き指定で外形が細り穴が広がる(抜き勾配)。
     潰れる角度(長方形 40°)は `IsDone()=False`。**ただしベジエ・楕円を押し出した側面(`SurfaceOfExtrusion`)は `AddDone()=False`**。
+  - **輪郭線ごとに `BRepOffsetAPI_MakeDraft(wire, 方向, |angle|)` + `SetOptions(BRepBuilderAPI_RightCorner)` で側面の殻を作り、
+    底面と上の自由境界から張った面を縫う**と、ベジエ・楕円・L字の凹角まで角が尖ったまま通り、長方形・円は DraftAngle と体積が一致する。
+    **細る/太るは角度の符号でも輪郭の向きでもなく `SetDraft(True)` で内向きになる**(既定は外向き。`Perform(L)` の L は斜辺の長さ)。
+    穴は穴の輪郭を逆向きに傾けた立体を外周の立体から cut すれば、外周が太ると穴が狭まる(DraftAngle の穴あき板と体積一致)。
+    潰れる角度は長方形・L字では殻が `BRepCheck` 偽になるが、**円は頂点を越えて砂時計形の円錐を返し、`BRepCheck` も
+    `BOPAlgo_ArgumentAnalyzer` の自己交差検査も通る**(円 r5・高さ 10・40°)。潰れの検出は自前で要る。
+    楕円 6×3 を高さ 10 で 5° 細らせると先端の曲率半径が約 0.6 になり、全辺 r1 のフィレットは失敗する(r0.5 や高さ 5 なら通る)。
 
 ## 複数面の押し出し（`kernel_extrude.extrude_faces`）
 
