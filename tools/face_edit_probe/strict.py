@@ -297,7 +297,7 @@ def _region_kept(old, images):
             projector = GeomAPI_ProjectPointOnSurf(gp_Pnt(*point), surface)
             if projector.NbPoints() == 0 or projector.LowerDistance() > LINEAR_TOL:
                 continue
-            u, v = projector.LowerDistanceParameters()
+            u, v = _into_face_period(image, *projector.LowerDistanceParameters())
             state = BRepClass_FaceClassifier(image, gp_Pnt2d(u, v), 1e-7).State()
             if state in (TopAbs_State.TopAbs_IN, TopAbs_State.TopAbs_ON):
                 on_some = True
@@ -305,6 +305,20 @@ def _region_kept(old, images):
         if not on_some:
             return False
     return True
+
+
+def _into_face_period(face, u, v):
+    """周期面(円筒・円錐・球・トーラス)では、射影の角度が面の持つ範囲から一周ずれて返ることがある。面の UV の範囲へ寄せる
+    (寄せないと面の内側の点を「外」と判定し、実物の STEP の穴・丸めの正しい削除を断った。fan_120mm_stand・hanger_bar で実測)。"""
+    u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
+    adaptor = BRepAdaptor_Surface(face)
+    if adaptor.IsUPeriodic():
+        period = adaptor.UPeriod()
+        u = u1 + math.fmod(math.fmod(u - u1, period) + period, period)
+    if adaptor.IsVPeriodic():
+        period = adaptor.VPeriod()
+        v = v1 + math.fmod(math.fmod(v - v1, period) + period, period)
+    return u, v
 
 
 # --------------------------------------------------------------------------------------

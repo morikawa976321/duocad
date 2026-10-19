@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+#: 1ソリッドあたりの試行の上限(丸めの連なり・穴・平面それぞれ)。PCケースは穴が数百あるため
 MOVE_LIMIT = 12
 MOVE_DISTANCE = 0.3
 BLEND_MAX_R = 3.0
@@ -121,7 +122,7 @@ def _trials(path):
     trials = []
     for solid_index, solid in enumerate(g.solids_of(shape)):
         chains, holes, free, tangent = _groups(solid)
-        items = [("delete_blend", chain, 0.0) for chain in chains] + [("delete_hole", [h], 0.0) for h in holes]
+        items = [("delete_blend", chain, 0.0) for chain in chains[:MOVE_LIMIT]] + [("delete_hole", [h], 0.0) for h in holes[:MOVE_LIMIT]]
         items += [("move_free", [p], d) for p in free[:MOVE_LIMIT] for d in (MOVE_DISTANCE, -MOVE_DISTANCE)]
         items += [("move_tangent", [p], d) for p in tangent[:MOVE_LIMIT] for d in (MOVE_DISTANCE, -MOVE_DISTANCE)]
         for kind, faces, distance in items:
@@ -241,6 +242,10 @@ def main(argv):
     def go(path):
         started = time.perf_counter()
         rows, problem = _run_model(path, method_set)
+        rows_log = __import__("os").environ.get("FACE_EDIT_ROWS")
+        if rows_log:  # 長い試験が途中で止まっても、終わった部品の結果は残す
+            with open(rows_log, "a", encoding="utf-8") as log:
+                log.write(json.dumps({"model": Path(path).name, "problem": problem, "rows": rows}, ensure_ascii=False) + "\n")
         return path, rows, problem, time.perf_counter() - started
 
     with ThreadPoolExecutor(max_workers=parallel) as pool:
