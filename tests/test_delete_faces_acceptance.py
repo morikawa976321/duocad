@@ -183,6 +183,20 @@ def test_replaying_the_log_gives_the_same_shape():
 
 
 # ---------------------------------------------------------------- Issue の要件から足したもの
+def test_a_deletion_that_collapses_the_body_is_refused():
+    """消すと形が成り立たない組には、残った面が別の閉じ方につぶれる組も入る。フィレット1辺の箱で下面と奥面を消すと、
+    OCCT は警告を出さずに丸めの外側の隙間だけを閉じた破片(23785 → 214.6 mm³)を返し、残した面は自分の曲面のまま、
+    BRepCheck も通る(tools/face_edit_probe/viz.py の全組み合わせで実測)。残した面の元の範囲が結果に残らないので断る。"""
+    doc = Document()
+    body_id, _ = _filleted_box(doc)
+    before = _state(doc)
+
+    with pytest.raises(ValueError):
+        _delete_faces(doc, [_plane_at(doc, body_id, 2, 0.0), _plane_at(doc, body_id, 1, D)], body_id)
+
+    assert _state(doc) == before
+
+
 def test_a_partly_removable_set_is_refused_as_a_whole():
     """消せる面と消せない面を一緒に選ぶと、消せる面だけ消して成功にしない(全部か何もしないか)。
     OCCT の Defeaturing は消せない面を警告だけで残し、残りを消した形を返す(docs/FACE_EDIT.md で実測)。"""

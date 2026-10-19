@@ -147,7 +147,8 @@ def _convexity(face, definition):
 
 
 def _interior_points(face, count):
-    """面の内側(境界の外は除く)の点を最大 `count` 個。"""
+    """面の内側(境界の外は除く)の点を最大 `count` 個、**面全体から均等に間引いて**返す
+    (格子の先頭から取ると UV の片側に寄り、段の削除で面の上半分が消えたのを見逃した)。"""
     u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
     a = BRepAdaptor_Surface(face)
     found = []
@@ -159,11 +160,11 @@ def _interior_points(face, count):
             if BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State() == TopAbs_State.TopAbs_IN:
                 p = a.Value(u, v)
                 found.append((p.X(), p.Y(), p.Z()))
-                if len(found) >= count:
-                    return found
     if not found:
         raise FaceEditError("could not find an interior point of a face")
-    return found
+    if len(found) <= count:
+        return found
+    return [found[round(k * (len(found) - 1) / max(1, count - 1))] for k in range(count)]
 
 
 def lies_on(face, source_face, distance=0.0):
@@ -270,12 +271,40 @@ def strict_delete(shape, faces):
             image = TopoDS.Face_s(after.FindKey(p))
             if describe_surface(old) is not None and not lies_on(image, old):
                 raise FaceEditError(f"kept face {i} left its own surface")
+        if not _region_kept(old, [TopoDS.Face_s(after.FindKey(p)) for p in positions]):
+            raise FaceEditError(f"kept face {i} lost part of its original region (the body collapsed to another closure)")
         table[i] = positions
     covered = {p for v in table.values() for p in v}
     new = [j for j in range(1, after.Extent() + 1) if j not in covered]
     if new:
         raise FaceEditError(f"faces {new} do not come from any kept face")
     return result, table, new
+
+
+def _region_kept(old, images):
+    """残した面の元の範囲(内部の点)が、どれかの像の面の上に残っているか。
+
+    面の削除は残す面を延ばすだけで削らないはずなので、元の範囲は結果の表面に残る。残らないのは、残した面の反対側が
+    つぶれて別の閉じ方になったとき(フィレット1辺の箱で下面と奥面を消すと 23785 → 214.6 mm³ の破片になり、
+    ほかの検査は全部通った。viz.py の全組み合わせで実測)。"""
+    from OCP.BRepClass import BRepClass_FaceClassifier
+
+    # 点は面全体に散らす(`_interior_points` の先頭の数点は UV の片側に寄り、段の削除で上半分が消えたのを見逃した)
+    for point in _interior_points(old, 49):
+        on_some = False
+        for image in images:
+            surface = BRep_Tool.Surface_s(image)
+            projector = GeomAPI_ProjectPointOnSurf(gp_Pnt(*point), surface)
+            if projector.NbPoints() == 0 or projector.LowerDistance() > LINEAR_TOL:
+                continue
+            u, v = projector.LowerDistanceParameters()
+            state = BRepClass_FaceClassifier(image, gp_Pnt2d(u, v), 1e-7).State()
+            if state in (TopAbs_State.TopAbs_IN, TopAbs_State.TopAbs_ON):
+                on_some = True
+                break
+        if not on_some:
+            return False
+    return True
 
 
 # --------------------------------------------------------------------------------------
