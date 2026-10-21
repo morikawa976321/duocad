@@ -96,7 +96,7 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 3. Issue の「足す物差し」(draw calls・再計算面数・verb 実行回数など)が要るなら、先にベンチへ行を足す
 4. 直したら同じ物差しで測り直し、PERFORMANCE.md の表に「後」を足す
 
-## [スケッチ][ボディ] 5件の実装(2026-10-22〜、進行中)
+## [スケッチ][ボディ] 5件の実装(2026-10-22、完了。本人の判断待ちなし)
 
 ゴール(本人の指示の原文の要点):
 
@@ -121,9 +121,9 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 #184 は #206 の上に積む(#184 を取り込むと #206 も入る。decisions.md の [スケッチ] #184)。
 
 作業場所: issue のブランチはこのワークツリーの下の `output/cloud/wt-<番号>`(git 管理外)に入れ子のワークツリーとして置く。
-手元で検証する `wt-201`・`wt-206`(と後で `wt-184`)には `.venv` と `web/node_modules` のジャンクションがある。
+6つの `wt-*`(issue の5本と統合の `wt-all`)すべてに `.venv` と `web/node_modules` のジャンクションがある。
 **片付けるときは先にジャンクションを外す**(`[System.IO.Directory]::Delete('<wt>\.venv', $false)` と同じく `web/node_modules`。
-docs/DEV_NOTES.md「ワークツリー」)。クラウド用の `wt-186`・`wt-193` は起動に使っただけで、ジャンクションは無い。
+docs/DEV_NOTES.md「ワークツリー」)。
 クラウドの依頼文は git に載せていない(スクラッチパッド)。要点は decisions.md の [ボディ] の節。
 
 この節と decisions.md の `[スケッチ]` `[ボディ]` の節は、このワークツリーのブランチ `claude/duocad-sketch-body-5-features-a37e8a` にだけ書く
@@ -141,17 +141,24 @@ docs/DEV_NOTES.md「ワークツリー」)。クラウド用の `wt-186`・`wt-1
 
 本人に残りそうな判断: 各 issue の「決めること」は可逆なので AI が決めて decisions.md に残す。カードは今のところ見込まない。
 
-### どこまで来たか(2026-10-22 03:00)
+### どこまで来たか(2026-10-22 完了)
 
-| issue | ブランチの先端 | 状態 |
-|---|---|---|
-| #206 | `claude/sketch-206-envelope-bezier` | 実装・sol のレビュー2回(重い指摘3件と回帰1件を直した)・pytest 全件・撮影済み。3回目のレビュー待ち |
-| #201 | `claude/sketch-201-measure-points` | 実装・sol のレビュー pass・pytest 全件・smoke・撮影済み。前のセッションのクラウド版は `claude/sketch-201-measure-points-cloud` に保存 |
-| #184 | `claude/sketch-184-project`(#206 の上) | 実装・sol のレビュー2回(重い指摘7件を直した)・本人の PC ケースで外形の投影が失敗したのを直した・smoke と関係する実機検査5本・撮影済み。3回目のレビュー待ち |
-| #193 | `claude/body-193-split-body` | クラウドが実装、手元で smoke を初めて実行して通した・sol のレビュー2回(重い指摘3件を直した)・撮影済み。3回目のレビュー待ち |
-| #186 | `claude/body-186-interference` | クラウドが実装、手元で PC ケースの件数が INTERFERENCE.md の表と一致・Windows の子プロセスと smoke を確かめた。描画の三角形分割が入力を書き換える不具合を見つけて直した。sol のレビュー(コア・画面)の重い指摘4件を直した。再レビュー待ち |
+5件とも実装・検証・sol の最終レビュー pass まで終わり、ブランチを push 済み。報告ページは `output/autopilot_report/index.html`(コミットしない)。
 
-残り: 再レビューの指摘を直す → 5本を一時的に合わせて衝突と全体テストを確かめる(確認用。どこにもマージしない) → 報告ページ。
+| issue | ブランチ | 先端 | 状態 |
+|---|---|---|---|
+| #206 | `claude/sketch-206-envelope-bezier` | `1ac023a7` | pytest 全件・包むの試験 35 件・撮影。sol 4回(最後 pass) |
+| #184 | `claude/sketch-184-project`(#206 の上) | `465127e5` | pytest 全件・投影の試験 30 件・smoke・PC ケースで実測・撮影。sol 10回(後半5回は端点の揃えの詰め。最後 pass) |
+| #201 | `claude/sketch-201-measure-points` | `2a9e1de5` | pytest 全件・試験 9 件・smoke・撮影。sol pass。前のセッションのクラウド版は `claude/sketch-201-measure-points-cloud` に保存 |
+| #193 | `claude/body-193-split-body` | `cc91352a` | クラウドが実装、手元で検証。pytest 全件 2742 件・試験 29 件・smoke・撮影。sol 5回(最後 pass) |
+| #186 | `claude/body-186-interference` | `a7469c0c` | クラウドが実装、手元で検証。PC ケースの件数が INTERFERENCE.md の表と一致・試験 100 件・smoke・撮影。sol 4回(最後 pass) |
+
+確認用の統合ブランチ `claude/autopilot-5-integration-check`(`f0b110d1`): develop(`00e9588f`)に #184(#206 を含む)→ #201 → #193 → #186 の順で
+合わせ、衝突を解いて pytest 全件 2931 件・型検査・build・smoke 10 本を確かめたもの。**確認用で、まとめて取り込むためのブランチではない**
+(本人は issue のブランチを1件ずつ取り込む。衝突する箇所は `tests/test_boundaries.py` の一覧・`docs/MCP.md` の表・`README.md` のモジュールの表・
+生成物の `web/src/generated/protocol.ts`(取り込んだ後に `tools/generate_protocol_ts.py` で生成し直す))。
+
+本人に残る判断: なし(各 issue の細部は decisions.md の [スケッチ][ボディ] の節に AI の判断として記録)。
 
 ### 再開の手順
 
@@ -159,3 +166,5 @@ docs/DEV_NOTES.md「ワークツリー」)。クラウド用の `wt-186`・`wt-1
 2. 検証は各 `wt-<番号>` で `.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`、`cd web && npm run check && npm run build`、
    `node scripts/smoke-<名前>.mjs --shots <このワークツリー>/output/autopilot_report`(smoke は OS に空きポートを選ばせる)。
 3. 撮影は `output/autopilot_report/` に `<issue>-<段>.png` で置く。報告ページは同じフォルダの `index.html`。
+4. 片付け: `output/cloud/wt-*` は入れ子のワークツリー(`wt-all` が統合ブランチ)。消す前に各 `wt-*` の `.venv` と `web/node_modules` の
+   ジャンクションを `[System.IO.Directory]::Delete('<wt>\.venv', $false)` で外してから `git worktree remove`(再帰削除は本体の `.venv` を消す)。
