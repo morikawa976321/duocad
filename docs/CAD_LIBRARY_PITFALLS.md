@@ -18,6 +18,7 @@
 | 面の `Orientation()==REVERSED` は平面の外向きを決めない。奇数回鏡映したボディの面は平面の `Position` が左手系で、REVERSED のとき `Direction` がすでに外向き(外向きは `BRepGProp_Face` の法線で決める) | `duocad/kernel_sketch.py` `_ax3_from_face` |
 | 曲面から `MakePrism` すると `IsDone()` は真でも `BRepCheck_Analyzer` が偽(または体積が激減) | `duocad/kernel_extrude.py` `_check_coplanar_planes` |
 | `ShapeUpgrade_UnifySameDomain` は入力そのものを壊す(コピーで試してから本番) | `duocad/kernel.py` `_unify_same_domain` |
+| `ShapeUpgrade_UnifySameDomain` に壊れた形を渡すと仮想メモリを際限なく使う(フィレットの吸収の総当たりで 84GB、PC が落ちた)。重い総当たりは `tools/capped_run.py` で | `duocad/kernel.py` `_absorbed_fillet` / `duocad/kernel_overflow.py` `_require_plausible` |
 | フィレット/面取りは例外を投げず失敗し、半径に対して単調でない | `duocad/kernel.py` `fillet_edges` / `chamfer_edges` |
 | 薄肉(シェル後)の箱で、フィレットの半径が縁の面の幅とちょうど一致すると `MakeFillet.Build()` が access violation でプロセスごと落ちる(`BRepPrimAPI_MakeBox` の箱で実測。押し出しの箱は `IsDone()=False`)。窓は 2e-9 mm 未満 | `duocad/kernel_chains.py` `fillet_consumes_face`(当たれば元の形の `MakeFillet` を呼ばずにはみ出しの吸収へ回る) |
 | `MakeFillet` は丸めの面が隣り合わない別の形に当たると、断る・壊れた形を返すほか、**その形にも球を触れさせた別の形を黙って返す**(issue #208) | `duocad/kernel.py` `_blend_reaches_other_faces` / [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md) |

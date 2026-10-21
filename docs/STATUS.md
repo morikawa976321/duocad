@@ -10,7 +10,10 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 - **できた**: `duocad/kernel_overflow.py` と `kernel._blend_edges` の切り替え。ブランチ `claude/fusion-fillet-overflow-a7edfe`。
   説明・実測・残っている差は [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md)。回帰は `tests/test_fillet_overflow.py`(18件)。
 - 確かめたこと: 期待値(障害物の無い形で丸めてから足す/切る)との体積の一致、#208 の10通り、既存のフィレット・面取りのテスト、
-  pytest 全体(web/ を読む30件は、このワークツリーに node_modules が無くて落ちる。Python の変更とは無関係)、画面での確定と描画。
+  pytest 全体(web/ を読む30件は、このワークツリーに node_modules が無くて落ちる。Python の変更とは無関係)、画面での確定と描画、
+  Codex のレビュー2回(7件の反例をすべて直して回帰テストに)、PC ケースの部品 100 本の総当たり(メモリ上限つきで、ピーク 1.19GB)。
+- 途中で PC が落ちた: 吸収の総当たりで python が仮想メモリ 84GB。原因(見当違いの肉を統合に渡した)を直した。
+  大きい形の総当たりは `tools/capped_run.py` を通す(DEV_NOTES「環境」)。
 - 本人待ち: Fusion で小さい当たりの形を見てもらうカード1件(急がない。decisions.md「本人待ち」)。
 - 次にやること: develop へマージ(本人の指示「作業ブランチから develop へは PR なしでマージしてよい」)→ 動作確認の後に develop → main の PR。
   吸収の対象を広げるなら、角(連なりが頂点で出会う)と Bスプライン面の延長。
