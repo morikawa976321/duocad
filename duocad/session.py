@@ -40,6 +40,7 @@ from .oplog import OpLog, verb_handler
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import fork, speculative
 from .verbs.envelope_regions import boundary_entities as envelope_boundary_entities, envelope_pieces, selected_regions
+from .verbs.project_to_sketch import outline_entities, projected_entities, selected_bodies, selected_targets
 from .view import DocumentView
 
 #: Windowsの予約デバイス名(拡張子の有無に関わらず特別扱い。大文字小文字を区別しない)。
@@ -103,6 +104,12 @@ def _edits_document(method: Any) -> Any:
 #: プレビューできるverb -> (`Session` のメソッド名, 受け取ってよい引数名)。ここに無いverbはプレビューできない
 #: (載せてよい条件は `catalog.Command.previewable`)。
 PREVIEWABLE_VERBS: dict = catalog.previewable_verbs()
+
+
+def _projection_ghost(sketch_id: str, entities: list) -> dict:
+    """投影のプレビューの幽霊(`preview_envelope_regions` と同じ形。図形が無ければ `pieces=0` で警告色)。"""
+    plain = [{"kind": entity["kind"], "params": dict(entity["params"])} for entity in entities]
+    return {"sketch_ghost": {"sketch_id": sketch_id, "entities": plain, "pieces": 1 if plain else 0}}
 
 
 def _tagged(progress: Any, steps: Any) -> Any:
@@ -786,6 +793,16 @@ class Session:
             for entity in envelope_boundary_entities(self.document, sketch_id, piece)
         ]
         return {"sketch_ghost": {"sketch_id": sketch_id, "entities": entities, "pieces": len(pieces)}}
+
+    def preview_project_to_sketch(self, sketch_id: str) -> dict:
+        """`project_to_sketch` の確定前の姿(写る図形)。文書を変えない。"""
+        entities = projected_entities(self.document, sketch_id, selected_targets(self.document))
+        return _projection_ghost(sketch_id, entities)
+
+    def preview_project_outline(self, sketch_id: str) -> dict:
+        """`project_outline` の確定前の姿(写る影の境界)。文書を変えない。"""
+        entities = outline_entities(self.document, sketch_id, selected_bodies(self.document))
+        return _projection_ghost(sketch_id, entities)
     # ---------------------------------------------------------------- 形状最適化を走らせる(`duocad/optimize_run.py` への委譲)
     def optimize_conditions(self) -> dict:
         """4条件がそろって走らせられるか(`optimize_run.conditions_report`)。"""

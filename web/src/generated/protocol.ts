@@ -29,6 +29,8 @@ export const COMMAND_CATEGORY = {
   move_body: 'feature',
   mirror_sketch_entities: 'sketch',
   envelope_regions: 'sketch',
+  project_to_sketch: 'sketch',
+  project_outline: 'sketch',
   mirror_body: 'feature',
   delete: 'feature',
   delete_items: 'feature',
@@ -118,6 +120,8 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   move_body: ['dx', 'dy', 'dz', 'copy', 'mode', 'angle', 'axis_edge', 'axis_point', 'axis_dir', 'center_vertex'],
   mirror_sketch_entities: ['axis'],
   envelope_regions: ['radius', 'offset'],
+  project_to_sketch: ['sketch_id'],
+  project_outline: ['sketch_id'],
   mirror_body: ['base_plane', 'plane_face'],
   delete: [],
   delete_items: ['bodies', 'sketches'],
@@ -205,6 +209,8 @@ export interface CommandArguments {
   move_body: { dx?: number; dy?: number; dz?: number; copy?: boolean; mode?: string; angle?: number; axis_edge?: object; axis_point?: unknown[]; axis_dir?: unknown[]; center_vertex?: object }
   mirror_sketch_entities: { axis: object }
   envelope_regions: { radius: number; offset: number }
+  project_to_sketch: { sketch_id: string }
+  project_outline: { sketch_id: string }
   mirror_body: { base_plane?: string; plane_face?: object }
   delete: Record<string, never>
   delete_items: { bodies?: unknown[]; sketches?: unknown[] }
@@ -303,6 +309,8 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'move_body'; mode: string; dx: number | null; dy: number | null; dz: number | null; angle: number | null; axis_point: number[] | null; axis_dir: number[] | null; copy: boolean; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'mirror_sketch_entities'; axis_p0: number[]; axis_dir: number[]; created: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'envelope_regions'; radius: number; offset: number; created: string[]; sketch_ids: string[]; approximated: number })
+  | (AppliedVerbBase & { verb: 'project_to_sketch'; created: string[]; sketch_ids: string[]; approximated: number })
+  | (AppliedVerbBase & { verb: 'project_outline'; created: string[]; sketch_ids: string[]; approximated: number })
   | (AppliedVerbBase & { verb: 'mirror_body'; plane_point: number[]; plane_normal: number[]; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'delete'; bodies: string[]; entities: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'delete_items'; bodies: string[]; sketches: string[] })

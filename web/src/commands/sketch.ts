@@ -487,6 +487,60 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
   },
 }
 
+/**
+ * 選んだソリッドの辺(1本ずつ)と面(外周と穴のループ)を、編集中のスケッチの平面へ写した図形として足す(Fusion の「投影」)。
+ * 起動中はスケッチの中身の代わりにソリッドの面・辺を指す(`App.svelte` の `solidPickInSketch`)。写した図形は普通の図形で、
+ * 元の形に追従しない。入力中の幽霊はサーバが文書を変えずに計算する(`preview_project_to_sketch`)。
+ */
+export const PROJECT_TO_SKETCH: CommandDef<'project_to_sketch'> = {
+  id: 'project_to_sketch',
+  label: '投影',
+  buttonId: 'sketch-project',
+  preview: 'server',
+  args: [
+    {
+      kind: 'selection',
+      name: 'targets',
+      label: '写す辺・面',
+      shapeKind: 'edge',
+      kinds: ['edge', 'face'],
+      min: 1,
+      max: null,
+    },
+  ],
+  build(values) {
+    const targets = (values.targets ?? []) as unknown[]
+    if (targets.length === 0) return { ok: false, reason: '写す辺・面が選ばれていない' }
+    return { ok: true, args: {} }
+  },
+}
+
+/**
+ * 選んだボディを、編集中のスケッチの平面の法線方向から見た外形(影の境界。外周と貫通した穴)を図形として足す。
+ * 面をクリックするとそのボディを指す(`optimizeSetFaceRef` がボディの粒度へ畳む)。
+ */
+export const PROJECT_OUTLINE: CommandDef<'project_outline'> = {
+  id: 'project_outline',
+  label: '外形を投影',
+  buttonId: 'sketch-project-outline',
+  preview: 'server',
+  args: [
+    {
+      kind: 'selection',
+      name: 'bodies',
+      label: '外形を写すボディ',
+      shapeKind: 'body',
+      min: 1,
+      max: null,
+    },
+  ],
+  build(values) {
+    const bodies = (values.bodies ?? []) as unknown[]
+    if (bodies.length === 0) return { ok: false, reason: 'ボディが選ばれていない' }
+    return { ok: true, args: {} }
+  },
+}
+
 /** そのverbがスケッチモードの中で走るのに `sketch_id` を取らないか(どのスケッチかは選んだ参照 `{sketch, entity, point}` / `{sketch, index}` が持つ)。`runsOutsideSketch` の隣。導出せず列挙。 */
 export function runsWithoutSketchId(verb: string): boolean {
   return verb === MOVE_SKETCH_ENTITIES.id || verb === MIRROR_SKETCH_ENTITIES.id || verb === ENVELOPE_REGIONS.id
@@ -519,6 +573,8 @@ export const SKETCH_COMMANDS: CommandDef[] = [
   MOVE_SKETCH_ENTITIES,
   MIRROR_SKETCH_ENTITIES,
   ENVELOPE_REGIONS,
+  PROJECT_TO_SKETCH,
+  PROJECT_OUTLINE,
   IMPORT_SVG,
 ]
 export const DEFAULT_SKETCH_COMMAND_ID = SELECT_IN_SKETCH.id

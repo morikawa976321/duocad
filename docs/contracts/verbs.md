@@ -127,6 +127,14 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **依存禁止**: 領域の添字(後の編集で指す先が変わる)。負のオフセットを OCCT へ直接頼むこと。
 - **罠**: 同心円の面の内向きオフセットは失敗する(箱 − 補集合の拡大で代替)。詳細は docs/CAD_LIBRARY_PITFALLS.md。
 
+## project_to_sketch / project_outline(スケッチの投影)
+
+- 呼ぶ面は MCP/セッション `project_to_sketch(sketch_id)`(対象は確定選択の辺・面)と `project_outline(sketch_id)`(対象は確定選択の面・辺・頂点・ボディが属するボディ)。verb は `duocad/verbs/project_to_sketch.py`、幾何は `kernel_project.edge_entities` / `face_edges` / `outline_entities`。プレビューは投機実行でなく `preview_project_to_sketch` / `preview_project_outline`(`sketch_ghost`。図形が無ければ `pieces=0`)。
+- **写した図形は普通の図形で元の形に追従しない。** redo/replay はログの図形数値を使う(面・辺の添字に依存しない)。1回の呼び出しの中の重複(上面と下面の同じ長方形)は1つにするが、スケッチに既にある図形との重複は除かない。
+- 点に潰れる辺は図形にしない。全部が潰れたら ValueError で何も変えない。メッシュのボディは断る。
+- 外形は隠線処理(`HLRBRep_Algo`)の線で平面を割り、法線方向の直線がボディに当たる面の和の境界。`HLRBRep_HLRToShape` の線は射影の局所座標で返り、3D の曲線を持たない辺がある(`BRepLib.BuildCurves3d` で作ってから世界座標へ戻す)。
+- Web は `PROJECT_TO_SKETCH`(`#sketch-project`、辺・面の選択)と `PROJECT_OUTLINE`(`#sketch-project-outline`、ボディの選択。面のクリックをボディへ畳む)。起動中はスケッチモードでもソリッドを指す(`App.svelte` の `solidPickInSketch`)。
+
 ## 押し出し(extrude)の kernel 分離・web 統合・extrude_face 廃止
 
 - **押し出しの幾何は `duocad/kernel_extrude.py`**(`extrude_regions(faces, distance, mode, normal, target_shape=None)` と `extrude_faces`。mode は join/cut/new)。`verbs/extrude.py` が直接呼ぶ。`kernel.py` に再エクスポートは無く、`kernel.extrude_regions`/`kernel.extrude_face_on_shape` は存在しない(AttributeError)。`mcp_server.py` から `kernel_extrude.*` を直接呼ばない(`tests/test_mcp_verbs.py` が検査)。

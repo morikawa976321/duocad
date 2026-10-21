@@ -1260,6 +1260,15 @@ export function createViewport(container: HTMLElement): Viewport {
     pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
   }
 
+  /** スケッチモード中に、編集中のスケッチの中身の代わりにソリッドの面・辺・頂点を指すか(`setSolidPickInSketch`)。 */
+  let solidPickInSketch = false
+
+  function setSolidPickInSketch(on: boolean): void {
+    if (on === solidPickInSketch) return
+    solidPickInSketch = on
+    pickChanged()
+  }
+
   /** スケッチ平面上の (u,v) を3Dの点へ(コアの `kernel_sketch._to_pnt` と同じ規則)。 */
   function toWorld(frame: SketchDraw['frame'], u: number, v: number): THREE.Vector3 {
     return planePoint(frame.origin, frame.u, frame.v, u, v)
@@ -2446,7 +2455,10 @@ export function createViewport(container: HTMLElement): Viewport {
       sketchEntity: null,
     }
     // スケッチモード中は面を拾わない(線を引くつもりのクリックが選択の置き換えになる)。領域が手前・平面の点がその次。
-    if (activeSketchId !== null) {
+    // ソリッドだけを受けるコマンド(投影)の起動中だけは、スケッチの中身の代わりにソリッドを指す(下の通常モードの分岐から
+    // スケッチの図形・領域・基準平面を除いたもの)。
+    const solidOnly = activeSketchId !== null && solidPickInSketch
+    if (activeSketchId !== null && !solidOnly) {
       const region = regionAt(offsetX, offsetY)
       const plane = planePointAt(offsetX, offsetY)
       // 図形は領域より手前(点・辺は領域の縁に乗っており、領域が勝つと端点を掴めない)。`point` は常に一緒に返し、
@@ -2463,7 +2475,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 細かさを先に見るのは、点は線の端に、線は面の縁に必ず乗っていて、広いものを先に見ると細かいものが一生取れないため
     // (docs/VIEWPORT.md「固定の優先順位の下では…」)。docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」。
     const project = projector()
-    const sketchCandidates = sketchPickCandidates(offsetX, offsetY, project)
+    const sketchCandidates = solidOnly ? { points: [], lines: [] } : sketchPickCandidates(offsetX, offsetY, project)
     const points: Array<RankedCandidate<PickCandidate>> = [...sketchCandidates.points]
     if (pickKinds.has('vertex')) {
       for (const candidate of features.vertexCandidates(offsetX, offsetY, VERTEX_PIXELS, project, section.keepsFilter())) {
@@ -2501,6 +2513,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 断面の切り口(`ref: null`)も遮る。
     const surface = faceHitAt(offsetX, offsetY)
     if (surface !== null && surface.ref !== null && pickKinds.has('face')) return { ...nothing, hit: surface.ref }
+    if (solidOnly) return nothing
     for (const candidate of regionHitsAt(offsetX, offsetY)) {
       if (surface !== null && candidate.distance > surface.distance + occlusion.slack(candidate.point, project.height)) break
       return { ...nothing, region: candidate.region }
@@ -2639,7 +2652,7 @@ export function createViewport(container: HTMLElement): Viewport {
           `${camera.zoom}`
     if (probe === hoverProbe) return
     hoverProbe = probe
-    if (point !== null && activeSketchId === null) requestPickData(point.x, point.y)
+    if (point !== null && (activeSketchId === null || solidPickInSketch)) requestPickData(point.x, point.y)
     const next = point === null ? null : resolveHit(point.x, point.y)
     // スケッチモードでは図形と領域が一緒に返る: 図形が取れるときは領域を光らせない
     // (点・辺は領域より手前で拾われ、光らせると予告が嘘になる)。
@@ -2808,6 +2821,7 @@ export function createViewport(container: HTMLElement): Viewport {
     setOptimizeState,
     setOptimizeDebug: optimizeDebug.setState,
     setPickKinds,
+    setSolidPickInSketch,
     setBodyEdges(bodyId, edges) {
       if (features.setEdges(bodyId, edges as BodyEdges | null)) pickChanged()
     },

@@ -1293,6 +1293,51 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="project_to_sketch",
+        returns=(
+            Result("created", "string[]"),
+            Result("sketch_ids", "string[]"),
+            Result("approximated", "number"),
+        ),
+        category="sketch",
+        description=(
+            "選択したソリッドの辺(1本ずつ)と面(外周と穴のループ)を、スケッチの平面へ正投影した図形として足すときに呼ぶ"
+            "(Fusion の「投影」)。写した図形は普通の線分・円・円弧・楕円・3次ベジエで、元の形が後で変わっても追従しない。"
+            "斜めの平面へ写した円は楕円、円弧は楕円弧を誤差 0.001 mm 以下の3次ベジエの列で近似する(応答の approximated が数)。"
+            "平面に垂直な辺は点に潰れるので図形を作らず、全部が潰れると失敗して何も変わらない。対象は選択から取る(引数では受けない)。"
+            "ボディの外形は project_outline。"
+        ),
+        params=(_SKETCH_ID,),
+        session="project_to_sketch",
+        previewable=True,
+        preview_session="preview_project_to_sketch",
+        resets_selection=True,
+        note=(
+            "ログには写した図形の数値を載せ、redo / replay は形を引き直さない(`envelope_regions` と同じ)。"
+            "プレビューは投機実行でなく `preview_project_to_sketch`(写る図形を `sketch_ghost` で返す)"
+        ),
+    ),
+    Command(
+        name="project_outline",
+        returns=(
+            Result("created", "string[]"),
+            Result("sketch_ids", "string[]"),
+            Result("approximated", "number"),
+        ),
+        category="sketch",
+        description=(
+            "選択(面・辺・頂点・ボディ)が属するボディを、スケッチの平面の法線方向から見た外形(影の境界)を図形として足すときに呼ぶ。"
+            "外周と、向こうが透けて見える穴(貫通穴)を写し、止まり穴の底や段の線のように影の内側にある線は写さない。"
+            "複数のボディを選ぶと、影を合わせた外形になる。元の形が後で変わっても追従しない。対象は選択から取る(引数では受けない)。"
+        ),
+        params=(_SKETCH_ID,),
+        session="project_outline",
+        previewable=True,
+        preview_session="preview_project_outline",
+        resets_selection=True,
+        note="ログには写した図形の数値を載せ、redo / replay は形を引き直さない(`envelope_regions` と同じ)",
+    ),
+    Command(
         name="mirror_body",
         returns=(
             Result("plane_point", "number[]"),
