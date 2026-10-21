@@ -1590,18 +1590,47 @@ def _built_blend(
     }
 
 
+#: 選んだ辺の連なりがこれより多いときは、連なりごとの当たりの検査(連なりの数だけフィレットを組み直す)を省く。
+#: PC ケースの最大ボディで1回の組み立ては約 18ms なので、12 本で約 0.2 秒。
+PER_CONTOUR_CHECK_LIMIT = 12
+
+
 def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
     """組み立てたフィレットが、丸めた辺(連なりを含む)の頂点に触れない面まで変えたか。
 
     変えていれば、丸めの面が隣り合わない別の形に当たっている。OCCT はそこで球をその形にも触れさせた別の形を返す
     (円板に柱2本、隙間 2・半径 3 で、両方の柱に接するBスプライン面が2枚増える。issue #208 の実測)。
     辺の端の面(箱の1辺を丸めたときの側面)は頂点に触れるので数えない。
+
+    連なりが2本以上なら、連なりごとに組み直しても見る: 全部の連なりの頂点でまとめて許すと、柱 A の根元の丸めが
+    柱 B の側面に当たっても、B の上縁も選んでいれば B の側面は B の上縁の頂点に触れるので見逃した(Codex レビューの反例)。
     """
+    if _changes_faces_away_from(maker, shape, range(1, maker.NbContours() + 1)):
+        return True
+    contours = maker.NbContours()
+    if contours < 2 or contours > PER_CONTOUR_CHECK_LIMIT:
+        return False
+    for contour in range(1, contours + 1):
+        if not maker.IsConstant(contour):
+            continue
+        alone = BRepFilletAPI_MakeFillet(shape)
+        alone.Add(maker.Radius(contour), maker.Edge(contour, 1))
+        try:
+            alone.Build()
+        except Exception:  # noqa: BLE001  OCCTは例外でも失敗しうる
+            continue
+        if alone.IsDone() and _changes_faces_away_from(alone, shape, range(1, alone.NbContours() + 1)):
+            return True
+    return False
+
+
+def _changes_faces_away_from(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int]) -> bool:
+    """`maker` が、`contours` の辺の頂点に触れない入力の面を変えたか。"""
     # 触られなかった面は結果に同じ面として残るので、結果に無い入力の面だけを調べる(`Modified` を全面に問うと、
     # PC ケースの 233 面のボディで1回 112ms かかった。フィレットそのものは 18ms)。
     kept = _face_map(maker.Shape())
     rounded_vertices = TopTools_IndexedMapOfShape()
-    for contour in range(1, maker.NbContours() + 1):
+    for contour in contours:
         for number in range(1, maker.NbEdges(contour) + 1):
             edge = maker.Edge(contour, number)
             rounded_vertices.Add(TopExp.FirstVertex_s(edge))
@@ -1623,7 +1652,9 @@ def _absorbed_fillet(
     """`kernel_overflow.absorb` の形を検査し、由来をたどって `_blend_edges` の戻り値の形にする。"""
     absorbed = kernel_overflow.absorb(shape, edge_map, radii)
     context = f"edges {edge_indices}, absorbing overflow"
-    volume_after = _checked_volume(absorbed.shape, "fillet", volume_before=volume_before, context=context)
+    # 凹の肉を足して凸の肉を引くと、体積が打ち消し合って変わらないことがある(形は変わっている)。
+    unchanged_check = None if (absorbed.concave and absorbed.convex) else volume_before
+    volume_after = _checked_volume(absorbed.shape, "fillet", volume_before=unchanged_check, context=context)
     if (absorbed.concave and not absorbed.convex and volume_after < volume_before) or (
         absorbed.convex and not absorbed.concave and volume_after > volume_before
     ):

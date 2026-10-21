@@ -6,11 +6,10 @@ Fusion 360 はどちらも、支える2面だけで丸めた面をはみ出し�
 
 1. 辺の両側の面 F1・F2 の曲面を大きく延長し、辺のまわりの箱を割って、辺に沿うくさび W(凹なら空気側・凸なら物体側)を作る。
    W には障害物も面の縁も無いので、`MakeFillet` が必ず通る見込みの形になる。
-2. 肉 M = W − fillet(W)。辺の端・はみ出した先は、F1・F2 を法線方向に厚くした柱の外に出る。
-3. 柱の外に出た部分のうち、辺から離れていて(辺の内側の点に触れない)、凹なら全部が空気・凸なら全部が物体の中に
-   あるものだけを捨てる。はみ出して崖の先に出た肉、辺の端の先へ伸びた肉がこれに当たる。
-   柱の外でも捨てないもの: 辺に触れる部分(曲面の支えや傾いた壁では、柱の境界が辺の上から斜めに出て正しい肉を切る)、
-   本体に重なる部分(貫通する別の柱の足元の上。和を取れば本体に埋もれる)。
+2. 肉 M = W − fillet(W)。辺の端・はみ出した先は、F1・F2(穴を塞いだもの)を法線方向に厚くした柱の外に出る。
+3. 柱の外に出た部分のうち、辺の内側の点に触れないものを捨てる。はみ出して崖の先に出た肉、辺の端の先へ伸びた肉がこれに当たる。
+   辺に触れる部分は捨てない(曲面の支えや傾いた壁では、柱の境界が辺の上から斜めに出て正しい肉を切る)。
+   貫通する別の柱の足元は面の穴なので、塞いだ柱の内側に入り、その上の肉は捨てない(和で本体に埋もれる)。
 
 **対応する形だけを引き受け、それ以外は `Unsupported` で断る**(呼び出し側は OCCT の結果か元の失敗へ戻る):
 両側の面が延長できる曲面(平面・円柱・円錐・球・トーラス・直線押し出し面)、選んだ辺の連なりどうしが頂点を共有しない
@@ -21,7 +20,7 @@ from __future__ import annotations
 import math
 from typing import Dict, List, NamedTuple, Sequence, Tuple
 
-from OCP.BRep import BRep_Tool
+from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBndLib import BRepBndLib
@@ -33,6 +32,7 @@ from OCP.BRepGProp import BRepGProp
 from OCP.BRepLProp import BRepLProp_SLProps
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
+from OCP.BRepTools import BRepTools
 from OCP.Bnd import Bnd_Box
 from OCP.ChFi3d import ChFi3d
 from OCP.ChFiDS import ChFiDS_TypeOfConcavity
@@ -40,7 +40,7 @@ from OCP.Geom import Geom_RectangularTrimmedSurface
 from OCP.GeomAbs import GeomAbs_SurfaceType
 from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
 from OCP.GProp import GProp_GProps
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_OUT, TopAbs_REVERSED, TopAbs_SOLID, TopAbs_VERTEX
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_OUT, TopAbs_REVERSED, TopAbs_SOLID, TopAbs_VERTEX, TopAbs_WIRE
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
@@ -88,8 +88,8 @@ def absorb(shape: TopoDS_Shape, edge_map, radii: Dict[int, float]) -> Absorbed:
     _refuse_corners(shape, edge_map, {chain for chain in chains.values()})
 
     pieces = []
-    for group in _face_pairs(edge_map, edge_faces, sorted(radius_of)):
-        pieces.append(_material(shape, [edge_map.FindKey(i) for i in group[2]], group[0], group[1], radius_of[group[2][0]]))
+    for first, second, radius, members in _face_pairs(edge_map, edge_faces, radius_of):
+        pieces.append(_material(shape, [edge_map.FindKey(i) for i in members], first, second, radius))
 
     added = [material for material, concave in pieces if concave]
     removed = [material for material, concave in pieces if not concave]
@@ -122,10 +122,12 @@ def _refuse_corners(shape: TopoDS_Shape, edge_map, chains: set) -> None:
                     raise Unsupported(f"edge chains {sorted(owner[key])} and {sorted(chain)} meet at a corner")
 
 
-def _face_pairs(edge_map, edge_faces, indices: Sequence[int]) -> List[Tuple[TopoDS_Shape, TopoDS_Shape, List[int]]]:
-    """辺を、両側の面の組ごとにまとめる(同じ2面の間の辺は同じくさびから1回で肉が取れる。閉じた交線が継ぎ目で割れた2本など)。"""
-    groups: List[Tuple[TopoDS_Shape, TopoDS_Shape, List[int]]] = []
-    for index in indices:
+def _face_pairs(edge_map, edge_faces, radius_of: Dict[int, float]) -> List[Tuple[TopoDS_Shape, TopoDS_Shape, float, List[int]]]:
+    """辺を、両側の面の組と半径ごとにまとめる(同じ2面・同じ半径の辺は同じくさびから1回で肉が取れる。閉じた交線が
+    継ぎ目で割れた2本など。同じ2面でも半径が違う辺は別にする)。"""
+    groups: List[Tuple[TopoDS_Shape, TopoDS_Shape, float, List[int]]] = []
+    for index in sorted(radius_of):
+        radius = radius_of[index]
         edge = edge_map.FindKey(index)
         faces = edge_faces.FindFromKey(edge)
         if faces.Extent() != 2 or faces.First().IsSame(faces.Last()):
@@ -134,12 +136,12 @@ def _face_pairs(edge_map, edge_faces, indices: Sequence[int]) -> List[Tuple[Topo
         for face in (first, second):
             if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() not in _SURFACES:
                 raise Unsupported(f"edge {index} borders a surface that cannot be extended")
-        for one, two, members in groups:
-            if (one.IsSame(first) and two.IsSame(second)) or (one.IsSame(second) and two.IsSame(first)):
+        for one, two, size, members in groups:
+            if size == radius and ((one.IsSame(first) and two.IsSame(second)) or (one.IsSame(second) and two.IsSame(first))):
                 members.append(index)
                 break
         else:
-            groups.append((first, second, [index]))
+            groups.append((first, second, radius, [index]))
     return groups
 
 
@@ -200,24 +202,39 @@ def _material(shape: TopoDS_Shape, edges: list, first: TopoDS_Shape, second: Top
     if not maker.IsDone():
         raise Unsupported("the wedge could not be rounded")
     material = _boolean("cut", wedge, maker.Shape()).Shape()
-    return _trim(shape, material, edges, first, second, concave, margin), concave
+    # 肉は支える面から max(reach, radius) より離れない。柱をそれ以上厚くすると、凸の曲面を内へ厚くしたときに軸へ潰れる
+    # (半径 4 の柱の上縁を半径 1 で丸めるとき、箱の余白 4 で厚くすると共通部分が失敗した)。
+    return _trim(shape, material, edges, first, second, concave, 1.25 * max(reach, radius)), concave
 
 
 def _trim(shape, material, edges, first, second, concave: bool, height: float):
-    """肉のうち、辺から離れて支える面の柱の外にあり、凹なら全部が空気・凸なら全部が物体の中にある部分を捨てる。"""
-    columns = _boolean("common", _column(first, height, concave), _column(second, height, concave)).Shape()
+    """肉のうち、穴を塞いだ支える面の柱の外にあり、辺の内側の点に触れない部分を捨てる。
+
+    柱は穴を塞いで作る: 支える面の穴(貫通する別の柱の足元)の上の肉は、和で本体に埋もれるか、低い柱の上を越えて
+    丸めが続く部分なので捨てない。穴を残した柱の外を「本体に重なれば残す」で救っていたときは、辺の端の先へ伸びた
+    肉が床の上の別の突起に少し重なっただけで丸ごと残り、外接箱を大きく越えた(Codex レビューの反例)。
+    """
+    columns = _boolean(
+        "common", _column(_without_holes(first), height, concave), _column(_without_holes(second), height, concave)
+    ).Shape()
     outside = _boolean("cut", material, columns).Shape()
     scale = max(_volume(material), 1.0e-12)
     dropped = []
     for part in _solids(outside):
-        if _volume(part) <= 1.0e-9 * scale or _touches_inside_of(part, edges):
-            continue
-        beyond = _boolean("cut" if concave else "common", part, shape).Shape()
-        if _volume(beyond) >= _volume(part) * (1.0 - 1.0e-6):
+        if _volume(part) > 1.0e-9 * scale and not _touches_inside_of(part, edges):
             dropped.append(part)
     for part in dropped:
         material = _boolean("cut", material, part).Shape()
     return material
+
+
+def _without_holes(face: TopoDS_Shape) -> TopoDS_Shape:
+    """面の内側の輪(穴)を外した面。外側の輪だけを、同じ曲面・同じ位置の空の面へ入れ直す(辺の pcurve をそのまま使える)。"""
+    if indexed_map(face, TopAbs_WIRE).Extent() <= 1:
+        return face
+    filled = TopoDS.Face_s(face.EmptyCopied())
+    BRep_Builder().Add(filled, BRepTools.OuterWire_s(TopoDS.Face_s(face)))
+    return filled
 
 
 def _column(face: TopoDS_Shape, height: float, concave: bool) -> TopoDS_Shape:

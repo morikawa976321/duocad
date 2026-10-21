@@ -216,3 +216,68 @@ def test_rounding_every_edge_of_a_cube_past_its_limit_is_still_refused():
 
     with pytest.raises(ValueError, match="IsDone is false.*meet at a corner"):
         kernel.fillet_edges(cube, every)
+
+
+def _box(x0, y0, z0, x1, y1, z1):
+    return BRepPrimAPI_MakeBox(gp_Pnt(x0, y0, z0), gp_Pnt(x1, y1, z1)).Shape()
+
+
+def test_overflow_cut_off_at_the_edge_end_is_dropped_even_if_it_touches_another_bump():
+    """L 字の辺の端の先へ伸びた肉が、床の上の別の突起に一部重なっても捨てられる(重なりで残すと、外接箱を大きく越えた
+    形になった。Codex レビューの再現)。"""
+    shape = _union(_box(0, 0, 0, 40, 35, 5), _box(0, 0, 0, 5, 30, 25), _box(10, 32, 5, 12, 35, 8))
+    index = _line_edge_at(shape, 5.0, 5.0)
+
+    rounded = kernel.fillet_edges(shape, {index: 22.0})
+
+    assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6)
+
+
+def test_another_selected_edge_does_not_hide_a_fillet_that_hits_a_post():
+    """柱 A の根元(半径 3、柱 B に当たる)と柱 B の上縁(半径 1)を同時に丸めても、A の丸めは B を貫通する。
+    B の側面は B の上縁の頂点に触れるので、選んだ辺全部の頂点でまとめて見ると当たりを見逃した(Codex レビューの再現)。"""
+    shape, without_b, post_b = _two_posts(2.0)
+    root = _circle_edge(shape, 5.0, 3.0)
+    top_b = _circle_edge(shape, 4.0, 23.0, x=11.0)
+
+    rounded = kernel.fillet_edges(shape, {root: 3.0, top_b: 1.0})
+
+    alone = _native(without_b, _circle_edge(without_b, 5.0, 3.0), 3.0)
+    b_rounded = _native(post_b, _circle_edge(post_b, 4.0, 23.0, x=11.0), 1.0)
+    expected = kernel.volume(_boolean(BRepAlgoAPI_Fuse, alone, b_rounded))
+    assert rounded["volume_after"] == pytest.approx(expected, rel=1e-7)
+
+
+def test_independent_edges_between_the_same_two_faces_keep_their_own_radii():
+    """同じ2面の間にある別々の辺(半円柱の2本の縦辺)は、それぞれの半径で丸まる(最初の辺の半径で両方を丸めていた。
+    Codex レビューの再現)。吸収へ入れるため、別の柱の根元をはみ出す半径で一緒に丸める。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common as _Common
+
+    half = _boolean(_Common, _cylinder(0.0, 3.0, 10.0, 30.0), _box(-20, 0, 3, 20, 20, 40))
+    shape = _union(_box(-20, -20, 0, 130, 20, 3), half, _cylinder(110.0, 3.0, 9.0, 60.0))
+    verticals = sorted(
+        (edge for edge in query.describe_edges(shape)
+         if edge["kind"] == "line" and abs(edge["start"][0]) > 9.9 and abs(edge["start"][0]) < 10.1
+         and abs(edge["start"][2] - edge["end"][2]) > 1.0),
+        key=lambda edge: edge["start"][0],
+    )
+    assert len(verticals) == 2
+    root = _circle_edge(shape, 9.0, 3.0, x=110.0)
+
+    volumes = [
+        kernel.fillet_edges(shape, {verticals[0]["index"]: 3.0, verticals[1]["index"]: second, root: 22.0})["volume_after"]
+        for second in (3.0, 4.0)
+    ]
+
+    assert volumes[0] != pytest.approx(volumes[1], rel=1e-9)
+
+
+def test_concave_and_convex_rounds_that_cancel_out_in_volume_are_accepted():
+    """凹の辺に足す肉と凸の辺から引く肉の体積が打ち消し合っても、形は変わっているので確定できる(体積が同じなのを
+    「何も変わらない」と見なして断っていた。Codex レビューの再現)。"""
+    shape = _union(_box(0, 0, 0, 20, 30, 3), _box(0, 0, 0, 3, 30, 6))
+    inner, outer = _line_edge_at(shape, 3.0, 3.0), _line_edge_at(shape, 20.0, 3.0)
+
+    rounded = kernel.fillet_edges(shape, {inner: 5.0, outer: 5.0})
+
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
