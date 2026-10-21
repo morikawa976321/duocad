@@ -463,3 +463,21 @@ def test_two_separate_walls_in_one_plane_are_rounded_separately():
 
     added = [kernel.fillet_edges(shape, {edge["index"]: 22.0})["volume_after"] - before for edge in roots]
     assert both["volume_after"] == pytest.approx(before + sum(added), rel=1e-7)
+
+
+def test_a_footprint_whose_surface_curls_under_the_plate_is_still_a_footprint():
+    """板から立ち上がって板の裏へ回り込むトーラスの足元も足元(穴でない)。柱の根元の丸めはトーラスを貫通し、
+    「板と柱だけを丸めてからトーラスを結合」と同じ形になる(トーラスの面全体の重心で決めたときは穴と見なし、
+    肉を欠いた。Codex レビューの反例)。"""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeTorus
+
+    plate, post = _box(0, -30, 0, 45, 30, 3), _cylinder(18.0, 3.0, 3.0, 20.0)
+    torus = BRepPrimAPI_MakeTorus(gp_Ax2(gp_Pnt(0, 0, -4), gp_Dir(0, 1, 0), gp_Dir(1, 0, 0)), 10.0, 2.0).Shape()
+    shape = _union(plate, post, torus)
+    root = _circle_edge(shape, 3.0, 3.0, x=18.0)
+
+    rounded = kernel.fillet_edges(shape, {root: 10.0})
+
+    alone = _union(plate, post)
+    expected = _boolean(BRepAlgoAPI_Fuse, _native(alone, _circle_edge(alone, 3.0, 3.0, x=18.0), 10.0), torus)
+    assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)

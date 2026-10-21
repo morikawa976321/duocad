@@ -21,10 +21,11 @@ import math
 from typing import Dict, List, NamedTuple, Sequence, Tuple
 
 from OCP.BRep import BRep_Builder, BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Curve2d, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeVertex
+from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
@@ -44,7 +45,7 @@ from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_OUT, TopAbs_R
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
-from OCP.gp import gp_Pnt, gp_Vec
+from OCP.gp import gp_Pnt, gp_Pnt2d, gp_Vec, gp_Vec2d
 
 from .kernel_chains import BlendChains
 from .mesh_geometry import indexed_map
@@ -388,11 +389,12 @@ def _without_footprints(face: TopoDS_Shape, edge_faces) -> TopoDS_Shape:
 
 
 def _is_footprint(wire: TopoDS_Shape, face: TopoDS_Shape, edge_faces) -> bool:
-    """内側の輪の上に別の形が立っているか(穴でなく足元か)。輪の最初の辺の向こうの面が、`face` の外側(空気の側)へ
-    立ち上がっていれば足元。
+    """内側の輪の上に別の形が立っているか(穴でなく足元か)。輪の最初の辺で見る。
 
-    凹凸の判定では足りない: 足元の根元が先に丸めてあると、輪の辺は丸めの面と接線で接するので凹にならず、穴と見なして
-    柱の脇に幅 0.05 の溝を残した(柱 B の根元を半径 0.05 で丸めてから、柱 A の根元を半径 10 で丸めた。Codex レビューの反例)。
+    鋭い辺は凹凸で決める(凹なら足元、凸なら穴)。接線で続く辺(根元を先に丸めた柱の足元、入口を丸めた穴)は凹凸が
+    出ないので、辺から向こうの面の中へ少し進んだ点が `face` の外側(空気の側)にあるかで決める。
+    凹凸だけで決めると、根元を丸めた柱の足元を穴と見なして柱の脇に幅 0.05 の溝を残した。向こうの面全体の重心で決めると、
+    板から立ち上がって板の裏へ回り込むトーラスの足元を穴と見なした(どちらも Codex レビューの反例)。
     """
     edges = indexed_map(wire, TopAbs_EDGE)
     for number in range(1, edges.Extent() + 1):
@@ -402,12 +404,35 @@ def _is_footprint(wire: TopoDS_Shape, face: TopoDS_Shape, edge_faces) -> bool:
         neighbours = [other for other in edge_faces.FindFromKey(edge) if not other.IsSame(face)]
         if not neighbours:
             return False
-        curve = BRepAdaptor_Curve(edge)
-        on_edge = curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()))
-        props = GProp_GProps()
-        BRepGProp.SurfaceProperties_s(neighbours[0], props)
-        rise = gp_Vec(on_edge, props.CentreOfMass()).Dot(_outward_normal(face, on_edge))
-        return rise > 0.0
+        neighbour = TopoDS.Face_s(neighbours[0])
+        kind = ChFi3d.DefineConnectType_s(edge, TopoDS.Face_s(face), neighbour, 1.0e-6, False)
+        if kind == ChFiDS_TypeOfConcavity.ChFiDS_Concave:
+            return True
+        if kind == ChFiDS_TypeOfConcavity.ChFiDS_Convex:
+            return False
+        return _rises_beside(edge, face, neighbour)
+    return False
+
+
+def _rises_beside(edge, face: TopoDS_Shape, neighbour) -> bool:
+    """辺の中点から `neighbour` の中へ少し進んだ点が、`face` の外側(外向き法線の側)にあるか。"""
+    curve = BRepAdaptor_Curve(edge)
+    middle = 0.5 * (curve.FirstParameter() + curve.LastParameter())
+    on_edge = curve.Value(middle)
+    pcurve = BRepAdaptor_Curve2d(edge, neighbour)
+    uv, tangent = gp_Pnt2d(), gp_Vec2d()
+    pcurve.D1(middle, uv, tangent)
+    if tangent.Magnitude() < 1.0e-12:
+        return False
+    across = gp_Vec2d(-tangent.Y(), tangent.X()).Normalized()
+    surface = BRepAdaptor_Surface(neighbour)
+    span = max(surface.LastUParameter() - surface.FirstUParameter(), surface.LastVParameter() - surface.FirstVParameter())
+    step = 1.0e-2 * min(span, 1.0e3)
+    normal = _outward_normal(face, on_edge)
+    for sign in (1.0, -1.0):
+        probe = gp_Pnt2d(uv.X() + sign * step * across.X(), uv.Y() + sign * step * across.Y())
+        if BRepClass_FaceClassifier(neighbour, probe, 1.0e-9).State() == TopAbs_IN:
+            return gp_Vec(on_edge, surface.Value(probe.X(), probe.Y())).Dot(normal) > 0.0
     return False
 
 
