@@ -13,7 +13,7 @@
 
 | 群 | ツール |
 |---|---|
-| 問い合わせ | `describe_document` / `describe_shape` / `measure` —— 最後の1つは選択の各項目の寸法に加え、**ちょうど2項目なら** `between`（点・直線・平面のあいだの距離。平行でない線・面どうしは角度）を返す。画面の「測定」と同じ計算 |
+| 問い合わせ | `describe_document` / `describe_shape` / `check_interference` / `measure` —— `measure` は選択の各項目の寸法に加え、**ちょうど2項目なら** `between`（点・直線・平面のあいだの距離。平行でない線・面どうしは角度）を返す。画面の「測定」と同じ計算。`check_interference` は見えているボディどうしの干渉（重なり・接触・離れ）を調べ、`clearance`（mm）でははめ合いの隙間も見る読み取り専用の問い合わせで、重い計算は子プロセスで時間の上限つき |
 | 述語の自己記述 | `describe_predicates` |
 | 選択 | `get_selection` / `set_selection` / `modify_selection` / `toggle_selection` / `clear_selection` —— 人（ブラウザ）が使う選択操作と同じ集合に、AIだけが述語を書ける `set_selection` を足したもの |
 | スケッチ | `sketch_create` / `sketch_create_offset` / `add_point` / `add_line` / `add_circle` / `add_ellipse` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` —— 最後の1つは選択の複数の領域を、へこみに沿って包む**単一の領域線**（線分と円弧だけ）を同じスケッチへ足す。`radius`（追従半径 R）と `offset`（d・負で内へ）は省略で 0。1つの領域にならないと失敗して何も変わらない |

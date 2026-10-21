@@ -486,6 +486,42 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="check_interference",
+        category="query",
+        description=(
+            "ボディどうしが重なっていないか・触れていないか・離れすぎていないかを調べるときに呼ぶ。"
+            "文書もログも変えない読み取り専用(verb ではない)。"
+            "対象は、選択が無ければ**見えているボディ**の総当たり、ボディを1つだけ選んでいればその1つと"
+            "ほかの見えているボディ全部、2つ以上選んでいれば選んだものどうし(面・辺・頂点を選んでいれば持ち主のボディ)。"
+            "組ごとに関係 `relation` を返す: overlap(体積が重なる。`volume` `thickness` `center` `bbox`)/"
+            "tiny_overlap(重なりが厚さ 1e-3 mm 以下の薄片。多くは合わせ面の数値誤差だが食い込みでないとは言い切れない)/"
+            "contact(面・辺・点で触れるだけ。`contact` と面なら `area`)/separated(離れている)/"
+            "unknown(計算が終わらない・失敗した。`reason` を読む。「干渉なし」ではない)。"
+            "`clearance`(mm・既定 0)を渡すと、はめ合いの隙間の要求として各組に short(要求未満。触れている組は全部)/"
+            "at(要求と一致)/ok を付ける(離れている組は最短距離 `distance` と `points`)。"
+            "離れていて隙間も足りている組は件数だけで `pairs` には入らない。接触・微小重なり・unknown は省かない。"
+            "メッシュのボディを含む組は近似(`approximate`)。重い計算は子プロセスで時間の上限つきで走り、"
+            "上限に達した組は unknown、残りは未着手(`complete: false`)で返る。数秒〜数十秒かかりうる。"
+        ),
+        params=(
+            Param(
+                "clearance",
+                "number",
+                "はめ合いの隙間の要求(mm・0 以上の有限の数。省略は 0=隙間検査なし)。"
+                "0 より大きいと触れている組は全部 short になるので、はめ合いを見るときは相手の2部品を選んで渡す",
+                required=False,
+            ),
+        ),
+        session="check_interference",
+        ws="special",
+        changes_document=False,
+        note=(
+            "画面の「干渉チェック」の実体。WSは `interference_job` をワーカースレッドで走らせ、要求した接続へ"
+            "`{type:'interference', client_op, ...}`(描画用の三角形つき)を返す(状態配信ではない)。"
+            "結果の寿命は画面が `client_op` と `document_revision` で決める。MCP は同期で走り、描画用の三角形は付けない。"
+        ),
+    ),
+    Command(
         name="get_selection",
         category="selection",
         description=(

@@ -210,6 +210,26 @@ def classify_clearance(relation: str, distance: Optional[float], clearance: floa
 # ------------------------------------------------------------------------------------------------
 # 実行
 # ------------------------------------------------------------------------------------------------
+@dataclass
+class Job:
+    """開始時に確定した検査1件(`make_job`)。`run(render)` はワーカースレッドで、`cancel()` はどのスレッドからでも呼べる。"""
+
+    run: Callable[[bool], Dict[str, Any]]
+    cancel: Callable[[], None]
+
+
+def make_job(document: Document, revision: str, clearance: Any, *, deviation: float, request_id: Any = None) -> Job:
+    """イベントループのスレッドで呼ぶ。引数の検査・対象の確定・形の写しをここで済ませる(失敗はここで `ValueError`)。"""
+    value = check_clearance(0.0 if clearance is None else clearance)
+    snapshot = take_snapshot(document, revision)
+    stop = threading.Event()
+
+    def execute(render: bool = False) -> Dict[str, Any]:
+        return run(snapshot, value, cancel=stop, render_deviation=deviation if render else None, request_id=request_id)
+
+    return Job(execute, stop.set)
+
+
 WorkerFactory = Callable[[Dict[str, Any], Optional[threading.Event]], Any]
 
 
@@ -237,7 +257,7 @@ def run(
     clearance: float = 0.0,
     *,
     limits: Limits = Limits(),
-    worker_factory: WorkerFactory = default_worker,
+    worker_factory: Optional[WorkerFactory] = None,
     cancel: Optional[threading.Event] = None,
     render_deviation: Optional[float] = None,
     request_id: Optional[str] = None,
@@ -268,7 +288,7 @@ def run(
         plans.append(plan)
 
     state = _RunState(limits, deadline, cancel, render_deviation, clearance, max(1.0, 2 * reach))
-    with worker_factory(load_message, cancel) as worker:
+    with (worker_factory or default_worker)(load_message, cancel) as worker:
         for plan in plans:
             if plan.needs_relation:
                 state.relation(worker, plan)

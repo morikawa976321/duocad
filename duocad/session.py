@@ -25,6 +25,7 @@ from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
 from . import (
     catalog,
+    interference,
     io_step,
     kernel,
     kernel_sketch,
@@ -406,6 +407,16 @@ class Session:
     def measure(self) -> dict:
         """いまの選択を測る(`measure.measure_selection`)。MCP の `measure` と WebSocket の `measure` が同じ計算を通る。"""
         return measure_selection(self)
+
+    def interference_job(self, clearance: Any = 0.0, request_id: Any = None) -> "interference.Job":
+        """干渉チェックを開始時の文書で確定する(`interference.make_job`)。計算は呼び手が別スレッドで `run(render)` する。文書は変えない。"""
+        self._require_open()
+        revision = f"{self._generation}.{self._applied_count}.{len(self.document.log.entries)}"
+        return interference.make_job(self.document, revision, clearance, deviation=self.view.view_deviation, request_id=request_id)
+
+    def check_interference(self, clearance: Any = 0.0) -> dict:
+        """干渉チェックをこのスレッドで走らせる(MCP。描画用の三角形は付けない)。WebSocket は `interference_job` をワーカーで走らせる。"""
+        return self.interference_job(clearance).run(False)
 
     def inspect_selection(self) -> Optional[dict]:
         """選択がちょうど1項目ならその寸法、それ以外は None(`measure.inspect_selection`。画面の選択情報の表示)。"""
