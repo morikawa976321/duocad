@@ -454,11 +454,13 @@ def test_a_plane_between_the_lumps_of_one_body_is_refused() -> None:
 
 
 def test_equal_volumes_are_ordered_by_x_even_when_x_differs_below_the_rounding() -> None:
-    """落ちたら: 重心を丸めて比べ、x の差が 1e-6 mm より小さい同体積の2塊で y の小さい方が先になる(仕様は x の小さい方)。"""
+    """落ちたら: 同体積の塊の並びが重心の x の小さい方にならない(6桁の丸めで x の差が消える・差の許容の比較が循環する)。"""
     a = {"side": "positive", "centroid": [5.0, 25.0, 7.5]}
     b = {"side": "positive", "centroid": [5.0000004, 5.0, 7.5]}
-    import functools
-
-    assert sorted([b, a], key=functools.cmp_to_key(kernel_split._piece_order))[0] is a
+    assert sorted([b, a], key=kernel_split._piece_order)[0] is a
     c = {"side": "negative", "centroid": [-100.0, 0.0, 0.0]}
-    assert sorted([c, b], key=functools.cmp_to_key(kernel_split._piece_order))[0] is b, "正側が先"
+    assert sorted([c, b], key=kernel_split._piece_order)[0] is b, "正側が先"
+    # 差の許容で比べると A>B・B>C・C>A と循環する3つ(x の差 0.75e-9 ずつ)。どの並びから並べても A が先
+    trio = [{"side": "positive", "centroid": [x, y, 0.0]} for x, y in ((0.0, 40.0), (0.75e-9, 20.0), (1.5e-9, 0.0))]
+    for order in ([0, 1, 2], [2, 1, 0], [1, 2, 0], [2, 0, 1]):
+        assert sorted([trio[i] for i in order], key=kernel_split._piece_order)[0] is trio[0]

@@ -7,7 +7,6 @@
 """
 from __future__ import annotations
 
-import functools
 import math
 from typing import Any, List, Sequence
 
@@ -99,22 +98,18 @@ def _split_by_plane(shape: "TopoDS_Shape", origin: List[float], axis: List[float
     # 離れた塊を持つボディ(和を取った2つの箱など)では、塊の間を通る平面でも両側に塊が残る。切り口の面ができたかで交わりを見る
     if not any(piece["provenance"]["new_faces"] for piece in pieces):
         raise _no_cut("平面が塊の間を通るだけで、切り口ができない")
-    pieces.sort(key=functools.cmp_to_key(_piece_order))
+    pieces.sort(key=_piece_order)
     return {"volume_before": volume_before, "pieces": pieces}
 
 
-#: 重心の座標が同じとみなす差[mm](塊の並びの比較)。丸めで比べると、丸めの境目で x の差が消えて y が先に効く。
-_CENTROID_TIE = 1.0e-9
+#: 塊の並びで重心の座標を丸める桁(1e-9 mm の格子)。差の許容で比べると順序にならず(推移律が破れ、3つの塊で比較が循環する)、
+#: 6桁の丸めでは 1e-6 mm より小さい x の差が消えて y が先に効く。
+_CENTROID_DIGITS = 9
 
 
-def _piece_order(a: dict, b: dict) -> int:
-    """塊の並び: 正側が先、同じ側では重心の x, y, z の小さい方が先(差が `_CENTROID_TIE` 以下の座標は次の座標で決める)。"""
-    if a["side"] != b["side"]:
-        return -1 if a["side"] == "positive" else 1
-    for left, right in zip(a["centroid"], b["centroid"]):
-        if abs(left - right) > _CENTROID_TIE:
-            return -1 if left < right else 1
-    return 0
+def _piece_order(piece: dict) -> tuple:
+    """塊の並びの鍵: 正側が先、同じ側では重心の x, y, z の小さい方が先。"""
+    return (piece["side"] != "positive", *[round(value, _CENTROID_DIGITS) for value in piece["centroid"]])
 
 
 def _no_cut(reason: str) -> ValueError:
