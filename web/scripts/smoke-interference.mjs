@@ -10,6 +10,7 @@
  *   4. 検査の前後で文書の版(適用回数・ログ本数)が変わらず、Ctrl+Z の対象にもならない
  *   5. 検査の最中に文書が変わったら、届いた結果は描かない
  *   6. 閉じると赤い立体が消える
+ *   7. 隙間の欄は、起動し直しても同じ文書の間は残り、文書を切り替えると 0 に戻る
  *
  * 形は全部 MCP で作る。**`--models-dir` に使い捨てディレクトリを渡す**(`runSmoke` が既定で渡す)。
  * 子プロセス(`python -m duocad.interference_worker`)の起動に 1〜2 秒かかるので、待ちは長めにしてある。
@@ -65,7 +66,10 @@ runSmoke('smoke-interference', { timeout: 120000, mcp: true }, async ({ browser,
   ok('行を選ぶとその組が強調され、もう一度押すと外れる')
 
   // ---------------------------------------------------------------- 3. 隙間の欄
-  await page.click('#interference-clearance', { clickCount: 3 })
+  await page.click('#interference-clearance')
+  await page.keyboard.down('Control')
+  await page.keyboard.press('KeyA')
+  await page.keyboard.up('Control')
   await page.keyboard.type('0.2')
   const firstOp = result.client_op
   await page.click('#interference-run')
@@ -74,6 +78,13 @@ runSmoke('smoke-interference', { timeout: 120000, mcp: true }, async ({ browser,
     return next !== null && next.client_op !== op && next.clearance === 0.2
   }, '隙間 0.2 の結果が届く', [firstOp])
   ok('隙間の欄の値が結果に載る')
+  await page.click('#interference')
+  await waitFor((op) => {
+    const next = window.__duocad.interference.result
+    return next !== null && next.client_op > op
+  }, '押し直した結果が届く', [firstOp + 1])
+  if ((await hook(() => document.querySelector('#interference-clearance').value)) !== '0.2') fail(`起動し直すと隙間の欄が変わった: ${await hook(() => document.querySelector('#interference-clearance').value)}`)
+  ok('隙間の欄は同じ文書のあいだ直前の値のまま')
 
   // ---------------------------------------------------------------- 4. 文書は変わらない
   const after = await hook(() => ({
@@ -106,4 +117,13 @@ runSmoke('smoke-interference', { timeout: 120000, mcp: true }, async ({ browser,
   ok('閉じると赤い立体もパネルも消える')
 
   await assertNoAppErrors(page, consoleErrors)
+
+  // ---------------------------------------------------------------- 7. 文書を切り替えると隙間の欄は 0 に戻る
+  // 新しい文書は空なので、押すと「組が作れない」と断られるが、パネルは開いて欄の値が見える(断りの札は検査の対象外)。
+  await page.click('#file-new')
+  await waitFor(() => document.querySelector('#interference-panel') === null, '文書を切り替えるとパネルが畳まれる')
+  await page.click('#interference')
+  await waitFor(() => document.querySelector('#interference-clearance') !== null, 'パネルが開く')
+  if ((await hook(() => document.querySelector('#interference-clearance').value)) !== '0') fail('文書を切り替えても隙間の欄が 0 に戻らない')
+  ok('文書を切り替えると隙間の欄は 0 に戻る')
 })
