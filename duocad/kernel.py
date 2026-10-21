@@ -44,13 +44,15 @@ from OCP.STEPControl import (
     STEPControl_Writer,
 )
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
-from OCP.TopExp import TopExp_Explorer
+from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
-from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
+from OCP.TopTools import (
+    TopTools_IndexedMapOfShape,
+)
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
-from . import kernel_chains, kernel_meshing, meshbody
+from . import kernel_chains, kernel_meshing, kernel_overflow, meshbody
 from .mesh_geometry import compound, indexed_map, subshapes
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
@@ -1489,8 +1491,12 @@ def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
 
     **薄肉では限界値ちょうどの半径が `IsDone()=False` でなく access violation になる**(`BRepPrimAPI_MakeBox` の箱を
     厚さ 2 で抜き、縁の辺を半径 2 で丸める。Python の例外にならず `except` で捕まらない)。辺から同じ平面の面の
-    別の辺までの距離と半径が一致するフィレットは、事前に ValueError で断る(`kernel_chains.fillet_consumes_face`)。
+    別の辺までの距離と半径が一致するフィレットは、元の形の `MakeFillet` を呼ばない(`kernel_chains.fillet_consumes_face`)。
     これで守れるのは実測した範囲だけで、他の形の同種の異常終了を防ぐ保証は無い。
+
+    **OCCT が断るか、丸めた辺に関係の無い面まで変えたとき(別の形に当たった)は、はみ出しを吸収して作る**
+    (`kernel_overflow.absorb`。Fusion 360 と同じく、はみ出しは崖の面で切れ、当たった形は貫通する。docs/FILLET_OVERFLOW.md)。
+    吸収が引き受けない形(角で連なりが出会う選び方など)では、OCCT の結果か失敗をそのまま返す。
 
     戻り値(`"shape"` 以外はJSON化できる素の値):
         {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
@@ -1527,16 +1533,40 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         maker.Add(float(raw_value), _edge_at(edge_map, index))
         edge_indices.append(index)
 
-    if verb == "fillet":
-        radii = {int(i): float(v) for i, v in values.items()}
-        clash = kernel_chains.fillet_consumes_face(shape, edge_map, radii)
-        if clash is not None:
-            raise ValueError(
-                f"fillet radius {radii[clash[0]]:g} on edge {clash[0]} would consume the whole planar face next to it "
-                f"(it reaches exactly as far as the face's edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと"
-                "落ちることがある。半径をわずかにずらすこと"
-            )
+    if verb != "fillet":
+        return _built_blend(shape, maker, values, verb, edge_indices, volume_before)
 
+    # フィレットは OCCT の結果を先に試し、失敗したとき・丸める辺に関係の無い面まで変えたとき(別の形に当たった)だけ、
+    # はみ出しを吸収する作り方(`kernel_overflow`)へ回す。経緯と比べた案は docs/FILLET_OVERFLOW.md。
+    radii = {int(i): float(v) for i, v in values.items()}
+    native: Optional[dict] = None
+    clash = kernel_chains.fillet_consumes_face(shape, edge_map, radii)
+    if clash is not None:
+        failure = ValueError(
+            f"fillet radius {radii[clash[0]]:g} on edge {clash[0]} would consume the whole planar face next to it "
+            f"(it reaches exactly as far as the face's edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと"
+            "落ちることがある。半径をわずかにずらすこと"
+        )
+    else:
+        try:
+            native = _built_blend(shape, maker, values, verb, edge_indices, volume_before)
+        except ValueError as error:
+            failure = error
+        else:
+            if not _blend_reaches_other_faces(maker, shape):
+                return native
+    try:
+        return _absorbed_fillet(shape, edge_map, radii, edge_indices, volume_before)
+    except ValueError as reason:
+        if native is not None:
+            return native
+        raise ValueError(f"{failure} (はみ出しの吸収もできない: {reason})") from failure
+
+
+def _built_blend(
+    shape: "TopoDS_Shape", maker: Any, values: dict, verb: str, edge_indices: List[int], volume_before: float
+) -> dict:
+    """辺を足し終えた `MakeFillet` / `MakeChamfer` を組み立てて検査し、`_blend_edges` の戻り値の形にする。"""
     try:
         maker.Build()
     except Exception as error:  # noqa: BLE001  OCCTは例外でも失敗しうる
@@ -1557,6 +1587,71 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         "provenance": _blend_provenance(maker, shape, final, verb, edge_indices),
         "volume_before": float(volume_before),
         "volume_after": float(volume_after),
+    }
+
+
+def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
+    """組み立てたフィレットが、丸めた辺(連なりを含む)の頂点に触れない面まで変えたか。
+
+    変えていれば、丸めの面が隣り合わない別の形に当たっている。OCCT はそこで球をその形にも触れさせた別の形を返す
+    (円板に柱2本、隙間 2・半径 3 で、両方の柱に接するBスプライン面が2枚増える。issue #208 の実測)。
+    辺の端の面(箱の1辺を丸めたときの側面)は頂点に触れるので数えない。
+    """
+    # 触られなかった面は結果に同じ面として残るので、結果に無い入力の面だけを調べる(`Modified` を全面に問うと、
+    # PC ケースの 233 面のボディで1回 112ms かかった。フィレットそのものは 18ms)。
+    kept = _face_map(maker.Shape())
+    rounded_vertices = TopTools_IndexedMapOfShape()
+    for contour in range(1, maker.NbContours() + 1):
+        for number in range(1, maker.NbEdges(contour) + 1):
+            edge = maker.Edge(contour, number)
+            rounded_vertices.Add(TopExp.FirstVertex_s(edge))
+            rounded_vertices.Add(TopExp.LastVertex_s(edge))
+    face_map = _face_map(shape)
+    for index in range(1, face_map.Extent() + 1):
+        face = face_map.FindKey(index)
+        if kept.Contains(face):
+            continue
+        corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
+        if not any(rounded_vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1)):
+            return True
+    return False
+
+
+def _absorbed_fillet(
+    shape: "TopoDS_Shape", edge_map: Any, radii: dict, edge_indices: List[int], volume_before: float
+) -> dict:
+    """`kernel_overflow.absorb` の形を検査し、由来をたどって `_blend_edges` の戻り値の形にする。"""
+    absorbed = kernel_overflow.absorb(shape, edge_map, radii)
+    context = f"edges {edge_indices}, absorbing overflow"
+    volume_after = _checked_volume(absorbed.shape, "fillet", volume_before=volume_before, context=context)
+    if (absorbed.concave and not absorbed.convex and volume_after < volume_before) or (
+        absorbed.convex and not absorbed.concave and volume_after > volume_before
+    ):
+        raise ValueError(f"fillet moved the volume the wrong way ({volume_before} -> {volume_after}, {context})")
+    final, history, _ = _unify_same_domain(absorbed.shape, volume_after)
+    _require_valid(final, "fillet", context)
+    if len(split_solids(final)) > len(split_solids(shape)):
+        raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
+
+    final_map = _face_map(final)
+    shape_map = _face_map(shape)
+    successors: dict = {}
+    for index in range(1, shape_map.Extent() + 1):
+        current = [shape_map.FindKey(index)]
+        for builder in absorbed.builders:
+            following = []
+            for face in current:
+                modified = _shape_list(builder, "Modified", face)
+                following.extend(modified or ([] if _is_removed(builder, face) else [face]))
+            current = following
+        successors[str(index)] = _positions_in(
+            final_map, (survivor for face in current for survivor in _through_history(history, face))
+        )
+    return {
+        "shape": final,
+        "provenance": {"verb": "fillet", "edges": list(edge_indices), **_face_map_projection(successors, final_map.Extent())},
+        "volume_before": float(volume_before),
+        "volume_after": float(volume(final)),
     }
 
 

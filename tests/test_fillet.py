@@ -429,12 +429,14 @@ print("survived")
 """
 
 
-def test_a_fillet_that_consumes_a_face_exactly_is_refused_without_killing_the_process():
-    """薄肉の箱で半径 = 壁厚のフィレットは ValueError で断る(以前は access violation でプロセスごと死んだ。別プロセスで試す)。"""
+def test_a_fillet_that_consumes_a_face_exactly_does_not_kill_the_process():
+    """薄肉の箱で半径 = 壁厚のフィレットは、元の形の `MakeFillet` を呼ばずにはみ出しの吸収へ回る(以前は access violation で
+    プロセスごと死んだ。別プロセスで試す)。角で連なりが出会う選び方(全辺・縁)は吸収できずに断り、X に平行な辺は丸まる。"""
     done = subprocess.run(
         [sys.executable, "-X", "faulthandler", "-c", _CONSUME_CHILD],
         cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
     )
     assert done.returncode == 0, (done.returncode, done.stderr[-800:])
-    assert done.stdout.split()[-1] == "survived"
-    assert done.stdout.count("refused") == 3, done.stdout
+    lines = done.stdout.splitlines()
+    assert lines[-1] == "survived"
+    assert [line.split()[:2] for line in lines[:-1]] == [["all", "refused"], ["rim", "refused"], ["x", "built"]], done.stdout

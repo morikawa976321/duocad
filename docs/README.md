@@ -40,6 +40,7 @@
 | [THREAD.md](THREAD.md) | ねじ verb の設計（3Dプリント前提・未実装）: 範囲・3Dプリント前提の4つの決め・引数・形の作り方の実測（螺旋の歯の和が壊れる・面から直接組む）・門と検査。試作は `tools/thread_prototype.py` |
 | [INTERFERENCE.md](INTERFERENCE.md) | 干渉チェック（Issue #186、未実装）の方式: 定義と許容差（重なり・微小重なり・接触・隙間）・方式の比較（General Fuse の像の共有を2体ずつ）・実測（PC ケース・ねじ山・メッシュ混在・ボディ数）・相談役の意見・本人判断カード・実装計画。試作は `tools/interference_probe/` |
 | [ELLIPSE.md](ELLIPSE.md) | 楕円 verb（`add_ellipse`）と円の直径化: 本人の決定・`gp_Elips` の長短の罠・保存形式 version 3 と移行・吸着と交点の作り |
+| [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md) | フィレットのはみ出しと貫通の吸収(Fusion 360 相当): 肉を別に作って足し引きする作り方・OCCT の結果から切り替える条件・実測・捨てた案・#207 との関係 |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
 | [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md) | 穴口の微細隙間とメッシュ欠損の因果調査（境界交差・最小再現・OCCT内部検査）と、案A（境界交差の検出・共有辺再分割）の設計・実装・実測 |
 
