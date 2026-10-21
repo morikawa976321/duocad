@@ -431,3 +431,53 @@ def test_a_tiny_arc_of_a_huge_circle_that_collapses_to_a_point_is_dropped() -> N
     circle = Geom_Circle(Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 1e-5), gp_Dir(1, 0, 0)), 1000.0)
     edge = BRepBuilderAPI_MakeEdge(circle, 0.0, 1e-5).Edge()
     assert kernel_project.edge_entities({"kind": "base", "name": "XY"}, [edge]) == []
+
+
+def test_the_outline_of_a_tilted_o_ring_closes_into_regions() -> None:
+    """傾けた O リング(トーラス。大半径 15・小半径 3)の外形から、本体の環と中の穴の2つの領域ができる。落ちたら外形の辺の端点が
+    4e-7 mm ずれたまま図形になり、外周が閉じない(端点を揃えていない)。"""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeTorus
+
+    session = Session(0.2)
+    ring = BRepPrimAPI_MakeTorus(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 2, 3)), 15.0, 3.0).Shape()
+    session.document.add_body(Body(id="ring", name="ring", kind="solid", shape=ring))
+    sketch_id = session.sketch_create("YZ")["sketch_id"]
+    select(session, [{"body": "ring", "kind": "body", "index": None}])
+    created = _entities(session, sketch_id, session.project_outline(sketch_id)["created"])
+    plane = sketch.get_sketch(session.document, sketch_id).plane
+    areas = _region_areas(plane, created)
+    assert len(areas) == 2
+    assert areas == pytest.approx([26.638, 385.027], abs=0.05)
+
+
+def test_endpoints_closer_than_the_weld_tolerance_are_joined_and_arcs_stay_on_their_circle() -> None:
+    """揃える距離より近い端点は1点になり、円弧の端は円の上のまま(線分の端が円弧の端へ寄る)。落ちたら STEP の辺の端点の
+    ずれ(形状許容差まで)で写した外周が閉じない。"""
+    from duocad import kernel_project
+
+    entities = [
+        {"kind": "line", "params": {"x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 0.003}},
+        {"kind": "arc", "params": {"cx": 10.0, "cy": 5.0, "radius": 5.0, "start_deg": -90.0, "end_deg": 90.0}},
+        {"kind": "line", "params": {"x0": 10.004, "y0": 10.0, "x1": 0.0, "y1": 10.0}},
+        {"kind": "line", "params": {"x0": 0.0, "y0": 10.0, "x1": 0.0, "y1": 0.0}},
+    ]
+    welded = kernel_project._welded(entities)
+    assert welded[0]["params"]["x1"] == pytest.approx(10.0) and welded[0]["params"]["y1"] == pytest.approx(0.0, abs=1e-12)
+    assert welded[2]["params"]["x0"] == pytest.approx(10.0) and welded[1]["params"]["end_deg"] == pytest.approx(90.0)
+    areas = _region_areas({"kind": "base", "name": "XY"}, welded)
+    assert areas == pytest.approx([100.0 + math.pi * 25.0 / 2.0], abs=1e-4)
+
+
+def test_an_almost_full_arc_closed_by_a_tiny_segment_stays_a_hole() -> None:
+    """ほぼ一周する円弧(半径 10)と、その両端を結ぶ 0.005 mm の線分で閉じた穴は、端点を揃えると円の穴になる。落ちたら揃えた後の
+    大きさで判定して、直径 20 の穴ごと消している。"""
+    from duocad import kernel_project
+
+    end = math.radians(359.971352)
+    hole = [
+        {"kind": "arc", "params": {"cx": 20.0, "cy": 20.0, "radius": 10.0, "start_deg": 0.0, "end_deg": math.degrees(end)}},
+        {"kind": "line", "params": {"x0": 20.0 + 10.0 * math.cos(end), "y0": 20.0 + 10.0 * math.sin(end), "x1": 30.0, "y1": 20.0}},
+    ]
+    welded = kernel_project._welded(hole)
+    assert [entity["kind"] for entity in welded] == ["circle"]
+    assert welded[0]["params"]["diameter"] == pytest.approx(20.0)

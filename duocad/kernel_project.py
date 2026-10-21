@@ -71,7 +71,7 @@ def edge_entities(plane: dict, edges: Iterable[Any]) -> List[dict]:
     entities: List[dict] = []
     for edge in edges:
         entities.extend(_projected_edge_entities(ax3, edge))
-    return _deduplicated(entities)
+    return _welded(_deduplicated(entities))
 
 
 def face_edges(face: Any) -> List[Any]:
@@ -93,7 +93,7 @@ def outline_entities(plane: dict, shapes: Sequence[Any]) -> List[dict]:
     entities: List[dict] = []
     for face in _shape_faces(_unified(compound(_union_faces(shadow)))):
         entities.extend(kernel_sketch.face_boundary_entities(plane, face))
-    return _deduplicated(entities)
+    return _welded(_deduplicated(entities))
 
 
 # --------------------------------------------------------------------------------------
@@ -457,3 +457,108 @@ def _entity_key(entity: dict) -> tuple:
         return round(float(value) % period[key], _DEDUP_DIGITS) % period[key] + 0.0 if key in period else r(value)
 
     return (kind, *sorted((key, folded(key, value)) for key, value in params.items()))
+
+
+# --------------------------------------------------------------------------------------
+# 端点を揃える
+# --------------------------------------------------------------------------------------
+#: 写した図形の端点を1点に揃える距離[mm]。外部の罠: STEP から来た形の辺の曲線は、共有する頂点から形状許容差の分だけ
+#: ずれた所で終わる(PC ケースの部品の最大許容差は実測 0.0097 mm)。辺ごとに写すと端点が一致せず、スケッチの領域が閉じない
+#: (2026-10-22 実測: PC ケースの平らな面 1155 枚のうち 118 枚)。外形も、和集合の結果の辺の端点が 4e-7 mm ずれて閉じない
+#: (sol の再現: トーラスの外形)。印刷の精度(0.1 mm)より十分小さい。
+WELD_TOLERANCE = 1.0e-2
+
+
+def _endpoint_slots(entity: dict) -> List[str]:
+    """端点を持つ図形の端点の名前(x のキー)。閉じた図形(円・楕円)は端点を持たない。"""
+    return {"line": ["x0", "x1"], "bezier": ["x0", "x1"], "arc": ["start", "end"]}.get(entity["kind"], [])
+
+
+def _endpoint(entity: dict, slot: str) -> Tuple[float, float]:
+    p = entity["params"]
+    if entity["kind"] == "arc":
+        angle = math.radians(p["start_deg" if slot == "start" else "end_deg"])
+        return (p["cx"] + p["radius"] * math.cos(angle), p["cy"] + p["radius"] * math.sin(angle))
+    return (p[slot], p["y" + slot[1:]])
+
+
+def _move_endpoint(entity: dict, slot: str, target: Tuple[float, float]) -> None:
+    p = entity["params"]
+    if entity["kind"] == "arc":
+        # 円弧は端の角度を揃え先の向きへ回す(半径は変えない。揃え先が円の上に無ければ、その分の隙間は残る)
+        angle = math.degrees(math.atan2(target[1] - p["cy"], target[0] - p["cx"]))
+        p["start_deg" if slot == "start" else "end_deg"] = angle
+        return
+    x_key, y_key = slot, "y" + slot[1:]
+    dx, dy = target[0] - p[x_key], target[1] - p[y_key]
+    p[x_key], p[y_key] = target
+    if entity["kind"] == "bezier":
+        # 隣の制御点も同じだけ動かして、端の接線の向きを保つ
+        inner_x, inner_y = ("cx1", "cy1") if slot == "x0" else ("cx2", "cy2")
+        p[inner_x] += dx
+        p[inner_y] += dy
+
+
+def _welded(entities: Sequence[dict], tolerance: float = WELD_TOLERANCE) -> List[dict]:
+    """`tolerance` 以内に集まった端点を1点に揃えた図形の並び(揃え先は円弧の端点を優先: 円弧の端は円の上から動かせない)。
+    両端が同じ点に揃った図形は、揃える前の差し渡しが `tolerance` の 10 倍以下なら除き(残すと小さな輪の領域ができる)、
+    それより大きい円弧は円にする(ほぼ一周する円弧と短い線分で閉じた穴)。"""
+    out = [{"kind": e["kind"], "params": dict(e["params"]), **({"approximated": True} if e.get("approximated") else {})} for e in entities]
+    extents = [_extent(entity) for entity in out]
+    slots = [(index, slot) for index, entity in enumerate(out) for slot in _endpoint_slots(entity)]
+    points = [_endpoint(out[index], slot) for index, slot in slots]
+    parent = list(range(len(slots)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    grid: dict = {}
+    for i, (x, y) in enumerate(points):
+        grid.setdefault((math.floor(x / tolerance), math.floor(y / tolerance)), []).append(i)
+    for (gx, gy), members in grid.items():
+        for i in members:
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for j in grid.get((gx + dx, gy + dy), ()):
+                        if j > i and math.dist(points[i], points[j]) <= tolerance:
+                            parent[root(j)] = root(i)
+    clusters: dict = {}
+    for i in range(len(slots)):
+        clusters.setdefault(root(i), []).append(i)
+    for members in clusters.values():
+        if len(members) < 2:
+            continue
+        anchor = next((i for i in members if out[slots[i][0]]["kind"] == "arc"), members[0])
+        target = points[anchor]
+        for i in members:
+            if i != anchor:
+                index, slot = slots[i]
+                _move_endpoint(out[index], slot, target)
+    kept = []
+    for index, entity in enumerate(out):
+        ends = [root(i) for i, (owner, _slot) in enumerate(slots) if owner == index]
+        if len(ends) == 2 and ends[0] == ends[1]:
+            if extents[index] <= 10.0 * tolerance:
+                continue
+            if entity["kind"] == "arc":
+                p = entity["params"]
+                entity = {"kind": "circle", "params": {"cx": p["cx"], "cy": p["cy"], "diameter": 2.0 * p["radius"]}}
+        kept.append(entity)
+    return kept
+
+
+def _extent(entity: dict) -> float:
+    """図形の差し渡し(端点・制御点の広がり。円弧は弦の長さと矢の高さの大きい方)。"""
+    p = entity["params"]
+    if entity["kind"] == "circle":
+        return p["diameter"]
+    if entity["kind"] == "ellipse":
+        return p["width"]
+    if entity["kind"] == "arc":
+        sweep = math.radians((p["end_deg"] - p["start_deg"]) % 360.0)
+        return p["radius"] * max(2.0 * math.sin(min(sweep, math.pi) / 2.0), 1.0 - math.cos(min(sweep, math.pi) / 2.0))
+    points = [(p[kx], p[ky]) for kx, ky in (("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1")) if kx in p]
+    return max(math.dist(a, b) for a in points for b in points)
