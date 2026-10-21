@@ -56,3 +56,32 @@ def nested_boxes(clearance):
     pocket = filleted_box(2, 2, 2, 36, 26, 30, radius)
     core = filleted_box(2 + clearance, 2 + clearance, 2 + clearance, 36 - 2 * clearance, 26 - 2 * clearance, 25, radius - clearance)
     return cut(outer, pocket), core
+
+
+def document_of(*named_shapes, hidden=()):
+    """`(id, 形)` の列から文書を作る。`hidden` の id は隠す。名前は id と同じ。"""
+    from duocad.document import Body, Document
+
+    document = Document()
+    for body_id, shape in named_shapes:
+        document.add_body(Body(id=body_id, name=body_id, kind="solid", shape=shape))
+    for body_id in hidden:
+        next(body for body in document.bodies if body.id == body_id).visible = False
+    return document
+
+
+def check(document, clearance=0.0, **options):
+    """スナップショット → 実行(同じプロセスで。時間の上限は掛からない)。"""
+    from duocad import interference
+    from duocad.interference_worker import InProcessWorker
+
+    snapshot = interference.take_snapshot(document, "test")
+    options.setdefault("worker_factory", lambda load, cancel: InProcessWorker(load, cancel=cancel))
+    return interference.run(snapshot, clearance, **options)
+
+
+def pair_of(result, first, second):
+    for entry in result["pairs"]:
+        if {entry["a"], entry["b"]} == {first, second}:
+            return entry
+    return None
