@@ -122,8 +122,7 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 
 作業場所: issue のブランチはこのワークツリーの下の `output/cloud/wt-<番号>`(git 管理外)に入れ子のワークツリーとして置く。
 手元で検証する `wt-201`・`wt-206`(と後で `wt-184`)には `.venv` と `web/node_modules` のジャンクションがある。
-**片付けるときは先にジャンクションを外す**(`[System.IO.Directory]::Delete('<wt>\.venv', $false)` と同じく `web
-ode_modules`。
+**片付けるときは先にジャンクションを外す**(`[System.IO.Directory]::Delete('<wt>\.venv', $false)` と同じく `web/node_modules`。
 docs/DEV_NOTES.md「ワークツリー」)。クラウド用の `wt-186`・`wt-193` は起動に使っただけで、ジャンクションは無い。
 クラウドの依頼文は git に載せていない(スクラッチパッド)。要点は decisions.md の [ボディ] の節。
 
