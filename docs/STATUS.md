@@ -2,6 +2,19 @@
 
 autopilot で親セッションが進めた作業の現在地。判断の記録は [decisions.md](decisions.md)(見出しの頭に `[ねじ]` が付いた節がねじ山形の作業)。
 
+## フィレットのはみ出しと貫通の吸収(2026-10-22)
+
+ゴール(本人の依頼の原文は decisions.md「[フィレット] … 依頼」): Fusion 360 のように、はみ出す半径でも失敗せずに丸め、
+別の形に当たっても貫通させる(issue #208 を含む。#207 は対象外)。
+
+- **できた**: `duocad/kernel_overflow.py` と `kernel._blend_edges` の切り替え。ブランチ `claude/fusion-fillet-overflow-a7edfe`。
+  説明・実測・残っている差は [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md)。回帰は `tests/test_fillet_overflow.py`(18件)。
+- 確かめたこと: 期待値(障害物の無い形で丸めてから足す/切る)との体積の一致、#208 の10通り、既存のフィレット・面取りのテスト、
+  pytest 全体(web/ を読む30件は、このワークツリーに node_modules が無くて落ちる。Python の変更とは無関係)、画面での確定と描画。
+- 本人待ち: Fusion で小さい当たりの形を見てもらうカード1件(急がない。decisions.md「本人待ち」)。
+- 次にやること: develop へマージ(本人の指示「作業ブランチから develop へは PR なしでマージしてよい」)→ 動作確認の後に develop → main の PR。
+  吸収の対象を広げるなら、角(連なりが頂点で出会う)と Bスプライン面の延長。
+
 ## ねじ山形のシミュレーション(2026-10-17〜、進行中)
 
 ゴール(本人の指示の原文):
