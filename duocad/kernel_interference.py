@@ -70,7 +70,7 @@ def pair_relation(first: TopoDS_Shape, second: TopoDS_Shape, deviation: Optional
     """2体の General Fuse の像の共有から、組の幾何の関係を読む。入力の形は変えない。
 
     戻り値(`kind` で分かれる。素の値だけ):
-        {"kind": "overlap", "volume", "thickness", "obb_min", "regions", "pieces", "warnings"}
+        {"kind": "overlap", "volume", "thickness", "obb_min", "regions", "pieces", "center", "bbox", "warnings"}
         {"kind": "face", "area", "faces", "warnings"} / {"kind": "edge", "edges", ...} / {"kind": "vertex", "vertices", ...}
         {"kind": "none", "warnings"}                 … 許容差の範囲で何も共有しない
         {"kind": "unknown", "reason", "warnings"}    … GF がエラー、または面積・体積が不正
@@ -210,6 +210,20 @@ def _region_measures(pieces: Sequence[TopoDS_Shape]) -> Dict[str, float]:
     return {"volume": volume, "thickness": 2 * volume / area, "obb_min": sides[0]}
 
 
+def _volume_center(shape: TopoDS_Shape) -> List[float]:
+    properties = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, properties)
+    center = properties.CentreOfMass()
+    return [center.X(), center.Y(), center.Z()]
+
+
+def _exact_bbox(shape: TopoDS_Shape) -> Tuple[List[float], List[float]]:
+    box = Bnd_Box()
+    BRepBndLib.AddOptimal_s(shape, box, False, False)
+    x0, y0, z0, x1, y1, z1 = box.Get()
+    return [x0, y0, z0], [x1, y1, z1]
+
+
 def overlap_measures(pieces: Sequence[TopoDS_Shape]) -> Dict[str, Any]:
     """重なりの立体片を、面を共有する連結領域にまとめ、領域ごとに体積・外側の面積・2V/A・有向境界箱の最小辺を測る。
 
@@ -218,7 +232,11 @@ def overlap_measures(pieces: Sequence[TopoDS_Shape]) -> Dict[str, Any]:
     `thickness` / `obb_min` は領域の中で最も厚いもの(どれか1つでも厚ければ tiny ではない)。
     """
     regions = [_region_measures([pieces[index] for index in group]) for group in _regions(pieces)]
+    whole = compound(list(pieces))
+    low, high = _exact_bbox(whole)
     return {
+        "center": _volume_center(whole),
+        "bbox": {"min": low, "max": high},
         "volume": sum(region["volume"] for region in regions),
         "regions": len(regions),
         "pieces": len(pieces),

@@ -268,7 +268,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` と `kernel_interference.py` の9本）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` の9本）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
 `tests/test_boundaries.py` がソースを静的走査して検査する（動的importも検出）。
 
 | モジュール | 役割 | OCP | build123d |
