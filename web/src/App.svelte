@@ -34,6 +34,7 @@
   import { ghostCopies, snapSketchPoint } from './entityKinds'
   import { IMPORT_STEP } from './commands/files'
   import { isImeKey } from './keys'
+  import { INTERFERENCE } from './commands/interference'
   import { MEASURE } from './commands/measure'
   import type { MeasurePayload } from './session'
   import {
@@ -97,6 +98,8 @@
   import SettingsDialog from './SettingsDialog.svelte'
   import { createDisplaySettings } from './displaySettings.svelte'
   import { createDocumentFiles } from './documentFiles.svelte'
+  import { createInterference } from './interference.svelte'
+  import InterferencePanel from './InterferencePanel.svelte'
   import { createMeasurement } from './measurement.svelte'
   import { createSelectionInfo } from './selectionInfo.svelte'
   import { createServerWait } from './serverWait.svelte'
@@ -121,6 +124,8 @@
     IMPORT_STEP,
     // 測定は verb ではなく `query`(文書もログも変えない)。通常モードだけ(`commands/measure.ts`)。
     MEASURE,
+    // 干渉チェックも `query`。引数なしでその場で走り、結果は右のパネル(`InterferencePanel`)とビューポートの層に出る。
+    INTERFERENCE,
   ]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
@@ -342,6 +347,12 @@
     onState: handleState,
     onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
     onError: (message, where, clientOp) => {
+      // 干渉チェックの要求の失敗(対象が足りない等)。待ちバーも `pendingOp` も使っていないので、実行中の表示を解くだけ。
+      if (where === 'check_interference') {
+        interference.onError(clientOp)
+        fail(message)
+        return
+      }
       // サムネイルは裏の要求。`pendingOp` を解くと、待っていた操作の確定より先に次の Enter が通る。
       if (where === 'save_thumbnail' || where === 'get_thumbnail') {
         files.dropThumbnailRequests()
@@ -412,6 +423,7 @@
     onVertices: handleVertices,
     onMeasure: handleMeasure,
     onSelectionInfo: (payload) => selectionInfo.onResult(payload),
+    onInterference: (payload) => interference.onResult(payload),
     onFile: files.onFile,
     onAiStatus: ai.onStatus,
     onAiToolCall: ai.onToolCall,
@@ -965,6 +977,18 @@
       host?.commandSucceeded()
     }
   }
+
+  // ---------------------------------------------------------------- 干渉チェック(issue #186。verbではない)
+  const interference = createInterference({
+    send: (clearance, clientOp) => session.checkInterference(clearance, clientOp),
+    nextOp,
+    // サーバの `Session.interference_job` の `revision` と同じ作り。
+    revision: () => (model === null ? null : `${model.generation}.${model.applied_count}.${model.log.length}`),
+    generation: () => model?.generation ?? null,
+    connected: () => status === 'open',
+    viewport: () => viewport,
+    fail,
+  })
 
   // ---------------------------------------------------------------- 選択情報(issue #140。verbではない)
   const selectionInfo = createSelectionInfo({
@@ -1522,6 +1546,8 @@
     if (activeVerb === null) return
     activeVerb = null
     if (verb === MEASURE.id && measure.current !== null) return
+    // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
+    if (verb === INTERFERENCE.id) return
     clearSelectionIfAny()
   }
 
@@ -1892,6 +1918,12 @@
       }
       // -------------------------------------------------------------- 測定(読み取り専用)
       case 'query': {
+        if (verb === INTERFERENCE.id) {
+          // 数秒〜2分かかりうるので、確定の待ち(`pendingOp`)にはせず、コマンドはすぐ無起動へ戻す。返事は右のパネルが待つ。
+          interference.run()
+          setTimeout(() => host?.commandSucceeded(), 0)
+          return
+        }
         // verb と同じ口で送る。返事は状態配信ではなく `{type:'measure'}` で、`handleMeasure` が `client_op` を突き合わせる。
         sendTracked(verb, args)
         return
@@ -2236,6 +2268,7 @@
     edges: () => edges,
     wantedPick: () => wantedPick,
     selectedEntities: () => selectedEntities,
+    interference: () => interference,
   })
 </script>
 
@@ -2449,6 +2482,7 @@
       {/if}
 
       {#if documentOpen}
+        <InterferencePanel {interference} />
         <SelectionInfoPanel
           item={selectionInfo.item}
           error={selectionInfo.error}

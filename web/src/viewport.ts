@@ -41,6 +41,7 @@ import { POLE_Z, upForDirection } from './viewCube'
 import { createOptimizeAnnotations } from './optimizeAnnotations'
 import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
+import { createInterferenceLayer } from './interferenceLayer'
 import { createMeasureAnnotation } from './measureAnnotation'
 import { createThumbnailer } from './thumbnail'
 import { buildBodyMesh } from './bodyMesh'
@@ -162,6 +163,11 @@ export function createViewport(container: HTMLElement): Viewport {
   const measureAnnotation = createMeasureAnnotation({ contentDiagonal: () => contentDiagonal })
   measureAnnotation.object.renderOrder = LAYER.measure
   scene.add(measureAnnotation.object)
+
+  // 干渉チェックの装飾(issue #186)。測定と同じく指せない。`showInterference` が唯一の書き手。
+  const interferenceLayer = createInterferenceLayer({ contentDiagonal: () => contentDiagonal })
+  interferenceLayer.object.renderOrder = LAYER.measure
+  scene.add(interferenceLayer.object)
 
   // ------------------------------------------------------------------ 開発用のデバッグ表示
   //
@@ -2840,6 +2846,8 @@ export function createViewport(container: HTMLElement): Viewport {
     collectInBox,
     projectEdge,
     showMeasurement: measureAnnotation.show,
+    showInterference: interferenceLayer.show,
+    interferenceSolidCount: interferenceLayer.overlapSolidCount,
     sketchRebuilds: () => sketchRebuildCount,
     drawCalls: () => lastDrawCalls,
     renderCount: () => renderCount,
@@ -2917,6 +2925,7 @@ export function createViewport(container: HTMLElement): Viewport {
       edgeMaterial.dispose()
       annotations.clear()
       measureAnnotation.dispose()
+      interferenceLayer.dispose()
       optimizeDebug.clear()
       renderer.dispose()
       renderer.domElement.remove()

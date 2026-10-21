@@ -54,6 +54,9 @@ export const OPTIMIZE_LOAD_COLOR = 0xffc857
 /** 測定(issue #10)の線・端点・札。 */
 export const MEASURE_COLOR = 0xff6ad5
 export const MEASURE_TEXT_COLOR = '#ff8ae0'
+/** 干渉チェック(`interferenceLayer.ts`)。重なりの立体は赤、接触(共有面・辺・点)は橙。 */
+export const INTERFERENCE_OVERLAP_COLOR = 0xff3b30
+export const INTERFERENCE_CONTACT_COLOR = 0xffa21f
 /**
  * 開発用のデバッグ表示の色(`?debug=space` / `?debug=anchors` / `?voxel=1`)。
  * `shoot-topopt.mjs` と同じ見え方を保つので、勝手に動かさないこと。
