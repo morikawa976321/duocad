@@ -19,7 +19,7 @@ from OCP.Bnd import Bnd_Box, Bnd_OBB
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.BRepBndLib import BRepBndLib
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeVertex
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
@@ -249,8 +249,13 @@ def overlap_measures(pieces: Sequence[TopoDS_Shape]) -> Dict[str, Any]:
 # 画面へ描く形
 # ------------------------------------------------------------------------------------------------
 def triangles(shape: TopoDS_Shape, deviation: float) -> Dict[str, List]:
-    """形の三角形を `{"positions": [x,y,z,...], "indices": [...]}` で返す(面の巻き方向を揃える。節点は位置の変換を適用)。"""
-    BRepTools.Clean_s(shape)
+    """形の三角形を `{"positions": [x,y,z,...], "indices": [...]}` で返す(面の巻き方向を揃える。節点は位置の変換を適用)。
+
+    外部の罠: 三角形分割は写しの上で作る。GF の像は入力と面の実体(TShape)を共有するので、像をそのまま分割すると入力の
+    面に三角形分割が書き込まれ、後の組の GF の結果が変わる(2026-10-22 実測: PC ケースの1組が、描画ありでは厚さ 4e-6 mm の
+    微小重なり、描画なしでは面積 573 mm² の接触になった)。
+    """
+    shape = BRepBuilderAPI_Copy(shape, True, False).Shape()  # 幾何も写し、三角形分割は写さない(`kernel.copy_shape` と同じ)
     BRepMesh_IncrementalMesh(shape, deviation, False, 0.5, False)
     positions: List[float] = []
     indices: List[int] = []

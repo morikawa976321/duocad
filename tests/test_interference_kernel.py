@@ -173,3 +173,24 @@ def test_shared_pieces_with_the_same_hash_are_neither_dropped_nor_swapped():
     right = {1: [Fake("b")], 2: [Fake("c")]}
     assert [x.name for x in ki._shared(left, right)] == ["b"]
     assert ki._shared({1: [a]}, {1: [b]}) == []
+
+
+def test_the_render_triangles_do_not_touch_the_inputs():
+    """描画の三角形を作っても入力の面に三角形分割が書き込まれない。落ちたら、描画するかどうかで後の組の GF の結果が変わる
+    (像は入力と面の実体を共有する)。"""
+    from OCP.BRep import BRep_Tool
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopoDS import TopoDS
+
+    from duocad.mesh_geometry import subshapes
+
+    first, second = box(0, 0, 0, 10, 10, 10), box(2, 2, 2, 6, 6, 6)  # 内側の箱の面がそのまま重なりの立体の面になる
+    assert ki.pair_relation(first, second, deviation=0.1)["kind"] == "overlap"
+    meshed = [
+        face
+        for shape in (first, second)
+        for face in subshapes(shape, TopAbs_FACE)
+        if BRep_Tool.Triangulation_s(TopoDS.Face_s(face), TopLoc_Location()) is not None
+    ]
+    assert meshed == []
