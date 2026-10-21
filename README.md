@@ -293,6 +293,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/kernel_sketch.py` | スケッチ平面の枠・図形種別ごとの辺・閉領域の検出。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_extrude.py` | 押し出し・回転体・ロフトの幾何（`extrude_faces` / `extrude_regions` / `revolve_regions` / `loft_regions`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_shell.py` | シェル（中空化）の幾何（`shell_solid`）。kernel を読むだけの一方向 | **○** | ✗ |
+| `duocad/kernel_split.py` | ボディを平面で割る幾何（`split_by_plane`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_meshing.py` | OCCTの面分割の段階制御と境界折れ線の交差検査（`tessellate` の実体） | **○** | ✗ |
 | `duocad/boundary_check.py` | 境界折れ線の交差・接触・重なりの判定（固定εを使わない） | ✗ | ✗ |
 | `duocad/mesh_intersections.py` | 三角形メッシュの自己交差 | ✗ | ✗ |
