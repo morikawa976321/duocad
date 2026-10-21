@@ -283,19 +283,20 @@ def _distance_to_projected_circle(world: list, normal: list, radius: float) -> f
     return dist((lo + hi) / 2.0)
 
 
-def test_outline_of_a_thin_tube_keeps_the_ring() -> None:
-    """外半径 10・内半径 9.99 の管の外形は、細い環(外の円と内の円)。落ちたら割った面の内側の点が弦の外(穴の中)に出て、
-    環の影を落としている。"""
+@pytest.mark.parametrize("inner", [9.99, 9.999])
+def test_outline_of_a_thin_tube_keeps_the_ring(inner: float) -> None:
+    """外半径 10・内半径 9.99 / 9.999 の管の外形は、細い環(外の円と内の円)。落ちたら割った面の内側の点が弦の外(穴の中)に出て、
+    環の影を落としているか、内側の点が見つからず断っている。"""
     session = Session(0.2)
     tube = BRepAlgoAPI_Cut(
         BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 10.0, 5.0).Shape(),
-        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -1), gp_Dir(0, 0, 1)), 9.99, 7.0).Shape(),
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -1), gp_Dir(0, 0, 1)), inner, 7.0).Shape(),
     ).Shape()
     session.document.add_body(Body(id="tube", name="tube", kind="solid", shape=tube))
     sketch_id = session.sketch_create("XY")["sketch_id"]
     select(session, [{"body": "tube", "kind": "body", "index": None}])
     created = _entities(session, sketch_id, session.project_outline(sketch_id)["created"])
-    assert sorted(entity["params"]["diameter"] for entity in created) == pytest.approx([19.98, 20.0])
+    assert sorted(entity["params"]["diameter"] for entity in created) == pytest.approx([2 * inner, 20.0])
 
 
 def test_a_bump_between_samples_is_not_flattened_into_a_line() -> None:
@@ -337,3 +338,38 @@ def test_the_same_ellipse_with_its_axis_flipped_is_kept_once() -> None:
         {"kind": "arc", "params": {"cx": 0.0, "cy": 0.0, "radius": 5.0, "start_deg": 270.0, "end_deg": 90.0}},
     ]
     assert len(kernel_project._deduplicated(arcs)) == 1
+
+
+def test_a_curve_swinging_inside_one_knot_span_is_not_flattened() -> None:
+    """ノットの区間の中で上下に振れ、ノットと中点ではどれも y = 0 になる B-スプラインを、線分1本に潰さない。落ちたら潰れの判定が
+    標本の点だけを見ている(制御点を見ていない)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_BSplineCurve
+    from OCP.TColgp import TColgp_Array1OfPnt
+    from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
+
+    from duocad import kernel_project
+
+    values, mults = [0.0, 0.004, 0.008, 1.0], [4, 3, 3, 4]
+    knots = TColStd_Array1OfReal(1, 4)
+    multiplicities = TColStd_Array1OfInteger(1, 4)
+    for i, (value, multiplicity) in enumerate(zip(values, mults)):
+        knots.SetValue(i + 1, value)
+        multiplicities.SetValue(i + 1, multiplicity)
+    ys = [0.0, 0.0, 0.0, 0.0, 10.0, -10.0, 0.0, 0.0, 0.0, 0.0]
+    poles = TColgp_Array1OfPnt(1, len(ys))
+    for i, y in enumerate(ys):
+        poles.SetValue(i + 1, gp_Pnt(10.0 * i / (len(ys) - 1), y, 2.0))
+    curve = Geom_BSplineCurve(poles, knots, multiplicities, 3)
+    assert abs(curve.Value(0.005).Y()) > 1.0, "題材の振れが立っていない"
+    entities = kernel_project.edge_entities({"kind": "base", "name": "XY"}, [BRepBuilderAPI_MakeEdge(curve).Edge()])
+    assert not (len(entities) == 1 and entities[0]["kind"] == "line")
+
+
+def test_angles_that_fold_to_the_same_value_are_one_key_after_rounding() -> None:
+    """軸の角度 20.123456 と 200.123456 の同じ楕円は1つにする。落ちたら丸めてから畳み、20.123456000000004 が別の鍵に残る。"""
+    from duocad import kernel_project
+
+    same = {"cx": 1.0, "cy": 2.0, "width": 20.0, "height": 16.0}
+    entities = [{"kind": "ellipse", "params": {**same, "angle": 20.123456}}, {"kind": "ellipse", "params": {**same, "angle": 200.123456}}]
+    assert len(kernel_project._deduplicated(entities)) == 1

@@ -28,6 +28,8 @@ from OCP.HLRAlgo import HLRAlgo_Projector
 from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
 from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
 from OCP.BRepClass import BRepClass_FaceClassifier
+from OCP.BRepGProp import BRepGProp
+from OCP.GProp import GProp_GProps
 from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
@@ -53,15 +55,14 @@ COLLAPSE_TOLERANCE = 1.0e-6
 #: 潰れの判定に使う標本の数(端点を含む)。
 _COLLAPSE_SAMPLES = 33
 
-#: 隠線処理の結果から集める線の種類(見える・隠れた × 稜線・滑らかな稜線・輪郭線)。影の境界はこのどれかに乗る。
-_HLR_COMPOUNDS = (
-    "VCompound",
-    "Rg1LineVCompound",
-    "OutLineVCompound",
-    "HCompound",
-    "Rg1LineHCompound",
-    "OutLineHCompound",
-)
+#: 隠線処理の結果から集める線の種類(見える稜線・滑らかな稜線・輪郭線)。影の境界の点を通る視線は立体をかすめるだけで手前に
+#: 遮るものが無いので、境界は必ず見える線に乗る。隠れた線は足さない(見える線とほぼ重なり、平面を割ると面積 0 の細片ができる。
+#: 2026-10-22 実測: PC ケースを XY へ写すと 4558 面のうち 138 面が面積 1e-8 mm² 以下)。
+_HLR_COMPOUNDS = ("VCompound", "Rg1LineVCompound", "OutLineVCompound")
+
+#: 割った面のうち、影の判定から外す細片の平均の幅(面積 / 周長)[mm]。線の重なりで残る幅がほぼ 0 の面(2026-10-22 実測: PC ケースを
+#: XZ へ写すと、長さ 105 mm・面積 0.00076 mm² の面ができた)。外しても和集合の許容差で隙間は閉じる。
+_SLIVER_WIDTH = 1.0e-4
 
 
 def edge_entities(plane: dict, edges: Iterable[Any]) -> List[dict]:
@@ -86,7 +87,7 @@ def outline_entities(plane: dict, shapes: Sequence[Any]) -> List[dict]:
     edges = [flat for edge in _hlr_edges(ax3, shapes) for flat in _flattened_edges(ax3, edge)]
     if not edges:
         return []
-    faces = _split_plane(ax3, edges)
+    faces = [face for face in _split_plane(ax3, edges) if not _sliver(face)]
     shadow = [face for face in faces if _covered(ax3, face, shapes)]
     if not shadow:
         return []
@@ -118,15 +119,27 @@ def _projected_edge_entities(ax3: "gp_Ax3", edge: Any) -> List[dict]:
 
 
 def _collapse(ax3: "gp_Ax3", edge: Any) -> Any:
-    """写すと点に潰れる辺は `[]`、線に潰れる辺はその区間の線分の図形1つ、どちらでもなければ None。"""
+    """写すと点に潰れる辺は `[]`、線に潰れる辺はその区間の線分の図形1つ、どちらでもなければ None。
+
+    潰れたかは曲線の種類ごとに決める: 直線は両端、円・楕円は平面へ写した短い方の半径、ベジエ・B-スプラインは制御点
+    (曲線は制御点の凸包の中にあるので、制御点が一直線なら曲線も一直線。標本の点では、ノットの区間の中で上下に振れる曲線を
+    見落とす)。それ以外の曲線(オフセット曲線など)は標本の点で見る。
+    """
     curve = BRepAdaptor_Curve(edge)
     first, last = curve.FirstParameter(), curve.LastParameter()
+    kind = curve.GetType()
 
     def uv(parameter: float) -> Tuple[float, float]:
         point = curve.Value(parameter)
         return _to_uv(ax3, point.X(), point.Y(), point.Z())
 
-    # 等間隔の標本に、曲線のノットとその間の中点を足す(ノットの区間より細い山を等間隔の標本が飛び越えないため)
+    if kind == GeomAbs_CurveType.GeomAbs_Line:
+        # 直線は往復しないので両端だけで決まる(隠線処理の線の多くは直線で、標本を取ると遅い)
+        (x0, y0), (x1, y1) = uv(first), uv(last)
+        if math.hypot(x1 - x0, y1 - y0) <= COLLAPSE_TOLERANCE:
+            return []
+        return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
+    # 等間隔の標本に、曲線のノットとその間の中点を足す(線に潰れた曲線の端を探すのに使う)
     knots = _smooth_breaks(curve, first, last)
     params = sorted(
         {first + (last - first) * k / (_COLLAPSE_SAMPLES - 1) for k in range(_COLLAPSE_SAMPLES)}
@@ -134,28 +147,41 @@ def _collapse(ax3: "gp_Ax3", edge: Any) -> Any:
         | {(a + b) / 2.0 for a, b in zip(knots, knots[1:])}
     )
     points = [uv(parameter) for parameter in params]
+    if kind in (GeomAbs_CurveType.GeomAbs_Circle, GeomAbs_CurveType.GeomAbs_Ellipse):
+        conic = curve.Circle() if kind == GeomAbs_CurveType.GeomAbs_Circle else curve.Ellipse()
+        minor = conic.Radius() if kind == GeomAbs_CurveType.GeomAbs_Circle else conic.MinorRadius()
+        if minor * abs(conic.Axis().Direction().Dot(ax3.Direction())) > COLLAPSE_TOLERANCE:
+            return None
+        shape = points
+    elif kind in (GeomAbs_CurveType.GeomAbs_BezierCurve, GeomAbs_CurveType.GeomAbs_BSplineCurve):
+        spline = curve.Bezier() if kind == GeomAbs_CurveType.GeomAbs_BezierCurve else curve.BSpline()
+        shape = [_to_uv(ax3, pole.X(), pole.Y(), pole.Z()) for pole in (spline.Pole(i) for i in range(1, spline.NbPoles() + 1))]
+    else:
+        shape = points
+    direction = _line_through(shape)
+    if direction is None:
+        return []
+    start, unit = direction
+    if any(abs(_cross(unit, (p[0] - start[0], p[1] - start[1]))) > COLLAPSE_TOLERANCE for p in shape):
+        return None
+    # 往復する曲線(縁から見た円)の端は標本の間にある。標本の最大・最小の近くで、線の向きの成分の極値まで詰める。
+    along = [p[0] * unit[0] + p[1] * unit[1] for p in points]
+    (x0, y0) = _extreme(uv, params, along, unit, -1.0)
+    (x1, y1) = _extreme(uv, params, along, unit, 1.0)
+    if math.hypot(x1 - x0, y1 - y0) <= COLLAPSE_TOLERANCE:
+        return []
+    return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
+
+
+def _line_through(points: Sequence[Tuple[float, float]]) -> Any:
+    """点の並びの最も離れた2点を通る直線の (始点, 単位方向)。全部が `COLLAPSE_TOLERANCE` の中に集まっていれば None。"""
     far = max(points, key=lambda point: math.dist(point, points[0]))
-    if math.dist(far, points[0]) <= COLLAPSE_TOLERANCE:
-        other = max(points, key=lambda point: math.dist(point, far))
-        if math.dist(other, far) <= COLLAPSE_TOLERANCE:
-            return []
     start = max(points, key=lambda point: math.dist(point, far))
     end = max(points, key=lambda point: math.dist(point, start))
     length = math.dist(start, end)
     if length <= COLLAPSE_TOLERANCE:
-        return []
-    direction = ((end[0] - start[0]) / length, (end[1] - start[1]) / length)
-    if any(abs(_cross(direction, (p[0] - start[0], p[1] - start[1]))) > COLLAPSE_TOLERANCE for p in points):
         return None
-    if curve.GetType() == GeomAbs_CurveType.GeomAbs_Line:
-        (x0, y0), (x1, y1) = points[0], points[-1]
-    else:
-        # 往復する曲線(縁から見た円)の端は標本の間にある。標本の最大・最小の近くで、線の向きの成分の極値まで詰める。
-        along = [p[0] * direction[0] + p[1] * direction[1] for p in points]
-        low = _extreme(uv, params, along, direction, -1.0)
-        high = _extreme(uv, params, along, direction, 1.0)
-        (x0, y0), (x1, y1) = low, high
-    return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
+    return start, ((end[0] - start[0]) / length, (end[1] - start[1]) / length)
 
 
 def _cross(a: Tuple[float, float], b: Tuple[float, float]) -> float:
@@ -257,9 +283,18 @@ def _split_plane(ax3: "gp_Ax3", edges: Sequence[Any]) -> List[Any]:
     return _shape_faces(splitter.Shape())
 
 
+def _sliver(face: Any) -> bool:
+    """平均の幅(面積 / 周長)が `_SLIVER_WIDTH` 以下の細片か。"""
+    area = kernel_sketch._face_props(face)[0]
+    props = GProp_GProps()
+    BRepGProp.LinearProperties_s(face, props)
+    perimeter = props.Mass()
+    return area <= 0.0 or perimeter <= 0.0 or area / perimeter <= _SLIVER_WIDTH
+
+
 def _covered(ax3: "gp_Ax3", face: Any, shapes: Sequence[Any]) -> bool:
     """面の内側の1点を通る法線方向の直線が、どれかのソリッドに当たるか(当たれば影の内側)。"""
-    point = _interior_point(face)
+    point = _interior_point(face, ax3)
     line = gp_Lin(point, ax3.Direction())
     for shape in shapes:
         intersector = IntCurvesFace_ShapeIntersector()
@@ -274,12 +309,16 @@ def _covered(ax3: "gp_Ax3", face: Any, shapes: Sequence[Any]) -> bool:
 _INTERIOR_DEFLECTIONS = (0.5, 0.05, 0.005)
 
 
-def _interior_point(face: Any) -> "gp_Pnt":
+def _interior_point(face: Any, ax3: "gp_Ax3") -> "gp_Pnt":
     """面の確かに内側にある点。三角形分割の三角形の重心を広い順に、面の分類で内側(`TopAbs_IN`)と確かめて選ぶ。
 
     外部の罠: 曲線の縁の三角形は弦で縁を切るので、重心が面の外に出ることがある(実測: 外半径 10・内半径 9.99 の環で、
-    最も広い三角形の重心は半径 9.932 の穴の中)。
+    最も広い三角形の重心は半径 9.932 の穴の中)。分類がどの重心にも内側と答えない面もある(実測: PC ケースを XZ へ写すと、
+    穴を 10 個持つ面積 22,974 mm² の面)。そのときは、内接円の半径が分割の偏差の 2 倍より大きい三角形の重心を使う(弦の
+    ずれでは面の外に出ない)。三角形分割そのものが失敗する面(実測: 同じ PC ケースで BRepCheck は正しいと言う面)と、分割の偏差より
+    細い面(肉厚 0.001 mm の管の環)は、縁の点から面の上で縁に垂直に少しずつ内へずらした点を分類で確かめる。
     """
+    roomy = None
     for deflection in _INTERIOR_DEFLECTIONS:
         BRepMesh_IncrementalMesh(face, deflection, False, 0.5, True)
         location = TopLoc_Location()
@@ -292,11 +331,46 @@ def _interior_point(face: Any) -> "gp_Pnt":
             pa, pb, pc = triangulation.Node(a), triangulation.Node(b), triangulation.Node(c)
             area = gp_Vec(pa, pb).Crossed(gp_Vec(pa, pc)).Magnitude()
             centre = gp_Pnt((pa.X() + pb.X() + pc.X()) / 3.0, (pa.Y() + pb.Y() + pc.Y()) / 3.0, (pa.Z() + pb.Z() + pc.Z()) / 3.0)
-            candidates.append((area, centre.Transformed(location.Transformation())))
-        for _, point in sorted(candidates, key=lambda item: -item[0]):
+            perimeter = pa.Distance(pb) + pb.Distance(pc) + pc.Distance(pa)
+            inradius = area / perimeter if perimeter > 0.0 else 0.0  # 三角形の内接円の半径 = 2·面積 / 周長(`area` は2倍の面積)
+            candidates.append((area, inradius, centre.Transformed(location.Transformation())))
+        for _, inradius, point in sorted(candidates, key=lambda item: -item[0]):
             if BRepClass_FaceClassifier(face, point, COLLAPSE_TOLERANCE).State() == TopAbs_State.TopAbs_IN:
                 return point
+            if roomy is None and inradius > 2.0 * deflection:
+                roomy = point
+    near = _point_inside_near_boundary(face, ax3)
+    if near is not None:
+        return near
+    if roomy is not None:
+        return roomy
     raise ValueError("ボディの外形を求められない(割った面の内側の点が見つからない)")
+
+
+#: 縁から内へずらす距離[mm](大きい方から試す)。
+_BOUNDARY_OFFSETS = (1.0e-1, 1.0e-2, 1.0e-3, 1.0e-4, 1.0e-5)
+
+#: 縁の点を試す辺の数の上限(どの辺の内側も面の内側なので、数本で足りる)。
+_BOUNDARY_EDGES = 8
+
+
+def _point_inside_near_boundary(face: Any, ax3: "gp_Ax3") -> Any:
+    """縁の辺の中点から、面の上で辺に垂直に `_BOUNDARY_OFFSETS` だけずらした点のうち、面の分類で内側の点(無ければ None)。"""
+    normal = gp_Vec(ax3.Direction())
+    for edge in face_edges(face)[:_BOUNDARY_EDGES]:
+        curve = BRepAdaptor_Curve(edge)
+        point, tangent = gp_Pnt(), gp_Vec()
+        curve.D1((curve.FirstParameter() + curve.LastParameter()) / 2.0, point, tangent)
+        side = normal.Crossed(tangent)
+        if side.Magnitude() <= 0.0:
+            continue
+        side.Normalize()
+        for offset in _BOUNDARY_OFFSETS:
+            for sign in (1.0, -1.0):
+                candidate = point.Translated(side.Multiplied(sign * offset))
+                if BRepClass_FaceClassifier(face, candidate, offset * 1.0e-2).State() == TopAbs_State.TopAbs_IN:
+                    return candidate
+    return None
 
 
 # --------------------------------------------------------------------------------------
@@ -336,6 +410,7 @@ def _entity_key(entity: dict) -> tuple:
     period = {"ellipse": {"angle": 180.0}, "arc": {"start_deg": 360.0, "end_deg": 360.0}}.get(kind, {})
 
     def folded(key: str, value: float) -> float:
-        return r(value) % period[key] if key in period else r(value)
+        # 畳んでから丸め、丸めで周期の端に乗った値をもう一度畳む(丸めてから畳むと 200.123456 % 180 = 20.123456000000004 が残る)
+        return round(float(value) % period[key], _DEDUP_DIGITS) % period[key] + 0.0 if key in period else r(value)
 
     return (kind, *sorted((key, folded(key, value)) for key, value in params.items()))
