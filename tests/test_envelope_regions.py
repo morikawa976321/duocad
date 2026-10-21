@@ -175,16 +175,133 @@ def test_undo_removes_only_the_envelope_and_replay_reproduces_it(session: Sessio
     assert _created_entities(session, sketch_id, applied["created"]) == with_envelope
 
 
-def test_bezier_boundary_is_rejected_instead_of_approximated() -> None:
-    """ベジエを含む領域は、近似の曲線を出さずに拒む。落ちたら線分・円弧以外が出力に混ざりうる。"""
+BEZIER_ARCH = {"x0": 0.0, "y0": 0.0, "cx1": 3.0, "cy1": 8.0, "cx2": 7.0, "cy2": 8.0, "x1": 10.0, "y1": 0.0}
+
+
+def test_bezier_boundary_comes_back_as_the_same_bezier_when_nothing_is_rounded() -> None:
+    """R = d = 0 で包んだベジエの領域は、元と同じ制御点のベジエを返す(近似しない)。落ちたらベジエを近似し直して制御点がずれる
+    か、ベジエの辺を断っている。"""
     entities = [
-        {"kind": "bezier", "params": {"x0": 0.0, "y0": 0.0, "cx1": 3.0, "cy1": 8.0, "cx2": 7.0, "cy2": 8.0, "x1": 10.0, "y1": 0.0}},
+        {"kind": "bezier", "params": dict(BEZIER_ARCH)},
         {"kind": "line", "params": {"x0": 10.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}},
     ]
     regions = kernel_sketch.sketch_regions(PLANE, entities)
     (piece,) = kernel_sketch.envelope_faces(PLANE, [regions[0]["face"]], 0.0, 0.0)
-    with pytest.raises(ValueError, match="ベジエ"):
-        kernel_sketch.face_boundary_entities(PLANE, piece)
+    out = kernel_sketch.face_boundary_entities(PLANE, piece)
+    (bezier,) = [entity for entity in out if entity["kind"] == "bezier"]
+    assert not bezier.get("approximated")
+    forward = [bezier["params"][key] for key in ("x0", "y0", "cx1", "cy1", "cx2", "cy2", "x1", "y1")]
+    backward = [bezier["params"][key] for key in ("x1", "y1", "cx2", "cy2", "cx1", "cy1", "x0", "y0")]
+    expected = [BEZIER_ARCH[key] for key in ("x0", "y0", "cx1", "cy1", "cx2", "cy2", "x1", "y1")]
+    assert forward == pytest.approx(expected, abs=1e-9) or backward == pytest.approx(expected, abs=1e-9)
+
+
+ELLIPSE = (20.0, 10.0, 30.0)  # 幅・高さ・角度
+
+
+def _ellipse_sketch(session: Session) -> str:
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    width, height, angle = ELLIPSE
+    session.add_ellipse(sketch_id, [0.0, 0.0], width, height, angle)
+    return sketch_id
+
+
+def _distance_to_ellipse(x: float, y: float) -> float:
+    """原点中心の `ELLIPSE` までの最短距離(角の標本から黄金分割で詰める。近似の検算用に、本体とは別の方法で測る)。"""
+    width, height, angle = ELLIPSE
+    a, b = width / 2.0, height / 2.0
+    c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    lx, ly = x * c + y * s, -x * s + y * c
+
+    def dist(theta: float) -> float:
+        return math.hypot(lx - a * math.cos(theta), ly - b * math.sin(theta))
+
+    step = 2.0 * math.pi / 720
+    best = min(range(720), key=lambda k: dist(k * step)) * step
+    lo, hi = best - step, best + step
+    ratio = (math.sqrt(5.0) - 1.0) / 2.0
+    for _ in range(80):
+        m1, m2 = hi - ratio * (hi - lo), lo + ratio * (hi - lo)
+        if dist(m1) < dist(m2):
+            hi = m2
+        else:
+            lo = m1
+    return dist((lo + hi) / 2.0)
+
+
+def _bezier_point(params: dict, t: float) -> tuple:
+    r = 1.0 - t
+    weights = (r * r * r, 3.0 * r * r * t, 3.0 * r * t * t, t * t * t)
+    keys = (("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1"))
+    return (
+        sum(w * params[kx] for w, (kx, _) in zip(weights, keys)),
+        sum(w * params[ky] for w, (_, ky) in zip(weights, keys)),
+    )
+
+
+@pytest.mark.parametrize("offset", [2.0, -1.0])
+def test_ellipse_offset_is_approximated_by_beziers_within_the_tolerance(session: Session, offset: float) -> None:
+    """楕円を d で包むと確定まで通り、出力のベジエの点はどれも楕円から |d| ± 誤差の上限 の距離にある。落ちたら楕円の
+    平行曲線を断っている(以前の挙動)か、近似の誤差が上限を超えている。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 0.0, offset)
+    created = _created_entities(session, sketch_id, applied["created"])
+    assert {entity["kind"] for entity in created} == {"bezier"}
+    assert applied["approximated"] == len(created)
+    worst = max(
+        abs(_distance_to_ellipse(*_bezier_point(entity["params"], k / 40)) - abs(offset))
+        for entity in created
+        for k in range(41)
+    )
+    assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE
+    assert len(created) <= 40, "区間の数が細かすぎない(誤差の上限 0.001 mm で 20×10 の楕円に 24 区間を実測)"
+
+
+def test_approximated_beziers_join_with_continuous_tangents(session: Session) -> None:
+    """近似したベジエは隣と同じ点でつながり、つなぎ目の接線の向きがそろう。落ちたら押し出した側面に折れ目ができる。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 0.0, 2.0)
+    created = _created_entities(session, sketch_id, applied["created"])
+    ends = {}
+    for entity in created:
+        p = entity["params"]
+        ends.setdefault((round(p["x0"], 6), round(p["y0"], 6)), []).append((p["cx1"] - p["x0"], p["cy1"] - p["y0"]))
+        ends.setdefault((round(p["x1"], 6), round(p["y1"], 6)), []).append((p["x1"] - p["cx2"], p["y1"] - p["cy2"]))
+    assert all(len(tangents) == 2 for tangents in ends.values()), "端点は2本ずつで共有される(閉じた1本の線)"
+    for (ux, uy), (vx, vy) in ends.values():
+        sine = abs(ux * vy - uy * vx) / (math.hypot(ux, uy) * math.hypot(vx, vy))
+        assert sine < 1e-6
+
+
+def test_rounding_an_ellipse_alone_gives_the_same_ellipse_back(session: Session) -> None:
+    """へこみの無い楕円を R だけで包むと、元と同じ楕円の図形1つになる(近似のベジエにしない)。落ちたら R 広げて R 縮めた
+    ずらし曲線のまま近似している。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 2.0, 0.0)
+    (entity,) = _created_entities(session, sketch_id, applied["created"])
+    assert entity["kind"] == "ellipse" and applied["approximated"] == 0
+    width, height, angle = ELLIPSE
+    assert entity["params"] == pytest.approx({"cx": 0.0, "cy": 0.0, "width": width, "height": height, "angle": angle})
+
+
+def test_rounding_then_offsetting_an_ellipse_stays_a_single_region(session: Session) -> None:
+    """楕円を R で丸めてから d で広げても1つの領域で、面積は楕円を d だけ広げたもの(π a b + 周長 d + π d²)。落ちたら OCCT の
+    2Dオフセットが楕円のずらし曲線のずらし曲線で壊れた形(2枚・負の面積)を返し、それをそのまま使っている。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 1.0, 1.5)
+    width, height, _ = ELLIPSE
+    perimeter = kernel_sketch.ellipse_perimeter({"cx": 0.0, "cy": 0.0, "width": width, "height": height, "angle": 0.0})
+    expected = math.pi * width * height / 4.0 + perimeter * 1.5 + math.pi * 1.5**2
+    assert _area_of_created(session, sketch_id, applied["created"]) == pytest.approx(expected, abs=0.05)
+
+
+def test_ellipse_ghost_is_the_same_as_the_committed_lines(session: Session) -> None:
+    """近似を含むときも、プレビューの線は確定で足される線と同じ。落ちたら幽霊と結果が食い違う。"""
+    sketch_id = _ellipse_sketch(session)
+    ghost = _preview(session, sketch_id, 1.0, 1.5)["sketch_ghost"]
+    applied = _envelope(session, sketch_id, 1.0, 1.5)
+    assert ghost["pieces"] == 1
+    assert ghost["entities"] == _created_entities(session, sketch_id, applied["created"])
 
 
 def test_enveloping_again_over_earlier_envelopes_terminates(session: Session) -> None:
