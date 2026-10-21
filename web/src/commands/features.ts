@@ -613,7 +613,7 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
 }
 
 /**
- * ボディを平面で切って分ける。切る平面は基準平面(XY/XZ/YZ)・既存の平らな面1つ(`plane_face`)・スケッチの図形1つ(`sketch_id`。その図形のスケッチの平面)。
+ * ボディを平面で切って分ける。切る平面は基準平面(XY/XZ/YZ)・既存の平らな面1つ(`plane_face`)・スケッチの線1本(`sketch_id`。その線のスケッチの平面。`sketchEntity` のピックは点を待たない)。
  * 面・図形は共有選択集合を経由しない別チャンネル(`PickArgSpec`)で受ける(鏡映面と同じ理由: 載せると切る平面に使った面のボディまで割られる)。
  * 残す側(`keep`)は法線の向く側を正とする。確定前の姿はサーバの投機実行で出す(切った後の形)。
  */
@@ -656,7 +656,7 @@ export const SPLIT_BODY: CommandDef<'split_body'> = {
     {
       kind: 'pick',
       name: 'sketch_id',
-      label: '切る平面のスケッチ(図形を1つ指す)',
+      label: '切る平面のスケッチ(線を1本指す)',
       target: 'sketchEntity',
       buttonId: 'split-body-sketch-pick',
       when: (values) => values.base_plane === 'sketch',

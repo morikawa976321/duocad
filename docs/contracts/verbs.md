@@ -109,7 +109,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **ログの形**: `args = {bodies, plane_point, plane_normal, keep, created: [[新ID…]…](ボディごと), numbers: [[通し番号…]…]}`。再生は同じ計算をして、塊を決定的な順で ID・番号へ当てる(塊の数が記録と違えば `copy_ids` が落ちる)。**由来(`provenance`)は** `{"verb", "bodies": [{"body", "pieces": [{"body", "side", "face_map", "deleted", "new_faces"}]}]}` で、`face_map` の鍵は元の面、値は**その塊の**面の添字、`new_faces` が切り口。
 - **undo**: 元のボディの形を `_common.SNAPSHOTS` へ退避し(`fillet` と同じ。`(body_id, seq)` 鍵)、作ったボディは `remove_created_bodies`(足した順の逆)。active は足す直前の値へ戻る(`mirror_body` と同じ)。
 - **プレビューは投機実行**(`previewable=True`)。`kernel_split.split_by_plane` の結果は `kernel.remembered` に載るので、確定はプレビューの形をそのまま使う。
-- Web は `SPLIT_BODY`(`commands/features.ts`、`#split-body`)。平面の choice は XY/XZ/YZ + `face`(「面を選ぶ」)+ `sketch`(「スケッチを選ぶ」)、後ろの2つは `sends: null` で `build` が `plane_face` / `sketch_id` へ読み替える。**スケッチの平面は「スケッチの図形を1つ指す」**(`PickArgSpec` の `sketchEntity`。平面そのものを指す的は画面に無い)。そのため**図形の無いスケッチの平面は画面からは指せない**(MCP は `sketch_id` で指せる)。`sketch_id` の UI の値(図形の参照)とサーバが配る値(文字列)が違いうるので、AI が文字列で埋めた `sketch_id` は画面のピック欄には戻らない。
+- Web は `SPLIT_BODY`(`commands/features.ts`、`#split-body`)。平面の choice は XY/XZ/YZ + `face`(「面を選ぶ」)+ `sketch`(「スケッチを選ぶ」)、後ろの2つは `sends: null` で `build` が `plane_face` / `sketch_id` へ読み替える。**スケッチの平面は「スケッチの線を1本指す」**(`PickArgSpec` の `sketchEntity`。平面そのものを指す的は画面に無く、点は指せない: `FINER_THAN` が点を外す)。そのため**線・円などの無いスケッチの平面は画面からは指せない**(MCP は `sketch_id` で指せる)。`sketch_id` の UI の値(図形の参照)とサーバが配る値(文字列)が違いうるので、AI が文字列で埋めた `sketch_id` は画面のピック欄には戻らない。
 
 ## boolean_body
 
