@@ -97,6 +97,7 @@ runSmoke('shoot-interference', { timeout: 120000, mcp: true }, async ({ browser,
   console.log(`  errors: ${JSON.stringify(await page.evaluate(() => JSON.parse(JSON.stringify(window.__duocad.errors ?? []))))}`)
 
   if (options.step !== undefined) {
+    await sleep(8500) // 断りの札が消えるのを待つ(札は 8 秒で消える)
     await page.click('#file-new')
     await mcp.callTool('import_step', { path: options.step })
     await waitFor(() => window.__duocad.parts.length > 5, 'STEP のボディが届く')
