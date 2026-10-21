@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from duocad import kernel, query
+from duocad import kernel, kernel_split, query
 from duocad.document import Body, Document
 from duocad.region import region_ref
 from duocad.sketch import (
@@ -422,3 +422,16 @@ def test_a_failed_split_leaves_the_session_untouched() -> None:
 
     assert len(session.document.log.entries) == entries
     assert len(session.document.bodies) == 1
+
+
+def test_a_plane_tangent_to_a_curved_body_inside_its_bounding_box_is_refused() -> None:
+    """落ちたら: 境界箱の内側で円柱に接するだけの平面が成功として通る(片側に塊が無いのに OCCT は IsDone を返す)。"""
+    doc = Document()
+    sketch_id = sketch_create(doc, base_plane("XY"))
+    add_circle(doc, sketch_id, (0.0, 0.0), 10.0)
+    cylinder = extrude(doc, [region_ref(sketch_id, 1)], 10.0, mode="new").args["body_id"]
+    reach = 5.0 / math.sqrt(2.0)
+    plane = {"plane_point": [reach, reach, 5.0], "plane_normal": [1.0, 1.0, 0.0]}
+
+    with pytest.raises(ValueError, match="割れない"):
+        kernel_split.split_by_plane(doc.get_body(cylinder).shape, plane["plane_point"], plane["plane_normal"])

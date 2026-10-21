@@ -62,7 +62,7 @@ def _split_by_plane(shape: "TopoDS_Shape", origin: List[float], axis: List[float
         raise ValueError("split_body: 対象はソリッドでなければならない")
     length = math.sqrt(sum(value * value for value in axis))
     unit = [value / length for value in axis]
-    box = kernel.bounding_box(shape)
+    box = kernel.bounding_box(shape, cache=None)
     reach = sum(abs(unit[i]) * box["size"][i] / 2.0 for i in range(3))
     centre = box["center"]
     height = sum((centre[i] - origin[i]) * unit[i] for i in range(3))
