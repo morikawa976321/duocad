@@ -294,9 +294,7 @@ class Server:
         self._preview_worker: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._preview_seq: dict = {}  # connection -> int
         self._preview_futures: dict = {}  # connection -> asyncio.Future
-        self._interference = InterferenceRuns(
-            lambda connection, text: connection.send(text), wire.dumps, lambda connection: connection in self.clients
-        )
+        self._interference = InterferenceRuns(_send, lambda connection: connection in self.clients)
         self._acks: dict = {}  # connection -> _Acks
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
         self._pending_ai_runs: set = set()

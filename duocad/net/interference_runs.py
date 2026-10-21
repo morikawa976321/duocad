@@ -14,14 +14,8 @@ from ..interference import InterferenceCancelled
 
 
 class InterferenceRuns:
-    def __init__(
-        self,
-        send_text: Callable[[Any, str], Awaitable[None]],
-        encode: Callable[[dict], str],
-        alive: Callable[[Any], bool],
-    ) -> None:
-        self._send_text = send_text
-        self._encode = encode
+    def __init__(self, send: Callable[[Any, dict], Awaitable[None]], alive: Callable[[Any], bool]) -> None:
+        self._send = send
         self._alive = alive
         self._worker: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._jobs: Dict[Any, Any] = {}  # connection -> 走っている Job
@@ -52,10 +46,9 @@ class InterferenceRuns:
             else:
                 payload = {**envelope, **result}
             if self._jobs.get(connection) is job and self._alive(connection):
-                # 文字列にするのもループの外で(描画の三角形が多いと数 MB になり、実測 6.6 MB で 66 ms ループを止めた)
-                text = await asyncio.get_running_loop().run_in_executor(None, self._encode, payload)
-                if self._jobs.get(connection) is job and self._alive(connection):
-                    await self._send_text(connection, text)
+                # JSON 化はループの上で走る(別スレッドへ出しても `json.dumps` が GIL を握るので止まり方は同じ)。実測: PC ケースの
+                # 結果 0.5 MB で 6 ms、描画の三角形が多い 7 MB で 84 ms ループが止まる(docs/INTERFERENCE.md「確かめていないこと」)
+                await self._send(connection, payload)
         finally:
             if self._jobs.get(connection) is job:
                 self._jobs.pop(connection, None)
