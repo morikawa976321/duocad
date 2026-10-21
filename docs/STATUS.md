@@ -140,3 +140,20 @@ docs/DEV_NOTES.md「ワークツリー」)。クラウド用の `wt-186`・`wt-1
 6. 報告ページを作る。
 
 本人に残りそうな判断: 各 issue の「決めること」は可逆なので AI が決めて decisions.md に残す。カードは今のところ見込まない。
+
+### どこまで来たか(2026-10-22 02:10)
+
+| issue | 状態 |
+|---|---|
+| #206 | 実装済み・sol のレビュー2回(重い指摘3件+回帰1件を直した)・pytest 全件・`npm run check`。撮影は報告の段で |
+| #201 | 実装済み・sol のレビュー pass(軽微1件を直した)・pytest 全件・smoke(`smoke-measure-sketch.mjs`)・撮影済み。前のセッションがクラウドに出していた同じ #201 の実装(`session_01SmbqN7ojs4xKbCzxRwjHip`)は、手元の版と重複したので採らず、ブランチ `claude/sketch-201-measure-points-cloud` に残した |
+| #184 | 実装中(核・verb 2つ・画面・smoke・撮影まで済み。未コミット)。pytest 全体と sol のレビュー待ち |
+| #193 | クラウドが実装(5コミット)。手元で smoke が通り、撮影と断る段を足した。pytest 全体と sol のレビュー待ち |
+| #186 | クラウドが実装(9コミット)。手元の検証はこれから: Windows での pytest・子プロセス・smoke、PC ケースの STEP での件数と時間、sol のレビュー |
+
+### 再開の手順
+
+1. `git -C output/cloud/wt-<番号> status` と `git log` で各ブランチの先端を見る(作業場所は上の「ブランチ」の下)。
+2. 検証は各 `wt-<番号>` で `.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider`、`cd web && npm run check && npm run build`、
+   `node scripts/smoke-<名前>.mjs --shots <このワークツリー>/output/autopilot_report`(smoke は OS に空きポートを選ばせる)。
+3. 撮影は `output/autopilot_report/` に `<issue>-<段>.png` で置く。報告ページは同じフォルダの `index.html`。
