@@ -116,16 +116,26 @@ def test_two_regions_on_parallel_sketches_report_their_spacing():
 
 
 def test_a_sketch_line_and_a_solid_edge_on_a_vertical_plane(session: Session):
-    """XZ 平面のスケッチ(u=x, v=z 以外の向きもありうるので枠から世界座標へ)の線分と、立方体の縦の辺。"""
+    """XZ 平面のスケッチの縦の線分と、立方体の縦の辺 (30, 0, z) は平行で 30 mm。落ちたら線分の向きを世界座標へ写していない。"""
     sketch_id = sketch_create(session.document, "XZ")
-    line = add_line(session.document, sketch_id, (0.0, 0.0), (0.0, 10.0))
-    select(session, [entity_ref(sketch_id, line)])
-    item = session.measure()["items"][0]
-    start, end = item["start"], item["end"]
     frame = region.plane_frame(session.document, sketch_id)
+    along_u = abs(frame["u"][2]) > 0.5  # 枠のどちらの軸が世界の Z か(基準平面の軸の取り方に依らない)
+    end = (10.0, 0.0) if along_u else (0.0, 10.0)
+    line = add_line(session.document, sketch_id, (0.0, 0.0), end)
+    shape = session.document.get_body("box").shape
+    vertical = next(
+        edge["index"]
+        for edge in query.describe_edges(shape)
+        if abs(edge["start"][0] - BOX) < 1e-9 and abs(edge["start"][1]) < 1e-9
+        and abs(edge["end"][0] - BOX) < 1e-9 and abs(edge["end"][1]) < 1e-9
+    )
+    select(session, [entity_ref(sketch_id, line), {"body": "box", "kind": "edge", "index": vertical}])
+    result = session.measure()
+    assert result["between"]["kind"] == "line-line"
+    assert result["between"]["parallel"] is True and result["between"]["distance"] == pytest.approx(BOX)
+    start, finish = result["items"][0]["start"], result["items"][0]["end"]
     assert start == pytest.approx(frame["origin"])
-    assert end == pytest.approx([frame["origin"][i] + 10.0 * frame["v"][i] for i in range(3)])
-    assert abs(start[1]) < 1e-12 and abs(end[1]) < 1e-12, "XZ 平面の線分が y=0 から外れた"
+    assert abs(finish[1]) < 1e-12 and abs(abs(finish[2]) - 10.0) < 1e-9, "XZ 平面の縦の線分が世界の Z に沿わない"
 
 
 def test_a_sketch_on_a_tilted_face_maps_points_into_that_face():
