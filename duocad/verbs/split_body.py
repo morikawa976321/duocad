@@ -96,6 +96,27 @@ def _plan(bodies: Sequence[Body], point: Sequence[float], normal: Sequence[float
     return plans
 
 
+def _replan(bodies: Sequence[Body], point: Sequence[float], normal: Sequence[float], keep: str, recorded: Sequence[Sequence[Sequence[float]]]) -> List[dict]:
+    """redo / replay: 切り直した塊を、記録した重心(ボディごとに [引き継いだ塊, ほかの塊...])に最も近いものへ対応づける。
+
+    並びの規則(`kernel_split._piece_order`)で決め直さない: 形の計算の誤差は 1e-15 mm でも丸めの境目をまたぎうるので、
+    同体積の塊の引き継ぎ先と ID の対応が保存の前後で入れ替わる。
+    """
+    plans = []
+    for body, centroids in zip(bodies, recorded):
+        pieces = kernel_split.split_by_plane(body.shape, point, normal)["pieces"]
+        left = [piece for piece in pieces if keep == KEEP_BOTH or piece["side"] == keep]
+        if len(left) != len(centroids):
+            raise ValueError(f"split_body: 切り直した塊が {len(left)} 個で、記録した {len(centroids)} 個と合わない(ボディ {body.id!r})")
+        matched = []
+        for centroid in centroids:
+            nearest = min(left, key=lambda piece: sum((a - b) ** 2 for a, b in zip(piece["centroid"], centroid)))
+            left.remove(nearest)
+            matched.append(nearest)
+        plans.append({"body": body, "heir": matched[0], "others": matched[1:]})
+    return plans
+
+
 def _provenance(plans: Sequence[dict], created: Sequence[Sequence[BodyId]]) -> dict:
     """切り口の面は各塊の `new_faces`(元の面の後継は `face_map`。添字は塊ごと)。"""
     return {
@@ -174,6 +195,7 @@ def split_body(
             "keep": keep,
             "created": [list(group) for group in created],
             "numbers": numbers,
+            "centroids": [[list(plan["heir"]["centroid"]), *[list(piece["centroid"]) for piece in plan["others"]]] for plan in plans],
         },
     )
     operation.provenance = _provenance(plans, created)
@@ -185,7 +207,11 @@ def _do_split_body(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された平面・残し方・ID・番号で切り直す(ログには触らない)。"""
     args = operation.args
     bodies = [replayed_body(document, body_id, what="split") for body_id in args["bodies"]]
-    plans = _plan(bodies, args["plane_point"], args["plane_normal"], _require_keep(args.get("keep", KEEP_BOTH)))
+    keep = _require_keep(args.get("keep", KEEP_BOTH))
+    if "centroids" in args:
+        plans = _replan(bodies, args["plane_point"], args["plane_normal"], keep, args["centroids"])
+    else:
+        plans = _plan(bodies, args["plane_point"], args["plane_normal"], keep)
     if len(args["created"]) != len(plans):
         raise ValueError(f"split_body: {len(plans)} bodies but {len(args['created'])} id groups recorded")
     created = [copy_ids(len(plan["others"]), group, verb="split_body") for plan, group in zip(plans, args["created"])]

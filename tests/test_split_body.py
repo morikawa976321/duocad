@@ -464,3 +464,19 @@ def test_equal_volumes_are_ordered_by_x_even_when_x_differs_below_the_rounding()
     trio = [{"side": "positive", "centroid": [x, y, 0.0]} for x, y in ((0.0, 40.0), (0.75e-9, 20.0), (1.5e-9, 0.0))]
     for order in ([0, 1, 2], [2, 1, 0], [1, 2, 0], [2, 0, 1]):
         assert sorted([trio[i] for i in order], key=kernel_split._piece_order)[0] is trio[0]
+
+
+def test_replay_follows_the_recorded_centroids_not_the_ordering_rule() -> None:
+    """落ちたら: 再生で塊と番号を並びの規則で決め直していて、計算の誤差で並びが変わると番号の対応が入れ替わる
+    (記録した重心に最も近い塊へ対応づける)。記録の重心の並びを入れ替えたログを再生して、記録どおりになることを見る。"""
+    doc = Document()
+    plate = _u_plate(doc)
+    operation = split_body(doc, [plate], sketch_id=_offset_sketch(doc, -12.0, "XZ"), keep="negative")
+    assert len(operation.args["centroids"][0]) == 2, "腕2本(同じ体積)"
+    heir, other = operation.args["centroids"][0]
+    operation.args["centroids"][0] = [other, heir]
+    replayed = replay_through_json(doc)
+    centroid_of = {body.id: kernel.centroid(body.shape) for body in replayed.bodies}
+    assert centroid_of[plate] == pytest.approx(other, abs=1e-9)
+    (new_id,) = operation.args["created"][0]
+    assert centroid_of[new_id] == pytest.approx(heir, abs=1e-9)
