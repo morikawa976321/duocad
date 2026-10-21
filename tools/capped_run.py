@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.wintypes as wt
+import os
 import subprocess
 import sys
 
@@ -64,6 +65,9 @@ def run(command: list, limit_gb: float) -> int:
         raise OSError(ctypes.get_last_error(), "SetInformationJobObject")
     # 外部の罠: venv の python.exe は本物のインタプリタを子として起こすランチャー。走り出してからジョブに入れると、
     # その子がジョブの外に出うる。停止状態で作り、ジョブに入れてから動かす。
+    # ランチャーは相対パスで起こすと自分の場所を見失って終了コード 103 で終わるので、絶対パスにしてから渡す。
+    if os.path.exists(command[0]):
+        command = [os.path.abspath(command[0]), *command[1:]]
     child = subprocess.Popen(command, creationflags=CREATE_SUSPENDED)
     handle = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, child.pid)
     if not kernel32.AssignProcessToJobObject(job, handle):
