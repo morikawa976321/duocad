@@ -480,3 +480,20 @@ def test_replay_follows_the_recorded_centroids_not_the_ordering_rule() -> None:
     assert centroid_of[plate] == pytest.approx(other, abs=1e-9)
     (new_id,) = operation.args["created"][0]
     assert centroid_of[new_id] == pytest.approx(heir, abs=1e-9)
+
+
+def test_a_wall_and_a_central_post_with_the_same_centroid_keep_their_ids_through_replay() -> None:
+    """落ちたら: 重心が一致する外壁と中央の柱(体積が違う)を、再生で取り違えて ID が入れ替わる(体積で見分ける)。"""
+    doc = Document()
+    body_id = new_box(doc, 60.0, 60.0, 30.0)
+    cut_sketch = _offset_sketch(doc, 2.0)
+    add_rectangle(doc, cut_sketch, (3.0, 3.0), 54.0, 54.0)
+    add_rectangle(doc, cut_sketch, (15.0, 15.0), 30.0, 30.0)
+    from duocad import region as regions
+
+    ring = region_ref(cut_sketch, max(regions.regions(doc, cut_sketch), key=lambda found: found.area).index)  # 溝になる環
+    extrude(doc, [ring], 28.0, mode="cut", body_id=body_id)
+    split_body(doc, [body_id], sketch_id=_offset_sketch(doc, 8.0))
+    before = {body.id: round(kernel.volume(body.shape), 3) for body in doc.bodies}
+    replayed = replay_through_json(doc)
+    assert {body.id: round(kernel.volume(body.shape), 3) for body in replayed.bodies} == before

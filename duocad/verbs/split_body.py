@@ -96,21 +96,39 @@ def _plan(bodies: Sequence[Body], point: Sequence[float], normal: Sequence[float
     return plans
 
 
-def _replan(bodies: Sequence[Body], point: Sequence[float], normal: Sequence[float], keep: str, recorded: Sequence[Sequence[Sequence[float]]]) -> List[dict]:
-    """redo / replay: 切り直した塊を、記録した重心(ボディごとに [引き継いだ塊, ほかの塊...])に最も近いものへ対応づける。
+#: 再生で塊を記録と対応づけるとき、体積が同じとみなす相対差。
+_REPLAY_VOLUME_RTOL = 1.0e-6
+
+
+def _replan(
+    bodies: Sequence[Body],
+    point: Sequence[float],
+    normal: Sequence[float],
+    keep: str,
+    centroids: Sequence[Sequence[Sequence[float]]],
+    volumes: Optional[Sequence[Sequence[float]]],
+) -> List[dict]:
+    """redo / replay: 切り直した塊を、記録した塊(ボディごとに [引き継いだ塊, ほかの塊...] の重心と体積)へ対応づける。
+    体積が同じ塊の中から、重心が最も近いものを選ぶ。
 
     並びの規則(`kernel_split._piece_order`)で決め直さない: 形の計算の誤差は 1e-15 mm でも丸めの境目をまたぎうるので、
-    同体積の塊の引き継ぎ先と ID の対応が保存の前後で入れ替わる。
+    同体積の塊の引き継ぎ先と ID の対応が保存の前後で入れ替わる。重心だけでも決まらない(外壁と中央の柱のように、別の塊の
+    重心が一致する)。
     """
     plans = []
-    for body, centroids in zip(bodies, recorded):
+    for index, (body, recorded) in enumerate(zip(bodies, centroids)):
         pieces = kernel_split.split_by_plane(body.shape, point, normal)["pieces"]
         left = [piece for piece in pieces if keep == KEEP_BOTH or piece["side"] == keep]
-        if len(left) != len(centroids):
-            raise ValueError(f"split_body: 切り直した塊が {len(left)} 個で、記録した {len(centroids)} 個と合わない(ボディ {body.id!r})")
+        if len(left) != len(recorded):
+            raise ValueError(f"split_body: 切り直した塊が {len(left)} 個で、記録した {len(recorded)} 個と合わない(ボディ {body.id!r})")
+        sizes = volumes[index] if volumes is not None else [None] * len(recorded)
         matched = []
-        for centroid in centroids:
-            nearest = min(left, key=lambda piece: sum((a - b) ** 2 for a, b in zip(piece["centroid"], centroid)))
+        for centroid, volume in zip(recorded, sizes):
+            alike = [
+                piece for piece in left
+                if volume is None or abs(piece["volume"] - volume) <= _REPLAY_VOLUME_RTOL * max(abs(volume), 1.0)
+            ] or left
+            nearest = min(alike, key=lambda piece: sum((a - b) ** 2 for a, b in zip(piece["centroid"], centroid)))
             left.remove(nearest)
             matched.append(nearest)
         plans.append({"body": body, "heir": matched[0], "others": matched[1:]})
@@ -196,6 +214,7 @@ def split_body(
             "created": [list(group) for group in created],
             "numbers": numbers,
             "centroids": [[list(plan["heir"]["centroid"]), *[list(piece["centroid"]) for piece in plan["others"]]] for plan in plans],
+            "volumes": [[plan["heir"]["volume"], *[piece["volume"] for piece in plan["others"]]] for plan in plans],
         },
     )
     operation.provenance = _provenance(plans, created)
@@ -209,7 +228,7 @@ def _do_split_body(document: Document, operation: Operation) -> None:
     bodies = [replayed_body(document, body_id, what="split") for body_id in args["bodies"]]
     keep = _require_keep(args.get("keep", KEEP_BOTH))
     if "centroids" in args:
-        plans = _replan(bodies, args["plane_point"], args["plane_normal"], keep, args["centroids"])
+        plans = _replan(bodies, args["plane_point"], args["plane_normal"], keep, args["centroids"], args.get("volumes"))
     else:
         plans = _plan(bodies, args["plane_point"], args["plane_normal"], keep)
     if len(args["created"]) != len(plans):
