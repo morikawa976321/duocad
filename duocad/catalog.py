@@ -1369,8 +1369,9 @@ COMMANDS: tuple[Command, ...] = (
             ),
             Param(
                 "sketch_id",
-                "string",
-                "切る平面をスケッチの平面で指す(スケッチのID。面に貼ったもの・オフセット平面のものも使える)。"
+                ["string", "object"],
+                "切る平面をスケッチの平面で指す(スケッチのID。面に貼ったもの・オフセット平面のものも使える。"
+                '画面はスケッチの図形1つを指すので `{"sketch": sketch_id, "entity": entity_id}` の参照も受ける)。'
                 "base_plane・plane_face とは同時に渡せない",
                 required=False,
             ),

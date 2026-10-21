@@ -613,6 +613,88 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
 }
 
 /**
+ * ボディを平面で切って分ける。切る平面は基準平面(XY/XZ/YZ)・既存の平らな面1つ(`plane_face`)・スケッチの図形1つ(`sketch_id`。その図形のスケッチの平面)。
+ * 面・図形は共有選択集合を経由しない別チャンネル(`PickArgSpec`)で受ける(鏡映面と同じ理由: 載せると切る平面に使った面のボディまで割られる)。
+ * 残す側(`keep`)は法線の向く側を正とする。確定前の姿はサーバの投機実行で出す(切った後の形)。
+ */
+export const SPLIT_BODY: CommandDef<'split_body'> = {
+  id: 'split_body',
+  label: 'ボディ分割',
+  buttonId: 'split-body',
+  preview: 'server',
+  args: [
+    {
+      kind: 'selection',
+      name: 'target',
+      label: '割るボディ(面/辺/頂点で指す)',
+      shapeKind: 'face',
+      kinds: ['face', 'edge', 'vertex'],
+      min: 1,
+      max: null,
+    },
+    {
+      kind: 'choice',
+      name: 'base_plane',
+      label: '切る平面',
+      options: [
+        { value: 'XY', label: 'XY平面', buttonId: 'split-body-xy' },
+        { value: 'XZ', label: 'XZ平面', buttonId: 'split-body-xz' },
+        { value: 'YZ', label: 'YZ平面', buttonId: 'split-body-yz' },
+        // この2つはサーバへ行かない(`base_plane` は XY/XZ/YZ のみ)。`plane_face` / `sketch_id` を出す印で、`build` が読み替える。
+        { value: 'face', label: '面を選ぶ', buttonId: 'split-body-face', sends: null, impliedBy: 'plane_face' },
+        { value: 'sketch', label: 'スケッチを選ぶ', buttonId: 'split-body-sketch', sends: null, impliedBy: 'sketch_id' },
+      ],
+    },
+    {
+      kind: 'pick',
+      name: 'plane_face',
+      label: '切る平面にする面',
+      target: 'face',
+      buttonId: 'split-body-plane-face',
+      when: (values) => values.base_plane === 'face',
+    },
+    {
+      kind: 'pick',
+      name: 'sketch_id',
+      label: '切る平面のスケッチ(図形を1つ指す)',
+      target: 'sketchEntity',
+      buttonId: 'split-body-sketch-pick',
+      when: (values) => values.base_plane === 'sketch',
+    },
+    {
+      kind: 'choice',
+      name: 'keep',
+      label: '残す側',
+      options: [
+        { value: 'both', label: '両側', buttonId: 'split-body-keep-both' },
+        { value: 'positive', label: '法線の側', buttonId: 'split-body-keep-positive' },
+        { value: 'negative', label: '反対側', buttonId: 'split-body-keep-negative' },
+      ],
+    },
+  ],
+  build(values) {
+    const empty = missingSelection(values, 'target', 'ボディ(面/辺/頂点)')
+    if (empty !== null) return { ok: false, reason: empty }
+    const basePlane = values.base_plane
+    if (typeof basePlane !== 'string') return { ok: false, reason: '切る平面が選ばれていない' }
+    const keep = values.keep
+    if (typeof keep !== 'string') return { ok: false, reason: '残す側が選ばれていない' }
+    if (basePlane === 'face') {
+      const face = pickedRefOf(values.plane_face)
+      if (face === null) return { ok: false, reason: '切る平面にする面が指されていない' }
+      return { ok: true, args: { plane_face: face, keep } }
+    }
+    if (basePlane === 'sketch') {
+      // 図形の参照のまま送る(スケッチの平面の解決はコア。revolve の `axis_line` と同じ)。
+      const figure = pickedRefOf(values.sketch_id)
+      if (figure === null) return { ok: false, reason: '切る平面のスケッチの図形が指されていない' }
+      return { ok: true, args: { sketch_id: figure, keep } }
+    }
+    return { ok: true, args: { base_plane: basePlane, keep } }
+  },
+}
+
+/**
  * 削除。通常モードでもスケッチモードでも同じ1つ(コアの verb が1つで、`selection.require_deletable` がボディ由来と図形の両方を1回で畳むため)。
  * `SOLID_FEATURE_COMMANDS` と `commands/sketch.ts` の一覧の両方へ入れる。
  *
@@ -653,6 +735,7 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
   BOOLEAN_BODY,
   MOVE_BODY,
   MIRROR_BODY,
+  SPLIT_BODY,
   LOFT,
   DELETE_SELECTION,
 ]

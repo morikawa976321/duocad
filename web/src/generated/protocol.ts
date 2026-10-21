@@ -208,7 +208,7 @@ export interface CommandArguments {
   mirror_sketch_entities: { axis: object }
   envelope_regions: { radius: number; offset: number }
   mirror_body: { base_plane?: string; plane_face?: object }
-  split_body: { base_plane?: string; plane_face?: object; sketch_id?: string; keep?: string }
+  split_body: { base_plane?: string; plane_face?: object; sketch_id?: string | object; keep?: string }
   delete: Record<string, never>
   delete_items: { bodies?: unknown[]; sketches?: unknown[] }
   rename: { target: string; name: string }

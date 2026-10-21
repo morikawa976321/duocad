@@ -4,7 +4,8 @@
 
 - `base_plane` … XY/XZ/YZ(原点通過)
 - `plane_face` … 既存ソリッドの平らな面への参照 `{"body": body_id, "index": 面の1始まりの添字}`。法線はその面の外向き
-- `sketch_id` … スケッチの平面(面に貼ったもの・オフセット平面を含む)。法線はスケッチの法線
+- `sketch_id` … スケッチの平面(面に貼ったもの・オフセット平面を含む)。法線はスケッチの法線。
+  スケッチの図形の参照 `{"sketch", "entity"}` でも指せる(画面は図形を1つ指す)
 
 ログには解決済みの数値 `{plane_point, plane_normal}` だけを載せる(`mirror_body` と同じ。面の番号は後で変わる)。
 
@@ -52,7 +53,7 @@ def _cut_plane(doc: Document, base_plane: Any, plane_face: Any, sketch_id: Any) 
         body, index = resolve_shape_ref(doc, plane_face, kind="face", what="plane_face", mesh_hint=_MESH_HINT)
         frame = kernel_sketch.face_frame(body.shape, index)
     elif sketch_id is not None:
-        frame = kernel_sketch.sketch_plane_frame(sketch.get_sketch(doc, str(sketch_id)).plane)
+        frame = kernel_sketch.sketch_plane_frame(sketch.get_sketch(doc, _sketch_id_of(sketch_id)).plane)
     else:
         raise ValueError(
             "split_body needs a cutting plane: base_plane(XY/XZ/YZ)・plane_face(既存の平らな面への参照)・"
@@ -62,6 +63,15 @@ def _cut_plane(doc: Document, base_plane: Any, plane_face: Any, sketch_id: Any) 
         "plane_point": [float(value) for value in frame["origin"]],
         "plane_normal": [float(value) for value in frame["normal"]],
     }
+
+
+def _sketch_id_of(value: Any) -> str:
+    """スケッチのID。**スケッチの図形の参照 `{"sketch", "entity"}` も受ける**(画面は図形を1つ指してスケッチを選ぶ)。"""
+    if isinstance(value, dict):
+        if not isinstance(value.get("sketch"), str):
+            raise ValueError(f'sketch_id の参照には "sketch" が要る(例: {{"sketch": "<sketch_id>", "entity": "<entity_id>"}}), got {value!r}')
+        return value["sketch"]
+    return str(value)
 
 
 def _require_keep(keep: Any) -> str:

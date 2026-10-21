@@ -18,7 +18,8 @@ from duocad.sketch import (
 )
 from duocad.verbs import add_mesh_body, extrude, move_body, split_body
 from document_support import assert_matches_replay, box_shape, new_box, replay_through_json, second_body
-from session_support import face_with_normal
+from duocad.server import Session
+from session_support import SIDE, box, face_with_normal, select
 
 CUBE = 20.0
 
@@ -302,6 +303,26 @@ def test_undo_restores_the_single_body_and_redo_splits_again() -> None:
     assert doc.log.entries[-1].verb == "split_body"
 
 
+def test_undo_of_a_one_sided_split_and_a_multi_body_split_restores_every_shape() -> None:
+    """落ちたら: 片側だけ残した割り・複数ボディの割りの undo が、元の形・ボディの並びに戻らない。"""
+    doc, cube = _cube()
+    plane = _offset_sketch(doc, 5.0)
+    shape = doc.get_body(cube).shape
+    split_body(doc, [cube], sketch_id=plane, keep="positive")
+    doc.log.undo(doc)
+    assert doc.get_body(cube).shape is shape
+
+    other = second_body(doc)  # z∈[0,5] は平面 z=5 に接するだけなので別の平面で
+    middle = _offset_sketch(doc, 2.5)
+    shapes = {body.id: body.shape for body in doc.bodies}
+    split_body(doc, [cube, other], sketch_id=middle)
+    assert len(doc.bodies) == 4
+    doc.log.undo(doc)
+
+    assert {body.id: body.shape for body in doc.bodies} == shapes
+    assert_matches_replay(doc)
+
+
 def test_the_split_matches_the_replay_after_saving() -> None:
     """落ちたら: 保存して読み直した文書で、番号と形の対応が変わる。"""
     doc, cube = _cube()
@@ -345,3 +366,59 @@ def test_a_mesh_body_is_refused_with_the_reason() -> None:
 
     with pytest.raises(ValueError, match="mesh body"):
         split_body(doc, [mesh], base_plane="XY")
+
+
+# --------------------------------------------------------------------------------------
+# Session(入口・プレビュー)
+# --------------------------------------------------------------------------------------
+def _session_cube():
+    session = Session(0.2)
+    body, _ = box(session)
+    select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    return session, body
+
+
+def test_the_preview_shows_the_cut_shape_and_leaves_the_document_alone() -> None:
+    """落ちたら: プレビューが切った後の形を返さない・文書・ログ・採番を変える(確定した番号が飛ぶ)。"""
+    session, body = _session_cube()
+    sketch_id = session.sketch_create_offset(SIDE / 2, "XY")["sketch_id"]
+    select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    entries, bodies = len(session.document.log.entries), len(session.document.bodies)
+    numbering = session.document.log._snapshot()[2]
+
+    preview = session.preview("split_body", {"sketch_id": sketch_id, "keep": "both"})
+
+    assert sorted(round(item["volume"]) for item in preview["bodies"]) == [SIDE**3 / 2] * 2
+    assert len(session.document.log.entries) == entries
+    assert len(session.document.bodies) == bodies
+    assert session.document.log._snapshot()[2] == numbering
+    applied = session.split_body(sketch_id=sketch_id)
+    assert len(applied["created"]) == 1
+
+
+def test_a_sketch_figure_reference_selects_the_sketch_plane() -> None:
+    """落ちたら: 画面が送る図形の参照 `{"sketch", "entity"}` でスケッチの平面を指せない。"""
+    session, body = _session_cube()
+    sketch_id = session.sketch_create_offset(SIDE / 2, "XY")["sketch_id"]
+    entity_id = session.add_circle(sketch_id, [1.0, 1.0], 2.0)["entity_id"]
+    select(session, [{"body": body.id, "kind": "face", "index": 1}])
+
+    applied = session.split_body(sketch_id={"sketch": sketch_id, "entity": entity_id, "point": None}, keep="negative")
+
+    assert applied["created"] == []
+    assert applied["keep"] == "negative"
+    assert applied["plane_point"][2] == SIDE / 2
+
+
+def test_a_failed_split_leaves_the_session_untouched() -> None:
+    """落ちたら: 交わらない平面で断った後も、ログに操作が積まれる・選択が消える。"""
+    session, body = _session_cube()
+    sketch_id = session.sketch_create_offset(SIDE * 2, "XY")["sketch_id"]
+    select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    entries = len(session.document.log.entries)
+
+    with pytest.raises(ValueError, match="割れない"):
+        session.split_body(sketch_id=sketch_id)
+
+    assert len(session.document.log.entries) == entries
+    assert len(session.document.bodies) == 1
