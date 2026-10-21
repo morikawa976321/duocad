@@ -1590,11 +1590,6 @@ def _built_blend(
     }
 
 
-#: 選んだ辺の連なりがこれより多いときは、連なりごとの当たりの検査(連なりの数だけフィレットを組み直す)を省く。
-#: PC ケースの最大ボディで1回の組み立ては約 18ms なので、12 本で約 0.2 秒。
-PER_CONTOUR_CHECK_LIMIT = 12
-
-
 def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
     """組み立てたフィレットが、丸めた辺(連なりを含む)の頂点に触れない面まで変えたか。
 
@@ -1602,15 +1597,28 @@ def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
     (円板に柱2本、隙間 2・半径 3 で、両方の柱に接するBスプライン面が2枚増える。issue #208 の実測)。
     辺の端の面(箱の1辺を丸めたときの側面)は頂点に触れるので数えない。
 
-    連なりが2本以上なら、連なりごとに組み直しても見る: 全部の連なりの頂点でまとめて許すと、柱 A の根元の丸めが
-    柱 B の側面に当たっても、B の上縁も選んでいれば B の側面は B の上縁の頂点に触れるので見逃した(Codex レビューの反例)。
+    全部の連なりの頂点でまとめて許すと、柱 A の根元の丸めが柱 B の側面に当たっても、B の上縁も選んでいれば B の側面は
+    B の上縁の頂点に触れるので見逃す(Codex レビューの反例)。そこで、変わった面の近くにあるのにその面に触れない連なりを、
+    1本ずつ組み直して見る(連なりの数で打ち切ると、離れた柱の上縁を 11 本足しただけで見逃しが戻った)。
     """
-    if _changes_faces_away_from(maker, shape, range(1, maker.NbContours() + 1)):
-        return True
-    contours = maker.NbContours()
-    if contours < 2 or contours > PER_CONTOUR_CHECK_LIMIT:
-        return False
-    for contour in range(1, contours + 1):
+    contours = range(1, maker.NbContours() + 1)
+    changed = _faces_changed_by(maker, shape)
+    touching = {contour: _vertices_of_contour(maker, contour) for contour in contours}
+    suspects = set()
+    for face in changed:
+        corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
+        owners = {
+            contour for contour, vertices in touching.items()
+            if any(vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1))
+        }
+        if not owners:
+            return True
+        face_box = Bnd_Box()
+        BRepBndLib.Add_s(face, face_box)
+        for contour in contours:
+            if contour not in owners and not _contour_box(maker, contour).IsOut(face_box):
+                suspects.add(contour)
+    for contour in sorted(suspects):
         if not maker.IsConstant(contour):
             continue
         alone = BRepFilletAPI_MakeFillet(shape)
@@ -1624,22 +1632,43 @@ def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
     return False
 
 
-def _changes_faces_away_from(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int]) -> bool:
-    """`maker` が、`contours` の辺の頂点に触れない入力の面を変えたか。"""
-    # 触られなかった面は結果に同じ面として残るので、結果に無い入力の面だけを調べる(`Modified` を全面に問うと、
+def _faces_changed_by(maker: Any, shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:
+    """`maker` が変えた(結果に同じ面として残らなかった)入力の面。"""
+    # 触られなかった面は結果に同じ面として残るので、結果に無い入力の面だけを見る(`Modified` を全面に問うと、
     # PC ケースの 233 面のボディで1回 112ms かかった。フィレットそのものは 18ms)。
     kept = _face_map(maker.Shape())
+    face_map = _face_map(shape)
+    return [face_map.FindKey(i) for i in range(1, face_map.Extent() + 1) if not kept.Contains(face_map.FindKey(i))]
+
+
+def _vertices_of_contour(maker: Any, contour: int) -> "TopTools_IndexedMapOfShape":
+    vertices = TopTools_IndexedMapOfShape()
+    for number in range(1, maker.NbEdges(contour) + 1):
+        edge = maker.Edge(contour, number)
+        vertices.Add(TopExp.FirstVertex_s(edge))
+        vertices.Add(TopExp.LastVertex_s(edge))
+    return vertices
+
+
+def _contour_box(maker: Any, contour: int) -> "Bnd_Box":
+    """連なりの辺の外接箱を、丸めが届きうる幅(半径の 3 倍)だけ広げた箱。"""
+    box = Bnd_Box()
+    for number in range(1, maker.NbEdges(contour) + 1):
+        BRepBndLib.Add_s(maker.Edge(contour, number), box)
+    # 可変半径の連なりは半径を1つに決められないので、どの面とも重なる箱にする(組み直しの検査は一定半径だけ)。
+    box.Enlarge(3.0 * maker.Radius(contour) if maker.IsConstant(contour) else 1.0e9)
+    return box
+
+
+def _changes_faces_away_from(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int]) -> bool:
+    """`maker` が、`contours` の辺の頂点に触れない入力の面を変えたか。"""
     rounded_vertices = TopTools_IndexedMapOfShape()
     for contour in contours:
         for number in range(1, maker.NbEdges(contour) + 1):
             edge = maker.Edge(contour, number)
             rounded_vertices.Add(TopExp.FirstVertex_s(edge))
             rounded_vertices.Add(TopExp.LastVertex_s(edge))
-    face_map = _face_map(shape)
-    for index in range(1, face_map.Extent() + 1):
-        face = face_map.FindKey(index)
-        if kept.Contains(face):
-            continue
+    for face in _faces_changed_by(maker, shape):
         corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
         if not any(rounded_vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1)):
             return True
@@ -1659,6 +1688,10 @@ def _absorbed_fillet(
         absorbed.convex and not absorbed.concave and volume_after > volume_before
     ):
         raise ValueError(f"fillet moved the volume the wrong way ({volume_before} -> {volume_after}, {context})")
+    # 統合の前に断る: 壊れた形や離れたソリッドを統合に渡すと、仮想メモリを使い尽くすことがある(PC ケースの部品で 84GB)。
+    if len(split_solids(absorbed.shape)) > len(split_solids(shape)):
+        raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
+    _require_valid(absorbed.shape, "fillet", context)
     final, history, _ = _unify_same_domain(absorbed.shape, volume_after)
     _require_valid(final, "fillet", context)
     if len(split_solids(final)) > len(split_solids(shape)):

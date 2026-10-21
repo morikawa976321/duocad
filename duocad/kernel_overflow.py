@@ -6,10 +6,10 @@ Fusion 360 はどちらも、支える2面だけで丸めた面をはみ出し�
 
 1. 辺の両側の面 F1・F2 の曲面を大きく延長し、辺のまわりの箱を割って、辺に沿うくさび W(凹なら空気側・凸なら物体側)を作る。
    W には障害物も面の縁も無いので、`MakeFillet` が必ず通る見込みの形になる。
-2. 肉 M = W − fillet(W)。辺の端・はみ出した先は、F1・F2(穴を塞いだもの)を法線方向に厚くした柱の外に出る。
+2. 肉 M = W − fillet(W)。辺の端・はみ出した先は、F1・F2(別の形が立つ足元を塞いだもの)を法線方向に厚くした柱の外に出る。
 3. 柱の外に出た部分のうち、辺の内側の点に触れないものを捨てる。はみ出して崖の先に出た肉、辺の端の先へ伸びた肉がこれに当たる。
    辺に触れる部分は捨てない(曲面の支えや傾いた壁では、柱の境界が辺の上から斜めに出て正しい肉を切る)。
-   貫通する別の柱の足元は面の穴なので、塞いだ柱の内側に入り、その上の肉は捨てない(和で本体に埋もれる)。
+   貫通する別の柱の足元は塞いだ柱の内側に入り、その上の肉は捨てない(和で本体に埋もれる)。本当の穴は塞がず、穴の上の肉は捨てる。
 
 **対応する形だけを引き受け、それ以外は `Unsupported` で断る**(呼び出し側は OCCT の結果か元の失敗へ戻る):
 両側の面が延長できる曲面(平面・円柱・円錐・球・トーラス・直線押し出し面)、選んだ辺の連なりどうしが頂点を共有しない
@@ -188,7 +188,12 @@ def _material(shape: TopoDS_Shape, edges: list, first: TopoDS_Shape, second: Top
     inward.Normalize()
     if not concave:
         inward.Reverse()
-    wedge = _solid_containing(splitter.Shape(), point.Translated(inward.Multiplied(1.0e-3 * radius)))
+    inside = point.Translated(inward.Multiplied(1.0e-3 * radius))
+    for face in (first, second):
+        room = _room_inside(face, inside)
+        if room is not None and radius >= room:
+            raise Unsupported(f"radius {radius:g} does not fit inside a curved face of radius {room:g}")
+    wedge = _solid_containing(splitter.Shape(), inside)
     if wedge is None:
         raise Unsupported("no wedge next to the edge")
 
@@ -202,21 +207,93 @@ def _material(shape: TopoDS_Shape, edges: list, first: TopoDS_Shape, second: Top
     if not maker.IsDone():
         raise Unsupported("the wedge could not be rounded")
     material = _boolean("cut", wedge, maker.Shape()).Shape()
-    # 肉は支える面から max(reach, radius) より離れない。柱をそれ以上厚くすると、凸の曲面を内へ厚くしたときに軸へ潰れる
-    # (半径 4 の柱の上縁を半径 1 で丸めるとき、箱の余白 4 で厚くすると共通部分が失敗した)。
-    return _trim(shape, material, edges, first, second, concave, 1.25 * max(reach, radius)), concave
+    # 柱の厚みは箱の余白(肉はこの中にしか無い)。ただし曲面を内側(軸の側)へ厚くするときは、曲面の半径の 9 割で止める:
+    # 半径以上に厚くすると軸へ潰れて共通部分が失敗した(半径 4 の柱の上縁を半径 1 で、余白 4)。厚みを接点までの距離で
+    # 絞ると、曲面の側の接点は辺の法線から求めた距離より遠いので肉が欠けた(半径 10 の半円柱の縦辺を半径 4 で、
+    # 平面から 6.67 まで届く肉を 5 で切った。Codex レビューの反例)。
+    heights = []
+    for face, normal in ((first, normals[0]), (second, normals[1])):
+        toward = normal if concave else normal.Reversed()
+        room = _room_inside(face, point.Translated(toward.Multiplied(1.0e-3 * radius)))
+        heights.append(margin if room is None else min(margin, 0.9 * room))
+    trimmed = _trim(shape, material, edges, (first, second), heights, concave)
+    _require_plausible(trimmed, edges, 1.5 * (reach + radius))
+    return trimmed, concave
 
 
-def _trim(shape, material, edges, first, second, concave: bool, height: float):
-    """肉のうち、穴を塞いだ支える面の柱の外にあり、辺の内側の点に触れない部分を捨てる。
+def _require_plausible(material: TopoDS_Shape, edges: list, spread: float) -> None:
+    """肉が辺のまわりの管(半径 `spread` = 接点までの距離 + 半径)に収まる大きさと場所かを確かめる。
 
-    柱は穴を塞いで作る: 支える面の穴(貫通する別の柱の足元)の上の肉は、和で本体に埋もれるか、低い柱の上を越えて
-    丸めが続く部分なので捨てない。穴を残した柱の外を「本体に重なれば残す」で救っていたときは、辺の端の先へ伸びた
-    肉が床の上の別の突起に少し重なっただけで丸ごと残り、外接箱を大きく越えた(Codex レビューの反例)。
+    外部の罠: くさびの延長面が箱を割り切れなかったり、くさびのフィレットが変な面を作ったりすると、OCCT は
+    エラーを出さずに見当違いの肉を返す。そのまま本体と合わせると、統合(UnifySameDomain)が仮想メモリを使い尽くし、
+    PC ごと落ちた(PC ケースの部品で 84GB。2026-10-22)。肉の各点は辺から `spread` より離れないので、
+    体積は辺の長さ × 管の断面積を超えず、外接箱は辺の外接箱を `spread` 広げた箱に収まる。
     """
-    columns = _boolean(
-        "common", _column(_without_holes(first), height, concave), _column(_without_holes(second), height, concave)
-    ).Shape()
+    length = sum(_edge_length(edge) for edge in edges)
+    volume = _volume(material)
+    if volume > 1.5 * math.pi * spread * spread * length:
+        raise Unsupported(f"the rounding material ({volume:.4g} mm3) is larger than any fillet along {length:.4g} mm")
+    reach_box = Bnd_Box()
+    for edge in edges:
+        BRepBndLib.Add_s(edge, reach_box)
+    reach_box.Enlarge(1.1 * spread)
+    found = Bnd_Box()
+    BRepBndLib.AddOptimal_s(material, found, False, False)
+    if found.IsVoid():
+        return
+    if any(reach_box.IsOut(corner) for corner in (found.CornerMin(), found.CornerMax())):
+        raise Unsupported("the rounding material reaches far from the edge")
+
+
+def _edge_length(edge: TopoDS_Shape) -> float:
+    props = GProp_GProps()
+    BRepGProp.LinearProperties_s(edge, props)
+    return props.Mass()
+
+
+def _room_inside(face: TopoDS_Shape, point: gp_Pnt):
+    """`point` が面の曲面の内側(円柱・円錐の軸側、球の中心側)にあれば、その曲面の半径。外側・平面などは None。
+
+    凸の柱の上縁(物体側のくさびが円柱の内側)や止まり穴の底(空気側のくさびが穴の内側)は、曲面の半径以上の球が
+    入らない。それでも延長したくさびの `MakeFillet` は通ることがあり、半径 0.56 の細いピンの上縁を半径 12 で丸めると
+    見当違いの肉ができ、統合で仮想メモリを使い尽くした(PC ケースの部品)。
+    """
+    surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
+    kind = surface.GetType()
+    if kind == GeomAbs_SurfaceType.GeomAbs_Cylinder:
+        axis, radius = surface.Cylinder().Axis(), surface.Cylinder().Radius()
+        return radius if _distance_to_axis(axis, point) < radius else None
+    if kind == GeomAbs_SurfaceType.GeomAbs_Cone:
+        cone = surface.Cone()
+        axis = cone.Axis()
+        along = gp_Vec(axis.Location(), point).Dot(gp_Vec(axis.Direction()))
+        local = cone.RefRadius() + along * math.tan(cone.SemiAngle())
+        return local if local > 0 and _distance_to_axis(axis, point) < local else None
+    if kind == GeomAbs_SurfaceType.GeomAbs_Sphere:
+        sphere = surface.Sphere()
+        return sphere.Radius() if point.Distance(sphere.Location()) < sphere.Radius() else None
+    return None
+
+
+def _distance_to_axis(axis, point: gp_Pnt) -> float:
+    offset = gp_Vec(axis.Location(), point)
+    along = offset.Dot(gp_Vec(axis.Direction()))
+    return math.sqrt(max(0.0, offset.SquareMagnitude() - along * along))
+
+
+def _trim(shape, material, edges, faces, heights, concave: bool):
+    """肉のうち、支える面(何かが立っている足元を塞いだもの)の柱の外にあり、辺の内側の点に触れない部分を捨てる。
+
+    支える面の内側の輪のうち、別の形が立っている足元(凹の辺の輪)は塞ぐ: その上の肉は、和で本体に埋もれるか、
+    低い柱の上を越えて丸めが続く部分なので捨てない。本当の穴(凸の辺の輪)は塞がない: 穴の上の肉は穴の壁の延長で
+    切れる(全部の輪を塞いだときは、柱の脇の貫通穴の上に肉が残って穴を塞いだ。Codex レビューの反例)。
+    足元を塞がず「本体に重なれば残す」で救っていたときは、辺の端の先へ伸びた肉が床の上の別の突起に少し重なっただけで
+    丸ごと残り、外接箱を大きく越えた(同じく反例)。
+    """
+    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
+    first, second = (_column(_without_footprints(face, edge_faces), height, concave) for face, height in zip(faces, heights))
+    columns = _boolean("common", first, second).Shape()
     outside = _boolean("cut", material, columns).Shape()
     scale = max(_volume(material), 1.0e-12)
     dropped = []
@@ -228,13 +305,35 @@ def _trim(shape, material, edges, first, second, concave: bool, height: float):
     return material
 
 
-def _without_holes(face: TopoDS_Shape) -> TopoDS_Shape:
-    """面の内側の輪(穴)を外した面。外側の輪だけを、同じ曲面・同じ位置の空の面へ入れ直す(辺の pcurve をそのまま使える)。"""
-    if indexed_map(face, TopAbs_WIRE).Extent() <= 1:
+def _without_footprints(face: TopoDS_Shape, edge_faces) -> TopoDS_Shape:
+    """面の内側の輪のうち、別の形が立っている足元(隣の面と凹で接する輪)を外した面。本当の穴の輪は残す。
+    残す輪だけを、同じ曲面・同じ位置の空の面へ入れ直す(辺の pcurve をそのまま使える)。"""
+    wires = indexed_map(face, TopAbs_WIRE)
+    if wires.Extent() <= 1:
         return face
+    outer = BRepTools.OuterWire_s(TopoDS.Face_s(face))
     filled = TopoDS.Face_s(face.EmptyCopied())
-    BRep_Builder().Add(filled, BRepTools.OuterWire_s(TopoDS.Face_s(face)))
+    builder = BRep_Builder()
+    for number in range(1, wires.Extent() + 1):
+        wire = wires.FindKey(number)
+        if wire.IsSame(outer) or not _is_footprint(wire, face, edge_faces):
+            builder.Add(filled, wire)
     return filled
+
+
+def _is_footprint(wire: TopoDS_Shape, face: TopoDS_Shape, edge_faces) -> bool:
+    """内側の輪が、隣の面と凹で接する(輪の上に別の形が立っている)か。輪の最初の辺で見る。"""
+    edges = indexed_map(wire, TopAbs_EDGE)
+    for number in range(1, edges.Extent() + 1):
+        edge = TopoDS.Edge_s(edges.FindKey(number))
+        if BRep_Tool.Degenerated_s(edge) or not edge_faces.Contains(edge):
+            continue
+        neighbours = [other for other in edge_faces.FindFromKey(edge) if not other.IsSame(face)]
+        if not neighbours:
+            return False
+        kind = ChFi3d.DefineConnectType_s(edge, TopoDS.Face_s(face), TopoDS.Face_s(neighbours[0]), 1.0e-6, False)
+        return kind == ChFiDS_TypeOfConcavity.ChFiDS_Concave
+    return False
 
 
 def _column(face: TopoDS_Shape, height: float, concave: bool) -> TopoDS_Shape:

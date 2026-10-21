@@ -281,3 +281,83 @@ def test_concave_and_convex_rounds_that_cancel_out_in_volume_are_accepted():
     rounded = kernel.fillet_edges(shape, {inner: 5.0, outer: 5.0})
 
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+
+
+def test_a_radius_wider_than_a_thin_pin_is_refused_before_building_any_material():
+    """細いピン(半径 1)の上縁を半径 3 で丸めると、球がピンの中に入らないので吸収も断る(理由つきのエラー)。
+    PC ケースの部品で同じ組(半径 0.56 のピンに半径 12)を吸収させると、見当違いの肉を統合するところで仮想メモリを
+    使い尽くし PC ごと落ちた。落ちたら、断る前に肉を作ろうとしている。"""
+    shape = _union(_box(-10, -10, 0, 10, 10, 3), _cylinder(0.0, 3.0, 1.0, 10.0))
+    top = _circle_edge(shape, 1.0, 13.0)
+
+    with pytest.raises(ValueError, match="does not fit inside a curved face of radius 1"):
+        kernel.fillet_edges(shape, {top: 3.0})
+
+
+def test_rounding_a_convex_edge_next_to_a_curved_face_removes_all_of_the_material():
+    """半円柱(半径 10)の縦辺を半径 4 で丸める肉は、曲面の側の接点まで(平面から 6.67)届く。吸収で作っても OCCT と
+    同じ体積になる(柱の厚みを接点までの距離で絞ったときは 6.18 mm³ 残った。Codex レビューの反例)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common as _Common
+
+    half = _boolean(_Common, _cylinder(0.0, 3.0, 10.0, 30.0), _box(-20, 0, 3, 20, 20, 40))
+    shape = _union(_box(-20, -20, 0, 20, 20, 3), half)
+    verticals = [
+        edge["index"] for edge in query.describe_edges(shape)
+        if edge["kind"] == "line" and 9.9 < abs(edge["start"][0]) < 10.1 and abs(edge["start"][2] - edge["end"][2]) > 1.0
+    ]
+    radii = dict(zip(verticals, (3.0, 4.0)))
+
+    from duocad import kernel_overflow
+
+    absorbed = kernel_overflow.absorb(shape, kernel._edge_map(shape), radii)
+
+    maker = BRepFilletAPI_MakeFillet(shape)
+    for index, radius in radii.items():
+        maker.Add(radius, TopoDS.Edge_s(kernel.edge_of(shape, index)))
+    maker.Build()
+    assert kernel.volume(absorbed.shape) == pytest.approx(kernel.volume(maker.Shape()), rel=1e-7)
+
+
+def test_a_through_hole_next_to_the_post_stays_open():
+    """柱の根元の丸めが脇の貫通穴にかかっても、穴の上の肉は穴の壁の延長で切れ、穴は塞がらない
+    (支える面の内側の輪を全部塞いだときは、穴の上に肉が残った。Codex レビューの反例)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.TopAbs import TopAbs_OUT
+
+    disc_and_post = _union(_cylinder(0.0, 0.0, 20.0, 3.0), _cylinder(0.0, 3.0, 5.0, 20.0))
+    hole = _cylinder(11.0, -1.0, 2.0, 30.0)
+    shape = kernel.boolean_bodies(disc_and_post, [hole], "cut")["shape"]
+    index = _circle_edge(shape, 5.0, 3.0)
+
+    rounded = kernel.fillet_edges(shape, {index: 6.0})
+
+    alone = _native(disc_and_post, _circle_edge(disc_and_post, 5.0, 3.0), 6.0)
+    expected = kernel.volume(_boolean(BRepAlgoAPI_Cut, alone, hole))
+    assert rounded["volume_after"] == pytest.approx(expected, rel=1e-7)
+    inside_the_hole = BRepClass3d_SolidClassifier(rounded["shape"], gp_Pnt(9.5, 0.0, 3.1), 1e-7)
+    assert inside_the_hole.State() == TopAbs_OUT
+
+
+def test_many_far_away_selections_do_not_hide_a_fillet_that_hits_a_post():
+    """柱 A・B(隙間 2)の当たりを、離れた 11 本の柱の上縁を一緒に選んでも見逃さない(連なりの数で検査を打ち切ったときは
+    13 本で見逃した。Codex レビューの反例)。"""
+    disc, post_a = _cylinder(0.0, 0.0, 60.0, 3.0), _cylinder(0.0, 3.0, 5.0, 20.0)
+    post_b = _cylinder(11.0, 3.0, 4.0, 20.0)
+    far = [BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(-35.0 + 7.0 * i, -35.0, 3.0), gp_Dir(0, 0, 1)), 2.0, 10.0).Shape() for i in range(11)]
+    shape = _union(disc, post_a, post_b, *far)
+    radii = {_circle_edge(shape, 5.0, 3.0): 3.0, _circle_edge(shape, 4.0, 23.0, x=11.0): 1.0}
+    for i in range(11):
+        radii[_circle_edge(shape, 2.0, 13.0, x=-35.0 + 7.0 * i)] = 0.25
+
+    rounded = kernel.fillet_edges(shape, radii)
+
+    without_b = _union(disc, post_a, *far)
+    pieces = BRepFilletAPI_MakeFillet(without_b)
+    pieces.Add(3.0, TopoDS.Edge_s(kernel.edge_of(without_b, _circle_edge(without_b, 5.0, 3.0))))
+    for i in range(11):
+        pieces.Add(0.25, TopoDS.Edge_s(kernel.edge_of(without_b, _circle_edge(without_b, 2.0, 13.0, x=-35.0 + 7.0 * i))))
+    pieces.Build()
+    b_rounded = _native(post_b, _circle_edge(post_b, 4.0, 23.0, x=11.0), 1.0)
+    expected = kernel.volume(_boolean(BRepAlgoAPI_Fuse, pieces.Shape(), b_rounded))
+    assert rounded["volume_after"] == pytest.approx(expected, rel=1e-7)
