@@ -510,3 +510,55 @@ def test_a_smooth_curve_with_many_knots_is_not_split_at_every_knot() -> None:
         abs(math.hypot(*_bezier_point(entity["params"], k / 40)) - 10.0) for entity in entities for k in range(41)
     )
     assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE
+
+
+def test_a_bump_away_from_the_knot_midpoint_is_not_skipped() -> None:
+    """ノットの区間 [0.020, 0.025] の中で、ノットと区間の中点では y = 0 になり、その間で振れる有理 B-スプラインの辺を近似しても、
+    振れが誤差の上限内に残る。落ちたら標本がノットとその間の中点だけで、区間の中の振れを飛び越えている。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_BSplineCurve
+    from OCP.TColgp import TColgp_Array1OfPnt
+    from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
+    from OCP.gp import gp_Pnt
+
+    breaks = [0.0, 0.020, 0.025, 1.0]
+    knots = TColStd_Array1OfReal(1, 4)
+    multiplicities = TColStd_Array1OfInteger(1, 4)
+    for i, (value, multiplicity) in enumerate(zip(breaks, [4, 3, 3, 4])):
+        knots.SetValue(i + 1, value)
+        multiplicities.SetValue(i + 1, multiplicity)
+    poles = TColgp_Array1OfPnt(1, 10)
+    weights = TColStd_Array1OfReal(1, 10)
+    # 3つのベジエの区間(制御点を共有)。x は区間ごとに等間隔で x = 10 t、y は真ん中の区間だけ 60 s (s - 1/2)(s - 1)
+    xs = [10.0 * (a + (b - a) * k / 3) for a, b in zip(breaks, breaks[1:]) for k in range(3)] + [10.0]
+    ys = [0.0, 0.0, 0.0, 0.0, 10.0, -10.0, 0.0, 0.0, 0.0, 0.0]
+    for i in range(10):
+        poles.SetValue(i + 1, gp_Pnt(xs[i], ys[i], 0.0))
+        weights.SetValue(i + 1, 1.001 if i == 8 else 1.0)  # y = 0 の区間の重みを変えて有理にする(近似の経路を通す)
+    curve = Geom_BSplineCurve(poles, weights, knots, multiplicities, 3)
+    assert curve.IsRational()
+    assert abs(curve.Value(0.0225).Y()) < 1e-9 and abs(curve.Value(0.021).Y()) > 1.0, "題材の振れが立っていない"
+    edge = BRepBuilderAPI_MakeEdge(curve).Edge()
+    entities = kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    polyline = []
+    for entity in entities:
+        polyline.extend(_bezier_point(entity["params"], k / 400) for k in range(401))
+    samples = [0.020 + 0.005 * k / 400 for k in range(401)]
+    worst = max(_distance_to_polyline((curve.Value(t).X(), curve.Value(t).Y()), polyline) for t in samples)
+    assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE + 1e-6
+
+
+def test_a_trimmed_bezier_edge_keeps_the_curve_of_the_edge() -> None:
+    """ベジエの辺の一部を図形にしても、辺の曲線そのものは書き換わらない。落ちたら `Segment` を辺の曲線に掛けている。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_BezierCurve
+    from OCP.TColgp import TColgp_Array1OfPnt
+    from OCP.gp import gp_Pnt
+
+    poles = TColgp_Array1OfPnt(1, 4)
+    for i, (x, y) in enumerate([(0, 0), (3, 8), (7, 8), (10, 0)]):
+        poles.SetValue(i + 1, gp_Pnt(x, y, 0))
+    bezier = Geom_BezierCurve(poles)
+    edge = BRepBuilderAPI_MakeEdge(bezier, 0.2, 0.8).Edge()
+    kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    assert (bezier.Pole(1).X(), bezier.Pole(4).X()) == (0.0, 10.0)

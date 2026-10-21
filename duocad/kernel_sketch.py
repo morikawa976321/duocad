@@ -511,7 +511,8 @@ def _bezier_entity(points: Sequence[Tuple[float, float]], approximated: bool = F
 def _polynomial_beziers(ax3: "gp_Ax3", curve: Any, kind: Any, first: float, last: float) -> Any:
     """3次以下の非有理ベジエ/B-スプラインの辺 `[first, last]` を、3次ベジエの図形へ**正確に**分ける。直せなければ None。"""
     if kind == GeomAbs_CurveType.GeomAbs_BezierCurve:
-        bezier = curve.Bezier()
+        # 写しを切る: `BRepAdaptor_Curve.Bezier()` は位置が恒等なら辺の曲線そのものを返し、`Segment` は辺の形を書き換える(実測)
+        bezier = curve.Bezier().Copy()
         if bezier.IsRational() or bezier.Degree() > 3:
             return None
         if first > bezier.FirstParameter() or last < bezier.LastParameter():
@@ -567,9 +568,9 @@ def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) 
     """辺 `[first, last]` を3次ベジエの列で近似する(つなぎ目で接線が連続する)。
 
     各区間は3次エルミート(端点と、区間の内側から取った端点の1階微分の 区間長/3 を制御点に)。区間の内側の標本で、ベジエの点と
-    同じ割合のパラメータにある曲線の点の距離を測り、`APPROXIMATION_TOLERANCE` を超えたら区間を二分する。標本は等間隔の点に、
-    区間の中にある曲線のノット(B-スプラインのノット、オフセット曲線なら元の曲線のノット)とその間の中点を足したもの(ノットの
-    区間より細い山を等間隔の標本が飛び越えないため。ノットで区間を割ると、ノットの多い滑らかな曲線が区間の上限に当たる)。
+    同じ割合のパラメータにある曲線の点の距離を測り、`APPROXIMATION_TOLERANCE` を超えたら区間を二分する。標本は、区間の中にある
+    曲線のノット(B-スプラインのノット、オフセット曲線なら元の曲線のノット)で区切った小区間ごとの等間隔の点(ノットの区間の中の
+    細い山を飛び越えないため。ノットで区間そのものを割ると、ノットの多い滑らかな曲線が区間の上限に当たる)。
     誤差の上限は標本の点での値で、標本の間の保証ではない。
     OCCT の `GeomConvert_ApproxCurve` は使わない: 3次で接線を連続にする(C1)と区間の数はこれと同じで、C2 を頼むと黙って
     5次にする(2026-10-22 実測。20×10 の楕円を包んだ辺)。
@@ -629,13 +630,12 @@ def _arc_error(
     t1: float,
     knots: Sequence[float] = (),
 ) -> float:
-    """ベジエ `points` と、曲線の `[t0, t1]` を同じ割合のパラメータで対応させたときの距離の最大(内側の等間隔の標本と、
-    区間の中のノット `knots`(昇順)とその間の中点で)。"""
-    shares = [k / (_APPROXIMATION_SAMPLES + 1) for k in range(1, _APPROXIMATION_SAMPLES + 1)]
-    if knots:
-        marks = [t0, *knots, t1]
-        shares += [(knot - t0) / (t1 - t0) for knot in knots]
-        shares += [((a + b) / 2.0 - t0) / (t1 - t0) for a, b in zip(marks, marks[1:])]
+    """ベジエ `points` と、曲線の `[t0, t1]` を同じ割合のパラメータで対応させたときの距離の最大。標本は、区間の中のノット
+    `knots`(昇順)で区切った小区間ごとの内側の等間隔の点と、ノットそのもの(ノットの区間の中の細い山を見落とさない)。"""
+    marks = [t0, *knots, t1]
+    shares = [(knot - t0) / (t1 - t0) for knot in knots]
+    for a, b in zip(marks, marks[1:]):
+        shares += [((a + (b - a) * k / (_APPROXIMATION_SAMPLES + 1)) - t0) / (t1 - t0) for k in range(1, _APPROXIMATION_SAMPLES + 1)]
     worst = 0.0
     for s in shares:
         r = 1.0 - s
