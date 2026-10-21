@@ -500,14 +500,16 @@ def _move_endpoint(entity: dict, slot: str, target: Tuple[float, float]) -> None
 
 
 def _welded(entities: Sequence[dict], tolerance: float = WELD_TOLERANCE) -> List[dict]:
-    """`tolerance` 以内に集まった端点を1点に揃えた図形の並び(揃え先は円弧の端点を優先: 円弧の端は円の上から動かせない)。
-    両端が同じ点に揃った図形は、揃える前の差し渡しが `tolerance` の 10 倍以下なら除き(残すと小さな輪の領域ができる)、
-    それより大きい円弧は円にする(ほぼ一周する円弧と短い線分で閉じた穴)。"""
+    """`tolerance` 以内の端点を近い組から順に1点へ揃えた図形の並び。短い図形(差し渡しが `tolerance` の 10 倍以下)の
+    両端は1点にまとめない(半径の違う円弧を結ぶ 0.005 mm の線分も本物の辺)。`COLLAPSE_TOLERANCE` 以下の残りかすは両端をまとめて除き、
+    両端がまとまった長い円弧は円にする(ほぼ一周する円弧)。円の上で揃えきれない円弧の端は線分でつなぐ(並びの最後に足す)。"""
     out = [{"kind": e["kind"], "params": dict(e["params"]), **({"approximated": True} if e.get("approximated") else {})} for e in entities]
     extents = [_extent(entity) for entity in out]
     slots = [(index, slot) for index, entity in enumerate(out) for slot in _endpoint_slots(entity)]
     points = [_endpoint(out[index], slot) for index, slot in slots]
     parent = list(range(len(slots)))
+    owners = [{index} for index, _slot in slots]
+    rigid = {index for index, extent in enumerate(extents) if COLLAPSE_TOLERANCE < extent <= 10.0 * tolerance}
 
     def root(i: int) -> int:
         while parent[i] != i:
@@ -518,36 +520,88 @@ def _welded(entities: Sequence[dict], tolerance: float = WELD_TOLERANCE) -> List
     grid: dict = {}
     for i, (x, y) in enumerate(points):
         grid.setdefault((math.floor(x / tolerance), math.floor(y / tolerance)), []).append(i)
+    pairs = []
     for (gx, gy), members in grid.items():
         for i in members:
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
                     for j in grid.get((gx + dx, gy + dy), ()):
                         if j > i and math.dist(points[i], points[j]) <= tolerance:
-                            parent[root(j)] = root(i)
+                            pairs.append((math.dist(points[i], points[j]), i, j))
+    for _distance, i, j in sorted(pairs):
+        ri, rj = root(i), root(j)
+        if ri != rj and not owners[ri] & owners[rj] & rigid:
+            parent[rj] = ri
+            owners[ri] |= owners[rj]
     clusters: dict = {}
     for i in range(len(slots)):
         clusters.setdefault(root(i), []).append(i)
+    bridges: List[Tuple[int, dict]] = []
     for members in clusters.values():
         if len(members) < 2:
             continue
-        anchor = next((i for i in members if out[slots[i][0]]["kind"] == "arc"), members[0])
-        target = points[anchor]
+        arc_ends = [i for i in members if out[slots[i][0]]["kind"] == "arc"]
+        target = _arc_meeting(out, slots, points, arc_ends, tolerance) if arc_ends else points[members[0]]
         for i in members:
-            if i != anchor:
-                index, slot = slots[i]
+            index, slot = slots[i]
+            if math.dist(points[i], target) > 0.0 and _keeps_sweep(out[index], slot, target):
                 _move_endpoint(out[index], slot, target)
+            reached = _endpoint(out[index], slot)
+            # 円弧の端は円の上でしか動かせない(同心で半径の違う円弧など)し、回すと向きが逆になる短い円弧もある。残った隙間は
+            # 線分でつなぐ。実測: 領域を作る General Fuse がつなぐ隙間は 2e-7 mm まで(5e-7 mm で閉じない)、1e-8 mm の線分でつないでも領域になる
+            if math.dist(reached, target) > 1.0e-9:
+                bridges.append((index, {"kind": "line", "params": {"x0": reached[0], "y0": reached[1], "x1": target[0], "y1": target[1]}}))
     kept = []
+    gone = set()
     for index, entity in enumerate(out):
         ends = [root(i) for i, (owner, _slot) in enumerate(slots) if owner == index]
         if len(ends) == 2 and ends[0] == ends[1]:
+            gone.add(index)
             if extents[index] <= 10.0 * tolerance:
                 continue
             if entity["kind"] == "arc":
                 p = entity["params"]
                 entity = {"kind": "circle", "params": {"cx": p["cx"], "cy": p["cy"], "diameter": 2.0 * p["radius"]}}
         kept.append(entity)
-    return kept
+    return kept + [bridge for owner, bridge in bridges if owner not in gone]
+
+
+def _arc_meeting(out: Sequence[dict], slots: Sequence[Tuple[int, str]], points: Sequence[Tuple[float, float]],
+                 arc_ends: Sequence[int], tolerance: float) -> Tuple[float, float]:
+    """円弧の端が集まった点の揃え先。円弧の端は円の上でしか動かせないので、違う円の円弧が2つ以上あればその2円の交点
+    (集まった円弧の端のどれかから `tolerance` より遠ければ最初の円弧の端)。"""
+    first = points[arc_ends[0]]
+    circles: List[Tuple[float, float, float]] = []
+    for i in arc_ends:
+        p = out[slots[i][0]]["params"]
+        circle = (p["cx"], p["cy"], p["radius"])
+        if all(max(abs(a - b) for a, b in zip(circle, other)) > 1.0e-9 for other in circles):
+            circles.append(circle)
+    if len(circles) < 2:
+        return first
+    (x1, y1, r1), (x2, y2, r2) = circles[:2]
+    d = math.hypot(x2 - x1, y2 - y1)
+    if d <= 1.0e-12:
+        return first
+    a = (d * d + r1 * r1 - r2 * r2) / (2.0 * d)
+    h = math.sqrt(max(r1 * r1 - a * a, 0.0))
+    ux, uy = (x2 - x1) / d, (y2 - y1) / d
+    mx, my = x1 + a * ux, y1 + a * uy
+    crossing = min(((mx - h * uy, my + h * ux), (mx + h * uy, my - h * ux)), key=lambda c: math.dist(c, first))
+    return crossing if all(math.dist(crossing, points[i]) <= tolerance for i in arc_ends) else first
+
+
+def _keeps_sweep(entity: dict, slot: str, target: Tuple[float, float]) -> bool:
+    """端点を `target` へ動かしても図形が裏返らないか。円弧は端を回して始点が終点を追い越すと、ほぼ一周の円弧に化ける
+    (0.01 mm ほどの円弧の両端を別々の点へ回したとき)。"""
+    if entity["kind"] != "arc":
+        return True
+    p = entity["params"]
+    old = p["start_deg" if slot == "start" else "end_deg"]
+    delta = (math.degrees(math.atan2(target[1] - p["cy"], target[0] - p["cx"])) - old + 180.0) % 360.0 - 180.0
+    sweep = (p["end_deg"] - p["start_deg"]) % 360.0
+    moved = sweep - delta if slot == "start" else sweep + delta
+    return 0.0 < moved < 360.0
 
 
 def _extent(entity: dict) -> float:

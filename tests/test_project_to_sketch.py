@@ -469,7 +469,7 @@ def test_endpoints_closer_than_the_weld_tolerance_are_joined_and_arcs_stay_on_th
 
 
 def test_an_almost_full_arc_closed_by_a_tiny_segment_stays_a_hole() -> None:
-    """ほぼ一周する円弧(半径 10)と、その両端を結ぶ 0.005 mm の線分で閉じた穴は、端点を揃えると円の穴になる。落ちたら揃えた後の
+    """ほぼ一周する円弧(半径 10)と、その両端を結ぶ 0.005 mm の線分で閉じた穴は、端点を揃えても穴のまま。落ちたら揃えた後の
     大きさで判定して、直径 20 の穴ごと消している。"""
     from duocad import kernel_project
 
@@ -479,5 +479,90 @@ def test_an_almost_full_arc_closed_by_a_tiny_segment_stays_a_hole() -> None:
         {"kind": "line", "params": {"x0": 20.0 + 10.0 * math.cos(end), "y0": 20.0 + 10.0 * math.sin(end), "x1": 30.0, "y1": 20.0}},
     ]
     welded = kernel_project._welded(hole)
-    assert [entity["kind"] for entity in welded] == ["circle"]
-    assert welded[0]["params"]["diameter"] == pytest.approx(20.0)
+    assert _region_areas({"kind": "base", "name": "XY"}, welded) == pytest.approx([math.pi * 100.0], abs=1e-3)
+
+
+def test_short_segments_joining_arcs_of_different_radii_are_kept() -> None:
+    """半径 10 と 10.005 の半円を、両側の 0.005 mm の線分で結んだ穴は閉じたまま。落ちたら短い線分を潰して消し、円弧どうしの
+    0.005 mm の隙間が残って穴が領域にならない(円弧は半径の向きには動かせない)。"""
+    from duocad import kernel_project
+
+    hole = [
+        {"kind": "arc", "params": {"cx": 20.0, "cy": 20.0, "radius": 10.0, "start_deg": 0.0, "end_deg": 180.0}},
+        {"kind": "line", "params": {"x0": 10.0, "y0": 20.0, "x1": 9.995, "y1": 20.0}},
+        {"kind": "arc", "params": {"cx": 20.0, "cy": 20.0, "radius": 10.005, "start_deg": 180.0, "end_deg": 360.0}},
+        {"kind": "line", "params": {"x0": 30.005, "y0": 20.0, "x1": 30.0, "y1": 20.0}},
+    ]
+    welded = kernel_project._welded(hole)
+    assert [entity["kind"] for entity in welded] == ["arc", "line", "arc", "line"]
+    areas = _region_areas({"kind": "base", "name": "XY"}, welded)
+    assert areas == pytest.approx([math.pi * (10.0**2 + 10.005**2) / 2.0], abs=1e-3)
+
+
+def test_arcs_whose_ends_miss_by_the_vertex_tolerance_close_the_hole() -> None:
+    """40 mm 角の板の、半径 10 の円弧2本(端が 0.003 mm ずれて頂点の許容差で接する)の穴は閉じる。落ちたら円弧を動かさずに
+    隙間を残し、押し出すと穴が埋まる(sol の再現)。"""
+    from duocad import kernel_project
+
+    plate = [
+        {"kind": "line", "params": {"x0": 0.0, "y0": 0.0, "x1": 40.0, "y1": 0.0}},
+        {"kind": "line", "params": {"x0": 40.0, "y0": 0.0, "x1": 40.0, "y1": 40.0}},
+        {"kind": "line", "params": {"x0": 40.0, "y0": 40.0, "x1": 0.0, "y1": 40.0}},
+        {"kind": "line", "params": {"x0": 0.0, "y0": 40.0, "x1": 0.0, "y1": 0.0}},
+        {"kind": "arc", "params": {"cx": 20.0, "cy": 20.0, "radius": 10.0, "start_deg": 0.0, "end_deg": 180.0}},
+        {"kind": "arc", "params": {"cx": 20.0, "cy": 20.0, "radius": 10.0, "start_deg": 180.0171887, "end_deg": 359.9828113}},
+    ]
+    areas = _region_areas({"kind": "base", "name": "XY"}, kernel_project._welded(plate))
+    assert sorted(areas) == pytest.approx([math.pi * 100.0, 1600.0 - math.pi * 100.0], abs=1e-3)
+
+
+@pytest.mark.parametrize("lower", [(20.0, 20.0, 10.003), (20.003, 20.0, 10.0)], ids=["radius", "center"])
+def test_arcs_that_cannot_meet_on_their_circles_are_joined_by_short_segments(lower: tuple) -> None:
+    """上半円(半径 10)と、半径が 0.003 mm 大きい/中心が 0.003 mm ずれた下半円が頂点の許容差で接する穴は閉じる。落ちたら
+    円弧の角度を回すだけで半径の向きの隙間が残り、押し出すと穴が埋まる(sol の再現)。"""
+    from duocad import kernel_project
+
+    cx, cy, radius = lower
+    plate = [
+        {"kind": "line", "params": {"x0": 0.0, "y0": 0.0, "x1": 40.0, "y1": 0.0}},
+        {"kind": "line", "params": {"x0": 40.0, "y0": 0.0, "x1": 40.0, "y1": 40.0}},
+        {"kind": "line", "params": {"x0": 40.0, "y0": 40.0, "x1": 0.0, "y1": 40.0}},
+        {"kind": "line", "params": {"x0": 0.0, "y0": 40.0, "x1": 0.0, "y1": 0.0}},
+        {"kind": "arc", "params": {"cx": 20.0, "cy": 20.0, "radius": 10.0, "start_deg": 0.0, "end_deg": 180.0}},
+        {"kind": "arc", "params": {"cx": cx, "cy": cy, "radius": radius, "start_deg": 180.0, "end_deg": 360.0}},
+    ]
+    areas = sorted(_region_areas({"kind": "base", "name": "XY"}, kernel_project._welded(plate)))
+    assert len(areas) == 2 and sum(areas) == pytest.approx(1600.0, abs=1e-3)
+    assert areas[0] == pytest.approx(math.pi * (100.0 + radius**2) / 2.0, abs=0.05)
+
+
+def test_a_tiny_arc_whose_ends_go_to_different_crossings_does_not_turn_inside_out() -> None:
+    """0.01 mm ほどの円弧の両端を、ほぼ接する隣の円との別々の交点へ揃えても、ほぼ一周の円弧に裏返らない。落ちたら面積
+    31416 mm² の1つの領域が、直径 100 の穴のある2つに割れる(sol の再現)。"""
+    from duocad import kernel_project
+
+    shape = [
+        {"kind": "arc", "params": {"cx": 0.0, "cy": 0.0, "radius": 50.0, "start_deg": -0.005844169520468187, "end_deg": 0.005844169520468187}},
+        {"kind": "arc", "params": {"cx": -49.99999999, "cy": 0.001, "radius": 100.0, "start_deg": 0.002349126960694522, "end_deg": 180.00057295779513}},
+        {"kind": "arc", "params": {"cx": -49.99999999, "cy": -0.001, "radius": 100.0, "start_deg": 179.99942704220487, "end_deg": 359.99765087303933}},
+    ]
+    welded = kernel_project._welded(shape)
+    tiny = welded[0]["params"]
+    assert (tiny["end_deg"] - tiny["start_deg"]) % 360.0 < 1.0
+    areas = _region_areas({"kind": "base", "name": "XY"}, welded)
+    assert max(areas) == pytest.approx(31416.3265, abs=0.01) and sum(areas) == pytest.approx(31416.3265, abs=0.01)
+
+
+def test_arcs_of_different_circles_that_both_miss_meet_at_the_crossing() -> None:
+    """違う円の円弧2本の端がどちらも交点から 0.003 mm ずれていても、2円の交点で閉じたレンズになる。落ちたら片方の円弧の端へ
+    揃えて、もう片方の円の上へ回せない隙間が残る。"""
+    from duocad import kernel_project
+
+    lens = [
+        {"kind": "arc", "params": {"cx": 0.0, "cy": -5.0, "radius": 10.0, "start_deg": 29.9828113, "end_deg": 150.0171887}},
+        {"kind": "arc", "params": {"cx": 0.0, "cy": 5.0, "radius": 10.0, "start_deg": 210.0171887, "end_deg": 329.9828113}},
+    ]
+    welded = kernel_project._welded(lens)
+    assert [entity["kind"] for entity in welded] == ["arc", "arc"]
+    lens_area = 200.0 * math.pi / 3.0 - 5.0 * math.sqrt(300.0)
+    assert _region_areas({"kind": "base", "name": "XY"}, welded) == pytest.approx([lens_area], abs=1e-3)
