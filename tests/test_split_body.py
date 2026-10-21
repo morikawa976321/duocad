@@ -435,3 +435,30 @@ def test_a_plane_tangent_to_a_curved_body_inside_its_bounding_box_is_refused() -
 
     with pytest.raises(ValueError, match="割れない"):
         kernel_split.split_by_plane(doc.get_body(cylinder).shape, plane["plane_point"], plane["plane_normal"])
+
+
+def test_a_plane_between_the_lumps_of_one_body_is_refused() -> None:
+    """落ちたら: 離れた2つの塊を持つ1つのボディを、塊の間を通る(どちらとも交わらない)平面で「割れた」ことにしている。"""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+
+    from duocad.mesh_geometry import compound
+
+    doc = Document()
+    lumps = compound([BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 10, 10, 10).Shape(), BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 30), 10, 10, 10).Shape()])
+    doc.add_body(Body(id="lumps", name="lumps", kind="solid", shape=lumps))
+    before = _state(doc)
+    with pytest.raises(ValueError, match="切り口ができない"):
+        split_body(doc, [doc.bodies[0].id], sketch_id=_offset_sketch(doc, 20.0))
+    assert _state(doc)[: len(before)] == before
+
+
+def test_equal_volumes_are_ordered_by_x_even_when_x_differs_below_the_rounding() -> None:
+    """落ちたら: 重心を丸めて比べ、x の差が 1e-6 mm より小さい同体積の2塊で y の小さい方が先になる(仕様は x の小さい方)。"""
+    a = {"side": "positive", "centroid": [5.0, 25.0, 7.5]}
+    b = {"side": "positive", "centroid": [5.0000004, 5.0, 7.5]}
+    import functools
+
+    assert sorted([b, a], key=functools.cmp_to_key(kernel_split._piece_order))[0] is a
+    c = {"side": "negative", "centroid": [-100.0, 0.0, 0.0]}
+    assert sorted([c, b], key=functools.cmp_to_key(kernel_split._piece_order))[0] is b, "正側が先"

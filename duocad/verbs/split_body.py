@@ -196,7 +196,6 @@ def _do_split_body(document: Document, operation: Operation) -> None:
 
 
 def _undo_split_body(document: Document, operation: Operation) -> None:
-    """undo: 作ったボディを消し、元のボディの形を戻す。"""
     args = operation.args
     shapes = [recall(document, body_id, operation.seq) for body_id in args["bodies"]]
     remove_created_bodies(document, [new_id for group in args["created"] for new_id in group])

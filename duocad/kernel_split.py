@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import functools
 import math
 from typing import Any, List, Sequence
 
@@ -95,8 +96,25 @@ def _split_by_plane(shape: "TopoDS_Shape", origin: List[float], axis: List[float
         raise ValueError(f"split_body: 割った塊の体積の合計が元と合わない({volume_before} → {total})")
     if any(piece["volume"] <= _SIDE_RTOL * volume_before for piece in pieces):
         raise _no_cut("平面の片側に体積がほとんど残らない")
-    pieces.sort(key=lambda piece: (piece["side"] != "positive", *[round(value, 6) for value in piece["centroid"]]))
+    # 離れた塊を持つボディ(和を取った2つの箱など)では、塊の間を通る平面でも両側に塊が残る。切り口の面ができたかで交わりを見る
+    if not any(piece["provenance"]["new_faces"] for piece in pieces):
+        raise _no_cut("平面が塊の間を通るだけで、切り口ができない")
+    pieces.sort(key=functools.cmp_to_key(_piece_order))
     return {"volume_before": volume_before, "pieces": pieces}
+
+
+#: 重心の座標が同じとみなす差[mm](塊の並びの比較)。丸めで比べると、丸めの境目で x の差が消えて y が先に効く。
+_CENTROID_TIE = 1.0e-9
+
+
+def _piece_order(a: dict, b: dict) -> int:
+    """塊の並び: 正側が先、同じ側では重心の x, y, z の小さい方が先(差が `_CENTROID_TIE` 以下の座標は次の座標で決める)。"""
+    if a["side"] != b["side"]:
+        return -1 if a["side"] == "positive" else 1
+    for left, right in zip(a["centroid"], b["centroid"]):
+        if abs(left - right) > _CENTROID_TIE:
+            return -1 if left < right else 1
+    return 0
 
 
 def _no_cut(reason: str) -> ValueError:
