@@ -43,10 +43,15 @@ def manifold_of_triangles(positions: List[float], indices: List[int]) -> Tuple[A
 
 
 def manifold_of_shape(shape: Any) -> Tuple[Any, np.ndarray]:
-    """B-rep を 0.01 mm(STL と同じ)で三角形分割して。三角形分割できない形は例外。"""
+    """B-rep を 0.01 mm(STL と同じ)で三角形分割して。三角形分割できない形は例外。
+
+    分割は写しの上で作る(子プロセスは同じ形を後の組の GF に使い回す。分割が面に書き込まれると GF の結果が変わる。
+    `kernel_interference.triangles` と同じ罠)。
+    """
+    from .kernel import copy_shape
     from .topopt.finalize import tessellate_body
 
-    vertices, faces, _boundary = tessellate_body(shape)
+    vertices, faces, _boundary = tessellate_body(copy_shape(shape))
     return manifold_of(vertices, faces), vertices
 
 

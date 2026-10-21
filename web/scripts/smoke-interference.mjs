@@ -3,9 +3,11 @@
  *
  *   node scripts/smoke-interference.mjs
  *
- *   1. 重なった2体(+離れた1体)で「干渉チェック」を押すと、結果のイベントに overlap の三角形があり、
- *      ビューポートの層に赤い立体が1つ増える(体積 4000 mm³ = 10×20×20)
- *   2. パネルの見出しは4つで、干渉の行は開き、接触は畳まれている。行を選ぶとその組が強調され、もう一度押すと外れる
+ *   1. 重なった2体の組が2つ(4体)で「干渉チェック」を押すと、結果のイベントに overlap の三角形があり、
+ *      ビューポートの層に赤い立体が2つ載る(体積 4000 mm³ = 10×20×20 と 2000 mm³ = 5×20×20)
+ *   2. パネルの見出しは4つで、干渉の行は開き、接触は畳まれている。行を選ぶとその組だけが強調され(赤い立体が1つ)、
+ *      もう一度押すと外れて全部に戻る
+ *   2b. モード(スケッチ)へ移るとパネルも赤い立体も畳まれる
  *   3. 隙間の欄に 0.2 を入れて再検査すると、その値が結果に載る(欄は同じ文書の間は残る)
  *   4. 検査の前後で文書の版(適用回数・ログ本数)が変わらず、Ctrl+Z の対象にもならない
  *   5. 検査の最中に文書が変わったら、届いた結果は描かない
@@ -24,13 +26,14 @@ runSmoke('smoke-interference', { timeout: 120000, mcp: true }, async ({ browser,
   await addExtrudedRect(mcp, { corner: [0, 0], width: 20, height: 20, distance: 20 })
   await addExtrudedRect(mcp, { corner: [10, 0], width: 20, height: 20, distance: 20 })
   await addExtrudedRect(mcp, { corner: [100, 0], width: 20, height: 20, distance: 20 })
+  await addExtrudedRect(mcp, { corner: [115, 0], width: 20, height: 20, distance: 20 })
 
   const { page, consoleErrors } = await openApp(browser, url, { timeout })
   const waitFor = (check, what, args = []) => waitOrFail(page, check, what, { args, timeout, polling: 50 })
   const hook = (read) => page.evaluate(read)
 
-  await waitFor(() => window.__duocad.parts.length === 3, '3つのボディが届く')
-  const before = await hook(() => ({
+  await waitFor(() => window.__duocad.parts.length === 4, '4つのボディが届く')
+  let before = await hook(() => ({
     applied: window.__duocad.state.applied_count,
     log: window.__duocad.state.log.length,
     canUndo: window.__duocad.state.can_undo,
@@ -41,29 +44,51 @@ runSmoke('smoke-interference', { timeout: 120000, mcp: true }, async ({ browser,
   await waitFor(() => window.__duocad.interference.result !== null, '干渉チェックの結果が届く')
   const result = await hook(() => JSON.parse(JSON.stringify(window.__duocad.interference.result)))
   const overlaps = result.pairs.filter((pair) => pair.relation === 'overlap')
-  if (overlaps.length !== 1) fail(`重なっている組が1つのはずが ${overlaps.length}: ${JSON.stringify(result.counts)}`)
-  if (Math.abs(overlaps[0].volume - 4000) > 1e-3) fail(`重なりの体積が 4000 のはずが ${overlaps[0].volume}`)
-  if (!(overlaps[0].render?.solid?.indices?.length > 0)) fail('結果のイベントに重なりの三角形が無い')
-  if (result.target.mode !== 'visible_all' || result.target.pairs !== 3) fail(`対象が違う: ${JSON.stringify(result.target)}`)
-  ok('結果のイベントに overlap の三角形があり、体積が 4000 mm³')
-  await waitFor(() => window.__duocad.interference.solids === 1, 'ビューポートの層に赤い立体が1つ載る')
-  ok('ビューポートの層に赤い立体が1つ増える')
+  if (overlaps.length !== 2) fail(`重なっている組が2つのはずが ${overlaps.length}: ${JSON.stringify(result.counts)}`)
+  const volumes = overlaps.map((pair) => pair.volume).sort((a, b) => a - b)
+  if (Math.abs(volumes[0] - 2000) > 1e-3 || Math.abs(volumes[1] - 4000) > 1e-3) fail(`重なりの体積が 2000 と 4000 のはずが ${volumes}`)
+  if (!overlaps.every((pair) => pair.render?.solid?.indices?.length > 0)) fail('結果のイベントに重なりの三角形が無い')
+  if (result.target.mode !== 'visible_all' || result.target.pairs !== 6) fail(`対象が違う: ${JSON.stringify(result.target)}`)
+  ok('結果のイベントに overlap の三角形があり、体積が 4000 mm³ と 2000 mm³')
+  await waitFor(() => window.__duocad.interference.solids === 2, 'ビューポートの層に赤い立体が2つ載る')
+  ok('何も選んでいなければ、重なりの赤い立体が全部(2つ)載る')
 
   // ---------------------------------------------------------------- 2. パネル
   const headings = await hook(() => [...document.querySelectorAll('#interference-panel details')].map((d) => ({
     group: d.dataset.group, open: d.open, rows: d.querySelectorAll('[data-pair]').length,
   })))
-  const expected = [['overlap', true, 1], ['short', true, 0], ['unknown', true, 0], ['contact', false, 0]]
+  const expected = [['overlap', true, 2], ['short', true, 0], ['unknown', true, 0], ['contact', false, 0]]
   if (JSON.stringify(headings.map((h) => [h.group, h.open, h.rows])) !== JSON.stringify(expected)) {
     fail(`見出しが違う: ${JSON.stringify(headings)}`)
   }
   ok('見出しは干渉・隙間不足・未確定・接触の4つで、接触だけ畳まれている')
   await page.click('[data-pair]')
   await waitFor(() => document.querySelector('[data-pair].picked') !== null, '行を選ぶと強調される')
-  await waitFor(() => window.__duocad.interference.solids === 1, '選んだ組の立体が出る')
+  await waitFor(() => window.__duocad.interference.solids === 1, '選んだ組の立体だけが出る(2つから1つへ)')
   await page.click('[data-pair]')
   await waitFor(() => document.querySelector('[data-pair].picked') === null, 'もう一度押すと外れる')
-  ok('行を選ぶとその組が強調され、もう一度押すと外れる')
+  await waitFor(() => window.__duocad.interference.solids === 2, '外すと全部の重なりに戻る')
+  ok('行を選ぶとその組だけが強調され、もう一度押すと外れて全部に戻る')
+
+  // ---------------------------------------------------------------- 2b. モードを変えると畳む
+  const sketch = (await mcp.callTool('sketch_create', { base_plane: 'XY' })).sketch_id
+  await waitFor(() => window.__duocad.mode === 'sketch', 'スケッチモードに入る')
+  await waitFor(
+    () => window.__duocad.interference.solids === 0 && document.querySelector('#interference-panel') === null,
+    'スケッチモードへ移っても干渉チェックのパネルと赤い立体が残る',
+  )
+  await mcp.callTool('leave_sketch')
+  await mcp.callTool('delete', { target: { sketch: sketch } }).catch(() => {})
+  await waitFor(() => window.__duocad.mode === 'idle', '通常モードへ戻る')
+  await page.click('#interference')
+  await waitFor(() => window.__duocad.interference.result !== null && window.__duocad.interference.solids === 2, '押し直すと結果が戻る')
+  ok('モード(スケッチ)へ移るとパネルも赤い立体も畳まれる')
+  // 2b でスケッチを作ったので、文書が変わらないことを見る起点をここへ取り直す
+  before = await hook(() => ({
+    applied: window.__duocad.state.applied_count,
+    log: window.__duocad.state.log.length,
+    canUndo: window.__duocad.state.can_undo,
+  }))
 
   // ---------------------------------------------------------------- 3. 隙間の欄
   await page.click('#interference-clearance')
@@ -97,7 +122,9 @@ runSmoke('smoke-interference', { timeout: 120000, mcp: true }, async ({ browser,
 
   // ---------------------------------------------------------------- 5. 検査の最中に文書が変わる
   await page.click('#interference-run')
-  await addExtrudedRect(mcp, { corner: [200, 0], width: 5, height: 5, distance: 5 })
+  // モードを変えない変更で文書の版を進める(箱を足すと画面がスケッチへ入り、モードの切り替えで先に畳まれる)
+  const renamed = (await mcp.callTool('describe_document', {})).bodies[0].body_id
+  await mcp.callTool('rename', { target: renamed, name: 'renamed-during-check' })
   await waitFor(() => window.__duocad.interference.running === false, '検査が終わる(結果は捨てられる)')
   await sleep(300)
   const stale = await hook(() => ({

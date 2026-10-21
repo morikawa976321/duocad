@@ -294,3 +294,42 @@ def test_a_mesh_body_overlapping_a_box_is_reported_with_the_approximation_mark()
     assert entry["relation"] == "overlap" and entry["volume"] == pytest.approx(500.0, rel=1e-6)
     assert entry["approximate"] == interference.APPROXIMATE
     assert result["method"].endswith("+mesh")
+
+
+def _mesh_cube(x: float):
+    from duocad.document import Mesh
+
+    corners = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]]
+    faces = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]]
+    scaled = [[cx * 10 + x, cy * 10, cz * 10] for cx, cy, cz in corners]
+    positions = [c for tri in faces for v in tri for c in scaled[v]]
+    return Mesh(positions=tuple(positions), indices=tuple(range(len(faces) * 3)))
+
+
+def test_meshes_closer_than_the_band_are_a_contact_even_without_a_clearance():
+    """隙間 0 でも、帯 ε(1e-6 mm)より近いメッシュ2体は接触。落ちたら箱の段の幅に ε が無く、離れているとして落としている
+    (隙間 0.2 で測ると接触になり、問い方で区分が変わる)。"""
+    from duocad.document import Body, Document
+
+    document = Document()
+    document.add_body(Body(id="m1", name="m1", kind="mesh", mesh=_mesh_cube(0.0)))
+    document.add_body(Body(id="m2", name="m2", kind="mesh", mesh=_mesh_cube(10.0000005)))
+    for clearance in (0.0, 0.2):
+        entry = pair_of(check(document, clearance), "m1", "m2")
+        assert entry is not None and entry["relation"] == "contact", clearance
+
+
+def test_converting_a_brep_to_a_mesh_does_not_mesh_the_brep():
+    """B-rep をメッシュの経路へ変換しても、元の形の面に三角形分割が書き込まれない。落ちたら子プロセスが使い回す形の GF の
+    結果が、メッシュを含む組を先に測ったかどうかで変わる。"""
+    from OCP.BRep import BRep_Tool
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopLoc import TopLoc_Location
+    from OCP.TopoDS import TopoDS
+
+    from duocad import interference_mesh
+    from duocad.mesh_geometry import subshapes
+
+    shape = box(0, 0, 0, 10, 10, 10)
+    interference_mesh.manifold_of_shape(shape)
+    assert all(BRep_Tool.Triangulation_s(TopoDS.Face_s(face), TopLoc_Location()) is None for face in subshapes(shape, TopAbs_FACE))

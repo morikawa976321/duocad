@@ -38,6 +38,8 @@ export function createInterference(deps: {
   /** 文書の世代(開く・新規・閉じるで進む)。 */
   generation: () => number | null
   connected: () => boolean
+  /** 今のモード(`'idle' | 'sketch-pending' | 'sketch' | 'optimize'`)。変わったら結果を畳む。 */
+  modeKind: () => string
   viewport: () => Viewport | null
   fail: (message: string) => void
 }): Interference {
@@ -78,12 +80,30 @@ export function createInterference(deps: {
     }
   })
 
-  // 繋がりが切れたら、返事を待たない。
+  // 繋がりが切れたら、返事を待たない。検査の途中で切れたら、前の結果(と赤い立体)は今回の検査の結果ではないので消して知らせる。
   $effect(() => {
     if (!deps.connected()) {
+      if (running) {
+        drop()
+        notice = '検査の途中で接続が切れた。繋がり直したらもう一度検査する'
+      }
       running = false
       currentOp = null
     }
+  })
+
+  // モードが変わったら畳む(スケッチ・形状最適化へ移ると文書の版は変わらないので、版の見張りでは消えない)。検査中なら返事も捨てる。
+  let seenMode: string | undefined
+  $effect(() => {
+    const mode = deps.modeKind()
+    if (seenMode !== undefined && mode !== seenMode) {
+      open = false
+      running = false
+      currentOp = null
+      notice = ''
+      drop()
+    }
+    seenMode = mode
   })
 
   // ビューポートの層。結果と選んだ行だけで決まる。

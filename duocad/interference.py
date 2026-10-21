@@ -272,7 +272,8 @@ def run(
     deadline = started + limits.total_seconds
     load_message, boxes = _prepare(snapshot)
     targets = snapshot.targets
-    reach = clearance + GAP_BAND_MM if clearance > 0 else 0.0
+    # 帯 ε は clearance 0 でも足す(メッシュの組は「距離が ε 以下なら接触」なので、箱が ε だけ離れた組を箱の段で落とさない)
+    reach = clearance + GAP_BAND_MM
     mesh_ids = {body_id for body_id, body in snapshot.bodies.items() if body.kind == "mesh"}
 
     plans: List[_Plan] = []

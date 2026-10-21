@@ -986,6 +986,7 @@
     revision: () => (model === null ? null : `${model.generation}.${model.applied_count}.${model.log.length}`),
     generation: () => model?.generation ?? null,
     connected: () => status === 'open',
+    modeKind: () => mode.kind,
     viewport: () => viewport,
     fail,
   })

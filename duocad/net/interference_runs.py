@@ -1,4 +1,4 @@
-"""画面からの干渉チェックの走らせ方(`Server` から切り出した。Issue #186)。
+"""画面からの干渉チェックの走らせ方(Issue #186)。
 
 計算は子プロセスを待つのでワーカースレッドで走らせ、イベントループは他の要求を捌き続ける(`Server._start_preview` の型)。
 ワーカーは1本。**結果は要求した接続にだけ返す**(状態配信ではない)。同じ接続が続けて起動したら前の検査は取り消し(子を止める)、
@@ -14,8 +14,14 @@ from ..interference import InterferenceCancelled
 
 
 class InterferenceRuns:
-    def __init__(self, send: Callable[[Any, dict], Awaitable[None]], alive: Callable[[Any], bool]) -> None:
-        self._send = send
+    def __init__(
+        self,
+        send_text: Callable[[Any, str], Awaitable[None]],
+        encode: Callable[[dict], str],
+        alive: Callable[[Any], bool],
+    ) -> None:
+        self._send_text = send_text
+        self._encode = encode
         self._alive = alive
         self._worker: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._jobs: Dict[Any, Any] = {}  # connection -> 走っている Job
@@ -46,7 +52,10 @@ class InterferenceRuns:
             else:
                 payload = {**envelope, **result}
             if self._jobs.get(connection) is job and self._alive(connection):
-                await self._send(connection, payload)
+                # 文字列にするのもループの外で(描画の三角形が多いと数 MB になり、実測 6.6 MB で 66 ms ループを止めた)
+                text = await asyncio.get_running_loop().run_in_executor(None, self._encode, payload)
+                if self._jobs.get(connection) is job and self._alive(connection):
+                    await self._send_text(connection, text)
         finally:
             if self._jobs.get(connection) is job:
                 self._jobs.pop(connection, None)
