@@ -31,10 +31,11 @@ from OCP.BRepAlgoAPI import (
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_Transform
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
+from OCP.ChFi3d import ChFi3d
 from OCP.BRepGProp import BRepGProp, BRepGProp_Domain, BRepGProp_Face, BRepGProp_Vinert
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_TangentialDeflection
-from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
+from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_ReturnStatus
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -48,6 +49,7 @@ from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.TopTools import (
+    TopTools_IndexedDataMapOfShapeListOfShape,
     TopTools_IndexedMapOfShape,
 )
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
@@ -1604,6 +1606,7 @@ def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
     contours = range(1, maker.NbContours() + 1)
     changed = _faces_changed_by(maker, shape)
     touching = {contour: _vertices_of_contour(maker, contour) for contour in contours}
+    smooth = None
     suspects = set()
     for face in changed:
         corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
@@ -1612,7 +1615,11 @@ def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
             if any(vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1))
         }
         if not owners:
-            return True
+            if smooth is None:
+                smooth = _smoothly_joined_supports(maker, shape, contours)
+            if not smooth.Contains(face):
+                return True
+            continue
         face_box = Bnd_Box()
         BRepBndLib.Add_s(face, face_box)
         for contour in contours:
@@ -1668,11 +1675,49 @@ def _changes_faces_away_from(maker: Any, shape: "TopoDS_Shape", contours: Iterab
             edge = maker.Edge(contour, number)
             rounded_vertices.Add(TopExp.FirstVertex_s(edge))
             rounded_vertices.Add(TopExp.LastVertex_s(edge))
+    smooth = None
     for face in _faces_changed_by(maker, shape):
         corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
         if not any(rounded_vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1)):
-            return True
+            if smooth is None:
+                smooth = _smoothly_joined_supports(maker, shape, contours)
+            if not smooth.Contains(face):
+                return True
     return False
+
+
+def _smoothly_joined_supports(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int]) -> "TopTools_IndexedMapOfShape":
+    """丸めた辺の両側の面と、そこから接線連続の辺(同じ平面を割った継ぎ目など)だけをたどって行ける面。
+
+    丸めが継ぎ目を越えて隣の面へ続くのは当たりではない(箱の上面を x=2 で同じ平面の2面に割り、x=0 の辺を半径 3 で
+    丸めると隣の面まで変わる。当たりと見なして吸収へ回すと、継ぎ目を崖として肉を切り、削り残した。Codex レビューの反例)。
+    """
+    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, TopAbs_ShapeEnum.TopAbs_FACE, edge_faces)
+    reached = TopTools_IndexedMapOfShape()
+    queue = []
+    for contour in contours:
+        for number in range(1, maker.NbEdges(contour) + 1):
+            edge = maker.Edge(contour, number)
+            if edge_faces.Contains(edge):
+                for face in edge_faces.FindFromKey(edge):
+                    if not reached.Contains(face):
+                        reached.Add(face)
+                        queue.append(face)
+    while queue:
+        face = queue.pop()
+        edges = indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+        for number in range(1, edges.Extent() + 1):
+            edge = TopoDS.Edge_s(edges.FindKey(number))
+            if not edge_faces.Contains(edge):
+                continue
+            for other in edge_faces.FindFromKey(edge):
+                if reached.Contains(other) or other.IsSame(face):
+                    continue
+                if ChFi3d.IsTangentFaces_s(edge, TopoDS.Face_s(face), TopoDS.Face_s(other), GeomAbs_Shape.GeomAbs_G1):
+                    reached.Add(other)
+                    queue.append(other)
+    return reached
 
 
 def _absorbed_fillet(

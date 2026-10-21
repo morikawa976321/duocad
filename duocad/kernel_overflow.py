@@ -137,12 +137,64 @@ def _face_pairs(edge_map, edge_faces, radius_of: Dict[int, float]) -> List[Tuple
             if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() not in _SURFACES:
                 raise Unsupported(f"edge {index} borders a surface that cannot be extended")
         for one, two, size, members in groups:
-            if size == radius and ((one.IsSame(first) and two.IsSame(second)) or (one.IsSame(second) and two.IsSame(first))):
+            if size == radius and (
+                (_same_support(one, first) and _same_support(two, second))
+                or (_same_support(one, second) and _same_support(two, first))
+            ):
                 members.append(index)
                 break
         else:
             groups.append((first, second, radius, [index]))
     return groups
+
+
+def _same_support(one: TopoDS_Shape, other: TopoDS_Shape) -> bool:
+    """同じ面か、同じ平面に載り外向きが揃った面か(同じ平面を割った面の間の辺は、1つのくさびから肉が取れる)。"""
+    if one.IsSame(other):
+        return True
+    first, second = _outward_plane(one), _outward_plane(other)
+    if first is None or second is None:
+        return False
+    (normal_a, offset_a), (normal_b, offset_b) = first, second
+    return normal_a.IsParallel(normal_b, 1.0e-9) and normal_a.Dot(normal_b) > 0 and abs(offset_a - offset_b) <= _COPLANAR
+
+
+#: 同じ平面と見なす距離[mm]。
+_COPLANAR = 1.0e-7
+
+
+def _outward_plane(face: TopoDS_Shape):
+    """平面の面の外向き単位法線と、原点からの符号つき距離。平面でなければ None。"""
+    surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
+    if surface.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
+        return None
+    plane = surface.Plane()
+    normal = gp_Vec(plane.Axis().Direction())
+    if face.Orientation() == TopAbs_REVERSED:
+        normal.Reverse()
+    return normal, gp_Vec(plane.Location().XYZ()).Dot(normal)
+
+
+def _coplanar_region(face: TopoDS_Shape, edge_faces) -> list:
+    """`face` と、辺を共有して同じ平面に載る面をたどって集めた面(平面でなければ `face` だけ)。
+    割れた平面の継ぎ目を崖として肉を切らないため(箱の上面を x=2 で割り、x=0 の辺を半径 3 で丸めると、継ぎ目の先の肉が
+    捨てられて削り残した。Codex レビューの反例)。"""
+    if _outward_plane(face) is None:
+        return [face]
+    region, queue = [face], [face]
+    while queue:
+        current = queue.pop()
+        edges = indexed_map(current, TopAbs_EDGE)
+        for number in range(1, edges.Extent() + 1):
+            edge = edges.FindKey(number)
+            if not edge_faces.Contains(edge):
+                continue
+            for other in edge_faces.FindFromKey(edge):
+                if any(other.IsSame(known) for known in region) or not _same_support(face, other):
+                    continue
+                region.append(other)
+                queue.append(other)
+    return region
 
 
 def _material(shape: TopoDS_Shape, edges: list, first: TopoDS_Shape, second: TopoDS_Shape, radius: float):
@@ -252,23 +304,19 @@ def _edge_length(edge: TopoDS_Shape) -> float:
 
 
 def _room_inside(face: TopoDS_Shape, point: gp_Pnt):
-    """`point` が面の曲面の内側(円柱・円錐の軸側、球の中心側)にあれば、その曲面の半径。外側・平面などは None。
+    """`point` が面の曲面の内側(円柱の軸側、球の中心側)にあれば、その曲面の半径。外側・平面・それ以外の曲面は None。
 
     凸の柱の上縁(物体側のくさびが円柱の内側)や止まり穴の底(空気側のくさびが穴の内側)は、曲面の半径以上の球が
     入らない。それでも延長したくさびの `MakeFillet` は通ることがあり、半径 0.56 の細いピンの上縁を半径 12 で丸めると
     見当違いの肉ができ、統合で仮想メモリを使い尽くした(PC ケースの部品)。
+    円錐は見ない: 球の中心は辺より奥にあり、下へ広がる円錐ではそこの半径が辺の半径より大きいので、辺での半径は上限に
+    ならない(上面半径 5・下面半径 15・高さ 10 の円錐台の上縁を半径 6 で丸めるのを OCCT は通すのに、断っていた。Codex レビューの反例)。
     """
     surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
     kind = surface.GetType()
     if kind == GeomAbs_SurfaceType.GeomAbs_Cylinder:
         axis, radius = surface.Cylinder().Axis(), surface.Cylinder().Radius()
         return radius if _distance_to_axis(axis, point) < radius else None
-    if kind == GeomAbs_SurfaceType.GeomAbs_Cone:
-        cone = surface.Cone()
-        axis = cone.Axis()
-        along = gp_Vec(axis.Location(), point).Dot(gp_Vec(axis.Direction()))
-        local = cone.RefRadius() + along * math.tan(cone.SemiAngle())
-        return local if local > 0 and _distance_to_axis(axis, point) < local else None
     if kind == GeomAbs_SurfaceType.GeomAbs_Sphere:
         sphere = surface.Sphere()
         return sphere.Radius() if point.Distance(sphere.Location()) < sphere.Radius() else None
@@ -292,7 +340,7 @@ def _trim(shape, material, edges, faces, heights, concave: bool):
     """
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
-    first, second = (_column(_without_footprints(face, edge_faces), height, concave) for face, height in zip(faces, heights))
+    first, second = (_region_column(face, edge_faces, height, concave) for face, height in zip(faces, heights))
     columns = _boolean("common", first, second).Shape()
     outside = _boolean("cut", material, columns).Shape()
     scale = max(_volume(material), 1.0e-12)
@@ -303,6 +351,15 @@ def _trim(shape, material, edges, faces, heights, concave: bool):
     for part in dropped:
         material = _boolean("cut", material, part).Shape()
     return material
+
+
+def _region_column(face: TopoDS_Shape, edge_faces, height: float, concave: bool) -> TopoDS_Shape:
+    """`face` と同じ平面に続く面すべての柱を合わせた立体(足元は塞ぐ)。"""
+    columns = [_column(_without_footprints(member, edge_faces), height, concave) for member in _coplanar_region(face, edge_faces)]
+    combined = columns[0]
+    for other in columns[1:]:
+        combined = _boolean("fuse", combined, other).Shape()
+    return combined
 
 
 def _without_footprints(face: TopoDS_Shape, edge_faces) -> TopoDS_Shape:

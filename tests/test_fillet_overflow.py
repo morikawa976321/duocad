@@ -361,3 +361,64 @@ def test_many_far_away_selections_do_not_hide_a_fillet_that_hits_a_post():
     b_rounded = _native(post_b, _circle_edge(post_b, 4.0, 23.0, x=11.0), 1.0)
     expected = kernel.volume(_boolean(BRepAlgoAPI_Fuse, pieces.Shape(), b_rounded))
     assert rounded["volume_after"] == pytest.approx(expected, rel=1e-7)
+
+
+def test_a_frustum_top_edge_wider_than_its_top_radius_is_still_rounded():
+    """上面半径 5・下面半径 15 の円錐台の上縁を半径 6 で丸めるのは OCCT が通す形で、球の大きさの検査で断らない
+    (辺での円錐の半径を上限にして断っていた。Codex レビューの反例)。吸収を直接呼んでも OCCT と同じ体積になる。"""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCone
+    from duocad import kernel_overflow
+
+    frustum = BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 15.0, 5.0, 10.0).Shape()
+    top = _circle_edge(frustum, 5.0, 10.0)
+
+    absorbed = kernel_overflow.absorb(frustum, kernel._edge_map(frustum), {top: 6.0})
+
+    assert kernel.volume(absorbed.shape) == pytest.approx(kernel.volume(_native(frustum, top, 6.0)), rel=1e-7)
+
+
+def _box_with_split_top():
+    """20×30×20 の箱の上面だけを、x=2 の線で同じ平面の2面に割った形(OCCT はこの継ぎ目を越えて丸められる)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.BRepFeat import BRepFeat_SplitShape
+
+    box = _box(0, 0, 0, 20, 30, 20)
+    top = kernel.face_of(box, [f["index"] for f in query.describe_faces(box) if f["normal"][2] > 0.9][0])
+    split = BRepFeat_SplitShape(box)
+    split.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(2, 0, 20), gp_Pnt(2, 30, 20)).Edge(), TopoDS.Face_s(top))
+    split.Build()
+    return split.Shape()
+
+
+def _split_box():
+    """20×30×20 の箱を x=2 で割った2つの箱を、統合せずに合わせた形(上面と前後の面が割れていて、OCCT は継ぎ目を越えて
+    丸められない)。"""
+    made = BRepAlgoAPI_Fuse(_box(0, 0, 0, 2, 30, 20), _box(2, 0, 0, 20, 30, 20))
+    made.Build()
+    return made.Shape()
+
+
+def test_a_fillet_spilling_across_a_coplanar_seam_stays_occt_s_own():
+    """同じ平面を割った継ぎ目を越えて丸めが続くのは、別の形に当たったのではない(OCCT の形のまま)。
+    当たりと見なして吸収へ回し、継ぎ目を崖として肉を切って削り残していた(Codex レビューの反例)。"""
+    shape = _box_with_split_top()
+    index = _line_edge_at(shape, 0.0, 20.0)
+    native = _native(shape, index, 3.0)
+    assert native is not None, "前提: OCCT はこの継ぎ目を越えて丸められる"
+
+    rounded = kernel.fillet_edges(shape, {index: 3.0})
+
+    assert rounded["volume_after"] == pytest.approx(kernel.volume(native), rel=1e-9)
+
+
+def test_absorbing_across_a_coplanar_seam_does_not_cut_at_the_seam():
+    """OCCT が継ぎ目を越えられない割れ方でも、吸収は継ぎ目の先の肉を捨てず、割れていない箱を丸めた形と同じになる。"""
+    shape = _split_box()
+    index = _line_edge_at(shape, 0.0, 20.0)
+    assert _native(shape, index, 3.0) is None, "前提: OCCT はこの割れ方では断る"
+
+    rounded = kernel.fillet_edges(shape, {index: 3.0})
+
+    whole = _box(0, 0, 0, 20, 30, 20)
+    expected = _native(whole, _line_edge_at(whole, 0.0, 20.0), 3.0)
+    assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
