@@ -132,7 +132,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - 呼ぶ面は MCP/セッション `project_to_sketch(sketch_id)`(対象は確定選択の辺・面)と `project_outline(sketch_id)`(対象は確定選択の面・辺・頂点・ボディが属するボディ)。verb は `duocad/verbs/project_to_sketch.py`、幾何は `kernel_project.edge_entities` / `face_edges` / `outline_entities`。プレビューは投機実行でなく `preview_project_to_sketch` / `preview_project_outline`(`sketch_ghost`。図形が無ければ `pieces=0`)。
 - **写した図形は普通の図形で元の形に追従しない。** redo/replay はログの図形数値を使う(面・辺の添字に依存しない)。1回の呼び出しの中の重複(上面と下面の同じ長方形)は1つにするが、スケッチに既にある図形との重複は除かない。
 - 点に潰れる辺は図形にしない。全部が潰れたら ValueError で何も変えない。メッシュのボディは断る。
-- **写した図形の端点は 0.01 mm 以内なら1点に揃える**(`kernel_project.WELD_TOLERANCE`。近い組から順にまとめ、差し渡し 0.1 mm 以下の図形の両端は1点にしない。円弧の端が集まれば円の上の点 — 違う円の円弧が2つなら2円の交点 — へ揃え、円の上で揃えきれない隙間は短い線分でつなぐ)。STEP の辺の曲線は頂点から形状許容差の分ずれて終わり(本人の PC ケースで最大 0.0097 mm)、揃えないと写した外周が閉じず領域にならない(PC ケースの平らな面 1155 枚のうち、揃えないと 77 枚、揃えると 31 枚。残る 31 枚は面積ほぼ 0 の退化した面)。
+- **写した図形の端点は 0.01 mm 以内なら1点に揃える**(`kernel_project.WELD_TOLERANCE`。近い組から順にまとめ、差し渡し 0.1 mm 以下の図形の両端は1点にしない。円弧の端が集まれば円の上の点 — 違う円の円弧が2つなら2円の交点 — へ揃え、円の上で揃えきれない隙間は短い線分でつなぐ)。STEP の辺の曲線は頂点から形状許容差の分ずれて終わり(本人の PC ケースで最大 0.0097 mm)、揃えないと写した外周が閉じず領域にならない(PC ケースの平らな面 1155 枚のうち、揃えないと 77 枚、揃えると 0 枚)。
 - 外形は隠線処理(`HLRBRep_Algo`)の線で平面を割り、法線方向の直線がボディに当たる面の和の境界。`HLRBRep_HLRToShape` の線は射影の局所座標で返り、3D の曲線を持たない辺がある(`BRepLib.BuildCurves3d` で作ってから世界座標へ戻す)。
 - Web は `PROJECT_TO_SKETCH`(`#sketch-project`、辺・面の選択)と `PROJECT_OUTLINE`(`#sketch-project-outline`、ボディの選択。面のクリックをボディへ畳む)。起動中はスケッチモードでもソリッドを指す(`App.svelte` の `solidPickInSketch`)。
 
