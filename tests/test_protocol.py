@@ -306,6 +306,14 @@ def _run_mirror_body(session: Session, tmp_path: Path) -> dict:
     return session.mirror_body(base_plane="YZ")
 
 
+@_runner("split_body")
+def _run_split_body(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    sketch_id = session.sketch_create_offset(SIDE / 2, "XY")["sketch_id"]
+    return session.split_body(sketch_id=sketch_id)
+
+
 @_runner("delete")
 def _run_delete(session: Session, tmp_path: Path) -> dict:
     """**ボディと図形を混ぜて**走らせる —— 片方だけで走らせると、宣言の

@@ -1333,6 +1333,66 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="split_body",
+        returns=(
+            Result("plane_point", "number[]"),
+            Result("plane_normal", "number[]"),
+            Result("keep", "string"),
+            Result("created", "string[]"),
+            Result("changed_bodies", "string[]"),
+        ),
+        category="feature",
+        description=(
+            "選択の面/辺/頂点が**属するボディ**を、平面で切って複数のボディに分けるときに呼ぶ"
+            "(大きな部品を割る・蓋と本体に分ける・断面を見る)。体積の合計は変わらず、切り口に平らな面ができる。"
+            "切る平面は base_plane(XY/XZ/YZ)・plane_face(既存の平らな面への参照)・sketch_id(スケッチの平面。"
+            "オフセット平面を含む)のどれか1つ。keep は残す側: both(既定。両側を残す)/ positive(平面の法線が向く側だけ。"
+            "平らな面なら外向きの法線)/ negative(反対側だけ)。元のボディの番号・名前は、残す塊のうち体積が最大のものが"
+            "引き継ぎ、ほかの塊は新しいボディになる。片側が離れた複数の塊に分かれるときは塊ごとに別のボディ。"
+            "平面がボディと交わらない・面に接しているだけのときは、どのボディも変えずに失敗する"
+            "(複数のボディは1つでも交わらなければ全体が失敗)。メッシュのボディは割れない。"
+        ),
+        params=(
+            Param(
+                "base_plane",
+                "string",
+                "切る平面を基準平面で指す XY / XZ / YZ(原点通過)。plane_face・sketch_id とは同時に渡せない",
+                required=False,
+            ),
+            Param(
+                "plane_face",
+                "object",
+                "切る平面を既存ソリッドの平らな面で指す "
+                '{"body": body_id, "index": 面の1始まりの添字}。base_plane・sketch_id とは同時に渡せない。'
+                "この面自身が対象ボディに属していてもよい(ただし面に接しているだけでは割れない)",
+                required=False,
+            ),
+            Param(
+                "sketch_id",
+                "string",
+                "切る平面をスケッチの平面で指す(スケッチのID。面に貼ったもの・オフセット平面のものも使える)。"
+                "base_plane・plane_face とは同時に渡せない",
+                required=False,
+            ),
+            Param(
+                "keep",
+                "string",
+                "残す側 both(既定)/ positive(平面の法線が向く側だけ)/ negative(反対側だけ)",
+                required=False,
+            ),
+        ),
+        session="split_body",
+        previewable=True,
+        resets_selection=True,
+        note=(
+            "**ログには解決済みの数値 `{plane_point, plane_normal}` を載せる**(`mirror_body` と同じ。後で面の番号が"
+            "変わっても再生が同じになる)。切る平面は3つが排他で、画面は「切る平面」の選択肢のうち基準平面・"
+            "面・スケッチの平面のどれか1つを送る。面・スケッチのピックは共有選択集合に入れない別チャンネル"
+            "(`mirror_body` の `plane_face` と同じ理由)。`keep` はMCPでは省略=both、画面は常に送る。"
+            "番号・名前の引き継ぎと採番は `duocad/verbs/split_body.py` のdocstring。"
+        ),
+    ),
+    Command(
         name="delete",
         returns=(
             Result("bodies", "string[]"),
