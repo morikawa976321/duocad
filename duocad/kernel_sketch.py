@@ -35,6 +35,7 @@ from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
+from OCP.TColStd import TColStd_Array1OfReal
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt, gp_Vec
 
 from .kernel import _BASE_PLANE_AXES, _face_map, _face_normal, _face_props, classify_face, edge_length, face_of
@@ -284,10 +285,17 @@ def _dilate_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[
     """
     result: List[Any] = []
     for face in faces:
-        grown = _dilate_face(ax3, face, distance)
-        if not _plausible_dilation(face, grown):
+        try:
+            grown = _dilate_face(ax3, face, distance)
+        except ValueError:
+            grown = None
+        if grown is None or not _plausible_dilation(face, grown):
             retry = _offset_ready(ax3, face)
-            grown = _dilate_face(ax3, retry, distance) if retry is not face else grown
+            if retry is face:
+                if grown is None:
+                    raise ValueError(f"2Dオフセット(距離 {distance} mm)に失敗した")
+            else:
+                grown = _dilate_face(ax3, retry, distance)
             if not _plausible_dilation(face, grown):
                 raise ValueError(f"2Dオフセット(距離 {distance} mm)が壊れた形を返した")
         result.extend(grown)
@@ -319,11 +327,12 @@ _REOFFSET_TOLERANCE = 1.0e-6
 
 
 def _offset_ready(ax3: "gp_Ax3", face: Any) -> Any:
-    """広げると壊れた形が返った面の、直線・円に乗らないオフセット曲線の辺を多項式の B-スプラインで近似し直した面。無ければ元の面。
+    """広げると失敗した・壊れた形が返った面の、直線・円に乗らないオフセット曲線の辺を多項式の B-スプラインで近似し直した面。無ければ元の面。
 
     外部の罠: 楕円を広げて縮めた面(辺が楕円のオフセットのオフセット)を `BRepOffsetAPI_MakeOffset` でさらに広げると、例外も
     `IsDone()=False` も出さずに壊れたワイヤを返す(2026-10-22 実測: 20×10 の楕円を R=1, d=1.5 で包むと、面積 43.3 と −16.8 の
-    2枚に分かれた。正しくは 236.81 の1枚)。`BRepBuilderAPI_NurbsConvert` で有理 B-スプラインにすると access violation で
+    2枚に分かれた。正しくは 236.81 の1枚)。同じ面で距離によっては `IsDone()=False` になる(角度 30 度の同じ楕円で R=1, d=2。
+    近似し直すと 266.53 の1枚)。`BRepBuilderAPI_NurbsConvert` で有理 B-スプラインにすると access violation で
     プロセスごと落ちる。有理でない多項式の B-スプライン(C2 を頼むので5次)に近似し直すと正しく広がる。
     壊れたときだけ使う: 辺ごとに近似すると継ぎ目の接線がわずかに折れ、広げた結果の継ぎ目に短い円弧が挟まる。
     直線・円に乗るオフセット曲線(円と長方形の領域で出る)は触らない(最後に円弧へ直せなくなる)。
@@ -499,10 +508,7 @@ def _bezier_entity(points: Sequence[Tuple[float, float]], approximated: bool = F
 
 
 def _polynomial_beziers(ax3: "gp_Ax3", curve: Any, kind: Any, first: float, last: float) -> Any:
-    """3次以下の非有理ベジエ/B-スプラインの辺 `[first, last]` を、3次ベジエの図形へ**正確に**分ける。直せなければ None。
-
-    ベジエは平行移動・回転で形が変わらない(アフィン不変)ので、3D の制御点をスケッチ平面へ写した点がそのまま図形の制御点になる。
-    """
+    """3次以下の非有理ベジエ/B-スプラインの辺 `[first, last]` を、3次ベジエの図形へ**正確に**分ける。直せなければ None。"""
     if kind == GeomAbs_CurveType.GeomAbs_BezierCurve:
         bezier = curve.Bezier()
         if bezier.IsRational() or bezier.Degree() > 3:
@@ -559,9 +565,10 @@ def _edge_on_ellipse(ax3: "gp_Ax3", edge: Any, params: dict) -> bool:
 def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) -> List[dict]:
     """辺 `[first, last]` を3次ベジエの列で近似する(つなぎ目で接線が連続する)。
 
-    各区間は3次エルミート(端点と、端点の1階微分の 区間長/3 を制御点に)。区間の内側の標本で、ベジエの点と同じ割合の
-    パラメータにある曲線の点の距離を測り、`APPROXIMATION_TOLERANCE` を超えたら区間を二分する。この距離は曲線までの最短距離
-    以上なので、上限を守れば形の誤差も上限以下(ただし標本の間は見ていない)。
+    最初の区間は曲線の滑らかな区間(B-スプラインならノットの区間)で、各区間は3次エルミート(端点と、区間の内側から取った
+    端点の1階微分の 区間長/3 を制御点に)。区間の内側の標本で、ベジエの点と同じ割合のパラメータにある曲線の点の距離を測り、
+    `APPROXIMATION_TOLERANCE` を超えたら区間を二分する。誤差の上限は標本の点での値で、標本の間の保証ではない(ノットで
+    区切るのは、ノットの区間より細い山を標本が飛び越えないため)。
     OCCT の `GeomConvert_ApproxCurve` は使わない: 3次で接線を連続にする(C1)と区間の数はこれと同じで、C2 を頼むと黙って
     5次にする(2026-10-22 実測。20×10 の楕円を包んだ辺)。
     """
@@ -573,13 +580,17 @@ def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) 
         return []
     xdir, ydir = gp_Vec(ax3.XDirection()), gp_Vec(ax3.YDirection())
 
-    def point_and_tangent(parameter: float) -> Tuple[Tuple[float, float], Tuple[float, float]]:
-        point, vector = gp_Pnt(), gp_Vec()
-        curve.D1(parameter, point, vector)
+    def point_and_tangent(parameter: float, inside: float) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+        # 微分は区間の内側へ `inside` だけ寄せて取る: ノットの上では片側の微分しか返らず、G1 だが C1 でない継ぎ目(有理の
+        # B-スプラインの円など)で区間の終わりの接線の大きさが食い違い、二分しても誤差が縮まない。
+        vector = gp_Vec()
+        curve.D1(parameter + inside, gp_Pnt(), vector)
+        point = curve.Value(parameter)
         return _to_uv(ax3, point.X(), point.Y(), point.Z()), (vector.Dot(xdir), vector.Dot(ydir))
 
     entities: List[dict] = []
-    pending = [(first, last)]
+    breaks = _smooth_breaks(curve, first, last)
+    pending = list(reversed(list(zip(breaks, breaks[1:]))))
     while pending:
         if len(entities) + len(pending) > _MAX_APPROXIMATION_SEGMENTS:
             raise ValueError(
@@ -587,7 +598,8 @@ def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) 
                 f"{APPROXIMATION_TOLERANCE} mm に収まらない。曲線が尖っている)"
             )
         t0, t1 = pending.pop()
-        (p0, d0), (p3, d3) = point_and_tangent(t0), point_and_tangent(t1)
+        nudge = (t1 - t0) * 1.0e-9
+        (p0, d0), (p3, d3) = point_and_tangent(t0, nudge), point_and_tangent(t1, -nudge)
         third = (t1 - t0) / 3.0
         points = [p0, (p0[0] + d0[0] * third, p0[1] + d0[1] * third), (p3[0] - d3[0] * third, p3[1] - d3[1] * third), p3]
         if _arc_error(points, uv, t0, t1) <= APPROXIMATION_TOLERANCE:
@@ -596,6 +608,15 @@ def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) 
             middle = (t0 + t1) / 2.0
             pending.extend([(middle, t1), (t0, middle)])
     return entities
+
+
+def _smooth_breaks(curve: Any, first: float, last: float) -> List[float]:
+    """`[first, last]` を曲線の滑らかな区間(B-スプラインならノット、オフセット曲線なら元の曲線のノット)の境目で区切った点の列。"""
+    count = curve.NbIntervals(GeomAbs_Shape.GeomAbs_CN)
+    bounds = TColStd_Array1OfReal(1, count + 1)
+    curve.Intervals(bounds, GeomAbs_Shape.GeomAbs_CN)
+    inner = sorted({bounds.Value(i) for i in range(1, count + 2) if first < bounds.Value(i) < last})
+    return [first, *inner, last]
 
 
 def _arc_error(

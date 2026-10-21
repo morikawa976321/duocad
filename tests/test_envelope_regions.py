@@ -425,3 +425,66 @@ def test_the_offset_curve_fit_does_not_depend_on_where_the_shapes_are(session: S
     """同じ図形を原点から (±1000, ±1000) mm 離しても包める。落ちたら、3点を通る円を絶対座標の二乗の差で解いていて、
     0.01〜0.1 mm の短い弧で桁が落ち、「標本点が直線にも円にも乗らない」で拒む(原点付近では通る)。"""
     assert _enveloped_area(session, 0.5, -0.5, shift) == pytest.approx(_enveloped_area(session, 0.5, -0.5), abs=1.0e-3)
+
+
+def test_rounding_then_offsetting_an_ellipse_where_the_first_offset_fails_retries(session: Session) -> None:
+    """R=1, d=2 では最初の2Dオフセットが IsDone()=False で失敗する(実測)。辺を近似し直して1つの領域にする。落ちたら
+    失敗の例外が、壊れた形のときだけの近似し直しを飛ばしている。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 1.0, 2.0)
+    width, height, _ = ELLIPSE
+    perimeter = kernel_sketch.ellipse_perimeter({"cx": 0.0, "cy": 0.0, "width": width, "height": height, "angle": 0.0})
+    expected = math.pi * width * height / 4.0 + perimeter * 2.0 + math.pi * 2.0**2
+    assert _area_of_created(session, sketch_id, applied["created"]) == pytest.approx(expected, abs=0.05)
+
+
+def _distance_to_polyline(point: tuple, polyline: list) -> float:
+    best = math.inf
+    for (ax, ay), (bx, by) in zip(polyline, polyline[1:]):
+        dx, dy = bx - ax, by - ay
+        length2 = dx * dx + dy * dy
+        t = 0.0 if length2 == 0.0 else max(0.0, min(1.0, ((point[0] - ax) * dx + (point[1] - ay) * dy) / length2))
+        best = min(best, math.hypot(point[0] - ax - t * dx, point[1] - ay - t * dy))
+    return best
+
+
+def test_a_bump_narrower_than_the_samples_is_not_skipped() -> None:
+    """[0.020, 0.025] だけに山を持つ有理 B-スプラインの辺を近似しても、山の形が誤差の上限内に残る。落ちたら区間の標本が山を
+    飛び越え、平らな1本のベジエにしている(ノットで区切っていない)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_BSplineCurve
+    from OCP.TColgp import TColgp_Array1OfPnt
+    from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
+    from OCP.gp import gp_Pnt
+
+    # 両端の4重ノットの間に [0.019, 0.026] だけノットを置き、その間だけに効く制御点を持ち上げる。ほかの制御点はグレヴィル点
+    # (x = 10 t が正確に出る位置)に置くので、両端の接線から作った1本のベジエは山の外でぴったり合う。
+    inner = [0.019, 0.020, 0.0225, 0.025, 0.026]
+    flat = [0.0] * 4 + inner + [1.0] * 4
+    knots = TColStd_Array1OfReal(1, len(inner) + 2)
+    multiplicities = TColStd_Array1OfInteger(1, len(inner) + 2)
+    for i, (value, multiplicity) in enumerate([(0.0, 4), *[(k, 1) for k in inner], (1.0, 4)]):
+        knots.SetValue(i + 1, value)
+        multiplicities.SetValue(i + 1, multiplicity)
+    count = len(flat) - 4
+    poles = TColgp_Array1OfPnt(1, count)
+    weights = TColStd_Array1OfReal(1, count)
+    for i in range(count):
+        greville = sum(flat[i + 1 : i + 4]) / 3.0
+        lifted = i == 4  # 台が [0.019, 0.026] の制御点
+        poles.SetValue(i + 1, gp_Pnt(10.0 * greville, 1.0 if lifted else 0.0, 0.0))
+        weights.SetValue(i + 1, 2.0 if lifted else 1.0)
+    curve = Geom_BSplineCurve(poles, weights, knots, multiplicities, 3)
+    edge = BRepBuilderAPI_MakeEdge(curve).Edge()
+
+    entities = kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    assert entities and all(entity.get("approximated") for entity in entities)
+    polyline = []
+    for entity in entities:
+        polyline.extend(_bezier_point(entity["params"], k / 200) for k in range(201))
+    peak = max(curve.Value(k / 4000).Y() for k in range(4001))
+    assert peak > 0.3, "題材の山が立っていない"
+    worst = max(
+        _distance_to_polyline((curve.Value(k / 4000).X(), curve.Value(k / 4000).Y()), polyline) for k in range(4001)
+    )
+    assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE + 1e-6
