@@ -44,13 +44,16 @@ from OCP.STEPControl import (
     STEPControl_Writer,
 )
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
-from OCP.TopExp import TopExp_Explorer
+from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
-from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
+from OCP.TopTools import (
+    TopTools_IndexedDataMapOfShapeListOfShape,
+    TopTools_IndexedMapOfShape,
+)
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
-from . import kernel_chains, kernel_meshing, meshbody
+from . import kernel_chains, kernel_meshing, kernel_overflow, meshbody
 from .mesh_geometry import compound, indexed_map, subshapes
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
@@ -1489,8 +1492,12 @@ def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
 
     **薄肉では限界値ちょうどの半径が `IsDone()=False` でなく access violation になる**(`BRepPrimAPI_MakeBox` の箱を
     厚さ 2 で抜き、縁の辺を半径 2 で丸める。Python の例外にならず `except` で捕まらない)。辺から同じ平面の面の
-    別の辺までの距離と半径が一致するフィレットは、事前に ValueError で断る(`kernel_chains.fillet_consumes_face`)。
+    別の辺までの距離と半径が一致するフィレットは、元の形の `MakeFillet` を呼ばない(`kernel_chains.fillet_consumes_face`)。
     これで守れるのは実測した範囲だけで、他の形の同種の異常終了を防ぐ保証は無い。
+
+    **OCCT が断るか、丸めた辺に関係の無い面まで変えたとき(別の形に当たった)は、はみ出しを吸収して作る**
+    (`kernel_overflow.absorb`。Fusion 360 と同じく、はみ出しは崖の面で切れ、当たった形は貫通する。docs/FILLET_OVERFLOW.md)。
+    吸収が引き受けない形(角で連なりが出会う選び方など)では、OCCT の結果か失敗をそのまま返す。
 
     戻り値(`"shape"` 以外はJSON化できる素の値):
         {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
@@ -1527,16 +1534,40 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         maker.Add(float(raw_value), _edge_at(edge_map, index))
         edge_indices.append(index)
 
-    if verb == "fillet":
-        radii = {int(i): float(v) for i, v in values.items()}
-        clash = kernel_chains.fillet_consumes_face(shape, edge_map, radii)
-        if clash is not None:
-            raise ValueError(
-                f"fillet radius {radii[clash[0]]:g} on edge {clash[0]} would consume the whole planar face next to it "
-                f"(it reaches exactly as far as the face's edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと"
-                "落ちることがある。半径をわずかにずらすこと"
-            )
+    if verb != "fillet":
+        return _built_blend(shape, maker, values, verb, edge_indices, volume_before)
 
+    # フィレットは OCCT の結果を先に試し、失敗したとき・丸める辺に関係の無い面まで変えたとき(別の形に当たった)だけ、
+    # はみ出しを吸収する作り方(`kernel_overflow`)へ回す。経緯と比べた案は docs/FILLET_OVERFLOW.md。
+    radii = {int(i): float(v) for i, v in values.items()}
+    native: Optional[dict] = None
+    clash = kernel_chains.fillet_consumes_face(shape, edge_map, radii)
+    if clash is not None:
+        failure = ValueError(
+            f"fillet radius {radii[clash[0]]:g} on edge {clash[0]} would consume the whole planar face next to it "
+            f"(it reaches exactly as far as the face's edge {clash[1]}): 面を過不足なく食い尽くす半径は OCCT がプロセスごと"
+            "落ちることがある。半径をわずかにずらすこと"
+        )
+    else:
+        try:
+            native = _built_blend(shape, maker, values, verb, edge_indices, volume_before)
+        except ValueError as error:
+            failure = error
+        else:
+            if not _blend_reaches_other_faces(maker, shape):
+                return native
+    try:
+        return _absorbed_fillet(shape, edge_map, radii, edge_indices, volume_before)
+    except ValueError as reason:
+        if native is not None:
+            return native
+        raise ValueError(f"{failure} (はみ出しの吸収もできない: {reason})") from failure
+
+
+def _built_blend(
+    shape: "TopoDS_Shape", maker: Any, values: dict, verb: str, edge_indices: List[int], volume_before: float
+) -> dict:
+    """辺を足し終えた `MakeFillet` / `MakeChamfer` を組み立てて検査し、`_blend_edges` の戻り値の形にする。"""
     try:
         maker.Build()
     except Exception as error:  # noqa: BLE001  OCCTは例外でも失敗しうる
@@ -1557,6 +1588,180 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         "provenance": _blend_provenance(maker, shape, final, verb, edge_indices),
         "volume_before": float(volume_before),
         "volume_after": float(volume_after),
+    }
+
+
+def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
+    """組み立てたフィレットが、丸めた辺(連なりを含む)の頂点に触れない面まで変えたか。
+
+    変えていれば、丸めの面が隣り合わない別の形に当たっている。OCCT はそこで球をその形にも触れさせた別の形を返す
+    (円板に柱2本、隙間 2・半径 3 で、両方の柱に接するBスプライン面が2枚増える。issue #208 の実測)。
+    辺の端の面(箱の1辺を丸めたときの側面)は頂点に触れるので数えない。
+
+    全部の連なりの頂点でまとめて許すと、柱 A の根元の丸めが柱 B の側面に当たっても、B の上縁も選んでいれば B の側面は
+    B の上縁の頂点に触れるので見逃す(Codex レビューの反例)。そこで、変わった面の近くにあるのにその面に触れない連なりを、
+    1本ずつ組み直して見る(連なりの数で打ち切ると、離れた柱の上縁を 11 本足しただけで見逃しが戻った)。
+    """
+    contours = range(1, maker.NbContours() + 1)
+    changed = _faces_changed_by(maker, shape)
+    touching = {contour: _vertices_of_contour(maker, contour) for contour in contours}
+    smooth = None
+    suspects = set()
+    for face in changed:
+        corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
+        owners = {
+            contour for contour, vertices in touching.items()
+            if any(vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1))
+        }
+        if not owners:
+            if smooth is None:
+                smooth = _coplanar_supports(maker, shape, contours)
+            if not smooth.Contains(face):
+                return True
+            continue
+        face_box = Bnd_Box()
+        BRepBndLib.Add_s(face, face_box)
+        for contour in contours:
+            if contour not in owners and not _contour_box(maker, contour).IsOut(face_box):
+                suspects.add(contour)
+    for contour in sorted(suspects):
+        if not maker.IsConstant(contour):
+            continue
+        alone = BRepFilletAPI_MakeFillet(shape)
+        alone.Add(maker.Radius(contour), maker.Edge(contour, 1))
+        try:
+            alone.Build()
+        except Exception:  # noqa: BLE001  OCCTは例外でも失敗しうる
+            continue
+        if alone.IsDone() and _changes_faces_away_from(alone, shape, range(1, alone.NbContours() + 1)):
+            return True
+    return False
+
+
+def _faces_changed_by(maker: Any, shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:
+    """`maker` が変えた(結果に同じ面として残らなかった)入力の面。"""
+    # 触られなかった面は結果に同じ面として残るので、結果に無い入力の面だけを見る(`Modified` を全面に問うと、
+    # PC ケースの 233 面のボディで1回 112ms かかった。フィレットそのものは 18ms)。
+    kept = _face_map(maker.Shape())
+    face_map = _face_map(shape)
+    return [face_map.FindKey(i) for i in range(1, face_map.Extent() + 1) if not kept.Contains(face_map.FindKey(i))]
+
+
+def _vertices_of_contour(maker: Any, contour: int) -> "TopTools_IndexedMapOfShape":
+    vertices = TopTools_IndexedMapOfShape()
+    for number in range(1, maker.NbEdges(contour) + 1):
+        edge = maker.Edge(contour, number)
+        vertices.Add(TopExp.FirstVertex_s(edge))
+        vertices.Add(TopExp.LastVertex_s(edge))
+    return vertices
+
+
+def _contour_box(maker: Any, contour: int) -> "Bnd_Box":
+    """連なりの辺の外接箱を、丸めが届きうる幅(半径の 3 倍)だけ広げた箱。"""
+    box = Bnd_Box()
+    for number in range(1, maker.NbEdges(contour) + 1):
+        BRepBndLib.Add_s(maker.Edge(contour, number), box)
+    # 可変半径の連なりは半径を1つに決められないので、どの面とも重なる箱にする(組み直しの検査は一定半径だけ)。
+    box.Enlarge(3.0 * maker.Radius(contour) if maker.IsConstant(contour) else 1.0e9)
+    return box
+
+
+def _changes_faces_away_from(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int]) -> bool:
+    """`maker` が、`contours` の辺の頂点に触れない入力の面を変えたか。"""
+    rounded_vertices = TopTools_IndexedMapOfShape()
+    for contour in contours:
+        for number in range(1, maker.NbEdges(contour) + 1):
+            edge = maker.Edge(contour, number)
+            rounded_vertices.Add(TopExp.FirstVertex_s(edge))
+            rounded_vertices.Add(TopExp.LastVertex_s(edge))
+    smooth = None
+    for face in _faces_changed_by(maker, shape):
+        corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
+        if not any(rounded_vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1)):
+            if smooth is None:
+                smooth = _coplanar_supports(maker, shape, contours)
+            if not smooth.Contains(face):
+                return True
+    return False
+
+
+def _coplanar_supports(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int]) -> "TopTools_IndexedMapOfShape":
+    """丸めた辺の両側の面と、そこから同じ平面に載る面だけをたどって行ける面(同じ平面を割った継ぎ目の先)。
+
+    丸めが継ぎ目を越えて隣の面へ続くのは当たりではない(箱の上面を x=2 で同じ平面の2面に割り、x=0 の辺を半径 3 で
+    丸めると隣の面まで変わる。当たりと見なして吸収へ回すと、継ぎ目を崖として肉を切り、削り残した。Codex レビューの反例)。
+    接線連続の辺でたどると、既にある丸めの面を通って別の柱の側面まで届き、本当の当たりを見逃した(柱 B の根元と上縁を
+    先に丸めておくと、柱 A の根元の丸めが B を消す形をそのまま返した。同じく反例)。
+    """
+    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, TopAbs_ShapeEnum.TopAbs_FACE, edge_faces)
+    reached = TopTools_IndexedMapOfShape()
+    queue = []
+    for contour in contours:
+        for number in range(1, maker.NbEdges(contour) + 1):
+            edge = maker.Edge(contour, number)
+            if edge_faces.Contains(edge):
+                for face in edge_faces.FindFromKey(edge):
+                    if not reached.Contains(face):
+                        reached.Add(face)
+                        queue.append(face)
+    while queue:
+        face = queue.pop()
+        edges = indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+        for number in range(1, edges.Extent() + 1):
+            edge = TopoDS.Edge_s(edges.FindKey(number))
+            if not edge_faces.Contains(edge):
+                continue
+            for other in edge_faces.FindFromKey(edge):
+                if reached.Contains(other) or other.IsSame(face):
+                    continue
+                if kernel_overflow.coplanar(face, other):
+                    reached.Add(other)
+                    queue.append(other)
+    return reached
+
+
+def _absorbed_fillet(
+    shape: "TopoDS_Shape", edge_map: Any, radii: dict, edge_indices: List[int], volume_before: float
+) -> dict:
+    """`kernel_overflow.absorb` の形を検査し、由来をたどって `_blend_edges` の戻り値の形にする。"""
+    absorbed = kernel_overflow.absorb(shape, edge_map, radii)
+    context = f"edges {edge_indices}, absorbing overflow"
+    # 凹の肉を足して凸の肉を引くと、体積が打ち消し合って変わらないことがある(形は変わっている)。
+    unchanged_check = None if (absorbed.concave and absorbed.convex) else volume_before
+    volume_after = _checked_volume(absorbed.shape, "fillet", volume_before=unchanged_check, context=context)
+    if (absorbed.concave and not absorbed.convex and volume_after < volume_before) or (
+        absorbed.convex and not absorbed.concave and volume_after > volume_before
+    ):
+        raise ValueError(f"fillet moved the volume the wrong way ({volume_before} -> {volume_after}, {context})")
+    # 統合の前に断る: 壊れた形や離れたソリッドを統合に渡すと、仮想メモリを使い尽くすことがある(PC ケースの部品で 84GB)。
+    if len(split_solids(absorbed.shape)) > len(split_solids(shape)):
+        raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
+    _require_valid(absorbed.shape, "fillet", context)
+    final, history, _ = _unify_same_domain(absorbed.shape, volume_after)
+    _require_valid(final, "fillet", context)
+    if len(split_solids(final)) > len(split_solids(shape)):
+        raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
+
+    final_map = _face_map(final)
+    shape_map = _face_map(shape)
+    successors: dict = {}
+    for index in range(1, shape_map.Extent() + 1):
+        current = [shape_map.FindKey(index)]
+        for builder in absorbed.builders:
+            following = []
+            for face in current:
+                modified = _shape_list(builder, "Modified", face)
+                following.extend(modified or ([] if _is_removed(builder, face) else [face]))
+            current = following
+        successors[str(index)] = _positions_in(
+            final_map, (survivor for face in current for survivor in _through_history(history, face))
+        )
+    return {
+        "shape": final,
+        "provenance": {"verb": "fillet", "edges": list(edge_indices), **_face_map_projection(successors, final_map.Extent())},
+        "volume_before": float(volume_before),
+        "volume_after": float(volume(final)),
     }
 
 

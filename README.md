@@ -289,6 +289,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
 | `duocad/kernel_brep.py` | BRep保存・`inspect_solid`・箱/格子との共通体積 | **○** | ✗ |
 | `duocad/kernel_chains.py` | 辺の連なり（フィレット・面取りで1本として振る舞う辺の組）と、フィレットの事前検査 | **○** | ✗ |
+| `duocad/kernel_overflow.py` | はみ出し・貫通を吸収するフィレット（丸めの肉を別に作って足し引きする。[docs/FILLET_OVERFLOW.md](docs/FILLET_OVERFLOW.md)）。kernel から呼ばれるだけの一方向 | **○** | ✗ |
 | `duocad/mesh_geometry.py` | 三角形境界の接続検査、CADソリッド化、位相の列挙 | **○** | ✗ |
 | `duocad/kernel_sketch.py` | スケッチ平面の枠・図形種別ごとの辺・閉領域の検出。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_extrude.py` | 押し出し・回転体・ロフトの幾何（`extrude_faces` / `extrude_regions` / `revolve_regions` / `loft_regions`）。kernel を読むだけの一方向 | **○** | ✗ |

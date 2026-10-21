@@ -18,9 +18,15 @@
 | 面の `Orientation()==REVERSED` は平面の外向きを決めない。奇数回鏡映したボディの面は平面の `Position` が左手系で、REVERSED のとき `Direction` がすでに外向き(外向きは `BRepGProp_Face` の法線で決める) | `duocad/kernel_sketch.py` `_ax3_from_face` |
 | 曲面から `MakePrism` すると `IsDone()` は真でも `BRepCheck_Analyzer` が偽(または体積が激減) | `duocad/kernel_extrude.py` `_check_coplanar_planes` |
 | `ShapeUpgrade_UnifySameDomain` は入力そのものを壊す(コピーで試してから本番) | `duocad/kernel.py` `_unify_same_domain` |
+| `ShapeUpgrade_UnifySameDomain` に壊れた形を渡すと仮想メモリを際限なく使う(フィレットの吸収の総当たりで 84GB、PC が落ちた)。重い総当たりは `tools/capped_run.py` で | `duocad/kernel.py` `_absorbed_fillet` / `duocad/kernel_overflow.py` `_require_plausible` |
 | フィレット/面取りは例外を投げず失敗し、半径に対して単調でない | `duocad/kernel.py` `fillet_edges` / `chamfer_edges` |
-| 薄肉(シェル後)の箱で、フィレットの半径が縁の面の幅とちょうど一致すると `MakeFillet.Build()` が access violation でプロセスごと落ちる(`BRepPrimAPI_MakeBox` の箱で実測。押し出しの箱は `IsDone()=False`)。窓は 2e-9 mm 未満 | `duocad/kernel_chains.py` `fillet_consumes_face` |
+| 薄肉(シェル後)の箱で、フィレットの半径が縁の面の幅とちょうど一致すると `MakeFillet.Build()` が access violation でプロセスごと落ちる(`BRepPrimAPI_MakeBox` の箱で実測。押し出しの箱は `IsDone()=False`)。窓は 2e-9 mm 未満 | `duocad/kernel_chains.py` `fillet_consumes_face`(当たれば元の形の `MakeFillet` を呼ばずにはみ出しの吸収へ回る) |
 | 辺の曲線の最小曲率半径を超える一定半径のフィレットは `IsDone()=False`(楕円 6×2 の柱の上縁、先端の曲率半径 b²/a=0.667 に対し r0.65 は通り r0.7 で失敗)。転がり球の接触線(辺を半径だけ内へずらした曲線)が先端で燕尾状に自己交差するので、なめらかな一定半径の解は無い。自己交差した部分を切り落とし先端に稜線を残せば一定半径のまま立体になる(Fusion はこれを返す。r1 では稜線は上端から 0.057 mm・長さ約 0.43 mm)が、`MakeFillet` は切り落としをしない。**可変半径(`Add(TColgp_Array1OfPnt2d, edge)`、先端 0.5・短軸の端 1.0〜1.5)なら通り `BRepCheck` 真**(2026-10-21 実測) | `duocad/kernel.py` `fillet_edges` |
+| `MakeFillet` は丸めの面が隣り合わない別の形に当たると、断る・壊れた形を返すほか、**その形にも球を触れさせた別の形を黙って返す**(issue #208) | `duocad/kernel.py` `_blend_reaches_other_faces` / [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md) |
+| `ShapeUpgrade_UnifySameDomain` は軸が逆向きの円柱を同じ面と見なさない(押し出した円柱面の軸の向きは押し出す向きで決まり、`BRepPrimAPI_MakeCylinder` とスケッチの押し出しで逆) | `duocad/kernel_overflow.py` `_column` |
+| `BRepOffsetAPI_MakeThickSolid.MakeThickSolidBySimple` は面の向きによって体積が負(裏返し)の立体を返す | `duocad/kernel_overflow.py` `_column` |
+| `BRepExtrema_DistShapeShape` は辺に沿って弧で触れていても、解を頂点にしか返さないことがある | `duocad/kernel_overflow.py` `_touches_inside_of` |
+| 円錐面の延長を頂点の手前で止めると先に穴が残り、箱を内と外に割り切れない(頂点ちょうどまで延ばす) | `duocad/kernel_overflow.py` `_extended_face` |
 | 由来(provenance)の取り出し方は操作ごとに違う(`History()` / `Modified()`、`IsRemoved` / `IsDeleted`) | `duocad/kernel.py` `normalize_provenance` |
 | `Face.center()` の既定は `CenterOf.GEOMETRY` で面積重心ではない(曲面では面パッチの上にすら乗らない) | `duocad/query.py` `face_centroid` / `face_fingerprint` |
 | 生の `TopoDS_Shape` を build123d で包む入口は `Compound.cast`(基底の `Shape.cast` は None を返す)。`faces()` / `edges()` は重複除去済み。ただし `edges()` は縮退辺(球の極・円錐の頂点・フィレットの角。長さ0)を除くので、辺の数は kernel の `edge_count` から取る(球で 1 と 3、全辺 R3 のフィレット立方体で 48 と 56) | `duocad/query.py` 冒頭・`describe_shape` |
