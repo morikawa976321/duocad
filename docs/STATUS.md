@@ -114,9 +114,18 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 |---|---|---|---|
 | #206 包む・ベジエ近似 | `claude/sketch-206-envelope-bezier` | develop | 親(手元) |
 | #184 スケッチの投影 | `claude/sketch-184-project` | #206 の近似の関数のコミット | 親(手元) |
-| #201 測定・スケッチの点 | `claude/sketch-201-measure-points` | develop | クラウド → 親が検証 |
-| #193 split_body | `claude/body-193-split-body` | develop | クラウド → 親が検証 |
-| #186 干渉チェック | `claude/body-186-interference` | develop | 親(手元) |
+| #201 測定・スケッチの点 | `claude/sketch-201-measure-points` | develop | 親(手元。小さいので) |
+| #193 split_body | `claude/body-193-split-body` | develop | クラウド `session_017moRvu1EwfqoivmeSY4KWz` → 親が検証 |
+| #186 干渉チェック | `claude/body-186-interference` | develop | クラウド `session_01HeAhy6W2onohTptM78PbJo` → 親が検証 |
+
+#184 は #206 の上に積む(#184 を取り込むと #206 も入る。decisions.md の [スケッチ] #184)。
+
+作業場所: issue のブランチはこのワークツリーの下の `output/cloud/wt-<番号>`(git 管理外)に入れ子のワークツリーとして置く。
+手元で検証する `wt-201`・`wt-206`(と後で `wt-184`)には `.venv` と `web/node_modules` のジャンクションがある。
+**片付けるときは先にジャンクションを外す**(`[System.IO.Directory]::Delete('<wt>\.venv', $false)` と同じく `web
+ode_modules`。
+docs/DEV_NOTES.md「ワークツリー」)。クラウド用の `wt-186`・`wt-193` は起動に使っただけで、ジャンクションは無い。
+クラウドの依頼文は git に載せていない(スクラッチパッド)。要点は decisions.md の [ボディ] の節。
 
 この節と decisions.md の `[スケッチ]` `[ボディ]` の節は、このワークツリーのブランチ `claude/duocad-sketch-body-5-features-a37e8a` にだけ書く
 (issue のブランチに書くと、本人が1件ずつ取り込むたびに同じ箇所でぶつかる)。各機能の仕様は issue のブランチの docs に書く。
@@ -126,8 +135,8 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 1. #206: `kernel_sketch` に「辺 → スケッチの図形」の変換を1本にまとめ、線分・円・円弧・閉じた楕円・3次以下の多項式のベジエ/B-スプライン
    は正確に、それ以外は3次ベジエの列で近似する(誤差の上限は固定の絶対値)。プレビューと確定は同じ関数を通る。
 2. #184: 上の変換を使って、選んだ辺・面(外周と穴)・ボディ(法線方向から見た外形)をスケッチ平面へ写す verb。
-3. #201・#193: クラウドに出し、戻ったら手元で検証・撮影し、sol にレビューさせる。
-4. #186: INTERFERENCE.md の実装計画どおり(カーネル → メッシュ → 組み立て → 子プロセス → 宣言と配線 → 画面 → 文書)。
+3. #201: 手元で実装する。
+4. #193・#186: クラウドに出し(#186 は INTERFERENCE.md の実装計画どおり)、戻ったら手元で検証・撮影し、sol にレビューさせる。
 5. 各ブランチ: pytest 全体、`npm run check`、`npm run build`、撮影。sol のレビューを通す。
 6. 報告ページを作る。
 
