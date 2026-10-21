@@ -488,3 +488,25 @@ def test_a_bump_narrower_than_the_samples_is_not_skipped() -> None:
         _distance_to_polyline((curve.Value(k / 4000).X(), curve.Value(k / 4000).Y()), polyline) for k in range(4001)
     )
     assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE + 1e-6
+
+
+def test_a_smooth_curve_with_many_knots_is_not_split_at_every_knot() -> None:
+    """形を変えずにノットを 513 個足した有理 B-スプラインの四分円は、ノットの数によらず数本のベジエになる。落ちたら
+    ノットごとに区間を割って区間の上限(512)で断っている。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.GC import GC_MakeArcOfCircle
+    from OCP.GeomConvert import GeomConvert
+    from OCP.gp import gp_Pnt
+
+    arc = GC_MakeArcOfCircle(gp_Pnt(10.0, 0.0, 0.0), gp_Pnt(10.0 / math.sqrt(2.0), 10.0 / math.sqrt(2.0), 0.0), gp_Pnt(0.0, 10.0, 0.0)).Value()
+    spline = GeomConvert.CurveToBSplineCurve_s(arc)
+    low, high = spline.FirstParameter(), spline.LastParameter()
+    for k in range(1, 514):
+        spline.InsertKnot(low + (high - low) * k / 514, 1, 1.0e-12)
+    edge = BRepBuilderAPI_MakeEdge(spline).Edge()
+    entities = kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    assert 0 < len(entities) <= 16
+    worst = max(
+        abs(math.hypot(*_bezier_point(entity["params"], k / 40)) - 10.0) for entity in entities for k in range(41)
+    )
+    assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE

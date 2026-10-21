@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import bisect
 import math
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Sequence, Tuple
@@ -565,10 +566,11 @@ def _edge_on_ellipse(ax3: "gp_Ax3", edge: Any, params: dict) -> bool:
 def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) -> List[dict]:
     """辺 `[first, last]` を3次ベジエの列で近似する(つなぎ目で接線が連続する)。
 
-    最初の区間は曲線の滑らかな区間(B-スプラインならノットの区間)で、各区間は3次エルミート(端点と、区間の内側から取った
-    端点の1階微分の 区間長/3 を制御点に)。区間の内側の標本で、ベジエの点と同じ割合のパラメータにある曲線の点の距離を測り、
-    `APPROXIMATION_TOLERANCE` を超えたら区間を二分する。誤差の上限は標本の点での値で、標本の間の保証ではない(ノットで
-    区切るのは、ノットの区間より細い山を標本が飛び越えないため)。
+    各区間は3次エルミート(端点と、区間の内側から取った端点の1階微分の 区間長/3 を制御点に)。区間の内側の標本で、ベジエの点と
+    同じ割合のパラメータにある曲線の点の距離を測り、`APPROXIMATION_TOLERANCE` を超えたら区間を二分する。標本は等間隔の点に、
+    区間の中にある曲線のノット(B-スプラインのノット、オフセット曲線なら元の曲線のノット)とその間の中点を足したもの(ノットの
+    区間より細い山を等間隔の標本が飛び越えないため。ノットで区間を割ると、ノットの多い滑らかな曲線が区間の上限に当たる)。
+    誤差の上限は標本の点での値で、標本の間の保証ではない。
     OCCT の `GeomConvert_ApproxCurve` は使わない: 3次で接線を連続にする(C1)と区間の数はこれと同じで、C2 を頼むと黙って
     5次にする(2026-10-22 実測。20×10 の楕円を包んだ辺)。
     """
@@ -589,8 +591,8 @@ def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) 
         return _to_uv(ax3, point.X(), point.Y(), point.Z()), (vector.Dot(xdir), vector.Dot(ydir))
 
     entities: List[dict] = []
-    breaks = _smooth_breaks(curve, first, last)
-    pending = list(reversed(list(zip(breaks, breaks[1:]))))
+    knots = _smooth_breaks(curve, first, last)[1:-1]
+    pending = [(first, last)]
     while pending:
         if len(entities) + len(pending) > _MAX_APPROXIMATION_SEGMENTS:
             raise ValueError(
@@ -602,7 +604,8 @@ def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) 
         (p0, d0), (p3, d3) = point_and_tangent(t0, nudge), point_and_tangent(t1, -nudge)
         third = (t1 - t0) / 3.0
         points = [p0, (p0[0] + d0[0] * third, p0[1] + d0[1] * third), (p3[0] - d3[0] * third, p3[1] - d3[1] * third), p3]
-        if _arc_error(points, uv, t0, t1) <= APPROXIMATION_TOLERANCE:
+        inside = knots[bisect.bisect_right(knots, t0) : bisect.bisect_left(knots, t1)]
+        if _arc_error(points, uv, t0, t1, inside) <= APPROXIMATION_TOLERANCE:
             entities.append(_bezier_entity(points, approximated=True))
         else:
             middle = (t0 + t1) / 2.0
@@ -620,12 +623,21 @@ def _smooth_breaks(curve: Any, first: float, last: float) -> List[float]:
 
 
 def _arc_error(
-    points: Sequence[Tuple[float, float]], uv: Callable[[float], Tuple[float, float]], t0: float, t1: float
+    points: Sequence[Tuple[float, float]],
+    uv: Callable[[float], Tuple[float, float]],
+    t0: float,
+    t1: float,
+    knots: Sequence[float] = (),
 ) -> float:
-    """ベジエ `points` と、曲線の `[t0, t1]` を同じ割合のパラメータで対応させたときの距離の最大(内側の標本で)。"""
+    """ベジエ `points` と、曲線の `[t0, t1]` を同じ割合のパラメータで対応させたときの距離の最大(内側の等間隔の標本と、
+    区間の中のノット `knots`(昇順)とその間の中点で)。"""
+    shares = [k / (_APPROXIMATION_SAMPLES + 1) for k in range(1, _APPROXIMATION_SAMPLES + 1)]
+    if knots:
+        marks = [t0, *knots, t1]
+        shares += [(knot - t0) / (t1 - t0) for knot in knots]
+        shares += [((a + b) / 2.0 - t0) / (t1 - t0) for a, b in zip(marks, marks[1:])]
     worst = 0.0
-    for k in range(1, _APPROXIMATION_SAMPLES + 1):
-        s = k / (_APPROXIMATION_SAMPLES + 1)
+    for s in shares:
         r = 1.0 - s
         weights = (r * r * r, 3.0 * r * r * s, 3.0 * r * s * s, s * s * s)
         bx = sum(w * p[0] for w, p in zip(weights, points))
