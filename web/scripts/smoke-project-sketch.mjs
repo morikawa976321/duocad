@@ -83,6 +83,39 @@ runSmoke('smoke-project-sketch', { timeout: 60000, mcp: true }, async ({ mcp, br
   await waitFor(() => (window.__duocad.sketch?.entities ?? []).length === 0, 'Ctrl+Z で写した図形が消えない')
   ok('project: Ctrl+Z で写した図形だけが消える')
 
+  // ================================================================ 2b. 投影の起動中の矩形選択はソリッドを集める
+  await page.click('#sketch-project')
+  await waitFor(() => window.__duocad.pickKinds.includes('face'), '投影の起動中に面を指せない(2回目)')
+  await waitFrames(page, 4)
+  await withoutBrowserPanel(page, async () => {
+    const corners = await page.evaluate(() => {
+      const rect = document.querySelector('.viewport').getBoundingClientRect()
+      const points = []
+      for (const x of [0, 40]) for (const y of [0, 30]) for (const z of [0, 10]) {
+        const at = window.__duocad.projectPoint([x, y, z])
+        if (at) points.push({ x: at.x + rect.left, y: at.y + rect.top })
+      }
+      return points
+    })
+    const xs = corners.map((point) => point.x)
+    const ys = corners.map((point) => point.y)
+    await page.mouse.move(Math.min(...xs) - 20, Math.min(...ys) - 20)
+    await page.mouse.down()
+    await page.mouse.move(Math.max(...xs) + 20, Math.max(...ys) + 20, { steps: 8 })
+    await page.mouse.up()
+    // パネルを畳んだまま待つ: 辺の届いていないボディがあると、届いてから同じ矩形で集め直し、そのとき視点の寸法が
+    // 引いたときと違えば捨てる(`App.svelte` の `pendingBox`)
+    await waitFor(
+      () => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'face' || item.kind === 'edge'),
+      '投影の起動中に矩形で囲んでもソリッドの面・辺が選ばれない',
+    )
+  })
+  const boxed = await selected()
+  if (boxed.some((item) => item.sketch !== undefined)) fail(`投影の起動中の矩形選択にスケッチのものが混ざる: ${JSON.stringify(boxed)}`)
+  ok(`project: 投影の起動中の矩形選択はソリッドの面・辺を集める(${boxed.length} 件)`)
+  await page.keyboard.press('Escape')
+  await waitFor(() => window.__duocad.command === null || window.__duocad.command?.verb !== 'project_to_sketch', '投影を中断できない')
+
   // ================================================================ 3. 外形を投影
   await page.click('#sketch-project-outline')
   await waitFor(() => window.__duocad.pickKinds.includes('face'), '外形の投影の起動中に面を指せない')

@@ -261,10 +261,7 @@ def _bezier_point(params: dict, t: float) -> tuple:
 
 
 def _distance_to_projected_circle(world: list, normal: list, radius: float) -> float:
-    """平面上の点 `world` から、原点中心・半径 `radius`・z=5 の水平な円を同じ平面へ写した楕円までの距離(別の方法で検算する)。
-
-    楕円上の点は円上の点 (r cos θ, r sin θ, 5) を法線方向に平面へ落としたもの。θ の粗い標本で最も近い所を探し、黄金分割で詰める。
-    """
+    """平面上の点 `world` から、半径 `radius`・z=5 の水平な円を平面へ写した楕円までの距離(本体と別の方法で検算する)。"""
     n = normal
     origin_offset = sum(world[i] * n[i] for i in range(3))
 
@@ -284,3 +281,59 @@ def _distance_to_projected_circle(world: list, normal: list, radius: float) -> f
         else:
             lo = m1
     return dist((lo + hi) / 2.0)
+
+
+def test_outline_of_a_thin_tube_keeps_the_ring() -> None:
+    """外半径 10・内半径 9.99 の管の外形は、細い環(外の円と内の円)。落ちたら割った面の内側の点が弦の外(穴の中)に出て、
+    環の影を落としている。"""
+    session = Session(0.2)
+    tube = BRepAlgoAPI_Cut(
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 10.0, 5.0).Shape(),
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -1), gp_Dir(0, 0, 1)), 9.99, 7.0).Shape(),
+    ).Shape()
+    session.document.add_body(Body(id="tube", name="tube", kind="solid", shape=tube))
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    select(session, [{"body": "tube", "kind": "body", "index": None}])
+    created = _entities(session, sketch_id, session.project_outline(sketch_id)["created"])
+    assert sorted(entity["params"]["diameter"] for entity in created) == pytest.approx([19.98, 20.0])
+
+
+def test_a_bump_between_samples_is_not_flattened_into_a_line() -> None:
+    """ノットの区間の中だけに山を持つ B-スプラインの辺は、線分1本に潰さない。落ちたら等間隔の標本が山を飛び越え、
+    写した形を失っている。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_BSplineCurve
+    from OCP.TColgp import TColgp_Array1OfPnt
+    from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
+
+    from duocad import kernel_project
+
+    inner = [0.004, 0.008, 0.012, 0.02]
+    flat = [0.0] * 4 + inner + [1.0] * 4
+    knots = TColStd_Array1OfReal(1, len(inner) + 2)
+    multiplicities = TColStd_Array1OfInteger(1, len(inner) + 2)
+    for i, (value, multiplicity) in enumerate([(0.0, 4), *[(k, 1) for k in inner], (1.0, 4)]):
+        knots.SetValue(i + 1, value)
+        multiplicities.SetValue(i + 1, multiplicity)
+    poles = TColgp_Array1OfPnt(1, len(flat) - 4)
+    for i in range(len(flat) - 4):
+        greville = sum(flat[i + 1 : i + 4]) / 3.0
+        poles.SetValue(i + 1, gp_Pnt(10.0 * greville, 10.0 if i == 3 else 0.0, 3.0))
+    edge = BRepBuilderAPI_MakeEdge(Geom_BSplineCurve(poles, knots, multiplicities, 3)).Edge()
+    entities = kernel_project.edge_entities({"kind": "base", "name": "XY"}, [edge])
+    assert entities and all(entity["kind"] != "line" for entity in entities)
+    assert max(max(entity["params"][key] for key in ("y0", "cy1", "cy2", "y1")) for entity in entities) > 1.0
+
+
+def test_the_same_ellipse_with_its_axis_flipped_is_kept_once() -> None:
+    """長軸の向きが逆(角度 0 と 180)の同じ楕円は1つにする。落ちたら1回の投影の中で同じ楕円が2つ残る。"""
+    from duocad import kernel_project
+
+    same = {"cx": 1.0, "cy": 2.0, "width": 20.0, "height": 16.0}
+    entities = [{"kind": "ellipse", "params": {**same, "angle": 0.0}}, {"kind": "ellipse", "params": {**same, "angle": 180.0}}]
+    assert len(kernel_project._deduplicated(entities)) == 1
+    arcs = [
+        {"kind": "arc", "params": {"cx": 0.0, "cy": 0.0, "radius": 5.0, "start_deg": -90.0, "end_deg": 90.0}},
+        {"kind": "arc", "params": {"cx": 0.0, "cy": 0.0, "radius": 5.0, "start_deg": 270.0, "end_deg": 90.0}},
+    ]
+    assert len(kernel_project._deduplicated(arcs)) == 1

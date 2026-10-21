@@ -27,14 +27,24 @@ from OCP.GeomProjLib import GeomProjLib
 from OCP.HLRAlgo import HLRAlgo_Projector
 from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
 from OCP.IntCurvesFace import IntCurvesFace_ShapeIntersector
-from OCP.TopAbs import TopAbs_ShapeEnum
+from OCP.BRepClass import BRepClass_FaceClassifier
+from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Lin, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 
 from . import kernel_sketch
-from .kernel_sketch import _ax3_from_plane, _plane_face, _shape_faces, _to_pnt, _to_uv, _unified, _union_faces
+from .kernel_sketch import (
+    _ax3_from_plane,
+    _plane_face,
+    _shape_faces,
+    _smooth_breaks,
+    _to_pnt,
+    _to_uv,
+    _unified,
+    _union_faces,
+)
 from .mesh_geometry import compound, indexed_map
 
 #: 写した辺が点・線へ潰れているとみなす距離[mm](`kernel_sketch` の領域の結合と同じ桁)。
@@ -116,7 +126,13 @@ def _collapse(ax3: "gp_Ax3", edge: Any) -> Any:
         point = curve.Value(parameter)
         return _to_uv(ax3, point.X(), point.Y(), point.Z())
 
-    params = [first + (last - first) * k / (_COLLAPSE_SAMPLES - 1) for k in range(_COLLAPSE_SAMPLES)]
+    # 等間隔の標本に、曲線のノットとその間の中点を足す(ノットの区間より細い山を等間隔の標本が飛び越えないため)
+    knots = _smooth_breaks(curve, first, last)
+    params = sorted(
+        {first + (last - first) * k / (_COLLAPSE_SAMPLES - 1) for k in range(_COLLAPSE_SAMPLES)}
+        | set(knots)
+        | {(a + b) / 2.0 for a, b in zip(knots, knots[1:])}
+    )
     points = [uv(parameter) for parameter in params]
     far = max(points, key=lambda point: math.dist(point, points[0]))
     if math.dist(far, points[0]) <= COLLAPSE_TOLERANCE:
@@ -254,21 +270,33 @@ def _covered(ax3: "gp_Ax3", face: Any, shapes: Sequence[Any]) -> bool:
     return False
 
 
+#: 割った面の内側の点を探す三角形分割の偏差[mm]。細い面で三角形が曲線の外へはみ出したら、細かくして探し直す。
+_INTERIOR_DEFLECTIONS = (0.5, 0.05, 0.005)
+
+
 def _interior_point(face: Any) -> "gp_Pnt":
-    """面の確かに内側にある点(三角形分割の最も広い三角形の重心。凹んだ面でも重心と違って外へ出ない)。"""
-    BRepMesh_IncrementalMesh(face, 0.5, False, 0.5, True)
-    location = TopLoc_Location()
-    triangulation = BRep_Tool.Triangulation_s(face, location)
-    if triangulation is None:
-        raise ValueError("ボディの外形を求められない(割った面を三角形にできない)")
-    best: Tuple[float, Any] = (-1.0, None)
-    for index in range(1, triangulation.NbTriangles() + 1):
-        a, b, c = triangulation.Triangle(index).Get()
-        pa, pb, pc = triangulation.Node(a), triangulation.Node(b), triangulation.Node(c)
-        area = gp_Vec(pa, pb).Crossed(gp_Vec(pa, pc)).Magnitude()
-        if area > best[0]:
-            best = (area, gp_Pnt((pa.X() + pb.X() + pc.X()) / 3.0, (pa.Y() + pb.Y() + pc.Y()) / 3.0, (pa.Z() + pb.Z() + pc.Z()) / 3.0))
-    return best[1].Transformed(location.Transformation())
+    """面の確かに内側にある点。三角形分割の三角形の重心を広い順に、面の分類で内側(`TopAbs_IN`)と確かめて選ぶ。
+
+    外部の罠: 曲線の縁の三角形は弦で縁を切るので、重心が面の外に出ることがある(実測: 外半径 10・内半径 9.99 の環で、
+    最も広い三角形の重心は半径 9.932 の穴の中)。
+    """
+    for deflection in _INTERIOR_DEFLECTIONS:
+        BRepMesh_IncrementalMesh(face, deflection, False, 0.5, True)
+        location = TopLoc_Location()
+        triangulation = BRep_Tool.Triangulation_s(face, location)
+        if triangulation is None:
+            continue
+        candidates = []
+        for index in range(1, triangulation.NbTriangles() + 1):
+            a, b, c = triangulation.Triangle(index).Get()
+            pa, pb, pc = triangulation.Node(a), triangulation.Node(b), triangulation.Node(c)
+            area = gp_Vec(pa, pb).Crossed(gp_Vec(pa, pc)).Magnitude()
+            centre = gp_Pnt((pa.X() + pb.X() + pc.X()) / 3.0, (pa.Y() + pb.Y() + pc.Y()) / 3.0, (pa.Z() + pb.Z() + pc.Z()) / 3.0)
+            candidates.append((area, centre.Transformed(location.Transformation())))
+        for _, point in sorted(candidates, key=lambda item: -item[0]):
+            if BRepClass_FaceClassifier(face, point, COLLAPSE_TOLERANCE).State() == TopAbs_State.TopAbs_IN:
+                return point
+    raise ValueError("ボディの外形を求められない(割った面の内側の点が見つからない)")
 
 
 # --------------------------------------------------------------------------------------
@@ -304,4 +332,10 @@ def _entity_key(entity: dict) -> tuple:
     if kind == "bezier":
         points = [(r(params[kx]), r(params[ky])) for kx, ky in kernel_sketch.BEZIER_POINT_KEYS]
         return (kind, *min(points, points[::-1]))
-    return (kind, *sorted((key, r(value)) for key, value in params.items()))
+    # 角度は周期で畳む(楕円は軸の向きで 180 度、円弧の端は 360 度。同じ図形が 0 度と 180 度で別に残る)
+    period = {"ellipse": {"angle": 180.0}, "arc": {"start_deg": 360.0, "end_deg": 360.0}}.get(kind, {})
+
+    def folded(key: str, value: float) -> float:
+        return r(value) % period[key] if key in period else r(value)
+
+    return (kind, *sorted((key, folded(key, value)) for key, value in params.items()))
