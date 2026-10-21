@@ -295,6 +295,26 @@ def test_rounding_then_offsetting_an_ellipse_stays_a_single_region(session: Sess
     assert _area_of_created(session, sketch_id, applied["created"]) == pytest.approx(expected, abs=0.05)
 
 
+def test_half_ellipse_offset_approximates_the_elliptic_arc_and_keeps_the_steiner_area(session: Session) -> None:
+    """楕円を中心を通る線分で割った半分を d で広げると、楕円弧のずらし曲線だけが近似のベジエになり、面積は凸な形の
+    平行体の公式(A + 周長 d + π d²)に合う。落ちたら楕円弧(閉じていない楕円)の辺を断っているか、近似が形を崩している。"""
+    width, height, angle = ELLIPSE
+    sketch_id = _ellipse_sketch(session)
+    session.add_line(sketch_id, [-15.0, 0.0], [15.0, 0.0])
+    offset = 1.0
+    applied = _envelope(session, sketch_id, 0.0, offset, regions=[1])
+    created = _created_entities(session, sketch_id, applied["created"])
+    assert applied["approximated"] > 0
+    assert {entity["kind"] for entity in created} <= {"bezier", "line", "arc"}
+    a, b = width / 2.0, height / 2.0
+    c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    half_chord = 1.0 / math.sqrt((c / a) ** 2 + (s / b) ** 2)  # 楕円の中心から x 軸の向きへの半径
+    full = kernel_sketch.ellipse_perimeter({"cx": 0.0, "cy": 0.0, "width": width, "height": height, "angle": 0.0})
+    perimeter = full / 2.0 + 2.0 * half_chord
+    expected = math.pi * a * b / 2.0 + perimeter * offset + math.pi * offset**2
+    assert _area_of_created(session, sketch_id, applied["created"]) == pytest.approx(expected, abs=0.05)
+
+
 def test_ellipse_ghost_is_the_same_as_the_committed_lines(session: Session) -> None:
     """近似を含むときも、プレビューの線は確定で足される線と同じ。落ちたら幽霊と結果が食い違う。"""
     sketch_id = _ellipse_sketch(session)
