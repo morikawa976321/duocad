@@ -422,3 +422,44 @@ def test_absorbing_across_a_coplanar_seam_does_not_cut_at_the_seam():
     whole = _box(0, 0, 0, 20, 30, 20)
     expected = _native(whole, _line_edge_at(whole, 0.0, 20.0), 3.0)
     assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
+
+
+def test_an_existing_fillet_does_not_hide_a_hit_on_the_post_behind_it():
+    """柱 B の根元と上縁を先に丸めておいても、柱 A の根元の大きな丸めが B に当たるのを見逃さない(B は残る)。
+    継ぎ目の先を接線連続でたどったときは、B の根元の丸めを通って B の側面まで「支える面の続き」と見なし、B を消す
+    OCCT の形をそのまま返した(Codex レビューの反例)。"""
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.TopAbs import TopAbs_IN
+
+    disc, post_a, post_b = _cylinder(0.0, 0.0, 20.0, 3.0), _cylinder(0.0, 3.0, 5.0, 20.0), _cylinder(9.5, 3.0, 4.0, 20.0)
+    with_b = _union(disc, post_b)
+    b_root, b_top = _circle_edge(with_b, 4.0, 3.0, x=9.5), _circle_edge(with_b, 4.0, 23.0, x=9.5)
+    b_rounded = kernel.fillet_edges(with_b, {b_root: 0.05, b_top: 0.5})["shape"]
+    shape = _union(b_rounded, post_a)
+    root_a = _circle_edge(shape, 5.0, 3.0)
+
+    rounded = kernel.fillet_edges(shape, {root_a: 10.0})
+
+    a_alone = _union(disc, post_a)
+    expected = _boolean(BRepAlgoAPI_Fuse, _native(a_alone, _circle_edge(a_alone, 5.0, 3.0), 10.0), b_rounded)
+    assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
+    inside_b = BRepClass3d_SolidClassifier(rounded["shape"], gp_Pnt(9.5, 0.0, 20.0), 1e-7)
+    assert inside_b.State() == TopAbs_IN
+
+
+def test_two_separate_walls_in_one_plane_are_rounded_separately():
+    """同じ高さに立つ離れた2枚の壁の根元を一緒に丸めても、それぞれ1本だけ丸めたときと同じ肉になる
+    (同じ平面というだけで1組にまとめると、柱が最初の壁しか覆わず、もう一方の肉が残って断った。Codex レビューの反例)。"""
+    shape = _union(_box(0, 0, 0, 40, 70, 3), _box(0, 0, 3, 3, 20, 23), _box(0, 40, 3, 3, 60, 23))
+    roots = sorted(
+        (edge for edge in query.describe_edges(shape)
+         if edge["kind"] == "line" and all(abs(p[0] - 3) < 1e-6 and abs(p[2] - 3) < 1e-6 for p in (edge["start"], edge["end"]))),
+        key=lambda edge: edge["start"][1],
+    )
+    assert len(roots) == 2
+    before = kernel.volume(shape)
+
+    both = kernel.fillet_edges(shape, {roots[0]["index"]: 22.0, roots[1]["index"]: 22.0})
+
+    added = [kernel.fillet_edges(shape, {edge["index"]: 22.0})["volume_after"] - before for edge in roots]
+    assert both["volume_after"] == pytest.approx(before + sum(added), rel=1e-7)

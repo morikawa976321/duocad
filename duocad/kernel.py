@@ -31,11 +31,10 @@ from OCP.BRepAlgoAPI import (
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_Transform
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
-from OCP.ChFi3d import ChFi3d
 from OCP.BRepGProp import BRepGProp, BRepGProp_Domain, BRepGProp_Face, BRepGProp_Vinert
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_TangentialDeflection
-from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_Shape, GeomAbs_SurfaceType
+from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_ReturnStatus
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -1616,7 +1615,7 @@ def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
         }
         if not owners:
             if smooth is None:
-                smooth = _smoothly_joined_supports(maker, shape, contours)
+                smooth = _coplanar_supports(maker, shape, contours)
             if not smooth.Contains(face):
                 return True
             continue
@@ -1680,17 +1679,19 @@ def _changes_faces_away_from(maker: Any, shape: "TopoDS_Shape", contours: Iterab
         corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
         if not any(rounded_vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1)):
             if smooth is None:
-                smooth = _smoothly_joined_supports(maker, shape, contours)
+                smooth = _coplanar_supports(maker, shape, contours)
             if not smooth.Contains(face):
                 return True
     return False
 
 
-def _smoothly_joined_supports(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int]) -> "TopTools_IndexedMapOfShape":
-    """丸めた辺の両側の面と、そこから接線連続の辺(同じ平面を割った継ぎ目など)だけをたどって行ける面。
+def _coplanar_supports(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int]) -> "TopTools_IndexedMapOfShape":
+    """丸めた辺の両側の面と、そこから同じ平面に載る面だけをたどって行ける面(同じ平面を割った継ぎ目の先)。
 
     丸めが継ぎ目を越えて隣の面へ続くのは当たりではない(箱の上面を x=2 で同じ平面の2面に割り、x=0 の辺を半径 3 で
     丸めると隣の面まで変わる。当たりと見なして吸収へ回すと、継ぎ目を崖として肉を切り、削り残した。Codex レビューの反例)。
+    接線連続の辺でたどると、既にある丸めの面を通って別の柱の側面まで届き、本当の当たりを見逃した(柱 B の根元と上縁を
+    先に丸めておくと、柱 A の根元の丸めが B を消す形をそのまま返した。同じく反例)。
     """
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, TopAbs_ShapeEnum.TopAbs_FACE, edge_faces)
@@ -1714,7 +1715,7 @@ def _smoothly_joined_supports(maker: Any, shape: "TopoDS_Shape", contours: Itera
             for other in edge_faces.FindFromKey(edge):
                 if reached.Contains(other) or other.IsSame(face):
                     continue
-                if ChFi3d.IsTangentFaces_s(edge, TopoDS.Face_s(face), TopoDS.Face_s(other), GeomAbs_Shape.GeomAbs_G1):
+                if kernel_overflow.coplanar(face, other):
                     reached.Add(other)
                     queue.append(other)
     return reached

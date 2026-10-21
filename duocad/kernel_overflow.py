@@ -138,8 +138,8 @@ def _face_pairs(edge_map, edge_faces, radius_of: Dict[int, float]) -> List[Tuple
                 raise Unsupported(f"edge {index} borders a surface that cannot be extended")
         for one, two, size, members in groups:
             if size == radius and (
-                (_same_support(one, first) and _same_support(two, second))
-                or (_same_support(one, second) and _same_support(two, first))
+                (_joined(one, first, edge_faces) and _joined(two, second, edge_faces))
+                or (_joined(one, second, edge_faces) and _joined(two, first, edge_faces))
             ):
                 members.append(index)
                 break
@@ -148,8 +148,17 @@ def _face_pairs(edge_map, edge_faces, radius_of: Dict[int, float]) -> List[Tuple
     return groups
 
 
-def _same_support(one: TopoDS_Shape, other: TopoDS_Shape) -> bool:
-    """同じ面か、同じ平面に載り外向きが揃った面か(同じ平面を割った面の間の辺は、1つのくさびから肉が取れる)。"""
+def _joined(one: TopoDS_Shape, other: TopoDS_Shape, edge_faces) -> bool:
+    """同じ面か、同じ平面に載り、同じ平面の面だけをたどってつながっている面か(1つの支える面として扱える)。
+    同じ平面でも離れた面(同じ高さに立つ別々の壁の側面)はつながっていない: まとめると、柱は最初の面からつながる範囲しか
+    覆わず、もう一方の辺の肉が残った(Codex レビューの反例)。"""
+    if one.IsSame(other):
+        return True
+    return coplanar(one, other) and any(other.IsSame(member) for member in _coplanar_region(one, edge_faces))
+
+
+def coplanar(one: TopoDS_Shape, other: TopoDS_Shape) -> bool:
+    """同じ面か、同じ平面に載り外向きが揃った面か(つながっているかは見ない)。"""
     if one.IsSame(other):
         return True
     first, second = _outward_plane(one), _outward_plane(other)
@@ -190,7 +199,7 @@ def _coplanar_region(face: TopoDS_Shape, edge_faces) -> list:
             if not edge_faces.Contains(edge):
                 continue
             for other in edge_faces.FindFromKey(edge):
-                if any(other.IsSame(known) for known in region) or not _same_support(face, other):
+                if any(other.IsSame(known) for known in region) or not coplanar(face, other):
                     continue
                 region.append(other)
                 queue.append(other)
@@ -379,7 +388,12 @@ def _without_footprints(face: TopoDS_Shape, edge_faces) -> TopoDS_Shape:
 
 
 def _is_footprint(wire: TopoDS_Shape, face: TopoDS_Shape, edge_faces) -> bool:
-    """内側の輪が、隣の面と凹で接する(輪の上に別の形が立っている)か。輪の最初の辺で見る。"""
+    """内側の輪の上に別の形が立っているか(穴でなく足元か)。輪の最初の辺の向こうの面が、`face` の外側(空気の側)へ
+    立ち上がっていれば足元。
+
+    凹凸の判定では足りない: 足元の根元が先に丸めてあると、輪の辺は丸めの面と接線で接するので凹にならず、穴と見なして
+    柱の脇に幅 0.05 の溝を残した(柱 B の根元を半径 0.05 で丸めてから、柱 A の根元を半径 10 で丸めた。Codex レビューの反例)。
+    """
     edges = indexed_map(wire, TopAbs_EDGE)
     for number in range(1, edges.Extent() + 1):
         edge = TopoDS.Edge_s(edges.FindKey(number))
@@ -388,8 +402,12 @@ def _is_footprint(wire: TopoDS_Shape, face: TopoDS_Shape, edge_faces) -> bool:
         neighbours = [other for other in edge_faces.FindFromKey(edge) if not other.IsSame(face)]
         if not neighbours:
             return False
-        kind = ChFi3d.DefineConnectType_s(edge, TopoDS.Face_s(face), TopoDS.Face_s(neighbours[0]), 1.0e-6, False)
-        return kind == ChFiDS_TypeOfConcavity.ChFiDS_Concave
+        curve = BRepAdaptor_Curve(edge)
+        on_edge = curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()))
+        props = GProp_GProps()
+        BRepGProp.SurfaceProperties_s(neighbours[0], props)
+        rise = gp_Vec(on_edge, props.CentreOfMass()).Dot(_outward_normal(face, on_edge))
+        return rise > 0.0
     return False
 
 
