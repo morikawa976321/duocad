@@ -60,8 +60,8 @@ _COLLAPSE_SAMPLES = 33
 #: 2026-10-22 実測: PC ケースを XY へ写すと 4558 面のうち 138 面が面積 1e-8 mm² 以下)。
 _HLR_COMPOUNDS = ("VCompound", "Rg1LineVCompound", "OutLineVCompound")
 
-#: 割った面のうち、影の判定から外す細片の平均の幅(面積 / 周長)[mm]。線の重なりで残る幅がほぼ 0 の面(2026-10-22 実測: PC ケースを
-#: XZ へ写すと、長さ 105 mm・面積 0.00076 mm² の面ができた)。外しても和集合の許容差で隙間は閉じる。
+#: 内側の点を探さず、隣の面で影かどうかを決める細片の平均の幅(面積 / 周長)[mm]。線の重なりで残る幅がほぼ 0 の面
+#: (2026-10-22 実測: PC ケースを XZ へ写すと、長さ 105 mm・面積 0.00076 mm² の面ができ、内側の点が取れなかった)。
 _SLIVER_WIDTH = 1.0e-4
 
 
@@ -87,8 +87,7 @@ def outline_entities(plane: dict, shapes: Sequence[Any]) -> List[dict]:
     edges = [flat for edge in _hlr_edges(ax3, shapes) for flat in _flattened_edges(ax3, edge)]
     if not edges:
         return []
-    faces = [face for face in _split_plane(ax3, edges) if not _sliver(face)]
-    shadow = [face for face in faces if _covered(ax3, face, shapes)]
+    shadow = _shadow_faces(ax3, _split_plane(ax3, edges), shapes)
     if not shadow:
         return []
     entities: List[dict] = []
@@ -148,14 +147,15 @@ def _collapse(ax3: "gp_Ax3", edge: Any) -> Any:
     )
     points = [uv(parameter) for parameter in params]
     if kind in (GeomAbs_CurveType.GeomAbs_Circle, GeomAbs_CurveType.GeomAbs_Ellipse):
+        if _line_through(points) is None:
+            return []  # 短い円弧が点に潰れる(円全体の向きでは決まらない)
         conic = curve.Circle() if kind == GeomAbs_CurveType.GeomAbs_Circle else curve.Ellipse()
         minor = conic.Radius() if kind == GeomAbs_CurveType.GeomAbs_Circle else conic.MinorRadius()
         if minor * abs(conic.Axis().Direction().Dot(ax3.Direction())) > COLLAPSE_TOLERANCE:
             return None
         shape = points
     elif kind in (GeomAbs_CurveType.GeomAbs_BezierCurve, GeomAbs_CurveType.GeomAbs_BSplineCurve):
-        spline = curve.Bezier() if kind == GeomAbs_CurveType.GeomAbs_BezierCurve else curve.BSpline()
-        shape = [_to_uv(ax3, pole.X(), pole.Y(), pole.Z()) for pole in (spline.Pole(i) for i in range(1, spline.NbPoles() + 1))]
+        shape = _segment_poles(ax3, curve, kind, first, last)
     else:
         shape = points
     direction = _line_through(shape)
@@ -171,6 +171,15 @@ def _collapse(ax3: "gp_Ax3", edge: Any) -> Any:
     if math.hypot(x1 - x0, y1 - y0) <= COLLAPSE_TOLERANCE:
         return []
     return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
+
+
+def _segment_poles(ax3: "gp_Ax3", curve: Any, kind: Any, first: float, last: float) -> List[Tuple[float, float]]:
+    """ベジエ・B-スプラインの辺 `[first, last]` の部分の制御点(平面の (u, v))。辺の外の制御点を見ると、辺の部分が線に
+    潰れていても潰れないと判定する。写しを切る(`Bezier()` / `BSpline()` は辺の曲線そのものを返し、`Segment` は形を書き換える)。"""
+    spline = (curve.Bezier() if kind == GeomAbs_CurveType.GeomAbs_BezierCurve else curve.BSpline()).Copy()
+    if first > spline.FirstParameter() or last < spline.LastParameter():
+        spline.Segment(first, last)
+    return [_to_uv(ax3, pole.X(), pole.Y(), pole.Z()) for pole in (spline.Pole(i) for i in range(1, spline.NbPoles() + 1))]
 
 
 def _line_through(points: Sequence[Tuple[float, float]]) -> Any:
@@ -281,6 +290,40 @@ def _split_plane(ax3: "gp_Ax3", edges: Sequence[Any]) -> List[Any]:
     if not splitter.IsDone():
         raise ValueError("ボディの外形を求められない(平面を線で割れない)")
     return _shape_faces(splitter.Shape())
+
+
+def _shadow_faces(ax3: "gp_Ax3", faces: Sequence[Any], shapes: Sequence[Any]) -> List[Any]:
+    """割った面のうち影の内側のもの。細片(`_sliver`)は内側の点を探さず、辺を共有する細片でない面のうち、共有する辺の長さの
+    合計が長い側(影の内側か外側か)に揃える(溝の下の細片で影に裂け目を残さない。細片の短い端は外側の面にも接する)。"""
+    thin = [_sliver(face) for face in faces]
+    inside = [False if thin[index] else _covered(ax3, face, shapes) for index, face in enumerate(faces)]
+    for index, shared in enumerate(_shared_lengths(faces)):
+        if thin[index]:
+            covered = sum(length for other, length in shared.items() if not thin[other] and inside[other])
+            uncovered = sum(length for other, length in shared.items() if not thin[other] and not inside[other])
+            inside[index] = covered > uncovered
+    return [face for face, covered in zip(faces, inside) if covered]
+
+
+def _shared_lengths(faces: Sequence[Any]) -> List[dict]:
+    """面ごとの {辺を共有する面の添字: 共有する辺の長さの合計}。辺は hash で束ねて `IsSame` で確かめる(hash と `==` は
+    一致しない。docs/CAD_LIBRARY_PITFALLS.md)。"""
+    buckets: dict = {}
+    for index, face in enumerate(faces):
+        edge_map = indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+        for i in range(1, edge_map.Extent() + 1):
+            edge = edge_map.FindKey(i)
+            buckets.setdefault(hash(edge), []).append((edge, index))
+    shared: List[dict] = [{} for _ in faces]
+    for bucket in buckets.values():
+        for position, (edge, index) in enumerate(bucket):
+            for other_edge, other in bucket[position + 1 :]:
+                if other != index and edge.IsSame(other_edge):
+                    props = GProp_GProps()
+                    BRepGProp.LinearProperties_s(edge, props)
+                    shared[index][other] = shared[index].get(other, 0.0) + props.Mass()
+                    shared[other][index] = shared[other].get(index, 0.0) + props.Mass()
+    return shared
 
 
 def _sliver(face: Any) -> bool:

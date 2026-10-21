@@ -373,3 +373,61 @@ def test_angles_that_fold_to_the_same_value_are_one_key_after_rounding() -> None
     same = {"cx": 1.0, "cy": 2.0, "width": 20.0, "height": 16.0}
     entities = [{"kind": "ellipse", "params": {**same, "angle": 20.123456}}, {"kind": "ellipse", "params": {**same, "angle": 200.123456}}]
     assert len(kernel_project._deduplicated(entities)) == 1
+
+
+def test_a_narrow_groove_over_a_base_plate_keeps_one_outline() -> None:
+    """底板の上に幅 0.0001 mm の溝を挟んで2つの段がある形の外形は、底板の長方形1つ。落ちたら溝の下の細片を影から外し、
+    影が2つに割れている(細片は隣の面で決める)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+
+    session = Session(0.2)
+    base = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 10, 10, 1).Shape()
+    left = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 1), 5 - 0.00005, 10, 1).Shape()
+    right = BRepPrimAPI_MakeBox(gp_Pnt(5 + 0.00005, 0, 1), 5 - 0.00005, 10, 1).Shape()
+    solid = BRepAlgoAPI_Fuse(BRepAlgoAPI_Fuse(base, left).Shape(), right).Shape()
+    session.document.add_body(Body(id="stepped", name="stepped", kind="solid", shape=solid))
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    select(session, [{"body": "stepped", "kind": "body", "index": None}])
+    created = _entities(session, sketch_id, session.project_outline(sketch_id)["created"])
+    plane = sketch.get_sketch(session.document, sketch_id).plane
+    assert _region_areas(plane, created) == pytest.approx([100.0], abs=1e-6)
+
+
+def test_the_trimmed_part_of_a_spline_that_folds_onto_a_line_becomes_one_segment() -> None:
+    """B-スプラインの辺 [0, 0.5] の部分だけが平面へ写すと線の上を往復する。辺の外の制御点を見ずに、線分1本にする。落ちたら
+    自己重複するベジエが出て、その線を含む領域が作れない。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_BSplineCurve
+    from OCP.TColgp import TColgp_Array1OfPnt
+    from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
+
+    from duocad import kernel_project
+
+    knots = TColStd_Array1OfReal(1, 3)
+    multiplicities = TColStd_Array1OfInteger(1, 3)
+    for i, (value, multiplicity) in enumerate([(0.0, 4), (0.5, 3), (1.0, 4)]):
+        knots.SetValue(i + 1, value)
+        multiplicities.SetValue(i + 1, multiplicity)
+    coords = [(0, 0, 0), (10, 0, 1), (-10, 0, 2), (0, 0, 3), (1, 10, 4), (2, -10, 5), (3, 0, 6)]
+    poles = TColgp_Array1OfPnt(1, len(coords))
+    for i, xyz in enumerate(coords):
+        poles.SetValue(i + 1, gp_Pnt(*xyz))
+    curve = Geom_BSplineCurve(poles, knots, multiplicities, 3)
+    entities = kernel_project.edge_entities({"kind": "base", "name": "XY"}, [BRepBuilderAPI_MakeEdge(curve, 0.0, 0.5).Edge()])
+    assert [entity["kind"] for entity in entities] == ["line"]
+    p = entities[0]["params"]
+    assert sorted((p["x0"], p["x1"])) == pytest.approx([-2.886751, 2.886751], abs=1e-5)
+
+
+def test_a_tiny_arc_of_a_huge_circle_that_collapses_to_a_point_is_dropped() -> None:
+    """半径 1000 の円の長さ 0.01 mm の円弧で、平面へ写すと 1e-7 mm に縮むものは図形にしない。落ちたら円全体の向きだけを見て、
+    幅 2000 mm の閉じた楕円を出している。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_Circle
+    from OCP.gp import gp_Ax2 as Ax2
+
+    from duocad import kernel_project
+
+    circle = Geom_Circle(Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 1e-5), gp_Dir(1, 0, 0)), 1000.0)
+    edge = BRepBuilderAPI_MakeEdge(circle, 0.0, 1e-5).Edge()
+    assert kernel_project.edge_entities({"kind": "base", "name": "XY"}, [edge]) == []
