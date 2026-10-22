@@ -347,17 +347,20 @@ def _trim(shape, material, edges, faces, heights, concave: bool):
     切れる(全部の輪を塞いだときは、柱の脇の貫通穴の上に肉が残って穴を塞いだ。Codex レビューの反例)。
     足元を塞がず「本体に重なれば残す」で救っていたときは、辺の端の先へ伸びた肉が床の上の別の突起に少し重なっただけで
     丸ごと残り、外接箱を大きく越えた(同じく反例)。
+
+    面ごとの柱の外を別々に見る: 2面の柱の共通部分の外をまとめて見ると、傾いた壁の柱の境界が辺から斜めに出て残す
+    「辺に触れる薄い層」と、もう一方の面の崖の先へはみ出した肉が1つにつながり、崖の先まで残った(円板 r25 の上の
+    先細りの柱の根元を r=20 で丸めると、縁から 1.66mm はみ出した)。
     """
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
-    first, second = (_region_column(face, edge_faces, height, concave) for face, height in zip(faces, heights))
-    columns = _boolean("common", first, second).Shape()
-    outside = _boolean("cut", material, columns).Shape()
     scale = max(_volume(material), 1.0e-12)
     dropped = []
-    for part in _solids(outside):
-        if _volume(part) > 1.0e-9 * scale and not _touches_inside_of(part, edges):
-            dropped.append(part)
+    for face, height in zip(faces, heights):
+        outside = _boolean("cut", material, _region_column(face, edge_faces, height, concave)).Shape()
+        for part in _solids(outside):
+            if _volume(part) > 1.0e-9 * scale and not _touches_inside_of(part, edges):
+                dropped.append(part)
     for part in dropped:
         material = _boolean("cut", material, part).Shape()
     return material

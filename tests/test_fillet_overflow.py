@@ -481,3 +481,25 @@ def test_a_footprint_whose_surface_curls_under_the_plate_is_still_a_footprint():
     alone = _union(plate, post)
     expected = _boolean(BRepAlgoAPI_Fuse, _native(alone, _circle_edge(alone, 3.0, 3.0, x=18.0), 10.0), torus)
     assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
+
+
+def test_a_tapered_post_overflowing_the_disc_is_cut_at_the_rim():
+    """円板(半径 25)の上の先細りの柱(根元 9 → 上 4)の根元を半径 20 で丸めると、縁を越える分は円板の側面の延長で
+    切れる(広い円板で丸めてから半径 25 の円柱で切った形と同じ)。2面の柱の外をまとめて見ていたときは、傾いた壁の側の
+    「辺に触れる層」と縁の外の肉がつながって残り、縁から 1.66mm はみ出した。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common as _Common
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCone
+
+    def tapered_post_on(disc_radius):
+        cone = BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(0, 0, 8), gp_Dir(0, 0, 1)), 9.0, 4.0, 40.0).Shape()
+        return _union(_cylinder(0.0, 0.0, disc_radius, 8.0), cone)
+
+    shape = tapered_post_on(25.0)
+    root = _circle_edge(shape, 9.0, 8.0)
+
+    rounded = kernel.fillet_edges(shape, {root: 20.0})
+
+    wide = tapered_post_on(60.0)
+    expected = _boolean(_Common, _native(wide, _circle_edge(wide, 9.0, 8.0), 20.0), _cylinder(0.0, 0.0, 25.0, 100.0))
+    assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
+    assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6)
