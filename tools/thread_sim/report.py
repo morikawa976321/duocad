@@ -232,6 +232,7 @@ def table_split(rows, out=sys.stdout):
 if __name__ == "__main__":
     st = sys.argv[1]
     rows = load(st)
+    st = st.split("_")[0]  # study4_tp1 なども同じ表
     if st == "study1":
         table_study1(rows)
     elif st == "study4":
