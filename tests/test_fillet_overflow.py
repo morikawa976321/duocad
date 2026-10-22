@@ -637,6 +637,30 @@ def test_a_wall_leaning_out_past_the_rim_keeps_the_material_under_it():
     assert _top_of_faces(rounded["shape"], rim_side) == pytest.approx(3.0, abs=1e-6), "床の側面が伸びた"
 
 
+def test_a_post_straddling_the_plate_edge_does_not_turn_the_air_beyond_the_rim_into_material():
+    """板(x,y=±20)の縁 x=20 にまたがって立つ柱(中心 (18, 0)・半径 5)の根元の円弧を半径 20 で丸めても、板の縁の外の空気
+    (板にも柱にも入らない点 (22, -10, 4))は肉にならない。張り出した壁のために縁の外を角へ戻す範囲を、相手の面の接点が
+    縁の外にある所に絞る前は、ここを肉にした(Codex レビューの反例)。"""
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.TopAbs import TopAbs_OUT
+
+    shape = _union(_box(-20, -20, 0, 20, 20, 3), _cylinder(18.0, 3.0, 5.0, 60.0))
+    def middle_x(index):
+        curve = BRepAdaptor_Curve(TopoDS.Edge_s(kernel.edge_of(shape, index)))
+        return curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter())).X()
+
+    roots = [  # 板の上に立つ根元の円弧(縁の外へ張り出した柱の底の円弧は除く)
+        edge["index"] for edge in query.describe_edges(shape)
+        if edge["kind"] == "circle" and abs(edge["start"][2] - 3.0) < 1e-6 and middle_x(edge["index"]) < 20.0
+    ]
+    assert roots
+
+    rounded = kernel.fillet_edges(shape, {index: 20.0 for index in roots})
+
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert BRepClass3d_SolidClassifier(rounded["shape"], gp_Pnt(22.0, -10.0, 4.0), 1e-7).State() == TopAbs_OUT
+
+
 def test_a_hole_narrower_than_the_sample_spacing_is_still_rolled_into():
     """柱の根元の丸めの足が、半径 0.5 の小さな穴をかすめる(64 点の標本どうしの間に収まる)ときも、球は穴の縁に乗って
     転がり、穴の壁は高くならない。標本だけを見ていたときは縁を越えない形として扱い、穴の壁が 0.02mm 伸びた

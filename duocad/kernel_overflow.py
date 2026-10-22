@@ -17,6 +17,7 @@ Fusion 360 はどちらも、支える2面だけで丸めた面をはみ出し�
 """
 from __future__ import annotations
 
+import bisect
 import math
 from typing import Dict, List, NamedTuple, Sequence, Tuple
 
@@ -27,14 +28,13 @@ from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeFace,
-    BRepBuilderAPI_MakePolygon,
     BRepBuilderAPI_MakeVertex,
     BRepBuilderAPI_MakeWire,
 )
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
-from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+from OCP.BRepExtrema import BRepExtrema_DistShapeShape, BRepExtrema_SupportType
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepLProp import BRepLProp_SLProps
@@ -363,16 +363,18 @@ def _rolled_over_rims(wedge, edges: list, faces, heights, radius: float, columns
         # 傾いた壁の柱は境界が辺から斜めに出て、辺に沿う薄い層を2面の柱の共通部分から外す(円板の上の先細りの柱で、
         # 管の下の角が辺に触れなくなり、肉が丸ごと捨てられた)。片方の柱の中だけにあって辺に触れる部分を角に戻す
         # (戻した層のうち丸めの面より上は、次の管で引かれる)。
-        # 球が縁に乗る面の柱の外は、連なりの横にある部分を全部戻す: 縁の先へ張り出した相手の面の下にも肉がある
-        # (縁の外へ 45° で張り出す壁の根元で、縁の真上に縦の面が残り、肉が 0.8% 欠けた。Codex レビューの反例)。
-        # 縁の先の空気とは、縁に乗る球が隔てる。連なりの端の先は戻さない(辺の端の先へ肉が伸びる)。
+        # 相手の面が縁の外へ張り出す所では、縁に乗る面の柱の外にも肉がある(縁の外へ 45° で張り出す壁の根元で、縁の真上に
+        # 縦の面が残り、肉が 0.8% 欠けた。Codex レビューの反例)。断面で肉は「辺の点・縁の点・相手の面の接点」の三角形の中に
+        # しかないので、接点が縁の外にある範囲(`overhangs`)の横だけを戻す。接点が縁の内側の所まで戻すと、縁の外の空気を
+        # 肉にした(板の縁にまたがって立つ柱の根元。Codex レビューの反例)。
         size = 10.0 * _diagonal(wedge)
         for rim_state, inside, outside in ((2, first_column, second_column), (1, second_column, first_column)):
             only = _boolean("cut", _boolean("common", wedge, inside).Shape(), outside).Shape()
-            if any(rim_state in path.states for path in paths):
-                parts = _alongside(only, paths, size)
-            else:
-                parts = [part for part in _solids(only) if _touches_inside_of(part, edges)]
+            parts = [part for part in _solids(only) if _touches_inside_of(part, edges)]
+            overhanging = [path for path in paths if path.overhangs[rim_state]]
+            if overhanging:
+                parts = parts + [part for part in _alongside(only, overhanging, rim_state, size)
+                                 if not _touches_inside_of(part, edges)]
             for part in parts:
                 corner = _boolean("fuse", corner, part).Shape()
     except Exception:  # noqa: BLE001  Unsupported と、OCCT の補間・ブーリアンの Standard_Failure 系。ふつうの丸めに戻る
@@ -388,16 +390,16 @@ def _rolled_over_rims(wedge, edges: list, faces, heights, radius: float, columns
     return None
 
 
-def _alongside(region: TopoDS_Shape, paths: list, size: float) -> list:
-    """`region` を開いた連なりの両端の法平面で割り、連なりの横にある(いちばん近い連なりの点が端でない)部分を返す。"""
+def _alongside(region: TopoDS_Shape, paths: list, rim_state: int, size: float) -> list:
+    """`region` を、相手の面が縁の外へ張り出す範囲(`path.overhangs[rim_state]`)の両端の法平面で割り、その範囲の横にある
+    (いちばん近いワイヤーの点がその範囲の中にある)部分を返す。"""
     planes = []
     for path in paths:
-        if path.loop:
-            continue
-        for at in (path.curve.FirstParameter(), path.curve.LastParameter()):
-            point, tangent = gp_Pnt(), gp_Vec()
-            path.curve.D1(at, point, tangent)
-            planes.append(BRepBuilderAPI_MakeFace(gp_Pln(point, gp_Dir(tangent)), -size, size, -size, size).Face())
+        for span in path.overhangs[rim_state]:
+            for at in span:
+                point, tangent = gp_Pnt(), gp_Vec()
+                path.curve.D1(at, point, tangent)
+                planes.append(BRepBuilderAPI_MakeFace(gp_Pln(point, gp_Dir(tangent)), -size, size, -size, size).Face())
     if planes:
         splitter = BRepAlgoAPI_Splitter()
         arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
@@ -416,12 +418,8 @@ def _alongside(region: TopoDS_Shape, paths: list, size: float) -> list:
         BRepGProp.VolumeProperties_s(part, props)
         centre = BRepBuilderAPI_MakeVertex(props.CentreOfMass()).Vertex()
         nearest = min(paths, key=lambda path: BRepExtrema_DistShapeShape(centre, path.wire).Value())
-        if nearest.loop:
-            kept.append(part)
-            continue
-        on_wire = BRepExtrema_DistShapeShape(centre, nearest.wire).PointOnShape2(1)
-        ends = (nearest.curve.Value(nearest.curve.FirstParameter()), nearest.curve.Value(nearest.curve.LastParameter()))
-        if all(on_wire.Distance(end) > 1.0e-7 * max(1.0, size) for end in ends):
+        at = nearest.param_of(BRepExtrema_DistShapeShape(centre, nearest.wire).PointOnShape2(1))
+        if any(low < at < high for low, high in nearest.overhangs[rim_state]):
             kept.append(part)
     return kept
 
@@ -603,7 +601,8 @@ class _Run(NamedTuple):
 class _RollingPath:
     """1本のワイヤー(接線でつながる辺の列)に沿った球の中心の道。`runs` はワイヤーの向きに並んだ滑らかな区間(`_Run`)、
     `loop` は区間が1周して閉じるか、`crossed` は縁を越えたか、`states` は現れた状態(0 ふつう・1/2 その面の縁に乗る)、
-    `probes` は間引いた `(辺の点, 球の中心)`。
+    `overhangs[状態]` は球がその面の縁に乗り、相手の面の接点が縁の外にある媒介変数の範囲、`probes` は間引いた
+    `(辺の点, 球の中心)`。
 
     辺の点 s での法平面の中で、ふつうは両面から半径の点(両方の足が面の上)。片方の足が面の外なら、その面の縁から半径・
     もう片方の面から半径の点(球が縁の辺に乗る)。両方の足が外なら引き受けない。状態が変わる所は二分法で詰め、
@@ -622,6 +621,8 @@ class _RollingPath:
         params, solved = self._with_missed_crossings(params, [self._center(u) for u in params], last)
         states = [state for state, _, _ in solved]
         self.states = set(states)
+        self.samples = [(u, self.curve.Value(u)) for u in params]
+        self.overhangs = {1: self._overhangs(params, solved, 1, last), 2: self._overhangs(params, solved, 2, last)}
         self.probes = [(self.curve.Value(params[i]), solved[i][1]) for i in range(0, len(params), 8)]
         self.crossed = any(state != 0 for state in states)
         runs: List[Tuple[List[gp_Pnt], int, object, object]] = []
@@ -650,30 +651,95 @@ class _RollingPath:
                 runs[0][2] = direction
         self.runs = [_Run(points, start, end) for points, _, start, end in runs]
 
+    def _overhangs(self, params: list, solved: list, rim_state: int, last: float) -> list:
+        """状態 `rim_state` の標本のうち、相手の面の接点(球の足)を縁に乗る面へ下ろした点が面の外にある標本の範囲。
+        両隣の標本まで広げる(範囲の端で縁の外の肉は厚みゼロへ向かう)。1周して全部なら `[(始め, 終わり)]`。"""
+        rim, other = (self.supports[0], self.supports[1]) if rim_state == 1 else (self.supports[1], self.supports[0])
+        beyond = []
+        for state, center, _ in solved:
+            if state != rim_state:
+                beyond.append(False)
+                continue
+            contact = other.signed(center)[1]
+            beyond.append(not rim.covers(rim.signed(contact)[1]))
+        count = len(params)
+        if not any(beyond):
+            return []
+        if all(beyond):
+            return [(params[0], last if self.loop else params[-1])]
+        period = last - params[0]
+
+        def at(index):  # 1周の継ぎ目をまたいだ添字も、続けた媒介変数で返す
+            if not self.loop:
+                return params[max(0, min(count - 1, index))]
+            return params[index % count] + period * (index // count)
+
+        # 1周する道は、範囲の外(偽)の標本から数え始めて、継ぎ目をまたぐ範囲を1つにする
+        begin = beyond.index(False) if self.loop else 0
+        spans, index = [], begin
+        while index < begin + count:
+            if not beyond[index % count]:
+                index += 1
+                continue
+            first = index
+            while index + 1 < begin + count and beyond[(index + 1) % count]:
+                index += 1
+            low, high = at(first - 1), at(index + 1)
+            if self.loop and low >= last:
+                low, high = low - period, high - period
+            if self.loop and high > last:
+                spans.extend([(low, last), (params[0], high - period)])
+            else:
+                spans.append((low, high))
+            index += 1
+        return spans
+
+    def param_of(self, point: gp_Pnt) -> float:
+        """ワイヤーの上の点の媒介変数(標本の辺の点を結んだ折れ線で近似)。"""
+        points = [p for _, p in self.samples] + ([self.samples[0][1]] if self.loop else [])
+        params = [u for u, _ in self.samples] + ([self.curve.LastParameter()] if self.loop else [])
+        return _param_on_polyline(point, points, params)
+
     def _with_missed_crossings(self, params: list, solved: list, last: float):
         """足(ふつうの中心から支える面へ下ろした点)の軌跡が面の縁をまたぐ所を探し、またぐ所どうしの間に標本を足す。
 
         標本だけを見ると、標本の間に収まる小さな穴を見逃した(半径 0.5 の穴を 64 点の間に置くと、縁を越えない形として
         ふつうの肉になり、穴の壁が肉の高さまで伸びた。Codex レビューの反例)。またぐ所の間は同じ状態なので、間に1点足せば
-        その状態が標本に現れ、切り替わりの点は `_joint` の二分法が詰める。"""
+        その状態が標本に現れ、切り替わりの点は `_joint` の二分法が詰める。
+        足の軌跡は足を通る B スプラインで表す: 足を結んだ折れ線は、半径 1001 の軌跡を 64 分割すると弦が 1.2mm 内側を通り、
+        半径 0.5 の穴を外した(Codex レビューの反例)。"""
         ends = params + [last] if self.loop else params
         crossings = []
         for support in self.supports:
             if not support.has_boundary:
                 continue
             feet = [support.signed(regular)[1] for _, _, regular in solved]
-            if self.loop:
-                feet.append(feet[0])
-            polygon = BRepBuilderAPI_MakePolygon()
-            for foot in feet:
-                polygon.Add(foot)
-            if not polygon.IsDone():
-                continue
-            measure = BRepExtrema_DistShapeShape(polygon.Wire(), support.boundary)
+            closed = feet + [feet[0]] if self.loop else feet
+            chords = [0.0]
+            for a, b in zip(closed, closed[1:]):
+                chords.append(chords[-1] + a.Distance(b))
+            if any(b - a < 1.0e-12 for a, b in zip(chords, chords[1:])):
+                continue  # 足が動かない(補間できない)所がある
+            array = TColgp_HArray1OfPnt(1, len(feet))
+            for number, foot in enumerate(feet, 1):
+                array.SetValue(number, foot)
+            interpolation = GeomAPI_Interpolate(array, self.loop, 1.0e-9)
+            interpolation.Perform()
+            if not interpolation.IsDone():
+                raise Unsupported("the track of the ball's feet could not be interpolated")
+            track = BRepBuilderAPI_MakeEdge(interpolation.Curve()).Edge()
+            measure = BRepExtrema_DistShapeShape(track, support.boundary)
             if not measure.IsDone() or measure.Value() > 1.0e-7 * max(1.0, self.radius):
                 continue
             for number in range(1, measure.NbSolution() + 1):
-                crossings.append(_param_on_polyline(measure.PointOnShape1(number), feet, ends))
+                # 補間の媒介変数は弦の長さの累計(`_interpolated` と同じ)なので、標本の間で比例配分して辺の媒介変数へ戻す
+                if measure.SupportTypeShape1(number) == BRepExtrema_SupportType.BRepExtrema_IsOnEdge:
+                    (along,) = measure.ParOnEdgeS1(number)  # OCP は参照で返す引数をタプルで返す
+                    k = max(0, min(len(chords) - 2, bisect.bisect_right(chords, along) - 1))
+                    share = (along - chords[k]) / (chords[k + 1] - chords[k])
+                    crossings.append(ends[k] + share * (ends[k + 1] - ends[k]))
+                else:
+                    crossings.append(_param_on_polyline(measure.PointOnShape1(number), closed, ends))
         if not crossings:
             return params, solved
         crossings.sort()
