@@ -76,14 +76,26 @@ _MEETING_STEPS = 60
 _SMOOTH_ANGLE = 1.0e-3
 
 
+class Declined(Unsupported):
+    """選んだ辺は上面を囲む輪(この作り方の対象)だが、丸められなかった。理由は利用者への失敗の文面に添える。"""
+
+
 def round_tight_loop(shape: TopoDS_Shape, edge_map, radii: dict) -> Tight:
-    """`radii`(`{辺の添字: 半径}`)の辺が上面を囲む輪なら、自己交差を切り落とした形で丸める。引き受けなければ `Unsupported`。"""
+    """`radii`(`{辺の添字: 半径}`)の辺が上面を囲む輪なら、自己交差を切り落とした形で丸める。輪でなければ `Unsupported`、
+    輪だが丸められなければ `Declined`。"""
     values = set(radii.values())
     if len(values) != 1:
         raise Unsupported("the loop must be rounded with one radius")
     radius = float(values.pop())
     edges = [edge_map.FindKey(int(index)) for index in radii]
     top = _top_face(shape, edges)
+    try:
+        return _round(shape, top, radius)
+    except Unsupported as error:
+        raise Declined(str(error)) from error
+
+
+def _round(shape: TopoDS_Shape, top: TopoDS_Shape, radius: float) -> Tight:
     normal = _outward_normal(top, _a_point_on(top))
     normal.Normalize()
     size = _diagonal(shape)

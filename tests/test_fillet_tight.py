@@ -204,13 +204,23 @@ def test_a_post_lower_than_the_radius_is_refused():
         kernel.fillet_edges(shape, {index: 1.0 for index in edges})
 
 
+def test_a_radius_too_wide_for_the_tip_caps_is_refused_with_this_way_s_reason():
+    """楕円 6×2 の上縁を半径 1.7(上面の半幅の 85%)で丸めると、帽子が隣の面となめらかにつながらないので断る。失敗の文面に
+    この作り方の理由が載る(載らないと、はみ出しの吸収の「くさびが丸まらない」だけが見える)。"""
+    shape = _elliptic_post(6.0, 2.0, 5.0)
+    edges = _top_edges(shape, 5.0)
+
+    with pytest.raises(ValueError, match="曲率半径を超える丸めもできない: the cap at the tip could not be filled smoothly"):
+        kernel.fillet_edges(shape, {index: 1.7 for index in edges})
+
+
 def test_a_radius_wider_than_the_waist_of_the_top_is_refused_by_this_way():
     """落花生形の柱(くびれの幅 2、先端の曲率半径 0.75)の上縁を半径 1.2 で丸める道は、くびれで球が反対側の壁に食い込むので
     引き受けない。OCCT はこの形を自分で丸めるので、作り方を直接呼ぶ。"""
-    from duocad import kernel_overflow, kernel_tight
+    from duocad import kernel_tight
 
     shape = _peanut_post(5.0)
     edges = _top_edges(shape, 5.0)
 
-    with pytest.raises(kernel_overflow.Unsupported, match="cut into the opposite wall"):
+    with pytest.raises(kernel_tight.Declined, match="cut into the opposite wall"):
         kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), {index: 1.2 for index in edges})

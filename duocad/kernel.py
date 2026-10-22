@@ -1556,10 +1556,13 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         else:
             if not _blend_reaches_other_faces(maker, shape):
                 return native
+    declined = ""
     if native is None:
         # 辺の曲率半径を超える半径の、上面を囲む輪(issue #207)。引き受けない形ならはみ出しの吸収へ進む
         try:
             return _tight_fillet(shape, edge_map, radii, edge_indices, volume_before)
+        except kernel_tight.Declined as reason:
+            declined = f"; 曲率半径を超える丸めもできない: {reason}"
         except kernel_overflow.Unsupported:
             pass
     try:
@@ -1567,7 +1570,7 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
     except ValueError as reason:
         if native is not None:
             return native
-        raise ValueError(f"{failure} (はみ出しの吸収もできない: {reason})") from failure
+        raise ValueError(f"{failure} (はみ出しの吸収もできない: {reason}{declined})") from failure
 
 
 def _built_blend(

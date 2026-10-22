@@ -37,6 +37,9 @@
 | 左手系のスケッチ枠で `gp_Ax2(中心, ax3.Direction(), X)` を作ると Y が逆になり、円弧は時計回り・楕円は角度が逆に出る(立方体6面のうち5面) | `duocad/kernel_sketch.py` `_curve_axis` |
 | `gp_Elips` は長半径 >= 短半径でないと `Standard_ConstructionError`(縦長の楕円は軸を 90° 回して入れ替える) | `duocad/kernel_sketch.py` `_ellipse_gp` |
 | 離心率0の `gp_Elips`(長半径と短半径の差 5e-8 以下)の辺を `BRepOffsetAPI_MakeOffset` に渡すと access violation でプロセスごと落ちる(縦横が等しい楕円は辺を `gp_Circ` にする) | `duocad/kernel_sketch.py` `_ellipse_gp` |
+| `BRepOffsetAPI_MakeOffset` で平面の輪郭を内へずらすと、領域が消える距離(半径 1 の円を 3)でプロセスごと落ちる。楕円では継ぎ目が 6° 折れ、面積が 1.5% ずれる | `duocad/kernel_tight.py` `_center_path` |
+| `BRepOffsetAPI_MakeFilling` に、支える面の上の座標(pcurve)を持たない辺を G1 の境界で渡すと `Build()` がアクセス違反でプロセスごと落ちる | `duocad/kernel_tight.py` `_cap` |
+| `BRepAdaptor_CompCurve` の弧長の媒介変数は、辺の境目だけが弧長の位置で、辺の中は辺の媒介変数の一次の伸ばし | `duocad/kernel_tight.py` `_contour_pieces` |
 | 円・直線を B-スプラインに直した辺(ブーリアン・オフセットの途中で出る)をさらにオフセットすると、元の型に戻らず `GeomAbs_OffsetCurve` のまま返る(曲線そのものは円・直線で、標本点の残差は 1e-10 以下)。標本点を当てはめて直す | `duocad/kernel_sketch.py` `_entities_of_offset_curve` |
 | 辺の長さは `GCPnts_AbscissaPoint.Length_s` の既定の許容差も build123d の `Edge.length` も楕円・B-spline で粗い(楕円 40×2 で +1.74%)。許容差を渡す | `duocad/kernel.py` `edge_length` |
 | 螺旋の歯を芯の円柱へ `Fuse` すると、`BRepCheck` が真のまま芯が消える寸法がある(M5×0.8 で体積 −84%) | [THREAD.md](THREAD.md)「形の作り方」 |
