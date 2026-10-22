@@ -299,6 +299,22 @@ def _run_envelope_regions(session: Session, tmp_path: Path) -> dict:
     return session.envelope_regions(1.0, 2.0)
 
 
+@_runner("project_to_sketch")
+def _run_project_to_sketch(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    sketch_id = session.sketch_create_offset(30.0, base_plane="XY")["sketch_id"]
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    return session.project_to_sketch(sketch_id)
+
+
+@_runner("project_outline")
+def _run_project_outline(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    sketch_id = session.sketch_create_offset(30.0, base_plane="XY")["sketch_id"]
+    _select(session, [{"body": body.id, "kind": "body", "index": None}])
+    return session.project_outline(sketch_id)
+
+
 @_runner("mirror_body")
 def _run_mirror_body(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)

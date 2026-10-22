@@ -1666,18 +1666,7 @@
     // 素クリックのトグル(`toggleOnlyMode`)はどの種類にも効かせる(測定は辺・頂点でも測る)。
     // 来るのは今指せる種類(`pickKinds`)だけ: コマンドの起動中はそのコマンドが受け付けるものに絞られている。
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
-    // 辺は連なりで扱うコマンド(フィレット・面取り)の起動中だけ連なりの単位(`edgeChainRefs`)、それ以外は1本。
-    if (event.edge !== null) {
-      const edge = event.edge
-      const refs = edgeChainRefs(edge.bodyId, edge.edgeIndex)
-      if (refs === null) deferUntilChains([edge], () => editEdgeChain(edgeChainRefs(edge.bodyId, edge.edgeIndex)!, pickMode))
-      else editEdgeChain(refs, pickMode)
-      return
-    }
-    if (event.vertex !== null) {
-      editSelection(vertexRef(event.vertex.bodyId, event.vertex.vertexIndex), pickMode)
-      return
-    }
+    if (editSolidEdgeOrVertex(event, pickMode)) return
     // スケッチの図形(点・線)。通常モードでは見えている全スケッチの図形が来る(スケッチモードは `onSketchPick`)。
     if (event.sketchEntity !== null) {
       const hit = event.sketchEntity
@@ -1699,6 +1688,37 @@
     // 保持/除外ソリッドの間だけボディ粒度へ畳む(`optimizeSetFaceRef`)。
     editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
+
+  /** ソリッドの辺・頂点のピックを選択の編集へ(当たっていれば true)。通常モードと、スケッチモードの投影の起動中が使う。 */
+  function editSolidEdgeOrVertex(event: PickEvent, pickMode: PickEvent['mode']): boolean {
+    // 辺は連なりで扱うコマンド(フィレット・面取り)の起動中だけ連なりの単位(`edgeChainRefs`)、それ以外は1本。
+    if (event.edge !== null) {
+      const edge = event.edge
+      const refs = edgeChainRefs(edge.bodyId, edge.edgeIndex)
+      if (refs === null) deferUntilChains([edge], () => editEdgeChain(edgeChainRefs(edge.bodyId, edge.edgeIndex)!, pickMode))
+      else editEdgeChain(refs, pickMode)
+      return true
+    }
+    if (event.vertex !== null) {
+      editSelection(vertexRef(event.vertex.bodyId, event.vertex.vertexIndex), pickMode)
+      return true
+    }
+    return false
+  }
+
+  /**
+   * スケッチモード中にソリッドを指すか: 起動中のコマンドが受けるのがソリッドの部分(面・辺・頂点・ボディ)だけのとき
+   * (投影)。スケッチの図形も受けるコマンド(削除)はスケッチの中身を指したまま。
+   */
+  const SOLID_KINDS: ReadonlySet<SelectableKind> = new Set(['face', 'edge', 'vertex', 'body'])
+  const solidPickInSketch = $derived(
+    sketchId !== null && wantedKinds.length > 0 && wantedKinds.every((kind) => SOLID_KINDS.has(kind)),
+  )
+
+  $effect(() => {
+    const on = solidPickInSketch
+    viewport?.setSolidPickInSketch(on)
+  })
 
   // ---------------------------------------------------------------- C: スケッチ
   const sketches = $derived(model?.sketches ?? [])
@@ -1802,6 +1822,13 @@
    * 点を待つコマンドの起動中は、領域の上を押しても点になる(既存の領域の内側に線を引けないと分割できない)。
    */
   function onSketchPick(event: PickEvent): void {
+    if (solidPickInSketch) {
+      // 投影の起動中: 当たるのはソリッドだけ(`viewport.setSolidPickInSketch`)。素のクリックは足す・外す。
+      const pickMode = toggleOnlyMode(event.mode)
+      if (editSolidEdgeOrVertex(event, pickMode)) return
+      if (event.hit !== null) editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
+      return
+    }
     if (event.point && host?.wantsPoint()) {
       // 当たっている図形へ落としてから渡す。幽霊(`hoverPoint`)も同じ関数を通るので、吸い付いて見える位置と確定結果はずれない。
       const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity)
@@ -1987,7 +2014,9 @@
     refireTimer = null
     serverPreview = { verb, args }
     previewId += 1
-    session.preview(verb, args, previewId)
+    // スケッチの verb は確定(`runCommand`)と同じく編集中のスケッチを足して送る(投影は `sketch_id` で写す先を決める)
+    const sketchVerb = CATEGORY_OF.get(verb) === 'sketch' && !runsOutsideSketch(verb) && !runsWithoutSketchId(verb)
+    session.preview(verb, sketchVerb && sketchId !== null ? { ...args, sketch_id: sketchId } : args, previewId)
   }
 
   function clearPreview(): void {
