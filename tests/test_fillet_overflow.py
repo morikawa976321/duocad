@@ -1,17 +1,21 @@
 """はみ出しを吸収するフィレット(`kernel_overflow`)。OCCT の `MakeFillet` が断る・別の形を返す半径でも、Fusion 360 と同じ形になるか。
 
-期待値は「障害物の無い形で OCCT が丸めてから、障害物を足す/はみ出しを切る」で作った形(issue #208 の「後で結合」)の体積。
+期待値は「障害物の無い形で OCCT が丸めてから、障害物を足す」で作った形(issue #208 の「後で結合」)の体積。支える面の縁を
+越える丸めは、縁の辺に乗って転がる球で作った形(台座の高さが変わらず、縁でフィレットの厚みがゼロ)の厳密な体積。
 """
 from __future__ import annotations
 
+import math
+
 import pytest
-from OCP.BRepAdaptor import BRepAdaptor_Curve
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Fuse
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 from OCP.Bnd import Bnd_Box
+from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 
@@ -68,24 +72,76 @@ def _post_on_disc(disc_radius: float):
     return _union(_cylinder(0.0, 0.0, disc_radius, 8.0), _cylinder(0.0, 8.0, 9.0, 60.0))
 
 
+#: 縁に乗って転がる球で作った肉の体積と厳密解との差の許容(相対)。球をわずかに膨らませて掃くので、丸めの面が
+#: 半径 × `kernel_overflow._ROLL_SWELLS` だけ角の側へずれ、肉が少し減る。
+_ROLLED_REL = 1.0e-3
+
+
+def _rolled_around_a_post(wall, base_z: float, rim: float, radius: float, steps: int = 100000) -> float:
+    """回転体の柱の根元を丸めて足される肉の厳密な体積。`wall` は柱の側面の断面の2点 (z, 軸からの距離)、台座の上面は
+    z=`base_z`、台座の縁は軸から `rim`。球は柱と上面に接し、中心が縁より外へ出るなら柱と縁の円に接して転がる。"""
+    (za, xa), (zb, xb) = wall
+    length = math.hypot(zb - za, xb - xa)
+    up, out = (xa - xb) / length, (zb - za) / length  # 柱の側面の外向き法線の (z, 軸からの距離) 成分
+
+    def wall_at(z):
+        return xa + (xb - xa) * (z - za) / (zb - za)
+
+    def across(height):  # 柱から radius 離れた線の上で、高さ height の点の軸からの距離
+        return wall_at(height - radius * up) + radius * out
+
+    height = base_z + radius
+    if across(height) > rim:
+        low, high = base_z, base_z + radius
+        for _ in range(100):
+            middle = 0.5 * (low + high)
+            if math.hypot(across(middle) - rim, middle - base_z) < radius:
+                low = middle
+            else:
+                high = middle
+        height = 0.5 * (low + high)
+    center, top = across(height), height - radius * up
+    total = 0.0
+    for i in range(steps):
+        z = base_z + (top - base_z) * (i + 0.5) / steps
+        inner = wall_at(z)
+        outer = min(rim, center - math.sqrt(max(0.0, radius * radius - (z - height) ** 2)))
+        if outer > inner:
+            total += math.pi * (outer * outer - inner * inner)
+    return total * (top - base_z) / steps
+
+
+def _top_of_faces(shape, on) -> float:
+    """`on(BRepAdaptor_Surface)` が真の面(台座の側面)の上端の z。"""
+    tops = []
+    for index in range(1, kernel.face_count(shape) + 1):
+        face = kernel.face_of(shape, index)
+        if on(BRepAdaptor_Surface(TopoDS.Face_s(face))):
+            tops.append(_bounds(face)[5])
+    assert tops, "台座の側面が見つからない"
+    return max(tops)
+
+
+def _cylinder_of_radius(radius: float):
+    return lambda surface: surface.GetType() == GeomAbs_Cylinder and abs(surface.Cylinder().Radius() - radius) < 1e-9
+
+
 @pytest.mark.parametrize("radius", [21.0, 21.25, 30.0])
-def test_a_radius_wider_than_the_flange_is_cut_where_the_flange_ends(radius):
-    """円板の縁(柱から 21)を越える半径で丸まり、縁の外へはみ出す分は円板の側面の延長で切れる。
-    落ちたら、はみ出しの吸収が働いていない(OCCT は 21 以上で断る)か、はみ出した肉の切り方が変わった。"""
+def test_a_radius_wider_than_the_flange_rolls_over_the_rim(radius):
+    """円板の縁(柱から 21)を越える半径で丸まり、縁の先では球が柱と縁の円に接して転がる(Fusion 360 と同じく、円板の
+    高さは変わらず、縁でフィレットの厚みがゼロになる)。
+    落ちたら、はみ出しの吸収が働いていない(OCCT は 21 以上で断る)か、縁に乗って転がる球の肉が変わった。"""
     shape = _post_on_disc(30.0)
     index = _circle_edge(shape, 9.0, 8.0)
     assert _native(shape, index, radius) is None, "前提: OCCT はこの半径を断る"
 
     rounded = kernel.fillet_edges(shape, {index: radius})
 
-    # 期待値: 十分広い円板で OCCT が丸め、円板の半径 30 の円柱の内側だけを残した形
-    wide = _post_on_disc(100.0)
-    expected = _boolean(
-        BRepAlgoAPI_Common, _native(wide, _circle_edge(wide, 9.0, 8.0), radius), _cylinder(0.0, 0.0, 30.0, 100.0)
-    )
-    assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
+    added = rounded["volume_after"] - kernel.volume(shape)
+    assert added == pytest.approx(_rolled_around_a_post(((8.0, 9.0), (68.0, 9.0)), 8.0, 30.0, radius), rel=_ROLLED_REL)
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
     assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6), "肉が円板の外へはみ出した"
+    assert _top_of_faces(rounded["shape"], _cylinder_of_radius(30.0)) == pytest.approx(8.0, abs=1e-6), "円板の側面が伸びた"
 
 
 def _two_posts(gap: float):
@@ -141,26 +197,26 @@ def _line_edge_at(shape, x: float, z: float) -> int:
     return found
 
 
-def test_a_straight_fillet_taller_than_the_wall_is_cut_at_the_wall_top():
-    """L 字の内側の辺を、壁の残りの高さ(20)を越える半径 22 で丸めると、壁の上面の高さで切れ、辺の両端は側面で切れる。"""
+def test_a_straight_fillet_taller_than_the_wall_rolls_over_the_wall_top():
+    """L 字の内側の辺を、壁の残りの高さ(20)を越える半径 22 で丸めると、球は床と壁の上の縁に接して転がり、肉は壁の上の
+    縁で厚みゼロになる(壁は高くならない)。辺の両端は側面で切れる。"""
     shape = _l_bracket()
     index = _line_edge_at(shape, 5.0, 5.0)
     assert _native(shape, index, 22.0) is None, "前提: OCCT はこの半径を断る"
 
     rounded = kernel.fillet_edges(shape, {index: 22.0})
 
-    # 断面は「22 角の正方形 − 四分円」のうち壁の上面(z=25)より下。z を 5..25 で積分した面積 × 奥行き 30
-    import math
+    # 断面: 球の中心は床から 22(z=27)・壁の上の縁 (5, 25) から 22。肉は壁(x=5)と床(z=5)と球の間で、z=5..25
+    r, height = 22.0, 27.0
+    center = 5.0 + math.sqrt(r * r - (height - 25.0) ** 2)
 
-    def area_below(height):  # 角(0,0)から高さ h までの「正方形 − 四分円」の面積(中心は (22, 22))
-        r = 22.0
-        y = height - r
-        circle = (y * math.sqrt(r * r - y * y) + r * r * math.asin(y / r)) / 2 - (-r * r * math.pi / 4)
-        return r * height - circle
+    def under(t):  # ∫ sqrt(r² - t²) dt
+        return (t * math.sqrt(r * r - t * t) + r * r * math.asin(t / r)) / 2.0
 
-    expected = kernel.volume(shape) + 30.0 * area_below(20.0)
-    assert rounded["volume_after"] == pytest.approx(expected, rel=1e-7)
-    assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6)
+    area = (center - 5.0) * 20.0 - (under(r) - under(height - 25.0))
+    added = rounded["volume_after"] - kernel.volume(shape)
+    assert added == pytest.approx(30.0 * area, rel=_ROLLED_REL)
+    assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6), "壁が高くなった・肉が側面の外へ出た"
 
 
 def test_a_convex_fillet_wider_than_the_plate_is_cut_at_the_bottom():
@@ -254,7 +310,7 @@ def test_independent_edges_between_the_same_two_faces_keep_their_own_radii():
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Common as _Common
 
     half = _boolean(_Common, _cylinder(0.0, 3.0, 10.0, 30.0), _box(-20, 0, 3, 20, 20, 40))
-    shape = _union(_box(-20, -20, 0, 130, 20, 3), half, _cylinder(110.0, 3.0, 9.0, 60.0))
+    shape = _union(_box(-20, -20, 0, 130, 20, 3), half, _cylinder(60.0, 3.0, 9.0, 60.0))
     verticals = sorted(
         (edge for edge in query.describe_edges(shape)
          if edge["kind"] == "line" and abs(edge["start"][0]) > 9.9 and abs(edge["start"][0]) < 10.1
@@ -262,7 +318,7 @@ def test_independent_edges_between_the_same_two_faces_keep_their_own_radii():
         key=lambda edge: edge["start"][0],
     )
     assert len(verticals) == 2
-    root = _circle_edge(shape, 9.0, 3.0, x=110.0)
+    root = _circle_edge(shape, 9.0, 3.0, x=60.0)
 
     volumes = [
         kernel.fillet_edges(shape, {verticals[0]["index"]: 3.0, verticals[1]["index"]: second, root: 22.0})["volume_after"]
@@ -319,11 +375,10 @@ def test_rounding_a_convex_edge_next_to_a_curved_face_removes_all_of_the_materia
 
 
 def test_a_through_hole_next_to_the_post_stays_open():
-    """柱の根元の丸めが脇の貫通穴にかかっても、穴の上の肉は穴の壁の延長で切れ、穴は塞がらない
-    (支える面の内側の輪を全部塞いだときは、穴の上に肉が残った。Codex レビューの反例)。"""
+    """柱の根元の丸めが脇の貫通穴にかかっても、穴は塞がらない(支える面の内側の輪を全部塞いだときは、穴の上に肉が
+    残った。Codex レビューの反例)。球は穴の縁に乗って穴へ転がり込むので、穴の上では肉が下がり、穴の無い円板で
+    丸めてから穴をあけた形より肉は少ない。"""
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
-    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
-    from OCP.TopAbs import TopAbs_OUT
 
     disc_and_post = _union(_cylinder(0.0, 0.0, 20.0, 3.0), _cylinder(0.0, 3.0, 5.0, 20.0))
     hole = _cylinder(11.0, -1.0, 2.0, 30.0)
@@ -333,10 +388,10 @@ def test_a_through_hole_next_to_the_post_stays_open():
     rounded = kernel.fillet_edges(shape, {index: 6.0})
 
     alone = _native(disc_and_post, _circle_edge(disc_and_post, 5.0, 3.0), 6.0)
-    expected = kernel.volume(_boolean(BRepAlgoAPI_Cut, alone, hole))
-    assert rounded["volume_after"] == pytest.approx(expected, rel=1e-7)
-    inside_the_hole = BRepClass3d_SolidClassifier(rounded["shape"], gp_Pnt(9.5, 0.0, 3.1), 1e-7)
-    assert inside_the_hole.State() == TopAbs_OUT
+    drilled = kernel.volume(_boolean(BRepAlgoAPI_Cut, alone, hole))
+    assert kernel.volume(shape) < rounded["volume_after"] < drilled
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert kernel.volume(_boolean(BRepAlgoAPI_Common, rounded["shape"], hole)) == pytest.approx(0.0, abs=1e-9), "穴が塞がった"
 
 
 def test_many_far_away_selections_do_not_hide_a_fillet_that_hits_a_post():
@@ -483,23 +538,205 @@ def test_a_footprint_whose_surface_curls_under_the_plate_is_still_a_footprint():
     assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
 
 
-def test_a_tapered_post_overflowing_the_disc_is_cut_at_the_rim():
-    """円板(半径 25)の上の先細りの柱(根元 9 → 上 4)の根元を半径 20 で丸めると、縁を越える分は円板の側面の延長で
-    切れる(広い円板で丸めてから半径 25 の円柱で切った形と同じ)。2面の柱の外をまとめて見ていたときは、傾いた壁の側の
-    「辺に触れる層」と縁の外の肉がつながって残り、縁から 1.66mm はみ出した。"""
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common as _Common
+def test_a_tapered_post_overflowing_the_disc_rolls_over_the_rim():
+    """円板(半径 25)の上の先細りの柱(根元 9 → 上 4)の根元を半径 20 で丸めると、球は傾いた柱と縁の円に接して転がる。
+    傾いた柱の柱(支える面を法線へ押し出した立体)は辺から斜めに出るので、辺に沿う薄い層を2面の柱の共通部分から外し、
+    肉が丸ごと捨てられたことがある。"""
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeCone
 
-    def tapered_post_on(disc_radius):
-        cone = BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(0, 0, 8), gp_Dir(0, 0, 1)), 9.0, 4.0, 40.0).Shape()
-        return _union(_cylinder(0.0, 0.0, disc_radius, 8.0), cone)
-
-    shape = tapered_post_on(25.0)
+    cone = BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(0, 0, 8), gp_Dir(0, 0, 1)), 9.0, 4.0, 40.0).Shape()
+    shape = _union(_cylinder(0.0, 0.0, 25.0, 8.0), cone)
     root = _circle_edge(shape, 9.0, 8.0)
 
     rounded = kernel.fillet_edges(shape, {root: 20.0})
 
-    wide = tapered_post_on(60.0)
-    expected = _boolean(_Common, _native(wide, _circle_edge(wide, 9.0, 8.0), 20.0), _cylinder(0.0, 0.0, 25.0, 100.0))
-    assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
+    added = rounded["volume_after"] - kernel.volume(shape)
+    assert added == pytest.approx(_rolled_around_a_post(((8.0, 9.0), (48.0, 4.0)), 8.0, 25.0, 20.0), rel=_ROLLED_REL)
     assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6)
+    assert _top_of_faces(rounded["shape"], _cylinder_of_radius(25.0)) == pytest.approx(8.0, abs=1e-6), "円板の側面が伸びた"
+
+
+def _plane_at(distance: float):
+    """原点から `distance` 離れた、法線が水平な平面(正方形の板の側面)。"""
+    def on(surface):
+        if surface.GetType() != GeomAbs_Plane:
+            return False
+        plane = surface.Plane()
+        return abs(plane.Axis().Direction().Z()) < 1e-9 and abs(plane.Distance(gp_Pnt(0, 0, 0)) - distance) < 1e-9
+    return on
+
+
+def test_a_post_on_a_square_plate_rolls_over_the_straight_rims():
+    """正方形の板(40×40×6)の中央の柱(半径 9)の根元を半径 14 で丸めると、球は辺の中ほどで板の縁を越え(9+14 > 20)、
+    角の方では越えない(< 20√2)。板の側面は高くならず、肉は内接円の円板と外接円の円板で転がした肉の間に収まる
+    (支える面が広いほど球は高く押し上げられ、肉は増える)。"""
+    shape = _union(_box(-20, -20, 0, 20, 20, 6), _cylinder(0.0, 6.0, 9.0, 50.0))
+    root = _circle_edge(shape, 9.0, 6.0)
+
+    rounded = kernel.fillet_edges(shape, {root: 14.0})
+
+    added = rounded["volume_after"] - kernel.volume(shape)
+    wall = ((6.0, 9.0), (56.0, 9.0))
+    inscribed, circumscribed = (_rolled_around_a_post(wall, 6.0, rim, 14.0) for rim in (20.0, 20.0 * math.sqrt(2.0)))
+    assert inscribed * (1.0 - _ROLLED_REL) < added < circumscribed
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6)
+    assert _top_of_faces(rounded["shape"], _plane_at(20.0)) == pytest.approx(6.0, abs=1e-6), "板の側面が伸びた"
+
+
+def test_a_ball_rolling_past_a_plate_corner_keeps_the_plate_height():
+    """細長い板(y=±20、端 x=130)の端近くの柱(x=110・半径 9)の根元を半径 22 で丸めると、球は板の長い2辺と端の辺と
+    角を越えて転がる。板は高くならず、肉は板の外へ出ない。"""
+    shape = _union(_box(-20, -20, 0, 130, 20, 3), _cylinder(110.0, 3.0, 9.0, 60.0))
+    root = _circle_edge(shape, 9.0, 3.0, x=110.0)
+
+    rounded = kernel.fillet_edges(shape, {root: 22.0})
+
+    assert rounded["volume_after"] > kernel.volume(shape)
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6)
+    sides = lambda surface: surface.GetType() == GeomAbs_Plane and abs(surface.Plane().Axis().Direction().Z()) < 1e-9
+    assert _top_of_faces(rounded["shape"], sides) == pytest.approx(3.0, abs=1e-6), "板の側面が伸びた"
+
+
+def test_a_wall_leaning_out_past_the_rim_keeps_the_material_under_it():
+    """床(x=-20..20)の根元から 45° で床の縁の外へ張り出す壁の根元を半径 20 で丸めると、球は壁と床の縁 (20, 3) に接し、
+    肉は縁の真上より外(壁の下)まで続く。床の柱の外を捨てたときは、縁の真上に縦の面が残って肉が 0.8% 欠けた
+    (Codex レビューの反例)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.TopAbs import TopAbs_IN
+    from OCP.gp import gp_Vec
+
+    outline = BRepBuilderAPI_MakePolygon()
+    for x, z in ((-5, 3), (0, 3), (60, 63), (55, 63)):
+        outline.Add(gp_Pnt(x, 0, z))
+    outline.Close()
+    wall = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(outline.Wire()).Face(), gp_Vec(0, 30, 0)).Shape()
+    shape = _union(_box(-20, 0, 0, 20, 30, 3), wall)
+    root = _line_edge_at(shape, 0.0, 3.0)
+
+    rounded = kernel.fillet_edges(shape, {root: 20.0})
+
+    # 断面(x, z): 球の中心は壁 z = x + 3 から 20、縁の点 (20, 3) から 20。肉は「辺の点・縁の点・壁の接点」の三角形から、
+    # 縁の点と壁の接点を結ぶ弦と球の弧の間(弓形)を除いたもの
+    r, gap = 20.0, 20.0 * math.sqrt(2.0) - 3.0  # 中心は cx − cz = gap の線の上
+    cx = ((20.0 + 3.0 + gap) + math.sqrt((20.0 + 3.0 + gap) ** 2 - 2.0 * (400.0 + (3.0 + gap) ** 2 - r * r))) / 2.0
+    cz = cx - gap
+    tx, tz = cx - r / math.sqrt(2.0), cz + r / math.sqrt(2.0)  # 壁の接点
+    triangle = abs((20.0 - 0.0) * (tz - 3.0) - (tx - 0.0) * (3.0 - 3.0)) / 2.0
+    chord = math.hypot(tx - 20.0, tz - 3.0)
+    angle = 2.0 * math.asin(chord / (2.0 * r))
+    exact = 30.0 * (triangle - r * r / 2.0 * (angle - math.sin(angle)))
+    added = rounded["volume_after"] - kernel.volume(shape)
+    assert added == pytest.approx(exact, rel=_ROLLED_REL)
+    assert BRepClass3d_SolidClassifier(rounded["shape"], gp_Pnt(22.1, 15.0, 25.0), 1e-7).State() == TopAbs_IN
+    rim_side = lambda surface: surface.GetType() == GeomAbs_Plane and abs(surface.Plane().Location().X() - 20.0) < 1e-9 \
+        and abs(abs(surface.Plane().Axis().Direction().X()) - 1.0) < 1e-9
+    assert _top_of_faces(rounded["shape"], rim_side) == pytest.approx(3.0, abs=1e-6), "床の側面が伸びた"
+
+
+def test_a_post_straddling_the_plate_edge_does_not_turn_the_air_beyond_the_rim_into_material():
+    """板(x,y=±20)の縁 x=20 にまたがって立つ柱(中心 (18, 0)・半径 5)の根元の円弧を半径 20 で丸めても、板の縁の外の空気
+    (板にも柱にも入らない点 (22, -10, 4))は肉にならない。張り出した壁のために縁の外を角へ戻す範囲を、相手の面の接点が
+    縁の外にある所に絞る前は、ここを肉にした(Codex レビューの反例)。"""
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.TopAbs import TopAbs_OUT
+
+    shape = _union(_box(-20, -20, 0, 20, 20, 3), _cylinder(18.0, 3.0, 5.0, 60.0))
+    def middle_x(index):
+        curve = BRepAdaptor_Curve(TopoDS.Edge_s(kernel.edge_of(shape, index)))
+        return curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter())).X()
+
+    roots = [  # 板の上に立つ根元の円弧(縁の外へ張り出した柱の底の円弧は除く)
+        edge["index"] for edge in query.describe_edges(shape)
+        if edge["kind"] == "circle" and abs(edge["start"][2] - 3.0) < 1e-6 and middle_x(edge["index"]) < 20.0
+    ]
+    assert roots
+
+    rounded = kernel.fillet_edges(shape, {index: 20.0 for index in roots})
+
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert BRepClass3d_SolidClassifier(rounded["shape"], gp_Pnt(22.0, -10.0, 4.0), 1e-7).State() == TopAbs_OUT
+
+
+def test_a_hole_narrower_than_the_sample_spacing_is_still_rolled_into():
+    """柱の根元の丸めの足が、半径 0.5 の小さな穴をかすめる(64 点の標本どうしの間に収まる)ときも、球は穴の縁に乗って
+    転がり、穴の壁は高くならない。標本だけを見ていたときは縁を越えない形として扱い、穴の壁が 0.02mm 伸びた
+    (Codex レビューの反例)。"""
+    theta = math.pi / 64
+    disc_and_post = _union(_cylinder(0.0, 0.0, 20.0, 3.0), _cylinder(0.0, 3.0, 5.0, 60.0))
+    hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(11 * math.cos(theta), 11 * math.sin(theta), -1), gp_Dir(0, 0, 1)), 0.5, 10.0).Shape()
+    shape = kernel.boolean_bodies(disc_and_post, [hole], "cut")["shape"]
+    root = _circle_edge(shape, 5.0, 3.0)
+
+    rounded = kernel.fillet_edges(shape, {root: 6.0})
+
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert _top_of_faces(rounded["shape"], _cylinder_of_radius(0.5)) == pytest.approx(3.0, abs=1e-6), "穴の壁が伸びた"
+
+
+_LYING_CYLINDER_CHILD = """
+from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+from duocad import kernel, query
+
+big = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, -15, 0), gp_Dir(0, 1, 0)), 20.0, 30.0).Shape()
+post = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 7, 10), gp_Dir(0, 0, 1)), 5.0, 40.0).Shape()
+shape = kernel.boolean_bodies(big, [post], "union")["shape"]
+root = [edge["index"] for edge in query.describe_edges(shape) if edge["kind"] == "other"][0]
+out = kernel.fillet_edges(shape, {root: 12.0})
+print(out["volume_after"] > kernel.volume(shape), BRepCheck_Analyzer(out["shape"]).IsValid())
+print("survived")
+"""
+
+
+def test_rounding_a_post_on_a_lying_cylinder_past_its_end_does_not_kill_the_process():
+    """横倒しの円柱(半径 20・長さ 30)に立つ柱の根元(交線が3本の辺に分かれる)を、円柱の端の縁を越える半径 12 で丸めても
+    プロセスが落ちない(辺ごとの管を1回の引き算にまとめて渡したときは、アクセス違反で落ちた。Codex レビューの反例。
+    別プロセスで試す)。"""
+    import subprocess
+    import sys
+
+    from duocad.paths import REPO_ROOT
+
+    done = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", _LYING_CYLINDER_CHILD],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
+    )
+    assert done.returncode == 0, (done.returncode, done.stderr[-800:])
+    assert done.stdout.splitlines() == ["True True", "survived"], done.stdout
+
+
+def test_a_hole_on_the_feet_track_of_an_elliptic_post_is_noticed():
+    """楕円柱(半軸 20・2)の根元を半径 10 で丸めるとき、足の軌跡の上の小さな穴(半径 0.5)で球が縁に乗ることを見つける
+    (足の軌跡の媒介変数を辺の媒介変数へ比例配分で戻したときは、足の進む速さが変わるので足した標本が穴の外に置かれ、
+    見落とした。Codex レビューの反例)。この形は楕円の両端の管を引いた結果が検査を通らず、丸めそのものはふつうの肉に戻る。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.gp import gp_Elips, gp_Vec
+    from duocad import kernel_overflow
+
+    outline = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(gp_Elips(gp_Ax2(gp_Pnt(0, 0, 3), gp_Dir(0, 0, 1)), 20.0, 2.0)).Edge()).Wire()
+    post = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(outline).Face(), gp_Vec(0, 0, 40)).Shape()
+    hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(28.95130879, -4.50746646, -1), gp_Dir(0, 0, 1)), 0.5, 10.0).Shape()
+    shape = kernel.boolean_bodies(_union(_box(-50, -50, 0, 50, 50, 3), post), [hole], "cut")["shape"]
+    (root,) = [
+        edge["index"] for edge in query.describe_edges(shape)
+        if edge["kind"] != "line" and abs(edge["start"][2] - 3.0) < 1e-6 and abs(edge["start"][0]) <= 20.01
+    ]
+    edge = kernel.edge_of(shape, root)
+    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
+    columns = kernel_overflow._Columns(shape, edge_faces)
+    supports = [kernel_overflow._Support(face, [edge], columns) for face in edge_faces.FindFromKey(edge)]
+    (wire,) = kernel_overflow._smooth_wires([edge])
+
+    path = kernel_overflow._RollingPath(wire, supports, 10.0)
+
+    assert path.states - {0}, "球が穴の縁に乗るのを見落とした"
