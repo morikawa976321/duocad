@@ -134,15 +134,16 @@ def table_window(rows, out=sys.stdout, key=lambda r: (r["D"], r.get("pitch_ratio
         groups[key(r)].append(r)
     for gk in sorted(groups, key=lambda k: tuple(str(x) for x in k) if not isinstance(k, tuple) else k):
         out.write(f"\n### {gk}\n\n")
-        out.write("| 設計 | c_geo | 幅 W | 欠け≥50% 雄/雌 | 垂れ最大 雄/雌 | 山の保持 | 窓の中心: 保持 N / 締め付け N / 乗り越え | 緩い端 |\n")
-        out.write("|---|---|---|---|---|---|---|---|\n")
+        out.write("| 設計 | c_geo | 幅 W | ガタの無い幅 W_use | 欠け≥50% 雄/雌 | 垂れ最大 雄/雌 | 山の保持 | 窓の中心: 保持 N / 締め付け N / 乗り越え | 緩い端 |\n")
+        out.write("|---|---|---|---|---|---|---|---|---|\n")
         for r in sorted(groups[gk], key=lambda r: -r.get("W", -9)):
             if "c_geo" not in r:
-                out.write(f"| {r['name']} | エラー {str(r.get('error', ''))[:40]} | | | | | | |\n")
+                out.write(f"| {r['name']} | エラー {str(r.get('error', ''))[:40]} | | | | | | | |\n")
                 continue
             ob, on = r.get("over_bolt", {}), r.get("over_nut", {})
             mark = " ※窓の中心が見つからない" if r.get("center_not_found") and r.get("W", 0) > 0 else ""
-            out.write(f"| {r['name']}{mark} | {r['c_geo']:.3f} | {r.get('W', float('nan')):+.3f} | "
+            wu = w_use(r)
+            out.write(f"| {r['name']}{mark} | {r['c_geo']:.3f} | {r.get('W', float('nan')):+.3f} | {'—' if wu is None else f'{wu:.3f}'} | "
                       f"{ob.get('lack_ge_50', float('nan')):.2f}/{on.get('lack_ge_50', float('nan')):.2f} | "
                       f"{ob.get('sag_max', float('nan')):.3f}/{on.get('sag_max', float('nan')):.3f} | {r.get('depth_kept', float('nan')):.2f} | "
                       f"{_wrow(r, 0)} | {_wrow(r, 1)} |\n")
@@ -182,6 +183,26 @@ def table_pareto(rows, out=sys.stdout, w_min=0.2):
                       f"{(_lower(r, 1) or float('nan')):.0f} | {x.get('jump_ratio', float('nan')):.2f} |\n")
         if pick is not None and pick not in front:
             out.write(f"\nW≥{w_min} で最強: {pick['name']}(W {pick['W']:.3f}、保持の下限 {_lower(pick):.0f} N)\n")
+
+
+PLAY_MAX = 0.3  # 本人が「ガタが大きい」とした境目の軸方向の遊び(TP1: 0.29 で付かず 0.365 で付く。1人の手の感覚1回分の仮置き)
+
+
+def w_use(r, p=PLAY_MAX):
+    """快適に使える誤差の幅 W_use: 構造の窓(はまる・掛かりが下限以上)のうち、軸方向の遊びが p 以下の部分。
+    窓の中心・緩い端・固い端の3点の遊びを ε で折れ線に補間して、遊びが p になる ε から固い端までを測る。"""
+    rows = [x for x in (r.get("rows") or []) if "play" in x and "eps" in x]
+    if r.get("W") is None or r["W"] <= 0 or len(rows) < 2:
+        return None
+    pts = sorted((x["eps"], x["play"]) for x in rows)
+    lo, hi = pts[0][0], pts[-1][0]
+    if pts[-1][1] > p:  # 固い端でも遊びが大きい
+        return 0.0
+    e_p = lo
+    for (e0, q0), (e1, q1) in zip(pts, pts[1:]):
+        if q0 > p >= q1:
+            e_p = e0 + (q0 - p) / (q0 - q1) * (e1 - e0)
+    return hi - max(lo, e_p)
 
 
 def center_residual(r):
