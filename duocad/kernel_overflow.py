@@ -26,6 +26,7 @@ from OCP.BRepAdaptor import BRepAdaptor_CompCurve, BRepAdaptor_Curve, BRepAdapto
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
+    BRepBuilderAPI_Copy,
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakeVertex,
@@ -289,8 +290,12 @@ def _material(
     splitter = BRepAlgoAPI_Splitter()
     arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
     arguments.Append(block)
-    tools.Append(_extended_face(first, size, point))
-    tools.Append(_extended_face(second, size, point))
+    # 外部の罠(凸の辺): 肉の面が本体の面と同じ曲面(Geom_Surface のハンドル)を共有していると、肉と本体のブーリアンが壊れる。
+    # 本体の円柱の面 2 枚の面積が負になって BRepCheck が偽になり(同じ本体への2回目以降は結果が呼ぶたびに変わる)、壊れていない
+    # 本体でも最後の差が肉を別のソリッドとして返す。凹の辺は逆に、写すと縁を越える丸めの回帰テスト
+    # (`test_a_hole_narrower_than_the_sample_spacing_is_still_rolled_into`)が落ちるので写さない。
+    tools.Append(_extended_face(first, size, point, not concave))
+    tools.Append(_extended_face(second, size, point, not concave))
     splitter.SetArguments(arguments)
     splitter.SetTools(tools)
     splitter.Build()
@@ -1167,6 +1172,13 @@ def _distance_to_axis(axis, point: gp_Pnt) -> float:
     return math.sqrt(max(0.0, offset.SquareMagnitude() - along * along))
 
 
+#: `_trim` の切り取りに与えるファジー値[mm]。肉の面は本体の面と同じ平面・曲面に乗り(柱の底面と重なる)、重なりの判定が
+#: 入力の最後の桁で変わる。実測(PC ケースの 188 面のボディ、辺 117 を半径 12): 入力を 1.5e-9〜1.6e-6 mm ずらした 32 通りのうち、
+#: ファジー無しは 7 通りを断り、通った 1 通りは別の形(192 面)になった。1e-6 は 16 通りのうち 4 通りを断った。
+#: 5e-6(全ブーリアン)と 1e-5(ここだけ)は全部通り、結果が 1 つに揃った。
+_TRIM_FUZZY = 1.0e-5
+
+
 def _trim(material, edges, faces, heights, concave: bool, columns: "_Columns"):
     """肉のうち、支える面(何かが立っている足元を塞いだもの)の柱の外にあり、辺の内側の点に触れない部分を捨てる。
 
@@ -1183,12 +1195,12 @@ def _trim(material, edges, faces, heights, concave: bool, columns: "_Columns"):
     scale = max(_volume(material), 1.0e-12)
     dropped = []
     for face, height in zip(faces, heights):
-        outside = _boolean("cut", material, columns.of(face, height, concave)).Shape()
+        outside = _boolean("cut", material, columns.of(face, height, concave), _TRIM_FUZZY).Shape()
         for part in _solids(outside):
             if _volume(part) > 1.0e-9 * scale and not _touches_inside_of(part, edges):
                 dropped.append(part)
     for part in dropped:
-        material = _boolean("cut", material, part).Shape()
+        material = _boolean("cut", material, part, _TRIM_FUZZY).Shape()
     return material
 
 
@@ -1301,6 +1313,9 @@ def _column(face: TopoDS_Shape, height: float, concave: bool) -> TopoDS_Shape:
     平面は押し出しで作る: 側面が円柱・平面になり、はみ出した肉を切った面が崖の側面と同じ曲面になって統合で1枚に
     戻る(厚み付けの側面は Bスプラインで、円板の縁に高さ 0.0015mm の別の面が残った)。
     """
+    # 外部の罠: 本体の面そのものから押し出す・厚くすると、本体の辺に本体のどの面でもない曲面の上の pcurve が増える(同じ本体に
+    # 呼ぶたびに BRep 文字列が約 23KB 太る)。面を写してから作る。
+    face = BRepBuilderAPI_Copy(face, True, False).Shape()
     surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
     if surface.GetType() == GeomAbs_SurfaceType.GeomAbs_Plane:
         direction = gp_Vec(surface.Plane().Axis().Direction())
@@ -1373,13 +1388,15 @@ def _outward_normal(face: TopoDS_Shape, point: gp_Pnt) -> gp_Vec:
     return normal
 
 
-def _extended_face(face: TopoDS_Shape, size: float, near: gp_Pnt) -> TopoDS_Shape:
-    """面の曲面を、辺のまわりの箱を貫く大きさまで延長した面(向きは元の面と同じ)。"""
+def _extended_face(face: TopoDS_Shape, size: float, near: gp_Pnt, copy_surface: bool = False) -> TopoDS_Shape:
+    """面の曲面を、辺のまわりの箱を貫く大きさまで延長した面(向きは元の面と同じ)。`copy_surface` なら曲面を写して使う。"""
     surface = BRep_Tool.Surface_s(TopoDS.Face_s(face))
     if isinstance(surface, Geom_RectangularTrimmedSurface):
         surface = surface.BasisSurface()
     adaptor = BRepAdaptor_Surface(TopoDS.Face_s(face))
     kind = adaptor.GetType()
+    if copy_surface:
+        surface = surface.Copy()
     u_first, u_last, v_first, v_last = surface.Bounds()
     u0, v0 = GeomAPI_ProjectPointOnSurf(near, surface).LowerDistanceParameters()
     if kind == GeomAbs_SurfaceType.GeomAbs_Plane:
@@ -1416,8 +1433,17 @@ def _solids(shape: TopoDS_Shape) -> list:
     return [found.FindKey(i) for i in range(1, found.Extent() + 1)]
 
 
-def _boolean(kind: str, first: TopoDS_Shape, second: TopoDS_Shape):
-    builder = {"fuse": BRepAlgoAPI_Fuse, "cut": BRepAlgoAPI_Cut, "common": BRepAlgoAPI_Common}[kind](first, second)
+def _boolean(kind: str, first: TopoDS_Shape, second: TopoDS_Shape, fuzzy: float = 0.0):
+    # 外部の罠: 2引数のコンストラクタはその場で演算まで実行する(`IsDone()` が `Build()` の前に真)。続けて `Build()` を呼ぶと
+    # 同じ演算が2回走り(`_absorbed_fillet` 1 回が実測 4.0〜4.3 秒 → 2.8〜3.1 秒)、`SetFuzzyValue` は2回目にしか効かない。
+    builder = {"fuse": BRepAlgoAPI_Fuse, "cut": BRepAlgoAPI_Cut, "common": BRepAlgoAPI_Common}[kind]()
+    arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    arguments.Append(first)
+    tools.Append(second)
+    builder.SetArguments(arguments)
+    builder.SetTools(tools)
+    if fuzzy:
+        builder.SetFuzzyValue(fuzzy)
     builder.Build()
     if not builder.IsDone():
         raise Unsupported(f"{kind} of the rounding material failed")
