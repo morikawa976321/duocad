@@ -25,6 +25,11 @@
 | `ShapeUpgrade_UnifySameDomain` は軸が逆向きの円柱を同じ面と見なさない(押し出した円柱面の軸の向きは押し出す向きで決まり、`BRepPrimAPI_MakeCylinder` とスケッチの押し出しで逆) | `duocad/kernel_overflow.py` `_column` |
 | `BRepOffsetAPI_MakeThickSolid.MakeThickSolidBySimple` は面の向きによって体積が負(裏返し)の立体を返す | `duocad/kernel_overflow.py` `_column` |
 | `BRepExtrema_DistShapeShape` は辺に沿って弧で触れていても、解を頂点にしか返さないことがある | `duocad/kernel_overflow.py` `_touches_inside_of` |
+| `BRepOffsetAPI_MakePipe` の既定の向き(補正フレネ)は、まっすぐな道で断面がずれて体積が 2% 小さい(離散の向きなら合う)。道の曲がりの半径が断面の半径より小さいと体積 0 の立体になる | `duocad/kernel_overflow.py` `_swept_balls` |
+| `GeomAPI_Interpolate.Load` に端の向きを `Scale=True` で渡すと、端で曲線が波打つ(媒介変数は弦の長さなので、長さ 1 の向きを `Scale=False` で) | `duocad/kernel_overflow.py` `_interpolated` |
+| 面に接する立体(ちょうど半径の球を掃いた管)を引くと、引いた残りが接線でつながったまま分かれない。わずかに膨らませる。球を並べるなら球の間のくぼみより深く | `duocad/kernel_overflow.py` `_ROLL_SWELLS` / `_CHAIN_SWELL` |
+| 重なり合う道具を先に結合してから引くと遅く、結果も1回の引き算に全部渡したときと食い違う。球を1回のブーリアンで全部結合するのは、順に1つずつより遅く重い | `duocad/kernel_overflow.py` `_rolled_material` / `_swept_balls` |
+| 円柱・トーラスで済む立体を B スプラインの管で作ると、ブーリアンが桁で遅い(角から引くのが 5.5 秒 → 0.07 秒) | `duocad/kernel_overflow.py` `_exact_tube` |
 | 円錐面の延長を頂点の手前で止めると先に穴が残り、箱を内と外に割り切れない(頂点ちょうどまで延ばす) | `duocad/kernel_overflow.py` `_extended_face` |
 | 由来(provenance)の取り出し方は操作ごとに違う(`History()` / `Modified()`、`IsRemoved` / `IsDeleted`) | `duocad/kernel.py` `normalize_provenance` |
 | `Face.center()` の既定は `CenterOf.GEOMETRY` で面積重心ではない(曲面では面パッチの上にすら乗らない) | `duocad/query.py` `face_centroid` / `face_fingerprint` |
