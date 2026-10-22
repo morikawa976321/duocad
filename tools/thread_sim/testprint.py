@@ -139,9 +139,12 @@ def write_page(groups, path: Path, title: str, intro: str = INTRO, test_id: str 
         svg = g[3] if len(g) > 3 else ""
         rows = []
         for iid, name, opts, flags in items:
-            cells = "".join(
-                f'<label><input type="radio" name="{esc(iid)}" value="{k}"{" checked" if o in ("試していない", "未回答") else ""}>'
-                f"<span>{esc(o)}</span></label>" for k, o in enumerate(opts))
+            if opts == "number":  # 実測値だけは数の入力欄(結果は id=数、空なら未記入)
+                cells = f'<input type="number" class="num" name="{esc(iid)}" min="0" step="any" inputmode="decimal">'
+            else:
+                cells = "".join(
+                    f'<label><input type="radio" name="{esc(iid)}" value="{k}"{" checked" if o in ("試していない", "未回答") else ""}>'
+                    f"<span>{esc(o)}</span></label>" for k, o in enumerate(opts))
             fl = "".join(f'<label class="flag"><input type="checkbox" name="{esc(iid)}_f" value="{k}"><span>{esc(o)}</span></label>'
                          for k, o in enumerate(flags))
             rows.append(f'<div class="row"><div class="name">{esc(name)}</div><div class="opts">{cells}{fl}</div></div>')
@@ -162,6 +165,7 @@ button { margin:8px 0; padding:8px 16px; border-radius:6px; border:0; background
 .sticky { position:sticky; bottom:0; background:var(--bg); padding:8px 0; border-top:2px solid var(--line); }
 .intro { background:var(--chip); border-radius:8px; padding:8px 12px; } .intro p { margin:6px 0; }
 .head { display:flex; flex-wrap:wrap; gap:12px; align-items:center; } .head .desc { flex:1 1 300px; }
+.num { width:7em; padding:4px 8px; border-radius:6px; border:1px solid var(--line); background:var(--chip); color:var(--fg); font-size:15px; }
 svg.prof { width:260px; height:auto; max-width:100%; } svg.prof .b { fill:var(--on); opacity:.75; } svg.prof .n { fill:var(--flag); opacity:.6; }
 svg.prof text { fill:var(--muted); font-size:10px; }
 """
@@ -170,7 +174,9 @@ const KEY = 'thread-testprint-' + TEST_ID;
 function save() {
   try {
     const st = {};
-    document.querySelectorAll('input').forEach(e => { if (e.checked) st[e.name + '|' + e.value] = 1; });
+    document.querySelectorAll('input').forEach(e => {
+      if (e.type === 'number') st[e.name + '|#'] = e.value; else if (e.checked) st[e.name + '|' + e.value] = 1;
+    });
     localStorage.setItem(KEY, JSON.stringify(st));
   } catch (e) {}
 }
@@ -178,20 +184,29 @@ function restore() {
   try {
     const st = JSON.parse(localStorage.getItem(KEY) || 'null');
     if (!st) return;
-    document.querySelectorAll('input').forEach(e => { e.checked = !!st[e.name + '|' + e.value]; });
+    document.querySelectorAll('input').forEach(e => {
+      if (e.type === 'number') e.value = st[e.name + '|#'] || ''; else e.checked = !!st[e.name + '|' + e.value];
+    });
   } catch (e) {}
 }
 function update() {
   const parts = [];
   for (const id of Object.keys(LEGEND)) {
+    let s;
+    if (LEGEND[id][1] === 'number') {
+      const v = document.querySelector('input[name="' + id + '"]').value;
+      s = id + '=' + (v === '' ? '未記入' : v);
+      parts.push(s);
+      continue;
+    }
     const el = document.querySelector('input[name="' + id + '"]:checked');
-    let s = id + '=' + (el ? LEGEND[id][1][+el.value] : '?');
+    s = id + '=' + (el ? LEGEND[id][1][+el.value] : '?');
     document.querySelectorAll('input[name="' + id + '_f"]:checked').forEach(f => { s += '+' + LEGEND[id][2][+f.value]; });
     parts.push(s);
   }
   document.getElementById('out').value = 'ねじ試し刷り結果 ' + TEST_ID + ' ' + parts.join(' ');
 }
-document.querySelectorAll('input').forEach(e => e.addEventListener('change', () => { update(); save(); }));
+document.querySelectorAll('input').forEach(e => e.addEventListener(e.type === 'number' ? 'input' : 'change', () => { update(); save(); }));
 document.getElementById('copy').addEventListener('click', async () => {
   update(); const t = document.getElementById('out');
   try { await navigator.clipboard.writeText(t.value); document.getElementById('msg').textContent = 'コピーしました'; }
@@ -390,18 +405,23 @@ def make_plate(out: Path, pieces, bed: float = 256.0, margin: float = 8.0, gap: 
     return dict(depth=float(y - gap), placed=placed)
 
 
-def layout_svg(out: Path, pieces, placed) -> str:
+def layout_svg(out: Path, pieces, placed, series=None, extra_rows=None, notes=None) -> str:
     """plate.stl を上から見た配置図(下が手前 = スライサーの上面図と同じ向き)。部品の輪郭は STL の XY の凸包、
-    ボルト・ナット・ピンの中心に呼び径の円。色は CSS 変数(結果ページの明暗に合わせる)で、無ければ明るい既定色。"""
+    ボルト・ナット・ピンの中心に呼び径の円。色は CSS 変数(結果ページの明暗に合わせる)で、無ければ明るい既定色。
+    series は凡例と色に使う系列(既定は TP1 の SERIES)、extra_rows は凡例に足す (記号, 1行目, 2行目)。"""
     from scipy.spatial import ConvexHull
 
+    series = SERIES if series is None else series
+    if extra_rows is None:
+        extra_rows = [("G", "G・H: ねじ無しのピンと穴の板(D6・D3)", "穴は直径 +0〜+0.6 を 0.1 刻み")]
     by_id = {p.id: p for p in pieces}
     depth = max(q["y"] + q["h"] for q in placed) + 8.0
     width = max(q["x"] + q["w"] for q in placed) + 8.0
     legend_w = 92.0
     W, H = width + legend_w, depth + 14.0
     fy = lambda y: depth - y  # 下が手前
-    hue = {"A": "#d9e8fb", "B": "#dff3e4", "K": "#fbe3d9", "C": "#efe3fb", "D": "#dff3e4", "F": "#efe3fb", "G": "#eeeeee", "H": "#eeeeee"}
+    by_sides = {4: "#dff3e4", 5: "#fbe3d9", 6: "#d9e8fb", 8: "#efe3fb"}  # 角の数ごと(TP1 と同じ色)
+    hue = {s[0]: by_sides.get(s[5], "#eeeeee") for s in series}
     fg, muted = "var(--fg, #222)", "var(--muted, #666)"
     s = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W:.1f} {H:.1f}" style="width:100%;max-width:{W * 6:.0f}px;'
          f'font-family:system-ui,sans-serif" role="img" aria-label="plate.stl の配置図">',
@@ -433,15 +453,15 @@ def layout_svg(out: Path, pieces, placed) -> str:
     s.append(f'<text x="{lx:.1f}" y="{ly:.1f}" style="font-size:3px;font-weight:700;fill:{fg}">列(手前から)</text>')
     shape_ja = {4: "四角", 5: "五角", 6: "六角", 8: "八角"}
     rows = [(sid, f"{sid}: {name}(頭とナットが{shape_ja[sides]})", "ナット1→" + str(len(cs)) + " の隙間 " + " / ".join(f"{c:g}" for c in sorted(cs, reverse=True)))
-            for sid, name, D, mk, mode, sides, cs in SERIES if any(q["id"].startswith(sid) for q in placed)]
-    rows += [("G", "G・H: ねじ無しのピンと穴の板(D6・D3)", "穴は直径 +0〜+0.6 を 0.1 刻み")]
+            for sid, name, D, mk, mode, sides, cs in series if any(q["id"].startswith(sid) for q in placed)]
+    rows += list(extra_rows)
     for sid, a, b in rows:
         ly += 6.5
         s.append(f'<text x="{lx:.1f}" y="{ly:.1f}" style="font-size:2.4px;fill:{fg}">{html.escape(a)}</text>')
         s.append(f'<text x="{lx + 2:.1f}" y="{ly + 2.9:.1f}" style="font-size:2.1px;fill:{muted}">{html.escape(b)}</text>')
     ly += 9
-    for line in ("記号の数字 0 はボルト(G0・H0 はピン)。", "ナットの番号 = 上面の凹みの数(1 が最も緩い)。",
-                 "実線の白丸はナットの穴、点線はボルト・ピンの軸。"):
+    for line in notes or ("記号の数字 0 はボルト(G0・H0 はピン)。", "ナットの番号 = 上面の凹みの数(1 が最も緩い)。",
+                          "実線の白丸はナットの穴、点線はボルト・ピンの軸。"):
         s.append(f'<text x="{lx:.1f}" y="{ly:.1f}" style="font-size:2.1px;fill:{muted}">{html.escape(line)}</text>')
         ly += 3.4
     s.append("</svg>")

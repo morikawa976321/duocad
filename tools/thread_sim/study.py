@@ -411,8 +411,24 @@ def study7():
     return specs, {}, dict(e_req=0.1, runner="window"), {}
 
 
+def study8():
+    """半円の丸みの半径 ρ とピッチの比。法線方向の隙間は谷が重なるまで(2(ρ+c) ≤ P)しか広げられず、ρ = 0.4P(study1・4)では
+    隙間の窓が狭い(TP2 の走査)。ρ/P と P/D を振る。試し刷りに合わせた係数で見るなら --printer tp1。"""
+    specs = []
+    for D in (3, 4, 6):
+        base = dict(D=D, L_nut=float(D), R_out=0.9 * D, family="coil")
+        for pr_ in (0.3, 0.4, 0.5):
+            P = round(pr_ * D / 0.05) * 0.05
+            for rr in (0.2, 0.25, 0.3, 0.35, 0.4):
+                rho = round(rr * P, 3)
+                for mode in ("normal", "radial"):
+                    specs.append(dict(base, P=P, rho=rho, rho_ratio=rr, pitch_ratio=pr_, mode=mode,
+                                      name=f"半円 D{D} P{P:g} ρ{rho:g}(ρ/P {rr:g}) {mode}"))
+    return specs, {}, dict(e_req=0.1, runner="window"), {}
+
+
 STUDIES = {"study1": study1, "study2": study2, "study3": study3, "study4": study4, "study5": study5, "study6": study6,
-           "study7": study7}
+           "study7": study7, "study8": study8}
 
 
 #: worker が異常終了した設計に書く行の説明。`--redo-errors` が回し直す(`c_geo` を持たない error 行)。
