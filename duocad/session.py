@@ -27,11 +27,9 @@ from . import (
     catalog,
     io_step,
     kernel,
-    kernel_sketch,
     optimize_run,
     query,
     selection,
-    sketch,
 )
 from .workspace import CommandState, NoCommand, Workspace, merge_args, stageable, stageable_verb_names
 from .document import Document
@@ -41,7 +39,7 @@ from .measure import inspect_selection, measure_selection
 from .oplog import OpLog, verb_handler
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import fork, speculative
-from .verbs.envelope_regions import envelope_pieces, selected_regions
+from .verbs.envelope_regions import boundary_entities as envelope_boundary_entities, envelope_pieces, selected_regions
 from .view import DocumentView
 
 #: Windowsの予約デバイス名(拡張子の有無に関わらず特別扱い。大文字小文字を区別しない)。
@@ -782,11 +780,10 @@ class Session:
         """
         refs = selected_regions(self.document)
         sketch_id, pieces = envelope_pieces(self.document, refs, float(radius), float(offset))
-        plane = sketch.get_sketch(self.document, sketch_id).plane
         entities = [
             {"kind": entity["kind"], "params": dict(entity["params"])}
             for piece in pieces
-            for entity in kernel_sketch.face_boundary_entities(plane, piece)
+            for entity in envelope_boundary_entities(self.document, sketch_id, piece)
         ]
         return {"sketch_ghost": {"sketch_id": sketch_id, "entities": entities, "pieces": len(pieces)}}
     # ---------------------------------------------------------------- 形状最適化を走らせる(`duocad/optimize_run.py` への委譲)

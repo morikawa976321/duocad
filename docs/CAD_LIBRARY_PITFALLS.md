@@ -34,6 +34,8 @@
 | `gp_Elips` は長半径 >= 短半径でないと `Standard_ConstructionError`(縦長の楕円は軸を 90° 回して入れ替える) | `duocad/kernel_sketch.py` `_ellipse_gp` |
 | 離心率0の `gp_Elips`(長半径と短半径の差 5e-8 以下)の辺を `BRepOffsetAPI_MakeOffset` に渡すと access violation でプロセスごと落ちる(縦横が等しい楕円は辺を `gp_Circ` にする) | `duocad/kernel_sketch.py` `_ellipse_gp` |
 | 円・直線を B-スプラインに直した辺(ブーリアン・オフセットの途中で出る)をさらにオフセットすると、元の型に戻らず `GeomAbs_OffsetCurve` のまま返る(曲線そのものは円・直線で、標本点の残差は 1e-10 以下)。標本点を当てはめて直す | `duocad/kernel_sketch.py` `_entities_of_offset_curve` |
+| 楕円を広げて縮めた面(辺が楕円のずらし曲線のずらし曲線)を `BRepOffsetAPI_MakeOffset` でさらに広げると、例外も `IsDone()=False` も出さずに壊れたワイヤを返す(20×10 の楕円を R=1, d=1.5 で包むと面積 43.3 と −16.8 の2枚。正しくは 236.81 の1枚)。同じ面でも距離によっては `IsDone()=False` で失敗する(角度 30 度で R=1, d=2)。`BRepBuilderAPI_NurbsConvert` で有理 B-スプラインにしてから渡すと access violation。広げるのに失敗するか、結果が「1枚で面積が減らない」でなければ、その辺を有理でない多項式の B-スプラインに近似し直してやり直す | `duocad/kernel_sketch.py` `_dilate_faces`・`_offset_ready` |
+| `GeomConvert_ApproxCurve` に連続性 C2・次数上限 3 を頼むと、断らずに5次の B-スプラインを返す(C2 には5次が要る)。3次で頼めるのは C1 まで | `duocad/kernel_sketch.py` `_approximated_beziers` |
 | 辺の長さは `GCPnts_AbscissaPoint.Length_s` の既定の許容差も build123d の `Edge.length` も楕円・B-spline で粗い(楕円 40×2 で +1.74%)。許容差を渡す | `duocad/kernel.py` `edge_length` |
 | 螺旋の歯を芯の円柱へ `Fuse` すると、`BRepCheck` が真のまま芯が消える寸法がある(M5×0.8 で体積 −84%) | [THREAD.md](THREAD.md)「形の作り方」 |
 | `VolumeProperties_s` の既定積分(Eps 無し)は何周も巻いた B-spline の面で狂う(歯だけで −19%、ねじの軸で 1.5e-03) | [THREAD.md](THREAD.md)「体積の既定積分はねじ山で狂う」 |

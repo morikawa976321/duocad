@@ -3,8 +3,9 @@
 結果 = D(offset)( D(-radius)( D(radius)(選択領域の和集合) ) )。D(r) は半径 r の円との
 ミンコフスキー和(負は縮小)。前半の D(-radius)∘D(radius) はクロージングで、幅 2*radius 未満の
 隙間とへこみを埋め、それより広いへこみには沿う(凸包ではない)。`offset` は正で外へ・負で内へ。
-幾何は OCCT の2Dオフセット(角は円弧)で正確に取り、出力は**線分と円弧(全周は円)だけ**
-(`kernel_sketch.envelope_faces`)。
+幾何は OCCT の2Dオフセット(角は円弧)で取る(`kernel_sketch.envelope_faces`)。出力の辺は線分・円弧・円・閉じた楕円・3次ベジエ
+に正確に直せるものは正確に、直せないもの(楕円のオフセット・楕円弧など)は3次ベジエの列で近似する
+(誤差 `kernel_sketch.APPROXIMATION_TOLERANCE` 以下。`kernel_sketch.edge_entities`)。
 
 - 結果の面がちょうど1枚のときだけ成功する。内側に穴を持つ1枚も単一とみなす。2枚以上は分裂
   として、何個に分かれたかを添えて ValueError。**必要な radius・offset の最小値は求めない**。
@@ -21,7 +22,7 @@ from __future__ import annotations
 import math
 from typing import List, Sequence, Tuple
 
-from .. import kernel_sketch
+from .. import kernel_sketch, parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
 from .. import selection
@@ -41,6 +42,13 @@ VERB_ENVELOPE_REGIONS = "envelope_regions"
 #: 1e7 で約 17〜28 秒、1e8 は 70 秒でも戻らない)、`radius` が 2 の冪の巨大値(2^49・2^50・2^51・2^53)だと
 #: `BRepOffsetAPI_MakeOffset` が access violation でプロセスごと落ちる。100 km は実用の寸法をはるかに超える。
 MAX_DISTANCE = 1e5
+
+
+def boundary_entities(doc: Document, sketch_id: str, piece: object) -> List[dict]:
+    """包んだ面1枚の境界のスケッチ図形。スケッチの楕円と一致する閉じた辺は、その楕円に戻す(R だけで d=0 の楕円など)。"""
+    sketch = get_sketch(doc, sketch_id)
+    ellipses = [parameters.resolve_all(doc, entity.params) for entity in sketch.entities if entity.kind == "ellipse"]
+    return kernel_sketch.face_boundary_entities(sketch.plane, piece, ellipses)
 
 
 def envelope_pieces(
@@ -104,7 +112,7 @@ def envelope_regions(
         raise ValueError(f"{len(pieces)} 個に分かれます。R か d を大きくしてください")
 
     sketch = get_sketch(doc, sketch_id)
-    entities = kernel_sketch.face_boundary_entities(sketch.plane, pieces[0])
+    entities = boundary_entities(doc, sketch_id, pieces[0])
     for entity in entities:
         require_valid_params(entity["kind"], entity["params"])
     created = add_entities(
@@ -121,6 +129,7 @@ def envelope_regions(
             "offset": offset,
             "entities": [{"kind": e["kind"], "params": dict(e["params"])} for e in entities],
             "created": created,
+            "approximated": sum(1 for e in entities if e.get("approximated")),
         },
     )
 
@@ -166,4 +175,5 @@ def _enter_envelope_regions(document: Document, radius: float = 0.0, offset: flo
         "offset": args["offset"],
         "created": list(args["created"]),
         "sketch_ids": [args["sketch_id"]],
+        "approximated": args["approximated"],
     }

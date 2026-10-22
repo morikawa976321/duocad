@@ -302,7 +302,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'move_sketch_entities'; mode: string; dx: number | null; dy: number | null; angle: number | null; center: number[] | null; copy: boolean; created: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'move_body'; mode: string; dx: number | null; dy: number | null; dz: number | null; angle: number | null; axis_point: number[] | null; axis_dir: number[] | null; copy: boolean; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'mirror_sketch_entities'; axis_p0: number[]; axis_dir: number[]; created: string[]; sketch_ids: string[] })
-  | (AppliedVerbBase & { verb: 'envelope_regions'; radius: number; offset: number; created: string[]; sketch_ids: string[] })
+  | (AppliedVerbBase & { verb: 'envelope_regions'; radius: number; offset: number; created: string[]; sketch_ids: string[]; approximated: number })
   | (AppliedVerbBase & { verb: 'mirror_body'; plane_point: number[]; plane_normal: number[]; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'delete'; bodies: string[]; entities: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'delete_items'; bodies: string[]; sketches: string[] })
