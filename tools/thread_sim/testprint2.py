@@ -3,10 +3,9 @@
     .venv/Scripts/python.exe -X utf8 -m tools.thread_sim.testprint2
 
 出力は output/thread_sim/testprint2/(git 管理外)。TP1(testprint.py)の部品・ページ・配置図の関数を使い回す。
-目的(THREAD_SIM.md 6.3):
-- 嵌合: TP1 に合わせた係数(printer.TP1_FIT)で上位になった半円・30° と、対照の 45° を、D6 P1.5 と D3 P1.2 で比べる。
-  ナットの隙間は「はまらない」「軽く回りガタ無し」「ガタが出る」の境目をまたぐように選んだ(事前の予測を predictions.json に書く)。
-- 強さ: 吊り板に通したボルトにナットを座らせ、ボルトの頭に重りを吊って、壊れる重さと場所を見る(模型の FEA と同じ荷重の掛け方)。
+目的(THREAD_SIM.md 6.3): TP1 に合わせた係数(printer.TP1_FIT)で上位になった半円・30° と、対照の 45° を、同じ D6 P1.5 で比べる。
+ナットの隙間は「はまらない/使える幅の締まり側/使える幅の緩み側/使えない(ガタか山飛び)」の4点(事前の予測を predictions.json に書く)。
+引き抜き(PULL)は、家での吊り試験の安全と支持の確かめが済むまで別の試験に回す(astra の7回目の意見)。コードは残し、PULL が空なら作らない。
 """
 from __future__ import annotations
 
@@ -27,18 +26,13 @@ TEST_ID = "TP2"  # 部品や隙間を変えたら上げる(結果の1行に入�
 # 角の数は TP1 と同じ対応(半円 = 八角、30° = 五角、45° = 四角)。隙間は、TP1 に合わせた係数で隙間を 0.01 刻みに振って出した
 # 「はまらない/軽く回る/ガタ/山飛び」の境目(THREAD_SIM.md 6.3)をまたぐように、TP1 のねじの誤差の幅の両端で判定が揃う所から選んだ
 SERIES = [
-    ("S", "半円 D6 P1.5 ρ0.6(法線の隙間)", 6, lambda: pf.coil(6, 1.5, 0.6), "normal", 8, [0.12, 0.20, 0.25, 0.32]),
-    ("T", "30°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 30, 30), "radial", 5, [0.20, 0.32, 0.45, 0.58]),
-    ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.08, 0.20, 0.40, 0.58]),
-    ("U", "半円 D3 P1.2 ρ0.48(法線の隙間)", 3, lambda: pf.coil(3, 1.2, 0.48), "normal", 8, [0.10, 0.15, 0.19, 0.25]),
-    ("V", "30°台形 D3 P1.2 深さ0.48(法線の隙間)", 3, lambda: pf.trapezoid(3, 1.2, 0.48, 30, 30), "normal", 5, [0.06, 0.17, 0.26, 0.33]),
-    ("D", "45°台形 D3 P1.2 深さ0.48", 3, lambda: pf.trapezoid(3, 1.2, 0.48, 45, 45), "radial", 4, [0.05, 0.18, 0.31, 0.42]),
+    ("S", "半円 D6 P1.5 ρ0.6(法線の隙間)", 6, lambda: pf.coil(6, 1.5, 0.6), "normal", 8, [0.13, 0.17, 0.22, 0.27]),
+    ("T", "30°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 30, 30), "radial", 5, [0.22, 0.30, 0.47, 0.55]),
+    ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.10, 0.17, 0.26, 0.34]),
 ]
 # 引き抜き: (記号, 表示名, 呼び径, 山形, 付け方, 角の数, 隙間, ナットの高さ, 本数)
-PULL = [
-    ("P", "半円 D3 P1.2 ρ0.48", 3, lambda: pf.coil(3, 1.2, 0.48), "normal", 8, 0.15, 2.4, 2),
-    ("Q", "45°台形 D3 P1.2 深さ0.48", 3, lambda: pf.trapezoid(3, 1.2, 0.48, 45, 45), "radial", 4, 0.20, 3.0, 2),
-]
+# 例(次の試験の候補): ("P", "半円 D3 P1.2 ρ0.48", 3, lambda: pf.coil(3, 1.2, 0.48), "normal", 8, 0.15, 2.4, 2)
+PULL = []
 E_THREAD = {6: (0.04, 0.06), 3: (0.0, 0.045)}  # TP1 のねじから読んだ寸法誤差(雌雄の和・半径)の幅(THREAD_SIM.md 6.1)
 PLAY_MAX = 0.3  # ガタの境目の軸方向の遊び(TP1、report.PLAY_MAX と同じ)
 E_REQ = 0.1  # 掛かりの下限(山飛び)
@@ -51,11 +45,8 @@ INTRO = (
     'プロセス「0.20mm Standard @Elegoo CC 0.4 nozzle」・PLA のまま、設定は何も変えずに刷る(回転しない・サポート不要)。</p>'
     '<p><b>嵌合の試し方</b>: TP1 と同じ(冷めてから、工具なしで、凹み1個のナットから順に、初回のねじ込みで判定)。'
     '<b>「ガタが大きい」は、ナットをボルトの途中で止めて軸の向きに押し引きしたとき、カタカタ動くのが分かる</b>ときに付ける。</p>'
-    '<p><b>引き抜きの試し方</b>(やらなくてもよい): 吊り板の両端の穴に紐を通して、丈夫な所から水平に吊る。ボルトを吊り板の真ん中の穴に下から通し、'
-    '上からナットを手で回して吊り板に当たるまで締める(工具は使わない)。ボルトの頭の横穴に紐を通して袋を吊り、水の入ったペットボトルを1本ずつ足す。'
-    '壊れたら、そのときの袋の重さ(はかりで量るか、ボトルの数 × 1本の重さ)を kg で書き、壊れた場所を選ぶ。'
-    '<b>落ちる袋の下にはクッションを置き、足や手を下に入れない。</b></p>'
-    '<p><b>返し方</b>: 各行を選び、数は入力欄に書く。下の「コピー」を押し、出てきた1行を次のメッセージに貼る。途中で閉じても入力は残る。</p></div>'
+    '刷れなかった・欠けた部品があれば、その行で「部品が欠けた・刷れなかった」に印を付ける(印刷のしやすさの記録になる)。</p>'
+    '<p><b>返し方</b>: 各行を1つクリック(点線の枠は当てはまるときだけ追加)。下の「コピー」を押し、出てきた1行を次のメッセージに貼る。途中で閉じても選択は残る。</p></div>'
 )
 
 
@@ -123,11 +114,14 @@ def predict(out: Path = OUT) -> dict:
     pr = DEFAULT.with_(**TP1_FIT)
     for sid, name, D, mk, mode, _, c, H, n in PULL:
         prof = mk()
-        des = ev.Design(name, prof, c, mode=mode, L_nut=H - 2 * prof.depth, R_out=_pull_af(D) / 2, split=0.0)
+        # ナットの両端の面取りは雌の山形の深さで切る(stl_export.nut)ので、ねじの掛かる長さもそれで測る
+        nprof = sx.simplify_profile(pf.nut_of(prof, c, mode))
+        engaged = H - 2 * (max(r for _, r in nprof) - min(r for _, r in nprof))
+        des = ev.Design(name, prof, c, mode=mode, L_nut=engaged, R_out=_pull_af(D) / 2, split=0.0)
         s = ev.evaluate(des, pr, with_strength=True).strength
         hold = min(s.F[k] for k in ("tcd", "strip_bolt", "strip_nut")) if s else None
         mode_ja = {"tcd": "ボルトの軸(芯の層間)", "strip_bolt": "ボルトのねじ山", "strip_nut": "ナットのねじ山"}
-        res["pull"][sid] = dict(name=name, clearance=c, nut_height=H, engaged=round(H - 2 * prof.depth, 3),
+        res["pull"][sid] = dict(name=name, clearance=c, nut_height=H, engaged=round(engaged, 3),
                                 hold_N=round(hold, 1) if hold else None, hold_kg=round(hold / 9.81, 1) if hold else None,
                                 where=mode_ja.get(min(("tcd", "strip_bolt", "strip_nut"), key=s.F.get)) if s else None,
                                 F={k: round(v, 1) for k, v in s.F.items()} if s else None)
@@ -153,7 +147,7 @@ def build(out: Path = OUT):
             f = f"{sid}{i}_nut_c{c:g}.stl"
             sx.write_stl(make_nut(pf.nut_of(prof, c, mode), i, sz["nut_h"], sz["af"], sides), out / f)
             pieces.append(Piece(f"{sid}{i}", "nut", f"{name} のナット{i}(凹み{i}個)", f, dict(D=D, mode=mode, clearance=c, series=sid)))
-            items.append((f"{sid}{i}", f"ナット{i}(上面の凹み{i}個)", OUTCOMES_THREAD, FLAGS_THREAD))
+            items.append((f"{sid}{i}", f"ナット{i}(上面の凹み{i}個)", OUTCOMES_THREAD, FLAGS_THREAD + ["部品が欠けた・刷れなかった"]))
         shape_ja = {4: "四角", 5: "五角", 6: "六角", 8: "八角"}[sides]
         mid = sorted(cs)[len(cs) // 2]
         groups.append((f"{sid}: {name}", f"頭とナットが{shape_ja}の組。凹み1個のナットから順に試す。1つ試したら外してから次へ。工具は使わない。",
@@ -173,18 +167,18 @@ def build(out: Path = OUT):
                                 dict(D=D, mode=mode, clearance=c, series=sid, height=H)))
             pitems.append((f"{sid}{k}w", f"{sid}{k}({name}): 壊れたときの重さ kg", "number", []))
             pitems.append((f"{sid}{k}m", f"{sid}{k}: 壊れた場所", OUTCOMES_PULL, []))
-    f = "R_bracket.stl"
-    sx.write_stl(make_bracket(3.0), out / f)
-    pieces.append(Piece("R", "bracket", "吊り板(D3 用)", f, dict(D=None)))
-    groups.append(("P・Q: 引き抜き(やらなくてもよい)", "吊り板 R にボルトを下から通し、上からナットを手で締めて、頭の横穴に重りを吊る。"
-                   "同じ組の2本は、同じ条件のくり返し。", pitems))
+    if PULL:
+        f = "R_bracket.stl"
+        sx.write_stl(make_bracket(PULL[0][2]), out / f)
+        pieces.append(Piece("R", "bracket", "吊り板", f, dict(D=None)))
+        groups.append(("引き抜き", "吊り板 R にボルトを下から通し、上からナットを手で締めて、頭の横穴に重りを吊る。"
+                       "同じ組の2本は、同じ条件のくり返し。", pitems))
     plate = make_plate(out, pieces)
     (out / "manifest.json").write_text(json.dumps(dict(test_id=TEST_ID, pieces=[p.__dict__ for p in pieces], plate=plate),
                                                   ensure_ascii=False, indent=1), encoding="utf-8")
     layout = layout_svg(out, pieces, plate["placed"], series=SERIES,
-                        extra_rows=[("P", "P・Q: 引き抜き(各2本。ボルトの頭に横穴、ナットは低い)", "P は半円 D3、Q は 45° D3。R は吊り板")],
-                        notes=("記号の数字 0 は嵌合を試すボルト。P1・P2・Q1・Q2 は引き抜きのボルト、P1n などはその相手のナット。",
-                               "ナットの番号 = 上面の凹みの数(1 が最も緩い)。", "実線の白丸はナットの穴、点線はボルトの軸。"))
+                        extra_rows=[(s[0], f"{s[0]}: 引き抜き {s[1]}(ボルトの頭に横穴、ナットは低い)", "R は吊り板") for s in PULL],
+                        notes=("記号の数字 0 はボルト。", "ナットの番号 = 上面の凹みの数(1 が最も緩い)。", "実線の白丸はナットの穴、点線はボルトの軸。"))
     (out / "layout.svg").write_text(layout, encoding="utf-8")
     figure = ('<div class="intro"><p><b>配置図</b>(plate.stl を上から見た図。下が手前。系列は頭やナットの角の数で、'
               'ナットの番号は上面の凹みの数で分かる)</p>' + layout + '</div>')
