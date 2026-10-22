@@ -4,7 +4,7 @@ OCCT の `MakeFillet` は、転がる球が上面に触れる線(輪郭を内へ
 断る。Fusion 360 は、球を両側から転がして自己交差の点 X(球が壁の2点と上面の1点に同時に触れる所)で止め、その先を隣の面と
 G1 でつながる帽子の面で埋める(本人が示した画面。docs/FILLET_OVERFLOW.md「曲率半径を超える半径」)。ここはその形を作る:
 
-1. 上面から深さ R の平面で輪郭を内へ R ずらす。`BRepOffsetAPI_MakeOffset` が自己交差を切り落とすので、これが球の中心の道。
+1. 上面から深さ R の平面で輪郭を内へ R ずらし、自己交差の輪(燕尾)を切り落とす。これが球の中心の道。
 2. 道の滑らかな区間ごとに、四分円の断面(壁の接点 → 上面の接点)を掃いて丸めの面にする。
 3. 道の角(自己交差を切った所)ごとに、両側の区間の端の四分円と、壁の縁の上の弧の3辺を、隣の面と G1 で埋めて帽子にする。
 4. 区間の上の縁で囲む上面(レンズ形)と深さ R の底面を合わせて冠の立体にし、本体の深さ R より下と結合する。
@@ -32,9 +32,8 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Transform,
 )
 from OCP.BRepCheck import BRepCheck_Analyzer
-from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling, BRepOffsetAPI_MakeOffset, BRepOffsetAPI_MakePipeShell
+from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling, BRepOffsetAPI_MakePipeShell
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
 from OCP.Bnd import Bnd_Box
@@ -42,7 +41,7 @@ from OCP.GC import GC_MakeArcOfCircle
 from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.GProp import GProp_GProps
 from OCP.GeomAPI import GeomAPI_Interpolate
-from OCP.GeomAbs import GeomAbs_JoinType, GeomAbs_Shape, GeomAbs_SurfaceType
+from OCP.GeomAbs import GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.ShapeFix import ShapeFix_Solid
 from OCP.TColgp import TColgp_HArray1OfPnt
 from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
@@ -95,7 +94,7 @@ def round_tight_loop(shape: TopoDS_Shape, edge_map, radii: dict) -> Tight:
     shift.SetTranslation(gp_Vec(normal.XYZ()).Multiplied(-radius))
     section = TopoDS.Face_s(BRepBuilderAPI_Transform(top, shift, True).Shape())
     contour = _Contour(BRepTools.OuterWire_s(section), normal)
-    segments, loops = _center_path(section, contour, radius, size)
+    segments, loops = _center_path(contour, radius)
     sides = [_side(segment, contour, radius) for segment in segments]
     # 区間 i の終わりと区間 i+1 の始めの間が、切り落とした輪 i+1(1つ目の区間は輪 0 の終わりから始まる)
     caps = [_cap(this, following, loop, contour, radius)
@@ -220,21 +219,13 @@ class _Segment(NamedTuple):
     high: float
 
 
-def _center_path(section: TopoDS_Shape, contour: _Contour, radius: float, size: float):
+def _center_path(contour: _Contour, radius: float):
     """球の中心の道(深さ R の輪郭を内へ R ずらした曲線から、自己交差の輪を切り落としたもの)の区間と、切り落とした輪の
     輪郭の弧長の範囲(帽子が壁に触れる範囲)を返す。
 
-    ずらした点は輪郭から直接求める: `BRepOffsetAPI_MakeOffset` の道は近似の継ぎ目で最大 6° 折れた(楕円 6×2 を R=1)。
-    MakeOffset は、ずらした領域が1つにつながっていることの確かめにだけ使う(首のくびれた輪郭では2つに割れる)。
+    ずらした点は輪郭から直接求める: `BRepOffsetAPI_MakeOffset` の道は近似の継ぎ目で最大 6° 折れ(楕円 6×2 を R=1)、
+    半径 1 の円を 3 ずらす(領域が消える)とプロセスごと落ちた。
     """
-    offset = BRepOffsetAPI_MakeOffset(TopoDS.Face_s(section), GeomAbs_JoinType.GeomAbs_Arc)
-    try:
-        offset.Perform(-radius)
-    except Exception as error:  # noqa: BLE001  OCCT は例外でも失敗する
-        raise Unsupported(f"the outline could not be offset inward by the radius: {error}") from error
-    if not offset.IsDone() or indexed_map(offset.Shape(), TopAbs_WIRE).Extent() != 1:
-        raise Unsupported("offsetting the outline by the radius splits it or makes it vanish (the top is too narrow)")
-
     count = max(_PATH_SAMPLES, _PATH_SAMPLES_PER_EDGE * contour.edges)
     step = contour.length / count
     centers = [contour.center(i * step, radius) for i in range(count)]
@@ -252,8 +243,9 @@ def _center_path(section: TopoDS_Shape, contour: _Contour, radius: float, size: 
         if high >= next_low:
             raise Unsupported("the swallowtails of the offset outline overlap")
     if not loops:
-        # 道が自己交差しない(半径が辺の曲率半径を超えない)なら OCCT の `MakeFillet` の領分。ここでは作らない
-        raise Unsupported("the radius does not exceed the curvature of the outline anywhere")
+        # 道が自己交差しない(半径が辺の曲率半径を超えない、または上面の幅を超えて裏返る)なら、ここでは作らない
+        raise Unsupported("the offset outline does not cross itself (the radius is within its curvature, or wider than the top)")
+    _clear_of_walls(contour, radius, loops, count)
     segments = []
     for (_, high), (next_low, _) in zip(loops, loops[1:] + [(loops[0][0] + contour.length, 0.0)]):
         span = next_low - high
@@ -263,6 +255,39 @@ def _center_path(section: TopoDS_Shape, contour: _Contour, radius: float, size: 
         path = _interpolate(points, contour.at(high)[1], contour.at(next_low)[1])
         segments.append(_Segment(path, high, next_low))
     return segments, loops
+
+
+def _clear_of_walls(contour: _Contour, radius: float, loops: list, count: int) -> None:
+    """切り落とした輪の外の球の中心が、輪郭のどこにも R より近づかないこと(半径が上面の幅を超える・首がくびれた形では、
+    球が反対側の壁に食い込む)。折れ線の距離で候補を絞り、候補だけ輪郭そのものとの距離を詰める。"""
+    step = contour.length / count
+    feet = [contour.at(i * step)[0] for i in range(count)]
+    middles = [contour.at((i + 0.5) * step)[0] for i in range(count)]
+    x_axis = contour.up.Crossed(_any_perpendicular(gp_Dir(contour.up))).Normalized()
+    y_axis = contour.up.Crossed(x_axis)
+    def flat(points):
+        return np.array([[gp_Vec(feet[0], point).Dot(x_axis), gp_Vec(feet[0], point).Dot(y_axis)] for point in points])
+
+    start = flat(feet)
+    direction = np.roll(start, -1, axis=0) - start
+    # 折れ線と輪郭のずれ(弦の中点と弧の中点の距離)。折れ線の距離はこの分だけ輪郭の距離より小さく出うる
+    deviation = float(np.max(np.linalg.norm(flat(middles) - (start + 0.5 * direction), axis=1)))
+    kept = [i for i in range(count)
+            if not any(low < i * step < high or low < i * step + contour.length < high for low, high in loops)]
+    centers = flat([contour.center(i * step, radius) for i in kept])
+    lengths = np.maximum(np.einsum("ij,ij->i", direction, direction), 1.0e-300)
+    relative = centers[:, None, :] - start[None, :, :]
+    along = np.clip(np.einsum("mnk,nk->mn", relative, direction) / lengths[None, :], 0.0, 1.0)
+    distance = np.linalg.norm(relative - along[..., None] * direction[None, :, :], axis=2)
+    own = np.array(kept)[:, None]
+    apart = np.abs(np.arange(count)[None, :] - own)
+    distance[np.minimum(apart, count - apart) <= 2] = np.inf  # 自分の接点のまわりは R ちょうど
+    allowance = 1.0e-7 * max(1.0, radius)
+    for row, column in zip(*np.nonzero(distance < radius + 2.0 * deviation + allowance)):
+        center = contour.center(kept[row] * step, radius)
+        nearest = _golden_minimum(lambda s: contour.at(s)[0].Distance(center), (column - 1) * step, (column + 2) * step)
+        if contour.at(nearest)[0].Distance(center) < radius - allowance:
+            raise Unsupported("the ball would cut into the opposite wall (the top is too narrow for the radius)")
 
 
 def _meeting(contour: _Contour, radius: float, first: float, second: float, step: float) -> Tuple[float, float]:

@@ -14,7 +14,9 @@ from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
 from OCP.GProp import GProp_GProps
+from OCP.GeomAPI import GeomAPI_Interpolate
 from OCP.GeomAbs import GeomAbs_SurfaceType
+from OCP.TColgp import TColgp_HArray1OfPnt
 from OCP.TopAbs import TopAbs_IN, TopAbs_OUT
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax2, gp_Dir, gp_Elips, gp_Pnt, gp_Vec
@@ -30,6 +32,18 @@ from document_support import assert_matches_replay
 def _elliptic_post(a: float, b: float, height: float):
     """半軸 `a`・`b`、高さ `height` の楕円柱(先端の曲率半径は b²/a)。"""
     outline = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(gp_Elips(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), a, b)).Edge()).Wire()
+    return BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(outline).Face(), gp_Vec(0, 0, height)).Shape()
+
+
+def _peanut_post(height: float):
+    """長さ 12、くびれの幅 2(両端の膨らみの幅 6、先端の曲率半径 0.75)の落花生形の柱。"""
+    points = TColgp_HArray1OfPnt(1, 120)
+    for i in range(120):
+        t = 2.0 * math.pi * i / 120
+        points.SetValue(i + 1, gp_Pnt(6.0 * math.cos(t), math.sin(t) * (1.0 + 2.0 * math.cos(t) ** 2), 0.0))
+    interpolation = GeomAPI_Interpolate(points, True, 1e-9)
+    interpolation.Perform()
+    outline = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(interpolation.Curve()).Edge()).Wire()
     return BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(outline).Face(), gp_Vec(0, 0, height)).Shape()
 
 
@@ -188,3 +202,15 @@ def test_a_post_lower_than_the_radius_is_refused():
 
     with pytest.raises(ValueError):
         kernel.fillet_edges(shape, {index: 1.0 for index in edges})
+
+
+def test_a_radius_wider_than_the_waist_of_the_top_is_refused_by_this_way():
+    """落花生形の柱(くびれの幅 2、先端の曲率半径 0.75)の上縁を半径 1.2 で丸める道は、くびれで球が反対側の壁に食い込むので
+    引き受けない。OCCT はこの形を自分で丸めるので、作り方を直接呼ぶ。"""
+    from duocad import kernel_overflow, kernel_tight
+
+    shape = _peanut_post(5.0)
+    edges = _top_edges(shape, 5.0)
+
+    with pytest.raises(kernel_overflow.Unsupported, match="cut into the opposite wall"):
+        kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), {index: 1.2 for index in edges})
