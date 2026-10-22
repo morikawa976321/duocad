@@ -5,8 +5,10 @@ verb ではない(文書もログも触らない)。MCP の `measure` と WebSoc
 
 ## 2項目のあいだ(`between`)
 
-頂点・直線の辺・平らな面を、点・直線・平面の3種に還元して測る。**直線と平面は無限に
-延ばす**(有限の辺・面どうしの最短距離ではない。平行な面どうしは重なっていなくても「面の間隔」が答え。issue #10)。
+ソリッドの頂点・直線の辺・平らな面と、スケッチの点(点の図形・端点・中心・制御点)・線分・領域を、点・直線・平面の
+3種に還元して測る(スケッチは `region.plane_frame` で世界座標へ。issue #201)。**直線と平面は無限に延ばす**(有限の辺・面
+どうしの最短距離ではない。平行な面どうしは重なっていなくても「面の間隔」が答え。issue #10)。スケッチの線分も辺と同じく
+無限直線で、領域はそのスケッチの平面。
 
 | 組 | 返すもの |
 |---|---|
@@ -14,7 +16,7 @@ verb ではない(文書もログも触らない)。MCP の `measure` と WebSoc
 | 点-直線 / 点-平面 | 垂線の長さ(足が `to`) |
 | 直線-直線 / 直線-平面 / 平面-平面 | 平行なら距離、平行でなければ**角度**(0〜90度。距離は無い) |
 
-`from` / `to` は画面が線で描くための2点で、直線側は辺の中点・平面側は面の面積重心を起点にする。
+`from` / `to` は画面が線で描くための2点で、直線側は辺(線分)の中点・平面側は面(領域)の面積重心を起点にする。
 
 平行の判定は `PARALLEL_SIN_TOLERANCE`(sin θ)。述語の `PARALLEL_TOLERANCE`(1e-3 ≈ 2.6度)は
 粗すぎ、測定に使うと 2度傾いた面どうしの「距離」が出てしまう。
@@ -109,6 +111,12 @@ def _to_uv(frame: dict, point: Any) -> list:
     """ワールド座標の点をスケッチ座標 (u, v) へ(`sketch_create` が返す `frame` の逆: 3D = origin + u·u軸 + v·v軸)。"""
     offset = _sub(_as_vec(point), _as_vec(frame["origin"]))
     return [_dot(offset, _as_vec(frame["u"])), _dot(offset, _as_vec(frame["v"]))]
+
+
+def _to_world(frame: dict, uv: Any) -> Vec:
+    """スケッチ座標 (u, v) をワールド座標へ(`_to_uv` の逆)。"""
+    origin = _as_vec(frame["origin"])
+    return _add(_add(origin, _scale(_as_vec(frame["u"]), float(uv[0]))), _scale(_as_vec(frame["v"]), float(uv[1])))
 
 
 def _body_centroid(body: Any) -> Union[list, None]:
@@ -265,15 +273,16 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             reg for reg in region.regions(session.document, sketch_id) if reg.index == ref["index"]
         )
         center = [float(value) for value in described.centroid]
+        frame = region.plane_frame(session.document, sketch_id)
         item = {
             "kind": "region",
             "sketch": sketch_id,
             "index": ref["index"],
             "area": described.area,
             "center": center,
-            "center_uv": _to_uv(region.plane_frame(session.document, sketch_id), center),
+            "center_uv": _to_uv(frame, center),
         }
-        return item, "領域は2項目の測定に使えない(測れるのはソリッドの頂点・直線の辺・平らな面)"
+        return item, Plane(point=_as_vec(center), normal=_unit(_as_vec(frame["normal"])))
 
     if kind == selection.BODY_KIND:
         # ソリッドを丸ごと指す種別(形状最適化の保持/除外)。面積にも長さにも足さない。
@@ -292,10 +301,12 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
 
     if kind == selection.SKETCH_ENTITY_KIND:
         # スケッチの図形。点なら (u, v) を、辺なら解決済みの `params` をそのまま返す(線分は長さ、楕円は周長も `length` に)。
+        # 2項目の測定に使う点・線分は世界座標(`world` / `start` / `end`)も返す。
         sketch_id = ref["sketch"]
         entity_id = ref["entity"]
         target = sketch.get_entity(sketch.get_sketch(session.document, sketch_id), entity_id)
         resolved = sketch.entity_params(session.document, sketch_id, entity_id)
+        frame = region.plane_frame(session.document, sketch_id)
         item = {
             "kind": selection.SKETCH_ENTITY_KIND,
             "sketch": sketch_id,
@@ -303,16 +314,25 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             "entity_kind": target.kind,
             "point": ref.get("point"),
         }
-        if ref.get("point") is None:
-            item["params"] = resolved
-            if target.kind == "line":
-                item["length"] = math.hypot(resolved["x1"] - resolved["x0"], resolved["y1"] - resolved["y0"])
-            elif target.kind == "ellipse":
-                item["length"] = kernel_sketch.ellipse_perimeter(resolved)
-        else:
+        if ref.get("point") is not None:
             x_key, y_key = sketch.entity_point_pair(target.kind, str(ref["point"]))
             item["position"] = [resolved[x_key], resolved[y_key]]
-        return item, "スケッチの図形は2項目の測定に使えない(測れるのはソリッドの頂点・直線の辺・平らな面)"
+            world = _to_world(frame, item["position"])
+            item["world"] = list(world)
+            return item, Point(point=world)
+        item["params"] = resolved
+        if target.kind == "ellipse":
+            item["length"] = kernel_sketch.ellipse_perimeter(resolved)
+        if target.kind != "line":
+            return item, (
+                f"スケッチの図形まるごとで測れるのは線分だけ(選んだのは {target.kind})。"
+                "中心や端点は点として指せる"
+            )
+        item["length"] = math.hypot(resolved["x1"] - resolved["x0"], resolved["y1"] - resolved["y0"])
+        start = _to_world(frame, (resolved["x0"], resolved["y0"]))
+        end = _to_world(frame, (resolved["x1"], resolved["y1"]))
+        item["start"], item["end"] = list(start), list(end)
+        return item, Line(point=_scale(_add(start, end), 0.5), direction=_unit(_sub(end, start)))
 
     raise ValueError(f"unmeasurable selection kind: {kind!r}")
 
