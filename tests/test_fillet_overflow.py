@@ -740,3 +740,28 @@ def test_a_hole_on_the_feet_track_of_an_elliptic_post_is_noticed():
     path = kernel_overflow._RollingPath(wire, supports, 10.0)
 
     assert path.states - {0}, "球が穴の縁に乗るのを見落とした"
+
+
+def test_a_trimming_cut_that_does_not_partition_the_material_is_refused(monkeypatch):
+    """落ちたら: 柱で切った「外」と「中」の体積が肉と合わない分割(issue #209 の壊れた cut)を、吸収が断らずに通している。"""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    from duocad import kernel_overflow
+
+    plate = BRepPrimAPI_MakeBox(gp_Pnt(-20, -20, 0), gp_Pnt(20, 20, 3)).Shape()
+    index = _line_edge_at(plate, 20.0, 3.0)
+    real = kernel_overflow._boolean
+
+    class _Nothing:
+        def Shape(self):
+            compound = TopoDS_Compound()
+            BRep_Builder().MakeCompound(compound)
+            return compound
+
+    def broken(kind, first, second, fuzzy=0.0):
+        return _Nothing() if kind == "common" else real(kind, first, second, fuzzy)
+
+    monkeypatch.setattr(kernel_overflow, "_boolean", broken)
+    with pytest.raises(kernel_overflow.Unsupported, match="did not partition"):
+        kernel_overflow.absorb(plate, kernel._edge_map(plate), {index: 5.0})
