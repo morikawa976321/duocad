@@ -21,10 +21,16 @@ import math
 from typing import Dict, List, NamedTuple, Sequence, Tuple
 
 from OCP.BRep import BRep_Builder, BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Curve2d, BRepAdaptor_Surface
+from OCP.BRepAdaptor import BRepAdaptor_CompCurve, BRepAdaptor_Curve, BRepAdaptor_Curve2d, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBndLib import BRepBndLib
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeVertex, BRepBuilderAPI_MakeWire
+from OCP.BRepBuilderAPI import (
+    BRepBuilderAPI_MakeEdge,
+    BRepBuilderAPI_MakeFace,
+    BRepBuilderAPI_MakePolygon,
+    BRepBuilderAPI_MakeVertex,
+    BRepBuilderAPI_MakeWire,
+)
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
@@ -58,7 +64,7 @@ from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_ON, TopAbs_OU
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
-from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Pnt2d, gp_Vec, gp_Vec2d
+from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pln, gp_Pnt, gp_Pnt2d, gp_Vec, gp_Vec2d
 
 from .kernel_chains import BlendChains
 from .mesh_geometry import indexed_map
@@ -349,7 +355,7 @@ def _rolled_over_rims(wedge, edges: list, faces, heights, radius: float, columns
     """
     try:
         supports = [_Support(face, edges, columns) for face in faces]
-        paths = [_RollingPath(edge, supports, radius) for edge in edges]
+        paths = [_RollingPath(wire, supports, radius) for wire in _smooth_wires(edges)]
         if not any(path.crossed for path in paths):
             return None
         first_column, second_column = (columns.of(face, height, True) for face, height in zip(faces, heights))
@@ -357,11 +363,18 @@ def _rolled_over_rims(wedge, edges: list, faces, heights, radius: float, columns
         # 傾いた壁の柱は境界が辺から斜めに出て、辺に沿う薄い層を2面の柱の共通部分から外す(円板の上の先細りの柱で、
         # 管の下の角が辺に触れなくなり、肉が丸ごと捨てられた)。片方の柱の中だけにあって辺に触れる部分を角に戻す
         # (戻した層のうち丸めの面より上は、次の管で引かれる)。
-        for inside, outside in ((first_column, second_column), (second_column, first_column)):
+        # 球が縁に乗る面の柱の外は、連なりの横にある部分を全部戻す: 縁の先へ張り出した相手の面の下にも肉がある
+        # (縁の外へ 45° で張り出す壁の根元で、縁の真上に縦の面が残り、肉が 0.8% 欠けた。Codex レビューの反例)。
+        # 縁の先の空気とは、縁に乗る球が隔てる。連なりの端の先は戻さない(辺の端の先へ肉が伸びる)。
+        size = 10.0 * _diagonal(wedge)
+        for rim_state, inside, outside in ((2, first_column, second_column), (1, second_column, first_column)):
             only = _boolean("cut", _boolean("common", wedge, inside).Shape(), outside).Shape()
-            for part in _solids(only):
-                if _touches_inside_of(part, edges):
-                    corner = _boolean("fuse", corner, part).Shape()
+            if any(rim_state in path.states for path in paths):
+                parts = _alongside(only, paths, size)
+            else:
+                parts = [part for part in _solids(only) if _touches_inside_of(part, edges)]
+            for part in parts:
+                corner = _boolean("fuse", corner, part).Shape()
     except Exception:  # noqa: BLE001  Unsupported と、OCCT の補間・ブーリアンの Standard_Failure 系。ふつうの丸めに戻る
         return None
     for swell in _ROLL_SWELLS:
@@ -375,21 +388,61 @@ def _rolled_over_rims(wedge, edges: list, faces, heights, radius: float, columns
     return None
 
 
+def _alongside(region: TopoDS_Shape, paths: list, size: float) -> list:
+    """`region` を開いた連なりの両端の法平面で割り、連なりの横にある(いちばん近い連なりの点が端でない)部分を返す。"""
+    planes = []
+    for path in paths:
+        if path.loop:
+            continue
+        for at in (path.curve.FirstParameter(), path.curve.LastParameter()):
+            point, tangent = gp_Pnt(), gp_Vec()
+            path.curve.D1(at, point, tangent)
+            planes.append(BRepBuilderAPI_MakeFace(gp_Pln(point, gp_Dir(tangent)), -size, size, -size, size).Face())
+    if planes:
+        splitter = BRepAlgoAPI_Splitter()
+        arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+        arguments.Append(region)
+        for plane in planes:
+            tools.Append(plane)
+        splitter.SetArguments(arguments)
+        splitter.SetTools(tools)
+        splitter.Build()
+        if not splitter.IsDone():
+            raise Unsupported("could not cut the region at the ends of the edges")
+        region = splitter.Shape()
+    kept = []
+    for part in _solids(region):
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(part, props)
+        centre = BRepBuilderAPI_MakeVertex(props.CentreOfMass()).Vertex()
+        nearest = min(paths, key=lambda path: BRepExtrema_DistShapeShape(centre, path.wire).Value())
+        if nearest.loop:
+            kept.append(part)
+            continue
+        on_wire = BRepExtrema_DistShapeShape(centre, nearest.wire).PointOnShape2(1)
+        ends = (nearest.curve.Value(nearest.curve.FirstParameter()), nearest.curve.Value(nearest.curve.LastParameter()))
+        if all(on_wire.Distance(end) > 1.0e-7 * max(1.0, size) for end in ends):
+            kept.append(part)
+    return kept
+
+
+def _diagonal(shape: TopoDS_Shape) -> float:
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box)
+    x0, y0, z0, x1, y1, z1 = box.Get()
+    return math.dist((x0, y0, z0), (x1, y1, z1))
+
+
 def _rolled_material(corner, paths, radius: float, swell: float, edges: list):
     """角から、半径を (1 + swell) 倍にした球を掃いた立体を引き、辺に触れる部分を返す。壊れた結果なら None。"""
     # 外部の罠: 管と球の束を先に結合してから引くと、結合が遅く(板の角を越える半径 22 で 6.6 秒)、肉の体積も1つずつ
-    # 引いた結果と食い違った(半径 2 の穴へ転がり込む半径 6 で 0.8%)。1回の引き算に道具として全部渡す。
-    cut = BRepAlgoAPI_Cut()
-    arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
-    arguments.Append(corner)
+    # 引いた結果と 0.8% 食い違った(半径 2 の穴へ転がり込む半径 6)。部品を全部1回の引き算に道具として渡すと、
+    # 横倒しの円柱に立つ柱の根元(連なり3本)を半径 12 で、`Build()` がアクセス違反でプロセスごと落ちた(部品を
+    # 1つずつ・2つずつなら落ちない)。1つずつ順に引く。
+    rest = corner
     for piece in _swept_balls(paths, radius, swell):
-        tools.Append(piece)
-    cut.SetArguments(arguments)
-    cut.SetTools(tools)
-    cut.Build()
-    if not cut.IsDone():
-        return None
-    kept = [part for part in _solids(cut.Shape()) if _touches_inside_of(part, edges)]
+        rest = _boolean("cut", rest, piece).Shape()
+    kept = [part for part in _solids(rest) if _touches_inside_of(part, edges)]
     if not kept or any(_volume(part) <= 0.0 for part in kept):
         return None
     material = kept[0]
@@ -494,6 +547,51 @@ class _Support:
         return measure
 
 
+def _smooth_wires(edges: list) -> list:
+    """辺を、頂点で接線のままつながる組に分け、組ごとに1本のワイヤーにする。
+
+    外部の罠: つながった辺ごとに管を作ると、継ぎ目で管の端の円が重なり、引き算がプロセスごと落ちた(`_rolled_material`)。
+    角丸長方形の柱の根元(辺 8 本)では、辺ごとの管と継ぎ目の球で 18.7 秒かかった。"""
+    groups: List[Tuple[list, list]] = []
+    for edge in edges:
+        ends = [TopExp.FirstVertex_s(TopoDS.Edge_s(edge)), TopExp.LastVertex_s(TopoDS.Edge_s(edge))]
+        joined = [
+            group for group in groups
+            if any(end.IsSame(known) and _tangent_at(edge, end).IsParallel(_tangent_at(group[0][k // 2], known), _SMOOTH_ANGLE)
+                   for end in ends for k, known in enumerate(group[1]))
+        ]
+        members, vertices = [edge], list(ends)
+        for group in joined:
+            members.extend(group[0])
+            vertices.extend(group[1])
+            groups.remove(group)
+        groups.append((members, vertices))
+    wires = []
+    for members, _ in groups:
+        listed = TopTools_ListOfShape()
+        for member in members:
+            listed.Append(member)
+        maker = BRepBuilderAPI_MakeWire()
+        maker.Add(listed)
+        if not maker.IsDone():
+            raise Unsupported("the edges between the same two faces do not join into wires")
+        wires.append(maker.Wire())
+    return wires
+
+
+#: 継ぎ目で接線とみなす角度(ラジアン)。
+_SMOOTH_ANGLE = 1.0e-4
+
+
+def _tangent_at(edge: TopoDS_Shape, vertex: TopoDS_Shape) -> gp_Vec:
+    curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
+    point, tangent = gp_Pnt(), gp_Vec()
+    curve.D1(BRep_Tool.Parameter_s(TopoDS.Vertex_s(vertex), TopoDS.Edge_s(edge)), point, tangent)
+    if tangent.Magnitude() < 1.0e-12:
+        raise Unsupported("an edge has no tangent at its end")
+    return tangent
+
+
 class _Run(NamedTuple):
     """球の中心の道の滑らかな1区間。`start`・`end` は区間の端での道の向き(状態が変わる点。辺の端なら None)。"""
 
@@ -503,27 +601,31 @@ class _Run(NamedTuple):
 
 
 class _RollingPath:
-    """1本の辺に沿った球の中心の道。`runs` は辺の向きに並んだ滑らかな区間(`_Run`)、`loop` は区間が1周して閉じるか、
-    `crossed` は縁を越えたか、`probes` は間引いた `(辺の点, 球の中心)`。
+    """1本のワイヤー(接線でつながる辺の列)に沿った球の中心の道。`runs` はワイヤーの向きに並んだ滑らかな区間(`_Run`)、
+    `loop` は区間が1周して閉じるか、`crossed` は縁を越えたか、`states` は現れた状態(0 ふつう・1/2 その面の縁に乗る)、
+    `probes` は間引いた `(辺の点, 球の中心)`。
 
     辺の点 s での法平面の中で、ふつうは両面から半径の点(両方の足が面の上)。片方の足が面の外なら、その面の縁から半径・
     もう片方の面から半径の点(球が縁の辺に乗る)。両方の足が外なら引き受けない。状態が変わる所は二分法で詰め、
     その点と向きを前後の区間の両方の端にする(区間を1本のワイヤーにつないで1本の管に掃ける)。
     """
 
-    def __init__(self, edge: TopoDS_Shape, supports, radius: float) -> None:
-        self.supports, self.radius = supports, radius
-        self.curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
+    def __init__(self, wire: TopoDS_Shape, supports, radius: float) -> None:
+        self.supports, self.radius, self.wire = supports, radius, wire
+        # 媒介変数は弧長にする(既定だと辺ごとの媒介変数をつなぐので、円弧の辺に点がほとんど来ない)
+        self.curve = BRepAdaptor_CompCurve(TopoDS.Wire_s(wire), True)
         first, last = self.curve.FirstParameter(), self.curve.LastParameter()
         self.loop = self.curve.Value(first).Distance(self.curve.Value(last)) < 1.0e-7
-        count = _ROLL_SAMPLES if self.loop else _ROLL_SAMPLES + 1
-        params = [first + (last - first) * i / _ROLL_SAMPLES for i in range(count)]
-        solved = [self._center(u) for u in params]
-        states = [state for state, _ in solved]
-        self.probes = [(self.curve.Value(params[i]), solved[i][1]) for i in range(0, count, 8)]
+        samples = _ROLL_SAMPLES * indexed_map(wire, TopAbs_EDGE).Extent()
+        count = samples if self.loop else samples + 1
+        params = [first + (last - first) * i / samples for i in range(count)]
+        params, solved = self._with_missed_crossings(params, [self._center(u) for u in params], last)
+        states = [state for state, _, _ in solved]
+        self.states = set(states)
+        self.probes = [(self.curve.Value(params[i]), solved[i][1]) for i in range(0, len(params), 8)]
         self.crossed = any(state != 0 for state in states)
         runs: List[Tuple[List[gp_Pnt], int, object, object]] = []
-        for i, (state, center) in enumerate(solved):
+        for i, (state, center, _) in enumerate(solved):
             if runs and runs[-1][1] == state:
                 runs[-1][0].append(center)
                 continue
@@ -548,7 +650,48 @@ class _RollingPath:
                 runs[0][2] = direction
         self.runs = [_Run(points, start, end) for points, _, start, end in runs]
 
+    def _with_missed_crossings(self, params: list, solved: list, last: float):
+        """足(ふつうの中心から支える面へ下ろした点)の軌跡が面の縁をまたぐ所を探し、またぐ所どうしの間に標本を足す。
+
+        標本だけを見ると、標本の間に収まる小さな穴を見逃した(半径 0.5 の穴を 64 点の間に置くと、縁を越えない形として
+        ふつうの肉になり、穴の壁が肉の高さまで伸びた。Codex レビューの反例)。またぐ所の間は同じ状態なので、間に1点足せば
+        その状態が標本に現れ、切り替わりの点は `_joint` の二分法が詰める。"""
+        ends = params + [last] if self.loop else params
+        crossings = []
+        for support in self.supports:
+            if not support.has_boundary:
+                continue
+            feet = [support.signed(regular)[1] for _, _, regular in solved]
+            if self.loop:
+                feet.append(feet[0])
+            polygon = BRepBuilderAPI_MakePolygon()
+            for foot in feet:
+                polygon.Add(foot)
+            if not polygon.IsDone():
+                continue
+            measure = BRepExtrema_DistShapeShape(polygon.Wire(), support.boundary)
+            if not measure.IsDone() or measure.Value() > 1.0e-7 * max(1.0, self.radius):
+                continue
+            for number in range(1, measure.NbSolution() + 1):
+                crossings.append(_param_on_polyline(measure.PointOnShape1(number), feet, ends))
+        if not crossings:
+            return params, solved
+        crossings.sort()
+        between = [(a + b) / 2.0 for a, b in zip(crossings, crossings[1:])]
+        if self.loop:
+            period = last - params[0]
+            wrapped = (crossings[-1] + crossings[0] + period) / 2.0
+            between.append(wrapped - period if wrapped >= last else wrapped)
+        known = dict(zip(params, solved))
+        spacing = 1.0e-9 * (last - params[0])
+        for u in between:
+            if all(abs(u - p) > spacing for p in known):
+                known[u] = self._center(u)
+        ordered = sorted(known)
+        return ordered, [known[u] for u in ordered]
+
     def _center(self, u: float):
+        """辺の点 u での `(状態, 球の中心, ふつうの中心)`。状態は 0 がふつう、1・2 は1つ目・2つ目の面の縁に乗る。"""
         s, tangent = gp_Pnt(), gp_Vec()
         self.curve.D1(u, s, tangent)
         if tangent.Magnitude() < 1.0e-12:
@@ -572,7 +715,7 @@ class _RollingPath:
         on_one = one.covers(one.signed(regular)[1])
         on_two = two.covers(two.signed(regular)[1])
         if on_one and on_two:
-            return 0, regular
+            return 0, regular, regular
         if on_one == on_two:
             raise Unsupported("the ball would leave both supporting faces")
         rim, other = (two, one) if on_one else (one, two)
@@ -581,7 +724,7 @@ class _RollingPath:
         center = _newton(regular, lambda c: rim.to_boundary(c) - r, lambda c: other.signed(c)[0] - r, axes, r)
         if not other.covers(other.signed(center)[1]) or rim.signed(center)[0] <= 0.0:
             raise Unsupported("the ball rolling over a rim leaves the other face")
-        return (2 if on_one else 1), center
+        return (2 if on_one else 1), center, regular
 
     def _joint(self, low: float, high: float, low_state: int):
         """状態が変わる辺の上の点を二分法で詰め、そこでの中心(ふつうの中心と縁に乗る中心が一致する点)と道の向き。
@@ -594,8 +737,8 @@ class _RollingPath:
                 low = middle
             else:
                 high = middle
-        before, center = self._center(low)
-        after, _ = self._center(high)
+        before, center, _ = self._center(low)
+        after = self._center(high)[0]
         along = self.curve.DN(low, 1)
         directions = [self._direction(state, center, along) for state in (before, after)]
         if directions[0].Angle(directions[1]) > 1.0e-3:
@@ -615,6 +758,19 @@ class _RollingPath:
             raise Unsupported("the ball path has no direction")
         direction.Normalize()
         return direction if direction.Dot(along) > 0.0 else direction.Reversed()
+
+
+def _param_on_polyline(point: gp_Pnt, vertices: list, params: list) -> float:
+    """折れ線(`vertices`、各点の媒介変数 `params`)の上の点 `point` の媒介変数(線分の中で比例配分)。"""
+    best = (math.inf, params[0])
+    for k in range(len(vertices) - 1):
+        start, step = vertices[k], gp_Vec(vertices[k], vertices[k + 1])
+        length = step.SquareMagnitude()
+        t = 0.0 if length < 1.0e-24 else max(0.0, min(1.0, gp_Vec(start, point).Dot(step) / length))
+        distance = start.Translated(step.Multiplied(t)).Distance(point)
+        if distance < best[0]:
+            best = (distance, params[k] + t * (params[k + 1] - params[k]))
+    return best[1]
 
 
 def _newton(start: gp_Pnt, f, g, axes, scale: float, steps: int = 40) -> gp_Pnt:
@@ -706,9 +862,8 @@ def _swept_balls(paths, radius: float, swell: float) -> list:
     balls.extend(BRepPrimAPI_MakeSphere(point, size).Shape() for point, size in distinct)
     if not balls:
         return pipes
-    # 外部の罠: 球は先に球どうしで順に結合する。管と球をばらばらに引き算へ渡すと遅く(板の角を越える半径 22 で 6 → 10 秒、
-    # 穴へ転がり込む半径 6 で 6.5 → 25 秒)、球を1回のブーリアン(引数を全部渡す)で結合するのも、順に1つずつより遅く
-    # 重かった(球 140 個で 3 秒 → 47 秒・3.7GB)。
+    # 球は先に球どうしで順に結合して1つの束にする(角から引く回数を減らす)。外部の罠: 球を1回のブーリアン(引数を全部
+    # 渡す)で結合するのは、順に1つずつより遅く重かった(球 140 個で 3 秒 → 47 秒・3.7GB)。
     bundle = balls[0]
     for ball in balls[1:]:
         bundle = _boolean("fuse", bundle, ball).Shape()

@@ -597,3 +597,90 @@ def test_a_ball_rolling_past_a_plate_corner_keeps_the_plate_height():
     assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6)
     sides = lambda surface: surface.GetType() == GeomAbs_Plane and abs(surface.Plane().Axis().Direction().Z()) < 1e-9
     assert _top_of_faces(rounded["shape"], sides) == pytest.approx(3.0, abs=1e-6), "板の側面が伸びた"
+
+
+def test_a_wall_leaning_out_past_the_rim_keeps_the_material_under_it():
+    """床(x=-20..20)の根元から 45° で床の縁の外へ張り出す壁の根元を半径 20 で丸めると、球は壁と床の縁 (20, 3) に接し、
+    肉は縁の真上より外(壁の下)まで続く。床の柱の外を捨てたときは、縁の真上に縦の面が残って肉が 0.8% 欠けた
+    (Codex レビューの反例)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.TopAbs import TopAbs_IN
+    from OCP.gp import gp_Vec
+
+    outline = BRepBuilderAPI_MakePolygon()
+    for x, z in ((-5, 3), (0, 3), (60, 63), (55, 63)):
+        outline.Add(gp_Pnt(x, 0, z))
+    outline.Close()
+    wall = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(outline.Wire()).Face(), gp_Vec(0, 30, 0)).Shape()
+    shape = _union(_box(-20, 0, 0, 20, 30, 3), wall)
+    root = _line_edge_at(shape, 0.0, 3.0)
+
+    rounded = kernel.fillet_edges(shape, {root: 20.0})
+
+    # 断面(x, z): 球の中心は壁 z = x + 3 から 20、縁の点 (20, 3) から 20。肉は「辺の点・縁の点・壁の接点」の三角形から、
+    # 縁の点と壁の接点を結ぶ弦と球の弧の間(弓形)を除いたもの
+    r, gap = 20.0, 20.0 * math.sqrt(2.0) - 3.0  # 中心は cx − cz = gap の線の上
+    cx = ((20.0 + 3.0 + gap) + math.sqrt((20.0 + 3.0 + gap) ** 2 - 2.0 * (400.0 + (3.0 + gap) ** 2 - r * r))) / 2.0
+    cz = cx - gap
+    tx, tz = cx - r / math.sqrt(2.0), cz + r / math.sqrt(2.0)  # 壁の接点
+    triangle = abs((20.0 - 0.0) * (tz - 3.0) - (tx - 0.0) * (3.0 - 3.0)) / 2.0
+    chord = math.hypot(tx - 20.0, tz - 3.0)
+    angle = 2.0 * math.asin(chord / (2.0 * r))
+    exact = 30.0 * (triangle - r * r / 2.0 * (angle - math.sin(angle)))
+    added = rounded["volume_after"] - kernel.volume(shape)
+    assert added == pytest.approx(exact, rel=_ROLLED_REL)
+    assert BRepClass3d_SolidClassifier(rounded["shape"], gp_Pnt(22.1, 15.0, 25.0), 1e-7).State() == TopAbs_IN
+    rim_side = lambda surface: surface.GetType() == GeomAbs_Plane and abs(surface.Plane().Location().X() - 20.0) < 1e-9 \
+        and abs(abs(surface.Plane().Axis().Direction().X()) - 1.0) < 1e-9
+    assert _top_of_faces(rounded["shape"], rim_side) == pytest.approx(3.0, abs=1e-6), "床の側面が伸びた"
+
+
+def test_a_hole_narrower_than_the_sample_spacing_is_still_rolled_into():
+    """柱の根元の丸めの足が、半径 0.5 の小さな穴をかすめる(64 点の標本どうしの間に収まる)ときも、球は穴の縁に乗って
+    転がり、穴の壁は高くならない。標本だけを見ていたときは縁を越えない形として扱い、穴の壁が 0.02mm 伸びた
+    (Codex レビューの反例)。"""
+    theta = math.pi / 64
+    disc_and_post = _union(_cylinder(0.0, 0.0, 20.0, 3.0), _cylinder(0.0, 3.0, 5.0, 60.0))
+    hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(11 * math.cos(theta), 11 * math.sin(theta), -1), gp_Dir(0, 0, 1)), 0.5, 10.0).Shape()
+    shape = kernel.boolean_bodies(disc_and_post, [hole], "cut")["shape"]
+    root = _circle_edge(shape, 5.0, 3.0)
+
+    rounded = kernel.fillet_edges(shape, {root: 6.0})
+
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert _top_of_faces(rounded["shape"], _cylinder_of_radius(0.5)) == pytest.approx(3.0, abs=1e-6), "穴の壁が伸びた"
+
+
+_LYING_CYLINDER_CHILD = """
+from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+from duocad import kernel, query
+
+big = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, -15, 0), gp_Dir(0, 1, 0)), 20.0, 30.0).Shape()
+post = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 7, 10), gp_Dir(0, 0, 1)), 5.0, 40.0).Shape()
+shape = kernel.boolean_bodies(big, [post], "union")["shape"]
+root = [edge["index"] for edge in query.describe_edges(shape) if edge["kind"] == "other"][0]
+out = kernel.fillet_edges(shape, {root: 12.0})
+print(out["volume_after"] > kernel.volume(shape), BRepCheck_Analyzer(out["shape"]).IsValid())
+print("survived")
+"""
+
+
+def test_rounding_a_post_on_a_lying_cylinder_past_its_end_does_not_kill_the_process():
+    """横倒しの円柱(半径 20・長さ 30)に立つ柱の根元(交線が3本の辺に分かれる)を、円柱の端の縁を越える半径 12 で丸めても
+    プロセスが落ちない(辺ごとの管を1回の引き算にまとめて渡したときは、アクセス違反で落ちた。Codex レビューの反例。
+    別プロセスで試す)。"""
+    import subprocess
+    import sys
+
+    from duocad.paths import REPO_ROOT
+
+    done = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", _LYING_CYLINDER_CHILD],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
+    )
+    assert done.returncode == 0, (done.returncode, done.stderr[-800:])
+    assert done.stdout.splitlines() == ["True True", "survived"], done.stdout
