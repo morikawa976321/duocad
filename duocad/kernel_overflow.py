@@ -959,8 +959,6 @@ def _swept_balls(paths, radius: float, swell: float) -> list:
     balls.extend(BRepPrimAPI_MakeSphere(point, size).Shape() for point, size in distinct)
     if not balls:
         return pipes
-    if len(balls) > _MAX_BALLS:
-        raise Unsupported(f"the ball path bends too sharply in too many places ({len(balls)} balls)")
     # 球は先に球どうしで順に結合して1つの束にする(角から引く回数を減らす)。外部の罠: 球を1回のブーリアン(引数を全部
     # 渡す)で結合するのは、順に1つずつより遅く重かった(球 140 個で 3 秒 → 47 秒・3.7GB)。
     bundle = balls[0]
@@ -996,7 +994,7 @@ def _exact_tube(points: List[gp_Pnt], loop: bool, radius: float):
     center = last.Translated(offset.Crossed(normal).Divided(2.0 * normal.SquareMagnitude()))
     normal.Normalize()
     circle_radius = center.Distance(first)
-    if circle_radius < 1.05 * radius:
+    if circle_radius < _TIGHT_BEND * radius:
         return None  # 管が自分に折れ込む(紡錘形のトーラス)
     for point in points:
         if abs(center.Distance(point) - circle_radius) > tolerance or abs(gp_Vec(center, point).Dot(normal)) > tolerance:
@@ -1061,9 +1059,10 @@ def _interpolated(run: "_Run", periodic: bool):
 
 #: 道の曲がりを調べる点の数(曲線1本あたり)。
 _BEND_SAMPLES = 64
-#: 並べる球の数の上限。超える道はふつうの肉に戻る: 球の結合と引き算が数で重くなり、楕円柱(半軸 20・2)の根元を半径 10 で
-#: 丸めて両端に球 60 個を並べた形は、1回に 70 秒以上かかったうえ検査を通らなかった。
-_MAX_BALLS = 40
+#: 曲がりの半径が球の半径の何倍より小さければ球を並べるか。管が自分に折れ込むのは管の半径(球の 1 + 膨らませ方 倍)を
+#: 下回るときだけ。1.05 倍にしたときは、楕円柱(半軸 20・2)の両端(道の曲がりの半径が球の 1.02 倍)まで球を 60 個並べ、
+#: 1回の丸めに 147 秒かかった。
+_TIGHT_BEND = 1.01
 #: 曲がりのきつい道に球を並べる間隔(球の半径に対して)。並べた球の間のくぼみの深さは半径の 間隔²/8 ≈ 1e-3 倍。
 _CHAIN_SPACING = 0.09
 #: 並べる球の膨らませ方(半径に対して)。くぼみより浅く膨らませると、球が支える面に食い込む円どうしの間に隙間が残り、
@@ -1073,7 +1072,7 @@ _CHAIN_SWELL = _CHAIN_SPACING ** 2 / 4.0
 
 
 def _stretches(curve, radius: float) -> List[Tuple[float, float, bool]]:
-    """曲線を、曲がりの半径が球の半径の 1.05 倍より小さい範囲(きつい)とそれ以外に分けた `(始め, 終わり, きついか)`。
+    """曲線を、曲がりの半径が球の半径の `_TIGHT_BEND` 倍より小さい範囲(きつい)とそれ以外に分けた `(始め, 終わり, きついか)`。
     きつい範囲は、調べた点の間隔1つぶんずつ両側へ広げる(点と点の間で曲がりがきつくなっても管にしない)。"""
     props = GeomLProp_CLProps(curve, 2, 1.0e-9)
     first, last = curve.FirstParameter(), curve.LastParameter()
@@ -1082,7 +1081,7 @@ def _stretches(curve, radius: float) -> List[Tuple[float, float, bool]]:
     for param in params:
         props.SetParameter(param)
         curvature = props.Curvature()
-        sharp.append(curvature > 1.0e-12 and 1.0 / curvature < 1.05 * radius)
+        sharp.append(curvature > 1.0e-12 and 1.0 / curvature < _TIGHT_BEND * radius)
     tight = [sharp[i] or sharp[i + 1] for i in range(_BEND_SAMPLES)]
     tight = [any(tight[max(0, i - 1):i + 2]) for i in range(_BEND_SAMPLES)]
     stretches: List[Tuple[float, float, bool]] = []

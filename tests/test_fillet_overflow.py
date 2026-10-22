@@ -713,7 +713,7 @@ def test_rounding_a_post_on_a_lying_cylinder_past_its_end_does_not_kill_the_proc
 def test_a_hole_on_the_feet_track_of_an_elliptic_post_is_noticed():
     """楕円柱(半軸 20・2)の根元を半径 10 で丸めるとき、足の軌跡の上の小さな穴(半径 0.5)で球が縁に乗ることを見つける
     (足の軌跡の媒介変数を辺の媒介変数へ比例配分で戻したときは、足の進む速さが変わるので足した標本が穴の外に置かれ、
-    見落とした。Codex レビューの反例)。この形は楕円の両端で球を並べる数が多すぎて、丸めそのものはふつうの肉に戻る。"""
+    見落とした。Codex レビューの反例)。この形は楕円の両端の管を引いた結果が検査を通らず、丸めそのものはふつうの肉に戻る。"""
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire
     from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
