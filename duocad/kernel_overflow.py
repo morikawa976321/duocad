@@ -88,9 +88,14 @@ def absorb(shape: TopoDS_Shape, edge_map, radii: Dict[int, float]) -> Absorbed:
             radius_of[member] = float(radii[index])
     _refuse_corners(shape, edge_map, {chain for chain in chains.values()})
 
-    pieces = []
-    for first, second, radius, members in _face_pairs(edge_map, edge_faces, radius_of):
-        pieces.append(_material(shape, [edge_map.FindKey(i) for i in members], first, second, radius))
+    # 安い検査(凹凸・球が入るか)を全部の組で先に済ませる: 断る形で重い箱の分割まで進むと、断るだけで 5 秒かかった
+    # (PC ケースの部品で半径 12、球が入らない辺)。
+    groups = [
+        (_probe([edge_map.FindKey(i) for i in members], first, second, radius), [edge_map.FindKey(i) for i in members], first, second, radius)
+        for first, second, radius, members in _face_pairs(edge_map, edge_faces, radius_of)
+    ]
+    columns = _Columns(shape, edge_faces)
+    pieces = [_material(shape, probe, edges, first, second, radius, columns) for probe, edges, first, second, radius in groups]
 
     added = [material for material, concave in pieces if concave]
     removed = [material for material, concave in pieces if not concave]
@@ -207,8 +212,17 @@ def _coplanar_region(face: TopoDS_Shape, edge_faces) -> list:
     return region
 
 
-def _material(shape: TopoDS_Shape, edges: list, first: TopoDS_Shape, second: TopoDS_Shape, radius: float):
-    """2面の間の辺(群)を半径 `radius` で丸める肉と、それが凹(足す)か。"""
+class _Probe(NamedTuple):
+    """肉を作る前に1つの組について求める値(重い処理の前に断れるものはここで断る)。"""
+
+    point: gp_Pnt
+    normals: Tuple[gp_Vec, gp_Vec]
+    concave: bool
+    inside: gp_Pnt
+
+
+def _probe(edges: list, first: TopoDS_Shape, second: TopoDS_Shape, radius: float) -> _Probe:
+    """辺の中点・両側の外向き法線・凹凸・くさびの中の点を求め、球が曲面の内側に入らない半径を断る。"""
     edge = TopoDS.Edge_s(edges[0])
     curve = BRepAdaptor_Curve(edge)
     point = curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()))
@@ -220,6 +234,25 @@ def _material(shape: TopoDS_Shape, edges: list, first: TopoDS_Shape, second: Top
         concave = False
     else:
         raise Unsupported("the two faces meet tangentially")
+    inward = normals[0] + normals[1]
+    if inward.Magnitude() < 1.0e-9:
+        raise Unsupported("the two faces are folded onto each other")
+    inward.Normalize()
+    if not concave:
+        inward.Reverse()
+    inside = point.Translated(inward.Multiplied(1.0e-3 * radius))
+    for face in (first, second):
+        room = _room_inside(face, inside)
+        if room is not None and radius >= room:
+            raise Unsupported(f"radius {radius:g} does not fit inside a curved face of radius {room:g}")
+    return _Probe(point, normals, concave, inside)
+
+
+def _material(
+    shape: TopoDS_Shape, probe: _Probe, edges: list, first: TopoDS_Shape, second: TopoDS_Shape, radius: float, columns: "_Columns"
+):
+    """2面の間の辺(群)を半径 `radius` で丸める肉と、それが凹(足す)か。"""
+    point, normals, concave, inside = probe
 
     # くさびの側から球が触れる点までの距離は radius·tan(φ/2)(φ は外向き法線のなす角。`kernel_chains._fillet_reach`)。
     # 箱はそれより十分広くとる: 箱の壁で肉が切れると、柱の外に出た部分として捨てられずに残る。
@@ -244,17 +277,6 @@ def _material(shape: TopoDS_Shape, edges: list, first: TopoDS_Shape, second: Top
     splitter.Build()
     if not splitter.IsDone():
         raise Unsupported("could not split the box by the extended faces")
-    inward = normals[0] + normals[1]
-    if inward.Magnitude() < 1.0e-9:
-        raise Unsupported("the two faces are folded onto each other")
-    inward.Normalize()
-    if not concave:
-        inward.Reverse()
-    inside = point.Translated(inward.Multiplied(1.0e-3 * radius))
-    for face in (first, second):
-        room = _room_inside(face, inside)
-        if room is not None and radius >= room:
-            raise Unsupported(f"radius {radius:g} does not fit inside a curved face of radius {room:g}")
     wedge = _solid_containing(splitter.Shape(), inside)
     if wedge is None:
         raise Unsupported("no wedge next to the edge")
@@ -278,7 +300,7 @@ def _material(shape: TopoDS_Shape, edges: list, first: TopoDS_Shape, second: Top
         toward = normal if concave else normal.Reversed()
         room = _room_inside(face, point.Translated(toward.Multiplied(1.0e-3 * radius)))
         heights.append(margin if room is None else min(margin, 0.9 * room))
-    trimmed = _trim(shape, material, edges, (first, second), heights, concave)
+    trimmed = _trim(material, edges, (first, second), heights, concave, columns)
     _require_plausible(trimmed, edges, 1.5 * (reach + radius))
     return trimmed, concave
 
@@ -339,7 +361,7 @@ def _distance_to_axis(axis, point: gp_Pnt) -> float:
     return math.sqrt(max(0.0, offset.SquareMagnitude() - along * along))
 
 
-def _trim(shape, material, edges, faces, heights, concave: bool):
+def _trim(material, edges, faces, heights, concave: bool, columns: "_Columns"):
     """肉のうち、支える面(何かが立っている足元を塞いだもの)の柱の外にあり、辺の内側の点に触れない部分を捨てる。
 
     支える面の内側の輪のうち、別の形が立っている足元(凹の辺の輪)は塞ぐ: その上の肉は、和で本体に埋もれるか、
@@ -347,20 +369,42 @@ def _trim(shape, material, edges, faces, heights, concave: bool):
     切れる(全部の輪を塞いだときは、柱の脇の貫通穴の上に肉が残って穴を塞いだ。Codex レビューの反例)。
     足元を塞がず「本体に重なれば残す」で救っていたときは、辺の端の先へ伸びた肉が床の上の別の突起に少し重なっただけで
     丸ごと残り、外接箱を大きく越えた(同じく反例)。
+
+    面ごとの柱の外を別々に見る: 2面の柱の共通部分の外をまとめて見ると、傾いた壁の柱の境界が辺から斜めに出て残す
+    「辺に触れる薄い層」と、もう一方の面の崖の先へはみ出した肉が1つにつながり、崖の先まで残った(円板 r25 の上の
+    先細りの柱の根元を r=20 で丸めると、縁から 1.66mm はみ出した)。
     """
-    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
-    TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
-    first, second = (_region_column(face, edge_faces, height, concave) for face, height in zip(faces, heights))
-    columns = _boolean("common", first, second).Shape()
-    outside = _boolean("cut", material, columns).Shape()
     scale = max(_volume(material), 1.0e-12)
     dropped = []
-    for part in _solids(outside):
-        if _volume(part) > 1.0e-9 * scale and not _touches_inside_of(part, edges):
-            dropped.append(part)
+    for face, height in zip(faces, heights):
+        outside = _boolean("cut", material, columns.of(face, height, concave)).Shape()
+        for part in _solids(outside):
+            if _volume(part) > 1.0e-9 * scale and not _touches_inside_of(part, edges):
+                dropped.append(part)
     for part in dropped:
         material = _boolean("cut", material, part).Shape()
     return material
+
+
+class _Columns:
+    """1回の吸収の中で、支える面の柱を面・厚み・向きごとに1度だけ作って使い回す。
+
+    柱の多い板(柱 40 本の根元を一度に丸める)では、どの組も同じ板の上面の柱を作り直し、その上面は柱の数だけ足元の輪を
+    持つので、組の数の2乗で遅くなった(1本あたり 5 本で 0.29 秒、40 本で 0.62 秒)。
+    """
+
+    def __init__(self, shape: TopoDS_Shape, edge_faces) -> None:
+        self._faces = indexed_map(shape, TopAbs_FACE)
+        self._edge_faces = edge_faces
+        self._made: Dict[tuple, TopoDS_Shape] = {}
+
+    def of(self, face: TopoDS_Shape, height: float, concave: bool) -> TopoDS_Shape:
+        key = (self._faces.FindIndex(face), round(height, 9), concave)
+        if key[0] == 0:
+            return _region_column(face, self._edge_faces, height, concave)
+        if key not in self._made:
+            self._made[key] = _region_column(face, self._edge_faces, height, concave)
+        return self._made[key]
 
 
 def _region_column(face: TopoDS_Shape, edge_faces, height: float, concave: bool) -> TopoDS_Shape:
