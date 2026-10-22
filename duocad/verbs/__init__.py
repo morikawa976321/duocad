@@ -29,6 +29,7 @@ from .optimize_setup import (  # noqa: F401
     set_preserve_bodies,
 )
 from .pattern import pattern_circular, pattern_rectangular  # noqa: F401
+from .project_to_sketch import project_outline, project_to_sketch  # noqa: F401
 from .rename import rename  # noqa: F401
 from .revolve import revolve  # noqa: F401
 from .shell_body import shell_body  # noqa: F401
@@ -58,6 +59,8 @@ __all__ = [
     "set_preserve_bodies",
     "pattern_circular",
     "pattern_rectangular",
+    "project_outline",
+    "project_to_sketch",
     "rename",
     "revolve",
     "shell_body",

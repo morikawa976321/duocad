@@ -715,7 +715,10 @@ export function createViewport(container: HTMLElement): Viewport {
   function viewSignature(): string {
     camera.updateMatrixWorld()
     const { width, height } = size()
-    return [...camera.matrixWorld.elements, ...camera.projectionMatrix.elements, width, height].join(',')
+    // 丸めて比べる: スケッチモードでは `OrbitControls` が止まっていても行列を毎フレーム 1e-8 ほど揺らし続け、完全一致だと
+    // 矩形選択の集め直し(`App.svelte` の `pendingBox`)が毎回「視点が動いた」として捨てられる(`updateHover` と同じ罠)
+    const fixed = (values: number[]) => values.map((value) => value.toFixed(6))
+    return [...fixed(camera.matrixWorld.elements), ...fixed(camera.projectionMatrix.elements), width, height].join(',')
   }
 
   function projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null {
@@ -1258,6 +1261,15 @@ export function createViewport(container: HTMLElement): Viewport {
     if (next.size === pickKinds.size && [...next].every((kind) => pickKinds.has(kind))) return
     pickKinds = next
     pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
+  }
+
+  /** スケッチモード中に、編集中のスケッチの中身の代わりにソリッドの面・辺・頂点を指すか(`setSolidPickInSketch`)。 */
+  let solidPickInSketch = false
+
+  function setSolidPickInSketch(on: boolean): void {
+    if (on === solidPickInSketch) return
+    solidPickInSketch = on
+    pickChanged()
   }
 
   /** スケッチ平面上の (u,v) を3Dの点へ(コアの `kernel_sketch._to_pnt` と同じ規則)。 */
@@ -1841,7 +1853,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * (`setPickKinds` に `'region'`)だけ見えている全スケッチの領域。
    */
   function regionPickTargets(): THREE.Mesh[] {
-    if (activeSketchId !== null) return sketches.get(activeSketchId)?.regionMeshes ?? []
+    if (activeSketchId !== null) return solidPickInSketch ? [] : (sketches.get(activeSketchId)?.regionMeshes ?? [])
     if (!pickKinds.has('region')) return []
     const meshes: THREE.Mesh[] = []
     for (const target of sketches.values()) meshes.push(...target.regionMeshes)
@@ -2172,17 +2184,20 @@ export function createViewport(container: HTMLElement): Viewport {
     // 寸法はこの呼び出しの間不変なので1回だけ読んで使い回す(`projectRaw` 参照)
     const { width, height } = size()
 
-    if (activeSketchId === null) {
+    // 投影の起動中(`solidPickInSketch`)はスケッチモードでも通常の分岐でソリッドを集める(スケッチの図形は `pickKinds` が、
+    // 領域は `regionPickTargets` が外す)
+    if (activeSketchId === null || solidPickInSketch) {
       const keep = section.keepsFilter()
       camera.updateMatrixWorld()
-      const depth = occlusion.snapshot()
+      // スケッチモード中は編集中の平面(格子)も奥行きに書かれていてソリッドを覆うので、奥行きの読み出しを使わず視線で確かめる
+      const depth = solidPickInSketch ? null : occlusion.snapshot()
       // 断面の ON の間は、奥行きの読み出しで見えた点を視線でも確かめる(読み出しは切り口の蓋を描かず、蓋の奥の裏の面で
       // 遮る。蓋に隠れた中身を見えていると読む。視線の判定 `surfaceAlong` は蓋で遮る)
       const sectionOn = keep !== null
       const seen = (point: THREE.Vector3, deviation = 0): boolean => {
         const slack = occlusion.slack(point, height, deviation)
         if (depth !== null && !depth.visible(point, slack)) return false
-        return !sectionOn || occlusion.visible(point, slack)
+        return (!sectionOn && depth !== null) || occlusion.visible(point, slack)
       }
       // 立体の点は断面で切り落とした側なら見えていない(描かれていない。切り落とした側から見ると蓋より手前にあり、
       // 奥行きでも視線でも見えていると読む)。スケッチは断面で切らない
@@ -2446,7 +2461,10 @@ export function createViewport(container: HTMLElement): Viewport {
       sketchEntity: null,
     }
     // スケッチモード中は面を拾わない(線を引くつもりのクリックが選択の置き換えになる)。領域が手前・平面の点がその次。
-    if (activeSketchId !== null) {
+    // ソリッドだけを受けるコマンド(投影)の起動中だけは、スケッチの中身の代わりにソリッドを指す(下の通常モードの分岐から
+    // スケッチの図形・領域・基準平面を除いたもの)。
+    const solidOnly = activeSketchId !== null && solidPickInSketch
+    if (activeSketchId !== null && !solidOnly) {
       const region = regionAt(offsetX, offsetY)
       const plane = planePointAt(offsetX, offsetY)
       // 図形は領域より手前(点・辺は領域の縁に乗っており、領域が勝つと端点を掴めない)。`point` は常に一緒に返し、
@@ -2463,7 +2481,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 細かさを先に見るのは、点は線の端に、線は面の縁に必ず乗っていて、広いものを先に見ると細かいものが一生取れないため
     // (docs/VIEWPORT.md「固定の優先順位の下では…」)。docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」。
     const project = projector()
-    const sketchCandidates = sketchPickCandidates(offsetX, offsetY, project)
+    const sketchCandidates = solidOnly ? { points: [], lines: [] } : sketchPickCandidates(offsetX, offsetY, project)
     const points: Array<RankedCandidate<PickCandidate>> = [...sketchCandidates.points]
     if (pickKinds.has('vertex')) {
       for (const candidate of features.vertexCandidates(offsetX, offsetY, VERTEX_PIXELS, project, section.keepsFilter())) {
@@ -2501,6 +2519,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 断面の切り口(`ref: null`)も遮る。
     const surface = faceHitAt(offsetX, offsetY)
     if (surface !== null && surface.ref !== null && pickKinds.has('face')) return { ...nothing, hit: surface.ref }
+    if (solidOnly) return nothing
     for (const candidate of regionHitsAt(offsetX, offsetY)) {
       if (surface !== null && candidate.distance > surface.distance + occlusion.slack(candidate.point, project.height)) break
       return { ...nothing, region: candidate.region }
@@ -2639,7 +2658,7 @@ export function createViewport(container: HTMLElement): Viewport {
           `${camera.zoom}`
     if (probe === hoverProbe) return
     hoverProbe = probe
-    if (point !== null && activeSketchId === null) requestPickData(point.x, point.y)
+    if (point !== null && (activeSketchId === null || solidPickInSketch)) requestPickData(point.x, point.y)
     const next = point === null ? null : resolveHit(point.x, point.y)
     // スケッチモードでは図形と領域が一緒に返る: 図形が取れるときは領域を光らせない
     // (点・辺は領域より手前で拾われ、光らせると予告が嘘になる)。
@@ -2808,6 +2827,7 @@ export function createViewport(container: HTMLElement): Viewport {
     setOptimizeState,
     setOptimizeDebug: optimizeDebug.setState,
     setPickKinds,
+    setSolidPickInSketch,
     setBodyEdges(bodyId, edges) {
       if (features.setEdges(bodyId, edges as BodyEdges | null)) pickChanged()
     },
