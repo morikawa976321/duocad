@@ -305,7 +305,11 @@ def build(out: Path = OUT, only=None):
     plate = make_plate(out, pieces)
     (out / "manifest.json").write_text(json.dumps(dict(test_id=TEST_ID, pieces=[p.__dict__ for p in pieces], plate=plate),
                                                   ensure_ascii=False, indent=1), encoding="utf-8")
-    write_page(groups, out / "index.html", "ねじ試し刷りの結果", test_id=TEST_ID)
+    layout = layout_svg(out, pieces, plate["placed"])
+    (out / "layout.svg").write_text(layout, encoding="utf-8")
+    figure = ('<div class="intro"><p><b>配置図</b>(plate.stl を上から見た図。下が手前。部品は頭やナットの角の数で系列が、'
+              'ナットは上面の凹みの数で番号が分かる)</p>' + layout + '</div>')
+    write_page(groups, out / "index.html", "ねじ試し刷りの結果", intro=INTRO + figure, test_id=TEST_ID)
     if not only:
         predict(out)
     return pieces
@@ -384,6 +388,64 @@ def make_plate(out: Path, pieces, bed: float = 256.0, margin: float = 8.0, gap: 
         fh.write(np.uint32(len(T)).tobytes())
         fh.write(rec.tobytes())
     return dict(depth=float(y - gap), placed=placed)
+
+
+def layout_svg(out: Path, pieces, placed) -> str:
+    """plate.stl を上から見た配置図(下が手前 = スライサーの上面図と同じ向き)。部品の輪郭は STL の XY の凸包、
+    ボルト・ナット・ピンの中心に呼び径の円。色は CSS 変数(結果ページの明暗に合わせる)で、無ければ明るい既定色。"""
+    from scipy.spatial import ConvexHull
+
+    by_id = {p.id: p for p in pieces}
+    depth = max(q["y"] + q["h"] for q in placed) + 8.0
+    width = max(q["x"] + q["w"] for q in placed) + 8.0
+    legend_w = 92.0
+    W, H = width + legend_w, depth + 14.0
+    fy = lambda y: depth - y  # 下が手前
+    hue = {"A": "#d9e8fb", "B": "#dff3e4", "K": "#fbe3d9", "C": "#efe3fb", "D": "#dff3e4", "F": "#efe3fb", "G": "#eeeeee", "H": "#eeeeee"}
+    fg, muted = "var(--fg, #222)", "var(--muted, #666)"
+    s = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W:.1f} {H:.1f}" style="width:100%;max-width:{W * 6:.0f}px;'
+         f'font-family:system-ui,sans-serif" role="img" aria-label="plate.stl の配置図">',
+         f'<rect x="0" y="0" width="{width:.1f}" height="{depth:.1f}" rx="2" style="fill:var(--chip, #f4f4f6)"/>']
+    for q in placed:
+        p = by_id[q["id"]]
+        T = _read_stl(out / p.file)
+        pts = T.reshape(-1, 3)
+        xy = pts[:, :2] - pts.min(0)[:2] + np.array([q["x"], q["y"]])
+        hull = xy[ConvexHull(xy).vertices]
+        cx, cy = hull.mean(0)
+        poly = " ".join(f"{a:.2f},{fy(b):.2f}" for a, b in hull)
+        s.append(f'<polygon points="{poly}" style="fill:{hue.get(p.id[0], "#eee")};stroke:{fg};stroke-width:0.25"/>')
+        D = p.params.get("D")
+        if D and p.kind in ("bolt", "nut", "pin"):
+            s.append(f'<circle cx="{cx:.2f}" cy="{fy(cy):.2f}" r="{D / 2:.2f}" style="fill:{"#fff" if p.kind == "nut" else "none"};'
+                     f'stroke:{fg};stroke-width:0.2;stroke-dasharray:{"none" if p.kind == "nut" else "0.6 0.4"}"/>')
+        label = p.id if p.kind != "holes" else f"{p.id[0]} 穴の板(角を切った端が穴1・小)"
+        size = 2.2 if p.kind == "holes" else (2.6 if q["w"] >= 9 else 2.1)
+        s.append(f'<text x="{cx:.2f}" y="{fy(cy) + size * 0.35:.2f}" text-anchor="middle" style="font-size:{size}px;font-weight:700;fill:#111;'
+                 f'paint-order:stroke;stroke:#fff;stroke-width:0.6px">'
+                 f'{html.escape(label)}</text>')
+        if p.kind == "nut":
+            s.append(f'<text x="{cx:.2f}" y="{fy(q["y"]) + 2.6:.2f}" text-anchor="middle" style="font-size:1.9px;fill:{muted}">'
+                     f'隙間 {p.params["clearance"]:g}</text>')
+    s.append(f'<text x="{width / 2:.1f}" y="{depth + 5:.1f}" text-anchor="middle" style="font-size:3px;fill:{fg}">'
+             '▼ 手前(扉の側)。スライサーで上から見た図と同じ向き</text>')
+    lx, ly = width + 4, 6.0
+    s.append(f'<text x="{lx:.1f}" y="{ly:.1f}" style="font-size:3px;font-weight:700;fill:{fg}">列(手前から)</text>')
+    shape_ja = {4: "四角", 5: "五角", 6: "六角", 8: "八角"}
+    rows = [(sid, f"{sid}: {name}(頭とナットが{shape_ja[sides]})", "ナット1→" + str(len(cs)) + " の隙間 " + " / ".join(f"{c:g}" for c in sorted(cs, reverse=True)))
+            for sid, name, D, mk, mode, sides, cs in SERIES if any(q["id"].startswith(sid) for q in placed)]
+    rows += [("G", "G・H: ねじ無しのピンと穴の板(D6・D3)", "穴は直径 +0〜+0.6 を 0.1 刻み")]
+    for sid, a, b in rows:
+        ly += 6.5
+        s.append(f'<text x="{lx:.1f}" y="{ly:.1f}" style="font-size:2.4px;fill:{fg}">{html.escape(a)}</text>')
+        s.append(f'<text x="{lx + 2:.1f}" y="{ly + 2.9:.1f}" style="font-size:2.1px;fill:{muted}">{html.escape(b)}</text>')
+    ly += 9
+    for line in ("記号の数字 0 はボルト(G0・H0 はピン)。", "ナットの番号 = 上面の凹みの数(1 が最も緩い)。",
+                 "実線の白丸はナットの穴、点線はボルト・ピンの軸。"):
+        s.append(f'<text x="{lx:.1f}" y="{ly:.1f}" style="font-size:2.1px;fill:{muted}">{html.escape(line)}</text>')
+        ly += 3.4
+    s.append("</svg>")
+    return "".join(s)
 
 
 if __name__ == "__main__":
