@@ -1179,6 +1179,26 @@ def _distance_to_axis(axis, point: gp_Pnt) -> float:
 _TRIM_FUZZY = 1.0e-5
 
 
+#: 柱で切った「外」と「中」の体積の和が、肉の体積からずれてよい割合。実測(PC ケースの 188 面のボディ、辺 117 を半径 12):
+#: 正しい分割のずれは最大 1.5e-4(ファジー値 1e-5 を付けた 222 mm³ の肉)、ほかは 1.4e-5 以下。壊れた分割(ファジー値 0 で
+#: BRep 文字列を往復させた入力)は `common` が空になり、ずれが肉の 0.36〜0.74。1e-2 はその間に置いた値。
+_SPLIT_SLACK = 1.0e-2
+
+
+def _require_partition(whole: float, outside: TopoDS_Shape, inside: TopoDS_Shape) -> None:
+    """柱による分割が、肉を過不足なく「外」と「中」に分けているかを体積で確かめる。
+
+    外部の罠: 肉の面は本体の面と同じ平面・曲面に乗るので、柱で切る cut は重なりの判定が入力の最後の桁で変わり、
+    エラーを出さずに見当違いの「外」を返すことがある(辺の内側に触れる 1 ソリッドになり、捨てるべき肉が丸ごと残った。
+    issue #209)。cut と common は同じ入力から別々に計算するので、壊れた回は和が合わない。
+    """
+    error = whole - _volume(outside) - _volume(inside)
+    if abs(error) > _SPLIT_SLACK * whole:
+        raise Unsupported(
+            f"the trimming cut did not partition the rounding material ({error:+.4g} of {whole:.4g} mm3 unaccounted)"
+        )
+
+
 def _trim(material, edges, faces, heights, concave: bool, columns: "_Columns"):
     """肉のうち、支える面(何かが立っている足元を塞いだもの)の柱の外にあり、辺の内側の点に触れない部分を捨てる。
 
@@ -1195,7 +1215,9 @@ def _trim(material, edges, faces, heights, concave: bool, columns: "_Columns"):
     scale = max(_volume(material), 1.0e-12)
     dropped = []
     for face, height in zip(faces, heights):
-        outside = _boolean("cut", material, columns.of(face, height, concave), _TRIM_FUZZY).Shape()
+        column = columns.of(face, height, concave)
+        outside = _boolean("cut", material, column, _TRIM_FUZZY).Shape()
+        _require_partition(scale, outside, _boolean("common", material, column, _TRIM_FUZZY).Shape())
         for part in _solids(outside):
             if _volume(part) > 1.0e-9 * scale and not _touches_inside_of(part, edges):
                 dropped.append(part)
