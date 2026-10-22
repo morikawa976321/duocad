@@ -231,6 +231,13 @@
 - 対策は `kernel_extrude.loft_regions`(向き・始点・辺の数を自前で揃えて `CheckCompatibility(False)`、`bTestSI=True` の検査)。
   上の 90°・楕円・円の継ぎ目・L字 → 円のケースは全部、合同な配置で体積が一致する正常な形になる(`tests/test_loft.py`)。
 
+## 平面でのボディの分割（`BRepAlgoAPI_Splitter`、`kernel_split`、#193 2026-10-21）
+
+- **平面を道具にした `BRepAlgoAPI_Splitter` で一度に割る**。平面は境界箱の対角より大きい `BRepBuilderAPI_MakeFace(gp_Pln, -h, h, -h, h)` の面にする。結果は Solid の compound なので `kernel.split_solids` で塊に分け、**各塊の体積重心が平面のどちら側にあるかで正側・負側へ振る**(塊は必ず片側に収まる)。半空間 `BRepPrimAPI_MakeHalfSpace` との `Common` / `Cut` を2回やる案より、演算が1回で切り口の面が両側で共有される。箱・円柱(軸を通る/横切る/斜め)・球・トーラス・全辺を丸めた箱で、体積の合計は相対 1e-6 以内、各塊は `BRepCheck` を通った。1回 5〜50 ms(丸めた箱 47 ms)。
+- **平面が面に接しているだけ・ボディの外にあるときも `IsDone()` は真で、元の形そのままの Solid が1つ返る**(エラーにならない)。「交わらない」は自分で見る: 境界箱の中心から平面までの距離が、法線方向の箱の半幅を超えれば外・等しければ接している(1e-6 mm の余白)、それ以外でも**片側に塊が無ければ**(曲面が箱の角だけを掠める)断る。体積比 1e-9 以下の塊も断る(1e-7 mm 手前の平面は接触と同じ扱い、1e-4 mm 手前は体積 0.01 mm³ の薄板が通る)。
+- **由来は Splitter 自身の `Modified` / `IsDeleted` で取れる**(`kernel._target_successors` を元のボディ・Splitter で呼ぶ)。切り口の面は `new_faces`(どの元の面の後継でもない面)に入る。塊ごとに面の添字が別なので、`face_map` の値は塊ごとに作る。
+- **塊の並びは `TopExp.MapShapes_s` の走査順に頼らず、(側, 重心の x, y, z を小数6桁に丸めた値)で並べ直す**。引き継ぎ先(同体積のときは正側)と新しいボディへの ID・番号の割り当てがログの再生で同じになる条件。
+
 ## STEP ファイル
 
 - **Fusion 360 のジェネレーティブデザイン結果を STEP で出すと長さ単位が `SI_UNIT(.CENTI.,.METRE.)`(cm)**

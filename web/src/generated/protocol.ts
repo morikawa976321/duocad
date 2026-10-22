@@ -32,6 +32,7 @@ export const COMMAND_CATEGORY = {
   project_to_sketch: 'sketch',
   project_outline: 'sketch',
   mirror_body: 'feature',
+  split_body: 'feature',
   delete: 'feature',
   delete_items: 'feature',
   rename: 'feature',
@@ -123,6 +124,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   project_to_sketch: ['sketch_id'],
   project_outline: ['sketch_id'],
   mirror_body: ['base_plane', 'plane_face'],
+  split_body: ['base_plane', 'plane_face', 'sketch_id', 'keep'],
   delete: [],
   delete_items: ['bodies', 'sketches'],
   rename: ['target', 'name'],
@@ -212,6 +214,7 @@ export interface CommandArguments {
   project_to_sketch: { sketch_id: string }
   project_outline: { sketch_id: string }
   mirror_body: { base_plane?: string; plane_face?: object }
+  split_body: { base_plane?: string; plane_face?: object; sketch_id?: string | object; keep?: string }
   delete: Record<string, never>
   delete_items: { bodies?: unknown[]; sketches?: unknown[] }
   rename: { target: string; name: string }
@@ -312,6 +315,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'project_to_sketch'; created: string[]; sketch_ids: string[]; approximated: number })
   | (AppliedVerbBase & { verb: 'project_outline'; created: string[]; sketch_ids: string[]; approximated: number })
   | (AppliedVerbBase & { verb: 'mirror_body'; plane_point: number[]; plane_normal: number[]; created: string[]; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'split_body'; plane_point: number[]; plane_normal: number[]; keep: string; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'delete'; bodies: string[]; entities: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'delete_items'; bodies: string[]; sketches: string[] })
   | (AppliedVerbBase & { verb: 'rename'; target: string; kind: string; name: string })
