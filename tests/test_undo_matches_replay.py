@@ -13,7 +13,16 @@ from duocad import kernel
 from duocad.document import Document
 from duocad.oplog import OpLog, verb_handler
 from duocad.region import region_ref, regions
-from duocad.sketch import add_circle, add_line, add_rectangle, get_sketch, sketch_create
+from duocad.sketch import (
+    VERB_SKETCH_CREATE_OFFSET,
+    add_circle,
+    add_line,
+    add_rectangle,
+    base_plane,
+    get_sketch,
+    offset_plane,
+    sketch_create,
+)
 from duocad.verbs import (
     add_mesh_body,
     add_solid_body,
@@ -27,6 +36,7 @@ from duocad.verbs import (
     move_body,
     move_sketch_entities,
     revolve,
+    split_body,
 )
 from document_support import assert_matches_replay, box_shape, document_state, new_box, second_body
 
@@ -294,6 +304,11 @@ def _mirror_the_body(document: Document, base: str, tmp_path) -> None:
     mirror_body(document, [base], base_plane="YZ")
 
 
+def _split_the_body(document: Document, base: str, tmp_path) -> None:
+    middle = sketch_create(document, offset_plane(base_plane("XY"), 10.0), verb=VERB_SKETCH_CREATE_OFFSET)
+    split_body(document, [base], sketch_id=middle)
+
+
 def _copy_the_body(document: Document, base: str, tmp_path) -> None:
     move_body(document, [base], dx=50.0, dy=0.0, dz=0.0, copy=True)
 
@@ -317,6 +332,7 @@ BODY_ADDING_OPERATIONS = [
     _revolve_a_new_body,
     _loft_a_new_body,
     _mirror_the_body,
+    _split_the_body,
     _copy_the_body,
     _add_a_mesh_body,
     _add_a_solid_body,
