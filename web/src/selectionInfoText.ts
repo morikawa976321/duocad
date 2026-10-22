@@ -115,7 +115,11 @@ export function selectionInfoRows(item: MeasureItem): InfoRow[] {
         { label: '面積重心', value: uv(item.center_uv[0], item.center_uv[1]) },
       ]
     case 'sketch_entity':
-      if (item.position !== undefined) return [{ label: '座標', value: uv(item.position[0], item.position[1]) }]
+      if (item.position !== undefined)
+        return [
+          { label: '座標', value: uv(item.position[0], item.position[1]) },
+          ...(item.world !== undefined ? [{ label: '世界座標', value: xyz(item.world) }] : []),
+        ]
       return entityRows(item.entity_kind, item.params ?? {}, item.length)
   }
 }

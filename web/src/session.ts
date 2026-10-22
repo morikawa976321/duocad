@@ -473,10 +473,15 @@ export type MeasureItem =
       point: string | null
       /** 点を指したときだけ。 */
       position?: number[]
+      /** 点を指したときだけ(`position` の世界座標)。 */
+      world?: number[]
       /** 図形全体を指したときだけ(解決済みの素の数値)。 */
       params?: Record<string, number>
-      /** 線分の図形全体を指したときだけ。 */
+      /** 線分・楕円の図形全体を指したときだけ。 */
       length?: number
+      /** 線分の図形全体を指したときだけ(端点の世界座標)。 */
+      start?: number[]
+      end?: number[]
     }
 
 /** `inspect_selection` の返事(要求した接続にだけ届く)。`item` は選択がちょうど1項目のときだけ。 */

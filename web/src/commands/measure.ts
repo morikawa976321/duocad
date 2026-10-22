@@ -2,7 +2,7 @@
  * 測定(issue #10)—— verb ではない唯一のコマンド。文書もログも変えない。
  * 対象は共有選択集合から**ちょうど2つ**取るので Enter は要らない。送るのは `{cmd:'measure'}` だけ(対象はコアの選択)で、
  * 応答は状態配信ではなく `{type:'measure', client_op, between, ...}`(`App.svelte` の `handleMeasure`)。
- * 起動中は面・辺・頂点を全ボディで指せる(`App.svelte` の `pickKinds`)。
+ * 起動中は面・辺・頂点を全ボディで、点・線・領域を見えている全スケッチで指せる(`App.svelte` の `pickKinds`)。
  */
 import type { SelectionRef } from '../session'
 import type { CommandDef } from './command'
@@ -18,7 +18,7 @@ export const MEASURE: CommandDef<'measure'> = {
       name: 'targets',
       label: '測る対象',
       shapeKind: 'vertex',
-      kinds: ['vertex', 'edge', 'face'],
+      kinds: ['vertex', 'edge', 'face', 'sketch_entity', 'region'],
       min: 2,
       max: 2,
       pickVertices: true,
@@ -26,7 +26,7 @@ export const MEASURE: CommandDef<'measure'> = {
   ],
   build(values) {
     const targets = (values.targets ?? []) as SelectionRef[]
-    if (targets.length < 2) return { ok: false, reason: '測る対象(頂点・直線の辺・平らな面)を2つ選ぶ' }
+    if (targets.length < 2) return { ok: false, reason: '測る対象(頂点・直線の辺・平らな面・スケッチの点・線分・領域)を2つ選ぶ' }
     return { ok: true, args: {} }
   },
 }
