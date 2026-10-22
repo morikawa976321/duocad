@@ -53,7 +53,7 @@ from OCP.TopTools import (
 )
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
-from . import kernel_chains, kernel_meshing, kernel_overflow, meshbody
+from . import kernel_chains, kernel_meshing, kernel_overflow, kernel_tight, meshbody
 from .mesh_geometry import compound, indexed_map, subshapes
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
@@ -1556,6 +1556,12 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         else:
             if not _blend_reaches_other_faces(maker, shape):
                 return native
+    if native is None:
+        # 辺の曲率半径を超える半径の、上面を囲む輪(issue #207)。引き受けない形ならはみ出しの吸収へ進む
+        try:
+            return _tight_fillet(shape, edge_map, radii, edge_indices, volume_before)
+        except kernel_overflow.Unsupported:
+            pass
     try:
         return _absorbed_fillet(shape, edge_map, radii, edge_indices, volume_before)
     except ValueError as reason:
@@ -1754,6 +1760,47 @@ def _absorbed_fillet(
                 modified = _shape_list(builder, "Modified", face)
                 following.extend(modified or ([] if _is_removed(builder, face) else [face]))
             current = following
+        successors[str(index)] = _positions_in(
+            final_map, (survivor for face in current for survivor in _through_history(history, face))
+        )
+    return {
+        "shape": final,
+        "provenance": {"verb": "fillet", "edges": list(edge_indices), **_face_map_projection(successors, final_map.Extent())},
+        "volume_before": float(volume_before),
+        "volume_after": float(volume(final)),
+    }
+
+
+def _tight_fillet(
+    shape: "TopoDS_Shape", edge_map: Any, radii: dict, edge_indices: List[int], volume_before: float
+) -> dict:
+    """`kernel_tight.round_tight_loop`(辺の曲率半径を超える半径。issue #207)の形を検査し、由来をたどって `_blend_edges` の
+    戻り値の形にする。上面の後継は丸めた後の上面、それ以外の面は本体を深さ R で切る引き算と冠との結合をたどる。"""
+    tight = kernel_tight.round_tight_loop(shape, edge_map, radii)
+    context = f"edges {edge_indices}, rounding past the edge curvature"
+    volume_after = _checked_volume(tight.shape, "fillet", volume_before=volume_before, context=context)
+    if volume_after >= volume_before:
+        raise ValueError(f"fillet moved the volume the wrong way ({volume_before} -> {volume_after}, {context})")
+    if len(split_solids(tight.shape)) != len(split_solids(shape)):
+        raise ValueError(f"fillet changed the number of solids ({context})")
+    _require_valid(tight.shape, "fillet", context)
+    final, history, _ = _unify_same_domain(tight.shape, volume_after)
+    _require_valid(final, "fillet", context)
+
+    def through(builder: Any, face: "TopoDS_Shape") -> List["TopoDS_Shape"]:
+        modified = _shape_list(builder, "Modified", face)
+        return modified or ([] if _is_removed(builder, face) else [face])
+
+    final_map = _face_map(final)
+    shape_map = _face_map(shape)
+    below, joined = tight.builders
+    successors: dict = {}
+    for index in range(1, shape_map.Extent() + 1):
+        face = shape_map.FindKey(index)
+        if face.IsSame(tight.top):
+            current = [tight.lens]
+        else:
+            current = [after for before in through(below, face) for after in through(joined, before)]
         successors[str(index)] = _positions_in(
             final_map, (survivor for face in current for survivor in _through_history(history, face))
         )
