@@ -13,7 +13,6 @@
 | [LOCAL_LLM_QWEN38.md](LOCAL_LLM_QWEN38.md) | Qwen3.8-27B を dGPU 無しのラップトップで動かしたアプリ内 AI の実測（思考の設定・依頼文・失敗の型・ばらつき対策・スロット保存が効かない理由・測定の運用） |
 | [UI.md](UI.md) | 画面と操作の判断（方針・パネル配置・コマンド層・スケッチ入力・見た目） |
 | [VIEWPORT.md](VIEWPORT.md) | 3D ビューポート（深度の規約・カメラ・ピック・グリッド・可変解像度と面カリング・ビューキューブ・断面） |
-| [PICK_EVERYTHING.md](PICK_EVERYTHING.md) | 「見えるものはすべてさわれる」の実装方針（未実装）: ピックの3段・遮蔽・描画・辺のデータ・選択の規則・段の切り方 |
 | [PERFORMANCE.md](PERFORMANCE.md) | 基本操作の速さ（1 操作の経路・サーバ単体とブラウザの実測・読み取れること）。物差しは `tools/bench_server_ops.py` と `web/scripts/bench-basic-ops.mjs`。方針は GitHub の `performance` ラベルの Issue |
 | [STATUS.md](STATUS.md) / [decisions.md](decisions.md) | autopilot（本人の時間を奪わずに進める作業）の現在地と判断の記録。再開するときに読む |
 | [SMOKE_TESTING.md](SMOKE_TESTING.md) | 実機検査（puppeteer）の書き方: 座標・待機・選択・fixture・環境 |
@@ -40,7 +39,9 @@
 | [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) | 最適化の途中記録（毎回自動で作る診断記録の中身） |
 | [THREAD.md](THREAD.md) | ねじ verb の設計（3Dプリント前提・未実装）: 範囲・3Dプリント前提の4つの決め・引数・形の作り方の実測（螺旋の歯の和が壊れる・面から直接組む）・門と検査。試作は `tools/thread_prototype.py` |
 | [FACE_EDIT.md](FACE_EDIT.md) | 面の削除(#190)と面のオフセット(#183)の方式の決定(未実装): Defeaturing・面ごとの MakeOffset・自前の組み直し・丸め追従の比較と実測(合成・実物 STEP・規模・GIL・BinTools)、関門、相談役の意見、本人判断カード、実装計画。試作は `tools/face_edit_probe/` |
+| [INTERFERENCE.md](INTERFERENCE.md) | 干渉チェック（Issue #186、未実装）の方式: 定義と許容差（重なり・微小重なり・接触・隙間）・方式の比較（General Fuse の像の共有を2体ずつ）・実測（PC ケース・ねじ山・メッシュ混在・ボディ数）・相談役の意見・本人判断カード・実装計画。試作は `tools/interference_probe/` |
 | [ELLIPSE.md](ELLIPSE.md) | 楕円 verb（`add_ellipse`）と円の直径化: 本人の決定・`gp_Elips` の長短の罠・保存形式 version 3 と移行・吸着と交点の作り |
+| [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md) | フィレットのはみ出しと貫通の吸収(Fusion 360 相当): 肉を別に作って足し引きする作り方・OCCT の結果から切り替える条件・実測・捨てた案・曲率半径を超える半径(#207)の作り方 |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
 | [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md) | 穴口の微細隙間とメッシュ欠損の因果調査（境界交差・最小再現・OCCT内部検査）と、案A（境界交差の検出・共有辺再分割）の設計・実装・実測 |
 

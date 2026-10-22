@@ -295,8 +295,8 @@ def test_every_sketch_verb_is_reachable_and_returns_its_id(empty_session: Sessio
     ]
 
 
-def test_both_patterns_are_reachable_and_return_their_id(empty_session: Session):
-    """反復2verb(矩形・円形)も1回ずつ成功し `pattern_id` が返る。1つの図形を2つの反復で使い回せない(コアが ValueError)ので図形を2つ作る。"""
+def test_both_patterns_are_reachable_and_return_the_created_entities(empty_session: Session):
+    """反復2verb(矩形・円形)も1回ずつ成功し、作った複製の図形IDの並び `created` が返る。"""
     server = McpServer(DocumentTools(empty_session))
     sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
     first = call(server, "add_circle", {"sketch_id": sketch_id, "center": [10, 0], "diameter": 4})[
@@ -319,11 +319,10 @@ def test_both_patterns_are_reachable_and_return_their_id(empty_session: Session)
 
     _assert_verb_envelope(rectangular, "pattern_rectangular")
     _assert_verb_envelope(circular, "pattern_circular")
-    assert isinstance(rectangular["pattern_id"], str) and rectangular["pattern_id"]
-    assert isinstance(circular["pattern_id"], str) and circular["pattern_id"]
-    assert [pattern.id for pattern in empty_session.document.sketches[0].patterns] == [
-        rectangular["pattern_id"],
-        circular["pattern_id"],
+    assert len(rectangular["created"]) == 1
+    assert len(circular["created"]) == 3
+    assert [entity.id for entity in empty_session.document.sketches[0].entities] == [
+        first, second, *rectangular["created"], *circular["created"]
     ]
 
 

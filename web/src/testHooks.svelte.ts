@@ -6,6 +6,7 @@
 import type { PickTarget, Point2 } from './commands/command'
 import type { Applied, BasePlaneName, ConnectionStatus, EdgesPayload, ServerState, SketchState } from './session'
 import type { Viewport } from './viewport'
+import type { PickKind } from './viewportTypes'
 
 export interface TestHookContext {
   viewport: () => Viewport | null
@@ -24,9 +25,9 @@ export interface TestHookContext {
   sketchId: () => string | null
   hoverPoint: () => Point2 | null
   wantsBasePlanes: () => boolean
+  /** スケッチモードの外で今指せる種類(`App.svelte` の `pickKinds`)。 */
+  pickKinds: () => readonly PickKind[]
   edges: () => Record<string, EdgesPayload>
-  edgeTargetBody: () => string | null
-  wantsEdges: () => boolean
   wantedPick: () => PickTarget | null
   selectedEntities: () => string[]
 }
@@ -35,7 +36,7 @@ export function installTestHooks(ctx: TestHookContext): void {
   $effect(() => {
     const viewport = ctx.viewport
     const model = ctx.model()
-    const edgeTargetBody = ctx.edgeTargetBody()
+    const edges = ctx.edges()
     ;(window as unknown as Record<string, unknown>).__duocad = {
       ready: ctx.status() === 'open' && model !== null,
       state: model,
@@ -86,11 +87,14 @@ export function installTestHooks(ctx: TestHookContext): void {
         const target = targetSketchId ?? ctx.sketchId()
         return target === null ? null : (viewport()?.projectRegion(target, index) ?? null)
       },
-      edges: edgeTargetBody === null ? null : (ctx.edges()[edgeTargetBody] ?? null),
-      wantsEdges: ctx.wantsEdges(),
+      // スケッチモードの外で今指せる種類(`'face' | 'edge' | 'vertex' | 'region' | 'sketchPoint' | 'sketchLine'`)。
+      pickKinds: [...ctx.pickKinds()],
+      // 取り寄せた辺(ボディの ID → 折れ線。カーソルの近くのボディから届く)。
+      edges,
       // 直接ピックの待ち受け(回転軸・回転中心)。
       wantedPick: ctx.wantedPick(),
       selectedEntities: ctx.selectedEntities(),
+      // 実際にその画素でその辺が取れるときだけ座標を返す(辺がまだ届いていなければ null)。
       projectEdge: (bodyId: string, edgeIndex: number) =>
         viewport()?.projectEdge(bodyId, edgeIndex) ?? null,
       // 画面が知っているその辺の連なり(フィレット・面取りの間だけ。届いていなければ null)。

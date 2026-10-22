@@ -30,6 +30,8 @@ export interface SelectionBand {
   /** 引いていなければ、離したときの扱いはクリック。 */
   active(): boolean
   polylineWorldInside(worldPoints: readonly THREE.Vector3[], rect: BandRect, width: number, height: number): boolean
+  /** 画素が矩形の中か(縁を含む)。 */
+  pointInside(point: { x: number; y: number }, rect: BandRect): boolean
   /** そのオブジェクトの全頂点が矩形の中か(`keep` が偽の頂点は数えない。残る頂点が無ければ false)。 */
   objectInside(
     object: THREE.Object3D & { geometry: THREE.BufferGeometry },
@@ -172,6 +174,7 @@ export function createSelectionBand(deps: SelectionBandDeps): SelectionBand {
     hide,
     active: () => boxActive,
     polylineWorldInside,
+    pointInside: (point, box) => inside(box, point),
     objectInside,
     positionsInside,
     dispose() {

@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import math
+from uuid import uuid4
 
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, kernel_sketch, query
 from duocad.document import Body, Document
-from duocad.oplog import OpLog
+from duocad.oplog import OpLog, verb_handler
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
 from duocad.verbs import extrude
@@ -63,6 +64,32 @@ def replay_through_json(document: Document, into: Document | None = None) -> Doc
     return restored
 
 
+def document_state(doc: Document) -> dict:
+    """undo 直後の文書と、同じログを再生した文書を `==` で比べるための写し。
+    active ボディ・ボディの並び・名前つきの値の表・図形と反復の `params`(名前つきの値への参照のまま)。"""
+    active = doc.active_body()
+    return {
+        "active": None if active is None else active.id,
+        "bodies": [(body.id, body.name) for body in doc.bodies],
+        "parameters": dict(doc.parameters),
+        "sketches": [
+            (
+                sketch.id,
+                sketch.name,
+                [(entity.id, entity.kind, dict(entity.params)) for entity in sketch.entities],
+                [(pattern.id, dict(pattern.params)) for pattern in sketch.patterns],
+            )
+            for sketch in doc.sketches
+        ],
+    }
+
+
+def assert_matches_replay(doc: Document, into: Document | None = None) -> None:
+    """生きている文書の状態が、同じ操作ログを JSON へ往復させて頭から再生した文書の状態と(座標は bit 単位で)一致する。
+    undo は「その操作が無かった文書」へ戻すので、undo の直後に呼ぶ。"""
+    assert document_state(doc) == document_state(replay_through_json(doc, into))
+
+
 def kinds_of(doc: Document, body_id: str) -> dict:
     """面の種別ごとの枚数(0枚の種別は落とす)。"""
     described = query.describe_shape(doc.get_body(body_id).shape)
@@ -105,3 +132,15 @@ def hole_axes(shape) -> list:
 def corner_set(params: dict) -> list:
     """長方形の4隅を順序に依らない集合として比べられる形へ。"""
     return sorted((round(u, 9), round(v, 9)) for u, v in kernel_sketch.rectangle_corners(params))
+
+
+def install_live_pattern(document: Document, verb: str, sketch_id: str, entities: list, **values) -> str:
+    """反復を旧形式(スケッチに `Pattern` を置き、描くたびに展開する)で入れ、PatternId を返す。今の verb はこの形を
+    作らないので、保存済みの古い文書に残る形を確かめる検査だけが使う。行は保存ログの旧形式と同じ
+    (矩形は `dx, dy, nx, ny`、円形は `center, count, total_angle, rotate_copies`)。"""
+    pattern_id = f"pattern-{uuid4().hex[:12]}"
+    operation = document.log.append(
+        verb, {"sketch_id": sketch_id, "pattern_id": pattern_id, "entities": list(entities), **values}
+    )
+    verb_handler(verb).do(document, operation)
+    return pattern_id

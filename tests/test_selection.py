@@ -431,3 +431,111 @@ def test_a_failing_listener_does_not_undo_the_selection(session: Session):
 
     assert session.get_selection()["count"] == 1
     assert any("配信に失敗" in warning for warning in session.warnings)
+
+
+# ---------------------------------------------------------------- 隠したものを選択から外す・参照の形
+def test_a_hidden_body_that_is_still_selected_can_be_replaced_by_a_new_pick(two_bodies: Document):
+    """落ちたら、選択に残った隠したボディの項目が `remove` を丸ごと拒否させ、画面の「いまの選択を外して新しく選ぶ」が失敗する。"""
+    selection.set_selection(two_bodies, refs=[selection.select_face(two_bodies, "a", 1)])
+    set_visible(two_bodies, "a", False)
+    assert selection.get_selection(two_bodies).items, "可視性の切替で選択は飛ばない(前提)"
+
+    result = selection.modify_selection(
+        two_bodies,
+        add=[selection.select_face(two_bodies, "b", 1)],
+        remove=[{"body": "a", "kind": "face", "index": 1, "provenance": None}],
+    )
+
+    assert [(item["body"], item["index"]) for item in result.items] == [("b", 1)]
+    with pytest.raises(ValueError, match="hidden"):
+        selection.modify_selection(two_bodies, add=[{"body": "a", "kind": "face", "index": 2}])
+
+
+def test_a_hidden_sketch_entity_that_is_still_selected_can_be_removed(sketch_doc):
+    """落ちたら、隠したスケッチの図形が選択に残ると外せない(ボディ側と同じ門が掛かっている)。"""
+    document, sketch_id = sketch_doc
+    ref = {"sketch": sketch_id, "entity": document.sketches[0].entities[0].id, "point": None}
+    selection.modify_selection(document, add=[ref])
+    selection.set_sketch_visible(document, sketch_id, False)
+
+    with pytest.raises(ValueError, match="hidden"):
+        selection.modify_selection(document, add=[ref, dict(ref, point="cx")])
+    selection.modify_selection(document, remove=[dict(ref)])
+
+    assert selection.get_selection(document).items == []
+
+
+def test_toggling_a_selected_ref_of_a_hidden_body_removes_it_but_a_hidden_one_cannot_be_added(two_bodies: Document):
+    """落ちたら、隠したボディの選択済みの面を toggle で外せない。逆に、隠したボディの面を toggle で足せてしまう。"""
+    selection.set_selection(
+        two_bodies, refs=[selection.select_face(two_bodies, "a", 1), selection.select_face(two_bodies, "b", 1)]
+    )
+    set_visible(two_bodies, "a", False)
+
+    selection.toggle_selection(two_bodies, [{"body": "a", "kind": "face", "index": 1}])
+    assert [(item["body"], item["index"]) for item in selection.get_selection(two_bodies).items] == [("b", 1)]
+
+    with pytest.raises(ValueError, match="hidden"):
+        selection.toggle_selection(two_bodies, [{"body": "a", "kind": "face", "index": 2}])
+    assert [(item["body"], item["index"]) for item in selection.get_selection(two_bodies).items] == [("b", 1)]
+
+
+def test_toggling_the_same_ref_twice_changes_nothing_and_keeps_the_order(doc: Document):
+    """落ちたら、入っている参照を2回 toggle すると末尾へ動く(`fillet` の辺リストと半径リストの対応がずれる)。"""
+
+    def edge(index: int) -> dict:
+        return selection.select_edge(doc, "box", index)
+
+    def indexes() -> list:
+        return [item["index"] for item in selection.get_selection(doc).items]
+
+    selection.set_selection(doc, refs=[edge(1), edge(2), edge(3)])
+    selection.toggle_selection(doc, [edge(1), edge(1)])
+    assert indexes() == [1, 2, 3]
+    selection.toggle_selection(doc, [edge(4), edge(4)])
+    assert indexes() == [1, 2, 3]
+    selection.toggle_selection(doc, [edge(2), edge(2), edge(2)])
+    assert indexes() == [1, 3], "奇数回は1回として外れる"
+
+
+def test_set_selection_keeps_only_the_first_of_duplicate_refs(doc: Document):
+    """落ちたら、同じ参照を複数渡すと件数が水増しされる(`measure` の合計が二重になり、`toggle` が1回で両方外す)。"""
+    first = selection.select_edge(doc, "box", 2)
+    result = selection.set_selection(
+        doc,
+        refs=[first, selection.select_edge(doc, "box", 1), dict(first), {"body": "box", "kind": "edge", "index": "1"}],
+    )
+
+    assert [item["index"] for item in result.items] == [2, 1]
+
+
+@pytest.mark.parametrize("index", [None, [1], True, 2.9, float("inf"), float("nan"), "x", {"a": 1}])
+def test_a_ref_index_that_is_not_an_integer_is_a_value_error_and_leaves_the_selection(doc: Document, index):
+    """落ちたら、`null`・配列は TypeError、`inf` は OverflowError(MCP では internal)で落ち、`2.9`・`true` は別の面を選ぶ。"""
+    keep = selection.select_edge(doc, "box", 1)
+    selection.set_selection(doc, refs=[keep])
+    bad = {"body": "box", "kind": "edge", "index": index}
+
+    for call in (
+        lambda: selection.set_selection(doc, refs=[bad]),
+        lambda: selection.modify_selection(doc, add=[bad]),
+        lambda: selection.modify_selection(doc, remove=[bad]),
+        lambda: selection.toggle_selection(doc, [bad]),
+    ):
+        with pytest.raises(ValueError):
+            call()
+    assert [item["index"] for item in selection.get_selection(doc).items] == [1]
+
+
+def test_an_integral_float_and_a_numeric_string_are_still_accepted_as_an_index(doc: Document):
+    result = selection.set_selection(
+        doc, refs=[{"body": "box", "kind": "edge", "index": 3.0}, {"body": "box", "kind": "edge", "index": "2"}]
+    )
+    assert [item["index"] for item in result.items] == [3, 2]
+
+
+def test_a_body_name_that_is_not_a_string_is_a_value_error(doc: Document):
+    """落ちたら、ボディ名が配列の参照が TypeError(unhashable)や KeyError で落ち、種別ごとに例外の型が揃わない。"""
+    for kind in ("face", "body"):
+        with pytest.raises(ValueError):
+            selection.modify_selection(doc, add=[{"body": ["box"], "kind": kind, "index": 1}])

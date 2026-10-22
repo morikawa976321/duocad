@@ -32,6 +32,8 @@ Ctrl+Z / Ctrl+Y では戻らず保存もされない(開き直すと全ボディ
 from __future__ import annotations
 
 import json
+import math
+import numbers
 from dataclasses import dataclass, field
 from typing import Iterable, List, NoReturn, Optional, Sequence
 
@@ -146,12 +148,14 @@ def set_selection(
     **落ちたときは選択を変更しない**。参照の形が不正なら ValueError、存在しないBodyなら KeyError、不正な述語は
     ValueError(MCPがAIへ返す説明を作るため)。**一致0件はエラーではなく、置き換えは起きる**
     (外した述語の後に古い候補が残ると、別の集合にverbがかかる)。
+    `refs` に同じ参照が複数あれば先頭の1件だけを残す(`modify_selection` の `add` と同じ規則。残さないと件数が水増しされ、
+    `measure` の合計が二重に数えられ、`toggle_selection` が1回で両方外す)。
     """
     if (refs is None) == (predicate is None):
         raise ValueError("set_selection needs exactly one of refs or predicate")
 
     if refs is not None:
-        items = _coerce_refs(doc, refs)
+        items = _unique_refs(_coerce_refs(doc, refs))
     else:
         from . import predicates
 
@@ -172,6 +176,8 @@ def modify_selection(
     - 同じ参照を2回 `add` しても重複しない(等価判定は `body`/`kind`/`index`、領域は `sketch`/`index`。`provenance` は見ない)。
     - 選択に無い参照の `remove` は空振りでよい。`add` と `remove` に同じ参照があれば **remove が勝つ**。
     - **既に入っている参照を再度 add しても位置は動かさない**(`fillet` の辺リストと半径リストの対応がずれる)。
+    - **`remove` は隠したボディ/スケッチを指す参照も外せる**(`add` は隠したものを指せないが、可視性の切替は選択を飛ばさないので、
+      隠した後も選択に残っている。外せないと、画面の「いまの選択を外して新しく選ぶ」が丸ごと拒否される)。
 
     重複は `ref_key` の集合引きで落とす(総当たりだと画面全体のドラッグ(実測2835面)で約0.8秒)。
     不正な参照は落ちて、選択を変更しない。
@@ -182,7 +188,7 @@ def modify_selection(
     bodies: dict = {}
     counts: dict = {}
     coerced_add = _coerce_refs(doc, add_list, bodies=bodies, counts=counts)
-    coerced_remove = _coerce_refs(doc, remove_list, bodies=bodies, counts=counts)
+    coerced_remove = _coerce_refs(doc, remove_list, bodies=bodies, counts=counts, allow_hidden=True)
 
     selection = get_selection(doc)
     items = list(selection.items)
@@ -204,18 +210,69 @@ def modify_selection(
 def toggle_selection(doc: Document, refs: Iterable[dict]) -> Selection:
     """参照ごとに、選択にあれば外し無ければ足す。UIの素のクリックと同じ操作。
 
-    - 同じ参照が `refs` に2回あれば足してから外すので結果は変わらない。並びの規則・失敗の契約は `modify_selection` と同じ。
+    - 同じ参照が `refs` に偶数回あれば打ち消し合い、選択は変わらない(入っている参照の位置も動かさない)。奇数回なら1回として扱う。
+    - 足す側(選択に無い参照)は `modify_selection` の `add` と同じ門を通る。外す側(選択に入っている参照)は通さない
+      (隠したボディの面も外せる)。並びの規則・失敗の契約は `modify_selection` と同じ。
     """
-    ref_list = _coerce_refs(doc, list(refs))
-    items = list(get_selection(doc).items)
+    ref_list = list(refs)
+    for ref in ref_list:
+        _check_form(ref)
+    # 選択の中を鍵で引くのは正規化(`_coerce_refs`)より前なので、点の図形の2つの書き方をここで揃える
+    ref_list = [_as_point_of_point_entity(doc, ref) for ref in ref_list]
+    selection = get_selection(doc)
+    items = list(selection.items)
+    present = {ref_key(item) for item in items}
+    first: dict = {}
+    odd: dict = {}
     for ref in ref_list:
         key = ref_key(ref)
-        if any(ref_key(existing) == key for existing in items):
-            items = [existing for existing in items if ref_key(existing) != key]
-        else:
-            items.append(ref)
-    get_selection(doc).items = items
-    return get_selection(doc)
+        first.setdefault(key, ref)
+        odd[key] = not odd.get(key, False)
+    absent = [key for key in first if key not in present]
+    coerced = dict(zip(absent, _coerce_refs(doc, [first[key] for key in absent])))
+    dropped = {key for key in first if odd[key] and key in present}
+    items = [item for item in items if ref_key(item) not in dropped]
+    items.extend(coerced[key] for key in absent if odd[key])
+    selection.items = items
+    return selection
+
+
+def _as_point_of_point_entity(doc: Document, ref: dict) -> dict:
+    """点の図形を `point` 無しで指す参照を `point: "cx"` の形にする(`select_sketch_entity` と同じ正規化)。
+    スケッチ・図形が無ければそのまま返す(存在の検査は後の門が持つ)。"""
+    if "sketch" not in ref or "entity" not in ref or ref.get("point") is not None:
+        return ref
+    from .sketch import get_entity, get_sketch
+
+    try:
+        kind = get_entity(get_sketch(doc, ref["sketch"]), ref["entity"]).kind
+    except KeyError:
+        return ref
+    return {**ref, "point": "cx"} if kind == "point" else ref
+
+
+def remove_items(doc: Document, items: Iterable[dict]) -> Selection:
+    """選択から `items` と同じ参照を外す。**検査は掛けない**(`modify_selection(remove=...)` と違い、存在・範囲・可視性を見ない)。
+
+    選択に既に入っている項目を内部の事情で外すときの口(`Session` のモード切替が、行き先で使えない項目を外す)。
+    隠したボディ/スケッチを指す項目も外せる。
+    """
+    dropped = {ref_key(item) for item in items}
+    selection = get_selection(doc)
+    selection.items = [item for item in selection.items if ref_key(item) not in dropped]
+    return selection
+
+
+def _unique_refs(refs: Iterable[dict]) -> List[dict]:
+    """同じ参照(`ref_key` が等しい)は先頭の1件だけを残す。並びは保つ。"""
+    seen: set = set()
+    out: List[dict] = []
+    for ref in refs:
+        key = ref_key(ref)
+        if key not in seen:
+            seen.add(key)
+            out.append(ref)
+    return out
 
 
 def clear_selection(doc: Document) -> Selection:
@@ -557,10 +614,10 @@ def select_vertex(doc: Document, body_id: BodyId, vertex_index: int) -> dict:
     return _select_shape(doc, body_id, "vertex", vertex_index)
 
 
-def _select_shape(doc: Document, body_id: BodyId, kind: str, index: int) -> dict:
+def _select_shape(doc: Document, body_id: BodyId, kind: str, index: int, *, allow_hidden: bool = False) -> dict:
     """面・辺・頂点で同じ手順: 可視Bodyを引く → メッシュを断る → 数える → `_shape_ref`。
     検査の順序(存在 → 可視 → メッシュ → 範囲)は `_coerce_refs` の一括経路と同じ。"""
-    body = _visible_body(doc, body_id)
+    body = _visible_body(doc, body_id, allow_hidden=allow_hidden)
     _reject_mesh(body, f"{_KIND_LABELS[kind]}を指す")
     return _shape_ref(body_id, kind, index, _subshape_count(body.shape, kind))
 
@@ -592,17 +649,17 @@ def _reject_mesh(body, what: str) -> None:
         meshbody.reject(body, what)
 
 
-def select_body(doc: Document, body_id: BodyId) -> dict:
+def select_body(doc: Document, body_id: BodyId, *, allow_hidden: bool = False) -> dict:
     """**ソリッドを丸ごと**指す参照を作る(`BODY_KIND` のdocstring)。
 
     不可視Body・存在しないBodyは例外(`_visible_body`)。`index` は `None` を明示的に持たせる(キーごと落とすと
-    「まだ埋めていない」と「持たない」を見分けられない)。
+    「まだ埋めていない」と「持たない」を見分けられない)。`allow_hidden` は外す側(`modify_selection` の `remove`)だけが立てる。
     """
-    body = _visible_body(doc, body_id)
+    body = _visible_body(doc, body_id, allow_hidden=allow_hidden)
     return {"body": body.id, "kind": BODY_KIND, "index": None, "provenance": None}
 
 
-def select_region(doc: Document, sketch_id: str, region_index: int) -> dict:
+def select_region(doc: Document, sketch_id: str, region_index: int, *, allow_hidden: bool = False) -> dict:
     """スケッチの領域を指す RegionRef を作る。
 
     **参照は `region.region_ref(sketch_id, index).to_dict()` を使い回す**(別形式のdictを組むと操作ログの
@@ -613,27 +670,31 @@ def select_region(doc: Document, sketch_id: str, region_index: int) -> dict:
     """
     from . import region as region_mod
 
-    _visible_sketch(doc, sketch_id)
+    _visible_sketch(doc, sketch_id, allow_hidden=allow_hidden)
     count = len(region_mod.regions(doc, sketch_id))
-    value = int(region_index)
+    value = _as_index(region_index)
     if not 1 <= value <= count:
         raise ValueError(f"region index out of range: {value} (1..{count})")
     return region_mod.region_ref(sketch_id, value).to_dict()
 
 
 def select_sketch_entity(
-    doc: Document, sketch_id: str, entity_id: str, point: Optional[str] = None
+    doc: Document, sketch_id: str, entity_id: str, point: Optional[str] = None, *, allow_hidden: bool = False
 ) -> dict:
     """スケッチの図形(または図形上の点)を指す参照を作る。
 
     `point` を省く(None)と**図形全体 = 辺**、文字列ならその点で、`sketch.entity_point_keys(kind)` の**xキー**でなければ
     ValueError(yキーや寸法キーは通さない)。存在しないスケッチ・図形は KeyError。**添字ではなく `entity_id` で指す**ので
     他の図形を足しても平行移動しても指す先が変わらない(`duocad-selection-resets-on-shape-change` の根拠が当たらない)。
+    **点の図形は辺を持たないので、`point` を省いても点 `cx` を指す**(選択は点として扱う。docs/DESIGN_DECISIONS.md。
+    2つの形を許すと同じ点が別の項目として2度選ばれる)。
     """
     from .sketch import entity_point_pair, get_entity
 
-    sketch = _visible_sketch(doc, sketch_id)
+    sketch = _visible_sketch(doc, sketch_id, allow_hidden=allow_hidden)
     entity = get_entity(sketch, entity_id)
+    if point is None and entity.kind == "point":
+        point = "cx"
     if point is not None:
         entity_point_pair(entity.kind, str(point))
     return {
@@ -652,12 +713,12 @@ def ref_key(ref: dict) -> tuple:
 
     | 種別 | 鍵 |
     |---|---|
-    | region | `("region", sketch, int(index))` |
+    | region | `("region", sketch, 整数の index)` |
     | sketch_entity | `("sketch_entity", sketch, entity, point)` |
     | body | `("body", body)` —— **添字を見ない** |
-    | face / edge / vertex | `(kind, body, int(index))` |
+    | face / edge / vertex | `(kind, body, 整数の index)` |
 
-    - **`provenance` は鍵に入れない**。**`int(index)` に正規化する**(`"3"` と `3` は同じ実体)。
+    - **`provenance` は鍵に入れない**。**index は整数に正規化する**(`"3"` と `3` は同じ実体。整数にできない値は `_as_index` が ValueError)。
     - **`point` は `.get("point")`**(キーの欠落と `None` を畳む。点と辺は別物)。
     - **種別は第1要素だけが持つ**(`ref["kind"]` を別要素として重ねると、鍵から種別を抜く変異を検査で示せなくなる)。
 
@@ -665,12 +726,12 @@ def ref_key(ref: dict) -> tuple:
     """
     kind = ref_kind(ref)
     if kind == REGION_KIND:
-        return (REGION_KIND, ref["sketch"], int(ref["index"]))
+        return (REGION_KIND, ref["sketch"], _as_index(ref["index"]))
     if kind == SKETCH_ENTITY_KIND:
         return (SKETCH_ENTITY_KIND, ref["sketch"], ref["entity"], ref.get("point"))
     if kind == BODY_KIND:
         return (BODY_KIND, ref["body"])
-    return (kind, ref["body"], int(ref["index"]))
+    return (kind, ref["body"], _as_index(ref["index"]))
 
 
 def same_ref(left: dict, right: dict) -> bool:
@@ -682,19 +743,43 @@ def same_ref(left: dict, right: dict) -> bool:
 
 
 # --------------------------------------------------------------------------------------
-def _coerce_ref(doc: Document, ref: dict) -> dict:
-    """手書きの参照を検査し、`select_*` と同じ形へ正規化する。失敗時は選択を変えない前提。"""
+def _as_index(value) -> int:
+    """参照の `index` を整数にする。整数・整数と等しい有限の小数(`3.0`)・整数の文字列(`"3"`)だけを通し、
+    `None`・配列・真偽値・小数(`2.9`。黙って切り捨てると別の面が選ばれる)・非有限は ValueError。
+    `int()` 任せだと `None`・配列は TypeError、`inf` は OverflowError になり、MCP では `internal` で返って AI が直せない。
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"index must be an integer, got {value!r}")
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, float):
+        if math.isfinite(value) and value.is_integer():
+            return int(value)
+        raise ValueError(f"index must be an integer, got {value!r}")
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            raise ValueError(f"index must be an integer, got {value!r}") from None
+    raise ValueError(f"index must be an integer, got {type(value).__name__}")
+
+
+def _check_form(ref: dict) -> None:
+    """参照の形(辞書か・必須キーが揃うか・種別が既知か・名前が文字列か)を検査する。存在・範囲・可視性は見ない。
+    ここを通った参照には `ref_key` の鍵がハッシュ可能で作れる(index が整数でなければ `ref_key` が ValueError)。
+    """
     if not isinstance(ref, dict):
         raise ValueError(f"ref must be a dict, got {type(ref).__name__}")
 
     if "sketch" in ref:
+        _require_str(ref, "sketch")
         if "entity" in ref:
-            return select_sketch_entity(
-                doc, ref["sketch"], ref["entity"], ref.get("point")
-            )
-        if "index" not in ref:
+            _require_str(ref, "entity")
+            if ref.get("point") is not None:
+                _require_str(ref, "point")
+        elif "index" not in ref:
             raise ValueError("RegionRef is missing 'index'")
-        return select_region(doc, ref["sketch"], ref["index"])
+        return
 
     if "kind" not in ref:
         raise ValueError("ShapeRef is missing 'kind'")
@@ -703,12 +788,30 @@ def _coerce_ref(doc: Document, ref: dict) -> dict:
         raise ValueError(f"unknown shape kind: {kind!r}")
     if "body" not in ref:
         raise ValueError("ShapeRef is missing 'body'")
-    if kind == BODY_KIND:
-        return select_body(doc, ref["body"])
-    if "index" not in ref:
+    _require_str(ref, "body")
+    if kind != BODY_KIND and "index" not in ref:
         raise ValueError("ShapeRef is missing 'index'")
 
-    return _select_shape(doc, ref["body"], kind, ref["index"])
+
+def _require_str(ref: dict, name: str) -> None:
+    if not isinstance(ref[name], str):
+        raise ValueError(f"{name!r} must be a string, got {type(ref[name]).__name__}")
+
+
+def _coerce_ref(doc: Document, ref: dict, *, allow_hidden: bool = False) -> dict:
+    """手書きの参照を検査し、`select_*` と同じ形へ正規化する。失敗時は選択を変えない前提。"""
+    _check_form(ref)
+
+    if "sketch" in ref:
+        if "entity" in ref:
+            return select_sketch_entity(
+                doc, ref["sketch"], ref["entity"], ref.get("point"), allow_hidden=allow_hidden
+            )
+        return select_region(doc, ref["sketch"], ref["index"], allow_hidden=allow_hidden)
+
+    if ref["kind"] == BODY_KIND:
+        return select_body(doc, ref["body"], allow_hidden=allow_hidden)
+    return _select_shape(doc, ref["body"], ref["kind"], ref["index"], allow_hidden=allow_hidden)
 
 
 def _coerce_refs(
@@ -717,6 +820,7 @@ def _coerce_refs(
     *,
     bodies: Optional[dict] = None,
     counts: Optional[dict] = None,
+    allow_hidden: bool = False,
 ) -> List[dict]:
     """`_coerce_ref` を複数件まとめて処理する版。
     `select_*` 経由だと参照1件ごとに `kernel.face_count` 等が `TopExp.MapShapes_s` で形状全体を走査し直すので、
@@ -725,6 +829,7 @@ def _coerce_refs(
 
     `bodies`/`counts` は呼び出し元と共有できるよう引数で受ける(`modify_selection` が add/remove の2回で同じ辞書を渡す。
     `None` なら呼び出し1回限りの空辞書)。`kernel.py` にはキャッシュを持たない(`_face_map` の戻りは可変で17箇所が共有すると壊れる)。
+    可視性は辞書の中身に関わらず参照ごとに見る(辞書は `allow_hidden` の違う呼び出しの間で共有され、先の呼び出しが入れたボディが隠れていることがある)。
     region / sketch_entity / body 種別・壊れた参照は `_coerce_ref` 単発へ流す。
     """
     if bodies is None:
@@ -737,50 +842,58 @@ def _coerce_refs(
             isinstance(ref, dict)
             and "sketch" not in ref
             and ref.get("kind") in SHAPE_KINDS
-            and "body" in ref
+            and isinstance(ref.get("body"), str)
             and "index" in ref
         ):
             kind = ref["kind"]
             body_id = ref["body"]
+            body = bodies.get(body_id)
+            if body is None:
+                body = bodies[body_id] = doc.get_body(body_id)
+            if not allow_hidden:
+                _require_visible(body)
             count_key = (body_id, kind)
             if count_key not in counts:
-                if body_id not in bodies:
-                    bodies[body_id] = _visible_body(doc, body_id)
-                body = bodies[body_id]
                 # 単発の `select_*` と同じ門番(このループは `select_face` 等を通らないので断りもここへ写す)。
                 _reject_mesh(body, f"{_KIND_LABELS[kind]}を指す")
                 counts[count_key] = _subshape_count(body.shape, kind)
             out.append(_shape_ref(body_id, kind, ref["index"], counts[count_key]))
         else:
-            out.append(_coerce_ref(doc, ref))
+            out.append(_coerce_ref(doc, ref, allow_hidden=allow_hidden))
     return out
 
 
-def _visible_sketch(doc: Document, sketch_id: str):
-    """存在して可視なスケッチを返す。無ければ KeyError、不可視なら ValueError(`_visible_body` と同じ線)。"""
+def _visible_sketch(doc: Document, sketch_id: str, *, allow_hidden: bool = False):
+    """存在して可視なスケッチを返す。無ければ KeyError、不可視なら ValueError(`_visible_body` と同じ線)。
+    `allow_hidden` なら不可視でも返す(外す側だけが立てる)。"""
     from .sketch import get_sketch
 
     target = get_sketch(doc, sketch_id)
-    if not target.visible:
+    if not allow_hidden and not target.visible:
         raise ValueError(f"sketch {sketch_id!r} is hidden: 見えないものは指せない")
     return target
 
 
-def _visible_body(doc: Document, body_id: BodyId):
+def _visible_body(doc: Document, body_id: BodyId, *, allow_hidden: bool = False):
     """存在して可視なBodyを返す。無ければ KeyError、不可視なら ValueError。
 
     **`body` を明示して不可視Bodyを指した場合も0件ではなくエラー**(「一致0件」と「見えないので対象外」はAIから区別が付かず、
-    存在する面を見失ったと誤読して条件を緩める)。
+    存在する面を見失ったと誤読して条件を緩める)。`allow_hidden` なら不可視でも返す(外す側だけが立てる)。
     """
     body = doc.get_body(body_id)
-    if not body.visible:
-        raise ValueError(f"body {body_id!r} is hidden: 見えないものは指せない")
+    if not allow_hidden:
+        _require_visible(body)
     return body
+
+
+def _require_visible(body) -> None:
+    if not body.visible:
+        raise ValueError(f"body {body.id!r} is hidden: 見えないものは指せない")
 
 
 def _shape_ref(body_id: BodyId, kind: str, index: int, count: int) -> dict:
     """1始まりの添字を検査して ShapeRef を作る(範囲外は ValueError)。"""
-    value = int(index)
+    value = _as_index(index)
     if not 1 <= value <= count:
         raise ValueError(f"{kind} index out of range: {value} (1..{count})")
     return {"body": body_id, "kind": kind, "index": value, "provenance": None}

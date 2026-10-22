@@ -69,6 +69,7 @@ from . import (
     selection,
     sketch,
 )
+from .net import wire
 from .channel import CHANNELS, StableUpdater, describe, hidden_features
 from .agent.loop import VersionChanged
 from .entry import entry_for
@@ -218,17 +219,21 @@ class DocumentTools:
         except Exception as error:  # noqa: BLE001 — 封筒にするのは呼び手(`error_envelope`)
             return None, error, self.current_seq()
 
-    def current_seq(self) -> tuple[int, int, str, str, int]:
+    def current_seq(self) -> tuple[int, int, int, str, str, int]:
         """文書+選択+作業空間の版。**モデルには見せない** —— `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
 
         `AgentLoop.run()` はモデルへの1往復・ツール1実行のたびにこれを控え、値が変わっていたら
         残りのツール呼び出しを構造化エラーへ差し替える(楽観ロック)。
 
-        戻り値は `(Session.generation, len(document.log.entries), selection.fingerprint(document),
-        selection.visibility_fingerprint(document), Session.workspace.revision)`。**5つとも要る**:
+        戻り値は `(Session.generation, len(document.log.entries), Session.applied_count, selection.fingerprint(document),
+        selection.visibility_fingerprint(document), Session.workspace.revision)`。**6つとも要る**:
 
         - 世代が無いと文書の切り替えを見逃す。新規→新規は残り3つが `(0, 空, 空)` のまま一致する(実測)。
-        - ログの本数だけでは足りない。選択の変更は操作ログに乗らないので、辺Aを外して辺Bを
+        - ログの本数は undo / redo で動く。無いと undo / redo 単独を見逃す。
+        - 適用回数(`applied_count`)は undo / redo で動かず、verb を適用するたびに進む。ログの本数だけでは、undo してから
+          同じ本数になる別の verb を打つと版が戻って見逃す(面・辺の添字が差し替わった形へ、古い前提の `set_selection` が効く)。
+          逆に適用回数だけでは undo / redo 単独が出ないので、両方持つ。
+        - ログと適用回数だけでは足りない。選択の変更は操作ログに乗らないので、辺Aを外して辺Bを
           選び直す**入れ替え**を検出できず、`fillet(radius)`(選択から対象を取る)は辺Aの
           つもりのAIに辺Bを黙って丸めさせる。
         - 選択の指紋だけでも足りない(形状が変わっても選択の中身が同じままのことがある)。
@@ -244,6 +249,7 @@ class DocumentTools:
         return (
             self.session.generation,
             len(self.session.document.log.entries),
+            self.session.applied_count,
             selection.fingerprint(self.session.document),
             selection.visibility_fingerprint(self.session.document),
             self.session.workspace.revision,
@@ -785,8 +791,14 @@ class McpServer:
             self._handle_notification(str(method))
             return None
 
+        params = message.get("params")
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            # MCP の params は object。object でない値を各メソッドに渡すと AttributeError が -32603 で返る。
+            return _error(request_id, INVALID_PARAMS, f"params must be a JSON object, got {type(params).__name__}")
         try:
-            result = self._handle_request(str(method), message.get("params") or {})
+            result = self._handle_request(str(method), params)
         except _RpcError as error:
             return _error(request_id, error.code, error.message)
         except Exception as error:  # プロトコル層で死なない(上記docstring)
@@ -866,13 +878,13 @@ class McpServer:
             envelope = {"error": self.tools.error_envelope(name, error)}
             return {
                 "content": [
-                    {"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}
+                    {"type": "text", "text": wire.dumps(envelope)}
                 ],
                 "isError": True,
             }
         return {
             "content": [
-                {"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)}
+                {"type": "text", "text": wire.dumps(payload, indent=2)}
             ],
             "isError": False,
         }
@@ -935,12 +947,12 @@ async def serve_stdio(server: McpServer, reader: Any = None, writer: Any = None)
             continue
         try:
             message = json.loads(text)
-        except ValueError as error:
-            response: Optional[dict] = _error(None, PARSE_ERROR, str(error))
+        except (ValueError, RecursionError) as error:  # 深すぎる入れ子の1行でサーバ全体(画面を含む)が落ちない
+            response: Optional[dict] = _error(None, PARSE_ERROR, f"{type(error).__name__}: {error}")
         else:
             response = server.handle(message)
         if response is not None:
-            writer.write(json.dumps(response, ensure_ascii=False).encode("utf-8") + b"\n")
+            writer.write(wire.dumps(response).encode("utf-8") + b"\n")
             writer.flush()
 
 
@@ -1014,6 +1026,11 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
     except (FileNotFoundError, OSError) as error:
         # ブラウザへ配れなくてもstdioのMCPは動く。**黙って落とさず**理由を残して続ける。
         # ただし `/mcp` も同じサーバに載っているので、**この経路ではHTTPのMCPも立たない**。
+        if args.no_stdio:
+            # stdio を使わない起動(安定版の launcher)では、静的配信と `/mcp` が立たない時点で誰とも話せない。
+            # 居座ると画面も MCP も繋がらないまま、再起動も WebSocket の bind で落ちる。
+            _log(f"error: 静的配信を立てられず --no-stdio なので、誰とも話せない。終了する: {error}")
+            raise SystemExit(1)
         _log(f"warning: 静的配信を立てられなかった(stdioのMCPだけで続行): {error}")
         served = False
 

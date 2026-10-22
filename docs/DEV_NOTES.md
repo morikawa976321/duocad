@@ -13,6 +13,10 @@
   同じ秒で出る（`sys.executable` を呼ぶ子プロセスも2つずつ）。二重起動を疑うときは親子関係（ppid）と作成時刻を見る
   （2026-10-07 に本人の検証を二重起動と誤認して片方を止め、検証全体が止まった）。
 - **Git Bash の `python` は日本語入りのファイルを cp932 で読む。** `-X utf8` か `encoding="utf-8"`。
+- **OCCT の重い処理を大きい形で総当たりするときは `tools/capped_run.py --gb 3 -- <コマンド>` で走らせる。** 上限を超えた
+  割り当ては失敗して子だけが終わる。2026-10-22 にフィレットの吸収を PC ケースの部品で総当たりしたら python が仮想メモリを
+  84GB 使い、PC がブルースクリーンで落ちた(イベントログの Resource-Exhaustion-Detector に PID と使用量が残る)。
+  venv の python はランチャなので、走り出してからジョブに入れると実体がジョブの外に出うる(このツールは停止状態で作ってから入れる)。
 - **形状探索の FEM を並べると OOM になる。** RAM 31.7 GB で普段 10〜15 GB は他のアプリが使う。hanger の1条件のピークは 2.388 mm で 7.5 GB〜1.592 mm で 24.2 GB。
   2本以上のピークが重なると落ちる（2026-09-26 に PC が落ちた）。
 - **PowerShell の `Invoke-CimMethod -ClassName Win32_Process -MethodName Create` で起動した独立プロセスは、Claude のアプリを閉じても続く**（親が `WmiPrvSE` になる）。
@@ -105,7 +109,7 @@ npm run check --prefix web                               # tsc と svelte-check�
 
 - **候補は確定ではない。** 2026-10-18 の初回は機械候補の約7割が誤検出だった。型: 同名の別実体への参照（`weights`・`render`・`flat`）／`@entry`・`register_verb`・`getattr(self, ツール名)`・catalog の文字列がメソッド名・dataclass の `asdict` と trace の `_encode` で動的に生きる／呼び元が1か所でも、その呼び元が生きている private ヘルパ／基底クラスのフック（`WebHandler.log_message`）やコールバック型に合わせた未使用引数／Svelte のテンプレートからの参照。
 - **消す前に独立に反証させる。** 「意図的な残置」は docs やコメントに書かれていることが多い（旧 SIMP 引数の拒否は `docs/TOPOPT.md` が契約、`server.py` の再輸出はコメントが「名前を減らさない」と明言）。動的参照の視点と履歴・意図の視点の2つを通ったものだけを確定にした。
-- **`window.__duocad` のキー（`web/src/testHooks.svelte.ts`）は、`web/scripts/*.mjs` と `tests/` が読むものだけを置く**（2026-10-18 本人決定: 読み手の無いキーは docs が名指ししていても消す。足すときは読む本と一緒に足す）。ピックの常時化（`docs/PICK_EVERYTHING.md`）が使う `project*`・`hoveredRef`・`sketchRebuilds` は、読み手が無くても残してある。
+- **`window.__duocad` のキー（`web/src/testHooks.svelte.ts`）は、`web/scripts/*.mjs` と `tests/` が読むものだけを置く**（2026-10-18 本人決定: 読み手の無いキーは docs が名指ししていても消す。足すときは読む本と一緒に足す）。ピックを見る `project*`・`hoveredRef`・`pickKinds`・`edges` と、待ち受けを見る `wanted*`・`wantsBasePlanes` は `web/scripts/smoke-pick-everything.mjs` ほかが読む。
 - **線引き**: 本番・テスト・検査スクリプトのどこからも参照されないものを消す。テストだけ／検査スクリプトだけが使うもの、docs が名指しするもの、保存形式・WebSocket の payload・trace の記録に載るフィールド、既定値のまま誰も変えない引数は、初回は本人判断として残したが、2026-10-18 に本人が「迷ったらシンプルな方で削除」と決めたので、呼び出しを AST で全数確かめたうえで消した（直すテストは直す）。いま残っている「消せるが消していない」ものは、テストが別の値を渡している引数と、型検査の都合で渡している引数（`restartServer` の `fail`: `tsc` が `.svelte` の名前つき export を読めない）。
 
 ## 測定記録（`output/`）の書き方

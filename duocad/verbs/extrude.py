@@ -10,7 +10,10 @@
 - `"new"` … 対象が何であっても常に新しいソリッドを作る(これが無いと既存部品がいる文書で2つ目の板が
   作れない)。`body_id` は受け付けない。
 
-失敗(領域が空・添字が範囲外・`mode` が未知・距離0・ブーリアン失敗)は例外を送出し、documentにも
+`taper`(度)は側面の傾き。正で押し出すにつれて太り、負で細る(Autodesk Fusion と同じ符号。穴は外周と逆に動く)。
+0 は今までの押し出しで、ログの args には 0 でないときだけ `taper` を記録する(無ければ 0 として再生する)。
+
+失敗(領域が空・添字が範囲外・`mode` が未知・距離0・ブーリアン失敗・テーパーで断面が潰れる)は例外を送出し、documentにも
 ログにも変更を残さない。「切り取ったのに穴が1つも開いていない」を成功として通さないこと。
 """
 from __future__ import annotations
@@ -22,7 +25,7 @@ from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from .. import selection
 from ..entry import entry
-from ._common import editable_body, recall, remember, resolve_shape_ref
+from ._common import editable_body, recall, remember, replayed_body, resolve_shape_ref
 from ..region import RegionRef, _regions_detailed
 from ..sketch import get_sketch
 
@@ -38,10 +41,10 @@ def extrude(
     distance: float,
     mode: str = "join",
     body_id: Optional[BodyId] = None,
+    taper: float = 0.0,
 ) -> Operation:
-    distance = float(distance)
-    if distance == 0.0:
-        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    distance = kernel_extrude.check_distance(distance)
+    taper = kernel_extrude.check_taper(taper)
     if mode not in MODES:
         raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
 
@@ -54,7 +57,7 @@ def extrude(
     target_shape = None if target_body is None else target_body.shape
 
     result = kernel_extrude.extrude_regions(
-        faces, distance, mode, normal, target_shape=target_shape
+        faces, distance, mode, normal, target_shape=target_shape, taper=taper
     )
 
     created_new = False
@@ -73,6 +76,7 @@ def extrude(
         {
             "regions": [ref.to_dict() for ref in refs],
             "distance": distance,
+            **_taper_arg(taper),
             "mode": mode,
             "body_id": resolved_body_id,
             **numbered,
@@ -89,25 +93,25 @@ def extrude_faces(
     distance: float,
     mode: str = "join",
     body_id: Optional[BodyId] = None,
+    taper: float = 0.0,
 ) -> Operation:
     """同一ボディの平面の面群(`{"body", "index"}` の並び)を押し出す。
 
     失敗時は例外を送出し、**documentにもログにも変更を残さない**(幾何計算をログの append より先に済ませる)。
     """
-    distance = float(distance)
-    if distance == 0.0:
-        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    distance = kernel_extrude.check_distance(distance)
+    taper = kernel_extrude.check_taper(taper)
     if mode not in MODES:
         raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
 
-    source, indices = _resolve_face_source(doc, faces)
+    source, indices = _resolve_face_source(doc, faces, require_visible=True)
     if mode != "new" and body_id is None:
         body_id = source.id
     target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
     target_shape = None if target_body is None else target_body.shape
 
     result = kernel_extrude.extrude_faces(
-        source.shape, indices, distance, mode, target_shape=target_shape
+        source.shape, indices, distance, mode, target_shape=target_shape, taper=taper
     )
 
     previous_shape: Any = None
@@ -124,6 +128,7 @@ def extrude_faces(
         {
             "faces": [{"body": source.id, "index": index} for index in indices],
             "distance": distance,
+            **_taper_arg(taper),
             "mode": mode,
             "body_id": resolved_body_id,
             **numbered,
@@ -134,9 +139,17 @@ def extrude_faces(
     return operation
 
 
-def _resolve_face_source(doc: Document, faces: Sequence[Any]) -> tuple[Body, List[int]]:
+def _taper_arg(taper: float) -> dict:
+    """ログの args へ足すテーパー。0 は記録しない(テーパーの無い古いログと同じ args になる)。"""
+    return {"taper": taper} if taper else {}
+
+
+def _resolve_face_source(
+    doc: Document, faces: Sequence[Any], *, require_visible: bool
+) -> tuple[Body, List[int]]:
     """面の参照から (面を持つボディ, 添字の並び) を取る。**別のボディにまたがる選択は ValueError**。
-    面の持ち主は「見えないものは指せない」を課す(`editable_body` と同じ理由)。"""
+    新しい押し出しは面の持ち主に「見えないものは指せない」を課す(`editable_body` と同じ理由)。redo / 再生は課さない
+    (`replayed_body`)。"""
     refs = list(faces)
     if not refs:
         raise ValueError("extrude requires at least one face")
@@ -155,7 +168,7 @@ def _resolve_face_source(doc: Document, faces: Sequence[Any]) -> tuple[Body, Lis
             )
         indices.append(index)
     assert source is not None
-    if not source.visible:
+    if require_visible and not source.visible:
         raise ValueError(
             f"body {source.id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
         )
@@ -199,8 +212,16 @@ def _resolve_target(
 
 def _editable_target(doc: Document, body_id: BodyId, what: str = VERB_EXTRUDE) -> Body:
     """押し出し・回転体の対象にできるボディ(編集可・可視・形状あり。メッシュは「足す/引く対象にする」ことを断る)。"""
-    reject_as = "押し出しの対象にする" if what == VERB_EXTRUDE else "足す/引く対象にする"
-    return editable_body(doc, body_id, what=what, reject_as=reject_as)
+    return editable_body(doc, body_id, what=what, reject_as=_reject_as(what))
+
+
+def _replayed_target(doc: Document, body_id: BodyId, what: str = VERB_EXTRUDE) -> Body:
+    """redo / 再生で足す・引く対象。`_editable_target` から可視性の門だけを外したもの(`_common.replayed_body`)。"""
+    return replayed_body(doc, body_id, what=what, reject_as=_reject_as(what))
+
+
+def _reject_as(what: str) -> str:
+    return "押し出しの対象にする" if what == VERB_EXTRUDE else "足す/引く対象にする"
 
 
 def _add_numbered_body(doc: Document, body_id: BodyId, shape: Any) -> dict:
@@ -266,8 +287,9 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     body_id = args["body_id"]
     mode = args["mode"]
     distance = float(args["distance"])
+    taper = float(args.get("taper", 0.0))
     if "faces" in args:
-        _redo_faces(document, operation, args["faces"], distance, mode, body_id)
+        _redo_faces(document, operation, args["faces"], distance, mode, body_id, taper)
         return
     refs = [RegionRef.from_dict(item) for item in args["regions"]]
     faces, normal = _resolve_faces_and_normal(document, refs)
@@ -283,13 +305,15 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     if existing is None and mode == "cut":
         raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
     if mode == "new" or existing is None:
-        result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=None)
+        result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=None, taper=taper)
         _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
         remember(document, body_id, operation.seq, None)
     else:
-        target = _editable_target(document, body_id)
+        target = _replayed_target(document, body_id)
         previous_shape = target.shape
-        result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=target.shape)
+        result = kernel_extrude.extrude_regions(
+            faces, distance, mode, normal, target_shape=target.shape, taper=taper
+        )
         target.shape = result["shape"]
         remember(document, body_id, operation.seq, previous_shape)
     if operation.provenance is None:
@@ -297,24 +321,30 @@ def _do_extrude(document: Document, operation: Operation) -> None:
 
 
 def _redo_faces(
-    document: Document, operation: Operation, faces: Sequence[Any], distance: float, mode: str, body_id: BodyId
+    document: Document,
+    operation: Operation,
+    faces: Sequence[Any],
+    distance: float,
+    mode: str,
+    body_id: BodyId,
+    taper: float,
 ) -> None:
     """面のログの再適用。記録した添字で面を引き直す(形が決定的なので同じ面を指す)。"""
-    source, indices = _resolve_face_source(document, faces)
+    source, indices = _resolve_face_source(document, faces, require_visible=False)
     existing = next((body for body in document.bodies if body.id == body_id), None)
     if mode == "new":
         if existing is not None:
             raise ValueError(f"cannot replay new: body {body_id!r} already exists")
-        result = kernel_extrude.extrude_faces(source.shape, indices, distance, mode)
+        result = kernel_extrude.extrude_faces(source.shape, indices, distance, mode, taper=taper)
         _add_new_body(document, body_id, result["shape"], _recorded_name(document, operation.args))
         remember(document, body_id, operation.seq, None)
     else:
         if existing is None:
             raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
-        target = _editable_target(document, body_id)
+        target = _replayed_target(document, body_id)
         previous_shape = target.shape
         result = kernel_extrude.extrude_faces(
-            source.shape, indices, distance, mode, target_shape=previous_shape
+            source.shape, indices, distance, mode, target_shape=previous_shape, taper=taper
         )
         target.shape = result["shape"]
         remember(document, body_id, operation.seq, previous_shape)
@@ -327,7 +357,7 @@ def _undo_extrude(document: Document, operation: Operation) -> None:
     body_id = operation.args["body_id"]
     previous = recall(document, body_id, operation.seq)
     if previous is None:
-        document.remove_body(body_id)
+        document.remove_added_body(body_id)
         return
     document.get_body(body_id).shape = previous
 
@@ -340,7 +370,11 @@ register_verb(VERB_EXTRUDE, do=_do_extrude, undo=_undo_extrude)
 # --------------------------------------------------------------------------------------
 @entry(VERB_EXTRUDE)
 def _enter_extrude(
-    document: Document, distance: float, mode: str = "join", body_id: Optional[BodyId] = None
+    document: Document,
+    distance: float,
+    mode: str = "join",
+    body_id: Optional[BodyId] = None,
+    taper: float = 0.0,
 ) -> dict:
     """選択の領域、または同一平面・同一ボディの面を押し出す(混在は ValueError)。
 
@@ -348,10 +382,12 @@ def _enter_extrude(
     """
     kind, items = selection.require_extrude_targets(document)
     if kind == "face":
-        operation = extrude_faces(document, items, float(distance), mode=str(mode), body_id=body_id)
+        operation = extrude_faces(
+            document, items, float(distance), mode=str(mode), body_id=body_id, taper=float(taper)
+        )
     else:
         refs = [RegionRef.from_dict(item) for item in items]
-        operation = extrude(document, refs, float(distance), mode=str(mode), body_id=body_id)
+        operation = extrude(document, refs, float(distance), mode=str(mode), body_id=body_id, taper=float(taper))
     changed = operation.args["body_id"]
     return {
         "body_id": changed,

@@ -281,6 +281,129 @@ def test_the_guard_does_not_stop_edges_whose_faces_are_wider_than_the_radius():
     kernel.fillet_edges(shape, {index: WALL for index in vertical})
 
 
+def _parallelogram_prism():
+    """XY 平面の平行四辺形 (0,0)(10,0)(13,4)(3,4) を高さ 30 で押し出した柱(押し出しで作るので落ちない側の作り方)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Pnt, gp_Vec
+
+    polygon = BRepBuilderAPI_MakePolygon()
+    for x, y in [(0.0, 0.0), (10.0, 0.0), (13.0, 4.0), (3.0, 4.0)]:
+        polygon.Add(gp_Pnt(x, y, 0.0))
+    polygon.Close()
+    face = BRepBuilderAPI_MakeFace(polygon.Wire()).Face()
+    return BRepPrimAPI_MakePrism(face, gp_Vec(0.0, 0.0, 30.0)).Shape()
+
+
+def _vertical_edge_at(shape, x: float, y: float) -> int:
+    (found,) = [
+        edge["index"]
+        for edge in query.describe_edges(shape)
+        if edge["kind"] == "line"
+        and edge["start"][2] != edge["end"][2]
+        and abs(edge["start"][0] - x) < 1e-6
+        and abs(edge["start"][1] - y) < 1e-6
+    ]
+    return found
+
+
+def test_the_guard_does_not_stop_a_fillet_on_an_obtuse_edge_whose_radius_equals_the_face_width():
+    """鈍角の辺(平行四辺形の(10,0)の縦辺、内角 126.9 度)は、半径 5 が隣の斜めの面の幅 5 と一致しても、面の中へ使う幅は
+    `5·tan(φ/2)` = 2.5 で、面は食い尽くされない(OCCT は体積 1172.7 の正常な形を作る)。落ちたら、角度を見ずに半径だけで
+    比べていて、正しく丸められる形を断っている。"""
+    shape = _parallelogram_prism()
+    edge_map = kernel._edge_map(shape)
+    index = _vertical_edge_at(shape, 10.0, 0.0)
+
+    assert kernel_chains.fillet_consumes_face(shape, edge_map, {index: 5.0}) is None
+    assert kernel.fillet_edges(shape, {index: 5.0})["shape"] is not None
+
+
+def _circle_edge(shape, radius: float, z: float) -> int:
+    import math
+
+    (found,) = [
+        edge["index"]
+        for edge in query.describe_edges(shape)
+        if edge["kind"] == "circle" and abs(edge["length"] - 2 * math.pi * radius) < 1e-6 and abs(edge["start"][2] - z) < 1e-6
+    ]
+    return found
+
+
+def test_the_guard_keeps_the_radius_as_the_width_next_to_a_curved_face():
+    """隣が曲面の辺は、面の中へ使う幅を半径とみなす(安全側)。円錐台に穴を開けた上面の外周(環の幅 5)を R=5 で丸めるのは
+    OCCT が通すが、幅が半径とちょうど一致するので断る。落ちたら、曲面の隣にも平面どうしの角度補正を当てはめている
+    (球や斜めの切断面では補正が曲率を含まず、正当な丸めまで断る: 下の2つのテスト)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCone, BRepPrimAPI_MakeCylinder
+
+    shape = BRepAlgoAPI_Cut(
+        BRepPrimAPI_MakeCone(20.0, 10.0, 20.0).Shape(), BRepPrimAPI_MakeCylinder(5.0, 20.0).Shape()
+    ).Shape()
+    edge_map = kernel._edge_map(shape)
+    outer = _circle_edge(shape, 10.0, 20.0)
+
+    assert kernel_chains.fillet_consumes_face(shape, edge_map, {outer: 5.0}) is not None
+    assert kernel_chains.fillet_consumes_face(shape, edge_map, {outer: 4.0}) is None
+
+
+def test_the_guard_does_not_stop_a_fillet_on_the_rim_of_a_spherical_dent():
+    """球を抜いた円柱の上面の環(幅 4)の内周を R=2 で丸める。隣は球面で、辺の1点の法線角から `R·tan(φ/2)` を求めると
+    幅 4 と偶然一致するが、OCCT は `IsDone()=True` で正常な形(体積 925.09)を作る。落ちたら、曲面の隣に角度補正を当てている。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeSphere
+
+    shape = BRepAlgoAPI_Cut(BRepPrimAPI_MakeCylinder(12.0, 6.0).Shape(), BRepPrimAPI_MakeSphere(10.0).Shape()).Shape()
+    edge_map = kernel._edge_map(shape)
+    rim = _circle_edge(shape, 8.0, 6.0)
+
+    assert kernel_chains.fillet_consumes_face(shape, edge_map, {rim: 2.0}) is None
+    assert kernel.fillet_edges(shape, {rim: 2.0})["shape"] is not None
+
+
+def test_the_guard_does_not_stop_a_fillet_on_a_tube_cut_at_a_slant():
+    """外半径 10・内半径 8・高さ 30 の円管を、斜め 25 度の平面で切った切断面の外周を R=1.2741405216149864 で丸める。中点の
+    面幅は約 2.2 だが、中点の法線で補正した幅が内周までの最短距離 2 と偶然一致する。OCCT は `IsDone()=True`。
+    落ちたら、辺に沿って角度が変わる曲面の隣に、中点1点の補正を当てている。"""
+    import math
+
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Dir, gp_Pln, gp_Pnt, gp_Vec
+
+    tube = BRepAlgoAPI_Cut(BRepPrimAPI_MakeCylinder(10.0, 30.0).Shape(), BRepPrimAPI_MakeCylinder(8.0, 30.0).Shape()).Shape()
+    # 平面 z = 15 - x·tan(25°) より上を落とす(平面の上側に十分大きな柱を作って引く)
+    tilt = math.radians(25.0)
+    normal = gp_Dir(math.sin(tilt), 0.0, math.cos(tilt))
+    cutter = BRepPrimAPI_MakePrism(
+        BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(0.0, 0.0, 15.0), normal), -40.0, 40.0, -40.0, 40.0).Face(),
+        gp_Vec(normal.X() * 60.0, normal.Y() * 60.0, normal.Z() * 60.0),
+    ).Shape()
+    shape = BRepAlgoAPI_Cut(tube, cutter).Shape()
+    edge_map = kernel._edge_map(shape)
+    (outer,) = [
+        edge["index"]
+        for edge in query.describe_edges(shape)
+        if edge["kind"] == "other" and abs(math.hypot(edge["start"][0], edge["start"][1]) - 10.0) < 1e-6
+    ]
+    radius = 2.0 / math.tan(math.radians(57.5))
+
+    assert kernel_chains.fillet_consumes_face(shape, edge_map, {outer: radius}) is None
+    assert kernel.fillet_edges(shape, {outer: radius})["shape"] is not None
+
+
+def test_the_guard_still_finds_the_radius_that_consumes_the_slanted_face():
+    """同じ辺は、使う幅 `R·tan(φ/2)` が斜めの面の幅 5 と一致する R = 10 で止める(OCCT は `IsDone()=False`)。"""
+    shape = _parallelogram_prism()
+    edge_map = kernel._edge_map(shape)
+    index = _vertical_edge_at(shape, 10.0, 0.0)
+
+    found = kernel_chains.fillet_consumes_face(shape, edge_map, {index: 10.0})
+
+    assert found is not None and found[0] == index
+
+
 _CONSUME_CHILD = """
 import sys
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
@@ -306,12 +429,14 @@ print("survived")
 """
 
 
-def test_a_fillet_that_consumes_a_face_exactly_is_refused_without_killing_the_process():
-    """薄肉の箱で半径 = 壁厚のフィレットは ValueError で断る(以前は access violation でプロセスごと死んだ。別プロセスで試す)。"""
+def test_a_fillet_that_consumes_a_face_exactly_does_not_kill_the_process():
+    """薄肉の箱で半径 = 壁厚のフィレットは、元の形の `MakeFillet` を呼ばずにはみ出しの吸収へ回る(以前は access violation で
+    プロセスごと死んだ。別プロセスで試す)。角で連なりが出会う選び方(全辺・縁)は吸収できずに断り、X に平行な辺は丸まる。"""
     done = subprocess.run(
         [sys.executable, "-X", "faulthandler", "-c", _CONSUME_CHILD],
         cwd=REPO_ROOT, capture_output=True, text=True, timeout=300,
     )
     assert done.returncode == 0, (done.returncode, done.stderr[-800:])
-    assert done.stdout.split()[-1] == "survived"
-    assert done.stdout.count("refused") == 3, done.stdout
+    lines = done.stdout.splitlines()
+    assert lines[-1] == "survived"
+    assert [line.split()[:2] for line in lines[:-1]] == [["all", "refused"], ["rim", "refused"], ["x", "built"]], done.stdout

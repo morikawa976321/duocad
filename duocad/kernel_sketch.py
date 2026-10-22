@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import bisect
 import math
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Sequence, Tuple
@@ -26,14 +27,17 @@ from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.Bnd import Bnd_Box
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffset
-from OCP.Geom import Geom_BezierCurve
-from OCP.GeomAbs import GeomAbs_Arc, GeomAbs_CurveType, GeomAbs_SurfaceType
+from OCP.BRepTools import BRepTools_WireExplorer
+from OCP.Geom import Geom_BezierCurve, Geom_TrimmedCurve
+from OCP.GeomAbs import GeomAbs_Arc, GeomAbs_CurveType, GeomAbs_Shape, GeomAbs_SurfaceType
+from OCP.GeomConvert import GeomConvert_ApproxCurve, GeomConvert_BSplineCurveToBezierCurve
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt
+from OCP.TColStd import TColStd_Array1OfReal
+from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt, gp_Vec
 
 from .kernel import _BASE_PLANE_AXES, _face_map, _face_normal, _face_props, classify_face, edge_length, face_of
 from .mesh_geometry import compound, indexed_map
@@ -282,18 +286,100 @@ def _dilate_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[
     """
     result: List[Any] = []
     for face in faces:
-        maker = BRepOffsetAPI_MakeOffset(face, GeomAbs_Arc)
-        maker.Perform(distance)
-        if not maker.IsDone():
-            raise ValueError(f"2Dオフセット(距離 {distance} mm)に失敗した")
-        shape = maker.Shape()
-        if shape is None or shape.IsNull():
-            raise ValueError(f"2Dオフセット(距離 {distance} mm)が空の結果を返した")
-        wire_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_WIRE)
-        wires = [TopoDS.Wire_s(wire_map.FindKey(i)) for i in range(1, wire_map.Extent() + 1)]
-        # 入れ子の数え上げは入力の面ごと(別の面のオフセット結果は重なりうる)。
-        result.extend(_faces_from_wires(ax3, wires))
+        try:
+            grown = _dilate_face(ax3, face, distance)
+        except ValueError:
+            grown = None
+        if grown is None or not _plausible_dilation(face, grown):
+            retry = _offset_ready(ax3, face)
+            if retry is face:
+                if grown is None:
+                    raise ValueError(f"2Dオフセット(距離 {distance} mm)に失敗した")
+            else:
+                grown = _dilate_face(ax3, retry, distance)
+            if not _plausible_dilation(face, grown):
+                raise ValueError(f"2Dオフセット(距離 {distance} mm)が壊れた形を返した")
+        result.extend(grown)
     return _union_faces(result)
+
+
+def _dilate_face(ax3: "gp_Ax3", face: Any, distance: float) -> List[Any]:
+    maker = BRepOffsetAPI_MakeOffset(face, GeomAbs_Arc)
+    maker.Perform(distance)
+    if not maker.IsDone():
+        raise ValueError(f"2Dオフセット(距離 {distance} mm)に失敗した")
+    shape = maker.Shape()
+    if shape is None or shape.IsNull():
+        raise ValueError(f"2Dオフセット(距離 {distance} mm)が空の結果を返した")
+    wire_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_WIRE)
+    wires = [TopoDS.Wire_s(wire_map.FindKey(i)) for i in range(1, wire_map.Extent() + 1)]
+    # 入れ子の数え上げは入力の面ごと(別の面のオフセット結果は重なりうる)。
+    return _faces_from_wires(ax3, wires)
+
+
+def _plausible_dilation(face: Any, grown: Sequence[Any]) -> bool:
+    """つながった面を広げた結果としてありうるか(つながった1枚で、面積が減らない)。"""
+    return len(grown) == 1 and _face_props(grown[0])[0] >= _face_props(face)[0] - _ENVELOPE_TOLERANCE
+
+
+#: オフセットの前に楕円由来のオフセット曲線を置き換える多項式の B-スプラインの誤差の上限[mm]。出力の近似(`APPROXIMATION_TOLERANCE`)
+#: より3桁小さく、最終の誤差にほとんど足さない。
+_REOFFSET_TOLERANCE = 1.0e-6
+
+
+def _offset_ready(ax3: "gp_Ax3", face: Any) -> Any:
+    """広げると失敗した・壊れた形が返った面の、直線・円に乗らないオフセット曲線の辺を多項式の B-スプラインで近似し直した面。無ければ元の面。
+
+    外部の罠: 楕円を広げて縮めた面(辺が楕円のオフセットのオフセット)を `BRepOffsetAPI_MakeOffset` でさらに広げると、例外も
+    `IsDone()=False` も出さずに壊れたワイヤを返す(2026-10-22 実測: 20×10 の楕円を R=1, d=1.5 で包むと、面積 43.3 と −16.8 の
+    2枚に分かれた。正しくは 236.81 の1枚)。同じ面で距離によっては `IsDone()=False` になる(角度 30 度の同じ楕円で R=1, d=2。
+    近似し直すと 266.53 の1枚)。`BRepBuilderAPI_NurbsConvert` で有理 B-スプラインにすると access violation で
+    プロセスごと落ちる。有理でない多項式の B-スプライン(C2 を頼むので5次)に近似し直すと正しく広がる。
+    壊れたときだけ使う: 辺ごとに近似すると継ぎ目の接線がわずかに折れ、広げた結果の継ぎ目に短い円弧が挟まる。
+    直線・円に乗るオフセット曲線(円と長方形の領域で出る)は触らない(最後に円弧へ直せなくなる)。
+    """
+    wire_map = indexed_map(face, TopAbs_ShapeEnum.TopAbs_WIRE)
+    rebuilt_wires: List[Any] = []
+    changed = False
+    for w in range(1, wire_map.Extent() + 1):
+        builder = BRepBuilderAPI_MakeWire()
+        explorer = BRepTools_WireExplorer(TopoDS.Wire_s(wire_map.FindKey(w)))
+        while explorer.More():
+            edge = explorer.Current()
+            replacement = _reoffset_edge(ax3, edge)
+            changed = changed or replacement is not None
+            builder.Add(replacement if replacement is not None else edge)
+            explorer.Next()
+        if not builder.IsDone():
+            return face
+        rebuilt_wires.append(builder.Wire())
+    if not changed:
+        return face
+    rebuilt = _faces_from_wires(ax3, rebuilt_wires)
+    return rebuilt[0] if len(rebuilt) == 1 else face
+
+
+def _reoffset_edge(ax3: "gp_Ax3", edge: Any) -> Any:
+    """直線・円に乗らないオフセット曲線の辺を、多項式の B-スプラインの辺にしたもの。それ以外・近似できないなら None。"""
+    curve = BRepAdaptor_Curve(edge)
+    if curve.GetType() != GeomAbs_CurveType.GeomAbs_OffsetCurve:
+        return None
+    first, last = curve.FirstParameter(), curve.LastParameter()
+
+    def uv(parameter: float) -> Tuple[float, float]:
+        point = curve.Value(parameter)
+        return _to_uv(ax3, point.X(), point.Y(), point.Z())
+
+    if _entities_of_offset_curve(uv, first, last) is not None:
+        return None
+    approx = GeomConvert_ApproxCurve(
+        Geom_TrimmedCurve(BRep_Tool.Curve_s(edge, first, last), first, last),
+        _REOFFSET_TOLERANCE, GeomAbs_Shape.GeomAbs_C2, 200, 3,
+    )
+    if not approx.HasResult() or approx.MaxError() > _REOFFSET_TOLERANCE:
+        return None
+    maker = BRepBuilderAPI_MakeEdge(approx.Curve())
+    return maker.Edge() if maker.IsDone() else None
 
 
 def _faces_from_wires(ax3: "gp_Ax3", wires: Sequence[Any]) -> List[Any]:
@@ -340,43 +426,224 @@ def _faces_from_wires(ax3: "gp_Ax3", wires: Sequence[Any]) -> List[Any]:
     return faces
 
 
-def face_boundary_entities(plane: dict, face: Any) -> List[dict]:
-    """面の境界(外周と穴)を、スケッチ図形 `{"kind", "params"}` の並びにする。**線分・円弧・円・閉じた楕円だけ**。
+#: 正確な図形に直せない辺を3次ベジエの列で近似するときの、誤差の上限[mm]。図形の大きさに比例させない固定値
+#: (3D プリントの精度より2桁小さい。区間の数は誤差がおよそ区間長の4乗に比例するので、大きさの 1/4 乗でしか増えない)。
+APPROXIMATION_TOLERANCE = 1.0e-3
 
-    辺がそれ以外(ベジエ・楕円弧など)なら ValueError。ベジエの領域を包むと、オフセットは元の曲線の
-    近似曲線を返し、線分と円弧だけという指定を満たせないため。円・直線を B-スプラインに直した辺のオフセット
-    (`GeomAbs_OffsetCurve`)は、標本点が直線・円に乗っていれば元の型の図形に直す(`_entities_of_offset_curve`)。
+#: 近似の1辺あたりの区間の上限。これを超えるのは曲線が尖っている・微分が壊れているときで、黙って細切れの線を出さずに断る。
+_MAX_APPROXIMATION_SEGMENTS = 512
+
+#: 区間の誤差を測る標本の数(区間の内側。端点は一致する)。
+_APPROXIMATION_SAMPLES = 15
+
+
+def face_boundary_entities(plane: dict, face: Any, ellipses: Sequence[dict] = ()) -> List[dict]:
+    """面の境界(外周と穴)を、スケッチ図形 `{"kind", "params"}` の並びにする(辺ごとの直し方は `edge_entities`)。
+
+    `ellipses` は元の領域にあった楕円の図形の params。1周のループの辺がすべて同じ楕円に乗っていれば、ループを
+    その楕円1つにする(楕円を R で広げて R で縮めると、元の楕円がずらし曲線の4辺になって返る)。
     """
     ax3 = _ax3_from_plane(plane)
     entities: List[dict] = []
-    edge_map = indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
-    for i in range(1, edge_map.Extent() + 1):
-        curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge_map.FindKey(i)))
-        first, last = curve.FirstParameter(), curve.LastParameter()
-        kind = curve.GetType()
-
-        def uv(parameter: float, curve: Any = curve) -> Tuple[float, float]:
-            point = curve.Value(parameter)
-            return _to_uv(ax3, point.X(), point.Y(), point.Z())
-
-        if kind == GeomAbs_CurveType.GeomAbs_Line:
-            (x0, y0), (x1, y1) = uv(first), uv(last)
-            entities.append({"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}})
-        elif kind == GeomAbs_CurveType.GeomAbs_Circle:
-            circle = curve.Circle()
-            centre = circle.Location()
-            cx, cy = _to_uv(ax3, centre.X(), centre.Y(), centre.Z())
-            entities.append(_circular_entity(uv, first, last, cx, cy, circle.Radius()))
-        elif kind == GeomAbs_CurveType.GeomAbs_Ellipse and _closed_edge(uv, first, last):
-            entities.append({"kind": "ellipse", "params": _ellipse_params(ax3, curve.Ellipse())})
-        elif kind == GeomAbs_CurveType.GeomAbs_OffsetCurve:
-            entities.extend(_entities_of_offset_curve(uv, first, last))
-        else:
-            raise ValueError(
-                f"包んだ結果に線分・円弧・円・閉じた楕円に直せない辺({kind.name})が出る"
-                "(ベジエ曲線や楕円を含む領域を丸めると近似曲線になるので包めない)"
-            )
+    wire_map = indexed_map(face, TopAbs_ShapeEnum.TopAbs_WIRE)
+    for w in range(1, wire_map.Extent() + 1):
+        edge_map = indexed_map(wire_map.FindKey(w), TopAbs_ShapeEnum.TopAbs_EDGE)
+        edges = [TopoDS.Edge_s(edge_map.FindKey(i)) for i in range(1, edge_map.Extent() + 1)]
+        matched = next((params for params in ellipses if all(_edge_on_ellipse(ax3, e, params) for e in edges)), None)
+        if matched is not None:
+            entities.append({"kind": "ellipse", "params": dict(matched)})
+            continue
+        for edge in edges:
+            entities.extend(edge_entities(ax3, edge))
     return entities
+
+
+def edge_entities(ax3: "gp_Ax3", edge: Any) -> List[dict]:
+    """平面 `ax3` の上にある辺1本を、スケッチ図形 `{"kind", "params"}` の並びにする(点に縮んだ辺は空)。
+
+    線分・円/円弧・閉じた楕円・3次以下の多項式のベジエ/B-スプライン・直線や円に乗るオフセット曲線は**正確な**図形にする。
+    それ以外(楕円弧・楕円のオフセット・有理 B-スプラインなど)は3次ベジエの列で近似し、その図形に `"approximated": True` を
+    付ける(誤差は `APPROXIMATION_TOLERANCE` 以下)。ポリラインにはしない(押し出した側面が線分の数だけ平面に割れる。
+    docs/DESIGN_DECISIONS.md)。
+    """
+    curve = BRepAdaptor_Curve(edge)
+    first, last = curve.FirstParameter(), curve.LastParameter()
+    kind = curve.GetType()
+
+    def uv(parameter: float) -> Tuple[float, float]:
+        point = curve.Value(parameter)
+        return _to_uv(ax3, point.X(), point.Y(), point.Z())
+
+    if kind == GeomAbs_CurveType.GeomAbs_Line:
+        (x0, y0), (x1, y1) = uv(first), uv(last)
+        if math.hypot(x1 - x0, y1 - y0) <= _ENVELOPE_TOLERANCE:
+            return []
+        return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
+    if kind == GeomAbs_CurveType.GeomAbs_Circle:
+        circle = curve.Circle()
+        centre = circle.Location()
+        cx, cy = _to_uv(ax3, centre.X(), centre.Y(), centre.Z())
+        return [_circular_entity(uv, first, last, cx, cy, circle.Radius())]
+    if kind == GeomAbs_CurveType.GeomAbs_Ellipse and _closed_edge(uv, first, last):
+        return [{"kind": "ellipse", "params": _ellipse_params(ax3, curve.Ellipse())}]
+    if kind == GeomAbs_CurveType.GeomAbs_OffsetCurve:
+        fitted = _entities_of_offset_curve(uv, first, last)
+        if fitted is not None:
+            return fitted
+    if kind in (GeomAbs_CurveType.GeomAbs_BezierCurve, GeomAbs_CurveType.GeomAbs_BSplineCurve):
+        exact = _polynomial_beziers(ax3, curve, kind, first, last)
+        if exact is not None:
+            return exact
+    return _approximated_beziers(ax3, curve, first, last)
+
+
+def _bezier_entity(points: Sequence[Tuple[float, float]], approximated: bool = False) -> dict:
+    """制御点4つ(始点・制御点1・制御点2・終点)のスケッチ図形。"""
+    params = {}
+    for (key_x, key_y), (x, y) in zip(BEZIER_POINT_KEYS, points):
+        params[key_x], params[key_y] = x, y
+    entity: dict = {"kind": "bezier", "params": params}
+    if approximated:
+        entity["approximated"] = True
+    return entity
+
+
+def _polynomial_beziers(ax3: "gp_Ax3", curve: Any, kind: Any, first: float, last: float) -> Any:
+    """3次以下の非有理ベジエ/B-スプラインの辺 `[first, last]` を、3次ベジエの図形へ**正確に**分ける。直せなければ None。"""
+    if kind == GeomAbs_CurveType.GeomAbs_BezierCurve:
+        # 写しを切る: `BRepAdaptor_Curve.Bezier()` は位置が恒等なら辺の曲線そのものを返し、`Segment` は辺の形を書き換える(実測)
+        bezier = curve.Bezier().Copy()
+        if bezier.IsRational() or bezier.Degree() > 3:
+            return None
+        if first > bezier.FirstParameter() or last < bezier.LastParameter():
+            bezier.Segment(first, last)
+        arcs = [bezier]
+    else:
+        bspline = curve.BSpline()
+        if bspline.IsRational() or bspline.Degree() > 3:
+            return None
+        converter = GeomConvert_BSplineCurveToBezierCurve(bspline, first, last, 1.0e-12)
+        arcs = [converter.Arc(index) for index in range(1, converter.NbArcs() + 1)]
+    entities: List[dict] = []
+    for arc in arcs:
+        if arc.Degree() < 3:
+            arc.Increase(3)
+        poles = [arc.Pole(index) for index in range(1, 5)]
+        points = [_to_uv(ax3, pole.X(), pole.Y(), pole.Z()) for pole in poles]
+        if max(math.dist(points[0], point) for point in points) > _ENVELOPE_TOLERANCE:
+            entities.append(_bezier_entity(points))
+    return entities
+
+
+#: 辺が元の楕円の上にあるとみなす距離[mm]。楕円を R で広げて R で縮めて戻った辺の実測の残差より十分大きく、
+#: 近似の誤差の上限(`APPROXIMATION_TOLERANCE`)より十分小さい。
+_ELLIPSE_MATCH_TOLERANCE = 1.0e-6
+
+
+def _edge_on_ellipse(ax3: "gp_Ax3", edge: Any, params: dict) -> bool:
+    """辺の標本点がすべて楕円 `params` の上にあるか。
+
+    距離は、楕円の枠で同じ角の位置にある楕円上の点までの長さで測る(楕円上の点は 0、外れた点は真の最短距離以上)。
+    """
+    curve = BRepAdaptor_Curve(edge)
+    first, last = curve.FirstParameter(), curve.LastParameter()
+    cx, cy = float(params["cx"]), float(params["cy"])
+    a, b = float(params["width"]) / 2.0, float(params["height"]) / 2.0
+    if a <= 0.0 or b <= 0.0:
+        return False
+    angle = math.radians(float(params["angle"]))
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    for k in range(_OFFSET_FIT_SAMPLES * 4 + 1):
+        point = curve.Value(first + (last - first) * k / (_OFFSET_FIT_SAMPLES * 4))
+        x, y = _to_uv(ax3, point.X(), point.Y(), point.Z())
+        local_x = (x - cx) * cos_a + (y - cy) * sin_a
+        local_y = -(x - cx) * sin_a + (y - cy) * cos_a
+        theta = math.atan2(local_y / b, local_x / a)
+        if math.hypot(local_x - a * math.cos(theta), local_y - b * math.sin(theta)) > _ELLIPSE_MATCH_TOLERANCE:
+            return False
+    return True
+
+
+def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) -> List[dict]:
+    """辺 `[first, last]` を3次ベジエの列で近似する(つなぎ目で接線が連続する)。
+
+    各区間は3次エルミート(端点と、区間の内側から取った端点の1階微分の 区間長/3 を制御点に)。区間の内側の標本で、ベジエの点と
+    同じ割合のパラメータにある曲線の点の距離を測り、`APPROXIMATION_TOLERANCE` を超えたら区間を二分する。標本は、区間の中にある
+    曲線のノット(B-スプラインのノット、オフセット曲線なら元の曲線のノット)で区切った小区間ごとの等間隔の点(ノットの区間の中の
+    細い山を飛び越えないため。ノットで区間そのものを割ると、ノットの多い滑らかな曲線が区間の上限に当たる)。
+    誤差の上限は標本の点での値で、標本の間の保証ではない。
+    OCCT の `GeomConvert_ApproxCurve` は使わない: 3次で接線を連続にする(C1)と区間の数はこれと同じで、C2 を頼むと黙って
+    5次にする(2026-10-22 実測。20×10 の楕円を包んだ辺)。
+    """
+    def uv(parameter: float) -> Tuple[float, float]:
+        point = curve.Value(parameter)
+        return _to_uv(ax3, point.X(), point.Y(), point.Z())
+
+    if max(math.dist(uv(first), uv(first + (last - first) * k / 8)) for k in range(1, 9)) <= _ENVELOPE_TOLERANCE:
+        return []
+    xdir, ydir = gp_Vec(ax3.XDirection()), gp_Vec(ax3.YDirection())
+
+    def point_and_tangent(parameter: float, inside: float) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+        # 微分は区間の内側へ `inside` だけ寄せて取る: ノットの上では片側の微分しか返らず、G1 だが C1 でない継ぎ目(有理の
+        # B-スプラインの円など)で区間の終わりの接線の大きさが食い違い、二分しても誤差が縮まない。
+        vector = gp_Vec()
+        curve.D1(parameter + inside, gp_Pnt(), vector)
+        point = curve.Value(parameter)
+        return _to_uv(ax3, point.X(), point.Y(), point.Z()), (vector.Dot(xdir), vector.Dot(ydir))
+
+    entities: List[dict] = []
+    knots = _smooth_breaks(curve, first, last)[1:-1]
+    pending = [(first, last)]
+    while pending:
+        if len(entities) + len(pending) > _MAX_APPROXIMATION_SEGMENTS:
+            raise ValueError(
+                f"辺を3次ベジエで近似できない({_MAX_APPROXIMATION_SEGMENTS} 区間に割っても誤差が "
+                f"{APPROXIMATION_TOLERANCE} mm に収まらない。曲線が尖っている)"
+            )
+        t0, t1 = pending.pop()
+        nudge = (t1 - t0) * 1.0e-9
+        (p0, d0), (p3, d3) = point_and_tangent(t0, nudge), point_and_tangent(t1, -nudge)
+        third = (t1 - t0) / 3.0
+        points = [p0, (p0[0] + d0[0] * third, p0[1] + d0[1] * third), (p3[0] - d3[0] * third, p3[1] - d3[1] * third), p3]
+        inside = knots[bisect.bisect_right(knots, t0) : bisect.bisect_left(knots, t1)]
+        if _arc_error(points, uv, t0, t1, inside) <= APPROXIMATION_TOLERANCE:
+            entities.append(_bezier_entity(points, approximated=True))
+        else:
+            middle = (t0 + t1) / 2.0
+            pending.extend([(middle, t1), (t0, middle)])
+    return entities
+
+
+def _smooth_breaks(curve: Any, first: float, last: float) -> List[float]:
+    """`[first, last]` を曲線の滑らかな区間(B-スプラインならノット、オフセット曲線なら元の曲線のノット)の境目で区切った点の列。"""
+    count = curve.NbIntervals(GeomAbs_Shape.GeomAbs_CN)
+    bounds = TColStd_Array1OfReal(1, count + 1)
+    curve.Intervals(bounds, GeomAbs_Shape.GeomAbs_CN)
+    inner = sorted({bounds.Value(i) for i in range(1, count + 2) if first < bounds.Value(i) < last})
+    return [first, *inner, last]
+
+
+def _arc_error(
+    points: Sequence[Tuple[float, float]],
+    uv: Callable[[float], Tuple[float, float]],
+    t0: float,
+    t1: float,
+    knots: Sequence[float] = (),
+) -> float:
+    """ベジエ `points` と、曲線の `[t0, t1]` を同じ割合のパラメータで対応させたときの距離の最大。標本は、区間の中のノット
+    `knots`(昇順)で区切った小区間ごとの内側の等間隔の点と、ノットそのもの(ノットの区間の中の細い山を見落とさない)。"""
+    marks = [t0, *knots, t1]
+    shares = [(knot - t0) / (t1 - t0) for knot in knots]
+    for a, b in zip(marks, marks[1:]):
+        shares += [((a + (b - a) * k / (_APPROXIMATION_SAMPLES + 1)) - t0) / (t1 - t0) for k in range(1, _APPROXIMATION_SAMPLES + 1)]
+    worst = 0.0
+    for s in shares:
+        r = 1.0 - s
+        weights = (r * r * r, 3.0 * r * r * s, 3.0 * r * s * s, s * s * s)
+        bx = sum(w * p[0] for w, p in zip(weights, points))
+        by = sum(w * p[1] for w, p in zip(weights, points))
+        worst = max(worst, math.dist((bx, by), uv(t0 + (t1 - t0) * s)))
+    return worst
 
 
 def _circular_entity(
@@ -405,13 +672,14 @@ _OFFSET_FIT_TOLERANCE = 1.0e-8
 _OFFSET_FIT_SAMPLES = 9
 
 
-def _entities_of_offset_curve(uv: Callable[[float], Tuple[float, float]], first: float, last: float) -> List[dict]:
-    """`GeomAbs_OffsetCurve` の辺を、線分・円弧・円のスケッチ図形にする(点にまで縮んだ辺は図形なし)。
+def _entities_of_offset_curve(uv: Callable[[float], Tuple[float, float]], first: float, last: float) -> Any:
+    """`GeomAbs_OffsetCurve` の辺を、線分・円弧・円のスケッチ図形にする(点にまで縮んだ辺は図形なし)。直線にも円にも
+    乗らなければ None(呼び出し側が近似する)。
 
     外部の罠: 円や直線を B-スプラインに直した辺(ブーリアンやオフセットの途中で出る)を、さらにオフセットすると、
     OCCT は辺を元の円・直線の型に戻さず `GeomAbs_OffsetCurve` のまま返す(2026-10-18 実測: 円と長方形だけの領域を
     R=0.5, d=-0.5 で包むと、円の頂点まわりの長さ 0.01〜0.1 mm の2辺が出た)。曲線そのものは元の円と同心の円で、
-    標本点の円への残差は 1e-10 以下。標本点を直線・円へ当てはめ、残差が `_OFFSET_FIT_TOLERANCE` を超えるなら直さずに断る。
+    標本点の円への残差は 1e-10 以下。標本点を直線・円へ当てはめ、残差が `_OFFSET_FIT_TOLERANCE` を超えるなら直さない。
     """
     params = [first + (last - first) * k / (_OFFSET_FIT_SAMPLES - 1) for k in range(_OFFSET_FIT_SAMPLES)]
     points = [uv(parameter) for parameter in params]
@@ -431,21 +699,24 @@ def _entities_of_offset_curve(uv: Callable[[float], Tuple[float, float]], first:
         cx, cy, radius = fitted
         if all(abs(math.hypot(p[0] - cx, p[1] - cy) - radius) <= _OFFSET_FIT_TOLERANCE for p in points):
             return [_circular_entity(uv, first, last, cx, cy, radius)]
-    raise ValueError(
-        "包んだ結果に線分・円弧・円・閉じた楕円に直せない辺(GeomAbs_OffsetCurve)が出る"
-        "(標本点が直線にも円にも乗らない)"
-    )
+    return None
 
 
 def _circle_through(a: Tuple[float, float], b: Tuple[float, float], c: Tuple[float, float]) -> Any:
-    """3点を通る円 `(cx, cy, radius)`。共線なら None。"""
-    d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]))
+    """3点を通る円 `(cx, cy, radius)`。共線なら None。
+
+    最初の点を原点とする局所座標で解く。絶対座標の二乗を差し引く解き方だと、図形が原点から離れる(1000 mm など)と
+    0.01〜0.1 mm の短い弧で桁が落ち、当てはめを検査する残差の許容を超えて包み込みを断ってしまう。
+    """
+    bx, by = b[0] - a[0], b[1] - a[1]
+    px, py = c[0] - a[0], c[1] - a[1]
+    d = 2.0 * (bx * py - by * px)
     if d == 0.0:
         return None
-    sa, sb, sc = a[0] ** 2 + a[1] ** 2, b[0] ** 2 + b[1] ** 2, c[0] ** 2 + c[1] ** 2
-    cx = (sa * (b[1] - c[1]) + sb * (c[1] - a[1]) + sc * (a[1] - b[1])) / d
-    cy = (sa * (c[0] - b[0]) + sb * (a[0] - c[0]) + sc * (b[0] - a[0])) / d
-    return cx, cy, math.hypot(a[0] - cx, a[1] - cy)
+    sb, sc = bx * bx + by * by, px * px + py * py
+    ux = (py * sb - by * sc) / d
+    uy = (bx * sc - px * sb) / d
+    return a[0] + ux, a[1] + uy, math.hypot(ux, uy)
 
 
 def _ax3_from_plane(plane: dict) -> "gp_Ax3":
@@ -577,6 +848,11 @@ def _to_uv(ax3: "gp_Ax3", x: float, y: float, z: float) -> Tuple[float, float]:
     u = dx * xdir.X() + dy * xdir.Y() + dz * xdir.Z()
     v = dx * ydir.X() + dy * ydir.Y() + dz * ydir.Z()
     return u, v
+
+
+def _edges_point(ax3: "gp_Ax3", params: dict) -> List[Any]:
+    """点の図形は辺を持たない(領域を割らない)。"""
+    return []
 
 
 def _edges_line(ax3: "gp_Ax3", params: dict) -> List[Any]:
@@ -758,6 +1034,11 @@ def _edges_rectangle(ax3: "gp_Ax3", params: dict) -> List[Any]:
     return edges
 
 
+def _bbox_point(params: dict) -> Tuple[float, float, float, float]:
+    cx, cy = float(params["cx"]), float(params["cy"])
+    return (cx, cx, cy, cy)
+
+
 def _bbox_line(params: dict) -> Tuple[float, float, float, float]:
     x0, y0, x1, y1 = float(params["x0"]), float(params["y0"]), float(params["x1"]), float(params["y1"])
     return (min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1))
@@ -818,6 +1099,7 @@ class _KernelEntityKindOps:
 
 
 _KERNEL_ENTITY_KIND_TABLE: Dict[str, _KernelEntityKindOps] = {
+    "point": _KernelEntityKindOps(_edges_point, _bbox_point),
     "line": _KernelEntityKindOps(_edges_line, _bbox_line),
     "circle": _KernelEntityKindOps(_edges_circle, _bbox_circle),
     "ellipse": _KernelEntityKindOps(_edges_ellipse, _bbox_ellipse),

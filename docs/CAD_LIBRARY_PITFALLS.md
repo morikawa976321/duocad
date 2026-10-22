@@ -18,15 +18,34 @@
 | 面の `Orientation()==REVERSED` は平面の外向きを決めない。奇数回鏡映したボディの面は平面の `Position` が左手系で、REVERSED のとき `Direction` がすでに外向き(外向きは `BRepGProp_Face` の法線で決める) | `duocad/kernel_sketch.py` `_ax3_from_face` |
 | 曲面から `MakePrism` すると `IsDone()` は真でも `BRepCheck_Analyzer` が偽(または体積が激減) | `duocad/kernel_extrude.py` `_check_coplanar_planes` |
 | `ShapeUpgrade_UnifySameDomain` は入力そのものを壊す(コピーで試してから本番) | `duocad/kernel.py` `_unify_same_domain` |
+| `ShapeUpgrade_UnifySameDomain` に壊れた形を渡すと仮想メモリを際限なく使う(フィレットの吸収の総当たりで 84GB、PC が落ちた)。重い総当たりは `tools/capped_run.py` で | `duocad/kernel.py` `_absorbed_fillet` / `duocad/kernel_overflow.py` `_require_plausible` |
 | フィレット/面取りは例外を投げず失敗し、半径に対して単調でない | `duocad/kernel.py` `fillet_edges` / `chamfer_edges` |
-| 薄肉(シェル後)の箱で、フィレットの半径が縁の面の幅とちょうど一致すると `MakeFillet.Build()` が access violation でプロセスごと落ちる(`BRepPrimAPI_MakeBox` の箱で実測。押し出しの箱は `IsDone()=False`)。窓は 2e-9 mm 未満 | `duocad/kernel_chains.py` `fillet_consumes_face` |
+| 薄肉(シェル後)の箱で、フィレットの半径が縁の面の幅とちょうど一致すると `MakeFillet.Build()` が access violation でプロセスごと落ちる(`BRepPrimAPI_MakeBox` の箱で実測。押し出しの箱は `IsDone()=False`)。窓は 2e-9 mm 未満 | `duocad/kernel_chains.py` `fillet_consumes_face`(当たれば元の形の `MakeFillet` を呼ばずにはみ出しの吸収へ回る) |
+| 辺の曲線の最小曲率半径を超える一定半径のフィレットは `IsDone()=False`(楕円 6×2 の柱の上縁、先端の曲率半径 b²/a=0.667 に対し r0.65 は通り r0.7 で失敗)。転がり球の接触線(辺を半径だけ内へずらした曲線)が先端で燕尾状に自己交差するので、なめらかな一定半径の解は無い。自己交差した部分を切り落とし先端に稜線を残せば一定半径のまま立体になる(Fusion はこれを返す。r1 では稜線は上端から 0.057 mm・長さ約 0.43 mm)が、`MakeFillet` は切り落としをしない。**可変半径(`Add(TColgp_Array1OfPnt2d, edge)`、先端 0.5・短軸の端 1.0〜1.5)なら通り `BRepCheck` 真**(2026-10-21 実測) | `duocad/kernel.py` `fillet_edges` |
+| `MakeFillet` は丸めの面が隣り合わない別の形に当たると、断る・壊れた形を返すほか、**その形にも球を触れさせた別の形を黙って返す**(issue #208) | `duocad/kernel.py` `_blend_reaches_other_faces` / [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md) |
+| `ShapeUpgrade_UnifySameDomain` は軸が逆向きの円柱を同じ面と見なさない(押し出した円柱面の軸の向きは押し出す向きで決まり、`BRepPrimAPI_MakeCylinder` とスケッチの押し出しで逆) | `duocad/kernel_overflow.py` `_column` |
+| `BRepOffsetAPI_MakeThickSolid.MakeThickSolidBySimple` は面の向きによって体積が負(裏返し)の立体を返す | `duocad/kernel_overflow.py` `_column` |
+| `BRepExtrema_DistShapeShape` は辺に沿って弧で触れていても、解を頂点にしか返さないことがある | `duocad/kernel_overflow.py` `_touches_inside_of` |
+| `BRepOffsetAPI_MakePipe` の既定の向き(補正フレネ)は、まっすぐな道で断面がずれて体積が 2% 小さい(離散の向きなら合う)。道の曲がりの半径が断面の半径より小さいと体積 0 の立体になる | `duocad/kernel_overflow.py` `_swept_balls` |
+| `GeomAPI_Interpolate.Load` に端の向きを `Scale=True` で渡すと、端で曲線が波打つ(媒介変数は弦の長さなので、長さ 1 の向きを `Scale=False` で) | `duocad/kernel_overflow.py` `_interpolated` |
+| 面に接する立体(ちょうど半径の球を掃いた管)を引くと、引いた残りが接線でつながったまま分かれない。わずかに膨らませる。球を並べるなら球の間のくぼみより深く | `duocad/kernel_overflow.py` `_ROLL_SWELLS` / `_CHAIN_SWELL` |
+| 重なり合う道具を先に結合してから引くと遅く、結果も1回の引き算に全部渡したときと食い違う。球を1回のブーリアンで全部結合するのは、順に1つずつより遅く重い | `duocad/kernel_overflow.py` `_rolled_material` / `_swept_balls` |
+| 円柱・トーラスで済む立体を B スプラインの管で作ると、ブーリアンが桁で遅い(角から引くのが 5.5 秒 → 0.07 秒) | `duocad/kernel_overflow.py` `_exact_tube` |
+| 円錐面の延長を頂点の手前で止めると先に穴が残り、箱を内と外に割り切れない(頂点ちょうどまで延ばす) | `duocad/kernel_overflow.py` `_extended_face` |
 | 由来(provenance)の取り出し方は操作ごとに違う(`History()` / `Modified()`、`IsRemoved` / `IsDeleted`) | `duocad/kernel.py` `normalize_provenance` |
 | `Face.center()` の既定は `CenterOf.GEOMETRY` で面積重心ではない(曲面では面パッチの上にすら乗らない) | `duocad/query.py` `face_centroid` / `face_fingerprint` |
-| 生の `TopoDS_Shape` を build123d で包む入口は `Compound.cast`(基底の `Shape.cast` は None を返す)。`faces()` / `edges()` は重複除去済み | `duocad/query.py` 冒頭 |
+| 生の `TopoDS_Shape` を build123d で包む入口は `Compound.cast`(基底の `Shape.cast` は None を返す)。`faces()` / `edges()` は重複除去済み。ただし `edges()` は縮退辺(球の極・円錐の頂点・フィレットの角。長さ0)を除くので、辺の数は kernel の `edge_count` から取る(球で 1 と 3、全辺 R3 のフィレット立方体で 48 と 56) | `duocad/query.py` 冒頭・`describe_shape` |
 | 左手系のスケッチ枠で `gp_Ax2(中心, ax3.Direction(), X)` を作ると Y が逆になり、円弧は時計回り・楕円は角度が逆に出る(立方体6面のうち5面) | `duocad/kernel_sketch.py` `_curve_axis` |
 | `gp_Elips` は長半径 >= 短半径でないと `Standard_ConstructionError`(縦長の楕円は軸を 90° 回して入れ替える) | `duocad/kernel_sketch.py` `_ellipse_gp` |
 | 離心率0の `gp_Elips`(長半径と短半径の差 5e-8 以下)の辺を `BRepOffsetAPI_MakeOffset` に渡すと access violation でプロセスごと落ちる(縦横が等しい楕円は辺を `gp_Circ` にする) | `duocad/kernel_sketch.py` `_ellipse_gp` |
+| `BRepOffsetAPI_MakeOffset` で平面の輪郭を内へずらすと、領域が消える距離(半径 1 の円を 3)でプロセスごと落ちる。楕円では継ぎ目が 6° 折れ、面積が 1.5% ずれる | `duocad/kernel_tight.py` `_center_path` |
+| `BRepOffsetAPI_MakeFilling` に、支える面の上の座標(pcurve)を持たない辺を G1 の境界で渡すと `Build()` がアクセス違反でプロセスごと落ちる | `duocad/kernel_tight.py` `_cap` |
+| `BRepAdaptor_CompCurve` の弧長の媒介変数は、辺の境目だけが弧長の位置で、辺の中は辺の媒介変数の一次の伸ばし | `duocad/kernel_tight.py` `_contour_pieces` |
+| `BRepOffsetAPI_MakePipeShell` の既定の許容(1e-4)の面は、掃いた断面の端の軌跡から 3.8e-5 ずれ、隣の面と縫い合わせられない | `duocad/kernel_tight.py` `_side` |
+| `ShapeFix_Solid` は面を置き換えることがあり、それより前の操作の由来(`Modified`)が結果の面に届かない | `duocad/kernel_tight.py` `_closed_solid` |
 | 円・直線を B-スプラインに直した辺(ブーリアン・オフセットの途中で出る)をさらにオフセットすると、元の型に戻らず `GeomAbs_OffsetCurve` のまま返る(曲線そのものは円・直線で、標本点の残差は 1e-10 以下)。標本点を当てはめて直す | `duocad/kernel_sketch.py` `_entities_of_offset_curve` |
+| 楕円を広げて縮めた面(辺が楕円のずらし曲線のずらし曲線)を `BRepOffsetAPI_MakeOffset` でさらに広げると、例外も `IsDone()=False` も出さずに壊れたワイヤを返す(20×10 の楕円を R=1, d=1.5 で包むと面積 43.3 と −16.8 の2枚。正しくは 236.81 の1枚)。同じ面でも距離によっては `IsDone()=False` で失敗する(角度 30 度で R=1, d=2)。`BRepBuilderAPI_NurbsConvert` で有理 B-スプラインにしてから渡すと access violation。広げるのに失敗するか、結果が「1枚で面積が減らない」でなければ、その辺を有理でない多項式の B-スプラインに近似し直してやり直す | `duocad/kernel_sketch.py` `_dilate_faces`・`_offset_ready` |
+| `GeomConvert_ApproxCurve` に連続性 C2・次数上限 3 を頼むと、断らずに5次の B-スプラインを返す(C2 には5次が要る)。3次で頼めるのは C1 まで | `duocad/kernel_sketch.py` `_approximated_beziers` |
 | 辺の長さは `GCPnts_AbscissaPoint.Length_s` の既定の許容差も build123d の `Edge.length` も楕円・B-spline で粗い(楕円 40×2 で +1.74%)。許容差を渡す | `duocad/kernel.py` `edge_length` |
 | 螺旋の歯を芯の円柱へ `Fuse` すると、`BRepCheck` が真のまま芯が消える寸法がある(M5×0.8 で体積 −84%) | [THREAD.md](THREAD.md)「形の作り方」 |
 | `VolumeProperties_s` の既定積分(Eps 無し)は何周も巻いた B-spline の面で狂う(歯だけで −19%、ねじの軸で 1.5e-03) | [THREAD.md](THREAD.md)「体積の既定積分はねじ山で狂う」 |
@@ -90,7 +109,27 @@
   由来で新しい面として記録されることがある(NURBS にした箱)ので、内壁から外す。
 - **`BRepExtrema_DistShapeShape` は同心の円筒どうし・球と円筒の面の対で `StdFail_NotDone` を投げる**(最短の組が
   無数にある。丸めた箱の内壁と外壁で実測)。その対を1つでも含む複合形状どうしも同じく落ちる。
-  面の縁の上の点から測れば測れる(`kernel_shell._face_distance`)。
+  面の縁の上の点から測れば測れる(`kernel_shell._face_distance`)。**角を丸めた箱に、丸めを同心にした中子を隙間 0.2 で入れた形でも落ち**
+  (r=3 と r=2 で再現、隙間 0.1 の r=3 では落ちない。`SetMultiThread(True)` だと `Standard_ProgramError: Multiple exceptions` で上がる)、
+  面の対ごとに測って落ちた対だけ縁の点から測ると 0.1999999718 と測れる(Issue #186 の試作 `tools/interference_probe/concentric.py`)。
+  全周の同心円筒(ピンと穴)と、円筒の穴の中の球は落ちなかった。
+- **`BRepExtrema_DistShapeShape.InnerSolution()` は当てにしない**: 片方がもう片方の中にあるとき True になる一方、体積の重なりが 0 の
+  接触の組でも True が出た(Issue #186 の試作、PC ケースの STEP)。
+- **General Fuse / BOP は既定の破壊モードで入力の形状許容差を書き換える**: PC ケースの STEP 27 体に `BOPAlgo_Builder` を掛けると、
+  11 体の最大許容差が変わった(例 1e-7 → 1.5e-7)。`SetNonDestructive(True)` で 0 体、時間は同じ。文書の形に結果を残さない計算
+  (問い合わせ・プレビュー)では非破壊にするか写し(`kernel.copy_shape`)に掛ける(Issue #186 の試作 `astra_checks.py`)。
+- **`BOPAlgo_BOP.PDS()` や `PPaveFiller().DS()` が返す DS に Python から触るとプロセスが落ちる**(終了コード 127。小さな形では
+  インタプリタの終了時に落ちる)。ラッパがポインタの持ち主のつもりで解放する。DS を読むなら `BOPAlgo_PaveFiller` を自分で作り
+  `DS()`(参照)を読む(`kernel_brep.inspect_solid` の `BOPAlgo_CheckerSI.DS()` も参照なので安全)。
+- **BOP の DS の FF 干渉は「面が触れている」ではない**: 隙間 0.2 で離れた2部品でも面の組が 114 件記録される(境界箱が重なる面の
+  組の記録)。接触は GF の像の共有(両方の像に同じ面・辺・頂点があるか)で読む([INTERFERENCE.md](INTERFERENCE.md))。
+- **OCP からは OCCT の計算を途中で止められない**: `BOPAlgo_Builder.Perform(theRange)` は進捗の範囲を受け取るが、止める側の
+  `Message_ProgressIndicator` は OCP で構築子が無く Python で継承できない(`TypeError: No constructor defined!`)。山形が一致した
+  ねじ山(M8×1.25、らせんの B-spline 面どうしが重なる)の2体 GF は 240 秒で終わらなかった(M20×2.5 では 4.2 秒で終わる)。
+  時間の上限が要る計算は子プロセスで走らせて止める。
+- **`BRepExtrema_ShapeProximity.OverlapSubShapes1/2()` は OCP 7.9.3 で戻り値の型(`NCollection_DataMap<int, TColStd_PackedMapOfInteger>`)が
+  登録されておらず `TypeError` になる。**
+- **manifold3d の `Manifold.min_gap(other, search)` は結果を [0, search] に丸める**: search を 0 にすると全部 0(接触)になる。
 - **R と d の円弧が同じ点で接する結果の結合は、既定の許容差(1e-7)だと取りこぼしうる**ので、ブーリアンに
   1e-6 のファジー値を付ける(`_ENVELOPE_TOLERANCE`)。ベジエ辺の領域は、オフセットが元の曲線の近似曲線を返し
   線分・円弧だけという指定を満たせないので拒む。
@@ -108,6 +147,49 @@
   - **素の柱を `BRepOffsetAPI_DraftAngle` で傾ける**(側面を `Add(face, 押し出し方向, angle, 底面の平面)`)と、高さは垂直のまま、
     太る向きでも角は尖ったまま(平面6枚)、円は円錐1枚で解析体積と一致、穴は同じ向き指定で外形が細り穴が広がる(抜き勾配)。
     潰れる角度(長方形 40°)は `IsDone()=False`。**ただしベジエ・楕円を押し出した側面(`SurfaceOfExtrusion`)は `AddDone()=False`**。
+  - **輪郭線ごとに `BRepOffsetAPI_MakeDraft(wire, 方向, |angle|)` + `SetOptions(BRepBuilderAPI_RightCorner)` で側面の殻を作り、
+    底面と上の自由境界から張った面を縫う**と、ベジエ・楕円・L字の凹角まで角が尖ったまま通り、長方形・円は DraftAngle と体積が一致する。
+    **細る/太るは角度の符号でも輪郭の向きでもなく `SetDraft(True)` で内向きになる**(既定は外向き。`Perform(L)` の L は斜辺の長さ)。
+    穴は穴の輪郭を逆向きに傾けた立体を外周の立体から cut すれば、外周が太ると穴が狭まる(DraftAngle の穴あき板と体積一致)。
+    潰れる角度は長方形・L字では殻が `BRepCheck` 偽になるが、**円は頂点を越えて砂時計形の円錐を返し、`BRepCheck` も
+    `BOPAlgo_ArgumentAnalyzer` の自己交差検査も通る**(円 r5・高さ 10・40°)。潰れの検出は自前で要る。
+    楕円 6×3 を高さ 10 で 5° 細らせると先端の曲率半径が約 0.6 になり、全辺 r1 のフィレットは失敗する(r0.5 や高さ 5 なら通る)。
+  - **`MakeDraft` は `Perform` の長さが 7e-5 mm 以下だと access violation でプロセスごと落ちる**(1e-4 は通る。角度 0.01°〜45°・
+    輪郭の大きさ 0.01〜1万倍によらない。2026-10-18 実測、sol レビューで発覚)。円・楕円は 1e-5 で `IsDone()=False` を返す。
+    `kernel_extrude.MIN_TAPER_DISTANCE` で先に断る。
+  - **`MakeDraft` は角度 89.8° 以上で別の形を成功として返す**(20×10・高さ 10・89.9° で体積 2000、期待は約 4.4 億)。89.5° までは正しく、
+    89.6〜89.7° は `BRepCheck` 偽で断られる。距離・輪郭の大きさによらず角度だけで決まる(2026-10-18 実測)。上限は `MAX_TAPER` = 89°。
+  - **端の1階微分が0のベジエ(端の制御点が重なる)で `MakeDraft` は `gp_Vec::Normalize` の Standard_ConstructionError を投げる**。
+    `Approx_CurvilinearParameter` で付け直すと NaN になる。重なった制御点を 1e-7 mm ずらせば通る(端点は動かない)。
+    同じ点で `BRepLProp_CLProps` は接線ありと答えるのに `Normal` が LProp_NotDefined を投げる。
+  - **曲率の極値は `Geom2dLProp_CurAndInf2d.PerformCurExt` で式で取れる**(曲率半径 0.001 mm の鋭いベジエの山を t=0.507 ちょうどで返す。
+    極が重なった直線状のベジエでは `IsDone()=False`)。OCP の例外は共通の基底を持たず `Exception` を直に継ぐ。
+  - **楕円を傾けた側面と底・ふたの縫い目は、押し出し量 0.1 mm だと許容差 1e-6 で閉じない**(自由辺2本・`BRepCheck` 偽。1e-5 で閉じる)。
+    殻の `ShapeAnalysis_ShapeTolerance` は 1e-7 と答えるので当てにならない。両端の極が重なった直線のベジエを極をずらして傾けると、
+    体積の積分が 2.4% ずれる(sol レビューで再現。線分に置き換えれば正確)。
+  - **`MakeDraft` は長さ 0.14 mm の辺(0.1 mm の面取り)を持つ多角形で、角度 ±0.3〜5° のどれでも Standard_OutOfRange を投げる**
+    (輪郭の向きによらない)。同じ輪郭を `DraftAngle` は作れ、面取り辺が消える角度(−1°)では `IsDone()=False` を返す。
+    直線と円弧だけの輪郭は `DraftAngle` に任せる。
+- **`BRepGProp.VolumeProperties` の既定の積分と適応積分は、面の種類で得手が逆になる**(2026-10-19 実測、sol レビュー):
+  - 既定の積分は、細い楕円を傾けた B スプラインの側面と B スプラインの曲線で囲まれた平面のふたで 3〜152% ずれる
+    (幅12・高さ1・距離10・5° で 215.53、真の値 208.48)。`Eps=1e-9` の適応積分なら合う。
+  - 適応積分は押し出し面(楕円柱の側面)で重心を 0.02 mm ずらす(幅120・高さ60・距離10。Eps=1e-6 では 0.25 mm)。既定なら正確。
+  - 面を1枚ずつ `VolumeProperties_s` に渡すと、基準点が面の位置変換に合わせて動き、寄与を足しても体積にならない(平面のふたが 0)。
+    共通の基準点で `BRepGProp_Vinert(BRepGProp_Face, BRepGProp_Domain, 基準点[, Eps])` を面ごとに作って `GProp_GProps.Add` する。
+    基準点は**閉じた殻ごとにその殻の境界箱の中心**にする(原点だと、Z=100 の 12×6 の楕円を 0.001 mm 押した形で体積が 1.3% ずれ
+    重心が立体の外へ出た。形全体の境界箱の中心でも、離れた2つの薄い殻を持つボディで重心が 0.24 mm ずれた)。
+    形全体を既定の積分で測る経路(原点が基準)は、箱・円柱を Z=10000 に置いても相対 2e-10 で問題ない。
+  `kernel._volume_props` は、曲面か境界の辺が B スプライン・ベジエ・平行曲線の面だけ適応積分にし、無ければ形全体を既定の積分で測る。
+- **`MakeDraft` で楕円を傾けた側面は近似で、底・ふたとの継ぎ目に約 1e-5 mm のすき間が残る**(12×6 の楕円を 0.001 mm・5° で押すと、
+  縫い合わせは 1e-6 で閉じず 1e-5 で閉じ、辺の許容差は 8.8e-6。2026-10-19 実測)。体積・重心はこのすき間 × 基準点からの距離(重心は2乗)
+  だけずれる: その板を 100 mm 離して2枚置き Φ0.2 の軸でつないだ1つの殻では、重心が 0.0085 mm ずれる。既定の積分・形全体の適応積分・
+  殻ごとの基準点の面ごとの積分のどれでも同じ値になる(積分のやり方ではなく形のすき間が原因)。板1枚だけなら重心は正しい。
+  sol レビュー8回目の指摘で、追いかけるのはここで止めた(正すには楕円の傾いた面を `MakeDraft` に頼らず正確に組む必要がある。
+  元の曲線と `Geom_OffsetCurve` の間の線織面(`BRepFill.Face`)は、細い楕円で対応点がずれ途中の断面が 1.1 mm 外れて使えなかった)。
+- **`MakeDraft` は、継ぎ目が曲率のきつい点にある1本の辺の閉じた輪郭で Standard_OutOfRange を投げる**(幅120・高さ1 の楕円、継ぎ目は
+  長軸の端)。継ぎ目を短軸の端へ移すか、4本に分ければ通る(`kernel_extrude._split_closed_edge`)。
+- **`BRepGProp.LinearProperties` と `GCPnts_AbscissaPoint.Length` は、精度を渡さないと半径 6・3 の楕円の周長を 29.1035 と返す**
+  (真の値 29.0653。0.13% 大きい。`Length_s(curve, 1e-9)` なら 29.065345。2026-10-19 実測)。検算に使うなら精度を渡す。
 
 ## 複数面の押し出し（`kernel_extrude.extrude_faces`）
 

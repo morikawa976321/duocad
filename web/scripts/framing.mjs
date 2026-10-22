@@ -22,20 +22,30 @@ export function distanceFor(dir, centre, allVerts, fov, aspect) {
   const n = Math.hypot(...dir)
   if (!Number.isFinite(n) || n === 0) throw new Error(`視線の向きが使えない: ${dir.join(',')}`)
   const d = dir.map((v) => v / n)
-  const f = d.map((v) => -v)
   const up = [0, 0, 1]
-  let right = cross(f, up)
-  const length = Math.hypot(...right)
-  // 真上・真下(Z軸と平行)では外積が零ベクトルになる。three.js の `lookAt` が選ぶ向き(画面の右 = +Y)に揃える。
-  right = length < 1e-9 ? [0, 1, 0] : right.map((v) => v / length)
-  const upv = cross(right, f)
+  // three.js の `Matrix4.lookAt` と同じ手順で画面の軸を決める(z = 注視点からカメラへの向き、x = up × z、y = z × x)。
+  // 退化(x が厳密に零ベクトル)のときだけ z を up と平行でない向きへ 1e-4 ずらして取り直す。**しきい値を 1e-9 などに
+  // しない**: 厳密には零でない 1e-10 の外積を three.js は正規化して使う(右が -X になる)ので、別の向きを選ぶと
+  // 距離の計算と実際の画面の軸が食い違い、被写体が画面から欠ける。
+  let z = d.slice()
+  let x = cross(up, z)
+  if (x[0] * x[0] + x[1] * x[1] + x[2] * x[2] === 0) {
+    if (Math.abs(up[2]) === 1) z[0] += 0.0001
+    else z[2] += 0.0001
+    const zn = Math.hypot(...z)
+    z = z.map((v) => v / zn)
+    x = cross(up, z)
+  }
+  const xn = Math.hypot(...x)
+  const right = x.map((v) => v / xn)
+  const upv = cross(z, right)
   const tanV = Math.tan((fov * Math.PI) / 180 / 2)
   const tanH = tanV * aspect
   let dist = 0
   for (const verts of allVerts) {
     for (let i = 0; i < verts.length; i += 3) {
       const p = [verts[i] - centre[0], verts[i + 1] - centre[1], verts[i + 2] - centre[2]]
-      const along = p[0] * d[0] + p[1] * d[1] + p[2] * d[2]
+      const along = p[0] * z[0] + p[1] * z[1] + p[2] * z[2]
       const x = Math.abs(p[0] * right[0] + p[1] * right[1] + p[2] * right[2])
       const y = Math.abs(p[0] * upv[0] + p[1] * upv[1] + p[2] * upv[2])
       dist = Math.max(dist, along + x / tanH, along + y / tanV)

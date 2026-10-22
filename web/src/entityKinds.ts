@@ -12,7 +12,7 @@ import {
 } from './adaptiveResolution'
 
 /** 図形の種別。この表のキーが唯一の正。 */
-export type EntityKind = 'line' | 'circle' | 'ellipse' | 'rectangle' | 'arc' | 'bezier'
+export type EntityKind = 'point' | 'line' | 'circle' | 'ellipse' | 'rectangle' | 'arc' | 'bezier'
 
 /**
  * 交点探索用の幾何プリミティブ。直線区間・円・円弧・楕円の4種(`EntityKindSpec.intersectables`)。
@@ -334,6 +334,26 @@ function projectToEllipse(params: Record<string, number>, u: number, v: number):
 }
 
 const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
+  // 点は辺を持たない: 折れ線は1点だけで線にならず(`viewport.ts` は点の印で描く)、交点も持たない
+  point: {
+    pointKeys: [['cx', 'cy']],
+    verb: 'add_point',
+    translate: (params, dx, dy) => translateAtCenter(params, 'cx', 'cy', dx, dy),
+    rotate(params, cx, cy, angleDeg) {
+      const [nx, ny] = rotatePoint(params.cx, params.cy, cx, cy, angleDeg)
+      return { ...params, cx: nx, cy: ny }
+    },
+    fromArgs(args) {
+      const point = args.point as [number, number]
+      return { cx: point[0], cy: point[1] }
+    },
+    toPoints(params) {
+      return [[params.cx, params.cy]]
+    },
+    snap(params) {
+      return [params.cx, params.cy]
+    },
+  },
   line: {
     pointKeys: [['x0', 'y0'], ['x1', 'y1']],
     intersectables: (params) => [
@@ -962,11 +982,9 @@ export function ghostEntity(
  * **1本も描かない**(途中まで描くと「間隔は合っているのに個数が足りない」に見え、
  * 打ち間違いなのか不具合なのか人には区別できない)。
  *
- * **コア側に同じ上限は無い**。ここは画面が固まらないためだけの値で、確定結果は
- * いつもどおり打った個数どおりに作られる —— **上限を超えた個数でも Enter は通り、
- * 幽霊を見ないまま大量の複製ができる**。それでよいとした理由は、上限を verb 側へ
- * 持ち込むと「画面が重い」というブラウザ側の都合が文書の作れる形を決めてしまうためで、
- * ここは表示の都合として閉じてある。
+ * **コア側の上限(`duocad/verbs/pattern.py` の `MAX_PATTERN_COPIES` = 2500)とは別の値**。ここは画面が固まらない
+ * ためだけの表示の値で、これを超えても Enter は通り、幽霊を見ないまま複製ができる。コアは複製の総数が
+ * 2500 を超える入力を ValueError で断る(桁の取り違えでイベントループが数十秒〜無限に止まるため)。
  */
 export const GHOST_COPY_LIMIT = 2000
 

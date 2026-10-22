@@ -28,6 +28,7 @@ JSON テキストのままだと PC ケース(27 部品)の初回配信が 6.1 M
 from __future__ import annotations
 
 import json
+import math
 import struct
 import sys
 from array import array
@@ -69,9 +70,39 @@ def encode(payload: dict) -> bytes:
             return [walk(item) for item in value]
         return value
 
-    header = json.dumps(walk(payload), ensure_ascii=False).encode("utf-8")
+    header = dumps(walk(payload)).encode("utf-8")
     header += b" " * (-len(header) % 4)
     return b"".join([struct.pack("<I", len(header)), header, *chunks])
+
+
+def _without_non_finite(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _without_non_finite(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_without_non_finite(item) for item in value]
+    return value
+
+
+def dumps(payload: Any, **options: Any) -> str:
+    """配信・応答の JSON 本文。**非有限の数は `null` にして送る**: JSON に `NaN` / `Infinity` は無く、裸のまま送ると
+    ブラウザの `JSON.parse` が状態フレーム全体を読めなくなり、再接続しても全量フレームにまた載る。入口の検査
+    (`catalog.check_arguments`)が通さないが、計算で出た NaN(退化した形の体積など)が混ざっても配信を壊さないための最後の砦。
+    厳密に符号化し、失敗したときだけ(普通は走らない)全体を走査して直す。
+    """
+    try:
+        text = json.dumps(payload, ensure_ascii=False, allow_nan=False, **options)
+    except ValueError:
+        payload = _without_non_finite(payload)
+        text = json.dumps(payload, ensure_ascii=False, allow_nan=False, **options)
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        # 要求の `id` や未知の `method` を応答にそのまま写す口などに、UTF-8 に符号化できない孤立サロゲートが紛れたとき。
+        # `\uXXXX` の書き方なら JSON として有効で、送る段(`.encode` / WebSocket)で落ちない。
+        text = json.dumps(payload, ensure_ascii=True, allow_nan=False, **options)
+    return text
 
 
 def decode(frame: bytes) -> dict:

@@ -153,9 +153,8 @@ export interface SelectionArgSpec extends ArgSpecCommon {
    */
   kinds?: SelectableKind[]
   /**
-   * 頂点そのものを対象にする引数(測定)。起動中は対象ボディの頂点を候補として全部出し、辺より先に取る
-   * (`App.svelte` の `vertexCandidateBody` / `viewport.preferVertices`)。`kinds` に `'vertex'` があるだけでは出さない
-   * (`move_body` / `mirror_body` の頂点はボディを名指しする手の1つでしかない)。
+   * 頂点そのものを対象にする引数(測定)。起動中は頂点を指せる種類に入れる(`App.svelte` の `wantedVertices` → `pickKinds`)。
+   * `kinds` に `'vertex'` があれば同じく指せる(`move_body` / `mirror_body` の頂点はボディを名指しする手の1つ)。
    */
   pickVertices?: true
   min: number
@@ -245,7 +244,7 @@ export function syncedChoice(
   return option !== undefined && choiceSends(option) === null ? { value: current } : { value: undefined }
 }
 
-/** スケッチの図形を選ぶ引数(反復のverb)。選択引数と別物: スケッチの図形は共有選択集合に入らない(コアの `SELECTABLE_KINDS`)。値はスケッチパネルで選んだ図形のIDで、`CommandHost` へは `entities` プロパティで渡る。 */
+/** スケッチの図形を選ぶ引数(反復のverb)。値は共有選択集合のうち編集中スケッチの図形のID(`App.svelte` の `selectedEntities`)で、`CommandHost` へは `entities` プロパティで渡る。 */
 export interface EntitiesArgSpec extends ArgSpecCommon {
   kind: 'entities'
   min: number
@@ -267,6 +266,11 @@ export interface TextArgSpec extends ArgSpecCommon {
    * 配信から欄へ戻すときは `String(値)` なので、配列はカンマ区切りの文字列に戻る。
    */
   toShared?(value: string): unknown
+  /**
+   * 確定・起動し直しの後も欄の値を残すか(既定は残す: ファイルのパスは同じ場所へ保存し直すのが普通の使い方)。
+   * 選んだ対象と対になる値(ロフトの `shifts` は断面ごと)は `false`: 残すと次の起動で断面の数と合わず確定できない。
+   */
+  remember?: boolean
 }
 
 /**

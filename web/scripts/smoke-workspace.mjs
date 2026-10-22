@@ -40,12 +40,18 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await mcp.callTool('set_visible', { body_id: far.bodyId, visible: false }) // 述語がボディをまたがないように
   await mcp.callTool('begin_command', { verb: 'fillet' })
   await waitFor(
-    () => document.querySelector('.command-host')?.dataset.command === 'fillet' && window.__duocad.wantsEdges === true,
-    'AI の begin_command で画面に「丸める」が起動しない(辺を要求していない)',
+    () =>
+      document.querySelector('.command-host')?.dataset.command === 'fillet' &&
+      JSON.stringify(window.__duocad.pickKinds) === '["edge"]',
+    'AI の begin_command で画面に「丸める」が起動しない(辺だけを指せる状態にならない)',
   )
   await mcp.callTool('set_selection', { predicate: VERTICAL_EDGES })
+  // 選ばれた辺のボディの辺は、カーソルが近くになくても取り寄せる(強調して描くのに座標が要る)
   await waitFor(
-    () => (window.__duocad.selection?.count ?? 0) === 4 && (window.__duocad.edges?.edges?.length ?? 0) > 0,
+    () => {
+      const items = window.__duocad.selection?.items ?? []
+      return items.length === 4 && items.every((item) => (window.__duocad.edges?.[item.body]?.edges?.length ?? 0) > 0)
+    },
     'AI の辺の選択が画面に届かない(辺のジオメトリが無い)',
   )
   ok('[1] AI が begin_command(fillet) → set_selection(辺) で止めると、画面に「丸める」が起動して辺が見える')

@@ -3,11 +3,11 @@
  *
  * 対象集合(領域・辺)はサーバへ送らない。サーバ側の `Session` が自分の選択集合から取る(`selection.require_*`)。
  * 選択引数の定義(`kind: 'selection'`)が残るのは、人がまだ選んでいないことを画面に出し、辺のピッキングを起動するため(`CommandHost` の `onWants`)。
- * スケッチの図形(反復の対象)はコアの選択集合に入らないので、スケッチパネルで選び `entities` 引数として渡る。
+ * スケッチの図形(反復の対象)は、共有選択集合のうち編集中スケッチの図形から `entities` 引数として渡る(`App.svelte` の `selectedEntities`)。
  *
- * 反復にはサーバのプレビューを出さない: 展開規則(全周は `360/count` の刻み角、など)はコアが持っており、ブラウザへ二重実装すると画面の予想と実際が食い違う。
+ * 反復にはサーバのプレビューを出さない(変わるのはスケッチの図形でソリッドではない)。幽霊はブラウザだけで描き、規則はコアの写し(docs/contracts/verbs.md)。
  */
-import { pickedRefOf, positive, type ArgValues, type CommandDef, type Point2 } from './command'
+import { pickedRefOf, positive, refKind, type ArgValues, type CommandDef, type Point2 } from './command'
 import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg } from './moveMode'
 import type { SelectionRef } from '../session'
 
@@ -30,28 +30,41 @@ function missingSelection(values: ArgValues, name: string, label: string): strin
 }
 
 /**
- * 押し出し(verb `extrude`)。スケッチ編集中は閉領域、通常モードはソリッドの面を選ぶ2つの定義を作る(サーバは選択の種別で分岐し、混在は断る)。
+ * 押し出し(verb `extrude`)。スケッチ編集中は閉領域、通常モードはソリッドの面か領域を選ぶ2つの定義を作る
+ * (サーバは選択の種別で分岐し、混在は断る。通常モードの領域は 2026-10-18 本人決定。docs/DESIGN_DECISIONS.md)。
  * 種別(join/cut/new)は人に選ばせる: 既定の join に落ちると「切り取るつもりで足した」が黙って通る。
  * 面の距離は外向きが正(削るには負)。領域の距離は0だけが無効。
+ * テーパー角は正で太る・負で細る(Fusion と同じ符号)。0 のときは送らない(テーパーの無い押し出しと同じ args になる)。
  */
 function makeExtrude(kind: 'region' | 'face'): CommandDef {
   const isFace = kind === 'face'
   const selectionName = isFace ? 'faces' : 'regions'
-  const selectionLabel = isFace ? '押し出す面' : '押し出す領域'
+  const selectionLabel = isFace ? '押し出す面・領域' : '押し出す領域'
   return {
     id: 'extrude',
     label: '押し出す',
     buttonId: 'extrude',
     preview: 'server',
     args: [
-      { kind: 'selection', name: selectionName, label: selectionLabel, shapeKind: kind, min: 1, max: null },
+      isFace
+        ? { kind: 'selection', name: selectionName, label: selectionLabel, shapeKind: 'face', kinds: ['face', 'region'], min: 1, max: null }
+        : { kind: 'selection', name: selectionName, label: selectionLabel, shapeKind: 'region', min: 1, max: null },
       {
         kind: 'number',
         name: 'distance',
-        label: isFace ? '距離(正=面の外向き)' : '距離',
+        label: isFace ? '距離(面は正=外向き)' : '距離',
         unit: 'mm',
         inputId: 'distance',
-        reject: (value) => (value === 0 ? (isFace ? '距離が0(正=面の外向き / 負=削る)' : '距離が0(形が変わらない)') : null),
+        reject: (value) => (value === 0 ? (isFace ? '距離が0(面は正=外向き / 負=削る)' : '距離が0(形が変わらない)') : null),
+      },
+      {
+        kind: 'number',
+        name: 'taper',
+        label: 'テーパー角(正=太る / 負=細る)',
+        unit: '°',
+        inputId: 'extrude-taper',
+        default: 0,
+        reject: (value) => (Math.abs(value) <= 89 ? null : 'テーパー角は-89以上89以下'),
       },
       {
         kind: 'choice',
@@ -65,13 +78,22 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
       },
     ],
     build(values) {
-      const empty = missingSelection(values, selectionName, isFace ? '面' : '領域')
+      const empty = missingSelection(values, selectionName, isFace ? '面か領域' : '領域')
       const distance = values.distance
+      const taper = values.taper
       const mode = values.mode
       if (empty !== null) return { ok: false, reason: empty }
+      // コアの `selection.require_extrude_targets` と同じ断り方を先に出す(押せるのにサーバで断られる、をなくす)
+      const targets = (values[selectionName] ?? []) as SelectionRef[]
+      const regions = targets.filter((ref) => refKind(ref) === 'region')
+      if (regions.length > 0 && regions.length < targets.length) return { ok: false, reason: '面と領域は一緒に押し出せない' }
+      if (new Set(regions.map((ref) => ('sketch' in ref ? ref.sketch : ''))).size > 1) {
+        return { ok: false, reason: '別々のスケッチの領域は一緒に押し出せない' }
+      }
       if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
+      if (typeof taper !== 'number') return { ok: false, reason: 'テーパー角が数値でない' }
       if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
-      return { ok: true, args: { distance, mode } }
+      return { ok: true, args: taper === 0 ? { distance, mode } : { distance, taper, mode } }
     },
   }
 }
@@ -79,7 +101,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
 /** スケッチモードの押し出し(閉領域を選ぶ)。 */
 export const EXTRUDE_REGIONS: CommandDef = makeExtrude('region')
 
-/** 通常モードの押し出し(ソリッドの面を選ぶ。同一平面・同一ボディなら何枚でも)。 */
+/** 通常モードの押し出し(ソリッドの面を選ぶ。同一平面・同一ボディなら何枚でも。または1つのスケッチの領域)。 */
 export const EXTRUDE_FACES: CommandDef = makeExtrude('face')
 
 /**
@@ -162,8 +184,9 @@ export function parseShifts(text: string): number[] | null {
 /**
  * ロフト(verb `loft`)。通常モードで、別々のスケッチの領域を**つなぐ順に**選ぶ(共有選択は追加順を保ち、コアはその順で使う)。
  * スケッチ編集中に出さないのは、編集中は開いているスケッチの領域しか指せないため(`viewport.regionPickTargets`)。
- * 通常モードで領域を要求するのはこのコマンドだけで、起動中だけ全スケッチの領域が当たる(`App.svelte` の `wantsRegions`)。
- * 始点・終点の点(`start_point` / `end_point`)は画面からは送らない: スケッチの点のハンドルは編集中のスケッチにしか無い。
+ * 起動中は領域だけが指せる(`App.svelte` の `pickKinds`)。収束点の「指す」を押している間だけ、スケッチの点も当たる。
+ * 収束点(`start_point` / `end_point`)は共有選択に入れずピックで指す(回転体の軸と同じ別チャンネル。点の図形のほか、
+ * 線分の端・円や円弧の中心など図形の点ならどれでもよい。断面と同じ平面の点はコアが断る)。断面1つと点1つでもロフトになる。
  * 始点のずらし(`shifts`)は断面の数と同じ個数の整数をカンマ区切りで打つ(空欄はずらさない)。
  */
 export const LOFT: CommandDef<'loft'> = {
@@ -172,7 +195,7 @@ export const LOFT: CommandDef<'loft'> = {
   buttonId: 'loft',
   preview: 'server',
   args: [
-    { kind: 'selection', name: 'regions', label: 'つなぐ断面(順に)', shapeKind: 'region', min: 2, max: null },
+    { kind: 'selection', name: 'regions', label: 'つなぐ断面(順に)', shapeKind: 'region', min: 1, max: null },
     {
       kind: 'choice',
       name: 'mode',
@@ -183,6 +206,8 @@ export const LOFT: CommandDef<'loft'> = {
         { value: 'new', label: '新規ボディ', buttonId: 'loft-mode-new' },
       ],
     },
+    { kind: 'pick', name: 'start_point', label: '始端を収束させる点', target: 'sketchPoint', buttonId: 'loft-start-point', optional: true },
+    { kind: 'pick', name: 'end_point', label: '終端を収束させる点', target: 'sketchPoint', buttonId: 'loft-end-point', optional: true },
     {
       kind: 'text',
       name: 'shifts',
@@ -190,6 +215,7 @@ export const LOFT: CommandDef<'loft'> = {
       inputId: 'loft-shifts',
       placeholder: '0, 1, 0',
       optional: true,
+      remember: false,
       reject: (value) => (parseShifts(value) === null ? '始点のずらしは整数をカンマ区切りで' : null),
       toShared: (value) => {
         const shifts = parseShifts(value)
@@ -199,17 +225,24 @@ export const LOFT: CommandDef<'loft'> = {
   ],
   build(values) {
     const regions = (values.regions ?? []) as SelectionRef[]
-    if (regions.length < 2) return { ok: false, reason: '断面を2つ以上選ぶ(つなぐ順に)' }
+    const start = pickedRefOf(values.start_point)
+    const end = pickedRefOf(values.end_point)
+    // 断面2つか、断面1つと収束点(コアの `loft_regions` と同じ条件。断面0は選択引数の min が止める)。
+    if (regions.length + (start === null ? 0 : 1) + (end === null ? 0 : 1) < 2) {
+      return { ok: false, reason: '断面をもう1つ選ぶか、収束点を指す(断面1つなら点が要る)' }
+    }
     const mode = values.mode
     if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    // 指していない点は引数ごと送らない(省略は「収束させない」)。
+    const points = { ...(start === null ? {} : { start_point: start }), ...(end === null ? {} : { end_point: end }) }
     const text = typeof values.shifts === 'string' ? values.shifts.trim() : ''
-    if (text === '') return { ok: true, args: { mode } }
+    if (text === '') return { ok: true, args: { mode, ...points } }
     const shifts = parseShifts(text)
     if (shifts === null) return { ok: false, reason: '始点のずらしは整数をカンマ区切りで' }
     if (shifts.length !== regions.length) {
       return { ok: false, reason: `始点のずらしは断面の数(${regions.length})だけ並べる` }
     }
-    return { ok: true, args: { mode, shifts } }
+    return { ok: true, args: { mode, ...points, shifts } }
   },
 }
 

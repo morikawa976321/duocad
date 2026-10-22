@@ -532,7 +532,10 @@ class DocumentView:
         # 粗さも「状態」のうち。入れないと、ズームで目標精度が変わっても差分配信が「版が同じ」と
         # 判断して古い粗さのメッシュが画面に残る。メッシュボディは `shape` が常に None なので
         # **メッシュの同一性も鍵に入れる**(`id(None)` は常に同じ値で、版が二度と上がらない)。
-        key = (id(body.shape), id(body.mesh), body.visible, self.body_recipe(body_id))
+        # メッシュボディは持っている三角形をそのまま配り粗さが効かないので、粗さは入れない(入れると、ズームのたびに
+        # 変わっていないメッシュ全体を配り直す)。
+        recipe = None if body.mesh is not None else self.body_recipe(body_id)
+        key = (id(body.shape), id(body.mesh), body.visible, recipe)
         if self._revision_state.get(body_id) != key:
             self._revision_state[body_id] = key
             self._revision_counter[body_id] = self._revision_counter.get(body_id, 0) + 1
@@ -666,11 +669,14 @@ class DocumentView:
     def edges(self, body_id: str) -> dict:
         """1Bodyの辺を折れ線で返す(キャッシュ付き)。
 
-        戻り値: `{"body_id", "revision", "edges": [kernel.tessellate_edges の1件, ...]}`
+        戻り値: `{"body_id", "revision", "shape_revision", "deviation", "edges": [kernel.tessellate_edges の1件, ...]}`
 
-        **`state` にも `delta` にも入れない**(辺が要るのはフィレット・面取り中だけで、常時配ると
-        27部品(2835面)の初回配信にその数倍の折れ線が乗る)。`revision` は、クライアントが「今の形の辺か」
-        を判定するためで、古い辺を指したままフィレットをかける(別の辺が丸まる)経路を閉じる。
+        **`state` にも `delta` にも入れない**(画面はカーソルの近くのボディの分だけ頼む。常時配ると
+        27部品(2835面)の初回配信にその数倍の折れ線が乗る)。`shape_revision` は、クライアントが「今の形の辺か」
+        を判定するためで、古い辺を指したままフィレットをかける(別の辺が丸まる)経路を閉じる(`revision` は粗さでも上がるので、
+        添字が使えるかは形の版で見る)。
+        `deviation` は折れ線の弦の偏差[mm]: 曲面の上の辺は面の三角形と別々に弦へ寄るので、画面の遮蔽判定が
+        この分の奥行きの差を許す(`web/src/occlusion.ts`)。
         """
         body = self._visible_brep(body_id, "辺")
         revision = self.body_revision(body_id)
@@ -679,12 +685,19 @@ class DocumentView:
             self._edge_cache, body_id, body.shape, (edge_deviation, edge_angular),
             lambda: kernel.tessellate_edges(body.shape, edge_deviation, edge_angular),
         )
-        return {"body_id": body_id, "revision": revision, "edges": described}
+        return {
+            "body_id": body_id,
+            "revision": revision,
+            "shape_revision": self.shape_revision(body_id),
+            "deviation": edge_deviation,
+            "edges": described,
+        }
 
     def edge_chains(self, body_id: str, edge_indices: list) -> dict:
         """頼まれた辺それぞれが属する連なり(フィレット・面取りで1本として振る舞う辺の組)を返す。
 
-        戻り値: `{"body_id", "revision", "chains": [[連なりの辺の添字(昇順)], ...]}`(頼んだ辺の順。同じ連なりは1つにまとめる)
+        戻り値: `{"body_id", "revision", "shape_revision", "chains": [[連なりの辺の添字(昇順)], ...]}`(頼んだ辺の順。同じ連なりは
+        1つにまとめる。今の形のものかは `shape_revision` で見る: 連なりは形にだけ依存し、`revision` は粗さでも上がる)
 
         `edges()` に入れない理由: 連なりは `MakeFillet.Add` で求め、大きな部品では折れ線の数十倍かかる(PC ケースの
         最大ボディで折れ線 13ms・全辺の連なり 0.5 秒)。画面はホバー・クリックした辺の分だけ頼む(辺1本で `Add` 1回)。
@@ -695,22 +708,32 @@ class DocumentView:
         finder = _memo(self._chain_cache, body_id, body.shape, None, lambda: kernel.edge_chain_finder(body.shape))
         groups = finder.of(edge_indices)
         chains = list(dict.fromkeys(groups[int(index)] for index in edge_indices))
-        return {"body_id": body_id, "revision": revision, "chains": [list(group) for group in chains]}
+        return {
+            "body_id": body_id,
+            "revision": revision,
+            "shape_revision": self.shape_revision(body_id),
+            "chains": [list(group) for group in chains],
+        }
 
     def vertices(self, body_id: str) -> dict:
         """1Bodyの頂点を1始まりの添字つきの3D座標で返す(キャッシュ付き)。
 
-        戻り値: `{"body_id", "revision", "vertices": [{"index", "point": [x,y,z]}, ...]}`
+        戻り値: `{"body_id", "revision", "shape_revision", "vertices": [{"index", "point": [x,y,z]}, ...]}`
 
-        `edges()` と同じく配信しない。画面に出るのは**選択に入った頂点だけ**(どれが選ばれるかを
-        事前に知らないので全頂点を返す)。`revision` の理由も辺と同じ。
+        `edges()` と同じく配信しない。画面に印が出るのはホバー中と選択中の頂点だけ(どれが指されるかを
+        事前に知らないので全頂点を返す)。`shape_revision` の理由も辺と同じ。
         """
         body = self._visible_brep(body_id, "頂点")
         revision = self.body_revision(body_id)
         described = _memo(
             self._vertex_cache, body_id, body.shape, None, lambda: query.describe_vertices(body.shape)
         )
-        return {"body_id": body_id, "revision": revision, "vertices": described}
+        return {
+            "body_id": body_id,
+            "revision": revision,
+            "shape_revision": self.shape_revision(body_id),
+            "vertices": described,
+        }
 
     def _visible_brep(self, body_id: str, what: str):
         """辺・頂点(`what`)を配ってよい Body。存在 → B-rep → 形あり → 可視の順で断る。

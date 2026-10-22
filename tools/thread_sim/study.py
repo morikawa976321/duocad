@@ -411,8 +411,24 @@ def study7():
     return specs, {}, dict(e_req=0.1, runner="window"), {}
 
 
+def study8():
+    """半円の丸みの半径 ρ とピッチの比。法線方向の隙間は谷が重なるまで(2(ρ+c) ≤ P)しか広げられず、ρ = 0.4P(study1・4)では
+    隙間の窓が狭い(TP2 の走査)。ρ/P と P/D を振る。試し刷りに合わせた係数で見るなら --printer tp1。"""
+    specs = []
+    for D in (3, 4, 6):
+        base = dict(D=D, L_nut=float(D), R_out=0.9 * D, family="coil")
+        for pr_ in (0.3, 0.4, 0.5):
+            P = round(pr_ * D / 0.05) * 0.05
+            for rr in (0.2, 0.25, 0.3, 0.35, 0.4):
+                rho = round(rr * P, 3)
+                for mode in ("normal", "radial"):
+                    specs.append(dict(base, P=P, rho=rho, rho_ratio=rr, pitch_ratio=pr_, mode=mode,
+                                      name=f"半円 D{D} P{P:g} ρ{rho:g}(ρ/P {rr:g}) {mode}"))
+    return specs, {}, dict(e_req=0.1, runner="window"), {}
+
+
 STUDIES = {"study1": study1, "study2": study2, "study3": study3, "study4": study4, "study5": study5, "study6": study6,
-           "study7": study7}
+           "study7": study7, "study8": study8}
 
 
 #: worker が異常終了した設計に書く行の説明。`--redo-errors` が回し直す(`c_geo` を持たない error 行)。
@@ -441,19 +457,27 @@ def run_pool(todo, runner, e_list, workers: int):
         crashed: list = []
         with ProcessPoolExecutor(max_workers=workers) as pool:
             inflight: dict = {}
+            pool_broken = False
             while queue or inflight:
-                while queue and not crashed and len(inflight) < workers:
-                    s, pk, mk = queue.pop(0)
-                    inflight[pool.submit(runner, s, pk, e_list, mk)] = s
-                finished, _ = wait(inflight, return_when=FIRST_COMPLETED)
-                for fu in finished:
-                    s = inflight.pop(fu)
-                    res, broken = _settle(fu, s)
-                    if broken:
-                        crashed.append(s)
-                    else:
-                        yield s, res
-                if crashed:
+                while queue and not crashed and not pool_broken and len(inflight) < workers:
+                    item = queue.pop(0)
+                    try:
+                        inflight[pool.submit(runner, item[0], item[1], e_list, item[2])] = item[0]
+                    except BrokenProcessPool:
+                        # 動いていた設計が落ちたのを、結果を受け取る前に管理スレッドが先に見つけたとき。配れなかった設計は
+                        # 戻して(何も書かない)、動いていた分を回収して新しいプールへ移る。
+                        queue.insert(0, item)
+                        pool_broken = True
+                if inflight:
+                    finished, _ = wait(inflight, return_when=FIRST_COMPLETED)
+                    for fu in finished:
+                        s = inflight.pop(fu)
+                        res, broken = _settle(fu, s)
+                        if broken:
+                            crashed.append(s)
+                        else:
+                            yield s, res
+                if crashed or pool_broken:
                     # 壊れたプールは動いていた分を一斉に失敗させる。残りを回収してから新しいプールへ移る。
                     finished, _ = wait(inflight)
                     for fu in finished:
@@ -466,6 +490,12 @@ def run_pool(todo, runner, e_list, workers: int):
                     break
         for s in crashed:
             yield s, dict(s, error=WORKER_DIED)
+
+
+def _read_lines(path: Path) -> list:
+    """JSONL の行。書き込み途中で止まった末尾が UTF-8 の文字の途中で切れていても読める(切れた行は壊れた JSON になり、
+    呼び手の `json.loads` が捨てて、その設計は未完了として回し直される)。"""
+    return path.read_bytes().decode("utf-8", errors="replace").splitlines()
 
 
 def ensure_final_newline(path: Path) -> None:
@@ -486,6 +516,9 @@ def main(argv=None) -> int:
     ap.add_argument("--only", default=None, help="名前にこの文字列を含む設計だけ")
     ap.add_argument("--redo-errors", action="store_true",
                     help="計算の失敗(メッシュ・接触・例外)を含む行を消して回し直す。「はまらない」は失敗ではないので残す")
+    ap.add_argument("--printer", choices=["default", "tp1"], default="default",
+                    help="tp1: 印刷の模擬の係数を試し刷り TP1 に合わせたもの(printer.TP1_FIT)にし、頑健さの場面も TP1 と一致する組にする。"
+                         "結果は <study>_tp1.jsonl")
     a = ap.parse_args(argv)
     got = STUDIES[a.study]()
     if got[3] is None:  # 設計ごとに (spec, printer_kw, mat_kw)
@@ -493,15 +526,20 @@ def main(argv=None) -> int:
     else:
         specs, printer_kw, e_list, mat_kw = got
         items = [(s, printer_kw, mat_kw) for s in specs]
+    if a.printer == "tp1":
+        from .printer import TP1_FIT, TP1_SCENARIOS
+        items = [(s, {**TP1_FIT, **pk}, mk) for s, pk, mk in items]
+        if isinstance(e_list, dict) and e_list.get("runner") == "robust":
+            e_list = dict(e_list, scenarios=TP1_SCENARIOS)
     specs = [s for s, _, _ in items]
     if a.only:
         specs = [s for s in specs if a.only in s["name"]]
     OUT.mkdir(parents=True, exist_ok=True)
-    path = OUT / f"{a.study}.jsonl"
+    path = OUT / (f"{a.study}_tp1.jsonl" if a.printer == "tp1" else f"{a.study}.jsonl")
     done = set()
     if path.exists() and a.redo_errors:
         keep, dropped = [], 0
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _read_lines(path):
             try:
                 d = json.loads(line)
             except json.JSONDecodeError:
@@ -515,7 +553,7 @@ def main(argv=None) -> int:
         path.write_text("".join(x + "\n" for x in keep), encoding="utf-8")
         print(f"失敗を含む {dropped} 行を消した", flush=True)
     if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in _read_lines(path):
             try:
                 done.add(json.loads(line)["name"])
             except (json.JSONDecodeError, KeyError):

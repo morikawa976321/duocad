@@ -12,6 +12,7 @@ export const COMMAND_CATEGORY = {
   clear_selection: 'selection',
   sketch_create: 'sketch',
   sketch_create_offset: 'sketch',
+  add_point: 'sketch',
   add_line: 'sketch',
   add_circle: 'sketch',
   add_ellipse: 'sketch',
@@ -100,12 +101,13 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   clear_selection: [],
   sketch_create: ['base_plane'],
   sketch_create_offset: ['base_plane', 'distance'],
+  add_point: ['sketch_id', 'point'],
   add_line: ['sketch_id', 'p0', 'p1'],
   add_circle: ['sketch_id', 'center', 'diameter'],
   add_ellipse: ['sketch_id', 'center', 'width', 'height', 'angle'],
   add_rectangle: ['sketch_id', 'corner', 'width', 'height', 'angle'],
   add_arc: ['sketch_id', 'center', 'radius', 'start_deg', 'end_deg'],
-  extrude: ['distance', 'mode', 'body_id'],
+  extrude: ['distance', 'taper', 'mode', 'body_id'],
   revolve: ['axis', 'axis_line', 'angle', 'mode', 'symmetric', 'body_id'],
   loft: ['mode', 'start_point', 'end_point', 'shifts', 'body_id'],
   fillet: ['radius'],
@@ -186,12 +188,13 @@ export interface CommandArguments {
   clear_selection: Record<string, never>
   sketch_create: { base_plane?: string }
   sketch_create_offset: { base_plane?: string; distance: number }
+  add_point: { sketch_id: string; point: unknown[] }
   add_line: { sketch_id: string; p0: unknown[]; p1: unknown[] }
   add_circle: { sketch_id: string; center: unknown[]; diameter: number }
   add_ellipse: { sketch_id: string; center: unknown[]; width: number; height: number; angle: number }
   add_rectangle: { sketch_id: string; corner: unknown[]; width: number; height: number }
   add_arc: { sketch_id: string; center: unknown[]; radius: number; start_deg: number; end_deg: number }
-  extrude: { distance: number; mode: string }
+  extrude: { distance: number; taper?: number; mode: string }
   revolve: { axis?: string; axis_line?: object; angle?: number; mode: string; symmetric?: boolean }
   loft: { mode: string; start_point?: object; end_point?: object; shifts?: unknown[] }
   fillet: { radius: number | unknown[] }
@@ -283,6 +286,7 @@ interface AppliedChangeBase {
 export type Applied =
   | (AppliedVerbBase & { verb: 'sketch_create'; sketch_id: string; frame: { origin: number[]; u: number[]; v: number[]; normal: number[] } })
   | (AppliedVerbBase & { verb: 'sketch_create_offset'; sketch_id: string; frame: { origin: number[]; u: number[]; v: number[]; normal: number[] } })
+  | (AppliedVerbBase & { verb: 'add_point'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_line'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_circle'; entity_id: string })
   | (AppliedVerbBase & { verb: 'add_ellipse'; entity_id: string })
@@ -298,7 +302,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'move_sketch_entities'; mode: string; dx: number | null; dy: number | null; angle: number | null; center: number[] | null; copy: boolean; created: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'move_body'; mode: string; dx: number | null; dy: number | null; dz: number | null; angle: number | null; axis_point: number[] | null; axis_dir: number[] | null; copy: boolean; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'mirror_sketch_entities'; axis_p0: number[]; axis_dir: number[]; created: string[]; sketch_ids: string[] })
-  | (AppliedVerbBase & { verb: 'envelope_regions'; radius: number; offset: number; created: string[]; sketch_ids: string[] })
+  | (AppliedVerbBase & { verb: 'envelope_regions'; radius: number; offset: number; created: string[]; sketch_ids: string[]; approximated: number })
   | (AppliedVerbBase & { verb: 'mirror_body'; plane_point: number[]; plane_normal: number[]; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'delete'; bodies: string[]; entities: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'delete_items'; bodies: string[]; sketches: string[] })
@@ -308,8 +312,8 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'set_fixtures'; face_count: number })
   | (AppliedVerbBase & { verb: 'set_loads'; face_count: number; applied_count: number; magnitude: number; direction: string; direction_vector: number[] | null })
   | (AppliedVerbBase & { verb: 'clear_loads'; face_count: number })
-  | (AppliedVerbBase & { verb: 'pattern_rectangular'; pattern_id: string })
-  | (AppliedVerbBase & { verb: 'pattern_circular'; pattern_id: string })
+  | (AppliedVerbBase & { verb: 'pattern_rectangular'; created: string[] })
+  | (AppliedVerbBase & { verb: 'pattern_circular'; created: string[] })
   | (AppliedVerbBase & { verb: 'import_svg'; sketch_id: string; entity_ids: string[]; source_name: string; entity_count: number })
   | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[] })
   | (AppliedVerbBase & { verb: 'undo'; undone: string })

@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict'
 
-import { distSqPointSegment, pickNearestWithinRadius } from '../web/src/screenPick.ts'
+import { distSqPointSegment, perspectiveParam, pickNearestWithinRadius, rankByOverlap } from '../web/src/screenPick.ts'
 
 // ============================================================== distSqPointSegment
 // 線分の真上(距離0)。
@@ -131,6 +131,40 @@ assert.equal(pickNearestWithinRadius(0, [{ item: 'off', distSq: 1e-12 }]), null,
   assert.equal(best, 100, '折れ線の最小距離が合わない')
   assert.equal(pickNearestWithinRadius(6, [{ item: 'line', distSq: best }]), null, '10px 先の線が 6px で取れた')
   assert.equal(pickNearestWithinRadius(10, [{ item: 'line', distSq: best }]), 'line', '10px 先の線が 10px で取れない')
+}
+
+// ============================================================== perspectiveParam
+// 正投影(w が両端で同じ)は画面の位置がそのまま3Dの位置。
+assert.equal(perspectiveParam(0.25, 1, 1), 0.25, '正投影で画面の位置と3Dの位置が違う')
+// 透視: 手前の半分が大きく見えるので、画面の真ん中は3Dでは手前寄り。視点 (0,0,0)・焦点距離1で
+// A=(-1,·,1)(w=1)と B=(1,·,3)(w=3)を射影すると -1 と 1/3、画面の中点 -1/3 は3Dの t=0.25 の点(-0.5,·,1.5)の射影。
+assert.equal(perspectiveParam(0.5, 1, 3), 0.25, '透視で画面の中点が3Dの位置へ戻らない')
+// 端は端のまま。
+assert.equal(perspectiveParam(0, 1, 3), 0, '始点が動いた')
+assert.equal(perspectiveParam(1, 1, 3), 1, '終点が動いた')
+
+// ============================================================== rankByOverlap
+{
+  const sketch = (key, distance) => ({ item: key, distSq: distance * distance, solid: false, key })
+  const solid = (key, distance) => ({ item: key, distSq: distance * distance, solid: true, key })
+  // 重なって見える(距離の差が overlap 以内)ならソリッドが先: 押し出した元のスケッチの線と押し出した辺。
+  assert.deepEqual(
+    rankByOverlap(6, 2, [sketch('line', 1), solid('edge', 2.5)]).map((entry) => entry.item),
+    ['edge', 'line'],
+    '重なって見えるのにスケッチの線がソリッドの辺に勝った',
+  )
+  // 離れていれば近い方が先(ソリッド優先は重なったときだけ)。
+  assert.deepEqual(
+    rankByOverlap(6, 2, [sketch('line', 0), solid('edge', 5)]).map((entry) => entry.item),
+    ['line', 'edge'],
+    '離れたソリッドの辺が近いスケッチの線に勝った',
+  )
+  // 半径の外は落とす。同着は鍵の順(届いた順で揺れない)。
+  assert.deepEqual(
+    rankByOverlap(6, 2, [solid('b', 3), solid('far', 7), solid('a', 3)]).map((entry) => entry.item),
+    ['a', 'b'],
+    '半径の外を落とさないか、同着が鍵の順にならない',
+  )
 }
 
 console.log('screen pick: all assertions passed')

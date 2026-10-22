@@ -40,12 +40,28 @@ BASE_PLANES = ("XY", "XZ", "YZ")
 PATTERN_KINDS = ("rectangular", "circular")
 
 
+def circular_pattern_step(count: int, total_angle: float) -> float:
+    """円形反復の刻み角[度]。全周(`total_angle == 360`)は `360/count`、全周未満は端点を含むので
+    `total_angle/(count-1)`(全周を `count-1` で割ると最後の複製が最初と重なる)。`count == 1` は0除算を避けて 0。
+    画面の幽霊(`web/src/entityKinds.ts`)が同じ規則を持つ。"""
+    if count == 1:
+        return 0.0
+    if total_angle == 360:
+        return 360.0 / count
+    return total_angle / (count - 1)
+
+
 # --------------------------------------------------------------------------------------
 # 図形種別ごとの純幾何演算(表)
 # --------------------------------------------------------------------------------------
 # **図形種別ごとに1行**(`EntityKindOps`)。OCPに依存する処理(辺の生成・2D bbox)は import境界のためここに置けず、
-# `kernel_sketch.py` に姉妹の表がある。新しい種別を足すときに触るのは「ここ」と「kernel_sketch.py」の各1行(+TS側1箇所)。
+# `kernel_sketch.py` に姉妹の表がある。新しい種別を足すときに触るのは「ここ」と「kernel_sketch.py」の各1行と、TS側の
+# `entityKinds.ts` の表・`selectionInfoText.ts` の名前(どれも漏れると `tests/test_entity_kind_tables.py` か型検査が落ちる)。
 # **表に無い種別は即時 ValueError**(`entity_kind_ops`)。silent defaultは無い。
+def _validate_point(params: Dict[str, float]) -> None:
+    """点は位置だけを持つので、座標が有限であればよい(有限かは `require_valid_params` が見る)。"""
+
+
 def _validate_line(params: Dict[str, float]) -> None:
     if (params["x0"], params["y0"]) == (params["x1"], params["y1"]):
         raise ValueError("line endpoints must differ (長さ0の線分は領域を割らない)")
@@ -98,7 +114,7 @@ def _translate_line(params: Dict[str, float], dx: float, dy: float) -> Dict[str,
 
 
 def _translate_cxcy(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
-    """中心 `cx`/`cy` だけで位置が決まる種別(円・楕円・円弧)の平行移動。"""
+    """中心 `cx`/`cy` だけで位置が決まる種別(点・円・楕円・円弧)の平行移動。"""
     moved = dict(params)
     moved["cx"] = params["cx"] + dx
     moved["cy"] = params["cy"] + dy
@@ -347,6 +363,11 @@ class EntityKindOps:
 
 
 _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
+    # 点は円と同じく `cx`/`cy` だけで位置が決まる(回転・鏡映も円の式がそのまま使える)
+    "point": EntityKindOps(
+        _validate_point, _translate_cxcy, _rotate_circle, _center_cxcy, _mirror_circle,
+        points=(("cx", "cy"),),
+    ),
     "line": EntityKindOps(
         _validate_line, _translate_line, _rotate_line, _center_line, _mirror_line,
         points=(("x0", "y0"), ("x1", "y1")),
@@ -420,6 +441,7 @@ def get_entity(sketch: "Sketch", entity_id: EntityId) -> "Entity":
 
 VERB_SKETCH_CREATE = "sketch_create"
 VERB_SKETCH_CREATE_OFFSET = "sketch_create_offset"
+VERB_ADD_POINT = "add_point"
 VERB_ADD_LINE = "add_line"
 VERB_ADD_CIRCLE = "add_circle"
 VERB_ADD_ELLIPSE = "add_ellipse"
@@ -484,6 +506,7 @@ class Entity:
 
     キーは図形ごとに固定する(スカラー1個 = 将来のパラメータ1個になるよう平らに持つ):
 
+        point     : cx, cy                               (辺を持たない。領域を割らない)
         line      : x0, y0, x1, y1
         circle    : cx, cy, diameter
         ellipse   : cx, cy, width, height, angle         (width は angle 方向の直径、height はそれに直交する直径)
@@ -491,9 +514,8 @@ class Entity:
         arc       : cx, cy, radius, start_deg, end_deg   (度・反時計回り・X軸から。0度をまたいでよい)
         bezier    : x0, y0, cx1, cy1, cx2, cy2, x1, y1   (始点・制御点1・制御点2・終点)
 
-    **bezier だけは値が素の数値のまま**(`import_svg` が作り、その鏡映・複製も `add_entities` が同じく素のまま持つ。
-    制御点座標は人が打ち直す寸法ではなく、ロゴ1枚で数千個の `d1` が SketchPanel の一覧を埋める)。
-    `parameters.resolve` は素の数値をそのまま返す。
+    **bezier だけは値が素の数値のままでありうる**(`import_svg` だけが作る。制御点座標は人が打ち直す寸法ではなく、
+    ロゴ1枚で数千個の `d1` が SketchPanel の一覧を埋める)。`parameters.resolve` は素の数値をそのまま返す。
     """
 
     id: EntityId
@@ -579,14 +601,33 @@ def sketch_create(doc: Document, plane: Any, *, verb: str = VERB_SKETCH_CREATE) 
     return sketch_id
 
 
+def point_2d(value: Any, what: str) -> Tuple[float, float]:
+    """スケッチ平面の点 `[u, v]` を読む。**数がちょうど2つの配列だけ**を受ける: 長さの違う配列(3次元の `[x, y, z]` の z を
+    黙って捨てない)・数でない要素(文字列 "1.5"、bool、null)・非有限の数は ValueError(`IndexError` / `TypeError` が
+    internal の封筒になって「直せる誤り」に見えなくなるのを避ける)。
+    """
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"{what} must be two numbers [u, v], got {value!r}")
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ValueError(f"{what} must be two numbers [u, v], got {value!r}")
+    u, v = float(value[0]), float(value[1])
+    if not (math.isfinite(u) and math.isfinite(v)):
+        raise ValueError(f"{what} must be two finite numbers [u, v], got {value!r}")
+    return u, v
+
+
+def add_point(doc: Document, sketch_id: SketchId, point: Any) -> EntityId:
+    """スケッチ平面上の `point` に点の図形を足して EntityId を返す。"""
+    cx, cy = point_2d(point, "point")
+    return _add_entity(doc, sketch_id, "point", {"cx": cx, "cy": cy}, VERB_ADD_POINT)
+
+
 def add_line(doc: Document, sketch_id: SketchId, p0: Any, p1: Any) -> EntityId:
     """スケッチ平面上の2点 `p0`/`p1` を結ぶ線分を足して EntityId を返す。"""
-    params = {
-        "x0": float(p0[0]),
-        "y0": float(p0[1]),
-        "x1": float(p1[0]),
-        "y1": float(p1[1]),
-    }
+    x0, y0 = point_2d(p0, "p0")
+    x1, y1 = point_2d(p1, "p1")
+    params = {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
     return _add_entity(doc, sketch_id, "line", params, VERB_ADD_LINE)
 
 
@@ -594,11 +635,8 @@ def add_circle(
     doc: Document, sketch_id: SketchId, center: Any, diameter: float
 ) -> EntityId:
     """スケッチ平面上の `center` を中心とする直径 `diameter` の円を足して EntityId を返す。"""
-    params = {
-        "cx": float(center[0]),
-        "cy": float(center[1]),
-        "diameter": float(diameter),
-    }
+    cx, cy = point_2d(center, "center")
+    params = {"cx": cx, "cy": cy, "diameter": float(diameter)}
     return _add_entity(doc, sketch_id, "circle", params, VERB_ADD_CIRCLE)
 
 
@@ -613,13 +651,8 @@ def add_ellipse(
     """`center` を中心とし、`angle` 度(反時計回り・X軸から)の向きに直径 `width`、それに直交する向きに直径 `height` の
     楕円を足して EntityId を返す。どちらが長くてもよい(長軸・短軸の意味は持たせない)。
     """
-    params = {
-        "cx": float(center[0]),
-        "cy": float(center[1]),
-        "width": float(width),
-        "height": float(height),
-        "angle": float(angle),
-    }
+    cx, cy = point_2d(center, "center")
+    params = {"cx": cx, "cy": cy, "width": float(width), "height": float(height), "angle": float(angle)}
     return _add_entity(doc, sketch_id, "ellipse", params, VERB_ADD_ELLIPSE)
 
 
@@ -635,9 +668,10 @@ def add_rectangle(
     `angle`(度・反時計回り)は基準の角まわりの傾き。**`angle` は params の最後に置くこと**(`_add_entity` はこの順に
     `register_value` を呼ぶので、順序を変えると再生で `d<n>` の割り当てが変わる)。
     """
+    x, y = point_2d(corner, "corner")
     params = {
-        "x": float(corner[0]),
-        "y": float(corner[1]),
+        "x": x,
+        "y": y,
         "width": float(width),
         "height": float(height),
         "angle": float(angle),
@@ -659,9 +693,10 @@ def add_arc(
     `start_deg` / `end_deg`。角度は度・反時計回り・X軸から。**0度をまたいでよい**(`start_deg=350, end_deg=10` は20度の円弧。
     掃引量は `(end_deg - start_deg) % 360`。`kernel_sketch` 側の実装)。
     """
+    cx, cy = point_2d(center, "center")
     params = {
-        "cx": float(center[0]),
-        "cy": float(center[1]),
+        "cx": cx,
+        "cy": cy,
         "radius": float(radius),
         "start_deg": float(start_deg),
         "end_deg": float(end_deg),
@@ -810,8 +845,6 @@ def add_entities(document: Document, planned: Sequence[tuple]) -> List[EntityId]
     """図形を足す。`planned` は `(Sketch, EntityId, 種別, 解決済みの params)` の並びで、作った ID の並びを返す。
     **全部の ID を先に検査してから**1件ずつ名前つきの値を登録(`parameters.register_all`。キーの並びが `d<n>` の振り順)して足す
     (足しながら検査すると、2件目で重複したとき1件目だけ書いた文書が残る)。
-    ベジエは登録しない(`Entity` のdocstring。登録は `register_value` が最小の空き番号を線形に探すので、
-    取り込んだロゴを全部複製すると二乗時間になり、パラメータ表が数万件に膨らむ)。
     """
     seen: set = set()
     for sketch, entity_id, _kind, _values in planned:
@@ -820,11 +853,7 @@ def add_entities(document: Document, planned: Sequence[tuple]) -> List[EntityId]
         seen.add(entity_id)
     created: List[EntityId] = []
     for sketch, entity_id, kind, values in planned:
-        refs = (
-            {key: float(value) for key, value in values.items()}
-            if kind == "bezier"
-            else parameters.register_all(document, dict(values))
-        )
+        refs = parameters.register_all(document, dict(values))
         sketch.entities.append(Entity(id=entity_id, kind=kind, params=refs))
         created.append(entity_id)
     return created
@@ -862,7 +891,7 @@ def _undo_add_entity(document: Document, operation: Operation) -> None:
 register_verb(VERB_SKETCH_CREATE, do=_do_sketch_create, undo=_undo_sketch_create)
 # `sketch_create_offset` は do/undoの実体が `plane["kind"]` を見ない(`sketch_create` のdocstring)。
 register_verb(VERB_SKETCH_CREATE_OFFSET, do=_do_sketch_create, undo=_undo_sketch_create)
-for _verb in (VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_ELLIPSE, VERB_ADD_RECTANGLE, VERB_ADD_ARC):
+for _verb in (VERB_ADD_POINT, VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_ELLIPSE, VERB_ADD_RECTANGLE, VERB_ADD_ARC):
     # do/undo の実体は args["kind"] で分かれない。verb名を分けているのは操作ログとMCPの粒度のため。
     register_verb(_verb, do=_do_add_entity, undo=_undo_add_entity)
 del _verb
@@ -896,6 +925,11 @@ def _enter_sketch_create_offset(
 ) -> dict:
     plane = offset_plane(plane_from_selection(document, base_plane), distance)
     return _created(document, sketch_create(document, plane, verb=VERB_SKETCH_CREATE_OFFSET))
+
+
+@entry(VERB_ADD_POINT)
+def _enter_add_point(document: Document, sketch_id: str, point: Any) -> dict:
+    return {"entity_id": add_point(document, sketch_id, point)}
 
 
 @entry(VERB_ADD_LINE)

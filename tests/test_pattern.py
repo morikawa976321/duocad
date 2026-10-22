@@ -8,10 +8,10 @@ import pytest
 
 from duocad import query
 from duocad.document import Document
-from duocad.parameters import parameter_of, set_parameter
+from duocad.parameters import parameter_of, resolve, set_parameter
 from duocad.region import region_ref, regions
-from duocad.sketch import add_circle, add_rectangle, get_sketch, sketch_create
-from duocad.verbs import extrude, pattern_rectangular
+from duocad.sketch import add_circle, add_rectangle, get_sketch, remove_entities, sketch_create
+from duocad.verbs import extrude, move_sketch_entities, pattern_rectangular
 from document_support import drill_all, hole_axes, replay_through_json
 
 PLATE_WIDTH = 40.0
@@ -44,10 +44,17 @@ def plate(document: Document) -> None:
 def hole_pattern(document: Document) -> tuple:
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
-    pattern_id = pattern_rectangular(
+    created = pattern_rectangular(
         document, sketch_id, [circle], SPACING_X, SPACING_Y, COLUMNS, ROWS
     )
-    return sketch_id, circle, pattern_id
+    return sketch_id, circle, created
+
+
+def centres(document: Document, sketch_id: str) -> list:
+    return [
+        (resolve(document, entity.params["cx"]), resolve(document, entity.params["cy"]))
+        for entity in get_sketch(document, sketch_id).entities
+    ]
 
 
 def test_pattern_multiplies_the_entity_into_nx_times_ny_regions():
@@ -62,20 +69,18 @@ def test_pattern_multiplies_the_entity_into_nx_times_ny_regions():
         assert math.isclose(region.area, math.pi * HOLE_RADIUS**2, rel_tol=1e-6)
 
 
-def test_pattern_is_one_operation_and_is_not_expanded_into_entities():
-    """反復が1つのverbとして操作ログに1行で載り、図形はN個に展開されない。"""
+def test_copies_are_independent_entities_made_by_one_operation():
+    """反復は複製を nx × ny − 1 個の独立した図形として作り、ログには作ったIDを持つ1行だけ載る。"""
     document = Document()
-    sketch_id, circle, pattern_id = hole_pattern(document)
+    sketch_id, circle, created = hole_pattern(document)
 
     sketch = get_sketch(document, sketch_id)
-    assert [entity.id for entity in sketch.entities] == [circle], "図形が展開されている"
-    assert [pattern.id for pattern in sketch.patterns] == [pattern_id]
-    assert sketch.patterns[0].sources == [circle]
-    pattern_params = sketch.patterns[0].params
-    assert set(pattern_params) == {"dx", "dy", "nx", "ny"}
-    assert all(isinstance(value, str) for value in pattern_params.values()), pattern_params
-    for key in ("dx", "dy", "nx", "ny"):
-        assert pattern_params[key] == parameter_of(document, sketch_id, pattern_id, key)
+    assert [entity.id for entity in sketch.entities] == [circle, *created]
+    assert len(set(created)) == COLUMNS * ROWS - 1
+    assert sketch.patterns == [], "旧形式の Pattern を置いている"
+    assert centres(document, sketch_id) == [
+        (10.0, 10.0), (20.0, 10.0), (30.0, 10.0), (10.0, 20.0), (20.0, 20.0), (30.0, 20.0),
+    ]
 
     entries = document.log.entries
     assert [operation.verb for operation in entries] == [
@@ -83,14 +88,27 @@ def test_pattern_is_one_operation_and_is_not_expanded_into_entities():
     ]
     assert entries[-1].args == {
         "sketch_id": sketch_id,
-        "pattern_id": pattern_id,
         "entities": [circle],
         "dx": SPACING_X,
         "dy": SPACING_Y,
         "nx": COLUMNS,
         "ny": ROWS,
+        "created": created,
     }
     json.loads(document.log.to_json())
+
+
+def test_a_copy_does_not_follow_when_the_source_moves():
+    """複製は元と繋がらない: 元を動かしても複製は動かず、複製を1つ消しても他は残る。"""
+    document = Document()
+    sketch_id, circle, created = hole_pattern(document)
+
+    move_sketch_entities(document, [{"sketch": sketch_id, "entity": circle, "point": None}], 0.0, 50.0)
+    remove_entities(document, [created[0]], sketch_id=sketch_id)
+
+    assert centres(document, sketch_id) == [
+        (10.0, 60.0), (30.0, 10.0), (10.0, 20.0), (20.0, 20.0), (30.0, 20.0),
+    ]
 
 
 def test_pattern_can_be_undone():
@@ -99,11 +117,13 @@ def test_pattern_can_be_undone():
     sketch_id, circle, _ = hole_pattern(document)
     assert len(regions(document, sketch_id)) == COLUMNS * ROWS
 
+    parameters_before = len(document.parameters)
+
     undone = document.log.undo(document)
 
     assert undone is not None and undone.verb == "pattern_rectangular"
-    assert get_sketch(document, sketch_id).patterns == []
     assert len(regions(document, sketch_id)) == 1
+    assert len(document.parameters) < parameters_before, "複製の名前つきの値を手放していない"
     assert [entity.id for entity in get_sketch(document, sketch_id).entities] == [circle]
 
     document.log.redo(document)
@@ -125,7 +145,28 @@ def test_pattern_rejects_counts_that_are_not_positive_integers(dx, dy, nx, ny):
     with pytest.raises(ValueError):
         pattern_rectangular(document, sketch_id, [circle], dx, dy, nx, ny)
 
-    assert get_sketch(document, sketch_id).patterns == []
+    assert [entity.id for entity in get_sketch(document, sketch_id).entities] == [circle]
+    assert len(document.log.entries) == entries_before
+
+
+@pytest.mark.parametrize(
+    ("dx", "dy", "nx", "ny"),
+    [(10.0, 10.0, 1, 1), (0.0, 10.0, 3, 1), (0.0, 0.0, 2, 2)],
+    ids=["no_copies", "zero_spacing_along_the_row", "zero_spacing"],
+)
+def test_pattern_rejects_making_no_copies_or_copies_on_the_source(dx, dy, nx, ny):
+    """複製が1つもできない指定・元と重なる複製ができる指定は ValueError(文書もログも不変)。"""
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    circle = add_circle(document, sketch_id, FIRST_HOLE, 2 * HOLE_RADIUS)
+    entries_before = len(document.log.entries)
+    parameters_before = dict(document.parameters)
+
+    with pytest.raises(ValueError):
+        pattern_rectangular(document, sketch_id, [circle], dx, dy, nx, ny)
+
+    assert [entity.id for entity in get_sketch(document, sketch_id).entities] == [circle]
+    assert document.parameters == parameters_before
     assert len(document.log.entries) == entries_before
 
 
@@ -143,21 +184,19 @@ def test_pattern_rejects_an_empty_or_foreign_entity_list():
     with pytest.raises(KeyError):
         pattern_rectangular(document, first, [foreign], SPACING_X, SPACING_Y, COLUMNS, ROWS)
 
-    assert get_sketch(document, first).patterns == []
+    assert len(get_sketch(document, first).entities) == 1
     assert len(document.log.entries) == entries_before
 
 
-def test_pattern_rejects_patterning_the_same_entity_twice():
-    """既に反復に使われている図形を二重に反復させない(ValueError・文書とログは不変)。"""
+def test_a_copy_can_be_patterned_again():
+    """複製は素の図形なので、もう一度反復の元にできる(反復の反復)。"""
     document = Document()
-    sketch_id, circle, _ = hole_pattern(document)
-    entries_before = len(document.log.entries)
+    sketch_id, _, created = hole_pattern(document)
 
-    with pytest.raises(ValueError):
-        pattern_rectangular(document, sketch_id, [circle], 5.0, 5.0, 2, 2)
+    again = pattern_rectangular(document, sketch_id, [created[-1]], 10.0, 0.0, 2, 1)
 
-    assert len(get_sketch(document, sketch_id).patterns) == 1
-    assert len(document.log.entries) == entries_before
+    assert len(again) == 1
+    assert centres(document, sketch_id)[-1] == (40.0, 20.0)
 
 
 def test_extruding_a_pattern_opens_nx_times_ny_holes():
@@ -177,61 +216,8 @@ def test_extruding_a_pattern_opens_nx_times_ny_holes():
     )
 
 
-def test_changing_the_spacing_moves_the_holes():
-    """`dx` を後から変更すると、開けた穴の間隔が追随する(個数は変わらない)。"""
-    document = Document()
-    plate(document)
-    sketch_id, _, pattern_id = hole_pattern(document)
-    drill_all(document, sketch_id)
-    assert hole_axes(document.active_body().shape) == [
-        (10.0, 10.0), (10.0, 20.0), (20.0, 10.0), (20.0, 20.0), (30.0, 10.0), (30.0, 20.0),
-    ]
-
-    set_parameter(document, parameter_of(document, sketch_id, pattern_id, "dx"), 8.0)
-
-    shape = document.active_body().shape
-    assert hole_axes(shape) == [
-        (10.0, 10.0), (10.0, 20.0), (18.0, 10.0), (18.0, 20.0), (26.0, 10.0), (26.0, 20.0),
-    ]
-    assert query.describe_shape(shape)["faces_by_type"]["cylinder_full"] == COLUMNS * ROWS
-    assert math.isclose(
-        query.volume(shape),
-        PLATE_VOLUME - COLUMNS * ROWS * math.pi * HOLE_RADIUS**2 * PLATE_THICKNESS,
-        rel_tol=VOLUME_REL_TOL,
-    )
-
-
-def test_changing_the_count_changes_the_regions_and_the_next_extrusion():
-    """`nx` を後から変更すると領域の個数が追随し、そのあと押し出せば穴の数も追随する。"""
-    document = Document()
-    plate(document)
-    sketch_id, _, pattern_id = hole_pattern(document)
-    assert len(regions(document, sketch_id)) == COLUMNS * ROWS
-
-    set_parameter(document, parameter_of(document, sketch_id, pattern_id, "nx"), 2)
-    assert len(regions(document, sketch_id)) == 2 * ROWS
-
-    set_parameter(document, parameter_of(document, sketch_id, pattern_id, "dx"), 8.0)
-    set_parameter(document, parameter_of(document, sketch_id, pattern_id, "nx"), 4)
-    assert len(regions(document, sketch_id)) == 4 * ROWS
-
-    drill_all(document, sketch_id)
-
-    shape = document.active_body().shape
-    assert query.describe_shape(shape)["faces_by_type"]["cylinder_full"] == 4 * ROWS
-    assert hole_axes(shape) == [
-        (10.0, 10.0), (10.0, 20.0), (18.0, 10.0), (18.0, 20.0),
-        (26.0, 10.0), (26.0, 20.0), (34.0, 10.0), (34.0, 20.0),
-    ]
-    assert math.isclose(
-        query.volume(shape),
-        PLATE_VOLUME - 4 * ROWS * math.pi * HOLE_RADIUS**2 * PLATE_THICKNESS,
-        rel_tol=VOLUME_REL_TOL,
-    )
-
-
 def test_editing_one_radius_moves_every_hole():
-    """穴の半径を1箇所だけ編集すると、反復で作った全部の穴が追随する。"""
+    """元の穴の半径を編集すると、作り直しで複製も元から作り直されて全部の穴が追随する。"""
     document = Document()
     plate(document)
     sketch_id, circle, _ = hole_pattern(document)
@@ -271,4 +257,4 @@ def test_pattern_survives_save_load_and_replay():
     assert body is not None
     assert math.isclose(query.volume(body.shape), expected_volume, rel_tol=1e-9)
     assert hole_axes(body.shape) == expected_axes
-    assert len(get_sketch(replayed, sketch_id).patterns) == 1
+    assert len(get_sketch(replayed, sketch_id).entities) == COLUMNS * ROWS

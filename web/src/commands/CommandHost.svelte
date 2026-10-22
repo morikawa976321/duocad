@@ -198,7 +198,7 @@
   /** 指したスケッチ平面(引数名 -> `'XY' | 'XZ' | 'YZ' | 'face'`)。点と同じく選択集合には入れない(基準平面は選択の種別でなく、面は参照が入るだけで「面に貼る」意思ではない)。 */
   let planes = $state<Record<string, string>>({})
 
-  /** 打ち込んだ文字列(引数名 -> 値。今はファイルのパスだけ)。確定しても消さない(下の `reset` 参照): 同じ場所への保存し直しが普通の使い方。 */
+  /** 打ち込んだ文字列(引数名 -> 値)。確定しても消さない(下の `reset` 参照): 同じ場所への保存し直しが普通の使い方。`remember: false` の欄だけ消す(`resetInputs`)。 */
   let textValues = $state<Record<string, string>>({})
 
   /** 直接ピックで指した参照(引数名 -> 参照1つ)。共有選択集合には入れない(`PickArgSpec` のdocstring)。 */
@@ -323,7 +323,7 @@
     return missing !== null && missing.kind === 'pick' ? missing : null
   })
 
-  /** このコマンドが選択から取る種別をアプリ層へ知らせる。無起動では `[]`(面・頂点は常に指せる)。`argKinds` を通す: `shapeKind` だけだと複数種別を食う引数(`move_body` の面/辺/頂点)で辺が指せなくなる。 */
+  /** このコマンドが選択から取る種別をアプリ層へ知らせる(起動中はこれだけが指せる。無起動では `[]` で、見えているもの全部が指せる)。`argKinds` を通す: `shapeKind` だけだと複数種別を食う引数(`move_body` の面/辺/頂点)で辺が指せなくなる。 */
   $effect(() => {
     onWants(
       (command?.args ?? [])
@@ -519,6 +519,10 @@
 
   /** 集めかけの引数を全部捨てる。起動の入れ替わり(`entered()` / `ended()`)とローカルのコマンドの確定が呼ぶ。 */
   function resetInputs(): void {
+    const forgotten = new Set(
+      commands.flatMap((candidate) => candidate.args).filter((spec) => spec.kind === 'text' && spec.remember === false).map((spec) => spec.name),
+    )
+    textValues = Object.fromEntries(Object.entries(textValues).filter(([name]) => !forgotten.has(name)))
     numberText = {}
     points = {}
     choices = {}

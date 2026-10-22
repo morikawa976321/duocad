@@ -160,8 +160,13 @@ def rebuild(
     押し出しより**後ろ**に載るので、順番どおり再生すると古い値の形状のまま値だけ新しくなる。
     そこで範囲内の `set_parameter` を先に走査して最終値の表を作り、各操作の直後に当てる。
     パラメータ名は決定的に振り直されるので、表の名前は再生後の同じスカラーを指す。
+
+    ログに載らない状態のうち、ボディとスケッチの可視性は作り直した側へ引き継ぎ、active ボディは残っていれば戻す。
+    失敗したら undo 用スナップショットも元の表へ戻す(再生が通った操作が失敗した形で上書きするため)。
     """
     global _REBUILDING
+    from .verbs._common import SNAPSHOTS
+
     source = doc.log
 
     values: Dict[str, float] = {}
@@ -185,6 +190,11 @@ def rebuild(
     saved_sketches = list(doc.sketches)
     saved_parameters = dict(doc.parameters)
     saved_active = doc._active_body_id
+    # 再生が通った操作は undo 用スナップショットを作り直す(`_common.reapply_shape`)ので、失敗したら元の表へ戻す。
+    saved_snapshots = dict(SNAPSHOTS.get(doc, {}))
+    # 可視性はログに載らないので、作り直した Body / Sketch へ引き継ぐ。
+    hidden_bodies = {body.id for body in saved_bodies if not body.visible}
+    hidden_sketches = {sketch.id for sketch in saved_sketches if not sketch.visible}
 
     doc.bodies.clear()
     doc._active_body_id = None
@@ -209,9 +219,15 @@ def rebuild(
         doc.parameters.clear()
         doc.parameters.update(saved_parameters)
         doc._active_body_id = saved_active
+        SNAPSHOTS[doc] = saved_snapshots
         raise
     finally:
         _REBUILDING = False
+
+    for body in doc.bodies:
+        body.visible = body.id not in hidden_bodies
+    for sketch in doc.sketches:
+        sketch.visible = sketch.id not in hidden_sketches
 
     # アクティブボディの選択はログに載らないので、ここで戻さないと最後に add_body されたボディへ移る。
     if saved_active is not None and any(body.id == saved_active for body in doc.bodies):

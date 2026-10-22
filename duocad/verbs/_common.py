@@ -10,9 +10,10 @@ import math
 from typing import Any, List, Optional, Sequence, Union
 from weakref import WeakKeyDictionary
 
-from .. import meshbody, naming, selection
+from .. import kernel_sketch, meshbody, naming, selection
 from ..document import MESH_KIND, Body, BodyId, Document, new_body_id
 from ..oplog import Operation
+from ..sketch import get_sketch
 
 #: undo用のスナップショット。`(body_id, seq) -> 直前の形状`。
 #:
@@ -79,8 +80,37 @@ def editable_body(
     **選択側の門番(`selection._visible_body`)だけでは足りない**。AIと人が並行して動くと、
     選択した後・verbを呼ぶ前に人がそのボディを隠す順序が起きる。`fillet`/`chamfer` がこの順序で
     隠したボディを黙って丸めることを実測した(`tests/test_agent_concurrency.py`)ので、
-    見えないボディは常に断る(面・辺どちらを取るverbも同じ)。
+    見えないボディは常に断る(面・辺どちらを取るverbも同じ)。**新しく掛ける操作の入口だけの門**で、
+    redo / 再生は `replayed_body`。
     """
+    return _checked_body(doc, body_id, what=what, reject_as=reject_as, require_visible=True)
+
+
+def replayed_body(
+    doc: Document,
+    body_id: BodyId,
+    *,
+    what: str,
+    reject_as: Optional[str] = None,
+) -> Body:
+    """redo / 再生で操作を掛け直すボディ。`editable_body` と同じ検査(無い・編集できない・形状が無い)から、
+    **「見えないものは指せない」だけを外したもの**。
+
+    可視性は操作ログに載らず undo / redo でも戻らない状態なので、undo の後に人がボディを隠しただけで
+    redo が通らなくなり、ログの再生の成否が画面の状態に左右される(`Body.visible`)。可視性の門が守るのは
+    「選択した後・verbを呼ぶ前に隠された」新規の操作で、ログにある操作はその門を通っている。
+    """
+    return _checked_body(doc, body_id, what=what, reject_as=reject_as, require_visible=False)
+
+
+def _checked_body(
+    doc: Document,
+    body_id: Optional[BodyId],
+    *,
+    what: str,
+    reject_as: Optional[str],
+    require_visible: bool,
+) -> Body:
     if body_id is None:
         active = doc.active_body()
         if active is None:
@@ -95,7 +125,7 @@ def editable_body(
             f"body {body_id!r} is not editable (kind={body.kind!r})"
         )
     body = doc.get_body(body_id)
-    if not body.visible:
+    if require_visible and not body.visible:
         raise ValueError(
             f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
         )
@@ -108,8 +138,8 @@ def deletable_body(doc: Document, body_id: BodyId, *, require_visible: bool = Tr
     """削除の対象になるボディ。**編集できるかは問わない**(メッシュボディも消せる)。
 
     `editable_body` と分けてあるのは、削除だけは種別に関係なく通すため(間違えて入れた形を
-    取り除けなくしない)。可視性の門番は**選択から取る `delete` だけ**に課す(理由は
-    `editable_body`)。ID で名指しする `delete_items` は `require_visible=False` —— ブラウザでは
+    取り除けなくしない)。可視性の門番は**選択から新しく消す `delete` だけ**に課す(理由は
+    `editable_body`。redo / 再生は課さない)。ID で名指しする `delete_items` は `require_visible=False` —— ブラウザでは
     隠したボディの行も ✕ で消せる。
     """
     body = doc.get_body(body_id)  # 存在しないIDは KeyError(document側の契約)
@@ -184,10 +214,15 @@ def add_transformed_copies(
     名前は、作成時(`allocate=True`)は新しく振った番号、redo / 再生では記録した `numbers`。
     番号の記録が無い古いログ(`None`)だけ元の名前を引き継ぐ。
 
-    **全部の形状を作ってから番号を振って足す** —— 途中で落ちても1体目だけ足された文書が残らず、
-    番号も飛ばない。
+    **形状を作り、ID の衝突を調べてから、番号を振って足す** —— 途中で落ちても1体目だけ足された文書が残らず、
+    番号も飛ばない(`new_ids` が既存のIDや互いに重なるのは、壊れたログの再生だけ)。
     """
     shapes = [transform(body.shape) for body in bodies]
+    taken = {existing.id for existing in doc.bodies}
+    for new_id in new_ids:
+        if new_id in taken:
+            raise ValueError(f"body id already exists: {new_id!r}")
+        taken.add(new_id)
     if allocate:
         numbers = [naming.allocate(doc, naming.BODY) for _ in bodies]
     if numbers is None:
@@ -197,16 +232,16 @@ def add_transformed_copies(
     if len(names) != len(bodies):
         raise ValueError(f"{len(bodies)} bodies but {len(names)} numbers recorded")
     for body, new_id, name, shape in zip(bodies, new_ids, names, shapes):
-        # 同じIDが既にあれば ValueError(黙って重複させない)
         doc.add_body(Body(id=new_id, name=name, kind=body.kind, shape=shape, visible=body.visible))
     return None if numbers is None else list(numbers)
 
 
 def remove_created_bodies(doc: Document, body_ids: Sequence[BodyId]) -> None:
-    """undo: 作った複製を消す。既に消えている(別のundoが先に消した)場合は空振りでよい。"""
-    for body_id in body_ids:
+    """undo: 作った複製を消す(active は複製を足す前の値へ戻る。`Document.remove_added_body`)。
+    既に消えている(別のundoが先に消した)場合は空振りでよい。足した順の逆に消す。"""
+    for body_id in reversed(list(body_ids)):
         try:
-            doc.remove_body(body_id)
+            doc.remove_added_body(body_id)
         except KeyError:
             pass
 
@@ -247,6 +282,9 @@ MODE_TRANSLATE = "translate"
 MODE_ROTATE = "rotate"
 MOVE_MODES = (MODE_TRANSLATE, MODE_ROTATE)
 
+#: 複製が元と重なるとみなす座標の差[mm]。幾何の許容差(1e-9mm)と同じ。
+OVERLAP_TOLERANCE = 1.0e-9
+
 
 def require_move_mode(mode: str, *, verb: str) -> None:
     if mode not in MOVE_MODES:
@@ -259,6 +297,52 @@ def reject_foreign_args(mode: str, given: dict, *, verb: str) -> None:
     foreign = sorted(name for name, value in given.items() if value is not None)
     if foreign:
         raise ValueError(f"{verb}(mode={mode!r}) does not take {foreign} (mode を切り替えるか、その引数を外すこと)")
+
+
+#: 別のスケッチの図形を軸・中心に使うとき、2つのスケッチの (u, v) が同じ点を指すとみなす差(枠の向きは単位ベクトル、原点は mm)。
+FRAME_TOLERANCE = 1.0e-9
+
+
+def require_same_uv_plane(doc: Document, reference_sketch_id: str, target_sketch_id: str, *, what: str) -> None:
+    """`what`(鏡映軸・回転中心)に使う図形のスケッチの (u, v) と、動かす・鏡映する図形のスケッチの (u, v) が、
+    同じ平面上の同じ点を指すことを確かめる(違えば ValueError)。軸・中心は (u, v) の数値にして対象の座標へそのまま当てるので、
+    平面が違うと別の場所に黙って鏡映・回転される。向きが同じで原点が法線方向にずれただけの平行な平面(オフセットしたスケッチ)は通す。
+    """
+    if reference_sketch_id == target_sketch_id:
+        return
+    reference = kernel_sketch.sketch_plane_frame(get_sketch(doc, reference_sketch_id).plane)
+    target = kernel_sketch.sketch_plane_frame(get_sketch(doc, target_sketch_id).plane)
+    same_axes = all(
+        abs(a - b) <= FRAME_TOLERANCE for key in ("u", "v") for a, b in zip(reference[key], target[key])
+    )
+    shift = [a - b for a, b in zip(reference["origin"], target["origin"])]
+    in_plane_shift = any(
+        abs(sum(delta * axis for delta, axis in zip(shift, reference[key]))) > FRAME_TOLERANCE for key in ("u", "v")
+    )
+    if not same_axes or in_plane_shift:
+        raise ValueError(
+            f"{what}の図形のスケッチ {reference_sketch_id!r} と対象のスケッチ {target_sketch_id!r} は平面が違う"
+            "((u, v) が同じ点を指さない。同じ平面のスケッチの図形を指すこと)"
+        )
+
+
+def overlaps_original(values: dict, current: dict, *, fresh: bool) -> bool:
+    """複製の `values` が元の `current` と全部のキーで同じ値か(重なる複製。領域検出が同じ辺を2本見る)。
+
+    **キーは両方の和集合で、無いキーは 0.0 として比べる**: `angle` を持たない旧い長方形(キーが4個)の回転コピーは `angle` が
+    増えるので、元が持つキーだけで比べると、向きが違う複製を「元と完全に重なる」と誤って断り、保存済みのログも再生できなくなる。
+    旧い長方形の `angle` の既定は 0 度。
+
+    新しく作る複製(`fresh`)は座標の丸め誤差(斜めの軸への鏡映は 1ulp ずれる)を許して重なりとみなす。
+    redo / 再生は厳密一致だけ —— 許容差で弾くと、重なる複製を断る前に作られた複製を含む保存済みの文書が開けなくなる。
+    """
+    keys = set(values) | set(current)
+    if not fresh:
+        return all(values.get(key, 0.0) == current.get(key, 0.0) for key in keys)
+    return all(
+        math.isclose(values.get(key, 0.0), current.get(key, 0.0), rel_tol=1.0e-12, abs_tol=OVERLAP_TOLERANCE)
+        for key in keys
+    )
 
 
 def rotation_degrees(angle: Any, *, verb: str, noun: str) -> float:

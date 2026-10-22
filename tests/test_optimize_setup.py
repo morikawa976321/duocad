@@ -788,3 +788,16 @@ def test_the_typescript_selectable_kinds_match_the_core() -> None:
         "TSのみ": sorted(declared - set(selection.SELECTABLE_KINDS)),
         "コアのみ": sorted(set(selection.SELECTABLE_KINDS) - declared),
     }
+
+
+def test_renaming_a_hidden_body_updates_the_reason_in_stale(session: Session) -> None:
+    """落ちたら、非表示のまま改名しても増分維持の鍵が動かず、`stale` の理由文に古い名前が残り続ける。"""
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+    session.set_visible(body.id, False)
+    assert body.name in _optimize(session)["stale"][0]["reason"]
+
+    session.apply("rename", {"target": body.id, "name": "renamed-body"})
+
+    assert "renamed-body" in _optimize(session)["stale"][0]["reason"]

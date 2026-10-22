@@ -9,11 +9,11 @@ import pytest
 from duocad import query
 from duocad.document import Document
 from duocad.oplog import OpLog
-from document_support import replay_through_json
+from document_support import install_live_pattern, replay_through_json
 from duocad.parameters import parameter_of, set_parameter
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, sketch_create
-from duocad.verbs import extrude, pattern_rectangular
+from duocad.verbs import extrude
 
 @pytest.mark.parametrize(
     ("key", "value"),
@@ -44,11 +44,13 @@ def test_set_parameter_rejects_values_that_add_circle_would_reject(key, value):
 
 @pytest.mark.parametrize("count", [2.5, 0, -3], ids=["fractional", "zero", "negative"])
 def test_set_parameter_rejects_pattern_counts_that_are_not_positive_integers(count):
-    """反復の個数も、`pattern_rectangular` と同じ規則で後から書き換えられない。"""
+    """旧形式の反復(保存済みの古い文書に残る)の個数も、`pattern_rectangular` と同じ規則で後から書き換えられない。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, (10.0, 10.0), 4.0)
-    pattern_id = pattern_rectangular(document, sketch_id, [circle], 10.0, 10.0, 3, 2)
+    pattern_id = install_live_pattern(
+        document, "pattern_rectangular", sketch_id, [circle], dx=10.0, dy=10.0, nx=3, ny=2
+    )
     name = parameter_of(document, sketch_id, pattern_id, "nx")
 
     with pytest.raises(ValueError):
@@ -117,14 +119,16 @@ def test_a_rebuild_that_fails_leaves_the_document_as_it_was():
     """作り直しが途中で失敗したら、bodies / sketches / parameters / アクティブを元へ戻す。
     落ちたら、ログは無傷なのに文書だけが途中まで作り直された不整合な状態が残る。
 
-    反復の個数を 3×2 から 1×2 へ減らすと、押し出しの対象にした6番目の領域が消えて
+    旧形式の反復の個数を 3×2 から 1×2 へ減らすと、押し出しの対象にした6番目の領域が消えて
     再生中の `extrude` が落ちる(値の検査は通る)。スケッチを1つその押し出しより後ろに
     置くのは意図的 —— 全スケッチを作り直した後で落ちると、退避を戻さなくても値で一致する。
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, (10.0, 10.0), 4.0)
-    pattern_id = pattern_rectangular(document, sketch_id, [circle], 10.0, 10.0, 3, 2)
+    pattern_id = install_live_pattern(
+        document, "pattern_rectangular", sketch_id, [circle], dx=10.0, dy=10.0, nx=3, ny=2
+    )
     found = regions(document, sketch_id)
     assert len(found) == 6
     extrude(document, [region_ref(sketch_id, found[-1].index)], 5.0, mode="new")

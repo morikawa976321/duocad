@@ -89,6 +89,8 @@ surface = build_surface_from_mask(**record)
 
 最新候補のscratch STLではなく、**採用結果の `final.stl`** を使う。
 
+**注意**: 約10万三角形・倍精度の現行の出力では、この判定器が「OCCTがソリッドを不正と判定した」で判定不能(`UNKNOWN`、終了コード2)になりうる(75〜107秒かかる。[TOPOPT_ACCEPTANCE.md](TOPOPT_ACCEPTANCE.md)「保存精度と簡略化」)。製品の合否は `finalize.final_mesh_checks` が記録する `final-mesh-checks`(水密・単一ソリッド・接続6項目・float32・自己交差)で読む。
+
 探索後の 1×1 の空隙埋め(`thin_voids`。進捗の段は `fill`)は `tube-fill` snapshot に残る: `cells`(埋めた総数)・`rounds`
 (各回の数)と、埋めたときは `search_safety_factor`(探索時)、取り直した6条件の `report`、`min_width`(`cells` と、
 m 立方に覆われない埋めセルの数 `uncovered_filled_cells`。止めずに `warning` に出す)。`selected-result` の
