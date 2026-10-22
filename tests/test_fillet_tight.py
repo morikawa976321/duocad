@@ -12,7 +12,8 @@ from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism, BRepPrimAPI_MakeSphere
 from OCP.GProp import GProp_GProps
 from OCP.GeomAPI import GeomAPI_Interpolate
 from OCP.GeomAbs import GeomAbs_SurfaceType
@@ -204,11 +205,11 @@ def test_a_post_lower_than_the_radius_is_refused():
         kernel.fillet_edges(shape, {index: 1.0 for index in edges})
 
 
-@pytest.mark.parametrize("radius", [0.67, 1.95])
+@pytest.mark.parametrize("radius", [0.6667, 0.67, 1.95])
 def test_radii_near_the_ends_of_the_range_are_rounded(radius):
-    """楕円 6×2 の上縁を、先端の曲率半径(0.667)をわずかに超える半径と、上面の半幅(2)にほぼ届く半径で丸めても、7 面の
-    有効な立体になり、上面の広さが式と合う。0.67 は燕尾が小さく交点の枝の角が浅い(交互に寄せる詰め方は収束しなかった)。
-    1.95 は上面が幅 0.1 の細いレンズになる(丸めの面の下の縁が壁から離れて縫い合わせられなかった)。"""
+    """楕円 6×2 の上縁を、先端の曲率半径(0.66667)をわずかに超える半径と、上面の半幅(2)にほぼ届く半径で丸めても、7 面の
+    有効な立体になり、上面の広さが式と合う。0.6667 の燕尾は標本の間隔より小さく、折れ線では交わらない。0.67 は交点の枝の角が
+    浅い(交互に寄せる詰め方は収束しなかった)。1.95 は上面が幅 0.1 の細いレンズ(丸めの面の下の縁が壁から離れて縫えなかった)。"""
     shape = _elliptic_post(6.0, 2.0, 5.0)
     edges = _top_edges(shape, 5.0)
     assert not _native_done(shape, edges, radius), "前提: OCCT はこの半径を断る"
@@ -242,3 +243,21 @@ def test_a_radius_wider_than_the_waist_of_the_top_is_refused_by_this_way():
 
     with pytest.raises(kernel_tight.Declined, match="cut into the opposite wall"):
         kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), {index: 1.2 for index in edges})
+
+
+@pytest.mark.parametrize("hole", ["sphere", "box"])
+def test_a_cavity_below_the_rounding_is_kept(hole):
+    """深さ R より下に空洞(球・箱)がある楕円柱でも、丸めた形に空洞が残り、体積は空洞の無い柱を丸めた形から空洞を引いた値。
+    空洞の面は消えない(縫い合わせで外の殻だけを作り直すと、球の空洞は消え、箱の空洞は殻が2つになって断られた)。"""
+    plain = _elliptic_post(6.0, 2.0, 5.0)
+    rounded_plain = kernel.fillet_edges(plain, {index: 1.0 for index in _top_edges(plain, 5.0)})["volume_after"]
+    cavity = (BRepPrimAPI_MakeSphere(gp_Pnt(0, 0, 2), 0.5).Shape() if hole == "sphere"
+              else BRepPrimAPI_MakeBox(gp_Pnt(-0.5, -0.5, 1.5), 1.0, 1.0, 1.0).Shape())
+    shape = BRepAlgoAPI_Cut(plain, cavity).Shape()
+
+    rounded = kernel.fillet_edges(shape, {index: 1.0 for index in _top_edges(shape, 5.0)})
+
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert _state(rounded["shape"], 0.0, 0.0, 2.0) == TopAbs_OUT
+    assert rounded["volume_after"] == pytest.approx(rounded_plain - kernel.volume(cavity), rel=1e-9)
+    assert rounded["provenance"]["deleted"] == []

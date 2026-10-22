@@ -118,11 +118,18 @@ def _round(shape: TopoDS_Shape, top: TopoDS_Shape, radius: float) -> Tight:
 
     # 本体の深さ R の断面と冠の底面を外して縫い合わせる。ブーリアンの結合は、帽子が壁に G1 で接する縁の交わりを解くのに
     # 楕円 6×2・R=0.67 で 8 秒かかった(R=1 で 1 秒)
+    # 縫うのは断面を持つ外の殻だけで、深さ R より下の空洞(内の殻)はそのまま立体に戻す
     cut, floor = _face_on(below.Shape(), section, normal), _face_on(crown, section, normal)
+    shells = indexed_map(below.Shape(), TopAbs_SHELL)
+    shells = [shells.FindKey(i) for i in range(1, shells.Extent() + 1)]
+    outer = [shell for shell in shells if indexed_map(shell, TopAbs_FACE).Contains(cut)]
+    if len(outer) != 1:
+        raise Unsupported("the cut at the fillet depth is not on one shell of the body")
     result, sewing = _closed_solid(
-        [face for face in _faces(below.Shape()) if not face.IsSame(cut)] + [face for face in _faces(crown) if not face.IsSame(floor)],
+        [face for face in _faces(outer[0]) if not face.IsSame(cut)] + [face for face in _faces(crown) if not face.IsSame(floor)],
         1.0e-6 * size,
         "joining the rounded crown to the body",
+        [shell for shell in shells if not shell.IsSame(outer[0])],
     )
     # 既定の積分は、帽子(充填の自由曲面)のある冠で 8% ずれた(楕円 6×2・R=0.67)
     removed = _precise_volume(shape) - _precise_volume(result)
@@ -581,16 +588,19 @@ def _crown(faces: list, section: TopoDS_Shape, size: float) -> TopoDS_Shape:
     return _closed_solid([*faces, floor.Face()], tolerance, "the rounded crown")[0]
 
 
-def _closed_solid(faces: list, tolerance: float, what: str):
-    """面を縫って閉じた1つの立体にする。立体と縫い合わせ(由来をたどる)を返す。"""
+def _closed_solid(faces: list, tolerance: float, what: str, cavities: list = ()):
+    """面を縫って閉じた1つの殻にし、`cavities`(内の殻)を空洞として加えた立体にする。立体と縫い合わせ(由来をたどる)を返す。"""
     sewing = BRepBuilderAPI_Sewing(tolerance)
     for face in faces:
         sewing.Add(face)
     sewing.Perform()
     shells = indexed_map(sewing.SewedShape(), TopAbs_SHELL)
-    if sewing.NbFreeEdges() != 0 or shells.Extent() != 1:
+    if sewing.NbFreeEdges() != 0 or shells.Extent() != 1 or indexed_map(shells.FindKey(1), TopAbs_FACE).Extent() != len(faces):
         raise Unsupported(f"{what} did not close ({sewing.NbFreeEdges()} free edges, {shells.Extent()} shells)")
-    solid = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(shells.FindKey(1))).Solid()
+    maker = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(shells.FindKey(1)))
+    for cavity in cavities:
+        maker.Add(TopoDS.Shell_s(cavity))
+    solid = maker.Solid()
     fix = ShapeFix_Solid(solid)
     fix.Perform()
     solid = fix.Solid()
