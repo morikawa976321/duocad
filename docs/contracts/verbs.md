@@ -123,7 +123,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 ## envelope_regions(スケッチの包絡)
 
 - 呼ぶ面は MCP/セッション `envelope_regions(radius=0, offset=0)`(対象は確定選択の領域。WS は radius・offset 必須)。verb は `duocad/verbs/envelope_regions.py`、幾何は `kernel_sketch.envelope_faces`/`face_boundary_entities`。プレビューは投機実行でなく `preview_envelope_regions`(分裂しても失敗にせず全部の線と個数を返す)。
-- **結果は線分・円弧・円のみ。面がちょうど 1 枚でなければ ValueError で何も変えない。** redo/replay はログの図形数値を使う。
+- **結果は線分・円弧・円・閉じた楕円・3次ベジエ。正確な図形に直せない辺(楕円のずらし曲線・楕円弧・有理 B-スプライン)は誤差 0.001 mm 以下の3次ベジエの列で近似する(`kernel_sketch.edge_entities`。応答の `approximated` が数)。面がちょうど 1 枚でなければ ValueError で何も変えない。** redo/replay はログの図形数値を使う。
 - **依存禁止**: 領域の添字(後の編集で指す先が変わる)。負のオフセットを OCCT へ直接頼むこと。
 - **罠**: 同心円の面の内向きオフセットは失敗する(箱 − 補集合の拡大で代替)。詳細は docs/CAD_LIBRARY_PITFALLS.md。
 

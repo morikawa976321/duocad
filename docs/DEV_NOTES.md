@@ -13,6 +13,10 @@
   同じ秒で出る（`sys.executable` を呼ぶ子プロセスも2つずつ）。二重起動を疑うときは親子関係（ppid）と作成時刻を見る
   （2026-10-07 に本人の検証を二重起動と誤認して片方を止め、検証全体が止まった）。
 - **Git Bash の `python` は日本語入りのファイルを cp932 で読む。** `-X utf8` か `encoding="utf-8"`。
+- **OCCT の重い処理を大きい形で総当たりするときは `tools/capped_run.py --gb 3 -- <コマンド>` で走らせる。** 上限を超えた
+  割り当ては失敗して子だけが終わる。2026-10-22 にフィレットの吸収を PC ケースの部品で総当たりしたら python が仮想メモリを
+  84GB 使い、PC がブルースクリーンで落ちた(イベントログの Resource-Exhaustion-Detector に PID と使用量が残る)。
+  venv の python はランチャなので、走り出してからジョブに入れると実体がジョブの外に出うる(このツールは停止状態で作ってから入れる)。
 - **形状探索の FEM を並べると OOM になる。** RAM 31.7 GB で普段 10〜15 GB は他のアプリが使う。hanger の1条件のピークは 2.388 mm で 7.5 GB〜1.592 mm で 24.2 GB。
   2本以上のピークが重なると落ちる（2026-09-26 に PC が落ちた）。
 - **PowerShell の `Invoke-CimMethod -ClassName Win32_Process -MethodName Create` で起動した独立プロセスは、Claude のアプリを閉じても続く**（親が `WmiPrvSE` になる）。

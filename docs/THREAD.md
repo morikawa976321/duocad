@@ -151,7 +151,7 @@ AI が論文・メーカーの設計指針・動画・CAD ライブラリを調�
 
 | | 中身 |
 |---|---|
-| target | 全周の円筒面（`kernel.classify_face` の `cylinder_full`）を1つ以上。**直径がすべて同じ**こと。別のボディにまたがってよい |
+| target | 全周の円筒面（`kernel.classify_face` の `cylinder_full`）を1つ以上。**直径がすべて同じ**こと。別のボディにまたがってよい。円錐面（テーパーねじ）は将来の拡張（Issue #210） |
 | how | `mate`（選択 `metal` / `printed`、必須・既定なし）、`pitch`（mm、省略可＝相手ごとの既定）、`clearance`（mm、省略可＝相手ごとの既定）。数値はどちらも `dimension=True` |
 | 返り値 | `changed_bodies` |
 | 宣言 | `category="feature"`・`previewable=True`・`resets_selection=True`・`ws="table"` |

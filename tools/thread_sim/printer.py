@@ -46,6 +46,13 @@ class Printer:
 
 DEFAULT = Printer()
 
+# 試し刷り TP1(2026-10-22、本人の Centauri Carbon・初期設定・層 0.2)の嵌合の 20 件すべてと一致する係数(calibrate.py --fit)。
+# 垂れは既定の 0〜0.25 倍で一致し、既定(1 倍)では 2 件外れる。ビードの側面は半円(既定)が最もよく合う
+TP1_FIT = dict(sag_amp=0.0)
+# TP1 の 20 件と一致し、かつ D6 のゲージの寸法誤差(0.05〜0.1)とも矛盾しない係数の組(頑健さを見る場面)
+TP1_SCENARIOS = [("基準", {}), ("垂れ0.25", dict(sag_amp=0.25)), ("垂れ0.25 φ0.3", dict(sag_amp=0.25, sag_phi_ok=0.3)),
+                 ("垂れ0.5 φ0.3", dict(sag_amp=0.5, sag_phi_ok=0.3))]
+
 
 def _system_dir() -> Path | None:
     appdata = os.environ.get("APPDATA")

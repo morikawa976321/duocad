@@ -75,7 +75,63 @@ def analyze(text: str, folder: Path = OUT) -> dict:
     return report
 
 
+def _nut_state(args):
+    """印刷の模擬の係数 kw のもとで、系列 sid のナット(隙間 c)の誤差なしの余りと掛かり代。ボルトは呼び寸法(split=0)。"""
+    sid, c, kw = args
+    from dataclasses import replace
+    from . import evaluate as ev
+    from .printer import DEFAULT
+    _, name, D, mk, mode, _, _ = next(s for s in SERIES if s[0] == sid)
+    des = ev.Design(name, mk(), c, mode=mode, L_nut=float(D), R_out=0.9 * D, split=0.0)
+    e = ev.evaluate(replace(des, clearance=c), DEFAULT.with_(**kw), with_strength=False)
+    return e.margin, e.engagement
+
+
+def fit(text: str, grid: dict, workers: int = 3) -> list:
+    """係数の組ごとに、観測(はまった/はまらない)と一致する誤差 e の範囲を径ごとに探す。
+    はまった = 「手で軽く回る」「全長回るが固い」(嵌合の境目を見るので山飛びは問わない)、はまらない = 「入らない」「途中で止まる」。
+    予測は「余り ≥ e ならはまる」。返り値は係数の組ごとの (一致数, 全数, 径ごとの e の一致区間)。"""
+    import itertools
+    from concurrent.futures import ProcessPoolExecutor
+    res = parse(text)
+    obs = []
+    for sid, name, D, _, mode, _, cs in SERIES:
+        for i, c in enumerate(sorted(cs, reverse=True), 1):
+            main = res.get(f"{sid}{i}", ("未回答", []))[0]
+            if main in (PASS, TIGHT):
+                obs.append((sid, D, c, True))
+            elif main in FAIL:
+                obs.append((sid, D, c, False))
+    keys = list(grid)
+    combos = [dict(zip(keys, v)) for v in itertools.product(*(grid[k] for k in keys))]
+    jobs = [(sid, c, kw) for kw in combos for sid, _, c, _ in obs]
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        states = list(pool.map(_nut_state, jobs, chunksize=4))
+    out = []
+    for n, kw in enumerate(combos):
+        st = states[n * len(obs):(n + 1) * len(obs)]
+        e_grid = [k * 0.005 for k in range(0, 61)]
+        best_total, per_D = 0, {}
+        for D in sorted({o[1] for o in obs}):
+            idx = [j for j, o in enumerate(obs) if o[1] == D]
+            score = [sum((st[j][0] >= e) == obs[j][3] for j in idx) for e in e_grid]
+            m = max(score)
+            ok = [e for e, s in zip(e_grid, score) if s == m]
+            per_D[D] = (m, len(idx), (min(ok), max(ok)))
+            best_total += m
+        out.append(dict(kw=kw, agree=best_total, total=len(obs), per_D=per_D,
+                        detail=[(o[0], o[2], o[3], round(s[0], 3), round(s[1], 3)) for o, s in zip(obs, st)]))
+    return sorted(out, key=lambda r: -r["agree"])
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--fit":
+        text = " ".join(sys.argv[2:])
+        grid = dict(sag_amp=[0.0, 0.25, 0.5, 1.0, 2.0], bead_round=[0.0, 0.5, 1.0], sag_phi_ok=[0.3, 0.5, 0.7])
+        for r in fit(text, grid):
+            per = "  ".join(f"D{D:g}: {m}/{t} e {lo:.3f}〜{hi:.3f}" for D, (m, t, (lo, hi)) in r["per_D"].items())
+            print(f"{r['agree']}/{r['total']}  {r['kw']}  {per}")
+        return
     text = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else sys.stdin.read()
     rep = analyze(text)
     print("試験版", rep["test_id"])

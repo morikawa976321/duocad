@@ -175,16 +175,153 @@ def test_undo_removes_only_the_envelope_and_replay_reproduces_it(session: Sessio
     assert _created_entities(session, sketch_id, applied["created"]) == with_envelope
 
 
-def test_bezier_boundary_is_rejected_instead_of_approximated() -> None:
-    """ベジエを含む領域は、近似の曲線を出さずに拒む。落ちたら線分・円弧以外が出力に混ざりうる。"""
+BEZIER_ARCH = {"x0": 0.0, "y0": 0.0, "cx1": 3.0, "cy1": 8.0, "cx2": 7.0, "cy2": 8.0, "x1": 10.0, "y1": 0.0}
+
+
+def test_bezier_boundary_comes_back_as_the_same_bezier_when_nothing_is_rounded() -> None:
+    """R = d = 0 で包んだベジエの領域は、元と同じ制御点のベジエを返す(近似しない)。落ちたらベジエを近似し直して制御点がずれる
+    か、ベジエの辺を断っている。"""
     entities = [
-        {"kind": "bezier", "params": {"x0": 0.0, "y0": 0.0, "cx1": 3.0, "cy1": 8.0, "cx2": 7.0, "cy2": 8.0, "x1": 10.0, "y1": 0.0}},
+        {"kind": "bezier", "params": dict(BEZIER_ARCH)},
         {"kind": "line", "params": {"x0": 10.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}},
     ]
     regions = kernel_sketch.sketch_regions(PLANE, entities)
     (piece,) = kernel_sketch.envelope_faces(PLANE, [regions[0]["face"]], 0.0, 0.0)
-    with pytest.raises(ValueError, match="ベジエ"):
-        kernel_sketch.face_boundary_entities(PLANE, piece)
+    out = kernel_sketch.face_boundary_entities(PLANE, piece)
+    (bezier,) = [entity for entity in out if entity["kind"] == "bezier"]
+    assert not bezier.get("approximated")
+    forward = [bezier["params"][key] for key in ("x0", "y0", "cx1", "cy1", "cx2", "cy2", "x1", "y1")]
+    backward = [bezier["params"][key] for key in ("x1", "y1", "cx2", "cy2", "cx1", "cy1", "x0", "y0")]
+    expected = [BEZIER_ARCH[key] for key in ("x0", "y0", "cx1", "cy1", "cx2", "cy2", "x1", "y1")]
+    assert forward == pytest.approx(expected, abs=1e-9) or backward == pytest.approx(expected, abs=1e-9)
+
+
+ELLIPSE = (20.0, 10.0, 30.0)  # 幅・高さ・角度
+
+
+def _ellipse_sketch(session: Session) -> str:
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    width, height, angle = ELLIPSE
+    session.add_ellipse(sketch_id, [0.0, 0.0], width, height, angle)
+    return sketch_id
+
+
+def _distance_to_ellipse(x: float, y: float) -> float:
+    """原点中心の `ELLIPSE` までの最短距離(角の標本から黄金分割で詰める。近似の検算用に、本体とは別の方法で測る)。"""
+    width, height, angle = ELLIPSE
+    a, b = width / 2.0, height / 2.0
+    c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    lx, ly = x * c + y * s, -x * s + y * c
+
+    def dist(theta: float) -> float:
+        return math.hypot(lx - a * math.cos(theta), ly - b * math.sin(theta))
+
+    step = 2.0 * math.pi / 720
+    best = min(range(720), key=lambda k: dist(k * step)) * step
+    lo, hi = best - step, best + step
+    ratio = (math.sqrt(5.0) - 1.0) / 2.0
+    for _ in range(80):
+        m1, m2 = hi - ratio * (hi - lo), lo + ratio * (hi - lo)
+        if dist(m1) < dist(m2):
+            hi = m2
+        else:
+            lo = m1
+    return dist((lo + hi) / 2.0)
+
+
+def _bezier_point(params: dict, t: float) -> tuple:
+    r = 1.0 - t
+    weights = (r * r * r, 3.0 * r * r * t, 3.0 * r * t * t, t * t * t)
+    keys = (("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1"))
+    return (
+        sum(w * params[kx] for w, (kx, _) in zip(weights, keys)),
+        sum(w * params[ky] for w, (_, ky) in zip(weights, keys)),
+    )
+
+
+@pytest.mark.parametrize("offset", [2.0, -1.0])
+def test_ellipse_offset_is_approximated_by_beziers_within_the_tolerance(session: Session, offset: float) -> None:
+    """楕円を d で包むと確定まで通り、出力のベジエの点はどれも楕円から |d| ± 誤差の上限 の距離にある。落ちたら楕円の
+    平行曲線を断っている(以前の挙動)か、近似の誤差が上限を超えている。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 0.0, offset)
+    created = _created_entities(session, sketch_id, applied["created"])
+    assert {entity["kind"] for entity in created} == {"bezier"}
+    assert applied["approximated"] == len(created)
+    worst = max(
+        abs(_distance_to_ellipse(*_bezier_point(entity["params"], k / 40)) - abs(offset))
+        for entity in created
+        for k in range(41)
+    )
+    assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE
+    assert len(created) <= 40, "区間の数が細かすぎない(誤差の上限 0.001 mm で 20×10 の楕円に 24 区間を実測)"
+
+
+def test_approximated_beziers_join_with_continuous_tangents(session: Session) -> None:
+    """近似したベジエは隣と同じ点でつながり、つなぎ目の接線の向きがそろう。落ちたら押し出した側面に折れ目ができる。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 0.0, 2.0)
+    created = _created_entities(session, sketch_id, applied["created"])
+    ends = {}
+    for entity in created:
+        p = entity["params"]
+        ends.setdefault((round(p["x0"], 6), round(p["y0"], 6)), []).append((p["cx1"] - p["x0"], p["cy1"] - p["y0"]))
+        ends.setdefault((round(p["x1"], 6), round(p["y1"], 6)), []).append((p["x1"] - p["cx2"], p["y1"] - p["cy2"]))
+    assert all(len(tangents) == 2 for tangents in ends.values()), "端点は2本ずつで共有される(閉じた1本の線)"
+    for (ux, uy), (vx, vy) in ends.values():
+        sine = abs(ux * vy - uy * vx) / (math.hypot(ux, uy) * math.hypot(vx, vy))
+        assert sine < 1e-6
+
+
+def test_rounding_an_ellipse_alone_gives_the_same_ellipse_back(session: Session) -> None:
+    """へこみの無い楕円を R だけで包むと、元と同じ楕円の図形1つになる(近似のベジエにしない)。落ちたら R 広げて R 縮めた
+    ずらし曲線のまま近似している。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 2.0, 0.0)
+    (entity,) = _created_entities(session, sketch_id, applied["created"])
+    assert entity["kind"] == "ellipse" and applied["approximated"] == 0
+    width, height, angle = ELLIPSE
+    assert entity["params"] == pytest.approx({"cx": 0.0, "cy": 0.0, "width": width, "height": height, "angle": angle})
+
+
+def test_rounding_then_offsetting_an_ellipse_stays_a_single_region(session: Session) -> None:
+    """楕円を R で丸めてから d で広げても1つの領域で、面積は楕円を d だけ広げたもの(π a b + 周長 d + π d²)。落ちたら OCCT の
+    2Dオフセットが楕円のずらし曲線のずらし曲線で壊れた形(2枚・負の面積)を返し、それをそのまま使っている。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 1.0, 1.5)
+    width, height, _ = ELLIPSE
+    perimeter = kernel_sketch.ellipse_perimeter({"cx": 0.0, "cy": 0.0, "width": width, "height": height, "angle": 0.0})
+    expected = math.pi * width * height / 4.0 + perimeter * 1.5 + math.pi * 1.5**2
+    assert _area_of_created(session, sketch_id, applied["created"]) == pytest.approx(expected, abs=0.05)
+
+
+def test_half_ellipse_offset_approximates_the_elliptic_arc_and_keeps_the_steiner_area(session: Session) -> None:
+    """楕円を中心を通る線分で割った半分を d で広げると、楕円弧のずらし曲線だけが近似のベジエになり、面積は凸な形の
+    平行体の公式(A + 周長 d + π d²)に合う。落ちたら楕円弧(閉じていない楕円)の辺を断っているか、近似が形を崩している。"""
+    width, height, angle = ELLIPSE
+    sketch_id = _ellipse_sketch(session)
+    session.add_line(sketch_id, [-15.0, 0.0], [15.0, 0.0])
+    offset = 1.0
+    applied = _envelope(session, sketch_id, 0.0, offset, regions=[1])
+    created = _created_entities(session, sketch_id, applied["created"])
+    assert applied["approximated"] > 0
+    assert {entity["kind"] for entity in created} <= {"bezier", "line", "arc"}
+    a, b = width / 2.0, height / 2.0
+    c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    half_chord = 1.0 / math.sqrt((c / a) ** 2 + (s / b) ** 2)  # 楕円の中心から x 軸の向きへの半径
+    full = kernel_sketch.ellipse_perimeter({"cx": 0.0, "cy": 0.0, "width": width, "height": height, "angle": 0.0})
+    perimeter = full / 2.0 + 2.0 * half_chord
+    expected = math.pi * a * b / 2.0 + perimeter * offset + math.pi * offset**2
+    assert _area_of_created(session, sketch_id, applied["created"]) == pytest.approx(expected, abs=0.05)
+
+
+def test_ellipse_ghost_is_the_same_as_the_committed_lines(session: Session) -> None:
+    """近似を含むときも、プレビューの線は確定で足される線と同じ。落ちたら幽霊と結果が食い違う。"""
+    sketch_id = _ellipse_sketch(session)
+    ghost = _preview(session, sketch_id, 1.0, 1.5)["sketch_ghost"]
+    applied = _envelope(session, sketch_id, 1.0, 1.5)
+    assert ghost["pieces"] == 1
+    assert ghost["entities"] == _created_entities(session, sketch_id, applied["created"])
 
 
 def test_enveloping_again_over_earlier_envelopes_terminates(session: Session) -> None:
@@ -288,3 +425,140 @@ def test_the_offset_curve_fit_does_not_depend_on_where_the_shapes_are(session: S
     """同じ図形を原点から (±1000, ±1000) mm 離しても包める。落ちたら、3点を通る円を絶対座標の二乗の差で解いていて、
     0.01〜0.1 mm の短い弧で桁が落ち、「標本点が直線にも円にも乗らない」で拒む(原点付近では通る)。"""
     assert _enveloped_area(session, 0.5, -0.5, shift) == pytest.approx(_enveloped_area(session, 0.5, -0.5), abs=1.0e-3)
+
+
+def test_rounding_then_offsetting_an_ellipse_where_the_first_offset_fails_retries(session: Session) -> None:
+    """R=1, d=2 では最初の2Dオフセットが IsDone()=False で失敗する(実測)。辺を近似し直して1つの領域にする。落ちたら
+    失敗の例外が、壊れた形のときだけの近似し直しを飛ばしている。"""
+    sketch_id = _ellipse_sketch(session)
+    applied = _envelope(session, sketch_id, 1.0, 2.0)
+    width, height, _ = ELLIPSE
+    perimeter = kernel_sketch.ellipse_perimeter({"cx": 0.0, "cy": 0.0, "width": width, "height": height, "angle": 0.0})
+    expected = math.pi * width * height / 4.0 + perimeter * 2.0 + math.pi * 2.0**2
+    assert _area_of_created(session, sketch_id, applied["created"]) == pytest.approx(expected, abs=0.05)
+
+
+def _distance_to_polyline(point: tuple, polyline: list) -> float:
+    best = math.inf
+    for (ax, ay), (bx, by) in zip(polyline, polyline[1:]):
+        dx, dy = bx - ax, by - ay
+        length2 = dx * dx + dy * dy
+        t = 0.0 if length2 == 0.0 else max(0.0, min(1.0, ((point[0] - ax) * dx + (point[1] - ay) * dy) / length2))
+        best = min(best, math.hypot(point[0] - ax - t * dx, point[1] - ay - t * dy))
+    return best
+
+
+def test_a_bump_narrower_than_the_samples_is_not_skipped() -> None:
+    """[0.020, 0.025] だけに山を持つ有理 B-スプラインの辺を近似しても、山の形が誤差の上限内に残る。落ちたら区間の標本が山を
+    飛び越え、平らな1本のベジエにしている(ノットで区切っていない)。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_BSplineCurve
+    from OCP.TColgp import TColgp_Array1OfPnt
+    from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
+    from OCP.gp import gp_Pnt
+
+    # 両端の4重ノットの間に [0.019, 0.026] だけノットを置き、その間だけに効く制御点を持ち上げる。ほかの制御点はグレヴィル点
+    # (x = 10 t が正確に出る位置)に置くので、両端の接線から作った1本のベジエは山の外でぴったり合う。
+    inner = [0.019, 0.020, 0.0225, 0.025, 0.026]
+    flat = [0.0] * 4 + inner + [1.0] * 4
+    knots = TColStd_Array1OfReal(1, len(inner) + 2)
+    multiplicities = TColStd_Array1OfInteger(1, len(inner) + 2)
+    for i, (value, multiplicity) in enumerate([(0.0, 4), *[(k, 1) for k in inner], (1.0, 4)]):
+        knots.SetValue(i + 1, value)
+        multiplicities.SetValue(i + 1, multiplicity)
+    count = len(flat) - 4
+    poles = TColgp_Array1OfPnt(1, count)
+    weights = TColStd_Array1OfReal(1, count)
+    for i in range(count):
+        greville = sum(flat[i + 1 : i + 4]) / 3.0
+        lifted = i == 4  # 台が [0.019, 0.026] の制御点
+        poles.SetValue(i + 1, gp_Pnt(10.0 * greville, 1.0 if lifted else 0.0, 0.0))
+        weights.SetValue(i + 1, 2.0 if lifted else 1.0)
+    curve = Geom_BSplineCurve(poles, weights, knots, multiplicities, 3)
+    edge = BRepBuilderAPI_MakeEdge(curve).Edge()
+
+    entities = kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    assert entities and all(entity.get("approximated") for entity in entities)
+    polyline = []
+    for entity in entities:
+        polyline.extend(_bezier_point(entity["params"], k / 200) for k in range(201))
+    peak = max(curve.Value(k / 4000).Y() for k in range(4001))
+    assert peak > 0.3, "題材の山が立っていない"
+    worst = max(
+        _distance_to_polyline((curve.Value(k / 4000).X(), curve.Value(k / 4000).Y()), polyline) for k in range(4001)
+    )
+    assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE + 1e-6
+
+
+def test_a_smooth_curve_with_many_knots_is_not_split_at_every_knot() -> None:
+    """形を変えずにノットを 513 個足した有理 B-スプラインの四分円は、ノットの数によらず数本のベジエになる。落ちたら
+    ノットごとに区間を割って区間の上限(512)で断っている。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.GC import GC_MakeArcOfCircle
+    from OCP.GeomConvert import GeomConvert
+    from OCP.gp import gp_Pnt
+
+    arc = GC_MakeArcOfCircle(gp_Pnt(10.0, 0.0, 0.0), gp_Pnt(10.0 / math.sqrt(2.0), 10.0 / math.sqrt(2.0), 0.0), gp_Pnt(0.0, 10.0, 0.0)).Value()
+    spline = GeomConvert.CurveToBSplineCurve_s(arc)
+    low, high = spline.FirstParameter(), spline.LastParameter()
+    for k in range(1, 514):
+        spline.InsertKnot(low + (high - low) * k / 514, 1, 1.0e-12)
+    edge = BRepBuilderAPI_MakeEdge(spline).Edge()
+    entities = kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    assert 0 < len(entities) <= 16
+    worst = max(
+        abs(math.hypot(*_bezier_point(entity["params"], k / 40)) - 10.0) for entity in entities for k in range(41)
+    )
+    assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE
+
+
+def test_a_bump_away_from_the_knot_midpoint_is_not_skipped() -> None:
+    """ノットの区間 [0.020, 0.025] の中で、ノットと区間の中点では y = 0 になり、その間で振れる有理 B-スプラインの辺を近似しても、
+    振れが誤差の上限内に残る。落ちたら標本がノットとその間の中点だけで、区間の中の振れを飛び越えている。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_BSplineCurve
+    from OCP.TColgp import TColgp_Array1OfPnt
+    from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
+    from OCP.gp import gp_Pnt
+
+    breaks = [0.0, 0.020, 0.025, 1.0]
+    knots = TColStd_Array1OfReal(1, 4)
+    multiplicities = TColStd_Array1OfInteger(1, 4)
+    for i, (value, multiplicity) in enumerate(zip(breaks, [4, 3, 3, 4])):
+        knots.SetValue(i + 1, value)
+        multiplicities.SetValue(i + 1, multiplicity)
+    poles = TColgp_Array1OfPnt(1, 10)
+    weights = TColStd_Array1OfReal(1, 10)
+    # 3つのベジエの区間(制御点を共有)。x は区間ごとに等間隔で x = 10 t、y は真ん中の区間だけ 60 s (s - 1/2)(s - 1)
+    xs = [10.0 * (a + (b - a) * k / 3) for a, b in zip(breaks, breaks[1:]) for k in range(3)] + [10.0]
+    ys = [0.0, 0.0, 0.0, 0.0, 10.0, -10.0, 0.0, 0.0, 0.0, 0.0]
+    for i in range(10):
+        poles.SetValue(i + 1, gp_Pnt(xs[i], ys[i], 0.0))
+        weights.SetValue(i + 1, 1.001 if i == 8 else 1.0)  # y = 0 の区間の重みを変えて有理にする(近似の経路を通す)
+    curve = Geom_BSplineCurve(poles, weights, knots, multiplicities, 3)
+    assert curve.IsRational()
+    assert abs(curve.Value(0.0225).Y()) < 1e-9 and abs(curve.Value(0.021).Y()) > 1.0, "題材の振れが立っていない"
+    edge = BRepBuilderAPI_MakeEdge(curve).Edge()
+    entities = kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    polyline = []
+    for entity in entities:
+        polyline.extend(_bezier_point(entity["params"], k / 400) for k in range(401))
+    samples = [0.020 + 0.005 * k / 400 for k in range(401)]
+    worst = max(_distance_to_polyline((curve.Value(t).X(), curve.Value(t).Y()), polyline) for t in samples)
+    assert worst <= kernel_sketch.APPROXIMATION_TOLERANCE + 1e-6
+
+
+def test_a_trimmed_bezier_edge_keeps_the_curve_of_the_edge() -> None:
+    """ベジエの辺の一部を図形にしても、辺の曲線そのものは書き換わらない。落ちたら `Segment` を辺の曲線に掛けている。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.Geom import Geom_BezierCurve
+    from OCP.TColgp import TColgp_Array1OfPnt
+    from OCP.gp import gp_Pnt
+
+    poles = TColgp_Array1OfPnt(1, 4)
+    for i, (x, y) in enumerate([(0, 0), (3, 8), (7, 8), (10, 0)]):
+        poles.SetValue(i + 1, gp_Pnt(x, y, 0))
+    bezier = Geom_BezierCurve(poles)
+    edge = BRepBuilderAPI_MakeEdge(bezier, 0.2, 0.8).Edge()
+    kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    assert (bezier.Pole(1).X(), bezier.Pole(4).X()) == (0.0, 10.0)
