@@ -708,3 +708,35 @@ def test_rounding_a_post_on_a_lying_cylinder_past_its_end_does_not_kill_the_proc
     )
     assert done.returncode == 0, (done.returncode, done.stderr[-800:])
     assert done.stdout.splitlines() == ["True True", "survived"], done.stdout
+
+
+def test_a_hole_on_the_feet_track_of_an_elliptic_post_is_noticed():
+    """楕円柱(半軸 20・2)の根元を半径 10 で丸めるとき、足の軌跡の上の小さな穴(半径 0.5)で球が縁に乗ることを見つける
+    (足の軌跡の媒介変数を辺の媒介変数へ比例配分で戻したときは、足の進む速さが変わるので足した標本が穴の外に置かれ、
+    見落とした。Codex レビューの反例)。この形は楕円の両端で球を並べる数が多すぎて、丸めそのものはふつうの肉に戻る。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCP.gp import gp_Elips, gp_Vec
+    from duocad import kernel_overflow
+
+    outline = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(gp_Elips(gp_Ax2(gp_Pnt(0, 0, 3), gp_Dir(0, 0, 1)), 20.0, 2.0)).Edge()).Wire()
+    post = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(outline).Face(), gp_Vec(0, 0, 40)).Shape()
+    hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(28.95130879, -4.50746646, -1), gp_Dir(0, 0, 1)), 0.5, 10.0).Shape()
+    shape = kernel.boolean_bodies(_union(_box(-50, -50, 0, 50, 50, 3), post), [hole], "cut")["shape"]
+    (root,) = [
+        edge["index"] for edge in query.describe_edges(shape)
+        if edge["kind"] != "line" and abs(edge["start"][2] - 3.0) < 1e-6 and abs(edge["start"][0]) <= 20.01
+    ]
+    edge = kernel.edge_of(shape, root)
+    edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
+    columns = kernel_overflow._Columns(shape, edge_faces)
+    supports = [kernel_overflow._Support(face, [edge], columns) for face in edge_faces.FindFromKey(edge)]
+    (wire,) = kernel_overflow._smooth_wires([edge])
+
+    path = kernel_overflow._RollingPath(wire, supports, 10.0)
+
+    assert path.states - {0}, "球が穴の縁に乗るのを見落とした"

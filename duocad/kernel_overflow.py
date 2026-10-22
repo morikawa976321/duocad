@@ -335,6 +335,8 @@ def _material(
 # --------------------------------------------------------------------------------------
 #: 辺1本に沿って球の中心を求める点の数(切り替わりの点は二分法で別に足す)。
 _ROLL_SAMPLES = 64
+#: 標本の間に収まる縁越え(小さい穴)の間に置く点の数。
+_SHORT_STRETCH_SAMPLES = 8
 #: 掃く球を半径の何倍だけ大きくするか(前から順に試す)。ちょうど半径だと球が両面に接するだけで、角の肉と上の空気が
 #: 接線でつながったまま分かれなかった。食い込ませた分だけ丸めの面が角の側へずれ(半径 × 倍率)、面と接する所に角度
 #: √(2 × 倍率) の折れ目が出る(1e-5 倍で 0.26°)。実測(縁を越える 8 つの形を2回ずつ): 1e-5 倍は全部通り、結果は毎回
@@ -732,24 +734,35 @@ class _RollingPath:
             if not measure.IsDone() or measure.Value() > 1.0e-7 * max(1.0, self.radius):
                 continue
             for number in range(1, measure.NbSolution() + 1):
-                # 補間の媒介変数は弦の長さの累計(`_interpolated` と同じ)なので、標本の間で比例配分して辺の媒介変数へ戻す
+                # 補間の媒介変数は弦の長さの累計(`_interpolated` と同じ)なので、どの標本の間かはそこから分かる。間のどこかは、
+                # 足がその点にいちばん近くなる辺の点を詰めて求める(比例配分すると、足の進む速さが変わる楕円柱の根元で
+                # 足した標本が穴の外に置かれ、縁越えを見逃した。Codex レビューの反例)
+                crossing = measure.PointOnShape1(number)
                 if measure.SupportTypeShape1(number) == BRepExtrema_SupportType.BRepExtrema_IsOnEdge:
                     (along,) = measure.ParOnEdgeS1(number)  # OCP は参照で返す引数をタプルで返す
                     k = max(0, min(len(chords) - 2, bisect.bisect_right(chords, along) - 1))
-                    share = (along - chords[k]) / (chords[k + 1] - chords[k])
-                    crossings.append(ends[k] + share * (ends[k + 1] - ends[k]))
                 else:
-                    crossings.append(_param_on_polyline(measure.PointOnShape1(number), closed, ends))
+                    k = min(range(len(closed)), key=lambda i: closed[i].Distance(crossing))
+                    k = max(0, min(len(ends) - 2, k))
+                low, high = ends[max(0, k - 1)], ends[min(len(ends) - 1, k + 2)]
+                crossings.append(_golden_minimum(lambda u: support.signed(self._center(u)[2])[1].Distance(crossing), low, high))
         if not crossings:
             return params, solved
         crossings.sort()
-        between = [(a + b) / 2.0 for a, b in zip(crossings, crossings[1:])]
+        period = last - params[0]
+        pairs = list(zip(crossings, crossings[1:]))
         if self.loop:
-            period = last - params[0]
-            wrapped = (crossings[-1] + crossings[0] + period) / 2.0
-            between.append(wrapped - period if wrapped >= last else wrapped)
+            pairs.append((crossings[-1], crossings[0] + period))
+        # 交点の間が標本の間隔より短い(小さい穴)ときは、間に `_SHORT_STRETCH_SAMPLES` 点置く: 1点だけだと、穴へ 0.02mm
+        # 落ちる球の道を3点で補間することになり、道がずれて管と面の間にすき間が残った(半径 0.5 の穴へ半径 6 の球)
+        step = period / max(1, len(params) - (0 if self.loop else 1))
+        between = []
+        for a, b in pairs:
+            count = _SHORT_STRETCH_SAMPLES if b - a < step else 1
+            between.extend(a + (b - a) * (i + 0.5) / count for i in range(count))
+        between = [u - period if self.loop and u >= last else u for u in between]
         known = dict(zip(params, solved))
-        spacing = 1.0e-9 * (last - params[0])
+        spacing = 1.0e-9 * period
         for u in between:
             if all(abs(u - p) > spacing for p in known):
                 known[u] = self._center(u)
@@ -824,6 +837,24 @@ class _RollingPath:
             raise Unsupported("the ball path has no direction")
         direction.Normalize()
         return direction if direction.Dot(along) > 0.0 else direction.Reversed()
+
+
+def _golden_minimum(f, low: float, high: float, steps: int = 48) -> float:
+    """[low, high] で f を最小にする点(黄金分割)。"""
+    ratio = (math.sqrt(5.0) - 1.0) / 2.0
+    a, b = low, high
+    c, d = b - ratio * (b - a), a + ratio * (b - a)
+    fc, fd = f(c), f(d)
+    for _ in range(steps):
+        if fc < fd:
+            b, d, fd = d, c, fc
+            c = b - ratio * (b - a)
+            fc = f(c)
+        else:
+            a, c, fc = c, d, fd
+            d = a + ratio * (b - a)
+            fd = f(d)
+    return 0.5 * (a + b)
 
 
 def _param_on_polyline(point: gp_Pnt, vertices: list, params: list) -> float:
@@ -928,6 +959,8 @@ def _swept_balls(paths, radius: float, swell: float) -> list:
     balls.extend(BRepPrimAPI_MakeSphere(point, size).Shape() for point, size in distinct)
     if not balls:
         return pipes
+    if len(balls) > _MAX_BALLS:
+        raise Unsupported(f"the ball path bends too sharply in too many places ({len(balls)} balls)")
     # 球は先に球どうしで順に結合して1つの束にする(角から引く回数を減らす)。外部の罠: 球を1回のブーリアン(引数を全部
     # 渡す)で結合するのは、順に1つずつより遅く重かった(球 140 個で 3 秒 → 47 秒・3.7GB)。
     bundle = balls[0]
@@ -1028,6 +1061,9 @@ def _interpolated(run: "_Run", periodic: bool):
 
 #: 道の曲がりを調べる点の数(曲線1本あたり)。
 _BEND_SAMPLES = 64
+#: 並べる球の数の上限。超える道はふつうの肉に戻る: 球の結合と引き算が数で重くなり、楕円柱(半軸 20・2)の根元を半径 10 で
+#: 丸めて両端に球 60 個を並べた形は、1回に 70 秒以上かかったうえ検査を通らなかった。
+_MAX_BALLS = 40
 #: 曲がりのきつい道に球を並べる間隔(球の半径に対して)。並べた球の間のくぼみの深さは半径の 間隔²/8 ≈ 1e-3 倍。
 _CHAIN_SPACING = 0.09
 #: 並べる球の膨らませ方(半径に対して)。くぼみより浅く膨らませると、球が支える面に食い込む円どうしの間に隙間が残り、
