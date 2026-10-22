@@ -41,7 +41,6 @@ from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.GProp import GProp_GProps
 from OCP.GeomAPI import GeomAPI_Interpolate
 from OCP.GeomAbs import GeomAbs_Shape, GeomAbs_SurfaceType
-from OCP.ShapeFix import ShapeFix_Solid
 from OCP.TColgp import TColgp_HArray1OfPnt
 from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SHELL, TopAbs_WIRE
@@ -119,7 +118,7 @@ def _round(shape: TopoDS_Shape, top: TopoDS_Shape, radius: float) -> Tight:
     # 本体の深さ R の断面と冠の底面を外して縫い合わせる。ブーリアンの結合は、帽子が壁に G1 で接する縁の交わりを解くのに
     # 楕円 6×2・R=0.67 で 8 秒かかった(R=1 で 1 秒)
     # 縫うのは断面を持つ外の殻だけで、深さ R より下の空洞(内の殻)はそのまま立体に戻す
-    cut, floor = _face_on(below.Shape(), section, normal), _face_on(crown, section, normal)
+    cut, floor = _face_on(below.Shape(), section, normal), _face_on(crown, section, normal.Reversed())
     shells = indexed_map(below.Shape(), TopAbs_SHELL)
     shells = [shells.FindKey(i) for i in range(1, shells.Extent() + 1)]
     outer = [shell for shell in shells if indexed_map(shell, TopAbs_FACE).Contains(cut)]
@@ -597,13 +596,14 @@ def _closed_solid(faces: list, tolerance: float, what: str, cavities: list = ())
     shells = indexed_map(sewing.SewedShape(), TopAbs_SHELL)
     if sewing.NbFreeEdges() != 0 or shells.Extent() != 1 or indexed_map(shells.FindKey(1), TopAbs_FACE).Extent() != len(faces):
         raise Unsupported(f"{what} did not close ({sewing.NbFreeEdges()} free edges, {shells.Extent()} shells)")
-    maker = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(shells.FindKey(1)))
+    # 殻の向きは体積の符号で決める。`ShapeFix_Solid` は面を置き換えることがあり、縫い合わせの由来が切れた(壁の切り欠き)
+    shell = TopoDS.Shell_s(shells.FindKey(1))
+    if _volume(BRepBuilderAPI_MakeSolid(shell).Solid()) < 0.0:
+        shell = TopoDS.Shell_s(shell.Reversed())
+    maker = BRepBuilderAPI_MakeSolid(shell)
     for cavity in cavities:
         maker.Add(TopoDS.Shell_s(cavity))
     solid = maker.Solid()
-    fix = ShapeFix_Solid(solid)
-    fix.Perform()
-    solid = fix.Solid()
     if _volume(solid) <= 0.0 or not BRepCheck_Analyzer(solid).IsValid():
         raise Unsupported(f"{what} is not a valid solid")
     return solid, sewing
@@ -620,8 +620,9 @@ def _faces(shape: TopoDS_Shape) -> list:
     return [faces.FindKey(i) for i in range(1, faces.Extent() + 1)]
 
 
-def _face_on(shape: TopoDS_Shape, top: TopoDS_Shape, normal: gp_Vec) -> TopoDS_Shape:
-    """`shape` の面のうち、上面と同じ平面にある面(丸めた後の上面)。"""
+def _face_on(shape: TopoDS_Shape, top: TopoDS_Shape, outward: gp_Vec) -> TopoDS_Shape:
+    """`shape` の面のうち、`top` と同じ平面にあり、外向きの法線が `outward` を向く面。向きを見ないと、深さ R のすぐ下に上面が
+    ある空洞の面(外向きは逆)も拾った(断面の 1e-6 下)。"""
     level = _a_point_on(top)
     found = []
     for face in (indexed_map(shape, TopAbs_FACE).FindKey(i) for i in range(1, indexed_map(shape, TopAbs_FACE).Extent() + 1)):
@@ -629,7 +630,9 @@ def _face_on(shape: TopoDS_Shape, top: TopoDS_Shape, normal: gp_Vec) -> TopoDS_S
         if surface.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
             continue
         plane = surface.Plane()
-        if plane.Axis().Direction().IsParallel(gp_Dir(normal), 1.0e-9) and plane.Distance(level) < 1.0e-7 * max(1.0, _diagonal(shape)):
+        if (plane.Axis().Direction().IsParallel(gp_Dir(outward), 1.0e-9)
+                and plane.Distance(level) < 1.0e-7 * max(1.0, _diagonal(shape))
+                and _outward_normal(face, _a_point_on(face)).Dot(outward) > 0.0):
             found.append(face)
     if len(found) != 1:
         raise Unsupported("the rounded top face could not be found")

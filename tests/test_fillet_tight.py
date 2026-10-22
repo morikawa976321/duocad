@@ -261,3 +261,18 @@ def test_a_cavity_below_the_rounding_is_kept(hole):
     assert _state(rounded["shape"], 0.0, 0.0, 2.0) == TopAbs_OUT
     assert rounded["volume_after"] == pytest.approx(rounded_plain - kernel.volume(cavity), rel=1e-9)
     assert rounded["provenance"]["deleted"] == []
+
+
+@pytest.mark.parametrize("corner", [(-0.5, 1.5, 1.5), (-0.5, -0.5, 2.999999)], ids=["notch in the wall", "cavity just below the cut"])
+def test_a_box_cut_below_the_rounding_keeps_every_face_traced(corner):
+    """深さ R より下で壁に食い込む箱の切り欠きと、上面が深さ R の 1e-6 下にある箱の空洞でも丸まり、元の面はどれも後継を持ち、
+    消えた面は無い(縫った立体を `ShapeFix_Solid` に通すと壁が置き換わって由来が切れた。断面を平面の位置だけで探すと、
+    空洞の上面も拾って断った)。"""
+    plain = _elliptic_post(6.0, 2.0, 5.0)
+    shape = BRepAlgoAPI_Cut(plain, BRepPrimAPI_MakeBox(gp_Pnt(*corner), 1.0, 1.0, 1.0).Shape()).Shape()
+
+    rounded = kernel.fillet_edges(shape, {index: 1.0 for index in _top_edges(shape, 5.0)})
+
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert rounded["provenance"]["deleted"] == []
+    assert all(rounded["provenance"]["face_map"].values())
