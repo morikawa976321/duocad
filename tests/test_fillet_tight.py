@@ -204,14 +204,32 @@ def test_a_post_lower_than_the_radius_is_refused():
         kernel.fillet_edges(shape, {index: 1.0 for index in edges})
 
 
-def test_a_radius_too_wide_for_the_tip_caps_is_refused_with_this_way_s_reason():
-    """楕円 6×2 の上縁を半径 1.7(上面の半幅の 85%)で丸めると、帽子が隣の面となめらかにつながらないので断る。失敗の文面に
-    この作り方の理由が載る(載らないと、はみ出しの吸収の「くさびが丸まらない」だけが見える)。"""
+@pytest.mark.parametrize("radius", [0.67, 1.95])
+def test_radii_near_the_ends_of_the_range_are_rounded(radius):
+    """楕円 6×2 の上縁を、先端の曲率半径(0.667)をわずかに超える半径と、上面の半幅(2)にほぼ届く半径で丸めても、7 面の
+    有効な立体になり、上面の広さが式と合う。0.67 は燕尾が小さく交点の枝の角が浅い(交互に寄せる詰め方は収束しなかった)。
+    1.95 は上面が幅 0.1 の細いレンズになる(丸めの面の下の縁が壁から離れて縫い合わせられなかった)。"""
+    shape = _elliptic_post(6.0, 2.0, 5.0)
+    edges = _top_edges(shape, 5.0)
+    assert not _native_done(shape, edges, radius), "前提: OCCT はこの半径を断る"
+
+    result = kernel.fillet_edges(shape, {index: radius for index in edges})["shape"]
+
+    assert BRepCheck_Analyzer(result).IsValid()
+    assert kernel.face_count(result) == 7
+    lens = max(_faces_of_type(result, GeomAbs_SurfaceType.GeomAbs_Plane),
+               key=lambda face: BRepAdaptor_Surface(TopoDS.Face_s(face)).Plane().Location().Z())
+    assert _area(lens) == pytest.approx(_lens_area(6.0, 2.0, radius), rel=1e-5)
+
+
+def test_a_radius_wider_than_the_top_is_refused_with_this_way_s_reason():
+    """楕円 6×2 の上縁を半径 2.2(上面の半幅 2 を超える)で丸めると断る。失敗の文面にこの作り方の理由が載る(載らないと、
+    はみ出しの吸収の「くさびが丸まらない」だけが見える)。"""
     shape = _elliptic_post(6.0, 2.0, 5.0)
     edges = _top_edges(shape, 5.0)
 
-    with pytest.raises(ValueError, match="曲率半径を超える丸めもできない: the cap at the tip could not be filled smoothly"):
-        kernel.fillet_edges(shape, {index: 1.7 for index in edges})
+    with pytest.raises(ValueError, match="曲率半径を超える丸めもできない: .*the radius is wider than the top"):
+        kernel.fillet_edges(shape, {index: 2.2 for index in edges})
 
 
 def test_a_radius_wider_than_the_waist_of_the_top_is_refused_by_this_way():

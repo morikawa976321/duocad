@@ -21,7 +21,6 @@ import numpy as np
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_CompCurve, BRepAdaptor_Curve, BRepAdaptor_Surface
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
@@ -47,7 +46,7 @@ from OCP.TColgp import TColgp_HArray1OfPnt
 from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SHELL, TopAbs_WIRE
 from OCP.TopExp import TopExp
-from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
+from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
@@ -57,7 +56,8 @@ from .mesh_geometry import indexed_map
 
 class Tight(NamedTuple):
     """丸めた形と、由来をたどる材料。上面(`top`)の後継は、丸めた形の上面と同じ平面の面(`lens`)。`builders` は本体の深さ R
-    より下を取る引き算と、冠との結合(この順)で、上面以外の元の面の後継はこの2つをたどる。"""
+    より下を取る引き算と、冠との縫い合わせ(この順。どちらも `Modified`・`IsDeleted` に答える)で、上面以外の元の面の後継は
+    この2つをたどる。"""
 
     shape: TopoDS_Shape
     top: TopoDS_Shape
@@ -96,11 +96,13 @@ def round_tight_loop(shape: TopoDS_Shape, edge_map, radii: dict) -> Tight:
 
 
 def _round(shape: TopoDS_Shape, top: TopoDS_Shape, radius: float) -> Tight:
+    if len(_solids(shape)) != 1:
+        raise Unsupported("the body must be one solid")
     normal = _outward_normal(top, _a_point_on(top))
     normal.Normalize()
     size = _diagonal(shape)
     below = _split_at_depth(shape, top, normal, radius, size)
-    expected = _volume(BRepPrimAPI_MakePrism(top, gp_Vec(normal.XYZ()).Multiplied(-radius)).Shape())
+    expected = _precise_volume(BRepPrimAPI_MakePrism(top, gp_Vec(normal.XYZ()).Multiplied(-radius)).Shape())
 
     shift = gp_Trsf()
     shift.SetTranslation(gp_Vec(normal.XYZ()).Multiplied(-radius))
@@ -114,23 +116,32 @@ def _round(shape: TopoDS_Shape, top: TopoDS_Shape, radius: float) -> Tight:
     lens = BRepBuilderAPI_MakeFace(_wire([side.top for side in sides]), True).Face()
     crown = _crown([lens, *(side.face for side in sides), *caps], section, size)
 
-    fuse = BRepAlgoAPI_Fuse()
-    arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
-    arguments.Append(below.Shape())
-    tools.Append(crown)
-    fuse.SetArguments(arguments)
-    fuse.SetTools(tools)
-    fuse.SetFuzzyValue(1.0e-7 * size)
-    fuse.Build()
-    if not fuse.IsDone():
-        raise Unsupported("the rounded crown could not be joined to the body")
-    result = fuse.Shape()
-    if len(_solids(result)) != 1 or not BRepCheck_Analyzer(result).IsValid():
-        raise Unsupported("joining the rounded crown did not give one valid solid")
-    removed = _volume(shape) - _volume(result)
+    # 本体の深さ R の断面と冠の底面を外して縫い合わせる。ブーリアンの結合は、帽子が壁に G1 で接する縁の交わりを解くのに
+    # 楕円 6×2・R=0.67 で 8 秒かかった(R=1 で 1 秒)
+    cut, floor = _face_on(below.Shape(), section, normal), _face_on(crown, section, normal)
+    result, sewing = _closed_solid(
+        [face for face in _faces(below.Shape()) if not face.IsSame(cut)] + [face for face in _faces(crown) if not face.IsSame(floor)],
+        1.0e-6 * size,
+        "joining the rounded crown to the body",
+    )
+    # 既定の積分は、帽子(充填の自由曲面)のある冠で 8% ずれた(楕円 6×2・R=0.67)
+    removed = _precise_volume(shape) - _precise_volume(result)
     if not 0.0 < removed < expected:
         raise Unsupported(f"the rounding removed an implausible volume ({removed:.6g} of at most {expected:.6g})")
-    return Tight(result, top, _face_on(result, top, normal), [below, fuse])
+    return Tight(result, top, _face_on(result, top, normal), [below, _Sewn(sewing)])
+
+
+class _Sewn:
+    """縫い合わせの由来を、ブーリアンのビルダと同じ問い(`Modified` は面の列、`IsDeleted`)で答える。"""
+
+    def __init__(self, sewing) -> None:
+        self.sewing = sewing
+
+    def Modified(self, face):  # noqa: N802  ビルダと同じ名前
+        return [self.sewing.Modified(face)] if self.sewing.IsModified(face) else []
+
+    def IsDeleted(self, face) -> bool:  # noqa: N802
+        return False
 
 
 # --------------------------------------------------------------------------------------
@@ -175,15 +186,14 @@ def _split_at_depth(shape, top, normal: gp_Vec, radius: float, size: float):
     side = gp_Dir(gp_Vec(axis.X(), axis.Y(), axis.Z()).Crossed(_any_perpendicular(axis)))
     corner = base.Translated(gp_Vec(side.XYZ()).Multiplied(-size)).Translated(gp_Vec(axis.Crossed(side).XYZ()).Multiplied(-size))
     box = BRepPrimAPI_MakeBox(gp_Ax2(corner, axis, side), 2.0 * size, 2.0 * size, size).Shape()
-    from .kernel import volume  # kernel がこのモジュールを読むので、呼ぶときに読む
-
     above = _boolean("common", shape, box).Shape()
     band = BRepPrimAPI_MakePrism(top, gp_Vec(normal.XYZ()).Multiplied(-radius)).Shape()
     # 外部の罠: 既定の積分(`BRepGProp.VolumeProperties_s` に精度を渡さない)は、ブーリアンで切った楕円の壁で相対 8.5e-7 ずれ、
     # 帯との比較が通らなかった。面ごとに積分を選ぶ `kernel.volume` なら 1e-10 で一致する
-    expected = volume(band)
+    expected = _precise_volume(band)
     tolerance = 1.0e-8 * max(1.0, expected)
-    if abs(volume(above) - expected) > tolerance or abs(volume(_boolean("common", above, band).Shape()) - expected) > tolerance:
+    if (abs(_precise_volume(above) - expected) > tolerance
+            or abs(_precise_volume(_boolean("common", above, band).Shape()) - expected) > tolerance):
         raise Unsupported("the body is not the top face pushed straight down over the fillet depth")
     below = _boolean("cut", shape, box)
     if len(_solids(below.Shape())) != len(_solids(shape)):
@@ -211,12 +221,29 @@ class _Contour:
         for a, b in zip(points, points[1:] + points[:1]):
             area.Add(gp_Vec(points[0], a).Crossed(gp_Vec(points[0], b)))
         self.side = 1.0 if area.Dot(up) > 0.0 else -1.0
+        self.origin = points[0]
+        self.x_axis = up.Crossed(_any_perpendicular(gp_Dir(up))).Normalized()
+        self.y_axis = up.Crossed(self.x_axis)
+
+    def _parameter(self, s: float) -> float:
+        return self.first + math.fmod(s, self.length) + (self.length if s < 0.0 else 0.0)
 
     def at(self, s: float) -> Tuple[gp_Pnt, gp_Vec, gp_Vec]:
         point, tangent = gp_Pnt(), gp_Vec()
-        self.curve.D1(self.first + math.fmod(s, self.length) + (self.length if s < 0.0 else 0.0), point, tangent)
+        self.curve.D1(self._parameter(s), point, tangent)
         tangent.Normalize()
         return point, tangent, self.up.Crossed(tangent).Multiplied(self.side)
+
+    def bend(self, s: float) -> float:
+        """曲率(面の内側へ曲がる向きが正)。"""
+        point, first, second = gp_Pnt(), gp_Vec(), gp_Vec()
+        self.curve.D2(self._parameter(s), point, first, second)
+        return self.side * first.Crossed(second).Dot(self.up) / first.Magnitude() ** 3
+
+    def flat(self, points) -> "np.ndarray":
+        """点を上面の平面の座標(N×2)にする。"""
+        return np.array([[gp_Vec(self.origin, point).Dot(self.x_axis), gp_Vec(self.origin, point).Dot(self.y_axis)]
+                         for point in points])
 
     def center(self, s: float, radius: float) -> gp_Pnt:
         point, _, inward = self.at(s)
@@ -240,23 +267,25 @@ def _center_path(contour: _Contour, radius: float):
     """
     count = max(_PATH_SAMPLES, _PATH_SAMPLES_PER_EDGE * contour.edges)
     step = contour.length / count
-    centers = [contour.center(i * step, radius) for i in range(count)]
-    x_axis = contour.up.Crossed(_any_perpendicular(gp_Dir(contour.up))).Normalized()
-    y_axis = contour.up.Crossed(x_axis)
-    flat = np.array([[gp_Vec(centers[0], point).Dot(x_axis), gp_Vec(centers[0], point).Dot(y_axis)] for point in centers])
     loops = []
-    for first, second in _self_crossings(flat):
-        low, high = sorted(_meeting(contour, radius, first * step, second * step, step))
+
+    def cut(first, second, reach):
+        low, high = sorted(_meeting(contour, radius, first, second, reach))
         if high - low > 0.5 * contour.length:  # 切り落とす輪は短い方(燕尾は局所)
             low, high = high, low + contour.length
         loops.append((low, high))
+
+    for first, second in _self_crossings(contour.flat([contour.center(i * step, radius) for i in range(count)])):
+        cut(first * step, second * step, step)
+    for first, second in _small_swallowtails(contour, radius, step, loops):
+        cut(first, second, second - first)
     loops.sort()
     for (low, high), (next_low, _) in zip(loops, loops[1:] + [(loops[0][0] + contour.length, 0.0)] if loops else []):
         if high >= next_low:
             raise Unsupported("the swallowtails of the offset outline overlap")
     if not loops:
-        # 道が自己交差しない(半径が辺の曲率半径を超えない、または上面の幅を超えて裏返る)なら、ここでは作らない
-        raise Unsupported("the offset outline does not cross itself (the radius is within its curvature, or wider than the top)")
+        # 道が自己交差しない(半径が辺の曲率半径を超えない)なら OCCT の `MakeFillet` の領分。ここでは作らない
+        raise Unsupported("the radius does not exceed the curvature of the outline anywhere")
     _clear_of_walls(contour, radius, loops, count)
     segments = []
     for (_, high), (next_low, _) in zip(loops, loops[1:] + [(loops[0][0] + contour.length, 0.0)]):
@@ -273,14 +302,9 @@ def _clear_of_walls(contour: _Contour, radius: float, loops: list, count: int) -
     """切り落とした輪の外の球の中心が、輪郭のどこにも R より近づかないこと(半径が上面の幅を超える・首がくびれた形では、
     球が反対側の壁に食い込む)。折れ線の距離で候補を絞り、候補だけ輪郭そのものとの距離を詰める。"""
     step = contour.length / count
-    feet = [contour.at(i * step)[0] for i in range(count)]
+    flat = contour.flat
+    start = flat([contour.at(i * step)[0] for i in range(count)])
     middles = [contour.at((i + 0.5) * step)[0] for i in range(count)]
-    x_axis = contour.up.Crossed(_any_perpendicular(gp_Dir(contour.up))).Normalized()
-    y_axis = contour.up.Crossed(x_axis)
-    def flat(points):
-        return np.array([[gp_Vec(feet[0], point).Dot(x_axis), gp_Vec(feet[0], point).Dot(y_axis)] for point in points])
-
-    start = flat(feet)
     direction = np.roll(start, -1, axis=0) - start
     # 折れ線と輪郭のずれ(弦の中点と弧の中点の距離)。折れ線の距離はこの分だけ輪郭の距離より小さく出うる
     deviation = float(np.max(np.linalg.norm(flat(middles) - (start + 0.5 * direction), axis=1)))
@@ -302,31 +326,85 @@ def _clear_of_walls(contour: _Contour, radius: float, loops: list, count: int) -
             raise Unsupported("the ball would cut into the opposite wall (the top is too narrow for the radius)")
 
 
-def _meeting(contour: _Contour, radius: float, first: float, second: float, step: float) -> Tuple[float, float]:
-    """ずらした曲線の2本の枝が交わる所の、両枝の輪郭の弧長。片方の枝の点に他方を寄せるのを交互に繰り返して詰める。"""
+def _small_swallowtails(contour: _Contour, radius: float, step: float, loops: list) -> List[Tuple[float, float]]:
+    """標本の折れ線では交差が見えないほど小さい燕尾(半径が辺の曲率半径をわずかに超える所)の、交点の目安(両枝の輪郭の弧長)。
+    曲率の山で R × 曲率 が 1 を超え、見つけた輪に含まれないものを、山のまわりだけ細かく標本して交差を探す。"""
+    count = int(round(contour.length / step))
+    excess = [radius * contour.bend(i * step) - 1.0 for i in range(count)]
+    found = []
+    for i in range(count):
+        if not excess[i - 1] <= excess[i] >= excess[(i + 1) % count]:
+            continue
+        peak = _golden_minimum(lambda s: -contour.bend(s), (i - 1) * step, (i + 1) * step)
+        if radius * contour.bend(peak) <= 1.0:
+            continue
+        if any(low < peak < high or low < peak + contour.length < high for low, high in loops):
+            continue
+        # 裏返る範囲(R × 曲率 > 1)が標本の間隔より広いのに折れ線が交わらないのは、燕尾ではなく道全体の裏返り
+        if any(radius * contour.bend(peak + direction * step) > 1.0 for direction in (1.0, -1.0)):
+            raise Unsupported("the offset outline turns over without crossing itself (the radius is wider than the top)")
+        # 交点は、燕尾の2つの尖り(R × 曲率 = 1)の間の半分の幅の √3 倍ほど山から離れる(放物線の先端で厳密)。その 3 倍まで見る
+        half = min(abs(_crossover(contour, radius, peak, peak + direction * step) - peak) for direction in (1.0, -1.0))
+        window = np.linspace(peak - 3.0 * half, peak + 3.0 * half, 257)
+        crossings = _self_crossings(contour.flat([contour.center(s, radius) for s in window]), closed=False)
+        if len(crossings) != 1:
+            raise Unsupported("a small swallowtail of the offset outline could not be located")
+        unit = window[1] - window[0]
+        found.append((window[0] + unit * crossings[0][0], window[0] + unit * crossings[0][1]))
+    return found
+
+
+def _crossover(contour: _Contour, radius: float, inside: float, outside: float) -> float:
+    """`inside`(R × 曲率 > 1)と `outside`(≤ 1)の間で R × 曲率 = 1 になる所(二分法)。"""
+    for _ in range(60):
+        middle = 0.5 * (inside + outside)
+        if radius * contour.bend(middle) > 1.0:
+            inside = middle
+        else:
+            outside = middle
+    return 0.5 * (inside + outside)
+
+
+def _meeting(contour: _Contour, radius: float, first: float, second: float, reach: float) -> Tuple[float, float]:
+    """ずらした曲線の2本の枝が交わる所の、両枝の輪郭の弧長。ニュートン法で詰める(片方の枝に他方を交互に寄せるのは、
+    枝の交わる角が小さいと 60 回で収束しなかった。楕円 6×2 を R=0.67)。1回に動かすのは `reach` まで。"""
+    def gap(a, b):
+        ends = contour.flat([contour.center(a, radius), contour.center(b, radius)])
+        return ends[0] - ends[1]
+
+    def slope(s):
+        h = 1.0e-5 * reach
+        ends = contour.flat([contour.center(s + h, radius), contour.center(s - h, radius)])
+        return (ends[0] - ends[1]) / (2.0 * h)
+
+    tolerance = 1.0e-7 * max(1.0, radius)
     for _ in range(_MEETING_STEPS):
-        target = contour.center(second, radius)
-        first = _golden_minimum(lambda s: contour.center(s, radius).Distance(target), first - 2.0 * step, first + 2.0 * step)
-        target = contour.center(first, radius)
-        moved = _golden_minimum(lambda s: contour.center(s, radius).Distance(target), second - 2.0 * step, second + 2.0 * step)
-        if abs(moved - second) < 1.0e-12 * contour.length:
-            second = moved
+        difference = gap(first, second)
+        if np.linalg.norm(difference) < 1.0e-3 * tolerance:
             break
-        second = moved
-    if contour.center(first, radius).Distance(contour.center(second, radius)) > 1.0e-7 * max(1.0, radius):
+        try:
+            move = np.linalg.solve(np.column_stack([slope(first), -slope(second)]), -difference)
+        except np.linalg.LinAlgError:
+            break
+        move *= min(1.0, reach / max(float(np.max(np.abs(move))), 1.0e-300))
+        first, second = first + float(move[0]), second + float(move[1])
+    if contour.center(first, radius).Distance(contour.center(second, radius)) > tolerance:
         raise Unsupported("the crossing of the offset outline could not be located")
     return first % contour.length, second % contour.length
 
 
-def _self_crossings(points: "np.ndarray") -> List[Tuple[float, float]]:
-    """閉じた折れ線(`points` は N×2)が自分と交わる所を、2本の線分の位置(線分の番号 + 割合)の組で返す。隣り合う線分は見ない。"""
-    count = len(points)
+def _self_crossings(points: "np.ndarray", closed: bool = True) -> List[Tuple[float, float]]:
+    """折れ線(`points` は N×2。`closed` なら最後の点から最初の点へも結ぶ)が自分と交わる所を、2本の線分の位置
+    (線分の番号 + 割合)の組で返す。隣り合う線分は見ない。"""
     start, finish = points, np.roll(points, -1, axis=0)
+    if not closed:
+        start, finish = start[:-1], finish[:-1]
+    count = len(start)
     direction = finish - start
     crossings = []
     for i in range(count):
         others = np.arange(i + 2, count)
-        if i == 0:
+        if i == 0 and closed:
             others = others[others != count - 1]
         if others.size == 0:
             continue
@@ -337,7 +415,8 @@ def _self_crossings(points: "np.ndarray") -> List[Tuple[float, float]]:
         with np.errstate(divide="ignore", invalid="ignore"):
             t = (offset[:, 0] * e[:, 1] - offset[:, 1] * e[:, 0]) / denominator
             u = (offset[:, 0] * d[1] - offset[:, 1] * d[0]) / denominator
-        hit = (np.abs(denominator) > 1.0e-15) & (t >= 0.0) & (t < 1.0) & (u >= 0.0) & (u < 1.0)
+        lengths = np.hypot(d[0], d[1]) * np.hypot(e[:, 0], e[:, 1])
+        hit = (np.abs(denominator) > 1.0e-12 * lengths) & (t >= 0.0) & (t < 1.0) & (u >= 0.0) & (u < 1.0)
         for j, tj, uj in zip(others[hit], t[hit], u[hit]):
             crossings.append((i + float(tj), int(j) + float(uj)))
     return crossings
@@ -378,6 +457,9 @@ def _side(segment: _Segment, contour: _Contour, radius: float) -> _Side:
     profile = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(GC_MakeArcOfCircle(foot, middle, crest).Value()).Edge()).Wire()
     sweep = BRepOffsetAPI_MakePipeShell(BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(segment.path).Edge()).Wire())
     sweep.SetMode(gp_Dir(up))  # 二法線を上面の法線に固定(断面の平面が常に法線を含む)
+    # 実測: 既定の許容(1e-4)では、下の縁が輪郭から最大 3.8e-5 離れ(楕円 6×2・R=1.95)、壁と縫い合わせられなかった。
+    # 1e-6 なら 1.5e-8 で、時間は変わらない
+    sweep.SetTolerance(1.0e-6 * max(1.0, radius), 1.0e-6 * max(1.0, radius), 1.0e-4)
     sweep.Add(profile)
     sweep.Build()
     if not sweep.IsDone():
@@ -407,7 +489,9 @@ def _cap(this: _Side, following: _Side, loop: Tuple[float, float], contour: _Con
     外部の罠: `BRepOffsetAPI_MakeFilling` に G1 の境界として、支える面の上の座標(pcurve)を持たない辺を渡すと、`Build()` が
     アクセス違反でプロセスごと落ちた。壁の縁の弧は、その弧を押し出した面を支えにし、押し出しの元の辺を渡す。
     """
-    filling = BRepOffsetAPI_MakeFilling(3, 15, 2, False, 1.0e-5, 1.0e-4, 1.0e-2, 0.1, 8, 9)
+    # 実測: 曲線上の点 15・繰り返し 2・3D の許容 1e-4 では、楕円 6×2 で R=0.667(G1 0.012)と R≥1.7(G0 1.9e-4)が上限を超えた。
+    # 30・3・1e-5 なら R=0.6667〜1.9 で G0 ≤ 1.3e-5・G1 ≤ 5.5e-3、帽子 1 枚 0.1 秒ほど
+    filling = BRepOffsetAPI_MakeFilling(3, 30, 3, False, 1.0e-5, 1.0e-5, 1.0e-2, 0.1, 8, 9)
     filling.Add(TopoDS.Edge_s(this.end), TopoDS.Face_s(this.face), GeomAbs_Shape.GeomAbs_G1, True)
     filling.Add(TopoDS.Edge_s(following.start), TopoDS.Face_s(following.face), GeomAbs_Shape.GeomAbs_G1, True)
     for rim in _contour_pieces(contour, *loop):
@@ -494,20 +578,36 @@ def _crown(faces: list, section: TopoDS_Shape, size: float) -> TopoDS_Shape:
     floor = BRepBuilderAPI_MakeFace(plane, TopoDS.Wire_s(loops.FindKey(1)), True)
     if not floor.IsDone():
         raise Unsupported("the floor of the rounded crown could not be made")
+    return _closed_solid([*faces, floor.Face()], tolerance, "the rounded crown")[0]
+
+
+def _closed_solid(faces: list, tolerance: float, what: str):
+    """面を縫って閉じた1つの立体にする。立体と縫い合わせ(由来をたどる)を返す。"""
     sewing = BRepBuilderAPI_Sewing(tolerance)
-    for face in [*faces, floor.Face()]:
+    for face in faces:
         sewing.Add(face)
     sewing.Perform()
     shells = indexed_map(sewing.SewedShape(), TopAbs_SHELL)
     if sewing.NbFreeEdges() != 0 or shells.Extent() != 1:
-        raise Unsupported(f"the rounded crown did not close ({sewing.NbFreeEdges()} free edges)")
+        raise Unsupported(f"{what} did not close ({sewing.NbFreeEdges()} free edges, {shells.Extent()} shells)")
     solid = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(shells.FindKey(1))).Solid()
     fix = ShapeFix_Solid(solid)
     fix.Perform()
     solid = fix.Solid()
     if _volume(solid) <= 0.0 or not BRepCheck_Analyzer(solid).IsValid():
-        raise Unsupported("the rounded crown is not a valid solid")
-    return solid
+        raise Unsupported(f"{what} is not a valid solid")
+    return solid, sewing
+
+
+def _precise_volume(shape: TopoDS_Shape) -> float:
+    from .kernel import volume  # kernel がこのモジュールを読むので、呼ぶときに読む
+
+    return volume(shape)
+
+
+def _faces(shape: TopoDS_Shape) -> list:
+    faces = indexed_map(shape, TopAbs_FACE)
+    return [faces.FindKey(i) for i in range(1, faces.Extent() + 1)]
 
 
 def _face_on(shape: TopoDS_Shape, top: TopoDS_Shape, normal: gp_Vec) -> TopoDS_Shape:
