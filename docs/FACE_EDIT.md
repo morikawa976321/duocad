@@ -1,7 +1,7 @@
 # 面の削除(#190)と面のオフセット(#183)— 方式の決定
 
-**状態: 方式の決定と受入条件のテスト化まで。未実装**(2026-10-18)。実装に入るとき、面編集の結果を疑うとき、
-OCCT の Defeaturing・MakeOffset の挙動を疑うときに読む。試作と実測の再現は `tools/face_edit_probe/`(末尾「再現」)。
+**状態: 実装計画の段1〜4(子プロセス・kernel・verb・MCP)を実装。画面(段5)は未実装**(2026-10-23。下「実装計画」の「実装の状態」)。
+面編集の結果を疑うとき、OCCT の Defeaturing・MakeOffset の挙動を疑うとき、画面に載せるときに読む。試作と実測の再現は `tools/face_edit_probe/`(末尾「再現」)。
 
 本人の依頼(Issue #190、2026-10-17):
 
@@ -472,6 +472,22 @@ PC ケース一式(ケース本体 27 ソリッド 2835 面・電源・マザー
 
 順番は「守り(子プロセス)→ kernel → verb → 公開面 → 画面」。各段で develop に入れられる大きさに切る(ブランチ運用は CLAUDE.md)。
 
+### 実装の状態(2026-10-23)
+
+- **入ったもの**: `duocad/kernel_worker.py`(子プロセス)、`duocad/kernel_face_edit.py`(`strict.py` を製品の形に。合成形状 60 ケースで試作と
+  判定・体積・由来が一致)、verb `delete_faces` / `offset_faces`、catalog・MCP.md・生成した型・`tests/test_protocol.py` の手続き。
+  受入テスト 32 件の xfail の印を外した。子の契約は `tests/test_face_edit_worker.py`、細かい場面は `tests/test_face_edit_kernel.py`。
+- **段1で入れたもの**: 常駐の子1本(初回の呼び出しで起動)、BinTools と JSON の受け渡し、実行は同時に1件(ロック)、
+  期限切れ・異常終了は子を殺して `ValueError`、次の呼び出しで立て直す。期限は画面・MCP の操作だけ(`INTERACTIVE_TIMEOUT_S` = 30 秒。
+  **置いた値で、カード e の本人判断待ち**)、ログの再生(redo・文書を開く・寸法の作り直し)は期限なし。プレビューの結果は
+  `kernel.remembered` と `adopt_results` で確定に使い回す(プレビューはワーカースレッドで子を待つので、その間イベントループは止まらない)。
+- **段1でまだ入れていないもの**: 親が同期的に待たない形(**確定と MCP の呼び出しはイベントループの上で子を待つ**。ほかの verb と同じく、
+  計算の間ループは止まる。GIL は握らないので、プレビューのワーカーや自動保存は動ける)、確定・再生をプレビューより優先する順番
+  (いまはロックの取り合い)、「中止」、採用の直前の文書の世代の照合(既存のプレビューの仕組み以上のものは無い)、再生の進捗、
+  親子のメモリの反復測定。どれも画面(段5)と一緒に入れる。
+- 計画と変えたこと: 選んだ面そのものが丸めのときと、選んだ面が平面・円筒・球・トーラスでないときは、計算の前に理由を名指しして断る
+  (試作では関門で落ちていたが、断り文が原因を言わなかった)。
+
 1. **子プロセスの口 `duocad/kernel_worker.py`**(新規)。astra の2回目の契約を初回から入れる:
    - 常駐の子1本(初回の呼び出しで起動)。形は BinTools のバイト列、添字・距離・結果の対応表は JSON。履歴のオブジェクトは渡さない。
    - **実行は同時に1件**。確定・再生をプレビューより優先し、待っているプレビューは最新の1件だけ残す。新しいプレビューで確定・再生中の子を殺さない。入力のたびに子を殺さない。
@@ -504,10 +520,8 @@ PC ケース一式(ケース本体 27 ソリッド 2835 面・電源・マザー
 
 `tests/test_delete_faces_acceptance.py`(14件)と `tests/test_offset_faces_acceptance.py`(18件)。Issue の受入条件(案)に、要件から足した検査を加えた。
 
-- **印**: モジュール `duocad/verbs/delete_faces.py` / `offset_faces.py` が無く、かつ verb の登録も無い間は `xfail(strict=True)`。モジュールを作ると印が外れ、
-  登録を忘れても xfail に紛れずに落ちる。**実装の PR で `pytestmark` を消す。** いまの全体のテストは落とさない(32 xfailed)。
-- **検算**: 試作を verb の作法で包んだ仮の verb(`tools/face_edit_probe/verb_shim.py`、pytest のプラグイン)を読み込むと 32 passed。
-  守りを外した仮の verb では該当のテストが落ちる: 削除の警告の検査と残存の検査を両方外す → 2件(閉じない面・一部だけ消せる組)、
+- 実装の前は xfail(strict)の印で全体のテストを落とさなかった。実装で印を外し、32 件とも通る(2026-10-23)。
+- **検算**(実装の前、試作を verb の作法で包んだ仮の verb で): 32 件とも通った。守りを外した仮の verb では該当のテストが落ちる: 削除の警告の検査と残存の検査を両方外す → 2件(閉じない面・一部だけ消せる組)、
   D を外す → 1件(丸めが付いてくる)、対応の検査と D を外す → 2件。**片方の守りだけ外しても落ちない**(もう片方が同じ罠を止める)。
 
 | Issue の受入条件(案) | テスト |
@@ -542,11 +556,10 @@ SNAPSHOTS が変わらず次の操作が通るか、BinTools の往復・プレ�
 .venv/Scripts/python.exe -m tools.face_edit_probe.isolation <file.step>     # BRep の往復
 .venv/Scripts/python.exe -m tools.face_edit_probe.realworld <file.step> ... # 実物(厳しい版。--methods legacy で緩い版)
 .venv/Scripts/python.exe -m tools.face_edit_probe.realworld_why <rows.jsonl> <file.step>  # 実物で断った理由の内訳(行の記録は FACE_EDIT_ROWS で残す)
-.venv/Scripts/python.exe -m pytest -q -p tools.face_edit_probe.verb_shim tests/test_delete_faces_acceptance.py tests/test_offset_faces_acceptance.py
 .venv/Scripts/python.exe -m tools.face_edit_probe.viz out.json                 # 触れる模型のデータ(13 場面・1,456 通り。約1分)
 ```
 
 触れる模型(本人向けの説明ページ、claude.ai の Artifact「面編集の模型」)は、`viz.py` の出力を three.js で表示したもの。ページ本体はリポジトリに置かない。
 
-試作は duocad 本体から import されない(`verb_shim.py` だけが pytest のプラグインとして duocad の verb の作法を借りる)。Windows では子プロセスの出力の
+試作は duocad 本体から import されない。Windows では子プロセスの出力の
 文字コードを `PYTHONIOENCODING=utf-8` にそろえる(`run.py` と `realworld.py` は子に渡している)。

@@ -242,6 +242,26 @@ def _run_shell_body(session: Session, tmp_path: Path) -> dict:
     return session.shell_body(RADIUS_THAT_WORKS)
 
 
+@_runner("delete_faces")
+def _run_delete_faces(session: Session, tmp_path: Path) -> dict:
+    from duocad import query
+
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
+    session.fillet(RADIUS_THAT_WORKS)
+    shape = session.document.get_body(body.id).shape
+    rounded = next(face["index"] for face in query.describe_faces(shape) if face["kind"].startswith("cylinder"))
+    _select(session, [{"body": body.id, "kind": "face", "index": rounded}])
+    return session.delete_faces()
+
+
+@_runner("offset_faces")
+def _run_offset_faces(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    return session.offset_faces(RADIUS_THAT_WORKS)
+
+
 @_runner("boolean_body")
 def _run_boolean_body(session: Session, tmp_path: Path) -> dict:
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox

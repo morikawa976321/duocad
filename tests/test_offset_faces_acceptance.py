@@ -1,7 +1,6 @@
 """面のオフセット `offset_faces`(#183)の受入条件(docs/FACE_EDIT.md「受入条件」)。
 
-**モジュール `duocad/verbs/offset_faces.py` ができるまでは xfail(strict)**。できると印は自動で外れ、本物の検査になる
-(登録を忘れても xfail に紛れずに落ちる)。実装の PR でこの印を消す。落ちたら、受入条件のどれが満たされていないかを意味する。
+落ちたら、受入条件のどれが満たされていないかを意味する。
 
 期待値の出どころ(tools/face_edit_probe で実測、2026-10-18): 40×30×20 の箱の上面 ±5 → 30000 / 18000 mm³。
 面取り 5 の箱の上面 +3 → 断面 30×23 から 8×8 の三角を引いて ×40 = 26320 mm³。
@@ -9,7 +8,6 @@
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import math
 
@@ -21,7 +19,7 @@ from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 
 import duocad.verbs as verbs
-from duocad import catalog, kernel, oplog, query, selection
+from duocad import catalog, kernel, query, selection
 from duocad.document import Body, Document
 from duocad.entry import entry_for
 from duocad.verbs import chamfer, fillet
@@ -29,11 +27,6 @@ from document_support import kinds_of, new_box, new_box_with_hole, replay_throug
 from mcp_support import call
 from session_support import session_with_box
 
-pytestmark = pytest.mark.xfail(
-    importlib.util.find_spec("duocad.verbs.offset_faces") is None and "offset_faces" not in oplog.registered_verbs(),
-    reason="受入条件(#183)。verb offset_faces の実装前(実装の PR でこの印を消す)",
-    strict=True,
-)
 
 W, D, H = 40.0, 30.0, 20.0
 
