@@ -115,7 +115,7 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 | #206 包む・ベジエ近似 | `claude/sketch-206-envelope-bezier` | develop | 親(手元) |
 | #184 スケッチの投影 | `claude/sketch-184-project` | #206 の近似の関数のコミット | 親(手元) |
 | #201 測定・スケッチの点 | `claude/sketch-201-measure-points` | develop | 親(手元。小さいので) |
-| #193 split_body | `claude/body-193-split-body` | develop | クラウド `session_017moRvu1EwfqoivmeSY4KWz` → 親が検証 |
+| #193 split_body | `claude/body-193-split-body` | develop | クラウド `session_017moRvu1EwfqoivmeSY4KWz`(要約の前に出した `session_01UiaqDNEwXg1mvndNxEAxs7` と重複) → 親が検証 |
 | #186 干渉チェック | `claude/body-186-interference` | develop | クラウド `session_01HeAhy6W2onohTptM78PbJo` → 親が検証 |
 
 #184 は #206 の上に積む(#184 を取り込むと #206 も入る。decisions.md の [スケッチ] #184)。
@@ -149,7 +149,7 @@ docs/DEV_NOTES.md「ワークツリー」)。
 |---|---|---|---|
 | #206 | `claude/sketch-206-envelope-bezier` | `1ac023a7` | pytest 全件・包むの試験 35 件・撮影。sol 4回(最後 pass) |
 | #184 | `claude/sketch-184-project`(#206 の上) | `465127e5` | pytest 全件・投影の試験 30 件・smoke・PC ケースで実測・撮影。sol 10回(後半5回は端点の揃えの詰め。最後 pass) |
-| #201 | `claude/sketch-201-measure-points` | `2a9e1de5` | pytest 全件・試験 9 件・smoke・撮影。sol pass。前のセッションのクラウド版は `claude/sketch-201-measure-points-cloud` に保存 |
+| #201 | `claude/sketch-201-measure-points` | `2a9e1de5` | pytest 全件・試験 9 件・smoke・撮影。sol pass。要約の前に出したクラウド版(`session_01SmbqN7ojs4xKbCzxRwjHip`)は `claude/sketch-201-measure-points-cloud` に保存 |
 | #193 | `claude/body-193-split-body` | `cc91352a` | クラウドが実装、手元で検証。pytest 全件 2742 件・試験 29 件・smoke・撮影。sol 5回(最後 pass) |
 | #186 | `claude/body-186-interference` | `a7469c0c` | クラウドが実装、手元で検証。PC ケースの件数が INTERFERENCE.md の表と一致・試験 100 件・smoke・撮影。sol 4回(最後 pass) |
 

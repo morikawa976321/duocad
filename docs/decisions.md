@@ -312,7 +312,9 @@ astra の意見(要旨)と AI の採否:
 
 ## [スケッチ] #201 の重複したクラウドの実装(AIの判断 2026-10-22)
 
-- 前のセッションが #201 をクラウド(`session_01SmbqN7ojs4xKbCzxRwjHip`)に出しており、このセッションが手元で実装したものと重複した。
+- 同じ作業の文脈の要約より前の段で #201 をクラウド(`session_01SmbqN7ojs4xKbCzxRwjHip`)に出していたのを、要約の後に見落とし、手元でも実装して重複した。
+  #193 も同じく、要約の前に `session_01UiaqDNEwXg1mvndNxEAxs7`(split_body(ボディの平面分割))、後に `session_017moRvu1EwfqoivmeSY4KWz` と2回出した
+  (どちらも `claude/body-193-split-body` 宛て。GitHub にあるクラウドのコミットは1組だけで、全部 #193 の最終版に入っている)。
   中身はほぼ同じ(点・線分・領域を Point・Line・Plane に還元)。手元の版は世界座標を項目に返す・選択情報に世界座標・実機の smoke と撮影・
   sol のレビューを通している。
 - 決めた: 手元の版を `claude/sketch-201-measure-points` に置き、クラウドの版はブランチ `claude/sketch-201-measure-points-cloud` に残す(消さない)。
