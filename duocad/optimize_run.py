@@ -13,6 +13,8 @@ import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
+from .optimize_voxels import DEBUG_VOXEL_LIMIT, debug_voxel_payload
+
 if TYPE_CHECKING:  # pragma: no cover - 型注釈のためだけ
     from .document import Document
 
@@ -60,12 +62,6 @@ DEFAULT_TARGET_SAFETY_FACTOR = 2.0
 #: その過大評価が取る上限(m=2 の曲げ 2.36)の切り上げ。m=1 には上限が無いが、`_resolve_min_width` の
 #: 既定(2026-09-22決定)により製品の実行は m=1 に到達しない。根拠と実測・限界は docs/TOPOPT_TARGET_FACTOR.md。
 SEARCH_TARGET_FACTOR = 2.4
-
-#: デバッグ表示(`?debug=space` / `?voxel=1`)で1回に配るボクセルの上限。表示は `InstancedMesh`
-#: (立方体1個 = 12三角形)なので、5〜12万要素の塊をそのまま出すと 60〜144万三角形になる。
-#: 超えたら軸方向に等間隔で間引き(`_debug_voxel_payload` の `stride`)、payload の `stride`/`total`/`shown`
-#: に出す。間引きは表示だけで、計算には触れない。
-DEBUG_VOXEL_LIMIT = 150_000
 
 #: デバッグ配信の種類。`run()` の `debug_kinds` に渡せる値。
 DEBUG_KINDS = ("space", "anchors", "rho")
@@ -707,44 +703,6 @@ def _min_element_size(lo, hi, volume: float) -> float:
 # 座標はワールドmm。要素 (i,j,k) の中心は `origin + spacing*(i+0.5, j+0.5, k+0.5)`、角の節点は
 # `origin + spacing*(i,j,k)`(セル中心の規約 `duocad/topopt/mesh.py:169`)。画面側で足し引きしない(両側で足すと半要素ずれる)。
 # --------------------------------------------------------------------------------------
-def _debug_stride_for(mask, limit: int) -> int:
-    """`mask[::s,::s,::s]` の立っている数が `limit` 以下になる最小の `s`。"""
-    import numpy as np
-
-    if int(np.count_nonzero(mask)) <= limit:
-        return 1
-    longest = max(int(n) for n in mask.shape)
-    for stride in range(2, longest + 1):
-        if int(np.count_nonzero(mask[::stride, ::stride, ::stride])) <= limit:
-            return stride
-    return longest
-
-
-def _debug_voxel_payload(kind: str, stage: str, grid, mask, *, limit: int) -> dict:
-    """立っている要素の通し添字(C順 `i*(ny*nz) + j*nz + k`)を配る。
-    座標でなく添字なのは配る量を1/3にするため。画面は `grid.shape` から `(i,j,k)` へ戻す。
-    """
-    import numpy as np
-
-    mask = np.asarray(mask, dtype=bool)
-    total = int(np.count_nonzero(mask))
-    stride = _debug_stride_for(mask, int(limit))
-    idx = np.argwhere(mask)
-    if stride > 1 and idx.size:
-        idx = idx[(idx % stride == 0).all(axis=1)]
-    _, ny, nz = (int(n) for n in mask.shape)
-    flat = idx[:, 0] * (ny * nz) + idx[:, 1] * nz + idx[:, 2]
-    return {
-        "kind": kind,
-        "stage": stage,
-        "grid": grid.as_dict(),
-        "elements": [int(v) for v in flat.tolist()],
-        "total": total,
-        "shown": int(flat.shape[0]),
-        "stride": int(stride),
-    }
-
-
 def _debug_anchor_payload(stage: str, space, table=None) -> Optional[dict]:
     """拘束面・荷重面に実際に割り当たった格子節点のワールド座標。
     出所は `table`(製品経路では探索が使う確定表)、省くと `DesignSpace.table`。表が無い塊では `None`。
@@ -796,7 +754,7 @@ class _DebugSink:
         if not self.wants("space"):
             return
         self._sink(
-            _debug_voxel_payload("space", stage, space.grid, space.mask, limit=DEBUG_VOXEL_LIMIT)
+            debug_voxel_payload("space", stage, space.grid, space.mask, limit=DEBUG_VOXEL_LIMIT)
         )
 
     def anchors(self, stage: str, space, table=None) -> None:
@@ -811,7 +769,7 @@ class _DebugSink:
             return
         import numpy as np
 
-        payload = _debug_voxel_payload(
+        payload = debug_voxel_payload(
             "rho", stage, grid, np.asarray(rho) > DEBUG_RHO_THRESHOLD, limit=DEBUG_VOXEL_LIMIT
         )
         payload["threshold"] = float(DEBUG_RHO_THRESHOLD)
@@ -1526,7 +1484,7 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
     """`DesignSpace` と `ConditionBundle` から `binary_search.SearchConditions` を組み立てる。
 
     `table` を省くとここで確定表を作る(検査・CLIがこの関数だけを呼んでも製品と同じ入口検査を通る)。
-    `preserves`/`excludes` は `(name, shape)` の対(`acceptance.inspect_document` と同じ形)。
+    `preserves`/`excludes` は `(name, shape)` の対(`optimize_acceptance.inspect_document` と同じ形)。
     `bbox_cache=doc.bbox_cache` は `_condition_boxes` と同じ理由。探索の目標は実際の目標 × `opts.search_target_factor`
     で、係数を掛けるのはここ1か所(測定は `search_target_factor=1.0` で固定)。安全率の代表応力は部材域の固定物理体積の
     上位値で、許す超過体積 V = 探索格子の要素 `stress.MEMBER_VOLUME_CELLS` 個分。

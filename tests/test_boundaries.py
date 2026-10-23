@@ -62,23 +62,36 @@ def _dotted_name(node: ast.AST) -> str:
     return ".".join(reversed(parts))
 
 
-def _imported_module_roots(py_file: Path) -> set[str]:
-    """py_fileが参照するトップレベルモジュール名の集合。"""
+def _imported_modules(py_file: Path) -> set[str]:
+    """静的・動的importのモジュール名と、from節で取り込む名前の集合。"""
     tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
-    roots: set[str] = set()
+    modules: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                roots.add(alias.name.split(".")[0])
+                modules.add(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module:
-                roots.add(node.module.split(".")[0])
+                modules.add(node.module)
+            for alias in node.names:
+                modules.add(f"{node.module}.{alias.name}" if node.module else alias.name)
         elif isinstance(node, ast.Call):
             if _dotted_name(node.func) in _DYNAMIC_IMPORT_CALLS:
                 for arg in node.args:
                     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                        roots.add(arg.value.split(".")[0])
-    return roots
+                        modules.add(arg.value.lstrip("."))
+    return modules
+
+
+def _imported_module_roots(py_file: Path) -> set[str]:
+    """py_fileが参照するトップレベルモジュール名の集合。"""
+    return {name.split(".")[0] for name in _imported_modules(py_file)}
+
+
+def _imports_optimization_executor(py_file: Path) -> bool:
+    forbidden = {"optimize_run", "duocad.optimize_run", "optimize_acceptance", "duocad.optimize_acceptance"}
+    return any(name == module or name.startswith(module + ".")
+               for name in _imported_modules(py_file) for module in forbidden)
 
 
 def _source_files() -> list[tuple[str, Path]]:
@@ -163,3 +176,34 @@ def test_boundary_scan_covers_every_source_file():
     }
     assert expected <= scanned, f"走査から漏れているモジュールがある: {sorted(expected - scanned)}"
     assert OCP_ALLOWED <= scanned and BUILD123D_ALLOWED <= scanned
+
+
+def test_numerics_and_steps_do_not_import_optimization_executor():
+    """数値検査・ステップ記録・共通の表示処理が、実行器や文書アダプターへ逆参照しない。"""
+    violations = [
+        rel for rel, py_file in _source_files()
+        if (rel.startswith("topopt/") or rel in {"optimize_steps.py", "optimize_voxels.py"})
+        and _imports_optimization_executor(py_file)
+    ]
+    assert violations == [], f"実行器側へ逆参照しているファイル: {violations}"
+
+
+def test_executor_boundary_scan_detects_every_import_form(tmp_path):
+    """関数内・相対・from節・動的importでも実行器への参照を検出する。"""
+    source = tmp_path / "source.py"
+    imports = [
+        "import duocad.optimize_run",
+        "from duocad.optimize_run import build_conditions",
+        "from duocad import optimize_run",
+        "from .optimize_run import DEBUG_VOXEL_LIMIT",
+        "from .. import optimize_run",
+        "importlib.import_module('duocad.optimize_run')",
+        "__import__('duocad.optimize_run')",
+        "import_module('.optimize_run', 'duocad')",
+        "from duocad.optimize_acceptance import inspect_document",
+    ]
+    for statement in imports:
+        source.write_text(f"def load():\n    {statement}\n", encoding="utf-8")
+        assert _imports_optimization_executor(source), statement
+    source.write_text("from .optimize_voxels import debug_voxel_payload\n", encoding="utf-8")
+    assert not _imports_optimization_executor(source)

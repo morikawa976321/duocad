@@ -109,6 +109,11 @@ m 立方に覆われない埋めセルの数 `uncovered_filled_cells`。止め�
 `preserve-fuse`・`final-solid`、警告・エラー時の `*-diagnostics` / `*-rejected`)があり、`final-solid` の
 B-rep は `check_boundary_meshing.py --brep-json` で読める。
 
+旧SIMP記録の密度場は `topopt_checks/check_pre_smoothing.py --run <実行フォルダ> --out <報告JSON>` で読む。
+文書の条件と密度場を変換する入口は `duocad.optimize_acceptance.inspect_document`。現行の二値探索記録には
+旧形式の `selected-result.result.run` が無いため、このCLIでは `--fields` と `--document` を使う。
+表示用の `optimize_voxels.debug_voxel_payload` と間引き上限は、診断記録の保存形式・配列精度には関与しない。
+
 ## 費用と障害
 
 配列の精度を落とす間引きは行わず、同一配列の重複排除と損失なし圧縮だけを使う。
@@ -141,3 +146,7 @@ CAD出力・ソース収集・イベント記録等を含む総追加時間で�
 
 小型モデルで、記録有無の数値一致、密度の時点、表面の完全再現、全候補・平滑化全段階、
 最終文書/STLの座標一致、失敗・中断・保存障害・同時実行の分離を確認する。
+
+2026-10-24、#230 段階1の移設後に `check_trace.py` が終了コード0で通過。
+製品経路は446.2秒で `done`、最終形状は3988三角形。単一導出・表面再現・最終文書/STL一致と中断を確認した。
+`source.zip` には移設先の `optimize_acceptance.py` と `optimize_voxels.py` もソースと同一の内容で収録されていた。

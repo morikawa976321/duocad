@@ -549,6 +549,17 @@ WebSocket に口がある(`optimize_conditions`/`optimize_resolution`/`optimize_
 - **パネルはビューポート左のブラウザと同じ列の下端に出す**(右へ帯を足すと`viewport.project()`の`clickable(x,y)`判定で左のボディの面が1枚も指せなくなった)。結果は積み上がる(`optimized`/`optimized-2`/…)。メッシュボディのピックはボディ選択へ畳む(`App.svelte`の`pickedRef`。`kind:"face"`参照にするとコアの`select_face`が断る)。
 - 開発用のデバッグ表示は`web/src/debugFlags.ts`(`?debug=space`・`?debug=anchors`・`?voxel=1`)。フラグが無いときの画面は1ピクセルも変わらない。
 
+文書と旧密度場記録から検査入力への変換は `duocad/optimize_acceptance.py` が担当する。
+`topopt.acceptance.inspect` は変換済みのboolマスク・アンカー表・条件だけを受け、実行器を参照しない。
+表示用の通し添字・間引きと15万セルの上限は `duocad/optimize_voxels.py` に置き、実行器のデバッグ配信と
+`OptimizationSteps.voxels` が共用する。計算用マスクや診断記録の配列には間引きを掛けない。
+
+2026-10-24、#230 段階1の移設前後を、既存pytestの2パッド・要求要素サイズ8 mm・評価予算3回・
+完成形測定3 mmの固定条件で比較した。全合格マスク・最終メッシュの頂点と面・検査結果・15件の進捗と
+デバッグ配信は、経過時間と生成IDを除いて完全一致。両方とも終了理由 `evaluation_limit`、
+材料量226194.52708238506 mm³、安全率43.8463597218811だった。
+旧密度場アダプターも4×2×2セルの梁で報告全体が完全一致した。
+
 ### 比較スクリーンショットの撮影台(`web/scripts/shoot-topopt.mjs`)
 
 ```powershell
@@ -565,7 +576,7 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
 
 - **誰も通らない分岐と、製品が使わない別実装は削除した**(受入検査は製品と同じ入口を通す)。削除したものは git 履歴が持つ(`warm_start`/`u0` の実測は [TOPOPT_SPEED.md](TOPOPT_SPEED.md))。
 - **製品の値が正しいことを、値を振って確かめるためのつまみは残す**: `rho_min`・`percentile`・`cg_rtol`・`element_components(neighbourhood=)`・`derive(elements_long_axis=)`・`step_exponent`/`max_step_ratio`/`single_cell_patience`。製品が渡さないことを理由に削らない(検出力の検査が成り立たなくなる)。
-- `acceptance.inspect_document`(旧記録の密度場を読むアダプター)は念のため残す。`target_safety_factor`/`max_evaluations`の受け口(UIに入力欄が無い)と`catalog.py`のParam宣言は、いったんそのまま(保留)。
+- `optimize_acceptance.inspect_document`(旧記録の密度場を読むアダプター)は念のため残す。`target_safety_factor`/`max_evaluations`の受け口(UIに入力欄が無い)と`catalog.py`のParam宣言は、いったんそのまま(保留)。
 
 ## 制限(承知のうえで残しているもの)
 

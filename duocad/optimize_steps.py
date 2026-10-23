@@ -65,7 +65,7 @@ class OptimizationSteps:
 
     def voxels(self, index: int) -> dict:
         """`index` 番目の形の表面のセル(材料の無い6近傍を持つセル。内側は画面から見えない)を、デバッグ表示と同じ形で返す。"""
-        from .optimize_run import DEBUG_VOXEL_LIMIT, _debug_voxel_payload
+        from .optimize_voxels import DEBUG_VOXEL_LIMIT, debug_voxel_payload
 
         with self._lock:
             if not 0 <= index < len(self._shapes):
@@ -73,5 +73,5 @@ class OptimizationSteps:
             shape, meta = self._shapes[index], dict(self._meta[index])
         mask = shape.mask()
         surface = mask & ~ndimage.binary_erosion(mask, border_value=0)
-        payload = _debug_voxel_payload("step", "step", self.grid, surface, limit=DEBUG_VOXEL_LIMIT)
+        payload = debug_voxel_payload("step", "step", self.grid, surface, limit=DEBUG_VOXEL_LIMIT)
         return dict(payload, **meta)

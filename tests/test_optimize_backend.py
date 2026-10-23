@@ -25,6 +25,7 @@ import sys
 import pytest
 
 from duocad import optimize_run
+from duocad.optimize_voxels import debug_voxel_payload
 from duocad.server import Session
 from session_support import face_with_normal, four_conditions, pad, select as _select, two_pads
 
@@ -942,7 +943,7 @@ def test_debug_voxels_carry_the_cell_centre_convention() -> None:
     mask = np.zeros(grid.shape, dtype=bool)
     mask[0, 0, 0] = True
     mask[1, 2, 3] = True
-    payload = optimize_run._debug_voxel_payload("space", "derive", grid, mask, limit=10_000)
+    payload = debug_voxel_payload("space", "derive", grid, mask, limit=10_000)
 
     assert payload["kind"] == "space"
     assert payload["stage"] == "derive"
@@ -973,7 +974,7 @@ def test_debug_voxels_thin_out_instead_of_shipping_a_million_cubes() -> None:
 
     grid = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=1.0, shape=(10, 10, 10))
     mask = np.ones(grid.shape, dtype=bool)
-    payload = optimize_run._debug_voxel_payload("space", "final", grid, mask, limit=200)
+    payload = debug_voxel_payload("space", "final", grid, mask, limit=200)
 
     assert payload["total"] == 1000
     assert payload["stride"] == 2  # 5*5*5 = 125 <= 200(stride=1 の 1000 は超える)
