@@ -173,6 +173,14 @@ def test_a_hole_exactly_one_pitch_longer_than_its_entry_chamfers_is_accepted():
     _assert_sound(doc.get_body(body_id).shape)
 
 
+def test_a_core_of_exactly_two_tenths_is_accepted():
+    """芯は 0.2mm を切ったら断る。半径 0.88・隙間 0.2(軸)・P1.2 の芯はちょうど 0.2(浮動小数の丸めで断らない境目)。"""
+    doc = Document()
+    body_id = new_cylinder(doc, radius=0.88, height=8.0)
+    thread(doc, _cylinder_face(doc, body_id), "trapezoid45", 0.2, body_id=body_id)
+    _assert_sound(doc.get_body(body_id).shape)
+
+
 def test_a_shaft_too_short_to_keep_a_full_thread_is_refused():
     """D6 P1.5 の軸の両端の面取りは 0.75 ずつ。長さ 2 では山頂の残る長さがピッチに足りない(ねじ山が円錐に削られて消える)。"""
     doc = Document()

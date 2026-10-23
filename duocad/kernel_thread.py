@@ -327,7 +327,7 @@ def resolve(target: dict, profile: str, clearance: Optional[float], pitch: Optio
     if c > limit + 1e-9:
         raise ValueError(f"隙間 {c:g} は上限 {limit:.3f} を超える(これより開けると山が掛からない。{PROFILES[profile]['label']} P{p:g})")
     depth = DEPTH_PER_PITCH * p
-    if target["radius"] - depth - (0 if female else c) <= 0.2:
+    if target["radius"] - depth - (0 if female else c) < 0.2 - 1e-9:
         raise ValueError(f"直径 {diameter:g} に対してピッチ {p:g} が粗すぎる(山の深さ {depth:g} で芯が残らない)")
     return dict(profile=profile, pitch=p, clearance=c, female=female, limit=limit,
                 recommended=recommended_range(profile, female), warning=clearance_warning(profile, female, c))
