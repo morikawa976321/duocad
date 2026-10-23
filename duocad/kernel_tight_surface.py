@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeVertex
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepFeat import BRepFeat_SplitShape
+from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
@@ -35,6 +36,7 @@ from .mesh_geometry import indexed_map
 
 
 def _projection(point, surface):
+    """支持面上の最近点と、その UV 座標を返す。"""
     projection = GeomAPI_ProjectPointOnSurf(point, surface)
     if not projection.IsDone() or not projection.NbPoints():
         raise Unsupported("a contact point could not be projected onto its support surface")
@@ -42,6 +44,7 @@ def _projection(point, surface):
 
 
 def _normal(face, u, v):
+    """面上の点と、面の向きを反映した外向き単位法線を返す。"""
     point, du, dv = gp_Pnt(), gp_Vec(), gp_Vec()
     BRep_Tool.Surface_s(TopoDS.Face_s(face)).D1(u, v, point, du, dv)
     normal = du.Crossed(dv).Normalized()
@@ -51,6 +54,7 @@ def _normal(face, u, v):
 
 
 def _walls(shape, top):
+    """上面の外周に隣接する壁を、重複なしで返す。"""
     adjacent = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, adjacent)
     walls = []
@@ -66,16 +70,28 @@ def _walls(shape, top):
 
 
 def _up(top, walls):
+    """平面の上向き法線、または全壁に共通する直線母線の向きを返す。"""
     if BRepAdaptor_Surface(TopoDS.Face_s(top)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane:
         return _outward_normal(top, tight._a_point_on(top)).Normalized()
-    directions = []
+    directions, normals = [], []
     for wall in walls:
         surface = BRepAdaptor_Surface(TopoDS.Face_s(wall))
-        if surface.GetType() != GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion:
+        kind = surface.GetType()
+        if kind == GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion:
+            directions.append(gp_Vec(surface.Direction()))
+        elif kind == GeomAbs_SurfaceType.GeomAbs_Cylinder:
+            directions.append(gp_Vec(surface.Cylinder().Axis().Direction()))
+        elif kind == GeomAbs_SurfaceType.GeomAbs_Plane:
+            normals.append(gp_Vec(surface.Plane().Axis().Direction()))
+        else:
             raise Unsupported("a curved top combined with tapered or non-extruded walls is not supported")
-        directions.append(gp_Vec(surface.Direction()))
-    up = directions[0]
-    if any(not gp_Dir(up).IsParallel(gp_Dir(direction), 1e-8) for direction in directions[1:]):
+    if not directions:
+        directions = [a.Crossed(b) for a in normals for b in normals if a.Crossed(b).Magnitude() > 1e-8]
+    if not directions:
+        raise Unsupported("the walls do not determine a common straight generator")
+    up = directions[0].Normalized()
+    if (any(not gp_Dir(up).IsParallel(gp_Dir(direction), 1e-8) for direction in directions[1:])
+            or any(abs(normal.Dot(up)) > 1e-8 for normal in normals)):
         raise Unsupported("the walls of a curved top must have parallel straight generators")
     if up.Dot(_outward_normal(top, tight._a_point_on(top))) < 0:
         up.Reverse()
@@ -83,10 +99,23 @@ def _up(top, walls):
 
 
 def _cut(shape, top, walls, up, radius):
+    """壁接点の最低点の少し下で切り、単一の断面・基点・上側の体積を返す。"""
     size = tight._diagonal(shape)
-    points = [point for edge in tight._edges(top) for point in tight._samples(edge, 33)]
-    origin = points[0]
-    level = min(gp_Vec(origin, point).Dot(up) for point in points) - 2.0 * radius
+    trial = _Contacts(top, top, walls, up, radius)
+    origin = trial.origin
+    count = max(512, 64 * trial.edges)
+    step = trial.length / count
+
+    def height(s):
+        """仮の輪郭パラメータで求めた壁接点の高さを返す。"""
+        return gp_Vec(origin, trial.contact(s)[1]).Dot(up)
+
+    heights = [height(i * step) for i in range(count)]
+    margin = max(1e-5 * size, 0.01 * radius)
+    minima = [tight._golden_minimum(height, (i - 1) * step, (i + 1) * step, 24)
+              for i in range(count) if max(heights) - min(heights) > margin
+              and heights[i] < heights[i - 1] and heights[i] < heights[(i + 1) % count]]
+    level = min([*heights, *(height(s) for s in minima)]) - margin
     base = origin.Translated(up.Multiplied(level))
     x = tight._any_perpendicular(gp_Dir(up)).Normalized()
     y = up.Crossed(x)
@@ -95,7 +124,7 @@ def _cut(shape, top, walls, up, radius):
     above = _boolean("common", shape, box)
     below = _boolean("cut", shape, box)
     if len(_solids(below.Shape())) != 1:
-        raise Unsupported("the plane below the wall contacts cuts through the bottom or splits the body")
+        raise Unsupported("the wall contacts are too close to the bottom for a cutting plane, or the plane splits the body")
     section = [face for face in tight._faces(below.Shape())
                if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane
                and abs(gp_Vec(base, tight._a_point_on(face)).Dot(up)) < 1e-7 * size
@@ -113,17 +142,23 @@ def _cut(shape, top, walls, up, radius):
             raise Unsupported("above the cut there must be only the top and its wall band (no holes, protrusions or other faces)")
     if indexed_map(section[0], TopAbs_WIRE).Extent() != 1:
         raise Unsupported("the section below the wall contacts has holes")
-    return section[0], base
+    return section[0], base, tight._precise_volume(above.Shape(), curved=True)
 
 
 class _Contacts(tight._Contour):
+    """輪郭パラメータから、球の中心・壁接点・上面接点・壁番号を求める。"""
+
     def __init__(self, section, top, walls, up, radius):
-        super().__init__(BRepTools.OuterWire_s(TopoDS.Face_s(section)), up)
+        """輪郭の各辺を元の壁に対応付け、接点のキャッシュを用意する。"""
+        boundary = [edge for edge in tight._edges(BRepTools.OuterWire_s(TopoDS.Face_s(section)))
+                    if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(section)) and not BRep_Tool.Degenerated_s(edge)]
+        super().__init__(tight._wire(boundary), up)
         self.top = top
         self.surface = BRep_Tool.Surface_s(TopoDS.Face_s(top))
         self.walls = walls
         self.radius = radius
         self.cache = {}
+        self.offsets = {}
         self.spans = []
         explorer = BRepTools_WireExplorer(TopoDS.Wire_s(self.wire))
         position = 0.0
@@ -141,6 +176,7 @@ class _Contacts(tight._Contour):
             explorer.Next()
 
     def contact(self, s):
+        """上面に半径 R で接する中心・壁接点・上面接点・壁番号を返す。"""
         s = s % self.length
         key = round(s, 13)
         if key in self.cache:
@@ -156,21 +192,27 @@ class _Contacts(tight._Contour):
         if max(abs(du.Normalized().Dot(self.up)), abs(dv.Normalized().Dot(self.up))) < 1e-8:
             raise Unsupported("a wall has no parametric direction transverse to the section plane")
 
-        def evaluate(parameter):
+        def ball(parameter):
+            """母線上の位置に対する壁接点と球の中心を返す。"""
             foot, normal = _normal(wall, parameter, v) if along_u else _normal(wall, u, parameter)
-            center = foot.Translated(normal.Multiplied(-self.radius))
+            return foot, foot.Translated(normal.Multiplied(-self.radius))
+
+        def evaluate(parameter):
+            """上面との距離の残差・接点・射影先の法線と UV 座標を返す。"""
+            foot, center = ball(parameter)
             crest, uv = _projection(center, self.surface)
             _, outward = _normal(self.top, *uv)
             residual = gp_Vec(center, crest).Dot(outward) - self.radius
-            return residual, (center, foot, crest, index)
+            return residual, (center, foot, crest, index), outward, uv
 
-        parameter = u if along_u else v
+        seed = u if along_u else v
+        parameter = seed + self.offsets.get(index, 0.0)
         for _ in range(24):
-            residual, contacts = evaluate(parameter)
+            residual, contacts, outward, crest_uv = evaluate(parameter)
             if abs(residual) < 1e-10 * max(1.0, self.radius):
                 break
             h = 1e-5 * max(1.0, abs(parameter))
-            derivative = (evaluate(parameter + h)[0] - evaluate(parameter - h)[0]) / (2 * h)
+            derivative = -gp_Vec(ball(parameter - h)[1], ball(parameter + h)[1]).Dot(outward) / (2 * h)
             if abs(derivative) < 1e-12:
                 raise Unsupported("the wall and top offset surfaces do not meet transversely")
             parameter -= residual / derivative
@@ -180,35 +222,47 @@ class _Contacts(tight._Contour):
         if (abs(center.Distance(crest) - self.radius) > 1e-7 * max(1.0, self.radius)
                 or gp_Vec(foot, crest).Dot(self.up) <= 0):
             raise Unsupported("the contact solution does not give a convex rounding above the wall")
-        for face, contact in ((wall, foot), (self.top, crest)):
-            _, uv = _projection(contact, BRep_Tool.Surface_s(TopoDS.Face_s(face)))
+        wall_uv = (parameter, v) if along_u else (u, parameter)
+        for face, uv in ((wall, wall_uv), (self.top, crest_uv)):
             if BRepClass_FaceClassifier(TopoDS.Face_s(face), gp_Pnt2d(*uv), 1e-7).State() not in (TopAbs_IN, TopAbs_ON):
-                raise Unsupported("a ball contact falls outside the trimmed top or wall face")
+                raise Unsupported("a ball contact falls outside the trimmed top or wall face (the radius may reach the bottom)")
+        self.offsets[index] = parameter - seed
         self.cache[key] = contacts
         return contacts
 
     def center(self, s, radius):
+        """上面と壁に半径 R で接する球の中心を返す。"""
         return self.contact(s)[0]
 
     def bend(self, s):
+        """中心の道の進行が反転するかを判定する符号付きの曲率を返す。"""
         h = 1e-5 * self.length
         tangent = gp_Vec(self.at(s - h)[0], self.at(s + h)[0])
         derivative = gp_Vec(self.center(s - h, self.radius), self.center(s + h, self.radius))
         return (1.0 - derivative.Dot(tangent) / tangent.SquareMagnitude()) / self.radius
 
     def clear_of_walls(self, radius, loops, count):
+        """残す道の球が、どの壁にも半径より近づかないことを検査する。"""
         for i in range(count):
             s = i * self.length / count
             if any(low < s < high or low < s + self.length < high for low, high in loops):
                 continue
             center = self.center(s, self.radius)
             for wall in self.walls:
-                nearest, _ = _projection(center, BRep_Tool.Surface_s(TopoDS.Face_s(wall)))
-                if nearest.Distance(center) < self.radius - 1e-7 * max(1.0, self.radius):
+                nearest, uv = _projection(center, BRep_Tool.Surface_s(TopoDS.Face_s(wall)))
+                limit = self.radius - 1e-7 * max(1.0, self.radius)
+                if nearest.Distance(center) < limit:
+                    if BRepClass_FaceClassifier(TopoDS.Face_s(wall), gp_Pnt2d(*uv), 1e-7).State() not in (TopAbs_IN, TopAbs_ON):
+                        distance = BRepExtrema_DistShapeShape(BRepBuilderAPI_MakeVertex(center).Vertex(), wall)
+                        if not distance.IsDone():
+                            raise Unsupported("the distance to a trimmed wall could not be measured")
+                        if distance.Value() >= limit:
+                            continue
                     raise Unsupported("the ball would cut into the opposite wall (the top is too narrow for the radius)")
 
 
 def _curves(contour, low, high, count=128):
+    """同じパラメータを持つ中心・壁接点・上面接点の補間曲線を返す。"""
     parameters = [low + (high - low) * i / count for i in range(count + 1)]
     contacts = [contour.contact(s) for s in parameters]
     curves = []
@@ -227,6 +281,7 @@ def _curves(contour, low, high, count=128):
 
 
 def _pcurve(edge, face, tolerance):
+    """支持面上の pcurve を付け、3D の辺からのずれを検査する。"""
     edge, face = TopoDS.Edge_s(edge), TopoDS.Face_s(face)
     ShapeFix_Edge().FixAddPCurve(edge, face, False, tolerance)
     pcurve = BRep_Tool.CurveOnSurface_s(edge, face, 0.0, 0.0)
@@ -238,6 +293,7 @@ def _pcurve(edge, face, tolerance):
     parameters = [first + (last - first) * i / 256 for i in range(257)]
 
     def error(curve):
+        """pcurve と 3D の辺の標本点での最大距離を返す。"""
         return max(adaptor.Value(u).Distance(surface.Value(curve.Value(u).X(), curve.Value(u).Y())) for u in parameters)
 
     deviation = error(pcurve)
@@ -253,6 +309,7 @@ def _pcurve(edge, face, tolerance):
 
 
 def _side(segment, contour, radius):
+    """接点の2本の曲線の間に、半径一定の管面とその境界辺を返す。"""
     path, foot, crest = _curves(contour, segment.low, segment.high,
                                 max(128, int((segment.high - segment.low) / contour.length * 512)))
     pipe = GeomFill_Pipe(path, foot, crest, radius)
@@ -265,6 +322,7 @@ def _side(segment, contour, radius):
     edges = tight._edges(face)
 
     def closest(points):
+        """指定された点列に最も近い管面の境界辺を返す。"""
         return min(edges, key=lambda edge: sum(min(p.Distance(q) for q in tight._samples(edge, 9)) for p in points))
 
     start = closest([begin[1], begin[2]])
@@ -277,6 +335,7 @@ def _side(segment, contour, radius):
 
 
 def _rim_pieces(contour, low, high):
+    """壁の境目で分けた壁接点の辺と、その支持面の組を返す。"""
     pieces = []
     for shift in (0.0, contour.length):
         for begin, finish, index in contour.spans:
@@ -292,6 +351,7 @@ def _rim_pieces(contour, low, high):
 
 
 def _cap(this, following, loop, contour, radius):
+    """隣の管面と実壁に G1 で接する、燕尾を覆う帽子を返す。"""
     filling = BRepOffsetAPI_MakeFilling(3, 30, 3, False, 1e-5, 1e-5, 1e-2, 0.1, 8, 9)
     filling.Add(TopoDS.Edge_s(this.end), TopoDS.Face_s(this.face), GeomAbs_Shape.GeomAbs_G1, True)
     filling.Add(TopoDS.Edge_s(following.start), TopoDS.Face_s(following.face), GeomAbs_Shape.GeomAbs_G1, True)
@@ -305,17 +365,23 @@ def _cap(this, following, loop, contour, radius):
 
 
 class _Trimmed:
+    """壁の分割の由来を kernel のビルダと同じ問いで返す。"""
+
     def __init__(self, replacements):
+        """元の壁と残す面の対応を保持する。"""
         self.replacements = replacements
 
     def Modified(self, face):
+        """元の壁に対応する分割後の面の列を返す。"""
         return next((pieces for original, pieces in self.replacements if original.IsSame(face)), [])
 
     def IsDeleted(self, face):
+        """壁は下側を残すため、削除扱いにしない。"""
         return False
 
 
 def _trim_wall(wall, edges):
+    """壁接点の輪で元の壁を2つの帯に分け、その面を返す。"""
     split = BRepFeat_SplitShape(wall)
     wire = tight._wire(edges)
     split.Add(TopoDS.Wire_s(wire), TopoDS.Face_s(wall))
@@ -329,11 +395,12 @@ def _trim_wall(wall, edges):
 
 
 def round_surface_loop(shape, top, radius):
+    """実面の接点で上面の外周を丸め、有効な立体と面の由来を返す。"""
     if len(_solids(shape)) != 1:
         raise Unsupported("the body must be one solid")
     walls = _walls(shape, top)
     up = _up(top, walls)
-    section, base = _cut(shape, top, walls, up, radius)
+    section, base, expected = _cut(shape, top, walls, up, radius)
     contour = _Contacts(section, top, walls, up, radius)
     for i in range(512):
         if gp_Vec(base, contour.contact(contour.length * i / 512)[1]).Dot(up) < 1e-5:
@@ -342,10 +409,19 @@ def round_surface_loop(shape, top, radius):
     sides = [_side(segment, contour, radius) for segment in segments]
     caps = [_cap(this, following, loop, contour, radius)
             for this, following, loop in zip(sides, sides[1:] + sides[:1], loops[1:] + loops[:1])]
-    for side in sides:
-        _pcurve(side.top, top, 1e-7)
+    top_edges = [side.top for side in sides]
+    if len(top_edges) == 1:
+        edge = top_edges[0]
+        curve = BRepAdaptor_Curve(edge)
+        first, last = curve.FirstParameter(), curve.LastParameter()
+        if curve.Value(first).Distance(curve.Value(last)) > 1e-7 * tight._diagonal(shape):
+            raise Unsupported("the single top contact edge is not closed")
+        vertex = BRepBuilderAPI_MakeVertex(curve.Value(first)).Vertex()
+        top_edges = [BRepBuilderAPI_MakeEdge(BRep_Tool.Curve_s(edge, 0.0, 0.0), vertex, vertex, first, last).Edge()]
+    for edge in top_edges:
+        _pcurve(edge, top, 1e-7)
     splitter = BRepFeat_SplitShape(top)
-    splitter.Add(TopoDS.Wire_s(tight._wire([side.top for side in sides])), TopoDS.Face_s(top))
+    splitter.Add(TopoDS.Wire_s(tight._wire(top_edges)), TopoDS.Face_s(top))
     splitter.Build()
     if not splitter.IsDone():
         raise Unsupported("the contact curves could not split the original top face")
@@ -377,7 +453,8 @@ def round_surface_loop(shape, top, radius):
                 if not indexed_map(shape, TopAbs_SHELL).FindKey(i).IsSame(outer[0])]
     result, sewing = tight._closed_solid([*kept, lens, *(side.face for side in sides), *caps],
                                          1e-6 * tight._diagonal(shape), "joining the contact-trimmed wall and crown", cavities)
-    if not 0 < tight._precise_volume(result) < tight._precise_volume(shape):
-        raise Unsupported("the rounding did not remove a positive volume")
+    removed = tight._precise_volume(shape, curved=True) - tight._precise_volume(result, curved=True)
+    if not 0 < removed < expected:
+        raise Unsupported(f"the rounding removed an implausible volume ({removed:.6g} of at most {expected:.6g})")
     successor = sewing.Modified(lens) if sewing.IsModified(lens) else lens
     return tight.Tight(result, top, successor, [_Trimmed(replacements), tight._Sewn(sewing)])

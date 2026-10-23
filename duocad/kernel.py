@@ -309,27 +309,17 @@ def _box_centre(shape: Any) -> "gp_Pnt":
 
 
 def _needs_adaptive(face: Any) -> bool:
-    """自由曲面・自由曲線で切った平面と球面・高さが変わる自由曲線で切った押し出し面は適応積分。
-    外部の罠: 球面ドームの既定の積分は 0.00804 ずれた。水平な縁の押し出し面は、適応積分で重心がずれる。"""
-    surface = BRepAdaptor_Surface(face)
-    kind = surface.GetType()
+    """B スプライン・ベジエの曲面か、自由曲線で囲まれた平面(実測で既定の積分が外れた面)。押し出し面などの
+    他の曲面は既定のまま(適応積分は楕円柱の側面で重心をずらす)。"""
+    kind = BRepAdaptor_Surface(face).GetType()
     if kind in _ADAPTIVE_SURFACES:
         return True
-    if kind not in (GeomAbs_SurfaceType.GeomAbs_Plane, GeomAbs_SurfaceType.GeomAbs_Sphere,
-                    GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion):
+    if kind != GeomAbs_SurfaceType.GeomAbs_Plane:
         return False
     explorer = TopExp_Explorer(face, TopAbs_ShapeEnum.TopAbs_EDGE)
     while explorer.More():
-        curve = BRepAdaptor_Curve(TopoDS.Edge_s(explorer.Current()))
-        if curve.GetType() in _ADAPTIVE_CURVES:
-            if kind != GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion:
-                return True
-            first, last = curve.FirstParameter(), curve.LastParameter()
-            origin = curve.Value(first)
-            heights = [gp_Vec(origin, curve.Value(first + (last - first) * i / 8)).Dot(gp_Vec(surface.Direction()))
-                       for i in range(9)]
-            if max(heights) - min(heights) > 1e-8:
-                return True
+        if BRepAdaptor_Curve(TopoDS.Edge_s(explorer.Current())).GetType() in _ADAPTIVE_CURVES:
+            return True
         explorer.Next()
     return False
 
@@ -1568,11 +1558,12 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
                 return native
     declined = ""
     if native is None:
-        # 対象外も理由を残す契約: 曲面などで早く断っても、利用者には吸収だけの理由を返さない。
         try:
             return _tight_fillet(shape, edge_map, radii, edge_indices, volume_before)
-        except kernel_overflow.Unsupported as reason:
+        except kernel_tight.Declined as reason:
             declined = f"; 曲率半径を超える丸めもできない: {reason}"
+        except kernel_overflow.Unsupported:
+            pass
     try:
         return _absorbed_fillet(shape, edge_map, radii, edge_indices, volume_before)
     except ValueError as reason:

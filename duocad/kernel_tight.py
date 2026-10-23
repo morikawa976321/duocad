@@ -95,8 +95,10 @@ def round_tight_loop(shape: TopoDS_Shape, edge_map, radii: dict) -> Tight:
         raise Unsupported("the loop must be rounded with one radius")
     radius = float(values.pop())
     edges = [edge_map.FindKey(int(index)) for index in radii]
-    top = _top_face(shape, edges)
+    # 失敗文面との契約: 閉じた1輪を選んだ場合だけ、この経路で断った理由を添える。
+    closed_loop = _is_closed_loop(edges)
     try:
+        top = _top_face(shape, edges)
         if BRepAdaptor_Surface(TopoDS.Face_s(top)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane:
             try:
                 return _round(shape, top, radius)
@@ -106,7 +108,36 @@ def round_tight_loop(shape: TopoDS_Shape, edge_map, radii: dict) -> Tight:
 
         return round_surface_loop(shape, top, radius)
     except Unsupported as error:
-        raise Declined(str(error)) from error
+        if closed_loop:
+            raise Declined(str(error)) from error
+        raise
+
+
+def _is_closed_loop(edges: list) -> bool:
+    """辺の端点の次数と連結性から、選択がちょうど1つの閉じた輪かを返す。"""
+    vertices, links = [], []
+    for edge in edges:
+        ends = []
+        for vertex in (TopExp.FirstVertex_s(TopoDS.Edge_s(edge)), TopExp.LastVertex_s(TopoDS.Edge_s(edge))):
+            if vertex.IsNull():
+                return False
+            index = next((i for i, known in enumerate(vertices) if known.IsSame(vertex)), len(vertices))
+            if index == len(vertices):
+                vertices.append(vertex)
+                links.append([])
+            ends.append(index)
+        a, b = ends
+        links[a].append(b)
+        links[b].append(a)
+    if not links or any(len(neighbors) != 2 for neighbors in links):
+        return False
+    reached, pending = set(), [0]
+    while pending:
+        index = pending.pop()
+        if index not in reached:
+            reached.add(index)
+            pending.extend(links[index])
+    return len(reached) == len(vertices)
 
 
 def _round(shape: TopoDS_Shape, top: TopoDS_Shape, radius: float) -> Tight:
@@ -634,7 +665,12 @@ def _closed_solid(faces: list, tolerance: float, what: str, cavities: list = ())
     return solid, sewing
 
 
-def _precise_volume(shape: TopoDS_Shape) -> float:
+def _precise_volume(shape: TopoDS_Shape, *, curved: bool = False) -> float:
+    """丸めの体積を測る。曲面の接点で切った形では、重心を使わず全体を適応積分する。"""
+    if curved:
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(shape, props, 1e-9)
+        return props.Mass()
     from .kernel import volume  # kernel がこのモジュールを読むので、呼ぶときに読む
 
     return volume(shape)

@@ -22,6 +22,22 @@ TRAPEZOID = ((0.0, 0.0), (80.0, 0.0), (60.0, 40.0), (20.0, 40.0))
 CENTROID_UV = (40.0, 160.0 / 9.0)
 THICKNESS = 10.0
 
+
+def test_an_oblique_rational_bspline_ellipse_prism_keeps_its_centroid():
+    """斜め押し出しの縁の高さを理由に、側面を不正確な適応積分へ切り替えない。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.Geom import Geom_Ellipse
+    from OCP.GeomConvert import GeomConvert
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Vec
+    from duocad import kernel
+
+    ellipse = Geom_Ellipse(gp_Ax2(gp_Pnt(), gp_Dir(0, 0, 1)), 6, 2)
+    curve = GeomConvert.CurveToBSplineCurve_s(ellipse)
+    face = BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(curve).Edge()).Wire()).Face()
+    shape = BRepPrimAPI_MakePrism(face, gp_Vec(5, 0, 5)).Shape()
+    assert kernel.centroid(shape) == pytest.approx([2.5, 0, 2.5], abs=0.0042)
+
 #: 原点まわりの単位四面体(巻きは外向き)。体積重心は (1/4, 1/4, 1/4)。
 TETRA_POSITIONS = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
 TETRA_INDICES = [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]

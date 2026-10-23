@@ -6,13 +6,16 @@ import pytest
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire, BRepBuilderAPI_Transform
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism, BRepPrimAPI_MakeSphere
+from OCP.BRepGProp import BRepGProp
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism, BRepPrimAPI_MakeSphere
 from OCP.Geom import Geom_BezierSurface
+from OCP.GC import GC_MakeArcOfCircle
 from OCP.GeomAbs import GeomAbs_SurfaceType
 from OCP.GeomConvert import GeomConvert
+from OCP.GProp import GProp_GProps
 from OCP.TColgp import TColgp_Array2OfPnt
 from OCP.TopAbs import TopAbs_IN, TopAbs_OUT
 from OCP.TopLoc import TopLoc_Location
@@ -27,7 +30,7 @@ from duocad.sketch import add_ellipse, base_plane, sketch_create
 from duocad.verbs import extrude, fillet
 from duocad.verbs.add_solid import add_solid_body
 from document_support import replay_through_json
-from test_fillet_tight import _elliptic_post, _state
+from test_fillet_tight import _elliptic_post, _lens_area, _native_done, _state
 
 
 def _dome(post=None, spline=False, center=-20):
@@ -45,11 +48,11 @@ def _dome(post=None, spline=False, center=-20):
     return BRepAlgoAPI_Common(post, tool).Shape()
 
 
-def _taper_document(angle):
+def _taper_document(angle, height=5):
     doc = Document()
     sketch = sketch_create(doc, base_plane("XY"))
     add_ellipse(doc, sketch, (0, 0), 12, 4)
-    body_id = extrude(doc, [region_ref(sketch, 1)], 5, taper=angle, mode="new").args["body_id"]
+    body_id = extrude(doc, [region_ref(sketch, 1)], height, taper=angle, mode="new").args["body_id"]
     return doc, body_id
 
 
@@ -77,6 +80,29 @@ def _check_provenance(before, rounded):
             TopoDS.Face_s(kernel.face_of(rounded["shape"], successors[0]))).GetType()
 
 
+def _spherical_lens_area(radius, nodes=256):
+    """楕円の内側平行体の極半径から、球面上のレンズ面積を独立に積分する。"""
+    abscissae, weights = np.polynomial.legendre.leggauss(nodes)
+    phi = math.pi / 4 * (abscissae + 1)
+    crossing = math.asin(math.sqrt(((radius * 6 / 2) ** 2 - 4) / 32))
+    low, high = np.full(nodes, crossing), np.full(nodes, math.pi / 2)
+    for _ in range(60):
+        t = (low + high) / 2
+        n = np.hypot(2 * np.cos(t), 6 * np.sin(t))
+        x, y = 6 * np.cos(t) - radius * 2 * np.cos(t) / n, 2 * np.sin(t) - radius * 6 * np.sin(t) / n
+        before = np.arctan2(y, x) < phi
+        low, high = np.where(before, t, low), np.where(before, high, t)
+    rho = np.hypot(x, y) * 26 / (26 - radius)
+    return math.pi * np.dot(weights, 26 * rho ** 2 / (26 + np.sqrt(26 ** 2 - rho ** 2)))
+
+
+def _precise_area(face):
+    """自由曲線で切った面の面積を、精度指定の積分で測る。"""
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(face, props, 1e-9)
+    return props.Mass()
+
+
 @pytest.mark.parametrize("radius", [1.0, 1.5, 1.95])
 def test_dome_has_a_valid_crown_and_an_independently_calculated_radius(radius):
     """球の内側の同心球との交点を神託に、長い側の断面の接点と円弧を確かめる。"""
@@ -87,6 +113,10 @@ def test_dome_has_a_valid_crown_and_an_independently_calculated_radius(radius):
     assert len(kernel.split_solids(result)) == 1
     assert kernel.face_count(result) == 7
     _check_provenance(shape, rounded)
+    lens = next(face for face in kernel_tight._faces(result)
+                if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere)
+    assert _spherical_lens_area(radius, 128) == pytest.approx(_spherical_lens_area(radius), abs=1e-9)
+    assert _precise_area(lens) == pytest.approx(_spherical_lens_area(radius), abs=2e-6)
     cy = 2 - radius
     cz = -20 + math.sqrt((26 - radius) ** 2 - cy ** 2)
     end = math.atan2(cz + 20, cy)
@@ -106,15 +136,6 @@ def test_a_non_spherical_bspline_top_uses_the_same_contact_solver():
     _check_provenance(shape, rounded)
 
 
-def test_dome_volume_matches_an_independent_integral():
-    """球面と壁の非平面の縁を既定の積分で測ると、約 0.008 mm³ ずれる。"""
-    nodes, weights = np.polynomial.legendre.leggauss(128)
-    angles = math.pi * (nodes + 1)
-    q = 36 * np.cos(angles) ** 2 + 4 * np.sin(angles) ** 2
-    expected = 12 * math.pi * np.sum(weights * ((26 ** 3 - (26 ** 2 - q) ** 1.5) / (3 * q) - 10))
-    assert kernel.volume(_dome()) == pytest.approx(expected, abs=2e-6)
-
-
 @pytest.mark.parametrize("angle,radius", [(-5, 0.8), (-5, 1.0), (-5, 1.65), (5, 1.0), (5, 1.8), (5, 2.2)])
 def test_tapered_wall_has_the_independently_calculated_non_quarter_circle(angle, radius):
     """元の楕円の支持線と傾斜角から求めた円弧は、90°±5°で上面と壁に接する。"""
@@ -132,6 +153,81 @@ def test_tapered_wall_has_the_independently_calculated_non_quarter_circle(angle,
         for scale, expected in ((0.999, TopAbs_IN), (1.001, TopAbs_OUT)):
             assert _state(result, 0, cy + scale * radius * math.cos(phi), cz + scale * radius * math.sin(phi)) == expected
     _check_provenance(shape, rounded)
+
+
+@pytest.mark.parametrize("angle,radius", [(-5, 0.8), (-5, 1), (-5, 1.65), (5, 1.8), (5, 2.2)])
+def test_tapered_lens_area_matches_the_independent_parallel_ellipse_integral(angle, radius):
+    """実装の接点や道を使わず、底の楕円と傾斜角から上面のレンズ面積を求める。"""
+    doc, body = _taper_document(angle)
+    shape = doc.get_body(body).shape
+    result = kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape)})["shape"]
+    lens = max((face for face in kernel_tight._faces(result)
+                if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
+               key=lambda face: kernel_tight._a_point_on(face).Z())
+    theta = math.radians(angle)
+    offset = radius / math.cos(theta) - (5 - radius) * math.tan(theta)
+    assert _precise_area(lens) == pytest.approx(_lens_area(6, 2, offset), abs=1e-4)
+
+
+@pytest.mark.parametrize("kind", ["taper", "dome"])
+def test_a_thin_body_uses_a_cut_just_below_the_contacts(kind):
+    """高さが 2R 程度でも、壁の接点が底から離れていれば丸められる。"""
+    shape = _dome(center=-23) if kind == "dome" else _taper_document(-5, 2.5)[0].bodies[0].shape
+    radius = 1.5 if kind == "dome" else 1.4
+    assert not _native_done(shape, _outline(shape, kind == "dome"), radius)
+    rounded = kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape, kind == "dome")})
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert 0 < rounded["volume_after"] < rounded["volume_before"]
+    _check_provenance(shape, rounded)
+
+
+def test_contacts_reaching_the_bottom_are_refused_with_a_reason():
+    """接点が底を突き抜ける部品は、底に届く可能性を文面に載せて断る。"""
+    shape = _taper_document(-5, 1)[0].bodies[0].shape
+    with pytest.raises(ValueError, match="曲率半径を超える丸めもできない: .*bottom"):
+        kernel.fillet_edges(shape, {edge: 1.4 for edge in _outline(shape)})
+
+
+def test_a_result_removing_more_than_the_band_above_the_cut_is_refused(monkeypatch):
+    """有効な小立体でも、切断面より上の体積を超えて削る結果は返さない。"""
+    shape = _dome()
+    top = next(face for face in kernel_tight._faces(shape)
+               if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere)
+    tiny = _elliptic_post(1, 0.5, 0.1)
+    monkeypatch.setattr(kernel_tight, "_closed_solid", lambda *args: (tiny, None))
+    with pytest.raises(kernel_tight_surface.Unsupported, match="removed an implausible volume"):
+        kernel_tight_surface.round_surface_loop(shape, top, 1)
+
+
+def _teardrop_post():
+    """半径 3 と 0.5 の円弧を、中心間距離 6 の共通外接線で結んだ柱を返す。"""
+    nx, ny = 2.5 / 6, math.sqrt(1 - (2.5 / 6) ** 2)
+    rear_up, rear_down = gp_Pnt(3 * nx, 3 * ny, 0), gp_Pnt(3 * nx, -3 * ny, 0)
+    tip_up, tip_down = gp_Pnt(6 + 0.5 * nx, 0.5 * ny, 0), gp_Pnt(6 + 0.5 * nx, -0.5 * ny, 0)
+    wire = BRepBuilderAPI_MakeWire()
+    for edge in (BRepBuilderAPI_MakeEdge(rear_up, tip_up).Edge(),
+                 BRepBuilderAPI_MakeEdge(GC_MakeArcOfCircle(tip_up, gp_Pnt(6.5, 0, 0), tip_down).Value()).Edge(),
+                 BRepBuilderAPI_MakeEdge(tip_down, rear_down).Edge(),
+                 BRepBuilderAPI_MakeEdge(GC_MakeArcOfCircle(rear_down, gp_Pnt(-3, 0, 0), rear_up).Value()).Edge()):
+        wire.Add(edge)
+    return BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(wire.Wire()).Face(), gp_Vec(0, 0, 8)).Shape()
+
+
+@pytest.mark.parametrize("curved", [False, True])
+def test_line_and_arc_walls_are_accepted_for_a_flat_or_spherical_top(curved):
+    """直線と円弧の輪郭の平面壁・円柱壁を、曲面でも平面でも丸める。"""
+    post = _teardrop_post()
+    shape = _dome(post) if curved else post
+    edges = _outline(shape, curved)
+    assert _native_done(shape, edges, 1) == (not curved)
+    rounded = kernel.fillet_edges(shape, {edge: 1 for edge in edges})
+    assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
+    assert len(kernel.split_solids(rounded["shape"])) == 1
+    assert rounded["provenance"]["deleted"] == []
+    if not curved:
+        direct = kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), {edge: 1 for edge in edges})
+        assert BRepCheck_Analyzer(direct.shape).IsValid()
+        assert kernel.face_count(direct.shape) == 8
 
 
 @pytest.mark.parametrize("kind", ["dome", -5, 5])
@@ -240,14 +336,37 @@ def test_a_curved_top_with_a_hole_is_refused_with_the_hole_reason():
         kernel.fillet_edges(shape, {edge: 1.0 for edge in edges})
 
 
-@pytest.mark.parametrize("height", [1.0, 4.0])
+@pytest.mark.parametrize("edges", [[1], [1, 3]])
+def test_an_open_selection_keeps_the_failure_message_without_a_loop_reason(edges, monkeypatch):
+    """輪でない辺の失敗文面に、曲率半径を超える丸めの理由を付けない。"""
+    shape = BRepPrimAPI_MakeBox(10, 10, 10).Shape()
+    values = {edge: 30 for edge in edges}
+
+    def no_absorption(*args):
+        raise ValueError("no absorption")
+
+    monkeypatch.setattr(kernel, "_absorbed_fillet", no_absorption)
+    with pytest.raises(ValueError) as actual:
+        kernel._blend_edges(shape, values, "fillet")
+    assert "曲率半径を超える丸めもできない" not in str(actual.value)
+
+    def unrelated(*args):
+        raise kernel_tight.Unsupported("not a loop")
+
+    monkeypatch.setattr(kernel_tight, "round_tight_loop", unrelated)
+    with pytest.raises(ValueError) as baseline:
+        kernel._blend_edges(shape, values, "fillet")
+    assert str(actual.value) == str(baseline.value)
+
+
+@pytest.mark.parametrize("height", [1.0, 4.0, 5.5])
 def test_a_cavity_is_preserved_below_the_cut_and_refused_above_it(height):
     """切断面より上の別の面は断り、下の空洞の殻と由来は保つ。"""
     dome = _dome()
     hole = BRepPrimAPI_MakeSphere(gp_Pnt(0, 0, height), 0.2).Shape()
     shape = BRepAlgoAPI_Cut(dome, hole).Shape()
     edges = _outline(shape, True)
-    if height == 4.0:
+    if height == 5.5:
         with pytest.raises(ValueError, match="above the cut there must be only the top and its wall band"):
             kernel.fillet_edges(shape, {edge: 1.0 for edge in edges})
     else:
