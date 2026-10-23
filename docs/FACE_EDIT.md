@@ -1,7 +1,7 @@
 # 面の削除(#190)と面のオフセット(#183)— 方式の決定
 
 **状態: 実装計画の段1〜4(子プロセス・kernel・verb・MCP)を実装。画面(段5)は未実装**(2026-10-23。下「実装計画」の「実装の状態」)。
-面編集の結果を疑うとき、OCCT の Defeaturing・MakeOffset の挙動を疑うとき、画面に載せるときに読む。試作と実測の再現は `tools/face_edit_probe/`(末尾「再現」)。
+面編集の結果を疑うとき、OCCT の Defeaturing・MakeOffset の挙動を疑うとき、画面に載せるときに読む。現行の検査と試作の参照先は末尾「検査と試作の参照」。
 
 本人の依頼(Issue #190、2026-10-17):
 
@@ -329,7 +329,7 @@ PC ケース一式(ケース本体 27 ソリッド 2835 面・電源・マザー
 
 ## 推奨する方式
 
-### kernel(`duocad/kernel_face_edit.py`。試作は `tools/face_edit_probe/strict.py`)
+### kernel(`duocad/kernel_face_edit.py`。試作は Git `3c3fb655` の `tools/face_edit_probe/strict.py`)
 
 `kernel.py` は 1,681 行で規律の 1,500 行を越えているので、新しいファイルに切る(依存は kernel_face_edit → kernel の一方向。`kernel_shell.py` と同じ形)。
 
@@ -524,10 +524,10 @@ PC ケース一式(ケース本体 27 ソリッド 2835 面・電源・マザー
    テスト: 子を送信中・演算中・返信中に止める、期限切れ、検査落ち、プレビューの連打→確定、確定中の undo、文書の切り替え、別の接続からの要求を注入し、
    通信が続き、文書・操作ログ・undo/redo の位置・SNAPSHOTS が変わらず、次の正常な要求が通ること。同じ操作列を繰り返して親子のメモリを測る(初期の増加と頭打ちを分ける)。
    `tests/test_boundaries.py` の `OCP_ALLOWED` と README の表に足す。
-2. **`duocad/kernel_face_edit.py`**(新規。`tools/face_edit_probe/strict.py` を製品の形に): `delete_faces` / `offset_faces`(D を含む)/ 関門 / 曲面の定義の比較 /
+2. **`duocad/kernel_face_edit.py`**(新規。試作 `tools/face_edit_probe/strict.py` を製品の形に): `delete_faces` / `offset_faces`(D を含む)/ 関門 / 曲面の定義の比較 /
    由来の射影。子プロセスの中で動く。テスト: 関門に誤った形を渡して断るか(受入条件「実装のときに足すテスト」)、D の認識が意匠の曲面・円錐・可変半径・丸めの上の丸め・
    支えの面の分割を、**理由を区別して**断るか、半径の違う丸めを取り違えないか(`m_fillet_two_radii_top_up2`)。
-   ここで `tools/face_edit_probe/` の数値(合成形状の判定表)を同じに再現できることを確かめる。
+   ここで本書の合成形状の判定表と同じ数値を再現できることを確かめる。
 3. **verb** `duocad/verbs/delete_faces.py` / `offset_faces.py`(`shell_body.py` と同じ形: 純関数・`_do_*`・`register_verb(do=, undo=undo_shape)`・`@entry`)、
    `duocad/verbs/__init__.py` の import と `__all__`。**受入テストの `pytestmark` を消す**(32件が本物の検査になる)。
 4. **公開面**: catalog に `Command`(category `feature`、`resets_selection=True`、`previewable=True`、`session` は Session のメソッド名、`offset_faces` の `distance` は
@@ -570,20 +570,10 @@ MCP の記述と実際の呼び出し、面が消える移動を断る、**丸�
 D と無関係な穴の径の変化・ソリッドの外に面が付いた結果)、子プロセスの強制終了・期限切れ・検査落ち・計算中のボディの変更を注入して文書・ログ・undo/redo の位置・
 SNAPSHOTS が変わらず次の操作が通るか、BinTools の往復・プレビューの採用・ログの再生の後に結果の面を選ぶ次の操作まで通るか(対称な面を含む)。
 
-## 再現
+## 検査と試作の参照
 
-```bash
-.venv/Scripts/python.exe -m tools.face_edit_probe.run                       # 合成形状 × A/B0/B1/C/DB/DC(約1分)
-.venv/Scripts/python.exe -m tools.face_edit_probe.run --strict              # 厳しい版 SA/SB/SD
-.venv/Scripts/python.exe -m tools.face_edit_probe.scale                     # 規模
-.venv/Scripts/python.exe -m tools.face_edit_probe.provenance                # 由来の取れ方
-.venv/Scripts/python.exe -m tools.face_edit_probe.isolation <file.step>     # BRep の往復
-.venv/Scripts/python.exe -m tools.face_edit_probe.realworld <file.step> ... # 実物(厳しい版。--methods legacy で緩い版)
-.venv/Scripts/python.exe -m tools.face_edit_probe.realworld_why <rows.jsonl> <file.step>  # 実物で断った理由の内訳(行の記録は FACE_EDIT_ROWS で残す)
-.venv/Scripts/python.exe -m tools.face_edit_probe.viz out.json                 # 触れる模型のデータ(13 場面・1,456 通り。約1分)
-```
+現行の面編集は `tests/test_delete_faces_acceptance.py`、`tests/test_offset_faces_acceptance.py`、
+`tests/test_face_edit_kernel.py`、`tests/test_face_edit_worker.py` と、画面の `web/scripts/smoke-face-edit.mjs` で検査する。
 
-触れる模型(本人向けの説明ページ、claude.ai の Artifact「面編集の模型」)は、`viz.py` の出力を three.js で表示したもの。ページ本体はリポジトリに置かない。
-
-試作は duocad 本体から import されない。Windows では子プロセスの出力の
-文字コードを `PYTHONIOENCODING=utf-8` にそろえる(`run.py` と `realworld.py` は子に渡している)。
+方式比較の試作・計測・模型生成コード(`tools/face_edit_probe/`。模型のデータは `viz.py`)は Git `3c3fb655` に残っている(`git show 3c3fb655:tools/face_edit_probe/run.py`。再現コマンドは同じコミットの本書末尾「再現」)。本書の実測値はその時点の記録。
+触れる模型(claude.ai の Artifact「面編集の模型」)のページ本体はリポジトリに置かない。

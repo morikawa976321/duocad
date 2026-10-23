@@ -276,7 +276,7 @@ def body_ref(body_id: str) -> dict:
 
 
 def face_ref(condition: dict) -> dict:
-    """配信用の面参照(`selection.select_face` と同じ形)。"""
+    """配信用の面参照(`selection._select_shape` と同じ形)。"""
     return {
         "body": condition["body"],
         "kind": "face",

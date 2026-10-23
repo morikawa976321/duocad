@@ -111,7 +111,7 @@
   無数にある。丸めた箱の内壁と外壁で実測)。その対を1つでも含む複合形状どうしも同じく落ちる。
   面の縁の上の点から測れば測れる(`kernel_shell._face_distance`)。**角を丸めた箱に、丸めを同心にした中子を隙間 0.2 で入れた形でも落ち**
   (r=3 と r=2 で再現、隙間 0.1 の r=3 では落ちない。`SetMultiThread(True)` だと `Standard_ProgramError: Multiple exceptions` で上がる)、
-  面の対ごとに測って落ちた対だけ縁の点から測ると 0.1999999718 と測れる(Issue #186 の試作 `tools/interference_probe/concentric.py`)。
+  面の対ごとに測って落ちた対だけ縁の点から測ると 0.1999999718 と測れる(Issue #186 の試作。Git `3c3fb655` の `tools/interference_probe/concentric.py`)。
   全周の同心円筒(ピンと穴)と、円筒の穴の中の球は落ちなかった。
 - **`BRepExtrema_DistShapeShape.InnerSolution()` は当てにしない**: 片方がもう片方の中にあるとき True になる一方、体積の重なりが 0 の
   接触の組でも True が出た(Issue #186 の試作、PC ケースの STEP)。

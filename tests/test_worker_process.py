@@ -7,8 +7,7 @@ from __future__ import annotations
 import sys
 
 from duocad import worker_process
-from duocad.interference_worker import InProcessWorker
-from interference_support import box, check, document_of
+from interference_support import InProcessWorker, box, check, document_of
 
 #: 1回答えるたびに終わる子(`worker_process` の線を話す)
 EXITS_AFTER_REPLY = r'''

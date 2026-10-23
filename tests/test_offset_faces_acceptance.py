@@ -2,7 +2,7 @@
 
 落ちたら、受入条件のどれが満たされていないかを意味する。
 
-期待値の出どころ(tools/face_edit_probe で実測、2026-10-18): 40×30×20 の箱の上面 ±5 → 30000 / 18000 mm³。
+期待値の出どころ(Git 3c3fb655 の tools/face_edit_probe で実測、2026-10-18): 40×30×20 の箱の上面 ±5 → 30000 / 18000 mm³。
 面取り 5 の箱の上面 +3 → 断面 30×23 から 8×8 の三角を引いて ×40 = 26320 mm³。
 丸め r5 の箱の上面 +3 → 40×30×23 から丸めの欠け (25 − 25π/4)×40 を引いた 27385.40 mm³(丸めが付いてくる形)。
 """
@@ -23,7 +23,7 @@ from duocad import catalog, kernel, query, selection
 from duocad.document import Body, Document
 from duocad.entry import entry_for
 from duocad.verbs import chamfer, fillet
-from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json
+from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json, shape_ref
 from mcp_support import call
 from session_support import session_with_box
 
@@ -276,7 +276,7 @@ def test_provenance_maps_every_face_one_to_one():
 def test_the_entry_takes_the_faces_from_the_selection():
     doc = Document()
     body_id = _box(doc)
-    selection.set_selection(doc, refs=[selection.select_face(doc, body_id, _plane_at(doc, body_id, 2, H))])
+    selection.set_selection(doc, refs=[shape_ref(doc, body_id, "face", _plane_at(doc, body_id, 2, H))])
 
     result = entry_for("offset_faces")(doc, distance=5.0)
 
