@@ -187,6 +187,34 @@ def build(out: Path = OUT):
     return pieces
 
 
+# TP1 で「ガタ」を付けずに回ったナット(id, 表示名)。TP2 と同じ押し引きで確かめ直し、ガタの判定が確かめ方で変わるかを見る(astra の8回目)
+RECHECK_TP1 = [
+    ("A2", "A: ISO M6(六角)のナット2(凹み2個)と六角のボルト"),
+    ("A3", "A: ISO M6(六角)のナット3(凹み3個)と六角のボルト"),
+    ("B3", "B: 45° D6(四角)のナット3(凹み3個)と四角のボルト"),
+    ("K2", "K: 30° D6(五角)のナット2(凹み2個)と五角のボルト"),
+    ("D2", "D: 45° D3(小さい四角)のナット2(凹み2個)と小さい四角のボルト"),
+    ("F1", "F: 半円 D3(小さい八角)のナット1(凹み1個)と小さい八角のボルト"),
+    ("F2", "F: 半円 D3(小さい八角)のナット2(凹み2個)と小さい八角のボルト"),
+]
+
+
+def write_recheck_tp1(path: Path = OUT.parent / "testprint" / "recheck_tp1.html"):
+    """TP1 の部品を、TP2 のガタの確かめ方で見直すページ(新しく刷らない)。結果は 'TP1R' の1行。"""
+    intro = ('<div class="intro"><p><b>新しく刷らない。</b>TP1 の部品が手元に残っていれば、下の組だけを確かめ直す(配置図は TP1 の index.html)。</p>'
+             '<p><b>確かめ方</b>(TP2 と同じ): ナットをボルトの真ん中あたりまで手で回して止め、ボルトの頭を持ってナットを軸の向きに押し引きする。'
+             'カタカタ動くのが指か耳で分かれば「ガタが分かる」、分からなければ「ガタ無し」。部品が無い・回らない組は「試していない」のままでよい。</p>'
+             '<p><b>返し方</b>: 各行を1つクリックし、下の「コピー」で出る1行を次のメッセージに貼る。</p></div>')
+    items = [(iid, name, ["ガタ無し", "ガタが分かる", "試していない"], []) for iid, name in RECHECK_TP1]
+    write_page([("TP1 の部品の確かめ直し", "TP1 で「ガタ」を付けなかった組。", items)], path, "TP1 の部品のガタの確かめ直し",
+               intro=intro, test_id="TP1R")
+    return path
+
+
 if __name__ == "__main__":
-    ps = build()
-    print(len(ps), "部品を", OUT, "へ")
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "recheck":
+        print(write_recheck_tp1())
+    else:
+        ps = build()
+        print(len(ps), "部品を", OUT, "へ")
