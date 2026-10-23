@@ -480,7 +480,7 @@ def _cut_female(shape, target, points, pitch, depth, context):
         chamfer_map = result["provenance"]["face_map"]
     z0 = target["v0"] + (depth if "low" in entries else 0.0)
     z1 = target["v1"] - (depth if "high" in entries else 0.0)
-    if z1 - z0 < pitch:
+    if z1 - z0 < pitch - 1e-9:
         raise ValueError(f"穴が短すぎる(入口の面取りを除いたねじの長さ {z1 - z0:.3g} がピッチ {pitch:g} に足りない)")
     before = _volume_eps(body)
     fuse = BRepAlgoAPI_Fuse(body, _cylinder(target, target["radius"] + _FILL_MARGIN, z0, z1))

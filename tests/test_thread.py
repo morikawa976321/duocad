@@ -162,6 +162,17 @@ def test_a_shaft_exactly_one_pitch_longer_than_its_chamfers_is_accepted():
     _assert_sound(doc.get_body(body_id).shape)
 
 
+def test_a_hole_exactly_one_pitch_longer_than_its_entry_chamfers_is_accepted():
+    """D8 P2 の穴の入口の面取りは両側 0.8 ずつ。厚さ 3.6 の板では残る長さがちょうど 1 ピッチ(浮動小数の丸めで断らない境目)。"""
+    doc = Document()
+    body_id = new_box(doc, 20.0, 20.0, 3.6)
+    sketch_id = sketch_create(doc, base_plane("XY"))
+    add_circle(doc, sketch_id, (10.0, 10.0), 8.0)
+    extrude(doc, [region_ref(sketch_id, 1)], 3.6, mode="cut", body_id=body_id)
+    thread(doc, _cylinder_face(doc, body_id), "trapezoid45", body_id=body_id)
+    _assert_sound(doc.get_body(body_id).shape)
+
+
 def test_a_shaft_too_short_to_keep_a_full_thread_is_refused():
     """D6 P1.5 の軸の両端の面取りは 0.75 ずつ。長さ 2 では山頂の残る長さがピッチに足りない(ねじ山が円錐に削られて消える)。"""
     doc = Document()
