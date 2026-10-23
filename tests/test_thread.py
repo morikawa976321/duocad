@@ -154,6 +154,14 @@ def test_a_bore_reaching_past_the_chamfered_tips_is_refused():
     _assert_refused_without_change(doc, body_id, _outer_cylinder_face(doc, body_id), "trapezoid45", None, "軸の中の穴")
 
 
+def test_a_shaft_exactly_one_pitch_longer_than_its_chamfers_is_accepted():
+    """D3 P1.2 の面取りは両端 0.6 ずつ。長さ 2.4 では残る長さがちょうど 1 ピッチ(浮動小数の丸めで断らない境目)。"""
+    doc = Document()
+    body_id = new_cylinder(doc, radius=1.5, height=2.4)
+    thread(doc, _cylinder_face(doc, body_id), "trapezoid45", body_id=body_id)
+    _assert_sound(doc.get_body(body_id).shape)
+
+
 def test_a_shaft_too_short_to_keep_a_full_thread_is_refused():
     """D6 P1.5 の軸の両端の面取りは 0.75 ずつ。長さ 2 では山頂の残る長さがピッチに足りない(ねじ山が円錐に削られて消える)。"""
     doc = Document()
