@@ -24,6 +24,7 @@
   どの配列にも入っておらず `root.add` されたまま二度と `remove` されなかった（ゴースト線＋リーク）。
   1つの論理単位が複数のオブジェクトを持つなら除去専用の束を持つ —— `web/src/sceneBatch.ts` の `createBatch(parent)` は
   `add()` が親へ足すのと控えるのを同時に行うので、push 忘れが構造的に起きない（ピック用の配列は `add()` の戻り値を別に push する）。
+  スケッチでは `sketchLayer.ts` が束・選択点/ホバー点の印・共有材質を所有し、viewport はピック用参照だけ借りる。
 - **`ShaderMaterial` は必ず `#version 300 es` が付く**（`RawShaderMaterial` でなければ）。GLSL1 流儀で書いてよく、
   `gl_FragDepth` / `fwidth` / `inverse` が使える。組み込み材質と同じ見え方にするにはフラグメント末尾に
   `#include <colorspace_fragment>`（忘れると同じ色コードで暗く出る）。フラグメントの prefix に `projectionMatrix` は無い。
@@ -34,7 +35,10 @@
   平面の式で自前に捨てる（[VIEWPORT.md](VIEWPORT.md)「断面」）。
 - **`createViewport()` は宣言の順序がそのまま初期化の順序。** 初期化中に後方の `const` を読むと TDZ で落ち、
   `window.__duocad.ready` が永久に立たず「画面が出ない」だけになる（`tsc` / `svelte-check` は検出しない）。
-  初期化中に読むものを増やす変更は宣言順を確認し、依存の無いもの（`new THREE.Group()`）は前方へ上げる。
+  初期化中に読むものを増やす変更は宣言順を確認する。描画先の `sketchRoot` はグリッドより先に作る
+  （`createGridPlanes` が `contentBoxForGrid` 経由で読む）。`createSketchLayer(sketchRoot)` は C節で呼び、
+  ボディより後という材質の生成順を保つ（不透明な描画の並びに材質 ID も効く）。後方の `resolution` は
+  初期化中に読まず、更新・幽霊の描画時に採用済みの解像度を値で渡す。
 - **画面座標へ変換するヘルパの最内ループで DOM を読まない。** `projectRaw` が頂点ごとに `size()`（`clientWidth`）を
   読んでいて、矩形選択 83,084 頂点で 32.1ms → ループ外へ巻き上げて 2.5ms（遅さの 92% が DOM 読み。オブジェクト割付は
   2.5→2.3ms でほぼ効かない）。寸法は引数で受けるか呼ぶ側がループ外で1回読む。

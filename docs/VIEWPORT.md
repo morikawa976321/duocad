@@ -1,7 +1,7 @@
 # duocad — 3Dビューポート（カメラ・ピック・グリッド・深度）
 
 **読むとき**: `web/src/viewport.ts` とその兄弟（`planeGrid.ts` / `gridScale.ts` / `viewCube*.ts` /
-`faceCulling.ts` / `screenPick.ts` / `sectionView.ts`）を変えるとき。当たり判定は screen 半径[px]で揃える
+`faceCulling.ts` / `screenPick.ts` / `sectionView.ts` / `sketchLayer.ts`）を変えるとき。当たり判定は screen 半径[px]で揃える
 （正は `web/src/screenPick.ts` と `tests/eval_screen_pick.mjs`）。
 実装の詳細はコードのコメントが正で、ここは**判断の理由と実測**。
 
@@ -26,6 +26,23 @@
 `polygonOffset`（WebGL は `POLYGON_OFFSET_FILL` しか持たず線に効かない）。`renderer.reversedDepthBuffer`
 （three 0.185.1 に実体はあるが `@types/three` の型に無く、B群の自前 `gl_FragDepth` が黙って壊れる）。
 ビューキューブは同一 canvas の第2パスで `clearDepth()` してから描くのでこの規約の外側。
+
+## スケッチ描画の所有者
+
+`sketchLayer.ts` の `createSketchLayer(sketchRoot)` は、描画先グループを受け取り更新・参照取得・破棄のハンドルを返す。
+描画指示の控え、`revision|editing` の構築鍵、線・点・領域、選択とホバーの材質、スケッチ幽霊を所有する。
+除去・geometry の破棄は `sceneBatch.ts`、共有材質のキャッシュは `viewportMaterials.ts` を使う。
+選択だけの更新では線・点・領域を再利用し、編集外の選択点・ホバー点の印だけは従来どおり差し替える。
+非表示・削除・文書切替で指示から外れたスケッチはピック参照と幽霊も除去し、viewport 破棄で材質も捨てる。
+
+viewport が渡すのは描画先グループ、採用済みの折れ線解像度と、リサイズ時の CSS 幅・高さ。カメラと DOM は渡さない。
+空のグループはグリッドより先に作るが、レイヤーと材質の生成はボディ材質より後に保つ。three.js は不透明な
+描画を材質の ID でも並べるため、幽霊や旧形式の反復の描画順を変えないための順序。
+カメラ停止後の解像度採用は `resolutionTracker.onApplied` → `redrawSketches` → レイヤーの `redraw` と通し、
+viewport 側が `invalidate()` とホバー・内容の対角・near/far・グリッドの更新を行う。
+`sketchRebuilds` はレイヤーの累積構築回数、`sketchPolylineCounts` は現在の図形順の点数を読み、意味は変えない。
+ピック用領域メッシュ、線・点、文書の図形、交点、外接球は借用参照。優先順位の統合、クリック・矩形選択の
+ゲートとポインタ処理は `viewport.ts` にまとめ、レイヤーは当たり判定を決めない。
 
 ## カメラ
 
