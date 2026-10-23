@@ -16,7 +16,7 @@ import type {
   ShapeRef,
   SketchEntityRef,
 } from '../session'
-import type { COMMAND_CATEGORY, CommandArguments, CommandName } from '../generated/protocol'
+import type { COMMAND_CATEGORY, CommandArguments, CommandName, CommandRequest } from '../generated/protocol'
 
 /** 選択の種別。コアの `SELECTABLE_KINDS` と同じ顔ぶれ(`tests/test_optimize_setup.py` が照合)。 */
 export type SelectableKind = ShapeKind | 'body' | 'region' | 'sketch_entity'
@@ -410,16 +410,34 @@ interface CommandDefBase {
 
 /** コマンドの定義。`CommandDef<'fillet'>` のように verb 名を付けて書く(型検査が `id` と `build` の引数をコアの宣言と照合する)。付けないのは一覧(`CommandDef[]`)とサーバへ送らない道具だけ。 */
 export type CommandDef<N extends HostCommandName = HostCommandName> =
-  | (CommandDefBase & {
+  | { [K in N]: CommandDefBase & {
       /** verb名。プレビューと確定で同じものをサーバへ送る(食い違うと嘘のプレビューになる)。 */
-      id: N
-      build(values: ArgValues): BuildResult<BuildArgs<N>>
-    })
+      id: K
+      build(values: ArgValues): BuildResult<BuildArgs<K>>
+    } }[N]
   | (CommandDefBase & { id: UiCommandId; build(values: ArgValues): BuildResult })
 
-/** `build` を verb を問わない形で呼ぶ。`CommandHost.svelte` は引数を名前で運ぶだけなので、verb ごとの型はここで落とす。 */
-export function buildArgs(command: CommandDef, values: ArgValues): BuildResult {
-  return command.build(values) as BuildResult
+export type BuiltCommandRequest = {
+  [N in HostCommandName]: [verb: N, args: BuildArgs<N>]
+}[HostCommandName] | [verb: UiCommandId, args: Record<string, unknown>]
+
+type BuiltCommandResult =
+  | { ok: true; args: Record<string, unknown>; request: BuiltCommandRequest }
+  | { ok: false; reason: string }
+
+export function buildArgs(command: CommandDef, values: ArgValues): BuiltCommandResult {
+  const result = command.build(values)
+  // 動的に選んだ定義の id と build の対応は CommandDef<N> が検査する。TS は呼び出し後にその相関を保持できない。
+  return result.ok
+    ? { ...result, request: [command.id, result.args] } as BuiltCommandResult
+    : result
+}
+
+/** build に含めない編集中のスケッチを App が解決した後で、送信引数へ加える。 */
+export function commandRequest(request: BuiltCommandRequest, sketchId?: string): CommandRequest {
+  const [verb, args] = request
+  if (verb === 'select_in_sketch') throw new Error('UIだけの道具は送信できない')
+  return [verb, sketchId === undefined ? args : { ...args, sketch_id: sketchId }] as CommandRequest
 }
 
 // 引数の検査と組み立て(`commands/*.ts` が共有する)

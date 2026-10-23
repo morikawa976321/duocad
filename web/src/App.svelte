@@ -11,6 +11,7 @@
   import CommandHost from './commands/CommandHost.svelte'
   import {
     bodyRef,
+    commandRequest,
     edgeRef,
     faceRef,
     refKey,
@@ -20,6 +21,7 @@
     sketchEntityRef,
     vertexRef,
     type CommandCategory,
+    type BuiltCommandRequest,
     type PickTarget,
     type Point2,
     type SelectableKind,
@@ -114,6 +116,7 @@
     type Viewport,
   } from './viewport'
   import type { PickKind } from './viewportTypes'
+  import type { CommandRequest } from './generated/protocol'
 
   /**
    * ツールバーの中身(モードごと)。領域押し出しはソリッド側・スケッチ側の両方に載る。
@@ -296,7 +299,7 @@
   // ---------------------------------------------------------------- E: ファイルと履歴
   /** ファイル操作と `duocad/models/` の一覧。応答待ち(`pendingOp`)はこちらの持ち物なので貸す。 */
   const files = createDocumentFiles({
-    sendCommand: (cmd, args, op) => session.sendCommand(cmd, args, op),
+    sendCommand: (...request) => session.sendCommand(...request),
     nextOp,
     hold: (op) => (pendingOp = op),
     release: releasePending,
@@ -777,10 +780,10 @@
    * 番号を取って応答待ち(`pendingOp`)にし、verb を送る(`runCommand` の sketch / feature / query)。
    * ファイル操作は `files.run`(文書を変える verb のときだけ待つ)で、ここは通さない。
    */
-  function sendTracked(verb: string, args: Record<string, unknown>): void {
+  function sendTracked(...request: CommandRequest): void {
     const op = nextOp()
     pendingOp = op
-    session.sendCommand(verb, args, op)
+    session.sendCommand(...[...request, op])
   }
 
   /** 自分が出して待っている操作の応答なら待ちを解く(解いたら true)。 */
@@ -1969,7 +1972,8 @@
   }
   // ---------------------------------------------------------------- コマンド層との繋ぎ
   /** 揃った引数をサーバへ送る。経路はコマンドの分類(`categoryOf`)だけで決まり、知らない名前はここで断る。 */
-  function runCommand(verb: string, args: Record<string, unknown>): void {
+  function runCommand(...request: BuiltCommandRequest): void {
+    const [verb] = request
     const category = CATEGORY_OF.get(verb)
     if (category === undefined || category === 'ui') {
       // `ui`(スケッチの「選ぶ」)は何も送らない道具なので、通常ここへは来ない。
@@ -1982,7 +1986,7 @@
         // `sketch_create` だけはスケッチモードの外で走る(入っていることを要求すると永久に起動できない)。
         // 反復の `needsSketchId`(分類は feature だが `sketch_id` が要る)の裏返しの位置にいる。
         if (runsOutsideSketch(verb)) {
-          sendTracked(verb, args)
+          sendTracked(...commandRequest(request))
           return
         }
         if (sketchId === null) {
@@ -1992,7 +1996,7 @@
         viewport?.showSketchGhosts(sketchId, []) // 本物を頼んだので幽霊は消す
         // 引数名はコマンド定義とサーバの宣言で揃っているので詰め替えない。
         // `move_sketch_entities` だけは `sketch_id` を足さない(選んだ参照が持っている。`runsWithoutSketchId`)。
-        sendTracked(verb, runsWithoutSketchId(verb) ? args : { ...args, sketch_id: sketchId })
+        sendTracked(...commandRequest(request, runsWithoutSketchId(verb) ? undefined : sketchId))
         return
       }
       // -------------------------------------------------------------- D: フィーチャ
@@ -2006,13 +2010,13 @@
           fail('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
           return
         }
-        sendTracked(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args)
+        sendTracked(...commandRequest(request, needsSketchId(verb) ? sketchId ?? undefined : undefined))
         return
       }
       // -------------------------------------------------------------- F: ファイル
       case 'file': {
         // `FilesPanel` と同じ口(`files.run`)へ流す(二重化すると応答待ちの解き方に差が生まれる)。
-        files.run(verb, args)
+        files.run(...commandRequest(request))
         return
       }
       // -------------------------------------------------------------- 測定(読み取り専用)
@@ -2024,7 +2028,7 @@
           return
         }
         // verb と同じ口で送る。返事は状態配信ではなく `{type:'measure'}` で、`handleMeasure` が `client_op` を突き合わせる。
-        sendTracked(verb, args)
+        sendTracked(...commandRequest(request))
         return
       }
       default: {

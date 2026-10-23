@@ -161,17 +161,17 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   undo: [],
   redo: [],
   get_state: [],
-  preview: ['verb', 'args'],
+  preview: ['verb', 'args', 'preview_id'],
   inspect_selection: ['request_id'],
   get_vertices: ['body_id'],
-  set_view_resolution: ['world_per_pixel', 'size_hint'],
+  set_view_resolution: ['world_per_pixel', 'size_hint', 'focus'],
   optimize_conditions: [],
   optimize_resolution: ['element_size_mm'],
-  run_optimization: ['element_size_mm', 'target_safety_factor', 'max_evaluations'],
+  run_optimization: ['element_size_mm', 'target_safety_factor', 'min_width_mm', 'debug', 'max_evaluations'],
   cancel_optimization: [],
-  finish_optimization: [],
+  finish_optimization: ['step', 'debug'],
   optimize_steps: [],
-  optimize_step_voxels: [],
+  optimize_step_voxels: ['index'],
   get_edges: ['body_id'],
   get_edge_chains: ['body_id', 'chain_of'],
   get_face_chains: ['body_id', 'chain_of'],
@@ -256,17 +256,17 @@ export interface CommandArguments {
   undo: Record<string, never>
   redo: Record<string, never>
   get_state: Record<string, never>
-  preview: { verb: string; args: object }
+  preview: { verb: string; args: object; preview_id?: number }
   inspect_selection: { request_id: number }
   get_vertices: { body_id: string }
-  set_view_resolution: { world_per_pixel: number; size_hint?: number }
+  set_view_resolution: { world_per_pixel: number; size_hint?: number; focus?: object | null }
   optimize_conditions: Record<string, never>
   optimize_resolution: { element_size_mm?: number }
-  run_optimization: { element_size_mm?: number; target_safety_factor?: number; max_evaluations?: number }
+  run_optimization: { element_size_mm?: number; target_safety_factor?: number; min_width_mm?: number; debug?: unknown[]; max_evaluations?: number }
   cancel_optimization: Record<string, never>
-  finish_optimization: Record<string, never>
+  finish_optimization: { step?: number; debug?: unknown[] }
   optimize_steps: Record<string, never>
-  optimize_step_voxels: Record<string, never>
+  optimize_step_voxels: { index: number }
   get_edges: { body_id: string }
   get_edge_chains: { body_id: string; chain_of: unknown[] }
   get_face_chains: { body_id: string; chain_of: unknown[] }
@@ -288,6 +288,29 @@ export interface CommandArguments {
   enter_optimize: Record<string, never>
   leave_optimize: Record<string, never>
 }
+
+/** WS は省略可能な引数の null を未指定として受ける。確定済みの build 引数とは分ける。 */
+export type WireCommandArguments<N extends CommandName> = {
+  [P in keyof CommandArguments[N]]: CommandArguments[N][P] | ({} extends Pick<CommandArguments[N], P> ? null : never)
+}
+
+export type CommandRequest = {
+  [N in CommandName]: [cmd: N, args: WireCommandArguments<N>]
+}[CommandName]
+
+export type CommandCall = [...CommandRequest, clientOp: number]
+export type SendCommand = (...request: CommandCall) => void
+
+export interface CommandMetadata {
+  client_op?: number
+  ack_id?: number
+}
+
+/** 引数なしの Record<string, never> を封筒へ広げず、cmd と共通の識別子を許す。 */
+export type ClientMessage = {
+  [N in CommandName]: CommandMetadata & { cmd: N } &
+    (CommandArguments[N] extends Record<string, never> ? unknown : WireCommandArguments<N>)
+}[CommandName]
 
 /**
  * verb の適用に共通するフィールド。`change?: undefined` は実行時には存在しない ——

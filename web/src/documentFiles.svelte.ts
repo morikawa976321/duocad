@@ -5,10 +5,11 @@
  * 応答待ち(`pendingOp`)は App の持ち物なので、番号の発行と待ちの出し入れは `deps` で借りる。
  */
 import { changesDocument } from './commands/files'
-import type { DocumentInfo, FilePayload, ServerState } from './session'
+import type { CommandRequest } from './generated/protocol'
+import type { DocumentInfo, FilePayload, ServerState, Session } from './session'
 
 export interface DocumentFilesDeps {
-  sendCommand(cmd: string, args: Record<string, unknown>, op: number): void
+  sendCommand: Session['sendCommand']
   nextOp(): number
   hold(op: number): void
   release(op: number | null): boolean
@@ -34,7 +35,7 @@ export interface DocumentFiles {
   onState(next: ServerState): void
   refresh(): void
   /** 文書を変えるものだけ応答待ちにする(`import_step`)。書き出しを待ちにすると `file` の応答まで Enter が拒否される。 */
-  run(verb: string, args: Record<string, unknown>): void
+  run(...request: CommandRequest): void
   /**
    * 今の文書を手で書き直す(Ctrl+S)。自動保存が書けなかった(`#save-state`)ときに人が押し直すためにある。
    * 引数は送らない(書き込み先はサーバの `Session._current_name`)。無題で未変更なら何も送らない。
@@ -185,11 +186,11 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     }
   })
 
-  function run(cmd: string, args: Record<string, unknown>): void {
+  function run(...request: CommandRequest): void {
     const op = deps.nextOp()
     lastOp = op
-    if (changesDocument(cmd)) deps.hold(op)
-    deps.sendCommand(cmd, args, op)
+    if (changesDocument(request[0])) deps.hold(op)
+    deps.sendCommand(...[...request, op])
   }
 
   return {
