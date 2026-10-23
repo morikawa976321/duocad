@@ -181,35 +181,34 @@ def test_a_missing_min_width_mm_still_reaches_run_at_the_default_cells(session: 
 
 
 def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(
-    session: Session, monkeypatch, tmp_path
+    session: Session, monkeypatch
 ) -> None:
     """2026-09-13実測: 数時間がかりの実行が、結果を見る前にサーバプロセスごと消えた。"""
     four_conditions(session)
-    session.models_dir = tmp_path
-    session._current_name = "hanger.json"
+    session.rename_document("hanger.json")
+    (session.models_dir / "hanger.json").unlink()
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
 
     _run_to_completion(session, {"cmd": "run_optimization"})
 
-    assert (tmp_path / "hanger.json").exists()
+    assert (session.models_dir / "hanger.json").exists()
     assert not session.warnings
 
 
 def test_a_successful_run_on_an_untitled_document_is_saved_under_an_automatic_name(
-    session: Session, monkeypatch, tmp_path
+    session: Session, monkeypatch
 ) -> None:
     """無題の文書(一度も名前を付けていない)でも結果は消えない —— 自動保存が
     `untitled-<n>.json` の名前を付けて書く(issue #5、2026-09-16)。警告は積まない。
     """
-    session.models_dir = tmp_path
     four_conditions(session)  # 条件を置く verb が最初の変更 = ここで名前が付く
-    assert session._current_name == "untitled-1.json"
+    assert session.current_name == "untitled-1.json"
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
 
     _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
 
     assert connection.of_type("optimize_result")[0]["state"] == "done"
-    assert (tmp_path / "untitled-1.json").exists()
+    assert (session.models_dir / "untitled-1.json").exists()
     assert connection.of_type("warning") == []
 
 
@@ -262,22 +261,22 @@ def test_a_cancel_sent_right_after_the_start_is_not_lost(session: Session, monke
     assert connection.of_type("optimize_status")[-1] == {"type": "optimize_status", "running": False, "available": True}
 
 
-def test_a_run_that_added_nothing_does_not_overwrite_the_file(session: Session, monkeypatch, tmp_path) -> None:
+def test_a_run_that_added_nothing_does_not_overwrite_the_file(session: Session, monkeypatch) -> None:
     """落ちたら、形が見つからず結果を足さなかった実行でも、編集中のファイルを未保存の編集で上書きする(issue #36)。"""
     four_conditions(session)
-    session.models_dir = tmp_path
-    session._current_name = "hanger.json"
+    session.rename_document("hanger.json")
+    (session.models_dir / "hanger.json").unlink()
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "no_feasible_found"})
     _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
     assert connection.of_type("optimize_result")[0]["state"] == "no_feasible_found"
-    assert not (tmp_path / "hanger.json").exists()
+    assert not (session.models_dir / "hanger.json").exists()
 
 
 def test_a_failed_autosave_still_delivers_the_result_and_the_end_of_the_run(session: Session, monkeypatch) -> None:
     """落ちたら、自動保存の `OSError`(Windows で別のプログラムがファイルを開いている等)が `_optimize_run` の外へ漏れ、
     結果も終了の `optimize_status` も配られず画面が実行中のまま固まる(issue #30)。"""
     four_conditions(session)
-    session._current_name = "hanger.json"
+    session.rename_document("hanger.json")
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
 
     def locked(*args, **kwargs):

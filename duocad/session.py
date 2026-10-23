@@ -13,11 +13,6 @@ import concurrent.futures
 import contextlib
 import functools
 import inspect
-import base64
-import binascii
-import json
-import os
-import shutil
 import threading
 import time
 from pathlib import Path
@@ -34,7 +29,12 @@ from . import (
 )
 from .workspace import CommandState, NoCommand, Workspace, merge_args, stageable, stageable_verb_names
 from .document import Document
-from .document_name import check_characters, check_writable_length
+from .document_store import (
+    DocumentStore,
+    THUMBNAIL_DIR,
+    THUMBNAIL_MAX_BYTES,
+    _RESERVED_WINDOWS_NAMES,
+)
 from .entry import entries, entry_for
 from .measure import inspect_selection, measure_selection
 from .oplog import OpLog, verb_handler
@@ -43,13 +43,6 @@ from .speculative import fork, speculative
 from .verbs.envelope_regions import boundary_entities as envelope_boundary_entities, envelope_pieces, selected_regions
 from .verbs.project_to_sketch import outline_entities, projected_entities, selected_bodies, selected_targets
 from .view import DocumentView
-
-#: Windowsの予約デバイス名(拡張子の有無に関わらず特別扱い。大文字小文字を区別しない)。
-_RESERVED_WINDOWS_NAMES = frozenset({
-    "CON", "PRN", "AUX", "NUL",
-    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-})
 
 class DocumentBusy(RuntimeError):
     """形状最適化を走らせている文書に、文書を変える操作が来た(`Session._edits_document`)。
@@ -66,22 +59,9 @@ class NoDocument(ValueError):
     """
 
 
-#: 書き出し先に認める拡張子(小文字。`Session._resolve_export_path`)。
+#: 書き出し先に認める拡張子(小文字。`DocumentStore.resolve_export_path`)。
 _STEP_SUFFIXES = (".step", ".stp")
 _STL_SUFFIXES = (".stl",)
-
-THUMBNAIL_DIR = ".thumbnails"
-#: 受け取るPNGの上限[バイト]。画面が撮るのは128px四方で、RGBAを圧縮せず持っても64KiB。
-THUMBNAIL_MAX_BYTES = 256 * 1024
-_PNG_SIGNATURE = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A])
-
-
-def _mtime_or_none(path: Path) -> Optional[float]:
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return None
-
 
 def _edits_document(method: Any) -> Any:
     """文書を変える `Session` のメソッドに付ける。形状最適化を走らせている文書なら `DocumentBusy` で断る。
@@ -144,14 +124,13 @@ class Session:
         #: 書き換えるのは `_replace_document` と `close_document` だけ。
         self._open = bool(opened)
         self.deviation = float(deviation)
-        self.models_dir: Path = (
-            DEFAULT_MODELS_DIR if models_dir is None else Path(models_dir)
-        ).resolve()
-        self.exports_dir: Path = (
-            DEFAULT_EXPORTS_DIR if exports_dir is None else Path(exports_dir)
-        ).resolve()
-        #: `geometry()` や `_sketch_state` が積む警告。`view` と同じリストオブジェクトを共有する(吸い出す口は `take_warnings()` だけ)。
+        #: `DocumentView` と保存部品が同じリストへ積む(吸い出す口は `take_warnings()` だけ)。
         self.warnings: list[str] = []
+        self.store = DocumentStore(
+            DEFAULT_MODELS_DIR if models_dir is None else models_dir,
+            DEFAULT_EXPORTS_DIR if exports_dir is None else exports_dir,
+            self.warnings,
+        )
         #: いま編集しているファイルの名前(`models_dir` 配下のファイル名だけ。無ければ `None`)。これで `save_document` の契約を2つに割り、
         #: 「編集中でないファイルを上書きできる」穴をどのUIからも塞いでいる。
         #: 書き換えるのは `save_document(name)` の成功・`open_document` の成功・`_replace_document` の3箇所だけ。
@@ -217,6 +196,22 @@ class Session:
         self._undelivered: dict[str, tuple[Document, Optional[float]]] = {}
         #: 別の文書を開いている間に終わった実行の、画面へまだ見せていない結果/失敗の封筒(ファイル名 -> 封筒。作って配るのは `net/ws.py`)。
         self.unseen_optimize_results: dict[str, dict] = {}
+
+    @property
+    def models_dir(self) -> Path:
+        return self.store.models_dir
+
+    @models_dir.setter
+    def models_dir(self, value: Path) -> None:
+        self.store.models_dir = value
+
+    @property
+    def exports_dir(self) -> Path:
+        return self.store.exports_dir
+
+    @exports_dir.setter
+    def exports_dir(self, value: Path) -> None:
+        self.store.exports_dir = value
 
     # ---------------------------------------------------------------- 変更イベント(上り方向)
     def add_listener(self, callback: Any) -> None:
@@ -1001,13 +996,13 @@ class Session:
         label = name
         try:
             if label is None:
-                label = self._unused_untitled_name()
-            target = self._resolve_document_name(label)
+                label = self.store.unused_untitled_name()
+            target = self.store.resolve_document_name(label)
             with self._save_lock:
-                self._write_document_file(target, document.log.to_json(created=self._optimize_created))
+                self.store.write_document_file(target, document.log.to_json(created=self._optimize_created))
             label = target.name
             # 一覧の絵は結果の無い形のまま。消しておけば次に開いたときに撮り直される。
-            self._drop_thumbnail(target)
+            self.store.drop_thumbnail(target)
         except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ知らせる(`autosave` と同じ)
             label = label or "untitled.json"
             self._undelivered[label] = (document, self._optimize_created)
@@ -1146,80 +1141,6 @@ class Session:
 
     # ---------------------------------------------------------------- ファイル操作
     # 保存形式は操作ログのJSON(docs/DESIGN_DECISIONS.md「技術選定の根拠」)。保存したものが開けないなら再生が壊れているので、隠さない。
-    def _resolve_document_name(self, name: Any) -> Path:
-        """ファイル名だけを受け取り、`models_dir` 配下に閉じたパスへ解決する(`models_dir` が無ければ作る)。
-
-        保存先が起動場所で変わらないよう起点を `models_dir` に固定してある。文字列だけの拒否では脱出経路が残る(いずれも実測):
-
-        - `Path("D:outside.json").is_absolute()` は False(Windowsのドライブ相対パス)。しかも `models_dir / "D:outside.json"` は
-          pathlib が「ドライブ付きセグメント」を新しいアンカーとして扱い、`models_dir` を捨てて `D:\\outside.json` に解決される。
-          コロン1文字が入口で、NTFSの代替データストリーム(`a.json:x`)も同じ。
-        - 予約デバイス名(`CON`/`COM1`等、拡張子を付けても特別扱い)・末尾のドット/空白(Windowsが黙って落とすため
-          `foo.json.` と `foo.json` が同じ実体になりうる)。
-        - 既存のシンボリックリンク/ジャンクションを指すファイル名は、文字列検査では `models_dir` の外へ解決されるのを塞げない。
-        - 制御文字・`<>"|?*`・孤立サロゲートは `document_name.check_characters` が断る(通すと一時ファイルを開く段で、
-          絶対パス入りの OSError になる)。書き込む名前の長さは `_resolve_writable_name`。
-
-        判定は2段: ①明らかに拒まれる形を早く言う文字列検査、②解決後のパスが `models_dir` 配下か(`is_relative_to`。
-        `resolve()` はリンクを辿る)。①だけに頼らない。
-        """
-        text = str(name)
-        stripped = text.strip()
-        if stripped == "":
-            raise ValueError("ファイル名が空")
-        if text != stripped:
-            raise ValueError(f"前後の空白は不可: {text!r}")
-        if "/" in text or "\\" in text:
-            raise ValueError(f"ファイル名だけを受け取る(区切り文字は不可): {text!r}")
-        if ":" in text:
-            # ドライブ指定("D:outside.json")もNTFS代替データストリーム("a.json:x")も
-            # コロン1文字が入口(上のdocstring参照)。
-            raise ValueError(f"ファイル名だけを受け取る(':'は不可): {text!r}")
-        if text in (".", ".."):
-            raise ValueError(f"ファイル名として使えない: {text!r}")
-        if text.endswith(".") or text.endswith(" "):
-            raise ValueError(f"末尾のドット/空白は不可(Windowsが黙って落とすため): {text!r}")
-        base_name = text.split(".", 1)[0].rstrip(" ").upper()
-        if base_name in _RESERVED_WINDOWS_NAMES:
-            raise ValueError(f"予約されたデバイス名は使えない: {text!r}")
-        if not text.lower().endswith(".json"):
-            # 一覧(`list_documents`)は `*.json` しか見ない。拡張子違いを受理すると、保存はできるのに一覧から二度と開けないファイルができる。
-            # 黙って `.json` を補うより、打ち間違いをその場で返す。
-            raise ValueError(f"拡張子は.json(一覧はモデルの*.jsonだけを見る): {text!r}")
-        check_characters(text)
-        candidate = Path(text)
-        if candidate.is_absolute():
-            raise ValueError(f"ファイル名だけを受け取る(絶対パスは不可): {text!r}")
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        root = self.models_dir.resolve()
-        resolved = (root / text).resolve()
-        # 正の判定はここ(シンボリックリンク越しの脱出も含めて最終的にここで止まる)。
-        if not resolved.is_relative_to(root):
-            raise ValueError(f"models/の外を指している: {text!r} -> {resolved}")
-        return resolved
-
-    def _resolve_writable_name(self, name: Any) -> Path:
-        """`_resolve_document_name` に、書き込む名前だけへ掛ける長さの検査を足したもの(保存・改名・複製先・自動保存)。
-        開く・消す・サムネイルは今ある名前を扱うので掛けない(長い名前のファイルを開けなくしない)。
-        """
-        target = self._resolve_document_name(name)
-        check_writable_length(target.name)
-        return target
-
-    @staticmethod
-    def _write_document_file(target: Path, payload: Any) -> None:
-        """一時ファイルへ書いてから差し替える(呼び手が `_save_lock` を持つ)。素の上書きは既存の中身を先に切り詰めるので、
-        途中で落ちると唯一の永続形式である前回の保存が半端なJSONで潰れる。`os.replace` は同じディレクトリ内なら不可分。
-        `payload` は文字列か、`OpLog.to_file_chunks` の断片の並び(同じ中身。文字列の改行は書き込みで `os.linesep` になる)。
-        """
-        staging = target.with_name(target.name + ".writing")
-        if isinstance(payload, list):
-            with open(staging, "wb") as stream:
-                stream.writelines(payload)
-        else:
-            staging.write_text(payload, encoding="utf-8")
-        os.replace(staging, target)
-
     @contextlib.contextmanager
     def background_autosave(self):
         """この中で掛けた verb の自動保存は、JSON 化までをその場で済ませ、ファイルへの書き込みを書き手スレッドへ回す。
@@ -1265,7 +1186,7 @@ class Session:
 
     def _queue_write(self) -> None:
         """編集中のファイルへの自動保存を書き手スレッドへ回す(中身はここで確定する)。"""
-        target = self._resolve_writable_name(self._current_name)
+        target = self.store.resolve_writable_name(self._current_name)
         data = self.document.log.to_file_chunks(created=self._created)
         self._write_seq += 1
         seq = self._write_seq
@@ -1278,7 +1199,7 @@ class Session:
         if seq != self._write_seq:
             return
         with self._save_lock:
-            self._write_document_file(target, data)
+            self.store.write_document_file(target, data)
 
     def save_document(self, name: Any = None, *, autosave_untitled: bool = False) -> dict:
         """操作ログをJSONで書き出す。verbではない(ログに載らない)。
@@ -1293,7 +1214,7 @@ class Session:
         無関係なモデルが今の文書に置き換わり、操作ログが唯一の正である以上、失ったものは復旧できない。
         拒否の文はどうすればできるかまで言う(封筒 `net/ws.py` の `{"type":"error"}` が `{型名}: {文}` を前置するので、文だけで人に通じる形で)。
 
-        `name` はファイル名だけ(`_resolve_document_name` が区切り文字・絶対パス・`..` を拒否する)。
+        `name` はファイル名だけ(`DocumentStore.resolve_document_name` が区切り文字・絶対パス・`..` を拒否する)。
         その検査を先に通す(models/ の外を指す名前は、存在の有無を問う前に断る)。
         呼び手は自動保存が主(issue #5、2026-09-16): 文書が変わるたび `autosave()` が引数なしで呼び、無題なら
         `untitled-<n>.json` を `name` に渡す(`autosave_untitled`)。人が名前を決める口は `rename_document`。
@@ -1308,9 +1229,9 @@ class Session:
                     "編集中のファイルが無い"
                     "(ファイルパネルで名前を付けて保存すれば、以後はそこへ上書きできる)"
                 )
-            target = self._resolve_writable_name(self._current_name)
+            target = self.store.resolve_writable_name(self._current_name)
         else:
-            target = self._resolve_writable_name(name)
+            target = self.store.resolve_writable_name(name)
             self._require_open()  # 閉じている間の空の文書を、新しい名前のファイルにしない
             if target.exists():
                 # どちらの枝も拒否する(分かれるのは「次に何をすればよいか」の文言だけ)。
@@ -1328,10 +1249,10 @@ class Session:
         created = self._created if name is None else time.time()
         payload = self.document.log.to_file_chunks(created=created)
         with self._save_lock:
-            self._write_document_file(target, payload)
+            self.store.write_document_file(target, payload)
             if name is not None:
                 # 同じ名前の古い文書(外で消された)の絵が残っていれば、それはこの文書の絵ではない。
-                self._drop_thumbnail(target)
+                self.store.drop_thumbnail(target)
             # 書けてから現在ファイルにする。先に控えると、書き込みが落ちたとき「存在しないファイルを編集中」になり、
             # 次の引数なし保存が黙って新しいファイルを作る。
             self._current_name = target.name
@@ -1350,14 +1271,6 @@ class Session:
         """
         return not self._unsaved
 
-    def _unused_untitled_name(self) -> str:
-        """`untitled-1.json` から順に、`models_dir` にまだ無い最初の名前。"""
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        number = 1
-        while (self.models_dir / f"untitled-{number}.json").exists():
-            number += 1
-        return f"untitled-{number}.json"
-
     def autosave(self) -> bool:
         """今の文書をディスクへ書く(1操作ごとの自動保存。issue #5、本人判断 2026-09-16)。
 
@@ -1372,7 +1285,7 @@ class Session:
         """
         try:
             if self._current_name is None:
-                self.save_document(self._unused_untitled_name(), autosave_untitled=True)
+                self.save_document(self.store.unused_untitled_name(), autosave_untitled=True)
             elif self._background_autosave:
                 self._queue_write()
             else:
@@ -1388,7 +1301,7 @@ class Session:
         人が名前を付ける口(ファイルパネルの名前欄。issue #5)。`name` が既に在れば拒否(上書きの口は持たない。`copy_document` と同じ)。
         無題で何も変えていない文書(ファイルがまだ無い)は、その名前で空の文書を書く。
         """
-        target = self._resolve_writable_name(name)
+        target = self.store.resolve_writable_name(name)
         # 閉じている間に通すと、空の文書がその名前で書かれる(トップ画面のまま新規ファイルが増える)。
         self._require_open()
         if self._document_locked():
@@ -1403,22 +1316,16 @@ class Session:
         self._drain_writes()
         with self._save_lock:
             previous = self._current_name
-            source = self._resolve_document_name(previous)
+            source = self.store.resolve_document_name(previous)
             stale = source.exists() and self._unsaved
-            if source.exists():
-                os.replace(source, target)
-            else:
-                # 編集中のファイルが外で消されていた。中身は文書が持っているので書き直す。
-                target.write_text(self.document.log.to_json(created=self._created), encoding="utf-8")
-            self._drop_thumbnail(target)
-            self._carry_thumbnail(source, target, move=True)
+            self.store.rename_document_file(source, target, self.document.log, self._created)
             self._current_name = target.name
             self._unsaved = False
             if stale:
                 # 直前の自動保存が書けなかったので、移したファイルは最後の変更を持っていない。文書を書き直す。
                 # 書けなければ未保存のまま残す(`autosave` と同じく、例外にせず警告と `saved=False` で知らせる)。
                 try:
-                    self._write_document_file(target, self.document.log.to_file_chunks(created=self._created))
+                    self.store.write_document_file(target, self.document.log.to_file_chunks(created=self._created))
                 except Exception as error:  # noqa: BLE001
                     self._unsaved = True
                     self.warnings.append(f"自動保存できなかった: {type(error).__name__}: {error}")
@@ -1437,13 +1344,11 @@ class Session:
         (`deliver_optimization_result`)。走らせているファイル自身を開き直した写しは、終わるまで編集を断る(`_document_locked`)。
         差し替えの後始末は `_replace_document`(`new_document` と共通)。
         """
-        source = self._resolve_document_name(name)
+        source = self.store.resolve_document_name(name)
         self._drain_writes()  # 同じ名前を開き直すとき、書きかけの最後の変更を読み落とさない
         if source.name in self._undelivered:
             return self._open_undelivered(source.name)
-        if not source.exists():
-            raise FileNotFoundError(f"開けるファイルが無い: {source}")
-        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload = self.store.read_document_file(source)
         log = OpLog.from_payload(payload)
         document = Document()
         # 束ねてから再生する(逆だと `set_parameter` を含むログで落ちる。パラメータの再生は `document.log` を頭から読むので、
@@ -1470,7 +1375,7 @@ class Session:
         return self._emit({
             "change": "document",
             "action": "open",
-            "path": str(self._resolve_document_name(name)),
+            "path": str(self.store.resolve_document_name(name)),
             "name": name,
         })
 
@@ -1528,62 +1433,15 @@ class Session:
         self.workspace.reset()
 
     def list_documents(self) -> dict:
-        """`models_dir` の中身を一覧にする(名前/更新日時/作成日時/サムネイルの版)。verbではない。
-
-        読めるファイルだけを載せる判定は `OpLog.from_payload` のパースだけで行う(形状の再生はしない)。
-        実測でファイルあたり約30ms(4.8MBのPCケースを3件で0.09s)。壊れたファイル(手で触られた・書き込み途中の `.writing` 等)は
-        省く。旧形式(version 1)のファイルも `from_payload` が ValueError にするため黙って省かれる(次に版を上げるときは
-        「一覧に出ないだけで理由が分からない」になる)。
-        `created` は入れ物の作成日時(無いファイルは None)。`thumb` はサムネイルの更新日時で、画像そのものは載せない
-        (一覧は自動保存のたびに取り直されるので、載せると全件の画像を毎回送る)。画像は `get_thumbnail` で1件ずつ取る。
-        ファイルは1件ずつ `_save_lock` を持って読む: 編集中のファイルを書き手スレッド(や実行器スレッドの自動保存)が
-        `os.replace` している間に開くと、Windows では書く側が `PermissionError` になり、自動保存が失敗する。
-        """
-        self.models_dir.mkdir(parents=True, exist_ok=True)
+        self.store.ensure_models_dir()
         self._drain_writes()
-        files = []
-        for path in sorted(self.models_dir.glob("*.json")):
-            try:
-                with self._save_lock:
-                    mtime = path.stat().st_mtime
-                    payload = json.loads(path.read_text(encoding="utf-8"))
-                OpLog.from_payload(payload)
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
-            files.append({
-                "name": path.name,
-                "mtime": mtime,
-                "created": OpLog.created_of(payload),
-                "thumb": _mtime_or_none(self._thumbnail_path(path)),
-            })
-        return {"action": "list", "path": str(self.models_dir), "files": files}
+        return self.store.list_documents(read_lock=self._save_lock)
 
     def copy_document(self, source: Any, dest: Any) -> dict:
-        """`models_dir` の `source` を `dest` へ複製する。verbではない。
-        いま編集している文書も `current_name` も変わらない。`dest` が既に在れば拒否(上書きの口は持たない。
-        `save_document(name)` と同じ。issue #17)。どちらの名前も `_resolve_document_name` を通す。
-        複製は新しいファイルなので作成日時を今にする(バイト列を写さず、読んで書き直す)。サムネイルは写す。
-        """
-        origin = self._resolve_document_name(source)
-        target = self._resolve_writable_name(dest)
+        origin = self.store.resolve_document_name(source)
+        target = self.store.resolve_writable_name(dest)
         self._drain_writes()  # 書きかけの最後の変更の無いファイルを写さない
-        if not origin.exists():
-            raise FileNotFoundError(f"複製元が無い: {origin.name}")
-        if target.exists():
-            raise ValueError(f"{target.name} は既にある(別の名前にする)")
-        log = OpLog.from_json(origin.read_text(encoding="utf-8"))
-        # `save_document` と同じく一時ファイル経由(`list_documents` は `.writing` を省く)。
-        staging = target.with_name(target.name + ".writing")
-        staging.write_text(log.to_json(created=time.time()), encoding="utf-8")
-        os.replace(staging, target)
-        self._drop_thumbnail(target)
-        self._carry_thumbnail(origin, target, move=False)
-        return {
-            "action": "copy",
-            "path": str(target),
-            "name": target.name,
-            "source": origin.name,
-        }
+        return self.store.copy_document_file(origin, target)
 
     def delete_document(self, name: Any) -> dict:
         """`models_dir` の `name` をディスクから削除する。verbではない。
@@ -1592,161 +1450,40 @@ class Session:
         無ければ FileNotFoundError。確認は挟まない(画面側が行内で聞く。`FilesPanel.svelte`)。
         `models/.trash` への退避はしない(issue #17)。サムネイルも消す。
         """
-        target = self._resolve_document_name(name)
+        target = self.store.resolve_document_name(name)
         if self._optimizing and target.name == self._optimize_name:
             # 消しても、終わった結果が同じ名前で書き戻されて黙って復活する。
             raise ValueError(
                 f"{target.name} は形状最適化の実行中(終わるか、開いて中断してから削除する)"
             )
         self._drain_writes()  # 書きかけの書き込みが、消した後のファイルを書き戻さないように
-        if not target.exists():
-            raise FileNotFoundError(f"削除するファイルが無い: {target.name}")
-        target.unlink()
+        self.store.delete_document_file(target)
         # 書けなかった結果も一緒に捨てる(残すと、同じ名前で作り直したファイルを開いたときに出てくる)。
         self._undelivered.pop(target.name, None)
         self.unseen_optimize_results.pop(target.name, None)
-        self._drop_thumbnail(target)
+        self.store.drop_thumbnail(target)
         deleted = {"action": "delete", "path": str(target), "name": target.name}
         if target.name == self._current_name:
             self.close_document()
             deleted["closed"] = True
         return deleted
 
-    # ---------------------------------------------------------------- サムネイル
-    # 一覧の絵は画面(three.js)が撮って預ける(`web/src/thumbnail.ts`)。置き場は `models/.thumbnails/<文書のファイル名>.png` の付随ファイルで、
-    # 文書のJSONには入れない(描き直せる写し)。だから付随ファイルの失敗は元の操作を失敗にしない。
-    def _thumbnail_path(self, document: Path) -> Path:
-        """文書のファイル(`models_dir` 直下)に付くサムネイルのパス。"""
-        return document.parent / THUMBNAIL_DIR / f"{document.name}.png"
-
-    def _drop_thumbnail(self, document: Path) -> None:
-        try:
-            self._thumbnail_path(document).unlink(missing_ok=True)
-        except OSError as error:
-            self.warnings.append(f"サムネイルを消せなかった: {error}")
-
-    def _carry_thumbnail(self, source: Path, target: Path, *, move: bool) -> None:
-        """改名(`move`)・複製でサムネイルも付いていかせる。複製は更新日時ごと写す(画面は版で取り直しを決める)。"""
-        origin = self._thumbnail_path(source)
-        if not origin.exists():
-            return
-        try:
-            if move:
-                os.replace(origin, self._thumbnail_path(target))
-            else:
-                shutil.copy2(origin, self._thumbnail_path(target))
-        except OSError as error:
-            self.warnings.append(f"サムネイルを{'移せ' if move else '写せ'}なかった: {error}")
-
     def save_thumbnail(self, name: Any, png: Any) -> dict:
-        """画面が撮ったPNG(base64)を `name` のサムネイルとして書く。verbではない。
-        `png` が空文字なら消す(見えている立体が1つも無い文書)。文書のファイルが無い・書けない(OSError)ときも断らず
-        `saved: False` を返す(撮ってから送るまでに改名が挟まりうるし、Windows では別のプログラムが開いているだけで
-        `os.replace` が落ちる)。断るのは中身が壊れているとき(画面側の不具合)だけ。
-        """
-        target = self._resolve_document_name(name)
-        thumbnail = self._thumbnail_path(target)
-        reply = {"action": "save_thumbnail", "path": str(thumbnail), "name": target.name}
-        text = str(png)
-        if text == "":
-            try:
-                thumbnail.unlink(missing_ok=True)
-            except OSError as error:
-                self.warnings.append(f"サムネイルを消せなかった: {error}")
-                return {**reply, "saved": False, "thumb": None}
-            return {**reply, "saved": True, "thumb": None}
-        try:
-            data = base64.b64decode(text, validate=True)
-        except binascii.Error as error:
-            raise ValueError(f"サムネイルがbase64ではない: {error}") from None
-        if not data.startswith(_PNG_SIGNATURE):
-            raise ValueError("サムネイルがPNGではない")
-        if len(data) > THUMBNAIL_MAX_BYTES:
-            raise ValueError(f"サムネイルが大きすぎる({len(data)} > {THUMBNAIL_MAX_BYTES}バイト)")
-        if not target.exists():
-            return {**reply, "saved": False, "thumb": None}
-        try:
-            thumbnail.parent.mkdir(exist_ok=True)
-            staging = thumbnail.with_name(thumbnail.name + ".writing")
-            staging.write_bytes(data)
-            os.replace(staging, thumbnail)
-            thumb = thumbnail.stat().st_mtime
-        except OSError as error:
-            self.warnings.append(f"サムネイルを書けなかった: {error}")
-            return {**reply, "saved": False, "thumb": None}
-        return {**reply, "saved": True, "thumb": thumb}
+        return self.store.save_thumbnail(name, png)
 
     def get_thumbnail(self, name: Any) -> dict:
-        """`name` のサムネイルをbase64で返す(無い・読めなければ `png: None`)。**verbではない**。"""
-        target = self._resolve_document_name(name)
-        thumbnail = self._thumbnail_path(target)
-        reply = {"action": "thumbnail", "path": str(thumbnail), "name": target.name}
-        try:
-            thumb = thumbnail.stat().st_mtime
-            data = thumbnail.read_bytes()
-        except OSError:
-            return {**reply, "png": None, "thumb": None}
-        return {**reply, "png": base64.b64encode(data).decode("ascii"), "thumb": thumb}
+        return self.store.get_thumbnail(name)
 
     def export_step_file(self, path: Any) -> dict:
         """STEPを書き出す。ログに載らない。対象はいま表示中のBodyだけ。非表示で除外した件数は `skipped_hidden` として必ず応答に載る。"""
-        target = self._resolve_export_path(path, _STEP_SUFFIXES)
+        target = self.store.resolve_export_path(path, _STEP_SUFFIXES)
         return {"action": "export_step", **io_step.export(self.document, target, "step")}
-
-    def _resolve_export_path(self, path: Any, suffixes: tuple[str, ...]) -> Path:
-        """書き出し先を絶対パスにする。相対は `exports_dir` 基準(その外へ逃げる経路は拒否)。絶対パスはそのまま(テスト・MCPの明示パス用)。
-
-        絶対パスは自由だが、書き出しは既存の中身を黙って潰すので、**形式の拡張子(`suffixes`)以外は断り、保存済みの文書
-        (`models_dir` の `*.json`)を指す先も断る**。拡張子は解決後のパスで見る(リンク越しに `*.json` を指す名前も止まる)。
-        画面の書き出しは必ず拡張子を付けて送るので、人の操作には当たらない。
-        """
-        text = str(path)
-        stripped = text.strip()
-        if stripped == "":
-            raise ValueError("書き出し先が空")
-        if text != stripped:
-            raise ValueError(f"前後の空白は不可: {text!r}")
-        candidate = Path(text).expanduser()
-        if candidate.is_absolute():
-            target = candidate.resolve()
-            if not target.parent.exists():
-                raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
-        else:
-            self.exports_dir.mkdir(parents=True, exist_ok=True)
-            root = self.exports_dir.resolve()
-            target = (root / text).resolve()
-            if not target.is_relative_to(root):
-                raise ValueError(f"export/の外を指している: {text!r} -> {target}")
-        check_characters(target.name)
-        if target.suffix.lower() not in suffixes:
-            raise ValueError(
-                f"書き出し先の拡張子は {' か '.join(suffixes)} にする(保存済みの文書などを潰さないため): {text!r}"
-            )
-        self._refuse_overwriting_a_document(target)
-        if not candidate.is_absolute():
-            target.parent.mkdir(parents=True, exist_ok=True)
-        return target
-
-    def _refuse_overwriting_a_document(self, target: Path) -> None:
-        """`target` が保存済みの文書(`models_dir` の `*.json`)と同じファイルなら断る。拡張子の検査をすり抜ける
-        ハードリンクでも、書けば文書の中身を書き換えてしまう。"""
-        if not target.exists():
-            return
-        for document in self.models_dir.glob("*.json"):
-            try:
-                same = target.samefile(document)
-            except OSError:
-                # 照合できないのはその文書(壊れたジャンクション・消えかけのファイル)だけ。検査全体を打ち切ると、
-                # 後ろに並ぶ本物の文書へのハードリンクを素通しする。
-                continue
-            if same:
-                raise ValueError(f"保存済みの文書 {document.name} は書き出しで上書きできない: {str(target)!r}")
 
     def export_stl_file(self, path: Any) -> dict:
         """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定で、人にもAIにも選ばせない。
         対象はいま表示中のBodyだけ。非表示で除外した件数は `skipped_hidden` として必ず応答に載る。応答の `deviation` は書いた粗さの記録で入力ではない。
         """
-        exported = io_step.export(self.document, self._resolve_export_path(path, _STL_SUFFIXES), "stl")
+        exported = io_step.export(self.document, self.store.resolve_export_path(path, _STL_SUFFIXES), "stl")
         return {
             "action": "export_stl",
             "path": exported["path"],

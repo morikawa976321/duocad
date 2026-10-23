@@ -1,4 +1,4 @@
-"""文書のファイル名と書き出し先の名前の、文字と長さの検査。`Session._resolve_document_name` が呼ぶ
+"""文書のファイル名と書き出し先の名前の、文字と長さの検査。`DocumentStore.resolve_document_name` が呼ぶ
 (区切り・コロン・予約名・拡張子・`models_dir` 内への包含はそちらが持つ)。画面の入力欄
 (`web/src/FilesPanel.svelte` の `nameProblem`)は同じ規則の写しで、食い違えば早く言う側が間違っているだけ(最終判定はここ)。
 """

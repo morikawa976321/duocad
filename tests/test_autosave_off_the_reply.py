@@ -88,7 +88,7 @@ def test_a_failed_background_write_marks_the_document_unsaved(session: Session, 
     def broken(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("duocad.session.os.replace", broken)
+    monkeypatch.setattr("duocad.document_store.os.replace", broken)
     with session.background_autosave():
         applied = session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     assert applied["verb"] == "add_circle"
@@ -104,13 +104,13 @@ def test_file_operations_wait_for_the_queued_write(session: Session, monkeypatch
     sketch_id = session.sketch_create("XY")["sketch_id"]
     name = session.current_name
     gate = concurrent.futures.Future()
-    real = Session._write_document_file
+    real = os.replace
 
-    def slow(target, payload):
+    def slow(source, target):
         gate.result(timeout=10)  # 書き手スレッドを止めておき、ファイルの口が待つかを見る
-        real(target, payload)
+        real(source, target)
 
-    monkeypatch.setattr(Session, "_write_document_file", staticmethod(slow))
+    monkeypatch.setattr(os, "replace", slow)
     with session.background_autosave():
         session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     queued = session.pending_write
@@ -140,13 +140,13 @@ def test_a_browser_verb_replies_before_the_write_and_the_file_follows(session: S
     """落ちたら、画面の操作の応答(状態配信)が書き込みを待っている、または書き終える前に次の要求を捌く。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     order: list = []
-    real = Session._write_document_file
+    real = os.replace
 
-    def watched(target, payload):
+    def watched(source, target):
         order.append("write")
-        real(target, payload)
+        real(source, target)
 
-    monkeypatch.setattr(Session, "_write_document_file", staticmethod(watched))
+    monkeypatch.setattr(os, "replace", watched)
 
     async def script(send):
         reply = await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 6.0, "client_op": 7})
@@ -166,7 +166,7 @@ def test_a_browser_verb_whose_write_fails_is_pushed_again_as_unsaved(session: Se
     def broken(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("duocad.session.os.replace", broken)
+    monkeypatch.setattr("duocad.document_store.os.replace", broken)
 
     async def script(send):
         await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 6.0, "client_op": 8})
@@ -190,7 +190,7 @@ def test_a_browser_verb_whose_write_recovers_is_pushed_again_as_saved(session: S
             raise failures.pop()
         return real(*args, **kwargs)
 
-    monkeypatch.setattr("duocad.session.os.replace", flaky)
+    monkeypatch.setattr("duocad.document_store.os.replace", flaky)
 
     async def script(send):
         await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 6.0, "client_op": 9})
@@ -207,4 +207,5 @@ def test_the_bytes_written_match_what_write_text_wrote(tmp_path) -> None:
     session = Session(0.2, models_dir=tmp_path / "models")
     session.sketch_create("XY")
     on_disk = (session.models_dir / session.current_name).read_bytes()
-    assert on_disk.count(os.linesep.encode()) == session.document.log.to_json(session._created).count("\n")
+    created = session.list_documents()["files"][0]["created"]
+    assert on_disk.count(os.linesep.encode()) == session.document.log.to_json(created).count("\n")

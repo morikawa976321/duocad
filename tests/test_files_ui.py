@@ -151,7 +151,7 @@ def test_a_failed_autosave_marks_the_document_unsaved_and_warns(
     def broken(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("duocad.session.os.replace", broken)
+    monkeypatch.setattr("duocad.document_store.os.replace", broken)
     applied = session.sketch_create("XZ")
 
     assert applied["verb"] == "sketch_create" and len(session.document.sketches) == 2
@@ -351,7 +351,7 @@ def test_a_drive_relative_escape_never_touches_the_drive(session: Session) -> No
 def test_resolved_path_must_stay_inside_models_dir_even_past_a_symlink(
     session: Session, tmp_path: Path
 ) -> None:
-    """判定は解決後のパスで行う: `models_dir` 内の既存リンクが外を指す場合を塞ぐ(`_resolve_document_name` の最終判定)。
+    """判定は解決後のパスで行う: `models_dir` 内の既存リンクが外を指す場合を塞ぐ。
     リンク先は**無い**ものにする(あると `save_document` の「既にある」拒否が先に断り、最終判定が効いているか見えない)。
     Windowsのシンボリックリンクは権限が要るので、権限の要らないジャンクションを張ってから先を消す。
     """
@@ -886,7 +886,7 @@ def test_a_thumbnail_that_cannot_be_written_is_reported_not_raised(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """落ちたら: 付随ファイルを書けないだけで、人が何もしていないのにエラーの通知が出る。"""
-    import duocad.session as session_module
+    import duocad.document_store as store_module
 
     _box(session)
     session.save_document("a.json")
@@ -894,7 +894,7 @@ def test_a_thumbnail_that_cannot_be_written_is_reported_not_raised(
     def refuse(*_args, **_kwargs):
         raise PermissionError("別のプログラムが開いている")
 
-    monkeypatch.setattr(session_module.os, "replace", refuse)
+    monkeypatch.setattr(store_module.os, "replace", refuse)
     answer = session.save_thumbnail("a.json", _PNG)
     assert answer["saved"] is False and answer["thumb"] is None
     assert any("サムネイル" in warning for warning in session.warnings)
@@ -1085,7 +1085,7 @@ def test_renaming_after_a_failed_autosave_writes_the_document_again_instead_of_c
         raise OSError("disk full")
 
     with monkeypatch.context() as patch:
-        patch.setattr("duocad.session.os.replace", broken)
+        patch.setattr("duocad.document_store.os.replace", broken)
         session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     assert session.state_meta()["saved"] is False
 
@@ -1104,10 +1104,17 @@ def test_renaming_when_the_rewrite_fails_too_stays_unsaved_and_warns(session: Se
         raise OSError("disk full")
 
     with monkeypatch.context() as patch:
-        patch.setattr("duocad.session.os.replace", broken)
+        patch.setattr("duocad.document_store.os.replace", broken)
         session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     with monkeypatch.context() as patch:
-        patch.setattr(Session, "_write_document_file", staticmethod(broken))
+        real_replace = os.replace
+
+        def refuse_rewrite(source, target):
+            if Path(source).suffix == ".writing":
+                raise OSError("disk full")
+            return real_replace(source, target)
+
+        patch.setattr(os, "replace", refuse_rewrite)
         session.rename_document("renamed.json")
 
     assert session.current_name == "renamed.json" and (session.models_dir / "renamed.json").exists()
@@ -1115,21 +1122,31 @@ def test_renaming_when_the_rewrite_fails_too_stays_unsaved_and_warns(session: Se
     assert any("自動保存できなかった" in line for line in session.warnings)
 
 
-def test_listing_documents_waits_for_a_save_in_progress(session: Session) -> None:
+def test_listing_documents_waits_for_a_save_in_progress(session: Session, monkeypatch) -> None:
     """落ちたら: 一覧が書き込み中のファイルを錠なしで開く。Windows では開いている間の `os.replace` が PermissionError になり、
     書き手の自動保存が失敗して `saved=False` が点滅する。"""
+    import concurrent.futures
     import threading
 
     _box(session)
-    finished = threading.Event()
+    entered = threading.Event()
+    release = threading.Event()
+    real_replace = os.replace
 
-    def list_it() -> None:
-        session.list_documents()
-        finished.set()
+    def paused(source, target):
+        entered.set()
+        assert release.wait(10)
+        return real_replace(source, target)
 
-    with session._save_lock:
-        thread = threading.Thread(target=list_it)
-        thread.start()
-        assert not finished.wait(0.3), "書き込み中(錠を持っている間)に一覧がファイルを読んでいる"
-    thread.join(10)
-    assert finished.is_set()
+    monkeypatch.setattr(os, "replace", paused)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        saving = pool.submit(session.save_document)
+        try:
+            assert entered.wait(10)
+            listing = pool.submit(session.list_documents)
+            with pytest.raises(TimeoutError):
+                listing.result(timeout=0.3)
+        finally:
+            release.set()
+        assert saving.result(timeout=10)["action"] == "save"
+        assert listing.result(timeout=10)["files"][0]["name"] == session.current_name
