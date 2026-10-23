@@ -329,6 +329,53 @@ export const SHELL_BODY: CommandDef<'shell_body'> = {
 }
 
 /**
+ * オフセット(`offset_faces`)。選んだ面を外向き法線へ距離だけ動かし、隣の面はそれぞれ自分の曲面のまま伸縮して付いてくる
+ * (押し出しと違い、斜めの隣・曲面・丸めの隣も付いてくる。曲面も選べる)。正で太る、負で痩せる。
+ */
+export const OFFSET_FACES: CommandDef<'offset_faces'> = {
+  id: 'offset_faces',
+  label: 'オフセット',
+  buttonId: 'offset-faces',
+  preview: 'server',
+  args: [
+    { kind: 'selection', name: 'faces', label: '動かす面', shapeKind: 'face', min: 1, max: null },
+    {
+      kind: 'number',
+      name: 'distance',
+      label: '距離',
+      unit: 'mm',
+      inputId: 'offset-faces-distance',
+      reject: (value) => (value === 0 ? '距離が0では面が動かない' : null),
+    },
+  ],
+  build(values) {
+    const empty = missingSelection(values, 'faces', '面')
+    const distance = values.distance
+    if (empty !== null) return { ok: false, reason: empty }
+    if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
+    return { ok: true, args: { distance } }
+  },
+}
+
+/**
+ * 面の削除(`delete_faces`)。選んだ面を消し、周りの面をそれぞれ自分の曲面のまま延ばして閉じる(フィレット・面取り・穴・ボスを消す)。
+ * 丸めの面は1クリックでつながった丸め全体が選ばれる(`App.svelte` の `faceChainCommand`。verb は選ばれた面だけを消す)。
+ * ボディそのものを消すのは「削除する」(`DELETE_SELECTION`)。
+ */
+export const DELETE_FACES: CommandDef<'delete_faces'> = {
+  id: 'delete_faces',
+  label: '面の削除',
+  buttonId: 'delete-faces',
+  preview: 'server',
+  args: [{ kind: 'selection', name: 'faces', label: '消す面', shapeKind: 'face', min: 1, max: null }],
+  build(values) {
+    const empty = missingSelection(values, 'faces', '面')
+    if (empty !== null) return { ok: false, reason: empty }
+    return { ok: true, args: {} }
+  },
+}
+
+/**
  * ねじ(`thread`)。全周の円筒面を1つ選び、山形を3つから選び、隙間は空欄なら既定(山形と、面が軸か穴かでサーバが決める)。
  * 推奨の範囲は山形の選択肢の表示に出す(範囲の外でも確定はでき、サーバが警告のトーストを出す)。上限はピッチで決まるのでサーバが断る。
  */
@@ -774,6 +821,8 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
   FILLET,
   CHAMFER,
   SHELL_BODY,
+  OFFSET_FACES,
+  DELETE_FACES,
   THREAD,
   BOOLEAN_BODY,
   MOVE_BODY,

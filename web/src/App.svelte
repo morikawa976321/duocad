@@ -73,6 +73,7 @@
     type ConnectionStatus,
     type EdgeChainsPayload,
     type EdgesPayload,
+    type FaceChainsPayload,
     type FemStatus,
     type OptimizeConditionsReport,
     type OptimizeDebugPayload,
@@ -98,6 +99,7 @@
   import SettingsDialog from './SettingsDialog.svelte'
   import { createDisplaySettings } from './displaySettings.svelte'
   import { createDocumentFiles } from './documentFiles.svelte'
+  import { createFaceChains } from './faceChains'
   import { createInterference } from './interference.svelte'
   import InterferencePanel from './InterferencePanel.svelte'
   import { createMeasurement } from './measurement.svelte'
@@ -276,6 +278,11 @@
   let edgeChains: Record<string, { shape_revision: number; chains: number[][] }> = {}
   /** 連なりを頼んだ辺(`${body_id}:${shape_revision}:${辺の添字}`)。 */
   let edgeChainsAsked = new Set<string>()
+  /** 丸めの面の連なり(「面の削除」でクリックを広げる)。 */
+  const faceChains = createFaceChains({
+    shapeRevisionOf: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.shape_revision,
+    send: (bodyId, faces) => session.getFaceChains(bodyId, faces),
+  })
   /**
    * 連なりが届くまで待たせているクリック・矩形選択(新しいものが古いものを置き換える)。待たせている間は確定させない
    * (`CommandHost` の `busy`。確定が先に届くと、待たせたクリックの辺を入れずに丸める)。
@@ -377,6 +384,10 @@
         edgeChainsAsked.clear()
         pendingChainPick = null
       }
+      if (where === 'get_face_chains' || where === 'send') {
+        faceChains.forgetAsked()
+        pendingChainPick = null
+      }
       if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
       // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
       // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
@@ -410,6 +421,7 @@
       if (next !== 'open') {
         edgesAsked.clear()
         edgeChainsAsked.clear()
+        faceChains.forgetAsked()
         pendingChainPick = null
         verticesAsked.clear()
         files.dropThumbnailRequests()
@@ -420,6 +432,7 @@
     onPreview: handlePreview,
     onEdges: handleEdges,
     onEdgeChains: handleEdgeChains,
+    onFaceChains: handleFaceChains,
     onVertices: handleVertices,
     onMeasure: handleMeasure,
     onSelectionInfo: (payload) => selectionInfo.onResult(payload),
@@ -944,6 +957,11 @@
     const chains = known?.shape_revision === payload.shape_revision ? [...known.chains, ...payload.chains] : payload.chains
     edgeChains[payload.body_id] = { shape_revision: payload.shape_revision, chains }
     viewport?.setEdgeChains(payload.body_id, payload.chains)
+    if (pendingChainPick?.()) pendingChainPick = null
+  }
+
+  function handleFaceChains(payload: FaceChainsPayload): void {
+    faceChains.remember(payload)
     if (pendingChainPick?.()) pendingChainPick = null
   }
 
@@ -1597,6 +1615,52 @@
   }
 
   /**
+   * 「面の削除」の起動中か。丸めの面は、つながった丸め全体を1つの単位として選ぶ(`faceChains`)。確定の前に、どこまで消えるかが
+   * 選択の強調で見える(本人の決定 2026-10-23。docs/FACE_EDIT.md カード b)。
+   */
+  const faceChainCommand = $derived(sketchId === null && model?.command?.verb === 'delete_faces')
+
+  /** 面の参照を、丸めの連なりの全部の参照へ広げる。連なりがまだ届いていなければ null。 */
+  function faceChainRefs(bodyId: string, faceIndex: number): SelectionRef[] | null {
+    const chain = faceChains.chainOf(bodyId, faceIndex)
+    return chain === null ? null : chain.map((index) => faceRef(bodyId, index))
+  }
+
+  /** 連なりの分からない面を指したクリックを、連なりが届くまで待たせる(`deferUntilChains` の面版。捨てる条件も同じ)。 */
+  function deferUntilFaceChains(faces: Array<{ bodyId: string; faceIndex: number }>, run: () => void): void {
+    const revisionOf = (bodyId: string) => model?.bodies.find((body) => body.body_id === bodyId)?.shape_revision
+    const pickedAt = new Map(faces.map((face) => [face.bodyId, revisionOf(face.bodyId)]))
+    pendingChainPick = () => {
+      if (!faceChainCommand) return true
+      for (const [bodyId, revision] of pickedAt) {
+        if (revisionOf(bodyId) !== revision) return true
+      }
+      if (faces.some((face) => faceChainRefs(face.bodyId, face.faceIndex) === null)) return false
+      run()
+      return true
+    }
+    for (const bodyId of new Set(faces.map((face) => face.bodyId))) {
+      faceChains.request(bodyId, faces.filter((face) => face.bodyId === bodyId).map((face) => face.faceIndex))
+    }
+  }
+
+  /** 起動した時点で選ばれていた面も連なりへ広げる(面を選んでから「面の削除」を押す順でも、どこまで消えるかが見える)。 */
+  $effect(() => {
+    if (!faceChainCommand) return
+    untrack(() => {
+      const faces = refsOfKind(currentItems(), 'face').map((ref) => ({ bodyId: ref.body, faceIndex: ref.index }))
+      if (faces.length === 0) return
+      const widen = () => {
+        const current = new Set(currentItems().map(refKey))
+        const add = faces.flatMap((face) => faceChainRefs(face.bodyId, face.faceIndex) ?? []).filter((ref) => !current.has(refKey(ref)))
+        modifySelection(add, [])
+      }
+      if (faces.every((face) => faceChainRefs(face.bodyId, face.faceIndex) !== null)) widen()
+      else deferUntilFaceChains(faces, widen)
+    })
+  })
+
+  /**
    * 参照のまとまり(連なり、または参照1つ)ごとにトグルする。全部入っていれば全部外し、そうでなければ欠けている分を足す
    * (1本ずつトグルすると、一部だけ入っていた連なりが入れ替わるだけになる)。
    */
@@ -1610,8 +1674,8 @@
     return { add, remove }
   }
 
-  /** 連なりを1つの単位として選択を編集する(`editSelection` の連なり版。トグルは `toggleUnits`)。 */
-  function editEdgeChain(refs: SelectionRef[], mode: PickEvent['mode']): void {
+  /** 連なり(辺、または丸めの面)を1つの単位として選択を編集する(`editSelection` の連なり版。トグルは `toggleUnits`)。 */
+  function editChain(refs: SelectionRef[], mode: PickEvent['mode']): void {
     if (refs.length === 1) {
       editSelection(refs[0], mode)
       return
@@ -1712,6 +1776,13 @@
       else if (event.mode === 'replace') note('面を外した')
       return
     }
+    if (faceChainCommand && !meshBodyIds.has(event.hit.bodyId)) {
+      const face = event.hit
+      const refs = faceChainRefs(face.bodyId, face.faceIndex)
+      if (refs === null) deferUntilFaceChains([face], () => editChain(faceChainRefs(face.bodyId, face.faceIndex)!, pickMode))
+      else editChain(refs, pickMode)
+      return
+    }
     // 保持/除外ソリッドの間だけボディ粒度へ畳む(`optimizeSetFaceRef`)。
     editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
@@ -1722,8 +1793,8 @@
     if (event.edge !== null) {
       const edge = event.edge
       const refs = edgeChainRefs(edge.bodyId, edge.edgeIndex)
-      if (refs === null) deferUntilChains([edge], () => editEdgeChain(edgeChainRefs(edge.bodyId, edge.edgeIndex)!, pickMode))
-      else editEdgeChain(refs, pickMode)
+      if (refs === null) deferUntilChains([edge], () => editChain(edgeChainRefs(edge.bodyId, edge.edgeIndex)!, pickMode))
+      else editChain(refs, pickMode)
       return true
     }
     if (event.vertex !== null) {
