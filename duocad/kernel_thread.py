@@ -57,6 +57,8 @@ DEPTH_PER_PITCH = 0.4
 SAMPLES_PER_TURN = 64
 _FILL_MARGIN = 0.01  # 埋める・切る円柱を面より 0.01 太くする(谷の帯と既存の円筒面を重ねると三角形に分割できない面が残る。実測)
 _VOLUME_TOLERANCE = 0.01  # 体積の増減の許容 = ねじ部の体積の 1%(docs/THREAD.md「合否の門と検査」)
+_RELIEF = 0.05  # 雄の根元の首を谷より細くする量(谷の帯と首の円錐を同じ半径で接させない)
+_AIR_EPS = 1e-6  # 軸の中の空きを「無い」とみなす体積(mm³)
 
 
 def default_pitch(diameter: float) -> float:
@@ -268,7 +270,8 @@ def describe_target(shape: "TopoDS_Shape", face_index: int) -> dict:
 
 def _end_kind(shape, face, origin, axis, radius: float, v: float) -> dict:
     """面の端(軸方向の位置 v)の円の辺と、その向こうの面の種類: "outward"(外へ広がる軸に直角な平面 = 部品の表面)、
-    "disc"(軸に直角な円板 = 軸の先端・止まり穴の底)、"cone"(面取り済み)、"other"。"""
+    "disc"(軸に直角な円板 = 軸の先端・止まり穴の底)、"cone"(軸へ向かって細る円錐 = 面取り済みの先)、
+    "shoulder"(外へ広がる円錐 = 根元の肩・皿の座ぐり)、"other"。"""
     ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, TopAbs_ShapeEnum.TopAbs_FACE, ancestors)
     edges, neighbours = [], []
@@ -294,19 +297,18 @@ def _end_kind(shape, face, origin, axis, radius: float, v: float) -> dict:
 def _neighbour_kind(other, origin, axis, radius: float) -> str:
     adaptor = BRepAdaptor_Surface(TopoDS.Face_s(other))
     kind = adaptor.GetType()
-    if kind == GeomAbs_SurfaceType.GeomAbs_Cone:
-        return "cone"
-    if kind != GeomAbs_SurfaceType.GeomAbs_Plane:
+    cone = kind == GeomAbs_SurfaceType.GeomAbs_Cone
+    if not cone and (kind != GeomAbs_SurfaceType.GeomAbs_Plane or abs(adaptor.Plane().Axis().Direction().Dot(axis)) < 0.999):
         return "other"
-    if abs(adaptor.Plane().Axis().Direction().Dot(axis)) < 0.999:
-        return "other"
-    far = 0.0
+    far = 0.0  # 隣の面の頂点の、軸からの最大の距離(面の半径を超えれば外へ広がる)
     exp = TopExp_Explorer(other, TopAbs_ShapeEnum.TopAbs_VERTEX)
     while exp.More():
         p = BRep_Tool.Pnt_s(TopoDS.Vertex_s(exp.Current()))
         along = gp_Vec(origin, p).Dot(gp_Vec(axis))
         far = max(far, origin.Translated(gp_Vec(axis).Multiplied(along)).Distance(p))
         exp.Next()
+    if cone:
+        return "shoulder" if far > radius + 1e-6 else "cone"
     return "outward" if far > radius + 1e-6 else "disc"
 
 
@@ -415,31 +417,48 @@ def _boolean(builder, label: str, context: str):
     return builder.Shape()
 
 
+def _end_radius(kind: str, r_maj: float, r_min: float, chamfer: float) -> float:
+    """雄の端の半径。先端(円板)は面取り(山頂から chamfer 細く)、それ以外(頭・板・肩)は谷より _RELIEF 細い首。
+    どちらの端もねじの切り口を平面に残さない(頭の上面に 30° の切り口が載ると、その平面が三角形に分割できない。D10 では体積・個数の門で落ちる。実測 2026-10-23)。"""
+    return r_maj - chamfer if kind == "disc" else r_min - _RELIEF
+
+
 def _add_male(shape, target, points, pitch, depth, context):
-    """雄: 先端(円板の端)だけ面取りした軸を、円柱域を切った本体へ足す。先が既に面取り済みなら断る。"""
+    """雄: 円柱域を切った本体へ、両端を 45° の円錐で細くしたねじ部を足す。軸の中の空き(同軸の穴など)は、谷より内側に
+    収まっていればねじ部からも抜いて残す。収まらなければ断る。先が既に面取り済み(軸へ向かって細る円錐)なら断る。
+    溝だけを引く作り方(円柱 − ねじ部 を本体から引く)は、螺旋の面が2回の集合演算に入って 30°・45° で壊れた(実測 2026-10-23)。"""
     ends = target["ends"]
     if "cone" in (ends["low"]["kind"], ends["high"]["kind"]):
         raise ValueError("軸の先が既に面取りされている(先が山より太い段になってナットに入らない)。面取りの前にねじを切る")
     z0, z1 = target["v0"], target["v1"]
     length = z1 - z0
-    r_maj = max(r for _, r in points)
+    r_maj, r_min = max(r for _, r in points), min(r for _, r in points)
     chamfer = depth + 0.1 * pitch
-    low_tip, high_tip = ends["low"]["kind"] == "disc", ends["high"]["kind"] == "disc"
-    # 先端の 45° の円錐は軸で閉じる(線を先へ 1 延ばすと、先の半径 r_tip が 1 未満の D3 では軸の反対へ出て回転体が作れない)
-    r_tip = r_maj - chamfer
-    outline = [(0.0, -r_tip), (r_maj + 1, chamfer + 1)] if low_tip else [(0.0, -1.0), (r_maj + 1, -1.0)]
-    outline += [(r_maj + 1, length - chamfer - 1), (0.0, length + r_tip)] if high_tip else [(r_maj + 1, length + 1), (0.0, length + 1)]
-    segment = threaded_segment(points, pitch, length)
-    if low_tip or high_tip:
-        segment = _boolean(BRepAlgoAPI_Common(segment, _revolve(outline)), "tip chamfer", context)
+    r_low = _end_radius(ends["low"]["kind"], r_maj, r_min, chamfer)
+    r_high = _end_radius(ends["high"]["kind"], r_maj, r_min, chamfer)
+    # 両端の 45° の円錐(r = r_low + z と r = r_high + (L − z))で挟んだ回転体。円錐は軸で閉じる(延ばした線が軸の反対へ出ると回転体が作れない)
+    z_cross = 0.5 * (r_high + length - r_low)
+    if r_low + z_cross <= r_maj + 1:
+        outline = [(0.0, -r_low), (r_low + z_cross, z_cross), (0.0, length + r_high)]
+    else:
+        outline = [(0.0, -r_low), (r_maj + 1, r_maj + 1 - r_low), (r_maj + 1, length - (r_maj + 1 - r_high)), (0.0, length + r_high)]
+    segment = _boolean(BRepAlgoAPI_Common(threaded_segment(points, pitch, length), _revolve(outline)), "ends", context)
     segment = _placed(segment, target, z0)
+    thread_volume = _volume_eps(segment)
+    # 軸の範囲の中の空き(同軸の穴など)。円柱を足し引きするとき埋まるので、ねじ部からも抜く
+    air = _boolean(BRepAlgoAPI_Cut(_cylinder(target, target["radius"], z0, z1), shape), "inner space", context)
+    air_volume = _volume_eps(air)
+    if air_volume > _AIR_EPS:
+        inner = _cylinder(target, min(r_low, r_high) - _RELIEF, z0, z1)
+        if abs(_volume_eps(_boolean(BRepAlgoAPI_Common(air, inner), "inner space", context)) - air_volume) > _AIR_EPS:
+            raise ValueError("軸の中の穴・切り欠きがねじの谷より外へ出ている(ねじを切ると穴が埋まるか壁が抜ける)")
+        segment = _boolean(BRepAlgoAPI_Cut(segment, air), "keep inner space", context)
     before = _volume_eps(shape)
     cut = BRepAlgoAPI_Cut(shape, _cylinder(target, target["radius"] + _FILL_MARGIN, z0, z1))
     body = _boolean(cut, "cut", context)
     fuse = BRepAlgoAPI_Fuse(body, segment)
     final = _boolean(fuse, "fuse", context)
-    thread_volume = _volume_eps(segment)
-    expected = thread_volume - math.pi * target["radius"] ** 2 * length
+    expected = thread_volume - math.pi * target["radius"] ** 2 * length  # 空きは足す側と引く側で同じだけ減る
     return final, [(cut, shape), (fuse, body)], expected, thread_volume, before
 
 

@@ -11,8 +11,10 @@ from duocad import kernel, kernel_thread, query, selection
 from duocad.document import Document
 from duocad.entry import entry_for
 from duocad.server import Session
-from duocad.verbs import chamfer, thread
-from document_support import new_box_with_hole, replay_through_json
+from duocad.region import region_ref
+from duocad.sketch import add_circle, base_plane, sketch_create
+from duocad.verbs import chamfer, extrude, thread
+from document_support import new_box, new_box_with_hole, replay_through_json
 from test_chamfer import new_cylinder
 
 
@@ -81,6 +83,83 @@ def test_a_d3_shaft_gets_a_male_thread(profile):
     operation = thread(doc, _cylinder_face(doc, body_id), profile, body_id=body_id)
     assert operation.args["pitch"] == pytest.approx(1.2)
     _assert_sound(doc.get_body(body_id).shape)
+
+
+def _outer_cylinder_face(doc: Document, body_id: str) -> int:
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.TopoDS import TopoDS
+
+    face_map = kernel._face_map(doc.get_body(body_id).shape)
+    found = [i for i in range(1, face_map.Extent() + 1) if kernel.classify_face(face_map.FindKey(i)) == "cylinder_full"]
+    return max(found, key=lambda i: BRepAdaptor_Surface(TopoDS.Face_s(face_map.FindKey(i))).Cylinder().Radius())
+
+
+def _bolt(doc: Document, diameter: float) -> str:
+    """12×12×3 の頭の上面に立てた軸(根元は頭の平面、先は円板)。"""
+    body_id = new_box(doc, 12.0, 12.0, 3.0)
+    sketch_id = sketch_create(doc, base_plane("XY"))
+    add_circle(doc, sketch_id, (6.0, 6.0), diameter)
+    extrude(doc, [region_ref(sketch_id, 1)], 3.0 + 2 * diameter, mode="join", body_id=body_id)
+    return body_id
+
+
+def _hollow_shaft(doc: Document, bore_diameter: float) -> str:
+    body_id = new_cylinder(doc, radius=3.0, height=12.0)
+    sketch_id = sketch_create(doc, base_plane("XY"))
+    add_circle(doc, sketch_id, (0.0, 0.0), bore_diameter)
+    extrude(doc, [region_ref(sketch_id, 1)], 12.0, mode="cut", body_id=body_id)
+    return body_id
+
+
+@pytest.mark.parametrize("profile", sorted(kernel_thread.PROFILES))
+@pytest.mark.parametrize("diameter", [3.0, 10.0])
+def test_a_bolt_standing_on_a_head_is_sound(profile, diameter):
+    """根元が頭の平面の軸。ねじの切り口が頭の上面に載ると 30° でその面が三角形に分割できず、D10 では門で落ちた(根元は谷より細い首で始める)。"""
+    doc = Document()
+    body_id = _bolt(doc, diameter)
+    volume_before = query.volume(doc.get_body(body_id).shape)
+    thread(doc, _cylinder_face(doc, body_id), profile, body_id=body_id)
+    shape = doc.get_body(body_id).shape
+    assert query.volume(shape) < volume_before
+    _assert_sound(shape)
+
+
+@pytest.mark.parametrize("profile", sorted(kernel_thread.PROFILES))
+def test_a_hollow_shaft_keeps_its_bore(profile):
+    """軸の中の同軸の穴(直径 1.2)は、ねじを切った後も穴のまま(円柱を足し引きする作り方で埋めない)。"""
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.TopAbs import TopAbs_State
+    from OCP.gp import gp_Pnt
+
+    doc = Document()
+    body_id = _hollow_shaft(doc, 1.2)
+    thread(doc, _outer_cylinder_face(doc, body_id), profile, body_id=body_id)
+    shape = doc.get_body(body_id).shape
+    assert BRepClass3d_SolidClassifier(shape, gp_Pnt(0.0, 0.0, 6.0), 1e-6).State() == TopAbs_State.TopAbs_OUT
+    _assert_sound(shape)
+
+
+def test_a_bore_reaching_past_the_thread_root_is_refused():
+    """D6 P1.5 の谷の半径は 2.4。直径 4.6 の穴はねじの首(2.2)より太く、切ると壁が抜けるので断る。"""
+    doc = Document()
+    body_id = _hollow_shaft(doc, 4.6)
+    _assert_refused_without_change(doc, body_id, _outer_cylinder_face(doc, body_id), "trapezoid45", None, "軸の中の穴")
+
+
+def test_a_shoulder_widening_towards_the_root_is_not_taken_for_a_chamfered_tip():
+    """根元へ太くなる円錐の肩の上の軸は切れる(先へ細る円錐 = 面取り済みの先だけを断る)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCone, BRepPrimAPI_MakeCylinder
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+
+    shoulder = BRepPrimAPI_MakeCone(5.0, 3.0, 2.0).Shape()
+    shaft = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0.0, 0.0, 2.0), gp_Dir(0.0, 0.0, 1.0)), 3.0, 8.0).Shape()
+    shape = BRepAlgoAPI_Fuse(shoulder, shaft).Shape()
+    face_map = kernel._face_map(shape)
+    face = next(i for i in range(1, face_map.Extent() + 1) if kernel.classify_face(face_map.FindKey(i)) == "cylinder_full")
+    assert kernel_thread.describe_target(shape, face)["ends"]["low"]["kind"] == "shoulder"
+    result = kernel_thread.thread_face(shape, face, "trapezoid45")
+    _assert_sound(result["shape"])
 
 
 def test_the_semicircle_profile_builds_on_a_hole():
