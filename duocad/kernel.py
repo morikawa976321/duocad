@@ -1441,7 +1441,6 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
                 return native
     declined = ""
     if native is None:
-        # 辺の曲率半径を超える半径の、上面を囲む輪(issue #207)。引き受けない形ならはみ出しの吸収へ進む
         try:
             return _tight_fillet(shape, edge_map, radii, edge_indices, volume_before)
         except kernel_tight.Declined as reason:
@@ -1660,8 +1659,8 @@ def _absorbed_fillet(
 def _tight_fillet(
     shape: "TopoDS_Shape", edge_map: Any, radii: dict, edge_indices: List[int], volume_before: float
 ) -> dict:
-    """`kernel_tight.round_tight_loop`(辺の曲率半径を超える半径。issue #207)の形を検査し、由来をたどって `_blend_edges` の
-    戻り値の形にする。上面の後継は丸めた後の上面、それ以外の面は本体を深さ R で切る引き算と冠との縫い合わせをたどる。"""
+    """`kernel_tight.round_tight_loop` の形を検査し、由来を `_blend_edges` の形にする。
+    上面の後継はレンズ、それ以外は壁の切り取りと縫い合わせをたどる。"""
     tight = kernel_tight.round_tight_loop(shape, edge_map, radii)
     context = f"edges {edge_indices}, rounding past the edge curvature"
     volume_after = _checked_volume(tight.shape, "fillet", volume_before=volume_before, context=context)
@@ -1683,7 +1682,7 @@ def _tight_fillet(
     successors: dict = {}
     for index in range(1, shape_map.Extent() + 1):
         face = shape_map.FindKey(index)
-        if face.IsSame(tight.top):
+        if face.IsSame(tight.top) or any(face.IsSame(top) for top in tight.top_faces):
             current = [tight.lens]
         else:
             current = [after for before in through(below, face) for after in through(joined, before)]
