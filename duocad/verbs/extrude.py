@@ -25,7 +25,7 @@ from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from .. import selection
 from ..entry import entry
-from ._common import editable_body, recall, remember, replayed_body, resolve_shape_ref
+from ._common import editable_body, editable_sketch, recall, remember, replayed_body, resolve_shape_ref
 from ..region import RegionRef, _regions_detailed
 from ..sketch import get_sketch
 
@@ -52,6 +52,8 @@ def extrude(
     if not refs:
         raise ValueError("extrude requires at least one region")
 
+    for ref in refs:
+        editable_sketch(doc, ref.sketch)
     faces, normal = _resolve_faces_and_normal(doc, refs)
     target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
     target_shape = None if target_body is None else target_body.shape

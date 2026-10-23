@@ -322,3 +322,68 @@ def test_undo_followed_by_another_verb_of_the_same_length_changes_the_version(bo
 
     assert len(box_session.document.log.entries) == seen[1], "検査の前提: ログの本数は元と同じ"
     assert tools.current_seq() != seen
+
+
+@pytest.mark.parametrize("first_look", [(), ("get_selection",), ("describe_document", "get_selection")])
+def test_an_edit_after_an_observation_is_detected_across_model_rounds(box_session, first_look):
+    from duocad.agent.providers import ToolResultTurn
+
+    commit_edge(box_session, index=1)
+
+    class EditAfterResult:
+        def __init__(self, session):
+            self.inner = DocumentTools(session)
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def call(self, name, arguments):
+            result = self.inner.call(name, arguments)
+            if name == "get_selection":
+                commit_edge(box_session, index=5)
+            return result
+
+        def call_and_seq(self, name, arguments, expected_seq=None):
+            result = self.inner.call_and_seq(name, arguments, expected_seq)
+            if name == "get_selection":
+                commit_edge(box_session, index=5)
+            return result
+
+    script = [] if first_look else [(tool_use("get_selection", {}), None)]
+    provider = ConcurrentEditProvider(script + [(tool_use("fillet", {"radius": 1}), None), (spoke("選び直します"), None)])
+    run = AgentLoop(EditAfterResult(box_session), provider, first_look=first_look).run("選択した辺をR1で丸めて")
+
+    assert run.ok
+    assert not box_session.document.log.entries
+    assert "fillet" not in [outcome.name for outcome in run.tool_calls]
+    results = [turn for turn in provider.requests[-1]["turns"] if isinstance(turn, ToolResultTurn)]
+    assert '"exception": "NotExecuted"' in results[-1].results[0].content
+
+
+def test_first_look_discards_observations_from_different_versions(box_session):
+    from duocad.agent.providers import ToolResultTurn
+
+    class EditBetweenLooks:
+        def __init__(self, session):
+            self.inner = DocumentTools(session)
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def call(self, name, arguments):
+            result = self.inner.call(name, arguments)
+            if name == "describe_document":
+                box_session.set_visible("box", False)
+            return result
+
+        def call_and_seq(self, name, arguments, expected_seq=None):
+            result = self.inner.call_and_seq(name, arguments, expected_seq)
+            if name == "describe_document":
+                box_session.set_visible("box", False)
+            return result
+
+    provider = ConcurrentEditProvider([(tool_use("get_selection", {}), None), (spoke("確認しました"), None)])
+    run = AgentLoop(EditBetweenLooks(box_session), provider, first_look=("describe_document", "get_selection")).run("確認して")
+
+    assert run.ok and run.tool_calls[0].ok
+    assert not any(isinstance(turn, ToolResultTurn) for turn in provider.requests[0]["turns"])

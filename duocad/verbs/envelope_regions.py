@@ -28,6 +28,7 @@ from ..oplog import Operation, register_verb
 from .. import selection
 from ..entry import entry
 from ..region import RegionRef, _regions_detailed
+from ._common import editable_sketch
 from ..sketch import (
     add_entities,
     get_sketch,
@@ -80,6 +81,7 @@ def envelope_pieces(
             "(選択が複数のスケッチにまたがっている。包む領域は同じスケッチのものだけ)"
         )
     sketch_id = sketch_ids[0]
+    editable_sketch(doc, sketch_id)
 
     detailed = _regions_detailed(doc, sketch_id)
     faces: List = []
