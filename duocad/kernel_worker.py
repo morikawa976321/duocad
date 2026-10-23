@@ -27,9 +27,9 @@ from OCP.TopoDS import TopoDS_Shape
 
 from . import worker_process
 
-#: 画面・MCP からの操作で、計算(子の起動と受け渡しを含む)を打ち切るまでの秒数。置いた値(docs/FACE_EDIT.md カード e は本人判断待ち)。
-#: 実測の根拠は「合成形状の正当な計算の最長 18 秒(穴100個を一度に消す)」と「角ばった実物の1件は最長約 2.3 秒」だけ。
-INTERACTIVE_TIMEOUT_S = 30.0
+#: 画面・MCP からの操作で、計算(子の起動と受け渡しを含む)を打ち切るまでの秒数。本人の決定(2026-10-23、docs/FACE_EDIT.md カード e)。
+#: 実測: 合成形状の正当な計算の最長は 18 秒(穴100個を一度に消す)、角ばった実物の1件は最長約 2.3 秒。
+INTERACTIVE_TIMEOUT_S = 20.0
 
 _LOCK = threading.Lock()
 _WORKER: Optional[worker_process.WorkerProcess] = None

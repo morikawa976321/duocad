@@ -2369,6 +2369,24 @@ COMMANDS: tuple[Command, ...] = (
             "画面がホバー・クリックした辺の分だけ返す(全辺ぶんは大きな部品で 0.5 秒かかる)"
         ),
     ),
+    Command(
+        name="get_face_chains",
+        category="protocol",
+        description="",
+        params=(
+            Param("body_id", "string", "連なりが要る面のボディ"),
+            # `faces` と綴らない理由は get_edge_chains と同じ(連なりを調べる読み取りで、verb の対象ではない)。
+            Param("chain_of", "array", "連なりが要る面の添字(1始まり)の配列"),
+        ),
+        session="face_chains",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**配信しない**(`get_edge_chains` と同じ)。「面の削除」で丸めの面1枚のクリックをつながった丸め全体へ広げるため、"
+            "画面がクリックした面の分だけ返す"
+        ),
+    ),
     # アプリ内AI(protocol)。**verbではなく、実体は `net/ws.py` の `Server`**(`session=None`)。
     # 応答は専用イベント(`ai_status` / `ai_tool_call` / `ai_result` / `ai_error`)で、AIが文書を変えた分は
     # 通常の状態配信として別途届く。**ここに宣言するのは、ソケットが受け取る名前を宣言で尽くすため**

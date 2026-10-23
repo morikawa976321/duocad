@@ -15,6 +15,7 @@ from typing import Any, Callable, Optional
 
 from . import (
     kernel,
+    kernel_face_edit,
     meshbody,
     optimize,
     query,
@@ -713,6 +714,20 @@ class DocumentView:
             "revision": revision,
             "shape_revision": self.shape_revision(body_id),
             "chains": [list(group) for group in chains],
+        }
+
+    def face_chains(self, body_id: str, face_indices: list) -> dict:
+        """頼まれた面それぞれが属する丸めの連なり(`kernel_face_edit.blend_chain`。丸めでない面はその面だけ)を返す。
+
+        戻り値は `edge_chains` と同じ形(`"chains"` は面の添字の組)。画面はクリックした面の分だけ頼む(1面で数十 ms)。
+        """
+        body = self._visible_brep(body_id, "面")
+        chains = list(dict.fromkeys(tuple(kernel_face_edit.blend_chain(body.shape, int(index))) for index in face_indices))
+        return {
+            "body_id": body_id,
+            "revision": self.body_revision(body_id),
+            "shape_revision": self.shape_revision(body_id),
+            "chains": [list(chain) for chain in chains],
         }
 
     def vertices(self, body_id: str) -> dict:

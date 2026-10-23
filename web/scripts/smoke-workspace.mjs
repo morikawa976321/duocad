@@ -5,7 +5,7 @@
  *
  *   web> node scripts/smoke-workspace.mjs
  *
- *   1. AI が begin_command(fillet) → set_selection(辺) で止めると、画面に「丸める」が起動して辺が見える
+ *   1. AI が begin_command(fillet) → set_selection(辺) で止めると、画面に「フィレット」が起動して辺が見える
  *   2. AI の set_command_args(radius) が人の欄に出る
  *   3. 人が打った値が共有の command に出る(打ち終わってから)
  *   4. 打っている最中の欄は外からの値で奪われず、欄を離れると自分の値が勝つ
@@ -43,7 +43,7 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     () =>
       document.querySelector('.command-host')?.dataset.command === 'fillet' &&
       JSON.stringify(window.__duocad.pickKinds) === '["edge"]',
-    'AI の begin_command で画面に「丸める」が起動しない(辺だけを指せる状態にならない)',
+    'AI の begin_command で画面に「フィレット」が起動しない(辺だけを指せる状態にならない)',
   )
   await mcp.callTool('set_selection', { predicate: VERTICAL_EDGES })
   // 選ばれた辺のボディの辺は、カーソルが近くになくても取り寄せる(強調して描くのに座標が要る)
@@ -54,7 +54,7 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     },
     'AI の辺の選択が画面に届かない(辺のジオメトリが無い)',
   )
-  ok('[1] AI が begin_command(fillet) → set_selection(辺) で止めると、画面に「丸める」が起動して辺が見える')
+  ok('[1] AI が begin_command(fillet) → set_selection(辺) で止めると、画面に「フィレット」が起動して辺が見える')
 
   // ================================================================ 2. AI の引数が欄に出る
   await mcp.callTool('set_command_args', { args: { radius: 2 } })

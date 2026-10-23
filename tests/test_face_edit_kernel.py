@@ -97,3 +97,56 @@ def test_the_structural_gate_refuses_two_solids():
     two = compound([BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape(), BRepPrimAPI_MakeBox(gp_Pnt(5, 0, 0), 1.0, 1.0, 1.0).Shape()])
     with pytest.raises(kernel_face_edit.FaceEditError, match="2 solids"):
         kernel_face_edit._structural_gate(two)
+
+
+def _filleted_box(radius: float, edges_of) -> object:
+    box = BRepPrimAPI_MakeBox(W, D, H).Shape()
+    maker = BRepFilletAPI_MakeFillet(box)
+    for edge in edges_of(box):
+        maker.Add(radius, edge)
+    maker.Build()
+    return maker.Shape()
+
+
+def _curved(shape) -> list:
+    return sorted(f["index"] for f in query.describe_faces(shape) if f["kind"] != "plane")
+
+
+def _all_edges(shape):
+    edges = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
+    return [TopoDS.Edge_s(edges.FindKey(i)) for i in range(1, edges.Extent() + 1)]
+
+
+def _top_edges(shape):
+    return [e for e in _all_edges(shape) if all(abs(p[2] - H) < 1e-6 for p in _edge_ends(e))]
+
+
+def _edge_ends(edge):
+    from OCP.BRep import BRep_Tool
+    from OCP.TopExp import TopExp
+
+    return [tuple(BRep_Tool.Pnt_s(v).XYZ().Coord()) for v in (TopExp.FirstVertex_s(edge), TopExp.LastVertex_s(edge))]
+
+
+def test_one_click_on_a_blend_reaches_the_blends_meeting_it_at_a_corner():
+    """上面4辺の丸めは角で折れて会う(接線でない)。1枚から4枚とも取れなければ、画面の「面の削除」が連なりへ広がらない。"""
+    shape = _filleted_box(4.0, _top_edges)
+    blends = _curved(shape)
+    assert len(blends) == 4
+    for index in blends:
+        assert kernel_face_edit.blend_chain(shape, index) == blends
+
+
+def test_the_chain_of_a_fully_rounded_box_includes_the_corner_spheres():
+    """全辺の丸めは、角の球を通って 12 本 + 球 8 枚の全部。平面(支え)は入らない。"""
+    shape = _filleted_box(3.0, _all_edges)
+    blends = _curved(shape)
+    assert len(blends) == 20
+    assert kernel_face_edit.blend_chain(shape, blends[0]) == blends
+
+
+def test_a_face_that_is_not_a_blend_is_its_own_chain():
+    """丸めの支えの平面をクリックしても丸めへ広がらない(上面を消すつもりで丸めまで消えない)。"""
+    shape = _filleted_box(4.0, _top_edges)
+    top = _face_facing(shape, (0.0, 0.0, 1.0))
+    assert kernel_face_edit.blend_chain(shape, top) == [top]

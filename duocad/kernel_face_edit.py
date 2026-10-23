@@ -399,6 +399,55 @@ def _structural_blends(shape: Any, faces: List[Any]):
     return blends, supports
 
 
+def blend_chain(shape: Any, face_index: int) -> List[int]:
+    """`face_index`(1始まり)の面が丸めなら、辺を共有してつながる丸めの連なり(角の球を含む)の添字を昇順で。丸めでなければその面だけ。
+
+    丸めどうしは接線でなくてよい(箱の上面4辺の丸めは角で折れて会う)。丸めの認識は `_blend_signature` と同じ構造の規則で、
+    互いの支えの面へはたどらない。計算は親で行う(位相をたどるだけで、RemoveFeatures を呼ばない)。
+    """
+    face_map = _face_map(shape)
+    edge_faces = _edge_faces(shape)
+    signatures: dict = {}
+
+    def signature(index: int, face: Any):
+        if index not in signatures:
+            signatures[index] = _blend_signature(face, edge_faces)
+        return signatures[index]
+
+    def is_corner_sphere(edge: Any, sphere: Any, blend: Any) -> bool:
+        return _surface_type(sphere) == "sphere" and _tangent(edge, sphere, blend)
+
+    start = kernel._face_at(face_map, face_index)
+    if signature(face_index, start) is None:
+        neighbours = [(e, _other_face(edge_faces, e, start)) for e in _edges(start)]
+        if not any(
+            other is not None and signature(face_map.FindIndex(other), other) is not None and is_corner_sphere(e, start, other)
+            for e, other in neighbours
+        ):
+            return [face_index]
+    chain, frontier = {face_index: start}, [face_index]
+    while frontier:
+        index = frontier.pop()
+        current = chain[index]
+        own = signature(index, current)
+        for edge in _edges(current):
+            other = _other_face(edge_faces, edge, current)
+            if other is None:
+                continue
+            other_index = face_map.FindIndex(other)
+            if other_index in chain or (own is not None and any(other.IsSame(s) for s in own[1:])):
+                continue
+            found = signature(other_index, other)
+            if found is not None:
+                if any(current.IsSame(s) for s in found[1:]):
+                    continue  # 丸めの上に乗った丸め。支えの側から上の丸めへは広げない
+            elif own is None or not is_corner_sphere(edge, other, current):
+                continue
+            chain[other_index] = other
+            frontier.append(other_index)
+    return sorted(chain)
+
+
 def _blend_signature(face: Any, edge_faces: Any):
     """`face` が一定半径の丸めなら (半径, 支えの面2枚)、でなければ None。
 
