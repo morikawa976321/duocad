@@ -790,6 +790,10 @@ class Session:
         payload: dict[str, Any] = {"verb": operation.verb, "seq": operation.seq}
         if extra:
             payload.update(extra)
+            # 入口が返す `warning`(断らずに確定した注意。`thread` の隙間が推奨の外など)を警告のトーストへ。
+            # プレビュー(`preview` はイベントを止めて同じ口を通る)のたびには積まない
+            if extra.get("warning") and self._suppress_events == 0:
+                self.warnings.append(str(extra["warning"]))
         return self._emit(payload)
 
     def preview_envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:

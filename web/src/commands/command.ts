@@ -185,6 +185,11 @@ export interface NumberArgSpec extends ArgSpecCommon {
    * 0が有効値でないところへ黙って0が埋まって壊れる。`move_body` の dx/dy/dz のように「空欄=その軸は動かさない」が成立する引数だけに付けること。
    */
   default?: number
+  /**
+   * 空欄のまま確定してよく、空欄なら値を送らない(サーバが既定を決める)引数。`default` と違って値を作らない:
+   * 既定がほかの引数やサーバだけが知る事情で変わるとき(`thread` の隙間は山形と、面が軸か穴かで変わる)に使う。
+   */
+  optional?: true
 }
 
 /** スケッチ平面をクリックして集める点。選択引数と別物: 点はその場の1クリックで集合に残らない(始点が選択集合に溜まると次のコマンドが拾う)。 */
@@ -514,8 +519,8 @@ export function argSatisfied(spec: ArgSpec, values: ArgValues): boolean {
     return isPlaneArgValue(values[spec.name])
   }
   const value = values[spec.name]
-  // 点から導ける寸法は空欄のままで揃っている(値は `build` が点から作る)。
-  if (value === undefined && spec.fromPoints === true) return true
+  // 点から導ける寸法・省略できる数値は空欄のままで揃っている(値は `build` が点から作るか、送らない)。
+  if (value === undefined && (spec.fromPoints === true || spec.optional === true)) return true
   return typeof value === 'number' && Number.isFinite(value) && spec.reject(value) === null
 }
 

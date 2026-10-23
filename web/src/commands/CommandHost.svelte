@@ -957,6 +957,7 @@
   }
 
   function placeholderFor(spec: NumberArgSpec): string {
+    if (spec.optional === true && (numberText[spec.name] ?? '') === '') return '既定'
     const resting = spec.unit
     if (spec.fromPoints !== true || (numberText[spec.name] ?? '') !== '') return resting
     const named = ghostBuilt?.args[spec.name]
