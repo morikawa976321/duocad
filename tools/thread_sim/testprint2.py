@@ -30,9 +30,9 @@ SERIES = [
     ("T", "30°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 30, 30), "radial", 5, [0.22, 0.30, 0.47, 0.55]),
     ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.10, 0.17, 0.26, 0.34]),
 ]
-# TP3: 本人のプリントの 99% が使う 0.12mm Fine(層 0.12・壁3周)で刷る。同じ D6 P1.5 の3系列と、45° の複製(E、六角)で同じ板の中の判定の揺れを見る。
-# 隙間は 0.12mm Fine の模型で、誤差 0〜0.05 とガタの境目 0.15〜0.28 のどの組でも判定が変わらない点(B3・E3 の 0.18 だけはガタの境目で分かれる点)
-SERIES_TP3 = [
+# TP4: 本人のプリントの 99% が使う 0.12mm Fine(層 0.12・壁3周)で刷る。同じ D6 P1.5 の3系列と、45° の複製(E、六角)で同じ板の中の判定の揺れを見る。
+# 隙間は 0.12mm Fine の模型で、誤差 0〜0.05 とガタの境目 0.15〜0.28 のどの組でも判定が変わらない点(B2・E2 の 0.18 だけはガタの境目で分かれる点)
+SERIES_TP4 = [
     ("S", "半円 D6 P1.5 ρ0.6(法線の隙間)", 6, lambda: pf.coil(6, 1.5, 0.6), "normal", 8, [0.07, 0.11, 0.14, 0.24]),
     ("T", "30°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 30, 30), "radial", 5, [0.10, 0.20, 0.24, 0.44]),
     ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.04, 0.12, 0.18, 0.28]),
@@ -59,7 +59,7 @@ INTRO = (
 )
 
 
-INTRO_TP3 = (
+INTRO_TP4 = (
     '<div class="intro"><p><b>刷り方</b>: <code>plate.stl</code> を ElegooSlicer で開き、プリンター「Elegoo Centauri Carbon 0.4 nozzle」・'
     '<b>プロセス「0.12mm Fine @Elegoo CC 0.4 nozzle」</b>・PLA のまま、ほかは何も変えずに刷る(回転しない・サポート不要)。</p>'
     '<p><b>試し方</b>: TP2 と同じ。冷めてから、工具なしで、凹み1個のナットから順に、初回のねじ込みで判定する。'
@@ -122,7 +122,7 @@ def classify(margin, engagement, play, play_max=PLAY_MAX):
     return "軽く回りガタ無し"
 
 
-def predict(out: Path = OUT, series=None, base=None, e_range=None, play_range=(PLAY_MAX,)) -> dict:
+def predict(out: Path = OUT, series=None, base=None, e_range=None, play_range=(PLAY_MAX,), fname: str = "predictions.json") -> dict:
     """事前の予測(結果を見る前に固定する)。ナットごとに、誤差の幅の両端 × ガタの境目の候補で予測した判定。引き抜きは保持の荷重と壊れる所。"""
     from . import evaluate as ev
     from .printer import DEFAULT, TP1_FIT
@@ -151,7 +151,7 @@ def predict(out: Path = OUT, series=None, base=None, e_range=None, play_range=(P
                                 hold_N=round(hold, 1) if hold else None, hold_kg=round(hold / 9.81, 1) if hold else None,
                                 where=mode_ja.get(min(("tcd", "strip_bolt", "strip_nut"), key=s.F.get)) if s else None,
                                 F={k: round(v, 1) for k, v in s.F.items()} if s else None)
-    (out / "predictions.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+    (out / fname).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     return res
 
 
@@ -160,7 +160,7 @@ def _pull_af(D):
 
 
 def build(out: Path = OUT, test_id: str = TEST_ID, series=None, base=None, intro=None, e_range=None, play_range=(PLAY_MAX,)):
-    """series・base(印刷の設定)・intro を変えると別の回の試し刷りになる(TP3 = 0.12mm Fine の版)。"""
+    """series・base(印刷の設定)・intro を変えると別の回の試し刷りになる(TP4 = 0.12mm Fine の版)。"""
     out.mkdir(parents=True, exist_ok=True)
     series = series or SERIES
     pieces, groups = [], []
@@ -201,6 +201,9 @@ def build(out: Path = OUT, test_id: str = TEST_ID, series=None, base=None, intro
         pieces.append(Piece("R", "bracket", "吊り板", f, dict(D=None)))
         groups.append(("引き抜き", "吊り板 R にボルトを下から通し、上からナットを手で締めて、頭の横穴に重りを吊る。"
                        "同じ組の2本は、同じ条件のくり返し。", pitems))
+    # 刷った設定を結果の1行に入れる(TP3 を 0.20 で刷った後に 0.12 の版を足し、どの板をどの設定で刷ったかが混ざりうるため)
+    groups.insert(0, ("刷った設定", "この板を刷ったときのプロセス(層の厚み)を選ぶ。",
+                      [("L", "刷ったプロセス", ["0.12mm Fine", "0.20mm Standard", "その他", "未回答"], [])]))
     plate = make_plate(out, pieces)
     (out / "manifest.json").write_text(json.dumps(dict(test_id=test_id, pieces=[p.__dict__ for p in pieces], plate=plate),
                                                   ensure_ascii=False, indent=1), encoding="utf-8")
@@ -243,11 +246,15 @@ if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "recheck":
         print(write_recheck_tp1())
-    elif len(sys.argv) > 1 and sys.argv[1] == "tp3":  # 0.12mm Fine の版(THREAD_SIM.md 6.5)
-        from .printer import FINE
-        ps = build(OUT.parent / "testprint3", "TP3", series=SERIES_TP3, base=FINE, intro=INTRO_TP3,
-                   e_range={6: (0.0, 0.05)}, play_range=(0.15, 0.28))
+    elif len(sys.argv) > 1 and sys.argv[1] == "tp3":  # TP2 と同じ板の刷り直し(本人が 0.20mm Standard で刷った)
+        ps = build(OUT.parent / "testprint3", "TP3")
         print(len(ps), "部品を", OUT.parent / "testprint3", "へ")
+    elif len(sys.argv) > 1 and sys.argv[1] == "tp4":  # 0.12mm Fine の版(THREAD_SIM.md 6.5)。0.20 で刷られた場合の予測も別に書く
+        from .printer import FINE
+        kw = dict(e_range={6: (0.0, 0.05)}, play_range=(0.15, 0.28))
+        ps = build(OUT.parent / "testprint4", "TP4", series=SERIES_TP4, base=FINE, intro=INTRO_TP4, **kw)
+        predict(OUT.parent / "testprint4", series=SERIES_TP4, fname="predictions_020.json", **kw)
+        print(len(ps), "部品を", OUT.parent / "testprint4", "へ")
     else:
         ps = build()
         print(len(ps), "部品を", OUT, "へ")
