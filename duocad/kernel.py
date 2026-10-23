@@ -1682,7 +1682,7 @@ def _tight_fillet(
     successors: dict = {}
     for index in range(1, shape_map.Extent() + 1):
         face = shape_map.FindKey(index)
-        if face.IsSame(tight.top):
+        if face.IsSame(tight.top) or any(face.IsSame(top) for top in tight.top_faces):
             current = [tight.lens]
         else:
             current = [after for before in through(below, face) for after in through(joined, before)]

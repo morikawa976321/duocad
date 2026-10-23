@@ -24,11 +24,12 @@ from typing import List, NamedTuple, Tuple
 
 import numpy as np
 
-from OCP.BRep import BRep_Tool
+from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_CompCurve, BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
+    BRepBuilderAPI_Copy,
     BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakeSolid,
     BRepBuilderAPI_MakeWire,
@@ -48,10 +49,12 @@ from OCP.GeomAPI import GeomAPI_Interpolate
 from OCP.GeomAbs import GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.TColgp import TColgp_HArray1OfPnt
 from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
+from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+from OCP.TopLoc import TopLoc_Location
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SHELL, TopAbs_WIRE
 from OCP.TopExp import TopExp
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
-from OCP.TopoDS import TopoDS, TopoDS_Shape
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 from .kernel_overflow import Unsupported, _boolean, _outward_normal, _solids, _volume
@@ -59,13 +62,14 @@ from .mesh_geometry import indexed_map
 
 
 class Tight(NamedTuple):
-    """上面(`top`)の後継は元の支持面のレンズ(`lens`)。`builders` は壁の切り取りと縫い合わせの順で、
+    """上面(`top_faces`、単面では `top`)の後継は同じレンズ(`lens`)。`builders` は壁の切り取りと縫い合わせの順で、
     `Modified`・`IsDeleted` に答える。上面以外の後継はこの2つをたどる(`kernel._tight_fillet` との契約)。"""
 
     shape: TopoDS_Shape
     top: TopoDS_Shape
     lens: TopoDS_Shape
     builders: list
+    top_faces: tuple = ()
 
 
 #: 球の中心の道を求める輪郭の点の数(少なくとも)と、輪郭の辺1本あたりの数。
@@ -98,15 +102,16 @@ def round_tight_loop(shape: TopoDS_Shape, edge_map, radii: dict) -> Tight:
     # 失敗文面との契約: 閉じた1輪を選んだ場合だけ、この経路で断った理由を添える。
     closed_loop = _is_closed_loop(edges)
     try:
-        top = _top_face(shape, edges)
-        if BRepAdaptor_Surface(TopoDS.Face_s(top)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane:
+        originals = []
+        top = _top_face(shape, edges, originals=originals)
+        if len(originals) == 1 and BRepAdaptor_Surface(TopoDS.Face_s(top)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane:
             try:
                 return _round(shape, top, radius)
             except _NotPrismatic:
                 pass
         from .kernel_tight_surface import round_surface_loop
 
-        return round_surface_loop(shape, top, radius)
+        return round_surface_loop(shape, top, radius, top_faces=originals)
     except Unsupported as error:
         if closed_loop:
             raise Declined(str(error)) from error
@@ -199,8 +204,28 @@ class _Sewn:
 # --------------------------------------------------------------------------------------
 # 引き受けるかの確かめ
 # --------------------------------------------------------------------------------------
-def _top_face(shape: TopoDS_Shape, edges: list) -> TopoDS_Shape:
-    """1つの上面の外周すべてを選ぶ。支持面のシーム・縮退辺は外周の選択に含めない。"""
+def _same_support(first, second):
+    first_location, second_location = TopLoc_Location(), TopLoc_Location()
+    first_surface = BRep_Tool.Surface_s(TopoDS.Face_s(first), first_location)
+    second_surface = BRep_Tool.Surface_s(TopoDS.Face_s(second), second_location)
+    return (first_surface == second_surface and first_location.IsEqual(second_location)
+            and first.Orientation() == second.Orientation())
+
+
+def _unified_faces(faces):
+    compound = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(compound)
+    for face in faces:
+        builder.Add(compound, face)
+    # UnifySameDomain は入力を変更しうる。元の本体の壁と辺を共有しないコピーで行う。
+    unified = ShapeUpgrade_UnifySameDomain(BRepBuilderAPI_Copy(compound).Shape(), False, True, False)
+    unified.Build()
+    return _faces(unified.Shape())
+
+
+def _top_face(shape: TopoDS_Shape, edges: list, *, originals=None) -> TopoDS_Shape:
+    """同じ支持面で接続した上面の全外周を選ぶ。元の面は由来と壁の隣接のために返す。"""
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
     def neighbors(edge):
@@ -210,17 +235,40 @@ def _top_face(shape: TopoDS_Shape, edges: list) -> TopoDS_Shape:
     shared = [face for face in candidates if all(any(edge.IsSame(other) for other in edges)
               for edge in _edges(BRepTools.OuterWire_s(TopoDS.Face_s(face)))
               if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(face)) and not BRep_Tool.Degenerated_s(edge))]
-    if not shared and candidates and BRep_Tool.IsClosed_s(_wire(edges)):
-        raise Unsupported("the top face has holes or other unselected boundary loops")
-    if len(shared) != 1:
-        raise Unsupported("the edges must be the whole outline of one top face")
-    common = shared[0]
+    groups = [[face] for face in shared]
+    if not groups:
+        for seed in neighbors(edges[0]):
+            group, pending = [], [seed]
+            while pending:
+                face = pending.pop()
+                if any(face.IsSame(known) for known in group):
+                    continue
+                group.append(face)
+                pending.extend(other for edge in _edges(face) for other in neighbors(edge)
+                               if not any(edge.IsSame(selected) for selected in edges)
+                               and _same_support(seed, other)
+                               and not any(other.IsSame(known) for known in group))
+            boundary = [edge for face in group for edge in _edges(face)
+                        if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(face))
+                        and not BRep_Tool.Degenerated_s(edge)
+                        and sum(any(other.IsSame(member) for member in group) for other in neighbors(edge)) == 1]
+            if len(boundary) == len(edges) and all(any(edge.IsSame(other) for other in boundary) for edge in edges):
+                groups.append(group)
+    if len(groups) != 1:
+        if not groups and candidates and BRep_Tool.IsClosed_s(_wire(edges)):
+            raise Unsupported("the top face has holes or other unselected boundary loops")
+        raise Unsupported("the edges must be the whole outline of one top face on the same support surface")
+    group = groups[0]
+    merged = group if len(group) == 1 else _unified_faces(group)
+    if len(merged) != 1 or not BRepCheck_Analyzer(merged[0]).IsValid():
+        raise Unsupported("the top faces on the same support do not join into one valid face")
+    common = merged[0]
     wires = indexed_map(common, TopAbs_WIRE)
     if wires.Extent() != 1:
         raise Unsupported("the top face has holes or other inner loops")
     loop = [edge for edge in _edges(wires.FindKey(1))
             if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(common)) and not BRep_Tool.Degenerated_s(edge)]
-    if len(loop) != len(edges) or not all(any(other.IsSame(edge) for other in loop) for edge in edges):
+    if len(group) == 1 and (len(loop) != len(edges) or not all(any(other.IsSame(edge) for other in loop) for edge in edges)):
         raise Unsupported("the edges must be the whole outline of the top face")
     explorer = BRepTools_WireExplorer(TopoDS.Wire_s(wires.FindKey(1)))
     ordered = []
@@ -231,6 +279,8 @@ def _top_face(shape: TopoDS_Shape, edges: list) -> TopoDS_Shape:
     for this, following in zip(ordered, ordered[1:] + ordered[:1]):
         if _end_direction(this, at_end=True).Angle(_end_direction(following, at_end=False)) > _SMOOTH_ANGLE:
             raise Unsupported("the outline has a sharp corner (corners are not rounded this way)")
+    if originals is not None:
+        originals.extend(group)
     return common
 
 

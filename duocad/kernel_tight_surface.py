@@ -12,7 +12,7 @@ import math
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeVertex
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeVertex
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
@@ -26,12 +26,13 @@ from OCP.GeomFill import GeomFill_Pipe
 from OCP.GeomProjLib import GeomProjLib
 from OCP.ShapeFix import ShapeFix_Edge
 from OCP.ShapeAnalysis import ShapeAnalysis_Surface
+from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.TColgp import TColgp_HArray1OfPnt
 from OCP.TColStd import TColStd_HArray1OfReal
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_ON, TopAbs_OUT, TopAbs_REVERSED, TopAbs_SHELL, TopAbs_WIRE
 from OCP.TopExp import TopExp
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
-from OCP.TopoDS import TopoDS
+from OCP.TopoDS import TopoDS, TopoDS_Compound
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Pnt2d, gp_Vec
 
 from . import kernel_tight as tight
@@ -81,15 +82,18 @@ def _contact_state(face, uv):
     return state
 
 
-def _walls(shape, top):
+def _walls(shape, tops):
     """上面の外周に隣接する壁を、重複なしで返す。"""
     adjacent = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, adjacent)
     walls = []
-    for edge in tight._edges(top):
+    for top, edge in ((top, edge) for top in tops for edge in tight._edges(top)):
         if BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(top)) or BRep_Tool.Degenerated_s(edge):
             continue
-        others = [face for face in adjacent.FindFromKey(edge) if not face.IsSame(top)]
+        neighbors = list(adjacent.FindFromKey(edge))
+        if sum(any(face.IsSame(top) for top in tops) for face in neighbors) > 1:
+            continue
+        others = [face for face in neighbors if not any(face.IsSame(top) for top in tops)]
         if len(others) != 1:
             raise Unsupported("the top outline does not have exactly one wall on each edge")
         if not any(others[0].IsSame(wall) for wall in walls):
@@ -126,7 +130,7 @@ def _up(top, walls):
     return up
 
 
-def _cut(shape, top, walls, up, radius):
+def _cut(shape, top, walls, up, radius, top_faces):
     """壁接点の最低点の少し下で切り、単一の断面・基点・上側の体積を返す。"""
     size = tight._diagonal(shape)
     trial = _Contacts(top, top, walls, up, radius)
@@ -159,7 +163,7 @@ def _cut(shape, top, walls, up, radius):
                and _outward_normal(face, tight._a_point_on(face)).Dot(up) > 0.99]
     if len(section) != 1:
         raise Unsupported("the cut below the wall contacts does not have one planar section")
-    allowed = [top, *walls]
+    allowed = [*top_faces, *walls]
     permitted = [modified for face in allowed for modified in (list(above.Modified(face)) or [face])]
     for face in tight._faces(above.Shape()):
         if any(face.IsSame(other) for other in permitted):
@@ -505,13 +509,14 @@ def _trim_wall(wall, edges):
     return pieces
 
 
-def round_surface_loop(shape, top, radius):
+def round_surface_loop(shape, top, radius, *, top_faces=None):
     """実面の接点で上面の外周を丸め、有効な立体と面の由来を返す。"""
     if len(_solids(shape)) != 1:
         raise Unsupported("the body must be one solid")
-    walls = _walls(shape, top)
+    top_faces = [top] if top_faces is None else top_faces
+    walls = _walls(shape, top_faces)
     up = _up(top, walls)
-    section, base, expected = _cut(shape, top, walls, up, radius)
+    section, base, expected = _cut(shape, top, walls, up, radius, top_faces)
     contour = _Contacts(section, top, walls, up, radius)
     for i in range(512):
         if gp_Vec(base, contour.contact(contour.length * i / 512)[1]).Dot(up) < 1e-5:
@@ -537,12 +542,26 @@ def round_surface_loop(shape, top, radius):
                 and not BRep_Tool.Degenerated_s(edge)]
     lenses = [face for face in pieces
               if not any(indexed_map(face, TopAbs_EDGE).Contains(edge) for edge in original)]
+    if len(lenses) > 1:
+        # シームがレンズ内部を通ると、Splitter は UV の両端に別々の面を作る。
+        # 外周を含まない片だけを同じ支持面上で統合し、接点の境界は保つ。
+        compound = TopoDS_Compound()
+        builder = BRep_Builder()
+        builder.MakeCompound(compound)
+        for face in lenses:
+            builder.Add(compound, face)
+        # UnifySameDomain による入力の変更を、元の上面や管の辺へ波及させない。
+        unified = ShapeUpgrade_UnifySameDomain(BRepBuilderAPI_Copy(compound).Shape(), False, True, False)
+        unified.Build()
+        lenses = tight._faces(unified.Shape())
     if len(lenses) != 1:
         raise Unsupported(f"the top contact curves do not enclose one lens ({len(lenses)} faces)")
     lens = lenses[0]
+    if not BRepCheck_Analyzer(lens).IsValid():
+        raise Unsupported("the top contact curves produced an invalid lens")
     replacements = []
     all_rims = _rim_pieces(contour, 0.0, contour.length)
-    top_edges = tight._edges(top)
+    top_edges = [edge for face in top_faces for edge in tight._edges(face)]
     for wall in walls:
         edges = [edge for edge, owner in all_rims if owner.IsSame(wall)]
         pieces = _trim_wall(wall, edges)
@@ -552,10 +571,10 @@ def round_surface_loop(shape, top, radius):
         replacements.append((wall, retained))
     outer = [shell for shell in (indexed_map(shape, TopAbs_SHELL).FindKey(i)
                                 for i in range(1, indexed_map(shape, TopAbs_SHELL).Extent() + 1))
-             if indexed_map(shell, TopAbs_FACE).Contains(top)]
+             if all(indexed_map(shell, TopAbs_FACE).Contains(face) for face in top_faces)]
     if len(outer) != 1:
         raise Unsupported("the top is not on one outer shell")
-    kept = [piece for face in tight._faces(outer[0]) if not face.IsSame(top)
+    kept = [piece for face in tight._faces(outer[0]) if not any(face.IsSame(top) for top in top_faces)
             for piece in next((pieces for wall, pieces in replacements if wall.IsSame(face)), [face])]
     cavities = [indexed_map(shape, TopAbs_SHELL).FindKey(i) for i in range(1, indexed_map(shape, TopAbs_SHELL).Extent() + 1)
                 if not indexed_map(shape, TopAbs_SHELL).FindKey(i).IsSame(outer[0])]
@@ -565,4 +584,4 @@ def round_surface_loop(shape, top, radius):
     if not 0 < removed < expected:
         raise Unsupported(f"the rounding removed an implausible volume ({removed:.6g} of at most {expected:.6g})")
     successor = sewing.Modified(lens) if sewing.IsModified(lens) else lens
-    return tight.Tight(result, top, successor, [_Trimmed(replacements), tight._Sewn(sewing)])
+    return tight.Tight(result, top, successor, [_Trimmed(replacements), tight._Sewn(sewing)], tuple(top_faces))

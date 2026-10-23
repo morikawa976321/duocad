@@ -22,7 +22,7 @@ from OCP.GeomAbs import GeomAbs_SurfaceType
 from OCP.GeomConvert import GeomConvert
 from OCP.GProp import GProp_GProps
 from OCP.TColgp import TColgp_Array2OfPnt
-from OCP.TopAbs import TopAbs_IN, TopAbs_OUT
+from OCP.TopAbs import TopAbs_FACE, TopAbs_IN, TopAbs_OUT
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS
@@ -71,8 +71,11 @@ def _outline(shape, curved=False):
     top = ((spheres or candidates)[0] if curved else max(
         (face for face in candidates if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
         key=lambda face: kernel_tight._a_point_on(face).Z()))
-    boundary = [edge for edge in kernel_tight._edges(top)
-                if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(top)) and not BRep_Tool.Degenerated_s(edge)]
+    tops = [face for face in candidates
+            if face.IsSame(top) or BRep_Tool.Surface_s(TopoDS.Face_s(face)) == BRep_Tool.Surface_s(TopoDS.Face_s(top))]
+    boundary = [edge for face in tops for edge in kernel_tight._edges(face)
+                if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(face)) and not BRep_Tool.Degenerated_s(edge)
+                and sum(any(edge.IsSame(other) for other in kernel_tight._edges(owner)) for owner in tops) == 1]
     return [i for i in range(1, kernel.edge_count(shape) + 1)
             if any(kernel.edge_of(shape, i).IsSame(edge) for edge in boundary)]
 
@@ -387,6 +390,76 @@ def _tilted_pole_dome(delta):
     angle = math.asin(0.5 / 24.5) + delta
     tool = BRepPrimAPI_MakeSphere(gp_Ax2(gp_Pnt(0, 0, -20), gp_Dir(0, math.sin(angle), math.cos(angle))), 26).Shape()
     return BRepAlgoAPI_Common(_elliptic_post(6, 2, 8), tool).Shape()
+
+
+@pytest.mark.parametrize('kind,direction,tilt,degrees', [
+    ('ellipse', 'Y', 0.03, 120),
+    ('ellipse', 'X', math.pi / 2, 30),
+    ('teardrop', 'Y', math.pi / 2, 120),
+])
+def test_a_seam_inside_the_lens_keeps_one_face_and_one_successor(kind, direction, tilt, degrees, monkeypatch):
+    """シームが内部を横切っても、Tightのレンズと最終的な上面の後継は1面に保つ。"""
+    pole = (gp_Dir(0, math.sin(tilt), math.cos(tilt)) if direction == 'Y'
+            else gp_Dir(math.sin(tilt), 0, math.cos(tilt)))
+    axes = gp_Ax2(gp_Pnt(0, 0, -20), pole)
+    axes.Rotate(gp_Ax1(axes.Location(), axes.Direction()), math.radians(degrees))
+    post = _teardrop_post() if kind == 'teardrop' else _elliptic_post(6, 2, 8)
+    radius = 1 if kind == 'teardrop' else 1.5
+    common = BRepAlgoAPI_Common(post, BRepPrimAPI_MakeSphere(axes, 26).Shape())
+    shape = common.Shape()
+    assert BRepCheck_Analyzer(shape).IsValid()
+    actual = kernel_tight.round_tight_loop
+    lenses = []
+
+    def checked_round(*args, **kwargs):
+        tight = actual(*args, **kwargs)
+        assert tight.lens.ShapeType() == TopAbs_FACE
+        assert BRepCheck_Analyzer(tight.lens).IsValid()
+        lenses.append(tight.lens)
+        return tight
+
+    monkeypatch.setattr(kernel_tight, 'round_tight_loop', checked_round)
+    rounded = kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape, True)})
+    assert len(lenses) == 1
+    assert BRepCheck_Analyzer(shape).IsValid()
+    assert BRepCheck_Analyzer(rounded['shape']).IsValid()
+    assert len(kernel.split_solids(rounded['shape'])) == 1
+    provenance = rounded['provenance']
+    assert provenance['deleted'] == []
+    assert all(len(successors) == 1 for successors in provenance['face_map'].values())
+    final_lenses = [face for face in kernel_tight._faces(rounded['shape'])
+                    if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere]
+    assert len(final_lenses) == 1
+    expected = _spherical_lens_area(radius) if kind == 'ellipse' else 18.147750439
+    assert _precise_area(lenses[0]) == pytest.approx(expected, abs=2e-6)
+    assert _precise_area(final_lenses[0]) == pytest.approx(expected, abs=2e-6)
+    if kind == 'ellipse':
+        _check_provenance(shape, rounded)
+
+
+@pytest.mark.parametrize('direction,tilt,degrees', [('Y', 0.1, 120), ('X', 0.3, 180)])
+def test_split_spherical_top_faces_share_the_lens_successor(direction, tilt, degrees):
+    """Boolean のまま2面に割れた上面の全外周を丸め、両方の後継を同じレンズにする。"""
+    pole = (gp_Dir(0, math.sin(tilt), math.cos(tilt)) if direction == 'Y'
+            else gp_Dir(math.sin(tilt), 0, math.cos(tilt)))
+    axes = gp_Ax2(gp_Pnt(0, 0, -20), pole)
+    axes.Rotate(gp_Ax1(axes.Location(), axes.Direction()), math.radians(degrees))
+    shape = BRepAlgoAPI_Common(_elliptic_post(6, 2, 8), BRepPrimAPI_MakeSphere(axes, 26).Shape()).Shape()
+    tops = [index for index in range(1, kernel.face_count(shape) + 1)
+            if BRepAdaptor_Surface(TopoDS.Face_s(kernel.face_of(shape, index))).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere]
+    assert len(tops) == 2
+    before_volume = kernel.volume(shape)
+    rounded = kernel.fillet_edges(shape, {edge: 1.5 for edge in _outline(shape, True)})
+    _check_provenance(shape, rounded)
+    successors = [rounded['provenance']['face_map'][str(index)] for index in tops]
+    assert successors[0] == successors[1]
+    lens = kernel.face_of(rounded['shape'], successors[0][0])
+    assert _precise_area(lens) == pytest.approx(_spherical_lens_area(1.5), abs=2e-6)
+    assert BRepCheck_Analyzer(rounded['shape']).IsValid()
+    assert len(kernel.split_solids(rounded['shape'])) == 1
+    assert BRepCheck_Analyzer(shape).IsValid()
+    assert kernel.face_count(shape) == 4
+    assert kernel.volume(shape) == pytest.approx(before_volume, abs=1e-10)
 
 
 @pytest.mark.parametrize('delta', [0, -1e-7, 1e-7, -1e-4, 1e-4])
