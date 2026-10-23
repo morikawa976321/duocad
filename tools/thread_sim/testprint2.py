@@ -30,6 +30,14 @@ SERIES = [
     ("T", "30°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 30, 30), "radial", 5, [0.22, 0.30, 0.47, 0.55]),
     ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.10, 0.17, 0.26, 0.34]),
 ]
+# TP3: 本人のプリントの 99% が使う 0.12mm Fine(層 0.12・壁3周)で刷る。同じ D6 P1.5 の3系列と、45° の複製(E、六角)で同じ板の中の判定の揺れを見る。
+# 隙間は 0.12mm Fine の模型で、誤差 0〜0.05 とガタの境目 0.15〜0.28 のどの組でも判定が変わらない点(B3・E3 の 0.18 だけはガタの境目で分かれる点)
+SERIES_TP3 = [
+    ("S", "半円 D6 P1.5 ρ0.6(法線の隙間)", 6, lambda: pf.coil(6, 1.5, 0.6), "normal", 8, [0.07, 0.11, 0.14, 0.24]),
+    ("T", "30°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 30, 30), "radial", 5, [0.10, 0.20, 0.24, 0.44]),
+    ("B", "45°台形 D6 P1.5 深さ0.6", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 4, [0.04, 0.12, 0.18, 0.28]),
+    ("E", "45°台形 D6 P1.5 深さ0.6(B の複製)", 6, lambda: pf.trapezoid(6, 1.5, 0.6, 45, 45), "radial", 6, [0.04, 0.12, 0.18, 0.28]),
+]
 # 引き抜き: (記号, 表示名, 呼び径, 山形, 付け方, 角の数, 隙間, ナットの高さ, 本数)
 # 例(次の試験の候補): ("P", "半円 D3 P1.2 ρ0.48", 3, lambda: pf.coil(3, 1.2, 0.48), "normal", 8, 0.15, 2.4, 2)
 PULL = []
@@ -46,6 +54,18 @@ INTRO = (
     '<p><b>嵌合の試し方</b>: TP1 と同じ(冷めてから、工具なしで、凹み1個のナットから順に、初回のねじ込みで判定)。'
     '<b>「ガタが大きい」は、ナットをボルトの途中で止めて軸の向きに押し引きしたとき、カタカタ動くのが分かる</b>ときに付ける。</p>'
     '刷れなかった・欠けた部品があれば、その行で「部品が欠けた・刷れなかった」に印を付ける(印刷のしやすさの記録になる)。</p>'
+    '<p><b>部品は捨てない</b>: 結果を返した後も、次の試し刷りの結果が出るまで全部の部品を袋などにまとめて取っておく(確かめ直しに使うことがある)。</p>'
+    '<p><b>返し方</b>: 各行を1つクリック(点線の枠は当てはまるときだけ追加)。下の「コピー」を押し、出てきた1行を次のメッセージに貼る。途中で閉じても選択は残る。</p></div>'
+)
+
+
+INTRO_TP3 = (
+    '<div class="intro"><p><b>刷り方</b>: <code>plate.stl</code> を ElegooSlicer で開き、プリンター「Elegoo Centauri Carbon 0.4 nozzle」・'
+    '<b>プロセス「0.12mm Fine @Elegoo CC 0.4 nozzle」</b>・PLA のまま、ほかは何も変えずに刷る(回転しない・サポート不要)。</p>'
+    '<p><b>試し方</b>: TP2 と同じ。冷めてから、工具なしで、凹み1個のナットから順に、初回のねじ込みで判定する。'
+    '<b>「ガタが大きい」は、ナットをボルトの途中で止めて軸の向きに押し引きしたとき、カタカタ動くのが分かる</b>ときに付ける。'
+    'B(四角)と E(六角)は同じ設計なので、それぞれ別に判定する(見比べて揃えない)。'
+    '刷れなかった・欠けた部品があれば、その行で「部品が欠けた・刷れなかった」に印を付ける。</p>'
     '<p><b>部品は捨てない</b>: 結果を返した後も、次の試し刷りの結果が出るまで全部の部品を袋などにまとめて取っておく(確かめ直しに使うことがある)。</p>'
     '<p><b>返し方</b>: 各行を1つクリック(点線の枠は当てはまるときだけ追加)。下の「コピー」を押し、出てきた1行を次のメッセージに貼る。途中で閉じても選択は残る。</p></div>'
 )
@@ -80,36 +100,41 @@ def make_bracket(D: float, length: float = 50.0, width: float = 16.0, thickness:
     return plate
 
 
-def _states(sid_or_spec, c, e, kw=None):
-    """TP1 に合わせた係数で、誤差 e(雌雄の和・半径)のもとで刷ったときの余り・掛かり代・軸方向の遊び。ボルトは呼び寸法(split=0)。"""
+def _states(sid_or_spec, c, e, kw=None, base=None):
+    """TP1 に合わせた係数で、誤差 e(雌雄の和・半径)のもとで刷ったときの余り・掛かり代・軸方向の遊び。ボルトは呼び寸法(split=0)。
+    base は印刷の設定(既定は 0.20mm Standard の DEFAULT、0.12mm Fine なら printer.FINE)。"""
     from . import evaluate as ev
     from .printer import DEFAULT, TP1_FIT
     name, D, mk, mode = sid_or_spec
-    pr = DEFAULT.with_(**{**TP1_FIT, **(kw or {})})
+    pr = (base or DEFAULT).with_(**{**TP1_FIT, **(kw or {})})
     pr = pr.with_(contour_bias=pr.contour_bias + e / 2, hole_bias=pr.hole_bias - e / 2)
     r = ev.evaluate(ev.Design(name, mk(), c, mode=mode, L_nut=float(D), R_out=0.9 * D, split=0.0), pr, with_strength=False)
     return r.margin, r.engagement, r.play
 
 
-def classify(margin, engagement, play):
+def classify(margin, engagement, play, play_max=PLAY_MAX):
     if margin < -0.005:
         return "はまらない"
     if engagement + 1e-9 < E_REQ:
         return "山飛び"
-    if play > PLAY_MAX:
+    if play > play_max:
         return "ガタ"
     return "軽く回りガタ無し"
 
 
-def predict(out: Path = OUT) -> dict:
-    """事前の予測(結果を見る前に固定する)。ナットごとに、TP1 のねじの誤差の幅の両端で予測した判定。引き抜きは保持の荷重と壊れる所。"""
+def predict(out: Path = OUT, series=None, base=None, e_range=None, play_range=(PLAY_MAX,)) -> dict:
+    """事前の予測(結果を見る前に固定する)。ナットごとに、誤差の幅の両端 × ガタの境目の候補で予測した判定。引き抜きは保持の荷重と壊れる所。"""
     from . import evaluate as ev
     from .printer import DEFAULT, TP1_FIT
     res = dict(series={}, pull={})
-    for sid, name, D, mk, mode, _, cs in SERIES:
+    for sid, name, D, mk, mode, _, cs in (series or SERIES):
         nuts = []
         for c in sorted(cs, reverse=True):
-            calls = {f"e{e:g}": classify(*_states((name, D, mk, mode), c, e)) for e in E_THREAD[D]}
+            calls = {}
+            for e in (e_range or E_THREAD)[D]:
+                st = _states((name, D, mk, mode), c, e, base=base)
+                for pm in play_range:
+                    calls[f"e{e:g} ガタ境目{pm:g}"] = classify(*st, play_max=pm)
             nuts.append(dict(c=c, predicted=calls))
         res["series"][sid] = dict(name=name, nuts=nuts)
     pr = DEFAULT.with_(**TP1_FIT)
@@ -134,11 +159,12 @@ def _pull_af(D):
     return max(1.6 * D, D + 4.0) + 2.0
 
 
-def build(out: Path = OUT, test_id: str = TEST_ID):
-    """test_id を変えると、同じ部品のまま別の回の試し刷りとして作る(TP3 = TP2 の刷り直し)。"""
+def build(out: Path = OUT, test_id: str = TEST_ID, series=None, base=None, intro=None, e_range=None, play_range=(PLAY_MAX,)):
+    """series・base(印刷の設定)・intro を変えると別の回の試し刷りになる(TP3 = 0.12mm Fine の版)。"""
     out.mkdir(parents=True, exist_ok=True)
+    series = series or SERIES
     pieces, groups = [], []
-    for sid, name, D, mk, mode, sides, cs in SERIES:
+    for sid, name, D, mk, mode, sides, cs in series:
         prof = mk()
         sz = _sizes(D)
         f = f"{sid}0_bolt.stl"
@@ -178,14 +204,14 @@ def build(out: Path = OUT, test_id: str = TEST_ID):
     plate = make_plate(out, pieces)
     (out / "manifest.json").write_text(json.dumps(dict(test_id=test_id, pieces=[p.__dict__ for p in pieces], plate=plate),
                                                   ensure_ascii=False, indent=1), encoding="utf-8")
-    layout = layout_svg(out, pieces, plate["placed"], series=SERIES,
+    layout = layout_svg(out, pieces, plate["placed"], series=series,
                         extra_rows=[(s[0], f"{s[0]}: 引き抜き {s[1]}(ボルトの頭に横穴、ナットは低い)", "R は吊り板") for s in PULL],
                         notes=("記号の数字 0 はボルト。", "ナットの番号 = 上面の凹みの数(1 が最も緩い)。", "実線の白丸はナットの穴、点線はボルトの軸。"))
     (out / "layout.svg").write_text(layout, encoding="utf-8")
     figure = ('<div class="intro"><p><b>配置図</b>(plate.stl を上から見た図。下が手前。系列は頭やナットの角の数で、'
               'ナットの番号は上面の凹みの数で分かる)</p>' + layout + '</div>')
-    write_page(groups, out / "index.html", f"ねじ試し刷り {test_id} の結果", intro=INTRO + figure, test_id=test_id)
-    predict(out)
+    write_page(groups, out / "index.html", f"ねじ試し刷り {test_id} の結果", intro=(intro or INTRO) + figure, test_id=test_id)
+    predict(out, series=series, base=base, e_range=e_range, play_range=play_range)
     return pieces
 
 
@@ -217,8 +243,10 @@ if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "recheck":
         print(write_recheck_tp1())
-    elif len(sys.argv) > 1 and sys.argv[1] == "tp3":  # TP2 と同じ部品の刷り直し(THREAD_SIM.md 6.5 の 2)
-        ps = build(OUT.parent / "testprint3", "TP3")
+    elif len(sys.argv) > 1 and sys.argv[1] == "tp3":  # 0.12mm Fine の版(THREAD_SIM.md 6.5)
+        from .printer import FINE
+        ps = build(OUT.parent / "testprint3", "TP3", series=SERIES_TP3, base=FINE, intro=INTRO_TP3,
+                   e_range={6: (0.0, 0.05)}, play_range=(0.15, 0.28))
         print(len(ps), "部品を", OUT.parent / "testprint3", "へ")
     else:
         ps = build()
