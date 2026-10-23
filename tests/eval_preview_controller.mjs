@@ -86,6 +86,19 @@ check('打ち直しのデバウンス中と送信後に前の応答を採用し�
   assert.equal(m.receive(2)[0].type, 'render')
 })
 
+check('0ms半径2→250ms要求1→300ms半径3→350ms要求1応答は描かず、550msに要求2を送る', () => {
+  const m = machine()
+  m.update(input(2), 0)
+  m.fire('debounce', 250)
+  m.update(input(3), 300)
+  assert.deepEqual(m.event({ type: 'response', payload: response(1), now: 350 }), [])
+  assert.equal(m.state.debounce.at, 550)
+  assert.deepEqual(m.sent(), [['fillet', { radius: 2 }, 1]])
+  m.fire('debounce', 550)
+  assert.deepEqual(m.sent(), [['fillet', { radius: 2 }, 1], ['fillet', { radius: 3 }, 2]])
+  assert.equal(m.receive(2)[0].type, 'render')
+})
+
 check('引数が同じでも選択が変われば1回送り、旧選択の遅延応答は捨てる', () => {
   const m = machine()
   m.update(input())

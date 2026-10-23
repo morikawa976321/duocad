@@ -37,13 +37,12 @@
    */
   import { onDestroy, onMount, untrack } from 'svelte'
   import type { PreviewController } from '../previewController'
+  import { createSharedArgsController, publishedArgs } from '../sharedArgsController'
   import {
     argApplies,
     argKinds,
     argSatisfied,
     buildArgs,
-    choiceSends,
-    syncedChoice,
     commitsGhost,
     findCommand,
     firstMissingArg,
@@ -70,7 +69,7 @@
   import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../expression'
   import { isImeKey, ownsEnterKey } from '../keys'
   import type { CommandState, SelectionRef, SelectionState } from '../session'
-  import { COMMAND_CATEGORY, COMMAND_PARAMS } from '../generated/protocol'
+  import { COMMAND_CATEGORY } from '../generated/protocol'
 
   let {
     selection,
@@ -149,9 +148,6 @@
     /** 起動中のコマンドが頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`。測定)。アプリ層が対象ボディの頂点を候補として出し、辺より先に取る。 */
     onWantsVertices?: (wants: boolean) => void
   } = $props()
-
-  /** 打ってからサーバの作業空間へ出すまでの待ち[ms]。打鍵のたびに送らない(AI には落ち着いた値だけ見える)。 */
-  const PUBLISH_DEBOUNCE_MS = 250
 
   /** 構える対象(サーバの作業空間に載る verb)か。スケッチとフィーチャの verb(`duocad/workspace.py` の `stageable` と同じ線)。 */
   function isStageable(verb: string): boolean {
@@ -425,7 +421,7 @@
       // 印は `onRun` より先に立てる: 繋がっていなくて送れなかったときは `onRun` の中で同期に `commitFailed()` が呼ばれて降りる。
       committed = true
       armedSelections = null
-      cancelPublish()
+      sharedArgs.cancel()
       preview.cancel()
       onRun(...source.request)
       return
@@ -491,11 +487,7 @@
     committed = false
     // 即適用の待ち受けも降ろす。構え直すのは `entered()` / `restart()` だけ。
     armedSelections = null
-    cancelPublish()
-    lastPublished = {}
-    sentKeys = new Set()
-    unmapped = new Set()
-    everLive = new Set()
+    sharedArgs.reset()
     preview.cancel()
   }
 
@@ -570,107 +562,36 @@
   })
 
   // ---------------------------------------------------------------- サーバの作業空間との同期(issue #153)
-  /** サーバが持っていると信じている引数(自分の送信と配信の写し)。配信がこれと同じなら自分の送信の返りなので欄に触らない。 */
-  let lastPublished: Record<string, unknown> = {}
-  let publishTimer: ReturnType<typeof setTimeout> | null = null
-
-  /**
-   * サーバへ出す引数。verb のサーバ側引数名で、宣言(`COMMAND_PARAMS`)にある名前だけ。選択・図形ID・貼る先の面は載せない
-   * (対象は共有選択から)。出すのは今要る引数(`liveArgs`。`when` で隠れた欄の値は出さない)で、数値・文字列・点・ピックは
-   * そのまま、選択肢は `sends` でサーバの値に読み替える。
-   */
-  const published = $derived.by<Record<string, unknown> | null>(() => {
-    if (sharedId === null || command === null) return null
-    const allowed = new Set<string>(COMMAND_PARAMS[command.id as keyof typeof COMMAND_PARAMS] ?? [])
-    const out: Record<string, unknown> = {}
-    for (const spec of liveArgs) {
-      if (spec.kind === 'selection' || spec.kind === 'entities' || spec.kind === 'plane') continue
-      let value: unknown = values[spec.name]
-      if (spec.kind === 'choice') {
-        const option = spec.options.find((candidate) => candidate.value === value)
-        value = option === undefined ? undefined : choiceSends(option)
-      }
-      if (spec.kind === 'text' && spec.toShared !== undefined && typeof value === 'string') {
-        value = spec.toShared(value)
-      }
-      if (value === undefined || value === null || value === '' || !allowed.has(spec.name)) continue
-      out[spec.name] = value
-    }
-    // 揃っていれば `build` の結果が勝つ(点から導いた寸法・貼る先の平面名はここでしかサーバ側の名前にならない)。
-    if (built?.ok) {
-      for (const [name, value] of Object.entries(built.args)) {
-        if (allowed.has(name) && value !== undefined && value !== null) out[name] = value
-      }
-    }
-    return out
+  const sharedArgs = createSharedArgsController({
+    context: () => ({ active: sharedId !== null, committed, specs: command?.args ?? [] }),
+    send: (args) => onSetArgs(args),
+    render: (draft) => {
+      numberText = draft.numberText
+      textValues = draft.textValues
+      choices = draft.choices
+      points = draft.points
+      picks = draft.picks
+      planes = draft.planes
+    },
+    note: (message) => onNote(message),
+    setTimer: (callback, delay) => setTimeout(callback, delay),
+    clearTimer: (timer) => clearTimeout(timer),
   })
+
+  const published = $derived(sharedId === null || command === null ? null : publishedArgs(command, liveArgs, values, built))
 
   $effect(() => {
     const next = published
-    if (next === null) return
-    const snapshot = { ...next }
-    untrack(() => {
-      if (publishTimer) clearTimeout(publishTimer)
-      publishTimer = setTimeout(() => {
-        publishTimer = null
-        flushPublish(snapshot)
-      }, PUBLISH_DEBOUNCE_MS)
-    })
+    untrack(() => sharedArgs.update(next))
   })
 
-  function cancelPublish(): void {
-    if (publishTimer) clearTimeout(publishTimer)
-    publishTimer = null
-  }
-
-  /** 自分がこの起動で実際に出したことのあるキー(`build` が作る `base_plane` / `mode` のように欄の名前と違うものを含む)。 */
-  let sentKeys = new Set<string>()
-  /** 配信された値を欄へ写せなかったキー(3択に無い荷重の向き・`sends: null` の選択肢に紐づく値など)。欄が空でも「人が消した」ではない。 */
-  let unmapped = new Set<string>()
-  /** この起動で一度でも画面に出た欄の名前。出たことのある欄が `when` で隠れたら、その値は人が切り替えで捨てたもの(回転→並進の `angle`)。 */
-  let everLive = new Set<string>()
   $effect(() => {
-    for (const spec of liveArgs) everLive.add(spec.name)
+    const names = liveArgs.map((spec) => spec.name)
+    untrack(() => sharedArgs.visible(names))
   })
 
-  /**
-   * `lastPublished` との差分だけ送る。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。
-   * 欄から消えたキーを null で外すのは、**自分が出したことのあるキー**か、**一度でも画面に出た欄のキーで、配信を欄へ写せなかった
-   * ものでない**ものだけ: 人が欄を空にした・モードを切り替えて欄を隠したのは「まだ決めていない」へ戻す意思で、AI が付けた値でも
-   * 外す(残すと AI の `apply_command` が並進に回転の引数を併合して断られる)。一度も出ていない欄(`when` で
-   * 隠れたままの欄)・欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)・
-   * 写せなかった値は触らない。
-   */
-  function flushPublish(next: Record<string, unknown>): void {
-    if (sharedId === null || committed) return
-    const fields = new Set(
-      (command?.args ?? [])
-        .filter((spec) => spec.kind === 'number' || spec.kind === 'text' || spec.kind === 'point' || spec.kind === 'pick' || spec.kind === 'choice')
-        .map((spec) => spec.name),
-    )
-    const delta: Record<string, unknown> = {}
-    for (const [name, value] of Object.entries(next)) {
-      if (JSON.stringify(value) !== JSON.stringify(lastPublished[name])) delta[name] = value
-    }
-    for (const name of Object.keys(lastPublished)) {
-      if (name in next) continue
-      const cleared = fields.has(name) && everLive.has(name) && !unmapped.has(name)
-      if (cleared || sentKeys.has(name)) delta[name] = null
-    }
-    if (Object.keys(delta).length === 0) return
-    for (const [name, value] of Object.entries(delta)) {
-      if (value !== null) sentKeys.add(name)
-      unmapped.delete(name)
-    }
-    lastPublished = { ...lastPublished, ...delta }
-    for (const name of Object.keys(delta)) if (delta[name] === null) delete lastPublished[name]
-    onSetArgs(delta)
-  }
-
-  /** 欄を離れたら待たずに出す(打鍵中に外から来た値を欄に写さなかったぶんを、ここで自分の値で上書きする)。 */
   function flushNow(): void {
-    cancelPublish()
-    if (published !== null) flushPublish(published)
+    sharedArgs.flush(published)
   }
 
   $effect(() => {
@@ -679,71 +600,11 @@
     untrack(() => syncFromShared())
   })
 
-  /**
-   * 配信された引数を欄へ写す(AI か別の画面が触ったぶん)。自分の送信の返り(`lastPublished` と同じ)なら何もしない。
-   * 打っている最中の欄は奪わず(サーバの値は後勝ちだが、打ち終わりの blur / Enter で自分の値が勝つ)、札で知らせる。
-   */
   function syncFromShared(): void {
     if (shared === null || command === null || sharedId === null) return
-    const remote = shared.args
-    if (JSON.stringify(remote) === JSON.stringify(lastPublished)) return
     const active = document.activeElement
-    const kept: string[] = []
-    unmapped = new Set()
-    for (const spec of command.args) {
-      const value = remote[spec.name]
-      if (spec.kind === 'number') {
-        const text = value === undefined ? '' : String(value)
-        if ((numberText[spec.name] ?? '') === text) continue
-        if (active instanceof HTMLElement && active.id === spec.inputId) {
-          kept.push(`${spec.label}=${text === '' ? '(空)' : text}`)
-          continue
-        }
-        numberText = { ...numberText, [spec.name]: text }
-      } else if (spec.kind === 'choice') {
-        const synced = syncedChoice(spec, remote, lastPublished, choices[spec.name])
-        if ('unmapped' in synced) {
-          unmapped.add(spec.name)
-        } else if (synced.value === undefined) {
-          const { [spec.name]: _removed, ...rest } = choices
-          choices = rest
-        } else {
-          choices = { ...choices, [spec.name]: synced.value }
-        }
-      } else if (spec.kind === 'text') {
-        const text = value === undefined ? '' : String(value)
-        if ((textValues[spec.name] ?? '') === text) continue
-        if (active instanceof HTMLElement && active.id === spec.inputId) {
-          kept.push(`${spec.label}=${text === '' ? '(空)' : text}`)
-          continue
-        }
-        textValues = { ...textValues, [spec.name]: text }
-      } else if (spec.kind === 'pick') {
-        if (value !== null && typeof value === 'object') {
-          picks = { ...picks, [spec.name]: value as SelectionRef }
-        } else if (value === undefined) {
-          const { [spec.name]: _removed, ...rest } = picks
-          picks = rest
-        } else {
-          unmapped.add(spec.name)
-        }
-      } else if (spec.kind === 'point') {
-        if (Array.isArray(value) && value.length === 2) {
-          points = { ...points, [spec.name]: [Number(value[0]), Number(value[1])] }
-        } else if (value === undefined) {
-          const { [spec.name]: _removed, ...rest } = points
-          points = rest
-        } else {
-          unmapped.add(spec.name)
-        }
-      } else if (spec.kind === 'plane') {
-        // サーバ側の名前は `base_plane`(面は載らない: 面は選択にあるので、無ければ局所の値をそのまま保つ)。
-        const base = remote.base_plane
-        if (typeof base === 'string') planes = { ...planes, [spec.name]: base }
-      }
-    }
-    lastPublished = { ...remote }
-    if (kept.length > 0) onNote(`外から ${kept.join(' / ')} に変わったが、打っている途中なので欄は変えていない`)
+    sharedArgs.receive(shared.args, command.args, { numberText, textValues, choices, points, picks, planes },
+      active instanceof HTMLElement ? active.id : null)
   }
 
   /** verb 引数 overlay の実高さ。`.app` の `--toolbar-overlay-h` とサイドバー位置に渡す。 */
@@ -777,7 +638,7 @@
   onDestroy(() => {
     overlayObserver?.disconnect()
     syncOverlayHeight(null)
-    cancelPublish()
+    sharedArgs.dispose()
     preview.detach()
   })
 

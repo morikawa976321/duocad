@@ -9,6 +9,7 @@
    */
   import { onMount, untrack } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
+  import { sharedArgsChangeNote } from './sharedArgsController'
   import { createPreviewController } from './previewController'
   import {
     bodyRef,
@@ -1519,15 +1520,8 @@
       if (was.verb !== now.verb) {
         note(`外から「${commandLabel(now.verb)}」に切り替えられた(AI か別の画面)`)
       } else {
-        const changed = [...new Set([...Object.keys(was.args), ...Object.keys(now.args)])].filter(
-          (name) => JSON.stringify(was.args[name]) !== JSON.stringify(now.args[name]),
-        )
-        if (changed.length > 0) {
-          const shown = changed
-            .map((name) => `${argLabel(now.verb, name)}=${now.args[name] === undefined ? '(空)' : JSON.stringify(now.args[name])}`)
-            .join(' / ')
-          note(`外から「${commandLabel(now.verb)}」の引数が変わった: ${shown}`)
-        }
+        const message = sharedArgsChangeNote(was.args, now.args, commandLabel(now.verb), (name) => argLabel(now.verb, name))
+        if (message !== null) note(message)
       }
     }
     if (JSON.stringify(before.mode) !== JSON.stringify(after.mode)) {

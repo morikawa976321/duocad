@@ -19,6 +19,22 @@
 - **`kernel.edge_axis` の向きと、配られた折れ線の「始点→終点」の向きは一致する**(同じ `BRepAdaptor_Curve` の媒介変数順。立方体・穴あき・フィレット・合体・L字の直線辺83本で実測)。辺の解決を書き換えたら測り直す(逆だと幽霊だけ逆回りに見える)。
 - 曲線の辺を軸に指したときは「幽霊が出ず、確定でコアのエラーが札に出る」(UI 側で先回りして断る判定は無い)。軸の数値直接入力(数値6欄)は無い(MCP の `axis_point`/`axis_dir` は有効)。
 
+## 共有引数と入力表示の同期(`web/src/sharedArgsController.ts`)
+
+- `CommandHost` は `publishedArgs` に表示中の欄・値・`build` の結果を渡す。サーバへ出すのは `COMMAND_PARAMS` にある名前だけで、
+  選択・図形ID・平面の補助欄は直接出さず、選択肢の `sends`・文字の `toShared` を通す。揃った `build` の結果が優先する。
+- `transitionSharedArgs(state, event)` が受信値(`remote`)・送信と受信を反映した比較用の値(`lastPublished`)・未送信のスナップショット
+  (`pending`)・受信時のフォーカス・送信済みキー・表示済み欄・欄へ写せなかったキーを持つ。Workspace の正はサーバにあり、
+  この状態は入力表示と通信の調整だけに使う。`createSharedArgsController` が送信・表示・通知と250msのタイマーを実行する。
+- 自分の送信の返りは欄へ写さない(数式を数値文字列へ戻さない)。外部更新は非表示の欄にも写すが、フォーカス中の数値・文字欄は
+  変えず通知する。blur は待ちを止めて現在値の差分を送り、Enter は差分を追加送信せず現在値で確定する。
+- 消えたキーを `null` で外すのは、自分が送ったキーか、一度表示した欄で受信値を写せたキーだけ。一度表示した欄を `when` で
+  隠すと消去になり、未表示の欄・欄の無いキー・写せなかった外部値は保つ。`sends: null` / `impliedBy` の逆引きは `syncedChoice`。
+  配信から消えた数値・文字・点・ピックは空へ戻すが、平面は `base_plane` が無ければ局所値を保つ。
+- 確定は保留送信を取り消し、起動の入れ替わりは同期状態をリセットし、破棄はタイマーを終了する。プレビューの `$effect` は
+  共有引数の送信予約より先に置く。同じ250ms待ちでも `preview` → `set_command_args` の順序を変えない。
+  固定は `tests/eval_shared_args_controller.mjs` と `web/scripts/smoke-workspace.mjs`。
+
 ## スケッチ入力(クリック・打鍵の両立)(`commands/sketch.ts` / `sketchGeometry.ts`)
 
 - 描く5 verb(`add_line` / `add_rectangle` / `add_circle` / `add_ellipse` / `add_arc`)は**クリックだけでも打鍵だけでも**置ける。寸法欄は `NumberArgSpec.fromPoints?: true`(空欄なら集めた点から導く寸法。値は作らず `build` が点から計算する)で、`commitsGhost(command)`(`fromPoints` 寸法を1つ以上持つか)が「見えている幽霊をそのまま確定してよい」を決める。`CommandHost` は `commitSource`(`built ?? ghostBuilt`)/ `canCommit` を見て、Enter・ボタン押し直しは `ready` ではなく `canCommit` を見る。**サーバの verb 契約は変えない。**
