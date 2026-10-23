@@ -1,11 +1,13 @@
-"""山形・径・ピッチごとの「ガタ無しで回る隙間の範囲」(推奨の範囲)を出す。ねじ verb の隙間の推奨の範囲の元になる表。
+"""山形・径・ピッチごとの隙間の範囲(ねじ verb の隙間の上下限・推奨の範囲・既定値の元になる表)。
 
     .venv/Scripts/python.exe -X utf8 -m tools.thread_sim.window [--workers 3]
 
 結果は output/thread_sim/windows_fine.json と表(標準出力)。前提(THREAD_SIM.md 6.8〜6.10):
 - 印刷は本人のふだんの 0.12mm Fine(printer.FINE)に、試し刷り TP1 に合わせた係数(printer.TP1_FIT)。
 - ボルトは呼び寸法、隙間はナットだけ(split=0)。半円は法線方向、台形は半径方向(試し刷りと同じ付け方)。
-- 範囲の下端 = 誤差 E_MAX でも余り ≥ 0 の最小の隙間。上端 = 誤差 0 でも軸方向の遊び ≤ PLAY_MAX かつ掛かり ≥ E_REQ の最大の隙間。
+- 推奨の下端 = 誤差 E_MAX でも余り ≥ 0 の最小の隙間。推奨の上端 = 誤差 0 でも軸方向の遊び ≤ PLAY_MAX かつ掛かり ≥ E_REQ の最大の隙間。
+- 上限(受け付けない境目) = 誤差 0 で掛かり ≥ E_REQ が残り、山形が作れる最大の隙間。下限は 0。
+余りと遊びは隙間とともに増え、掛かりは減る(単調)ので、境目は二分法で探す。
 """
 from __future__ import annotations
 
@@ -23,6 +25,8 @@ FAMILIES = {  # 名前: (山形を作る式, 隙間の付け方)
     "30°台形": (lambda D, P: ("trap", D, P, round(0.4 * P, 4), 30), "radial"),
     "45°台形": (lambda D, P: ("trap", D, P, round(0.4 * P, 4), 45), "radial"),
 }
+PITCH_RATIOS = (0.25, 0.3, 0.4)
+DIAMETERS = (3, 4, 5, 6, 8, 10)
 
 
 def _profile(spec):
@@ -32,8 +36,8 @@ def _profile(spec):
     return pf.trapezoid(spec[1], spec[2], spec[3], spec[4], spec[4])
 
 
-def _state(args):
-    fam, D, P, c, e = args
+def _state(fam, D, P, c, e):
+    """(余り, 掛かり, 遊び)。山形が作れないときは None。"""
     from . import evaluate as ev
     from .printer import FINE, TP1_FIT
     mk, mode = FAMILIES[fam]
@@ -42,47 +46,50 @@ def _state(args):
     try:
         r = ev.evaluate(ev.Design(fam, _profile(mk(D, P)), c, mode=mode, L_nut=float(D), R_out=0.9 * D, split=0.0), pr,
                         with_strength=False)
-        return fam, D, P, c, e, r.margin, r.engagement, r.play
+        return r.margin, r.engagement, r.play
     except ValueError:
-        return fam, D, P, c, e, None, None, None
+        return None
 
 
-def windows(states):
-    by = {}
-    for fam, D, P, c, e, m, g, p in states:
-        by.setdefault((fam, D, P), {}).setdefault(c, {})[e] = (m, g, p)
-    out = []
-    for (fam, D, P), row in sorted(by.items()):
-        lo = next((c for c in sorted(row) if row[c][E_MAX][0] is not None and row[c][E_MAX][0] >= 0), None)
-        hi = None
-        for c in sorted(row):
-            m, g, p = row[c][0.0]
-            if m is not None and g >= E_REQ and p <= PLAY_MAX:
-                hi = c
-        ok = lo is not None and hi is not None and hi >= lo
-        out.append(dict(family=fam, D=D, P=P, lo=lo if ok else None, hi=hi if ok else None,
-                        center=round(0.5 * (lo + hi), 3) if ok else None))
-    return out
+def _bisect(ok, lo, hi, tol=0.004):
+    """ok(lo) が真、ok(hi) が偽のとき、真の最大の点(ok が c について 真→偽 と一度だけ変わる前提)。"""
+    while hi - lo > tol:
+        mid = 0.5 * (lo + hi)
+        if ok(mid):
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def case(args):
+    fam, D, P = args
+    depth = 0.4 * P
+    top = 2.5 * depth + 0.3  # これより大きい隙間では、どの山形も掛かりが残らない
+    holds = lambda c: (s := _state(fam, D, P, c, 0.0)) is not None and s[1] >= E_REQ
+    fits = lambda c: (s := _state(fam, D, P, c, E_MAX)) is not None and s[0] >= 0
+    quiet = lambda c: (s := _state(fam, D, P, c, 0.0)) is not None and s[1] >= E_REQ and s[2] <= PLAY_MAX
+    hard_hi = _bisect(holds, 0.0, top) if holds(0.0) else None
+    rec_lo = (_bisect(lambda c: not fits(c), 0.0, top) + 0.004) if not fits(0.0) else 0.0
+    rec_hi = _bisect(quiet, rec_lo, top) if quiet(rec_lo) else None
+    return dict(family=fam, D=D, P=P, depth=round(depth, 3), hard_lo=0.0,
+                hard_hi=round(hard_hi, 3) if hard_hi is not None else None,
+                rec_lo=round(rec_lo, 3), rec_hi=round(rec_hi, 3) if rec_hi is not None else None)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=3)
-    ap.add_argument("--families", default=",".join(FAMILIES))
     a = ap.parse_args(argv)
-    fams = a.families.split(",")
-    cs = [round(0.01 * k, 2) for k in range(1, 61)]
-    jobs = [(f, D, round(pr * D / 0.05) * 0.05, c, e) for f in fams for D in (3, 4, 5, 6, 8, 10) for pr in (0.25, 0.3, 0.4)
-            for c in cs for e in (0.0, E_MAX)]
+    jobs = [(f, D, round(pr * D / 0.05) * 0.05) for f in FAMILIES for D in DIAMETERS for pr in PITCH_RATIOS]
     with ProcessPoolExecutor(a.workers) as pool:
-        states = list(pool.map(_state, jobs, chunksize=8))
-    res = windows(states)
+        res = list(pool.map(case, jobs))
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "windows_fine.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
-    print("山形 D P 範囲(真ん中)")
+    print("山形 D P | 上限(掛かり 0.1) | 推奨の範囲")
     for r in res:
-        rng = f"[{r['lo']:.2f}, {r['hi']:.2f}]({r['center']:.3f})" if r["lo"] is not None else "範囲なし"
-        print(f"{r['family']} D{r['D']:g} P{r['P']:g} {rng}")
+        rec = f"{r['rec_lo']:.3f}〜{r['rec_hi']:.3f}" if r["rec_hi"] is not None and r["rec_hi"] >= r["rec_lo"] else "範囲なし"
+        print(f"{r['family']} D{r['D']:g} P{r['P']:g} | {r['hard_hi']} | {rec}", flush=True)
 
 
 if __name__ == "__main__":
