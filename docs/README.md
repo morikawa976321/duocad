@@ -38,6 +38,7 @@
 | [TOPOPT_CONVERGENCE.md](TOPOPT_CONVERGENCE.md) | 段階4を予算の内で尽きさせる傷の毒（実測・終端の確かめ直し・3者の相談）と、hanger の新条件の警告・低応力の部材・くびれの穴の調査 |
 | [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) | 最適化の途中記録（毎回自動で作る診断記録の中身） |
 | [THREAD.md](THREAD.md) | ねじ verb の設計（3Dプリント前提・未実装）: 範囲・3Dプリント前提の4つの決め・引数・形の作り方の実測（螺旋の歯の和が壊れる・面から直接組む）・門と検査。試作は `tools/thread_prototype.py` |
+| [FACE_EDIT.md](FACE_EDIT.md) | 面の削除(#190)と面のオフセット(#183)の方式と実装(画面は未実装): Defeaturing・面ごとの MakeOffset・自前の組み直し・丸め追従の比較と実測(合成・実物 STEP・規模・GIL・BinTools)、関門、相談役の意見、本人判断カード、実装計画。試作は `tools/face_edit_probe/` |
 | [INTERFERENCE.md](INTERFERENCE.md) | 干渉チェック（Issue #186、実装済み）の方式と実装の記録: 定義と許容差（重なり・微小重なり・接触・隙間）・方式の比較（General Fuse の像の共有を2体ずつ）・実測（PC ケース・ねじ山・メッシュ混在・ボディ数）・相談役の意見・本人判断カード・実装計画。試作は `tools/interference_probe/` |
 | [ELLIPSE.md](ELLIPSE.md) | 楕円 verb（`add_ellipse`）と円の直径化: 本人の決定・`gp_Elips` の長短の罠・保存形式 version 3 と移行・吸着と交点の作り |
 | [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md) | フィレットのはみ出しと貫通の吸収(Fusion 360 相当): 肉を別に作って足し引きする作り方・OCCT の結果から切り替える条件・実測・捨てた案・曲率半径を超える半径(#207)の作り方 |

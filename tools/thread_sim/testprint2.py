@@ -46,6 +46,7 @@ INTRO = (
     '<p><b>嵌合の試し方</b>: TP1 と同じ(冷めてから、工具なしで、凹み1個のナットから順に、初回のねじ込みで判定)。'
     '<b>「ガタが大きい」は、ナットをボルトの途中で止めて軸の向きに押し引きしたとき、カタカタ動くのが分かる</b>ときに付ける。</p>'
     '刷れなかった・欠けた部品があれば、その行で「部品が欠けた・刷れなかった」に印を付ける(印刷のしやすさの記録になる)。</p>'
+    '<p><b>部品は捨てない</b>: 結果を返した後も、次の試し刷りの結果が出るまで全部の部品を袋などにまとめて取っておく(確かめ直しに使うことがある)。</p>'
     '<p><b>返し方</b>: 各行を1つクリック(点線の枠は当てはまるときだけ追加)。下の「コピー」を押し、出てきた1行を次のメッセージに貼る。途中で閉じても選択は残る。</p></div>'
 )
 
@@ -133,7 +134,8 @@ def _pull_af(D):
     return max(1.6 * D, D + 4.0) + 2.0
 
 
-def build(out: Path = OUT):
+def build(out: Path = OUT, test_id: str = TEST_ID):
+    """test_id を変えると、同じ部品のまま別の回の試し刷りとして作る(TP3 = TP2 の刷り直し)。"""
     out.mkdir(parents=True, exist_ok=True)
     pieces, groups = [], []
     for sid, name, D, mk, mode, sides, cs in SERIES:
@@ -174,7 +176,7 @@ def build(out: Path = OUT):
         groups.append(("引き抜き", "吊り板 R にボルトを下から通し、上からナットを手で締めて、頭の横穴に重りを吊る。"
                        "同じ組の2本は、同じ条件のくり返し。", pitems))
     plate = make_plate(out, pieces)
-    (out / "manifest.json").write_text(json.dumps(dict(test_id=TEST_ID, pieces=[p.__dict__ for p in pieces], plate=plate),
+    (out / "manifest.json").write_text(json.dumps(dict(test_id=test_id, pieces=[p.__dict__ for p in pieces], plate=plate),
                                                   ensure_ascii=False, indent=1), encoding="utf-8")
     layout = layout_svg(out, pieces, plate["placed"], series=SERIES,
                         extra_rows=[(s[0], f"{s[0]}: 引き抜き {s[1]}(ボルトの頭に横穴、ナットは低い)", "R は吊り板") for s in PULL],
@@ -182,11 +184,42 @@ def build(out: Path = OUT):
     (out / "layout.svg").write_text(layout, encoding="utf-8")
     figure = ('<div class="intro"><p><b>配置図</b>(plate.stl を上から見た図。下が手前。系列は頭やナットの角の数で、'
               'ナットの番号は上面の凹みの数で分かる)</p>' + layout + '</div>')
-    write_page(groups, out / "index.html", "ねじ試し刷り TP2 の結果", intro=INTRO + figure, test_id=TEST_ID)
+    write_page(groups, out / "index.html", f"ねじ試し刷り {test_id} の結果", intro=INTRO + figure, test_id=test_id)
     predict(out)
     return pieces
 
 
+# TP1 で「ガタ」を付けずに回ったナット(id, 表示名)。TP2 と同じ押し引きで確かめ直し、ガタの判定が確かめ方で変わるかを見る(astra の8回目)
+RECHECK_TP1 = [
+    ("A2", "A: ISO M6(六角)のナット2(凹み2個)と六角のボルト"),
+    ("A3", "A: ISO M6(六角)のナット3(凹み3個)と六角のボルト"),
+    ("B3", "B: 45° D6(四角)のナット3(凹み3個)と四角のボルト"),
+    ("K2", "K: 30° D6(五角)のナット2(凹み2個)と五角のボルト"),
+    ("D2", "D: 45° D3(小さい四角)のナット2(凹み2個)と小さい四角のボルト"),
+    ("F1", "F: 半円 D3(小さい八角)のナット1(凹み1個)と小さい八角のボルト"),
+    ("F2", "F: 半円 D3(小さい八角)のナット2(凹み2個)と小さい八角のボルト"),
+]
+
+
+def write_recheck_tp1(path: Path = OUT.parent / "testprint" / "recheck_tp1.html"):
+    """TP1 の部品を、TP2 のガタの確かめ方で見直すページ(新しく刷らない)。結果は 'TP1R' の1行。"""
+    intro = ('<div class="intro"><p><b>新しく刷らない。</b>TP1 の部品が手元に残っていれば、下の組だけを確かめ直す(配置図は TP1 の index.html)。</p>'
+             '<p><b>確かめ方</b>(TP2 と同じ): ナットをボルトの真ん中あたりまで手で回して止め、ボルトの頭を持ってナットを軸の向きに押し引きする。'
+             'カタカタ動くのが指か耳で分かれば「ガタが分かる」、分からなければ「ガタ無し」。部品が無い・回らない組は「試していない」のままでよい。</p>'
+             '<p><b>返し方</b>: 各行を1つクリックし、下の「コピー」で出る1行を次のメッセージに貼る。</p></div>')
+    items = [(iid, name, ["ガタ無し", "ガタが分かる", "試していない"], []) for iid, name in RECHECK_TP1]
+    write_page([("TP1 の部品の確かめ直し", "TP1 で「ガタ」を付けなかった組。", items)], path, "TP1 の部品のガタの確かめ直し",
+               intro=intro, test_id="TP1R")
+    return path
+
+
 if __name__ == "__main__":
-    ps = build()
-    print(len(ps), "部品を", OUT, "へ")
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "recheck":
+        print(write_recheck_tp1())
+    elif len(sys.argv) > 1 and sys.argv[1] == "tp3":  # TP2 と同じ部品の刷り直し(THREAD_SIM.md 6.5 の 2)
+        ps = build(OUT.parent / "testprint3", "TP3")
+        print(len(ps), "部品を", OUT.parent / "testprint3", "へ")
+    else:
+        ps = build()
+        print(len(ps), "部品を", OUT, "へ")

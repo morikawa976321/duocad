@@ -296,6 +296,7 @@ def run(
         for plan in plans:
             if plan.needs_distance(clearance):
                 state.distance(worker, plan)
+        state.restarts += getattr(worker, "revived", 0)
     return _assemble(snapshot, plans, clearance, request_id, time.monotonic() - started, state, render_deviation is not None)
 
 

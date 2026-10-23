@@ -1,0 +1,856 @@
+"""面の削除と面のオフセットの幾何(OCPを触るカーネル層)。方式・実測・罠は docs/FACE_EDIT.md。
+
+- 削除(`delete_faces`): `BOPAlgo_RemoveFeatures`。消した面の周りの面を、それぞれ自分の曲面のまま延ばして閉じ直す。
+- オフセット(`offset_faces`): `BRepOffset_MakeOffset` を全体0・選んだ面だけ距離 d で。選んだ面に接線でつながる
+  一定半径の丸めは、外して(削除と同じ仕組み)、尖った形で動かし、同じ半径で丸め直す(丸めが付いてくる)。
+
+**OCCT の成功を信じない**: どちらも、閉じられない形や意図と違う形を、例外も `BRepCheck` 落ちも無く返す。結果を面ごとに
+元の面と照らし合わせる関門を通ったときだけ返し、通らなければ `ValueError`(文書には何も触らない)。
+
+計算は常駐の子プロセス(`kernel_worker`)で行い、`compute` は子の中で呼ばれる。依存は kernel_face_edit → kernel の一方向。
+戻り値の規律は kernel と同じ(`"shape"` 以外は JSON 化できる素の値)。
+"""
+from __future__ import annotations
+
+import math
+from typing import Any, List, Optional, Sequence
+
+from OCP.BOPAlgo import BOPAlgo_RemoveFeatures
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeSolid
+from OCP.BRepCheck import BRepCheck_Analyzer, BRepCheck_Shell, BRepCheck_Status
+from OCP.BRepClass import BRepClass_FaceClassifier
+from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+from OCP.BRepGProp import BRepGProp
+from OCP.BRepLib import BRepLib
+from OCP.BRepLProp import BRepLProp_SLProps
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.BRepOffset import BRepOffset_MakeOffset, BRepOffset_Mode
+from OCP.BRepTools import BRepTools
+from OCP.Bnd import Bnd_Box
+from OCP.BRepBndLib import BRepBndLib
+from OCP.ChFi3d import ChFi3d
+from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_JoinType, GeomAbs_Shape, GeomAbs_SurfaceType
+from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
+from OCP.GProp import GProp_GProps
+from OCP.gp import gp_Pnt, gp_Pnt2d
+from OCP.Message import Message_Gravity
+from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_State
+from OCP.TopExp import TopExp
+from OCP.TopLoc import TopLoc_Location
+from OCP.TopoDS import TopoDS
+from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
+
+from . import kernel, kernel_worker
+from .kernel import _face_map, _face_map_projection, _positions_in, volume
+from .mesh_geometry import indexed_map, subshapes
+
+VERB_DELETE = "delete_faces"
+VERB_OFFSET = "offset_faces"
+
+#: 面積がこれ未満の面を「消えたのに位相に残った面」とみなす[mm²]。置いた値(合成形状で MakeOffset が残した面積0の面を拾う)。
+#: 退化直前の細長い面は拾えず、元からある正当な微小面を断りうる。
+MIN_FACE_AREA = 1e-6
+#: 曲面の定義を比べる許容差[mm]と、向きの許容差(|cos| の 1 からのずれ)。置いた値
+LINEAR_TOL = 1e-6
+ANGULAR_TOL = 1e-9
+#: 「残した面の元の範囲」を確かめる標本点の数
+_REGION_SAMPLES = 49
+
+_HINT_DELETE = "周りの面を延ばしても閉じない。穴や丸めは、それを作る面(底・段・縁の丸め、つながった丸め)をまとめて選ぶ"
+_HINT_COLLAPSE = "消すと残す面が削られる(形がつぶれる)"
+_HINT_TOO_FAR = "距離が大きすぎて面が消えるか、形のつながりが変わる"
+_HINT_CANNOT_OFFSET = "この形では OCCT が面を動かせない(動かす面によらず、同じボディでは同じように断ることが多い)"
+_HINT_TANGENT = "接線でつながる隣の面が一定半径の丸めでないので、付いてこさせられない"
+
+
+class FaceEditError(ValueError):
+    """関門で断った。`hint` は利用者向けの言い換え(断り文の末尾に付く)。"""
+
+    def __init__(self, cause: str, hint: str = ""):
+        super().__init__(cause)
+        self.cause = cause
+        self.hint = hint
+
+
+# --------------------------------------------------------------------------------------
+# 入口(親プロセス)
+# --------------------------------------------------------------------------------------
+def delete_faces(shape: Any, face_indices: Sequence[int], *, interactive: bool = True) -> dict:
+    """`face_indices`(1始まり)の面を消し、周りの面を延ばして閉じ直した**新しい形状**を返す(計算は子プロセス)。
+
+    `interactive` は画面・MCP からの操作(期限 `kernel_worker.INTERACTIVE_TIMEOUT_S`)。ログの再生は False で期限なし。戻り値:
+        {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float, "volume_after": float}
+    """
+    indices = _checked_indices(shape, face_indices, VERB_DELETE)
+    return kernel.remembered(
+        VERB_DELETE,
+        (shape,),
+        (tuple(indices),),
+        lambda: kernel_worker.run(VERB_DELETE, shape, {"faces": indices}, timeout=kernel_worker.time_limit(interactive)),
+    )
+
+
+def offset_faces(
+    shape: Any,
+    face_indices: Sequence[int],
+    distance: float,
+    *,
+    interactive: bool = True,
+) -> dict:
+    """`face_indices` の面を外向き法線へ `distance` だけ動かした**新しい形状**を返す(正で太る。計算は子プロセス)。"""
+    indices = _checked_indices(shape, face_indices, VERB_OFFSET)
+    value = float(distance)
+    if not math.isfinite(value) or value == 0.0:
+        raise ValueError(f"{VERB_OFFSET}: distance must be finite and not 0, got {distance!r}")
+    return kernel.remembered(
+        VERB_OFFSET,
+        (shape,),
+        (tuple(indices), value),
+        lambda: kernel_worker.run(
+            VERB_OFFSET, shape, {"faces": indices, "distance": value}, timeout=kernel_worker.time_limit(interactive)
+        ),
+    )
+
+
+def _checked_indices(shape: Any, face_indices: Sequence[int], verb: str) -> List[int]:
+    if shape is None or shape.IsNull():
+        raise ValueError(f"{verb}: the body is empty")
+    indices = [int(index) for index in face_indices]
+    if not indices:
+        raise ValueError(f"{verb} requires at least one face")
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"{verb} got the same face twice: {indices}")
+    count = kernel.face_count(shape)
+    outside = [index for index in indices if not 1 <= index <= count]
+    if outside:
+        raise ValueError(f"{verb}: face index out of range: {outside} (1..{count})")
+    return indices
+
+
+# --------------------------------------------------------------------------------------
+# 計算(子プロセス)
+# --------------------------------------------------------------------------------------
+def compute(verb: str, shape: Any, arguments: dict) -> dict:
+    """子プロセスの入口。断ったら `ValueError`(文は原因と言い換え)。"""
+    indices = [int(index) for index in arguments["faces"]]
+    face_map = _face_map(shape)
+    faces = [kernel._face_at(face_map, index) for index in indices]
+    try:
+        if verb == VERB_DELETE:
+            final, table, _ = _delete(shape, faces)
+            provenance = {"verb": VERB_DELETE, "faces": indices}
+        elif verb == VERB_OFFSET:
+            distance = float(arguments["distance"])
+            final, table, _ = _offset_following_blends(shape, faces, distance)
+            provenance = {"verb": VERB_OFFSET, "faces": indices, "distance": distance}
+        else:
+            raise ValueError(f"unknown face edit {verb!r}")
+    except FaceEditError as error:
+        message = f"{verb} refused (faces {indices}): {error.cause}"
+        raise ValueError(f"{message}: {error.hint}" if error.hint else message) from error
+    successors = {str(key): positions for key, positions in table.items()}
+    provenance.update(_face_map_projection(successors, _face_map(final).Extent()))
+    return {
+        "shape": final,
+        "provenance": provenance,
+        "volume_before": float(volume(shape)),
+        "volume_after": float(volume(final)),
+    }
+
+
+# --------------------------------------------------------------------------------------
+# 削除
+# --------------------------------------------------------------------------------------
+def _delete(shape: Any, faces: List[Any]):
+    result, algo = _remove_features(shape, faces)
+    _structural_gate(result)
+    history = algo.History()
+    before, after = _face_map(shape), _face_map(result)
+    table = {}
+    for i in range(1, before.Extent() + 1):
+        old = TopoDS.Face_s(before.FindKey(i))
+        if any(old.IsSame(face) for face in faces):
+            if not history.IsRemoved(old):
+                raise FaceEditError(f"face {i} was selected but is not removed", _HINT_DELETE)
+            table[i] = []
+            continue
+        images = [TopoDS.Face_s(x) for x in history.Modified(old)] or ([] if history.IsRemoved(old) else [old])
+        positions = _positions_in(after, images)
+        if not positions:
+            raise FaceEditError(f"kept face {i} is lost", _HINT_DELETE)
+        kept = [TopoDS.Face_s(after.FindKey(p)) for p in positions]
+        if _describe(old) is not None and not all(_lies_on(image, old) for image in kept):
+            raise FaceEditError(f"kept face {i} left its own surface", _HINT_DELETE)
+        if not _region_kept(old, kept):
+            raise FaceEditError(f"kept face {i} lost part of its original region", _HINT_COLLAPSE)
+        table[i] = positions
+    covered = {p for positions in table.values() for p in positions}
+    new = [j for j in range(1, after.Extent() + 1) if j not in covered]
+    if new:
+        raise FaceEditError(f"faces {new} do not come from any kept face", _HINT_DELETE)
+    return result, table, new
+
+
+def _remove_features(shape: Any, faces: List[Any]):
+    """`BRepAlgoAPI_Defeaturing` の中身を直接使う(OCP の `BRepAlgoAPI_Defeaturing` は警告の問い合わせ口を出していない)。
+
+    **閉じられない面は例外にも失敗にもならず、警告だけ出して元の形(か一部だけ消した形)を返す**(箱の上面で実測)。警告も失敗にする。
+    """
+    algo = BOPAlgo_RemoveFeatures()
+    algo.SetShape(shape)
+    to_remove = TopTools_ListOfShape()
+    for face in faces:
+        to_remove.Append(face)
+    algo.AddFacesToRemove(to_remove)
+    algo.SetRunParallel(False)
+    algo.SetToFillHistory(True)
+    algo.Perform()
+    if algo.HasErrors():
+        raise FaceEditError("RemoveFeatures failed: " + ", ".join(_alerts(algo, Message_Gravity.Message_Fail)), _HINT_DELETE)
+    warnings = _alerts(algo, Message_Gravity.Message_Warning)
+    if warnings:
+        raise FaceEditError("RemoveFeatures warned: " + ", ".join(warnings), _HINT_DELETE)
+    result = algo.Shape()
+    if result is None or result.IsNull():
+        raise FaceEditError("RemoveFeatures returned an empty shape", _HINT_DELETE)
+    return result, algo
+
+
+def _alerts(algo: Any, gravity: Any) -> List[str]:
+    return [alert.GetMessageKey() for alert in algo.GetReport().GetAlerts(gravity)]
+
+
+def _region_kept(old: Any, images: List[Any]) -> bool:
+    """残した面の元の範囲(内部の標本点)が、どれかの像の面の上に残っているか。
+
+    初版の削除は「残す面を延ばすだけで削らない」閉じ方に限る。標本点で確かめるだけで、面全体が残ることの証明ではない
+    (標本の間の細い欠けは見逃し、残す面を正当に削る閉じ方は断る)。これが無いと、フィレット1辺の箱の下面と奥面を消したとき
+    OCCT が警告なしに返す 214.6 mm³ の破片(元 23785 mm³)を、ほかの検査が全部通した。
+    """
+    for point in _interior_points(old, _REGION_SAMPLES):
+        if not any(_point_on_face(point, image) for image in images):
+            return False
+    return True
+
+
+def _point_on_face(point: tuple, face: Any) -> bool:
+    projector = GeomAPI_ProjectPointOnSurf(gp_Pnt(*point), BRep_Tool.Surface_s(face))
+    if projector.NbPoints() == 0 or projector.LowerDistance() > LINEAR_TOL:
+        return False
+    u, v = _into_face_period(face, *projector.LowerDistanceParameters())
+    state = BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State()
+    return state in (TopAbs_State.TopAbs_IN, TopAbs_State.TopAbs_ON)
+
+
+# --------------------------------------------------------------------------------------
+# オフセット
+# --------------------------------------------------------------------------------------
+def _offset_following_blends(shape: Any, faces: List[Any], distance: float):
+    for face in faces:
+        if _offset_definition(face, distance) is None:
+            raise FaceEditError(
+                f"a selected face is a {_surface_type(face)}",
+                "動かせるのは平面・円筒・球・トーラスの面だけ(ずらした位置を確かめられない)",
+            )
+    edge_faces = _edge_faces(shape)
+    if any(_blend_signature(face, edge_faces) is not None for face in faces):
+        raise FaceEditError(
+            "a selected face is a blend", "丸めの面そのものは動かせない。半径を変えるときは、面の削除で丸めを消してから丸め直す"
+        )
+    blends, supports = _structural_blends(shape, faces)
+    if not blends:
+        return _offset(shape, faces, distance)
+    return _offset_with_blends(shape, faces, distance, blends, supports)
+
+
+def _offset(shape: Any, faces: List[Any], distance: float):
+    raw, algo = _make_offset(shape, faces, distance)
+    result = _wrap_checked(raw)
+    _structural_gate(result, hint=_HINT_TOO_FAR)
+    table = _offset_correspondence(shape, faces, distance, result, lambda old: list(algo.Generated(old)))
+    return result, table, []
+
+
+def _make_offset(shape: Any, faces: List[Any], distance: float):
+    """全体の距離を 0 にして、選んだ面だけ `distance` だけ法線方向へずらす。
+
+    `Intersection=False`(B0)。`True` は OCCT 7.9.3 の説明で未完成とされる。**接線でつながる面(丸めとその先の面)は
+    選んでいなくても一緒にずれる**ので、丸めに接する面は `_offset_with_blends` を通す。結果はシェルで返ることがある。
+    """
+    algo = BRepOffset_MakeOffset()
+    algo.Initialize(
+        shape, 0.0, 1e-7, BRepOffset_Mode.BRepOffset_Skin, False, False, GeomAbs_JoinType.GeomAbs_Intersection, False, False
+    )
+    for face in faces:
+        algo.SetOffsetOnFace(face, distance)
+    algo.MakeOffsetShape()
+    if not algo.IsDone():
+        raise FaceEditError(f"MakeOffset failed ({algo.Error()})", _HINT_CANNOT_OFFSET)
+    result = algo.Shape()
+    if result is None or result.IsNull():
+        raise FaceEditError("MakeOffset returned an empty shape", _HINT_CANNOT_OFFSET)
+    return result, algo
+
+
+def _wrap_checked(raw: Any) -> Any:
+    """MakeOffset の生の結果を1ソリッドにする。**包む前に**、ソリッド1つか閉じたシェル1つだけで、その外に面も辺も無いことを見る
+    (シェルを包むと、外に付いた独立の面や辺が後の検査から見えなくなる)。"""
+    solids = _solids(raw)
+    if solids:
+        if len(solids) != 1 or _count(raw, "face") != _count(solids[0], "face") or _count(raw, "edge") != _count(solids[0], "edge"):
+            raise FaceEditError("raw result is not exactly one solid", _HINT_CANNOT_OFFSET)
+        return raw
+    shells = subshapes(raw, TopAbs_ShapeEnum.TopAbs_SHELL)
+    if len(shells) != 1 or _count(raw, "face") != _count(shells[0], "face") or _count(raw, "edge") != _count(shells[0], "edge"):
+        raise FaceEditError("raw result is not exactly one shell", _HINT_CANNOT_OFFSET)
+    shell = TopoDS.Shell_s(shells[0])
+    if BRepCheck_Shell(shell).Closed() != BRepCheck_Status.BRepCheck_NoError:
+        raise FaceEditError("raw shell is not closed", _HINT_CANNOT_OFFSET)
+    solid = BRepBuilderAPI_MakeSolid(shell).Solid()
+    if not BRepLib.OrientClosedSolid_s(solid):
+        raise FaceEditError("could not orient the closed shell", _HINT_CANNOT_OFFSET)
+    return solid
+
+
+def _offset_correspondence(shape: Any, faces: List[Any], distance: float, result: Any, images_of) -> dict:
+    """旧面 → 新面が1対1で全部を覆い、各新面が対応元の曲面(選んだ面ならずらした曲面)に乗る。"""
+    before, after = _face_map(shape), _face_map(result)
+    table = {}
+    for i in range(1, before.Extent() + 1):
+        old = TopoDS.Face_s(before.FindKey(i))
+        positions = _positions_in(after, images_of(old))
+        if len(positions) != 1:
+            raise FaceEditError(f"face {i} maps to {len(positions)} faces (topology changed)", _HINT_TOO_FAR)
+        selected = any(old.IsSame(face) for face in faces)
+        if not _lies_on(TopoDS.Face_s(after.FindKey(positions[0])), old, distance if selected else 0.0):
+            raise FaceEditError(f"face {i} is not where it should be ({'moved' if selected else 'kept'} face)", _HINT_TOO_FAR)
+        table[i] = positions
+    covered = sorted(p for positions in table.values() for p in positions)
+    if len(set(covered)) != len(covered) or len(covered) != after.Extent():
+        raise FaceEditError("old and new faces are not one-to-one", _HINT_TOO_FAR)
+    _require_volume_follows(shape, result, distance)
+    return table
+
+
+def _require_volume_follows(shape: Any, result: Any, distance: float) -> None:
+    change = volume(result) - volume(shape)
+    if change * distance <= 0:
+        raise FaceEditError(f"volume moved the wrong way ({change:+.6g} for distance {distance:+g})", _HINT_TOO_FAR)
+
+
+# --------------------------------------------------------------------------------------
+# 丸めが付いてくる(構造で認識した一定半径の丸めだけ)
+# --------------------------------------------------------------------------------------
+def _structural_blends(shape: Any, faces: List[Any]):
+    """選んだ面に接線でつながる丸めの連なり(角の球を含む)と、各丸めの (半径, 支えの面2枚)。
+
+    丸めの認識は構造で、半径の大小では決めない(意匠の大きな丸めも丸めとして扱う。設計者がフィレットとして作ったことの証明ではない)。
+    丸めと認めない接線の隣があれば断る(MakeOffset の接線伝播へは切り替えない)。
+    """
+    edge_faces = _edge_faces(shape)
+    blends: List[Any] = []
+    supports: List[tuple] = []
+    frontier, seen = list(faces), list(faces)
+    own_supports: dict = {}
+    radius_of: dict = {}
+    while frontier:
+        current = frontier.pop(0)
+        for edge in _edges(current):
+            other = _other_face(edge_faces, edge, current)
+            if other is None or any(other.IsSame(s) for s in seen) or not _tangent(edge, current, other):
+                continue
+            if any(other.IsSame(s) for s in own_supports.get(id(current), ())):
+                continue
+            kind = _surface_type(other)
+            if kind == "sphere" and any(current.IsSame(b) for b in blends):
+                current_radius = radius_of.get(id(current))
+                if current_radius is None or abs(_describe(other)[2] - current_radius) > LINEAR_TOL:
+                    raise FaceEditError("a sphere next to a blend has a different radius", _HINT_TANGENT)
+                radius_of[id(other)] = current_radius
+                seen.append(other)
+                blends.append(other)
+                frontier.append(other)
+                continue
+            signature = _blend_signature(other, edge_faces)
+            if signature is None:
+                if any(current.IsSame(face) for face in faces) or kind != "plane":
+                    raise FaceEditError(f"a tangent neighbour ({kind}) is not a constant-radius blend", _HINT_TANGENT)
+                continue  # 丸めの反対側の支えの平面(選んでいない)。たどらない
+            seen.append(other)
+            blends.append(other)
+            supports.append(signature)
+            own_supports[id(other)] = signature[1:]
+            radius_of[id(other)] = signature[0]
+            frontier.append(other)
+    for sphere in [b for b in blends if _surface_type(b) == "sphere"]:
+        radius = _describe(sphere)[2]
+        for edge in _edges(sphere):
+            other = _other_face(edge_faces, edge, sphere)
+            if other is None or not any(other.IsSame(b) for b in blends) or _surface_type(other) == "sphere":
+                continue
+            signature = _blend_signature(other, edge_faces)
+            if signature is None or abs(signature[0] - radius) > LINEAR_TOL:
+                raise FaceEditError("a sphere next to a blend has a different radius", _HINT_TANGENT)
+    for _, first, second in supports:
+        if any(first.IsSame(b) or second.IsSame(b) for b in blends):
+            raise FaceEditError("a blend rests on another blend", _HINT_TANGENT)
+    return blends, supports
+
+
+def _blend_signature(face: Any, edge_faces: Any):
+    """`face` が一定半径の丸めなら (半径, 支えの面2枚)、でなければ None。
+
+    丸め = 円筒かトーラスで、**長手の辺**(円筒は軸に平行な直線、トーラスは同軸の円)が、ちょうど2枚の別の面に G1 で接する。
+    """
+    definition = _describe(face)
+    if definition is None or definition[0] not in ("cylinder", "torus"):
+        return None
+    radius = definition[3] if definition[0] == "cylinder" else definition[4]
+    supports: List[Any] = []
+    for edge in _edges(face):
+        if BRep_Tool.Degenerated_s(edge) or not _is_spring_edge(edge, definition):
+            continue
+        other = _other_face(edge_faces, edge, face)
+        if other is None or other.IsSame(face) or not _tangent(edge, face, other):
+            return None
+        if not any(other.IsSame(s) for s in supports):
+            supports.append(other)
+    if len(supports) != 2:
+        return None
+    return radius, supports[0], supports[1]
+
+
+def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: List[Any], supports: List[tuple]):
+    """丸めを外す → 尖った形で動かす → 支えの面の共有辺を元の半径で丸め直す → 半径・接線・対応を確かめる。
+
+    由来: 旧丸めは deleted、丸め直した面は new_faces(旧丸めと新丸めを対応させる根拠を持たない)。
+    """
+    sharp, removal = _remove_features(shape, blends)
+    _structural_gate(sharp, hint=_HINT_TANGENT)
+    history = removal.History()
+
+    def through_removal(face: Any) -> Any:
+        images = [TopoDS.Face_s(x) for x in history.Modified(face)] or ([] if history.IsRemoved(face) else [face])
+        if len(images) != 1:
+            raise FaceEditError("a face split while removing the blends", _HINT_TANGENT)
+        return _as_in(sharp, images[0])
+
+    moved_faces = [through_removal(face) for face in faces]
+    raw, offset = _make_offset(sharp, moved_faces, distance)
+    moved = _wrap_checked(raw)
+    _structural_gate(moved, hint=_HINT_TOO_FAR)
+    sharp_table = _offset_correspondence(sharp, moved_faces, distance, moved, lambda old: list(offset.Generated(old)))
+    sharp_map, moved_map = _face_map(sharp), _face_map(moved)
+
+    def to_moved(face: Any) -> Any:
+        return TopoDS.Face_s(moved_map.FindKey(sharp_table[sharp_map.FindIndex(through_removal(face))][0]))
+
+    edge_faces = _edge_faces(moved)
+    rebuilt = []
+    for radius, first, second in supports:
+        a, b = to_moved(first), to_moved(second)
+        common = [
+            edge
+            for edge in _edges(a)
+            if (other := _other_face(edge_faces, edge, a)) is not None
+            and other.IsSame(b)
+            and not any(edge.IsSame(e) for e, *_ in rebuilt)
+        ]
+        if len(common) != 1:
+            raise FaceEditError(f"supports of a blend share {len(common)} edges after the move", _HINT_TOO_FAR)
+        rebuilt.append((common[0], radius, a, b))
+    maker = BRepFilletAPI_MakeFillet(moved)
+    for edge, radius, _, _ in rebuilt:
+        maker.Add(radius, edge)
+    maker.Build()
+    if not maker.IsDone():
+        raise FaceEditError("re-blending failed", _HINT_TOO_FAR)
+    final = maker.Shape()
+    _structural_gate(final, hint=_HINT_TOO_FAR)
+    final_map = _face_map(final)
+    regenerated = _check_reblended(maker, final, final_map, rebuilt)
+
+    before = _face_map(shape)
+    table = {}
+    for i in range(1, before.Extent() + 1):
+        old = TopoDS.Face_s(before.FindKey(i))
+        if any(old.IsSame(b) for b in blends):
+            table[i] = []
+            continue
+        in_moved = to_moved(old)
+        positions = _positions_in(final_map, [TopoDS.Face_s(x) for x in maker.Modified(in_moved)] or [in_moved])
+        if len(positions) != 1:
+            raise FaceEditError(f"face {i} does not map to exactly one final face", _HINT_TOO_FAR)
+        selected = any(old.IsSame(face) for face in faces)
+        if not _lies_on(TopoDS.Face_s(final_map.FindKey(positions[0])), old, distance if selected else 0.0):
+            raise FaceEditError(f"face {i} is not where it should be after re-blending", _HINT_TOO_FAR)
+        table[i] = positions
+    covered = [p for positions in table.values() for p in positions]
+    if len(set(covered)) != len(covered):
+        raise FaceEditError("two old faces map to the same final face", _HINT_TOO_FAR)
+    if set(covered) & set(regenerated):
+        raise FaceEditError("a kept face is also counted as re-blended", _HINT_TOO_FAR)
+    stray = [j for j in range(1, final_map.Extent() + 1) if j not in covered and j not in regenerated]
+    if stray:
+        raise FaceEditError(f"faces {stray} come from nowhere", _HINT_TOO_FAR)
+    _require_volume_follows(shape, final, distance)
+    return final, table, regenerated
+
+
+def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> List[int]:
+    """丸め直した面が、その辺の半径の円筒・トーラスで、長手の辺で支えの面の像の**両方**に G1 で接すること。
+    角は辺でなく頂点から生まれる(全辺丸めの上面で実測)ので、頂点から生まれた面は同じ半径の球であること。"""
+    final_edge_faces = _edge_faces(final)
+    regenerated: List[int] = []
+    for edge, radius, first, second in rebuilt:
+        made = sorted({final_map.FindIndex(x) for x in maker.Generated(edge)} - {0})
+        if not made:
+            raise FaceEditError("re-blending produced no face for an edge", _HINT_TOO_FAR)
+        support_a = list(maker.Modified(first)) or [first]
+        support_b = list(maker.Modified(second)) or [second]
+        for position in made:
+            face = TopoDS.Face_s(final_map.FindKey(position))
+            definition = _describe(face)
+            if definition is None or definition[0] not in ("cylinder", "torus"):
+                raise FaceEditError("a re-blended face is not a cylinder or torus", _HINT_TOO_FAR)
+            made_radius = definition[3] if definition[0] == "cylinder" else definition[4]
+            if abs(made_radius - radius) > LINEAR_TOL:
+                raise FaceEditError("a re-blended face has the radius of another blend", _HINT_TOO_FAR)
+            touched_a = touched_b = False
+            for spring in _edges(face):
+                if not _is_spring_edge(spring, definition):
+                    continue
+                neighbour = _other_face(final_edge_faces, spring, face)
+                on_a = neighbour is not None and any(neighbour.IsSame(x) for x in support_a)
+                on_b = neighbour is not None and any(neighbour.IsSame(x) for x in support_b)
+                if not (on_a or on_b) or not _tangent(spring, face, neighbour):
+                    raise FaceEditError("a re-blended face is not tangent to its supports", _HINT_TOO_FAR)
+                touched_a, touched_b = touched_a or on_a, touched_b or on_b
+            if not (touched_a and touched_b):
+                raise FaceEditError("a re-blended face does not rest on both supports", _HINT_TOO_FAR)
+        regenerated += made
+        for vertex in subshapes(edge, TopAbs_ShapeEnum.TopAbs_VERTEX):
+            for position in sorted({final_map.FindIndex(x) for x in maker.Generated(vertex)} - {0}):
+                definition = _describe(TopoDS.Face_s(final_map.FindKey(position)))
+                if definition is None or definition[0] != "sphere" or abs(definition[2] - radius) > LINEAR_TOL:
+                    raise FaceEditError("a corner made by re-blending is not a sphere of the blend radius", _HINT_TOO_FAR)
+                regenerated.append(position)
+    return sorted(set(regenerated))
+
+
+def _as_in(shape: Any, face: Any) -> Any:
+    """`shape` の中での向きのまま `face` を引く(履歴の像は向きを持たず、MakeOffset に渡すと外向きを取り違える)。"""
+    for occurrence in subshapes(shape, TopAbs_ShapeEnum.TopAbs_FACE):
+        if occurrence.IsSame(face):
+            return TopoDS.Face_s(occurrence)
+    raise FaceEditError("a face is not in the shape after removing the blends", _HINT_TANGENT)
+
+
+# --------------------------------------------------------------------------------------
+# 構造の関門(削除・オフセット共通)
+# --------------------------------------------------------------------------------------
+def _structural_gate(result: Any, *, hint: str = _HINT_DELETE) -> None:
+    """結果全体がちょうど1ソリッドで、外に面が無く、壊れておらず、面積0の面を残していない。"""
+    solids = _solids(result)
+    if len(solids) != 1:
+        raise FaceEditError(f"result has {len(solids)} solids", hint)
+    if _count(result, "face") != _count(solids[0], "face"):
+        raise FaceEditError("result has faces outside its solid", hint)
+    if not BRepCheck_Analyzer(result).IsValid():
+        raise FaceEditError("result is invalid (BRepCheck)", hint)
+    if _free_edge_count(result):
+        raise FaceEditError("result has free edges", hint)
+    if not volume(result) > 0:
+        raise FaceEditError("result has no volume", hint)
+    tiny = [face for face in _faces(result) if _face_area(face) < MIN_FACE_AREA]
+    if tiny:
+        raise FaceEditError(f"{len(tiny)} face(s) vanished but stayed in the shape (area < {MIN_FACE_AREA:g})", hint)
+
+
+def _free_edge_count(shape: Any) -> int:
+    """面が1枚しか付かない辺(継ぎ目の辺は同じ面が2回付くので数えない)。"""
+    ancestors = _edge_faces(shape)
+    return sum(
+        1
+        for i in range(1, ancestors.Extent() + 1)
+        if not BRep_Tool.Degenerated_s(TopoDS.Edge_s(ancestors.FindKey(i))) and ancestors.FindFromIndex(i).Size() < 2
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 曲面の定義の比較
+# --------------------------------------------------------------------------------------
+def _describe(face: Any):
+    """解析曲面の定義(世界座標)。自由曲面は None。"""
+    adaptor = BRepAdaptor_Surface(face)
+    kind = adaptor.GetType()
+    if kind == GeomAbs_SurfaceType.GeomAbs_Plane:
+        plane = adaptor.Plane()
+        return ("plane", _vec(plane.Location()), _vec(plane.Axis().Direction()))
+    if kind == GeomAbs_SurfaceType.GeomAbs_Cylinder:
+        cylinder = adaptor.Cylinder()
+        return ("cylinder", *_axis(cylinder.Axis()), cylinder.Radius())
+    if kind == GeomAbs_SurfaceType.GeomAbs_Cone:
+        cone = adaptor.Cone()
+        return ("cone", _vec(cone.Apex()), _vec(cone.Axis().Direction()), cone.SemiAngle())
+    if kind == GeomAbs_SurfaceType.GeomAbs_Sphere:
+        sphere = adaptor.Sphere()
+        return ("sphere", _vec(sphere.Location()), sphere.Radius())
+    if kind == GeomAbs_SurfaceType.GeomAbs_Torus:
+        torus = adaptor.Torus()
+        return ("torus", *_axis(torus.Axis()), torus.MajorRadius(), torus.MinorRadius())
+    return None
+
+
+def _same_surface(a: Optional[tuple], b: Optional[tuple]) -> bool:
+    if a is None or b is None or a[0] != b[0]:
+        return False
+    kind = a[0]
+    if kind == "plane":
+        return _parallel(a[2], b[2]) and abs(_dot(_sub(b[1], a[1]), a[2])) < LINEAR_TOL
+    if kind == "cylinder":
+        return _parallel(a[2], b[2]) and _point_line_distance(b[1], a[1], a[2]) < LINEAR_TOL and abs(a[3] - b[3]) < LINEAR_TOL
+    if kind == "cone":
+        return _parallel(a[2], b[2]) and math.dist(a[1], b[1]) < LINEAR_TOL and abs(abs(a[3]) - abs(b[3])) < ANGULAR_TOL
+    if kind == "sphere":
+        return math.dist(a[1], b[1]) < LINEAR_TOL and abs(a[2] - b[2]) < LINEAR_TOL
+    if kind == "torus":
+        return (
+            _parallel(a[2], b[2])
+            and math.dist(a[1], b[1]) < LINEAR_TOL
+            and abs(a[3] - b[3]) < LINEAR_TOL
+            and abs(a[4] - b[4]) < LINEAR_TOL
+        )
+    return False
+
+
+def _offset_definition(face: Any, distance: float) -> Optional[tuple]:
+    """外向き法線へ `distance` ずらした曲面の定義。円錐(ずらすと頂点が動く)と自由曲面は None。"""
+    definition = _describe(face)
+    if definition is None:
+        return None
+    kind = definition[0]
+    if kind == "plane":
+        normal = _face_normal(face)
+        return ("plane", tuple(definition[1][i] + normal[i] * distance for i in range(3)), definition[2])
+    if kind == "cylinder":
+        return ("cylinder", definition[1], definition[2], definition[3] + _convexity(face, definition) * distance)
+    if kind == "sphere":
+        return ("sphere", definition[1], definition[2] + _convexity(face, definition) * distance)
+    if kind == "torus":
+        return ("torus", definition[1], definition[2], definition[3], definition[4] + _convexity(face, definition) * distance)
+    return None
+
+
+def _convexity(face: Any, definition: tuple) -> float:
+    """外向き法線が中心(軸)から離れる向きなら +1(凸。太ると半径が増える)、近づく向きなら −1(穴)。"""
+    point = _interior_points(face, 1)[0]
+    normal = _face_normal(face)
+    kind = definition[0]
+    if kind == "sphere":
+        radial = _sub(point, definition[1])
+    else:
+        origin, direction = definition[1], definition[2]
+        v = _sub(point, origin)
+        along = _dot(v, direction)
+        radial = tuple(v[i] - along * direction[i] for i in range(3))
+        if kind == "torus":
+            length = math.sqrt(_dot(radial, radial)) or 1.0
+            ring = tuple(origin[i] + radial[i] / length * definition[3] for i in range(3))
+            radial = _sub(point, ring)
+    return 1.0 if _dot(radial, normal) > 0 else -1.0
+
+
+def _lies_on(face: Any, source: Any, distance: float = 0.0) -> bool:
+    """`face` が `source`(を `distance` ずらした曲面)に乗っているか。解析曲面は定義の照合、自由曲面は内部の最大9点の射影
+    (曲面の同一性の証明ではない)。自由曲面のずらしは比べられないので偽。"""
+    expected = _offset_definition(source, distance) if distance else _describe(source)
+    if expected is not None:
+        return _same_surface(expected, _describe(face))
+    if distance:
+        return False
+    surface = BRep_Tool.Surface_s(source)
+    for point in _interior_points(face, 9):
+        projector = GeomAPI_ProjectPointOnSurf(gp_Pnt(*point), surface)
+        if projector.NbPoints() == 0 or projector.LowerDistance() > LINEAR_TOL:
+            return False
+    return True
+
+
+def _interior_points(face: Any, count: int) -> List[tuple]:
+    """面の内側の点を最大 `count` 個、**面全体から均等に間引いて**返す
+    (格子の先頭から取ると UV の片側に寄り、段の削除で面の上半分が消えたのを見逃した)。"""
+    u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
+    adaptor = BRepAdaptor_Surface(face)
+    found = []
+    steps = max(3, int(math.ceil(math.sqrt(count * 4))))
+    for i in range(1, steps):
+        for j in range(1, steps):
+            u = u1 + (u2 - u1) * i / steps
+            v = v1 + (v2 - v1) * j / steps
+            if BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State() == TopAbs_State.TopAbs_IN:
+                point = adaptor.Value(u, v)
+                found.append((point.X(), point.Y(), point.Z()))
+    if not found:
+        found = _points_from_mesh(face)
+    if not found:
+        raise FaceEditError("could not find an interior point of a face", "細い帯状の面は確かめられないので断る")
+    if len(found) <= count:
+        return found
+    return [found[round(k * (len(found) - 1) / max(1, count - 1))] for k in range(count)]
+
+
+def _points_from_mesh(face: Any) -> List[tuple]:
+    """細い帯状の面では UV の格子が内側を1点も拾えない(PC ケースの実物で実測)。面の写しを三角形に分け、
+    三角形の重心を面の曲面へ射影して、面の内側にあるものを使う(写すのは、三角形分割が面に書き込まれるため)。"""
+    copy = TopoDS.Face_s(BRepBuilderAPI_Copy(face).Shape())
+    box = Bnd_Box()
+    BRepBndLib.Add_s(copy, box)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    BRepMesh_IncrementalMesh(copy, max(xmax - xmin, ymax - ymin, zmax - zmin, 1e-3) / 50.0, False, 0.2, True)
+    location = TopLoc_Location()
+    triangulation = BRep_Tool.Triangulation_s(copy, location)
+    if triangulation is None:
+        return []
+    transform = location.Transformation()
+    surface = BRep_Tool.Surface_s(face)
+    found = []
+    for t in range(1, triangulation.NbTriangles() + 1):
+        corners = [triangulation.Node(k).Transformed(transform) for k in triangulation.Triangle(t).Get()]
+        centre = gp_Pnt(*(sum(getattr(p, axis)() for p in corners) / 3 for axis in ("X", "Y", "Z")))
+        projector = GeomAPI_ProjectPointOnSurf(centre, surface)
+        if projector.NbPoints() == 0:
+            continue
+        u, v = _into_face_period(face, *projector.LowerDistanceParameters())
+        if BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State() == TopAbs_State.TopAbs_IN:
+            point = projector.NearestPoint()
+            found.append((point.X(), point.Y(), point.Z()))
+    return found
+
+
+def _into_face_period(face: Any, u: float, v: float):
+    """周期面では、射影の角度が面の持つ範囲から一周ずれて返ることがある。面の UV の範囲へ寄せる
+    (寄せないと面の内側の点を「外」と判定し、実物の STEP の穴・丸めの正しい削除を断った)。"""
+    u1, _, v1, _ = BRepTools.UVBounds_s(face)
+    adaptor = BRepAdaptor_Surface(face)
+    if adaptor.IsUPeriodic():
+        period = adaptor.UPeriod()
+        u = u1 + math.fmod(math.fmod(u - u1, period) + period, period)
+    if adaptor.IsVPeriodic():
+        period = adaptor.VPeriod()
+        v = v1 + math.fmod(math.fmod(v - v1, period) + period, period)
+    return u, v
+
+
+# --------------------------------------------------------------------------------------
+# 小道具
+# --------------------------------------------------------------------------------------
+_SURFACE_NAMES = {
+    GeomAbs_SurfaceType.GeomAbs_Plane: "plane",
+    GeomAbs_SurfaceType.GeomAbs_Cylinder: "cylinder",
+    GeomAbs_SurfaceType.GeomAbs_Cone: "cone",
+    GeomAbs_SurfaceType.GeomAbs_Sphere: "sphere",
+    GeomAbs_SurfaceType.GeomAbs_Torus: "torus",
+    GeomAbs_SurfaceType.GeomAbs_BSplineSurface: "bspline",
+    GeomAbs_SurfaceType.GeomAbs_BezierSurface: "bezier",
+}
+_KINDS = {"face": TopAbs_ShapeEnum.TopAbs_FACE, "edge": TopAbs_ShapeEnum.TopAbs_EDGE}
+
+
+def _surface_type(face: Any) -> str:
+    return _SURFACE_NAMES.get(BRepAdaptor_Surface(face).GetType(), "other")
+
+
+def _faces(shape: Any) -> List[Any]:
+    found = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+    return [TopoDS.Face_s(found.FindKey(i)) for i in range(1, found.Extent() + 1)]
+
+
+def _edges(shape: Any) -> List[Any]:
+    found = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
+    return [TopoDS.Edge_s(found.FindKey(i)) for i in range(1, found.Extent() + 1)]
+
+
+def _solids(shape: Any) -> List[Any]:
+    found = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
+    return [found.FindKey(i) for i in range(1, found.Extent() + 1)]
+
+
+def _count(shape: Any, kind: str) -> int:
+    return indexed_map(shape, _KINDS[kind]).Extent()
+
+
+def _edge_faces(shape: Any) -> Any:
+    found = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, TopAbs_ShapeEnum.TopAbs_FACE, found)
+    return found
+
+
+def _other_face(edge_faces: Any, edge: Any, face: Any) -> Optional[Any]:
+    index = edge_faces.FindIndex(edge)
+    if index == 0:
+        return None
+    others = [TopoDS.Face_s(f) for f in edge_faces.FindFromIndex(index) if not f.IsSame(face)]
+    return others[0] if len(others) == 1 else None
+
+
+def _tangent(edge: Any, a: Any, b: Any) -> bool:
+    return ChFi3d.IsTangentFaces_s(edge, a, b, GeomAbs_Shape.GeomAbs_G1)
+
+
+def _is_spring_edge(edge: Any, definition: tuple) -> bool:
+    """丸めの長手の辺(円筒なら軸に平行な直線、トーラスなら軸と同軸の円)か。"""
+    curve = BRepAdaptor_Curve(edge)
+    kind = definition[0]
+    if kind == "cylinder" and curve.GetType() == GeomAbs_CurveType.GeomAbs_Line:
+        return _parallel(_vec(curve.Line().Direction()), definition[2])
+    if kind == "torus" and curve.GetType() == GeomAbs_CurveType.GeomAbs_Circle:
+        circle = curve.Circle()
+        return _parallel(_vec(circle.Axis().Direction()), definition[2]) and (
+            _point_line_distance(_vec(circle.Location()), definition[1], definition[2]) < LINEAR_TOL
+        )
+    return False
+
+
+def _face_area(face: Any) -> float:
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(face, props)
+    return props.Mass()
+
+
+def _face_normal(face: Any) -> tuple:
+    """面の UV の中点での**外向き**法線(面の向きを反映)。"""
+    adaptor = BRepAdaptor_Surface(face)
+    u = 0.5 * (adaptor.FirstUParameter() + adaptor.LastUParameter())
+    v = 0.5 * (adaptor.FirstVParameter() + adaptor.LastVParameter())
+    normal = BRepLProp_SLProps(adaptor, u, v, 1, 1e-7).Normal()
+    sign = -1.0 if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED else 1.0
+    return (sign * normal.X(), sign * normal.Y(), sign * normal.Z())
+
+
+def _vec(d: Any) -> tuple:
+    return (d.X(), d.Y(), d.Z())
+
+
+def _axis(axis: Any) -> tuple:
+    return _vec(axis.Location()), _vec(axis.Direction())
+
+
+def _sub(a: tuple, b: tuple) -> tuple:
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _dot(a: tuple, b: tuple) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _parallel(a: tuple, b: tuple) -> bool:
+    return abs(abs(_dot(a, b)) - 1.0) < ANGULAR_TOL
+
+
+def _point_line_distance(point: tuple, origin: tuple, direction: tuple) -> float:
+    v = _sub(point, origin)
+    along = _dot(v, direction)
+    return math.sqrt(max(0.0, _dot(v, v) - along * along))

@@ -51,6 +51,10 @@
 | `VolumeProperties_s` の既定積分(Eps 無し)は何周も巻いた B-spline の面で狂う(歯だけで −19%、ねじの軸で 1.5e-03) | [THREAD.md](THREAD.md)「体積の既定積分はねじ山で狂う」 |
 | `BRepBuilderAPI_Sewing` に蓋と帯を辺を共有させたまま渡すと、端の辺を縮退扱いにして殻にならない | [THREAD.md](THREAD.md)「採る: 面から直接組む」 |
 | `BRepClass3d_SolidClassifier` は材料内部の孤立点を OUT と誤判定することがある(神託として使うときの作法) | [TOPOPT.md](TOPOPT.md) |
+| `BRepAlgoAPI_Defeaturing` / `BOPAlgo_RemoveFeatures` は閉じられない面を例外にも `IsDone()=false` にもせず、警告だけ出して元の形(か消せた分だけ消した形)を返す。OCP の Defeaturing は警告の口を出していない | [FACE_EDIT.md](FACE_EDIT.md)「OCCT の罠」 |
+| `BOPAlgo_RemoveFeatures.Perform` は計算中ずっと GIL を握る(3 秒の計算で主スレッドが 3 秒止まる)。実物の部品で丸め1枚に 61 秒かかる例がある | [FACE_EDIT.md](FACE_EDIT.md)「OCCT の罠」 |
+| `BRepOffset_MakeOffset` は接線でつながる面を1組として同じ距離ずらす・SOLID でなく SHELL を返す・面積0の面を残した形を `BRepCheck` 合格で返す・由来は `Modified` でなく `Generated` に入る | [FACE_EDIT.md](FACE_EDIT.md)「OCCT の罠」 |
+| BinTools(バイナリ BRep)の往復は厳密、テキスト BRep は 1e-14 ずれる(面の並びは保つ) | [FACE_EDIT.md](FACE_EDIT.md)「由来と再生の決定性」 |
 | 面の添字は形状変更(フィレット)で散発的にずれる / STEP往復の体積は bit-exact でない | [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)(面の添字)、[../README.md](../README.md)「実測で判明している技術的な地雷」(STEP往復) |
 
 ## build123d / OCP

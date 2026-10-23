@@ -998,6 +998,39 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=True,
     ),
     Command(
+        name="delete_faces",
+        returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
+        category="feature",
+        description=(
+            "フィレット・面取り・穴・ボスなどの面を取り除いて形を閉じ直すときに呼ぶ(履歴の無い STEP のボディでも使える)。"
+            "選択の面(1枚以上・1つのボディ)を消し、周りの面をそれぞれ自分の曲面のまま延ばして閉じる。"
+            "穴や丸めは、それを作る面(止まり穴の底・座ぐりの段・縁の丸め・つながった丸め)をまとめて選ぶ。"
+            "延ばしても閉じない形(箱の上面だけ・段の面)、新しい面が要る形、残す面が削られる形は断り、何も変えない。"
+            "ボディそのものを消すときは delete。"
+        ),
+        session="delete_faces",
+        previewable=True,
+        resets_selection=True,
+    ),
+    Command(
+        name="offset_faces",
+        returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
+        category="feature",
+        description=(
+            "履歴の無いボディの面を押し出す・引っ込める(プッシュ/プル)ときに呼ぶ。"
+            "選択の面(1枚以上・1つのボディ)を外向き法線へ distance だけ動かし、隣の面はそれぞれ自分の曲面のまま伸縮して付いてくる"
+            "(正で太る。穴の内面なら穴が細くなる)。動かせるのは平面・円筒・球・トーラスの面。"
+            "接している一定半径の丸めは同じ半径のまま付いてくる。面が消える・つながりが変わる距離や、"
+            "接線でつながる隣が丸めとして扱えない形は断り、何も変えない。"
+        ),
+        params=(
+            Param("distance", "number", "外向き法線へ動かす距離(mm)。正で太る、負で痩せる", dimension=True),
+        ),
+        session="offset_faces",
+        previewable=True,
+        resets_selection=True,
+    ),
+    Command(
         name="boolean_body",
         returns=(
             Result("target_body_id", "string"),

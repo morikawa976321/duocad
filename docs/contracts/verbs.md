@@ -132,6 +132,20 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - 許容差は `min(1e-3, 厚さ/1000)`(固定 1e-3 では薄い壁が `IsDone=False`)。
 - Web は `SHELL_BODY`(`commands/features.ts`、`SOLID_FEATURE_COMMANDS`、`#shell-body`、厚さ `#shell-thickness`)。面の選択引数は `min: 1`。プレビューはサーバの投機実行(`preview: 'server'`)。
 
+## delete_faces・offset_faces(面の削除・面のオフセット)
+
+- 呼ぶ面は `delete_faces()` と `offset_faces(distance)`。対象の面は確定選択の面から `selection.require_faces` で取る(1ボディ限定)。
+  verb は `duocad/verbs/delete_faces.py`・`offset_faces.py`、幾何は `duocad/kernel_face_edit.py`(依存は kernel_face_edit → kernel の一方向)、
+  計算は常駐の子プロセス(`duocad/kernel_worker.py`)。方式・実測・本人判断カードは docs/FACE_EDIT.md。
+- **合否は OCCT の成功で決めない**: 結果を面ごとに元の面と照らし合わせる関門(1ソリッド・面積0の面なし・削除は残す面が自分の曲面のまま
+  元の範囲を保つ・オフセットは旧面と新面が1対1で各面が元の曲面かずらした曲面に乗る)を通ったときだけ採る。断ったら ValueError で、
+  文書・ログ・undo を変えない。断り文は原因(英語)と利用者向けの言い換え(日本語)。
+- **期限**: 画面・MCP の操作は `kernel_worker.INTERACTIVE_TIMEOUT_S`(置いた値。カード e)、ログの再生は `interactive=False` で期限なし。
+  期限切れ・子の異常終了は子を殺して ValueError、次の呼び出しで立て直す。
+- **由来**: 削除は `deleted` = 選んだ面、`new_faces` は空。オフセットは旧面と新面が1対1。丸めが付いてくるときは旧丸めが `deleted`、
+  丸め直した面が `new_faces`(旧丸めと新丸めを対応させる根拠を持たない)。
+- 画面の口はまだ無い(カード a・b・d・e が本人判断待ち)。MCP とセッションのメソッドだけ。
+
 ## envelope_regions(スケッチの包絡)
 
 - 呼ぶ面は MCP/セッション `envelope_regions(radius=0, offset=0)`(対象は確定選択の領域。WS は radius・offset 必須)。verb は `duocad/verbs/envelope_regions.py`、幾何は `kernel_sketch.envelope_faces`/`face_boundary_entities`。プレビューは投機実行でなく `preview_envelope_regions`(分裂しても失敗にせず全部の線と個数を返す)。
@@ -152,7 +166,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 
 - **押し出しの幾何は `duocad/kernel_extrude.py`**(`extrude_regions(faces, distance, mode, normal, target_shape=None)` と `extrude_faces`。mode は join/cut/new)。`verbs/extrude.py` が直接呼ぶ。`kernel.py` に再エクスポートは無く、`kernel.extrude_regions`/`kernel.extrude_face_on_shape` は存在しない(AttributeError)。`mcp_server.py` から `kernel_extrude.*` を直接呼ばない(`tests/test_mcp_verbs.py` が検査)。
 - **依存は `kernel_extrude` → `kernel` の一方向。** `kernel.py` から `kernel_extrude` を import しない(循環)。`kernel_extrude` は kernel の private 補助(`_face_map`・`_face_at`・`_face_normal`・`_face_props`・`_checked_volume`・`_require_valid`・`_unify_same_domain`・`_fuse_all`・`_target_successors`・`_face_map_projection`)を import している。これらの名前・シグネチャを `kernel.py` 側で変えるなら `kernel_extrude` も直す。`face_of`/`_face_at` は `query.py`・`kernel_sketch.py`・テストが使うので `kernel` に残す。
-- **OCP を import してよいカーネル層は `kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` の8本と `topopt/voxelize.py`**(`tests/test_boundaries.py` の `OCP_ALLOWED` が正。押し出しを切り出した当時は 6 本だった)。
+- **OCP を import してよいカーネル層は `kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` と `topopt/voxelize.py`**(`tests/test_boundaries.py` の `OCP_ALLOWED` が正。押し出しを切り出した当時は 6 本だった)。
 - **UI から `extrude_face` を呼ぶ経路は無い。** ツールバーの「押し出す」は 1 つ(`#extrude`)。`features.ts` の `makeExtrude('region'|'face')` が同じ id `extrude` の 2 定義を作り、`EXTRUDE_REGIONS`(`SKETCH_FEATURE_COMMANDS`、選択引数名 `regions`)と `EXTRUDE_FACES`(通常モードの `SOLID_FEATURE_COMMANDS`、`faces`)として出す(どちらも min 1・max null)。距離 `#distance`、テーパー角 `#extrude-taper`、種別 `#extrude-mode-join/cut/new`。サーバへ送るのは両方 `{distance, mode}` と、0 でないときの `taper` だけ(対象はコアの確定選択)。旧 UI id `extrude_face`、`#extrude-regions`、`#regions-distance` は廃止。
 - 同じ id `extrude` が 2 つの一覧に居ても、`CATEGORY_OF`(`App.svelte`)は id→category で両方 `feature` なので壊れない。`findCommand(id, list)` の `list`、`CommandHost` の `commands` プロップは必須(既定なし)。
 - `App.svelte` の `verb === 'extrude' && !regionsStillExist(...)` は変更不要(面の選択なら領域参照が空集合で true)。通常モードの押し出しは面か1つのスケッチの領域を受け付ける(2026-10-18 本人決定。`EXTRUDE_FACES` の選択引数は `kinds: ['face', 'region']`)。面と領域の混在・別スケッチの領域は画面が先に断る(`makeExtrude` の `build`。コアの `require_extrude_targets` と同じ断り方)。

@@ -10,6 +10,7 @@ from .add_solid import add_solid_body  # noqa: F401
 from .boolean_body import boolean_body  # noqa: F401
 from .chamfer import chamfer  # noqa: F401
 from .delete import delete, delete_items  # noqa: F401
+from .delete_faces import delete_faces  # noqa: F401
 from .envelope_regions import envelope_regions  # noqa: F401
 from .extrude import extrude, extrude_faces  # noqa: F401
 from . import extrude_face as _extrude_face_replay  # noqa: F401  再生専用verbの登録
@@ -21,6 +22,7 @@ from .mirror_body import mirror_body  # noqa: F401
 from .mirror_sketch import mirror_sketch_entities  # noqa: F401
 from .move_body import move_body  # noqa: F401
 from .move_sketch import move_sketch_entities  # noqa: F401
+from .offset_faces import offset_faces  # noqa: F401
 from .optimize_setup import (  # noqa: F401
     clear_loads,
     set_exclude_bodies,
@@ -42,6 +44,7 @@ __all__ = [
     "chamfer",
     "delete",
     "delete_items",
+    "delete_faces",
     "envelope_regions",
     "extrude",
     "extrude_faces",
@@ -54,6 +57,7 @@ __all__ = [
     "mirror_sketch_entities",
     "move_body",
     "move_sketch_entities",
+    "offset_faces",
     "set_exclude_bodies",
     "set_fixtures",
     "set_loads",
