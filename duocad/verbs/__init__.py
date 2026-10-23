@@ -36,6 +36,7 @@ from .rename import rename  # noqa: F401
 from .revolve import revolve  # noqa: F401
 from .shell_body import shell_body  # noqa: F401
 from .split_body import split_body  # noqa: F401
+from .thread import thread  # noqa: F401
 
 __all__ = [
     "add_mesh_body",
@@ -70,4 +71,5 @@ __all__ = [
     "revolve",
     "shell_body",
     "split_body",
+    "thread",
 ]

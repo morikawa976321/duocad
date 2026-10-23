@@ -268,7 +268,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` の9本）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py`。一覧は下の表）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
 `tests/test_boundaries.py` がソースを静的走査して検査する（動的importも検出）。
 
 | モジュール | 役割 | OCP | build123d |
@@ -294,6 +294,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/kernel_sketch.py` | スケッチ平面の枠・図形種別ごとの辺・閉領域の検出。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_extrude.py` | 押し出し・回転体・ロフトの幾何（`extrude_faces` / `extrude_regions` / `revolve_regions` / `loft_regions`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_shell.py` | シェル（中空化）の幾何（`shell_solid`）。kernel を読むだけの一方向 | **○** | ✗ |
+| `duocad/kernel_thread.py` | ねじ山の幾何（山形・隙間の上下限と既定・`thread_face`。[docs/THREAD.md](docs/THREAD.md)）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_face_edit.py` | 面の削除・面のオフセットの幾何と関門（[docs/FACE_EDIT.md](docs/FACE_EDIT.md)）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_worker.py` | 面の削除・オフセットを常駐の子プロセスで計算する口（形は BinTools の base64 で渡す） | **○** | ✗ |
 | `duocad/worker_process.py` | 重い計算を子プロセスで走らせる共通の部品（起動・1行1 JSON の線・時間の上限・取り消し・作り直し。干渉チェックと面の編集が使う） | ✗ | ✗ |

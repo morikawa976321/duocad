@@ -45,6 +45,8 @@ class Printer:
 
 
 DEFAULT = Printer()
+# 「0.12mm Fine @Elegoo CC 0.4 nozzle」は 0.20mm Standard を継いで層 0.12・壁3周だけを変える(実測)。本人のプリントの 99% はこちら(2026-10-23)
+FINE = DEFAULT.with_(layer=0.12, walls=3)
 
 # 試し刷り TP1(2026-10-22、本人の Centauri Carbon・初期設定・層 0.2)の嵌合の 20 件すべてと一致する係数(calibrate.py --fit)。
 # 垂れは既定の 0〜0.25 倍で一致し、既定(1 倍)では 2 件外れる。ビードの側面は半円(既定)が最もよく合う
@@ -78,8 +80,11 @@ def resolve(kind: str, name: str, vendor: str = "Elegoo") -> dict:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             continue
-        if isinstance(d, dict) and "name" in d and "type" in d:
-            index.setdefault((d["type"], d["name"]), d)
+        if isinstance(d, dict) and "name" in d:
+            # 「0.12mm Fine @Elegoo CC 0.4 nozzle」のように type を持たないファイルがある(実測)。置き場所のフォルダ名で補う
+            kind_of = d.get("type") or next((k for k in ("process", "filament", "machine") if k in f.relative_to(root).parts), None)
+            if kind_of:
+                index.setdefault((kind_of, d["name"]), d)
     chain, d = [], index[(kind, name)]
     chain.append(d)
     while d.get("inherits"):

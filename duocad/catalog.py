@@ -998,6 +998,31 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=True,
     ),
     Command(
+        name="thread",
+        returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
+        category="feature",
+        description=(
+            "3Dプリントで組むボルト・ナット・ねじ穴のねじ山を作るときに呼ぶ。"
+            "選択の全周の円筒面(ちょうど1つ)にねじ山を実体で刻む: 外向きの面(軸)は雄ねじ、内向きの面(穴)は雌ねじ。"
+            "面の直径を呼び径とみなす(6mm の穴・軸に掛ける)。ピッチは径から自動(0.25 倍、1.2mm 以上)。"
+            "穴の入口と軸の先端は自動で面取りする。軸の先が既に面取り済みなら断る(面取りの前にねじを切る)。"
+        ),
+        params=(
+            Param("profile", "string", "山形: semicircle(半円) / trapezoid30(30°台形) / trapezoid45(45°台形)"),
+            Param(
+                "clearance",
+                "number",
+                "このねじの隙間(mm)。省略で山形ごとの既定(穴は 半円 0.12・30°台形 0.20・45°台形 0.12、軸は 0)。"
+                "0 以上で、山が掛かる上限まで。推奨(穴: 半円 0.11〜0.14・30°台形 0.18〜0.22・45°台形 0.11〜0.13、軸: 0)の外は警告",
+                required=False,
+                dimension=True,
+            ),
+        ),
+        session="thread",
+        previewable=True,
+        resets_selection=True,
+    ),
+    Command(
         name="delete_faces",
         returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
         category="feature",

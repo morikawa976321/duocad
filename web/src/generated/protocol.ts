@@ -25,6 +25,7 @@ export const COMMAND_CATEGORY = {
   fillet: 'feature',
   chamfer: 'feature',
   shell_body: 'feature',
+  thread: 'feature',
   delete_faces: 'feature',
   offset_faces: 'feature',
   boolean_body: 'feature',
@@ -120,6 +121,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   fillet: ['radius'],
   chamfer: ['distance'],
   shell_body: ['thickness'],
+  thread: ['profile', 'clearance'],
   delete_faces: [],
   offset_faces: ['distance'],
   boolean_body: ['target_ref', 'mode'],
@@ -213,6 +215,7 @@ export interface CommandArguments {
   fillet: { radius: number | unknown[] }
   chamfer: { distance: number | unknown[] }
   shell_body: { thickness: number }
+  thread: { profile: string; clearance?: number }
   delete_faces: Record<string, never>
   offset_faces: { distance: number }
   boolean_body: { target_ref: object; mode: string }
@@ -316,6 +319,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'shell_body'; body_id: string; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'thread'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'delete_faces'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'offset_faces'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'boolean_body'; target_body_id: string; mode: string; removed_bodies: string[]; changed_bodies: string[] })

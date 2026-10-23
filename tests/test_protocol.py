@@ -255,6 +255,19 @@ def _run_delete_faces(session: Session, tmp_path: Path) -> dict:
     return session.delete_faces()
 
 
+@_runner("thread")
+def _run_thread(session: Session, tmp_path: Path) -> dict:
+    sketch_id = _sketch(session)
+    session.add_circle(sketch_id, [0.0, 0.0], 6.0)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude(10.0, mode="new")
+    body = session.document.bodies[-1]
+    face_map = kernel._face_map(body.shape)
+    face = next(i for i in range(1, face_map.Extent() + 1) if kernel.classify_face(face_map.FindKey(i)) == "cylinder_full")
+    _select(session, [{"body": body.id, "kind": "face", "index": face}])
+    return session.thread("trapezoid45")
+
+
 @_runner("offset_faces")
 def _run_offset_faces(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)

@@ -329,6 +329,48 @@ export const SHELL_BODY: CommandDef<'shell_body'> = {
 }
 
 /**
+ * ねじ(`thread`)。全周の円筒面を1つ選び、山形を3つから選び、隙間は空欄なら既定(山形と、面が軸か穴かでサーバが決める)。
+ * 推奨の範囲は山形の選択肢の表示に出す(範囲の外でも確定はでき、サーバが警告のトーストを出す)。上限はピッチで決まるのでサーバが断る。
+ */
+export const THREAD: CommandDef<'thread'> = {
+  id: 'thread',
+  label: 'ねじ',
+  buttonId: 'thread',
+  preview: 'server',
+  args: [
+    { kind: 'selection', name: 'faces', label: '円筒面(1つ)', shapeKind: 'face', min: 1, max: 1 },
+    {
+      kind: 'choice',
+      name: 'profile',
+      label: '山形',
+      options: [
+        { value: 'semicircle', label: '半円(穴の推奨 0.11〜0.14)', buttonId: 'thread-profile-semicircle' },
+        { value: 'trapezoid30', label: '30°台形(穴の推奨 0.18〜0.22)', buttonId: 'thread-profile-trapezoid30' },
+        { value: 'trapezoid45', label: '45°台形(穴の推奨 0.11〜0.13)', buttonId: 'thread-profile-trapezoid45' },
+      ],
+    },
+    {
+      kind: 'number',
+      name: 'clearance',
+      label: '隙間(空欄=既定。軸の既定は 0)',
+      unit: 'mm',
+      inputId: 'thread-clearance',
+      optional: true,
+      reject: (value) => (value >= 0 ? null : '隙間は0以上'),
+    },
+  ],
+  build(values) {
+    const empty = missingSelection(values, 'faces', '円筒面')
+    const profile = values.profile
+    const clearance = values.clearance
+    if (empty !== null) return { ok: false, reason: empty }
+    if (typeof profile !== 'string') return { ok: false, reason: '山形が選ばれていない' }
+    if (clearance !== undefined && typeof clearance !== 'number') return { ok: false, reason: '隙間が数値でない' }
+    return { ok: true, args: clearance === undefined ? { profile } : { profile, clearance } }
+  },
+}
+
+/**
  * ソリッドブーリアン。ターゲットは面1枚を直接ピック(`PickArgSpec`)、ツールは選択(複数)。
  * ターゲットのピックをツール選択より前に置く(`args` の並びが `firstMissingArg` の順序)。ターゲットを選択に入れると `require_bodies` でツールとロールが混ざる。
  */
@@ -732,6 +774,7 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
   FILLET,
   CHAMFER,
   SHELL_BODY,
+  THREAD,
   BOOLEAN_BODY,
   MOVE_BODY,
   MIRROR_BODY,

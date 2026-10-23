@@ -516,9 +516,9 @@ def main(argv=None) -> int:
     ap.add_argument("--only", default=None, help="名前にこの文字列を含む設計だけ")
     ap.add_argument("--redo-errors", action="store_true",
                     help="計算の失敗(メッシュ・接触・例外)を含む行を消して回し直す。「はまらない」は失敗ではないので残す")
-    ap.add_argument("--printer", choices=["default", "tp1"], default="default",
+    ap.add_argument("--printer", choices=["default", "tp1", "tp1fine"], default="default",
                     help="tp1: 印刷の模擬の係数を試し刷り TP1 に合わせたもの(printer.TP1_FIT)にし、頑健さの場面も TP1 と一致する組にする。"
-                         "結果は <study>_tp1.jsonl")
+                         "tp1fine: それを本人のふだんの設定 0.12mm Fine(層 0.12・壁3周)で。結果は <study>_<printer>.jsonl")
     a = ap.parse_args(argv)
     got = STUDIES[a.study]()
     if got[3] is None:  # 設計ごとに (spec, printer_kw, mat_kw)
@@ -526,16 +526,21 @@ def main(argv=None) -> int:
     else:
         specs, printer_kw, e_list, mat_kw = got
         items = [(s, printer_kw, mat_kw) for s in specs]
-    if a.printer == "tp1":
+    if a.printer in ("tp1", "tp1fine"):
         from .printer import TP1_FIT, TP1_SCENARIOS
-        items = [(s, {**TP1_FIT, **pk}, mk) for s, pk, mk in items]
+        if a.printer == "tp1fine":
+            # 壁3周の帯: 外壁 0.42 + 内壁 0.45×2 − 重なり 2·h(1−π/4)(壁2周の 0.83 と同じ式、h = 0.12)
+            fine_p, fine_m = dict(layer=0.12, walls=3), dict(t_wall=round(0.42 + 0.9 - 2 * 0.12 * (1 - math.pi / 4), 3))
+        else:
+            fine_p, fine_m = {}, {}
+        items = [(s, {**TP1_FIT, **fine_p, **pk}, {**fine_m, **mk}) for s, pk, mk in items]
         if isinstance(e_list, dict) and e_list.get("runner") == "robust":
             e_list = dict(e_list, scenarios=TP1_SCENARIOS)
     specs = [s for s, _, _ in items]
     if a.only:
         specs = [s for s in specs if a.only in s["name"]]
     OUT.mkdir(parents=True, exist_ok=True)
-    path = OUT / (f"{a.study}_tp1.jsonl" if a.printer == "tp1" else f"{a.study}.jsonl")
+    path = OUT / (f"{a.study}_{a.printer}.jsonl" if a.printer != "default" else f"{a.study}.jsonl")
     done = set()
     if path.exists() and a.redo_errors:
         keep, dropped = [], 0

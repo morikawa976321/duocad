@@ -34,6 +34,7 @@ OCP_ALLOWED = frozenset(
         "kernel_overflow.py",
         "kernel_tight.py",
         "kernel_shell.py",
+        "kernel_thread.py",
         "kernel_face_edit.py",
         "kernel_worker.py",
         "kernel_project.py",
