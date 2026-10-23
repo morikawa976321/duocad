@@ -36,6 +36,10 @@ class Autosave:
             self._background_autosave -= 1
 
     @property
+    def background_active(self) -> bool:
+        return self._background_autosave > 0
+
+    @property
     def pending_write(self) -> concurrent.futures.Future | None:
         return self._pending_write
 
@@ -79,7 +83,7 @@ class Autosave:
             self.store.write_document_file(target, payload)
 
     def save_current(self, name: str, log: OpLog, created: float | None) -> None:
-        if self._background_autosave:
+        if self.background_active:
             target = self.store.resolve_writable_name(name)
             # 呼び手が変更を配る前に中身を確定し、ワーカーにはログを渡さない。
             payload = log.to_file_chunks(created=created)

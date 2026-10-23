@@ -14,6 +14,7 @@ import pytest
 
 from duocad.oplog import OpLog
 from duocad.server import Session
+from duocad.session import NoDocument
 from session_support import browser as _browser
 
 
@@ -65,6 +66,48 @@ def test_a_remembered_operation_follows_its_provenance_and_undo() -> None:
 
 def _ops_on_disk(session: Session) -> int:
     return len(json.loads((session.models_dir / session.current_name).read_text(encoding="utf-8"))["operations"])
+
+
+@pytest.mark.parametrize("background", [False, True])
+def test_external_case_rename_follows_the_save_mode(session: Session, background) -> None:
+    """同期保存は実ファイルの現在名を反映し、背景保存は現在名を変えず、同期保存後の削除は文書も閉じる。"""
+    session.save_document("model.json")
+    original = session.models_dir / "model.json"
+    renamed = session.models_dir / "MODEL.json"
+    if not renamed.exists() or not renamed.samefile(original):
+        pytest.skip("大小文字を区別しないファイルシステムだけを対象にする")
+    created = json.loads(original.read_text(encoding="utf-8"))["created"]
+    original.rename(renamed)
+    assert [path.name for path in session.models_dir.glob("*.json")] == ["MODEL.json"]
+    observed_names = []
+    session.add_listener(lambda _applied: observed_names.append(session.state_meta()["current_name"]))
+
+    if background:
+        with session.background_autosave():
+            session.sketch_create("XY")
+        assert session.pending_write is not None
+        concurrent.futures.wait([session.pending_write])
+        assert session.settle_autosave() is True
+        assert session.current_name == "model.json"
+        assert observed_names == ["model.json"]
+    else:
+        session.sketch_create("XY")
+        assert session.pending_write is None
+        assert session.current_name == "MODEL.json"
+        assert observed_names == ["MODEL.json"]
+    payload = json.loads(renamed.read_text(encoding="utf-8"))
+    assert len(payload["operations"]) == 1 and payload["created"] == created
+    assert session.saved
+
+    if background:
+        session.sketch_create("YZ")
+        assert session.current_name == "MODEL.json"
+    deleted = session.delete_document(session.current_name)
+    assert deleted["closed"] is True
+    assert not session.document_open and session.current_name is None
+    with pytest.raises(NoDocument):
+        session.sketch_create("XY")
+    assert list(session.models_dir.glob("*.json")) == []
 
 
 def test_the_file_is_written_in_the_background_and_settles(session: Session) -> None:

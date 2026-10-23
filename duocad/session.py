@@ -1234,8 +1234,10 @@ class Session:
         try:
             if self._current_name is None:
                 self.save_document(self.store.unused_untitled_name(), autosave_untitled=True)
-            else:
+            elif self.autosaver.background_active:
                 self.autosaver.save_current(self._current_name, self.document.log, self._created)
+            else:
+                self.save_document()
         except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ画面へ出す
             return self.autosaver.failed(error)
         return True
