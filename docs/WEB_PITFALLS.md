@@ -44,8 +44,10 @@
 - **`$effect` の `?.` 短絡は依存の登録ごと飛ばす。** `viewport?.showBasePlanes(wants)` は初回 `viewport===null` で
   `wants` を一度も読まず依存ゼロで登録され、二度と再実行されない（「コマンドを起動しても基準平面が指せない」）。
   リアクティブ値を先にローカルへ読む。`void selection` のような明示的に読む1行はこの穴を塞ぐイディオム。
-- **`{#key}` の作り直しは子の「中断」を親へ伝えない。** 子が描かせていた幽霊がビューポートに残る。作り直しの引き金を
-  持つ側（`setMode`）で明示的に消す。子の `$effect` クリーンアップに任せない（消す相手が親の持ち物なら破棄の順序に依存する）。
+- **`{#key}` の作り直しは子の通常の中断経路を通らない。** プレビューの寿命は `previewController.ts` が持つ。
+  `CommandHost` は破棄時に `preview.detach()`、`App` はモード変更で `preview.clear()`、自身の破棄で
+  `preview.dispose()` を呼ぶ。描画の破棄だけで済ませると、保留タイマーや遅い応答から幽霊が戻る。
+  遷移は `tests/eval_preview_controller.mjs` が時刻と応答順を固定して検査する。
 - **runes モードのインスタンススクリプトに `export` は書けない。** 型や定数を公開するなら `<script module lang="ts">`
   （`Toast.svelte` が先例）。`npm run check` で出る。
 - **`$state` のオブジェクト・配列を `page.evaluate` の戻り値にすると中身が欠ける**（Proxy が CDP のディープシリアライズに

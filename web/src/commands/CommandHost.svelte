@@ -27,22 +27,22 @@
    * ## 引数収集と選択
    *
    * 選択引数の値はコアの選択集合から導出し、ここには持たない。空のときだけ「面を1つ選ぶ」と問う。AIが選んだ集合はそのまま対象になる。
-   * 選択の中身は送らない(サーバがコアの選択から取る)。`onRun` / `onPreview` へ渡るのは数値・選択肢・パスだけ。
+   * 選択の中身はWSへ送らない(サーバがコアの選択から取る)。選択の指紋はプレビューの重複抑止だけに使う。
    * 引数収集中にAIが選択を書き換えても止めない(選択に出所の区別は無い)。
    *
    * ## プレビューは投機的実行
    *
-   * 引数が揃ったら `preview` を投げる(サーバがverbを試して形だけ返し、文書は元へ戻す)。押し出しは実測で数百ms〜1秒かかるので、打鍵ごとには投げず、打ち終わり(`PREVIEW_DEBOUNCE_MS`)を待って1回だけ投げる。
+   * 引数が揃ったら `preview` を投げる(サーバがverbを試して形だけ返し、文書は元へ戻す)。押し出しは実測で数百ms〜1秒かかるので、打鍵ごとには投げず、打ち終わり(`previewController.ts`)を待って1回だけ投げる。
    * Enterはプレビューを待たない(プレビューは確認用で、確定の前提ではない)。
    */
   import { onDestroy, onMount, untrack } from 'svelte'
+  import type { PreviewController } from '../previewController'
+  import { createSharedArgsController, publishedArgs } from '../sharedArgsController'
   import {
     argApplies,
     argKinds,
     argSatisfied,
     buildArgs,
-    choiceSends,
-    syncedChoice,
     commitsGhost,
     findCommand,
     firstMissingArg,
@@ -69,7 +69,7 @@
   import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../expression'
   import { isImeKey, ownsEnterKey } from '../keys'
   import type { CommandState, SelectionRef, SelectionState } from '../session'
-  import { COMMAND_CATEGORY, COMMAND_PARAMS } from '../generated/protocol'
+  import { COMMAND_CATEGORY } from '../generated/protocol'
 
   let {
     selection,
@@ -87,8 +87,7 @@
     onSetArgs = () => {},
     onEndShared = () => {},
     onRun,
-    onPreview,
-    onCancelPreview,
+    preview,
     onNote,
     onWants = () => {},
     onWantsPlane = () => {},
@@ -136,9 +135,7 @@
     /** 起動中の verb を畳む(サーバの `end_command`)。 */
     onEndShared?: () => void
     onRun: (...request: BuiltCommandRequest) => void
-    /** `mode` は `CommandDef.preview`。`local` はブラウザだけで描く(サーバへ投げない)。 */
-    onPreview: (verb: string, args: Record<string, unknown>, mode: 'server' | 'local') => void
-    onCancelPreview: () => void
+    preview: PreviewController
     onNote: (message: string) => void
     /** 起動中のコマンドが選択から取る種別。辺を要求したときだけアプリ層が辺の折れ線を取りに行く(常時出すと27部品ぶんの辺が要り、面のピックも辺に取られて押し出しが遅くなる)。 */
     onWants?: (kinds: SelectableKind[]) => void
@@ -151,18 +148,6 @@
     /** 起動中のコマンドが頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`。測定)。アプリ層が対象ボディの頂点を候補として出し、辺より先に取る。 */
     onWantsVertices?: (wants: boolean) => void
   } = $props()
-
-  /** 打ち終わってからプレビューを投げるまでの待ち[ms]。 */
-  const PREVIEW_DEBOUNCE_MS = 250
-  /**
-   * 打ち続けていても、最初の打鍵からこれだけ経てば途中の値で投げる[ms]。末尾だけのデバウンスは、打鍵の間隔が
-   * `PREVIEW_DEBOUNCE_MS` 空かない限り何も出さない(issue #169)。古い要求はサーバが捨てる(`net/ws.py` の集約)。
-   */
-  const PREVIEW_MAX_WAIT_MS = 750
-  /** 投げていない打ち直しの最初の時刻(`PREVIEW_MAX_WAIT_MS` の起点)。投げたら・取り消したら null。 */
-  let previewWaitingSince: number | null = null
-  /** 打ってからサーバの作業空間へ出すまでの待ち[ms]。打鍵のたびに送らない(AI には落ち着いた値だけ見える)。 */
-  const PUBLISH_DEBOUNCE_MS = 250
 
   /** 構える対象(サーバの作業空間に載る verb)か。スケッチとフィーチャの verb(`duocad/workspace.py` の `stageable` と同じ線)。 */
   function isStageable(verb: string): boolean {
@@ -356,10 +341,6 @@
   })
 
   // ---------------------------------------------------------------- プレビュー
-  let previewTimer: ReturnType<typeof setTimeout> | null = null
-  /** 直前に投げたプレビューの印(同じものを投げ直さないため)。 */
-  let previewedKey: string | null = null
-
   /** 選択の中身の印。対象集合は引数に載らないので、これを入れないと辺を足しても再送されず古い幽霊が残る。 */
   const selectionPrint = $derived(
     (command?.args ?? []).some((spec) => spec.kind === 'selection')
@@ -372,31 +353,12 @@
     const cmd = command
     // 確定を送った後は出さない(打った値は残すので、消した幽霊を同じ引数で出し直してしまう)。
     const source = cmd === null || cmd.preview === 'none' || committed ? null : ghostBuilt
-    const key = source ? JSON.stringify([cmd!.id, source.args, selectionPrint]) : null
-    if (key === previewedKey) return
-    if (previewTimer) clearTimeout(previewTimer)
-    previewedKey = key
-    if (key === null || source === null || cmd === null) {
-      previewWaitingSince = null
-      onCancelPreview()
-      return
-    }
-    const mode = cmd.preview as 'server' | 'local'
-    const args = source.args
-    // ブラウザだけで描ける幽霊はデバウンスしない(デバウンスは投機実行が重いことへの対処)。
-    if (mode === 'local') {
-      previewWaitingSince = null
-      onPreview(cmd.id, args, mode)
-      return
-    }
-    const now = performance.now()
-    previewWaitingSince ??= now
-    const wait = Math.max(0, Math.min(PREVIEW_DEBOUNCE_MS, previewWaitingSince + PREVIEW_MAX_WAIT_MS - now))
-    previewTimer = setTimeout(() => {
-      previewTimer = null
-      previewWaitingSince = null
-      onPreview(cmd.id, args, mode)
-    }, wait)
+    preview.update(source === null || cmd === null ? null : {
+      verb: cmd.id,
+      args: source.args,
+      mode: cmd.preview as 'server' | 'local',
+      selection: selectionPrint,
+    })
   })
 
   // ---------------------------------------------------------------- 即適用(Enterが要らないもの)
@@ -459,8 +421,8 @@
       // 印は `onRun` より先に立てる: 繋がっていなくて送れなかったときは `onRun` の中で同期に `commitFailed()` が呼ばれて降りる。
       committed = true
       armedSelections = null
-      cancelPublish()
-      cancelPreview()
+      sharedArgs.cancel()
+      preview.cancel()
       onRun(...source.request)
       return
     }
@@ -510,14 +472,6 @@
     if (wasArmed) onNote('中断した(文書は変わっていない)')
   }
 
-  /** 幽霊を消す(投げかけも止める)。 */
-  function cancelPreview(): void {
-    if (previewTimer) clearTimeout(previewTimer)
-    previewTimer = null
-    previewedKey = null
-    onCancelPreview()
-  }
-
   /** 集めかけの引数を全部捨てる。起動の入れ替わり(`entered()` / `ended()`)とローカルのコマンドの確定が呼ぶ。 */
   function resetInputs(): void {
     const forgotten = new Set(
@@ -533,12 +487,8 @@
     committed = false
     // 即適用の待ち受けも降ろす。構え直すのは `entered()` / `restart()` だけ。
     armedSelections = null
-    cancelPublish()
-    lastPublished = {}
-    sentKeys = new Set()
-    unmapped = new Set()
-    everLive = new Set()
-    cancelPreview()
+    sharedArgs.reset()
+    preview.cancel()
   }
 
   /**
@@ -612,107 +562,36 @@
   })
 
   // ---------------------------------------------------------------- サーバの作業空間との同期(issue #153)
-  /** サーバが持っていると信じている引数(自分の送信と配信の写し)。配信がこれと同じなら自分の送信の返りなので欄に触らない。 */
-  let lastPublished: Record<string, unknown> = {}
-  let publishTimer: ReturnType<typeof setTimeout> | null = null
-
-  /**
-   * サーバへ出す引数。verb のサーバ側引数名で、宣言(`COMMAND_PARAMS`)にある名前だけ。選択・図形ID・貼る先の面は載せない
-   * (対象は共有選択から)。出すのは今要る引数(`liveArgs`。`when` で隠れた欄の値は出さない)で、数値・文字列・点・ピックは
-   * そのまま、選択肢は `sends` でサーバの値に読み替える。
-   */
-  const published = $derived.by<Record<string, unknown> | null>(() => {
-    if (sharedId === null || command === null) return null
-    const allowed = new Set<string>(COMMAND_PARAMS[command.id as keyof typeof COMMAND_PARAMS] ?? [])
-    const out: Record<string, unknown> = {}
-    for (const spec of liveArgs) {
-      if (spec.kind === 'selection' || spec.kind === 'entities' || spec.kind === 'plane') continue
-      let value: unknown = values[spec.name]
-      if (spec.kind === 'choice') {
-        const option = spec.options.find((candidate) => candidate.value === value)
-        value = option === undefined ? undefined : choiceSends(option)
-      }
-      if (spec.kind === 'text' && spec.toShared !== undefined && typeof value === 'string') {
-        value = spec.toShared(value)
-      }
-      if (value === undefined || value === null || value === '' || !allowed.has(spec.name)) continue
-      out[spec.name] = value
-    }
-    // 揃っていれば `build` の結果が勝つ(点から導いた寸法・貼る先の平面名はここでしかサーバ側の名前にならない)。
-    if (built?.ok) {
-      for (const [name, value] of Object.entries(built.args)) {
-        if (allowed.has(name) && value !== undefined && value !== null) out[name] = value
-      }
-    }
-    return out
+  const sharedArgs = createSharedArgsController({
+    context: () => ({ active: sharedId !== null, committed, specs: command?.args ?? [] }),
+    send: (args) => onSetArgs(args),
+    render: (draft) => {
+      numberText = draft.numberText
+      textValues = draft.textValues
+      choices = draft.choices
+      points = draft.points
+      picks = draft.picks
+      planes = draft.planes
+    },
+    note: (message) => onNote(message),
+    setTimer: (callback, delay) => setTimeout(callback, delay),
+    clearTimer: (timer) => clearTimeout(timer),
   })
+
+  const published = $derived(sharedId === null || command === null ? null : publishedArgs(command, liveArgs, values, built))
 
   $effect(() => {
     const next = published
-    if (next === null) return
-    const snapshot = { ...next }
-    untrack(() => {
-      if (publishTimer) clearTimeout(publishTimer)
-      publishTimer = setTimeout(() => {
-        publishTimer = null
-        flushPublish(snapshot)
-      }, PUBLISH_DEBOUNCE_MS)
-    })
+    untrack(() => sharedArgs.update(next))
   })
 
-  function cancelPublish(): void {
-    if (publishTimer) clearTimeout(publishTimer)
-    publishTimer = null
-  }
-
-  /** 自分がこの起動で実際に出したことのあるキー(`build` が作る `base_plane` / `mode` のように欄の名前と違うものを含む)。 */
-  let sentKeys = new Set<string>()
-  /** 配信された値を欄へ写せなかったキー(3択に無い荷重の向き・`sends: null` の選択肢に紐づく値など)。欄が空でも「人が消した」ではない。 */
-  let unmapped = new Set<string>()
-  /** この起動で一度でも画面に出た欄の名前。出たことのある欄が `when` で隠れたら、その値は人が切り替えで捨てたもの(回転→並進の `angle`)。 */
-  let everLive = new Set<string>()
   $effect(() => {
-    for (const spec of liveArgs) everLive.add(spec.name)
+    const names = liveArgs.map((spec) => spec.name)
+    untrack(() => sharedArgs.visible(names))
   })
 
-  /**
-   * `lastPublished` との差分だけ送る。確定を送った後と無起動では送らない(畳まれた後に届くと「起動中のコマンドが無い」になる)。
-   * 欄から消えたキーを null で外すのは、**自分が出したことのあるキー**か、**一度でも画面に出た欄のキーで、配信を欄へ写せなかった
-   * ものでない**ものだけ: 人が欄を空にした・モードを切り替えて欄を隠したのは「まだ決めていない」へ戻す意思で、AI が付けた値でも
-   * 外す(残すと AI の `apply_command` が並進に回転の引数を併合して断られる)。一度も出ていない欄(`when` で
-   * 隠れたままの欄)・欄が無いキー(AI が付けた `scale`・サーバが補う `sketch_id`)・
-   * 写せなかった値は触らない。
-   */
-  function flushPublish(next: Record<string, unknown>): void {
-    if (sharedId === null || committed) return
-    const fields = new Set(
-      (command?.args ?? [])
-        .filter((spec) => spec.kind === 'number' || spec.kind === 'text' || spec.kind === 'point' || spec.kind === 'pick' || spec.kind === 'choice')
-        .map((spec) => spec.name),
-    )
-    const delta: Record<string, unknown> = {}
-    for (const [name, value] of Object.entries(next)) {
-      if (JSON.stringify(value) !== JSON.stringify(lastPublished[name])) delta[name] = value
-    }
-    for (const name of Object.keys(lastPublished)) {
-      if (name in next) continue
-      const cleared = fields.has(name) && everLive.has(name) && !unmapped.has(name)
-      if (cleared || sentKeys.has(name)) delta[name] = null
-    }
-    if (Object.keys(delta).length === 0) return
-    for (const [name, value] of Object.entries(delta)) {
-      if (value !== null) sentKeys.add(name)
-      unmapped.delete(name)
-    }
-    lastPublished = { ...lastPublished, ...delta }
-    for (const name of Object.keys(delta)) if (delta[name] === null) delete lastPublished[name]
-    onSetArgs(delta)
-  }
-
-  /** 欄を離れたら待たずに出す(打鍵中に外から来た値を欄に写さなかったぶんを、ここで自分の値で上書きする)。 */
   function flushNow(): void {
-    cancelPublish()
-    if (published !== null) flushPublish(published)
+    sharedArgs.flush(published)
   }
 
   $effect(() => {
@@ -721,71 +600,11 @@
     untrack(() => syncFromShared())
   })
 
-  /**
-   * 配信された引数を欄へ写す(AI か別の画面が触ったぶん)。自分の送信の返り(`lastPublished` と同じ)なら何もしない。
-   * 打っている最中の欄は奪わず(サーバの値は後勝ちだが、打ち終わりの blur / Enter で自分の値が勝つ)、札で知らせる。
-   */
   function syncFromShared(): void {
     if (shared === null || command === null || sharedId === null) return
-    const remote = shared.args
-    if (JSON.stringify(remote) === JSON.stringify(lastPublished)) return
     const active = document.activeElement
-    const kept: string[] = []
-    unmapped = new Set()
-    for (const spec of command.args) {
-      const value = remote[spec.name]
-      if (spec.kind === 'number') {
-        const text = value === undefined ? '' : String(value)
-        if ((numberText[spec.name] ?? '') === text) continue
-        if (active instanceof HTMLElement && active.id === spec.inputId) {
-          kept.push(`${spec.label}=${text === '' ? '(空)' : text}`)
-          continue
-        }
-        numberText = { ...numberText, [spec.name]: text }
-      } else if (spec.kind === 'choice') {
-        const synced = syncedChoice(spec, remote, lastPublished, choices[spec.name])
-        if ('unmapped' in synced) {
-          unmapped.add(spec.name)
-        } else if (synced.value === undefined) {
-          const { [spec.name]: _removed, ...rest } = choices
-          choices = rest
-        } else {
-          choices = { ...choices, [spec.name]: synced.value }
-        }
-      } else if (spec.kind === 'text') {
-        const text = value === undefined ? '' : String(value)
-        if ((textValues[spec.name] ?? '') === text) continue
-        if (active instanceof HTMLElement && active.id === spec.inputId) {
-          kept.push(`${spec.label}=${text === '' ? '(空)' : text}`)
-          continue
-        }
-        textValues = { ...textValues, [spec.name]: text }
-      } else if (spec.kind === 'pick') {
-        if (value !== null && typeof value === 'object') {
-          picks = { ...picks, [spec.name]: value as SelectionRef }
-        } else if (value === undefined) {
-          const { [spec.name]: _removed, ...rest } = picks
-          picks = rest
-        } else {
-          unmapped.add(spec.name)
-        }
-      } else if (spec.kind === 'point') {
-        if (Array.isArray(value) && value.length === 2) {
-          points = { ...points, [spec.name]: [Number(value[0]), Number(value[1])] }
-        } else if (value === undefined) {
-          const { [spec.name]: _removed, ...rest } = points
-          points = rest
-        } else {
-          unmapped.add(spec.name)
-        }
-      } else if (spec.kind === 'plane') {
-        // サーバ側の名前は `base_plane`(面は載らない: 面は選択にあるので、無ければ局所の値をそのまま保つ)。
-        const base = remote.base_plane
-        if (typeof base === 'string') planes = { ...planes, [spec.name]: base }
-      }
-    }
-    lastPublished = { ...remote }
-    if (kept.length > 0) onNote(`外から ${kept.join(' / ')} に変わったが、打っている途中なので欄は変えていない`)
+    sharedArgs.receive(shared.args, command.args, { numberText, textValues, choices, points, picks, planes },
+      active instanceof HTMLElement ? active.id : null)
   }
 
   /** verb 引数 overlay の実高さ。`.app` の `--toolbar-overlay-h` とサイドバー位置に渡す。 */
@@ -819,11 +638,8 @@
   onDestroy(() => {
     overlayObserver?.disconnect()
     syncOverlayHeight(null)
-    cancelPublish()
-    // 破棄後に満了すると、破棄済みのクロージャが `onPreview` を呼んで幽霊が新しいモードに残る(消す者がいない)。
-    // 幽霊自体は `App.svelte` の `onModeChanged` が消すので、ここでは止めるだけ。
-    if (previewTimer) clearTimeout(previewTimer)
-    previewTimer = null
+    sharedArgs.dispose()
+    preview.detach()
   })
 
   /** スケッチ平面のクリックを、待っている点引数へ入れる。待っている点が無ければ何もしない(上書きすると、揃った後のクリックで図形が動いて見える)。 */
