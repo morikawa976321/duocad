@@ -2,7 +2,7 @@
 
 平面の枠(`face_frame` / `sketch_plane_frame` / `offset_plane_frame`)、領域検出(`sketch_regions`)、
 図形種別ごとの辺と外接矩形(`_KERNEL_ENTITY_KIND_TABLE`)を持つ。面の数え方(`_face_map` の
-1始まりの添字)は `kernel` の側にあり、ここはそれを読むだけ —— 依存は kernel_sketch → kernel の一方向。
+1始まりの添字)は `brep_topology`、平面と面集合の共通機構は `brep_planar` を参照する。
 
 戻り値の規律は kernel と同じ(JSON化できる素の値だけ)。例外は `sketch_regions` の戻りに含まれる
 領域の面(`kernel_extrude.extrude_regions` の入力になる TopoDS_Face)。
@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Copy,
     BRepBuilderAPI_MakeEdge,
@@ -31,23 +31,23 @@ from OCP.BRepTools import BRepTools_WireExplorer
 from OCP.Geom import Geom_BezierCurve, Geom_TrimmedCurve
 from OCP.GeomAbs import GeomAbs_Arc, GeomAbs_CurveType, GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.GeomConvert import GeomConvert_ApproxCurve, GeomConvert_BSplineCurveToBezierCurve
-from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.TColStd import TColStd_Array1OfReal
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt, gp_Vec
 
-from .kernel import _BASE_PLANE_AXES
-from .brep_topology import _face_map, face_of, compound, indexed_map, is_null as _is_null
-from .brep_geometry import _face_normal, _face_props, classify_face, edge_length
+from . import (
+    brep_geometry as _brep_geometry,
+    brep_planar as _brep_planar,
+    brep_topology as _brep_topology,
+)
 
 
 def require_planar_face(shape: "TopoDS_Shape", face_index: int) -> Any:
     """面 `face_index` が平面でなければ ValueError。平面ならその面を返す(`_face_map` の数え直しを避ける)。"""
-    face = face_of(shape, face_index)
-    kind = classify_face(face)
+    face = _brep_topology.face_of(shape, face_index)
+    kind = _brep_geometry.classify_face(face)
     if kind != "plane":
         raise ValueError(
             f"face {face_index} is {kind}: スケッチを貼れるのは平面の面だけ"
@@ -69,12 +69,12 @@ def face_frame(shape: "TopoDS_Shape", face_index: int) -> dict:
 
     平面でなければ ValueError(スケッチを貼れない面)。
     """
-    return _frame_from_ax3(_ax3_from_face(require_planar_face(shape, face_index)))
+    return _brep_planar._frame_from_ax3(_ax3_from_face(require_planar_face(shape, face_index)))
 
 
 def sketch_plane_normal(plane: dict) -> Tuple[float, float, float]:
     """スケッチ平面の法線(単位)。押し出し方向の正の向き。"""
-    ax3 = _ax3_from_plane(plane)
+    ax3 = _brep_planar._ax3_from_plane(plane)
     direction = ax3.Direction()
     return (direction.X(), direction.Y(), direction.Z())
 
@@ -85,7 +85,7 @@ def sketch_plane_frame(plane: dict) -> dict:
     (u, v) と3D座標を行き来する規則そのもの(`p = origin + u*u_axis + v*v_axis`)。アプリ層が
     独自に持つと基準平面の軸の取り方と `ZReverse` の扱いがずれるので、**枠はコアが配る**。
     """
-    return _frame_from_ax3(_ax3_from_plane(plane))
+    return _brep_planar._frame_from_ax3(_brep_planar._ax3_from_plane(plane))
 
 
 def offset_plane_frame(frame: dict, distance: float) -> dict:
@@ -123,7 +123,7 @@ def sketch_regions(plane: dict, entities: list) -> List[dict]:
     if not entities:
         return []
 
-    ax3 = _ax3_from_plane(plane)
+    ax3 = _brep_planar._ax3_from_plane(plane)
     edges = []
     for entity in entities:
         edges.extend(_entity_edges(ax3, entity))
@@ -133,7 +133,7 @@ def sketch_regions(plane: dict, entities: list) -> List[dict]:
     u_min, u_max, v_min, v_max = _entities_bbox_2d(entities)
     diagonal = math.hypot(u_max - u_min, v_max - v_min)
     margin = max(10.0, diagonal)
-    aux = _plane_face(
+    aux = _brep_planar._plane_face(
         ax3,
         u_min - margin,
         u_max + margin,
@@ -154,22 +154,22 @@ def sketch_regions(plane: dict, entities: list) -> List[dict]:
     if not splitter.IsDone():
         raise ValueError("BRepAlgoAPI_Splitter failed (IsDone is false)")
     result = splitter.Shape()
-    if result is None or _is_null(result):
+    if result is None or _brep_topology.is_null(result):
         raise ValueError("BRepAlgoAPI_Splitter produced an empty shape")
 
     tol = 1.0e-6 * max(1.0, diagonal)
     kept: List[tuple] = []
-    result_map = _face_map(result)
+    result_map = _brep_topology._face_map(result)
     for index in range(1, result_map.Extent() + 1):
         region_face = TopoDS.Face_s(result_map.FindKey(index))
         if not _face_vertices_inside_bbox_2d(
             region_face, ax3, u_min, u_max, v_min, v_max, tol
         ):
             continue
-        area, centroid = _face_props(region_face)
+        area, centroid = _brep_geometry._face_props(region_face)
         if area <= 0:
             continue
-        u, v = _to_uv(ax3, centroid[0], centroid[1], centroid[2])
+        u, v = _brep_planar._to_uv(ax3, centroid[0], centroid[1], centroid[2])
         # 3つのキーとも**丸めた**値。生の面積だと等しい2領域でも1e-16級の積分残差で先に決着し、
         # docstringが約束するタイブレーク(重心の u,v)が発火しない(y=0で割った半円が
         # 628.3185307179587 と ...584 になる)。重心の u も同じ: 同じ x に縦に積んだ同じ形の領域は u が
@@ -191,11 +191,6 @@ def sketch_regions(plane: dict, entities: list) -> List[dict]:
     return regions
 
 
-#: 包み込みの面の結合・境界判定に使う許容差[mm]。OCCTの既定(1e-7)では、R と d の円弧が
-#: 同じ点で接するオフセット結果の結合を取りこぼしうるので、その10倍にする。
-_ENVELOPE_TOLERANCE = 1.0e-6
-
-
 def envelope_faces(
     plane: dict, faces: Sequence[Any], radius: float, offset: float
 ) -> List[Any]:
@@ -208,54 +203,18 @@ def envelope_faces(
     """
     if not faces:
         return []
-    ax3 = _ax3_from_plane(plane)
+    ax3 = _brep_planar._ax3_from_plane(plane)
     pieces = list(faces)
     if radius > 0.0:
         pieces = _dilate_faces(ax3, pieces, radius)
         pieces = _erode_faces(ax3, pieces, radius)
     else:
-        pieces = _union_faces(pieces)
+        pieces = _brep_planar._union_faces(pieces)
     if offset > 0.0:
         pieces = _dilate_faces(ax3, pieces, offset)
     elif offset < 0.0:
         pieces = _erode_faces(ax3, pieces, -offset)
-    return _shape_faces(_unified(compound(pieces)))
-
-
-def _shape_faces(shape: Any) -> List[Any]:
-    shape_map = _face_map(shape)
-    return [TopoDS.Face_s(shape_map.FindKey(i)) for i in range(1, shape_map.Extent() + 1)]
-
-
-def _unified(shape: Any) -> Any:
-    """同一平面・同一曲線上で隣り合う面・辺を1つにまとめる(共線の線分や同心の円弧の分割を消す)。"""
-    unify = ShapeUpgrade_UnifySameDomain(shape, True, True, False)
-    unify.Build()
-    return unify.Shape()
-
-
-def _union_faces(faces: Sequence[Any]) -> List[Any]:
-    """面を和集合にして、つながった成分ごとの面の並びにする(辺で接するだけの面も1枚に結合する)。"""
-    if len(faces) <= 1:
-        return list(faces)
-    return _shape_faces(_boolean(BRepAlgoAPI_Fuse(), faces[:1], faces[1:]))
-
-
-def _boolean(operation: Any, arguments: Sequence[Any], tools: Sequence[Any]) -> Any:
-    """`arguments` と `tools` で2Dのブーリアンを取る(許容差つき)。"""
-    argument_list = TopTools_ListOfShape()
-    for shape in arguments:
-        argument_list.Append(shape)
-    tool_list = TopTools_ListOfShape()
-    for shape in tools:
-        tool_list.Append(shape)
-    operation.SetArguments(argument_list)
-    operation.SetTools(tool_list)
-    operation.SetFuzzyValue(_ENVELOPE_TOLERANCE)
-    operation.Build()
-    if not operation.IsDone():
-        raise ValueError("領域のブーリアン演算に失敗した")
-    return operation.Shape()
+    return _brep_planar._shape_faces(_brep_planar._unified(_brep_topology.compound(pieces)))
 
 
 def _erode_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[Any]:
@@ -269,14 +228,14 @@ def _erode_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[A
     for face in faces:
         BRepBndLib.Add_s(face, box_3d)
     x0, y0, z0, x1, y1, z1 = box_3d.Get()
-    corners = [_to_uv(ax3, x, y, z) for x in (x0, x1) for y in (y0, y1) for z in (z0, z1)]
+    corners = [_brep_planar._to_uv(ax3, x, y, z) for x in (x0, x1) for y in (y0, y1) for z in (z0, z1)]
     u_min, u_max = min(c[0] for c in corners), max(c[0] for c in corners)
     v_min, v_max = min(c[1] for c in corners), max(c[1] for c in corners)
     margin = 2.0 * distance + 1.0
-    box = _plane_face(ax3, u_min - margin, u_max + margin, v_min - margin, v_max + margin)
-    complement = _shape_faces(_boolean(BRepAlgoAPI_Cut(), [box], list(faces)))
+    box = _brep_planar._plane_face(ax3, u_min - margin, u_max + margin, v_min - margin, v_max + margin)
+    complement = _brep_planar._shape_faces(_brep_planar._boolean(BRepAlgoAPI_Cut(), [box], list(faces)))
     grown = _dilate_faces(ax3, complement, distance)
-    return _shape_faces(_boolean(BRepAlgoAPI_Cut(), [box], grown))
+    return _brep_planar._shape_faces(_brep_planar._boolean(BRepAlgoAPI_Cut(), [box], grown))
 
 
 def _dilate_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[Any]:
@@ -301,7 +260,7 @@ def _dilate_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[
             if not _plausible_dilation(face, grown):
                 raise ValueError(f"2Dオフセット(距離 {distance} mm)が壊れた形を返した")
         result.extend(grown)
-    return _union_faces(result)
+    return _brep_planar._union_faces(result)
 
 
 def _dilate_face(ax3: "gp_Ax3", face: Any, distance: float) -> List[Any]:
@@ -310,9 +269,9 @@ def _dilate_face(ax3: "gp_Ax3", face: Any, distance: float) -> List[Any]:
     if not maker.IsDone():
         raise ValueError(f"2Dオフセット(距離 {distance} mm)に失敗した")
     shape = maker.Shape()
-    if shape is None or _is_null(shape):
+    if shape is None or _brep_topology.is_null(shape):
         raise ValueError(f"2Dオフセット(距離 {distance} mm)が空の結果を返した")
-    wire_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_WIRE)
+    wire_map = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_WIRE)
     wires = [TopoDS.Wire_s(wire_map.FindKey(i)) for i in range(1, wire_map.Extent() + 1)]
     # 入れ子の数え上げは入力の面ごと(別の面のオフセット結果は重なりうる)。
     return _faces_from_wires(ax3, wires)
@@ -320,7 +279,7 @@ def _dilate_face(ax3: "gp_Ax3", face: Any, distance: float) -> List[Any]:
 
 def _plausible_dilation(face: Any, grown: Sequence[Any]) -> bool:
     """つながった面を広げた結果としてありうるか(つながった1枚で、面積が減らない)。"""
-    return len(grown) == 1 and _face_props(grown[0])[0] >= _face_props(face)[0] - _ENVELOPE_TOLERANCE
+    return len(grown) == 1 and _brep_geometry._face_props(grown[0])[0] >= _brep_geometry._face_props(face)[0] - _brep_planar._ENVELOPE_TOLERANCE
 
 
 #: オフセットの前に楕円由来のオフセット曲線を置き換える多項式の B-スプラインの誤差の上限[mm]。出力の近似(`APPROXIMATION_TOLERANCE`)
@@ -339,7 +298,7 @@ def _offset_ready(ax3: "gp_Ax3", face: Any) -> Any:
     壊れたときだけ使う: 辺ごとに近似すると継ぎ目の接線がわずかに折れ、広げた結果の継ぎ目に短い円弧が挟まる。
     直線・円に乗るオフセット曲線(円と長方形の領域で出る)は触らない(最後に円弧へ直せなくなる)。
     """
-    wire_map = indexed_map(face, TopAbs_ShapeEnum.TopAbs_WIRE)
+    wire_map = _brep_topology.indexed_map(face, TopAbs_ShapeEnum.TopAbs_WIRE)
     rebuilt_wires: List[Any] = []
     changed = False
     for w in range(1, wire_map.Extent() + 1):
@@ -369,7 +328,7 @@ def _reoffset_edge(ax3: "gp_Ax3", edge: Any) -> Any:
 
     def uv(parameter: float) -> Tuple[float, float]:
         point = curve.Value(parameter)
-        return _to_uv(ax3, point.X(), point.Y(), point.Z())
+        return _brep_planar._to_uv(ax3, point.X(), point.Y(), point.Z())
 
     if _entities_of_offset_curve(uv, first, last) is not None:
         return None
@@ -396,17 +355,17 @@ def _faces_from_wires(ax3: "gp_Ax3", wires: Sequence[Any]) -> List[Any]:
         if not made.IsDone():
             continue
         face = made.Face()
-        edge = TopoDS.Edge_s(indexed_map(wire, TopAbs_ShapeEnum.TopAbs_EDGE).FindKey(1))
+        edge = TopoDS.Edge_s(_brep_topology.indexed_map(wire, TopAbs_ShapeEnum.TopAbs_EDGE).FindKey(1))
         curve = BRepAdaptor_Curve(edge)
         point = curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2.0)
-        entries.append({"face": face, "point": point, "area": _face_props(face)[0]})
+        entries.append({"face": face, "point": point, "area": _brep_geometry._face_props(face)[0]})
 
     for entry in entries:
         entry["containers"] = [
             other
             for other in entries
             if other is not entry
-            and BRepClass_FaceClassifier(other["face"], entry["point"], _ENVELOPE_TOLERANCE).State()
+            and BRepClass_FaceClassifier(other["face"], entry["point"], _brep_planar._ENVELOPE_TOLERANCE).State()
             == TopAbs_State.TopAbs_IN
         ]
         entry["depth"] = len(entry["containers"])
@@ -422,7 +381,7 @@ def _faces_from_wires(ax3: "gp_Ax3", wires: Sequence[Any]) -> List[Any]:
     for entry in sorted((e for e in entries if e["depth"] % 2 == 0), key=lambda e: -e["area"]):
         face = entry["face"]
         for hole in holes_of.get(id(entry), []):
-            face = _shape_faces(_boolean(BRepAlgoAPI_Cut(), [face], [hole["face"]]))[0]
+            face = _brep_planar._shape_faces(_brep_planar._boolean(BRepAlgoAPI_Cut(), [face], [hole["face"]]))[0]
         faces.append(face)
     return faces
 
@@ -444,11 +403,11 @@ def face_boundary_entities(plane: dict, face: Any, ellipses: Sequence[dict] = ()
     `ellipses` は元の領域にあった楕円の図形の params。1周のループの辺がすべて同じ楕円に乗っていれば、ループを
     その楕円1つにする(楕円を R で広げて R で縮めると、元の楕円がずらし曲線の4辺になって返る)。
     """
-    ax3 = _ax3_from_plane(plane)
+    ax3 = _brep_planar._ax3_from_plane(plane)
     entities: List[dict] = []
-    wire_map = indexed_map(face, TopAbs_ShapeEnum.TopAbs_WIRE)
+    wire_map = _brep_topology.indexed_map(face, TopAbs_ShapeEnum.TopAbs_WIRE)
     for w in range(1, wire_map.Extent() + 1):
-        edge_map = indexed_map(wire_map.FindKey(w), TopAbs_ShapeEnum.TopAbs_EDGE)
+        edge_map = _brep_topology.indexed_map(wire_map.FindKey(w), TopAbs_ShapeEnum.TopAbs_EDGE)
         edges = [TopoDS.Edge_s(edge_map.FindKey(i)) for i in range(1, edge_map.Extent() + 1)]
         matched = next((params for params in ellipses if all(_edge_on_ellipse(ax3, e, params) for e in edges)), None)
         if matched is not None:
@@ -473,17 +432,17 @@ def edge_entities(ax3: "gp_Ax3", edge: Any) -> List[dict]:
 
     def uv(parameter: float) -> Tuple[float, float]:
         point = curve.Value(parameter)
-        return _to_uv(ax3, point.X(), point.Y(), point.Z())
+        return _brep_planar._to_uv(ax3, point.X(), point.Y(), point.Z())
 
     if kind == GeomAbs_CurveType.GeomAbs_Line:
         (x0, y0), (x1, y1) = uv(first), uv(last)
-        if math.hypot(x1 - x0, y1 - y0) <= _ENVELOPE_TOLERANCE:
+        if math.hypot(x1 - x0, y1 - y0) <= _brep_planar._ENVELOPE_TOLERANCE:
             return []
         return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
     if kind == GeomAbs_CurveType.GeomAbs_Circle:
         circle = curve.Circle()
         centre = circle.Location()
-        cx, cy = _to_uv(ax3, centre.X(), centre.Y(), centre.Z())
+        cx, cy = _brep_planar._to_uv(ax3, centre.X(), centre.Y(), centre.Z())
         return [_circular_entity(uv, first, last, cx, cy, circle.Radius())]
     if kind == GeomAbs_CurveType.GeomAbs_Ellipse and _closed_edge(uv, first, last):
         return [{"kind": "ellipse", "params": _ellipse_params(ax3, curve.Ellipse())}]
@@ -530,8 +489,8 @@ def _polynomial_beziers(ax3: "gp_Ax3", curve: Any, kind: Any, first: float, last
         if arc.Degree() < 3:
             arc.Increase(3)
         poles = [arc.Pole(index) for index in range(1, 5)]
-        points = [_to_uv(ax3, pole.X(), pole.Y(), pole.Z()) for pole in poles]
-        if max(math.dist(points[0], point) for point in points) > _ENVELOPE_TOLERANCE:
+        points = [_brep_planar._to_uv(ax3, pole.X(), pole.Y(), pole.Z()) for pole in poles]
+        if max(math.dist(points[0], point) for point in points) > _brep_planar._ENVELOPE_TOLERANCE:
             entities.append(_bezier_entity(points))
     return entities
 
@@ -556,7 +515,7 @@ def _edge_on_ellipse(ax3: "gp_Ax3", edge: Any, params: dict) -> bool:
     cos_a, sin_a = math.cos(angle), math.sin(angle)
     for k in range(_OFFSET_FIT_SAMPLES * 4 + 1):
         point = curve.Value(first + (last - first) * k / (_OFFSET_FIT_SAMPLES * 4))
-        x, y = _to_uv(ax3, point.X(), point.Y(), point.Z())
+        x, y = _brep_planar._to_uv(ax3, point.X(), point.Y(), point.Z())
         local_x = (x - cx) * cos_a + (y - cy) * sin_a
         local_y = -(x - cx) * sin_a + (y - cy) * cos_a
         theta = math.atan2(local_y / b, local_x / a)
@@ -578,9 +537,9 @@ def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) 
     """
     def uv(parameter: float) -> Tuple[float, float]:
         point = curve.Value(parameter)
-        return _to_uv(ax3, point.X(), point.Y(), point.Z())
+        return _brep_planar._to_uv(ax3, point.X(), point.Y(), point.Z())
 
-    if max(math.dist(uv(first), uv(first + (last - first) * k / 8)) for k in range(1, 9)) <= _ENVELOPE_TOLERANCE:
+    if max(math.dist(uv(first), uv(first + (last - first) * k / 8)) for k in range(1, 9)) <= _brep_planar._ENVELOPE_TOLERANCE:
         return []
     xdir, ydir = gp_Vec(ax3.XDirection()), gp_Vec(ax3.YDirection())
 
@@ -590,10 +549,10 @@ def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) 
         vector = gp_Vec()
         curve.D1(parameter + inside, gp_Pnt(), vector)
         point = curve.Value(parameter)
-        return _to_uv(ax3, point.X(), point.Y(), point.Z()), (vector.Dot(xdir), vector.Dot(ydir))
+        return _brep_planar._to_uv(ax3, point.X(), point.Y(), point.Z()), (vector.Dot(xdir), vector.Dot(ydir))
 
     entities: List[dict] = []
-    knots = _smooth_breaks(curve, first, last)[1:-1]
+    knots = _brep_planar._smooth_breaks(curve, first, last)[1:-1]
     pending = [(first, last)]
     while pending:
         if len(entities) + len(pending) > _MAX_APPROXIMATION_SEGMENTS:
@@ -613,15 +572,6 @@ def _approximated_beziers(ax3: "gp_Ax3", curve: Any, first: float, last: float) 
             middle = (t0 + t1) / 2.0
             pending.extend([(middle, t1), (t0, middle)])
     return entities
-
-
-def _smooth_breaks(curve: Any, first: float, last: float) -> List[float]:
-    """`[first, last]` を曲線の滑らかな区間(B-スプラインならノット、オフセット曲線なら元の曲線のノット)の境目で区切った点の列。"""
-    count = curve.NbIntervals(GeomAbs_Shape.GeomAbs_CN)
-    bounds = TColStd_Array1OfReal(1, count + 1)
-    curve.Intervals(bounds, GeomAbs_Shape.GeomAbs_CN)
-    inner = sorted({bounds.Value(i) for i in range(1, count + 2) if first < bounds.Value(i) < last})
-    return [first, *inner, last]
 
 
 def _arc_error(
@@ -652,7 +602,7 @@ def _circular_entity(
 ) -> dict:
     """中心と半径の円の、辺 `[first, last]` にあたる円弧(閉じた辺は円)のスケッチ図形。"""
     (sx, sy), (ex, ey) = uv(first), uv(last)
-    if math.hypot(ex - sx, ey - sy) <= _ENVELOPE_TOLERANCE:
+    if math.hypot(ex - sx, ey - sy) <= _brep_planar._ENVELOPE_TOLERANCE:
         return {"kind": "circle", "params": {"cx": cx, "cy": cy, "diameter": 2.0 * radius}}
     mx, my = uv((first + last) / 2.0)
     start = math.degrees(math.atan2(sy - cy, sx - cx))
@@ -686,11 +636,11 @@ def _entities_of_offset_curve(uv: Callable[[float], Tuple[float, float]], first:
     points = [uv(parameter) for parameter in params]
     start, middle, end = points[0], points[len(points) // 2], points[-1]
     extent = max(math.dist(start, point) for point in points)
-    if extent <= _ENVELOPE_TOLERANCE:
+    if extent <= _brep_planar._ENVELOPE_TOLERANCE:
         return []
 
     chord = math.dist(start, end)
-    if chord > _ENVELOPE_TOLERANCE:
+    if chord > _brep_planar._ENVELOPE_TOLERANCE:
         along = ((end[0] - start[0]) / chord, (end[1] - start[1]) / chord)
         if all(abs((p[0] - start[0]) * along[1] - (p[1] - start[1]) * along[0]) <= _OFFSET_FIT_TOLERANCE for p in points):
             return [{"kind": "line", "params": {"x0": start[0], "y0": start[1], "x1": end[0], "y1": end[1]}}]
@@ -720,99 +670,13 @@ def _circle_through(a: Tuple[float, float], b: Tuple[float, float], c: Tuple[flo
     return a[0] + ux, a[1] + uy, math.hypot(ux, uy)
 
 
-def _ax3_from_plane(plane: dict) -> "gp_Ax3":
-    """PlaneRef から gp_Ax3 を作る。
-
-    **`kind` を問わず `plane["frame"]`(作成時に焼き付けた姿勢。`face_frame` のdocstring)が最優先**。
-    `sketch.resolve_plane` が必ず `frame` を焼き付けて渡すので、新しい `kind` が増えても無改修で通る。
-    """
-    kind = plane.get("kind")
-    if kind == "base":
-        name = plane.get("name")
-        if name not in _BASE_PLANE_AXES:
-            raise ValueError(f"unknown base plane: {name!r}")
-        origin, normal, xdir = _BASE_PLANE_AXES[name]
-        return gp_Ax3(gp_Pnt(*origin), gp_Dir(*normal), gp_Dir(*xdir))
-    frame = plane.get("frame")
-    if frame is not None:
-        return _ax3_from_frame(frame)
-    raise ValueError(f"invalid sketch plane: {plane!r}")
-
-
-def _frame_from_ax3(ax3: "gp_Ax3") -> dict:
-    """gp_Ax3 を素の数値の枠へ(`_ax3_from_frame` の逆)。"""
-    origin = ax3.Location()
-    xdir = ax3.XDirection()
-    ydir = ax3.YDirection()
-    normal = ax3.Direction()
-    return {
-        "origin": [origin.X(), origin.Y(), origin.Z()],
-        "u": [xdir.X(), xdir.Y(), xdir.Z()],
-        "v": [ydir.X(), ydir.Y(), ydir.Z()],
-        "normal": [normal.X(), normal.Y(), normal.Z()],
-    }
-
-
-def _ax3_from_frame(frame: Any) -> "gp_Ax3":
-    """素の数値の枠から gp_Ax3 を復元する(`_frame_from_ax3` の逆)。
-
-    **`v` を捨ててはいけない**。`gp_Ax3(location, direction, xdirection)` は必ず右手系を作る
-    (`YDirection = Direction ^ XDirection`)のに対し、`_ax3_from_face` が反転面へ当てる
-    `ZReverse()` は Direction だけを裏返して X/Y を据え置く(＝左手系)。origin/normal/u だけで
-    組み直すと反転面のスケッチは v 軸が符号反転し、図形が鏡像になる(実測)。
-    そこで `v` も保存し、必要なら `YReverse()` で左手系へ戻す。
-
-    復元した軸が保存値と一致しなければ ValueError(黙って鏡像の平面を配らない)。
-    """
-    if not isinstance(frame, dict):
-        raise ValueError(f"invalid sketch plane frame: {frame!r}")
-    try:
-        given = {
-            name: [float(value) for value in frame[name]]
-            for name in ("origin", "u", "v", "normal")
-        }
-    except (KeyError, TypeError, ValueError) as error:
-        raise ValueError(f"invalid sketch plane frame: {frame!r}") from error
-    for name, vector in given.items():
-        if len(vector) != 3 or not all(math.isfinite(value) for value in vector):
-            raise ValueError(f"invalid sketch plane frame ({name}): {frame!r}")
-    origin, u, v, normal = given["origin"], given["u"], given["v"], given["normal"]
-
-    try:
-        # 長さ0や normal と u が平行な枠は OCCT が Standard_ConstructionError で落とす。
-        # 呼び出し側が「平面が不正」を1種類の例外で捕まえられるよう ValueError へ揃える。
-        ax3 = gp_Ax3(gp_Pnt(*origin), gp_Dir(*normal), gp_Dir(*u))
-    except Exception as error:
-        raise ValueError(f"invalid sketch plane frame: {frame!r}") from error
-    if _dot3(ax3.YDirection(), v) < 0.0:
-        ax3.YReverse()
-
-    restored = _frame_from_ax3(ax3)
-    for name, vector in given.items():
-        for expected, actual in zip(vector, restored[name]):
-            if abs(expected - actual) > 1.0e-9 * max(1.0, abs(expected)):
-                raise ValueError(
-                    f"sketch plane frame is not orthonormal ({name}): {frame!r}"
-                )
-    return ax3
-
-
-def _dot3(direction: "gp_Dir", vector: Sequence[float]) -> float:
-    """gp_Dir と素の3成分の内積。"""
-    return (
-        direction.X() * float(vector[0])
-        + direction.Y() * float(vector[1])
-        + direction.Z() * float(vector[2])
-    )
-
-
 def _ax3_from_face(face: Any) -> "gp_Ax3":
     """平面の面から gp_Ax3 を取る。平面でなければ ValueError。法線は面の外向きにそろえる。"""
     face = TopoDS.Face_s(face)
     adaptor = BRepAdaptor_Surface(face)
     if adaptor.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
         raise ValueError(
-            f"face is {classify_face(face)}: スケッチ平面にできるのは平面だけ"
+            f"face is {_brep_geometry.classify_face(face)}: スケッチ平面にできるのは平面だけ"
         )
     # OCP には gp_Ax3(gp_Ax3) のコンストラクタが無いので位置・法線・X方向から組み直す。
     # 外向きと逆なら `ZReverse`(`ReverseZ` は存在しない)で法線だけを裏返す(X/Y は変わらない)。
@@ -820,35 +684,10 @@ def _ax3_from_face(face: Any) -> "gp_Ax3":
     ax3 = gp_Ax3(position.Location(), position.Direction(), position.XDirection())
     # 外部の罠: 向きが REVERSED かどうかで反転を決めてはいけない。奇数回鏡映したボディの面は平面の Position が
     # 左手系で、REVERSED のときに Direction がすでに外を向いている(実測: 鏡映した直方体の6面すべてで法線が逆になった)。
-    # `BRepGProp_Face` の外向き法線(`kernel._face_normal`)と突き合わせる。
-    if _dot3(ax3.Direction(), _face_normal(face)) < 0.0:
+    # `BRepGProp_Face` の外向き法線(`brep_geometry._face_normal`)と突き合わせる。
+    if _brep_planar._dot3(ax3.Direction(), _brep_geometry._face_normal(face)) < 0.0:
         ax3.ZReverse()
     return ax3
-
-
-def _to_pnt(ax3: "gp_Ax3", u: float, v: float) -> "gp_Pnt":
-    """スケッチ平面上の (u, v) を 3D 点へ。"""
-    origin = ax3.Location()
-    xdir = ax3.XDirection()
-    ydir = ax3.YDirection()
-    return gp_Pnt(
-        origin.X() + u * xdir.X() + v * ydir.X(),
-        origin.Y() + u * xdir.Y() + v * ydir.Y(),
-        origin.Z() + u * xdir.Z() + v * ydir.Z(),
-    )
-
-
-def _to_uv(ax3: "gp_Ax3", x: float, y: float, z: float) -> Tuple[float, float]:
-    """3D 点をスケッチ平面の (u, v) へ。"""
-    origin = ax3.Location()
-    xdir = ax3.XDirection()
-    ydir = ax3.YDirection()
-    dx = x - origin.X()
-    dy = y - origin.Y()
-    dz = z - origin.Z()
-    u = dx * xdir.X() + dy * xdir.Y() + dz * xdir.Z()
-    v = dx * ydir.X() + dy * ydir.Y() + dz * ydir.Z()
-    return u, v
 
 
 def _edges_point(ax3: "gp_Ax3", params: dict) -> List[Any]:
@@ -857,8 +696,8 @@ def _edges_point(ax3: "gp_Ax3", params: dict) -> List[Any]:
 
 
 def _edges_line(ax3: "gp_Ax3", params: dict) -> List[Any]:
-    p0 = _to_pnt(ax3, float(params["x0"]), float(params["y0"]))
-    p1 = _to_pnt(ax3, float(params["x1"]), float(params["y1"]))
+    p0 = _brep_planar._to_pnt(ax3, float(params["x0"]), float(params["y0"]))
+    p1 = _brep_planar._to_pnt(ax3, float(params["x1"]), float(params["y1"]))
     maker = BRepBuilderAPI_MakeEdge(p0, p1)
     if not maker.IsDone():
         raise ValueError("failed to build a line edge")
@@ -885,7 +724,7 @@ def _curve_axis(ax3: "gp_Ax3", center: "gp_Pnt", angle_deg: float = 0.0) -> "gp_
 
 
 def _edges_circle(ax3: "gp_Ax3", params: dict) -> List[Any]:
-    center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
+    center = _brep_planar._to_pnt(ax3, float(params["cx"]), float(params["cy"]))
     diameter = float(params["diameter"])
     if diameter <= 0:
         raise ValueError(f"circle diameter must be positive, got {diameter}")
@@ -897,13 +736,13 @@ def _edges_circle(ax3: "gp_Ax3", params: dict) -> List[Any]:
 
 def _closed_edge(uv: Callable[[float], Tuple[float, float]], first: float, last: float) -> bool:
     (sx, sy), (ex, ey) = uv(first), uv(last)
-    return math.hypot(ex - sx, ey - sy) <= _ENVELOPE_TOLERANCE
+    return math.hypot(ex - sx, ey - sy) <= _brep_planar._ENVELOPE_TOLERANCE
 
 
 def _ellipse_params(ax3: "gp_Ax3", ellipse: "gp_Elips") -> dict:
     """OCCT の楕円を `ellipse` の params へ(長軸を `width` にする)。"""
     centre = ellipse.Location()
-    cx, cy = _to_uv(ax3, centre.X(), centre.Y(), centre.Z())
+    cx, cy = _brep_planar._to_uv(ax3, centre.X(), centre.Y(), centre.Z())
     major = ellipse.XAxis().Direction()
     du = major.Dot(ax3.XDirection())
     dv = major.Dot(ax3.YDirection())
@@ -929,7 +768,7 @@ def _ellipse_gp(ax3: "gp_Ax3", params: dict) -> Any:
     例外にならず access violation でプロセスごと落ちる(差が 1e-7 以上なら ValueError)。
     縦横が等しい楕円は docs/ELLIPSE.md が「真円になるだけ」と許すので、辺を円にする。
     """
-    center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
+    center = _brep_planar._to_pnt(ax3, float(params["cx"]), float(params["cy"]))
     semi_width = float(params["width"]) / 2.0
     semi_height = float(params["height"]) / 2.0
     if semi_width <= 0 or semi_height <= 0:
@@ -951,12 +790,12 @@ def _edges_ellipse(ax3: "gp_Ax3", params: dict) -> List[Any]:
 
 
 def ellipse_perimeter(params: dict) -> float:
-    """楕円の周長[mm]。閉じた式が無いので OCCT に辺の長さを測らせる(許容差の罠は `kernel.edge_length`)。"""
-    return edge_length(_edges_ellipse(gp_Ax3(), params)[0])
+    """楕円の周長[mm]。閉じた式が無いので OCCT に辺の長さを測らせる(許容差の罠は `brep_geometry.edge_length`)。"""
+    return _brep_geometry.edge_length(_edges_ellipse(gp_Ax3(), params)[0])
 
 
 def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:
-    center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
+    center = _brep_planar._to_pnt(ax3, float(params["cx"]), float(params["cy"]))
     radius = float(params["radius"])
     if radius <= 0:
         raise ValueError(f"arc radius must be positive, got {radius}")
@@ -985,7 +824,7 @@ def _edges_bezier(ax3: "gp_Ax3", params: dict) -> List[Any]:
     points = TColgp_Array1OfPnt(1, 4)
     for index, (key_x, key_y) in enumerate(BEZIER_POINT_KEYS, start=1):
         points.SetValue(
-            index, _to_pnt(ax3, float(params[key_x]), float(params[key_y]))
+            index, _brep_planar._to_pnt(ax3, float(params[key_x]), float(params[key_y]))
         )
     maker = BRepBuilderAPI_MakeEdge(Geom_BezierCurve(points))
     if not maker.IsDone():
@@ -1025,7 +864,7 @@ def rectangle_corners(params: dict) -> List[Tuple[float, float]]:
 
 
 def _edges_rectangle(ax3: "gp_Ax3", params: dict) -> List[Any]:
-    corners = [_to_pnt(ax3, u, v) for u, v in rectangle_corners(params)]
+    corners = [_brep_planar._to_pnt(ax3, u, v) for u, v in rectangle_corners(params)]
     edges = []
     for index in range(4):
         maker = BRepBuilderAPI_MakeEdge(corners[index], corners[(index + 1) % 4])
@@ -1142,33 +981,6 @@ def _entities_bbox_2d(entities: list) -> Tuple[float, float, float, float]:
     return u_min, u_max, v_min, v_max
 
 
-def _plane_face(
-    ax3: "gp_Ax3", u0: float, u1: float, v0: float, v1: float
-) -> Any:
-    """スケッチ平面上の軸平行矩形の TopoDS_Face(補助面)。"""
-    corners = [
-        _to_pnt(ax3, u0, v0),
-        _to_pnt(ax3, u1, v0),
-        _to_pnt(ax3, u1, v1),
-        _to_pnt(ax3, u0, v1),
-    ]
-    wire_maker = BRepBuilderAPI_MakeWire()
-    for index in range(4):
-        edge_maker = BRepBuilderAPI_MakeEdge(corners[index], corners[(index + 1) % 4])
-        if not edge_maker.IsDone():
-            raise ValueError("failed to build an auxiliary edge")
-        wire_maker.Add(edge_maker.Edge())
-    if not wire_maker.IsDone():
-        raise ValueError("failed to build an auxiliary wire")
-    face_maker = BRepBuilderAPI_MakeFace(wire_maker.Wire(), True)
-    if not face_maker.IsDone():
-        raise ValueError("failed to build an auxiliary face")
-    face = face_maker.Face()
-    if face is None or _is_null(face):
-        raise ValueError("auxiliary face is empty")
-    return face
-
-
 def _face_vertices_inside_bbox_2d(
     face: Any,
     ax3: "gp_Ax3",
@@ -1179,12 +991,12 @@ def _face_vertices_inside_bbox_2d(
     tol: float,
 ) -> bool:
     """面の頂点がすべて 2D bbox(+tol) の内側なら True。"""
-    shape_map = indexed_map(TopoDS.Face_s(face), TopAbs_ShapeEnum.TopAbs_VERTEX)
+    shape_map = _brep_topology.indexed_map(TopoDS.Face_s(face), TopAbs_ShapeEnum.TopAbs_VERTEX)
     if shape_map.Extent() < 1:
         return False
     for index in range(1, shape_map.Extent() + 1):
         point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(shape_map.FindKey(index)))
-        u, v = _to_uv(ax3, point.X(), point.Y(), point.Z())
+        u, v = _brep_planar._to_uv(ax3, point.X(), point.Y(), point.Z())
         if not (
             u_min - tol <= u <= u_max + tol and v_min - tol <= v <= v_max + tol
         ):

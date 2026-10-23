@@ -177,7 +177,7 @@ class OpLog:
         """現在有効なエントリ全部をJSON文字列へシリアライズする。
 
         **前提**: `args` / `provenance` はJSON化できる値であること。
-        `kernel.normalize_provenance()` の戻り(TopoDS_Shape を含むメモリ上の形)をそのまま
+        `brep_history.normalize_provenance()` の戻り(TopoDS_Shape を含むメモリ上の形)をそのまま
         入れるとここで TypeError になるので、永続化用の射影を挟むこと。
         黙って落とすと由来が静かに失われるため、変換の失敗は例外のまま上げる。
 

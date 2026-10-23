@@ -19,9 +19,13 @@ from OCP.TopAbs import TopAbs_IN, TopAbs_OUT, TopAbs_SHELL
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Pnt
 
-from .brep_checks import is_valid as _is_valid
+
 from .boundary_check import degenerate_mask
-from .brep_topology import subshapes, indexed_map, compound
+
+from . import (
+    brep_checks as _brep_checks,
+    brep_topology as _brep_topology,
+)
 
 
 TOLERANCE_MM = Precision.Confusion_s()
@@ -111,7 +115,7 @@ def checked_solid(shell):
     if not maker.IsDone():
         raise RuntimeError('閉シェルをソリッドへ変換できない')
     solid = maker.Solid()
-    if not BRepLib.OrientClosedSolid_s(solid) or not _is_valid(solid):
+    if not BRepLib.OrientClosedSolid_s(solid) or not _brep_checks.is_valid(solid):
         raise RuntimeError('OCCTがソリッドを不正と判定した')
     return solid
 
@@ -132,7 +136,7 @@ def make_material(vertices, faces, components, *, check_intersections=True):
                 raise RuntimeError('三角形の面を構築できない')
             sewing.Add(maker.Face())
         sewing.Perform()
-        found = subshapes(sewing.SewedShape(), TopAbs_SHELL)
+        found = _brep_topology.subshapes(sewing.SewedShape(), TopAbs_SHELL)
         if len(found) != 1 or sewing.NbFreeEdges() or sewing.NbMultipleEdges() or sewing.NbDeletedFaces():
             raise RuntimeError('縫合で面が欠落したか、閉シェルを再現できなかった')
         shell = found[0]
@@ -140,7 +144,7 @@ def make_material(vertices, faces, components, *, check_intersections=True):
         enclosed.append(checked_solid(shell))
     if check_intersections:
         checker = BOPAlgo_CheckerSI()
-        checker.AddArgument(compound(shells))
+        checker.AddArgument(_brep_topology.compound(shells))
         checker.SetLevelOfCheck(5)
         checker.Perform()
         if checker.HasErrors() or checker.HasWarnings():
@@ -173,10 +177,10 @@ def make_material(vertices, faces, components, *, check_intersections=True):
         maker = BRepBuilderAPI_MakeSolid(solid)
         for j in range(len(shells)):
             if contains[i, j] and depth[j] == depth[i]+1:
-                shell = subshapes(enclosed[j], TopAbs_SHELL)[0]
+                shell = _brep_topology.subshapes(enclosed[j], TopAbs_SHELL)[0]
                 maker.Add(TopoDS.Shell_s(shell.Reversed()))
         material = maker.Solid()
-        if not _is_valid(material):
+        if not _brep_checks.is_valid(material):
             raise RuntimeError('空洞を含むソリッドが不正')
         solids.append(material)
-    return compound(solids), dict(self_intersections=0, solids=len(solids), cavities=int(sum(depth % 2)))
+    return _brep_topology.compound(solids), dict(self_intersections=0, solids=len(solids), cavities=int(sum(depth % 2)))

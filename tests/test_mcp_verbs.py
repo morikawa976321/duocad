@@ -32,6 +32,10 @@ INVALID_PARAMS = -32602
 
 from duocad.paths import REPO_ROOT
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 #: 形を変えるverbのツール(問い合わせ・選択・履歴を除く)。**catalog の宣言から引く**。
 SHAPE_VERB_TOOLS = {
     command.name
@@ -210,7 +214,7 @@ def _assert_verb_envelope(payload: dict, verb: str) -> None:
 def test_a_verb_reports_what_changed_not_a_sentence(server: McpServer, box_session: Session):
     """成功したら変わったBody・新しい面数・操作のseqが構造で返る(自然文だけだとAIが次の一手を推測する)。"""
     box = box_session.document.bodies[0]
-    faces_before = kernel.face_count(box.shape)
+    faces_before = _brep_topology.face_count(box.shape)
     volume_before = query.volume(box.shape)
 
     select_refs(server, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])
@@ -221,7 +225,7 @@ def test_a_verb_reports_what_changed_not_a_sentence(server: McpServer, box_sessi
     after = {body["body_id"]: body for body in payload["bodies"]}[box.id]
     assert after["face_count"] > faces_before, "新しい面数が返っていない/丸まっていない"
     assert after["volume"] < volume_before
-    assert after["face_count"] == kernel.face_count(box.shape), "返した面数が実物と違う"
+    assert after["face_count"] == _brep_topology.face_count(box.shape), "返した面数が実物と違う"
 
 
 def test_changed_bodies_is_empty_when_only_a_sketch_changed(
@@ -413,7 +417,7 @@ def test_a_solid_can_be_built_from_scratch_through_mcp(empty_session: Session):
     _assert_verb_envelope(payload, "extrude")
     assert len(payload["changed_bodies"]) == 1
     body = empty_session.document.bodies[0]
-    assert kernel.face_count(body.shape) == 6
+    assert _brep_topology.face_count(body.shape) == 6
     assert query.volume(body.shape) == pytest.approx(BOX_X * BOX_Y * BOX_Z, rel=1e-9)
 
 
@@ -651,13 +655,13 @@ def test_move_sketch_entities_can_rotate_through_mcp(empty_session: Session):
 
 def test_chamfer_reaches_the_core_verb(server: McpServer, box_session: Session):
     box = box_session.document.bodies[0]
-    faces_before = kernel.face_count(box.shape)
+    faces_before = _brep_topology.face_count(box.shape)
     select_refs(server, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])
 
     payload = call(server, "chamfer", {"distance": 2.0})
 
     _assert_verb_envelope(payload, "chamfer")
-    assert kernel.face_count(box.shape) > faces_before
+    assert _brep_topology.face_count(box.shape) > faces_before
     assert box_session.document.log.entries[-1].verb == "chamfer"
 
 
@@ -845,7 +849,7 @@ def test_a_verb_applied_through_mcp_reaches_the_browser(box_session: Session):
     import asyncio
 
     box = box_session.document.bodies[0]
-    faces_before = kernel.face_count(box.shape)
+    faces_before = _brep_topology.face_count(box.shape)
     mcp = McpServer(DocumentTools(box_session))
     # # 選択は接続を作る前に済ませる(選択の変更もイベントを起こし、後だとどの配信に幾何の差分が載るかが実行順で変わる)。
     select_refs(mcp, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])

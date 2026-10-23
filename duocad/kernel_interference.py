@@ -29,14 +29,9 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 
-from .brep_topology import compound, subshapes, is_null as _is_null
-from .brep_geometry import (
-    _interference_loose_bbox as loose_bbox,
-    _interference_area as _area,
-    _interference_volume as _volume,
-    _interference_obb_sides as obb_sides,
-    _interference_volume_center as _volume_center,
-    _interference_exact_bbox as _exact_bbox,
+from . import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
 )
 
 
@@ -52,7 +47,7 @@ def decode_brep_unchecked(text: str) -> TopoDS_Shape:
     """`kernel_brep.decode_brep` から `BRepCheck_Analyzer` を省いたもの。親が検査済みの形を子へ渡すときだけ使う(検査が支配的になる)。"""
     shape = TopoDS_Shape()
     BRepTools.Read_s(shape, io.BytesIO(text.encode("ascii")), BRep_Builder())
-    if _is_null(shape):
+    if _brep_topology.is_null(shape):
         raise ValueError("BRep を読めない")
     return shape
 
@@ -89,10 +84,10 @@ def pair_relation(first: TopoDS_Shape, second: TopoDS_Shape, deviation: Optional
             result = {"kind": "overlap", **overlap_measures(shared[TopAbs_SOLID])}
         except ValueError as error:
             return {"kind": "unknown", "reason": str(error), "warnings": warnings}
-        render = {"solid": triangles(compound(shared[TopAbs_SOLID]), deviation)} if deviation else None
+        render = {"solid": triangles(_brep_topology.compound(shared[TopAbs_SOLID]), deviation)} if deviation else None
     elif shared[TopAbs_FACE]:
-        result = {"kind": "face", "area": sum(_area(face) for face in shared[TopAbs_FACE]), "faces": len(shared[TopAbs_FACE])}
-        render = {"faces": triangles(compound(shared[TopAbs_FACE]), deviation)} if deviation else None
+        result = {"kind": "face", "area": sum(_brep_geometry._interference_area(face) for face in shared[TopAbs_FACE]), "faces": len(shared[TopAbs_FACE])}
+        render = {"faces": triangles(_brep_topology.compound(shared[TopAbs_FACE]), deviation)} if deviation else None
     elif shared[TopAbs_EDGE]:
         result = {"kind": "edge", "edges": len(shared[TopAbs_EDGE])}
         render = {"edges": [_polyline(edge, deviation) for edge in shared[TopAbs_EDGE]]} if deviation else None
@@ -114,13 +109,13 @@ def _warning_names(builder: Any) -> List[str]:
 def _image(builder: Any, shape: TopoDS_Shape) -> Dict[Any, Dict[int, List[TopoDS_Shape]]]:
     """入力の形の像(GF の後の立体片)を、種別ごとに hash で束ねて持つ。"""
     pieces: List[TopoDS_Shape] = []
-    for solid in subshapes(shape, TopAbs_SOLID):
+    for solid in _brep_topology.subshapes(shape, TopAbs_SOLID):
         modified = list(builder.Modified(solid))
         if modified:
             pieces.extend(modified)
         elif not builder.IsDeleted(solid):
             pieces.append(solid)
-    whole = compound([piece for piece in pieces if piece.ShapeType() == TopAbs_SOLID])
+    whole = _brep_topology.compound([piece for piece in pieces if piece.ShapeType() == TopAbs_SOLID])
     return {kind: _buckets(whole, kind) for kind in _KINDS}
 
 
@@ -167,7 +162,7 @@ def _regions(pieces: Sequence[TopoDS_Shape]) -> List[List[int]]:
 
 
 def _region_measures(pieces: Sequence[TopoDS_Shape]) -> Dict[str, float]:
-    volume = sum(_volume(piece) for piece in pieces)
+    volume = sum(_brep_geometry._interference_volume(piece) for piece in pieces)
     faces: List[list] = []  # [面, 数えた回数]
     for piece in pieces:
         for bucket in _buckets(piece, TopAbs_FACE).values():
@@ -178,10 +173,10 @@ def _region_measures(pieces: Sequence[TopoDS_Shape]) -> Dict[str, float]:
                         break
                 else:
                     faces.append([face, 1])
-    area = sum(_area(face) for face, count in faces if count == 1)
+    area = sum(_brep_geometry._interference_area(face) for face, count in faces if count == 1)
     if not (area > 0) or not (volume >= 0):
         raise ValueError(f"重なりの面積・体積が不正: V={volume} A={area}")
-    sides = obb_sides(compound(list(pieces)))
+    sides = _brep_geometry._interference_obb_sides(_brep_topology.compound(list(pieces)))
     return {"volume": volume, "thickness": 2 * volume / area, "obb_min": sides[0]}
 
 
@@ -193,10 +188,10 @@ def overlap_measures(pieces: Sequence[TopoDS_Shape]) -> Dict[str, Any]:
     `thickness` / `obb_min` は領域の中で最も厚いもの(どれか1つでも厚ければ tiny ではない)。
     """
     regions = [_region_measures([pieces[index] for index in group]) for group in _regions(pieces)]
-    whole = compound(list(pieces))
-    low, high = _exact_bbox(whole)
+    whole = _brep_topology.compound(list(pieces))
+    low, high = _brep_geometry._interference_exact_bbox(whole)
     return {
-        "center": _volume_center(whole),
+        "center": _brep_geometry._interference_volume_center(whole),
         "bbox": {"min": low, "max": high},
         "volume": sum(region["volume"] for region in regions),
         "regions": len(regions),
@@ -220,7 +215,7 @@ def triangles(shape: TopoDS_Shape, deviation: float) -> Dict[str, List]:
     BRepMesh_IncrementalMesh(shape, deviation, False, 0.5, False)
     positions: List[float] = []
     indices: List[int] = []
-    for face in subshapes(shape, TopAbs_FACE):
+    for face in _brep_topology.subshapes(shape, TopAbs_FACE):
         location = TopLoc_Location()
         triangulation = BRep_Tool.Triangulation_s(TopoDS.Face_s(face), location)
         if triangulation is None:
@@ -245,7 +240,7 @@ def _polyline(edge: TopoDS_Shape, deviation: float) -> List[List[float]]:
     curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
     sampler = GCPnts_QuasiUniformDeflection(curve, deviation)
     if not sampler.IsDone():
-        return [_point(vertex) for vertex in subshapes(edge, TopAbs_VERTEX)]
+        return [_point(vertex) for vertex in _brep_topology.subshapes(edge, TopAbs_VERTEX)]
     return [[p.X(), p.Y(), p.Z()] for p in (sampler.Value(i) for i in range(1, sampler.NbPoints() + 1))]
 
 
@@ -288,8 +283,8 @@ def _distance(first: TopoDS_Shape, second: TopoDS_Shape) -> Optional[Tuple[float
 
 
 def _facewise_distance(first: TopoDS_Shape, second: TopoDS_Shape) -> Dict[str, Any]:
-    faces_a, faces_b = subshapes(first, TopAbs_FACE), subshapes(second, TopAbs_FACE)
-    boxes_a, boxes_b = [loose_bbox(f) for f in faces_a], [loose_bbox(f) for f in faces_b]
+    faces_a, faces_b = _brep_topology.subshapes(first, TopAbs_FACE), _brep_topology.subshapes(second, TopAbs_FACE)
+    boxes_a, boxes_b = [_brep_geometry._interference_loose_bbox(f) for f in faces_a], [_brep_geometry._interference_loose_bbox(f) for f in faces_b]
     order = sorted(
         (box_gap(boxes_a[i], boxes_b[j]), i, j) for i in range(len(faces_a)) for j in range(len(faces_b))
     )
@@ -326,7 +321,7 @@ def box_gap(first: Tuple[Vec, Vec], second: Tuple[Vec, Vec]) -> float:
 
 def _boundary_points(face: TopoDS_Shape) -> List[TopoDS_Shape]:
     points = []
-    for edge_shape in subshapes(face, TopAbs_EDGE):
+    for edge_shape in _brep_topology.subshapes(face, TopAbs_EDGE):
         edge = TopoDS.Edge_s(edge_shape)
         if BRep_Tool.Degenerated_s(edge):
             continue

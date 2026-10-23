@@ -9,13 +9,17 @@ from build123d import Box
 
 from duocad import kernel
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 
 def test_a_face_taken_twice_hits_the_same_entry() -> None:
     """`TopoDS_Shape` は hash が一致しても `__eq__` が False なので、素の dict だと当たらない。"""
     shape = Box(40, 20, 10).wrapped
     cache = kernel.BoundingBoxCache()
-    first = kernel.bounding_box(kernel.face_of(shape, 1), cache=cache)
-    second = kernel.bounding_box(kernel.face_of(shape, 1), cache=cache)
+    first = kernel.bounding_box(_brep_topology.face_of(shape, 1), cache=cache)
+    second = kernel.bounding_box(_brep_topology.face_of(shape, 1), cache=cache)
     assert len(cache) == 1
     assert first == second
 

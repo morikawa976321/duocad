@@ -11,6 +11,11 @@ from duocad.mcp_server import DocumentTools
 from duocad.server import Session
 from session_support import SIDE, box as _box, browser as _browser, select as _select
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 DEVIATION = 0.2
 
 #: §7の実測値(20mm立方体の全辺)。**この2つが逆転したら §7 の記述が古い**。
@@ -56,7 +61,7 @@ def test_every_edge_arrives_as_a_polyline_with_at_least_two_points(session: Sess
         assert len(item["points"]) >= 6, item  # 2点 = 6要素
         assert len(item["points"]) % 3 == 0
         assert all(isinstance(value, float) for value in item["points"])
-        assert item["kind"] in kernel.EDGE_KINDS
+        assert item["kind"] in _brep_geometry.EDGE_KINDS
         assert item["length"] == pytest.approx(SIDE, rel=1e-6)
 
 
@@ -270,7 +275,7 @@ def test_the_browser_can_make_a_new_body(session: Session) -> None:
 def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:
     """辺を複数選んでフィレットがかけられる(タスクDの検証2)。"""
     body, _ = _box(session)
-    faces_before = kernel.face_count(body.shape)
+    faces_before = _brep_topology.face_count(body.shape)
     _select(session, _edges(body, [1, 2]))
 
     async def script(send):
@@ -282,7 +287,7 @@ def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:
 
     assert answer["applied"]["verb"] == "fillet"
     assert answer["applied"]["client_op"] == 3
-    assert kernel.face_count(body.shape) > faces_before
+    assert _brep_topology.face_count(body.shape) > faces_before
 
 
 def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:
@@ -303,7 +308,7 @@ def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:
     _select(from_ai, _edges(ai_body, (1, 3)))
     tools.call("fillet", {"radius": RADIUS_THAT_WORKS})
 
-    assert kernel.face_count(ui_body.shape) == kernel.face_count(ai_body.shape)
+    assert _brep_topology.face_count(ui_body.shape) == _brep_topology.face_count(ai_body.shape)
     assert query.volume(ui_body.shape) == pytest.approx(query.volume(ai_body.shape), rel=1e-12)
     assert [entry.verb for entry in from_ui.document.log.entries] == [
         entry.verb for entry in from_ai.document.log.entries
@@ -322,7 +327,7 @@ def test_previewing_a_fillet_shows_the_shape_and_leaves_nothing_behind(
 
     assert result["verb"] == "fillet"
     assert [item["body_id"] for item in result["bodies"]] == [body.id]
-    assert result["bodies"][0]["face_count"] > kernel.face_count(body.shape)
+    assert result["bodies"][0]["face_count"] > _brep_topology.face_count(body.shape)
     assert _fingerprint(session) == before
 
 

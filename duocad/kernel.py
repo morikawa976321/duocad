@@ -5,7 +5,7 @@
 
 戻り値はいずれも **JSON化できる素の値(float/int/str/list/dict)だけ**にする。OCPのオブジェクトを
 kernel の外へ出さないための規律で、境界テスト(importの静的検査)では捕まえられない側の約束。
-唯一の例外は `kernel_extrude.extrude_faces` / `kernel_extrude.extrude_regions` / `face_of`
+唯一の例外は `kernel_extrude.extrude_faces` / `kernel_extrude.extrude_regions` / `brep_topology.face_of`
 (と `kernel_sketch.sketch_regions`)の戻りに含まれる TopoDS_*(document.Body.shape や領域押し出しの入力になる値)。
 
 **ocp_tessellate は使わない**(この venv に入っておらず、面ごとの三角形グループが要るため自前実装)。
@@ -28,12 +28,11 @@ from OCP.BRepAlgoAPI import (
     BRepAlgoAPI_Cut,
     BRepAlgoAPI_Fuse,
 )
-from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_Transform
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_TangentialDeflection
 from OCP.IFSelect import IFSelect_ReturnStatus
-from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import (
     STEPControl_Reader,
     STEPControl_StepModelType,
@@ -50,70 +49,14 @@ from OCP.TopTools import (
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 from . import kernel_chains, kernel_meshing, kernel_overflow, kernel_tight, meshbody
-from .brep_topology import (
-    compound,
-    indexed_map,
-    subshapes,
-    _SUBSHAPE_KINDS,
-    count_subshapes,
-    _face_map_projection,
-    face_solid_indices,
-    face_count,
-    face_of,
-    _face_at,
-    edge_count,
-    edge_of,
-    _edge_at,
-    _vertex_map,
-    _edge_map,
-    split_solids,
-    _subshape_map,
-    _face_map,
-    is_null as _is_null,
-)
-from .brep_geometry import (
-    FACE_KINDS,
-    FULL_CYLINDER_DEGREES,
-    _ADAPTIVE_SURFACES,
-    _ADAPTIVE_CURVES,
-    _ADAPTIVE_VOLUME_EPS,
-    volume,
-    _volume_props,
-    _faces_of,
-    _box_centre,
-    _needs_adaptive,
-    centroid,
-    classify_face,
-    _bounding_box_extents,
-    _point_and_direction,
-    edge_axis,
-    edge_circle,
-    face_plane,
-    EDGE_KINDS,
-    edge_length,
-    classify_edge,
-    _face_normal,
-    _face_props,
-    _bounding_box,
-)
-from .brep_checks import (
-    _NO_CHANGE_RTOL,
-    _checked_volume,
-    _require_valid,
-    _check_tessellation_args,
-    _is_closed_shell,
-    is_closed_shell,
-    is_solid,
-    is_valid as _is_valid,
-)
 
-
-#: 基準平面の (origin, normal, xdir)。gp_Ax3 で組み立てると v は表のとおりになる。
-_BASE_PLANE_AXES = {
-    "XY": ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),  # v -> +Y
-    "XZ": ((0.0, 0.0, 0.0), (0.0, -1.0, 0.0), (1.0, 0.0, 0.0)),  # v -> +Z
-    "YZ": ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),  # v -> +Z
-}
+from . import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_history as _brep_history,
+    brep_operations as _brep_operations,
+    brep_topology as _brep_topology,
+)
 
 
 # --------------------------------------------------------------------------------------
@@ -147,7 +90,7 @@ def _load_step(filename: str) -> tuple:
         raise ValueError(f"STEP file has no transferable root: {filename}")
 
     shape = reader.OneShape()
-    if shape is None or _is_null(shape):
+    if shape is None or _brep_topology.is_null(shape):
         raise ValueError(f"STEP file produced an empty shape: {filename}")
     return reader, shape
 
@@ -214,12 +157,12 @@ def step_import_problems(text: str) -> List[str]:
         shown = "; ".join(dict.fromkeys(reason.strip() for reason in reasons if reason.strip()))
         problems.append(f"STEP の要素 {count} 件を転送できず、取り込むと面が欠けた形になる({shown[:200]})")
 
-    solids = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
+    solids = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
     if solids.Extent() > 0:
-        faces = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+        faces = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
         inside = set()
         for index in range(1, solids.Extent() + 1):
-            solid_faces = indexed_map(solids.FindKey(index), TopAbs_ShapeEnum.TopAbs_FACE)
+            solid_faces = _brep_topology.indexed_map(solids.FindKey(index), TopAbs_ShapeEnum.TopAbs_FACE)
             inside.update(faces.FindIndex(solid_faces.FindKey(number)) for number in range(1, solid_faces.Extent() + 1))
         inside.discard(0)
         loose = faces.Extent() - len(inside)
@@ -233,7 +176,7 @@ def step_import_problems(text: str) -> List[str]:
 
 def write_step(shape: "TopoDS_Shape", path: str) -> None:
     """形状をSTEPとして書き出す(モードは AsIs)。書き出しに失敗したらファイルを残さない。"""
-    if shape is None or _is_null(shape):
+    if shape is None or _brep_topology.is_null(shape):
         raise ValueError("cannot write an empty shape to STEP")
 
     filename = os.fspath(path)
@@ -338,7 +281,7 @@ class BoundingBoxCache:
         key = _ShapeKey(shape)
         found = self._extents.get(key)
         if found is None:
-            found = _bounding_box_extents(shape)
+            found = _brep_geometry._bounding_box_extents(shape)
             self._extents[key] = found
         return found
 
@@ -353,153 +296,13 @@ def bounding_box(
     `cache` に `document.bbox_cache` を渡すと測り直しを避ける。戻り値の dict は毎回作り直す。
     `kernel.tessellate` の戻りの `bbox` は三角形の節点から作った別物(カメラ合わせ用)。
     """
-    if shape is None or _is_null(shape):
+    if shape is None or _brep_topology.is_null(shape):
         raise ValueError("cannot compute the bounding box of an empty shape")
     if cache is None:
-        x_min, y_min, z_min, x_max, y_max, z_max = _bounding_box_extents(shape)
+        x_min, y_min, z_min, x_max, y_max, z_max = _brep_geometry._bounding_box_extents(shape)
     else:
         x_min, y_min, z_min, x_max, y_max, z_max = cache.extents(shape)
     return meshbody.bbox_payload([x_min, y_min, z_min], [x_max, y_max, z_max], size=True)
-
-
-# --------------------------------------------------------------------------------------
-# ブーリアンの結果の検証(extrude_faces / extrude_regions / boolean_bodies / fillet・chamfer が共有)
-# --------------------------------------------------------------------------------------
-
-
-def _fuse_all(shapes: Sequence[Any], what: str) -> "TopoDS_Shape":
-    """`shapes` を `BRepAlgoAPI_Fuse` で1つにする。**1つなら Fuse を呼ばずそのまま返す**。"""
-    combined = shapes[0]
-    for other in shapes[1:]:
-        fused = BRepAlgoAPI_Fuse(combined, other)
-        fused.Build()
-        if not fused.IsDone():
-            raise ValueError(f"failed to fuse {what}")
-        combined = fused.Shape()
-        if combined is None or _is_null(combined):
-            raise ValueError(f"fusing {what} produced an empty shape")
-    return combined
-
-
-def _target_successors(
-    builder: Any, target_shape: "TopoDS_Shape", history: Any, final_map: "TopTools_IndexedMapOfShape"
-) -> dict:
-    """`target_shape` の各面が、ブーリアン(`builder`)と統合(`history`。統合しなければ None)を経て
-    `final_map` の何番になったか(旧添字の文字列 → 新添字の列)。ツール側の面は鍵に入らない。"""
-    target_map = _face_map(target_shape)
-    successors: dict = {}
-    for index in range(1, target_map.Extent() + 1):
-        old_face = target_map.FindKey(index)
-        candidates = _shape_list(builder, "Modified", old_face)
-        if not candidates and not _is_removed(builder, old_face):
-            candidates = [old_face]
-        successors[str(index)] = _positions_in(
-            final_map,
-            (survivor for candidate in candidates for survivor in _through_history(history, candidate)),
-        )
-    return successors
-
-
-def _through_history(history: Any, sub: "TopoDS_Shape") -> List["TopoDS_Shape"]:
-    """`BRepTools_History` を1段たどる(消えたら空、触られていなければ自分自身)。"""
-    if history is None:
-        return [sub]
-    modified = _shape_list(history, "Modified", sub)
-    if modified:
-        return modified
-    if _is_removed(history, sub):
-        return []
-    return [sub]
-
-
-def _positions_in(final_map: "TopTools_IndexedMapOfShape", candidates: Iterable[Any]) -> List[int]:
-    """`candidates` が `final_map` の何番目かを重複なしで(最初に現れた順に)集める。"""
-    resolved: List[int] = []
-    for candidate in candidates:
-        position = final_map.FindIndex(candidate)
-        if position > 0 and position not in resolved:
-            resolved.append(position)
-    return resolved
-
-
-# --------------------------------------------------------------------------------------
-# 由来(provenance)の正規化アダプタ
-# --------------------------------------------------------------------------------------
-def normalize_provenance(
-    builder: Any,
-    inputs: Iterable["TopoDS_Shape"] = (),
-) -> Optional[dict]:
-    """OCCTの由来マップを1つの形へ正規化して返す(`Operation.provenance` に入れる値)。
-
-    **取り出し方が操作ごとに違う**のを吸収する —— ブーリアン(`BRepAlgoAPI_*`)は `History()`
-    -> `BRepTools_History` を持ち、フィレット等の `BRepBuilderAPI_MakeShape` 系は自分自身が
-    `Modified()` / `Generated()` / `IsDeleted()` を持つ。
-
-    戻り値の形(由来が1件も取れなければ None):
-
-        {
-            "modified":  [{"input": <TopoDS_Shape>, "results": [<TopoDS_Shape>, ...]}, ...],
-            "generated": [{"input": <TopoDS_Shape>, "results": [<TopoDS_Shape>, ...]}, ...],
-            "deleted":   [<TopoDS_Shape>, ...],
-        }
-
-    戻り値は `TopoDS_Shape` を含む**メモリ上の形**で、JSON化できない(永続化は `_blend_provenance`)。
-    """
-    source = builder.History() if hasattr(builder, "History") else builder
-
-    modified: List[dict] = []
-    generated: List[dict] = []
-    deleted: List[Any] = []
-
-    for input_shape in inputs:
-        if input_shape is None or _is_null(input_shape):
-            continue
-        for sub in _iter_faces_and_edges(input_shape):
-            for bucket, getter in (("modified", "Modified"), ("generated", "Generated")):
-                results = _shape_list(source, getter, sub)
-                if results:
-                    (modified if bucket == "modified" else generated).append(
-                        {"input": sub, "results": results}
-                    )
-            if _is_removed(source, sub):
-                deleted.append(sub)
-
-    if not (modified or generated or deleted):
-        return None
-    return {"modified": modified, "generated": generated, "deleted": deleted}
-
-
-def _iter_faces_and_edges(shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:
-    """由来を問い合わせる部分形状(面・辺)を重複なしで列挙する。"""
-    out: List[TopoDS_Shape] = []
-    for enum in (TopAbs_ShapeEnum.TopAbs_FACE, TopAbs_ShapeEnum.TopAbs_EDGE):
-        shape_map = indexed_map(shape, enum)
-        out.extend(shape_map.FindKey(i) for i in range(1, shape_map.Extent() + 1))
-    return out
-
-
-def _shape_list(source: Any, getter: str, sub: "TopoDS_Shape") -> List["TopoDS_Shape"]:
-    """`Modified(sub)` / `Generated(sub)` の戻り(TopTools_ListOfShape)をPythonのlistへ。"""
-    method = getattr(source, getter, None)
-    if method is None:
-        return []
-    try:
-        result = method(sub)
-    except Exception:  # OCCTは対象外の部分形状で例外を投げることがある
-        return []
-    return list(result)
-
-
-def _is_removed(source: Any, sub: "TopoDS_Shape") -> bool:
-    """削除されたか。`BRepTools_History` は IsRemoved、MakeShape系は IsDeleted を持つ。"""
-    for name in ("IsRemoved", "IsDeleted"):
-        method = getattr(source, name, None)
-        if method is not None:
-            try:
-                return bool(method(sub))
-            except Exception:
-                return False
-    return False
 
 
 # --------------------------------------------------------------------------------------
@@ -550,7 +353,7 @@ def rotate_shape(
 
     軸方向が零ベクトル・非有限なら ValueError。
     """
-    point, direction = _point_and_direction(
+    point, direction = _brep_geometry._point_and_direction(
         axis_point, axis_dir, names=("axis_point", "axis_dir"), zero_reason="軸の向きが決まらない"
     )
     if not math.isfinite(float(angle_deg)):
@@ -584,7 +387,7 @@ def mirror_shape(
 
     点・法線が3要素でない/非有限、または法線が零ベクトルなら ValueError。
     """
-    origin, axis = _point_and_direction(
+    origin, axis = _brep_geometry._point_and_direction(
         point, normal, names=("point", "normal"), zero_reason="鏡映面の向きが決まらない"
     )
 
@@ -622,14 +425,14 @@ def tessellate(
     交差した境界を面分割へ渡すと穴や非多様体の三角形になり、`untriangulated` にも現れない
     (docs/TOPOPT_GAP_CAUSALITY.md)。
     """
-    _check_tessellation_args(shape, deviation, angular_deflection)
+    _brep_checks._check_tessellation_args(shape, deviation, angular_deflection)
 
     # 既存の三角形分割は `mesh_shape` が捨ててから測り直す(残っていると偏差が効かない)。偏差は絶対mm
     # (Relative=False)。True にすると 0.2/0.05/0.01 のどれでも同じメッシュになる。
     # **build123d の既定の `export_stl` は True 側**なので流用しない。
     boundary = kernel_meshing.mesh_shape(shape, float(deviation), float(angular_deflection))
 
-    shape_map = _face_map(shape)
+    shape_map = _brep_topology._face_map(shape)
     faces: List[dict] = []
     untriangulated: List[int] = []
     for index in range(1, shape_map.Extent() + 1):
@@ -647,7 +450,7 @@ def tessellate(
     return {
         "deviation": float(deviation),
         "face_count": len(faces),
-        "bbox": _bounding_box(faces),
+        "bbox": _brep_geometry._bounding_box(faces),
         "faces": faces,
         "untriangulated": untriangulated,
         "boundary": boundary,
@@ -657,13 +460,13 @@ def tessellate(
 def _describe_face(face: Any, index: int) -> dict:
     """1面ぶんの三角形・分類・面積・重心・法線。"""
     positions, indices = _face_triangles(face)
-    area, centroid = _face_props(face)
+    area, centroid = _brep_geometry._face_props(face)
     return {
         "index": index,
-        "kind": classify_face(face),
+        "kind": _brep_geometry.classify_face(face),
         "area": area,
         "centroid": list(centroid),
-        "normal": list(_face_normal(face)),
+        "normal": list(_brep_geometry._face_normal(face)),
         "positions": positions,
         "indices": indices,
     }
@@ -676,8 +479,8 @@ def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], It
     "closed": bool}`。組ごとに compound にして測る。組が全面なら形状そのものを測る(`tessellate()` と同じ結果)。
     組の間で共有する辺の分割は伝わらず、曲線の共有辺には粗い側の偏差ぶんの隙間が開きうる。
     """
-    _check_tessellation_args(shape, *next(iter(groups), (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)))
-    shape_map = _face_map(shape)
+    _brep_checks._check_tessellation_args(shape, *next(iter(groups), (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)))
+    shape_map = _brep_topology._face_map(shape)
     total = shape_map.Extent()
     described: Dict[int, dict] = {}
     untriangulated: List[int] = []
@@ -689,7 +492,7 @@ def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], It
         if len(wanted) == total:
             passes.append(kernel_meshing.mesh_shape(shape, float(deviation), float(angular)))
         else:
-            group = compound([shape_map.FindKey(index) for index in wanted])
+            group = _brep_topology.compound([shape_map.FindKey(index) for index in wanted])
             BRepTools.Clean_s(shape)
             passes.append(_renumber_faces(kernel_meshing.mesh_shape(group, float(deviation), float(angular)), wanted))
         # 次の組の Clean_s で消える前に抜き出す。
@@ -702,7 +505,7 @@ def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], It
         "faces": described,
         "untriangulated": sorted(untriangulated),
         "boundary": kernel_meshing.merge_diagnostics(passes),
-        "closed": _is_closed_shell(shape),
+        "closed": _brep_checks._is_closed_shell(shape),
     }
 
 
@@ -718,7 +521,7 @@ def _renumber_faces(diagnostic: dict, wanted: List[int]) -> dict:
 
 def bounding_box_of_faces(faces: List[dict]) -> dict:
     """`tessellate()` の `bbox` と同じものを、面の三角形の並びから求める(面単位のキャッシュから組み直すとき)。"""
-    return _bounding_box(faces)
+    return _brep_geometry._bounding_box(faces)
 
 
 # --------------------------------------------------------------------------------------
@@ -746,16 +549,16 @@ def _boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) ->
                         "face_map": {"<旧添字>": [新添字, ...]}, "deleted": [...], "new_faces": [...]}}
     `face_map` の旧添字は `target_shape` の面。ツールの面から来た面は `new_faces` に入る。
     """
-    if target_shape is None or _is_null(target_shape):
+    if target_shape is None or _brep_topology.is_null(target_shape):
         raise ValueError("boolean_bodies requires a target shape")
     if not tool_shapes:
         raise ValueError("boolean_bodies requires at least one tool shape")
     if mode not in ("union", "cut", "intersect"):
         raise ValueError(f"unknown boolean mode: {mode!r}")
 
-    combined = _fuse_all(tool_shapes, "tool shapes")
+    combined = _brep_operations.fuse_all(tool_shapes, "tool shapes")
 
-    volume_before = volume(target_shape)
+    volume_before = _brep_geometry.volume(target_shape)
     if mode == "union":
         builder = BRepAlgoAPI_Fuse(target_shape, combined)
     elif mode == "cut":
@@ -767,24 +570,24 @@ def _boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) ->
         raise ValueError(f"{mode} failed")
     result = builder.Shape()
     # 無変化は検査しない(`volume_before` を渡さない): 同じ体積で形だけ変わる intersect がある。
-    volume_after = _checked_volume(result, mode)
+    volume_after = _brep_checks._checked_volume(result, mode)
     final, history, unified = result, None, False
     if mode == "union":
-        final, history, unified = _unify_same_domain(result, volume_after)
-    _require_valid(final, mode)
-    final_map = _face_map(final)
+        final, history, unified = _brep_operations.unify_same_domain(result, volume_after)
+    _brep_checks._require_valid(final, mode)
+    final_map = _brep_topology._face_map(final)
 
     return {
         "shape": final,
         "unified": unified,
         "volume_before": volume_before,
-        "volume_after": volume(final),
+        "volume_after": _brep_geometry.volume(final),
         "provenance": {
             "verb": "boolean_body",
             "mode": mode,
             "unified": unified,
-            **_face_map_projection(
-                _target_successors(builder, target_shape, history, final_map), final_map.Extent()
+            **_brep_topology._face_map_projection(
+                _brep_history.target_successors(builder, target_shape, history, final_map), final_map.Extent()
             ),
         },
     }
@@ -800,7 +603,7 @@ def edge_index_of(shape: "TopoDS_Shape", edge: Any) -> int:
 
     build123d の列挙順が `_edge_map` と一致する保証は無いので、`query.edges_of_face` は形状の同一性で引き当てる。
     """
-    shape_map = _edge_map(shape)
+    shape_map = _brep_topology._edge_map(shape)
     for index in range(1, shape_map.Extent() + 1):
         if shape_map.FindKey(index).IsSame(edge):
             return index
@@ -833,11 +636,11 @@ def tessellate_edges(
     の順で、`IsDone()` を持たず、退化した曲線では例外を投げる。**分割に失敗した辺は端点だけの2点で返す**
     (落とすとその辺だけ画面から消えて「指せない辺」になる)。
     """
-    _check_tessellation_args(
+    _brep_checks._check_tessellation_args(
         shape, deviation, angular_deflection, target="the edges of an empty shape"
     )
 
-    shape_map = _edge_map(shape)
+    shape_map = _brep_topology._edge_map(shape)
     described: List[dict] = []
     for index in range(1, shape_map.Extent() + 1):
         edge = TopoDS.Edge_s(shape_map.FindKey(index))
@@ -861,8 +664,8 @@ def tessellate_edges(
         described.append(
             {
                 "index": index,
-                "kind": classify_edge(edge),
-                "length": edge_length(edge),
+                "kind": _brep_geometry.classify_edge(edge),
+                "length": _brep_geometry.edge_length(edge),
                 "closed": bool(edge.Closed()),
                 "points": points,
             }
@@ -886,7 +689,7 @@ def vertex_positions(shape: "TopoDS_Shape") -> List[dict]:
     戻り値(素の値だけ): `[{"index": int, "point": [x, y, z]}, ...]`
 
     """
-    shape_map = _vertex_map(shape)
+    shape_map = _brep_topology._vertex_map(shape)
     described: List[dict] = []
     for index in range(1, shape_map.Extent() + 1):
         point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(shape_map.FindKey(index)))
@@ -927,13 +730,7 @@ def remembered(name: str, shapes: tuple, arguments: Any, compute: Callable[[], d
 
 
 def copy_shape(shape: Any) -> Any:
-    """形の深い写し(幾何も写し、三角形分割は写さない)。面・辺・頂点の添字の数え方は元と同じ
-    (PC ケースの 27 部品すべてで面・辺・頂点の対応を確認。最大ボディ 233 面で 4 ms)。
-
-    別スレッドで形を扱うとき(`Session.preview_job`)に、イベントループ側と同じ `TShape` を共有しないために使う
-    (OCCT の三角形分割は面に書き込まれ、`BRepTools.Clean_s` + 面分割が同じ面を別スレッドから書き換えると壊れる)。
-    """
-    return BRepBuilderAPI_Copy(shape, True, False).Shape()
+    return _brep_operations.copy_shape(shape)
 
 
 def adopt_results(pairs: Sequence[Tuple[Any, Any]]) -> None:
@@ -1004,13 +801,13 @@ def chamfer_edges(shape: "TopoDS_Shape", distances: dict) -> dict:
 
 def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
     """フィレットと面取りの共通実装(違うのはビルダの型だけ)。"""
-    if shape is None or _is_null(shape):
+    if shape is None or _brep_topology.is_null(shape):
         raise ValueError(f"cannot {verb} an empty shape")
     if not values:
         raise ValueError(f"{verb} requires at least one edge")
 
-    edge_map = _edge_map(shape)
-    volume_before = volume(shape)
+    edge_map = _brep_topology._edge_map(shape)
+    volume_before = _brep_geometry.volume(shape)
     maker = (
         BRepFilletAPI_MakeFillet(shape)
         if verb == "fillet"
@@ -1019,7 +816,7 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
     edge_indices: List[int] = []
     for raw_index, raw_value in values.items():
         index = int(raw_index)
-        maker.Add(float(raw_value), _edge_at(edge_map, index))
+        maker.Add(float(raw_value), _brep_topology._edge_at(edge_map, index))
         edge_indices.append(index)
 
     if verb != "fillet":
@@ -1077,8 +874,8 @@ def _built_blend(
 
     final = maker.Shape()
     context = f"edges {edge_indices}"
-    volume_after = _checked_volume(final, verb, context=context)
-    _require_valid(final, verb, context)
+    volume_after = _brep_checks._checked_volume(final, verb, context=context)
+    _brep_checks._require_valid(final, verb, context)
 
     return {
         "shape": final,
@@ -1105,7 +902,7 @@ def _blend_reaches_other_faces(maker: Any, shape: "TopoDS_Shape") -> bool:
     smooth = None
     suspects = set()
     for face in changed:
-        corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
+        corners = _brep_topology.indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
         owners = {
             contour for contour, vertices in touching.items()
             if any(vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1))
@@ -1139,8 +936,8 @@ def _faces_changed_by(maker: Any, shape: "TopoDS_Shape") -> List["TopoDS_Shape"]
     """`maker` が変えた(結果に同じ面として残らなかった)入力の面。"""
     # 触られなかった面は結果に同じ面として残るので、結果に無い入力の面だけを見る(`Modified` を全面に問うと、
     # PC ケースの 233 面のボディで1回 112ms かかった。フィレットそのものは 18ms)。
-    kept = _face_map(maker.Shape())
-    face_map = _face_map(shape)
+    kept = _brep_topology._face_map(maker.Shape())
+    face_map = _brep_topology._face_map(shape)
     return [face_map.FindKey(i) for i in range(1, face_map.Extent() + 1) if not kept.Contains(face_map.FindKey(i))]
 
 
@@ -1173,7 +970,7 @@ def _changes_faces_away_from(maker: Any, shape: "TopoDS_Shape", contours: Iterab
             rounded_vertices.Add(TopExp.LastVertex_s(edge))
     smooth = None
     for face in _faces_changed_by(maker, shape):
-        corners = indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
+        corners = _brep_topology.indexed_map(face, TopAbs_ShapeEnum.TopAbs_VERTEX)
         if not any(rounded_vertices.Contains(corners.FindKey(i)) for i in range(1, corners.Extent() + 1)):
             if smooth is None:
                 smooth = _coplanar_supports(maker, shape, contours)
@@ -1204,7 +1001,7 @@ def _coplanar_supports(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int
                         queue.append(face)
     while queue:
         face = queue.pop()
-        edges = indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+        edges = _brep_topology.indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
         for number in range(1, edges.Extent() + 1):
             edge = TopoDS.Edge_s(edges.FindKey(number))
             if not edge_faces.Contains(edge):
@@ -1226,39 +1023,39 @@ def _absorbed_fillet(
     context = f"edges {edge_indices}, absorbing overflow"
     # 凹の肉を足して凸の肉を引くと、体積が打ち消し合って変わらないことがある(形は変わっている)。
     unchanged_check = None if (absorbed.concave and absorbed.convex) else volume_before
-    volume_after = _checked_volume(absorbed.shape, "fillet", volume_before=unchanged_check, context=context)
+    volume_after = _brep_checks._checked_volume(absorbed.shape, "fillet", volume_before=unchanged_check, context=context)
     if (absorbed.concave and not absorbed.convex and volume_after < volume_before) or (
         absorbed.convex and not absorbed.concave and volume_after > volume_before
     ):
         raise ValueError(f"fillet moved the volume the wrong way ({volume_before} -> {volume_after}, {context})")
     # 統合の前に断る: 壊れた形や離れたソリッドを統合に渡すと、仮想メモリを使い尽くすことがある(PC ケースの部品で 84GB)。
-    if len(split_solids(absorbed.shape)) > len(split_solids(shape)):
+    if len(_brep_topology.split_solids(absorbed.shape)) > len(_brep_topology.split_solids(shape)):
         raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
-    _require_valid(absorbed.shape, "fillet", context)
-    final, history, _ = _unify_same_domain(absorbed.shape, volume_after)
-    _require_valid(final, "fillet", context)
-    if len(split_solids(final)) > len(split_solids(shape)):
+    _brep_checks._require_valid(absorbed.shape, "fillet", context)
+    final, history, _ = _brep_operations.unify_same_domain(absorbed.shape, volume_after)
+    _brep_checks._require_valid(final, "fillet", context)
+    if len(_brep_topology.split_solids(final)) > len(_brep_topology.split_solids(shape)):
         raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
 
-    final_map = _face_map(final)
-    shape_map = _face_map(shape)
+    final_map = _brep_topology._face_map(final)
+    shape_map = _brep_topology._face_map(shape)
     successors: dict = {}
     for index in range(1, shape_map.Extent() + 1):
         current = [shape_map.FindKey(index)]
         for builder in absorbed.builders:
             following = []
             for face in current:
-                modified = _shape_list(builder, "Modified", face)
-                following.extend(modified or ([] if _is_removed(builder, face) else [face]))
+                modified = _brep_history.shape_list(builder, "Modified", face)
+                following.extend(modified or ([] if _brep_history.is_removed(builder, face) else [face]))
             current = following
-        successors[str(index)] = _positions_in(
-            final_map, (survivor for face in current for survivor in _through_history(history, face))
+        successors[str(index)] = _brep_history.positions_in(
+            final_map, (survivor for face in current for survivor in _brep_history.through_history(history, face))
         )
     return {
         "shape": final,
-        "provenance": {"verb": "fillet", "edges": list(edge_indices), **_face_map_projection(successors, final_map.Extent())},
+        "provenance": {"verb": "fillet", "edges": list(edge_indices), **_brep_topology._face_map_projection(successors, final_map.Extent())},
         "volume_before": float(volume_before),
-        "volume_after": float(volume(final)),
+        "volume_after": float(_brep_geometry.volume(final)),
     }
 
 
@@ -1269,21 +1066,21 @@ def _tight_fillet(
     戻り値の形にする。上面の後継は丸めた後の上面、それ以外の面は本体を深さ R で切る引き算と冠との縫い合わせをたどる。"""
     tight = kernel_tight.round_tight_loop(shape, edge_map, radii)
     context = f"edges {edge_indices}, rounding past the edge curvature"
-    volume_after = _checked_volume(tight.shape, "fillet", volume_before=volume_before, context=context)
+    volume_after = _brep_checks._checked_volume(tight.shape, "fillet", volume_before=volume_before, context=context)
     if volume_after >= volume_before:
         raise ValueError(f"fillet moved the volume the wrong way ({volume_before} -> {volume_after}, {context})")
-    if len(split_solids(tight.shape)) != len(split_solids(shape)):
+    if len(_brep_topology.split_solids(tight.shape)) != len(_brep_topology.split_solids(shape)):
         raise ValueError(f"fillet changed the number of solids ({context})")
-    _require_valid(tight.shape, "fillet", context)
-    final, history, _ = _unify_same_domain(tight.shape, volume_after)
-    _require_valid(final, "fillet", context)
+    _brep_checks._require_valid(tight.shape, "fillet", context)
+    final, history, _ = _brep_operations.unify_same_domain(tight.shape, volume_after)
+    _brep_checks._require_valid(final, "fillet", context)
 
     def through(builder: Any, face: "TopoDS_Shape") -> List["TopoDS_Shape"]:
-        modified = _shape_list(builder, "Modified", face)
-        return modified or ([] if _is_removed(builder, face) else [face])
+        modified = _brep_history.shape_list(builder, "Modified", face)
+        return modified or ([] if _brep_history.is_removed(builder, face) else [face])
 
-    final_map = _face_map(final)
-    shape_map = _face_map(shape)
+    final_map = _brep_topology._face_map(final)
+    shape_map = _brep_topology._face_map(shape)
     below, joined = tight.builders
     successors: dict = {}
     for index in range(1, shape_map.Extent() + 1):
@@ -1292,14 +1089,14 @@ def _tight_fillet(
             current = [tight.lens]
         else:
             current = [after for before in through(below, face) for after in through(joined, before)]
-        successors[str(index)] = _positions_in(
-            final_map, (survivor for face in current for survivor in _through_history(history, face))
+        successors[str(index)] = _brep_history.positions_in(
+            final_map, (survivor for face in current for survivor in _brep_history.through_history(history, face))
         )
     return {
         "shape": final,
-        "provenance": {"verb": "fillet", "edges": list(edge_indices), **_face_map_projection(successors, final_map.Extent())},
+        "provenance": {"verb": "fillet", "edges": list(edge_indices), **_brep_topology._face_map_projection(successors, final_map.Extent())},
         "volume_before": float(volume_before),
-        "volume_after": float(volume(final)),
+        "volume_after": float(_brep_geometry.volume(final)),
     }
 
 
@@ -1311,39 +1108,27 @@ def _blend_provenance(
     edge_indices: List[int],
 ) -> dict:
     """由来を `normalize_provenance` 経由で回収し、JSON化できる添字の射影へ落とす(`extrude_faces` と同じ形)。"""
-    normalized = normalize_provenance(maker, [shape]) or {}
+    normalized = _brep_history.normalize_provenance(maker, [shape]) or {}
     modified = {}
     for entry in normalized.get("modified", []):
         modified[entry["input"]] = entry["results"]
     deleted_inputs = normalized.get("deleted", [])
 
-    shape_map = _face_map(shape)
-    final_map = _face_map(final)
+    shape_map = _brep_topology._face_map(shape)
+    final_map = _brep_topology._face_map(final)
     successors: dict = {}
     for index in range(1, shape_map.Extent() + 1):
         old_face = shape_map.FindKey(index)
-        candidates = _lookup_by_identity(modified, old_face)
+        candidates = _brep_history.lookup_by_identity(modified, old_face)
         if candidates is None:
-            candidates = [] if _contains_identity(deleted_inputs, old_face) else [old_face]
-        successors[str(index)] = _positions_in(final_map, candidates)
+            candidates = [] if _brep_history.contains_identity(deleted_inputs, old_face) else [old_face]
+        successors[str(index)] = _brep_history.positions_in(final_map, candidates)
 
     return {
         "verb": verb,
         "edges": list(edge_indices),
-        **_face_map_projection(successors, final_map.Extent()),
+        **_brep_topology._face_map_projection(successors, final_map.Extent()),
     }
-
-
-def _lookup_by_identity(mapping: dict, key: Any) -> Optional[List[Any]]:
-    """`TopoDS_Shape` は辞書の鍵として同一性で引けないので `IsSame` で探す。"""
-    for candidate, results in mapping.items():
-        if candidate.IsSame(key):
-            return results
-    return None
-
-
-def _contains_identity(shapes: Sequence[Any], key: Any) -> bool:
-    return any(candidate.IsSame(key) for candidate in shapes)
 
 
 # --------------------------------------------------------------------------------------
@@ -1355,7 +1140,7 @@ def make_compound(shapes: Sequence["TopoDS_Shape"]) -> "TopoDS_Shape":
     """複数の形状を1つの TopoDS_Compound へまとめる。"""
     if not shapes:
         raise ValueError("cannot build a compound from an empty sequence of shapes")
-    return compound(shapes)
+    return _brep_topology.compound(shapes)
 
 
 # --------------------------------------------------------------------------------------
@@ -1391,48 +1176,3 @@ def _face_triangles(face: Any) -> tuple:
             second, third = third, second
         indices.extend((first - 1, second - 1, third - 1))
     return positions, indices
-
-
-def _unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
-    """同一平面の面を統合した形状・その履歴・採用したかを返す。
-
-    採用しない場合は**統合を一度も通していない元の形状**と履歴 None を返す。
-
-    **`ShapeUpgrade_UnifySameDomain` は入力の形状を壊す**(実測):
-
-        fuse の結果        -> IsValid()=True
-        unify.Build() した後、**同じ fuse の結果を測り直すと** IsValid()=False
-        unify の前に取った BRepBuilderAPI_Copy は unify 後も IsValid()=True
-
-    したがって「統合してダメなら統合前へ戻る」は戻り先が既に壊れている。必ず**コピーで試してから**本番を行う:
-
-    1. コピーに対して統合を試し、(a)妥当 (b)体積が変わらない (c)**面が実際に減る** を確かめる
-    2. 3つとも満たすときだけ、元の形状に対して本番の統合を行い、その出力と履歴を返す
-       (由来の射影は元の形状の部分形状を鍵に引くので、コピーに対して統合すると同一性が切れる)
-    3. 満たさないときは元の形状をそのまま返す
-
-    (c)は、面が減らない統合は利得ゼロで入力を壊す危険だけが残るため。`shelf_attachment_GD.step` の
-    面36・43を+2mmしたときが実際にこれで、面数は57のまま統合後の形状だけが壊れていた
-    (20mm立方体の上面+10では 10面 -> 6面 に減るので採用される)。
-    """
-    trial = ShapeUpgrade_UnifySameDomain(
-        BRepBuilderAPI_Copy(shape).Shape(), True, True, False
-    )
-    trial.Build()
-    candidate = trial.Shape()
-    if candidate is None or _is_null(candidate):
-        return shape, None, False
-    if abs(volume(candidate) - volume_before) > 1e-6 * max(1.0, abs(volume_before)):
-        return shape, None, False
-    if not _is_valid(candidate):
-        return shape, None, False
-    if _face_map(candidate).Extent() >= _face_map(shape).Extent():
-        return shape, None, False
-
-    unify = ShapeUpgrade_UnifySameDomain(shape, True, True, False)
-    unify.Build()
-    unified = unify.Shape()
-    if unified is None or _is_null(unified) or not _is_valid(unified):
-        # 試行では通ったのに本番で壊れた場合。入力(shape)はもう壊れているので操作ごと捨てる。
-        raise ValueError("ShapeUpgrade_UnifySameDomain が試行と異なる結果を返した")
-    return unified, unify.History(), True

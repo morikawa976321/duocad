@@ -84,6 +84,10 @@ from .server import (
     start_http_server,
 )
 
+from . import (
+    brep_topology as _brep_topology,
+)
+
 SERVER_NAME = "duocad"
 SERVER_VERSION = "0.0.1"
 
@@ -269,7 +273,7 @@ class DocumentTools:
         document = self.session.document
         bodies = []
         for body in document.bodies:
-            # **メッシュボディはB-repの測り方を通せない**(`kernel.face_count(None)` が落ちる)。
+            # **メッシュボディはB-repの測り方を通せない**(`brep_topology.face_count(None)` が落ちる)。
             # 面は1枚として数える(`view._face_count` と同じ規約)。
             is_mesh = body.mesh is not None
             entry = {
@@ -277,7 +281,7 @@ class DocumentTools:
                 "name": body.name,
                 "kind": body.kind,
                 "visible": body.visible,
-                "face_count": 1 if is_mesh else kernel.face_count(body.shape),
+                "face_count": 1 if is_mesh else _brep_topology.face_count(body.shape),
                 "volume": meshbody.volume(body.mesh) if is_mesh else query.volume(body.shape),
             }
             if include_bbox:

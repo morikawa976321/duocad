@@ -22,8 +22,13 @@ from OCP.TopAbs import TopAbs_SOLID
 
 from _documents import open_session
 from duocad.paths import DEFAULT_MODELS_DIR
-from duocad import kernel
-from duocad.mesh_geometry import TOLERANCE_MM, TOPOLOGY_DEFECTS, make_material, subshapes, topology, weld_exact
+from duocad.mesh_geometry import TOLERANCE_MM, TOPOLOGY_DEFECTS, make_material, topology, weld_exact
+
+from duocad import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
 
 LABELS = {
     "preserve": "保持部分をすべて含む",
@@ -67,8 +72,8 @@ def boolean_remainder(left, right, operation):
     result = boolean.Shape()
     if result.IsNull() or not BRepCheck_Analyzer(result).IsValid():
         raise RuntimeError('集合演算の結果が不正')
-    solids = subshapes(result, TopAbs_SOLID)
-    return dict(residual_solids=len(solids), residual_volume_mm3=sum(abs(kernel.volume(s)) for s in solids))
+    solids = _brep_topology.subshapes(result, TopAbs_SOLID)
+    return dict(residual_solids=len(solids), residual_volume_mm3=sum(abs(_brep_geometry.volume(s)) for s in solids))
 
 
 def evaluate(vertices, faces, preserve=(), exclude=(), *, progress=None, check_constraints=False):
@@ -111,7 +116,7 @@ def evaluate(vertices, faces, preserve=(), exclude=(), *, progress=None, check_c
                 if progress:
                     progress(f'{key} {len(rows)+1}/{len(shapes)}: {name}')
                 try:
-                    if shape is None or shape.IsNull() or not subshapes(shape, TopAbs_SOLID) or not BRepCheck_Analyzer(shape).IsValid():
+                    if shape is None or shape.IsNull() or not _brep_topology.subshapes(shape, TopAbs_SOLID) or not BRepCheck_Analyzer(shape).IsValid():
                         raise ValueError('条件ソリッドが空または不正')
                     row = boolean_remainder(shape, material, operation)
                     rows.append(dict(body=name, status='pass' if row['residual_solids'] == 0 else 'fail', **row))
@@ -161,10 +166,10 @@ def main(argv=None):
         if args.solid_body:
             if args.check_constraints:
                 raise ValueError('--solid-body は水密・単一ソリッドの検査用です')
-            from duocad.kernel_brep import inspect_solid, encode_brep
+            from duocad.kernel_brep import encode_brep
             shape = document.get_body(args.solid_body).shape
             source_info = dict(body=args.solid_body)
-            diagnostics = inspect_solid(shape)
+            diagnostics = _brep_checks.inspect_solid(shape)
             report = finish(dict(checks={key: dict(label=LABELS[key], status='pass' if diagnostics[key] else 'fail')
                                          for key in ('watertight', 'single_solid')}, solid=diagnostics))
             source_info['sha256'] = hashlib.sha256(encode_brep(shape).encode('ascii')).hexdigest()

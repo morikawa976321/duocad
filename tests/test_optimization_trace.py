@@ -9,6 +9,10 @@ import pytest
 
 from duocad.topopt import trace, fem, mesh
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 
 @pytest.fixture
 def recordings(tmp_path, monkeypatch):
@@ -261,7 +265,7 @@ def test_real_cad_and_source_archive_are_complete(tmp_path):
     manifest=json.loads((rec.path/'manifest.json').read_text(encoding='utf-8'))
     assert hashlib.sha256((rec.path/'source.zip').read_bytes()).hexdigest()==manifest['source_sha256']
     restored=kernel.read_step(str(next((rec.path/'cad').glob('*.step'))))
-    assert kernel.volume(restored)==pytest.approx(24.)
+    assert _brep_geometry.volume(restored)==pytest.approx(24.)
 
 
 def test_git_provenance_returns_while_another_thread_blocks_on_piped_stdin():

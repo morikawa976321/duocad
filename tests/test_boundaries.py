@@ -46,6 +46,9 @@ OCP_ALLOWED = frozenset(
         "brep_topology.py",
         "brep_geometry.py",
         "brep_checks.py",
+        "brep_history.py",
+        "brep_operations.py",
+        "brep_planar.py",
         "topopt/voxelize.py",
     }
 )
@@ -55,7 +58,16 @@ OCP_CORE = "kernel.py"
 
 _DYNAMIC_IMPORT_CALLS = {"__import__", "import_module", "importlib.import_module"}
 
-BREP_COMMON = ("brep_topology.py", "brep_geometry.py", "brep_checks.py", "mesh_geometry.py")
+BREP_DEPENDENCIES = {
+    "brep_topology.py": set(),
+    "brep_geometry.py": {"brep_topology"},
+    "brep_checks.py": {"brep_topology", "brep_geometry"},
+    "brep_history.py": {"brep_topology"},
+    "brep_operations.py": {"brep_topology", "brep_geometry", "brep_checks"},
+    "brep_planar.py": {"brep_topology"},
+    "mesh_geometry.py": {"brep_topology", "brep_checks"},
+}
+BREP_COMMON = tuple(BREP_DEPENDENCIES)
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -115,6 +127,83 @@ def _kernel_operation_imports(py_file: Path) -> set[str]:
 def test_common_brep_modules_do_not_import_operations(module):
     """共通幾何機構が個別操作を参照すると、依存が逆流する。"""
     assert _kernel_operation_imports(DUOCAD_DIR / module) == set()
+
+
+@pytest.mark.parametrize("module", BREP_COMMON)
+def test_common_brep_dependency_direction(module):
+    """共通層の参照先が増えると、層の順序や循環の有無を見直す必要がある。"""
+    common = {Path(name).stem for name in BREP_COMMON}
+    imported = {
+        part for name in _imported_modules(DUOCAD_DIR / module)
+        for part in name.split(".") if part in common
+    }
+    assert imported <= BREP_DEPENDENCIES[module]
+
+
+def test_operations_do_not_import_common_functions_as_compatibility_aliases():
+    """共通関数を操作モジュールへ再輸出すると、旧い差し替え点が復活する。"""
+    common = {Path(name).stem for name in BREP_COMMON}
+    violations = []
+    for path in [*DUOCAD_DIR.glob("kernel*.py"), DUOCAD_DIR / "mesh_geometry.py"]:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[-1] in common:
+                violations.append((path.name, node.lineno))
+    assert violations == []
+
+
+def _private_operation_references(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = (
+                    f"{node.module}.{alias.name}" if node.module else alias.name
+                )
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                aliases[alias.asname or alias.name.split(".")[0]] = (
+                    alias.name if alias.asname else alias.name.split(".")[0]
+                )
+
+    def resolved(node):
+        first, *rest = _dotted_name(node).split(".")
+        return ".".join([aliases.get(first, first), *rest])
+
+    references = set(_imported_modules(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            references.add(resolved(node))
+        elif isinstance(node, ast.Call) and _dotted_name(node.func) == "getattr" and len(node.args) > 1:
+            if isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str):
+                references.add(f"{resolved(node.args[0])}.{node.args[1].value}")
+    return {
+        name for name in references if name.split(".")[-1].startswith("_")
+        and any(part == "kernel" or part.startswith("kernel_") for part in name.split("."))
+    }
+
+
+def test_operations_do_not_share_private_operation_helpers():
+    """操作間の内部関数共有は、共通層を経由しなければならない。"""
+    assert {
+        path.name: refs for path in DUOCAD_DIR.glob("kernel*.py")
+        if (refs := _private_operation_references(path))
+    } == {}
+
+
+@pytest.mark.parametrize("source", [
+    "from .kernel import _shared",
+    "from duocad.kernel_overflow import _shared as helper",
+    "from . import kernel as operation; operation._shared()",
+    "import duocad.kernel; duocad.kernel._shared()",
+    "import duocad.kernel as operation; operation._shared()",
+    "from . import kernel; getattr(kernel, '_shared')",
+])
+def test_operation_helper_boundary_detects_aliases(tmp_path, source):
+    """別名・完全修飾・属性文字列で、操作間の内部参照の検査を迂回できない。"""
+    path = tmp_path / "operation.py"
+    path.write_text(source, encoding="utf-8")
+    assert _private_operation_references(path)
 
 
 @pytest.mark.parametrize("source", [

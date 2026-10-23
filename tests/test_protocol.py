@@ -23,6 +23,11 @@ from duocad.paths import REPO_ROOT
 from duocad.server import Session
 from session_support import SIDE, box as _box, select as _select
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 DEVIATION = 0.2
 #: 20mm立方体の辺に対して**通る**半径(`tests/test_feature_ui.py` の実測値と同じ)。
 RADIUS_THAT_WORKS = 3.0
@@ -306,8 +311,8 @@ def _run_thread(session: Session, tmp_path: Path) -> dict:
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude(10.0, mode="new")
     body = session.document.bodies[-1]
-    face_map = kernel._face_map(body.shape)
-    face = next(i for i in range(1, face_map.Extent() + 1) if kernel.classify_face(face_map.FindKey(i)) == "cylinder_full")
+    face_map = _brep_topology._face_map(body.shape)
+    face = next(i for i in range(1, face_map.Extent() + 1) if _brep_geometry.classify_face(face_map.FindKey(i)) == "cylinder_full")
     _select(session, [{"body": body.id, "kind": "face", "index": face}])
     return session.thread("trapezoid45")
 

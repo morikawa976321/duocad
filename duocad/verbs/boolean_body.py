@@ -23,6 +23,11 @@ from ._common import (
     resolve_shape_ref,
 )
 
+from duocad import (
+    brep_checks as _brep_checks,
+    brep_topology as _brep_topology,
+)
+
 VERB_BOOLEAN_BODY = "boolean_body"
 _SNAPSHOT_KEY = "boolean_body:removed"
 
@@ -31,10 +36,10 @@ def _validate_target_ref(doc: Document, target_ref: Any) -> BodyId:
     body, index = resolve_shape_ref(
         doc, target_ref, kind="face", what="target_ref", mesh_hint="(メッシュボディには面が無い)"
     )
-    if index < 1 or index > kernel.face_count(body.shape):
+    if index < 1 or index > _brep_topology.face_count(body.shape):
         raise ValueError(
             f"target_ref: face index {index} is out of range for body {body.id!r} "
-            f"(1..{kernel.face_count(body.shape)})"
+            f"(1..{_brep_topology.face_count(body.shape)})"
         )
     return body.id
 
@@ -59,13 +64,13 @@ def _validate_participants(
         )
 
     target_body = find(doc, target_body_id, what="boolean_body")
-    if not kernel.is_solid(target_body.shape):
+    if not _brep_checks.is_solid(target_body.shape):
         raise ValueError(f"boolean_body: target body {target_body.id!r} is not a solid")
 
     tools = []
     for tool_id in tool_ids:
         tool = find(doc, tool_id, what="boolean_body")
-        if not kernel.is_solid(tool.shape):
+        if not _brep_checks.is_solid(tool.shape):
             raise ValueError(f"boolean_body: tool body {tool_id!r} is not a solid")
         tools.append(tool)
     return target_body, tools

@@ -19,13 +19,17 @@ from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 
 import duocad.verbs as verbs
-from duocad import catalog, kernel, query, selection
+from duocad import catalog, query, selection
 from duocad.document import Body, Document
 from duocad.entry import entry_for
 from duocad.verbs import chamfer, fillet
 from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json, shape_ref
 from mcp_support import call
 from session_support import session_with_box
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
 
 
 W, D, H = 40.0, 30.0, 20.0
@@ -68,7 +72,7 @@ def _bbox(doc: Document, body_id: str) -> list:
 def _state(doc: Document) -> tuple:
     return (
         json.dumps(doc.log.to_json(), sort_keys=True),
-        tuple((body.id, body.shape, query.volume(body.shape), kernel.face_count(body.shape)) for body in doc.bodies),
+        tuple((body.id, body.shape, query.volume(body.shape), _brep_topology.face_count(body.shape)) for body in doc.bodies),
     )
 
 
@@ -89,7 +93,7 @@ def _l_block(doc: Document) -> str:
     unifier = ShapeUpgrade_UnifySameDomain(fused, True, True, False)
     unifier.Build()
     doc.add_body(Body(id="step", name="step", kind="solid", shape=unifier.Shape()))
-    assert kernel.face_count(doc.get_body("step").shape) == 8
+    assert _brep_topology.face_count(doc.get_body("step").shape) == 8
     return "step"
 
 
@@ -195,7 +199,7 @@ def test_a_fillet_next_to_the_moved_face_follows_it():
     assert query.volume(shape) == pytest.approx(W * D * (H + 3.0) - (25.0 - 25.0 * math.pi / 4) * W, rel=1e-9)
     assert kinds_of(doc, body_id) == {"plane": 6, "cylinder_partial": 1}
     (new_round,) = [f["index"] for f in query.describe_faces(shape) if f["kind"] == "cylinder_partial"]
-    assert BRepAdaptor_Surface(kernel.face_of(shape, new_round)).Cylinder().Radius() == pytest.approx(5.0, abs=1e-9)
+    assert BRepAdaptor_Surface(_brep_topology.face_of(shape, new_round)).Cylinder().Radius() == pytest.approx(5.0, abs=1e-9)
     for axis, value in ((1, 0.0), (1, D), (0, 0.0), (0, W), (2, 0.0), (2, H + 3.0)):
         _plane_at(doc, body_id, axis, value)  # 前面は y=0 のまま、上面は z=23
     assert operation.provenance["deleted"] == [old_round]
@@ -255,7 +259,7 @@ def test_provenance_maps_every_face_one_to_one():
     """面の由来の記録に載る。位相を変えないので、旧面はすべて新しい面1枚に対応し、消えた面も新しい面も無い。"""
     doc = Document()
     body_id = new_box_with_hole(doc, 20.0, 4.0)
-    count = kernel.face_count(doc.get_body(body_id).shape)
+    count = _brep_topology.face_count(doc.get_body(body_id).shape)
     before = {face["index"]: face for face in query.describe_faces(doc.get_body(body_id).shape)}
 
     operation = _offset_faces(doc, [_hole(doc, body_id)], -1.0, body_id)

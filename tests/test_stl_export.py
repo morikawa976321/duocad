@@ -22,6 +22,10 @@ from duocad.server import Session
 from duocad.verbs import fillet
 from document_support import new_box
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 
 @pytest.mark.parametrize('existing', [False, True])
 def test_unresolved_face_prevents_partial_stl_export(tmp_path, existing):
@@ -198,7 +202,7 @@ def test_a_b_rep_with_pole_triangles_is_written_without_the_zero_area_ones(tmp_p
     assert not degenerate_mask(written.astype(np.float64)).any()
     assert _directed_edge_pairs_are_complete(written)
     signed = np.einsum("ij,ij->i", written[:, 0].astype(np.float64), np.cross(written[:, 1], written[:, 2]).astype(np.float64)).sum() / 6.0
-    assert signed == pytest.approx(kernel.volume(shape), rel=0.03), "面積0を除いても体積は変わらない(三角形の近似ぶんは残る)"
+    assert signed == pytest.approx(_brep_geometry.volume(shape), rel=0.03), "面積0を除いても体積は変わらない(三角形の近似ぶんは残る)"
 
 
 def test_stl_export_still_refuses_a_mesh_body_with_a_zero_area_triangle(tmp_path):

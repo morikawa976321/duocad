@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
+from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepGProp import BRepGProp, BRepGProp_Domain, BRepGProp_Face, BRepGProp_Vinert
@@ -11,8 +12,9 @@ from OCP.BRepLProp import BRepLProp_SLProps
 from OCP.Bnd import Bnd_Box, Bnd_OBB
 from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.GProp import GProp_GProps
+from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
-from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
+from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_REVERSED
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.gp import gp_Pnt, gp_Vec
@@ -466,3 +468,21 @@ def _tight_diagonal(shape: TopoDS_Shape) -> float:
     BRepBndLib.Add_s(shape, box)
     x0, y0, z0, x1, y1, z1 = box.Get()
     return max(1.0, math.dist((x0, y0, z0), (x1, y1, z1)))
+
+
+def _overflow_volume(shape: TopoDS_Shape) -> float:
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, props)
+    return props.Mass()
+
+
+def outward_normal(face: TopoDS_Shape, point: gp_Pnt) -> Optional[gp_Vec]:
+    surface = BRep_Tool.Surface_s(TopoDS.Face_s(face))
+    u, v = GeomAPI_ProjectPointOnSurf(point, surface).LowerDistanceParameters()
+    props = BRepLProp_SLProps(BRepAdaptor_Surface(TopoDS.Face_s(face)), u, v, 1, 1.0e-7)
+    if not props.IsNormalDefined():
+        return None
+    normal = gp_Vec(props.Normal())
+    if face.Orientation() == TopAbs_REVERSED:
+        normal.Reverse()
+    return normal

@@ -17,6 +17,10 @@ from duocad.server import Session
 from duocad.session import NoDocument
 from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, edit_parameter, send_one
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 DEVIATION = 0.2
 
 
@@ -393,7 +397,7 @@ def test_opening_rebuilds_the_same_shape_and_reaches_every_connection(session: S
     """保存 → 開く → 同じ形。開いた文書は全接続へ届く。形は操作ログから再生されるので、再生経路が壊れていないことの検査でもある。"""
     body, _ = _box(session)
     volume = query.volume(body.shape)
-    faces = kernel.face_count(body.shape)
+    faces = _brep_topology.face_count(body.shape)
     session.save_document("model.json")
 
     fresh = Session(DEVIATION, models_dir=session.models_dir)
@@ -408,7 +412,7 @@ def test_opening_rebuilds_the_same_shape_and_reaches_every_connection(session: S
     assert answer["applied"]["name"] == "model.json"
     assert answer["applied"]["client_op"] == 3
     reopened = fresh.document.bodies[-1]
-    assert kernel.face_count(reopened.shape) == faces
+    assert _brep_topology.face_count(reopened.shape) == faces
     assert query.volume(reopened.shape) == pytest.approx(volume, rel=1e-9)
     assert [entry.verb for entry in fresh.document.log.entries] == [
         entry.verb for entry in session.document.log.entries
@@ -1034,7 +1038,7 @@ def test_a_saved_document_opens_after_the_imported_step_is_renamed(
     step_path = _two_solid_step(tmp_path)
     session.import_step(str(step_path))
     before = [
-        (body.name, body.kind, body.visible, kernel.face_count(body.shape),
+        (body.name, body.kind, body.visible, _brep_topology.face_count(body.shape),
          round(query.volume(body.shape), 9))
         for body in session.document.bodies
     ]
@@ -1048,7 +1052,7 @@ def test_a_saved_document_opens_after_the_imported_step_is_renamed(
     fresh.open_document("imported.json")
 
     assert [
-        (body.name, body.kind, body.visible, kernel.face_count(body.shape),
+        (body.name, body.kind, body.visible, _brep_topology.face_count(body.shape),
          round(query.volume(body.shape), 9))
         for body in fresh.document.bodies
     ] == before

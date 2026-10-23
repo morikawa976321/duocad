@@ -5,7 +5,7 @@ from typing import Any, List
 
 from OCP.BRep import BRep_Builder
 from OCP.BRepTools import BRepTools_WireExplorer
-from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_EDGE, TopAbs_FACE
+from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_EDGE, TopAbs_FACE, TopAbs_SOLID
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_IndexedMapOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Compound
@@ -225,3 +225,8 @@ def compound(shapes):
 def is_null(shape) -> bool:
     """OCCT の null 判定。None の扱いと失敗時の文面は呼び出し側が決める。"""
     return shape.IsNull()
+
+
+def _overflow_solids(shape: TopoDS_Shape) -> list:
+    found = indexed_map(shape, TopAbs_SOLID)
+    return [found.FindKey(i) for i in range(1, found.Extent() + 1)]

@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from duocad import kernel, kernel_sketch, parameters, query, region
+from duocad import kernel_sketch, parameters, query, region
 from duocad.document import Document
 from duocad.region import region_ref
 from duocad.sketch import (
@@ -17,6 +17,11 @@ from duocad.sketch import (
 )
 from duocad.verbs import extrude
 from document_support import all_edges, assert_same_frame, new_box, replay_through_json
+
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
 
 BOX = 20.0
 #: 直方体の上面(z=BOX・法線+Z)の面添字。`new_box` の直後は必ずこれになる(実測)。
@@ -55,7 +60,7 @@ def test_a_later_fillet_does_not_move_a_face_sketch_even_when_the_index_now_land
 
     # 前提の確認: 添字6はもう平面ではない(＝古い実装ならここで落ちていた)
     shape = document.get_body(body_id).shape
-    assert kernel.classify_face(kernel.face_of(shape, TOP_FACE_INDEX)) != "plane"
+    assert _brep_geometry.classify_face(_brep_topology.face_of(shape, TOP_FACE_INDEX)) != "plane"
     with pytest.raises(ValueError):
         kernel_sketch.face_frame(shape, TOP_FACE_INDEX)
 
@@ -86,7 +91,7 @@ def test_a_face_sketch_survives_the_referenced_face_disappearing_completely():
     extrude(document, [region_ref(cutter, 1)], -5.0, mode="cut", body_id=body_id)
 
     assert top_plane_indices(document, body_id, BOX) == [], "上面が残っている(前提が崩れた)"
-    assert kernel.volume(document.get_body(body_id).shape) == pytest.approx(
+    assert _brep_geometry.volume(document.get_body(body_id).shape) == pytest.approx(
         BOX * BOX * (BOX - 5.0)
     )
     # 添字6は今や+X側の側面。凍結前は**例外も出さずに**スケッチがそこへ移っていた。
@@ -111,11 +116,11 @@ def test_extrude_takes_its_direction_from_the_frozen_frame():
     from duocad.verbs import fillet
 
     fillet(document, all_edges(document, body_id), 3.0, body_id=body_id)
-    volume_before = kernel.volume(document.get_body(body_id).shape)
+    volume_before = _brep_geometry.volume(document.get_body(body_id).shape)
 
     extrude(document, [region_ref(sketch_id, 1)], 5.0, mode="join", body_id=body_id)
 
-    volume_after = kernel.volume(document.get_body(body_id).shape)
+    volume_after = _brep_geometry.volume(document.get_body(body_id).shape)
     assert volume_after > volume_before, "上向きに積めていない(法線が別の面へ移った)"
 
 

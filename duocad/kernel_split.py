@@ -16,11 +16,14 @@ from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS_Shape  # noqa: F401  型注釈だけ
 from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
 
-from . import kernel, brep_geometry, brep_checks, brep_topology
-from .brep_topology import _face_map, _face_map_projection, is_null as _is_null
-from .brep_geometry import _point_and_direction
-from .brep_checks import _require_valid
-from .kernel import _target_successors
+from . import kernel
+
+from . import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_history as _brep_history,
+    brep_topology as _brep_topology,
+)
 
 
 #: 平面の両側に体積が残ったとみなす、元の体積に対する比。平面が面に接しているだけ(片側が空)の判定に使う。
@@ -40,7 +43,7 @@ SIDES = ("positive", "negative")
 
 def split_by_plane(shape: "TopoDS_Shape", point: Sequence[float], normal: Sequence[float]) -> dict:
     """`shape` を、点 `point` を通り法線 `normal` の平面で割る(`_split_by_plane`。結果は `kernel.remembered`)。"""
-    origin, axis = _point_and_direction(
+    origin, axis = _brep_geometry._point_and_direction(
         point, normal, names=("plane_point", "plane_normal"), zero_reason="切る平面の向きが決まらない"
     )
     return kernel.remembered(
@@ -60,9 +63,9 @@ def _split_by_plane(shape: "TopoDS_Shape", origin: List[float], axis: List[float
                      "provenance": {"face_map": {"<元の面の添字>": [この塊の面の添字, ...]}, "deleted": [...], "new_faces": [...]}}]}
     `pieces` の並びは決定的(正側が先、同じ側では重心の x, y, z の昇順)。`new_faces` が切り口の面。
     """
-    if shape is None or _is_null(shape):
+    if shape is None or _brep_topology.is_null(shape):
         raise ValueError("cannot split an empty shape")
-    if not brep_checks.is_solid(shape):
+    if not _brep_checks.is_solid(shape):
         raise ValueError("split_body: 対象はソリッドでなければならない")
     length = math.sqrt(sum(value * value for value in axis))
     unit = [value / length for value in axis]
@@ -75,7 +78,7 @@ def _split_by_plane(shape: "TopoDS_Shape", origin: List[float], axis: List[float
     if abs(height) >= reach - _BOX_MARGIN:
         raise _no_cut("平面が面・辺・頂点で接しているだけ")
 
-    volume_before = brep_geometry.volume(shape)
+    volume_before = _brep_geometry.volume(shape)
     # 工具の面はボディの境界箱の外接球より大きくする(平面の上で centre の真下に置いて余らせる)。
     foot = [centre[i] - height * unit[i] for i in range(3)]
     half = box["diagonal"] + abs(height) + 1.0
@@ -87,10 +90,10 @@ def _split_by_plane(shape: "TopoDS_Shape", origin: List[float], axis: List[float
     splitter.SetArguments(arguments)
     splitter.SetTools(tools)
     splitter.Build()
-    if not splitter.IsDone() or splitter.Shape() is None or _is_null(splitter.Shape()):
+    if not splitter.IsDone() or splitter.Shape() is None or _brep_topology.is_null(splitter.Shape()):
         raise ValueError("split_body: 平面で割れなかった(OCCTの Splitter が失敗した)")
 
-    pieces = [_piece(solid, splitter, shape, origin, unit) for solid in brep_topology.split_solids(splitter.Shape())]
+    pieces = [_piece(solid, splitter, shape, origin, unit) for solid in _brep_topology.split_solids(splitter.Shape())]
     for side in SIDES:
         if not any(piece["side"] == side for piece in pieces):
             raise _no_cut("平面の片側にボディが残らない(面に接しているだけ)")
@@ -121,17 +124,17 @@ def _no_cut(reason: str) -> ValueError:
 
 
 def _piece(solid: Any, splitter: Any, source: Any, origin: List[float], unit: List[float]) -> dict:
-    _require_valid(solid, "split_body")
-    volume = brep_geometry.volume(solid)
+    _brep_checks._require_valid(solid, "split_body")
+    volume = _brep_geometry.volume(solid)
     if not volume > 0.0:
         raise ValueError(f"split_body: 割った塊の体積が正でない(volume={volume})")
-    centroid = brep_geometry.centroid(solid)
+    centroid = _brep_geometry.centroid(solid)
     offset = sum((centroid[i] - origin[i]) * unit[i] for i in range(3))
-    final_map = _face_map(solid)
+    final_map = _brep_topology._face_map(solid)
     return {
         "side": "positive" if offset > 0.0 else "negative",
         "shape": solid,
         "volume": volume,
         "centroid": centroid,
-        "provenance": _face_map_projection(_target_successors(splitter, source, None, final_map), final_map.Extent()),
+        "provenance": _brep_topology._face_map_projection(_brep_history.target_successors(splitter, source, None, final_map), final_map.Extent()),
     }

@@ -11,6 +11,11 @@ from duocad.server import Session
 from document_support import corner_set as _corner_set, replay_through_json
 from session_support import SIDE, box as _box, cylinder, select as _select
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 
 def _params(session: Session, sketch_id: str, entity_id: str) -> dict:
     return sketch.entity_params(session.document, sketch_id, entity_id)
@@ -31,9 +36,9 @@ def _cylinder(session: Session):
 
 
 def _curved_face_index(shape) -> int:
-    count = kernel.face_count(shape)
+    count = _brep_topology.face_count(shape)
     for index in range(1, count + 1):
-        if kernel.classify_face(kernel.face_of(shape, index)) != "plane":
+        if _brep_geometry.classify_face(_brep_topology.face_of(shape, index)) != "plane":
             return index
     raise AssertionError("非平面の面が無い(テストの前提が崩れている)")
 

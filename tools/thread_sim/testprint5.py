@@ -16,12 +16,17 @@ import math
 import shutil
 from pathlib import Path
 
-from duocad import io_step, kernel, meshbody
+from duocad import io_step, meshbody
 from duocad.session import Session
 
 from . import profiles as pf
 from .testprint import FLAGS_THREAD, OUTCOMES_THREAD, Piece, _sizes, layout_svg, make_plate, profile_svg, write_page
 from .testprint2 import predict
+
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
 
 OUT = Path(__file__).resolve().parents[2] / "output" / "thread_sim" / "testprint5"
 TEST_ID = "TP5"
@@ -97,8 +102,8 @@ def _region_by_area(session: Session, sketch_id: str, area: float) -> int:
 
 
 def _cylinder_face(session: Session, body_id: str) -> int:
-    face_map = kernel._face_map(session.document.get_body(body_id).shape)
-    found = [i for i in range(1, face_map.Extent() + 1) if kernel.classify_face(face_map.FindKey(i)) == "cylinder_full"]
+    face_map = _brep_topology._face_map(session.document.get_body(body_id).shape)
+    found = [i for i in range(1, face_map.Extent() + 1) if _brep_geometry.classify_face(face_map.FindKey(i)) == "cylinder_full"]
     assert len(found) == 1, found
     return found[0]
 

@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from duocad import kernel, kernel_sketch, query, region
+from duocad import kernel_sketch, query, region
 from duocad.document import Document
 from duocad.sketch import (
     BASE_PLANES,
@@ -17,6 +17,11 @@ from duocad.sketch import (
     sketch_create,
 )
 from document_support import all_edges, assert_same_frame, new_box, replay_through_json
+
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
 
 BOX = 20.0
 #: 直方体の上面(z=BOX・法線+Z)の面添字。`new_box` の直後は必ずこれになる(実測)。
@@ -83,7 +88,7 @@ def test_a_later_fillet_does_not_move_an_offset_from_face_sketch():
 
     # 前提の確認: 添字6はもう平面ではない(旧実装ならここでスケッチごと落ちていた)
     shape = document.get_body(body_id).shape
-    assert kernel.classify_face(kernel.face_of(shape, TOP_FACE_INDEX)) != "plane"
+    assert _brep_geometry.classify_face(_brep_topology.face_of(shape, TOP_FACE_INDEX)) != "plane"
 
     assert_same_frame(region.plane_frame(document, sketch_id), frame_before)
     assert [item.area for item in region.regions(document, sketch_id)] == pytest.approx(

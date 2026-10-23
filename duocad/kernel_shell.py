@@ -24,19 +24,15 @@ from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 
-from .brep_checks import _NO_CHANGE_RTOL, _checked_volume, _require_valid
-from .kernel import _contains_identity, _lookup_by_identity, _positions_in, normalize_provenance
-from .brep_topology import (
-    _face_at,
-    _face_map,
-    _face_map_projection,
-    compound,
-    indexed_map,
-    subshapes,
-    is_null as _is_null,
-)
-from .brep_geometry import volume
+
 from . import kernel
+
+from . import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_history as _brep_history,
+    brep_topology as _brep_topology,
+)
 
 
 #: `MakeThickSolidByJoin` の許容差(mm)の上限。2026-10-13 の実測(docs/CAD_LIBRARY_PITFALLS.md)はこの値で取った。
@@ -73,7 +69,7 @@ def _shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: 
         {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
          "volume_after": float}
     """
-    if shape is None or _is_null(shape):
+    if shape is None or _brep_topology.is_null(shape):
         raise ValueError("cannot shell an empty shape")
     indices = [int(index) for index in face_indices]
     if not indices:
@@ -84,12 +80,12 @@ def _shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: 
     if not math.isfinite(value) or value <= 0.0:
         raise ValueError(f"thickness must be finite and > 0, got {thickness!r}")
 
-    face_map = _face_map(shape)
+    face_map = _brep_topology._face_map(shape)
     closing = TopTools_ListOfShape()
     for index in indices:
-        closing.Append(_face_at(face_map, index))
+        closing.Append(_brep_topology._face_at(face_map, index))
 
-    volume_before = volume(shape)
+    volume_before = _brep_geometry.volume(shape)
     maker = BRepOffsetAPI_MakeThickSolid()
     tolerance = min(_TOLERANCE, value * 1.0e-3)
     context = f"faces {indices}, thickness={value}"
@@ -117,18 +113,18 @@ def _shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: 
         )
 
     final = maker.Shape()
-    if final is None or _is_null(final):
+    if final is None or _brep_topology.is_null(final):
         raise ValueError(f"shell produced an empty shape ({context})")
-    solids = indexed_map(final, TopAbs_ShapeEnum.TopAbs_SOLID).Extent()
+    solids = _brep_topology.indexed_map(final, TopAbs_ShapeEnum.TopAbs_SOLID).Extent()
     if solids != 1:
         raise ValueError(f"shell produced {solids} solids instead of one ({context})")
-    volume_after = _checked_volume(final, "shell", context=context)
-    if not volume_after < volume_before * (1.0 - _NO_CHANGE_RTOL):
+    volume_after = _brep_checks._checked_volume(final, "shell", context=context)
+    if not volume_after < volume_before * (1.0 - _brep_checks._NO_CHANGE_RTOL):
         raise ValueError(
             f"shell did not hollow the body (volume {volume_before} -> {volume_after}, {context}): "
             f"厚さが大きすぎる。{_FILLET_HINT}"
         )
-    _require_valid(final, "shell", context)
+    _brep_checks._require_valid(final, "shell", context)
     provenance = _shell_provenance(maker, shape, final, indices, value)
     _require_wall_thickness(shape, indices, final, provenance["new_faces"], value, tolerance, context)
 
@@ -155,8 +151,8 @@ def _require_wall_thickness(
     円柱を足し、底を抜いて厚さ4で、円柱の壁が2になった。2026-10-14 実測)。体積も BRepCheck も通る。
     抜いた面は内壁の縁と接するので外側に数えない。指定より厚い壁は検出しない。
     """
-    shape_map = _face_map(shape)
-    final_map = _face_map(final)
+    shape_map = _brep_topology._face_map(shape)
+    final_map = _brep_topology._face_map(final)
     outer = [shape_map.FindKey(index) for index in range(1, shape_map.Extent() + 1) if index not in opened]
     opened_surfaces = [BRep_Tool.Surface_s(TopoDS.Face_s(shape_map.FindKey(index))) for index in opened]
     inner = [
@@ -166,7 +162,7 @@ def _require_wall_thickness(
     ]
     if not inner:
         raise ValueError(f"shell made no inner faces ({context})")
-    thinnest = _distance(compound(inner), compound(outer))
+    thinnest = _distance(_brep_topology.compound(inner), _brep_topology.compound(outer))
     if thinnest is None:
         thinnest = min(_face_distance(face, other, context) for face in inner for other in outer)
     # 測定の誤差は作るときの許容差より十分小さい(NURBS の円筒で 1mm を 0.9999984 と測った。sol の指摘で実測)。
@@ -226,7 +222,7 @@ def _face_distance(face: "TopoDS_Shape", other: "TopoDS_Shape", context: str) ->
 
 def _boundary_points(face: "TopoDS_Shape") -> List["TopoDS_Shape"]:
     points = []
-    for edge_shape in subshapes(face, TopAbs_ShapeEnum.TopAbs_EDGE):
+    for edge_shape in _brep_topology.subshapes(face, TopAbs_ShapeEnum.TopAbs_EDGE):
         edge = TopoDS.Edge_s(edge_shape)
         if BRep_Tool.Degenerated_s(edge):
             continue
@@ -242,23 +238,23 @@ def _shell_provenance(
     maker: Any, shape: "TopoDS_Shape", final: "TopoDS_Shape", indices: List[int], thickness: float
 ) -> dict:
     """由来を `face_map` / `deleted` / `new_faces` の射影へ落とす(`kernel._blend_provenance` と同じ形)。"""
-    normalized = normalize_provenance(maker, [shape]) or {}
+    normalized = _brep_history.normalize_provenance(maker, [shape]) or {}
     modified = {entry["input"]: entry["results"] for entry in normalized.get("modified", [])}
     deleted_inputs = normalized.get("deleted", [])
 
-    shape_map = _face_map(shape)
-    final_map = _face_map(final)
+    shape_map = _brep_topology._face_map(shape)
+    final_map = _brep_topology._face_map(final)
     successors: dict = {}
     for index in range(1, shape_map.Extent() + 1):
         old_face = shape_map.FindKey(index)
-        candidates = _lookup_by_identity(modified, old_face)
+        candidates = _brep_history.lookup_by_identity(modified, old_face)
         if candidates is None:
-            candidates = [] if _contains_identity(deleted_inputs, old_face) else [old_face]
-        successors[str(index)] = _positions_in(final_map, candidates)
+            candidates = [] if _brep_history.contains_identity(deleted_inputs, old_face) else [old_face]
+        successors[str(index)] = _brep_history.positions_in(final_map, candidates)
 
     return {
         "verb": "shell_body",
         "faces": list(indices),
         "thickness": thickness,
-        **_face_map_projection(successors, final_map.Extent()),
+        **_brep_topology._face_map_projection(successors, final_map.Extent()),
     }

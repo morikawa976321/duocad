@@ -22,10 +22,12 @@ from OCP.TopoDS import TopoDS_Shape
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
 
-from . import brep_geometry
-from .brep_topology import compound, subshapes, is_null as _is_null
-from .brep_checks import _count_face_interferences, inspect_solid, require_valid_solid, is_valid as _is_valid
-from .brep_geometry import _mass_and_center
+
+from . import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
 
 
 def encode_brep(shape):
@@ -37,7 +39,7 @@ def encode_brep(shape):
 def decode_brep(text):
     shape = TopoDS_Shape()
     BRepTools.Read_s(shape, io.BytesIO(text.encode('ascii')), BRep_Builder())
-    if _is_null(shape) or not _is_valid(shape):
+    if _brep_topology.is_null(shape) or not _brep_checks.is_valid(shape):
         raise ValueError('保存されたCADソリッドが不正')
     return shape
 
@@ -60,9 +62,9 @@ def _common_with_box(shape: "TopoDS_Shape", lo: Sequence[float], hi: Sequence[fl
     if operation.HasErrors() or operation.HasWarnings():
         raise RuntimeError("common-volume boolean did not finish cleanly")
     result = operation.Shape()
-    if result is None or _is_null(result) or not _is_valid(result):
+    if result is None or _brep_topology.is_null(result) or not _brep_checks.is_valid(result):
         raise RuntimeError("common-volume boolean produced an invalid shape")
-    piece = brep_geometry.volume(result)
+    piece = _brep_geometry.volume(result)
     if not math.isfinite(piece) or piece < 0:
         raise RuntimeError("common volume is not finite/non-negative")
     return result, piece
@@ -161,9 +163,9 @@ def grid_cell_common_volumes(
     reach = max(abs(extent[a + side] - (lo[a] + hi[a]) / 2.0) for a in range(3) for side in (0, 3))
     reach += math.dist(lo, hi)
     inside, inside_volume = [], 0.0
-    for solid in subshapes(_split_by_planes(shape, _axis_planes(lo, hi, [(lo[a], hi[a]) for a in range(3)], reach)),
+    for solid in _brep_topology.subshapes(_split_by_planes(shape, _axis_planes(lo, hi, [(lo[a], hi[a]) for a in range(3)], reach)),
                            TopAbs_SOLID):
-        mass, center = _mass_and_center(solid)
+        mass, center = _brep_geometry._mass_and_center(solid)
         if all(lo[a] < center[a] < hi[a] for a in range(3)):
             inside.append(solid)
             inside_volume += mass
@@ -178,11 +180,11 @@ def grid_cell_common_volumes(
         return "empty", {}
     if inside_volume >= _FULL_BLOCK_RATIO * block:
         return "full", {}
-    cells = _split_by_planes(compound(inside), _axis_planes(
+    cells = _split_by_planes(_brep_topology.compound(inside), _axis_planes(
         lo, hi, [[lo[a] + m * spacing for m in range(1, counts[a])] for a in range(3)], math.dist(lo, hi)))
     volumes: Dict[Tuple[int, int, int], float] = {}
-    for solid in subshapes(cells, TopAbs_SOLID):
-        mass, center = _mass_and_center(solid)
+    for solid in _brep_topology.subshapes(cells, TopAbs_SOLID):
+        mass, center = _brep_geometry._mass_and_center(solid)
         if mass > _FULL_CELL_LIMIT * spacing ** 3:
             raise RuntimeError("cell piece is larger than a cell: a cutting plane did not split it")
         cell = tuple(min(counts[a] - 1, max(0, math.floor((center[a] - lo[a]) / spacing))) for a in range(3))
@@ -200,7 +202,7 @@ def boxes_common_volume(
 
     `boxes` は**互いに体積を共有しない**ことを呼び出し側が保証する(重なると二重に数える)。
     """
-    require_valid_solid(shape)
+    _brep_checks.require_valid_solid(shape)
     overlap = 0.0
     for lo, hi in boxes:
         overlap += box_common_volume(shape, lo, hi)

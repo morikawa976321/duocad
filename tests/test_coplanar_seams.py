@@ -16,6 +16,10 @@ from duocad.sketch import add_line, add_rectangle, sketch_create
 from duocad.verbs import extrude, extrude_faces
 from duocad.verbs.boolean_body import boolean_body
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 SIDE = 10.0
 HEIGHT = 5.0
 MERGED_VOLUME = 2 * SIDE * SIDE * HEIGHT
@@ -33,7 +37,7 @@ def _seamed_box():
 
 
 def _counts(shape) -> tuple:
-    return kernel.face_count(shape), kernel.edge_count(shape)
+    return _brep_topology.face_count(shape), _brep_topology.edge_count(shape)
 
 
 def _two_squares_sketch(document: Document) -> str:
@@ -103,7 +107,7 @@ def test_a_single_prism_as_new_is_not_merged():
 
     operation = extrude(document, [region_ref(sketch_id, found[0].index)], HEIGHT, mode="new")
 
-    assert kernel.face_count(document.active_body().shape) == 7
+    assert _brep_topology.face_count(document.active_body().shape) == 7
     assert operation.provenance["unified"] is False
 
 
@@ -136,7 +140,7 @@ def test_cut_and_intersect_leave_the_seams_as_they_are(mode, tool, faces):
     """統合は union だけ。落ちたら cut / intersect でも統合していて、継ぎ目の面の番号が変わる。"""
     result = kernel.boolean_bodies(_seamed_box(), [tool], mode)
     assert result["unified"] is False
-    assert kernel.face_count(result["shape"]) == faces
+    assert _brep_topology.face_count(result["shape"]) == faces
 
 
 def test_the_long_edge_across_the_former_seam_can_be_filleted():

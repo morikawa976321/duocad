@@ -3,7 +3,7 @@
 面の押し出し(`extrude_faces`)、スケッチの領域の押し出し(`extrude_regions`)・回転体(`revolve_regions`)・
 ロフト(`loft_regions`)を持つ。
 位相・幾何量・形状検査は `brep_topology` / `brep_geometry` / `brep_checks` を参照する。
-ビルダの履歴と面の同一性を使う由来処理は `kernel` を参照する。
+ビルダの履歴と面の同一性を使う由来処理は `brep_history` を参照する。
 
 戻り値の規律は kernel と同じ(JSON化できる素の値だけ)。例外は `"shape"`(TopoDS_Shape。
 document.Body.shape になる値)。
@@ -54,25 +54,13 @@ from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だ�
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.gp import gp_Ax1, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 
-from .brep_checks import _checked_volume, _require_valid, is_valid as _is_valid
-from .brep_topology import (
-    _face_at,
-    _face_map,
-    _face_map_projection,
-    _extrude_count as _count,
-    _extrude_edges as _edges,
-    is_null as _is_null,
+from . import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_history as _brep_history,
+    brep_operations as _brep_operations,
+    brep_topology as _brep_topology,
 )
-from .brep_geometry import (
-    _face_normal,
-    _face_props,
-    classify_face,
-    volume,
-    _extrude_shape_area as _shape_area,
-    _extrude_edge_length as _edge_length,
-    _extrude_area_centroid as _area_centroid,
-)
-from .kernel import _fuse_all, _target_successors, _unify_same_domain
 
 
 #: 面の同一性を「重心の一致」で判定するときの相対許容差(after_face_index の探索)。
@@ -92,7 +80,7 @@ MAX_DISTANCE = 1e6
 def check_distance(distance: Any) -> float:
     """押し出し量を数にして検査する。0・非有限・下限未満・上限超過は ValueError。
 
-    NaN / ±inf は `BRepPrimAPI_MakePrism` が NaN 座標の形を返し、直後の体積計算 `kernel.volume` が native のスタック
+    NaN / ±inf は `BRepPrimAPI_MakePrism` が NaN 座標の形を返し、直後の体積計算 `brep_geometry.volume` が native のスタック
     オーバーフローで **プロセスごと落ちる**(Python の except では捕まらない)。入口の型検査 `catalog.check_arguments`
     が先に断るが、WebSocket の `preview` はそれを通らないので、ここでも断る。
     """
@@ -157,11 +145,11 @@ def extrude_regions(
         if not prism.IsDone():
             raise ValueError("failed to build a prism from a region face")
         prism_shape = prism.Shape()
-        if prism_shape is None or _is_null(prism_shape):
+        if prism_shape is None or _brep_topology.is_null(prism_shape):
             raise ValueError("prism from a region face is empty")
         # 押し出し方向が面の平面内に寝ると体積0の退化ソリッドができ、`IsDone()` も
         # `IsNull()` も `BRepCheck_Analyzer` も通る。体積を見るのが唯一の関門。
-        if volume(prism_shape) <= 0:
+        if _brep_geometry.volume(prism_shape) <= 0:
             raise ValueError(
                 "prism from a region face has no volume "
                 "(押し出し方向が領域の平面に寝ている)"
@@ -255,7 +243,7 @@ def _drafted_solid(
     """
     wire = _regular_wire(wire)
     _require_curvature_room(wire, reach, inward, label)
-    if all(BRepAdaptor_Curve(edge).GetType() in (GeomAbs_Line, GeomAbs_Circle) for edge in _edges(wire)):
+    if all(BRepAdaptor_Curve(edge).GetType() in (GeomAbs_Line, GeomAbs_Circle) for edge in _brep_topology._extrude_edges(wire)):
         return _analytic_drafted_solid(wire, axis, height, angle, inward, label)
     wire = _split_closed_edge(wire)
     draft = BRepOffsetAPI_MakeDraft(wire, axis, angle)
@@ -266,7 +254,7 @@ def _drafted_solid(
     if not draft.IsDone():
         raise ValueError(_collapse_message(label))
     shell = draft.Shell()
-    if not _is_valid(shell):
+    if not _brep_checks.is_valid(shell):
         raise ValueError(_collapse_message(label))
 
     base = BRepBuilderAPI_MakeFace(wire, True)
@@ -315,7 +303,7 @@ def _analytic_drafted_solid(
     if not draft.IsDone():
         raise ValueError(_collapse_message(label))
     solid = draft.Shape()
-    if _count(solid, TopAbs_SOLID) != 1 or not volume(solid) > 0 or not _is_valid(solid):
+    if _brep_topology._extrude_count(solid, TopAbs_SOLID) != 1 or not _brep_geometry.volume(solid) > 0 or not _brep_checks.is_valid(solid):
         raise ValueError(_collapse_message(label))
     return TopoDS.Solid_s(TopExp_Explorer(solid, TopAbs_SOLID).Current())
 
@@ -331,7 +319,7 @@ def _split_closed_edge(wire: Any) -> Any:
     角度・距離によらず失敗した。継ぎ目を短軸の端へ移すか、4本に分ければ通り、体積は Steiner の式と相対 1e-7 で合う。
     2026-10-19 実測、sol レビュー)。
     """
-    edges = _edges(wire)
+    edges = _brep_topology._extrude_edges(wire)
     if len(edges) != 1:
         return wire
     curve = BRepAdaptor_Curve(edges[0])
@@ -353,7 +341,7 @@ def _sewn_solid(parts: Sequence[Any], tolerance: float) -> Optional[Any]:
     fix = ShapeFix_Solid(solid)
     fix.Perform()
     solid = fix.Solid()
-    if not volume(solid) > 0 or not _is_valid(solid):
+    if not _brep_geometry.volume(solid) > 0 or not _brep_checks.is_valid(solid):
         return None
     return solid
 
@@ -369,7 +357,7 @@ def _regular_wire(wire: Any) -> Any:
     端の1階微分が0の辺(SVG の `C 0 0 0 0 20 0` など。書き出しでよく出る)は `MakeDraft` が
     `gp_Vec::Normalize` の Standard_ConstructionError で失敗する(sol レビューで再現)。
     """
-    edges = _edges(wire)
+    edges = _brep_topology._extrude_edges(wire)
     rebuilt = [_regular_edge(edge) for edge in edges]
     if all(new is old for new, old in zip(rebuilt, edges)):
         return wire
@@ -549,10 +537,10 @@ def _curvature(curve: Any, t: float) -> float:
 
 def _require_uncollapsed(body: Any, face: Any, offset: "gp_Vec", holes: int, label: str) -> None:
     """壁どうしがぶつかった形を断る: 立体が1つ、ふたが面1枚で穴の数が底と同じ、自己交差が無いこと。"""
-    if _count(body, TopAbs_SOLID) != 1:
+    if _brep_topology._extrude_count(body, TopAbs_SOLID) != 1:
         raise ValueError(_collapse_message(label))
     lids = _lids(body, face, offset)
-    if len(lids) != 1 or _count(lids[0], TopAbs_WIRE) != holes + 1:
+    if len(lids) != 1 or _brep_topology._extrude_count(lids[0], TopAbs_WIRE) != holes + 1:
         raise ValueError(_collapse_message(label))
     if not BRepAlgoAPI_Check(body, True, True).IsValid():
         raise ValueError(_collapse_message(label))
@@ -567,7 +555,7 @@ def _lids(body: Any, face: Any, offset: "gp_Vec") -> List[Any]:
     while explorer.More():
         candidate = TopoDS.Face_s(explorer.Current())
         if BRepAdaptor_Surface(candidate).GetType() == GeomAbs_Plane:
-            centre = _face_props(candidate)[1]
+            centre = _brep_geometry._face_props(candidate)[1]
             if abs(plane.Distance(gp_Pnt(*centre)) - height) <= _MATCH_TOL * max(1.0, height):
                 out.append(candidate)
         explorer.Next()
@@ -629,7 +617,7 @@ def revolve_regions(
         if not maker.IsDone():
             raise ValueError(f"failed to revolve region #{position}")
         solid = maker.Shape()
-        if solid is None or _is_null(solid) or volume(solid) <= 0:
+        if solid is None or _brep_topology.is_null(solid) or _brep_geometry.volume(solid) <= 0:
             raise ValueError(f"revolving region #{position} produced no volume")
         solids.append(solid)
 
@@ -649,7 +637,7 @@ def _require_one_side_of_axis(
     軸の両側に半平面を置き、面との共通部分の面積で決める。境界を折れ線で拾う方法は、軸をまたいで
     わずかに膨らむ円弧を取りこぼす。横切った面の回転体は自己交差し、`IsDone()` も体積検査も通りうる。
     """
-    total, _ = _face_props(face)
+    total, _ = _brep_geometry._face_props(face)
     box = Bnd_Box()
     BRepBndLib.Add_s(face, box)
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
@@ -674,7 +662,7 @@ def _require_one_side_of_axis(
         common.Build()
         if not common.IsDone():
             raise ValueError(f"failed to test region #{position} against the revolve axis")
-        sides.append(_shape_area(common.Shape()))
+        sides.append(_brep_geometry._extrude_shape_area(common.Shape()))
     if min(sides) > _AXIS_SIDE_TOL * total:
         raise ValueError(
             f"revolve axis crosses region #{position}: 軸の両側にまたがる領域は回せない"
@@ -686,9 +674,9 @@ def _check_region_mode(mode: str, target_shape: Any) -> None:
     """領域の押し出し・回転体に共通する mode と相手の組の検査。"""
     if mode not in ("join", "cut", "new"):
         raise ValueError(f"unknown mode: {mode!r} (one of ['join', 'cut', 'new'])")
-    if mode == "cut" and (target_shape is None or _is_null(target_shape)):
+    if mode == "cut" and (target_shape is None or _brep_topology.is_null(target_shape)):
         raise ValueError("cut requires a target shape")
-    if mode == "new" and target_shape is not None and not _is_null(target_shape):
+    if mode == "new" and target_shape is not None and not _brep_topology.is_null(target_shape):
         # 相手を黙って無視すると「足したつもりが別ボディ」が成功として通る。
         raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
 
@@ -701,47 +689,47 @@ def _combine_region_solids(
     同一平面の面の統合(`_unify_same_domain`)は、join / new で立体を束ねたとき(複数か、相手への join)にだけ掛ける。
     戻り値は `extrude_regions` の docstring の形。`head` は provenance の先頭に置く(`verb` ほか)。
     """
-    combined = _fuse_all(solids, "region solids")
+    combined = _brep_operations.fuse_all(solids, "region solids")
 
     volume_before: Optional[float] = None
     builder = None
     if mode in ("join", "new"):
-        if target_shape is None or _is_null(target_shape):
+        if target_shape is None or _brep_topology.is_null(target_shape):
             result = combined
         else:
-            volume_before = volume(target_shape)
+            volume_before = _brep_geometry.volume(target_shape)
             builder = BRepAlgoAPI_Fuse(target_shape, combined)
             builder.Build()
             if not builder.IsDone():
                 raise ValueError("join (fuse) failed")
             result = builder.Shape()
     else:
-        volume_before = volume(target_shape)
+        volume_before = _brep_geometry.volume(target_shape)
         builder = BRepAlgoAPI_Cut(target_shape, combined)
         builder.Build()
         if not builder.IsDone():
             raise ValueError("cut failed")
         result = builder.Shape()
 
-    volume_after = _checked_volume(result, mode, volume_before=volume_before)
+    volume_after = _brep_checks._checked_volume(result, mode, volume_before=volume_before)
     final, history, unified = result, None, False
     # 柱1本の new は束ねていないので統合しない。統合すると輪郭の分割で割れた側面までまとまり、
     # 後の操作が記録した面・辺の番号がずれる(実測: SVG を取り込んだ輪郭の柱1本で 38面 -> 26面)。
     if mode in ("join", "new") and (len(solids) > 1 or builder is not None):
-        final, history, unified = _unify_same_domain(result, volume_after)
-    _require_valid(final, mode)
-    final_map = _face_map(final)
-    successors = {} if builder is None else _target_successors(builder, target_shape, history, final_map)
+        final, history, unified = _brep_operations.unify_same_domain(result, volume_after)
+    _brep_checks._require_valid(final, mode)
+    final_map = _brep_topology._face_map(final)
+    successors = {} if builder is None else _brep_history.target_successors(builder, target_shape, history, final_map)
 
     return {
         "shape": final,
         "unified": unified,
         "volume_before": volume_before,
-        "volume_after": volume(final),
+        "volume_after": _brep_geometry.volume(final),
         "provenance": {
             **head,
             "unified": unified,
-            **_face_map_projection(successors, final_map.Extent()),
+            **_brep_topology._face_map_projection(successors, final_map.Extent()),
         },
     }
 
@@ -776,7 +764,7 @@ def extrude_faces(
                         "new_faces": [...], "after_face_indices": [...]}}
     `face_map` の旧添字は `target_shape` の面(`new` では空)。`faces` は `source_shape` の添字。
     """
-    if source_shape is None or _is_null(source_shape):
+    if source_shape is None or _brep_topology.is_null(source_shape):
         raise ValueError("cannot extrude faces of an empty shape")
     indices = [int(index) for index in face_indices]
     if not indices:
@@ -787,14 +775,14 @@ def extrude_faces(
     taper = check_taper(taper)
     if mode not in ("join", "cut", "new"):
         raise ValueError(f"unknown extrude mode: {mode!r}")
-    has_target = target_shape is not None and not _is_null(target_shape)
+    has_target = target_shape is not None and not _brep_topology.is_null(target_shape)
     if mode == "new" and has_target:
         raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
     if mode != "new" and not has_target:
         raise ValueError(f"{mode} requires a target shape")
 
-    source_map = _face_map(source_shape)
-    faces = [_face_at(source_map, index) for index in indices]
+    source_map = _brep_topology._face_map(source_shape)
+    faces = [_brep_topology._face_at(source_map, index) for index in indices]
     normal, centroids = _check_coplanar_planes(faces, indices)
 
     prisms: List[TopoDS_Shape] = []
@@ -805,17 +793,17 @@ def extrude_faces(
         if taper:
             prism_shape = _tapered_prism(face, offset, taper, f"face {index}")
             prisms.append(prism_shape)
-            lid_centroids.append(_face_props(_lids(prism_shape, face, offset)[0])[1])
+            lid_centroids.append(_brep_geometry._face_props(_lids(prism_shape, face, offset)[0])[1])
             continue
         lid_centroids.append(tuple(centroid[axis] + normal[axis] * distance for axis in range(3)))
         prism = BRepPrimAPI_MakePrism(face, offset)
         if not prism.IsDone():
             raise ValueError(f"failed to build the prism for face {index} (distance={distance})")
         prism_shape = prism.Shape()
-        if prism_shape is None or _is_null(prism_shape):
+        if prism_shape is None or _brep_topology.is_null(prism_shape):
             raise ValueError(f"prism for face {index} is empty (distance={distance})")
         prisms.append(prism_shape)
-    combined = _fuse_all(prisms, "face prisms")
+    combined = _brep_operations.fuse_all(prisms, "face prisms")
 
     context = f"faces {indices}, distance={distance}"
     volume_before: Optional[float] = None
@@ -823,7 +811,7 @@ def extrude_faces(
     if mode == "new":
         result = combined
     else:
-        volume_before = volume(target_shape)
+        volume_before = _brep_geometry.volume(target_shape)
         builder = (
             BRepAlgoAPI_Fuse(target_shape, combined)
             if mode == "join"
@@ -835,7 +823,7 @@ def extrude_faces(
         result = builder.Shape()
 
     try:
-        volume_result = _checked_volume(result, mode, volume_before=volume_before, context=context)
+        volume_result = _brep_checks._checked_volume(result, mode, volume_before=volume_before, context=context)
     except ValueError as error:
         if mode == "cut" and distance > 0 and "did not change" in str(error):
             raise ValueError(
@@ -848,11 +836,11 @@ def extrude_faces(
         final, history, unified = result, None, False
     else:
         # 順序は 無変化 → 統合 → BRepCheck(統合は形状を壊しうるので、検査は統合後に行う)。
-        final, history, unified = _unify_same_domain(result, volume_result)
-    _require_valid(final, mode, context)
-    final_map = _face_map(final)
+        final, history, unified = _brep_operations.unify_same_domain(result, volume_result)
+    _brep_checks._require_valid(final, mode, context)
+    final_map = _brep_topology._face_map(final)
 
-    successors = {} if builder is None else _target_successors(builder, target_shape, history, final_map)
+    successors = {} if builder is None else _brep_history.target_successors(builder, target_shape, history, final_map)
 
     after_face_indices = [
         _find_translated_face(final_map, target=target, normal=normal, scale=abs(distance))
@@ -865,7 +853,7 @@ def extrude_faces(
         "distance": distance,
         **({"taper": taper} if taper else {}),
         "unified": unified,
-        **_face_map_projection(successors, final_map.Extent()),
+        **_brep_topology._face_map_projection(successors, final_map.Extent()),
         "after_face_indices": after_face_indices,
     }
     return {
@@ -874,7 +862,7 @@ def extrude_faces(
         "normal": list(normal),
         "distance": distance,
         "volume_before": volume_before,
-        "volume_after": volume(final),
+        "volume_after": _brep_geometry.volume(final),
         "after_face_indices": after_face_indices,
         "provenance": provenance,
     }
@@ -885,14 +873,14 @@ def _check_coplanar_planes(faces: Sequence[Any], indices: Sequence[int]) -> tupl
     normals: List[tuple] = []
     centroids: List[tuple] = []
     for position, (index, face) in enumerate(zip(indices, faces), start=1):
-        kind = classify_face(face)
+        kind = _brep_geometry.classify_face(face)
         if kind != "plane":
             raise ValueError(
                 f"selected face #{position} (index {index}) is {kind}: 押し出せるのは平面の面だけ"
                 "(曲面は掃引すると壊れた形状になることを実測済み。docs/CAD_LIBRARY_PITFALLS.md)"
             )
-        normals.append(_face_normal(face))
-        centroids.append(_face_props(face)[1])
+        normals.append(_brep_geometry._face_normal(face))
+        centroids.append(_brep_geometry._face_props(face)[1])
 
     first_normal, first_centroid = normals[0], centroids[0]
     for position in range(2, len(faces) + 1):
@@ -934,11 +922,11 @@ def _find_translated_face(
     best: Optional[tuple] = None
     for index in range(1, shape_map.Extent() + 1):
         face = TopoDS.Face_s(shape_map.FindKey(index))
-        candidate_normal = _face_normal(face)
+        candidate_normal = _brep_geometry._face_normal(face)
         alignment = sum(candidate_normal[axis] * normal[axis] for axis in range(3))
         if alignment < 1.0 - _MATCH_TOL:
             continue
-        _, centroid = _face_props(face)
+        _, centroid = _brep_geometry._face_props(face)
         distance = math.dist(centroid, target)
         if distance <= tolerance and (best is None or distance < best[0]):
             best = (distance, index)
@@ -1007,7 +995,7 @@ def loft_regions(
                 "(外周をロフトしてから、内側の領域を cut でロフトする)"
             )
         wires.append(BRepTools.OuterWire_s(face))
-        centroids.append(_area_centroid(face))
+        centroids.append(_brep_geometry._extrude_area_centroid(face))
     _require_separate_planes(centroids, normals, start, end)
 
     oriented = _oriented_normals(centroids, normals, start, end)
@@ -1057,15 +1045,15 @@ def _require_sound_loft(solid: Any, faces: Sequence[Any]) -> None:
     実測: 始点がずれて潰れた・裏返ったロフトは `BRepCheck_Analyzer` を通す。`BRepAlgoAPI_Check` は第3引数
     `bTestSI`(自己干渉)を True にしたときだけ捕まえる(25〜80 ms)。体積は断面の最大面積^1.5 を目安に比べる。
     """
-    if solid is None or _is_null(solid):
+    if solid is None or _brep_topology.is_null(solid):
         raise ValueError("loft produced an empty shape")
-    scale = max(_shape_area(face) for face in faces) ** 1.5
-    if not volume(solid) > 1.0e-6 * scale:
+    scale = max(_brep_geometry._extrude_shape_area(face) for face in faces) ** 1.5
+    if not _brep_geometry.volume(solid) > 1.0e-6 * scale:
         raise ValueError(
             "loft collapsed (体積が0か負): 断面どうしの対応がねじれて潰れている。"
             "shifts で断面の始点をずらすか、断面の間に断面を足すこと"
         )
-    if not _is_valid(solid):
+    if not _brep_checks.is_valid(solid):
         raise ValueError("loft produced an invalid shape (BRepCheck)")
     if not BRepAlgoAPI_Check(solid, True, True).IsValid():
         raise ValueError(
@@ -1131,7 +1119,7 @@ def _aligned_wires(
     辺の数が全断面で同じなら始点は頂点から選ぶ(角どうしがつながる)。違うなら運んだ向きのちょうどの点で
     辺を割って始点にする(三角形 → 正方形で、角を最寄りの角へ寄せると 45° ねじれる)。
     """
-    same_count = len({len(_edges(wire)) for wire in wires}) == 1
+    same_count = len({len(_brep_topology._extrude_edges(wire)) for wire in wires}) == 1
     out: List[Any] = []
     reference: Optional[Vec] = None
     for i, wire in enumerate(wires):
@@ -1149,7 +1137,7 @@ def _aligned_wires(
 
 def _start_toward(wire: Any, centre: Vec, normal: Vec, reference: Vec, shift: int, vertex_only: bool) -> Any:
     """`reference` の向き(`centre` から見た極角)に最も近い点を始点にし、そこから `shift` 頂点進めた線。"""
-    edges = _edges(wire)
+    edges = _brep_topology._extrude_edges(wire)
     if len(edges) == 1:
         turned = reference
         for _ in range(shift % 4):
@@ -1179,7 +1167,7 @@ def _shift_from_split(split_count: int, shift: int) -> int:
 
 def _split_at_direction(wire: Any, centre: Vec, normal: Vec, reference: Vec) -> Optional[List[Any]]:
     """`reference` の向きの点で辺を割り、その点から始まる辺の並びを返す。その向きに線が無ければ None。"""
-    edges = _edges(wire)
+    edges = _brep_topology._extrude_edges(wire)
     for index, edge in enumerate(edges):
         params = _traversal_parameters(edge)
         angles = [_angle(_sub(_point_on(edge, t), centre), normal, reference) for t in params]
@@ -1208,7 +1196,7 @@ def _matched_candidates(
     だめなら OCCT の揃え(`CheckCompatibility`)。実測: U字 → 正方形は長さの割合だと側面が自己交差し OCCT の揃えなら
     通る。U字 → 円は逆で、OCCT の揃えは `IsDone()=False`。OCCT の揃えでは `shifts` が効かないことがある。
     """
-    counts = {len(_edges(wire)) for wire in wires}
+    counts = {len(_brep_topology._extrude_edges(wire)) for wire in wires}
     if len(counts) == 1:
         return [(list(wires), True)]
     profiles = [_polar_profile(w, c, n) for w, c, n in zip(wires, centroids, normals)]
@@ -1222,7 +1210,7 @@ def _matched_candidates(
     else:
         fractions = _merged([f for wire in wires for f in _vertex_fractions(wire)], tol=1.0e-9)
         candidates = [([_split_at_fractions(wire, fractions) for wire in wires], True), (list(wires), False)]
-    usable = [(ws, own) for ws, own in candidates if not own or len({len(_edges(w)) for w in ws}) == 1]
+    usable = [(ws, own) for ws, own in candidates if not own or len({len(_brep_topology._extrude_edges(w)) for w in ws}) == 1]
     if not usable:
         raise ValueError("failed to match the number of edges between loft sections")
     return usable
@@ -1233,7 +1221,7 @@ def _polar_profile(wire: Any, centre: Vec, normal: Vec) -> Optional[List[List[Tu
     reference = _sub(_start(wire), centre)
     out: List[List[Tuple[float, float]]] = []
     previous: Optional[float] = None
-    for edge in _edges(wire):
+    for edge in _brep_topology._extrude_edges(wire):
         row = []
         for t in _traversal_parameters(edge):
             raw = _angle(_sub(_point_on(edge, t), centre), normal, reference) % 360.0
@@ -1259,7 +1247,7 @@ def _split_at_angles(
     reference = _sub(_start(wire), centre)
     vertices = [row[0][1] for row in profile] + [360.0]
     out: List[Any] = []
-    for edge, row in zip(_edges(wire), profile):
+    for edge, row in zip(_brep_topology._extrude_edges(wire), profile):
         low, high = row[0][1], row[-1][1]
         cuts = [
             a for a in angles
@@ -1296,7 +1284,7 @@ def _bisect_angle(
 
 
 def _vertex_fractions(wire: Any) -> List[float]:
-    lengths = [_edge_length(edge) for edge in _edges(wire)]
+    lengths = [_brep_geometry._extrude_edge_length(edge) for edge in _brep_topology._extrude_edges(wire)]
     total = sum(lengths)
     out, acc = [], 0.0
     for length in lengths[:-1]:
@@ -1307,8 +1295,8 @@ def _vertex_fractions(wire: Any) -> List[float]:
 
 def _split_at_fractions(wire: Any, fractions: Sequence[float]) -> Any:
     """線を、始点からの長さの割合 `fractions` の位置で割る(既にある頂点の位置は割らない)。"""
-    edges = _edges(wire)
-    lengths = [_edge_length(edge) for edge in edges]
+    edges = _brep_topology._extrude_edges(wire)
+    lengths = [_brep_geometry._extrude_edge_length(edge) for edge in edges]
     total = sum(lengths)
     out: List[Any] = []
     acc = 0.0
@@ -1352,7 +1340,7 @@ def _make_wire(edges: Sequence[Any]) -> Any:
 
 
 def _reversed(wire: Any) -> Any:
-    return _make_wire([TopoDS.Edge_s(edge.Reversed()) for edge in reversed(_edges(wire))])
+    return _make_wire([TopoDS.Edge_s(edge.Reversed()) for edge in reversed(_brep_topology._extrude_edges(wire))])
 
 
 def _traversal_parameters(edge: Any, count: int = _SAMPLES_PER_EDGE) -> List[float]:
@@ -1368,13 +1356,13 @@ def _point_on(edge: Any, t: float) -> Vec:
 
 
 def _start(wire: Any) -> Vec:
-    edge = _edges(wire)[0]
+    edge = _brep_topology._extrude_edges(wire)[0]
     return _point_on(edge, _traversal_parameters(edge, 1)[0])
 
 
 def _wire_points(wire: Any) -> List[Vec]:
     points: List[Vec] = []
-    for edge in _edges(wire):
+    for edge in _brep_topology._extrude_edges(wire):
         points += [_point_on(edge, t) for t in _traversal_parameters(edge, 24)[:-1]]
     return points
 

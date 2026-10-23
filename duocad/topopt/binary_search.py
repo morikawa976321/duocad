@@ -26,6 +26,10 @@ from . import acceptance, anchor, min_width, neck, voxelize
 from .acceptance import NEIGHBOURHOOD_STRUCTURE
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 
 # ---------------------------------------------------------------------------
 # 評価条件(§4.1「評価条件の識別子」)
@@ -103,7 +107,7 @@ def _body_signature(shape: Any, *, cache: Any) -> dict:
     bounds = kernel.bounding_box(raw, cache=cache)
     return dict(min=[round(float(v), 9) for v in bounds['min']],
                 max=[round(float(v), 9) for v in bounds['max']],
-                volume=round(float(kernel.volume(raw)), 9))
+                volume=round(float(_brep_geometry.volume(raw)), 9))
 
 
 def _boundary_signature(conditions: SearchConditions) -> dict:

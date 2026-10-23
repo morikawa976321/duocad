@@ -7,6 +7,10 @@ from duocad import kernel
 from duocad.server import Session
 from session_support import SIDE, box as _box, browser as _browser
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 
 def test_vertex_positions_use_the_same_index_as_the_selection(session: Session) -> None:
     """`vertex_positions` の添字は `count_subshapes(shape, "vertex")` の体系と同じ。
@@ -17,7 +21,7 @@ def test_vertex_positions_use_the_same_index_as_the_selection(session: Session) 
     body, _ = _box(session)
     described = kernel.vertex_positions(body.shape)
 
-    assert len(described) == kernel.count_subshapes(body.shape, "vertex") == 8
+    assert len(described) == _brep_topology.count_subshapes(body.shape, "vertex") == 8
     assert [item["index"] for item in described] == list(range(1, 9))
     for item in described:
         assert len(item["point"]) == 3

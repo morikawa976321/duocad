@@ -1,7 +1,7 @@
 """辺の連なり: フィレット・面取りで1本として振る舞う辺の組(画面の辺の選択単位)と、フィレットの事前検査。
 
 画面は辺の折れ線(`kernel.tessellate_edges`)とは別に、指した辺の分だけ取り寄せる(`BlendChains`。`view.DocumentView.edge_chains`)。
-添字は `kernel._edge_map` と同じ数え方(`indexed_map` の1始まり)。
+添字は `brep_topology._edge_map` と同じ数え方(`indexed_map` の1始まり)。
 """
 from __future__ import annotations
 
@@ -21,7 +21,9 @@ from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Vertex
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 
-from .brep_topology import indexed_map
+from . import (
+    brep_topology as _brep_topology,
+)
 
 
 class BlendChains:
@@ -39,7 +41,7 @@ class BlendChains:
 
     def __init__(self, shape: TopoDS_Shape) -> None:
         self._shape = shape
-        self._edge_map = indexed_map(shape, TopAbs_EDGE)
+        self._edge_map = _brep_topology.indexed_map(shape, TopAbs_EDGE)
         self._maker: Optional[BRepFilletAPI_MakeFillet] = None
         self._candidates: Optional[set] = None
         self._groups: Dict[int, Tuple[int, ...]] = {}
@@ -100,7 +102,7 @@ def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
     """
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
-    vertex_map = indexed_map(shape, TopAbs_VERTEX)
+    vertex_map = _brep_topology.indexed_map(shape, TopAbs_VERTEX)
 
     # OCP の `TopTools_ListOfShape` を for で回すと1リスト約 0.3ms かかる(4,812辺の板で 2.5 秒)。
     # 面は `Extent` / `First` / `Last` で読み、頂点に集まる辺は辺の両端から組む。
@@ -203,8 +205,8 @@ def fillet_consumes_face(shape: TopoDS_Shape, edge_map, radii: Dict[int, float])
     """
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
-    vertex_map = indexed_map(shape, TopAbs_VERTEX)
-    face_map = indexed_map(shape, TopAbs_FACE)
+    vertex_map = _brep_topology.indexed_map(shape, TopAbs_VERTEX)
+    face_map = _brep_topology.indexed_map(shape, TopAbs_FACE)
     boundaries: Dict[int, List[tuple]] = {}
 
     def vertices_of(edge: TopoDS_Shape) -> set:
@@ -217,7 +219,7 @@ def fillet_consumes_face(shape: TopoDS_Shape, edge_map, radii: Dict[int, float])
         key = face_map.FindIndex(face)
         if key not in boundaries:
             entries = []
-            face_edges = indexed_map(face, TopAbs_EDGE)
+            face_edges = _brep_topology.indexed_map(face, TopAbs_EDGE)
             for number in range(1, face_edges.Extent() + 1):
                 edge = face_edges.FindKey(number)
                 if BRep_Tool.Degenerated_s(TopoDS.Edge_s(edge)):

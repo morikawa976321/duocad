@@ -38,23 +38,14 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 from OCP.TopTools import TopTools_ListOfShape
 
-from . import kernel, kernel_worker, brep_topology
-from .brep_topology import (
-    _face_map,
-    _face_map_projection,
-    indexed_map,
-    subshapes,
-    _face_edit_KINDS as _KINDS,
-    _face_edit_faces as _faces,
-    _face_edit_edges as _edges,
-    _face_edit_solids as _solids,
-    _face_edit_count as _count,
-    _face_edit_edge_faces as _edge_faces,
-    is_null as _is_null,
+from . import kernel, kernel_worker
+
+from . import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_history as _brep_history,
+    brep_topology as _brep_topology,
 )
-from .kernel import _positions_in
-from .brep_geometry import volume, _face_edit_face_area as _face_area, _face_edit_face_normal as _face_normal
-from .brep_checks import _face_edit_free_edge_count as _free_edge_count, is_valid as _is_valid
 
 
 VERB_DELETE = "delete_faces"
@@ -126,14 +117,14 @@ def offset_faces(
 
 
 def _checked_indices(shape: Any, face_indices: Sequence[int], verb: str) -> List[int]:
-    if shape is None or _is_null(shape):
+    if shape is None or _brep_topology.is_null(shape):
         raise ValueError(f"{verb}: the body is empty")
     indices = [int(index) for index in face_indices]
     if not indices:
         raise ValueError(f"{verb} requires at least one face")
     if len(set(indices)) != len(indices):
         raise ValueError(f"{verb} got the same face twice: {indices}")
-    count = brep_topology.face_count(shape)
+    count = _brep_topology.face_count(shape)
     outside = [index for index in indices if not 1 <= index <= count]
     if outside:
         raise ValueError(f"{verb}: face index out of range: {outside} (1..{count})")
@@ -146,8 +137,8 @@ def _checked_indices(shape: Any, face_indices: Sequence[int], verb: str) -> List
 def compute(verb: str, shape: Any, arguments: dict) -> dict:
     """子プロセスの入口。断ったら `ValueError`(文は原因と言い換え)。"""
     indices = [int(index) for index in arguments["faces"]]
-    face_map = _face_map(shape)
-    faces = [brep_topology._face_at(face_map, index) for index in indices]
+    face_map = _brep_topology._face_map(shape)
+    faces = [_brep_topology._face_at(face_map, index) for index in indices]
     try:
         if verb == VERB_DELETE:
             final, table, _ = _delete(shape, faces)
@@ -162,12 +153,12 @@ def compute(verb: str, shape: Any, arguments: dict) -> dict:
         message = f"{verb} refused (faces {indices}): {error.cause}"
         raise ValueError(f"{message}: {error.hint}" if error.hint else message) from error
     successors = {str(key): positions for key, positions in table.items()}
-    provenance.update(_face_map_projection(successors, _face_map(final).Extent()))
+    provenance.update(_brep_topology._face_map_projection(successors, _brep_topology._face_map(final).Extent()))
     return {
         "shape": final,
         "provenance": provenance,
-        "volume_before": float(volume(shape)),
-        "volume_after": float(volume(final)),
+        "volume_before": float(_brep_geometry.volume(shape)),
+        "volume_after": float(_brep_geometry.volume(final)),
     }
 
 
@@ -178,7 +169,7 @@ def _delete(shape: Any, faces: List[Any]):
     result, algo = _remove_features(shape, faces)
     _structural_gate(result)
     history = algo.History()
-    before, after = _face_map(shape), _face_map(result)
+    before, after = _brep_topology._face_map(shape), _brep_topology._face_map(result)
     table = {}
     for i in range(1, before.Extent() + 1):
         old = TopoDS.Face_s(before.FindKey(i))
@@ -188,7 +179,7 @@ def _delete(shape: Any, faces: List[Any]):
             table[i] = []
             continue
         images = [TopoDS.Face_s(x) for x in history.Modified(old)] or ([] if history.IsRemoved(old) else [old])
-        positions = _positions_in(after, images)
+        positions = _brep_history.positions_in(after, images)
         if not positions:
             raise FaceEditError(f"kept face {i} is lost", _HINT_DELETE)
         kept = [TopoDS.Face_s(after.FindKey(p)) for p in positions]
@@ -224,7 +215,7 @@ def _remove_features(shape: Any, faces: List[Any]):
     if warnings:
         raise FaceEditError("RemoveFeatures warned: " + ", ".join(warnings), _HINT_DELETE)
     result = algo.Shape()
-    if result is None or _is_null(result):
+    if result is None or _brep_topology.is_null(result):
         raise FaceEditError("RemoveFeatures returned an empty shape", _HINT_DELETE)
     return result, algo
 
@@ -265,7 +256,7 @@ def _offset_following_blends(shape: Any, faces: List[Any], distance: float):
                 f"a selected face is a {_surface_type(face)}",
                 "動かせるのは平面・円筒・球・トーラスの面だけ(ずらした位置を確かめられない)",
             )
-    edge_faces = _edge_faces(shape)
+    edge_faces = _brep_topology._face_edit_edge_faces(shape)
     if any(_blend_signature(face, edge_faces) is not None for face in faces):
         raise FaceEditError(
             "a selected face is a blend", "丸めの面そのものは動かせない。半径を変えるときは、面の削除で丸めを消してから丸め直す"
@@ -300,7 +291,7 @@ def _make_offset(shape: Any, faces: List[Any], distance: float):
     if not algo.IsDone():
         raise FaceEditError(f"MakeOffset failed ({algo.Error()})", _HINT_CANNOT_OFFSET)
     result = algo.Shape()
-    if result is None or _is_null(result):
+    if result is None or _brep_topology.is_null(result):
         raise FaceEditError("MakeOffset returned an empty shape", _HINT_CANNOT_OFFSET)
     return result, algo
 
@@ -308,13 +299,13 @@ def _make_offset(shape: Any, faces: List[Any], distance: float):
 def _wrap_checked(raw: Any) -> Any:
     """MakeOffset の生の結果を1ソリッドにする。**包む前に**、ソリッド1つか閉じたシェル1つだけで、その外に面も辺も無いことを見る
     (シェルを包むと、外に付いた独立の面や辺が後の検査から見えなくなる)。"""
-    solids = _solids(raw)
+    solids = _brep_topology._face_edit_solids(raw)
     if solids:
-        if len(solids) != 1 or _count(raw, "face") != _count(solids[0], "face") or _count(raw, "edge") != _count(solids[0], "edge"):
+        if len(solids) != 1 or _brep_topology._face_edit_count(raw, "face") != _brep_topology._face_edit_count(solids[0], "face") or _brep_topology._face_edit_count(raw, "edge") != _brep_topology._face_edit_count(solids[0], "edge"):
             raise FaceEditError("raw result is not exactly one solid", _HINT_CANNOT_OFFSET)
         return raw
-    shells = subshapes(raw, TopAbs_ShapeEnum.TopAbs_SHELL)
-    if len(shells) != 1 or _count(raw, "face") != _count(shells[0], "face") or _count(raw, "edge") != _count(shells[0], "edge"):
+    shells = _brep_topology.subshapes(raw, TopAbs_ShapeEnum.TopAbs_SHELL)
+    if len(shells) != 1 or _brep_topology._face_edit_count(raw, "face") != _brep_topology._face_edit_count(shells[0], "face") or _brep_topology._face_edit_count(raw, "edge") != _brep_topology._face_edit_count(shells[0], "edge"):
         raise FaceEditError("raw result is not exactly one shell", _HINT_CANNOT_OFFSET)
     shell = TopoDS.Shell_s(shells[0])
     if BRepCheck_Shell(shell).Closed() != BRepCheck_Status.BRepCheck_NoError:
@@ -327,11 +318,11 @@ def _wrap_checked(raw: Any) -> Any:
 
 def _offset_correspondence(shape: Any, faces: List[Any], distance: float, result: Any, images_of) -> dict:
     """旧面 → 新面が1対1で全部を覆い、各新面が対応元の曲面(選んだ面ならずらした曲面)に乗る。"""
-    before, after = _face_map(shape), _face_map(result)
+    before, after = _brep_topology._face_map(shape), _brep_topology._face_map(result)
     table = {}
     for i in range(1, before.Extent() + 1):
         old = TopoDS.Face_s(before.FindKey(i))
-        positions = _positions_in(after, images_of(old))
+        positions = _brep_history.positions_in(after, images_of(old))
         if len(positions) != 1:
             raise FaceEditError(f"face {i} maps to {len(positions)} faces (topology changed)", _HINT_TOO_FAR)
         selected = any(old.IsSame(face) for face in faces)
@@ -346,7 +337,7 @@ def _offset_correspondence(shape: Any, faces: List[Any], distance: float, result
 
 
 def _require_volume_follows(shape: Any, result: Any, distance: float) -> None:
-    change = volume(result) - volume(shape)
+    change = _brep_geometry.volume(result) - _brep_geometry.volume(shape)
     if change * distance <= 0:
         raise FaceEditError(f"volume moved the wrong way ({change:+.6g} for distance {distance:+g})", _HINT_TOO_FAR)
 
@@ -360,7 +351,7 @@ def _structural_blends(shape: Any, faces: List[Any]):
     丸めの認識は構造で、半径の大小では決めない(意匠の大きな丸めも丸めとして扱う。設計者がフィレットとして作ったことの証明ではない)。
     丸めと認めない接線の隣があれば断る(MakeOffset の接線伝播へは切り替えない)。
     """
-    edge_faces = _edge_faces(shape)
+    edge_faces = _brep_topology._face_edit_edge_faces(shape)
     blends: List[Any] = []
     supports: List[tuple] = []
     frontier, seen = list(faces), list(faces)
@@ -368,7 +359,7 @@ def _structural_blends(shape: Any, faces: List[Any]):
     radius_of: dict = {}
     while frontier:
         current = frontier.pop(0)
-        for edge in _edges(current):
+        for edge in _brep_topology._face_edit_edges(current):
             other = _other_face(edge_faces, edge, current)
             if other is None or any(other.IsSame(s) for s in seen) or not _tangent(edge, current, other):
                 continue
@@ -397,7 +388,7 @@ def _structural_blends(shape: Any, faces: List[Any]):
             frontier.append(other)
     for sphere in [b for b in blends if _surface_type(b) == "sphere"]:
         radius = _describe(sphere)[2]
-        for edge in _edges(sphere):
+        for edge in _brep_topology._face_edit_edges(sphere):
             other = _other_face(edge_faces, edge, sphere)
             if other is None or not any(other.IsSame(b) for b in blends) or _surface_type(other) == "sphere":
                 continue
@@ -416,8 +407,8 @@ def blend_chain(shape: Any, face_index: int) -> List[int]:
     丸めどうしは接線でなくてよい(箱の上面4辺の丸めは角で折れて会う)。丸めの認識は `_blend_signature` と同じ構造の規則で、
     互いの支えの面へはたどらない。計算は親で行う(位相をたどるだけで、RemoveFeatures を呼ばない)。
     """
-    face_map = _face_map(shape)
-    edge_faces = _edge_faces(shape)
+    face_map = _brep_topology._face_map(shape)
+    edge_faces = _brep_topology._face_edit_edge_faces(shape)
     signatures: dict = {}
 
     def signature(index: int, face: Any):
@@ -428,9 +419,9 @@ def blend_chain(shape: Any, face_index: int) -> List[int]:
     def is_corner_sphere(edge: Any, sphere: Any, blend: Any) -> bool:
         return _surface_type(sphere) == "sphere" and _tangent(edge, sphere, blend)
 
-    start = brep_topology._face_at(face_map, face_index)
+    start = _brep_topology._face_at(face_map, face_index)
     if signature(face_index, start) is None:
-        neighbours = [(e, _other_face(edge_faces, e, start)) for e in _edges(start)]
+        neighbours = [(e, _other_face(edge_faces, e, start)) for e in _brep_topology._face_edit_edges(start)]
         if not any(
             other is not None and signature(face_map.FindIndex(other), other) is not None and is_corner_sphere(e, start, other)
             for e, other in neighbours
@@ -441,7 +432,7 @@ def blend_chain(shape: Any, face_index: int) -> List[int]:
         index = frontier.pop()
         current = chain[index]
         own = signature(index, current)
-        for edge in _edges(current):
+        for edge in _brep_topology._face_edit_edges(current):
             other = _other_face(edge_faces, edge, current)
             if other is None:
                 continue
@@ -469,7 +460,7 @@ def _blend_signature(face: Any, edge_faces: Any):
         return None
     radius = definition[3] if definition[0] == "cylinder" else definition[4]
     supports: List[Any] = []
-    for edge in _edges(face):
+    for edge in _brep_topology._face_edit_edges(face):
         if BRep_Tool.Degenerated_s(edge) or not _is_spring_edge(edge, definition):
             continue
         other = _other_face(edge_faces, edge, face)
@@ -502,18 +493,18 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
     moved = _wrap_checked(raw)
     _structural_gate(moved, hint=_HINT_TOO_FAR)
     sharp_table = _offset_correspondence(sharp, moved_faces, distance, moved, lambda old: list(offset.Generated(old)))
-    sharp_map, moved_map = _face_map(sharp), _face_map(moved)
+    sharp_map, moved_map = _brep_topology._face_map(sharp), _brep_topology._face_map(moved)
 
     def to_moved(face: Any) -> Any:
         return TopoDS.Face_s(moved_map.FindKey(sharp_table[sharp_map.FindIndex(through_removal(face))][0]))
 
-    edge_faces = _edge_faces(moved)
+    edge_faces = _brep_topology._face_edit_edge_faces(moved)
     rebuilt = []
     for radius, first, second in supports:
         a, b = to_moved(first), to_moved(second)
         common = [
             edge
-            for edge in _edges(a)
+            for edge in _brep_topology._face_edit_edges(a)
             if (other := _other_face(edge_faces, edge, a)) is not None
             and other.IsSame(b)
             and not any(edge.IsSame(e) for e, *_ in rebuilt)
@@ -529,10 +520,10 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
         raise FaceEditError("re-blending failed", _HINT_TOO_FAR)
     final = maker.Shape()
     _structural_gate(final, hint=_HINT_TOO_FAR)
-    final_map = _face_map(final)
+    final_map = _brep_topology._face_map(final)
     regenerated = _check_reblended(maker, final, final_map, rebuilt)
 
-    before = _face_map(shape)
+    before = _brep_topology._face_map(shape)
     table = {}
     for i in range(1, before.Extent() + 1):
         old = TopoDS.Face_s(before.FindKey(i))
@@ -540,7 +531,7 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
             table[i] = []
             continue
         in_moved = to_moved(old)
-        positions = _positions_in(final_map, [TopoDS.Face_s(x) for x in maker.Modified(in_moved)] or [in_moved])
+        positions = _brep_history.positions_in(final_map, [TopoDS.Face_s(x) for x in maker.Modified(in_moved)] or [in_moved])
         if len(positions) != 1:
             raise FaceEditError(f"face {i} does not map to exactly one final face", _HINT_TOO_FAR)
         selected = any(old.IsSame(face) for face in faces)
@@ -562,7 +553,7 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
 def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> List[int]:
     """丸め直した面が、その辺の半径の円筒・トーラスで、長手の辺で支えの面の像の**両方**に G1 で接すること。
     角は辺でなく頂点から生まれる(全辺丸めの上面で実測)ので、頂点から生まれた面は同じ半径の球であること。"""
-    final_edge_faces = _edge_faces(final)
+    final_edge_faces = _brep_topology._face_edit_edge_faces(final)
     regenerated: List[int] = []
     for edge, radius, first, second in rebuilt:
         made = sorted({final_map.FindIndex(x) for x in maker.Generated(edge)} - {0})
@@ -579,7 +570,7 @@ def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> L
             if abs(made_radius - radius) > LINEAR_TOL:
                 raise FaceEditError("a re-blended face has the radius of another blend", _HINT_TOO_FAR)
             touched_a = touched_b = False
-            for spring in _edges(face):
+            for spring in _brep_topology._face_edit_edges(face):
                 if not _is_spring_edge(spring, definition):
                     continue
                 neighbour = _other_face(final_edge_faces, spring, face)
@@ -591,7 +582,7 @@ def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> L
             if not (touched_a and touched_b):
                 raise FaceEditError("a re-blended face does not rest on both supports", _HINT_TOO_FAR)
         regenerated += made
-        for vertex in subshapes(edge, TopAbs_ShapeEnum.TopAbs_VERTEX):
+        for vertex in _brep_topology.subshapes(edge, TopAbs_ShapeEnum.TopAbs_VERTEX):
             for position in sorted({final_map.FindIndex(x) for x in maker.Generated(vertex)} - {0}):
                 definition = _describe(TopoDS.Face_s(final_map.FindKey(position)))
                 if definition is None or definition[0] != "sphere" or abs(definition[2] - radius) > LINEAR_TOL:
@@ -602,7 +593,7 @@ def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> L
 
 def _as_in(shape: Any, face: Any) -> Any:
     """`shape` の中での向きのまま `face` を引く(履歴の像は向きを持たず、MakeOffset に渡すと外向きを取り違える)。"""
-    for occurrence in subshapes(shape, TopAbs_ShapeEnum.TopAbs_FACE):
+    for occurrence in _brep_topology.subshapes(shape, TopAbs_ShapeEnum.TopAbs_FACE):
         if occurrence.IsSame(face):
             return TopoDS.Face_s(occurrence)
     raise FaceEditError("a face is not in the shape after removing the blends", _HINT_TANGENT)
@@ -613,18 +604,18 @@ def _as_in(shape: Any, face: Any) -> Any:
 # --------------------------------------------------------------------------------------
 def _structural_gate(result: Any, *, hint: str = _HINT_DELETE) -> None:
     """結果全体がちょうど1ソリッドで、外に面が無く、壊れておらず、面積0の面を残していない。"""
-    solids = _solids(result)
+    solids = _brep_topology._face_edit_solids(result)
     if len(solids) != 1:
         raise FaceEditError(f"result has {len(solids)} solids", hint)
-    if _count(result, "face") != _count(solids[0], "face"):
+    if _brep_topology._face_edit_count(result, "face") != _brep_topology._face_edit_count(solids[0], "face"):
         raise FaceEditError("result has faces outside its solid", hint)
-    if not _is_valid(result):
+    if not _brep_checks.is_valid(result):
         raise FaceEditError("result is invalid (BRepCheck)", hint)
-    if _free_edge_count(result):
+    if _brep_checks._face_edit_free_edge_count(result):
         raise FaceEditError("result has free edges", hint)
-    if not volume(result) > 0:
+    if not _brep_geometry.volume(result) > 0:
         raise FaceEditError("result has no volume", hint)
-    tiny = [face for face in _faces(result) if _face_area(face) < MIN_FACE_AREA]
+    tiny = [face for face in _brep_topology._face_edit_faces(result) if _brep_geometry._face_edit_face_area(face) < MIN_FACE_AREA]
     if tiny:
         raise FaceEditError(f"{len(tiny)} face(s) vanished but stayed in the shape (area < {MIN_FACE_AREA:g})", hint)
 
@@ -683,7 +674,7 @@ def _offset_definition(face: Any, distance: float) -> Optional[tuple]:
         return None
     kind = definition[0]
     if kind == "plane":
-        normal = _face_normal(face)
+        normal = _brep_geometry._face_edit_face_normal(face)
         return ("plane", tuple(definition[1][i] + normal[i] * distance for i in range(3)), definition[2])
     if kind == "cylinder":
         return ("cylinder", definition[1], definition[2], definition[3] + _convexity(face, definition) * distance)
@@ -697,7 +688,7 @@ def _offset_definition(face: Any, distance: float) -> Optional[tuple]:
 def _convexity(face: Any, definition: tuple) -> float:
     """外向き法線が中心(軸)から離れる向きなら +1(凸。太ると半径が増える)、近づく向きなら −1(穴)。"""
     point = _interior_points(face, 1)[0]
-    normal = _face_normal(face)
+    normal = _brep_geometry._face_edit_face_normal(face)
     kind = definition[0]
     if kind == "sphere":
         radial = _sub(point, definition[1])

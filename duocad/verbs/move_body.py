@@ -41,6 +41,10 @@ from ._common import (
     rotation_degrees,
 )
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 VERB_MOVE_BODY = "move_body"
 #: `mode` の宣言(`MODE_TRANSLATE` / `MODE_ROTATE` / `MOVE_MODES`)は `_common` が正。
 _MESH_HINT = "(メッシュボディには軸に使える辺も頂点も無い)"
@@ -72,8 +76,8 @@ def _composite_centroid(bodies: Sequence[Body]) -> List[float]:
     total = 0.0
     weighted = [0.0, 0.0, 0.0]
     for body in bodies:
-        mass = kernel.volume(body.shape)
-        center = kernel.centroid(body.shape)
+        mass = _brep_geometry.volume(body.shape)
+        center = _brep_geometry.centroid(body.shape)
         total += mass
         for axis in range(3):
             weighted[axis] += mass * center[axis]
@@ -120,7 +124,7 @@ def _rotation_args(
         )
     if axis_edge is not None:
         axis_body, index = resolve_shape_ref(doc, axis_edge, kind="edge", what="axis_edge", mesh_hint=_MESH_HINT)
-        point, direction = kernel.edge_axis(axis_body.shape, index)
+        point, direction = _brep_geometry.edge_axis(axis_body.shape, index)
     else:
         if axis_dir is None:
             raise ValueError(
