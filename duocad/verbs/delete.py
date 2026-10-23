@@ -63,7 +63,7 @@ from ..oplog import Operation, register_verb
 from .. import selection
 from ..entry import entry
 from ..sketch import Entity, Pattern, Sketch, get_entity, get_sketch, remove_entities
-from ._common import deletable_body, detach_bodies, reattach_bodies, recall, remember
+from ._common import deletable_body, detach_bodies, editable_sketch, reattach_bodies, recall, remember
 
 VERB_DELETE = "delete"
 VERB_DELETE_ITEMS = "delete_items"
@@ -178,6 +178,8 @@ def delete(
         # 隠したボディ・形の無いボディを弾く(理由は `_common.editable_body`)。種別は問わない
         # (メッシュボディは編集できないが消せる。`_common.deletable_body`)。
         deletable_body(doc, body_id)
+    for ref in entities:
+        editable_sketch(doc, ref["sketch"])
     entity_specs = _entity_snapshots(doc, entities)
 
     removed = _remove(doc, body_ids, entity_specs, [])

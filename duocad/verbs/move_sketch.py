@@ -44,6 +44,7 @@ from ..sketch import (
 from ._common import (
     MODE_ROTATE,
     MODE_TRANSLATE,
+    editable_sketch,
     finite_numbers,
     inverse_move_args,
     is_rotation,
@@ -303,7 +304,7 @@ def _copy(
         entity = get_entity(sketch, entity_id)
         current = parameters.resolve_all(doc, entity.params)
         values = transform(entity.kind, current, None)
-        if overlaps_original(values, current, fresh=fresh):
+        if overlaps_original(entity.kind, values, current, fresh=fresh):
             raise ValueError(
                 f"move_sketch_entities: 複製 {entity_id!r} が元と完全に重なる"
                 "(回転中心が図形の中心と一致している)"
@@ -365,6 +366,8 @@ def move_sketch_entities(
     """
     require_move_mode(mode, verb="move_sketch_entities")
     normalized = _normalize_targets(doc, targets)
+    for item in normalized:
+        editable_sketch(doc, item["sketch"])
 
     if mode == MODE_ROTATE:
         reject_foreign_args(mode, {"dx": dx, "dy": dy}, verb="move_sketch_entities")

@@ -29,6 +29,7 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
   引数の集め方・新しい描画）を持つときだけ。
 - **同じ結線を2本で通さない。** 足す前に `web/scripts/smoke*.mjs` を語で検索する。
 - 例外として足した本: `smoke-interference.mjs`（issue #186。新しい描画＝重なりの立体の層と、起動し直し・文書の変化をまたぐ結果の寿命・隙間の欄の持ち越しを通す。Linux の Chromium では `DUOCAD_BROWSER` に `--no-sandbox` 付きの起動スクリプトを渡し、`.venv/Scripts/python.exe` を `.venv/bin/python` への symlink にして走らせた）。
+- `node web/scripts/smoke-section-stencil.mjs` は断面の WebGL 画素を検査する（issue #225）。9〜25体でのステンシルの再利用、3平面・反転・透視／正投影、非表示・差し替え・断面の再開と遮蔽を通す。バックエンドは使わず、OS が選ぶ空きポートの Vite でソースを配る。
 
 根拠の実測（smoke を触った 140 コミットの分類）: コストの主因は flake ではなく、**書いた量と、仕様変更が
 多数本へ波及する結合**（製品の仕様変更への追従 42 件、うち 13 件は1つの変更で 3 本以上を直した。smoke が

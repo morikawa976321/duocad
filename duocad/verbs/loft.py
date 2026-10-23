@@ -24,7 +24,7 @@ from ..entry import entry
 from ..oplog import Operation, register_verb
 from ..region import RegionRef
 from ..sketch import entity_point_pair, get_entity, get_sketch
-from ._common import recall, remember
+from ._common import editable_sketch, recall, remember
 from .extrude import (
     MODES,
     _add_new_body,
@@ -55,6 +55,9 @@ def loft(
     start = _normalized_point(start_point, "start_point")
     end = _normalized_point(end_point, "end_point")
     recorded_shifts = _normalized_shifts(shifts, len(refs))
+
+    for ref in refs:
+        editable_sketch(doc, ref.sketch)
 
     target_body, resolved_body_id = _resolve_target(doc, mode, body_id, what=VERB_LOFT)
     result = _loft_shape(

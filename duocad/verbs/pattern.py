@@ -17,7 +17,8 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, Dict, List, Sequence
 
-from .. import kernel_sketch, parameters
+from .. import parameters
+from ._sketch_geometry import geometry_signature as _geometry_signature
 from ..document import Document, unknown_id_message
 from ..oplog import Operation, register_verb
 from ..entry import entry
@@ -186,41 +187,6 @@ def _circular_placement(cx: float, cy: float, count: int, total_angle: float, ro
         return copies
 
     return place
-
-
-def _geometry_signature(kind: str, params: Dict[str, float]) -> tuple:
-    """図形の幾何を、表し方の違い(線分の端点の順、長方形の基準の角と向き、楕円の長軸の取り方、円弧の角度の巻き)に
-    よらず同じ値にする署名。回した複製が元と**重なるか**を比べるのに使う(丸めは小数6桁)。"""
-
-    def r(value: float) -> float:
-        return round(float(value), 6) + 0.0  # -0.0 を 0.0 にする
-
-    if kind == "circle":
-        return ("circle", r(params["cx"]), r(params["cy"]), r(params["diameter"]))
-    if kind == "line":
-        ends = sorted([(r(params["x0"]), r(params["y0"])), (r(params["x1"]), r(params["y1"]))])
-        return ("line", *ends)
-    if kind == "rectangle":
-        return ("rectangle", *sorted((r(x), r(y)) for x, y in kernel_sketch.rectangle_corners(params)))
-    if kind == "arc":
-        sweep = (float(params["end_deg"]) - float(params["start_deg"])) % 360.0
-        if sweep < 1e-9 or sweep > 360.0 - 1e-9:  # 始終の角が同じ(0〜360 度など)円弧は全周で、円と同じ
-            return ("circle", r(params["cx"]), r(params["cy"]), r(2.0 * float(params["radius"])))
-        return (
-            "arc", r(params["cx"]), r(params["cy"]), r(params["radius"]),
-            r(params["start_deg"] % 360.0) % 360.0, r(params["end_deg"] % 360.0) % 360.0,
-        )
-    if kind == "ellipse":
-        width, height, angle = float(params["width"]), float(params["height"]), float(params["angle"])
-        if abs(width - height) <= 1e-9:
-            return ("circle", r(params["cx"]), r(params["cy"]), r(width))
-        if width < height:  # 長軸と短軸を入れ替えても同じ楕円(向きは 90 度ずれる)
-            width, height, angle = height, width, angle + 90.0
-        return ("ellipse", r(params["cx"]), r(params["cy"]), r(width), r(height), r(angle % 180.0) % 180.0)
-    if kind == "bezier":
-        points = [(r(params[kx]), r(params[ky])) for kx, ky in kernel_sketch.BEZIER_POINT_KEYS]
-        return ("bezier", *min(points, points[::-1]))  # 始点と終点を入れ替えても同じ曲線
-    return (kind, *sorted((key, r(value)) for key, value in params.items()))
 
 
 def pattern_circular(
