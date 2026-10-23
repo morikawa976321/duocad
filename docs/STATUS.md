@@ -19,7 +19,19 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 
 ### どこまで来たか
 
-- 計画を決め、#227 の1段目(保存部品)を sol に出した。
+- 着手前の pytest 全体: 3153 件通過・1 件スキップ(このワークツリー、main と同じ内容)。
+- **#227 は main に入った**(PR #236、2026-10-24)。`DocumentStore`・`Autosave`・`duocad/optimization.py` の4部品。段階ごとの
+  sol のレビューで1件の退行(同期の自動保存が現在名の更新を落とす)を見つけて直した。最適化の小型の製品経路の前後一致を確かめた
+  (decisions.md「[リファクタ] 最適化の前後一致の確かめ方」)。
+- #230 段階1(下位層から実行器への逆参照の解消)はレビュー合格、作業ブランチに commit 済み。段階2(`shared` と `finisher` の型付き化)を
+  sol が実装中。
+
+### 再開の手順
+
+- 作業ブランチ `claude/autopilot-issues-227-232-f5569f`(このワークツリー)。develop へは本体チェックアウトで `--no-ff` マージして push、
+  develop → main は PR。作業ツリーが使用中のときの develop との統合は `git merge-tree --write-tree` と一時の index で組む(decisions.md)。
+- 最適化の前後一致の道具はスクラッチパッドにある使い捨て(`golden_optimize.py`・`golden_diff.py`)。無ければ decisions.md の
+  手順から作り直す。
 
 ## フィレットのはみ出しと貫通の吸収(2026-10-22)
 
