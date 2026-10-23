@@ -408,7 +408,7 @@ astra の意見（要旨）と AI の採否:
    確定する（対象の決め方はカード2。対象数と除外数を結果に入れる）。境界箱の絞り込み（幅は clearance + ε）、組の振り分け（B-rep どうし／
    メッシュを含む）、分類（定義の表。知らない種類・面積 0 は relation を unknown と理由へ、距離の失敗は clearance を null と理由へ回し、separated や 0 にしない）、
    戻り値の組み立て。
-4. **子プロセス**: `duocad/interference_worker.py`（`python -m` で起こす）。形は子へ1回だけ BRep の文字列（`kernel_brep.encode_brep`。改行を
+4. **子プロセス**: `duocad/interference_worker.py`（`python -m` で起こす。子の起動・線・上限・作り直しは面の編集と共通の `duocad/worker_process.py`）。形は子へ1回だけ BRep の文字列（`kernel_brep.encode_brep`。改行を
    含むので JSON の文字列で包む）で渡し、組はボディ ID の対で1つずつ送って結果を1行ずつ受け取る。上限（GF 30 秒・最短距離 5 秒・全体
    120 秒。全体には起動・受け渡し・作り直し・三角形分割・返送を含める）を超えたら子を止めて作り直し（その組は最短距離だけ）、全体の上限で
    残りを未着手にして部分結果を返す。取り消しは要求した接続の検査だけを止める（別の接続の検査を黙って止めない）。文書が変わった・接続が
@@ -480,7 +480,7 @@ OCP・manifold3d 一般の罠（BOP の破壊モード・`PDS()` で落ちる・
 | カーネル | `duocad/kernel_interference.py`（OCP） | `pair_relation`（2体 GF・非破壊・像の共有・領域ごとの 2V/A と有向箱・重心と箱・描画用の三角形/折れ線/点）、`min_distance`（形全体 → 面の対ごと → 縁の点）、`loose_bbox` |
 | メッシュ | `duocad/interference_mesh.py`（manifold3d） | `mesh_pair`: 交差の体積が正（小さい方の体積の 1e-9 倍超）なら重なり、連成分ごとに 2V/A と頂点の主成分箱の最小辺を測り、最も厚い成分を返す。体積 0 なら `min_gap`（探索幅 `max(1, 2·(clearance+ε))`）が ε 以下で接触、より大きければ離れている（探索幅で頭打ちなら `distance_lower_bound`） |
 | 組み立て | `duocad/interference.py`（OCP なし） | 引数の検査・対象の決め方（`resolve_targets`）・スナップショット・分類（`classify_relation` / `classify_clearance`）・実行（`run`）・結果 |
-| 子プロセス | `duocad/interference_worker.py` | 親側の `WorkerProcess`（JSON 行の線・上限つきの待ち・取り消し）と子の本体（`python -m duocad.interference_worker`）。同じ口の `InProcessWorker`（軽い形の試験用） |
+| 子プロセス | `duocad/interference_worker.py` | 親側の `WorkerProcess`（共通の `duocad/worker_process.py` に `load` を載せたもの。JSON 行の線・上限つきの待ち・取り消しは共通の側）と子の本体（`python -m duocad.interference_worker`）。同じ口の `InProcessWorker`（軽い形の試験用） |
 | 宣言と配線 | `catalog.py` / `session.py` / `mcp_server.py` / `net/ws.py` / `net/interference_runs.py` | `check_interference`（`query`・`ws="special"`・`changes_document=False`）。`Session.interference_job`（開始時に確定）と `Session.check_interference`（MCP・同期）。WS は `InterferenceRuns` がワーカー1本で走らせる |
 | 画面 | `web/src/` の `commands/interference.ts` / `interference.svelte.ts` / `interferenceGroups.ts` / `interferenceLayer.ts` / `InterferencePanel.svelte` | 使い方は [UI.md](UI.md)「干渉チェック」 |
 

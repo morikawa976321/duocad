@@ -45,7 +45,7 @@ def test_a_call_over_the_time_limit_is_refused_and_the_next_call_works(monkeypat
     body_id, rounded = _filleted_box(doc)
     before = _state(doc)
     monkeypatch.setattr(kernel_worker, "INTERACTIVE_TIMEOUT_S", 1e-6)
-    with pytest.raises(ValueError, match="time limit"):
+    with pytest.raises(ValueError, match="秒以内に返事が無かった"):
         verbs.delete_faces(doc, [rounded], body_id=body_id)
     assert _state(doc) == before
     monkeypatch.undo()
@@ -69,8 +69,8 @@ def test_a_worker_that_was_killed_between_calls_is_restarted():
     doc = Document()
     body_id, rounded = _filleted_box(doc)
     kernel_face_edit.offset_faces(BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape(), [1], 1.0)  # 子を立てる
-    kernel_worker._CHILD.process.kill()
-    kernel_worker._CHILD.process.wait()
+    kernel_worker._WORKER._process.kill()
+    kernel_worker._WORKER._process.wait()
     verbs.delete_faces(doc, [rounded], body_id=body_id)
     assert kernel.face_count(doc.get_body(body_id).shape) == 6
 
@@ -89,11 +89,11 @@ def test_a_worker_that_dies_during_a_call_is_refused_and_the_next_call_works():
     assert len(holes) == 49
     kernel_face_edit.offset_faces(doc.get_body("plate").shape, [holes[0]], -0.5)  # 子を先に立てておく(起動を落とす窓に入れない)
     before = _state(doc)
-    process = kernel_worker._CHILD.process
+    process = kernel_worker._WORKER._process
     killer = threading.Timer(0.5, process.kill)  # 49 個を一度に消す計算は約 3.5 秒(docs/FACE_EDIT.md「規模」)
     killer.start()
     try:
-        with pytest.raises(ValueError, match="stopped"):
+        with pytest.raises(ValueError, match="途中で終了"):
             verbs.delete_faces(doc, holes, body_id="plate")
     finally:
         killer.cancel()
