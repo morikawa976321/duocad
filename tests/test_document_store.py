@@ -52,7 +52,7 @@ def test_model_payloads_round_trip_without_changing_the_bytes(store, chunks):
     target = store.resolve_writable_name("a.json")
     payload = log.to_file_chunks(created=1.25) if chunks else log.to_json(created=1.25)
     store.write_document_file(target, payload)
-    assert target.read_bytes() == log.to_file_bytes(created=1.25)
+    assert target.read_bytes() == b"".join(log.to_file_chunks(created=1.25))
     assert store.read_document_file(target) == json.loads(log.to_json(created=1.25))
     assert not target.with_suffix(".json.writing").exists()
 
