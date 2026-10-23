@@ -28,7 +28,7 @@ class OptimizationRecord:
 
     @property
     def has_finisher(self) -> bool:
-        return self.steps is not None and self.steps.finisher is not None
+        return self.steps is not None and self.steps.plan is not None
 
     def start_search(self) -> OptimizationSteps:
         self.steps = OptimizationSteps()
