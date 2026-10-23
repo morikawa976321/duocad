@@ -9,7 +9,7 @@ from duocad.region import region_ref
 from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
 from duocad.selection import set_visible
 from duocad.verbs import extrude
-from document_support import BOX_X, BOX_Y, BOX_Z, box_shape as _box_shape
+from document_support import BOX_X, BOX_Y, BOX_Z, box_shape as _box_shape, shape_ref
 
 
 #: 長さの比較に使う許容(mm)。STEP由来の形状も同じ述語で扱うので厳密比較にしない。
@@ -288,7 +288,7 @@ def test_naming_a_hidden_body_explicitly_is_an_error():
 
 def test_a_zero_match_proposal_still_replaces_the_previous_selection(doc: Document):
     """0件の提案でも置き換えは起きる(古い候補が残らない)。"""
-    selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
+    selection.set_selection(doc, refs=[shape_ref(doc, "box", "edge", 1)])
     result = selection.set_selection(
         doc, predicate={"kind": "edge", "where": [{"op": "length_gt", "value": 10_000}]}
     )
@@ -327,7 +327,7 @@ def test_an_invalid_predicate_leaves_the_selection_untouched(doc: Document):
     (途中まで評価して落ちる作りだと、守れるかどうかが実装の偶然になる)。
     """
     selection.modify_selection(
-        doc, add=[selection.select_edge(doc, "box", index) for index in (1, 2)]
+        doc, add=[shape_ref(doc, "box", "edge", index) for index in (1, 2)]
     )
     before = [dict(item) for item in selection.get_selection(doc).items]
 
@@ -345,7 +345,7 @@ def test_a_predicate_that_fails_at_evaluation_also_leaves_the_selection_untouche
     範囲外は形式としては正しく、**実際に形状を見るまで分からない**ので、
     「全条件を検査してから評価する」が効いているかはこちらでしか確かめられない。
     """
-    selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
+    selection.modify_selection(doc, add=[shape_ref(doc, "box", "edge", 1)])
     before = [dict(item) for item in selection.get_selection(doc).items]
 
     bad = {"kind": "edge", "where": [{"op": "on_boundary_of_face", "face": 99}]}

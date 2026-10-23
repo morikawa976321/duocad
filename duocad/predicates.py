@@ -1,4 +1,4 @@
-"""述語による選択 — **AIが引数を作る側の経路**(人のクリックに当たるのは `selection.select_face` 等)。
+"""述語による選択 — **AIが引数を作る側の経路**(人のクリックは `selection.modify_selection` が参照を検査する)。
 
 表現形式は**構造化(JSON)**。DSL文字列ではない:
 
@@ -333,7 +333,7 @@ def _boundary_sets(body, where: Sequence[dict]) -> dict:
         try:
             resolved[face_index] = set(query.edges_of_face(body.shape, face_index))
         except ValueError as error:
-            # 有効な範囲まで言う(`select_*` と揃える)。
+            # 有効な範囲まで言う(`selection._select_shape` と揃える)。
             raise ValueError(
                 f"on_boundary_of_face face out of range: {face_index} "
                 f"(1..{kernel.face_count(body.shape)} on body {body.id!r})"

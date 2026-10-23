@@ -2,7 +2,7 @@
 
 落ちたら、受入条件のどれが満たされていないかを意味する。
 
-期待値の出どころ(tools/face_edit_probe で 40×30×20 の箱を実測、2026-10-18): フィレット・面取り・穴の面を
+期待値の出どころ(Git 3c3fb655 の tools/face_edit_probe で 40×30×20 の箱を実測、2026-10-18): フィレット・面取り・穴の面を
 消すと元の箱(24000 mm³・平面6枚)に戻る。箱の上面は周りが平行で閉じない。
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ from duocad.document import Document
 from duocad.entry import entry_for
 from duocad.verbs import chamfer, fillet
 from duocad.verbs.import_editable import import_step
-from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json, second_body
+from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json, second_body, shape_ref
 from mcp_support import call
 from session_support import session_with_box
 
@@ -209,7 +209,7 @@ def test_replaying_the_log_gives_the_same_shape():
 def test_a_deletion_that_collapses_the_body_is_refused():
     """消すと形が成り立たない組には、残った面が別の閉じ方につぶれる組も入る。フィレット1辺の箱で下面と奥面を消すと、
     OCCT は警告を出さずに丸めの外側の隙間だけを閉じた破片(23785 → 214.6 mm³)を返し、残した面は自分の曲面のまま、
-    BRepCheck も通る(tools/face_edit_probe/viz.py の全組み合わせで実測)。残した面の元の範囲が結果に残らないので断る。"""
+    BRepCheck も通る(Git 3c3fb655 の tools/face_edit_probe/viz.py の全組み合わせで実測)。残した面の元の範囲が結果に残らないので断る。"""
     doc = Document()
     body_id, _ = _filleted_box(doc)
     before = _state(doc)
@@ -278,7 +278,7 @@ def test_provenance_lists_the_deleted_faces_and_maps_every_other_face():
 def test_the_entry_takes_the_faces_from_the_selection():
     doc = Document()
     body_id, cylinder = _filleted_box(doc)
-    selection.set_selection(doc, refs=[selection.select_face(doc, body_id, cylinder)])
+    selection.set_selection(doc, refs=[shape_ref(doc, body_id, "face", cylinder)])
 
     result = entry_for("delete_faces")(doc)
 
@@ -291,7 +291,7 @@ def test_the_entry_refuses_faces_of_two_bodies():
     body_id, cylinder = _filleted_box(doc)
     other = second_body(doc)
     selection.set_selection(
-        doc, refs=[selection.select_face(doc, body_id, cylinder), selection.select_face(doc, other, 1)]
+        doc, refs=[shape_ref(doc, body_id, "face", cylinder), shape_ref(doc, other, "face", 1)]
     )
     before = _state(doc)
 

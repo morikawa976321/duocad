@@ -53,76 +53,67 @@ def cylinder_shape():
 
 
 def _triangles(payload: dict, index: int) -> int:
-    return len(payload["faces"][index - 1]["indices"]) // 3
+    faces = payload["faces"]
+    face = faces[index] if isinstance(faces, dict) else faces[index - 1]
+    return len(face["indices"]) // 3
 
 
 def test_asking_for_every_face_is_the_same_as_the_plain_tessellation(cylinder_shape) -> None:
-    """`fine_faces=None` は `tessellate()` と同じ測り方。"""
+    """全面を1組で測った結果が、通常の三角形分割と一致する。"""
     plain = kernel.tessellate(cylinder_shape, 0.002, 0.05)
-    selective = kernel.tessellate_selective(cylinder_shape, None, 0.002, 0.05, 0.4, 0.5)
-    assert selective["face_count"] == plain["face_count"]
-    for index in range(1, plain["face_count"] + 1):
-        assert _triangles(selective, index) == _triangles(plain, index)
-    assert selective["fine_face_count"] == plain["face_count"]
-    assert all(face["detail"] == "fine" for face in selective["faces"])
+    grouped = kernel.tessellate_faces(cylinder_shape, {(0.002, 0.05): [1, 2, 3]})
+    assert set(grouped["faces"]) == {1, 2, 3}
+    for face in plain["faces"]:
+        assert grouped["faces"][face["index"]] == face
 
 
-def test_a_face_measured_finely_is_identical_whether_or_not_its_neighbours_are(
-    cylinder_shape,
-) -> None:
-    """**面が互いの粗さに引きずられない**。この仕掛けが成立する前提そのもの。"""
-    everything = kernel.tessellate_selective(cylinder_shape, None, 0.002, 0.05, 0.4, 0.5)
-    nothing = kernel.tessellate_selective(cylinder_shape, [], 0.002, 0.05, 0.4, 0.5)
-    mixed = kernel.tessellate_selective(cylinder_shape, [1], 0.002, 0.05, 0.4, 0.5)
-
-    assert _triangles(mixed, 1) == _triangles(everything, 1), "細かい面が粗い隣に引きずられた"
-    assert _triangles(mixed, 2) == _triangles(nothing, 2), "粗い面が細かい隣に引きずられた"
+def test_a_face_measured_finely_is_identical_whether_or_not_its_neighbours_are(cylinder_shape) -> None:
+    """面の三角形の細かさが、別の組で測った隣の面に引きずられない。"""
+    everything = kernel.tessellate_faces(cylinder_shape, {(0.002, 0.05): [1, 2, 3]})
+    nothing = kernel.tessellate_faces(cylinder_shape, {(0.4, 0.5): [1, 2, 3]})
+    mixed = kernel.tessellate_faces(cylinder_shape, {(0.4, 0.5): [2, 3], (0.002, 0.05): [1]})
+    assert _triangles(mixed, 1) == _triangles(everything, 1)
+    assert _triangles(mixed, 2) == _triangles(nothing, 2)
     assert _triangles(mixed, 3) == _triangles(nothing, 3)
-    assert [face["detail"] for face in mixed["faces"]] == ["fine", "coarse", "coarse"]
 
 
 def test_leaving_the_curved_face_coarse_actually_saves_triangles(cylinder_shape) -> None:
-    """**節約になっていること**を数で見る(分ける仕掛けを入れた目的)。"""
-    everything = kernel.tessellate_selective(cylinder_shape, None, 0.002, 0.05, 0.4, 0.5)
-    nothing = kernel.tessellate_selective(cylinder_shape, [], 0.002, 0.05, 0.4, 0.5)
-    total_fine = sum(len(face["indices"]) // 3 for face in everything["faces"])
-    total_coarse = sum(len(face["indices"]) // 3 for face in nothing["faces"])
+    """粗い測り方に変えると、実際の三角形の数が減る。"""
+    everything = kernel.tessellate_faces(cylinder_shape, {(0.002, 0.05): [1, 2, 3]})
+    nothing = kernel.tessellate_faces(cylinder_shape, {(0.4, 0.5): [1, 2, 3]})
+    total_fine = sum(len(face["indices"]) // 3 for face in everything["faces"].values())
+    total_coarse = sum(len(face["indices"]) // 3 for face in nothing["faces"].values())
     assert total_coarse * 4 < total_fine, f"粗くしても減らない: {total_coarse} / {total_fine}"
 
 
-def test_the_reported_deviation_is_the_finest_one_in_the_payload(cylinder_shape) -> None:
-    """`deviation` は「この配りものの中でいちばん細かい値」(画面側の待ち合わせが見る)。"""
-    mixed = kernel.tessellate_selective(cylinder_shape, [1], 0.002, 0.05, 0.4, 0.5)
-    assert mixed["deviation"] == pytest.approx(0.002)
-    assert mixed["coarse_deviation"] == pytest.approx(0.4)
-    # 1面も細かくしないなら、いちばん細かい値は粗い側である(嘘をつかない)。
-    nothing = kernel.tessellate_selective(cylinder_shape, [], 0.002, 0.05, 0.4, 0.5)
-    assert nothing["deviation"] == pytest.approx(0.4)
-
-
-def test_a_coarse_side_finer_than_the_fine_side_is_pulled_back(cylinder_shape) -> None:
-    """粗い側に細かい値を渡しても**細かい側を下回らない**(呼び出し側の取り違えを吸う)。"""
-    payload = kernel.tessellate_selective(cylinder_shape, [1], 0.1, 0.3, 0.001, 0.01)
-    assert payload["coarse_deviation"] == pytest.approx(0.1)
-    plain = kernel.tessellate(cylinder_shape, 0.1, 0.3)
-    for index in (1, 2, 3):
-        assert _triangles(payload, index) == _triangles(plain, index)
+def test_the_reported_deviation_is_the_finest_one_in_the_payload(two_body_session) -> None:
+    """配信する偏差・細かい面の数・印が、実際に測った粗さと一致する。"""
+    session, body, _ = two_body_session
+    session.set_view_resolution(0.005, 400.0, {body: [1]})
+    mixed = session.geometry(body)
+    assert mixed["deviation"] == session.view.view_deviation
+    assert mixed["deviation"] < mixed["coarse_deviation"]
+    assert mixed["fine_face_count"] == 1
+    assert [face["detail"] for face in mixed["faces"]] == ["fine", "coarse", "coarse"]
+    session.set_view_resolution(0.005, 400.0, {body: []})
+    coarse = session.geometry(body)
+    assert coarse["deviation"] == coarse["coarse_deviation"]
+    assert coarse["fine_face_count"] == 0
+    assert all(face["detail"] == "coarse" for face in coarse["faces"])
 
 
 def test_out_of_range_face_indices_are_ignored(cylinder_shape) -> None:
-    """存在しない面を指されても落ちない(画面の添字は形状変更で古くなりうる)。"""
-    payload = kernel.tessellate_selective(cylinder_shape, [0, 99, 2], 0.002, 0.05, 0.4, 0.5)
-    assert payload["fine_face_count"] == 1
-    assert [face["detail"] for face in payload["faces"]] == ["coarse", "fine", "coarse"]
+    """測る面の範囲外の番号を落とし、指定した有効な面だけを返す。"""
+    payload = kernel.tessellate_faces(cylinder_shape, {(0.002, 0.05): [0, 99, 2]})
+    assert set(payload["faces"]) == {2}
 
 
 def test_a_solid_is_closed_and_a_lone_face_is_not(cylinder_shape) -> None:
-    """**開いたシェルでは裏を向いた面が本当に見える** —— 画面側はこの旗で判定を止める。"""
-    solid = kernel.tessellate_selective(cylinder_shape, None, 0.1, 0.35)
+    """閉じていない面を、バックフェイスで隠せる立体と取り違えない。"""
+    solid = kernel.tessellate_faces(cylinder_shape, {(0.1, 0.35): [1, 2, 3]})
     assert solid["closed"] is True
-
-    lone_face = kernel._face_map(cylinder_shape).FindKey(1)
-    opened = kernel.tessellate_selective(lone_face, None, 0.1, 0.35)
+    lone_face = kernel.face_of(cylinder_shape, 1)
+    opened = kernel.tessellate_faces(lone_face, {(0.1, 0.35): [1]})
     assert opened["closed"] is False
 
 

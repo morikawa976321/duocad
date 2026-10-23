@@ -2,7 +2,7 @@
 
 **状態: 実装済み**（2026-10-21、クラウドセッションで実装。下の「実装の記録」）。調査と方針は 2026-10-18、本人判断カードは4枚とも回答済み（同日）。判定の数字（許容差・厚さ・時間）を疑うとき、実装の形を知りたいときに読む。
 PC ケースの実物と Windows での子プロセス・実機 smoke は手元で確かめた（2026-10-22。下の「実装の記録」の「手元での確認」）。
-試作と計測は `tools/interference_probe/`（再現コマンドは末尾）。生データは `output/interference_probe/`（git 管理外）。
+試作と計測のコードは Git `3c3fb655` の `tools/interference_probe/`（検査と参照先は末尾）。生データは `output/interference_probe/`（git 管理外）。
 
 本人の依頼（2026-10-18、要旨）: Issue #186 の調査と方針探し。方式の候補ごとに小さな試作で精度・計算時間・失敗する形を測って
 比べ、相談役と意見を交わし、好みが核になる点は推奨付きの本人判断カードにする。本実装はしない。
@@ -528,20 +528,11 @@ OCP・manifold3d 一般の罠（BOP の破壊モード・`PDS()` で落ちる・
   別スレッドへ出しても `json.dumps` が GIL を握るので変わらない）。大きなメッシュの混ざる文書で問題になったら、描画の配列を
   バイナリのフレーム（`net/wire.py` の `BINARY_TYPES`）で送る。
 
-## 再現コマンド
+## 検査と試作の参照
 
-```powershell
-.\.venv\Scripts\python.exe -m tools.interference_probe.run_cases --deviation 0.01 --json output\interference_probe\cases_dev0.01.json
-.\.venv\Scripts\python.exe -m tools.interference_probe.real_docs <PC ケースの STEP> --json output\interference_probe\pc_case.json
-.\.venv\Scripts\python.exe -m tools.interference_probe.pc_detail <PC ケースの STEP> output\interference_probe\pc_case.json
-.\.venv\Scripts\python.exe -m tools.interference_probe.pipeline <PC ケースの STEP> --clearance 0.2 [--whole] --compare output\interference_probe\pc_case.json
-.\.venv\Scripts\python.exe -m tools.interference_probe.astra_checks
-.\.venv\Scripts\python.exe -m tools.interference_probe.scale --n 30 100 300
-.\.venv\Scripts\python.exe -m tools.interference_probe.mixed <形状最適化の結果入りの文書.json> [--to-brep [--no-gf]]
-.\.venv\Scripts\python.exe -m tools.interference_probe.threads --timeout 240
-.\.venv\Scripts\python.exe -m tools.interference_probe.tolerance_check <PC ケースの STEP>
-.\.venv\Scripts\python.exe -m tools.interference_probe.subprocess_cost <PC ケースの STEP>
-```
+現行の干渉チェックは `tests/test_interference.py`、`tests/test_interference_kernel.py`、
+`tests/test_interference_mesh.py`、`tests/test_interference_worker.py`、`tests/test_interference_session.py` と、
+画面の `web/scripts/smoke-interference.mjs` で検査する。
 
-`-m` で走らせる（cwd が sys.path の先頭に入り、ワークツリーの `duocad` を読む。[DEV_NOTES.md](DEV_NOTES.md)「ワークツリー」）。
-PC ケースの STEP は本人の 3d-models フォルダの `mATX_PC_case_20251122`（読むだけ）。
+方式・許容値・実物・規模の比較を行った試作と計測コード（`tools/interference_probe/`）は Git `3c3fb655` に残っている（再現コマンドは同じコミットの本書末尾「再現コマンド」）。
+本書の実測値はその時点の記録。PC ケースの STEP は本人の 3d-models フォルダの `mATX_PC_case_20251122`（読むだけ）。

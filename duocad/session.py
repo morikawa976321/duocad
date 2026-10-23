@@ -1366,7 +1366,7 @@ class Session:
         失敗しても例外にしない(文書の変更は確定済みで巻き戻せない)。書けなかったことは警告と `saved=False` で知らせ、
         戻り値は書けたか。捕まえるのは種類を問わない: Windows では別のプログラムがファイルを開いているだけで
         `os.replace` が `PermissionError` になり(実測)、漏れると最適化の経路で結果も終了の `optimize_status` も配られず画面が実行中のまま固まる。
-        費用は操作ログ全体のJSON化と書き込み。大きな操作の JSON は `OpLog` が覚えていて(`to_file_bytes`)、14.9 MB の文書で
+        費用は操作ログ全体のJSON化と書き込み。大きな操作の JSON は `OpLog` が覚えていて(`to_file_chunks`)、14.9 MB の文書で
         JSON 化 4 ms・書き込み 22 ms(実測)。画面の操作では書き込みを書き手スレッドへ回す(`background_autosave`)。
         debounce は入れない(落ちたとき最後の変更が残る保証が崩れる。issue #5 の本人決定)。
         """

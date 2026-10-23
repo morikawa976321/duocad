@@ -8,8 +8,8 @@
 
 ## 選択参照の同一性(`duocad/selection.py` / `web/src/commands/command.ts`)
 
-- **参照の同一性の鍵は `selection.ref_key(ref) -> tuple` の1箇所だけ**。形は region `("region", sketch, int(index))` / sketch_entity `("sketch_entity", sketch, entity, point)` / body `("body", body)`(添字を見ない)/ face・edge・vertex `(kind, body, int(index))`。参照の形でなければ `ref_kind` と同じ `ValueError`。`same_ref` は `ref_key(l) == ref_key(r)` そのもの。TS 側は `refKey(ref): string` で、`sameRef` はその一致で定義。
-  - 等価判定を種別ごとの分岐として書き直さない(「集合引きが落とす重複」と「`same_ref` が同じと言う組」がずれ、**どちらも例外を出さないまま**重複が残る／別物が同一視される)。TS 側は `tests/eval_selection_ref_key.mjs` が押さえる。
+- **参照の同一性の鍵は `selection.ref_key(ref) -> tuple` の1箇所だけ**。形は region `("region", sketch, int(index))` / sketch_entity `("sketch_entity", sketch, entity, point)` / body `("body", body)`(添字を見ない)/ face・edge・vertex `(kind, body, int(index))`。参照の形でなければ `ref_kind` と同じ `ValueError`。等価判定は `ref_key(l) == ref_key(r)`。TS 側は `refKey(ref): string` で、`sameRef` はその一致で定義。
+  - 等価判定を種別ごとの分岐として書き直さない(集合引きの重複除去と別の規則になり、**どちらも例外を出さないまま**重複が残る／別物が同一視される)。TS 側は `tests/eval_selection_ref_key.mjs` が押さえる。
   - 種別は鍵の第1要素だけが持つ。face/edge/vertex の鍵に `ref["kind"]` を重ねない(重ねると「種別を鍵から抜く」変異がもう一方に吸収され検査で示せない。意図的に3要素)。
   - `provenance` は鍵に入れない／`index` は `int()` に正規化／`point` は `.get()` で欠落と `None` を畳む。TS 側の `point` は `p` を付けて書く(`null` と空文字の点名を畳まないため)。
 - **`modify_selection` の並び順は不変**: 追加は末尾に足すだけ、除去は残りの相対順序を保つ。既存参照の再 add で位置が動くと `fillet` の辺リストと半径リストの対応がずれる。
@@ -53,7 +53,7 @@
 ## 直接ピックの待ち(回転軸・回転中心・鏡映面)
 
 - 待っている種類は起動中に指せる種類へ足す(`pickKinds` = 選択の引数の種類 ∪ 待っている種類)。待ち受けは素のクリックだけを食い、修飾キー付きのクリックは対象の選択を足し外しする(`onPick`)。
-- メッシュボディのピックは `App.svelte` の `pickedRef` でボディ参照へ畳む(畳まないと `select_face` が断り、ドラッグの一括選択が丸ごと落ちる)。`dedupeRefs` を外さない(重複 `{kind:"body"}` が `modify_selection` へ並ぶ)。**スケッチを貼る先だけは畳まず断る**。詳細は ui-optimize-integration.md。
+- メッシュボディのピックは `App.svelte` の `pickedRef` でボディ参照へ畳む(畳まないと `modify_selection` が断り、ドラッグの一括選択が丸ごと落ちる)。`dedupeRefs` を外さない(重複 `{kind:"body"}` が `modify_selection` へ並ぶ)。**スケッチを貼る先だけは畳まず断る**。詳細は ui-optimize-integration.md。
 
 ## 分割モジュール(`viewport.ts` と兄弟)
 

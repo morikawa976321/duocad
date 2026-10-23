@@ -24,18 +24,6 @@ from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 from .mesh_geometry import indexed_map
 
 
-def blend_chains(shape: TopoDS_Shape) -> Dict[int, int]:
-    """辺の添字 → その辺が属する連なりの代表(連なりの最小の添字)。全辺ぶんを一度に求める(`BlendChains` の全部)。
-
-    連なりは OCCT のフィレットが1本の辺から広げる範囲そのもの(`MakeFillet.Add` の輪郭)。
-    実測: 1本を渡すと、一直線上で割れた辺も、直線→円弧→直線の接線連続も、フィレット・面取りとも
-    全部にかかる。画面の選択をこの単位にしないと「光った1本より広く丸まる」になる。
-    """
-    edge_count = indexed_map(shape, TopAbs_EDGE).Extent()
-    groups = BlendChains(shape).of(range(1, edge_count + 1))
-    return {index: group[0] for index, group in groups.items()}
-
-
 class BlendChains:
     """1つの形の辺の連なりを、頼まれた辺の分だけ求めて覚える。形は不変(差し替えは別の形)なので、作り直すのは形が変わったときだけ。
 

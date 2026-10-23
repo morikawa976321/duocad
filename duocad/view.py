@@ -256,7 +256,7 @@ class DocumentView:
         )
 
     def _tessellation_args(self, body_id: str) -> tuple:
-        """`kernel.tessellate_selective` に渡す `(fine_faces, dev, ang, coarse_dev, coarse_ang)`。"""
+        """面ごとの測り方を決める `(fine_faces, dev, ang, coarse_dev, coarse_ang)`。"""
         fine = self._body_focus(body_id)
         coarse = self._view_coarse_resolution
         if coarse is None:
@@ -605,8 +605,7 @@ class DocumentView:
     def _tessellate_body(self, body) -> dict:
         """B-rep を測り、取れなかった面・解消できなかった境界の警告を積む(**測ったときだけ**出す)。
 
-        面ごとに測り方(細かい側・粗い側)を決め、覚えていない面だけを測る(`_FaceTessellations`)。測り方の決め方と
-        戻り値の形は `kernel.tessellate_selective` と同じ。
+        面ごとに測り方(細かい側・粗い側)を決め、覚えていない面だけを測る(`_FaceTessellations`)。
         """
         fine, deviation, angular, coarse_deviation, coarse_angular = self._tessellation_args(body.id)
         total = self._body_face_count(body)

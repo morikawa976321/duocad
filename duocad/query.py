@@ -158,7 +158,7 @@ def _describe_face(face: Any, index: int) -> dict:
 def describe_vertices(shape: Any) -> list:
     """頂点を1始まりの添字つきで列挙する(`[{"index": int, "point": [x,y,z]}, ...]`)。
 
-    **添字は `kernel.count_subshapes(shape, "vertex")` の体系**(`selection.select_vertex`
+    **添字は `kernel.count_subshapes(shape, "vertex")` の体系**(`selection._select_shape`
     と同じ)。build123d の `.vertices()` の順序とは一致する保証が無いので、座標も順序も
     `kernel.vertex_positions` から取る。
     """
