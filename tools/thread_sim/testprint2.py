@@ -46,6 +46,7 @@ INTRO = (
     '<p><b>嵌合の試し方</b>: TP1 と同じ(冷めてから、工具なしで、凹み1個のナットから順に、初回のねじ込みで判定)。'
     '<b>「ガタが大きい」は、ナットをボルトの途中で止めて軸の向きに押し引きしたとき、カタカタ動くのが分かる</b>ときに付ける。</p>'
     '刷れなかった・欠けた部品があれば、その行で「部品が欠けた・刷れなかった」に印を付ける(印刷のしやすさの記録になる)。</p>'
+    '<p><b>部品は捨てない</b>: 結果を返した後も、次の試し刷りの結果が出るまで全部の部品を袋などにまとめて取っておく(確かめ直しに使うことがある)。</p>'
     '<p><b>返し方</b>: 各行を1つクリック(点線の枠は当てはまるときだけ追加)。下の「コピー」を押し、出てきた1行を次のメッセージに貼る。途中で閉じても選択は残る。</p></div>'
 )
 
@@ -133,7 +134,8 @@ def _pull_af(D):
     return max(1.6 * D, D + 4.0) + 2.0
 
 
-def build(out: Path = OUT):
+def build(out: Path = OUT, test_id: str = TEST_ID):
+    """test_id を変えると、同じ部品のまま別の回の試し刷りとして作る(TP3 = TP2 の刷り直し)。"""
     out.mkdir(parents=True, exist_ok=True)
     pieces, groups = [], []
     for sid, name, D, mk, mode, sides, cs in SERIES:
@@ -174,7 +176,7 @@ def build(out: Path = OUT):
         groups.append(("引き抜き", "吊り板 R にボルトを下から通し、上からナットを手で締めて、頭の横穴に重りを吊る。"
                        "同じ組の2本は、同じ条件のくり返し。", pitems))
     plate = make_plate(out, pieces)
-    (out / "manifest.json").write_text(json.dumps(dict(test_id=TEST_ID, pieces=[p.__dict__ for p in pieces], plate=plate),
+    (out / "manifest.json").write_text(json.dumps(dict(test_id=test_id, pieces=[p.__dict__ for p in pieces], plate=plate),
                                                   ensure_ascii=False, indent=1), encoding="utf-8")
     layout = layout_svg(out, pieces, plate["placed"], series=SERIES,
                         extra_rows=[(s[0], f"{s[0]}: 引き抜き {s[1]}(ボルトの頭に横穴、ナットは低い)", "R は吊り板") for s in PULL],
@@ -182,7 +184,7 @@ def build(out: Path = OUT):
     (out / "layout.svg").write_text(layout, encoding="utf-8")
     figure = ('<div class="intro"><p><b>配置図</b>(plate.stl を上から見た図。下が手前。系列は頭やナットの角の数で、'
               'ナットの番号は上面の凹みの数で分かる)</p>' + layout + '</div>')
-    write_page(groups, out / "index.html", "ねじ試し刷り TP2 の結果", intro=INTRO + figure, test_id=TEST_ID)
+    write_page(groups, out / "index.html", f"ねじ試し刷り {test_id} の結果", intro=INTRO + figure, test_id=test_id)
     predict(out)
     return pieces
 
@@ -215,6 +217,9 @@ if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "recheck":
         print(write_recheck_tp1())
+    elif len(sys.argv) > 1 and sys.argv[1] == "tp3":  # TP2 と同じ部品の刷り直し(THREAD_SIM.md 6.5 の 2)
+        ps = build(OUT.parent / "testprint3", "TP3")
+        print(len(ps), "部品を", OUT.parent / "testprint3", "へ")
     else:
         ps = build()
         print(len(ps), "部品を", OUT, "へ")
