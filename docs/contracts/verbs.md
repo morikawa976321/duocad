@@ -9,7 +9,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **ローカル方式はサーバへ何も送らない**(Esc で中断しても文書が変わらないことを「送らない」で成立させる)。投機実行へ寄せない。
 - **TS の変換規則はコアの写しで、片方だけ変えてはならない**(幽霊と確定結果が別の場所に出る)。`entityKinds.ts` の `translate`/`rotate` ← `duocad/sketch.py` の `_translate_*`/`_rotate_*`、円形反復の刻み角 ← `duocad/sketch.py` の `circular_pattern_step`、点だけ動かすか図形全体か ← `duocad/verbs/move_sketch.py` の `_normalize_targets`/`_moved_params`、`rotatedTargets` ← 同 `_rotation_args`/`_rotated_params`/`_apply`/`_copy`。一致は `tests/test_ghost_agreement.py` と `tests/eval_ghosts.mjs` が突き合わせる。
 - **`showBodyGhosts` は本物を隠さない**(`showPreview` は隠す)。幽霊は 1 ボディ = 1 `THREE.Group` で `group.matrixAutoUpdate = false` にして行列を直に置く(`group.position` は効かない)。行列は `T(offset)·T(p)·R·T(-p)`。
-- **幽霊が消える場面は `viewport.clearPreview()` に集約**(`update`/`prune`/`showPreview`/`App.clearPreview`/モードが変わったときの `onModeChanged` がすべてここを通る)。別の消し口を作らない。
+- **幽霊が消える場面は `viewport.clearPreview()` に集約**(`update`/`prune`/`showPreview`/`previewController.clear/cancel`/モードが変わったときの `onModeChanged` がすべてここを通る)。別の消し口を作らない。
 - **幽霊は「解決済みの数値」でしか描かない。** 中心・軸を省略したときのコアの既定(スケッチ=対象の代表点の平均 / ソリッド=体積重心)はブラウザへ写さない(規則が2箇所に増える。体積重心は三角形分割からの近似にしかならない)。UI で軸・中心を指させるときも画面側が数値へ解決してから渡す(辺の参照をそのまま `showLocalGhost` へ渡さない。実装は `App.svelte` の `resolvePicksForGhost`)。
 - **長方形は回しても鏡映しても長方形のまま**(基準の角を動かし、`angle` を回す。`web/src/entityKinds.ts` の `rotate`/`mirror` はコアの `_rotate_rectangle`/`_mirror_rectangle` の写し)。幽霊も同じ長方形を描く。番人は `tests/test_ghost_agreement.py::test_a_rotated_rectangle_ghost_is_still_the_same_rectangle`。
 - スケッチ回転の幽霊は `ghostCopies` の `args.mode === 'rotate'` 分岐(引数は `angle`(度)・`center: [u, v]` の数値・任意で `copy`)。`rotateCopies` は **`true`** を渡す(対象そのものを回す。`false` は反復の複製用で向きを変えず位置だけ回す)。
@@ -23,7 +23,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 ### 踏んだ罠
 
 - **`move_sketch_entities` は選んだ点だけを動かす**(図形全体ではない)。参照の `point` が `null` なら図形全体、文字列ならその1点。同じ図形に辺と点が両方選ばれたら辺(全体)が勝つ。`copy=true` は常に図形まるごと1つを複製。図形IDに畳んだ `selectedEntities` を幽霊の対象にすると、点1つの選択で図形ごと動く幽霊になる(`GhostSource.points` を使う)。
-- **モード切替では `onCancelPreview` が来ない**(`{#key commandRowKey}` が `CommandHost` ごと作り直す)。`App.svelte` の `onModeChanged` の先頭で `clearPreview()` を呼ぶ。**`mode` を差し替える前**でなければならない(`clearPreview` が旧 `sketchId` を読む)。
+- **モード切替はコマンドの通常の中断経路を通らない**(`{#key commandRowKey}` が `CommandHost` ごと作り直す)。`App.svelte` の `onModeChanged` の先頭で `preview.clear()` を呼び、子の破棄は `preview.detach()` で保留処理を終える。寿命の契約は [ui-selection-viewport.md](ui-selection-viewport.md)「プレビュー要求の寿命」。
 - **`web/dist` を作り直さないと実機 smoke は古いバンドルを見る**(`duocad/net/http.py` が配る)。`npm run check` が通っても smoke が「幽霊が出ない」で落ちる。画面側を直したら smoke の前に `npm run build`。
 - **原点を通る軸で回転行列を検算しても意味が薄い**(`T(p)·R·T(-p)` の平行移動2項が恒等になり、軸位置を落とした実装でも通る)。非原点の軸、Y軸・負角度・非単位ベクトルで検算する。
 - **`onBoxSelect` はスケッチの領域も拾う。** 長方形をウィンドウ選択すると領域参照が混ざる。「図形まるごと1つ」の判定は `item.entity !== undefined` で絞る。
@@ -231,7 +231,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **角度は度で `0 < |angle| <= 360`、負は逆向き**(押し出しの距離の符号と同じ扱い)。正は軸の向き(線分の始点→終点)まわりの右ねじ。`symmetric` は両側へ半分ずつ。360° は角度なしの `BRepPrimAPI_MakeRevol` で作る。
 - **軸が領域を横切るのは ValueError**(`_require_one_side_of_axis`)。軸の両側に半平面を置いて共通部分の面積で決める(辺が軸上にあるのは面積0なので通る)。境界を折れ線で拾う判定は、軸をわずかにまたぐ円弧を取りこぼす。
 - **360° の回転体のシーム(継ぎ目の辺)をフィレットに渡すと、OCCT が「適した辺が無い」で断り、verb は例外で何も変えない**(`tests/test_revolve.py` が固定)。ピックからは外していない。
-- **画面(`REVOLVE`、スケッチモード)は 軸の3択(x軸 / y軸 / 線分を選ぶ)+ 線分のピック(`axis_line`。共有選択に入れない)+ 角度(既定 360)+ 種別。** 「線分を選ぶ」は `sends: null` でサーバへ行かず、`build` が `axis_line` を送る(`MIRROR_BODY` の「面を選ぶ」と同じ形)。**`sends: null` の選択肢は `impliedBy` に配信から自分を戻す引数名を持つ**(「線分を選ぶ」は `axis_line`、「面を選ぶ」は `plane_face`。`CommandHost.syncFromShared` が使い、`tests/test_ui_command_wiring.py` が全選択肢に課す)。無いと再読み込みで選択肢が戻らず、ピックの欄が隠れたまま確定できない。**両側(`symmetric`)は画面から送らない**(選択肢は既定値を持てず、毎回1クリック増えるため)。プレビューは押し出しと同じサーバの投機実行。実機検査は `web/scripts/smoke-revolve.mjs`。
+- **画面(`REVOLVE`、スケッチモード)は 軸の3択(x軸 / y軸 / 線分を選ぶ)+ 線分のピック(`axis_line`。共有選択に入れない)+ 角度(既定 360)+ 種別。** 「線分を選ぶ」は `sends: null` でサーバへ行かず、`build` が `axis_line` を送る(`MIRROR_BODY` の「面を選ぶ」と同じ形)。**`sends: null` の選択肢は `impliedBy` に配信から自分を戻す引数名を持つ**(「線分を選ぶ」は `axis_line`、「面を選ぶ」は `plane_face`。`sharedArgsController.transitionSharedArgs` が使い、`tests/test_ui_command_wiring.py` が全選択肢に課す)。無いと再読み込みで選択肢が戻らず、ピックの欄が隠れたまま確定できない。**両側(`symmetric`)は画面から送らない**(選択肢は既定値を持てず、毎回1クリック増えるため)。プレビューは押し出しと同じサーバの投機実行。実機検査は `web/scripts/smoke-revolve.mjs`。
 
 ## ロフト(loft)
 
