@@ -279,6 +279,9 @@ class AgentLoop:
             rearm()
         self._settle_history()
         self.turns.append(UserTurn(prompt))
+        # 楽観ロックの基準は「モデルが読んだ版」で、往復をまたいで持ち越す(事前確認と各ツール実行の `seq_after`、止めたときは止めた時点の版)。
+        # 往復の冒頭で `current_seq()` を取り直さない: 読んだ後〜取り直すまでに入った人の選び直しが基準に吸われ、
+        # 古い選択を前提にしたフィレットが選び直した辺へ通る(issue #221)。応答待ちの間の変更は、各ツールの直前の照合が拾う。
         expected_seq = self._look_first()
         descriptors = self.tools.descriptors()
         outcomes: list[ToolOutcome] = []

@@ -222,8 +222,8 @@ class DocumentTools:
     def current_seq(self) -> tuple[int, int, int, str, str, int]:
         """文書+選択+作業空間の版。**モデルには見せない** —— `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
 
-        `AgentLoop.run()` はモデルへの1往復・ツール1実行のたびにこれを控え、値が変わっていたら
-        残りのツール呼び出しを構造化エラーへ差し替える(楽観ロック)。
+        `AgentLoop.run()` はモデルが読んだ版(事前確認とツール実行のたびに `call_and_seq` が同じ1手で読んだ版)を往復をまたいで
+        持ち越し、ツールを実行する直前の値と違えば残りのツール呼び出しを構造化エラーへ差し替える(楽観ロック)。
 
         戻り値は `(Session.generation, len(document.log.entries), Session.applied_count, selection.fingerprint(document),
         selection.visibility_fingerprint(document), Session.workspace.revision)`。**6つとも要る**:

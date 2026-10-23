@@ -129,6 +129,7 @@ def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) ->
     """
     normalized = _normalize_targets(doc, targets)
     axis_sketch, axis_entity, ax, ay, ux, uy = _axis_line(doc, axis)
+    editable_sketch(doc, axis_sketch)
     normalized = [item for item in normalized if item != (axis_sketch, axis_entity)]
     if not normalized:
         raise ValueError(

@@ -93,6 +93,19 @@ def test_one_hidden_target_prevents_changes_to_visible_targets(session, verb, ar
     assert snapshot(session.document) == before
 
 
+def test_a_mirror_axis_in_a_hidden_sketch_is_refused(session):
+    axis_sketch = session.sketch_create("XY")["sketch_id"]
+    axis_id = session.add_line(axis_sketch, [0, 0], [30, 0])["entity_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_rectangle(sketch_id, [2, 3], 10, 6)["entity_id"]
+    selection.set_selection(session.document, refs=[{"sketch": sketch_id, "entity": entity_id}])
+    session.set_sketch_visible(axis_sketch, False)
+    before = snapshot(session.document)
+    with pytest.raises(ValueError, match="hidden"):
+        session.mirror_sketch_entities(axis={"sketch": axis_sketch, "entity": axis_id})
+    assert snapshot(session.document) == before
+
+
 def test_delete_items_can_still_remove_a_hidden_sketch_by_id(session):
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.set_sketch_visible(sketch_id, False)
