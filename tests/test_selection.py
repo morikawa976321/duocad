@@ -15,7 +15,7 @@ from duocad.selection import set_visible
 from duocad.server import Session
 from duocad.sketch import add_circle, sketch_create
 from duocad.verbs import extrude_faces
-from document_support import box_shape as _box_shape
+from document_support import box_shape as _box_shape, shape_ref
 from session_support import session_with_box
 
 #: 押し出し量(mm)。文書を実際に変えるために使う。
@@ -60,9 +60,9 @@ def _first_extrudable_face(shape) -> int:
 def test_each_kind_of_reference_keeps_its_kind(doc: Document):
     """面・辺・頂点の参照が、それぞれ `kind` を保持したまま選択に入る。"""
     refs = [
-        selection.select_face(doc, "box", 1),
-        selection.select_edge(doc, "box", 1),
-        selection.select_vertex(doc, "box", 1),
+        shape_ref(doc, "box", "face", 1),
+        shape_ref(doc, "box", "edge", 1),
+        shape_ref(doc, "box", "vertex", 1),
     ]
     result = selection.modify_selection(doc, add=refs)
     assert [item["kind"] for item in result.items] == ["face", "edge", "vertex"]
@@ -70,7 +70,7 @@ def test_each_kind_of_reference_keeps_its_kind(doc: Document):
 
 def test_shape_refs_have_the_shape_of_the_spec(doc: Document):
     """ShapeRef の形は §3.5 のとおり(`provenance` は day1 の空スロット)。"""
-    ref = selection.select_edge(doc, "box", 3)
+    ref = shape_ref(doc, "box", "edge", 3)
     assert ref == {"body": "box", "kind": "edge", "index": 3, "provenance": None}
 
 
@@ -80,12 +80,12 @@ def test_edge_and_vertex_indexes_follow_the_kernel_numbering(doc: Document):
     assert kernel.edge_count(shape) == 12
     assert kernel.count_subshapes(shape, "vertex") == 8
 
-    selection.select_edge(doc, "box", 12)
-    selection.select_vertex(doc, "box", 8)
+    shape_ref(doc, "box", "edge", 12)
+    shape_ref(doc, "box", "vertex", 8)
     with pytest.raises(ValueError):
-        selection.select_edge(doc, "box", 13)
+        shape_ref(doc, "box", "edge", 13)
     with pytest.raises(ValueError):
-        selection.select_vertex(doc, "box", 0)
+        shape_ref(doc, "box", "vertex", 0)
 
 
 def test_regions_can_be_selected_with_a_region_ref(sketch_doc):
@@ -123,7 +123,7 @@ def test_regions_go_into_the_selection_like_any_other_kind(sketch_doc, doc: Docu
 
 def test_selected_items_rejects_an_unknown_kind(doc: Document):
     """`kind` の綴り間違いは ValueError(0件として返すとverbが黙って何もしない)。"""
-    selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
+    selection.modify_selection(doc, add=[shape_ref(doc, "box", "edge", 1)])
     with pytest.raises(ValueError):
         selection.selected_items(doc, kind="edges")
 
@@ -131,12 +131,12 @@ def test_selected_items_rejects_an_unknown_kind(doc: Document):
 def test_selecting_from_a_missing_body_raises(doc: Document):
     """存在しない body_id は KeyError(黙って空振りさせない。§6予防6)。"""
     with pytest.raises(KeyError):
-        selection.select_edge(doc, "nope", 1)
+        shape_ref(doc, "nope", "edge", 1)
 
 
 def test_modify_selection_refuses_a_malformed_ref(doc: Document):
     """人が触る主経路でも、壊れた参照は落ちて選択を変更しない(`propose` と同じ契約)。"""
-    selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
+    selection.modify_selection(doc, add=[shape_ref(doc, "box", "edge", 1)])
     with pytest.raises(ValueError):
         selection.modify_selection(doc, add=[{"body": "box", "index": 1}])
     with pytest.raises(KeyError):
@@ -148,14 +148,14 @@ def test_modify_selection_refuses_a_malformed_ref(doc: Document):
 
 def test_removing_something_that_is_not_selected_is_a_no_op(doc: Document):
     """選択に無いものの remove は空振りでよい(UIのトグルがそのまま乗る)。"""
-    selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
-    result = selection.modify_selection(doc, remove=[selection.select_edge(doc, "box", 9)])
+    selection.modify_selection(doc, add=[shape_ref(doc, "box", "edge", 1)])
+    result = selection.modify_selection(doc, remove=[shape_ref(doc, "box", "edge", 9)])
     assert [item["index"] for item in result.items] == [1]
 
 
 def test_remove_wins_when_the_same_reference_is_added_and_removed(doc: Document):
     """同じ参照が add と remove の両方にあるとき、**remove が勝つ**(引き算を後に適用)。"""
-    ref = selection.select_edge(doc, "box", 5)
+    ref = shape_ref(doc, "box", "edge", 5)
     result = selection.modify_selection(doc, add=[ref], remove=[dict(ref)])
     assert result.items == []
 
@@ -165,8 +165,8 @@ def test_selection_spans_multiple_bodies(two_bodies: Document):
     result = selection.modify_selection(
         two_bodies,
         add=[
-            selection.select_face(two_bodies, "a", 1),
-            selection.select_face(two_bodies, "b", 1),
+            shape_ref(two_bodies, "a", "face", 1),
+            shape_ref(two_bodies, "b", "face", 1),
         ],
     )
     assert [item["body"] for item in result.items] == ["a", "b"]
@@ -177,13 +177,13 @@ def test_hidden_bodies_cannot_be_selected(two_bodies: Document):
     set_visible(two_bodies, "b", False)
     assert selection.selectable_bodies(two_bodies) == ["a"]
     with pytest.raises(ValueError):
-        selection.select_face(two_bodies, "b", 1)
+        shape_ref(two_bodies, "b", "face", 1)
 
 
 def test_operating_the_raw_verb_function_does_not_touch_selection(doc: Document):
     """**選択集合そのものは永続する**。verb関数(`duocad/verbs/*.py` の生の関数)は形しか触らない。"""
     face_index = _first_extrudable_face(doc.bodies[0].shape)
-    before = selection.modify_selection(doc, add=[selection.select_face(doc, "box", face_index)])
+    before = selection.modify_selection(doc, add=[shape_ref(doc, "box", "face", face_index)])
     kept = [dict(item) for item in before.items]
 
     extrude_faces(doc, [{"body": "box", "index": face_index}], EXTRUDE_MM)
@@ -194,9 +194,9 @@ def test_operating_the_raw_verb_function_does_not_touch_selection(doc: Document)
 def test_changing_the_selection_does_not_touch_the_operation_log(doc: Document):
     """**選択の変更は操作ログに載らない**(選択は文書を変更しないため)。"""
     before = len(doc.log.entries)
-    selection.set_selection(doc, refs=[selection.select_face(doc, "box", 1)])
-    selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
-    selection.toggle_selection(doc, [selection.select_edge(doc, "box", 2)])
+    selection.set_selection(doc, refs=[shape_ref(doc, "box", "face", 1)])
+    selection.modify_selection(doc, add=[shape_ref(doc, "box", "edge", 1)])
+    selection.toggle_selection(doc, [shape_ref(doc, "box", "edge", 2)])
     selection.clear_selection(doc)
     assert len(doc.log.entries) == before
 
@@ -218,7 +218,7 @@ def test_set_visible_does_not_land_in_the_log_either(doc: Document):
 def test_selection_is_not_saved(doc: Document):
     """**選択は保存されない**(セッション状態)。保存・再生の対象は操作ログだけ。"""
     sketch_create(doc, "XY")  # ログに1行積んでおく(空のログを再生しても何も検査できない)
-    selected = selection.select_face(doc, "box", 1)
+    selected = shape_ref(doc, "box", "face", 1)
     selection.set_selection(doc, refs=[selected])
     saved = doc.log.to_json()
 
@@ -238,15 +238,15 @@ def test_selection_is_not_saved(doc: Document):
 def test_the_ai_selects_the_human_fixes_and_the_ai_reads_it_back(doc: Document):
     """**交互操作そのもの。このファイルの核心の1本**。"""
     chosen = selection.set_selection(
-        doc, refs=[selection.select_edge(doc, "box", index) for index in (1, 2, 3)]
+        doc, refs=[shape_ref(doc, "box", "edge", index) for index in (1, 2, 3)]
     )
     assert [item["index"] for item in chosen.items] == [1, 2, 3]
 
     # 人が過不足を直す(1本足して1本引く)
     selection.modify_selection(
         doc,
-        add=[selection.select_edge(doc, "box", 4)],
-        remove=[selection.select_edge(doc, "box", 2)],
+        add=[shape_ref(doc, "box", "edge", 4)],
+        remove=[shape_ref(doc, "box", "edge", 2)],
     )
 
     # AIが読み直す。**人の編集が見えている**
@@ -256,15 +256,15 @@ def test_the_ai_selects_the_human_fixes_and_the_ai_reads_it_back(doc: Document):
 
 def test_toggle_selection_adds_what_is_absent_and_removes_what_is_present(doc: Document):
     """`toggle_selection` は参照ごとにあれば外し無ければ足す(UIの素のクリックと同じ)。"""
-    selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
+    selection.set_selection(doc, refs=[shape_ref(doc, "box", "edge", 1)])
     selection.toggle_selection(
-        doc, [selection.select_edge(doc, "box", 1), selection.select_edge(doc, "box", 2)]
+        doc, [shape_ref(doc, "box", "edge", 1), shape_ref(doc, "box", "edge", 2)]
     )
     assert [item["index"] for item in selection.get_selection(doc).items] == [2]
 
 
 def test_toggle_selection_refuses_a_malformed_ref_without_touching_the_selection(doc: Document):
-    keep = [selection.select_edge(doc, "box", 1)]
+    keep = [shape_ref(doc, "box", "edge", 1)]
     selection.set_selection(doc, refs=keep)
     with pytest.raises(ValueError):
         selection.toggle_selection(doc, [{"body": "box", "kind": "nope", "index": 1}])
@@ -275,7 +275,7 @@ def test_selected_items_can_be_filtered_by_kind(doc: Document):
     """`selected_items(kind=...)` で種別を絞れる(verbは自分が食える種別だけ要る)。"""
     selection.modify_selection(
         doc,
-        add=[selection.select_face(doc, "box", 1), selection.select_edge(doc, "box", 1)],
+        add=[shape_ref(doc, "box", "face", 1), shape_ref(doc, "box", "edge", 1)],
     )
     assert len(selection.selected_items(doc, kind="edge")) == 1
     assert len(selection.selected_items(doc, kind="face")) == 1
@@ -284,7 +284,7 @@ def test_selected_items_can_be_filtered_by_kind(doc: Document):
 def test_edge_indices_feed_fillet_directly(doc: Document):
     """確定した選択が `fillet(edges=[...])` へそのまま渡せる形で取り出せる。"""
     selection.modify_selection(
-        doc, add=[selection.select_edge(doc, "box", index) for index in (1, 3)]
+        doc, add=[shape_ref(doc, "box", "edge", index) for index in (1, 3)]
     )
     assert selection.edge_indices(doc) == [1, 3]
 
@@ -294,8 +294,8 @@ def test_edge_indices_refuses_to_guess_across_bodies(two_bodies: Document):
     selection.modify_selection(
         two_bodies,
         add=[
-            selection.select_edge(two_bodies, "a", 1),
-            selection.select_edge(two_bodies, "b", 1),
+            shape_ref(two_bodies, "a", "edge", 1),
+            shape_ref(two_bodies, "b", "edge", 1),
         ],
     )
     with pytest.raises(ValueError):
@@ -305,8 +305,8 @@ def test_edge_indices_refuses_to_guess_across_bodies(two_bodies: Document):
 
 def test_proposing_again_replaces_the_previous_selection(doc: Document):
     """`set_selection` は**置き換え**(差分は `modify_selection` の仕事)。"""
-    selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 1)])
-    result = selection.set_selection(doc, refs=[selection.select_edge(doc, "box", 2)])
+    selection.set_selection(doc, refs=[shape_ref(doc, "box", "edge", 1)])
+    result = selection.set_selection(doc, refs=[shape_ref(doc, "box", "edge", 2)])
     assert [item["index"] for item in result.items] == [2]
 
 
@@ -326,7 +326,7 @@ def test_a_malformed_ref_is_refused_without_touching_the_selection(
     doc: Document, bad: dict, expected: type, why: str
 ):
     """手書きの壊れた参照も**落ちて、選択を変更しない**。"""
-    keep = [selection.select_edge(doc, "box", 1)]
+    keep = [shape_ref(doc, "box", "edge", 1)]
     selection.modify_selection(doc, add=keep)
 
     with pytest.raises(expected):
@@ -343,7 +343,7 @@ def test_set_selection_needs_exactly_one_source(doc: Document):
     with pytest.raises(ValueError):
         selection.set_selection(
             doc,
-            refs=[selection.select_edge(doc, "box", 1)],
+            refs=[shape_ref(doc, "box", "edge", 1)],
             predicate={"kind": "edge", "where": []},
         )
 
@@ -352,13 +352,13 @@ def test_every_selection_api_fires_exactly_one_event(session: Session):
     """変更する4つのAPIがそれぞれ1回だけ発火し、読み取りは発火しない。"""
     events = []
     session.add_listener(events.append)
-    ref = selection.select_edge(session.document, "box", 1)
+    ref = shape_ref(session.document, "box", "edge", 1)
 
     session.set_selection(refs=[ref])
     assert len(events) == 1
-    session.modify_selection(add=[selection.select_edge(session.document, "box", 2)])
+    session.modify_selection(add=[shape_ref(session.document, "box", "edge", 2)])
     assert len(events) == 2
-    session.toggle_selection([selection.select_edge(session.document, "box", 2)])
+    session.toggle_selection([shape_ref(session.document, "box", "edge", 2)])
     assert len(events) == 3
     session.clear_selection()
     assert len(events) == 4
@@ -371,7 +371,7 @@ def test_the_event_carries_enough_to_redraw(session: Session):
     """イベントは**UIが描き直すのに足る情報**を持つ。"""
     events = []
     session.add_listener(events.append)
-    session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
+    session.set_selection(refs=[shape_ref(session.document, "box", "edge", 1)])
 
     payload = events[0]
     assert payload["change"] == "selection"
@@ -383,7 +383,7 @@ def test_the_event_carries_the_client_op_back(session: Session):
     """`client_op` をそのまま載せて返す(操作を出したクライアントが自分の計測と突き合わせる)。"""
     events = []
     session.add_listener(events.append)
-    ref = selection.select_edge(session.document, "box", 1)
+    ref = shape_ref(session.document, "box", "edge", 1)
 
     assert session.set_selection(refs=[ref], client_op=7)["client_op"] == 7
     assert events[0]["client_op"] == 7
@@ -405,7 +405,7 @@ def test_selection_events_ride_the_same_up_path_as_set_visible(session: Session)
     session.set_visible("box", True)
     assert len(events) == 2
 
-    session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
+    session.set_selection(refs=[shape_ref(session.document, "box", "edge", 1)])
     assert len(events) == 3
 
     session.remove_listener(events.append)
@@ -415,7 +415,7 @@ def test_selection_events_ride_the_same_up_path_as_set_visible(session: Session)
 
 def test_selection_is_part_of_the_pushed_state(session: Session):
     """選択は `state_meta()` に載る —— **これが無いとAIの変更は画面へ届かない**。"""
-    session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
+    session.set_selection(refs=[shape_ref(session.document, "box", "edge", 1)])
     state = session.state_meta()
     assert "origin" not in state["selection"]
     assert state["selection"]["count"] == 1
@@ -427,7 +427,7 @@ def test_a_failing_listener_does_not_undo_the_selection(session: Session):
         raise RuntimeError("購読者が落ちた")
 
     session.add_listener(broken)
-    session.set_selection(refs=[selection.select_edge(session.document, "box", 1)])
+    session.set_selection(refs=[shape_ref(session.document, "box", "edge", 1)])
 
     assert session.get_selection()["count"] == 1
     assert any("配信に失敗" in warning for warning in session.warnings)
@@ -436,13 +436,13 @@ def test_a_failing_listener_does_not_undo_the_selection(session: Session):
 # ---------------------------------------------------------------- 隠したものを選択から外す・参照の形
 def test_a_hidden_body_that_is_still_selected_can_be_replaced_by_a_new_pick(two_bodies: Document):
     """落ちたら、選択に残った隠したボディの項目が `remove` を丸ごと拒否させ、画面の「いまの選択を外して新しく選ぶ」が失敗する。"""
-    selection.set_selection(two_bodies, refs=[selection.select_face(two_bodies, "a", 1)])
+    selection.set_selection(two_bodies, refs=[shape_ref(two_bodies, "a", "face", 1)])
     set_visible(two_bodies, "a", False)
     assert selection.get_selection(two_bodies).items, "可視性の切替で選択は飛ばない(前提)"
 
     result = selection.modify_selection(
         two_bodies,
-        add=[selection.select_face(two_bodies, "b", 1)],
+        add=[shape_ref(two_bodies, "b", "face", 1)],
         remove=[{"body": "a", "kind": "face", "index": 1, "provenance": None}],
     )
 
@@ -468,7 +468,7 @@ def test_a_hidden_sketch_entity_that_is_still_selected_can_be_removed(sketch_doc
 def test_toggling_a_selected_ref_of_a_hidden_body_removes_it_but_a_hidden_one_cannot_be_added(two_bodies: Document):
     """落ちたら、隠したボディの選択済みの面を toggle で外せない。逆に、隠したボディの面を toggle で足せてしまう。"""
     selection.set_selection(
-        two_bodies, refs=[selection.select_face(two_bodies, "a", 1), selection.select_face(two_bodies, "b", 1)]
+        two_bodies, refs=[shape_ref(two_bodies, "a", "face", 1), shape_ref(two_bodies, "b", "face", 1)]
     )
     set_visible(two_bodies, "a", False)
 
@@ -484,7 +484,7 @@ def test_toggling_the_same_ref_twice_changes_nothing_and_keeps_the_order(doc: Do
     """落ちたら、入っている参照を2回 toggle すると末尾へ動く(`fillet` の辺リストと半径リストの対応がずれる)。"""
 
     def edge(index: int) -> dict:
-        return selection.select_edge(doc, "box", index)
+        return shape_ref(doc, "box", "edge", index)
 
     def indexes() -> list:
         return [item["index"] for item in selection.get_selection(doc).items]
@@ -500,10 +500,10 @@ def test_toggling_the_same_ref_twice_changes_nothing_and_keeps_the_order(doc: Do
 
 def test_set_selection_keeps_only_the_first_of_duplicate_refs(doc: Document):
     """落ちたら、同じ参照を複数渡すと件数が水増しされる(`measure` の合計が二重になり、`toggle` が1回で両方外す)。"""
-    first = selection.select_edge(doc, "box", 2)
+    first = shape_ref(doc, "box", "edge", 2)
     result = selection.set_selection(
         doc,
-        refs=[first, selection.select_edge(doc, "box", 1), dict(first), {"body": "box", "kind": "edge", "index": "1"}],
+        refs=[first, shape_ref(doc, "box", "edge", 1), dict(first), {"body": "box", "kind": "edge", "index": "1"}],
     )
 
     assert [item["index"] for item in result.items] == [2, 1]
@@ -512,7 +512,7 @@ def test_set_selection_keeps_only_the_first_of_duplicate_refs(doc: Document):
 @pytest.mark.parametrize("index", [None, [1], True, 2.9, float("inf"), float("nan"), "x", {"a": 1}])
 def test_a_ref_index_that_is_not_an_integer_is_a_value_error_and_leaves_the_selection(doc: Document, index):
     """落ちたら、`null`・配列は TypeError、`inf` は OverflowError(MCP では internal)で落ち、`2.9`・`true` は別の面を選ぶ。"""
-    keep = selection.select_edge(doc, "box", 1)
+    keep = shape_ref(doc, "box", "edge", 1)
     selection.set_selection(doc, refs=[keep])
     bad = {"body": "box", "kind": "edge", "index": index}
 

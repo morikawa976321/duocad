@@ -1303,7 +1303,7 @@
    */
   /**
    * 当たった面を選択の参照へ翻訳する。メッシュボディだけはボディ参照へ畳む:
-   * メッシュに指せる面は無い(`selection.select_face` が断る)が、ボディ単位なら選べる。
+   * メッシュに指せる面は無い(`selection.modify_selection` が断る)が、ボディ単位なら選べる。
    * 編集verbは `kinds` にボディを持たないので押せないまま、「押せるのに断られる」が画面から消える。
    */
   function pickedRef(bodyId: string, faceIndex: number): SelectionRef {
@@ -2184,7 +2184,7 @@
   /**
    * 面を持たないボディ(三角形メッシュ)のID。`duocad.document.MESH_KIND` と同じ綴り。
    * ピックの畳み込み(`pickedRef`)に要る: viewport はメッシュも1枚の面(添字1)として描くので、素直に翻訳すると
-   * コアの `select_face` が断り、ドラッグの一括選択はまとめて1回で送るのでメッシュが1つ入るだけで選択が丸ごと落ちる
+   * コアの `modify_selection` が断り、ドラッグの一括選択はまとめて1回で送るのでメッシュが1つ入るだけで選択が丸ごと落ちる
    * (`docs/contracts/ui-optimize-integration.md`「編集 verb を効かせない」)。
    */
   const meshBodyIds = $derived(

@@ -6,6 +6,7 @@ import math
 import pytest
 
 from duocad import interference, selection
+from document_support import shape_ref
 from interference_support import (
     box, check, cut, cylinder, document_of, filleted_box, nested_boxes, pair_of, plate_with_hole, rotated,
 )
@@ -145,7 +146,7 @@ def test_the_targets_follow_the_visibility_and_the_selection():
     assert _targets(document) == ("one_vs_rest", [("a", "b"), ("b", "c")], 1)
     select(document, selection.select_body(document, "b"), selection.select_body(document, "c"))
     assert _targets(document) == ("selected_set", [("b", "c")], 1)
-    select(document, selection.select_face(document, "c", 1))
+    select(document, shape_ref(document, "c", "face", 1))
     assert _targets(document)[0] == "one_vs_rest" and interference.resolve_targets(document).selected == ("c",)
 
 

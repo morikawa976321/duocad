@@ -22,7 +22,7 @@ export type { Applied, EntityKind }
 /** 選べるものの種別。領域(region)は `RegionRef` 側で表す(`duocad/selection.py` §3.5)。 */
 export type ShapeKind = 'face' | 'edge' | 'vertex'
 
-/** 面・辺・頂点を指す参照。添字は**1始まり**(コアの `select_*` と同じ)。 */
+/** 面・辺・頂点を指す参照。添字は**1始まり**(コアの `selection._select_shape` と同じ)。 */
 export interface ShapeRef {
   body: string
   kind: ShapeKind

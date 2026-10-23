@@ -11,7 +11,7 @@ from session_support import SIDE, box as _box, browser as _browser
 def test_vertex_positions_use_the_same_index_as_the_selection(session: Session) -> None:
     """`vertex_positions` の添字は `count_subshapes(shape, "vertex")` の体系と同じ。
 
-    落ちたら、`selection.select_vertex` が通した添字で座標が引けない
+    落ちたら、選択で通した頂点の添字で座標が引けない
     (= 選択に入った頂点を画面に出せない)。
     """
     body, _ = _box(session)

@@ -545,7 +545,7 @@ WebSocket に口がある(`optimize_conditions`/`optimize_resolution`/`optimize_
 - 通知はトーストとパネルの二重(トーストは8秒で消えるので「結果が信用できない」という文はパネルの`#optimize-notice`に残す)。中断はエラー扱いにしない。
 - **実行中は走らせている文書を変える操作をすべて断る**(`Session` の `DocumentBusy`。選択・表示・保存・書き出しは通す)。途中で変えると古い条件の形が足される(issue #26)。ブラウザ・MCP・アプリ内AIはどれも `Session` を通るので1箇所で止まる。
 - **走らせたまま別の文書へ移って編集してよい**(2026-10-04 本人指示)。結果は`Session.deliver_optimization_result`が開いたままならその文書へ、別の文書を開いていればそのファイルの操作ログへ書く。書けなかった結果はメモリに残し次にそのファイルを開くと結果入りで開く。走らせているファイルの改名・別名保存・削除は断る。同時に走らせられるのは1本だけ(上の太字「メモリ」の段落にある 1.6 mm の実測から、2本は収まらない)。
-- **パネルはビューポート左のブラウザと同じ列の下端に出す**(右へ帯を足すと`viewport.project()`の`clickable(x,y)`判定で左のボディの面が1枚も指せなくなった)。結果は積み上がる(`optimized`/`optimized-2`/…)。メッシュボディのピックはボディ選択へ畳む(`App.svelte`の`pickedRef`。`kind:"face"`参照にするとコアの`select_face`が断る)。
+- **パネルはビューポート左のブラウザと同じ列の下端に出す**(右へ帯を足すと`viewport.project()`の`clickable(x,y)`判定で左のボディの面が1枚も指せなくなった)。結果は積み上がる(`optimized`/`optimized-2`/…)。メッシュボディのピックはボディ選択へ畳む(`App.svelte`の`pickedRef`。`kind:"face"`参照にするとコアの`modify_selection`が断る)。
 - 開発用のデバッグ表示は`web/src/debugFlags.ts`(`?debug=space`・`?debug=anchors`・`?voxel=1`)。フラグが無いときの画面は1ピクセルも変わらない。
 
 ### 比較スクリーンショットの撮影台(`web/scripts/shoot-topopt.mjs`)

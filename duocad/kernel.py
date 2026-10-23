@@ -992,81 +992,12 @@ def _describe_face(face: Any, index: int) -> dict:
     }
 
 
-def tessellate_selective(
-    shape: "TopoDS_Shape",
-    fine_faces: Optional[Iterable[int]] = None,
-    deviation: float = DEFAULT_DEVIATION,
-    angular_deflection: float = DEFAULT_ANGULAR_DEFLECTION,
-    coarse_deviation: Optional[float] = None,
-    coarse_angular_deflection: Optional[float] = None,
-) -> dict:
-    """**面ごとに粗さを変えて**三角形分割する(視錐台/バックフェイスによる選択的高精度化)。
-
-    `fine_faces` に入っている1始まりの面添字だけを `deviation` / `angular_deflection` で、
-    それ以外を `coarse_deviation` / `coarse_angular_deflection` で測る。
-    `fine_faces=None` は「全面を細かく」で、`tessellate()` と同じ測り方になる。
-
-    戻り値は `tessellate()` と同じ形に次を足したもの:
-
-        "deviation":        この配りものの中で**いちばん細かい**偏差[mm]
-        "coarse_deviation": 粗い側の偏差[mm]
-        "fine_face_count":  細かく測った面の数
-        "closed":           閉じた立体か(`_is_closed_shell`。バックフェイス判定の可否)
-        faces[i]["detail"]: "fine" | "coarse"
-
-    **2パスで測る**(面ごとの偏差を渡す口がOCCTに無い)。粗い面・細かい面をそれぞれ compound にして
-    測り、パスの間で三角形を抜き出す。`BRepTools.Clean_s` を**パスごとに**形状全体へ呼ぶのは、
-    前のパスの三角形が残っているとOCCTが「もう十分細かい」と判断して測り直さないため。
-
-    境界の交差検査・再分割(`kernel_meshing`)はパスごとに compound の中で完結し、共有辺の再分割は
-    他方のパスに伝わらない(`boundary["passes"]` に両方の診断を残す)。
-
-    **分かっている代償(隙間)**: 細かい面と粗い面が**曲線の辺**を共有していると、境目に粗い側の偏差
-    ぶんの隙間が開きうる(境目は視錐台の縁とシルエット。直線の共有辺では起きない)。画面の縁の話なので塞いでいない。
-    """
-    _check_tessellation_args(shape, deviation, angular_deflection)
-
-    shape_map = _face_map(shape)
-    total = shape_map.Extent()
-    coarse_dev = float(deviation if coarse_deviation is None else coarse_deviation)
-    coarse_ang = float(
-        angular_deflection if coarse_angular_deflection is None else coarse_angular_deflection
-    )
-    # **粗い側が細かい側を下回らない**。逆転すると「見えていない面の方が細かい」になる。
-    coarse_dev = max(coarse_dev, float(deviation))
-    coarse_ang = max(coarse_ang, float(angular_deflection))
-
-    if fine_faces is None:
-        fine = set(range(1, total + 1))
-    else:
-        fine = {int(index) for index in fine_faces if 1 <= int(index) <= total}
-
-    if not fine:
-        result = tessellate(shape, coarse_dev, coarse_ang)
-    elif len(fine) == total or (
-        coarse_dev == float(deviation) and coarse_ang == float(angular_deflection)
-    ):
-        result = tessellate(shape, deviation, angular_deflection)
-    else:
-        result = _tessellate_split(
-            shape, shape_map, fine, float(deviation), float(angular_deflection), coarse_dev, coarse_ang
-        )
-
-    for face in result["faces"]:
-        face["detail"] = "fine" if face["index"] in fine else "coarse"
-    result["deviation"] = float(deviation) if fine else coarse_dev
-    result["coarse_deviation"] = coarse_dev
-    result["fine_face_count"] = len(fine)
-    result["closed"] = _is_closed_shell(shape)
-    return result
-
-
 def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], Iterable[int]]) -> dict:
     """指定した面だけを、`(偏差, 角度偏差)` の組ごとに三角形分割する(面単位のキャッシュ `view.DocumentView` の口)。
 
     戻り値: `{"faces": {面の添字: tessellate() の faces[i] と同じ形}, "untriangulated": [...], "boundary": {...},
-    "closed": bool}`。組ごとに compound にして測る(`_tessellate_split` と同じ測り方)。組が全面なら形状そのものを測る
-    (`tessellate()` と同じ結果)。組の間で共有する辺の分割は伝わらない(`tessellate_selective` の「分かっている代償」と同じ)。
+    "closed": bool}`。組ごとに compound にして測る。組が全面なら形状そのものを測る(`tessellate()` と同じ結果)。
+    組の間で共有する辺の分割は伝わらず、曲線の共有辺には粗い側の偏差ぶんの隙間が開きうる。
     """
     _check_tessellation_args(shape, *next(iter(groups), (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)))
     shape_map = _face_map(shape)
@@ -1109,61 +1040,13 @@ def _renumber_faces(diagnostic: dict, wanted: List[int]) -> dict:
 
 
 def is_closed_shell(shape: "TopoDS_Shape") -> bool:
-    """閉じた立体か(`_is_closed_shell`。`tessellate_selective` の `closed`)。"""
+    """閉じた立体か(画面でバックフェイスを隠してよいかの判定)。"""
     return _is_closed_shell(shape)
 
 
 def bounding_box_of_faces(faces: List[dict]) -> dict:
     """`tessellate()` の `bbox` と同じものを、面の三角形の並びから求める(面単位のキャッシュから組み直すとき)。"""
     return _bounding_box(faces)
-
-
-def _tessellate_split(
-    shape: "TopoDS_Shape",
-    shape_map: "TopTools_IndexedMapOfShape",
-    fine: set,
-    deviation: float,
-    angular_deflection: float,
-    coarse_deviation: float,
-    coarse_angular_deflection: float,
-) -> dict:
-    """`tessellate_selective` の2パス本体。**粗い側 → 細かい側**の順で測って抜き出す。"""
-    total = shape_map.Extent()
-    coarse = set(range(1, total + 1)) - fine
-    described: Dict[int, dict] = {}
-    untriangulated: List[int] = []
-    passes: List[dict] = []
-
-    for group_indices, dev, angle in (
-        (coarse, coarse_deviation, coarse_angular_deflection),
-        (fine, deviation, angular_deflection),
-    ):
-        if not group_indices:
-            continue
-        group = compound([shape_map.FindKey(index) for index in sorted(group_indices)])
-        BRepTools.Clean_s(shape)
-        passes.append(_renumber_faces(kernel_meshing.mesh_shape(group, float(dev), float(angle)), sorted(group_indices)))
-        # 次のパスの Clean_s で消える前に抜き出す。
-        for index in sorted(group_indices):
-            face = TopoDS.Face_s(shape_map.FindKey(index))
-            payload = _describe_face(face, index)
-            if not payload["indices"]:
-                untriangulated.append(index)
-            described[index] = payload
-
-    faces = [described[index] for index in range(1, total + 1)]
-    if faces and len(untriangulated) == len(faces):
-        raise ValueError(
-            f"三角形分割が1面も取れなかった(deviation={deviation}, coarse={coarse_deviation})"
-        )
-    return {
-        "deviation": float(deviation),
-        "face_count": len(faces),
-        "bbox": _bounding_box(faces),
-        "faces": faces,
-        "untriangulated": sorted(untriangulated),
-        "boundary": kernel_meshing.merge_diagnostics(passes),
-    }
 
 
 # --------------------------------------------------------------------------------------
@@ -1388,7 +1271,7 @@ def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:
 # 頂点(選択集合に入った頂点を画面に出すための座標)
 # --------------------------------------------------------------------------------------
 def _vertex_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
-    """頂点の重複除去済みマップ(1始まり)。添字が `selection.select_vertex` の識別子そのもの。"""
+    """頂点の重複除去済みマップ(1始まり)。添字が選択参照の `index` そのもの。"""
     return _subshape_map(shape, "vertex")
 
 

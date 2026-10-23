@@ -197,12 +197,12 @@ def test_tessellate_payload_carries_boundary_diagnostics_and_repaired_faces():
     assert all(stats[key] == 0 for key in CONNECTIVITY)
 
 
-def test_selective_split_path_reports_both_passes():
+def test_face_groups_report_both_passes():
     shape = holed_box()
     total = kernel.face_count(shape)
     fine = {1, 2}
-    payload = kernel.tessellate_selective(shape, fine, 0.05, 0.35, 0.5, 0.7)
-    assert payload['fine_face_count'] == 2 and total > 2
+    payload = kernel.tessellate_faces(shape, {(0.5, 0.7): sorted(set(range(1, total + 1)) - fine), (0.05, 0.35): sorted(fine)})
+    assert set(payload['faces']) == set(range(1, total + 1)) and total > 2
     assert len(payload['boundary']['passes']) == 2
     assert payload['boundary']['termination'] == 'resolved'
     assert payload['untriangulated'] == []

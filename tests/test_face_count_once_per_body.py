@@ -126,7 +126,7 @@ def test_hidden_body_face_ref_is_refused_through_modify_selection(two_shapes: Do
     """不可視ボディへの面参照は、`_coerce_refs` のキャッシュ経路でも今までどおり
     `ValueError` になる(可視性チェックをボディごとに1回へ間引いても、その1回を
     飛ばしてはいけない)。`test_selection.py::test_hidden_bodies_cannot_be_selected`
-    は `select_face` を直接呼ぶ経路しか見ていないので、`modify_selection` 経由の
+    は単発の経路(`_select_shape`)しか見ていないので、`modify_selection` 経由の
     バッチ経路をここで別途押さえる。"""
     selection.set_visible(two_shapes, "cyl", False)
 
