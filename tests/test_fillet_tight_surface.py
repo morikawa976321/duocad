@@ -1,5 +1,6 @@
 """曲面の上面とテーパー壁でも、接点・断面の半径・由来を保って丸まる。"""
 import math
+import time
 
 import numpy as np
 import pytest
@@ -48,10 +49,10 @@ def _dome(post=None, spline=False, center=-20):
     return BRepAlgoAPI_Common(post, tool).Shape()
 
 
-def _taper_document(angle, height=5):
+def _taper_document(angle, height=5, rotation=0):
     doc = Document()
     sketch = sketch_create(doc, base_plane("XY"))
-    add_ellipse(doc, sketch, (0, 0), 12, 4)
+    add_ellipse(doc, sketch, (0, 0), 12, 4, angle=rotation)
     body_id = extrude(doc, [region_ref(sketch, 1)], height, taper=angle, mode="new").args["body_id"]
     return doc, body_id
 
@@ -228,6 +229,101 @@ def test_line_and_arc_walls_are_accepted_for_a_flat_or_spherical_top(curved):
         direct = kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), {edge: 1 for edge in edges})
         assert BRepCheck_Analyzer(direct.shape).IsValid()
         assert kernel.face_count(direct.shape) == 8
+
+
+def _rotate_z(shape, degrees):
+    transform = gp_Trsf()
+    transform.SetRotation(gp_Ax1(gp_Pnt(), gp_Dir(0, 0, 1)), math.radians(degrees))
+    return BRepBuilderAPI_Transform(shape, transform, True).Shape()
+
+
+def _mirror_yz(shape):
+    transform = gp_Trsf()
+    transform.SetMirror(gp_Ax2(gp_Pnt(), gp_Dir(1, 0, 0)))
+    return BRepBuilderAPI_Transform(shape, transform, True).Shape()
+
+
+def _round_and_measure_lens(shape, radius, curved, record_property):
+    assert BRepCheck_Analyzer(shape).IsValid()
+    start = time.perf_counter()
+    rounded = kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape, curved)})
+    record_property("fillet_seconds", time.perf_counter() - start)
+    result = rounded["shape"]
+    assert BRepCheck_Analyzer(result).IsValid()
+    assert len(kernel.split_solids(result)) == 1
+    assert BRepCheck_Analyzer(shape).IsValid()
+    assert rounded["provenance"]["deleted"] == []
+    assert all(rounded["provenance"]["face_map"].values())
+    faces = kernel_tight._faces(result)
+    if curved:
+        lenses = [face for face in faces
+                  if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere]
+        assert len(lenses) == 1
+        lens = lenses[0]
+    else:
+        lens = max((face for face in faces
+                    if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
+                   key=lambda face: kernel_tight._a_point_on(face).Z())
+    area = _precise_area(lens)
+    record_property("lens_area", area)
+    return area
+
+
+@pytest.fixture(scope="module", params=["teardrop", "ellipse"])
+def spherical_seam_reference(request):
+    post = _teardrop_post() if request.param == "teardrop" else _elliptic_post(6, 2, 8)
+    radius = 1.0 if request.param == "teardrop" else 1.5
+    area = _round_and_measure_lens(_dome(post), radius, True, lambda *args: None)
+    return post, radius, area
+
+
+@pytest.mark.parametrize("degrees", [0, 45, 90, 135, 180, 270])
+@pytest.mark.parametrize("motion", ["outline_first", "dome_first", "mirrored_dome"])
+def test_spherical_lens_does_not_depend_on_surface_seams(spherical_seam_reference, degrees, motion, record_property):
+    """球を切る前後の回転・鏡映でも、球面レンズの面積と有効な1立体を保つ。"""
+    post, radius, reference = spherical_seam_reference
+    if motion == "outline_first":
+        shape = _dome(_rotate_z(post, degrees))
+    else:
+        shape = _dome(post)
+        if motion == "mirrored_dome":
+            shape = _mirror_yz(shape)
+        shape = _rotate_z(shape, degrees)
+    area = _round_and_measure_lens(shape, radius, True, record_property)
+    assert area == pytest.approx(reference, abs=2e-6)
+    if radius == 1.5:
+        assert area == pytest.approx(_spherical_lens_area(radius), abs=2e-6)
+
+
+@pytest.fixture(scope="module", params=[-5, 5])
+def tapered_seam_reference(request):
+    angle = request.param
+    radius = 1.0 if angle == -5 else 2.2
+    doc, body = _taper_document(angle)
+    area = _round_and_measure_lens(doc.get_body(body).shape, radius, False, lambda *args: None)
+    return angle, radius, area
+
+
+@pytest.mark.parametrize("degrees", [0, 45, 90, 135, 180, 270])
+def test_tapered_lens_does_not_depend_on_the_bspline_wall_seam(tapered_seam_reference, degrees, record_property):
+    """テーパー前に楕円を回しても、Bスプライン壁の接点で同じレンズを残す。"""
+    angle, radius, reference = tapered_seam_reference
+    doc, body = _taper_document(angle, rotation=degrees)
+    area = _round_and_measure_lens(doc.get_body(body).shape, radius, False, record_property)
+    theta = math.radians(angle)
+    offset = radius / math.cos(theta) - (5 - radius) * math.tan(theta)
+    assert area == pytest.approx(reference, abs=1e-4)
+    assert area == pytest.approx(_lens_area(6, 2, offset), abs=1e-4)
+
+
+@pytest.mark.parametrize("motion", ["rotate", "mirror"])
+def test_tapered_wall_seam_survives_transforming_the_solid(tapered_seam_reference, motion, record_property):
+    """完成後のテーパー壁を回転・鏡映しても、同じ面積の有効な1立体に丸まる。"""
+    angle, radius, reference = tapered_seam_reference
+    doc, body = _taper_document(angle)
+    shape = doc.get_body(body).shape
+    shape = _rotate_z(shape, 135) if motion == "rotate" else _mirror_yz(shape)
+    assert _round_and_measure_lens(shape, radius, False, record_property) == pytest.approx(reference, abs=1e-4)
 
 
 @pytest.mark.parametrize("kind", ["dome", -5, 5])

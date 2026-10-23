@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeVertex
+from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass import BRepClass_FaceClassifier
-from OCP.BRepFeat import BRepFeat_SplitShape
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
@@ -26,7 +27,7 @@ from OCP.TColgp import TColgp_HArray1OfPnt
 from OCP.TColStd import TColStd_HArray1OfReal
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_ON, TopAbs_REVERSED, TopAbs_SHELL, TopAbs_WIRE
 from OCP.TopExp import TopExp
-from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Pnt2d, gp_Vec
 
@@ -51,6 +52,21 @@ def _normal(face, u, v):
     if face.Orientation() == TopAbs_REVERSED:
         normal.Reverse()
     return point, normal
+
+
+def _contact_state(face, uv):
+    """射影の UV を面の周期に揃えて、トリム内の接点かを返す。"""
+    face = TopoDS.Face_s(face)
+    surface = BRep_Tool.Surface_s(face)
+    u, v = uv
+    first_u, last_u, first_v, last_v = BRepTools.UVBounds_s(face)
+    # 外部の罠: 射影はシーム上で 0 の代わりに 2π−ε を返し、
+    # BRepClass_FaceClassifier は部分円柱の同じ接点を面外と判定する。
+    if surface.IsUPeriodic():
+        u += surface.UPeriod() * round(((first_u + last_u) / 2 - u) / surface.UPeriod())
+    if surface.IsVPeriodic():
+        v += surface.VPeriod() * round(((first_v + last_v) / 2 - v) / surface.VPeriod())
+    return BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State()
 
 
 def _walls(shape, top):
@@ -224,7 +240,7 @@ class _Contacts(tight._Contour):
             raise Unsupported("the contact solution does not give a convex rounding above the wall")
         wall_uv = (parameter, v) if along_u else (u, parameter)
         for face, uv in ((wall, wall_uv), (self.top, crest_uv)):
-            if BRepClass_FaceClassifier(TopoDS.Face_s(face), gp_Pnt2d(*uv), 1e-7).State() not in (TopAbs_IN, TopAbs_ON):
+            if _contact_state(face, uv) not in (TopAbs_IN, TopAbs_ON):
                 raise Unsupported("a ball contact falls outside the trimmed top or wall face (the radius may reach the bottom)")
         self.offsets[index] = parameter - seed
         self.cache[key] = contacts
@@ -252,7 +268,7 @@ class _Contacts(tight._Contour):
                 nearest, uv = _projection(center, BRep_Tool.Surface_s(TopoDS.Face_s(wall)))
                 limit = self.radius - 1e-7 * max(1.0, self.radius)
                 if nearest.Distance(center) < limit:
-                    if BRepClass_FaceClassifier(TopoDS.Face_s(wall), gp_Pnt2d(*uv), 1e-7).State() not in (TopAbs_IN, TopAbs_ON):
+                    if _contact_state(wall, uv) not in (TopAbs_IN, TopAbs_ON):
                         distance = BRepExtrema_DistShapeShape(BRepBuilderAPI_MakeVertex(center).Vertex(), wall)
                         if not distance.IsDone():
                             raise Unsupported("the distance to a trimmed wall could not be measured")
@@ -380,15 +396,29 @@ class _Trimmed:
         return False
 
 
-def _trim_wall(wall, edges):
-    """壁接点の輪で元の壁を2つの帯に分け、その面を返す。"""
-    split = BRepFeat_SplitShape(wall)
-    wire = tight._wire(edges)
-    split.Add(TopoDS.Wire_s(wire), TopoDS.Face_s(wall))
+def _split_face(face, edges):
+    """接点線と支持面のシームを交差分割し、有効な面を返す。"""
+    # 外部の罠: BRepFeat_SplitShape は接点線と周期面のシームを交差分割せず、
+    # 極を含む球面の輪や円柱壁に UnorientableShape を返すことがある。
+    arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
+    arguments.Append(face)
+    tools.Append(tight._wire(edges))
+    split = BRepAlgoAPI_Splitter()
+    split.SetArguments(arguments)
+    split.SetTools(tools)
+    split.SetNonDestructive(True)
     split.Build()
     if not split.IsDone():
-        raise Unsupported("the contact curve could not split an original wall")
+        raise Unsupported("the contact curves could not split an original support face")
     pieces = tight._faces(split.Shape())
+    if not all(BRepCheck_Analyzer(piece).IsValid() for piece in pieces):
+        raise Unsupported("the contact curves produced an invalid support face")
+    return pieces
+
+
+def _trim_wall(wall, edges):
+    """壁接点の輪で元の壁を2つの帯に分け、その面を返す。"""
+    pieces = _split_face(wall, edges)
     if len(pieces) != 2:
         raise Unsupported(f"the contact curve did not split a wall into two bands ({len(pieces)} faces)")
     return pieces
@@ -420,14 +450,10 @@ def round_surface_loop(shape, top, radius):
         top_edges = [BRepBuilderAPI_MakeEdge(BRep_Tool.Curve_s(edge, 0.0, 0.0), vertex, vertex, first, last).Edge()]
     for edge in top_edges:
         _pcurve(edge, top, 1e-7)
-    splitter = BRepFeat_SplitShape(top)
-    splitter.Add(TopoDS.Wire_s(tight._wire(top_edges)), TopoDS.Face_s(top))
-    splitter.Build()
-    if not splitter.IsDone():
-        raise Unsupported("the contact curves could not split the original top face")
+    pieces = _split_face(top, top_edges)
     original = [edge for edge in tight._edges(top) if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(top))
                 and not BRep_Tool.Degenerated_s(edge)]
-    lenses = [face for face in tight._faces(splitter.Shape())
+    lenses = [face for face in pieces
               if not any(indexed_map(face, TopAbs_EDGE).Contains(edge) for edge in original)]
     if len(lenses) != 1:
         raise Unsupported(f"the top contact curves do not enclose one lens ({len(lenses)} faces)")
