@@ -137,6 +137,7 @@ def test_run_optimization_rejects_the_old_arguments_with_a_named_error(
     assert kwarg in reply["message"]
     assert reply.get("cancelled") is not True
     assert connection.of_type("optimize_result") == []
+    assert session.steps_for_current() is None
 
 
 def test_run_optimization_forwards_min_width_mm_so_a_below_floor_value_is_refused(session: Session) -> None:
@@ -181,35 +182,34 @@ def test_a_missing_min_width_mm_still_reaches_run_at_the_default_cells(session: 
 
 
 def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(
-    session: Session, monkeypatch, tmp_path
+    session: Session, monkeypatch
 ) -> None:
     """2026-09-13実測: 数時間がかりの実行が、結果を見る前にサーバプロセスごと消えた。"""
     four_conditions(session)
-    session.models_dir = tmp_path
-    session._current_name = "hanger.json"
+    session.rename_document("hanger.json")
+    (session.models_dir / "hanger.json").unlink()
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
 
     _run_to_completion(session, {"cmd": "run_optimization"})
 
-    assert (tmp_path / "hanger.json").exists()
+    assert (session.models_dir / "hanger.json").exists()
     assert not session.warnings
 
 
 def test_a_successful_run_on_an_untitled_document_is_saved_under_an_automatic_name(
-    session: Session, monkeypatch, tmp_path
+    session: Session, monkeypatch
 ) -> None:
     """無題の文書(一度も名前を付けていない)でも結果は消えない —— 自動保存が
     `untitled-<n>.json` の名前を付けて書く(issue #5、2026-09-16)。警告は積まない。
     """
-    session.models_dir = tmp_path
     four_conditions(session)  # 条件を置く verb が最初の変更 = ここで名前が付く
-    assert session._current_name == "untitled-1.json"
+    assert session.current_name == "untitled-1.json"
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
 
     _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
 
     assert connection.of_type("optimize_result")[0]["state"] == "done"
-    assert (tmp_path / "untitled-1.json").exists()
+    assert (session.models_dir / "untitled-1.json").exists()
     assert connection.of_type("warning") == []
 
 
@@ -222,7 +222,7 @@ def test_cancel_does_nothing_when_nothing_is_running(session: Session) -> None:
     status = connection.of_type("optimize_status")[0]
     assert status["running"] is False
     assert "cancelling" not in status
-    assert session._optimize_cancel.is_set() is False
+    assert session.optimization_status() == {"running": False}
 
 
 def test_cancel_sets_the_flag_while_running(session: Session) -> None:
@@ -230,7 +230,7 @@ def test_cancel_sets_the_flag_while_running(session: Session) -> None:
     connection = _dispatch(session, {"cmd": "cancel_optimization"})
     status = connection.of_type("optimize_status")[0]
     assert status["cancelling"] is True
-    assert session._optimize_cancel.is_set() is True
+    assert session.optimization_status() == {"running": True, "cancelling": True}
 
 
 def test_a_cancel_sent_right_after_the_start_is_not_lost(session: Session, monkeypatch) -> None:
@@ -262,28 +262,28 @@ def test_a_cancel_sent_right_after_the_start_is_not_lost(session: Session, monke
     assert connection.of_type("optimize_status")[-1] == {"type": "optimize_status", "running": False, "available": True}
 
 
-def test_a_run_that_added_nothing_does_not_overwrite_the_file(session: Session, monkeypatch, tmp_path) -> None:
+def test_a_run_that_added_nothing_does_not_overwrite_the_file(session: Session, monkeypatch) -> None:
     """落ちたら、形が見つからず結果を足さなかった実行でも、編集中のファイルを未保存の編集で上書きする(issue #36)。"""
     four_conditions(session)
-    session.models_dir = tmp_path
-    session._current_name = "hanger.json"
+    session.rename_document("hanger.json")
+    (session.models_dir / "hanger.json").unlink()
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "no_feasible_found"})
     _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
     assert connection.of_type("optimize_result")[0]["state"] == "no_feasible_found"
-    assert not (tmp_path / "hanger.json").exists()
+    assert not (session.models_dir / "hanger.json").exists()
 
 
 def test_a_failed_autosave_still_delivers_the_result_and_the_end_of_the_run(session: Session, monkeypatch) -> None:
     """落ちたら、自動保存の `OSError`(Windows で別のプログラムがファイルを開いている等)が `_optimize_run` の外へ漏れ、
     結果も終了の `optimize_status` も配られず画面が実行中のまま固まる(issue #30)。"""
     four_conditions(session)
-    session._current_name = "hanger.json"
+    session.rename_document("hanger.json")
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
 
     def locked(*args, **kwargs):
         raise PermissionError("別のプログラムが開いている")
 
-    monkeypatch.setattr(session, "save_document", locked)
+    monkeypatch.setattr(session.store, "write_document_file", locked)
     _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
     assert connection.of_type("optimize_result")[0]["state"] == "done"
     assert connection.of_type("optimize_status")[-1]["running"] is False
@@ -326,42 +326,46 @@ def test_a_run_keeps_going_on_another_document_and_shows_up_on_return(session: S
     session.rename_document("a.json")
     session.copy_document("a.json", "b.json")
     gates = [threading.Event(), threading.Event()]
+    first_progress = asyncio.Event()
+    second_progress = asyncio.Event()
+    loop = None
 
     def fake_run(document, options, *, progress, **kwargs):
         progress({"phase": "search", "message": "1", "evaluation": 1})
-        gates[0].wait(10)
+        assert gates[0].wait(10)
         progress({"phase": "search", "message": "2", "evaluation": 2})
-        gates[1].wait(10)
+        loop.call_soon_threadsafe(second_progress.set)
+        assert gates[1].wait(10)
         body_id = add_mesh_body(document, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [0, 1, 2], name="結果")
         return {"state": "done", "body_id": body_id, "name": "結果", "triangle_count": 1}
 
     monkeypatch.setattr(optimize_run, "run", fake_run)
 
-    async def until(condition) -> None:
-        for _ in range(500):
-            if condition():
-                return
-            await asyncio.sleep(0.01)
-        raise AssertionError("待っても起きなかった")
+    class ProgressConnection(FakeConnection):
+        async def send(self, raw):
+            await super().send(raw)
+            if self.payloads[-1].get("type") == "optimize_progress":
+                first_progress.set()
 
     async def scenario() -> None:
+        nonlocal loop
+        loop = asyncio.get_running_loop()
         server = Server(session)
         server.bind_loop(asyncio.get_running_loop())
-        connection = FakeConnection()
+        connection = ProgressConnection()
         server.clients.add(connection)
 
         async def send(command: dict) -> None:
             await server._dispatch(connection, json.dumps(command))
 
         await send({"cmd": "run_optimization"})
-        await until(lambda: connection.of_type("optimize_progress"))
+        await asyncio.wait_for(first_progress.wait(), 10)
         await send({"cmd": "open_document", "name": "b.json"})
         assert connection.last("optimize_status")["running"] is False
 
         connection.payloads.clear()
         gates[0].set()
-        await until(lambda: (server._optimize_last_progress or {}).get("evaluation") == 2)
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(second_progress.wait(), 10)
         assert connection.of_type("optimize_progress") == [], "別の文書の画面に進捗を配った"
 
         await send({"cmd": "open_document", "name": "a.json"})
@@ -379,6 +383,10 @@ def test_a_run_keeps_going_on_another_document_and_shows_up_on_return(session: S
         assert connection.last("optimize_result")["state"] == "done"
         assert connection.last("optimize_status")["running"] is False
         assert [body.name for body in session.document.bodies][-1] == "結果"
+
+        await send({"cmd": "open_document", "name": "b.json"})
+        await send({"cmd": "open_document", "name": "a.json"})
+        assert len(connection.of_type("optimize_result")) == 1
 
     asyncio.run(scenario())
 

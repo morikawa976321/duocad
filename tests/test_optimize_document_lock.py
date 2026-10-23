@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -157,18 +159,18 @@ def test_a_result_that_could_not_be_written_opens_from_memory(running: Session, 
     """落ちたら、別の文書を開いている間に終わった結果をファイルへ書けなかったとき、数時間の結果が消える。"""
     _fake_run_that_adds_a_mesh(monkeypatch)
     running.open_document("b.json")
-    real_write = Session._write_document_file
+    real_write = os.replace
 
-    def refuse(target, payload):
+    def refuse(source, target):
         raise PermissionError("別のプログラムが開いている")
 
-    monkeypatch.setattr(Session, "_write_document_file", staticmethod(refuse))
+    monkeypatch.setattr(os, "replace", refuse)
     result = running.deliver_optimization_result(running.run_optimization())
     running.end_optimization()
     assert "a.json へ書けなかった" in result["warning"]
     assert running.take_warnings() == [], "別の文書の画面へ警告を出した"
 
-    monkeypatch.setattr(Session, "_write_document_file", staticmethod(real_write))
+    monkeypatch.setattr(os, "replace", real_write)
     running.open_document("a.json")
     assert [body.name for body in running.document.bodies][-1] == "結果"
     assert _verbs_on_disk(running, "a.json")[-1] == "add_mesh_body"
@@ -193,15 +195,17 @@ def test_a_result_whose_file_name_cannot_be_resolved_is_kept_in_memory(running: 
     """落ちたら、届け先の名前を決める所の例外(models/ が作れない等)で、数時間の結果がメモリにも残らない。"""
     _fake_run_that_adds_a_mesh(monkeypatch)
     running.open_document("b.json")
-    real_resolve = Session._resolve_document_name
+    real_mkdir = Path.mkdir
 
-    def broken(self, name):
-        raise OSError("models/ を作れない")
+    def broken(path, *args, **kwargs):
+        if path == running.models_dir:
+            raise OSError("models/ を作れない")
+        return real_mkdir(path, *args, **kwargs)
 
-    monkeypatch.setattr(Session, "_resolve_document_name", broken)
+    monkeypatch.setattr(Path, "mkdir", broken)
     result = running.deliver_optimization_result(running.run_optimization())
     running.end_optimization()
-    monkeypatch.setattr(Session, "_resolve_document_name", real_resolve)
+    monkeypatch.setattr(Path, "mkdir", real_mkdir)
 
     assert result["file"] == "a.json" and "書けなかった" in result["warning"]
     running.open_document("a.json")
@@ -211,7 +215,7 @@ def test_a_result_whose_file_name_cannot_be_resolved_is_kept_in_memory(running: 
 def test_two_results_that_could_not_be_written_are_both_kept(running: Session, monkeypatch) -> None:
     """落ちたら、書けなかった結果を開かないうちに次の実行も書けなかったとき、先の結果が黙って消える。"""
     _fake_run_that_adds_a_mesh(monkeypatch)
-    monkeypatch.setattr(Session, "_write_document_file", staticmethod(lambda target, payload: 1 / 0))
+    monkeypatch.setattr(os, "replace", lambda source, target: 1 / 0)
     running.open_document("b.json")
     running.deliver_optimization_result(running.run_optimization())
     running.end_optimization()
@@ -229,12 +233,12 @@ def test_two_results_that_could_not_be_written_are_both_kept(running: Session, m
 def test_deleting_a_file_drops_its_kept_result_and_unseen_notice(running: Session, monkeypatch) -> None:
     """落ちたら、消して同じ名前で作り直したファイルを開くと、消す前の実行の結果や通知が出てくる。"""
     _fake_run_that_adds_a_mesh(monkeypatch)
-    monkeypatch.setattr(Session, "_write_document_file", staticmethod(lambda target, payload: 1 / 0))
+    monkeypatch.setattr(os, "replace", lambda source, target: 1 / 0)
     running.open_document("b.json")
     running.deliver_optimization_result(running.run_optimization())
     running.end_optimization()
     monkeypatch.undo()
-    running.unseen_optimize_results["a.json"] = {"type": "optimize_result", "state": "done"}
+    running.optimization_results.keep_notice("a.json", {"type": "optimize_result", "state": "done"})
 
     running.delete_document("a.json")
     running.new_document()
@@ -243,7 +247,7 @@ def test_deleting_a_file_drops_its_kept_result_and_unseen_notice(running: Sessio
     running.open_document("b.json")
     running.open_document("a.json")
     assert [body.name for body in running.document.bodies] == []
-    assert "a.json" not in running.unseen_optimize_results
+    assert running.optimization_results.take_notice("a.json") is None
 
 
 def test_a_warning_from_a_run_finished_elsewhere_stays_off_the_other_screen(running: Session, monkeypatch) -> None:

@@ -596,17 +596,22 @@ def test_cancelling_leaves_the_document_untouched(session: Session) -> None:
     assert session.applied_count == applied
 
 
-def test_run_optimization_clears_a_stale_cancel_flag(session: Session) -> None:
-    """**旗を畳むのは実行の側**である。畳まないと、前回の中断が次の実行を即死させる。
+def test_run_optimization_clears_a_stale_cancel_flag(session: Session, monkeypatch) -> None:
+    """前の実行への中断要求が、次の実行へ持ち越されない。"""
+    seen = []
 
-    実際に走らせずに確かめる —— `run_optimization` は条件が無ければ
-    `OptimizeInputError` で落ちるが、そこへ着くのは旗を畳んだ**後**である。
-    """
+    def fake_run(document, options, *, should_cancel, **kwargs):
+        seen.append(should_cancel())
+        return {"state": "no_feasible_found"}
+
+    monkeypatch.setattr(optimize_run, "run", fake_run)
+    session.begin_optimization()
     session.cancel_optimization()
-    assert session._optimize_cancel.is_set()
-    with pytest.raises(optimize_run.OptimizeInputError):
-        session.run_optimization()
-    assert not session._optimize_cancel.is_set()
+    session.run_optimization()
+    session.end_optimization()
+    session.run_optimization()
+    assert seen == [True, False]
+    assert session.optimization_status() == {"running": False}
 
 
 @pytest.mark.parametrize(
