@@ -14,6 +14,7 @@ import pytest
 
 from duocad.oplog import OpLog
 from duocad.server import Session
+from duocad.session import NoDocument
 from session_support import browser as _browser
 
 
@@ -67,6 +68,48 @@ def _ops_on_disk(session: Session) -> int:
     return len(json.loads((session.models_dir / session.current_name).read_text(encoding="utf-8"))["operations"])
 
 
+@pytest.mark.parametrize("background", [False, True])
+def test_external_case_rename_follows_the_save_mode(session: Session, background) -> None:
+    """同期保存は実ファイルの現在名を反映し、背景保存は現在名を変えず、同期保存後の削除は文書も閉じる。"""
+    session.save_document("model.json")
+    original = session.models_dir / "model.json"
+    renamed = session.models_dir / "MODEL.json"
+    if not renamed.exists() or not renamed.samefile(original):
+        pytest.skip("大小文字を区別しないファイルシステムだけを対象にする")
+    created = json.loads(original.read_text(encoding="utf-8"))["created"]
+    original.rename(renamed)
+    assert [path.name for path in session.models_dir.glob("*.json")] == ["MODEL.json"]
+    observed_names = []
+    session.add_listener(lambda _applied: observed_names.append(session.state_meta()["current_name"]))
+
+    if background:
+        with session.background_autosave():
+            session.sketch_create("XY")
+        assert session.pending_write is not None
+        concurrent.futures.wait([session.pending_write])
+        assert session.settle_autosave() is True
+        assert session.current_name == "model.json"
+        assert observed_names == ["model.json"]
+    else:
+        session.sketch_create("XY")
+        assert session.pending_write is None
+        assert session.current_name == "MODEL.json"
+        assert observed_names == ["MODEL.json"]
+    payload = json.loads(renamed.read_text(encoding="utf-8"))
+    assert len(payload["operations"]) == 1 and payload["created"] == created
+    assert session.saved
+
+    if background:
+        session.sketch_create("YZ")
+        assert session.current_name == "MODEL.json"
+    deleted = session.delete_document(session.current_name)
+    assert deleted["closed"] is True
+    assert not session.document_open and session.current_name is None
+    with pytest.raises(NoDocument):
+        session.sketch_create("XY")
+    assert list(session.models_dir.glob("*.json")) == []
+
+
 def test_the_file_is_written_in_the_background_and_settles(session: Session) -> None:
     """落ちたら、書き手スレッドへ回した書き込みが着かない・別の文書の中身を書く・`saved` が戻らない。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]  # 無題の最初の保存はその場で書く(名前が配りものに載る)
@@ -88,7 +131,7 @@ def test_a_failed_background_write_marks_the_document_unsaved(session: Session, 
     def broken(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("duocad.session.os.replace", broken)
+    monkeypatch.setattr("duocad.document_store.os.replace", broken)
     with session.background_autosave():
         applied = session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     assert applied["verb"] == "add_circle"
@@ -98,33 +141,59 @@ def test_a_failed_background_write_marks_the_document_unsaved(session: Session, 
     assert any("自動保存できなかった" in line for line in session.warnings)
 
 
-@pytest.mark.parametrize("act", ["save", "delete", "open_again", "copy"])
+@pytest.mark.parametrize("act", ["save", "delete", "open_again", "copy", "new", "close", "rename"])
 def test_file_operations_wait_for_the_queued_write(session: Session, monkeypatch, act) -> None:
     """落ちたら、遅れて着いた古い書き込みが新しい保存を上書きする・消したファイルを書き戻す・最後の変更の無いファイルを読む/写す。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     name = session.current_name
-    gate = concurrent.futures.Future()
-    real = Session._write_document_file
+    gate = threading.Event()
+    writing = threading.Event()
+    draining = threading.Event()
+    real_write = session.store.write_document_file
+    real_drain = session.autosaver.drain
 
     def slow(target, payload):
-        gate.result(timeout=10)  # 書き手スレッドを止めておき、ファイルの口が待つかを見る
-        real(target, payload)
+        writing.set()
+        assert gate.wait(10), "止めた書き込みが解放されなかった"
+        real_write(target, payload)
 
-    monkeypatch.setattr(Session, "_write_document_file", staticmethod(slow))
+    def drain():
+        draining.set()
+        real_drain()
+
+    monkeypatch.setattr(session.store, "write_document_file", slow)
+    monkeypatch.setattr(session.autosaver, "drain", drain)
     with session.background_autosave():
         session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     queued = session.pending_write
-    assert queued is not None and not queued.done()
-    # 書き手を止めたままファイルの口へ入る。待たない口は先に済ませてしまい、後から着いた書き込みが結果を壊す。
-    threading.Timer(0.3, gate.set_result, [None]).start()
-    if act == "save":
-        session.add_circle(sketch_id, [5.0, 5.0], 2.0)  # 画面の外(MCP)の操作はその場で書く
-    elif act == "delete":
-        session.delete_document(name)
-    elif act == "open_again":
-        session.open_document(name)
-    else:
-        session.copy_document(name, "copy.json")
+    assert writing.wait(10) and queued is not None and not queued.done()
+
+    def release_when_draining():
+        if draining.wait(10):
+            gate.set()
+
+    releaser = threading.Thread(target=release_when_draining)
+    releaser.start()
+    try:
+        if act == "save":
+            session.add_circle(sketch_id, [5.0, 5.0], 2.0)
+        elif act == "delete":
+            session.delete_document(name)
+        elif act == "open_again":
+            session.open_document(name)
+        elif act == "copy":
+            session.copy_document(name, "copy.json")
+        elif act == "new":
+            session.new_document()
+        elif act == "close":
+            session.close_document()
+        else:
+            session.rename_document("renamed.json")
+        assert draining.is_set(), "ファイル操作の前に書き込みを流し切っていない"
+    finally:
+        draining.set()
+        gate.set()
+        releaser.join(timeout=10)
     concurrent.futures.wait([queued])
     if act == "save":
         assert json.loads((session.models_dir / name).read_text(encoding="utf-8"))["operations"].__len__() == 3
@@ -132,21 +201,27 @@ def test_file_operations_wait_for_the_queued_write(session: Session, monkeypatch
         assert not (session.models_dir / name).exists()
     elif act == "open_again":
         assert len(session.document.log.entries) == 2
-    else:
+    elif act == "copy":
         assert len(json.loads((session.models_dir / "copy.json").read_text(encoding="utf-8"))["operations"]) == 2
+    elif act == "rename":
+        assert not (session.models_dir / name).exists()
+        assert _ops_on_disk(session) == 2 and session.current_name == "renamed.json"
+    else:
+        assert session.current_name is None and session.document.log.entries == []
+        assert len(json.loads((session.models_dir / name).read_text(encoding="utf-8"))["operations"]) == 2
 
 
 def test_a_browser_verb_replies_before_the_write_and_the_file_follows(session: Session, monkeypatch) -> None:
     """落ちたら、画面の操作の応答(状態配信)が書き込みを待っている、または書き終える前に次の要求を捌く。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     order: list = []
-    real = Session._write_document_file
+    real = os.replace
 
-    def watched(target, payload):
+    def watched(source, target):
         order.append("write")
-        real(target, payload)
+        real(source, target)
 
-    monkeypatch.setattr(Session, "_write_document_file", staticmethod(watched))
+    monkeypatch.setattr(os, "replace", watched)
 
     async def script(send):
         reply = await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 6.0, "client_op": 7})
@@ -166,7 +241,7 @@ def test_a_browser_verb_whose_write_fails_is_pushed_again_as_unsaved(session: Se
     def broken(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("duocad.session.os.replace", broken)
+    monkeypatch.setattr("duocad.document_store.os.replace", broken)
 
     async def script(send):
         await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 6.0, "client_op": 8})
@@ -190,7 +265,7 @@ def test_a_browser_verb_whose_write_recovers_is_pushed_again_as_saved(session: S
             raise failures.pop()
         return real(*args, **kwargs)
 
-    monkeypatch.setattr("duocad.session.os.replace", flaky)
+    monkeypatch.setattr("duocad.document_store.os.replace", flaky)
 
     async def script(send):
         await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "diameter": 6.0, "client_op": 9})
@@ -207,4 +282,5 @@ def test_the_bytes_written_match_what_write_text_wrote(tmp_path) -> None:
     session = Session(0.2, models_dir=tmp_path / "models")
     session.sketch_create("XY")
     on_disk = (session.models_dir / session.current_name).read_bytes()
-    assert on_disk.count(os.linesep.encode()) == session.document.log.to_json(session._created).count("\n")
+    created = session.list_documents()["files"][0]["created"]
+    assert on_disk.count(os.linesep.encode()) == session.document.log.to_json(created).count("\n")

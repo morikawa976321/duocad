@@ -11,7 +11,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
 #: 保存/開くの既定の置き場。リポジトリ直下・gitignore対象。無ければ
-#: `Session._resolve_document_name` が作る。テストは `Session(models_dir=tmp_path)` で差し替える。
+#: `DocumentStore.resolve_document_name` が作る。テストは `Session(models_dir=tmp_path)` で差し替える。
 DEFAULT_MODELS_DIR = REPO_ROOT / "models"
 #: STEP/STL書き出しの既定の置き場。リポジトリ直下・gitignore対象。相対パスはここ基準。
 #: テストは `Session(exports_dir=tmp_path)` か `conftest` の差し替えで実フォルダを触らない。

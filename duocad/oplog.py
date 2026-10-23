@@ -192,7 +192,7 @@ class OpLog:
         return head[:-2] + ',\n  "operations": ' + body + "\n}"
 
     def to_file_chunks(self, created: Optional[float] = None) -> List[bytes]:
-        """保存するバイト列の断片(繋がずにそのまま順に書く。自動保存の口 `Session._write_document_file`)。
+        """保存するバイト列の断片(繋がずにそのまま順に書く。自動保存の口 `DocumentStore.write_document_file`)。
 
         文字列で組むと、日本語を含む小さな操作と ASCII だけの巨大な操作(STEP 本文・三角形)を繋いだ瞬間に全体が1文字2〜4バイトへ
         広がって写し直され、さらに書き込みで改行を変換する(14.9 MB の文書で連結 16 ms・書き込み 26 ms)。バイト列で繋いでも

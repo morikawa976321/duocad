@@ -303,7 +303,7 @@ class Server:
         #: 実行中の最適化タスク(`_pending_ai_runs` と同じ理由で参照を保持する)。
         self._pending_optimize_runs: set = set()
         #: 進捗・結果は走らせている文書を開いている間だけ配る(`Session.optimization_visible`)。別の文書を開いている間の
-        #: 最後の進捗はここに、終了時の結果/失敗は `Session.unseen_optimize_results` に控え、戻ってきたとき見せる(`_announce_optimization`)。
+        #: 最後の進捗はここに、終了時の結果/失敗は `OptimizationResults` に控え、戻ってきたとき見せる(`_announce_optimization`)。
         self._optimize_last_progress: Optional[dict] = None
         # -------------------------------------------------- I: 計算の設定(この clone の設定ファイル)
         fem.FEM_DEVICE = local_settings.fem_device()
@@ -1192,8 +1192,7 @@ class Server:
                 kwargs["debug_kinds"] = kinds
         # 中断の旗を畳むのも文書を閉じるのもここ(イベントループのスレッド)で済ませる。ワーカースレッドの中で畳むと、走り出すまでに届いた中断が消える(issue #35)。
         self.session.begin_optimization()
-        # 前の実行のステップを、新しい実行が最初のステップを足すまで画面へ見せない(ステップは実行のスレッドが作り直す)。
-        self.session.optimization_steps = None
+        self.session.optimization.prepare_search()
         self._optimize_last_progress = None
         await self._broadcast_optimize_status()
         task = asyncio.get_running_loop().create_task(self._optimize_run(kwargs))
@@ -1233,7 +1232,7 @@ class Server:
             return
         steps = self.session.steps_for_current()
         count = 0 if steps is None else len(steps)
-        if steps is None or steps.finisher is None or count == 0:
+        if steps is None or not self.session.steps_have_finisher() or count == 0:
             await _send(connection, {"type": "optimize_error",
                                      "message": "仕上げられるステップが無い(この文書で探索が合格した形を出していない)"})
             return
@@ -1324,7 +1323,7 @@ class Server:
             if visible:
                 await self._broadcast(payload)
             elif name is not None:
-                self.session.unseen_optimize_results[name] = payload
+                self.session.optimization_results.keep_notice(name, payload)
         finally:
             await self._broadcast_optimize_status()
             await self._push(None, applied=None)
@@ -1373,9 +1372,9 @@ class Server:
             if self._optimize_last_progress is not None:
                 await self._broadcast(self._optimize_last_progress)
             return
-        name = self.session.current_name
-        if name is not None and name in self.session.unseen_optimize_results:
-            await self._broadcast(self.session.unseen_optimize_results.pop(name))
+        payload = self.session.optimization_results.take_notice(self.session.current_name)
+        if payload is not None:
+            await self._broadcast(payload)
 
     async def _optimize_cancel(self, connection: Any) -> None:
         """中断の旗を立てる。実際に降りるのは次に進捗が出た時点(進捗を出さない短い処理の途中では止まらない)。
