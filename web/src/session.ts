@@ -397,6 +397,12 @@ export interface EdgeChainsPayload {
 }
 
 /**
+ * 丸めの面の連なりの応答(`get_face_chains`)。形は辺の連なりと同じで、`chains` は面の添字の組
+ * (丸めでない面はその面だけ。`duocad/kernel_face_edit.py` の `blend_chain`)。
+ */
+export type FaceChainsPayload = EdgeChainsPayload
+
+/**
  * 1つの頂点の3D座標(`kernel.vertex_positions` の1件そのまま)。
  *
  * `index` はコアの数え方の1始まり(`count_subshapes(shape, "vertex")`)で、
@@ -901,6 +907,8 @@ export interface SessionHooks {
   onEdges(payload: EdgesPayload): void
   /** 頼んだ辺の連なりが返ってきた(状態は変わっていない)。 */
   onEdgeChains(payload: EdgeChainsPayload): void
+  /** 頼んだ面の連なりが返ってきた(状態は変わっていない)。 */
+  onFaceChains(payload: FaceChainsPayload): void
   /** 頼んだ頂点が返ってきた(状態は変わっていない)。 */
   onVertices(payload: VerticesPayload): void
   /** 測った(状態は変わっていない)。要求した接続にだけ届く。 */
@@ -996,6 +1004,8 @@ export interface Session {
    * フィレット・面取りで指した辺の分だけ頼む(全辺ぶんは大きな部品で 0.5 秒かかる。`DocumentView.edge_chains`)。
    */
   getEdgeChains(bodyId: string, edges: number[]): void
+  /** 丸めの面の連なりを取りに行く(応答は `onFaceChains`)。「面の削除」でクリックした面の分だけ頼む。 */
+  getFaceChains(bodyId: string, faces: number[]): void
   /**
    * 1Bodyの頂点の座標を取りに行く(応答は `onVertices`)。状態配信ではない。
    * 呼ぶのは選択に頂点が入っているときだけ(`duocad/server.py` の `Session.vertices`)。
@@ -1296,13 +1306,15 @@ export function createSession(hooks: SessionHooks): Session {
         deviation: message.deviation ?? 0,
         edges: message.edges ?? [],
       })
-    } else if (message.type === 'edge_chains') {
-      hooks.onEdgeChains({
+    } else if (message.type === 'edge_chains' || message.type === 'face_chains') {
+      const payload = {
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
         shape_revision: message.shape_revision ?? -1,
         chains: message.chains ?? [],
-      })
+      }
+      if (message.type === 'edge_chains') hooks.onEdgeChains(payload)
+      else hooks.onFaceChains(payload)
     } else if (message.type === 'vertices') {
       hooks.onVertices({
         body_id: message.body_id ?? '',
@@ -1518,6 +1530,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     getEdgeChains(bodyId, edges) {
       send({ cmd: 'get_edge_chains', body_id: bodyId, chain_of: edges })
+    },
+    getFaceChains(bodyId, faces) {
+      send({ cmd: 'get_face_chains', body_id: bodyId, chain_of: faces })
     },
     getVertices(bodyId) {
       send({ cmd: 'get_vertices', body_id: bodyId }, true)

@@ -149,7 +149,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **合否は OCCT の成功で決めない**: 結果を面ごとに元の面と照らし合わせる関門(1ソリッド・面積0の面なし・削除は残す面が自分の曲面のまま
   元の範囲を保つ・オフセットは旧面と新面が1対1で各面が元の曲面かずらした曲面に乗る)を通ったときだけ採る。断ったら ValueError で、
   文書・ログ・undo を変えない。断り文は原因(英語)と利用者向けの言い換え(日本語)。
-- **期限**: 画面・MCP の操作は `kernel_worker.INTERACTIVE_TIMEOUT_S`(置いた値。カード e)、ログの再生は `interactive=False` で期限なし。
+- **期限**: 画面・MCP の操作は `kernel_worker.INTERACTIVE_TIMEOUT_S`(20 秒。本人の決定、カード e)、ログの再生は `interactive=False` で期限なし。
   期限切れ・子の異常終了は子を殺して ValueError、次の呼び出しで立て直す。
 - **由来**: 削除は `deleted` = 選んだ面、`new_faces` は空。オフセットは旧面と新面が1対1。丸めが付いてくるときは旧丸めが `deleted`、
   丸め直した面が `new_faces`(旧丸めと新丸めを対応させる根拠を持たない)。
