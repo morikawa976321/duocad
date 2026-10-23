@@ -436,6 +436,9 @@ def _add_male(shape, target, points, pitch, depth, context):
     chamfer = depth + 0.1 * pitch
     r_low = _end_radius(ends["low"]["kind"], r_maj, r_min, chamfer)
     r_high = _end_radius(ends["high"]["kind"], r_maj, r_min, chamfer)
+    full = length - (r_maj - r_low) - (r_maj - r_high)  # 両端の円錐が山頂を削らない長さ
+    if full < pitch:
+        raise ValueError(f"軸が短すぎる(先の面取りと根元の首を除いたねじの長さ {full:.3g} がピッチ {pitch:g} に足りない)")
     # 両端の 45° の円錐(r = r_low + z と r = r_high + (L − z))で挟んだ回転体。円錐は軸で閉じる(延ばした線が軸の反対へ出ると回転体が作れない)
     z_cross = 0.5 * (r_high + length - r_low)
     if r_low + z_cross <= r_maj + 1:
@@ -449,9 +452,9 @@ def _add_male(shape, target, points, pitch, depth, context):
     air = _boolean(BRepAlgoAPI_Cut(_cylinder(target, target["radius"], z0, z1), shape), "inner space", context)
     air_volume = _volume_eps(air)
     if air_volume > _AIR_EPS:
-        inner = _cylinder(target, min(r_low, r_high) - _RELIEF, z0, z1)
+        inner = _cylinder(target, min(r_low, r_high) - 1e-3, z0, z1)  # 両端の細いところ(首・先)より内側
         if abs(_volume_eps(_boolean(BRepAlgoAPI_Common(air, inner), "inner space", context)) - air_volume) > _AIR_EPS:
-            raise ValueError("軸の中の穴・切り欠きがねじの谷より外へ出ている(ねじを切ると穴が埋まるか壁が抜ける)")
+            raise ValueError("軸の中の穴・切り欠きがねじの首・先の面取りより外へ出ている(ねじを切ると穴が埋まるか壁が抜ける)")
         segment = _boolean(BRepAlgoAPI_Cut(segment, air), "keep inner space", context)
     before = _volume_eps(shape)
     cut = BRepAlgoAPI_Cut(shape, _cylinder(target, target["radius"] + _FILL_MARGIN, z0, z1))

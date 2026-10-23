@@ -139,11 +139,26 @@ def test_a_hollow_shaft_keeps_its_bore(profile):
     _assert_sound(shape)
 
 
-def test_a_bore_reaching_past_the_thread_root_is_refused():
-    """D6 P1.5 の谷の半径は 2.4。直径 4.6 の穴はねじの首(2.2)より太く、切ると壁が抜けるので断る。"""
+def test_a_bore_just_inside_the_chamfered_tips_is_kept():
+    """D6 P1.5 の軸の先の面取りの半径は 2.25。直径 4.44(半径 2.22)の穴はその内側なので、断らずに穴を残す。"""
+    doc = Document()
+    body_id = _hollow_shaft(doc, 4.44)
+    thread(doc, _outer_cylinder_face(doc, body_id), "trapezoid45", body_id=body_id)
+    _assert_sound(doc.get_body(body_id).shape)
+
+
+def test_a_bore_reaching_past_the_chamfered_tips_is_refused():
+    """直径 4.6(半径 2.3)の穴は先の面取りの半径 2.25 より太く、切ると壁が抜けるので断る。"""
     doc = Document()
     body_id = _hollow_shaft(doc, 4.6)
     _assert_refused_without_change(doc, body_id, _outer_cylinder_face(doc, body_id), "trapezoid45", None, "軸の中の穴")
+
+
+def test_a_shaft_too_short_to_keep_a_full_thread_is_refused():
+    """D6 P1.5 の軸の両端の面取りは 0.75 ずつ。長さ 2 では山頂の残る長さがピッチに足りない(ねじ山が円錐に削られて消える)。"""
+    doc = Document()
+    body_id = new_cylinder(doc, radius=3.0, height=2.0)
+    _assert_refused_without_change(doc, body_id, _cylinder_face(doc, body_id), "trapezoid45", None, "軸が短すぎる")
 
 
 def test_a_shoulder_widening_towards_the_root_is_not_taken_for_a_chamfered_tip():
