@@ -130,10 +130,10 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 
 ### どこまで来たか(2026-10-23)
 
-5件とも develop と main に入った。#206 は別のセッションが先に develop へ取り込み、フィレットとまとめて PR #213 で main に入っていたので、
-PR は残りの4件の4本になった。
+5件とも develop と main に入った。#206 は1回目の取り込み(2026-10-22。検証の途中でセッションが終わった)で develop に入り、
+別のセッションがフィレットとまとめた PR #213 で main に入れていたので、PR は残りの4件の4本になった。
 
-| issue | main への PR | 作業ブランチ(GitHub に残してある) | 担当 |
+| issue | main への PR | 作業ブランチ(取り込んだ後に消した) | 担当 |
 |---|---|---|---|
 | #206 包む・ベジエ近似 | #213(フィレットと同じ PR) | `claude/sketch-206-envelope-bezier` | 親(手元) |
 | #184 スケッチの投影 | #214 | `claude/sketch-184-project` | 親(手元) |
@@ -144,11 +144,11 @@ PR は残りの4件の4本になった。
 各 PR は、取り込んだ直後の develop で pytest 全体・`npm run check`・`npm run build`・関係する実機 smoke を通してから出した。
 細部の判断は decisions.md の [スケッチ][ボディ] の節。本人に残る判断は無い。
 
-### 片付け
+### 片付け(2026-10-23 済み)
 
-- 調整用のワークツリー `.claude/worktrees/duocad-sketch-body-5-features-a37e8a` の下の `output/cloud/wt-*`(6つ。入れ子のワークツリー)は、
-  どれも `.venv` と `web/node_modules` がジャンクション。**消す前に** `[System.IO.Directory]::Delete('<wt>\.venv', $false)` と同じく
-  `web/node_modules` を外してから `git worktree remove`(再帰削除はジャンクションを辿って本体の `.venv` を消す。docs/DEV_NOTES.md「ワークツリー」)。
-- 報告ページ `output/autopilot_report/index.html` は同じワークツリーの中(git 管理外)。
-- 確認用の統合ブランチ `claude/autopilot-5-integration-check` と、クラウドが自動で作った `claude/split-body-193-zui9us`・
-  `claude/body-186-interference-wtqs2d` は、中身が全部 main に入っているので消してよい。
+- 入れ子のワークツリー7つ(`output/cloud/wt-*`。1回目の取り込みの検証用 `wt-dev` を含む)は、`.venv` と `web/node_modules` の
+  ジャンクションを外してから `git worktree remove` で消した。
+- 作業ブランチ5本・確認用の統合ブランチ・クラウドが自動で作った2本は、手元と GitHub から消した。
+- 残したもの: 採らなかったクラウド版 `claude/sketch-201-measure-points-cloud`(main に無いコミットが1つ)、調整用ワークツリーの
+  ブランチ `claude/duocad-sketch-body-5-features-a37e8a`(アプリのワークツリーと一緒に片付く)、その中の報告ページ
+  `output/autopilot_report/`(git 管理外)。
