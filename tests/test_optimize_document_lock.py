@@ -238,7 +238,7 @@ def test_deleting_a_file_drops_its_kept_result_and_unseen_notice(running: Sessio
     running.deliver_optimization_result(running.run_optimization())
     running.end_optimization()
     monkeypatch.undo()
-    running.unseen_optimize_results["a.json"] = {"type": "optimize_result", "state": "done"}
+    running.optimization_results.keep_notice("a.json", {"type": "optimize_result", "state": "done"})
 
     running.delete_document("a.json")
     running.new_document()
@@ -247,7 +247,7 @@ def test_deleting_a_file_drops_its_kept_result_and_unseen_notice(running: Sessio
     running.open_document("b.json")
     running.open_document("a.json")
     assert [body.name for body in running.document.bodies] == []
-    assert "a.json" not in running.unseen_optimize_results
+    assert running.optimization_results.take_notice("a.json") is None
 
 
 def test_a_warning_from_a_run_finished_elsewhere_stays_off_the_other_screen(running: Session, monkeypatch) -> None:

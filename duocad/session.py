@@ -13,7 +13,6 @@ import concurrent.futures
 import contextlib
 import functools
 import inspect
-import threading
 import time
 from pathlib import Path
 from typing import Any, Optional  # Any: Session verb wrappers / listeners
@@ -38,7 +37,8 @@ from .document_store import (
 )
 from .entry import entries, entry_for
 from .measure import inspect_selection, measure_selection
-from .oplog import OpLog, verb_handler
+from .oplog import OpLog
+from .optimization import Optimization, OptimizationResults
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import fork, speculative
 from .verbs.envelope_regions import boundary_entities as envelope_boundary_entities, envelope_pieces, selected_regions
@@ -150,40 +150,8 @@ class Session:
         #: 作業空間(起動中のコマンド・モード。issue #153)。選択・可視性と同じ共有の短命状態で、文書の差し替えで空に戻る。
         self.workspace = Workspace()
         self._suppress_events = 0  # >0 の間は `_emit` が配らない(プレビュー。`preview` 参照)
-        #: 形状最適化の中断の旗。別スレッド(実行はワーカー、`cancel_optimization` はイベントループ)から触るので `Event`。
-        self._optimize_cancel = threading.Event()
-        #: 「探索を止めてこのステップを仕上げる」の要求(ステップの番号。負は最新。`None` は要求なし)。イベントループが書き、
-        #: 実行のスレッドが読む(代入1回なので錠は要らない)。次の `begin_optimization` が畳む。
-        self._finish_request: Optional[int] = None
-        #: 仕上げの要求を受け付けるか。実行のスレッドが探索の後に要求を最後に読むときに閉じる(`_read_finish_request`)。
-        #: 読んだ後に受け付けると、受け付けたと答えた要求が黙って捨てられる。要求と読み取りは `_finish_lock` で順に並べる。
-        self._finish_open = False
-        self._finish_lock = threading.Lock()
-        #: 直近の実行の各ステップ(`optimize_steps.OptimizationSteps`)と、その実行の文書・ファイル名。実行の後も残し、
-        #: 画面が切り替えて見て、選んだステップを `finish_optimization_step` で仕上げる。
-        self.optimization_steps: Any = None
-        self._steps_document: Optional[Document] = None
-        self._steps_name: Optional[str] = None
-        #: 直近の実行を始めたときの文書の操作ログ(`run_optimization`)と、実行とその後の仕上げが足した結果の操作(`_adopt_optimization_results`)。
-        #: 仕上げは実行したときの条件・形で作るので、結果の操作を除いたログがこれと違う文書へは足さない(`_require_unchanged_since_run`)。
-        self._steps_inputs: Optional[tuple] = None
-        self._steps_results: list = []
-        #: 形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。立っている間は走らせている文書だけを変える操作を断る
-        #: (`_edits_document` / `_document_locked`)。イベントループのスレッドだけが書く。
-        self._optimizing = False
-        #: 走らせている文書(開始時の `self.document`)とそのファイル名・作成日時。別の文書へ切り替えても実行はこの `Document` を持ったまま
-        #: 走り続け、結果は `deliver_optimization_result` がファイルへ届ける。
-        self._optimize_document: Optional[Document] = None
-        self._optimize_name: Optional[str] = None
-        self._optimize_created: Optional[float] = None
-        #: 実行のスレッドが読む文書の写し(形は深く写してある。`begin_optimization`)と、その時点の操作ログの長さ。
-        #: 実行が足した結果は写しに入り、`deliver_optimization_result` が走らせた文書へ移す。
-        self._optimize_work: Optional[Document] = None
-        self._optimize_work_entries = 0
-        #: ファイルへ書けなかった結果(ファイル名 -> (文書, 作成日時))。次にその名前を開いたときディスクでなくこちらを開く。
-        self._undelivered: dict[str, tuple[Document, Optional[float]]] = {}
-        #: 別の文書を開いている間に終わった実行の、画面へまだ見せていない結果/失敗の封筒(ファイル名 -> 封筒。作って配るのは `net/ws.py`)。
-        self.unseen_optimize_results: dict[str, dict] = {}
+        self.optimization = Optimization()
+        self.optimization_results = OptimizationResults(self.store, self.autosaver)
 
     @property
     def models_dir(self) -> Path:
@@ -824,65 +792,45 @@ class Session:
 
     def cancel_optimization(self) -> dict:
         """走っている最適化に降りるよう伝える(旗を立てるだけ。実際に降りるのは次に進捗が出た時点)。
-        旗は次の `begin_optimization` が畳む(ここで畳むと、中断の直後に立て直された旗を新しい実行が拾う)。
+        旗は実行ごとに持つ。実行前の要求は次の実行へ持ち越さない。
         """
-        self._optimize_cancel.set()
+        run = self.optimization.active
+        if run is not None:
+            run.cancel()
         return {"cancelled": True}
 
     def request_finish(self, step: Optional[int] = None) -> dict:
-        """走っている探索を止めて、`step` 番目(省くと最新)のステップを仕上げるよう伝える(降りるのは次の候補を作る前)。
-        探索が終わって要求を読み終えた後なら受け付けない(`{"finishing": False}`)。"""
-        with self._finish_lock:
-            if not self._finish_open:
-                return {"finishing": False}
-            self._finish_request = -1 if step is None else int(step)
-            return {"finishing": True}
+        """走っている探索に仕上げを頼み、受付が閉じていれば False を返す。"""
+        run = self.optimization.active
+        return {"finishing": run is not None and run.request_finish(step)}
 
     def mark_finishing(self, step: int) -> None:
-        """実行の後の仕上げを始めた印(画面に「仕上げ中」と出す)。この仕上げは要求を読まないので、受け付けも閉じる。"""
-        with self._finish_lock:
-            self._finish_open = False
-            self._finish_request = int(step)
-
-    def _read_finish_request(self, final: bool = False) -> Optional[int]:
-        """実行のスレッドが仕上げの要求を読む。`final` で読んだら以後は受け付けない。"""
-        with self._finish_lock:
-            if final:
-                self._finish_open = False
-            return self._finish_request
+        """実行後の仕上げを始め、探索への仕上げ要求の受付を閉じる。"""
+        self.optimization.mark_finishing(step)
 
     def steps_for_current(self) -> Any:
         """いま開いている文書の直近の実行のステップ(無ければ None)。同じオブジェクトか同じファイル名で判定する
         (`_document_locked` と同じ理由)。"""
-        if self.optimization_steps is None:
-            return None
-        if self.document is self._steps_document:
-            return self.optimization_steps
-        if self._steps_name is not None and self._current_name == self._steps_name:
-            return self.optimization_steps
-        return None
+        return self.optimization.steps_for(self.document, self._current_name)
+
+    def steps_have_finisher(self) -> bool:
+        """いま開いている文書のステップに仕上げ手段があるか。"""
+        return self.optimization.has_finisher(self.document, self._current_name)
 
     def steps_finishable(self) -> bool:
-        """直近の実行のステップを選んで仕上げられるか: ステップがあり、仕上げる手段が残っていて、実行の後で文書が変わっていない
-        (`finish_optimization_step` が断る条件と同じ。画面の「このステップで仕上げる」ボタンの出し分けに使う)。"""
-        steps = self.steps_for_current()
-        if steps is None or steps.finisher is None:
-            return False
-        try:
-            self._require_unchanged_since_run(self.document)
-        except optimize_run.OptimizeInputError:
-            return False
-        return True
+        """直近の実行と同じ前提でステップを仕上げられるか。"""
+        return self.optimization.finishable(self.document, self._current_name)
 
     @property
     def optimizing(self) -> bool:
         """形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。どの文書でかは問わない(同時に走るのは1本だけ。docs/TOPOPT.md)。"""
-        return self._optimizing
+        return self.optimization.active is not None
 
     @property
     def optimizing_name(self) -> Optional[str]:
         """走らせている文書のファイル名(走っていない・無題なら None)。"""
-        return self._optimize_name if self._optimizing else None
+        run = self.optimization.active
+        return run.name if run is not None else None
 
     @property
     def optimization_visible(self) -> bool:
@@ -893,53 +841,20 @@ class Session:
         """今の文書が、走っている最適化の対象か(=文書を変える操作を断るか)。同じオブジェクトか同じファイル名で判定する
         (実行中に同じファイルを開き直すとディスクから再生した別の `Document` になり、名前で見ないと編集できて結果がその編集を上書きする)。
         """
-        if not self._optimizing:
-            return False
-        if self.document is self._optimize_document:
-            return True
-        return self._optimize_name is not None and self._current_name == self._optimize_name
+        return self.optimization.visible(self.document, self._current_name)
 
     def optimization_status(self) -> dict:
-        """走っているか・中断を頼まれているか(`net/ws.py` の `optimize_status` の中身)。
-        `running` は「いま開いている文書で走っているか」(`optimization_visible`)。`cancelling` は走っている間だけ載せる
-        (旗は次の開始まで立ったままなので、走っていないのに載せると次の実行が中断表示から始まって見える)。
-        """
-        visible = self.optimization_visible
-        status: dict = {"running": visible}
-        if visible and self._optimize_cancel.is_set():
-            status["cancelling"] = True
-        if visible and self._finish_request is not None:
-            status["finishing"] = True
-        return status
+        """開いている文書の実行と、中断・仕上げ要求の状態。"""
+        run = self.optimization.active
+        return run.status() if self.optimization_visible else {"running": False}
 
     def begin_optimization(self) -> None:
-        """走らせる前にイベントループのスレッドで呼ぶ。中断の旗を畳み、今の文書を対象として控える。
-        旗をワーカースレッドの中で畳むと、投げてから走り出すまでに届いた中断が消されて結果が足される(issue #35)。
-        """
-        if self._optimizing:
-            raise ValueError("最適化が既に走っている(中断してから)")
-        # 実行のスレッドには文書そのものでなく形を写した文書を渡す(`speculative.fork`)。文書の形を一緒に使うと、実行が測る
-        # 三角形分割と、画面のズームがループ側で測り直す三角形分割が同じ面に書き込んで競合する(`kernel.copy_shape`)。
-        # 写しは失敗しうるので、「走っている」状態にする前に作る。
-        work, _ = fork(self.document, kernel.copy_shape)
-        self._optimize_cancel.clear()
-        with self._finish_lock:
-            self._finish_request = None
-            self._finish_open = True
-        self._optimize_work = work
-        self._optimize_work_entries = len(work.log.entries)
-        self._optimize_document = self.document
-        self._optimize_name = self._current_name
-        self._optimize_created = self._created
-        self._optimizing = True
+        """イベントループ上で開始元を固定し、深い作業コピーと新しい要求受付を作る。"""
+        self.optimization.begin(self.document, self._current_name, self._created)
 
     def end_optimization(self) -> None:
-        """`begin_optimization` の対。文書を変える操作をまた受け付ける。"""
-        self._optimizing = False
-        self._optimize_document = None
-        self._optimize_work = None
-        self._optimize_name = None
-        self._optimize_created = None
+        """実行の文書ロックを解き、要求受付と作業コピーを手放す。"""
+        self.optimization.end()
 
     def deliver_optimization_result(self, result: dict) -> dict:
         """足し終えた結果を、走らせた文書のファイルへ届ける。`end_optimization` より前に、イベントループのスレッドで呼ぶ
@@ -955,19 +870,19 @@ class Session:
         結果の警告(`warning`)を `Session.warnings` へ積むのは、その文書を開いているときだけ。離れている間の分は結果の
         `warning` に載せ、戻ってきたときにパネルの通知で読ませる(`net/ws.py`)。`state != "done"` のときは警告の行き先を決めるだけ。
         """
-        self._adopt_optimization_results()
-        document = self._optimize_document
-        name = self._optimize_name
-        here = document is None or self.document is document or (
-            name is not None and self._current_name == name
-        )
+        run = self.optimization.active
+        if run is not None:
+            run.adopt_results()
+        document = run.document if run is not None else None
+        name = run.name if run is not None else None
+        here = run is None or run.matches(self.document, self._current_name)
         if here and result.get("warning"):
             self.warnings.append(result["warning"])
         if result.get("state") != "done":
             return result if here else dict(result, elsewhere=True)
         if here:
             if document is not None and self.document is not document:
-                self._replace_document(document, current_name=name, created=self._optimize_created)
+                self._replace_document(document, current_name=name, created=run.created)
             applied = None
             if "body_id" in result:
                 applied = self._after_logged_verb(
@@ -981,51 +896,7 @@ class Session:
             # 変更イベントを発火しない経路(結果にボディが無い)でも書く。
             self.autosave()
             return result if applied is None else dict(result, applied=applied)
-        label = name
-        try:
-            if label is None:
-                label = self.store.unused_untitled_name()
-            target = self.store.resolve_document_name(label)
-            self.autosaver.write(target, document.log.to_json(created=self._optimize_created))
-            label = target.name
-            # 一覧の絵は結果の無い形のまま。消しておけば次に開いたときに撮り直される。
-            self.store.drop_thumbnail(target)
-        except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ知らせる(`autosave` と同じ)
-            label = label or "untitled.json"
-            self._undelivered[label] = (document, self._optimize_created)
-            note = (
-                f"最適化の結果を {label} へ書けなかった(次に {label} を開くと結果入りで開く): "
-                f"{type(error).__name__}: {error}"
-            )
-            result = dict(result, warning=f"{result['warning']}\n{note}" if result.get("warning") else note)
-        return dict(result, elsewhere=True, file=label)
-
-    def _adopt_optimization_results(self) -> None:
-        """実行(と仕上げ)が写しの文書に足した操作を、走らせた文書へ同じ内容で足す(ボディのIDも記録されているので同じIDで入る)。
-        2回呼んでも、足した分を二重に移さない。"""
-        work, document = self._optimize_work, self._optimize_document
-        if work is None or document is None:
-            return
-        added = work.log.entries[self._optimize_work_entries:]
-        self._optimize_work_entries += len(added)
-        for operation in added:
-            moved = document.log.append(operation.verb, operation.args)
-            verb_handler(operation.verb).do(document, moved)
-            self._steps_results.append(moved)
-
-    def _require_unchanged_since_run(self, document: Optional[Document] = None) -> None:
-        """直近の実行の後で文書が変わっていたら断る。仕上げは実行したときの条件・格子・保持形状で作るので、その後に条件や形を
-        変えた文書へ足すと、古い前提の結果が黙って入る。実行(と仕上げ)が足した結果の操作は変えたと数えない
-        (結果を取り消す・やり直すのも同じ)。`document` は比べる文書(既定は実行中の文書。実行の外から問うときは開いている文書)。"""
-        if self._steps_inputs is None:
-            return
-        document = document if document is not None else self._optimize_document
-        current = tuple(operation for operation in document.log.entries if operation not in self._steps_results)
-        if current != self._steps_inputs:
-            raise optimize_run.OptimizeInputError(
-                "文書が最適化の実行の後で変わった。実行したときの条件で作った結果は、いまの文書へ足せない"
-                "(変更を元に戻すか、最適化をやり直してください)"
-            )
+        return self.optimization_results.deliver_elsewhere(run, result)
 
     def run_optimization(
         self,
@@ -1074,26 +945,21 @@ class Session:
             min_width_mm=None if min_width_mm is None else float(min_width_mm),
             max_evaluations=None if max_evaluations is None else int(max_evaluations),
         )
-        owned = not self._optimizing
+        owned = not self.optimizing
         if owned:
             self.begin_optimization()
         try:
-            from .optimize_steps import OptimizationSteps
-
-            steps = OptimizationSteps()
-            self.optimization_steps = steps
-            self._steps_document, self._steps_name = self._optimize_document, self._optimize_name
-            self._steps_inputs, self._steps_results = tuple(self._optimize_document.log.entries), []
-            # **今の文書ではなく、開始時に控えた文書の写しを解く**(途中で別の文書へ切り替えてもよい)。
+            run = self.optimization.prepare_search()
+            steps = run.start_search()
             result = optimize_run.run(
-                self._optimize_work,
+                run.work,
                 options,
                 progress=_tagged(progress, steps),
-                should_cancel=self._optimize_cancel.is_set,
+                should_cancel=run.cancelled,
                 debug=debug,
                 debug_kinds=debug_kinds,
                 steps=steps,
-                finish_request=self._read_finish_request,
+                finish_request=run.read_finish_request,
             )
             if owned:
                 result = self.deliver_optimization_result(result)
@@ -1108,16 +974,16 @@ class Session:
 
         `run_optimization` と同じく重いので別スレッドで回し、呼び出し側が `begin_optimization` を済ませていなければここで囲む。
         仕上げる先は開始時に控えた文書(いま開いている文書が直近の実行の文書であることは `net/ws.py` が確かめる)。
-        その文書が実行の後で変わっていたら `OptimizeInputError` で断る(`_require_unchanged_since_run`)。
+        その文書が実行の後で変わっていたら `OptimizeInputError` で断る(`OptimizationRecord.require_unchanged`)。
         """
-        steps = self.optimization_steps
-        owned = not self._optimizing
+        owned = not self.optimizing
         if owned:
             self.begin_optimization()
         try:
-            self._require_unchanged_since_run()
-            result = optimize_run.finish_step(self._optimize_work, steps, int(step), progress=_tagged(progress, steps),
-                                              should_cancel=self._optimize_cancel.is_set, debug=debug,
+            run = self.optimization.prepare_finish()
+            steps = run.record.steps if run.record is not None else None
+            result = optimize_run.finish_step(run.work, steps, int(step), progress=_tagged(progress, steps),
+                                              should_cancel=run.cancelled, debug=debug,
                                               debug_kinds=debug_kinds)
             if owned:
                 result = self.deliver_optimization_result(result)
@@ -1192,7 +1058,7 @@ class Session:
             # 名前を変えて書くと、編集を断っている写しが別名で編集できる文書になり、結果は
             # 元の名前へ届く(写しには入らない)。
             raise ValueError(
-                f"形状最適化の実行中は別名で保存できない({self._optimize_name or '無題の文書'} の実行が終わるか中断してから)"
+                f"形状最適化の実行中は別名で保存できない({self.optimizing_name or '無題の文書'} の実行が終わるか中断してから)"
             )
         created = self._created if name is None else time.time()
         payload = self.document.log.to_file_chunks(created=created)
@@ -1253,7 +1119,7 @@ class Session:
         if self._document_locked():
             # 移すと、終わった結果が元の名前で新しいファイルとして書かれる。
             raise ValueError(
-                f"形状最適化の実行中は名前を変えられない({self._optimize_name or '無題の文書'} の実行が終わるか中断してから)"
+                f"形状最適化の実行中は名前を変えられない({self.optimizing_name or '無題の文書'} の実行が終わるか中断してから)"
             )
         if target.exists():
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
@@ -1291,8 +1157,9 @@ class Session:
         """
         source = self.store.resolve_document_name(name)
         self.autosaver.drain()  # 同じ名前を開き直すとき、書きかけの最後の変更を読み落とさない
-        if source.name in self._undelivered:
-            return self._open_undelivered(source.name)
+        kept = self.optimization_results.take_document(source.name)
+        if kept is not None:
+            return self._open_undelivered(source.name, kept)
         payload = self.store.read_document_file(source)
         log = OpLog.from_payload(payload)
         document = Document()
@@ -1312,9 +1179,9 @@ class Session:
             "name": source.name,
         })
 
-    def _open_undelivered(self, name: str) -> dict:
+    def _open_undelivered(self, name: str, kept: tuple[Document, Optional[float]]) -> dict:
         """ファイルへ書けなかった最適化の結果入りの文書を開き、もう一度書く。開いた時点で今の文書になるので手放す。"""
-        document, created = self._undelivered.pop(name)
+        document, created = kept
         self._replace_document(document, current_name=name, created=created)
         self.autosave()
         return self._emit({
@@ -1396,7 +1263,7 @@ class Session:
         `models/.trash` への退避はしない(issue #17)。サムネイルも消す。
         """
         target = self.store.resolve_document_name(name)
-        if self._optimizing and target.name == self._optimize_name:
+        if self.optimizing and target.name == self.optimizing_name:
             # 消しても、終わった結果が同じ名前で書き戻されて黙って復活する。
             raise ValueError(
                 f"{target.name} は形状最適化の実行中(終わるか、開いて中断してから削除する)"
@@ -1404,8 +1271,7 @@ class Session:
         self.autosaver.drain()  # 書きかけの書き込みが、消した後のファイルを書き戻さないように
         self.store.delete_document_file(target)
         # 書けなかった結果も一緒に捨てる(残すと、同じ名前で作り直したファイルを開いたときに出てくる)。
-        self._undelivered.pop(target.name, None)
-        self.unseen_optimize_results.pop(target.name, None)
+        self.optimization_results.discard(target.name)
         self.store.drop_thumbnail(target)
         deleted = {"action": "delete", "path": str(target), "name": target.name}
         if target.name == self._current_name:

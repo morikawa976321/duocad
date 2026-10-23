@@ -109,7 +109,9 @@ def test_failure_is_collected_once_and_a_later_write_recovers(autosaver, monkeyp
     assert autosaver.pending_write is None
     assert autosaver.store.warnings == ["自動保存できなかった: OSError: disk full"]
     assert autosaver.settle() is True and not autosaver.saved
-    autosaver.save_current("current.json", _log(2), None)
+    with autosaver.background():
+        autosaver.save_current("current.json", _log(2), None)
+    autosaver.drain()
     assert autosaver.saved and len(autosaver.store.warnings) == 1
 
 
@@ -136,33 +138,39 @@ def test_drain_waits_and_collects_the_last_result(autosaver, monkeypatch, fail):
     assert bool(autosaver.store.warnings) is fail
 
 
-def test_synchronous_save_follows_the_queued_write(autosaver, monkeypatch):
+def test_synchronous_save_follows_the_queued_write(session, monkeypatch):
+    """製品の同期保存が、それ以前の背景保存を追い越さない。"""
+    session.sketch_create("XY")
     started = threading.Event()
 
-    def save():
-        started.set()
-        autosaver.save_current("current.json", _log(2), None)
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as caller:
-        with HeldWrite(autosaver.store, monkeypatch) as held:
-            with autosaver.background():
-                autosaver.save_current("current.json", _log(1), None)
+        with HeldWrite(session.store, monkeypatch) as held:
+            with session.background_autosave():
+                session.sketch_create("YZ")
             assert held.entered.wait(10)
-            result = caller.submit(save)
-            assert started.wait(10) and not result.done()
-        result.result(timeout=10)
-    assert held.writes == [("current.json", 1), ("current.json", 2)]
-    assert autosaver.pending_write is None and autosaver.saved
+
+            def release():
+                assert started.wait(10)
+                held.release.set()
+
+            released = caller.submit(release)
+            started.set()
+            assert session.autosave()
+        released.result(timeout=10)
+    assert held.writes == [(session.current_name, 2), (session.current_name, 2)]
+    assert session.pending_write is None and session.saved
 
 
-def test_nested_background_context_restores_synchronous_saving(autosaver, monkeypatch):
-    with HeldWrite(autosaver.store, monkeypatch) as held:
-        with autosaver.background():
-            with pytest.raises(ValueError), autosaver.background():
+def test_nested_background_context_restores_synchronous_saving(session, monkeypatch):
+    """背景保存の入れ子を例外で抜けても、Session の通常の保存経路へ戻る。"""
+    session.sketch_create("XY")
+    with HeldWrite(session.store, monkeypatch) as held:
+        with session.background_autosave():
+            with pytest.raises(ValueError), session.background_autosave():
                 raise ValueError("中断")
-            autosaver.save_current("current.json", _log(1), None)
+            session.sketch_create("YZ")
             assert held.entered.wait(10)
-            assert autosaver.pending_write is not None
-    autosaver.save_current("current.json", _log(2), None)
-    assert autosaver.pending_write is None
-    assert held.writes == [("current.json", 1), ("current.json", 2)]
+            assert session.pending_write is not None
+    assert session.autosave()
+    assert session.pending_write is None
+    assert held.writes == [(session.current_name, 2), (session.current_name, 2)]

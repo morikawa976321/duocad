@@ -137,6 +137,7 @@ def test_run_optimization_rejects_the_old_arguments_with_a_named_error(
     assert kwarg in reply["message"]
     assert reply.get("cancelled") is not True
     assert connection.of_type("optimize_result") == []
+    assert session.steps_for_current() is None
 
 
 def test_run_optimization_forwards_min_width_mm_so_a_below_floor_value_is_refused(session: Session) -> None:
@@ -221,7 +222,7 @@ def test_cancel_does_nothing_when_nothing_is_running(session: Session) -> None:
     status = connection.of_type("optimize_status")[0]
     assert status["running"] is False
     assert "cancelling" not in status
-    assert session._optimize_cancel.is_set() is False
+    assert session.optimization_status() == {"running": False}
 
 
 def test_cancel_sets_the_flag_while_running(session: Session) -> None:
@@ -229,7 +230,7 @@ def test_cancel_sets_the_flag_while_running(session: Session) -> None:
     connection = _dispatch(session, {"cmd": "cancel_optimization"})
     status = connection.of_type("optimize_status")[0]
     assert status["cancelling"] is True
-    assert session._optimize_cancel.is_set() is True
+    assert session.optimization_status() == {"running": True, "cancelling": True}
 
 
 def test_a_cancel_sent_right_after_the_start_is_not_lost(session: Session, monkeypatch) -> None:
@@ -325,42 +326,46 @@ def test_a_run_keeps_going_on_another_document_and_shows_up_on_return(session: S
     session.rename_document("a.json")
     session.copy_document("a.json", "b.json")
     gates = [threading.Event(), threading.Event()]
+    first_progress = asyncio.Event()
+    second_progress = asyncio.Event()
+    loop = None
 
     def fake_run(document, options, *, progress, **kwargs):
         progress({"phase": "search", "message": "1", "evaluation": 1})
-        gates[0].wait(10)
+        assert gates[0].wait(10)
         progress({"phase": "search", "message": "2", "evaluation": 2})
-        gates[1].wait(10)
+        loop.call_soon_threadsafe(second_progress.set)
+        assert gates[1].wait(10)
         body_id = add_mesh_body(document, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [0, 1, 2], name="結果")
         return {"state": "done", "body_id": body_id, "name": "結果", "triangle_count": 1}
 
     monkeypatch.setattr(optimize_run, "run", fake_run)
 
-    async def until(condition) -> None:
-        for _ in range(500):
-            if condition():
-                return
-            await asyncio.sleep(0.01)
-        raise AssertionError("待っても起きなかった")
+    class ProgressConnection(FakeConnection):
+        async def send(self, raw):
+            await super().send(raw)
+            if self.payloads[-1].get("type") == "optimize_progress":
+                first_progress.set()
 
     async def scenario() -> None:
+        nonlocal loop
+        loop = asyncio.get_running_loop()
         server = Server(session)
         server.bind_loop(asyncio.get_running_loop())
-        connection = FakeConnection()
+        connection = ProgressConnection()
         server.clients.add(connection)
 
         async def send(command: dict) -> None:
             await server._dispatch(connection, json.dumps(command))
 
         await send({"cmd": "run_optimization"})
-        await until(lambda: connection.of_type("optimize_progress"))
+        await asyncio.wait_for(first_progress.wait(), 10)
         await send({"cmd": "open_document", "name": "b.json"})
         assert connection.last("optimize_status")["running"] is False
 
         connection.payloads.clear()
         gates[0].set()
-        await until(lambda: (server._optimize_last_progress or {}).get("evaluation") == 2)
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(second_progress.wait(), 10)
         assert connection.of_type("optimize_progress") == [], "別の文書の画面に進捗を配った"
 
         await send({"cmd": "open_document", "name": "a.json"})
@@ -378,6 +383,10 @@ def test_a_run_keeps_going_on_another_document_and_shows_up_on_return(session: S
         assert connection.last("optimize_result")["state"] == "done"
         assert connection.last("optimize_status")["running"] is False
         assert [body.name for body in session.document.bodies][-1] == "結果"
+
+        await send({"cmd": "open_document", "name": "b.json"})
+        await send({"cmd": "open_document", "name": "a.json"})
+        assert len(connection.of_type("optimize_result")) == 1
 
     asyncio.run(scenario())
 

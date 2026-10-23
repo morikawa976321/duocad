@@ -83,25 +83,16 @@ class Autosave:
             self.store.write_document_file(target, payload)
 
     def save_current(self, name: str, log: OpLog, created: float | None) -> None:
-        if self.background_active:
-            target = self.store.resolve_writable_name(name)
-            # 呼び手が変更を配る前に中身を確定し、ワーカーにはログを渡さない。
-            payload = log.to_file_chunks(created=created)
-            self.supersede()
-            seq = self._write_seq
-            if self._writer is None:
-                self._writer = concurrent.futures.ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix="duocad-autosave"
-                )
-            self._pending_write = self._writer.submit(self._write_queued, target, payload, seq)
-        else:
-            self.drain()
-            self.supersede()
-            target = self.store.resolve_writable_name(name)
-            payload = log.to_file_chunks(created=created)
-            with self.locked():
-                self.store.write_document_file(target, payload)
-                self.mark_saved()
+        target = self.store.resolve_writable_name(name)
+        # 呼び手が変更を配る前に中身を確定し、ワーカーにはログを渡さない。
+        payload = log.to_file_chunks(created=created)
+        self.supersede()
+        seq = self._write_seq
+        if self._writer is None:
+            self._writer = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="duocad-autosave"
+            )
+        self._pending_write = self._writer.submit(self._write_queued, target, payload, seq)
 
     def _write_queued(self, target: Path, payload: list, seq: int) -> None:
         if seq != self._write_seq:
