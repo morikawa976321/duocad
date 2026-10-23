@@ -1,8 +1,8 @@
 """シェル(中空化)の幾何(OCPを触るカーネル層)。
 
 抜く面(開口)を選び、外形から内側へ一様な厚さの殻にする(`BRepOffsetAPI_MakeThickSolid`)。
-面の数え方・検査・由来の射影は `kernel` の側にあり、ここはそれを読むだけ ——
-依存は kernel_shell → kernel の一方向(`kernel_extrude` と同じ)。
+位相・幾何量・形状検査は `brep_topology` / `brep_geometry` / `brep_checks`、
+履歴と面の同一性を使う由来処理は `kernel` を参照する。
 
 戻り値の規律は kernel と同じ(JSON化できる素の値だけ)。例外は `"shape"`。
 """
@@ -24,21 +24,20 @@ from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 
-from .kernel import (
-    _NO_CHANGE_RTOL,
-    _checked_volume,
-    _contains_identity,
+from .brep_checks import _NO_CHANGE_RTOL, _checked_volume, _require_valid
+from .kernel import _contains_identity, _lookup_by_identity, _positions_in, normalize_provenance
+from .brep_topology import (
     _face_at,
     _face_map,
     _face_map_projection,
-    _lookup_by_identity,
-    _positions_in,
-    _require_valid,
-    normalize_provenance,
-    volume,
+    compound,
+    indexed_map,
+    subshapes,
+    is_null as _is_null,
 )
+from .brep_geometry import volume
 from . import kernel
-from .mesh_geometry import compound, indexed_map, subshapes
+
 
 #: `MakeThickSolidByJoin` の許容差(mm)の上限。2026-10-13 の実測(docs/CAD_LIBRARY_PITFALLS.md)はこの値で取った。
 #: 1e-6 に変えても、抜く面がフィレット面に接するときの失敗は変わらなかった。厚さがこれに近いと
@@ -74,7 +73,7 @@ def _shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: 
         {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
          "volume_after": float}
     """
-    if shape is None or shape.IsNull():
+    if shape is None or _is_null(shape):
         raise ValueError("cannot shell an empty shape")
     indices = [int(index) for index in face_indices]
     if not indices:
@@ -118,7 +117,7 @@ def _shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: 
         )
 
     final = maker.Shape()
-    if final is None or final.IsNull():
+    if final is None or _is_null(final):
         raise ValueError(f"shell produced an empty shape ({context})")
     solids = indexed_map(final, TopAbs_ShapeEnum.TopAbs_SOLID).Extent()
     if solids != 1:

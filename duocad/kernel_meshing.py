@@ -25,6 +25,7 @@ import time
 from typing import Dict, List, Optional
 
 import numpy as np
+
 from OCP.BRepMesh import (
     BRepMesh_EdgeDiscret,
     BRepMesh_FaceDiscret,
@@ -44,7 +45,8 @@ from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS
 
 from . import boundary_check
-from .mesh_geometry import indexed_map
+from .brep_topology import indexed_map, is_null as _is_null
+
 
 #: 再分割の反復上限の既定(仮置き。docs/TOPOPT_GAP_CAUSALITY.md「案Aの実装」)。
 DEFAULT_MAX_ROUNDS = 12
@@ -267,7 +269,7 @@ def mesh_shape(shape, deviation: float, angular_deflection: float, *, max_rounds
         count_mismatch: 面分割後に点数が検査時と食い違った use(空が正常)
         seconds: 段階ごとの秒
     """
-    if shape is None or shape.IsNull():
+    if shape is None or _is_null(shape):
         raise ValueError('cannot mesh an empty shape')
     seconds: Dict[str, float] = {}
     clock = time.perf_counter

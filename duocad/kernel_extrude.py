@@ -2,9 +2,8 @@
 
 面の押し出し(`extrude_faces`)、スケッチの領域の押し出し(`extrude_regions`)・回転体(`revolve_regions`)・
 ロフト(`loft_regions`)を持つ。
-面の数え方(`_face_map` の1始まりの添字)・ブーリアンの検査(`_checked_volume` / `_require_valid`)・
-由来の射影(`_target_successors` / `_face_map_projection`)は `kernel` の側にあり、ここはそれを読むだけ ——
-依存は kernel_extrude → kernel の一方向。
+位相・幾何量・形状検査は `brep_topology` / `brep_geometry` / `brep_checks` を参照する。
+ビルダの履歴と面の同一性を使う由来処理は `kernel` を参照する。
 
 戻り値の規律は kernel と同じ(JSON化できる素の値だけ)。例外は `"shape"`(TopoDS_Shape。
 document.Body.shape になる値)。
@@ -16,7 +15,6 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
-
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Check, BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
@@ -30,15 +28,12 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Sewing,
     BRepBuilderAPI_Transform,
 )
-from OCP.BRepCheck import BRepCheck_Analyzer
-from OCP.BRepGProp import BRepGProp
 from OCP.BRepLProp import BRepLProp_CLProps
 from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle, BRepOffsetAPI_MakeDraft, BRepOffsetAPI_ThruSections
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
-from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
+from OCP.BRepTools import BRepTools
 from OCP.Bnd import Bnd_Box
 from OCP.GCPnts import GCPnts_AbscissaPoint
-from OCP.GProp import GProp_GProps
 from OCP.Geom2dLProp import Geom2dLProp_CurAndInf2d
 from OCP.LProp import LProp_NotDefined
 from OCP.GeomAbs import GeomAbs_BezierCurve, GeomAbs_BSplineCurve, GeomAbs_Circle, GeomAbs_Line, GeomAbs_Plane
@@ -59,20 +54,26 @@ from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だ�
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.gp import gp_Ax1, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 
-from .kernel import (
-    _checked_volume,
+from .brep_checks import _checked_volume, _require_valid, is_valid as _is_valid
+from .brep_topology import (
     _face_at,
     _face_map,
     _face_map_projection,
+    _extrude_count as _count,
+    _extrude_edges as _edges,
+    is_null as _is_null,
+)
+from .brep_geometry import (
     _face_normal,
     _face_props,
-    _fuse_all,
-    _require_valid,
-    _target_successors,
-    _unify_same_domain,
     classify_face,
     volume,
+    _extrude_shape_area as _shape_area,
+    _extrude_edge_length as _edge_length,
+    _extrude_area_centroid as _area_centroid,
 )
+from .kernel import _fuse_all, _target_successors, _unify_same_domain
+
 
 #: 面の同一性を「重心の一致」で判定するときの相対許容差(after_face_index の探索)。
 _MATCH_TOL = 1.0e-6
@@ -156,7 +157,7 @@ def extrude_regions(
         if not prism.IsDone():
             raise ValueError("failed to build a prism from a region face")
         prism_shape = prism.Shape()
-        if prism_shape is None or prism_shape.IsNull():
+        if prism_shape is None or _is_null(prism_shape):
             raise ValueError("prism from a region face is empty")
         # 押し出し方向が面の平面内に寝ると体積0の退化ソリッドができ、`IsDone()` も
         # `IsNull()` も `BRepCheck_Analyzer` も通る。体積を見るのが唯一の関門。
@@ -265,7 +266,7 @@ def _drafted_solid(
     if not draft.IsDone():
         raise ValueError(_collapse_message(label))
     shell = draft.Shell()
-    if not BRepCheck_Analyzer(shell).IsValid():
+    if not _is_valid(shell):
         raise ValueError(_collapse_message(label))
 
     base = BRepBuilderAPI_MakeFace(wire, True)
@@ -314,7 +315,7 @@ def _analytic_drafted_solid(
     if not draft.IsDone():
         raise ValueError(_collapse_message(label))
     solid = draft.Shape()
-    if _count(solid, TopAbs_SOLID) != 1 or not volume(solid) > 0 or not BRepCheck_Analyzer(solid).IsValid():
+    if _count(solid, TopAbs_SOLID) != 1 or not volume(solid) > 0 or not _is_valid(solid):
         raise ValueError(_collapse_message(label))
     return TopoDS.Solid_s(TopExp_Explorer(solid, TopAbs_SOLID).Current())
 
@@ -352,7 +353,7 @@ def _sewn_solid(parts: Sequence[Any], tolerance: float) -> Optional[Any]:
     fix = ShapeFix_Solid(solid)
     fix.Perform()
     solid = fix.Solid()
-    if not volume(solid) > 0 or not BRepCheck_Analyzer(solid).IsValid():
+    if not volume(solid) > 0 or not _is_valid(solid):
         return None
     return solid
 
@@ -573,15 +574,6 @@ def _lids(body: Any, face: Any, offset: "gp_Vec") -> List[Any]:
     return out
 
 
-def _count(shape: Any, kind: Any) -> int:
-    explorer = TopExp_Explorer(shape, kind)
-    count = 0
-    while explorer.More():
-        count += 1
-        explorer.Next()
-    return count
-
-
 def _collapse_message(label: str) -> str:
     return (
         f"taper collapses {label} (断面が潰れる): 側面どうしがぶつかるか、穴が閉じるか、輪郭が頂点を越える。"
@@ -637,7 +629,7 @@ def revolve_regions(
         if not maker.IsDone():
             raise ValueError(f"failed to revolve region #{position}")
         solid = maker.Shape()
-        if solid is None or solid.IsNull() or volume(solid) <= 0:
+        if solid is None or _is_null(solid) or volume(solid) <= 0:
             raise ValueError(f"revolving region #{position} produced no volume")
         solids.append(solid)
 
@@ -690,19 +682,13 @@ def _require_one_side_of_axis(
         )
 
 
-def _shape_area(shape: Any) -> float:
-    props = GProp_GProps()
-    BRepGProp.SurfaceProperties_s(shape, props)
-    return props.Mass()
-
-
 def _check_region_mode(mode: str, target_shape: Any) -> None:
     """領域の押し出し・回転体に共通する mode と相手の組の検査。"""
     if mode not in ("join", "cut", "new"):
         raise ValueError(f"unknown mode: {mode!r} (one of ['join', 'cut', 'new'])")
-    if mode == "cut" and (target_shape is None or target_shape.IsNull()):
+    if mode == "cut" and (target_shape is None or _is_null(target_shape)):
         raise ValueError("cut requires a target shape")
-    if mode == "new" and target_shape is not None and not target_shape.IsNull():
+    if mode == "new" and target_shape is not None and not _is_null(target_shape):
         # 相手を黙って無視すると「足したつもりが別ボディ」が成功として通る。
         raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
 
@@ -720,7 +706,7 @@ def _combine_region_solids(
     volume_before: Optional[float] = None
     builder = None
     if mode in ("join", "new"):
-        if target_shape is None or target_shape.IsNull():
+        if target_shape is None or _is_null(target_shape):
             result = combined
         else:
             volume_before = volume(target_shape)
@@ -790,7 +776,7 @@ def extrude_faces(
                         "new_faces": [...], "after_face_indices": [...]}}
     `face_map` の旧添字は `target_shape` の面(`new` では空)。`faces` は `source_shape` の添字。
     """
-    if source_shape is None or source_shape.IsNull():
+    if source_shape is None or _is_null(source_shape):
         raise ValueError("cannot extrude faces of an empty shape")
     indices = [int(index) for index in face_indices]
     if not indices:
@@ -801,7 +787,7 @@ def extrude_faces(
     taper = check_taper(taper)
     if mode not in ("join", "cut", "new"):
         raise ValueError(f"unknown extrude mode: {mode!r}")
-    has_target = target_shape is not None and not target_shape.IsNull()
+    has_target = target_shape is not None and not _is_null(target_shape)
     if mode == "new" and has_target:
         raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
     if mode != "new" and not has_target:
@@ -826,7 +812,7 @@ def extrude_faces(
         if not prism.IsDone():
             raise ValueError(f"failed to build the prism for face {index} (distance={distance})")
         prism_shape = prism.Shape()
-        if prism_shape is None or prism_shape.IsNull():
+        if prism_shape is None or _is_null(prism_shape):
             raise ValueError(f"prism for face {index} is empty (distance={distance})")
         prisms.append(prism_shape)
     combined = _fuse_all(prisms, "face prisms")
@@ -1071,7 +1057,7 @@ def _require_sound_loft(solid: Any, faces: Sequence[Any]) -> None:
     実測: 始点がずれて潰れた・裏返ったロフトは `BRepCheck_Analyzer` を通す。`BRepAlgoAPI_Check` は第3引数
     `bTestSI`(自己干渉)を True にしたときだけ捕まえる(25〜80 ms)。体積は断面の最大面積^1.5 を目安に比べる。
     """
-    if solid is None or solid.IsNull():
+    if solid is None or _is_null(solid):
         raise ValueError("loft produced an empty shape")
     scale = max(_shape_area(face) for face in faces) ** 1.5
     if not volume(solid) > 1.0e-6 * scale:
@@ -1079,7 +1065,7 @@ def _require_sound_loft(solid: Any, faces: Sequence[Any]) -> None:
             "loft collapsed (体積が0か負): 断面どうしの対応がねじれて潰れている。"
             "shifts で断面の始点をずらすか、断面の間に断面を足すこと"
         )
-    if not BRepCheck_Analyzer(solid).IsValid():
+    if not _is_valid(solid):
         raise ValueError("loft produced an invalid shape (BRepCheck)")
     if not BRepAlgoAPI_Check(solid, True, True).IsValid():
         raise ValueError(
@@ -1354,13 +1340,6 @@ def _merged(values: Sequence[float], tol: float = _ANGLE_TOL) -> List[float]:
 # --------------------------------------------------------------------------------------
 # 辺と線の小道具
 # --------------------------------------------------------------------------------------
-def _edges(wire: Any) -> List[Any]:
-    explorer = BRepTools_WireExplorer(TopoDS.Wire_s(wire))
-    out = []
-    while explorer.More():
-        out.append(TopoDS.Edge_s(explorer.Current()))
-        explorer.Next()
-    return out
 
 
 def _make_wire(edges: Sequence[Any]) -> Any:
@@ -1449,10 +1428,6 @@ def _closed_from(edge: Any, t: float) -> Any:
     return _make_wire([rebuilt])
 
 
-def _edge_length(edge: Any) -> float:
-    return GCPnts_AbscissaPoint.Length_s(BRepAdaptor_Curve(edge))
-
-
 def _wire_count(face: Any) -> int:
     explorer = TopExp_Explorer(face, TopAbs_WIRE)
     count = 0
@@ -1460,13 +1435,6 @@ def _wire_count(face: Any) -> int:
         count += 1
         explorer.Next()
     return count
-
-
-def _area_centroid(face: Any) -> Vec:
-    props = GProp_GProps()
-    BRepGProp.SurfaceProperties_s(face, props)
-    c = props.CentreOfMass()
-    return (c.X(), c.Y(), c.Z())
 
 
 # --------------------------------------------------------------------------------------

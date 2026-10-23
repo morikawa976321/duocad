@@ -15,17 +15,13 @@ import io
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from OCP.BOPAlgo import BOPAlgo_Builder
-from OCP.Bnd import Bnd_Box, Bnd_OBB
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
-from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeVertex
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
-from OCP.BRepGProp import BRepGProp
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_QuasiUniformDeflection
-from OCP.GProp import GProp_GProps
 from OCP.Message import Message_Gravity
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_Orientation, TopAbs_SOLID, TopAbs_VERTEX
 from OCP.TopExp import TopExp_Explorer
@@ -33,7 +29,16 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 
-from .mesh_geometry import compound, subshapes
+from .brep_topology import compound, subshapes, is_null as _is_null
+from .brep_geometry import (
+    _interference_loose_bbox as loose_bbox,
+    _interference_area as _area,
+    _interference_volume as _volume,
+    _interference_obb_sides as obb_sides,
+    _interference_volume_center as _volume_center,
+    _interference_exact_bbox as _exact_bbox,
+)
+
 
 #: 面の対ごとの距離が測れないとき、片方の面の縁の辺 1 本を何等分した点から測るか(`kernel_shell._EDGE_SAMPLES` と同じ考え)。
 _EDGE_SAMPLES = 16
@@ -47,20 +52,9 @@ def decode_brep_unchecked(text: str) -> TopoDS_Shape:
     """`kernel_brep.decode_brep` から `BRepCheck_Analyzer` を省いたもの。親が検査済みの形を子へ渡すときだけ使う(検査が支配的になる)。"""
     shape = TopoDS_Shape()
     BRepTools.Read_s(shape, io.BytesIO(text.encode("ascii")), BRep_Builder())
-    if shape.IsNull():
+    if _is_null(shape):
         raise ValueError("BRep を読めない")
     return shape
-
-
-def loose_bbox(shape: TopoDS_Shape) -> Tuple[Vec, Vec]:
-    """緩い境界箱(`BRepBndLib.Add`)。真の箱を含むので絞り込みで組を落とさない。形状許容差の分だけ広がる。
-
-    `kernel.bounding_box`(`AddOptimal`)は PC ケースで 1.7 秒に対しこちらは 7 ms。表示する寸法には使わない。
-    """
-    box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box, False)
-    x0, y0, z0, x1, y1, z1 = box.Get()
-    return (x0, y0, z0), (x1, y1, z1)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -148,25 +142,6 @@ def _shared(left: Dict[int, List[TopoDS_Shape]], right: Dict[int, List[TopoDS_Sh
     return [x for key in left.keys() & right.keys() for x in left[key] if any(x.IsSame(y) for y in right[key])]
 
 
-def _area(shape: TopoDS_Shape) -> float:
-    properties = GProp_GProps()
-    BRepGProp.SurfaceProperties_s(shape, properties)
-    return properties.Mass()
-
-
-def _volume(shape: TopoDS_Shape) -> float:
-    properties = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, properties)
-    return properties.Mass()
-
-
-def obb_sides(shape: TopoDS_Shape) -> List[float]:
-    """有向境界箱の 3 辺の長さ(短い順)。"""
-    box = Bnd_OBB()
-    BRepBndLib.AddOBB_s(shape, box, False, True, False)
-    return sorted(2 * half for half in (box.XHSize(), box.YHSize(), box.ZHSize()))
-
-
 def _regions(pieces: Sequence[TopoDS_Shape]) -> List[List[int]]:
     """面を共有する片をつないだ連結領域(片の添字の列)。"""
     parent = list(range(len(pieces)))
@@ -208,20 +183,6 @@ def _region_measures(pieces: Sequence[TopoDS_Shape]) -> Dict[str, float]:
         raise ValueError(f"重なりの面積・体積が不正: V={volume} A={area}")
     sides = obb_sides(compound(list(pieces)))
     return {"volume": volume, "thickness": 2 * volume / area, "obb_min": sides[0]}
-
-
-def _volume_center(shape: TopoDS_Shape) -> List[float]:
-    properties = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, properties)
-    center = properties.CentreOfMass()
-    return [center.X(), center.Y(), center.Z()]
-
-
-def _exact_bbox(shape: TopoDS_Shape) -> Tuple[List[float], List[float]]:
-    box = Bnd_Box()
-    BRepBndLib.AddOptimal_s(shape, box, False, False)
-    x0, y0, z0, x1, y1, z1 = box.Get()
-    return [x0, y0, z0], [x1, y1, z1]
 
 
 def overlap_measures(pieces: Sequence[TopoDS_Shape]) -> Dict[str, Any]:
@@ -374,4 +335,3 @@ def _boundary_points(face: TopoDS_Shape) -> List[TopoDS_Shape]:
         for step in range(_EDGE_SAMPLES + 1):
             points.append(BRepBuilderAPI_MakeVertex(curve.Value(first + (last - first) * step / _EDGE_SAMPLES)).Vertex())
     return points
-

@@ -36,6 +36,7 @@ from OCP.TopoDS import TopoDS
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Lin, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 
+from .brep_geometry import _face_props
 from . import kernel_sketch
 from .kernel_sketch import (
     _ax3_from_plane,
@@ -47,7 +48,8 @@ from .kernel_sketch import (
     _unified,
     _union_faces,
 )
-from .mesh_geometry import compound, indexed_map
+from .brep_topology import compound, indexed_map, is_null as _is_null
+
 
 #: 写した辺が点・線へ潰れているとみなす距離[mm](`kernel_sketch` の領域の結合と同じ桁)。
 COLLAPSE_TOLERANCE = 1.0e-6
@@ -243,7 +245,7 @@ def _hlr_edges(ax3: "gp_Ax3", shapes: Sequence[Any]) -> List[Any]:
     edges: List[Any] = []
     for name in _HLR_COMPOUNDS:
         lines = getattr(result, name)()
-        if lines is None or lines.IsNull():
+        if lines is None or _is_null(lines):
             continue
         BRepLib.BuildCurves3d_s(lines)
         moved = BRepBuilderAPI_Transform(lines, to_world, True).Shape()
@@ -328,7 +330,7 @@ def _shared_lengths(faces: Sequence[Any]) -> List[dict]:
 
 def _sliver(face: Any) -> bool:
     """平均の幅(面積 / 周長)が `_SLIVER_WIDTH` 以下の細片か。"""
-    area = kernel_sketch._face_props(face)[0]
+    area = _face_props(face)[0]
     props = GProp_GProps()
     BRepGProp.LinearProperties_s(face, props)
     perimeter = props.Mass()

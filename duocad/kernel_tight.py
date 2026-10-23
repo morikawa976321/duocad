@@ -21,7 +21,6 @@ import numpy as np
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_CompCurve, BRepAdaptor_Curve, BRepAdaptor_Surface
-from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeFace,
@@ -30,15 +29,11 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Sewing,
     BRepBuilderAPI_Transform,
 )
-from OCP.BRepCheck import BRepCheck_Analyzer
-from OCP.BRepGProp import BRepGProp
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling, BRepOffsetAPI_MakePipeShell
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
-from OCP.Bnd import Bnd_Box
 from OCP.GC import GC_MakeArcOfCircle
 from OCP.GCPnts import GCPnts_AbscissaPoint
-from OCP.GProp import GProp_GProps
 from OCP.GeomAPI import GeomAPI_Interpolate
 from OCP.GeomAbs import GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.TColgp import TColgp_HArray1OfPnt
@@ -50,7 +45,13 @@ from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 from .kernel_overflow import Unsupported, _boolean, _outward_normal, _solids, _volume
-from .mesh_geometry import indexed_map
+from .brep_topology import indexed_map, _tight_faces as _faces, _tight_edges as _edges
+from .brep_geometry import (
+    _tight_a_point_on as _a_point_on,
+    _tight_area as _area,
+    _tight_diagonal as _diagonal,
+)
+from .brep_checks import is_valid as _is_valid
 
 
 class Tight(NamedTuple):
@@ -604,20 +605,15 @@ def _closed_solid(faces: list, tolerance: float, what: str, cavities: list = ())
     for cavity in cavities:
         maker.Add(TopoDS.Shell_s(cavity))
     solid = maker.Solid()
-    if _volume(solid) <= 0.0 or not BRepCheck_Analyzer(solid).IsValid():
+    if _volume(solid) <= 0.0 or not _is_valid(solid):
         raise Unsupported(f"{what} is not a valid solid")
     return solid, sewing
 
 
 def _precise_volume(shape: TopoDS_Shape) -> float:
-    from .kernel import volume  # kernel がこのモジュールを読むので、呼ぶときに読む
+    from .brep_geometry import volume
 
     return volume(shape)
-
-
-def _faces(shape: TopoDS_Shape) -> list:
-    faces = indexed_map(shape, TopAbs_FACE)
-    return [faces.FindKey(i) for i in range(1, faces.Extent() + 1)]
 
 
 def _face_on(shape: TopoDS_Shape, top: TopoDS_Shape, outward: gp_Vec) -> TopoDS_Shape:
@@ -648,11 +644,6 @@ def _wire(edges: list) -> TopoDS_Shape:
     return maker.Wire()
 
 
-def _edges(shape: TopoDS_Shape) -> list:
-    found = indexed_map(shape, TopAbs_EDGE)
-    return [TopoDS.Edge_s(found.FindKey(i)) for i in range(1, found.Extent() + 1)]
-
-
 def _samples(edge, count: int) -> list:
     curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
     first, last = curve.FirstParameter(), curve.LastParameter()
@@ -672,25 +663,6 @@ def _end_direction(edge, at_end: bool) -> gp_Vec:
     return tangent if forward else tangent.Reversed()
 
 
-def _a_point_on(face: TopoDS_Shape) -> gp_Pnt:
-    surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
-    return surface.Value(0.5 * (surface.FirstUParameter() + surface.LastUParameter()),
-                         0.5 * (surface.FirstVParameter() + surface.LastVParameter()))
-
-
 def _any_perpendicular(direction: gp_Dir) -> gp_Vec:
     helper = gp_Vec(1.0, 0.0, 0.0) if abs(direction.X()) < 0.9 else gp_Vec(0.0, 1.0, 0.0)
     return gp_Vec(direction).Crossed(helper)
-
-
-def _area(face: TopoDS_Shape) -> float:
-    props = GProp_GProps()
-    BRepGProp.SurfaceProperties_s(face, props)
-    return props.Mass()
-
-
-def _diagonal(shape: TopoDS_Shape) -> float:
-    box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box)
-    x0, y0, z0, x1, y1, z1 = box.Get()
-    return max(1.0, math.dist((x0, y0, z0), (x1, y1, z1)))

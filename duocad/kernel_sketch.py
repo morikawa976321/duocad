@@ -39,8 +39,9 @@ from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.TColStd import TColStd_Array1OfReal
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pln, gp_Pnt, gp_Vec
 
-from .kernel import _BASE_PLANE_AXES, _face_map, _face_normal, _face_props, classify_face, edge_length, face_of
-from .mesh_geometry import compound, indexed_map
+from .kernel import _BASE_PLANE_AXES
+from .brep_topology import _face_map, face_of, compound, indexed_map, is_null as _is_null
+from .brep_geometry import _face_normal, _face_props, classify_face, edge_length
 
 
 def require_planar_face(shape: "TopoDS_Shape", face_index: int) -> Any:
@@ -153,7 +154,7 @@ def sketch_regions(plane: dict, entities: list) -> List[dict]:
     if not splitter.IsDone():
         raise ValueError("BRepAlgoAPI_Splitter failed (IsDone is false)")
     result = splitter.Shape()
-    if result is None or result.IsNull():
+    if result is None or _is_null(result):
         raise ValueError("BRepAlgoAPI_Splitter produced an empty shape")
 
     tol = 1.0e-6 * max(1.0, diagonal)
@@ -309,7 +310,7 @@ def _dilate_face(ax3: "gp_Ax3", face: Any, distance: float) -> List[Any]:
     if not maker.IsDone():
         raise ValueError(f"2Dオフセット(距離 {distance} mm)に失敗した")
     shape = maker.Shape()
-    if shape is None or shape.IsNull():
+    if shape is None or _is_null(shape):
         raise ValueError(f"2Dオフセット(距離 {distance} mm)が空の結果を返した")
     wire_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_WIRE)
     wires = [TopoDS.Wire_s(wire_map.FindKey(i)) for i in range(1, wire_map.Extent() + 1)]
@@ -1163,7 +1164,7 @@ def _plane_face(
     if not face_maker.IsDone():
         raise ValueError("failed to build an auxiliary face")
     face = face_maker.Face()
-    if face is None or face.IsNull():
+    if face is None or _is_null(face):
         raise ValueError("auxiliary face is empty")
     return face
 

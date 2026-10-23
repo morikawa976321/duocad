@@ -43,6 +43,9 @@ OCP_ALLOWED = frozenset(
         "kernel_split.py",
         "kernel_interference.py",
         "mesh_geometry.py",
+        "brep_topology.py",
+        "brep_geometry.py",
+        "brep_checks.py",
         "topopt/voxelize.py",
     }
 )
@@ -51,6 +54,8 @@ BUILD123D_ALLOWED = frozenset({"query.py"})
 OCP_CORE = "kernel.py"
 
 _DYNAMIC_IMPORT_CALLS = {"__import__", "import_module", "importlib.import_module"}
+
+BREP_COMMON = ("brep_topology.py", "brep_geometry.py", "brep_checks.py", "mesh_geometry.py")
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -97,6 +102,45 @@ def _imported_modules(py_file: Path, *, include_type_checking: bool = True) -> s
 def _imported_module_roots(py_file: Path) -> set[str]:
     """py_fileが参照するトップレベルモジュール名の集合。"""
     return {name.split(".")[0] for name in _imported_modules(py_file)}
+
+
+def _kernel_operation_imports(py_file: Path) -> set[str]:
+    return {
+        name for name in _imported_modules(py_file)
+        if any(part == "kernel" or part.startswith("kernel_") for part in name.split("."))
+    }
+
+
+@pytest.mark.parametrize("module", BREP_COMMON)
+def test_common_brep_modules_do_not_import_operations(module):
+    """共通幾何機構が個別操作を参照すると、依存が逆流する。"""
+    assert _kernel_operation_imports(DUOCAD_DIR / module) == set()
+
+
+@pytest.mark.parametrize("source", [
+    "import duocad.kernel",
+    "from .kernel import volume",
+    "from . import kernel",
+    "from duocad import kernel_overflow",
+    "from .kernel_tight import Tight",
+    "import importlib; importlib.import_module('duocad.kernel_extrude')",
+    "__import__('duocad.kernel_face_edit')",
+])
+def test_common_brep_boundary_detects_operation_import_forms(tmp_path, source):
+    """関数内・相対・動的 import でも共通層の境界を迂回できない。"""
+    offender = tmp_path / "offender.py"
+    offender.write_text("def load():\n    " + source + "\n", encoding="utf-8")
+    assert _kernel_operation_imports(offender)
+
+
+def test_brep_analyzer_is_confined_to_shape_checks():
+    """操作ごとの例外と呼び出し順を残し、BRepCheck の本体だけを検査層へ集める。"""
+    sources = [*DUOCAD_DIR.glob("kernel*.py"), *(DUOCAD_DIR / name for name in BREP_COMMON)]
+    assert [
+        path.name for path in sources
+        if path.name != "brep_checks.py"
+        and "OCP.BRepCheck.BRepCheck_Analyzer" in _imported_modules(path)
+    ] == []
 
 
 def _imports_optimization_executor(py_file: Path, *, allow_plan_type_imports: bool = False) -> bool:

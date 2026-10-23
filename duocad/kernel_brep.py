@@ -14,19 +14,18 @@ from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Builder
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
-from OCP.BRepCheck import BRepCheck_Analyzer
-from OCP.BRepGProp import BRepGProp
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.BRepTools import BRepTools
-from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_CheckerSI, BOPAlgo_Operation, BOPAlgo_Splitter
-from OCP.GProp import GProp_GProps
-from OCP.TopAbs import TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
+from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Operation, BOPAlgo_Splitter
+from OCP.TopAbs import TopAbs_SOLID
 from OCP.TopoDS import TopoDS_Shape
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
 
-from . import kernel
-from .mesh_geometry import compound, subshapes
+from . import brep_geometry
+from .brep_topology import compound, subshapes, is_null as _is_null
+from .brep_checks import _count_face_interferences, inspect_solid, require_valid_solid, is_valid as _is_valid
+from .brep_geometry import _mass_and_center
 
 
 def encode_brep(shape):
@@ -38,49 +37,14 @@ def encode_brep(shape):
 def decode_brep(text):
     shape = TopoDS_Shape()
     BRepTools.Read_s(shape, io.BytesIO(text.encode('ascii')), BRep_Builder())
-    if shape.IsNull() or not BRepCheck_Analyzer(shape).IsValid():
+    if _is_null(shape) or not _is_valid(shape):
         raise ValueError('保存されたCADソリッドが不正')
     return shape
-
-
-def _count_face_interferences(ds, pairs):
-    """`pairs`(`BOPDS_Pair`の列)のうち、両端の形状が面であるものだけを数える。
-
-    `BOPAlgo_CheckerSI` の `Interferences()` は種類混在の集計で、頂点/辺を含むペアは許容差が
-    触れているだけで無条件にカウントされる。面-面だけは、OCCT自身が実際の交差の有無を確認してから
-    数える。型だけで判定し、数値のしきい値は使わない。
-    """
-    return sum(1 for pair in pairs
-               if all(ds.Shape(index).ShapeType() == TopAbs_FACE for index in pair.Indices()))
-
-
-def inspect_solid(shape):
-    solids = subshapes(shape, TopAbs_SOLID) if shape is not None and not shape.IsNull() else []
-    valid = bool(solids) and BRepCheck_Analyzer(shape).IsValid()
-    shells = subshapes(shape, TopAbs_SHELL) if solids else []
-    closed = bool(shells) and all(shell.Closed() for shell in shells)
-    intersections = None
-    if valid and closed:
-        checker = BOPAlgo_CheckerSI()
-        checker.AddArgument(shape)
-        checker.SetLevelOfCheck(5)
-        checker.Perform()
-        if checker.HasErrors() or checker.HasWarnings():
-            raise ValueError('最終ソリッドの自己干渉検査が完了しなかった')
-        ds = checker.DS()
-        intersections = _count_face_interferences(ds, ds.Interferences())
-    return dict(watertight=valid and closed and intersections == 0,
-                single_solid=len(solids) == 1, solids=len(solids),
-                self_intersections=intersections, valid=valid, closed=closed)
 
 
 # --------------------------------------------------------------------------------------
 # 箱・格子との共通体積(形状最適化の受入検査)
 # --------------------------------------------------------------------------------------
-def require_valid_solid(shape: "TopoDS_Shape") -> None:
-    """`shape` が非空かつ `BRepCheck_Analyzer` 上妥当でなければ `ValueError`。"""
-    if shape is None or shape.IsNull() or not BRepCheck_Analyzer(shape).IsValid():
-        raise ValueError("shape is null or not a valid solid")
 
 
 def _common_with_box(shape: "TopoDS_Shape", lo: Sequence[float], hi: Sequence[float]):
@@ -96,9 +60,9 @@ def _common_with_box(shape: "TopoDS_Shape", lo: Sequence[float], hi: Sequence[fl
     if operation.HasErrors() or operation.HasWarnings():
         raise RuntimeError("common-volume boolean did not finish cleanly")
     result = operation.Shape()
-    if result is None or result.IsNull() or not BRepCheck_Analyzer(result).IsValid():
+    if result is None or _is_null(result) or not _is_valid(result):
         raise RuntimeError("common-volume boolean produced an invalid shape")
-    piece = kernel.volume(result)
+    piece = brep_geometry.volume(result)
     if not math.isfinite(piece) or piece < 0:
         raise RuntimeError("common volume is not finite/non-negative")
     return result, piece
@@ -157,16 +121,6 @@ def _split_by_planes(argument: "TopoDS_Shape", planes: "TopTools_ListOfShape") -
     if splitter.HasErrors():
         raise RuntimeError("cell split boolean failed")
     return splitter.Shape()
-
-
-def _mass_and_center(solid: "TopoDS_Shape"):
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(solid, props)
-    mass = props.Mass()
-    if not math.isfinite(mass) or mass < 0:
-        raise RuntimeError("cell piece volume is not finite/non-negative")
-    point = props.CentreOfMass()
-    return mass, (point.X(), point.Y(), point.Z())
 
 
 def grid_cell_common_volumes(

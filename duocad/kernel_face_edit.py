@@ -19,12 +19,10 @@ from OCP.BOPAlgo import BOPAlgo_RemoveFeatures
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeSolid
-from OCP.BRepCheck import BRepCheck_Analyzer, BRepCheck_Shell, BRepCheck_Status
+from OCP.BRepCheck import BRepCheck_Shell, BRepCheck_Status
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
-from OCP.BRepGProp import BRepGProp
 from OCP.BRepLib import BRepLib
-from OCP.BRepLProp import BRepLProp_SLProps
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepOffset import BRepOffset_MakeOffset, BRepOffset_Mode
 from OCP.BRepTools import BRepTools
@@ -33,18 +31,31 @@ from OCP.BRepBndLib import BRepBndLib
 from OCP.ChFi3d import ChFi3d
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_JoinType, GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
-from OCP.GProp import GProp_GProps
 from OCP.gp import gp_Pnt, gp_Pnt2d
 from OCP.Message import Message_Gravity
-from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_State
-from OCP.TopExp import TopExp
+from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
-from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
+from OCP.TopTools import TopTools_ListOfShape
 
-from . import kernel, kernel_worker
-from .kernel import _face_map, _face_map_projection, _positions_in, volume
-from .mesh_geometry import indexed_map, subshapes
+from . import kernel, kernel_worker, brep_topology
+from .brep_topology import (
+    _face_map,
+    _face_map_projection,
+    indexed_map,
+    subshapes,
+    _face_edit_KINDS as _KINDS,
+    _face_edit_faces as _faces,
+    _face_edit_edges as _edges,
+    _face_edit_solids as _solids,
+    _face_edit_count as _count,
+    _face_edit_edge_faces as _edge_faces,
+    is_null as _is_null,
+)
+from .kernel import _positions_in
+from .brep_geometry import volume, _face_edit_face_area as _face_area, _face_edit_face_normal as _face_normal
+from .brep_checks import _face_edit_free_edge_count as _free_edge_count, is_valid as _is_valid
+
 
 VERB_DELETE = "delete_faces"
 VERB_OFFSET = "offset_faces"
@@ -115,14 +126,14 @@ def offset_faces(
 
 
 def _checked_indices(shape: Any, face_indices: Sequence[int], verb: str) -> List[int]:
-    if shape is None or shape.IsNull():
+    if shape is None or _is_null(shape):
         raise ValueError(f"{verb}: the body is empty")
     indices = [int(index) for index in face_indices]
     if not indices:
         raise ValueError(f"{verb} requires at least one face")
     if len(set(indices)) != len(indices):
         raise ValueError(f"{verb} got the same face twice: {indices}")
-    count = kernel.face_count(shape)
+    count = brep_topology.face_count(shape)
     outside = [index for index in indices if not 1 <= index <= count]
     if outside:
         raise ValueError(f"{verb}: face index out of range: {outside} (1..{count})")
@@ -136,7 +147,7 @@ def compute(verb: str, shape: Any, arguments: dict) -> dict:
     """子プロセスの入口。断ったら `ValueError`(文は原因と言い換え)。"""
     indices = [int(index) for index in arguments["faces"]]
     face_map = _face_map(shape)
-    faces = [kernel._face_at(face_map, index) for index in indices]
+    faces = [brep_topology._face_at(face_map, index) for index in indices]
     try:
         if verb == VERB_DELETE:
             final, table, _ = _delete(shape, faces)
@@ -213,7 +224,7 @@ def _remove_features(shape: Any, faces: List[Any]):
     if warnings:
         raise FaceEditError("RemoveFeatures warned: " + ", ".join(warnings), _HINT_DELETE)
     result = algo.Shape()
-    if result is None or result.IsNull():
+    if result is None or _is_null(result):
         raise FaceEditError("RemoveFeatures returned an empty shape", _HINT_DELETE)
     return result, algo
 
@@ -289,7 +300,7 @@ def _make_offset(shape: Any, faces: List[Any], distance: float):
     if not algo.IsDone():
         raise FaceEditError(f"MakeOffset failed ({algo.Error()})", _HINT_CANNOT_OFFSET)
     result = algo.Shape()
-    if result is None or result.IsNull():
+    if result is None or _is_null(result):
         raise FaceEditError("MakeOffset returned an empty shape", _HINT_CANNOT_OFFSET)
     return result, algo
 
@@ -417,7 +428,7 @@ def blend_chain(shape: Any, face_index: int) -> List[int]:
     def is_corner_sphere(edge: Any, sphere: Any, blend: Any) -> bool:
         return _surface_type(sphere) == "sphere" and _tangent(edge, sphere, blend)
 
-    start = kernel._face_at(face_map, face_index)
+    start = brep_topology._face_at(face_map, face_index)
     if signature(face_index, start) is None:
         neighbours = [(e, _other_face(edge_faces, e, start)) for e in _edges(start)]
         if not any(
@@ -607,7 +618,7 @@ def _structural_gate(result: Any, *, hint: str = _HINT_DELETE) -> None:
         raise FaceEditError(f"result has {len(solids)} solids", hint)
     if _count(result, "face") != _count(solids[0], "face"):
         raise FaceEditError("result has faces outside its solid", hint)
-    if not BRepCheck_Analyzer(result).IsValid():
+    if not _is_valid(result):
         raise FaceEditError("result is invalid (BRepCheck)", hint)
     if _free_edge_count(result):
         raise FaceEditError("result has free edges", hint)
@@ -616,16 +627,6 @@ def _structural_gate(result: Any, *, hint: str = _HINT_DELETE) -> None:
     tiny = [face for face in _faces(result) if _face_area(face) < MIN_FACE_AREA]
     if tiny:
         raise FaceEditError(f"{len(tiny)} face(s) vanished but stayed in the shape (area < {MIN_FACE_AREA:g})", hint)
-
-
-def _free_edge_count(shape: Any) -> int:
-    """面が1枚しか付かない辺(継ぎ目の辺は同じ面が2回付くので数えない)。"""
-    ancestors = _edge_faces(shape)
-    return sum(
-        1
-        for i in range(1, ancestors.Extent() + 1)
-        if not BRep_Tool.Degenerated_s(TopoDS.Edge_s(ancestors.FindKey(i))) and ancestors.FindFromIndex(i).Size() < 2
-    )
 
 
 # --------------------------------------------------------------------------------------
@@ -805,36 +806,10 @@ _SURFACE_NAMES = {
     GeomAbs_SurfaceType.GeomAbs_BSplineSurface: "bspline",
     GeomAbs_SurfaceType.GeomAbs_BezierSurface: "bezier",
 }
-_KINDS = {"face": TopAbs_ShapeEnum.TopAbs_FACE, "edge": TopAbs_ShapeEnum.TopAbs_EDGE}
 
 
 def _surface_type(face: Any) -> str:
     return _SURFACE_NAMES.get(BRepAdaptor_Surface(face).GetType(), "other")
-
-
-def _faces(shape: Any) -> List[Any]:
-    found = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
-    return [TopoDS.Face_s(found.FindKey(i)) for i in range(1, found.Extent() + 1)]
-
-
-def _edges(shape: Any) -> List[Any]:
-    found = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
-    return [TopoDS.Edge_s(found.FindKey(i)) for i in range(1, found.Extent() + 1)]
-
-
-def _solids(shape: Any) -> List[Any]:
-    found = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
-    return [found.FindKey(i) for i in range(1, found.Extent() + 1)]
-
-
-def _count(shape: Any, kind: str) -> int:
-    return indexed_map(shape, _KINDS[kind]).Extent()
-
-
-def _edge_faces(shape: Any) -> Any:
-    found = TopTools_IndexedDataMapOfShapeListOfShape()
-    TopExp.MapShapesAndAncestors_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, TopAbs_ShapeEnum.TopAbs_FACE, found)
-    return found
 
 
 def _other_face(edge_faces: Any, edge: Any, face: Any) -> Optional[Any]:
@@ -861,22 +836,6 @@ def _is_spring_edge(edge: Any, definition: tuple) -> bool:
             _point_line_distance(_vec(circle.Location()), definition[1], definition[2]) < LINEAR_TOL
         )
     return False
-
-
-def _face_area(face: Any) -> float:
-    props = GProp_GProps()
-    BRepGProp.SurfaceProperties_s(face, props)
-    return props.Mass()
-
-
-def _face_normal(face: Any) -> tuple:
-    """面の UV の中点での**外向き**法線(面の向きを反映)。"""
-    adaptor = BRepAdaptor_Surface(face)
-    u = 0.5 * (adaptor.FirstUParameter() + adaptor.LastUParameter())
-    v = 0.5 * (adaptor.FirstVParameter() + adaptor.LastVParameter())
-    normal = BRepLProp_SLProps(adaptor, u, v, 1, 1e-7).Normal()
-    sign = -1.0 if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED else 1.0
-    return (sign * normal.X(), sign * normal.Y(), sign * normal.Z())
 
 
 def _vec(d: Any) -> tuple:

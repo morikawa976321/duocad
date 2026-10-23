@@ -32,7 +32,6 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeVertex,
     BRepBuilderAPI_MakeWire,
 )
-from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape, BRepExtrema_SupportType
@@ -68,7 +67,9 @@ from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_Lis
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pln, gp_Pnt, gp_Pnt2d, gp_Vec, gp_Vec2d
 
 from .kernel_chains import BlendChains
-from .mesh_geometry import indexed_map
+from .brep_topology import indexed_map
+from .brep_geometry import _overflow_diagonal as _diagonal, _overflow_edge_length as _edge_length
+from .brep_checks import is_valid as _is_valid
 
 
 class Unsupported(ValueError):
@@ -431,13 +432,6 @@ def _alongside(region: TopoDS_Shape, paths: list, rim_state: int, size: float) -
     return kept
 
 
-def _diagonal(shape: TopoDS_Shape) -> float:
-    box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box)
-    x0, y0, z0, x1, y1, z1 = box.Get()
-    return math.dist((x0, y0, z0), (x1, y1, z1))
-
-
 def _rolled_material(corner, paths, radius: float, swell: float, edges: list):
     """角から、半径を (1 + swell) 倍にした球を掃いた立体を引き、辺に触れる部分を返す。壊れた結果なら None。"""
     # 外部の罠: 管と球の束を先に結合してから引くと、結合が遅く(板の角を越える半径 22 で 6.6 秒)、肉の体積も1つずつ
@@ -456,7 +450,7 @@ def _rolled_material(corner, paths, radius: float, swell: float, edges: list):
     # 外部の罠: 球が縁にちょうど接するので、角から管を引くブーリアンが壊れることがある。半径 2 の穴の縁へ半径 6 の球が
     # 転がり込む形では、体積が負の立体や、引く前の角より大きい立体が返った(どちらも BRepCheck は真)。
     volume = _volume(material)
-    if volume <= 0.0 or volume > _volume(corner) * (1.0 + 1.0e-6) or not BRepCheck_Analyzer(material).IsValid():
+    if volume <= 0.0 or volume > _volume(corner) * (1.0 + 1.0e-6) or not _is_valid(material):
         return None
     # 球の向こう側(辺から中心へ向かう先)の空気が肉に入っていれば、掃いた立体に隙間があって肉と空気が分かれていない
     classifier = BRepClass3d_SolidClassifier(material)
@@ -1138,12 +1132,6 @@ def _require_plausible(material: TopoDS_Shape, edges: list, spread: float) -> No
         return
     if any(reach_box.IsOut(corner) for corner in (found.CornerMin(), found.CornerMax())):
         raise Unsupported("the rounding material reaches far from the edge")
-
-
-def _edge_length(edge: TopoDS_Shape) -> float:
-    props = GProp_GProps()
-    BRepGProp.LinearProperties_s(edge, props)
-    return props.Mass()
 
 
 def _room_inside(face: TopoDS_Shape, point: gp_Pnt):

@@ -12,6 +12,7 @@ import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBuilderAPI import (
@@ -23,7 +24,6 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Sewing,
     BRepBuilderAPI_Transform,
 )
-from OCP.BRepGProp import BRepGProp
 from OCP.BRepLib import BRepLib
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeRevol
 from OCP.BRep import BRep_Tool
@@ -31,7 +31,6 @@ from OCP.GCE2d import GCE2d_MakeSegment
 from OCP.Geom import Geom_BSplineSurface
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GeomAPI import GeomAPI_Interpolate
-from OCP.GProp import GProp_GProps
 from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
 from OCP.ShapeFix import ShapeFix_Solid
 from OCP.TColgp import TColgp_Array2OfPnt, TColgp_HArray1OfPnt
@@ -42,9 +41,12 @@ from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Dir, gp_Pnt, gp_Pnt2d, gp_Trsf, gp_Vec
 
-from . import kernel
-from .kernel import _face_at, _face_map, _face_map_projection, _require_valid, _target_successors
-from .mesh_geometry import indexed_map
+from . import kernel, brep_geometry
+from .brep_topology import _face_at, _face_map, _face_map_projection, indexed_map, is_null as _is_null
+from .brep_checks import _require_valid
+from .kernel import _target_successors
+from .brep_geometry import _thread_volume_eps as _volume_eps
+
 
 # 山形の族。深さ(半円は丸みの半径)はピッチの 0.4 倍。隙間は半円が法線方向、台形が半径方向(試し刷りと同じ付け方)。
 # recommended / default_female はナット側(穴)の値。軸(雄)の既定は 0(隙間はナット側に持たせると強い。THREAD_SIM.md 5.5)。
@@ -235,21 +237,14 @@ def _revolve(points: Sequence[Tuple[float, float]]):
     return BRepPrimAPI_MakeRevol(face, gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1))).Shape()
 
 
-def _volume_eps(shape) -> float:
-    """Eps 付きの体積。既定の積分は何周も巻いた B-spline の面で狂う(docs/THREAD.md「体積の既定積分はねじ山で狂う」)。"""
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props, 1e-7)
-    return props.Mass()
-
-
 # --------------------------------------------------------------------------------------
 # 選んだ円筒面を読む
 # --------------------------------------------------------------------------------------
 def describe_target(shape: "TopoDS_Shape", face_index: int) -> dict:
     """面がねじを刻める全周の円筒面か確かめ、軸・半径・範囲・雄か雌か・両端の隣の面の種類を返す。"""
     face = _face_at(_face_map(shape), face_index)
-    if kernel.classify_face(face) != "cylinder_full":
-        raise ValueError(f"ねじを刻めるのは全周の円筒面だけ(面 {face_index} は {kernel.classify_face(face)})")
+    if brep_geometry.classify_face(face) != "cylinder_full":
+        raise ValueError(f"ねじを刻めるのは全周の円筒面だけ(面 {face_index} は {brep_geometry.classify_face(face)})")
     adaptor = BRepAdaptor_Surface(TopoDS.Face_s(face))
     cylinder = adaptor.Cylinder()
     frame = cylinder.Position()
@@ -262,7 +257,7 @@ def describe_target(shape: "TopoDS_Shape", face_index: int) -> dict:
     along = gp_Vec(origin, point).Dot(gp_Vec(axis))
     foot = origin.Translated(gp_Vec(axis).Multiplied(along))
     radial = gp_Vec(foot, point)
-    normal = gp_Vec(*kernel._face_normal(face))
+    normal = gp_Vec(*brep_geometry._face_normal(face))
     female = radial.Dot(normal) < 0
     ends = {"low": _end_kind(shape, face, origin, axis, radius, v0), "high": _end_kind(shape, face, origin, axis, radius, v1)}
     return dict(face=face, origin=origin, axis=axis, xdir=xdir, radius=radius, v0=v0, v1=v1, female=female, ends=ends)
@@ -360,7 +355,7 @@ def _thread_face(shape, face_index, profile, clearance, pitch) -> dict:
     検査(docs/THREAD.md「合否の門と検査」): 集合演算の `IsDone`・空でない・ソリッドの数が変わらない・`BRepCheck`・
     体積の増減が期待値とねじ部の体積の 1% 以内で合う(`BRepCheck` が真のまま芯が消える壊れ方を弾く)。
     """
-    if shape is None or shape.IsNull():
+    if shape is None or _is_null(shape):
         raise ValueError("cannot thread an empty shape")
     target = describe_target(shape, int(face_index))
     plan = resolve(target, profile, clearance, pitch)
@@ -373,7 +368,7 @@ def _thread_face(shape, face_index, profile, clearance, pitch) -> dict:
         final, steps, expected_delta, thread_volume, before = _cut_female(shape, target, points, p, depth, context)
     else:
         final, steps, expected_delta, thread_volume, before = _add_male(shape, target, points, p, depth, context)
-    if final is None or final.IsNull():
+    if final is None or _is_null(final):
         raise ValueError(f"thread produced an empty shape ({context})")
     solids = indexed_map(final, TopAbs_ShapeEnum.TopAbs_SOLID).Extent()
     if solids != solids_before:
@@ -388,8 +383,8 @@ def _thread_face(shape, face_index, profile, clearance, pitch) -> dict:
     return {
         "shape": final,
         "provenance": _provenance(shape, steps, final, int(face_index), plan),
-        "volume_before": float(kernel.volume(shape)),
-        "volume_after": float(kernel.volume(final)),
+        "volume_before": float(brep_geometry.volume(shape)),
+        "volume_after": float(brep_geometry.volume(final)),
         **{k: plan[k] for k in ("female", "pitch", "clearance", "limit", "warning")},
         "recommended": list(plan["recommended"]),
     }
