@@ -253,11 +253,11 @@ export const LOFT: CommandDef<'loft'> = {
  */
 export const FILLET: CommandDef<'fillet'> = {
   id: 'fillet',
-  label: '丸める',
+  label: 'フィレット',
   buttonId: 'fillet',
   preview: 'server',
   args: [
-    { kind: 'selection', name: 'edges', label: '丸める辺', shapeKind: 'edge', min: 1, max: null },
+    { kind: 'selection', name: 'edges', label: 'フィレットする辺', shapeKind: 'edge', min: 1, max: null },
     {
       kind: 'number',
       name: 'radius',
