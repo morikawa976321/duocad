@@ -23,8 +23,14 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
 - **#227 は main に入った**(PR #236、2026-10-24)。`DocumentStore`・`Autosave`・`duocad/optimization.py` の4部品。段階ごとの
   sol のレビューで1件の退行(同期の自動保存が現在名の更新を落とす)を見つけて直した。最適化の小型の製品経路の前後一致を確かめた
   (decisions.md「[リファクタ] 最適化の前後一致の確かめ方」)。
-- #230 段階1(下位層から実行器への逆参照の解消)はレビュー合格、作業ブランチに commit 済み。段階2(`shared` と `finisher` の型付き化)を
-  sol が実装中。
+- **#230 は main に入った**(PR #237)。`optimize_acceptance.py`・`optimize_voxels.py`(逆参照の解消)と `optimize_pipeline.py`・
+  `optimize_plan.py`・`optimize_finish.py`・`optimize_events.py`(段階と再仕上げ計画)。main・段階1後・段階2後の前後一致を確かめた
+  (完成形検査は空きメモリで分割数が変わるので固定して比べる。decisions.md)。
+- **#228 は main に入った**(PR #238)。`previewController.ts`・`sharedArgsController.ts`。入力が変わった後に届いた古い入力の応答を
+  描かない変化を意図して採った(decisions.md)。開発版の画面に出すには本体チェックアウトの `web` で `npm run build` が要る。
+- 本体の develop には別セッションの #211・#212(フィレット)が未 push で入っている。それを main へ運ばないよう、origin/develop の先に
+  統合して push → PR、本体の develop にはその統合を早送りで入れている(decisions.md「本体の develop に未 push の別作業があるとき」)。
+- #232 を sol が実装中。#231 は最後。
 
 ### 再開の手順
 
