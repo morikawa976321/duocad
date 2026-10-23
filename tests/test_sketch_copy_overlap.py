@@ -7,7 +7,7 @@ import pytest
 
 from duocad import parameters
 from duocad.document import Document
-from duocad.sketch import add_circle, add_line, entity_kind_ops, get_sketch, sketch_create
+from duocad.sketch import add_circle, add_ellipse, add_line, add_rectangle, entity_kind_ops, get_sketch, sketch_create
 from duocad.verbs import mirror_sketch_entities, move_sketch_entities
 from document_support import replay_through_json
 
@@ -108,7 +108,89 @@ def test_a_rotated_copy_of_a_rectangle_without_angle_is_not_taken_for_an_overlap
 
     old_rectangle = {"x": 0.0, "y": 0.0, "width": 10.0, "height": 4.0}
     rotated = {**old_rectangle, "angle": 30.0}
-    assert not overlaps_original(rotated, old_rectangle, fresh=True)
-    assert not overlaps_original(rotated, old_rectangle, fresh=False)
+    assert not overlaps_original("rectangle", rotated, old_rectangle, fresh=True)
+    assert not overlaps_original("rectangle", rotated, old_rectangle, fresh=False)
     # 向きが同じ(angle=0)なら、無いキーは 0.0 として重なる
-    assert overlaps_original({**old_rectangle, "angle": 0.0}, old_rectangle, fresh=False)
+    assert overlaps_original("rectangle", {**old_rectangle, "angle": 0.0}, old_rectangle, fresh=False)
+
+
+@pytest.mark.parametrize("kind,angle", [("line", 180), ("rectangle", 180), ("square", 90), ("ellipse", 180)])
+def test_rotational_symmetry_cannot_create_a_duplicate(kind, angle):
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    if kind == "line":
+        entity_id = add_line(document, sketch_id, [-5, 0], [5, 0])
+    elif kind == "ellipse":
+        entity_id = add_ellipse(document, sketch_id, [0, 0], 10, 6, 25)
+    else:
+        height = 10 if kind == "square" else 6
+        entity_id = add_rectangle(document, sketch_id, [-5, -height / 2], 10, height)
+    before = document.log.to_json(created=0)
+    with pytest.raises(ValueError, match="元と完全に重なる"):
+        move_sketch_entities(document, [{"sketch": sketch_id, "entity": entity_id}],
+                             mode="rotate", angle=angle, center=[0, 0], copy=True)
+    assert document.log.to_json(created=0) == before
+    assert _entity_count(document, sketch_id) == 1
+
+
+@pytest.mark.parametrize("axis_end", [[0, 10], [10, 0], [10, 10]])
+def test_mirror_symmetry_of_rectangles_is_refused(axis_end):
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    axis = add_line(document, sketch_id, [0, 0], axis_end)
+    height = 10 if axis_end == [10, 10] else 6
+    entity_id = add_rectangle(document, sketch_id, [-5, -height / 2], 10, height)
+    before = document.log.to_json(created=0)
+    with pytest.raises(ValueError, match="元と完全に重なる"):
+        mirror_sketch_entities(document, [{"sketch": sketch_id, "entity": entity_id}],
+                               {"sketch": sketch_id, "entity": axis})
+    assert document.log.to_json(created=0) == before
+    assert _entity_count(document, sketch_id) == 2
+
+
+@pytest.mark.parametrize("verb", ["mirror_sketch_entities", "move_sketch_entities"])
+def test_saved_geometrically_overlapping_copies_still_replay_and_redo(verb):
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    entity_id = add_rectangle(document, sketch_id, [-5, -3], 10, 6)
+    args = {"targets": [{"sketch": sketch_id, "entity": entity_id}], "created": ["entity-old-copy"]}
+    if verb == "mirror_sketch_entities":
+        args.update(axis_p0=[0, 0], axis_dir=[0, 1])
+    else:
+        args.update(mode="rotate", angle=180, center=[0, 0], copy=True)
+    document.log.append(verb, args)
+    restored = replay_through_json(document)
+    assert _entity_count(restored, sketch_id) == 2
+    restored.log.undo(restored)
+    restored.log.redo(restored)
+    assert _entity_count(restored, sketch_id) == 2
+
+
+@pytest.mark.parametrize("kind,values,current,expected", [
+    ("line", {"x0": 0, "y0": 1e-8, "x1": 10, "y1": 1e-8}, {"x0": 0, "y0": 0, "x1": 10, "y1": 0}, False),
+    ("arc", {"cx": 0, "cy": 0, "radius": 5, "start_deg": 360, "end_deg": 450},
+     {"cx": 0, "cy": 0, "radius": 5, "start_deg": 0, "end_deg": 90}, True),
+    ("arc", {"cx": 0, "cy": 0, "radius": 5, "start_deg": 90, "end_deg": 360},
+     {"cx": 0, "cy": 0, "radius": 5, "start_deg": 0, "end_deg": 90}, False),
+    ("ellipse", {"cx": 0, "cy": 0, "width": 10, "height": 6, "angle": 30},
+     {"cx": 0, "cy": 0, "width": 10, "height": 6, "angle": -30}, False),
+    ("bezier", {"x0": 0, "y0": 0, "cx1": 1, "cy1": 2, "cx2": -1, "cy2": -2, "x1": 0, "y1": 0},
+     {"x0": 0, "y0": 0, "cx1": -1, "cy1": -2, "cx2": 1, "cy2": 2, "x1": 0, "y1": 0}, True),
+])
+def test_geometry_comparison_preserves_distinct_shapes_and_small_separations(kind, values, current, expected):
+    from duocad.verbs._common import overlaps_original
+    assert overlaps_original(kind, values, current, fresh=True) is expected
+
+
+def test_point_copies_reject_overlap_and_preserve_translation(session):
+    from session_support import select
+
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_point(sketch_id, [3, 4])["entity_id"]
+    select(session, [{"sketch": sketch_id, "entity": entity_id}])
+    with pytest.raises(ValueError, match="元と完全に重なる"):
+        session.move_sketch_entities(mode="rotate", angle=180, center=[3, 4], copy=True)
+    result = session.move_sketch_entities(dx=10, dy=0, copy=True)
+    assert len(result["created"]) == 1
+    copied = get_sketch(session.document, sketch_id).entities[-1]
+    assert parameters.resolve_all(session.document, copied.params) == {"cx": 13, "cy": 4}

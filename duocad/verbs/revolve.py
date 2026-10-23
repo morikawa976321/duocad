@@ -27,7 +27,7 @@ from ..entry import entry
 from ..oplog import Operation, register_verb
 from ..region import RegionRef
 from ..sketch import get_entity, get_sketch
-from ._common import recall, remember
+from ._common import editable_sketch, recall, remember
 from .extrude import (
     MODES,
     _add_new_body,
@@ -60,6 +60,9 @@ def revolve(
     if not refs:
         raise ValueError("revolve requires at least one region")
     axis = _normalized_axis(axis)
+
+    for ref in refs:
+        editable_sketch(doc, ref.sketch)
 
     target_body, resolved_body_id = _resolve_target(doc, mode, body_id, what=VERB_REVOLVE)
     result = _revolve_shape(

@@ -13,7 +13,8 @@ from weakref import WeakKeyDictionary
 from .. import kernel_sketch, meshbody, naming, selection
 from ..document import MESH_KIND, Body, BodyId, Document, new_body_id
 from ..oplog import Operation
-from ..sketch import get_sketch
+from ..sketch import Sketch, get_sketch
+from ._sketch_geometry import geometries_overlap
 
 #: undo用のスナップショット。`(body_id, seq) -> 直前の形状`。
 #:
@@ -84,6 +85,16 @@ def editable_body(
     redo / 再生は `replayed_body`。
     """
     return _checked_body(doc, body_id, what=what, reject_as=reject_as, require_visible=True)
+
+
+def editable_sketch(doc: Document, sketch_id: str) -> Sketch:
+    """選択を消費する新規操作の対象。可視性はログにないため redo / replay には課さない。"""
+    sketch = get_sketch(doc, sketch_id)
+    if not sketch.visible:
+        raise ValueError(
+            f"sketch {sketch_id!r} is hidden: 見えないものは指せない(set_sketch_visible で表示すること)"
+        )
+    return sketch
 
 
 def replayed_body(
@@ -185,8 +196,8 @@ def resolve_shape_ref(doc: Document, ref: Any, *, kind: str, what: str, mesh_hin
     if body.shape is None:
         raise ValueError(f"{what}: body {body.id!r} has no B-rep shape {mesh_hint}")
     try:
-        index = int(ref["index"])
-    except (TypeError, ValueError):
+        index = selection._as_index(ref["index"])
+    except ValueError:
         raise ValueError(f"{what}: index must be an integer, got {ref['index']!r}") from None
     return body, index
 
@@ -326,23 +337,20 @@ def require_same_uv_plane(doc: Document, reference_sketch_id: str, target_sketch
         )
 
 
-def overlaps_original(values: dict, current: dict, *, fresh: bool) -> bool:
-    """複製の `values` が元の `current` と全部のキーで同じ値か(重なる複製。領域検出が同じ辺を2本見る)。
+def overlaps_original(kind: str, values: dict, current: dict, *, fresh: bool) -> bool:
+    """複製の `values` が元の `current` と重なるか。
 
-    **キーは両方の和集合で、無いキーは 0.0 として比べる**: `angle` を持たない旧い長方形(キーが4個)の回転コピーは `angle` が
+    **redo / 再生はキーの和集合で、無いキーは 0.0 として比べる**: `angle` を持たない旧い長方形(キーが4個)の回転コピーは `angle` が
     増えるので、元が持つキーだけで比べると、向きが違う複製を「元と完全に重なる」と誤って断り、保存済みのログも再生できなくなる。
     旧い長方形の `angle` の既定は 0 度。
 
-    新しく作る複製(`fresh`)は座標の丸め誤差(斜めの軸への鏡映は 1ulp ずれる)を許して重なりとみなす。
+    新しく作る複製(`fresh`)は図形の表現の違いと座標の丸め誤差を吸収して重なりとみなす。
     redo / 再生は厳密一致だけ —— 許容差で弾くと、重なる複製を断る前に作られた複製を含む保存済みの文書が開けなくなる。
     """
     keys = set(values) | set(current)
     if not fresh:
         return all(values.get(key, 0.0) == current.get(key, 0.0) for key in keys)
-    return all(
-        math.isclose(values.get(key, 0.0), current.get(key, 0.0), rel_tol=1.0e-12, abs_tol=OVERLAP_TOLERANCE)
-        for key in keys
-    )
+    return geometries_overlap(kind, values, current, tolerance=OVERLAP_TOLERANCE)
 
 
 def rotation_degrees(angle: Any, *, verb: str, noun: str) -> float:

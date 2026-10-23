@@ -81,7 +81,6 @@ export interface SectionView {
 const Y_AXIS = new THREE.Vector3(0, 1, 0)
 /** 視線と法線のなす角がこれより浅いとドラッグ量が発散するので、その間は動かさない(sin²)。 */
 const DRAG_PARALLEL_LIMIT = 0.01
-const STENCIL_BITS = 8
 
 function planeSpec(plane: BasePlaneName): (typeof BASE_PLANES)[number] {
   const spec = BASE_PLANES.find((candidate) => candidate.name === plane)
@@ -145,56 +144,53 @@ export function createSectionView(deps: SectionViewDeps): SectionView {
   const stencilRoot = new THREE.Group()
   group.add(stencilRoot)
   const bodyGeometries = new Map<string, readonly THREE.BufferGeometry[]>()
-  const stencilMeshes = new Map<string, { mesh: THREE.Mesh; bit: number }>()
+  const stencilMeshes = new Map<string, { mesh: THREE.Mesh; cap: THREE.Mesh }>()
   const hiddenBodies = new Set<string>()
-  const stencilMaterials: THREE.MeshBasicMaterial[] = []
+  const stencilMaterial = new THREE.MeshBasicMaterial({
+    side: THREE.DoubleSide,
+    colorWrite: false,
+    depthWrite: false,
+    depthTest: false,
+    stencilWrite: true,
+    stencilFunc: THREE.AlwaysStencilFunc,
+    stencilWriteMask: 1,
+    stencilFail: THREE.InvertStencilOp,
+    stencilZFail: THREE.InvertStencilOp,
+    stencilZPass: THREE.InvertStencilOp,
+    clippingPlanes: clipPlanes,
+  })
 
-  function stencilMaterial(bit: number): THREE.MeshBasicMaterial {
-    const cached = stencilMaterials[bit]
-    if (cached) return cached
-    const material = new THREE.MeshBasicMaterial({
-      side: THREE.DoubleSide,
-      colorWrite: false,
-      depthWrite: false,
-      depthTest: false,
-      stencilWrite: true,
-      stencilFunc: THREE.AlwaysStencilFunc,
-      stencilWriteMask: 1 << bit,
-      stencilFail: THREE.InvertStencilOp,
-      stencilZFail: THREE.InvertStencilOp,
-      stencilZPass: THREE.InvertStencilOp,
-      clippingPlanes: clipPlanes,
-    })
-    stencilMaterials[bit] = material
-    return material
-  }
-
-  /** いちばん使われていないビット。同じビットの2ボディが重なると、断面が打ち消し合って塗られない。 */
-  function freeBit(): number {
-    const uses = new Array<number>(STENCIL_BITS).fill(0)
-    for (const entry of stencilMeshes.values()) uses[entry.bit] += 1
-    return uses.indexOf(Math.min(...uses))
+  function orderStencilPairs(): void {
+    const step = (LAYER.sectionCap - LAYER.sectionStencil) / (2 * stencilMeshes.size + 1)
+    let index = 0
+    for (const { mesh, cap } of stencilMeshes.values()) {
+      mesh.renderOrder = LAYER.sectionStencil + step * index++
+      cap.renderOrder = LAYER.sectionStencil + step * index++
+    }
   }
 
   function disposeStencil(bodyId: string): void {
     const entry = stencilMeshes.get(bodyId)
     if (!entry) return
-    stencilRoot.remove(entry.mesh)
+    stencilRoot.remove(entry.mesh, entry.cap)
     entry.mesh.geometry.dispose()
     stencilMeshes.delete(bodyId)
+    orderStencilPairs()
   }
 
   function buildStencil(bodyId: string): void {
     disposeStencil(bodyId)
     const geometries = bodyGeometries.get(bodyId)
     if (!geometries || geometries.length === 0) return
-    const bit = freeBit()
-    const mesh = new THREE.Mesh(mergePositions(geometries), stencilMaterial(bit))
-    mesh.renderOrder = LAYER.sectionStencil
+    const mesh = new THREE.Mesh(mergePositions(geometries), stencilMaterial)
+    const cap = new THREE.Mesh(capGeometry, capMaterial)
     mesh.raycast = () => {}
+    cap.raycast = () => {}
     mesh.visible = !hiddenBodies.has(bodyId)
-    stencilRoot.add(mesh)
-    stencilMeshes.set(bodyId, { mesh, bit })
+    cap.visible = mesh.visible && hasContent()
+    stencilRoot.add(mesh, cap)
+    stencilMeshes.set(bodyId, { mesh, cap })
+    orderStencilPairs()
   }
 
   // ------------------------------------------------------------------ 切り口の板・枠
@@ -209,11 +205,13 @@ export function createSectionView(deps: SectionViewDeps): SectionView {
     stencilWrite: true,
     stencilRef: 0,
     stencilFunc: THREE.NotEqualStencilFunc,
+    stencilWriteMask: 1,
+    stencilFuncMask: 1,
+    // 遮蔽されて深度検査に落ちた画素も、次のボディを描く前に消す。
+    stencilFail: THREE.ZeroStencilOp,
+    stencilZFail: THREE.ZeroStencilOp,
+    stencilZPass: THREE.ZeroStencilOp,
   })
-  const cap = new THREE.Mesh(capGeometry, capMaterial)
-  cap.renderOrder = LAYER.sectionCap
-  cap.raycast = () => {}
-  group.add(cap)
 
   const frameGeometry = new THREE.BufferGeometry()
   frameGeometry.setAttribute('position', new THREE.BufferAttribute(cornerPositions, 3))
@@ -278,7 +276,7 @@ export function createSectionView(deps: SectionViewDeps): SectionView {
 
   function rebuildShape(): void {
     const visible = hasContent()
-    cap.visible = visible
+    for (const [bodyId, entry] of stencilMeshes) entry.cap.visible = visible && !hiddenBodies.has(bodyId)
     frame.visible = visible
     handle.visible = visible
     if (!visible) return
@@ -420,7 +418,10 @@ export function createSectionView(deps: SectionViewDeps): SectionView {
       if (visible) hiddenBodies.delete(bodyId)
       else hiddenBodies.add(bodyId)
       const entry = stencilMeshes.get(bodyId)
-      if (entry) entry.mesh.visible = visible
+      if (entry) {
+        entry.mesh.visible = visible
+        entry.cap.visible = visible && hasContent()
+      }
     },
     cut(ray) {
       if (!state.on) return 'kept'
@@ -480,7 +481,7 @@ export function createSectionView(deps: SectionViewDeps): SectionView {
     },
     dispose() {
       for (const bodyId of [...stencilMeshes.keys()]) disposeStencil(bodyId)
-      for (const material of stencilMaterials) material?.dispose()
+      stencilMaterial.dispose()
       capGeometry.dispose()
       capMaterial.dispose()
       frameGeometry.dispose()

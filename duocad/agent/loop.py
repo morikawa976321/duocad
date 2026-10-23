@@ -279,7 +279,7 @@ class AgentLoop:
             rearm()
         self._settle_history()
         self.turns.append(UserTurn(prompt))
-        self._look_first()
+        expected_seq = self._look_first()
         descriptors = self.tools.descriptors()
         outcomes: list[ToolOutcome] = []
         usage: dict = {}
@@ -304,10 +304,6 @@ class AgentLoop:
                 return self._timeout_result(turn, outcomes, usage)
 
             turn += 1
-            # 楽観ロックの版はここで控える: `provider.complete()` は数十秒〜数分かかりうり、その間に人(またはMCP経由の別クライアント)が
-            # 文書や選択を変えると、モデルが組み立てているツール呼び出しは古い状態を前提にした決定になる。
-            # ツールを実行する直前ごとに(1件目だけでなく)これと比べる(下記「文書(または選択)が変わっていたら実行しない」)。
-            seq_before_request = self.tools.current_seq()
             # 予算が縮めたのか元から短かったのかを覚えておく。「失敗した時刻が締切を過ぎているか」で判定すると取りこぼす
             # (実測: 締切の手前(29.2秒/上限30秒)で発火した回が `provider_error` を名乗った)。
             budget_left = deadline - monotonic()
@@ -397,7 +393,6 @@ class AgentLoop:
             # チェックは呼び出し1件ごと: 1つの応答に複数のツール呼び出しが束ねて届くことがあり、1件目の実行そのものが版を動かすうえ、
             # 1件目の後・2件目の前にもイベントループが人の操作を処理できる隙間がある(`ToolsOnLoop._run_on_loop` は呼び出しのたびにイベントループへ制御を返す)。
             # run() を終了させない: 打ち切りと違いモデルは自己修復できる(実測)ので、次のターンで最新の状態を読み直させて続ける。
-            expected_seq = seq_before_request
             results: list[ToolResult] = []
             cancelled_at: Optional[int] = None
             stale_at: Optional[int] = None
@@ -456,32 +451,40 @@ class AgentLoop:
                     )
                 )
                 self.turns.append(ToolResultTurn(tuple(results)))
+                expected_seq = stale_seq
                 continue
 
             self.turns.append(ToolResultTurn(tuple(results)))
 
     # ------------------------------------------------------------------ 履歴
-    def _look_first(self) -> None:
+    def _look_first(self) -> Any:
         """モデルが依頼のたびに最初に呼ぶ問い合わせを、代わりに呼んで履歴へ置く(その往復を消す)。
 
         「モデルが呼んで結果が返った」形で置く(発話に書き足さない): 実測(Gemma 4 12B)で、発話の末尾へ添えると往復は減るが最初の返事の思考が
         伸びて書く量が約1.5倍になり、全体では遅くなった。発話と分かれるので、寸法のガードが結果の数字を「人が言った数量」と読むこともない。
         進捗と `AgentRun.tool_calls` には載せない(モデルの判断ではないので画面に「AIが呼んだ」と出さない)。取れなければ置かずに進む(モデルは自分で呼べる)。
         """
+        expected_seq = self.tools.current_seq()
         if not self.first_look:
-            return
+            return expected_seq
         calls: list[ToolCall] = []
         results: list[ToolResult] = []
         try:
             for index, name in enumerate(self.first_look):
-                content = json.dumps(_condensed(self.tools.call(name, {})), ensure_ascii=False)
+                payload, error, seq_after = self.tools.call_and_seq(name, {}, expected_seq)
+                if isinstance(error, VersionChanged):
+                    return error.seq
+                if error is not None:
+                    raise error
+                content = json.dumps(_condensed(payload), ensure_ascii=False)
                 calls.append(ToolCall(id=f"{FIRST_LOOK_ID}{index}", name=name, arguments={}))
                 results.append(ToolResult(call_id=calls[-1].id, name=name, content=content, ok=True))
         except Exception:
             _logger.warning("first look failed", exc_info=True)
-            return
+            return self.tools.current_seq()
         self.turns.append(AssistantTurn(text="", tool_calls=tuple(calls)))
         self.turns.append(ToolResultTurn(tuple(results)))
+        return seq_after
 
     def _settle_history(self) -> None:
         """済んだ依頼を「人の発話 + AIの最終返答」の2つへ畳む(ツールの往復は捨てる)。

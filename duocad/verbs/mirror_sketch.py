@@ -28,7 +28,7 @@ from ..sketch import (
     remove_entities,
     require_valid_params,
 )
-from ._common import overlaps_original, require_same_uv_plane
+from ._common import editable_sketch, overlaps_original, require_same_uv_plane
 
 VERB_MIRROR_SKETCH_ENTITIES = "mirror_sketch_entities"
 
@@ -89,9 +89,7 @@ def _mirrored_plan(
         current = parameters.resolve_all(doc, entity.params)
         values = dict(current)
         values.update(entity_kind_ops(entity.kind).mirror(current, ax, ay, ux, uy))
-        # 元が持っているキーだけで比べる(`angle` を持たない時代のログから再生した長方形は
-        # `values` のほうがキーが1つ多く、素の辞書比較では常に不一致になる)。
-        if overlaps_original(values, current, fresh=fresh):
+        if overlaps_original(entity.kind, values, current, fresh=fresh):
             # 対象が軸の上に乗っている。元と重なる複製は作らない(領域検出が同じ辺を2本見る)。
             raise ValueError(
                 f"mirror_sketch_entities: 複製 {entity_id!r} が元と完全に重なる"
@@ -138,6 +136,7 @@ def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) ->
             "(軸に使った図形は対象から自動的に外れるので、他に対象が要る)"
         )
     for sketch_id, _ in normalized:
+        editable_sketch(doc, sketch_id)
         require_same_uv_plane(doc, axis_sketch, sketch_id, what="鏡映軸")
     new_ids = [new_entity_id() for _ in normalized]
     created = _create_mirrors(doc, normalized, ax, ay, ux, uy, new_ids, fresh=True)

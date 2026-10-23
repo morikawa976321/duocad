@@ -60,7 +60,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 
 ### 既知の穴(判断)
 
-`move_body` の `copy=True` で、対象がその軸まわりの回転対称を持つ角度(立方体を自分の中心軸で90度など)を指すと元と完全に重なる複製ができる。スケッチ側は `params` が座標の許容差(1e-9mm)で一致すれば弾ける(`_common.overlaps_original`。新しく作る複製だけで、redo / 再生は厳密一致のみ。線分の端点の入れ替えや長方形の向きの違いで `params` が変わる重なりは弾けない)が、ソリッドに安くて健全な判定が無い(境界箱の一致は L 字180度回転の正当な場合を誤って断り、最小距離 `BRepExtrema_DistShapeShape` は角を共有する正当な複製を誤って断り、ブーリアン共通部分は重い)。**不健全な判定を入れるより通す**を選んだ(注意書きは `duocad/verbs/move_body.py`)。
+`move_body` の `copy=True` で、対象がその軸まわりの回転対称を持つ角度(立方体を自分の中心軸で90度など)を指すと元と完全に重なる複製ができる。スケッチ側は図形の幾何を座標の許容差(1e-9mm)で比較して弾く(`_common.overlaps_original` と `_sketch_geometry`。線分の端点の入れ替え・長方形の角と向き・楕円の軸・円弧の角度の巻きも吸収する。新しく作る複製だけで、redo / 再生は従来の `params` の厳密一致のみ)が、ソリッドに安くて健全な判定が無い(境界箱の一致は L 字180度回転の正当な場合を誤って断り、最小距離 `BRepExtrema_DistShapeShape` は角を共有する正当な複製を誤って断り、ブーリアン共通部分は重い)。**不健全な判定を入れるより通す**を選んだ(注意書きは `duocad/verbs/move_body.py`)。
 
 ## 数値引数の既定値(`NumberArgSpec.default`)と空欄軸
 
