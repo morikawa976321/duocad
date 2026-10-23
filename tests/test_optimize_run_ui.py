@@ -282,7 +282,7 @@ def test_a_failed_autosave_still_delivers_the_result_and_the_end_of_the_run(sess
     def locked(*args, **kwargs):
         raise PermissionError("別のプログラムが開いている")
 
-    monkeypatch.setattr(session, "save_document", locked)
+    monkeypatch.setattr(session.store, "write_document_file", locked)
     _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
     assert connection.of_type("optimize_result")[0]["state"] == "done"
     assert connection.of_type("optimize_status")[-1]["running"] is False

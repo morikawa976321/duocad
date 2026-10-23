@@ -27,6 +27,7 @@ from . import (
     query,
     selection,
 )
+from .autosave import Autosave
 from .workspace import CommandState, NoCommand, Workspace, merge_args, stageable, stageable_verb_names
 from .document import Document
 from .document_store import (
@@ -142,20 +143,7 @@ class Session:
         #: 文書を差し替えた回数(`_replace_document` だけが進める)。AI が「前に見た文書と同じか」を確かめる唯一の手がかり
         #: (issue #102)。ファイル名では足りない: 新規→新規・A→B→A・同名の開き直しで名前が一致する。
         self._generation = 0
-        #: 自動保存で書けなかった変更があるか(issue #5)。通常は常に False で、書き込み失敗(ディスク・権限)のときだけ True。
-        self._unsaved = False
-        #: 保存の書き込みを直列にする。アプリ内AIの道具はワーカースレッドで動き(`net/ws.py` の `_ai_start`)、`apply` → `_emit` → 自動保存へ来るので、
-        #: イベントループ側の保存と同じ一時ファイルへ同時に書く経路がある。
-        self._save_lock = threading.Lock()
-        #: >0 の間、編集中のファイルへの自動保存は JSON 化までをその場で行い、書き込みを1本の書き手スレッドへ回す
-        #: (`background_autosave`。画面の操作の応答に書き込みの時間を乗せない。issue #173)。
-        self._background_autosave = 0
-        #: 書き手スレッド(初めて使うときに作る)。1本なので頼んだ順に書く。
-        self._writer: Optional[concurrent.futures.ThreadPoolExecutor] = None
-        #: 最後に頼んだ書き込み。結果(書けたか)は `settle_autosave` が読む。
-        self._pending_write: Optional[concurrent.futures.Future] = None
-        #: 頼んだ書き込みの通し番号。新しいものが控えていれば、古い書き込みは書かずに降りる(新しい方が今の文書を書く)。
-        self._write_seq = 0
+        self.autosaver = Autosave(self.store)
         #: 配りもの。文書を差し替えたら `view.reset()` を呼ぶ(`_replace_document`)。
         self.view = DocumentView(self.document, self.deviation, self.warnings)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
@@ -998,8 +986,7 @@ class Session:
             if label is None:
                 label = self.store.unused_untitled_name()
             target = self.store.resolve_document_name(label)
-            with self._save_lock:
-                self.store.write_document_file(target, document.log.to_json(created=self._optimize_created))
+            self.autosaver.write(target, document.log.to_json(created=self._optimize_created))
             label = target.name
             # 一覧の絵は結果の無い形のまま。消しておけば次に開いたときに撮り直される。
             self.store.drop_thumbnail(target)
@@ -1150,56 +1137,17 @@ class Session:
         (14.9 MB の文書で 22 ms。issue #173)。呼び手は配った後に `pending_write` を待って `settle_autosave()` を呼ぶ。
         無題の文書の最初の保存は名前(`current_name`)が配りものに載るので、その場で書く。
         """
-        self._background_autosave += 1
-        try:
+        with self.autosaver.background():
             yield
-        finally:
-            self._background_autosave -= 1
 
     @property
     def pending_write(self) -> Optional[concurrent.futures.Future]:
         """書き手スレッドへ回して、まだ結果を読んでいない書き込み(`background_autosave`)。"""
-        return self._pending_write
+        return self.autosaver.pending_write
 
     def settle_autosave(self) -> bool:
         """回した書き込みが済んでいれば結果を `saved` と警告へ写す。書けなかったときだけ False。済んでいなければ何もしない。"""
-        future = self._pending_write
-        if future is None or not future.done():
-            return True
-        self._pending_write = None
-        error = future.exception()
-        if error is None:
-            self._unsaved = False
-            return True
-        self._unsaved = True
-        self.warnings.append(f"自動保存できなかった: {type(error).__name__}: {error}")
-        return False
-
-    def _drain_writes(self) -> None:
-        """回した書き込みが終わるまで待ち、結果を写す。ファイルを書く・読む・消す・移す口の先頭で呼ぶ
-        (待たないと、遅れて着いた古い書き込みが新しい保存を上書きする・消したファイルを書き戻す・最後の変更の無いファイルを読む)。
-        """
-        future = self._pending_write
-        if future is not None:
-            concurrent.futures.wait([future])
-            self.settle_autosave()
-
-    def _queue_write(self) -> None:
-        """編集中のファイルへの自動保存を書き手スレッドへ回す(中身はここで確定する)。"""
-        target = self.store.resolve_writable_name(self._current_name)
-        data = self.document.log.to_file_chunks(created=self._created)
-        self._write_seq += 1
-        seq = self._write_seq
-        if self._writer is None:
-            self._writer = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="duocad-autosave")
-        self._pending_write = self._writer.submit(self._write_queued, target, data, seq)
-
-    def _write_queued(self, target: Path, data: list, seq: int) -> None:
-        """書き手スレッドの1件。後から頼んだ書き込みが控えていれば書かない(そちらが新しい文書を書く)。"""
-        if seq != self._write_seq:
-            return
-        with self._save_lock:
-            self.store.write_document_file(target, data)
+        return self.autosaver.settle()
 
     def save_document(self, name: Any = None, *, autosave_untitled: bool = False) -> dict:
         """操作ログをJSONで書き出す。verbではない(ログに載らない)。
@@ -1221,8 +1169,8 @@ class Session:
         `autosave_untitled` は最適化の実行中の別名保存の拒否を外す: 拒否が守るのは「実行の対象の写しを別名で編集できる
         文書にしない」ことで、無題の文書自身を初めて書く自動保存(結果の届け)はそれに当たらない。
         """
-        self._drain_writes()
-        self._write_seq += 1  # 待っても間に合わなかった古い書き込みが後から着いたら、書かずに降りる(`_write_queued`)
+        self.autosaver.drain()
+        self.autosaver.supersede()
         if name is None:
             if self._current_name is None:
                 raise ValueError(
@@ -1248,7 +1196,7 @@ class Session:
             )
         created = self._created if name is None else time.time()
         payload = self.document.log.to_file_chunks(created=created)
-        with self._save_lock:
+        with self.autosaver.locked():
             self.store.write_document_file(target, payload)
             if name is not None:
                 # 同じ名前の古い文書(外で消された)の絵が残っていれば、それはこの文書の絵ではない。
@@ -1257,7 +1205,7 @@ class Session:
             # 次の引数なし保存が黙って新しいファイルを作る。
             self._current_name = target.name
             self._created = created
-            self._unsaved = False
+            self.autosaver.mark_saved()
         return {
             "action": "save",
             "path": str(target),
@@ -1269,7 +1217,7 @@ class Session:
         """今の文書がそのままファイルに載っているか(`state()["saved"]`)。自動保存が書けなかったときだけ False
         (無題で何も変えていない文書は True)。
         """
-        return not self._unsaved
+        return self.autosaver.saved
 
     def autosave(self) -> bool:
         """今の文書をディスクへ書く(1操作ごとの自動保存。issue #5、本人判断 2026-09-16)。
@@ -1286,14 +1234,10 @@ class Session:
         try:
             if self._current_name is None:
                 self.save_document(self.store.unused_untitled_name(), autosave_untitled=True)
-            elif self._background_autosave:
-                self._queue_write()
             else:
-                self.save_document()
+                self.autosaver.save_current(self._current_name, self.document.log, self._created)
         except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ画面へ出す
-            self._unsaved = True
-            self.warnings.append(f"自動保存できなかった: {type(error).__name__}: {error}")
-            return False
+            return self.autosaver.failed(error)
         return True
 
     def rename_document(self, name: Any) -> dict:
@@ -1313,22 +1257,21 @@ class Session:
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
         if self._current_name is None:
             return dict(self.save_document(target.name), action="rename", previous=None)
-        self._drain_writes()
-        with self._save_lock:
+        self.autosaver.drain()
+        with self.autosaver.locked():
             previous = self._current_name
             source = self.store.resolve_document_name(previous)
-            stale = source.exists() and self._unsaved
+            stale = source.exists() and not self.autosaver.saved
             self.store.rename_document_file(source, target, self.document.log, self._created)
             self._current_name = target.name
-            self._unsaved = False
+            self.autosaver.mark_saved()
             if stale:
                 # 直前の自動保存が書けなかったので、移したファイルは最後の変更を持っていない。文書を書き直す。
                 # 書けなければ未保存のまま残す(`autosave` と同じく、例外にせず警告と `saved=False` で知らせる)。
                 try:
                     self.store.write_document_file(target, self.document.log.to_file_chunks(created=self._created))
                 except Exception as error:  # noqa: BLE001
-                    self._unsaved = True
-                    self.warnings.append(f"自動保存できなかった: {type(error).__name__}: {error}")
+                    self.autosaver.failed(error)
         return {
             "action": "rename",
             "path": str(target),
@@ -1345,7 +1288,7 @@ class Session:
         差し替えの後始末は `_replace_document`(`new_document` と共通)。
         """
         source = self.store.resolve_document_name(name)
-        self._drain_writes()  # 同じ名前を開き直すとき、書きかけの最後の変更を読み落とさない
+        self.autosaver.drain()  # 同じ名前を開き直すとき、書きかけの最後の変更を読み落とさない
         if source.name in self._undelivered:
             return self._open_undelivered(source.name)
         payload = self.store.read_document_file(source)
@@ -1420,12 +1363,12 @@ class Session:
         配りものは `view.reset()` で作り直す(Bodyのidは再生で作り直されるが同じidが再び現れうる。古い形状を指したキャッシュが
         残ると別の文書の形を配る)。選択集合は `Document` が持つので、差し替えた時点で空になっている。
         """
-        self._drain_writes()  # 回した書き込みは前の文書のもの。書き終えてから差し替える(結果の `saved` を新しい文書へ持ち越さない)
+        self.autosaver.drain()  # 回した書き込みは前の文書のもの。書き終えてから差し替える(結果の `saved` を新しい文書へ持ち越さない)
         self.document = document
         self._open = True  # 閉じる側(`close_document`)は差し替えの後で False に戻す
         self._current_name = current_name
         self._created = created
-        self._unsaved = False  # 開いた/空にした文書に、書けなかった変更は無い
+        self.autosaver.mark_saved()  # 開いた/空にした文書に、書けなかった変更は無い
         # キャッシュの破棄は `view` の1呼び出し(とくに版の数え上げを消さない理由は `DocumentView.reset` の docstring)。
         self.view.reset(document)
         self._applied_count += 1
@@ -1434,13 +1377,13 @@ class Session:
 
     def list_documents(self) -> dict:
         self.store.ensure_models_dir()
-        self._drain_writes()
-        return self.store.list_documents(read_lock=self._save_lock)
+        self.autosaver.drain()
+        return self.store.list_documents(read_lock=self.autosaver.locked())
 
     def copy_document(self, source: Any, dest: Any) -> dict:
         origin = self.store.resolve_document_name(source)
         target = self.store.resolve_writable_name(dest)
-        self._drain_writes()  # 書きかけの最後の変更の無いファイルを写さない
+        self.autosaver.drain()  # 書きかけの最後の変更の無いファイルを写さない
         return self.store.copy_document_file(origin, target)
 
     def delete_document(self, name: Any) -> dict:
@@ -1456,7 +1399,7 @@ class Session:
             raise ValueError(
                 f"{target.name} は形状最適化の実行中(終わるか、開いて中断してから削除する)"
             )
-        self._drain_writes()  # 書きかけの書き込みが、消した後のファイルを書き戻さないように
+        self.autosaver.drain()  # 書きかけの書き込みが、消した後のファイルを書き戻さないように
         self.store.delete_document_file(target)
         # 書けなかった結果も一緒に捨てる(残すと、同じ名前で作り直したファイルを開いたときに出てくる)。
         self._undelivered.pop(target.name, None)

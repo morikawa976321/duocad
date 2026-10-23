@@ -98,33 +98,59 @@ def test_a_failed_background_write_marks_the_document_unsaved(session: Session, 
     assert any("自動保存できなかった" in line for line in session.warnings)
 
 
-@pytest.mark.parametrize("act", ["save", "delete", "open_again", "copy"])
+@pytest.mark.parametrize("act", ["save", "delete", "open_again", "copy", "new", "close", "rename"])
 def test_file_operations_wait_for_the_queued_write(session: Session, monkeypatch, act) -> None:
     """落ちたら、遅れて着いた古い書き込みが新しい保存を上書きする・消したファイルを書き戻す・最後の変更の無いファイルを読む/写す。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     name = session.current_name
-    gate = concurrent.futures.Future()
-    real = os.replace
+    gate = threading.Event()
+    writing = threading.Event()
+    draining = threading.Event()
+    real_write = session.store.write_document_file
+    real_drain = session.autosaver.drain
 
-    def slow(source, target):
-        gate.result(timeout=10)  # 書き手スレッドを止めておき、ファイルの口が待つかを見る
-        real(source, target)
+    def slow(target, payload):
+        writing.set()
+        assert gate.wait(10), "止めた書き込みが解放されなかった"
+        real_write(target, payload)
 
-    monkeypatch.setattr(os, "replace", slow)
+    def drain():
+        draining.set()
+        real_drain()
+
+    monkeypatch.setattr(session.store, "write_document_file", slow)
+    monkeypatch.setattr(session.autosaver, "drain", drain)
     with session.background_autosave():
         session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     queued = session.pending_write
-    assert queued is not None and not queued.done()
-    # 書き手を止めたままファイルの口へ入る。待たない口は先に済ませてしまい、後から着いた書き込みが結果を壊す。
-    threading.Timer(0.3, gate.set_result, [None]).start()
-    if act == "save":
-        session.add_circle(sketch_id, [5.0, 5.0], 2.0)  # 画面の外(MCP)の操作はその場で書く
-    elif act == "delete":
-        session.delete_document(name)
-    elif act == "open_again":
-        session.open_document(name)
-    else:
-        session.copy_document(name, "copy.json")
+    assert writing.wait(10) and queued is not None and not queued.done()
+
+    def release_when_draining():
+        if draining.wait(10):
+            gate.set()
+
+    releaser = threading.Thread(target=release_when_draining)
+    releaser.start()
+    try:
+        if act == "save":
+            session.add_circle(sketch_id, [5.0, 5.0], 2.0)
+        elif act == "delete":
+            session.delete_document(name)
+        elif act == "open_again":
+            session.open_document(name)
+        elif act == "copy":
+            session.copy_document(name, "copy.json")
+        elif act == "new":
+            session.new_document()
+        elif act == "close":
+            session.close_document()
+        else:
+            session.rename_document("renamed.json")
+        assert draining.is_set(), "ファイル操作の前に書き込みを流し切っていない"
+    finally:
+        draining.set()
+        gate.set()
+        releaser.join(timeout=10)
     concurrent.futures.wait([queued])
     if act == "save":
         assert json.loads((session.models_dir / name).read_text(encoding="utf-8"))["operations"].__len__() == 3
@@ -132,8 +158,14 @@ def test_file_operations_wait_for_the_queued_write(session: Session, monkeypatch
         assert not (session.models_dir / name).exists()
     elif act == "open_again":
         assert len(session.document.log.entries) == 2
-    else:
+    elif act == "copy":
         assert len(json.loads((session.models_dir / "copy.json").read_text(encoding="utf-8"))["operations"]) == 2
+    elif act == "rename":
+        assert not (session.models_dir / name).exists()
+        assert _ops_on_disk(session) == 2 and session.current_name == "renamed.json"
+    else:
+        assert session.current_name is None and session.document.log.entries == []
+        assert len(json.loads((session.models_dir / name).read_text(encoding="utf-8"))["operations"]) == 2
 
 
 def test_a_browser_verb_replies_before_the_write_and_the_file_follows(session: Session, monkeypatch) -> None:
