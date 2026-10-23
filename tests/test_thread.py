@@ -73,6 +73,16 @@ def test_a_shaft_gets_a_male_thread_with_zero_clearance_and_chamfered_tips():
     _assert_sound(shape)
 
 
+@pytest.mark.parametrize("profile", sorted(kernel_thread.PROFILES))
+def test_a_d3_shaft_gets_a_male_thread(profile):
+    """D3 は面取りした先の半径が 1mm 未満(1.5 − 0.6)。先の円錐を作る回転体が細い軸で壊れないこと(両端とも先)。"""
+    doc = Document()
+    body_id = new_cylinder(doc, radius=1.5, height=8.0)
+    operation = thread(doc, _cylinder_face(doc, body_id), profile, body_id=body_id)
+    assert operation.args["pitch"] == pytest.approx(1.2)
+    _assert_sound(doc.get_body(body_id).shape)
+
+
 def test_the_semicircle_profile_builds_on_a_hole():
     doc = Document()
     body_id, face = _hole(doc)

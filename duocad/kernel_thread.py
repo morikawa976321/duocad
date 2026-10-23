@@ -425,10 +425,10 @@ def _add_male(shape, target, points, pitch, depth, context):
     r_maj = max(r for _, r in points)
     chamfer = depth + 0.1 * pitch
     low_tip, high_tip = ends["low"]["kind"] == "disc", ends["high"]["kind"] == "disc"
-    outline = [(0.0, -1.0)]
-    outline += [(r_maj - chamfer - 1, -1.0), (r_maj + 1, chamfer + 1)] if low_tip else [(r_maj + 1, -1.0)]
-    outline += [(r_maj + 1, length - chamfer - 1), (r_maj - chamfer - 1, length + 1)] if high_tip else [(r_maj + 1, length + 1)]
-    outline += [(0.0, length + 1)]
+    # 先端の 45° の円錐は軸で閉じる(線を先へ 1 延ばすと、先の半径 r_tip が 1 未満の D3 では軸の反対へ出て回転体が作れない)
+    r_tip = r_maj - chamfer
+    outline = [(0.0, -r_tip), (r_maj + 1, chamfer + 1)] if low_tip else [(0.0, -1.0), (r_maj + 1, -1.0)]
+    outline += [(r_maj + 1, length - chamfer - 1), (0.0, length + r_tip)] if high_tip else [(r_maj + 1, length + 1), (0.0, length + 1)]
     segment = threaded_segment(points, pitch, length)
     if low_tip or high_tip:
         segment = _boolean(BRepAlgoAPI_Common(segment, _revolve(outline)), "tip chamfer", context)
