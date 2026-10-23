@@ -1,16 +1,21 @@
-"""辺の曲率半径を超える半径のフィレット(issue #207): 平面の上面を囲む輪を、Fusion 360 と同じ形に丸める。
+"""辺の曲率半径を超える半径のフィレット(issue #207・#211・#212)。
 
 OCCT の `MakeFillet` は、転がる球が上面に触れる線(輪郭を内へ R ずらした曲線)が自己交差する半径(辺の曲率半径を超える)で
 断る。Fusion 360 は、球を両側から転がして自己交差の点 X(球が壁の2点と上面の1点に同時に触れる所)で止め、その先を隣の面と
-G1 でつながる帽子の面で埋める(本人が示した画面。docs/FILLET_OVERFLOW.md「曲率半径を超える半径」)。ここはその形を作る:
+G1 でつながる帽子の面で埋める(平面の上面の画面。docs/FILLET_OVERFLOW.md「曲率半径を超える半径」)。
+曲面の上面・テーパー壁での Fusion の結果は未確認。作り方は次のとおり:
 
-1. 上面から深さ R の平面で輪郭を内へ R ずらし、自己交差の輪(燕尾)を切り落とす。これが球の中心の道。
-2. 道の滑らかな区間ごとに、四分円の断面(壁の接点 → 上面の接点)を掃いて丸めの面にする。
-3. 道の角(自己交差を切った所)ごとに、両側の区間の端の四分円と、壁の縁の上の弧の3辺を、隣の面と G1 で埋めて帽子にする。
-4. 区間の上の縁で囲む上面(レンズ形)と深さ R の底面を合わせて冠の立体にし、本体の深さ R より下と、深さ R の断面で縫い合わせる。
+1. 平面の上面 × 垂直壁では、深さ R の輪郭を内へ R ずらした道と四分円を使う。冠を深さ R の断面で本体と縫う。
+2. 曲面の上面またはテーパー壁では `kernel_tight_surface` で実面の接点を求める。壁の接点 F の内向き法線上に中心 c を置き、
+   上面への射影 T との距離が R となる母線上の位置を求根する。切断面は接点より下に置き、上に壁と上面だけがあることを確かめる。
+3. 中心の道を「上」の向きに射影し、折れ線の自己交差(燕尾)を切る。射影で交わる中心は空間でも一致しなければ断る。
+4. 残した道の各区間で、中心 c・接点 F と T の線を `GeomFill_Pipe` に渡し、半径 R の円弧(角度は可変)を掃いた面を作る。
+5. 燕尾の区間の F の線と両側の円弧を境界に、実際の壁と丸めの面に G1 でつながる帽子を張る。壁の縁には検証済み pcurve が要る。
+6. T の輪で元の上面を分割してレンズを残す。壁も F の線で分割して下側を残し、レンズ・丸め・帽子と縫う。空洞の殻はそのまま残す。
 
-**引き受けるのは**(それ以外は `Unsupported`): 選んだ辺が1つの平面の上面の外周を成し、接線でつながる1つの輪で、上面に内側の輪
-(穴)が無い。本体の上面から深さ R までが、上面を押し出した形そのもの(壁が上面に垂直で、その範囲に他の形が無い)。
+**引き受けるのは**(それ以外は `Unsupported`): 選んだ辺が1つの上面の外周を成し、接線でつながる1つの輪で、上面に穴が無く、
+半径は1つ。平面の上面では法線を「上」とし、曲面では平行な垂直壁の母線を「上」とする。テーパー壁 × 曲面の上面は対象外。
+OCCT が成功した場合はこの経路に来ない。対象外の理由も `kernel` の失敗文面に含める。
 """
 from __future__ import annotations
 
@@ -54,9 +59,8 @@ from .mesh_geometry import indexed_map
 
 
 class Tight(NamedTuple):
-    """丸めた形と、由来をたどる材料。上面(`top`)の後継は、丸めた形の上面と同じ平面の面(`lens`)。`builders` は本体の深さ R
-    より下を取る引き算と、冠との縫い合わせ(この順。どちらも `Modified`・`IsDeleted` に答える)で、上面以外の元の面の後継は
-    この2つをたどる。"""
+    """上面(`top`)の後継は元の支持面のレンズ(`lens`)。`builders` は壁の切り取りと縫い合わせの順で、
+    `Modified`・`IsDeleted` に答える。上面以外の後継はこの2つをたどる(`kernel._tight_fillet` との契約)。"""
 
     shape: TopoDS_Shape
     top: TopoDS_Shape
@@ -79,6 +83,10 @@ class Declined(Unsupported):
     """選んだ辺は上面を囲む輪(この作り方の対象)だが、丸められなかった。理由は利用者への失敗の文面に添える。"""
 
 
+class _NotPrismatic(Unsupported):
+    pass
+
+
 def round_tight_loop(shape: TopoDS_Shape, edge_map, radii: dict) -> Tight:
     """`radii`(`{辺の添字: 半径}`)の辺が上面を囲む輪なら、自己交差を切り落とした形で丸める。輪でなければ `Unsupported`、
     輪だが丸められなければ `Declined`。"""
@@ -89,7 +97,14 @@ def round_tight_loop(shape: TopoDS_Shape, edge_map, radii: dict) -> Tight:
     edges = [edge_map.FindKey(int(index)) for index in radii]
     top = _top_face(shape, edges)
     try:
-        return _round(shape, top, radius)
+        if BRepAdaptor_Surface(TopoDS.Face_s(top)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane:
+            try:
+                return _round(shape, top, radius)
+            except _NotPrismatic:
+                pass
+        from .kernel_tight_surface import round_surface_loop
+
+        return round_surface_loop(shape, top, radius)
     except Unsupported as error:
         raise Declined(str(error)) from error
 
@@ -154,29 +169,33 @@ class _Sewn:
 # 引き受けるかの確かめ
 # --------------------------------------------------------------------------------------
 def _top_face(shape: TopoDS_Shape, edges: list) -> TopoDS_Shape:
-    """選んだ辺が全部接する平面の面(上面)。その面の輪が1つだけで、その輪の辺が選んだ辺とちょうど一致し、継ぎ目が接線。"""
+    """1つの上面の外周すべてを選ぶ。支持面のシーム・縮退辺は外周の選択に含めない。"""
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
-    def planes(edge):
-        return [
-            face for face in edge_faces.FindFromKey(edge)
-            if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane
-        ]
+    def neighbors(edge):
+        return list(edge_faces.FindFromKey(edge))
 
-    shared = [face for face in planes(edges[0]) if all(any(face.IsSame(other) for other in planes(edge)) for edge in edges[1:])]
+    candidates = [face for face in neighbors(edges[0]) if all(any(face.IsSame(other) for other in neighbors(edge)) for edge in edges[1:])]
+    shared = [face for face in candidates if all(any(edge.IsSame(other) for other in edges)
+              for edge in _edges(BRepTools.OuterWire_s(TopoDS.Face_s(face)))
+              if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(face)) and not BRep_Tool.Degenerated_s(edge))]
+    if not shared and candidates and BRep_Tool.IsClosed_s(_wire(edges)):
+        raise Unsupported("the top face has holes or other unselected boundary loops")
     if len(shared) != 1:
-        raise Unsupported("the edges do not all bound one planar face")
+        raise Unsupported("the edges must be the whole outline of one top face")
     common = shared[0]
     wires = indexed_map(common, TopAbs_WIRE)
     if wires.Extent() != 1:
         raise Unsupported("the top face has holes or other inner loops")
-    loop = indexed_map(wires.FindKey(1), TopAbs_EDGE)
-    if loop.Extent() != len(edges) or not all(loop.Contains(edge) for edge in edges):
+    loop = [edge for edge in _edges(wires.FindKey(1))
+            if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(common)) and not BRep_Tool.Degenerated_s(edge)]
+    if len(loop) != len(edges) or not all(any(other.IsSame(edge) for other in loop) for edge in edges):
         raise Unsupported("the edges must be the whole outline of the top face")
     explorer = BRepTools_WireExplorer(TopoDS.Wire_s(wires.FindKey(1)))
     ordered = []
     while explorer.More():
-        ordered.append(explorer.Current())
+        if any(explorer.Current().IsSame(edge) for edge in loop):
+            ordered.append(explorer.Current())
         explorer.Next()
     for this, following in zip(ordered, ordered[1:] + ordered[:1]):
         if _end_direction(this, at_end=True).Angle(_end_direction(following, at_end=False)) > _SMOOTH_ANGLE:
@@ -200,7 +219,7 @@ def _split_at_depth(shape, top, normal: gp_Vec, radius: float, size: float):
     tolerance = 1.0e-8 * max(1.0, expected)
     if (abs(_precise_volume(above) - expected) > tolerance
             or abs(_precise_volume(_boolean("common", above, band).Shape()) - expected) > tolerance):
-        raise Unsupported("the body is not the top face pushed straight down over the fillet depth")
+        raise _NotPrismatic("the body is not the top face pushed straight down over the fillet depth")
     below = _boolean("cut", shape, box)
     if len(_solids(below.Shape())) != len(_solids(shape)):
         raise Unsupported("cutting the body at the fillet depth split it")
@@ -255,6 +274,9 @@ class _Contour:
         point, _, inward = self.at(s)
         return point.Translated(inward.Multiplied(radius))
 
+    def clear_of_walls(self, radius: float, loops: list, count: int) -> None:
+        _clear_of_walls(self, radius, loops, count)
+
 
 class _Segment(NamedTuple):
     """球の中心の道の滑らかな1区間と、それに当たる輪郭の媒介変数の範囲。"""
@@ -292,7 +314,7 @@ def _center_path(contour: _Contour, radius: float):
     if not loops:
         # 道が自己交差しない(半径が辺の曲率半径を超えない)なら OCCT の `MakeFillet` の領分。ここでは作らない
         raise Unsupported("the radius does not exceed the curvature of the outline anywhere")
-    _clear_of_walls(contour, radius, loops, count)
+    contour.clear_of_walls(radius, loops, count)
     segments = []
     for (_, high), (next_low, _) in zip(loops, loops[1:] + [(loops[0][0] + contour.length, 0.0)]):
         span = next_low - high
@@ -395,6 +417,9 @@ def _meeting(contour: _Contour, radius: float, first: float, second: float, reac
         move *= min(1.0, reach / max(float(np.max(np.abs(move))), 1.0e-300))
         first, second = first + float(move[0]), second + float(move[1])
     if contour.center(first, radius).Distance(contour.center(second, radius)) > tolerance:
+        if np.linalg.norm(gap(first, second)) < tolerance:
+            distance = contour.center(first, radius).Distance(contour.center(second, radius))
+            raise Unsupported(f"the projected crossing has distinct spatial centers ({distance:.6g} apart)")
         raise Unsupported("the crossing of the offset outline could not be located")
     return first % contour.length, second % contour.length
 

@@ -309,17 +309,27 @@ def _box_centre(shape: Any) -> "gp_Pnt":
 
 
 def _needs_adaptive(face: Any) -> bool:
-    """B スプライン・ベジエの曲面か、自由曲線で囲まれた平面(実測で既定の積分が外れた面)。押し出し面などの
-    他の曲面は既定のまま(適応積分は楕円柱の側面で重心をずらす)。"""
-    kind = BRepAdaptor_Surface(face).GetType()
+    """自由曲面・自由曲線で切った平面と球面・高さが変わる自由曲線で切った押し出し面は適応積分。
+    外部の罠: 球面ドームの既定の積分は 0.00804 ずれた。水平な縁の押し出し面は、適応積分で重心がずれる。"""
+    surface = BRepAdaptor_Surface(face)
+    kind = surface.GetType()
     if kind in _ADAPTIVE_SURFACES:
         return True
-    if kind != GeomAbs_SurfaceType.GeomAbs_Plane:
+    if kind not in (GeomAbs_SurfaceType.GeomAbs_Plane, GeomAbs_SurfaceType.GeomAbs_Sphere,
+                    GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion):
         return False
     explorer = TopExp_Explorer(face, TopAbs_ShapeEnum.TopAbs_EDGE)
     while explorer.More():
-        if BRepAdaptor_Curve(TopoDS.Edge_s(explorer.Current())).GetType() in _ADAPTIVE_CURVES:
-            return True
+        curve = BRepAdaptor_Curve(TopoDS.Edge_s(explorer.Current()))
+        if curve.GetType() in _ADAPTIVE_CURVES:
+            if kind != GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion:
+                return True
+            first, last = curve.FirstParameter(), curve.LastParameter()
+            origin = curve.Value(first)
+            heights = [gp_Vec(origin, curve.Value(first + (last - first) * i / 8)).Dot(gp_Vec(surface.Direction()))
+                       for i in range(9)]
+            if max(heights) - min(heights) > 1e-8:
+                return True
         explorer.Next()
     return False
 
@@ -1558,13 +1568,11 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
                 return native
     declined = ""
     if native is None:
-        # 辺の曲率半径を超える半径の、上面を囲む輪(issue #207)。引き受けない形ならはみ出しの吸収へ進む
+        # 対象外も理由を残す契約: 曲面などで早く断っても、利用者には吸収だけの理由を返さない。
         try:
             return _tight_fillet(shape, edge_map, radii, edge_indices, volume_before)
-        except kernel_tight.Declined as reason:
+        except kernel_overflow.Unsupported as reason:
             declined = f"; 曲率半径を超える丸めもできない: {reason}"
-        except kernel_overflow.Unsupported:
-            pass
     try:
         return _absorbed_fillet(shape, edge_map, radii, edge_indices, volume_before)
     except ValueError as reason:
@@ -1777,8 +1785,8 @@ def _absorbed_fillet(
 def _tight_fillet(
     shape: "TopoDS_Shape", edge_map: Any, radii: dict, edge_indices: List[int], volume_before: float
 ) -> dict:
-    """`kernel_tight.round_tight_loop`(辺の曲率半径を超える半径。issue #207)の形を検査し、由来をたどって `_blend_edges` の
-    戻り値の形にする。上面の後継は丸めた後の上面、それ以外の面は本体を深さ R で切る引き算と冠との縫い合わせをたどる。"""
+    """`kernel_tight.round_tight_loop` の形を検査し、由来を `_blend_edges` の形にする。
+    上面の後継はレンズ、それ以外は壁の切り取りと縫い合わせをたどる。"""
     tight = kernel_tight.round_tight_loop(shape, edge_map, radii)
     context = f"edges {edge_indices}, rounding past the edge curvature"
     volume_after = _checked_volume(tight.shape, "fillet", volume_before=volume_before, context=context)
