@@ -307,7 +307,10 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/kernel_meshing.py` | OCCTの面分割の段階制御と境界折れ線の交差検査（`tessellate` の実体） | **○** | ✗ |
 | `duocad/boundary_check.py` | 境界折れ線の交差・接触・重なりの判定（固定εを使わない） | ✗ | ✗ |
 | `duocad/mesh_intersections.py` | 三角形メッシュの自己交差 | ✗ | ✗ |
-| `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbを掛ける唯一の口 `apply`。配りものは `view` へ委譲） | ✗ | ✗ |
+| `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbを掛ける唯一の口 `apply`。配りものは `view`、自動保存の進行は `autosaver`、最適化の実行と記録は `optimization`、結果配送の控えは `optimization_results` へ委譲） | ✗ | ✗ |
+| `duocad/autosave.py` | `Autosave`（書き込みの排他・順序・古い要求の省略・完了と失敗の回収、未保存状態） | ✗ | ✗ |
+| `duocad/optimization.py` | `Optimization`（実行と直近の記録の寿命）、`OptimizationRun`（開始元・作業コピー・中断と仕上げ受付）、`OptimizationRecord`（ステップと再仕上げの前提）、`OptimizationResults`（別文書への保存・未配送と未表示の控え） | ✗ | ✗ |
+| `duocad/document_store.py` | `DocumentStore`（文書ファイル・サムネイル・保存先と書き出し先の検査。現在の文書や保存キューは持たない） | ✗ | ✗ |
 | `duocad/view.py` | `DocumentView`（配りもの＝状態配信・版・キャッシュ。文書を変えない） | ✗ | ✗ |
 | `duocad/paths.py` | `REPO_ROOT` と既定の置き場（`web/dist` / `models`） | ✗ | ✗ |
 | `duocad/net/ws.py` | `Server`（WebSocketの配信と `_dispatch`） | ✗ | ✗ |
@@ -318,7 +321,9 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/mcp_server.py` | MCPサーバ。アプリ層ではなくコアのもう一人のクライアント | ✗ | ✗ |
 | `duocad/agent/` | アプリ内AIエージェント（プロバイダのアダプタ＋tool-useループ。UIは持たない） | ✗ | ✗ |
 
-**`duocad/net/` → `duocad/session.py` → `duocad/view.py` の一方向。** 唯一の逆向きは `Server._ensure_ai_loop` が
+**`duocad/net/` → `duocad/session.py` → `duocad/view.py` / `duocad/optimization.py` / `duocad/autosave.py` / `duocad/document_store.py` の一方向。**
+`OptimizationResults` は `Autosave` と `DocumentStore` の口で書き、`Autosave` は `DocumentStore` の口で書く。
+これらの部品は `Session` を参照しない。唯一の逆向きは `Server._ensure_ai_loop` が
 `build_provider` を入口（`duocad.server`）越しに引くところで、差し替え点を `duocad.server.build_provider` に固定するため
 （`tests/test_agent_ws.py` が monkeypatch する。直接importすると差し替えが黙って効かなくなる）。
 

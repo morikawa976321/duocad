@@ -219,5 +219,5 @@ def test_a_document_that_cannot_be_compared_does_not_open_the_door_to_a_hard_lin
 
     monkeypatch.setattr(Path, "samefile", flaky)
     with pytest.raises(ValueError, match="precious.json"):
-        session._resolve_export_path(str(alias), (".step",))
+        session.export_step_file(str(alias))
     assert (models / "precious.json").read_text(encoding="utf-8") == "{}"

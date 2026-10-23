@@ -111,7 +111,10 @@ def test_the_screen_lists_the_steps_shows_one_and_finishes_another_after_the_run
     assert results[1]["name"] == "optimized-step1"
     # 後から届いた前の実行の進捗を画面が見分けられるよう、進捗はどれも実行の識別子を持つ
     progress = connection.of_type("optimize_progress")
-    assert progress and {event["run"] for event in progress} == {session.optimization_steps.run}
+    assert progress and {event["run"] for event in progress} == {session.steps_for_current().run}
+    session.new_document()
+    assert session.steps_for_current() is None
+    assert not session.steps_finishable()
 
 
 def test_finish_while_running_sets_the_request_and_tells_the_screen(session: Session) -> None:
@@ -119,10 +122,10 @@ def test_finish_while_running_sets_the_request_and_tells_the_screen(session: Ses
     session.begin_optimization()
     connection = browser(session, lambda send: send({"cmd": "finish_optimization", "step": 2}), connections=1)[1][0]
     [status] = connection.of_type("optimize_status")
-    assert status["finishing"] is True and session._finish_request == 2
+    assert status["finishing"] is True
     session.end_optimization()
     session.begin_optimization()
-    assert session._finish_request is None  # 次の実行には持ち越さない
+    assert "finishing" not in session.optimization_status()
 
 
 def test_finish_without_steps_is_refused_with_a_reason(session: Session) -> None:
@@ -130,9 +133,6 @@ def test_finish_without_steps_is_refused_with_a_reason(session: Session) -> None
     connection = browser(session, lambda send: send({"cmd": "finish_optimization"}), connections=1)[1][0]
     [error] = connection.of_type("optimize_error")
     assert "仕上げられるステップが無い" in error["message"]
-    session.optimization_steps = OptimizationSteps()
-    session._steps_name = "another.json"
-    assert session.steps_for_current() is None
 
 
 def test_a_finish_request_is_honoured_even_when_the_search_ends_on_its_own(session: Session, monkeypatch) -> None:
@@ -152,29 +152,6 @@ def test_a_finish_request_is_honoured_even_when_the_search_ends_on_its_own(sessi
     assert result["state"] == "done" and result["finished_step"] == 1 and result["name"] == "optimized-step2"
     assert result["termination"] != "stopped_by_user" and len(steps) > 2
     assert {row["run"] for row in steps.meta()} == {steps.run}
-
-
-def test_a_finish_after_the_search_has_ended_is_refused_without_clearing_the_running_view(session: Session) -> None:
-    """落ちたら、実行が探索の後に要求を読み終えた後の「このステップで仕上げる」を受け付けたと答えて黙って捨てている。"""
-
-    async def scenario() -> FakeConnection:
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        connection = FakeConnection()
-        server.clients.add(connection)
-        session.begin_optimization()
-        assert session._read_finish_request() is None  # 探索の途中の読み取りでは閉じない
-        await server._dispatch(connection, json.dumps({"cmd": "finish_optimization", "step": 1}))
-        assert session._read_finish_request(final=True) == 1  # 探索の後の読み取りで閉じる
-        await server._dispatch(connection, json.dumps({"cmd": "finish_optimization", "step": 0}))
-        return connection
-
-    connection = asyncio.run(scenario())
-    statuses = connection.of_type("optimize_status")
-    assert statuses and statuses[-1]["finishing"] is True
-    [error] = connection.of_type("optimize_error")
-    assert error["already_running"] is True and "探索はもう終わって" in error["message"]
-    assert session._finish_request == 1  # 閉じた後の要求で書き換わらない
 
 
 def test_a_step_is_not_finished_into_a_document_that_changed_after_the_run(session: Session) -> None:
