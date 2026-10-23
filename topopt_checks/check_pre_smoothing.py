@@ -9,7 +9,7 @@ import _record
 import numpy as np
 
 from duocad.topopt import trace, voxelize
-from duocad.topopt.acceptance import inspect_document
+from duocad.optimize_acceptance import inspect_document
 
 
 def read_run(run):

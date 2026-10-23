@@ -270,6 +270,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 
 **`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py`。一覧は下の表）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
 `tests/test_boundaries.py` がソースを静的走査して検査する（動的importも検出）。
+`topopt/`・`optimize_steps.py`・`optimize_voxels.py` は実行器 `optimize_run` と文書アダプター `optimize_acceptance` を import しない。
 
 | モジュール | 役割 | OCP | build123d |
 |---|---|---|---|
@@ -311,6 +312,10 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbを掛ける唯一の口 `apply`。配りものは `view`、自動保存の進行は `autosaver`、最適化の実行と記録は `optimization`、結果配送の控えは `optimization_results` へ委譲） | ✗ | ✗ |
 | `duocad/autosave.py` | `Autosave`（書き込みの排他・順序・古い要求の省略・完了と失敗の回収、未保存状態） | ✗ | ✗ |
 | `duocad/optimization.py` | `Optimization`（実行と直近の記録の寿命）、`OptimizationRun`（開始元・作業コピー・中断と仕上げ受付）、`OptimizationRecord`（ステップと再仕上げの前提）、`OptimizationResults`（別文書への保存・未配送と未表示の控え） | ✗ | ✗ |
+| `duocad/optimize_run.py` | 文書の条件確定・数値探索・完成化・進捗・結果追加の実行器 | ✗ | ✗ |
+| `duocad/optimize_steps.py` | 合格ステップの記録・一覧・表面ボクセルと再仕上げの窓口 | ✗ | ✗ |
+| `duocad/optimize_acceptance.py` | 文書と旧密度場記録を `topopt.acceptance.inspect` の数値入力へ変換 | ✗ | ✗ |
+| `duocad/optimize_voxels.py` | 実行器とステップ記録に共通の表示用ボクセルデータ・間引き上限 | ✗ | ✗ |
 | `duocad/document_store.py` | `DocumentStore`（文書ファイル・サムネイル・保存先と書き出し先の検査。現在の文書や保存キューは持たない） | ✗ | ✗ |
 | `duocad/view.py` | `DocumentView`（配りもの＝状態配信・版・キャッシュ。文書を変えない） | ✗ | ✗ |
 | `duocad/paths.py` | `REPO_ROOT` と既定の置き場（`web/dist` / `models`） | ✗ | ✗ |
