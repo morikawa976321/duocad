@@ -139,7 +139,7 @@ PR は残りの4件の4本になった。
 | #184 スケッチの投影 | #214 | `claude/sketch-184-project` | 親(手元) |
 | #201 測定・スケッチの点 | #215 | `claude/sketch-201-measure-points` | 親(手元)。同じ #201 のクラウド版(`session_01SmbqN7ojs4xKbCzxRwjHip`)は採らず `claude/sketch-201-measure-points-cloud` に残した |
 | #193 split_body | #216 | `claude/body-193-split-body` | クラウド `session_017moRvu1EwfqoivmeSY4KWz`(`session_01UiaqDNEwXg1mvndNxEAxs7` と重複) → 親が検証 |
-| #186 干渉チェック | {pr186} | `claude/body-186-interference` | クラウド `session_01HeAhy6W2onohTptM78PbJo` → 親が検証 |
+| #186 干渉チェック | #217 | `claude/body-186-interference` | クラウド `session_01HeAhy6W2onohTptM78PbJo` → 親が検証 |
 
 各 PR は、取り込んだ直後の develop で pytest 全体・`npm run check`・`npm run build`・関係する実機 smoke を通してから出した。
 細部の判断は decisions.md の [スケッチ][ボディ] の節。本人に残る判断は無い。
