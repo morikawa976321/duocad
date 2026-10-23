@@ -60,7 +60,7 @@ export function refKind(ref: SelectionRef): SelectableKind {
  * | body | `body:<body>` —— **添字を見ない**(Bodyは他のBodyの部分形状ではない) |
  * | face / edge / vertex | `<kind>:<body>:<index>` |
  *
- * `provenance` は鍵に入れない(コアの `same_ref` が見ていない)。点は `p` を付けて書く(素で並べると `point: null` と空文字の点名が同じ鍵になる)。
+ * `provenance` は鍵に入れない(コアの `ref_key` が見ていない)。点は `p` を付けて書く(素で並べると `point: null` と空文字の点名が同じ鍵になる)。
  */
 export function refKey(ref: SelectionRef): string {
   const kind = refKind(ref)
@@ -78,7 +78,7 @@ export function refKey(ref: SelectionRef): string {
   return `${item.kind}:${item.body}:${item.index}`
 }
 
-/** 2つの参照が同じ実体を指すか(コアの `same_ref` と同じ)。 */
+/** 2つの参照が同じ実体を指すか(コアの `ref_key` の一致と同じ)。 */
 export function sameRef(left: SelectionRef, right: SelectionRef): boolean {
   return refKey(left) === refKey(right)
 }

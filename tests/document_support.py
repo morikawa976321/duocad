@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import kernel, kernel_sketch, query
+from duocad import kernel, kernel_sketch, query, selection
 from duocad.document import Body, Document
 from duocad.oplog import OpLog, verb_handler
 from duocad.region import region_ref, regions
@@ -150,3 +150,8 @@ def install_live_pattern(document: Document, verb: str, sketch_id: str, entities
     )
     verb_handler(verb).do(document, operation)
     return pattern_id
+
+
+def shape_ref(document: Document, body_id: str, kind: str, index: int) -> dict:
+    """面・辺・頂点を指す参照を、本体の可視性・種別・添字の検査を通して作る。"""
+    return selection._select_shape(document, body_id, kind, index)

@@ -51,40 +51,6 @@ class WorkerProcess(worker_process.WorkerProcess):
         )
 
 
-class InProcessWorker:
-    """同じ要求を呼び出し元のプロセスで処理する。`WorkerProcess` と同じ口(時間の上限は掛からない。軽い形のテスト用)。"""
-
-    def __init__(self, load_message: Dict[str, Any], *, cancel: Optional[threading.Event] = None) -> None:
-        self._load = load_message
-        self._cancel = cancel
-        self._handler: Optional[Handler] = None
-        self.starts = 0
-
-    def request(self, message: Dict[str, Any], timeout: float) -> Dict[str, Any]:  # noqa: ARG002
-        if self._cancel is not None and self._cancel.is_set():
-            raise WorkerCancelled()
-        if self._handler is None:
-            self._handler = Handler()
-            self._handler.handle(self._load)
-            self.starts += 1
-        try:
-            return self._handler.handle(message)
-        except Exception as error:  # noqa: BLE001
-            raise WorkerRemoteError(f"{type(error).__name__}: {error}") from error
-
-    def restart(self) -> None:
-        self._handler = None
-
-    def close(self) -> None:
-        self._handler = None
-
-    def __enter__(self) -> "InProcessWorker":
-        return self
-
-    def __exit__(self, *_exc: Any) -> None:
-        self.close()
-
-
 # ------------------------------------------------------------------------------------------------
 # 子の本体
 # ------------------------------------------------------------------------------------------------

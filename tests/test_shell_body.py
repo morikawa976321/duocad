@@ -12,7 +12,7 @@ from duocad import kernel_shell, query, selection
 from duocad.document import Document
 from duocad.entry import entry_for
 from duocad.verbs import fillet, shell_body
-from document_support import new_box, replay_through_json, second_body
+from document_support import new_box, replay_through_json, second_body, shape_ref
 
 WIDTH, DEPTH, HEIGHT = 40.0, 30.0, 20.0
 THICKNESS = 2.0
@@ -140,7 +140,7 @@ def test_the_entry_takes_the_opening_faces_from_the_selection():
     doc = Document()
     body_id = _box(doc)
     top = _face_where(doc, body_id, 2, HEIGHT)
-    selection.set_selection(doc, refs=[selection.select_face(doc, body_id, top)])
+    selection.set_selection(doc, refs=[shape_ref(doc, body_id, "face", top)])
 
     result = entry_for("shell_body")(doc, thickness=THICKNESS)
 
@@ -171,7 +171,7 @@ def test_the_entry_refuses_faces_of_two_bodies():
     other = second_body(doc)
     selection.set_selection(
         doc,
-        refs=[selection.select_face(doc, first, 1), selection.select_face(doc, other, 1)],
+        refs=[shape_ref(doc, first, "face", 1), shape_ref(doc, other, "face", 1)],
     )
     log_before = len(doc.log.entries)
     with pytest.raises(ValueError, match="multiple bodies"):

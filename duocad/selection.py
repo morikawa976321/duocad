@@ -300,7 +300,7 @@ def ref_kind(ref: dict) -> str:
     """参照の種別を返す(`"face"|"edge"|"vertex"|"body"|"region"|"sketch_entity"`)。
 
     RegionRef も SketchEntityRef も `kind` キーを持たない: `"sketch"` キーがあればスケッチ側で、`"entity"` を持てば
-    `SKETCH_ENTITY_KIND`、持たなければ `REGION_KIND`。種別判定はここ1箇所(`selected_items` と `same_ref` が別規則を持たないため)。
+    `SKETCH_ENTITY_KIND`、持たなければ `REGION_KIND`。種別判定はここ1箇所(`selected_items` と `ref_key` が別規則を持たないため)。
     どちらでもない形は ValueError。
     """
     if not isinstance(ref, dict):
@@ -596,24 +596,6 @@ def selectable_bodies(doc: Document) -> List[BodyId]:
     return [body.id for body in doc.bodies if body.visible]
 
 
-def select_face(doc: Document, body_id: BodyId, face_index: int) -> dict:
-    """面を指す ShapeRef を作る。不可視Body・存在しないBody・範囲外の添字は例外。
-
-    **メッシュボディは断る**(`_reject_mesh`)。
-    """
-    return _select_shape(doc, body_id, "face", face_index)
-
-
-def select_edge(doc: Document, body_id: BodyId, edge_index: int) -> dict:
-    """辺を指す ShapeRef を作る(添字は `query.describe_edges` / `fillet` と同じ1始まり)。"""
-    return _select_shape(doc, body_id, "edge", edge_index)
-
-
-def select_vertex(doc: Document, body_id: BodyId, vertex_index: int) -> dict:
-    """頂点を指す ShapeRef を作る(添字は `kernel.count_subshapes(shape, "vertex")` の1始まり)。"""
-    return _select_shape(doc, body_id, "vertex", vertex_index)
-
-
 def _select_shape(doc: Document, body_id: BodyId, kind: str, index: int, *, allow_hidden: bool = False) -> dict:
     """面・辺・頂点で同じ手順: 可視Bodyを引く → メッシュを断る → 数える → `_shape_ref`。
     検査の順序(存在 → 可視 → メッシュ → 範囲)は `_coerce_refs` の一括経路と同じ。"""
@@ -706,7 +688,7 @@ def select_sketch_entity(
 
 
 def ref_key(ref: dict) -> tuple:
-    """参照の**同一性の鍵**。等しい鍵 ⇔ 同じ実体を指す(`same_ref` はこれで定義される)。
+    """参照の**同一性の鍵**。等しい鍵 ⇔ 同じ実体を指す。
 
     **等価判定を書き下ろす場所はここ1つだけ**(別に書くと「重複が残る / 別物を同一視する」が静かに入る)。
     ハッシュ可能なタプルなので `modify_selection` は集合引きで重複を落とせる。
@@ -732,14 +714,6 @@ def ref_key(ref: dict) -> tuple:
     if kind == BODY_KIND:
         return (BODY_KIND, ref["body"])
     return (kind, ref["body"], _as_index(ref["index"]))
-
-
-def same_ref(left: dict, right: dict) -> bool:
-    """2つの参照が同じ実体を指すか(`provenance` は見ない)。
-
-    重複除去と `remove` の両方がこの判定を使う。判定の実体は `ref_key`(別々に書くと集合引きで落ちる重複とずれる)。種別が違えば別物。
-    """
-    return ref_key(left) == ref_key(right)
 
 
 # --------------------------------------------------------------------------------------
@@ -823,7 +797,7 @@ def _coerce_refs(
     allow_hidden: bool = False,
 ) -> List[dict]:
     """`_coerce_ref` を複数件まとめて処理する版。
-    `select_*` 経由だと参照1件ごとに `kernel.face_count` 等が `TopExp.MapShapes_s` で形状全体を走査し直すので、
+    `_coerce_ref` を1件ずつ通すと参照1件ごとに `kernel.face_count` 等が `TopExp.MapShapes_s` で形状全体を走査し直すので、
     同じボディを何度も指すドラッグ選択で選択件数ぶん全走査になる。`(body_id, kind)` ごとに数え上げを1回だけ行って使い回す。
     **通す/弾くの判定は `_coerce_ref` と1件も変えない**(門番・範囲外検査・例外の種類とメッセージは同じ)。
 
@@ -854,7 +828,7 @@ def _coerce_refs(
                 _require_visible(body)
             count_key = (body_id, kind)
             if count_key not in counts:
-                # 単発の `select_*` と同じ門番(このループは `select_face` 等を通らないので断りもここへ写す)。
+                # 単発の `_select_shape` と同じ門番(このループは `_select_shape` を通らないので断りもここへ写す)。
                 _reject_mesh(body, f"{_KIND_LABELS[kind]}を指す")
                 counts[count_key] = _subshape_count(body.shape, kind)
             out.append(_shape_ref(body_id, kind, ref["index"], counts[count_key]))

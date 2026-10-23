@@ -89,7 +89,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **`pickedLabel(value, target)` は `target` を渡す。** 同じ `{sketch, entity, point:null}` でも `sketchPoint` は「図形の最初の点」、`sketchEntity` は「図形1つ」。TS 上は省略できるが第1引数だけで呼ぶと表示が誤る。
 - **幽霊は無い**(`preview: 'none'`/`previewable=False` を両方維持。`resolvePicksForGhost` 経路には繋がっていない)。Enter で確定する(`needsEnter` が真)。
 - 却下した案: 専用の入力モード(`PickArgSpec` の `pendingPick`/`armedPick`/`wantsPick` と二重になる)、軸ピックを `optional` にして自動で構えない案(軸が要ることが伝わらない)、スケッチ側の `base_plane` 相当の3択(平面2Dに基準"軸"の概念が無い)。
-- **`face_fingerprint`(面積+法線照合)は鏡映で壊れない**(複製の新ボディは元と別 ID なので指紋が独立)。鏡映複製ソリッドの面法線は反転する(上面 `[0,0,1]` → `[0,0,-1]`)が `face_fingerprint`/`select_face` は壊れない。Body に元ボディ由来の参照を足すなら、この独立性の前提から見直す。
+- **`face_fingerprint`(面積+法線照合)は鏡映で壊れない**(複製の新ボディは元と別 ID なので指紋が独立)。鏡映複製ソリッドの面法線は反転する(上面 `[0,0,1]` → `[0,0,-1]`)が `face_fingerprint`/面の選択は壊れない。Body に元ボディ由来の参照を足すなら、この独立性の前提から見直す。
 
 ### 踏んだ罠
 
