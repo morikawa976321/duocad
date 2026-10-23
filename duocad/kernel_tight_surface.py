@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import math
+
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
@@ -18,14 +20,15 @@ from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
 from OCP.GCPnts import GCPnts_AbscissaPoint
-from OCP.GeomAPI import GeomAPI_Interpolate, GeomAPI_ProjectPointOnSurf
+from OCP.GeomAPI import GeomAPI_Interpolate, GeomAPI_ProjectPointOnCurve, GeomAPI_ProjectPointOnSurf
 from OCP.GeomAbs import GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.GeomFill import GeomFill_Pipe
 from OCP.GeomProjLib import GeomProjLib
 from OCP.ShapeFix import ShapeFix_Edge
+from OCP.ShapeAnalysis import ShapeAnalysis_Surface
 from OCP.TColgp import TColgp_HArray1OfPnt
 from OCP.TColStd import TColStd_HArray1OfReal
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_ON, TopAbs_REVERSED, TopAbs_SHELL, TopAbs_WIRE
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_ON, TopAbs_OUT, TopAbs_REVERSED, TopAbs_SHELL, TopAbs_WIRE
 from OCP.TopExp import TopExp
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
 from OCP.TopoDS import TopoDS
@@ -55,18 +58,27 @@ def _normal(face, u, v):
 
 
 def _contact_state(face, uv):
-    """射影の UV を面の周期に揃えて、トリム内の接点かを返す。"""
+    """UV 範囲内の全周期の代表点で、トリム内の接点かを返す。"""
     face = TopoDS.Face_s(face)
     surface = BRep_Tool.Surface_s(face)
     u, v = uv
     first_u, last_u, first_v, last_v = BRepTools.UVBounds_s(face)
-    # 外部の罠: 射影はシーム上で 0 の代わりに 2π−ε を返し、
-    # BRepClass_FaceClassifier は部分円柱の同じ接点を面外と判定する。
-    if surface.IsUPeriodic():
-        u += surface.UPeriod() * round(((first_u + last_u) / 2 - u) / surface.UPeriod())
-    if surface.IsVPeriodic():
-        v += surface.VPeriod() * round(((first_v + last_v) / 2 - v) / surface.VPeriod())
-    return BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State()
+
+    def representatives(value, first, last, periodic, period):
+        if not periodic:
+            return [value]
+        return [value + k * period for k in range(math.ceil((first - value - 1e-7) / period),
+                                                 math.floor((last - value + 1e-7) / period) + 1)]
+
+    us = representatives(u, first_u, last_u, surface.IsUPeriodic(), surface.UPeriod() if surface.IsUPeriodic() else 0)
+    vs = representatives(v, first_v, last_v, surface.IsVPeriodic(), surface.VPeriod() if surface.IsVPeriodic() else 0)
+    state = TopAbs_OUT
+    for u in us:
+        for v in vs:
+            state = BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State()
+            if state in (TopAbs_IN, TopAbs_ON):
+                return state
+    return state
 
 
 def _walls(shape, top):
@@ -296,6 +308,76 @@ def _curves(contour, low, high, count=128):
     return curves
 
 
+def _support_pieces(edge, face, role="support"):
+    """pcurve を作る前に、支持面の周期の切れ目で3D辺を分ける。"""
+    edge, face = TopoDS.Edge_s(edge), TopoDS.Face_s(face)
+    surface = BRep_Tool.Surface_s(face)
+    axes = [(axis, period, origin) for axis, periodic, period, origin in (
+        (0, surface.IsUPeriodic(), surface.UPeriod() if surface.IsUPeriodic() else 0, surface.Bounds()[0]),
+        (1, surface.IsVPeriodic(), surface.VPeriod() if surface.IsVPeriodic() else 0, surface.Bounds()[2])) if periodic]
+    curve = BRep_Tool.Curve_s(edge, 0.0, 0.0)
+    adaptor = BRepAdaptor_Curve(edge)
+    first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+    analysis = ShapeAnalysis_Surface(surface)
+    for i in range(1, analysis.NbSingularities(1e-7) + 1):
+        pole = gp_Pnt()
+        if analysis.Singularity(i, 0.0, pole, gp_Pnt2d(), gp_Pnt2d(), 0.0, 0.0, False):
+            nearest = GeomAPI_ProjectPointOnCurve(pole, curve, first, last)
+            # 設計上の除外幅。極の内外ではなく、接点辺までの3D距離を使う。
+            distance = min(pole.Distance(adaptor.Value(first)), pole.Distance(adaptor.Value(last)),
+                           nearest.LowerDistance() if nearest.NbPoints() else math.inf)
+            if distance < 1e-4 * tight._diagonal(face):
+                raise Unsupported(f"the {role} surface parameter pole is near a contact curve")
+    if not axes:
+        return [edge]
+    parameters = [first + (last - first) * i / 128 for i in range(129)]
+    uvs = [_projection(adaptor.Value(t), surface)[1] for t in parameters]
+    cuts = []
+    for axis, period, origin in axes:
+        # 面に保持されたシームが支持面の標準の周期とずれている場合も拾う。
+        seams = [origin]
+        for seam in tight._edges(face):
+            if BRep_Tool.IsClosed_s(seam, face):
+                pc = BRep_Tool.CurveOnSurface_s(seam, face, 0.0, 0.0)
+                if pc is not None:
+                    p = pc.Value(pc.FirstParameter())
+                    value = p.X() if axis == 0 else p.Y()
+                    if all(abs((value - known + period / 2) % period - period / 2) > 1e-9 for known in seams):
+                        seams.append(value)
+        for seam in seams:
+            values = [(uv[axis] - seam) % period for uv in uvs]
+            for i, (a, b) in enumerate(zip(values, values[1:])):
+                if abs(b - a) <= period / 2:
+                    continue
+                lo, hi = parameters[i:i + 2]
+                target = period if a > b else 0.0
+                for _ in range(44):
+                    middle = (lo + hi) / 2
+                    value = (_projection(adaptor.Value(middle), surface)[1][axis] - seam) % period
+                    value += period * round((a - value) / period)
+                    if (value < target) == (a < target):
+                        lo = middle
+                    else:
+                        hi = middle
+                cut = (lo + hi) / 2
+                if first + 1e-10 * (last - first) < cut < last - 1e-10 * (last - first):
+                    cuts.append(cut)
+    cuts = sorted(cuts)
+    unique = [first]
+    for cut in cuts:
+        if cut - unique[-1] > 1e-9 * (last - first):
+            unique.append(cut)
+    unique.append(last)
+    if len(unique) == 2:
+        return [edge]
+    # 隣り合う片は同じ頂点を使う。管・帽子側の同じ3D曲線とは縫合で分割を共有する。
+    vertices = [TopExp.FirstVertex_s(edge),
+                *(BRepBuilderAPI_MakeVertex(adaptor.Value(t)).Vertex() for t in unique[1:-1]),
+                TopExp.LastVertex_s(edge)]
+    return [BRepBuilderAPI_MakeEdge(curve, v1, v2, a, b).Edge()
+            for a, b, v1, v2 in zip(unique, unique[1:], vertices, vertices[1:])]
+
+
 def _pcurve(edge, face, tolerance):
     """支持面上の pcurve を付け、3D の辺からのずれを検査する。"""
     edge, face = TopoDS.Edge_s(edge), TopoDS.Face_s(face)
@@ -361,8 +443,9 @@ def _rim_pieces(contour, low, high):
             curve = _curves(contour, lo, hi, max(32, int((hi - lo) / contour.length * 512)))[1]
             edge = BRepBuilderAPI_MakeEdge(curve).Edge()
             wall = contour.walls[index]
-            _pcurve(edge, wall, 1e-7)
-            pieces.append((edge, wall))
+            for piece in _support_pieces(edge, wall, "wall"):
+                _pcurve(piece, wall, 1e-7)
+                pieces.append((piece, wall))
     return pieces
 
 
@@ -397,9 +480,7 @@ class _Trimmed:
 
 
 def _split_face(face, edges):
-    """接点線と支持面のシームを交差分割し、有効な面を返す。"""
-    # 外部の罠: BRepFeat_SplitShape は接点線と周期面のシームを交差分割せず、
-    # 極を含む球面の輪や円柱壁に UnorientableShape を返すことがある。
+    """周期内で連続な pcurve を持つ接点辺で支持面を分割する。"""
     arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
     arguments.Append(face)
     tools.Append(tight._wire(edges))
@@ -411,7 +492,7 @@ def _split_face(face, edges):
     if not split.IsDone():
         raise Unsupported("the contact curves could not split an original support face")
     pieces = tight._faces(split.Shape())
-    if not all(BRepCheck_Analyzer(piece).IsValid() for piece in pieces):
+    if not pieces or not all(BRepCheck_Analyzer(piece).IsValid() for piece in pieces):
         raise Unsupported("the contact curves produced an invalid support face")
     return pieces
 
@@ -448,6 +529,7 @@ def round_surface_loop(shape, top, radius):
             raise Unsupported("the single top contact edge is not closed")
         vertex = BRepBuilderAPI_MakeVertex(curve.Value(first)).Vertex()
         top_edges = [BRepBuilderAPI_MakeEdge(BRep_Tool.Curve_s(edge, 0.0, 0.0), vertex, vertex, first, last).Edge()]
+    top_edges = [piece for edge in top_edges for piece in _support_pieces(edge, top, "top")]
     for edge in top_edges:
         _pcurve(edge, top, 1e-7)
     pieces = _split_face(top, top_edges)

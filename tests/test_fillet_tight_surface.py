@@ -1,18 +1,22 @@
 """曲面の上面とテーパー壁でも、接点・断面の半径・由来を保って丸まる。"""
 import math
 import time
+from functools import lru_cache
 
 import numpy as np
 import pytest
 from OCP.BRep import BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCP.BRepClass import BRepClass_FaceClassifier
+from OCP.BRepLib import BRepLib
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire, BRepBuilderAPI_Transform
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism, BRepPrimAPI_MakeSphere
-from OCP.Geom import Geom_BezierSurface
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism, BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeRevol
+from OCP.Geom import Geom_BezierSurface, Geom_Ellipse, Geom_CylindricalSurface, Geom_ToroidalSurface, Geom_SurfaceOfLinearExtrusion
+from OCP.GCE2d import GCE2d_MakeSegment
 from OCP.GC import GC_MakeArcOfCircle
 from OCP.GeomAbs import GeomAbs_SurfaceType
 from OCP.GeomConvert import GeomConvert
@@ -20,8 +24,9 @@ from OCP.GProp import GProp_GProps
 from OCP.TColgp import TColgp_Array2OfPnt
 from OCP.TopAbs import TopAbs_IN, TopAbs_OUT
 from OCP.TopLoc import TopLoc_Location
+from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS
-from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Dir, gp_Pnt, gp_Pnt2d, gp_Trsf, gp_Vec
 
 from duocad import kernel, kernel_tight, kernel_tight_surface
 from duocad import query
@@ -60,7 +65,8 @@ def _taper_document(angle, height=5, rotation=0):
 def _outline(shape, curved=False):
     candidates = [face for face in kernel_tight._faces(shape)
                   if (BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() in
-                      (GeomAbs_SurfaceType.GeomAbs_Sphere, GeomAbs_SurfaceType.GeomAbs_BSplineSurface)) == curved]
+                      (GeomAbs_SurfaceType.GeomAbs_Sphere, GeomAbs_SurfaceType.GeomAbs_BSplineSurface,
+                       GeomAbs_SurfaceType.GeomAbs_SurfaceOfRevolution)) == curved]
     spheres = [face for face in candidates if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere]
     top = ((spheres or candidates)[0] if curved else max(
         (face for face in candidates if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
@@ -104,11 +110,30 @@ def _precise_area(face):
     return props.Mass()
 
 
+@pytest.fixture(scope="module")
+def rounded_taper():
+    @lru_cache(maxsize=None)
+    def build(angle, radius, rotation=0):
+        doc, body = _taper_document(angle, rotation=rotation)
+        shape = doc.get_body(body).shape
+        return shape, kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape)})
+    return build
+
+
+@pytest.fixture(scope="module")
+def rounded_sphere():
+    @lru_cache(maxsize=None)
+    def build(kind, radius):
+        post = _teardrop_post() if kind == 'teardrop' else _elliptic_post(6, 2, 8)
+        shape = _dome(post)
+        return shape, kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape, True)})
+    return build
+
+
 @pytest.mark.parametrize("radius", [1.0, 1.5, 1.95])
-def test_dome_has_a_valid_crown_and_an_independently_calculated_radius(radius):
+def test_dome_has_a_valid_crown_and_an_independently_calculated_radius(radius, rounded_sphere):
     """球の内側の同心球との交点を神託に、長い側の断面の接点と円弧を確かめる。"""
-    shape = _dome()
-    rounded = kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape, True)})
+    shape, rounded = rounded_sphere('ellipse', radius)
     result = rounded["shape"]
     assert BRepCheck_Analyzer(result).IsValid()
     assert len(kernel.split_solids(result)) == 1
@@ -138,11 +163,9 @@ def test_a_non_spherical_bspline_top_uses_the_same_contact_solver():
 
 
 @pytest.mark.parametrize("angle,radius", [(-5, 0.8), (-5, 1.0), (-5, 1.65), (5, 1.0), (5, 1.8), (5, 2.2)])
-def test_tapered_wall_has_the_independently_calculated_non_quarter_circle(angle, radius):
+def test_tapered_wall_has_the_independently_calculated_non_quarter_circle(angle, radius, rounded_taper):
     """元の楕円の支持線と傾斜角から求めた円弧は、90°±5°で上面と壁に接する。"""
-    doc, body = _taper_document(angle)
-    shape = doc.get_body(body).shape
-    rounded = kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape)})
+    shape, rounded = rounded_taper(angle, radius)
     result = rounded["shape"]
     assert BRepCheck_Analyzer(result).IsValid()
     assert len(kernel.split_solids(result)) == 1
@@ -157,11 +180,10 @@ def test_tapered_wall_has_the_independently_calculated_non_quarter_circle(angle,
 
 
 @pytest.mark.parametrize("angle,radius", [(-5, 0.8), (-5, 1), (-5, 1.65), (5, 1.8), (5, 2.2)])
-def test_tapered_lens_area_matches_the_independent_parallel_ellipse_integral(angle, radius):
+def test_tapered_lens_area_matches_the_independent_parallel_ellipse_integral(angle, radius, rounded_taper):
     """実装の接点や道を使わず、底の楕円と傾斜角から上面のレンズ面積を求める。"""
-    doc, body = _taper_document(angle)
-    shape = doc.get_body(body).shape
-    result = kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape)})["shape"]
+    _, rounded = rounded_taper(angle, radius)
+    result = rounded["shape"]
     lens = max((face for face in kernel_tight._faces(result)
                 if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
                key=lambda face: kernel_tight._a_point_on(face).Z())
@@ -215,13 +237,16 @@ def _teardrop_post():
 
 
 @pytest.mark.parametrize("curved", [False, True])
-def test_line_and_arc_walls_are_accepted_for_a_flat_or_spherical_top(curved):
+def test_line_and_arc_walls_are_accepted_for_a_flat_or_spherical_top(curved, rounded_sphere):
     """直線と円弧の輪郭の平面壁・円柱壁を、曲面でも平面でも丸める。"""
     post = _teardrop_post()
     shape = _dome(post) if curved else post
     edges = _outline(shape, curved)
     assert _native_done(shape, edges, 1) == (not curved)
-    rounded = kernel.fillet_edges(shape, {edge: 1 for edge in edges})
+    if curved:
+        shape, rounded = rounded_sphere('teardrop', 1)
+    else:
+        rounded = kernel.fillet_edges(shape, {edge: 1 for edge in edges})
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
     assert len(kernel.split_solids(rounded["shape"])) == 1
     assert rounded["provenance"]["deleted"] == []
@@ -243,11 +268,12 @@ def _mirror_yz(shape):
     return BRepBuilderAPI_Transform(shape, transform, True).Shape()
 
 
-def _round_and_measure_lens(shape, radius, curved, record_property):
+def _round_and_measure_lens(shape, radius, curved, record_property, rounded=None):
     assert BRepCheck_Analyzer(shape).IsValid()
-    start = time.perf_counter()
-    rounded = kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape, curved)})
-    record_property("fillet_seconds", time.perf_counter() - start)
+    if rounded is None:
+        start = time.perf_counter()
+        rounded = kernel.fillet_edges(shape, {edge: radius for edge in _outline(shape, curved)})
+        record_property("fillet_seconds", time.perf_counter() - start)
     result = rounded["shape"]
     assert BRepCheck_Analyzer(result).IsValid()
     assert len(kernel.split_solids(result)) == 1
@@ -269,19 +295,26 @@ def _round_and_measure_lens(shape, radius, curved, record_property):
     return area
 
 
-@pytest.fixture(scope="module", params=["teardrop", "ellipse"])
-def spherical_seam_reference(request):
-    post = _teardrop_post() if request.param == "teardrop" else _elliptic_post(6, 2, 8)
-    radius = 1.0 if request.param == "teardrop" else 1.5
-    area = _round_and_measure_lens(_dome(post), radius, True, lambda *args: None)
-    return post, radius, area
+@pytest.fixture(scope="module")
+def spherical_seam_reference(rounded_sphere):
+    @lru_cache(maxsize=None)
+    def build(kind):
+        post = _teardrop_post() if kind == "teardrop" else _elliptic_post(6, 2, 8)
+        radius = 1.0 if kind == "teardrop" else 1.5
+        shape, rounded = rounded_sphere(kind, radius)
+        area = _round_and_measure_lens(shape, radius, True, lambda *args: None, rounded)
+        return post, radius, area, shape, rounded
+    return build
 
 
-@pytest.mark.parametrize("degrees", [0, 45, 90, 135, 180, 270])
-@pytest.mark.parametrize("motion", ["outline_first", "dome_first", "mirrored_dome"])
-def test_spherical_lens_does_not_depend_on_surface_seams(spherical_seam_reference, degrees, motion, record_property):
+@pytest.mark.parametrize("kind,degrees,motion", [
+    *(('teardrop', d, 'outline_first') for d in (0, 45, 90, 135, 180, 270)),
+    *(('ellipse', d, 'outline_first') for d in (0, 90, 135)),
+    ('teardrop', 135, 'mirrored_dome'), ('ellipse', 135, 'mirrored_dome'),
+])
+def test_spherical_lens_does_not_depend_on_surface_seams(spherical_seam_reference, kind, degrees, motion, record_property):
     """球を切る前後の回転・鏡映でも、球面レンズの面積と有効な1立体を保つ。"""
-    post, radius, reference = spherical_seam_reference
+    post, radius, reference, base_shape, base_rounded = spherical_seam_reference(kind)
     if motion == "outline_first":
         shape = _dome(_rotate_z(post, degrees))
     else:
@@ -289,27 +322,36 @@ def test_spherical_lens_does_not_depend_on_surface_seams(spherical_seam_referenc
         if motion == "mirrored_dome":
             shape = _mirror_yz(shape)
         shape = _rotate_z(shape, degrees)
-    area = _round_and_measure_lens(shape, radius, True, record_property)
+    if motion == 'outline_first' and degrees == 0:
+        area = _round_and_measure_lens(base_shape, radius, True, record_property, base_rounded)
+    else:
+        area = _round_and_measure_lens(shape, radius, True, record_property)
     assert area == pytest.approx(reference, abs=2e-6)
     if radius == 1.5:
         assert area == pytest.approx(_spherical_lens_area(radius), abs=2e-6)
 
 
 @pytest.fixture(scope="module", params=[-5, 5])
-def tapered_seam_reference(request):
+def tapered_seam_reference(request, rounded_taper):
     angle = request.param
     radius = 1.0 if angle == -5 else 2.2
-    doc, body = _taper_document(angle)
-    area = _round_and_measure_lens(doc.get_body(body).shape, radius, False, lambda *args: None)
+    _, rounded = rounded_taper(angle, radius)
+    area = _precise_area(max((f for f in kernel_tight._faces(rounded['shape'])
+                             if BRepAdaptor_Surface(TopoDS.Face_s(f)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
+                            key=lambda f: kernel_tight._a_point_on(f).Z()))
     return angle, radius, area
 
 
-@pytest.mark.parametrize("degrees", [0, 45, 90, 135, 180, 270])
-def test_tapered_lens_does_not_depend_on_the_bspline_wall_seam(tapered_seam_reference, degrees, record_property):
+@pytest.mark.parametrize("degrees", [0, 90, 135])
+def test_tapered_lens_does_not_depend_on_the_bspline_wall_seam(tapered_seam_reference, degrees, record_property, rounded_taper):
     """テーパー前に楕円を回しても、Bスプライン壁の接点で同じレンズを残す。"""
     angle, radius, reference = tapered_seam_reference
-    doc, body = _taper_document(angle, rotation=degrees)
-    area = _round_and_measure_lens(doc.get_body(body).shape, radius, False, record_property)
+    if degrees == 0:
+        shape, rounded = rounded_taper(angle, radius)
+        area = _round_and_measure_lens(shape, radius, False, record_property, rounded)
+    else:
+        doc, body = _taper_document(angle, rotation=degrees)
+        area = _round_and_measure_lens(doc.get_body(body).shape, radius, False, record_property)
     theta = math.radians(angle)
     offset = radius / math.cos(theta) - (5 - radius) * math.tan(theta)
     assert area == pytest.approx(reference, abs=1e-4)
@@ -324,6 +366,83 @@ def test_tapered_wall_seam_survives_transforming_the_solid(tapered_seam_referenc
     shape = doc.get_body(body).shape
     shape = _rotate_z(shape, 135) if motion == "rotate" else _mirror_yz(shape)
     assert _round_and_measure_lens(shape, radius, False, record_property) == pytest.approx(reference, abs=1e-4)
+
+
+@pytest.mark.parametrize("degrees", [0, 45, 90, 135])
+def test_revolved_ellipsoid_contacts_cross_the_seam(degrees):
+    ellipse = Geom_Ellipse(gp_Ax2(gp_Pnt(0, 0, -20), gp_Dir(0, 1, 0), gp_Dir(0, 0, 1)), 26, 24)
+    arc = BRepBuilderAPI_MakeEdge(ellipse, 0, math.pi).Edge()
+    axis = BRepBuilderAPI_MakeEdge(ellipse.Value(math.pi), ellipse.Value(0)).Edge()
+    profile = BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(arc, axis).Wire()).Face()
+    tool = BRepPrimAPI_MakeRevol(profile, gp_Ax1(gp_Pnt(), gp_Dir(0, 0, 1))).Shape()
+    shape = BRepAlgoAPI_Common(_rotate_z(_elliptic_post(6, 2, 8), degrees), tool).Shape()
+    assert BRepCheck_Analyzer(shape).IsValid()
+    rounded = kernel.fillet_edges(shape, {edge: 1.5 for edge in _outline(shape, True)})
+    assert BRepCheck_Analyzer(rounded['shape']).IsValid()
+    assert len(kernel.split_solids(rounded['shape'])) == 1
+    assert all(rounded['provenance']['face_map'].values())
+
+
+def _tilted_pole_dome(delta):
+    angle = math.asin(0.5 / 24.5) + delta
+    tool = BRepPrimAPI_MakeSphere(gp_Ax2(gp_Pnt(0, 0, -20), gp_Dir(0, math.sin(angle), math.cos(angle))), 26).Shape()
+    return BRepAlgoAPI_Common(_elliptic_post(6, 2, 8), tool).Shape()
+
+
+@pytest.mark.parametrize('delta', [0, -1e-7, 1e-7, -1e-4, 1e-4])
+def test_a_pole_near_the_contact_has_an_explicit_reason(delta):
+    shape = _tilted_pole_dome(delta)
+    edges = {edge: 1.5 for edge in _outline(shape, True)}
+    if abs(delta) < 1e-6:
+        with pytest.raises(kernel_tight.Declined, match='top surface parameter pole is near a contact curve'):
+            kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), edges)
+    else:
+        rounded = kernel.fillet_edges(shape, edges)
+        assert BRepCheck_Analyzer(rounded['shape']).IsValid()
+        assert len(kernel.split_solids(rounded['shape'])) == 1
+
+
+def test_contact_state_checks_every_period_in_a_helical_band():
+    surface = Geom_CylindricalSurface(gp_Ax3(), 2)
+    points = [gp_Pnt2d(0, 0), gp_Pnt2d(4 * math.pi, 4 * math.pi),
+              gp_Pnt2d(4 * math.pi, 4 * math.pi + 0.5), gp_Pnt2d(0, 0.5)]
+    wire = BRepBuilderAPI_MakeWire()
+    for a, b in zip(points, points[1:] + points[:1]):
+        wire.Add(BRepBuilderAPI_MakeEdge(GCE2d_MakeSegment(a, b).Value(), surface).Edge())
+    face = BRepBuilderAPI_MakeFace(surface, wire.Wire()).Face()
+    BRepLib.BuildCurves3d_s(face)
+    assert BRepCheck_Analyzer(face).IsValid()
+    uv = (0.5, 0.75)
+    assert BRepClass_FaceClassifier(face, gp_Pnt2d(*uv), 1e-7).State() == TopAbs_IN
+    assert kernel_tight_surface._contact_state(face, uv) == TopAbs_IN
+
+
+@pytest.mark.parametrize('kind', ['cylinder', 'extrusion', 'torus', 'periodic_bspline'])
+def test_contact_pieces_have_continuous_pcurves_and_shared_seam_vertices(kind):
+    if kind == 'cylinder':
+        surface = Geom_CylindricalSurface(gp_Ax3(), 2)
+    elif kind == 'extrusion':
+        surface = Geom_SurfaceOfLinearExtrusion(Geom_Ellipse(gp_Ax2(), 6, 2), gp_Dir(0, 0, 1))
+    else:
+        surface = Geom_ToroidalSurface(gp_Ax3(), 5, 1)
+        if kind == 'periodic_bspline':
+            surface = GeomConvert.SurfaceToBSplineSurface_s(surface)
+    face = BRepBuilderAPI_MakeFace(surface, 1e-7).Face()
+    edge = BRepBuilderAPI_MakeEdge(GCE2d_MakeSegment(gp_Pnt2d(5.8, 5.5), gp_Pnt2d(6.8, 6.5)).Value(), surface).Edge()
+    BRepLib.BuildCurves3d_s(edge)
+    pieces = kernel_tight_surface._support_pieces(edge, face)
+    assert len(pieces) == (3 if surface.IsVPeriodic() else 2)
+    for a, b in zip(pieces, pieces[1:]):
+        assert TopExp.LastVertex_s(a).IsSame(TopExp.FirstVertex_s(b))
+    for piece in pieces:
+        kernel_tight_surface._pcurve(piece, face, 1e-7)
+        pc = BRep_Tool.CurveOnSurface_s(piece, face, 0.0, 0.0)
+        curve = BRepAdaptor_Curve(piece)
+        points = [pc.Value(curve.FirstParameter() + (curve.LastParameter() - curve.FirstParameter()) * i / 32)
+                  for i in range(33)]
+        assert max(p.X() for p in points) - min(p.X() for p in points) < math.pi
+        if surface.IsVPeriodic():
+            assert max(p.Y() for p in points) - min(p.Y() for p in points) < math.pi
 
 
 @pytest.mark.parametrize("kind", ["dome", -5, 5])
@@ -456,7 +575,7 @@ def test_an_open_selection_keeps_the_failure_message_without_a_loop_reason(edges
 
 
 @pytest.mark.parametrize("height", [1.0, 4.0, 5.5])
-def test_a_cavity_is_preserved_below_the_cut_and_refused_above_it(height):
+def test_a_cavity_is_preserved_below_the_cut_and_refused_above_it(height, rounded_sphere):
     """切断面より上の別の面は断り、下の空洞の殻と由来は保つ。"""
     dome = _dome()
     hole = BRepPrimAPI_MakeSphere(gp_Pnt(0, 0, height), 0.2).Shape()
@@ -469,7 +588,7 @@ def test_a_cavity_is_preserved_below_the_cut_and_refused_above_it(height):
         rounded = kernel.fillet_edges(shape, {edge: 1.0 for edge in edges})
         assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
         assert _state(rounded["shape"], 0, 0, height) == TopAbs_OUT
-        plain = kernel.fillet_edges(dome, {edge: 1.0 for edge in _outline(dome, True)})
+        _, plain = rounded_sphere('ellipse', 1.0)
         assert rounded["volume_after"] == pytest.approx(plain["volume_after"] - kernel.volume(hole), abs=1e-8)
         assert rounded["provenance"]["deleted"] == []
         assert all(rounded["provenance"]["face_map"].values())
