@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import math
 import runpy
 import subprocess
 from pathlib import Path
@@ -94,6 +95,30 @@ def _compare(what: str, results, applied: dict) -> None:
         if (reason := _type_mismatch(declared[name].type, applied[name]))
     ]
     assert not problems, f"{what} の型が宣言と食い違う:\n  " + "\n  ".join(problems)
+    if "frame" in present:
+        frame = applied["frame"]
+        keys = {"origin", "u", "v", "normal"}
+        assert isinstance(frame, dict) and set(frame) == keys, f"{what}: frame のキーが違う: {frame!r}"
+        for key in keys:
+            vector = frame[key]
+            assert isinstance(vector, list) and len(vector) == 3, f"{what}: frame.{key} は3成分: {vector!r}"
+            assert all(_PRIMITIVES["number"](v) and math.isfinite(v) for v in vector), (
+                f"{what}: frame.{key} は有限な数値: {vector!r}"
+            )
+
+
+@pytest.mark.parametrize("frame", [
+    "broken",
+    {},
+    {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0]},
+    *[
+        {"origin": vector, "u": [1, 0, 0], "v": [0, 1, 0], "normal": [0, 0, 1]}
+        for vector in ([0, 0], ["0", 0, 0], [True, 0, 0], [math.nan, 0, 0], [math.inf, 0, 0])
+    ],
+])
+def test_the_response_check_rejects_an_invalid_frame(frame):
+    with pytest.raises(AssertionError, match="frame"):
+        _compare("sketch_create", catalog.BY_NAME["sketch_create"].returns, {"sketch_id": "s1", "frame": frame})
 
 
 _RUNNERS: dict[str, Callable[..., dict]] = {}

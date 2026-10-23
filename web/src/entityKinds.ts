@@ -333,7 +333,7 @@ function projectToEllipse(params: Record<string, number>, u: number, v: number):
   return swapped ? frame.world(ly, lx) : frame.world(lx, ly)
 }
 
-const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
+export const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   // 点は辺を持たない: 折れ線は1点だけで線にならず(`viewport.ts` は点の印で描く)、交点も持たない
   point: {
     pointKeys: [['cx', 'cy']],

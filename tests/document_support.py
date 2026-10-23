@@ -1,6 +1,7 @@
 """verb を `Document` へ直に当てるテストが共有する題材と検算(`Session` を通さない)。"""
 from __future__ import annotations
 
+import json
 import math
 from uuid import uuid4
 
@@ -62,6 +63,11 @@ def replay_through_json(document: Document, into: Document | None = None) -> Doc
     restored.log = OpLog.from_json(document.log.to_json())
     restored.log.replay(restored)
     return restored
+
+
+def assert_finite_json(text: str) -> None:
+    # Pythonのloadsは裸のNaN/Infinityも受理し、1e999をinfにする。
+    json.dumps(json.loads(text), allow_nan=False)
 
 
 def document_state(doc: Document) -> dict:
