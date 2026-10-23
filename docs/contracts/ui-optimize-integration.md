@@ -31,7 +31,7 @@
 ## 最適化の配線(`duocad/optimize_run.py` / `session.py` / `net/ws.py`)
 
 - **verb は足していない**(結果を文書に入れる口は既存の `add_mesh_body` だけ)。`Session` の4つ: `optimize_conditions()`(4条件がそろって走らせられるか。`{ready, problems, preserve_bodies, exclude_bodies, fixtures, loads, load}`、**`problems` はそのまま人に見せる文**)/ `optimize_resolution()`(要素サイズの上限・下限・既定。軽い)/ `run_optimization(...)`(重い。成功時だけ戻り値に `"applied"` を足す)/ `cancel_optimization()`(旗を立てるだけ。実際に降りるのは次に進捗が出た時点)。コア側は `conditions_report(doc)`/`build_conditions(doc)`/`resolution_limits(doc)`/`run(doc, options, *, progress, should_cancel, debug, debug_kinds)`、摘みは `OptimizeOptions`。
-- **`run()` の戻り値は `state` で分岐し、`"done"` 以外では文書は1ビットも変わらない**(`body_id` は None)。`state` は `"done"`(`body_id/name/triangle_count/vertex_count/safety_factor/...`)のほか `"empty_condition_faces"`(条件面に格子節点が付かない。`empty_condition_faces` に診断、`warning` に `anchor.format_condition_face_warning` の1文)／`"unrepresented_regions"`(保持/除外がこの解像度で表現できていない事後検出。`format_region_warning`)／`boundary_mapping_failed`／`no_feasible_found`／`input_contradiction`／`resolution_insufficient`／`fill_infeasible`／`final_unsafe` など(全一覧は `_run` の docstring)。どの状態でも `resolution/element_size_mm/grid/design_elements/allowable/anchor_check/seconds/warning` が入る。**戻り値は素の値だけ**(`json.dumps` が通る。`DesignSpace`/`AnchorTable` を外へ出さない)。
+- **`run()` の戻り値は `state` で分岐し、`"done"` 以外では文書は1ビットも変わらない**(`body_id` は None)。`state` は `"done"`(`body_id/name/triangle_count/vertex_count/safety_factor/...`)のほか `"empty_condition_faces"`(条件面に格子節点が付かない。`empty_condition_faces` に診断、`warning` に `anchor.format_condition_face_warning` の1文)／`"unrepresented_regions"`(保持/除外がこの解像度で表現できていない事後検出。`format_region_warning`)／`boundary_mapping_failed`／`no_feasible_found`／`input_contradiction`／`resolution_insufficient`／`fill_infeasible`／`final_unsafe` など(全一覧は `optimize_pipeline.execute` の docstring)。どの状態でも `resolution/element_size_mm/grid/design_elements/allowable/anchor_check/seconds/warning` が入る。**戻り値は素の値だけ**(`json.dumps` が通る。`DesignSpace`/`AnchorTable` を外へ出さない)。
 - **進捗は `progress(event)`**。`event` は必ず `{"phase","message","evaluation"}`(phase は `prepare/derive/search/fill/mesh/finalize/final_check/insert`)。例外は文面に「次に何をすればよいか」を含み**握り潰さない**: `OptimizeInputError`(`ValueError`)/`FaceMappingError`(**`RuntimeError`**)/`OptimizeCancelled`(**`RuntimeError`**) ほか。**`OptimizeCancelled` を `ValueError` にしない**(探索内の `acceptance.inspect` の例外処理が入力の不備と分類して**探索が続く**)。
 - **元のボディを消さない・形を差し替えない。** 最適化は編集ではなく「条件から新しい形を1つ作る」操作。結果は `optimized`(2回目は `optimized-2`)という名前のメッシュボディとして**足されるだけ**(積み上がる。要らないものは `delete`)。`shape` の同一性(`is`)で固定。
 - **面の対応の網を2枚とも外さない。** 面添字がずれても例外は出ず、**荷重が別の面に入ったまま最適化がもっともらしく収束する**。(1) `_verify_face_mapping`: まとめた形(`kernel.make_compound`)側で測り直した指紋がボディ単体の指紋と一致するか。**面積・法線・重心の3つ**(重心を外すと同じ形のボディを2つ並べた文書で取り違えを通す)。(2) `_check_anchor_centroids`: 実際にできた面アンカーの節点の重心が条件面の重心から3要素以内か。
@@ -64,7 +64,9 @@
 
 - **正はサーバ。** 1回の実行に `OptimizationSteps` が1つ(`OptimizationRecord.steps`、その実行の文書とファイル名・再仕上げの前提を記録が持つ)。ステップは計算が始まるときに作り、それまでは無い。探索の
   `on_accept`(`binary_search.find_best_feasible`)が合格形(`AcceptedShape`、1セル1ビット)を足し、探索が合格形を出して終わると
-  `optimize_run` が `finisher`(選んだステップを完成化・完成形検査・さかのぼり・追加まで進める手順。条件・格子はその実行のもの)を置く。
+  `optimize_pipeline` が `FinishPlan`（開始時の条件・格子・検査規則と合格形）を `steps.plan` に渡す。
+  各ステップの格子は形と一緒に追加時に記録し、`OptimizationSteps` に格子や完成化のクロージャを後から設定しない。
+  完成化・完成形検査・さかのぼり・追加は `optimize_finish.finish_shape` が計画と追加先文書・その仕上げの通知先を受け取って行う。
   実行の後も、次に走らせるまで残る。いま開いている文書の実行のものだけを返す(`Session.steps_for_current`。同じオブジェクトか同じファイル名)。
   **実行の後で文書が変わっていれば仕上げは断る**(`Session.finish_optimization_step` が `OptimizeInputError`)。仕上げは実行したときの条件・格子・
   保持形状で作るので、条件や形を変えた文書へ足すと古い前提の結果が入る。変わったかは、実行を始めたときの操作ログと、実行とその後の仕上げが

@@ -4,6 +4,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 
 # 免除はここに名指しした相対パスだけ(DUOCAD_DIRからの相対パス)。**ディレクトリ単位では
@@ -62,23 +64,53 @@ def _dotted_name(node: ast.AST) -> str:
     return ".".join(reversed(parts))
 
 
-def _imported_module_roots(py_file: Path) -> set[str]:
-    """py_fileが参照するトップレベルモジュール名の集合。"""
+def _imported_modules(py_file: Path, *, include_type_checking: bool = True) -> set[str]:
+    """静的・動的importのモジュール名と、from節で取り込む名前の集合。"""
     tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
-    roots: set[str] = set()
+    type_only_nodes = set() if include_type_checking else {
+        node
+        for guard in ast.walk(tree)
+        if isinstance(guard, ast.If) and _dotted_name(guard.test) in {"TYPE_CHECKING", "typing.TYPE_CHECKING"}
+        for statement in guard.body
+        for node in ast.walk(statement)
+    }
+    modules: set[str] = set()
     for node in ast.walk(tree):
+        if node in type_only_nodes:
+            continue
         if isinstance(node, ast.Import):
             for alias in node.names:
-                roots.add(alias.name.split(".")[0])
+                modules.add(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module:
-                roots.add(node.module.split(".")[0])
+                modules.add(node.module)
+            for alias in node.names:
+                modules.add(f"{node.module}.{alias.name}" if node.module else alias.name)
         elif isinstance(node, ast.Call):
             if _dotted_name(node.func) in _DYNAMIC_IMPORT_CALLS:
                 for arg in node.args:
                     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                        roots.add(arg.value.split(".")[0])
-    return roots
+                        modules.add(arg.value.lstrip("."))
+    return modules
+
+
+def _imported_module_roots(py_file: Path) -> set[str]:
+    """py_fileが参照するトップレベルモジュール名の集合。"""
+    return {name.split(".")[0] for name in _imported_modules(py_file)}
+
+
+def _imports_optimization_executor(py_file: Path, *, allow_plan_type_imports: bool = False) -> bool:
+    modules = {"optimize_run", "optimize_acceptance", "optimize_pipeline", "optimize_plan", "optimize_finish", "optimize_events"}
+    forbidden = modules | {f"duocad.{name}" for name in modules}
+    imported = _imported_modules(py_file)
+    if allow_plan_type_imports:
+        plan_modules = {"optimize_plan", "duocad.optimize_plan"}
+        imported = {
+            name for name in imported
+            if not any(name == module or name.startswith(module + ".") for module in plan_modules)
+        } | _imported_modules(py_file, include_type_checking=False)
+    return any(name == module or name.startswith(module + ".")
+               for name in imported for module in forbidden)
 
 
 def _source_files() -> list[tuple[str, Path]]:
@@ -163,3 +195,100 @@ def test_boundary_scan_covers_every_source_file():
     }
     assert expected <= scanned, f"走査から漏れているモジュールがある: {sorted(expected - scanned)}"
     assert OCP_ALLOWED <= scanned and BUILD123D_ALLOWED <= scanned
+
+
+def test_numerics_and_steps_do_not_import_optimization_executor():
+    """数値層と表示処理は実行器を参照せず、ステップ記録は計画の型注釈だけを参照する。"""
+    violations = [
+        rel for rel, py_file in _source_files()
+        if (rel.startswith("topopt/") or rel in {"optimize_steps.py", "optimize_voxels.py"})
+        and _imports_optimization_executor(py_file, allow_plan_type_imports=(rel == "optimize_steps.py"))
+    ]
+    assert violations == [], f"実行器側へ逆参照しているファイル: {violations}"
+
+
+def test_executor_boundary_scan_detects_every_import_form(tmp_path):
+    """関数内・相対・from節・動的importでも実行器への参照を検出する。"""
+    source = tmp_path / "source.py"
+    imports = [
+        "import duocad.optimize_run",
+        "from duocad.optimize_run import build_conditions",
+        "from duocad import optimize_run",
+        "from .optimize_run import DEBUG_VOXEL_LIMIT",
+        "from .. import optimize_run",
+        "importlib.import_module('duocad.optimize_run')",
+        "__import__('duocad.optimize_run')",
+        "import_module('.optimize_run', 'duocad')",
+        "from duocad.optimize_acceptance import inspect_document",
+        "from duocad.optimize_pipeline import execute",
+        "import duocad.optimize_plan",
+        "from duocad.optimize_plan import FinishPlan",
+        "from duocad import optimize_plan",
+        "from .optimize_plan import FinishPlan",
+        "from .. import optimize_plan",
+        "importlib.import_module('duocad.optimize_plan')",
+        "__import__('duocad.optimize_plan')",
+        "import_module('.optimize_plan', 'duocad')",
+        "from .optimize_finish import finish_shape",
+        "from duocad import optimize_events",
+    ]
+    for statement in imports:
+        source.write_text(f"def load():\n    {statement}\n", encoding="utf-8")
+        assert _imports_optimization_executor(source), statement
+        assert _imports_optimization_executor(source, allow_plan_type_imports=True), statement
+    source.write_text("from .optimize_voxels import debug_voxel_payload\n", encoding="utf-8")
+    assert not _imports_optimization_executor(source)
+
+
+def test_executor_boundary_allows_only_type_checking_plan_imports(tmp_path):
+    """計画の型参照の許可は、TYPE_CHECKING の本体だけに限り、他の実行器には広げない。"""
+    source = tmp_path / "source.py"
+    for header, guard in [
+        ("from typing import TYPE_CHECKING", "TYPE_CHECKING"),
+        ("import typing", "typing.TYPE_CHECKING"),
+    ]:
+        source.write_text(
+            f"{header}\nif {guard}:\n    from duocad.optimize_plan import FinishPlan\n",
+            encoding="utf-8",
+        )
+        assert _imports_optimization_executor(source)
+        assert not _imports_optimization_executor(source, allow_plan_type_imports=True)
+
+        source.write_text(
+            f"{header}\nif {guard}:\n    from .optimize_plan import FinishPlan\n"
+            "else:\n    from .optimize_plan import FinishPlan\n",
+            encoding="utf-8",
+        )
+        assert _imports_optimization_executor(source, allow_plan_type_imports=True)
+
+    source.write_text(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n"
+        "    from .optimize_finish import finish_shape\n",
+        encoding="utf-8",
+    )
+    assert _imports_optimization_executor(source, allow_plan_type_imports=True)
+
+
+@pytest.mark.parametrize(("relative_path", "type_only", "allowed"), [
+    ("topopt/offender.py", False, False),
+    ("topopt/offender.py", True, False),
+    ("optimize_steps.py", False, False),
+    ("optimize_steps.py", True, True),
+    ("optimize_voxels.py", False, False),
+    ("optimize_voxels.py", True, False),
+])
+def test_executor_boundary_applies_type_import_exception_only_to_steps(
+    tmp_path, monkeypatch, relative_path, type_only, allowed,
+):
+    """一時ソースでも実際の境界検査を通し、計画の型参照の免除先をステップ記録だけに限る。"""
+    source = tmp_path / relative_path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    statement = "from duocad.optimize_plan import FinishPlan\n"
+    code = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    " + statement if type_only else statement
+    source.write_text(code, encoding="utf-8")
+    monkeypatch.setattr(f"{__name__}.DUOCAD_DIR", tmp_path)
+    if allowed:
+        test_numerics_and_steps_do_not_import_optimization_executor()
+    else:
+        with pytest.raises(AssertionError, match=relative_path):
+            test_numerics_and_steps_do_not_import_optimization_executor()

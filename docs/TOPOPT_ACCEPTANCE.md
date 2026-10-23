@@ -21,6 +21,10 @@ float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
 
 安全率は2つ返す: 探索時の値(`safety_factor`。平滑化前の形・探索の格子)と、**完成形を間隔 0.67 mm 以下の格子へ占有化して解き直し、部材域の表面の面積 4 mm² の上位値で出した値**(`final_safety_factor`、2026-10-07〜。この物差しは 2026-10-11〜で、要素数の上限で粗くしか測れないときは割り増す。[TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md) 6章)。完成形が本来の目標安全率を割ったときは、探索の合格形をさかのぼって完成形検査に通る形を警告付きで足し(`topopt.complete.backtrack`)、どれも通らなければ `final_unsafe` で結果を足さない(#129・さかのぼりとも 2026-10-11 本人決定。測り方の見直しは [TOPOPT_PEAK_GATE.md](TOPOPT_PEAK_GATE.md))。つなぎ目の幅は診断で、「幅不足の疑い / 未確定 / 疑いは観測されなかった」の3値(適合は出さない。[TOPOPT_MIN_WIDTH.md](TOPOPT_MIN_WIDTH.md))。
 
+完成形検査の分割数は実行時の空きメモリで決まる(`final_check.refine_factor` / `_available_memory_bytes`)。
+同じ完成メッシュでも空き RAM によって分割数 5 / 6、安全率 12.54 / 13.65 に分かれた
+(2026-10-24 実測、`check_optimize_wiring.run_once` の小型条件)。前後の比較では空きメモリの判定を固定する。
+
 入力・最終メッシュとも、閉殻の包含深さと面の向きを照合する。交差のない閉殻に対して代表頂点からの
 立体角で包含を判定し、深さが偶数なら外向き、奇数なら内向きを要求する。外に離れた内向きの閉殻を
 空洞として数えない。空洞内の材料は別ソリッドなので最終の単一ソリッド検査で不合格になる。
@@ -73,7 +77,7 @@ float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
 - **「元の条件」は探索へ渡した確定表**。`optimize_run._map_boundary_conditions` が、固定した設計空間に接する節点だけへ条件面を対応付けた表
   (`anchor.build_anchors(allowed_nodes=...)`、`stats["mapping"] == "material"`)を1回作り、探索・6条件・FEMの全てがそれを使う。
   導出が接続確認に使う幾何の表(`stats["mapping"] == "geometry"`)を渡してはいけない(面の外側の節点が最初から材料に接せず全材料マスクでも不合格になる)。
-  確定後は探索中に再配分しない。過去記録を読む `inspect_document` も、文書から作った格子上の表を材料マスクに対応付けてから検査する。
+  確定後は探索中に再配分しない。過去記録を読む `optimize_acceptance.inspect_document` も、文書から作った格子上の表を材料マスクに対応付けてから検査する。
 - CADとの体積比較はセル中心による占有近似ではなく、材料セルを体積を共有しない直方体列にまとめて元のCADとの共通体積をOCCTで計算して合計する(格子外の除外空間も数える)。
   許容差は `max(1e-9 mm³, 条件CADの体積 × 1e-9)`、計算エラー・警告は判定不能。僅かな重なり・空間でも合格し、保持全体の包含や除外全体の空洞化は要求しない。
   保持条件なしは不合格、除外条件なしは合格(空集合)。探索の中では、同じ共通体積を格子ごとに前計算したセルごとの重なり体積の足し算で取る
@@ -94,7 +98,7 @@ python -m pytest tests/test_pre_smoothing.py -q
   製品と同じ順序で適用して復元し、目標安全率・閾値・許容応力・ヤング率・パーセンタイルも保存値を使う。採用記録がなければ推測せず判定不能。
 - `--fields` の npz は `rho_clean`・`rho_before`(保持・除外の塗り直し後、島除去前)・`origin`・`spacing`(同じ格子上の有限な0〜1の密度)。
   `--level`/`--allowable-mpa`/`--youngs-modulus-mpa`/`--percentile`/`--solver`(`cg` 既定か `direct`)で明示指定もできる。
-  Pythonからは `duocad.topopt.acceptance.inspect_document` が入口(密度→boolの閾値変換と密度積算量の付記を閉じる)。boolマスクとアンカー表があるときだけ `acceptance.inspect` へ直接渡せる。
+  Pythonからは `duocad.optimize_acceptance.inspect_document` が入口(文書の条件確定・密度→boolの閾値変換・密度積算量の付記を閉じる)。boolマスクとアンカー表があるときだけ `acceptance.inspect` へ直接渡せる。
 - 終了コードは 0=6項目合格、1=不合格あり、2=判定不能(不合格確定なら1が優先)。
 
 ## 平滑化(Taubin)後の自己交差

@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import math
+import weakref
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -55,13 +58,29 @@ def test_a_finish_request_stops_the_search_and_finishes_the_chosen_step(session:
 
 
 def test_after_the_run_another_step_is_finished_without_searching_again(session: Session, monkeypatch) -> None:
-    """落ちたら、実行の後に選んだステップを仕上げるのに探索をやり直すか、結果を足さないか、名前で見分けられない。"""
+    """再仕上げが開始時の入力を使わない、探索や入力変換をやり直す、または終了した通知先を保持している。"""
     from duocad.topopt import binary_search
 
     four_conditions(session)
     steps = OptimizationSteps()
-    first = optimize_run.run(session.document, OPTIONS, steps=steps)
+    options = replace(OPTIONS)
+
+    class Reporter:
+        def __call__(self, event):
+            pass
+
+    reporter = Reporter()
+    report_ref = weakref.ref(reporter)
+    first = optimize_run.run(session.document, options, steps=steps, progress=reporter)
     assert first["state"] == "done" and first["finished_step"] == len(steps) - 1 and first["name"] == "optimized"
+    del reporter
+    gc.collect()
+    assert report_ref() is None
+    options.target_safety_factor = 1e10
+    options.element_size_mm = 0.1
+    options.min_width_mm = 1000.0
+    monkeypatch.setattr(optimize_run, "build_conditions", lambda *a: pytest.fail("条件を読み直した"))
+    monkeypatch.setattr(optimize_run, "resolution_limits", lambda *a: pytest.fail("格子を作り直した"))
     monkeypatch.setattr(binary_search, "find_best_feasible", lambda *a, **k: pytest.fail("探索をやり直した"))
     bodies = len(session.document.bodies)
     again = optimize_run.finish_step(session.document, steps, 0)

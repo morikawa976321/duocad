@@ -8,11 +8,12 @@ import pytest
 from build123d import Box, Pos
 
 from duocad import kernel
+from duocad.optimize_acceptance import inspect_document
 from duocad.topopt import voxelize, fem, stress
 from duocad.topopt.anchor import floating_dofs
 from duocad.topopt.acceptance import (
     active_nodes, boundary_check, closed_voids, condition_check, connectivity_check, void_components,
-    inspect, inspect_document, intersection_volume, region_check, safety_check, search_diagnostics,
+    inspect, intersection_volume, region_check, safety_check, search_diagnostics,
 )
 from topopt_support import Table
 
@@ -320,3 +321,32 @@ def test_cli_invalid_input_is_machine_readable(tmp_path):
     output = tmp_path / 'error.json'
     assert check_pre_smoothing.main(['--fields', str(tmp_path / 'missing.npz'), '--out', str(output)]) == 2
     assert json.loads(output.read_text(encoding='utf-8'))['status'] == 'unknown'
+
+
+def test_cli_reads_legacy_density_run(tmp_path):
+    """旧SIMP記録の読み取りで、保持優先の塗り直し・密度積算量・探索履歴を保つ。"""
+    _beam_document(tmp_path)
+    (tmp_path / 'input.json').write_bytes((tmp_path / 'beam.json').read_bytes())
+    rho = np.full((4, 2, 2), .7)
+    solid = np.zeros_like(rho, dtype=bool)
+    solid[0, 0, 0] = True
+    selected = dict(result=dict(
+        run=dict(result=dict(rho=rho.tolist()), solid=solid.tolist(), void=solid.tolist(),
+                 surface=dict(rho_clean=rho.tolist(), level=.5)),
+        space=dict(grid=dict(origin=[0., 0., 0.], spacing=1., shape=list(rho.shape))),
+        target_safety_factor=.001, allowable_mpa=30.,
+        report=dict(scale=dict(youngs_modulus_mpa=2000.), representative=dict(percentile=99.)),
+        history=[dict(outcome='ok', material_mm3=11.2, safety_factor=10.)], converged=False))
+    (tmp_path / '000001-selected-result.json').write_text(json.dumps(selected), encoding='utf-8')
+    (tmp_path / '000002-safety-search-input.json').write_text(
+        json.dumps(dict(max_evaluations=1)), encoding='utf-8')
+    output = tmp_path / 'legacy-report.json'
+    code = check_pre_smoothing.main(['--run', str(tmp_path), '--solver', 'direct', '--out', str(output)])
+    report = json.loads(output.read_text(encoding='utf-8'))
+    assert code == 0, report
+    assert report['boundary_mapping']['status'] == 'pass'
+    assert report['volumes']['material_mm3'] == 16.
+    assert report['volumes']['density_integral_before_mm3'] == pytest.approx(11.5)
+    assert report['volumes']['density_integral_after_mm3'] == pytest.approx(11.2)
+    assert report['search']['history'] == selected['result']['history']
+    assert report['search']['termination'] == 'evaluation_limit'
