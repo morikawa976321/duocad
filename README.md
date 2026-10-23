@@ -345,6 +345,7 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](docs/WEB_PITFALLS.md)�
 | `web/src/App.svelte` | 画面全体の組み立て・選択の規則・キー処理 |
 | `web/src/{displaySettings,documentFiles,aiChat,measurement}.svelte.ts` | `App.svelte` から切り出した状態の持ち主。**選択・ピック・コマンドの確定には触らない**かたまりだけ |
 | `web/src/viewport.ts` | three.js の囲い（load / onPick / highlight / project …） |
+| `web/src/previewController.ts` | プレビュー要求の寿命（重複抑止・デバウンス・再送・取消・応答採用）。純粋な遷移と副作用の実行を分離 |
 | `web/src/session.ts` | WebSocketクライアント。**WSのURLはサーバが `/duocad-config.json` で教える** |
 | `web/src/generated/protocol.ts` | **生成物**。正は `duocad/catalog.py`。手で直さない |
 | `web/src/commands/CommandHost.svelte` | コマンド層の骨格（起動→引数収集→プレビュー→Enter/Esc・即適用）。verbごとに作り直さない |

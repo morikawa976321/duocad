@@ -27,15 +27,16 @@
    * ## 引数収集と選択
    *
    * 選択引数の値はコアの選択集合から導出し、ここには持たない。空のときだけ「面を1つ選ぶ」と問う。AIが選んだ集合はそのまま対象になる。
-   * 選択の中身は送らない(サーバがコアの選択から取る)。`onRun` / `onPreview` へ渡るのは数値・選択肢・パスだけ。
+   * 選択の中身はWSへ送らない(サーバがコアの選択から取る)。選択の指紋はプレビューの重複抑止だけに使う。
    * 引数収集中にAIが選択を書き換えても止めない(選択に出所の区別は無い)。
    *
    * ## プレビューは投機的実行
    *
-   * 引数が揃ったら `preview` を投げる(サーバがverbを試して形だけ返し、文書は元へ戻す)。押し出しは実測で数百ms〜1秒かかるので、打鍵ごとには投げず、打ち終わり(`PREVIEW_DEBOUNCE_MS`)を待って1回だけ投げる。
+   * 引数が揃ったら `preview` を投げる(サーバがverbを試して形だけ返し、文書は元へ戻す)。押し出しは実測で数百ms〜1秒かかるので、打鍵ごとには投げず、打ち終わり(`previewController.ts`)を待って1回だけ投げる。
    * Enterはプレビューを待たない(プレビューは確認用で、確定の前提ではない)。
    */
   import { onDestroy, onMount, untrack } from 'svelte'
+  import type { PreviewController } from '../previewController'
   import {
     argApplies,
     argKinds,
@@ -87,8 +88,7 @@
     onSetArgs = () => {},
     onEndShared = () => {},
     onRun,
-    onPreview,
-    onCancelPreview,
+    preview,
     onNote,
     onWants = () => {},
     onWantsPlane = () => {},
@@ -136,9 +136,7 @@
     /** 起動中の verb を畳む(サーバの `end_command`)。 */
     onEndShared?: () => void
     onRun: (...request: BuiltCommandRequest) => void
-    /** `mode` は `CommandDef.preview`。`local` はブラウザだけで描く(サーバへ投げない)。 */
-    onPreview: (verb: string, args: Record<string, unknown>, mode: 'server' | 'local') => void
-    onCancelPreview: () => void
+    preview: PreviewController
     onNote: (message: string) => void
     /** 起動中のコマンドが選択から取る種別。辺を要求したときだけアプリ層が辺の折れ線を取りに行く(常時出すと27部品ぶんの辺が要り、面のピックも辺に取られて押し出しが遅くなる)。 */
     onWants?: (kinds: SelectableKind[]) => void
@@ -152,15 +150,6 @@
     onWantsVertices?: (wants: boolean) => void
   } = $props()
 
-  /** 打ち終わってからプレビューを投げるまでの待ち[ms]。 */
-  const PREVIEW_DEBOUNCE_MS = 250
-  /**
-   * 打ち続けていても、最初の打鍵からこれだけ経てば途中の値で投げる[ms]。末尾だけのデバウンスは、打鍵の間隔が
-   * `PREVIEW_DEBOUNCE_MS` 空かない限り何も出さない(issue #169)。古い要求はサーバが捨てる(`net/ws.py` の集約)。
-   */
-  const PREVIEW_MAX_WAIT_MS = 750
-  /** 投げていない打ち直しの最初の時刻(`PREVIEW_MAX_WAIT_MS` の起点)。投げたら・取り消したら null。 */
-  let previewWaitingSince: number | null = null
   /** 打ってからサーバの作業空間へ出すまでの待ち[ms]。打鍵のたびに送らない(AI には落ち着いた値だけ見える)。 */
   const PUBLISH_DEBOUNCE_MS = 250
 
@@ -356,10 +345,6 @@
   })
 
   // ---------------------------------------------------------------- プレビュー
-  let previewTimer: ReturnType<typeof setTimeout> | null = null
-  /** 直前に投げたプレビューの印(同じものを投げ直さないため)。 */
-  let previewedKey: string | null = null
-
   /** 選択の中身の印。対象集合は引数に載らないので、これを入れないと辺を足しても再送されず古い幽霊が残る。 */
   const selectionPrint = $derived(
     (command?.args ?? []).some((spec) => spec.kind === 'selection')
@@ -372,31 +357,12 @@
     const cmd = command
     // 確定を送った後は出さない(打った値は残すので、消した幽霊を同じ引数で出し直してしまう)。
     const source = cmd === null || cmd.preview === 'none' || committed ? null : ghostBuilt
-    const key = source ? JSON.stringify([cmd!.id, source.args, selectionPrint]) : null
-    if (key === previewedKey) return
-    if (previewTimer) clearTimeout(previewTimer)
-    previewedKey = key
-    if (key === null || source === null || cmd === null) {
-      previewWaitingSince = null
-      onCancelPreview()
-      return
-    }
-    const mode = cmd.preview as 'server' | 'local'
-    const args = source.args
-    // ブラウザだけで描ける幽霊はデバウンスしない(デバウンスは投機実行が重いことへの対処)。
-    if (mode === 'local') {
-      previewWaitingSince = null
-      onPreview(cmd.id, args, mode)
-      return
-    }
-    const now = performance.now()
-    previewWaitingSince ??= now
-    const wait = Math.max(0, Math.min(PREVIEW_DEBOUNCE_MS, previewWaitingSince + PREVIEW_MAX_WAIT_MS - now))
-    previewTimer = setTimeout(() => {
-      previewTimer = null
-      previewWaitingSince = null
-      onPreview(cmd.id, args, mode)
-    }, wait)
+    preview.update(source === null || cmd === null ? null : {
+      verb: cmd.id,
+      args: source.args,
+      mode: cmd.preview as 'server' | 'local',
+      selection: selectionPrint,
+    })
   })
 
   // ---------------------------------------------------------------- 即適用(Enterが要らないもの)
@@ -460,7 +426,7 @@
       committed = true
       armedSelections = null
       cancelPublish()
-      cancelPreview()
+      preview.cancel()
       onRun(...source.request)
       return
     }
@@ -510,14 +476,6 @@
     if (wasArmed) onNote('中断した(文書は変わっていない)')
   }
 
-  /** 幽霊を消す(投げかけも止める)。 */
-  function cancelPreview(): void {
-    if (previewTimer) clearTimeout(previewTimer)
-    previewTimer = null
-    previewedKey = null
-    onCancelPreview()
-  }
-
   /** 集めかけの引数を全部捨てる。起動の入れ替わり(`entered()` / `ended()`)とローカルのコマンドの確定が呼ぶ。 */
   function resetInputs(): void {
     const forgotten = new Set(
@@ -538,7 +496,7 @@
     sentKeys = new Set()
     unmapped = new Set()
     everLive = new Set()
-    cancelPreview()
+    preview.cancel()
   }
 
   /**
@@ -820,10 +778,7 @@
     overlayObserver?.disconnect()
     syncOverlayHeight(null)
     cancelPublish()
-    // 破棄後に満了すると、破棄済みのクロージャが `onPreview` を呼んで幽霊が新しいモードに残る(消す者がいない)。
-    // 幽霊自体は `App.svelte` の `onModeChanged` が消すので、ここでは止めるだけ。
-    if (previewTimer) clearTimeout(previewTimer)
-    previewTimer = null
+    preview.detach()
   })
 
   /** スケッチ平面のクリックを、待っている点引数へ入れる。待っている点が無ければ何もしない(上書きすると、揃った後のクリックで図形が動いて見える)。 */

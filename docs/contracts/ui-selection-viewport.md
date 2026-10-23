@@ -17,6 +17,22 @@
 - **罠**: `_coerce_ref` を通った body 参照は必ず `index: None` を持つので、「body の鍵に `index` を足す」変異は `modify_selection` 経由の検査では1件も落ちない。`ref_key` を直接叩いて `{"kind":"body","index":7}` を渡す検査が要る。
 - **性能の測り方**: `modify_selection` の重複判定を鍵引きにして約810ms→0.8ms、残りは全部 `kernel.face_count`(M=2835 で 51.1ms)。fresh 起動5回の中央値で 1037ms→47.3ms。測るときは**プロセス1回につき1計測の fresh 起動5回の中央値**で見る(in-process の繰り返しは暖まりで 5〜15ms にばらつく)。
 
+## プレビュー要求の寿命(`web/src/previewController.ts`)
+
+- `App` が `createPreviewController(deps)` で1つ作り、`CommandHost` は引数・方式・選択の指紋を `update` へ渡す。
+  要求番号、重複抑止、デバウンスの起点、再送する要求、2種類のタイマーはコントローラだけが所有する。
+- 純関数 `transitionPreview(state, event)` は次の状態と送信・描画・タイマー操作の指示を返す。時刻はイベントに載せる。
+  実行器は注入された送信・描画・時計だけを呼び、Workspace と入力欄の同期は持たない。
+- 応答を採れるのは、現在の入力・選択に対応する要求番号だけ。打ち直し・選択変更・形状配信・切断で古い応答の採用を止める。
+  形が変わらない粗さだけの配信では再送せず、幽霊を残す。形状配信後の再送待ちと入力のデバウンス待ちは別々に保ち、送信順を変えない。
+- 確定とコマンドの終了・入れ替わりは `cancel()`、子の破棄は `detach()`、
+  `App` の破棄は `dispose()` で保留タイマー・再送用要求・応答待ちを終える。モード変更とプレビュー失敗の `clear()` は
+  サーバ要求・再送を取り消し、入力の重複抑止と後から打った入力のデバウンスは残す。モード変更では子の破棄が残る入力待ちも終える。
+  取消で要求番号を進める従来の契約と、送信の回数を保ち、取消済みタイマーのコールバックもトークンで拒否する。
+  同じホスト内の `cancel()` は最大待ちの起点だけを従来どおり残す（送信・空入力・ローカル入力で解け、ホスト破棄で捨てる）。
+- `window.__duocad.previewing` はサーバ計算の幽霊が表示されている印のまま。ローカル幽霊の表示では立てない。
+  境界は `tests/eval_preview_controller.mjs` と `tests/test_ts_evaluators.py` が検査する。
+
 ## 面数・辺数のカウントのキャッシュ(`selection._coerce_refs`)
 
 - `_coerce_refs(doc, refs, *, bodies=None, counts=None, allow_hidden=False)` は face/edge/vertex 参照を `(body_id, kind)` ごとに `kernel.face_count` / `edge_count` / `count_subshapes` を1回だけ呼んで使い回す。戻り値・例外の型とメッセージは `_coerce_ref` を1件ずつ呼んだときと同じ。モジュール内部関数(外から直接呼ぶ経路を増やさない)。戻りは入力 `refs` と1対1・同順。

@@ -25,6 +25,7 @@ EVALUATORS = [
     "eval_keys.mjs",
     "eval_min_width.mjs",
     "eval_pixel_ratio.mjs",
+    "eval_preview_controller.mjs",
     "eval_rename_draft.mjs",
     "eval_resolution_tracker.mjs",
     "eval_screen_pick.mjs",

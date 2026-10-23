@@ -63,11 +63,11 @@
 
 - **`viewport.update(bodies)` の事後条件**: 呼ぶ前に出ていたローカル幽霊(`showBodyGhosts` で置いたもの=`move_body`)は、呼んだ後も出ている。中身は**届いたばかりの `rawGeometry` から組み直した**メッシュで、組み直す入力(`bodyGhostInfo` の `offset`/`rotate`)は不変。**サーバ投機実行のプレビュー(`showPreview`)は落ちる。** 幽霊が乗っていたボディがこの更新で消えた(`entry.geometry === null`)ぶんは落ちる。`clearPreview()` 自体は変えない(`prune()`・Esc・App の中断はローカル幽霊も一緒に消す)。
 - **組み直しは `update()` の末尾**に置く(`refreshContentDiagonal()` の `contentBoxForGrid()` と `frameToContent()` の `Box3.setFromObject(root)` は幽霊も `root` に入るので、前へ動かすと初回フレーミングとグリッド倍率に幽霊が混ざる)。
-- **控えるのは `bodyGhostInfo`(指示)であってメッシュではない。** `clearPreview()`→`clearBodyGhosts()` は `bodyGhostInfo` を**新しい配列へ差し替える**(`bodyGhostInfo = []`)ので先に掴んだ参照が生き残る。`length = 0` や `splice` へ変えると救済が**エラーなしに空振りする**。`bodyGhostInfo` は製品の分岐が読む入力。実体は `ghostLayer.ts`。`showLocalGhost`/`previewedKey`(投げ直す側のデデュープ)は触らず、救済は受け側 `viewport` に閉じる。
+- **控えるのは `bodyGhostInfo`(指示)であってメッシュではない。** `clearPreview()`→`clearBodyGhosts()` は `bodyGhostInfo` を**新しい配列へ差し替える**(`bodyGhostInfo = []`)ので先に掴んだ参照が生き残る。`length = 0` や `splice` へ変えると救済が**エラーなしに空振りする**。`bodyGhostInfo` は製品の分岐が読む入力。実体は `ghostLayer.ts`。`showLocalGhost`/`previewController` の入力の重複抑止は触らず、救済は受け側 `viewport` に閉じる。
 - **「幽霊の対象ボディ集合と `entries` の交差で消さない」判定は成立しない。** `duocad/view.py::body_revision` の鍵に `body_recipe()`(目標精度+face単位 `focus`)が入っており、**カメラを回すと幽霊が乗っているボディ自身の版が上がる**(実測: 右ドラッグ1回で 2→3)。「`applied === null` なら形は変わっていない」も成立しない(`_spawn_push()` の MCP/AI 経路と最適化完了配信が `applied=None` で本物の形を配る)。
-- **背景の race**: カメラを動かすと可変解像度が180ms後に配信を起こし、その `viewport.update()` が表示中の幽霊を消し、幽霊は引数が変わらない限り描き直されない(`CommandHost` の `previewedKey`)。`move_body`(`showBodyGhosts`)は上の救済で解消。`move_sketch_entities`/`pattern_*`/`add_line` 等のスケッチ幽霊はこの race を踏まない(`viewport.update()` はソリッド側だけを触る。`clearGhost()` の呼び元は `showSketchGhosts`/`setActiveSketch(null)`/`dispose` の3つ)。
+- **背景の race**: カメラを動かすと可変解像度が180ms後に配信を起こし、その `viewport.update()` が表示中の幽霊を消し、幽霊は引数が変わらない限り描き直されない(`previewController` の入力の重複抑止)。`move_body`(`showBodyGhosts`)は上の救済で解消。`move_sketch_entities`/`pattern_*`/`add_line` 等のスケッチ幽霊はこの race を踏まない(`viewport.update()` はソリッド側だけを触る。`clearGhost()` の呼び元は `showSketchGhosts`/`setActiveSketch(null)`/`dispose` の3つ)。
 - **`preview: 'server'` の同じ race は #169 で解消した。** カメラ由来の再配信は形の版 `shape_revision` が変わらないので、`viewport.update(…, { keepPreview: true })` がサーバ投機実行の幽霊を消さずに残す（`ghostLayer.rebuildAround`）。形が本当に変わった配信では消え、プレビューは投げ直される。
-- 確定の往復で二重オフセットの幽霊は載らない: `CommandHost.commit()` は `onRun()` の直後に `reset()` を同期で呼び `onCancelPreview()`→`viewport.clearPreview()` まで走る(WS へ送る前に `bodyGhostInfo` が空)。別の主体(AI/MCP)が対象ボディを変えた配信では、幽霊は新しい形の上に同じ offset で組み直される(意図した挙動)。
+- 確定の往復で二重オフセットの幽霊は載らない: `CommandHost.commit()` は共有コマンドの `onRun()` より前に `preview.cancel()` を同期で呼び、`viewport.clearPreview()` まで走る(WS へ送る前に `bodyGhostInfo` が空)。別の主体(AI/MCP)が対象ボディを変えた配信では、幽霊は新しい形の上に同じ offset で組み直される(意図した挙動)。
 
 ## スケッチ中のグリッド追従(`gridScale.ts` / `gridPlanes.ts`)
 
