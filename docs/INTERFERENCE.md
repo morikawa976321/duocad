@@ -1,6 +1,7 @@
 # 干渉チェック（Issue #186）の方式
 
-**状態: 調査と方針だけ。未実装**（2026-10-18）。本人判断カードは4枚とも回答済み（同日）。実装に入るとき、判定の数字（許容差・厚さ・時間）を疑うときに読む。
+**状態: 実装済み**（2026-10-21、クラウドセッションで実装。下の「実装の記録」）。調査と方針は 2026-10-18、本人判断カードは4枚とも回答済み（同日）。判定の数字（許容差・厚さ・時間）を疑うとき、実装の形を知りたいときに読む。
+PC ケースの実物と Windows での子プロセス・実機 smoke は手元で確かめた（2026-10-22。下の「実装の記録」の「手元での確認」）。
 試作と計測は `tools/interference_probe/`（再現コマンドは末尾）。生データは `output/interference_probe/`（git 管理外）。
 
 本人の依頼（2026-10-18、要旨）: Issue #186 の調査と方針探し。方式の候補ごとに小さな試作で精度・計算時間・失敗する形を測って
@@ -467,6 +468,65 @@ OCP・manifold3d 一般の罠（BOP の破壊モード・`PDS()` で落ちる・
 - **ねじの試作を1プロセスで回すと、3組目（山形が一致）の GF で 20 分の打ち切りに掛かった。** 方式ごとに子プロセスで時間の上限を
   付ける（`threads.py`）。
 - **直列の GF はねじ山で 12〜15 秒**、`SetRunParallel(True)` で 2〜5 秒。試作の関数ごとに並列の設定が違い、最初の比較を誤りかけた。
+
+## 実装の記録（2026-10-21）
+
+実装計画（上）のとおりに入れた。計画との違い・決めた細部・確かめていないことだけをここに書く。
+
+### 構成
+
+| 段 | モジュール | 中身 |
+|---|---|---|
+| カーネル | `duocad/kernel_interference.py`（OCP） | `pair_relation`（2体 GF・非破壊・像の共有・領域ごとの 2V/A と有向箱・重心と箱・描画用の三角形/折れ線/点）、`min_distance`（形全体 → 面の対ごと → 縁の点）、`loose_bbox` |
+| メッシュ | `duocad/interference_mesh.py`（manifold3d） | `mesh_pair`: 交差の体積が正（小さい方の体積の 1e-9 倍超）なら重なり、連成分ごとに 2V/A と頂点の主成分箱の最小辺を測り、最も厚い成分を返す。体積 0 なら `min_gap`（探索幅 `max(1, 2·(clearance+ε))`）が ε 以下で接触、より大きければ離れている（探索幅で頭打ちなら `distance_lower_bound`） |
+| 組み立て | `duocad/interference.py`（OCP なし） | 引数の検査・対象の決め方（`resolve_targets`）・スナップショット・分類（`classify_relation` / `classify_clearance`）・実行（`run`）・結果 |
+| 子プロセス | `duocad/interference_worker.py` | 親側の `WorkerProcess`（JSON 行の線・上限つきの待ち・取り消し）と子の本体（`python -m duocad.interference_worker`）。同じ口の `InProcessWorker`（軽い形の試験用） |
+| 宣言と配線 | `catalog.py` / `session.py` / `mcp_server.py` / `net/ws.py` / `net/interference_runs.py` | `check_interference`（`query`・`ws="special"`・`changes_document=False`）。`Session.interference_job`（開始時に確定）と `Session.check_interference`（MCP・同期）。WS は `InterferenceRuns` がワーカー1本で走らせる |
+| 画面 | `web/src/` の `commands/interference.ts` / `interference.svelte.ts` / `interferenceGroups.ts` / `interferenceLayer.ts` / `InterferencePanel.svelte` | 使い方は [UI.md](UI.md)「干渉チェック」 |
+
+### 決めた細部（INTERFERENCE.md に書かれていなかったもの）
+
+- **箱の段**: 箱の距離 gap が `reach = clearance + ε`（clearance 0 なら 0）を超える組は離れていると決める（clearance > 0 なら ok）。**B-rep どうしで 0 < gap ≤ reach の組は GF を掛けず**
+  separated とし最短距離だけ測る（`loose_bbox` は形状許容差を含むので、箱が離れていれば GF の接触にならない）。メッシュを含む組は gap ≤ reach なら関係と距離を1回で測る。
+- **距離を測る組**: 子が B-rep どうしで separated か unknown を返した組。隙間を問われていなければ unknown の組だけ（距離を残すため）。関係の段を全部終えてから距離の段に入る（全体の上限が来たとき、関係の方を先に確保する）。
+- **打ち切りと故障の区別**: 時間の上限での打ち切り（unknown＋最短距離は試す）／子が途中で終わった・壊れた返事（unknown＋距離は試さず、`clearance` は null）／子が計算の例外を返した（子は生きている。unknown）。
+  距離が上限に掛かった組は測り直さず null と理由で終える。**子が続けて 3 回壊れたら残りの組は試さず未着手**にする（作り直しのたびに起動の時間がかかり、毎組繰り返さないため）。時間の打ち切りは故障の数に入れない（難しい形で時間を使い切っただけ）。
+- **未着手**: 全体の上限（120 秒）に達した組・子が続けて壊れたあとの組は relation=unknown（理由「未着手(…)」）で `not_started` に数える。`complete` は未着手か距離の未着手があれば偽。
+- **子へ渡す形**: スナップショットは `kernel.copy_shape` の写し（イベントループで）、BRep の文字列化と境界箱はワーカースレッド。子は `BRepCheck_Analyzer` を省いて読む（`decode_brep_unchecked`）。
+  メッシュのボディは座標の平らな列と三角形の列を JSON で渡し、manifold3d への変換は子で（頂点は座標が完全一致するものだけ共有）。
+- **線**: 1行 1 つの JSON（ASCII）に `seq` を付け、`seq` の違う返事は捨てる（止めた直後に遅れて届く返事）。子は fd 1 を標準エラーへ向け、線は複製した fd へ書く（OCCT が C のレベルで標準出力へ書いても線が壊れない）。
+  親は書き込みを別スレッドにする（大きな `load` を読まない子へ書いて塞がらない）。標準エラーは別スレッドで読み続け、末尾 8 KB だけ控える。
+- **結果の版**: `document_revision` は `世代.適用回数.ログ本数`（文字列）。画面は状態の `generation` / `applied_count` / `log.length` から同じ文字列を作って突き合わせる。`request_id` は WS では要求の `client_op`（MCP は uuid）。
+  WS の返事は `{type:'interference', client_op, ...}`、計算が例外で終わったときは `error` を載せる（画面の「実行中」を必ず解く）。対象が作れない等の断りは通常の `{type:'error', where:'check_interference'}`。
+- **MCP は同期で走る**（`ToolsOnLoop` はツールをイベントループで実行するので、全体の上限 120 秒のあいだループを塞ぐ。PC ケースで数秒〜十数秒）。画面（WS）の経路はワーカーで走らせ塞がない。
+- **接触の描画**: メッシュを含む組の接触は共有面・辺・点が分からないので描かない（距離の線もメッシュでは出ない）。
+- **重なりの重心 `center` と `bbox`**: B-rep は体積重心と `AddOptimal` の箱、メッシュは交差メッシュの体積重心と頂点の箱。
+- **見出しに出さない組**: 離れていて at / ok の組（件数だけ）。隙間不足の見出しは「離れていて short」だけ、距離を測れなかった離れた組（clearance null）は未確定。
+
+### 実測（この実装・クラウドの Linux）
+
+- 合成（箱・円柱・丸めた箱を 10 mm 格子に 10.2 mm 幅で隣と重ねた形）で、子プロセス込みの全体: 30 体（435 組・関係を測る組 90）= 3.4 秒（clearance 0）/ 4.1 秒（0.2）、100 体（4,950 組・関係を測る組 365）= 9.2 / 11.5 秒。
+  組あたりの関係の計算は 20 ms 前後（試作の「1組 1.0〜44.5 ms」の範囲）で、子の起動と読み込みが約 1.2 秒。PC ケースでの時間は下の「手元での確認」。
+- **形全体の最短距離が落ちるかどうかは、同じ形でも表現で変わる**: 角を丸めた箱に同心の中子（隙間 0.2）は、組み立てた形(と `copy_shape` の写し)では `StdFail_NotDone` で面の対ごとに落ちる（上界の印が付く）が、BRep の文字列を経由して読み直した形（子の中の形）では形全体で測れて 0.1999999718 が出る。
+  どちらでも `at` になるので判定は変わらない（`tests/test_interference.py` は段を決め打ちせず値と区分だけ見る。段の落ち方は `tests/test_interference_kernel.py` が組み立てた形そのもので固定）。
+
+### 手元での確認（2026-10-22、Windows）
+
+- **PC ケースの STEP（27 部品）**: 区分の件数は上の「定義と許容差」の表と一致（clearance 0 で干渉 2・微小重なり 20・接触 31・離れている 298、
+  0.2 で不足 58・ちょうど 14・余裕 279。干渉の2組は体積 1270.35 / 25.38 mm³・2V/A 1.51 / 0.79・有向箱の最小辺 2.41 / 2.31）。
+  時間は子プロセス込みで 4.1 秒（clearance 0）/ 7.4 秒（0.2）。
+- **描画の三角形分割が入力を書き換えていた**（直した）。GF の像は入力と面の実体を共有するので、像をそのまま三角形分割すると入力の面に
+  分割が書き込まれ、後の組の GF の結果が変わった（PC ケースの1組が、画面からの検査では厚さ 4e-6 mm の微小重なり、MCP からでは
+  面積 573 mm² の接触。件数が 21/30 と 20/31 に割れた）。分割は写しの上で作る（`kernel_interference.triangles`）。
+- Windows の子プロセス（`sys.executable -m duocad.interference_worker`）を含む pytest 全体と、実機 smoke（`smoke-interference.mjs`）が通る。
+
+### 確かめていないこと
+
+- メッシュ混在の実文書（hanger）。ねじ山の組（山形が一致して GF が終わらない形）での打ち切りと unknown の出方。
+- 子への形の受け渡しが大きな文書で支配的になる（INTERFERENCE.md「推奨が覆る条件」の常駐する子）かどうか。
+- **画面へ返す結果の JSON 化の間、イベントループが止まる**（PC ケースの結果 0.5 MB で 6 ms。描画の三角形が多い 7 MB の模擬で 84 ms。
+  別スレッドへ出しても `json.dumps` が GIL を握るので変わらない）。大きなメッシュの混ざる文書で問題になったら、描画の配列を
+  バイナリのフレーム（`net/wire.py` の `BINARY_TYPES`）で送る。
 
 ## 再現コマンド
 

@@ -675,6 +675,11 @@ class DocumentTools:
         """
         return self.session.measure()
 
+    def check_interference(self, clearance: Optional[float] = None) -> dict:
+        """干渉チェック(Issue #186)。**verbではない**ので提案のままでも通る。実体は `Session.check_interference`
+        (= `duocad/interference.py`)で、WebSocket の `check_interference` と同じ計算。同期で走る(子プロセスの上限は合計 120 秒)。"""
+        return self.session.check_interference(0.0 if clearance is None else clearance)
+
     # ------------------------------------------------------------------ verb(ログに1行積むツール)
     def _apply_verb(self, verb: str, **arguments: Any) -> dict:
         """verb を掛けて成功封筒を返す。**専用メソッドを持たない verb のツールは全部ここを通る。**

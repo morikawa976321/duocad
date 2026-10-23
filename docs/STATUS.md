@@ -116,3 +116,39 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
    - ブラウザ: `cd web && node scripts/bench-basic-ops.mjs`(PC ケースの STEP は `web/scripts/models.mjs` の `PC_CASE_STEP`。`--skip A,B,C` で場面を選べる)
 3. Issue の「足す物差し」(draw calls・再計算面数・verb 実行回数など)が要るなら、先にベンチへ行を足す
 4. 直したら同じ物差しで測り直し、PERFORMANCE.md の表に「後」を足す
+
+## [スケッチ][ボディ] 5件の実装(2026-10-22 完了、2026-10-23 main へ取り込み済み)
+
+ゴール(本人の指示の原文の要点):
+
+> duocad の次の5件を実装まで進めてほしい。#206 包む(ベジエで近似)/ #184 スケッチの投影 / #201 測定(スケッチの点)/
+> #193 split_body / #186 干渉チェック(方式は docs/INTERFERENCE.md で決定済み、カード4枚も回答済み。調査は繰り返さず実装に入る)
+
+取り込み(2026-10-23 の本人の指示):
+
+> ひとつずつdevelopにローカルで取り込んで、mainにPRをだして。5PRに分けて。マージも自分でしていい
+
+### どこまで来たか(2026-10-23)
+
+5件とも develop と main に入った。#206 は別のセッションが先に develop へ取り込み、フィレットとまとめて PR #213 で main に入っていたので、
+PR は残りの4件の4本になった。
+
+| issue | main への PR | 作業ブランチ(GitHub に残してある) | 担当 |
+|---|---|---|---|
+| #206 包む・ベジエ近似 | #213(フィレットと同じ PR) | `claude/sketch-206-envelope-bezier` | 親(手元) |
+| #184 スケッチの投影 | #214 | `claude/sketch-184-project` | 親(手元) |
+| #201 測定・スケッチの点 | #215 | `claude/sketch-201-measure-points` | 親(手元)。同じ #201 のクラウド版(`session_01SmbqN7ojs4xKbCzxRwjHip`)は採らず `claude/sketch-201-measure-points-cloud` に残した |
+| #193 split_body | #216 | `claude/body-193-split-body` | クラウド `session_017moRvu1EwfqoivmeSY4KWz`(`session_01UiaqDNEwXg1mvndNxEAxs7` と重複) → 親が検証 |
+| #186 干渉チェック | #217 | `claude/body-186-interference` | クラウド `session_01HeAhy6W2onohTptM78PbJo` → 親が検証 |
+
+各 PR は、取り込んだ直後の develop で pytest 全体・`npm run check`・`npm run build`・関係する実機 smoke を通してから出した。
+細部の判断は decisions.md の [スケッチ][ボディ] の節。本人に残る判断は無い。
+
+### 片付け
+
+- 調整用のワークツリー `.claude/worktrees/duocad-sketch-body-5-features-a37e8a` の下の `output/cloud/wt-*`(6つ。入れ子のワークツリー)は、
+  どれも `.venv` と `web/node_modules` がジャンクション。**消す前に** `[System.IO.Directory]::Delete('<wt>\.venv', $false)` と同じく
+  `web/node_modules` を外してから `git worktree remove`(再帰削除はジャンクションを辿って本体の `.venv` を消す。docs/DEV_NOTES.md「ワークツリー」)。
+- 報告ページ `output/autopilot_report/index.html` は同じワークツリーの中(git 管理外)。
+- 確認用の統合ブランチ `claude/autopilot-5-integration-check` と、クラウドが自動で作った `claude/split-body-193-zui9us`・
+  `claude/body-186-interference-wtqs2d` は、中身が全部 main に入っているので消してよい。

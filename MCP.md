@@ -13,7 +13,7 @@
 
 | 群 | ツール |
 |---|---|
-| 問い合わせ | `describe_document` / `describe_shape` / `measure` —— 最後の1つは選択の各項目の寸法に加え、**ちょうど2項目なら** `between`（点・直線・平面のあいだの距離。平行でない線・面どうしは角度）を返す。画面の「測定」と同じ計算 |
+| 問い合わせ | `describe_document` / `describe_shape` / `check_interference` / `measure` —— `measure` は選択の各項目の寸法に加え、**ちょうど2項目なら** `between`（点・直線・平面のあいだの距離。平行でない線・面どうしは角度）を返す。画面の「測定」と同じ計算。`check_interference` は見えているボディどうしの干渉（重なり・接触・離れ）を調べ、`clearance`（mm）でははめ合いの隙間も見る読み取り専用の問い合わせで、重い計算は子プロセスで時間の上限つき |
 | 述語の自己記述 | `describe_predicates` |
 | 選択 | `get_selection` / `set_selection` / `modify_selection` / `toggle_selection` / `clear_selection` —— 人（ブラウザ）が使う選択操作と同じ集合に、AIだけが述語を書ける `set_selection` を足したもの |
 | スケッチ | `sketch_create` / `sketch_create_offset` / `add_point` / `add_line` / `add_circle` / `add_ellipse` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` / `project_to_sketch` / `project_outline` —— `project_to_sketch` は選択のソリッドの辺・面（外周と穴）を、`project_outline` は選択が属するボディを法線方向から見た外形（影の境界。外周と貫通穴）を、`sketch_id` のスケッチの平面へ写した普通の図形として足す（元の形に追従しない。点に潰れる辺は図形にせず、全部潰れると失敗）。`envelope_regions` は選択の複数の領域を、へこみに沿って包む**単一の領域線**（線分・円弧・円・楕円・3次ベジエ。正確な図形に直せない辺は誤差 0.001 mm 以下のベジエで近似）を同じスケッチへ足す。`radius`（追従半径 R）と `offset`（d・負で内へ）は省略で 0。1つの領域にならないと失敗して何も変わらない |

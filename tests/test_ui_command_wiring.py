@@ -380,6 +380,7 @@ def test_which_commands_apply_without_enter():
         "add_line",
         "add_point",
         "add_rectangle",
+        "check_interference",
         "measure",
         "select_in_sketch",
         "sketch_create",
