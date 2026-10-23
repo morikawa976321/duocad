@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import math
 import runpy
 import subprocess
 from pathlib import Path
@@ -60,8 +61,27 @@ _PRIMITIVES: dict[str, Callable[[Any], bool]] = {
 }
 
 
+def _frame_mismatch(frame: Any) -> Optional[str]:
+    keys = {"origin", "u", "v", "normal"}
+    if not isinstance(frame, dict) or set(frame) != keys:
+        return f"frame のキーが違う: {frame!r}"
+    for key in keys:
+        vector = frame[key]
+        if not isinstance(vector, list) or len(vector) != 3:
+            return f"frame.{key} は3成分: {vector!r}"
+        if not all(_PRIMITIVES["number"](v) and math.isfinite(v) for v in vector):
+            return f"frame.{key} は有限な数値: {vector!r}"
+    return None
+
+
+_STRUCTURED_TYPES = {catalog._SKETCH_FRAME.type: _frame_mismatch}
+
+
 def _type_mismatch(declared: str, value: Any) -> Optional[str]:
-    """実値 `value` が宣言の型に収まらない理由。収まっていれば `None`。独自型は中身を見ない。"""
+    """実値が宣言の型に収まらなければ理由を返す。未登録の独自型は中身を見ない。"""
+    validator = _STRUCTURED_TYPES.get(declared)
+    if validator is not None:
+        return validator(value)
     arms = [arm.strip() for arm in declared.split("|")]
     if value is None:
         return None if "null" in arms else f"実応答が null だが宣言は `{declared}`(`| null` が要る)"
@@ -94,6 +114,30 @@ def _compare(what: str, results, applied: dict) -> None:
         if (reason := _type_mismatch(declared[name].type, applied[name]))
     ]
     assert not problems, f"{what} の型が宣言と食い違う:\n  " + "\n  ".join(problems)
+
+
+@pytest.mark.parametrize("frame", [
+    "broken",
+    {},
+    {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0]},
+    *[
+        {"origin": vector, "u": [1, 0, 0], "v": [0, 1, 0], "normal": [0, 0, 1]}
+        for vector in ([0, 0], ["0", 0, 0], [True, 0, 0], [math.nan, 0, 0], [math.inf, 0, 0])
+    ],
+])
+def test_the_response_check_rejects_an_invalid_frame(frame):
+    with pytest.raises(AssertionError, match="frame"):
+        _compare("sketch_create", catalog.BY_NAME["sketch_create"].returns, {"sketch_id": "s1", "frame": frame})
+
+
+def test_structured_response_checks_follow_the_declared_type_not_the_field_name():
+    frame = {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0], "normal": [0, 0, 1]}
+    for name in ("frame", "basis"):
+        declaration = [catalog.Result(name, catalog._SKETCH_FRAME.type)]
+        _compare("renamed_frame", declaration, {name: frame})
+        with pytest.raises(AssertionError, match="frame"):
+            _compare("renamed_frame", declaration, {name: {}})
+    _compare("string_field", [catalog.Result("frame", "string")], {"frame": "XY"})
 
 
 _RUNNERS: dict[str, Callable[..., dict]] = {}

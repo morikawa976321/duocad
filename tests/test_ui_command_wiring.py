@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import functools
 import importlib.util
+import json
 import re
 import sys
 
+from duocad.net import ws
 from duocad.paths import REPO_ROOT
+from duocad.server import Server
 from node_support import run_node
+from session_support import FakeConnection
 
 
 def _catalog():
@@ -237,20 +242,32 @@ def test_server_command_tables_are_readable():
     assert {"sketch_create", "extrude", "save_document"} <= names
 
 
-def test_every_hand_dispatched_command_has_a_branch():
-    """宣言で「個別に捌く」と書いたコマンドは、**`_dispatch` に実際に分岐がある**。"""
-    catalog = _catalog()
-    tree = ast.parse((REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8"))
-    dispatch = next(
-        node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef) and node.name == "_dispatch"
-    )
-    literals = {node.value for node in ast.walk(dispatch) if isinstance(node, ast.Constant) and isinstance(node.value, str)}
-    missing = [
-        command.name
-        for command in catalog.COMMANDS
-        if command.ws == "special" and command.name not in literals
-    ]
-    assert not missing, f"`_dispatch` に分岐が無い(宣言だけある): {missing}"
+def test_every_hand_dispatched_command_reaches_a_handler(monkeypatch):
+    """宣言だけのコマンドは unknown command になり、実際に分岐を通るコマンドは処理先か引数の検査へ届く。"""
+    class Probe:
+        _hidden_commands = frozenset()
+
+        def __getattr__(self, name):
+            raise RuntimeError(f"handler reached: {name}")
+
+        async def _settle_autosave(self, connection):
+            pass
+
+    missing = "__declared_without_a_handler__"
+    monkeypatch.setattr(ws, "WS_COMMAND_NAMES", ws.WS_COMMAND_NAMES | {missing})
+
+    async def check():
+        commands = [command.name for command in _catalog().COMMANDS if command.ws == "special"]
+        assert commands
+        for command in [missing, *commands]:
+            client = FakeConnection()
+            await Server._dispatch(Probe(), client, json.dumps({"cmd": command}))
+            assert len(client.payloads) == 1, command
+            answer = client.payloads[0]
+            assert answer.get("where", command) == command
+            assert ("unknown command:" in answer.get("message", "")) == (command == missing), answer
+
+    asyncio.run(check())
 
 
 def test_every_name_dispatched_by_hand_is_declared():

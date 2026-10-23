@@ -5,20 +5,18 @@
 from __future__ import annotations
 
 import json
-import threading
+import sys
 
 import pytest
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
-from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopoDS import TopoDS
 
 import duocad.verbs as verbs
-from duocad import kernel, kernel_face_edit, kernel_worker, query
+from duocad import kernel, kernel_face_edit, kernel_worker, query, worker_process
 from duocad.document import Body, Document
-from duocad.mesh_geometry import compound, indexed_map
+from duocad.mesh_geometry import indexed_map
 from document_support import replay_through_json
 
 BOX_VOLUME = 40.0 * 30.0 * 20.0
@@ -75,28 +73,30 @@ def test_a_worker_that_was_killed_between_calls_is_restarted():
     assert kernel.face_count(doc.get_body(body_id).shape) == 6
 
 
-def test_a_worker_that_dies_during_a_call_is_refused_and_the_next_call_works():
+def test_a_worker_that_dies_during_a_call_is_refused_and_the_next_call_works(tmp_path, monkeypatch):
     """計算中に子が落ちたら断り(文書もログも変えない)、次の要求で子を立て直す。"""
-    plate = BRepPrimAPI_MakeBox(100.0, 100.0, 5.0).Shape()
-    tools = [
-        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(10.0 + 13.0 * i, 10.0 + 13.0 * j, -1.0), gp_Dir(0, 0, 1)), 2.0, 7.0).Shape()
-        for i in range(7)
-        for j in range(7)
-    ]
+    child = '''
+import json, os, sys
+from pathlib import Path
+marker = Path(sys.argv[1])
+if not marker.exists():
+    message = json.loads(sys.stdin.readline())
+    marker.write_text(message["op"], encoding="utf-8")
+    os._exit(3)
+from duocad import kernel_worker
+kernel_worker.child_main()
+'''
     doc = Document()
-    doc.add_body(Body(id="plate", name="plate", kind="solid", shape=BRepAlgoAPI_Cut(plate, compound(tools)).Shape()))
-    holes = [f["index"] for f in query.describe_faces(doc.get_body("plate").shape) if f["kind"] == "cylinder_full"]
-    assert len(holes) == 49
-    kernel_face_edit.offset_faces(doc.get_body("plate").shape, [holes[0]], -0.5)  # 子を先に立てておく(起動を落とす窓に入れない)
+    body_id, rounded = _filleted_box(doc)
     before = _state(doc)
-    process = kernel_worker._WORKER._process
-    killer = threading.Timer(0.5, process.kill)  # 49 個を一度に消す計算は約 3.5 秒(docs/FACE_EDIT.md「規模」)
-    killer.start()
-    try:
+    marker = tmp_path / "received"
+    with worker_process.WorkerProcess([sys.executable, "-c", child, str(marker)]) as worker:
+        monkeypatch.setattr(kernel_worker, "_WORKER", worker)
         with pytest.raises(ValueError, match="途中で終了"):
-            verbs.delete_faces(doc, holes, body_id="plate")
-    finally:
-        killer.cancel()
-    assert _state(doc) == before
-    verbs.delete_faces(doc, holes[1:2], body_id="plate")
-    assert kernel.face_count(doc.get_body("plate").shape) == 6 + 48
+            verbs.delete_faces(doc, [rounded], body_id=body_id)
+        assert marker.read_text(encoding="utf-8") == "face_edit"
+        assert _state(doc) == before
+        assert worker._process is None
+        verbs.delete_faces(doc, [rounded], body_id=body_id)
+        assert worker.starts == 2
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(BOX_VOLUME, abs=1e-6)

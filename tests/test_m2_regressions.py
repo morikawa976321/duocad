@@ -1,7 +1,6 @@
 """M2の回帰テスト — **契約のテストが通っていても壊れていた経路**。"""
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 
@@ -11,7 +10,7 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, query
 from duocad.document import Body, Document
-from document_support import replay_through_json
+from document_support import assert_finite_json, replay_through_json
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_rectangle, face_plane, sketch_create
 from duocad.verbs import extrude
@@ -119,7 +118,7 @@ def test_broken_numbers_never_enter_the_sketch(add):
 
     assert len(document.log.entries) == entries_before
     assert len(regions(document, sketch_id)) == 1, "正常な領域が巻き添えで消えている"
-    json.loads(document.log.to_json())  # 裸のNaNが混ざっていたらここで落ちる
+    assert_finite_json(document.log.to_json())
 
 
 def _single_solid_step(tmp_path) -> Path:

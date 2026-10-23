@@ -7,6 +7,18 @@ import json
 import pytest
 
 from duocad.oplog import OpLog
+from document_support import assert_finite_json
+
+
+@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_the_saved_json_check_rejects_non_finite_numbers_even_inside_arrays(number):
+    with pytest.raises(ValueError):
+        assert_finite_json('{"operations": [{"args": {"point": [0, ' + number + ']}}]}')
+
+
+def test_the_saved_json_check_accepts_finite_numbers_and_unicode():
+    assert_finite_json('{"name": "部品", "point": [0, -2.5, 1e300], "visible": true}')
+
 
 def test_to_json_emits_actual_json_with_the_logged_fields():
     """to_json()の出力は本物のJSONで、各操作のseq/verb/args/provenanceが読める形で入る

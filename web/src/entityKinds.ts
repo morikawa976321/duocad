@@ -602,6 +602,15 @@ const VERB_TO_KIND: Record<string, EntityKind> = Object.fromEntries(
     .map(([kind, spec]) => [spec.verb as string, kind]),
 )
 
+export function entityPointKeys(): Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> {
+  return Object.fromEntries(
+    Object.entries(ENTITY_KIND_TABLE).map(([kind, spec]) => [
+      kind,
+      spec.pointKeys.map(([xKey, yKey]) => [xKey, yKey] as const),
+    ]),
+  )
+}
+
 function entityKindSpec(kind: string): EntityKindSpec {
   const spec = (ENTITY_KIND_TABLE as Record<string, EntityKindSpec>)[kind]
   if (!spec) throw new Error(`unknown entity kind: ${kind}`)
