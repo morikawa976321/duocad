@@ -12,7 +12,7 @@
  */
 /** 図形の種別。唯一の正は `entityKinds.ts` の表。 */
 import type { EntityKind } from './entityKinds'
-import type { Applied, ServerStateKey } from './generated/protocol'
+import type { Applied, ClientMessage, CommandCall, SendCommand, ServerStateKey } from './generated/protocol'
 import type { InterferencePayload } from './interferenceTypes'
 import type { GeometryPayload } from './viewport'
 import { createDelivered, decodeFrame, DeliveryMismatch, type WireState } from './wire'
@@ -963,9 +963,9 @@ export interface Session {
    * コマンドを1つ送る。文書を変える verb に限らない(保存・改名・一覧などファイル操作もここを通る)。
    * 引数のdictをそのまま流す(`cmd` と `client_op` を足すだけ)。引数を作るのは `CommandDef.build` の仕事で、
    * verbごとにメソッドを書き写すと、キー名を打ち間違えた経路がそのverbでだけ静かに壊れる。
-   * 受け取れるverbの一覧はコアの宣言(`duocad/catalog.py` の `COMMANDS`)が正で、無い文字列は `unknown command` で返る。
+   * コアの宣言(`duocad/catalog.py` の `COMMANDS`)から生成した型で、コマンド名と引数の対応を検査する。
    */
-  sendCommand(cmd: string, args: Record<string, unknown>, clientOp: number): void
+  sendCommand: SendCommand
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
   setSketchVisible(sketchId: string, visible: boolean, clientOp: number): void
   /** 差分編集(足す・外す)。 */
@@ -1178,7 +1178,10 @@ export function createSession(hooks: SessionHooks): Session {
    * 「同じ文言は積まずに数える」)であって、送る側が黙る話ではない —— ここで最初の1回だけ
    * にすると、**2回目の操作が黙って消える**(押した本人には成功と区別がつかない)。
    */
-  function send(payload: Record<string, unknown>, wait = false): void {
+  function send(request: ClientMessage | CommandCall, wait = false): void {
+    const payload = Array.isArray(request)
+      ? { cmd: request[0], ...request[1], client_op: request[2] }
+      : request
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       hooks.onError('サーバに繋がっていないので操作を送れなかった(自動で繋ぎ直しを試みている)', 'send')
       return
@@ -1483,8 +1486,8 @@ export function createSession(hooks: SessionHooks): Session {
     start() {
       void connect()
     },
-    sendCommand(cmd, args, clientOp) {
-      send({ cmd, ...args, client_op: clientOp }, !NOT_SHOWN_IN_VIEWPORT.has(cmd))
+    sendCommand(...request) {
+      send(request, !NOT_SHOWN_IN_VIEWPORT.has(request[0]))
     },
     setVisible(bodyId, visible, clientOp) {
       send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp }, true)

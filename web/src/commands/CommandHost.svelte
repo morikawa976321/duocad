@@ -56,6 +56,7 @@
     type ArgValues,
     type ChoiceArgSpec,
     type CommandDef,
+    type BuiltCommandRequest,
     type NumberArgSpec,
     type PickArgSpec,
     type PickTarget,
@@ -134,7 +135,7 @@
     onSetArgs?: (args: Record<string, unknown>) => void
     /** 起動中の verb を畳む(サーバの `end_command`)。 */
     onEndShared?: () => void
-    onRun: (verb: string, args: Record<string, unknown>) => void
+    onRun: (...request: BuiltCommandRequest) => void
     /** `mode` は `CommandDef.preview`。`local` はブラウザだけで描く(サーバへ投げない)。 */
     onPreview: (verb: string, args: Record<string, unknown>, mode: 'server' | 'local') => void
     onCancelPreview: () => void
@@ -460,10 +461,10 @@
       armedSelections = null
       cancelPublish()
       cancelPreview()
-      onRun(command.id, source.args)
+      onRun(...source.request)
       return
     }
-    onRun(command.id, source.args)
+    onRun(...source.request)
     // ローカルのコマンド(測定・ファイル操作)は従来どおり。無起動へは戻さない(成否が未確定。戻すのは `commandSucceeded()`)。
     resetInputs()
   }

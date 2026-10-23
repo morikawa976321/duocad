@@ -699,7 +699,7 @@ def test_the_generated_typescript_is_up_to_date() -> None:
 
 
 def test_the_web_code_type_checks_against_the_declaration() -> None:
-    """画面のコードが、生成した型(コマンド名・WebSocket の引数・`Applied`・状態のキー)で通る。
+    """画面のコードが生成型で通り、不正な送信要求は `typecheck_sender.ts` で型エラーになる。
 
     落ちたら、`commands/*.ts` の `id` や `build` の引数、`session.ts` の `ServerState` が宣言と合っていない。
     **skip しない** —— `web/node_modules` が無いときの skip は、無人実行では緑と区別が付かない。
@@ -707,7 +707,7 @@ def test_the_web_code_type_checks_against_the_declaration() -> None:
     tsc = REPO_ROOT / "web" / "node_modules" / "typescript" / "bin" / "tsc"
     assert tsc.exists(), f"TypeScript が無い({tsc})。`npm install --prefix web` を走らせること"
     done = subprocess.run(
-        ["node", str(tsc), "--noEmit", "-p", str(REPO_ROOT / "web" / "tsconfig.json")],
+        ["node", str(tsc), "--noEmit", "-p", str(REPO_ROOT / "web" / "tsconfig.type-tests.json")],
         capture_output=True,
         text=True,
         encoding="utf-8",

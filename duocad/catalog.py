@@ -2143,6 +2143,7 @@ COMMANDS: tuple[Command, ...] = (
         params=(
             Param("verb", "string", "プレビューするverb名(previewable なものだけ)"),
             Param("args", "object", "そのverbの引数"),
+            Param("preview_id", "integer", "古いプレビュー応答を捨てるための通し番号", required=False),
         ),
         session="preview",
         ws="special",
@@ -2197,6 +2198,7 @@ COMMANDS: tuple[Command, ...] = (
                 "いま見えているものの外接対角[mm](上下限の丸めにだけ使う)",
                 required=False,
             ),
+            Param("focus", ("object", "null"), "細かくする面の添字をボディごとに並べたもの", required=False),
         ),
         session="set_view_resolution",
         ws="special",
@@ -2264,6 +2266,8 @@ COMMANDS: tuple[Command, ...] = (
         params=(
             Param("element_size_mm", "number", "要素サイズ[mm]。省くと上限側(既定)", required=False),
             Param("target_safety_factor", "number", "目標安全率", required=False),
+            Param("min_width_mm", "number", "最小幅[mm]。省くと最も細い段", required=False),
+            Param("debug", "array", "要求するデバッグ表示の種類", required=False),
             Param(
                 "max_evaluations", "number",
                 "形状探索(初期合格探索とエネルギー順の削減)の評価予算。省くと既定(binary_search.find_best_feasibleの既定)",
@@ -2304,6 +2308,10 @@ COMMANDS: tuple[Command, ...] = (
         feature="shape_optimization",
         category="protocol",
         description="",
+        params=(
+            Param("step", "integer", "仕上げるステップの番号。省くと最新", required=False),
+            Param("debug", "array", "要求するデバッグ表示の種類", required=False),
+        ),
         session="request_finish",
         ws="special",
         mcp=False,
@@ -2330,6 +2338,7 @@ COMMANDS: tuple[Command, ...] = (
         feature="shape_optimization",
         category="protocol",
         description="",
+        params=(Param("index", "integer", "表示するステップの番号"),),
         session="steps_for_current",
         ws="special",
         mcp=False,

@@ -129,7 +129,7 @@ SENDER_FILES = {"web/src/session.ts"}
 #: `{cmd: '名前'}` / `{ cmd: "名前" }` / `{cmd:`名前`}`(空白・改行・引用符の違いを許す)。
 _CMD_LITERAL = re.compile(r"\bcmd\s*:\s*[\"'`]([a-z_]+)[\"'`]")
 #: `session.ts` の送信メソッドへ名前を文字列で渡す間接経路(`sendCommand('export_step', …)` / `files.run('import_step', …)`)。
-#: 引数が `string` なので型では守れない。
+#: コマンドと引数の対応は型で検査し、宣言と送信経路の一致もここで検査する。
 _INDIRECT_LITERAL = re.compile(r"\b(?:sendCommand|run)\s*\(\s*[\"'`]([a-z_]+)[\"'`]")
 #: ソケットそのもの。`session.ts` 以外に現れたら、ディスパッチャを迂回する送信口ができた。
 _SOCKET_USE = re.compile(r"new\s+WebSocket\s*\(|\.send\s*\(\s*JSON\s*\.\s*stringify")
