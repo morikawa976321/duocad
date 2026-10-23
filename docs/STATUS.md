@@ -30,7 +30,12 @@ autopilot で親セッションが進めた作業の現在地。判断の記録�
   描かない変化を意図して採った(decisions.md)。開発版の画面に出すには本体チェックアウトの `web` で `npm run build` が要る。
 - 本体の develop には別セッションの #211・#212(フィレット)が未 push で入っている。それを main へ運ばないよう、origin/develop の先に
   統合して push → PR、本体の develop にはその統合を早送りで入れている(decisions.md「本体の develop に未 push の別作業があるとき」)。
-- #232 を sol が実装中。#231 は最後。
+- **#232 は main に入った**(PR #239)。`sketchLayer.ts`。選択だけの変更で再構築の増分 0、削除・非表示・文書切替・破棄の後の残留 0。
+- #231: 段階1(`brep_topology`・`brep_geometry`・`brep_checks`、移行の再輸出つき)はレビュー合格。段階2(`brep_history`・
+  `brep_operations`・`brep_planar`、再輸出の撤去)を commit 済みでレビュー中。本体の develop の未 push のフィレット作業は旧い名前と
+  `BRepCheck_Analyzer` の直接呼び出しに依っていて、#231 を入れると壊れる(段階1の統合候補で 83 件が NameError)。#231 を main へ出す前に、
+  このワークツリーで本体の develop へ #231 を `--no-commit` で統合し、sol にフィレット側を新しい層へ合わせさせ、統合コミットに入れる
+  (decisions.md「#231 を未 push のフィレット作業と当たる状態で進める」)。
 
 ### 再開の手順
 
