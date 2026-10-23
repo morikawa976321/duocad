@@ -33,6 +33,10 @@ session.sendCommand('fillet', { radius: '2' }, 1)
 session.sendCommand('fillet', { distance: 2 }, 1)
 // @ts-expect-error metadata is not a command argument
 session.sendCommand('undo', { ack_id: 1 }, 1)
+// @ts-expect-error a command without arguments rejects unknown names even as null
+session.sendCommand('undo', { anything: null }, 1)
+// @ts-expect-error a command without arguments rejects unknown names even as null
+files.run('list_documents', { name: null })
 // @ts-expect-error client operation must be a number
 session.sendCommand('measure', {}, '1')
 // @ts-expect-error command takes no arguments
