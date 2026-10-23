@@ -5,10 +5,12 @@
    *
    * 選択の正はコアにある(docs/DESIGN_DECISIONS.md「層の分け方」)。ここは `state.selection` を
    * 描き直すだけで、選択の値を覚えない。責務は、ピック→コアの選択への翻訳(修飾キーで
-   * 追加・除去・置き換え)と、プレビューの往復(コマンド層が決め、ここが投げて幽霊を描く)。
+   * 追加・除去・置き換え)と、previewController が指示する送信・幽霊の描画。
    */
   import { onMount, untrack } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
+  import { sharedArgsChangeNote } from './sharedArgsController'
+  import { createPreviewController } from './previewController'
   import {
     bodyRef,
     commandRequest,
@@ -162,18 +164,27 @@
   /** 送って配信待ちの `clear_selection` の `client_op`。描画に使わない。 */
   let clearingOp: number | null = null
 
-  /** 投げたプレビューの番号(古い応答を捨てる。0は「投げていない」)。 */
-  let previewId = 0
-  /** 画面に幽霊が出ているか(テスト用フックが見る)。 */
+  /** 画面にサーバ計算の幽霊が出ているか(テスト用フックが見る)。 */
   let previewing = $state(false)
-  /**
-   * いま構えているサーバ投機実行(`clearPreview` で null)。無関係な再配信のあと投げ直すために控える:
-   * `viewport.update()` は形の変わった配信で幽霊を落とすが、`CommandHost` は引数が変わらない限り
-   * 再発火しない(`previewedKey`)ので、投げ直さないと消えたまま戻らない。
-   */
-  let serverPreview: { verb: string; args: Record<string, unknown> } | null = null
-  let refireTimer: ReturnType<typeof setTimeout> | null = null
-  const PREVIEW_REFIRE_MS = 250
+  const preview = createPreviewController({
+    send(verb, args, id) {
+      // スケッチの verb は確定と同じく編集中のスケッチを足す。
+      const sketchVerb = CATEGORY_OF.get(verb) === 'sketch' && !runsOutsideSketch(verb) && !runsWithoutSketchId(verb)
+      session.preview(verb, sketchVerb && sketchId !== null ? { ...args, sketch_id: sketchId } : args, id)
+    },
+    local: (verb, args) => showLocalGhost(verb, resolvePicksForGhost(ghostContext(), verb, args)),
+    render: handlePreview,
+    clear() {
+      previewing = false
+      viewport?.clearPreview()
+      // 空配列なら宛先によらず消える。通常モードのサーバ幽霊も対象。
+      viewport?.showSketchGhosts(sketchId ?? '', [])
+    },
+    hidden: () => { previewing = false },
+    now: () => performance.now(),
+    setTimer: (callback, delay) => setTimeout(callback, delay),
+    clearTimer: (timer) => clearTimeout(timer),
+  })
 
   // ---------------------------------------------------------------- モード(verbより1つ上の次元)
   /** スケッチを抜けたときの戻り先(最適化モード中にスケッチ名クリックで入ったら、抜けて最適化へ戻る)。 */
@@ -380,7 +391,7 @@
         // `clearingOp` が残って以後の選択の差分が空の選択に対して組まれ続ける(`onStatus` の切断時だけでは捨てられない)。
         clearingOp = null
       } else releasePending(clientOp ?? null)
-      if (where === 'preview') clearPreview()
+      if (where === 'preview') preview.clear()
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
       if (where === 'get_edges' || where === 'send') edgesAsked.clear()
       if (where === 'get_edge_chains' || where === 'send') {
@@ -415,10 +426,13 @@
       // Enterが永久に拒否される(`onerror` を伴わない正常クローズで踏む)。
       if (next !== 'open' && pendingOp !== null) {
         pendingOp = null
-        clearPreview()
+        preview.clear()
       }
       // 全解除の配信も同じく返ってこない(残すと以後の差分が空の選択に対して組まれ続ける)。
-      if (next !== 'open') clearingOp = null
+      if (next !== 'open') {
+        clearingOp = null
+        preview.disconnect()
+      }
       // 切断中の要求は捨てられるが `edgesAsked` には残る。残すと再接続後も版が同じなら
       // 「もう頼んだ」と判断して二度と取りに行かず、そのBodyの辺が出ないままになる。
       if (next !== 'open') {
@@ -432,7 +446,7 @@
         optimizeStarting = false
       }
     },
-    onPreview: handlePreview,
+    onPreview: preview.receive,
     onEdges: handleEdges,
     onEdgeChains: handleEdgeChains,
     onFaceChains: handleFaceChains,
@@ -828,20 +842,8 @@
     )
     // 文書から消えたBodyはビューポートからも取り除く。
     viewport?.prune(next.bodies.map((body) => body.body_id))
-    // サーバ投機実行のプレビュー(`showPreview`)だけの話。形が変わって本物が届くと `viewport.update()` が落とすので待っている印も降ろす。
-    // ローカル幽霊(`showBodyGhosts`)は `update()` の中で組み直されて出続ける(`viewportTypes.ts` の `update` の項)。
-    if (changed.length > 0 && shapesMoved) {
-      previewing = false
-      // 自分の確定ならここは null(`commit()` が先に `onCancelPreview` を呼ぶ)。残っているのは
-      // 他の操作による再配信なので同じ引数で投げ直す。続けて来ることがあるので落ち着くまで待つ。
-      if (serverPreview !== null) {
-        if (refireTimer) clearTimeout(refireTimer)
-        refireTimer = setTimeout(() => {
-          refireTimer = null
-          if (serverPreview !== null) requestPreview(serverPreview.verb, serverPreview.args, 'server')
-        }, PREVIEW_REFIRE_MS)
-      }
-    }
+    // ローカルのボディ幽霊は viewport.update が組み直す。サーバ計算分だけ再送する。
+    if (changed.length > 0 && shapesMoved) preview.shapesChanged()
 
     drawHighlight()
     // スケッチも「コアが持ち、ここは描き直すだけ」。直後の `lookAtSketch` が平面の枠を要るので $effect ではなく同期に描く。
@@ -935,7 +937,6 @@
   }
 
   function handlePreview(payload: PreviewPayload): void {
-    if (payload.preview_id !== previewId) return // 追い越された応答・中断後の応答は捨てる
     viewport?.showPreview(
       payload.bodies.map((body) => ({ bodyId: body.body_id, geometry: body.geometry })),
     )
@@ -1519,15 +1520,8 @@
       if (was.verb !== now.verb) {
         note(`外から「${commandLabel(now.verb)}」に切り替えられた(AI か別の画面)`)
       } else {
-        const changed = [...new Set([...Object.keys(was.args), ...Object.keys(now.args)])].filter(
-          (name) => JSON.stringify(was.args[name]) !== JSON.stringify(now.args[name]),
-        )
-        if (changed.length > 0) {
-          const shown = changed
-            .map((name) => `${argLabel(now.verb, name)}=${now.args[name] === undefined ? '(空)' : JSON.stringify(now.args[name])}`)
-            .join(' / ')
-          note(`外から「${commandLabel(now.verb)}」の引数が変わった: ${shown}`)
-        }
+        const message = sharedArgsChangeNote(was.args, now.args, commandLabel(now.verb), (name) => argLabel(now.verb, name))
+        if (message !== null) note(message)
       }
     }
     if (JSON.stringify(before.mode) !== JSON.stringify(after.mode)) {
@@ -1852,8 +1846,8 @@
 
   function onModeChanged(prev: Mode, next: Mode, crossedDocument: boolean): void {
     // 確定前の姿を持ち越さない。モードが変わると下の `{#key commandRowKey}` が `CommandHost` ごと作り直すので
-    // `onCancelPreview` は来ない。ここで消さないと、`move_body` の半透明ボディや `extrude` の投機実行の幽霊が残り続ける。
-    clearPreview()
+    // 子の再生成より先に消す。旧モードの幽霊を次のモードへ持ち越さない。
+    preview.clear()
     const nextSketch = next.kind === 'sketch' ? next.id : null
     // `CommandHost` が作り直されるので、起動中だったコマンドは終わりの通知なしに消える。
     activeVerb = null
@@ -2107,38 +2101,6 @@
     view.showSketchGhosts(sketchId, ghostCopies(verb, args, ghostSources(ghostContext(), verb, args)))
   }
 
-  /** 確定前の姿。ローカル方式はサーバへ投げない(形はブラウザ側で分かっており、投機実行にすると中断しても文書に一度は入る)。 */
-  function requestPreview(
-    verb: string,
-    args: Record<string, unknown>,
-    mode: 'server' | 'local',
-  ): void {
-    if (mode === 'local') {
-      // 参照を数値へ解決してから渡す(`resolvePicksForGhost`)。`showLocalGhost` は解決済みの数値しか読まない層。
-      showLocalGhost(verb, resolvePicksForGhost(ghostContext(), verb, args))
-      return
-    }
-    if (refireTimer) clearTimeout(refireTimer)
-    refireTimer = null
-    serverPreview = { verb, args }
-    previewId += 1
-    // スケッチの verb は確定(`runCommand`)と同じく編集中のスケッチを足して送る(投影は `sketch_id` で写す先を決める)
-    const sketchVerb = CATEGORY_OF.get(verb) === 'sketch' && !runsOutsideSketch(verb) && !runsWithoutSketchId(verb)
-    session.preview(verb, sketchVerb && sketchId !== null ? { ...args, sketch_id: sketchId } : args, previewId)
-  }
-
-  function clearPreview(): void {
-    previewId += 1 // 投げてある応答を無効にする(戻ってきても番号が合わない)
-    previewing = false
-    serverPreview = null
-    if (refireTimer) clearTimeout(refireTimer)
-    refireTimer = null
-    viewport?.clearPreview()
-    // 空配列なら宛先のスケッチによらず消える。サーバの幽霊は選んだ領域のスケッチに出るので、
-    // 開いているスケッチ(`sketchId`)が無いときも消す。
-    viewport?.showSketchGhosts(sketchId ?? '', [])
-  }
-
   function onWindowKeydown(event: KeyboardEvent): void {
     // Esc は測定の札を消す(コマンドの中断は `CommandHost` が同じキーで別に見る)。
     if (event.key === 'Escape') {
@@ -2254,6 +2216,7 @@
     viewport.onResolutionChange(sendViewResolution)
     session.start()
     return () => {
+      preview.dispose()
       session.dispose()
       serverWait.dispose()
       viewport?.dispose()
@@ -2522,8 +2485,7 @@
           onSetArgs={setCommandArgs}
           onEndShared={endCommand}
           onRun={runCommand}
-          onPreview={requestPreview}
-          onCancelPreview={clearPreview}
+          {preview}
           onNote={note}
           onStart={onCommandStart}
           onEnd={onCommandEnd}

@@ -201,7 +201,7 @@ export interface PointArgSpec extends ArgSpecCommon {
  * 2つ以上から1つ選ぶ引数。既定値を持たない(`join` 既定だと「切り取るつもりで足した」が黙って通る。サーバ側も `mode` を必須にしてある)。
  * `sends` は共有の作業空間(`state.command.args`)へ出すサーバ側の値(省略なら `value` そのまま。`build` と同じ読み替えをここにも
  * 書く: `copy` の 'copy' → true、荷重の 'down' → [0,0,-1])。サーバの値にならない選択肢(鏡映面の「面を選ぶ」)は `null`。
- * 配信された値を欄へ戻すときも同じ対応で引く(`CommandHost.svelte` の `syncFromShared`)。
+ * 配信された値を欄へ戻すときも同じ対応で引く(`sharedArgsController.ts` の `transitionSharedArgs`)。
  * `impliedBy` は `sends: null` の選択肢だけが持つ、配信からその選択肢を戻す手がかり: 配信にこの名前の引数があれば、
  * 自分の引数が配信に無くてもこの選択肢を選び直す(再読み込みで回転体の「線分を選ぶ」が戻らず `axis_line` が隠れたままになるのを防ぐ)。
  */
@@ -216,7 +216,7 @@ export function choiceSends(option: ChoiceArgSpec['options'][number]): unknown {
 }
 
 /**
- * 配信された引数(`remote`)から、選択肢の欄の値を決める(`CommandHost.svelte` の `syncFromShared`)。
+ * 配信された引数(`remote`)から、選択肢の欄の値を決める(`sharedArgsController.ts` の `transitionSharedArgs`)。
  * `previous` はこの画面がサーバにあると信じている引数(`lastPublished`)、`current` は欄のいまの値。
  * 戻りは `{ value }`(`undefined` は「選んでいない」)か、配信の値に対応する選択肢が無いときの `{ unmapped: true }`(欄は触らない)。
  *
