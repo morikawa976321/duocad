@@ -241,7 +241,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 `meshbody.reject` の1箇所、門は `verbs/_common.editable_body` と `verbs/extrude._resolve_target` の2つ。
 
 - **扱いは「名指ししたら断る / 導出した集合からは黙って外す」。** 根拠は「呼び出し側が何を主張したか」——
-  `select_face`/`edge`/`vertex`・`predicates` の `body` 明示・保持/除外ソリッドへの割り当ては名指しなので断り、
+  面・辺・頂点を指す選択・`predicates` の `body` 明示・保持/除外ソリッドへの割り当ては名指しなので断り、
   `predicates` の `body` 省略と `export_stl` の対象集合は導出なので、前者は黙って外し後者は含める。
 - **選択の粒度はボディ単位だけ**（メッシュには面の指紋が無い）。メッシュボディを含むドラッグ一括選択は丸ごと落ちる
   （範囲外の添字と同じ挙動に揃えてある）。

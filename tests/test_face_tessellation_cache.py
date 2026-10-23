@@ -66,23 +66,33 @@ def test_zooming_back_measures_nothing(boxed, counted) -> None:
     assert [face["positions"] for face in back["faces"]] == [face["positions"] for face in first["faces"]]
 
 
-def test_the_first_measurement_matches_the_selective_tessellation(boxed) -> None:
-    """落ちたら、面ごとに組み直した配りものが、ボディを一度に測った従来の配りものと食い違う(形・粗さ・印)。"""
+def test_the_first_measurement_matches_the_grouped_tessellation(boxed) -> None:
+    """面のキャッシュから組んだ配信が、同じ組を直接測った形・粗さ・印と一致する。"""
     session, body = boxed
-    # 最後の2つは引ききった姿(粗い側が細かい側と同じ。全面を細かく測るが、報告は求められた面のまま)
+    shape = session.document.get_body(body).shape
+    total = kernel.face_count(shape)
     for world_per_pixel, focus in ((0.02, None), (0.02, {body: [1]}), (0.02, {body: []}), (50.0, {body: [1]}), (50.0, {body: []})):
         fresh = Session(DEVIATION)
         fresh.document = session.document
         fresh.view.reset(session.document)
         fresh.set_view_resolution(world_per_pixel, 400.0, focus)
         ours = fresh.geometry(body)
-        args = fresh.view._tessellation_args(body)
-        theirs = kernel.tessellate_selective(session.document.get_body(body).shape, *args)
-        for key in ("deviation", "coarse_deviation", "fine_face_count", "face_count", "closed", "untriangulated", "bbox"):
-            assert ours[key] == theirs[key], key
-        assert [(f["index"], f["detail"], f["positions"], f["indices"]) for f in ours["faces"]] == [
-            (f["index"], f["detail"], f["positions"], f["indices"]) for f in theirs["faces"]
-        ]
+        fine, dev, angle, coarse_dev, coarse_angle = fresh.view._tessellation_args(body)
+        fine_set = set(range(1, total + 1)) if fine is None else set(fine)
+        coarse = (coarse_dev or dev, coarse_angle or angle)
+        groups = {}
+        for index in range(1, total + 1):
+            groups.setdefault((dev, angle) if index in fine_set else coarse, []).append(index)
+        measured = kernel.tessellate_faces(shape, groups)
+        assert ours["deviation"] == (dev if fine_set else coarse[0])
+        assert ours["coarse_deviation"] == coarse[0]
+        assert ours["fine_face_count"] == len(fine_set)
+        assert ours["face_count"] == total
+        assert ours["closed"] == measured["closed"]
+        assert ours["untriangulated"] == measured["untriangulated"]
+        assert ours["bbox"] == kernel.bounding_box_of_faces(list(measured["faces"].values()))
+        expected = [dict(measured["faces"][index], detail="fine" if index in fine_set else "coarse") for index in range(1, total + 1)]
+        assert [{key: value for key, value in face.items() if key != "serial"} for face in ours["faces"]] == expected
 
 
 def test_a_new_shape_starts_a_new_cache(boxed, counted) -> None:
@@ -186,7 +196,7 @@ def test_boundary_diagnostics_name_the_faces_of_the_body() -> None:
     assert [entry["face"] for entry in whole["boundary"]["unresolved"]] == [7], "題材の前提(7番目の面が交差する)が崩れた"
     part = kernel.tessellate_faces(shape, {recipe: [2, 7]})
     assert [entry["face"] for entry in part["boundary"]["unresolved"]] == [7]
-    split = kernel.tessellate_selective(shape, [2, 7], DEVIATION, recipe[1], coarse_deviation=1.0)
+    split = kernel.tessellate_faces(shape, {(1.0, recipe[1]): [1, 3, 4, 5, 6], recipe: [2, 7]})
     assert [entry["face"] for entry in split["boundary"]["unresolved"]] == [7]
 
 
@@ -201,10 +211,11 @@ def test_a_deep_zoom_measures_the_fine_faces_in_one_go(boxed, counted) -> None:
     session.set_view_resolution(deep, 400.0, {body: [1, 2]})
     ours = session.geometry(body)
     assert counted == [[1, 2]], "細かい面の組を1回で測り直す"
-    args = session.view._tessellation_args(body)
-    theirs = kernel.tessellate_selective(session.document.get_body(body).shape, *args)
-    fine = lambda result: [(f["index"], f["positions"], f["indices"]) for f in result["faces"] if f["detail"] == "fine"]
-    assert fine(ours) == fine(theirs)
+    recipe = (session.view.view_deviation, session.view.view_angular_deflection)
+    theirs = kernel.tessellate_faces(session.document.get_body(body).shape, {recipe: [1, 2]})
+    assert [{key: value for key, value in face.items() if key != "serial"} for face in ours["faces"] if face["detail"] == "fine"] == [
+        dict(theirs["faces"][index], detail="fine") for index in (1, 2)
+    ]
     counted.clear()
     session.set_view_resolution(0.02, 400.0, {body: [1]})
     session.geometry(body)

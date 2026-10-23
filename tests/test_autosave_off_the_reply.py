@@ -45,7 +45,7 @@ def test_the_saved_bytes_do_not_change(created, tmp_path) -> None:
             assert log.to_json(created) == _reference(log, created)
             written = tmp_path / "written.json"
             written.write_text(_reference(log, created), encoding="utf-8")
-            assert log.to_file_bytes(created) == written.read_bytes()
+            assert b"".join(log.to_file_chunks(created)) == written.read_bytes()
 
 
 def test_a_remembered_operation_follows_its_provenance_and_undo() -> None:

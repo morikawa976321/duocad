@@ -12,11 +12,11 @@ from OCP.TopoDS import TopoDS
 
 from duocad import interference, selection
 from duocad.document import Body
-from duocad.interference_worker import InProcessWorker, WorkerProcess
+from duocad.interference_worker import WorkerProcess
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.mesh_geometry import subshapes
 from duocad.server import Server, Session
-from interference_support import box
+from interference_support import InProcessWorker, box
 from mcp_support import call, call_error, request
 from session_support import FakeConnection
 

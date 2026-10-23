@@ -1,4 +1,4 @@
-"""`kernel_chains.blend_chains`: 画面で1本として選ぶ辺の連なりが、フィレット・面取りが実際にかかる範囲と一致する。"""
+"""辺の連なりが、フィレット・面取りが実際にかかる範囲と一致する。"""
 from __future__ import annotations
 
 import pytest
@@ -7,6 +7,11 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
 
 from duocad import kernel, kernel_chains
+
+
+def _all_chains(shape):
+    groups = kernel_chains.BlendChains(shape).of(range(1, kernel.edge_count(shape) + 1))
+    return {index: group[0] for index, group in groups.items()}
 
 
 def _stepped():
@@ -31,7 +36,7 @@ def test_collinear_split_edges_share_one_chain() -> None:
     shape = _stepped()
     front = _bottom_edges_along_x(shape, 0.0)
     assert len(front) == 2
-    chains = kernel_chains.blend_chains(shape)
+    chains = _all_chains(shape)
     assert chains[front[0]] == chains[front[1]] == min(front)
 
 
@@ -54,7 +59,7 @@ def test_tangent_line_arc_line_is_one_chain() -> None:
     )
     rounded = kernel.fillet_edges(box, {vertical: 2.0})["shape"]
     described = kernel.tessellate_edges(rounded)
-    chains = kernel_chains.blend_chains(rounded)
+    chains = _all_chains(rounded)
     bottom = [item for item in described if all(abs(v) < 1e-9 for v in item["points"][2::3])]
     arc = next(item for item in bottom if item["kind"] == "circle")
     together = [item["index"] for item in bottom if chains[item["index"]] == chains[arc["index"]]]
@@ -63,13 +68,13 @@ def test_tangent_line_arc_line_is_one_chain() -> None:
 
 def test_a_plain_box_has_one_chain_per_edge() -> None:
     """落ちたら、接線で続かない辺(直角の角)までまとめて選ばれる。"""
-    chains = kernel_chains.blend_chains(BRepPrimAPI_MakeBox(10, 10, 5).Shape())
+    chains = _all_chains(BRepPrimAPI_MakeBox(10, 10, 5).Shape())
     assert sorted(chains) == list(range(1, 13))
     assert all(chains[index] == index for index in chains)
 
 
 def _every_edge_chains(shape) -> dict:
-    """篩を通さず全辺に `Add` する素朴な版(`blend_chains` の答え合わせ用)。"""
+    """篩を通さず全辺に `Add` する素朴な版(`BlendChains.of` の答え合わせ用)。"""
     from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
     from OCP.TopoDS import TopoDS
 
@@ -134,7 +139,7 @@ def _shapes() -> dict:
 def test_the_sieve_loses_no_chain(name: str) -> None:
     """落ちたら、`Add` を呼ぶ辺を絞る篩(`_sieve`)が連なりの辺を取りこぼし、画面で連なりが割れる。"""
     shape = _shapes()[name]
-    assert kernel_chains.blend_chains(shape) == _every_edge_chains(shape)
+    assert _all_chains(shape) == _every_edge_chains(shape)
 
 
 def test_an_edge_also_listed_as_internal_still_chains() -> None:
@@ -152,7 +157,7 @@ def test_an_edge_also_listed_as_internal_still_chains() -> None:
     builder.MakeSolid(rebuilt)
     builder.Add(rebuilt, kernel._edge_map(stepped).FindKey(front[0]).Oriented(TopAbs_INTERNAL))
     builder.Add(rebuilt, indexed_map(solid, TopAbs_SHELL).FindKey(1))
-    assert kernel_chains.blend_chains(rebuilt) == _every_edge_chains(rebuilt)
+    assert _all_chains(rebuilt) == _every_edge_chains(rebuilt)
 
 
 def test_an_internal_only_edge_can_start_a_chain() -> None:
@@ -168,7 +173,7 @@ def test_an_internal_only_edge_can_start_a_chain() -> None:
     builder.MakeSolid(solid)
     builder.Add(solid, indexed_map(outer, TopAbs_SHELL).FindKey(1))
     builder.Add(solid, indexed_map(_stepped(), TopAbs_SHELL).FindKey(1).Oriented(TopAbs_INTERNAL))
-    assert kernel_chains.blend_chains(solid) == _every_edge_chains(solid)
+    assert _all_chains(solid) == _every_edge_chains(solid)
 
 
 @pytest.mark.parametrize(
@@ -177,7 +182,7 @@ def test_an_internal_only_edge_can_start_a_chain() -> None:
 def test_asking_one_edge_at_a_time_gives_the_same_chains(name: str) -> None:
     """落ちたら、画面がホバーした辺1本ずつ頼む連なり(篩を通さない `Add` 1回)が、全辺ぶんを一度に求めた連なりと食い違う。"""
     shape = _shapes()[name]
-    whole = kernel_chains.blend_chains(shape)
+    whole = _all_chains(shape)
     finder = kernel_chains.BlendChains(shape)
     for index in reversed(sorted(whole)):  # 頼む順に依らない(連なりの後ろの辺から先に頼む)
         group = finder.of([index])[index]
