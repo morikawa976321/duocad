@@ -89,7 +89,8 @@ def _imported_module_roots(py_file: Path) -> set[str]:
 
 
 def _imports_optimization_executor(py_file: Path) -> bool:
-    forbidden = {"optimize_run", "duocad.optimize_run", "optimize_acceptance", "duocad.optimize_acceptance"}
+    modules = {"optimize_run", "optimize_acceptance", "optimize_pipeline", "optimize_finish", "optimize_events"}
+    forbidden = modules | {f"duocad.{name}" for name in modules}
     return any(name == module or name.startswith(module + ".")
                for name in _imported_modules(py_file) for module in forbidden)
 
@@ -201,6 +202,9 @@ def test_executor_boundary_scan_detects_every_import_form(tmp_path):
         "__import__('duocad.optimize_run')",
         "import_module('.optimize_run', 'duocad')",
         "from duocad.optimize_acceptance import inspect_document",
+        "from duocad.optimize_pipeline import execute",
+        "from .optimize_finish import finish_shape",
+        "from duocad import optimize_events",
     ]
     for statement in imports:
         source.write_text(f"def load():\n    {statement}\n", encoding="utf-8")
