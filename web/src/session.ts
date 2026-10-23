@@ -13,6 +13,7 @@
 /** 図形の種別。唯一の正は `entityKinds.ts` の表。 */
 import type { EntityKind } from './entityKinds'
 import type { Applied, ServerStateKey } from './generated/protocol'
+import type { InterferencePayload } from './interferenceTypes'
 import type { GeometryPayload } from './viewport'
 import { createDelivered, decodeFrame, DeliveryMismatch, type WireState } from './wire'
 
@@ -473,10 +474,15 @@ export type MeasureItem =
       point: string | null
       /** 点を指したときだけ。 */
       position?: number[]
+      /** 点を指したときだけ(`position` の世界座標)。 */
+      world?: number[]
       /** 図形全体を指したときだけ(解決済みの素の数値)。 */
       params?: Record<string, number>
-      /** 線分の図形全体を指したときだけ。 */
+      /** 線分・楕円の図形全体を指したときだけ。 */
       length?: number
+      /** 線分の図形全体を指したときだけ(端点の世界座標)。 */
+      start?: number[]
+      end?: number[]
     }
 
 /** `inspect_selection` の返事(要求した接続にだけ届く)。`item` は選択がちょうど1項目のときだけ。 */
@@ -901,6 +907,8 @@ export interface SessionHooks {
   onMeasure(payload: MeasurePayload): void
   /** 選択情報の表示の返事(状態は変わっていない)。要求した接続にだけ届く。 */
   onSelectionInfo(payload: SelectionInfoPayload): void
+  /** 干渉チェックの結果(状態は変わっていない)。要求した接続にだけ届く。古い返事かどうかは受け手が `client_op` と版で決める。 */
+  onInterference(payload: InterferencePayload): void
   /** ファイルを書いた(状態は変わっていない)。 */
   onFile(payload: FilePayload): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
@@ -995,6 +1003,11 @@ export interface Session {
   getVertices(bodyId: string): void
   /** 選択がちょうど1項目ならその寸法を取りに行く(応答は `onSelectionInfo`)。状態配信ではない。 */
   inspectSelection(requestId: number): void
+  /**
+   * 干渉チェックを頼む(応答は `onInterference`。数秒〜2分かかりうる。待ちバーは出さない)。対象はコアの選択と可視性から決まる。
+   * `clearance` は隙間の要求[mm](0 なら隙間検査なし)。
+   */
+  checkInterference(clearance: number, clientOp: number): void
   /**
    * 画面の見え方をサーバへ知らせ、ズームに合わせた粗さでソリッド・辺・領域を測り直させる(可変解像度)。
    * 応答は通常の状態配信で、変わらなければ何も来ない。
@@ -1305,6 +1318,8 @@ export function createSession(hooks: SessionHooks): Session {
         between: message.between,
         between_error: message.between_error,
       })
+    } else if (message.type === 'interference') {
+      hooks.onInterference({ ...message, client_op: message.client_op ?? null } as InterferencePayload)
     } else if (message.type === 'selection_info') {
       hooks.onSelectionInfo({
         request_id: message.request_id ?? null,
@@ -1509,6 +1524,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     inspectSelection(requestId) {
       send({ cmd: 'inspect_selection', request_id: requestId })
+    },
+    checkInterference(clearance, clientOp) {
+      send({ cmd: 'check_interference', clearance, client_op: clientOp })
     },
     setViewResolution(worldPerPixel, sizeHint, focus) {
       if (focus == null) {

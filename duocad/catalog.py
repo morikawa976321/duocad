@@ -473,9 +473,10 @@ COMMANDS: tuple[Command, ...] = (
             "領域・面・ボディを選んでこれで読む(押し出す前の位置決めは領域で読む)。"
             "面は種類を `surface_kind` に、円(円弧)の辺は `radius` と `center` を、"
             "スケッチの線分は長さ、楕円は周長を `length` に返す。"
-            "ちょうど2項目(頂点・直線の辺・平らな面)なら、そのあいだの距離が `between` に"
-            "返る(直線・平面は無限に延ばして測る。平行でない線・面どうしは距離の代わりに"
-            "角度)。verb ではないので、選んだ対象を確かめる往復に使う。"
+            "ちょうど2項目(頂点・直線の辺・平らな面・スケッチの点・スケッチの線分・領域)なら、そのあいだの"
+            "距離が `between` に返る(直線・平面は無限に延ばして測る。スケッチの線分は直線、領域はそのスケッチの"
+            "平面として測る。平行でない線・面どうしは距離の代わりに角度)。スケッチの点・線分は世界座標も"
+            "`world` / `start` / `end` に返る。verb ではないので、選んだ対象を確かめる往復に使う。"
         ),
         session="measure",
         ws="special",
@@ -483,6 +484,42 @@ COMMANDS: tuple[Command, ...] = (
         note=(
             "画面の「測定」コマンドの実体。WSは要求した接続へ `{type:'measure', client_op, ...}` を"
             "返す(状態配信ではない。`get_edges` と同じ扱い)。"
+        ),
+    ),
+    Command(
+        name="check_interference",
+        category="query",
+        description=(
+            "ボディどうしが重なっていないか・触れていないか・離れすぎていないかを調べるときに呼ぶ。"
+            "文書もログも変えない読み取り専用(verb ではない)。"
+            "対象は、選択が無ければ**見えているボディ**の総当たり、ボディを1つだけ選んでいればその1つと"
+            "ほかの見えているボディ全部、2つ以上選んでいれば選んだものどうし(面・辺・頂点を選んでいれば持ち主のボディ)。"
+            "組ごとに関係 `relation` を返す: overlap(体積が重なる。`volume` `thickness` `center` `bbox`)/"
+            "tiny_overlap(重なりが厚さ 1e-3 mm 以下の薄片。多くは合わせ面の数値誤差だが食い込みでないとは言い切れない)/"
+            "contact(面・辺・点で触れるだけ。`contact` と面なら `area`)/separated(離れている)/"
+            "unknown(計算が終わらない・失敗した。`reason` を読む。「干渉なし」ではない)。"
+            "`clearance`(mm・既定 0)を渡すと、はめ合いの隙間の要求として各組に short(要求未満。触れている組は全部)/"
+            "at(要求と一致)/ok を付ける(離れている組は最短距離 `distance` と `points`)。"
+            "離れていて隙間も足りている組は件数だけで `pairs` には入らない。接触・微小重なり・unknown は省かない。"
+            "メッシュのボディを含む組は近似(`approximate`)。重い計算は子プロセスで時間の上限つきで走り、"
+            "上限に達した組は unknown、残りは未着手(`complete: false`)で返る。数秒〜数十秒かかりうる。"
+        ),
+        params=(
+            Param(
+                "clearance",
+                "number",
+                "はめ合いの隙間の要求(mm・0 以上の有限の数。省略は 0=隙間検査なし)。"
+                "0 より大きいと触れている組は全部 short になるので、はめ合いを見るときは相手の2部品を選んで渡す",
+                required=False,
+            ),
+        ),
+        session="check_interference",
+        ws="special",
+        changes_document=False,
+        note=(
+            "画面の「干渉チェック」の実体。WSは `interference_job` をワーカースレッドで走らせ、要求した接続へ"
+            "`{type:'interference', client_op, ...}`(描画用の三角形つき)を返す(状態配信ではない)。"
+            "結果の寿命は画面が `client_op` と `document_revision` で決める。MCP は同期で走り、描画用の三角形は付けない。"
         ),
     ),
     Command(
@@ -1326,6 +1363,51 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="project_to_sketch",
+        returns=(
+            Result("created", "string[]"),
+            Result("sketch_ids", "string[]"),
+            Result("approximated", "number"),
+        ),
+        category="sketch",
+        description=(
+            "選択したソリッドの辺(1本ずつ)と面(外周と穴のループ)を、スケッチの平面へ正投影した図形として足すときに呼ぶ"
+            "(Fusion の「投影」)。写した図形は普通の線分・円・円弧・楕円・3次ベジエで、元の形が後で変わっても追従しない。"
+            "斜めの平面へ写した円は楕円、円弧は楕円弧を誤差 0.001 mm 以下の3次ベジエの列で近似する(応答の approximated が数)。"
+            "平面に垂直な辺は点に潰れるので図形を作らず、全部が潰れると失敗して何も変わらない。対象は選択から取る(引数では受けない)。"
+            "ボディの外形は project_outline。"
+        ),
+        params=(_SKETCH_ID,),
+        session="project_to_sketch",
+        previewable=True,
+        preview_session="preview_project_to_sketch",
+        resets_selection=True,
+        note=(
+            "ログには写した図形の数値を載せ、redo / replay は形を引き直さない(`envelope_regions` と同じ)。"
+            "プレビューは投機実行でなく `preview_project_to_sketch`(写る図形を `sketch_ghost` で返す)"
+        ),
+    ),
+    Command(
+        name="project_outline",
+        returns=(
+            Result("created", "string[]"),
+            Result("sketch_ids", "string[]"),
+            Result("approximated", "number"),
+        ),
+        category="sketch",
+        description=(
+            "選択(面・辺・頂点・ボディ)が属するボディを、スケッチの平面の法線方向から見た外形(影の境界)を図形として足すときに呼ぶ。"
+            "外周と、向こうが透けて見える穴(貫通穴)を写し、止まり穴の底や段の線のように影の内側にある線は写さない。"
+            "複数のボディを選ぶと、影を合わせた外形になる。元の形が後で変わっても追従しない。対象は選択から取る(引数では受けない)。"
+        ),
+        params=(_SKETCH_ID,),
+        session="project_outline",
+        previewable=True,
+        preview_session="preview_project_outline",
+        resets_selection=True,
+        note="ログには写した図形の数値を載せ、redo / replay は形を引き直さない(`envelope_regions` と同じ)",
+    ),
+    Command(
         name="mirror_body",
         returns=(
             Result("plane_point", "number[]"),
@@ -1366,6 +1448,67 @@ COMMANDS: tuple[Command, ...] = (
             "`PickArgSpec`)である。載せてしまうと `require_bodies` が鏡映面に使った面の"
             "ボディまで対象に数え、基準にした部品まで一緒に複製される。"
             "プレビュー(幽霊)は無い —— `previewable=False`。"
+        ),
+    ),
+    Command(
+        name="split_body",
+        returns=(
+            Result("plane_point", "number[]"),
+            Result("plane_normal", "number[]"),
+            Result("keep", "string"),
+            Result("created", "string[]"),
+            Result("changed_bodies", "string[]"),
+        ),
+        category="feature",
+        description=(
+            "選択の面/辺/頂点が**属するボディ**を、平面で切って複数のボディに分けるときに呼ぶ"
+            "(大きな部品を割る・蓋と本体に分ける・断面を見る)。体積の合計は変わらず、切り口に平らな面ができる。"
+            "切る平面は base_plane(XY/XZ/YZ)・plane_face(既存の平らな面への参照)・sketch_id(スケッチの平面。"
+            "オフセット平面を含む)のどれか1つ。keep は残す側: both(既定。両側を残す)/ positive(平面の法線が向く側だけ。"
+            "平らな面なら外向きの法線)/ negative(反対側だけ)。元のボディの番号・名前は、残す塊のうち体積が最大のものが"
+            "引き継ぎ、ほかの塊は新しいボディになる。片側が離れた複数の塊に分かれるときは塊ごとに別のボディ。"
+            "平面がボディと交わらない・面に接しているだけのときは、どのボディも変えずに失敗する"
+            "(複数のボディは1つでも交わらなければ全体が失敗)。メッシュのボディは割れない。"
+        ),
+        params=(
+            Param(
+                "base_plane",
+                "string",
+                "切る平面を基準平面で指す XY / XZ / YZ(原点通過)。plane_face・sketch_id とは同時に渡せない",
+                required=False,
+            ),
+            Param(
+                "plane_face",
+                "object",
+                "切る平面を既存ソリッドの平らな面で指す "
+                '{"body": body_id, "index": 面の1始まりの添字}。base_plane・sketch_id とは同時に渡せない。'
+                "この面自身が対象ボディに属していてもよい(ただし面に接しているだけでは割れない)",
+                required=False,
+            ),
+            Param(
+                "sketch_id",
+                ["string", "object"],
+                "切る平面をスケッチの平面で指す(スケッチのID。面に貼ったもの・オフセット平面のものも使える。"
+                '画面はスケッチの図形1つを指すので `{"sketch": sketch_id, "entity": entity_id}` の参照も受ける)。'
+                "base_plane・plane_face とは同時に渡せない",
+                required=False,
+            ),
+            Param(
+                "keep",
+                "string",
+                "残す側 both(既定)/ positive(平面の法線が向く側だけ)/ negative(反対側だけ)",
+                required=False,
+            ),
+        ),
+        session="split_body",
+        previewable=True,
+        resets_selection=True,
+        note=(
+            "**ログには解決済みの数値 `{plane_point, plane_normal}` を載せる**(`mirror_body` と同じ。後で面の番号が"
+            "変わっても再生が同じになる)。切る平面は3つが排他で、画面は「切る平面」の選択肢のうち基準平面・"
+            "面・スケッチの平面のどれか1つを送る。面・スケッチのピックは共有選択集合に入れない別チャンネル"
+            "(`mirror_body` の `plane_face` と同じ理由)。`keep` はMCPでは省略=both、画面は常に送る。"
+            "番号・名前の引き継ぎと採番は `duocad/verbs/split_body.py` のdocstring。"
         ),
     ),
     Command(

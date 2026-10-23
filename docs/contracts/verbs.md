@@ -99,6 +99,18 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **`pytest.approx(0.0)` は絶対許容差がほぼ 0。** `kernel.bounding_box` を鏡映(x=0)で検算すると OCCT の境界箱が許容差ぶん膨らんで 1e-7 程度の誤差が乗るので、0 との比較には `abs=1e-4` を明示。
 - **`smoke-mirror.mjs` の円を描く手順が 11 回中 1 回だけ落ちた**(原因未確定、再現せず)。描く 4 verb は点を 1 つずつ食うので、クリックが早すぎると図形が出ないのに理由も出ない。1 手ごとに `#command-prompt` の待ち受け(`awaitPrompt`)で確かめ、失敗時にスケッチの図形・選択・トーストを出す。
 
+## split_body(ボディの分割。#193)
+
+- 呼ぶ面は `split_body(base_plane | plane_face | sketch_id, keep="both")`。対象は確定選択の面/辺/頂点が属するボディ(`mirror_body` と同じ。複数ボディなら全部を同じ平面で割る)。verb は `duocad/verbs/split_body.py`、幾何は `duocad/kernel_split.py`(`kernel.py` には足していない)。
+- **切る平面は3つが排他**(0個・2個以上は ValueError): 基準平面 / 平らな面(法線はその面の外向き。`kernel_sketch.face_frame`)/ スケッチの平面(`sketch_plane_frame`。オフセット平面・面に貼ったスケッチを含む)。**`sketch_id` は図形の参照 `{"sketch", "entity"}` も受ける**(画面は図形を1つ指す。`revolve.axis_line` と同じ別チャンネルのピック。後述の理由)。ログには解決済みの `{plane_point, plane_normal}` だけを載せる(`mirror_body` と同じ)。
+- **`keep`**: `both`(既定)/ `positive`(法線の向く側だけ)/ `negative`。画面は `keep` を必ず送る(選択肢に既定を持たせない作法。両側を押す1手が増える)。MCP は省略=both。
+- **番号・名前・ID の引き継ぎ(本人ではなく親セッションの決定。2026-10-21)**: 元のボディの ID・番号・名前は、**残す塊のうち体積が最大のもの**が引き継ぐ。法線の向きで引き継ぎ先が変わらない(蓋と本体に割ると大きい本体が元の名前を保つ)。体積が相対 1e-9 以内で同じなら正側、それでも決まらなければ重心の (x, y, z) の小さい方(`kernel_split` が塊をこの順に並べて返し、verb は先頭を取る)。ほかの塊は新しいボディで、**名前は `naming` の通し番号(`ボディN`)**(複製・鏡映と同じ流儀。元の名前から派生させる流儀はコードベースに無い)・表示の属性は `dataclasses.replace` で元から写す。片側が離れた複数の塊になるときは `kernel.split_solids` で塊ごとに別のボディ(U字を横に切る)。
+- **全ボディの切断と検査が終わるまで文書にも採番にも触れない**(`_plan` が先、`_apply` が後)。**どれか1つでも平面と交わらなければ全体を断る**(一部だけ成功させない)。面に接しているだけ(片側が空)も「交わらない」。メッシュのボディは `editable_body` が断る。
+- **ログの形**: `args = {bodies, plane_point, plane_normal, keep, created: [[新ID…]…](ボディごと), numbers: [[通し番号…]…]}`。再生は同じ計算をして、塊を決定的な順で ID・番号へ当てる(塊の数が記録と違えば `copy_ids` が落ちる)。**由来(`provenance`)は** `{"verb", "bodies": [{"body", "pieces": [{"body", "side", "face_map", "deleted", "new_faces"}]}]}` で、`face_map` の鍵は元の面、値は**その塊の**面の添字、`new_faces` が切り口。
+- **undo**: 元のボディの形を `_common.SNAPSHOTS` へ退避し(`fillet` と同じ。`(body_id, seq)` 鍵)、作ったボディは `remove_created_bodies`(足した順の逆)。active は足す直前の値へ戻る(`mirror_body` と同じ)。
+- **プレビューは投機実行**(`previewable=True`)。`kernel_split.split_by_plane` の結果は `kernel.remembered` に載るので、確定はプレビューの形をそのまま使う。
+- Web は `SPLIT_BODY`(`commands/features.ts`、`#split-body`)。平面の choice は XY/XZ/YZ + `face`(「面を選ぶ」)+ `sketch`(「スケッチを選ぶ」)、後ろの2つは `sends: null` で `build` が `plane_face` / `sketch_id` へ読み替える。**スケッチの平面は「スケッチの線を1本指す」**(`PickArgSpec` の `sketchEntity`。平面そのものを指す的は画面に無く、点は指せない: `FINER_THAN` が点を外す)。そのため**線・円などの無いスケッチの平面は画面からは指せない**(MCP は `sketch_id` で指せる)。`sketch_id` の UI の値(図形の参照)とサーバが配る値(文字列)が違いうるので、AI が文字列で埋めた `sketch_id` は画面のピック欄には戻らない。
+
 ## boolean_body
 
 - **ツールボディは引数で渡さない。** 呼ぶ前に選択集合(面/辺/頂点、`min=1`)へ入れ、内部で `selection.require_bodies(document)` が逆引きする。`target_ref` は `{"body","kind":"face","index"}`(面1枚。選択集合には入れない)、`mode` は `union|cut|intersect`。verb 層は `verbs.boolean_body(doc, target_ref, tool_body_ids, mode)`。WS は表(`ws=table`)で `target_ref`/`mode` とも必須。
@@ -140,6 +152,15 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **結果は線分・円弧・円・閉じた楕円・3次ベジエ。正確な図形に直せない辺(楕円のずらし曲線・楕円弧・有理 B-スプライン)は誤差 0.001 mm 以下の3次ベジエの列で近似する(`kernel_sketch.edge_entities`。応答の `approximated` が数)。面がちょうど 1 枚でなければ ValueError で何も変えない。** redo/replay はログの図形数値を使う。
 - **依存禁止**: 領域の添字(後の編集で指す先が変わる)。負のオフセットを OCCT へ直接頼むこと。
 - **罠**: 同心円の面の内向きオフセットは失敗する(箱 − 補集合の拡大で代替)。詳細は docs/CAD_LIBRARY_PITFALLS.md。
+
+## project_to_sketch / project_outline(スケッチの投影)
+
+- 呼ぶ面は MCP/セッション `project_to_sketch(sketch_id)`(対象は確定選択の辺・面)と `project_outline(sketch_id)`(対象は確定選択の面・辺・頂点・ボディが属するボディ)。verb は `duocad/verbs/project_to_sketch.py`、幾何は `kernel_project.edge_entities` / `face_edges` / `outline_entities`。プレビューは投機実行でなく `preview_project_to_sketch` / `preview_project_outline`(`sketch_ghost`。図形が無ければ `pieces=0`)。
+- **写した図形は普通の図形で元の形に追従しない。** redo/replay はログの図形数値を使う(面・辺の添字に依存しない)。1回の呼び出しの中の重複(上面と下面の同じ長方形)は1つにするが、スケッチに既にある図形との重複は除かない。
+- 点に潰れる辺は図形にしない。全部が潰れたら ValueError で何も変えない。メッシュのボディは断る。
+- **写した図形の端点は 0.01 mm 以内なら1点に揃える**(`kernel_project.WELD_TOLERANCE`。近い組から順にまとめ、差し渡し 0.1 mm 以下の図形の両端は1点にしない。円弧の端が集まれば円の上の点 — 違う円の円弧が2つなら2円の交点 — へ揃え、円の上で揃えきれない隙間は短い線分でつなぐ)。STEP の辺の曲線は頂点から形状許容差の分ずれて終わり(本人の PC ケースで最大 0.0097 mm)、揃えないと写した外周が閉じず領域にならない(PC ケースの平らな面 1155 枚のうち、揃えないと 77 枚、揃えると 0 枚)。
+- 外形は隠線処理(`HLRBRep_Algo`)の線で平面を割り、法線方向の直線がボディに当たる面の和の境界。`HLRBRep_HLRToShape` の線は射影の局所座標で返り、3D の曲線を持たない辺がある(`BRepLib.BuildCurves3d` で作ってから世界座標へ戻す)。
+- Web は `PROJECT_TO_SKETCH`(`#sketch-project`、辺・面の選択)と `PROJECT_OUTLINE`(`#sketch-project-outline`、ボディの選択。面のクリックをボディへ畳む)。起動中はスケッチモードでもソリッドを指す(`App.svelte` の `solidPickInSketch`)。
 
 ## 押し出し(extrude)の kernel 分離・web 統合・extrude_face 廃止
 

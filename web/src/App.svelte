@@ -34,6 +34,7 @@
   import { ghostCopies, snapSketchPoint } from './entityKinds'
   import { IMPORT_STEP } from './commands/files'
   import { isImeKey } from './keys'
+  import { INTERFERENCE } from './commands/interference'
   import { MEASURE } from './commands/measure'
   import type { MeasurePayload } from './session'
   import {
@@ -97,6 +98,8 @@
   import SettingsDialog from './SettingsDialog.svelte'
   import { createDisplaySettings } from './displaySettings.svelte'
   import { createDocumentFiles } from './documentFiles.svelte'
+  import { createInterference } from './interference.svelte'
+  import InterferencePanel from './InterferencePanel.svelte'
   import { createMeasurement } from './measurement.svelte'
   import { createSelectionInfo } from './selectionInfo.svelte'
   import { createServerWait } from './serverWait.svelte'
@@ -121,6 +124,8 @@
     IMPORT_STEP,
     // 測定は verb ではなく `query`(文書もログも変えない)。通常モードだけ(`commands/measure.ts`)。
     MEASURE,
+    // 干渉チェックも `query`。引数なしでその場で走り、結果は右のパネル(`InterferencePanel`)とビューポートの層に出る。
+    INTERFERENCE,
   ]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
@@ -342,6 +347,12 @@
     onState: handleState,
     onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
     onError: (message, where, clientOp) => {
+      // 干渉チェックの要求の失敗(対象が足りない等)。待ちバーも `pendingOp` も使っていないので、実行中の表示を解くだけ。
+      if (where === 'check_interference') {
+        interference.onError(clientOp)
+        fail(message)
+        return
+      }
       // サムネイルは裏の要求。`pendingOp` を解くと、待っていた操作の確定より先に次の Enter が通る。
       if (where === 'save_thumbnail' || where === 'get_thumbnail') {
         files.dropThumbnailRequests()
@@ -412,6 +423,7 @@
     onVertices: handleVertices,
     onMeasure: handleMeasure,
     onSelectionInfo: (payload) => selectionInfo.onResult(payload),
+    onInterference: (payload) => interference.onResult(payload),
     onFile: files.onFile,
     onAiStatus: ai.onStatus,
     onAiToolCall: ai.onToolCall,
@@ -965,6 +977,19 @@
       host?.commandSucceeded()
     }
   }
+
+  // ---------------------------------------------------------------- 干渉チェック(issue #186。verbではない)
+  const interference = createInterference({
+    send: (clearance, clientOp) => session.checkInterference(clearance, clientOp),
+    nextOp,
+    // サーバの `Session.interference_job` の `revision` と同じ作り。
+    revision: () => (model === null ? null : `${model.generation}.${model.applied_count}.${model.log.length}`),
+    generation: () => model?.generation ?? null,
+    connected: () => status === 'open',
+    modeKind: () => mode.kind,
+    viewport: () => viewport,
+    fail,
+  })
 
   // ---------------------------------------------------------------- 選択情報(issue #140。verbではない)
   const selectionInfo = createSelectionInfo({
@@ -1522,6 +1547,8 @@
     if (activeVerb === null) return
     activeVerb = null
     if (verb === MEASURE.id && measure.current !== null) return
+    // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
+    if (verb === INTERFERENCE.id) return
     clearSelectionIfAny()
   }
 
@@ -1666,18 +1693,7 @@
     // 素クリックのトグル(`toggleOnlyMode`)はどの種類にも効かせる(測定は辺・頂点でも測る)。
     // 来るのは今指せる種類(`pickKinds`)だけ: コマンドの起動中はそのコマンドが受け付けるものに絞られている。
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
-    // 辺は連なりで扱うコマンド(フィレット・面取り)の起動中だけ連なりの単位(`edgeChainRefs`)、それ以外は1本。
-    if (event.edge !== null) {
-      const edge = event.edge
-      const refs = edgeChainRefs(edge.bodyId, edge.edgeIndex)
-      if (refs === null) deferUntilChains([edge], () => editEdgeChain(edgeChainRefs(edge.bodyId, edge.edgeIndex)!, pickMode))
-      else editEdgeChain(refs, pickMode)
-      return
-    }
-    if (event.vertex !== null) {
-      editSelection(vertexRef(event.vertex.bodyId, event.vertex.vertexIndex), pickMode)
-      return
-    }
+    if (editSolidEdgeOrVertex(event, pickMode)) return
     // スケッチの図形(点・線)。通常モードでは見えている全スケッチの図形が来る(スケッチモードは `onSketchPick`)。
     if (event.sketchEntity !== null) {
       const hit = event.sketchEntity
@@ -1699,6 +1715,37 @@
     // 保持/除外ソリッドの間だけボディ粒度へ畳む(`optimizeSetFaceRef`)。
     editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
+
+  /** ソリッドの辺・頂点のピックを選択の編集へ(当たっていれば true)。通常モードと、スケッチモードの投影の起動中が使う。 */
+  function editSolidEdgeOrVertex(event: PickEvent, pickMode: PickEvent['mode']): boolean {
+    // 辺は連なりで扱うコマンド(フィレット・面取り)の起動中だけ連なりの単位(`edgeChainRefs`)、それ以外は1本。
+    if (event.edge !== null) {
+      const edge = event.edge
+      const refs = edgeChainRefs(edge.bodyId, edge.edgeIndex)
+      if (refs === null) deferUntilChains([edge], () => editEdgeChain(edgeChainRefs(edge.bodyId, edge.edgeIndex)!, pickMode))
+      else editEdgeChain(refs, pickMode)
+      return true
+    }
+    if (event.vertex !== null) {
+      editSelection(vertexRef(event.vertex.bodyId, event.vertex.vertexIndex), pickMode)
+      return true
+    }
+    return false
+  }
+
+  /**
+   * スケッチモード中にソリッドを指すか: 起動中のコマンドが受けるのがソリッドの部分(面・辺・頂点・ボディ)だけのとき
+   * (投影)。スケッチの図形も受けるコマンド(削除)はスケッチの中身を指したまま。
+   */
+  const SOLID_KINDS: ReadonlySet<SelectableKind> = new Set(['face', 'edge', 'vertex', 'body'])
+  const solidPickInSketch = $derived(
+    sketchId !== null && wantedKinds.length > 0 && wantedKinds.every((kind) => SOLID_KINDS.has(kind)),
+  )
+
+  $effect(() => {
+    const on = solidPickInSketch
+    viewport?.setSolidPickInSketch(on)
+  })
 
   // ---------------------------------------------------------------- C: スケッチ
   const sketches = $derived(model?.sketches ?? [])
@@ -1802,6 +1849,13 @@
    * 点を待つコマンドの起動中は、領域の上を押しても点になる(既存の領域の内側に線を引けないと分割できない)。
    */
   function onSketchPick(event: PickEvent): void {
+    if (solidPickInSketch) {
+      // 投影の起動中: 当たるのはソリッドだけ(`viewport.setSolidPickInSketch`)。素のクリックは足す・外す。
+      const pickMode = toggleOnlyMode(event.mode)
+      if (editSolidEdgeOrVertex(event, pickMode)) return
+      if (event.hit !== null) editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
+      return
+    }
     if (event.point && host?.wantsPoint()) {
       // 当たっている図形へ落としてから渡す。幽霊(`hoverPoint`)も同じ関数を通るので、吸い付いて見える位置と確定結果はずれない。
       const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity)
@@ -1892,6 +1946,12 @@
       }
       // -------------------------------------------------------------- 測定(読み取り専用)
       case 'query': {
+        if (verb === INTERFERENCE.id) {
+          // 数秒〜2分かかりうるので、確定の待ち(`pendingOp`)にはせず、コマンドはすぐ無起動へ戻す。返事は右のパネルが待つ。
+          interference.run()
+          setTimeout(() => host?.commandSucceeded(), 0)
+          return
+        }
         // verb と同じ口で送る。返事は状態配信ではなく `{type:'measure'}` で、`handleMeasure` が `client_op` を突き合わせる。
         sendTracked(verb, args)
         return
@@ -1987,7 +2047,9 @@
     refireTimer = null
     serverPreview = { verb, args }
     previewId += 1
-    session.preview(verb, args, previewId)
+    // スケッチの verb は確定(`runCommand`)と同じく編集中のスケッチを足して送る(投影は `sketch_id` で写す先を決める)
+    const sketchVerb = CATEGORY_OF.get(verb) === 'sketch' && !runsOutsideSketch(verb) && !runsWithoutSketchId(verb)
+    session.preview(verb, sketchVerb && sketchId !== null ? { ...args, sketch_id: sketchId } : args, previewId)
   }
 
   function clearPreview(): void {
@@ -2236,6 +2298,7 @@
     edges: () => edges,
     wantedPick: () => wantedPick,
     selectedEntities: () => selectedEntities,
+    interference: () => interference,
   })
 </script>
 
@@ -2449,6 +2512,7 @@
       {/if}
 
       {#if documentOpen}
+        <InterferencePanel {interference} />
         <SelectionInfoPanel
           item={selectionInfo.item}
           error={selectionInfo.error}

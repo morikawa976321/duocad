@@ -2,6 +2,7 @@
 import * as THREE from 'three'
 
 import { type ViewResolution } from './adaptiveResolution'
+import type { InterferenceVisual } from './interferenceTypes'
 import type { BasePlaneName, EdgeGeometry, OptimizeDebugGrid } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
@@ -422,6 +423,11 @@ export interface Viewport {
   // ------------------------------------------------------------------ 何を指せるか
   /** スケッチモードの外で指せる種類(`PickKind`)。既定は全部。 */
   setPickKinds(kinds: readonly PickKind[]): void
+  /**
+   * スケッチモード中に、編集中のスケッチの中身の代わりにソリッドの面・辺・頂点を `setPickKinds` の種類で指す(投影の起動中)。
+   * スケッチモードの外では効かない。
+   */
+  setSolidPickInSketch(on: boolean): void
   // ------------------------------------------------------------------ D: 辺・頂点
   /**
    * そのボディの辺の折れ線(null で捨てる)。届いたボディの辺だけが指せる。描くのはホバー中・選択中の辺だけで、
@@ -488,6 +494,11 @@ export interface Viewport {
    * 点から面へ下ろした垂線の足は面の裏やソリッドの内側に落ちうるので、深度検査をしない。
    */
   showMeasurement(visual: MeasurementVisual | null): void
+  // ------------------------------------------------------------------ 干渉チェック(issue #186)
+  /** 重なりの立体(半透明の赤)・接触面・最短距離の線と札を出す(`null` で消す)。指せない装飾。深度検査をしない(重なりは2つのボディの内側にある)。 */
+  showInterference(visual: InterferenceVisual | null): void
+  /** 層に載っている赤い立体の数(実機検査用)。 */
+  interferenceSolidCount(): number
   /** スケッチを作り直した回数の累計(実機検査・物差し用。選択だけが変わった配信では増えない)。 */
   sketchRebuilds(): number
   /** 直近の本描画の描画呼び出しの数(`renderer.info.render.calls`。ビューキューブを除く)。物差し用。 */

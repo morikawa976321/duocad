@@ -21,6 +21,7 @@ EVALUATORS = [
     "eval_grid_planes.mjs",
     "eval_grid_scale.mjs",
     "eval_headlight.mjs",
+    "eval_interference.mjs",
     "eval_keys.mjs",
     "eval_min_width.mjs",
     "eval_pixel_ratio.mjs",

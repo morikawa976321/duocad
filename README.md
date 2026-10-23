@@ -268,7 +268,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` の8本）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` の9本）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
 `tests/test_boundaries.py` がソースを静的走査して検査する（動的importも検出）。
 
 | モジュール | 役割 | OCP | build123d |
@@ -296,6 +296,12 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/kernel_shell.py` | シェル（中空化）の幾何（`shell_solid`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_face_edit.py` | 面の削除・面のオフセットの幾何と関門（[docs/FACE_EDIT.md](docs/FACE_EDIT.md)）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_worker.py` | 重い形状演算を常駐の子プロセスで走らせる口（いまは面の削除・オフセットだけ。形は BinTools で渡す） | **○** | ✗ |
+| `duocad/kernel_split.py` | ボディを平面で割る幾何（`split_by_plane`）。kernel を読むだけの一方向 | **○** | ✗ |
+| `duocad/kernel_project.py` | ソリッドの辺・面・外形をスケッチ平面へ写す幾何（`edge_entities` / `face_edges` / `outline_entities`）。kernel を読むだけの一方向 | **○** | ✗ |
+| `duocad/kernel_interference.py` | 干渉チェックの幾何（2体 General Fuse の像の共有・最短距離・描画用の三角形）。単独で OCP を触る | **○** | ✗ |
+| `duocad/interference.py` | 干渉チェックの組み立て（対象の決め方・区分と隙間の判定・時間の上限と部分結果。verb ではない） | ✗ | ✗ |
+| `duocad/interference_mesh.py` | 干渉チェックのメッシュ経路（manifold3d。B-rep を 0.01 mm で三角形分割した近似） | ✗ | ✗ |
+| `duocad/interference_worker.py` | 干渉チェックの子プロセス（親側の `WorkerProcess` と、`python -m` で起こす子の本体） | ✗ | ✗ |
 | `duocad/kernel_meshing.py` | OCCTの面分割の段階制御と境界折れ線の交差検査（`tessellate` の実体） | **○** | ✗ |
 | `duocad/boundary_check.py` | 境界折れ線の交差・接触・重なりの判定（固定εを使わない） | ✗ | ✗ |
 | `duocad/mesh_intersections.py` | 三角形メッシュの自己交差 | ✗ | ✗ |
@@ -305,6 +311,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/net/ws.py` | `Server`（WebSocketの配信と `_dispatch`） | ✗ | ✗ |
 | `duocad/net/http.py` | `web/dist` の静的配信と `/mcp` | ✗ | ✗ |
 | `duocad/net/tools_on_loop.py` | `ToolsOnLoop`（別スレッドからの道具呼び出しをイベントループへ限定） | ✗ | ✗ |
+| `duocad/net/interference_runs.py` | 画面からの干渉チェックをワーカースレッドで走らせ、要求した接続にだけ返す | ✗ | ✗ |
 | `duocad/server.py` | **入口**（再輸出。`mcp_server.py` とテストはここから名前を取る） | ✗ | ✗ |
 | `duocad/mcp_server.py` | MCPサーバ。アプリ層ではなくコアのもう一人のクライアント | ✗ | ✗ |
 | `duocad/agent/` | アプリ内AIエージェント（プロバイダのアダプタ＋tool-useループ。UIは持たない） | ✗ | ✗ |

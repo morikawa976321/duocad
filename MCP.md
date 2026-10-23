@@ -13,11 +13,11 @@
 
 | 群 | ツール |
 |---|---|
-| 問い合わせ | `describe_document` / `describe_shape` / `measure` —— 最後の1つは選択の各項目の寸法に加え、**ちょうど2項目なら** `between`（点・直線・平面のあいだの距離。平行でない線・面どうしは角度）を返す。画面の「測定」と同じ計算 |
+| 問い合わせ | `describe_document` / `describe_shape` / `check_interference` / `measure` —— `measure` は選択の各項目の寸法に加え、**ちょうど2項目なら** `between`（点・直線・平面のあいだの距離。平行でない線・面どうしは角度）を返す。画面の「測定」と同じ計算。`check_interference` は見えているボディどうしの干渉（重なり・接触・離れ）を調べ、`clearance`（mm）でははめ合いの隙間も見る読み取り専用の問い合わせで、重い計算は子プロセスで時間の上限つき |
 | 述語の自己記述 | `describe_predicates` |
 | 選択 | `get_selection` / `set_selection` / `modify_selection` / `toggle_selection` / `clear_selection` —— 人（ブラウザ）が使う選択操作と同じ集合に、AIだけが述語を書ける `set_selection` を足したもの |
-| スケッチ | `sketch_create` / `sketch_create_offset` / `add_point` / `add_line` / `add_circle` / `add_ellipse` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` —— 最後の1つは選択の複数の領域を、へこみに沿って包む**単一の領域線**（線分・円弧・円・楕円・3次ベジエ。正確な図形に直せない辺は誤差 0.001 mm 以下のベジエで近似）を同じスケッチへ足す。`radius`（追従半径 R）と `offset`（d・負で内へ）は省略で 0。1つの領域にならないと失敗して何も変わらない |
-| フィーチャ | `extrude` / `revolve` / `loft` / `fillet` / `chamfer` / `shell_body` / `delete_faces` / `offset_faces` / `boolean_body` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `delete` / `delete_items` / `rename` |
+| スケッチ | `sketch_create` / `sketch_create_offset` / `add_point` / `add_line` / `add_circle` / `add_ellipse` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` / `project_to_sketch` / `project_outline` —— `project_to_sketch` は選択のソリッドの辺・面（外周と穴）を、`project_outline` は選択が属するボディを法線方向から見た外形（影の境界。外周と貫通穴）を、`sketch_id` のスケッチの平面へ写した普通の図形として足す（元の形に追従しない。点に潰れる辺は図形にせず、全部潰れると失敗）。`envelope_regions` は選択の複数の領域を、へこみに沿って包む**単一の領域線**（線分・円弧・円・楕円・3次ベジエ。正確な図形に直せない辺は誤差 0.001 mm 以下のベジエで近似）を同じスケッチへ足す。`radius`（追従半径 R）と `offset`（d・負で内へ）は省略で 0。1つの領域にならないと失敗して何も変わらない |
+| フィーチャ | `extrude` / `revolve` / `loft` / `fillet` / `chamfer` / `shell_body` / `delete_faces` / `offset_faces` / `boolean_body` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `split_body` / `delete` / `delete_items` / `rename` |
 | 可視性 | `set_visible` / `set_sketch_visible` —— ボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない。**名前つき寸法の打ち直し（`set_parameter`）は公開していない**（人間側に口が無いため。口ができたら人とAIの両方へ同時に出す。`describe_document` はパラメータ名と値を返す） |
 | 作業空間 | `get_command` / `begin_command` / `set_command_args` / `end_command` / `apply_command` / `enter_sketch` / `leave_sketch` —— **起動中の verb と途中の引数・モードを人の画面と共有する**(issue #153)。`begin_command(verb)` で起動すると人の画面にその verb が起動し、対象の候補(辺など)が見える。人が画面で起動した verb と打ちかけの引数は `describe_document` / `get_command` の `command` に見え、`set_command_args` で引数を足し、`apply_command` で確定する(人の Enter と同じ)。`end_command` は人の Esc。起動・引数・畳む・モードの操作は操作ログに載らず undo では戻らない（`apply_command` が確定した形の変更はログに載り、undo で戻る）。スケッチを作ると誰が作ってもそのスケッチへ入り、`enter_sketch` / `leave_sketch` で出入りする |
 | 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` / `enter_optimize` / `leave_optimize` —— 保持/除外ソリッド・拘束面・荷重面の条件を置く（ボディと拘束は集合代入。荷重は大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`）。**安定版には出さない**（凍結中。docs/STABLE.md「安定版で出さない機能」） |
@@ -33,8 +33,9 @@
 1. `describe_document` で `body_id` / スケッチ / パラメータ名を知る。手前の部品を隠すなら `set_visible(body_id, false)`
    （人間の画面からも消える。**可視性は操作ログに載らないので `undo` では戻らない** —— 戻すのは `set_visible(body_id, true)`）
 2. `set_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認
-   - `measure` は**測るだけ**（verb ではない）。頂点・直線の辺・平らな面を2つ置くと `between.distance`（直線・平面は無限に延ばす）、
-     平行でない線・面どうしは `between.angle_deg` が返る。測れない組（円い辺・曲面・ボディそのもの・スケッチの図形）は
+   - `measure` は**測るだけ**（verb ではない）。頂点・直線の辺・平らな面・スケッチの点・スケッチの線分・領域を2つ置くと `between.distance`
+     （直線・平面は無限に延ばす。スケッチの線分は直線、領域はそのスケッチの平面）、平行でない線・面どうしは
+     `between.angle_deg` が返る。測れない組（円い辺・曲面・ボディそのもの・線分以外のスケッチの図形まるごと）は
      `between_error` に理由が入り、各項目の寸法はそのまま読める
    - `sketch_create_offset(distance, base_plane=?)` は `sketch_create` の兄弟。`base_plane` 省略時は選択の面（ちょうど1枚）を基準に
      し、その法線方向へ `distance`（mm・正の向きが法線）離れた平面にスケッチを貼る。基準の基準（offsetのoffset）は作れない

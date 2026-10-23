@@ -18,7 +18,9 @@ DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 # `kernel_meshing.py`(OCCTの面分割の段階制御と境界交差の再分割)・
 # `mesh_geometry.py`(三角形境界の接続検査とCADソリッド化。位相の列挙と compound の定型)・
 # `kernel_sketch.py`(スケッチ平面の枠・図形の辺・領域検出)・
-# `kernel_extrude.py`(面と領域の押し出し)は
+# `kernel_split.py`(平面でのボディの分割)・
+# `kernel_extrude.py`(面と領域の押し出し)・
+# `kernel_project.py`(ソリッドの辺・面・外形のスケッチ平面への投影)は
 # **カーネル層の一部**であって verb 層ではない —— `kernel.py` が大きいので
 # 役割ごとに分けてあるだけである。この一覧の外でOCPを叩いたら落ちる。
 OCP_ALLOWED = frozenset(
@@ -34,6 +36,9 @@ OCP_ALLOWED = frozenset(
         "kernel_shell.py",
         "kernel_face_edit.py",
         "kernel_worker.py",
+        "kernel_project.py",
+        "kernel_split.py",
+        "kernel_interference.py",
         "mesh_geometry.py",
         "topopt/voxelize.py",
     }

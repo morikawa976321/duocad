@@ -95,6 +95,7 @@ from ..agent.providers import (
 from ..session import Session
 from ..topopt import fem, gpu_cg
 from . import wire
+from .interference_runs import InterferenceRuns
 from .tools_on_loop import ToolsOnLoop
 
 # ソケットから踏める口は `duocad/catalog.py` の宣言からの導出。登録制は変わらない: ここに現れない名前は
@@ -293,6 +294,7 @@ class Server:
         self._preview_worker: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._preview_seq: dict = {}  # connection -> int
         self._preview_futures: dict = {}  # connection -> asyncio.Future
+        self._interference = InterferenceRuns(_send, lambda connection: connection in self.clients)
         self._acks: dict = {}  # connection -> _Acks
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
         self._pending_ai_runs: set = set()
@@ -397,6 +399,7 @@ class Server:
             pending = self._preview_futures.pop(connection, None)
             if pending is not None:
                 pending.cancel()
+            self._interference.cancel(connection)
             self._on_disconnect()
 
     async def _receive(self, connection: Any, inbox: "_Inbox") -> None:
@@ -554,6 +557,10 @@ class Server:
                     connection,
                     {"type": "measure", "client_op": message.get("client_op"), **result},
                 )
+            # 干渉チェック(verbではない。配信しない)。対象と形の写しはここで確定し、計算はワーカーで走らせて要求した接続にだけ返す(`InterferenceRuns`)
+            elif command == "check_interference":
+                job = self.session.interference_job(message.get("clearance"), request_id=message.get("client_op"))
+                self._spawn(self._interference.start(connection, message, job), "干渉チェックの応答に失敗")
             elif command == "inspect_selection":
                 payload: dict = {"request_id": message.get("request_id"), "item": None, "error": None}
                 try:

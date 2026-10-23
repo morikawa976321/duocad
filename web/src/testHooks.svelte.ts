@@ -5,6 +5,7 @@
  */
 import type { PickTarget, Point2 } from './commands/command'
 import type { Applied, BasePlaneName, ConnectionStatus, EdgesPayload, ServerState, SketchState } from './session'
+import type { Interference } from './interference.svelte'
 import type { Viewport } from './viewport'
 import type { PickKind } from './viewportTypes'
 
@@ -30,6 +31,7 @@ export interface TestHookContext {
   edges: () => Record<string, EdgesPayload>
   wantedPick: () => PickTarget | null
   selectedEntities: () => string[]
+  interference: () => Interference
 }
 
 export function installTestHooks(ctx: TestHookContext): void {
@@ -106,6 +108,19 @@ export function installTestHooks(ctx: TestHookContext): void {
       hoveredRef: () => viewport()?.hoveredRef() ?? null,
       projectVertex: (bodyId: string, vertexIndex: number) =>
         viewport()?.projectVertex(bodyId, vertexIndex) ?? null,
+      // 干渉チェック(issue #186)。`smoke-interference.mjs` が結果と層の赤い立体の数を読む。結果は `$state.raw` なので素で渡る。
+      // 読むたびに今の値(層への反映は別の `$effect` なので、値で渡すと反映前の数が見える)。
+      interference: {
+        get running() {
+          return ctx.interference().running
+        },
+        get result() {
+          return ctx.interference().result
+        },
+        get solids() {
+          return viewport()?.interferenceSolidCount() ?? 0
+        },
+      },
     }
   })
 }

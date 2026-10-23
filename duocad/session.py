@@ -25,6 +25,7 @@ from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
 from . import (
     catalog,
+    interference,
     io_step,
     kernel,
     optimize_run,
@@ -40,6 +41,7 @@ from .oplog import OpLog, verb_handler
 from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import fork, speculative
 from .verbs.envelope_regions import boundary_entities as envelope_boundary_entities, envelope_pieces, selected_regions
+from .verbs.project_to_sketch import outline_entities, projected_entities, selected_bodies, selected_targets
 from .view import DocumentView
 
 #: Windowsの予約デバイス名(拡張子の有無に関わらず特別扱い。大文字小文字を区別しない)。
@@ -103,6 +105,12 @@ def _edits_document(method: Any) -> Any:
 #: プレビューできるverb -> (`Session` のメソッド名, 受け取ってよい引数名)。ここに無いverbはプレビューできない
 #: (載せてよい条件は `catalog.Command.previewable`)。
 PREVIEWABLE_VERBS: dict = catalog.previewable_verbs()
+
+
+def _projection_ghost(sketch_id: str, entities: list) -> dict:
+    """投影のプレビューの幽霊(`preview_envelope_regions` と同じ形。図形が無ければ `pieces=0` で警告色)。"""
+    plain = [{"kind": entity["kind"], "params": dict(entity["params"])} for entity in entities]
+    return {"sketch_ghost": {"sketch_id": sketch_id, "entities": plain, "pieces": 1 if plain else 0}}
 
 
 def _tagged(progress: Any, steps: Any) -> Any:
@@ -404,6 +412,16 @@ class Session:
     def measure(self) -> dict:
         """いまの選択を測る(`measure.measure_selection`)。MCP の `measure` と WebSocket の `measure` が同じ計算を通る。"""
         return measure_selection(self)
+
+    def interference_job(self, clearance: Any = 0.0, request_id: Any = None) -> "interference.Job":
+        """干渉チェックを開始時の文書で確定する(`interference.make_job`)。計算は呼び手が別スレッドで `run(render)` する。文書は変えない。"""
+        self._require_open()
+        revision = f"{self._generation}.{self._applied_count}.{len(self.document.log.entries)}"
+        return interference.make_job(self.document, revision, clearance, deviation=self.view.view_deviation, request_id=request_id)
+
+    def check_interference(self, clearance: Any = 0.0) -> dict:
+        """干渉チェックをこのスレッドで走らせる(MCP。描画用の三角形は付けない)。WebSocket は `interference_job` をワーカーで走らせる。"""
+        return self.interference_job(clearance).run(False)
 
     def inspect_selection(self) -> Optional[dict]:
         """選択がちょうど1項目ならその寸法、それ以外は None(`measure.inspect_selection`。画面の選択情報の表示)。"""
@@ -786,6 +804,16 @@ class Session:
             for entity in envelope_boundary_entities(self.document, sketch_id, piece)
         ]
         return {"sketch_ghost": {"sketch_id": sketch_id, "entities": entities, "pieces": len(pieces)}}
+
+    def preview_project_to_sketch(self, sketch_id: str) -> dict:
+        """`project_to_sketch` の確定前の姿(写る図形)。文書を変えない。"""
+        entities = projected_entities(self.document, sketch_id, selected_targets(self.document))
+        return _projection_ghost(sketch_id, entities)
+
+    def preview_project_outline(self, sketch_id: str) -> dict:
+        """`project_outline` の確定前の姿(写る影の境界)。文書を変えない。"""
+        entities = outline_entities(self.document, sketch_id, selected_bodies(self.document))
+        return _projection_ghost(sketch_id, entities)
     # ---------------------------------------------------------------- 形状最適化を走らせる(`duocad/optimize_run.py` への委譲)
     def optimize_conditions(self) -> dict:
         """4条件がそろって走らせられるか(`optimize_run.conditions_report`)。"""

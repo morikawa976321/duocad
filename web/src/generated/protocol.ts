@@ -7,6 +7,7 @@ export const COMMAND_CATEGORY = {
   set_visible: 'selection',
   set_sketch_visible: 'selection',
   measure: 'query',
+  check_interference: 'query',
   modify_selection: 'selection',
   toggle_selection: 'selection',
   clear_selection: 'selection',
@@ -31,7 +32,10 @@ export const COMMAND_CATEGORY = {
   move_body: 'feature',
   mirror_sketch_entities: 'sketch',
   envelope_regions: 'sketch',
+  project_to_sketch: 'sketch',
+  project_outline: 'sketch',
   mirror_body: 'feature',
+  split_body: 'feature',
   delete: 'feature',
   delete_items: 'feature',
   rename: 'feature',
@@ -98,6 +102,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   set_visible: ['body_id', 'visible'],
   set_sketch_visible: ['sketch_id', 'visible'],
   measure: [],
+  check_interference: ['clearance'],
   modify_selection: ['add', 'remove'],
   toggle_selection: ['refs'],
   clear_selection: [],
@@ -122,7 +127,10 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   move_body: ['dx', 'dy', 'dz', 'copy', 'mode', 'angle', 'axis_edge', 'axis_point', 'axis_dir', 'center_vertex'],
   mirror_sketch_entities: ['axis'],
   envelope_regions: ['radius', 'offset'],
+  project_to_sketch: ['sketch_id'],
+  project_outline: ['sketch_id'],
   mirror_body: ['base_plane', 'plane_face'],
+  split_body: ['base_plane', 'plane_face', 'sketch_id', 'keep'],
   delete: [],
   delete_items: ['bodies', 'sketches'],
   rename: ['target', 'name'],
@@ -187,6 +195,7 @@ export interface CommandArguments {
   set_visible: { body_id: string; visible: boolean }
   set_sketch_visible: { sketch_id: string; visible: boolean }
   measure: Record<string, never>
+  check_interference: { clearance?: number }
   modify_selection: { add?: unknown[]; remove?: unknown[] }
   toggle_selection: { refs: unknown[] }
   clear_selection: Record<string, never>
@@ -211,7 +220,10 @@ export interface CommandArguments {
   move_body: { dx?: number; dy?: number; dz?: number; copy?: boolean; mode?: string; angle?: number; axis_edge?: object; axis_point?: unknown[]; axis_dir?: unknown[]; center_vertex?: object }
   mirror_sketch_entities: { axis: object }
   envelope_regions: { radius: number; offset: number }
+  project_to_sketch: { sketch_id: string }
+  project_outline: { sketch_id: string }
   mirror_body: { base_plane?: string; plane_face?: object }
+  split_body: { base_plane?: string; plane_face?: object; sketch_id?: string | object; keep?: string }
   delete: Record<string, never>
   delete_items: { bodies?: unknown[]; sketches?: unknown[] }
   rename: { target: string; name: string }
@@ -311,7 +323,10 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'move_body'; mode: string; dx: number | null; dy: number | null; dz: number | null; angle: number | null; axis_point: number[] | null; axis_dir: number[] | null; copy: boolean; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'mirror_sketch_entities'; axis_p0: number[]; axis_dir: number[]; created: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'envelope_regions'; radius: number; offset: number; created: string[]; sketch_ids: string[]; approximated: number })
+  | (AppliedVerbBase & { verb: 'project_to_sketch'; created: string[]; sketch_ids: string[]; approximated: number })
+  | (AppliedVerbBase & { verb: 'project_outline'; created: string[]; sketch_ids: string[]; approximated: number })
   | (AppliedVerbBase & { verb: 'mirror_body'; plane_point: number[]; plane_normal: number[]; created: string[]; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'split_body'; plane_point: number[]; plane_normal: number[]; keep: string; created: string[]; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'delete'; bodies: string[]; entities: string[]; sketch_ids: string[] })
   | (AppliedVerbBase & { verb: 'delete_items'; bodies: string[]; sketches: string[] })
   | (AppliedVerbBase & { verb: 'rename'; target: string; kind: string; name: string })
