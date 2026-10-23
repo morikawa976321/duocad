@@ -85,6 +85,8 @@ class WorkerProcess:
         self._stderr_lock = threading.Lock()
         self._seq = 0
         self.starts = 0
+        #: 要求の合間に死んでいた子を、次の要求の前に作り直した回数(`restart` を通らないので、呼び手の作り直しの数には入らない)
+        self.revived = 0
 
     def __enter__(self) -> "WorkerProcess":
         return self
@@ -99,6 +101,7 @@ class WorkerProcess:
         deadline = math.inf if timeout is None else time.monotonic() + timeout
         if self._process is not None and self._process.poll() is not None:
             self._kill()  # 要求の合間に死んだ子(このまま送ると、送った要求ごと失敗する)
+            self.revived += 1
         if self._process is None:
             self._spawn()
             if self._load is not None:
