@@ -16,8 +16,12 @@ def ts_point_keys():
 def test_the_three_entity_kind_tables_agree_on_their_key_set(ts_point_keys):
     canonical = set(sketch.ENTITY_KINDS)
     assert canonical, "sketch.ENTITY_KINDS が空"
-    assert set(kernel_sketch._KERNEL_ENTITY_KIND_TABLE) == canonical
-    assert set(ts_point_keys) == canonical
+    assert set(kernel_sketch._KERNEL_ENTITY_KIND_TABLE) == canonical, (
+        "duocad/kernel_sketch.py の種別表(辺生成・2D bbox)を確認すること"
+    )
+    assert set(ts_point_keys) == canonical, (
+        "web/src/entityKinds.ts の種別表(fromArgs・toPoints)を確認すること"
+    )
 
 
 def test_the_movable_point_tables_agree(ts_point_keys):

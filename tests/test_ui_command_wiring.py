@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import functools
 import importlib.util
+import json
 import re
 import sys
 
+from duocad.net import ws
 from duocad.paths import REPO_ROOT
+from duocad.server import Server
 from node_support import run_node
+from session_support import FakeConnection
 
 
 def _catalog():
@@ -239,13 +244,6 @@ def test_server_command_tables_are_readable():
 
 def test_every_hand_dispatched_command_reaches_a_handler(monkeypatch):
     """宣言だけのコマンドは unknown command になり、実際に分岐を通るコマンドは処理先か引数の検査へ届く。"""
-    import asyncio
-    import json
-
-    from duocad.net import ws
-    from duocad.server import Server
-    from session_support import FakeConnection
-
     class Probe:
         _hidden_commands = frozenset()
 

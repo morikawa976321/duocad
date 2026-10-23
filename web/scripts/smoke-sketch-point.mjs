@@ -5,8 +5,9 @@
  *
  * 題材(MCP で作る): 20×20×10 の箱と、XY のスケッチ S に点を2つ(箱の横の P1 と、箱の真下に隠れる P2)。
  *
- *   1. 箱に隠れた点を押しても、点ではなく手前の箱が選ばれる
- *   2. 矩形選択で点の図形が点として入る
+ *   1. 見える点はホバーとクリックで点として取れる(遮蔽の検査の対照)
+ *   2. 箱に隠れた点を押しても、点ではなく手前の箱が選ばれる
+ *   3. 矩形選択で点の図形が点として入る
  */
 import { fail, ok } from './args.mjs'
 import { assertNoAppErrors, frameAll, openApp, viewportCenter, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
@@ -35,9 +36,9 @@ runSmoke('smoke-sketch-point', { timeout: 60000, mcp: true }, async ({ mcp, brow
     await mcp.callTool('clear_selection')
     await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '選択が空にならない')
   }
-  const hoverAndClick = async (u, v, what, sketchId = sketch) =>
+  const hoverAndClick = async (u, v, what) =>
     withoutBrowserPanel(page, async () => {
-      const at = await sketchPointAt(page, u, v, { sketchId, settle: true })
+      const at = await sketchPointAt(page, u, v, { sketchId: sketch, settle: true })
       if (!at) fail(`${what} が画面の中に無い`)
       await page.mouse.move(at.x, at.y)
       await waitFrames(page, 4)
@@ -57,7 +58,22 @@ runSmoke('smoke-sketch-point', { timeout: 60000, mcp: true }, async ({ mcp, brow
   }
   await zoomOut()
 
-  // ================================================================ 1. 隠れた点の図形
+  // ================================================================ 1. 見える点の図形(遮蔽の対照)
+  const visible = await hoverAndClick(...P1, '点 P1')
+  if (visible.sketchEntity?.entityId !== p1 || visible.sketchEntity?.point !== 'cx') {
+    fail(`見える点がホバーで取れない: ${JSON.stringify(visible)}`)
+  }
+  await waitFor(
+    (id) => {
+      const selected = window.__duocad.selection?.items ?? []
+      return selected.length === 1 && selected[0].entity === id && selected[0].point === 'cx'
+    },
+    '見える点をクリックしても点として選べない',
+    [p1],
+  )
+  ok('point: 遮蔽の対照となる見える点はホバーとクリックで取れる')
+
+  // ================================================================ 2. 隠れた点の図形
   await clear()
   const hovered = await hoverAndClick(...P2, '箱に隠れた点 P2')
   if (hovered.sketchEntity !== null) fail(`箱に隠れた点がホバーで光る: ${JSON.stringify(hovered)}`)
@@ -66,7 +82,7 @@ runSmoke('smoke-sketch-point', { timeout: 60000, mcp: true }, async ({ mcp, brow
   if (under[0].body !== bodyId) fail(`箱に隠れた点を押すと、手前の箱ではなく ${JSON.stringify(under)} が選ばれる`)
   ok('point: 箱に隠れた点の図形は取れず、手前の箱が取れる')
 
-  // ================================================================ 2. 矩形選択
+  // ================================================================ 3. 矩形選択
   await clear()
   await withoutBrowserPanel(page, async () => {
     const at = await sketchPointAt(page, ...P1, { sketchId: sketch, settle: true })

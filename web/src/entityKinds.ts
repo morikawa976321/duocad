@@ -333,7 +333,7 @@ function projectToEllipse(params: Record<string, number>, u: number, v: number):
   return swapped ? frame.world(ly, lx) : frame.world(lx, ly)
 }
 
-export const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
+const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   // 点は辺を持たない: 折れ線は1点だけで線にならず(`viewport.ts` は点の印で描く)、交点も持たない
   point: {
     pointKeys: [['cx', 'cy']],
@@ -601,6 +601,15 @@ const VERB_TO_KIND: Record<string, EntityKind> = Object.fromEntries(
     .filter(([, spec]) => spec.verb !== undefined)
     .map(([kind, spec]) => [spec.verb as string, kind]),
 )
+
+export function entityPointKeys(): Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> {
+  return Object.fromEntries(
+    Object.entries(ENTITY_KIND_TABLE).map(([kind, spec]) => [
+      kind,
+      spec.pointKeys.map(([xKey, yKey]) => [xKey, yKey] as const),
+    ]),
+  )
+}
 
 function entityKindSpec(kind: string): EntityKindSpec {
   const spec = (ENTITY_KIND_TABLE as Record<string, EntityKindSpec>)[kind]
