@@ -170,6 +170,12 @@ develop に集まらず、ジャンクション経由で本体の `.venv` を消
   **本体の `.venv` の中身を丸ごと消した**（`uv sync --frozen` で作り直した）。外すのは PowerShell の
   `[System.IO.Directory]::Delete('<worktree>\.venv', $false)`（本体の `.venv` が残ることを実測済み）。再帰削除
   （`Remove-Item -Recurse`、エクスプローラーでの削除）をジャンクション入りのワークツリーへ向けない。
+- **Codex アプリのワークツリー（`%USERPROFILE%\.codex\worktrees\<名前>\duocad`）の前後でも本体の環境が消えた。**
+  2026-10-24、Codex が上の2本のジャンクションを張って #229 を作業した間に、本体の `.venv` が `Lib` と `pyvenv.cfg` を失い（00:35）、
+  そのワークツリーが消えた時刻（00:50）に `web/node_modules` が空になった。経路は未確定。Codex に duocad を触らせた後は、
+  本体の `.venv\pyvenv.cfg` と `web\node_modules\typescript` があるかを先に見る。戻し方は
+  `uv venv --allow-existing --python 3.14 .venv` → `uv sync --frozen --extra gpu`（この機械は GPU の部品を入れている。
+  `--extra gpu` を落とすと cupy が消える）と、`web` での `npm ci`。
 - **素の python スクリプトは本体を import する。** `.venv` は `_editable_impl_duocad.pth` で本体の checkout を sys.path に入れて
   いるため、ワークツリーで `python script.py` するとワークツリーではなく本体の `duocad` を読む。ワークツリーのコードを確実に
   読ませる経路は `pytest`（`pythonpath = ["."]`）、`topopt_checks/*.py`（`_bootstrap`）、`python -m duocad...` / `python -c`
