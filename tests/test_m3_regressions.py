@@ -1,7 +1,6 @@
 """M3の回帰テスト — **契約のテストが通っていても壊れていた経路**。"""
 from __future__ import annotations
 
-import json
 import math
 
 import pytest
@@ -9,7 +8,7 @@ import pytest
 from duocad import query
 from duocad.document import Document
 from duocad.oplog import OpLog
-from document_support import install_live_pattern, replay_through_json
+from document_support import assert_finite_json, install_live_pattern, replay_through_json
 from duocad.parameters import parameter_of, set_parameter
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, sketch_create
@@ -39,7 +38,7 @@ def test_set_parameter_rejects_values_that_add_circle_would_reject(key, value):
     assert document.parameters[name] == 4.0
     assert len(document.log.entries) == entries_before
     assert len(regions(document, sketch_id)) == 1
-    json.loads(document.log.to_json())  # 裸のNaN/Infが混ざっていたら落ちる
+    assert_finite_json(document.log.to_json())
 
 
 @pytest.mark.parametrize("count", [2.5, 0, -3], ids=["fractional", "zero", "negative"])

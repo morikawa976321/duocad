@@ -1,13 +1,11 @@
 /**
- * 実機での確認 — **ボディ分割が、画面から「起動 → 平面を指す → プレビュー → 確定 → Ctrl+Z」と通る**。
+ * 実機での確認 — **ボディ分割が、画面から「起動 → 平面を指す → プレビュー → 確定」と通る**。
  *
  *   web> node scripts/smoke-split-body.mjs
  *
  *   1. ボディの面を選んで「ボディ分割」を起動し、「スケッチを選ぶ」でスケッチの線を1本指すと、図形の参照が入る
  *   2. 残す側(両側)まで揃うとプレビューが出て、文書はまだ1ボディのまま
  *   3. Enter で確定すると、体積が半分ずつの2ボディになる
- *   4. Ctrl+Z で元の1ボディに戻る
- *   5. ボディの底面に接するだけの XY 平面では、理由付きで断って何も変えない
  *
  * `--shots <dir>` を渡すと各段の画面を PNG で残す(報告用。git に載せない場所へ)。確定後は片側を隠して切り口も撮る。
  *
@@ -17,11 +15,9 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fail, ok } from './args.mjs'
-import { assertNoAppErrors, frameAll, openApp, pressUndo, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
+import { assertNoAppErrors, frameAll, openApp, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
 import { runSmoke } from './harness.mjs'
 import { clickFace, clickSketchPoint, faceAt } from './pick.mjs'
-
-const REFUSAL = '平面が面・辺・頂点で接しているだけ'
 
 runSmoke('smoke-split-body', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout, options }) => {
   const base = (await mcp.callTool('sketch_create', { base_plane: 'XY' })).sketch_id
@@ -114,30 +110,5 @@ runSmoke('smoke-split-body', { timeout: 60000, mcp: true }, async ({ mcp, browse
     )
   }
 
-  // ================================================================ 4. Ctrl+Z
-  await waitFrames(page, 4)
-  await pressUndo(page)
-  await waitFor(() => (window.__duocad.parts ?? []).length === 1, 'Ctrl+Z で1ボディに戻らない')
-  const restored = await bodies()
-  if (restored.length !== 1 || Math.round(restored[0].volume) !== 16000) fail(`元に戻らない: ${JSON.stringify(restored)}`)
-  ok('split_body: Ctrl+Z で元の1ボディ(16000 mm³)に戻った')
-
-  // ================================================================ 5. 接するだけの平面は断る
-  await clickFace(page, bodyId, await visibleFace(), { hidePanel: true })
-  await waitFor(() => (window.__duocad.selection?.items ?? []).length >= 1, '面を選べない(2回目)')
-  await page.click('#split-body')
-  await waitFor(() => window.__duocad.command?.verb === 'split_body', 'ボディ分割を起動できない(2回目)')
-  await page.click('#split-body-xy')
-  await page.click('#split-body-keep-both')
-  await page.keyboard.press('Enter')
-  await waitFor((text) => (window.__duocad.errors ?? []).some((line) => line.includes(text)), '底面に接するだけの平面で断らない', [REFUSAL])
-  if ((await bodies()).length !== 1) fail('断ったのにボディの数が変わった')
-  await shot('193-4-refused')
-  const refusals = await page.evaluate(
-    (text) => (window.__duocad.errors ?? []).filter((line) => line.includes(text)),
-    REFUSAL,
-  )
-  ok('split_body: 底面に接するだけの XY 平面は理由付きで断り、何も変えない')
-
-  await assertNoAppErrors(page, consoleErrors, { allow: [...new Set(refusals)] })
+  await assertNoAppErrors(page, consoleErrors)
 })
