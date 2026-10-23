@@ -14,7 +14,7 @@ from duocad.server import Session
 from duocad.region import region_ref
 from duocad.sketch import add_circle, base_plane, sketch_create
 from duocad.verbs import chamfer, extrude, thread
-from document_support import new_box, new_box_with_hole, replay_through_json
+from document_support import new_box, new_box_with_hole, replay_through_json, shape_ref
 from test_chamfer import new_cylinder
 
 
@@ -297,7 +297,7 @@ def test_a_clearance_outside_the_recommended_range_warns_but_does_not_refuse():
 def test_the_entry_takes_exactly_one_face_from_the_selection():
     doc = Document()
     body_id, face = _hole(doc)
-    selection.set_selection(doc, refs=[selection.select_face(doc, body_id, face)])
+    selection.set_selection(doc, refs=[shape_ref(doc, body_id, "face", face)])
     result = entry_for("thread")(doc, profile="trapezoid45")
     assert result == {"body_id": body_id, "changed_bodies": [body_id]}
 
@@ -306,7 +306,7 @@ def test_the_entry_refuses_two_faces():
     doc = Document()
     body_id, face = _hole(doc)
     selection.set_selection(
-        doc, refs=[selection.select_face(doc, body_id, face), selection.select_face(doc, body_id, _plane_face(doc, body_id))]
+        doc, refs=[shape_ref(doc, body_id, "face", face), shape_ref(doc, body_id, "face", _plane_face(doc, body_id))]
     )
     with pytest.raises(selection.SelectionAmbiguous):
         entry_for("thread")(doc, profile="trapezoid45")

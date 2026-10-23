@@ -14,7 +14,7 @@ from duocad.server import Session
 from duocad.speculative import speculative
 from duocad.verbs import add_mesh_body, chamfer, delete, extrude_faces, fillet, move_body, shell_body
 from duocad.verbs.extrude import _resolve_target
-from document_support import replay_through_json
+from document_support import replay_through_json, shape_ref
 from session_support import edit_parameter, session_with_box
 
 SIDE = 20.0
@@ -156,12 +156,13 @@ def test_speculative_restores_a_mesh_body():
 
 # ======================================================================== §4 画面へ配る
 def test_the_geometry_payload_has_the_same_shape_as_a_tessellated_b_rep():
-    """**`web/` を1行も触らずに描ける**ことの根拠 —— 配りものの形がB-repと同じであること。"""
+    """**`web/` を1行も触らずに描ける**ことの根拠 —— 配りものの形がB-repと同じであること(面の `serial` を除く)。"""
     session, body_id = _tetra_session()
     payload = session.view.geometry(body_id)
-    reference = kernel.tessellate_selective(_box_shape(), None, DEVIATION, 0.5)
+    session.document.add_body(Body(id="brep", name="box", kind="solid", shape=_box_shape()))
+    reference = session.view.geometry("brep")
     assert set(payload) == set(reference)
-    assert set(payload["faces"][0]) == set(reference["faces"][0])
+    assert set(payload["faces"][0]) == set(reference["faces"][0]) - {"serial"}
     assert set(payload["bbox"]) == set(reference["bbox"])
 
 
@@ -272,9 +273,9 @@ def test_extrude_refuses_the_faces_of_a_mesh_body():
 @pytest.mark.parametrize(
     "call",
     [
-        pytest.param(lambda doc, body_id: selection.select_face(doc, body_id, 1), id="face"),
-        pytest.param(lambda doc, body_id: selection.select_edge(doc, body_id, 1), id="edge"),
-        pytest.param(lambda doc, body_id: selection.select_vertex(doc, body_id, 1), id="vertex"),
+        pytest.param(lambda doc, body_id: shape_ref(doc, body_id, "face", 1), id="face"),
+        pytest.param(lambda doc, body_id: shape_ref(doc, body_id, "edge", 1), id="edge"),
+        pytest.param(lambda doc, body_id: shape_ref(doc, body_id, "vertex", 1), id="vertex"),
     ],
 )
 def test_faces_edges_and_vertices_of_a_mesh_body_cannot_be_selected(call):
@@ -285,7 +286,7 @@ def test_faces_edges_and_vertices_of_a_mesh_body_cannot_be_selected(call):
 
 
 def test_the_bulk_selection_path_refuses_a_mesh_body_too():
-    """一括選択は数え上げを減らすために `select_face` を通らないので、断りも写してある。"""
+    """一括選択は数え上げを減らすために `_select_shape` を通らないので、断りも写してある。"""
     doc, body_id = _tetra_doc()
     with pytest.raises(ValueError, match="is a mesh body"):
         selection.set_selection(doc, refs=[{"body": body_id, "kind": "face", "index": 1}])

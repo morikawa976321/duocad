@@ -7,7 +7,7 @@ import pytest
 
 from duocad import selection
 from duocad.document import Body, Document
-from duocad.selection import modify_selection, ref_key, same_ref
+from duocad.selection import modify_selection, ref_key
 from duocad.sketch import add_circle, sketch_create
 from document_support import box_shape as _box_shape
 
@@ -76,7 +76,6 @@ def test_the_key_agrees_with_a_separately_written_judgement(doc: Document, sketc
         for right in corpus:
             expected = _same_ref_written_out(left, right)
             assert (ref_key(left) == ref_key(right)) is expected, (left, right)
-            assert same_ref(left, right) is expected, (left, right)
 
 
 def test_a_ref_that_is_neither_shape_nor_region_is_a_value_error():
@@ -101,7 +100,6 @@ def test_the_body_key_ignores_the_index():
     with_index = {"body": "box", "kind": "body", "index": 7}
     other_index = {"body": "box", "kind": "body", "index": 9}
     assert ref_key(plain) == ref_key(with_index) == ref_key(other_index)
-    assert same_ref(with_index, other_index)
     assert ref_key(plain) != ref_key({"body": "other", "kind": "body"})
 
 
@@ -114,8 +112,6 @@ def test_a_sketch_entity_point_is_not_the_whole_entity():
     assert ref_key(whole) == ref_key(missing)
     assert ref_key(whole) != ref_key(x0)
     assert ref_key(x0) != ref_key(x1)
-    assert not same_ref(whole, x0)
-    assert same_ref(whole, missing)
 
 
 def test_provenance_is_not_part_of_the_key():
@@ -123,7 +119,6 @@ def test_provenance_is_not_part_of_the_key():
     bare = {"body": "box", "kind": "face", "index": 1}
     with_provenance = {"body": "box", "kind": "face", "index": 1, "provenance": {"op": 3}}
     assert ref_key(bare) == ref_key(with_provenance)
-    assert same_ref(bare, with_provenance)
     region_bare = {"sketch": "s", "index": 1}
     region_prov = {"sketch": "s", "index": 1, "provenance": None}
     assert ref_key(region_bare) == ref_key(region_prov)

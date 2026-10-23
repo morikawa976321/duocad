@@ -96,7 +96,7 @@ def _triangles_of(body: Body):
     """1Bodyぶんの三角形。メッシュは持っている三角形、B-repはその場でテッセレーションする。
 
     B-repは画面の土台と同じ角度偏差(層をまたぐ契約): `DocumentView.geometry` はズームも注視面の指定も
-    無いとき `kernel.tessellate_selective(shape, None, ...)` で測り、角度偏差の既定は
+    無いとき全面を1組にして `kernel.tessellate_faces` で測り、角度偏差の既定は
     `kernel.DEFAULT_ANGULAR_DEFLECTION`。線形偏差が固定された後も角度偏差は既定のまま: 0.01mmでは
     半径1.5mm超の曲面は線形側が支配し、1.5mm以下でも弦のずれは0.006mm以下(2026-09-24実測)。
     ズーム中の画面の粗さには合わせない(`tests/test_adaptive_resolution.py`)。

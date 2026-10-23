@@ -53,7 +53,7 @@ def test_a_sketch_entity_can_be_selected_as_a_point_or_as_a_whole(session: Sessi
     assert selection.ref_kind(whole) == selection.SKETCH_ENTITY_KIND
     assert point["point"] == "x0" and whole["point"] is None
     # **点と辺は別物**(同じ図形を指していても同じ参照ではない)
-    assert not selection.same_ref(point, whole)
+    assert selection.ref_key(point) != selection.ref_key(whole)
 
 
 def test_a_point_that_the_kind_does_not_have_is_refused(session: Session) -> None:

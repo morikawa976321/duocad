@@ -123,11 +123,11 @@ def centroid(mesh: Mesh) -> list:
 
 
 def geometry(mesh: Mesh) -> dict:
-    """画面へ配る payload。`kernel.tessellate_selective` と同じキー構成。
+    """画面へ配る payload。`DocumentView.geometry` のB-repと同じキー構成(面の `serial` だけ無く、配信で省かれない。`net/wire.Delivered`)。
 
     **三角形群を「面1枚」として配る** —— 画面側(`web/src/viewport.ts` の `FaceGeometry`)は面ごとに
     THREE.Mesh を作るので、三角形ごとに面を作るとドローコールが数万になる。面添字は payload の形を
-    合わせるためだけで、面は選べない(`selection.select_face` はメッシュボディを拒否する)。
+    合わせるためだけで、面は選べない(`selection._select_shape` はメッシュボディを拒否する)。
     """
     area = 0.0
     weighted = [0.0, 0.0, 0.0]
@@ -252,7 +252,7 @@ def _unlink_quietly(filename: str) -> None:
 
 
 def from_tessellation(result: dict) -> Mesh:
-    """`kernel.tessellate` / `tessellate_selective` の戻り値を1つのメッシュへ畳む。
+    """`kernel.tessellate` / `DocumentView.geometry` の戻り値を1つのメッシュへ畳む。
 
     面ごとの `indices` は面の中で0始まりなので、頂点のオフセットを足して連結する。
     """

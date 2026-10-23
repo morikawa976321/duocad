@@ -297,7 +297,7 @@ F2000_h2.0_w2 の `finalize` の入力を書き出し、製品と同じ集合演
 
 ## ビューア表示とSTLエクスポートの同一性
 
-三角形分割の経路は3つ: (1) ビューア表示(`DocumentView.geometry` が `kernel.tessellate_selective`。ズームも注視面の指定も無い土台の粗さは `kernel.tessellate(shape, Session.deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)` と同じ)、
+三角形分割の経路は3つ: (1) ビューア表示(`DocumentView.geometry` が `kernel.tessellate_faces`。ズームも注視面の指定も無い土台の粗さは `kernel.tessellate(shape, Session.deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)` と同じ)、
 (2) 記録用STL `final.stl`(`trace.final_mesh` が、`finalize` が合格させた最終メッシュ(manifold3d の集合演算の結果)の三角形を書く。`kernel.tessellate` は通らない)、(3) `export_stl` MCPツール(`io_step.export_stl`)。
 **(3)は全B-repで(1)の土台と同じ `kernel.tessellate` の三角形をそのまま書く**(本人判断: 適用範囲は最適化の結果に絞らず全B-rep)。OCCT純正の `StlAPI_Writer` で測り直す経路(`kernel.write_stl`)は削除した。
 一致は `tests/test_stl_export.py` がビット単位で固定する(曲面を持つ形・複数Body。面積0の三角形だけは書き出しで除く)。ズーム中の画面の粗さには合わせない(書き出しの粗さはカメラで変わらない。`tests/test_adaptive_resolution.py`)。
