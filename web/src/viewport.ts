@@ -49,14 +49,14 @@ import { closestOnPolyline, createProjector, screenHitOfPoint, type PickPolyline
 import { createSolidFeatures, type BodyEdges, type BodyVertices } from './solidFeatures'
 import type { BasePlaneName } from './session'
 import {
-  type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
+  type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef,
   type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type SectionState,
   type SketchDraw, type SketchEntityHit, type VertexRef, type Viewport,
 } from './viewportTypes'
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
   BOX_SEEN_STEP_PX, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
-  HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS, PREVIEW_COLOR,
+  HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS,
   SKETCH_FIT_MARGIN,
   SKETCH_HANDLE_PIXELS, VERTEX_PIXELS, WORLD_UP, isSelectableFov, lighten, type BodyMeshes,
 } from './viewportConstants'
@@ -313,15 +313,6 @@ export function createViewport(container: HTMLElement): Viewport {
     const hex = bodies.get(ref.bodyId)?.body.faceColor(ref.faceIndex)
     return hex === undefined ? null : new THREE.Color(hex).getHex()
   }
-  const previewMaterial = new THREE.MeshLambertMaterial({
-    color: PREVIEW_COLOR,
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.55,
-    // 半透明どうしが互いを隠して真っ黒な塊にならないよう、奥行きは書かない
-    depthWrite: false,
-    clippingPlanes: section.clipPlanes,
-  })
   const edgeMaterial = new THREE.LineBasicMaterial({ color: EDGE_COLOR, clippingPlanes: section.clipPlanes })
 
   const raycaster = new THREE.Raycaster()
@@ -437,6 +428,7 @@ export function createViewport(container: HTMLElement): Viewport {
     orthographic.left = -orthographic.top * aspect
     orthographic.updateProjectionMatrix()
     sketchLayer.setLineResolution(width, height)
+    ghostLayer.setLineResolution(width, height)
   }
 
   function clearBody(bodyId: string): void {
@@ -448,23 +440,6 @@ export function createViewport(container: HTMLElement): Viewport {
     bodies.delete(bodyId)
     rawGeometry.delete(bodyId)
     if (faceSamples.delete(bodyId)) focusGeneration += 1
-  }
-
-  /**
-   * 1面ぶんの `BufferGeometry` を作る。本物(`buildBody`)と幽霊(`ghostLayer.ts`)で共有する
-   * (ずれるとプレビューと確定結果が違う形に見える)。メッシュの組み立ては共通化しない:
-   * 本物は `userData` と面の境界線を持ち、幽霊は持たない。
-   */
-  function faceGeometry(face: FaceGeometry): THREE.BufferGeometry {
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(new Float32Array(face.positions), 3),
-    )
-    geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(face.indices), 1))
-    geometry.computeVertexNormals()
-    geometry.computeBoundingSphere()
-    return geometry
   }
 
   function buildBody(bodyId: string, payload: GeometryPayload): void {
@@ -528,8 +503,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
   const ghostLayer = createGhostLayer({
     parent: root,
-    material: previewMaterial,
-    faceGeometry,
+    clippingPlanes: section.clipPlanes,
+    buildShape: (payload) => buildBodyMesh('ghost', payload, bodyMaterials, edgeMaterial, BASE_COLOR),
     rawGeometry: (bodyId) => rawGeometry.get(bodyId),
     setBodyVisible,
     pickChanged,
@@ -2321,6 +2296,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (needsRender || cameraMovedSinceRender()) {
       needsRender = false
       headlightRig.follow(controls.target)
+      ghostLayer.setWorldPerPixel(worldPerPixel())
       renderer.render(scene, camera)
       lastDrawCalls = renderer.info.render.calls
       renderCount += 1
@@ -2475,7 +2451,7 @@ export function createViewport(container: HTMLElement): Viewport {
       controls.dispose()
       bodyMaterials.smooth.dispose()
       bodyMaterials.flat.dispose()
-      previewMaterial.dispose()
+      ghostLayer.dispose()
       edgeMaterial.dispose()
       annotations.clear()
       measureAnnotation.dispose()

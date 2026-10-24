@@ -18,6 +18,7 @@ EVALUATORS = [
     "eval_choice_sync.mjs",
     "eval_expression.mjs",
     "eval_frame_loop.mjs",
+    "eval_ghost_layer.mjs",
     "eval_grid_planes.mjs",
     "eval_grid_scale.mjs",
     "eval_headlight.mjs",
