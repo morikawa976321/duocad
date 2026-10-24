@@ -80,7 +80,7 @@ def test_a_shaft_gets_a_male_thread_with_zero_clearance_and_chamfered_tips():
     _assert_sound(shape)
 
 
-@pytest.mark.parametrize("profile", sorted(kernel_thread.PROFILES))
+@pytest.mark.parametrize("profile", kernel_thread.SELECTABLE)
 def test_a_d3_shaft_gets_a_male_thread(profile):
     """D3 は面取りした先の半径が 1mm 未満(1.5 − 0.6)。先の円錐を作る回転体が細い軸で壊れないこと(両端とも先)。"""
     doc = Document()
@@ -116,7 +116,7 @@ def _hollow_shaft(doc: Document, bore_diameter: float) -> str:
     return body_id
 
 
-@pytest.mark.parametrize("profile", sorted(kernel_thread.PROFILES))
+@pytest.mark.parametrize("profile", kernel_thread.SELECTABLE)
 @pytest.mark.parametrize("diameter", [3.0, 10.0])
 def test_a_bolt_standing_on_a_head_is_sound(profile, diameter):
     """根元が頭の平面の軸。ねじの切り口が頭の上面に載ると 30° でその面が三角形に分割できず、D10 では門で落ちた(根元は谷より細い首で始める)。"""
@@ -129,7 +129,7 @@ def test_a_bolt_standing_on_a_head_is_sound(profile, diameter):
     _assert_sound(shape)
 
 
-@pytest.mark.parametrize("profile", sorted(kernel_thread.PROFILES))
+@pytest.mark.parametrize("profile", kernel_thread.SELECTABLE)
 def test_a_hollow_shaft_keeps_its_bore(profile):
     """軸の中の同軸の穴(直径 1.2)は、ねじを切った後も穴のまま(円柱を足し引きする作り方で埋めない)。"""
     from OCP.BRepClass3d import BRepClass3d_SolidClassifier
@@ -209,12 +209,17 @@ def test_a_shoulder_widening_towards_the_root_is_not_taken_for_a_chamfered_tip()
     _assert_sound(result["shape"])
 
 
-def test_the_semicircle_profile_builds_on_a_hole():
+def test_a_document_threaded_with_the_retired_semicircle_still_replays(monkeypatch):
+    """半円は新しく刻めないが、外す前に半円で刻んだ文書は記録された隙間・ピッチで再生できる(2026-10-24 本人の決定)。"""
     doc = Document()
     body_id, face = _hole(doc)
-    operation = thread(doc, face, "semicircle", body_id=body_id)
-    assert operation.args["clearance"] == 0.12
-    _assert_sound(doc.get_body(body_id).shape)
+    with monkeypatch.context() as patch:
+        patch.setattr(kernel_thread, "require_selectable", lambda profile: None)  # 外す前の文書を作る
+        thread(doc, face, "semicircle", body_id=body_id)
+    volume = query.volume(doc.get_body(body_id).shape)
+    replayed = replay_through_json(doc)
+    assert query.volume(replayed.get_body(body_id).shape) == pytest.approx(volume)
+    _assert_sound(replayed.get_body(body_id).shape)
 
 
 def test_thread_is_logged_undoable_and_replays():
@@ -248,7 +253,8 @@ def _assert_refused_without_change(doc, body_id, face, profile, clearance, match
         ("iso", None, "profile"),
         ("trapezoid45", -0.01, "0 以上"),
         ("trapezoid45", 0.48, "上限"),  # D6 は P1.5、上限 0.4P − 0.125 = 0.475
-        ("semicircle", 0.27, "上限"),  # 0.24P − 0.1 = 0.26
+        ("semicircle", None, "新しく刻めない"),
+        ("trapezoid30", 0.48, "上限"),
     ],
 )
 def test_bad_arguments_are_refused_without_change(profile, clearance, match):
@@ -293,8 +299,8 @@ def test_the_clearance_limit_keeps_engagement_and_scales_with_pitch():
 
 
 def test_a_clearance_outside_the_recommended_range_warns_but_does_not_refuse():
-    assert kernel_thread.clearance_warning("semicircle", True, 0.12) is None
-    assert "推奨" in kernel_thread.clearance_warning("semicircle", True, 0.2)
+    assert kernel_thread.clearance_warning("trapezoid30", True, 0.20) is None
+    assert "推奨" in kernel_thread.clearance_warning("trapezoid30", True, 0.22)  # TP5 の D3 でガタが出た(THREAD_SIM.md 6.12)
     assert "ナット側" in kernel_thread.clearance_warning("trapezoid45", False, 0.1)
 
 

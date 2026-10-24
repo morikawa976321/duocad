@@ -135,7 +135,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 ## thread(ねじ)
 
 - 呼ぶ面は `thread(profile, clearance?)`。刻む面は確定選択の全周の円筒面ちょうど1つ(`selection.require_selected(..., exactly_one=True)`)。verb は `duocad/verbs/thread.py`、幾何は `duocad/kernel_thread.py`(依存は kernel_thread → kernel の一方向)。設計と数値の根拠は [docs/THREAD.md](../THREAD.md)・[docs/THREAD_SIM.md](../THREAD_SIM.md) 6.10。
-- **仕様(2026-10-23 本人判断)**: 山形は `semicircle` / `trapezoid30` / `trapezoid45` から選ぶ。隙間は入力でき、下限 0・上限(山の深さに比例するピッチの式)で断り、推奨の範囲の外は確定して警告する。既定は穴が推奨の真ん中、軸が 0。ピッチは径から自動で入力欄は無い(AI の判断)。
+- **仕様(2026-10-23・10-24 本人判断)**: 山形は `trapezoid30` / `trapezoid45` から選ぶ。`semicircle` は新しく刻めない(`kernel_thread.require_selectable` が断る)が、既に半円で刻んだ文書の再生(`_do_thread`)は通す。隙間は入力でき、下限 0・上限(山の深さに比例するピッチの式)で断り、推奨の範囲の外は確定して警告する。既定は穴が 30°台形 0.20(推奨の上端。TP5 で D3〜D10 とも回った)・45°台形 0.12、軸が 0。ピッチは径から自動で入力欄は無い(AI の判断)。
 - **ログには解決後の隙間とピッチを残す**(`{face, profile, clearance, pitch, body_id}`)。再生は記録された値で刻み直すので、既定の表やピッチの式を直しても古い文書の形は変わらない。
 - **警告は入口の返り値の `warning` で運ぶ**。`Session._after_logged_verb` が `_suppress_events == 0`(確定)のときだけ `Session.warnings` へ積む。プレビューは同じ入口を通るので、ここで抑えないと幽霊を描くたびにトーストが出る。
 - 合否は `IsDone`・`BRepCheck` だけで決めない: ソリッドの数が変わらない・体積の増減が「単独で組んだねじ部の体積 − 埋めた・切った円柱」とねじ部の体積の 1% 以内で合うことまで見る(`BRepCheck` が真のまま芯が消える壊れ方。docs/THREAD.md「形の作り方」)。

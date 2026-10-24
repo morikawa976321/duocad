@@ -53,11 +53,13 @@ from . import (
 
 # 山形の族。深さ(半円は丸みの半径)はピッチの 0.4 倍。隙間は半円が法線方向、台形が半径方向(試し刷りと同じ付け方)。
 # recommended / default_female はナット側(穴)の値。軸(雄)の既定は 0(隙間はナット側に持たせると強い。THREAD_SIM.md 5.5)。
+# retired の山形は新しく刻めない。既にその山形で刻んだ文書を開けるよう、再生(記録された隙間・ピッチで刻み直す)には残す。
 PROFILES: Dict[str, dict] = {
-    "semicircle": dict(label="半円", offset="normal", recommended=(0.11, 0.14), default_female=0.12),
-    "trapezoid30": dict(label="30°台形", beta=30.0, offset="radial", recommended=(0.18, 0.22), default_female=0.20),
+    "semicircle": dict(label="半円", offset="normal", recommended=(0.11, 0.14), default_female=0.12, retired=True),
+    "trapezoid30": dict(label="30°台形", beta=30.0, offset="radial", recommended=(0.18, 0.20), default_female=0.20),
     "trapezoid45": dict(label="45°台形", beta=45.0, offset="radial", recommended=(0.11, 0.13), default_female=0.12),
 }
+SELECTABLE = tuple(name for name, spec in PROFILES.items() if not spec.get("retired"))
 DEPTH_PER_PITCH = 0.4
 SAMPLES_PER_TURN = 64
 _FILL_MARGIN = 0.01  # 埋める・切る円柱を面より 0.01 太くする(谷の帯と既存の円筒面を重ねると三角形に分割できない面が残る。実測)
@@ -85,6 +87,16 @@ def recommended_range(profile: str, female: bool) -> Tuple[float, float]:
 
 def default_clearance(profile: str, female: bool) -> float:
     return float(PROFILES[profile]["default_female"]) if female else 0.0
+
+
+def require_selectable(profile: str) -> None:
+    """新しく刻める山形か(再生は `_require_profile` だけを通り、retired の山形も受ける)。"""
+    spec = _require_profile(profile)
+    if spec.get("retired"):
+        raise ValueError(
+            f"{spec['label']}の山形は新しく刻めない(大きい径で既定の隙間でもはまらなかった。THREAD_SIM.md 6.12)。"
+            f"{' / '.join(SELECTABLE)} のどれかを選ぶ"
+        )
 
 
 def _require_profile(profile: str) -> dict:
