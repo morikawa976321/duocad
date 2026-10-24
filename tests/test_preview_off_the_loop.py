@@ -98,8 +98,10 @@ def _run(session: Session, script):
         await server._push(client, applied=None, only=client)
         client.payloads.clear()
         result = await script(server, client)
-        while server._pending_pushes:
-            await asyncio.gather(*list(server._pending_pushes), return_exceptions=True)
+        async with asyncio.timeout(10):
+            while server._pending_pushes:
+                await asyncio.gather(*list(server._pending_pushes), return_exceptions=True)
+                await asyncio.sleep(0)  # 完了済みでも、集合から除くコールバックを実行させる。
         return result, client
 
     return asyncio.run(scenario())
@@ -184,8 +186,10 @@ def test_a_preview_finishing_after_a_disconnect_does_not_keep_the_connection(ses
         await server._dispatch(client, json.dumps({"cmd": "preview", "verb": "fillet", "args": {"radius": RADIUS}, "preview_id": 1, "ack_id": 1}))
         server.clients.discard(client)  # `handle` の後始末と同じ
         server._acks.pop(client, None)
-        while server._pending_pushes:
-            await asyncio.gather(*list(server._pending_pushes), return_exceptions=True)
+        async with asyncio.timeout(10):
+            while server._pending_pushes:
+                await asyncio.gather(*list(server._pending_pushes), return_exceptions=True)
+                await asyncio.sleep(0)  # 完了済みでも、集合から除くコールバックを実行させる。
         return dict(server._acks)
 
     (acks, _client) = _run(session, script)

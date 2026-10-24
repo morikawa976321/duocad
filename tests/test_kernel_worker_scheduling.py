@@ -251,8 +251,10 @@ def test_disconnect_stops_even_a_superseded_running_preview(session, delayed, mo
             while worker._process is not None:
                 assert time.monotonic() < deadline
                 await asyncio.sleep(0.005)
-            while server._pending_pushes:
-                await asyncio.gather(*list(server._pending_pushes))
+            async with asyncio.timeout(10):
+                while server._pending_pushes:
+                    await asyncio.gather(*list(server._pending_pushes))
+                    await asyncio.sleep(0)  # 完了済みでも、集合から除くコールバックを実行させる。
             assert all(job._cancel.is_set() for job in jobs)
             assert not server._preview_jobs and not server._preview_futures
             assert client not in server._acks
