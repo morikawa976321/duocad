@@ -17,7 +17,7 @@ from duocad.topopt.acceptance import (
 )
 from topopt_support import Table
 
-CHECKS = Path(__file__).resolve().parents[1] / 'topopt_checks'
+CHECKS = Path(__file__).resolve().parents[2] / 'topopt_checks'
 sys.path.insert(0, str(CHECKS))
 spec = importlib.util.spec_from_file_location('check_pre_smoothing', CHECKS / 'check_pre_smoothing.py')
 check_pre_smoothing = importlib.util.module_from_spec(spec)

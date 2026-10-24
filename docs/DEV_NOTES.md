@@ -19,6 +19,28 @@
   venv の python はランチャなので、走り出してからジョブに入れると実体がジョブの外に出うる(このツールは停止状態で作ってから入れる)。
 - **形状探索の FEM を並べると OOM になる。** RAM 31.7 GB で普段 10〜15 GB は他のアプリが使う。hanger の1条件のピークは 2.388 mm で 7.5 GB〜1.592 mm で 24.2 GB。
   2本以上のピークが重なると落ちる（2026-09-26 に PC が落ちた）。
+- **OpenBLAS のスレッドは既定で1本にしてある（`duocad/__init__.py` の `setdefault`）。** numpy と scipy は別々に OpenBLAS を持ち、
+  読み込んだ時点で論理コア数（この機械では14）ぶんの作業域を確保する。2026-10-24 に測った private bytes（14 → 1 スレッド）:
+  サーバ本体（`python -m duocad.mcp_server`）1.11 → 0.30 GB、面の編集の子（`kernel_worker`）と干渉チェックの子
+  （`interference_worker`）は各 0.55 → 0.14 GB、`import numpy, scipy.linalg` だけで 0.86 → 0.04 GB。
+  - 読み込んだ後に `threadpoolctl.threadpool_limits(1)` で絞っても 0.857 GB のまま返らない。`python -m duocad.mcp_server` でも
+    `mcp_server.py` の本文より先に `duocad/__init__.py` が verb を読み込んで numpy に届くので、置き場所はここしかない。
+    子は `worker_process` が `os.environ` を渡すので同じ値を継ぐ。
+  - 製品で BLAS に届くのは小さい計算だけ（`interference_mesh` の 3×3 の `eigh`、`kernel_tight` の 2×2 の `solve`、`norm`）。
+    形状最適化の FEM（CPU）も速さは変わらない（CG 60×28×24 で 2.32 → 2.25 秒、直接法 40×18×16 で 8.4 → 8.6 秒）が、
+    **CG の解は末尾の桁が変わる**（相対 2.5×10⁻¹³。直接法は一致）。多スレッドの BLAS で測りたいときは、numpy を読む前に
+    `OPENBLAS_NUM_THREADS` を明示する（明示した値が勝つ）。
+  - pytest も同じ値で走る（`tests/conftest.py` が最初に `duocad` を読む）。同じコード（3,370件）の全件の直列実行で、
+    メモリのピーク 3.88 → 1.94 GB、時間 13分13秒 → 11分49秒（1回ずつ。縮んだのは `test_fillet_tight_surface` の −29 秒ほか
+    フィレット・ねじの重いテスト）。xdist で4ワーカー並べたとき 8 GB の上限を超えて OpenBLAS の確保失敗で落ちていたのはこれ
+    （収集だけで1ワーカー 1.16 → 0.34 GB）。
+- **pytest は全件を4ワーカーで並べる（`pyproject.toml` の `addopts`、ワーカー数は `tests/conftest.py`）。並列度を縛るのはメモリ。**
+  2026-10-24 の develop で、直列の全件 11分49秒 → 4ワーカー 2分37秒（凍結中の `tests/topopt/` を除く2,722件、ピーク 3.35 GB）。
+  `--topopt` で全件を並べると 3分10秒（ピーク 5.91 GB）。
+  - ワーカー数は main の時点の2,595件で比べた: 4本 1分48秒・3.18 GB、8本 1分33秒・4.85 GB。8本にしても15秒しか縮まず、
+    別のセッションが同時に回すと空き（計測時 9〜11 GB）を超えうるので4本。分配を load にすると4本で2分23秒（worksteal は
+    重いテストが1つのワーカーに残って最後に1本だけ走り続けるのを避ける）。
+  - ファイルやテストを名指ししたときは直列にする。4本の立ち上げに毎回約10秒かかり、1ファイルなら直列 8.5 秒・並列 18 秒。
 - **PowerShell の `Invoke-CimMethod -ClassName Win32_Process -MethodName Create` で起動した独立プロセスは、Claude のアプリを閉じても続く**（親が `WmiPrvSE` になる）。
 - **`.venv` は `uv sync --frozen` で `uv.lock` から作り直せる。** 依存は `uv add` で入れる。`uv pip install` で手入れした
   ものは作り直すと消え、収集エラー（`No module named ...`）で初めて気づく。Python の版が変わったときは venv ごと

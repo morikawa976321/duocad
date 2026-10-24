@@ -131,12 +131,20 @@ cd web; npm run dev                                 # 画面(5173)
 
 サーバもブラウザも要らない。実STEPを読む重いテストは含まない。ただし `tests/eval_*.mjs` を走らせる検査と `tests/test_protocol.py` の型検査は Node 23.6 以上と `web/node_modules` を使うので、先に §1.1 の `npm install --prefix web` を済ませる（無いと素の clone で20件余りが落ちる）。
 
+- **全件は4ワーカーで並べて走る**（pytest-xdist。`pyproject.toml` の `addopts` の `-n auto --dist worksteal`）。ファイルやテストを
+  名指ししたときは直列（ワーカーの立ち上げに毎回約10秒かかり、1ファイルなら直列の方が速い）。ワーカー数は `tests/conftest.py` の
+  `WORKERS_FOR_THE_WHOLE_SUITE`、その場で変えるなら `-n 8` / `-n 0`。`pytest-xdist` の入っていない `.venv` では `-n` を読めずに
+  止まるので、`uv sync --frozen --extra gpu` で入れる。
+- **形状最適化だけを守るテスト（`tests/topopt/`）は既定では集めない**（開発も製品での公開も凍結中。2026-10-24 本人指示）。
+  集めるなら `--topopt`。`tests/topopt/` の中を名指ししたときも集まる。凍結中も製品が使う部分（条件入りの文書の保存と配信、
+  干渉チェックが使う `tessellate_body`、安定版で隠れること）は `tests/` 側に残してある。
+
 ### 形状最適化の受入検査
 
 途中データの保存範囲・場所・読み方は [docs/TOPOPT_RECORDING.md](docs/TOPOPT_RECORDING.md)。
 最終形状の合格条件は [docs/TOPOPT_ACCEPTANCE.md](docs/TOPOPT_ACCEPTANCE.md)
 （最終形状は `topopt_checks/check_final_shape.py`、島除去後・平滑化前の6条件は `topopt_checks/check_pre_smoothing.py` で判定。
-判定器自体の回帰検査は `tests/test_final_shape.py` / `tests/test_pre_smoothing.py`）。
+判定器自体の回帰検査は `tests/topopt/test_final_shape.py` / `tests/topopt/test_pre_smoothing.py`）。
 
 **以下の数値検査は pytest には入れていない**（毎回の `pytest -q` が重くなる。マーカーで既定から外すと、CIが無いので
 誰も回さなくなる）。**強制力は、依頼に書く「受入検査がすべて緑」の一文と、それを回すセッションが担う。**

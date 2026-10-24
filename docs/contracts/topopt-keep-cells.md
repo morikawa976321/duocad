@@ -1,7 +1,7 @@
 # 形状最適化の保持セル（keep）・最小幅の対象外の契約
 
 保持ソリッド由来のセル（`SearchConditions.keep_cells` / `DesignSpace.keep`）を探索で扱う規則——最小幅 R(m) の対象外（`exempt`）と、決して抜かない（`protected`）——について、ソースを読んでも分からない不変条件・依存禁止・罠。
-いまの挙動の正はコードとテスト（`tests/test_binary_search_keep.py`・`tests/test_binary_search.py`）、実測と決定の理由の正は [../TOPOPT_PRESERVE.md](../TOPOPT_PRESERVE.md)（冒頭の契約・節A・節B）。最小幅の規則そのものは [topopt-min-width-peel.md](topopt-min-width-peel.md)。
+いまの挙動の正はコードとテスト（`tests/topopt/test_binary_search_keep.py`・`tests/topopt/test_binary_search.py`）、実測と決定の理由の正は [../TOPOPT_PRESERVE.md](../TOPOPT_PRESERVE.md)（冒頭の契約・節A・節B）。最小幅の規則そのものは [topopt-min-width-peel.md](topopt-min-width-peel.md)。
 
 ## 呼ぶ面と意味の線引き
 
@@ -23,7 +23,7 @@
 - `peel(mask, order, count, anchor_ids, *, min_width_cells, exempt, protected)`: `protected`（bool、`mask` に含まれること）のセルは順位に並んでいても飛ばし（`picked` に数えない）、**島として切り離す手も却下する**（`skipped_connectivity` に数える。別の計数名は作っていない）。m>1 で `protected` を渡すときは `protected ⊆ exempt`（でなければ `ValueError`。製品では `exempt` = 保持セルなので常に成り立つ）。
 - `binary_search.resolve_islands(candidate, conditions)`: 生存成分は「全条件を満たし、かつ全保持セルを含む成分」だけ。保持セルが2つ以上の成分に分かれる形は生存成分が無い（段階3では `full_material_infeasible`）。
 - `binary_search._evaluate_survivor`: `keep_cells` があり `survivor` が保持セルを欠くと `RuntimeError`（黙って塗り直さない）。段階3・段階4の全評価がここを通る。
-- **不変条件**: `keep_cells` が与えられた探索が作る全候補・全合格形状で `mask[keep].all()`。テストは `tests/test_binary_search_keep.py`（m=1,2,3）。
+- **不変条件**: `keep_cells` が与えられた探索が作る全候補・全合格形状で `mask[keep].all()`。テストは `tests/topopt/test_binary_search_keep.py`（m=1,2,3）。
 - 変えていないもの: `keep_cells is None` の経路（`PeelStats` の項目・診断のキーも同じ）、`acceptance.inspect` の6条件の並び・報告の形、合格条件(3)（保持CADとの共通体積）、代表応力（99.5% 点）の母集団（保持セルも入る）、除外ソリッドのボクセル化。
 
 ## 依存してはいけないもの

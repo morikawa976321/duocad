@@ -11,7 +11,7 @@ from build123d import Box, Pos, Rotation
 from duocad.topopt import acceptance, anchor, voxelize
 from duocad.topopt import binary_search as bs
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'topopt_checks'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'topopt_checks'))
 import _fixtures  # noqa: E402  合成題材(build123d を直接使うので duocad/ の外にある)
 
 

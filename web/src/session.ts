@@ -69,7 +69,7 @@ export interface SketchEntityRef {
  *
  * `BodyRef` を落とさないこと: `state.optimize` の4配列は「そのまま `modifySelection` へ渡せる」が
  * 契約なので、ここに無いと保持/除外ソリッドのプリセレクトが型の上で書けない
- * (`tests/test_optimize_setup.py` が宣言を静的に見ている)。
+ * (`tests/topopt/test_optimize_setup.py` が宣言を静的に見ている)。
  */
 export type SelectionRef = ShapeRef | BodyRef | RegionRef | SketchEntityRef
 

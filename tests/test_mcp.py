@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
 import subprocess
 import sys
 
@@ -20,6 +21,12 @@ from duocad.paths import REPO_ROOT
 def _server() -> McpServer:
     """文書を持たないサーバ(プロトコル層しか叩かない)。"""
     return McpServer(DocumentTools(session=None))  # type: ignore[arg-type]
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
 
 @pytest.mark.parametrize(
@@ -87,11 +94,12 @@ def test_the_process_starts_and_answers_over_real_stdio():
             sys.executable,
             "-m",
             "duocad.mcp_server",
-            # 既定のポート(8765/8766)は実機のサーバが使っている可能性があるので避ける
+            # 既定のポート(8765/8766)は実機のサーバが使っている可能性があるので避ける。固定の番号にすると、
+            # 別のセッションが同時に回した pytest と取り合う
             "--port",
-            "18765",
+            str(_free_port()),
             "--http-port",
-            "18766",
+            str(_free_port()),
             "--web-dist",
             str(REPO_ROOT / "web" / "does-not-exist"),
         ],

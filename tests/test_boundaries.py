@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+from duocad.paths import REPO_ROOT
 
 DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 
@@ -444,3 +448,21 @@ def test_executor_boundary_applies_type_import_exception_only_to_steps(
     else:
         with pytest.raises(AssertionError, match=relative_path):
             test_numerics_and_steps_do_not_import_optimization_executor()
+
+
+def test_importing_the_session_does_not_pull_in_the_topopt_layer() -> None:
+    """`optimize_run` を `session.py` が読むようになっても、**最適化の層は来ない**。
+
+    **`scipy` は見ない** —— `duocad/view.py` が(このタスクの前から)既に読んでいるので、
+    scipy の有無ではこの配線の退行を検出できない(2026-09-05実測)。
+    """
+    code = (
+        "import sys; import duocad; import duocad.session; "
+        "print(sorted(m for m in sys.modules "
+        "if m.startswith('skimage') or m.startswith('duocad.topopt')))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "[]", out.stdout

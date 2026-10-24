@@ -47,4 +47,4 @@
 
 > 保持ソリッドが探索時の削減可能対象から正しく外れているならそれで問題ない。
 
-外れていることの確認: 変更後の3本とも採用マスクの保持セルは1,498/1,498、`_evaluate_survivor` の不変条件、`tests/test_binary_search_keep.py`(20 passed)。目標2.0での変更前後の測り直しはしない(製品の既定は探索時の目標 = 実際の目標 × 2.4 に変わった。[TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md))。
+外れていることの確認: 変更後の3本とも採用マスクの保持セルは1,498/1,498、`_evaluate_survivor` の不変条件、`tests/topopt/test_binary_search_keep.py`(20 passed)。目標2.0での変更前後の測り直しはしない(製品の既定は探索時の目標 = 実際の目標 × 2.4 に変わった。[TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md))。

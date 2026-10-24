@@ -12,7 +12,7 @@
 - **可変グローバル(`fem.PARALLEL_THREADS` / `fem._SOLVE_STATS`)は `fem` を import して `fem.X` を直接触る。** `from .fem import PARALLEL_THREADS` で再輸出した名前は import 時点のコピーで、読み取りは効くが代入は届かない。並列度を一時的に変える検査・計測は `fem.PARALLEL_THREADS = 1` と書く(`check_parallel.py` が該当)。
 - `topopt_checks/check_fem.py` が二値の棒・梁4題材(内部空洞・表面切り欠き・複数空洞+スレッド並列)の変位・コンプライアンス・反力・von Mises応力を SHA-256/スカラーで固定している。**`fem.py` を触ったら最初に走らせる**(`.\.venv\Scripts\python.exe topopt_checks\check_fem.py`)。基準値は移設前の実装(コミット `2223908`)から採った。変更後の実装同士の比較で一致を名乗らない。再採取は基準の実装の状態に戻して採る(他者の未コミット変更を壊さない手段で)。
 - `rho**penal` と `emin` は `assemble` / `compliance` / `stiffness_apply` に残っている(二値 rho∈{0,1} では penal に依らず無害に縮退する)。
-- **`duocad/topopt/trace.py` の `Model` 直列化は、フィールド名リストがハードコードされている。** `fem.Model` のフィールドを増減すると `trace._encode` が `getattr(value, n)` で `AttributeError` になり、`keep_model=True` や `trace.recording()` を使う検査(`check_trace.py`・`tests/test_optimization_trace.py`)が壊れる。フィールドを変えたら `trace.py` のリストも直す。
+- **`duocad/topopt/trace.py` の `Model` 直列化は、フィールド名リストがハードコードされている。** `fem.Model` のフィールドを増減すると `trace._encode` が `getattr(value, n)` で `AttributeError` になり、`keep_model=True` や `trace.recording()` を使う検査(`check_trace.py`・`tests/topopt/test_optimization_trace.py`)が壊れる。フィールドを変えたら `trace.py` のリストも直す。
 - 合成密度場(ガウスぼかしで作る)を使う検査(`check_parallel.py` / `check_stress.py` / `check_mesh.py`)は、ファイルごとにシード・sigma・格子サイズに対して**実測校正した閾値**を持つ。これらを変えると体積一致率や前処理の効きの閾値を割る。変更時は各ファイルのコメントの実測値で再校正する。`check_mesh.py` は marching cubes 直後の体積一致(5%以内)と Taubin 平滑化の体積保存を両立させるため、大きい sigma で太い塊を作ってから二値化している(細い突起があると Taubin で体積が大きく動く)。
 
 ## acceptance.py(6条件の唯一の実装)
@@ -21,8 +21,8 @@
 - **密度→bool変換は読み取りアダプター `duocad.optimize_acceptance.inspect_document(document, rho_clean, rho_before, grid, *, level=0.5, **kwargs)` だけの責務。** 過去記録(密度場)を読むときだけ使い、`rho > level` の二値化と、二値体積とは別枠の密度積算量(`report['volumes']['density_integral_before_mm3'/'density_integral_after_mm3']`)をここでだけ作る。`topopt_checks/check_pre_smoothing.py` はこの関数だけを呼ぶCLIで、6条件のロジックを複製しない。`inspect()` は入力を書き換えず、自分では二値化しない(密度+levelを内部で二値化する形は「新規の製品APIはboolマスクを受ける」に反する)。
 - 個別検査も公開: `boundary_check` / `connectivity_check`(幾何、OCP不使用)、`region_check` / `intersection_volume`(CAD、`duocad.kernel*` 越し)、`condition_check`(境界条件)、`safety_check`(FEM、`fem.Model` を直接構築)。
 - **CAD共通体積の生プリミティブは kernel 層に置く**(現行 `duocad/kernel_brep.py` の `boxes_common_volume` / `require_valid_solid` / `grid_cell_common_volumes` / `box_common_volume`。`kernel.py` の `BoundingBoxCache` / `shape_key`)。**Grid / material 配列の概念を持たず**、生の `(min, max)` mm 座標のリストだけを受ける。`acceptance.py` は自分で OCP を import しない(`tests/test_boundaries.py::test_only_kernel_module_imports_ocp` の `OCP_ALLOWED` に載せない)。`topopt/voxelize.py` が OCP を許されているのは「B-repの厳密なbbox(`SetGap` 順序)が要る」という名指しの理由のためで、無関係なOCP呼び出しを便乗させない。
-- bbox計測に `BoundingBoxCache` を使い回せる(`cache=` 引数。`inspect_document` は既定で `document.bbox_cache` を渡す)。`region_check` / `intersection_volume` の体積は `bbox_cache` の有無で一致する(`tests/test_pre_smoothing.py::test_intersection_volume_matches_with_and_without_bbox_cache` / `::test_inspect_result_is_identical_with_and_without_bbox_cache` で固定)。
-- **計算失敗(残差検算・特異行列・非有限値)は例外を握って `status='unknown'` を返す**(`safety_check` / `region_check` とも)。安全率不足・体積不足(不合格)へ変換しない(`tests/test_pre_smoothing.py::test_solver_failure_is_unknown_not_unsafe`、§4.5)。
+- bbox計測に `BoundingBoxCache` を使い回せる(`cache=` 引数。`inspect_document` は既定で `document.bbox_cache` を渡す)。`region_check` / `intersection_volume` の体積は `bbox_cache` の有無で一致する(`tests/topopt/test_pre_smoothing.py::test_intersection_volume_matches_with_and_without_bbox_cache` / `::test_inspect_result_is_identical_with_and_without_bbox_cache` で固定)。
+- **計算失敗(残差検算・特異行列・非有限値)は例外を握って `status='unknown'` を返す**(`safety_check` / `region_check` とも)。安全率不足・体積不足(不合格)へ変換しない(`tests/topopt/test_pre_smoothing.py::test_solver_failure_is_unknown_not_unsafe`、§4.5)。
 - `acceptance.py` は `fem.Model` / `fem.SOLVE_RESIDUAL_TOL` を直接使う。許容応力等の既定は `material.py` から import する。
 
 ## binary_search.py: 初期実行可能解(段階3)

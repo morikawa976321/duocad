@@ -1,19 +1,12 @@
 """形状最適化(第3のモード)の条件を置く4 verb の契約。"""
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
 import pytest
 
 from duocad import optimize, selection
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
 from session_support import SIDE, pad, select as _select, send_one
-
-from duocad.paths import REPO_ROOT
-SESSION_TS = REPO_ROOT / "web" / "src" / "session.ts"
-COMMAND_TS = REPO_ROOT / "web" / "src" / "commands" / "command.ts"
 
 DEVIATION = 0.2
 
@@ -51,35 +44,6 @@ def _indices(refs: list) -> list:
 
 def _optimize(session: Session) -> dict:
     return session.state_meta()["optimize"]
-
-
-def test_a_body_can_be_selected_whole(session: Session) -> None:
-    """**ソリッドを丸ごと指せる**(面を全部入れる案は採っていない)。
-
-    落ちるのは「`kind='body'` の参照が選択機構を通らない」とき。保持/除外ソリッドは
-    選択から対象を取るので、通らなければverb自体が使えない。
-    """
-    body = _box(session)
-    ref = selection.select_body(session.document, body.id)
-    assert ref == {"body": body.id, "kind": "body", "index": None, "provenance": None}
-    assert selection.ref_kind(ref) == selection.BODY_KIND
-
-    _select(session, _body_refs(body))
-    items = session.get_selection()["items"]
-    # **面が展開されて入っていない**(2835面のボディで選択集合が膨れる案を採らないこと)
-    assert items == [ref], items
-    assert selection.require_selected_bodies(session.document) == [body.id]
-
-
-def test_the_same_body_is_not_selected_twice(session: Session) -> None:
-    """同じボディを2回 add しても重複しない(等価判定が添字を見ていないこと)。"""
-    body = _box(session)
-    session.clear_selection()
-    session.modify_selection(_body_refs(body), [])
-    session.modify_selection(_body_refs(body), [])
-    assert len(session.get_selection()["items"]) == 1
-    session.modify_selection([], _body_refs(body))
-    assert session.get_selection()["items"] == []
 
 
 def test_assigning_bodies_replaces_the_whole_set(session: Session) -> None:
@@ -376,67 +340,6 @@ def test_the_fingerprint_check_names_what_changed(session: Session) -> None:
     assert reason is not None and "面積" in reason, reason
 
 
-def test_the_setup_survives_a_real_save_and_open(tmp_path) -> None:
-    """落ちたら、`save_document` → `new_document` → `open_document` の実APIの往復(ファイルI/Oと
-    文書の差し替えを通る)で条件が戻らないか、差し替え後に前の文書の割り当てを配っている。"""
-    made = Session(DEVIATION, models_dir=tmp_path / "models")
-    body = _box(made)
-    _select(made, _body_refs(body))
-    made.set_preserve_bodies()
-    _select(made, _face_refs(body, [1, 2]))
-    made.set_fixtures()
-    _select(made, _face_refs(body, [3]))
-    made.set_loads(120.0, [1.0, 0.0, 0.0])
-    before = _optimize(made)
-    assert len(before["fixtures"]) == 2 and before["load_specs"][0]["magnitude"] == 120.0
-
-    made.save_document("optimized.json")
-    made.new_document()
-    # **差し替えでキャッシュごと落ちていること**(ここが緑でないと、次の open が
-    # 前の文書の割り当てを配っていても気づけない)
-    empty = _optimize(made)
-    assert empty["preserve_bodies"] == [] and empty["fixtures"] == [] and empty["load_specs"] == []
-
-    made.open_document("optimized.json")
-    after = _optimize(made)
-    assert after == before, {"開く前": before, "開いた後": after}
-
-
-def test_clearing_every_role_survives_a_real_save_and_open(tmp_path) -> None:
-    """**外す操作も操作ログの1手**なので、保存・再オープンで「空のまま」戻る。
-
-    ここが落ちるなら、外した役割が開き直すたびに復活していることになる。
-    ボディ・拘束は集合代入なので「空を代入した」が外し方、荷重だけは上書き代入なので
-    `clear_loads` が外し方である(`duocad/verbs/optimize_setup.py`)。
-    """
-    made = Session(DEVIATION, models_dir=tmp_path / "models")
-    body = _box(made)
-    _select(made, _body_refs(body))
-    made.set_preserve_bodies()
-    _select(made, _face_refs(made.document.bodies[-1], [1]))
-    made.set_fixtures()
-    _select(made, _face_refs(body, [2]))
-    made.set_loads(30.0, "normal")
-
-    # 4つとも空にする(ボディ・拘束は空の選択で確定、荷重は `clear_loads`)。
-    # **条件面を先に外す** —— 条件面は保持ソリッドの面にしか置けないので、条件が残ったまま
-    # 保持を空にはできない(2026-09-18〜)。
-    made.clear_selection()
-    made.set_fixtures()
-    made.clear_loads()
-    made.set_preserve_bodies()
-    made.set_exclude_bodies()
-    assert _optimize(made)["fixtures"] == [] and _optimize(made)["load_specs"] == []
-
-    made.save_document("cleared.json")
-    made.new_document()
-    made.open_document("cleared.json")
-
-    after = _optimize(made)
-    assert after["preserve_bodies"] == [] and after["exclude_bodies"] == []
-    assert after["fixtures"] == [] and after["loads"] == [] and after["stale"] == []
-
-
 def test_undo_and_redo_walk_the_assignment_back(session: Session) -> None:
     """undoは**直前の集合**へ戻り、redoでやり直せる(集合代入なので差分ではない)。"""
     first = _box(session)
@@ -719,75 +622,6 @@ def test_the_delivered_refs_can_be_fed_straight_back_into_the_selection(
     assert session.get_selection()["count"] == 3
     assert selection.require_selected_bodies(session.document) == [body.id]
     assert len(selection.require_selected_faces(session.document)) == 2
-
-
-def test_the_state_is_not_rebuilt_on_every_broadcast(session: Session) -> None:
-    """**配信のたびに全ボディを走査しない**。"""
-    body = _box(session)
-    other = _box(session, corner=(50.0, 0.0))
-    _preserve(session, body)
-    _select(session, _face_refs(body, [1]))
-    session.set_fixtures()
-
-    session.state_meta()  # 1回目は当然作る(条件を置いた直後なので)。数えるのはその後
-    calls: list = []
-    original = optimize.face_fingerprint
-
-    def counted(doc, body_id, index):
-        calls.append((body_id, index))
-        return original(doc, body_id, index)
-
-    optimize.face_fingerprint = counted
-    try:
-        session.state_meta()
-        session.state_meta()
-        assert calls == [], f"条件が変わっていないのに測り直している: {calls}"
-
-        # **条件と関係の無いボディ**を変えても測り直さない
-        _select(session, _face_refs(other, [1]))
-        session.extrude(3.0, mode="join")
-        session.state_meta()
-        assert calls == [], f"無関係なボディの変更で測り直している: {calls}"
-
-        # 条件が指しているボディの形が変われば、そこだけ測り直す
-        _select(session, _face_refs(body, [2]))
-        session.extrude(3.0, mode="join")
-        session.state_meta()
-        assert [item[0] for item in calls] == [body.id], calls
-    finally:
-        optimize.face_fingerprint = original
-
-
-def test_the_log_broadcast_does_not_carry_every_fingerprint(session: Session) -> None:
-    """状態配信は面の指紋の本文を配らない(**保存(`to_json`)は書く**)。"""
-    body = _box(session)
-    _preserve(session, body)
-    _select(session, _face_refs(body, [1, 2, 3]))
-    session.set_fixtures()
-
-    delivered = session.state_meta()["log"][-1]["args"]
-    assert "配信しない" in delivered["faces"], delivered
-    assert len(session.document.log.entries[-1].args["faces"]) == 3
-
-
-def _ts_union_arms(path: Path, name: str) -> set:
-    """`export type <name> = A | B | C` の右辺を集合で返す。"""
-    text = path.read_text(encoding="utf-8")
-    match = re.search(rf"^export type {name} = (.+)$", text, re.M)
-    assert match, f"{name} の宣言を {path.name} から読めていない"
-    return {arm.strip() for arm in match.group(1).split("|") if arm.strip()}
-
-
-def test_the_typescript_selectable_kinds_match_the_core() -> None:
-    """TSの `SelectableKind` の顔ぶれが、コアの `SELECTABLE_KINDS` と一致する。"""
-    shape_kinds = {arm.strip("'") for arm in _ts_union_arms(SESSION_TS, "ShapeKind")}
-    declared = set()
-    for arm in _ts_union_arms(COMMAND_TS, "SelectableKind"):
-        declared |= shape_kinds if arm == "ShapeKind" else {arm.strip("'")}
-    assert declared == set(selection.SELECTABLE_KINDS), {
-        "TSのみ": sorted(declared - set(selection.SELECTABLE_KINDS)),
-        "コアのみ": sorted(set(selection.SELECTABLE_KINDS) - declared),
-    }
 
 
 def test_renaming_a_hidden_body_updates_the_reason_in_stale(session: Session) -> None:

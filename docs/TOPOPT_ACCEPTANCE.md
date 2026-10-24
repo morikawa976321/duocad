@@ -37,7 +37,7 @@ float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
 .venv/Scripts/python.exe topopt_checks/check_final_shape.py --mesh result.stl --out output/acceptance.json
 .venv/Scripts/python.exe topopt_checks/check_final_shape.py --model-dir output/optimization_runs/<run-id> --model document_after.json --mesh-body <body-id> --out output/acceptance.json
 .venv/Scripts/python.exe topopt_checks/replay_finalization.py output/optimization_runs/<run-id>
-.venv/Scripts/python.exe -m pytest tests/test_final_shape.py -q
+.venv/Scripts/python.exe -m pytest tests/topopt/test_final_shape.py -q
 ```
 
 - `check_final_shape.py` はメッシュをOCCTのソリッドに縫合して `BRepCheck`・自己干渉で2条件だけを判定する(hangerの最終メッシュで約89秒)。
@@ -53,7 +53,7 @@ float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
   各段階の検査(`smoothed-mesh-checks` / `cad-meshes` / `mesh-boolean` / `final-mesh-checks`)と、成功時の文書(メッシュボディ)/STLを保存する。
   元の実行が finalize 失敗で mesh-world snapshot を残していない場合は finalize-input から読み直すフォールバックになり、
   その回は grid が無いため成功しても最終STL(`final.stl`)は保存しない。
-- 検証は `tests/test_finalization.py`、`tests/test_final_shape.py`、`tests/test_optimization_trace.py` と `topopt_checks/check_trace.py`
+- 検証は `tests/topopt/test_finalization.py`、`tests/topopt/test_final_shape.py`、`tests/topopt/test_optimization_trace.py` と `topopt_checks/check_trace.py`
   (小型モデルで製品経路・文書再生・最終STLを確認)。判定器のテストが通ることと、対象モデルの最適化結果が合格することは別に記録する。
 - 「厳密」の範囲: 元CADと最終メッシュ全体の集合演算で、残存体積の割合による許容値は設けない(微小でも残存ソリッドがあれば不合格)。
   ただし有限精度のOCCTで、縫合・包含判定は `Precision.Confusion`(1e-7 mm)、集合演算にはCADのトポロジーごとの公差も作用する。
@@ -91,7 +91,7 @@ float32 で潰れる三角形の最短辺(1e-5 mm 未満)を潰す →
 ```powershell
 python topopt_checks/check_pre_smoothing.py --run output/optimization_runs/RUN_ID --out output/pre_smoothing_checks/report.json
 python topopt_checks/check_pre_smoothing.py --fields fields.npz --document models/hanger_bar_attachment.json --target 2 --out output/pre_smoothing_checks/report.json
-python -m pytest tests/test_pre_smoothing.py -q
+python -m pytest tests/topopt/test_pre_smoothing.py -q
 ```
 
 - **`--run` は旧SIMP記録(2026-09-16 以前の密度場の記録)専用。今の記録には使えない**(今の `selected-result` は `status`・`termination`・`material_mm3`・`safety_factor`・`filled_cells` のスカラーだけで `rho_clean` を持たず、`KeyError` で終了コード2=判定不能になる)。今の記録には `--fields` で NPZ を渡す。旧記録では `selected-result` に記録された採用候補の `rho_clean` を読む(最後に評価した候補ではない)。除去前の場は同候補の密度へ保存済みの保持・除外マスクを

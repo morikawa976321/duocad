@@ -13,6 +13,8 @@ dependencies = [
     # topopt_checks/render_*.py の画像出力。pillow と scikit-image はこの版で topopt のテストが通る(2026-09-18 実測)
     "pillow==12.3.0",
     "pytest>=8.0",
+    # tests/ の並列実行(下の addopts の `-n auto`。ワーカー数は tests/conftest.py が決める)
+    "pytest-xdist==3.8.0",
     # duocad/topopt/mesh.py の marching_cubes
     "scikit-image==0.26.0",
     # M1: duocad/server.py の WebSocket。固定版で入れる(ローカル専用ツールなので上げなければ壊れない)
@@ -33,6 +35,9 @@ testpaths = ["tests"]
 # これが無いと `python -m pytest`（CWDがsys.pathに入る）でしか走らず、素の `pytest` では
 # `ModuleNotFoundError: No module named 'duocad'` で収集エラーになる（実測）。
 pythonpath = ["."]
+# 全件は4ワーカーで並べ、ファイルやテストを名指ししたときは直列(`pytest_xdist_auto_num_workers`)。
+# worksteal は、重いテストが1つのワーカーに偏って最後に1本だけ走り続けるのを避ける(4本で 2分23秒 → 1分48秒。2026-10-24 実測)。
+addopts = "-n auto --dist worksteal"
 
 [build-system]
 requires = ["hatchling"]

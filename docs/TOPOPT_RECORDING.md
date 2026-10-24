@@ -182,7 +182,7 @@ CAD出力・ソース収集・イベント記録等を含む総追加時間で�
 ## 検査
 
 ```powershell
-.venv/Scripts/python.exe -m pytest tests/test_optimization_trace.py -q
+.venv/Scripts/python.exe -m pytest tests/topopt/test_optimization_trace.py -q
 .venv/Scripts/python.exe topopt_checks/check_trace.py
 ```
 

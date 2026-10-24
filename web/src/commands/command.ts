@@ -18,7 +18,7 @@ import type {
 } from '../session'
 import type { COMMAND_CATEGORY, CommandArguments, CommandName, CommandRequest } from '../generated/protocol'
 
-/** 選択の種別。コアの `SELECTABLE_KINDS` と同じ顔ぶれ(`tests/test_optimize_setup.py` が照合)。 */
+/** 選択の種別。コアの `SELECTABLE_KINDS` と同じ顔ぶれ(`tests/test_selection.py` が照合)。 */
 export type SelectableKind = ShapeKind | 'body' | 'region' | 'sketch_entity'
 
 /** 種別ごとの数え方(「辺 4本」「面 2面」)。 */
