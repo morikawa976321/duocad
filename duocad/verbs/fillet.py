@@ -16,11 +16,10 @@ from __future__ import annotations
 
 from typing import Optional, Sequence, Union
 
-from .. import kernel
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
 from ..entry import entry
-from ._common import edge_entry, editable_body, normalize_values, reapply_shape, remember, replayed_body, undo_shape
+from ._common import blend_edges, edge_entry, editable_body, normalize_values, reapply_shape, remember, replayed_body, undo_shape
 
 VERB_FILLET = "fillet"
 
@@ -37,7 +36,7 @@ def fillet(
 
     body = editable_body(doc, body_id, what="fillet")
     values, stored_radius = normalize_values(edge_list, radius, label="radius")
-    result = kernel.fillet_edges(body.shape, dict(zip(edge_list, values)))
+    result = blend_edges(body.shape, dict(zip(edge_list, values)), verb=VERB_FILLET)
 
     previous_shape = body.shape
     body.shape = result["shape"]
@@ -56,7 +55,7 @@ def _do_fillet(document: Document, operation: Operation) -> None:
     edge_list = [int(index) for index in args["edges"]]
     values, _ = normalize_values(edge_list, args["radius"], label="radius")
     body = replayed_body(document, args["body_id"], what="fillet")
-    result = kernel.fillet_edges(body.shape, dict(zip(edge_list, values)))
+    result = blend_edges(body.shape, dict(zip(edge_list, values)), verb=VERB_FILLET, interactive=False)
     reapply_shape(document, body, result, operation)
 
 

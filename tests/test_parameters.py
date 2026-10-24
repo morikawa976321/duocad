@@ -1,6 +1,7 @@
 """名前つきの寸法値(`duocad.parameters`)の契約。"""
 from __future__ import annotations
 
+import copy
 import json
 import math
 
@@ -236,3 +237,65 @@ def test_rebuilding_keeps_hidden_bodies_and_sketches_hidden():
 
     assert not document.get_body(body_id).visible
     assert not get_sketch(document, sketch_id).visible
+
+
+def _two_boxes_with_dimension():
+    document = Document()
+    sketch = sketch_create(document, "XY")
+    rectangle = add_rectangle(document, sketch, (0, 0), 20, 20)
+    for _ in range(2):
+        extrude(document, [region_ref(sketch, 1)], 20, mode="new")
+    return document, sketch, parameter_of(document, sketch, rectangle, "width")
+
+
+def test_failed_dimension_rebuild_restores_optimize_setup(monkeypatch):
+    from duocad import kernel_worker
+    from duocad.verbs import chamfer
+    from duocad.verbs.optimize_setup import set_preserve_bodies, set_fixtures, set_loads
+
+    document, _, width = _two_boxes_with_dimension()
+    a, b = document.bodies
+    set_preserve_bodies(document, [a.id])
+    chamfer(document, [1], 2, body_id=a.id)
+    set_preserve_bodies(document, [b.id])
+    set_fixtures(document, [{"body": b.id, "kind": "face", "index": 1}])
+    set_loads(document, [{"body": b.id, "kind": "face", "index": 2}], 10, "normal")
+    setup = document.optimize
+    before = copy.deepcopy(setup)
+    log_before = document.log.to_json()
+    monkeypatch.setattr(kernel_worker, "INTERACTIVE_TIMEOUT_S", 1e-6)
+
+    with pytest.raises(ValueError, match="秒以内"):
+        set_parameter(document, width, 22)
+
+    assert document.optimize is setup
+    assert document.optimize == before  # 条件の全項目と revision も戻す。
+    assert document.log.to_json() == log_before
+    assert document.parameters[width] == 20
+
+
+def test_failed_dimension_rebuild_restores_active_before_add_for_later_undo(monkeypatch):
+    from duocad import kernel_worker
+    from duocad.verbs import chamfer
+
+    document, sketch, width = _two_boxes_with_dimension()
+    a, _ = document.bodies
+    document.set_active_body(a.id)
+    extrude(document, [region_ref(sketch, 1)], 20, mode="new")
+    c = document.active_body()
+    chamfer(document, [1], 2, body_id=a.id)
+    before = dict(document._active_before_add)
+    log_before = document.log.to_json()
+    assert before[c.id] == a.id
+    monkeypatch.setattr(kernel_worker, "INTERACTIVE_TIMEOUT_S", 1e-6)
+
+    with pytest.raises(ValueError, match="秒以内"):
+        set_parameter(document, width, 22)
+
+    assert document._active_before_add == before
+    assert document.active_body() is c
+    assert document.log.to_json() == log_before
+    assert document.parameters[width] == 20
+    document.log.undo(document)  # 面取り
+    document.log.undo(document)  # C の追加
+    assert document.active_body() is a
