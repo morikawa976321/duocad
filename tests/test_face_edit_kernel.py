@@ -23,7 +23,7 @@ from OCP.BRepPrimAPI import (
 from OCP.BRepTools import BRepTools, BRepTools_ReShape
 from OCP.Convert import Convert_ParameterisationType
 from OCP.Geom import Geom_BezierCurve, Geom_Ellipse, Geom_OffsetSurface, Geom_RectangularTrimmedSurface, Geom_TrimmedCurve
-from OCP.GeomAbs import GeomAbs_CurveType
+from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GeomConvert import GeomConvert
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Elips, gp_Pnt, gp_Pnt2d, gp_Vec
 from OCP.TColgp import TColgp_Array1OfPnt, TColgp_Array1OfPnt2d
@@ -32,7 +32,7 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 from OCP.TopTools import TopTools_ListOfShape
 
-from duocad import kernel_face_edit, query
+from duocad import kernel, kernel_face_edit, query
 
 from duocad import (
     brep_topology as _brep_topology,
@@ -126,6 +126,34 @@ def test_a_fold_between_the_curvature_samples_is_still_refused(spike, distance, 
             kernel_face_edit.offset_faces(shape, [side], distance)
     else:
         kernel_face_edit.offset_faces(shape, [side], distance)
+
+
+def test_a_fold_on_a_periodic_face_spanning_another_period_is_still_refused():
+    """落ちたら、周期の面を節点と別の周期の UV の範囲で張ったとき節点の点が標本に入らず、節点の間の尖りを見逃す(sol の指摘)。"""
+    shape = _prism_of_a_shifted_b_spline_ellipse(spike=True)
+    (side,) = [
+        TopoDS.Face_s(face)
+        for face in _brep_topology.subshapes(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+        if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion
+    ]
+    shifted = BRepBuilderAPI_MakeFace(BRep_Tool.Surface_s(side), 2 * math.pi, 4 * math.pi, -30.0, 0.0, 1e-7).Face()
+    with pytest.raises(kernel_face_edit.FaceEditError, match="fold"):
+        kernel_face_edit._require_no_cusp(shifted, 0.088)
+
+
+@pytest.mark.parametrize("distance", [0.1, -0.1])
+def test_a_wall_with_a_small_rim_fillet_still_moves(distance):
+    """落ちたら、半径 0.008 の一定半径の丸めを、主曲率の近似のずれ(割合で 3.7e-4)のせいで丸めと認めず、壁を動かせない(sol の指摘)。"""
+    edge = BRepBuilderAPI_MakeEdge(gp_Elips(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 30.0, 15.0)).Edge()
+    prism = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(edge).Wire()).Face(), gp_Vec(0, 0, 30)).Shape()
+    rims = [
+        e["index"]
+        for e in query.describe_edges(prism)
+        if e["kind"] == "other" and all(abs(p[2] - 30.0) < 1e-6 for p in (e["start"], e["end"]))
+    ]
+    shape = kernel.fillet_edges(prism, {i: 0.008 for i in rims})["shape"]
+    (wall,) = [f["index"] for f in query.describe_faces(shape) if f["kind"] == "other"]
+    kernel_face_edit.offset_faces(shape, [wall], distance)
 
 
 @pytest.mark.parametrize(
