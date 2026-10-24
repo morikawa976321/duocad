@@ -39,9 +39,10 @@ async def _wait_until(predicate, *, timeout: float = 3.0, interval: float = 0.01
 
 async def _settle(server: Server) -> None:
     """走っているAIの実行と、その知らせを運ぶ配信タスクが終わるのを待つ。"""
-    while server._pending_ai_runs or server._pending_pushes:
-        await asyncio.gather(*server._pending_ai_runs, *server._pending_pushes, return_exceptions=True)
-        await asyncio.sleep(0)
+    async with asyncio.timeout(10):
+        while server._pending_ai_runs or server._pending_pushes:
+            await asyncio.gather(*server._pending_ai_runs, *server._pending_pushes, return_exceptions=True)
+            await asyncio.sleep(0)
 
 
 def test_ai_status_carries_no_key_of_any_kind(box_session: Session):

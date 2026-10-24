@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from duocad import kernel
+from duocad import kernel, kernel_worker
 from duocad.net.ws import Server, _Inbox
 from duocad.server import Session
 from session_support import FakeConnection, box as _box, select as _select
@@ -65,8 +65,8 @@ def test_a_job_on_the_fork_gives_the_same_ghost_and_leaves_the_document_alone(se
 def test_the_commit_reuses_what_the_worker_computed(session: Session, monkeypatch) -> None:
     """落ちたら、ワーカーが写しの上で求めたフィレットを確定が使えず、同じ計算をもう一度する(#169 の使い回しが消える)。"""
     calls = []
-    real = kernel._blend_edges
-    monkeypatch.setattr(kernel, "_blend_edges", lambda shape, values, verb: calls.append(verb) or real(shape, values, verb=verb))
+    real = kernel_worker.run
+    monkeypatch.setattr(kernel_worker, "run", lambda verb, *args, **kwargs: calls.append(verb) or real(verb, *args, **kwargs))
     monkeypatch.setattr(kernel, "_RESULTS", type(kernel._RESULTS)())
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
@@ -79,13 +79,13 @@ def test_the_commit_reuses_what_the_worker_computed(session: Session, monkeypatc
 
 
 def _slow_blends(monkeypatch, seconds: float) -> None:
-    real = kernel._blend_edges
+    real = kernel_worker.run
 
-    def slow(shape, values, verb):
+    def slow(verb, *args, **kwargs):
         time.sleep(seconds)
-        return real(shape, values, verb=verb)
+        return real(verb, *args, **kwargs)
 
-    monkeypatch.setattr(kernel, "_blend_edges", slow)
+    monkeypatch.setattr(kernel_worker, "run", slow)
     monkeypatch.setattr(kernel, "_RESULTS", type(kernel._RESULTS)())
 
 
@@ -98,8 +98,10 @@ def _run(session: Session, script):
         await server._push(client, applied=None, only=client)
         client.payloads.clear()
         result = await script(server, client)
-        while server._pending_pushes:
-            await asyncio.gather(*list(server._pending_pushes), return_exceptions=True)
+        async with asyncio.timeout(10):
+            while server._pending_pushes:
+                await asyncio.gather(*list(server._pending_pushes), return_exceptions=True)
+                await asyncio.sleep(0)  # 完了済みでも、集合から除くコールバックを実行させる。
         return result, client
 
     return asyncio.run(scenario())
@@ -184,8 +186,10 @@ def test_a_preview_finishing_after_a_disconnect_does_not_keep_the_connection(ses
         await server._dispatch(client, json.dumps({"cmd": "preview", "verb": "fillet", "args": {"radius": RADIUS}, "preview_id": 1, "ack_id": 1}))
         server.clients.discard(client)  # `handle` の後始末と同じ
         server._acks.pop(client, None)
-        while server._pending_pushes:
-            await asyncio.gather(*list(server._pending_pushes), return_exceptions=True)
+        async with asyncio.timeout(10):
+            while server._pending_pushes:
+                await asyncio.gather(*list(server._pending_pushes), return_exceptions=True)
+                await asyncio.sleep(0)  # 完了済みでも、集合から除くコールバックを実行させる。
         return dict(server._acks)
 
     (acks, _client) = _run(session, script)

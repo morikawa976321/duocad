@@ -35,6 +35,7 @@ OCP_ALLOWED = frozenset(
         "kernel_chains.py",
         "kernel_overflow.py",
         "kernel_tight.py",
+        "kernel_tight_surface.py",
         "kernel_shell.py",
         "kernel_thread.py",
         "kernel_face_edit.py",
@@ -180,6 +181,9 @@ def _private_operation_references(path: Path) -> set[str]:
     return {
         name for name in references if name.split(".")[-1].startswith("_")
         and any(part == "kernel" or part.startswith("kernel_") for part in name.split("."))
+        # 同じ曲率半径超えフィレットを分割した2ファイルなので、この向きの内部参照だけ許す。
+        and not (path.name == "kernel_tight_surface.py"
+                 and name.removeprefix("duocad.").rsplit(".", 1)[0] == "kernel_tight")
     }
 
 
@@ -204,6 +208,21 @@ def test_operation_helper_boundary_detects_aliases(tmp_path, source):
     path = tmp_path / "operation.py"
     path.write_text(source, encoding="utf-8")
     assert _private_operation_references(path)
+
+
+@pytest.mark.parametrize(("filename", "source", "allowed"), [
+    ("kernel_tight_surface.py", "from . import kernel_tight as tight; tight._shared()", True),
+    ("kernel_tight_surface.py", "from duocad.kernel_tight import _shared", True),
+    ("kernel_tight_surface.py", "import duocad.kernel_tight as tight; tight._shared()", True),
+    ("kernel_tight_surface.py", "from .kernel_overflow import _shared", False),
+    ("kernel_tight.py", "from .kernel_tight_surface import _shared", False),
+    ("kernel_overflow.py", "from .kernel_tight import _shared", False),
+])
+def test_operation_helper_exception_is_only_for_the_split_tight_operation(tmp_path, filename, source, allowed):
+    """同じ操作の分割の例外を、別操作や逆向きの内部参照へ広げない。"""
+    path = tmp_path / filename
+    path.write_text(source, encoding="utf-8")
+    assert bool(_private_operation_references(path)) is not allowed
 
 
 @pytest.mark.parametrize("source", [
