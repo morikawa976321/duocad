@@ -9,13 +9,16 @@ import math
 
 import pytest
 
-from duocad import kernel
 from duocad.document import Document
 from duocad.oplog import OpLog
 from duocad.oplog_upgrade import upgrade_operations
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, entity_params, sketch_create
 from duocad.verbs import extrude
+
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
 
 
 def _as_version_2(document: Document) -> str:
@@ -43,7 +46,7 @@ def test_a_version_2_file_opens_with_the_same_circle_and_saves_as_the_current_ve
     restored.log.replay(restored)
 
     assert entity_params(restored, sketch_id, entity_id) == {"cx": 1.0, "cy": 2.0, "diameter": 10.0}
-    assert kernel.volume(restored.bodies[0].shape) == pytest.approx(math.pi * 25.0 * 3.0, rel=1e-6)
+    assert _brep_geometry.volume(restored.bodies[0].shape) == pytest.approx(math.pi * 25.0 * 3.0, rel=1e-6)
     assert json.loads(restored.log.to_json())["version"] == OpLog.FORMAT_VERSION
     # 名前つきの値の振り順(`d<n>`)は変わらない: 中心2つのあとに直径。
     assert restored.sketches[0].entities[0].params == {"cx": "d1", "cy": "d2", "diameter": "d3"}

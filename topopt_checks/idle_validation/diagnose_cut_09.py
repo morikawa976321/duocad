@@ -30,10 +30,15 @@ from OCP.TopAbs import TopAbs_SOLID  # noqa: E402
 
 import _common  # noqa: E402
 import final_shapes_09 as fs  # noqa: E402
-from duocad import kernel, optimize_run  # noqa: E402
-from duocad.mesh_geometry import make_material, subshapes, topology  # noqa: E402
+from duocad import optimize_run
+from duocad.mesh_geometry import make_material, topology  # noqa: E402
 from duocad.topopt import acceptance  # noqa: E402
 from duocad.topopt import mesh as topo_mesh  # noqa: E402
+
+from duocad import (
+    brep_checks as _brep_checks,
+    brep_topology as _brep_topology,
+)
 
 
 def boolean(shape, tools, operation):
@@ -66,11 +71,11 @@ def volume(shape) -> float:
 
 
 def describe(shape, diagnostics) -> dict:
-    solids = subshapes(shape, TopAbs_SOLID) if not shape.IsNull() else []
+    solids = _brep_topology.subshapes(shape, TopAbs_SOLID) if not shape.IsNull() else []
     volumes = sorted((volume(s) for s in solids), reverse=True)
     return dict(has_errors=diagnostics["has_errors"], has_warnings=diagnostics["has_warnings"],
                 warnings=diagnostics["warnings"].strip().splitlines(), errors=diagnostics["errors"].strip().splitlines(),
-                null=bool(shape.IsNull()), valid=bool(is_valid(shape)), is_solid=bool(kernel.is_solid(shape)),
+                null=bool(shape.IsNull()), valid=bool(is_valid(shape)), is_solid=bool(_brep_checks.is_solid(shape)),
                 solid_count=len(solids), solid_volumes_mm3_top8=volumes[:8],
                 solid_volumes_below_1mm3=int(sum(v < 1.0 for v in volumes)),
                 total_volume_mm3=float(sum(volumes)))

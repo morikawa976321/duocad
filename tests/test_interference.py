@@ -11,6 +11,10 @@ from interference_support import (
     box, check, cut, cylinder, document_of, filleted_box, nested_boxes, pair_of, plate_with_hole, rotated,
 )
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 A = box(0, 0, 0, 10, 10, 10)
 
 
@@ -329,8 +333,8 @@ def test_converting_a_brep_to_a_mesh_does_not_mesh_the_brep():
     from OCP.TopoDS import TopoDS
 
     from duocad import interference_mesh
-    from duocad.mesh_geometry import subshapes
+
 
     shape = box(0, 0, 0, 10, 10, 10)
     interference_mesh.manifold_of_shape(shape)
-    assert all(BRep_Tool.Triangulation_s(TopoDS.Face_s(face), TopLoc_Location()) is None for face in subshapes(shape, TopAbs_FACE))
+    assert all(BRep_Tool.Triangulation_s(TopoDS.Face_s(face), TopLoc_Location()) is None for face in _brep_topology.subshapes(shape, TopAbs_FACE))

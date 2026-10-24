@@ -11,6 +11,10 @@ from duocad.topopt.finalize import CAD_DEVIATION_MM, final_mesh_checks, finalize
 from duocad.topopt.mesh import mesh_volume
 from duocad.verbs import add_solid_body
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 
 def box(lo, hi):
     return BRepPrimAPI_MakeBox(gp_Pnt(*lo), gp_Pnt(*hi)).Shape()
@@ -31,13 +35,13 @@ def test_union_then_cut_preserves_cad_and_inputs():
     vertices, faces = mesh_of(source)
     keep = box((1, 0, 0), (3, 2, 2))
     cut = BRepPrimAPI_MakeCylinder(.3, 2).Shape()
-    before = [kernel.volume(s) for s in (source, keep, cut)]
+    before = [_brep_geometry.volume(s) for s in (source, keep, cut)]
     result_vertices, result_faces = finalize(vertices, faces, [keep], [cut])
     checks = final_mesh_checks(result_vertices, result_faces)
     assert checks['failed'] == [] and checks['solids'] == 1
     # 円柱は内接する三角形で引くので、引ける体積は真値よりわずかに小さい(docs/TOPOPT_ACCEPTANCE.md「メッシュ集合演算」)
     assert mesh_volume(result_vertices, result_faces) == pytest.approx(12-np.pi*.3**2*2/4, rel=1e-3)
-    assert [kernel.volume(s) for s in (source, keep, cut)] == before
+    assert [_brep_geometry.volume(s) for s in (source, keep, cut)] == before
 
 
 def test_exclusion_wins_overlap():
@@ -263,11 +267,11 @@ def test_solid_operation_undo_redo_and_replay():
     doc.log.undo(doc)
     assert not doc.bodies
     doc.log.redo(doc)
-    assert kernel.volume(doc.get_body(body_id).shape) == pytest.approx(24)
+    assert _brep_geometry.volume(doc.get_body(body_id).shape) == pytest.approx(24)
     replay = Document()
     doc.log.replay(replay)
     assert replay.get_body(body_id).name == 'optimized'
-    assert kernel.volume(replay.get_body(body_id).shape) == pytest.approx(24)
+    assert _brep_geometry.volume(replay.get_body(body_id).shape) == pytest.approx(24)
 
 
 def test_generated_document_and_two_condition_cli(tmp_path):

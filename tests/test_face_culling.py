@@ -7,6 +7,10 @@ from duocad import kernel, resolution
 from duocad.server import Session
 from session_support import browser
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 DEVIATION = 0.2
 SIDE = 20.0
 RADIUS = 10.0
@@ -112,7 +116,7 @@ def test_a_solid_is_closed_and_a_lone_face_is_not(cylinder_shape) -> None:
     """閉じていない面を、バックフェイスで隠せる立体と取り違えない。"""
     solid = kernel.tessellate_faces(cylinder_shape, {(0.1, 0.35): [1, 2, 3]})
     assert solid["closed"] is True
-    lone_face = kernel.face_of(cylinder_shape, 1)
+    lone_face = _brep_topology.face_of(cylinder_shape, 1)
     opened = kernel.tessellate_faces(lone_face, {(0.1, 0.35): [1]})
     assert opened["closed"] is False
 

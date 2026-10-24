@@ -21,6 +21,11 @@ from document_support import assert_matches_replay, box_shape, new_box, replay_t
 from duocad.server import Session
 from session_support import SIDE, box, face_with_normal, select
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 CUBE = 20.0
 
 
@@ -39,15 +44,15 @@ def _state(doc: Document) -> list:
         (
             body.id,
             body.name,
-            round(kernel.volume(body.shape), 6),
-            tuple(round(value, 6) for value in kernel.centroid(body.shape)),
+            round(_brep_geometry.volume(body.shape), 6),
+            tuple(round(value, 6) for value in _brep_geometry.centroid(body.shape)),
         )
         for body in doc.bodies
     ]
 
 
 def _total_volume(doc: Document) -> float:
-    return sum(kernel.volume(body.shape) for body in doc.bodies)
+    return sum(_brep_geometry.volume(body.shape) for body in doc.bodies)
 
 
 def _z_range(doc: Document, body_id: str) -> tuple:
@@ -79,7 +84,7 @@ def test_a_cube_cut_through_the_middle_gives_two_halves() -> None:
     operation = split_body(doc, [cube], sketch_id=_offset_sketch(doc, CUBE / 2))
 
     assert len(doc.bodies) == 2
-    assert [round(kernel.volume(body.shape), 6) for body in doc.bodies] == [CUBE**3 / 2] * 2
+    assert [round(_brep_geometry.volume(body.shape), 6) for body in doc.bodies] == [CUBE**3 / 2] * 2
     assert math.isclose(_total_volume(doc), before, rel_tol=1e-6)
     assert operation.args["plane_normal"] == [0.0, 0.0, 1.0]
     assert operation.args["plane_point"][2] == CUBE / 2
@@ -116,12 +121,12 @@ def test_a_slanted_plane_given_by_a_face_cuts_the_body() -> None:
     assert len(doc.bodies) == 3
     assert operation.args["plane_normal"] == pytest.approx(slanted["normal"])
     assert math.isclose(
-        sum(kernel.volume(doc.get_body(body_id).shape) for body_id in [cube, *operation.args["created"][0]]),
+        sum(_brep_geometry.volume(doc.get_body(body_id).shape) for body_id in [cube, *operation.args["created"][0]]),
         CUBE**3,
         rel_tol=1e-6,
     )
     for body_id in operation.args["created"][0]:
-        assert 0.0 < kernel.volume(doc.get_body(body_id).shape) < CUBE**3
+        assert 0.0 < _brep_geometry.volume(doc.get_body(body_id).shape) < CUBE**3
 
 
 def test_keep_positive_leaves_only_the_side_the_normal_points_to() -> None:
@@ -197,10 +202,10 @@ def test_the_largest_piece_keeps_the_name() -> None:
     split_body(doc, [cube], sketch_id=_offset_sketch(doc, 5.0))
 
     assert doc.get_body(cube).name == name
-    assert kernel.volume(doc.get_body(cube).shape) == pytest.approx(CUBE * CUBE * 15.0)
+    assert _brep_geometry.volume(doc.get_body(cube).shape) == pytest.approx(CUBE * CUBE * 15.0)
     lid = doc.bodies[1]
     assert lid.name != name
-    assert kernel.volume(lid.shape) == pytest.approx(CUBE * CUBE * 5.0)
+    assert _brep_geometry.volume(lid.shape) == pytest.approx(CUBE * CUBE * 5.0)
 
 
 def test_the_heir_does_not_change_when_the_normal_is_flipped() -> None:
@@ -242,8 +247,8 @@ def test_a_side_in_several_lumps_becomes_one_body_per_lump() -> None:
     assert len(doc.bodies) == 3
     assert operation.args["created"] and len(operation.args["created"][0]) == 2
     for body in doc.bodies:
-        assert len(kernel.split_solids(body.shape)) == 1
-    assert sorted(round(kernel.volume(body.shape)) for body in doc.bodies) == [1200, 1200, 4100]
+        assert len(_brep_topology.split_solids(body.shape)) == 1
+    assert sorted(round(_brep_geometry.volume(body.shape)) for body in doc.bodies) == [1200, 1200, 4100]
     assert math.isclose(_total_volume(doc), 40.0 * 20.0 * 10.0 - 10.0 * 15.0 * 10.0, rel_tol=1e-6)
 
 
@@ -339,13 +344,13 @@ def test_the_volume_total_is_kept_for_a_curved_body() -> None:
     sketch_id = sketch_create(doc, base_plane("XY"))
     add_circle(doc, sketch_id, (CUBE / 2, CUBE / 2), 8.0)
     extrude(doc, [region_ref(sketch_id, 1)], CUBE, mode="cut", body_id=body_id)
-    before = kernel.volume(doc.get_body(body_id).shape)
+    before = _brep_geometry.volume(doc.get_body(body_id).shape)
 
     operation = split_body(doc, [body_id], plane_face=_tilted_plane(doc))
 
     pieces = [body_id, *operation.args["created"][0]]
     assert len(pieces) == 2
-    assert math.isclose(sum(kernel.volume(doc.get_body(piece).shape) for piece in pieces), before, rel_tol=1e-6)
+    assert math.isclose(sum(_brep_geometry.volume(doc.get_body(piece).shape) for piece in pieces), before, rel_tol=1e-6)
 
 
 def _tilted_plane(doc: Document) -> dict:
@@ -442,10 +447,9 @@ def test_a_plane_between_the_lumps_of_one_body_is_refused() -> None:
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
     from OCP.gp import gp_Pnt
 
-    from duocad.mesh_geometry import compound
 
     doc = Document()
-    lumps = compound([BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 10, 10, 10).Shape(), BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 30), 10, 10, 10).Shape()])
+    lumps = _brep_topology.compound([BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 10, 10, 10).Shape(), BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 30), 10, 10, 10).Shape()])
     doc.add_body(Body(id="lumps", name="lumps", kind="solid", shape=lumps))
     before = _state(doc)
     with pytest.raises(ValueError, match="切り口ができない"):
@@ -476,7 +480,7 @@ def test_replay_follows_the_recorded_centroids_not_the_ordering_rule() -> None:
     heir, other = operation.args["centroids"][0]
     operation.args["centroids"][0] = [other, heir]
     replayed = replay_through_json(doc)
-    centroid_of = {body.id: kernel.centroid(body.shape) for body in replayed.bodies}
+    centroid_of = {body.id: _brep_geometry.centroid(body.shape) for body in replayed.bodies}
     assert centroid_of[plate] == pytest.approx(other, abs=1e-9)
     (new_id,) = operation.args["created"][0]
     assert centroid_of[new_id] == pytest.approx(heir, abs=1e-9)
@@ -494,6 +498,6 @@ def test_a_wall_and_a_central_post_with_the_same_centroid_keep_their_ids_through
     ring = region_ref(cut_sketch, max(regions.regions(doc, cut_sketch), key=lambda found: found.area).index)  # 溝になる環
     extrude(doc, [ring], 28.0, mode="cut", body_id=body_id)
     split_body(doc, [body_id], sketch_id=_offset_sketch(doc, 8.0))
-    before = {body.id: round(kernel.volume(body.shape), 3) for body in doc.bodies}
+    before = {body.id: round(_brep_geometry.volume(body.shape), 3) for body in doc.bodies}
     replayed = replay_through_json(doc)
-    assert {body.id: round(kernel.volume(body.shape), 3) for body in replayed.bodies} == before
+    assert {body.id: round(_brep_geometry.volume(body.shape), 3) for body in replayed.bodies} == before

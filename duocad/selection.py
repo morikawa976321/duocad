@@ -27,7 +27,7 @@ Ctrl+Z / Ctrl+Y では戻らず保存もされない(開き直すと全ボディ
 
 **添字は現時点のものであって、形が変われば別の実体を指す**(添字の付け替えは契約にしていない)。
 
-**OCP / build123d を直接importしない**(数え上げは `kernel` 越し、幾何は `query` 越し)。
+**OCP / build123d を直接importしない**(数え上げは `brep_topology` 越し、幾何は `query` 越し)。
 """
 from __future__ import annotations
 
@@ -37,8 +37,12 @@ import numbers
 from dataclasses import dataclass, field
 from typing import Iterable, List, NoReturn, Optional, Sequence
 
-from . import kernel, meshbody  # noqa: F401  face_count / count_subshapes を使う(OCPは kernel の中だけ)
+from . import meshbody
 from .document import BodyId, Document
+
+from . import (
+    brep_topology as _brep_topology,
+)
 
 
 class SelectionEmpty(ValueError):
@@ -605,13 +609,13 @@ def _select_shape(doc: Document, body_id: BodyId, kind: str, index: int, *, allo
 
 
 def _subshape_count(shape, kind: str) -> int:
-    """`kind` の部分形状の数。**呼ぶ時点で `kernel` の属性から引く**(表へ束ねると
-    `tests/test_face_count_once_per_body.py` の `kernel.face_count` 差し替えが効かない)。"""
+    """`kind` の部分形状の数。**呼ぶ時点で `brep_topology` の属性から引く**(表へ束ねると
+    `tests/test_face_count_once_per_body.py` の `brep_topology.face_count` 差し替えが効かない)。"""
     if kind == "face":
-        return kernel.face_count(shape)
+        return _brep_topology.face_count(shape)
     if kind == "edge":
-        return kernel.edge_count(shape)
-    return kernel.count_subshapes(shape, "vertex")
+        return _brep_topology.edge_count(shape)
+    return _brep_topology.count_subshapes(shape, "vertex")
 
 
 #: 断り文に出す種別の呼び名。
@@ -797,7 +801,7 @@ def _coerce_refs(
     allow_hidden: bool = False,
 ) -> List[dict]:
     """`_coerce_ref` を複数件まとめて処理する版。
-    `_coerce_ref` を1件ずつ通すと参照1件ごとに `kernel.face_count` 等が `TopExp.MapShapes_s` で形状全体を走査し直すので、
+    `_coerce_ref` を1件ずつ通すと参照1件ごとに `brep_topology.face_count` 等が `TopExp.MapShapes_s` で形状全体を走査し直すので、
     同じボディを何度も指すドラッグ選択で選択件数ぶん全走査になる。`(body_id, kind)` ごとに数え上げを1回だけ行って使い回す。
     **通す/弾くの判定は `_coerce_ref` と1件も変えない**(門番・範囲外検査・例外の種類とメッセージは同じ)。
 

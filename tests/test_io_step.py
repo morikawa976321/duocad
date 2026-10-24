@@ -26,6 +26,10 @@ from duocad.oplog import OpLog
 from duocad.selection import set_visible
 from duocad.verbs.import_editable import import_step
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 def test_import_step_missing_file_raises_and_does_not_mutate_document(tmp_path):
     """存在しないSTEPパスは FileNotFoundError で、documentにもログにも変更が残らない。
 
@@ -153,7 +157,7 @@ def _two_solid_step(tmp_path) -> Path:
 def _shape_fingerprint(doc: Document) -> list:
     """形が同じであることの指紋(ボディ数・名前・面数・体積)。"""
     return [
-        (body.name, body.kind, kernel.face_count(body.shape), round(query.volume(body.shape), 9))
+        (body.name, body.kind, _brep_topology.face_count(body.shape), round(query.volume(body.shape), 9))
         for body in doc.bodies
     ]
 
@@ -264,7 +268,7 @@ def test_import_refuses_a_step_whose_elements_failed_to_transfer(tmp_path):
     """一部の面の転送が失敗した STEP は、面が欠けた形を solid として黙って入れずに断る。ログにもボディにも残さない。
     落ちたら転送のチェック一覧を見ていない(`NbRootsForTransfer` の比較では、失敗がルートの中の面なので検出できない)。"""
     text = _step_with_a_broken_face_reference(tmp_path)
-    assert kernel.face_count(kernel.read_step_text(text)) == 5, "前提: OCCT は面が5枚の形を成功として返す"
+    assert _brep_topology.face_count(kernel.read_step_text(text)) == 5, "前提: OCCT は面が5枚の形を成功として返す"
     path = tmp_path / "broken_face.step"
     path.write_text(text, encoding="utf-8")
     doc = Document()

@@ -29,6 +29,11 @@ from duocad.sketch import add_ellipse, base_plane, sketch_create
 from duocad.verbs import extrude, fillet
 from document_support import assert_matches_replay
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 
 def _elliptic_post(a: float, b: float, height: float):
     """半軸 `a`・`b`、高さ `height` の楕円柱(先端の曲率半径は b²/a)。"""
@@ -58,15 +63,15 @@ def _top_edges(shape, height: float) -> list:
 def _native_done(shape, edges: list, radius: float) -> bool:
     maker = BRepFilletAPI_MakeFillet(shape)
     for index in edges:
-        maker.Add(radius, TopoDS.Edge_s(kernel.edge_of(shape, index)))
+        maker.Add(radius, TopoDS.Edge_s(_brep_topology.edge_of(shape, index)))
     maker.Build()
     return maker.IsDone()
 
 
 def _faces_of_type(shape, kind) -> list:
     return [
-        kernel.face_of(shape, index) for index in range(1, kernel.face_count(shape) + 1)
-        if BRepAdaptor_Surface(TopoDS.Face_s(kernel.face_of(shape, index))).GetType() == kind
+        _brep_topology.face_of(shape, index) for index in range(1, _brep_topology.face_count(shape) + 1)
+        if BRepAdaptor_Surface(TopoDS.Face_s(_brep_topology.face_of(shape, index))).GetType() == kind
     ]
 
 
@@ -112,11 +117,11 @@ def test_an_elliptic_top_rounded_past_its_tip_curvature_gets_a_lens_top_and_two_
 
     result = rounded["shape"]
     assert BRepCheck_Analyzer(result).IsValid()
-    assert kernel.face_count(result) == 7
+    assert _brep_topology.face_count(result) == 7
     planes = _faces_of_type(result, GeomAbs_SurfaceType.GeomAbs_Plane)
     lens = max(planes, key=lambda face: BRepAdaptor_Surface(TopoDS.Face_s(face)).Plane().Location().Z())
     assert _area(lens) == pytest.approx(_lens_area(a, b, radius), rel=1e-6)
-    walls = [face for face in (kernel.face_of(result, i) for i in range(1, kernel.face_count(result) + 1))
+    walls = [face for face in (_brep_topology.face_of(result, i) for i in range(1, _brep_topology.face_count(result) + 1))
              if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion]
     assert len(walls) == 1
     from OCP.BRepBndLib import BRepBndLib
@@ -143,8 +148,8 @@ def test_rounding_past_the_tip_curvature_reports_which_faces_became_which():
     assert len(provenance["new_faces"]) == 4
     for old_index, new_indices in provenance["face_map"].items():
         assert len(new_indices) == 1
-        old = BRepAdaptor_Surface(TopoDS.Face_s(kernel.face_of(shape, int(old_index)))).GetType()
-        new = BRepAdaptor_Surface(TopoDS.Face_s(kernel.face_of(rounded["shape"], new_indices[0]))).GetType()
+        old = BRepAdaptor_Surface(TopoDS.Face_s(_brep_topology.face_of(shape, int(old_index)))).GetType()
+        new = BRepAdaptor_Surface(TopoDS.Face_s(_brep_topology.face_of(rounded["shape"], new_indices[0]))).GetType()
         assert old == new, (old_index, old, new)
 
 
@@ -175,13 +180,13 @@ def test_a_radius_within_the_tip_curvature_stays_occt_s_own():
     edges = _top_edges(shape, 5.0)
     maker = BRepFilletAPI_MakeFillet(shape)
     for index in edges:
-        maker.Add(0.5, TopoDS.Edge_s(kernel.edge_of(shape, index)))
+        maker.Add(0.5, TopoDS.Edge_s(_brep_topology.edge_of(shape, index)))
     maker.Build()
 
     rounded = kernel.fillet_edges(shape, {index: 0.5 for index in edges})
 
-    assert rounded["volume_after"] == pytest.approx(kernel.volume(maker.Shape()), rel=1e-12)
-    assert kernel.face_count(rounded["shape"]) == kernel.face_count(maker.Shape())
+    assert rounded["volume_after"] == pytest.approx(_brep_geometry.volume(maker.Shape()), rel=1e-12)
+    assert _brep_topology.face_count(rounded["shape"]) == _brep_topology.face_count(maker.Shape())
 
 
 def test_a_top_face_with_a_hole_is_refused_with_the_reason():
@@ -217,7 +222,7 @@ def test_radii_near_the_ends_of_the_range_are_rounded(radius):
     result = kernel.fillet_edges(shape, {index: radius for index in edges})["shape"]
 
     assert BRepCheck_Analyzer(result).IsValid()
-    assert kernel.face_count(result) == 7
+    assert _brep_topology.face_count(result) == 7
     lens = max(_faces_of_type(result, GeomAbs_SurfaceType.GeomAbs_Plane),
                key=lambda face: BRepAdaptor_Surface(TopoDS.Face_s(face)).Plane().Location().Z())
     assert _area(lens) == pytest.approx(_lens_area(6.0, 2.0, radius), rel=1e-5)
@@ -242,7 +247,7 @@ def test_a_radius_wider_than_the_waist_of_the_top_is_refused_by_this_way():
     edges = _top_edges(shape, 5.0)
 
     with pytest.raises(kernel_tight.Declined, match="cut into the opposite wall"):
-        kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), {index: 1.2 for index in edges})
+        kernel_tight.round_tight_loop(shape, _brep_topology._edge_map(shape), {index: 1.2 for index in edges})
 
 
 @pytest.mark.parametrize("hole", ["sphere", "box"])
@@ -259,7 +264,7 @@ def test_a_cavity_below_the_rounding_is_kept(hole):
 
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
     assert _state(rounded["shape"], 0.0, 0.0, 2.0) == TopAbs_OUT
-    assert rounded["volume_after"] == pytest.approx(rounded_plain - kernel.volume(cavity), rel=1e-9)
+    assert rounded["volume_after"] == pytest.approx(rounded_plain - _brep_geometry.volume(cavity), rel=1e-9)
     assert rounded["provenance"]["deleted"] == []
 
 

@@ -1,28 +1,32 @@
 """三角形境界の接続検査と、向き・空洞を保ったCADソリッド化。
 
-位相の列挙(`subshapes` / `indexed_map`)と compound の組み立て(`compound`)もここに置く ——
-カーネル層の最下位で、`kernel` と `kernel_meshing` のどちらからも循環せずに import できる
-(`kernel_meshing` は `kernel` を import できない)。
+位相の列挙と compound は `brep_topology` から再輸出する。
+形状検査は `brep_checks` を参照し、個別のカーネル操作は参照しない。
 """
 from collections import defaultdict
+
 import numpy as np
+
 from OCP.BOPAlgo import BOPAlgo_CheckerSI
-from OCP.BRep import BRep_Builder
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon,
     BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing,
 )
-from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.BRepLib import BRepLib
 from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_IN, TopAbs_OUT, TopAbs_SHELL
-from OCP.TopExp import TopExp, TopExp_Explorer
-from OCP.TopoDS import TopoDS, TopoDS_Compound
-from OCP.TopTools import TopTools_IndexedMapOfShape
+from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Pnt
 
+
 from .boundary_check import degenerate_mask
+
+from . import (
+    brep_checks as _brep_checks,
+    brep_topology as _brep_topology,
+)
+
 
 TOLERANCE_MM = Precision.Confusion_s()
 
@@ -44,17 +48,6 @@ def weld_exact(triangles):
     """
     vertices, inverse = np.unique(np.asarray(triangles).reshape(-1, 3), axis=0, return_inverse=True)
     return vertices, inverse.reshape(-1, 3)
-
-
-def subshapes(shape, kind):
-    """`kind`(`TopAbs_ShapeEnum`)の部分形状を `TopExp_Explorer` の走査順で列挙する。**重複を除かない**
-    (隣接2面から同じ辺を2回拾う。重複なしは `indexed_map`)。"""
-    result = []
-    explorer = TopExp_Explorer(shape, kind)
-    while explorer.More():
-        result.append(explorer.Current())
-        explorer.Next()
-    return result
 
 
 def topology(vertices: np.ndarray, faces: np.ndarray) -> tuple[dict, list[list[int]]]:
@@ -117,29 +110,12 @@ def topology(vertices: np.ndarray, faces: np.ndarray) -> tuple[dict, list[list[i
                 duplicate_triangles=duplicates, boundary_components=len(components)), components
 
 
-def indexed_map(shape, kind):
-    """`kind`(`TopAbs_ShapeEnum`)の部分形状を**重複なし**で1始まりに並べた `TopTools_IndexedMapOfShape`
-    (`TopExp.MapShapes_s`)。null の検査はしない(断る文面は呼び出し側が持つ)。"""
-    result = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, kind, result)
-    return result
-
-
-def compound(shapes):
-    """`shapes` を1つの `TopoDS_Compound` にまとめる(空の列も許す。各形はそのまま `Add` する)。"""
-    builder, result = BRep_Builder(), TopoDS_Compound()
-    builder.MakeCompound(result)
-    for shape in shapes:
-        builder.Add(result, shape)
-    return result
-
-
 def checked_solid(shell):
     maker = BRepBuilderAPI_MakeSolid(TopoDS.Shell_s(shell))
     if not maker.IsDone():
         raise RuntimeError('閉シェルをソリッドへ変換できない')
     solid = maker.Solid()
-    if not BRepLib.OrientClosedSolid_s(solid) or not BRepCheck_Analyzer(solid).IsValid():
+    if not BRepLib.OrientClosedSolid_s(solid) or not _brep_checks.is_valid(solid):
         raise RuntimeError('OCCTがソリッドを不正と判定した')
     return solid
 
@@ -160,7 +136,7 @@ def make_material(vertices, faces, components, *, check_intersections=True):
                 raise RuntimeError('三角形の面を構築できない')
             sewing.Add(maker.Face())
         sewing.Perform()
-        found = subshapes(sewing.SewedShape(), TopAbs_SHELL)
+        found = _brep_topology.subshapes(sewing.SewedShape(), TopAbs_SHELL)
         if len(found) != 1 or sewing.NbFreeEdges() or sewing.NbMultipleEdges() or sewing.NbDeletedFaces():
             raise RuntimeError('縫合で面が欠落したか、閉シェルを再現できなかった')
         shell = found[0]
@@ -168,7 +144,7 @@ def make_material(vertices, faces, components, *, check_intersections=True):
         enclosed.append(checked_solid(shell))
     if check_intersections:
         checker = BOPAlgo_CheckerSI()
-        checker.AddArgument(compound(shells))
+        checker.AddArgument(_brep_topology.compound(shells))
         checker.SetLevelOfCheck(5)
         checker.Perform()
         if checker.HasErrors() or checker.HasWarnings():
@@ -201,10 +177,10 @@ def make_material(vertices, faces, components, *, check_intersections=True):
         maker = BRepBuilderAPI_MakeSolid(solid)
         for j in range(len(shells)):
             if contains[i, j] and depth[j] == depth[i]+1:
-                shell = subshapes(enclosed[j], TopAbs_SHELL)[0]
+                shell = _brep_topology.subshapes(enclosed[j], TopAbs_SHELL)[0]
                 maker.Add(TopoDS.Shell_s(shell.Reversed()))
         material = maker.Solid()
-        if not BRepCheck_Analyzer(material).IsValid():
+        if not _brep_checks.is_valid(material):
             raise RuntimeError('空洞を含むソリッドが不正')
         solids.append(material)
-    return compound(solids), dict(self_intersections=0, solids=len(solids), cavities=int(sum(depth % 2)))
+    return _brep_topology.compound(solids), dict(self_intersections=0, solids=len(solids), cavities=int(sum(depth % 2)))

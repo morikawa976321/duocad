@@ -15,6 +15,10 @@ from document_support import BOX_X, BOX_Y, BOX_Z
 from mcp_support import call, call_error
 from session_support import pushed_by_mcp, session_with_box
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 #: A1と同じ述語(§5の例 `edges where parallel_to Z and length > 20`)。
 #: 30×30×40 の直方体では**Zに平行で長さ40の辺がちょうど4本**一致する。
 VERTICAL_EDGES = {
@@ -287,15 +291,15 @@ def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, 
     server = McpServer(DocumentTools(session))
     target, other = session.document.bodies
     assert session.document.active_body().id == "other", "前提: 狙う側はアクティブではない"
-    target_faces = kernel.face_count(target.shape)
-    other_faces = kernel.face_count(other.shape)
+    target_faces = _brep_topology.face_count(target.shape)
+    other_faces = _brep_topology.face_count(other.shape)
 
     call(server, "set_selection", {"predicate": {**VERTICAL_EDGES, "body": "target"}})
     payload = call(server, tool, arguments)
 
     assert payload["changed_bodies"] == ["target"], "選択と違うBodyに当たっている"
-    assert kernel.face_count(target.shape) > target_faces
-    assert kernel.face_count(other.shape) == other_faces, "無関係なBodyが変わった"
+    assert _brep_topology.face_count(target.shape) > target_faces
+    assert _brep_topology.face_count(other.shape) == other_faces, "無関係なBodyが変わった"
 
 
 def test_measure_reads_the_current_selection(server: McpServer):
@@ -371,7 +375,7 @@ def test_measure_returns_the_position_of_a_vertex(server: McpServer, session: Se
 def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, session: Session):
     """**このファイルで最も重要な1本**。"""
     box = box_of(session)
-    faces_before = kernel.face_count(box.shape)
+    faces_before = _brep_topology.face_count(box.shape)
     volume_before = query.volume(box.shape)
 
     # 1. AIが述語で選ぶ
@@ -402,7 +406,7 @@ def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, ses
 
     # 5. 体積と面数が変わる
     assert payload["verb"] == "fillet" and payload["changed_bodies"] == [box.id]
-    assert kernel.face_count(box.shape) > faces_before
+    assert _brep_topology.face_count(box.shape) > faces_before
     assert query.volume(box.shape) < volume_before
     assert session.document.log.entries[-1].args["edges"] == vertical[1:] + [added]
 
@@ -437,5 +441,3 @@ def test_a_selection_change_from_mcp_reaches_the_browser(session: Session):
     assert pushed["type"] == "state"
     assert pushed["state"]["selection"]["count"] == 4
     assert "applied" not in pushed
-
-

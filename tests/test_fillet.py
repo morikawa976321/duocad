@@ -2,7 +2,7 @@
 
 期待値の出どころ(20mm立方体・全辺フィレットの実測):
 
-**球が `other` に落ちること自体が契約**(`kernel.classify_face` は球を独立の種別に持たない)。
+**球が `other` に落ちること自体が契約**(`brep_geometry.classify_face` は球を独立の種別に持たない)。
 """
 from __future__ import annotations
 
@@ -17,6 +17,10 @@ from duocad.paths import REPO_ROOT
 from duocad.document import Document
 from duocad.verbs import fillet
 from document_support import edges_of_kind, kinds_of, new_box, new_box_with_hole
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
 
 #: 20mm立方体・全辺フィレットの実測（上のdocstring参照）
 CUBE_MM = 20.0
@@ -250,7 +254,7 @@ def test_the_guard_finds_a_fillet_radius_equal_to_the_rim_width():
     """縁(幅 `WALL`)の辺を半径 `WALL` で丸めると面を食い尽くす。落ちたら、その半径で OCCT の `Build()` がプロセスごと落ちる
     (`test_a_fillet_that_consumes_a_face_exactly_is_refused_without_killing_the_process`)。"""
     shape = _open_box()
-    edge_map = kernel._edge_map(shape)
+    edge_map = _brep_topology._edge_map(shape)
     rim = [edge["index"] for edge in _edges_where(shape, _is_rim)]
     assert len(rim) == 8
 
@@ -263,7 +267,7 @@ def test_the_guard_finds_a_fillet_radius_equal_to_the_rim_width():
 def test_the_guard_leaves_every_other_radius_to_occt(radius):
     """半径が縁の幅と 1e-7 mm より離れていれば止めない(止めるのは落ちる半径だけ。ほかは従来どおり OCCT の判定)。"""
     shape = _open_box()
-    edge_map = kernel._edge_map(shape)
+    edge_map = _brep_topology._edge_map(shape)
     rim = [edge["index"] for edge in _edges_where(shape, _is_rim)]
 
     assert kernel_chains.fillet_consumes_face(shape, edge_map, {index: radius for index in rim}) is None
@@ -272,7 +276,7 @@ def test_the_guard_leaves_every_other_radius_to_occt(radius):
 def test_the_guard_does_not_stop_edges_whose_faces_are_wider_than_the_radius():
     """縦辺(隣の面は幅 30)・底の辺は半径 `WALL` で止めない。落ちたら、実測で通る丸めまで断っている。"""
     shape = _open_box()
-    edge_map = kernel._edge_map(shape)
+    edge_map = _brep_topology._edge_map(shape)
     vertical = [edge["index"] for edge in _edges_where(shape, lambda e: e["kind"] == "line" and e["start"][2] != e["end"][2])]
     bottom = [edge["index"] for edge in _edges_where(shape, lambda e: abs(e["start"][2]) < 1e-6 and abs(e["end"][2]) < 1e-6)]
     assert vertical and bottom
@@ -312,7 +316,7 @@ def test_the_guard_does_not_stop_a_fillet_on_an_obtuse_edge_whose_radius_equals_
     `5·tan(φ/2)` = 2.5 で、面は食い尽くされない(OCCT は体積 1172.7 の正常な形を作る)。落ちたら、角度を見ずに半径だけで
     比べていて、正しく丸められる形を断っている。"""
     shape = _parallelogram_prism()
-    edge_map = kernel._edge_map(shape)
+    edge_map = _brep_topology._edge_map(shape)
     index = _vertical_edge_at(shape, 10.0, 0.0)
 
     assert kernel_chains.fillet_consumes_face(shape, edge_map, {index: 5.0}) is None
@@ -340,7 +344,7 @@ def test_the_guard_keeps_the_radius_as_the_width_next_to_a_curved_face():
     shape = BRepAlgoAPI_Cut(
         BRepPrimAPI_MakeCone(20.0, 10.0, 20.0).Shape(), BRepPrimAPI_MakeCylinder(5.0, 20.0).Shape()
     ).Shape()
-    edge_map = kernel._edge_map(shape)
+    edge_map = _brep_topology._edge_map(shape)
     outer = _circle_edge(shape, 10.0, 20.0)
 
     assert kernel_chains.fillet_consumes_face(shape, edge_map, {outer: 5.0}) is not None
@@ -354,7 +358,7 @@ def test_the_guard_does_not_stop_a_fillet_on_the_rim_of_a_spherical_dent():
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeSphere
 
     shape = BRepAlgoAPI_Cut(BRepPrimAPI_MakeCylinder(12.0, 6.0).Shape(), BRepPrimAPI_MakeSphere(10.0).Shape()).Shape()
-    edge_map = kernel._edge_map(shape)
+    edge_map = _brep_topology._edge_map(shape)
     rim = _circle_edge(shape, 8.0, 6.0)
 
     assert kernel_chains.fillet_consumes_face(shape, edge_map, {rim: 2.0}) is None
@@ -381,7 +385,7 @@ def test_the_guard_does_not_stop_a_fillet_on_a_tube_cut_at_a_slant():
         gp_Vec(normal.X() * 60.0, normal.Y() * 60.0, normal.Z() * 60.0),
     ).Shape()
     shape = BRepAlgoAPI_Cut(tube, cutter).Shape()
-    edge_map = kernel._edge_map(shape)
+    edge_map = _brep_topology._edge_map(shape)
     (outer,) = [
         edge["index"]
         for edge in query.describe_edges(shape)
@@ -396,7 +400,7 @@ def test_the_guard_does_not_stop_a_fillet_on_a_tube_cut_at_a_slant():
 def test_the_guard_still_finds_the_radius_that_consumes_the_slanted_face():
     """同じ辺は、使う幅 `R·tan(φ/2)` が斜めの面の幅 5 と一致する R = 10 で止める(OCCT は `IsDone()=False`)。"""
     shape = _parallelogram_prism()
-    edge_map = kernel._edge_map(shape)
+    edge_map = _brep_topology._edge_map(shape)
     index = _vertical_edge_at(shape, 10.0, 0.0)
 
     found = kernel_chains.fillet_consumes_face(shape, edge_map, {index: 10.0})

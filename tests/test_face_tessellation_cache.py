@@ -7,6 +7,10 @@ import pytest
 from duocad import kernel
 from duocad.server import Session
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 DEVIATION = 0.2
 SIDE = 20.0
 RADIUS = 10.0
@@ -70,7 +74,7 @@ def test_the_first_measurement_matches_the_grouped_tessellation(boxed) -> None:
     """面のキャッシュから組んだ配信が、同じ組を直接測った形・粗さ・印と一致する。"""
     session, body = boxed
     shape = session.document.get_body(body).shape
-    total = kernel.face_count(shape)
+    total = _brep_topology.face_count(shape)
     for world_per_pixel, focus in ((0.02, None), (0.02, {body: [1]}), (0.02, {body: []}), (50.0, {body: [1]}), (50.0, {body: []})):
         fresh = Session(DEVIATION)
         fresh.document = session.document

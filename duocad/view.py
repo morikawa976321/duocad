@@ -26,6 +26,11 @@ from . import (
 )
 from .document import Document
 
+from . import (
+    brep_checks as _brep_checks,
+    brep_topology as _brep_topology,
+)
+
 
 def _face_count(body) -> int:
     """`body_meta` が配る面の数。**メッシュボディは常に1**(メッシュは面1枚として配る。`meshbody.geometry`)。
@@ -33,7 +38,7 @@ def _face_count(body) -> int:
     """
     if body.mesh is not None:
         return 1
-    return kernel.face_count(body.shape)
+    return _brep_topology.face_count(body.shape)
 
 
 #: 状態配信で本文を伏せるログ引数。値の代わりに文字数だけを配る。
@@ -211,7 +216,7 @@ class DocumentView:
         #: body_id -> OrderedDict[id(形) -> (形, `_FaceTessellations`)]。形ごとに `FACE_STORES_PER_BODY` 世代まで覚える
         #: (undo で元の形へ戻ったとき・プレビューで測った新しい形を確定したときに測り直さない)。
         self._face_cache: dict = {}
-        self._face_count_cache: dict = {}  # kernel.face_count結果(`body_meta`)
+        self._face_count_cache: dict = {}  # brep_topology.face_count結果(`body_meta`)
         #: 形状最適化の条件の配りもの(`optimize.state_payload`)の増分維持。
         #: 作り直すのは「条件が変わった」か「条件が指しているボディの形が差し替わった」ときだけ。
         self._optimize_cache = optimize.OptimizeStateCache()
@@ -594,7 +599,7 @@ class DocumentView:
         measured = {
             "faces": {face["index"]: face for face in geometry["faces"]},
             "untriangulated": list(geometry.get("untriangulated", [])),
-            "closed": kernel.is_closed_shell(shape),
+            "closed": _brep_checks.is_closed_shell(shape),
         }
         store = self._face_store(body_id, shape)
         store.remember({recipe: indices}, measured)

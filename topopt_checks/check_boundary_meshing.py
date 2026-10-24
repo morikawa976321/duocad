@@ -33,6 +33,10 @@ from duocad import kernel
 from duocad.mesh_geometry import topology, weld_exact
 from duocad.topopt.finalize import final_mesh_checks
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 
 def peak_working_set_mb() -> float | None:
     """Windows のピーク常駐メモリ(MB)。他 OS では None。"""
@@ -80,7 +84,7 @@ def standard(shape, deviation):
     started = time.perf_counter()
     BRepTools.Clean_s(shape)
     BRepMesh_IncrementalMesh(shape, deviation, False, kernel.DEFAULT_ANGULAR_DEFLECTION, True)
-    face_map = kernel._face_map(shape)
+    face_map = _brep_topology._face_map(shape)
     chunks, missing = [], []
     for index in range(1, face_map.Extent() + 1):
         positions, indices = kernel._face_triangles(TopoDS.Face_s(face_map.FindKey(index)))
@@ -106,7 +110,7 @@ def main(argv=None) -> int:
     started = time.perf_counter()
     shape = load_shape(args)
     report = dict(source=args.brep_json or args.brep, deviation=args.deviation,
-                  faces=kernel.face_count(shape), load_seconds=time.perf_counter() - started)
+                  faces=_brep_topology.face_count(shape), load_seconds=time.perf_counter() - started)
 
     started = time.perf_counter()
     payload = kernel.tessellate(shape, args.deviation)

@@ -26,6 +26,11 @@ from duocad.sketch import add_circle, base_plane, sketch_create
 from duocad.verbs import extrude, fillet
 from document_support import assert_matches_replay
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 
 def _cylinder(x: float, z: float, radius: float, height: float):
     return BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x, 0.0, z), gp_Dir(0.0, 0.0, 1.0)), radius, height).Shape()
@@ -45,7 +50,7 @@ def _circle_edge(shape, radius: float, z: float, x: float = 0.0) -> int:
     for edge in query.describe_edges(shape):
         if edge["kind"] != "circle" or abs(edge["start"][2] - z) > 1e-6:
             continue
-        circle = BRepAdaptor_Curve(TopoDS.Edge_s(kernel.edge_of(shape, edge["index"]))).Circle()
+        circle = BRepAdaptor_Curve(TopoDS.Edge_s(_brep_topology.edge_of(shape, edge["index"]))).Circle()
         if abs(circle.Radius() - radius) < 1e-6 and abs(circle.Location().X() - x) < 1e-6:
             return edge["index"]
     raise AssertionError(f"no circle r={radius} at z={z}")
@@ -54,7 +59,7 @@ def _circle_edge(shape, radius: float, z: float, x: float = 0.0) -> int:
 def _native(shape, index: int, radius: float):
     """OCCT の `MakeFillet` だけで丸めた形。断れば None。"""
     maker = BRepFilletAPI_MakeFillet(shape)
-    maker.Add(radius, TopoDS.Edge_s(kernel.edge_of(shape, index)))
+    maker.Add(radius, TopoDS.Edge_s(_brep_topology.edge_of(shape, index)))
     maker.Build()
     if not maker.IsDone() or not BRepCheck_Analyzer(maker.Shape()).IsValid():
         return None
@@ -114,8 +119,8 @@ def _rolled_around_a_post(wall, base_z: float, rim: float, radius: float, steps:
 def _top_of_faces(shape, on) -> float:
     """`on(BRepAdaptor_Surface)` が真の面(台座の側面)の上端の z。"""
     tops = []
-    for index in range(1, kernel.face_count(shape) + 1):
-        face = kernel.face_of(shape, index)
+    for index in range(1, _brep_topology.face_count(shape) + 1):
+        face = _brep_topology.face_of(shape, index)
         if on(BRepAdaptor_Surface(TopoDS.Face_s(face))):
             tops.append(_bounds(face)[5])
     assert tops, "台座の側面が見つからない"
@@ -137,7 +142,7 @@ def test_a_radius_wider_than_the_flange_rolls_over_the_rim(radius):
 
     rounded = kernel.fillet_edges(shape, {index: radius})
 
-    added = rounded["volume_after"] - kernel.volume(shape)
+    added = rounded["volume_after"] - _brep_geometry.volume(shape)
     assert added == pytest.approx(_rolled_around_a_post(((8.0, 9.0), (68.0, 9.0)), 8.0, 30.0, radius), rel=_ROLLED_REL)
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
     assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6), "肉が円板の外へはみ出した"
@@ -165,7 +170,7 @@ def test_a_fillet_that_reaches_another_post_passes_through_it(gap, radius):
     rounded = kernel.fillet_edges(shape, {index: radius})
 
     alone = _native(without_b, _circle_edge(without_b, 5.0, 3.0), radius)
-    expected = kernel.volume(_boolean(BRepAlgoAPI_Fuse, alone, post_b))
+    expected = _brep_geometry.volume(_boolean(BRepAlgoAPI_Fuse, alone, post_b))
     assert rounded["volume_after"] == pytest.approx(expected, rel=1e-7)
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
 
@@ -178,8 +183,8 @@ def test_a_fillet_that_reaches_nothing_else_is_occt_s_own():
     rounded = kernel.fillet_edges(shape, {index: 1.0})["shape"]
 
     native = _native(shape, index, 1.0)
-    assert kernel.volume(rounded) == pytest.approx(kernel.volume(native), rel=1e-12)
-    assert kernel.face_count(rounded) == kernel.face_count(native)
+    assert _brep_geometry.volume(rounded) == pytest.approx(_brep_geometry.volume(native), rel=1e-12)
+    assert _brep_topology.face_count(rounded) == _brep_topology.face_count(native)
 
 
 def _l_bracket():
@@ -214,7 +219,7 @@ def test_a_straight_fillet_taller_than_the_wall_rolls_over_the_wall_top():
         return (t * math.sqrt(r * r - t * t) + r * r * math.asin(t / r)) / 2.0
 
     area = (center - 5.0) * 20.0 - (under(r) - under(height - 25.0))
-    added = rounded["volume_after"] - kernel.volume(shape)
+    added = rounded["volume_after"] - _brep_geometry.volume(shape)
     assert added == pytest.approx(30.0 * area, rel=_ROLLED_REL)
     assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6), "壁が高くなった・肉が側面の外へ出た"
 
@@ -237,8 +242,8 @@ def test_a_convex_fillet_wider_than_the_plate_is_cut_at_the_bottom():
         return 5.0 - math.sqrt(r * r - (z - y0) ** 2)
     steps = 20000
     removed = sum(width((i + 0.5) * depth / steps) for i in range(steps)) * depth / steps
-    assert rounded["volume_after"] == pytest.approx(kernel.volume(plate) - 40.0 * removed, rel=1e-6)
-    assert rounded["volume_after"] < kernel.volume(plate)
+    assert rounded["volume_after"] == pytest.approx(_brep_geometry.volume(plate) - 40.0 * removed, rel=1e-6)
+    assert rounded["volume_after"] < _brep_geometry.volume(plate)
 
 
 def test_absorbed_fillet_is_logged_undone_and_replayed():
@@ -300,7 +305,7 @@ def test_another_selected_edge_does_not_hide_a_fillet_that_hits_a_post():
 
     alone = _native(without_b, _circle_edge(without_b, 5.0, 3.0), 3.0)
     b_rounded = _native(post_b, _circle_edge(post_b, 4.0, 23.0, x=11.0), 1.0)
-    expected = kernel.volume(_boolean(BRepAlgoAPI_Fuse, alone, b_rounded))
+    expected = _brep_geometry.volume(_boolean(BRepAlgoAPI_Fuse, alone, b_rounded))
     assert rounded["volume_after"] == pytest.approx(expected, rel=1e-7)
 
 
@@ -365,13 +370,13 @@ def test_rounding_a_convex_edge_next_to_a_curved_face_removes_all_of_the_materia
 
     from duocad import kernel_overflow
 
-    absorbed = kernel_overflow.absorb(shape, kernel._edge_map(shape), radii)
+    absorbed = kernel_overflow.absorb(shape, _brep_topology._edge_map(shape), radii)
 
     maker = BRepFilletAPI_MakeFillet(shape)
     for index, radius in radii.items():
-        maker.Add(radius, TopoDS.Edge_s(kernel.edge_of(shape, index)))
+        maker.Add(radius, TopoDS.Edge_s(_brep_topology.edge_of(shape, index)))
     maker.Build()
-    assert kernel.volume(absorbed.shape) == pytest.approx(kernel.volume(maker.Shape()), rel=1e-7)
+    assert _brep_geometry.volume(absorbed.shape) == pytest.approx(_brep_geometry.volume(maker.Shape()), rel=1e-7)
 
 
 def test_a_through_hole_next_to_the_post_stays_open():
@@ -388,10 +393,10 @@ def test_a_through_hole_next_to_the_post_stays_open():
     rounded = kernel.fillet_edges(shape, {index: 6.0})
 
     alone = _native(disc_and_post, _circle_edge(disc_and_post, 5.0, 3.0), 6.0)
-    drilled = kernel.volume(_boolean(BRepAlgoAPI_Cut, alone, hole))
-    assert kernel.volume(shape) < rounded["volume_after"] < drilled
+    drilled = _brep_geometry.volume(_boolean(BRepAlgoAPI_Cut, alone, hole))
+    assert _brep_geometry.volume(shape) < rounded["volume_after"] < drilled
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
-    assert kernel.volume(_boolean(BRepAlgoAPI_Common, rounded["shape"], hole)) == pytest.approx(0.0, abs=1e-9), "穴が塞がった"
+    assert _brep_geometry.volume(_boolean(BRepAlgoAPI_Common, rounded["shape"], hole)) == pytest.approx(0.0, abs=1e-9), "穴が塞がった"
 
 
 def test_many_far_away_selections_do_not_hide_a_fillet_that_hits_a_post():
@@ -409,12 +414,12 @@ def test_many_far_away_selections_do_not_hide_a_fillet_that_hits_a_post():
 
     without_b = _union(disc, post_a, *far)
     pieces = BRepFilletAPI_MakeFillet(without_b)
-    pieces.Add(3.0, TopoDS.Edge_s(kernel.edge_of(without_b, _circle_edge(without_b, 5.0, 3.0))))
+    pieces.Add(3.0, TopoDS.Edge_s(_brep_topology.edge_of(without_b, _circle_edge(without_b, 5.0, 3.0))))
     for i in range(11):
-        pieces.Add(0.25, TopoDS.Edge_s(kernel.edge_of(without_b, _circle_edge(without_b, 2.0, 13.0, x=-35.0 + 7.0 * i))))
+        pieces.Add(0.25, TopoDS.Edge_s(_brep_topology.edge_of(without_b, _circle_edge(without_b, 2.0, 13.0, x=-35.0 + 7.0 * i))))
     pieces.Build()
     b_rounded = _native(post_b, _circle_edge(post_b, 4.0, 23.0, x=11.0), 1.0)
-    expected = kernel.volume(_boolean(BRepAlgoAPI_Fuse, pieces.Shape(), b_rounded))
+    expected = _brep_geometry.volume(_boolean(BRepAlgoAPI_Fuse, pieces.Shape(), b_rounded))
     assert rounded["volume_after"] == pytest.approx(expected, rel=1e-7)
 
 
@@ -427,9 +432,9 @@ def test_a_frustum_top_edge_wider_than_its_top_radius_is_still_rounded():
     frustum = BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 15.0, 5.0, 10.0).Shape()
     top = _circle_edge(frustum, 5.0, 10.0)
 
-    absorbed = kernel_overflow.absorb(frustum, kernel._edge_map(frustum), {top: 6.0})
+    absorbed = kernel_overflow.absorb(frustum, _brep_topology._edge_map(frustum), {top: 6.0})
 
-    assert kernel.volume(absorbed.shape) == pytest.approx(kernel.volume(_native(frustum, top, 6.0)), rel=1e-7)
+    assert _brep_geometry.volume(absorbed.shape) == pytest.approx(_brep_geometry.volume(_native(frustum, top, 6.0)), rel=1e-7)
 
 
 def _box_with_split_top():
@@ -438,7 +443,7 @@ def _box_with_split_top():
     from OCP.BRepFeat import BRepFeat_SplitShape
 
     box = _box(0, 0, 0, 20, 30, 20)
-    top = kernel.face_of(box, [f["index"] for f in query.describe_faces(box) if f["normal"][2] > 0.9][0])
+    top = _brep_topology.face_of(box, [f["index"] for f in query.describe_faces(box) if f["normal"][2] > 0.9][0])
     split = BRepFeat_SplitShape(box)
     split.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(2, 0, 20), gp_Pnt(2, 30, 20)).Edge(), TopoDS.Face_s(top))
     split.Build()
@@ -463,7 +468,7 @@ def test_a_fillet_spilling_across_a_coplanar_seam_stays_occt_s_own():
 
     rounded = kernel.fillet_edges(shape, {index: 3.0})
 
-    assert rounded["volume_after"] == pytest.approx(kernel.volume(native), rel=1e-9)
+    assert rounded["volume_after"] == pytest.approx(_brep_geometry.volume(native), rel=1e-9)
 
 
 def test_absorbing_across_a_coplanar_seam_does_not_cut_at_the_seam():
@@ -476,7 +481,7 @@ def test_absorbing_across_a_coplanar_seam_does_not_cut_at_the_seam():
 
     whole = _box(0, 0, 0, 20, 30, 20)
     expected = _native(whole, _line_edge_at(whole, 0.0, 20.0), 3.0)
-    assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
+    assert rounded["volume_after"] == pytest.approx(_brep_geometry.volume(expected), rel=1e-7)
 
 
 def test_an_existing_fillet_does_not_hide_a_hit_on_the_post_behind_it():
@@ -497,7 +502,7 @@ def test_an_existing_fillet_does_not_hide_a_hit_on_the_post_behind_it():
 
     a_alone = _union(disc, post_a)
     expected = _boolean(BRepAlgoAPI_Fuse, _native(a_alone, _circle_edge(a_alone, 5.0, 3.0), 10.0), b_rounded)
-    assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
+    assert rounded["volume_after"] == pytest.approx(_brep_geometry.volume(expected), rel=1e-7)
     inside_b = BRepClass3d_SolidClassifier(rounded["shape"], gp_Pnt(9.5, 0.0, 20.0), 1e-7)
     assert inside_b.State() == TopAbs_IN
 
@@ -512,7 +517,7 @@ def test_two_separate_walls_in_one_plane_are_rounded_separately():
         key=lambda edge: edge["start"][1],
     )
     assert len(roots) == 2
-    before = kernel.volume(shape)
+    before = _brep_geometry.volume(shape)
 
     both = kernel.fillet_edges(shape, {roots[0]["index"]: 22.0, roots[1]["index"]: 22.0})
 
@@ -535,7 +540,7 @@ def test_a_footprint_whose_surface_curls_under_the_plate_is_still_a_footprint():
 
     alone = _union(plate, post)
     expected = _boolean(BRepAlgoAPI_Fuse, _native(alone, _circle_edge(alone, 3.0, 3.0, x=18.0), 10.0), torus)
-    assert rounded["volume_after"] == pytest.approx(kernel.volume(expected), rel=1e-7)
+    assert rounded["volume_after"] == pytest.approx(_brep_geometry.volume(expected), rel=1e-7)
 
 
 def test_a_tapered_post_overflowing_the_disc_rolls_over_the_rim():
@@ -550,7 +555,7 @@ def test_a_tapered_post_overflowing_the_disc_rolls_over_the_rim():
 
     rounded = kernel.fillet_edges(shape, {root: 20.0})
 
-    added = rounded["volume_after"] - kernel.volume(shape)
+    added = rounded["volume_after"] - _brep_geometry.volume(shape)
     assert added == pytest.approx(_rolled_around_a_post(((8.0, 9.0), (48.0, 4.0)), 8.0, 25.0, 20.0), rel=_ROLLED_REL)
     assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6)
     assert _top_of_faces(rounded["shape"], _cylinder_of_radius(25.0)) == pytest.approx(8.0, abs=1e-6), "円板の側面が伸びた"
@@ -575,7 +580,7 @@ def test_a_post_on_a_square_plate_rolls_over_the_straight_rims():
 
     rounded = kernel.fillet_edges(shape, {root: 14.0})
 
-    added = rounded["volume_after"] - kernel.volume(shape)
+    added = rounded["volume_after"] - _brep_geometry.volume(shape)
     wall = ((6.0, 9.0), (56.0, 9.0))
     inscribed, circumscribed = (_rolled_around_a_post(wall, 6.0, rim, 14.0) for rim in (20.0, 20.0 * math.sqrt(2.0)))
     assert inscribed * (1.0 - _ROLLED_REL) < added < circumscribed
@@ -592,7 +597,7 @@ def test_a_ball_rolling_past_a_plate_corner_keeps_the_plate_height():
 
     rounded = kernel.fillet_edges(shape, {root: 22.0})
 
-    assert rounded["volume_after"] > kernel.volume(shape)
+    assert rounded["volume_after"] > _brep_geometry.volume(shape)
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
     assert _bounds(rounded["shape"]) == pytest.approx(_bounds(shape), abs=1e-6)
     sides = lambda surface: surface.GetType() == GeomAbs_Plane and abs(surface.Plane().Axis().Direction().Z()) < 1e-9
@@ -629,7 +634,7 @@ def test_a_wall_leaning_out_past_the_rim_keeps_the_material_under_it():
     chord = math.hypot(tx - 20.0, tz - 3.0)
     angle = 2.0 * math.asin(chord / (2.0 * r))
     exact = 30.0 * (triangle - r * r / 2.0 * (angle - math.sin(angle)))
-    added = rounded["volume_after"] - kernel.volume(shape)
+    added = rounded["volume_after"] - _brep_geometry.volume(shape)
     assert added == pytest.approx(exact, rel=_ROLLED_REL)
     assert BRepClass3d_SolidClassifier(rounded["shape"], gp_Pnt(22.1, 15.0, 25.0), 1e-7).State() == TopAbs_IN
     rim_side = lambda surface: surface.GetType() == GeomAbs_Plane and abs(surface.Plane().Location().X() - 20.0) < 1e-9 \
@@ -646,7 +651,7 @@ def test_a_post_straddling_the_plate_edge_does_not_turn_the_air_beyond_the_rim_i
 
     shape = _union(_box(-20, -20, 0, 20, 20, 3), _cylinder(18.0, 3.0, 5.0, 60.0))
     def middle_x(index):
-        curve = BRepAdaptor_Curve(TopoDS.Edge_s(kernel.edge_of(shape, index)))
+        curve = BRepAdaptor_Curve(TopoDS.Edge_s(_brep_topology.edge_of(shape, index)))
         return curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter())).X()
 
     roots = [  # 板の上に立つ根元の円弧(縁の外へ張り出した柱の底の円弧は除く)
@@ -681,14 +686,14 @@ _LYING_CYLINDER_CHILD = """
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
-from duocad import kernel, query
+from duocad import brep_geometry, kernel, query
 
 big = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, -15, 0), gp_Dir(0, 1, 0)), 20.0, 30.0).Shape()
 post = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 7, 10), gp_Dir(0, 0, 1)), 5.0, 40.0).Shape()
 shape = kernel.boolean_bodies(big, [post], "union")["shape"]
 root = [edge["index"] for edge in query.describe_edges(shape) if edge["kind"] == "other"][0]
 out = kernel.fillet_edges(shape, {root: 12.0})
-print(out["volume_after"] > kernel.volume(shape), BRepCheck_Analyzer(out["shape"]).IsValid())
+print(out["volume_after"] > brep_geometry.volume(shape), BRepCheck_Analyzer(out["shape"]).IsValid())
 print("survived")
 """
 
@@ -730,7 +735,7 @@ def test_a_hole_on_the_feet_track_of_an_elliptic_post_is_noticed():
         edge["index"] for edge in query.describe_edges(shape)
         if edge["kind"] != "line" and abs(edge["start"][2] - 3.0) < 1e-6 and abs(edge["start"][0]) <= 20.01
     ]
-    edge = kernel.edge_of(shape, root)
+    edge = _brep_topology.edge_of(shape, root)
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
     columns = kernel_overflow._Columns(shape, edge_faces)
@@ -764,4 +769,4 @@ def test_a_trimming_cut_that_does_not_partition_the_material_is_refused(monkeypa
 
     monkeypatch.setattr(kernel_overflow, "_boolean", broken)
     with pytest.raises(kernel_overflow.Unsupported, match="did not partition"):
-        kernel_overflow.absorb(plate, kernel._edge_map(plate), {index: 5.0})
+        kernel_overflow.absorb(plate, _brep_topology._edge_map(plate), {index: 5.0})
