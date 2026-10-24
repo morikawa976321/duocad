@@ -335,6 +335,44 @@ AI が「C+戻しを、選んだ面の隣に延ばせない曲面があるとき
 - 体積はオフセット面の上の適応積分で合わない: +2 の柱で `query.volume` 34330.2、Steiner の式(A + P d + π d²)で 34338.7、
   `BRepGProp` の Eps=1e-9 では 33657.6。関門の体積は増減の向きしか見ないので影響しない。受入テストの体積は rel 1e-3 で見る。
 
+### 削除の時間をどこまで縮められるか(2026-10-24)
+
+本人の依頼「楕円につけたフィレットの削除が遅すぎるので、より早くする方法がないか検討しておいて」への調査。形は上の歯ブラシ立て(ログを seq 49 まで再生した 652 面)、
+消すのは上縁の丸め8枚(面 2, 6, 633, 634, 635, 641, 642, 643)。このPC(14 論理コア)で測った。台本はセッションの使い捨てで、リポジトリには置いていない。
+
+**並列にする前の内訳(8枚)**: 画面と同じ `Session.preview_job` で 9.0 s。うち子プロセスの計算 8.4 s、テセレーション 0.43 s、体積 0.13 s。確定は覚えた結果を使うので 0.02 s。
+子の計算 9.0 s(cProfile)のうち **`BOPAlgo_RemoveFeatures.Perform` が 7.7 s**、体積3回 0.44 s(関門1回と `compute` の前後。前後の2回は呼び手のどこも使っていない)、
+構造の関門 0.41 s(うち全 644 面の面積 0.13 s)、`_region_kept` 0.32 s。張り替えと戻しは 0.05 s。
+
+**RemoveFeatures が遅い理由(OCCT 7.9.3 `BOPAlgo_RemoveFeatures.cxx` を読んだ)**: 消す面を辺でつながる塊(feature)に分け、近傍の延長(`FillGap`)は
+feature ごとに並列に作る。そのあと **feature を1つずつ順に、残す面を全部 `BOPAlgo_MakerVolume` に渡して形全体を作り直す**(`RemoveFeature`。
+1つ失敗しても他を消せるようにするため、とコメントにある)。費用はおよそ「feature の数 × 形全体の面数」で、8枚は 1枚の約8倍になる。
+`SetUseOBB`・`SetFuzzyValue` は内部の MakerVolume に渡されない(渡すのは並列・内部形状の回避・交差・非破壊の4つだけ)。
+
+| 案 | 8枚 | 1枚 | 結果 |
+|---|---|---|---|
+| 並列にする前(`SetRunParallel(False)`) | Perform 8.0 s、`compute` 8.65 s | `compute` 2.13 s | — |
+| `SetUseOBB(True)` | Perform 7.3 s(揺れの範囲) | | |
+| `SetToFillHistory(False)` | Perform 7.3 s(揺れの範囲。由来に履歴が要るので使えない) | | |
+| **`SetRunParallel(True)`** | Perform 3.9〜4.5 s、`compute` 5.1〜5.6 s | `compute` 1.52 s | 直列と**BinTools のバイト列まで同じ**(1枚・2枚・8枚。8枚は並列を3回走らせて3回とも同じ) |
+| 並列 + `compute` の前後の体積を省く | `_delete` 4.8 s | 1.37 s | 同じ |
+| **近傍だけ切り出して消す(試作)** | **1.5 s** | 1.4 s | 下 |
+
+- 並列で済むのは子プロセスの中なので、GIL の罠(下「OCCT の罠」2)は画面に響かない。結果の面の並びが並列で変わらないことは上「由来と再生の決定性」でも見ていた。
+- **近傍の切り出し(試作)**: 消す面の外接箱を 2 mm 広げた箱で形を `Common`(0.21 s)と `Cut`(0.22 s)に分ける。箱の中(4ソリッド・24 面)で
+  今の `_delete` をソリッドごとに掛け(0.82 s)、箱の外と `Fuse`(0.22 s)して `UnifySameDomain`(0.04 s)で継ぎ目を戻す。BOP はすべて並列。
+  8枚は 644 面、種類は正解と同じ(押し出し面 214・B-spline 420・平面 10)、BRepCheck を通り、全体で消した結果との対称差は両向き 0、体積差 1.6e-9 mm³。
+  広げる幅 5 mm でも同じ時間・同じ結果。1枚では 1.38 s(全体の並列 1.52 s とほぼ同じ。形全体への BOP 3回が MakerVolume 1回分くらいかかる)で、
+  体積が全体で消した結果と 5e-5 mm³ 違う。**丸めの数が多いほど効く**。
+- 切り出しを製品にするときに要るもの(試作では作っていない): 由来の表を `Common`・`Cut`・`Fuse`・`UnifySameDomain` の履歴を通して作り直す、結果の面の並びと再生の決定性の確認、
+  **箱の面から来た面を RemoveFeatures が変えていないこと**の検査(変えていれば、閉じ方が箱の外まで届いている。全体で消す今の方式へ戻す)、
+  箱の面が元の面と重なる配置での BOP の失敗、関門を箱の中に掛けるか全体に掛けるか。
+
+AI が「まず `SetRunParallel(True)` と使っていない体積の計算(面の編集の `compute` が返していた前後の体積)を外し、近傍の切り出しは由来と検査の作り直しが
+大きいので別の作業にする」を推奨し、本人は前者の実装を指示した(2026-10-24)。実装後、画面と同じ `Session.preview_job` で 8枚 9.0 → 5.1 s、1枚 1.9 s。
+結果の形は1枚・2枚・8枚とも変更前の直列と BinTools のバイト列まで同じ。近傍の切り出しは未着手。器の上下を同時に消す 35 s(上の表)は、
+並列でも切り出しでもまだ測っていない。
+
 ## OCCT の罠(このリポジトリで実測)
 
 1. **`BRepAlgoAPI_Defeaturing` / `BOPAlgo_RemoveFeatures` は、閉じられない面を例外にも `IsDone()=false` にもしない。** 警告
@@ -449,9 +487,9 @@ AI が「C+戻しを、選んだ面の隣に延ばせない曲面があるとき
 
 `kernel.py` は 1,681 行で規律の 1,500 行を越えているので、新しいファイルに切る(依存は kernel_face_edit → kernel の一方向。`kernel_shell.py` と同じ形)。
 
-- `delete_faces(shape, face_indices) -> {"shape", "provenance", "volume_before", "volume_after"}`
+- `delete_faces(shape, face_indices) -> {"shape", "provenance"}`
   1. 選んだ面の隣に延ばせない曲面(押し出し・回転・オフセット。罠の11)があれば、その面だけ同じ形の B-spline の面に張り替える(上「押し出し面に接する丸めの削除」)。
-  2. `BOPAlgo_RemoveFeatures`(`SetToFillHistory(True)`、`SetRunParallel(False)`)。エラーも**警告も**失敗。
+  2. `BOPAlgo_RemoveFeatures`(`SetToFillHistory(True)`、`SetRunParallel(True)`)。エラーも**警告も**失敗。
   3. 張り替えた面の像を元の曲面へ張り直す。
   4. 関門(下)。由来は `History()` を `_blend_provenance` と同じ形で射影する(`face_map` / `deleted`(=選んだ面) / `new_faces`(=空))。
 - `offset_faces(shape, face_indices, distance) -> {...}`
