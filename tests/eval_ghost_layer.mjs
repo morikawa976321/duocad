@@ -114,11 +114,15 @@ for (const material of [visible, hidden]) {
   const shader = { vertexShader: material.vertexShader, fragmentShader: material.fragmentShader, uniforms: material.uniforms }
   material.onBeforeCompile(shader)
   assert.ok(shader.vertexShader.includes('depthBiasMm'), '辺が奥行きのために寄っていない')
-  // 戻すのは最後に描く端点(カメラ面で詰めた後)から。寄せる前の端点を控えると、詰めた線分で描く位置とクリップの位置が食い違う
-  const clipAt = shader.vertexShader.indexOf('vec4 mvPosition = ( position.y < 0.5 ) ? start : end;')
-  assert.ok(clipAt >= 0, 'クリップの位置を描く端点から取っていない')
-  const afterClip = shader.vertexShader.slice(clipAt, shader.vertexShader.indexOf('#include <clipping_planes_vertex>', clipAt))
-  assert.ok(afterClip.includes('mvPosition.xyz /= max(') && afterClip.includes('mvPosition.z -= depthBiasMm'), '断面のクリップを寄せた後の位置で判定している')
+  assert.ok(
+    shader.vertexShader.includes('vec4 mvPosition = ( position.y < 0.5 ) ? trimmedStart : trimmedEnd;'),
+    '断面のクリップを寄せた後の位置で判定している',
+  )
+  // 寄せるのはカメラ面で詰めた後(先に寄せると、詰めた端点が寄せる前の線分の上へ戻らない)
+  const trimmedAt = shader.vertexShader.indexOf('trimSegmentAlpha( end, start )')
+  const biasAt = shader.vertexShader.indexOf('float depthBiasMm')
+  assert.ok(trimmedAt >= 0 && biasAt > trimmedAt, 'カメラ面で詰める前に寄せている')
+  assert.ok(biasAt < shader.vertexShader.indexOf('vec4 clipStart = projectionMatrix * start;'), '射影した後に寄せている')
 }
 // 立方体の辺は12本(面ごとの境界線は24本で届く)
 assert.equal(passes[4].geometry.getAttribute('instanceStart').count, 12)
