@@ -114,15 +114,13 @@ for (const material of [visible, hidden]) {
   const shader = { vertexShader: material.vertexShader, fragmentShader: material.fragmentShader, uniforms: material.uniforms }
   material.onBeforeCompile(shader)
   assert.ok(shader.vertexShader.includes('depthBiasMm'), '辺が奥行きのために寄っていない')
-  assert.ok(
-    shader.vertexShader.includes('vec4 mvPosition = ( position.y < 0.5 ) ? trimmedStart : trimmedEnd;'),
-    '断面のクリップを寄せた後の位置で判定している',
-  )
-  // 寄せるのはカメラ面で詰めた後(先に寄せると、詰めた端点が寄せる前の線分の上へ戻らない)
-  const trimmedAt = shader.vertexShader.indexOf('trimSegmentAlpha( end, start )')
-  const biasAt = shader.vertexShader.indexOf('float depthBiasMm')
-  assert.ok(trimmedAt >= 0 && biasAt > trimmedAt, 'カメラ面で詰める前に寄せている')
-  assert.ok(biasAt < shader.vertexShader.indexOf('vec4 clipStart = projectionMatrix * start;'), '射影した後に寄せている')
+  // 寄せるのは深度だけ。描く端点(xy・w)とクリップの位置は LineMaterial のまま
+  assert.ok(shader.vertexShader.includes('vec4 mvPosition = ( position.y < 0.5 ) ? start : end;'), 'クリップの位置を書き換えている')
+  assert.ok(!/\b(start|end)\.(xyz|z) [*+]=/.test(shader.vertexShader), '描く端点そのものを寄せている(クリップの位置と透視補間がずれる)')
+  const zAt = shader.vertexShader.indexOf('gl_Position.z = biasedClip.z / biasedClip.w * gl_Position.w;')
+  assert.ok(zAt > shader.vertexShader.indexOf('gl_Position = clip;'), '寄せた深度を描く頂点へ入れていない')
+  // 寄せる端点はカメラ面で詰めた後のもの
+  assert.ok(shader.vertexShader.indexOf('float depthBiasMm') > shader.vertexShader.indexOf('trimSegmentAlpha( end, start )'), 'カメラ面で詰める前の端点を寄せている')
 }
 // 立方体の辺は12本(面ごとの境界線は24本で届く)
 assert.equal(passes[4].geometry.getAttribute('instanceStart').count, 12)
