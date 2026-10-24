@@ -114,10 +114,11 @@ for (const material of [visible, hidden]) {
   const shader = { vertexShader: material.vertexShader, fragmentShader: material.fragmentShader, uniforms: material.uniforms }
   material.onBeforeCompile(shader)
   assert.ok(shader.vertexShader.includes('depthBiasMm'), '辺が奥行きのために寄っていない')
-  assert.ok(
-    shader.vertexShader.includes('vec4 mvPosition = ( position.y < 0.5 ) ? unbiasedStart : unbiasedEnd;'),
-    '断面のクリップを寄せた後の位置で判定している',
-  )
+  // 戻すのは最後に描く端点(カメラ面で詰めた後)から。寄せる前の端点を控えると、詰めた線分で描く位置とクリップの位置が食い違う
+  const clipAt = shader.vertexShader.indexOf('vec4 mvPosition = ( position.y < 0.5 ) ? start : end;')
+  assert.ok(clipAt >= 0, 'クリップの位置を描く端点から取っていない')
+  const afterClip = shader.vertexShader.slice(clipAt, shader.vertexShader.indexOf('#include <clipping_planes_vertex>', clipAt))
+  assert.ok(afterClip.includes('mvPosition.xyz /= max(') && afterClip.includes('mvPosition.z -= depthBiasMm'), '断面のクリップを寄せた後の位置で判定している')
 }
 // 立方体の辺は12本(面ごとの境界線は24本で届く)
 assert.equal(passes[4].geometry.getAttribute('instanceStart').count, 12)

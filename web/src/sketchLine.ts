@@ -22,7 +22,9 @@ export function createSketchLineMaterial(color: number, resolution: THREE.Vector
  * `project_vertex` を通らないので、両端を視点座標へ移した直後に寄せる)。寄せないと、面に貼ったスケッチの線が
  * 面と奥行きを争って明滅する。
  * 断面のクリップは寄せる前の位置で判定する: `LineMaterial` は寄せた両端をそのままクリップの位置(`mvPosition`)に使うので、
- * 寄せた位置で判定すると切り口の近くの辺が消える・はみ出す。
+ * 寄せた位置で判定すると切り口の近くの辺が消える・はみ出す。戻すのは最後に描く端点からにする: 透視でカメラ面をまたぐ線分は
+ * `LineMaterial` が寄せた後の端点を近接面まで詰めるので、寄せる前の端点を控えておくと描く位置とクリップの位置が食い違う。
+ * 寄せは視線上の拡大縮小(透視)・平行移動(正投影)なので、詰めた端点からでもそのまま戻せる。
  */
 export function withLineDepthBias(material: LineMaterial, layer: number): LineMaterial {
   const bias = (layer * DEPTH_BIAS_UNIT).toFixed(8)
@@ -36,13 +38,16 @@ export function withLineDepthBias(material: LineMaterial, layer: number): LineMa
     }
     shader.vertexShader = shader.vertexShader.replace(
       clipMarker,
-      'vec4 mvPosition = ( position.y < 0.5 ) ? unbiasedStart : unbiasedEnd;',
+      `${clipMarker}
+			if ( isPerspectiveMatrix( projectionMatrix ) ) {
+				mvPosition.xyz /= max( 1.0 - depthBiasMm * ( - mvPosition.z ) / length( mvPosition.xyz ), 1e-6 );
+			} else {
+				mvPosition.z -= depthBiasMm;
+			}`,
     )
     shader.vertexShader = shader.vertexShader.replace(
       marker,
       `${marker}
-			vec4 unbiasedStart = start;
-			vec4 unbiasedEnd = end;
 			float depthBiasMm = ${bias} * 2.0 / projectionMatrix[1][1];
 			if ( isPerspectiveMatrix( projectionMatrix ) ) {
 				start.xyz *= max( 1.0 - depthBiasMm * ( - start.z ) / length( start.xyz ), 0.0 );
