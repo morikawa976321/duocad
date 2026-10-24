@@ -7,9 +7,7 @@ import pytest
 
 from duocad import interference, selection
 from document_support import shape_ref
-from interference_support import (
-    box, check, cut, cylinder, document_of, filleted_box, nested_boxes, pair_of, plate_with_hole, rotated,
-)
+from interference_support import box, check, cylinder, document_of, nested_boxes, pair_of, plate_with_hole, rotated
 
 from duocad import (
     brep_topology as _brep_topology,
@@ -233,7 +231,6 @@ class FakeWorker:
 
 
 def fake_run(relations, distances, clearance=0.0, ids=("a", "b", "c")):
-    from itertools import combinations
 
     document = document_of(*[(i, box(n * 3, 0, 0, 10, 10, 10)) for n, i in enumerate(ids)])
     return check(document, clearance, worker_factory=lambda load, cancel: FakeWorker(relations, distances))

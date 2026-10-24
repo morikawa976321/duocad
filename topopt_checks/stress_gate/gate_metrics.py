@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy import ndimage, signal
+from scipy import signal
 
 
 def percentile_current(vm: np.ndarray, mask: np.ndarray, q: float = 99.5) -> float:

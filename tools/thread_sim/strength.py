@@ -19,7 +19,6 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.sparse import csr_matrix
 from scipy.spatial import cKDTree
 
 from .fea import Body, ContactPair, ContactSystem, Dirichlet, Material

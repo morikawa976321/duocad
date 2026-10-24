@@ -2,7 +2,6 @@
 import dataclasses
 import sys, json, numpy as np
 from pathlib import Path
-from unittest.mock import patch
 REPO = Path(r"C:\Users\tm976\mf\duocad"); sys.path.insert(0, str(REPO / "topopt_checks"))
 import _bootstrap  # noqa
 from duocad import optimize_run

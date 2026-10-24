@@ -137,7 +137,6 @@ def test_mesh_body_left_over_from_a_replayed_log_is_refused_at_run_time(
 
 
 def test_face_indices_shift_by_the_face_count_of_earlier_bodies(session: Session) -> None:
-    from duocad import kernel
 
     left, right, fixed, load = four_conditions(session)
     bundle = optimize_run.build_conditions(session.document)

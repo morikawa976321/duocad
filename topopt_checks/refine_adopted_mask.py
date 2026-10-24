@@ -27,7 +27,6 @@ MODEL = REPO_ROOT / "models" / "hanger_bar_attachment.json"
 
 def refine(mask: np.ndarray, origin: np.ndarray, spacing: float, ks: list[int], target: float, model: Path) -> list[dict]:
     from duocad import optimize_run
-    from duocad.server import Session
     from duocad.topopt import acceptance, anchor, binary_search, design_space as ds, trace
     from duocad.topopt.voxelize import Grid
 

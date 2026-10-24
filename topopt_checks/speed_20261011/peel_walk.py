@@ -14,7 +14,6 @@ def main():
     p.add_argument("--out", required=True)
     a = p.parse_args()
     import _bootstrap  # noqa
-    import numpy as np
     from duocad import optimize_run
     from duocad.topopt import binary_search, fem
     from _documents import open_session

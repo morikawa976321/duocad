@@ -20,11 +20,6 @@ from scipy import sparse
 from scipy.sparse.linalg import LinearOperator, cg, splu
 from scipy.spatial import cKDTree
 
-try:
-    from .fea import Material
-except ImportError:
-    from fea import Material
-
 
 SIGNS = np.array([[-1, -1, -1], [1, -1, -1], [1, 1, -1],
                   [-1, 1, -1], [-1, -1, 1], [1, -1, 1],

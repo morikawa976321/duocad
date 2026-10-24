@@ -13,7 +13,6 @@ from __future__ import annotations
 import dataclasses
 import sys
 from pathlib import Path
-from typing import Optional
 from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[2]

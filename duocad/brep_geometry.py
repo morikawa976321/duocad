@@ -20,7 +20,7 @@ from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.gp import gp_Pnt, gp_Vec
 
 from . import meshbody
-from .brep_topology import edge_count, edge_of, face_count, face_of, is_null
+from .brep_topology import edge_of, face_of, is_null
 
 Vec = Tuple[float, float, float]
 
@@ -455,12 +455,6 @@ def _tight_a_point_on(face: TopoDS_Shape) -> gp_Pnt:
     surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
     return surface.Value(0.5 * (surface.FirstUParameter() + surface.LastUParameter()),
                          0.5 * (surface.FirstVParameter() + surface.LastVParameter()))
-
-
-def _tight_area(face: TopoDS_Shape) -> float:
-    props = GProp_GProps()
-    BRepGProp.SurfaceProperties_s(face, props)
-    return props.Mass()
 
 
 def _tight_diagonal(shape: TopoDS_Shape) -> float:

@@ -77,7 +77,7 @@ def make_nut(prof: pf.Profile, mark: int, height: float, af: float, sides: int =
 
 
 def make_pin(d: float, length: float, af: float, head_h: float, mark: int):
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Fuse
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
     c = 0.5
     pin = sx.tp.revolve([(0, -0.1), (d / 2, -0.1), (d / 2, length - c), (d / 2 - c, length), (0, length)])
     shape = BRepAlgoAPI_Fuse(sx._hex_prism(af, -head_h, head_h), pin).Shape()

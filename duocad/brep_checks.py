@@ -10,7 +10,7 @@ from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 
 from .brep_geometry import volume
-from .brep_topology import _face_edit_edge_faces, _face_map, indexed_map, split_solids, subshapes, is_null
+from .brep_topology import _face_edit_edge_faces, _face_map, indexed_map, subshapes, is_null
 
 
 #: 「ブーリアンは成功したのに体積が変わっていない」と見なす相対差。OCCT は「成功したが何も

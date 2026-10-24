@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
 import time
 import traceback
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
@@ -309,12 +308,6 @@ def study2():
                 ("L0.25", {}, dict(L=0.25)), ("L1.0", {}, dict(L=1.0))]
     items = [(dict(s, name=f"{s['name']} | {vn}", variant=vn), pk, mk) for s in base for vn, pk, mk in variants]
     return items, None, dict(e_req=0.1, runner="window"), None
-
-
-def flats_trapezoid(D, beta, depth, crest, root):
-    """斜面の角・深さ・山頂の平坦・谷の平坦からピッチが決まる対称台形の仕様。"""
-    P = round(2 * depth * math.tan(math.radians(beta)) + crest + root, 4)
-    return dict(family="trap", D=D, P=P, depth=depth, b_lo=beta, b_up=beta, crest_share=crest / (crest + root))
 
 
 def study3():

@@ -51,7 +51,7 @@
   import SelectionInfoPanel from './SelectionInfoPanel.svelte'
   import { optimizeNoticeFor, type OptimizeNotice } from './optimizeNotice'
   import { chosenStep, snapMinWidth } from './minWidth'
-  import { buildSketchDraws, regionsStillExist } from './sketchDraws'
+  import { buildSketchDraws } from './sketchDraws'
   import { installTestHooks } from './testHooks.svelte'
   import { bodyGhostRotation, ghostSources, resolvePicksForGhost, type GhostContext } from './ghostArgs'
   import {
@@ -1997,11 +1997,6 @@
       case 'feature': {
         if (needsSketchId(verb) && sketchId === null) {
           fail('スケッチモードに入っていない(反復はスケッチの図形が対象)')
-          return
-        }
-        if ((verb === 'extrude' || verb === 'revolve' || verb === 'loft') && !regionsStillExist(selection, sketches)) {
-          // 領域はパラメータ編集で分裂・消失しうる(§7)。消えた領域を送るとサーバは添字が範囲外と言うだけ。
-          fail('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
           return
         }
         sendTracked(...commandRequest(request, needsSketchId(verb) ? sketchId ?? undefined : undefined))

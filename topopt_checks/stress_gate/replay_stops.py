@@ -79,16 +79,6 @@ def single_phase(n):
     return rule
 
 
-def either(a, b):
-    def rule(rows, i, st):
-        sa = st.setdefault("a", {})
-        sb = st.setdefault("b", {})
-        ra, rb = a(rows, i, sa), b(rows, i, sb)
-        return ra or rb
-    rule.name = f"{a.name} | {b.name}"
-    return rule
-
-
 def apply(rule, rows):
     st = {}
     for i in range(len(rows)):

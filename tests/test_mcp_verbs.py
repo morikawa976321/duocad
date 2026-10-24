@@ -846,7 +846,6 @@ def test_a_failed_tool_fires_nothing(server: McpServer, box_session: Session):
 
 def test_a_verb_applied_through_mcp_reaches_the_browser(box_session: Session):
     """MCPで形を変えると、開いているブラウザへ版が変わったBodyだけが `delta` に新しい `geometry` つきで載る。"""
-    import asyncio
 
     box = box_session.document.bodies[0]
     faces_before = _brep_topology.face_count(box.shape)
