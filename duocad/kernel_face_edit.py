@@ -1,6 +1,7 @@
 """面の削除と面のオフセットの幾何(OCPを触るカーネル層)。方式・実測・罠は docs/FACE_EDIT.md。
 
 - 削除(`delete_faces`): `BOPAlgo_RemoveFeatures`。消した面の周りの面を、それぞれ自分の曲面のまま延ばして閉じ直す。
+  OCCT が延ばせない曲面(押し出し・回転・オフセット)の隣は、消す間だけ同じ形の B-spline の面に置き換え、消した後に元の曲面へ戻す。
 - オフセット(`offset_faces`): `BRepOffset_MakeOffset` を全体0・選んだ面だけ距離 d で。選んだ面に接線でつながる
   一定半径の丸めは、外して(削除と同じ仕組み)、尖った形で動かし、同じ半径で丸め直す(丸めが付いてくる)。
 
@@ -16,7 +17,7 @@ import math
 from typing import Any, List, Optional, Sequence
 
 from OCP.BOPAlgo import BOPAlgo_RemoveFeatures
-from OCP.BRep import BRep_Tool
+from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeSolid
 from OCP.BRepCheck import BRepCheck_Shell, BRepCheck_Status
@@ -25,17 +26,21 @@ from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepLib import BRepLib
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepOffset import BRepOffset_MakeOffset, BRepOffset_Mode
-from OCP.BRepTools import BRepTools
+from OCP.BRepTools import BRepTools, BRepTools_ReShape
 from OCP.Bnd import Bnd_Box
 from OCP.BRepBndLib import BRepBndLib
 from OCP.ChFi3d import ChFi3d
+from OCP.Geom import Geom_OffsetSurface, Geom_RectangularTrimmedSurface
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_JoinType, GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
+from OCP.GeomConvert import GeomConvert, GeomConvert_ApproxSurface
 from OCP.gp import gp_Pnt, gp_Pnt2d
 from OCP.Message import Message_Gravity
+from OCP.Precision import Precision
+from OCP.ShapeFix import ShapeFix_Face
 from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import TopoDS
+from OCP.TopoDS import TopoDS, TopoDS_Face, TopoDS_Iterator
 from OCP.TopTools import TopTools_ListOfShape
 
 from . import kernel, kernel_worker
@@ -59,6 +64,13 @@ LINEAR_TOL = 1e-6
 ANGULAR_TOL = 1e-9
 #: 「残した面の元の範囲」を確かめる標本点の数
 _REGION_SAMPLES = 49
+#: `BRepLib::ExtendFace` が延ばさずにそのまま返す曲面(解析曲面でも `Geom_BoundedSurface` でもない。OCCT 7.9.3 の General case)。
+#: 消す面の隣にあると RemoveFeatures が隙間を閉じられない(docs/FACE_EDIT.md「OCCT の罠」11)
+_UNEXTENDABLE = (
+    GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion,
+    GeomAbs_SurfaceType.GeomAbs_SurfaceOfRevolution,
+    GeomAbs_SurfaceType.GeomAbs_OffsetSurface,
+)
 
 _HINT_DELETE = "周りの面を延ばしても閉じない。穴や丸めは、それを作る面(底・段・縁の丸め、つながった丸め)をまとめて選ぶ"
 _HINT_COLLAPSE = "消すと残す面が削られる(形がつぶれる)"
@@ -166,33 +178,163 @@ def compute(verb: str, shape: Any, arguments: dict) -> dict:
 # 削除
 # --------------------------------------------------------------------------------------
 def _delete(shape: Any, faces: List[Any]):
-    result, algo = _remove_features(shape, faces)
-    _structural_gate(result)
+    work, stand_ins = _with_extendable_neighbours(shape, faces)
+    result, algo = _remove_features(work, [_in(stand_ins, face) for face in faces])
     history = algo.History()
-    before, after = _brep_topology._face_map(shape), _brep_topology._face_map(result)
-    table = {}
+    before = _brep_topology._face_map(shape)
+    removed, images, stood_in, changed = [], {}, [], set()
     for i in range(1, before.Extent() + 1):
         old = TopoDS.Face_s(before.FindKey(i))
+        current = _in(stand_ins, old)
         if any(old.IsSame(face) for face in faces):
-            if not history.IsRemoved(old):
+            if not history.IsRemoved(current):
                 raise FaceEditError(f"face {i} was selected but is not removed", _HINT_DELETE)
-            table[i] = []
+            removed.append(i)
             continue
-        images = [TopoDS.Face_s(x) for x in history.Modified(old)] or ([] if history.IsRemoved(old) else [old])
-        positions = _brep_history.positions_in(after, images)
+        modified = [TopoDS.Face_s(x) for x in history.Modified(current)]
+        images[i] = modified or ([] if history.IsRemoved(current) else [current])
+        replaced = not current.IsSame(old)
+        if replaced:
+            stood_in.append(i)
+        if modified or replaced:
+            changed.add(i)
+    result = _restore_stand_ins(before, stood_in, result, images)
+    _structural_gate(result)
+    after = _brep_topology._face_map(result)
+    table = {i: [] for i in removed}
+    for i, kept_images in images.items():
+        positions = _brep_history.positions_in(after, kept_images)
         if not positions:
             raise FaceEditError(f"kept face {i} is lost", _HINT_DELETE)
+        table[i] = positions
+        if i not in changed:
+            continue  # RemoveFeatures が触らなかった面は元の面そのもの(範囲も曲面も同じ)
+        old = TopoDS.Face_s(before.FindKey(i))
         kept = [TopoDS.Face_s(after.FindKey(p)) for p in positions]
         if _describe(old) is not None and not all(_lies_on(image, old) for image in kept):
             raise FaceEditError(f"kept face {i} left its own surface", _HINT_DELETE)
         if not _region_kept(old, kept):
             raise FaceEditError(f"kept face {i} lost part of its original region", _HINT_COLLAPSE)
-        table[i] = positions
     covered = {p for positions in table.values() for p in positions}
     new = [j for j in range(1, after.Extent() + 1) if j not in covered]
     if new:
         raise FaceEditError(f"faces {new} do not come from any kept face", _HINT_DELETE)
     return result, table, new
+
+
+def _with_extendable_neighbours(shape: Any, faces: List[Any]):
+    """消す面と辺を共有する面(RemoveFeatures が延ばす面)のうち延ばせない曲面(`_UNEXTENDABLE`)の面を、同じ形の B-spline の
+    面に置き換えた形と、その置き換えの表。置き換えが要らなければ元の形と空の表。"""
+    stand_ins = BRepTools_ReShape()
+    edge_faces = _brep_topology._face_edit_edge_faces(shape)
+    targets: List[Any] = []
+    for face in faces:
+        for edge in _brep_topology._face_edit_edges(face):
+            for neighbour in edge_faces.FindFromKey(edge):
+                neighbour = TopoDS.Face_s(neighbour)
+                if BRepAdaptor_Surface(neighbour).GetType() in _UNEXTENDABLE and not any(
+                    neighbour.IsSame(other) for other in (*faces, *targets)
+                ):
+                    targets.append(neighbour)
+    if not targets:
+        return shape, stand_ins
+    for face in targets:
+        stand_in = _laid_on(face, *_as_bspline(face))
+        if not _brep_checks.is_valid(stand_in):
+            raise FaceEditError("a neighbouring face could not be rewritten as a B-spline", _HINT_DELETE)
+        stand_ins.Replace(face, stand_in)
+    return stand_ins.Apply(shape), stand_ins
+
+
+def _restore_stand_ins(before: Any, stood_in: List[int], result: Any, images: dict) -> Any:
+    """置き換えた面(`before` の添字 `stood_in`)の像を元の面の曲面の上に張り直した形(`images` の像も張り直した面へ差し替える)。
+    像が元の曲面から外れていれば断る。"""
+    if not stood_in:
+        return result
+    back = BRepTools_ReShape()
+    for i in stood_in:
+        # 張り替えた B-spline と同じく矩形トリムを外した曲面へ戻す(像はトリムの外へ延びている)
+        surface, location = _untrimmed_surface(TopoDS.Face_s(before.FindKey(i)))
+        in_world = surface if location.IsIdentity() else surface.Transformed(location.Transformation())
+        for image in images[i]:
+            if not _points_lie_on(image, in_world):
+                raise FaceEditError(f"kept face {i} left its own surface", _HINT_DELETE)
+            back.Replace(image, _laid_on(image, surface, location))
+    restored = back.Apply(result)
+    for i in stood_in:
+        images[i] = [_in(back, image) for image in images[i]]
+    # B-spline の面に張った 2D 曲線は、元の形と共有する辺にも書き込まれている
+    BRepTools.RemoveUnusedPCurves_s(restored)
+    return restored
+
+
+def _in(reshape: Any, face: Any) -> Any:
+    return TopoDS.Face_s(reshape.Value(face))
+
+
+def _untrimmed_surface(face: Any):
+    """面の曲面から矩形トリムを外したもの(オフセット面は基底のトリムも外す)と、その世界座標での置き場所。"""
+    location = TopLoc_Location()
+    return _without_trims(BRep_Tool.Surface_s(face, location)), location
+
+
+def _without_trims(surface: Any) -> Any:
+    if isinstance(surface, Geom_RectangularTrimmedSurface):
+        return _without_trims(surface.BasisSurface())
+    if isinstance(surface, Geom_OffsetSurface) and isinstance(surface.BasisSurface(), Geom_RectangularTrimmedSurface):
+        return Geom_OffsetSurface(_without_trims(surface.BasisSurface()), surface.Offset())
+    return surface
+
+
+def _as_bspline(face: Any):
+    """面の曲面を B-spline にしたものと、その世界座標での置き場所。曲面の定義域で切り、無限に延びる向き(押し出しの向き)だけ面の範囲で切る。
+
+    ExtendFace は B-spline を定義域の外へ両端から接線の向きへ外挿で延ばし、閉じた向きは延ばさない。周期の向きは一周で切って
+    閉じたままにし、面が一周を覆わなくても周方向へは延ばさない(半周の回転面の端の丸めは断る)。周方向を開くと、面の範囲で
+    切れば外挿が元の曲面から外れ、広げて切れば延びた両端どうしが交わって重なった2枚の面を関門をすり抜けて返した。
+    有限の向きを面の範囲で切っても外挿が元の曲面からずれた(どれも実測)。"""
+    surface, location = _untrimmed_surface(face)
+    own, used = surface.Bounds(), BRepTools.UVBounds_s(face)
+    trimmed = Geom_RectangularTrimmedSurface(
+        surface, *[used[k] if Precision.IsInfinite_s(own[k]) else own[k] for k in range(4)]
+    )
+    if not isinstance(surface, Geom_OffsetSurface):
+        return GeomConvert.SurfaceToBSplineSurface_s(trimmed), location
+    # GeomConvert はオフセット面を許容差を選べない近似で変換し、楕円柱の殻の内壁で 2.5e-6 mm ずれた(LINEAR_TOL を超え、
+    # 戻すときに断る)。許容差を指定すると 1e-7 に対して 7e-9・3 ms(実測)
+    approximation = GeomConvert_ApproxSurface(
+        trimmed, Precision.Confusion_s(), GeomAbs_Shape.GeomAbs_C1, GeomAbs_Shape.GeomAbs_C1, 9, 9, 1000, 0
+    )
+    if not approximation.HasResult() or approximation.MaxError() > Precision.Confusion_s():
+        raise FaceEditError("a neighbouring offset face could not be rewritten as a B-spline", _HINT_DELETE)
+    return approximation.Surface(), location
+
+
+def _laid_on(face: Any, surface: Any, location: Any) -> Any:
+    """`face` と同じ輪郭(同じ辺)を、`location` に置いた `surface` の上に張った面。辺の 2D 曲線は `ShapeFix_Face` が作る。
+
+    1辺ずつ射影して付け直すと、継ぎ目の辺が分かれた側壁で輪が 2D で閉じず、面の向きが決まらなくなった(楕円筒で実測)。
+    `ShapeFix_Face` は輪郭が曲面に乗らなくても辺の許容差を広げて通す(延びた器の壁を矩形トリムの狭い曲面へ戻すと 1.16 mm まで
+    広げ、BRepCheck も関門も通って体積が 1.7 % 違った)。正しい形では張り替えでも戻しでも許容差は増えなかったので、増えたら断る(実測)。"""
+    edges = _brep_topology._face_edit_edges(face)
+    tolerances = [BRep_Tool.Tolerance_s(edge) for edge in edges]
+    laid = TopoDS_Face()
+    builder = BRep_Builder()
+    builder.MakeFace(laid, surface, face.Location().Inverted().Multiplied(location), BRep_Tool.Tolerance_s(face))
+    wires = TopoDS_Iterator(face, False, False)
+    while wires.More():
+        builder.Add(laid, wires.Value())
+        wires.Next()
+    laid.Location(face.Location())
+    laid.Orientation(face.Orientation())
+    fix = ShapeFix_Face(laid)
+    fix.Perform()
+    laid = TopoDS.Face_s(fix.Face())
+    for edge in _brep_topology._face_edit_edges(laid):
+        before = next((t for e, t in zip(edges, tolerances) if e.IsSame(edge)), 0.0)
+        if BRep_Tool.Tolerance_s(edge) > before + LINEAR_TOL:
+            raise FaceEditError("an edge does not lie on the surface its face was laid on", _HINT_DELETE)
+    return laid
 
 
 def _remove_features(shape: Any, faces: List[Any]):
@@ -712,7 +854,11 @@ def _lies_on(face: Any, source: Any, distance: float = 0.0) -> bool:
         return _same_surface(expected, _describe(face))
     if distance:
         return False
-    surface = BRep_Tool.Surface_s(source)
+    return _points_lie_on(face, BRep_Tool.Surface_s(source))
+
+
+def _points_lie_on(face: Any, surface: Any) -> bool:
+    """`face` の内部の最大9点が、世界座標の `surface` から `LINEAR_TOL` 以内か。"""
     for point in _interior_points(face, 9):
         projector = GeomAPI_ProjectPointOnSurf(gp_Pnt(*point), surface)
         if projector.NbPoints() == 0 or projector.LowerDistance() > LINEAR_TOL:
