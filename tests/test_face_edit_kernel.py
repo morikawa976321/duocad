@@ -21,10 +21,12 @@ from OCP.BRepPrimAPI import (
     BRepPrimAPI_MakeRevol,
 )
 from OCP.BRepTools import BRepTools, BRepTools_ReShape
-from OCP.Geom import Geom_BezierCurve, Geom_OffsetSurface, Geom_RectangularTrimmedSurface
+from OCP.Convert import Convert_ParameterisationType
+from OCP.Geom import Geom_BezierCurve, Geom_Ellipse, Geom_OffsetSurface, Geom_RectangularTrimmedSurface, Geom_TrimmedCurve
 from OCP.GeomAbs import GeomAbs_CurveType
-from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Elips, gp_Pnt, gp_Vec
-from OCP.TColgp import TColgp_Array1OfPnt
+from OCP.GeomConvert import GeomConvert
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Elips, gp_Pnt, gp_Pnt2d, gp_Vec
+from OCP.TColgp import TColgp_Array1OfPnt, TColgp_Array1OfPnt2d
 from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
@@ -96,6 +98,43 @@ def test_moving_a_cone_is_refused_with_a_reason():
     (side,) = [f["index"] for f in query.describe_faces(cone) if f["kind"].startswith("cone")]
     with pytest.raises(ValueError, match="平面・円筒・球・トーラスと、押し出し・回転・オフセットの面だけ"):
         kernel_face_edit.offset_faces(cone, [side], 1.0)
+
+
+def _prism_of_a_shifted_b_spline_ellipse():
+    """30×15 の楕円を始点 0.05 で B-spline にして高さ 30 押し出した柱。楕円の先端(曲がりの半径 7.5)が曲率の格子の間に来る。"""
+    trimmed = Geom_TrimmedCurve(Geom_Ellipse(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 30.0, 15.0), 0.05, 0.05 + 2 * math.pi)
+    curve = GeomConvert.CurveToBSplineCurve_s(trimmed, Convert_ParameterisationType.Convert_RationalC1)
+    curve.SetPeriodic()
+    face = BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(curve).Edge()).Wire()).Face()
+    return BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, 30)).Shape()
+
+
+@pytest.mark.parametrize("distance, folds", [(-7.5075, True), (-7.4, False)])
+def test_a_fold_between_the_curvature_samples_is_still_refused(distance, folds):
+    """落ちたら、曲率の格子の間にある楕円の先端を見逃し、尖った形を成功として返す(sol の指摘)。"""
+    shape = _prism_of_a_shifted_b_spline_ellipse()
+    (side,) = [f["index"] for f in query.describe_faces(shape) if f["kind"] not in ("plane", "plane_circle")]
+    if folds:
+        with pytest.raises(ValueError, match="fold"):
+            kernel_face_edit.offset_faces(shape, [side], distance)
+    else:
+        kernel_face_edit.offset_faces(shape, [side], distance)
+
+
+def test_a_variable_radius_blend_changing_near_its_end_is_not_taken_for_a_constant_one():
+    """落ちたら、端の 3 % だけ半径 2.2 の可変半径の丸めを一定半径 2 とみなし、上面を動かすと円筒の丸めに置き換えて返す(sol の指摘)。"""
+    box = BRepPrimAPI_MakeBox(W, D, H).Shape()
+    law = [(0.0, 2.2), (0.01, 2.2), (0.02, 2.2), (0.03, 2.0), (0.04, 2.0), (0.05, 2.0), (0.06, 2.0), (0.08, 2.0), (0.1, 2.0),
+           (0.2, 2.0), (0.3, 2.0), (0.5, 2.0), (0.7, 2.0), (1.0, 2.0)]
+    radii = TColgp_Array1OfPnt2d(1, len(law))
+    for i, (u, r) in enumerate(law, 1):
+        radii.SetValue(i, gp_Pnt2d(u, r))
+    maker = BRepFilletAPI_MakeFillet(box)
+    maker.Add(radii, _edge_at(box, 0.0, H))
+    maker.Build()
+    shape = maker.Shape()
+    with pytest.raises(ValueError, match="not a constant-radius blend"):
+        kernel_face_edit.offset_faces(shape, [_face_facing(shape, (0.0, 0.0, 1.0))], 1.0)
 
 
 def test_a_blind_hole_needs_its_floor_too():
