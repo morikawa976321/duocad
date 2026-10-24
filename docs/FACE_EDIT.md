@@ -461,7 +461,7 @@ AI が「まず `SetRunParallel(True)` と使っていない体積の計算(面�
 
 `kernel.py` は 1,681 行で規律の 1,500 行を越えているので、新しいファイルに切る(依存は kernel_face_edit → kernel の一方向。`kernel_shell.py` と同じ形)。
 
-- `delete_faces(shape, face_indices) -> {"shape", "provenance", "volume_before", "volume_after"}`
+- `delete_faces(shape, face_indices) -> {"shape", "provenance"}`
   1. 選んだ面の隣に延ばせない曲面(押し出し・回転・オフセット。罠の11)があれば、その面だけ同じ形の B-spline の面に張り替える(上「押し出し面に接する丸めの削除」)。
   2. `BOPAlgo_RemoveFeatures`(`SetToFillHistory(True)`、`SetRunParallel(True)`)。エラーも**警告も**失敗。
   3. 張り替えた面の像を元の曲面へ張り直す。
