@@ -43,6 +43,10 @@ import numpy as np
 
 from .. import kernel
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 # レイを列の中心からずらす幅(要素サイズ比)。2軸で違う無理数比にして、両軸が同時に縮退する形状(対角線上の辺など)も外す。
 RAY_JITTER_X = 1.0e-4
 RAY_JITTER_Y = 0.6180339887498949e-4
@@ -288,7 +292,7 @@ def triangles_from_shape(
         raise ValueError("三角形が1枚も取れなかった")
 
     face_index = np.concatenate(face_chunks, axis=0)
-    solid_of_face = np.asarray(kernel.face_solid_indices(shape), dtype=np.int64)
+    solid_of_face = np.asarray(_brep_topology.face_solid_indices(shape), dtype=np.int64)
     solid_index = solid_of_face[face_index - 1] if np.unique(solid_of_face).size > 1 else None
     return TriangleSoup(
         positions=np.concatenate(pos_chunks, axis=0),

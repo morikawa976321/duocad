@@ -25,6 +25,10 @@ from duocad import kernel, kernel_sketch  # noqa: E402
 from duocad.net import wire  # noqa: E402
 from duocad.session import Session  # noqa: E402
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 PC_CASE = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_20251122.step")
 ROWS: list[dict] = []
 
@@ -207,15 +211,15 @@ def bench_pc_case(models_dir: Path, step: Path) -> None:
     timed("C 変化なし配信 state_meta+delta(known)", lambda: push_payload(s, known), repeat=5, bytes=fsize(push_payload(s, known)))
     timed("C state_meta() 単体", lambda: s.state_meta(), repeat=5)
     timed("C wire.encode(state_meta)", lambda: wire.encode({"type": "state", "state": s.state_meta()}), repeat=5)
-    big = max(s.document.bodies, key=lambda b: kernel.face_count(b.shape))
-    nfaces = kernel.face_count(big.shape)
-    nedges = kernel.edge_count(big.shape)
+    big = max(s.document.bodies, key=lambda b: _brep_topology.face_count(b.shape))
+    nfaces = _brep_topology.face_count(big.shape)
+    nedges = _brep_topology.edge_count(big.shape)
     print(f"  最大ボディ: {big.name} faces={nfaces} edges={nedges}")
     timed("C kernel.tessellate(最大ボディ, dev=0.26)", lambda: kernel.tessellate(big.shape, 0.26, kernel.DEFAULT_ANGULAR_DEFLECTION), repeat=3)
     face_ref = {"body": big.id, "kind": "face", "index": 1}
     timed("C modify_selection(面1) + 配信", lambda: (s.modify_selection(add=[face_ref]), push_payload(s, known)), repeat=5)
     s.clear_selection()
-    all_faces = [{"body": b.id, "kind": "face", "index": i} for b in s.document.bodies for i in range(1, kernel.face_count(b.shape) + 1)]
+    all_faces = [{"body": b.id, "kind": "face", "index": i} for b in s.document.bodies for i in range(1, _brep_topology.face_count(b.shape) + 1)]
     timed(f"C modify_selection(全面 {len(all_faces)}) + 配信", lambda: (s.modify_selection(add=all_faces), push_payload(s, known)), repeat=3)
     ROWS[-1]["bytes"] = fsize(push_payload(s, known))
     s.clear_selection()
@@ -229,7 +233,7 @@ def bench_pc_case(models_dir: Path, step: Path) -> None:
     for b in s.document.bodies:
         if b is big:
             continue
-        t0 = time.perf_counter(); s.edges(b.id); per_body.append(((time.perf_counter() - t0) * 1000.0, b.name, kernel.edge_count(b.shape)))
+        t0 = time.perf_counter(); s.edges(b.id); per_body.append(((time.perf_counter() - t0) * 1000.0, b.name, _brep_topology.edge_count(b.shape)))
     worst = max(per_body)
     record("C edges 残り26部品 初回 合計", sum(p[0] for p in per_body), worst_ms=round(worst[0], 1), worst_body=worst[1], worst_edges=worst[2])
     # ズーム: 最大ボディの20面だけ細かく、他は粗く
@@ -247,7 +251,7 @@ def bench_pc_case(models_dir: Path, step: Path) -> None:
     known = known_of(s)
     # 回転で別のボディが視界に入る(5ボディが粗→細 10面ずつ)
     for b in [b for b in s.document.bodies if b is not big][:5]:
-        focus[b.id] = list(range(1, min(10, kernel.face_count(b.shape)) + 1))
+        focus[b.id] = list(range(1, min(10, _brep_topology.face_count(b.shape)) + 1))
     changed = s.set_view_resolution(0.02, 640.0, focus)
     payload = once("C 回転 別の5ボディが視界に入る 配信", lambda: push_payload(s, known))
     ROWS[-1].update(changed=changed, bytes=fsize(payload), bodies_sent=len(payload["delta"]["bodies"]))

@@ -22,6 +22,11 @@ from build123d import CenterOf, Compound, Edge, Face
 
 from . import kernel
 
+from . import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 
 def describe_shape(shape: Any) -> dict:
     """形状の面・辺の数と種別内訳(平面/全周円筒/部分円筒/トーラス/円錐/spline)を返す。
@@ -32,39 +37,39 @@ def describe_shape(shape: Any) -> dict:
     wrapped = _wrap(shape)
     faces = wrapped.faces()
 
-    faces_by_type = {kind: 0 for kind in kernel.FACE_KINDS}
+    faces_by_type = {kind: 0 for kind in _brep_geometry.FACE_KINDS}
     for face in faces:
-        faces_by_type[kernel.classify_face(face.wrapped)] += 1
+        faces_by_type[_brep_geometry.classify_face(face.wrapped)] += 1
 
     return {
         "face_count": len(faces),
-        "edge_count": kernel.edge_count(_unwrap(shape)),
+        "edge_count": _brep_topology.edge_count(_unwrap(shape)),
         "faces_by_type": faces_by_type,
     }
 
 
 def volume(shape: Any) -> float:
     """形状の体積(mm^3)。"""
-    return kernel.volume(_unwrap(shape))
+    return _brep_geometry.volume(_unwrap(shape))
 
 
 def describe_edges(shape: Any) -> list:
     """辺を1始まりの添字つきで列挙する(フィレット・面取りの辺はここから選ぶ)。
 
-    **添字と種別は `kernel` 側から取る**。build123d の `.edges()` の順序が `kernel._edge_map`
+    **添字と種別は `kernel` 側から取る**。build123d の `.edges()` の順序が `brep_topology._edge_map`
     と一致する保証は無く、ずれると**選んだ辺と違う辺が丸まる**ので、build123d は長さと端点の
     計測にだけ使う。
 
     `start` / `end` は辺の端点(閉じた辺=円などでは同じ点になる)。
     """
     raw = _unwrap(shape)
-    return [_describe_edge(kernel.edge_of(raw, index), index) for index in range(1, kernel.edge_count(raw) + 1)]
+    return [_describe_edge(_brep_topology.edge_of(raw, index), index) for index in range(1, _brep_topology.edge_count(raw) + 1)]
 
 
 def describe_edge(shape: Any, edge_index: int) -> dict:
     """`describe_edges` の1件を**辺1本ぶんだけ**測る(選択1件の表示で全辺を測らない)。範囲外は ValueError。"""
     index = int(edge_index)
-    return _describe_edge(kernel.edge_of(_unwrap(shape), index), index)
+    return _describe_edge(_brep_topology.edge_of(_unwrap(shape), index), index)
 
 
 def _describe_edge(edge: Any, index: int) -> dict:
@@ -73,8 +78,8 @@ def _describe_edge(edge: Any, index: int) -> dict:
     end = wrapped.end_point()
     return {
         "index": index,
-        "kind": kernel.classify_edge(edge),
-        "length": kernel.edge_length(edge),
+        "kind": _brep_geometry.classify_edge(edge),
+        "length": _brep_geometry.edge_length(edge),
         "start": [float(start.X), float(start.Y), float(start.Z)],
         "end": [float(end.X), float(end.Y), float(end.Z)],
     }
@@ -89,10 +94,10 @@ def face_centroid(shape: Any, face_index: int) -> list:
     12.9mm 離れる。面の上に material が乗る場所を知りたい側はこちら
     (`optimize_run._check_anchor_centroids`)。平面では一致する。
 
-    添字は1始まり。範囲外は ValueError(`kernel.face_of` が投げる)。
+    添字は1始まり。範囲外は ValueError(`brep_topology.face_of` が投げる)。
     """
     index = int(face_index)
-    point = Face(kernel.face_of(_unwrap(shape), index)).center(CenterOf.MASS)
+    point = Face(_brep_topology.face_of(_unwrap(shape), index)).center(CenterOf.MASS)
     return [float(point.X), float(point.Y), float(point.Z)]
 
 
@@ -107,11 +112,11 @@ def face_fingerprint(shape: Any, face_index: int) -> dict:
     `describe_faces` の1件と同じ値を**面1枚ぶんだけ**測る(2835面のボディで全面を測らない。
     `duocad/optimize.py`)。`kind` は含めない。
 
-    添字は1始まり。範囲外は ValueError(`kernel.face_of` が投げる。ここで数え直さない ——
+    添字は1始まり。範囲外は ValueError(`brep_topology.face_of` が投げる。ここで数え直さない ——
     `_face_map` の全走査が2回になる)。
     """
     index = int(face_index)
-    wrapped = Face(kernel.face_of(_unwrap(shape), index))
+    wrapped = Face(_brep_topology.face_of(_unwrap(shape), index))
     normal = wrapped.normal_at()
     center = wrapped.center()
     return {
@@ -133,13 +138,13 @@ def describe_faces(shape: Any) -> list:
     曲面の `normal` / `center` は面の中央(UV範囲の中点)での値でしかない。
     """
     raw = _unwrap(shape)
-    return [_describe_face(kernel.face_of(raw, index), index) for index in range(1, kernel.face_count(raw) + 1)]
+    return [_describe_face(_brep_topology.face_of(raw, index), index) for index in range(1, _brep_topology.face_count(raw) + 1)]
 
 
 def describe_face(shape: Any, face_index: int) -> dict:
     """`describe_faces` の1件を**面1枚ぶんだけ**測る(選択1件の表示で全面を測らない)。範囲外は ValueError。"""
     index = int(face_index)
-    return _describe_face(kernel.face_of(_unwrap(shape), index), index)
+    return _describe_face(_brep_topology.face_of(_unwrap(shape), index), index)
 
 
 def _describe_face(face: Any, index: int) -> dict:
@@ -148,7 +153,7 @@ def _describe_face(face: Any, index: int) -> dict:
     center = wrapped.center()
     return {
         "index": index,
-        "kind": kernel.classify_face(face),
+        "kind": _brep_geometry.classify_face(face),
         "area": float(wrapped.area),
         "normal": [float(normal.X), float(normal.Y), float(normal.Z)],
         "center": [float(center.X), float(center.Y), float(center.Z)],
@@ -158,7 +163,7 @@ def _describe_face(face: Any, index: int) -> dict:
 def describe_vertices(shape: Any) -> list:
     """頂点を1始まりの添字つきで列挙する(`[{"index": int, "point": [x,y,z]}, ...]`)。
 
-    **添字は `kernel.count_subshapes(shape, "vertex")` の体系**(`selection._select_shape`
+    **添字は `brep_topology.count_subshapes(shape, "vertex")` の体系**(`selection._select_shape`
     と同じ)。build123d の `.vertices()` の順序とは一致する保証が無いので、座標も順序も
     `kernel.vertex_positions` から取る。
     """
@@ -173,7 +178,7 @@ def edges_of_face(shape: Any, face_index: int) -> list:
     `fillet(edges=[...])` の添字と一致する。
     """
     raw = _unwrap(shape)
-    face = Face(kernel.face_of(raw, face_index))
+    face = Face(_brep_topology.face_of(raw, face_index))
     indexes = {
         kernel.edge_index_of(raw, edge.wrapped) for edge in face.outer_wire().edges()
     }

@@ -14,10 +14,14 @@ from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopoDS import TopoDS
 
 import duocad.verbs as verbs
-from duocad import kernel, kernel_face_edit, kernel_worker, query, worker_process
+from duocad import kernel_face_edit, kernel_worker, query, worker_process
 from duocad.document import Body, Document
-from duocad.mesh_geometry import indexed_map
+
 from document_support import replay_through_json
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
 
 BOX_VOLUME = 40.0 * 30.0 * 20.0
 
@@ -26,7 +30,7 @@ def _filleted_box(doc: Document) -> tuple:
     """40×30×20 の箱の1辺を半径5で丸めたボディと、丸めの面の添字。"""
     box = BRepPrimAPI_MakeBox(40.0, 30.0, 20.0).Shape()
     maker = BRepFilletAPI_MakeFillet(box)
-    maker.Add(5.0, TopoDS.Edge_s(indexed_map(box, TopAbs_ShapeEnum.TopAbs_EDGE).FindKey(1)))
+    maker.Add(5.0, TopoDS.Edge_s(_brep_topology.indexed_map(box, TopAbs_ShapeEnum.TopAbs_EDGE).FindKey(1)))
     maker.Build()
     doc.add_body(Body(id="rounded", name="rounded", kind="solid", shape=maker.Shape()))
     (rounded,) = [f["index"] for f in query.describe_faces(maker.Shape()) if f["kind"].startswith("cylinder")]
@@ -70,7 +74,7 @@ def test_a_worker_that_was_killed_between_calls_is_restarted():
     kernel_worker._WORKER._process.kill()
     kernel_worker._WORKER._process.wait()
     verbs.delete_faces(doc, [rounded], body_id=body_id)
-    assert kernel.face_count(doc.get_body(body_id).shape) == 6
+    assert _brep_topology.face_count(doc.get_body(body_id).shape) == 6
 
 
 def test_a_worker_that_dies_during_a_call_is_refused_and_the_next_call_works(tmp_path, monkeypatch):

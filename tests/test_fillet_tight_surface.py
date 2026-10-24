@@ -29,6 +29,7 @@ from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Dir, gp_Pnt, gp_Pnt2d, gp_Trsf, gp_Vec
 
 from duocad import kernel, kernel_tight, kernel_tight_surface
+from duocad import brep_geometry as _brep_geometry, brep_topology as _brep_topology
 from duocad import query
 from duocad.document import Document
 from duocad.region import region_ref
@@ -63,21 +64,21 @@ def _taper_document(angle, height=5, rotation=0):
 
 
 def _outline(shape, curved=False):
-    candidates = [face for face in kernel_tight._faces(shape)
+    candidates = [face for face in _brep_topology._tight_faces(shape)
                   if (BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() in
                       (GeomAbs_SurfaceType.GeomAbs_Sphere, GeomAbs_SurfaceType.GeomAbs_BSplineSurface,
                        GeomAbs_SurfaceType.GeomAbs_SurfaceOfRevolution)) == curved]
     spheres = [face for face in candidates if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere]
     top = ((spheres or candidates)[0] if curved else max(
         (face for face in candidates if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
-        key=lambda face: kernel_tight._a_point_on(face).Z()))
+        key=lambda face: _brep_geometry._tight_a_point_on(face).Z()))
     tops = [face for face in candidates
             if face.IsSame(top) or BRep_Tool.Surface_s(TopoDS.Face_s(face)) == BRep_Tool.Surface_s(TopoDS.Face_s(top))]
-    boundary = [edge for face in tops for edge in kernel_tight._edges(face)
+    boundary = [edge for face in tops for edge in _brep_topology._tight_edges(face)
                 if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(face)) and not BRep_Tool.Degenerated_s(edge)
-                and sum(any(edge.IsSame(other) for other in kernel_tight._edges(owner)) for owner in tops) == 1]
-    return [i for i in range(1, kernel.edge_count(shape) + 1)
-            if any(kernel.edge_of(shape, i).IsSame(edge) for edge in boundary)]
+                and sum(any(edge.IsSame(other) for other in _brep_topology._tight_edges(owner)) for owner in tops) == 1]
+    return [i for i in range(1, _brep_topology.edge_count(shape) + 1)
+            if any(_brep_topology.edge_of(shape, i).IsSame(edge) for edge in boundary)]
 
 
 def _check_provenance(before, rounded):
@@ -86,8 +87,8 @@ def _check_provenance(before, rounded):
     assert len(provenance["new_faces"]) == 4
     for old, successors in provenance["face_map"].items():
         assert len(successors) == 1
-        assert BRepAdaptor_Surface(TopoDS.Face_s(kernel.face_of(before, int(old)))).GetType() == BRepAdaptor_Surface(
-            TopoDS.Face_s(kernel.face_of(rounded["shape"], successors[0]))).GetType()
+        assert BRepAdaptor_Surface(TopoDS.Face_s(_brep_topology.face_of(before, int(old)))).GetType() == BRepAdaptor_Surface(
+            TopoDS.Face_s(_brep_topology.face_of(rounded["shape"], successors[0]))).GetType()
 
 
 def _spherical_lens_area(radius, nodes=256):
@@ -139,10 +140,10 @@ def test_dome_has_a_valid_crown_and_an_independently_calculated_radius(radius, r
     shape, rounded = rounded_sphere('ellipse', radius)
     result = rounded["shape"]
     assert BRepCheck_Analyzer(result).IsValid()
-    assert len(kernel.split_solids(result)) == 1
-    assert kernel.face_count(result) == 7
+    assert len(_brep_topology.split_solids(result)) == 1
+    assert _brep_topology.face_count(result) == 7
     _check_provenance(shape, rounded)
-    lens = next(face for face in kernel_tight._faces(result)
+    lens = next(face for face in _brep_topology._tight_faces(result)
                 if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere)
     assert _spherical_lens_area(radius, 128) == pytest.approx(_spherical_lens_area(radius), abs=1e-9)
     assert _precise_area(lens) == pytest.approx(_spherical_lens_area(radius), abs=2e-6)
@@ -171,7 +172,7 @@ def test_tapered_wall_has_the_independently_calculated_non_quarter_circle(angle,
     shape, rounded = rounded_taper(angle, radius)
     result = rounded["shape"]
     assert BRepCheck_Analyzer(result).IsValid()
-    assert len(kernel.split_solids(result)) == 1
+    assert len(_brep_topology.split_solids(result)) == 1
     theta = math.radians(angle)
     cy = 2 + 5 * math.tan(theta) - radius * (1 / math.cos(theta) + math.tan(theta))
     cz = 5 - radius
@@ -187,9 +188,9 @@ def test_tapered_lens_area_matches_the_independent_parallel_ellipse_integral(ang
     """実装の接点や道を使わず、底の楕円と傾斜角から上面のレンズ面積を求める。"""
     _, rounded = rounded_taper(angle, radius)
     result = rounded["shape"]
-    lens = max((face for face in kernel_tight._faces(result)
+    lens = max((face for face in _brep_topology._tight_faces(result)
                 if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
-               key=lambda face: kernel_tight._a_point_on(face).Z())
+               key=lambda face: _brep_geometry._tight_a_point_on(face).Z())
     theta = math.radians(angle)
     offset = radius / math.cos(theta) - (5 - radius) * math.tan(theta)
     assert _precise_area(lens) == pytest.approx(_lens_area(6, 2, offset), abs=1e-4)
@@ -217,7 +218,7 @@ def test_contacts_reaching_the_bottom_are_refused_with_a_reason():
 def test_a_result_removing_more_than_the_band_above_the_cut_is_refused(monkeypatch):
     """有効な小立体でも、切断面より上の体積を超えて削る結果は返さない。"""
     shape = _dome()
-    top = next(face for face in kernel_tight._faces(shape)
+    top = next(face for face in _brep_topology._tight_faces(shape)
                if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere)
     tiny = _elliptic_post(1, 0.5, 0.1)
     monkeypatch.setattr(kernel_tight, "_closed_solid", lambda *args: (tiny, None))
@@ -251,12 +252,12 @@ def test_line_and_arc_walls_are_accepted_for_a_flat_or_spherical_top(curved, rou
     else:
         rounded = kernel.fillet_edges(shape, {edge: 1 for edge in edges})
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
-    assert len(kernel.split_solids(rounded["shape"])) == 1
+    assert len(_brep_topology.split_solids(rounded["shape"])) == 1
     assert rounded["provenance"]["deleted"] == []
     if not curved:
-        direct = kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), {edge: 1 for edge in edges})
+        direct = kernel_tight.round_tight_loop(shape, _brep_topology._edge_map(shape), {edge: 1 for edge in edges})
         assert BRepCheck_Analyzer(direct.shape).IsValid()
-        assert kernel.face_count(direct.shape) == 8
+        assert _brep_topology.face_count(direct.shape) == 8
 
 
 def _rotate_z(shape, degrees):
@@ -279,11 +280,11 @@ def _round_and_measure_lens(shape, radius, curved, record_property, rounded=None
         record_property("fillet_seconds", time.perf_counter() - start)
     result = rounded["shape"]
     assert BRepCheck_Analyzer(result).IsValid()
-    assert len(kernel.split_solids(result)) == 1
+    assert len(_brep_topology.split_solids(result)) == 1
     assert BRepCheck_Analyzer(shape).IsValid()
     assert rounded["provenance"]["deleted"] == []
     assert all(rounded["provenance"]["face_map"].values())
-    faces = kernel_tight._faces(result)
+    faces = _brep_topology._tight_faces(result)
     if curved:
         lenses = [face for face in faces
                   if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere]
@@ -292,7 +293,7 @@ def _round_and_measure_lens(shape, radius, curved, record_property, rounded=None
     else:
         lens = max((face for face in faces
                     if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
-                   key=lambda face: kernel_tight._a_point_on(face).Z())
+                   key=lambda face: _brep_geometry._tight_a_point_on(face).Z())
     area = _precise_area(lens)
     record_property("lens_area", area)
     return area
@@ -339,9 +340,9 @@ def tapered_seam_reference(request, rounded_taper):
     angle = request.param
     radius = 1.0 if angle == -5 else 2.2
     _, rounded = rounded_taper(angle, radius)
-    area = _precise_area(max((f for f in kernel_tight._faces(rounded['shape'])
+    area = _precise_area(max((f for f in _brep_topology._tight_faces(rounded['shape'])
                              if BRepAdaptor_Surface(TopoDS.Face_s(f)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane),
-                            key=lambda f: kernel_tight._a_point_on(f).Z()))
+                            key=lambda f: _brep_geometry._tight_a_point_on(f).Z()))
     return angle, radius, area
 
 
@@ -382,7 +383,7 @@ def test_revolved_ellipsoid_contacts_cross_the_seam(degrees):
     assert BRepCheck_Analyzer(shape).IsValid()
     rounded = kernel.fillet_edges(shape, {edge: 1.5 for edge in _outline(shape, True)})
     assert BRepCheck_Analyzer(rounded['shape']).IsValid()
-    assert len(kernel.split_solids(rounded['shape'])) == 1
+    assert len(_brep_topology.split_solids(rounded['shape'])) == 1
     assert all(rounded['provenance']['face_map'].values())
 
 
@@ -423,11 +424,11 @@ def test_a_seam_inside_the_lens_keeps_one_face_and_one_successor(kind, direction
     assert len(lenses) == 1
     assert BRepCheck_Analyzer(shape).IsValid()
     assert BRepCheck_Analyzer(rounded['shape']).IsValid()
-    assert len(kernel.split_solids(rounded['shape'])) == 1
+    assert len(_brep_topology.split_solids(rounded['shape'])) == 1
     provenance = rounded['provenance']
     assert provenance['deleted'] == []
     assert all(len(successors) == 1 for successors in provenance['face_map'].values())
-    final_lenses = [face for face in kernel_tight._faces(rounded['shape'])
+    final_lenses = [face for face in _brep_topology._tight_faces(rounded['shape'])
                     if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere]
     assert len(final_lenses) == 1
     expected = _spherical_lens_area(radius) if kind == 'ellipse' else 18.147750439
@@ -445,21 +446,21 @@ def test_split_spherical_top_faces_share_the_lens_successor(direction, tilt, deg
     axes = gp_Ax2(gp_Pnt(0, 0, -20), pole)
     axes.Rotate(gp_Ax1(axes.Location(), axes.Direction()), math.radians(degrees))
     shape = BRepAlgoAPI_Common(_elliptic_post(6, 2, 8), BRepPrimAPI_MakeSphere(axes, 26).Shape()).Shape()
-    tops = [index for index in range(1, kernel.face_count(shape) + 1)
-            if BRepAdaptor_Surface(TopoDS.Face_s(kernel.face_of(shape, index))).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere]
+    tops = [index for index in range(1, _brep_topology.face_count(shape) + 1)
+            if BRepAdaptor_Surface(TopoDS.Face_s(_brep_topology.face_of(shape, index))).GetType() == GeomAbs_SurfaceType.GeomAbs_Sphere]
     assert len(tops) == 2
-    before_volume = kernel.volume(shape)
+    before_volume = _brep_geometry.volume(shape)
     rounded = kernel.fillet_edges(shape, {edge: 1.5 for edge in _outline(shape, True)})
     _check_provenance(shape, rounded)
     successors = [rounded['provenance']['face_map'][str(index)] for index in tops]
     assert successors[0] == successors[1]
-    lens = kernel.face_of(rounded['shape'], successors[0][0])
+    lens = _brep_topology.face_of(rounded['shape'], successors[0][0])
     assert _precise_area(lens) == pytest.approx(_spherical_lens_area(1.5), abs=2e-6)
     assert BRepCheck_Analyzer(rounded['shape']).IsValid()
-    assert len(kernel.split_solids(rounded['shape'])) == 1
+    assert len(_brep_topology.split_solids(rounded['shape'])) == 1
     assert BRepCheck_Analyzer(shape).IsValid()
-    assert kernel.face_count(shape) == 4
-    assert kernel.volume(shape) == pytest.approx(before_volume, abs=1e-10)
+    assert _brep_topology.face_count(shape) == 4
+    assert _brep_geometry.volume(shape) == pytest.approx(before_volume, abs=1e-10)
 
 
 @pytest.mark.parametrize('delta', [0, -1e-7, 1e-7, -1e-4, 1e-4])
@@ -468,11 +469,11 @@ def test_a_pole_near_the_contact_has_an_explicit_reason(delta):
     edges = {edge: 1.5 for edge in _outline(shape, True)}
     if abs(delta) < 1e-6:
         with pytest.raises(kernel_tight.Declined, match='top surface parameter pole is near a contact curve'):
-            kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), edges)
+            kernel_tight.round_tight_loop(shape, _brep_topology._edge_map(shape), edges)
     else:
         rounded = kernel.fillet_edges(shape, edges)
         assert BRepCheck_Analyzer(rounded['shape']).IsValid()
-        assert len(kernel.split_solids(rounded['shape'])) == 1
+        assert len(_brep_topology.split_solids(rounded['shape'])) == 1
 
 
 def test_contact_state_checks_every_period_in_a_helical_band():
@@ -525,7 +526,7 @@ def test_small_radii_do_not_call_the_extended_builder(kind, monkeypatch):
     edges = _outline(shape, kind == "dome")
     native = BRepFilletAPI_MakeFillet(shape)
     for edge in edges:
-        native.Add(0.2, TopoDS.Edge_s(kernel.edge_of(shape, edge)))
+        native.Add(0.2, TopoDS.Edge_s(_brep_topology.edge_of(shape, edge)))
     native.Build()
     assert native.IsDone()
 
@@ -534,8 +535,8 @@ def test_small_radii_do_not_call_the_extended_builder(kind, monkeypatch):
 
     monkeypatch.setattr(kernel_tight, "round_tight_loop", unexpected)
     rounded = kernel.fillet_edges(shape, {edge: 0.2 for edge in edges})
-    assert rounded["volume_after"] == pytest.approx(kernel.volume(native.Shape()), rel=1e-12)
-    assert kernel.face_count(rounded["shape"]) == kernel.face_count(native.Shape())
+    assert rounded["volume_after"] == pytest.approx(_brep_geometry.volume(native.Shape()), rel=1e-12)
+    assert _brep_topology.face_count(rounded["shape"]) == _brep_topology.face_count(native.Shape())
 
 
 @pytest.mark.parametrize("kind", ["dome", -5, 5])
@@ -547,20 +548,20 @@ def test_extended_fillet_is_logged_undone_redone_and_reopened(kind):
     else:
         doc, body = _taper_document(kind)
     shape = doc.get_body(body).shape
-    before = kernel.volume(shape)
+    before = _brep_geometry.volume(shape)
     fillet(doc, _outline(shape, kind == "dome"), 1.0 if kind != 5 else 2.2, body_id=body)
     after = doc.get_body(body).shape
-    volume = kernel.volume(after)
-    faces = kernel.face_count(after)
+    volume = _brep_geometry.volume(after)
+    faces = _brep_topology.face_count(after)
     doc.log.undo(doc)
-    assert kernel.volume(doc.get_body(body).shape) == pytest.approx(before)
+    assert _brep_geometry.volume(doc.get_body(body).shape) == pytest.approx(before)
     doc.log.redo(doc)
-    assert kernel.volume(doc.get_body(body).shape) == pytest.approx(volume)
+    assert _brep_geometry.volume(doc.get_body(body).shape) == pytest.approx(volume)
     reopened = replay_through_json(doc)
     restored = reopened.get_body(body).shape
     assert BRepCheck_Analyzer(restored).IsValid()
-    assert kernel.volume(restored) == pytest.approx(volume, rel=1e-10)
-    assert kernel.face_count(restored) == faces
+    assert _brep_geometry.volume(restored) == pytest.approx(volume, rel=1e-10)
+    assert _brep_topology.face_count(restored) == faces
 
 
 @pytest.mark.parametrize("motion", ["rotate", "invert", "mirror", "located"])
@@ -580,13 +581,13 @@ def test_extended_fillet_does_not_depend_on_world_z(kind, motion):
         transform.SetTranslationPart(gp_Vec(11, -4, 9))
         location = TopLoc_Location(transform)
         moved = shape.Moved(location)
-        moved_edges = [kernel.edge_of(shape, edge).Moved(location) for edge in edges]
+        moved_edges = [_brep_topology.edge_of(shape, edge).Moved(location) for edge in edges]
     else:
         mover = BRepBuilderAPI_Transform(shape, transform, True)
         moved = mover.Shape()
-        moved_edges = [mover.ModifiedShape(kernel.edge_of(shape, edge)) for edge in edges]
-    selected = [i for i in range(1, kernel.edge_count(moved) + 1)
-                if any(kernel.edge_of(moved, i).IsSame(edge) for edge in moved_edges)]
+        moved_edges = [mover.ModifiedShape(_brep_topology.edge_of(shape, edge)) for edge in edges]
+    selected = [i for i in range(1, _brep_topology.edge_count(moved) + 1)
+                if any(_brep_topology.edge_of(moved, i).IsSame(edge) for edge in moved_edges)]
     radius = 2.2 if kind == 5 else 1.0
     rounded = kernel.fillet_edges(moved, {edge: radius for edge in selected})
     assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
@@ -662,7 +663,7 @@ def test_a_cavity_is_preserved_below_the_cut_and_refused_above_it(height, rounde
         assert BRepCheck_Analyzer(rounded["shape"]).IsValid()
         assert _state(rounded["shape"], 0, 0, height) == TopAbs_OUT
         _, plain = rounded_sphere('ellipse', 1.0)
-        assert rounded["volume_after"] == pytest.approx(plain["volume_after"] - kernel.volume(hole), abs=1e-8)
+        assert rounded["volume_after"] == pytest.approx(plain["volume_after"] - _brep_geometry.volume(hole), abs=1e-8)
         assert rounded["provenance"]["deleted"] == []
         assert all(rounded["provenance"]["face_map"].values())
 
@@ -678,7 +679,7 @@ def test_a_projected_crossing_with_different_spatial_centers_is_refused(monkeypa
     monkeypatch.setattr(kernel_tight_surface._Contacts, "center", lifted)
     shape = _dome()
     with pytest.raises(kernel_tight.Declined, match="projected crossing has distinct spatial centers"):
-        kernel_tight.round_tight_loop(shape, kernel._edge_map(shape), {edge: 1.0 for edge in _outline(shape, True)})
+        kernel_tight.round_tight_loop(shape, _brep_topology._edge_map(shape), {edge: 1.0 for edge in _outline(shape, True)})
 
 
 def test_a_tapered_outline_is_an_offset_curve_and_not_an_ellipse():
@@ -687,7 +688,7 @@ def test_a_tapered_outline_is_an_offset_curve_and_not_an_ellipse():
     shape = doc.get_body(body).shape
     from OCP.BRepAdaptor import BRepAdaptor_Curve
 
-    edge = BRepAdaptor_Curve(TopoDS.Edge_s(kernel.edge_of(shape, _outline(shape)[0])))
+    edge = BRepAdaptor_Curve(TopoDS.Edge_s(_brep_topology.edge_of(shape, _outline(shape)[0])))
     point, first, second = gp_Pnt(), gp_Vec(), gp_Vec()
     edge.D2(edge.FirstParameter(), point, first, second)
     curvature_radius = first.Magnitude() ** 3 / first.Crossed(second).Magnitude()

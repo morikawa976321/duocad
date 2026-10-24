@@ -12,6 +12,10 @@ from duocad.net.ws import Server, _Inbox
 from duocad.server import Session
 from session_support import FakeConnection, box as _box, select as _select
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 RADIUS = 2.0
 
 
@@ -71,7 +75,7 @@ def test_the_commit_reuses_what_the_worker_computed(session: Session, monkeypatc
     job.adopt()
     session.fillet(RADIUS)
     assert calls == ["fillet"]
-    assert kernel.volume(body.shape) == pytest.approx(preview["bodies"][0]["volume"])
+    assert _brep_geometry.volume(body.shape) == pytest.approx(preview["bodies"][0]["volume"])
 
 
 def _slow_blends(monkeypatch, seconds: float) -> None:

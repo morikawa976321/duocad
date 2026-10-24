@@ -5,8 +5,13 @@ import math
 
 import pytest
 
-from duocad import kernel, kernel_interference as ki
+from duocad import kernel_interference as ki
 from interference_support import box, cylinder, nested_boxes, plate_with_hole, rotated
+
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
 
 
 def relation(a, b):
@@ -59,12 +64,12 @@ def test_the_relation_does_not_depend_on_the_argument_order():
 
 def test_the_inputs_are_not_modified_by_the_fuse():
     from OCP.BRep import BRep_Tool
-    from duocad.mesh_geometry import subshapes
+
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
 
     def tolerances(shape):
         return [
-            (BRep_Tool.MaxTolerance_s(shape, kind), len(subshapes(shape, kind)))
+            (BRep_Tool.MaxTolerance_s(shape, kind), len(_brep_topology.subshapes(shape, kind)))
             for kind in (TopAbs_VERTEX, TopAbs_EDGE, TopAbs_FACE)
         ]
 
@@ -145,17 +150,17 @@ def test_the_concentric_core_with_a_gap_that_measures_whole_is_not_flagged():
 
 
 def test_loose_bbox_contains_the_shape_and_box_gap_is_zero_when_they_overlap():
-    box_a = ki.loose_bbox(A)
+    box_a = _brep_geometry._interference_loose_bbox(A)
     assert all(lo <= 0 and hi >= 10 for lo, hi in zip(*box_a))
-    assert ki.box_gap(box_a, ki.loose_bbox(box(5, 0, 0, 10, 10, 10))) == 0.0
-    assert ki.box_gap(box_a, ki.loose_bbox(box(20, 0, 0, 1, 1, 1))) == pytest.approx(10.0, abs=1e-6)
+    assert ki.box_gap(box_a, _brep_geometry._interference_loose_bbox(box(5, 0, 0, 10, 10, 10))) == 0.0
+    assert ki.box_gap(box_a, _brep_geometry._interference_loose_bbox(box(20, 0, 0, 1, 1, 1))) == pytest.approx(10.0, abs=1e-6)
 
 
 def test_the_brep_round_trip_without_the_validity_check_keeps_the_volume():
     from duocad.kernel_brep import encode_brep
 
     restored = ki.decode_brep_unchecked(encode_brep(A))
-    assert kernel.volume(restored) == pytest.approx(1000.0)
+    assert _brep_geometry.volume(restored) == pytest.approx(1000.0)
 
 
 def test_shared_pieces_with_the_same_hash_are_neither_dropped_nor_swapped():
@@ -183,14 +188,13 @@ def test_the_render_triangles_do_not_touch_the_inputs():
     from OCP.TopLoc import TopLoc_Location
     from OCP.TopoDS import TopoDS
 
-    from duocad.mesh_geometry import subshapes
 
     first, second = box(0, 0, 0, 10, 10, 10), box(2, 2, 2, 6, 6, 6)  # 内側の箱の面がそのまま重なりの立体の面になる
     assert ki.pair_relation(first, second, deviation=0.1)["kind"] == "overlap"
     meshed = [
         face
         for shape in (first, second)
-        for face in subshapes(shape, TopAbs_FACE)
+        for face in _brep_topology.subshapes(shape, TopAbs_FACE)
         if BRep_Tool.Triangulation_s(TopoDS.Face_s(face), TopLoc_Location()) is not None
     ]
     assert meshed == []

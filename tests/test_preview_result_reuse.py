@@ -7,6 +7,10 @@ from duocad import kernel
 from duocad.server import Session
 from session_support import box as _box, select as _select
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 RADIUS = 2.0
 
 
@@ -33,7 +37,7 @@ def test_commit_and_redo_reuse_the_previewed_fillet(session: Session, blends) ->
     session.fillet(RADIUS)
     assert blends == ["fillet"], "確定がプレビューの結果を使わなかった"
     committed = body.shape
-    assert preview["bodies"][0]["volume"] == pytest.approx(kernel.volume(committed))
+    assert preview["bodies"][0]["volume"] == pytest.approx(_brep_geometry.volume(committed))
     session.undo()
     session.redo()
     assert blends == ["fillet"], "redo が同じ形へ同じフィレットを掛け直した"

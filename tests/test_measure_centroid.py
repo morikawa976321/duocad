@@ -30,13 +30,13 @@ def test_an_oblique_rational_bspline_ellipse_prism_keeps_its_centroid():
     from OCP.Geom import Geom_Ellipse
     from OCP.GeomConvert import GeomConvert
     from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Vec
-    from duocad import kernel
+    from duocad import brep_geometry as _brep_geometry
 
     ellipse = Geom_Ellipse(gp_Ax2(gp_Pnt(), gp_Dir(0, 0, 1)), 6, 2)
     curve = GeomConvert.CurveToBSplineCurve_s(ellipse)
     face = BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(curve).Edge()).Wire()).Face()
     shape = BRepPrimAPI_MakePrism(face, gp_Vec(5, 0, 5)).Shape()
-    assert kernel.centroid(shape) == pytest.approx([2.5, 0, 2.5], abs=0.0042)
+    assert _brep_geometry.centroid(shape) == pytest.approx([2.5, 0, 2.5], abs=0.0042)
 
 #: 原点まわりの単位四面体(巻きは外向き)。体積重心は (1/4, 1/4, 1/4)。
 TETRA_POSITIONS = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]

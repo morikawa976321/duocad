@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import bisect
 import math
-from typing import Dict, List, NamedTuple, Sequence, Tuple
+from typing import Dict, List, NamedTuple, Tuple
 
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_CompCurve, BRepAdaptor_Curve, BRepAdaptor_Curve2d, BRepAdaptor_Surface
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Copy,
@@ -32,13 +32,11 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeVertex,
     BRepBuilderAPI_MakeWire,
 )
-from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape, BRepExtrema_SupportType
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepLProp import BRepLProp_SLProps
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipe, BRepOffsetAPI_MakeThickSolid
 from OCP.BRepPrimAPI import (
     BRepPrimAPI_MakeBox,
@@ -61,14 +59,20 @@ from OCP.GeomFill import GeomFill_Trihedron
 from OCP.GProp import GProp_GProps
 from OCP.TColStd import TColStd_HArray1OfBoolean
 from OCP.TColgp import TColgp_Array1OfVec, TColgp_HArray1OfPnt
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_ON, TopAbs_OUT, TopAbs_REVERSED, TopAbs_SOLID, TopAbs_VERTEX, TopAbs_WIRE
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_IN, TopAbs_ON, TopAbs_OUT, TopAbs_REVERSED, TopAbs_VERTEX, TopAbs_WIRE
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pln, gp_Pnt, gp_Pnt2d, gp_Vec, gp_Vec2d
 
 from .kernel_chains import BlendChains
-from .mesh_geometry import indexed_map
+
+from . import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_operations as _brep_operations,
+    brep_topology as _brep_topology,
+)
 
 
 class Unsupported(ValueError):
@@ -135,7 +139,7 @@ def absorb(shape: TopoDS_Shape, edge_map, radii: Dict[int, float]) -> Absorbed:
 
 def _refuse_corners(shape: TopoDS_Shape, edge_map, chains: set) -> None:
     """別々の連なりが頂点を共有していれば断る(角の頂点の丸めはしない)。"""
-    vertex_map = indexed_map(shape, TopAbs_VERTEX)
+    vertex_map = _brep_topology.indexed_map(shape, TopAbs_VERTEX)
     owner: Dict[int, Tuple[int, ...]] = {}
     for chain in chains:
         for index in chain:
@@ -219,7 +223,7 @@ def _coplanar_region(face: TopoDS_Shape, edge_faces) -> list:
     region, queue = [face], [face]
     while queue:
         current = queue.pop()
-        edges = indexed_map(current, TopAbs_EDGE)
+        edges = _brep_topology.indexed_map(current, TopAbs_EDGE)
         for number in range(1, edges.Extent() + 1):
             edge = edges.FindKey(number)
             if not edge_faces.Contains(edge):
@@ -374,10 +378,10 @@ def _rolled_over_rims(wedge, edges: list, faces, heights, radius: float, columns
         # 縦の面が残り、肉が 0.8% 欠けた。Codex レビューの反例)。断面で肉は「辺の点・縁の点・相手の面の接点」の三角形の中に
         # しかないので、接点が縁の外にある範囲(`overhangs`)の横だけを戻す。接点が縁の内側の所まで戻すと、縁の外の空気を
         # 肉にした(板の縁にまたがって立つ柱の根元。Codex レビューの反例)。
-        size = 10.0 * _diagonal(wedge)
+        size = 10.0 * _brep_geometry._overflow_diagonal(wedge)
         for rim_state, inside, outside in ((2, first_column, second_column), (1, second_column, first_column)):
             only = _boolean("cut", _boolean("common", wedge, inside).Shape(), outside).Shape()
-            parts = [part for part in _solids(only) if _touches_inside_of(part, edges)]
+            parts = [part for part in _brep_topology._overflow_solids(only) if _touches_inside_of(part, edges)]
             overhanging = [path for path in paths if path.overhangs[rim_state]]
             if overhanging:
                 parts = parts + [part for part in _alongside(only, overhanging, rim_state, size)
@@ -420,7 +424,7 @@ def _alongside(region: TopoDS_Shape, paths: list, rim_state: int, size: float) -
             raise Unsupported("could not cut the region at the ends of the edges")
         region = splitter.Shape()
     kept = []
-    for part in _solids(region):
+    for part in _brep_topology._overflow_solids(region):
         props = GProp_GProps()
         BRepGProp.VolumeProperties_s(part, props)
         centre = BRepBuilderAPI_MakeVertex(props.CentreOfMass()).Vertex()
@@ -429,13 +433,6 @@ def _alongside(region: TopoDS_Shape, paths: list, rim_state: int, size: float) -
         if any(low < at < high for low, high in nearest.overhangs[rim_state]):
             kept.append(part)
     return kept
-
-
-def _diagonal(shape: TopoDS_Shape) -> float:
-    box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box)
-    x0, y0, z0, x1, y1, z1 = box.Get()
-    return math.dist((x0, y0, z0), (x1, y1, z1))
 
 
 def _rolled_material(corner, paths, radius: float, swell: float, edges: list):
@@ -447,16 +444,16 @@ def _rolled_material(corner, paths, radius: float, swell: float, edges: list):
     rest = corner
     for piece in _swept_balls(paths, radius, swell):
         rest = _boolean("cut", rest, piece).Shape()
-    kept = [part for part in _solids(rest) if _touches_inside_of(part, edges)]
-    if not kept or any(_volume(part) <= 0.0 for part in kept):
+    kept = [part for part in _brep_topology._overflow_solids(rest) if _touches_inside_of(part, edges)]
+    if not kept or any(_brep_geometry._overflow_volume(part) <= 0.0 for part in kept):
         return None
     material = kept[0]
     for other in kept[1:]:
         material = _boolean("fuse", material, other).Shape()
     # 外部の罠: 球が縁にちょうど接するので、角から管を引くブーリアンが壊れることがある。半径 2 の穴の縁へ半径 6 の球が
     # 転がり込む形では、体積が負の立体や、引く前の角より大きい立体が返った(どちらも BRepCheck は真)。
-    volume = _volume(material)
-    if volume <= 0.0 or volume > _volume(corner) * (1.0 + 1.0e-6) or not BRepCheck_Analyzer(material).IsValid():
+    volume = _brep_geometry._overflow_volume(material)
+    if volume <= 0.0 or volume > _brep_geometry._overflow_volume(corner) * (1.0 + 1.0e-6) or not _brep_checks.is_valid(material):
         return None
     # 球の向こう側(辺から中心へ向かう先)の空気が肉に入っていれば、掃いた立体に隙間があって肉と空気が分かれていない
     classifier = BRepClass3d_SolidClassifier(material)
@@ -488,7 +485,7 @@ class _Support:
         self.filled = [_without_footprints(member, edge_faces) for member in _coplanar_region(face, edge_faces)]
         seen: Dict[int, list] = {}
         for member in self.filled:
-            member_edges = indexed_map(member, TopAbs_EDGE)
+            member_edges = _brep_topology.indexed_map(member, TopAbs_EDGE)
             for number in range(1, member_edges.Extent() + 1):
                 candidate = member_edges.FindKey(number)
                 if BRep_Tool.Degenerated_s(TopoDS.Edge_s(candidate)):
@@ -622,7 +619,7 @@ class _RollingPath:
         self.curve = BRepAdaptor_CompCurve(TopoDS.Wire_s(wire), True)
         first, last = self.curve.FirstParameter(), self.curve.LastParameter()
         self.loop = self.curve.Value(first).Distance(self.curve.Value(last)) < 1.0e-7
-        samples = _ROLL_SAMPLES * indexed_map(wire, TopAbs_EDGE).Extent()
+        samples = _ROLL_SAMPLES * _brep_topology.indexed_map(wire, TopAbs_EDGE).Extent()
         count = samples if self.loop else samples + 1
         params = [first + (last - first) * i / samples for i in range(count)]
         params, solved = self._with_missed_crossings(params, [self._center(u) for u in params], last)
@@ -1032,7 +1029,7 @@ def _pipe(stretches: list, radius: float) -> TopoDS_Shape:
     ).Face()
     pipe = BRepOffsetAPI_MakePipe(wire.Wire(), disk, GeomFill_Trihedron.GeomFill_IsDiscreteTrihedron, False)
     pipe.Build()
-    if not pipe.IsDone() or _volume(pipe.Shape()) <= 0.0:
+    if not pipe.IsDone() or _brep_geometry._overflow_volume(pipe.Shape()) <= 0.0:
         raise Unsupported("the ball could not be swept along its path")
     return pipe.Shape()
 
@@ -1124,8 +1121,8 @@ def _require_plausible(material: TopoDS_Shape, edges: list, spread: float) -> No
     PC ごと落ちた(PC ケースの部品で 84GB。2026-10-22)。肉の各点は辺から `spread` より離れないので、
     体積は辺の長さ × 管の断面積を超えず、外接箱は辺の外接箱を `spread` 広げた箱に収まる。
     """
-    length = sum(_edge_length(edge) for edge in edges)
-    volume = _volume(material)
+    length = sum(_brep_geometry._overflow_edge_length(edge) for edge in edges)
+    volume = _brep_geometry._overflow_volume(material)
     if volume > 1.5 * math.pi * spread * spread * length:
         raise Unsupported(f"the rounding material ({volume:.4g} mm3) is larger than any fillet along {length:.4g} mm")
     reach_box = Bnd_Box()
@@ -1138,12 +1135,6 @@ def _require_plausible(material: TopoDS_Shape, edges: list, spread: float) -> No
         return
     if any(reach_box.IsOut(corner) for corner in (found.CornerMin(), found.CornerMax())):
         raise Unsupported("the rounding material reaches far from the edge")
-
-
-def _edge_length(edge: TopoDS_Shape) -> float:
-    props = GProp_GProps()
-    BRepGProp.LinearProperties_s(edge, props)
-    return props.Mass()
 
 
 def _room_inside(face: TopoDS_Shape, point: gp_Pnt):
@@ -1192,7 +1183,7 @@ def _require_partition(whole: float, outside: TopoDS_Shape, inside: TopoDS_Shape
     エラーを出さずに見当違いの「外」を返すことがある(辺の内側に触れる 1 ソリッドになり、捨てるべき肉が丸ごと残った。
     issue #209)。cut と common は同じ入力から別々に計算するので、壊れた回は和が合わない。
     """
-    error = whole - _volume(outside) - _volume(inside)
+    error = whole - _brep_geometry._overflow_volume(outside) - _brep_geometry._overflow_volume(inside)
     if abs(error) > _SPLIT_SLACK * whole:
         raise Unsupported(
             f"the trimming cut did not partition the rounding material ({error:+.4g} of {whole:.4g} mm3 unaccounted)"
@@ -1212,14 +1203,14 @@ def _trim(material, edges, faces, heights, concave: bool, columns: "_Columns"):
     「辺に触れる薄い層」と、もう一方の面の崖の先へはみ出した肉が1つにつながり、崖の先まで残った(円板 r25 の上の
     先細りの柱の根元を r=20 で丸めると、縁から 1.66mm はみ出した)。
     """
-    scale = max(_volume(material), 1.0e-12)
+    scale = max(_brep_geometry._overflow_volume(material), 1.0e-12)
     dropped = []
     for face, height in zip(faces, heights):
         column = columns.of(face, height, concave)
         outside = _boolean("cut", material, column, _TRIM_FUZZY).Shape()
         _require_partition(scale, outside, _boolean("common", material, column, _TRIM_FUZZY).Shape())
-        for part in _solids(outside):
-            if _volume(part) > 1.0e-9 * scale and not _touches_inside_of(part, edges):
+        for part in _brep_topology._overflow_solids(outside):
+            if _brep_geometry._overflow_volume(part) > 1.0e-9 * scale and not _touches_inside_of(part, edges):
                 dropped.append(part)
     for part in dropped:
         material = _boolean("cut", material, part, _TRIM_FUZZY).Shape()
@@ -1234,8 +1225,8 @@ class _Columns:
     """
 
     def __init__(self, shape: TopoDS_Shape, edge_faces) -> None:
-        self._faces = indexed_map(shape, TopAbs_FACE)
-        self._edges = indexed_map(shape, TopAbs_EDGE)
+        self._faces = _brep_topology.indexed_map(shape, TopAbs_FACE)
+        self._edges = _brep_topology.indexed_map(shape, TopAbs_EDGE)
         self._edge_faces = edge_faces
         self._made: Dict[tuple, TopoDS_Shape] = {}
 
@@ -1268,7 +1259,7 @@ def _region_column(face: TopoDS_Shape, edge_faces, height: float, concave: bool)
 def _without_footprints(face: TopoDS_Shape, edge_faces) -> TopoDS_Shape:
     """面の内側の輪のうち、別の形が立っている足元(隣の面と凹で接する輪)を外した面。本当の穴の輪は残す。
     残す輪だけを、同じ曲面・同じ位置の空の面へ入れ直す(辺の pcurve をそのまま使える)。"""
-    wires = indexed_map(face, TopAbs_WIRE)
+    wires = _brep_topology.indexed_map(face, TopAbs_WIRE)
     if wires.Extent() <= 1:
         return face
     outer = BRepTools.OuterWire_s(TopoDS.Face_s(face))
@@ -1289,7 +1280,7 @@ def _is_footprint(wire: TopoDS_Shape, face: TopoDS_Shape, edge_faces) -> bool:
     凹凸だけで決めると、根元を丸めた柱の足元を穴と見なして柱の脇に幅 0.05 の溝を残した。向こうの面全体の重心で決めると、
     板から立ち上がって板の裏へ回り込むトーラスの足元を穴と見なした(どちらも Codex レビューの反例)。
     """
-    edges = indexed_map(wire, TopAbs_EDGE)
+    edges = _brep_topology.indexed_map(wire, TopAbs_EDGE)
     for number in range(1, edges.Extent() + 1):
         edge = TopoDS.Edge_s(edges.FindKey(number))
         if BRep_Tool.Degenerated_s(edge) or not edge_faces.Contains(edge):
@@ -1354,7 +1345,7 @@ def _column(face: TopoDS_Shape, height: float, concave: bool) -> TopoDS_Shape:
         raise Unsupported("could not thicken a supporting face")
     column = maker.Shape()
     # 外部の罠: 面の向きによって、体積が負(裏返し)の立体が返る。
-    if _volume(column) < 0:
+    if _brep_geometry._overflow_volume(column) < 0:
         column.Reverse()
     return column
 
@@ -1385,7 +1376,7 @@ _EDGE_SAMPLES = 48
 def _edges_through(wedge: TopoDS_Shape, edges: list) -> list:
     """くさびの辺のうち、元の辺の中点を通るもの(箱を延長面で割ると、元の辺は延長されて1本の辺になる)。"""
     found = []
-    wedge_edges = indexed_map(wedge, TopAbs_EDGE)
+    wedge_edges = _brep_topology.indexed_map(wedge, TopAbs_EDGE)
     for edge in edges:
         curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
         middle = BRepBuilderAPI_MakeVertex(curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()))).Vertex()
@@ -1396,18 +1387,6 @@ def _edges_through(wedge: TopoDS_Shape, edges: list) -> list:
     if not found:
         raise Unsupported("the wedge has no edge along the selected edge")
     return found
-
-
-def _outward_normal(face: TopoDS_Shape, point: gp_Pnt) -> gp_Vec:
-    surface = BRep_Tool.Surface_s(TopoDS.Face_s(face))
-    u, v = GeomAPI_ProjectPointOnSurf(point, surface).LowerDistanceParameters()
-    props = BRepLProp_SLProps(BRepAdaptor_Surface(TopoDS.Face_s(face)), u, v, 1, 1.0e-7)
-    if not props.IsNormalDefined():
-        raise Unsupported("the face has no normal at the edge")
-    normal = gp_Vec(props.Normal())
-    if face.Orientation() == TopAbs_REVERSED:
-        normal.Reverse()
-    return normal
 
 
 def _extended_face(face: TopoDS_Shape, size: float, near: gp_Pnt, copy_surface: bool = False) -> TopoDS_Shape:
@@ -1444,35 +1423,21 @@ def _extended_face(face: TopoDS_Shape, size: float, near: gp_Pnt, copy_surface: 
 
 
 def _solid_containing(shape: TopoDS_Shape, point: gp_Pnt):
-    for solid in _solids(shape):
+    for solid in _brep_topology._overflow_solids(shape):
         if BRepClass3d_SolidClassifier(solid, point, 1.0e-7).State() == TopAbs_IN:
             return solid
     return None
 
 
-def _solids(shape: TopoDS_Shape) -> list:
-    found = indexed_map(shape, TopAbs_SOLID)
-    return [found.FindKey(i) for i in range(1, found.Extent() + 1)]
-
-
 def _boolean(kind: str, first: TopoDS_Shape, second: TopoDS_Shape, fuzzy: float = 0.0):
-    # 外部の罠: 2引数のコンストラクタはその場で演算まで実行する(`IsDone()` が `Build()` の前に真)。続けて `Build()` を呼ぶと
-    # 同じ演算が2回走り(`_absorbed_fillet` 1 回が実測 4.0〜4.3 秒 → 2.8〜3.1 秒)、`SetFuzzyValue` は2回目にしか効かない。
-    builder = {"fuse": BRepAlgoAPI_Fuse, "cut": BRepAlgoAPI_Cut, "common": BRepAlgoAPI_Common}[kind]()
-    arguments, tools = TopTools_ListOfShape(), TopTools_ListOfShape()
-    arguments.Append(first)
-    tools.Append(second)
-    builder.SetArguments(arguments)
-    builder.SetTools(tools)
-    if fuzzy:
-        builder.SetFuzzyValue(fuzzy)
-    builder.Build()
+    builder = _brep_operations.build_boolean(kind, first, second, fuzzy)
     if not builder.IsDone():
         raise Unsupported(f"{kind} of the rounding material failed")
     return builder
 
 
-def _volume(shape: TopoDS_Shape) -> float:
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props)
-    return props.Mass()
+def _outward_normal(face: TopoDS_Shape, point: gp_Pnt) -> gp_Vec:
+    normal = _brep_geometry.outward_normal(face, point)
+    if normal is None:
+        raise Unsupported("the face has no normal at the edge")
+    return normal

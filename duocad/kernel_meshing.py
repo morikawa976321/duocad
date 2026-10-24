@@ -25,6 +25,7 @@ import time
 from typing import Dict, List, Optional
 
 import numpy as np
+
 from OCP.BRepMesh import (
     BRepMesh_EdgeDiscret,
     BRepMesh_FaceDiscret,
@@ -44,7 +45,11 @@ from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS
 
 from . import boundary_check
-from .mesh_geometry import indexed_map
+
+from . import (
+    brep_topology as _brep_topology,
+)
+
 
 #: 再分割の反復上限の既定(仮置き。docs/TOPOPT_GAP_CAUSALITY.md「案Aの実装」)。
 DEFAULT_MAX_ROUNDS = 12
@@ -90,9 +95,9 @@ class _Model:
     def __init__(self, context: IMeshTools_Context, shape):
         self.context = context
         self.model = context.GetModel()
-        self.face_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
-        edge_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
-        vertex_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_VERTEX)
+        self.face_map = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+        edge_map = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
+        vertex_map = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_VERTEX)
         self.faces = [self.model.GetFace(i) for i in range(self.model.FacesNb())]
         self.face_ids = [self.face_map.FindIndex(df.GetFace()) for df in self.faces]
         self.edges = [self.model.GetEdge(i) for i in range(self.model.EdgesNb())]
@@ -267,7 +272,7 @@ def mesh_shape(shape, deviation: float, angular_deflection: float, *, max_rounds
         count_mismatch: 面分割後に点数が検査時と食い違った use(空が正常)
         seconds: 段階ごとの秒
     """
-    if shape is None or shape.IsNull():
+    if shape is None or _brep_topology.is_null(shape):
         raise ValueError('cannot mesh an empty shape')
     seconds: Dict[str, float] = {}
     clock = time.perf_counter

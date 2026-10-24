@@ -16,11 +16,15 @@ from __future__ import annotations
 
 from typing import Any, List, Sequence
 
-from .. import kernel, kernel_project, selection
+from .. import kernel_project, selection
 from ..document import Document
 from ..entry import entry
 from ..oplog import Operation, register_verb
 from ..sketch import add_entities, get_sketch, new_entity_id, remove_entities, require_valid_params
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
 
 VERB_PROJECT_TO_SKETCH = "project_to_sketch"
 VERB_PROJECT_OUTLINE = "project_outline"
@@ -44,9 +48,9 @@ def projected_entities(doc: Document, sketch_id: str, targets: Sequence[dict]) -
         kind = selection.ref_kind(ref)
         shape = _brep(doc, ref["body"])
         if kind == "edge":
-            edges.append(kernel.edge_of(shape, int(ref["index"])))
+            edges.append(_brep_topology.edge_of(shape, int(ref["index"])))
         elif kind == "face":
-            edges.extend(kernel_project.face_edges(kernel.face_of(shape, int(ref["index"]))))
+            edges.extend(kernel_project.face_edges(_brep_topology.face_of(shape, int(ref["index"]))))
         else:
             raise ValueError(f"project_to_sketch が写せるのは辺と面だけ(got {kind}。ボディの外形は project_outline)")
     return kernel_project.edge_entities(plane, edges)

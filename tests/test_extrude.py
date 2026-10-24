@@ -25,6 +25,10 @@ from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_line, add_rectangle, sketch_create
 from duocad.verbs import extrude, extrude_faces
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 #: 板＋穴の構成を最小で作るための寸法
 PLATE_WIDTH = 40.0
 PLATE_HEIGHT = 30.0
@@ -390,7 +394,6 @@ def test_replay_reproduces_the_plate_with_the_hole():
     assert len(replayed.sketches) == 2
 
 
-
 def test_extrude_faces_adopt_face_merging_when_it_helps():
     """統合が効く場合は採用され、面が増えっぱなしにならない(20mm立方体の上面を+10)。
 
@@ -414,7 +417,7 @@ def test_extrude_faces_adopt_face_merging_when_it_helps():
     operation = extrude_faces(document, [{"body": "box", "index": top["index"]}], 10.0)
 
     assert math.isclose(query.volume(body.shape), 12000.0, rel_tol=1e-9)
-    assert kernel.face_count(body.shape) == 6, "同一平面の面が統合されていない"
+    assert _brep_topology.face_count(body.shape) == 6, "同一平面の面が統合されていない"
     assert operation.provenance["unified"] is True
     assert isinstance(operation.provenance["after_face_indices"][0], int)
     assert BRepCheck_Analyzer(body.shape).IsValid()

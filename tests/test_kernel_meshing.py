@@ -25,6 +25,10 @@ from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 from duocad import kernel, kernel_meshing
 from duocad.mesh_geometry import TOPOLOGY_DEFECTS, topology, weld_exact
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 CONNECTIVITY = TOPOLOGY_DEFECTS
 
@@ -38,7 +42,7 @@ def load(name):
 
 def welded(shape):
     """形状に付いた三角形を座標一致で溶接して (vertices, faces) にする。"""
-    face_map = kernel._face_map(shape)
+    face_map = _brep_topology._face_map(shape)
     chunks = []
     for index in range(1, face_map.Extent() + 1):
         positions, indices = kernel._face_triangles(TopoDS.Face_s(face_map.FindKey(index)))
@@ -58,7 +62,7 @@ def standard_mesh(shape, deviation, angle=0.35):
 
 
 def per_face_triangles(shape):
-    face_map = kernel._face_map(shape)
+    face_map = _brep_topology._face_map(shape)
     return [kernel._face_triangles(TopoDS.Face_s(face_map.FindKey(i))) for i in range(1, face_map.Extent() + 1)]
 
 
@@ -109,7 +113,7 @@ def holed_box():
     ('sphere_poles', lambda: BRepPrimAPI_MakeSphere(4.0).Shape()),
     ('cone_seam', lambda: BRepPrimAPI_MakeCone(5.0, 2.0, 10.0).Shape()),
     ('face_with_hole', holed_box),
-    ('open_single_face', lambda: kernel.face_of(BRepPrimAPI_MakeBox(20.0, 30.0, 10.0).Shape(), 1)),
+    ('open_single_face', lambda: _brep_topology.face_of(BRepPrimAPI_MakeBox(20.0, 30.0, 10.0).Shape(), 1)),
 ])
 def test_ordinary_shapes_are_unchanged_and_identical_to_the_standard_mesher(label, make):
     """seam・極・穴・2辺 wire・開いた面で誤報せず、三角形が一括メッシャーと一致する。"""
@@ -130,7 +134,7 @@ def test_amplified_edge_updates_every_pcurve_and_the_committed_polygons_agree():
     assert diagnostics['amplified_edge_ids']
     edge_map = TopTools_IndexedMapOfShape()
     TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, edge_map)
-    face_map = kernel._face_map(shape)
+    face_map = _brep_topology._face_map(shape)
     for edge_id in diagnostics['amplified_edge_ids']:
         edge = TopoDS.Edge_s(edge_map.FindKey(edge_id))
         counts = []
@@ -199,7 +203,7 @@ def test_tessellate_payload_carries_boundary_diagnostics_and_repaired_faces():
 
 def test_face_groups_report_both_passes():
     shape = holed_box()
-    total = kernel.face_count(shape)
+    total = _brep_topology.face_count(shape)
     fine = {1, 2}
     payload = kernel.tessellate_faces(shape, {(0.5, 0.7): sorted(set(range(1, total + 1)) - fine), (0.05, 0.35): sorted(fine)})
     assert set(payload['faces']) == set(range(1, total + 1)) and total > 2

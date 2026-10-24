@@ -29,6 +29,10 @@ from ..oplog import Operation, register_verb
 from ..entry import entry
 from ..paths import resolve_user_path
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 PathLike = Union[str, Path]
 
 VERB_IMPORT_STEP = "import_step"
@@ -41,7 +45,7 @@ def import_step(doc: Document, path: PathLike) -> list[BodyId]:
     """
     source_name, text = read_step_source(path)
     shape = kernel.read_step_text(text)  # 壊れていればここで例外、doc/logは無傷
-    solids = kernel.split_solids(shape)
+    solids = _brep_topology.split_solids(shape)
     body_ids = [new_body_id() for _ in solids]
     names = solid_names(source_name, len(solids))
     _apply_to(doc, body_ids, solids, names)
@@ -71,7 +75,7 @@ def _do_import_step(document: Document, operation: Operation) -> None:
     """redo / replay: ログに埋め込まれたSTEP本文から、記録されたIDで復元する(`import_step` を呼ぶとログに二重記録される)。"""
     args = operation.args
     shape = kernel.read_step_text(args["step"])
-    solids = kernel.split_solids(shape)
+    solids = _brep_topology.split_solids(shape)
     names = solid_names(args["source_name"], len(solids))
     _apply_to(document, args["body_ids"], solids, names)
 

@@ -13,7 +13,6 @@ from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeVertex
-from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
@@ -36,8 +35,12 @@ from OCP.TopoDS import TopoDS, TopoDS_Compound
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Pnt2d, gp_Vec
 
 from . import kernel_tight as tight
-from .kernel_overflow import Unsupported, _boolean, _outward_normal, _solids
-from .mesh_geometry import indexed_map
+from .kernel_overflow import Unsupported
+from . import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
 
 
 def _projection(point, surface):
@@ -87,7 +90,7 @@ def _walls(shape, tops):
     adjacent = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, adjacent)
     walls = []
-    for top, edge in ((top, edge) for top in tops for edge in tight._edges(top)):
+    for top, edge in ((top, edge) for top in tops for edge in _brep_topology._tight_edges(top)):
         if BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(top)) or BRep_Tool.Degenerated_s(edge):
             continue
         neighbors = list(adjacent.FindFromKey(edge))
@@ -104,7 +107,7 @@ def _walls(shape, tops):
 def _up(top, walls):
     """平面の上向き法線、または全壁に共通する直線母線の向きを返す。"""
     if BRepAdaptor_Surface(TopoDS.Face_s(top)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane:
-        return _outward_normal(top, tight._a_point_on(top)).Normalized()
+        return tight._outward_normal(top, _brep_geometry._tight_a_point_on(top)).Normalized()
     directions, normals = [], []
     for wall in walls:
         surface = BRepAdaptor_Surface(TopoDS.Face_s(wall))
@@ -125,14 +128,14 @@ def _up(top, walls):
     if (any(not gp_Dir(up).IsParallel(gp_Dir(direction), 1e-8) for direction in directions[1:])
             or any(abs(normal.Dot(up)) > 1e-8 for normal in normals)):
         raise Unsupported("the walls of a curved top must have parallel straight generators")
-    if up.Dot(_outward_normal(top, tight._a_point_on(top))) < 0:
+    if up.Dot(tight._outward_normal(top, _brep_geometry._tight_a_point_on(top))) < 0:
         up.Reverse()
     return up
 
 
 def _cut(shape, top, walls, up, radius, top_faces):
     """壁接点の最低点の少し下で切り、単一の断面・基点・上側の体積を返す。"""
-    size = tight._diagonal(shape)
+    size = _brep_geometry._tight_diagonal(shape)
     trial = _Contacts(top, top, walls, up, radius)
     origin = trial.origin
     count = max(512, 64 * trial.edges)
@@ -153,26 +156,26 @@ def _cut(shape, top, walls, up, radius, top_faces):
     y = up.Crossed(x)
     corner = base.Translated(x.Multiplied(-size)).Translated(y.Multiplied(-size))
     box = BRepPrimAPI_MakeBox(gp_Ax2(corner, gp_Dir(up), gp_Dir(x)), 2 * size, 2 * size, 2 * size).Shape()
-    above = _boolean("common", shape, box)
-    below = _boolean("cut", shape, box)
-    if len(_solids(below.Shape())) != 1:
+    above = tight._boolean("common", shape, box)
+    below = tight._boolean("cut", shape, box)
+    if len(_brep_topology._overflow_solids(below.Shape())) != 1:
         raise Unsupported("the wall contacts are too close to the bottom for a cutting plane, or the plane splits the body")
-    section = [face for face in tight._faces(below.Shape())
+    section = [face for face in _brep_topology._tight_faces(below.Shape())
                if BRepAdaptor_Surface(TopoDS.Face_s(face)).GetType() == GeomAbs_SurfaceType.GeomAbs_Plane
-               and abs(gp_Vec(base, tight._a_point_on(face)).Dot(up)) < 1e-7 * size
-               and _outward_normal(face, tight._a_point_on(face)).Dot(up) > 0.99]
+               and abs(gp_Vec(base, _brep_geometry._tight_a_point_on(face)).Dot(up)) < 1e-7 * size
+               and tight._outward_normal(face, _brep_geometry._tight_a_point_on(face)).Dot(up) > 0.99]
     if len(section) != 1:
         raise Unsupported("the cut below the wall contacts does not have one planar section")
     allowed = [*top_faces, *walls]
     permitted = [modified for face in allowed for modified in (list(above.Modified(face)) or [face])]
-    for face in tight._faces(above.Shape()):
+    for face in _brep_topology._tight_faces(above.Shape()):
         if any(face.IsSame(other) for other in permitted):
             continue
         surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
         if (surface.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane
-                or abs(gp_Vec(base, tight._a_point_on(face)).Dot(up)) > 1e-7 * size):
+                or abs(gp_Vec(base, _brep_geometry._tight_a_point_on(face)).Dot(up)) > 1e-7 * size):
             raise Unsupported("above the cut there must be only the top and its wall band (no holes, protrusions or other faces)")
-    if indexed_map(section[0], TopAbs_WIRE).Extent() != 1:
+    if _brep_topology.indexed_map(section[0], TopAbs_WIRE).Extent() != 1:
         raise Unsupported("the section below the wall contacts has holes")
     return section[0], base, tight._precise_volume(above.Shape(), curved=True)
 
@@ -182,7 +185,7 @@ class _Contacts(tight._Contour):
 
     def __init__(self, section, top, walls, up, radius):
         """輪郭の各辺を元の壁に対応付け、接点のキャッシュを用意する。"""
-        boundary = [edge for edge in tight._edges(BRepTools.OuterWire_s(TopoDS.Face_s(section)))
+        boundary = [edge for edge in _brep_topology._tight_edges(BRepTools.OuterWire_s(TopoDS.Face_s(section)))
                     if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(section)) and not BRep_Tool.Degenerated_s(edge)]
         super().__init__(tight._wire(boundary), up)
         self.top = top
@@ -201,7 +204,7 @@ class _Contacts(tight._Contour):
             distances = [(_projection(point, BRep_Tool.Surface_s(TopoDS.Face_s(wall)))[0].Distance(point), i)
                          for i, wall in enumerate(walls)]
             distance, index = min(distances)
-            if distance > 1e-6 * tight._diagonal(section):
+            if distance > 1e-6 * _brep_geometry._tight_diagonal(section):
                 raise Unsupported("the planar section does not lie on the original walls")
             self.spans.append((position, position + length, index))
             position += length
@@ -330,7 +333,7 @@ def _support_pieces(edge, face, role="support"):
             # 設計上の除外幅。極の内外ではなく、接点辺までの3D距離を使う。
             distance = min(pole.Distance(adaptor.Value(first)), pole.Distance(adaptor.Value(last)),
                            nearest.LowerDistance() if nearest.NbPoints() else math.inf)
-            if distance < 1e-4 * tight._diagonal(face):
+            if distance < 1e-4 * _brep_geometry._tight_diagonal(face):
                 raise Unsupported(f"the {role} surface parameter pole is near a contact curve")
     if not axes:
         return [edge]
@@ -340,7 +343,7 @@ def _support_pieces(edge, face, role="support"):
     for axis, period, origin in axes:
         # 面に保持されたシームが支持面の標準の周期とずれている場合も拾う。
         seams = [origin]
-        for seam in tight._edges(face):
+        for seam in _brep_topology._tight_edges(face):
             if BRep_Tool.IsClosed_s(seam, face):
                 pc = BRep_Tool.CurveOnSurface_s(seam, face, 0.0, 0.0)
                 if pc is not None:
@@ -406,7 +409,7 @@ def _pcurve(edge, face, tolerance):
         if alternative is not None and error(alternative) < deviation:
             pcurve, deviation = alternative, error(alternative)
             BRep_Builder().UpdateEdge(edge, pcurve, face, max(tolerance, deviation))
-    if deviation > 1e-6 * tight._diagonal(face):
+    if deviation > 1e-6 * _brep_geometry._tight_diagonal(face):
         raise Unsupported(f"a contact pcurve deviates from its 3D edge ({deviation:.6g})")
 
 
@@ -421,7 +424,7 @@ def _side(segment, contour, radius):
     face = BRepBuilderAPI_MakeFace(pipe.Surface(), 1e-7).Face()
     begin = contour.contact(segment.low)
     finish = contour.contact(segment.high)
-    edges = tight._edges(face)
+    edges = _brep_topology._tight_edges(face)
 
     def closest(points):
         """指定された点列に最も近い管面の境界辺を返す。"""
@@ -495,8 +498,8 @@ def _split_face(face, edges):
     split.Build()
     if not split.IsDone():
         raise Unsupported("the contact curves could not split an original support face")
-    pieces = tight._faces(split.Shape())
-    if not pieces or not all(BRepCheck_Analyzer(piece).IsValid() for piece in pieces):
+    pieces = _brep_topology._tight_faces(split.Shape())
+    if not pieces or not all(_brep_checks.is_valid(piece) for piece in pieces):
         raise Unsupported("the contact curves produced an invalid support face")
     return pieces
 
@@ -511,7 +514,7 @@ def _trim_wall(wall, edges):
 
 def round_surface_loop(shape, top, radius, *, top_faces=None):
     """実面の接点で上面の外周を丸め、有効な立体と面の由来を返す。"""
-    if len(_solids(shape)) != 1:
+    if len(_brep_topology._overflow_solids(shape)) != 1:
         raise Unsupported("the body must be one solid")
     top_faces = [top] if top_faces is None else top_faces
     walls = _walls(shape, top_faces)
@@ -530,7 +533,7 @@ def round_surface_loop(shape, top, radius, *, top_faces=None):
         edge = top_edges[0]
         curve = BRepAdaptor_Curve(edge)
         first, last = curve.FirstParameter(), curve.LastParameter()
-        if curve.Value(first).Distance(curve.Value(last)) > 1e-7 * tight._diagonal(shape):
+        if curve.Value(first).Distance(curve.Value(last)) > 1e-7 * _brep_geometry._tight_diagonal(shape):
             raise Unsupported("the single top contact edge is not closed")
         vertex = BRepBuilderAPI_MakeVertex(curve.Value(first)).Vertex()
         top_edges = [BRepBuilderAPI_MakeEdge(BRep_Tool.Curve_s(edge, 0.0, 0.0), vertex, vertex, first, last).Edge()]
@@ -538,10 +541,10 @@ def round_surface_loop(shape, top, radius, *, top_faces=None):
     for edge in top_edges:
         _pcurve(edge, top, 1e-7)
     pieces = _split_face(top, top_edges)
-    original = [edge for edge in tight._edges(top) if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(top))
+    original = [edge for edge in _brep_topology._tight_edges(top) if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(top))
                 and not BRep_Tool.Degenerated_s(edge)]
     lenses = [face for face in pieces
-              if not any(indexed_map(face, TopAbs_EDGE).Contains(edge) for edge in original)]
+              if not any(_brep_topology.indexed_map(face, TopAbs_EDGE).Contains(edge) for edge in original)]
     if len(lenses) > 1:
         # シームがレンズ内部を通ると、Splitter は UV の両端に別々の面を作る。
         # 外周を含まない片だけを同じ支持面上で統合し、接点の境界は保つ。
@@ -553,33 +556,33 @@ def round_surface_loop(shape, top, radius, *, top_faces=None):
         # UnifySameDomain による入力の変更を、元の上面や管の辺へ波及させない。
         unified = ShapeUpgrade_UnifySameDomain(BRepBuilderAPI_Copy(compound).Shape(), False, True, False)
         unified.Build()
-        lenses = tight._faces(unified.Shape())
+        lenses = _brep_topology._tight_faces(unified.Shape())
     if len(lenses) != 1:
         raise Unsupported(f"the top contact curves do not enclose one lens ({len(lenses)} faces)")
     lens = lenses[0]
-    if not BRepCheck_Analyzer(lens).IsValid():
+    if not _brep_checks.is_valid(lens):
         raise Unsupported("the top contact curves produced an invalid lens")
     replacements = []
     all_rims = _rim_pieces(contour, 0.0, contour.length)
-    top_edges = [edge for face in top_faces for edge in tight._edges(face)]
+    top_edges = [edge for face in top_faces for edge in _brep_topology._tight_edges(face)]
     for wall in walls:
         edges = [edge for edge, owner in all_rims if owner.IsSame(wall)]
         pieces = _trim_wall(wall, edges)
-        retained = [piece for piece in pieces if not any(indexed_map(piece, TopAbs_EDGE).Contains(edge) for edge in top_edges)]
+        retained = [piece for piece in pieces if not any(_brep_topology.indexed_map(piece, TopAbs_EDGE).Contains(edge) for edge in top_edges)]
         if len(retained) != 1:
             raise Unsupported("the wall band below the contacts could not be identified")
         replacements.append((wall, retained))
-    outer = [shell for shell in (indexed_map(shape, TopAbs_SHELL).FindKey(i)
-                                for i in range(1, indexed_map(shape, TopAbs_SHELL).Extent() + 1))
-             if all(indexed_map(shell, TopAbs_FACE).Contains(face) for face in top_faces)]
+    outer = [shell for shell in (_brep_topology.indexed_map(shape, TopAbs_SHELL).FindKey(i)
+                                for i in range(1, _brep_topology.indexed_map(shape, TopAbs_SHELL).Extent() + 1))
+             if all(_brep_topology.indexed_map(shell, TopAbs_FACE).Contains(face) for face in top_faces)]
     if len(outer) != 1:
         raise Unsupported("the top is not on one outer shell")
-    kept = [piece for face in tight._faces(outer[0]) if not any(face.IsSame(top) for top in top_faces)
+    kept = [piece for face in _brep_topology._tight_faces(outer[0]) if not any(face.IsSame(top) for top in top_faces)
             for piece in next((pieces for wall, pieces in replacements if wall.IsSame(face)), [face])]
-    cavities = [indexed_map(shape, TopAbs_SHELL).FindKey(i) for i in range(1, indexed_map(shape, TopAbs_SHELL).Extent() + 1)
-                if not indexed_map(shape, TopAbs_SHELL).FindKey(i).IsSame(outer[0])]
+    cavities = [_brep_topology.indexed_map(shape, TopAbs_SHELL).FindKey(i) for i in range(1, _brep_topology.indexed_map(shape, TopAbs_SHELL).Extent() + 1)
+                if not _brep_topology.indexed_map(shape, TopAbs_SHELL).FindKey(i).IsSame(outer[0])]
     result, sewing = tight._closed_solid([*kept, lens, *(side.face for side in sides), *caps],
-                                         1e-6 * tight._diagonal(shape), "joining the contact-trimmed wall and crown", cavities)
+                                         1e-6 * _brep_geometry._tight_diagonal(shape), "joining the contact-trimmed wall and crown", cavities)
     removed = tight._precise_volume(shape, curved=True) - tight._precise_volume(result, curved=True)
     if not 0 < removed < expected:
         raise Unsupported(f"the rounding removed an implausible volume ({removed:.6g} of at most {expected:.6g})")

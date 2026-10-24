@@ -13,6 +13,10 @@ from duocad.server import Session
 from document_support import replay_through_json
 from session_support import select as _select
 
+from duocad import (
+    brep_planar as _brep_planar,
+)
+
 PLANE = {"kind": "base", "name": "XY"}
 
 
@@ -477,7 +481,7 @@ def test_a_bump_narrower_than_the_samples_is_not_skipped() -> None:
     curve = Geom_BSplineCurve(poles, weights, knots, multiplicities, 3)
     edge = BRepBuilderAPI_MakeEdge(curve).Edge()
 
-    entities = kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    entities = kernel_sketch.edge_entities(_brep_planar._ax3_from_plane(PLANE), edge)
     assert entities and all(entity.get("approximated") for entity in entities)
     polyline = []
     for entity in entities:
@@ -504,7 +508,7 @@ def test_a_smooth_curve_with_many_knots_is_not_split_at_every_knot() -> None:
     for k in range(1, 514):
         spline.InsertKnot(low + (high - low) * k / 514, 1, 1.0e-12)
     edge = BRepBuilderAPI_MakeEdge(spline).Edge()
-    entities = kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    entities = kernel_sketch.edge_entities(_brep_planar._ax3_from_plane(PLANE), edge)
     assert 0 < len(entities) <= 16
     worst = max(
         abs(math.hypot(*_bezier_point(entity["params"], k / 40)) - 10.0) for entity in entities for k in range(41)
@@ -539,7 +543,7 @@ def test_a_bump_away_from_the_knot_midpoint_is_not_skipped() -> None:
     assert curve.IsRational()
     assert abs(curve.Value(0.0225).Y()) < 1e-9 and abs(curve.Value(0.021).Y()) > 1.0, "題材の振れが立っていない"
     edge = BRepBuilderAPI_MakeEdge(curve).Edge()
-    entities = kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    entities = kernel_sketch.edge_entities(_brep_planar._ax3_from_plane(PLANE), edge)
     polyline = []
     for entity in entities:
         polyline.extend(_bezier_point(entity["params"], k / 400) for k in range(401))
@@ -560,5 +564,5 @@ def test_a_trimmed_bezier_edge_keeps_the_curve_of_the_edge() -> None:
         poles.SetValue(i + 1, gp_Pnt(x, y, 0))
     bezier = Geom_BezierCurve(poles)
     edge = BRepBuilderAPI_MakeEdge(bezier, 0.2, 0.8).Edge()
-    kernel_sketch.edge_entities(kernel_sketch._ax3_from_plane(PLANE), edge)
+    kernel_sketch.edge_entities(_brep_planar._ax3_from_plane(PLANE), edge)
     assert (bezier.Pole(1).X(), bezier.Pole(4).X()) == (0.0, 10.0)

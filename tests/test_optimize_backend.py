@@ -31,6 +31,10 @@ from session_support import face_with_normal, four_conditions, pad, select as _s
 
 from duocad.paths import REPO_ROOT
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 pytestmark = pytest.mark.usefixtures("finished_shape_check_at_a_third_of_the_test_element")
 
 
@@ -144,9 +148,9 @@ def test_face_indices_shift_by_the_face_count_of_earlier_bodies(session: Session
 
     assert bundle.anchor_body_ids == [left.id, right.id]
     assert bundle.face_offsets[left.id] == 0
-    assert bundle.face_offsets[right.id] == kernel.face_count(left.shape)
+    assert bundle.face_offsets[right.id] == _brep_topology.face_count(left.shape)
     assert bundle.fixed_faces == (fixed,)
-    assert bundle.load_faces == (kernel.face_count(left.shape) + load,)
+    assert bundle.load_faces == (_brep_topology.face_count(left.shape) + load,)
     # **面ごとの力ベクトルは実単位[N]**(向き × 大きさ)。単位ベクトルではない。
     assert bundle.forces[0] == pytest.approx((0.0, 0.0, -500.0))
 

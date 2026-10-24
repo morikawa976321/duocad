@@ -3,8 +3,12 @@
 スタブで見るのは、実物の `BOPAlgo_CheckerSI` を自己交差のある小さな題材で安定に動かせないため
 (実測: 2ソリッドのタッチだけでも `HasWarnings()=True` で `inspect_solid` の前段ガードに阻まれる)。
 """
-from duocad.kernel_brep import _count_face_interferences
+
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
+
+from duocad import (
+    brep_checks as _brep_checks,
+)
 
 
 class _StubPair:
@@ -29,4 +33,4 @@ def test_only_face_face_pairs_are_counted():
     ds = _StubDS({1: TopAbs_FACE, 2: TopAbs_FACE, 3: TopAbs_FACE, 4: TopAbs_VERTEX,
                   5: TopAbs_VERTEX, 6: TopAbs_EDGE})
     pairs = [_StubPair((1, 2)), _StubPair((3, 4)), _StubPair((5, 6))]
-    assert _count_face_interferences(ds, pairs) == 1
+    assert _brep_checks._count_face_interferences(ds, pairs) == 1

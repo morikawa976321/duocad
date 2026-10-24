@@ -18,6 +18,11 @@ from document_support import replay_through_json
 from mcp_support import call
 from session_support import select, session_with_box
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 REL = 1.0e-9
 
 
@@ -60,7 +65,7 @@ def _refs(body_id: str, indices) -> list:
 def _state(document: Document) -> tuple:
     return (
         json.dumps(document.log.to_json(), sort_keys=True),
-        [(body.id, kernel.volume(body.shape), kernel.face_count(body.shape)) for body in document.bodies],
+        [(body.id, _brep_geometry.volume(body.shape), _brep_topology.face_count(body.shape)) for body in document.bodies],
     )
 
 
@@ -75,11 +80,11 @@ def test_join_on_a_box_top_adds_volume_and_cut_with_negative_distance_removes_it
     top = _top(document.get_body("b").shape)
 
     extrude_faces(document, _refs("b", [top]), 10.0, mode="join")
-    assert math.isclose(kernel.volume(document.get_body("b").shape), 12000.0, rel_tol=REL)
+    assert math.isclose(_brep_geometry.volume(document.get_body("b").shape), 12000.0, rel_tol=REL)
 
     top = _top(document.get_body("b").shape)
     extrude_faces(document, _refs("b", [top]), -10.0, mode="cut")
-    assert math.isclose(kernel.volume(document.get_body("b").shape), 8000.0, rel_tol=REL)
+    assert math.isclose(_brep_geometry.volume(document.get_body("b").shape), 8000.0, rel_tol=REL)
 
 
 def test_new_makes_a_separate_pillar_and_leaves_the_source_body():
@@ -90,10 +95,10 @@ def test_new_makes_a_separate_pillar_and_leaves_the_source_body():
     operation = extrude_faces(document, _refs("b", [top]), 5.0, mode="new")
 
     assert len(document.bodies) == 2
-    assert math.isclose(kernel.volume(document.get_body("b").shape), 8000.0, rel_tol=REL)
+    assert math.isclose(_brep_geometry.volume(document.get_body("b").shape), 8000.0, rel_tol=REL)
     pillar = document.get_body(operation.args["body_id"])
     assert operation.args["body_id"] != "b"
-    assert math.isclose(kernel.volume(pillar.shape), 400.0 * 5.0, rel_tol=REL)
+    assert math.isclose(_brep_geometry.volume(pillar.shape), 400.0 * 5.0, rel_tol=REL)
 
 
 @pytest.mark.parametrize("distance, mode, expected", [(10.0, "join", 12000.0), (-7.0, "cut", 5200.0)])
@@ -103,7 +108,7 @@ def test_one_face_join_and_cut_keep_the_box_a_box(distance, mode, expected):
     result = kernel_extrude.extrude_faces(shape, [_top(shape)], distance, mode, target_shape=shape)
 
     assert math.isclose(result["volume_after"], expected, rel_tol=REL)
-    assert kernel.face_count(result["shape"]) == 6
+    assert _brep_topology.face_count(result["shape"]) == 6
     assert BRepCheck_Analyzer(result["shape"]).IsValid()
 
 
@@ -116,7 +121,7 @@ def test_two_separate_coplanar_faces_are_extruded_together(distance, mode, expec
 
     extrude_faces(document, _refs("b", tops), distance, mode=mode)
 
-    assert math.isclose(kernel.volume(document.get_body("b").shape), expected, rel_tol=REL)
+    assert math.isclose(_brep_geometry.volume(document.get_body("b").shape), expected, rel_tol=REL)
 
 
 def _rejects_without_a_trace(document: Document, call) -> str:
@@ -206,8 +211,8 @@ def test_a_body_id_sends_the_pillar_to_another_body():
 
     extrude_faces(document, _refs("b", [top_b]), 5.0, mode="join", body_id="c")
 
-    assert math.isclose(kernel.volume(document.get_body("b").shape), 8000.0, rel_tol=REL)
-    assert math.isclose(kernel.volume(document.get_body("c").shape), 8000.0 + 20.0 * 20.0 * 5.0, rel_tol=REL)
+    assert math.isclose(_brep_geometry.volume(document.get_body("b").shape), 8000.0, rel_tol=REL)
+    assert math.isclose(_brep_geometry.volume(document.get_body("c").shape), 8000.0 + 20.0 * 20.0 * 5.0, rel_tol=REL)
 
 
 @pytest.mark.parametrize("mode, distance", [("join", 6.0), ("cut", -6.0), ("new", 6.0)])
@@ -215,19 +220,19 @@ def test_undo_redo_and_replay_give_the_same_shape(mode, distance):
     """面の押し出しの undo / redo / 保存したログの再生が同じ形にならない。"""
     document = _doc(_two_towers())
     tops = _faces_facing(document.get_body("b").shape, 0, 0, 1, z=10.0)
-    original = kernel.volume(document.get_body("b").shape)
+    original = _brep_geometry.volume(document.get_body("b").shape)
     operation = extrude_faces(document, _refs("b", tops), distance, mode=mode)
-    after = {body.id: kernel.volume(body.shape) for body in document.bodies}
+    after = {body.id: _brep_geometry.volume(body.shape) for body in document.bodies}
 
     document.log.undo(document)
     assert [body.id for body in document.bodies] == ["b"]
-    assert math.isclose(kernel.volume(document.get_body("b").shape), original, rel_tol=REL)
+    assert math.isclose(_brep_geometry.volume(document.get_body("b").shape), original, rel_tol=REL)
 
     document.log.redo(document)
-    assert {body.id: kernel.volume(body.shape) for body in document.bodies} == pytest.approx(after, rel=REL)
+    assert {body.id: _brep_geometry.volume(body.shape) for body in document.bodies} == pytest.approx(after, rel=REL)
 
     restored = replay_through_json(document, into=_doc(_two_towers()))
-    assert {body.id: kernel.volume(body.shape) for body in restored.bodies} == pytest.approx(after, rel=REL)
+    assert {body.id: _brep_geometry.volume(body.shape) for body in restored.bodies} == pytest.approx(after, rel=REL)
     assert operation.provenance["faces"] == tops
 
 
@@ -235,17 +240,17 @@ def test_session_extrude_takes_faces_and_rejects_a_mixed_selection():
     """Session.extrude が面の選択を受けない、または領域との混在を通す。プレビューも文書を変えない。"""
     session = session_with_box()
     top = _top(session.document.get_body("box").shape)
-    before = kernel.volume(session.document.get_body("box").shape)
+    before = _brep_geometry.volume(session.document.get_body("box").shape)
 
     select(session, _refs("box", [top]))
     preview = session.preview("extrude", {"distance": 5.0, "mode": "join"})
     assert preview["bodies"], "面のプレビューが形を返さない"
-    assert kernel.volume(session.document.get_body("box").shape) == before
+    assert _brep_geometry.volume(session.document.get_body("box").shape) == before
     assert session.document.log.entries == []
 
     applied = session.extrude(5.0, mode="join")
     assert applied["changed_bodies"] == ["box"]
-    assert kernel.volume(session.document.get_body("box").shape) > before
+    assert _brep_geometry.volume(session.document.get_body("box").shape) > before
 
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [100.0, 100.0], 5.0, 5.0)
@@ -258,11 +263,11 @@ def test_mcp_extrude_takes_a_face_selection():
     """MCP の `extrude` が確定した面の選択を押さない(AIが面を押し出せる唯一の入口)。"""
     session = session_with_box()
     top = _top(session.document.get_body("box").shape)
-    before = kernel.volume(session.document.get_body("box").shape)
+    before = _brep_geometry.volume(session.document.get_body("box").shape)
     server = McpServer(DocumentTools(session))
     call(server, "set_selection", {"refs": _refs("box", [top])})
 
     payload = call(server, "extrude", {"distance": 5.0, "mode": "join"})
 
     assert payload["verb"] == "extrude"
-    assert kernel.volume(session.document.get_body("box").shape) > before
+    assert _brep_geometry.volume(session.document.get_body("box").shape) > before

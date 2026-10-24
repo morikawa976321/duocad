@@ -11,6 +11,10 @@ from duocad.selection import set_visible
 from duocad.verbs import extrude
 from document_support import BOX_X, BOX_Y, BOX_Z, box_shape as _box_shape, shape_ref
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 
 #: 長さの比較に使う許容(mm)。STEP由来の形状も同じ述語で扱うので厳密比較にしない。
 LENGTH_TOLERANCE = 1e-6
@@ -61,19 +65,19 @@ def test_face_predicates_can_combine_conditions(doc: Document):
 
 def test_kind_is_actually_filters_by_the_classified_kind(doc: Document):
     """`kind_is` が**分類ラベルで実際に絞れる**こと(`validate` / `describe_ops` に
-    opが載っていることだけを見ていると、評価側が `kernel.classify_face` /
+    opが載っていることだけを見ていると、評価側が `brep_geometry.classify_face` /
     `classify_edge` と違うラベルを見ていても気づけない)。
     """
     shape = doc.bodies[0].shape
     planes = predicates.evaluate(
         doc, {"kind": "face", "where": [{"op": "kind_is", "value": "plane"}]}
     )
-    assert len(planes) == kernel.face_count(shape) == 6
+    assert len(planes) == _brep_topology.face_count(shape) == 6
 
     lines = predicates.evaluate(
         doc, {"kind": "edge", "where": [{"op": "kind_is", "value": "line"}]}
     )
-    assert len(lines) == kernel.edge_count(shape) == 12
+    assert len(lines) == _brep_topology.edge_count(shape) == 12
     assert predicates.evaluate(
         doc, {"kind": "edge", "where": [{"op": "kind_is", "value": "circle"}]}
     ) == []
@@ -118,7 +122,7 @@ def test_a_vector_axis_is_normalized_before_the_dot_product(doc: Document):
 def test_an_empty_where_matches_everything_of_that_kind(doc: Document):
     """`where: []` はその種別の全部(「全面を選ぶ」を特別扱いしないで書けるように)。"""
     matched = predicates.evaluate(doc, {"kind": "face", "where": []})
-    assert len(matched) == kernel.face_count(doc.bodies[0].shape) == 6
+    assert len(matched) == _brep_topology.face_count(doc.bodies[0].shape) == 6
 
 
 def test_edges_can_be_selected_by_direction_and_length(doc: Document):

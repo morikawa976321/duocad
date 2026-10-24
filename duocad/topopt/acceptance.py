@@ -25,6 +25,11 @@ from . import anchor, fem, stress, voxelize
 from .anchor import active_nodes  # noqa: F401  6条件と探索用の確定表が同じ「材料に接する節点」の定義を使う
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 
+from duocad import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+)
+
 
 #: 保持・除外の体積判定の許容差 `max(VOLUME_ATOL, VOLUME_RTOL * 条件ソリッドの体積)` [mm^3]。
 VOLUME_ATOL = 1e-9
@@ -159,8 +164,8 @@ def _cell_window(bounds, grid, shape):
 
 def _positive_volume(shape) -> float:
     """妥当なソリッドの正の体積。不正な形状・正でない体積は例外(もっともらしい数値を返さない)。"""
-    kernel_brep.require_valid_solid(shape)
-    total = float(kernel.volume(shape))
+    _brep_checks.require_valid_solid(shape)
+    total = float(_brep_geometry.volume(shape))
     if not np.isfinite(total) or total <= 0:
         raise ValueError('条件CADに正の体積がない')
     return total

@@ -14,6 +14,10 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from .optimize_voxels import DEBUG_VOXEL_LIMIT, debug_voxel_payload
 
+from . import (
+    brep_topology as _brep_topology,
+)
+
 if TYPE_CHECKING:  # pragma: no cover - 型注釈のためだけ
     from .document import Document
     from .optimize_steps import OptimizationSteps
@@ -336,7 +340,7 @@ def _compound_with_offsets(doc: "Document", body_ids: List[str]) -> tuple:
         if body.shape is None:
             raise OptimizeInputError(f"ボディ {body.name} に形が無い")
         offsets[body_id] = total
-        total += kernel.face_count(body.shape)
+        total += _brep_topology.face_count(body.shape)
         shapes.append(body.shape)
     if len(shapes) == 1:
         return shapes[0], offsets

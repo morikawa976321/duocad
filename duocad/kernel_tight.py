@@ -26,7 +26,6 @@ import numpy as np
 
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_CompCurve, BRepAdaptor_Curve, BRepAdaptor_Surface
-from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_Copy,
@@ -36,12 +35,10 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Sewing,
     BRepBuilderAPI_Transform,
 )
-from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeFilling, BRepOffsetAPI_MakePipeShell
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
-from OCP.Bnd import Bnd_Box
 from OCP.GC import GC_MakeArcOfCircle
 from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.GProp import GProp_GProps
@@ -57,8 +54,14 @@ from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
-from .kernel_overflow import Unsupported, _boolean, _outward_normal, _solids, _volume
-from .mesh_geometry import indexed_map
+from .kernel_overflow import Unsupported
+
+from . import (
+    brep_checks as _brep_checks,
+    brep_geometry as _brep_geometry,
+    brep_operations as _brep_operations,
+    brep_topology as _brep_topology,
+)
 
 
 class Tight(NamedTuple):
@@ -146,11 +149,11 @@ def _is_closed_loop(edges: list) -> bool:
 
 
 def _round(shape: TopoDS_Shape, top: TopoDS_Shape, radius: float) -> Tight:
-    if len(_solids(shape)) != 1:
+    if len(_brep_topology._overflow_solids(shape)) != 1:
         raise Unsupported("the body must be one solid")
-    normal = _outward_normal(top, _a_point_on(top))
+    normal = _outward_normal(top, _brep_geometry._tight_a_point_on(top))
     normal.Normalize()
-    size = _diagonal(shape)
+    size = _brep_geometry._tight_diagonal(shape)
     below = _split_at_depth(shape, top, normal, radius, size)
     expected = _precise_volume(BRepPrimAPI_MakePrism(top, gp_Vec(normal.XYZ()).Multiplied(-radius)).Shape())
 
@@ -170,13 +173,13 @@ def _round(shape: TopoDS_Shape, top: TopoDS_Shape, radius: float) -> Tight:
     # 楕円 6×2・R=0.67 で 8 秒かかった(R=1 で 1 秒)
     # 縫うのは断面を持つ外の殻だけで、深さ R より下の空洞(内の殻)はそのまま立体に戻す
     cut, floor = _face_on(below.Shape(), section, normal), _face_on(crown, section, normal.Reversed())
-    shells = indexed_map(below.Shape(), TopAbs_SHELL)
+    shells = _brep_topology.indexed_map(below.Shape(), TopAbs_SHELL)
     shells = [shells.FindKey(i) for i in range(1, shells.Extent() + 1)]
-    outer = [shell for shell in shells if indexed_map(shell, TopAbs_FACE).Contains(cut)]
+    outer = [shell for shell in shells if _brep_topology.indexed_map(shell, TopAbs_FACE).Contains(cut)]
     if len(outer) != 1:
         raise Unsupported("the cut at the fillet depth is not on one shell of the body")
     result, sewing = _closed_solid(
-        [face for face in _faces(outer[0]) if not face.IsSame(cut)] + [face for face in _faces(crown) if not face.IsSame(floor)],
+        [face for face in _brep_topology._tight_faces(outer[0]) if not face.IsSame(cut)] + [face for face in _brep_topology._tight_faces(crown) if not face.IsSame(floor)],
         1.0e-6 * size,
         "joining the rounded crown to the body",
         [shell for shell in shells if not shell.IsSame(outer[0])],
@@ -221,7 +224,7 @@ def _unified_faces(faces):
     # UnifySameDomain は入力を変更しうる。元の本体の壁と辺を共有しないコピーで行う。
     unified = ShapeUpgrade_UnifySameDomain(BRepBuilderAPI_Copy(compound).Shape(), False, True, False)
     unified.Build()
-    return _faces(unified.Shape())
+    return _brep_topology._tight_faces(unified.Shape())
 
 
 def _top_face(shape: TopoDS_Shape, edges: list, *, originals=None) -> TopoDS_Shape:
@@ -233,7 +236,7 @@ def _top_face(shape: TopoDS_Shape, edges: list, *, originals=None) -> TopoDS_Sha
 
     candidates = [face for face in neighbors(edges[0]) if all(any(face.IsSame(other) for other in neighbors(edge)) for edge in edges[1:])]
     shared = [face for face in candidates if all(any(edge.IsSame(other) for other in edges)
-              for edge in _edges(BRepTools.OuterWire_s(TopoDS.Face_s(face)))
+              for edge in _brep_topology._tight_edges(BRepTools.OuterWire_s(TopoDS.Face_s(face)))
               if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(face)) and not BRep_Tool.Degenerated_s(edge))]
     groups = [[face] for face in shared]
     if not groups:
@@ -244,11 +247,11 @@ def _top_face(shape: TopoDS_Shape, edges: list, *, originals=None) -> TopoDS_Sha
                 if any(face.IsSame(known) for known in group):
                     continue
                 group.append(face)
-                pending.extend(other for edge in _edges(face) for other in neighbors(edge)
+                pending.extend(other for edge in _brep_topology._tight_edges(face) for other in neighbors(edge)
                                if not any(edge.IsSame(selected) for selected in edges)
                                and _same_support(seed, other)
                                and not any(other.IsSame(known) for known in group))
-            boundary = [edge for face in group for edge in _edges(face)
+            boundary = [edge for face in group for edge in _brep_topology._tight_edges(face)
                         if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(face))
                         and not BRep_Tool.Degenerated_s(edge)
                         and sum(any(other.IsSame(member) for member in group) for other in neighbors(edge)) == 1]
@@ -260,13 +263,13 @@ def _top_face(shape: TopoDS_Shape, edges: list, *, originals=None) -> TopoDS_Sha
         raise Unsupported("the edges must be the whole outline of one top face on the same support surface")
     group = groups[0]
     merged = group if len(group) == 1 else _unified_faces(group)
-    if len(merged) != 1 or not BRepCheck_Analyzer(merged[0]).IsValid():
+    if len(merged) != 1 or not _brep_checks.is_valid(merged[0]):
         raise Unsupported("the top faces on the same support do not join into one valid face")
     common = merged[0]
-    wires = indexed_map(common, TopAbs_WIRE)
+    wires = _brep_topology.indexed_map(common, TopAbs_WIRE)
     if wires.Extent() != 1:
         raise Unsupported("the top face has holes or other inner loops")
-    loop = [edge for edge in _edges(wires.FindKey(1))
+    loop = [edge for edge in _brep_topology._tight_edges(wires.FindKey(1))
             if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(common)) and not BRep_Tool.Degenerated_s(edge)]
     if len(group) == 1 and (len(loop) != len(edges) or not all(any(other.IsSame(edge) for other in loop) for edge in edges)):
         raise Unsupported("the edges must be the whole outline of the top face")
@@ -287,7 +290,7 @@ def _top_face(shape: TopoDS_Shape, edges: list, *, originals=None) -> TopoDS_Sha
 def _split_at_depth(shape, top, normal: gp_Vec, radius: float, size: float):
     """本体を上面から深さ `radius` の平面で切った下の部分(引き算のビルダ)。上の部分が、上面をそのまま深さ `radius` まで
     押し出した形(帯)でなければ引き受けない(壁が上面に垂直で、その範囲に穴・突起・別の面が無い)。"""
-    base = _a_point_on(top).Translated(gp_Vec(normal.XYZ()).Multiplied(-radius))
+    base = _brep_geometry._tight_a_point_on(top).Translated(gp_Vec(normal.XYZ()).Multiplied(-radius))
     axis = gp_Dir(normal)
     side = gp_Dir(gp_Vec(axis.X(), axis.Y(), axis.Z()).Crossed(_any_perpendicular(axis)))
     corner = base.Translated(gp_Vec(side.XYZ()).Multiplied(-size)).Translated(gp_Vec(axis.Crossed(side).XYZ()).Multiplied(-size))
@@ -295,14 +298,14 @@ def _split_at_depth(shape, top, normal: gp_Vec, radius: float, size: float):
     above = _boolean("common", shape, box).Shape()
     band = BRepPrimAPI_MakePrism(top, gp_Vec(normal.XYZ()).Multiplied(-radius)).Shape()
     # 外部の罠: 既定の積分(`BRepGProp.VolumeProperties_s` に精度を渡さない)は、ブーリアンで切った楕円の壁で相対 8.5e-7 ずれ、
-    # 帯との比較が通らなかった。面ごとに積分を選ぶ `kernel.volume` なら 1e-10 で一致する
+    # 帯との比較が通らなかった。面ごとに積分を選ぶ `brep_geometry.volume` なら 1e-10 で一致する
     expected = _precise_volume(band)
     tolerance = 1.0e-8 * max(1.0, expected)
     if (abs(_precise_volume(above) - expected) > tolerance
             or abs(_precise_volume(_boolean("common", above, band).Shape()) - expected) > tolerance):
         raise _NotPrismatic("the body is not the top face pushed straight down over the fillet depth")
     below = _boolean("cut", shape, box)
-    if len(_solids(below.Shape())) != len(_solids(shape)):
+    if len(_brep_topology._overflow_solids(below.Shape())) != len(_brep_topology._overflow_solids(shape)):
         raise Unsupported("cutting the body at the fillet depth split it")
     return below
 
@@ -320,7 +323,7 @@ class _Contour:
         self.curve = BRepAdaptor_CompCurve(TopoDS.Wire_s(wire), True)
         self.first = self.curve.FirstParameter()
         self.length = self.curve.LastParameter() - self.first
-        self.edges = indexed_map(wire, TopAbs_EDGE).Extent()
+        self.edges = _brep_topology.indexed_map(wire, TopAbs_EDGE).Extent()
         # 上から見て反時計回りなら、左(上 × 向き)が面の内側
         points = [self.curve.Value(self.first + self.length * i / 256) for i in range(256)]
         area = gp_Vec(0.0, 0.0, 0.0)
@@ -576,13 +579,13 @@ def _side(segment: _Segment, contour: _Contour, radius: float) -> _Side:
     sweep.Build()
     if not sweep.IsDone():
         raise Unsupported("the rounding face could not be swept along the ball path")
-    faces = indexed_map(sweep.Shape(), TopAbs_FACE)
+    faces = _brep_topology.indexed_map(sweep.Shape(), TopAbs_FACE)
     if faces.Extent() != 1:
         raise Unsupported("sweeping the rounding gave more than one face")
     face = faces.FindKey(1)
     top = None
     ends = []
-    for edge in _edges(face):
+    for edge in _brep_topology._tight_edges(face):
         heights = [gp_Vec(center, point).Dot(up) for point in _samples(edge, 5)]
         if all(abs(height - radius) < 1.0e-6 * max(1.0, radius) for height in heights):
             top = edge
@@ -608,7 +611,7 @@ def _cap(this: _Side, following: _Side, loop: Tuple[float, float], contour: _Con
     filling.Add(TopoDS.Edge_s(following.start), TopoDS.Face_s(following.face), GeomAbs_Shape.GeomAbs_G1, True)
     for rim in _contour_pieces(contour, *loop):
         support = BRepPrimAPI_MakePrism(rim, gp_Vec(contour.up.XYZ()).Multiplied(radius)).Shape()
-        filling.Add(rim, TopoDS.Face_s(indexed_map(support, TopAbs_FACE).FindKey(1)), GeomAbs_Shape.GeomAbs_G1, True)
+        filling.Add(rim, TopoDS.Face_s(_brep_topology.indexed_map(support, TopAbs_FACE).FindKey(1)), GeomAbs_Shape.GeomAbs_G1, True)
     try:
         filling.Build()
     except Exception as error:  # noqa: BLE001
@@ -683,8 +686,8 @@ def _crown(faces: list, section: TopoDS_Shape, size: float) -> TopoDS_Shape:
         sewing.Add(face)
     sewing.Perform()
     free = ShapeAnalysis_FreeBounds(sewing.SewedShape(), tolerance, False, False)
-    loops = indexed_map(free.GetClosedWires(), TopAbs_WIRE)
-    if loops.Extent() != 1 or indexed_map(free.GetOpenWires(), TopAbs_EDGE).Extent() != 0:
+    loops = _brep_topology.indexed_map(free.GetClosedWires(), TopAbs_WIRE)
+    if loops.Extent() != 1 or _brep_topology.indexed_map(free.GetOpenWires(), TopAbs_EDGE).Extent() != 0:
         raise Unsupported("the rounding faces do not leave one loop on the wall")
     plane = BRepAdaptor_Surface(TopoDS.Face_s(section)).Plane()
     floor = BRepBuilderAPI_MakeFace(plane, TopoDS.Wire_s(loops.FindKey(1)), True)
@@ -699,18 +702,18 @@ def _closed_solid(faces: list, tolerance: float, what: str, cavities: list = ())
     for face in faces:
         sewing.Add(face)
     sewing.Perform()
-    shells = indexed_map(sewing.SewedShape(), TopAbs_SHELL)
-    if sewing.NbFreeEdges() != 0 or shells.Extent() != 1 or indexed_map(shells.FindKey(1), TopAbs_FACE).Extent() != len(faces):
+    shells = _brep_topology.indexed_map(sewing.SewedShape(), TopAbs_SHELL)
+    if sewing.NbFreeEdges() != 0 or shells.Extent() != 1 or _brep_topology.indexed_map(shells.FindKey(1), TopAbs_FACE).Extent() != len(faces):
         raise Unsupported(f"{what} did not close ({sewing.NbFreeEdges()} free edges, {shells.Extent()} shells)")
     # 殻の向きは体積の符号で決める。`ShapeFix_Solid` は面を置き換えることがあり、縫い合わせの由来が切れた(壁の切り欠き)
     shell = TopoDS.Shell_s(shells.FindKey(1))
-    if _volume(BRepBuilderAPI_MakeSolid(shell).Solid()) < 0.0:
+    if _brep_geometry._overflow_volume(BRepBuilderAPI_MakeSolid(shell).Solid()) < 0.0:
         shell = TopoDS.Shell_s(shell.Reversed())
     maker = BRepBuilderAPI_MakeSolid(shell)
     for cavity in cavities:
         maker.Add(TopoDS.Shell_s(cavity))
     solid = maker.Solid()
-    if _volume(solid) <= 0.0 or not BRepCheck_Analyzer(solid).IsValid():
+    if _brep_geometry._overflow_volume(solid) <= 0.0 or not _brep_checks.is_valid(solid):
         raise Unsupported(f"{what} is not a valid solid")
     return solid, sewing
 
@@ -721,29 +724,22 @@ def _precise_volume(shape: TopoDS_Shape, *, curved: bool = False) -> float:
         props = GProp_GProps()
         BRepGProp.VolumeProperties_s(shape, props, 1e-9)
         return props.Mass()
-    from .kernel import volume  # kernel がこのモジュールを読むので、呼ぶときに読む
-
-    return volume(shape)
-
-
-def _faces(shape: TopoDS_Shape) -> list:
-    faces = indexed_map(shape, TopAbs_FACE)
-    return [faces.FindKey(i) for i in range(1, faces.Extent() + 1)]
+    return _brep_geometry.volume(shape)
 
 
 def _face_on(shape: TopoDS_Shape, top: TopoDS_Shape, outward: gp_Vec) -> TopoDS_Shape:
     """`shape` の面のうち、`top` と同じ平面にあり、外向きの法線が `outward` を向く面。向きを見ないと、深さ R のすぐ下に上面が
     ある空洞の面(外向きは逆)も拾った(断面の 1e-6 下)。"""
-    level = _a_point_on(top)
+    level = _brep_geometry._tight_a_point_on(top)
     found = []
-    for face in (indexed_map(shape, TopAbs_FACE).FindKey(i) for i in range(1, indexed_map(shape, TopAbs_FACE).Extent() + 1)):
+    for face in (_brep_topology.indexed_map(shape, TopAbs_FACE).FindKey(i) for i in range(1, _brep_topology.indexed_map(shape, TopAbs_FACE).Extent() + 1)):
         surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
         if surface.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
             continue
         plane = surface.Plane()
         if (plane.Axis().Direction().IsParallel(gp_Dir(outward), 1.0e-9)
-                and plane.Distance(level) < 1.0e-7 * max(1.0, _diagonal(shape))
-                and _outward_normal(face, _a_point_on(face)).Dot(outward) > 0.0):
+                and plane.Distance(level) < 1.0e-7 * max(1.0, _brep_geometry._tight_diagonal(shape))
+                and _outward_normal(face, _brep_geometry._tight_a_point_on(face)).Dot(outward) > 0.0):
             found.append(face)
     if len(found) != 1:
         raise Unsupported("the rounded top face could not be found")
@@ -757,11 +753,6 @@ def _wire(edges: list) -> TopoDS_Shape:
     if not maker.IsDone():
         raise Unsupported("the rounding edges do not join into a loop")
     return maker.Wire()
-
-
-def _edges(shape: TopoDS_Shape) -> list:
-    found = indexed_map(shape, TopAbs_EDGE)
-    return [TopoDS.Edge_s(found.FindKey(i)) for i in range(1, found.Extent() + 1)]
 
 
 def _samples(edge, count: int) -> list:
@@ -783,25 +774,20 @@ def _end_direction(edge, at_end: bool) -> gp_Vec:
     return tangent if forward else tangent.Reversed()
 
 
-def _a_point_on(face: TopoDS_Shape) -> gp_Pnt:
-    surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
-    return surface.Value(0.5 * (surface.FirstUParameter() + surface.LastUParameter()),
-                         0.5 * (surface.FirstVParameter() + surface.LastVParameter()))
-
-
 def _any_perpendicular(direction: gp_Dir) -> gp_Vec:
     helper = gp_Vec(1.0, 0.0, 0.0) if abs(direction.X()) < 0.9 else gp_Vec(0.0, 1.0, 0.0)
     return gp_Vec(direction).Crossed(helper)
 
 
-def _area(face: TopoDS_Shape) -> float:
-    props = GProp_GProps()
-    BRepGProp.SurfaceProperties_s(face, props)
-    return props.Mass()
+def _boolean(kind: str, first: TopoDS_Shape, second: TopoDS_Shape, fuzzy: float = 0.0):
+    builder = _brep_operations.build_boolean(kind, first, second, fuzzy)
+    if not builder.IsDone():
+        raise Unsupported(f"{kind} of the rounding material failed")
+    return builder
 
 
-def _diagonal(shape: TopoDS_Shape) -> float:
-    box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box)
-    x0, y0, z0, x1, y1, z1 = box.Get()
-    return max(1.0, math.dist((x0, y0, z0), (x1, y1, z1)))
+def _outward_normal(face: TopoDS_Shape, point: gp_Pnt) -> gp_Vec:
+    normal = _brep_geometry.outward_normal(face, point)
+    if normal is None:
+        raise Unsupported("the face has no normal at the edge")
+    return normal

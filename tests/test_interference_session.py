@@ -14,11 +14,15 @@ from duocad import interference, selection
 from duocad.document import Body
 from duocad.interference_worker import WorkerProcess
 from duocad.mcp_server import DocumentTools, McpServer
-from duocad.mesh_geometry import subshapes
+
 from duocad.server import Server, Session
 from interference_support import InProcessWorker, box
 from mcp_support import call, call_error, request
 from session_support import FakeConnection
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +43,7 @@ def tolerances(session):
     out = []
     for body in session.document.bodies:
         for kind, cast in ((TopAbs_VERTEX, TopoDS.Vertex_s), (TopAbs_EDGE, TopoDS.Edge_s), (TopAbs_FACE, TopoDS.Face_s)):
-            out.append([BRep_Tool.Tolerance_s(cast(sub)) for sub in subshapes(body.shape, kind)])
+            out.append([BRep_Tool.Tolerance_s(cast(sub)) for sub in _brep_topology.subshapes(body.shape, kind)])
     return out
 
 
@@ -47,7 +51,7 @@ def fingerprint(session):
     return (
         session.document.log.to_json(), len(session.document.log.entries), session.applied_count,
         session.get_selection(), [body.id for body in session.document.bodies], tolerances(session),
-        [(len(subshapes(b.shape, TopAbs_VERTEX)), len(subshapes(b.shape, TopAbs_EDGE)), len(subshapes(b.shape, TopAbs_FACE))) for b in session.document.bodies],
+        [(len(_brep_topology.subshapes(b.shape, TopAbs_VERTEX)), len(_brep_topology.subshapes(b.shape, TopAbs_EDGE)), len(_brep_topology.subshapes(b.shape, TopAbs_FACE))) for b in session.document.bodies],
     )
 
 

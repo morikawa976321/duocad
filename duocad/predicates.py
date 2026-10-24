@@ -31,9 +31,14 @@ from __future__ import annotations
 import math
 from typing import List, Sequence, Tuple
 
-from . import kernel, meshbody, query
+from . import meshbody, query
 from .document import Document
 from .selection import selectable_bodies
+
+from . import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
 
 #: 述語が対象にできる種別(領域の述語はスケッチ側の話なので持たない)
 PREDICATE_KINDS = ("face", "edge")
@@ -134,7 +139,7 @@ def describe_ops() -> dict:
             },
             {
                 "op": "kind_is",
-                "args": {"value": "|".join(kernel.FACE_KINDS)},
+                "args": {"value": "|".join(_brep_geometry.FACE_KINDS)},
                 "doc": "面の種別が value と一致する(kernel.classify_face)",
             },
         ],
@@ -156,7 +161,7 @@ def describe_ops() -> dict:
             },
             {
                 "op": "kind_is",
-                "args": {"value": "|".join(kernel.EDGE_KINDS)},
+                "args": {"value": "|".join(_brep_geometry.EDGE_KINDS)},
                 "doc": "辺の種別が value と一致する(kernel.classify_edge)",
             },
             {
@@ -193,7 +198,7 @@ def _normalize_condition(kind: str, condition: dict) -> dict:
         value = condition["value"]
         if not isinstance(value, str):
             raise ValueError(f"'value' for kind_is must be a str, got {type(value).__name__}")
-        known = kernel.FACE_KINDS if kind == "face" else kernel.EDGE_KINDS
+        known = _brep_geometry.FACE_KINDS if kind == "face" else _brep_geometry.EDGE_KINDS
         if value not in known:
             raise ValueError(f"unknown kind value: {value!r}")
         return {"op": op, "value": value}
@@ -336,7 +341,7 @@ def _boundary_sets(body, where: Sequence[dict]) -> dict:
             # 有効な範囲まで言う(`selection._select_shape` と揃える)。
             raise ValueError(
                 f"on_boundary_of_face face out of range: {face_index} "
-                f"(1..{kernel.face_count(body.shape)} on body {body.id!r})"
+                f"(1..{_brep_topology.face_count(body.shape)} on body {body.id!r})"
             ) from error
     return resolved
 

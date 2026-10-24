@@ -8,12 +8,16 @@ from duocad.document import Document
 from duocad.verbs import fillet, move_body
 from document_support import box_shape, document_state, new_box, replay_through_json
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 
 def _geometry(document):
     result = {}
     for body in document.bodies:
         box = kernel.bounding_box(body.shape, cache=None)
-        result[body.id] = [kernel.volume(body.shape), *kernel.centroid(body.shape), *box["min"], *box["max"]]
+        result[body.id] = [_brep_geometry.volume(body.shape), *_brep_geometry.centroid(body.shape), *box["min"], *box["max"]]
     return result
 
 
