@@ -80,8 +80,9 @@ OCCT の `MakeFillet` は 1 で `IsDone()=False`、2 では断る・壊れた形
 ### いつ使うか(`kernel._blend_edges`)
 
 画面・MCP の確定とプレビューでは、フィレット・面取りの計算全体(関門・由来の射影を含む)を、面の編集と同じ常駐の
-子プロセス `kernel_worker` で行う。対話の期限は `kernel_worker.time_limit(True)`(暫定で既存の `INTERACTIVE_TIMEOUT_S = 20.0` 秒を共有。
-子の起動と受け渡しを含み、前の要求待ちは含まない)。期限切れは `fillet: 20 秒以内に返事が無かった` / `chamfer: 20 秒以内に返事が無かった`
+子プロセス `kernel_worker` で行う。対話の期限は `kernel_worker.time_limit(True)`(面の編集と同じ `INTERACTIVE_TIMEOUT_S = 20.0` 秒。
+子の起動と受け渡しを含み、前の要求待ちは含まない)。本人の決定(2026-10-24): 面の編集と同じ 20 秒。はみ出しの吸収が要る辺を
+多数一度に選ぶ重い丸め(下の「時間」の表で 19.7〜24.1 秒。上限として読む値)は断られうるので、その場合は辺を分けて丸める。期限切れは `fillet: 20 秒以内に返事が無かった` / `chamfer: 20 秒以内に返事が無かった`
 という `ValueError` で断り、子を止め、文書もログも変えない。次の要求で子を立て直す。期限を契機に別の作り方へ切り替えない。
 ログの再生(文書を開く・redo・寸法の作り直し)も子を通すが、期限を掛けない。プレビューの結果は親の `kernel.remembered` に覚え、
 写しの結果を `adopt_results` で採用して確定・redo で使い回す。直接呼ぶ `kernel.fillet_edges` / `chamfer_edges` は同一プロセスの純粋な関数のまま。

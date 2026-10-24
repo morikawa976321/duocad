@@ -29,7 +29,7 @@ from . import worker_process
 
 #: 画面・MCP からの操作で、計算(子の起動と受け渡しを含む)を打ち切るまでの秒数。本人の決定(2026-10-23、docs/FACE_EDIT.md カード e)。
 #: 実測: 合成形状の正当な計算の最長は 18 秒(穴100個を一度に消す)、角ばった実物の1件は最長約 2.3 秒。
-#: フィレット・面取りも暫定で共有する。期限の最終値は別途決定する(docs/FILLET_OVERFLOW.md「いつ使うか」)。
+#: フィレット・面取りも同じ値(本人の決定 2026-10-24。docs/FILLET_OVERFLOW.md「いつ使うか」)。
 INTERACTIVE_TIMEOUT_S = 20.0
 
 _LOCK = threading.Lock()
