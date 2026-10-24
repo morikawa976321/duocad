@@ -173,7 +173,7 @@ AI が論文・メーカーの設計指針・動画・CAD ライブラリを調�
 
 | | 中身 |
 |---|---|
-| target | 確定選択の**全周の円筒面（`kernel.classify_face` の `cylinder_full`）ちょうど1つ**（`selection.require_selected(..., exactly_one=True)`）。円錐面（テーパーねじ）は将来の拡張（Issue #210） |
+| target | 確定選択の**全周の円筒面（`kernel.classify_face` の `cylinder_full`）ちょうど1つ**（`selection.require_selected(..., exactly_one=True)`）。円錐面（テーパーねじ）は将来の拡張 |
 | how | `profile`（選択 `trapezoid30` / `trapezoid45`、必須・既定なし）、`clearance`（mm、省略可＝山形と雄雌ごとの既定、`dimension=True`） |
 | 返り値 | `body_id`・`changed_bodies`。推奨の外の隙間なら `warning` も（`Session` が確定のときだけ警告のトーストへ積む） |
 | 宣言 | `category="feature"`・`previewable=True`・`resets_selection=True` |
