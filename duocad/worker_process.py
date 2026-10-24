@@ -95,7 +95,7 @@ class WorkerProcess:
         self.close()
 
     # ---- 要求
-    def request(self, message: Dict[str, Any], timeout: Optional[float]) -> Dict[str, Any]:
+    def request(self, message: Dict[str, Any], timeout: Optional[float], *, cancel: Optional[threading.Event] = None) -> Dict[str, Any]:
         """子へ要求を送り、返事の `result` を返す。子が無ければ起動して `load` を送る(子の起動もその時間も `timeout` の内)。
         `timeout` が None なら上限なし(取り消しは効く)。"""
         deadline = math.inf if timeout is None else time.monotonic() + timeout
@@ -105,8 +105,8 @@ class WorkerProcess:
         if self._process is None:
             self._spawn()
             if self._load is not None:
-                self._exchange(self._load, min(self._startup_seconds, max(deadline - time.monotonic(), 0.0)))
-        return self._exchange(message, max(deadline - time.monotonic(), 0.0))
+                self._exchange(self._load, min(self._startup_seconds, max(deadline - time.monotonic(), 0.0)), cancel=cancel)
+        return self._exchange(message, max(deadline - time.monotonic(), 0.0), cancel=cancel)
 
     def restart(self) -> None:
         """子を止めて、次の要求で作り直させる。"""
@@ -183,13 +183,13 @@ class WorkerProcess:
         except (OSError, ValueError):
             return
 
-    def _exchange(self, message: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+    def _exchange(self, message: Dict[str, Any], timeout: float, *, cancel: Optional[threading.Event] = None) -> Dict[str, Any]:
         self._seq += 1
         seq = self._seq
         self._outgoing.put((json.dumps({**message, "seq": seq}) + "\n").encode("ascii"))
         deadline = time.monotonic() + timeout
         while True:
-            if self._cancel is not None and self._cancel.is_set():
+            if (self._cancel is not None and self._cancel.is_set()) or (cancel is not None and cancel.is_set()):
                 raise WorkerCancelled()
             remaining = deadline - time.monotonic()
             if remaining <= 0:

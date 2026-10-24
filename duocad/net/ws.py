@@ -295,6 +295,7 @@ class Server:
         self._preview_worker: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._preview_seq: dict = {}  # connection -> int
         self._preview_futures: dict = {}  # connection -> asyncio.Future
+        self._preview_jobs: dict = {}  # connection -> PreviewJob(取消しはループへ戻る前に伝える)
         self._interference = InterferenceRuns(_send, lambda connection: connection in self.clients)
         self._acks: dict = {}  # connection -> _Acks
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
@@ -398,6 +399,9 @@ class Server:
             self._preview_seq.pop(connection, None)
             self._acks.pop(connection, None)
             pending = self._preview_futures.pop(connection, None)
+            job = self._preview_jobs.pop(connection, None)
+            if job is not None:
+                job.cancel()
             if pending is not None:
                 pending.cancel()
             self._interference.cancel(connection)
@@ -770,19 +774,28 @@ class Server:
         seq = self._preview_seq.get(connection, 0) + 1
         self._preview_seq[connection] = seq
         previous = self._preview_futures.pop(connection, None)
+        job = self._preview_jobs.pop(connection, None)
+        if job is not None:
+            job.cancel()
         if previous is not None:
-            previous.cancel()  # 始まっていなければ取り消せる(始まっていれば結果を送らないだけ)
+            previous.cancel()
         return seq
 
     def _start_preview(self, connection: Any, message: dict, job: Any, seq: int) -> None:
         """プレビューをワーカースレッドで計算させ、この要求の処理はすぐ抜ける(計算中もこの接続の次の要求を捌く。issue #168)。
 
-        ワーカーは1本で、届いた順に計算する。古いプレビューの扱いは `_supersede_previews`。`done` は結果(か失敗)の後。
+        ワーカーは1本で、待つプレビューは接続をまたいでも最新の1件。古いプレビューの扱いは `_supersede_previews`。`done` は結果(か失敗)の後。
         """
         if self._preview_worker is None:
             self._preview_worker = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="duocad-preview")
+        for owner, previous in self._preview_futures.items():
+            self._preview_jobs[owner].cancel()
+            previous.cancel()
         future = asyncio.get_running_loop().run_in_executor(self._preview_worker, job.run)
+        # asyncio の Future の取消しは、既に走っているスレッドへは届かない。
+        future.add_done_callback(lambda done: job.cancel() if done.cancelled() else None)
         self._preview_futures[connection] = future
+        self._preview_jobs[connection] = job
 
         async def deliver() -> None:
             latest = lambda: self._preview_seq.get(connection) == seq  # noqa: E731
@@ -806,6 +819,7 @@ class Server:
             finally:
                 if self._preview_futures.get(connection) is future:
                     self._preview_futures.pop(connection, None)
+                    self._preview_jobs.pop(connection, None)
                 ack_id = message.get("ack_id")
                 if ack_id is not None:
                     try:

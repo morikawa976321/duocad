@@ -23,6 +23,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Mapping, Optional
 
+from . import kernel_worker
 from .document import Document, unknown_id_message
 from .oplog import Operation, register_verb, verb_handler
 
@@ -138,7 +139,8 @@ def set_parameter(doc: Document, name: str, value: float) -> Operation:
     _require_usable_value(doc, name, value)
 
     upto_seq = doc.log.entries[-1].seq if doc.log.entries else 0
-    rebuild(doc, upto_seq, overrides={name: value})
+    with kernel_worker.new_input():
+        rebuild(doc, upto_seq, overrides={name: value})
 
     return doc.log.append(
         VERB_SET_PARAMETER,
@@ -192,6 +194,8 @@ def rebuild(
     saved_active = doc._active_body_id
     # 再生が通った操作は undo 用スナップショットを作り直す(`_common.reapply_shape`)ので、失敗したら元の表へ戻す。
     saved_snapshots = dict(SNAPSHOTS.get(doc, {}))
+    saved_log = source._snapshot()
+    saved_provenance = [(operation, operation.provenance) for operation in source._entries]
     # 可視性はログに載らないので、作り直した Body / Sketch へ引き継ぐ。
     hidden_bodies = {body.id for body in saved_bodies if not body.visible}
     hidden_sketches = {sketch.id for sketch in saved_sketches if not sketch.visible}
@@ -220,6 +224,9 @@ def rebuild(
         doc.parameters.update(saved_parameters)
         doc._active_body_id = saved_active
         SNAPSHOTS[doc] = saved_snapshots
+        source._restore(saved_log)
+        for operation, provenance in saved_provenance:
+            operation.provenance = provenance
         raise
     finally:
         _REBUILDING = False

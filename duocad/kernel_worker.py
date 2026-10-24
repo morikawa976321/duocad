@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import atexit
 import base64
+from contextlib import contextmanager
+from contextvars import ContextVar
 import io
 import sys
 import threading
+import time
 from typing import Any, Dict, Optional
 
 from OCP.BinTools import BinTools, BinTools_FormatVersion
@@ -27,38 +30,111 @@ from OCP.TopoDS import TopoDS_Shape
 
 from . import worker_process
 
-#: 画面・MCP からの操作で、計算(子の起動と受け渡しを含む)を打ち切るまでの秒数。本人の決定(2026-10-23、docs/FACE_EDIT.md カード e)。
+#: 新しい入力(画面・MCP の確定・プレビュー・寸法変更)の期限[秒](要求待ち・子の起動・受け渡しを含む)。本人の決定(2026-10-23、docs/FACE_EDIT.md カード e)。
 #: 実測: 合成形状の正当な計算の最長は 18 秒(穴100個を一度に消す)、角ばった実物の1件は最長約 2.3 秒。
 #: フィレット・面取りも同じ値(本人の決定 2026-10-24。docs/FILLET_OVERFLOW.md「いつ使うか」)。
 INTERACTIVE_TIMEOUT_S = 20.0
 
-_LOCK = threading.Lock()
+_CONDITION = threading.Condition()
+_ACTIVE: Optional[threading.Event] = None
+_ACTIVE_PREVIEW = False
+_PENDING_PREVIEW: Optional[threading.Event] = None
+_WAITING_FOREGROUND = 0
+_PREVIEW: ContextVar[Optional[threading.Event]] = ContextVar("kernel_preview", default=None)
+_NEW_INPUT: ContextVar[bool] = ContextVar("kernel_new_input", default=False)
 _WORKER: Optional[worker_process.WorkerProcess] = None
 
 
+@contextmanager
+def preview_context(cancel: Optional[threading.Event] = None):
+    """プレビューの印と取消しを、計算するスレッドの中だけ伝える。"""
+    token = _PREVIEW.set(cancel if cancel is not None else threading.Event())
+    try:
+        yield
+    finally:
+        _PREVIEW.reset(token)
+
+
+@contextmanager
+def new_input():
+    """寸法変更の試し再生は、記録済みの操作でも新しい入力として期限を掛ける。"""
+    token = _NEW_INPUT.set(True)
+    try:
+        yield
+    finally:
+        _NEW_INPUT.reset(token)
+
+
 def time_limit(interactive: bool) -> Optional[float]:
-    """画面・MCP からの操作なら期限[秒]、ログの再生なら None(再生に期限を掛けると、保存できた文書が負荷しだいで開けなくなる)。"""
-    return INTERACTIVE_TIMEOUT_S if interactive else None
+    """新しい入力(確定・プレビュー・寸法変更)は期限あり、記録済み入力の再生は期限なし。"""
+    return INTERACTIVE_TIMEOUT_S if interactive or _NEW_INPUT.get() else None
 
 
 def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op: str = "face_edit") -> dict:
-    """子で面の編集か `kernel.fillet_edges` / `chamfer_edges` を走らせ、同じ形の辞書を返す(`"shape"` は親の形)。
+    """子の計算は1件。確定・再生を優先し、プレビューは待機中も実行中も取消し可能。
 
-    `timeout` は計算の期限[秒](None は期限なし。ログの再生)。前の計算の終わりを待つ時間は含めない。
+    期限は呼び出しから数え、符号化・待機・起動・受け渡しを含める。
+    子を止めるのは所有スレッドだけ(次の要求の子を誤って止めない)。
     """
-    global _WORKER
-    message = {"op": op, "verb": verb, "arguments": arguments, "shape": _encode(shape)}
-    with _LOCK:
+    global _WORKER, _ACTIVE, _ACTIVE_PREVIEW, _PENDING_PREVIEW, _WAITING_FOREGROUND
+    deadline = float("inf") if timeout is None else time.monotonic() + timeout
+    preview = _PREVIEW.get()
+    cancel = preview if preview is not None else threading.Event()
+
+    def check():
+        if cancel.is_set():
+            raise ValueError(f"{verb}: プレビューを取り消した")
+        if time.monotonic() >= deadline:
+            raise ValueError(f"{verb}: {timeout:.0f} 秒以内に返事が無かった")
+
+    with _CONDITION:
+        check()
+        if preview is not None:
+            if _PENDING_PREVIEW is not None:
+                _PENDING_PREVIEW.set()
+            _PENDING_PREVIEW = cancel
+        else:
+            _WAITING_FOREGROUND += 1
+        if _ACTIVE_PREVIEW and _ACTIVE is not None:
+            _ACTIVE.set()
+        try:
+            while True:
+                check()
+                if _ACTIVE is None and (preview is None or _WAITING_FOREGROUND == 0):
+                    _ACTIVE, _ACTIVE_PREVIEW = cancel, preview is not None
+                    break
+                _CONDITION.wait(timeout=min(0.05, max(0.0, deadline - time.monotonic())))
+        finally:
+            if preview is None:
+                _WAITING_FOREGROUND -= 1
+            elif _PENDING_PREVIEW is cancel:
+                _PENDING_PREVIEW = None
+            _CONDITION.notify_all()
+    try:
+        message = {"op": op, "verb": verb, "arguments": arguments, "shape": _encode(shape)}
+        check()
         if _WORKER is None:
-            # `-m duocad.kernel_worker` だと、パッケージの import が先にこのモジュールを読み、runpy が二重読みを警告する
             _WORKER = worker_process.WorkerProcess([sys.executable, "-c", "from duocad import kernel_worker; kernel_worker.child_main()"])
         try:
-            result = _WORKER.request(message, timeout)
+            remaining = None if timeout is None else max(0.0, deadline - time.monotonic())
+            result = _WORKER.request(message, remaining, cancel=cancel)
+            if cancel.is_set() or time.monotonic() >= deadline:
+                _WORKER.restart()
+            check()  # 返信と同時に取り消された結果も採らない
         except worker_process.WorkerRemoteError as error:
             raise ValueError(f"{verb}: OCCT raised {error.reason}") from None
+        except worker_process.WorkerCancelled:
+            _WORKER.restart()
+            raise ValueError(f"{verb}: プレビューを取り消した") from None
         except worker_process.WorkerError as error:
             _WORKER.restart()
+            if isinstance(error, worker_process.WorkerTimeout):
+                raise ValueError(f"{verb}: {timeout:.0f} 秒以内に返事が無かった") from None
             raise ValueError(f"{verb}: {error.reason}") from None
+    finally:
+        with _CONDITION:
+            _ACTIVE, _ACTIVE_PREVIEW = None, False
+            _CONDITION.notify_all()
     if "refused" in result:
         raise ValueError(result["refused"])
     return {
@@ -71,7 +147,9 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
 
 def stop() -> None:
     """子を止める(終了時。次の `run` で立て直す)。"""
-    with _LOCK:
+    with _CONDITION:
+        while _ACTIVE is not None:
+            _CONDITION.wait(timeout=0.05)
         if _WORKER is not None:
             _WORKER.close()
 

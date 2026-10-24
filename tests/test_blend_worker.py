@@ -182,3 +182,80 @@ def test_worker_imports_the_worktree_code():
     with worker_process.WorkerProcess([sys.executable, "-c", child]) as worker:
         result = worker.request({}, 20)
     assert result["root"] == str(REPO_ROOT / "duocad" / "kernel_worker.py")
+
+
+def test_dimension_rebuild_of_the_slow_dome_times_out_atomically(session, monkeypatch):
+    from duocad.parameters import parameter_of, set_parameter
+    from duocad.region import region_ref
+    from duocad.sketch import add_ellipse, sketch_create
+    from duocad.verbs import boolean_body, extrude, fillet, rename
+    from duocad.verbs.add_solid import add_solid_body
+    from duocad.verbs._common import SNAPSHOTS
+
+    doc = session.document
+    sketch = sketch_create(doc, "XY")
+    ellipse = add_ellipse(doc, sketch, (0, 0), 4, 4)
+    extrude(doc, [region_ref(sketch, 1)], 8, mode="new")
+    body = doc.bodies[0]
+    axes = gp_Ax2(gp_Pnt(0, 0, -20), gp_Dir(0, math.sin(0.03), math.cos(0.03)))
+    axes.Rotate(gp_Ax1(axes.Location(), axes.Direction()), math.pi)
+    sphere = add_solid_body(doc, BRepPrimAPI_MakeSphere(axes, 26).Shape(), "sphere")
+    boolean_body(doc, {"body": body.id, "kind": "face", "index": 1}, [sphere], mode="intersect")
+    fillet(doc, [3, 4], 1.5, body_id=body.id)
+    # redo の末尾と、再生中に補完される空の由来も失敗時には残す。
+    rename(doc, body.id, "renamed")
+    doc.log.undo(doc)
+    doc.log.entries[-2].provenance = None
+    before = (_state(session), dict(doc.parameters), doc.log._snapshot(),
+              list(doc.sketches), doc._active_body_id, dict(SNAPSHOTS[doc]))
+    monkeypatch.setattr(kernel_worker, "INTERACTIVE_TIMEOUT_S", 2.0)
+    started = time.monotonic()
+    with pytest.raises(ValueError, match="fillet: 2 秒以内に返事が無かった"):
+        set_parameter(doc, parameter_of(doc, sketch, ellipse, "width"), 12)
+    assert time.monotonic() - started < 8
+    assert (_state(session), dict(doc.parameters), doc.log._snapshot(),
+            list(doc.sketches), doc._active_body_id, dict(SNAPSHOTS[doc])) == before
+    assert kernel_worker._WORKER._process is None
+    assert doc.log.can_redo
+    # 復元した undo 用の形を実際に使える。
+    expected = SNAPSHOTS[doc][(body.id, doc.log.entries[-1].seq)]
+    doc.log.undo(doc)
+    assert body.shape is expected
+
+
+@pytest.mark.parametrize("verb", ["fillet", "chamfer", "offset_faces"])
+def test_dimension_changes_have_deadlines_but_recorded_changes_replay_without_them(monkeypatch, verb):
+    from duocad.document import Document
+    from duocad.parameters import parameter_of, set_parameter
+    from duocad.region import region_ref
+    from duocad.sketch import add_rectangle, sketch_create
+    from duocad import verbs
+
+    doc = Document()
+    sketch = sketch_create(doc, "XY")
+    rectangle = add_rectangle(doc, sketch, (0, 0), 20, 20)
+    verbs.extrude(doc, [region_ref(sketch, 1)], 20, mode="new")
+    body = doc.bodies[0]
+    if verb == "offset_faces":
+        verbs.offset_faces(doc, [1], 1, body_id=body.id)
+    else:
+        getattr(verbs, verb)(doc, [1], 2, body_id=body.id)
+    calls = []
+    run = kernel_worker.run
+    def observe(*args, **kwargs):
+        calls.append(kwargs["timeout"])
+        return run(*args, **kwargs)
+    monkeypatch.setattr(kernel_worker, "run", observe)
+    width = parameter_of(doc, sketch, rectangle, "width")
+    set_parameter(doc, width, 22)
+    assert calls == [kernel_worker.INTERACTIVE_TIMEOUT_S]
+    assert doc.parameters[width] == 22
+    calls.clear()
+    monkeypatch.setattr(kernel_worker, "INTERACTIVE_TIMEOUT_S", 1e-6)
+    doc.log.undo(doc)
+    doc.log.redo(doc)
+    restored = replay_through_json(doc)
+    assert calls and all(timeout is None for timeout in calls)
+    assert restored.parameters == doc.parameters
+    assert query.volume(restored.bodies[0].shape) == pytest.approx(query.volume(doc.bodies[0].shape))
+    assert kernel_worker.time_limit(False) is None

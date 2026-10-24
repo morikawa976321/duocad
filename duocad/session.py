@@ -13,6 +13,7 @@ import concurrent.futures
 import contextlib
 import functools
 import inspect
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional  # Any: Session verb wrappers / listeners
@@ -22,6 +23,7 @@ from . import (
     interference,
     io_step,
     kernel,
+    kernel_worker,
     optimize_run,
     query,
     selection,
@@ -109,8 +111,18 @@ class PreviewJob:
     イベントループで呼ぶ。"""
 
     def __init__(self, run: Any, adopt: Any) -> None:
-        self.run = run
+        self._cancel = threading.Event()
+        self._run = run
         self.adopt = adopt
+
+    def run(self):
+        with kernel_worker.preview_context(self._cancel):
+            if self._cancel.is_set():
+                raise ValueError("プレビューを取り消した")
+            return self._run()
+
+    def cancel(self) -> None:
+        self._cancel.set()
 
 
 class Session:
@@ -615,7 +627,7 @@ class Session:
         bodies_out: list[dict] = []
         self._suppress_events += 1
         try:
-            with speculative(self.document):
+            with speculative(self.document), kernel_worker.preview_context():
                 getattr(self, method_name)(**values)
                 for body in self.document.bodies:
                     if not body.visible or body.shape is None:
