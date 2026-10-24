@@ -40,6 +40,16 @@ export const REGION_COLOR = 0x4d7ea8
 export const REGION_SELECTED_COLOR = 0xffb454
 /** 確定前の形。半透明で「まだ無いもの」に見せる。 */
 export const PREVIEW_COLOR = 0x7ee081
+/** ゴーストの見えている辺。半透明の面(`PREVIEW_COLOR`)の上でも、灰色のボディの上でも読める明るさにする。 */
+export const PREVIEW_EDGE_COLOR = 0xc6f8c8
+/** ゴーストの一番手前の面の不透明度。奥の破線と光る輪郭が透けて読める薄さ。 */
+export const PREVIEW_FILL_OPACITY = 0.3
+/** ゴーストの見えている辺・隠れた辺(破線)の太さ[CSS px]。 */
+export const PREVIEW_EDGE_WIDTH_PX = 2
+export const PREVIEW_HIDDEN_EDGE_WIDTH_PX = 1.25
+/** 隠れた辺の破線の長さと隙間[CSS px](注視点の奥行きで測る。ズームしても画面上の長さが変わらない)。 */
+export const PREVIEW_DASH_PX = 8
+export const PREVIEW_GAP_PX = 5
 /**
  * 形状最適化(第3のモード)の役割色。選択が勝つ: 選ばれているあいだは
  * `HIGHLIGHT_COLOR` になり、役割色は一時的に見えなくなる(`applyFaceMaterials` が実体)。
@@ -223,6 +233,12 @@ export const LAYER = {
   /** 断面(`sectionView.ts`)。ステンシルの偶奇を書く判定メッシュ → 切り口の板の順で、板がソリッドの後に描かれることが要る。 */
   sectionStencil: 3,
   sectionCap: 4,
+  /**
+   * 確定前のゴースト(`ghostLayer.ts`)。ボディごとの `Group` に付け、three.js の groupOrder として子の全パスに効かせる。
+   * ソリッド・断面の切り口・グリッド・スケッチ(どれも groupOrder 0 以下)の後、測定の札より前。
+   * ゴーストは奥行きを書くので、これより後に深度検査つきで描くものはゴーストの奥で消える。
+   */
+  ghost: 5,
   edge: 10,
   region: 11,
   sketchLine: 12,
@@ -273,6 +289,11 @@ export const DEPTH_BIAS_LAYER = {
    * 許しが寄せた量より狭いと「見えているのに指せない」になる(`slack` はこの量 + 1画素を下限に持つ)。
    */
   sketch: 1,
+  /**
+   * ゴーストの辺。見えている辺(深度 ≦)と隠れた辺(深度 >)を同じ量だけ寄せて分ける。面の上の辺が自分の面・重なった本物の
+   * ボディと奥行きを争うと、同じ辺が実線と破線に明滅する。太さ2pxの線の片側(1px)が斜めの面に掛かっても勝つよう、`sketch` の2倍寄せる。
+   */
+  ghostEdge: 2,
 } as const
 
 /**
