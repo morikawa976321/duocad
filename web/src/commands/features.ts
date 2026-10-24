@@ -391,8 +391,7 @@ export const THREAD: CommandDef<'thread'> = {
       name: 'profile',
       label: '山形',
       options: [
-        { value: 'semicircle', label: '半円(穴の推奨 0.11〜0.14)', buttonId: 'thread-profile-semicircle' },
-        { value: 'trapezoid30', label: '30°台形(穴の推奨 0.18〜0.22)', buttonId: 'thread-profile-trapezoid30' },
+        { value: 'trapezoid30', label: '30°台形(穴の推奨 0.18〜0.20)', buttonId: 'thread-profile-trapezoid30' },
         { value: 'trapezoid45', label: '45°台形(穴の推奨 0.11〜0.13)', buttonId: 'thread-profile-trapezoid45' },
       ],
     },
