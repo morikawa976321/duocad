@@ -24,6 +24,7 @@ from OCP.BRepCheck import BRepCheck_Shell, BRepCheck_Status
 from OCP.BRepClass import BRepClass_FaceClassifier
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepLib import BRepLib
+from OCP.BRepLProp import BRepLProp_SLProps
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepOffset import BRepOffset_MakeOffset, BRepOffset_Mode
 from OCP.BRepTools import BRepTools, BRepTools_ReShape
@@ -34,11 +35,12 @@ from OCP.Geom import Geom_OffsetSurface, Geom_RectangularTrimmedSurface
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_JoinType, GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.GeomAPI import GeomAPI_ProjectPointOnSurf
 from OCP.GeomConvert import GeomConvert, GeomConvert_ApproxSurface
+from OCP.GeomLProp import GeomLProp_SLProps
 from OCP.gp import gp_Pnt, gp_Pnt2d
 from OCP.Message import Message_Gravity
 from OCP.Precision import Precision
 from OCP.ShapeFix import ShapeFix_Face
-from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
+from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Face, TopoDS_Iterator
 from OCP.TopTools import TopTools_ListOfShape
@@ -71,12 +73,18 @@ _UNEXTENDABLE = (
     GeomAbs_SurfaceType.GeomAbs_SurfaceOfRevolution,
     GeomAbs_SurfaceType.GeomAbs_OffsetSurface,
 )
+#: 曲がりの半径を調べる格子の1辺の点数(UV の範囲の両端を含む)
+_CURVATURE_SAMPLES = 33
+#: 解析曲面でない面をずらすとき、`1 + 曲率 × 距離` がこれ未満なら断る。置いた値(標本の間にある曲がりの半径の最小値を
+#: 取りこぼす分の余裕)。0 で尖る: 30×15 の楕円柱(曲がりの半径の最小 7.5)を内へ 7.51 ずらした形は BRepCheck を通った(実測)
+_CUSP_MARGIN = 0.01
 
 _HINT_DELETE = "周りの面を延ばしても閉じない。穴や丸めは、それを作る面(底・段・縁の丸め、つながった丸め)をまとめて選ぶ"
 _HINT_COLLAPSE = "消すと残す面が削られる(形がつぶれる)"
 _HINT_TOO_FAR = "距離が大きすぎて面が消えるか、形のつながりが変わる"
 _HINT_CANNOT_OFFSET = "この形では OCCT が面を動かせない(動かす面によらず、同じボディでは同じように断ることが多い)"
 _HINT_TANGENT = "接線でつながる隣の面が一定半径の丸めでないので、付いてこさせられない"
+_HINT_CUSP = "内側へずらす距離が面の曲がりの半径に近いか超えていて、面が折り返す"
 
 
 class FaceEditError(ValueError):
@@ -393,11 +401,14 @@ def _point_on_face(point: tuple, face: Any) -> bool:
 # --------------------------------------------------------------------------------------
 def _offset_following_blends(shape: Any, faces: List[Any], distance: float):
     for face in faces:
-        if _offset_definition(face, distance) is None:
+        if _offset_definition(face, distance) is not None:
+            continue
+        if BRepAdaptor_Surface(face).GetType() not in _UNEXTENDABLE:
             raise FaceEditError(
                 f"a selected face is a {_surface_type(face)}",
-                "動かせるのは平面・円筒・球・トーラスの面だけ(ずらした位置を確かめられない)",
+                "動かせるのは平面・円筒・球・トーラスと、押し出し・回転・オフセットの面だけ(ずらした位置を確かめられない)",
             )
+        _require_no_cusp(face, distance)
     edge_faces = _brep_topology._face_edit_edge_faces(shape)
     if any(_blend_signature(face, edge_faces) is not None for face in faces):
         raise FaceEditError(
@@ -407,6 +418,25 @@ def _offset_following_blends(shape: Any, faces: List[Any], distance: float):
     if not blends:
         return _offset(shape, faces, distance)
     return _offset_with_blends(shape, faces, distance, blends, supports)
+
+
+def _require_no_cusp(face: Any, distance: float) -> None:
+    """解析曲面でない面を `distance` ずらしても折り返さないこと。面の UV の範囲の格子で主曲率を見る(格子の間は見ない)。
+    `BRepLProp` の曲率は曲面の法線の側へ曲がると正なので、外向き法線に対しては面の向きで符号を返す(円柱の側面で実測)。"""
+    adaptor = BRepAdaptor_Surface(face)
+    sign = -1.0 if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED else 1.0
+    u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
+    last = _CURVATURE_SAMPLES - 1
+    worst = math.inf
+    for i in range(_CURVATURE_SAMPLES):
+        for j in range(_CURVATURE_SAMPLES):
+            props = BRepLProp_SLProps(adaptor, u1 + (u2 - u1) * i / last, v1 + (v2 - v1) * j / last, 2, 1e-7)
+            if not props.IsCurvatureDefined():
+                continue  # 回転面の極など。周りの標本が見る
+            for curvature in (props.MaxCurvature(), props.MinCurvature()):
+                worst = min(worst, 1.0 - sign * curvature * distance)
+    if worst < _CUSP_MARGIN:
+        raise FaceEditError(f"the moved face would fold (1 + curvature * distance = {worst:.3g})", _HINT_CUSP)
 
 
 def _offset(shape: Any, faces: List[Any], distance: float):
@@ -848,13 +878,32 @@ def _convexity(face: Any, definition: tuple) -> float:
 
 def _lies_on(face: Any, source: Any, distance: float = 0.0) -> bool:
     """`face` が `source`(を `distance` ずらした曲面)に乗っているか。解析曲面は定義の照合、自由曲面は内部の最大9点の射影
-    (曲面の同一性の証明ではない)。自由曲面のずらしは比べられないので偽。"""
+    (曲面の同一性の証明ではない)。"""
     expected = _offset_definition(source, distance) if distance else _describe(source)
     if expected is not None:
         return _same_surface(expected, _describe(face))
     if distance:
-        return False
+        return _points_offset_from(face, source, distance)
     return _points_lie_on(face, BRep_Tool.Surface_s(source))
+
+
+def _points_offset_from(face: Any, source: Any, distance: float) -> bool:
+    """`face` の内部の最大9点が、`source` の曲面の最寄りの点から外向き法線へ `distance` の位置(`LINEAR_TOL` 以内)にあるか。
+    最寄りの点が足になるのは、ずらしが折り返さないとき(`_require_no_cusp`)。"""
+    surface = BRep_Tool.Surface_s(source)
+    sign = -1.0 if source.Orientation() == TopAbs_Orientation.TopAbs_REVERSED else 1.0
+    for point in _interior_points(face, 9):
+        projector = GeomAPI_ProjectPointOnSurf(gp_Pnt(*point), surface)
+        if projector.NbPoints() == 0:
+            return False
+        props = GeomLProp_SLProps(surface, *projector.LowerDistanceParameters(), 1, 1e-7)
+        if not props.IsNormalDefined():
+            return False
+        foot, normal = props.Value(), props.Normal()
+        expected = tuple(getattr(foot, a)() + sign * distance * getattr(normal, a)() for a in ("X", "Y", "Z"))
+        if math.dist(point, expected) > LINEAR_TOL:
+            return False
+    return True
 
 
 def _points_lie_on(face: Any, surface: Any) -> bool:

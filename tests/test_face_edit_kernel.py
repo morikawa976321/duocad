@@ -94,7 +94,7 @@ def test_moving_a_blend_itself_is_refused_with_a_reason():
 def test_moving_a_cone_is_refused_with_a_reason():
     cone = BRepPrimAPI_MakeCone(10.0, 5.0, 10.0).Shape()
     (side,) = [f["index"] for f in query.describe_faces(cone) if f["kind"].startswith("cone")]
-    with pytest.raises(ValueError, match="平面・円筒・球・トーラス"):
+    with pytest.raises(ValueError, match="平面・円筒・球・トーラスと、押し出し・回転・オフセットの面だけ"):
         kernel_face_edit.offset_faces(cone, [side], 1.0)
 
 
