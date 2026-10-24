@@ -2,47 +2,36 @@
 
 autopilot で親セッションが進めた作業の現在地。判断の記録は [decisions.md](decisions.md)(見出しの頭に `[ねじ]` が付いた節がねじ山形の作業)。
 
-## 設計改善のリファクタ5件(#227・#228・#230・#231・#232。2026-10-24〜、進行中)
+## 設計改善のリファクタ5件(#227・#228・#230・#231・#232。2026-10-24、完了)
 
 ゴール(本人の依頼の原文): 「issue227, 228, 230, 231, 232をdevelopで実装しmainにマージして。実装の順番やPRの粒度は任せる。
 実装はなるべくsolに任せ、レビューもコンテキストの独立したsolになるべくやらせる。あなたは判断と指示出しに注力すること。」
 
-計画(親の案に astra の反論を入れたもの。decisions.md「[リファクタ] 計画」):
+進め方(decisions.md「[リファクタ] 計画」): #227 → #230 → #228 → #232 → #231 の順に1本ずつ。大きい issue は段階に割り、段階ごとに
+sol(implement)が実装 → 親が範囲と検査を確かめて commit → 別の文脈の sol(review)がレビュー → 指摘を親が確かめて直させる。
+issue の最後に全体の統合レビュー。PR は issue ごと。
 
-- 順序は #227 → #230 → #228 → #232 → #231。実装は1本ずつ直列(同じワークツリーで2本を並べない)。
-- 大きい issue は段階に割り、段階ごとに sol(implement、新しい文脈)が実装 → 親が範囲と検査を確かめて commit → 別の sol(review、
-  新しい文脈)がその commit をレビュー → 指摘を親が確かめて直させる。issue の最後に issue 全体の統合レビュー。
-- issue が通るごとに develop へマージし、develop → main の PR(issue ごと)を出してマージする。develop に他セッションの未確認の変更が
-  入っていたら、それが確かめられるまで main へのマージを待つ。
-- 作業場所: アプリが作ったワークツリー `.claude/worktrees/venv-broken-check-3e820b`(ブランチ `claude/autopilot-issues-227-232-f5569f`)。
-  `.venv`・`web/node_modules` はこのワークツリー専用に作った(本体へのジャンクションではない。消すときは普通に消してよい)。
+### 結果(5件とも main に入った)
 
-### どこまで来たか
+| issue | PR | 主な部品 | レビューで見つかったもの |
+|---|---|---|---|
+| #227 | #236 | `DocumentStore`・`Autosave`・`duocad/optimization.py` | 同期の自動保存が現在名の更新を落とす退行(直した) |
+| #230 | #237 | `optimize_acceptance`・`optimize_voxels`・`optimize_pipeline`・`optimize_plan`・`optimize_finish`・`optimize_events` | 境界の検査の漏れ・比較手順の文書の混入(直した) |
+| #228 | #238 | `previewController.ts`・`sharedArgsController.ts` | 古い入力の応答を描かなくなる挙動差(意図して採った) |
+| #232 | #239 | `sketchLayer.ts` | なし |
+| #231 | #240 | `brep_topology`・`brep_geometry`・`brep_checks`・`brep_history`・`brep_operations`・`brep_planar` | 文書への作業記録の混入(直した) |
 
-- 着手前の pytest 全体: 3153 件通過・1 件スキップ(このワークツリー、main と同じ内容)。
-- **#227 は main に入った**(PR #236、2026-10-24)。`DocumentStore`・`Autosave`・`duocad/optimization.py` の4部品。段階ごとの
-  sol のレビューで1件の退行(同期の自動保存が現在名の更新を落とす)を見つけて直した。最適化の小型の製品経路の前後一致を確かめた
-  (decisions.md「[リファクタ] 最適化の前後一致の確かめ方」)。
-- **#230 は main に入った**(PR #237)。`optimize_acceptance.py`・`optimize_voxels.py`(逆参照の解消)と `optimize_pipeline.py`・
-  `optimize_plan.py`・`optimize_finish.py`・`optimize_events.py`(段階と再仕上げ計画)。main・段階1後・段階2後の前後一致を確かめた
-  (完成形検査は空きメモリで分割数が変わるので固定して比べる。decisions.md)。
-- **#228 は main に入った**(PR #238)。`previewController.ts`・`sharedArgsController.ts`。入力が変わった後に届いた古い入力の応答を
-  描かない変化を意図して採った(decisions.md)。開発版の画面に出すには本体チェックアウトの `web` で `npm run build` が要る。
-- 本体の develop には別セッションの #211・#212(フィレット)が未 push で入っている。それを main へ運ばないよう、origin/develop の先に
-  統合して push → PR、本体の develop にはその統合を早送りで入れている(decisions.md「本体の develop に未 push の別作業があるとき」)。
-- **#232 は main に入った**(PR #239)。`sketchLayer.ts`。選択だけの変更で再構築の増分 0、削除・非表示・文書切替・破棄の後の残留 0。
-- #231: 段階1(`brep_topology`・`brep_geometry`・`brep_checks`、移行の再輸出つき)はレビュー合格。段階2(`brep_history`・
-  `brep_operations`・`brep_planar`、再輸出の撤去)を commit 済みでレビュー中。本体の develop の未 push のフィレット作業は旧い名前と
-  `BRepCheck_Analyzer` の直接呼び出しに依っていて、#231 を入れると壊れる(段階1の統合候補で 83 件が NameError)。#231 を main へ出す前に、
-  このワークツリーで本体の develop へ #231 を `--no-commit` で統合し、sol にフィレット側を新しい層へ合わせさせ、統合コミットに入れる
-  (decisions.md「#231 を未 push のフィレット作業と当たる状態で進める」)。
+- 着手前の pytest 全体 3153 件 → 最後(#231 の後)3243 件、いずれも失敗 0。形状最適化(#227・#230)とカーネル(#231)は、変更前の
+  コードを別フォルダへ出して小型の製品経路・代表操作の結果を比べ、差 0 件(decisions.md「最適化の前後一致の確かめ方」)。
+- 本体の develop には別セッションの #211・#212(フィレット、未 push・本人の判断待ち)が入っている。それを main へ運ばないよう、各 issue は
+  origin/develop の先に統合して push → PR、本体の develop にはその統合を早送りで入れた。#231 は、その別作業が #231 で移した名前に依って
+  いたので、本体の develop への統合コミット(77c9eacb)の中でフィレット側を新しい層に合わせた(decisions.md)。本体の develop は
+  origin/develop を含むので、別作業を後で push するときは早送りで済む。
+- 開発版(本体チェックアウト、8765/8766)は、サーバの再起動と `web` での `npm run build` をするまで新しいコードを読まない。
 
-### 再開の手順
+### 残っていること
 
-- 作業ブランチ `claude/autopilot-issues-227-232-f5569f`(このワークツリー)。develop へは本体チェックアウトで `--no-ff` マージして push、
-  develop → main は PR。作業ツリーが使用中のときの develop との統合は `git merge-tree --write-tree` と一時の index で組む(decisions.md)。
-- 最適化の前後一致の道具はスクラッチパッドにある使い捨て(`golden_optimize.py`・`golden_diff.py`)。無ければ decisions.md の
-  手順から作り直す。
+なし(本人の判断待ちも無い)。
 
 ## フィレットのはみ出しと貫通の吸収(2026-10-22)
 
