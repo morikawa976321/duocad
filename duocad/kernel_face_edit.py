@@ -273,12 +273,17 @@ def _in(reshape: Any, face: Any) -> Any:
 
 
 def _untrimmed_surface(face: Any):
-    """面の曲面(矩形トリムは外す)と、その世界座標での置き場所。"""
+    """面の曲面から矩形トリムを外したもの(オフセット面は基底のトリムも外す)と、その世界座標での置き場所。"""
     location = TopLoc_Location()
-    surface = BRep_Tool.Surface_s(face, location)
+    return _without_trims(BRep_Tool.Surface_s(face, location)), location
+
+
+def _without_trims(surface: Any) -> Any:
     if isinstance(surface, Geom_RectangularTrimmedSurface):
-        surface = surface.BasisSurface()
-    return surface, location
+        return _without_trims(surface.BasisSurface())
+    if isinstance(surface, Geom_OffsetSurface) and isinstance(surface.BasisSurface(), Geom_RectangularTrimmedSurface):
+        return Geom_OffsetSurface(_without_trims(surface.BasisSurface()), surface.Offset())
+    return surface
 
 
 def _as_bspline(face: Any):

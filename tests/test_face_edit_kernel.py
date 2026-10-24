@@ -12,15 +12,23 @@ from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCone, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeRevol
+from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
+from OCP.BRepPrimAPI import (
+    BRepPrimAPI_MakeBox,
+    BRepPrimAPI_MakeCone,
+    BRepPrimAPI_MakeCylinder,
+    BRepPrimAPI_MakePrism,
+    BRepPrimAPI_MakeRevol,
+)
 from OCP.BRepTools import BRepTools, BRepTools_ReShape
-from OCP.Geom import Geom_BezierCurve, Geom_RectangularTrimmedSurface
+from OCP.Geom import Geom_BezierCurve, Geom_OffsetSurface, Geom_RectangularTrimmedSurface
 from OCP.GeomAbs import GeomAbs_CurveType
-from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Elips, gp_Pnt
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Elips, gp_Pnt, gp_Vec
 from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
+from OCP.TopTools import TopTools_ListOfShape
 
 from duocad import kernel_face_edit, query
 
@@ -218,6 +226,40 @@ def test_a_rim_fillet_beside_a_trimmed_revolved_wall_is_deleted_back_to_the_vase
     result = kernel_face_edit.delete_faces(filleted, _bspline_faces(filleted))["shape"]
 
     assert query.volume(result) == pytest.approx(query.volume(vase), rel=1e-8)
+
+
+def _shelled_ellipse():
+    """楕円柱を上面を開けて殻にした形(内壁は押し出し面のオフセット面)。"""
+    edge = BRepBuilderAPI_MakeEdge(gp_Elips(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 11.4, 10.4)).Edge()
+    prism = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(edge).Wire()).Face(), gp_Vec(0, 0, 30)).Shape()
+    opening = TopTools_ListOfShape()
+    opening.Append(_brep_topology._face_map(prism).FindKey(_face_facing(prism, (0.0, 0.0, 1.0))))
+    maker = BRepOffsetAPI_MakeThickSolid()
+    maker.MakeThickSolidByJoin(prism, opening, -2.4, 1e-6)
+    return maker.Shape()
+
+
+def _with_trimmed_offset_basis(shape):
+    """オフセット面の基底を、面の UV の範囲の矩形トリムで包んだ形。"""
+    reshape = BRepTools_ReShape()
+    for wall in _walls(shape):
+        location = TopLoc_Location()
+        surface = BRep_Tool.Surface_s(wall, location)
+        if isinstance(surface, Geom_OffsetSurface):
+            basis = Geom_RectangularTrimmedSurface(surface.BasisSurface(), *BRepTools.UVBounds_s(wall))
+            reshape.Replace(wall, kernel_face_edit._laid_on(wall, Geom_OffsetSurface(basis, surface.Offset()), location))
+    return reshape.Apply(shape)
+
+
+def test_a_rim_fillet_beside_an_offset_wall_on_a_trimmed_basis_is_deleted_back_to_the_shell():
+    """落ちたら、基底が矩形トリムのオフセット面(殻の内壁)を、狭い基底のまま張り替えるか戻して、正しい削除を断る。"""
+    shell = _shelled_ellipse()
+    rims = [e for e in _plane_edges(shell) if all(abs(p[2] - 30.0) < 1e-6 for p in _edge_ends(e))]
+    filleted = _with_trimmed_offset_basis(_filleted(shell, rims))
+
+    result = kernel_face_edit.delete_faces(filleted, _bspline_faces(filleted))["shape"]
+
+    assert query.volume(result) == pytest.approx(query.volume(shell), rel=1e-8)
 
 
 def test_laying_an_outline_on_a_surface_it_does_not_lie_on_is_refused():
