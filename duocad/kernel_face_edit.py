@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Tuple
 
 from OCP.BOPAlgo import BOPAlgo_RemoveFeatures
 from OCP.BRep import BRep_Builder, BRep_Tool
@@ -74,17 +74,17 @@ _UNEXTENDABLE = (
     GeomAbs_SurfaceType.GeomAbs_SurfaceOfRevolution,
     GeomAbs_SurfaceType.GeomAbs_OffsetSurface,
 )
-#: 曲がりの半径を調べる格子の1辺の点数(UV の範囲の両端を含む)と、最小を詰め直す厳しい標本の数
+#: 曲がりの半径を調べる格子の1辺の等間隔の点数(UV の範囲の両端を含む。B-spline の節点の区間ごとの点が加わる)と、最小を詰め直す厳しい標本の数
 _CURVATURE_SAMPLES = 33
 _CURVATURE_REFINED = 8
 #: 解析曲面でない面をずらすとき、`1 + 曲率 × 距離` がこれ未満なら断る。置いた値(詰め直しても届かない局所的な最小の分の余裕)。
 #: 0 で尖る: 30×15 の楕円柱(曲がりの半径の最小 7.5)を内へ 7.51 ずらした形は BRepCheck を通った(実測)
 _CUSP_MARGIN = 0.01
 #: B-spline の丸めを見分けるとき主曲率を見る等間隔の内側の点の数(1方向)と、主曲率が 1/r から外れてよい割合。
-#: 割合は置いた値。実測: 楕円柱・楕円のコップの縁の丸めの内側で最大 3.4e-6、歯ブラシ立ての半径 0.4 の丸めの面の端で最大 1.0e-4、
-#: 端の 3 % だけ半径 2.2 の可変半径の丸め(断る側)で 10 %
+#: 割合は置いた値で、これ未満しか半径の変わらない可変半径の丸めは一定半径とみなす。実測: 楕円柱・楕円のコップの縁の丸めの内側で最大 3.4e-6、
+#: 歯ブラシ立ての半径 0.4 の丸め 206 面で最大 1.14e-4、半径が 2.0 から 2.003 へ変わる丸め(断る側)で 7.5e-4
 _BLEND_SAMPLES = 9
-_BLEND_CURVATURE_TOL = 1e-3
+_BLEND_CURVATURE_TOL = 3e-4
 
 _HINT_DELETE = "周りの面を延ばしても閉じない。穴や丸めは、それを作る面(底・段・縁の丸め、つながった丸め)をまとめて選ぶ"
 _HINT_COLLAPSE = "消すと残す面が削られる(形がつぶれる)"
@@ -424,8 +424,9 @@ def _offset_following_blends(shape: Any, faces: List[Any], distance: float):
 
 
 def _require_no_cusp(face: Any, distance: float) -> None:
-    """解析曲面でない面を `distance` ずらしても折り返さないこと。面の UV の範囲の格子で主曲率を見て、厳しい標本の周りで
-    最小を詰める(格子だけでは、楕円の先端が格子の間に来ると見逃した。始点を 0.05 ずらした楕円の B-spline で実測)。
+    """解析曲面でない面を `distance` ずらしても折り返さないこと。面の UV の範囲の格子(B-spline の節点の区間ごとの点を含む)で
+    主曲率を見て、厳しい標本の周りで最小を詰める。等間隔の格子だけでは、楕円の先端が格子の間に来ると見逃し(始点を 0.05 ずらした
+    楕円の B-spline で実測)、詰め直しを足しても、節点を密に入れて幅 0.006 の区間だけ曲げた尖りを見逃した(sol の指摘で実測)。
     `BRepLProp` の曲率は曲面の法線の側へ曲がると正なので、外向き法線に対しては面の向きで符号を返す(円柱の側面で実測)。"""
     adaptor = BRepAdaptor_Surface(face)
     sign = -1.0 if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED else 1.0
@@ -437,12 +438,10 @@ def _require_no_cusp(face: Any, distance: float) -> None:
             return math.inf  # 回転面の極など。周りの標本が見る
         return min(1.0 - sign * curvature * distance for curvature in (props.MaxCurvature(), props.MinCurvature()))
 
-    last = _CURVATURE_SAMPLES - 1
-    values = {
-        (i, j): margin(u1 + (u2 - u1) * i / last, v1 + (v2 - v1) * j / last)
-        for i in range(_CURVATURE_SAMPLES)
-        for j in range(_CURVATURE_SAMPLES)
-    }
+    u_knots, v_knots = _knots(adaptor)
+    us = _sample_parameters(u1, u2, _CURVATURE_SAMPLES - 1, u_knots)
+    vs = _sample_parameters(v1, v2, _CURVATURE_SAMPLES - 1, v_knots)
+    values = {(i, j): margin(u, v) for i, u in enumerate(us) for j, v in enumerate(vs)}
     worst = min(values.values())
     # 格子の局所的な最小から詰める。押し出し面は曲率が片方向に変わらず同じ値が列に並ぶので、行・列の重ならないものを選ぶ
     minima = sorted(
@@ -460,8 +459,9 @@ def _require_no_cusp(face: Any, distance: float) -> None:
         used_i.add(i)
         used_j.add(j)
     for value, i, j in starts:
-        u, v = u1 + (u2 - u1) * i / last, v1 + (v2 - v1) * j / last
-        du, dv = (u2 - u1) / last, (v2 - v1) / last
+        u, v = us[i], vs[j]
+        du = max(us[min(i + 1, len(us) - 1)] - u, u - us[max(i - 1, 0)])
+        dv = max(vs[min(j + 1, len(vs) - 1)] - v, v - vs[max(j - 1, 0)])
         while du > (u2 - u1) * 1e-9 or dv > (v2 - v1) * 1e-9:
             candidates = [(margin(u + a * du, v + b * dv), u + a * du, v + b * dv) for a in (-1, 0, 1) for b in (-1, 0, 1)]
             best = min(candidates)
@@ -702,15 +702,10 @@ def _blend_radius(face: Any) -> Optional[float]:
         return None
     adaptor = BRepAdaptor_Surface(face)
     u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
-    if adaptor.GetType() == GeomAbs_SurfaceType.GeomAbs_BSplineSurface:
-        surface = adaptor.BSpline()
-        u_knots = [surface.UKnot(i) for i in range(1, surface.NbUKnots() + 1)]
-        v_knots = [surface.VKnot(i) for i in range(1, surface.NbVKnots() + 1)]
-    else:
-        u_knots = v_knots = []
+    u_knots, v_knots = _knots(adaptor)
     samples = []
-    for u in _blend_parameters(u1, u2, u_knots):
-        for v in _blend_parameters(v1, v2, v_knots):
+    for u in _sample_parameters(u1, u2, _BLEND_SAMPLES + 1, u_knots):
+        for v in _sample_parameters(v1, v2, _BLEND_SAMPLES + 1, v_knots):
             props = BRepLProp_SLProps(adaptor, u, v, 2, 1e-7)
             if props.IsCurvatureDefined():
                 samples.append((abs(props.MaxCurvature()), abs(props.MinCurvature())))
@@ -725,16 +720,33 @@ def _blend_radius(face: Any) -> Optional[float]:
     return None
 
 
-def _blend_parameters(low: float, high: float, knots: List[float]) -> List[float]:
-    """丸めの主曲率を見る1方向の位置: 両端と、等間隔の内側の点と、範囲にかかる節点の区間ごとの端と中点。
-    等間隔の内側だけでは、端の 3 % で半径が 2.2 から 2 へ変わる可変半径の丸めを一定半径と見誤った(sol の指摘で実測)。"""
-    found = {low, high}
-    found.update(low + (high - low) * i / (_BLEND_SAMPLES + 1) for i in range(1, _BLEND_SAMPLES + 1))
+def _sample_parameters(low: float, high: float, intervals: int, knots: List[float]) -> List[float]:
+    """曲率を見る1方向の位置: 範囲を `intervals` 等分する点(両端を含む)と、範囲にかかる節点の区間ごとの端と中点。
+    等間隔の点だけでは、端の 3 % で半径が 2.2 から 2 へ変わる可変半径の丸めを一定半径と見誤った(sol の指摘で実測)。"""
+    found = {low + (high - low) * i / intervals for i in range(intervals + 1)}
     for a, b in zip(knots, knots[1:]):
         a, b = max(a, low), min(b, high)
         if a < b:
             found.update((a, (a + b) / 2))
     return sorted(found)
+
+
+def _knots(adaptor: Any) -> Tuple[List[float], List[float]]:
+    """面の U・V の B-spline の節点。押し出し・回転の面は元の曲線の節点が、押し出しは U・回転は V の向きに出る。"""
+    kind = adaptor.GetType()
+    if kind == GeomAbs_SurfaceType.GeomAbs_BSplineSurface:
+        surface = adaptor.BSpline()
+        return [surface.UKnot(i) for i in range(1, surface.NbUKnots() + 1)], [surface.VKnot(i) for i in range(1, surface.NbVKnots() + 1)]
+    if kind == GeomAbs_SurfaceType.GeomAbs_OffsetSurface:
+        return _knots(adaptor.BasisSurface())
+    if kind in (GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion, GeomAbs_SurfaceType.GeomAbs_SurfaceOfRevolution):
+        curve = adaptor.BasisCurve()
+        knots = []
+        if curve.GetType() == GeomAbs_CurveType.GeomAbs_BSplineCurve:
+            bspline = curve.BSpline()
+            knots = [bspline.Knot(i) for i in range(1, bspline.NbKnots() + 1)]
+        return (knots, []) if kind == GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion else ([], knots)
+    return [], []
 
 
 def _springs(face: Any, edge_faces: Any) -> List[tuple]:
