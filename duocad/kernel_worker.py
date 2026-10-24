@@ -38,7 +38,6 @@ INTERACTIVE_TIMEOUT_S = 20.0
 _CONDITION = threading.Condition()
 _ACTIVE: Optional[threading.Event] = None
 _ACTIVE_PREVIEW = False
-_PENDING_PREVIEW: Optional[threading.Event] = None
 _WAITING_FOREGROUND = 0
 _PREVIEW: ContextVar[Optional[threading.Event]] = ContextVar("kernel_preview", default=None)
 _NEW_INPUT: ContextVar[bool] = ContextVar("kernel_new_input", default=False)
@@ -71,12 +70,13 @@ def time_limit(interactive: bool) -> Optional[float]:
 
 
 def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op: str = "face_edit") -> dict:
-    """子の計算は1件。確定・再生を優先し、プレビューは待機中も実行中も取消し可能。
+    """子の計算は1件。確定・再生・寸法変更を優先し、実行中のプレビューを中断する。
 
+    新しいプレビューは実行中の計算を止めず待つ。接続ごとの未開始分の差し替えは呼び出し側で行う。
     期限は呼び出しから数え、符号化・待機・起動・受け渡しを含める。
     子を止めるのは所有スレッドだけ(次の要求の子を誤って止めない)。
     """
-    global _WORKER, _ACTIVE, _ACTIVE_PREVIEW, _PENDING_PREVIEW, _WAITING_FOREGROUND
+    global _WORKER, _ACTIVE, _ACTIVE_PREVIEW, _WAITING_FOREGROUND
     deadline = float("inf") if timeout is None else time.monotonic() + timeout
     preview = _PREVIEW.get()
     cancel = preview if preview is not None else threading.Event()
@@ -89,14 +89,10 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
 
     with _CONDITION:
         check()
-        if preview is not None:
-            if _PENDING_PREVIEW is not None:
-                _PENDING_PREVIEW.set()
-            _PENDING_PREVIEW = cancel
-        else:
+        if preview is None:
             _WAITING_FOREGROUND += 1
-        if _ACTIVE_PREVIEW and _ACTIVE is not None:
-            _ACTIVE.set()
+            if _ACTIVE_PREVIEW and _ACTIVE is not None:
+                _ACTIVE.set()
         try:
             while True:
                 check()
@@ -107,8 +103,6 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
         finally:
             if preview is None:
                 _WAITING_FOREGROUND -= 1
-            elif _PENDING_PREVIEW is cancel:
-                _PENDING_PREVIEW = None
             _CONDITION.notify_all()
     try:
         message = {"op": op, "verb": verb, "arguments": arguments, "shape": _encode(shape)}

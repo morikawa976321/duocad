@@ -19,6 +19,8 @@ for line in sys.stdin:
     m = json.loads(line)
     Path(sys.argv[1]).write_text(str(m["arguments"].get("tag", "preview")))
     time.sleep(m["arguments"].get("delay", 5))
+    with Path(sys.argv[1]).with_suffix(".completed").open("a") as completed:
+        completed.write(str(m["arguments"].get("tag", "preview")) + "\n")
     result = dict(shape=m["shape"], provenance={}, volume_before=8000, volume_after=8000)
     print(json.dumps(dict(seq=m["seq"], ok=True, result=result)), flush=True)
 '''
@@ -78,20 +80,55 @@ def test_cancelled_preview_stops_the_child(delayed):
     assert worker._process is None
 
 
-def test_preview_does_not_stop_commit_and_only_the_latest_waiter_runs(delayed):
+def test_previews_do_not_stop_commit_or_cancel_other_waiters(delayed):
     worker, marker = delayed
     with ThreadPoolExecutor(3) as pool:
         commit = pool.submit(_call, "face_edit", 0.6, "commit")
         _wait(marker.exists)
         old = pool.submit(_call, "blend_edges", 0, "old", threading.Event())
-        _wait(lambda: kernel_worker._PENDING_PREVIEW is not None)
         latest = pool.submit(_call, "blend_edges", 0, "latest", threading.Event())
-        with pytest.raises(ValueError, match="取り消した"):
-            old.result(timeout=1)
         commit.result(timeout=2)
+        old.result(timeout=2)
         latest.result(timeout=2)
     assert worker.starts == 1
-    assert marker.read_text() == "latest"
+    completed = marker.with_suffix(".completed").read_text().splitlines()
+    assert completed[0] == "commit" and set(completed[1:]) == {"old", "latest"}
+
+
+def test_new_preview_waits_for_running_preview_without_restarting_child(delayed):
+    worker, marker = delayed
+    cancel = threading.Event()
+    with ThreadPoolExecutor(2) as pool:
+        old = pool.submit(_call, "blend_edges", 0.5, "old", cancel)
+        _wait(marker.exists)
+        latest = pool.submit(_call, "blend_edges", 0, "latest", threading.Event())
+        old.result(timeout=2)
+        latest.result(timeout=2)
+    assert not cancel.is_set()
+    assert worker.starts == 1
+    assert marker.with_suffix(".completed").read_text().splitlines() == ["old", "latest"]
+
+
+def test_waiting_preview_deadline_does_not_stop_running_preview(delayed):
+    worker, marker = delayed
+    with ThreadPoolExecutor(1) as pool:
+        old = pool.submit(_call, "blend_edges", 0.5, "old", threading.Event())
+        _wait(marker.exists)
+        with pytest.raises(ValueError, match="秒以内"):
+            _call("blend_edges", 0, "expired", threading.Event(), timeout=0.15)
+        old.result(timeout=2)
+    assert worker.starts == 1
+    assert marker.with_suffix(".completed").read_text().splitlines() == ["old"]
+
+
+def test_running_preview_deadline_stops_child_and_next_request_recovers(delayed):
+    worker, marker = delayed
+    with pytest.raises(ValueError, match="秒以内"):
+        _call("blend_edges", 5, "expired", threading.Event(), timeout=0.3)
+    assert marker.exists() and worker._process is None
+    _call("blend_edges", 0, "next", threading.Event())
+    assert worker.starts == 2
+    assert marker.with_suffix(".completed").read_text().splitlines() == ["next"]
 
 
 @pytest.mark.parametrize("preview", [True, False])
@@ -125,44 +162,105 @@ def test_cancelled_websocket_future_stops_the_preview_child(session, delayed):
     assert not client.of_type("preview")
 
 
-def test_websocket_keeps_only_latest_preview_across_connections(session, delayed):
+@pytest.mark.parametrize("superseded", [False, True])
+def test_disconnect_stops_even_a_superseded_running_preview(session, delayed, monkeypatch, superseded):
+    from duocad.net.ws import Server
     from duocad.session import PreviewJob
     from session_support import FakeConnection
-    _, marker = delayed
+    worker, marker = delayed
+    jobs = []
+    def make_job(_verb, args):
+        tag = str(args["radius"])
+        job = PreviewJob(lambda: (_call("blend_edges", 5, tag) and dict(verb="fillet", bodies=[])), lambda: None)
+        jobs.append(job)
+        return job
+    monkeypatch.setattr(session, "preview_job", make_job)
+    async def scenario():
+        disconnected = asyncio.Event()
+        class Connection(FakeConnection):
+            async def __aiter__(self):
+                await disconnected.wait()
+                return
+                yield  # 非同期イテレータ。切断までは受信を待つ。
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        client = Connection()
+        handler = asyncio.create_task(server.handle(client))
+        deadline = time.monotonic() + 4
+        try:
+            while client not in server.clients:
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.005)
+            async def preview(value):
+                await server._dispatch(client, json.dumps(dict(cmd="preview", verb="fillet",
+                                        args=dict(radius=value), preview_id=value, ack_id=value)))
+            await preview(1)
+            while not marker.exists():
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.005)
+            if superseded:
+                await preview(2)
+            disconnected.set()
+            await asyncio.wait_for(handler, timeout=1)
+            while worker._process is not None:
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.005)
+            while server._pending_pushes:
+                await asyncio.gather(*list(server._pending_pushes))
+            assert all(job._cancel.is_set() for job in jobs)
+            assert not server._preview_jobs and not server._preview_futures
+            assert client not in server._acks
+            assert not client.of_type("preview") and not client.of_type("error")
+        finally:
+            disconnected.set()
+            await handler
+            if server._preview_worker is not None:
+                server._preview_worker.shutdown(wait=True)
+    asyncio.run(scenario())
+    assert worker.starts == 1
+    assert not marker.with_suffix(".completed").exists()
+
+
+def test_websocket_supersedes_only_queued_previews_on_the_same_connection(session, delayed, monkeypatch):
+    from duocad.session import PreviewJob
+    from session_support import FakeConnection
+    worker, marker = delayed
+    jobs = []
+    def make_job(_verb, args):
+        tag = str(args["radius"])
+        job = PreviewJob(lambda: (_call("blend_edges", 0.5 if tag == "1" else 0, tag)
+                                 and dict(verb="fillet", bodies=[])), lambda: None)
+        jobs.append(job)
+        return job
+    monkeypatch.setattr(session, "preview_job", make_job)
     async def script(server, client):
         other = FakeConnection()
         server.clients.add(other)
-        # 確定が子を所有している間に、異なる接続から3件のプレビューを待たせる。
-        with ThreadPoolExecutor(1) as pool:
-            commit = pool.submit(_call, "face_edit", 0.6, "commit")
-            while not marker.exists():
-                await asyncio.sleep(0.005)
-            jobs = []
-            for connection, tag in [(client, "old"), (other, "middle"), (client, "latest")]:
-                job = PreviewJob(lambda tag=tag: (_call("blend_edges", 0, tag) and dict(verb="fillet", bodies=[])), lambda: None)
-                jobs.append(job)
-                seq = server._supersede_previews(connection)
-                server._start_preview(connection, {}, job, seq)
-                await asyncio.sleep(0.02)
-            while not commit.done():
-                await asyncio.sleep(0.01)
-            commit.result()
-        assert jobs[0]._cancel.is_set() and jobs[1]._cancel.is_set()
-    async def scenario():
-        from duocad.net.ws import Server
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        client = FakeConnection()
-        server.clients.add(client)
-        await asyncio.wait_for(script(server, client), timeout=4)
-        await asyncio.wait_for(asyncio.gather(*list(server._pending_pushes)), timeout=2)
-        return client
-    client = asyncio.run(scenario())
-    assert marker.read_text() == "latest"
-    assert len(client.of_type("preview")) == 1
+        async def preview(connection, value):
+            await server._dispatch(connection, json.dumps(dict(cmd="preview", verb="fillet",
+                                    args=dict(radius=value), preview_id=value, ack_id=value)))
+        await preview(client, 1)
+        deadline = time.monotonic() + 4
+        while not marker.exists():
+            assert time.monotonic() < deadline
+            await asyncio.sleep(0.005)
+        await preview(other, 2)
+        await preview(client, 3)
+        await preview(client, 4)
+        assert not client.of_type("done")  # 実行中の古い要求が済む前に後続を完了扱いにしない。
+        return other, server
+    (other, server), client = _run(session, script)
+    assert [job._cancel.is_set() for job in jobs] == [False, False, True, False]
+    assert worker.starts == 1
+    assert marker.with_suffix(".completed").read_text().splitlines() == ["1", "2", "4"]
+    assert [item["preview_id"] for item in client.of_type("preview")] == [4]
+    assert [item["preview_id"] for item in other.of_type("preview")] == [2]
+    assert client.of_type("done")[-1]["ack_id"] == 4
+    assert not client.of_type("error") and not other.of_type("error")
+    assert not server._preview_jobs and not server._preview_futures
 
 
-def test_superseded_job_cannot_enter_the_worker_after_an_inline_preview(session, monkeypatch):
+def test_superseded_running_job_can_finish_after_an_inline_preview(session, monkeypatch):
     from duocad import kernel
     from duocad.net.ws import Server
     from session_support import FakeConnection
@@ -176,7 +274,7 @@ def test_superseded_job_cannot_enter_the_worker_after_an_inline_preview(session,
             assert release.wait(timeout=4)
         else:
             # 同期のプレビュー中は Future の done callback がまだ走れない。
-            assert old_job._cancel.is_set()
+            assert not old_job._cancel.is_set()
             release.set()
         return real(verb, shape, arguments, **kwargs)
     monkeypatch.setattr(kernel_worker, "run", pause_old)
