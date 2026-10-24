@@ -46,7 +46,7 @@
 - **`PeelStats`**: `skipped_thickness` は**常に 0**（`> 0` を期待するテスト・記録は成り立たない）。`casualties` が増え `as_dict` にも出る。`stats.picked` は「手の数」で、減ったセル数は `picked + casualties + islands`。`count` の打ち切りは巻き添えも数えるので、最後の一口で要求を最大 (2m−1)³−1 セル超える。
 - **支えの数え方**: `peel` は一口の節点IDを重複ありの並びで持ち、却下は `support_flat[n] <= 出現回数`、採用は出現回数ぶん `-= 1`。x 単独の支えの早期却下は残してある（x ⊂ 一口なので x で落ちれば一口も落ちる）。
 - 2セル厚の板では、上面のセルも下面のセルも**同じ貫通柱**を一口にする（重複候補の源。回帰テストはこの形）。自由縁のすぐ内側のセルはリブごと（x 方向に2セル×厚み）抜ける。2×2 の棒の途中は断面ごとで、片側に条件節点が無ければ全体の数え直しで却下される。`_reduce_volume` は不合格の形のハッシュを、手の数に関わらず `rejected` に入れる。
-- **m=1 では `min_width` の関数も `CoreConnectivity` も一切呼ばない・作らない**（`tests/test_binary_search.py` が `min_width` モジュールを差し替えて、呼んだら落ちるようにしてある）。
+- **m=1 では `min_width` の関数も `CoreConnectivity` も一切呼ばない・作らない**（`tests/topopt/test_binary_search.py` が `min_width` モジュールを差し替えて、呼んだら落ちるようにしてある）。
 - **`binary_search` の中で `min_width` は「モジュール名」**。同名のローカル変数（`optimize_run` の `min_width` の dict など）があるスコープではモジュールを別名で import する。
 
 ## 芯の連結 S(m)（CoreConnectivity）
@@ -54,7 +54,7 @@
 - `CoreConnectivity(m, exempt=None)`（`exempt` は保持セルの真偽配列）。`.groups(mask)`: 芯 K の連結成分（m が4未満は6連結、`CORE_26_MIN_M`＝4 以上は26連結）を保持セルで結んだ塊の数（K が空なら 0）。`.connected(mask)` = 塊 ≤ 1（大域。`exempt` は `mask` に無くても材料に数える）。`.window(changed_lo, changed_hi, shape)` → `(lo, hi, ext)` と `.proven(before, after, lo, hi) -> bool`: 窓の判定。**真 = 「抜く前に S(m) を満たしていれば、抜いた後も満たす」と窓の中で言えた。偽 = 言えなかっただけで破れるとは限らない**（呼び出し側が `.connected` で大域を数え直す）。`.after_bite(inner, bite, island_cells)`（`peel` 用）は、窓で言えなければ大域で数え直すところまで含む。`min_width.core_cells(material, m)`: m 立方が軸に収まらない格子では全部偽。
 - 診断: `PeelStats.skipped_core`（`as_dict` に出る。m=1 は常に0）・`diagnostics['min_width']['design_core_groups']`。
 - **`peel` の前提: 入力 `mask` が S(m) を満たす**（窓の判定は「抜く前に満たす」を前提にした十分条件）。`_reduce_volume` は段階3の合格候補（大域検査を通ったもの）から始まるので満たす。
-- 窓判定 `proven` の健全性（真なら大域でも真）は `tests/test_min_width_core.py` が独立な物差し（`tests/topopt_support.py` の `core_groups_oracle`）と突き合わせて固定している。**`window` の範囲を変えるときはそのテストを通すこと。**
+- 窓判定 `proven` の健全性（真なら大域でも真）は `tests/topopt/test_min_width_core.py` が独立な物差し（`tests/topopt/topopt_support.py` の `core_groups_oracle`）と突き合わせて固定している。**`window` の範囲を変えるときはそのテストを通すこと。**
 - **`peel` の所要時間**: S(m) の判定は hanger m=2 で `peel` の合計を 38 秒 → 398 秒にした（大半は窓で言えず大域で数え直した手）。所要時間を前提にした見積もり・測定の並べ方をしない。
 - 乱数のマスクは `peel` の前提（全頂点が正則・1成分）を満たさない。`peel` を繰り返すテストは全材料の箱から始める（`test_peel_refuses_the_moves_that_would_split_the_core_...`）。R と S は別々に差し替える（`_mask_satisfies_min_width` を実行時に差し替えると `peel` の島の除去の確認〈m≥3・保持あり〉まで差し替わり R のみの側の数字が歪む）。
 - 島の除去は保持成分と辺・頂点でも接しないので、`exempt` が無いか m=2 なら島の除去は厚みの不変条件を壊さない。m≥3 では mask に無い `exempt` セルを挟んで跨ぎうるので、島を消した形を大域で確かめ、崩れる手は却下する（`skipped_connectivity`）。

@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
 from duocad import kernel_extrude, selection
 from duocad.document import Body, Document
 from duocad.oplog import OpLog
+from duocad.paths import REPO_ROOT
 from duocad.region import region_ref, regions
 from duocad.selection import set_visible
 from duocad.server import Session
@@ -22,6 +25,8 @@ from duocad import (
     brep_topology as _brep_topology,
 )
 
+SESSION_TS = REPO_ROOT / "web" / "src" / "session.ts"
+COMMAND_TS = REPO_ROOT / "web" / "src" / "commands" / "command.ts"
 #: 押し出し量(mm)。文書を実際に変えるために使う。
 EXTRUDE_MM = 5.0
 
@@ -543,3 +548,23 @@ def test_a_body_name_that_is_not_a_string_is_a_value_error(doc: Document):
     for kind in ("face", "body"):
         with pytest.raises(ValueError):
             selection.modify_selection(doc, add=[{"body": ["box"], "kind": kind, "index": 1}])
+
+
+def _ts_union_arms(path: Path, name: str) -> set:
+    """`export type <name> = A | B | C` の右辺を集合で返す。"""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(rf"^export type {name} = (.+)$", text, re.M)
+    assert match, f"{name} の宣言を {path.name} から読めていない"
+    return {arm.strip() for arm in match.group(1).split("|") if arm.strip()}
+
+
+def test_the_typescript_selectable_kinds_match_the_core() -> None:
+    """TSの `SelectableKind` の顔ぶれが、コアの `SELECTABLE_KINDS` と一致する。"""
+    shape_kinds = {arm.strip("'") for arm in _ts_union_arms(SESSION_TS, "ShapeKind")}
+    declared = set()
+    for arm in _ts_union_arms(COMMAND_TS, "SelectableKind"):
+        declared |= shape_kinds if arm == "ShapeKind" else {arm.strip("'")}
+    assert declared == set(selection.SELECTABLE_KINDS), {
+        "TSのみ": sorted(declared - set(selection.SELECTABLE_KINDS)),
+        "コアのみ": sorted(set(selection.SELECTABLE_KINDS) - declared),
+    }

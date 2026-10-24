@@ -1,7 +1,8 @@
 # 形状最適化(topopt) — 測って分かったこと
 
 **凍結中(2026-10-13〜)**: 安定版(制作用)には出さず、開発版でだけ使える(本人決定。[TOPOPT_CONVERGENCE.md](TOPOPT_CONVERGENCE.md) 9節、
-隠し方は [STABLE.md](STABLE.md)「安定版で出さない機能」)。
+隠し方は [STABLE.md](STABLE.md)「安定版で出さない機能」)。開発も止めていて、テスト(`tests/topopt/`)は既定の pytest では集めない
+(2026-10-24 本人指示。集めるなら `--topopt`)。
 
 形状最適化(二値探索・FEM・メッシュ化・最終処理)の既定値の索引、判断、実測の結論をまとめる。
 **現在の最優先目標と最終形状の2条件(水密・単一ソリッド)**は [TOPOPT_ACCEPTANCE.md](TOPOPT_ACCEPTANCE.md)。
@@ -208,10 +209,10 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 必須ケースとテスト(中身は**テスト自身の docstring が正**):
 
 - **CAD面の対応・荷重保存・格子依存・対応不能**(除外境界に沿う平面・曲面で探索用アンカーが全て許可材料に接する。複数・相反荷重でも脱落が相殺されない。平行移動・格子位相・細分でも精度を保つ。支持節点がない面・標本、
-  所有権競合で空になった面を診断し、遠方節点で穴埋めしない。hanger一例で確定しない): `tests/test_anchor_mapping.py`
+  所有権競合で空になった面を診断し、遠方節点で穴埋めしない。hanger一例で確定しない): `tests/topopt/test_anchor_mapping.py`
 - **条件固定・入口停止・最良候補・候補管理**(初期合格後に確定アンカーの足場を削ると不合格で、再正規化で合格へ戻らない。全空間でも未被覆の節点を持つ直接API入力は候補生成0回・FEM0回で停止。上限・中断・後続失敗で最良合格の
-  ハッシュと体積が変わらない。各6条件を単独で破る反例が合格に化けない): `tests/test_binary_search.py`
-- 製品経路では、保持しない板に載った荷重面を `tests/test_optimize_backend.py::test_a_load_face_on_a_body_that_is_not_preserved_is_refused` が入口で断る。
+  ハッシュと体積が変わらない。各6条件を単独で破る反例が合格に化けない): `tests/topopt/test_binary_search.py`
+- 製品経路では、保持しない板に載った荷重面を `tests/topopt/test_optimize_backend.py::test_a_load_face_on_a_body_that_is_not_preserved_is_refused` が入口で断る。
 
 **まだ無いもの**: 複数荷重・相反荷重・複数拘束面を**同時に**持つ単一のテスト。hangerの検証は保存済みの同一入力・同一物性・目標・要素サイズを基準にし、採用マスクで6条件全合格・最終再検査一致・導出1回・候補中メッシュ化0回を必須とする
 (速度の合否閾値は設けない)。
@@ -533,7 +534,7 @@ Taubin 30回は1セル幅の構造を消すフィルタとして働くので、�
 (まとめた形で測り直した指紋〈面積・法線・**重心**〉が単体の指紋と一致するか。重心を外すと同形の別ボディの取り違えを見逃す)と`_check_anchor_centroids`(面アンカーの節点の重心が条件面の重心の近くにあるか)。同じ性格で、結果メッシュの頂点は要素添字空間で返るので
 `grid.origin + verts * grid.spacing`でワールド[mm]へ直す必要があり、`_check_mesh_placement`が毎回見る。
 
-`check_optimize_wiring.py`は**本物を回す唯一の受入検査**(`tests/test_optimize_backend.py`はFEMを1回も回さない)。題材は離れた2パッドで`element_size_mm=4.0`を明示している。
+`check_optimize_wiring.py`は**本物を回す唯一の受入検査**(`tests/topopt/test_optimize_backend.py`はFEMを1回も回さない)。題材は離れた2パッドで`element_size_mm=4.0`を明示している。
 
 ### 画面から走らせる(`web/src/OptimizePanel.svelte`)
 

@@ -414,7 +414,7 @@ def _not_done(
     """結果を作れずに戻るときの応答(`state="done"` 以外の4経路)。
 
     値の無い欄は None に固定し、`keep_room_warning` はここで繋ぐ(経路ごとに繋ぐと繋ぎ忘れる。
-    `tests/test_optimize_backend.py` の "rides on every early return" が固定する)。
+    `tests/topopt/test_optimize_backend.py` の "rides on every early return" が固定する)。
     """
     return dict(
         common,

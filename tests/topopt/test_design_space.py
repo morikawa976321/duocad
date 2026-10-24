@@ -21,7 +21,7 @@ from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds
 from duocad.topopt import voxelize as vx
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'topopt_checks'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'topopt_checks'))
 import _fixtures  # noqa: E402  合成題材(build123d を直接使うので duocad/ の外にある)
 
 LONG_AXIS = 16  # 合成の箱は 20mm 級なので、余白込みで要素サイズ 2〜3mm になる

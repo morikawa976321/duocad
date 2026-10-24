@@ -745,7 +745,7 @@ class PeelWalk:
     段階4は不合格のたびに同じ親から削り直す: 要求数を半分にする(候補は前の歩きの接頭辞)か、抜いた1手を順位から外す
     (その手より前のセルは同じマスクで同じ判定)。`take` は前回の順位と比べ、食い違う位置より前の手を残して、その位置の状態から
     歩きを再開する。判定は真偽と整数だけで決まるので、**候補・`picked_cells`・`PeelStats` の数(`seconds` を除く)は毎回 `peel` を
-    呼んだときと等しい**(`tests/test_peel_walk.py`)。親が変わったら作り直すこと。
+    呼んだときと等しい**(`tests/topopt/test_peel_walk.py`)。親が変わったら作り直すこと。
     """
 
     def __init__(self, mask: np.ndarray, anchor_ids: np.ndarray, *, min_width_cells: int = 1,

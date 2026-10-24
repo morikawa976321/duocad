@@ -87,7 +87,8 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
   ステップの取り直しも頼まない。口を断るのと同じサーバが答えるので、`/duocad-config.json` の取得に失敗しても食い違わない。
 - 最適化の条件や結果のボディが入った文書も、そのまま開いて使える(条件は文書に残り、見えないだけ)。
 
-凍結を解くときは `HIDDEN_IN_STABLE` から外す。
+凍結を解くときは `HIDDEN_IN_STABLE` から外し、`tests/topopt/` を既定の pytest へ戻す(`tests/conftest.py` の `FROZEN_TOPOPT`)。
+凍結中は既定の実行で回していないので、戻す前に `pytest --topopt` を回し、共有コードの変更で壊れた分を直す。
 
 **アプリ内AIは Claude API だけにする**(本人指示 2026-10-14)。ローカルAI(llama-server、`openai_compat`)は機能 `local_ai` として
 同じ `HIDDEN_IN_STABLE` で隠す:

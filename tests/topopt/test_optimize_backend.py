@@ -19,8 +19,6 @@ from __future__ import annotations
 
 import json
 import math
-import subprocess
-import sys
 
 import pytest
 
@@ -28,8 +26,6 @@ from duocad import optimize_run
 from duocad.optimize_voxels import debug_voxel_payload
 from duocad.server import Session
 from session_support import face_with_normal, four_conditions, pad, select as _select, two_pads
-
-from duocad.paths import REPO_ROOT
 
 from duocad import (
     brep_topology as _brep_topology,
@@ -913,24 +909,6 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
     assert "spacing" not in kwargs_seen[0]
 
 
-def test_importing_the_session_does_not_pull_in_the_topopt_layer() -> None:
-    """`optimize_run` を `session.py` が読むようになっても、**最適化の層は来ない**。
-
-    **`scipy` は見ない** —— `duocad/view.py` が(このタスクの前から)既に読んでいるので、
-    scipy の有無ではこの配線の退行を検出できない(2026-09-05実測)。
-    """
-    code = (
-        "import sys; import duocad; import duocad.session; "
-        "print(sorted(m for m in sys.modules "
-        "if m.startswith('skimage') or m.startswith('duocad.topopt')))"
-    )
-    out = subprocess.run(
-        [sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True
-    )
-    assert out.returncode == 0, out.stderr
-    assert out.stdout.strip() == "[]", out.stdout
-
-
 # 9. 開発用のデバッグ表示(`?debug=space` / `?debug=anchors` / `?voxel=1`。20260905-1700)
 #
 # 端から端まで(本物のSIMPを1回通して塊・節点・密度場が実ブラウザに出る)は
@@ -1029,44 +1007,6 @@ def test_debug_sink_builds_nothing_unless_asked() -> None:
     both.rho("final", grid, np.ones(grid.shape))
     assert [event["kind"] for event in events] == ["rho"]
     assert events[0]["threshold"] == pytest.approx(optimize_run.DEBUG_RHO_THRESHOLD)
-
-
-def test_face_centroid_is_the_area_centroid_not_the_geometry_center() -> None:
-    """**曲面では両者が大きく離れる。** 離れないなら片方をもう片方で代用してしまっている。"""
-    from duocad import query
-    from duocad.document import Document
-    from duocad.region import region_ref
-    from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
-    from duocad.verbs import extrude, fillet
-
-    doc = Document()
-    sketch = sketch_create(doc, base_plane("XY"))
-    add_rectangle(doc, sketch, (0.0, 0.0), 20.0, 20.0)
-    body_id = extrude(doc, [region_ref(sketch, 1)], 20.0, mode="join").args["body_id"]
-    hole = sketch_create(doc, base_plane("XY"))
-    add_circle(doc, hole, (10.0, 10.0), 8.0)
-    extrude(doc, [region_ref(hole, 1)], 20.0, mode="cut", body_id=body_id)
-    circles = [
-        edge["index"]
-        for edge in query.describe_edges(
-            next(b for b in doc.bodies if b.id == body_id).shape
-        )
-        if edge["kind"] == "circle"
-    ]
-    fillet(doc, circles[:1], 1.5, body_id=body_id)
-    shape = next(b for b in doc.bodies if b.id == body_id).shape
-
-    faces = query.describe_faces(shape)
-    curved = next(f["index"] for f in faces if f["kind"] == "torus")
-    flat = next(f["index"] for f in faces if f["kind"] == "plane")
-
-    def gap(index: int) -> float:
-        centroid = query.face_centroid(shape, index)
-        center = query.face_fingerprint(shape, index)["center"]
-        return math.dist(centroid, center)
-
-    assert gap(flat) == pytest.approx(0.0, abs=1e-6)
-    assert gap(curved) > 1.0
 
 
 def test_the_anchor_gate_does_not_read_the_baked_center(session: Session) -> None:
@@ -1488,7 +1428,7 @@ def test_tube_fill_failure_is_reported_without_touching_the_document(session: Se
 
 def test_tube_fill_reports_uncovered_filled_cells_as_a_warning_not_a_failure(session: Session, monkeypatch) -> None:
     # 埋めたセルが最小幅の m 立方に覆われなくても止めない(保持セルと同じ対象外)。数を warning に出し、結果は done。
-    # 幾何(埋めたセルが覆われない配置)は tests/test_thin_voids.py が持つので、ここは配線だけを見る: 被覆の判定を差し替え、
+    # 幾何(埋めたセルが覆われない配置)は tests/topopt/test_thin_voids.py が持つので、ここは配線だけを見る: 被覆の判定を差し替え、
     # 埋めたセルが1つも覆われない状況を作る。
     import numpy as np
     from duocad.topopt import acceptance, min_width, thin_voids

@@ -674,7 +674,7 @@ def check_degenerate_rays() -> None:
     # 40x40 の上面は2枚の三角形に割れ、その対角線 y=x が列の中心 (±1,±1),(±3,±3),... を
     # **厳密に**通る。すると1本のレイが共有辺に当たる。偶奇で数えるとその列の内外が反転し
     # (実測15200 mm^3 / 正解16000 mm^3)、巻き数でも「両方に数える」と空洞のある形で空洞が
-    # 材料になる(`tests/test_voxelize_occupancy.py`)。辺に乗った交点は縮退として検知し、
+    # 材料になる(`tests/topopt/test_voxelize_occupancy.py`)。辺に乗った交点は縮退として検知し、
     # 既定のずらしの列でやり直す。ずらしを切ると検知で落ちることも見る。
     soup = vx.triangles_from_shape(vx.unwrap(Box(40, 40, 10)), deviation=0.04)
     grid = vx.grid_for_bbox(*soup.bbox, 20)

@@ -551,7 +551,7 @@ class Model:
 
     def element_energy(self, u: np.ndarray, cells: np.ndarray) -> np.ndarray:
         """要素 `cells`(平坦添字)の u_eᵀ k₀ u_e。`compliance` の `ce` の同じ要素とビット一致する(einsum は行ごとに独立。
-        `tests/test_fem_dofs.py`)ので、材料の要素だけが要るときは箱の全要素を計算しない。"""
+        `tests/topopt/test_fem_dofs.py`)ので、材料の要素だけが要るときは箱の全要素を計算しない。"""
         ue = u[self.edof[cells]]
         return np.einsum("ij,jk,ik->i", ue, self.ke, ue)
 

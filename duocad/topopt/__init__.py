@@ -20,8 +20,8 @@ pytest 全体が毎回それを払うことになる。呼ぶ側が
 `from duocad.topopt import design_space` のように名指しする。
 
 **この規律の退行を検査するなら、見るのは `skimage` と `duocad.topopt` であって scipy ではない。**
-`import duocad` だけなら numpy も scipy も来ないが、`import duocad.view` で numpy と scipy が来る
-(2026-09-05 実測)ので、scipy は指標にならない(`tests/test_optimize_backend.py` 8)。
+`import duocad.view` で scipy が来る(2026-09-05 実測。numpy は `import duocad` だけで来る。2026-10-24 実測)ので、
+scipy は指標にならない(`tests/test_boundaries.py` の `test_importing_the_session_does_not_pull_in_the_topopt_layer`)。
 """
 from pathlib import Path
 

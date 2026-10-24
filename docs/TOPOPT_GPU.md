@@ -58,7 +58,7 @@ GPU の CG が収束しない(`not-converged:`)ときだけは CPU の CG を経
 
 - 内積の足し順は OpenBLAS のスレッド数(既定は論理プロセッサ数)と実行時カーネルで決まる。**機械をまたぐ一致は CPU 同士でも元々無い。**
 - numpy・scipy を上げると自己検査に落ちて CPU に戻ることがある(結果は変わらず、速度だけ戻る)。版は `uv.lock` で固定してあり、
-  上げるときは GPU のある機械で `tests/test_fem_gpu.py` を回す。
+  上げるときは GPU のある機械で `tests/topopt/test_fem_gpu.py` を回す。
 - 確認した組み合わせ: numpy 2.4.6(OpenBLAS 0.3.31)・scipy 1.17.1・cupy-cuda13x 14.2.0、Python 3.11 と 3.14、Core Ultra 5 245KF。
 
 ## 方針(2026-10-10 本人決定)
@@ -117,5 +117,5 @@ GPU の無い機械で CPU の CG を速くする候補として測った(本人
 
 ## テスト
 
-`tests/test_fem_gpu.py`。CPU へ戻る経路は GPU が無くても走る。ビット一致と探索の一致は、CuPy と GPU がある環境でだけ走る
+`tests/topopt/test_fem_gpu.py`。CPU へ戻る経路は GPU が無くても走る。ビット一致と探索の一致は、CuPy と GPU がある環境でだけ走る
 (開発用チェックアウトで回すなら `uv sync --extra gpu`)。

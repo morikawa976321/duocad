@@ -118,3 +118,41 @@ def test_a_mesh_body_reports_its_volume_centroid():
     item = measure_one(session, {"body": body_id, "kind": "body", "index": None})
 
     assert item["center"] == pytest.approx([0.25, 0.25, 0.25])
+
+
+def test_face_centroid_is_the_area_centroid_not_the_geometry_center() -> None:
+    """**曲面では両者が大きく離れる。** 離れないなら片方をもう片方で代用してしまっている。"""
+    from duocad import query
+    from duocad.document import Document
+    from duocad.region import region_ref
+    from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
+    from duocad.verbs import extrude, fillet
+
+    doc = Document()
+    sketch = sketch_create(doc, base_plane("XY"))
+    add_rectangle(doc, sketch, (0.0, 0.0), 20.0, 20.0)
+    body_id = extrude(doc, [region_ref(sketch, 1)], 20.0, mode="join").args["body_id"]
+    hole = sketch_create(doc, base_plane("XY"))
+    add_circle(doc, hole, (10.0, 10.0), 8.0)
+    extrude(doc, [region_ref(hole, 1)], 20.0, mode="cut", body_id=body_id)
+    circles = [
+        edge["index"]
+        for edge in query.describe_edges(
+            next(b for b in doc.bodies if b.id == body_id).shape
+        )
+        if edge["kind"] == "circle"
+    ]
+    fillet(doc, circles[:1], 1.5, body_id=body_id)
+    shape = next(b for b in doc.bodies if b.id == body_id).shape
+
+    faces = query.describe_faces(shape)
+    curved = next(f["index"] for f in faces if f["kind"] == "torus")
+    flat = next(f["index"] for f in faces if f["kind"] == "plane")
+
+    def gap(index: int) -> float:
+        centroid = query.face_centroid(shape, index)
+        center = query.face_fingerprint(shape, index)["center"]
+        return math.dist(centroid, center)
+
+    assert gap(flat) == pytest.approx(0.0, abs=1e-6)
+    assert gap(curved) > 1.0

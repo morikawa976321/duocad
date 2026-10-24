@@ -2,7 +2,7 @@
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_optimize_wiring.py
 
-`tests/test_optimize_backend.py` は**SIMPを1回も回さない**(pytest を重くしないため)。
+`tests/topopt/test_optimize_backend.py` は**SIMPを1回も回さない**(pytest を重くしないため)。
 ここが「4条件を置いた duocad の文書から、実際にメッシュボディが出る」を確かめる唯一の場所で、
 だから**この1本だけは本物を回す**(約25〜40秒。熱状態で1.7倍振れる)。
 

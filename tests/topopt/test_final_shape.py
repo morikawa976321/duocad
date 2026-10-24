@@ -11,7 +11,7 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
 import pytest
 
-CHECKS = Path(__file__).resolve().parents[1] / 'topopt_checks'
+CHECKS = Path(__file__).resolve().parents[2] / 'topopt_checks'
 sys.path.insert(0, str(CHECKS))
 spec = importlib.util.spec_from_file_location('check_final_shape', CHECKS / 'check_final_shape.py')
 check = importlib.util.module_from_spec(spec)
