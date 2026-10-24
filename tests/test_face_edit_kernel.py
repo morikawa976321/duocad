@@ -100,19 +100,26 @@ def test_moving_a_cone_is_refused_with_a_reason():
         kernel_face_edit.offset_faces(cone, [side], 1.0)
 
 
-def _prism_of_a_shifted_b_spline_ellipse():
-    """30×15 の楕円を始点 0.05 で B-spline にして高さ 30 押し出した柱。楕円の先端(曲がりの半径 7.5)が曲率の格子の間に来る。"""
+def _prism_of_a_shifted_b_spline_ellipse(spike: bool = False):
+    """30×15 の楕円を始点 0.05 で B-spline にして高さ 30 押し出した柱。楕円の先端(曲がりの半径 7.5)が曲率の格子の間に来る。
+    `spike` なら u=1.0 の周りの幅 0.006 に節点を密に入れ、制御点を 0.001 ずらして曲がりの半径を約 0.088 にする。"""
     trimmed = Geom_TrimmedCurve(Geom_Ellipse(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 30.0, 15.0), 0.05, 0.05 + 2 * math.pi)
     curve = GeomConvert.CurveToBSplineCurve_s(trimmed, Convert_ParameterisationType.Convert_RationalC1)
     curve.SetPeriodic()
+    if spike:
+        for i in range(7):
+            curve.InsertKnot(0.997 + 0.001 * i, 2)
+        pole = min(range(1, curve.NbPoles() + 1), key=lambda i: curve.Pole(i).Distance(curve.Value(1.0)))
+        moved = curve.Pole(pole)
+        curve.SetPole(pole, gp_Pnt(moved.X() + 0.001, moved.Y() + 0.001, 0.0))
     face = BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(curve).Edge()).Wire()).Face()
     return BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, 30)).Shape()
 
 
-@pytest.mark.parametrize("distance, folds", [(-7.5075, True), (-7.4, False)])
-def test_a_fold_between_the_curvature_samples_is_still_refused(distance, folds):
-    """落ちたら、曲率の格子の間にある楕円の先端を見逃し、尖った形を成功として返す(sol の指摘)。"""
-    shape = _prism_of_a_shifted_b_spline_ellipse()
+@pytest.mark.parametrize("spike, distance, folds", [(False, -7.5075, True), (False, -7.4, False), (True, -0.088, True), (True, -0.05, False)])
+def test_a_fold_between_the_curvature_samples_is_still_refused(spike, distance, folds):
+    """落ちたら、曲率の格子の間にある楕円の先端か、節点の間の短い区間の尖りを見逃し、尖った形を成功として返す(sol の指摘)。"""
+    shape = _prism_of_a_shifted_b_spline_ellipse(spike)
     (side,) = [f["index"] for f in query.describe_faces(shape) if f["kind"] not in ("plane", "plane_circle")]
     if folds:
         with pytest.raises(ValueError, match="fold"):
@@ -121,11 +128,19 @@ def test_a_fold_between_the_curvature_samples_is_still_refused(distance, folds):
         kernel_face_edit.offset_faces(shape, [side], distance)
 
 
-def test_a_variable_radius_blend_changing_near_its_end_is_not_taken_for_a_constant_one():
-    """落ちたら、端の 3 % だけ半径 2.2 の可変半径の丸めを一定半径 2 とみなし、上面を動かすと円筒の丸めに置き換えて返す(sol の指摘)。"""
+@pytest.mark.parametrize(
+    "law",
+    [
+        [(0.0, 2.2), (0.01, 2.2), (0.02, 2.2), (0.03, 2.0), (0.04, 2.0), (0.05, 2.0), (0.06, 2.0), (0.08, 2.0), (0.1, 2.0),
+         (0.2, 2.0), (0.3, 2.0), (0.5, 2.0), (0.7, 2.0), (1.0, 2.0)],
+        [(0.0, 2.0), (0.5, 2.0015), (1.0, 2.003)],
+    ],
+    ids=["near-its-end", "slightly-overall"],
+)
+def test_a_variable_radius_blend_is_not_taken_for_a_constant_one(law):
+    """落ちたら、端の 3 % だけ半径 2.2 か、全体で 2.0 から 2.003 へ変わる可変半径の丸めを一定半径とみなし、
+    上面を動かすと円筒の丸めに置き換えて返す(sol の指摘)。"""
     box = BRepPrimAPI_MakeBox(W, D, H).Shape()
-    law = [(0.0, 2.2), (0.01, 2.2), (0.02, 2.2), (0.03, 2.0), (0.04, 2.0), (0.05, 2.0), (0.06, 2.0), (0.08, 2.0), (0.1, 2.0),
-           (0.2, 2.0), (0.3, 2.0), (0.5, 2.0), (0.7, 2.0), (1.0, 2.0)]
     radii = TColgp_Array1OfPnt2d(1, len(law))
     for i, (u, r) in enumerate(law, 1):
         radii.SetValue(i, gp_Pnt2d(u, r))
