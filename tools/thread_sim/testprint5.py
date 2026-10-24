@@ -8,6 +8,8 @@
 確かめること(本人の指示 2026-10-23、decisions.md「ねじ verb を実装し…」): (1) verb が評価した形を作るか、(2) 小径 D3、
 (3) 0.12mm Fine での刷るたびの再現(D6 半円の 0.11・0.14 は TP4 の S3・S2 と同じ隙間)、(4) 大径 D10。強さは確かめない(本人の決定)。
 ピッチは verb の既定(D3 → 1.2、D6 → 1.5、D10 → 2.5)、ボルトは隙間 0、ナットは verb の推奨の両端と既定値。
+半円は 2026-10-24 に verb で新しく刻めなくした(TP5 の結果。THREAD_SIM.md 6.12)ので、今このスクリプトを回すと半円の F・S・X は飛ばす。
+刷った TP5 の板は半円を含む(当時の verb で作った)。
 """
 from __future__ import annotations
 
@@ -162,6 +164,8 @@ def build(out: Path = OUT, series=SERIES_TP5) -> list:
     session = Session(io_step.STL_DEVIATION, models_dir=out / "models")
     session.new_document()
     pieces, groups, x = [], [], 0.0
+    from duocad import kernel_thread as kt
+    series = [s for s in series if s[7] in kt.SELECTABLE]  # 新しく刻めない山形(半円)は作れない
     for sid, name, D, mk, mode, sides, cs, profile in series:
         step = _sizes(D)["af"] + 6.0
         body = make_bolt(session, x, 0.0, D, profile, sides)

@@ -1,7 +1,7 @@
 """verb `thread`(画面の名前「ねじ」)— 選んだ全周の円筒面1つにねじ山を実体で刻む。
 
-外向きの面(軸)なら雄ねじ、内向きの面(穴)なら雌ねじ。面の直径を呼び径とみなす。山形は半円・30°台形・45°台形の3つから選ぶ
-(本人の決定 2026-10-23。評価は docs/THREAD_SIM.md 6.8〜6.10)。隙間は空欄なら山形ごとの既定(穴は推奨の真ん中、軸は 0)、
+外向きの面(軸)なら雄ねじ、内向きの面(穴)なら雌ねじ。面の直径を呼び径とみなす。山形は 30°台形・45°台形から選ぶ
+(本人の決定 2026-10-23・10-24。評価は docs/THREAD_SIM.md 6.8〜6.12。半円は新しく刻めず、再生だけ残す)。隙間は空欄なら山形ごとの既定(穴は推奨の真ん中、軸は 0)、
 上限を超えれば断り、推奨の範囲の外なら確定はして警告を出す。ピッチは径から自動(`kernel_thread.default_pitch`)。
 
 **ログには解決後の数値(隙間・ピッチ)を残す**(既定値の表を後で直しても、古い文書の再生が変わらない。docs/THREAD.md「verb の形」)。
@@ -26,6 +26,7 @@ def thread(
     clearance: Optional[float] = None,
     body_id: Optional[BodyId] = None,
 ) -> Operation:
+    kernel_thread.require_selectable(profile)
     body = editable_body(doc, body_id, what="thread")
     result = kernel_thread.thread_face(body.shape, int(face), profile, clearance)
 
