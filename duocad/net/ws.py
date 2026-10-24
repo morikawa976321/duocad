@@ -295,6 +295,8 @@ class Server:
         self._preview_worker: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._preview_seq: dict = {}  # connection -> int
         self._preview_futures: dict = {}  # connection -> asyncio.Future
+        # 置き換えられても実行中の計算を残し、切断時にはその接続の全件を止める。
+        self._preview_jobs: dict = {}  # connection -> {concurrent.futures.Future: PreviewJob}
         self._interference = InterferenceRuns(_send, lambda connection: connection in self.clients)
         self._acks: dict = {}  # connection -> _Acks
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
@@ -398,6 +400,9 @@ class Server:
             self._preview_seq.pop(connection, None)
             self._acks.pop(connection, None)
             pending = self._preview_futures.pop(connection, None)
+            for computation, job in self._preview_jobs.pop(connection, {}).items():
+                job.cancel()
+                computation.cancel()
             if pending is not None:
                 pending.cancel()
             self._interference.cancel(connection)
@@ -769,20 +774,27 @@ class Server:
         """
         seq = self._preview_seq.get(connection, 0) + 1
         self._preview_seq[connection] = seq
-        previous = self._preview_futures.pop(connection, None)
-        if previous is not None:
-            previous.cancel()  # 始まっていなければ取り消せる(始まっていれば結果を送らないだけ)
+        for computation, job in self._preview_jobs.get(connection, {}).items():
+            # concurrent の Future なら、開始済みとの競合も含めて未開始の分だけ取り消せる。
+            # asyncio の Future.cancel() は実行中でも成功するので、ここでは呼ばない。
+            if computation.cancel():
+                job.cancel()
         return seq
 
     def _start_preview(self, connection: Any, message: dict, job: Any, seq: int) -> None:
         """プレビューをワーカースレッドで計算させ、この要求の処理はすぐ抜ける(計算中もこの接続の次の要求を捌く。issue #168)。
 
-        ワーカーは1本で、届いた順に計算する。古いプレビューの扱いは `_supersede_previews`。`done` は結果(か失敗)の後。
+        ワーカーは1本。同じ接続の未開始の計算だけ差し替え、実行中の計算と別接続の計算は待つ。
+        古いプレビューの扱いは `_supersede_previews`。`done` は結果(か失敗)の後。
         """
         if self._preview_worker is None:
             self._preview_worker = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="duocad-preview")
-        future = asyncio.get_running_loop().run_in_executor(self._preview_worker, job.run)
+        computation = self._preview_worker.submit(job.run)
+        future = asyncio.wrap_future(computation)
+        # asyncio の Future の取消しは、既に走っているスレッドへは届かない。
+        future.add_done_callback(lambda done: job.cancel() if done.cancelled() else None)
         self._preview_futures[connection] = future
+        self._preview_jobs.setdefault(connection, {})[computation] = job
 
         async def deliver() -> None:
             latest = lambda: self._preview_seq.get(connection) == seq  # noqa: E731
@@ -806,6 +818,11 @@ class Server:
             finally:
                 if self._preview_futures.get(connection) is future:
                     self._preview_futures.pop(connection, None)
+                jobs = self._preview_jobs.get(connection)
+                if jobs is not None:
+                    jobs.pop(computation, None)
+                    if not jobs:
+                        self._preview_jobs.pop(connection, None)
                 ack_id = message.get("ack_id")
                 if ack_id is not None:
                     try:

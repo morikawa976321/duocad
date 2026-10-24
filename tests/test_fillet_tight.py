@@ -240,7 +240,7 @@ def test_a_radius_wider_than_the_top_is_refused_with_this_way_s_reason():
 
 def test_a_radius_wider_than_the_waist_of_the_top_is_refused_by_this_way():
     """落花生形の柱(くびれの幅 2、先端の曲率半径 0.75)の上縁を半径 1.2 で丸める道は、くびれで球が反対側の壁に食い込むので
-    引き受けない。OCCT はこの形を自分で丸めるので、作り方を直接呼ぶ。"""
+    引き受けない。本来の OCCT の結果も無効で、公開経路は断る(2026-10-24 再測定)。"""
     from duocad import kernel_tight
 
     shape = _peanut_post(5.0)
@@ -248,6 +248,8 @@ def test_a_radius_wider_than_the_waist_of_the_top_is_refused_by_this_way():
 
     with pytest.raises(kernel_tight.Declined, match="cut into the opposite wall"):
         kernel_tight.round_tight_loop(shape, _brep_topology._edge_map(shape), {index: 1.2 for index in edges})
+    with pytest.raises(ValueError, match="invalid"):
+        kernel.fillet_edges(shape, {index: 1.2 for index in edges})
 
 
 @pytest.mark.parametrize("hole", ["sphere", "box"])
