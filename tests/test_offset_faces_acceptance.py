@@ -20,7 +20,7 @@ from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 
 import duocad.verbs as verbs
-from duocad import catalog, query, selection
+from duocad import catalog, kernel_face_edit, query, selection
 from duocad.document import Body, Document
 from duocad.entry import entry_for
 from duocad.region import region_ref
@@ -294,6 +294,89 @@ def test_moving_a_shelled_elliptic_wall_thickens_the_shell():
     assert _volume(doc, body_id) - before == pytest.approx(
         (_parallel_ellipse_area(20.0, 12.0, -1.0) - _parallel_ellipse_area(20.0, 12.0, -2.0)) * 29.0, rel=1e-2
     )
+
+
+def _faces_of_type(doc: Document, body_id: str, kind) -> list:
+    shape = doc.get_body(body_id).shape
+    return [i for i in range(1, _brep_topology.face_count(shape) + 1) if BRepAdaptor_Surface(_brep_topology.face_of(shape, i)).GetType() == kind]
+
+
+def _fillet_top_rims(doc: Document, body_id: str, radius: float) -> None:
+    """上面(z=30)の楕円の縁を丸める(丸めは B-spline の面になる)。"""
+    rims = [
+        edge["index"]
+        for edge in query.describe_edges(doc.get_body(body_id).shape)
+        if edge["kind"] == "other" and all(abs(p[2] - 30.0) < 1e-6 for p in (edge["start"], edge["end"]))
+    ]
+    assert rims
+    fillet(doc, rims, radius, body_id=body_id)
+
+
+@pytest.mark.parametrize("distance", [1.0, -0.5])
+def test_a_rim_fillet_on_an_elliptic_wall_follows_it(distance):
+    """上縁を丸めた楕円柱の側面を動かすと、B-spline の丸めが同じ半径のまま付いてきて、上下の面はずれない(歯ブラシ立ての壁が断られた形)。"""
+    doc = Document()
+    body_id = _elliptic_prism(doc)
+    _fillet_top_rims(doc, body_id, 2.0)
+    (wall,) = _faces_of_type(doc, body_id, GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion)
+    before = _volume(doc, body_id)
+
+    _offset_faces(doc, [wall], distance, body_id)
+
+    shape = doc.get_body(body_id).shape
+    (blend,) = _faces_of_type(doc, body_id, GeomAbs_SurfaceType.GeomAbs_BSplineSurface)
+    assert kernel_face_edit._blend_radius(_brep_topology.face_of(shape, blend)) == pytest.approx(2.0, rel=1e-5)
+    _plane_at(doc, body_id, 2, 30.0)
+    _plane_at(doc, body_id, 2, 0.0)
+    assert (_volume(doc, body_id) - before) * distance > 0
+    restored = replay_through_json(doc)
+    assert query.describe_faces(restored.get_body(body_id).shape) == query.describe_faces(shape)
+
+
+def _shell_with_rounded_rims(doc: Document) -> str:
+    """楕円柱を厚さ 1 の殻にし、内外の上縁を 0.4 で丸めた形(丸め2つで上面の幅 0.8 を使う)。"""
+    body_id = _elliptic_prism(doc)
+    shell_body(doc, [_plane_at(doc, body_id, 2, 30.0)], 1.0, body_id=body_id)
+    _fillet_top_rims(doc, body_id, 0.4)
+    return body_id
+
+
+def test_rim_fillets_on_both_sides_follow_a_thickened_shell_wall():
+    """内壁を動かすと内の丸めが付いてきて、動かさない外壁(押し出し面)と外の丸め(B-spline)は元の曲面のまま残る
+    (MakeOffset は動かさない面を距離0のオフセット面に包んで返す。実測)。"""
+    doc = Document()
+    body_id = _shell_with_rounded_rims(doc)
+    (inner,) = _faces_of_type(doc, body_id, GeomAbs_SurfaceType.GeomAbs_OffsetSurface)
+    before = _volume(doc, body_id)
+
+    _offset_faces(doc, [inner], 0.3, body_id)
+
+    assert _volume(doc, body_id) > before
+    assert len(_faces_of_type(doc, body_id, GeomAbs_SurfaceType.GeomAbs_BSplineSurface)) == 2
+    assert len(_faces_of_type(doc, body_id, GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion)) == 1
+
+
+def test_rim_fillets_that_no_longer_fit_on_a_thinned_shell_wall_are_refused():
+    """壁を 0.7 まで薄くすると内外の丸め(合わせて 0.8)が上面に収まらないので、例外にして文書もログも変えない。"""
+    doc = Document()
+    body_id = _shell_with_rounded_rims(doc)
+    (inner,) = _faces_of_type(doc, body_id, GeomAbs_SurfaceType.GeomAbs_OffsetSurface)
+    before = _state(doc)
+
+    with pytest.raises(ValueError):
+        _offset_faces(doc, [inner], -0.3, body_id)
+
+    assert _state(doc) == before
+
+
+def test_an_elliptic_rim_fillet_itself_is_refused_as_a_blend():
+    doc = Document()
+    body_id = _elliptic_prism(doc)
+    _fillet_top_rims(doc, body_id, 2.0)
+    (blend,) = _faces_of_type(doc, body_id, GeomAbs_SurfaceType.GeomAbs_BSplineSurface)
+
+    with pytest.raises(ValueError, match="丸めの面そのものは動かせない"):
+        _offset_faces(doc, [blend], 1.0, body_id)
 
 
 def test_two_faces_move_together():

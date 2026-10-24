@@ -40,6 +40,7 @@ from OCP.gp import gp_Pnt, gp_Pnt2d
 from OCP.Message import Message_Gravity
 from OCP.Precision import Precision
 from OCP.ShapeFix import ShapeFix_Face
+from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Face, TopoDS_Iterator
@@ -78,6 +79,10 @@ _CURVATURE_SAMPLES = 33
 #: 解析曲面でない面をずらすとき、`1 + 曲率 × 距離` がこれ未満なら断る。置いた値(標本の間にある曲がりの半径の最小値を
 #: 取りこぼす分の余裕)。0 で尖る: 30×15 の楕円柱(曲がりの半径の最小 7.5)を内へ 7.51 ずらした形は BRepCheck を通った(実測)
 _CUSP_MARGIN = 0.01
+#: B-spline の丸めを見分けるとき主曲率を見る格子の1辺の点数(UV の範囲の内側)と、主曲率が 1/r から外れてよい割合。
+#: 割合は置いた値(楕円柱・楕円のコップの縁の丸めで最大 3.4e-6、丸め直した丸めで最大 2.9e-6。実測)
+_BLEND_SAMPLES = 9
+_BLEND_CURVATURE_TOL = 1e-4
 
 _HINT_DELETE = "周りの面を延ばしても閉じない。穴や丸めは、それを作る面(底・段・縁の丸め、つながった丸め)をまとめて選ぶ"
 _HINT_COLLAPSE = "消すと残す面が削られる(形がつぶれる)"
@@ -396,6 +401,11 @@ def _point_on_face(point: tuple, face: Any) -> bool:
 # オフセット
 # --------------------------------------------------------------------------------------
 def _offset_following_blends(shape: Any, faces: List[Any], distance: float):
+    edge_faces = _brep_topology._face_edit_edge_faces(shape)
+    if any(_blend_signature(face, edge_faces) is not None for face in faces):
+        raise FaceEditError(
+            "a selected face is a blend", "丸めの面そのものは動かせない。半径を変えるときは、面の削除で丸めを消してから丸め直す"
+        )
     for face in faces:
         if _offset_definition(face, distance) is not None:
             continue
@@ -405,11 +415,6 @@ def _offset_following_blends(shape: Any, faces: List[Any], distance: float):
                 "動かせるのは平面・円筒・球・トーラスと、押し出し・回転・オフセットの面だけ(ずらした位置を確かめられない)",
             )
         _require_no_cusp(face, distance)
-    edge_faces = _brep_topology._face_edit_edge_faces(shape)
-    if any(_blend_signature(face, edge_faces) is not None for face in faces):
-        raise FaceEditError(
-            "a selected face is a blend", "丸めの面そのものは動かせない。半径を変えるときは、面の削除で丸めを消してから丸め直す"
-        )
     blends, supports = _structural_blends(shape, faces)
     if not blends:
         return _offset(shape, faces, distance)
@@ -437,9 +442,9 @@ def _require_no_cusp(face: Any, distance: float) -> None:
 
 def _offset(shape: Any, faces: List[Any], distance: float):
     raw, algo = _make_offset(shape, faces, distance)
-    result = _wrap_checked(raw)
+    result, unwrapped = _without_zero_offsets(_wrap_checked(raw))
     _structural_gate(result, hint=_HINT_TOO_FAR)
-    table = _offset_correspondence(shape, faces, distance, result, lambda old: list(algo.Generated(old)))
+    table = _offset_correspondence(shape, faces, distance, result, lambda old: [unwrapped.Value(x) for x in algo.Generated(old)])
     return result, table, []
 
 
@@ -482,6 +487,18 @@ def _wrap_checked(raw: Any) -> Any:
     if not BRepLib.OrientClosedSolid_s(solid):
         raise FaceEditError("could not orient the closed shell", _HINT_CANNOT_OFFSET)
     return solid
+
+
+def _without_zero_offsets(shape: Any):
+    """MakeOffset は動かさない面のうち解析曲面でないもの(押し出し面・B-spline の丸め)を、距離0のオフセット面に包んで返す(実測)。
+    包んだままだと曲面の種類が変わり、丸めとも見分けられない。元の曲面へ張り直した形と、その置き換えの表。"""
+    reshape = BRepTools_ReShape()
+    for face in _brep_topology._face_edit_faces(shape):
+        location = TopLoc_Location()
+        surface = BRep_Tool.Surface_s(face, location)
+        if isinstance(surface, Geom_OffsetSurface) and abs(surface.Offset()) < Precision.Confusion_s():
+            reshape.Replace(face, _laid_on(face, surface.BasisSurface(), location))
+    return reshape.Apply(shape), reshape
 
 
 def _offset_correspondence(shape: Any, faces: List[Any], distance: float, result: Any, images_of) -> dict:
@@ -621,17 +638,13 @@ def blend_chain(shape: Any, face_index: int) -> List[int]:
 def _blend_signature(face: Any, edge_faces: Any):
     """`face` が一定半径の丸めなら (半径, 支えの面2枚)、でなければ None。
 
-    丸め = 円筒かトーラスで、**長手の辺**(円筒は軸に平行な直線、トーラスは同軸の円)が、ちょうど2枚の別の面に G1 で接する。
+    丸め = 一定半径の丸めの曲面(`_blend_radius`)で、**長手の辺**(`_springs`)が、ちょうど2枚の別の面に G1 で接する。
     """
-    definition = _describe(face)
-    if definition is None or definition[0] not in ("cylinder", "torus"):
+    radius = _blend_radius(face)
+    if radius is None:
         return None
-    radius = definition[3] if definition[0] == "cylinder" else definition[4]
     supports: List[Any] = []
-    for edge in _brep_topology._face_edit_edges(face):
-        if BRep_Tool.Degenerated_s(edge) or not _is_spring_edge(edge, definition):
-            continue
-        other = _other_face(edge_faces, edge, face)
+    for edge, other in _springs(face, edge_faces):
         if other is None or other.IsSame(face) or not _tangent(edge, face, other):
             return None
         if not any(other.IsSame(s) for s in supports):
@@ -641,26 +654,93 @@ def _blend_signature(face: Any, edge_faces: Any):
     return radius, supports[0], supports[1]
 
 
+def _blend_radius(face: Any) -> Optional[float]:
+    """一定半径の丸めの曲面なら半径。円筒・トーラスは定義から。B-spline・ベジエは、片方の主曲率の大きさが面全体で同じ 1/r であること
+    (半径 r の球が転がった包絡面)から。楕円などの縁を製品のフィレットで丸めると B-spline の面になる。"""
+    definition = _describe(face)
+    if definition is not None:
+        if definition[0] == "cylinder":
+            return definition[3]
+        if definition[0] == "torus":
+            return definition[4]
+        return None
+    if BRepAdaptor_Surface(face).GetType() not in (GeomAbs_SurfaceType.GeomAbs_BSplineSurface, GeomAbs_SurfaceType.GeomAbs_BezierSurface):
+        return None
+    adaptor = BRepAdaptor_Surface(face)
+    u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
+    samples = []
+    for i in range(1, _BLEND_SAMPLES + 1):
+        for j in range(1, _BLEND_SAMPLES + 1):
+            u = u1 + (u2 - u1) * i / (_BLEND_SAMPLES + 1)
+            v = v1 + (v2 - v1) * j / (_BLEND_SAMPLES + 1)
+            props = BRepLProp_SLProps(adaptor, u, v, 2, 1e-7)
+            if props.IsCurvatureDefined():
+                samples.append((abs(props.MaxCurvature()), abs(props.MinCurvature())))
+    if not samples:
+        return None
+    for candidate in samples[0]:
+        if candidate <= 1e-9:
+            continue
+        matched = [min(pair, key=lambda k: abs(k / candidate - 1.0)) for pair in samples]
+        if all(abs(k / candidate - 1.0) < _BLEND_CURVATURE_TOL for k in matched):
+            return len(matched) / sum(matched)
+    return None
+
+
+def _springs(face: Any, edge_faces: Any) -> List[tuple]:
+    """丸めの長手の辺と、その向こうの面(無ければ None)。円筒・トーラスは定義で(軸に平行な直線、同軸の円)、B-spline の丸めは
+    接線でつながる別の面との辺で決める(輪になった丸めの継ぎ目と、端で折れて会う面との辺は入らない)。"""
+    definition = _describe(face)
+    found = []
+    for edge in _brep_topology._face_edit_edges(face):
+        if BRep_Tool.Degenerated_s(edge):
+            continue
+        other = _other_face(edge_faces, edge, face)
+        if definition is not None:
+            if _is_spring_edge(edge, definition):
+                found.append((edge, other))
+        elif other is not None and _tangent(edge, face, other):
+            found.append((edge, other))
+    return found
+
+
 def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: List[Any], supports: List[tuple]):
     """丸めを外す → 尖った形で動かす → 支えの面の共有辺を元の半径で丸め直す → 半径・接線・対応を確かめる。
 
     由来: 旧丸めは deleted、丸め直した面は new_faces(旧丸めと新丸めを対応させる根拠を持たない)。
     """
-    sharp, removal = _remove_features(shape, blends)
-    _structural_gate(sharp, hint=_HINT_TANGENT)
-    history = removal.History()
+    # 削除と同じ経路で外す(支えが押し出し面などの延ばせない曲面でも閉じ、削除の関門も通る)
+    try:
+        sharp, removal_table, _ = _delete(shape, blends)
+    except FaceEditError as error:
+        raise FaceEditError(error.cause, _HINT_TANGENT) from error
+    original_map, removed_map = _brep_topology._face_map(shape), _brep_topology._face_map(sharp)
+    # 外した丸めの境目の頂点が支えの辺に残る。同じ半径で丸め直すとその頂点をわずかに跨ぎ、無効な形になる(楕円柱の上縁 r2 を外すと
+    # 壁の継ぎ目が z=28 で2本に分かれ、丸め直しの半径 2.00001 で壁の輪郭が UV で閉じなかった。2.0・1.99999 は有効。実測)。辺をつなぐ
+    unifier = ShapeUpgrade_UnifySameDomain(sharp, True, False, True)
+    unifier.Build()
+    unified, unify_history = unifier.Shape(), unifier.History()
+    _structural_gate(unified, hint=_HINT_TANGENT)
 
     def through_removal(face: Any) -> Any:
-        images = [TopoDS.Face_s(x) for x in history.Modified(face)] or ([] if history.IsRemoved(face) else [face])
-        if len(images) != 1:
+        positions = removal_table[original_map.FindIndex(face)]
+        if len(positions) != 1:
             raise FaceEditError("a face split while removing the blends", _HINT_TANGENT)
-        return _as_in(sharp, images[0])
+        removed = TopoDS.Face_s(removed_map.FindKey(positions[0]))
+        images = [TopoDS.Face_s(x) for x in unify_history.Modified(removed)] or [removed]
+        if len(images) != 1:
+            raise FaceEditError("a face split while joining edges", _HINT_TANGENT)
+        return _as_in(unified, images[0])
+
+    sharp = unified
 
     moved_faces = [through_removal(face) for face in faces]
     raw, offset = _make_offset(sharp, moved_faces, distance)
-    moved = _wrap_checked(raw)
+    moved, unwrapped = _without_zero_offsets(_wrap_checked(raw))
     _structural_gate(moved, hint=_HINT_TOO_FAR)
-    sharp_table = _offset_correspondence(sharp, moved_faces, distance, moved, lambda old: list(offset.Generated(old)))
+    sharp_table = _offset_correspondence(
+        sharp, moved_faces, distance, moved, lambda old: [unwrapped.Value(x) for x in offset.Generated(old)]
+    )
     sharp_map, moved_map = _brep_topology._face_map(sharp), _brep_topology._face_map(moved)
 
     def to_moved(face: Any) -> Any:
@@ -719,7 +799,7 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
 
 
 def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> List[int]:
-    """丸め直した面が、その辺の半径の円筒・トーラスで、長手の辺で支えの面の像の**両方**に G1 で接すること。
+    """丸め直した面が、その辺の半径の丸めの曲面(`_blend_radius`)で、長手の辺で支えの面の像の**両方**に G1 で接すること。
     角は辺でなく頂点から生まれる(全辺丸めの上面で実測)ので、頂点から生まれた面は同じ半径の球であること。"""
     final_edge_faces = _brep_topology._face_edit_edge_faces(final)
     regenerated: List[int] = []
@@ -731,17 +811,14 @@ def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> L
         support_b = list(maker.Modified(second)) or [second]
         for position in made:
             face = TopoDS.Face_s(final_map.FindKey(position))
-            definition = _describe(face)
-            if definition is None or definition[0] not in ("cylinder", "torus"):
-                raise FaceEditError("a re-blended face is not a cylinder or torus", _HINT_TOO_FAR)
-            made_radius = definition[3] if definition[0] == "cylinder" else definition[4]
-            if abs(made_radius - radius) > LINEAR_TOL:
+            made_radius = _blend_radius(face)
+            if made_radius is None:
+                raise FaceEditError("a re-blended face is not a constant-radius blend", _HINT_TOO_FAR)
+            # B-spline の丸めの半径は主曲率から出すので、近似の分だけ定義の照合より緩める
+            if abs(made_radius - radius) > max(LINEAR_TOL, radius * _BLEND_CURVATURE_TOL):
                 raise FaceEditError("a re-blended face has the radius of another blend", _HINT_TOO_FAR)
             touched_a = touched_b = False
-            for spring in _brep_topology._face_edit_edges(face):
-                if not _is_spring_edge(spring, definition):
-                    continue
-                neighbour = _other_face(final_edge_faces, spring, face)
+            for spring, neighbour in _springs(face, final_edge_faces):
                 on_a = neighbour is not None and any(neighbour.IsSame(x) for x in support_a)
                 on_b = neighbour is not None and any(neighbour.IsSame(x) for x in support_b)
                 if not (on_a or on_b) or not _tangent(spring, face, neighbour):
