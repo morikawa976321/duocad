@@ -1,18 +1,22 @@
-"""`query.describe_shape` の数え方が、辺の選択で指せる添字の体系(`kernel.edge_count` / `query.describe_edges`)と同じであること。"""
+"""`query.describe_shape` の数え方が、辺の選択で指せる添字の体系(`brep_topology.edge_count` / `query.describe_edges`)と同じであること。"""
 from __future__ import annotations
 
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeCone, BRepPrimAPI_MakeSphere
 
-from duocad import kernel, query
+from duocad import query
 from duocad.server import Session
 from session_support import box
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
 
 
 def _agrees_with_the_selectable_edges(shape) -> None:
     described = query.describe_shape(shape)
-    assert described["edge_count"] == kernel.edge_count(shape) == len(query.describe_edges(shape))
-    assert described["face_count"] == kernel.face_count(shape) == sum(described["faces_by_type"].values())
+    assert described["edge_count"] == _brep_topology.edge_count(shape) == len(query.describe_edges(shape))
+    assert described["face_count"] == _brep_topology.face_count(shape) == sum(described["faces_by_type"].values())
 
 
 @pytest.mark.parametrize(

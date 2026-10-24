@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from duocad import kernel, kernel_extrude, selection
+from duocad import kernel_extrude, selection
 from duocad.document import Body, Document
 from duocad.oplog import OpLog
 from duocad.region import region_ref, regions
@@ -17,6 +17,10 @@ from duocad.sketch import add_circle, sketch_create
 from duocad.verbs import extrude_faces
 from document_support import box_shape as _box_shape, shape_ref
 from session_support import session_with_box
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
 
 #: 押し出し量(mm)。文書を実際に変えるために使う。
 EXTRUDE_MM = 5.0
@@ -48,7 +52,7 @@ def session() -> Session:
 
 def _first_extrudable_face(shape) -> int:
     """押し出しに成功する最初の面の1始まり添字(添字の決め打ちを避ける)。"""
-    for index in range(1, kernel.face_count(shape) + 1):
+    for index in range(1, _brep_topology.face_count(shape) + 1):
         try:
             kernel_extrude.extrude_faces(shape, [index], EXTRUDE_MM, "join", target_shape=shape)
         except Exception:  # noqa: BLE001  曲面・退化など押せない面は飛ばす
@@ -77,8 +81,8 @@ def test_shape_refs_have_the_shape_of_the_spec(doc: Document):
 def test_edge_and_vertex_indexes_follow_the_kernel_numbering(doc: Document):
     """辺・頂点の添字は `kernel` の数え方(1始まり)で、範囲外は ValueError。"""
     shape = doc.bodies[0].shape
-    assert kernel.edge_count(shape) == 12
-    assert kernel.count_subshapes(shape, "vertex") == 8
+    assert _brep_topology.edge_count(shape) == 12
+    assert _brep_topology.count_subshapes(shape, "vertex") == 8
 
     shape_ref(doc, "box", "edge", 12)
     shape_ref(doc, "box", "vertex", 8)

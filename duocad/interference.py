@@ -32,6 +32,10 @@ from .interference_worker import (
     WorkerTimeout,
 )
 
+from . import (
+    brep_geometry as _brep_geometry,
+)
+
 #: tiny_overlap にする厚さ[mm]。重なりを面でつながる領域に分け、**すべての領域で**厚さの目安 2V/A と有向境界箱の最小辺が**どちらも**これ以下。
 #: 仮置き(根拠は PC ケースの実測だけ。FDM の精度とも形状許容差とも結び付けていない)。
 THICKNESS_MM = 1e-3
@@ -248,7 +252,7 @@ def _prepare(snapshot: Snapshot) -> Tuple[Dict[str, Any], Dict[str, Tuple[Any, A
             boxes[body_id] = ((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
         else:
             payload.append({"id": body_id, "kind": "brep", "brep": kernel_brep.encode_brep(body.shape)})
-            boxes[body_id] = kernel_interference.loose_bbox(body.shape)
+            boxes[body_id] = _brep_geometry._interference_loose_bbox(body.shape)
     return {"op": "load", "bodies": payload}, boxes
 
 

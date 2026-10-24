@@ -4,9 +4,13 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from duocad import kernel, query
+from duocad import query
 from duocad.document import Document
 from duocad.oplog import OpLog
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "extrude_face_log.json"
 
@@ -29,7 +33,7 @@ def test_a_saved_log_with_extrude_face_replays_to_the_saved_shape():
     assert [entry.verb for entry in document.log.entries].count("extrude_face") == 3
     (body,) = document.bodies
     assert math.isclose(query.volume(body.shape), SAVED_VOLUME, rel_tol=1e-9)
-    assert kernel.face_count(body.shape) == SAVED_FACES
+    assert _brep_topology.face_count(body.shape) == SAVED_FACES
 
 
 def test_undo_and_redo_of_a_replayed_extrude_face_restore_the_shapes():

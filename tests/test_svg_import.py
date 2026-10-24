@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from duocad import kernel, region, sketch as sketch_module, svg_import
+from duocad import region, sketch as sketch_module, svg_import
 from duocad.document import Document
 from duocad.mcp_server import DocumentTools, McpServer
 from document_support import replay_through_json
@@ -15,6 +15,10 @@ from duocad.region import RegionRef
 from duocad.server import Session
 from duocad.verbs import import_svg
 from duocad.verbs.extrude import extrude
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
 
 #: 幅100mm・高さ50mmの座標系に、矩形1つと直線+3次ベジエの閉じた形を置いたSVG。
 #: **物理単位を持つ**(`width="100mm"`)ので、取り込んだ寸法はそのままmmになる。
@@ -180,8 +184,8 @@ def test_the_extruded_side_of_a_curve_stays_one_face(tmp_path: Path) -> None:
     curved = min(regions, key=lambda item: item.area)  # 矩形(600mm^2)ではない方
     extrude(document, [RegionRef(sketch=sketch_id, index=curved.index)], 5.0, "join")
     shape = document.bodies[-1].shape
-    assert kernel.face_count(shape) == 4, (
-        f"側面が割れている(面数 {kernel.face_count(shape)})"
+    assert _brep_topology.face_count(shape) == 4, (
+        f"側面が割れている(面数 {_brep_topology.face_count(shape)})"
     )
 
 

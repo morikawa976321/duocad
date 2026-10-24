@@ -45,6 +45,10 @@ from .verbs.envelope_regions import boundary_entities as envelope_boundary_entit
 from .verbs.project_to_sketch import outline_entities, projected_entities, selected_bodies, selected_targets
 from .view import DocumentView
 
+from . import (
+    brep_topology as _brep_topology,
+)
+
 class DocumentBusy(RuntimeError):
     """形状最適化を走らせている文書に、文書を変える操作が来た(`Session._edits_document`)。
 
@@ -621,7 +625,7 @@ class Session:
                     bodies_out.append({
                         "body_id": body.id,
                         "name": body.name,
-                        "face_count": kernel.face_count(body.shape),
+                        "face_count": _brep_topology.face_count(body.shape),
                         "volume": query.volume(body.shape),
                         # プレビューも画面の粗さで測る(本物のBodyと並べて出るので、土台の粗さのままだと確定の前後で滑らかさが跳ねる)。
                         "geometry": kernel.tessellate(
@@ -684,7 +688,7 @@ class Session:
                 bodies_out.append({
                     "body_id": body.id,
                     "name": body.name,
-                    "face_count": kernel.face_count(body.shape),
+                    "face_count": _brep_topology.face_count(body.shape),
                     "volume": query.volume(body.shape),
                     "geometry": geometry,
                 })

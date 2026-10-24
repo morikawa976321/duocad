@@ -24,6 +24,10 @@ from duocad.region import region_ref, regions
 from duocad.sketch import add_arc, add_line, add_rectangle, sketch_create
 from duocad.verbs import extrude, fillet, revolve
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 VOLUME_REL_TOL = 1.0e-9
 
 
@@ -220,8 +224,8 @@ def test_the_seam_edge_of_a_full_revolution_does_not_break_fillet():
 
 
 def _seam_edge_indices(shape) -> list:
-    """周期面の継ぎ目の辺(同じ面に2回使われる辺)の添字(1始まり。`kernel._edge_map` の数え方)。"""
-    edges, faces = kernel._edge_map(shape), kernel._face_map(shape)
+    """周期面の継ぎ目の辺(同じ面に2回使われる辺)の添字(1始まり。`brep_topology._edge_map` の数え方)。"""
+    edges, faces = _brep_topology._edge_map(shape), _brep_topology._face_map(shape)
     found = []
     for index in range(1, edges.Extent() + 1):
         edge = TopoDS.Edge_s(edges.FindKey(index))

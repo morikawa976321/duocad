@@ -43,6 +43,11 @@ from duocad.verbs import chamfer, extrude, extrude_faces, fillet
 from document_support import replay_through_json
 from mcp_support import call
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 REL = 1.0e-9
 UP = (0.0, 0.0, 1.0)
 
@@ -124,7 +129,7 @@ def test_a_rectangle_becomes_a_frustum_with_sharp_corners(taper):
     assert math.isclose(result["volume_after"], _frustum(20.0, 10.0, 10.0, taper), rel_tol=REL)
     kinds = {face["kind"] for face in query.describe_faces(result["shape"])}
     assert kinds == {"plane"}, kinds
-    assert kernel.face_count(result["shape"]) == 6
+    assert _brep_topology.face_count(result["shape"]) == 6
 
 
 @pytest.mark.parametrize("taper", [5.0, -5.0])
@@ -229,7 +234,7 @@ def test_zero_taper_is_the_plain_extrusion():
     zero = _new(_rect(), 10.0, 0.0)
 
     assert zero["volume_after"] == plain["volume_after"]
-    assert kernel.face_count(zero["shape"]) == kernel.face_count(plain["shape"])
+    assert _brep_topology.face_count(zero["shape"]) == _brep_topology.face_count(plain["shape"])
     assert "taper" not in zero["provenance"]
 
 
@@ -245,7 +250,7 @@ def _sketch_rect(document: Document, corner=(0.0, 0.0), w: float = 20.0, h: floa
 def _state(document: Document) -> tuple:
     return (
         json.dumps(document.log.to_json(), sort_keys=True),
-        [(body.id, kernel.volume(body.shape), kernel.face_count(body.shape)) for body in document.bodies],
+        [(body.id, _brep_geometry.volume(body.shape), _brep_topology.face_count(body.shape)) for body in document.bodies],
     )
 
 
@@ -260,7 +265,7 @@ def test_taper_is_logged_only_when_set_and_replays():
     assert tapered.provenance["taper"] == -5.0
 
     restored = replay_through_json(document)
-    assert [kernel.volume(body.shape) for body in restored.bodies] == pytest.approx(
+    assert [_brep_geometry.volume(body.shape) for body in restored.bodies] == pytest.approx(
         [2000.0, _frustum(20.0, 10.0, 10.0, -5.0)], rel=REL
     )
 
@@ -269,14 +274,14 @@ def test_tapered_extrusion_undoes_and_redoes():
     document = Document()
     refs = _sketch_rect(document)
     extrude(document, refs, 10.0, mode="join")
-    before = kernel.volume(document.bodies[0].shape)
+    before = _brep_geometry.volume(document.bodies[0].shape)
 
     extrude(document, _sketch_rect(document, (5.0, 2.0), 10.0, 6.0), 4.0, mode="cut", taper=10.0)
-    after = kernel.volume(document.bodies[0].shape)
+    after = _brep_geometry.volume(document.bodies[0].shape)
     document.log.undo(document)
-    assert kernel.volume(document.bodies[0].shape) == pytest.approx(before, rel=REL)
+    assert _brep_geometry.volume(document.bodies[0].shape) == pytest.approx(before, rel=REL)
     document.log.redo(document)
-    assert kernel.volume(document.bodies[0].shape) == pytest.approx(after, rel=REL)
+    assert _brep_geometry.volume(document.bodies[0].shape) == pytest.approx(after, rel=REL)
 
 
 def test_cut_tapers_the_tool_body():
@@ -290,7 +295,7 @@ def test_cut_tapers_the_tool_body():
     extrude(document, hole, 10.0, mode="cut", taper=-10.0)
 
     expected = 40.0 * 30.0 * 10.0 - _cone(3.0, 10.0, -10.0)
-    assert kernel.volume(document.bodies[0].shape) == pytest.approx(expected, rel=REL)
+    assert _brep_geometry.volume(document.bodies[0].shape) == pytest.approx(expected, rel=REL)
 
 
 def test_a_collapsing_taper_changes_neither_the_document_nor_the_log():
@@ -330,11 +335,11 @@ def test_a_solid_face_extrudes_with_taper_and_finds_its_lid():
     operation = extrude_faces(document, [{"body": "b", "kind": "face", "index": top}], 5.0, mode="join", taper=-10.0)
 
     shape = document.get_body("b").shape
-    assert kernel.volume(shape) == pytest.approx(8000.0 + _frustum(20.0, 20.0, 5.0, -10.0), rel=REL)
+    assert _brep_geometry.volume(shape) == pytest.approx(8000.0 + _frustum(20.0, 20.0, 5.0, -10.0), rel=REL)
     assert operation.args["taper"] == -10.0
     assert operation.provenance["after_face_indices"] == [_top(shape)]
     restored = replay_through_json(document, into=_box_document())
-    assert kernel.volume(restored.get_body("b").shape) == pytest.approx(kernel.volume(shape), rel=REL)
+    assert _brep_geometry.volume(restored.get_body("b").shape) == pytest.approx(_brep_geometry.volume(shape), rel=REL)
 
 
 @pytest.mark.parametrize("finish", ["fillet", "chamfer"])
@@ -343,13 +348,13 @@ def test_tapered_sides_take_fillets_and_chamfers(finish):
     document = Document()
     extrude(document, _sketch_rect(document), 10.0, mode="new", taper=-5.0)
     shape = document.bodies[0].shape
-    edges = list(range(1, kernel.edge_count(shape) + 1))
+    edges = list(range(1, _brep_topology.edge_count(shape) + 1))
 
     (fillet if finish == "fillet" else chamfer)(document, edges, 1.0)
 
     finished = document.bodies[0].shape
     assert BRepCheck_Analyzer(finished).IsValid()
-    assert kernel.volume(finished) < kernel.volume(shape)
+    assert _brep_geometry.volume(finished) < _brep_geometry.volume(shape)
 
 
 def test_mcp_extrude_takes_a_taper():
@@ -574,7 +579,7 @@ def test_the_volume_of_a_thin_tapered_ellipse_is_accurate(width, height, distanc
 
     expected = _ellipse_parallel_volume(width / 2.0, height / 2.0, distance, 5.0)
     assert math.isclose(result["volume_after"], expected, rel_tol=1e-5)
-    assert math.isclose(kernel.volume(result["shape"]), expected, rel_tol=1e-5)
+    assert math.isclose(_brep_geometry.volume(result["shape"]), expected, rel_tol=1e-5)
 
 
 def _short_chamfer():
@@ -613,8 +618,8 @@ def test_an_untapered_elliptic_cylinder_keeps_its_centroid():
     face = _sketch_ellipse_face(120.0, 60.0)
     shape = _new(face, 10.0, 0.0)["shape"]
 
-    assert kernel.volume(shape) == pytest.approx(math.pi * 60.0 * 30.0 * 10.0, rel=1e-12)
-    assert kernel.centroid(shape) == pytest.approx([0.0, 0.0, 5.0], abs=1e-9)
+    assert _brep_geometry.volume(shape) == pytest.approx(math.pi * 60.0 * 30.0 * 10.0, rel=1e-12)
+    assert _brep_geometry.centroid(shape) == pytest.approx([0.0, 0.0, 5.0], abs=1e-9)
 
 
 def test_a_shape_mixing_extrusion_and_bspline_faces_measures_both_exactly():
@@ -628,8 +633,8 @@ def test_a_shape_mixing_extrusion_and_bspline_faces_measures_both_exactly():
     joined = kernel_extrude.extrude_regions([tapered], 10.0, "join", UP, cylinder, taper=5.0)["shape"]
 
     expected = math.pi * 60.0 * 30.0 * 10.0 + _ellipse_parallel_volume(6.0, 3.0, 10.0, 5.0)
-    assert kernel.volume(joined) == pytest.approx(expected, rel=1e-7)
-    assert kernel.centroid(joined)[1] == pytest.approx(0.0, abs=1e-9)
+    assert _brep_geometry.volume(joined) == pytest.approx(expected, rel=1e-7)
+    assert _brep_geometry.centroid(joined)[1] == pytest.approx(0.0, abs=1e-9)
 
 
 @pytest.mark.parametrize("distance, taper", [(1.0, 5.0), (1.0, 0.3), (-1.0, 5.0), (10.0, 5.0)])
@@ -662,8 +667,8 @@ def test_a_tapered_ellipse_far_from_the_origin_measures_its_volume_and_centroid(
 
     result = _new(face, distance, 5.0)
 
-    assert math.isclose(kernel.volume(result["shape"]), _ellipse_parallel_volume(6.0, 3.0, distance, 5.0), rel_tol=1e-5)
-    centre = kernel.centroid(result["shape"])
+    assert math.isclose(_brep_geometry.volume(result["shape"]), _ellipse_parallel_volume(6.0, 3.0, distance, 5.0), rel_tol=1e-5)
+    centre = _brep_geometry.centroid(result["shape"])
     assert centre[0] == pytest.approx(0.0, abs=1e-6 * distance + 1e-9)
     assert abs(centre[2] - (lift + distance / 2.0)) < 0.01 * distance
 
@@ -682,5 +687,5 @@ def test_a_body_of_two_distant_thin_tapered_solids_has_the_right_centroid():
     both = kernel_extrude.extrude_regions([far], 0.001, "join", UP, first, taper=5.0)["shape"]
 
     one = _ellipse_parallel_volume(6.0, 3.0, 0.001, 5.0)
-    assert math.isclose(kernel.volume(both), 2.0 * one, rel_tol=1e-5)
-    assert kernel.centroid(both)[2] == pytest.approx(50.0005, abs=1e-6)
+    assert math.isclose(_brep_geometry.volume(both), 2.0 * one, rel_tol=1e-5)
+    assert _brep_geometry.centroid(both)[2] == pytest.approx(50.0005, abs=1e-6)

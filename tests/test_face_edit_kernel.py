@@ -15,7 +15,11 @@ from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopoDS import TopoDS
 
 from duocad import kernel_face_edit, query
-from duocad.mesh_geometry import compound, indexed_map
+
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 
 W, D, H = 40.0, 30.0, 20.0
 
@@ -27,7 +31,7 @@ def _edge_at(shape, y: float, z: float):
         for edge in query.describe_edges(shape)
         if all(abs(p[1] - y) < 1e-6 and abs(p[2] - z) < 1e-6 for p in (edge["start"], edge["end"]))
     ]
-    return TopoDS.Edge_s(indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE).FindKey(index))
+    return TopoDS.Edge_s(_brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE).FindKey(index))
 
 
 def _face_facing(shape, normal: tuple) -> int:
@@ -38,7 +42,7 @@ def _face_facing(shape, normal: tuple) -> int:
 def _radii(shape) -> list:
     from OCP.BRepAdaptor import BRepAdaptor_Surface
 
-    faces = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+    faces = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
     return sorted(
         round(BRepAdaptor_Surface(TopoDS.Face_s(faces.FindKey(f["index"]))).Cylinder().Radius(), 9)
         for f in query.describe_faces(shape)
@@ -94,7 +98,7 @@ def test_a_blind_hole_needs_its_floor_too():
 
 
 def test_the_structural_gate_refuses_two_solids():
-    two = compound([BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape(), BRepPrimAPI_MakeBox(gp_Pnt(5, 0, 0), 1.0, 1.0, 1.0).Shape()])
+    two = _brep_topology.compound([BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape(), BRepPrimAPI_MakeBox(gp_Pnt(5, 0, 0), 1.0, 1.0, 1.0).Shape()])
     with pytest.raises(kernel_face_edit.FaceEditError, match="2 solids"):
         kernel_face_edit._structural_gate(two)
 
@@ -113,7 +117,7 @@ def _curved(shape) -> list:
 
 
 def _all_edges(shape):
-    edges = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
+    edges = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
     return [TopoDS.Edge_s(edges.FindKey(i)) for i in range(1, edges.Extent() + 1)]
 
 

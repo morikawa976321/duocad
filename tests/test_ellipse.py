@@ -27,6 +27,10 @@ from duocad.sketch import (
 from duocad.verbs import extrude
 from document_support import new_box, replay_through_json
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 
 def _ellipse(width: float, height: float, angle: float = 0.0):
     doc = Document()
@@ -82,7 +86,7 @@ def test_the_angle_turns_the_width_axis_counterclockwise():
 def test_extruding_an_ellipse_gives_area_times_distance():
     doc, sketch_id, _ = _ellipse(20.0, 8.0, 15.0)
     extrude(doc, [region_ref(sketch_id, 1)], 5.0, mode="new")
-    assert kernel.volume(doc.bodies[0].shape) == pytest.approx(math.pi * 10.0 * 4.0 * 5.0, rel=1e-6)
+    assert _brep_geometry.volume(doc.bodies[0].shape) == pytest.approx(math.pi * 10.0 * 4.0 * 5.0, rel=1e-6)
 
 
 def test_the_perimeter_matches_the_integral():
@@ -149,7 +153,7 @@ def test_ellipses_and_arcs_keep_their_turn_on_every_face_of_a_box(face_index):
 
 def test_the_edges_of_an_ellipse_prism_report_the_true_length():
     """落ちたら、画面の辺(`tessellate_edges`)か `measure`・述語の辺(`query.describe_edges`)の長さが、
-    楕円の辺で粗い既定の積分に戻っている(直径 40×2 で +1.74%)。`kernel.edge_length` を通すこと。"""
+    楕円の辺で粗い既定の積分に戻っている(直径 40×2 で +1.74%)。`brep_geometry.edge_length` を通すこと。"""
     doc = Document()
     sketch_id = sketch_create(doc, "XY")
     add_ellipse(doc, sketch_id, (0.0, 0.0), 40.0, 2.0)

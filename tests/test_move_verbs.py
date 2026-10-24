@@ -11,6 +11,11 @@ from duocad.verbs import move_sketch_entities as move_sketch_entities_verb
 from document_support import install_live_pattern, replay_through_json
 from session_support import SIDE, box as _box, edit_parameter, select as _select, send_one
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 DEVIATION = 0.2
 
 
@@ -451,13 +456,13 @@ def test_moving_a_body_from_a_face_selection(session: Session) -> None:
 
 def test_moving_a_body_keeps_its_volume_and_face_count(session: Session) -> None:
     body, _sketch_id = _box(session)
-    faces = kernel.face_count(body.shape)
+    faces = _brep_topology.face_count(body.shape)
     volume = query.volume(body.shape)
     _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
     session.move_body(1.0, 2.0, 3.0)
 
     moved = session.document.get_body(body.id)
-    assert kernel.face_count(moved.shape) == faces
+    assert _brep_topology.face_count(moved.shape) == faces
     assert query.volume(moved.shape) == pytest.approx(volume)
 
 
@@ -727,12 +732,12 @@ def test_the_default_centre_is_the_centroid(session: Session) -> None:
     """中心を省くと軸は対象の**重心**を通る(原点でも境界箱の中心でもない)。落ちたら、
     45度回した後のL字の重心が動いている。"""
     body = _l_body(session)
-    before = kernel.centroid(body.shape)
+    before = _brep_geometry.centroid(body.shape)
     assert before[:2] != pytest.approx(_bbox(body)["center"][:2], abs=1.0), "題材の前提"
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=45.0)
 
-    after = kernel.centroid(session.document.get_body(body.id).shape)
+    after = _brep_geometry.centroid(session.document.get_body(body.id).shape)
     assert after == pytest.approx(before, abs=1e-6)
     args = session.document.log.entries[-1].args
     assert args["axis_point"][:2] == pytest.approx(before[:2], abs=1e-9)
@@ -760,14 +765,14 @@ def test_rotating_keeps_the_volume_and_the_face_indices(session: Session) -> Non
     """**添字は回転でも変わらない**(`TopoDS_Shape.Moved` は下層の形状を共有する)。"""
     body, _sketch_id = _box(session)
     volume = query.volume(body.shape)
-    faces = kernel.face_count(body.shape)
+    faces = _brep_topology.face_count(body.shape)
     normals = {face["index"]: face["normal"] for face in query.describe_faces(body.shape)}
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=90.0)
 
     rotated = session.document.get_body(body.id)
     assert query.volume(rotated.shape) == pytest.approx(volume)
-    assert kernel.face_count(rotated.shape) == faces
+    assert _brep_topology.face_count(rotated.shape) == faces
     after = {face["index"]: face["normal"] for face in query.describe_faces(rotated.shape)}
     assert after.keys() == normals.keys()
     # **同じ添字が同じ面を指し続ける**: Z向きの面は法線が変わらず、横向きの面は
@@ -785,7 +790,7 @@ def test_two_bodies_rotate_about_one_composite_centre(session: Session) -> None:
     _select(session, [{"sketch": sketch_id, "index": 2}])
     session.extrude(SIDE, mode="new")
     second = session.document.bodies[-1]
-    before = (kernel.centroid(first.shape), kernel.centroid(second.shape))
+    before = (_brep_geometry.centroid(first.shape), _brep_geometry.centroid(second.shape))
 
     _select(session, [
         {"body": first.id, "kind": "face", "index": 1},
@@ -793,8 +798,8 @@ def test_two_bodies_rotate_about_one_composite_centre(session: Session) -> None:
     ])
     session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=180.0)
 
-    after_first = kernel.centroid(session.document.get_body(first.id).shape)
-    after_second = kernel.centroid(session.document.get_body(second.id).shape)
+    after_first = _brep_geometry.centroid(session.document.get_body(first.id).shape)
+    after_second = _brep_geometry.centroid(session.document.get_body(second.id).shape)
     assert after_first[:2] == pytest.approx(before[1][:2], abs=1e-6)
     assert after_second[:2] == pytest.approx(before[0][:2], abs=1e-6)
     # **1呼び出し = 1オペレーション**(ボディごとに分解しない)
@@ -847,13 +852,13 @@ def test_a_rotation_survives_save_and_replay(session: Session) -> None:
     session.move_body(mode="rotate", axis_edge={"body": body.id, "index": index}, angle=30.0)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     session.move_body(mode="rotate", axis_dir=[0.0, 1.0, 0.0], angle=20.0, copy=True)
-    expected = [(b.id, kernel.centroid(b.shape)) for b in session.document.bodies]
+    expected = [(b.id, _brep_geometry.centroid(b.shape)) for b in session.document.bodies]
 
     replayed = replay_through_json(session.document)
 
     assert [b.id for b in replayed.bodies] == [body_id for body_id, _ in expected]
     for (_body_id, center), rebuilt in zip(expected, replayed.bodies):
-        assert kernel.centroid(rebuilt.shape) == pytest.approx(center, abs=1e-9)
+        assert _brep_geometry.centroid(rebuilt.shape) == pytest.approx(center, abs=1e-9)
 
 
 def test_a_replayed_log_without_a_mode_is_still_a_translation(session: Session) -> None:
@@ -1300,7 +1305,7 @@ def test_the_browser_rotates_a_body_around_a_picked_edge(session: Session) -> No
     assert applied["verb"] == "move_body"
     assert applied["mode"] == "rotate"
     # **参照ではなく数値**が返る(`Session.move_body` の契約)。
-    point, direction = kernel.edge_axis(body.shape, 1)
+    point, direction = _brep_geometry.edge_axis(body.shape, 1)
     assert applied["axis_point"] == pytest.approx(point)
     assert applied["axis_dir"] == pytest.approx(direction)
     assert _center(session.document.get_body(body.id)) != pytest.approx(before, abs=1e-6)
@@ -1324,7 +1329,7 @@ def test_the_browser_can_move_the_axis_onto_a_picked_vertex(session: Session) ->
     )
 
     applied = answer["applied"]
-    _point, direction = kernel.edge_axis(body.shape, 1)
+    _point, direction = _brep_geometry.edge_axis(body.shape, 1)
     assert applied["axis_point"] == pytest.approx(list(vertex["point"]))
     assert applied["axis_dir"] == pytest.approx(direction)
 

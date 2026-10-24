@@ -24,6 +24,10 @@ from document_support import kinds_of, new_box, new_box_with_hole, replay_throug
 from mcp_support import call
 from session_support import session_with_box
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 
 W, D, H = 40.0, 30.0, 20.0
 BOX_VOLUME = W * D * H
@@ -82,7 +86,7 @@ def _filleted_box(doc: Document) -> tuple[str, int]:
 def _state(doc: Document) -> tuple:
     return (
         json.dumps(doc.log.to_json(), sort_keys=True),
-        tuple((body.id, body.shape, query.volume(body.shape), kernel.face_count(body.shape)) for body in doc.bodies),
+        tuple((body.id, body.shape, query.volume(body.shape), _brep_topology.face_count(body.shape)) for body in doc.bodies),
     )
 
 
@@ -138,7 +142,7 @@ def test_a_fillet_of_a_step_body_can_be_deleted(tmp_path):
         for edge in query.describe_edges(box)
         if all(abs(p[1]) < 1e-6 and abs(p[2] - H) < 1e-6 for p in (edge["start"], edge["end"]))
     ]
-    maker.Add(5.0, kernel.edge_of(box, top_front[0]))
+    maker.Add(5.0, _brep_topology.edge_of(box, top_front[0]))
     maker.Build()
     step_path = tmp_path / "filleted.step"
     kernel.write_step(maker.Shape(), str(step_path))
@@ -256,7 +260,7 @@ def test_provenance_lists_the_deleted_faces_and_maps_every_other_face():
     """面の由来の記録(`face_map` / `deleted` / `new_faces`)に載る。消した面は `deleted`、残りは1枚ずつ対応し、新しい面は無い。"""
     doc = Document()
     body_id, cylinder = _filleted_box(doc)
-    faces_before = kernel.face_count(doc.get_body(body_id).shape)
+    faces_before = _brep_topology.face_count(doc.get_body(body_id).shape)
     before = {face["index"]: face for face in query.describe_faces(doc.get_body(body_id).shape)}
 
     operation = _delete_faces(doc, [cylinder], body_id)

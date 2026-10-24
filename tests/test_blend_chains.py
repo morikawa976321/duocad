@@ -8,9 +8,13 @@ from OCP.gp import gp_Pnt
 
 from duocad import kernel, kernel_chains
 
+from duocad import (
+    brep_topology as _brep_topology,
+)
+
 
 def _all_chains(shape):
-    groups = kernel_chains.BlendChains(shape).of(range(1, kernel.edge_count(shape) + 1))
+    groups = kernel_chains.BlendChains(shape).of(range(1, _brep_topology.edge_count(shape) + 1))
     return {index: group[0] for index, group in groups.items()}
 
 
@@ -78,7 +82,7 @@ def _every_edge_chains(shape) -> dict:
     from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
     from OCP.TopoDS import TopoDS
 
-    edge_map = kernel._edge_map(shape)
+    edge_map = _brep_topology._edge_map(shape)
     chains = {}
     for index in range(1, edge_map.Extent() + 1):
         maker = BRepFilletAPI_MakeFillet(shape)
@@ -101,7 +105,7 @@ def _shapes() -> dict:
     from OCP.gp import gp_Ax2, gp_Dir
 
     box = BRepPrimAPI_MakeBox(20, 10, 5).Shape()
-    every = {index: 1.0 for index in range(1, kernel._edge_map(box).Extent() + 1)}
+    every = {index: 1.0 for index in range(1, _brep_topology._edge_map(box).Extent() + 1)}
     plate = BRepPrimAPI_MakeBox(30, 30, 5).Shape()
     for x in (8, 22):
         hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x, 15, -1), gp_Dir(0, 0, 1)), 3, 7).Shape()
@@ -148,15 +152,14 @@ def test_an_edge_also_listed_as_internal_still_chains() -> None:
     from OCP.TopAbs import TopAbs_INTERNAL, TopAbs_SHELL, TopAbs_SOLID
     from OCP.TopoDS import TopoDS, TopoDS_Solid
 
-    from duocad.mesh_geometry import indexed_map
 
     stepped = _stepped()
     front = _bottom_edges_along_x(stepped, 0.0)
-    solid = TopoDS.Solid_s(indexed_map(stepped, TopAbs_SOLID).FindKey(1))
+    solid = TopoDS.Solid_s(_brep_topology.indexed_map(stepped, TopAbs_SOLID).FindKey(1))
     builder, rebuilt = BRep_Builder(), TopoDS_Solid()
     builder.MakeSolid(rebuilt)
-    builder.Add(rebuilt, kernel._edge_map(stepped).FindKey(front[0]).Oriented(TopAbs_INTERNAL))
-    builder.Add(rebuilt, indexed_map(solid, TopAbs_SHELL).FindKey(1))
+    builder.Add(rebuilt, _brep_topology._edge_map(stepped).FindKey(front[0]).Oriented(TopAbs_INTERNAL))
+    builder.Add(rebuilt, _brep_topology.indexed_map(solid, TopAbs_SHELL).FindKey(1))
     assert _all_chains(rebuilt) == _every_edge_chains(rebuilt)
 
 
@@ -166,13 +169,12 @@ def test_an_internal_only_edge_can_start_a_chain() -> None:
     from OCP.TopAbs import TopAbs_INTERNAL, TopAbs_SHELL
     from OCP.TopoDS import TopoDS_Solid
 
-    from duocad.mesh_geometry import indexed_map
 
     outer = BRepPrimAPI_MakeBox(gp_Pnt(-10, -10, -10), 40, 30, 30).Shape()
     builder, solid = BRep_Builder(), TopoDS_Solid()
     builder.MakeSolid(solid)
-    builder.Add(solid, indexed_map(outer, TopAbs_SHELL).FindKey(1))
-    builder.Add(solid, indexed_map(_stepped(), TopAbs_SHELL).FindKey(1).Oriented(TopAbs_INTERNAL))
+    builder.Add(solid, _brep_topology.indexed_map(outer, TopAbs_SHELL).FindKey(1))
+    builder.Add(solid, _brep_topology.indexed_map(_stepped(), TopAbs_SHELL).FindKey(1).Oriented(TopAbs_INTERNAL))
     assert _all_chains(solid) == _every_edge_chains(solid)
 
 

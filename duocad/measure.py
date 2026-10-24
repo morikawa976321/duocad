@@ -29,7 +29,11 @@ import math
 from dataclasses import dataclass
 from typing import Any, Union
 
-from . import kernel, kernel_sketch, meshbody, query, region, selection, sketch
+from . import kernel_sketch, meshbody, query, region, selection, sketch
+
+from . import (
+    brep_geometry as _brep_geometry,
+)
 
 #: 2本の単位ベクトルを「平行」とみなす sin θ の上限(1e-6 rad ≈ 0.00006度)。
 PARALLEL_SIN_TOLERANCE = 1e-6
@@ -124,7 +128,7 @@ def _body_centroid(body: Any) -> Union[list, None]:
     try:
         if body.mesh is not None:
             return meshbody.centroid(body.mesh)
-        return [float(value) for value in kernel.centroid(body.shape)]
+        return [float(value) for value in _brep_geometry.centroid(body.shape)]
     except ValueError:
         return None
 
@@ -234,7 +238,7 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             return item, (
                 f"面 {ref['index']} は平面ではない({described['kind']})。平面として測れるのは平らな面だけ"
             )
-        centroid, normal = kernel.face_plane(body.shape, int(ref["index"]))
+        centroid, normal = _brep_geometry.face_plane(body.shape, int(ref["index"]))
         return item, Plane(point=_as_vec(centroid), normal=_unit(_as_vec(normal)))
 
     if kind == "edge":
@@ -250,12 +254,12 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             "edge_kind": described["kind"],
         }
         if described["kind"] == "circle":
-            item["center"], item["radius"] = kernel.edge_circle(body.shape, int(ref["index"]))
+            item["center"], item["radius"] = _brep_geometry.edge_circle(body.shape, int(ref["index"]))
         if described["kind"] != "line":
             return item, (
                 f"辺 {ref['index']} は直線ではない({described['kind']})。直線として測れるのはまっすぐな辺だけ"
             )
-        _, direction = kernel.edge_axis(body.shape, int(ref["index"]))
+        _, direction = _brep_geometry.edge_axis(body.shape, int(ref["index"]))
         midpoint = _scale(_add(_as_vec(described["start"]), _as_vec(described["end"])), 0.5)
         return item, Line(point=midpoint, direction=_unit(_as_vec(direction)))
 

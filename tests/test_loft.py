@@ -16,7 +16,7 @@ import math
 import pytest
 from OCP.BRepCheck import BRepCheck_Analyzer
 
-from duocad import kernel, query
+from duocad import query
 from duocad.document import Document
 from document_support import replay_through_json
 from duocad.server import Session
@@ -24,6 +24,11 @@ from session_support import select
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_ellipse, add_line, add_rectangle, sketch_create
 from duocad.verbs import extrude, loft
+
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
 
 VOLUME_REL_TOL = 1.0e-9
 
@@ -119,8 +124,8 @@ def test_a_box_top_to_each_side_gives_the_same_volume():
         extrude(document, [region_ref(base, regions(document, base)[0].index)], 20.0)
         body = document.active_body()
         faces = {}
-        for index in range(1, kernel.face_count(body.shape) + 1):
-            _, normal = kernel.face_plane(body.shape, index)
+        for index in range(1, _brep_topology.face_count(body.shape) + 1):
+            _, normal = _brep_geometry.face_plane(body.shape, index)
             faces[tuple(round(v) for v in normal)] = index
         top = _square(document, {"kind": "face", "body": body.id, "index": faces[(0, 0, 1)]}, 10.0)
         normal = [(1, 0, 0), (0, 1, 0), (-1, 0, 0), (0, -1, 0)][side]

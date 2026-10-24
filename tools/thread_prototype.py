@@ -50,6 +50,10 @@ from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Dir, gp_Dir2d, gp_Pnt, gp_Pnt2d, g
 
 from duocad import kernel
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+)
+
 SAMPLES_PER_TURN = 64
 STL_DEVIATION = 0.01  # duocad/io_step.py と同じ
 CASES = [(3, 0.5, 8, 0.1), (5, 0.8, 12, 0.1), (8, 1.25, 20, 0.1), (20, 2.5, 30, 0.15), (60, 4.0, 15, 0.2)]
@@ -176,7 +180,7 @@ def report(label, shape, seconds, expected):
     tris = sum(len(f["indices"]) // 3 for f in mesh["faces"])
     print(
         f"{label:22s} {seconds:5.2f}s valid={BRepCheck_Analyzer(shape).IsValid()!s:5s} rel={(v - expected) / expected:+.1e} "
-        f"kernel.volume rel={(kernel.volume(shape) - expected) / expected:+.1e} STL {t_mesh:4.2f}s {tris} tris untri={mesh['untriangulated']}"
+        f"kernel.volume rel={(_brep_geometry.volume(shape) - expected) / expected:+.1e} STL {t_mesh:4.2f}s {tris} tris untri={mesh['untriangulated']}"
     )
 
 
@@ -275,7 +279,7 @@ def rejected():
         tooth = _tooth(closed, p, -p, turns)
         core = cylinder(prof[0][1], -2 * p, L + 4 * p)
         tooth_exp = volume_eps(tooth)
-        print(f"歯だけ M{d}x{p}: kernel.volume rel={(kernel.volume(tooth) - tooth_exp) / tooth_exp:+.1e}")
+        print(f"歯だけ M{d}x{p}: kernel.volume rel={(_brep_geometry.volume(tooth) - tooth_exp) / tooth_exp:+.1e}")
         t0 = time.perf_counter()
         fused = BRepAlgoAPI_Fuse(core, tooth).Shape()
         report(f"歯∪芯 M{d}x{p}", fused, time.perf_counter() - t0, volume_eps(core) + tooth_exp)

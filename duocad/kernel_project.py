@@ -36,18 +36,15 @@ from OCP.TopoDS import TopoDS
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Lin, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 
+
 from . import kernel_sketch
-from .kernel_sketch import (
-    _ax3_from_plane,
-    _plane_face,
-    _shape_faces,
-    _smooth_breaks,
-    _to_pnt,
-    _to_uv,
-    _unified,
-    _union_faces,
+
+from . import (
+    brep_geometry as _brep_geometry,
+    brep_planar as _brep_planar,
+    brep_topology as _brep_topology,
 )
-from .mesh_geometry import compound, indexed_map
+
 
 #: 写した辺が点・線へ潰れているとみなす距離[mm](`kernel_sketch` の領域の結合と同じ桁)。
 COLLAPSE_TOLERANCE = 1.0e-6
@@ -67,7 +64,7 @@ _SLIVER_WIDTH = 1.0e-4
 
 def edge_entities(plane: dict, edges: Iterable[Any]) -> List[dict]:
     """3D の辺の並びを平面 `plane` へ写したスケッチ図形(点に潰れた辺は除き、重複を除く)。"""
-    ax3 = _ax3_from_plane(plane)
+    ax3 = _brep_planar._ax3_from_plane(plane)
     entities: List[dict] = []
     for edge in edges:
         entities.extend(_projected_edge_entities(ax3, edge))
@@ -76,14 +73,14 @@ def edge_entities(plane: dict, edges: Iterable[Any]) -> List[dict]:
 
 def face_edges(face: Any) -> List[Any]:
     """面の外周と穴のループの辺。円筒などの継ぎ目の辺(面の境界ではない)は除く。"""
-    edge_map = indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+    edge_map = _brep_topology.indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
     edges = [TopoDS.Edge_s(edge_map.FindKey(i)) for i in range(1, edge_map.Extent() + 1)]
     return [edge for edge in edges if not BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(face))]
 
 
 def outline_entities(plane: dict, shapes: Sequence[Any]) -> List[dict]:
     """ソリッドの並び `shapes` を平面 `plane` の法線方向から見た影の境界のスケッチ図形(重複を除く)。"""
-    ax3 = _ax3_from_plane(plane)
+    ax3 = _brep_planar._ax3_from_plane(plane)
     edges = [flat for edge in _hlr_edges(ax3, shapes) for flat in _flattened_edges(ax3, edge)]
     if not edges:
         return []
@@ -91,7 +88,7 @@ def outline_entities(plane: dict, shapes: Sequence[Any]) -> List[dict]:
     if not shadow:
         return []
     entities: List[dict] = []
-    for face in _shape_faces(_unified(compound(_union_faces(shadow)))):
+    for face in _brep_planar._shape_faces(_brep_planar._unified(_brep_topology.compound(_brep_planar._union_faces(shadow)))):
         entities.extend(kernel_sketch.face_boundary_entities(plane, face))
     return _welded(_deduplicated(entities))
 
@@ -130,7 +127,7 @@ def _collapse(ax3: "gp_Ax3", edge: Any) -> Any:
 
     def uv(parameter: float) -> Tuple[float, float]:
         point = curve.Value(parameter)
-        return _to_uv(ax3, point.X(), point.Y(), point.Z())
+        return _brep_planar._to_uv(ax3, point.X(), point.Y(), point.Z())
 
     if kind == GeomAbs_CurveType.GeomAbs_Line:
         # 直線は往復しないので両端だけで決まる(隠線処理の線の多くは直線で、標本を取ると遅い)
@@ -139,7 +136,7 @@ def _collapse(ax3: "gp_Ax3", edge: Any) -> Any:
             return []
         return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
     # 等間隔の標本に、曲線のノットとその間の中点を足す(線に潰れた曲線の端を探すのに使う)
-    knots = _smooth_breaks(curve, first, last)
+    knots = _brep_planar._smooth_breaks(curve, first, last)
     params = sorted(
         {first + (last - first) * k / (_COLLAPSE_SAMPLES - 1) for k in range(_COLLAPSE_SAMPLES)}
         | set(knots)
@@ -179,7 +176,7 @@ def _segment_poles(ax3: "gp_Ax3", curve: Any, kind: Any, first: float, last: flo
     spline = (curve.Bezier() if kind == GeomAbs_CurveType.GeomAbs_BezierCurve else curve.BSpline()).Copy()
     if first > spline.FirstParameter() or last < spline.LastParameter():
         spline.Segment(first, last)
-    return [_to_uv(ax3, pole.X(), pole.Y(), pole.Z()) for pole in (spline.Pole(i) for i in range(1, spline.NbPoles() + 1))]
+    return [_brep_planar._to_uv(ax3, pole.X(), pole.Y(), pole.Z()) for pole in (spline.Pole(i) for i in range(1, spline.NbPoles() + 1))]
 
 
 def _line_through(points: Sequence[Tuple[float, float]]) -> Any:
@@ -243,11 +240,11 @@ def _hlr_edges(ax3: "gp_Ax3", shapes: Sequence[Any]) -> List[Any]:
     edges: List[Any] = []
     for name in _HLR_COMPOUNDS:
         lines = getattr(result, name)()
-        if lines is None or lines.IsNull():
+        if lines is None or _brep_topology.is_null(lines):
             continue
         BRepLib.BuildCurves3d_s(lines)
         moved = BRepBuilderAPI_Transform(lines, to_world, True).Shape()
-        edge_map = indexed_map(moved, TopAbs_ShapeEnum.TopAbs_EDGE)
+        edge_map = _brep_topology.indexed_map(moved, TopAbs_ShapeEnum.TopAbs_EDGE)
         edges.extend(TopoDS.Edge_s(edge_map.FindKey(i)) for i in range(1, edge_map.Extent() + 1))
     return edges
 
@@ -260,7 +257,7 @@ def _flattened_edges(ax3: "gp_Ax3", edge: Any) -> List[Any]:
     edges = []
     for entity in collapsed:
         p = entity["params"]
-        maker = BRepBuilderAPI_MakeEdge(_to_pnt(ax3, p["x0"], p["y0"]), _to_pnt(ax3, p["x1"], p["y1"]))
+        maker = BRepBuilderAPI_MakeEdge(_brep_planar._to_pnt(ax3, p["x0"], p["y0"]), _brep_planar._to_pnt(ax3, p["x1"], p["y1"]))
         if maker.IsDone():
             edges.append(maker.Edge())
     return edges
@@ -273,12 +270,12 @@ def _split_plane(ax3: "gp_Ax3", edges: Sequence[Any]) -> List[Any]:
         curve = BRepAdaptor_Curve(edge)
         for k in range(5):
             point = curve.Value(curve.FirstParameter() + (curve.LastParameter() - curve.FirstParameter()) * k / 4)
-            points.append(_to_uv(ax3, point.X(), point.Y(), point.Z()))
+            points.append(_brep_planar._to_uv(ax3, point.X(), point.Y(), point.Z()))
     u_min, u_max = min(p[0] for p in points), max(p[0] for p in points)
     v_min, v_max = min(p[1] for p in points), max(p[1] for p in points)
     margin = max(10.0, math.hypot(u_max - u_min, v_max - v_min))
     arguments = TopTools_ListOfShape()
-    arguments.Append(_plane_face(ax3, u_min - margin, u_max + margin, v_min - margin, v_max + margin))
+    arguments.Append(_brep_planar._plane_face(ax3, u_min - margin, u_max + margin, v_min - margin, v_max + margin))
     tools = TopTools_ListOfShape()
     for edge in edges:
         tools.Append(edge)
@@ -289,7 +286,7 @@ def _split_plane(ax3: "gp_Ax3", edges: Sequence[Any]) -> List[Any]:
     splitter.Build()
     if not splitter.IsDone():
         raise ValueError("ボディの外形を求められない(平面を線で割れない)")
-    return _shape_faces(splitter.Shape())
+    return _brep_planar._shape_faces(splitter.Shape())
 
 
 def _shadow_faces(ax3: "gp_Ax3", faces: Sequence[Any], shapes: Sequence[Any]) -> List[Any]:
@@ -310,7 +307,7 @@ def _shared_lengths(faces: Sequence[Any]) -> List[dict]:
     一致しない。docs/CAD_LIBRARY_PITFALLS.md)。"""
     buckets: dict = {}
     for index, face in enumerate(faces):
-        edge_map = indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+        edge_map = _brep_topology.indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
         for i in range(1, edge_map.Extent() + 1):
             edge = edge_map.FindKey(i)
             buckets.setdefault(hash(edge), []).append((edge, index))
@@ -328,7 +325,7 @@ def _shared_lengths(faces: Sequence[Any]) -> List[dict]:
 
 def _sliver(face: Any) -> bool:
     """平均の幅(面積 / 周長)が `_SLIVER_WIDTH` 以下の細片か。"""
-    area = kernel_sketch._face_props(face)[0]
+    area = _brep_geometry._face_props(face)[0]
     props = GProp_GProps()
     BRepGProp.LinearProperties_s(face, props)
     perimeter = props.Mass()

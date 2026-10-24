@@ -17,17 +17,22 @@ from duocad.verbs import chamfer, extrude, thread
 from document_support import new_box, new_box_with_hole, replay_through_json, shape_ref
 from test_chamfer import new_cylinder
 
+from duocad import (
+    brep_geometry as _brep_geometry,
+    brep_topology as _brep_topology,
+)
+
 
 def _cylinder_face(doc: Document, body_id: str) -> int:
-    face_map = kernel._face_map(doc.get_body(body_id).shape)
-    found = [i for i in range(1, face_map.Extent() + 1) if kernel.classify_face(face_map.FindKey(i)) == "cylinder_full"]
+    face_map = _brep_topology._face_map(doc.get_body(body_id).shape)
+    found = [i for i in range(1, face_map.Extent() + 1) if _brep_geometry.classify_face(face_map.FindKey(i)) == "cylinder_full"]
     assert len(found) == 1, found
     return found[0]
 
 
 def _plane_face(doc: Document, body_id: str) -> int:
-    face_map = kernel._face_map(doc.get_body(body_id).shape)
-    return next(i for i in range(1, face_map.Extent() + 1) if kernel.classify_face(face_map.FindKey(i)) == "plane")
+    face_map = _brep_topology._face_map(doc.get_body(body_id).shape)
+    return next(i for i in range(1, face_map.Extent() + 1) if _brep_geometry.classify_face(face_map.FindKey(i)) == "plane")
 
 
 def _hole(doc: Document) -> tuple:
@@ -89,8 +94,8 @@ def _outer_cylinder_face(doc: Document, body_id: str) -> int:
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     from OCP.TopoDS import TopoDS
 
-    face_map = kernel._face_map(doc.get_body(body_id).shape)
-    found = [i for i in range(1, face_map.Extent() + 1) if kernel.classify_face(face_map.FindKey(i)) == "cylinder_full"]
+    face_map = _brep_topology._face_map(doc.get_body(body_id).shape)
+    found = [i for i in range(1, face_map.Extent() + 1) if _brep_geometry.classify_face(face_map.FindKey(i)) == "cylinder_full"]
     return max(found, key=lambda i: BRepAdaptor_Surface(TopoDS.Face_s(face_map.FindKey(i))).Cylinder().Radius())
 
 
@@ -197,8 +202,8 @@ def test_a_shoulder_widening_towards_the_root_is_not_taken_for_a_chamfered_tip()
     shoulder = BRepPrimAPI_MakeCone(5.0, 3.0, 2.0).Shape()
     shaft = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0.0, 0.0, 2.0), gp_Dir(0.0, 0.0, 1.0)), 3.0, 8.0).Shape()
     shape = BRepAlgoAPI_Fuse(shoulder, shaft).Shape()
-    face_map = kernel._face_map(shape)
-    face = next(i for i in range(1, face_map.Extent() + 1) if kernel.classify_face(face_map.FindKey(i)) == "cylinder_full")
+    face_map = _brep_topology._face_map(shape)
+    face = next(i for i in range(1, face_map.Extent() + 1) if _brep_geometry.classify_face(face_map.FindKey(i)) == "cylinder_full")
     assert kernel_thread.describe_target(shape, face)["ends"]["low"]["kind"] == "shoulder"
     result = kernel_thread.thread_face(shape, face, "trapezoid45")
     _assert_sound(result["shape"])
