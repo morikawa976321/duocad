@@ -650,7 +650,7 @@ D10 0.015mm 以下(谷との角の折れ線の近似)。違いは verb が付け
 ```
 
 1 設計 1 行で、止めても同じコマンドで続きから回る。重いもの(study2・3・5)は `claude --cloud` のセッションで回し、
-結果を `thread-sim/<study>-…-results` ブランチの `tools/thread_sim/results/` で受け取った(decisions.md「長い計算はクラウドのセッションへ」)。
+結果を `thread-sim/<study>-…-results` ブランチで受け取り、`output/thread_sim/` へまとめた(decisions.md「長い計算はクラウドのセッションへ」。ブランチは 2026-10-24 に消した)。
 **計算は環境によらず再現する**(実測): study2(直す前のコード)は 238 件の W がすべて一致、study6 は 51 件の W_rob が一致し、
 保持の差は 0.21% 以内(クラウドの Linux と手元の Windows)。
 

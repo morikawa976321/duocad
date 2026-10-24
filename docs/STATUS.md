@@ -110,7 +110,7 @@ issue の最後に全体の統合レビュー。PR は issue ごと。
 
 - 計算は止めても同じコマンドで続きから回る: `.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.study <study> --workers 2`(手順の一覧は THREAD_SIM.md 7章)
 - 表: `.venv/Scripts/python.exe -X utf8 -m tools.thread_sim.report <study>`(study2〜7)
-- クラウドの結果は `thread-sim/<study>-v2-results`・`thread-sim/study7-results` ブランチの `tools/thread_sim/results/`(`-v2` の無い study2・3・5 は直す前のコード)。
+- クラウドで回した結果も `output/thread_sim/` にある(受け取りに使った `thread-sim/*` ブランチは 2026-10-24 に消した。直す前のコードで走った study2・3・5 の初回の結果は捨てた)。
   study2 の v2 はクラウドから戻らなかったので手元で回した。
 
 
