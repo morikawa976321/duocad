@@ -7,7 +7,7 @@ OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒�
 
 - 子は1本で、初回の呼び出しで立て、計算が終わっても残す(起動に約 1.6 秒。干渉チェックは1回ごとに立てる)。
 - 要求は {"op":"face_edit" または "blend_edges","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
-  {"shape":<base64>,"provenance":{...},"volume_before":..,"volume_after":..} か、関門で断ったときの {"refused":"<断り文>"}。
+  {"shape":<base64>,"provenance":{...}}(フィレット・面取りは "volume_before"・"volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。
   BinTools は往復で幾何が変わらず、面の添字の数え方も保つ(BRep の文字列は 1e-14 ずれる)。base64 の往復は
   PC ケースの最大のボディ(233 面、BinTools で 229 KB)で 1 ms 未満。
 - 実行は同時に1件。期限切れ・異常終了・取り消しは子を止めて `ValueError`(呼び出し側は結果を採らず、文書もログも変えない)、
@@ -131,12 +131,7 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
             _CONDITION.notify_all()
     if "refused" in result:
         raise ValueError(result["refused"])
-    return {
-        "shape": _decode(result["shape"]),
-        "provenance": result["provenance"],
-        "volume_before": result["volume_before"],
-        "volume_after": result["volume_after"],
-    }
+    return {**result, "shape": _decode(result["shape"])}
 
 
 def stop() -> None:
