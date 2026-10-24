@@ -21,6 +21,8 @@ export function createSketchLineMaterial(color: number, resolution: THREE.Vector
  * 量だけカメラ側へ寄せる(`viewportConstants.ts` の `DEPTH_BIAS_UNIT` と同じ量。`LineMaterial` の頂点シェーダーは
  * `project_vertex` を通らないので、両端を視点座標へ移した直後に寄せる)。寄せないと、面に貼ったスケッチの線が
  * 面と奥行きを争って明滅する。
+ * 断面のクリップは寄せる前の位置で判定する: `LineMaterial` は寄せた両端をそのままクリップの位置(`mvPosition`)に使うので、
+ * 寄せた位置で判定すると切り口の近くの辺が消える・はみ出す。
  */
 export function withLineDepthBias(material: LineMaterial, layer: number): LineMaterial {
   const bias = (layer * DEPTH_BIAS_UNIT).toFixed(8)
@@ -28,12 +30,19 @@ export function withLineDepthBias(material: LineMaterial, layer: number): LineMa
   material.depthWrite = false
   material.onBeforeCompile = (shader) => {
     const marker = 'vec4 end = modelViewMatrix * vec4( instanceEnd, 1.0 );'
-    if (!shader.vertexShader.includes(marker)) {
+    const clipMarker = 'vec4 mvPosition = ( position.y < 0.5 ) ? start : end;'
+    if (!shader.vertexShader.includes(marker) || !shader.vertexShader.includes(clipMarker)) {
       throw new Error('太線の材質に深度バイアスを掛けられない(LineMaterial の頂点シェーダーの形が変わった)')
     }
     shader.vertexShader = shader.vertexShader.replace(
+      clipMarker,
+      'vec4 mvPosition = ( position.y < 0.5 ) ? unbiasedStart : unbiasedEnd;',
+    )
+    shader.vertexShader = shader.vertexShader.replace(
       marker,
       `${marker}
+			vec4 unbiasedStart = start;
+			vec4 unbiasedEnd = end;
 			float depthBiasMm = ${bias} * 2.0 / projectionMatrix[1][1];
 			if ( isPerspectiveMatrix( projectionMatrix ) ) {
 				start.xyz *= max( 1.0 - depthBiasMm * ( - start.z ) / length( start.xyz ), 0.0 );

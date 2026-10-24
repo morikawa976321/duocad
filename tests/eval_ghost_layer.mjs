@@ -109,6 +109,16 @@ assert.equal(hidden.dashed, true)
 assert.ok(passes[2].geometry.getAttribute('instanceDistanceStart'), '隠れた辺に線の通し距離が無い(破線にならない)')
 assert.equal(fill.depthWrite, false)
 assert.equal(visible.depthFunc, THREE.LessEqualDepth)
+// 辺は奥行きのために寄せるが、断面のクリップは寄せる前の位置で判定する(寄せた位置だと切り口の近くの辺が消える)
+for (const material of [visible, hidden]) {
+  const shader = { vertexShader: material.vertexShader, fragmentShader: material.fragmentShader, uniforms: material.uniforms }
+  material.onBeforeCompile(shader)
+  assert.ok(shader.vertexShader.includes('depthBiasMm'), '辺が奥行きのために寄っていない')
+  assert.ok(
+    shader.vertexShader.includes('vec4 mvPosition = ( position.y < 0.5 ) ? unbiasedStart : unbiasedEnd;'),
+    '断面のクリップを寄せた後の位置で判定している',
+  )
+}
 // 立方体の辺は12本(面ごとの境界線は24本で届く)
 assert.equal(passes[4].geometry.getAttribute('instanceStart').count, 12)
 assert.deepEqual(visibility, [['a', false]])
