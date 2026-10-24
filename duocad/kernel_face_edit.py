@@ -714,8 +714,12 @@ def _blend_radius(face: Any) -> Optional[float]:
         if candidate <= 1e-9:
             continue
         matched = [min(pair, key=lambda k: abs(k / candidate - 1.0)) for pair in samples]
-        if all(k > 0.0 and abs(1.0 / k - 1.0 / candidate) < _BLEND_RADIUS_TOL for k in matched):
-            return len(matched) / sum(matched)
+        if min(matched) <= 0.0:
+            continue
+        # 照合は返す半径で行う(候補の半径で照らすと、候補から ±1e-4 の標本の平均が候補からずれ、返す半径からは 1e-4 を超えた。sol の指摘)
+        radius = len(matched) / sum(matched)
+        if all(abs(1.0 / k - radius) < _BLEND_RADIUS_TOL for k in matched):
+            return radius
     return None
 
 

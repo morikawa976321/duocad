@@ -162,12 +162,13 @@ def test_a_wall_with_a_small_rim_fillet_still_moves(distance):
         [(0.0, 2.2), (0.01, 2.2), (0.02, 2.2), (0.03, 2.0), (0.04, 2.0), (0.05, 2.0), (0.06, 2.0), (0.08, 2.0), (0.1, 2.0),
          (0.2, 2.0), (0.3, 2.0), (0.5, 2.0), (0.7, 2.0), (1.0, 2.0)],
         [(0.0, 2.0), (0.5, 2.0015), (1.0, 2.003)],
+        [(i / 10, 0.00809 if i == 5 else 0.00818 if i == 10 else 0.008) for i in range(11)],
     ],
-    ids=["near-its-end", "slightly-overall"],
+    ids=["near-its-end", "slightly-overall", "within-the-tolerance-of-the-middle"],
 )
 def test_a_variable_radius_blend_is_not_taken_for_a_constant_one(law):
-    """落ちたら、端の 3 % だけ半径 2.2 か、全体で 2.0 から 2.003 へ変わる可変半径の丸めを一定半径とみなし、
-    上面を動かすと円筒の丸めに置き換えて返す(sol の指摘)。"""
+    """落ちたら、端の 3 % だけ半径 2.2 か、全体で 2.0 から 2.003 へ変わるか、中ほどの半径からは 1e-4 mm 以内でも平均からは外れる
+    可変半径の丸めを一定半径とみなし、上面を動かすと円筒の丸めに置き換えて返す(sol の指摘)。"""
     box = BRepPrimAPI_MakeBox(W, D, H).Shape()
     radii = TColgp_Array1OfPnt2d(1, len(law))
     for i, (u, r) in enumerate(law, 1):
