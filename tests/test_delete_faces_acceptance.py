@@ -18,7 +18,9 @@ import duocad.verbs as verbs
 from duocad import catalog, kernel, query, selection
 from duocad.document import Document
 from duocad.entry import entry_for
-from duocad.verbs import chamfer, fillet
+from duocad.region import region_ref
+from duocad.sketch import add_ellipse, base_plane, sketch_create
+from duocad.verbs import chamfer, extrude, fillet, shell_body
 from duocad.verbs.import_editable import import_step
 from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json, second_body, shape_ref
 from mcp_support import call
@@ -183,6 +185,52 @@ def test_a_hole_of_a_step_body_whose_round_end_crosses_the_cylinder_seam_can_be_
     _delete_faces(doc, [hole_face], body_id)
 
     assert query.volume(doc.get_body(body_id).shape) == pytest.approx(40 * 20 * 10 + math.pi * 10**2 / 2 * 10, rel=1e-9)
+
+
+def _elliptic_prism(doc: Document) -> str:
+    """楕円(40×24)を 30 押し出した柱。側面は楕円の押し出し面(OCCT が延ばせない曲面。docs/FACE_EDIT.md「OCCT の罠」11)。"""
+    sketch_id = sketch_create(doc, base_plane("XY"))
+    add_ellipse(doc, sketch_id, (0.0, 0.0), 40.0, 24.0)
+    return extrude(doc, [region_ref(sketch_id, 1)], 30.0, mode="join").args["body_id"]
+
+
+def _fillet_top_rims(doc: Document, body_id: str, radius: float) -> list:
+    """上面(z=30)の楕円の縁を丸め、丸めの面の添字を返す。"""
+    rims = [
+        edge["index"]
+        for edge in query.describe_edges(doc.get_body(body_id).shape)
+        if edge["kind"] == "other" and all(abs(p[2] - 30.0) < 1e-6 for p in (edge["start"], edge["end"]))
+    ]
+    assert rims
+    return fillet(doc, rims, radius, body_id=body_id).provenance["new_faces"]
+
+
+def test_a_rim_fillet_beside_an_elliptic_wall_is_deleted_back_to_the_prism():
+    """押し出した楕円の上縁の丸めを削除すると、元の楕円柱に戻る(歯ブラシ立ての上縁の丸めが消せなかった形)。"""
+    doc = Document()
+    body_id = _elliptic_prism(doc)
+    kinds, volume = kinds_of(doc, body_id), query.volume(doc.get_body(body_id).shape)
+
+    _delete_faces(doc, _fillet_top_rims(doc, body_id, 1.0), body_id)
+
+    assert kinds_of(doc, body_id) == kinds
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(volume, rel=1e-8)
+    restored = replay_through_json(doc)
+    assert query.describe_faces(restored.get_body(body_id).shape) == query.describe_faces(doc.get_body(body_id).shape)
+
+
+def test_rim_fillets_beside_a_shelled_elliptic_wall_are_deleted_back_to_the_shell():
+    """殻にした楕円柱の縁の丸めを削除すると、元の殻に戻る(内壁は押し出し面のオフセット面で、これも延ばせない曲面)。"""
+    doc = Document()
+    body_id = _elliptic_prism(doc)
+    shell_body(doc, [_plane_at(doc, body_id, 2, 30.0)], 1.0, body_id=body_id)
+    kinds, volume = kinds_of(doc, body_id), query.volume(doc.get_body(body_id).shape)
+
+    _delete_faces(doc, _fillet_top_rims(doc, body_id, 0.4), body_id)
+
+    assert kinds_of(doc, body_id) == kinds
+    # オフセット面の上の体積は、戻した形で 3e-6 ずれる(元の殻との対称差は 0。実測)
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(volume, rel=1e-5)
 
 
 def test_faces_that_cannot_close_raise_and_leave_document_and_log_unchanged():
