@@ -80,11 +80,12 @@ _CURVATURE_REFINED = 8
 #: 解析曲面でない面をずらすとき、`1 + 曲率 × 距離` がこれ未満なら断る。置いた値(詰め直しても届かない局所的な最小の分の余裕)。
 #: 0 で尖る: 30×15 の楕円柱(曲がりの半径の最小 7.5)を内へ 7.51 ずらした形は BRepCheck を通った(実測)
 _CUSP_MARGIN = 0.01
-#: B-spline の丸めを見分けるとき主曲率を見る等間隔の内側の点の数(1方向)と、主曲率が 1/r から外れてよい割合。
-#: 割合は置いた値で、これ未満しか半径の変わらない可変半径の丸めは一定半径とみなす。実測: 楕円柱・楕円のコップの縁の丸めの内側で最大 3.4e-6、
-#: 歯ブラシ立ての半径 0.4 の丸め 206 面で最大 1.14e-4、半径が 2.0 から 2.003 へ変わる丸め(断る側)で 7.5e-4
+#: B-spline の丸めを見分けるとき主曲率を見る等間隔の内側の点の数(1方向)と、主曲率から出した曲がりの半径が r から外れてよい差[mm]。
+#: 差は置いた値で、これ未満しか半径の変わらない可変半径の丸めは一定半径とみなす。割合でなく差で見るのは、近似のずれが半径によらないから
+#: (実測: 楕円柱の縁を半径 0.008〜7 で丸めた面で最大 6.5e-6、割合では r=0.008 で 6.0e-4。歯ブラシ立ての半径 0.4 の丸め 206 面で最大 4.6e-5。
+#: 半径が 2.0 から 2.003 へ変わる丸め(断る側)で 1.5e-3)
 _BLEND_SAMPLES = 9
-_BLEND_CURVATURE_TOL = 3e-4
+_BLEND_RADIUS_TOL = 1e-4
 
 _HINT_DELETE = "周りの面を延ばしても閉じない。穴や丸めは、それを作る面(底・段・縁の丸め、つながった丸め)をまとめて選ぶ"
 _HINT_COLLAPSE = "消すと残す面が削られる(形がつぶれる)"
@@ -438,9 +439,7 @@ def _require_no_cusp(face: Any, distance: float) -> None:
             return math.inf  # 回転面の極など。周りの標本が見る
         return min(1.0 - sign * curvature * distance for curvature in (props.MaxCurvature(), props.MinCurvature()))
 
-    u_knots, v_knots = _knots(adaptor)
-    us = _sample_parameters(u1, u2, _CURVATURE_SAMPLES - 1, u_knots)
-    vs = _sample_parameters(v1, v2, _CURVATURE_SAMPLES - 1, v_knots)
+    us, vs = _sample_grid(adaptor, (u1, u2, v1, v2), _CURVATURE_SAMPLES - 1)
     values = {(i, j): margin(u, v) for i, u in enumerate(us) for j, v in enumerate(vs)}
     worst = min(values.values())
     # 格子の局所的な最小から詰める。押し出し面は曲率が片方向に変わらず同じ値が列に並ぶので、行・列の重ならないものを選ぶ
@@ -702,10 +701,10 @@ def _blend_radius(face: Any) -> Optional[float]:
         return None
     adaptor = BRepAdaptor_Surface(face)
     u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
-    u_knots, v_knots = _knots(adaptor)
+    us, vs = _sample_grid(adaptor, (u1, u2, v1, v2), _BLEND_SAMPLES + 1)
     samples = []
-    for u in _sample_parameters(u1, u2, _BLEND_SAMPLES + 1, u_knots):
-        for v in _sample_parameters(v1, v2, _BLEND_SAMPLES + 1, v_knots):
+    for u in us:
+        for v in vs:
             props = BRepLProp_SLProps(adaptor, u, v, 2, 1e-7)
             if props.IsCurvatureDefined():
                 samples.append((abs(props.MaxCurvature()), abs(props.MinCurvature())))
@@ -715,15 +714,28 @@ def _blend_radius(face: Any) -> Optional[float]:
         if candidate <= 1e-9:
             continue
         matched = [min(pair, key=lambda k: abs(k / candidate - 1.0)) for pair in samples]
-        if all(abs(k / candidate - 1.0) < _BLEND_CURVATURE_TOL for k in matched):
+        if all(k > 0.0 and abs(1.0 / k - 1.0 / candidate) < _BLEND_RADIUS_TOL for k in matched):
             return len(matched) / sum(matched)
     return None
 
 
-def _sample_parameters(low: float, high: float, intervals: int, knots: List[float]) -> List[float]:
+def _sample_grid(adaptor: Any, bounds: tuple, intervals: int) -> Tuple[List[float], List[float]]:
+    """曲率を見る U・V の位置(`_sample_parameters`)。周期の面は、節点を周期ずつずらして面の範囲へ持ってくる
+    (節点が 0.05〜6.33 にある面を U の範囲 [2π, 4π] で張ると、ずらさなければ節点の点が1つも入らない。sol の指摘)。"""
+    u1, u2, v1, v2 = bounds
+    u_knots, v_knots = _knots(adaptor)
+    u_period = adaptor.UPeriod() if adaptor.IsUPeriodic() else 0.0
+    v_period = adaptor.VPeriod() if adaptor.IsVPeriodic() else 0.0
+    return _sample_parameters(u1, u2, intervals, u_knots, u_period), _sample_parameters(v1, v2, intervals, v_knots, v_period)
+
+
+def _sample_parameters(low: float, high: float, intervals: int, knots: List[float], period: float) -> List[float]:
     """曲率を見る1方向の位置: 範囲を `intervals` 等分する点(両端を含む)と、範囲にかかる節点の区間ごとの端と中点。
     等間隔の点だけでは、端の 3 % で半径が 2.2 から 2 へ変わる可変半径の丸めを一定半径と見誤った(sol の指摘で実測)。"""
     found = {low + (high - low) * i / intervals for i in range(intervals + 1)}
+    if period > 0.0 and knots:
+        shifts = range(math.floor((low - knots[-1]) / period), math.ceil((high - knots[0]) / period) + 1)
+        knots = sorted({knot + n * period for n in shifts for knot in knots})
     for a, b in zip(knots, knots[1:]):
         a, b = max(a, low), min(b, high)
         if a < b:
@@ -877,7 +889,7 @@ def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> L
             if made_radius is None:
                 raise FaceEditError("a re-blended face is not a constant-radius blend", _HINT_TOO_FAR)
             # B-spline の丸めの半径は主曲率から出すので、近似の分だけ定義の照合より緩める
-            if abs(made_radius - radius) > max(LINEAR_TOL, radius * _BLEND_CURVATURE_TOL):
+            if abs(made_radius - radius) > _BLEND_RADIUS_TOL:
                 raise FaceEditError("a re-blended face has the radius of another blend", _HINT_TOO_FAR)
             touched_a = touched_b = False
             for spring, neighbour in _springs(face, final_edge_faces):
