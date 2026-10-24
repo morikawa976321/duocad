@@ -15,6 +15,7 @@ import pytest
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
+from OCP.GeomAbs import GeomAbs_SurfaceType
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 
@@ -22,7 +23,9 @@ import duocad.verbs as verbs
 from duocad import catalog, query, selection
 from duocad.document import Body, Document
 from duocad.entry import entry_for
-from duocad.verbs import chamfer, fillet
+from duocad.region import region_ref
+from duocad.sketch import add_ellipse, base_plane, sketch_create
+from duocad.verbs import chamfer, extrude, fillet, shell_body
 from document_support import kinds_of, new_box, new_box_with_hole, replay_through_json, shape_ref
 from mcp_support import call
 from session_support import session_with_box
@@ -226,6 +229,71 @@ def test_a_tangent_neighbour_that_cannot_follow_is_refused():
         _offset_faces(doc, [_plane_at(doc, body_id, 1, 0.0)], 1.0, body_id)
 
     assert _state(doc) == before
+
+
+def _elliptic_prism(doc: Document) -> str:
+    """楕円(40×24)を 30 押し出した柱。側面は楕円の押し出し面(解析曲面でない)で、曲がりの半径の最小は 12²/20 = 7.2。"""
+    sketch_id = sketch_create(doc, base_plane("XY"))
+    add_ellipse(doc, sketch_id, (0.0, 0.0), 40.0, 24.0)
+    return extrude(doc, [region_ref(sketch_id, 1)], 30.0, mode="join").args["body_id"]
+
+
+def _elliptic_wall(doc: Document, body_id: str) -> int:
+    (index,) = [f["index"] for f in query.describe_faces(doc.get_body(body_id).shape) if f["kind"] not in ("plane", "plane_circle")]
+    return index
+
+
+def _parallel_ellipse_area(a: float, b: float, d: float) -> float:
+    """楕円を d ずらした平行曲線の囲む面積(Steiner の式 A + P d + π d²。折り返さない範囲で正確)。周長は数値積分。"""
+    n = 100000
+    perimeter = sum(math.hypot(a * math.sin(t), b * math.cos(t)) for t in (2 * math.pi * (i + 0.5) / n for i in range(n))) * 2 * math.pi / n
+    return math.pi * a * b + perimeter * d + math.pi * d * d
+
+
+@pytest.mark.parametrize("distance", [2.0, -2.0, -7.0])
+def test_moving_an_elliptic_wall_keeps_it_parallel_to_the_ellipse(distance):
+    """楕円柱の側面(押し出し面)を動かすと、楕円に平行な壁になり、上下の面が伸縮する。"""
+    doc = Document()
+    body_id = _elliptic_prism(doc)
+
+    _offset_faces(doc, [_elliptic_wall(doc, body_id)], distance, body_id)
+
+    # オフセット面の上の体積は適応積分で最大 0.03 % ずれる(30×15 の楕円柱を +2 で 34330.2、Steiner の式で 34338.7。実測)
+    assert _volume(doc, body_id) == pytest.approx(_parallel_ellipse_area(20.0, 12.0, distance) * 30.0, rel=1e-3)
+    assert kinds_of(doc, body_id) == kinds_of(replay_through_json(doc), body_id)
+
+
+def test_moving_an_elliptic_wall_inward_past_its_tightest_bend_is_refused():
+    """内側へ曲がりの半径(最小 7.2)を超えてずらすと面が折り返すので、例外にして文書もログも変えない。
+    超えた直後は MakeOffset も BRepCheck も通す(30×15 の楕円柱で 7.5 に対し 7.51。実測)。"""
+    doc = Document()
+    body_id = _elliptic_prism(doc)
+    before = _state(doc)
+
+    with pytest.raises(ValueError, match="fold"):
+        _offset_faces(doc, [_elliptic_wall(doc, body_id)], -7.21, body_id)
+
+    assert _state(doc) == before
+
+
+def test_moving_a_shelled_elliptic_wall_thickens_the_shell():
+    """殻にした楕円柱の内壁(押し出し面のオフセット面)を正へ動かすと、壁が厚くなる(外向き法線は軸へ向かう)。"""
+    doc = Document()
+    body_id = _elliptic_prism(doc)
+    shell_body(doc, [_plane_at(doc, body_id, 2, 30.0)], 1.0, body_id=body_id)
+    shape = doc.get_body(body_id).shape
+    (inner,) = [
+        i
+        for i in range(1, _brep_topology.face_count(shape) + 1)
+        if BRepAdaptor_Surface(_brep_topology.face_of(shape, i)).GetType() == GeomAbs_SurfaceType.GeomAbs_OffsetSurface
+    ]
+    before = _volume(doc, body_id)
+
+    _offset_faces(doc, [inner], 1.0, body_id)
+
+    assert _volume(doc, body_id) - before == pytest.approx(
+        (_parallel_ellipse_area(20.0, 12.0, -1.0) - _parallel_ellipse_area(20.0, 12.0, -2.0)) * 29.0, rel=1e-2
+    )
 
 
 def test_two_faces_move_together():
