@@ -8,12 +8,13 @@ import math
 
 import pytest
 from OCP.BRep import BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Curve
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCone, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeRevol
-from OCP.Geom import Geom_BezierCurve
+from OCP.BRepTools import BRepTools, BRepTools_ReShape
+from OCP.Geom import Geom_BezierCurve, Geom_RectangularTrimmedSurface
 from OCP.GeomAbs import GeomAbs_CurveType
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Elips, gp_Pnt
 from OCP.TColgp import TColgp_Array1OfPnt
@@ -185,6 +186,49 @@ def test_a_rim_fillet_beside_a_revolved_wall_is_deleted_back_to_the_vase(angle):
     assert query.volume(result) == pytest.approx(query.volume(vase), rel=1e-8)
     assert query.volume(BRepAlgoAPI_Cut(result, vase).Shape()) == pytest.approx(0.0, abs=1e-6)
     assert query.volume(BRepAlgoAPI_Cut(vase, result).Shape()) == pytest.approx(0.0, abs=1e-6)
+
+
+def _walls(shape) -> list:
+    """延ばせない曲面の面。"""
+    faces = _brep_topology._face_map(shape)
+    return [
+        TopoDS.Face_s(faces.FindKey(i))
+        for i in range(1, faces.Extent() + 1)
+        if BRepAdaptor_Surface(TopoDS.Face_s(faces.FindKey(i))).GetType() in kernel_face_edit._UNEXTENDABLE
+    ]
+
+
+def _trimmed_to_faces(shape):
+    """延ばせない曲面の面を、面の UV の範囲の矩形トリムで包んだ曲面の上に張り直した形。"""
+    reshape = BRepTools_ReShape()
+    for wall in _walls(shape):
+        location = TopLoc_Location()
+        surface = BRep_Tool.Surface_s(wall, location)
+        trimmed = Geom_RectangularTrimmedSurface(surface, *BRepTools.UVBounds_s(wall))
+        reshape.Replace(wall, kernel_face_edit._laid_on(wall, trimmed, location))
+    return reshape.Apply(shape)
+
+
+def test_a_rim_fillet_beside_a_trimmed_revolved_wall_is_deleted_back_to_the_vase():
+    """落ちたら、矩形トリムで包んだ曲面の壁を、延びた像のままトリムの狭い範囲へ戻している(辺の許容差が 1.16 mm に広がり、
+    体積の違う形が関門を通った。実測)。"""
+    vase = _vase()
+    filleted = _trimmed_to_faces(_filleted(vase, _top_rim(vase)))
+
+    result = kernel_face_edit.delete_faces(filleted, _bspline_faces(filleted))["shape"]
+
+    assert query.volume(result) == pytest.approx(query.volume(vase), rel=1e-8)
+
+
+def test_laying_an_outline_on_a_surface_it_does_not_lie_on_is_refused():
+    """落ちたら、輪郭が乗らない曲面へ張った面を、`ShapeFix_Face` が辺の許容差を広げて通したまま返す。"""
+    (wall,) = _walls(_vase())
+    location = TopLoc_Location()
+    surface = BRep_Tool.Surface_s(wall, location)
+    u1, u2, v1, v2 = BRepTools.UVBounds_s(wall)
+
+    with pytest.raises(kernel_face_edit.FaceEditError, match="does not lie on"):
+        kernel_face_edit._laid_on(wall, Geom_RectangularTrimmedSurface(surface, u1, u2, v1, (v1 + v2) / 2), location)
 
 
 def test_the_b_spline_stand_ins_leave_no_curves_on_the_edges():

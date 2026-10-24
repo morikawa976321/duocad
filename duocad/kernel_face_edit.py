@@ -253,11 +253,11 @@ def _restore_stand_ins(before: Any, stood_in: List[int], result: Any, images: di
         return result
     back = BRepTools_ReShape()
     for i in stood_in:
-        old = TopoDS.Face_s(before.FindKey(i))
-        location = TopLoc_Location()
-        surface = BRep_Tool.Surface_s(old, location)
+        # 張り替えた B-spline と同じく矩形トリムを外した曲面へ戻す(像はトリムの外へ延びている)
+        surface, location = _untrimmed_surface(TopoDS.Face_s(before.FindKey(i)))
+        in_world = surface if location.IsIdentity() else surface.Transformed(location.Transformation())
         for image in images[i]:
-            if not _lies_on(image, old):
+            if not _points_lie_on(image, in_world):
                 raise FaceEditError(f"kept face {i} left its own surface", _HINT_DELETE)
             back.Replace(image, _laid_on(image, surface, location))
     restored = back.Apply(result)
@@ -272,6 +272,15 @@ def _in(reshape: Any, face: Any) -> Any:
     return TopoDS.Face_s(reshape.Value(face))
 
 
+def _untrimmed_surface(face: Any):
+    """面の曲面(矩形トリムは外す)と、その世界座標での置き場所。"""
+    location = TopLoc_Location()
+    surface = BRep_Tool.Surface_s(face, location)
+    if isinstance(surface, Geom_RectangularTrimmedSurface):
+        surface = surface.BasisSurface()
+    return surface, location
+
+
 def _as_bspline(face: Any):
     """面の曲面を B-spline にしたものと、その世界座標での置き場所。曲面の定義域で切り、無限に延びる向き(押し出しの向き)だけ面の範囲で切る。
 
@@ -279,10 +288,7 @@ def _as_bspline(face: Any):
     閉じたままにし、面が一周を覆わなくても周方向へは延ばさない(半周の回転面の端の丸めは断る)。周方向を開くと、面の範囲で
     切れば外挿が元の曲面から外れ、広げて切れば延びた両端どうしが交わって重なった2枚の面を関門をすり抜けて返した。
     有限の向きを面の範囲で切っても外挿が元の曲面からずれた(どれも実測)。"""
-    location = TopLoc_Location()
-    surface = BRep_Tool.Surface_s(face, location)
-    if isinstance(surface, Geom_RectangularTrimmedSurface):
-        surface = surface.BasisSurface()
+    surface, location = _untrimmed_surface(face)
     own, used = surface.Bounds(), BRepTools.UVBounds_s(face)
     trimmed = Geom_RectangularTrimmedSurface(
         surface, *[used[k] if Precision.IsInfinite_s(own[k]) else own[k] for k in range(4)]
@@ -302,7 +308,11 @@ def _as_bspline(face: Any):
 def _laid_on(face: Any, surface: Any, location: Any) -> Any:
     """`face` と同じ輪郭(同じ辺)を、`location` に置いた `surface` の上に張った面。辺の 2D 曲線は `ShapeFix_Face` が作る。
 
-    1辺ずつ射影して付け直すと、継ぎ目の辺が分かれた側壁で輪が 2D で閉じず、面の向きが決まらなくなった(楕円筒で実測)。"""
+    1辺ずつ射影して付け直すと、継ぎ目の辺が分かれた側壁で輪が 2D で閉じず、面の向きが決まらなくなった(楕円筒で実測)。
+    `ShapeFix_Face` は輪郭が曲面に乗らなくても辺の許容差を広げて通す(延びた器の壁を矩形トリムの狭い曲面へ戻すと 1.16 mm まで
+    広げ、BRepCheck も関門も通って体積が 1.7 % 違った)。正しい形では張り替えでも戻しでも許容差は増えなかったので、増えたら断る(実測)。"""
+    edges = _brep_topology._face_edit_edges(face)
+    tolerances = [BRep_Tool.Tolerance_s(edge) for edge in edges]
     laid = TopoDS_Face()
     builder = BRep_Builder()
     builder.MakeFace(laid, surface, face.Location().Inverted().Multiplied(location), BRep_Tool.Tolerance_s(face))
@@ -314,7 +324,12 @@ def _laid_on(face: Any, surface: Any, location: Any) -> Any:
     laid.Orientation(face.Orientation())
     fix = ShapeFix_Face(laid)
     fix.Perform()
-    return TopoDS.Face_s(fix.Face())
+    laid = TopoDS.Face_s(fix.Face())
+    for edge in _brep_topology._face_edit_edges(laid):
+        before = next((t for e, t in zip(edges, tolerances) if e.IsSame(edge)), 0.0)
+        if BRep_Tool.Tolerance_s(edge) > before + LINEAR_TOL:
+            raise FaceEditError("an edge does not lie on the surface its face was laid on", _HINT_DELETE)
+    return laid
 
 
 def _remove_features(shape: Any, faces: List[Any]):
@@ -834,7 +849,11 @@ def _lies_on(face: Any, source: Any, distance: float = 0.0) -> bool:
         return _same_surface(expected, _describe(face))
     if distance:
         return False
-    surface = BRep_Tool.Surface_s(source)
+    return _points_lie_on(face, BRep_Tool.Surface_s(source))
+
+
+def _points_lie_on(face: Any, surface: Any) -> bool:
+    """`face` の内部の最大9点が、世界座標の `surface` から `LINEAR_TOL` 以内か。"""
     for point in _interior_points(face, 9):
         projector = GeomAPI_ProjectPointOnSurf(gp_Pnt(*point), surface)
         if projector.NbPoints() == 0 or projector.LowerDistance() > LINEAR_TOL:
