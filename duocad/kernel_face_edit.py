@@ -103,7 +103,7 @@ def delete_faces(shape: Any, face_indices: Sequence[int], *, interactive: bool =
     """`face_indices`(1始まり)の面を消し、周りの面を延ばして閉じ直した**新しい形状**を返す(計算は子プロセス)。
 
     `interactive` は画面・MCP からの操作(期限 `kernel_worker.INTERACTIVE_TIMEOUT_S`)。ログの再生は False で期限なし。戻り値:
-        {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float, "volume_after": float}
+        {"shape": <TopoDS_Shape>, "provenance": {...}}
     """
     indices = _checked_indices(shape, face_indices, VERB_DELETE)
     return kernel.remembered(
@@ -174,12 +174,7 @@ def compute(verb: str, shape: Any, arguments: dict) -> dict:
         raise ValueError(f"{message}: {error.hint}" if error.hint else message) from error
     successors = {str(key): positions for key, positions in table.items()}
     provenance.update(_brep_topology._face_map_projection(successors, _brep_topology._face_map(final).Extent()))
-    return {
-        "shape": final,
-        "provenance": provenance,
-        "volume_before": float(_brep_geometry.volume(shape)),
-        "volume_after": float(_brep_geometry.volume(final)),
-    }
+    return {"shape": final, "provenance": provenance}
 
 
 # --------------------------------------------------------------------------------------
@@ -356,7 +351,8 @@ def _remove_features(shape: Any, faces: List[Any]):
     for face in faces:
         to_remove.Append(face)
     algo.AddFacesToRemove(to_remove)
-    algo.SetRunParallel(False)
+    # 並列でも結果は BinTools のバイト列まで直列と同じで、歯ブラシ立ての丸め8枚が 8.0 → 約 4 s(実測。docs/FACE_EDIT.md)
+    algo.SetRunParallel(True)
     algo.SetToFillHistory(True)
     algo.Perform()
     if algo.HasErrors():
