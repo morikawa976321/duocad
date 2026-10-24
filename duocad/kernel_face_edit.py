@@ -74,15 +74,17 @@ _UNEXTENDABLE = (
     GeomAbs_SurfaceType.GeomAbs_SurfaceOfRevolution,
     GeomAbs_SurfaceType.GeomAbs_OffsetSurface,
 )
-#: 曲がりの半径を調べる格子の1辺の点数(UV の範囲の両端を含む)
+#: 曲がりの半径を調べる格子の1辺の点数(UV の範囲の両端を含む)と、最小を詰め直す厳しい標本の数
 _CURVATURE_SAMPLES = 33
-#: 解析曲面でない面をずらすとき、`1 + 曲率 × 距離` がこれ未満なら断る。置いた値(標本の間にある曲がりの半径の最小値を
-#: 取りこぼす分の余裕)。0 で尖る: 30×15 の楕円柱(曲がりの半径の最小 7.5)を内へ 7.51 ずらした形は BRepCheck を通った(実測)
+_CURVATURE_REFINED = 8
+#: 解析曲面でない面をずらすとき、`1 + 曲率 × 距離` がこれ未満なら断る。置いた値(詰め直しても届かない局所的な最小の分の余裕)。
+#: 0 で尖る: 30×15 の楕円柱(曲がりの半径の最小 7.5)を内へ 7.51 ずらした形は BRepCheck を通った(実測)
 _CUSP_MARGIN = 0.01
-#: B-spline の丸めを見分けるとき主曲率を見る格子の1辺の点数(UV の範囲の内側)と、主曲率が 1/r から外れてよい割合。
-#: 割合は置いた値(楕円柱・楕円のコップの縁の丸めで最大 3.4e-6、丸め直した丸めで最大 2.9e-6。実測)
+#: B-spline の丸めを見分けるとき主曲率を見る等間隔の内側の点の数(1方向)と、主曲率が 1/r から外れてよい割合。
+#: 割合は置いた値。実測: 楕円柱・楕円のコップの縁の丸めの内側で最大 3.4e-6、歯ブラシ立ての半径 0.4 の丸めの面の端で最大 1.0e-4、
+#: 端の 3 % だけ半径 2.2 の可変半径の丸め(断る側)で 10 %
 _BLEND_SAMPLES = 9
-_BLEND_CURVATURE_TOL = 1e-4
+_BLEND_CURVATURE_TOL = 1e-3
 
 _HINT_DELETE = "周りの面を延ばしても閉じない。穴や丸めは、それを作る面(底・段・縁の丸め、つながった丸め)をまとめて選ぶ"
 _HINT_COLLAPSE = "消すと残す面が削られる(形がつぶれる)"
@@ -422,20 +424,52 @@ def _offset_following_blends(shape: Any, faces: List[Any], distance: float):
 
 
 def _require_no_cusp(face: Any, distance: float) -> None:
-    """解析曲面でない面を `distance` ずらしても折り返さないこと。面の UV の範囲の格子で主曲率を見る(格子の間は見ない)。
+    """解析曲面でない面を `distance` ずらしても折り返さないこと。面の UV の範囲の格子で主曲率を見て、厳しい標本の周りで
+    最小を詰める(格子だけでは、楕円の先端が格子の間に来ると見逃した。始点を 0.05 ずらした楕円の B-spline で実測)。
     `BRepLProp` の曲率は曲面の法線の側へ曲がると正なので、外向き法線に対しては面の向きで符号を返す(円柱の側面で実測)。"""
     adaptor = BRepAdaptor_Surface(face)
     sign = -1.0 if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED else 1.0
     u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
+
+    def margin(u: float, v: float) -> float:
+        props = BRepLProp_SLProps(adaptor, min(max(u, u1), u2), min(max(v, v1), v2), 2, 1e-7)
+        if not props.IsCurvatureDefined():
+            return math.inf  # 回転面の極など。周りの標本が見る
+        return min(1.0 - sign * curvature * distance for curvature in (props.MaxCurvature(), props.MinCurvature()))
+
     last = _CURVATURE_SAMPLES - 1
-    worst = math.inf
-    for i in range(_CURVATURE_SAMPLES):
-        for j in range(_CURVATURE_SAMPLES):
-            props = BRepLProp_SLProps(adaptor, u1 + (u2 - u1) * i / last, v1 + (v2 - v1) * j / last, 2, 1e-7)
-            if not props.IsCurvatureDefined():
-                continue  # 回転面の極など。周りの標本が見る
-            for curvature in (props.MaxCurvature(), props.MinCurvature()):
-                worst = min(worst, 1.0 - sign * curvature * distance)
+    values = {
+        (i, j): margin(u1 + (u2 - u1) * i / last, v1 + (v2 - v1) * j / last)
+        for i in range(_CURVATURE_SAMPLES)
+        for j in range(_CURVATURE_SAMPLES)
+    }
+    worst = min(values.values())
+    # 格子の局所的な最小から詰める。押し出し面は曲率が片方向に変わらず同じ値が列に並ぶので、行・列の重ならないものを選ぶ
+    minima = sorted(
+        (value, i, j)
+        for (i, j), value in values.items()
+        if all(value <= values.get((i + a, j + b), math.inf) for a in (-1, 0, 1) for b in (-1, 0, 1))
+    )
+    starts, used_i, used_j = [], set(), set()
+    for value, i, j in minima:
+        if len(starts) == _CURVATURE_REFINED:
+            break
+        if i in used_i or j in used_j:
+            continue
+        starts.append((value, i, j))
+        used_i.add(i)
+        used_j.add(j)
+    for value, i, j in starts:
+        u, v = u1 + (u2 - u1) * i / last, v1 + (v2 - v1) * j / last
+        du, dv = (u2 - u1) / last, (v2 - v1) / last
+        while du > (u2 - u1) * 1e-9 or dv > (v2 - v1) * 1e-9:
+            candidates = [(margin(u + a * du, v + b * dv), u + a * du, v + b * dv) for a in (-1, 0, 1) for b in (-1, 0, 1)]
+            best = min(candidates)
+            if best[0] < value:
+                value, u, v = best[0], min(max(best[1], u1), u2), min(max(best[2], v1), v2)
+            else:
+                du, dv = du / 2, dv / 2
+        worst = min(worst, value)
     if worst < _CUSP_MARGIN:
         raise FaceEditError(f"the moved face would fold (1 + curvature * distance = {worst:.3g})", _HINT_CUSP)
 
@@ -668,23 +702,39 @@ def _blend_radius(face: Any) -> Optional[float]:
         return None
     adaptor = BRepAdaptor_Surface(face)
     u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
+    if adaptor.GetType() == GeomAbs_SurfaceType.GeomAbs_BSplineSurface:
+        surface = adaptor.BSpline()
+        u_knots = [surface.UKnot(i) for i in range(1, surface.NbUKnots() + 1)]
+        v_knots = [surface.VKnot(i) for i in range(1, surface.NbVKnots() + 1)]
+    else:
+        u_knots = v_knots = []
     samples = []
-    for i in range(1, _BLEND_SAMPLES + 1):
-        for j in range(1, _BLEND_SAMPLES + 1):
-            u = u1 + (u2 - u1) * i / (_BLEND_SAMPLES + 1)
-            v = v1 + (v2 - v1) * j / (_BLEND_SAMPLES + 1)
+    for u in _blend_parameters(u1, u2, u_knots):
+        for v in _blend_parameters(v1, v2, v_knots):
             props = BRepLProp_SLProps(adaptor, u, v, 2, 1e-7)
             if props.IsCurvatureDefined():
                 samples.append((abs(props.MaxCurvature()), abs(props.MinCurvature())))
     if not samples:
         return None
-    for candidate in samples[0]:
+    for candidate in (*samples[len(samples) // 2], *samples[0]):
         if candidate <= 1e-9:
             continue
         matched = [min(pair, key=lambda k: abs(k / candidate - 1.0)) for pair in samples]
         if all(abs(k / candidate - 1.0) < _BLEND_CURVATURE_TOL for k in matched):
             return len(matched) / sum(matched)
     return None
+
+
+def _blend_parameters(low: float, high: float, knots: List[float]) -> List[float]:
+    """丸めの主曲率を見る1方向の位置: 両端と、等間隔の内側の点と、範囲にかかる節点の区間ごとの端と中点。
+    等間隔の内側だけでは、端の 3 % で半径が 2.2 から 2 へ変わる可変半径の丸めを一定半径と見誤った(sol の指摘で実測)。"""
+    found = {low, high}
+    found.update(low + (high - low) * i / (_BLEND_SAMPLES + 1) for i in range(1, _BLEND_SAMPLES + 1))
+    for a, b in zip(knots, knots[1:]):
+        a, b = max(a, low), min(b, high)
+        if a < b:
+            found.update((a, (a + b) / 2))
+    return sorted(found)
 
 
 def _springs(face: Any, edge_faces: Any) -> List[tuple]:
