@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from duocad import kernel
+from duocad import kernel, kernel_worker
 from duocad.server import Session
 from session_support import box as _box, select as _select
 
@@ -16,10 +16,12 @@ RADIUS = 2.0
 
 @pytest.fixture
 def blends(monkeypatch):
-    """`kernel._blend_edges`(フィレット・面取りの実体)を呼んだ回数。覚えた結果は空から始める。"""
+    """同一プロセスの計算と子への要求の回数。覚えた結果は空から始める。"""
     calls = []
     real = kernel._blend_edges
     monkeypatch.setattr(kernel, "_blend_edges", lambda shape, values, verb: calls.append(verb) or real(shape, values, verb=verb))
+    run = kernel_worker.run
+    monkeypatch.setattr(kernel_worker, "run", lambda verb, *args, **kwargs: calls.append(verb) or run(verb, *args, **kwargs))
     monkeypatch.setattr(kernel, "_RESULTS", type(kernel._RESULTS)())
     return calls
 

@@ -10,7 +10,7 @@ import math
 from typing import Any, List, Optional, Sequence, Union
 from weakref import WeakKeyDictionary
 
-from .. import kernel_sketch, meshbody, naming, selection
+from .. import kernel, kernel_sketch, kernel_worker, meshbody, naming, selection
 from ..document import MESH_KIND, Body, BodyId, Document, new_body_id
 from ..oplog import Operation
 from ..sketch import Sketch, get_sketch
@@ -420,6 +420,22 @@ def normalize_values(
         if not math.isfinite(item) or item <= 0.0:
             raise ValueError(f"{label} must be finite and > 0, got {item!r}")
     return values, stored
+
+
+def blend_edges(shape: Any, values: dict, *, verb: str, interactive: bool = True) -> dict:
+    """対話と再生で期限を分け、子で辺を編集する。鍵と送信する組は同じ順序(`kernel._value_key`)。
+
+    覚える場所と鍵を同一プロセスの kernel と揃え、プレビューの採用・確定・redo で結果を使い回す。
+    """
+    ordered = kernel._value_key(values)
+    return kernel.remembered(
+        verb,
+        (shape,),
+        ordered,
+        lambda: kernel_worker.run(
+            verb, shape, {"values": ordered}, op="blend_edges", timeout=kernel_worker.time_limit(interactive)
+        ),
+    )
 
 
 def edge_entry(document: Document, verb: Any, value: Any) -> dict:

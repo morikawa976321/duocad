@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from duocad import kernel
+from duocad import kernel, kernel_worker
 from duocad.net.ws import Server, _Inbox
 from duocad.server import Session
 from session_support import FakeConnection, box as _box, select as _select
@@ -65,8 +65,8 @@ def test_a_job_on_the_fork_gives_the_same_ghost_and_leaves_the_document_alone(se
 def test_the_commit_reuses_what_the_worker_computed(session: Session, monkeypatch) -> None:
     """落ちたら、ワーカーが写しの上で求めたフィレットを確定が使えず、同じ計算をもう一度する(#169 の使い回しが消える)。"""
     calls = []
-    real = kernel._blend_edges
-    monkeypatch.setattr(kernel, "_blend_edges", lambda shape, values, verb: calls.append(verb) or real(shape, values, verb=verb))
+    real = kernel_worker.run
+    monkeypatch.setattr(kernel_worker, "run", lambda verb, *args, **kwargs: calls.append(verb) or real(verb, *args, **kwargs))
     monkeypatch.setattr(kernel, "_RESULTS", type(kernel._RESULTS)())
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
@@ -79,13 +79,13 @@ def test_the_commit_reuses_what_the_worker_computed(session: Session, monkeypatc
 
 
 def _slow_blends(monkeypatch, seconds: float) -> None:
-    real = kernel._blend_edges
+    real = kernel_worker.run
 
-    def slow(shape, values, verb):
+    def slow(verb, *args, **kwargs):
         time.sleep(seconds)
-        return real(shape, values, verb=verb)
+        return real(verb, *args, **kwargs)
 
-    monkeypatch.setattr(kernel, "_blend_edges", slow)
+    monkeypatch.setattr(kernel_worker, "run", slow)
     monkeypatch.setattr(kernel, "_RESULTS", type(kernel._RESULTS)())
 
 

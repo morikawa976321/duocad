@@ -1,4 +1,4 @@
-"""面の削除・オフセットを常駐の子プロセスで計算する口。方式と実測は docs/FACE_EDIT.md「子プロセス」。
+"""面の編集・フィレット・面取りを常駐の子プロセスで計算する口。方式と実測は docs/FACE_EDIT.md と docs/FILLET_OVERFLOW.md。
 
 OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒の計算で主スレッドが 3.09 秒止まった)、
 `BRepOffset_MakeOffset` はプロセスごと落ちることがある(角ばった実物で 21 件)。同じプロセスで計算すると、その間サーバ全体
@@ -6,7 +6,7 @@ OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒�
 `worker_process` の共通の部品で、ここは要求の形と子での計算だけを持つ。
 
 - 子は1本で、初回の呼び出しで立て、計算が終わっても残す(起動に約 1.6 秒。干渉チェックは1回ごとに立てる)。
-- 要求は {"op":"face_edit","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
+- 要求は {"op":"face_edit" または "blend_edges","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
   {"shape":<base64>,"provenance":{...},"volume_before":..,"volume_after":..} か、関門で断ったときの {"refused":"<断り文>"}。
   BinTools は往復で幾何が変わらず、面の添字の数え方も保つ(BRep の文字列は 1e-14 ずれる)。base64 の往復は
   PC ケースの最大のボディ(233 面、BinTools で 229 KB)で 1 ms 未満。
@@ -29,6 +29,7 @@ from . import worker_process
 
 #: 画面・MCP からの操作で、計算(子の起動と受け渡しを含む)を打ち切るまでの秒数。本人の決定(2026-10-23、docs/FACE_EDIT.md カード e)。
 #: 実測: 合成形状の正当な計算の最長は 18 秒(穴100個を一度に消す)、角ばった実物の1件は最長約 2.3 秒。
+#: フィレット・面取りも暫定で共有する。期限の最終値は別途決定する(docs/FILLET_OVERFLOW.md「いつ使うか」)。
 INTERACTIVE_TIMEOUT_S = 20.0
 
 _LOCK = threading.Lock()
@@ -40,13 +41,13 @@ def time_limit(interactive: bool) -> Optional[float]:
     return INTERACTIVE_TIMEOUT_S if interactive else None
 
 
-def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float]) -> dict:
-    """子で `kernel_face_edit.compute(verb, shape, arguments)` を走らせ、同じ形の辞書を返す(`"shape"` は親の形)。
+def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op: str = "face_edit") -> dict:
+    """子で面の編集か `kernel.fillet_edges` / `chamfer_edges` を走らせ、同じ形の辞書を返す(`"shape"` は親の形)。
 
     `timeout` は計算の期限[秒](None は期限なし。ログの再生)。前の計算の終わりを待つ時間は含めない。
     """
     global _WORKER
-    message = {"op": "face_edit", "verb": verb, "arguments": arguments, "shape": _encode(shape)}
+    message = {"op": op, "verb": verb, "arguments": arguments, "shape": _encode(shape)}
     with _LOCK:
         if _WORKER is None:
             # `-m duocad.kernel_worker` だと、パッケージの import が先にこのモジュールを読み、runpy が二重読みを警告する
@@ -94,12 +95,22 @@ def _decode(text: str) -> Any:
 # 子
 # --------------------------------------------------------------------------------------
 def _handle(message: Dict[str, Any]) -> Dict[str, Any]:
-    from . import kernel_face_edit
+    from . import kernel, kernel_face_edit
 
-    if message.get("op") != "face_edit":
-        raise ValueError(f"unknown op {message.get('op')!r}")
+    op = message.get("op")
+    if op not in ("face_edit", "blend_edges"):
+        raise ValueError(f"unknown op {op!r}")
     try:
-        result = kernel_face_edit.compute(message["verb"], _decode(message["shape"]), message["arguments"])
+        if op == "face_edit":
+            result = kernel_face_edit.compute(message["verb"], _decode(message["shape"]), message["arguments"])
+        else:
+            verb = message["verb"]
+            if verb not in ("fillet", "chamfer"):
+                raise ValueError(f"unknown blend {verb!r}")
+            values = {int(index): float(value) for index, value in message["arguments"]["values"]}
+            # kernel の公開関数は同一プロセスの純粋な計算口。子を起こす verb 層の入口は呼ばない。
+            compute = kernel.fillet_edges if verb == "fillet" else kernel.chamfer_edges
+            result = compute(_decode(message["shape"]), values)
     except ValueError as error:
         return {"refused": str(error)}
     result["shape"] = _encode(result["shape"])

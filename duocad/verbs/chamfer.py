@@ -10,11 +10,10 @@ from __future__ import annotations
 
 from typing import Optional, Sequence, Union
 
-from .. import kernel
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
 from ..entry import entry
-from ._common import edge_entry, editable_body, normalize_values, reapply_shape, remember, replayed_body, undo_shape
+from ._common import blend_edges, edge_entry, editable_body, normalize_values, reapply_shape, remember, replayed_body, undo_shape
 
 VERB_CHAMFER = "chamfer"
 
@@ -31,7 +30,7 @@ def chamfer(
 
     body = editable_body(doc, body_id, what="chamfer")
     values, stored_distance = normalize_values(edge_list, distance, label="distance")
-    result = kernel.chamfer_edges(body.shape, dict(zip(edge_list, values)))
+    result = blend_edges(body.shape, dict(zip(edge_list, values)), verb=VERB_CHAMFER)
 
     previous_shape = body.shape
     body.shape = result["shape"]
@@ -50,7 +49,7 @@ def _do_chamfer(document: Document, operation: Operation) -> None:
     edge_list = [int(index) for index in args["edges"]]
     values, _ = normalize_values(edge_list, args["distance"], label="distance")
     body = replayed_body(document, args["body_id"], what="chamfer")
-    result = kernel.chamfer_edges(body.shape, dict(zip(edge_list, values)))
+    result = blend_edges(body.shape, dict(zip(edge_list, values)), verb=VERB_CHAMFER, interactive=False)
     reapply_shape(document, body, result, operation)
 
 
