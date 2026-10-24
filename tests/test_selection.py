@@ -19,7 +19,7 @@ from duocad.server import Session
 from duocad.sketch import add_circle, sketch_create
 from duocad.verbs import extrude_faces
 from document_support import box_shape as _box_shape, shape_ref
-from session_support import session_with_box
+from session_support import SIDE, pad, select, session_with_box
 
 from duocad import (
     brep_topology as _brep_topology,
@@ -548,6 +548,36 @@ def test_a_body_name_that_is_not_a_string_is_a_value_error(doc: Document):
     for kind in ("face", "body"):
         with pytest.raises(ValueError):
             selection.modify_selection(doc, add=[{"body": ["box"], "kind": kind, "index": 1}])
+
+
+def test_a_body_can_be_selected_whole(session: Session) -> None:
+    """**ソリッドを丸ごと指せる**(面を全部入れる案は採っていない)。
+
+    落ちるのは「`kind='body'` の参照が選択機構を通らない」とき。削除・計測・最適化の保持/除外ソリッドは
+    選択から対象を取るので、通らなければそれらの verb がボディを指せない。
+    """
+    body = pad(session, SIDE, SIDE, SIDE)
+    ref = selection.select_body(session.document, body.id)
+    assert ref == {"body": body.id, "kind": "body", "index": None, "provenance": None}
+    assert selection.ref_kind(ref) == selection.BODY_KIND
+
+    select(session, [{"body": body.id, "kind": "body"}])
+    items = session.get_selection()["items"]
+    # **面が展開されて入っていない**(2835面のボディで選択集合が膨れる案を採らないこと)
+    assert items == [ref], items
+    assert selection.require_selected_bodies(session.document) == [body.id]
+
+
+def test_the_same_body_is_not_selected_twice(session: Session) -> None:
+    """同じボディを2回 add しても重複しない(等価判定が添字を見ていないこと)。"""
+    body = pad(session, SIDE, SIDE, SIDE)
+    refs = [{"body": body.id, "kind": "body"}]
+    session.clear_selection()
+    session.modify_selection(refs, [])
+    session.modify_selection(refs, [])
+    assert len(session.get_selection()["items"]) == 1
+    session.modify_selection([], refs)
+    assert session.get_selection()["items"] == []
 
 
 def _ts_union_arms(path: Path, name: str) -> set:

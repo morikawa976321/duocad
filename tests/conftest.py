@@ -19,6 +19,7 @@ WORKERS_FOR_THE_WHOLE_SUITE = 4
 FROZEN_TOPOPT = Path(__file__).resolve().parent / "topopt"
 
 
+@pytest.hookimpl(optionalhook=True)  # xdist を `-p no:xdist` で外したとき、未知のフックとして収集が止まる
 def pytest_xdist_auto_num_workers(config):
     """`-n auto`(pyproject の既定)のワーカー数。ファイルやテストだけを名指ししたときは並べない
     (ワーカーの立ち上げに毎回約10秒かかり、1ファイルなら直列の方が速い。2026-10-24 実測)。"""

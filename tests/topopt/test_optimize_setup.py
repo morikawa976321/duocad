@@ -46,35 +46,6 @@ def _optimize(session: Session) -> dict:
     return session.state_meta()["optimize"]
 
 
-def test_a_body_can_be_selected_whole(session: Session) -> None:
-    """**ソリッドを丸ごと指せる**(面を全部入れる案は採っていない)。
-
-    落ちるのは「`kind='body'` の参照が選択機構を通らない」とき。保持/除外ソリッドは
-    選択から対象を取るので、通らなければverb自体が使えない。
-    """
-    body = _box(session)
-    ref = selection.select_body(session.document, body.id)
-    assert ref == {"body": body.id, "kind": "body", "index": None, "provenance": None}
-    assert selection.ref_kind(ref) == selection.BODY_KIND
-
-    _select(session, _body_refs(body))
-    items = session.get_selection()["items"]
-    # **面が展開されて入っていない**(2835面のボディで選択集合が膨れる案を採らないこと)
-    assert items == [ref], items
-    assert selection.require_selected_bodies(session.document) == [body.id]
-
-
-def test_the_same_body_is_not_selected_twice(session: Session) -> None:
-    """同じボディを2回 add しても重複しない(等価判定が添字を見ていないこと)。"""
-    body = _box(session)
-    session.clear_selection()
-    session.modify_selection(_body_refs(body), [])
-    session.modify_selection(_body_refs(body), [])
-    assert len(session.get_selection()["items"]) == 1
-    session.modify_selection([], _body_refs(body))
-    assert session.get_selection()["items"] == []
-
-
 def test_assigning_bodies_replaces_the_whole_set(session: Session) -> None:
     """**置き換えであって追加ではない。** 2回目の確定で1回目の中身が消える。"""
     first = _box(session)
