@@ -19,7 +19,6 @@ import sys
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
-JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
 LIMIT_PROCESS_MEMORY = 0x100
 LIMIT_JOB_MEMORY = 0x200
 LIMIT_KILL_ON_JOB_CLOSE = 0x2000
@@ -50,10 +49,6 @@ class _Extended(ctypes.Structure):
         ("PeakProcessMemoryUsed", ctypes.c_size_t),
         ("PeakJobMemoryUsed", ctypes.c_size_t),
     ]
-
-
-class _ProcessIds(ctypes.Structure):
-    _fields_ = [("Assigned", wt.DWORD), ("InList", wt.DWORD), ("Ids", ctypes.c_size_t * 32)]
 
 
 def run(command: list, limit_gb: float) -> int:

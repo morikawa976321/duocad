@@ -284,8 +284,6 @@ for f in PY:
 # ---------------------------------------------------------------------------------------
 TEXT_EXT = (".ts", ".svelte", ".mjs", ".js", ".json", ".html", ".css", ".md", ".ps1", ".toml", ".cmd")
 TS_FILES = [f for f in FILES if f.startswith("web/src/") and f.endswith((".ts", ".svelte"))]
-JS_SCRIPTS = [f for f in FILES if f.startswith("web/scripts/") and f.endswith(".mjs")]
-JS_TESTS = [f for f in FILES if f.startswith("tests/") and f.endswith(".mjs")]
 ts_text: dict[str, str] = {}
 for f in FILES:
     if f.endswith(".py") or not f.endswith(TEXT_EXT) or f.endswith("package-lock.json") or f == "uv.lock":
@@ -426,7 +424,6 @@ for f in PY:
     if base in ("conftest",):
         continue
     importers = {p for p in import_tokens.get(base, ()) if p != f}
-    text_mentions = text_refs.get(base, {})
     other_str = [p for p, _ in str_refs.get(base, ()) if p != f]
     in_docs = doc_refs.get(base, 0)
     has_main = "__main__" in read(f)
@@ -439,8 +436,6 @@ orphan_modules = [o for o in orphans if o["n_importers"] == 0 and o["str_refs"] 
 # ---------------------------------------------------------------------------------------
 EXPORT_DECL = re.compile(r"^export\s+(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:function\*?|const|let|class|interface|type|enum|abstract class)\s+(\w+)", re.M)
 EXPORT_LIST = re.compile(r"^export\s*\{([^}]*)\}", re.M | re.S)
-SVELTE_PROP = re.compile(r"^\s*export\s+let\s+(\w+)", re.M)
-ts_counts: dict[str, dict] = {}
 
 
 def word_count_in(text: str, name: str) -> int:

@@ -1,7 +1,6 @@
 """干渉チェックのカーネル(`duocad/kernel_interference.py`)。落ちたら、組の関係か最短距離を誤って読んでいる。"""
 from __future__ import annotations
 
-import math
 
 import pytest
 

@@ -31,12 +31,7 @@ from . import (
 from .autosave import Autosave
 from .workspace import CommandState, NoCommand, Workspace, merge_args, stageable, stageable_verb_names
 from .document import Document
-from .document_store import (
-    DocumentStore,
-    THUMBNAIL_DIR,
-    THUMBNAIL_MAX_BYTES,
-    _RESERVED_WINDOWS_NAMES,
-)
+from .document_store import DocumentStore, _RESERVED_WINDOWS_NAMES
 from .entry import entries, entry_for
 from .measure import inspect_selection, measure_selection
 from .oplog import OpLog

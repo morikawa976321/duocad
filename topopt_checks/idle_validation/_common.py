@@ -46,11 +46,6 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def sha256_json(obj) -> str:
-    """`obj`をjson.dumps(sort_keys=True)で正規化してhash化する(値の一致だけを見る。整形差は無視)。"""
-    return hashlib.sha256(json.dumps(obj, sort_keys=True, ensure_ascii=False, default=float).encode("utf-8")).hexdigest()
-
-
 def write_atomic(path: Path, data: bytes | str) -> None:
     """`os.replace`は同一ボリューム内でアトミック(実行中断で壊れた途中ファイルを残さない)。"""
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -23,14 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import kernel, kernel_brep, kernel_interference, selection
 from .document import Document
-from .interference_worker import (
-    WorkerCancelled,
-    WorkerError,
-    WorkerFailure,
-    WorkerProcess,
-    WorkerRemoteError,
-    WorkerTimeout,
-)
+from .interference_worker import WorkerCancelled, WorkerError, WorkerProcess, WorkerRemoteError, WorkerTimeout
 
 from . import (
     brep_geometry as _brep_geometry,

@@ -205,14 +205,6 @@ def w_use(r, p=PLAY_MAX):
     return hi - max(lo, e_p)
 
 
-def center_residual(r):
-    """窓の中心での強さの行(ε=0)の余りと掛かり代から、中心の残差 z = (余り − 掛かり代 + 下限)/2。0 なら誤差 0 が窓の真ん中。"""
-    rows = r.get("rows") or []
-    if not rows or "margin" not in rows[0]:
-        return None
-    return (rows[0]["margin"] - rows[0]["engagement"] + r.get("e_req", 0.1)) / 2
-
-
 def table_robust(rows, out=sys.stdout):
     """study6: 隙間を基準の係数での窓の中心に固定し、係数の場面すべてで通る誤差の共通部分 W_rob と、その端での保持。"""
     by = defaultdict(list)

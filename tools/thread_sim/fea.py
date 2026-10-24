@@ -118,10 +118,6 @@ class BodyResult:
     area: np.ndarray  # meridional integration weights
     volume: np.ndarray  # area * 2*pi*r
 
-    @property
-    def reaction_sum(self):
-        return self.reaction.sum(axis=0)
-
 
 class Body:
     def __init__(self, mesh: Mesh, material, conditions=(), loads=(), *, plane_strain=False, groups=None):

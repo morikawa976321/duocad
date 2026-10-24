@@ -102,26 +102,6 @@ def closing(R, rho):
     return erode(dilate(R, rho), rho)
 
 
-def normal_offset(R, d):
-    """曲線を外向きの法線方向へ d(配列可、負で内へ)動かして、同じ θ の格子へ引き直す。"""
-    n = len(R)
-    th = np.arange(n) * 2 * math.pi / n
-    x, y = R * np.cos(th), R * np.sin(th)
-    tx = np.roll(x, -1) - np.roll(x, 1)
-    ty = np.roll(y, -1) - np.roll(y, 1)
-    L = np.hypot(tx, ty)
-    nx, ny = ty / L, -tx / L  # 反時計回りの曲線の外向き法線
-    x2, y2 = x + d * nx, y + d * ny
-    th2 = np.unwrap(np.arctan2(y2, x2))
-    r2 = np.hypot(x2, y2)
-    # 引き直し: 角度が単調でない区間(小さなループ)は、遠い/近い側を取る代わりに中央値で潰さず、
-    # 単調化してから補間する(d が曲率半径より小さい範囲で使う)
-    order = np.argsort(th2)
-    th2, r2 = th2[order], r2[order]
-    th2 = th2 - 2 * math.pi * math.floor(th2[0] / (2 * math.pi))
-    return np.interp(th, th2, r2, period=2 * math.pi)
-
-
 def signed_distance_out(Rq, Rref, outward: bool):
     """曲線 Rq の各点から曲線 Rref への XY の距離。outward=True なら Rref の外(半径が大きい側)にある点を正にする。"""
     n = len(Rq)
@@ -177,7 +157,6 @@ def simulate(part: Part, pr: Printer, n_theta: int = N_THETA, seed: int = 0) -> 
     length = part.z1 - part.z0
     g = part.print_profile_fn()
     theta = np.arange(n_theta) * 2 * math.pi / n_theta
-    # 模擬範囲にかかる層(印刷の座標)。最初の層だけ高さが違う場合は first_layer(既定は同じ 0.2)
     zp_lo, zp_hi = part.bed_gap, part.bed_gap + length
     k0 = int(math.floor(zp_lo / h)) - 1
     k1 = int(math.ceil(zp_hi / h)) + 1

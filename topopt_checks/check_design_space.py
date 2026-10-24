@@ -942,7 +942,6 @@ def check_hanger_run(run_dir: str) -> None:
     from pathlib import Path
 
     from duocad import optimize_run
-    from duocad.session import Session
     from duocad.topopt.trace import load_snapshot
 
     run = Path(run_dir)

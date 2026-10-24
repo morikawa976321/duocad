@@ -119,7 +119,7 @@ def absorb(shape: TopoDS_Shape, edge_map, radii: Dict[int, float]) -> Absorbed:
         for first, second, radius, members in _face_pairs(edge_map, edge_faces, radius_of)
     ]
     columns = _Columns(shape, edge_faces)
-    pieces = [_material(shape, probe, edges, first, second, radius, columns) for probe, edges, first, second, radius in groups]
+    pieces = [_material(probe, edges, first, second, radius, columns) for probe, edges, first, second, radius in groups]
 
     added = [material for material, concave in pieces if concave]
     removed = [material for material, concave in pieces if not concave]
@@ -273,7 +273,7 @@ def _probe(edges: list, first: TopoDS_Shape, second: TopoDS_Shape, radius: float
 
 
 def _material(
-    shape: TopoDS_Shape, probe: _Probe, edges: list, first: TopoDS_Shape, second: TopoDS_Shape, radius: float, columns: "_Columns"
+    probe: _Probe, edges: list, first: TopoDS_Shape, second: TopoDS_Shape, radius: float, columns: "_Columns"
 ):
     """2面の間の辺(群)を半径 `radius` で丸める肉と、それが凹(足す)か。"""
     point, normals, concave, inside = probe

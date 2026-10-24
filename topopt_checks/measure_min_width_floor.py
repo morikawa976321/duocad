@@ -75,7 +75,7 @@ def _search_summary(result, best_mask: np.ndarray, keep: np.ndarray, m: int) -> 
     peels = [step.get("peel", {}) for step in reduction.get("steps", [])]
     totals = {name: sum(int(p.get(name, 0)) for p in peels)
               for name in ("picked", "casualties", "islands", "skipped_support", "skipped_surface", "skipped_manifold",
-                           "skipped_thickness", "skipped_connectivity", "skipped_core", "already_removed", "global_checks")}
+                           "skipped_connectivity", "skipped_core", "already_removed", "global_checks")}
     outcomes = [t.outcome for t in result.history]
     failed_checks: dict = {}
     for trial in result.history:
@@ -110,7 +110,6 @@ def _opening_removed(material: np.ndarray, size: int) -> dict:
 def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None,
         target: float = TARGET_SAFETY_FACTOR, element_size: float = REQUESTED_ELEMENT_SIZE_MM) -> dict:
     from duocad import optimize_run
-    from duocad.server import Session
     from duocad.topopt import binary_search, design_space as ds, mesh, trace
 
     out: dict = {"model": str(MODEL), "element_size_requested_mm": element_size,

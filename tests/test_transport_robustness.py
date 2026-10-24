@@ -14,7 +14,7 @@ from duocad.agent import providers
 from duocad.mcp_server import DocumentTools, McpServer, serve_stdio
 from duocad.net import wire
 from duocad.server import Server, Session
-from session_support import FakeConnection, browser, session_with_box
+from session_support import FakeConnection, session_with_box
 
 DEEP = "[" * 200_000 + "]" * 200_000
 

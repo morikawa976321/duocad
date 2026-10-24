@@ -43,7 +43,7 @@
 - **`min_width.lost_coverage(mask, region, m, exempt=None) -> (origin, lost)`**: 巻き添えはこれで取る（二重実装しない）。`region`（3軸スライスの組）を丸ごと空にしたと仮定して被覆を失う材料セルの真偽配列 `lost`（`region` の周り距離 m−1 の帯）と、その (0,0,0) の `mask` 添字 `origin`。座標は `np.argwhere(lost) + np.asarray(origin)`。`mask` が既に規則を満たす前提。判定は `region` から距離 2×(m−1) の窓だけで足り、大域を再計算しない。`exempt` のセルは `lost` に入らない。
 - `min_width.casualties(mask, cell, m, exempt=None) -> (n,3)` は1セル用の薄い包み。`min_width.cube_opening(mask, m)` は m 立方の opening。`min_width.bite_verdict(padded, bite)` は複数セルの一口の 表面・多様体・連結 の窓判定。戻りは (理由|None, 窓の中で連結と言えたか)。理由は `'surface'`・`'manifold'`・`'connectivity'`。**支えの判定は含まない**（`peel` 側が条件節点の支え数を持つため）。
 - `bite_verdict` の座標: `padded` は外周 +1 なので、内側の (i,j,k) は `padded` の (i+1,j+1,k+1)。窓は一口の外接箱 +1 セルで、頂点は `[1:-1]` の内側だけ見る（窓の外周の頂点は窓の外を空と見るので使えない）。
-- **`PeelStats`**: `skipped_thickness` は**常に 0**（`> 0` を期待するテスト・記録は成り立たない）。`casualties` が増え `as_dict` にも出る。`stats.picked` は「手の数」で、減ったセル数は `picked + casualties + islands`。`count` の打ち切りは巻き添えも数えるので、最後の一口で要求を最大 (2m−1)³−1 セル超える。
+- **`PeelStats`**: `casualties` が増え `as_dict` にも出る。`stats.picked` は「手の数」で、減ったセル数は `picked + casualties + islands`。`count` の打ち切りは巻き添えも数えるので、最後の一口で要求を最大 (2m−1)³−1 セル超える。
 - **支えの数え方**: `peel` は一口の節点IDを重複ありの並びで持ち、却下は `support_flat[n] <= 出現回数`、採用は出現回数ぶん `-= 1`。x 単独の支えの早期却下は残してある（x ⊂ 一口なので x で落ちれば一口も落ちる）。
 - 2セル厚の板では、上面のセルも下面のセルも**同じ貫通柱**を一口にする（重複候補の源。回帰テストはこの形）。自由縁のすぐ内側のセルはリブごと（x 方向に2セル×厚み）抜ける。2×2 の棒の途中は断面ごとで、片側に条件節点が無ければ全体の数え直しで却下される。`_reduce_volume` は不合格の形のハッシュを、手の数に関わらず `rejected` に入れる。
 - **m=1 では `min_width` の関数も `CoreConnectivity` も一切呼ばない・作らない**（`tests/topopt/test_binary_search.py` が `min_width` モジュールを差し替えて、呼んだら落ちるようにしてある）。

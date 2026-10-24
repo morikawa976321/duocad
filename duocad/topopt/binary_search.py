@@ -603,7 +603,7 @@ class PeelStats:
     `islands` は切り離されて消したセル。実際に減ったセル数は `picked + casualties + islands`。
     `skipped_*` は飛ばした理由ごとの数(支え・表面・傷・多様体・連結性・くびれ・芯の連結の順に判定し、最初に落ちた理由で数える)。
     `skipped_scar` は一口(起点 + 巻き添え)が傷(`scar`。段階4で安全率に落ちた1手の削除セル)と重なった数。
-    `skipped_thickness` は常に0。`skipped_neck` は `neck.NeckJudge` がくびれと判定した数、`neck_full_grid` は材料が格子全体まで
+    `skipped_neck` は `neck.NeckJudge` がくびれと判定した数、`neck_full_grid` は材料が格子全体まで
     広げないとつながらなかった判定の数、`skipped_core` は `min_width.CoreConnectivity` が切れるとした数(いずれも m=1 は常に0)。
     保護セル(`protected`)を含む成分を島として切り離す手は `skipped_connectivity` に数える。"""
 
@@ -613,7 +613,6 @@ class PeelStats:
     skipped_support: int = 0
     skipped_surface: int = 0
     skipped_manifold: int = 0
-    skipped_thickness: int = 0
     skipped_connectivity: int = 0
     skipped_neck: int = 0
     skipped_core: int = 0

@@ -64,8 +64,7 @@ def test_add_shape_verbs_clear_a_pre_existing_3d_selection(session: Session) -> 
 def test_a_move_clears_a_selected_region_that_the_edit_makes_vanish(
     session: Session,
 ) -> None:
-    """落ちたら、図形を動かして消えた領域を選んだままになり、`App.svelte` の `regionsStillExist` の
-    分岐へ届く(`web/scripts/smoke-regions.mjs` 検証5と同じシナリオ)。"""
+    """落ちたら、図形を動かして消えた領域が選択に残り、次の操作へ無効な添字を渡す。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 30.0)
     session.add_circle(sketch_id, [20.0, 0.0], 30.0)

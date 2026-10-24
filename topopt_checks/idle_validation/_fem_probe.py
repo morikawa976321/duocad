@@ -407,43 +407,6 @@ def section_force_moment(
     )
 
 
-def richardson_extrapolate(values: list[float], ratios: list[float]) -> dict | None:
-    if len(values) < 2:
-        return None
-    order_estimates: list[float | None] = []
-    extrapolated: list[float | None] = []
-    n = len(values)
-    for i in range(n - 2):
-        # **ratios[i] は values[i]→values[i+1] 間の細分比**(run_bending の `ratios.append(prev_el / element_mm)`
-        # と同じ並び)。d0 も同じ2点の差なので、d0 とペアにする比は ratios[i](ratios[i+1] ではない)。
-        # 比が全区間で一定でない場合(呼び出し元は等比細分を保証しない)この3点式の次数推定は近似になるが、
-        # 発散気味の列で無意味な外挿値を出さないための閾値チェックはそのまま機能する。
-        ratio = ratios[i] if i < len(ratios) else ratios[-1]
-        d0 = abs(values[i + 1] - values[i])
-        d1 = abs(values[i + 2] - values[i + 1])
-        if d0 <= 0.0 or d1 <= 0.0 or ratio <= 0.0:
-            order_estimates.append(None)
-            extrapolated.append(None)
-            continue
-        p = math.log(d0 / d1) / math.log(ratio)
-        if not math.isfinite(p) or p <= 0.0 or p >= 6.0:
-            order_estimates.append(None)
-            extrapolated.append(None)
-            continue
-        order_estimates.append(p)
-        denom = ratio ** p - 1.0
-        if abs(denom) < 1e-30:
-            extrapolated.append(None)
-            continue
-        v_inf = values[i + 2] + (values[i + 2] - values[i + 1]) / denom
-        extrapolated.append(float(v_inf) if math.isfinite(v_inf) else None)
-    while len(order_estimates) < max(0, n - 2):
-        order_estimates.append(None)
-    while len(extrapolated) < max(0, n - 2):
-        extrapolated.append(None)
-    return dict(order_estimates=order_estimates, extrapolated=extrapolated)
-
-
 def _richardson_rhs(p: float, ratio_a: float, ratio_b: float) -> float:
     rb = ratio_b ** p
     ra = ratio_a ** p

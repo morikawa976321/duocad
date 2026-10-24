@@ -41,20 +41,3 @@ export function buildSketchDraws(
         .map((ref) => ({ entityId: ref.entity, point: ref.point })),
     }))
 }
-
-/**
- * 選択中の領域が、今のスケッチにまだ全部あるか。領域はパラメータ編集で分裂・消失しうる(§7)ので、
- * `runCommand` の `extrude` が先に断る。領域は共有選択集合にあって送る引数には入っていない —— 引数を見ると常に空で空振りする。
- *
- * false は通常の UI 操作では到達しない: 領域を変えうる verb はすべて `resets_selection=True`
- * (`duocad/catalog.py`)で選択が先に空になる
- * (`tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`)。
- */
-export function regionsStillExist(selection: SelectionState | null, sketches: readonly SketchState[]): boolean {
-  const refs = refsOfKind(selection?.items ?? [], 'region')
-  return refs.every((ref) =>
-    sketches.some(
-      (item) => item.sketch_id === ref.sketch && item.regions.some((candidate) => candidate.index === ref.index),
-    ),
-  )
-}

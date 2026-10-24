@@ -23,7 +23,6 @@ from duocad import (
 )
 
 #: 20mm立方体・全辺フィレットの実測（上のdocstring参照）
-CUBE_MM = 20.0
 RADIUS_OK = 3.0
 RADIUS_FAILS_LOW = 10.0
 RADIUS_ODD_BUT_OK = 10.5

@@ -9,7 +9,6 @@ from pathlib import Path
 
 sys.path.insert(0, r"C:\Users\tm976\mf\duocad")
 import numpy as np
-import scipy.sparse.linalg as spla
 
 from duocad.topopt import fem, gpu_cg
 

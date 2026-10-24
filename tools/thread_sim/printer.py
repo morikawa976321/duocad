@@ -20,13 +20,9 @@ FILAMENT = "Elegoo PLA @ECC"
 class Printer:
     # --- スライサーの初期設定(Centauri Carbon・0.20mm Standard・Elegoo PLA) ---
     layer: float = 0.20
-    first_layer: float = 0.20
-    nozzle: float = 0.40
     outer_wall: float = 0.42  # outer_wall_line_width
-    inner_wall: float = 0.45  # inner_wall_line_width
     walls: int = 2
     seam: str = "aligned"
-    min_layer_time: float = 4.0  # slow_down_layer_time(PLA)
     # --- 誤差のモデル(既定は誤差なし。感度解析と較正で振る) ---
     contour_bias: float = 0.0  # 雄の外形の半径の系統誤差(+で太る)
     hole_bias: float = 0.0  # 雌の穴の半径の系統誤差(-で痩せる)
@@ -103,17 +99,13 @@ def _width(v, nozzle):
 
 def check_against_installed() -> list[str]:
     """固定値と、この機械の ElegooSlicer のプロファイルの値の食い違い。"""
-    proc, mach, fil = resolve("process", PROCESS), resolve("machine", MACHINE), resolve("filament", FILAMENT)
+    proc, mach = resolve("process", PROCESS), resolve("machine", MACHINE)
     nozzle = float(mach["nozzle_diameter"][0])
     got = dict(
         layer=float(proc["layer_height"]),
-        first_layer=float(proc["initial_layer_print_height"]),
-        nozzle=nozzle,
         outer_wall=_width(proc["outer_wall_line_width"], nozzle),
-        inner_wall=_width(proc["inner_wall_line_width"], nozzle),
         walls=int(proc["wall_loops"]),
         seam=proc["seam_position"],
-        min_layer_time=float(fil["slow_down_layer_time"][0]),
     )
     return [f"{k}: 固定 {getattr(DEFAULT, k)!r} / 機械 {v!r}" for k, v in got.items() if getattr(DEFAULT, k) != v]
 
