@@ -20,6 +20,7 @@ UIに打ち直し口ができたら人とAIの両方へ同時に出す。ここ�
 """
 from __future__ import annotations
 
+import copy
 import math
 from typing import Any, Dict, Mapping, Optional
 
@@ -164,7 +165,8 @@ def rebuild(
     パラメータ名は決定的に振り直されるので、表の名前は再生後の同じスカラーを指す。
 
     ログに載らない状態のうち、ボディとスケッチの可視性は作り直した側へ引き継ぎ、active ボディは残っていれば戻す。
-    失敗したら undo 用スナップショットも元の表へ戻す(再生が通った操作が失敗した形で上書きするため)。
+    失敗したら、再生で書き換わる最適化条件(版も含む)・追加前の active の表・
+    undo 用スナップショット・ログと由来も元へ戻す。
     """
     global _REBUILDING
     from .verbs._common import SNAPSHOTS
@@ -192,6 +194,8 @@ def rebuild(
     saved_sketches = list(doc.sketches)
     saved_parameters = dict(doc.parameters)
     saved_active = doc._active_body_id
+    saved_active_before_add = dict(doc._active_before_add)
+    saved_optimize = copy.deepcopy(vars(doc.optimize))
     # 再生が通った操作は undo 用スナップショットを作り直す(`_common.reapply_shape`)ので、失敗したら元の表へ戻す。
     saved_snapshots = dict(SNAPSHOTS.get(doc, {}))
     saved_log = source._snapshot()
@@ -223,6 +227,9 @@ def rebuild(
         doc.parameters.clear()
         doc.parameters.update(saved_parameters)
         doc._active_body_id = saved_active
+        doc._active_before_add.clear()
+        doc._active_before_add.update(saved_active_before_add)
+        vars(doc.optimize).update(saved_optimize)
         SNAPSHOTS[doc] = saved_snapshots
         source._restore(saved_log)
         for operation, provenance in saved_provenance:
