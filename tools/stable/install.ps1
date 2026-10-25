@@ -8,7 +8,7 @@
 #    短縮ハッシュを解決しない)。ローカルの main をそのコミットに置き、追跡先は origin/main のまま。
 #    mainがそのコミットを取り込むまで更新ボタンは出ない(docs/STABLE.md)
 # 2. uv sync --frozen(GPU の部品を入れる clone なら --extra gpu も) / npm ci / npm run build
-# 3. 制作データの置き場(models/ export/ logs/)を作る。-ImportModelsFrom の *.json を写す(上書きしない)
+# 3. 制作データの置き場(安定版の data/ の下に models/ export/ logs/。.gitignore で外してある)を作る。-ImportModelsFrom の *.json を写す(上書きしない)
 # 4. スタートメニューに「duocad」を登録する(Win -> duocad -> Enter で起動)
 # 5. 安定版のフォルダで開いた Claude Code だけが安定版のMCP(8776)へ繋ぐよう、local スコープで登録する
 # 6. 安定版のフォルダに CLAUDE.local.md を置く(そこで開いたセッションにコードを触らせない)
@@ -17,7 +17,7 @@
 
 param(
     [string]$StableRoot = (Join-Path $env:USERPROFILE 'mf\duocad-stable'),
-    [string]$DataDir = (Join-Path $env:USERPROFILE 'mf\duocad-data'),
+    [string]$DataDir = (Join-Path $StableRoot 'data'),
     [string]$Remote = '',
     [string]$Branch = 'main',
     [string]$ImportModelsFrom = '',
@@ -50,7 +50,7 @@ function Run([string]$exe, [string[]]$arguments, [string]$cwd, [switch]$AllowFai
 # ---- 1. clone ----
 if (Test-Path (Join-Path $StableRoot '.git')) {
     Write-Host "安定版のcloneは既にある: $StableRoot"
-    if ($Commit) { Write-Warning "-Commit は無視した(cloneが既にある)。入れ直すときは $StableRoot を消してからやり直す" }
+    if ($Commit) { Write-Warning "-Commit は無視した(cloneが既にある)。入れ直すときは制作データ $StableRoot\data を clone の外へ退避してから $StableRoot を消し、導入後に戻す" }
 } else {
     Run 'git' @('clone', '--branch', $Branch, $Remote, $StableRoot) $env:USERPROFILE
     if ($Commit) {
@@ -142,6 +142,7 @@ $localGuide = @"
 
 - **コードを編集しない・コミットしない・ブランチを操作しない・ビルドしない。** 書き換えると画面の更新ボタンが止まる。
 - duocad の操作は MCP の ``duocad``($mcpUrl。local スコープで登録済み)で行う。
+- ``data\``(git の外)は本人の制作データ(models・export・logs)。消さない・動かさない。
 - リポジトリの CLAUDE.md にある開発の規律(develop で作業・即コミット・「安定版に触らない」)は開発用チェックアウト向けで、このフォルダには適用しない。
 - 不具合を見つけたら直さずに本人へ伝える。直すのは開発用のチェックアウト(mf\duocad)。
 "@
