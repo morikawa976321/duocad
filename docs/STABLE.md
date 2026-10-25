@@ -9,7 +9,7 @@
 |---|---|---|
 | コード | `%USERPROFILE%\mf\duocad-stable`(`main` のclone) | `mf\duocad`(develop) |
 | 実行環境 | 専用の `.venv` / `node_modules` / `web/dist` | 開発用のもの |
-| 制作データ | `%USERPROFILE%\mf\duocad-data\{models,export,logs}` | リポジトリ直下の `models/` `export/` |
+| 制作データ | `%USERPROFILE%\mf\duocad-stable\data\{models,export,logs}`(git の外) | リポジトリ直下の `models/` `export/` |
 | ポート(WS / HTTP) | **8775 / 8776** | 8765 / 8766(既定) |
 | MCP(Claude Code) | 安定版のフォルダで開いたセッション → 8776(local スコープ登録) | `.mcp.json` → 8766 |
 
@@ -46,7 +46,7 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 - **起動**: スタートメニューの「duocad」(`pythonw -m duocad.launcher`)。サーバが立っていなければ
   窓の無いプロセスで立て(初回は十数秒)、Edgeの `--app=` ウィンドウで開く。立っていれば窓を開くだけ。
 - **窓を閉じてもサーバは残る**(MCPクライアントが窓と無関係に繋ぐため)。止め方は [MANUAL.md](MANUAL.md)「サーバを止める」。
-- ログ: `duocad-data\logs\server.log`(5MBで1世代回す)。
+- ログ: `data\logs\server.log`(5MBで1世代回す)。
 - 同じポートで別のduocad(開発版)が動いていたら、ランチャーは開かずにその旨を出す。
 
 ## 更新
@@ -107,5 +107,11 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 ## 制作データの扱い
 
 - 安定版のファイルを開発版で直接開かない。保存形式を開発版で変えると、開発版で書いたファイルを
-  安定版で開けなくなる。開発版で再現したいときは `duocad-data\models` から写して使う。
-- `duocad-data` はリポジトリの外なので `git clean` では消えない。バックアップの対象には自分で入れること。
+  安定版で開けなくなる。開発版で再現したいときは `duocad-stable\data\models` から写して使う。
+- 制作データは安定版のcloneの中の `data\` に置き、`.gitignore` の `/data/` で git から外す。
+  更新が走らせる `git merge --ff-only`・`git reset --hard`(巻き戻しと失敗時の復元)は追跡外のファイルに触れないので、
+  退避しなくても残る。ただし **git は無視されたファイルを黙って上書きする**ので、取り込む先のコミットが `data/` の下を
+  追跡していたら `update.ps1` が取り込む前に止まる(`git add -f` で入れない限り起きない)。
+- **安定版のフォルダで `git clean -x`(`-X`)を走らせない。** 無視されたファイルとして `data\` を消す
+  (`-x` の無い `git clean -fd` は無視されたファイルを残す)。
+- バックアップの対象には自分で入れること(git は持たない)。

@@ -95,7 +95,7 @@ const COMMON = [
   '## 前提(厳守)',
   '- これは**読み取り専用**の調査。リポジトリのファイルを変更・コミット・stash しない。サーバ(ポート 8765/8766/8775/8776 を含む)を立てない。pytest・npm run・node でのビルド/テストを走らせない。',
   '- 使ってよいもの: Read / Grep / Glob、git の読み取り系(git grep・git log -S・git log -G・git show・git blame)、' + REPO + '\\.venv\\Scripts\\python.exe での ast 解析(読むだけ)。一時ファイルは ' + SCRATCH + ' の下にだけ作る。',
-  '- 作業ディレクトリは ' + REPO + ' 。%USERPROFILE%\\mf\\duocad-stable と duocad-data は触らない(今回は不要)。',
+  '- 作業ディレクトリは ' + REPO + ' 。%USERPROFILE%\\mf\\duocad-stable(制作データの data を含む)は触らない(今回は不要)。',
   '',
   '## 「デッドコード」の定義(この調査での分類)',
   '- dead: 本番コード(duocad/・web/src/)・スクリプト(tools/・topopt_checks/・web/scripts/)・テスト(tests/)のどこからも到達しない関数/メソッド/クラス/定数/フィールド/import/引数/ローカル変数。',

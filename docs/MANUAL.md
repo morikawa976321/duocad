@@ -11,7 +11,7 @@ duocad は2つあります。**作品を作るときは「制作用」、duocad 
 | 場所 | `C:\Users\tm976\mf\duocad-stable` | `C:\Users\tm976\mf\duocad` |
 | 起動 | Win キー → `duocad` → Enter | 今までどおり(README 1章) |
 | 画面 | 独立した窓(タブやアドレスバーが無い) | ブラウザのタブ。**左上にピンクの「開発版」** |
-| ファイルの置き場 | `C:\Users\tm976\mf\duocad-data\models`(書き出しは `export`) | `mf\duocad\models`(書き出しは `export`) |
+| ファイルの置き場 | `C:\Users\tm976\mf\duocad-stable\data\models`(書き出しは `export`) | `mf\duocad\models`(書き出しは `export`) |
 | アドレス | `http://127.0.0.1:8776/` | `http://127.0.0.1:8766/` |
 
 **見分け方は「開発版」の札だけ覚えれば足ります。** 札が出ている窓では制作しないでください。
@@ -21,7 +21,7 @@ duocad は2つあります。**作品を作るときは「制作用」、duocad 
 1. **Win キー → `duocad` → Enter** で起動します。初めの1回はサーバの準備に十数秒かかります。
    起動直後は何も開いていない画面(最近の文書のカードと「新規」)が出るので、そこから選びます。
    作業中の文書はファイル一覧の「閉じる」でこの画面へ戻せます。開いている文書を削除しても戻ります。
-2. 保存は自動です(操作のたびに書かれます)。ファイル一覧には `duocad-data\models` の中身だけが出ます。
+2. 保存は自動です(操作のたびに書かれます)。ファイル一覧には `duocad-stable\data\models` の中身だけが出ます。
 3. 終わったら**窓を閉じるだけ**でかまいません。裏でサーバが残るので、次はすぐ開きます。
 4. 部品どうしの干渉は、通常モードのツールバーの**「干渉チェック」**で調べます。何も選ばなければ見えている部品の総当たり、
    部品を1つ選べばそれとほかの全部、2つ以上選べば選んだものどうしです。右に出る一覧の行を押すと、重なりが赤く光ります。
@@ -51,7 +51,7 @@ duocad は2つあります。**作品を作るときは「制作用」、duocad 
 
 - 作業場所は今までどおり `mf\duocad`(develop)です。
 - 制作用と同時に開いてかまいません(ポートが違うのでぶつかりません)。
-- **制作用のファイルで不具合を試したいときは、`duocad-data\models` から `mf\duocad\models` へコピーして**開きます。
+- **制作用のファイルで不具合を試したいときは、`duocad-stable\data\models` から `mf\duocad\models` へコピーして**開きます。
   制作用のファイルを開発用で直接開くと、保存形式の違いで制作用で開けなくなることがあります。
 - 直したものを制作用に届けるには、**develop を main へマージ**します(GitHub の PR)。届いたら制作用に更新ボタンが出ます。
 
@@ -74,8 +74,8 @@ duocad は2つあります。**作品を作るときは「制作用」、duocad 
 |---|---|
 | 「ポート 8776 で別の duocad が動いている」と出る | 開発用のサーバが制作用の番号で動いています。それを止めてから起動し直します |
 | 「既に別のタブで開いている」と出る | 制作用の窓が2つ開いています(Win キーから2回起動した等)。片方を閉じてから開き直します |
-| 「サーバが立たなかった」と出る | `duocad-data\logs\server.log` の最後を見ます |
-| 更新に失敗した | 下に出たログ(`duocad-data\logs\update-日時.log`)を見ます。制作用は元の版のまま使えます |
+| 「サーバが立たなかった」と出る | `duocad-stable\data\logs\server.log` の最後を見ます |
+| 更新に失敗した | 下に出たログ(`duocad-stable\data\logs\update-日時.log`)を見ます。制作用は元の版のまま使えます |
 | 「元の版にも戻せなかった」と出た | 制作用が動かないことがあります。ログを開発側のセッションに渡して直してもらいます |
 | 更新前の版に戻したい | 下の「前の版に戻す」 |
 | 制作用のサーバを完全に止めたい | 下の「サーバを止める」 |
@@ -90,13 +90,13 @@ Get-CimInstance Win32_Process | Where-Object CommandLine -like '*--channel stabl
 数十秒かかることがあります。止まって見えても待ってください):
 
 ```powershell
-& "$env:USERPROFILE\mf\duocad-stable\tools\stable\update.ps1" -RepoRoot "$env:USERPROFILE\mf\duocad-stable" -LogDir "$env:USERPROFILE\mf\duocad-data\logs" -DataDir "$env:USERPROFILE\mf\duocad-data" -Rollback
+& "$env:USERPROFILE\mf\duocad-stable\tools\stable\update.ps1" -RepoRoot "$env:USERPROFILE\mf\duocad-stable" -LogDir "$env:USERPROFILE\mf\duocad-stable\data\logs" -DataDir "$env:USERPROFILE\mf\duocad-stable\data" -Rollback
 ```
 
 ## 気をつけること
 
 - **`duocad-stable` の中のファイルを手で書き換えないでください。** 更新が止まります(「更新できない」の札)。
-- **作品は `duocad-data` にあります。** リポジトリの外なのでバックアップは別に取ってください。
-- セットアップでは、開発用の `models` から**名前を付けたファイルだけ**を制作用へ写しました。`untitled-*.json`(自動で付く名前のもの)は写していません。必要なものがあれば `duocad-data\models` へコピーしてください。
+- **作品は `duocad-stable\data` にあります。** git の外(更新では消えません)なので、バックアップは別に取ってください。
+- セットアップでは、開発用の `models` から**名前を付けたファイルだけ**を制作用へ写しました。`untitled-*.json`(自動で付く名前のもの)は写していません。必要なものがあれば `duocad-stable\data\models` へコピーしてください。
 
 仕組みと再セットアップの手順は [STABLE.md](STABLE.md) にあります。

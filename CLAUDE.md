@@ -14,7 +14,7 @@
 
 実制作は別cloneの**安定版**で行っている（[docs/STABLE.md](docs/STABLE.md)）。**開発用チェックアウト（`mf\duocad`）で作業するエージェントは**:
 
-- **`%USERPROFILE%\mf\duocad-stable` と `%USERPROFILE%\mf\duocad-data` に書き込まない**（制作データと制作用のコード）。作成・変更・削除・移動のほか、`git checkout` / `git pull` などclone の状態を変える git 操作もしない。
+- **`%USERPROFILE%\mf\duocad-stable` に書き込まない**（制作用のコードと、その `data\` にある制作データ）。作成・変更・削除・移動のほか、`git checkout` / `git pull` などclone の状態を変える git 操作もしない。
 - **読むだけなら構わない**（ファイルの閲覧・検索、`git log` / `git diff` / `git show`）。
 - **ポート 8775 / 8776 でサーバを立てない・繋がない**（安定版のもの）。
 - 安定版に変更を届けるのは **develop → main のPR だけ**。届いた変更は本人が画面の更新ボタンで取り込む。

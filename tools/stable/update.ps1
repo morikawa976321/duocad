@@ -172,10 +172,23 @@ try {
         if ($Rollback) {
             if (-not (Test-Path $previousFile)) { throw '戻り先(.git\duocad-previous)が無い' }
             $target = (Get-Content $previousFile -Raw).Trim()
-            Run 'git reset' 'git' @('reset', '--hard', $target)
         } else {
             Run 'git fetch' 'git' @('fetch', 'origin', $Branch)
-            Run 'git merge' 'git' @('merge', '--ff-only', "origin/$Branch")
+            $target = "origin/$Branch"
+        }
+        # 制作データがcloneの中(data/。.gitignore で外してある)にあるとき、取り込む先がその下を追跡していたら止める。
+        # **git は無視されたファイルを黙って上書きする**(merge・reset --hard とも)。追跡外のままなら触らない。
+        $repoFull = [IO.Path]::GetFullPath($RepoRoot).TrimEnd('\') + '\'
+        $dataFull = [IO.Path]::GetFullPath($DataDir).TrimEnd('\')
+        if ($dataFull.StartsWith($repoFull, [StringComparison]::OrdinalIgnoreCase)) {
+            $dataRel = $dataFull.Substring($repoFull.Length).Replace('\', '/')
+            $tracked = & git -C $RepoRoot ls-tree -r --name-only $target -- $dataRel
+            if ($tracked) { throw "取り込む先が制作データの置き場($dataRel)にファイルを持つ: $(@($tracked)[0])" }
+        }
+        if ($Rollback) {
+            Run 'git reset' 'git' @('reset', '--hard', $target)
+        } else {
+            Run 'git merge' 'git' @('merge', '--ff-only', $target)
         }
         $to = (& git -C $RepoRoot rev-parse HEAD).Trim()
         Build $from
