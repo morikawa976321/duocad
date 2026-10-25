@@ -176,14 +176,19 @@ try {
             Run 'git fetch' 'git' @('fetch', 'origin', $Branch)
             $target = "origin/$Branch"
         }
-        # 制作データがcloneの中(data/。.gitignore で外してある)にあるとき、取り込む先がその下を追跡していたら止める。
-        # **git は無視されたファイルを黙って上書きする**(merge・reset --hard とも)。追跡外のままなら触らない。
+        # 制作データがcloneの中(data/。.gitignore で外してある)にあるとき、取り込む先がその下か祖先(data という
+        # ファイル)を追跡していたら止める。**git は無視されたファイルを黙って上書きする**(merge・reset --hard とも)。
+        # `ls-tree -- <path>` は大文字小文字を区別するが Windows のファイルは区別しない(Data/x も同じ場所)ので、
+        # 全ファイルを取って大文字小文字を無視して比べる。
         $repoFull = [IO.Path]::GetFullPath($RepoRoot).TrimEnd('\') + '\'
         $dataFull = [IO.Path]::GetFullPath($DataDir).TrimEnd('\')
         if ($dataFull.StartsWith($repoFull, [StringComparison]::OrdinalIgnoreCase)) {
             $dataRel = $dataFull.Substring($repoFull.Length).Replace('\', '/')
-            $tracked = & git -C $RepoRoot ls-tree -r --name-only $target -- $dataRel
-            if ($tracked) { throw "取り込む先が制作データの置き場($dataRel)にファイルを持つ: $(@($tracked)[0])" }
+            $ic = [StringComparison]::OrdinalIgnoreCase
+            $clash = & git -C $RepoRoot -c core.quotePath=false ls-tree -r --name-only $target | Where-Object {
+                $_.Equals($dataRel, $ic) -or $_.StartsWith("$dataRel/", $ic) -or $dataRel.StartsWith("$_/", $ic)
+            } | Select-Object -First 1
+            if ($clash) { throw "取り込む先が制作データの置き場($dataRel)にファイルを持つ: $clash" }
         }
         if ($Rollback) {
             Run 'git reset' 'git' @('reset', '--hard', $target)

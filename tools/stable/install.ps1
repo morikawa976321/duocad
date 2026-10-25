@@ -50,7 +50,7 @@ function Run([string]$exe, [string[]]$arguments, [string]$cwd, [switch]$AllowFai
 # ---- 1. clone ----
 if (Test-Path (Join-Path $StableRoot '.git')) {
     Write-Host "安定版のcloneは既にある: $StableRoot"
-    if ($Commit) { Write-Warning "-Commit は無視した(cloneが既にある)。入れ直すときは $StableRoot を消してからやり直す" }
+    if ($Commit) { Write-Warning "-Commit は無視した(cloneが既にある)。入れ直すときは制作データ $StableRoot\data を clone の外へ退避してから $StableRoot を消し、導入後に戻す" }
 } else {
     Run 'git' @('clone', '--branch', $Branch, $Remote, $StableRoot) $env:USERPROFILE
     if ($Commit) {
