@@ -1,7 +1,7 @@
 # duocad — AI統合（アプリ内AI・MCP・ローカルLLM）
 
 **読むとき**: アプリ内 AI パネル・`duocad/agent/`・MCP 経路の方向を変えるとき、ローカル LLM の能力や待ち時間を見積もるとき。
-仕組みの正は README §1・§4 と [../MCP.md](../MCP.md)、契約は `tests/test_agent_*.py` / `tests/test_mcp*.py`。
+仕組みの正は docs/DEVELOPMENT.md §1・§4 と [../MCP.md](../MCP.md)、契約は `tests/test_agent_*.py` / `tests/test_mcp*.py`。
 
 ## 方向と未決
 
@@ -17,7 +17,7 @@
     本人は「モデルが古くなるだけなら環境変数で書き換えればいいのでsdkは不要と思う」と応じた）。
   - **既定モデルは Claude Haiku 5.5**（本人「とりあえずはhaiku5.5を既定として」）。差し替えは環境変数 `DUOCAD_ANTHROPIC_MODEL`。
   - **キーはアプリの設定ダイアログ（正投影の下）から置ける**（本人提案）。値は画面へ戻さずリポジトリ直下の
-    `duocad_secrets.json` に書く。手で置く場合の置き場所と、名前を `ANTHROPIC_API_KEY` にしない理由は README §4「AI側」。
+    `duocad_secrets.json` に書く。手で置く場合の置き場所と、名前を `ANTHROPIC_API_KEY` にしない理由は docs/DEVELOPMENT.md §4「AI側」。
 - **`claude` CLI をサブプロセス起動して AI パネルから使う案（3段構成の段2+3）は未決**（段1の MCP HTTP トランスポートだけ実装済み）。
   「web アプリであることが邪魔をしているのでは。ネイティブに移植すべきか」も未決。
 

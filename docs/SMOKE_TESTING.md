@@ -1,7 +1,7 @@
 # duocad — 実機検査（puppeteer smoke / acceptance）の書き方
 
 **読むとき**: `web/scripts/smoke-*.mjs` を書く・直す・赤の原因を切り分けるとき。
-走らせ方は README §3。共有部品の使い方は各ファイル冒頭 —— 骨格は `harness.mjs`（`runSmoke`）、
+走らせ方は docs/DEVELOPMENT.md §3。共有部品の使い方は各ファイル冒頭 —— 骨格は `harness.mjs`（`runSmoke`）、
 画面を開く・エラーの確認・入力・待ちは `browser.mjs`（`openApp` / `assertNoAppErrors` / `typeInto` /
 `waitOrFail` / `waitFrames`）、射影してクリックする手と面の名指し（`planarFace`）は `pick.mjs`、
 MCP で箱を作る手は `mcp-client.mjs`。

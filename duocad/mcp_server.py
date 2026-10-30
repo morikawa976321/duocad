@@ -970,7 +970,7 @@ def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-#: `npm run dev` が使うポート(README §1.3)。dev serverは `web/src` を直に配るので
+#: `npm run dev` が使うポート(docs/DEVELOPMENT.md §1.3)。dev serverは `web/src` を直に配るので
 #: 静的配信(`--http-port`)とは別オリジンになる。
 VITE_DEV_PORT = 5173
 

@@ -931,7 +931,7 @@ class _KernelEntityKindOps:
     """図形1種別ぶんのOCP依存演算(辺生成・2D bbox)。
 
     `duocad/sketch.py` の `EntityKindOps`(純幾何)の姉妹表。import境界(OCPはカーネル層だけ)のため
-    1本化できない(README.md「モジュールとimport境界」)。
+    1本化できない(docs/DEVELOPMENT.md「モジュールとimport境界」)。
     """
 
     edges: Callable[["gp_Ax3", dict], List[Any]]

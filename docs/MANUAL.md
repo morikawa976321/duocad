@@ -9,7 +9,7 @@ duocad は2つあります。**作品を作るときは「制作用」、duocad 
 |---|---|---|
 | 使うとき | 作品を作る | duocad を直す・機能を足す |
 | 場所 | `C:\Users\tm976\mf\duocad-stable` | `C:\Users\tm976\mf\duocad` |
-| 起動 | Win キー → `duocad` → Enter | 今までどおり(README 1章) |
+| 起動 | Win キー → `duocad` → Enter | 今までどおり(docs/DEVELOPMENT.md 1章) |
 | 画面 | 独立した窓(タブやアドレスバーが無い) | ブラウザのタブ。**左上にピンクの「開発版」** |
 | ファイルの置き場 | `C:\Users\tm976\mf\duocad-stable\data\models`(書き出しは `export`) | `mf\duocad\models`(書き出しは `export`) |
 | アドレス | `http://127.0.0.1:8776/` | `http://127.0.0.1:8766/` |

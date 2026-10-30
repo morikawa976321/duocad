@@ -17,7 +17,7 @@ from duocad.session import Session
 
 from duocad.paths import REPO_ROOT
 MCP_MD = REPO_ROOT / "MCP.md"
-ROOT_README = REPO_ROOT / "README.md"
+ROOT_README = REPO_ROOT / "docs/DEVELOPMENT.md"
 TOPOPT_MD = REPO_ROOT / "docs" / "TOPOPT.md"
 MCP_SERVER_PY = REPO_ROOT / "duocad" / "mcp_server.py"
 
@@ -253,17 +253,17 @@ def test_the_current_truth_table_values_match_the_code():
 
 
 def test_the_readme_lists_every_acceptance_check_script():
-    """`README.md`「形状最適化の受入検査」が `topopt_checks/check_*.py` を全部並べている。
+    """`docs/DEVELOPMENT.md`「形状最適化の受入検査」が `topopt_checks/check_*.py` を全部並べている。
 
-    落ちたら、**受入検査を足した(消した)のに README の実行手順が古い**。この群は pytest に
-    入れておらず、README のこのブロックを写して回すのが唯一の強制力なので、
+    落ちたら、**受入検査を足した(消した)のに docs/DEVELOPMENT.md の実行手順が古い**。この群は pytest に
+    入れておらず、docs/DEVELOPMENT.md のこのブロックを写して回すのが唯一の強制力なので、
     並べ忘れた検査は**誰も走らせないまま緑に見える**。
     """
     section = _section(ROOT_README, "### 形状最適化の受入検査")
     listed = set(re.findall(r"topopt_checks[\\/](check_[a-z_]+\.py)", section))
     actual = {path.name for path in (REPO_ROOT / "topopt_checks").glob("check_*.py")}
     assert listed == actual, (
-        "README.md「形状最適化の受入検査」と topopt_checks/ の顔ぶれが食い違う"
-        "(意図した変更なら README のブロックを更新すること): "
-        f"READMEに無い={sorted(actual - listed)} / 実在しない={sorted(listed - actual)}"
+        "docs/DEVELOPMENT.md「形状最適化の受入検査」と topopt_checks/ の顔ぶれが食い違う"
+        "(意図した変更なら docs/DEVELOPMENT.md のブロックを更新すること): "
+        f"docs/DEVELOPMENT.mdに無い={sorted(actual - listed)} / 実在しない={sorted(listed - actual)}"
     )
