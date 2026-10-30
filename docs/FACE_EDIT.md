@@ -753,7 +753,7 @@ AI が「まず `SetRunParallel(True)` と使っていない体積の計算(面�
    - メモリの上限は親子の両方(子は要求ごとの形・履歴を持ち越さない。親の結果の覚えは件数と容量で捨てる。子の立て直しの条件は反復の実測で決め、実行中の確定を潰さない)。
    テスト: 子を送信中・演算中・返信中に止める、期限切れ、検査落ち、プレビューの連打→確定、確定中の undo、文書の切り替え、別の接続からの要求を注入し、
    通信が続き、文書・操作ログ・undo/redo の位置・SNAPSHOTS が変わらず、次の正常な要求が通ること。同じ操作列を繰り返して親子のメモリを測る(初期の増加と頭打ちを分ける)。
-   `tests/test_boundaries.py` の `OCP_ALLOWED` と README の表に足す。
+   `tests/test_boundaries.py` の `OCP_ALLOWED` と docs/DEVELOPMENT.md の表に足す。
 2. **`duocad/kernel_face_edit.py`**(新規。試作 `tools/face_edit_probe/strict.py` を製品の形に): `delete_faces` / `offset_faces`(D を含む)/ 関門 / 曲面の定義の比較 /
    由来の射影。子プロセスの中で動く。テスト: 関門に誤った形を渡して断るか(受入条件「実装のときに足すテスト」)、D の認識が意匠の曲面・円錐・可変半径・丸めの上の丸め・
    支えの面の分割を、**理由を区別して**断るか、半径の違う丸めを取り違えないか(`m_fillet_two_radii_top_up2`)。

@@ -145,7 +145,7 @@ Claude Desktopはstdioで繋ぐので、**あちらがduocadのプロセスを�
   ため、stdioの待ち受けを始める時点で fd 1 を stderr へ振り替える（ツール実行中だけ囲む形では、人がブラウザから書き出す経路を取り逃す。
   `_claim_stdout`）。
 - **AIへ渡す手順の文（`initialize` の `instructions`）は `catalog.agent_instructions()` の1本**で、アプリ内AIエージェント
-  （`duocad/agent/`・README §4）と共有する。ツール数も宣言から数えるので、verbを足しても古くならない。
+  （`duocad/agent/`・docs/DEVELOPMENT.md §4）と共有する。ツール数も宣言から数えるので、verbを足しても古くならない。
 - ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
   （`not_found` / `invalid_argument` / `selection_empty` /
   `selection_kind_mismatch` / `invalid_predicate` / `busy` / `document_changed` / `no_command` / `internal` / `dimension_not_given`）。
