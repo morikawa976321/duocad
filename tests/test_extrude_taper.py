@@ -27,7 +27,7 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.GC import GC_MakeArcOfCircle
 from OCP.Geom import Geom_BezierCurve
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.TopAbs import TopAbs_FACE
+from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID, TopAbs_WIRE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Elips, gp_Pnt
@@ -308,6 +308,165 @@ def test_a_collapsing_taper_changes_neither_the_document_nor_the_log():
         extrude(document, refs, 10.0, mode="new", taper=-40.0)
 
     assert _state(document) == before
+
+
+def _all_regions(document: Document, sketch_id) -> list:
+    return [region_ref(sketch_id, region.index) for region in regions(document, sketch_id)]
+
+
+def _union_of_disks(r1: float, r2: float, d: float) -> float:
+    if d >= r1 + r2:
+        return math.pi * (r1 * r1 + r2 * r2)
+    lens = (
+        r1 * r1 * math.acos((d * d + r1 * r1 - r2 * r2) / (2.0 * d * r1))
+        + r2 * r2 * math.acos((d * d + r2 * r2 - r1 * r1) / (2.0 * d * r2))
+        - 0.5 * math.sqrt((-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2))
+    )
+    return math.pi * (r1 * r1 + r2 * r2) - lens
+
+
+@pytest.mark.parametrize("taper", [5.0, -5.0])
+def test_adjacent_regions_taper_as_one_outline(taper):
+    """隣り合う領域ごとにテーパーが掛かり、境目に傾いた壁が残る(断面が2円の和にならない)。"""
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    add_circle(document, sketch_id, (12.0, 0.0), 12.0)
+
+    extrude(document, _all_regions(document, sketch_id), 10.0, mode="new", taper=taper)
+
+    slope, n = _slope(taper), 2000
+    area = [_union_of_disks(10.0 + slope * z, 6.0 + slope * z, 12.0) for z in (10.0 * i / n for i in range(n + 1))]
+    expected = 10.0 / n / 3.0 * (area[0] + area[-1] + sum((4 if i % 2 else 2) * area[i] for i in range(1, n)))
+    shape = document.bodies[0].shape
+    assert _brep_geometry.volume(shape) == pytest.approx(expected, rel=1e-9)
+    assert _brep_topology.face_count(shape) == 4
+
+
+@pytest.mark.parametrize("taper", [5.0, -5.0])
+def test_overlapping_rectangles_taper_as_one_outline(taper):
+    """重なった2つの長方形の領域ごとにテーパーが掛かり、断面が2つの長方形をずらした和にならない。"""
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (0.0, 0.0), 20.0, 10.0)
+    add_rectangle(document, sketch_id, (10.0, 5.0), 20.0, 10.0)
+
+    extrude(document, _all_regions(document, sketch_id), 10.0, mode="new", taper=taper)
+
+    def area(z: float) -> float:
+        r = _slope(taper) * z
+        return 2.0 * (20.0 + 2.0 * r) * (10.0 + 2.0 * r) - (10.0 + 2.0 * r) * (5.0 + 2.0 * r)
+
+    expected = 10.0 / 6.0 * (area(0.0) + 4.0 * area(5.0) + area(10.0))
+    shape = document.bodies[0].shape
+    assert _brep_geometry.volume(shape) == pytest.approx(expected, rel=REL)
+    assert _brep_topology.face_count(shape) == 10
+
+
+@pytest.mark.parametrize(
+    "circle, ellipse, distance, taper",
+    [
+        # 輪郭が角から始まり、`MakeDraft` が最初と最後の側面をつながない
+        ((0.0, 0.0, 10.0), (8.0, 0.0, 8.0, 4.0), 10.0, 5.0),
+        # 領域ごとに傾けると円と楕円の間のレンズ形の領域が潰れる
+        ((0.0, 0.0, 40.0), (15.0, 5.0, 30.0, 15.0), 30.0, -5.0),
+    ],
+)
+def test_a_circle_and_an_ellipse_taper_as_one_outline(circle, ellipse, distance, taper):
+    """円と楕円の和の輪郭が断られるか、領域の境目に面が残る。"""
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_circle(document, sketch_id, circle[:2], circle[2])
+    add_ellipse(document, sketch_id, ellipse[:2], ellipse[2], ellipse[3])
+
+    extrude(document, _all_regions(document, sketch_id), distance, mode="new", taper=taper)
+
+    shape = document.bodies[0].shape
+    planes = [face for face in query.describe_faces(shape) if face["kind"] == "plane"]
+    assert len(planes) == 2
+    assert _brep_topology._extrude_count(shape, TopAbs_SOLID) == 1
+
+
+
+def test_an_ellipse_seam_on_the_merged_outline_does_not_refuse_it():
+    """楕円の継ぎ目のそばに短い弧が残った輪郭が断られる(同じ形を継ぎ目が輪郭の外に出る向きで描くと通る)。"""
+    volumes = []
+    for angle in (20.0, 200.0):
+        document = Document()
+        sketch_id = sketch_create(document, "XY")
+        add_ellipse(document, sketch_id, (0.0, 0.0), 10.0, 8.0, angle)
+        add_ellipse(document, sketch_id, (8.0, 0.0), 8.0, 4.0)
+        extrude(document, _all_regions(document, sketch_id), 10.0, mode="new", taper=5.0)
+        volumes.append(_brep_geometry.volume(document.bodies[0].shape))
+
+    assert volumes[0] == pytest.approx(volumes[1], rel=1e-6)
+
+
+def _mitre_offset_error(outline, shape, height: float, reach: float) -> float:
+    """ふたの輪郭の点が、底の輪郭の辺か辺の端の接線の延長から `reach` の距離にあるかの最大のずれ(mm)。"""
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.Geom import Geom_Line
+    from OCP.GeomAPI import GeomAPI_ProjectPointOnCurve
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.gp import gp_Vec
+
+    curves = []
+    explorer = TopExp_Explorer(outline, TopAbs_EDGE)
+    while explorer.More():
+        edge = BRepAdaptor_Curve(TopoDS.Edge_s(explorer.Current()))
+        explorer.Next()
+        curves.append((edge.Curve().Curve(), edge.FirstParameter(), edge.LastParameter()))
+        for t, sign in ((edge.FirstParameter(), -1.0), (edge.LastParameter(), 1.0)):
+            point, tangent = gp_Pnt(), gp_Vec()
+            edge.D1(t, point, tangent)
+            curves.append((Geom_Line(point, gp_Dir(tangent.Multiplied(sign))), 0.0, 1.0e3))
+    (lid,) = kernel_extrude._lids(shape, outline, gp_Vec(0.0, 0.0, height))
+    worst = 0.0
+    for edge in _brep_topology._extrude_edges(TopExp_Explorer(lid, TopAbs_WIRE).Current()):
+        curve = BRepAdaptor_Curve(edge)
+        for k in range(17):
+            at = curve.Value(curve.FirstParameter() + (curve.LastParameter() - curve.FirstParameter()) * k / 16)
+            point = gp_Pnt(at.X(), at.Y(), at.Z() - height)
+            worst = max(worst, min(
+                abs(GeomAPI_ProjectPointOnCurve(point, geometry, first, last).LowerDistance() - reach)
+                for geometry, first, last in curves
+                if GeomAPI_ProjectPointOnCurve(point, geometry, first, last).NbPoints()
+            ))
+    return worst
+
+
+@pytest.mark.parametrize("taper", [5.0, -4.0])
+def test_a_restarted_outline_keeps_the_mitred_corners(taper):
+    """始点を辺の中点へ移してやり直した輪郭のふたが、角を接線の延長で尖らせた断面からずれる。
+
+    `MakeDraft` の角は元の始点で通る輪郭でも接線の延長(実測のずれ 8e-5 mm 以下)。円と楕円は元の始点では通らない。
+    """
+    from duocad.verbs.extrude import _resolve_faces_and_normal
+
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_circle(document, sketch_id, (0.0, 0.0), 10.0)
+    add_ellipse(document, sketch_id, (8.0, 0.0), 8.0, 4.0)
+    faces, _ = _resolve_faces_and_normal(document, _all_regions(document, sketch_id))
+    (outline,) = kernel_extrude._merged_regions(faces)
+
+    shape = _new(outline, 10.0, taper)["shape"]
+
+    assert _mitre_offset_error(outline, shape, 10.0, 10.0 * _slope(abs(taper))) < 2.0e-4
+
+
+def test_separate_regions_still_taper_separately():
+    """離れた領域どうしがまとめられ、別々の角錐台にならない。"""
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (0.0, 0.0), 20.0, 10.0)
+    add_rectangle(document, sketch_id, (40.0, 0.0), 20.0, 10.0)
+
+    extrude(document, _all_regions(document, sketch_id), 10.0, mode="new", taper=-5.0)
+
+    shape = document.bodies[0].shape
+    assert _brep_geometry.volume(shape) == pytest.approx(2.0 * _frustum(20.0, 10.0, 10.0, -5.0), rel=REL)
+    assert _brep_topology._extrude_count(shape, TopAbs_SOLID) == 2
 
 
 def _box_document() -> Document:

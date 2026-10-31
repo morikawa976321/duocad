@@ -192,6 +192,11 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - 距離 z の断面は「元の領域を z·tan(taper) だけ外へずらしたもの」で角は尖ったまま。**穴は外周と逆に動く**(正で狭まり、負で広がる。
   Fusion も同じ: Autodesk Community「Extrude Taper option odd behavior!」)。距離が負でも「進むにつれて」で、cut では掘る側の立体に掛かる
   (負なら穴が奥ほど狭まる)。領域・面の両方、join / cut / new のすべてで効く。
+- **複数の領域は、隣り合うものを1つの輪郭にまとめてから傾ける**(2026-10-31 本人指示「全領域を一つとみなしてテーパー付きの押し出しを行う」)。
+  領域ごとに傾けて束ねると、領域の境目にも傾いた壁ができる(細る向きでは境目に溝が残り、狭い領域は先に潰れて全体が断られる)。
+  まとめるのは `kernel_extrude._merged_regions`(2Dの和 + 同一曲線の辺の統合)。離れた領域は別々に傾く。面の押し出し(`extrude_faces`)は
+  まだ面ごとに傾ける。
+  凹角の延ばし方は経路で違う(`MakeDraft` は接線の延長、`DraftAngle` は円錐をそのまま延ばす。docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」)。
 - 幾何は `kernel_extrude._tapered_prism`(輪郭ごとに傾けた立体を作り、外周の立体から穴の立体を cut)。輪郭の立体は、
   直線と円弧だけなら柱の側面を `BRepOffsetAPI_DraftAngle` で傾け(面は平面・円錐のまま)、楕円・ベジエ・B スプラインを含むなら
   `BRepOffsetAPI_MakeDraft` で側面を作って底とふたで閉じる(1本の辺で閉じた輪郭は先に4本に分ける)。`MakeDraft` は 0.1 mm の面取り辺を
