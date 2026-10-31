@@ -196,6 +196,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
   領域ごとに傾けて束ねると、領域の境目にも傾いた壁ができる(細る向きでは境目に溝が残り、狭い領域は先に潰れて全体が断られる)。
   まとめるのは `kernel_extrude._merged_regions`(2Dの和 + 同一曲線の辺の統合)。離れた領域は別々に傾く。面の押し出し(`extrude_faces`)は
   まだ面ごとに傾ける。
+  凹角の延ばし方は経路で違う(`MakeDraft` は接線の延長、`DraftAngle` は円錐をそのまま延ばす。docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」)。
 - 幾何は `kernel_extrude._tapered_prism`(輪郭ごとに傾けた立体を作り、外周の立体から穴の立体を cut)。輪郭の立体は、
   直線と円弧だけなら柱の側面を `BRepOffsetAPI_DraftAngle` で傾け(面は平面・円錐のまま)、楕円・ベジエ・B スプラインを含むなら
   `BRepOffsetAPI_MakeDraft` で側面を作って底とふたで閉じる(1本の辺で閉じた輪郭は先に4本に分ける)。`MakeDraft` は 0.1 mm の面取り辺を

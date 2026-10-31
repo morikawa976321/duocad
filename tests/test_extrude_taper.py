@@ -27,7 +27,7 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.GC import GC_MakeArcOfCircle
 from OCP.Geom import Geom_BezierCurve
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
+from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID, TopAbs_WIRE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Elips, gp_Pnt
@@ -385,6 +385,59 @@ def test_a_circle_and_an_ellipse_taper_as_one_outline(circle, ellipse, distance,
     planes = [face for face in query.describe_faces(shape) if face["kind"] == "plane"]
     assert len(planes) == 2
     assert _brep_topology._extrude_count(shape, TopAbs_SOLID) == 1
+
+
+def _mitre_offset_error(outline, shape, height: float, reach: float) -> float:
+    """ふたの輪郭の点が、底の輪郭の辺か辺の端の接線の延長から `reach` の距離にあるかの最大のずれ(mm)。"""
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.Geom import Geom_Line
+    from OCP.GeomAPI import GeomAPI_ProjectPointOnCurve
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.gp import gp_Vec
+
+    curves = []
+    explorer = TopExp_Explorer(outline, TopAbs_EDGE)
+    while explorer.More():
+        edge = BRepAdaptor_Curve(TopoDS.Edge_s(explorer.Current()))
+        explorer.Next()
+        curves.append((edge.Curve().Curve(), edge.FirstParameter(), edge.LastParameter()))
+        for t, sign in ((edge.FirstParameter(), -1.0), (edge.LastParameter(), 1.0)):
+            point, tangent = gp_Pnt(), gp_Vec()
+            edge.D1(t, point, tangent)
+            curves.append((Geom_Line(point, gp_Dir(tangent.Multiplied(sign))), 0.0, 1.0e3))
+    (lid,) = kernel_extrude._lids(shape, outline, gp_Vec(0.0, 0.0, height))
+    worst = 0.0
+    for edge in _brep_topology._extrude_edges(TopExp_Explorer(lid, TopAbs_WIRE).Current()):
+        curve = BRepAdaptor_Curve(edge)
+        for k in range(17):
+            at = curve.Value(curve.FirstParameter() + (curve.LastParameter() - curve.FirstParameter()) * k / 16)
+            point = gp_Pnt(at.X(), at.Y(), at.Z() - height)
+            worst = max(worst, min(
+                abs(GeomAPI_ProjectPointOnCurve(point, geometry, first, last).LowerDistance() - reach)
+                for geometry, first, last in curves
+                if GeomAPI_ProjectPointOnCurve(point, geometry, first, last).NbPoints()
+            ))
+    return worst
+
+
+@pytest.mark.parametrize("taper", [5.0, -4.0])
+def test_a_restarted_outline_keeps_the_mitred_corners(taper):
+    """始点を辺の中点へ移してやり直した輪郭のふたが、角を接線の延長で尖らせた断面からずれる。
+
+    `MakeDraft` の角は元の始点で通る輪郭でも接線の延長(実測のずれ 8e-5 mm 以下)。円と楕円は元の始点では通らない。
+    """
+    from duocad.verbs.extrude import _resolve_faces_and_normal
+
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_circle(document, sketch_id, (0.0, 0.0), 10.0)
+    add_ellipse(document, sketch_id, (8.0, 0.0), 8.0, 4.0)
+    faces, _ = _resolve_faces_and_normal(document, _all_regions(document, sketch_id))
+    (outline,) = kernel_extrude._merged_regions(faces)
+
+    shape = _new(outline, 10.0, taper)["shape"]
+
+    assert _mitre_offset_error(outline, shape, 10.0, 10.0 * _slope(abs(taper))) < 2.0e-4
 
 
 def test_separate_regions_still_taper_separately():
