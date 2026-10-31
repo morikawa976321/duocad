@@ -387,6 +387,21 @@ def test_a_circle_and_an_ellipse_taper_as_one_outline(circle, ellipse, distance,
     assert _brep_topology._extrude_count(shape, TopAbs_SOLID) == 1
 
 
+
+def test_an_ellipse_seam_on_the_merged_outline_does_not_refuse_it():
+    """楕円の継ぎ目のそばに短い弧が残った輪郭が断られる(同じ形を継ぎ目が輪郭の外に出る向きで描くと通る)。"""
+    volumes = []
+    for angle in (20.0, 200.0):
+        document = Document()
+        sketch_id = sketch_create(document, "XY")
+        add_ellipse(document, sketch_id, (0.0, 0.0), 10.0, 8.0, angle)
+        add_ellipse(document, sketch_id, (8.0, 0.0), 8.0, 4.0)
+        extrude(document, _all_regions(document, sketch_id), 10.0, mode="new", taper=5.0)
+        volumes.append(_brep_geometry.volume(document.bodies[0].shape))
+
+    assert volumes[0] == pytest.approx(volumes[1], rel=1e-6)
+
+
 def _mitre_offset_error(outline, shape, height: float, reach: float) -> float:
     """ふたの輪郭の点が、底の輪郭の辺か辺の端の接線の延長から `reach` の距離にあるかの最大のずれ(mm)。"""
     from OCP.BRepAdaptor import BRepAdaptor_Curve

@@ -36,7 +36,14 @@ from OCP.Bnd import Bnd_Box
 from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.Geom2dLProp import Geom2dLProp_CurAndInf2d
 from OCP.LProp import LProp_NotDefined
-from OCP.GeomAbs import GeomAbs_BezierCurve, GeomAbs_BSplineCurve, GeomAbs_Circle, GeomAbs_Line, GeomAbs_Plane
+from OCP.GeomAbs import (
+    GeomAbs_BezierCurve,
+    GeomAbs_BSplineCurve,
+    GeomAbs_Circle,
+    GeomAbs_Ellipse,
+    GeomAbs_Line,
+    GeomAbs_Plane,
+)
 from OCP.Precision import Precision
 from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
 from OCP.ShapeFix import ShapeFix_Solid
@@ -261,8 +268,14 @@ def _drafted_solid(
     if all(BRepAdaptor_Curve(edge).GetType() in (GeomAbs_Line, GeomAbs_Circle) for edge in _brep_topology._extrude_edges(wire)):
         return _analytic_drafted_solid(wire, axis, height, angle, inward, label)
     wire = _split_closed_edge(wire)
+    starts = [wire]
+    joined = _joined_seams(wire)
+    if joined is not wire:
+        joined = _split_closed_edge(joined)
+        starts.append(joined)
+    starts.extend(_midpoint_starts(joined))
     first_failure = None
-    for start in (wire, *_midpoint_starts(wire)):
+    for start in starts:
         try:
             return _swept_drafted_solid(start, axis, height, angle, inward, label)
         except Exception as error:
@@ -270,6 +283,65 @@ def _drafted_solid(
                 raise
             first_failure = first_failure or error
     raise first_failure
+
+
+def _joined_seams(wire: Any) -> Any:
+    """同じ円・楕円の上で続く辺(継ぎ目で割れた弧)を1本にした線。該当が無ければ `wire` のまま。
+
+    `_unified` は円・楕円の継ぎ目で割れた弧をまとめない。継ぎ目のそばに短い弧が残ると `MakeDraft` の結果が閉じないことがある
+    (楕円 10×8・20° と楕円 8×4 の和を +5° で傾けると断られ、同じ形を 200° で描くか継ぎ目を除けば通る。2026-10-31 sol レビューで再現)。
+    """
+    edges = _brep_topology._extrude_edges(wire)
+    changed = False
+    k = 0
+    while len(edges) > 1 and k < len(edges):
+        nxt = (k + 1) % len(edges)
+        merged = _joined_arcs(edges[k], edges[nxt])
+        if merged is None:
+            k += 1
+            continue
+        edges = [merged, *edges[k + 2:], *edges[:k]] if nxt else [merged, *edges[1:k]]
+        changed, k = True, 0
+    return _make_wire(edges) if changed else wire
+
+
+def _joined_arcs(first: Any, second: Any) -> Optional[Any]:
+    """走査順に続く2本の辺が同じ円・楕円の上の弧なら、つないだ1本の辺(1周になるなら None)。"""
+    if first.Orientation() != second.Orientation():
+        return None
+    a, b = BRepAdaptor_Curve(first), BRepAdaptor_Curve(second)
+    kind = a.GetType()
+    if kind != b.GetType() or kind not in (GeomAbs_Circle, GeomAbs_Ellipse):
+        return None
+    tolerance, angular = Precision.Confusion_s(), Precision.Angular_s()
+    if kind == GeomAbs_Circle:
+        conic, other = a.Circle(), b.Circle()
+        radii = abs(conic.Radius() - other.Radius()) <= tolerance
+    else:
+        conic, other = a.Ellipse(), b.Ellipse()
+        radii = (
+            abs(conic.MajorRadius() - other.MajorRadius()) <= tolerance
+            and abs(conic.MinorRadius() - other.MinorRadius()) <= tolerance
+        )
+    frame, other_frame = conic.Position(), other.Position()
+    if not (
+        radii
+        and frame.Location().Distance(other_frame.Location()) <= tolerance
+        and frame.Direction().IsEqual(other_frame.Direction(), angular)
+        and frame.XDirection().IsEqual(other_frame.XDirection(), angular)
+    ):
+        return None
+    forward = first.Orientation() != TopAbs_REVERSED
+    meet_first = a.LastParameter() if forward else a.FirstParameter()
+    meet_second = b.FirstParameter() if forward else b.LastParameter()
+    if abs(math.remainder(meet_first - meet_second, 2.0 * math.pi)) > Precision.PConfusion_s():
+        return None
+    span = (a.LastParameter() - a.FirstParameter()) + (b.LastParameter() - b.FirstParameter())
+    if span >= 2.0 * math.pi - Precision.PConfusion_s():
+        return None
+    start = a.FirstParameter() if forward else b.FirstParameter()
+    edge = BRepBuilderAPI_MakeEdge(conic, start, start + span).Edge()
+    return edge if forward else TopoDS.Edge_s(edge.Reversed())
 
 
 #: 輪郭の始点を辺の中点へ移して `MakeDraft` をやり直す回数の上限(長い辺から)。
