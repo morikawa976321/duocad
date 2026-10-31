@@ -59,6 +59,7 @@ from . import (
     brep_geometry as _brep_geometry,
     brep_history as _brep_history,
     brep_operations as _brep_operations,
+    brep_planar as _brep_planar,
     brep_topology as _brep_topology,
 )
 
@@ -137,24 +138,27 @@ def extrude_regions(
     offset = gp_Vec(nx * distance, ny * distance, nz * distance)
 
     prisms: List[TopoDS_Shape] = []
-    for position, face in enumerate(faces, start=1):
-        if taper:
-            prisms.append(_tapered_prism(TopoDS.Face_s(face), offset, taper, f"region #{position}"))
-            continue
-        prism = BRepPrimAPI_MakePrism(TopoDS.Face_s(face), offset)
-        if not prism.IsDone():
-            raise ValueError("failed to build a prism from a region face")
-        prism_shape = prism.Shape()
-        if prism_shape is None or _brep_topology.is_null(prism_shape):
-            raise ValueError("prism from a region face is empty")
-        # 押し出し方向が面の平面内に寝ると体積0の退化ソリッドができ、`IsDone()` も
-        # `IsNull()` も `BRepCheck_Analyzer` も通る。体積を見るのが唯一の関門。
-        if _brep_geometry.volume(prism_shape) <= 0:
-            raise ValueError(
-                "prism from a region face has no volume "
-                "(押し出し方向が領域の平面に寝ている)"
-            )
-        prisms.append(prism_shape)
+    if taper:
+        merged = _merged_regions(faces)
+        label = "region #{}" if len(merged) == len(faces) else "merged region #{}"
+        for position, face in enumerate(merged, start=1):
+            prisms.append(_tapered_prism(face, offset, taper, label.format(position)))
+    else:
+        for face in faces:
+            prism = BRepPrimAPI_MakePrism(TopoDS.Face_s(face), offset)
+            if not prism.IsDone():
+                raise ValueError("failed to build a prism from a region face")
+            prism_shape = prism.Shape()
+            if prism_shape is None or _brep_topology.is_null(prism_shape):
+                raise ValueError("prism from a region face is empty")
+            # 押し出し方向が面の平面内に寝ると体積0の退化ソリッドができ、`IsDone()` も
+            # `IsNull()` も `BRepCheck_Analyzer` も通る。体積を見るのが唯一の関門。
+            if _brep_geometry.volume(prism_shape) <= 0:
+                raise ValueError(
+                    "prism from a region face has no volume "
+                    "(押し出し方向が領域の平面に寝ている)"
+                )
+            prisms.append(prism_shape)
 
     head = {"verb": "extrude", "mode": mode, "distance": distance}
     if taper:
@@ -165,6 +169,17 @@ def extrude_regions(
 # --------------------------------------------------------------------------------------
 # テーパー
 # --------------------------------------------------------------------------------------
+def _merged_regions(faces: Sequence[Any]) -> List[Any]:
+    """隣り合う領域を1枚の面にまとめる(つながった成分ごとに1枚)。
+
+    テーパーは選んだ領域の和の縁にだけ掛ける。領域ごとに傾けて束ねると、領域の境目に傾いた壁が残る。
+    """
+    if len(faces) <= 1:
+        return [TopoDS.Face_s(face) for face in faces]
+    union = _brep_planar._union_faces([TopoDS.Face_s(face) for face in faces])
+    return _brep_planar._shape_faces(_brep_planar._unified(_brep_topology.compound(union)))
+
+
 # 押し出した距離 z の断面は「元の領域を z·tan(taper) だけ外へずらした領域」(正で外へ。角は尖ったまま)。
 # 外周も穴も領域の縁として動くので、正なら外周は広がり穴は狭まる(Autodesk Fusion の押し出しのテーパーと同じ)。
 #
@@ -246,6 +261,42 @@ def _drafted_solid(
     if all(BRepAdaptor_Curve(edge).GetType() in (GeomAbs_Line, GeomAbs_Circle) for edge in _brep_topology._extrude_edges(wire)):
         return _analytic_drafted_solid(wire, axis, height, angle, inward, label)
     wire = _split_closed_edge(wire)
+    first_failure = None
+    for start in (wire, *_midpoint_starts(wire)):
+        try:
+            return _swept_drafted_solid(start, axis, height, angle, inward, label)
+        except Exception as error:
+            if not isinstance(error, ValueError) and not type(error).__module__.startswith("OCP"):
+                raise
+            first_failure = first_failure or error
+    raise first_failure
+
+
+#: 輪郭の始点を辺の中点へ移して `MakeDraft` をやり直す回数の上限(長い辺から)。
+_DRAFT_RESTARTS = 3
+
+
+def _midpoint_starts(wire: Any) -> List[Any]:
+    """`wire` の長い辺から順に、その辺の中点を始点にした同じ輪郭(最大 `_DRAFT_RESTARTS` 本)。
+
+    `MakeDraft` は始点(=終点)の角で、最初と最後の側面をつながずに隙間を残すことがある(縫っても閉じない)。
+    円と楕円の和の輪郭が角から始まると内外どちらへも失敗し、同じ輪郭を辺の中点から始めると通る(2026-10-31 実測)。
+    中点は滑らかなので、そこで閉じる側面どうしは角の処理を要らない。
+    """
+    edges = _brep_topology._extrude_edges(wire)
+    if len(edges) < 2:
+        return []
+    order = sorted(range(len(edges)), key=lambda k: -GCPnts_AbscissaPoint.Length_s(BRepAdaptor_Curve(edges[k])))
+    starts = []
+    for k in order[:_DRAFT_RESTARTS]:
+        curve = BRepAdaptor_Curve(edges[k])
+        head, tail = _split_edge(edges[k], [(curve.FirstParameter() + curve.LastParameter()) / 2.0])
+        starts.append(_make_wire([tail, *edges[k + 1:], *edges[:k], head]))
+    return starts
+
+
+def _swept_drafted_solid(wire: Any, axis: "gp_Dir", height: float, angle: float, inward: bool, label: str) -> Any:
+    """`MakeDraft` で傾いた側面を作り、底とふたで閉じた立体(`_drafted_solid` の曲線を含む輪郭の経路)。"""
     draft = BRepOffsetAPI_MakeDraft(wire, axis, angle)
     draft.SetOptions(BRepBuilderAPI_RightCorner)
     # 内か外かは角度の符号でも線の向きでもなく、この指定で決まる(既定は外)。Perform の長さは斜辺。
