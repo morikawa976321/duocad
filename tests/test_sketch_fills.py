@@ -154,3 +154,43 @@ def test_reopening_the_document_builds_the_fills_again(tmp_path, counted) -> Non
     session.open_document("plate.json")
     assert len(_regions(session, sketch_id)) == 3
     assert len(counted["tessellate"]) == before + 3
+
+
+def _polygons(session: Session) -> str:
+    """直線だけのスケッチ(重なる長方形 2 つと、それを横切る線分)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [0.0, 0.0], 30.0, 20.0)
+    session.add_rectangle(sketch_id, [10.0, 5.0], 30.0, 20.0)
+    session.add_line(sketch_id, [-5.0, 12.0], [50.0, 3.0])
+    return sketch_id
+
+
+def test_a_sketch_of_straight_edges_is_filled_once_for_every_resolution(counted) -> None:
+    """落ちたら、直線だけのスケッチ(長方形 150 個など)をカメラが粗さを変えるたびに塗り直すか、使い回した塗りが
+    その粗さでその場で求めた塗りと食い違う(OCCT の平面の分割が偏差に依るようになった)。"""
+    session = Session(0.2)
+    sketch_id = _polygons(session)
+    session.set_view_resolution(FAR, SIZE)
+    first = _regions(session, sketch_id)
+    assert len(first) > 3
+    before = len(counted["tessellate"])
+    for world_per_pixel in (NEAR, FAR / 3, 0.0005):
+        session.set_view_resolution(world_per_pixel, SIZE)
+        assert _regions(session, sketch_id) == first
+    assert len(counted["tessellate"]) == before
+    for deviation in (0.001, 0.05, 2.0):
+        assert region.regions_with_geometry(session.document, sketch_id, deviation) == first
+
+
+def test_a_curve_added_to_a_straight_sketch_makes_its_fill_follow_the_resolution(counted) -> None:
+    """落ちたら、円を足した後も直線だけのときの扱いが残り、寄っても円の塗りが粗いまま。"""
+    session = Session(0.2)
+    sketch_id = _polygons(session)
+    session.set_view_resolution(FAR, SIZE)
+    _regions(session, sketch_id)
+    session.add_circle(sketch_id, [80.0, 0.0], 40.0)
+    far = _regions(session, sketch_id)
+    session.set_view_resolution(NEAR, SIZE)
+    near = _regions(session, sketch_id)
+    assert near != far
+    assert near == region.regions_with_geometry(session.document, sketch_id, session.view.view_deviation)

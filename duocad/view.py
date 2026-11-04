@@ -220,12 +220,14 @@ RETIRED_FACE_STORES = 6
 
 #: スケッチごとに塗り(領域の三角形)を覚えておく粗さの段の数。寄って戻る・引いて戻るで使い回す。
 SKETCH_FILLS_PER_SKETCH = 4
+#: 辺が直線だけになる図形。これだけのスケッチの塗りは偏差によらない(`_SketchFills.straight`)。
+_STRAIGHT_KINDS = frozenset({"point", "line", "rectangle"})
 
 
 class _SketchFills:
     """1つのスケッチについて、描くもの(姿勢と展開した図形)が同じ間に使い回すもの。すべて描くものだけで決まる。"""
 
-    __slots__ = ("document", "content", "frame", "detection", "fills")
+    __slots__ = ("document", "content", "frame", "detection", "straight", "fills")
 
     def __init__(self, document: Document, content: str) -> None:
         #: 作った文書(開き直したら作り直し、壊れたスケッチの知らせも出し直す)
@@ -234,18 +236,21 @@ class _SketchFills:
         self.frame: Optional[dict] = None
         #: `None` は図形が無いか、枠・検出に失敗した(どの粗さでも領域は空)
         self.detection: Optional[region.Detection] = None
-        #: 偏差 -> 領域の一覧(`region.fill`)。最近使った順に `SKETCH_FILLS_PER_SKETCH` 個まで。
+        #: 図形が直線だけ。領域の輪郭は偏差によらず厳密で、平面の三角形分割も偏差によらない(実測: 長方形・交わる線分の
+        #: スケッチで偏差 5 〜 0.001 mm の塗りがバイト単位で一致)ので、塗りを1つだけ持ってどの粗さにも使う。
+        self.straight = False
+        #: 偏差(`straight` なら `None`) -> 領域の一覧(`region.fill`)。最近使った順に `SKETCH_FILLS_PER_SKETCH` 個まで。
         #: 三角形は `array` に詰めて持つ(実測: 円 384 個の外周を持つ 385 領域・2.8 万三角形で、数の list は 1 段 5.2 MB)。
-        self.fills: "OrderedDict[float, list]" = OrderedDict()
+        self.fills: "OrderedDict[Optional[float], list]" = OrderedDict()
 
-    def lookup(self, deviation: float) -> Optional[list]:
+    def lookup(self, deviation: Optional[float]) -> Optional[list]:
         packed = self.fills.get(deviation)
         if packed is None:
             return None
         self.fills.move_to_end(deviation)
         return [dict(item, positions=item["positions"].tolist(), indices=item["indices"].tolist()) for item in packed]
 
-    def keep(self, deviation: float, regions: list) -> None:
+    def keep(self, deviation: Optional[float], regions: list) -> None:
         self.fills[deviation] = [
             dict(item, positions=array("d", item["positions"]), indices=array("q", item["indices"])) for item in regions
         ]
@@ -625,6 +630,7 @@ class DocumentView:
             held.frame = region.plane_frame(self.document, item.id)
             if drawn:
                 held.detection = region.detect(item.plane, drawn)
+                held.straight = all(entity["kind"] in _STRAIGHT_KINDS for entity in drawn)
         except Exception as error:
             self.warnings.append(
                 f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
@@ -635,7 +641,7 @@ class DocumentView:
     def _sketch_fill(self, item, held: "_SketchFills") -> list:
         """いまの粗さ(`view_deviation`)の塗り。同じ粗さに戻ったら測り直さない。"""
         deviation = self.view_deviation
-        regions = held.lookup(deviation)
+        regions = held.lookup(None if held.straight else deviation)
         if regions is not None:
             return regions
         regions = []
@@ -652,7 +658,7 @@ class DocumentView:
                 self.warnings.append(
                     f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
                 )
-        held.keep(deviation, regions)
+        held.keep(None if held.straight else deviation, regions)
         return regions
 
     # ---------------------------------------------------------------- M3.5: 差分送信
