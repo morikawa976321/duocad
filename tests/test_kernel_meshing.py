@@ -197,7 +197,8 @@ def test_tessellate_payload_carries_boundary_diagnostics_and_repaired_faces():
     assert payload['untriangulated'] == []
     assert payload['boundary']['termination'] == 'resolved'
     assert payload['boundary']['amplified_edges'] >= 2
-    stats, _ = topology(*welded(shape))
+    stats, _ = topology(*weld_exact(np.concatenate([
+        np.asarray(f['positions']).reshape(-1, 3)[np.asarray(f['indices']).reshape(-1, 3)] for f in payload['faces']])))
     assert all(stats[key] == 0 for key in CONNECTIVITY)
 
 

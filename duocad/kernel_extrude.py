@@ -958,10 +958,7 @@ def extrude_faces(
 
     successors = {} if builder is None else _brep_history.target_successors(builder, target_shape, history, final_map)
 
-    after_face_indices = [
-        _find_translated_face(final_map, target=target, normal=normal, scale=abs(distance))
-        for target in lid_centroids
-    ]
+    after_face_indices = _find_translated_faces(final_map, targets=lid_centroids, normal=normal, scale=abs(distance))
     provenance = {
         "verb": "extrude",
         "faces": indices,
@@ -1023,30 +1020,35 @@ def _check_coplanar_planes(faces: Sequence[Any], indices: Sequence[int]) -> tupl
     return first_normal, centroids
 
 
-def _find_translated_face(
+def _find_translated_faces(
     shape_map: "TopTools_IndexedMapOfShape",
-    target: tuple,
+    targets: Sequence[tuple],
     normal: tuple,
     scale: float,
-) -> Optional[int]:
-    """重心が `target`・法線が `normal` と同じ向きの面の添字(無ければNone)。
+) -> List[Optional[int]]:
+    """`targets` の重心ごとに、重心がそこにあり法線が `normal` と同じ向きの面の添字(無ければNone)。
 
     押し出した面が新形状のどれになったかを幾何で突き合わせる。由来マップ(`Modified`)はブーリアンでは
     空を返すことが多い(実測: Fuseは押し出した面を `IsDeleted` にするだけ)ため。
     """
-    tolerance = _MATCH_TOL * max(1.0, abs(scale), *(abs(value) for value in target))
-    best: Optional[tuple] = None
+    aligned: List[tuple] = []
     for index in range(1, shape_map.Extent() + 1):
         face = TopoDS.Face_s(shape_map.FindKey(index))
         candidate_normal = _brep_geometry._face_normal(face)
         alignment = sum(candidate_normal[axis] * normal[axis] for axis in range(3))
         if alignment < 1.0 - _MATCH_TOL:
             continue
-        _, centroid = _brep_geometry._face_props(face)
-        distance = math.dist(centroid, target)
-        if distance <= tolerance and (best is None or distance < best[0]):
-            best = (distance, index)
-    return None if best is None else best[1]
+        aligned.append((index, _brep_geometry._face_props(face)[1]))
+    found: List[Optional[int]] = []
+    for target in targets:
+        tolerance = _MATCH_TOL * max(1.0, abs(scale), *(abs(value) for value in target))
+        best: Optional[tuple] = None
+        for index, centroid in aligned:
+            distance = math.dist(centroid, target)
+            if distance <= tolerance and (best is None or distance < best[0]):
+                best = (distance, index)
+        found.append(None if best is None else best[1])
+    return found
 
 # ======================================================================================
 # ロフト

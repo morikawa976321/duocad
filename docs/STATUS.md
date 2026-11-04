@@ -29,6 +29,32 @@ QR1(733 面)ではゴーストが 0.4 秒なので、穴の多い平面で急に
 - C7 面の削除(`kernel_face_edit.py`): `--part big` でゴースト 10 秒
 - 手元: 画面側の受信の残り(境界線・辺の折れ線の差し替え)、各枝の QR1・ブラウザでの確認、ゴーストの待ち 250 ms(好みなのでカード)
 
+### どこまで来たか(2026-11-04 夜)
+
+- 枝の切り方は astra の意見で改めた(共通の関数は持ち主を1つ。実経路の実測 `paths` と合成の文書群 `corpus` を足して9本)。
+- 取り込んだ(手元の develop、push は PR #295 のマージ待ち): delivery 4・regions 4・boolean のうち統合の 2・faceedit 2・thread 2・extrude 1・
+  corpus の道具、手元の WebSocket の圧縮を切る・外接球。どれも保存済み 208 文書の再生の指紋が基準と一致。統合後の全件テスト 2,838 passed、
+  合成の 300 本(5,744 操作)を1操作ずつ、三角形分割なし・ありで基準と比べて食い違い 0。数値は PERFORMANCE.md 7章。
+- 入れなかった: 離れた柱の近道(合成の文書で退行が見つかり取り消した)、並列のブーリアン(並列の非決定が見つかったので保留)。
+- 見つけて直した不具合: 並列の BRepCheck の非決定(直列に戻した)、表示用の三角形分割が載ったボディへの和でボディが消える(入力から外し、根本は画面へ配る分割を文書の形に残さない)。
+- meshing: 境界検査の候補探し(組1)は sol のレビューで2件の問題が出て取り消し、Delabella(組2)と一緒に別の候補にした(decisions.md)。
+  その後、別のセッションで組1を直して develop に入れた。組2は、Delabella そのものが正方形の格子の穴の板で極端に遅いと分かり、入れない。
+- sol のレビュー: 統合した状態で pass。最後の全件テスト 2,839 passed、保存済み 208 文書と合成の 300 本で基準と一致。develop → main の PR を出した。
+
+### 次にやること
+
+- 本人: develop → main の PR のマージ。ゴーストの待ち 250 ms を縮めるか(カード `output/autopilot/ghost_wait_card.html`)
+- 別の候補(どれも decisions.md に確かめ方): ブーリアンの並列(`cloud/perf-boolean` の b0b79f9)、面の分割を子プロセスへ出す(GIL。
+  穴の多い平面の分割を速くする手は、Delabella が使えないと分かったのでこれが先)
+
+### 再開の手順
+
+- 検証の環境: Python 3.14 の環境(`UV_PROJECT_ENVIRONMENT=<一時フォルダ> uv sync --frozen`)、Node は `C:\Program Files\nodejs` の 24。
+- 枝の確かめ方: `git archive <枝>` を一時フォルダに書き出し、そこで `tools/replay_fingerprint.py --out` を保存済みの文書群の写しに掛けて
+  基準の指紋と `--compare`、全件テストの失敗の顔ぶれを基準と比べる。合成の文書群は `tools/synthetic_corpus.py generate --seed 1 --count 300` で
+  1回だけ作り、`steps`(と `--triangles`)を前後で取って `compare`。
+- クラウドの依頼文は枝 `cloud/briefs`、各枝の報告は `cloud/perf-<名前>` の `REPORT-<名前>.md`(develop には取り込まない)。
+
 ## Fusion の STEP の丸めが消えない(2026-11-04、実装済み。main への PR を出した)
 
 ゴール(本人の依頼は decisions.md「[面の削除] … 依頼と進め方」): フィレットの削除が断られる原因を特定して直す。

@@ -180,11 +180,33 @@ def regions_with_geometry(
 
     **三角形にできない領域があっても、ほかの領域を落とさない**: `on_error(領域の添字, 例外)` を渡すと、その領域は
     三角形が空のまま一覧に残し(添字と面積は有効)、理由を `on_error` へ渡す。渡さなければ例外をそのまま上げる。
+
+    検出(`detect`)と塗り(`fill`)を続けて呼ぶのと同じ。粗さだけが変わる呼び手は、検出を持っておいて `fill` だけを呼ぶ。
     """
+    return fill(Detection(_detected(doc, sketch_id)), deviation, on_error)
+
+
+@dataclass(frozen=True, eq=False)
+class Detection:
+    """領域検出の結果(`detect`)。中の面は表(`_DETECTED`)と共有なので外へ出さず、`fill` が写してから三角形にする。"""
+
+    _items: List[dict]
+
+
+def detect(plane: dict, entities: List[dict]) -> Detection:
+    """姿勢 `plane` と展開した図形 `entities`(`expanded_entities`)の閉領域。同じ入力なら検出し直さない(`_DETECTED`)。"""
+    return Detection(_detected_for(plane, entities))
+
+
+def fill(
+    detection: Detection, deviation: float, on_error: Optional[Callable[[int, Exception], None]] = None
+) -> List[dict]:
+    """検出した領域を偏差 `deviation` で三角形にする。戻り値と `on_error` は `regions_with_geometry` と同じ。"""
+    faces = [kernel_sketch.copy_face(item["face"]) for item in detection._items]
     out: List[dict] = []
-    for item in _regions_detailed(doc, sketch_id):
+    for item, face in zip(detection._items, faces):
         try:
-            mesh = kernel.tessellate(item["face"], deviation)
+            mesh = kernel.tessellate(face, deviation)
         except Exception as error:  # noqa: BLE001  OCCT 由来の失敗は型で絞れない。領域ごとに隔離する
             if on_error is None:
                 raise
@@ -195,7 +217,7 @@ def regions_with_geometry(
             {
                 "index": item["index"],
                 "area": item["area"],
-                "centroid": item["centroid"],
+                "centroid": list(item["centroid"]),
                 "positions": first["positions"] if first else [],
                 "indices": first["indices"] if first else [],
             }
@@ -233,10 +255,13 @@ def _detected(doc: Document, sketch_id: SketchId) -> List[dict]:
     sketch = get_sketch(doc, sketch_id)
     if not sketch.entities:
         return []
-    entities = expanded_entities(doc, sketch_id)
+    return _detected_for(sketch.plane, expanded_entities(doc, sketch_id))
+
+
+def _detected_for(plane: dict, entities: List[dict]) -> List[dict]:
     if not entities:
         return []
-    signature = json.dumps([sketch.plane, entities], sort_keys=True, default=str)
+    signature = json.dumps([plane, entities], sort_keys=True, default=str)
     with _DETECTED_LOCK:
         cached = _DETECTED.get(signature)
         if cached is not None:
@@ -244,7 +269,7 @@ def _detected(doc: Document, sketch_id: SketchId) -> List[dict]:
     if cached is None:
         # 面に貼ったスケッチでも `TopoDS_Face` は渡さない。使うのは無限平面としての姿勢だけで、
         # それは `plane["frame"]` が持つ(`plane_frame` のdocstring)。
-        cached = kernel_sketch.sketch_regions(sketch.plane, entities)
+        cached = kernel_sketch.sketch_regions(plane, entities)
         with _DETECTED_LOCK:
             _DETECTED[signature] = cached
             while len(_DETECTED) > _DETECTED_LIMIT:

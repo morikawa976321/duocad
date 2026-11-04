@@ -976,6 +976,15 @@ def _log(message: str) -> None:
 VITE_DEV_PORT = 5173
 
 
+def websocket_options(http_port: int) -> dict:
+    """画面の WebSocket の `serve` に渡す設定。
+
+    permessage-deflate は切る: 送信のたびの圧縮がループの上で 1 MB あたり約 40 ms かかり、ズームや移動の配信(数 MB)で
+    クリックを待たせていた(実測)。サーバは 127.0.0.1 にしか bind しないので、圧縮しなくても転送は数 ms。
+    """
+    return {"max_size": 8 * 1024 * 1024, "origins": allowed_origins(http_port), "compression": None}
+
+
 def allowed_origins(http_port: int) -> list:
     """WebSocketを開いてよい `Origin` の許可リスト。
 
@@ -1044,14 +1053,7 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
         _log(f"warning: 静的配信を立てられなかった(stdioのMCPだけで続行): {error}")
         served = False
 
-    origins = allowed_origins(args.http_port)
-    async with serve(
-        server.handle,
-        "127.0.0.1",
-        args.port,
-        max_size=8 * 1024 * 1024,
-        origins=origins,
-    ):
+    async with serve(server.handle, "127.0.0.1", args.port, **websocket_options(args.http_port)):
         _log(f"duocad MCP server: stdio / WebSocket {ws_url}")
         if served:
             _log(f"  ブラウザで開く: {page_url}")

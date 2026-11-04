@@ -12,6 +12,7 @@
 | OCP の `TopTools_ListOfShape` を `for` / `list()` で走査すると、中身の数によらず1回 0.35〜0.45 ms(空でも) | `duocad/brep_topology.py` `listed` |
 | `BRepAlgoAPI_Fuse(a, b)` など2引数のコンストラクタはその場で演算し、続く `Build()` でもう一度走る | `duocad/brep_operations.py` `build_boolean` |
 | `BRepBndLib::Add` は面のトリムを見ない・`AddOptimal` は繰り返しても速くならない・`useTriangulation=True` は前回の三角形分割を見る・`SetGap(0.0)` の効き方は `Add` の前後で変わる | `duocad/kernel.py` `_bounding_box_extents` / `duocad/topopt/voxelize.py` `_shape_bbox` / [TOPOPT.md](TOPOPT.md)「OCCT の bbox はトリムを見ない」 |
+| 面・辺に載った三角形分割を、ブーリアン・GF・`BRepBndLib::Add` の既定が読む(画面へ配った分割を形に残すと、配ったかどうかで演算の結果が変わる) | `duocad/kernel.py` `tessellate` / `duocad/brep_operations.py` `build_boolean` / `duocad/kernel_interference.py` `triangles` |
 | STEP 読み込みは `ReadFile()` の戻り値を見ずに `TransferRoots()` へ進むとプロセスごと落ちる(0xC0000005)。書き出しは `Transfer()` の戻り値も見る | `duocad/kernel.py` `read_step` / `write_step`、`duocad/io_step.py` |
 | STEP 書き出しは C++ から stdout へ統計を吐く(`redirect_stdout` では止まらない。fd 1 を fd 2 へ振り替える) | `duocad/mcp_server.py` `_claim_stdout` |
 | STL の偏差は `isRelative=False` で渡す(相対だと偏差を1/20にしても1バイトも変わらない) | `duocad/kernel.py` `tessellate` |

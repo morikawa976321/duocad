@@ -106,8 +106,8 @@ def offset_plane_frame(frame: dict, distance: float) -> dict:
 def copy_face(face: Any) -> Any:
     """領域の面の写し(形も三角形分割も元と共有しない)。
 
-    `region` は検出結果を入力の署名で共有する(`region._DETECTED`)。面は三角形分割を自分に持ち(`kernel.tessellate` が
-    張り替える)、押し出したソリッドの底面にもそのまま入るので、共有した面を外へ渡すと、別の粗さの分割が混ざる・
+    `region` は検出結果を入力の署名で共有する(`region._DETECTED`)。面は測る間だけ三角形分割を書き込まれ(`kernel.tessellate`)、
+    押し出したソリッドの底面にもそのまま入るので、共有した面を外へ渡すと、別の粗さの分割が混ざる・
     同じ領域を2回押し出した2つのボディが同じ面を共有してブーリアンの結果が変わる。外へ渡すのは必ずこの写し。
     """
     return TopoDS.Face_s(BRepBuilderAPI_Copy(face, True, False).Shape())

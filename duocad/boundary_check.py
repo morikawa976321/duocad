@@ -180,31 +180,153 @@ def degenerate_mask(tri: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------------------
 # 検査本体
 # --------------------------------------------------------------------------------------
-def _candidate_pairs(face_of_seg: np.ndarray, lo: np.ndarray, hi: np.ndarray):
-    """外接矩形が重なる同じ面の線分の組 (i, j), i<j。x の掃引で候補を絞り、y で落とす。
+#: 線分がこれより少なければ帯に分けない(実測: 穴を格子に並べた境界で、x の掃引 → 帯が 1,536 本 0.46 → 0.71 ms、4,608 本
+#: 1.8 → 2.2 ms、9,216 本 7.3 → 2.3 ms。小さい入力では x の掃引がキャッシュに収まり、帯の見積もりと準備の固定費が勝つ)。
+_BANDED_FROM = 8192
+#: 帯に分けるのは、帯の手間がどれも x の掃引の候補 `total` 組に比べて小さいときだけ: 帯の写しの総数は `total` の
+#: `_BANDED_COPIES` まで(超えたら帯を減らし、線分の数より減らせなければ分けない)、帯で作る組は `_BANDED_MADE` まで、y でも
+#: 重なって残る組(最後に元の並びへ並べ直す)は `_BANDED_KEEP` まで。作る組と残る組は、写しを並べる前に、候補から乱数で選んだ
+#: `_SAMPLES` 組で見積もる。実測(帯に分けない掃引 → 帯、どれも sol のレビューの反例): 写しが候補の 0.44 倍の縦に長い線分
+#: 26 万本で 112 → 379 ms、候補が全部残る高い線分の束 16,384 本で 6 → 20 ms、作る組が候補の大半になる縦に長い線分 26 万本で
+#: 写しを並べてから断ると 204 → 370 ms。穴を格子に並べた境界は、写し 0.03 倍・残る組 2% で 45 → 6 ms。
+_BANDED_COPIES = 1 / 16
+_BANDED_MADE = 1 / 4
+_BANDED_KEEP = 1 / 16
+_SAMPLES = 1024
+#: 写しを並べた後の、帯で作る組の正確な数の確かめ(見積もりの外れの安全網)は、見積もりより緩くする。並べた後に断ると、続けるより
+#: 遅い(実測: 見積もり 25%・実際 28% の縦に長い線分 26 万本で、断ると 277 → 359 ms、続けると 200 ms。実際 53% で続けると 202 → 210 ms)。
+_BANDED_MADE_SORTED = 1 / 2
+#: 帯の写しは、上の割合のほかに線分の数のこの倍数まで(メモリ)。
+_BAND_COPIES = 4
 
-    面ごとに x をずらして 1 本の掃引にする。同じ定数の加算は単調なので、ずらした後の比較が
-    元の比較より狭くなることはない(候補の取りこぼしが起きない)。
+
+def _candidate_pairs(face_of_seg: np.ndarray, lo: np.ndarray, hi: np.ndarray):
+    """外接矩形が重なる同じ面の線分の組 (i, j), i<j。
+
+    組の集合は「面ごとに x をずらした区間と y の区間がどちらも(閉区間で)重なる組」で、並びは x をずらした左端の安定な
+    順位の組 (前, 後) の辞書順。面ごとに x をずらすのは、同じ定数の加算が単調で、ずらした後の比較が元の比較より狭く
+    ならないため(候補の取りこぼしが起きない)。
+
+    x の掃引の候補が線分に比べて多く、その大半が y で落ちるときは、y を帯に分けて (面, 帯) ごとに x の掃引をする
+    (`_banded_pairs`)。x の掃引だけでは、穴 384 の板の面(線分 19.6 万)で y で落とす組が 875 万になる。
     """
     span = float(hi[:, 0].max() - lo[:, 0].min()) + 1.0
     shift = face_of_seg.astype(np.float64) * span * 2.0
     lo_x = lo[:, 0] + shift
     hi_x = hi[:, 0] + shift
     order = np.argsort(lo_x, kind='stable')
-    lo_sorted = lo_x[order]
-    upper = np.searchsorted(lo_sorted, hi_x[order], side='right')
+    upper = np.searchsorted(lo_x[order], hi_x[order], side='right')
     base = np.arange(len(order))
     counts = np.maximum(upper - base - 1, 0)
     total = int(counts.sum())
-    if total == 0:
-        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
-    second = np.repeat(base + 1, counts) + (np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts))
-    i = order[np.repeat(base, counts)]
-    j = order[second]
-    keep = (face_of_seg[i] == face_of_seg[j]) & (lo[j, 1] <= hi[i, 1]) & (lo[i, 1] <= hi[j, 1])
+    banded = None
+    if len(order) >= _BANDED_FROM and len(order) <= _BANDED_COPIES * total:
+        banded = _banded_pairs(face_of_seg, lo, hi, lo_x, hi_x, order, counts, total)
+    if banded is None:
+        if total == 0:
+            return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+        i = order[np.repeat(base, counts)]
+        j = order[np.repeat(base + 1, counts) + _ranges(counts)]
+        keep = (face_of_seg[i] == face_of_seg[j]) & (lo[j, 1] <= hi[i, 1]) & (lo[i, 1] <= hi[j, 1])
+        i, j = i[keep], j[keep]
+        return np.minimum(i, j), np.maximum(i, j)
+    i, j = banded
+    keep = (lo[j, 1] <= hi[i, 1]) & (lo[i, 1] <= hi[j, 1])
     i, j = i[keep], j[keep]
-    swap = i > j
-    return np.where(swap, j, i), np.where(swap, i, j)
+    rank = np.empty(len(order), dtype=np.int64)
+    rank[order] = base
+    sequence = np.argsort(np.minimum(rank[i], rank[j]) * len(order) + np.maximum(rank[i], rank[j]))
+    i, j = i[sequence], j[sequence]
+    return np.minimum(i, j), np.maximum(i, j)
+
+
+def _banded_pairs(face_of_seg, lo, hi, lo_x, hi_x, order, counts, total):
+    """(面, y の帯) ごとの x の掃引で作る組 (前, 後)(並びは不定)。帯に分けられない入力と、帯の手間が x の掃引の候補 `total`
+    に比べて小さくならない入力は None。`order`・`counts` は x の掃引の左端の順と、各位置の後ろの重なる区間の数。
+
+    組は、どちらかがその帯から始まるものだけを作る。y の区間が重なる組は、始まりの帯の上の側に両方いて、そこで1回だけ
+    作られる。作る組は同じ面の x の重なる組の一部なので、帯に分けない掃引より多くならない。x は値の順位(整数)で比べるので、
+    浮動小数の比較と同じ結果になる。座標が有限でない入力(面ごとのずらしのあふれを含む)は None。
+    """
+    lo_y, hi_y = lo[:, 1], hi[:, 1]
+    if not (np.isfinite(lo_x).all() and np.isfinite(hi_x).all() and np.isfinite(lo_y).all() and np.isfinite(hi_y).all()):
+        return None
+    # 候補から選んだ組で、y でも重なる割合と、帯が重なる(帯で作る)割合を見積もる。標本は呼ぶたびに乱数で選ぶ(決まった位置だと、
+    # その位置の組だけ重ならないように作った入力で見積もりが外れ、写しを並べてから断ることになる)。組と並びは標本によらない
+    rng = np.random.default_rng()
+    picks = rng.integers(0, total, _SAMPLES)
+    ends = np.cumsum(counts)
+    k = np.searchsorted(ends, picks, side='right')
+    si, sj = order[k], order[k + 1 + picks - (ends[k] - counts[k])]
+    same = face_of_seg[si] == face_of_seg[sj]
+    if (same & (lo_y[sj] <= hi_y[si]) & (lo_y[si] <= hi_y[sj])).mean() >= _BANDED_KEEP:
+        return None
+    count = len(lo_x)
+    limit = min(_BAND_COPIES * count, _BANDED_COPIES * total)
+    cuts = _y_cuts(lo_y, hi_y, limit, rng)
+    if cuts is None:
+        return None
+    if (same & (np.searchsorted(cuts, lo_y[sj], side='right') <= np.searchsorted(cuts, hi_y[si], side='right'))
+            & (np.searchsorted(cuts, lo_y[si], side='right') <= np.searchsorted(cuts, hi_y[sj], side='right'))).mean() >= _BANDED_MADE:
+        return None
+    band_lo = np.searchsorted(cuts, lo_y, side='right')
+    band_hi = np.searchsorted(cuts, hi_y, side='right')
+    if int((band_hi - band_lo + 1).sum()) > limit:
+        return None
+    band_count = len(cuts) + 1
+    values = np.unique(np.concatenate((lo_x, hi_x)))
+    width = len(values) + 1
+    faces, face_index = np.unique(face_of_seg, return_inverse=True)
+    if len(faces) * band_count * width >= 2 ** 62:
+        return None
+    rank_lo = np.searchsorted(values, lo_x)
+    rank_hi = np.searchsorted(values, hi_x)
+    copies = band_hi - band_lo + 1
+    member = np.repeat(np.arange(count), copies)
+    band = np.repeat(band_lo, copies) + _ranges(copies)
+    group = face_index[member].astype(np.int64) * band_count + band
+    keys_lo = group * width + rank_lo[member]
+    keys_hi = group * width + rank_hi[member]
+    sorted_copies = np.argsort(keys_lo, kind='stable')
+    upper = np.searchsorted(keys_lo[sorted_copies], keys_hi[sorted_copies], side='right')
+    starts = band[sorted_copies] == band_lo[member[sorted_copies]]
+    # 帯から始まる写しは、後ろの重なる写し全部と組む。帯の前から続く写しは、後ろの重なる写しのうち帯から始まるものとだけ組む
+    first = np.flatnonzero(starts)
+    counts_first = np.maximum(upper[first] - first - 1, 0)
+    rest = np.flatnonzero(~starts)
+    begin = np.searchsorted(first, rest, side='right')
+    counts_rest = np.maximum(np.searchsorted(first, upper[rest], side='left') - begin, 0)
+    if int(counts_first.sum()) + int(counts_rest.sum()) > _BANDED_MADE_SORTED * total:
+        return None
+    a = np.concatenate((np.repeat(first, counts_first), np.repeat(rest, counts_rest)))
+    b = np.concatenate((np.repeat(first + 1, counts_first) + _ranges(counts_first),
+                        first[np.repeat(begin, counts_rest) + _ranges(counts_rest)]))
+    return member[sorted_copies[a]], member[sorted_copies[b]]
+
+
+def _y_cuts(lo_y: np.ndarray, hi_y: np.ndarray, copies: float, rng):
+    """y の帯の境目(昇順。帯の番号は `searchsorted(境目, y, 'right')` で、y について単調)。境目は乱数で選んだ線分の端点の分位で
+    決める。帯の数は、帯をまたぐ線分の写しの総数の見積もりが `copies` の 3/4 以下になる最大(多くて線分の数の平方根)にし、2 に届かなければ
+    None。見積もりに余裕を持たせるのは、正確な数が `copies` を超えると帯に分けるのをやめるため。
+
+    1本の線分がまたぐ帯の数は 1 + (lo, hi] に入る境目の数で、およそ 1 + 帯の数 × (端点の分布の上で (lo, hi] が占める割合)。
+    """
+    count = len(lo_y)
+    chosen = rng.integers(0, count, min(count, 2 * _SAMPLES))
+    sample_lo, sample_hi = lo_y[chosen], hi_y[chosen]
+    sample = np.sort(np.concatenate((sample_lo, sample_hi)))
+    share = float((np.searchsorted(sample, sample_hi, side='right') - np.searchsorted(sample, sample_lo, side='right')).mean())
+    share /= len(sample)
+    room = 0.75 * copies / count - 1.0
+    bands = int(np.sqrt(count)) if share <= 0.0 else int(min(np.sqrt(count), room / share))
+    if bands < 2:
+        return None
+    return sample[np.arange(1, bands) * len(sample) // bands]
+
+
+def _ranges(counts: np.ndarray) -> np.ndarray:
+    """`counts` の各要素について 0..count-1 を並べた列。"""
+    return np.arange(int(counts.sum())) - np.repeat(np.cumsum(counts) - counts, counts)
 
 
 def _group_pairs(keys: np.ndarray):

@@ -22,7 +22,7 @@ from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeSolid
 from OCP.BRepCheck import BRepCheck_Shell, BRepCheck_Status
-from OCP.BRepClass import BRepClass_FaceClassifier
+from OCP.BRepClass import BRepClass_FaceClassifier, BRepClass_FaceExplorer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.BRepLib import BRepLib
 from OCP.BRepLProp import BRepLProp_SLProps
@@ -120,7 +120,7 @@ def delete_faces(shape: Any, face_indices: Sequence[int], *, interactive: bool =
     """`face_indices`(1始まり)の面を消し、周りの面を延ばして閉じ直した**新しい形状**を返す(計算は子プロセス)。
 
     `interactive` は画面・MCP からの操作(期限 `kernel_worker.INTERACTIVE_TIMEOUT_S`)。ログの再生は False で期限なし。戻り値:
-        {"shape": <TopoDS_Shape>, "provenance": {...}}
+        {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_after": <結果の体積>}
     """
     indices = _checked_indices(shape, face_indices, VERB_DELETE)
     return kernel.remembered(
@@ -198,7 +198,9 @@ def _checked_indices(shape: Any, face_indices: Sequence[int], verb: str) -> List
 # 計算(子プロセス)
 # --------------------------------------------------------------------------------------
 def compute(verb: str, shape: Any, arguments: dict) -> dict:
-    """子プロセスの入口。断ったら `ValueError`(文は原因と言い換え)。"""
+    """子プロセスの入口。断ったら `ValueError`(文は原因と言い換え)。
+
+    `"volume_after"` は関門で積分した結果の体積で、親の `kernel_worker.run` が戻った形の体積として覚える(積分し直さない)。"""
     indices = [int(index) for index in arguments["faces"]]
     face_map = _brep_topology._face_map(shape)
     faces = [_brep_topology._face_at(face_map, index) for index in indices]
@@ -217,7 +219,7 @@ def compute(verb: str, shape: Any, arguments: dict) -> dict:
         raise ValueError(f"{message}: {error.hint}" if error.hint else message) from error
     successors = {str(key): positions for key, positions in table.items()}
     provenance.update(_brep_topology._face_map_projection(successors, _brep_topology._face_map(final).Extent()))
-    return {"shape": final, "provenance": provenance}
+    return {"shape": final, "provenance": provenance, "volume_after": _brep_geometry.volume(final)}
 
 
 # --------------------------------------------------------------------------------------
@@ -420,19 +422,26 @@ def _region_kept(old: Any, images: List[Any]) -> bool:
     (標本の間の細い欠けは見逃し、残す面を正当に削る閉じ方は断る)。これが無いと、フィレット1辺の箱の下面と奥面を消したとき
     OCCT が警告なしに返す 214.6 mm³ の破片(元 23785 mm³)を、ほかの検査が全部通した。
     """
+    tests = [_point_on_face(image) for image in images]
     for point in _interior_points(old, _REGION_SAMPLES):
-        if not any(_point_on_face(point, image) for image in images):
+        if not any(test(point) for test in tests):
             return False
     return True
 
 
-def _point_on_face(point: tuple, face: Any) -> bool:
-    projector = GeomAPI_ProjectPointOnSurf(gp_Pnt(*point), BRep_Tool.Surface_s(face))
-    if projector.NbPoints() == 0 or projector.LowerDistance() > LINEAR_TOL:
-        return False
-    u, v = _into_face_period(face, *projector.LowerDistanceParameters())
-    state = BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State()
-    return state in (TopAbs_State.TopAbs_IN, TopAbs_State.TopAbs_ON)
+def _point_on_face(face: Any):
+    """点 `(x, y, z)` が `face` の上(曲面から `LINEAR_TOL` 以内で、面の内側か境界)にあるかを返す関数。"""
+    surface = BRep_Tool.Surface_s(face)
+    into_period = _face_period(face)
+    classify = _classifier(face)
+
+    def test(point: tuple) -> bool:
+        projector = GeomAPI_ProjectPointOnSurf(gp_Pnt(*point), surface)
+        if projector.NbPoints() == 0 or projector.LowerDistance() > LINEAR_TOL:
+            return False
+        return classify(*into_period(*projector.LowerDistanceParameters())) in (TopAbs_State.TopAbs_IN, TopAbs_State.TopAbs_ON)
+
+    return test
 
 
 # --------------------------------------------------------------------------------------
@@ -1229,13 +1238,14 @@ def _interior_points(face: Any, count: int) -> List[tuple]:
     (格子の先頭から取ると UV の片側に寄り、段の削除で面の上半分が消えたのを見逃した)。"""
     u1, u2, v1, v2 = BRepTools.UVBounds_s(face)
     adaptor = BRepAdaptor_Surface(face)
+    classify = _classifier(face)
     found = []
     steps = max(3, int(math.ceil(math.sqrt(count * 4))))
     for i in range(1, steps):
         for j in range(1, steps):
             u = u1 + (u2 - u1) * i / steps
             v = v1 + (v2 - v1) * j / steps
-            if BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State() == TopAbs_State.TopAbs_IN:
+            if classify(u, v) == TopAbs_State.TopAbs_IN:
                 point = adaptor.Value(u, v)
                 found.append((point.X(), point.Y(), point.Z()))
     if not found:
@@ -1261,6 +1271,8 @@ def _points_from_mesh(face: Any) -> List[tuple]:
         return []
     transform = location.Transformation()
     surface = BRep_Tool.Surface_s(face)
+    into_period = _face_period(face)
+    classify = _classifier(face)
     found = []
     for t in range(1, triangulation.NbTriangles() + 1):
         corners = [triangulation.Node(k).Transformed(transform) for k in triangulation.Triangle(t).Get()]
@@ -1268,25 +1280,41 @@ def _points_from_mesh(face: Any) -> List[tuple]:
         projector = GeomAPI_ProjectPointOnSurf(centre, surface)
         if projector.NbPoints() == 0:
             continue
-        u, v = _into_face_period(face, *projector.LowerDistanceParameters())
-        if BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), 1e-7).State() == TopAbs_State.TopAbs_IN:
+        if classify(*into_period(*projector.LowerDistanceParameters())) == TopAbs_State.TopAbs_IN:
             point = projector.NearestPoint()
             found.append((point.X(), point.Y(), point.Z()))
     return found
 
 
-def _into_face_period(face: Any, u: float, v: float):
-    """周期面では、射影の角度が面の持つ範囲から一周ずれて返ることがある。面の UV の範囲へ寄せる
+def _face_period(face: Any):
+    """`(u, v)` を `face` の UV の範囲の周期へ寄せる関数。周期面では、射影の角度が面の持つ範囲から一周ずれて返ることがある
     (寄せないと面の内側の点を「外」と判定し、実物の STEP の穴・丸めの正しい削除を断った)。"""
     u1, _, v1, _ = BRepTools.UVBounds_s(face)
     adaptor = BRepAdaptor_Surface(face)
-    if adaptor.IsUPeriodic():
-        period = adaptor.UPeriod()
-        u = u1 + math.fmod(math.fmod(u - u1, period) + period, period)
-    if adaptor.IsVPeriodic():
-        period = adaptor.VPeriod()
-        v = v1 + math.fmod(math.fmod(v - v1, period) + period, period)
-    return u, v
+    u_period = adaptor.UPeriod() if adaptor.IsUPeriodic() else None
+    v_period = adaptor.VPeriod() if adaptor.IsVPeriodic() else None
+
+    def into_period(u: float, v: float):
+        if u_period is not None:
+            u = u1 + math.fmod(math.fmod(u - u1, u_period) + u_period, u_period)
+        if v_period is not None:
+            v = v1 + math.fmod(math.fmod(v - v1, v_period) + v_period, v_period)
+        return u, v
+
+    return into_period
+
+
+def _classifier(face: Any):
+    """`(u, v)` の `face` に対する位置(`TopAbs_State`。許容差 1e-7)を返す関数。面から作る `BRepClass_FaceClassifier` と同じ判定。
+
+    OCCT 7.9.3 の面から作る分類は、点ごとに探索器を作り直して面の UV の範囲を測り直す(穴 384 個の平面で1点 0.25 ms、
+    分類全体の約2割)。探索器に持ち越されるのはその範囲だけで(辺の走査・線の選び直しは点ごとに初めから)、判定は変わらない。"""
+    explorer = BRepClass_FaceExplorer(face)
+
+    def classify(u: float, v: float):
+        return BRepClass_FaceClassifier(explorer, gp_Pnt2d(u, v), 1e-7).State()
+
+    return classify
 
 
 # --------------------------------------------------------------------------------------
