@@ -458,16 +458,40 @@ def tessellate(
 def _describe_face(face: Any, index: int) -> dict:
     """1面ぶんの三角形・分類・面積・重心・法線。"""
     positions, indices = _face_triangles(face)
-    area, centroid = _brep_geometry._face_props(face)
+    kind, area, centroid, normal = _face_traits(face)
     return {
         "index": index,
-        "kind": _brep_geometry.classify_face(face),
+        "kind": kind,
         "area": area,
         "centroid": list(centroid),
-        "normal": list(_brep_geometry._face_normal(face)),
+        "normal": list(normal),
         "positions": positions,
         "indices": indices,
     }
+
+
+#: 面の分類・面積・重心・法線(`_face_traits`)を面の同一性(TShape・Location・向き)で覚える。測り方(偏差)に依らないので、
+#: ズームで測り直す面や、形が変わっても残った面で求め直さない(733 面で1回 83 ms)。
+_FACE_TRAITS: "OrderedDict[Any, tuple]" = OrderedDict()
+_FACE_TRAITS_LIMIT = 50_000
+_FACE_TRAITS_LOCK = threading.Lock()
+
+
+def _face_traits(face: Any) -> tuple:
+    """`(分類, 面積, 重心, 外向きの法線)`。"""
+    key = shape_key(face)
+    with _FACE_TRAITS_LOCK:
+        held = _FACE_TRAITS.get(key)
+        if held is not None:
+            _FACE_TRAITS.move_to_end(key)
+            return held
+    area, centroid = _brep_geometry._face_props(face)
+    traits = (_brep_geometry.classify_face(face), area, centroid, _brep_geometry._face_normal(face))
+    with _FACE_TRAITS_LOCK:
+        _FACE_TRAITS[key] = traits
+        while len(_FACE_TRAITS) > _FACE_TRAITS_LIMIT:
+            _FACE_TRAITS.popitem(last=False)
+    return traits
 
 
 def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], Iterable[int]]) -> dict:
@@ -1159,20 +1183,26 @@ def _face_triangles(face: Any) -> tuple:
     if triangulation is None:
         return [], []
 
-    is_identity = location.IsIdentity()
-    transformation = location.Transformation()
+    node = triangulation.Node
     positions: List[float] = []
-    for node_index in range(1, triangulation.NbNodes() + 1):
-        node = triangulation.Node(node_index)
-        if not is_identity:
-            node = node.Transformed(transformation)
-        positions.extend((node.X(), node.Y(), node.Z()))
+    extend = positions.extend
+    if location.IsIdentity():
+        for node_index in range(1, triangulation.NbNodes() + 1):
+            extend(node(node_index).Coord())
+    else:
+        transformation = location.Transformation()
+        for node_index in range(1, triangulation.NbNodes() + 1):
+            extend(node(node_index).Transformed(transformation).Coord())
 
-    is_reversed = face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED
+    triangle = triangulation.Triangle
     indices: List[int] = []
-    for triangle_index in range(1, triangulation.NbTriangles() + 1):
-        first, second, third = triangulation.Triangle(triangle_index).Get()
-        if is_reversed:
-            second, third = third, second
-        indices.extend((first - 1, second - 1, third - 1))
+    extend = indices.extend
+    if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
+        for triangle_index in range(1, triangulation.NbTriangles() + 1):
+            first, second, third = triangle(triangle_index).Get()
+            extend((first - 1, third - 1, second - 1))
+    else:
+        for triangle_index in range(1, triangulation.NbTriangles() + 1):
+            first, second, third = triangle(triangle_index).Get()
+            extend((first - 1, second - 1, third - 1))
     return positions, indices

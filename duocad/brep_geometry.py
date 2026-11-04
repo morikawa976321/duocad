@@ -367,11 +367,12 @@ def _bounding_box(faces: List[dict]) -> dict:
     highs = [float("-inf")] * 3
     for face in faces:
         positions = face["positions"]
-        for offset in range(0, len(positions), 3):
-            for axis in range(3):
-                value = positions[offset + axis]
-                lows[axis] = min(lows[axis], value)
-                highs[axis] = max(highs[axis], value)
+        if len(positions) < 3:
+            continue
+        for axis in range(3):
+            column = positions[axis::3]
+            lows[axis] = min(lows[axis], min(column))
+            highs[axis] = max(highs[axis], max(column))
     if any(low == float("inf") for low in lows):
         lows, highs = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
     return meshbody.bbox_payload(lows, highs)
