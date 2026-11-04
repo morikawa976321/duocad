@@ -53,3 +53,29 @@ def entry_for(verb: str) -> EntryFn:
 def entries() -> Dict[str, EntryFn]:
     """verb名 -> 入口(写し)。"""
     return dict(_ENTRIES)
+
+
+_PREVIEW_FALLBACKS: Dict[str, EntryFn] = {}
+
+
+def preview_fallback(verb: str) -> Callable[[EntryFn], EntryFn]:
+    """`verb` のプレビューが形を断ったときに、代わりの案を探して写しの文書へ掛ける関数として登録する(デコレータ)。
+
+    形は `(document, **引数) -> dict | None`(入口と同じ引数)。見つけた案(画面へ載せる)か、無ければ None。
+    呼ぶのはプレビューだけで、確定・再生は呼ばない(記録した引数のとおりに掛ける)。断った verb が写しの文書を変えていないこと
+    (形を計算し終えてから文書を変える)を前提に、同じ写しへ掛ける。
+    """
+
+    def register(function: EntryFn) -> EntryFn:
+        existing = _PREVIEW_FALLBACKS.get(verb)
+        if existing is not None and _identity(existing) != _identity(function):
+            raise ValueError(f"verb {verb!r} のプレビューの代案が既に登録されている: {_identity(existing)}")
+        _PREVIEW_FALLBACKS[verb] = function
+        return function
+
+    return register
+
+
+def preview_fallback_for(verb: str) -> EntryFn | None:
+    """登録済みのプレビューの代案(無ければ None)。"""
+    return _PREVIEW_FALLBACKS.get(verb)

@@ -796,6 +796,8 @@
     }
     // 点だけで引数が揃うコマンド(線分など)はEnterの受け皿が無いので、数値欄にフォーカスが無いときのEnterをここで拾う(欄にあるときは `onNumberKeydown` が拾う)。
     if (event.key !== 'Enter' || !canCommit) return
+    // 押しっぱなしの自動の繰り返しでは確定しない(断られた確定を打ち直し続け、選択が広がった直後にも確定してしまう)。
+    if (event.repeat) return
     const target = event.target as HTMLElement | null
     // ボタン・選択肢も除く: フォーカスの残ったボタン(undo等)のEnterを奪うと、そのボタンでなくコマンドが確定する。
     if (ownsEnterKey(target)) return
@@ -808,6 +810,7 @@
     if (event.key === 'Enter') {
       if (isImeKey(event)) return
       event.preventDefault()
+      if (event.repeat) return
       commit()
       return
     }
