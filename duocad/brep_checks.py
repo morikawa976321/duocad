@@ -19,8 +19,13 @@ _NO_CHANGE_RTOL = 1e-9
 
 
 def _analyzer_valid(shape: "TopoDS_Shape") -> bool:
-    """`BRepCheck_Analyzer` の合否。部分形状の検査を並列に走らせる(733 面のボディで 153 → 77 ms、合否は直列と同じ。実測 2026-11-04)。"""
-    return BRepCheck_Analyzer(shape, True, True).IsValid()
+    """`BRepCheck_Analyzer` の合否。**直列で**検査する。
+
+    並列(3つ目の引数を True)は同じ形を時々「不正」と答える(ねじを刻んだ円錐の面取りの結果で、並列 60 回中 1 回・直列 20 回中 0 回。
+    Linux では 200 回中 8〜11 回。実測 2026-11-04)。文書の再生や確定が揺れて断られるうえ、並列の検査の後でメモリの破損で落ちた例もあった。
+    733 面のボディで直列 153 ms・並列 77 ms だが、合否が揺れる方を採らない。
+    """
+    return BRepCheck_Analyzer(shape, True, False).IsValid()
 
 
 def _checked_volume(
