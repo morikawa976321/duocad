@@ -1,6 +1,7 @@
 /**
  * 面の境界線と折れ目の線分。three.js の `EdgesGeometry` と同じ規則で、同じ線分を同じ順に返す
  * (`tests/eval_edge_segments.mjs` が突き合わせる)。添字は3の倍数個で、頂点の範囲内にあること(余りの添字は捨てる)。
+ * NaN の座標の中身のビット(signaling か)までは揃えない(写し方で変わる。NaN の頂点は描かれない)。
  *
  * `EdgesGeometry` は頂点を丸めた座標の文字列で突き合わせるので、ズームで測り直した QR1 の面を受けたとき、
  * 受信1回 138 ms のうち 111 ms がここだった(実測)。丸めた座標を数のまま突き合わせる。
@@ -9,7 +10,19 @@
 /** `EdgesGeometry` の `precisionPoints = 4`。 */
 const PRECISION = 10 ** 4
 
-/** 丸めた座標が同じ頂点に同じ番号を振る(`EdgesGeometry` の頂点の文字列が同じ ⇔ 番号が同じ)。 */
+/** 32 ビットの散らし(MurmurHash3 の fmix32)。上位ビットを下位へ混ぜる。 */
+function fmix(h: number): number {
+  h ^= h >>> 16
+  h = Math.imul(h, 0x85ebca6b)
+  h ^= h >>> 13
+  h = Math.imul(h, 0xc2b2ae35)
+  return h ^ (h >>> 16)
+}
+
+/**
+ * 丸めた座標が同じ頂点に同じ番号を振る(`EdgesGeometry` の頂点の文字列が同じ ⇔ 番号が同じ)。
+ * 表の位置は座標の下位ビットだけで決めない: 刻みが2の冪の倍数の格子だと全頂点が同じ位置に集まり、探索が二乗になる。
+ */
 function mergeRounded(positions: Float32Array, vertexCount: number): { ids: Int32Array; count: number } {
   const rx = new Float64Array(vertexCount)
   const ry = new Float64Array(vertexCount)
@@ -29,7 +42,7 @@ function mergeRounded(positions: Float32Array, vertexCount: number): { ids: Int3
     rx[vertex] = x
     ry[vertex] = y
     rz[vertex] = z
-    let slot = (Math.imul(x | 0, 73856093) ^ Math.imul(y | 0, 19349663) ^ Math.imul(z | 0, 83492791)) & mask
+    let slot = fmix(fmix(fmix(x | 0) ^ (y | 0)) ^ (z | 0)) & mask
     for (;;) {
       const other = table[slot]
       if (other === -1) {
