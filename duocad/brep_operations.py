@@ -7,6 +7,7 @@ from typing import Any, Sequence
 from OCP.BinTools import BinTools, BinTools_FormatVersion
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+from OCP.BRepTools import BRepTools
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.TopoDS import TopoDS_Shape
 from OCP.TopTools import TopTools_ListOfShape
@@ -116,6 +117,12 @@ def build_boolean(kind: str, first: TopoDS_Shape, second: TopoDS_Shape, fuzzy: f
     builder.SetTools(tools)
     if fuzzy:
         builder.SetFuzzyValue(fuzzy)
+    # 外部の罠: 入力の面に三角形分割(画面に配るとき `kernel_meshing.mesh_shape` が文書の形に書き込んだもの)が載っていると、
+    # 和が相手の立体を落として道具だけを返すことがある(合成の文書で、22 面・1,726.3 mm³ になる join が 6 面・8.41 mm³ に。
+    # 三角形分割を外すと正しい。実測 2026-11-04。干渉の GF も同じ罠を持つ: `kernel_interference`)。画面の配信は三角形を
+    # Python 側に持つので、ここで外しても表示は測り直さない。
+    BRepTools.Clean_s(first)
+    BRepTools.Clean_s(second)
     builder.Build()
     return builder
 
