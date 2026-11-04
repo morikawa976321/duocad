@@ -32,6 +32,7 @@ EVALUATORS = [
     "eval_resolution_tracker.mjs",
     "eval_screen_pick.mjs",
     "eval_section_view.mjs",
+    "eval_selection_grain.mjs",
     "eval_selection_ref_key.mjs",
     "eval_session_dispose.mjs",
     "eval_session_sender.mjs",

@@ -405,7 +405,7 @@ export interface Viewport {
    */
   highlight(refs: FaceRef[]): void
   /**
-   * 選択中のボディを強調する(空配列で解除)。形状最適化で保持/除外ソリッドを決めているあいだだけ非空。
+   * 選択中のボディ(と、ブーリアンのターゲットのように直接ピックで指したボディ)を全面強調する(空配列で解除)。
    * 選択は役割色(`setOptimizeState` の緑/赤)に勝つ。
    */
   highlightBodies(bodyIds: string[]): void
@@ -473,6 +473,12 @@ export interface Viewport {
    * フィレット・面取りの起動中だけ立てる(測定・回転軸は辺を1本ずつ指す)。
    */
   groupEdgeChains(on: boolean): void
+  /**
+   * ホバーを、指したものの持ち主の単位で光らせる(既定はどちらも `false`)。`body` はボディの全面、`entity` はスケッチの
+   * 図形全体(点を指しても図形の線を光らせる。点の図形はその点のまま)。持ち主ごとに効くコマンドの起動中だけ立てる
+   * (`commands/grain.ts`。クリックで選ばれるものとホバーで光るものを揃える)。
+   */
+  setHoverGrain(grain: { body: boolean; entity: boolean }): void
   /**
    * その辺と同じ連なりの辺の添字(`groupEdgeChains(false)` の間はその辺だけ)。
    * 連なりの単位で扱っているのに、その辺の連なりがまだ届いていなければ `null`。

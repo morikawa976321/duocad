@@ -710,8 +710,10 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 今の選択(`highlight` が受け取ったもの)。 */
   let selectedFaceKeys = new Set<string>()
-  /** ボディ単位の選択(`highlightBodies`。保持/除外を決めているあいだだけ埋まる)。 */
+  /** ボディ単位の選択(`highlightBodies`)。 */
   let selectedBodyIds = new Set<string>()
+  /** ホバーを持ち主の単位で光らせるか(`setHoverGrain`)。 */
+  let hoverGrain = { body: false, entity: false }
 
   /** 形状最適化(第3のモード)の役割。モードを抜けたら空にする(`setOptimizeState(null)`)。 */
   let bodyRoles = new Map<string, 'preserve' | 'exclude'>()
@@ -730,7 +732,8 @@ export function createViewport(container: HTMLElement): Viewport {
         const key = refKey(bodyId, face.index)
         const state: FaceMaterialState = hitAsBody || selectedFaceKeys.has(key) ? 'user' : 'plain'
         const role: OptimizeFaceRole = fixtureFaceKeys.has(key) ? 'fixture' : bodyRole
-        const isHovered = hoverFace !== null && hoverFace.bodyId === bodyId && hoverFace.faceIndex === face.index
+        const isHovered =
+          hoverFace !== null && hoverFace.bodyId === bodyId && (hoverGrain.body || hoverFace.faceIndex === face.index)
         if (entry.body.setFaceColor(face.index, faceColorFor(role, state, isHovered))) invalidate()
       }
     }
@@ -1162,7 +1165,15 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function applySketchHoverMaterials(): void {
-    sketchLayer.applySketchHoverMaterials(hoverSketchEntity)
+    sketchLayer.applySketchHoverMaterials(hoverSketchEntity, hoverGrain.entity)
+  }
+
+  function setHoverGrain(grain: { body: boolean; entity: boolean }): void {
+    if (grain.body === hoverGrain.body && grain.entity === hoverGrain.entity) return
+    hoverGrain = { body: grain.body, entity: grain.entity }
+    applyFaceMaterials()
+    applySketchHoverMaterials()
+    invalidate()
   }
 
   /**
@@ -2374,6 +2385,7 @@ export function createViewport(container: HTMLElement): Viewport {
     groupEdgeChains(on) {
       features.groupChains(on)
     },
+    setHoverGrain,
     edgeChain: features.chainOf,
     setEdgeChains: features.setChains,
     onEdgeChainWanted: features.onChainWanted,

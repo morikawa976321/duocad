@@ -1,6 +1,6 @@
 /**
  * `web/src/commands/*.ts` の `CommandDef` を**実際に読み込み**、`tests/test_ui_command_wiring.py` が
- * 突き合わせる値(id・`needsEnter` の結果・サーバへ行かない選択肢・ピック引数の名前)を JSON で標準出力へ書く。
+ * 突き合わせる値(id・`needsEnter` の結果・サーバへ行かない選択肢・ピック引数の名前・選択の粒度)を JSON で標準出力へ書く。
  *
  * Node の型除去は拡張子の無い相対 import(`from './command'`)を解決しない(Vite は補う)ので、
  * 解決に失敗したときだけ `.ts` を補う resolve フックを先に登録する。
@@ -11,6 +11,7 @@ import './ts_resolve_hook.mjs'
 
 const directory = new URL('../web/src/commands/', import.meta.url)
 const { needsEnter } = await import(new URL('command.ts', directory).href)
+const { grainOf } = await import(new URL('grain.ts', directory).href)
 
 const found = new Map()
 for (const file of readdirSync(directory).filter((name) => name.endsWith('.ts')).sort()) {
@@ -26,7 +27,7 @@ for (const file of readdirSync(directory).filter((name) => name.endsWith('.ts'))
           : [],
       )
       const picks = def.args.filter((arg) => arg.kind === 'pick').map((arg) => arg.name)
-      found.set(def.id, { id: def.id, file, needsEnter: needsEnter(def), unsent, picks })
+      found.set(def.id, { id: def.id, file, needsEnter: needsEnter(def), unsent, picks, grain: grainOf(def) })
     }
   }
 }
