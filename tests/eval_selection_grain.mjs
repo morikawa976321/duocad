@@ -76,6 +76,11 @@ assert.deepEqual(hoverGrainOf(NO_GRAIN, 'sketchEntity'), ENTITY, '軸・平面�
 
 // ============================================================== ボディを直接ピックする
 assert.deepEqual(pickedRefOf(bodyA), bodyA, 'ボディの参照はピックの値になる')
+assert.deepEqual(
+  pickedRefOf({ body: 'a', kind: 'body' }),
+  { body: 'a', kind: 'body' },
+  '添字の無いボディ参照も値になる(AI が共有引数に置く形。コアの `target_ref` も受ける)',
+)
 assert.equal(pickedRefOf({ body: 'a', kind: 'body', index: 2 }), null, '添字付きのボディ参照は値にしない')
 assert.equal(pickedRefOf({ body: 'a', kind: 'face' }), null, '添字の無い面は値にしない')
 assert.equal(pickedLabel(bodyA, 'body'), 'ボディ1つ')

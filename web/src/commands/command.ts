@@ -368,7 +368,8 @@ export function pickedRefOf(value: unknown): SelectionRef | null {
   const ref = value as Record<string, unknown>
   if (typeof ref.sketch === 'string') return typeof ref.entity === 'string' ? (value as SelectionRef) : null
   if (typeof ref.body !== 'string') return null
-  if (ref.kind === 'body') return ref.index === null ? (value as SelectionRef) : null
+  // コアの `target_ref` は添字の無いボディ参照も受ける(AI が `index` を省いて共有引数に置く)。
+  if (ref.kind === 'body') return ref.index === null || ref.index === undefined ? (value as SelectionRef) : null
   return typeof ref.index === 'number' ? (value as SelectionRef) : null
 }
 
