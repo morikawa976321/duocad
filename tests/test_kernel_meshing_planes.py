@@ -94,8 +94,17 @@ def assert_valid_plane_triangulation(face):
     return uv, triangles
 
 
-def illegal_edges(uv, triangles):
-    """内側の辺のうち、向かいの頂点が外接円の内に入るもの(厳密)の数。"""
+def incircle_exact(a, b, c, d):
+    ax, ay, bx, by, cx, cy, dx, dy = boundary_check.exact_integers((*a, *b, *c, *d))
+    adx, ady, bdx, bdy, cdx, cdy = ax - dx, ay - dy, bx - dx, by - dy, cx - dx, cy - dy
+    det = ((adx * adx + ady * ady) * (bdx * cdy - cdx * bdy) + (bdx * bdx + bdy * bdy) * (cdx * ady - adx * cdy)
+           + (cdx * cdx + cdy * cdy) * (adx * bdy - bdx * ady))
+    return (det > 0) - (det < 0)
+
+
+def illegal_edges(uv, triangles, *, surely=True):
+    """内側の辺のうち、向かいの頂点が外接円の内に入るものの数。`surely` なら浮動小数点で確かなものだけ(四角形のどちらの
+    三角形から見ても確かなもの。同じ円の上の丸めの範囲では見る側で確かさが変わる)、偽なら厳密。"""
     sense = int(np.sign(boundary_check.orient2d(uv[triangles[:1, 0]], uv[triangles[:1, 1]], uv[triangles[:1, 2]])[0]))
     opposite = {}
     for row in triangles.tolist():
@@ -105,7 +114,9 @@ def illegal_edges(uv, triangles):
     if not rows:
         return 0
     a, b, c, d = (uv[np.asarray(column)] for column in zip(*rows))
-    return int((sense * boundary_check.incircle(a, b, c, d) > 0).sum())
+    if surely:
+        return int((kernel_meshing._surely_inside(a, b, c, d, sense) & kernel_meshing._surely_inside(b, a, d, c, sense)).sum())
+    return sum(sense * incircle_exact(*row) > 0 for row in zip(a, b, c, d))
 
 
 def min_angle(xyz, triangles):
@@ -254,19 +265,21 @@ def test_flips_keep_fixed_edges_and_cocircular_quads():
     assert np.array_equal(kernel_meshing._delaunay_flips(thin, triangles, diagonal), triangles)
 
 
-def test_incircle_matches_exact_arithmetic_near_degenerate_points():
-    """浮動小数点で決まらない組(同じ円の上・その近く)も整数演算と同じ符号。"""
+def test_surely_inside_never_disagrees_with_exact_arithmetic():
+    """「確かに内」と答えた組は整数演算でも内。同じ円の上(とその丸めの範囲)の組には「確かに内」と答えない。"""
     rng = np.random.default_rng(5)
     rows = []
     for _ in range(400):
         center = rng.normal(size=2)
         angles = rng.uniform(0.0, 2.0 * math.pi, 4)
         points = center + np.column_stack((np.cos(angles), np.sin(angles)))
-        points[3] += rng.choice([0.0, 1e-17, -1e-15, 1e-9]) * rng.normal(size=2)
+        points[3] += rng.choice([0.0, 1e-17, -1e-15, 1e-9, 1e-3]) * rng.normal(size=2)
         rows.append(points)
     rows.append(np.asarray([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]))
     rows = np.asarray(rows)
-    got = boundary_check.incircle(rows[:, 0], rows[:, 1], rows[:, 2], rows[:, 3])
-    expected = [boundary_check.incircle_exact(*row) for row in rows]
-    assert got.tolist() == expected
-    assert expected[-1] == 0
+    orientation = boundary_check.orient2d(rows[:, 0], rows[:, 1], rows[:, 2]).astype(np.int64)
+    surely = kernel_meshing._surely_inside(rows[:, 0], rows[:, 1], rows[:, 2], rows[:, 3], orientation)
+    exact = np.asarray([incircle_exact(*row) for row in rows])
+    assert ((exact * orientation)[surely] > 0).all()
+    assert not surely[-1]
+    assert surely.any() and (~surely & (exact * orientation > 0)).any()

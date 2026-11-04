@@ -29,8 +29,6 @@ import numpy as np
 _EPS = np.finfo(np.float64).eps
 #: Shewchuk, "Adaptive Precision Floating-Point Arithmetic", orient2d の ccwerrboundA。
 _ORIENT2D_BOUND = (3.0 + 16.0 * _EPS) * _EPS
-#: 同・incircle の iccerrboundA。
-_INCIRCLE_BOUND = (10.0 + 96.0 * _EPS) * _EPS
 
 #: 報告する種類のうち、`open` 以外は共有辺の再分割で解消しうる(`open` は CAD 側の接続が無い)。
 FIXABLE_KINDS = frozenset(('cross', 'touch', 'overlap', 'fold'))
@@ -163,33 +161,6 @@ def segment_contacts(p1, p2, p3, p4):
     touch = ((o1 == 0) & inside(p1, p3, p4)) | ((o2 == 0) & inside(p2, p3, p4)) \
         | ((o3 == 0) & inside(p3, p1, p2)) | ((o4 == 0) & inside(p4, p1, p2))
     return cross, touch, collinear
-
-
-def incircle_exact(a, b, c, d) -> int:
-    """d が (a, b, c) の外接円の内なら +1・外なら -1・円の上なら 0(a, b, c が反時計回りのとき。時計回りなら符号が逆)。整数演算で厳密に求める。"""
-    ax, ay, bx, by, cx, cy, dx, dy = exact_integers((*a, *b, *c, *d))
-    adx, ady, bdx, bdy, cdx, cdy = ax - dx, ay - dy, bx - dx, by - dy, cx - dx, cy - dy
-    det = ((adx * adx + ady * ady) * (bdx * cdy - cdx * bdy) + (bdx * bdx + bdy * bdy) * (cdx * ady - adx * cdy)
-           + (cdx * cdx + cdy * cdy) * (adx * bdy - bdx * ady))
-    return (det > 0) - (det < 0)
-
-
-def incircle(a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray) -> np.ndarray:
-    """行ごとの `incircle_exact` の符号 (M,) int8。浮動小数点で確定しない行だけ厳密演算へ落とす(`orient2d` と同じ規律)。"""
-    adx, ady = a[:, 0] - d[:, 0], a[:, 1] - d[:, 1]
-    bdx, bdy = b[:, 0] - d[:, 0], b[:, 1] - d[:, 1]
-    cdx, cdy = c[:, 0] - d[:, 0], c[:, 1] - d[:, 1]
-    bc, cb = bdx * cdy, cdx * bdy
-    ca, ac = cdx * ady, adx * cdy
-    ab, ba = adx * bdy, bdx * ady
-    alift, blift, clift = adx * adx + ady * ady, bdx * bdx + bdy * bdy, cdx * cdx + cdy * cdy
-    det = alift * (bc - cb) + blift * (ca - ac) + clift * (ab - ba)
-    permanent = (alift * (np.abs(bc) + np.abs(cb)) + blift * (np.abs(ca) + np.abs(ac))
-                 + clift * (np.abs(ab) + np.abs(ba)))
-    sign = np.sign(det).astype(np.int8)
-    for row in np.flatnonzero(~(np.abs(det) > _INCIRCLE_BOUND * permanent)):
-        sign[row] = incircle_exact(a[row], b[row], c[row], d[row])
-    return sign
 
 
 def degenerate_mask(tri: np.ndarray) -> np.ndarray:

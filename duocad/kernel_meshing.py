@@ -70,6 +70,8 @@ DEFAULT_MAX_POINTS = 4_000_000
 DELABELLA_PLANE_POINTS = 1000
 #: 辺の裏返しの回数の上限(1回に、三角形を共有しない辺をまとめて裏返す)。届いたらその時点の分割を使う(どの時点でも正しい分割)。
 _FLIP_ROUNDS = 10_000
+#: Shewchuk, "Adaptive Precision Floating-Point Arithmetic", incircle の iccerrboundA。
+_INCIRCLE_BOUND = (10.0 + 96.0 * np.finfo(np.float64).eps) * np.finfo(np.float64).eps
 
 _FAILURE = IMeshData_Status.IMeshData_Failure
 _REUSED = IMeshData_Status.IMeshData_Reused
@@ -478,8 +480,29 @@ def _complete(df) -> bool:
     return triangulation.NbTriangles() == triangulation.NbNodes() + 2 * df.WiresNb() - 4
 
 
+def _surely_inside(a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray, sense: int) -> np.ndarray:
+    """d が (a, b, c) の外接円の内に**確かに**あるか(行ごと)。`sense` は (a, b, c) の向き(+1 反時計回り)。
+
+    浮動小数点の誤差境界で決まらない組(同じ円の上とその近く)は False。穴を等間隔に並べた面では、同じ穴を平行移動した
+    点どうしが長方形を作り、ちょうど同じ円の上に乗る組が多い(実測: 穴 54 の板 60 枚で 11 万組、整数演算で 1.2 秒)。
+    その組はどちらの対角線でも Delaunay なので、裏返さない。
+    """
+    adx, ady = a[:, 0] - d[:, 0], a[:, 1] - d[:, 1]
+    bdx, bdy = b[:, 0] - d[:, 0], b[:, 1] - d[:, 1]
+    cdx, cdy = c[:, 0] - d[:, 0], c[:, 1] - d[:, 1]
+    bc, cb = bdx * cdy, cdx * bdy
+    ca, ac = cdx * ady, adx * cdy
+    ab, ba = adx * bdy, bdx * ady
+    alift, blift, clift = adx * adx + ady * ady, bdx * bdx + bdy * bdy, cdx * cdx + cdy * cdy
+    det = alift * (bc - cb) + blift * (ca - ac) + clift * (ab - ba)
+    permanent = (alift * (np.abs(bc) + np.abs(cb)) + blift * (np.abs(ca) + np.abs(ac))
+                 + clift * (np.abs(ab) + np.abs(ba)))
+    return sense * det > _INCIRCLE_BOUND * permanent
+
+
 def _delaunay_flips(uv: np.ndarray, triangles: np.ndarray, fixed: np.ndarray) -> np.ndarray:
-    """平面の三角形分割の内側の辺を、外接円の判定(厳密)で Delaunay になるまで裏返す(Lawson)。`fixed` の辺は裏返さない。
+    """平面の三角形分割の内側の辺を、向かいの頂点が外接円の内に確かに入る限り裏返す(Lawson)。`fixed` の辺は裏返さない。
+    結果は、同じ円の上(丸めの範囲)の組を除いて Delaunay。
 
     外部の罠: Delabella は点の外接箱を軸ごとに [-0.5, 0.5] へ縮めてから分割する(`BRepMesh_DelabellaBaseMeshAlgo`)ので、
     外接箱が正方形でない面では UV の上で Delaunay にならない。辺の裏返しは三角形の数・節点・境界の線分を変えない。
@@ -520,7 +543,7 @@ def _delaunay_flips(uv: np.ndarray, triangles: np.ndarray, fixed: np.ndarray) ->
         t1, k1, t2, k2 = edge // 3, edge % 3, other // 3, other % 3
         a, b = triangles[t1, k1], triangles[t1, (k1 + 1) % 3]
         c, d = triangles[t1, (k1 + 2) % 3], triangles[t2, (k2 + 2) % 3]
-        illegal = sense * boundary_check.incircle(uv[a], uv[b], uv[c], uv[d]) > 0
+        illegal = _surely_inside(uv[a], uv[b], uv[c], uv[d], sense)
         if not illegal.any():
             break
         t1, k1, t2, k2, a, b, c, d = (v[illegal] for v in (t1, k1, t2, k2, a, b, c, d))
