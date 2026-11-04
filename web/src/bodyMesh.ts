@@ -11,6 +11,7 @@
  */
 import * as THREE from 'three'
 
+import { edgeSegments } from './edgeSegments'
 import type { FaceGeometry, GeometryPayload } from './viewportTypes'
 
 /** 1面ぶんの範囲。`index` はコアの面の添字(1始まり)。 */
@@ -77,13 +78,7 @@ function faceSphere(face: FaceGeometry): THREE.Sphere {
 function faceEdges(face: FaceGeometry): Float32Array {
   const known = perFace.get(face.positions) as { sphere: THREE.Sphere; edges: Float32Array | null }
   if (known.edges !== null) return known.edges
-  const part = new THREE.BufferGeometry()
-  part.setAttribute('position', new THREE.BufferAttribute(float32(face.positions), 3))
-  part.setIndex(new THREE.BufferAttribute(face.indices instanceof Uint32Array ? face.indices : Uint32Array.from(face.indices), 1))
-  const edgesGeometry = new THREE.EdgesGeometry(part, EDGE_THRESHOLD_DEGREES)
-  known.edges = edgesGeometry.getAttribute('position').array as Float32Array
-  edgesGeometry.dispose()
-  part.dispose()
+  known.edges = edgeSegments(float32(face.positions), face.indices, EDGE_THRESHOLD_DEGREES)
   return known.edges
 }
 
@@ -163,7 +158,7 @@ export function buildBodyMesh(
 
   let lines: THREE.LineSegments | null = null
   if (!flat) {
-    // 境界線(隣り合う同色の面を狙い分けるため)。面ごとに `EdgesGeometry` を取って繋ぐ: ボディ全体に掛けると、
+    // 境界線(隣り合う同色の面を狙い分けるため)。面ごとに線分を取って繋ぐ: ボディ全体に掛けると、
     // 接線で続く面の境目(角度 0)が「同じ面の内側」と同じ扱いで消える。
     const segments: Float32Array[] = []
     let segmentTotal = 0

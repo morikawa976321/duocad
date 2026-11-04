@@ -30,16 +30,19 @@ export const SCREENSHOTS_DIR = resolve(REPO_ROOT, 'screenshots')
  *
  * `newDocument`(既定 true)は立ち上がり後に「新規」を送る(トップ画面そのものを見る検査だけ false)。
  *
+ * `webDist`(`--web-dist`)を渡すと、`web/dist` の代わりにそのビルドを配る。
+ *
  * @param {{wsPort: number|string, httpPort: number|string, timeout?: number,
- *          modelsDir?: string, newDocument?: boolean}} options
+ *          modelsDir?: string, webDist?: string, newDocument?: boolean}} options
  * @returns {Promise<{url: string, child: import('node:child_process').ChildProcess,
  *                    stop: () => Promise<void>, log: () => string}>}
  */
-export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir, newDocument = true }) {
+export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir, webDist, newDocument = true }) {
   if (!existsSync(PYTHON)) throw new Error(`venvのpythonが無い: ${PYTHON}`)
 
   const args = ['-m', 'duocad.mcp_server', '--port', String(wsPort), '--http-port', String(httpPort)]
   args.push('--models-dir', modelsDir ?? mkdtempSync(join(tmpdir(), 'duocad-models-')))
+  if (webDist !== undefined) args.push('--web-dist', webDist)
   const child = spawn(PYTHON, args, {
     cwd: REPO_ROOT,
     env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
