@@ -182,6 +182,9 @@ def degenerate_mask(tri: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------------------
 #: y の帯に分けるとき、帯をまたぐ線分の写しの総数をこの倍数(線分の数に対して)までに抑える(超えたら帯を減らす)。
 _BAND_COPIES = 4
+#: 線分がこれより少なければ帯に分けない(実測: 穴を格子に並べた境界で、576 本は x の掃引 0.12 ms・帯 0.14 ms、
+#: 1,296 本は 0.37 ms・0.25 ms。小さい面の検査は呼ぶ回数が多く、帯の固定費 約 50 µs が効く)。
+_BANDED_FROM = 1024
 
 
 def _candidate_pairs(face_of_seg: np.ndarray, lo: np.ndarray, hi: np.ndarray):
@@ -200,6 +203,11 @@ def _candidate_pairs(face_of_seg: np.ndarray, lo: np.ndarray, hi: np.ndarray):
     lo_x = lo[:, 0] + shift
     hi_x = hi[:, 0] + shift
     count = len(lo_x)
+    if count < _BANDED_FROM:
+        i, j = _sweep(lo_x, hi_x)
+        keep = (face_of_seg[i] == face_of_seg[j]) & (lo[j, 1] <= hi[i, 1]) & (lo[i, 1] <= hi[j, 1])
+        i, j = i[keep], j[keep]
+        return np.minimum(i, j), np.maximum(i, j)
     values = np.unique(np.concatenate((lo_x, hi_x)))
     rank_lo = np.searchsorted(values, lo_x)
     rank_hi = np.searchsorted(values, hi_x)
@@ -245,7 +253,7 @@ def _ranges(counts: np.ndarray) -> np.ndarray:
 
 
 def _sweep(keys_lo: np.ndarray, keys_hi: np.ndarray):
-    """整数の区間 [keys_lo, keys_hi] の組のうち、安定な順で後の区間の左端が前の区間に入るものの (前, 後)。"""
+    """区間 [keys_lo, keys_hi] の組のうち、左端の安定な順で後の区間の左端が前の区間に入るものの (前, 後)。"""
     order = np.argsort(keys_lo, kind='stable')
     upper = np.searchsorted(keys_lo[order], keys_hi[order], side='right')
     base = np.arange(len(order))
