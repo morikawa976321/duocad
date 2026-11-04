@@ -8,14 +8,13 @@
 - **AI は Claude もローカル LLM も「作業しているマシン」で実行する**（本人）。web デプロイしてもサーバ機の AI を全端末で共用する
   形は採らない。帰結: サーバと AI が別マシンになるので LLM 呼び出しの接続の向きを反転させる必要がある（`AgentLoop` は今は
   Python サーバ側で LLM を叩く）。借り物の PC ではローカル LLM 経路は成立せず Claude 側の経路だけが残る。
-- **アプリ内 AI パネルから Claude を API キーで使う**（2026-10-08 本人）:
-  > claudeAPIキーを200ドル分もらったのでduocadをAPIで使う選択肢が復活した。実装してみようかと思う。
+- **アプリ内 AI パネルから Claude を API キーで使う**（2026-10-08 本人）。
 
   接続先は llama-server（`openai_compat`）と Claude API（`anthropic`）の2つで、サブスク認証の Claude Code が `/mcp` へ繋ぐ道も
   並ぶ。画面のプロバイダ選択は `providers` が2つ以上のときだけ出る（`AiPanel.svelte`）。
   - **公式SDKは入れない**（本人。AI がストリーミング組み立て・429/529 再試行・thinking ブロックの往復を自前で持つ代価を挙げ、
-    本人は「モデルが古くなるだけなら環境変数で書き換えればいいのでsdkは不要と思う」と応じた）。
-  - **既定モデルは Claude Haiku 5.5**（本人「とりあえずはhaiku5.5を既定として」）。差し替えは環境変数 `DUOCAD_ANTHROPIC_MODEL`。
+    本人は、モデルが古くなるだけなら環境変数で書き換えればよいので SDK は不要と判断した）。
+  - **既定モデルは Claude Haiku 5.5**（本人。当面の既定）。差し替えは環境変数 `DUOCAD_ANTHROPIC_MODEL`。
   - **キーはアプリの設定ダイアログ（正投影の下）から置ける**（本人提案）。値は画面へ戻さずリポジトリ直下の
     `duocad_secrets.json` に書く。手で置く場合の置き場所と、名前を `ANTHROPIC_API_KEY` にしない理由は docs/DEVELOPMENT.md §4「AI側」。
 - **`claude` CLI をサブプロセス起動して AI パネルから使う案（3段構成の段2+3）は未決**（段1の MCP HTTP トランスポートだけ実装済み）。
