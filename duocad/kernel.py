@@ -509,23 +509,29 @@ def tessellate(
     解消できなかった面は**分割せず** `untriangulated` に入れ、`boundary["unresolved"]` に理由を残す ——
     交差した境界を面分割へ渡すと穴や非多様体の三角形になり、`untriangulated` にも現れない
     (docs/TOPOPT_GAP_CAUSALITY.md)。
+
+    三角形は戻り値にだけ残し、形からは外す(`tessellate_faces` も同じ)。外部の罠: OCCT の演算と `BRepBndLib.Add` の既定は
+    面・辺に載った三角形分割を読むので、形に残すと、画面へ配ったかどうかで後の演算の結果が変わる(和でボディが消える:
+    `brep_operations.build_boolean`、干渉の GF: `kernel_interference.triangles`、辺の外接箱が最大 0.2 mm 変わる。実測 2026-11-04)。
     """
     _brep_checks._check_tessellation_args(shape, deviation, angular_deflection)
 
     # 既存の三角形分割は `mesh_shape` が捨ててから測り直す(残っていると偏差が効かない)。偏差は絶対mm
     # (Relative=False)。True にすると 0.2/0.05/0.01 のどれでも同じメッシュになる。
     # **build123d の既定の `export_stl` は True 側**なので流用しない。
-    boundary = kernel_meshing.mesh_shape(shape, float(deviation), float(angular_deflection))
-
-    shape_map = _brep_topology._face_map(shape)
-    faces: List[dict] = []
-    untriangulated: List[int] = []
-    for index in range(1, shape_map.Extent() + 1):
-        face = TopoDS.Face_s(shape_map.FindKey(index))
-        payload = _describe_face(face, index)
-        if not payload["indices"]:
-            untriangulated.append(index)
-        faces.append(payload)
+    try:
+        boundary = kernel_meshing.mesh_shape(shape, float(deviation), float(angular_deflection))
+        shape_map = _brep_topology._face_map(shape)
+        faces: List[dict] = []
+        untriangulated: List[int] = []
+        for index in range(1, shape_map.Extent() + 1):
+            face = TopoDS.Face_s(shape_map.FindKey(index))
+            payload = _describe_face(face, index)
+            if not payload["indices"]:
+                untriangulated.append(index)
+            faces.append(payload)
+    finally:
+        BRepTools.Clean_s(shape)
 
     if faces and len(untriangulated) == len(faces):
         raise ValueError(
@@ -618,22 +624,25 @@ def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], It
     described: Dict[int, dict] = {}
     untriangulated: List[int] = []
     passes: List[dict] = []
-    for (deviation, angular), indices in groups.items():
-        wanted = sorted({int(index) for index in indices if 1 <= int(index) <= total})
-        if not wanted:
-            continue
-        if len(wanted) == total:
-            passes.append(kernel_meshing.mesh_shape(shape, float(deviation), float(angular)))
-        else:
-            group = _brep_topology.compound([shape_map.FindKey(index) for index in wanted])
-            BRepTools.Clean_s(shape)
-            passes.append(_renumber_faces(kernel_meshing.mesh_shape(group, float(deviation), float(angular)), wanted))
-        # 次の組の Clean_s で消える前に抜き出す。
-        for index in wanted:
-            payload = _describe_face(TopoDS.Face_s(shape_map.FindKey(index)), index)
-            if not payload["indices"]:
-                untriangulated.append(index)
-            described[index] = payload
+    try:
+        for (deviation, angular), indices in groups.items():
+            wanted = sorted({int(index) for index in indices if 1 <= int(index) <= total})
+            if not wanted:
+                continue
+            if len(wanted) == total:
+                passes.append(kernel_meshing.mesh_shape(shape, float(deviation), float(angular)))
+            else:
+                group = _brep_topology.compound([shape_map.FindKey(index) for index in wanted])
+                BRepTools.Clean_s(shape)
+                passes.append(_renumber_faces(kernel_meshing.mesh_shape(group, float(deviation), float(angular)), wanted))
+            # 次の組の Clean_s で消える前に抜き出す。
+            for index in wanted:
+                payload = _describe_face(TopoDS.Face_s(shape_map.FindKey(index)), index)
+                if not payload["indices"]:
+                    untriangulated.append(index)
+                described[index] = payload
+    finally:
+        BRepTools.Clean_s(shape)  # 形に残さない(`tessellate` の外部の罠)
     return {
         "faces": described,
         "untriangulated": sorted(untriangulated),
