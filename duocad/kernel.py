@@ -1131,23 +1131,9 @@ def _blend_provenance(
     verb: str,
     edge_indices: List[int],
 ) -> dict:
-    """由来を `normalize_provenance` 経由で回収し、JSON化できる添字の射影へ落とす(`extrude_faces` と同じ形)。"""
-    normalized = _brep_history.normalize_provenance(maker, [shape]) or {}
-    modified = {}
-    for entry in normalized.get("modified", []):
-        modified[entry["input"]] = entry["results"]
-    deleted_inputs = normalized.get("deleted", [])
-
-    shape_map = _brep_topology._face_map(shape)
+    """由来を JSON化できる添字の射影へ落とす(`extrude_faces` と同じ形)。"""
     final_map = _brep_topology._face_map(final)
-    successors: dict = {}
-    for index in range(1, shape_map.Extent() + 1):
-        old_face = shape_map.FindKey(index)
-        candidates = _brep_history.lookup_by_identity(modified, old_face)
-        if candidates is None:
-            candidates = [] if _brep_history.contains_identity(deleted_inputs, old_face) else [old_face]
-        successors[str(index)] = _brep_history.positions_in(final_map, candidates)
-
+    successors = _brep_history.maker_successors(maker, shape, final_map)
     return {
         "verb": verb,
         "edges": list(edge_indices),

@@ -238,20 +238,8 @@ def _shell_provenance(
     maker: Any, shape: "TopoDS_Shape", final: "TopoDS_Shape", indices: List[int], thickness: float
 ) -> dict:
     """由来を `face_map` / `deleted` / `new_faces` の射影へ落とす(`kernel._blend_provenance` と同じ形)。"""
-    normalized = _brep_history.normalize_provenance(maker, [shape]) or {}
-    modified = {entry["input"]: entry["results"] for entry in normalized.get("modified", [])}
-    deleted_inputs = normalized.get("deleted", [])
-
-    shape_map = _brep_topology._face_map(shape)
     final_map = _brep_topology._face_map(final)
-    successors: dict = {}
-    for index in range(1, shape_map.Extent() + 1):
-        old_face = shape_map.FindKey(index)
-        candidates = _brep_history.lookup_by_identity(modified, old_face)
-        if candidates is None:
-            candidates = [] if _brep_history.contains_identity(deleted_inputs, old_face) else [old_face]
-        successors[str(index)] = _brep_history.positions_in(final_map, candidates)
-
+    successors = _brep_history.maker_successors(maker, shape, final_map)
     return {
         "verb": "shell_body",
         "faces": list(indices),
