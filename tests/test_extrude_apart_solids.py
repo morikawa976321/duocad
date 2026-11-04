@@ -129,3 +129,20 @@ def test_touching_overlapping_and_compound_inputs_go_through_the_boolean():
 
     joined = kernel_extrude.extrude_regions([_rectangle(0.0, 0.0, 10.0, 10.0), _rectangle(10.0, 0.0, 10.0, 10.0)], 5.0, "new", UP)
     assert brep_topology.face_count(joined["shape"]) == 6
+
+
+def test_each_pushed_face_finds_its_own_lid_in_selection_order():
+    """落ちたら、複数の面を押したときの行き先(`after_face_indices`)が選んだ順の面のふたを指していない。"""
+    base, tops = _bosses_and_tops()
+    faces = brep_topology._face_map(base)
+    picked = [tops[i] for i in (4, 0, 7, 2)]
+    expected = [brep_geometry._face_props(faces.FindKey(index))[1] for index in picked]
+
+    result = kernel_extrude.extrude_faces(base, picked, 1.0, "join", target_shape=base)
+
+    lids = brep_topology._face_map(result["shape"])
+    found = result["after_face_indices"]
+    assert len(set(found)) == len(picked)
+    for index, (x, y, z) in zip(found, expected):
+        assert brep_geometry._face_normal(lids.FindKey(index))[2] > 0.999
+        assert brep_geometry._face_props(lids.FindKey(index))[1] == pytest.approx((x, y, z + 1.0), abs=1e-9)
