@@ -33,7 +33,6 @@ from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle, BRepOffsetAPI_MakeDraft,
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
 from OCP.BRepTools import BRepTools
 from OCP.Bnd import Bnd_Box
-from OCP.BOPTools import BOPTools_AlgoTools
 from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.Geom2dLProp import Geom2dLProp_CurAndInf2d
 from OCP.LProp import LProp_NotDefined
@@ -58,7 +57,7 @@ from OCP.TopAbs import (
     TopAbs_WIRE,
 )
 from OCP.TopExp import TopExp, TopExp_Explorer
-from OCP.TopTools import TopTools_IndexedMapOfShape
+from OCP.TopTools import TopTools_IndexedMapOfShape  # noqa: F401  型注釈だけ
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.gp import gp_Ax1, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 
@@ -803,58 +802,6 @@ def _check_region_mode(mode: str, target_shape: Any) -> None:
         raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
 
 
-#: 柱どうしを「離れている」とみなす境界箱の隙間(mm)。ブーリアンが組を調べる境界箱の余白(`Precision.Confusion` の半分)より十分大きく取る。
-_APART_MARGIN = 1.0e-3
-
-
-def _fused_solids(solids: Sequence[Any], what: str) -> Any:
-    """`brep_operations.fuse_all(solids, what)` と同じ形を返す。どの2つも境界箱が離れた SOLID の並びは、ブーリアンを掛けずに組む。"""
-    if len(solids) > 1 and _apart(solids):
-        return _apart_union(solids)
-    return _brep_operations.fuse_all(solids, what)
-
-
-def _apart(solids: Sequence[Any]) -> bool:
-    """全部が SOLID で、どの2つも境界箱(ブーリアンと同じ取り方で面・辺・頂点の箱を足したもの)が重ならないか。"""
-    if any(solid.ShapeType() != TopAbs_SOLID for solid in solids):
-        return False
-    boxes = [_boolean_reach(solid) for solid in solids]
-    return all(boxes[i].IsOut(boxes[j]) for i in range(len(boxes)) for j in range(i + 1, len(boxes)))
-
-
-def _boolean_reach(solid: Any) -> "Bnd_Box":
-    # 外部の罠: ブーリアン(`BOPDS_DS::Init`)は面・辺の箱を `BRepBndLib::Add` の既定(三角形分割があればそれを使う)で取り、
-    # 頂点は許容差ぶん広げる。ここも同じ関数で取らないと、三角形分割を持つ面で箱が食い違う。
-    box = Bnd_Box()
-    for kind in (TopAbs_FACE, TopAbs_EDGE):
-        subshapes = _brep_topology.indexed_map(solid, kind)
-        for index in range(1, subshapes.Extent() + 1):
-            BRepBndLib.Add_s(subshapes.FindKey(index), box)
-    vertices = _brep_topology.indexed_map(solid, TopAbs_VERTEX)
-    for index in range(1, vertices.Extent() + 1):
-        vertex = TopoDS.Vertex_s(vertices.FindKey(index))
-        around = Bnd_Box()
-        around.Add(BRep_Tool.Pnt_s(vertex))
-        around.Enlarge(BRep_Tool.Tolerance_s(vertex))
-        box.Add(around)
-    box.Enlarge(_APART_MARGIN)
-    return box
-
-
-def _apart_union(solids: Sequence[Any]) -> Any:
-    # 外部の罠: 触れ合わない SOLID どうしの fuse は、元の SOLID を作り直さずに compound へ入れて返す。並びは引数のうち SOLID が先・
-    # compound の中身が後(OCCT 7.9.3 の `BOPAlgo_BOP::BuildResult` → `BuildRC` → `BuildSolid`)なので、`fuse_all` の順の fuse は
-    # (p[n-1], ..., p[2], p[0], p[1]) になる。面の番号はこの並びで決まる。結果には毎回 `BOPAlgo_Builder::PostTreat` の許容差の
-    # 補正が掛かる(入力の形をその場で書き換える)ので、同じ2つを掛ける。`tests/test_extrude_apart_solids.py` が順の fuse と
-    # BRep の書き出しの一致で比べる(OCCT を上げて並びが変わると落ちる)。
-    order = [*reversed(solids[2:]), solids[0], solids[1]]
-    combined = _brep_topology.compound(order)
-    untouched = TopTools_IndexedMapOfShape()
-    BOPTools_AlgoTools.CorrectTolerances_s(combined, untouched, 0.05, False)
-    BOPTools_AlgoTools.CorrectShapeTolerances_s(combined, untouched, False)
-    return combined
-
-
 def _combine_region_solids(
     solids: Sequence[TopoDS_Shape], mode: str, target_shape: Any, head: dict
 ) -> dict:
@@ -863,7 +810,7 @@ def _combine_region_solids(
     同一平面の面の統合(`_unify_same_domain`)は、join / new で立体を束ねたとき(複数か、相手への join)にだけ掛ける。
     戻り値は `extrude_regions` の docstring の形。`head` は provenance の先頭に置く(`verb` ほか)。
     """
-    combined = _fused_solids(solids, "region solids")
+    combined = _brep_operations.fuse_all(solids, "region solids")
 
     volume_before: Optional[float] = None
     builder = None
@@ -976,7 +923,7 @@ def extrude_faces(
         if prism_shape is None or _brep_topology.is_null(prism_shape):
             raise ValueError(f"prism for face {index} is empty (distance={distance})")
         prisms.append(prism_shape)
-    combined = _fused_solids(prisms, "face prisms")
+    combined = _brep_operations.fuse_all(prisms, "face prisms")
 
     context = f"faces {indices}, distance={distance}"
     volume_before: Optional[float] = None
