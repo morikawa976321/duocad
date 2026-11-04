@@ -116,3 +116,33 @@ def test_a_ghost_typed_again_measures_only_the_changed_faces(boxed, counted) -> 
     assert counted == [sorted(set(range(1, ghost["face_count"] + 1)) - kept)]
     fresh = kernel.tessellate(shape, session.view.view_deviation, session.view.view_angular_deflection)
     assert [face["positions"] for face in ghost["faces"]] == [face["positions"] for face in fresh["faces"]]
+
+
+def test_an_operation_keeps_the_screen_s_choice_for_the_faces_it_kept(boxed, counted) -> None:
+    """落ちたら、操作で面の番号がずれたとき、画面が面ごとに選んだ測り方を番号のまま別の面に当て、残った面まで別の測り方で
+    測り直す(--part big を上から見た画面で、辺1本のフィレットの後の配信 10 秒のうち 4 秒)。"""
+    session, body = boxed
+    session.set_view_resolution(0.02, 400.0, {body: [1, 2, 3]})
+    session.geometry(body)
+    session.modify_selection([{"body": body, "kind": "edge", "index": 1}], [])
+    counted.clear()
+    session.fillet(1.0)
+    after = session.geometry(body)
+    kept = dict(kernel.kept_faces(session.document.get_body(body).shape)[1])
+    assert kept and any(position != index for position, index in kept.items()), "題材の前提(残った面の番号がずれる)が崩れた"
+    assert counted == [sorted(set(range(1, after["face_count"] + 1)) - set(kept))]
+    for face in after["faces"]:
+        coarse = face["index"] in kept and kept[face["index"]] not in {1, 2, 3}
+        assert face["detail"] == ("coarse" if coarse else "fine"), f"面 {face['index']}"
+
+
+def test_moving_a_body_keeps_the_screen_s_choice(boxed, counted) -> None:
+    """落ちたら、ボディを動かしただけで、画面が粗く求めた面まで細かく測り直す(位置だけ違う同じ面を見分けられていない)。"""
+    session, body = boxed
+    session.set_view_resolution(0.02, 400.0, {body: [1, 2, 3]})
+    before = [face["detail"] for face in session.geometry(body)["faces"]]
+    session.modify_selection([{"body": body, "kind": "body", "index": None}], [])
+    counted.clear()
+    session.apply("move_body", {"dx": 5.0, "dy": 0.0, "dz": 0.0})
+    assert [face["detail"] for face in session.geometry(body)["faces"]] == before
+    assert counted == []
