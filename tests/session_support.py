@@ -181,6 +181,7 @@ def browser(session: Session, script, *, connections: int = 2, initial_push: boo
 
         async def send(command: dict):
             await server._dispatch(clients[0], json.dumps(command))
+            await server.settled()  # 背景の測り直しが配り終えるまで(画面が最後に見る状態)
             return clients[0].payloads[-1] if clients[0].payloads else None
 
         return await script(send), clients

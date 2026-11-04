@@ -141,6 +141,8 @@ class Delivered:
     def __init__(self) -> None:
         #: body_id -> 版(`Session.delta` の基準)
         self.revisions: Dict[str, int] = {}
+        #: body_id -> 形の版(送らずにおいてよいか = 画面が今の形を持っているか、の判定。`Server._deferrable`)
+        self.shape_revisions: Dict[str, int] = {}
         #: body_id -> {面の添字: serial}(前回送ったそのボディの面。serial の無い面 = メッシュボディの面は入れない)。
         #: 接続が持っている面は、全ボディのこの値の和(画面は受け取るたびにボディごとに置き換え、消えたボディは忘れる)
         self.faces: Dict[str, Dict[int, int]] = {}
@@ -177,9 +179,15 @@ class Delivered:
         ]
         return dict(body, geometry=dict(geometry, faces=faces))
 
-    def record(self, meta: dict, bodies: list) -> None:
-        """`compose` で作った配りものを送り終えた(**送信が成功してから**呼ぶ)。`bodies` は省く前のもの。"""
-        self.revisions = {body["body_id"]: body["revision"] for body in meta["bodies"]}
+    def record(self, meta: dict, bodies: list, deferred: frozenset = frozenset()) -> None:
+        """`compose` で作った配りものを送り終えた(**送信が成功してから**呼ぶ)。`bodies` は省く前のもの。
+        `deferred` のボディは三角形を送っていないので、前に送った版のまま覚える(次の配信で送り直す)。"""
+        self.revisions = {
+            body["body_id"]: self.revisions[body["body_id"]] if body["body_id"] in deferred else body["revision"]
+            for body in meta["bodies"]
+            if body["body_id"] not in deferred or body["body_id"] in self.revisions
+        }
+        self.shape_revisions = {body["body_id"]: body.get("shape_revision") for body in meta["bodies"]}
         for body in bodies:
             geometry = body.get("geometry")
             self.faces[body["body_id"]] = {

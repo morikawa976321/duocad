@@ -66,10 +66,11 @@ def test_a_frame_round_trips_with_the_rounding_the_browser_used() -> None:
 def test_only_the_faces_measured_again_travel() -> None:
     """落ちたら、カメラで測り方の変わった面が一部でも、ボディの全面の三角形を送り直す(PC ケースで 1 回 4.5 MB)。"""
     client = _camera_then_selection(session_with_box())
-    after_swap = _state_frames(client)[2]
+    # 三角形が流れた配信だけを見る(カメラの要求の直後は測り直しの最中で、そのボディを送らない。測り終えてから配る)
+    after_swap = [frame for frame in _state_frames(client) if frame["delta"]["bodies"]][-1]
     faces = after_swap["delta"]["bodies"][0]["geometry"]["faces"]
     assert sorted(face["index"] for face in faces if "positions" in face) == [2, 3]
-    restored = [payload for payload in client.payloads if payload["type"] == "state"][1]
+    restored = [payload for payload in client.payloads if payload["type"] == "state" and payload["delta"]["bodies"]][1]
     assert all("positions" in face for face in restored["delta"]["bodies"][0]["geometry"]["faces"])
 
 

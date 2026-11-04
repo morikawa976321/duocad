@@ -286,9 +286,17 @@ class Session:
         state.update(self.workspace.to_state())
         return state
 
-    def delta(self, known_revisions: dict) -> dict:
+    def delta(self, known_revisions: dict, defer: frozenset = frozenset()) -> dict:
         """クライアントが持っている版との差分(`DocumentView.delta`)。"""
-        return self.view.delta(known_revisions)
+        return self.view.delta(known_revisions, defer)
+
+    def refinement_jobs(self) -> list:
+        """ループの外で測る分(`DocumentView.refinement_jobs`)。"""
+        return self.view.refinement_jobs()
+
+    def adopt_refinement(self, body_id: str, shape: Any, groups: dict, measured: dict) -> bool:
+        """ループの外で測った面を覚える(`DocumentView.adopt_refinement`)。"""
+        return self.view.adopt_refinement(body_id, shape, groups, measured)
 
     def geometry(self, body_id: str) -> dict:
         """1Bodyのテセレーション結果(`DocumentView.geometry`)。"""

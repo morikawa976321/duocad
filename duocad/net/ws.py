@@ -78,7 +78,7 @@ import re
 import threading
 from typing import Any, Optional  # Any: listeners / 接続
 
-from .. import catalog, local_settings, optimize_run
+from .. import catalog, kernel, local_settings, optimize_run
 from ..agent import AgentLoop, Cancellation, Limits, ProviderError
 from ..agent.loop import FIRST_LOOK
 from ..agent.providers import (
@@ -208,6 +208,14 @@ class _Acks:
         return ready
 
 
+def _measure_copies(copies: list) -> list:
+    """`Server._schedule_refinement` のワーカーで、形の写しの面を測る。結果は元の形の面として覚える(添字は同じ)。"""
+    return [
+        (body_id, shape, groups, kernel.tessellate_faces(copy, groups, closed=closed))
+        for body_id, shape, copy, groups, closed in copies
+    ]
+
+
 class _Inbox:
     """1接続の受信待ち行列。届いた順に捌くが、`COALESCED_COMMANDS` は未着手の同じ名前の要求を新しい方で置き換える。
 
@@ -298,6 +306,12 @@ class Server:
         # 置き換えられても実行中の計算を残し、切断時にはその接続の全件を止める。
         self._preview_jobs: dict = {}  # connection -> {concurrent.futures.Future: PreviewJob}
         self._interference = InterferenceRuns(_send, lambda connection: connection in self.clients)
+        #: 背景の測り直し(カメラの要求で足りなくなった面を、形の写しの上でループの外で測る。`_schedule_refinement`)。
+        #: 測っている間、そのボディの三角形は配らない(画面は前の三角形を出し続ける)。
+        self._refine_worker: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._refinement: Optional[asyncio.Task] = None
+        self._refining: dict = {}  # body_id -> 測っている形
+        self._refine_again = False
         self._acks: dict = {}  # connection -> _Acks
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
         self._pending_ai_runs: set = set()
@@ -590,6 +604,7 @@ class Server:
                     message.get("focus"),
                 )
                 if changed:
+                    self._schedule_refinement()
                     await self._push(connection, applied=None)
             # -------------------------------------------------- E: ファイル操作(SVG読み込みは無い: `import_svg` はスケッチのverbなのでC節)
             # 応答は `FILE_COMMANDS` の3つ目の値で違う: 文書を変えるものは状態を全接続へ、書き出すだけのものは要求した接続へ結果だけ返す。
@@ -1424,6 +1439,59 @@ class Server:
             except Exception:
                 self.clients.discard(target)
 
+    def _schedule_refinement(self) -> None:
+        """カメラの要求で足りなくなった面を、ループの外で測り始める(測り終えたら全接続へ配る)。
+
+        測り直しはボディを丸ごと測ることもあり(733 面で 0.5〜0.9 秒)、ループの上で測るとその間のクリック・選択が待たされた。
+        写し(`kernel.copy_shape`。添字は元と同じ)の上で測るのは、三角形分割が面に書き込まれ、ループ側の演算と同じ面を
+        取り合わないため(プレビューと同じ理由。`Session.preview_job`)。測っている最中にまたカメラが動いたら、終わってから
+        足りない分をもう一度測る。
+        """
+        if self._refinement is not None and not self._refinement.done():
+            self._refine_again = True
+            for body_id, shape, _groups, _closed in self.session.refinement_jobs():
+                self._refining.setdefault(body_id, shape)
+            return
+        jobs = self.session.refinement_jobs()
+        if not jobs:
+            return
+        if self._refine_worker is None:
+            self._refine_worker = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="duocad-refine")
+        copies = [(body_id, shape, kernel.copy_shape(shape), groups, closed) for body_id, shape, groups, closed in jobs]
+        self._refining = {body_id: shape for body_id, shape, _groups, _closed in jobs}
+        loop = asyncio.get_running_loop()
+        computation = loop.run_in_executor(self._refine_worker, _measure_copies, copies)
+        self._refinement = loop.create_task(self._finish_refinement(computation))
+
+    async def _finish_refinement(self, computation: "asyncio.Future") -> None:
+        try:
+            results = await computation
+        except Exception as error:  # noqa: BLE001  測れなかったボディは、次の配信がループの上で測る
+            self.session.warnings.append(f"面の測り直しに失敗: {type(error).__name__}: {error}")
+            results = []
+        for body_id, shape, groups, measured in results:
+            self.session.adopt_refinement(body_id, shape, groups, measured)
+        self._refining = {}
+        again, self._refine_again = self._refine_again, False
+        if again:
+            self._schedule_refinement()
+        await self._push(None, applied=None)
+
+    async def settled(self) -> None:
+        """背景の測り直しと、それが終わって配る分が済むまで待つ(テストの接続が、配り終えた状態を見るため)。"""
+        while self._refinement is not None and not self._refinement.done():
+            await asyncio.shield(self._refinement)
+
+    def _deferrable(self, meta: dict, delivered: "wire.Delivered") -> frozenset:
+        """この接続へ今回は三角形を送らずにおくボディ(背景で測っている最中で、画面が今の形を持っているもの)。"""
+        current = {body["body_id"]: body for body in meta["bodies"]}
+        return frozenset(
+            body_id for body_id, shape in self._refining.items()
+            if body_id in current and current[body_id]["visible"]
+            and delivered.shape_revisions.get(body_id) == current[body_id]["shape_revision"]
+            and self.session.document.get_body(body_id).shape is shape
+        )
+
     async def _push(self, origin: Any, applied: Optional[dict], only: Any = None) -> None:
         """状態を配信する。`only` を指定するとその接続にだけ送る。
 
@@ -1443,7 +1511,8 @@ class Server:
             async with lock:
                 meta = self.session.state_meta()
                 delivered = self._delivered.get(target) or wire.Delivered()
-                delta = self.session.delta(delivered.revisions)
+                deferred = self._deferrable(meta, delivered) if self._refining else frozenset()
+                delta = self.session.delta(delivered.revisions, deferred)
                 payload = {"type": "state", **delivered.compose(meta, delta["bodies"])}
                 if applied is not None and target is origin:
                     payload["applied"] = applied
@@ -1451,7 +1520,7 @@ class Server:
                     await _send(target, payload)
                     # **送信が成功してから**記録する(送信前に記録すると、失敗時や
                     # 割り込み時に「送っていない版・面を知っている」ことになってしまう)。
-                    delivered.record(meta, delta["bodies"])
+                    delivered.record(meta, delta["bodies"], deferred)
                     self._delivered[target] = delivered
                 except Exception:  # 落ちた接続のために他へ配れないことを避ける
                     self.clients.discard(target)

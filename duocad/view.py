@@ -678,11 +678,8 @@ class DocumentView:
         store.unwarned_failed |= set(measured["untriangulated"])
         store.unwarned_boundary.extend((geometry.get("boundary") or {}).get("unresolved") or [])
 
-    def _tessellate_body(self, body) -> dict:
-        """B-rep を測り、取れなかった面・解消できなかった境界の警告を積む(**測ったときだけ**出す)。
-
-        面ごとに測り方(細かい側・粗い側)を決め、覚えていない面だけを測る(`_FaceTessellations`)。
-        """
+    def _wanted_faces(self, body) -> tuple:
+        """面ごとの測り方 `(wanted {面の添字: 測り方}, 細かく測る面の集合, 細かい側, 粗い側)`。"""
         fine, deviation, angular, coarse_deviation, coarse_angular = self._tessellation_args(body.id)
         total = self._body_face_count(body)
         coarse = (
@@ -696,7 +693,10 @@ class DocumentView:
         wanted = {
             index: detailed if everything_detailed or index in fine_set else coarse for index in range(1, total + 1)
         }
-        store = self._face_store(body.id, body.shape)
+        return wanted, fine_set, detailed, coarse
+
+    def _missing_groups(self, store: "_FaceTessellations", wanted: dict, detailed: tuple) -> dict:
+        """まだ測る面を測り方ごとに(借りられる面はここで借りる)。"""
         groups = store.missing(wanted)
         if groups:
             groups = self._borrow_faces(store, groups)
@@ -706,6 +706,47 @@ class DocumentView:
             fine_group = [index for index, recipe in wanted.items() if recipe == detailed]
             if fine_group and not store.one_batch(detailed, fine_group):
                 groups[detailed] = fine_group
+        return groups
+
+    def refinement_jobs(self) -> list:
+        """いまの測り方に足りない面があるボディの `(body_id, 形, 測る面の組, 閉じた立体かも測るか)`(カメラの要求の後に、
+        ループの外で測る分。`net/ws.py` の背景の測り直し)。"""
+        jobs = []
+        for body in self.document.bodies:
+            if not body.visible or body.mesh is not None or body.shape is None:
+                continue
+            wanted, _fine_set, detailed, _coarse = self._wanted_faces(body)
+            store = self._face_store(body.id, body.shape)
+            groups = self._missing_groups(store, wanted, detailed)
+            if groups:
+                jobs.append((body.id, body.shape, groups, store.closed is None))
+        return jobs
+
+    def adopt_refinement(self, body_id: str, shape: Any, groups: dict, measured: dict) -> bool:
+        """ループの外で測った面を、その形の面として覚える。ボディの形が替わっていたら捨てて False(測った形の面は配らない)。
+        既に覚えている面は上書きしない(配った `serial` を変えない)。警告は次に配るときに出す。"""
+        body = next((item for item in self.document.bodies if item.id == body_id), None)
+        if body is None or body.shape is not shape:
+            return False
+        store = self._face_store(body_id, shape)
+        fresh = {
+            recipe: [index for index in indices if index not in store.by_recipe.get(recipe, {})]
+            for recipe, indices in groups.items()
+        }
+        store.remember({recipe: indices for recipe, indices in fresh.items() if indices}, measured)
+        store.unwarned_failed |= set(measured["untriangulated"])
+        store.unwarned_boundary.extend((measured.get("boundary") or {}).get("unresolved") or [])
+        return True
+
+    def _tessellate_body(self, body) -> dict:
+        """B-rep を測り、取れなかった面・解消できなかった境界の警告を積む(**測ったときだけ**出す)。
+
+        面ごとに測り方(細かい側・粗い側)を決め、覚えていない面だけを測る(`_FaceTessellations`)。
+        """
+        wanted, fine_set, detailed, coarse = self._wanted_faces(body)
+        deviation = detailed[0]
+        store = self._face_store(body.id, body.shape)
+        groups = self._missing_groups(store, wanted, detailed)
         measured = None
         if groups:
             measured = kernel.tessellate_faces(body.shape, groups, closed=store.closed is None)
@@ -919,7 +960,7 @@ class DocumentView:
             for body_id in [key for key in cache if key not in alive]:
                 cache.pop(body_id, None)
 
-    def delta(self, known_revisions: dict) -> dict:
+    def delta(self, known_revisions: dict, defer: frozenset = frozenset()) -> dict:
         """クライアントが持っている版との差分だけを返す(未知のIDは必ずbodiesへ)。
 
         戻り値:
@@ -930,12 +971,15 @@ class DocumentView:
 
         クライアントが知っているのに `bodies` にも `unchanged` にも現れないIDは**文書から消えた**
         (undoでの消滅。専用の "removed" は持たない)。
+
+        `defer` のボディは、クライアントが版を知っていれば今回は送らない(ループの外で測っている最中。呼び手は送らなかった版を
+        覚えず、測り終えてから配る。`net/ws.py` の背景の測り直し)。
         """
         bodies_out = []
         unchanged = []
         for body in self.document.bodies:
             current = self.body_revision(body.id)
-            if known_revisions.get(body.id) == current:
+            if known_revisions.get(body.id) == current or (body.id in defer and body.id in known_revisions):
                 unchanged.append(body.id)
             else:
                 bodies_out.append(self.body_state(body))
