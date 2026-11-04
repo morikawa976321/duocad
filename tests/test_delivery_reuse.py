@@ -69,3 +69,22 @@ def test_cancelled_ghosts_keep_the_faces_the_camera_needs(boxed, counted) -> Non
     session.set_view_resolution(0.02, 400.0, {body: [1, 3]})
     session.geometry(body)
     assert counted == [[2, 3]], "測り方の変わった面(2: 細→粗、3: 粗→細)だけを測る"
+
+
+@pytest.mark.parametrize("verb, args", [
+    ("mirror_body", {"base_plane": "YZ"}),
+    ("move_body", {"dx": 100.0, "dy": 0.0, "dz": 0.0, "copy": True}),
+])
+def test_a_rigid_copy_takes_closedness_from_its_source(boxed, monkeypatch, verb, args) -> None:
+    """落ちたら、複製・鏡映のたびに、元と同じつながりの形が閉じた立体かを数え直す(穴 384 個の板で 8〜12 ms)。"""
+    session, body = boxed
+    session.geometry(body)
+    session.modify_selection([{"body": body, "kind": "body", "index": None}], [])
+    calls: list = []
+    real = kernel.is_closed_shell
+    monkeypatch.setattr(kernel, "is_closed_shell", lambda shape: calls.append(shape) or real(shape))
+    session.apply(verb, args)
+    copy = session.document.bodies[-1]
+    geometry = session.geometry(copy.id)
+    assert calls == []
+    assert geometry["closed"] is real(copy.shape)

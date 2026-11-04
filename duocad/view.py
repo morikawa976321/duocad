@@ -816,6 +816,8 @@ class DocumentView:
         sources = dict(kept[1]) if origin is not None else {}
         transform = kept[2] if origin is not None else None
         keys = store.keys()
+        if transform is not None and store.closed is None and len(sources) == len(keys):
+            store.closed = origin.closed  # 形全体を剛体で写した複製は、元と同じ面と辺のつながり
         left: dict = {}
         for recipe, indices in groups.items():
             rest = []
