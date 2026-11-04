@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import itertools
 import json
+from array import array
 from collections import OrderedDict
 from typing import Any, Callable, Optional
 
@@ -216,6 +217,41 @@ FACE_STORES_PER_BODY = 3
 RETIRED_FACE_STORES = 6
 
 
+#: スケッチごとに塗り(領域の三角形)を覚えておく粗さの段の数。寄って戻る・引いて戻るで使い回す。
+SKETCH_FILLS_PER_SKETCH = 4
+
+
+class _SketchFills:
+    """1つのスケッチについて、描くもの(姿勢と展開した図形)が同じ間に使い回すもの。すべて描くものだけで決まる。"""
+
+    __slots__ = ("document", "content", "frame", "detection", "fills")
+
+    def __init__(self, document: Document, content: str) -> None:
+        #: 作った文書(開き直したら作り直し、壊れたスケッチの知らせも出し直す)
+        self.document = document
+        self.content = content
+        self.frame: Optional[dict] = None
+        #: `None` は図形が無いか、枠・検出に失敗した(どの粗さでも領域は空)
+        self.detection: Optional[region.Detection] = None
+        #: 偏差 -> 領域の一覧(`region.fill`)。最近使った順に `SKETCH_FILLS_PER_SKETCH` 個まで。
+        #: 三角形は `array` に詰めて持つ(実測: 円 384 個の外周を持つ 385 領域・2.8 万三角形で、数の list は 1 段 5.2 MB)。
+        self.fills: "OrderedDict[float, list]" = OrderedDict()
+
+    def lookup(self, deviation: float) -> Optional[list]:
+        packed = self.fills.get(deviation)
+        if packed is None:
+            return None
+        self.fills.move_to_end(deviation)
+        return [dict(item, positions=item["positions"].tolist(), indices=item["indices"].tolist()) for item in packed]
+
+    def keep(self, deviation: float, regions: list) -> None:
+        self.fills[deviation] = [
+            dict(item, positions=array("d", item["positions"]), indices=array("q", item["indices"])) for item in regions
+        ]
+        while len(self.fills) > SKETCH_FILLS_PER_SKETCH:
+            self.fills.popitem(last=False)
+
+
 class DocumentView:
     """1つの文書の「配りもの」。**文書を変えない読み取り + キャッシュ**だけを持つ。
 
@@ -257,6 +293,8 @@ class DocumentView:
         self._shape_counter: dict = {}
         # sketch_id -> (署名, 領域つきペイロード)。領域の計算が重いので内容で引く(C)
         self._sketch_cache: dict = {}
+        #: sketch_id -> `_SketchFills`。粗さが変わっても残す(`_sketch_cache` は `set_view_resolution` が捨てる)。
+        self._sketch_fills: dict = {}
         #: sketch_id -> (描くものの指紋, 版)。版は画面がスケッチを作り直すかの印(`_sketch_state` の `revision`)。
         #: 番号は文書をまたいで単調に増やす(`reset()` で数え直すと、別の文書の同じ id・同じ番号のスケッチを描き直さない)。
         self._sketch_revisions: dict = {}
@@ -513,6 +551,8 @@ class DocumentView:
             self._sketch_cache.pop(sketch_id, None)
         for sketch_id in [key for key in self._sketch_revisions if key not in alive]:
             self._sketch_revisions.pop(sketch_id, None)
+        for sketch_id in [key for key in self._sketch_fills if key not in alive]:
+            self._sketch_fills.pop(sketch_id, None)
         return [self._sketch_state(item) for item in self.document.sketches]
 
     def _sketch_state(self, item) -> dict:
@@ -524,31 +564,14 @@ class DocumentView:
         # **貼った先のボディの形状は署名に入れない**。面に貼ったスケッチの姿勢は `item.plane["frame"]` が持つ
         # (`duocad.region.plane_frame`)ので、後からのフィレット等で枠も領域も変わらない。
         # `rebuild()` で姿勢が解き直されると `plane` が変わるので署名が拾う。
-        signature = json.dumps(
-            [item.plane, drawn, self.view_deviation], sort_keys=True, default=str
-        )
+        content = json.dumps([item.plane, drawn], sort_keys=True, default=str)
+        signature = (content, self.view_deviation)
         cached = self._sketch_cache.get(item.id)
         if cached is not None and cached[0] == signature:
             payload = dict(cached[1])
         else:
-            frame: Optional[dict] = None
-            regions: list = []
-            try:
-                frame = region.plane_frame(self.document, item.id)
-                if drawn:
-                    regions = region.regions_with_geometry(
-                        self.document,
-                        item.id,
-                        self.view_deviation,
-                        on_error=lambda index, error, sketch_id=item.id: self.warnings.append(
-                            f"スケッチ {sketch_id} の領域 {index} を三角形にできない: {type(error).__name__}: {error}"
-                        ),
-                    )
-            except Exception as error:
-                self.warnings.append(
-                    f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
-                )
-            payload = {"frame": frame, "drawn": drawn, "regions": regions}
+            held = self._sketch_drawing(item, drawn, content)
+            payload = {"frame": held.frame, "drawn": drawn, "regions": self._sketch_fill(item, held)}
             self._sketch_cache[item.id] = (signature, payload)
             payload = dict(payload)
         payload["sketch_id"] = item.id
@@ -586,6 +609,46 @@ class DocumentView:
             self._sketch_revisions[item.id] = known
         payload["revision"] = known[1]
         return payload
+
+    def _sketch_drawing(self, item, drawn: list, content: str) -> "_SketchFills":
+        """描くもの(`content`)が同じ間に使い回す枠と領域の検出。失敗は描くものが変わるまで1回だけ知らせる。"""
+        held = self._sketch_fills.get(item.id)
+        if held is not None and held.document is self.document and held.content == content:
+            return held
+        held = _SketchFills(self.document, content)
+        try:
+            held.frame = region.plane_frame(self.document, item.id)
+            if drawn:
+                held.detection = region.detect(item.plane, drawn)
+        except Exception as error:
+            self.warnings.append(
+                f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
+            )
+        self._sketch_fills[item.id] = held
+        return held
+
+    def _sketch_fill(self, item, held: "_SketchFills") -> list:
+        """いまの粗さ(`view_deviation`)の塗り。同じ粗さに戻ったら測り直さない。"""
+        deviation = self.view_deviation
+        regions = held.lookup(deviation)
+        if regions is not None:
+            return regions
+        regions = []
+        if held.detection is not None:
+            try:
+                regions = region.fill(
+                    held.detection,
+                    deviation,
+                    on_error=lambda index, error, sketch_id=item.id: self.warnings.append(
+                        f"スケッチ {sketch_id} の領域 {index} を三角形にできない: {type(error).__name__}: {error}"
+                    ),
+                )
+            except Exception as error:
+                self.warnings.append(
+                    f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
+                )
+        held.keep(deviation, regions)
+        return regions
 
     # ---------------------------------------------------------------- M3.5: 差分送信
     def body_revision(self, body_id: str) -> int:
