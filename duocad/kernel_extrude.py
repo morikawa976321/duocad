@@ -33,7 +33,9 @@ from OCP.BRepOffsetAPI import BRepOffsetAPI_DraftAngle, BRepOffsetAPI_MakeDraft,
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol
 from OCP.BRepTools import BRepTools
 from OCP.Bnd import Bnd_Box
-from OCP.BOPTools import BOPTools_AlgoTools
+# Windows の cadquery-ocp-novtk 7.9.3.1.1 は `OCP/BOPTools/__init__.py` を同梱しておらず(Linux の wheel にはある)、
+# `from OCP.BOPTools import ...` が ImportError になる(実測)。クラスは本体の拡張モジュールにあるので、そこから取る。
+from OCP.OCP.BOPTools import BOPTools_AlgoTools
 from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.Geom2dLProp import Geom2dLProp_CurAndInf2d
 from OCP.LProp import LProp_NotDefined
