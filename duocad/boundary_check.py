@@ -180,79 +180,31 @@ def degenerate_mask(tri: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------------------
 # 検査本体
 # --------------------------------------------------------------------------------------
-#: y の帯に分けるとき、帯をまたぐ線分の写しの総数をこの倍数(線分の数に対して)までに抑える(超えたら帯を減らす)。
-_BAND_COPIES = 4
-
-
 def _candidate_pairs(face_of_seg: np.ndarray, lo: np.ndarray, hi: np.ndarray):
-    """外接矩形が重なる同じ面の線分の組 (i, j), i<j。
+    """外接矩形が重なる同じ面の線分の組 (i, j), i<j。x の掃引で候補を絞り、y で落とす。
 
-    組の集合は「面ごとに x をずらした区間と y の区間がどちらも(閉区間で)重なる組」で、並びは x をずらした左端の安定な
-    順位の組 (前, 後) の辞書順。面ごとに x をずらすのは、同じ定数の加算が単調で、ずらした後の比較が元の比較より狭く
-    ならないため(候補の取りこぼしが起きない)。
-
-    探し方: y を帯に分け、(面, 帯) ごとに x の掃引をする。組は、両方の左下の帯のうち上の帯でだけ数える(y の区間が重なる
-    組は必ずその帯に両方いる)。x は値の順位(整数)に写して比べるので、ずらした浮動小数の比較と同じ結果になる。
-    x の掃引だけでは、穴 384 の板の面(線分 19.6 万)で y で落とす組が 875 万になる(実測 0.48 秒。帯に分けて 0.05 秒)。
+    面ごとに x をずらして 1 本の掃引にする。同じ定数の加算は単調なので、ずらした後の比較が
+    元の比較より狭くなることはない(候補の取りこぼしが起きない)。
     """
     span = float(hi[:, 0].max() - lo[:, 0].min()) + 1.0
     shift = face_of_seg.astype(np.float64) * span * 2.0
     lo_x = lo[:, 0] + shift
     hi_x = hi[:, 0] + shift
-    count = len(lo_x)
-    values = np.unique(np.concatenate((lo_x, hi_x)))
-    rank_lo = np.searchsorted(values, lo_x)
-    rank_hi = np.searchsorted(values, hi_x)
-    band_lo, band_hi, bands = _y_bands(lo[:, 1], hi[:, 1])
-    copies = band_hi - band_lo + 1
-    member = np.repeat(np.arange(count), copies)
-    band = np.repeat(band_lo, copies) + _ranges(copies)
-    group = face_of_seg[member].astype(np.int64) * bands + band
-    width = len(values) + 1
-    a, b = _sweep(group * width + rank_lo[member], group * width + rank_hi[member])
-    i, j = member[a], member[b]
-    keep = ((face_of_seg[i] == face_of_seg[j]) & (lo[j, 1] <= hi[i, 1]) & (lo[i, 1] <= hi[j, 1])
-            & (band[a] == np.maximum(band_lo[i], band_lo[j])))
-    i, j = i[keep], j[keep]
     order = np.argsort(lo_x, kind='stable')
-    rank = np.empty(count, dtype=np.int64)
-    rank[order] = np.arange(count)
-    sequence = np.lexsort((np.maximum(rank[i], rank[j]), np.minimum(rank[i], rank[j])))
-    i, j = i[sequence], j[sequence]
-    return np.minimum(i, j), np.maximum(i, j)
-
-
-def _y_bands(lo_y: np.ndarray, hi_y: np.ndarray):
-    """線分ごとの y の帯の範囲 `(最初の帯, 最後の帯, 帯の数)`。帯の番号は y について単調(区間の端の帯の間に区間の全点の帯がある)。"""
-    count = len(lo_y)
-    bottom = float(lo_y.min())
-    height = float(hi_y.max()) - bottom
-    bands = max(1, int(np.sqrt(count)))
-    while bands > 1 and height > 0.0:
-        step = height / bands
-        band_lo = np.minimum(((lo_y - bottom) / step).astype(np.int64), bands - 1)
-        band_hi = np.minimum(((hi_y - bottom) / step).astype(np.int64), bands - 1)
-        if int((band_hi - band_lo + 1).sum()) <= _BAND_COPIES * count:
-            return band_lo, band_hi, bands
-        bands //= 2
-    zero = np.zeros(count, dtype=np.int64)
-    return zero, zero, 1
-
-
-def _ranges(counts: np.ndarray) -> np.ndarray:
-    """`counts` の各要素について 0..count-1 を並べた列。"""
-    return np.arange(int(counts.sum())) - np.repeat(np.cumsum(counts) - counts, counts)
-
-
-def _sweep(keys_lo: np.ndarray, keys_hi: np.ndarray):
-    """整数の区間 [keys_lo, keys_hi] の組のうち、安定な順で後の区間の左端が前の区間に入るものの (前, 後)。"""
-    order = np.argsort(keys_lo, kind='stable')
-    upper = np.searchsorted(keys_lo[order], keys_hi[order], side='right')
+    lo_sorted = lo_x[order]
+    upper = np.searchsorted(lo_sorted, hi_x[order], side='right')
     base = np.arange(len(order))
     counts = np.maximum(upper - base - 1, 0)
-    if int(counts.sum()) == 0:
+    total = int(counts.sum())
+    if total == 0:
         return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
-    return order[np.repeat(base, counts)], order[np.repeat(base + 1, counts) + _ranges(counts)]
+    second = np.repeat(base + 1, counts) + (np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts))
+    i = order[np.repeat(base, counts)]
+    j = order[second]
+    keep = (face_of_seg[i] == face_of_seg[j]) & (lo[j, 1] <= hi[i, 1]) & (lo[i, 1] <= hi[j, 1])
+    i, j = i[keep], j[keep]
+    swap = i > j
+    return np.where(swap, j, i), np.where(swap, i, j)
 
 
 def _group_pairs(keys: np.ndarray):
