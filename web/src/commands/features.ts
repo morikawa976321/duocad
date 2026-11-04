@@ -7,7 +7,15 @@
  *
  * 反復にはサーバのプレビューを出さない(変わるのはスケッチの図形でソリッドではない)。幽霊はブラウザだけで描き、規則はコアの写し(docs/contracts/verbs.md)。
  */
-import { pickedRefOf, positive, refKind, type ArgValues, type CommandDef, type Point2 } from './command'
+import {
+  pickedRefOf,
+  positive,
+  refKind,
+  type ArgValues,
+  type CommandDef,
+  type Point2,
+  type SelectionArgSpec,
+} from './command'
 import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg } from './moveMode'
 import type { SelectionRef } from '../session'
 
@@ -27,6 +35,16 @@ function finite(label: string): (value: number) => string | null {
 /** 選択引数が空なら理由を返す。値は送らず、「まだ選んでいない」を画面に出すためだけ。 */
 function missingSelection(values: ArgValues, name: string, label: string): string | null {
   return ((values[name] ?? []) as SelectionRef[]).length === 0 ? `${label}が選ばれていない` : null
+}
+
+/**
+ * ボディごとに効く選択引数(コアの `selection.require_bodies` が面・辺・頂点からボディを逆引きする)。
+ * `shapeKind: 'body'` が起動中のクリックをボディの参照へ畳む印(`grain.ts`)。面・辺・頂点も `kinds` に残すのは、
+ * AI が選んだ部分の参照も対象に数えるため(コアはどれからでも同じボディを指す)。
+ */
+const BODY_SELECTION: Pick<SelectionArgSpec, 'shapeKind' | 'kinds'> = {
+  shapeKind: 'body',
+  kinds: ['body', 'face', 'edge', 'vertex'],
 }
 
 /**
@@ -417,7 +435,7 @@ export const THREAD: CommandDef<'thread'> = {
 }
 
 /**
- * ソリッドブーリアン。ターゲットは面1枚を直接ピック(`PickArgSpec`)、ツールは選択(複数)。
+ * ソリッドブーリアン。ターゲットはボディ1つを直接ピック(`PickArgSpec`)、ツールは選択(複数)。
  * ターゲットのピックをツール選択より前に置く(`args` の並びが `firstMissingArg` の順序)。ターゲットを選択に入れると `require_bodies` でツールとロールが混ざる。
  */
 export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
@@ -429,16 +447,15 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
     {
       kind: 'pick',
       name: 'target_ref',
-      label: 'ターゲット(面1枚)',
-      target: 'face',
+      label: 'ターゲットボディ',
+      target: 'body',
       buttonId: 'boolean-body-target',
     },
     {
       kind: 'selection',
       name: 'tools',
-      label: 'ツールボディ(面/辺/頂点で指す)',
-      shapeKind: 'face',
-      kinds: ['face', 'edge', 'vertex'],
+      label: 'ツールボディ',
+      ...BODY_SELECTION,
       min: 1,
       max: null,
     },
@@ -576,7 +593,7 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
 }
 
 /**
- * ボディの平行移動 / 回転 / 複製。面・辺・頂点のどれでもボディを指せる(`selection.require_bodies` が `ShapeRef.body` から逆引きする)。
+ * ボディの平行移動 / 回転 / 複製。対象はボディ単位で選ぶ(`BODY_SELECTION`)。
  * 複製するか・並進か回転かは既定を置かず人に選ばせる(押し出しの `mode` と同じ理由)。
  *
  * 回転軸は共有選択集合に入れず別チャンネル(`kind: 'pick'`)で指す: 入れると `require_bodies` が軸にした辺のボディまで動かす対象に数える。
@@ -592,9 +609,8 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
     {
       kind: 'selection',
       name: 'target',
-      label: '動かすボディ(面/辺/頂点で指す)',
-      shapeKind: 'face',
-      kinds: ['face', 'edge', 'vertex'],
+      label: '動かすボディ',
+      ...BODY_SELECTION,
       min: 1,
       max: null,
     },
@@ -625,7 +641,7 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
   ],
   build(values) {
     return buildMove(values, {
-      missingTarget: (given) => missingSelection(given, 'target', 'ボディ(面/辺/頂点)'),
+      missingTarget: (given) => missingSelection(given, 'target', '動かすボディ'),
       axes: ['dx', 'dy', 'dz'],
       zeroReason: '移動量が全部0',
       rotateArgs: (angle, given) => {
@@ -658,9 +674,8 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
     {
       kind: 'selection',
       name: 'target',
-      label: '鏡映するボディ(面/辺/頂点で指す)',
-      shapeKind: 'face',
-      kinds: ['face', 'edge', 'vertex'],
+      label: '鏡映するボディ',
+      ...BODY_SELECTION,
       min: 1,
       max: null,
     },
@@ -686,7 +701,7 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
     },
   ],
   build(values) {
-    const empty = missingSelection(values, 'target', 'ボディ(面/辺/頂点)')
+    const empty = missingSelection(values, 'target', '鏡映するボディ')
     if (empty !== null) return { ok: false, reason: empty }
     const basePlane = values.base_plane
     if (typeof basePlane !== 'string') return { ok: false, reason: '鏡映面が選ばれていない' }
@@ -714,9 +729,8 @@ export const SPLIT_BODY: CommandDef<'split_body'> = {
     {
       kind: 'selection',
       name: 'target',
-      label: '割るボディ(面/辺/頂点で指す)',
-      shapeKind: 'face',
-      kinds: ['face', 'edge', 'vertex'],
+      label: '割るボディ',
+      ...BODY_SELECTION,
       min: 1,
       max: null,
     },
@@ -761,7 +775,7 @@ export const SPLIT_BODY: CommandDef<'split_body'> = {
     },
   ],
   build(values) {
-    const empty = missingSelection(values, 'target', 'ボディ(面/辺/頂点)')
+    const empty = missingSelection(values, 'target', '割るボディ')
     if (empty !== null) return { ok: false, reason: empty }
     const basePlane = values.base_plane
     if (typeof basePlane !== 'string') return { ok: false, reason: '切る平面が選ばれていない' }
@@ -803,6 +817,7 @@ export const DELETE_SELECTION: CommandDef<'delete'> = {
       label: '削除するボディ・図形',
       shapeKind: 'body',
       kinds: ['body', 'face', 'edge', 'vertex', 'sketch_entity'],
+      wholeEntities: true,
       min: 1,
       max: null,
     },

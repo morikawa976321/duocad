@@ -99,6 +99,32 @@ def test_intersect_with_two_tools_is_union_of_intersections(session: Session) ->
     assert math.isclose(_volume(session.document, target_id), 2 * TOOL**3, rel_tol=1e-5)
 
 
+def test_the_target_and_the_tools_can_be_named_by_body_references(session: Session) -> None:
+    """画面が送る形(ターゲットもツールもボディの参照)で切り取れる。落ちたら、ボディ単位で選んだブーリアンが確定できない。"""
+    target_id, tool_id = _two_boxes(session.document)
+    _select(session, [{"body": tool_id, "kind": "body", "index": None}])
+    session.boolean_body({"body": target_id, "kind": "body", "index": None}, "cut")
+    assert [body.id for body in session.document.bodies] == [target_id]
+    assert math.isclose(_volume(session.document, target_id), SIDE**3 - TOOL**3, rel_tol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "target_ref, error",
+    [
+        ({"body": "missing", "kind": "body"}, KeyError),
+        ({"kind": "body", "index": None}, ValueError),
+        ({"body": "{target}", "kind": "body", "index": 1}, ValueError),
+    ],
+)
+def test_a_malformed_body_target_is_rejected(session: Session, target_ref: dict, error: type) -> None:
+    """ボディの参照でも、無いボディ・`body` の欠け・添字付きは断る(黙って別のボディを演算しない)。"""
+    doc = session.document
+    target_id, tool_id = _two_boxes(doc)
+    ref = {key: (target_id if value == "{target}" else value) for key, value in target_ref.items()}
+    with pytest.raises(error):
+        boolean_body_verb(doc, ref, [tool_id], mode="cut")
+
+
 def test_non_solid_target_is_rejected(session: Session) -> None:
     doc = session.document
     solid_id = _add_body(doc, "solid", _box_shape(SIDE, SIDE, SIDE))

@@ -16,7 +16,9 @@
     commandRequest,
     edgeRef,
     faceRef,
+    pickedRefOf,
     refKey,
+    refKind,
     refsOfKind,
     regionRef,
     sameRef,
@@ -29,6 +31,7 @@
     type SelectableKind,
   } from './commands/command'
   import { categoryOf } from './commands/category'
+  import { foldRef, foldRefs, grainOf, hoverGrainOf, NO_GRAIN, type SelectionGrain } from './commands/grain'
   import {
     MOVE_BODY,
     SKETCH_FEATURE_COMMANDS,
@@ -148,6 +151,15 @@
       ...SKETCH_MODE_COMMANDS,
       ...OPTIMIZE_MODE_COMMANDS,
     ].map((command) => [command.id, categoryOf(command)]),
+  )
+  /** verb名 -> その選択の粒度(`grain.ts`)。起動したときの選択を畳むのに使う(`onCommandStart`)。 */
+  const GRAIN_OF: Map<string, SelectionGrain> = new Map(
+    [
+      ...SOLID_COMMANDS,
+      ...SKETCH_PENDING_COMMANDS,
+      ...SKETCH_MODE_COMMANDS,
+      ...OPTIMIZE_MODE_COMMANDS,
+    ].map((command) => [command.id, grainOf(command)]),
   )
 
   let container: HTMLDivElement
@@ -289,6 +301,8 @@
    * `wantedPick === 'vertex'` と同じ扱いで、対象ボディの頂点を候補に出し、辺より先に取る。
    */
   let wantedVertices = $state(false)
+  /** 起動中のコマンドが持ち主(ボディ・図形)ごとに効くか(`CommandHost` が知らせる)。クリックとホバーをその粒度へ畳む。 */
+  let wantedGrain = $state<SelectionGrain>(NO_GRAIN)
   /** 取り寄せた辺(body_id -> その版の折れ線)。カーソルの近くのボディから頼む(`requestPickData`)。 */
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
@@ -1141,10 +1155,18 @@
     send()
   }
 
+  /** 起動中のコマンドが直接ピックで指したボディ(ブーリアンのターゲット)。選択には入らないので、配信された引数から引いて光らせる。 */
+  function pickedBodies(): string[] {
+    return Object.values(model?.command?.args ?? {}).flatMap((value) => {
+      const ref = pickedRefOf(value)
+      return ref !== null && refKind(ref) === 'body' ? [(ref as BodyRef).body] : []
+    })
+  }
+
   function drawHighlight(): void {
     viewport?.highlight(selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
     // 選択が勝つ: ボディが選ばれているあいだは保持/除外の役割色より優先(`viewport.applyFaceMaterials` が実体)。
-    viewport?.highlightBodies(selectedBodies.map((item) => item.body))
+    viewport?.highlightBodies([...selectedBodies.map((item) => item.body), ...pickedBodies()])
     viewport?.highlightEdges(selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
     viewport?.highlightVertices(selectedVertices.map((item) => ({ bodyId: item.body, vertexIndex: item.index })))
   }
@@ -1227,7 +1249,7 @@
     viewport?.showBasePlanes(on)
   })
 
-  /** 選択の種類から画面で指す種類へ(ボディ参照は面のクリックを畳んで作る。`optimizeSetFaceRef`)。 */
+  /** 選択の種類から画面で指す種類へ(ボディ参照は面のクリックを畳んで作る。`solidClickRef`)。 */
   const PICK_KINDS_OF: Record<SelectableKind, PickKind[]> = {
     face: ['face'],
     edge: ['edge'],
@@ -1238,6 +1260,7 @@
   }
   const PICK_TARGET_KINDS: Record<PickTarget, PickKind[]> = {
     face: ['face'],
+    body: ['face'],
     edge: ['edge'],
     vertex: ['vertex'],
     sketchPoint: ['sketchPoint'],
@@ -1247,6 +1270,7 @@
   /** 直接ピックで待っているものより細かい的(`pickKinds` が待っている間だけ外す)。 */
   const FINER_THAN: Record<PickTarget, PickKind[]> = {
     face: ['edge', 'vertex', 'sketchPoint', 'sketchLine'],
+    body: ['edge', 'vertex', 'sketchPoint', 'sketchLine'],
     edge: ['vertex', 'sketchPoint'],
     vertex: [],
     sketchPoint: [],
@@ -1266,7 +1290,11 @@
       (model?.command ?? null) !== null || wantedKinds.length > 0 || wantedPick !== null || wantedVertices
     if (!commandActive) return mode.kind === 'optimize' ? ['face'] : EVERY_PICK_KIND
     const kinds = new Set<PickKind>()
-    for (const kind of wantedKinds) for (const pick of PICK_KINDS_OF[kind]) kinds.add(pick)
+    for (const kind of wantedKinds) {
+      // ボディごとに効くコマンドは面を押せば足りる(`body` が面を足す)。辺・頂点を的に残すと、辺の際を押したときだけ辺が光る。
+      if (wantedGrain.body && (kind === 'face' || kind === 'edge' || kind === 'vertex')) continue
+      for (const pick of PICK_KINDS_OF[kind]) kinds.add(pick)
+    }
     if (wantedPick !== null) for (const pick of PICK_TARGET_KINDS[wantedPick]) kinds.add(pick)
     if (wantedVertices) kinds.add('vertex')
     // 直接ピックを待っている間は、待っているものより細かい的を外す: 細かい方が先に取られ(`resolveHit`)、鏡映面を
@@ -1320,6 +1348,11 @@
     const on = edgeOnlyCommand
     viewport?.groupEdgeChains(on)
   })
+
+  $effect(() => {
+    const grain = hoverGrainOf(wantedGrain, wantedPick)
+    viewport?.setHoverGrain(grain)
+  })
   function modifySelection(add: SelectionRef[], remove: SelectionRef[]): number | null {
     if (add.length === 0 && remove.length === 0) return null
     const op = nextOp()
@@ -1353,7 +1386,6 @@
   /**
    * 当たった面を選択の参照へ翻訳する。メッシュボディだけはボディ参照へ畳む:
    * メッシュに指せる面は無い(`selection.modify_selection` が断る)が、ボディ単位なら選べる。
-   * 編集verbは `kinds` にボディを持たないので押せないまま、「押せるのに断られる」が画面から消える。
    */
   function pickedRef(bodyId: string, faceIndex: number): SelectionRef {
     if (meshBodyIds.has(bodyId)) return bodyRef(bodyId)
@@ -1378,12 +1410,36 @@
   }
 
   /**
-   * 保持/除外ソリッドの間はボディ粒度(`wantedKinds` に `'body'` が立つのは `SET_PRESERVE_BODIES` /
-   * `SET_EXCLUDE_BODIES` だけ)。面の参照を確定すると `require_selected_bodies` が面を無視し集合が黙って空になる。
+   * 当たった面を、起動中のコマンドの粒度の参照へ翻訳する(`grain.ts`)。ボディごとに効くコマンドの間はボディの参照:
+   * 面のまま選ぶと、保持/除外ソリッドでは `require_selected_bodies` が面を無視して集合が黙って空になり、
+   * 移動・ブーリアンなどでは光った面と効くボディが食い違う。
    */
-  function optimizeSetFaceRef(bodyId: string, faceIndex: number): SelectionRef {
-    if (wantedKinds.includes('body')) return bodyRef(bodyId)
+  function solidClickRef(bodyId: string, faceIndex: number): SelectionRef {
+    if (wantedGrain.body) return bodyRef(bodyId)
     return pickedRef(bodyId, faceIndex)
+  }
+
+  /** スケッチの図形の参照を、起動中のコマンドの粒度へ畳む(図形ごとに効くコマンドの間は点を落とす)。 */
+  function sketchClickRef(sketchId: string, entityId: string, point: string | null): SelectionRef {
+    return foldRef(sketchEntityRef(sketchId, entityId, point), wantedGrain, isPointEntity)
+  }
+
+  function isPointEntity(sketchId: string, entityId: string): boolean {
+    const sketch = sketches.find((item) => item.sketch_id === sketchId)
+    return sketch?.entities.find((item) => item.entity_id === entityId)?.kind === 'point'
+  }
+
+  /** 矩形選択のまとまりを粒度へ畳み、同じ持ち主に畳まれたまとまりを1つにする(同じボディの面と辺を囲んでも1つ)。 */
+  function foldUnits(units: SelectionRef[][]): SelectionRef[][] {
+    const seen = new Set<string>()
+    return units
+      .map((unit) => foldRefs(unit, wantedGrain, isPointEntity))
+      .filter((unit) => {
+        const key = unit.map(refKey).join('|')
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
   }
 
   function onBoxSelect(event: BoxSelectEvent): void {
@@ -1406,14 +1462,13 @@
       const unit = edgeChainRefs(item.bodyId, item.edgeIndex) ?? [edgeRef(item.bodyId, item.edgeIndex)]
       chainUnits.set(refKey(unit[0]), unit)
     }
-    const units: SelectionRef[][] = [
-      // 同じボディの面が何枚囲まれても参照は1つ(`refKey` で重複を落とす)。
-      ...dedupeRefs(event.faces.map((item) => optimizeSetFaceRef(item.bodyId, item.faceIndex))).map((ref) => [ref]),
+    const units: SelectionRef[][] = foldUnits([
+      ...event.faces.map((item) => [solidClickRef(item.bodyId, item.faceIndex)]),
       ...chainUnits.values(),
       ...event.vertices.map((item) => [vertexRef(item.bodyId, item.vertexIndex)]),
       ...event.regions.map((item) => [regionRef(item.sketchId, item.index)]),
       ...event.sketchEntities.map((item) => [sketchEntityRef(item.sketchId, item.entityId, item.point)]),
-    ]
+    ])
     const picked = units.flat()
     const current = currentItems()
     const currentKeys = new Set(current.map(refKey))
@@ -1443,15 +1498,15 @@
     modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
   }
 
-  /** 同じ参照が2つ以上入らないようにする(メッシュの面を畳むと同じボディ参照が並ぶ)。 */
-  function dedupeRefs(refs: SelectionRef[]): SelectionRef[] {
-    const seen = new Set<string>()
-    return refs.filter((ref) => {
-      const key = refKey(ref)
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+  /**
+   * 選択を粒度の持ち主へ畳む。粒度は `CommandHost` の知らせ(`wantedGrain`)を待たずに引数で受ける: 起動の瞬間は
+   * まだ前のコマンドの粒度が残っている。
+   */
+  function foldSelection(grain: SelectionGrain): void {
+    const current = currentItems()
+    const folded = foldRefs(current, grain, isPointEntity)
+    if (folded.length === current.length && folded.every((ref, index) => sameRef(ref, current[index]))) return
+    presetSelection(folded)
   }
 
   /** `selectOnly` の複数版 —— 選択集合を `refs` そのものに置き換える。 */
@@ -1466,9 +1521,10 @@
   }
 
   /**
-   * コマンドが起動した(`CommandHost.start`)。形状最適化のverbだけが意味を持つ。
+   * コマンドが起動した(`CommandHost.start`)。
    * 集合代入の3つは、起動した役割の既存の割り当て(`state.optimize` の該当配列。`duocad/optimize.py` の契約で
    * そのまま `modifySelection` へ渡せる)を選択状態にして見せる。荷重の2つは空にする(`OPTIMIZE_EMPTY_START_VERBS`)。
+   * それ以外は、起動前に選んであったもの(AI が選んだ面も)をそのコマンドの粒度へ畳む(`foldSelection`)。
    */
   function onCommandStart(verb: string): void {
     measure.clear() // 次の操作に入ったら、前の測定の札は用済み
@@ -1487,6 +1543,7 @@
     if (role === undefined) {
       // 集合代入の3つは下の `presetSelection` が置き換えるので、ここへ来るのはそれ以外だけ。
       if (switched) clearSelectionIfAny()
+      else foldSelection(GRAIN_OF.get(verb) ?? NO_GRAIN)
       return
     }
     // 非表示のボディに付いた割り当ては選択に並ばない(`state.optimize` の配列は指せるものだけ)。集合 verb は
@@ -1797,6 +1854,10 @@
         host.setPick(faceRef(event.hit.bodyId, event.hit.faceIndex))
         return
       }
+      if (wants === 'body' && event.hit !== null) {
+        host.setPick(bodyRef(event.hit.bodyId))
+        return
+      }
       // スケッチの点・図形を待つ通常モードのコマンド(ロフトの収束点)。読み方はスケッチモードの `onSketchPick` と同じ:
       // 点は当たった点をそのまま、図形は点を落として図形1つに畳む。
       const sketchHit = event.sketchEntity
@@ -1816,7 +1877,7 @@
     // スケッチの図形(点・線)。通常モードでは見えている全スケッチの図形が来る(スケッチモードは `onSketchPick`)。
     if (event.sketchEntity !== null) {
       const hit = event.sketchEntity
-      editSelection(sketchEntityRef(hit.sketchId, hit.entityId, hit.point), pickMode)
+      editSelection(sketchClickRef(hit.sketchId, hit.entityId, hit.point), pickMode)
       return
     }
     if (event.region !== null) {
@@ -1844,12 +1905,17 @@
       else pick()
       return
     }
-    // 保持/除外ソリッドの間だけボディ粒度へ畳む(`optimizeSetFaceRef`)。
-    editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
+    editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
 
   /** ソリッドの辺・頂点のピックを選択の編集へ(当たっていれば true)。通常モードと、スケッチモードの投影の起動中が使う。 */
   function editSolidEdgeOrVertex(event: PickEvent, pickMode: PickEvent['mode']): boolean {
+    // ボディごとに効くコマンドの間に辺・頂点が当たるのは、回転軸・中心を待つあいだの修飾キー付きクリックだけ。
+    const part = event.edge ?? event.vertex
+    if (wantedGrain.body && part !== null) {
+      editSelection(bodyRef(part.bodyId), pickMode)
+      return true
+    }
     // 辺は連なりで扱うコマンド(フィレット・面取り)の起動中だけ連なりの単位(`edgeChainRefs`)、それ以外は1本。
     if (event.edge !== null) {
       const edge = event.edge
@@ -1985,7 +2051,7 @@
       // 投影の起動中: 当たるのはソリッドだけ(`viewport.setSolidPickInSketch`)。素のクリックは足す・外す。
       const pickMode = toggleOnlyMode(event.mode)
       if (editSolidEdgeOrVertex(event, pickMode)) return
-      if (event.hit !== null) editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
+      if (event.hit !== null) editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
       return
     }
     if (event.point && host?.wantsPoint()) {
@@ -2009,14 +2075,8 @@
     // 図形は領域より先(点・辺は領域の縁に乗っているので、領域が勝つと端点を掴めない)。
     const pickMode = commandClickToggles() ? 'toggle' : event.mode
     if (event.sketchEntity) {
-      editSelection(
-        sketchEntityRef(
-          event.sketchEntity.sketchId,
-          event.sketchEntity.entityId,
-          event.sketchEntity.point,
-        ),
-        pickMode,
-      )
+      const hit = event.sketchEntity
+      editSelection(sketchClickRef(hit.sketchId, hit.entityId, hit.point), pickMode)
       return
     }
     if (event.region) {
@@ -2553,6 +2613,7 @@
           onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
           onWantsPick={(target) => (wantedPick = target)}
           onWantsVertices={(wants) => (wantedVertices = wants)}
+          onWantsGrain={(grain) => (wantedGrain = grain)}
         />
       {/key}
     </section>

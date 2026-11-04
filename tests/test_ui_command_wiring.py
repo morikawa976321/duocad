@@ -404,6 +404,78 @@ def test_which_commands_apply_without_enter():
     ], f"即適用になるコマンドの顔ぶれが変わった: {immediate}"
 
 
+# 選択の粒度(`web/src/commands/grain.ts`)
+#: コアが選択の面・辺・頂点をボディへ逆引きする口(`duocad/selection.py`)。
+_BODY_RESOLVERS = frozenset({"require_bodies", "require_deletable"})
+
+
+def _called_names(node: ast.AST) -> set:
+    names = set()
+    for call in ast.walk(node):
+        if isinstance(call, ast.Call):
+            if isinstance(call.func, ast.Attribute):
+                names.add(call.func.attr)
+            elif isinstance(call.func, ast.Name):
+                names.add(call.func.id)
+    return names
+
+
+def _verbs_whose_entry_calls(targets: frozenset) -> set:
+    """`duocad/verbs/*.py` の入口(`@entry(VERB)`)のうち、`targets` のどれかを呼ぶ verb(同じモジュールの関数を1段たどる)。"""
+    found = set()
+    for path in sorted((REPO_ROOT / "duocad" / "verbs").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        for node in functions.values():
+            for decorator in node.decorator_list:
+                if not (
+                    isinstance(decorator, ast.Call)
+                    and isinstance(decorator.func, ast.Name)
+                    and decorator.func.id == "entry"
+                ):
+                    continue
+                verb = decorator.args[0]
+                if isinstance(verb, ast.Name):
+                    verb_name = getattr(importlib.import_module(f"duocad.verbs.{path.stem}"), verb.id)
+                else:
+                    verb_name = ast.literal_eval(verb)
+                direct = _called_names(node)
+                reached = direct | {
+                    name for helper in direct if helper in functions for name in _called_names(functions[helper])
+                }
+                if reached & targets:
+                    found.add(verb_name)
+    return found
+
+
+def test_verbs_that_act_on_whole_bodies_select_whole_bodies_on_screen():
+    """コアが選択をボディへ逆引きして効かせる verb は、画面でもボディ単位で選ぶ(`shapeKind: 'body'`)。
+
+    落ちたら、その verb の起動中に面や辺を押すとその面・辺だけが光るのに、ボディ全体が動く・割れる・消える。
+    逆向き(画面だけがボディ単位)は、ボディに畳んだ選択をコアが面として読めずに断る。
+    """
+    body_verbs = _verbs_whose_entry_calls(_BODY_RESOLVERS)
+    assert {"move_body", "boolean_body", "delete", "project_outline"} <= body_verbs, f"入口を読めていない: {body_verbs}"
+    commands = {command["id"]: command for command in _ui_commands()}
+    face_grained = sorted(verb for verb in body_verbs if verb in commands and not commands[verb]["grain"]["body"])
+    assert face_grained == [], f"コアはボディごとに効くのに、画面が部分を選ぶ: {face_grained}"
+    accepts_bodies = _verbs_whose_entry_calls(_BODY_RESOLVERS | {"require_selected_bodies"})
+    stray = sorted(
+        command["id"] for command in commands.values() if command["grain"]["body"] and command["id"] not in accepts_bodies
+    )
+    assert stray == [], f"画面はボディ単位で選ぶのに、コアがボディの参照を読まない: {stray}"
+
+
+def test_which_commands_select_whole_sketch_entities():
+    """図形単位で選ぶ(点を押しても図形を選ぶ)のは、コアが点を図形へ畳んで効かせる verb だけ。
+
+    落ちたら、端点を押すと点だけが光るのに図形ごと消える・鏡映される・反復される(またはその逆に、点だけを動かす
+    `move_sketch_entities` で点を選べなくなる)。
+    """
+    entity_grained = sorted(command["id"] for command in _ui_commands() if command["grain"]["entity"])
+    assert entity_grained == ["delete", "mirror_sketch_entities", "pattern_circular", "pattern_rectangular"]
+
+
 # プレビュー
 def test_every_unsent_choice_can_be_restored_from_the_shared_args():
     """サーバへ行かない選択肢(`sends: null`)は、配信のどの引数から戻すかを `impliedBy` で名指しする。

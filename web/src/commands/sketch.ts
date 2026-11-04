@@ -416,6 +416,7 @@ export const MIRROR_SKETCH_ENTITIES: CommandDef<'mirror_sketch_entities'> = {
       name: 'target',
       label: '鏡映する図形',
       shapeKind: 'sketch_entity',
+      wholeEntities: true,
       min: 1,
       max: null,
     },
@@ -517,7 +518,7 @@ export const PROJECT_TO_SKETCH: CommandDef<'project_to_sketch'> = {
 
 /**
  * 選んだボディを、編集中のスケッチの平面の法線方向から見た外形(影の境界。外周と貫通した穴)を図形として足す。
- * 面をクリックするとそのボディを指す(`optimizeSetFaceRef` がボディの粒度へ畳む)。
+ * 面をクリックするとそのボディを指す(`shapeKind: 'body'`。`grain.ts`)。
  */
 export const PROJECT_OUTLINE: CommandDef<'project_outline'> = {
   id: 'project_outline',

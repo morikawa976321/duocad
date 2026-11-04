@@ -68,7 +68,7 @@ export interface SketchLayer {
   redraw(resolution: ViewResolution): boolean
   setLineResolution(width: number, height: number): void
   applyRegionMaterials(hover: RegionHover): void
-  applySketchHoverMaterials(hover: SketchEntityHit | null): void
+  applySketchHoverMaterials(hover: SketchEntityHit | null, wholeEntity?: boolean): void
   showGhosts(sketchId: string, entities: SketchDraw['entities'], resolution: ViewResolution, tone?: 'normal' | 'warn'): void
   clearGhost(): void
   rebuilds(): number
@@ -439,8 +439,13 @@ export function createSketchLayer(sketchRoot = new THREE.Group()): SketchLayer {
    * スケッチの線・点の材質を決める。選択とホバーの両方を見る唯一の場所。`handleLines`/`handleMeshes` を
    * 歩いて `.material` を差し替えるだけ。点は必ず辺の上に乗るので、点がホバーされているときは
    * 線を光らせない(`hoverSketchEntity.point === null` を線側の条件に入れて排他にする)。
+   * `wholeEntity` の間は点を指しても図形の線を光らせる(図形ごとに効くコマンドの起動中。線を持たない点の図形はその点のまま)。
    */
-  function applySketchHoverMaterials(hoverSketchEntity: SketchEntityHit | null): void {
+  function applySketchHoverMaterials(hover: SketchEntityHit | null, wholeEntity = false): void {
+    const hasLine = (hit: SketchEntityHit): boolean =>
+      sketches.get(hit.sketchId)?.handleLines.some((line) => line.userData.entityId === hit.entityId) ?? false
+    const hoverSketchEntity =
+      wholeEntity && hover !== null && hover.point !== null && hasLine(hover) ? { ...hover, point: null } : hover
     for (const [sketchId, entry] of sketches) {
       for (const line of entry.handleLines) {
         const entityId = line.userData.entityId as string
