@@ -47,8 +47,7 @@ QR1(733 面)ではゴーストが 0.4 秒なので、穴の多い平面で急に
 
 ### 再開の手順
 
-- 検証の環境: Python 3.14 の環境(`UV_PROJECT_ENVIRONMENT=<一時フォルダ> uv sync --frozen`)、Node は `C:\Program Files
-odejs` の 24。
+- 検証の環境: Python 3.14 の環境(`UV_PROJECT_ENVIRONMENT=<一時フォルダ> uv sync --frozen`)、Node は `C:\Program Files\nodejs` の 24。
 - 枝の確かめ方: `git archive <枝>` を一時フォルダに書き出し、そこで `tools/replay_fingerprint.py --out` を保存済みの文書群の写しに掛けて
   基準の指紋と `--compare`、全件テストの失敗の顔ぶれを基準と比べる。合成の文書群は `tools/synthetic_corpus.py generate --seed 1 --count 300` で
   1回だけ作り、`steps`(と `--triangles`)を前後で取って `compare`。
