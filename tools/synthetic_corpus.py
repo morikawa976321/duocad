@@ -258,17 +258,17 @@ def replay_steps(path: Path, workdir: Path, *, triangles: bool, detail: bool) ->
     return out
 
 
-def peak_memory_mb() -> Optional[dict]:
-    """このプロセスと子プロセス(丸め・面の編集の常駐の子)の最大常駐量[MB]。測れない OS(Windows)では None。"""
+def peak_memory_mb() -> Optional[float]:
+    """このプロセスの最大常駐量[MB]。測れない OS(Windows)では None。
+
+    常駐の子(丸め・面の編集)は含まない(`RUSAGE_CHILDREN` は終わった子しか数えず、子は終わるまで残る)。
+    """
     try:
         import resource
     except ImportError:
         return None
     scale = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
-    return {
-        "self": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / scale, 1),
-        "children": round(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / scale, 1),
-    }
+    return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / scale, 1)
 
 
 def collect(paths: list) -> list:
