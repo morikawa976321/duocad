@@ -51,7 +51,7 @@ import type { BasePlaneName } from './session'
 import {
   type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef,
   type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type SectionState,
-  type SketchDraw, type SketchEntityHit, type VertexRef, type Viewport,
+  type SketchDraw, type SketchEntityHit, type VertexRef, type ViewSnapshot, type Viewport,
 } from './viewportTypes'
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
@@ -689,13 +689,36 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
-  function viewSignature(): string {
+  /**
+   * 今の視点の控え(カメラの写しと画面の寸法)。写しは子(ヘッドライト)を持たない。シーン直下のカメラなので、写しの
+   * `updateMatrixWorld` は元と同じ行列になる。
+   */
+  function viewSnapshot(): ViewSnapshot {
     camera.updateMatrixWorld()
+    const kept =
+      camera instanceof THREE.PerspectiveCamera
+        ? new THREE.PerspectiveCamera().copy(camera, false)
+        : new THREE.OrthographicCamera().copy(camera, false)
+    return { camera: kept, ...size() }
+  }
+
+  function fitsView(view: ViewSnapshot): boolean {
     const { width, height } = size()
-    // 丸めて比べる: スケッチモードでは `OrbitControls` が止まっていても行列を毎フレーム 1e-8 ほど揺らし続け、完全一致だと
-    // 矩形選択の集め直し(`App.svelte` の `pendingBox`)が毎回「視点が動いた」として捨てられる(`updateHover` と同じ罠)
-    const fixed = (values: number[]) => values.map((value) => value.toFixed(6))
-    return [...fixed(camera.matrixWorld.elements), ...fixed(camera.projectionMatrix.elements), width, height].join(',')
+    return view.width === width && view.height === height
+  }
+
+  /**
+   * 控えの視点で矩形の中を集める。`camera` を控えの写しへ差し替えて集め、戻す(集める間は描かないので画面には出ない。
+   * 奥行きの読み出し `occlusion` も同じ `camera` を読む)。寸法が控えと違えば呼ばない(`fitsView`)。
+   */
+  function collectInBoxAs(rect: BandRect, view: ViewSnapshot): Omit<BoxSelectEvent, 'mode'> {
+    const live = camera
+    camera = view.camera as typeof camera
+    try {
+      return collectInBox(rect)
+    } finally {
+      camera = live
+    }
   }
 
   function projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null {
@@ -2180,7 +2203,8 @@ export function createViewport(container: HTMLElement): Viewport {
     const point = orbiting ? null : hoverAt
     // カメラの値は丸めて鍵にする: 真上から見る極の近く(スケッチ中)では `OrbitControls` が毎フレーム位置と姿勢を
     // 1e-8 ほど揺らし続け、そのままだと止まっていても毎フレーム当たりを解き直す(`cameraMovedSinceRender` と同じ揺れ)。
-    const fixed = (values: number[]) => values.map((value) => value.toFixed(6)).join(',')
+    // 0 の近くで揺れる成分は `toFixed` だと `-0.000000` と `0.000000` に分かれるので、丸めた整数(-0 は 0 に)で鍵にする。
+    const fixed = (values: number[]) => values.map((value) => Math.round(value * 1e6) + 0).join(',')
     const probe =
       point === null
         ? ''
@@ -2428,7 +2452,9 @@ export function createViewport(container: HTMLElement): Viewport {
     },
     setFov,
     cameraPose,
-    viewSignature,
+    viewSnapshot,
+    fitsView,
+    collectInBoxAs,
     projectPoint,
     projectSketchPoint,
     projectBasePlane,

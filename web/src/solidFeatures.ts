@@ -111,11 +111,36 @@ interface BodyVertexEntry {
   sphere: THREE.Sphere
 }
 
-function sphereOf(points: ArrayLike<number>): THREE.Sphere {
-  const box = new THREE.Box3()
-  const scratch = new THREE.Vector3()
-  for (let at = 0; at + 2 < points.length; at += 3) box.expandByPoint(scratch.set(points[at], points[at + 1], points[at + 2]))
-  return box.isEmpty() ? new THREE.Sphere(new THREE.Vector3(), -1) : box.getBoundingSphere(new THREE.Sphere())
+/**
+ * 点を `Box3.expandByPoint` で囲んで `getBoundingSphere` したのと同じ球(点が無ければ半径 -1)。点ごとに `Vector3` を通すと、
+ * ズームで QR1 の辺を受けたとき 7〜8 ms かかっていた(実測)ので、同じ式を数のまま計算する。
+ */
+export function sphereOf(points: ArrayLike<number>): THREE.Sphere {
+  let minX = Infinity
+  let minY = Infinity
+  let minZ = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  let maxZ = -Infinity
+  for (let at = 0; at + 2 < points.length; at += 3) {
+    const x = points[at]
+    const y = points[at + 1]
+    const z = points[at + 2]
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    minZ = Math.min(minZ, z)
+    maxX = Math.max(maxX, x)
+    maxY = Math.max(maxY, y)
+    maxZ = Math.max(maxZ, z)
+  }
+  if (maxX < minX || maxY < minY || maxZ < minZ) return new THREE.Sphere(new THREE.Vector3(), -1)
+  const dx = maxX - minX
+  const dy = maxY - minY
+  const dz = maxZ - minZ
+  return new THREE.Sphere(
+    new THREE.Vector3((minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5),
+    Math.sqrt(dx * dx + dy * dy + dz * dz) * 0.5,
+  )
 }
 
 function float32Polyline(points: Float32Array): PickPolyline {

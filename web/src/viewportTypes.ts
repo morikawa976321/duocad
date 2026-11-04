@@ -298,6 +298,17 @@ export interface SketchEntityHit {
  * 左ドラッグのウィンドウ選択の結果(矩形に完全包含され、一部でも見えているものだけ)。
  * 何も囲まなかったドラッグも空配列で呼ぶ(修飾なしなら選択を空にする)。
  */
+/**
+ * 視点の控え(`Viewport.viewSnapshot`)。矩形を引いた後に辺・頂点の到着を待つ間にカメラが動いても、引いたときの視点で集め直す。
+ * 視点が同じかを数で比べて捨てる作りにはしない: スケッチモードの `OrbitControls` は止まっていても行列を 1e-8 ほど揺らし続け、
+ * 0 の符号(`-0.000000`)や丸めの境目をまたいで「動いた」と見る(投影の起動中の矩形選択が何も選ばなかった。実測)。
+ */
+export interface ViewSnapshot {
+  readonly camera: THREE.Camera
+  readonly width: number
+  readonly height: number
+}
+
 export interface BoxSelectEvent {
   faces: FaceRef[]
   edges: EdgeRef[]
@@ -628,11 +639,12 @@ export interface Viewport {
    * `position.z - target.z` が変わらないこと(回転の極が+Z)。後者は `OrbitControls` が
    * 生成時の up を `_quat` へ焼き込む仕様のせいで静かに壊れる。
    */
-  /**
-   * 画面の画素と世界を結ぶ写像の鍵(カメラの姿勢・投影・正投影のズーム・画面の寸法)。同じ鍵なら、前に引いた画面の矩形が
-   * 同じものを囲む(届くのを待たせた矩形選択を集め直してよいかの判定)。
-   */
-  viewSignature(): string
+  /** 今の視点の控え(届くのを待たせた矩形選択を、引いたときの視点で集め直すため)。 */
+  viewSnapshot(): ViewSnapshot
+  /** 画面の寸法が控えのときと同じか(違えば、控えの視点で集めても画面の矩形が同じ所を指さない)。 */
+  fitsView(view: ViewSnapshot): boolean
+  /** `collectInBox` を控えの視点で行う。 */
+  collectInBoxAs(rect: BoxRect, view: ViewSnapshot): Omit<BoxSelectEvent, 'mode'>
   cameraPose(): {
     position: [number, number, number]
     target: [number, number, number]

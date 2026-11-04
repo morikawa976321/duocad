@@ -42,6 +42,7 @@ EVALUATORS = [
     "eval_sketch_intersections.mjs",
     "eval_sketch_layer.mjs",
     "eval_sketch_snap.mjs",
+    "eval_sphere_of.mjs",
     "eval_text_sprite.mjs",
     "eval_view_cube.mjs",
     "eval_view_cube_overlay.mjs",
