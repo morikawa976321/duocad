@@ -1,8 +1,10 @@
 """形状のコピー・結合・同一領域の統合。操作の試行順と失敗方針は呼び手が決める。"""
 from __future__ import annotations
 
+import io
 from typing import Any, Sequence
 
+from OCP.BinTools import BinTools, BinTools_FormatVersion
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -44,7 +46,8 @@ def unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
 
     1. コピーに対して統合を試し、(a)妥当 (b)体積が変わらない (c)**面が実際に減る** を確かめる
     2. 3つとも満たすときだけ、元の形状に対して本番の統合を行い、その出力と履歴を返す
-       (由来の射影は元の形状の部分形状を鍵に引くので、コピーに対して統合すると同一性が切れる)
+       (由来の射影は元の形状の部分形状を鍵に引くので、コピーに対して統合すると同一性が切れる)。
+       本番の出力が試行の出力と同じ中身(`_same_content`)なら、試行の検査と体積をそのまま使う
     3. 満たさないときは元の形状をそのまま返す
 
     3つ目の戻り値が True なら、返す形は検査済み(呼び手は妥当性を測り直さない)。
@@ -63,7 +66,8 @@ def unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
     # 3条件の判定は安い順(面が減らない統合が多く、そのとき体積と BRepCheck を測らずに済む)
     if _brep_topology._face_map(candidate).Extent() >= _brep_topology._face_map(shape).Extent():
         return shape, None, False
-    if abs(_brep_geometry.volume(candidate) - volume_before) > 1e-6 * max(1.0, abs(volume_before)):
+    candidate_volume = _brep_geometry.volume(candidate)
+    if abs(candidate_volume - volume_before) > 1e-6 * max(1.0, abs(volume_before)):
         return shape, None, False
     if not _brep_checks.is_valid(candidate):
         return shape, None, False
@@ -72,10 +76,33 @@ def unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
     unify.Build()
     _brep_geometry.forget_volume(shape)
     unified = unify.Shape()
-    if unified is None or _brep_topology.is_null(unified) or not _brep_checks.is_valid(unified):
+    if unified is None or _brep_topology.is_null(unified):
+        raise ValueError("ShapeUpgrade_UnifySameDomain が試行と異なる結果を返した")
+    if _same_content(unified, candidate):
+        _brep_geometry.note_volume(unified, candidate_volume)  # 同じ中身なので積分し直しても同じ値
+    elif not _brep_checks.is_valid(unified):
         # 試行では通ったのに本番で壊れた場合。入力(shape)はもう壊れているので操作ごと捨てる。
         raise ValueError("ShapeUpgrade_UnifySameDomain が試行と異なる結果を返した")
     return unified, unify.History(), True
+
+
+def _same_content(shape: "TopoDS_Shape", other: "TopoDS_Shape") -> bool:
+    """2つの形が、幾何の持ち方の違いを除いて同じ中身か(写しの BinTools のバイト列。三角形は入れない)。
+
+    同じなら BRepCheck の答えも同じなので、検査済みの試行と同じ本番は測り直さない(485 面の板で BRepCheck 1回 0.28 秒、
+    この比較 0.05 秒)。外部の罠: ブーリアンの結果は辺どうしで pcurve を共有し、`BRepBuilderAPI_Copy` は分けるので、
+    写さずに比べると試行と本番は必ず違う(全件のテストで統合した 71 回すべて)。写し同士なら 71 回すべて同じだった。
+    """
+    return _content(shape) == _content(other)
+
+
+def _content(shape: "TopoDS_Shape") -> bytes:
+    stream = io.BytesIO()
+    BinTools.Write_s(
+        BRepBuilderAPI_Copy(shape, True, False).Shape(), stream, False, False,
+        BinTools_FormatVersion.BinTools_FormatVersion_CURRENT,
+    )
+    return stream.getvalue()
 
 
 def build_boolean(kind: str, first: TopoDS_Shape, second: TopoDS_Shape, fuzzy: float = 0.0):
