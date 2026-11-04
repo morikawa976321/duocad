@@ -46,6 +46,7 @@ EVALUATORS = [
     "eval_view_cube.mjs",
     "eval_view_cube_overlay.mjs",
     "eval_view_settings.mjs",
+    "eval_view_snapshot.mjs",
 ]
 
 

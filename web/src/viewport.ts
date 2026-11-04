@@ -44,6 +44,7 @@ import { createInterferenceLayer } from './interferenceLayer'
 import { createMeasureAnnotation } from './measureAnnotation'
 import { createThumbnailer } from './thumbnail'
 import { buildBodyMesh } from './bodyMesh'
+import { sameView, snapshotView, type ViewSnapshot } from './viewSnapshot'
 import { OCCLUDER_LAYER, createOcclusion } from './occlusion'
 import { closestOnPolyline, createProjector, screenHitOfPoint, type PickPolyline, type ScreenProjector } from './polylinePick'
 import { createSolidFeatures, type BodyEdges, type BodyVertices } from './solidFeatures'
@@ -689,13 +690,10 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
-  function viewSignature(): string {
+  function viewSnapshot(): ViewSnapshot {
     camera.updateMatrixWorld()
     const { width, height } = size()
-    // 丸めて比べる: スケッチモードでは `OrbitControls` が止まっていても行列を毎フレーム 1e-8 ほど揺らし続け、完全一致だと
-    // 矩形選択の集め直し(`App.svelte` の `pendingBox`)が毎回「視点が動いた」として捨てられる(`updateHover` と同じ罠)
-    const fixed = (values: number[]) => values.map((value) => value.toFixed(6))
-    return [...fixed(camera.matrixWorld.elements), ...fixed(camera.projectionMatrix.elements), width, height].join(',')
+    return snapshotView(camera.matrixWorld.elements, camera.projectionMatrix.elements, width, height)
   }
 
   function projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null {
@@ -2180,7 +2178,8 @@ export function createViewport(container: HTMLElement): Viewport {
     const point = orbiting ? null : hoverAt
     // カメラの値は丸めて鍵にする: 真上から見る極の近く(スケッチ中)では `OrbitControls` が毎フレーム位置と姿勢を
     // 1e-8 ほど揺らし続け、そのままだと止まっていても毎フレーム当たりを解き直す(`cameraMovedSinceRender` と同じ揺れ)。
-    const fixed = (values: number[]) => values.map((value) => value.toFixed(6)).join(',')
+    // 0 の近くで揺れる成分は `toFixed` だと `-0.000000` と `0.000000` に分かれるので、丸めた整数(-0 は 0 に)で鍵にする。
+    const fixed = (values: number[]) => values.map((value) => Math.round(value * 1e6) + 0).join(',')
     const probe =
       point === null
         ? ''
@@ -2428,7 +2427,8 @@ export function createViewport(container: HTMLElement): Viewport {
     },
     setFov,
     cameraPose,
-    viewSignature,
+    viewSnapshot,
+    sameView: (snapshot: ViewSnapshot) => sameView(snapshot, viewSnapshot()),
     projectPoint,
     projectSketchPoint,
     projectBasePlane,

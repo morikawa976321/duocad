@@ -121,6 +121,7 @@
     type Viewport,
   } from './viewport'
   import type { PickKind } from './viewportTypes'
+  import type { ViewSnapshot } from './viewSnapshot'
   import type { CommandRequest } from './generated/protocol'
 
   /**
@@ -1312,11 +1313,7 @@
    * 辺・頂点が届くのを待っている矩形選択(`onBoxSelect`)と、引いたときの視点。新しいクリック・矩形選択・コマンドの起動で
    * 捨てる(後の操作の結果を古い矩形が上書きしない)。視点が動いていたら集め直さずに捨てる(画面の矩形は引いたときの視点のもの)。
    */
-  let pendingBox = $state<{ event: BoxSelectEvent; pose: string } | null>(null)
-
-  function cameraKey(): string {
-    return viewport?.viewSignature() ?? ''
-  }
+  let pendingBox = $state<{ event: BoxSelectEvent; view: ViewSnapshot | null } | null>(null)
 
   $effect(() => {
     const waiting = pendingBox
@@ -1331,7 +1328,7 @@
     // 画面へ渡す側の `$effect` が先に走り終えてから集め直す(同じ配信で両方が走る順序は決まっていない)。
     // 集め直しで新たに足りないボディが出ても待たない(届かないボディで矩形選択が止まり続けないように)。
     setTimeout(() => {
-      if (viewport === null || cameraKey() !== waiting.pose) return
+      if (viewport === null || waiting.view === null || !viewport.sameView(waiting.view)) return
       onBoxSelect({ ...viewport.collectInBox(waiting.event.rect), pendingBodies: [], mode: waiting.event.mode })
     }, 0)
   })
@@ -1445,7 +1442,7 @@
   function onBoxSelect(event: BoxSelectEvent): void {
     // 辺・頂点がまだ届いていないボディが矩形に掛かっていたら、届いてから同じ矩形で集め直す(`pendingBox`)
     if (event.pendingBodies.length > 0) {
-      pendingBox = { event, pose: cameraKey() }
+      pendingBox = { event, view: viewport?.viewSnapshot() ?? null }
       return
     }
     pendingBox = null
