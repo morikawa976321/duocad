@@ -35,7 +35,7 @@ STEP)。本人の実データに近い題材として QR1 のヒンジカバー�
 
 ### 次にやること
 
-- 本人の答え待ち: シェルにも 20 秒の期限を付けるか(decisions.md「本人待ち」、現物 `output/autopilot/shell_timeout_card.html`)
+- シェルの期限は付けない(本人の決定 2026-11-04。decisions.md「[速さ] シェルには期限を付けない」)
 - 本人が開発版を立て直して(サーバの再起動と `npm run build --prefix web`)触り、良ければ develop → main の PR
   (main は動作確認済みの完成品なので、PR は本人の確認の後)
 - 残り(PERFORMANCE.md 6章「残り」): 読み込み直後の三角形分割、ねじのブーリアン、複数領域の押し出しの柱の結合
@@ -45,8 +45,6 @@ STEP)。本人の実データに近い題材として QR1 のヒンジカバー�
 - 検証は `.venv`(本人の環境。いま Python 3.11 で pyproject の 3.14 と合わない)でなく、ロックどおりに作った 3.14 の環境で行った
   (`UV_PROJECT_ENVIRONMENT=<一時フォルダ> uv sync --frozen`)。全件テストは Node 23.6 以上が要る(`C:\Program Files\nodejs` の 24 を PATH の先頭に)
 - 変更前の基準は develop `ec1e5405` を `git archive` で書き出したコードで取る(`tools/replay_fingerprint.py` と `tools/bench_all_ops.py` をそこへ写して走らせる)
-- 本人がシェルの期限に「付ける」と答えたら、`verbs/shell_body.py` の `_shelled` の `timeout` を `kernel_worker.time_limit(interactive)` に
-  変え(再生は期限なし)、テストを足す
 
 ## 設計改善のリファクタ5件(#227・#228・#230・#231・#232。2026-10-24、完了)
 
