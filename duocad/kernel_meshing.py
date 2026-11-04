@@ -7,6 +7,9 @@ DiscretizeFaces → PostProcessModel を一括で回す(OCCT の `IMeshTools_Mes
 OCCT 自身の `BRepMesh_FaceChecker` は 5 度未満の交差角と `π(2·面偏差)²` 未満の小ループを無視するので、
 そこを通り抜けた交差が面分割へ渡り、面の欠落・非多様体の三角形になる(docs/TOPOPT_GAP_CAUSALITY.md)。
 
+面分割は OCCT の既定(`BRepMesh_MeshAlgoFactory`)で行い、境界の点が多い平面だけを Delabella
+(`BRepMesh_DelabellaMeshAlgoFactory`)で先に分割し、辺の裏返しで Delaunay に戻す(`_discretize_faces`)。
+
 再分割は OCCT の `BRepMesh_ModelHealer` 内の EdgeAmplifier と同じ手順(辺の偏差を 1/3 にして元の曲線から
 点列を作り直し、端点は保ち、全 pcurve へ伝播)。CAD の曲線・曲面・位相は変更しない。
 
@@ -26,7 +29,9 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepMesh import (
+    BRepMesh_DelabellaMeshAlgoFactory,
     BRepMesh_EdgeDiscret,
     BRepMesh_FaceDiscret,
     BRepMesh_MeshAlgoFactory,
@@ -36,12 +41,15 @@ from OCP.BRepMesh import (
     BRepMesh_ModelPreProcessor,
 )
 from OCP.BRepTools import BRepTools
+from OCP.GeomAbs import GeomAbs_SurfaceType
 from OCP.IMeshData import IMeshData_Status
 from OCP.IMeshTools import IMeshTools_Context, IMeshTools_Parameters
 from OCP.Message import Message_ProgressRange
+from OCP.Poly import Poly_Triangle
 from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp
+from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 
 from . import boundary_check
@@ -56,9 +64,18 @@ DEFAULT_MAX_ROUNDS = 12
 #: 全辺の離散点数の予算。超えたら未解決として止める(メモリの歯止め)。
 DEFAULT_MAX_POINTS = 4_000_000
 
+#: 平面の面の境界の点がこの数以上なら Delabella で分割する。OCCT の既定(Watson の逐次挿入)は1面の中で並列にならず、
+#: 境界の点 n に対しておよそ n^1.7 で伸びる(実測: 円板 1,257 点 69 ms・2,514 点 347 ms、穴 384 の板の面 13,828 点 1.6 秒。
+#: Delabella は同じ順に 9 ms・13 ms・0.04 秒)。少ない面は既定のまま(三角形の並びが既定の分割と同じ)。
+DELABELLA_PLANE_POINTS = 1000
+#: 辺の裏返しの回数の上限(1回に、三角形を共有しない辺をまとめて裏返す)。届いたらその時点の分割を使う(どの時点でも正しい分割)。
+_FLIP_ROUNDS = 10_000
+
 _FAILURE = IMeshData_Status.IMeshData_Failure
+_REUSED = IMeshData_Status.IMeshData_Reused
 _SELF_INTERSECTING = IMeshData_Status.IMeshData_SelfIntersectingWire
 _FORWARD = TopAbs_Orientation.TopAbs_FORWARD
+_PLANE = GeomAbs_SurfaceType.GeomAbs_Plane
 
 
 def _parameters(deviation: float, angular_deflection: float) -> IMeshTools_Parameters:
@@ -267,6 +284,8 @@ def mesh_shape(shape, deviation: float, angular_deflection: float, *, max_rounds
         unresolved: [{'face': CAD 1始まり, 'issues': [...]}]  面分割へ渡さず(Failure)三角形なしにした面
         endpoint: {'mismatches': n, 'gap_max': mm}  同じ CAD 頂点に着くのに座標が一致しない終端の組(boundary_check)
         reinstated: [CAD 面番号]  OCCT の healer が SelfIntersectingWire|Failure にしたが独自検査で解消していたので分割対象に戻した面
+        delabella: [CAD 面番号]  Delabella で分割した面(`_discretize_faces`)
+        delabella_fallback: [CAD 面番号]  Delabella の結果が数の検査を通らず、既定の分割で測り直した面
         amplified_edges: 再分割した辺の数(重複なし), amplifications: 再分割の延べ回数
         rounds_log: 各回の {round, faces_checked, issues, edges, points}
         count_mismatch: 面分割後に点数が検査時と食い違った use(空が正常)
@@ -401,7 +420,8 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
             reinstated.append(model.face_ids[position])
 
     started = clock()
-    if not context.DiscretizeFaces(Message_ProgressRange()):
+    discretized, delabella, delabella_fallback = _discretize_faces(model, context)
+    if not discretized:
         raise ValueError(f'meshing failed at DiscretizeFaces (deviation={deviation})')
     seconds['DiscretizeFaces'] = clock() - started
     started = clock()
@@ -420,6 +440,8 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         rounds=rounds, termination=termination,
         unresolved=[dict(face=face_id, issues=_issue_summary(issues)) for face_id, issues in sorted(unresolved.items())],
         reinstated=sorted(reinstated),
+        delabella=[model.face_ids[position] for position in delabella],
+        delabella_fallback=[model.face_ids[position] for position in delabella_fallback],
         amplified_edges=len(amplified), amplifications=int(sum(amplified.values())),
         amplified_edge_ids=sorted(amplified),
         rounds_log=rounds_log, count_mismatch=count_mismatch,
@@ -427,6 +449,185 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         endpoint=endpoint,
         seconds={k: float(v) for k, v in seconds.items()},
     )
+
+
+def _delabella_planes(model: _Model) -> List[int]:
+    """Delabella で分割する面の位置。境界の点が `DELABELLA_PLANE_POINTS` 以上の平面で、全 wire を分割に使い(自己交差の印が
+    無い)、INTERNAL の辺を持たないもの(`_complete` の数の検査が成り立つ面)。"""
+    chosen = []
+    for position, df in enumerate(model.faces):
+        if df.IsSet(_FAILURE) or df.IsSet(_REUSED) or df.GetSurface().GetType() != _PLANE:
+            continue
+        uses = model.face_uses[position]
+        if model.use_internal_array[uses].any():
+            continue
+        if sum(len(model.use_points[use]) for use in uses) < DELABELLA_PLANE_POINTS:
+            continue
+        if any(df.GetWire(wire).IsSet(_SELF_INTERSECTING) for wire in range(df.WiresNb())):
+            continue
+        chosen.append(position)
+    return chosen
+
+
+def _complete(df) -> bool:
+    """内点を足さない平面の分割として三角形の数が合うか: 境界の点 N・wire W の領域を覆う三角形は N + 2W - 4 個。
+    穴を塞いだ・領域の一部が欠けた(縁の点が浮いた)分割はこの数にならない。"""
+    triangulation = BRep_Tool.Triangulation_s(df.GetFace(), TopLoc_Location())
+    if triangulation is None:
+        return False
+    return triangulation.NbTriangles() == triangulation.NbNodes() + 2 * df.WiresNb() - 4
+
+
+def _delaunay_flips(uv: np.ndarray, triangles: np.ndarray, fixed: np.ndarray) -> np.ndarray:
+    """平面の三角形分割の内側の辺を、外接円の判定(厳密)で Delaunay になるまで裏返す(Lawson)。`fixed` の辺は裏返さない。
+
+    外部の罠: Delabella は点の外接箱を軸ごとに [-0.5, 0.5] へ縮めてから分割する(`BRepMesh_DelabellaBaseMeshAlgo`)ので、
+    外接箱が正方形でない面では UV の上で Delaunay にならない。辺の裏返しは三角形の数・節点・境界の線分を変えない。
+
+    `uv` は (N, 2)、`triangles` は (T, 3) の 0 始まりで、全部が同じ向き(違えば何もしない)。`fixed` は固定する辺の鍵
+    `min·N + max`。戻り値は裏返した後の (T, 3)(向きは保つ)。
+    """
+    triangles = np.array(triangles, dtype=np.int64)
+    count = len(triangles)
+    if count < 2:
+        return triangles
+    signs = boundary_check.orient2d(uv[triangles[:, 0]], uv[triangles[:, 1]], uv[triangles[:, 2]])
+    if not ((signs > 0).all() or (signs < 0).all()):
+        return triangles
+    sense = int(signs[0])
+    nodes = len(uv)
+    # 半辺 3t + k は三角形 t の k 番目の頂点から次の頂点へ。twin は同じ辺の逆向きの半辺(境界は -1)
+    start = triangles.ravel()
+    end = triangles[:, [1, 2, 0]].ravel()
+    key = np.minimum(start, end) * nodes + np.maximum(start, end)
+    order = np.argsort(key, kind='stable')
+    _keys, first, counts = np.unique(key[order], return_index=True, return_counts=True)
+    shared = first[counts == 2]
+    one, two = order[shared], order[shared + 1]
+    opposite = (start[one] == end[two]) & (end[one] == start[two])
+    twin = np.full(3 * count, -1, dtype=np.int64)
+    twin[one[opposite]] = two[opposite]
+    twin[two[opposite]] = one[opposite]
+    locked = np.isin(key, fixed)
+    active = np.ones(count, dtype=bool)
+    for _ in range(_FLIP_ROUNDS):
+        half = (3 * np.flatnonzero(active)[:, None] + np.arange(3)).ravel()
+        half = half[(twin[half] >= 0) & ~locked[half]]
+        edge = np.unique(np.minimum(half, twin[half]))
+        if len(edge) == 0:
+            break
+        other = twin[edge]
+        t1, k1, t2, k2 = edge // 3, edge % 3, other // 3, other % 3
+        a, b = triangles[t1, k1], triangles[t1, (k1 + 1) % 3]
+        c, d = triangles[t1, (k1 + 2) % 3], triangles[t2, (k2 + 2) % 3]
+        illegal = sense * boundary_check.incircle(uv[a], uv[b], uv[c], uv[d]) > 0
+        if not illegal.any():
+            break
+        t1, k1, t2, k2, a, b, c, d = (v[illegal] for v in (t1, k1, t2, k2, a, b, c, d))
+        # 1回に裏返すのは三角形を共有しない辺だけ(三角形ごとに番号の小さい辺を採る)。残りは次の回に見直す
+        ident = np.arange(len(t1))
+        least = np.full(count, len(t1), dtype=np.int64)
+        np.minimum.at(least, t1, ident)
+        np.minimum.at(least, t2, ident)
+        chosen = (least[t1] == ident) & (least[t2] == ident)
+        active = np.zeros(count, dtype=bool)
+        active[t1[~chosen]] = True
+        active[t2[~chosen]] = True
+        t1, k1, t2, k2, a, b, c, d = (v[chosen] for v in (t1, k1, t2, k2, a, b, c, d))
+        convex = ((sense * boundary_check.orient2d(uv[a], uv[d], uv[c]) > 0)
+                  & (sense * boundary_check.orient2d(uv[d], uv[b], uv[c]) > 0))
+        t1, k1, t2, k2, a, b, c, d = (v[convex] for v in (t1, k1, t2, k2, a, b, c, d))
+        if len(t1) == 0:
+            break
+        # (a, b, c) と (b, a, d) を (a, d, c) と (d, b, c) にする。外周の4辺の半辺は新しい位置へ移り、相手の twin も付け替える
+        moved_from = np.concatenate((3 * t2 + (k2 + 1) % 3, 3 * t1 + (k1 + 2) % 3, 3 * t2 + (k2 + 2) % 3, 3 * t1 + (k1 + 1) % 3))
+        moved_to = np.concatenate((3 * t1, 3 * t1 + 2, 3 * t2, 3 * t2 + 1))
+        partners = twin[moved_from]
+        moved_locks = locked[moved_from]
+        remap = np.arange(3 * count)
+        remap[moved_from] = moved_to
+        bordered = partners >= 0
+        twin[moved_to] = np.where(bordered, remap[np.maximum(partners, 0)], -1)
+        twin[remap[partners[bordered]]] = moved_to[bordered]
+        locked[moved_to] = moved_locks
+        twin[3 * t1 + 1], twin[3 * t2 + 2] = 3 * t2 + 2, 3 * t1 + 1
+        locked[3 * t1 + 1] = locked[3 * t2 + 2] = False
+        triangles[t1] = np.column_stack((a, d, c))
+        triangles[t2] = np.column_stack((d, b, c))
+        active[t1] = True
+        active[t2] = True
+    return triangles
+
+
+def _restore_delaunay(model: _Model, position: int) -> int:
+    """Delabella で分割した平面の三角形を UV の上で Delaunay に戻して書き戻す。裏返した三角形の数を返す。
+
+    固定する辺は、その面の pcurve の点列の隣り合う節点(`GetIndex` は面の三角形分割の節点番号。OCCT の `PostProcessModel`
+    が辺の折れ線をこの番号で書く)。
+    """
+    triangulation = BRep_Tool.Triangulation_s(model.faces[position].GetFace(), TopLoc_Location())
+    node = triangulation.UVNode
+    uv = np.asarray([node(i).Coord() for i in range(1, triangulation.NbNodes() + 1)], dtype=np.float64).reshape(-1, 2)
+    triangle = triangulation.Triangle
+    before = np.asarray([triangle(i).Get() for i in range(1, triangulation.NbTriangles() + 1)],
+                        dtype=np.int64).reshape(-1, 3) - 1
+    fixed = []
+    for use in model.face_uses[position]:
+        pcurve = model.use_pcurve[use]
+        index = np.asarray([pcurve.GetIndex(i) for i in range(pcurve.ParametersNb())], dtype=np.int64) - 1
+        fixed.append(np.minimum(index[:-1], index[1:]) * len(uv) + np.maximum(index[:-1], index[1:]))
+    after = _delaunay_flips(uv, before, np.concatenate(fixed) if fixed else np.zeros(0, dtype=np.int64))
+    changed = np.flatnonzero((after != before).any(axis=1))
+    for row in changed:
+        first, second, third = (int(v) + 1 for v in after[row])
+        triangulation.SetTriangle(int(row) + 1, Poly_Triangle(first, second, third))
+    return len(changed)
+
+
+def _discretize_faces(model: _Model, context) -> tuple:
+    """`DiscretizeFaces` を2回に分ける: 境界の点が多い平面を Delabella で、残りを既定の分割で。
+
+    OCCT の面分割は `IMeshData_Reused` の面を飛ばすので、片方の回はもう片方の面にその印を付けて走らせ、終わったら外す
+    (印が残ると `PostProcessModel` が辺の折れ線を書かない)。Delabella の結果が `_complete` を通らない面は、付いた三角形を
+    外して既定の分割で測り直す。通った面は `_restore_delaunay` で Delaunay に戻す。
+    戻り値は `(成功したか, Delabella で分割した面の位置, 測り直した面の位置)`。
+    """
+    planes = _delabella_planes(model)
+    if not planes:
+        return context.DiscretizeFaces(Message_ProgressRange()), [], []
+    chosen = set(planes)
+    others = [position for position, df in enumerate(model.faces) if position not in chosen and not df.IsSet(_REUSED)]
+    for position in others:
+        model.faces[position].SetStatus(_REUSED)
+    context.SetFaceDiscret(BRepMesh_FaceDiscret(BRepMesh_DelabellaMeshAlgoFactory()))
+    try:
+        discretized = context.DiscretizeFaces(Message_ProgressRange())
+    finally:
+        for position in others:
+            model.faces[position].UnsetStatus(_REUSED)
+        context.SetFaceDiscret(BRepMesh_FaceDiscret(BRepMesh_MeshAlgoFactory()))
+    kept, fallback = [], []
+    for position in planes:
+        df = model.faces[position]
+        if discretized and not df.IsSet(_FAILURE) and _complete(df):
+            try:
+                _restore_delaunay(model, position)
+            except Exception:  # noqa: BLE001  書き戻しの途中で止まった面も、外して既定の分割で測り直す(`delabella_fallback` に出る)
+                pass
+            else:
+                kept.append(position)
+                continue
+        df.UnsetStatus(_FAILURE)
+        BRep_Builder().UpdateFace(df.GetFace(), None)
+        fallback.append(position)
+    for position in kept:
+        model.faces[position].SetStatus(_REUSED)
+    try:
+        discretized = context.DiscretizeFaces(Message_ProgressRange())
+    finally:
+        for position in kept:
+            model.faces[position].UnsetStatus(_REUSED)
+    return discretized, kept, fallback
 
 
 def merge_diagnostics(passes: List[dict]) -> dict:
@@ -440,6 +641,8 @@ def merge_diagnostics(passes: List[dict]) -> dict:
         termination='resolved' if all(t == 'resolved' for t in terminations) else next(t for t in terminations if t != 'resolved'),
         unresolved=sorted(unresolved, key=lambda entry: entry['face']),
         reinstated=sorted(face for diag in passes for face in diag['reinstated']),
+        delabella=sorted(face for diag in passes for face in diag['delabella']),
+        delabella_fallback=sorted(face for diag in passes for face in diag['delabella_fallback']),
         rounds=int(sum(diag['rounds'] for diag in passes)),
         amplified_edges=int(sum(diag['amplified_edges'] for diag in passes)),
         amplifications=int(sum(diag['amplifications'] for diag in passes)),

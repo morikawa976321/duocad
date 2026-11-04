@@ -649,6 +649,8 @@ def _renumber_faces(diagnostic: dict, wanted: List[int]) -> dict:
     """
     diagnostic["unresolved"] = [dict(entry, face=wanted[entry["face"] - 1]) for entry in diagnostic["unresolved"]]
     diagnostic["reinstated"] = [wanted[face - 1] for face in diagnostic["reinstated"]]
+    diagnostic["delabella"] = [wanted[face - 1] for face in diagnostic["delabella"]]
+    diagnostic["delabella_fallback"] = [wanted[face - 1] for face in diagnostic["delabella_fallback"]]
     return diagnostic
 
 
