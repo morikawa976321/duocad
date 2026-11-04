@@ -120,7 +120,7 @@ def delete_faces(shape: Any, face_indices: Sequence[int], *, interactive: bool =
     """`face_indices`(1始まり)の面を消し、周りの面を延ばして閉じ直した**新しい形状**を返す(計算は子プロセス)。
 
     `interactive` は画面・MCP からの操作(期限 `kernel_worker.INTERACTIVE_TIMEOUT_S`)。ログの再生は False で期限なし。戻り値:
-        {"shape": <TopoDS_Shape>, "provenance": {...}}
+        {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_after": <結果の体積>}
     """
     indices = _checked_indices(shape, face_indices, VERB_DELETE)
     return kernel.remembered(
@@ -198,7 +198,9 @@ def _checked_indices(shape: Any, face_indices: Sequence[int], verb: str) -> List
 # 計算(子プロセス)
 # --------------------------------------------------------------------------------------
 def compute(verb: str, shape: Any, arguments: dict) -> dict:
-    """子プロセスの入口。断ったら `ValueError`(文は原因と言い換え)。"""
+    """子プロセスの入口。断ったら `ValueError`(文は原因と言い換え)。
+
+    `"volume_after"` は関門で積分した結果の体積で、親の `kernel_worker.run` が戻った形の体積として覚える(積分し直さない)。"""
     indices = [int(index) for index in arguments["faces"]]
     face_map = _brep_topology._face_map(shape)
     faces = [_brep_topology._face_at(face_map, index) for index in indices]
@@ -217,7 +219,7 @@ def compute(verb: str, shape: Any, arguments: dict) -> dict:
         raise ValueError(f"{message}: {error.hint}" if error.hint else message) from error
     successors = {str(key): positions for key, positions in table.items()}
     provenance.update(_brep_topology._face_map_projection(successors, _brep_topology._face_map(final).Extent()))
-    return {"shape": final, "provenance": provenance}
+    return {"shape": final, "provenance": provenance, "volume_after": _brep_geometry.volume(final)}
 
 
 # --------------------------------------------------------------------------------------
