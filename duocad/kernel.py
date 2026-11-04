@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import io
 import math
+
+import numpy as np
 import os
 import tempfile
 import threading
@@ -252,6 +254,50 @@ def face_keys(shape: "TopoDS_Shape") -> List[Any]:
     return [_OrientedShapeKey(face_map.FindKey(index)) for index in range(1, face_map.Extent() + 1)]
 
 
+def face_placements(shape: "TopoDS_Shape") -> List[Tuple[Any, Optional["gp_Trsf"]]]:
+    """面の添字の順に `(位置を外した面の同一性の鍵, 面の位置の変換)`。鍵は TShape と向きだけを見る(`move_body` は TShape を
+    共有して位置だけを差し替える。`translate_shape`)。変換は単位なら None。"""
+    face_map = _brep_topology._face_map(shape)
+    bare = TopLoc_Location()
+    placements = []
+    for index in range(1, face_map.Extent() + 1):
+        face = face_map.FindKey(index)
+        location = face.Location()
+        placements.append((_OrientedShapeKey(face.Located(bare)), None if location.IsIdentity() else location.Transformation()))
+    return placements
+
+
+def moved_face(face: dict, before: Optional["gp_Trsf"], after: Optional["gp_Trsf"]) -> Optional[dict]:
+    """位置 `before` に置いた面で測った三角形(`tessellate` の `faces[i]`)を、同じ面を `after` に置いたときのものにする。"""
+    if after is None:
+        relative = gp_Trsf() if before is None else before.Inverted()
+    else:
+        relative = after if before is None else after.Multiplied(before.Inverted())
+    return transformed_face(face, relative)
+
+
+def transformed_face(face: dict, trsf: "gp_Trsf") -> Optional[dict]:
+    """面の三角形に変換 `trsf`(回転・平行移動・鏡映)を掛ける。拡大を含む変換は None(面積が変わる)。鏡映は三角形の巻きを
+    裏返す(外向きを保つ)。`serial` は落とす(三角形が変わる)。"""
+    if abs(abs(trsf.ScaleFactor()) - 1.0) > 1e-12:  # 鏡映は OCCT では拡大率 -1
+        return None
+    matrix = np.array([[trsf.Value(row, column) for column in range(1, 5)] for row in range(1, 4)])
+    linear, offset = matrix[:, :3], matrix[:, 3]
+    positions = (np.asarray(face["positions"], dtype=np.float64).reshape(-1, 3) @ linear.T + offset).ravel().tolist()
+    indices = face["indices"]
+    if trsf.IsNegative():
+        triangles = np.asarray(indices, dtype=np.int64).reshape(-1, 3)
+        indices = triangles[:, [0, 2, 1]].ravel().tolist()
+    moved = {key: value for key, value in face.items() if key != "serial"}
+    moved.update(
+        positions=positions,
+        indices=indices,
+        centroid=(linear @ np.asarray(face["centroid"]) + offset).tolist(),
+        normal=(linear @ np.asarray(face["normal"])).tolist(),
+    )
+    return moved
+
+
 def shape_key(shape: "TopoDS_Shape") -> Any:
     """形状を辞書の鍵にするための値(TShape・Location・Orientation の一致で同一とみなす)。
     素の `TopoDS_Shape` は鍵にならない(`_ShapeKey` の docstring)。"""
@@ -378,7 +424,11 @@ def _transformed(
         builder = BRepBuilderAPI_Transform(shape, trsf, True)
         if not builder.IsDone():
             raise ValueError(f"形状の{what}(複製)に失敗した")
-        return builder.Shape()
+        result = builder.Shape()
+        # 複製は面の添字を保つ(`translate_shape`)。画面の三角形は元の面のものに変換を掛けて作れる(`view._borrow_faces`)
+        count = _brep_topology.face_count(shape)
+        note_kept_faces(result, shape, [(index, index) for index in range(1, count + 1)], trsf)
+        return result
     return shape.Moved(TopLoc_Location(trsf))
 
 
@@ -798,24 +848,25 @@ _KEPT_LIMIT = 16
 _KEPT_LOCK = threading.Lock()
 
 
-def note_kept_faces(result: Any, source: Any, pairs: Sequence[Tuple[int, int]]) -> None:
-    """`result` の面のうち `source` の面と同じもの `(結果の添字, 入力の添字)` を覚える。"""
+def note_kept_faces(result: Any, source: Any, pairs: Sequence[Tuple[int, int]], transform: Any = None) -> None:
+    """`result` の面のうち `source` の面と同じもの `(結果の添字, 入力の添字)` を覚える。`transform`(`gp_Trsf`)を渡したら、
+    結果の面は入力の面にその変換を掛けたもの(複製・鏡映。`_transformed`)。"""
     if not pairs:
         return
     with _KEPT_LOCK:
-        _KEPT[id(result)] = (result, source, tuple((int(j), int(i)) for j, i in pairs))
+        _KEPT[id(result)] = (result, source, tuple((int(j), int(i)) for j, i in pairs), transform)
         _KEPT.move_to_end(id(result))
         while len(_KEPT) > _KEPT_LIMIT:
             _KEPT.popitem(last=False)
 
 
-def kept_faces(result: Any) -> Optional[Tuple[Any, tuple]]:
-    """`note_kept_faces` で覚えた `(入力の形, 対)`。無ければ None。"""
+def kept_faces(result: Any) -> Optional[Tuple[Any, tuple, Any]]:
+    """`note_kept_faces` で覚えた `(入力の形, 対, 変換 または None)`。無ければ None。"""
     with _KEPT_LOCK:
         held = _KEPT.get(id(result))
     if held is None or held[0] is not result:
         return None
-    return held[1], held[2]
+    return held[1], held[2], held[3]
 
 
 def identical_faces(result: Any, source: Any) -> List[Tuple[int, int]]:
@@ -828,7 +879,7 @@ def kept_pairs(result: Any, source: Any) -> List[Tuple[int, int]]:
     """`result` の面のうち `source` の面と同じ面の対(`identical_faces` と、子の結果について覚えた `note_kept_faces`)。"""
     pairs = dict(identical_faces(result, source))
     noted = kept_faces(result)
-    if noted is not None and noted[0] is source:
+    if noted is not None and noted[0] is source and noted[2] is None:
         for position, index in noted[1]:
             pairs.setdefault(position, index)
     return sorted(pairs.items())
@@ -855,8 +906,8 @@ def adopt_results(pairs: Sequence[Tuple[Any, Any]]) -> None:
             del _RESULTS[key]
             _RESULTS[(key[0], tuple(id(shape) for shape in swapped), key[2])] = (swapped, result)
     with _KEPT_LOCK:
-        for key, (result, source, kept) in list(_KEPT.items()):
-            _KEPT[key] = (result, swap(source), kept)
+        for key, (result, source, kept, transform) in list(_KEPT.items()):
+            _KEPT[key] = (result, swap(source), kept, transform)
 
 
 def _value_key(values: dict) -> tuple:

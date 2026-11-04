@@ -101,6 +101,8 @@ class _FaceTessellations:
         self.shape = shape
         self._keys: Optional[list] = None  # 面の添字の順の、面の同一性の鍵(`kernel.face_keys`。要るときに1回)
         self._index_of: dict = {}  # 鍵 -> 添字
+        self._placements: Optional[list] = None  # 面の添字の順の (位置を外した鍵, 位置)(`kernel.face_placements`)
+        self._bare_index_of: dict = {}  # 位置を外した鍵 -> 添字
         self.by_recipe: "OrderedDict[tuple, dict]" = OrderedDict()  # (偏差, 角度偏差) -> {面の添字: 面の三角形}
         self.untriangulated: "OrderedDict[tuple, set]" = OrderedDict()
         #: (偏差, 角度偏差) -> {面の添字: 測った回の番号}(`one_batch`)
@@ -146,6 +148,22 @@ class _FaceTessellations:
             self._index_of = {key: index for index, key in enumerate(self._keys, start=1)}
         return self._keys
 
+    def placements(self) -> list:
+        """面の添字の順の `(位置を外した面の同一性の鍵, 位置)`。"""
+        if self._placements is None:
+            self._placements = kernel.face_placements(self.shape)
+            self._bare_index_of = {key: index for index, (key, _placement) in enumerate(self._placements, start=1)}
+        return self._placements
+
+    def lend_placed(self, bare_key: Any, recipe: tuple) -> Optional[tuple]:
+        """位置だけ違う同じ面(TShape と向きが同じ)をその測り方で測った `(三角形, その面の位置)`。無ければ None。"""
+        placements = self.placements()
+        index = self._bare_index_of.get(bare_key)
+        if index is None or index in self.untriangulated.get(recipe, ()):
+            return None
+        face = self.by_recipe.get(recipe, {}).get(index)
+        return None if face is None else (face, placements[index - 1][1])
+
     def measured(self, recipe: tuple) -> dict:
         """その測り方で測れた面(添字 -> 三角形)の写し。"""
         failed = self.untriangulated.get(recipe, set())
@@ -161,9 +179,10 @@ class _FaceTessellations:
 
     def adopt(self, recipe: tuple, index: int, face: dict) -> None:
         """別の形で測った同じ面の三角形を、この形の `index` の面として覚える。回は面ごとに新しく振る(下限に張り付いたときの
-        「1回で測った組」に数えない)。`serial` はそのまま(三角形が同じなので、画面が持っていれば送り直さない)。"""
+        「1回で測った組」に数えない)。`serial` はそのまま(三角形が同じなので、画面が持っていれば送り直さない)、
+        位置を変えて写した三角形(`serial` を持たない)には新しく振る。"""
         self._batches += 1
-        self.by_recipe.setdefault(recipe, {})[index] = dict(face, index=index)
+        self.by_recipe.setdefault(recipe, {})[index] = dict(face, index=index, serial=face.get("serial") or next(_FACE_SERIALS))
         self.untriangulated.setdefault(recipe, set()).discard(index)
         self.batch_of.setdefault(recipe, {})[index] = self._batches
 
@@ -738,12 +757,13 @@ class DocumentView:
         lenders = [held for _shape, held in stored if held is not store]
         if not lenders:
             return groups
-        # 子プロセスの結果・確定したプレビューの結果は、入力の形の何番の面と同じかを覚えている(`kernel.note_kept_faces`)
+        # 子プロセスの結果・確定したプレビューの結果・複製は、入力の形の何番の面と同じかを覚えている(`kernel.note_kept_faces`)
         kept = kernel.kept_faces(store.shape)
         origin = None
         if kept is not None:
             origin = next((held for shape, held in stored if shape is kept[0] and held is not store), None)
         sources = dict(kept[1]) if origin is not None else {}
+        transform = kept[2] if origin is not None else None
         keys = store.keys()
         left: dict = {}
         for recipe, indices in groups.items():
@@ -754,6 +774,10 @@ class DocumentView:
                 face = next((found for found in (lender.lend(key, recipe) for lender in lenders) if found is not None), None)
                 if face is None and index in sources:
                     face = from_origin.get(sources[index])
+                    if face is not None and transform is not None:
+                        face = kernel.transformed_face(face, transform)
+                if face is None:
+                    face = self._placed_face(store, index, recipe, lenders)
                 if face is None:
                     rest.append(index)
                 else:
@@ -761,6 +785,18 @@ class DocumentView:
             if rest:
                 left[recipe] = rest
         return left
+
+    @staticmethod
+    def _placed_face(store: "_FaceTessellations", index: int, recipe: tuple, lenders: list) -> Optional[dict]:
+        """位置だけ違う同じ面(移動したボディ・同じ部品を別の位置に置いた STEP)の三角形を、位置の差を掛けて写す。"""
+        bare_key, placement = store.placements()[index - 1]
+        for lender in lenders:
+            found = lender.lend_placed(bare_key, recipe)
+            if found is not None:
+                moved = kernel.moved_face(found[0], found[1], placement)
+                if moved is not None:
+                    return moved
+        return None
 
     def edges(self, body_id: str) -> dict:
         """1Bodyの辺を折れ線で返す(キャッシュ付き)。

@@ -286,3 +286,34 @@ def test_the_preview_measures_only_the_faces_the_operation_changed(boxed, counte
     session.fillet(2.0)
     fresh = real(session.document.get_body(body).shape, session.view.view_deviation, session.view.view_angular_deflection)
     assert [face["positions"] for face in geometry["faces"]] == [face["positions"] for face in fresh["faces"]]
+
+
+@pytest.mark.parametrize("verb, args", [
+    ("move_body", {"dx": 5.0, "dy": -3.0, "dz": 1.0}),
+    ("move_body", {"mode": "rotate", "axis_point": [0.0, 0.0, 0.0], "axis_dir": [0.0, 0.0, 1.0], "angle": 30.0}),
+    ("move_body", {"dx": 100.0, "dy": 0.0, "dz": 0.0, "copy": True}),
+    ("mirror_body", {"base_plane": "YZ"}),
+])
+def test_moving_copying_or_mirroring_a_body_measures_nothing(boxed, counted, verb, args) -> None:
+    """落ちたら、ボディを動かす・複製する・鏡映するたびに丸ごと測り直す(733 面のボディで 0.9 秒)。写した三角形は元の三角形を
+    同じ変換で動かしたもの(偏差も面の境目も元のまま)で、鏡映では外向きの巻きを保つ。"""
+    import numpy as np
+
+    session, body = boxed
+    before = session.geometry(body)
+    session.modify_selection([{"body": body, "kind": "body", "index": None}], [])
+    counted.clear()
+    session.apply(verb, args)
+    moved = session.document.bodies[-1] if verb == "mirror_body" or args.get("copy") else session.document.get_body(body)
+    after = session.geometry(moved.id)
+    assert counted == []
+    assert len(after["faces"]) == len(before["faces"])
+    for old, new in zip(before["faces"], after["faces"]):
+        assert len(old["positions"]) == len(new["positions"]) and len(old["indices"]) == len(new["indices"])
+        assert new["area"] == pytest.approx(old["area"])
+        assert new["serial"] != old["serial"], "三角形が変わったのに同じ serial(画面が古い位置の三角形を使う)"
+        if old["kind"] == "plane":
+            points = np.asarray(new["positions"]).reshape(-1, 3)
+            triangles = np.asarray(new["indices"]).reshape(-1, 3)
+            normals = np.cross(points[triangles[:, 1]] - points[triangles[:, 0]], points[triangles[:, 2]] - points[triangles[:, 0]])
+            assert (normals @ np.asarray(new["normal"]) > 0).all(), "三角形の巻きが面の外向きと逆"
