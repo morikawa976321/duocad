@@ -1,6 +1,6 @@
 """undo / redo と配信の競合を確かめる: 復元した形・配った版・画面が持つ面(配信の記録)が食い違わないか。
 
-    uv run python -X utf8 tools/probe_undo_delivery.py [--only <場面の名前の一部>] [--fuzz 200] [--seed 1] [--out <json>]
+    uv run python -X utf8 tools/probe_undo_delivery.py [--part small|big] [--only <場面の名前の一部>] [--fuzz 200] [--seed 1] [--out <json>]
 
 同じプロセスで `Server.handle` を本物のまま回し、接続だけを偽物にする(受け取ったフレームを画面と同じ規則 `web/src/wire.ts` で
 埋め戻す)。MCP の操作は、`ToolsOnLoop` と同じくループの上で `Session.apply` / `undo` / `redo` を素で呼ぶ(配信は
@@ -593,6 +593,7 @@ def kernel_face_count(body: Any) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
+    ap.add_argument("--part", choices=sorted(base.PARTS), default="small")
     ap.add_argument("--evictions", type=int, default=10)
     ap.add_argument("--copies", type=int, default=8)
     ap.add_argument("--fuzz", type=int, default=120)
@@ -603,7 +604,7 @@ def main() -> None:
     async def run() -> list:
         models = Path(tempfile.mkdtemp(prefix="duocad-undo-"))
         session = Session(kernel.DEFAULT_DEVIATION, models_dir=models)
-        part = base.build_part(session, **base.PARTS["small"])
+        part = base.build_part(session, **base.PARTS[args.part])
         session.apply("sketch_create", {"base_plane": "XZ"})
         sid = base.last_sketch(session)
         session.apply("add_rectangle", {"sketch_id": sid, "corner": [-70, 2], "width": 140, "height": 3})
