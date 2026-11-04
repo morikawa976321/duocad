@@ -275,7 +275,10 @@ class Screen:
     def __init__(self, url: str) -> None:
         from websockets.sync.client import connect
 
-        self.connection = connect(url, max_size=None, open_timeout=30)
+        # ブラウザは ping を送らない(サーバの ping に pong を返すだけ)。こちらから送ると、ループが 20 秒を超えて塞がったときに
+        # こちらが接続を切り、サーバが切るかどうかを見られない
+        self.connection = connect(url, max_size=None, open_timeout=30, ping_interval=None)
+        self.closed: Optional[dict] = None
         self.messages: list = []
         self.changed = threading.Condition()
         self.probe_reply = threading.Event()
@@ -303,8 +306,15 @@ class Screen:
                 with self.changed:
                     self.messages.append({"t": arrived, "type": kind, "bytes": size, "header": header})
                     self.changed.notify_all()
-        except Exception:  # noqa: BLE001  切断
-            pass
+        except Exception as error:  # noqa: BLE001  切断
+            closing = getattr(error, "rcvd", None) or getattr(error, "sent", None)
+            self.closed = {"t": now(), "error": f"{type(error).__name__}: {error}"[:200],
+                           "code": getattr(closing, "code", None)}
+        else:
+            self.closed = {"t": now(), "error": "closed", "code": getattr(self.connection, "close_code", None)}
+        with self.changed:
+            self.changed.notify_all()
+        self.probe_reply.set()
 
     def next_op(self) -> int:
         self._client_op += 1
@@ -320,6 +330,8 @@ class Screen:
                 for message in self.messages[start:]:
                     if predicate(message):
                         return message
+                if self.closed is not None:
+                    raise ConnectionError(f"接続が切れた: {self.closed}")
                 left = deadline - now()
                 if left <= 0:
                     raise TimeoutError("待っていた配信が来ない")
@@ -338,10 +350,13 @@ class Screen:
         return taken
 
     def _probe(self, interval: float) -> None:
-        while self._probing.is_set():
+        while self._probing.is_set() and self.closed is None:
             self.probe_reply.clear()
             sent = now()
-            self.send({"cmd": "ai_get_status"})
+            try:
+                self.send({"cmd": "ai_get_status"})
+            except Exception:  # noqa: BLE001  切断
+                break
             if not self.probe_reply.wait(900):
                 break
             self.probes.append((sent, now()))
@@ -354,12 +369,49 @@ class Screen:
             pass
 
 
+class HttpProber:
+    """HTTP のスレッドへの軽い照会(`/duocad-config.json`。ループを通らない)。返事が遅れるのは、他のスレッドが GIL を握っているとき。"""
+
+    def __init__(self, port: int, interval: float) -> None:
+        self.port = port
+        self.interval = interval
+        self.samples: list = []
+        self._running = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self.samples = []
+        self._running.set()
+        self._thread = threading.Thread(target=self._run, name="http-probe", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> list:
+        self._running.clear()
+        if self._thread is not None:
+            self._thread.join(timeout=900)
+        return self.samples
+
+    def _run(self) -> None:
+        while self._running.is_set():
+            sent = now()
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=900)
+                connection.request("GET", "/duocad-config.json")
+                connection.getresponse().read()
+                connection.close()
+            except OSError:
+                break
+            self.samples.append((sent, now()))
+            time.sleep(self.interval)
+
+
 class Tracer:
     def __init__(self, port: int) -> None:
         self.port = port
 
     def fetch(self, peek: bool = False) -> dict:
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=60)
+        # 背景の測り直しが OCCT の中で GIL を握っている間は、HTTP のスレッドも答えられない(大きい部品で 60 秒を超えた)
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=900)
         connection.request("GET", "/__trace" + ("?peek=1" if peek else ""))
         payload = json.loads(connection.getresponse().read())
         connection.close()
@@ -477,7 +529,9 @@ def summarize(label: str, kind: str, t0: float, t_reply: float, t_end: float, fr
 
 
 class Bench:
-    def __init__(self, screen: Screen, mcp: Mcp, tracer: Tracer, probe_interval: float, only: str) -> None:
+    def __init__(self, screen: Screen, mcp: Mcp, tracer: Tracer, probe_interval: float, only: str, url: str) -> None:
+        self.url = url
+        self.http_prober = HttpProber(tracer.port, 0.05)
         self.screen = screen
         self.mcp = mcp
         self.tracer = tracer
@@ -508,6 +562,8 @@ class Bench:
         start = len(self.screen.messages)
         busy0 = self.tracer.fetch(peek=True)["busy"]
         prober = self.screen.start_probing(self.probe_interval) if record else None
+        if record:
+            self.http_prober.start()
         t0 = now()
         error = None
         result = None
@@ -522,6 +578,7 @@ class Bench:
         self.settle(start)
         t_end = now()
         probes = self.screen.stop_probing(prober) if prober is not None else []
+        http_probes = self.http_prober.stop() if record else []
         trace = self.tracer.fetch()
         if not record:
             if error:
@@ -535,12 +592,26 @@ class Bench:
         row = summarize(label, kind, t0, t_reply, t_end, frames, trace["events"], probes, trace["busy"] - busy0, error)
         if isinstance(result, dict) and "_extra" in result:
             row.update(result["_extra"])
+        latencies = [b - a for a, b in http_probes]
+        row["http_probes"] = {"n": len(latencies), "max_ms": _ms(max(latencies)) if latencies else None}
+        if self.screen.closed is not None:
+            row["closed"] = dict(self.screen.closed, t=_ms(self.screen.closed["t"] - t0))
         self.rows.append(row)
         stage = " ".join(f"{k}={v}" for k, v in row["stages"].items())
         print(f"  {label:<34} reply={row['reply_ms']} state={row['first_state_ms']} last={row['last_frame_ms']} "
               f"loop_busy={row['loop']['busy_ms']} max_block={row['loop']['max_block_ms']} probe_max={row['probes']['max_ms']} "
-              f"{stage} {'ERR ' + error if error else ''}", flush=True)
+              f"http_probe_max={row['http_probes']['max_ms']} "
+              f"{stage} {'ERR ' + error if error else ''}{' CLOSED ' + str(row['closed']) if 'closed' in row else ''}", flush=True)
+        if self.screen.closed is not None:
+            self.reconnect()
         return result
+
+    def reconnect(self) -> None:
+        """切れた画面を繋ぎ直す(画面と同じく、繋いだ直後の全量の配信を受ける)。"""
+        self.screen.close()
+        self.screen = Screen(self.url)
+        self.screen.wait(lambda m: m["type"] == "state", 0, timeout=900)
+        self.settle(0)
 
     # ---------------------------------------------------------------- 経路ごとの1手
     def mcp_op(self, label: str, name: str, arguments: Optional[dict] = None, *, expect_state: bool = True,
@@ -699,9 +770,11 @@ def medians(rows: list) -> list:
             return values
 
         warm = items[1:] or items
-        entry = {"case": base, "n": len(items), "errors": sum(1 for row in items if row.get("error"))}
+        entry = {"case": base, "n": len(items), "errors": sum(1 for row in items if row.get("error")),
+                 "closed": sum(1 for row in items if row.get("closed"))}
         for key, sub, name in (("reply_ms", None, "reply"), ("first_state_ms", None, "state"), ("last_frame_ms", None, "last"),
                                ("loop", "busy_ms", "loop_busy"), ("loop", "max_block_ms", "max_block"), ("probes", "max_ms", "probe_max"),
+                               ("http_probes", "max_ms", "http_probe_max"),
                                ("next_call_ms", None, "next_call")):
             cold = pick(key, sub, items[:1])
             values = pick(key, sub, warm)
@@ -754,11 +827,12 @@ def main() -> None:
         screen = Screen(f"ws://127.0.0.1:{port}")
         screen.wait(lambda m: m["type"] == "state", 0, timeout=60)
         time.sleep(3.0)  # 子の先立て(`kernel_worker.warm_up_in_background`)が済むまで
-        bench = Bench(screen, Mcp(http_port), tracer, args.probe_interval, args.only)
+        bench = Bench(screen, Mcp(http_port), tracer, args.probe_interval, args.only, f"ws://127.0.0.1:{port}")
         try:
             run_scenes(bench, doc, args.rounds)
         finally:
             rows = bench.rows
+            screen = bench.screen
     finally:
         if screen is not None:
             screen.close()
@@ -773,11 +847,11 @@ def main() -> None:
         args.out.write_text(json.dumps({"python": sys.version, "part": args.part, "document": doc, "summary": table, "rows": rows},
                                        ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"\nwrote {args.out}")
-        print("\n| 場面 | 返事 冷/温 | 配信が届く 冷/温 | ループ占有 温 | 最長の塞ぎ 温 | 照会の最大 温 | 失敗 |")
-        print("|---|---|---|---|---|---|---|")
+        print("\n| 場面 | 返事 冷/温 | 配信が届く 冷/温 | ループ占有 温 | 最長の塞ぎ 温 | 照会の最大 温 | 失敗 | 切断 |")
+        print("|---|---|---|---|---|---|---|---|")
         for entry in table:
             print(f"| {entry['case']} | {entry['reply_cold']} / {entry['reply_warm']} | {entry['state_cold']} / {entry['state_warm']} | "
-                  f"{entry['loop_busy_warm']} | {entry['max_block_warm']} | {entry['probe_max_warm']} | {entry['errors']} |")
+                  f"{entry['loop_busy_warm']} | {entry['max_block_warm']} | {entry['probe_max_warm']} | {entry['errors']} | {entry['closed']} |")
         shutil.copy(work / "server.log", args.out.with_suffix(".server.log"))
         shutil.rmtree(work, ignore_errors=True)
 
