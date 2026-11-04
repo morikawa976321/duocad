@@ -110,7 +110,7 @@ def _image(builder: Any, shape: TopoDS_Shape) -> Dict[Any, Dict[int, List[TopoDS
     """入力の形の像(GF の後の立体片)を、種別ごとに hash で束ねて持つ。"""
     pieces: List[TopoDS_Shape] = []
     for solid in _brep_topology.subshapes(shape, TopAbs_SOLID):
-        modified = list(builder.Modified(solid))
+        modified = _brep_topology.listed(builder.Modified(solid))
         if modified:
             pieces.extend(modified)
         elif not builder.IsDeleted(solid):

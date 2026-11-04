@@ -276,12 +276,13 @@ def test_the_websocket_command_is_silent_when_nothing_changes(cylinder_session) 
 
     async def script(send):
         message = {"cmd": "set_view_resolution", "world_per_pixel": 0.002, "size_hint": SIDE}
-        await send(message)
-        await send(dict(message))
+        first = await send(message)
+        second = await send(dict(message))
+        return first, second
 
-    client = browser(session, script, connections=1)[1][0]
-    states = [payload for payload in client.payloads if payload.get("type") == "state"]
-    assert len(states) == 1, f"2回目でも配信している: {len(states)}件"
+    (first, second), clients = browser(session, script, connections=1)
+    assert first is not None and first.get("type") == "state", "1回目は配る"
+    assert second is first, "2回目でも配信している"
 
 
 def test_the_size_hint_may_be_omitted(cylinder_session) -> None:

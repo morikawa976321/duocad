@@ -93,7 +93,7 @@ def _walls(shape, tops):
     for top, edge in ((top, edge) for top in tops for edge in _brep_topology._tight_edges(top)):
         if BRep_Tool.IsClosed_s(edge, TopoDS.Face_s(top)) or BRep_Tool.Degenerated_s(edge):
             continue
-        neighbors = list(adjacent.FindFromKey(edge))
+        neighbors = _brep_topology.listed(adjacent.FindFromKey(edge))
         if sum(any(face.IsSame(top) for top in tops) for face in neighbors) > 1:
             continue
         others = [face for face in neighbors if not any(face.IsSame(top) for top in tops)]
@@ -167,7 +167,7 @@ def _cut(shape, top, walls, up, radius, top_faces):
     if len(section) != 1:
         raise Unsupported("the cut below the wall contacts does not have one planar section")
     allowed = [*top_faces, *walls]
-    permitted = [modified for face in allowed for modified in (list(above.Modified(face)) or [face])]
+    permitted = [modified for face in allowed for modified in (_brep_topology.listed(above.Modified(face)) or [face])]
     for face in _brep_topology._tight_faces(above.Shape()):
         if any(face.IsSame(other) for other in permitted):
             continue

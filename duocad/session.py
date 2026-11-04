@@ -43,6 +43,7 @@ from .verbs.project_to_sketch import outline_entities, projected_entities, selec
 from .view import DocumentView
 
 from . import (
+    brep_geometry as _brep_geometry,
     brep_topology as _brep_topology,
 )
 
@@ -285,9 +286,17 @@ class Session:
         state.update(self.workspace.to_state())
         return state
 
-    def delta(self, known_revisions: dict) -> dict:
+    def delta(self, known_revisions: dict, defer: frozenset = frozenset()) -> dict:
         """クライアントが持っている版との差分(`DocumentView.delta`)。"""
-        return self.view.delta(known_revisions)
+        return self.view.delta(known_revisions, defer)
+
+    def refinement_jobs(self) -> list:
+        """ループの外で測る分(`DocumentView.refinement_jobs`)。"""
+        return self.view.refinement_jobs()
+
+    def adopt_refinement(self, body_id: str, shape: Any, groups: dict, measured: dict) -> bool:
+        """ループの外で測った面を覚える(`DocumentView.adopt_refinement`)。"""
+        return self.view.adopt_refinement(body_id, shape, groups, measured)
 
     def geometry(self, body_id: str) -> dict:
         """1Bodyのテセレーション結果(`DocumentView.geometry`)。"""
@@ -679,6 +688,16 @@ class Session:
         deviation = self.view.view_deviation
         angular = self.view.view_angular_deflection
         function = entry_for(verb)
+        # 写しの面は元の形と同じ添字(`fork`)なので、結果に残った面は元の形で測った三角形を借りられる。いまここで写しを取る
+        # (計算はワーカーで走り、その間もループが元の形を測る)。下限に張り付いたズームでは借りない(1回で測る規則。`view`)
+        inputs = dict(zip((body.id for body in self.document.bodies if body.shape is not None), pairs))
+        for original, copy in pairs:  # 写しは幾何がそのままなので体積も同じ(verb の検査が積分し直さない)
+            known = _brep_geometry.known_volume(original)
+            if known is not None:
+                _brep_geometry.note_volume(copy, known)
+        lent = {} if self.view.floored else {
+            body_id: self.view.measured_faces(body_id, original, (deviation, angular)) for body_id, (original, _copy) in inputs.items()
+        }
 
         measured: list = []  # (ボディ, 形, 三角形) — 確定後の配信で使い回す(`adopt`)
 
@@ -690,7 +709,14 @@ class Session:
                     continue
                 if copies.get(id(body.shape)) is body.shape:
                     continue  # 形が変わっていないBodyは送らない(`preview` と同じ)
-                geometry = kernel.tessellate(body.shape, deviation, angular)
+                reuse: dict = {}
+                held = inputs.get(body.id)
+                if held is not None:
+                    kept = kernel.kept_pairs(body.shape, held[1])
+                    kernel.note_kept_faces(body.shape, held[1], kept)  # 確定で元の形へ付け替わる(`kernel.adopt_results`)
+                    borrowed = lent.get(body.id) or {}
+                    reuse = {position: borrowed[index] for position, index in kept if index in borrowed}
+                geometry = kernel.tessellate_reusing(body.shape, deviation, angular, reuse)
                 measured.append((body.id, body.shape, geometry))
                 bodies_out.append({
                     "body_id": body.id,

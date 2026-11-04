@@ -1,7 +1,8 @@
 /**
  * 状態とプレビューの配信を読む: 1枚のバイナリフレームと、省かれて届いたものの埋め戻し(issue #166・#170)。
  * 形と省く規則の正はサーバの `duocad/net/wire.py`(ヘッダの JSON の数の並びが `{"$f32": [バイト位置, 個数]}` /
- * `{"$u32": ...}` に置き換わっている。省かれた面は `{index, serial, detail}`、スケッチは `{sketch_id, unchanged}`、
+ * `{"$u32": ...}` に置き換わっている。省かれた面は `{index, serial, detail}`(直前に受け取ったどのボディの面でも、同じ `serial` の
+ * 三角形を使う。添字とボディは変わりうる)、スケッチは `{sketch_id, unchanged}`、
  * 操作ログは `log` が無く、変わったときだけ `log_keep`(前回の先頭から残す件数)と `log_tail`(後ろに足す分)がある)。
  */
 import type { BodyGeometry, ServerState, SketchState } from './session'
@@ -40,7 +41,7 @@ export function decodeFrame(buffer: ArrayBuffer): unknown {
   return root
 }
 
-/** 省かれて届いた面(前回このボディで受け取った同じ `serial` の面を使う)。 */
+/** 省かれて届いた面(直前に受け取った同じ `serial` の面を使う)。 */
 interface OmittedFace {
   index: number
   serial: number
@@ -90,20 +91,26 @@ export function createDelivered(): { restore(state: WireState, bodies: BodyGeome
       return known
     })
     sketches = new Map((state.sketches as SketchState[]).map((sketch) => [sketch.sketch_id, sketch]))
+    // 受け取る前に持っていた面(このフレームの途中でボディごとに置き換えても引けるよう、先に写す)
+    const held = new Map<number, FaceGeometry>()
+    for (const known of faces.values()) {
+      for (const face of known.values()) if (face.serial !== undefined) held.set(face.serial, face)
+    }
     for (const body of bodies) {
       if (!body.geometry) {
         faces.delete(body.body_id)
         continue
       }
-      const known = faces.get(body.body_id)
       const restored = body.geometry.faces.map((face: FaceGeometry | OmittedFace) => {
         if ('positions' in face) return face
-        const previous = known?.get(face.index)
-        if (previous === undefined || previous.serial !== face.serial) {
+        const previous = held.get(face.serial)
+        if (previous === undefined) {
           throw new DeliveryMismatch(`受け取っていない面を省かれた: ${body.body_id} の面 ${face.index}`)
         }
         // 同じ三角形(配列もそのまま使い回す。`bodyMesh.ts` が配列ごとに境界線を覚えている)
-        return previous.detail === face.detail ? previous : { ...previous, detail: face.detail }
+        return previous.index === face.index && previous.detail === face.detail
+          ? previous
+          : { ...previous, index: face.index, detail: face.detail }
       })
       body.geometry.faces = restored
       faces.set(body.body_id, new Map(restored.map((face) => [face.index, face])))

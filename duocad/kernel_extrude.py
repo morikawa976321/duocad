@@ -15,7 +15,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Check, BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Check
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
@@ -243,8 +243,7 @@ def _build_tapered_prism(face: Any, offset: "gp_Vec", taper: float, label: str) 
             holes.append(_drafted_solid(wire, axis, height, angle, reach, inward=grow, label=label))
         explorer.Next()
     for hole in holes:
-        cut = BRepAlgoAPI_Cut(body, hole)
-        cut.Build()
+        cut = _brep_operations.build_boolean("cut", body, hole)
         if not cut.IsDone():
             raise ValueError(f"failed to cut a hole out of the tapered {label}")
         body = cut.Shape()
@@ -781,8 +780,7 @@ def _require_one_side_of_axis(
         ]
         polygon = BRepBuilderAPI_MakePolygon(*corners, True)
         half = BRepBuilderAPI_MakeFace(polygon.Wire(), True).Face()
-        common = BRepAlgoAPI_Common(face, half)
-        common.Build()
+        common = _brep_operations.build_boolean("common", face, half)
         if not common.IsDone():
             raise ValueError(f"failed to test region #{position} against the revolve axis")
         sides.append(_brep_geometry._extrude_shape_area(common.Shape()))
@@ -821,15 +819,13 @@ def _combine_region_solids(
             result = combined
         else:
             volume_before = _brep_geometry.volume(target_shape)
-            builder = BRepAlgoAPI_Fuse(target_shape, combined)
-            builder.Build()
+            builder = _brep_operations.build_boolean("fuse", target_shape, combined)
             if not builder.IsDone():
                 raise ValueError("join (fuse) failed")
             result = builder.Shape()
     else:
         volume_before = _brep_geometry.volume(target_shape)
-        builder = BRepAlgoAPI_Cut(target_shape, combined)
-        builder.Build()
+        builder = _brep_operations.build_boolean("cut", target_shape, combined)
         if not builder.IsDone():
             raise ValueError("cut failed")
         result = builder.Shape()
@@ -840,7 +836,8 @@ def _combine_region_solids(
     # 後の操作が記録した面・辺の番号がずれる(実測: SVG を取り込んだ輪郭の柱1本で 38面 -> 26面)。
     if mode in ("join", "new") and (len(solids) > 1 or builder is not None):
         final, history, unified = _brep_operations.unify_same_domain(result, volume_after)
-    _brep_checks._require_valid(final, mode)
+    if not unified:
+        _brep_checks._require_valid(final, mode)
     final_map = _brep_topology._face_map(final)
     successors = {} if builder is None else _brep_history.target_successors(builder, target_shape, history, final_map)
 
@@ -935,12 +932,7 @@ def extrude_faces(
         result = combined
     else:
         volume_before = _brep_geometry.volume(target_shape)
-        builder = (
-            BRepAlgoAPI_Fuse(target_shape, combined)
-            if mode == "join"
-            else BRepAlgoAPI_Cut(target_shape, combined)
-        )
-        builder.Build()
+        builder = _brep_operations.build_boolean("fuse" if mode == "join" else "cut", target_shape, combined)
         if not builder.IsDone():
             raise ValueError(f"{mode} failed for faces {indices} (distance={distance})")
         result = builder.Shape()
@@ -960,7 +952,8 @@ def extrude_faces(
     else:
         # 順序は 無変化 → 統合 → BRepCheck(統合は形状を壊しうるので、検査は統合後に行う)。
         final, history, unified = _brep_operations.unify_same_domain(result, volume_result)
-    _brep_checks._require_valid(final, mode, context)
+    if not unified:
+        _brep_checks._require_valid(final, mode, context)
     final_map = _brep_topology._face_map(final)
 
     successors = {} if builder is None else _brep_history.target_successors(builder, target_shape, history, final_map)

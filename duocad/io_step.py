@@ -26,7 +26,7 @@ TransferRoots() を呼ぶと、Python例外にはならず**プロセスごと�
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 
 from . import kernel, meshbody
 from .document import Body, BodyId, Document
@@ -41,8 +41,8 @@ PathLike = Union[str, Path]
 STL_DEVIATION = 0.01
 
 
-def read_step_source(path: PathLike) -> tuple[str, str]:
-    """STEPファイルを読み、`(source_name, text)` を返す。`source_name` は**ファイル名だけ**。
+def read_step_source(path: PathLike) -> tuple[str, str, Any]:
+    """STEPファイルを読み、`(source_name, text, 形)` を返す。`source_name` は**ファイル名だけ**、形は `text` を読んだもの。
 
     ヘッダや説明文字列にASCII外のバイトが入った実ファイルがあるため、バイト列で読み、UTF-8で読めなければ latin-1 へ落とす。
 
@@ -54,10 +54,10 @@ def read_step_source(path: PathLike) -> tuple[str, str]:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         text = data.decode("latin-1")
-    problems = kernel.step_import_problems(text)
+    shape, problems = kernel.read_step_text_checked(text)
     if problems:
         raise ValueError(f"cannot import {Path(path).name}: " + " / ".join(problems))
-    return Path(path).name, text
+    return Path(path).name, text, shape
 
 
 def solid_names(source_name: str, count: int) -> list[str]:

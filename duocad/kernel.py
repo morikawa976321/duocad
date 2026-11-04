@@ -12,22 +12,22 @@ kernel の外へ出さないための規律で、境界テスト(importの静的
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import math
+
+import numpy as np
 import os
 import tempfile
 import threading
 from collections import OrderedDict
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from OCP.BinTools import BinTools, BinTools_FormatVersion
 from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.BRepBndLib import BRepBndLib
-from OCP.BRepAlgoAPI import (
-    BRepAlgoAPI_Common,
-    BRepAlgoAPI_Cut,
-    BRepAlgoAPI_Fuse,
-)
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepTools import BRepTools
@@ -130,7 +130,13 @@ def _load_step_text(text: str) -> tuple:
 
 
 def step_import_problems(text: str) -> List[str]:
-    """STEP本文を取り込むと**黙って欠ける**ものを、人が読む文の一覧にする。欠けなければ空。
+    """STEP本文を取り込むと**黙って欠ける**ものを、人が読む文の一覧にする(`read_step_text_checked` の検査だけ)。"""
+    return read_step_text_checked(text)[1]
+
+
+def read_step_text_checked(text: str) -> Tuple["TopoDS_Shape", List[str]]:
+    """STEP本文を読み、`(形, 取り込むと黙って欠けるものの文の一覧)` を返す(欠けなければ一覧は空)。形は `read_step_text` と
+    同じ読み込み(`_load_step_text`)で、取り込みはこの形をそのまま使う(読み直すと STEP の転送をもう一度払う。4.6 MB で 0.6 秒)。
 
     1. **転送に失敗した要素**: 一部の面・要素(例: 未対応の面種、存在しない面への参照)の転送が失敗しても、ルートが
        1つでも転送できれば `read_step` は成功を返し、面が落ちた開いたシェルが solid として入る。`NbRootsForTransfer` との
@@ -140,7 +146,7 @@ def step_import_problems(text: str) -> List[str]:
        ソリッドが無い形は形全体を1ボディにするので数えない。ワイヤ・辺だけのものは面が無いので見えない。
 
     **取り込み(`io_step.read_step_source`)でだけ呼ぶ。再生は呼ばない**: 検査を足す前に取り込んだ形を含む保存済みの文書を、
-    そのまま開けなければならない。形は読み直す(`read_step_text` と別の読み込みになる)。
+    そのまま開けなければならない。
     """
     reader, shape = _load_step_text(text)
     problems: List[str] = []
@@ -171,7 +177,7 @@ def step_import_problems(text: str) -> List[str]:
                 f"ソリッド {solids.Extent()} 個の外に面が {loose} 枚ある(全体 {faces.Extent()} 面のうちソリッドに入るのは "
                 f"{faces.Extent() - loose} 面)。取り込むとそれらは黙って落ちる"
             )
-    return problems
+    return shape, problems
 
 
 def write_step(shape: "TopoDS_Shape", path: str) -> None:
@@ -246,6 +252,77 @@ class _OrientedShapeKey(_ShapeKey):
                 and bool(self.shape.IsSame(other.shape)))
 
     __hash__ = _ShapeKey.__hash__
+
+
+def face_keys(shape: "TopoDS_Shape") -> List[Any]:
+    """面の添字(1始まり)の順に、面の同一性の鍵(`shape_key`。TShape・Location・向き)を並べる。別の形にそのまま残った面は同じ鍵になる。"""
+    face_map = _brep_topology._face_map(shape)
+    return [_OrientedShapeKey(face_map.FindKey(index)) for index in range(1, face_map.Extent() + 1)]
+
+
+#: 閉じた立体か(`is_closed_shell`)を、位置を外した形の同一性(TShape と向き)で覚える。位置に依らない(動かした・
+#: 同じ部品を別の位置に置いた形で数え直さない。733 面で 0.03 秒)。
+_CLOSED: "OrderedDict[Any, bool]" = OrderedDict()
+_CLOSED_LOCK = threading.Lock()
+
+
+def is_closed_shell(shape: "TopoDS_Shape") -> bool:
+    """すべての辺が2面以上に共有されているか(`brep_checks._is_closed_shell`)。"""
+    key = _OrientedShapeKey(shape.Located(TopLoc_Location()))
+    with _CLOSED_LOCK:
+        if key in _CLOSED:
+            _CLOSED.move_to_end(key)
+            return _CLOSED[key]
+    closed = _brep_checks._is_closed_shell(shape)
+    with _CLOSED_LOCK:
+        _CLOSED[key] = closed
+        while len(_CLOSED) > 256:
+            _CLOSED.popitem(last=False)
+    return closed
+
+
+def face_placements(shape: "TopoDS_Shape") -> List[Tuple[Any, Optional["gp_Trsf"]]]:
+    """面の添字の順に `(位置を外した面の同一性の鍵, 面の位置の変換)`。鍵は TShape と向きだけを見る(`move_body` は TShape を
+    共有して位置だけを差し替える。`translate_shape`)。変換は単位なら None。"""
+    face_map = _brep_topology._face_map(shape)
+    bare = TopLoc_Location()
+    placements = []
+    for index in range(1, face_map.Extent() + 1):
+        face = face_map.FindKey(index)
+        location = face.Location()
+        placements.append((_OrientedShapeKey(face.Located(bare)), None if location.IsIdentity() else location.Transformation()))
+    return placements
+
+
+def moved_face(face: dict, before: Optional["gp_Trsf"], after: Optional["gp_Trsf"]) -> Optional[dict]:
+    """位置 `before` に置いた面で測った三角形(`tessellate` の `faces[i]`)を、同じ面を `after` に置いたときのものにする。"""
+    if after is None:
+        relative = gp_Trsf() if before is None else before.Inverted()
+    else:
+        relative = after if before is None else after.Multiplied(before.Inverted())
+    return transformed_face(face, relative)
+
+
+def transformed_face(face: dict, trsf: "gp_Trsf") -> Optional[dict]:
+    """面の三角形に変換 `trsf`(回転・平行移動・鏡映)を掛ける。拡大を含む変換は None(面積が変わる)。鏡映は三角形の巻きを
+    裏返す(外向きを保つ)。`serial` は落とす(三角形が変わる)。"""
+    if abs(abs(trsf.ScaleFactor()) - 1.0) > 1e-12:  # 鏡映は OCCT では拡大率 -1
+        return None
+    matrix = np.array([[trsf.Value(row, column) for column in range(1, 5)] for row in range(1, 4)])
+    linear, offset = matrix[:, :3], matrix[:, 3]
+    positions = (np.asarray(face["positions"], dtype=np.float64).reshape(-1, 3) @ linear.T + offset).ravel().tolist()
+    indices = face["indices"]
+    if trsf.IsNegative():
+        triangles = np.asarray(indices, dtype=np.int64).reshape(-1, 3)
+        indices = triangles[:, [0, 2, 1]].ravel().tolist()
+    moved = {key: value for key, value in face.items() if key != "serial"}
+    moved.update(
+        positions=positions,
+        indices=indices,
+        centroid=(linear @ np.asarray(face["centroid"]) + offset).tolist(),
+        normal=(linear @ np.asarray(face["normal"])).tolist(),
+    )
+    return moved
 
 
 def shape_key(shape: "TopoDS_Shape") -> Any:
@@ -374,8 +451,16 @@ def _transformed(
         builder = BRepBuilderAPI_Transform(shape, trsf, True)
         if not builder.IsDone():
             raise ValueError(f"形状の{what}(複製)に失敗した")
-        return builder.Shape()
-    return shape.Moved(TopLoc_Location(trsf))
+        result = builder.Shape()
+        # 複製は面の添字を保つ(`translate_shape`)。画面の三角形は元の面のものに変換を掛けて作れる(`view._borrow_faces`)
+        count = _brep_topology.face_count(shape)
+        note_kept_faces(result, shape, [(index, index) for index in range(1, count + 1)], trsf)
+    else:
+        result = shape.Moved(TopLoc_Location(trsf))
+    known = _brep_geometry.known_volume(shape)
+    if known is not None:  # 剛体の変換(鏡映を含む)は体積を変えない(733 面で積分し直すと 0.18 秒)
+        _brep_geometry.note_volume(result, known)
+    return result
 
 
 def mirror_shape(
@@ -460,23 +545,71 @@ def tessellate(
 def _describe_face(face: Any, index: int) -> dict:
     """1面ぶんの三角形・分類・面積・重心・法線。"""
     positions, indices = _face_triangles(face)
-    area, centroid = _brep_geometry._face_props(face)
+    kind, area, centroid, normal = _face_traits(face)
     return {
         "index": index,
-        "kind": _brep_geometry.classify_face(face),
+        "kind": kind,
         "area": area,
         "centroid": list(centroid),
-        "normal": list(_brep_geometry._face_normal(face)),
+        "normal": list(normal),
         "positions": positions,
         "indices": indices,
     }
 
 
-def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], Iterable[int]]) -> dict:
+#: 面の分類・面積・重心・法線(`_face_traits`)を面の同一性(TShape・Location・向き)で覚える。測り方(偏差)に依らないので、
+#: ズームで測り直す面や、形が変わっても残った面で求め直さない(733 面で1回 83 ms)。
+_FACE_TRAITS: "OrderedDict[Any, tuple]" = OrderedDict()
+_FACE_TRAITS_LIMIT = 50_000
+_FACE_TRAITS_LOCK = threading.Lock()
+
+
+def _face_traits(face: Any) -> tuple:
+    """`(分類, 面積, 重心, 外向きの法線)`。"""
+    key = shape_key(face)
+    with _FACE_TRAITS_LOCK:
+        held = _FACE_TRAITS.get(key)
+        if held is not None:
+            _FACE_TRAITS.move_to_end(key)
+            return held
+    area, centroid = _brep_geometry._face_props(face)
+    traits = (_brep_geometry.classify_face(face), area, centroid, _brep_geometry._face_normal(face))
+    with _FACE_TRAITS_LOCK:
+        _FACE_TRAITS[key] = traits
+        while len(_FACE_TRAITS) > _FACE_TRAITS_LIMIT:
+            _FACE_TRAITS.popitem(last=False)
+    return traits
+
+
+def tessellate_reusing(shape: "TopoDS_Shape", deviation: float, angular_deflection: float, reuse: Dict[int, dict]) -> dict:
+    """`tessellate` と同じ形を返す。`reuse` の面(添字 -> 同じ面を同じ測り方で測った `faces[i]`)は測らずに使う。"""
+    if not reuse:
+        return tessellate(shape, deviation, angular_deflection)
+    total = _brep_topology.face_count(shape)
+    missing = [index for index in range(1, total + 1) if index not in reuse]
+    measured = (
+        tessellate_faces(shape, {(float(deviation), float(angular_deflection)): missing}, closed=False) if missing
+        else {"faces": {}, "untriangulated": [], "boundary": kernel_meshing.merge_diagnostics([])}
+    )
+    faces = [dict(reuse[index], index=index) if index in reuse else measured["faces"][index] for index in range(1, total + 1)]
+    untriangulated = list(measured["untriangulated"])
+    if faces and len(untriangulated) == len(faces):
+        raise ValueError(f"三角形分割が1面も取れなかった(deviation={deviation}, angular={angular_deflection})")
+    return {
+        "deviation": float(deviation),
+        "face_count": len(faces),
+        "bbox": _brep_geometry._bounding_box(faces),
+        "faces": faces,
+        "untriangulated": untriangulated,
+        "boundary": measured["boundary"],
+    }
+
+
+def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], Iterable[int]], *, closed: bool = True) -> dict:
     """指定した面だけを、`(偏差, 角度偏差)` の組ごとに三角形分割する(面単位のキャッシュ `view.DocumentView` の口)。
 
     戻り値: `{"faces": {面の添字: tessellate() の faces[i] と同じ形}, "untriangulated": [...], "boundary": {...},
-    "closed": bool}`。組ごとに compound にして測る。組が全面なら形状そのものを測る(`tessellate()` と同じ結果)。
+    "closed": bool}`(`closed=False` で頼んだら `"closed"` は None。形ごとに1回で足りる)。組ごとに compound にして測る。組が全面なら形状そのものを測る(`tessellate()` と同じ結果)。
     組の間で共有する辺の分割は伝わらず、曲線の共有辺には粗い側の偏差ぶんの隙間が開きうる。
     """
     _brep_checks._check_tessellation_args(shape, *next(iter(groups), (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)))
@@ -505,7 +638,7 @@ def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], It
         "faces": described,
         "untriangulated": sorted(untriangulated),
         "boundary": kernel_meshing.merge_diagnostics(passes),
-        "closed": _brep_checks._is_closed_shell(shape),
+        "closed": is_closed_shell(shape) if closed else None,
     }
 
 
@@ -559,13 +692,9 @@ def _boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) ->
     combined = _brep_operations.fuse_all(tool_shapes, "tool shapes")
 
     volume_before = _brep_geometry.volume(target_shape)
-    if mode == "union":
-        builder = BRepAlgoAPI_Fuse(target_shape, combined)
-    elif mode == "cut":
-        builder = BRepAlgoAPI_Cut(target_shape, combined)
-    else:
-        builder = BRepAlgoAPI_Common(target_shape, combined)
-    builder.Build()
+    builder = _brep_operations.build_boolean(
+        {"union": "fuse", "cut": "cut"}.get(mode, "common"), target_shape, combined
+    )
     if not builder.IsDone():
         raise ValueError(f"{mode} failed")
     result = builder.Shape()
@@ -574,7 +703,8 @@ def _boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) ->
     final, history, unified = result, None, False
     if mode == "union":
         final, history, unified = _brep_operations.unify_same_domain(result, volume_after)
-    _brep_checks._require_valid(final, mode)
+    if not unified:
+        _brep_checks._require_valid(final, mode)
     final_map = _brep_topology._face_map(final)
 
     return {
@@ -733,6 +863,59 @@ def copy_shape(shape: Any) -> Any:
     return _brep_operations.copy_shape(shape)
 
 
+def shapes_digest(shapes: Sequence[Any]) -> str:
+    """形の並びの中身の指紋(BinTools の書き出しの SHA-1)。呼ぶたびに作り直される入力(スケッチの領域の面は写しで渡る)を、
+    `remembered` の引数側の鍵にするため。"""
+    stream = io.BytesIO()
+    BinTools.Write_s(make_compound(list(shapes)), stream, False, False, BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+    return hashlib.sha1(stream.getvalue()).hexdigest()
+
+
+#: 結果の形の面のうち、入力の形の面と同じ面(幾何が同じで、測った三角形をそのまま使える)の対。鍵は id(結果の形)、
+#: 値は (結果の形, 入力の形, ((結果の添字, 入力の添字), ...))。子プロセスで計算した結果は BinTools で戻って TShape が切れ、
+#: プレビューの結果は写しの上の形なので、面の同一性(`face_keys`)では元の形の三角形につながらない(`view._borrow_faces`)。
+_KEPT: "OrderedDict[int, tuple]" = OrderedDict()
+_KEPT_LIMIT = 16
+_KEPT_LOCK = threading.Lock()
+
+
+def note_kept_faces(result: Any, source: Any, pairs: Sequence[Tuple[int, int]], transform: Any = None) -> None:
+    """`result` の面のうち `source` の面と同じもの `(結果の添字, 入力の添字)` を覚える。`transform`(`gp_Trsf`)を渡したら、
+    結果の面は入力の面にその変換を掛けたもの(複製・鏡映。`_transformed`)。"""
+    if not pairs:
+        return
+    with _KEPT_LOCK:
+        _KEPT[id(result)] = (result, source, tuple((int(j), int(i)) for j, i in pairs), transform)
+        _KEPT.move_to_end(id(result))
+        while len(_KEPT) > _KEPT_LIMIT:
+            _KEPT.popitem(last=False)
+
+
+def kept_faces(result: Any) -> Optional[Tuple[Any, tuple, Any]]:
+    """`note_kept_faces` で覚えた `(入力の形, 対, 変換 または None)`。無ければ None。"""
+    with _KEPT_LOCK:
+        held = _KEPT.get(id(result))
+    if held is None or held[0] is not result:
+        return None
+    return held[1], held[2], held[3]
+
+
+def identical_faces(result: Any, source: Any) -> List[Tuple[int, int]]:
+    """`result` の面のうち `source` の面と TShape・位置・向きが同じもの(同じプロセスの演算でそのまま残った面)の対。"""
+    index_of = {key: index for index, key in enumerate(face_keys(source), start=1)}
+    return [(position, index_of[key]) for position, key in enumerate(face_keys(result), start=1) if key in index_of]
+
+
+def kept_pairs(result: Any, source: Any) -> List[Tuple[int, int]]:
+    """`result` の面のうち `source` の面と同じ面の対(`identical_faces` と、子の結果について覚えた `note_kept_faces`)。"""
+    pairs = dict(identical_faces(result, source))
+    noted = kept_faces(result)
+    if noted is not None and noted[0] is source and noted[2] is None:
+        for position, index in noted[1]:
+            pairs.setdefault(position, index)
+    return sorted(pairs.items())
+
+
 def adopt_results(pairs: Sequence[Tuple[Any, Any]]) -> None:
     """`(元の形, 写し)` の組について、写しを入力として覚えた結果(`remembered`)を、元の形を入力とした結果として覚え直す。
 
@@ -753,6 +936,9 @@ def adopt_results(pairs: Sequence[Tuple[Any, Any]]) -> None:
                 continue
             del _RESULTS[key]
             _RESULTS[(key[0], tuple(id(shape) for shape in swapped), key[2])] = (swapped, result)
+    with _KEPT_LOCK:
+        for key, (result, source, kept, transform) in list(_KEPT.items()):
+            _KEPT[key] = (result, swap(source), kept, transform)
 
 
 def _value_key(values: dict) -> tuple:
@@ -994,7 +1180,7 @@ def _coplanar_supports(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int
         for number in range(1, maker.NbEdges(contour) + 1):
             edge = maker.Edge(contour, number)
             if edge_faces.Contains(edge):
-                for face in edge_faces.FindFromKey(edge):
+                for face in _brep_topology.listed(edge_faces.FindFromKey(edge)):
                     if not reached.Contains(face):
                         reached.Add(face)
                         queue.append(face)
@@ -1005,7 +1191,7 @@ def _coplanar_supports(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int
             edge = TopoDS.Edge_s(edges.FindKey(number))
             if not edge_faces.Contains(edge):
                 continue
-            for other in edge_faces.FindFromKey(edge):
+            for other in _brep_topology.listed(edge_faces.FindFromKey(edge)):
                 if reached.Contains(other) or other.IsSame(face):
                     continue
                 if kernel_overflow.coplanar(face, other):
@@ -1032,7 +1218,6 @@ def _absorbed_fillet(
         raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
     _brep_checks._require_valid(absorbed.shape, "fillet", context)
     final, history, _ = _brep_operations.unify_same_domain(absorbed.shape, volume_after)
-    _brep_checks._require_valid(final, "fillet", context)
     if len(_brep_topology.split_solids(final)) > len(_brep_topology.split_solids(shape)):
         raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
 
@@ -1072,7 +1257,6 @@ def _tight_fillet(
         raise ValueError(f"fillet changed the number of solids ({context})")
     _brep_checks._require_valid(tight.shape, "fillet", context)
     final, history, _ = _brep_operations.unify_same_domain(tight.shape, volume_after)
-    _brep_checks._require_valid(final, "fillet", context)
 
     def through(builder: Any, face: "TopoDS_Shape") -> List["TopoDS_Shape"]:
         modified = _brep_history.shape_list(builder, "Modified", face)
@@ -1106,23 +1290,9 @@ def _blend_provenance(
     verb: str,
     edge_indices: List[int],
 ) -> dict:
-    """由来を `normalize_provenance` 経由で回収し、JSON化できる添字の射影へ落とす(`extrude_faces` と同じ形)。"""
-    normalized = _brep_history.normalize_provenance(maker, [shape]) or {}
-    modified = {}
-    for entry in normalized.get("modified", []):
-        modified[entry["input"]] = entry["results"]
-    deleted_inputs = normalized.get("deleted", [])
-
-    shape_map = _brep_topology._face_map(shape)
+    """由来を JSON化できる添字の射影へ落とす(`extrude_faces` と同じ形)。"""
     final_map = _brep_topology._face_map(final)
-    successors: dict = {}
-    for index in range(1, shape_map.Extent() + 1):
-        old_face = shape_map.FindKey(index)
-        candidates = _brep_history.lookup_by_identity(modified, old_face)
-        if candidates is None:
-            candidates = [] if _brep_history.contains_identity(deleted_inputs, old_face) else [old_face]
-        successors[str(index)] = _brep_history.positions_in(final_map, candidates)
-
+    successors = _brep_history.maker_successors(maker, shape, final_map)
     return {
         "verb": verb,
         "edges": list(edge_indices),
@@ -1158,20 +1328,26 @@ def _face_triangles(face: Any) -> tuple:
     if triangulation is None:
         return [], []
 
-    is_identity = location.IsIdentity()
-    transformation = location.Transformation()
+    node = triangulation.Node
     positions: List[float] = []
-    for node_index in range(1, triangulation.NbNodes() + 1):
-        node = triangulation.Node(node_index)
-        if not is_identity:
-            node = node.Transformed(transformation)
-        positions.extend((node.X(), node.Y(), node.Z()))
+    extend = positions.extend
+    if location.IsIdentity():
+        for node_index in range(1, triangulation.NbNodes() + 1):
+            extend(node(node_index).Coord())
+    else:
+        transformation = location.Transformation()
+        for node_index in range(1, triangulation.NbNodes() + 1):
+            extend(node(node_index).Transformed(transformation).Coord())
 
-    is_reversed = face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED
+    triangle = triangulation.Triangle
     indices: List[int] = []
-    for triangle_index in range(1, triangulation.NbTriangles() + 1):
-        first, second, third = triangulation.Triangle(triangle_index).Get()
-        if is_reversed:
-            second, third = third, second
-        indices.extend((first - 1, second - 1, third - 1))
+    extend = indices.extend
+    if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
+        for triangle_index in range(1, triangulation.NbTriangles() + 1):
+            first, second, third = triangle(triangle_index).Get()
+            extend((first - 1, third - 1, second - 1))
+    else:
+        for triangle_index in range(1, triangulation.NbTriangles() + 1):
+            first, second, third = triangle(triangle_index).Get()
+            extend((first - 1, second - 1, third - 1))
     return positions, indices

@@ -723,6 +723,29 @@ runSmoke('bench-basic-ops', { timeout: 600000, mcp: true }, async (ctx) => {
       }
       const settled2 = await waitMatched(page, started2)
       record('B', 'ズームアウト8段(元へ)→形が要求に揃うまで', settled2, summarizeWs(await wsSince(page, t1)))
+      // ズームの直後(画面が測り直しを頼んだところ)に別の接続から軽い要求を投げた往復。測り直しがループを塞いでいれば、
+      // その終わりまで待たされる(クリックの返事も同じだけ遅れる)。最大を値にする(最初の往復だけが待たされる)
+      const trips = await wsRoundTrips(ctx.url, 5, (op) => ({ cmd: 'clear_selection', client_op: op }), {
+        beforeTrips: async () => {
+          const since = await now(page)
+          for (let i = 0; i < 14; i += 1) { // 上のズームインより深く(まだ測っていない段にして、測り直しを起こす)
+            await page.mouse.wheel({ deltaY: -100 })
+            await sleep(50)
+          }
+          await page.waitForFunction(
+            (t) => window.__bench.ws.some((e) => e.t >= t && e.dir === 'out' && e.type === 'set_view_resolution'),
+            { timeout: 10000, polling: 'raf' },
+            since,
+          )
+        },
+      })
+      record('B', 'ズームの測り直しの最中の軽い要求の往復(別の接続から 5 回の最大)', trips.max, { first: trips.first, p50: trips.p50 })
+      const started3 = Date.now()
+      for (let i = 0; i < 14; i += 1) {
+        await page.mouse.wheel({ deltaY: 100 })
+        await sleep(50)
+      }
+      await waitMatched(page, started3)
     }
     await frameStats(page, 'B', 'ズーム後・静止時のフレーム間隔 2秒', () => sleep(2000))
     await selectFilletUndo(page, ctx.mcp, 'B', bigId, { radius: 0.5, url: ctx.url })
