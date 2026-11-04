@@ -29,7 +29,7 @@ chains.forgetPicks()
 assert.deepEqual([...chains.sharedWith('b', 64, [62, 63, 71, 64, 65])], [])
 
 // 上面4辺の丸めのように、どの面からでも同じ連なりが返る。1 をクリックして選び、同じ連なりの 2 をクリックして外すとき、何も残さない
-chains.remember({ body_id: 'b', revision: 2, shape_revision: 2, origins: [1, 2], chains: [[1, 2, 3, 4], [1, 2, 3, 4]] })
+assert.equal(chains.remember({ body_id: 'b', revision: 1, shape_revision: 1, origins: [1, 2], chains: [[1, 2, 3, 4], [1, 2, 3, 4]] }), true)
 chains.picked('b', 1, true)
 assert.deepEqual([...chains.sharedWith('b', 2, [1, 2, 3, 4])], [])
 chains.forgetPicks()
