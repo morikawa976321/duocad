@@ -8,7 +8,7 @@ OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒�
 - 子は1本で、初回の呼び出しで立て、計算が終わっても残す(起動に約 1.6 秒。干渉チェックは1回ごとに立てる)。
 - 要求は {"op":"face_edit"・"blend_edges"・"shell","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
   {"shape":<base64>,"provenance":{...},"kept":[[結果の面の添字, 入力の面の添字], ...]}(フィレット・面取りは "volume_before"・
-  "volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。"kept" は入力のまま残った面で、親は `kernel.note_kept_faces` に渡す。
+  "volume_after"、面の編集は "volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。"kept" は入力のまま残った面で、親は `kernel.note_kept_faces` に渡す。
   要求の "volume" は親が知っている入力の体積(あれば。子は積分し直さない)。
   BinTools は往復で幾何が変わらず、面の添字の数え方も保つ(BRep の文字列は 1e-14 ずれる)。base64 の往復は
   PC ケースの最大のボディ(233 面、BinTools で 229 KB)で 1 ms 未満。
