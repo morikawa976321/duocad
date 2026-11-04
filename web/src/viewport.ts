@@ -44,7 +44,6 @@ import { createInterferenceLayer } from './interferenceLayer'
 import { createMeasureAnnotation } from './measureAnnotation'
 import { createThumbnailer } from './thumbnail'
 import { buildBodyMesh } from './bodyMesh'
-import { probePoints, sameView, snapshotView, type ViewSnapshot } from './viewSnapshot'
 import { OCCLUDER_LAYER, createOcclusion } from './occlusion'
 import { closestOnPolyline, createProjector, screenHitOfPoint, type PickPolyline, type ScreenProjector } from './polylinePick'
 import { createSolidFeatures, type BodyEdges, type BodyVertices } from './solidFeatures'
@@ -52,7 +51,7 @@ import type { BasePlaneName } from './session'
 import {
   type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef,
   type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type SectionState,
-  type SketchDraw, type SketchEntityHit, type VertexRef, type Viewport,
+  type SketchDraw, type SketchEntityHit, type VertexRef, type ViewSnapshot, type Viewport,
 } from './viewportTypes'
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
@@ -690,27 +689,36 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
-  const worldToClipScratch = new THREE.Matrix4()
-
-  /** 世界 → クリップの行列(`camera.updateMatrixWorld` が `matrixWorldInverse` も更新する)。 */
-  function worldToClip(): ArrayLike<number> {
-    camera.updateMatrixWorld()
-    return worldToClipScratch.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements
-  }
-
+  /**
+   * 今の視点の控え(カメラの写しと画面の寸法)。写しは子(ヘッドライト)を持たない。シーン直下のカメラなので、写しの
+   * `updateMatrixWorld` は元と同じ行列になる。
+   */
   function viewSnapshot(): ViewSnapshot {
-    const { width, height } = size()
-    const matrix = worldToClip()
-    // 見本点は見えている広さの半分まで。透視ではカメラから注視点までの半分に抑える(奥の向きの点をカメラの後ろへ出さない)
-    let reach = (worldPerPixel() * Math.min(width, height)) / 2
-    if (camera instanceof THREE.PerspectiveCamera) reach = Math.min(reach, camera.position.distanceTo(controls.target) / 2)
-    const points = probePoints(controls.target.toArray(), camera.matrixWorld.elements, reach)
-    return snapshotView(matrix, points, width, height)
+    camera.updateMatrixWorld()
+    const kept =
+      camera instanceof THREE.PerspectiveCamera
+        ? new THREE.PerspectiveCamera().copy(camera, false)
+        : new THREE.OrthographicCamera().copy(camera, false)
+    return { camera: kept, ...size() }
   }
 
-  function sameViewAs(snapshot: ViewSnapshot): boolean {
+  function fitsView(view: ViewSnapshot): boolean {
     const { width, height } = size()
-    return sameView(snapshot, worldToClip(), width, height)
+    return view.width === width && view.height === height
+  }
+
+  /**
+   * 控えの視点で矩形の中を集める。`camera` を控えの写しへ差し替えて集め、戻す(集める間は描かないので画面には出ない。
+   * 奥行きの読み出し `occlusion` も同じ `camera` を読む)。寸法が控えと違えば呼ばない(`fitsView`)。
+   */
+  function collectInBoxAs(rect: BandRect, view: ViewSnapshot): Omit<BoxSelectEvent, 'mode'> {
+    const live = camera
+    camera = view.camera as typeof camera
+    try {
+      return collectInBox(rect)
+    } finally {
+      camera = live
+    }
   }
 
   function projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null {
@@ -2445,7 +2453,8 @@ export function createViewport(container: HTMLElement): Viewport {
     setFov,
     cameraPose,
     viewSnapshot,
-    sameView: sameViewAs,
+    fitsView,
+    collectInBoxAs,
     projectPoint,
     projectSketchPoint,
     projectBasePlane,

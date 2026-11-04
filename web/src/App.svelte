@@ -120,8 +120,7 @@
     type SketchEntityHit,
     type Viewport,
   } from './viewport'
-  import type { PickKind } from './viewportTypes'
-  import type { ViewSnapshot } from './viewSnapshot'
+  import type { PickKind, ViewSnapshot } from './viewportTypes'
   import type { CommandRequest } from './generated/protocol'
 
   /**
@@ -1311,7 +1310,8 @@
 
   /**
    * 辺・頂点が届くのを待っている矩形選択(`onBoxSelect`)と、引いたときの視点。新しいクリック・矩形選択・コマンドの起動で
-   * 捨てる(後の操作の結果を古い矩形が上書きしない)。視点が動いていたら集め直さずに捨てる(画面の矩形は引いたときの視点のもの)。
+   * 捨てる(後の操作の結果を古い矩形が上書きしない)。集め直しは引いたときの視点で行う(画面の矩形は引いたときの視点のもの)。
+   * 画面の寸法が変わっていたら捨てる。
    */
   let pendingBox = $state<{ event: BoxSelectEvent; view: ViewSnapshot | null } | null>(null)
 
@@ -1328,8 +1328,8 @@
     // 画面へ渡す側の `$effect` が先に走り終えてから集め直す(同じ配信で両方が走る順序は決まっていない)。
     // 集め直しで新たに足りないボディが出ても待たない(届かないボディで矩形選択が止まり続けないように)。
     setTimeout(() => {
-      if (viewport === null || waiting.view === null || !viewport.sameView(waiting.view)) return
-      onBoxSelect({ ...viewport.collectInBox(waiting.event.rect), pendingBodies: [], mode: waiting.event.mode })
+      if (viewport === null || waiting.view === null || !viewport.fitsView(waiting.view)) return
+      onBoxSelect({ ...viewport.collectInBoxAs(waiting.event.rect, waiting.view), pendingBodies: [], mode: waiting.event.mode })
     }, 0)
   })
 
