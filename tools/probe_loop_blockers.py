@@ -1,6 +1,6 @@
 """ループを塞ぐ3つの原因を、サーバを立てずに単体で測る(`tools/bench_request_paths.py` の結果の裏付け)。
 
-    uv run python -X utf8 tools/probe_loop_blockers.py [--part small|big] [--only gil|deflate|roundtrip] [--out <json>]
+    uv run python -X utf8 tools/probe_loop_blockers.py [--part small|big] [--step <STEP>] [--only gil|deflate|roundtrip] [--out <json>]
 
 - gil: ワーカースレッドが OCCT の三角形分割をしている間に、主スレッドが 1 ms おきに起きられるか(起きられなかった最長の間)。
   OCP は OCCT の呼び出しの間 GIL を放さないので、背景の測り直し・プレビューのワーカーでも主スレッド(ループ)は止まる
@@ -32,9 +32,14 @@ from duocad.session import Session  # noqa: E402
 now = time.perf_counter
 
 
-def part_session(part: str) -> tuple:
+def part_session(part: str, step: "Path | None" = None) -> tuple:
+    """合成の部品か、STEP の面の最も多いボディ。"""
     session = Session(kernel.DEFAULT_DEVIATION, models_dir=Path(tempfile.mkdtemp(prefix="duocad-blockers-")))
-    body_id = base.build_part(session, **base.PARTS[part])
+    if step is not None:
+        session.apply("import_step", {"path": str(step)})
+        body_id = max(session.document.bodies, key=lambda body: brep_topology.face_count(body.shape)).id
+    else:
+        body_id = base.build_part(session, **base.PARTS[part])
     diag = session.geometry(body_id)["bbox"]["diagonal"]
     return session, body_id, diag
 
@@ -133,11 +138,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--part", choices=sorted(base.PARTS), default="small")
     ap.add_argument("--only", default="")
+    ap.add_argument("--step", type=Path, default=None, help="この STEP の最大のボディで測る(--part より優先)")
     ap.add_argument("--out", type=Path, default=REPO / "output" / "bench_request_paths" / "loop_blockers.json")
     args = ap.parse_args()
-    session, body_id, diag = part_session(args.part)
-    print(f"part={args.part} 面 {brep_topology.face_count(session.document.get_body(body_id).shape)} python={sys.version.split()[0]}", flush=True)
-    result: dict = {"part": args.part, "python": sys.version}
+    session, body_id, diag = part_session(args.part, args.step)
+    label = str(args.step) if args.step is not None else args.part
+    print(f"part={label} 面 {brep_topology.face_count(session.document.get_body(body_id).shape)} python={sys.version.split()[0]}", flush=True)
+    result: dict = {"part": label, "python": sys.version}
     for name, measure in (("gil", measure_gil), ("deflate", measure_deflate), ("roundtrip", measure_roundtrip)):
         if args.only and args.only != name:
             continue

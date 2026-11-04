@@ -1,6 +1,6 @@
 """実際の要求の経路(MCP の HTTP・画面の WebSocket)を、本物のサーバを子プロセスで立てて工程ごとに測る。
 
-    uv run python -X utf8 tools/bench_request_paths.py --part small|big|multi [--rounds 4] [--out <json>] [--only <名前の一部>]
+    uv run python -X utf8 tools/bench_request_paths.py --part small|big|multi [--step <STEP>] [--rounds 4] [--out <json>] [--only <名前の一部>]
 
 子プロセスは `duocad.mcp_server.main` そのもの(`--no-stdio`・使い捨ての `--models-dir`・空いたポート)で、起動の前に
 関数へ時計を差し込む(既存のコードは変えない)。時計は `time.perf_counter`(同じ機械ならプロセスをまたいで同じ時計)。
@@ -640,23 +640,30 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
-def build_document(part: str, models_dir: Path) -> dict:
-    """部品を作って `models_dir` へ保存し、場面に要る添字(サーバが開く文書と同じ。再生は同じ添字を作る)を返す。"""
+def build_document(part: str, models_dir: Path, step: Optional[Path] = None) -> dict:
+    """部品を作って(`step` なら取り込んで)`models_dir` へ保存し、場面に要る添字(サーバが開く文書と同じ。再生は同じ添字を作る)を返す。
+    STEP では面の最も多いボディを対象にし、2 番目のボディをブーリアンと削除の相手にする(無ければその場面を飛ばす)。"""
     import bench_all_ops as base
     from duocad import brep_topology, kernel
     from duocad.session import Session
 
     session = Session(kernel.DEFAULT_DEVIATION, models_dir=models_dir)
-    size = "small" if part == "multi" else part
+    size = "small" if part in ("multi", "step") else part
     t0 = now()
-    body_id = base.build_part(session, **base.PARTS[size])
-    session.apply("sketch_create", {"base_plane": "XZ"})
-    sid = base.last_sketch(session)
-    session.apply("add_rectangle", {"sketch_id": sid, "corner": [-70, 2], "width": 140, "height": 3})
-    session.leave_sketch()
-    base.select(session, [{"sketch": sid, "index": 1}])
-    session.apply("extrude", {"distance": 30, "mode": "new"})
-    tool = session.document.bodies[-1].id
+    if step is not None:
+        session.apply("import_step", {"path": str(step)})
+        ranked = sorted(session.document.bodies, key=lambda body: -brep_topology.face_count(body.shape))
+        body_id = ranked[0].id
+        tool = ranked[1].id if len(ranked) > 1 else None
+    else:
+        body_id = base.build_part(session, **base.PARTS[size])
+        session.apply("sketch_create", {"base_plane": "XZ"})
+        sid = base.last_sketch(session)
+        session.apply("add_rectangle", {"sketch_id": sid, "corner": [-70, 2], "width": 140, "height": 3})
+        session.leave_sketch()
+        base.select(session, [{"sketch": sid, "index": 1}])
+        session.apply("extrude", {"distance": 30, "mode": "new"})
+        tool = session.document.bodies[-1].id
     if part == "multi":
         for k in range(12):
             base.select(session, [base.body_ref(body_id)])
@@ -665,7 +672,8 @@ def build_document(part: str, models_dir: Path) -> dict:
     built = now() - t0
     planes = base.faces_of_kind(session, body_id, "plane")
     top = max(planes, key=lambda f: f["centroid"][2])
-    lines = base.blendable(session, body_id, base.edges_of_kind(session, body_id, "line", 3.0), 1)
+    lines = base.blendable(session, body_id, base.edges_of_kind(session, body_id, "line", 3.0), 1) \
+        or base.blendable(session, body_id, base.edges_of_kind(session, body_id, "circle"), 1)
     bbox = session.geometry(body_id)["bbox"]
     name = f"paths_{part}.json"
     session.rename_document(name)
@@ -721,18 +729,20 @@ def run_scenes(bench: Bench, doc: dict, rounds: int) -> None:
         bench.mcp_op(f"mcp set_selection face {tag}", "set_selection", {"refs": [top]}, record=False)
         bench.mcp_op(f"mcp extrude face join {tag}", "extrude", {"distance": 0.5 + 0.01 * r, "mode": "join"})
         bench.mcp_op(f"mcp undo extrude {tag}", "undo")
-        bench.mcp_op(f"mcp set_selection bar {tag}", "set_selection", {"refs": [bar]}, record=False)
-        bench.mcp_op(f"mcp boolean cut {tag}", "boolean_body", {"target_ref": top, "mode": "cut"})
-        bench.mcp_op(f"mcp undo boolean {tag}", "undo")
+        if tool is not None:
+            bench.mcp_op(f"mcp set_selection bar {tag}", "set_selection", {"refs": [bar]}, record=False)
+            bench.mcp_op(f"mcp boolean cut {tag}", "boolean_body", {"target_ref": top, "mode": "cut"})
+            bench.mcp_op(f"mcp undo boolean {tag}", "undo")
         bench.mcp_op(f"mcp set_selection body {tag}", "set_selection", {"refs": [whole]}, record=False)
         bench.mcp_op(f"mcp move_body {tag}", "move_body", {"dx": 1.0 + 0.01 * r, "dy": 0.0, "dz": 0.0})
         bench.mcp_op(f"mcp undo move {tag}", "undo")
         bench.mcp_op(f"mcp set_selection body(2) {tag}", "set_selection", {"refs": [whole]}, record=False)
         bench.mcp_op(f"mcp mirror_body {tag}", "mirror_body", {"base_plane": "YZ"})
         bench.mcp_op(f"mcp undo mirror {tag}", "undo")
-        bench.mcp_op(f"mcp set_selection bar(2) {tag}", "set_selection", {"refs": [bar]}, record=False)
-        bench.mcp_op(f"mcp delete bar {tag}", "delete")
-        bench.mcp_op(f"mcp undo delete {tag}", "undo")
+        if tool is not None:
+            bench.mcp_op(f"mcp set_selection bar(2) {tag}", "set_selection", {"refs": [bar]}, record=False)
+            bench.mcp_op(f"mcp delete bar {tag}", "delete")
+            bench.mcp_op(f"mcp undo delete {tag}", "undo")
         bench.mcp_op(f"mcp describe_document {tag}", "describe_document", expect_state=False)
 
         bench.ws_op(f"ws modify_selection edge {tag}", {"cmd": "modify_selection", "add": [edge], "remove": []})
@@ -790,6 +800,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--serve", action="store_true", help="(内部用)時計を差し込んだサーバとして立つ。残りの引数は mcp_server へ")
     ap.add_argument("--part", choices=("small", "big", "multi"), default="small")
+    ap.add_argument("--step", type=Path, default=None, help="この STEP の最大のボディで測る(--part より優先)")
     ap.add_argument("--rounds", type=int, default=4)
     ap.add_argument("--probe-interval", type=float, default=0.02)
     ap.add_argument("--only", default="")
@@ -804,7 +815,7 @@ def main() -> None:
     dist.mkdir()
     (dist / "index.html").write_text("<!doctype html><title>bench</title>", encoding="utf-8")
     print(f"work={work} python={sys.version.split()[0]} part={args.part}", flush=True)
-    doc = build_document(args.part, models)
+    doc = build_document("step" if args.step else args.part, models, args.step)
     print(f"  文書: {json.dumps(doc, ensure_ascii=False)}", flush=True)
     port, http_port = free_port(), free_port()
     log = (work / "server.log").open("w", encoding="utf-8")
@@ -844,7 +855,7 @@ def main() -> None:
         log.close()
         table = medians(rows)
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps({"python": sys.version, "part": args.part, "document": doc, "summary": table, "rows": rows},
+        args.out.write_text(json.dumps({"python": sys.version, "part": "step" if args.step else args.part, "document": doc, "summary": table, "rows": rows},
                                        ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"\nwrote {args.out}")
         print("\n| 場面 | 返事 冷/温 | 配信が届く 冷/温 | ループ占有 温 | 最長の塞ぎ 温 | 照会の最大 温 | 失敗 | 切断 |")
