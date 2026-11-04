@@ -723,17 +723,14 @@ class DocumentView:
         return jobs
 
     def adopt_refinement(self, body_id: str, shape: Any, groups: dict, measured: dict) -> bool:
-        """ループの外で測った面を、その形の面として覚える。ボディの形が替わっていたら捨てて False(測った形の面は配らない)。
-        既に覚えている面は上書きしない(配った `serial` を変えない)。警告は次に配るときに出す。"""
+        """ループの外で測った面を、その形の面として覚える(ループの上で測ったのと同じく、組ごと1回の測定として。下限に張り付いた
+        ズームの「細かい面は1回で測る」組を崩さない)。ボディの形が替わっていたら捨てて False(測った形の面は配らない)。
+        警告は次に配るときに出す。"""
         body = next((item for item in self.document.bodies if item.id == body_id), None)
         if body is None or body.shape is not shape:
             return False
         store = self._face_store(body_id, shape)
-        fresh = {
-            recipe: [index for index in indices if index not in store.by_recipe.get(recipe, {})]
-            for recipe, indices in groups.items()
-        }
-        store.remember({recipe: indices for recipe, indices in fresh.items() if indices}, measured)
+        store.remember(groups, measured)
         store.unwarned_failed |= set(measured["untriangulated"])
         store.unwarned_boundary.extend((measured.get("boundary") or {}).get("unresolved") or [])
         return True

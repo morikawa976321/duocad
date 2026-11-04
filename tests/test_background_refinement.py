@@ -130,3 +130,67 @@ def test_a_camera_request_during_the_refinement_is_measured_right_after_it(monke
     last = states[-1]["delta"]["bodies"][0]["geometry"]
     fine = sorted(face["index"] for face in last["faces"] if face["detail"] == "fine")
     assert fine == [3, 4], f"後の向きで測った三角形が届いていない: {fine}"
+
+
+def test_a_deep_zoom_is_measured_once_in_the_background(monkeypatch) -> None:
+    """落ちたら、偏差が下限に張り付く深いズームで、背景で一緒に測った細かい面を一部しか取り込まず、続く配信がループの上で同じ面を
+    測り直す(背景で測る意味が無くなり、クリックの返事がまた待たされる)。"""
+    session = session_with_box()
+    on_the_loop: list = []
+    real = kernel.tessellate_faces
+
+    def measured(shape, groups, **options):
+        if threading.current_thread() is threading.main_thread():
+            on_the_loop.append(sorted(index for indices in groups.values() for index in indices))
+        return real(shape, groups, **options)
+
+    monkeypatch.setattr(kernel, "tessellate_faces", measured)
+    deep = {"cmd": "set_view_resolution", "world_per_pixel": 1.0e-6, "size_hint": 400.0}
+
+    async def scenario():
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        client = FakeConnection()
+        server.clients.add(client)
+        await server._push(client, applied=None, only=client)
+        await server._dispatch(client, json.dumps(dict(deep, focus={"box": [1]})))
+        await server.settled()
+        on_the_loop.clear()
+        await server._dispatch(client, json.dumps(dict(deep, focus={"box": [1, 2]})))
+        await server.settled()
+
+    asyncio.run(scenario())
+    assert on_the_loop == [], f"背景で測った面をループの上で測り直した: {on_the_loop}"
+
+
+def test_a_failure_after_the_refinement_reaches_the_screen(monkeypatch) -> None:
+    """落ちたら、測り直しの後の配信が失敗したとき、画面にエラーも警告も届かず、古い粗さの三角形が黙って残る。"""
+    session = session_with_box()
+    gate = threading.Event()
+    real = kernel.tessellate_faces
+    broken = {"on": False}
+
+    def measured(shape, groups, **options):
+        if threading.current_thread() is not threading.main_thread():
+            gate.wait(10)
+        if broken["on"]:
+            raise ValueError("測れない")
+        return real(shape, groups, **options)
+
+    monkeypatch.setattr(kernel, "tessellate_faces", measured)
+
+    async def scenario():
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        client = FakeConnection()
+        server.clients.add(client)
+        await server._push(client, applied=None, only=client)
+        await server._dispatch(client, json.dumps(dict(CAMERA, focus={"box": [1, 2]})))
+        broken["on"] = True
+        gate.set()
+        await server.settled()
+        return client.payloads
+
+    payloads = asyncio.run(scenario())
+    errors = [payload for payload in payloads if payload.get("type") == "error"]
+    assert errors and errors[-1]["where"] == "set_view_resolution"

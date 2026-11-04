@@ -1476,7 +1476,12 @@ class Server:
         again, self._refine_again = self._refine_again, False
         if again:
             self._schedule_refinement()
-        await self._push(None, applied=None)
+        try:
+            await self._push(None, applied=None)
+        except Exception as error:  # noqa: BLE001  ループの上で測った配信の失敗と同じく、画面へ知らせる(タスクの外へ漏らさない)
+            await self._broadcast({"type": "error", "where": "set_view_resolution", "message": f"{type(error).__name__}: {error}"})
+            for warning in self.session.take_warnings():
+                await self._broadcast({"type": "warning", "message": warning})
 
     async def settled(self) -> None:
         """背景の測り直しと、それが終わって配る分が済むまで待つ(テストの接続が、配り終えた状態を見るため)。"""
