@@ -27,7 +27,6 @@ from . import (
 from .document import Document
 
 from . import (
-    brep_checks as _brep_checks,
     brep_topology as _brep_topology,
 )
 
@@ -670,7 +669,7 @@ class DocumentView:
         measured = {
             "faces": {face["index"]: face for face in geometry["faces"]},
             "untriangulated": list(geometry.get("untriangulated", [])),
-            "closed": _brep_checks.is_closed_shell(shape),
+            "closed": kernel.is_closed_shell(shape),
         }
         store = self._face_store(body_id, shape)
         store.remember({recipe: indices}, measured)
@@ -749,7 +748,7 @@ class DocumentView:
             measured = kernel.tessellate_faces(body.shape, groups, closed=store.closed is None)
             store.remember(groups, measured)
         if store.closed is None:
-            store.closed = _brep_checks.is_closed_shell(body.shape)  # 全部を借りて測らなかった
+            store.closed = kernel.is_closed_shell(body.shape)  # 全部を借りて測らなかった
         faces = [dict(face, detail="fine" if face["index"] in fine_set else "coarse") for face in store.take(wanted)]
         untriangulated = store.failed(wanted)
         if faces and len(untriangulated) == len(faces):

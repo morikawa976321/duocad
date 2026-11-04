@@ -260,6 +260,27 @@ def face_keys(shape: "TopoDS_Shape") -> List[Any]:
     return [_OrientedShapeKey(face_map.FindKey(index)) for index in range(1, face_map.Extent() + 1)]
 
 
+#: 閉じた立体か(`is_closed_shell`)を、位置を外した形の同一性(TShape と向き)で覚える。位置に依らない(動かした・
+#: 同じ部品を別の位置に置いた形で数え直さない。733 面で 0.03 秒)。
+_CLOSED: "OrderedDict[Any, bool]" = OrderedDict()
+_CLOSED_LOCK = threading.Lock()
+
+
+def is_closed_shell(shape: "TopoDS_Shape") -> bool:
+    """すべての辺が2面以上に共有されているか(`brep_checks._is_closed_shell`)。"""
+    key = _OrientedShapeKey(shape.Located(TopLoc_Location()))
+    with _CLOSED_LOCK:
+        if key in _CLOSED:
+            _CLOSED.move_to_end(key)
+            return _CLOSED[key]
+    closed = _brep_checks._is_closed_shell(shape)
+    with _CLOSED_LOCK:
+        _CLOSED[key] = closed
+        while len(_CLOSED) > 256:
+            _CLOSED.popitem(last=False)
+    return closed
+
+
 def face_placements(shape: "TopoDS_Shape") -> List[Tuple[Any, Optional["gp_Trsf"]]]:
     """面の添字の順に `(位置を外した面の同一性の鍵, 面の位置の変換)`。鍵は TShape と向きだけを見る(`move_body` は TShape を
     共有して位置だけを差し替える。`translate_shape`)。変換は単位なら None。"""
@@ -434,8 +455,12 @@ def _transformed(
         # 複製は面の添字を保つ(`translate_shape`)。画面の三角形は元の面のものに変換を掛けて作れる(`view._borrow_faces`)
         count = _brep_topology.face_count(shape)
         note_kept_faces(result, shape, [(index, index) for index in range(1, count + 1)], trsf)
-        return result
-    return shape.Moved(TopLoc_Location(trsf))
+    else:
+        result = shape.Moved(TopLoc_Location(trsf))
+    known = _brep_geometry.known_volume(shape)
+    if known is not None:  # 剛体の変換(鏡映を含む)は体積を変えない(733 面で積分し直すと 0.18 秒)
+        _brep_geometry.note_volume(result, known)
+    return result
 
 
 def mirror_shape(
@@ -613,7 +638,7 @@ def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], It
         "faces": described,
         "untriangulated": sorted(untriangulated),
         "boundary": kernel_meshing.merge_diagnostics(passes),
-        "closed": _brep_checks._is_closed_shell(shape) if closed else None,
+        "closed": is_closed_shell(shape) if closed else None,
     }
 
 
