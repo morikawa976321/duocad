@@ -1472,6 +1472,7 @@ class Server:
         for body_id, shape, groups, measured in results:
             self.session.adopt_refinement(body_id, shape, groups, measured)
         self._refining = {}
+        self._refinement = None  # 自分はもう測っていない(次を始められるように。`_schedule_refinement` は実行中の測り直しがあれば待つ)
         again, self._refine_again = self._refine_again, False
         if again:
             self._schedule_refinement()

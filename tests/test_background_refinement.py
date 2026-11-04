@@ -106,3 +106,27 @@ def test_the_refined_faces_match_what_the_loop_would_measure(monkeypatch) -> Non
     assert [(face["index"], face["detail"], face["positions"]) for face in ours] == [
         (face["index"], face["detail"], face["positions"]) for face in theirs
     ]
+
+
+def test_a_camera_request_during_the_refinement_is_measured_right_after_it(monkeypatch) -> None:
+    """落ちたら、測り直しの最中にまたカメラが動いたとき、その向きの面が次にカメラが動くまで測られず、画面が粗いまま残る。"""
+    session = session_with_box()
+    gate = threading.Event()
+    _slow_measurement(monkeypatch, gate)
+
+    async def scenario():
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        client = FakeConnection()
+        server.clients.add(client)
+        await server._push(client, applied=None, only=client)
+        await server._dispatch(client, json.dumps(dict(CAMERA, focus={"box": [1, 2]})))
+        await server._dispatch(client, json.dumps(dict(CAMERA, focus={"box": [3, 4]})))
+        gate.set()
+        await server.settled()
+        return [payload for payload in client.payloads if payload.get("type") == "state" and payload["delta"]["bodies"]]
+
+    states = asyncio.run(scenario())
+    last = states[-1]["delta"]["bodies"][0]["geometry"]
+    fine = sorted(face["index"] for face in last["faces"] if face["detail"] == "fine")
+    assert fine == [3, 4], f"後の向きで測った三角形が届いていない: {fine}"
