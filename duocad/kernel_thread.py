@@ -23,6 +23,7 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Sewing,
     BRepBuilderAPI_Transform,
 )
+from OCP.BRepGProp import BRepGProp_Domain, BRepGProp_Face, BRepGProp_Vinert
 from OCP.BRepLib import BRepLib
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeRevol
 from OCP.BRep import BRep_Tool
@@ -34,7 +35,7 @@ from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
 from OCP.ShapeFix import ShapeFix_Solid
 from OCP.TColgp import TColgp_Array2OfPnt, TColgp_HArray1OfPnt
 from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal, TColStd_HArray1OfReal
-from OCP.TopAbs import TopAbs_ShapeEnum
+from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 from OCP.TopoDS import TopoDS
@@ -66,6 +67,7 @@ _FILL_MARGIN = 0.01  # 埋める・切る円柱を面より 0.01 太くする(�
 _VOLUME_TOLERANCE = 0.01  # 体積の増減の許容 = ねじ部の体積の 1%(docs/THREAD.md「合否の門と検査」)
 _RELIEF = 0.05  # 雄の根元の首を谷より細くする量(谷の帯と首の円錐を同じ半径で接させない)
 _AIR_EPS = 1e-6  # 軸の中の空きを「無い」とみなす体積(mm³)
+_VOLUME_EPS = 1e-7  # 体積の門の積分の Eps。`brep_geometry._thread_volume_eps` と揃える(門の増減とねじ部の体積を同じ精度で比べる)
 
 
 def default_pitch(diameter: float) -> float:
@@ -388,19 +390,19 @@ def _thread_face(shape, face_index, profile, clearance, pitch) -> dict:
     context = f"face {face_index}, {profile}, P{p:g}, c{c:g}"
     solids_before = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID).Extent()
     if female:
-        final, steps, expected_delta, thread_volume, before = _cut_female(shape, target, points, p, depth, context)
+        final, steps, expected_delta, thread_volume, start = _cut_female(shape, target, points, p, depth, context)
     else:
-        final, steps, expected_delta, thread_volume, before = _add_male(shape, target, points, p, depth, context)
+        final, steps, expected_delta, thread_volume, start = _add_male(shape, target, points, p, depth, context)
     if final is None or _brep_topology.is_null(final):
         raise ValueError(f"thread produced an empty shape ({context})")
     solids = _brep_topology.indexed_map(final, TopAbs_ShapeEnum.TopAbs_SOLID).Extent()
     if solids != solids_before:
         raise ValueError(f"thread changed the number of solids {solids_before} -> {solids} ({context})")
     _brep_checks._require_valid(final, "thread", context)
-    after = _brep_geometry._thread_volume_eps(final)
-    if abs((after - before) - expected_delta) > _VOLUME_TOLERANCE * thread_volume:
+    change = _volume_change(start, final)
+    if abs(change - expected_delta) > _VOLUME_TOLERANCE * thread_volume:
         raise ValueError(
-            f"thread changed the volume by {after - before:.6g}, expected {expected_delta:.6g} "
+            f"thread changed the volume by {change:.6g}, expected {expected_delta:.6g} "
             f"(±{_VOLUME_TOLERANCE * thread_volume:.3g}, {context}): ねじ部の集合演算が壊れた"
         )
     return {
@@ -411,6 +413,54 @@ def _thread_face(shape, face_index, profile, clearance, pitch) -> dict:
         **{k: plan[k] for k in ("female", "pitch", "clearance", "limit", "warning")},
         "recommended": list(plan["recommended"]),
     }
+
+
+def _volume_change(before, after) -> float:
+    """`after` の体積 − `before` の体積(`_thread_volume_eps` と同じ積分)。集合演算が触れなかった面は前後に同じ面
+    (TShape・位置・向き)で残り寄与が打ち消すので、片方にしか無い面だけを積分する。基準点は前後とも `after` の頂点の平均
+    (`VolumeProperties_s` が `after` を丸ごと積分するときの点で、`after` の面の寄与はその中の値と同じになる。片方にしか無い面の
+    組は閉じているので、増減は基準点に依らない)。実測: 穴 384 の板で 0.78 → 0.16 秒、丸ごとの差との違いは 1e-8 mm³ 未満。"""
+    removed: Dict[object, list] = {}
+    for face in _brep_geometry._faces_of(before):
+        removed.setdefault(kernel.shape_key(face), []).append(face)
+    added = []
+    for face in _brep_geometry._faces_of(after):
+        same = removed.get(kernel.shape_key(face))
+        if same:
+            same.pop()
+        else:
+            added.append(face)
+    gone = [face for faces in removed.values() for face in faces]
+    if any(face.NbChildren() == 0 for face in added + gone):
+        # 外部の罠: Eps 付きの `VolumeProperties_s` は境界の無い面に直前の面の境界を使い回す(OCCT 7.9 `BRepGProp.cxx`)ので、
+        # 面ごとに測ると丸ごとの値と食い違う
+        return _brep_geometry._thread_volume_eps(after) - _brep_geometry._thread_volume_eps(before)
+    centre = _vertex_mean(after)
+    change = 0.0
+    for face in added:  # `sum()` は 3.12 から補正つきの和で、OCCT の素の足し算と最後の桁が違う
+        change += _face_volume(face, centre)
+    for face in gone:
+        change -= _face_volume(face, centre)
+    return change
+
+
+def _vertex_mean(shape) -> "gp_Pnt":
+    """頂点の座標の平均(辺ごとに数え直す)。OCCT の `BRepGProp` が体積の基準点にする `roughBaryCenter` と同じ数え方・足し順。"""
+    x = y = z = 0.0
+    count = 0
+    exp = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_VERTEX)
+    while exp.More():
+        point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(exp.Current()))
+        x, y, z, count = x + point.X(), y + point.Y(), z + point.Z(), count + 1
+        exp.Next()
+    return gp_Pnt(x / count, y / count, z / count) if count else gp_Pnt(0, 0, 0)
+
+
+def _face_volume(face, centre) -> float:
+    """1面の体積の寄与。`VolumeProperties_s(.., _VOLUME_EPS)` が面ごとに足す値と同じ計算(前・後ろ向きでない面は数えない)。"""
+    if face.Orientation() not in (TopAbs_Orientation.TopAbs_FORWARD, TopAbs_Orientation.TopAbs_REVERSED):
+        return 0.0
+    return BRepGProp_Vinert(BRepGProp_Face(face), BRepGProp_Domain(face), centre, _VOLUME_EPS).Mass()
 
 
 def _placed(solid, target: dict, z_start: float):
@@ -473,13 +523,12 @@ def _add_male(shape, target, points, pitch, depth, context):
         if abs(_brep_geometry._thread_volume_eps(_boolean(_brep_operations.build_boolean("common", air, inner), "inner space", context)) - air_volume) > _AIR_EPS:
             raise ValueError("軸の中の穴・切り欠きがねじの首・先の面取りより外へ出ている(ねじを切ると穴が埋まるか壁が抜ける)")
         segment = _boolean(_brep_operations.build_boolean("cut", segment, air), "keep inner space", context)
-    before = _brep_geometry._thread_volume_eps(shape)
     cut = _brep_operations.build_boolean("cut", shape, _cylinder(target, target["radius"] + _FILL_MARGIN, z0, z1))
     body = _boolean(cut, "cut", context)
     fuse = _brep_operations.build_boolean("fuse", body, segment)
     final = _boolean(fuse, "fuse", context)
     expected = thread_volume - math.pi * target["radius"] ** 2 * length  # 空きは足す側と引く側で同じだけ減る
-    return final, [(cut, shape), (fuse, body)], expected, thread_volume, before
+    return final, [(cut, shape), (fuse, body)], expected, thread_volume, shape
 
 
 def _cut_female(shape, target, points, pitch, depth, context):
@@ -499,7 +548,6 @@ def _cut_female(shape, target, points, pitch, depth, context):
     z1 = target["v1"] - (depth if "high" in entries else 0.0)
     if z1 - z0 < pitch - 1e-9:
         raise ValueError(f"穴が短すぎる(入口の面取りを除いたねじの長さ {z1 - z0:.3g} がピッチ {pitch:g} に足りない)")
-    before = _brep_geometry._thread_volume_eps(body)
     fuse = _brep_operations.build_boolean("fuse", body, _cylinder(target, target["radius"] + _FILL_MARGIN, z0, z1))
     filled = _boolean(fuse, "fill", context)
     void = _placed(threaded_segment(points, pitch, z1 - z0), target, z0)
@@ -507,7 +555,7 @@ def _cut_female(shape, target, points, pitch, depth, context):
     final = _boolean(cut, "cut", context)
     thread_volume = _brep_geometry._thread_volume_eps(void)
     expected = math.pi * target["radius"] ** 2 * (z1 - z0) - thread_volume
-    return final, [("chamfer", chamfer_map), (fuse, body), (cut, filled)], expected, thread_volume, before
+    return final, [("chamfer", chamfer_map), (fuse, body), (cut, filled)], expected, thread_volume, body
 
 
 def _provenance(shape, steps, final, face_index: int, plan: dict) -> dict:
