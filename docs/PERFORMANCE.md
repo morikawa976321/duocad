@@ -434,7 +434,7 @@ QR1 の最大ボディ:
 - 面の性質を面の同一性で `kernel._face_traits`、三角形を借りる `view.DocumentView._borrow_faces`(同一性・子の対 `kernel.note_kept_faces`・
   写しの添字・位置の差 `kernel.moved_face` / `transformed_face`)、配信の省略は serial で `net/wire.py` と `web/src/wire.ts`
 - プレビューは元の形で測った面を借りる `kernel.tessellate_reusing`、子へ入力の体積を渡す `kernel_worker`
-- カメラの測り直しをループの外で `net/ws.py` の `_schedule_refinement`(測っている間はそのボディを配らない `DocumentView.delta(defer)`)
+- カメラの測り直しをループの外で `net/refinement.py` の `BackgroundRefinement`(測っている間はそのボディを配らない `DocumentView.delta(defer)`)
 - 子の先立て `kernel_worker.warm_up_in_background`、シェルを子で `verbs/shell_body.py` の `_shelled`、STEP は1回だけ `kernel.read_step_text_checked`
 - コマンドを抜けた・替えたら走っているゴーストの計算を止める `net/ws.py` の `_abandon_previews`(ワーカー1本の後ろに次のゴーストが並ばない)
 

@@ -1,4 +1,4 @@
-"""カメラの要求で足りなくなった面を、ループの外で測る(`net/ws.py` の `Server._schedule_refinement`)。"""
+"""カメラの要求で足りなくなった面を、ループの外で測る(`net/refinement.py` の `BackgroundRefinement`)。"""
 from __future__ import annotations
 
 import asyncio

@@ -709,7 +709,7 @@ class DocumentView:
 
     def refinement_jobs(self) -> list:
         """いまの測り方に足りない面があるボディの `(body_id, 形, 測る面の組, 閉じた立体かも測るか)`(カメラの要求の後に、
-        ループの外で測る分。`net/ws.py` の背景の測り直し)。"""
+        ループの外で測る分。`net/refinement.py`)。"""
         jobs = []
         for body in self.document.bodies:
             if not body.visible or body.mesh is not None or body.shape is None:
@@ -969,7 +969,7 @@ class DocumentView:
         (undoでの消滅。専用の "removed" は持たない)。
 
         `defer` のボディは、クライアントが版を知っていれば今回は送らない(ループの外で測っている最中。呼び手は送らなかった版を
-        覚えず、測り終えてから配る。`net/ws.py` の背景の測り直し)。
+        覚えず、測り終えてから配る。`net/refinement.py`)。
         """
         bodies_out = []
         unchanged = []
