@@ -101,7 +101,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 
 ## split_body(ボディの分割。#193)
 
-- 呼ぶ面は `split_body(base_plane | plane_face | sketch_id, keep="both")`。対象は確定選択の面/辺/頂点が属するボディ(`mirror_body` と同じ。複数ボディなら全部を同じ平面で割る)。verb は `duocad/verbs/split_body.py`、幾何は `duocad/kernel_split.py`(`kernel.py` には足していない)。
+- 呼ぶ面は `split_body(base_plane | plane_face | sketch_id, keep="both")`。対象は確定選択のボディ、または面/辺/頂点が属するボディ(`mirror_body` と同じ。複数ボディなら全部を同じ平面で割る)。verb は `duocad/verbs/split_body.py`、幾何は `duocad/kernel_split.py`(`kernel.py` には足していない)。
 - **切る平面は3つが排他**(0個・2個以上は ValueError): 基準平面 / 平らな面(法線はその面の外向き。`kernel_sketch.face_frame`)/ スケッチの平面(`sketch_plane_frame`。オフセット平面・面に貼ったスケッチを含む)。**`sketch_id` は図形の参照 `{"sketch", "entity"}` も受ける**(画面は図形を1つ指す。`revolve.axis_line` と同じ別チャンネルのピック。後述の理由)。ログには解決済みの `{plane_point, plane_normal}` だけを載せる(`mirror_body` と同じ)。
 - **`keep`**: `both`(既定)/ `positive`(法線の向く側だけ)/ `negative`。画面は `keep` を必ず送る(選択肢に既定を持たせない作法。両側を押す1手が増える)。MCP は省略=both。
 - **番号・名前・ID の引き継ぎ(本人ではなく親セッションの決定。2026-10-21)**: 元のボディの ID・番号・名前は、**残す塊のうち体積が最大のもの**が引き継ぐ。法線の向きで引き継ぎ先が変わらない(蓋と本体に割ると大きい本体が元の名前を保つ)。体積が相対 1e-9 以内で同じなら正側、それでも決まらなければ重心の (x, y, z) の小さい方(`kernel_split` が塊をこの順に並べて返し、verb は先頭を取る)。ほかの塊は新しいボディで、**名前は `naming` の通し番号(`ボディN`)**(複製・鏡映と同じ流儀。元の名前から派生させる流儀はコードベースに無い)・表示の属性は `dataclasses.replace` で元から写す。片側が離れた複数の塊になるときは `kernel.split_solids` で塊ごとに別のボディ(U字を横に切る)。
@@ -113,13 +113,13 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 
 ## boolean_body
 
-- **ツールボディは引数で渡さない。** 呼ぶ前に選択集合(面/辺/頂点、`min=1`)へ入れ、内部で `selection.require_bodies(document)` が逆引きする。`target_ref` は `{"body","kind":"face","index"}`(面1枚。選択集合には入れない)、`mode` は `union|cut|intersect`。verb 層は `verbs.boolean_body(doc, target_ref, tool_body_ids, mode)`。WS は表(`ws=table`)で `target_ref`/`mode` とも必須。
+- **ツールボディは引数で渡さない。** 呼ぶ前に選択集合(ボディか面/辺/頂点、`min=1`)へ入れ、内部で `selection.require_bodies(document)` が逆引きする。`target_ref` は `{"body","kind":"body"}`(画面が送る)か `{"body","kind":"face","index"}`(面1枚)。どちらも選択集合には入れない。ログに載るのは解決した `target_body_id` なので、参照の形を足しても再生は変わらない。`mode` は `union|cut|intersect`。verb 層は `verbs.boolean_body(doc, target_ref, tool_body_ids, mode)`。WS は表(`ws=table`)で `target_ref`/`mode` とも必須。
 - **ターゲットと同じ BodyId がツールに混ざっていたら ValueError**(黙って畳まない)。
 - **交差は `target ∩ (tool1 ∪ tool2 ∪ …)`**(`target ∩ tool1 ∩ tool2…` ではない)。ツールは常に先に `BRepAlgoAPI_Fuse` で1つへ融合してからターゲットと演算する(`kernel.boolean_bodies` を素通しで使えばこの意味になる)。
 - **1回の undo/redo で「ターゲットの形状」と「消えたツール Body 群」の両方が戻る。** `_common.SNAPSHOTS` に `(target_body_id, seq)` と `("boolean_body:removed", seq)` の2鍵で退避。この2鍵構成を崩すと片方だけ戻る。
 - **ソリッド限定チェックは `kernel.is_solid()`(SOLID 0 個なら False)を通す。** `selection.py` と verb 層は `OCP` を直接 import しない(`tests/test_boundaries.py` が強制)。
 - **プレビュー再計算は既存の汎用機構が覆う**: `CommandHost.svelte` の `selectionPrint`(`kind:'selection'` の arg を持つコマンドは確定選択の中身をプレビュー再送キーに含める)。選択の増減でプレビューが動く verb を足すときも、まずこれで足りるか確認する。
-- Web の `BOOLEAN_BODY` の `args` 順は `[pick target_ref(face), selection tools(face/edge/vertex, min=1), choice mode]`(`firstMissingArg` の質問順)。`SOLID_FEATURE_COMMANDS` にのみ追加。
+- Web の `BOOLEAN_BODY` の `args` 順は `[pick target_ref(body), selection tools(ボディ単位, min=1), choice mode]`(`firstMissingArg` の質問順。粒度は [UI.md](../UI.md)「持ち主ごとに効くコマンド」)。`SOLID_FEATURE_COMMANDS` にのみ追加。
 - **union だけ同一平面の面を統合する**(`_unify_same_domain`。隣り合うボディの継ぎ目を消し、またぐ辺にフィレットをかけられるようにする)。cut / intersect は統合しない。`provenance` は押し出しと同じ形(`face_map` の鍵はターゲットの面、ツール由来の面は `new_faces`)。
 - 1つの Body 内に複数 SOLID(compound ソリッド)を持つ場合の個別演算は未保証(`boolean_bodies` は「SOLID が 1 個以上あるか」しか見ない)。
 - 新しい verb の追加は `MCP.md` のツール表(`test_doc_code_agreement.py`)と画面の `Applied` 型(`web/src/generated/protocol.ts` の生成物。`npm run check`)の追随が不可避。

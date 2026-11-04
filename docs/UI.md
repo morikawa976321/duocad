@@ -98,7 +98,17 @@
   必須のピックは対象の最小数が満たされた瞬間に構えられ素のクリックを全部吸うので、**修飾キー付きクリックは
   ピックへ行かせない**。ピックを `optional` にする案（必須が「(任意)」と出る）、対象の上限を1にする案
   （仕様を曲げる）は採らなかった。
-- **ボディ分割(`split_body`)は鏡映(`mirror_body`)の起動に揃えた**: 対象は面/辺/頂点で指すボディ、切る平面は「XY / XZ / YZ / 面を選ぶ / スケッチを選ぶ」の choice で、後ろの2つは別チャンネルのピック(共有選択に入れない)。**「スケッチを選ぶ」はスケッチの線を1本指す**(平面そのものを指す的が無いため。`sketchEntity` のピックは点を待たないので、線・円などの無いスケッチ(点だけ)は指せない)。「残す側」(両側 / 法線の側 / 反対側)は既定を持たない choice(作法どおり。両側なら1手増える)。鏡映と違って**幽霊を出す**(`preview: 'server'`。切った後の形で本物を隠す)。決定の細目は [contracts/verbs.md](contracts/verbs.md)「split_body」。
+- **持ち主ごとに効くコマンドの起動中は、光るものと効くものを揃える**（2026-11-04 本人指示「ボディではなく面が選択されてしまう」を
+  全 verb へ広げた。`web/src/commands/grain.ts`）。コアが面・辺・頂点からボディを逆引きして効かせる verb（`move_body` /
+  `mirror_body` / `split_body` / `boolean_body` / `delete` / `project_outline`。選択引数の `shapeKind: 'body'`）は、
+  どこを押してもボディ全体を選び、ホバーもボディ全体を光らせる（辺・頂点は的から外す。ホバーは次の素のクリックで入るものに
+  揃えるので、鏡映面・切る平面の「面を選ぶ」で面1枚を待つ間は面1枚、鏡映軸や切る平面のスケッチで線を待つ間は線まるごと）。スケッチの点から図形を逆引きして
+  効かせる verb（`delete` / `mirror_sketch_entities` / 反復。`wholeEntities` と `entities` 引数）は、端点を押しても図形を選ぶ
+  （点の図形はその点のまま）。起動前に選んであったもの（AI が選んだ面も）は起動の瞬間に同じ粒度へ畳む。点だけを動かせる
+  `move_sketch_entities` は点のまま。ブーリアンのターゲットはボディを直接ピックし（`PickTarget` の `body`）、指したボディを
+  全面強調する。照合は `tests/test_ui_command_wiring.py`（コアの入口を静的に読む）。**起動中に AI が選んだ面は畳まない**
+  （AI の選択を画面が書き換え続けると取り合いになる）。
+- **ボディ分割(`split_body`)は鏡映(`mirror_body`)の起動に揃えた**: 対象はボディ(上の粒度)、切る平面は「XY / XZ / YZ / 面を選ぶ / スケッチを選ぶ」の choice で、後ろの2つは別チャンネルのピック(共有選択に入れない)。**「スケッチを選ぶ」はスケッチの線を1本指す**(平面そのものを指す的が無いため。`sketchEntity` のピックは点を待たないので、線・円などの無いスケッチ(点だけ)は指せない)。「残す側」(両側 / 法線の側 / 反対側)は既定を持たない choice(作法どおり。両側なら1手増える)。鏡映と違って**幽霊を出す**(`preview: 'server'`。切った後の形で本物を隠す)。決定の細目は [contracts/verbs.md](contracts/verbs.md)「split_body」。
 - **モードは verb の上位次元**（[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)）。`App.svelte` のモードはタグ付き
   ユニオン1変数（`idle` / `sketch-pending` / `sketch` / `optimize`）だが**サーバの作業空間 `state.mode` からの派生**で、画面は
   持たない（issue #153）。入る・出るは `enter_sketch` / `leave_sketch` / `enter_optimize` / `leave_optimize` をサーバへ頼み、

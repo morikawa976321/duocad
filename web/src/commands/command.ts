@@ -36,6 +36,7 @@ const PICK_TARGET_HINTS: Record<PickTarget, string> = {
   edge: '3Dビューの辺',
   vertex: '3Dビューの頂点',
   face: '3Dビューの平らな面',
+  body: '3Dビューのボディ(どの面を押してもよい)',
   sketchPoint: 'スケッチの点(線の端点・円/弧の中心など)',
   sketchEntity: 'スケッチの線分',
 }
@@ -157,6 +158,11 @@ export interface SelectionArgSpec extends ArgSpecCommon {
    * `kinds` に `'vertex'` があれば同じく指せる(`move_body` / `mirror_body` の頂点はボディを名指しする手の1つ)。
    */
   pickVertices?: true
+  /**
+   * スケッチの点を指しても、その図形ごとに効く引数(`delete`・`mirror_sketch_entities`。コアが点を図形へ畳む)。
+   * 起動中は点のクリックを図形の参照へ畳んで選ぶ(`grain.ts`)。`move_sketch_entities` は点だけを動かすので付けない。
+   */
+  wholeEntities?: true
   min: number
   max: number | null
 }
@@ -295,13 +301,13 @@ export function isPlaneArgValue(value: unknown): value is PlaneArgValue {
 }
 
 /**
- * `PickArgSpec` が指させるもの: 3Dの辺・頂点・面と、スケッチの点・図形1つ。ピックイベント(`viewportTypes.PickEvent`)が既に
+ * `PickArgSpec` が指させるもの: 3Dの辺・頂点・面・ボディ(当たった面の持ち主)と、スケッチの点・図形1つ。ピックイベント(`viewportTypes.PickEvent`)が既に
  * 運んでいる `edge` / `vertex` / `hit` / `sketchEntity` に対応する。増やすときはピックイベントに既にある種別から選ぶこと。
  *
  * `sketchPoint` と `sketchEntity` は同じ当たり判定の読み方違い: 前者は当たった点(`point` が文字列)をそのまま使い、
  * 後者は図形そのものを使う(端点の近くを押しても `point` を落として図形1つに畳む。鏡映軸に要るのは線分であって端点ではない)。
  */
-export type PickTarget = 'edge' | 'vertex' | 'face' | 'sketchPoint' | 'sketchEntity'
+export type PickTarget = 'edge' | 'vertex' | 'face' | 'body' | 'sketchPoint' | 'sketchEntity'
 
 /**
  * 図形を1つ直接ピックして集める引数(共有選択集合を経由しない)。
@@ -317,6 +323,7 @@ export type PickTarget = 'edge' | 'vertex' | 'face' | 'sketchPoint' | 'sketchEnt
  * | `edge` | `{body, kind:'edge', index}` | `PickEvent.edge`(3Dビュー) |
  * | `vertex` | `{body, kind:'vertex', index}` | `PickEvent.vertex`(3Dビュー) |
  * | `face` | `{body, kind:'face', index}` | `PickEvent.hit`(3Dビュー) |
+ * | `body` | `{body, kind:'body', index: null}` | `PickEvent.hit`(3Dビュー。当たった面の持ち主) |
  * | `sketchPoint` | `{sketch, entity, point}` | `PickEvent.sketchEntity`(スケッチ平面) |
  * | `sketchEntity` | `{sketch, entity, point: null}` | `PickEvent.sketchEntity`(スケッチ平面) |
  *
@@ -360,7 +367,9 @@ export function pickedRefOf(value: unknown): SelectionRef | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const ref = value as Record<string, unknown>
   if (typeof ref.sketch === 'string') return typeof ref.entity === 'string' ? (value as SelectionRef) : null
-  return typeof ref.body === 'string' && typeof ref.index === 'number' ? (value as SelectionRef) : null
+  if (typeof ref.body !== 'string') return null
+  if (ref.kind === 'body') return ref.index === null ? (value as SelectionRef) : null
+  return typeof ref.index === 'number' ? (value as SelectionRef) : null
 }
 
 export type BuildResult<Args = Record<string, unknown>> =
@@ -625,6 +634,7 @@ export function pickedLabel(value: unknown, target?: PickTarget): string {
     const item = ref as SketchEntityRef
     return item.point === null ? '図形の最初の点' : `点 ${item.point}`
   }
+  if (refKind(ref) === 'body') return 'ボディ1つ'
   const item = ref as ShapeRef
   const kind = item.kind === 'edge' ? '辺' : item.kind === 'face' ? '面' : '頂点'
   return `${kind} ${item.index}`

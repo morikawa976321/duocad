@@ -66,6 +66,7 @@
     type TextArgSpec,
   } from './command'
   import { categoryOf } from './category'
+  import { grainOf, type SelectionGrain } from './grain'
   import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../expression'
   import { isImeKey, ownsEnterKey } from '../keys'
   import type { CommandState, SelectionRef, SelectionState } from '../session'
@@ -94,6 +95,7 @@
     onWantsPoint = () => {},
     onWantsPick = () => {},
     onWantsVertices = () => {},
+    onWantsGrain = () => {},
   }: {
     /** コアの選択集合(state.selection)。 */
     selection: SelectionState | null
@@ -147,6 +149,8 @@
     onWantsPick?: (target: PickTarget | null) => void
     /** 起動中のコマンドが頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`。測定)。アプリ層が対象ボディの頂点を候補として出し、辺より先に取る。 */
     onWantsVertices?: (wants: boolean) => void
+    /** 起動中のコマンドが指した部分ではなく持ち主(ボディ・図形)ごとに効くか(`grain.ts`)。無起動では `NO_GRAIN`。 */
+    onWantsGrain?: (grain: SelectionGrain) => void
   } = $props()
 
   /** 構える対象(サーバの作業空間に載る verb)か。スケッチとフィーチャの verb(`duocad/workspace.py` の `stageable` と同じ線)。 */
@@ -309,7 +313,7 @@
     return missing !== null && missing.kind === 'pick' ? missing : null
   })
 
-  /** このコマンドが選択から取る種別をアプリ層へ知らせる(起動中はこれだけが指せる。無起動では `[]` で、見えているもの全部が指せる)。`argKinds` を通す: `shapeKind` だけだと複数種別を食う引数(`move_body` の面/辺/頂点)で辺が指せなくなる。 */
+  /** このコマンドが選択から取る種別をアプリ層へ知らせる(起動中はこれだけが指せる。無起動では `[]` で、見えているもの全部が指せる)。`argKinds` を通す: `shapeKind` だけだと複数種別を食う引数(`project_to_sketch` の辺/面)で面が指せなくなる。 */
   $effect(() => {
     onWants(
       (command?.args ?? [])
@@ -338,6 +342,10 @@
     onWantsVertices(
       (command?.args ?? []).some((spec) => spec.kind === 'selection' && spec.pickVertices === true),
     )
+  })
+
+  $effect(() => {
+    onWantsGrain(grainOf(command))
   })
 
   // ---------------------------------------------------------------- プレビュー

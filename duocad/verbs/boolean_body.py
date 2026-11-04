@@ -33,6 +33,17 @@ _SNAPSHOT_KEY = "boolean_body:removed"
 
 
 def _validate_target_ref(doc: Document, target_ref: Any) -> BodyId:
+    """ターゲットのボディ。ボディの参照 `{"body", "kind": "body"}`(画面が送る)か、その面1枚の参照。"""
+    if isinstance(target_ref, dict) and target_ref.get("kind") == selection.BODY_KIND:
+        if "body" not in target_ref or target_ref.get("index") is not None:
+            raise ValueError(
+                'target_ref: a body reference is {"body": "<body_id>", "kind": "body"} '
+                f"(index must be absent or null), got {target_ref!r}"
+            )
+        body = doc.get_body(str(target_ref["body"]))  # 存在しないIDは KeyError(document側の契約)
+        if body.shape is None:
+            raise ValueError(f"target_ref: body {body.id!r} has no B-rep shape (メッシュボディは演算できない)")
+        return body.id
     body, index = resolve_shape_ref(
         doc, target_ref, kind="face", what="target_ref", mesh_hint="(メッシュボディには面が無い)"
     )
