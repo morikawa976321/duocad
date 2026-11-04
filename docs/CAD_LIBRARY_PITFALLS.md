@@ -61,9 +61,6 @@
 
 ## build123d / OCP
 
-- **Windows の `cadquery-ocp-novtk` 7.9.3.1.1 は `OCP/BOPTools/__init__.py` を同梱していない**(2026-11-04 実測。Linux の wheel にはある)。
-  `from OCP.BOPTools import BOPTools_AlgoTools` が Windows だけ ImportError になる(`OCP.BOPTools` が中身の無い名前空間になる)。
-  クラスは本体の拡張モジュールにあるので `from OCP.OCP.BOPTools import ...` で取る。Linux のクラウドで書いたコードは、Windows で import できるかを確かめる。
 - **`build123d.Mesher().read()` は点群ではなく OCCT の形状(faceted B-rep)を返す**(0.11.1 実測:
   `Box(10,10,10)` を STL に書いて読み戻すと `Solid` / 12面 / 体積 1000.0)。内部で
   三角形 → 平面 Face → `BRepBuilderAPI_Sewing` → Shell → (manifold なら) Solid までやるので自前で書く必要は無い。
