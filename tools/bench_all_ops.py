@@ -164,14 +164,21 @@ def run_case(doc_label: str, session: Session, link: Wire, name: str, verb: str,
     print(f"  {doc_label:<5} {name:<34} {row.get('error') or cells}", flush=True)
 
 
-def build_part(session: Session) -> str:
-    """板(120x80x8)に穴 24 個・リブ・外周の丸めを持つ合成の部品。返すのはボディの id。"""
+#: `--part` の大きさ。big は 485 面(穴 384)で、QR1 のヒンジカバーの最大ボディ(733 面)の代わりに使う(リポジトリに STEP の題材が無い)。
+#: 穴の縁まで丸めると、切り取り・丸め・分割が断られる形になった(実測)ので丸めない
+PARTS = {"small": {"columns": 6, "rows": 4}, "big": {"columns": 24, "rows": 16}}
+
+
+def build_part(session: Session, columns: int = 6, rows: int = 4) -> str:
+    """板(120x80x8)に穴 columns×rows 個・リブ・外周の丸めを持つ合成の部品。返すのはボディの id。"""
     session.apply("sketch_create", {"base_plane": "XY"})
     sid = last_sketch(session)
     session.apply("add_rectangle", {"sketch_id": sid, "corner": [-60, -40], "width": 120, "height": 80})
-    for i in range(6):
-        for j in range(4):
-            session.apply("add_circle", {"sketch_id": sid, "center": [-45 + i * 18, -27 + j * 18], "diameter": 6})
+    pitch_x, pitch_y = 108 / columns, 72 / rows
+    diameter = min(6.0, 0.55 * min(pitch_x, pitch_y))
+    for i in range(columns):
+        for j in range(rows):
+            session.apply("add_circle", {"sketch_id": sid, "center": [-54 + (i + 0.5) * pitch_x, -36 + (j + 0.5) * pitch_y], "diameter": diameter})
     session.leave_sketch()
     regions = session.state_meta()["sketches"][-1]["regions"]
     outer = max(regions, key=lambda r: r["area"])
@@ -340,6 +347,7 @@ def main() -> None:
     ap.add_argument("--step", type=Path, default=None)
     ap.add_argument("--only", default="")
     ap.add_argument("--docs", default="part,step")
+    ap.add_argument("--part", choices=sorted(PARTS), default="small")
     ap.add_argument("--profile", action="store_true")
     ap.add_argument("--top", type=int, default=45)
     ap.add_argument("--out", type=Path, default=REPO / "output" / "bench_basic_ops" / "all_ops.json")
@@ -353,7 +361,7 @@ def main() -> None:
             print("\n## 合成の部品")
             s = Session(kernel.DEFAULT_DEVIATION, models_dir=tmp)
             t0 = time.perf_counter()
-            body_id = build_part(s)
+            body_id = build_part(s, **PARTS[args.part])
             print(f"  (部品を作るのに {(time.perf_counter() - t0) * 1000:.0f} ms、面 {_brep_topology.face_count(body_of(s, body_id).shape)})")
             # ブーリアンの相手(板を横切る棒)
             s.apply("sketch_create", {"base_plane": "XZ"})
