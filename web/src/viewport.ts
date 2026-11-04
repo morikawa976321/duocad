@@ -44,7 +44,7 @@ import { createInterferenceLayer } from './interferenceLayer'
 import { createMeasureAnnotation } from './measureAnnotation'
 import { createThumbnailer } from './thumbnail'
 import { buildBodyMesh } from './bodyMesh'
-import { sameView, snapshotView, type ViewSnapshot } from './viewSnapshot'
+import { probePoints, sameView, snapshotView, type ViewSnapshot } from './viewSnapshot'
 import { OCCLUDER_LAYER, createOcclusion } from './occlusion'
 import { closestOnPolyline, createProjector, screenHitOfPoint, type PickPolyline, type ScreenProjector } from './polylinePick'
 import { createSolidFeatures, type BodyEdges, type BodyVertices } from './solidFeatures'
@@ -690,10 +690,27 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
-  function viewSnapshot(): ViewSnapshot {
+  const worldToClipScratch = new THREE.Matrix4()
+
+  /** 世界 → クリップの行列(`camera.updateMatrixWorld` が `matrixWorldInverse` も更新する)。 */
+  function worldToClip(): ArrayLike<number> {
     camera.updateMatrixWorld()
+    return worldToClipScratch.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements
+  }
+
+  function viewSnapshot(): ViewSnapshot {
     const { width, height } = size()
-    return snapshotView(camera.matrixWorld.elements, camera.projectionMatrix.elements, width, height)
+    const matrix = worldToClip()
+    // 見本点は見えている広さの半分まで。透視ではカメラから注視点までの半分に抑える(奥の向きの点をカメラの後ろへ出さない)
+    let reach = (worldPerPixel() * Math.min(width, height)) / 2
+    if (camera instanceof THREE.PerspectiveCamera) reach = Math.min(reach, camera.position.distanceTo(controls.target) / 2)
+    const points = probePoints(controls.target.toArray(), camera.matrixWorld.elements, reach)
+    return snapshotView(matrix, points, width, height)
+  }
+
+  function sameViewAs(snapshot: ViewSnapshot): boolean {
+    const { width, height } = size()
+    return sameView(snapshot, worldToClip(), width, height)
   }
 
   function projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null {
@@ -2428,7 +2445,7 @@ export function createViewport(container: HTMLElement): Viewport {
     setFov,
     cameraPose,
     viewSnapshot,
-    sameView: (snapshot: ViewSnapshot) => sameView(snapshot, viewSnapshot()),
+    sameView: sameViewAs,
     projectPoint,
     projectSketchPoint,
     projectBasePlane,
