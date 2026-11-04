@@ -19,9 +19,14 @@ function fmix(h: number): number {
   return h ^ (h >>> 16)
 }
 
+/** 丸めた座標(整数)の下位 32 ビットと上位を両方混ぜる。-0 と 0、NaN どうしは同じ値になる(突き合わせと同じ)。 */
+function mixInteger(h: number, value: number): number {
+  return fmix(fmix(h ^ (value | 0)) ^ (Math.floor(value / 4294967296) | 0))
+}
+
 /**
  * 丸めた座標が同じ頂点に同じ番号を振る(`EdgesGeometry` の頂点の文字列が同じ ⇔ 番号が同じ)。
- * 表の位置は座標の下位ビットだけで決めない: 刻みが2の冪の倍数の格子だと全頂点が同じ位置に集まり、探索が二乗になる。
+ * 表の位置は座標の一部のビットだけで決めない: 刻みが2の冪の倍数の格子だと全頂点が同じ位置に集まり、探索が二乗になる。
  */
 function mergeRounded(positions: Float32Array, vertexCount: number): { ids: Int32Array; count: number } {
   const rx = new Float64Array(vertexCount)
@@ -42,7 +47,7 @@ function mergeRounded(positions: Float32Array, vertexCount: number): { ids: Int3
     rx[vertex] = x
     ry[vertex] = y
     rz[vertex] = z
-    let slot = fmix(fmix(fmix(x | 0) ^ (y | 0)) ^ (z | 0)) & mask
+    let slot = mixInteger(mixInteger(mixInteger(0, x), y), z) & mask
     for (;;) {
       const other = table[slot]
       if (other === -1) {

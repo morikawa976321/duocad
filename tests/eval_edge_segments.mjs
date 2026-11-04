@@ -133,13 +133,13 @@ for (let trial = 0; trial < 300; trial += 1) {
   for (const threshold of THRESHOLDS) same('無限大と3枚の辺', positions, indices, threshold)
 }
 
-// 刻みが2の冪の倍数の格子(丸めた座標の下位ビットが全部 0)でも、同じ結果を EdgesGeometry より速く返す。
+// 刻みが2の冪の倍数の格子(丸めた座標の下位 32 ビットが偏る・全部 0 になる)でも、同じ結果を EdgesGeometry より速く返す。
 // 頂点の表の位置を下位ビットだけで決めていたときは全頂点が同じ位置に集まり、3 秒(EdgesGeometry は 0.4 秒)かかった
-{
+for (const step of [8192, 268435456]) {
   const side = 256
   const positions = new Float32Array(side * side * 3)
   for (let y = 0; y < side; y += 1) {
-    for (let x = 0; x < side; x += 1) positions.set([8192 * x, 8192 * y, 0], (y * side + x) * 3)
+    for (let x = 0; x < side; x += 1) positions.set([step * x, step * y, 0], (y * side + x) * 3)
   }
   const indices = []
   for (let y = 0; y + 1 < side; y += 1) {
@@ -155,7 +155,7 @@ for (let trial = 0; trial < 300; trial += 1) {
   const got = edgeSegments(positions, index, 20)
   const t2 = performance.now()
   assert.deepEqual(Array.from(got), Array.from(want))
-  assert.ok(t2 - t1 < t1 - t0, `格子で EdgesGeometry より遅い: ${(t2 - t1).toFixed(0)} ms(EdgesGeometry ${(t1 - t0).toFixed(0)} ms)`)
+  assert.ok(t2 - t1 < t1 - t0, `刻み ${step} の格子で EdgesGeometry より遅い: ${(t2 - t1).toFixed(0)} ms(EdgesGeometry ${(t1 - t0).toFixed(0)} ms)`)
 }
 
 // 三角形が無い面は線分も無い
