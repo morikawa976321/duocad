@@ -108,6 +108,8 @@ class _FaceTessellations:
         self.batch_of: "OrderedDict[tuple, dict]" = OrderedDict()
         self._batches = 0
         self.closed: Optional[bool] = None
+        #: 配ったことがあるか(`_tessellate_body`)。プレビューが覚えさせただけの形(`seed_faces`)は、追い出すときに先に捨てる
+        self.delivered = False
         #: まだ警告していない取れなかった面と、解消できなかった境界(`seed_faces` で覚えさせた分。配るときに1回だけ出す)
         self.unwarned_failed: set = set()
         self.unwarned_boundary: list = []
@@ -210,6 +212,24 @@ class _FaceTessellations:
         return sorted(index for index, recipe in wanted.items() if index in self.untriangulated.get(recipe, set()))
 
 
+def _remap_focus(shape: Any, basis: Any, fine: frozenset) -> frozenset:
+    """`basis` の面の添字で書いた細かく測る面 `fine` を、`shape` の面の添字へ直す。`basis` にそのまま残った面(同じ面・子の対・
+    位置だけ違う面)は `basis` での指定を引き継ぎ、残っていない面(新しい面・変わった面)は細かい側にする(画面が測り直して
+    送ってくるまで、見えているかもしれない面を粗く出さない)。"""
+    same = dict(kernel.kept_pairs(shape, basis))
+    noted = kernel.kept_faces(basis)
+    if noted is not None and noted[0] is shape and noted[2] is None:  # undo で子の結果から元の形へ戻った
+        for position, index in noted[1]:
+            same.setdefault(index, position)
+    if not same:  # 移動(TShape はそのままで位置だけ違う)
+        before = {key: index for index, (key, _placement) in enumerate(kernel.face_placements(basis), start=1)}
+        for position, (key, _placement) in enumerate(kernel.face_placements(shape), start=1):
+            if key in before:
+                same[position] = before[key]
+    total = _brep_topology.face_count(shape)
+    return frozenset(position for position in range(1, total + 1) if position not in same or same[position] in fine)
+
+
 #: ボディごとに面の三角形を覚えておく形の数(今の形・undo で戻る前の形・プレビューで測った確定前の形)。
 FACE_STORES_PER_BODY = 3
 #: 消えたボディの形の面の三角形を覚えておく数(削除・undo で消えたボディが undo / redo で戻ったときに貸す。`_borrow_faces`)。
@@ -243,6 +263,10 @@ class DocumentView:
         #: **どの面を細かく測るか**(`{body_id: frozenset(1始まりの面添字)}`)。`None` = 全Body全面を細かく。
         #: dictに居ないBodyも全面細かく。空のfrozensetは「そのBodyは全面粗く」。画面の設定で文書の状態ではない。
         self._view_focus: Optional[dict] = None
+        #: `focus` が届いたときの各ボディの形(`focus` の面の添字はこの形のもの)と、今の形の添字に直した写し
+        #: (body_id -> (今の形, 届いたときの形, 届いた集合, 直した集合))。`_body_focus`
+        self._focus_basis: dict = {}
+        self._focus_remapped: dict = {}
         #: 細かい側の偏差が下限に張り付いているか(`resolution.deviation_floored`)。張り付いている間は、細かく測る面の組を
         #: 同じ回に測ったものだけで組む(`_tessellate_body`)。測り方が変わるのでレシピに入れる(`body_recipe`)。
         self._view_floored = False
@@ -292,10 +316,25 @@ class DocumentView:
         return self._view_resolution[1]
 
     def _body_focus(self, body_id: str) -> Optional[frozenset]:
-        """そのBodyで**細かく測る面**の集合。`None` は全面(指定が無い/そのBodyの指定が無い)。"""
+        """そのBodyで**細かく測る面**の集合。`None` は全面(指定が無い/そのBodyの指定が無い)。
+
+        画面の `focus` は届いたときの形の面の添字なので、操作で形が変わってから画面が測り直して送ってくるまでは、今の形の添字に
+        直して使う(`_remap_focus`)。添字のまま当てると、番号のずれた残った面を別の測り方で測り直す(--part big を上から見た画面で、
+        辺1本のフィレットの後の配信 10 秒のうち 4 秒)。"""
         if self._view_focus is None:
             return None
-        return self._view_focus.get(body_id, None)
+        fine = self._view_focus.get(body_id, None)
+        basis = self._focus_basis.get(body_id)
+        if fine is None or basis is None:
+            return fine
+        shape = next((body.shape for body in self.document.bodies if body.id == body_id), None)
+        if shape is None or shape is basis:
+            return fine
+        held = self._focus_remapped.get(body_id)
+        if held is None or held[0] is not shape or held[1] is not basis or held[2] is not fine:
+            held = (shape, basis, fine, _remap_focus(shape, basis, fine))
+            self._focus_remapped[body_id] = held
+        return held[3]
 
     def body_recipe(self, body_id: str) -> tuple:
         """そのBodyを**どう測るか**の実効レシピ。キャッシュの鍵であり、版の鍵でもある。
@@ -397,18 +436,24 @@ class DocumentView:
         if coarse == target:
             coarse = None  # 分ける意味が無い(`size_hint` が無い/引ききっている)
         normalized = self._normalize_focus(focus)
+        basis = {} if normalized is None else {
+            body.id: body.shape for body in self.document.bodies if body.id in normalized and body.shape is not None
+        }
         floored = resolution.deviation_floored(world_per_pixel, size_hint)
         if (
             self._view_resolution == target
             and self._view_coarse_resolution == coarse
             and self._view_focus == normalized
             and self._view_floored == floored
+            and basis.keys() == self._focus_basis.keys()
+            and all(self._focus_basis[body_id] is shape for body_id, shape in basis.items())
         ):
             return False
         resolution_changed = self._view_resolution != target
         self._view_resolution = target
         self._view_coarse_resolution = coarse
         self._view_focus = normalized
+        self._focus_basis = basis
         self._view_floored = floored
         # geometry / edges のキャッシュは捨てない(`set_view_resolution` のdocstring)。
         if resolution_changed:
@@ -443,6 +488,8 @@ class DocumentView:
         self._shape_state.clear()
         # **どの面を細かく測るかも捨てる**。面の添字は文書が変われば別のものを指す。
         self._view_focus = None
+        self._focus_basis = {}
+        self._focus_remapped.clear()
 
     # ---------------------------------------------------------------- 状態
     def state(self, *, can_undo: bool, applied_count: int, previewing: bool) -> dict:
@@ -634,7 +681,11 @@ class DocumentView:
         return _memo(self._geometry_cache, body_id, body.shape, recipe, lambda: self._tessellate_body(body))
 
     def _face_store(self, body_id: str, shape: Any) -> "_FaceTessellations":
-        """その形の面の三角形の控え(無ければ作る)。ボディごとに `FACE_STORES_PER_BODY` 個の形まで覚える。"""
+        """その形の面の三角形の控え(無ければ作る)。ボディごとに `FACE_STORES_PER_BODY` 個の形まで覚える。
+
+        追い出すのは古い順だが、ボディの今の形は残し、プレビューが覚えさせただけの形(配っていない)を先に捨てる。半径を打ち直すたびに
+        ゴーストの結果を覚えさせる(`seed_faces`)ので、古い順だけだと画面に出ている形が押し出され、undo やカメラで全面を測り直す
+        (穴 384 個の板で 10 秒)。"""
         stores = self._face_cache.setdefault(body_id, OrderedDict())
         held = stores.get(id(shape))
         if held is not None and held[0] is shape:
@@ -642,8 +693,14 @@ class DocumentView:
             return held[1]
         store = _FaceTessellations(shape)
         stores[id(shape)] = (shape, store)
-        while len(stores) > FACE_STORES_PER_BODY:
-            stores.popitem(last=False)
+        if len(stores) > FACE_STORES_PER_BODY:
+            current = next((body.shape for body in self.document.bodies if body.id == body_id), None)
+            while len(stores) > FACE_STORES_PER_BODY:
+                candidates = [key for key, (kept, kept_store) in stores.items() if kept is not current and kept_store is not store]
+                if not candidates:
+                    break
+                stale = next((key for key in candidates if not stores[key][1].delivered), candidates[0])
+                del stores[stale]
         return store
 
     @property
@@ -676,6 +733,24 @@ class DocumentView:
         # プレビューは警告を積まない。確定後に配るとき1回だけ出す(`_tessellate_body`)
         store.unwarned_failed |= set(measured["untriangulated"])
         store.unwarned_boundary.extend((geometry.get("boundary") or {}).get("unresolved") or [])
+
+    def return_kept_faces(self, body_id: str, source: Any, shape: Any, recipe: tuple, pairs: dict) -> None:
+        """プレビューの結果 `shape`(`seed_faces` で覚えさせた後)の面のうち、元の形 `source` の面がそのまま残ったもの(`pairs`: 元の添字 ->
+        結果の添字)を、元の形のその測り方の三角形として覚えさせる。
+
+        ゴーストは全面を細かい側で測るが、画面は背を向けた面・画面外の面を粗く測っているので、元の形はそれらの面を細かい側で持っていない。
+        返さないと、半径を打ち直すたびのゴーストがそれらを測り直す(--part big の上から見た画面で 73 面・1 回 2〜4 秒)。"""
+        stores = self._face_cache.get(body_id, {})
+        lender, target = stores.get(id(shape)), stores.get(id(source))
+        if lender is None or lender[0] is not shape or target is None or target[0] is not source:
+            return
+        recipe = (float(recipe[0]), float(recipe[1]))
+        measured = lender[1].measured(recipe)
+        held = target[1].by_recipe.get(recipe, {})
+        for index, position in pairs.items():
+            face = measured.get(position)
+            if face is not None and index not in held:
+                target[1].adopt(recipe, index, face)
 
     def _wanted_faces(self, body) -> tuple:
         """面ごとの測り方 `(wanted {面の添字: 測り方}, 細かく測る面の集合, 細かい側, 粗い側)`。"""
@@ -742,6 +817,7 @@ class DocumentView:
         wanted, fine_set, detailed, coarse = self._wanted_faces(body)
         deviation = detailed[0]
         store = self._face_store(body.id, body.shape)
+        store.delivered = True
         groups = self._missing_groups(store, wanted, detailed)
         measured = None
         if groups:
@@ -803,6 +879,8 @@ class DocumentView:
         sources = dict(kept[1]) if origin is not None else {}
         transform = kept[2] if origin is not None else None
         keys = store.keys()
+        if transform is not None and store.closed is None and len(sources) == len(keys):
+            store.closed = origin.closed  # 形全体を剛体で写した複製は、元と同じ面と辺のつながり
         left: dict = {}
         for recipe, indices in groups.items():
             rest = []
@@ -953,7 +1031,7 @@ class DocumentView:
             self._retired_faces.popitem(last=False)
         for cache in (
             self._geometry_cache, self._edge_cache, self._chain_cache, self._vertex_cache, self._volume_cache,
-            self._face_count_cache, self._face_cache,
+            self._face_count_cache, self._face_cache, self._focus_remapped,
         ):
             for body_id in [key for key in cache if key not in alive]:
                 cache.pop(body_id, None)

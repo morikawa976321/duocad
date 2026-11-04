@@ -703,6 +703,7 @@ class Session:
         }
 
         measured: list = []  # (ボディ, 形, 三角形) — 確定後の配信で使い回す(`adopt`)
+        returned: list = []  # (ボディ, 元の形, 結果の形, {元の添字: 結果の添字}) — 残った面で測ったもの(`DocumentView.return_kept_faces`)
 
         def run() -> dict:
             suggestion = None
@@ -723,6 +724,7 @@ class Session:
                 if copies.get(id(body.shape)) is body.shape:
                     continue  # 形が変わっていないBodyは送らない(`preview` と同じ)
                 reuse: dict = {}
+                kept: list = []
                 held = inputs.get(body.id)
                 if held is not None:
                     kept = kernel.kept_pairs(body.shape, held[1])
@@ -731,6 +733,8 @@ class Session:
                     reuse = {position: borrowed[index] for position, index in kept if index in borrowed}
                 geometry = kernel.tessellate_reusing(body.shape, deviation, angular, reuse)
                 measured.append((body.id, body.shape, geometry))
+                if held is not None and body.id in lent:
+                    returned.append((body.id, held[0], body.shape, {index: position for position, index in kept if position not in reuse}))
                 bodies_out.append({
                     "body_id": body.id,
                     "name": body.name,
@@ -747,6 +751,8 @@ class Session:
             # 確定は覚えた結果の形そのものを使う(`kernel.remembered`)ので、その形の三角形として覚えさせる
             for body_id, shape, geometry in measured:
                 self.view.seed_faces(body_id, shape, deviation, angular, geometry)
+            for body_id, original, shape, sources in returned:
+                self.view.return_kept_faces(body_id, original, shape, (deviation, angular), sources)
 
         return PreviewJob(run, adopt)
 
