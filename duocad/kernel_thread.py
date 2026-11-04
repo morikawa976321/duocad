@@ -358,9 +358,17 @@ def clearance_warning(profile: str, female: bool, clearance: float) -> Optional[
 # --------------------------------------------------------------------------------------
 def thread_face(shape: "TopoDS_Shape", face_index: int, profile: str, clearance: Optional[float] = None,
                 pitch: Optional[float] = None) -> dict:
-    """面 `face_index`(1始まり)にねじを刻んだ**新しい形状**(`_thread_face`。結果は `kernel.remembered`)。"""
+    """面 `face_index`(1始まり)にねじを刻んだ**新しい形状**(`_thread_face`。結果は `kernel.remembered`)。
+
+    空欄の隙間・ピッチで求めた結果は、解決後の数値の鍵でも覚える。redo・再生はログに残した解決後の数値で呼ぶので、
+    空欄の鍵だけでは同じ形への redo が計算し直しになる(結果は空欄を既定で埋めて計算したものと同じ)。
+    """
     key = (int(face_index), str(profile), None if clearance is None else float(clearance), None if pitch is None else float(pitch))
-    return kernel.remembered("thread", (shape,), key, lambda: _thread_face(shape, face_index, profile, clearance, pitch))
+    result = kernel.remembered("thread", (shape,), key, lambda: _thread_face(shape, face_index, profile, clearance, pitch))
+    resolved = (key[0], key[1], float(result["clearance"]), float(result["pitch"]))
+    if resolved != key:
+        kernel.remembered("thread", (shape,), resolved, lambda: dict(result))
+    return result
 
 
 def _thread_face(shape, face_index, profile, clearance, pitch) -> dict:
