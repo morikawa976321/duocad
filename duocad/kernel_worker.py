@@ -9,6 +9,7 @@ OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒�
 - 要求は {"op":"face_edit" または "blend_edges","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
   {"shape":<base64>,"provenance":{...},"kept":[[結果の面の添字, 入力の面の添字], ...]}(フィレット・面取りは "volume_before"・
   "volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。"kept" は入力のまま残った面で、親は `kernel.note_kept_faces` に渡す。
+  要求の "volume" は親が知っている入力の体積(あれば。子は積分し直さない)。
   BinTools は往復で幾何が変わらず、面の添字の数え方も保つ(BRep の文字列は 1e-14 ずれる)。base64 の往復は
   PC ケースの最大のボディ(233 面、BinTools で 229 KB)で 1 ms 未満。
 - 実行は同時に1件。期限切れ・異常終了・取り消しは子を止めて `ValueError`(呼び出し側は結果を採らず、文書もログも変えない)、
@@ -29,7 +30,7 @@ from typing import Any, Dict, Optional
 from OCP.BinTools import BinTools, BinTools_FormatVersion
 from OCP.TopoDS import TopoDS_Shape
 
-from . import worker_process
+from . import brep_geometry, worker_process
 
 #: 新しい入力(画面・MCP の確定・プレビュー・寸法変更)の期限[秒](要求待ち・子の起動・受け渡しを含む)。本人の決定(2026-10-23、docs/FACE_EDIT.md カード e)。
 #: 実測: 合成形状の正当な計算の最長は 18 秒(穴100個を一度に消す)、角ばった実物の1件は最長約 2.3 秒。
@@ -108,6 +109,9 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
             _CONDITION.notify_all()
     try:
         message = {"op": op, "verb": verb, "arguments": arguments, "shape": _encode(shape)}
+        known = brep_geometry.known_volume(shape)
+        if known is not None:
+            message["volume"] = known  # 子が入力の体積を積分し直さない(733 面で 0.15 秒)
         check()
         if _WORKER is None:
             _WORKER = worker_process.WorkerProcess(_CHILD_COMMAND)
@@ -133,7 +137,7 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
             _CONDITION.notify_all()
     if "refused" in result:
         raise ValueError(result["refused"])
-    from . import brep_geometry, kernel
+    from . import kernel
 
     decoded = _decode(result["shape"])
     kernel.note_kept_faces(decoded, shape, result.pop("kept", ()))
@@ -202,6 +206,8 @@ def _handle(message: Dict[str, Any]) -> Dict[str, Any]:
     if op not in ("face_edit", "blend_edges"):
         raise ValueError(f"unknown op {op!r}")
     source = _decode(message["shape"])
+    if "volume" in message:
+        brep_geometry.note_volume(source, message["volume"])
     try:
         if op == "face_edit":
             result = kernel_face_edit.compute(message["verb"], source, message["arguments"])

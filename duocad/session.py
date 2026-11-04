@@ -43,6 +43,7 @@ from .verbs.project_to_sketch import outline_entities, projected_entities, selec
 from .view import DocumentView
 
 from . import (
+    brep_geometry as _brep_geometry,
     brep_topology as _brep_topology,
 )
 
@@ -682,6 +683,10 @@ class Session:
         # 写しの面は元の形と同じ添字(`fork`)なので、結果に残った面は元の形で測った三角形を借りられる。いまここで写しを取る
         # (計算はワーカーで走り、その間もループが元の形を測る)。下限に張り付いたズームでは借りない(1回で測る規則。`view`)
         inputs = dict(zip((body.id for body in self.document.bodies if body.shape is not None), pairs))
+        for original, copy in pairs:  # 写しは幾何がそのままなので体積も同じ(verb の検査が積分し直さない)
+            known = _brep_geometry.known_volume(original)
+            if known is not None:
+                _brep_geometry.note_volume(copy, known)
         lent = {} if self.view.floored else {
             body_id: self.view.measured_faces(body_id, original, (deviation, angular)) for body_id, (original, _copy) in inputs.items()
         }

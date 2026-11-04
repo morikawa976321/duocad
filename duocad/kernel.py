@@ -130,7 +130,13 @@ def _load_step_text(text: str) -> tuple:
 
 
 def step_import_problems(text: str) -> List[str]:
-    """STEP本文を取り込むと**黙って欠ける**ものを、人が読む文の一覧にする。欠けなければ空。
+    """STEP本文を取り込むと**黙って欠ける**ものを、人が読む文の一覧にする(`read_step_text_checked` の検査だけ)。"""
+    return read_step_text_checked(text)[1]
+
+
+def read_step_text_checked(text: str) -> Tuple["TopoDS_Shape", List[str]]:
+    """STEP本文を読み、`(形, 取り込むと黙って欠けるものの文の一覧)` を返す(欠けなければ一覧は空)。形は `read_step_text` と
+    同じ読み込み(`_load_step_text`)で、取り込みはこの形をそのまま使う(読み直すと STEP の転送をもう一度払う。4.6 MB で 0.6 秒)。
 
     1. **転送に失敗した要素**: 一部の面・要素(例: 未対応の面種、存在しない面への参照)の転送が失敗しても、ルートが
        1つでも転送できれば `read_step` は成功を返し、面が落ちた開いたシェルが solid として入る。`NbRootsForTransfer` との
@@ -140,7 +146,7 @@ def step_import_problems(text: str) -> List[str]:
        ソリッドが無い形は形全体を1ボディにするので数えない。ワイヤ・辺だけのものは面が無いので見えない。
 
     **取り込み(`io_step.read_step_source`)でだけ呼ぶ。再生は呼ばない**: 検査を足す前に取り込んだ形を含む保存済みの文書を、
-    そのまま開けなければならない。形は読み直す(`read_step_text` と別の読み込みになる)。
+    そのまま開けなければならない。
     """
     reader, shape = _load_step_text(text)
     problems: List[str] = []
@@ -171,7 +177,7 @@ def step_import_problems(text: str) -> List[str]:
                 f"ソリッド {solids.Extent()} 個の外に面が {loose} 枚ある(全体 {faces.Extent()} 面のうちソリッドに入るのは "
                 f"{faces.Extent() - loose} 面)。取り込むとそれらは黙って落ちる"
             )
-    return problems
+    return shape, problems
 
 
 def write_step(shape: "TopoDS_Shape", path: str) -> None:
@@ -557,7 +563,7 @@ def tessellate_reusing(shape: "TopoDS_Shape", deviation: float, angular_deflecti
     total = _brep_topology.face_count(shape)
     missing = [index for index in range(1, total + 1) if index not in reuse]
     measured = (
-        tessellate_faces(shape, {(float(deviation), float(angular_deflection)): missing}) if missing
+        tessellate_faces(shape, {(float(deviation), float(angular_deflection)): missing}, closed=False) if missing
         else {"faces": {}, "untriangulated": [], "boundary": kernel_meshing.merge_diagnostics([])}
     )
     faces = [dict(reuse[index], index=index) if index in reuse else measured["faces"][index] for index in range(1, total + 1)]

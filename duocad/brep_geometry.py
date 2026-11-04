@@ -103,6 +103,16 @@ def note_volume(shape: "TopoDS_Shape", value: float) -> None:
             _NOTED_VOLUMES.popitem(last=False)
 
 
+def known_volume(shape: "TopoDS_Shape") -> Optional[float]:
+    """`shape` について覚えている体積(積分し直さない。覚えていなければ None)。"""
+    with _VOLUME_PROPS_LOCK:
+        for memo, pick in ((_NOTED_VOLUMES, lambda held: held[1]), (_VOLUME_PROPS, lambda held: held[1].Mass())):
+            held = memo.get(id(shape))
+            if held is not None and held[0] is shape:
+                return float(pick(held))
+    return None
+
+
 def forget_volume(shape: "TopoDS_Shape") -> None:
     """`shape` について覚えた体積を捨てる(その場で書き換えた形に使う)。"""
     with _VOLUME_PROPS_LOCK:
