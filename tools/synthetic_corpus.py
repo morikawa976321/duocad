@@ -475,6 +475,8 @@ class Builder:
         self.slow: list = []
         #: 予算を超えた verb(この文書では二度と試さない)。
         self.over_budget: set = set()
+        #: 続きの操作の対象をこのボディに固定する(`ensure_chain`)。
+        self.forced_target: Optional[str] = None
         self._faces: dict = {}
 
     @property
@@ -920,6 +922,8 @@ def _target(b: Builder) -> Optional[str]:
     solids = b.solids()
     if not solids:
         return None
+    if b.forced_target in {s.id for s in solids}:
+        return b.forced_target
     last = next((op.args.get("body_id") for op in reversed(b.doc.log.entries) if isinstance(op.args.get("body_id"), str)), None)
     if last in {s.id for s in solids} and b.rng.random() < 0.7:
         return last
@@ -1272,6 +1276,24 @@ def chain_count(entries: list) -> int:
     return chained
 
 
+def ensure_chain(b: Builder, tries: int = 6) -> None:
+    """連鎖が1つも無いまま続きの操作を使い切った文書に、同じボディへ「面に貼ったスケッチから押し出す → 丸めか面の押し出し」を重ねる
+    (平面を持つボディが無ければ板を足す。面1枚のトーラスのように、添字で指す先が無い形がある)。"""
+    for _ in range(tries):
+        if chain_count(b.doc.log.entries) >= 1:
+            return
+        candidates = [body for body in b.solids() if b.planar_faces(body.id, 16.0)]
+        if not candidates:
+            base_plate(b)
+            continue
+        b.forced_target = max(candidates, key=lambda body: _brep_topology.face_count(body.shape)).id
+        try:
+            if move_sketch_on_face(b):
+                b.one([lambda: move_blend(b, "fillet"), lambda: move_blend(b, "chamfer"), lambda: move_extrude_faces(b)])()
+        finally:
+            b.forced_target = None
+
+
 def build_document(seed: int, number: int, workdir: Path, moves: int = 0) -> tuple:
     """1本の文書(ログの JSON 文字列)と、その要約。"""
     rng = random.Random(f"duocad-corpus/{seed}/{number}")
@@ -1295,6 +1317,7 @@ def build_document(seed: int, number: int, workdir: Path, moves: int = 0) -> tup
                 continue
             if table[name](b):
                 done.append(name)
+        ensure_chain(b)
     entries = b.doc.log.entries
     summary = {
         "base": base,
