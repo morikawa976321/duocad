@@ -2,6 +2,31 @@
 
 autopilot で親セッションが進めた作業の現在地。判断の記録は [decisions.md](decisions.md)(見出しの頭に `[ねじ]` が付いた節がねじ山形の作業)。
 
+## Fusion の STEP の丸めが消えない(2026-11-04、実装済み。main への PR を出した)
+
+ゴール(本人の依頼の原文は decisions.md「[面の削除] … 依頼と進め方」): フィレットの削除が断られる原因を特定して直す。
+本人の決定(原文「Aで進めて」): 方針1(連なりに継ぎ面を入れる)→ 方針2(断られたら別の削除範囲を見せて本人の Enter で確定)。方針3(残す面の検査)は確かめを作ってから別に。
+
+### どこまで来たか
+
+- 原因と方針: claude.ai の Artifact「フィレットはなぜ消えないのか」(https://claude.ai/artifact/SHCPi2ZxJ6o5KUUuBYxh6g)。実測は [FACE_EDIT.md](FACE_EDIT.md)「Fusion の STEP の丸めが消えない」。
+- 方針1・2を入れた(FACE_EDIT.md「入れたもの」、判断は decisions.md の `[面の削除]` の最後の4節)。丸めらしい面の1クリック単位で、
+  カバー 10 → 17 / 52、別部品 7 → 30 / 92。QR1 本体で連なりが変わる3組は全部、断りから通るに変わった。
+- 確かめ: 全件テスト 2,789 件が通った(落ちたのは、ワークツリーに `.venv` が無いので起動台本の失敗の検査が python を見つけられない1件だけ)。
+  新しいテストは `tests/test_delete_faces_b_spline_corners.py` と `tests/eval_face_chains.mjs`。実機(別ポート・使い捨てのデータ)で、手前上の r0.2 の1クリックが
+  [62,63,71] で約 4 秒でプレビュー、右上の r0.5 の1クリックが代案 [46,58,71] へ広がって Enter でログに残ることを見た。astra の意見を2回、
+  sol のレビュー2回(1回目の2件を直して2回目 pass)。作業ブランチ `claude/fillet-deletion-failures-3ec92f` を develop へ入れて push した(main へはまだ)。
+
+### 次にやること
+
+- 本人の決定(原文「開発版は触っていないが本番にPRだして」): 開発版で触らずに develop → main の PR を出した。マージは本人
+- 残り: 成功を特徴(消したい丸め)単位で数え直す評価、方針3、別部品の 79・81(乗った丸め)と 23(時間切れ)
+
+### 再開の手順
+
+- 検証の環境はワークツリーの再開の手順と同じ(`UV_PROJECT_ENVIRONMENT=<一時フォルダ> uv sync --frozen`。`lib3mf.dll` が欠けたら uv のキャッシュから写す)。
+  ワークツリーの画面は `npm ci --prefix web` → `npm run build --prefix web`。実機は `.claude/launch.json` に別ポート(8785/8786)と使い捨ての `--models-dir` の構成を一時に足す。
+
 ## 全操作の応答の高速化(2026-11-04、本人の答え待ち1件)
 
 ゴール(本人の依頼の原文): 「すべての操作について、レスポンスの高速化のためのリファクタリングを行って」。
@@ -35,9 +60,8 @@ STEP)。本人の実データに近い題材として QR1 のヒンジカバー�
 
 ### 次にやること
 
-- 本人の答え待ち: シェルにも 20 秒の期限を付けるか(decisions.md「本人待ち」、現物 `output/autopilot/shell_timeout_card.html`)
-- 本人が開発版を立て直して(サーバの再起動と `npm run build --prefix web`)触り、良ければ develop → main の PR
-  (main は動作確認済みの完成品なので、PR は本人の確認の後)
+- シェルの期限は付けない(本人の決定 2026-11-04。decisions.md「[速さ] シェルには期限を付けない」)
+- 本人が開発版で確かめた(「開発版OK、PRへ」2026-11-04)。develop → main の PR を出した。マージは本人
 - 残り(PERFORMANCE.md 6章「残り」): 読み込み直後の三角形分割、ねじのブーリアン、複数領域の押し出しの柱の結合
 
 ### 再開の手順
@@ -45,8 +69,6 @@ STEP)。本人の実データに近い題材として QR1 のヒンジカバー�
 - 検証は `.venv`(本人の環境。いま Python 3.11 で pyproject の 3.14 と合わない)でなく、ロックどおりに作った 3.14 の環境で行った
   (`UV_PROJECT_ENVIRONMENT=<一時フォルダ> uv sync --frozen`)。全件テストは Node 23.6 以上が要る(`C:\Program Files\nodejs` の 24 を PATH の先頭に)
 - 変更前の基準は develop `ec1e5405` を `git archive` で書き出したコードで取る(`tools/replay_fingerprint.py` と `tools/bench_all_ops.py` をそこへ写して走らせる)
-- 本人がシェルの期限に「付ける」と答えたら、`verbs/shell_body.py` の `_shelled` の `timeout` を `kernel_worker.time_limit(interactive)` に
-  変え(再生は期限なし)、テストを足す
 
 ## 設計改善のリファクタ5件(#227・#228・#230・#231・#232。2026-10-24、完了)
 

@@ -13,7 +13,7 @@ OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒�
   BinTools は往復で幾何が変わらず、面の添字の数え方も保つ(BRep の文字列は 1e-14 ずれる)。base64 の往復は
   PC ケースの最大のボディ(233 面、BinTools で 229 KB)で 1 ms 未満。
 - 実行は同時に1件。期限切れ・異常終了・取り消しは子を止めて `ValueError`(呼び出し側は結果を採らず、文書もログも変えない)、
-  次の呼び出しで立て直す。
+  次の呼び出しで立て直す。形を断ったときはその派生の `Refused`、期限切れは `TimedOut`。
 """
 from __future__ import annotations
 
@@ -36,6 +36,15 @@ from . import brep_geometry, worker_process
 #: 実測: 合成形状の正当な計算の最長は 18 秒(穴100個を一度に消す)、角ばった実物の1件は最長約 2.3 秒。
 #: フィレット・面取りも同じ値(本人の決定 2026-10-24。docs/FILLET_OVERFLOW.md「いつ使うか」)。
 INTERACTIVE_TIMEOUT_S = 20.0
+
+
+class Refused(ValueError):
+    """子の関門・OCCT が形を断った(期限切れ・取り消し・子の異常終了ではない)。"""
+
+
+class TimedOut(ValueError):
+    """期限までに返事が無かった(形の失敗ではない)。"""
+
 
 _CONDITION = threading.Condition()
 _ACTIVE: Optional[threading.Event] = None
@@ -88,7 +97,7 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
         if cancel.is_set():
             raise ValueError(f"{verb}: プレビューを取り消した")
         if time.monotonic() >= deadline:
-            raise ValueError(f"{verb}: {timeout:.0f} 秒以内に返事が無かった")
+            raise TimedOut(f"{verb}: {timeout:.0f} 秒以内に返事が無かった")
 
     with _CONDITION:
         check()
@@ -129,14 +138,14 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
         except worker_process.WorkerError as error:
             _WORKER.restart()
             if isinstance(error, worker_process.WorkerTimeout):
-                raise ValueError(f"{verb}: {timeout:.0f} 秒以内に返事が無かった") from None
+                raise TimedOut(f"{verb}: {timeout:.0f} 秒以内に返事が無かった") from None
             raise ValueError(f"{verb}: {error.reason}") from None
     finally:
         with _CONDITION:
             _ACTIVE, _ACTIVE_PREVIEW = None, False
             _CONDITION.notify_all()
     if "refused" in result:
-        raise ValueError(result["refused"])
+        raise Refused(result["refused"])
     from . import kernel
 
     decoded = _decode(result["shape"])

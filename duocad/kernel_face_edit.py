@@ -14,7 +14,8 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, Optional, Sequence, Tuple
+import time
+from typing import Any, Iterator, List, Optional, Sequence, Tuple
 
 from OCP.BOPAlgo import BOPAlgo_RemoveFeatures
 from OCP.BRep import BRep_Builder, BRep_Tool
@@ -86,6 +87,14 @@ _CUSP_MARGIN = 0.01
 #: 半径が 2.0 から 2.003 へ変わる丸め(断る側)で 1.5e-3)
 _BLEND_SAMPLES = 9
 _BLEND_RADIUS_TOL = 1e-4
+#: 連なりの選択で、丸めの端につながる面を同じ丸めの続き・角の継ぎ面とみなす、曲がりの半径の割合の差。置いた値で、選ぶときにだけ使う
+#: (一定半径の保証は `_BLEND_RADIUS_TOL`)。Fusion の STEP の B-spline の丸めは公称 0.5 で 0.468〜0.514、0.2 で 0.185〜0.209
+#: (トリムの内側の点でも同じ。実測、docs/FACE_EDIT.md「Fusion の STEP の丸めが消えない」)
+_CHAIN_RADIUS_RELATIVE = 0.15
+#: 断られた削除の代わりに広げた範囲を探すとき、候補1件を待つ秒数と、探す全体の秒数。置いた値。通った候補は 0.6〜1.7 秒で返った
+#: (実測、docs/FACE_EDIT.md「Fusion の STEP の丸めが消えない」)
+_WIDER_TIMEOUT_S = 5.0
+_WIDER_BUDGET_S = 10.0
 
 _HINT_DELETE = "周りの面を延ばしても閉じない。穴や丸めは、それを作る面(底・段・縁の丸め、つながった丸め)をまとめて選ぶ"
 _HINT_COLLAPSE = "消すと残す面が削られる(形がつぶれる)"
@@ -142,6 +151,32 @@ def offset_faces(
             VERB_OFFSET, shape, {"faces": indices, "distance": value}, timeout=kernel_worker.time_limit(interactive)
         ),
     )
+
+
+def wider_deletion(shape: Any, face_indices: Sequence[int]) -> Optional[List[int]]:
+    """断られた面の組を広げて閉じる削除範囲: `deletion_candidates` を順に試し、最初に通った組(昇順)。無ければ None。
+
+    1件 `_WIDER_TIMEOUT_S` 秒・合わせて `_WIDER_BUDGET_S` 秒まで。候補が断られるか時間切れなら次の候補へ進み、それ以外の失敗
+    (子の異常・取り消し)は探すのをやめてそのまま投げる。通った結果は `kernel.remembered` に残るので、同じ形でその組を消す確定は
+    計算し直さない。
+    """
+    indices = _checked_indices(shape, face_indices, VERB_DELETE)
+    deadline = time.monotonic() + _WIDER_BUDGET_S
+    for candidate in deletion_candidates(shape, indices):
+        limit = min(_WIDER_TIMEOUT_S, deadline - time.monotonic())
+        if limit <= 0:
+            break
+        try:
+            kernel.remembered(
+                VERB_DELETE,
+                (shape,),
+                (tuple(candidate),),
+                lambda faces=candidate, seconds=limit: kernel_worker.run(VERB_DELETE, shape, {"faces": faces}, timeout=seconds),
+            )
+        except (kernel_worker.Refused, kernel_worker.TimedOut):
+            continue
+        return candidate
+    return None
 
 
 def _checked_indices(shape: Any, face_indices: Sequence[int], verb: str) -> List[int]:
@@ -620,19 +655,15 @@ def _structural_blends(shape: Any, faces: List[Any]):
 
 
 def blend_chain(shape: Any, face_index: int) -> List[int]:
-    """`face_index`(1始まり)の面が丸めなら、辺を共有してつながる丸めの連なり(角の球を含む)の添字を昇順で。丸めでなければその面だけ。
+    """`face_index`(1始まり)の面が丸めなら、辺を共有してつながる丸めの連なり(角の球を含む)と、その端につながる継ぎ面
+    (`_end_faces`)の添字を昇順で。丸めでなければその面だけ。
 
     丸めどうしは接線でなくてよい(箱の上面4辺の丸めは角で折れて会う)。丸めの認識は `_blend_signature` と同じ構造の規則で、
     互いの支えの面へはたどらない。計算は親で行う(位相をたどるだけで、RemoveFeatures を呼ばない)。
     """
     face_map = _brep_topology._face_map(shape)
     edge_faces = _brep_topology._face_edit_edge_faces(shape)
-    signatures: dict = {}
-
-    def signature(index: int, face: Any):
-        if index not in signatures:
-            signatures[index] = _blend_signature(face, edge_faces)
-        return signatures[index]
+    signature = _signatures(edge_faces)
 
     def is_corner_sphere(edge: Any, sphere: Any, blend: Any) -> bool:
         return _surface_type(sphere) == "sphere" and _tangent(edge, sphere, blend)
@@ -665,7 +696,133 @@ def blend_chain(shape: Any, face_index: int) -> List[int]:
                 continue
             chain[other_index] = other
             frontier.append(other_index)
-    return sorted(chain)
+    return sorted({*chain, *_end_faces(face_map, edge_faces, chain, signature)})
+
+
+def deletion_candidates(shape: Any, face_indices: Sequence[int]) -> Iterator[List[int]]:
+    """断られた面の組を広げた削除範囲の候補を、試す順に1つずつ(添字は昇順で、どれも元の組を含み元の組より広い)。位相をたどるだけ。
+    最小の範囲を探すのではない(2 が 1 より狭いこともある)。
+
+    1. 丸めの端に接線でつながる面を、半径によらず足す(半径の違う丸めへ移る継ぎ。`_end_faces`)
+    2. 組の面に接線でつながる丸めらしい面を足す(B-spline の丸めの区間を1枚だけ選んだときの、続く区間。`_tangent_blends`)
+    """
+    face_map = _brep_topology._face_map(shape)
+    edge_faces = _brep_topology._face_edit_edge_faces(shape)
+    signature = _signatures(edge_faces)
+    members = {int(index): _brep_topology._face_at(face_map, int(index)) for index in face_indices}
+    offered: List[List[int]] = []
+    for widen in (
+        lambda: _end_faces(face_map, edge_faces, members, signature, any_radius=True),
+        lambda: _tangent_blends(face_map, edge_faces, members, signature),
+    ):
+        candidate = sorted({*members, *widen()})
+        if len(candidate) > len(members) and candidate not in offered:
+            offered.append(candidate)
+            yield candidate
+
+
+def _signatures(edge_faces: Any):
+    """`_blend_signature` を面の添字ごとに覚えて返す関数 `(添字, 面) -> 署名`。"""
+    known: dict = {}
+
+    def signature(index: int, face: Any):
+        if index not in known:
+            known[index] = _blend_signature(face, edge_faces)
+        return known[index]
+
+    return signature
+
+
+def _tangent_blends(face_map: Any, edge_faces: Any, members: dict, signature: Any) -> dict:
+    """`members` の面にどれかの辺で接線でつながる、丸めらしい面(添字 → 面)。選択用の半径(`_blend_like_radius`)が分かり、
+    `members` の最大の2倍以下の面に限る(支えの壁を拾わない)。丸めの支えの面と、丸めの上に乗った丸めは入れない。"""
+    radii = [radius for radius in (_blend_like_radius(face) for face in members.values()) if radius is not None]
+    if not radii:
+        return {}
+    limit = 2.0 * max(radii)
+    found: dict = {}
+    for index, face in members.items():
+        own = signature(index, face)
+        for edge in _brep_topology._face_edit_edges(face):
+            if BRep_Tool.Degenerated_s(edge):
+                continue
+            other = _other_face(edge_faces, edge, face)
+            if other is None or _surface_type(other) == "plane":
+                continue
+            other_index = face_map.FindIndex(other)
+            if other_index in members or other_index in found or not _tangent(edge, face, other):
+                continue
+            if own is not None and any(other.IsSame(s) for s in own[1:]):
+                continue
+            blend = signature(other_index, other)
+            if blend is not None and any(face.IsSame(s) for s in blend[1:]):
+                continue
+            radius = blend[0] if blend is not None else _blend_like_radius(other)
+            if radius is not None and radius <= limit:
+                found[other_index] = other
+    return found
+
+
+def _end_faces(face_map: Any, edge_faces: Any, members: dict, signature: Any, *, any_radius: bool = False) -> dict:
+    """`members`(添字 → 面)の丸めの端の辺(長手でない辺)に接線でつながる、平面でない面(添字 → 面)。Fusion の STEP では
+    丸めの曲がり角と、丸めが会う角が B-spline の継ぎ面で、これを残すと周りの面を延ばしても閉じない。
+
+    半径の違う丸め(選択用の半径 `_blend_like_radius` が `_CHAIN_RADIUS_RELATIVE` を超えて違う)は独立した丸めとみなして入れない
+    (`any_radius` なら入れる)。選択用の半径が出ない面(曲率がそろわない継ぎ面のほか、判定できない面も)は入れる。丸めの支えの面と、
+    一定半径の丸めとして認識できる乗った丸めは入れない(認識できない B-spline の乗った丸めは見分けられない)。足した面からはその先へ
+    広げない。長手の辺を接線の辺で決める B-spline の丸め(`_springs`)からは端の辺が無いので、何も足さない。
+    """
+    found: dict = {}
+    for index, face in members.items():
+        own = signature(index, face)
+        if own is None:
+            continue
+        springs = [edge for edge, _ in _springs(face, edge_faces)]
+        for edge in _brep_topology._face_edit_edges(face):
+            if BRep_Tool.Degenerated_s(edge) or any(edge.IsSame(spring) for spring in springs):
+                continue
+            other = _other_face(edge_faces, edge, face)
+            if other is None or _surface_type(other) == "plane" or any(other.IsSame(s) for s in own[1:]):
+                continue
+            other_index = face_map.FindIndex(other)
+            if other_index in members or other_index in found or not _tangent(edge, face, other):
+                continue
+            blend = signature(other_index, other)
+            if blend is not None and any(face.IsSame(s) for s in blend[1:]):
+                continue
+            if not any_radius:
+                radius = blend[0] if blend is not None else _blend_like_radius(other)
+                if radius is not None and abs(radius - own[0]) > _CHAIN_RADIUS_RELATIVE * own[0]:
+                    continue
+            found[other_index] = other
+    return found
+
+
+def _blend_like_radius(face: Any) -> Optional[float]:
+    """選ぶときの丸めらしさ: 面の各点の大きい方の主曲率の半径が、その中央値から割合 `_CHAIN_RADIUS_RELATIVE` 以内にそろえば中央値。
+    一定半径の保証ではない(それは `_blend_radius`)。円筒・トーラス・球は定義の半径。"""
+    definition = _describe(face)
+    if definition is not None:
+        position = {"cylinder": 3, "torus": 4, "sphere": 2}.get(definition[0])
+        return None if position is None else definition[position]
+    adaptor = BRepAdaptor_Surface(face)
+    if adaptor.GetType() not in (GeomAbs_SurfaceType.GeomAbs_BSplineSurface, GeomAbs_SurfaceType.GeomAbs_BezierSurface):
+        return None
+    us, vs = _sample_grid(adaptor, BRepTools.UVBounds_s(face), _BLEND_SAMPLES + 1)
+    radii = []
+    for u in us:
+        for v in vs:
+            props = BRepLProp_SLProps(adaptor, u, v, 2, 1e-7)
+            if props.IsCurvatureDefined():
+                curvature = max(abs(props.MaxCurvature()), abs(props.MinCurvature()))
+                if curvature <= 1e-9:
+                    return None
+                radii.append(1.0 / curvature)
+    if not radii:
+        return None
+    radii.sort()
+    middle = radii[len(radii) // 2]
+    return middle if all(abs(r - middle) <= _CHAIN_RADIUS_RELATIVE * middle for r in radii) else None
 
 
 def _blend_signature(face: Any, edge_faces: Any):

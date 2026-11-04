@@ -354,6 +354,11 @@ export interface PreviewPayload {
     entities: Array<{ kind: string; params: Record<string, number> }>
     pieces: number
   } | null
+  /**
+   * 選んだ面では形を断ったので、代わりに広げて閉じる範囲(「面の削除」だけ。`duocad/verbs/delete_faces.py` の
+   * `_wider_delete_faces`)。`bodies` はこの範囲を消した形。画面はこれを選択にして見せ、確定は本人の Enter。
+   */
+  suggestion: { body_id: string; faces: number[] } | null
 }
 
 /**
@@ -397,10 +402,12 @@ export interface EdgeChainsPayload {
 }
 
 /**
- * 丸めの面の連なりの応答(`get_face_chains`)。形は辺の連なりと同じで、`chains` は面の添字の組
+ * 丸めの面の連なりの応答(`get_face_chains`)。`chains[i]` は面 `origins[i]` をクリックしたときに選ぶ面の添字
  * (丸めでない面はその面だけ。`duocad/kernel_face_edit.py` の `blend_chain`)。
  */
-export type FaceChainsPayload = EdgeChainsPayload
+export interface FaceChainsPayload extends EdgeChainsPayload {
+  origins: number[]
+}
 
 /**
  * 1つの頂点の3D座標(`kernel.vertex_positions` の1件そのまま)。
@@ -1208,6 +1215,8 @@ export function createSession(hooks: SessionHooks): Session {
       verb?: string
       bodies?: PreviewPayload['bodies']
       sketch_ghost?: PreviewPayload['sketch_ghost']
+      suggestion?: PreviewPayload['suggestion']
+      origins?: number[]
       body_id?: string
       revision?: number
       shape_revision?: number
@@ -1300,6 +1309,7 @@ export function createSession(hooks: SessionHooks): Session {
         verb: message.verb ?? '',
         bodies: message.bodies ?? [],
         sketch_ghost: message.sketch_ghost ?? null,
+        suggestion: message.suggestion ?? null,
       })
     } else if (message.type === 'edges') {
       hooks.onEdges({
@@ -1317,7 +1327,7 @@ export function createSession(hooks: SessionHooks): Session {
         chains: message.chains ?? [],
       }
       if (message.type === 'edge_chains') hooks.onEdgeChains(payload)
-      else hooks.onFaceChains(payload)
+      else hooks.onFaceChains({ ...payload, origins: message.origins ?? [] })
     } else if (message.type === 'vertices') {
       hooks.onVertices({
         body_id: message.body_id ?? '',
