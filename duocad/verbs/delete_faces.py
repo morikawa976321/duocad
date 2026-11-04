@@ -14,7 +14,7 @@ from typing import Optional, Sequence
 
 from .. import kernel_face_edit, selection
 from ..document import BodyId, Document
-from ..entry import entry
+from ..entry import entry, preview_fallback
 from ..oplog import Operation, register_verb
 from ._common import editable_body, reapply_shape, remember, replayed_body, undo_shape
 
@@ -50,3 +50,16 @@ def _enter_delete_faces(document: Document) -> dict:
     faces, body_id = selection.require_faces(document)
     changed = delete_faces(document, faces, body_id=body_id).args["body_id"]
     return {"body_id": changed, "changed_bodies": [changed]}
+
+
+@preview_fallback(VERB_DELETE_FACES)
+def _wider_delete_faces(document: Document) -> Optional[dict]:
+    """プレビューで断られた面の組の代わりに、広げて閉じる削除範囲(`kernel_face_edit.wider_deletion`)を写しの文書へ掛ける。
+    画面はそれを選択にして見せ、本人が見て Enter で確定する。確定・再生は記録した面を消すだけで探し直さない。"""
+    faces, body_id = selection.require_faces(document)
+    body = editable_body(document, body_id, what="delete faces")
+    found = kernel_face_edit.wider_deletion(body.shape, faces)
+    if found is None:
+        return None
+    delete_faces(document, found, body_id=body.id)
+    return {"body_id": body.id, "faces": found}

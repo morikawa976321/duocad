@@ -17,6 +17,7 @@ EVALUATORS = [
     "eval_arc_sweep.mjs",
     "eval_choice_sync.mjs",
     "eval_expression.mjs",
+    "eval_face_chains.mjs",
     "eval_frame_loop.mjs",
     "eval_ghost_layer.mjs",
     "eval_grid_planes.mjs",

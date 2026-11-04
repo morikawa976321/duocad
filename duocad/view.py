@@ -886,17 +886,19 @@ class DocumentView:
         }
 
     def face_chains(self, body_id: str, face_indices: list) -> dict:
-        """頼まれた面それぞれが属する丸めの連なり(`kernel_face_edit.blend_chain`。丸めでない面はその面だけ)を返す。
+        """頼まれた面それぞれから選ぶ丸めの連なり(`kernel_face_edit.blend_chain`。丸めでない面はその面だけ)を返す。
 
-        戻り値は `edge_chains` と同じ形(`"chains"` は面の添字の組)。画面はクリックした面の分だけ頼む(1面で数十 ms)。
+        `"origins"` は頼まれた面、`"chains"` はそれぞれの連なり(同じ並び)。辺の連なりと違って面の連なりは互いに重なる
+        (丸めの角の継ぎ面は、そこで会う丸めのどれの連なりにも入る)ので、起点の面ごとに返す。画面はクリックした面の分だけ頼む(1面で数十 ms)。
         """
         body = self._visible_brep(body_id, "面")
-        chains = list(dict.fromkeys(tuple(kernel_face_edit.blend_chain(body.shape, int(index))) for index in face_indices))
+        origins = list(dict.fromkeys(int(index) for index in face_indices))
         return {
             "body_id": body_id,
             "revision": self.body_revision(body_id),
             "shape_revision": self.shape_revision(body_id),
-            "chains": [list(chain) for chain in chains],
+            "origins": origins,
+            "chains": [kernel_face_edit.blend_chain(body.shape, index) for index in origins],
         }
 
     def vertices(self, body_id: str) -> dict:

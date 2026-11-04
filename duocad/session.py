@@ -32,7 +32,7 @@ from .autosave import Autosave
 from .workspace import CommandState, NoCommand, Workspace, merge_args, stageable, stageable_verb_names
 from .document import Document
 from .document_store import DocumentStore, _RESERVED_WINDOWS_NAMES
-from .entry import entries, entry_for
+from .entry import entries, entry_for, preview_fallback_for
 from .measure import inspect_selection, measure_selection
 from .oplog import OpLog
 from .optimization import Optimization, OptimizationResults
@@ -679,6 +679,9 @@ class Session:
         文書を変えずに結果だけ計算する verb(`preview_session`。軽い)は `None` を返す(呼び手が `preview` をその場で呼ぶ)。
         粗さ(偏差・角度偏差)はいまの値を控える。投機実行の結果は `PreviewJob.adopt()` で元の形の結果として覚え直す
         (確定が同じ計算をしない。`kernel.adopt_results`)。
+
+        verb が形を断り(`kernel_worker.Refused`)、その verb にプレビューの代案(`entry.preview_fallback`)があれば、代案を掛けた
+        写しを測り、戻り値に `"suggestion"`(代案の関数が返したもの)を足す。画面はそれを見せ、確定は本人がする。
         """
         _method_name, values = self._preview_arguments(verb, args)
         if catalog.BY_NAME[verb].preview_session is not None:
@@ -702,7 +705,17 @@ class Session:
         measured: list = []  # (ボディ, 形, 三角形) — 確定後の配信で使い回す(`adopt`)
 
         def run() -> dict:
-            function(twin, **values)
+            suggestion = None
+            try:
+                function(twin, **values)
+            except kernel_worker.Refused as refusal:
+                fallback = preview_fallback_for(verb)
+                try:
+                    suggestion = None if fallback is None else fallback(twin, **values)
+                except ValueError:
+                    suggestion = None  # 代案探しの失敗(子の異常・取り消し)は、元の断りとして返す
+                if suggestion is None:
+                    raise refusal
             bodies_out: list[dict] = []
             for body in twin.bodies:
                 if not body.visible or body.shape is None:
@@ -725,6 +738,8 @@ class Session:
                     "volume": query.volume(body.shape),
                     "geometry": geometry,
                 })
+            if suggestion is not None:
+                return {"verb": verb, "bodies": bodies_out, "suggestion": suggestion}
             return {"verb": verb, "bodies": bodies_out}
 
         def adopt() -> None:

@@ -103,7 +103,7 @@
   import SettingsDialog from './SettingsDialog.svelte'
   import { createDisplaySettings } from './displaySettings.svelte'
   import { createDocumentFiles } from './documentFiles.svelte'
-  import { createFaceChains } from './faceChains'
+  import { createFaceChains, suggestedAdditions } from './faceChains'
   import { createInterference } from './interference.svelte'
   import InterferencePanel from './InterferencePanel.svelte'
   import { createMeasurement } from './measurement.svelte'
@@ -351,6 +351,12 @@
    * 返ってきた `applied.client_op` で照合する。
    */
   const myClientOps = new Set<number>()
+  /** 直前に「面の削除」の代案で広げた選択の鍵(`suggestedAdditions`)。 */
+  let widenedDeletion: string | null = null
+  /** この画面が送って、配信がまだ返ってこない選択の変更(`client_op`)。 */
+  const selectionOpsInFlight = new Set<number>()
+  /** 代案で選択を広げた変更の `client_op`。返ってくるまで確定させない(広げた範囲が画面に出る前の Enter で確定しない)。 */
+  let wideningOp = $state<number | null>(null)
   /**
    * この画面のクリックで選択が変わった回数(コマンド層の「即適用」の引き金)。
    * Enterの要らないコマンド(`command.ts` の `needsEnter`)の引き金は人がこの画面で指したことでなければならない。
@@ -390,7 +396,12 @@
         // 送れなかった全解除の配信は来ない。残すと、繋ぎ直しの試行中に送って失敗しその試行が成功したとき、
         // `clearingOp` が残って以後の選択の差分が空の選択に対して組まれ続ける(`onStatus` の切断時だけでは捨てられない)。
         clearingOp = null
-      } else releasePending(clientOp ?? null)
+        selectionOpsInFlight.clear()
+        wideningOp = null
+      } else {
+        settleSelectionOp(clientOp ?? null)
+        releasePending(clientOp ?? null)
+      }
       if (where === 'preview') preview.clear()
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
       if (where === 'get_edges' || where === 'send') edgesAsked.clear()
@@ -431,6 +442,8 @@
       // 全解除の配信も同じく返ってこない(残すと以後の差分が空の選択に対して組まれ続ける)。
       if (next !== 'open') {
         clearingOp = null
+        selectionOpsInFlight.clear()
+        wideningOp = null
         preview.disconnect()
       }
       // 切断中の要求は捨てられるが `edgesAsked` には残る。残すと再接続後も版が同じなら
@@ -872,6 +885,7 @@
         selfSelections += 1
       }
       if (applied.client_op !== null && applied.client_op === clearingOp) clearingOp = null
+      settleSelectionOp(applied.client_op)
       releasePending(applied.client_op)
       return
     }
@@ -946,6 +960,26 @@
       viewport?.showSketchGhosts(ghost.sketch_id, ghost.entities, ghost.pieces === 1 ? 'normal' : 'warn')
     }
     previewing = payload.bodies.length > 0 || (ghost?.entities.length ?? 0) > 0
+    if (payload.suggestion !== null && faceChainCommand) widenToSuggestion(payload.suggestion)
+  }
+
+  function settleSelectionOp(clientOp: number | null): void {
+    if (clientOp === null) return
+    selectionOpsInFlight.delete(clientOp)
+    if (clientOp === wideningOp) wideningOp = null
+  }
+
+  /**
+   * 選んだ面では消せなかったので、サーバが見つけた消せる範囲まで選択を広げる(橙で見せ、確定は本人の Enter)。
+   * 送った選び直しがまだ返っていない間の代案は、古い選択に対するものなので使わない。
+   */
+  function widenToSuggestion(suggestion: NonNullable<PreviewPayload['suggestion']>): void {
+    if (selectionOpsInFlight.size > 0 || wideningOp !== null) return
+    const wider = suggestedAdditions(suggestion, refsOfKind(currentItems(), 'face'), widenedDeletion)
+    if (wider === null) return
+    widenedDeletion = wider.key
+    wideningOp = modifySelection(wider.add.map((index) => faceRef(suggestion.body_id, index)), [])
+    note(`選んだ面だけでは消せなかったので、消せる範囲まで選択を広げた(${wider.add.length} 面を追加)。範囲を確かめて Enter で確定`)
   }
 
   function handleEdges(payload: EdgesPayload): void {
@@ -1280,9 +1314,12 @@
     const on = edgeOnlyCommand
     viewport?.groupEdgeChains(on)
   })
-  function modifySelection(add: SelectionRef[], remove: SelectionRef[]): void {
-    if (add.length === 0 && remove.length === 0) return
-    session.modifySelection(add, remove, nextOp())
+  function modifySelection(add: SelectionRef[], remove: SelectionRef[]): number | null {
+    if (add.length === 0 && remove.length === 0) return null
+    const op = nextOp()
+    selectionOpsInFlight.add(op)
+    session.modifySelection(add, remove, op)
+    return op
   }
 
   /**
@@ -1294,7 +1331,9 @@
     const current = currentItems()
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'toggle') {
-      session.toggleSelection([ref], nextOp())
+      const op = nextOp()
+      selectionOpsInFlight.add(op)
+      session.toggleSelection([ref], op)
     } else if (already && current.length === 1) modifySelection([], [ref])
     else selectOnly(ref)
   }
@@ -1539,6 +1578,7 @@
   /** 選択を全解除する。配信が届くまでの判定は `currentItems()` が空として扱う。 */
   function clearSelection(): void {
     clearingOp = nextOp()
+    selectionOpsInFlight.add(clearingOp)
     session.clearSelection(clearingOp)
   }
 
@@ -1561,6 +1601,9 @@
   function onCommandEnd(verb: string): void {
     if (activeVerb === null) return
     activeVerb = null
+    widenedDeletion = null
+    wideningOp = null
+    faceChains.forgetPicks()
     if (verb === MEASURE.id && measure.current !== null) return
     // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
     if (verb === INTERFERENCE.id) return
@@ -1623,6 +1666,12 @@
     return chain === null ? null : chain.map((index) => faceRef(bodyId, index))
   }
 
+  /** 起点 `faceIndex` の連なりを外すときに残す面(選択に残るほかの起点の継ぎ面。`FaceChains.sharedWith`)の参照の鍵。 */
+  function sharedFaceKeys(bodyId: string, faceIndex: number): Set<string> {
+    const selected = refsOfKind(currentItems(), 'face').filter((ref) => ref.body === bodyId).map((ref) => ref.index)
+    return new Set([...faceChains.sharedWith(bodyId, faceIndex, selected)].map((index) => refKey(faceRef(bodyId, index))))
+  }
+
   /** 連なりの分からない面を指したクリックを、連なりが届くまで待たせる(`deferUntilChains` の面版。捨てる条件も同じ)。 */
   function deferUntilFaceChains(faces: Array<{ bodyId: string; faceIndex: number }>, run: () => void): void {
     const revisionOf = (bodyId: string) => model?.bodies.find((body) => body.body_id === bodyId)?.shape_revision
@@ -1650,6 +1699,7 @@
       const widen = () => {
         const current = new Set(currentItems().map(refKey))
         const add = faces.flatMap((face) => faceChainRefs(face.bodyId, face.faceIndex) ?? []).filter((ref) => !current.has(refKey(ref)))
+        for (const face of faces) faceChains.picked(face.bodyId, face.faceIndex, true)
         modifySelection(add, [])
       }
       if (faces.every((face) => faceChainRefs(face.bodyId, face.faceIndex) !== null)) widen()
@@ -1672,7 +1722,7 @@
   }
 
   /** 連なり(辺、または丸めの面)を1つの単位として選択を編集する(`editSelection` の連なり版。トグルは `toggleUnits`)。 */
-  function editChain(refs: SelectionRef[], mode: PickEvent['mode']): void {
+  function editChain(refs: SelectionRef[], mode: PickEvent['mode'], keep: Set<string> = new Set()): void {
     if (refs.length === 1) {
       editSelection(refs[0], mode)
       return
@@ -1682,7 +1732,7 @@
     const allIn = refs.every((ref) => currentKeys.has(refKey(ref)))
     if (mode === 'toggle') {
       const { add, remove } = toggleUnits([refs], currentKeys)
-      modifySelection(add, remove)
+      modifySelection(add, remove.filter((ref) => !keep.has(refKey(ref))))
       return
     }
     if (allIn && current.length === refs.length) {
@@ -1775,9 +1825,15 @@
     }
     if (faceChainCommand && !meshBodyIds.has(event.hit.bodyId)) {
       const face = event.hit
-      const refs = faceChainRefs(face.bodyId, face.faceIndex)
-      if (refs === null) deferUntilFaceChains([face], () => editChain(faceChainRefs(face.bodyId, face.faceIndex)!, pickMode))
-      else editChain(refs, pickMode)
+      const pick = () => {
+        const refs = faceChainRefs(face.bodyId, face.faceIndex)!
+        const selected = new Set(currentItems().map(refKey))
+        const removing = refs.every((ref) => selected.has(refKey(ref)))
+        editChain(refs, pickMode, removing ? sharedFaceKeys(face.bodyId, face.faceIndex) : new Set())
+        faceChains.picked(face.bodyId, face.faceIndex, !removing)
+      }
+      if (faceChainRefs(face.bodyId, face.faceIndex) === null) deferUntilFaceChains([face], pick)
+      else pick()
       return
     }
     // 保持/除外ソリッドの間だけボディ粒度へ畳む(`optimizeSetFaceRef`)。
@@ -2462,7 +2518,7 @@
         <CommandHost
           bind:this={host}
           {selection}
-          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null}
+          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null}
           {selfSelections}
           commands={mode.kind === 'sketch'
             ? SKETCH_MODE_COMMANDS
