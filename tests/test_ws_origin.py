@@ -117,3 +117,20 @@ def test_the_running_server_applies_the_allowlist(monkeypatch, tmp_path):
     asyncio.run(mcp_server._run(Session(0.2), args))
 
     assert outcomes == {"http://evil.example.com": False, None: True}
+
+
+def test_the_screen_websocket_does_not_compress():
+    """落ちたら、画面の WebSocket が permessage-deflate を取り決め、送信のたびの圧縮(1 MB あたり約 40 ms)がループを塞ぐ。"""
+
+    async def scenario():
+        async with serve(_accept, "127.0.0.1", 0, **mcp_server.websocket_options(8766)) as server:
+            port = server.sockets[0].getsockname()[1]
+            async with connect(f"ws://127.0.0.1:{port}") as socket:
+                offered = socket.request.headers.get("Sec-WebSocket-Extensions")
+                accepted = socket.response.headers.get("Sec-WebSocket-Extensions")
+                await socket.send("ping")
+                return offered, accepted
+
+    offered, accepted = asyncio.run(scenario())
+    assert offered is not None and "permessage-deflate" in offered  # クライアントは申し出ている
+    assert accepted is None
