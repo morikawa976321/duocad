@@ -166,8 +166,13 @@
 
   /** 画面にサーバ計算の幽霊が出ているか(テスト用フックが見る)。 */
   let previewing = $state(false)
+  /** この画面が送ったコマンドの起動・終了の数。代案(`PreviewPayload.suggestion`)は、送った後に起動・終了を頼んでいたら使わない。 */
+  let commandRequests = 0
+  /** 最後に送ったプレビューの番号と、そのときの `commandRequests`。 */
+  let previewAsked: { id: number; commands: number } | null = null
   const preview = createPreviewController({
     send(verb, args, id) {
+      previewAsked = { id, commands: commandRequests }
       // スケッチの verb は確定と同じく編集中のスケッチを足す。
       const sketchVerb = CATEGORY_OF.get(verb) === 'sketch' && !runsOutsideSketch(verb) && !runsWithoutSketchId(verb)
       session.preview(verb, sketchVerb && sketchId !== null ? { ...args, sketch_id: sketchId } : args, id)
@@ -960,7 +965,8 @@
       viewport?.showSketchGhosts(ghost.sketch_id, ghost.entities, ghost.pieces === 1 ? 'normal' : 'warn')
     }
     previewing = payload.bodies.length > 0 || (ghost?.entities.length ?? 0) > 0
-    if (payload.suggestion !== null && faceChainCommand) widenToSuggestion(payload.suggestion)
+    const current = previewAsked?.id === payload.preview_id && previewAsked.commands === commandRequests
+    if (payload.suggestion !== null && faceChainCommand && current) widenToSuggestion(payload.suggestion)
   }
 
   function settleSelectionOp(clientOp: number | null): void {
@@ -1514,6 +1520,7 @@
   function beginCommand(verb: string, args: Record<string, unknown>): void {
     pendingChainPick = null // 前のコマンドで待たせたクリックを次のコマンドへ持ち越さない
     pendingBox = null
+    commandRequests += 1
     session.beginCommand(verb, args, nextOp())
   }
 
@@ -1525,6 +1532,7 @@
     // 中断を送った時点で捨てる(連なりの応答は中断の配信より先に届くので、届いてからでは起動中に見える)。
     pendingChainPick = null
     pendingBox = null
+    commandRequests += 1
     session.endCommand(nextOp())
   }
 

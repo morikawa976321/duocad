@@ -14,8 +14,8 @@ export interface FaceChains {
   /** 本人がクリックで選んだ(`selected`)・外した起点の面を覚える。 */
   picked(bodyId: string, origin: number, selected: boolean): void
   /**
-   * 起点 `origin` の連なりを選択から外すときに残す面: 選択に残るほかの起点(`picked`)の連なりにも入っている面。
-   * 継ぎ面を共有する丸めを1本外しても、残す丸めの継ぎ面は外さない。
+   * 起点 `origin` の連なりを選択から外すときに残す面: 外した後も選択に残る起点(`picked` のうち、この連なりの外にあるもの)の連なりにも
+   * 入っている面。継ぎ面を共有する丸めを1本外しても、残す丸めの継ぎ面は外さない。
    */
   sharedWith(bodyId: string, origin: number, selected: number[]): Set<number>
   /** クリックした起点の覚えを捨てる(コマンドを抜けた)。 */
@@ -58,7 +58,8 @@ export function createFaceChains(deps: {
       const inChain = new Set(chain)
       const still = new Set(selected)
       for (const other of picks[bodyId] ?? []) {
-        if (other === origin || !still.has(other)) continue
+        // 外す連なりに入っている起点は一緒に外れる(同じ連なりの別の面をクリックして外すとき、その連なりを守らない)
+        if (inChain.has(other) || !still.has(other)) continue
         for (const face of chains.get(other) ?? []) if (inChain.has(face)) kept.add(face)
       }
       return kept
