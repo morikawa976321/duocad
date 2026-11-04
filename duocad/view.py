@@ -108,6 +108,8 @@ class _FaceTessellations:
         self.batch_of: "OrderedDict[tuple, dict]" = OrderedDict()
         self._batches = 0
         self.closed: Optional[bool] = None
+        #: 配ったことがあるか(`_tessellate_body`)。プレビューが覚えさせただけの形(`seed_faces`)は、追い出すときに先に捨てる
+        self.delivered = False
         #: まだ警告していない取れなかった面と、解消できなかった境界(`seed_faces` で覚えさせた分。配るときに1回だけ出す)
         self.unwarned_failed: set = set()
         self.unwarned_boundary: list = []
@@ -634,7 +636,11 @@ class DocumentView:
         return _memo(self._geometry_cache, body_id, body.shape, recipe, lambda: self._tessellate_body(body))
 
     def _face_store(self, body_id: str, shape: Any) -> "_FaceTessellations":
-        """その形の面の三角形の控え(無ければ作る)。ボディごとに `FACE_STORES_PER_BODY` 個の形まで覚える。"""
+        """その形の面の三角形の控え(無ければ作る)。ボディごとに `FACE_STORES_PER_BODY` 個の形まで覚える。
+
+        追い出すのは古い順だが、ボディの今の形は残し、プレビューが覚えさせただけの形(配っていない)を先に捨てる。半径を打ち直すたびに
+        ゴーストの結果を覚えさせる(`seed_faces`)ので、古い順だけだと画面に出ている形が押し出され、undo やカメラで全面を測り直す
+        (穴 384 個の板で 10 秒)。"""
         stores = self._face_cache.setdefault(body_id, OrderedDict())
         held = stores.get(id(shape))
         if held is not None and held[0] is shape:
@@ -642,8 +648,14 @@ class DocumentView:
             return held[1]
         store = _FaceTessellations(shape)
         stores[id(shape)] = (shape, store)
-        while len(stores) > FACE_STORES_PER_BODY:
-            stores.popitem(last=False)
+        if len(stores) > FACE_STORES_PER_BODY:
+            current = next((body.shape for body in self.document.bodies if body.id == body_id), None)
+            while len(stores) > FACE_STORES_PER_BODY:
+                candidates = [key for key, (kept, kept_store) in stores.items() if kept is not current and kept_store is not store]
+                if not candidates:
+                    break
+                stale = next((key for key in candidates if not stores[key][1].delivered), candidates[0])
+                del stores[stale]
         return store
 
     @property
@@ -742,6 +754,7 @@ class DocumentView:
         wanted, fine_set, detailed, coarse = self._wanted_faces(body)
         deviation = detailed[0]
         store = self._face_store(body.id, body.shape)
+        store.delivered = True
         groups = self._missing_groups(store, wanted, detailed)
         measured = None
         if groups:
