@@ -574,11 +574,11 @@ def tessellate_reusing(shape: "TopoDS_Shape", deviation: float, angular_deflecti
     }
 
 
-def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], Iterable[int]]) -> dict:
+def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], Iterable[int]], *, closed: bool = True) -> dict:
     """指定した面だけを、`(偏差, 角度偏差)` の組ごとに三角形分割する(面単位のキャッシュ `view.DocumentView` の口)。
 
     戻り値: `{"faces": {面の添字: tessellate() の faces[i] と同じ形}, "untriangulated": [...], "boundary": {...},
-    "closed": bool}`。組ごとに compound にして測る。組が全面なら形状そのものを測る(`tessellate()` と同じ結果)。
+    "closed": bool}`(`closed=False` で頼んだら `"closed"` は None。形ごとに1回で足りる)。組ごとに compound にして測る。組が全面なら形状そのものを測る(`tessellate()` と同じ結果)。
     組の間で共有する辺の分割は伝わらず、曲線の共有辺には粗い側の偏差ぶんの隙間が開きうる。
     """
     _brep_checks._check_tessellation_args(shape, *next(iter(groups), (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)))
@@ -607,7 +607,7 @@ def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], It
         "faces": described,
         "untriangulated": sorted(untriangulated),
         "boundary": kernel_meshing.merge_diagnostics(passes),
-        "closed": _brep_checks._is_closed_shell(shape),
+        "closed": _brep_checks._is_closed_shell(shape) if closed else None,
     }
 
 

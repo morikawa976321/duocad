@@ -139,7 +139,8 @@ class _FaceTessellations:
                 else:
                     failed.discard(index)
                 batch[index] = self._batches
-        self.closed = measured["closed"]
+        if measured.get("closed") is not None:
+            self.closed = measured["closed"]
 
     def keys(self) -> list:
         """面の添字の順の、面の同一性の鍵。"""
@@ -707,7 +708,7 @@ class DocumentView:
                 groups[detailed] = fine_group
         measured = None
         if groups:
-            measured = kernel.tessellate_faces(body.shape, groups)
+            measured = kernel.tessellate_faces(body.shape, groups, closed=store.closed is None)
             store.remember(groups, measured)
         if store.closed is None:
             store.closed = _brep_checks.is_closed_shell(body.shape)  # 全部を借りて測らなかった

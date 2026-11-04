@@ -175,6 +175,18 @@ def test_face_edits_and_blends_share_one_worker():
     assert kernel_worker._WORKER is worker and worker.starts == starts
 
 
+def test_a_request_during_the_warm_up_waits_for_the_same_child(monkeypatch):
+    """落ちたら、サーバの起動直後に来た最初のフィレットが、裏で立てている子と別にもう1つ子を立てる(または先立てが無く 1.6 秒待つ)。"""
+    kernel_worker.stop()
+    monkeypatch.setattr(kernel_worker, "_WORKER", None)
+    kernel_worker.warm_up_in_background()
+    shape = BRepPrimAPI_MakeBox(20, 20, 20).Shape()
+    result = kernel_worker.run("fillet", shape, {"values": [(1, 2.0)]}, op="blend_edges", timeout=20)
+    assert result["shape"] is not None
+    assert kernel_worker._WORKER is not None and kernel_worker._WORKER.starts == 1
+    kernel_worker.stop()
+
+
 def test_worker_imports_the_worktree_code():
     from duocad.paths import REPO_ROOT
 

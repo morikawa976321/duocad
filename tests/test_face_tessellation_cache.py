@@ -22,9 +22,9 @@ def counted(monkeypatch):
     calls: list = []
     real = kernel.tessellate_faces
 
-    def counting(shape, groups):
+    def counting(shape, groups, **options):
         calls.append(sorted(index for indices in groups.values() for index in indices))
-        return real(shape, groups)
+        return real(shape, groups, **options)
 
     monkeypatch.setattr(kernel, "tessellate_faces", counting)
     return calls

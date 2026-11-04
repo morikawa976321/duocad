@@ -78,6 +78,10 @@ def volume(shape: "TopoDS_Shape") -> float:
     """
     if shape is None or is_null(shape):
         raise ValueError("cannot compute the volume of an empty shape")
+    with _VOLUME_PROPS_LOCK:
+        noted = _NOTED_VOLUMES.get(id(shape))
+    if noted is not None and noted[0] is shape:
+        return noted[1]
     return _volume_props(shape).Mass()
 
 
@@ -87,14 +91,25 @@ def volume(shape: "TopoDS_Shape") -> float:
 _VOLUME_PROPS: "OrderedDict[int, tuple]" = OrderedDict()
 _VOLUME_PROPS_LIMIT = 64
 _VOLUME_PROPS_LOCK = threading.Lock()
+#: 別のプロセスで同じ形について求めた体積(`note_volume`)。id(形) -> (形, 体積)
+_NOTED_VOLUMES: "OrderedDict[int, tuple]" = OrderedDict()
+
+
+def note_volume(shape: "TopoDS_Shape", value: float) -> None:
+    """子プロセスが同じ形について求めた体積を覚えさせる(BinTools の往復は幾何を変えないので、積分し直しても同じ値)。"""
+    with _VOLUME_PROPS_LOCK:
+        _NOTED_VOLUMES[id(shape)] = (shape, float(value))
+        while len(_NOTED_VOLUMES) > _VOLUME_PROPS_LIMIT:
+            _NOTED_VOLUMES.popitem(last=False)
 
 
 def forget_volume(shape: "TopoDS_Shape") -> None:
     """`shape` について覚えた体積を捨てる(その場で書き換えた形に使う)。"""
     with _VOLUME_PROPS_LOCK:
-        held = _VOLUME_PROPS.get(id(shape))
-        if held is not None and held[0] is shape:
-            del _VOLUME_PROPS[id(shape)]
+        for memo in (_VOLUME_PROPS, _NOTED_VOLUMES):
+            held = memo.get(id(shape))
+            if held is not None and held[0] is shape:
+                del memo[id(shape)]
 
 
 def _volume_props(shape: "TopoDS_Shape") -> "GProp_GProps":

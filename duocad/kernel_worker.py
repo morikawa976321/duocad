@@ -43,6 +43,7 @@ _WAITING_FOREGROUND = 0
 _PREVIEW: ContextVar[Optional[threading.Event]] = ContextVar("kernel_preview", default=None)
 _NEW_INPUT: ContextVar[bool] = ContextVar("kernel_new_input", default=False)
 _WORKER: Optional[worker_process.WorkerProcess] = None
+_CHILD_COMMAND = [sys.executable, "-c", "from duocad import kernel_worker; kernel_worker.child_main()"]
 
 
 @contextmanager
@@ -109,7 +110,7 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
         message = {"op": op, "verb": verb, "arguments": arguments, "shape": _encode(shape)}
         check()
         if _WORKER is None:
-            _WORKER = worker_process.WorkerProcess([sys.executable, "-c", "from duocad import kernel_worker; kernel_worker.child_main()"])
+            _WORKER = worker_process.WorkerProcess(_CHILD_COMMAND)
         try:
             remaining = None if timeout is None else max(0.0, deadline - time.monotonic())
             result = _WORKER.request(message, remaining, cancel=cancel)
@@ -132,11 +133,37 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
             _CONDITION.notify_all()
     if "refused" in result:
         raise ValueError(result["refused"])
-    from . import kernel
+    from . import brep_geometry, kernel
 
     decoded = _decode(result["shape"])
     kernel.note_kept_faces(decoded, shape, result.pop("kept", ()))
+    if "volume_after" in result:
+        brep_geometry.note_volume(decoded, result["volume_after"])
     return {**result, "shape": decoded}
+
+
+def warm_up_in_background() -> None:
+    """子を裏で先に立てておく(起動に約 1.6 秒かかり、最初のフィレット・面取り・面の編集の応答がその分遅れていた)。
+    子は一度立てたら残すので、立てる時刻が早まるだけ。立てている間の要求は待ち、失敗したら次の `run` が立て直す。"""
+    threading.Thread(target=_warm_up, name="kernel-worker-warm-up", daemon=True).start()
+
+
+def _warm_up() -> None:
+    global _WORKER, _ACTIVE, _ACTIVE_PREVIEW
+    with _CONDITION:
+        if _WORKER is not None or _ACTIVE is not None:
+            return
+        _ACTIVE, _ACTIVE_PREVIEW = threading.Event(), False
+    worker = worker_process.WorkerProcess(_CHILD_COMMAND)
+    try:
+        worker.request({"op": "ping"}, 60.0)
+        _WORKER = worker
+    except Exception:  # noqa: BLE001  立てられなくても、次の `run` が立て直す
+        worker.close()
+    finally:
+        with _CONDITION:
+            _ACTIVE, _ACTIVE_PREVIEW = None, False
+            _CONDITION.notify_all()
 
 
 def stop() -> None:
@@ -170,6 +197,8 @@ def _handle(message: Dict[str, Any]) -> Dict[str, Any]:
     from . import kernel, kernel_face_edit
 
     op = message.get("op")
+    if op == "ping":
+        return {}
     if op not in ("face_edit", "blend_edges"):
         raise ValueError(f"unknown op {op!r}")
     source = _decode(message["shape"])
