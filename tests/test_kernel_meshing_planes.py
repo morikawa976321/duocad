@@ -176,7 +176,7 @@ def test_heavy_planes_are_delaunay_with_the_standard_nodes(label, make, deviatio
         assert illegal_edges(uv, triangles) == 0
         assert min_angle(xyz, triangles) >= min_angle(ref_xyz, ref_triangles) - 1e-12
     assert welded_defects(shape) == reference_defects
-    if label != 'mirrored':  # 鏡映の写しは、同じ節点が面ごとの位置の変換で 1 ulp ずれ、座標の一致では溶接しきれない(既定の分割でも同じ)
+    if label != 'mirrored':  # 鏡映の写しは、面の位置を掛けた共有辺の節点が隣の面と最大 8.9e-16 ずれ(実測。既定の分割でも同じ)、座標の一致では溶接しきれない
         assert all(value == 0 for value in reference_defects.values())
 
 
