@@ -19,6 +19,7 @@ from . import (
     kernel_face_edit,
     meshbody,
     optimize,
+    parameters,
     query,
     region,
     resolution,
@@ -581,11 +582,15 @@ class DocumentView:
         # 図形そのものは軽いのでキャッシュしない。**try で包む**(上の `drawn` だけ守っても、
         # 同じパラメータ解決のこちらが落ちると `state_meta()` ごと落ち、以後の配信が全部止まる)。
         try:
+            # `sketch.entity_params` と同じ引き方(同じ id の図形が2つあれば先の方)を、図形ごとの走査をせずに1回で
+            first: dict = {}
+            for entity in sketch.get_sketch(self.document, item.id).entities:
+                first.setdefault(entity.id, entity)
             payload["entities"] = [
                 {
                     "entity_id": entity.id,
                     "kind": entity.kind,
-                    "params": sketch.entity_params(self.document, item.id, entity.id),
+                    "params": parameters.resolve_all(self.document, first[entity.id].params),
                 # 値が名前つきパラメータならその名前、素の数値なら None。
                     "refs": {
                         key: ref if isinstance(ref, str) else None
