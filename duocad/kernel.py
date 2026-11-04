@@ -500,6 +500,30 @@ def _face_traits(face: Any) -> tuple:
     return traits
 
 
+def tessellate_reusing(shape: "TopoDS_Shape", deviation: float, angular_deflection: float, reuse: Dict[int, dict]) -> dict:
+    """`tessellate` と同じ形を返す。`reuse` の面(添字 -> 同じ面を同じ測り方で測った `faces[i]`)は測らずに使う。"""
+    if not reuse:
+        return tessellate(shape, deviation, angular_deflection)
+    total = _brep_topology.face_count(shape)
+    missing = [index for index in range(1, total + 1) if index not in reuse]
+    measured = (
+        tessellate_faces(shape, {(float(deviation), float(angular_deflection)): missing}) if missing
+        else {"faces": {}, "untriangulated": [], "boundary": kernel_meshing.merge_diagnostics([])}
+    )
+    faces = [dict(reuse[index], index=index) if index in reuse else measured["faces"][index] for index in range(1, total + 1)]
+    untriangulated = list(measured["untriangulated"])
+    if faces and len(untriangulated) == len(faces):
+        raise ValueError(f"三角形分割が1面も取れなかった(deviation={deviation}, angular={angular_deflection})")
+    return {
+        "deviation": float(deviation),
+        "face_count": len(faces),
+        "bbox": _brep_geometry._bounding_box(faces),
+        "faces": faces,
+        "untriangulated": untriangulated,
+        "boundary": measured["boundary"],
+    }
+
+
 def tessellate_faces(shape: "TopoDS_Shape", groups: Dict[Tuple[float, float], Iterable[int]]) -> dict:
     """指定した面だけを、`(偏差, 角度偏差)` の組ごとに三角形分割する(面単位のキャッシュ `view.DocumentView` の口)。
 
@@ -766,6 +790,50 @@ def shapes_digest(shapes: Sequence[Any]) -> str:
     return hashlib.sha1(stream.getvalue()).hexdigest()
 
 
+#: 結果の形の面のうち、入力の形の面と同じ面(幾何が同じで、測った三角形をそのまま使える)の対。鍵は id(結果の形)、
+#: 値は (結果の形, 入力の形, ((結果の添字, 入力の添字), ...))。子プロセスで計算した結果は BinTools で戻って TShape が切れ、
+#: プレビューの結果は写しの上の形なので、面の同一性(`face_keys`)では元の形の三角形につながらない(`view._borrow_faces`)。
+_KEPT: "OrderedDict[int, tuple]" = OrderedDict()
+_KEPT_LIMIT = 16
+_KEPT_LOCK = threading.Lock()
+
+
+def note_kept_faces(result: Any, source: Any, pairs: Sequence[Tuple[int, int]]) -> None:
+    """`result` の面のうち `source` の面と同じもの `(結果の添字, 入力の添字)` を覚える。"""
+    if not pairs:
+        return
+    with _KEPT_LOCK:
+        _KEPT[id(result)] = (result, source, tuple((int(j), int(i)) for j, i in pairs))
+        _KEPT.move_to_end(id(result))
+        while len(_KEPT) > _KEPT_LIMIT:
+            _KEPT.popitem(last=False)
+
+
+def kept_faces(result: Any) -> Optional[Tuple[Any, tuple]]:
+    """`note_kept_faces` で覚えた `(入力の形, 対)`。無ければ None。"""
+    with _KEPT_LOCK:
+        held = _KEPT.get(id(result))
+    if held is None or held[0] is not result:
+        return None
+    return held[1], held[2]
+
+
+def identical_faces(result: Any, source: Any) -> List[Tuple[int, int]]:
+    """`result` の面のうち `source` の面と TShape・位置・向きが同じもの(同じプロセスの演算でそのまま残った面)の対。"""
+    index_of = {key: index for index, key in enumerate(face_keys(source), start=1)}
+    return [(position, index_of[key]) for position, key in enumerate(face_keys(result), start=1) if key in index_of]
+
+
+def kept_pairs(result: Any, source: Any) -> List[Tuple[int, int]]:
+    """`result` の面のうち `source` の面と同じ面の対(`identical_faces` と、子の結果について覚えた `note_kept_faces`)。"""
+    pairs = dict(identical_faces(result, source))
+    noted = kept_faces(result)
+    if noted is not None and noted[0] is source:
+        for position, index in noted[1]:
+            pairs.setdefault(position, index)
+    return sorted(pairs.items())
+
+
 def adopt_results(pairs: Sequence[Tuple[Any, Any]]) -> None:
     """`(元の形, 写し)` の組について、写しを入力として覚えた結果(`remembered`)を、元の形を入力とした結果として覚え直す。
 
@@ -786,6 +854,9 @@ def adopt_results(pairs: Sequence[Tuple[Any, Any]]) -> None:
                 continue
             del _RESULTS[key]
             _RESULTS[(key[0], tuple(id(shape) for shape in swapped), key[2])] = (swapped, result)
+    with _KEPT_LOCK:
+        for key, (result, source, kept) in list(_KEPT.items()):
+            _KEPT[key] = (result, swap(source), kept)
 
 
 def _value_key(values: dict) -> tuple:

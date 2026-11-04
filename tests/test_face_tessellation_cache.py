@@ -99,15 +99,18 @@ def test_the_first_measurement_matches_the_grouped_tessellation(boxed) -> None:
         assert [{key: value for key, value in face.items() if key != "serial"} for face in ours["faces"]] == expected
 
 
-def test_a_new_shape_starts_a_new_cache(boxed, counted) -> None:
-    """落ちたら、フィレット・undo で形が変わっても前の形の面の三角形を配る(添字が同じ別の面になる)。"""
+def test_a_new_shape_does_not_take_triangles_by_index(boxed, counted) -> None:
+    """落ちたら、フィレットで形が変わったとき、同じ添字の別の面に前の形の三角形を配るか、そのまま残った面まで測り直す
+    (フィレットは子プロセスで計算して形が往復するので、残った面は子が返す対で前の形の面につなぐ)。"""
     session, body = boxed
     session.geometry(body)
     counted.clear()
     session.modify_selection([{"body": body, "kind": "edge", "index": 1}], [])
     session.fillet(2.0)
     measured = session.geometry(body)
-    assert counted and len(counted[-1]) == measured["face_count"]
+    fresh = kernel.tessellate(session.document.get_body(body).shape, session.view.view_deviation, session.view.view_angular_deflection)
+    assert [face["positions"] for face in measured["faces"]] == [face["positions"] for face in fresh["faces"]]
+    assert counted and len(counted[-1]) < measured["face_count"], "残った面まで測り直した"
 
 
 def test_undo_reuses_the_faces_of_the_shape_it_returns_to(boxed, counted) -> None:
@@ -263,3 +266,23 @@ def test_bringing_a_deleted_body_back_measures_nothing(boxed, counted) -> None:
     session.state_meta()
     session.geometry(body)
     assert counted == []
+
+
+def test_the_preview_measures_only_the_faces_the_operation_changed(boxed, counted, monkeypatch) -> None:
+    """落ちたら、ゴーストを出すたびにボディを丸ごと測る(733 面のボディで 0.4〜0.6 秒、半径を打ち直すたびに)。"""
+    session, body = boxed
+    session.geometry(body)
+    whole: list = []
+    real = kernel.tessellate
+    monkeypatch.setattr(kernel, "tessellate", lambda *args, **kwargs: whole.append(1) or real(*args, **kwargs))
+    session.modify_selection([{"body": body, "kind": "edge", "index": 1}], [])
+    counted.clear()
+    job = session.preview_job("fillet", {"radius": 2.0})
+    preview = job.run()
+    geometry = preview["bodies"][0]["geometry"]
+    assert not whole, "ボディを丸ごと測った"
+    assert counted and len(counted[-1]) < geometry["face_count"]
+    job.adopt()
+    session.fillet(2.0)
+    fresh = real(session.document.get_body(body).shape, session.view.view_deviation, session.view.view_angular_deflection)
+    assert [face["positions"] for face in geometry["faces"]] == [face["positions"] for face in fresh["faces"]]

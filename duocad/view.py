@@ -120,7 +120,8 @@ class _FaceTessellations:
         return groups
 
     def remember(self, groups: dict, measured: dict) -> None:
-        """測った結果を覚える。`groups` の測り方1つが1回の測定(`kernel.tessellate_faces` は組ごとに測る)。"""
+        """測った結果を覚える。`groups` の測り方1つが1回の測定(`kernel.tessellate_faces` は組ごとに測る)。
+        `serial` を持って来た面(プレビューが元の形から借りた面)はそれを引き継ぐ(同じ三角形なので、画面は送り直しを要らない)。"""
         newly_failed = set(measured["untriangulated"])
         for recipe, indices in groups.items():
             self._batches += 1
@@ -129,7 +130,8 @@ class _FaceTessellations:
             batch = self.batch_of.setdefault(recipe, {})
             for index in indices:
                 if index in measured["faces"]:
-                    faces[index] = dict(measured["faces"][index], serial=next(_FACE_SERIALS))
+                    face = measured["faces"][index]
+                    faces[index] = dict(face, serial=face.get("serial") or next(_FACE_SERIALS))
                 if index in newly_failed:
                     failed.add(index)
                 else:
@@ -143,6 +145,11 @@ class _FaceTessellations:
             self._keys = kernel.face_keys(self.shape)
             self._index_of = {key: index for index, key in enumerate(self._keys, start=1)}
         return self._keys
+
+    def measured(self, recipe: tuple) -> dict:
+        """その測り方で測れた面(添字 -> 三角形)の写し。"""
+        failed = self.untriangulated.get(recipe, set())
+        return {index: face for index, face in self.by_recipe.get(recipe, {}).items() if index not in failed}
 
     def lend(self, key: Any, recipe: tuple) -> Optional[dict]:
         """同じ面(`key`)をその測り方で測った三角形。持っていない・取れなかった面は None。"""
@@ -620,6 +627,18 @@ class DocumentView:
             stores.popitem(last=False)
         return store
 
+    @property
+    def floored(self) -> bool:
+        """細かい側の偏差が下限に張り付いているか(別々に測った面の境目の隙間が画素より大きくなりうる)。"""
+        return self._view_floored
+
+    def measured_faces(self, body_id: str, shape: Any, recipe: tuple) -> dict:
+        """その形をその測り方で測って覚えている面(添字 -> 三角形)の写し。無ければ空(プレビューが別スレッドで借りる。`Session.preview_job`)。"""
+        held = self._face_cache.get(body_id, {}).get(id(shape))
+        if held is None or held[0] is not shape:
+            return {}
+        return held[1].measured((float(recipe[0]), float(recipe[1])))
+
     def seed_faces(self, body_id: str, shape: Any, deviation: float, angular: float, geometry: dict) -> None:
         """全面を同じ測り方で測った結果(`kernel.tessellate` の戻り値)を、その形の面の三角形として覚えさせる。
 
@@ -715,17 +734,26 @@ class DocumentView:
         別々に測った面の境目は、粗さの組を分けて測るときと同じ隙間(偏差の2倍程度)が開きうる。下限に張り付いたときの
         1回で測る規則は、借りた面に別の回を振ることで保つ(`_FaceTessellations.adopt`)。
         """
-        lenders = [held for stores in self._face_cache.values() for _shape, held in stores.values() if held is not store]
-        lenders += [held for _shape, held in self._retired_faces.values()]
+        stored = [held for stores in self._face_cache.values() for held in stores.values()] + list(self._retired_faces.values())
+        lenders = [held for _shape, held in stored if held is not store]
         if not lenders:
             return groups
+        # 子プロセスの結果・確定したプレビューの結果は、入力の形の何番の面と同じかを覚えている(`kernel.note_kept_faces`)
+        kept = kernel.kept_faces(store.shape)
+        origin = None
+        if kept is not None:
+            origin = next((held for shape, held in stored if shape is kept[0] and held is not store), None)
+        sources = dict(kept[1]) if origin is not None else {}
         keys = store.keys()
         left: dict = {}
         for recipe, indices in groups.items():
             rest = []
+            from_origin = origin.measured(recipe) if origin is not None else {}
             for index in indices:
                 key = keys[index - 1]
                 face = next((found for found in (lender.lend(key, recipe) for lender in lenders) if found is not None), None)
+                if face is None and index in sources:
+                    face = from_origin.get(sources[index])
                 if face is None:
                     rest.append(index)
                 else:

@@ -7,7 +7,8 @@ OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒�
 
 - 子は1本で、初回の呼び出しで立て、計算が終わっても残す(起動に約 1.6 秒。干渉チェックは1回ごとに立てる)。
 - 要求は {"op":"face_edit" または "blend_edges","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
-  {"shape":<base64>,"provenance":{...}}(フィレット・面取りは "volume_before"・"volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。
+  {"shape":<base64>,"provenance":{...},"kept":[[結果の面の添字, 入力の面の添字], ...]}(フィレット・面取りは "volume_before"・
+  "volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。"kept" は入力のまま残った面で、親は `kernel.note_kept_faces` に渡す。
   BinTools は往復で幾何が変わらず、面の添字の数え方も保つ(BRep の文字列は 1e-14 ずれる)。base64 の往復は
   PC ケースの最大のボディ(233 面、BinTools で 229 KB)で 1 ms 未満。
 - 実行は同時に1件。期限切れ・異常終了・取り消しは子を止めて `ValueError`(呼び出し側は結果を採らず、文書もログも変えない)、
@@ -131,7 +132,11 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
             _CONDITION.notify_all()
     if "refused" in result:
         raise ValueError(result["refused"])
-    return {**result, "shape": _decode(result["shape"])}
+    from . import kernel
+
+    decoded = _decode(result["shape"])
+    kernel.note_kept_faces(decoded, shape, result.pop("kept", ()))
+    return {**result, "shape": decoded}
 
 
 def stop() -> None:
@@ -167,9 +172,10 @@ def _handle(message: Dict[str, Any]) -> Dict[str, Any]:
     op = message.get("op")
     if op not in ("face_edit", "blend_edges"):
         raise ValueError(f"unknown op {op!r}")
+    source = _decode(message["shape"])
     try:
         if op == "face_edit":
-            result = kernel_face_edit.compute(message["verb"], _decode(message["shape"]), message["arguments"])
+            result = kernel_face_edit.compute(message["verb"], source, message["arguments"])
         else:
             verb = message["verb"]
             if verb not in ("fillet", "chamfer"):
@@ -177,9 +183,11 @@ def _handle(message: Dict[str, Any]) -> Dict[str, Any]:
             values = {int(index): float(value) for index, value in message["arguments"]["values"]}
             # kernel の公開関数は同一プロセスの純粋な計算口。子を起こす verb 層の入口は呼ばない。
             compute = kernel.fillet_edges if verb == "fillet" else kernel.chamfer_edges
-            result = compute(_decode(message["shape"]), values)
+            result = compute(source, values)
     except ValueError as error:
         return {"refused": str(error)}
+    # 入力のまま残った面の対(親では BinTools の往復で TShape が切れるので、ここでしか分からない)
+    result["kept"] = [list(pair) for pair in kernel.identical_faces(result["shape"], source)]
     result["shape"] = _encode(result["shape"])
     return result
 

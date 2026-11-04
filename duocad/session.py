@@ -679,6 +679,12 @@ class Session:
         deviation = self.view.view_deviation
         angular = self.view.view_angular_deflection
         function = entry_for(verb)
+        # 写しの面は元の形と同じ添字(`fork`)なので、結果に残った面は元の形で測った三角形を借りられる。いまここで写しを取る
+        # (計算はワーカーで走り、その間もループが元の形を測る)。下限に張り付いたズームでは借りない(1回で測る規則。`view`)
+        inputs = dict(zip((body.id for body in self.document.bodies if body.shape is not None), pairs))
+        lent = {} if self.view.floored else {
+            body_id: self.view.measured_faces(body_id, original, (deviation, angular)) for body_id, (original, _copy) in inputs.items()
+        }
 
         measured: list = []  # (ボディ, 形, 三角形) — 確定後の配信で使い回す(`adopt`)
 
@@ -690,7 +696,14 @@ class Session:
                     continue
                 if copies.get(id(body.shape)) is body.shape:
                     continue  # 形が変わっていないBodyは送らない(`preview` と同じ)
-                geometry = kernel.tessellate(body.shape, deviation, angular)
+                reuse: dict = {}
+                held = inputs.get(body.id)
+                if held is not None:
+                    kept = kernel.kept_pairs(body.shape, held[1])
+                    kernel.note_kept_faces(body.shape, held[1], kept)  # 確定で元の形へ付け替わる(`kernel.adopt_results`)
+                    borrowed = lent.get(body.id) or {}
+                    reuse = {position: borrowed[index] for position, index in kept if index in borrowed}
+                geometry = kernel.tessellate_reusing(body.shape, deviation, angular, reuse)
                 measured.append((body.id, body.shape, geometry))
                 bodies_out.append({
                     "body_id": body.id,
