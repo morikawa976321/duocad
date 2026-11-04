@@ -310,7 +310,9 @@ class Server:
         #: 測っている間、そのボディの三角形は配らない(画面は前の三角形を出し続ける)。
         self._refine_worker: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._refinement: Optional[asyncio.Task] = None
-        self._refining: dict = {}  # body_id -> 測っている形
+        #: 測り直しの後始末(測った面を覚えて配る)のタスク全部。`settled` はこれが空になるまで待つ
+        self._refinement_tasks: set = set()
+        self._refining: dict = {}  # body_id -> 測っている(測る予定の)形
         self._refine_again = False
         self._acks: dict = {}  # connection -> _Acks
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
@@ -1450,7 +1452,7 @@ class Server:
         if self._refinement is not None and not self._refinement.done():
             self._refine_again = True
             for body_id, shape, _groups, _closed in self.session.refinement_jobs():
-                self._refining.setdefault(body_id, shape)
+                self._refining[body_id] = shape  # 今の形(測っている最中に操作で形が替わっていれば、替わった方を待たせる)
             return
         jobs = self.session.refinement_jobs()
         if not jobs:
@@ -1462,6 +1464,8 @@ class Server:
         loop = asyncio.get_running_loop()
         computation = loop.run_in_executor(self._refine_worker, _measure_copies, copies)
         self._refinement = loop.create_task(self._finish_refinement(computation))
+        self._refinement_tasks.add(self._refinement)
+        self._refinement.add_done_callback(self._refinement_tasks.discard)
 
     async def _finish_refinement(self, computation: "asyncio.Future") -> None:
         try:
@@ -1485,8 +1489,8 @@ class Server:
 
     async def settled(self) -> None:
         """背景の測り直しと、それが終わって配る分が済むまで待つ(テストの接続が、配り終えた状態を見るため)。"""
-        while self._refinement is not None and not self._refinement.done():
-            await asyncio.shield(self._refinement)
+        while self._refinement_tasks:
+            await asyncio.gather(*list(self._refinement_tasks), return_exceptions=True)
 
     def _deferrable(self, meta: dict, delivered: "wire.Delivered") -> frozenset:
         """この接続へ今回は三角形を送らずにおくボディ(背景で測っている最中で、画面が今の形を持っているもの)。"""
