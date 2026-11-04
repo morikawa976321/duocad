@@ -116,6 +116,9 @@ def build_boolean(kind: str, first: TopoDS_Shape, second: TopoDS_Shape, fuzzy: f
     builder.SetTools(tools)
     if fuzzy:
         builder.SetFuzzyValue(fuzzy)
+    # 実測: 並列でも結果の BinTools のバイト列と面・辺の履歴は直列と同じ(全件のテストの 1,391 回、合成の板と道具の 960 組、
+    # OCCT のスレッド数 2・4・16)。保存済みの操作ログは面・辺の添字で対象を指すので、同じでなくなれば直列へ戻す。
+    builder.SetRunParallel(True)
     builder.Build()
     return builder
 
