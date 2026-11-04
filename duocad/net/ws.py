@@ -96,6 +96,7 @@ from ..agent.providers import (
 from ..session import Session
 from ..topopt import fem, gpu_cg
 from . import wire
+from .refinement import BackgroundRefinement
 from .interference_runs import InterferenceRuns
 from .tools_on_loop import ToolsOnLoop
 
@@ -298,6 +299,8 @@ class Server:
         # 置き換えられても実行中の計算を残し、切断時にはその接続の全件を止める。
         self._preview_jobs: dict = {}  # connection -> {concurrent.futures.Future: PreviewJob}
         self._interference = InterferenceRuns(_send, lambda connection: connection in self.clients)
+        #: カメラの要求で足りなくなった面を、ループの外で測る(`net/refinement.py`)
+        self._refinement = BackgroundRefinement(session, lambda: self._push(None, applied=None), self._broadcast)
         self._acks: dict = {}  # connection -> _Acks
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
         self._pending_ai_runs: set = set()
@@ -516,6 +519,7 @@ class Server:
                 applied = self._apply(
                     self.session.begin_command, verb, _args_object(message, required=False), message.get("client_op")
                 )
+                self._abandon_previews(connection)
                 await self._push(connection, applied=applied)
             elif command == "set_command_args":
                 applied = self._apply(
@@ -524,6 +528,7 @@ class Server:
                 await self._push(connection, applied=applied)
             elif command == "end_command":
                 applied = self._apply(self.session.end_command, message.get("client_op"))
+                self._abandon_previews(connection)
                 await self._push(connection, applied=applied)
             elif command == "apply_command":
                 # 応答は構えていた verb の封筒(`client_op` を載せて全接続へ)。
@@ -590,6 +595,7 @@ class Server:
                     message.get("focus"),
                 )
                 if changed:
+                    self._refinement.schedule()
                     await self._push(connection, applied=None)
             # -------------------------------------------------- E: ファイル操作(SVG読み込みは無い: `import_svg` はスケッチのverbなのでC節)
             # 応答は `FILE_COMMANDS` の3つ目の値で違う: 文書を変えるものは状態を全接続へ、書き出すだけのものは要求した接続へ結果だけ返す。
@@ -780,6 +786,14 @@ class Server:
             if computation.cancel():
                 job.cancel()
         return seq
+
+    def _abandon_previews(self, connection: Any) -> None:
+        """コマンドを抜けた・替えた: この接続のプレビューを古くし、走っている計算も止める。ワーカーは1本なので、子プロセスの長い
+        計算(大きな部品のシェルで数分)が走ったままだと、次のコマンドのゴーストが全部その後ろで待つ。同じプロセスの計算は止まらず、
+        終わっても結果を送らない。"""
+        self._supersede_previews(connection)
+        for job in list(self._preview_jobs.get(connection, {}).values()):
+            job.cancel()
 
     def _start_preview(self, connection: Any, message: dict, job: Any, seq: int) -> None:
         """プレビューをワーカースレッドで計算させ、この要求の処理はすぐ抜ける(計算中もこの接続の次の要求を捌く。issue #168)。
@@ -1424,6 +1438,10 @@ class Server:
             except Exception:
                 self.clients.discard(target)
 
+    async def settled(self) -> None:
+        """背景の測り直しと、それが終わって配る分が済むまで待つ(テストの接続が、配り終えた状態を見るため)。"""
+        await self._refinement.settled()
+
     async def _push(self, origin: Any, applied: Optional[dict], only: Any = None) -> None:
         """状態を配信する。`only` を指定するとその接続にだけ送る。
 
@@ -1443,7 +1461,8 @@ class Server:
             async with lock:
                 meta = self.session.state_meta()
                 delivered = self._delivered.get(target) or wire.Delivered()
-                delta = self.session.delta(delivered.revisions)
+                deferred = self._refinement.deferrable(meta, delivered) if self._refinement.active else frozenset()
+                delta = self.session.delta(delivered.revisions, deferred)
                 payload = {"type": "state", **delivered.compose(meta, delta["bodies"])}
                 if applied is not None and target is origin:
                     payload["applied"] = applied
@@ -1451,7 +1470,7 @@ class Server:
                     await _send(target, payload)
                     # **送信が成功してから**記録する(送信前に記録すると、失敗時や
                     # 割り込み時に「送っていない版・面を知っている」ことになってしまう)。
-                    delivered.record(meta, delta["bodies"])
+                    delivered.record(meta, delta["bodies"], deferred)
                     self._delivered[target] = delivered
                 except Exception:  # 落ちた接続のために他へ配れないことを避ける
                     self.clients.discard(target)

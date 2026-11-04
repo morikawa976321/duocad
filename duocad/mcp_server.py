@@ -62,6 +62,7 @@ from websockets.asyncio.server import serve
 from . import (
     catalog,
     kernel,
+    kernel_worker,
     meshbody,
     predicates,
     query,
@@ -1058,6 +1059,7 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
             if args.open:
                 webbrowser.open(page_url)
         _log(f"  bodies={len(session.document.bodies)}")
+        kernel_worker.warm_up_in_background()
         if args.no_stdio:
             await stop.wait()
             _log("duocad MCP server: stopping for update, bye")

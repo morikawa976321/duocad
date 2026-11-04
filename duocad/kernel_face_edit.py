@@ -202,7 +202,7 @@ def _delete(shape: Any, faces: List[Any]):
                 raise FaceEditError(f"face {i} was selected but is not removed", _HINT_DELETE)
             removed.append(i)
             continue
-        modified = [TopoDS.Face_s(x) for x in history.Modified(current)]
+        modified = [TopoDS.Face_s(x) for x in _brep_topology.listed(history.Modified(current))]
         images[i] = modified or ([] if history.IsRemoved(current) else [current])
         replaced = not current.IsSame(old)
         if replaced:
@@ -241,7 +241,7 @@ def _with_extendable_neighbours(shape: Any, faces: List[Any]):
     targets: List[Any] = []
     for face in faces:
         for edge in _brep_topology._face_edit_edges(face):
-            for neighbour in edge_faces.FindFromKey(edge):
+            for neighbour in _brep_topology.listed(edge_faces.FindFromKey(edge)):
                 neighbour = TopoDS.Face_s(neighbour)
                 if BRepAdaptor_Surface(neighbour).GetType() in _UNEXTENDABLE and not any(
                     neighbour.IsSame(other) for other in (*faces, *targets)
@@ -477,7 +477,7 @@ def _offset(shape: Any, faces: List[Any], distance: float):
     raw, algo = _make_offset(shape, faces, distance)
     result, unwrapped = _without_zero_offsets(_wrap_checked(raw))
     _structural_gate(result, hint=_HINT_TOO_FAR)
-    table = _offset_correspondence(shape, faces, distance, result, lambda old: [unwrapped.Value(x) for x in algo.Generated(old)])
+    table = _offset_correspondence(shape, faces, distance, result, lambda old: [unwrapped.Value(x) for x in _brep_topology.listed(algo.Generated(old))])
     return result, table, []
 
 
@@ -797,6 +797,7 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
     # 壁の継ぎ目が z=28 で2本に分かれ、丸め直しの半径 2.00001 で壁の輪郭が UV で閉じなかった。2.0・1.99999 は有効。実測)。辺をつなぐ
     unifier = ShapeUpgrade_UnifySameDomain(sharp, True, False, True)
     unifier.Build()
+    _brep_geometry.forget_volume(sharp)
     unified, unify_history = unifier.Shape(), unifier.History()
     _structural_gate(unified, hint=_HINT_TANGENT)
 
@@ -805,7 +806,7 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
         if len(positions) != 1:
             raise FaceEditError("a face split while removing the blends", _HINT_TANGENT)
         removed = TopoDS.Face_s(removed_map.FindKey(positions[0]))
-        images = [TopoDS.Face_s(x) for x in unify_history.Modified(removed)] or [removed]
+        images = [TopoDS.Face_s(x) for x in _brep_topology.listed(unify_history.Modified(removed))] or [removed]
         if len(images) != 1:
             raise FaceEditError("a face split while joining edges", _HINT_TANGENT)
         return _as_in(unified, images[0])
@@ -817,7 +818,7 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
     moved, unwrapped = _without_zero_offsets(_wrap_checked(raw))
     _structural_gate(moved, hint=_HINT_TOO_FAR)
     sharp_table = _offset_correspondence(
-        sharp, moved_faces, distance, moved, lambda old: [unwrapped.Value(x) for x in offset.Generated(old)]
+        sharp, moved_faces, distance, moved, lambda old: [unwrapped.Value(x) for x in _brep_topology.listed(offset.Generated(old))]
     )
     sharp_map, moved_map = _brep_topology._face_map(sharp), _brep_topology._face_map(moved)
 
@@ -857,7 +858,7 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
             table[i] = []
             continue
         in_moved = to_moved(old)
-        positions = _brep_history.positions_in(final_map, [TopoDS.Face_s(x) for x in maker.Modified(in_moved)] or [in_moved])
+        positions = _brep_history.positions_in(final_map, [TopoDS.Face_s(x) for x in _brep_topology.listed(maker.Modified(in_moved))] or [in_moved])
         if len(positions) != 1:
             raise FaceEditError(f"face {i} does not map to exactly one final face", _HINT_TOO_FAR)
         selected = any(old.IsSame(face) for face in faces)
@@ -882,11 +883,11 @@ def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> L
     final_edge_faces = _brep_topology._face_edit_edge_faces(final)
     regenerated: List[int] = []
     for edge, radius, first, second in rebuilt:
-        made = sorted({final_map.FindIndex(x) for x in maker.Generated(edge)} - {0})
+        made = sorted({final_map.FindIndex(x) for x in _brep_topology.listed(maker.Generated(edge))} - {0})
         if not made:
             raise FaceEditError("re-blending produced no face for an edge", _HINT_TOO_FAR)
-        support_a = list(maker.Modified(first)) or [first]
-        support_b = list(maker.Modified(second)) or [second]
+        support_a = _brep_topology.listed(maker.Modified(first)) or [first]
+        support_b = _brep_topology.listed(maker.Modified(second)) or [second]
         for position in made:
             face = TopoDS.Face_s(final_map.FindKey(position))
             made_radius = _blend_radius(face)
@@ -906,7 +907,7 @@ def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> L
                 raise FaceEditError("a re-blended face does not rest on both supports", _HINT_TOO_FAR)
         regenerated += made
         for vertex in _brep_topology.subshapes(edge, TopAbs_ShapeEnum.TopAbs_VERTEX):
-            for position in sorted({final_map.FindIndex(x) for x in maker.Generated(vertex)} - {0}):
+            for position in sorted({final_map.FindIndex(x) for x in _brep_topology.listed(maker.Generated(vertex))} - {0}):
                 definition = _describe(TopoDS.Face_s(final_map.FindKey(position)))
                 if definition is None or definition[0] != "sphere" or abs(definition[2] - radius) > LINEAR_TOL:
                     raise FaceEditError("a corner made by re-blending is not a sphere of the blend radius", _HINT_TOO_FAR)
@@ -1153,7 +1154,7 @@ def _other_face(edge_faces: Any, edge: Any, face: Any) -> Optional[Any]:
     index = edge_faces.FindIndex(edge)
     if index == 0:
         return None
-    others = [TopoDS.Face_s(f) for f in edge_faces.FindFromIndex(index) if not f.IsSame(face)]
+    others = [TopoDS.Face_s(f) for f in _brep_topology.listed(edge_faces.FindFromIndex(index)) if not f.IsSame(face)]
     return others[0] if len(others) == 1 else None
 
 

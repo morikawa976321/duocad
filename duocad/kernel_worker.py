@@ -6,8 +6,10 @@ OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒�
 `worker_process` の共通の部品で、ここは要求の形と子での計算だけを持つ。
 
 - 子は1本で、初回の呼び出しで立て、計算が終わっても残す(起動に約 1.6 秒。干渉チェックは1回ごとに立てる)。
-- 要求は {"op":"face_edit" または "blend_edges","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
-  {"shape":<base64>,"provenance":{...}}(フィレット・面取りは "volume_before"・"volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。
+- 要求は {"op":"face_edit"・"blend_edges"・"shell","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
+  {"shape":<base64>,"provenance":{...},"kept":[[結果の面の添字, 入力の面の添字], ...]}(フィレット・面取りは "volume_before"・
+  "volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。"kept" は入力のまま残った面で、親は `kernel.note_kept_faces` に渡す。
+  要求の "volume" は親が知っている入力の体積(あれば。子は積分し直さない)。
   BinTools は往復で幾何が変わらず、面の添字の数え方も保つ(BRep の文字列は 1e-14 ずれる)。base64 の往復は
   PC ケースの最大のボディ(233 面、BinTools で 229 KB)で 1 ms 未満。
 - 実行は同時に1件。期限切れ・異常終了・取り消しは子を止めて `ValueError`(呼び出し側は結果を採らず、文書もログも変えない)、
@@ -28,7 +30,7 @@ from typing import Any, Dict, Optional
 from OCP.BinTools import BinTools, BinTools_FormatVersion
 from OCP.TopoDS import TopoDS_Shape
 
-from . import worker_process
+from . import brep_geometry, worker_process
 
 #: 新しい入力(画面・MCP の確定・プレビュー・寸法変更)の期限[秒](要求待ち・子の起動・受け渡しを含む)。本人の決定(2026-10-23、docs/FACE_EDIT.md カード e)。
 #: 実測: 合成形状の正当な計算の最長は 18 秒(穴100個を一度に消す)、角ばった実物の1件は最長約 2.3 秒。
@@ -42,6 +44,7 @@ _WAITING_FOREGROUND = 0
 _PREVIEW: ContextVar[Optional[threading.Event]] = ContextVar("kernel_preview", default=None)
 _NEW_INPUT: ContextVar[bool] = ContextVar("kernel_new_input", default=False)
 _WORKER: Optional[worker_process.WorkerProcess] = None
+_CHILD_COMMAND = [sys.executable, "-c", "from duocad import kernel_worker; kernel_worker.child_main()"]
 
 
 @contextmanager
@@ -106,9 +109,12 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
             _CONDITION.notify_all()
     try:
         message = {"op": op, "verb": verb, "arguments": arguments, "shape": _encode(shape)}
+        known = brep_geometry.known_volume(shape)
+        if known is not None:
+            message["volume"] = known  # 子が入力の体積を積分し直さない(733 面で 0.15 秒)
         check()
         if _WORKER is None:
-            _WORKER = worker_process.WorkerProcess([sys.executable, "-c", "from duocad import kernel_worker; kernel_worker.child_main()"])
+            _WORKER = worker_process.WorkerProcess(_CHILD_COMMAND)
         try:
             remaining = None if timeout is None else max(0.0, deadline - time.monotonic())
             result = _WORKER.request(message, remaining, cancel=cancel)
@@ -131,7 +137,37 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
             _CONDITION.notify_all()
     if "refused" in result:
         raise ValueError(result["refused"])
-    return {**result, "shape": _decode(result["shape"])}
+    from . import kernel
+
+    decoded = _decode(result["shape"])
+    kernel.note_kept_faces(decoded, shape, result.pop("kept", ()))
+    if "volume_after" in result:
+        brep_geometry.note_volume(decoded, result["volume_after"])
+    return {**result, "shape": decoded}
+
+
+def warm_up_in_background() -> None:
+    """子を裏で先に立てておく(起動に約 1.6 秒かかり、最初のフィレット・面取り・面の編集の応答がその分遅れていた)。
+    子は一度立てたら残すので、立てる時刻が早まるだけ。立てている間の要求は待ち、失敗したら次の `run` が立て直す。"""
+    threading.Thread(target=_warm_up, name="kernel-worker-warm-up", daemon=True).start()
+
+
+def _warm_up() -> None:
+    global _WORKER, _ACTIVE, _ACTIVE_PREVIEW
+    with _CONDITION:
+        if _WORKER is not None or _ACTIVE is not None:
+            return
+        _ACTIVE, _ACTIVE_PREVIEW = threading.Event(), False
+    worker = worker_process.WorkerProcess(_CHILD_COMMAND)
+    try:
+        worker.request({"op": "ping"}, 60.0)
+        _WORKER = worker
+    except Exception:  # noqa: BLE001  立てられなくても、次の `run` が立て直す
+        worker.close()
+    finally:
+        with _CONDITION:
+            _ACTIVE, _ACTIVE_PREVIEW = None, False
+            _CONDITION.notify_all()
 
 
 def stop() -> None:
@@ -162,14 +198,21 @@ def _decode(text: str) -> Any:
 # 子
 # --------------------------------------------------------------------------------------
 def _handle(message: Dict[str, Any]) -> Dict[str, Any]:
-    from . import kernel, kernel_face_edit
+    from . import kernel, kernel_face_edit, kernel_shell
 
     op = message.get("op")
-    if op not in ("face_edit", "blend_edges"):
+    if op == "ping":
+        return {}
+    if op not in ("face_edit", "blend_edges", "shell"):
         raise ValueError(f"unknown op {op!r}")
+    source = _decode(message["shape"])
+    if "volume" in message:
+        brep_geometry.note_volume(source, message["volume"])
     try:
         if op == "face_edit":
-            result = kernel_face_edit.compute(message["verb"], _decode(message["shape"]), message["arguments"])
+            result = kernel_face_edit.compute(message["verb"], source, message["arguments"])
+        elif op == "shell":
+            result = kernel_shell.shell_solid(source, message["arguments"]["faces"], message["arguments"]["thickness"])
         else:
             verb = message["verb"]
             if verb not in ("fillet", "chamfer"):
@@ -177,9 +220,11 @@ def _handle(message: Dict[str, Any]) -> Dict[str, Any]:
             values = {int(index): float(value) for index, value in message["arguments"]["values"]}
             # kernel の公開関数は同一プロセスの純粋な計算口。子を起こす verb 層の入口は呼ばない。
             compute = kernel.fillet_edges if verb == "fillet" else kernel.chamfer_edges
-            result = compute(_decode(message["shape"]), values)
+            result = compute(source, values)
     except ValueError as error:
         return {"refused": str(error)}
+    # 入力のまま残った面の対(親では BinTools の往復で TShape が切れるので、ここでしか分からない)
+    result["kept"] = [list(pair) for pair in kernel.identical_faces(result["shape"], source)]
     result["shape"] = _encode(result["shape"])
     return result
 

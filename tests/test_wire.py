@@ -66,10 +66,11 @@ def test_a_frame_round_trips_with_the_rounding_the_browser_used() -> None:
 def test_only_the_faces_measured_again_travel() -> None:
     """落ちたら、カメラで測り方の変わった面が一部でも、ボディの全面の三角形を送り直す(PC ケースで 1 回 4.5 MB)。"""
     client = _camera_then_selection(session_with_box())
-    after_swap = _state_frames(client)[2]
+    # 三角形が流れた配信だけを見る(カメラの要求の直後は測り直しの最中で、そのボディを送らない。測り終えてから配る)
+    after_swap = [frame for frame in _state_frames(client) if frame["delta"]["bodies"]][-1]
     faces = after_swap["delta"]["bodies"][0]["geometry"]["faces"]
     assert sorted(face["index"] for face in faces if "positions" in face) == [2, 3]
-    restored = [payload for payload in client.payloads if payload["type"] == "state"][1]
+    restored = [payload for payload in client.payloads if payload["type"] == "state" and payload["delta"]["bodies"]][1]
     assert all("positions" in face for face in restored["delta"]["bodies"][0]["geometry"]["faces"])
 
 
@@ -86,6 +87,43 @@ def test_an_unchanged_log_and_sketch_are_left_out() -> None:
     assert restored["sketches"][0]["regions"], "省かれたスケッチを埋め戻していない"
 
 
+def _boss_on_top(send, session):
+    """箱の上面の中ほどに小さな柱を足す(側面4つと底面はそのまま残り、添字が変わる)。"""
+    top = max((face for face in session.geometry("box")["faces"] if face["kind"] == "plane"), key=lambda face: face["centroid"][2])
+
+    async def steps():
+        await send({"cmd": "clear_selection"})
+        await send({"cmd": "modify_selection", "add": [{"body": "box", "kind": "face", "index": top["index"]}], "remove": []})
+        await send({"cmd": "sketch_create"})
+        sketch_id = session.document.sketches[-1].id
+        await send({"cmd": "add_rectangle", "sketch_id": sketch_id, "corner": [13.0, 13.0], "width": 4.0, "height": 4.0})
+        await send({"cmd": "leave_sketch"})
+        await send({"cmd": "clear_selection"})
+        await send({"cmd": "modify_selection", "add": [{"sketch": sketch_id, "index": 1}], "remove": []})
+        await send({"cmd": "extrude", "distance": 5.0, "mode": "join", "body_id": "box"})
+
+    return steps()
+
+
+def test_faces_that_survive_an_operation_do_not_travel_again() -> None:
+    """落ちたら、ボディに柱を1本足すたびに、そのまま残った面の三角形まで全部送り直す(添字が変わるので同じ添字では省けない)。"""
+    session = session_with_box()
+
+    async def script(send):
+        await _boss_on_top(send, session)
+
+    client = browser(session, script, connections=1)[1][0]
+    frames = _state_frames(client)
+    last = next(frame for frame in reversed(frames) if frame["delta"]["bodies"])
+    faces = last["delta"]["bodies"][0]["geometry"]["faces"]
+    omitted = [face for face in faces if "positions" not in face]
+    assert len(omitted) == 5, "側面4つと底面は送り直さない"
+    restored = next(p for p in reversed(client.payloads) if p["type"] == "state" and p["delta"]["bodies"])
+    ours = restored["delta"]["bodies"][0]["geometry"]["faces"]
+    theirs = session.geometry("box")["faces"]
+    assert [(face["index"], face["serial"]) for face in ours] == [(face["index"], face["serial"]) for face in theirs]
+
+
 def test_the_browser_decoder_restores_what_the_server_meant() -> None:
     """落ちたら、画面の読み方(`web/src/wire.ts`)がサーバの省き方・フレームの形と食い違い、面が欠けるか別の面の三角形を描く。"""
     session = _with_sketch()
@@ -97,6 +135,8 @@ def test_the_browser_decoder_restores_what_the_server_meant() -> None:
         await send({"cmd": "modify_selection", "add": [{"body": "box", "kind": "face", "index": 1}], "remove": []})
         await send({"cmd": "add_rectangle", "sketch_id": sketch_id, "corner": [60.0, 0.0], "width": 5.0, "height": 5.0})
         await send({"cmd": "undo"})
+        await send({"cmd": "leave_sketch"})
+        await _boss_on_top(send, session)
 
     client = browser(session, script, connections=1)[1][0]
     frames = [

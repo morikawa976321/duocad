@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import math
+import threading
+from collections import OrderedDict
 from typing import Any, List, Optional, Sequence, Tuple
 
 from OCP.BRep import BRep_Tool
@@ -76,10 +78,66 @@ def volume(shape: "TopoDS_Shape") -> float:
     """
     if shape is None or is_null(shape):
         raise ValueError("cannot compute the volume of an empty shape")
+    with _VOLUME_PROPS_LOCK:
+        noted = _NOTED_VOLUMES.get(id(shape))
+    if noted is not None and noted[0] is shape:
+        return noted[1]
     return _volume_props(shape).Mass()
 
 
+#: 体積の積分(`_volume_props`)の結果を、形の Python のオブジェクトの同一性(`is`)で覚える。同じ形の体積は、verb の前後の検査・
+#: 配りもの(`view` の `volume`)・プレビューで何度も求められる(733 面のボディで1回 0.1〜0.15 秒)。ボディに入った形は差し替えであって
+#: 書き換えではない(`kernel.remembered` と同じ前提)。入力をその場で壊す統合は、壊した形を `forget_volume` で忘れさせる。
+_VOLUME_PROPS: "OrderedDict[int, tuple]" = OrderedDict()
+_VOLUME_PROPS_LIMIT = 64
+_VOLUME_PROPS_LOCK = threading.Lock()
+#: 別のプロセスで同じ形について求めた体積(`note_volume`)。id(形) -> (形, 体積)
+_NOTED_VOLUMES: "OrderedDict[int, tuple]" = OrderedDict()
+
+
+def note_volume(shape: "TopoDS_Shape", value: float) -> None:
+    """子プロセスが同じ形について求めた体積を覚えさせる(BinTools の往復は幾何を変えないので、積分し直しても同じ値)。"""
+    with _VOLUME_PROPS_LOCK:
+        _NOTED_VOLUMES[id(shape)] = (shape, float(value))
+        while len(_NOTED_VOLUMES) > _VOLUME_PROPS_LIMIT:
+            _NOTED_VOLUMES.popitem(last=False)
+
+
+def known_volume(shape: "TopoDS_Shape") -> Optional[float]:
+    """`shape` について覚えている体積(積分し直さない。覚えていなければ None)。"""
+    with _VOLUME_PROPS_LOCK:
+        for memo, pick in ((_NOTED_VOLUMES, lambda held: held[1]), (_VOLUME_PROPS, lambda held: held[1].Mass())):
+            held = memo.get(id(shape))
+            if held is not None and held[0] is shape:
+                return float(pick(held))
+    return None
+
+
+def forget_volume(shape: "TopoDS_Shape") -> None:
+    """`shape` について覚えた体積を捨てる(その場で書き換えた形に使う)。"""
+    with _VOLUME_PROPS_LOCK:
+        for memo in (_VOLUME_PROPS, _NOTED_VOLUMES):
+            held = memo.get(id(shape))
+            if held is not None and held[0] is shape:
+                del memo[id(shape)]
+
+
 def _volume_props(shape: "TopoDS_Shape") -> "GProp_GProps":
+    """`_integrated_volume_props` を形の同一性で覚えた口。戻り値は読むだけにする(覚えた物を共有する)。"""
+    with _VOLUME_PROPS_LOCK:
+        held = _VOLUME_PROPS.get(id(shape))
+        if held is not None and held[0] is shape:
+            _VOLUME_PROPS.move_to_end(id(shape))
+            return held[1]
+    props = _integrated_volume_props(shape)
+    with _VOLUME_PROPS_LOCK:
+        _VOLUME_PROPS[id(shape)] = (shape, props)
+        while len(_VOLUME_PROPS) > _VOLUME_PROPS_LIMIT:
+            _VOLUME_PROPS.popitem(last=False)
+    return props
+
+
+def _integrated_volume_props(shape: "TopoDS_Shape") -> "GProp_GProps":
     """体積の積分(質量 = 体積、重心)。適応積分の要る面が無ければ形全体を既定の積分で1回、あれば**閉じた殻ごとに**
     その殻の境界箱の中心を基準点として面ごとに積分を選び、寄与を足す(`BRepGProp.VolumeProperties_s` の内側と同じ組み立て。
     体積の積分は閉じた殻ごとに成り立つ)。
@@ -334,11 +392,12 @@ def _bounding_box(faces: List[dict]) -> dict:
     highs = [float("-inf")] * 3
     for face in faces:
         positions = face["positions"]
-        for offset in range(0, len(positions), 3):
-            for axis in range(3):
-                value = positions[offset + axis]
-                lows[axis] = min(lows[axis], value)
-                highs[axis] = max(highs[axis], value)
+        if len(positions) < 3:
+            continue
+        for axis in range(3):
+            column = positions[axis::3]
+            lows[axis] = min(lows[axis], min(column))
+            highs[axis] = max(highs[axis], max(column))
     if any(low == float("inf") for low in lows):
         lows, highs = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
     return meshbody.bbox_payload(lows, highs)

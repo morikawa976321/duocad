@@ -43,8 +43,7 @@ def import_step(doc: Document, path: PathLike) -> list[BodyId]:
 
     単一ソリッドでも1要素のリストを返す(戻り値の型を部品数に依存させない)。
     """
-    source_name, text = read_step_source(path)
-    shape = kernel.read_step_text(text)  # 壊れていればここで例外、doc/logは無傷
+    source_name, text, shape = read_step_source(path)  # 壊れていればここで例外、doc/logは無傷
     solids = _brep_topology.split_solids(shape)
     body_ids = [new_body_id() for _ in solids]
     names = solid_names(source_name, len(solids))

@@ -175,6 +175,18 @@ def test_face_edits_and_blends_share_one_worker():
     assert kernel_worker._WORKER is worker and worker.starts == starts
 
 
+def test_a_request_during_the_warm_up_waits_for_the_same_child(monkeypatch):
+    """落ちたら、サーバの起動直後に来た最初のフィレットが、裏で立てている子と別にもう1つ子を立てる(または先立てが無く 1.6 秒待つ)。"""
+    kernel_worker.stop()
+    monkeypatch.setattr(kernel_worker, "_WORKER", None)
+    kernel_worker.warm_up_in_background()
+    shape = BRepPrimAPI_MakeBox(20, 20, 20).Shape()
+    result = kernel_worker.run("fillet", shape, {"values": [(1, 2.0)]}, op="blend_edges", timeout=20)
+    assert result["shape"] is not None
+    assert kernel_worker._WORKER is not None and kernel_worker._WORKER.starts == 1
+    kernel_worker.stop()
+
+
 def test_worker_imports_the_worktree_code():
     from duocad.paths import REPO_ROOT
 
@@ -259,3 +271,19 @@ def test_dimension_changes_have_deadlines_but_recorded_changes_replay_without_th
     assert restored.parameters == doc.parameters
     assert query.volume(restored.bodies[0].shape) == pytest.approx(query.volume(doc.bodies[0].shape))
     assert kernel_worker.time_limit(False) is None
+
+
+def test_a_shell_is_computed_in_the_worker(monkeypatch):
+    """落ちたら、シェルを同じプロセスで計算し、OCCT が GIL を握る間(大きな部品で数分)サーバ全体が止まる・落ちる。"""
+    from duocad import kernel_shell
+    from duocad.server import Session
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("シェルを同じプロセスで計算した")
+
+    monkeypatch.setattr(kernel_shell, "_shell_solid", refuse)
+    session = Session(0.2)
+    session.document.add_body(Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(20, 20, 20).Shape()))
+    select(session, [{"body": "box", "kind": "face", "index": 1}])
+    session.apply("shell_body", {"thickness": 2.0})
+    assert query.volume(session.document.get_body("box").shape) < 20 ** 3

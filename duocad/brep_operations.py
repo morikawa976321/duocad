@@ -20,8 +20,7 @@ def fuse_all(shapes: Sequence[Any], what: str) -> "TopoDS_Shape":
     """`shapes` を `BRepAlgoAPI_Fuse` で1つにする。**1つなら Fuse を呼ばずそのまま返す**。"""
     combined = shapes[0]
     for other in shapes[1:]:
-        fused = BRepAlgoAPI_Fuse(combined, other)
-        fused.Build()
+        fused = build_boolean("fuse", combined, other)
         if not fused.IsDone():
             raise ValueError(f"failed to fuse {what}")
         combined = fused.Shape()
@@ -48,6 +47,8 @@ def unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
        (由来の射影は元の形状の部分形状を鍵に引くので、コピーに対して統合すると同一性が切れる)
     3. 満たさないときは元の形状をそのまま返す
 
+    3つ目の戻り値が True なら、返す形は検査済み(呼び手は妥当性を測り直さない)。
+
     (c)は、面が減らない統合は利得ゼロで入力を壊す危険だけが残るため。`shelf_attachment_GD.step` の
     面36・43を+2mmしたときが実際にこれで、面数は57のまま統合後の形状だけが壊れていた
     (20mm立方体の上面+10では 10面 -> 6面 に減るので採用される)。
@@ -59,15 +60,17 @@ def unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
     candidate = trial.Shape()
     if candidate is None or _brep_topology.is_null(candidate):
         return shape, None, False
+    # 3条件の判定は安い順(面が減らない統合が多く、そのとき体積と BRepCheck を測らずに済む)
+    if _brep_topology._face_map(candidate).Extent() >= _brep_topology._face_map(shape).Extent():
+        return shape, None, False
     if abs(_brep_geometry.volume(candidate) - volume_before) > 1e-6 * max(1.0, abs(volume_before)):
         return shape, None, False
     if not _brep_checks.is_valid(candidate):
         return shape, None, False
-    if _brep_topology._face_map(candidate).Extent() >= _brep_topology._face_map(shape).Extent():
-        return shape, None, False
 
     unify = ShapeUpgrade_UnifySameDomain(shape, True, True, False)
     unify.Build()
+    _brep_geometry.forget_volume(shape)
     unified = unify.Shape()
     if unified is None or _brep_topology.is_null(unified) or not _brep_checks.is_valid(unified):
         # 試行では通ったのに本番で壊れた場合。入力(shape)はもう壊れているので操作ごと捨てる。

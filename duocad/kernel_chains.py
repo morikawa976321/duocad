@@ -104,7 +104,7 @@ def _sieve(shape: TopoDS_Shape, edge_map) -> List[int]:
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
     vertex_map = _brep_topology.indexed_map(shape, TopAbs_VERTEX)
 
-    # OCP の `TopTools_ListOfShape` を for で回すと1リスト約 0.3ms かかる(4,812辺の板で 2.5 秒)。
+    # 形状リストは走査に固定費がある(`brep_topology.listed`。4,812辺の板で 2.5 秒)。
     # 面は `Extent` / `First` / `Last` で読み、頂点に集まる辺は辺の両端から組む。
     sides: Dict[int, object] = {}
     for number in range(1, edge_faces.Extent() + 1):

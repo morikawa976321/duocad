@@ -14,7 +14,6 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeFace,
@@ -47,6 +46,7 @@ from . import (
     brep_checks as _brep_checks,
     brep_geometry as _brep_geometry,
     brep_history as _brep_history,
+    brep_operations as _brep_operations,
     brep_topology as _brep_topology,
 )
 
@@ -296,7 +296,7 @@ def _end_kind(shape, face, origin, axis, radius: float, v: float) -> dict:
         if abs(gp_Vec(origin, centre).Dot(gp_Vec(axis)) - v) > 1e-6:
             continue
         edges.append(edge)
-        for other in ancestors.FindFromKey(edge):
+        for other in _brep_topology.listed(ancestors.FindFromKey(edge)):
             if not other.IsSame(face):
                 neighbours.append(other)
     kinds = {_neighbour_kind(other, origin, axis, radius) for other in neighbours}
@@ -421,7 +421,6 @@ def _cylinder(target: dict, radius: float, z0: float, z1: float):
 
 
 def _boolean(builder, label: str, context: str):
-    builder.Build()
     if not builder.IsDone():
         raise ValueError(f"thread: {label} failed (IsDone is false, {context})")
     return builder.Shape()
@@ -455,21 +454,21 @@ def _add_male(shape, target, points, pitch, depth, context):
         outline = [(0.0, -r_low), (r_low + z_cross, z_cross), (0.0, length + r_high)]
     else:
         outline = [(0.0, -r_low), (r_maj + 1, r_maj + 1 - r_low), (r_maj + 1, length - (r_maj + 1 - r_high)), (0.0, length + r_high)]
-    segment = _boolean(BRepAlgoAPI_Common(threaded_segment(points, pitch, length), _revolve(outline)), "ends", context)
+    segment = _boolean(_brep_operations.build_boolean("common", threaded_segment(points, pitch, length), _revolve(outline)), "ends", context)
     segment = _placed(segment, target, z0)
     thread_volume = _brep_geometry._thread_volume_eps(segment)
     # 軸の範囲の中の空き(同軸の穴など)。円柱を足し引きするとき埋まるので、ねじ部からも抜く
-    air = _boolean(BRepAlgoAPI_Cut(_cylinder(target, target["radius"], z0, z1), shape), "inner space", context)
+    air = _boolean(_brep_operations.build_boolean("cut", _cylinder(target, target["radius"], z0, z1), shape), "inner space", context)
     air_volume = _brep_geometry._thread_volume_eps(air)
     if air_volume > _AIR_EPS:
         inner = _cylinder(target, min(r_low, r_high) - 1e-3, z0, z1)  # 両端の細いところ(首・先)より内側
-        if abs(_brep_geometry._thread_volume_eps(_boolean(BRepAlgoAPI_Common(air, inner), "inner space", context)) - air_volume) > _AIR_EPS:
+        if abs(_brep_geometry._thread_volume_eps(_boolean(_brep_operations.build_boolean("common", air, inner), "inner space", context)) - air_volume) > _AIR_EPS:
             raise ValueError("軸の中の穴・切り欠きがねじの首・先の面取りより外へ出ている(ねじを切ると穴が埋まるか壁が抜ける)")
-        segment = _boolean(BRepAlgoAPI_Cut(segment, air), "keep inner space", context)
+        segment = _boolean(_brep_operations.build_boolean("cut", segment, air), "keep inner space", context)
     before = _brep_geometry._thread_volume_eps(shape)
-    cut = BRepAlgoAPI_Cut(shape, _cylinder(target, target["radius"] + _FILL_MARGIN, z0, z1))
+    cut = _brep_operations.build_boolean("cut", shape, _cylinder(target, target["radius"] + _FILL_MARGIN, z0, z1))
     body = _boolean(cut, "cut", context)
-    fuse = BRepAlgoAPI_Fuse(body, segment)
+    fuse = _brep_operations.build_boolean("fuse", body, segment)
     final = _boolean(fuse, "fuse", context)
     expected = thread_volume - math.pi * target["radius"] ** 2 * length  # 空きは足す側と引く側で同じだけ減る
     return final, [(cut, shape), (fuse, body)], expected, thread_volume, before
@@ -493,10 +492,10 @@ def _cut_female(shape, target, points, pitch, depth, context):
     if z1 - z0 < pitch - 1e-9:
         raise ValueError(f"穴が短すぎる(入口の面取りを除いたねじの長さ {z1 - z0:.3g} がピッチ {pitch:g} に足りない)")
     before = _brep_geometry._thread_volume_eps(body)
-    fuse = BRepAlgoAPI_Fuse(body, _cylinder(target, target["radius"] + _FILL_MARGIN, z0, z1))
+    fuse = _brep_operations.build_boolean("fuse", body, _cylinder(target, target["radius"] + _FILL_MARGIN, z0, z1))
     filled = _boolean(fuse, "fill", context)
     void = _placed(threaded_segment(points, pitch, z1 - z0), target, z0)
-    cut = BRepAlgoAPI_Cut(filled, void)
+    cut = _brep_operations.build_boolean("cut", filled, void)
     final = _boolean(cut, "cut", context)
     thread_volume = _brep_geometry._thread_volume_eps(void)
     expected = math.pi * target["radius"] ** 2 * (z1 - z0) - thread_volume

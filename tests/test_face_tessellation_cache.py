@@ -22,9 +22,9 @@ def counted(monkeypatch):
     calls: list = []
     real = kernel.tessellate_faces
 
-    def counting(shape, groups):
+    def counting(shape, groups, **options):
         calls.append(sorted(index for indices in groups.values() for index in indices))
-        return real(shape, groups)
+        return real(shape, groups, **options)
 
     monkeypatch.setattr(kernel, "tessellate_faces", counting)
     return calls
@@ -99,15 +99,18 @@ def test_the_first_measurement_matches_the_grouped_tessellation(boxed) -> None:
         assert [{key: value for key, value in face.items() if key != "serial"} for face in ours["faces"]] == expected
 
 
-def test_a_new_shape_starts_a_new_cache(boxed, counted) -> None:
-    """落ちたら、フィレット・undo で形が変わっても前の形の面の三角形を配る(添字が同じ別の面になる)。"""
+def test_a_new_shape_does_not_take_triangles_by_index(boxed, counted) -> None:
+    """落ちたら、フィレットで形が変わったとき、同じ添字の別の面に前の形の三角形を配るか、そのまま残った面まで測り直す
+    (フィレットは子プロセスで計算して形が往復するので、残った面は子が返す対で前の形の面につなぐ)。"""
     session, body = boxed
     session.geometry(body)
     counted.clear()
     session.modify_selection([{"body": body, "kind": "edge", "index": 1}], [])
     session.fillet(2.0)
     measured = session.geometry(body)
-    assert counted and len(counted[-1]) == measured["face_count"]
+    fresh = kernel.tessellate(session.document.get_body(body).shape, session.view.view_deviation, session.view.view_angular_deflection)
+    assert [face["positions"] for face in measured["faces"]] == [face["positions"] for face in fresh["faces"]]
+    assert counted and len(counted[-1]) < measured["face_count"], "残った面まで測り直した"
 
 
 def test_undo_reuses_the_faces_of_the_shape_it_returns_to(boxed, counted) -> None:
@@ -226,3 +229,91 @@ def test_a_deep_zoom_measures_the_fine_faces_in_one_go(boxed, counted) -> None:
     session.set_view_resolution(0.02, 400.0, {body: [1, 2]})
     session.geometry(body)
     assert counted[-1] == [2], "画素から偏差が決まっている間は、足りない面だけを測る"
+
+
+def _top_face(session, body) -> int:
+    return max((face for face in session.geometry(body)["faces"] if face["kind"] == "plane"), key=lambda face: face["centroid"][2])["index"]
+
+
+def test_an_operation_measures_only_the_faces_it_changed(boxed, counted) -> None:
+    """落ちたら、ボディに足す押し出しのたびに、そのまま残った面までボディを丸ごと測り直す(733 面のボディで 1 回 0.6 秒)。"""
+    session, body = boxed
+    before = {face["serial"]: face for face in session.geometry(body)["faces"]}
+    session.modify_selection([{"body": body, "kind": "face", "index": _top_face(session, body)}], [])
+    counted.clear()
+    session.extrude(2.0, mode="join")
+    after = session.geometry(body)
+    kept = [face for face in after["faces"] if face["serial"] in before]
+    assert kept, "題材の前提(足しても残る面がある)が崩れた"
+    assert sorted(counted[-1]) == sorted(face["index"] for face in after["faces"] if face["serial"] not in before)
+    for face in kept:
+        assert face["positions"] == before[face["serial"]]["positions"], "同じ serial の面が別の三角形を持っている"
+    fresh = kernel.tessellate(session.document.get_body(body).shape, session.view.view_deviation, session.view.view_angular_deflection)
+    assert [face["positions"] for face in after["faces"]] == [face["positions"] for face in fresh["faces"]], (
+        "借りた面の三角形が、新しい形を測った三角形と違う(添字の取り違え)"
+    )
+
+
+def test_bringing_a_deleted_body_back_measures_nothing(boxed, counted) -> None:
+    """落ちたら、ボディを消して undo で戻すたびに、そのボディを丸ごと測り直す(733 面のボディで 1.4 秒)。"""
+    session, body = boxed
+    session.geometry(body)
+    session.modify_selection([{"body": body, "kind": "body", "index": None}], [])
+    session.delete()
+    session.state_meta()
+    counted.clear()
+    session.undo()
+    session.state_meta()
+    session.geometry(body)
+    assert counted == []
+
+
+def test_the_preview_measures_only_the_faces_the_operation_changed(boxed, counted, monkeypatch) -> None:
+    """落ちたら、ゴーストを出すたびにボディを丸ごと測る(733 面のボディで 0.4〜0.6 秒、半径を打ち直すたびに)。"""
+    session, body = boxed
+    session.geometry(body)
+    whole: list = []
+    real = kernel.tessellate
+    monkeypatch.setattr(kernel, "tessellate", lambda *args, **kwargs: whole.append(1) or real(*args, **kwargs))
+    session.modify_selection([{"body": body, "kind": "edge", "index": 1}], [])
+    counted.clear()
+    job = session.preview_job("fillet", {"radius": 2.0})
+    preview = job.run()
+    geometry = preview["bodies"][0]["geometry"]
+    assert not whole, "ボディを丸ごと測った"
+    assert counted and len(counted[-1]) < geometry["face_count"]
+    job.adopt()
+    session.fillet(2.0)
+    fresh = real(session.document.get_body(body).shape, session.view.view_deviation, session.view.view_angular_deflection)
+    assert [face["positions"] for face in geometry["faces"]] == [face["positions"] for face in fresh["faces"]]
+
+
+@pytest.mark.parametrize("verb, args", [
+    ("move_body", {"dx": 5.0, "dy": -3.0, "dz": 1.0}),
+    ("move_body", {"mode": "rotate", "axis_point": [0.0, 0.0, 0.0], "axis_dir": [0.0, 0.0, 1.0], "angle": 30.0}),
+    ("move_body", {"dx": 100.0, "dy": 0.0, "dz": 0.0, "copy": True}),
+    ("mirror_body", {"base_plane": "YZ"}),
+])
+def test_moving_copying_or_mirroring_a_body_measures_nothing(boxed, counted, verb, args) -> None:
+    """落ちたら、ボディを動かす・複製する・鏡映するたびに丸ごと測り直す(733 面のボディで 0.9 秒)。写した三角形は元の三角形を
+    同じ変換で動かしたもの(偏差も面の境目も元のまま)で、鏡映では外向きの巻きを保つ。"""
+    import numpy as np
+
+    session, body = boxed
+    before = session.geometry(body)
+    session.modify_selection([{"body": body, "kind": "body", "index": None}], [])
+    counted.clear()
+    session.apply(verb, args)
+    moved = session.document.bodies[-1] if verb == "mirror_body" or args.get("copy") else session.document.get_body(body)
+    after = session.geometry(moved.id)
+    assert counted == []
+    assert len(after["faces"]) == len(before["faces"])
+    for old, new in zip(before["faces"], after["faces"]):
+        assert len(old["positions"]) == len(new["positions"]) and len(old["indices"]) == len(new["indices"])
+        assert new["area"] == pytest.approx(old["area"])
+        assert new["serial"] != old["serial"], "三角形が変わったのに同じ serial(画面が古い位置の三角形を使う)"
+        if old["kind"] == "plane":
+            points = np.asarray(new["positions"]).reshape(-1, 3)
+            triangles = np.asarray(new["indices"]).reshape(-1, 3)
+            normals = np.cross(points[triangles[:, 1]] - points[triangles[:, 0]], points[triangles[:, 2]] - points[triangles[:, 0]])
+            assert (normals @ np.asarray(new["normal"]) > 0).all(), "三角形の巻きが面の外向きと逆"
