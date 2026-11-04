@@ -46,9 +46,12 @@ def segments(kind, rng):
     return faces, np.minimum(start, end), np.maximum(start, end)
 
 
+@pytest.mark.parametrize('banded_from', [0, 10 ** 9])
 @pytest.mark.parametrize('kind', ['plain', 'huge', 'tiny', 'vertical', 'ties', 'flat'])
-def test_pairs_and_their_order_match_the_x_sweep(kind):
-    """座標の大きさ・同じ座標・長い縦の線分(帯を減らす側)・高さ 0 で、組とその並びが x の掃引だけのときと同じ。"""
+def test_pairs_and_their_order_match_the_x_sweep(kind, banded_from, monkeypatch):
+    """座標の大きさ・同じ座標・長い縦の線分(帯を減らす側)・高さ 0 で、組とその並びが x の掃引だけのときと同じ
+    (帯に分ける道と分けない道の両方)。"""
+    monkeypatch.setattr(bc, '_BANDED_FROM', banded_from)
     rng = np.random.default_rng(len(kind))
     for _ in range(300):
         faces, lo, hi = segments(kind, rng)
