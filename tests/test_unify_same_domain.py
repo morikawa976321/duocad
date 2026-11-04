@@ -53,3 +53,13 @@ def test_a_real_result_that_differs_from_the_trial_is_still_checked(monkeypatch)
     monkeypatch.setattr(brep_checks, "is_valid", lambda shape: next(verdicts))
     with pytest.raises(ValueError, match="試行と異なる結果"):
         brep_operations.unify_same_domain(fused, volume)
+
+
+@pytest.mark.parametrize("make", [_two_boxes, _plate_with_holes_and_a_flush_block], ids=["箱2つ", "穴あき板と接する箱"])
+def test_an_adopted_unification_hands_over_the_volume_it_integrated(make):
+    """落ちたら、統合した形に引き継いだ体積が、その形を積分し直した値とずれている(体積の表示・検査が変わる)。"""
+    fused = make()
+    unified, _history, adopted = brep_operations.unify_same_domain(fused, brep_geometry.volume(fused))
+    assert adopted is True
+    assert brep_geometry.known_volume(unified) is not None
+    assert brep_geometry.volume(unified) == brep_geometry._integrated_volume_props(unified).Mass()

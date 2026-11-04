@@ -47,7 +47,7 @@ def unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
     1. コピーに対して統合を試し、(a)妥当 (b)体積が変わらない (c)**面が実際に減る** を確かめる
     2. 3つとも満たすときだけ、元の形状に対して本番の統合を行い、その出力と履歴を返す
        (由来の射影は元の形状の部分形状を鍵に引くので、コピーに対して統合すると同一性が切れる)。
-       本番の出力が試行の出力と同じ中身(`_same_content`)なら、試行の検査をそのまま使う
+       本番の出力が試行の出力と同じ中身(`_same_content`)なら、試行の検査と体積をそのまま使う
     3. 満たさないときは元の形状をそのまま返す
 
     3つ目の戻り値が True なら、返す形は検査済み(呼び手は妥当性を測り直さない)。
@@ -66,7 +66,8 @@ def unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
     # 3条件の判定は安い順(面が減らない統合が多く、そのとき体積と BRepCheck を測らずに済む)
     if _brep_topology._face_map(candidate).Extent() >= _brep_topology._face_map(shape).Extent():
         return shape, None, False
-    if abs(_brep_geometry.volume(candidate) - volume_before) > 1e-6 * max(1.0, abs(volume_before)):
+    candidate_volume = _brep_geometry.volume(candidate)
+    if abs(candidate_volume - volume_before) > 1e-6 * max(1.0, abs(volume_before)):
         return shape, None, False
     if not _brep_checks.is_valid(candidate):
         return shape, None, False
@@ -75,9 +76,11 @@ def unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:
     unify.Build()
     _brep_geometry.forget_volume(shape)
     unified = unify.Shape()
-    if unified is None or _brep_topology.is_null(unified) or not (
-        _same_content(unified, candidate) or _brep_checks.is_valid(unified)
-    ):
+    if unified is None or _brep_topology.is_null(unified):
+        raise ValueError("ShapeUpgrade_UnifySameDomain が試行と異なる結果を返した")
+    if _same_content(unified, candidate):
+        _brep_geometry.note_volume(unified, candidate_volume)  # 同じ中身なので積分し直しても同じ値
+    elif not _brep_checks.is_valid(unified):
         # 試行では通ったのに本番で壊れた場合。入力(shape)はもう壊れているので操作ごと捨てる。
         raise ValueError("ShapeUpgrade_UnifySameDomain が試行と異なる結果を返した")
     return unified, unify.History(), True
