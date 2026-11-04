@@ -172,7 +172,9 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
   ポートは本人が常時動かしている 8765 / 8766 を避け、`--port 8785 --http-port 8786` など空きを渡す。Browser pane で見るときは
   `.claude/launch.json` に一時の構成を足して `preview_start` し、終わったら `preview_stop` して launch.json を戻す。確認用の文書は
   実 `models/` から使い捨ての models-dir へ写して使う。`web/dist` を作り直すと本人のサーバが配る画面も新しくなるので、
-  サーバ側に新しいコマンドを足したときは本人にサーバの再起動を伝える。
+  サーバ側に新しいコマンドを足したときは本人にサーバの再起動を伝える。作業途中の画面を試すだけなら
+  `npm run build -- --outDir <一時フォルダ> --emptyOutDir` で別に作り、実機検査に `--web-dist <一時フォルダ>`
+  (手で立てるサーバも同じ引数)を渡せば `web/dist` に触れない。
   `models/` の差分に「自分が入れた覚えのない操作」が混ざっていたら並行して誰かが触っている印 ——
   `git checkout` を向けない。
 - **headless Chrome は実 GPU を掴む。** `--use-angle=swiftshader` が CPU ラスタライズを強制していただけで、

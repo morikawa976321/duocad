@@ -7,6 +7,7 @@
  * - `modelsDir` は必ず使い捨ての temp(`--workdir` で外から渡されたときだけ消さない)。
  * - 失敗は `${name}: FAIL ...` を出して `process.exitCode = 1`(後始末を待ってから終わる)。
  * - ポートは OS に空きを選ばせる(`--port` / `--http-port` で明示したときだけ固定)。
+ * - `--web-dist <dir>` で `web/dist` 以外のビルドを配る(作業中のビルドで本人のサーバの画面を差し替えない)。
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
@@ -80,7 +81,7 @@ export async function runSmoke(name, defaults, body) {
 
   const start = async () => {
     if (attachUrl === null) {
-      ctx.server = await startServer({ wsPort, httpPort, modelsDir: ctx.workdir })
+      ctx.server = await startServer({ wsPort, httpPort, modelsDir: ctx.workdir, webDist: options['web-dist'] })
       ctx.url = ctx.server.url
       if (defaults.mcp) {
         ctx.mcp = new McpClient(ctx.server.child, { timeout, onNoise: defaults.onNoise })
