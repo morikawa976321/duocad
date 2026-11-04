@@ -228,7 +228,7 @@ def _coplanar_region(face: TopoDS_Shape, edge_faces) -> list:
             edge = edges.FindKey(number)
             if not edge_faces.Contains(edge):
                 continue
-            for other in edge_faces.FindFromKey(edge):
+            for other in _brep_topology.listed(edge_faces.FindFromKey(edge)):
                 if any(other.IsSame(known) for known in region) or not coplanar(face, other):
                     continue
                 region.append(other)
@@ -1285,7 +1285,7 @@ def _is_footprint(wire: TopoDS_Shape, face: TopoDS_Shape, edge_faces) -> bool:
         edge = TopoDS.Edge_s(edges.FindKey(number))
         if BRep_Tool.Degenerated_s(edge) or not edge_faces.Contains(edge):
             continue
-        neighbours = [other for other in edge_faces.FindFromKey(edge) if not other.IsSame(face)]
+        neighbours = [other for other in _brep_topology.listed(edge_faces.FindFromKey(edge)) if not other.IsSame(face)]
         if not neighbours:
             return False
         neighbour = TopoDS.Face_s(neighbours[0])

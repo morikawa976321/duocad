@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
 
-from .. import kernel_extrude, kernel_sketch, naming
+from .. import kernel, kernel_extrude, kernel_sketch, naming
 from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from .. import selection
@@ -59,9 +59,7 @@ def extrude(
     target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
     target_shape = None if target_body is None else target_body.shape
 
-    result = kernel_extrude.extrude_regions(
-        faces, distance, mode, normal, target_shape=target_shape, taper=taper
-    )
+    result = _extruded_regions(faces, distance, mode, normal, target_shape, taper)
 
     created_new = False
     previous_shape: Any = None
@@ -113,9 +111,7 @@ def extrude_faces(
     target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
     target_shape = None if target_body is None else target_body.shape
 
-    result = kernel_extrude.extrude_faces(
-        source.shape, indices, distance, mode, target_shape=target_shape, taper=taper
-    )
+    result = _extruded_faces(source.shape, indices, distance, mode, target_shape, taper)
 
     previous_shape: Any = None
     numbered: dict = {}
@@ -140,6 +136,28 @@ def extrude_faces(
     operation.provenance = result["provenance"]
     remember(doc, resolved_body_id, operation.seq, previous_shape)
     return operation
+
+
+def _extruded_regions(faces: Sequence[Any], distance: float, mode: str, normal: Sequence[float], target_shape: Any, taper: float) -> dict:
+    """領域の押し出しの計算。相手のボディがあるときは結果を覚え、プレビュー・確定・redo で使い回す(`kernel.remembered`。
+    相手の無い `new` は軽いので覚えない)。"""
+    def compute() -> dict:
+        return kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=target_shape, taper=taper)
+
+    if target_shape is None:
+        return compute()
+    arguments = (kernel.shapes_digest(faces), distance, mode, tuple(float(v) for v in normal), taper)
+    return kernel.remembered("extrude_regions", (target_shape,), arguments, compute)
+
+
+def _extruded_faces(source_shape: Any, indices: Sequence[int], distance: float, mode: str, target_shape: Any, taper: float) -> dict:
+    """面の押し出しの計算(`_extruded_regions` と同じく、相手があるときだけ覚える)。"""
+    def compute() -> dict:
+        return kernel_extrude.extrude_faces(source_shape, indices, distance, mode, target_shape=target_shape, taper=taper)
+
+    if target_shape is None:
+        return compute()
+    return kernel.remembered("extrude_faces", (source_shape, target_shape), (tuple(indices), distance, mode, taper), compute)
 
 
 def _taper_arg(taper: float) -> dict:
@@ -314,9 +332,7 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     else:
         target = _replayed_target(document, body_id)
         previous_shape = target.shape
-        result = kernel_extrude.extrude_regions(
-            faces, distance, mode, normal, target_shape=target.shape, taper=taper
-        )
+        result = _extruded_regions(faces, distance, mode, normal, target.shape, taper)
         target.shape = result["shape"]
         remember(document, body_id, operation.seq, previous_shape)
     if operation.provenance is None:
@@ -346,9 +362,7 @@ def _redo_faces(
             raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
         target = _replayed_target(document, body_id)
         previous_shape = target.shape
-        result = kernel_extrude.extrude_faces(
-            source.shape, indices, distance, mode, target_shape=previous_shape, taper=taper
-        )
+        result = _extruded_faces(source.shape, indices, distance, mode, previous_shape, taper)
         target.shape = result["shape"]
         remember(document, body_id, operation.seq, previous_shape)
     if operation.provenance is None:

@@ -115,7 +115,9 @@ def shape_list(source: Any, getter: str, sub: "TopoDS_Shape") -> List["TopoDS_Sh
         result = method(sub)
     except Exception:  # OCCTは対象外の部分形状で例外を投げることがある
         return []
-    return list(result)
+    if isinstance(result, (list, tuple)):  # Python 側の履歴(`kernel_tight` の縫い合わせ)は list で返す
+        return list(result)
+    return _brep_topology.listed(result)
 
 
 def is_removed(source: Any, sub: "TopoDS_Shape") -> bool:

@@ -232,7 +232,7 @@ def _top_face(shape: TopoDS_Shape, edges: list, *, originals=None) -> TopoDS_Sha
     edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces)
     def neighbors(edge):
-        return list(edge_faces.FindFromKey(edge))
+        return _brep_topology.listed(edge_faces.FindFromKey(edge))
 
     candidates = [face for face in neighbors(edges[0]) if all(any(face.IsSame(other) for other in neighbors(edge)) for edge in edges[1:])]
     shared = [face for face in candidates if all(any(edge.IsSame(other) for other in edges)

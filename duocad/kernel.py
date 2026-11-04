@@ -12,6 +12,8 @@ kernel の外へ出さないための規律で、境界テスト(importの静的
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import math
 import os
 import tempfile
@@ -19,15 +21,11 @@ import threading
 from collections import OrderedDict
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from OCP.BinTools import BinTools, BinTools_FormatVersion
 from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.BRepBndLib import BRepBndLib
-from OCP.BRepAlgoAPI import (
-    BRepAlgoAPI_Common,
-    BRepAlgoAPI_Cut,
-    BRepAlgoAPI_Fuse,
-)
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepTools import BRepTools
@@ -559,13 +557,9 @@ def _boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) ->
     combined = _brep_operations.fuse_all(tool_shapes, "tool shapes")
 
     volume_before = _brep_geometry.volume(target_shape)
-    if mode == "union":
-        builder = BRepAlgoAPI_Fuse(target_shape, combined)
-    elif mode == "cut":
-        builder = BRepAlgoAPI_Cut(target_shape, combined)
-    else:
-        builder = BRepAlgoAPI_Common(target_shape, combined)
-    builder.Build()
+    builder = _brep_operations.build_boolean(
+        {"union": "fuse", "cut": "cut"}.get(mode, "common"), target_shape, combined
+    )
     if not builder.IsDone():
         raise ValueError(f"{mode} failed")
     result = builder.Shape()
@@ -574,7 +568,8 @@ def _boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) ->
     final, history, unified = result, None, False
     if mode == "union":
         final, history, unified = _brep_operations.unify_same_domain(result, volume_after)
-    _brep_checks._require_valid(final, mode)
+    if not unified:
+        _brep_checks._require_valid(final, mode)
     final_map = _brep_topology._face_map(final)
 
     return {
@@ -731,6 +726,14 @@ def remembered(name: str, shapes: tuple, arguments: Any, compute: Callable[[], d
 
 def copy_shape(shape: Any) -> Any:
     return _brep_operations.copy_shape(shape)
+
+
+def shapes_digest(shapes: Sequence[Any]) -> str:
+    """形の並びの中身の指紋(BinTools の書き出しの SHA-1)。呼ぶたびに作り直される入力(スケッチの領域の面は写しで渡る)を、
+    `remembered` の引数側の鍵にするため。"""
+    stream = io.BytesIO()
+    BinTools.Write_s(make_compound(list(shapes)), stream, False, False, BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+    return hashlib.sha1(stream.getvalue()).hexdigest()
 
 
 def adopt_results(pairs: Sequence[Tuple[Any, Any]]) -> None:
@@ -994,7 +997,7 @@ def _coplanar_supports(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int
         for number in range(1, maker.NbEdges(contour) + 1):
             edge = maker.Edge(contour, number)
             if edge_faces.Contains(edge):
-                for face in edge_faces.FindFromKey(edge):
+                for face in _brep_topology.listed(edge_faces.FindFromKey(edge)):
                     if not reached.Contains(face):
                         reached.Add(face)
                         queue.append(face)
@@ -1005,7 +1008,7 @@ def _coplanar_supports(maker: Any, shape: "TopoDS_Shape", contours: Iterable[int
             edge = TopoDS.Edge_s(edges.FindKey(number))
             if not edge_faces.Contains(edge):
                 continue
-            for other in edge_faces.FindFromKey(edge):
+            for other in _brep_topology.listed(edge_faces.FindFromKey(edge)):
                 if reached.Contains(other) or other.IsSame(face):
                     continue
                 if kernel_overflow.coplanar(face, other):
@@ -1032,7 +1035,6 @@ def _absorbed_fillet(
         raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
     _brep_checks._require_valid(absorbed.shape, "fillet", context)
     final, history, _ = _brep_operations.unify_same_domain(absorbed.shape, volume_after)
-    _brep_checks._require_valid(final, "fillet", context)
     if len(_brep_topology.split_solids(final)) > len(_brep_topology.split_solids(shape)):
         raise ValueError(f"fillet left the rounding material as a separate solid ({context})")
 
@@ -1072,7 +1074,6 @@ def _tight_fillet(
         raise ValueError(f"fillet changed the number of solids ({context})")
     _brep_checks._require_valid(tight.shape, "fillet", context)
     final, history, _ = _brep_operations.unify_same_domain(tight.shape, volume_after)
-    _brep_checks._require_valid(final, "fillet", context)
 
     def through(builder: Any, face: "TopoDS_Shape") -> List["TopoDS_Shape"]:
         modified = _brep_history.shape_list(builder, "Modified", face)

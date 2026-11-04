@@ -7,7 +7,7 @@ from OCP.BRep import BRep_Builder
 from OCP.BRepTools import BRepTools_WireExplorer
 from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_EDGE, TopAbs_FACE, TopAbs_SOLID
 from OCP.TopExp import TopExp, TopExp_Explorer
-from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_IndexedMapOfShape
+from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_IndexedMapOfShape, TopTools_ListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Compound
 
 
@@ -203,6 +203,29 @@ def subshapes(shape, kind):
         result.append(explorer.Current())
         explorer.Next()
     return result
+
+
+def listed(shapes: "TopTools_ListOfShape") -> List[Any]:
+    """OCP の形状リスト(`Modified` / `Generated` / 祖先の表の値)を Python の list にする。
+
+    外部の罠(実測 2026-11-04、OCP 7.9.3): OCP の `TopTools_ListOfShape` を `for` / `list()` で走査すると、中身の数によらず
+    1回 0.33〜0.45 ms かかる(空でも)。由来を面・辺ごとに引くと、733 面のボディで数秒になっていた。`Size` / `First` / `Last` と、
+    写しの `RemoveFirst` で取り出すと、0〜2 個で 1 µs 前後、50 個で 60 µs。並びは走査と同じ。
+    """
+    count = shapes.Size()
+    if count == 0:
+        return []
+    if count == 1:
+        return [shapes.First()]
+    if count == 2:
+        return [shapes.First(), shapes.Last()]
+    rest = TopTools_ListOfShape()
+    rest.Assign(shapes)
+    out = []
+    while not rest.IsEmpty():
+        out.append(rest.First())
+        rest.RemoveFirst()
+    return out
 
 
 def indexed_map(shape, kind):
