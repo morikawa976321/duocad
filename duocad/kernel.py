@@ -246,6 +246,12 @@ class _OrientedShapeKey(_ShapeKey):
     __hash__ = _ShapeKey.__hash__
 
 
+def face_keys(shape: "TopoDS_Shape") -> List[Any]:
+    """面の添字(1始まり)の順に、面の同一性の鍵(`shape_key`。TShape・Location・向き)を並べる。別の形にそのまま残った面は同じ鍵になる。"""
+    face_map = _brep_topology._face_map(shape)
+    return [_OrientedShapeKey(face_map.FindKey(index)) for index in range(1, face_map.Extent() + 1)]
+
+
 def shape_key(shape: "TopoDS_Shape") -> Any:
     """形状を辞書の鍵にするための値(TShape・Location・Orientation の一致で同一とみなす)。
     素の `TopoDS_Shape` は鍵にならない(`_ShapeKey` の docstring)。"""

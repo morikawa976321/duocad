@@ -14,8 +14,10 @@ JSON テキストのままだと PC ケース(27 部品)の初回配信が 6.1 M
 
 **省く規則**(`Delivered`)。接続ごとに、送り届けたものを覚えて次の配信から省く:
 
-- 面: 版の変わったボディでも、前回送った面と同じもの(`serial` が同じ。`view._FaceTessellations` が測るたびに振る)は
-  `{"index", "serial", "detail"}` だけにする。カメラを動かして測り方の変わる面は一部なので、残りを送らずに済む
+- 面: 版の変わったボディでも、接続が今持っている面と同じもの(`serial` が同じ。`view._FaceTessellations` が測るたびに振り、
+  別の形にそのまま残った面は同じ `serial` を引き継ぐ)は `{"index", "serial", "detail"}` だけにする。持っている面は全ボディの
+  直前に送った面で、添字やボディが変わっていても省く(操作で形が変わっても大半の面はそのまま残る。カメラを動かして測り方の
+  変わる面も一部)。読む側は省かれた面を `serial` で引き、`index` と `detail` を届いた値にする
 - 操作ログ: 前回と同じなら `state` から `log` を落とす(長方形 150 個のスケッチで領域を1つ選ぶたびに 33 KB 流れていた)。
   変わったときも前回と同じ先頭は省き、`log_keep`(前回の先頭から残す件数)と `log_tail`(その後ろに足す分)だけ送る
   (操作は末尾に足すか、undo で末尾を削るので、ふつうは数件)
@@ -139,7 +141,8 @@ class Delivered:
     def __init__(self) -> None:
         #: body_id -> 版(`Session.delta` の基準)
         self.revisions: Dict[str, int] = {}
-        #: body_id -> {面の添字: serial}(前回送ったそのボディの面。serial の無い面 = メッシュボディの面は入れない)
+        #: body_id -> {面の添字: serial}(前回送ったそのボディの面。serial の無い面 = メッシュボディの面は入れない)。
+        #: 接続が持っている面は、全ボディのこの値の和(画面は受け取るたびにボディごとに置き換え、消えたボディは忘れる)
         self.faces: Dict[str, Dict[int, int]] = {}
         self.log: Optional[list] = None
         #: sketch_id -> 前回送ったそのスケッチの配りもの
@@ -159,16 +162,17 @@ class Delivered:
             if self.sketches.get(sketch["sketch_id"]) == sketch else sketch
             for sketch in meta["sketches"]
         ]
-        return {"state": state, "delta": {"bodies": [self._omit_known_faces(body) for body in bodies]}}
+        held = {serial for faces in self.faces.values() for serial in faces.values()}
+        return {"state": state, "delta": {"bodies": [self._omit_known_faces(body, held) for body in bodies]}}
 
-    def _omit_known_faces(self, body: dict) -> dict:
+    @staticmethod
+    def _omit_known_faces(body: dict, held: set) -> dict:
         geometry = body.get("geometry")
-        known = self.faces.get(body["body_id"])
-        if not geometry or not known:
+        if not geometry or not held:
             return body
         faces = [
             {"index": face["index"], "serial": face["serial"], "detail": face.get("detail")}
-            if face.get("serial") is not None and known.get(face["index"]) == face["serial"] else face
+            if face.get("serial") is not None and face["serial"] in held else face
             for face in geometry["faces"]
         ]
         return dict(body, geometry=dict(geometry, faces=faces))

@@ -137,20 +137,18 @@ class FakeConnection:
             sketches.append(sketch)
         state["sketches"] = sketches
         self._sketches = {sketch["sketch_id"]: sketch for sketch in sketches}
+        held = {face["serial"]: face for known in self._faces.values() for face in known.values() if face.get("serial") is not None}
         for body in payload["delta"]["bodies"]:
             geometry = body.get("geometry")
             if not geometry:
                 self._faces.pop(body["body_id"], None)
                 continue
-            known = self._faces.get(body["body_id"], {})
             faces = []
             for face in geometry["faces"]:
                 if "positions" not in face:
-                    previous = known.get(face["index"])
-                    assert previous is not None and previous.get("serial") == face["serial"], (
-                        f"受け取っていない面を省かれた: {body['body_id']} {face}"
-                    )
-                    face = dict(previous, detail=face["detail"])
+                    previous = held.get(face["serial"])
+                    assert previous is not None, f"受け取っていない面を省かれた: {body['body_id']} {face}"
+                    face = dict(previous, index=face["index"], detail=face["detail"])
                 faces.append(face)
             geometry["faces"] = faces
             self._faces[body["body_id"]] = {face["index"]: face for face in faces}

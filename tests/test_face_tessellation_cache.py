@@ -226,3 +226,40 @@ def test_a_deep_zoom_measures_the_fine_faces_in_one_go(boxed, counted) -> None:
     session.set_view_resolution(0.02, 400.0, {body: [1, 2]})
     session.geometry(body)
     assert counted[-1] == [2], "画素から偏差が決まっている間は、足りない面だけを測る"
+
+
+def _top_face(session, body) -> int:
+    return max((face for face in session.geometry(body)["faces"] if face["kind"] == "plane"), key=lambda face: face["centroid"][2])["index"]
+
+
+def test_an_operation_measures_only_the_faces_it_changed(boxed, counted) -> None:
+    """落ちたら、ボディに足す押し出しのたびに、そのまま残った面までボディを丸ごと測り直す(733 面のボディで 1 回 0.6 秒)。"""
+    session, body = boxed
+    before = {face["serial"]: face for face in session.geometry(body)["faces"]}
+    session.modify_selection([{"body": body, "kind": "face", "index": _top_face(session, body)}], [])
+    counted.clear()
+    session.extrude(2.0, mode="join")
+    after = session.geometry(body)
+    kept = [face for face in after["faces"] if face["serial"] in before]
+    assert kept, "題材の前提(足しても残る面がある)が崩れた"
+    assert sorted(counted[-1]) == sorted(face["index"] for face in after["faces"] if face["serial"] not in before)
+    for face in kept:
+        assert face["positions"] == before[face["serial"]]["positions"], "同じ serial の面が別の三角形を持っている"
+    fresh = kernel.tessellate(session.document.get_body(body).shape, session.view.view_deviation, session.view.view_angular_deflection)
+    assert [face["positions"] for face in after["faces"]] == [face["positions"] for face in fresh["faces"]], (
+        "借りた面の三角形が、新しい形を測った三角形と違う(添字の取り違え)"
+    )
+
+
+def test_bringing_a_deleted_body_back_measures_nothing(boxed, counted) -> None:
+    """落ちたら、ボディを消して undo で戻すたびに、そのボディを丸ごと測り直す(733 面のボディで 1.4 秒)。"""
+    session, body = boxed
+    session.geometry(body)
+    session.modify_selection([{"body": body, "kind": "body", "index": None}], [])
+    session.delete()
+    session.state_meta()
+    counted.clear()
+    session.undo()
+    session.state_meta()
+    session.geometry(body)
+    assert counted == []
