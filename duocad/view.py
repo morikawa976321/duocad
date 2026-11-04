@@ -689,6 +689,24 @@ class DocumentView:
         store.unwarned_failed |= set(measured["untriangulated"])
         store.unwarned_boundary.extend((geometry.get("boundary") or {}).get("unresolved") or [])
 
+    def return_kept_faces(self, body_id: str, source: Any, shape: Any, recipe: tuple, pairs: dict) -> None:
+        """プレビューの結果 `shape`(`seed_faces` で覚えさせた後)の面のうち、元の形 `source` の面がそのまま残ったもの(`pairs`: 元の添字 ->
+        結果の添字)を、元の形のその測り方の三角形として覚えさせる。
+
+        ゴーストは全面を細かい側で測るが、画面は背を向けた面・画面外の面を粗く測っているので、元の形はそれらの面を細かい側で持っていない。
+        返さないと、半径を打ち直すたびのゴーストがそれらを測り直す(--part big の上から見た画面で 73 面・1 回 2〜4 秒)。"""
+        stores = self._face_cache.get(body_id, {})
+        lender, target = stores.get(id(shape)), stores.get(id(source))
+        if lender is None or lender[0] is not shape or target is None or target[0] is not source:
+            return
+        recipe = (float(recipe[0]), float(recipe[1]))
+        measured = lender[1].measured(recipe)
+        held = target[1].by_recipe.get(recipe, {})
+        for index, position in pairs.items():
+            face = measured.get(position)
+            if face is not None and index not in held:
+                target[1].adopt(recipe, index, face)
+
     def _wanted_faces(self, body) -> tuple:
         """面ごとの測り方 `(wanted {面の添字: 測り方}, 細かく測る面の集合, 細かい側, 粗い側)`。"""
         fine, deviation, angular, coarse_deviation, coarse_angular = self._tessellation_args(body.id)
