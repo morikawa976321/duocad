@@ -74,8 +74,9 @@ def body_of(session: Session, body_id: str):
 
 
 def faces_of_kind(session: Session, body_id: str, kind: str) -> list:
+    """`kind` で始まる種類の面(円柱は `cylinder_full` / `cylinder_partial`)を面積の大きい順に。"""
     geometry = session.geometry(body_id)
-    return sorted((f for f in geometry["faces"] if f["kind"] == kind), key=lambda f: -f["area"])
+    return sorted((f for f in geometry["faces"] if f["kind"].startswith(kind)), key=lambda f: -f["area"])
 
 
 def edges_of_kind(session: Session, body_id: str, kind: str, min_length: float = 0.0) -> list:
@@ -221,7 +222,7 @@ def blendable(session: Session, body_id: str, edges: list, count: int) -> list:
 def cases_for(session: Session, body_id: str, tool_body: Optional[str]) -> list:
     """(名前, verb, 選択して引数を返す関数) の並び。"""
     planes = faces_of_kind(session, body_id, "plane")
-    cylinders = faces_of_kind(session, body_id, "cylinder")
+    cylinders = faces_of_kind(session, body_id, "cylinder_full")
     lines = blendable(session, body_id, edges_of_kind(session, body_id, "line", 3.0), 4)
     circles = blendable(session, body_id, edges_of_kind(session, body_id, "circle"), 1)
     top = max(planes, key=lambda f: f["centroid"][2])
@@ -245,6 +246,14 @@ def cases_for(session: Session, body_id: str, tool_body: Optional[str]) -> list:
             return {"distance": distance, "mode": mode, **({"body_id": body_id} if mode != "new" else {})}
         out.append((name, "extrude", setup))
 
+    def revolve_setup():
+        sid = sketch_on_xy_above()
+        session.apply("add_rectangle", {"sketch_id": sid, "corner": [cx - 3.0, cy + 2.0], "width": 6.0, "height": 4.0})
+        session.leave_sketch()
+        select(session, [{"sketch": sid, "index": 1}])
+        return {"axis": "x", "angle": 90.0, "mode": "new"}
+
+    out.append(("revolve 領域 new 90°", "revolve", revolve_setup))
     region_case("extrude 領域 new", "new", 5.0)
     region_case("extrude 領域 join(ボディを貫く)", "join", zmax + 5.0)
     region_case("extrude 領域 cut(貫通)", "cut", zmax + 5.0)
