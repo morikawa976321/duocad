@@ -532,6 +532,7 @@ class Server:
                 applied = self._apply(
                     self.session.begin_command, verb, _args_object(message, required=False), message.get("client_op")
                 )
+                self._abandon_previews(connection)
                 await self._push(connection, applied=applied)
             elif command == "set_command_args":
                 applied = self._apply(
@@ -540,6 +541,7 @@ class Server:
                 await self._push(connection, applied=applied)
             elif command == "end_command":
                 applied = self._apply(self.session.end_command, message.get("client_op"))
+                self._abandon_previews(connection)
                 await self._push(connection, applied=applied)
             elif command == "apply_command":
                 # 応答は構えていた verb の封筒(`client_op` を載せて全接続へ)。
@@ -797,6 +799,14 @@ class Server:
             if computation.cancel():
                 job.cancel()
         return seq
+
+    def _abandon_previews(self, connection: Any) -> None:
+        """コマンドを抜けた・替えた: この接続のプレビューを古くし、走っている計算も止める。ワーカーは1本なので、子プロセスの長い
+        計算(大きな部品のシェルで数分)が走ったままだと、次のコマンドのゴーストが全部その後ろで待つ。同じプロセスの計算は止まらず、
+        終わっても結果を送らない。"""
+        self._supersede_previews(connection)
+        for job in list(self._preview_jobs.get(connection, {}).values()):
+            job.cancel()
 
     def _start_preview(self, connection: Any, message: dict, job: Any, seq: int) -> None:
         """プレビューをワーカースレッドで計算させ、この要求の処理はすぐ抜ける(計算中もこの接続の次の要求を捌く。issue #168)。

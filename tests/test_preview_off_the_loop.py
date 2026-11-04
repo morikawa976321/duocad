@@ -194,3 +194,44 @@ def test_a_preview_finishing_after_a_disconnect_does_not_keep_the_connection(ses
 
     (acks, _client) = _run(session, script)
     assert acks == {}
+
+
+def test_leaving_the_command_stops_a_running_worker_preview(session: Session, monkeypatch) -> None:
+    """落ちたら、子プロセスで長く走るゴースト(大きな部品のシェルで数分)が Esc の後も走り続け、次のコマンドのゴーストが全部その後ろで待つ。"""
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
+    real = kernel_worker.run
+    calls = {"n": 0}
+
+    def long_first(verb, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            cancel = kernel_worker._PREVIEW.get()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if cancel is not None and cancel.is_set():
+                    raise ValueError(f"{verb}: プレビューを取り消した")
+                time.sleep(0.01)
+        return real(verb, *args, **kwargs)
+
+    monkeypatch.setattr(kernel_worker, "run", long_first)
+    monkeypatch.setattr(kernel, "_RESULTS", type(kernel._RESULTS)())
+
+    async def script(server, client):
+        await server._dispatch(client, json.dumps({"cmd": "begin_command", "verb": "fillet"}))
+        await server._dispatch(client, json.dumps({"cmd": "preview", "verb": "fillet", "args": {"radius": 1.0}, "preview_id": 1, "ack_id": 1}))
+        await asyncio.sleep(0.1)
+        started = time.perf_counter()
+        await server._dispatch(client, json.dumps({"cmd": "end_command"}))
+        await server._dispatch(client, json.dumps({"cmd": "begin_command", "verb": "chamfer"}))
+        await server._dispatch(client, json.dumps({"cmd": "modify_selection", "add": [{"body": body.id, "kind": "edge", "index": 1}], "remove": []}))
+        await server._dispatch(client, json.dumps({"cmd": "preview", "verb": "chamfer", "args": {"distance": 1.0}, "preview_id": 2, "ack_id": 2}))
+        async with asyncio.timeout(20):
+            while not client.of_type("preview") and not client.of_type("error"):
+                await asyncio.sleep(0.01)
+        return time.perf_counter() - started
+
+    (elapsed, client) = _run(session, script)
+    assert elapsed < 5.0, f"次のコマンドのゴーストが走り続けたゴーストを待った({elapsed:.2f} 秒)"
+    assert [item["preview_id"] for item in client.of_type("preview")] == [2]
+    assert client.of_type("error") == [], "止めたゴーストの失敗を画面へ出した"
