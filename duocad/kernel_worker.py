@@ -6,7 +6,7 @@ OCCT の `BOPAlgo_RemoveFeatures` は計算中ずっと GIL を握り(3.04 秒�
 `worker_process` の共通の部品で、ここは要求の形と子での計算だけを持つ。
 
 - 子は1本で、初回の呼び出しで立て、計算が終わっても残す(起動に約 1.6 秒。干渉チェックは1回ごとに立てる)。
-- 要求は {"op":"face_edit" または "blend_edges","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
+- 要求は {"op":"face_edit"・"blend_edges"・"shell","verb":...,"arguments":{...},"shape":<BinTools の base64>}。返事の result は
   {"shape":<base64>,"provenance":{...},"kept":[[結果の面の添字, 入力の面の添字], ...]}(フィレット・面取りは "volume_before"・
   "volume_after" も)か、関門で断ったときの {"refused":"<断り文>"}。"kept" は入力のまま残った面で、親は `kernel.note_kept_faces` に渡す。
   要求の "volume" は親が知っている入力の体積(あれば。子は積分し直さない)。
@@ -198,12 +198,12 @@ def _decode(text: str) -> Any:
 # 子
 # --------------------------------------------------------------------------------------
 def _handle(message: Dict[str, Any]) -> Dict[str, Any]:
-    from . import kernel, kernel_face_edit
+    from . import kernel, kernel_face_edit, kernel_shell
 
     op = message.get("op")
     if op == "ping":
         return {}
-    if op not in ("face_edit", "blend_edges"):
+    if op not in ("face_edit", "blend_edges", "shell"):
         raise ValueError(f"unknown op {op!r}")
     source = _decode(message["shape"])
     if "volume" in message:
@@ -211,6 +211,8 @@ def _handle(message: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if op == "face_edit":
             result = kernel_face_edit.compute(message["verb"], source, message["arguments"])
+        elif op == "shell":
+            result = kernel_shell.shell_solid(source, message["arguments"]["faces"], message["arguments"]["thickness"])
         else:
             verb = message["verb"]
             if verb not in ("fillet", "chamfer"):

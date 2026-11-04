@@ -10,9 +10,9 @@
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
-from .. import kernel_shell, selection
+from .. import kernel, kernel_worker, selection
 from ..document import BodyId, Document
 from ..entry import entry
 from ..oplog import Operation, register_verb
@@ -30,7 +30,7 @@ def shell_body(
     face_list = [int(index) for index in faces]
     value = float(thickness)
     body = editable_body(doc, body_id, what="shell")
-    result = kernel_shell.shell_solid(body.shape, face_list, value)
+    result = _shelled(body.shape, face_list, value)
 
     previous_shape = body.shape
     body.shape = result["shape"]
@@ -47,10 +47,21 @@ def _do_shell_body(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された面と厚さで殻にし直す(ログには触らない)。"""
     args = operation.args
     body = replayed_body(document, args["body_id"], what="shell")
-    result = kernel_shell.shell_solid(
-        body.shape, [int(index) for index in args["faces"]], float(args["thickness"])
-    )
+    result = _shelled(body.shape, [int(index) for index in args["faces"]], float(args["thickness"]))
     reapply_shape(document, body, result, operation)
+
+
+def _shelled(shape: Any, faces: Sequence[int], thickness: float) -> dict:
+    """殻の計算を子プロセスで(`kernel_worker`)。OCCT のシェル(`MakeThickSolidByJoin`)は計算中ずっと GIL を握り、大きな部品で
+    数分かかる(QR1 の 733 面の平面を抜いて 167 秒。同じプロセスではその間サーバ全体が止まった)。面の編集・フィレットと違い期限は
+    付けない(新しい入力でも上限なし)。鍵は同じプロセスの `kernel_shell.shell_solid` と同じ(プレビューの採用・確定・redo で使い回す)。"""
+    ordered = (tuple(int(index) for index in faces), float(thickness))
+    return kernel.remembered(
+        "shell",
+        (shape,),
+        ordered,
+        lambda: kernel_worker.run("shell_body", shape, {"faces": list(ordered[0]), "thickness": ordered[1]}, op="shell", timeout=None),
+    )
 
 
 register_verb(VERB_SHELL_BODY, do=_do_shell_body, undo=undo_shape)
