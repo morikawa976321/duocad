@@ -204,6 +204,7 @@ def test_select_face_boundaries_swaps_the_faces_for_their_outer_edges(session: S
     kept = next(index for index in range(1, 13) if index not in query.edges_of_face(body.shape, top)
                 and index not in query.edges_of_face(body.shape, side))
     _select(session, _face_refs(body, [top]) + _edges(body, [kept]) + _face_refs(body, [side]))
+    session.begin_command("fillet")
 
     async def script(send):
         return await send({"cmd": "select_face_boundaries", "client_op": 7})
@@ -227,6 +228,7 @@ def test_select_face_boundaries_widens_the_outer_edges_to_their_chains(session: 
         boundary = query.edges_of_face(body.shape, face["index"])
         chains = session.edge_chains(body.id, boundary)["chains"]
         _select(session, _face_refs(body, [face["index"]]))
+        session.begin_command("chamfer")
         session.select_face_boundaries()
         answer = [index for kind, index in _selected(session)]
         assert answer == sorted({member for chain in chains for member in chain})
@@ -239,8 +241,20 @@ def test_select_face_boundaries_only_drops_the_faces_of_a_hidden_body(session: S
     body, _ = _box(session)
     _select(session, _face_refs(body, [1]))
     session.set_visible(body.id, False)
+    session.begin_command("fillet")
     session.select_face_boundaries()
     assert _selected(session) == []
+
+
+@pytest.mark.parametrize("verb", [None, "offset_faces"])
+def test_select_face_boundaries_leaves_the_selection_outside_an_edge_only_command(session: Session, verb) -> None:
+    """落ちたら、繋ぎ直した画面の古い要求が、別の画面で起動した面を食う verb の面を辺へ置き換える。"""
+    body, _ = _box(session)
+    if verb is not None:
+        session.begin_command(verb)
+    _select(session, _face_refs(body, [1]))
+    session.select_face_boundaries(client_op=3)
+    assert _selected(session) == [("face", 1)]
 
 
 def test_edge_chains_survive_a_zoom(session: Session, monkeypatch) -> None:

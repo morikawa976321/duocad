@@ -1183,7 +1183,9 @@
       const first = kind === undefined ? undefined : entityPointKeys()[kind]?.[0]?.[0]
       return first === undefined ? null : { ...ref, point: first }
     }
-    if ('kind' in ref && ref.kind !== undefined) return ref
+    // `kind: null` もコアは省いたのと同じに読む。
+    const kind = (ref as { kind?: string | null }).kind
+    if (kind !== undefined && kind !== null) return ref
     if (target === 'face' || target === 'edge' || target === 'vertex') return { ...(ref as ShapeRef), kind: target }
     return target === 'body' ? bodyRef((ref as ShapeRef).body) : null
   }
