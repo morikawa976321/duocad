@@ -20,6 +20,7 @@
         {"type": "edges", "body_id": str, "revision": int, "shape_revision": int, "deviation": float, "edges": [...]}
         {"type": "edge_chains", "body_id": str, "revision": int, "shape_revision": int, "chains": [[int, ...], ...]}
         {"type": "face_chains", "body_id": str, "revision": int, "shape_revision": int, "origins": [int, ...], "chains": [[int, ...], ...]}
+        {"type": "face_edges", "body_id": str, "revision": int, "shape_revision": int, "faces": [int, ...], "boundary_edges": [int, ...]}
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
         {"type": "error", "message": str, "where": str, "client_op": int|None}
         {"type": "done", "ack_id": int}
@@ -560,6 +561,9 @@ class Server:
             elif command == "get_face_chains":
                 result = self.session.face_chains(message["body_id"], list(message["chain_of"]))
                 await _send(connection, {"type": "face_chains", **result})
+            elif command == "get_face_edges":
+                result = self.session.face_edges(message["body_id"], list(message["boundary_of"]))
+                await _send(connection, {"type": "face_edges", **result})
             # -------------------------------------------------- D: 頂点の座標(`get_edges` と同じく要求した接続にだけ返す)
             elif command == "get_vertices":
                 result = self.session.vertices(message["body_id"])

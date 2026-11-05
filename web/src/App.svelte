@@ -80,6 +80,7 @@
     type EdgeChainsPayload,
     type EdgesPayload,
     type FaceChainsPayload,
+    type FaceEdgesPayload,
     type FemStatus,
     type OptimizeConditionsReport,
     type OptimizeDebugPayload,
@@ -310,6 +311,8 @@
   let edgeChains: Record<string, { shape_revision: number; chains: number[][] }> = {}
   /** 連なりを頼んだ辺(`${body_id}:${shape_revision}:${辺の添字}`)。 */
   let edgeChainsAsked = new Set<string>()
+  /** 外周の辺を頼んだ面(`${body_id}:${shape_revision}:${面の添字}`)。コマンドを降りたら忘れる(`onCommandEnd` / `onWantsKinds`)。 */
+  const faceEdgesAsked = new Set<string>()
   /** 丸めの面の連なり(「面の削除」でクリックを広げる)。 */
   const faceChains = createFaceChains({
     shapeRevisionOf: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.shape_revision,
@@ -431,6 +434,7 @@
         faceChains.forgetAsked()
         pendingChainPick = null
       }
+      if (where === 'get_face_edges' || where === 'send') faceEdgesAsked.clear()
       if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
       // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
       // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
@@ -470,6 +474,7 @@
         edgesAsked.clear()
         edgeChainsAsked.clear()
         faceChains.forgetAsked()
+        faceEdgesAsked.clear()
         pendingChainPick = null
         verticesAsked.clear()
         files.dropThumbnailRequests()
@@ -481,6 +486,7 @@
     onEdges: handleEdges,
     onEdgeChains: handleEdgeChains,
     onFaceChains: handleFaceChains,
+    onFaceEdges: handleFaceEdges,
     onVertices: handleVertices,
     onMeasure: handleMeasure,
     onSelectionInfo: (payload) => selectionInfo.onResult(payload),
@@ -1020,6 +1026,31 @@
   function handleFaceChains(payload: FaceChainsPayload): void {
     faceChains.remember(payload)
     if (pendingChainPick?.()) pendingChainPick = null
+  }
+
+  /** 外した面の外周の辺を、辺の連なりで選択へ入れる(`onWantsKinds`)。届く前に降りた・形が変わったなら捨てる。 */
+  function handleFaceEdges(payload: FaceEdgesPayload): void {
+    if (!edgeOnlyCommand || !sameShape(payload.body_id, payload)) return
+    const items = payload.boundary_edges.map((edgeIndex) => ({ bodyId: payload.body_id, edgeIndex }))
+    const add = () => {
+      modifySelection(items.flatMap((item) => edgeChainRefs(item.bodyId, item.edgeIndex) ?? []), [])
+    }
+    if (items.some((item) => edgeChainRefs(item.bodyId, item.edgeIndex) === null)) deferUntilChains(items, add)
+    else add()
+  }
+
+  /** 面の外周の辺を頼む(同じ起動で同じ形の同じ面は2度頼まない)。隠したボディ・メッシュボディは辺を持たないので頼まない。 */
+  function requestFaceEdges(faces: readonly ShapeRef[]): void {
+    for (const bodyId of new Set(faces.map((face) => face.body))) {
+      const body = model?.bodies.find((item) => item.body_id === bodyId)
+      if (!body || !body.visible || body.kind === 'mesh') continue
+      const missing = faces
+        .filter((face) => face.body === bodyId && !faceEdgesAsked.has(`${bodyId}:${body.shape_revision}:${face.index}`))
+        .map((face) => face.index)
+      if (missing.length === 0) continue
+      for (const index of missing) faceEdgesAsked.add(`${bodyId}:${body.shape_revision}:${index}`)
+      session.getFaceEdges(bodyId, missing)
+    }
   }
 
   /** 辺の連なりを頼む(同じ形の同じ辺は2度頼まない。連なりは形にだけ依存する)。形の版の分からないボディは頼まない。 */
@@ -1672,6 +1703,7 @@
     widenedDeletion = null
     wideningOp = null
     faceChains.forgetPicks()
+    faceEdgesAsked.clear()
     if (verb === MEASURE.id && measure.current !== null) return
     // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
     if (verb === INTERFERENCE.id) return
@@ -1684,11 +1716,19 @@
    */
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
-    if (kinds.length === 0) pendingOptimizePreset = null
+    if (kinds.length === 0) {
+      pendingOptimizePreset = null
+      faceEdgesAsked.clear()
+    }
     // 辺だけを食うコマンドが起動したら、選択に残っている面を外す(辺は残す。面は指せなくなるので外す手が無い)。
+    // 外した面は、その外周の辺の連なりで入れ直す(`handleFaceEdges`)。
     // `untrack`: ここは `CommandHost` の `$effect` の中から呼ばれ、選択を読むとその effect が選択の変化ごとに走り直す。
     if (kinds.length > 0 && kinds.every((kind) => kind === 'edge')) {
-      untrack(() => modifySelection([], refsOfKind(currentItems(), 'face')))
+      untrack(() => {
+        const faces = refsOfKind(currentItems(), 'face')
+        modifySelection([], faces)
+        requestFaceEdges(faces)
+      })
     }
   }
 

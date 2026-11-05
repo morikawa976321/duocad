@@ -3,11 +3,11 @@
  *
  *   node scripts/smoke-fillet-pick.mjs
  *
- *   1. 面を選んだ状態でフィレットを起動すると、面が選択から外れる(辺は残す)
+ *   1. 面を選んだ状態でフィレットを起動すると、面が選択から外れ、その面の外周の辺が入る(`get_face_edges`)
  *   2. 起動中は辺だけを指せる(`pickKinds`)。面をクリックしても選択に入らず、ホバーも面を指さない
  *   3. 接線で続く辺(角を丸めた箱の底の直線→円弧→直線)の1本をクリックすると連なりが全部入り、もう一度で全部外れる。
  *      連なりの一部だけが入った状態で連なりの1本を矩形で囲むと全部入り、もう一度で全部外れる
- *   4. 面取りでも 1 と同じ
+ *   4. 面取りでも 1 と同じ(角を丸めた面の外周は、辺の連なりごと入る)
  *
  * 形は MCP で作る: 箱を2つ作り、アクティブでない方の対角の縦の辺2本を丸める。一直線上で割れた辺は押し出しの join / union が面ごと
  * 統合して1本にするので、画面から作れる連なりの題材はこちら(一直線の連なりは `tests/test_blend_chains.py`)。
@@ -33,6 +33,17 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   const selection = () =>
     page.evaluate(() => JSON.parse(JSON.stringify(window.__duocad.selection?.items ?? [])))
   const kinds = async () => (await selection()).map((item) => item.kind ?? (item.entity ? 'entity' : 'region'))
+  /** 面が外れ、そのボディの辺だけが `count` 本(省けば1本以上)入るまで待つ。 */
+  const waitForBoundary = (what, count = null) =>
+    waitFor(
+      (id, expected) => {
+        const items = window.__duocad.selection?.items ?? []
+        if (items.length === 0 || (expected !== null && items.length !== expected)) return false
+        return items.every((item) => item.kind === 'edge' && item.body === id)
+      },
+      what,
+      [bodyId, count],
+    )
 
   /** 画面に見えている面を1つ(添字と画面座標)。 */
   async function visibleFace() {
@@ -48,8 +59,8 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   await clickFace(page, bodyId, face.index)
   await waitFor(() => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'face'), '面が選ばれない')
   await page.click('#fillet')
-  await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'フィレットの起動で面が外れない')
-  ok('面を選んだままフィレットを起動したら、面が外れた')
+  await waitForBoundary('フィレットの起動で、面がその外周の4本の辺へ読み替わらない', 4)
+  ok('面を選んだままフィレットを起動したら、面がその外周の4本の辺へ読み替わった')
 
   // ---------------------------------------------------------------- 2. 起動中は面を指せない
   // 辺はカーソルの近くのボディの分が届く(面を押したカーソルはそのボディの上にある)
@@ -112,6 +123,10 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   await clickFace(page, bodyId, (await visibleFace()).index)
   await waitFor(() => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'face'), '面が選ばれない(丸めた後)')
   await page.click('#fillet')
+  // 面は外周の辺へ読み替わる。連なりのクリックを見るので、読み替わってから空にする。
+  await waitForBoundary('丸めた後の面が外周の辺へ読み替わらない')
+  await mcp.callTool('clear_selection', {})
+  await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '選択が空にならない')
   // 丸めた形の辺(丸めた後の版以降)。版はその後も粗さで上がりうるが、形が同じなら添字はそのまま使える(`sameShape`)
   await waitFor(
     (id, revision) => (window.__duocad.edges?.[id]?.revision ?? -1) >= revision,
@@ -256,8 +271,8 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
   await clickFace(page, bodyId, (await visibleFace()).index) // 角を丸めたので面の添字は付け直し
   await waitFor(() => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'face'), '面が選ばれない(面取りの前)')
   await page.click('#chamfer')
-  await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '面取りの起動で面が外れない')
-  ok('面を選んだまま面取りを起動したら、面が外れた')
+  await waitForBoundary('面取りの起動で、面がその外周の辺へ読み替わらない')
+  ok('面を選んだまま面取りを起動したら、面がその外周の辺へ読み替わった')
 
   await assertNoAppErrors(page, consoleErrors)
 })

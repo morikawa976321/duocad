@@ -187,6 +187,26 @@ def test_edge_chains_are_sent_only_to_the_connection_that_asked(session: Session
     assert clients[1].payloads == [], "連なりは全接続へ配らない(要求した接続だけ)"
 
 
+def test_face_edges_answer_the_outer_edges_of_the_asked_faces(session: Session) -> None:
+    """`get_face_edges` は要求した接続にだけ、頼んだ面の外周の辺をまとめて返す(先に選んだ面をフィレット・面取りの辺へ読み替える)。"""
+    body, _ = _box(session)
+    faces = query.describe_faces(body.shape)
+    top = next(face["index"] for face in faces if face["normal"][2] > 0.9)
+    side = next(face["index"] for face in faces if face["normal"][0] > 0.9)
+
+    async def script(send):
+        return await send({"cmd": "get_face_edges", "body_id": body.id, "boundary_of": [top, side, top]})
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "face_edges"
+    assert answer["shape_revision"] == session.edges(body.id)["shape_revision"]
+    assert answer["faces"] == [top, side], "同じ面は1つに畳む"
+    expected = sorted(set(query.edges_of_face(body.shape, top)) | set(query.edges_of_face(body.shape, side)))
+    assert answer["boundary_edges"] == expected and len(expected) == 7, "上面と側面の外周(共有の1本は1回)"
+    assert clients[1].payloads == [], "外周の辺は全接続へ配らない(要求した接続だけ)"
+
+
 def test_edge_chains_survive_a_zoom(session: Session, monkeypatch) -> None:
     """落ちたら、ズームで粗さが変わるたびに連なりを求め直す(連なりは形にだけ依存する。大きな部品で辺1本 10ms)。"""
     body, _ = _box(session)

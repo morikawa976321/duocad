@@ -78,6 +78,7 @@ export const COMMAND_CATEGORY = {
   get_edges: 'protocol',
   get_edge_chains: 'protocol',
   get_face_chains: 'protocol',
+  get_face_edges: 'protocol',
   ai_get_status: 'protocol',
   ai_configure: 'protocol',
   ai_set_thinking: 'protocol',
@@ -175,6 +176,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   get_edges: ['body_id'],
   get_edge_chains: ['body_id', 'chain_of'],
   get_face_chains: ['body_id', 'chain_of'],
+  get_face_edges: ['body_id', 'boundary_of'],
   ai_get_status: [],
   ai_configure: ['provider', 'model', 'base_url'],
   ai_set_thinking: ['thinking'],
@@ -270,6 +272,7 @@ export interface CommandArguments {
   get_edges: { body_id: string }
   get_edge_chains: { body_id: string; chain_of: unknown[] }
   get_face_chains: { body_id: string; chain_of: unknown[] }
+  get_face_edges: { body_id: string; boundary_of: unknown[] }
   ai_get_status: Record<string, never>
   ai_configure: { provider: string; model?: string; base_url?: string }
   ai_set_thinking: { thinking: string }

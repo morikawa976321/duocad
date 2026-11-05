@@ -1053,6 +1053,25 @@ class DocumentView:
             "chains": [kernel_face_edit.blend_chain(body.shape, index) for index in origins],
         }
 
+    def face_edges(self, body_id: str, face_indices: list) -> dict:
+        """頼まれた面の外周の辺(`query.edges_of_face`。穴の縁は入れない)を、全部の面の分まとめて昇順で返す。
+
+        戻り値: `{"body_id", "revision", "shape_revision", "faces": [頼まれた面(重複を畳む)], "boundary_edges": [辺の添字(昇順)]}`
+
+        画面は、面を選んだままフィレット・面取りを起動したとき、その面を外周の辺へ読み替える(辺だけを食うコマンドの
+        起動中は面を指せない)。辺の連なりは入れない(`edge_chains` で別に頼む)。
+        """
+        body = self._visible_brep(body_id, "面")
+        faces = list(dict.fromkeys(int(index) for index in face_indices))
+        edges = sorted({edge for face in faces for edge in query.edges_of_face(body.shape, face)})
+        return {
+            "body_id": body_id,
+            "revision": self.body_revision(body_id),
+            "shape_revision": self.shape_revision(body_id),
+            "faces": faces,
+            "boundary_edges": edges,
+        }
+
     def vertices(self, body_id: str) -> dict:
         """1Bodyの頂点を1始まりの添字つきの3D座標で返す(キャッシュ付き)。
 

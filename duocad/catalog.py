@@ -2397,6 +2397,24 @@ COMMANDS: tuple[Command, ...] = (
             "画面がクリックした面の分だけ返す"
         ),
     ),
+    Command(
+        name="get_face_edges",
+        category="protocol",
+        description="",
+        params=(
+            Param("body_id", "string", "外周の辺が要る面のボディ"),
+            # `faces` と綴らない理由は get_edge_chains と同じ(外周を調べる読み取りで、verb の対象ではない)。
+            Param("boundary_of", "array", "外周の辺が要る面の添字(1始まり)の配列"),
+        ),
+        session="face_edges",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**配信しない**(`get_edge_chains` と同じ)。面を選んだままフィレット・面取りを起動したとき、"
+            "画面がその面を外周の辺(穴の縁は入れない)へ読み替えるために頼む"
+        ),
+    ),
     # アプリ内AI(protocol)。**verbではなく、実体は `net/ws.py` の `Server`**(`session=None`)。
     # 応答は専用イベント(`ai_status` / `ai_tool_call` / `ai_result` / `ai_error`)で、AIが文書を変えた分は
     # 通常の状態配信として別途届く。**ここに宣言するのは、ソケットが受け取る名前を宣言で尽くすため**
