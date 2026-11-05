@@ -59,3 +59,10 @@ assert.deepEqual(syncedChoice(ROTATION_AXIS, { axis_edge: { datum: 'Z' } }, {}, 
 assert.deepEqual(syncedChoice(ROTATION_AXIS, { axis_edge: { body: 'b', kind: 'edge', index: 3 } }, {}, undefined), { value: 'edge' })
 // 数値の軸(axis_dir)だけの配信からはどのボタンも選ばない(選ぶと画面が原点の軸で送り直して軸の位置を上書きする)。
 assert.deepEqual(syncedChoice(ROTATION_AXIS, { axis_dir: [0, 0, 1], axis_point: [10, 0, 0] }, {}, undefined), { value: undefined })
+// 画面が原点の Z 軸を送ったあと、AI が axis_edge を外して数値の軸へ替えた: Z軸 を残さない(残すと古い axis_edge を送り直し、
+// 原点を通る Z 軸で回る)。まだ送っていない選択(前回の配信に axis_edge が無い)は残す。
+assert.deepEqual(
+  syncedChoice(ROTATION_AXIS, { axis_dir: [0, 0, 1], axis_point: [10, 0, 0] }, { axis_edge: { datum: 'Z' } }, 'z'),
+  { value: undefined },
+)
+assert.deepEqual(syncedChoice(ROTATION_AXIS, { angle: 90 }, {}, 'z'), { value: 'z' })
