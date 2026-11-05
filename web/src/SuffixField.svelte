@@ -14,6 +14,8 @@
 </script>
 
 <script lang="ts">
+  import { isImeKey } from './keys'
+
   /**
    * 拡張子を欄の外に固定で出す入力欄(本人指示 2026-10-07)。送るときに `withSuffix` で付けるのは呼ぶ側。
    * 貼り付け時と欄を離れたときだけ、打った側の同じ拡張子を落とす。打っている途中では落とさない
@@ -55,7 +57,11 @@
     spellcheck="false"
     {placeholder}
     bind:value
-    {onkeydown}
+    onkeydown={(event) => {
+      // Esc は呼ぶ側が自分の値へ戻す合図(改名・複製の取り消し)。戻した値が打った値と同じ文字列でも落とさない。
+      if (event.key === 'Escape' && !isImeKey(event)) typed = null
+      onkeydown?.(event)
+    }}
     onmousedown={(event) => {
       selectedByFocus = selectOnFocus && document.activeElement !== event.currentTarget
     }}
