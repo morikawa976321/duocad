@@ -546,6 +546,8 @@ export interface MeasurePayload {
   /** ちょうど2項目のときだけ付く(`duocad/measure.py` の `measure_selection`)。 */
   between?: MeasureBetween | null
   between_error?: string | null
+  /** 測れない項目の `items` での添字(2項目のときだけ。`duocad/measure.py`)。 */
+  between_error_items?: number[]
 }
 
 /**
@@ -1069,6 +1071,8 @@ export interface Session {
    * `clearance` は隙間の要求[mm](0 なら隙間検査なし)。
    */
   checkInterference(clearance: number, clientOp: number): void
+  /** この接続の干渉チェックを取り消す(サーバが子を止める。結果は来ない)。走っていなければ何もしない。 */
+  cancelInterference(): void
   /**
    * 画面の見え方をサーバへ知らせ、ズームに合わせた粗さでソリッド・辺・領域を測り直させる(可変解像度)。
    * 応答は通常の状態配信で、変わらなければ何も来ない。
@@ -1325,6 +1329,7 @@ export function createSession(hooks: SessionHooks): Session {
       items?: unknown[]
       between?: MeasureBetween | null
       between_error?: string | null
+      between_error_items?: number[]
       // ---------------------------------------------------------------- 選択情報
       request_id?: number | null
       item?: MeasureItem | null
@@ -1395,6 +1400,7 @@ export function createSession(hooks: SessionHooks): Session {
         items: message.items ?? [],
         between: message.between,
         between_error: message.between_error,
+        between_error_items: message.between_error_items,
       })
     } else if (message.type === 'interference') {
       hooks.onInterference({ ...message, client_op: message.client_op ?? null } as InterferencePayload)
@@ -1621,6 +1627,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     checkInterference(clearance, clientOp) {
       send({ cmd: 'check_interference', clearance, client_op: clientOp })
+    },
+    cancelInterference() {
+      send({ cmd: 'cancel_interference' })
     },
     setViewResolution(worldPerPixel, sizeHint, focus) {
       if (focus == null) {

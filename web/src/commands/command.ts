@@ -10,6 +10,7 @@ import type {
   BodyRef,
   DatumName,
   DatumRef,
+  MeasureItem,
   Point2,
   RegionRef,
   SelectionRef,
@@ -82,6 +83,17 @@ export function refKey(ref: SelectionRef): string {
   const item = ref as ShapeRef
   if (kind === 'body') return `body:${item.body}`
   return `${item.kind}:${item.body}:${item.index}`
+}
+
+/**
+ * 測定の1項目(`duocad/measure.py` の `_measure_item`)が指す選択の参照。項目は参照の識別子
+ * (`body` / `index` / `sketch` / `entity` / `point`)をそのまま写して返す。
+ */
+export function measureItemRef(item: MeasureItem): SelectionRef {
+  if (item.kind === 'sketch_entity') return { sketch: item.sketch, entity: item.entity, point: item.point }
+  if (item.kind === 'region') return { sketch: item.sketch, index: item.index }
+  if (item.kind === 'body') return { body: item.body, kind: 'body', index: null }
+  return { body: item.body, kind: item.kind, index: item.index }
 }
 
 /** 2つの参照が同じ実体を指すか(コアの `ref_key` の一致と同じ)。 */
@@ -197,6 +209,13 @@ export interface SelectionArgSpec extends ArgSpecCommon {
    * `kinds` に `'vertex'` があれば同じく指せる(`move_body` / `mirror_body` の頂点はボディを名指しする手の1つ)。
    */
   pickVertices?: true
+  /**
+   * 起動中に指せる面・辺の形(`faces` は面の `kind`、`edges` は辺の `kind`。省略は形を問わない)。コアが受けない形を
+   * 光らせない(`App.svelte` の `pickShapes` → `Viewport.setPickShapes`)。
+   */
+  shapes?: { faces?: readonly string[]; edges?: readonly string[] }
+  /** 待ちの1行に添える、受け付けるものの説明(`promptFor`)。 */
+  hint?: string
   /**
    * スケッチの点を指しても、その図形ごとに効く引数(`delete`・`mirror_sketch_entities`。コアが点を図形へ畳む)。
    * 起動中は点のクリックを図形の参照へ畳んで選ぶ(`grain.ts`)。`move_sketch_entities` は点だけを動かすので付けない。
@@ -694,7 +713,8 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   if (spec.kind === 'selection') {
     const have = ((values[spec.name] ?? []) as SelectionRef[]).length
     const need = spec.min - have
-    return `${spec.label}を${need}${counterFor(spec)}選ぶ(クリックで足す・外す / 左ドラッグで囲む)`
+    const hint = spec.hint === undefined ? '' : `: ${spec.hint}`
+    return `${spec.label}を${need}${counterFor(spec)}選ぶ${hint}(クリックで足す・外す / 左ドラッグで囲む)`
   }
   if (spec.kind === 'point') {
     const instead = spec.typedInstead === undefined ? '' : ` / ${spec.typedInstead}を打てばクリックは要らない`

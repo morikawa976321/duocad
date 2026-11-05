@@ -36,7 +36,7 @@
    - `measure` は**測るだけ**（verb ではない）。頂点・直線の辺・平らな面・スケッチの点・スケッチの線分・領域を2つ置くと `between.distance`
      （直線・平面は無限に延ばす。スケッチの線分は直線、領域はそのスケッチの平面）、平行でない線・面どうしは
      `between.angle_deg` が返る。測れない組（円い辺・曲面・ボディそのもの・線分以外のスケッチの図形まるごと）は
-     `between_error` に理由が入り、各項目の寸法はそのまま読める
+     `between_error` に理由が、`between_error_items` に測れない項目の添字が入り、各項目の寸法はそのまま読める
    - `sketch_create_offset(distance, base_plane=?)` は `sketch_create` の兄弟。`base_plane` 省略時は選択の面（ちょうど1枚）を基準に
      し、その法線方向へ `distance`（mm・正の向きが法線）離れた平面にスケッチを貼る。基準の基準（offsetのoffset）は作れない
    - どちらも戻り値に**スケッチの枠 `frame`**（`origin` / `u` / `v` / `normal`）を返し、図形の座標 (u, v) はこの枠で測る

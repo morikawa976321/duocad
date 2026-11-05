@@ -3,6 +3,7 @@
  * `tests/test_ts_evaluators.py` が `node` でこれを走らせる。
  *
  * 落ちたら、札の canvas が文字より狭く、右端の単位が切れる(固定幅 256px だと `12.345 mm` 以上で欠ける)。
+ * または、画素で一定のはずの札(測定・干渉の距離)が、寄る・引く・正投影のズームで画面の上の大きさを変える。
  */
 import assert from 'node:assert/strict'
 
@@ -44,7 +45,8 @@ globalThis.document = {
   },
 }
 
-const { makeTextSprite, spriteCanvasWidth } = await import('../web/src/textSprite.ts')
+const { makeScreenTextSprite, makeTextSprite, spriteCanvasWidth } = await import('../web/src/textSprite.ts')
+const THREE = await import(new URL('../web/node_modules/three/build/three.module.js', import.meta.url).href)
 
 // 文字の幅に余白(左右12px)を足した幅になる。
 assert.equal(spriteCanvasWidth(100), 124)
@@ -66,5 +68,36 @@ for (const text of ['5.000 mm', '12.345 mm', '100.000 mm', '1234.567 mm', '12345
   assert.ok(Math.abs(sprite.scale.x / sprite.scale.y - canvas.width / canvas.height) < 1e-12)
   assert.equal(sprite.scale.y, 10)
 }
+
+// 画素で一定の札: 描く直前に、縦が `heightPx` 画素に映る大きさへ直る。
+const viewport = { width: 1000, height: 600 }
+const renderer = { getSize: (out) => out.set(viewport.width, viewport.height) }
+function projectedHeightPx(sprite, camera) {
+  sprite.updateMatrixWorld()
+  camera.updateMatrixWorld()
+  sprite.onBeforeRender(renderer, null, camera)
+  const center = new THREE.Vector3().setFromMatrixPosition(sprite.matrixWorld)
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize().multiplyScalar(sprite.scale.y)
+  const top = center.clone().add(up).project(camera)
+  return ((top.y - center.clone().project(camera).y) / 2) * viewport.height
+}
+const { sprite: screenSprite } = makeScreenTextSprite('12.345 mm', 26, '#ffffff')
+screenSprite.position.set(5, 3, -2)
+const perspective = new THREE.PerspectiveCamera(45, viewport.width / viewport.height, 0.1, 1e5)
+for (const distance of [10, 1000]) {
+  perspective.position.set(5, 3, distance)
+  perspective.lookAt(5, 3, -2)
+  perspective.updateProjectionMatrix()
+  assert.ok(Math.abs(projectedHeightPx(screenSprite, perspective) - 26) < 1e-6, `透視・距離 ${distance}`)
+}
+const orthographic = new THREE.OrthographicCamera(-50, 50, 30, -30, 0.1, 1e5)
+orthographic.position.set(5, 3, 100)
+for (const zoom of [1, 40]) {
+  orthographic.zoom = zoom
+  orthographic.updateProjectionMatrix()
+  assert.ok(Math.abs(projectedHeightPx(screenSprite, orthographic) - 26) < 1e-6, `正投影・ズーム ${zoom}`)
+}
+assert.equal(screenSprite.frustumCulled, false, '直す前の大きさで視錐台から外され、画面の端の札が描かれない')
+assert.ok(Math.abs(screenSprite.scale.x / screenSprite.scale.y - created.canvas.width / created.canvas.height) < 1e-12, '縦横比は保つ')
 
 console.log('textSprite.ts: 全ての想定を満たした')

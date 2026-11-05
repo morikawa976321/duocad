@@ -5,6 +5,7 @@
  * 1つ=その1つ対ほか全部 / 2つ以上=選んだものどうし)ので、`build` が作る引数は無い。
  * 送るのは `{cmd:'check_interference', clearance, client_op}` で、返事は状態配信ではなく `{type:'interference', client_op, ...}`。
  */
+import { evaluateExpression } from '../expression'
 import type { CommandDef } from './command'
 
 export const INTERFERENCE: CommandDef<'check_interference'> = {
@@ -20,12 +21,15 @@ export const INTERFERENCE: CommandDef<'check_interference'> = {
 
 export type ClearanceParse = { ok: true; value: number } | { ok: false; reason: string }
 
-/** 隙間の欄の文字列。空欄は 0(隙間検査なし)。0 以上の有限の数だけ通す(コアの `check_clearance` と同じ規則)。 */
+/**
+ * 隙間の欄の文字列。空欄は 0(隙間検査なし)。ほかの数値欄と同じく式で読み(`evaluateExpression`)、
+ * 0 以上の有限の数だけ通す(コアの `check_clearance` と同じ規則)。
+ */
 export function parseClearance(text: string): ClearanceParse {
   const trimmed = text.trim()
   if (trimmed === '') return { ok: true, value: 0 }
-  const value = Number(trimmed)
-  if (!Number.isFinite(value)) return { ok: false, reason: `隙間は数(mm)で入れる: ${trimmed}` }
-  if (value < 0) return { ok: false, reason: '隙間は 0 以上(mm)で入れる' }
-  return { ok: true, value }
+  const evaluated = evaluateExpression(trimmed)
+  if (!evaluated.ok) return { ok: false, reason: `隙間: ${evaluated.reason}` }
+  if (evaluated.value < 0) return { ok: false, reason: '隙間は 0 以上(mm)で入れる' }
+  return { ok: true, value: evaluated.value }
 }

@@ -64,6 +64,8 @@ export const OPTIMIZE_LOAD_COLOR = 0xffc857
 /** 測定(issue #10)の線・端点・札。 */
 export const MEASURE_COLOR = 0xff6ad5
 export const MEASURE_TEXT_COLOR = '#ff8ae0'
+/** 測定・干渉の距離の札の縦[CSS 画素](画面の上で一定。`makeScreenTextSprite`)。 */
+export const LABEL_HEIGHT_PX = 26
 /** 干渉チェック(`interferenceLayer.ts`)。重なりの立体は赤、接触(共有面・辺・点)は橙。 */
 export const INTERFERENCE_OVERLAP_COLOR = 0xff3b30
 export const INTERFERENCE_CONTACT_COLOR = 0xffa21f

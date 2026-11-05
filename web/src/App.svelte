@@ -20,6 +20,7 @@
     datumRef,
     edgeRef,
     faceRef,
+    measureItemRef,
     pickedRefOf,
     refKey,
     refKind,
@@ -47,7 +48,7 @@
   import { isImeKey } from './keys'
   import { INTERFERENCE } from './commands/interference'
   import { MEASURE } from './commands/measure'
-  import type { MeasurePayload } from './session'
+  import type { MeasureItem, MeasurePayload } from './session'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
     OPTIMIZE_MODE_COMMANDS,
@@ -126,7 +127,7 @@
     type SketchEntityHit,
     type Viewport,
   } from './viewport'
-  import type { PickKind, SketchGuideHit, ViewSnapshot } from './viewportTypes'
+  import type { PickKind, PickShapes, SketchGuideHit, ViewSnapshot } from './viewportTypes'
   import type { CommandRequest } from './generated/protocol'
 
   /**
@@ -315,6 +316,8 @@
    * `wantedPick === 'vertex'` と同じ扱いで、対象ボディの頂点を候補に出し、辺より先に取る。
    */
   let wantedVertices = $state(false)
+  /** 起動中のコマンドが受ける面・辺の形(`SelectionArgSpec.shapes`。測定の平らな面・直線の辺)。 */
+  let wantedShapes = $state<PickShapes>({ faces: null, edges: null })
   /** 起動中のコマンドが持ち主(ボディ・図形)ごとに効くか(`CommandHost` が知らせる)。クリックとホバーをその粒度へ畳む。 */
   let wantedGrain = $state<SelectionGrain>(NO_GRAIN)
   /** 取り寄せた辺(body_id -> その版の折れ線)。カーソルの近くのボディから頼む(`requestPickData`)。 */
@@ -1076,10 +1079,22 @@
     fail,
   })
 
+  const MESH_UNMEASURABLE = 'メッシュボディは測れない(頂点・辺・面を持たない)'
+
+  /** 断られた測定で外す項目(`onCommandEnd` が読んで捨てる)。測れた側は残し、次の1つを指せば測り直せる。 */
+  let measureRefused: SelectionRef[] | null = null
+
   function handleMeasure(payload: MeasurePayload): void {
     // 結果を先に入れる(`commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で選択を残すかを決める)。
     measure.onResult(payload)
     if (releasePending(payload.client_op)) {
+      // 添字は応答の `items`(コアが測った選択)の並び。画面の選択はまだ古い配信のことがあるので、項目から参照を作って外す
+      // (選択に無い参照の除外はコアが空振りにする)。
+      const refused = (payload.between_error_items ?? []).flatMap((at) => {
+        const item = payload.items[at] as MeasureItem | undefined
+        return item === undefined ? [] : [measureItemRef(item)]
+      })
+      measureRefused = refused.length > 0 ? refused : null
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }
@@ -1088,6 +1103,7 @@
   // ---------------------------------------------------------------- 干渉チェック(issue #186。verbではない)
   const interference = createInterference({
     send: (clearance, clientOp) => session.checkInterference(clearance, clientOp),
+    cancel: () => session.cancelInterference(),
     nextOp,
     // サーバの `Session.interference_job` の `revision` と同じ作り。
     revision: () => (model === null ? null : `${model.generation}.${model.applied_count}.${model.log.length}`),
@@ -1095,8 +1111,21 @@
     connected: () => status === 'open',
     modeKind: () => mode.kind,
     viewport: () => viewport,
+    bodyName: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? null,
+    selectBodies: selectInterferingBodies,
     fail,
   })
+
+  /** 干渉の行の2つを選ぶ。隠したボディはコアが選択に入れない(1つでも混ぜると選択の変更ごと断られる)ので外して知らせる。 */
+  function selectInterferingBodies(bodyIds: string[]): void {
+    const hidden = bodyIds.filter((bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.visible !== true)
+    if (hidden.length > 0) {
+      const names = hidden.map((bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? bodyId)
+      fail(`隠したボディは選べない: ${names.join('・')}`)
+    }
+    const shown = bodyIds.filter((bodyId) => !hidden.includes(bodyId))
+    if (shown.length > 0) presetSelection(shown.map((bodyId) => bodyRef(bodyId)))
+  }
 
   // ---------------------------------------------------------------- 選択情報(issue #140。verbではない)
   const selectionInfo = createSelectionInfo({
@@ -1379,6 +1408,11 @@
     viewport?.setPickKinds(kinds)
   })
 
+  $effect(() => {
+    const shapes = wantedShapes
+    viewport?.setPickShapes(shapes)
+  })
+
   /**
    * 辺・頂点が届くのを待っている矩形選択(`onBoxSelect`)と、引いたときの視点。新しいクリック・矩形選択・コマンドの起動で
    * 捨てる(後の操作の結果を古い矩形が上書きしない)。集め直しは引いたときの視点で行う(画面の矩形は引いたときの視点のもの)。
@@ -1517,6 +1551,11 @@
       return
     }
     pendingBox = null
+    if (activeVerb === MEASURE.id && event.faces.some((item) => meshBodyIds.has(item.bodyId))) {
+      fail(MESH_UNMEASURABLE)
+      onBoxSelect({ ...event, faces: event.faces.filter((item) => !meshBodyIds.has(item.bodyId)) })
+      return
+    }
     const mode = toggleOnlyMode(event.mode)
     // 辺は連なりごとのまとまり(連なりの辺を2本囲んでも1つ)。トグルはまとまり単位(`toggleUnits`)。
     // 連なりの分からない辺があれば、届くまで選択ごと待たせる(1本だけ入れると連なりが割れる)。
@@ -1730,6 +1769,7 @@
    * コマンドが終わった(`CommandHost.onEnd`: Esc・中断ボタン・確定成功)。選択を全解除する。
    * 形を変えるverbの確定ではコアが先に空にしているので効くのは中断と、形を変えない確定(集合代入・測定の失敗等)。
    * 測定の成功だけは残す(読み札と3Dの線は測った選択が変わるまで残る。`measurement.svelte.ts`)。
+   * 測定が断られたら、測れない項目だけを外す(`measureRefused`)。
    * `activeVerb === null` は、`onModeChanged` が先に起動を畳んだ後に遅れて届いた通知で、選択に触らない。
    */
   function onCommandEnd(verb: string): void {
@@ -1738,7 +1778,15 @@
     widenedDeletion = null
     wideningOp = null
     faceChains.forgetPicks()
-    if (verb === MEASURE.id && measure.current !== null) return
+    if (verb === MEASURE.id) {
+      const refused = measureRefused
+      measureRefused = null
+      if (measure.current !== null) return
+      if (refused !== null) {
+        modifySelection([], refused)
+        return
+      }
+    }
     // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
     if (verb === INTERFERENCE.id) return
     clearSelectionIfAny()
@@ -1946,6 +1994,11 @@
         host.setPick(sketchEntityRef(sketchHit.sketchId, sketchHit.entityId, null))
         return
       }
+    }
+    // メッシュボディは測れない(面も辺も頂点も持たず、ボディ参照へ畳むとコアの選択に数の外の項目が入る)。矩形選択も同じ(`onBoxSelect`)。
+    if (activeVerb === MEASURE.id && event.hit !== null && meshBodyIds.has(event.hit.bodyId)) {
+      fail(MESH_UNMEASURABLE)
+      return
     }
     // 素クリックのトグル(`toggleOnlyMode`)はどの種類にも効かせる(測定は辺・頂点でも測る)。
     // 来るのは今指せる種類(`pickKinds`)だけ: コマンドの起動中はそのコマンドが受け付けるものに絞られている。
@@ -2738,6 +2791,7 @@
             wantedPickDatum = datum
           }}
           onWantsVertices={(wants) => (wantedVertices = wants)}
+          onWantsShapes={(shapes) => (wantedShapes = shapes)}
           onWantsGrain={(grain) => (wantedGrain = grain)}
           onDeselect={(refs) => modifySelection([], refs)}
           faceKindOf={faceKinds.kindOf}
@@ -2802,7 +2856,6 @@
           item={selectionInfo.item}
           error={selectionInfo.error}
           names={selectionInfoNames}
-          besideOptimizePanel={optimizeMode}
         />
         <BrowserPanel
           bodies={partBodies}

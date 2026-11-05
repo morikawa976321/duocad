@@ -9,8 +9,10 @@
  */
 import assert from 'node:assert/strict'
 
-import { parseClearance } from '../web/src/commands/interference.ts'
-import { acceptResult, groupPairs, pairKey, summaryLines, visualFor } from '../web/src/interferenceGroups.ts'
+import './ts_resolve_hook.mjs'
+
+const { parseClearance } = await import('../web/src/commands/interference.ts')
+const { acceptResult, groupPairs, pairKey, summaryLines, visualFor } = await import('../web/src/interferenceGroups.ts')
 
 const pair = (a, b, extra) => ({ a, b, a_name: a.toUpperCase(), b_name: b.toUpperCase(), warnings: [], ...extra })
 const mesh = { positions: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 1, 2] }
@@ -18,7 +20,9 @@ const mesh = { positions: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 1, 2] }
 // ---- 隙間の欄
 assert.deepEqual(parseClearance(''), { ok: true, value: 0 })
 assert.deepEqual(parseClearance(' 0.2 '), { ok: true, value: 0.2 })
-for (const bad of ['-1', 'abc', 'NaN', 'Infinity']) assert.equal(parseClearance(bad).ok, false, bad)
+for (const bad of ['-1', 'abc', 'NaN', 'Infinity', '0x10', '1/0']) assert.equal(parseClearance(bad).ok, false, bad)
+assert.equal(parseClearance('10/3').value, 10 / 3, '隙間の欄もほかの数値欄と同じく式を読む')
+assert.equal(parseClearance('0.1*2').value, 0.2)
 
 // ---- 見出し
 const pairs = [
@@ -55,6 +59,13 @@ const summary = summaryLines({
   counts: { short: 4, at: 1, ok: 2 },
 })
 assert.ok(summary[0].includes('bolt') && summary[0].includes('7 組') && summary[0].includes('隠した 2 個'))
+const named = (selected, pairs = []) =>
+  summaryLines({ client_op: 1, target: { mode: 'selected_set', selected, bodies: selected, excluded_hidden: 0, pairs: 1 }, pairs }, (id) =>
+    id === 'b2' ? 'ナット' : null,
+  )[0]
+assert.ok(named(['b1', 'b2'], [pair('b1', 'b2', { relation: 'contact' })]).includes('B1・B2'), '選んだボディどうしも名前で(組の名前が先)')
+assert.ok(named(['b1', 'b2']).includes('b1・ナット'), '組に無いボディは今の名前、それも無ければ ID')
+assert.ok(named(['a', 'b', 'c', 'd', 'e']).includes('ほか 2 個'), '多ければ先頭だけ名前で')
 assert.ok(summary.some((line) => line.includes('不足 4') && line.includes('要求どおり 1')))
 assert.ok(summary.some((line) => line.includes('未着手 3')))
 

@@ -32,6 +32,8 @@ export interface BodyVertices {
 
 export interface EdgeCandidate extends ScreenHit {
   ref: EdgeRef
+  /** 辺の形(サーバの `edges[i].kind`。`line` / `circle` …)。 */
+  kind: string
   /** その辺の折れ線の偏差[mm]。 */
   deviation: number
 }
@@ -83,7 +85,7 @@ export interface SolidFeatures {
   setChains(bodyId: string, chains: number[][]): void
   onChainWanted(listener: (ref: EdgeRef) => void): void
   /** そのボディの辺1本ずつ(矩形選択)。 */
-  forEachEdge(visit: (ref: EdgeRef, points: Float32Array, deviation: number) => void): void
+  forEachEdge(visit: (ref: EdgeRef, points: Float32Array, deviation: number, kind: string) => void): void
   forEachVertex(visit: (ref: VertexRef, point: THREE.Vector3) => void): void
   /** 辺の折れ線の道のりの `fraction` の位置(0=始点 1=終点)。無ければ null。 */
   edgePoint(ref: EdgeRef, fraction: number): THREE.Vector3 | null
@@ -95,6 +97,7 @@ export interface SolidFeatures {
 
 interface EdgeEntry {
   index: number
+  kind: string
   points: Float32Array
   sphere: THREE.Sphere
 }
@@ -177,7 +180,7 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
         if (!sphereNear(edge.sphere, x, y, radiusPx, projector)) continue
         const hit = closestOnPolyline(x, y, float32Polyline(edge.points), projector, clip)
         if (hit === null || hit.distSq > limit) continue
-        found.push({ ...hit, ref: { bodyId, edgeIndex: edge.index }, deviation: entry.source.deviation })
+        found.push({ ...hit, ref: { bodyId, edgeIndex: edge.index }, kind: edge.kind, deviation: entry.source.deviation })
       }
     }
     return found
@@ -348,7 +351,7 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
     else {
       const edges = data.edges.map((edge) => {
         const points = edge.points instanceof Float32Array ? edge.points : new Float32Array(edge.points)
-        return { index: edge.index, points, sphere: sphereOf(points) }
+        return { index: edge.index, kind: edge.kind, points, sphere: sphereOf(points) }
       })
       const all: number[] = []
       for (const edge of edges) {
@@ -434,7 +437,7 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
     },
     forEachEdge(visit) {
       for (const [bodyId, entry] of edgeData) {
-        for (const edge of entry.edges) visit({ bodyId, edgeIndex: edge.index }, edge.points, entry.source.deviation)
+        for (const edge of entry.edges) visit({ bodyId, edgeIndex: edge.index }, edge.points, entry.source.deviation, edge.kind)
       }
     },
     forEachVertex(visit) {

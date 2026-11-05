@@ -583,6 +583,8 @@ class Server:
             elif command == "check_interference":
                 job = self.session.interference_job(message.get("clearance"), request_id=message.get("client_op"))
                 self._spawn(self._interference.start(connection, message, job), "干渉チェックの応答に失敗")
+            elif command == "cancel_interference":
+                self._interference.cancel(connection)
             elif command == "inspect_selection":
                 payload: dict = {"request_id": message.get("request_id"), "item": None, "error": None}
                 try:

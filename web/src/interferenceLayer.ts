@@ -8,13 +8,15 @@
 import * as THREE from 'three'
 
 import type { InterferenceVisual, RenderMesh } from './interferenceTypes'
-import { makeTextSprite } from './textSprite'
-import { INTERFERENCE_CONTACT_COLOR, INTERFERENCE_OVERLAP_COLOR, LAYER, MEASURE_COLOR, MEASURE_TEXT_COLOR } from './viewportConstants'
-
-export interface InterferenceLayerDeps {
-  /** 内容の外接直方体の対角[mm]。札の大きさに使う。 */
-  contentDiagonal(): number
-}
+import { makeScreenTextSprite } from './textSprite'
+import {
+  INTERFERENCE_CONTACT_COLOR,
+  INTERFERENCE_OVERLAP_COLOR,
+  LABEL_HEIGHT_PX,
+  LAYER,
+  MEASURE_COLOR,
+  MEASURE_TEXT_COLOR,
+} from './viewportConstants'
 
 export interface InterferenceLayer {
   /** `scene` へ足すのは呼び出し側。 */
@@ -25,7 +27,7 @@ export interface InterferenceLayer {
   dispose(): void
 }
 
-export function createInterferenceLayer(deps: InterferenceLayerDeps): InterferenceLayer {
+export function createInterferenceLayer(): InterferenceLayer {
   const root = new THREE.Group()
   root.name = 'interference'
   const solidMaterial = new THREE.MeshBasicMaterial({
@@ -129,8 +131,7 @@ export function createInterferenceLayer(deps: InterferenceLayerDeps): Interferen
     if (visual.distance !== null) {
       const { from, to, label } = visual.distance
       addPoints([from, to], distanceEndMaterial, distanceLineMaterial)
-      const height = Math.max(deps.contentDiagonal(), 1e-6) * 0.04
-      const { sprite, disposables: spriteDisposables } = makeTextSprite(label, height, MEASURE_TEXT_COLOR)
+      const { sprite, disposables: spriteDisposables } = makeScreenTextSprite(label, LABEL_HEIGHT_PX, MEASURE_TEXT_COLOR)
       sprite.position.set((from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2)
       sprite.renderOrder = LAYER.measure
       root.add(sprite)

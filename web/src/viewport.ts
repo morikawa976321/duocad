@@ -55,7 +55,7 @@ import { createSolidFeatures, type BodyEdges, type BodyVertices } from './solidF
 import type { BasePlaneName, DatumName } from './session'
 import {
   type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef,
-  type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type SectionState,
+  type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type PickShapes, type SectionState,
   type SketchDraw, type SketchEntityHit, type SketchGuideHit, type SketchGuides, type VertexRef, type ViewSnapshot, type Viewport,
 } from './viewportTypes'
 import {
@@ -162,12 +162,12 @@ export function createViewport(container: HTMLElement): Viewport {
   scene.add(annotations.object)
 
   // 測定の線と札(issue #10)。`root` に入れず、ピック対象にもしない。`showMeasurement` が唯一の書き手。
-  const measureAnnotation = createMeasureAnnotation({ contentDiagonal: () => contentDiagonal })
+  const measureAnnotation = createMeasureAnnotation()
   measureAnnotation.object.renderOrder = LAYER.measure
   scene.add(measureAnnotation.object)
 
   // 干渉チェックの装飾(issue #186)。測定と同じく指せない。`showInterference` が唯一の書き手。
-  const interferenceLayer = createInterferenceLayer({ contentDiagonal: () => contentDiagonal })
+  const interferenceLayer = createInterferenceLayer()
   interferenceLayer.object.renderOrder = LAYER.measure
   scene.add(interferenceLayer.object)
 
@@ -651,21 +651,39 @@ export function createViewport(container: HTMLElement): Viewport {
     // 置かないと、全部消して `frameAll()` してもグリッドが縮まない)。戻り値(姿勢を合わせたか)とは独立。
     grid.rescale(contentBoxForGrid(), true)
     if (box.isEmpty()) return false
+    frameBox(box, HOME_VIEW_OFFSET)
+    return true
+  }
+
+  /** 箱が収まるよう、注視点を箱の中心へ、カメラを `offset` の向きへ引く(`offset` の長さは `HOME_VIEW_OFFSET` と同じ引き具合の係数)。 */
+  function frameBox(box: THREE.Box3, offset: THREE.Vector3): void {
     const center = new THREE.Vector3()
     box.getCenter(center)
     const diagonal = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-6)
     const distance = fitDistance(diagonal / 2)
-    camera.position.copy(center).addScaledVector(HOME_VIEW_OFFSET, distance)
+    camera.position.copy(center).addScaledVector(offset, distance)
     controls.target.copy(center)
     // 正投影は視錐台で収める。`HOME_VIEW_OFFSET` の長さが1ではなく、透視は `fitHalfHeight` の
     // 1.5362倍ぶん引いた絵になるので、同じ係数を掛けて揃える(掛けないと `frameAll` のたびに
     // 正投影だけ1.54倍に寄る。実測 93.6px → 143.7px)。
     if (camera === orthographic) {
-      setViewHalfHeight(fitHalfHeight(diagonal / 2) * HOME_VIEW_OFFSET.length())
+      setViewHalfHeight(fitHalfHeight(diagonal / 2) * offset.length())
     }
     updateClipPlanes()
     controls.update()
-    return true
+  }
+
+  /** 見えているボディ `bodyIds` が収まる所へ、今の向きのまま寄る。どれも見えていなければ動かない。 */
+  function frameBodies(bodyIds: readonly string[]): void {
+    const box = new THREE.Box3()
+    for (const bodyId of bodyIds) {
+      const mesh = bodies.get(bodyId)?.body.mesh
+      if (mesh !== undefined && mesh.visible) box.expandByObject(mesh)
+    }
+    if (box.isEmpty()) return
+    const offset = camera.position.clone().sub(controls.target)
+    if (offset.lengthSq() === 0) offset.copy(HOME_VIEW_OFFSET)
+    frameBox(box, offset.setLength(HOME_VIEW_OFFSET.length()))
   }
 
   function setFov(deg: number): void {
@@ -1200,6 +1218,26 @@ export function createViewport(container: HTMLElement): Viewport {
     if (next.size === pickKinds.size && [...next].every((kind) => pickKinds.has(kind))) return
     pickKinds = next
     pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
+  }
+
+  let pickShapes: PickShapes = { faces: null, edges: null }
+
+  function setPickShapes(shapes: PickShapes): void {
+    const same = (a: readonly string[] | null, b: readonly string[] | null) =>
+      a === b || (a !== null && b !== null && a.length === b.length && a.every((kind) => b.includes(kind)))
+    if (same(shapes.faces, pickShapes.faces) && same(shapes.edges, pickShapes.edges)) return
+    pickShapes = shapes
+    pickChanged()
+  }
+
+  function faceShapePickable(bodyId: string, faceIndex: number): boolean {
+    if (pickShapes.faces === null) return true
+    const kind = bodies.get(bodyId)?.body.faceOf(faceIndex)?.kind
+    return kind !== undefined && pickShapes.faces.includes(kind)
+  }
+
+  function edgeShapePickable(kind: string): boolean {
+    return pickShapes.edges === null || pickShapes.edges.includes(kind)
   }
 
   /** スケッチモード中に、編集中のスケッチの中身の代わりにソリッドの面・辺・頂点を指すか(`setSolidPickInSketch`)。 */
@@ -1945,6 +1983,7 @@ export function createViewport(container: HTMLElement): Viewport {
         if (!mesh.visible) continue
         mesh.updateWorldMatrix(true, false)
         for (const face of entry.body.faces) {
+          if (!faceShapePickable(bodyId, face.index)) continue
           const positions = entry.body.facePositions(face.index)
           if (positions === null || !band.positionsInside(positions, mesh.matrixWorld, rect, width, height, keep)) continue
           if (!faceSeen(entry.body.mesh, face, seenOnSolid)) continue
@@ -1953,7 +1992,8 @@ export function createViewport(container: HTMLElement): Viewport {
       }
       // 辺・頂点(届いたボディの分)
       if (pickKinds.has('edge')) {
-        features.forEachEdge((ref, points, deviation) => {
+        features.forEachEdge((ref, points, deviation, kind) => {
+          if (!edgeShapePickable(kind)) return
           if (!band.positionsInside(points, identity, rect, width, height, keep)) return
           const visible = polylineSeen(
             Math.floor(points.length / 3),
@@ -2216,6 +2256,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const lines: Array<RankedCandidate<PickCandidate>> = [...sketchCandidates.lines]
     if (pickKinds.has('edge')) {
       for (const candidate of features.edgeCandidates(offsetX, offsetY, EDGE_PICK_PIXELS, project, section.signedDistance())) {
+        if (!edgeShapePickable(candidate.kind)) continue
         lines.push({
           item: {
             hit: { edge: candidate.ref },
@@ -2251,7 +2292,12 @@ export function createViewport(container: HTMLElement): Viewport {
     const datumSlack = datumPlane === null ? 0 : occlusion.slack(datumPlane.point, project.height)
     const datumInFront =
       datumPlane !== null && (surface === null || datumPlane.distance < surface.distance - datumSlack)
-    if (surface !== null && surface.ref !== null && pickKinds.has('face') && !datumInFront) return { ...nothing, hit: surface.ref }
+    if (
+      surface !== null && surface.ref !== null && pickKinds.has('face') && !datumInFront &&
+      faceShapePickable(surface.ref.bodyId, surface.ref.faceIndex)
+    ) {
+      return { ...nothing, hit: surface.ref }
+    }
     if (solidOnly) return nothing
     for (const candidate of regionHitsAt(offsetX, offsetY)) {
       if (surface !== null && candidate.distance > surface.distance + occlusion.slack(candidate.point, project.height)) break
@@ -2588,6 +2634,7 @@ export function createViewport(container: HTMLElement): Viewport {
     setOptimizeState,
     setOptimizeDebug: optimizeDebug.setState,
     setPickKinds,
+    setPickShapes,
     setSolidPickInSketch,
     setBodyEdges(bodyId, edges) {
       if (features.setEdges(bodyId, edges as BodyEdges | null)) pickChanged()
@@ -2658,6 +2705,7 @@ export function createViewport(container: HTMLElement): Viewport {
       camera.up.copy(WORLD_UP) // スケッチの v 軸へ倒したままだと、戻したのに傾いて見える
       frameToContent()
     },
+    frameBodies,
     resetGrid() {
       grid.rescale(contentBoxForGrid(), true)
     },

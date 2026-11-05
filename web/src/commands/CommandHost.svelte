@@ -73,6 +73,7 @@
   import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../expression'
   import { isImeKey, isTextEntry, ownsEnterKey, ownsEscapeKey } from '../keys'
   import type { CommandState, SelectionRef, SelectionState } from '../session'
+  import type { PickShapes } from '../viewportTypes'
   import { COMMAND_CATEGORY } from '../generated/protocol'
 
   let {
@@ -98,6 +99,7 @@
     onWantsPoint = () => {},
     onWantsPick = () => {},
     onWantsVertices = () => {},
+    onWantsShapes = () => {},
     onWantsGrain = () => {},
     onDeselect = () => {},
     faceKindOf = () => null,
@@ -154,6 +156,8 @@
     onWantsPick?: (target: PickTarget | null, datum: boolean) => void
     /** 起動中のコマンドが頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`。測定)。アプリ層が対象ボディの頂点を候補として出し、辺より先に取る。 */
     onWantsVertices?: (wants: boolean) => void
+    /** 起動中のコマンドが受ける面・辺の形(`SelectionArgSpec.shapes`)。無起動・形を問わないコマンドでは両方 null。 */
+    onWantsShapes?: (shapes: PickShapes) => void
     /** 起動中のコマンドが指した部分ではなく持ち主(ボディ・図形)ごとに効くか(`grain.ts`)。無起動では `NO_GRAIN`。 */
     onWantsGrain?: (grain: SelectionGrain) => void
     /** 共有選択からこれらの参照を外す(`PickArgSpec.excludesFrom`)。 */
@@ -357,6 +361,12 @@
     onWantsVertices(
       (command?.args ?? []).some((spec) => spec.kind === 'selection' && spec.pickVertices === true),
     )
+  })
+
+  $effect(() => {
+    const shapes = (command?.args ?? []).find((spec) => spec.kind === 'selection' && spec.shapes !== undefined)
+    const wanted = shapes?.kind === 'selection' ? shapes.shapes : undefined
+    onWantsShapes({ faces: wanted?.faces ?? null, edges: wanted?.edges ?? null })
   })
 
   $effect(() => {
