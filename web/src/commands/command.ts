@@ -8,6 +8,7 @@
  */
 import type {
   BodyRef,
+  MeasureItem,
   Point2,
   RegionRef,
   SelectionRef,
@@ -77,6 +78,17 @@ export function refKey(ref: SelectionRef): string {
   const item = ref as ShapeRef
   if (kind === 'body') return `body:${item.body}`
   return `${item.kind}:${item.body}:${item.index}`
+}
+
+/**
+ * 測定の1項目(`duocad/measure.py` の `_measure_item`)が指す参照の `refKey`。項目は参照の識別子
+ * (`body` / `index` / `sketch` / `entity` / `point`)をそのまま写して返す。
+ */
+export function measureItemKey(item: MeasureItem): string {
+  if (item.kind === 'sketch_entity') return refKey({ sketch: item.sketch, entity: item.entity, point: item.point })
+  if (item.kind === 'region') return refKey({ sketch: item.sketch, index: item.index })
+  if (item.kind === 'body') return refKey({ body: item.body, kind: 'body', index: null })
+  return refKey({ body: item.body, kind: item.kind, index: item.index })
 }
 
 /** 2つの参照が同じ実体を指すか(コアの `ref_key` の一致と同じ)。 */

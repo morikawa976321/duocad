@@ -16,6 +16,7 @@
     commandRequest,
     edgeRef,
     faceRef,
+    measureItemKey,
     pickedRefOf,
     refKey,
     refKind,
@@ -43,7 +44,7 @@
   import { isImeKey } from './keys'
   import { INTERFERENCE } from './commands/interference'
   import { MEASURE } from './commands/measure'
-  import type { MeasurePayload } from './session'
+  import type { MeasureItem, MeasurePayload } from './session'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
     OPTIMIZE_MODE_COMMANDS,
@@ -1056,13 +1057,14 @@
     // 結果を先に入れる(`commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で選択を残すかを決める)。
     measure.onResult(payload)
     if (releasePending(payload.client_op)) {
-      // 添字はコアの選択の並び(`duocad/measure.py` は選択の項目順に `items` を作る)。
-      const items = currentItems()
-      const refused = payload.between_error_items ?? []
-      measureRefused =
-        payload.count === 2 && items.length === 2 && refused.length > 0
-          ? refused.map((at) => items[at]).filter((ref) => ref !== undefined)
-          : null
+      // 添字は応答の `items` の並び。画面の選択はまだ古い配信のことがあるので、項目の参照で引き当てる。
+      const refusedKeys = new Set(
+        (payload.between_error_items ?? []).flatMap((at) => {
+          const item = payload.items[at] as MeasureItem | undefined
+          return item === undefined ? [] : [measureItemKey(item)]
+        }),
+      )
+      measureRefused = refusedKeys.size > 0 ? currentItems().filter((ref) => refusedKeys.has(refKey(ref))) : null
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }
