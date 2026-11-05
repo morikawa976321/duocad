@@ -1,4 +1,7 @@
-/** 文字を canvas テクスチャの `THREE.Sprite` にする。大きさは世界座標(`height`[mm])で、深度検査はしない(奥でも読める)。 */
+/**
+ * 文字を canvas テクスチャの `THREE.Sprite` にする。深度検査はしない(奥でも読める)。大きさは世界座標(`makeTextSprite`)か、
+ * 画面の画素で一定(`makeScreenTextSprite`。寄っても対象を覆わない)。
+ */
 import * as THREE from 'three'
 
 const SPRITE_FONT = 'bold 48px sans-serif'
@@ -45,4 +48,36 @@ export function makeTextSprite(
   const sprite = new THREE.Sprite(material)
   sprite.scale.set(height * (canvas.width / canvas.height), height, 1)
   return { sprite, disposables: [texture, material] }
+}
+
+/**
+ * 投影の縦の係数 `p11`(`projectionMatrix.elements[5]`)と、視点空間の奥行き `depth`(正投影は null)で、
+ * 縦 `viewportHeightPx` の画面での1画素ぶんの世界長さ。
+ */
+export function worldPerPixel(p11: number, depth: number | null, viewportHeightPx: number): number {
+  const span = depth === null ? 2 / p11 : (2 * depth) / p11
+  return span / Math.max(viewportHeightPx, 1)
+}
+
+/** `makeTextSprite` と同じ札を、描くたびに縦 `heightPx`[CSS 画素]になる大きさへ直す。 */
+export function makeScreenTextSprite(
+  text: string,
+  heightPx: number,
+  textColor: string,
+): { sprite: THREE.Sprite; disposables: Array<{ dispose(): void }> } {
+  const made = makeTextSprite(text, 1, textColor)
+  const sprite = made.sprite
+  const aspect = sprite.scale.x
+  const size = new THREE.Vector2()
+  const at = new THREE.Vector3()
+  // 行列は `onBeforeRender` の後に組まれる(three の `renderObject`)ので、ここで直した大きさがその回の描画に効く
+  sprite.onBeforeRender = (renderer, _scene, camera) => {
+    renderer.getSize(size)
+    at.setFromMatrixPosition(sprite.matrixWorld).applyMatrix4(camera.matrixWorldInverse)
+    const depth = (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true ? Math.max(-at.z, 1e-9) : null
+    const height = heightPx * worldPerPixel(camera.projectionMatrix.elements[5], depth, size.y)
+    sprite.scale.set(height * aspect, height, 1)
+    sprite.updateMatrixWorld()
+  }
+  return made
 }

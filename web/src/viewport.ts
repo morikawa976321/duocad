@@ -156,12 +156,12 @@ export function createViewport(container: HTMLElement): Viewport {
   scene.add(annotations.object)
 
   // 測定の線と札(issue #10)。`root` に入れず、ピック対象にもしない。`showMeasurement` が唯一の書き手。
-  const measureAnnotation = createMeasureAnnotation({ contentDiagonal: () => contentDiagonal })
+  const measureAnnotation = createMeasureAnnotation()
   measureAnnotation.object.renderOrder = LAYER.measure
   scene.add(measureAnnotation.object)
 
   // 干渉チェックの装飾(issue #186)。測定と同じく指せない。`showInterference` が唯一の書き手。
-  const interferenceLayer = createInterferenceLayer({ contentDiagonal: () => contentDiagonal })
+  const interferenceLayer = createInterferenceLayer()
   interferenceLayer.object.renderOrder = LAYER.measure
   scene.add(interferenceLayer.object)
 
