@@ -147,7 +147,7 @@ def _loft_shape(
         start_point=None if start is None else _point_in_space(doc, start),
         end_point=None if end is None else _point_in_space(doc, end),
         shifts=shifts,
-        merged=merged,
+        merged_bodies=merged,
     )
 
 

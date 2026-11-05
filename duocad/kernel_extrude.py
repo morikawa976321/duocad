@@ -127,7 +127,7 @@ def extrude_regions(
     normal: Sequence[float],
     target_shape: Any = None,
     taper: float = 0.0,
-    merged: Sequence[Any] = (),
+    merged_bodies: Sequence[Any] = (),
 ) -> dict:
     """領域の面群を法線方向へ押し出し、join/cut/new した形状を返す(束ね方は `_combine_region_solids`)。
 
@@ -175,7 +175,7 @@ def extrude_regions(
     head = {"verb": "extrude", "mode": mode, "distance": distance}
     if taper:
         head["taper"] = taper
-    return _combine_region_solids(prisms, mode, target_shape, head, merged)
+    return _combine_region_solids(prisms, mode, target_shape, head, merged_bodies)
 
 
 # --------------------------------------------------------------------------------------
@@ -705,7 +705,7 @@ def revolve_regions(
     mode: str,
     target_shape: Any = None,
     symmetric: bool = False,
-    merged: Sequence[Any] = (),
+    merged_bodies: Sequence[Any] = (),
 ) -> dict:
     """領域の面群を、スケッチ平面上の軸(`axis_point` を通り `axis_dir` 向き)のまわりに `angle` 度回し、
     join/cut/new した形状を返す(束ね方は `_combine_region_solids`)。
@@ -754,7 +754,7 @@ def revolve_regions(
         mode,
         target_shape,
         {"verb": "revolve", "mode": mode, "angle": angle, "symmetric": bool(symmetric)},
-        merged,
+        merged_bodies,
     )
 
 
@@ -798,8 +798,8 @@ def _require_one_side_of_axis(
         )
 
 
-def _check_merged(mode: str, target_shape: Any, merged: Sequence[Any]) -> None:
-    if merged and (mode != "join" or target_shape is None or _brep_topology.is_null(target_shape)):
+def _check_merged(mode: str, target_shape: Any, merged_bodies: Sequence[Any]) -> None:
+    if merged_bodies and (mode != "join" or target_shape is None or _brep_topology.is_null(target_shape)):
         raise ValueError("merged shapes need mode='join' and a target shape")
 
 
@@ -815,18 +815,18 @@ def _check_region_mode(mode: str, target_shape: Any) -> None:
 
 
 def _combine_region_solids(
-    solids: Sequence[TopoDS_Shape], mode: str, target_shape: Any, head: dict, merged: Sequence[Any] = ()
+    solids: Sequence[TopoDS_Shape], mode: str, target_shape: Any, head: dict, merged_bodies: Sequence[Any] = ()
 ) -> dict:
     """領域から作った立体(柱・回転体)を束ね、相手へ join / cut する(new は束ねたものを返す)。
 
-    `merged` は join で相手と一緒に1つにする別のボディの形(立体と先に束ねてから相手へ足すので、provenance の
+    `merged_bodies` は join で相手と一緒に1つにする別のボディの形(立体と先に束ねてから相手へ足すので、provenance の
     `face_map` は相手の面だけを写す)。
 
     同一平面の面の統合(`_unify_same_domain`)は、join / new で立体を束ねたとき(複数か、相手への join)にだけ掛ける。
     戻り値は `extrude_regions` の docstring の形。`head` は provenance の先頭に置く(`verb` ほか)。
     """
-    _check_merged(mode, target_shape, merged)
-    combined = _brep_operations.fuse_all([*solids, *merged], "region solids")
+    _check_merged(mode, target_shape, merged_bodies)
+    combined = _brep_operations.fuse_all([*solids, *merged_bodies], "region solids")
 
     volume_before: Optional[float] = None
     builder = None
@@ -846,7 +846,8 @@ def _combine_region_solids(
             raise ValueError("cut failed")
         result = builder.Shape()
 
-    volume_after = _brep_checks._checked_volume(result, mode, volume_before=volume_before)
+    # 一緒に融合するボディがあれば、相手の体積が変わらなくても文書は変わる(融合したボディが消える)
+    volume_after = _brep_checks._checked_volume(result, mode, volume_before=None if merged_bodies else volume_before)
     final, history, unified = result, None, False
     # 柱1本の new は束ねていないので統合しない。統合すると輪郭の分割で割れた側面までまとまり、
     # 後の操作が記録した面・辺の番号がずれる(実測: SVG を取り込んだ輪郭の柱1本で 38面 -> 26面)。
@@ -877,7 +878,7 @@ def extrude_faces(
     mode: str,
     target_shape: Any = None,
     taper: float = 0.0,
-    merged: Sequence[Any] = (),
+    merged_bodies: Sequence[Any] = (),
 ) -> dict:
     """`source_shape` の**同一平面・同じ向きの平面の面**を `face_indices`(1始まり・選択順)で
     まとめて法線方向へ押し出し、`target_shape` へ join / cut する(`new` は柱だけを返す)。
@@ -917,7 +918,7 @@ def extrude_faces(
         raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
     if mode != "new" and not has_target:
         raise ValueError(f"{mode} requires a target shape")
-    _check_merged(mode, target_shape, merged)
+    _check_merged(mode, target_shape, merged_bodies)
 
     source_map = _brep_topology._face_map(source_shape)
     faces = [_brep_topology._face_at(source_map, index) for index in indices]
@@ -941,7 +942,7 @@ def extrude_faces(
         if prism_shape is None or _brep_topology.is_null(prism_shape):
             raise ValueError(f"prism for face {index} is empty (distance={distance})")
         prisms.append(prism_shape)
-    combined = _brep_operations.fuse_all([*prisms, *merged], "face prisms")
+    combined = _brep_operations.fuse_all([*prisms, *merged_bodies], "face prisms")
 
     context = f"faces {indices}, distance={distance}"
     volume_before: Optional[float] = None
@@ -956,7 +957,9 @@ def extrude_faces(
         result = builder.Shape()
 
     try:
-        volume_result = _brep_checks._checked_volume(result, mode, volume_before=volume_before, context=context)
+        volume_result = _brep_checks._checked_volume(
+            result, mode, volume_before=None if merged_bodies else volume_before, context=context
+        )
     except _brep_checks.Unchanged as error:
         if mode == "cut" and distance > 0:
             raise _brep_checks.Unchanged(f"{error}: {OUTWARD_CUT_HINT}") from None
@@ -1098,7 +1101,7 @@ def loft_regions(
     start_point: Optional[Sequence[float]] = None,
     end_point: Optional[Sequence[float]] = None,
     shifts: Optional[Sequence[int]] = None,
-    merged: Sequence[Any] = (),
+    merged_bodies: Sequence[Any] = (),
 ) -> dict:
     """断面(`(面, スケッチ平面の法線)` の並び)を順につないだ立体を作り、join/cut/new した形状を返す。
 
@@ -1153,7 +1156,7 @@ def loft_regions(
         raise failure
 
     return _combine_region_solids(
-        [solid], mode, target_shape, {"verb": "loft", "mode": mode, "sections": len(faces)}, merged
+        [solid], mode, target_shape, {"verb": "loft", "mode": mode, "sections": len(faces)}, merged_bodies
     )
 
 

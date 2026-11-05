@@ -41,7 +41,7 @@ from OCP.STEPControl import (
     STEPControl_Writer,
 )
 from OCP.ShapeAnalysis import ShapeAnalysis_ShapeTolerance
-from OCP.TopAbs import TopAbs_IN, TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_VERTEX
+from OCP.TopAbs import TopAbs_IN, TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_SOLID, TopAbs_VERTEX
 from OCP.TopExp import TopExp
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
@@ -878,8 +878,10 @@ _TOUCH_TOL = 1e-6
 def touching_shapes(tool: Any, shapes: Sequence[Any]) -> List[int]:
     """`tool` に触れる・重なる・含む/含まれる `shapes` の位置(押し出しの相手探し)。
 
-    緩い箱で絞ってから最短距離を測る。形全体の最短距離は、片方がもう片方の内側にあれば 0 を返す(`InnerSolution`)。
-    形全体で測れないときは面の対ごとに測り(`kernel_interference.min_distance`)、その道では内側を点の分類で見る。
+    緩い箱で絞ってから最短距離を測る。形全体で測れないときは面の対ごとに測る(`kernel_interference.min_distance`)。
+    離れていれば、片方がもう片方の内側に埋まっていないかを点の分類で見る。最短距離の `InnerSolution` には頼れない:
+    ボディの形は1つのソリッドでも COMPOUND で包まれていることが多く(ブーリアンの結果)、そのときは内側でも表面どうしの
+    正の距離を返す。
     """
     tool_box = _loose_box(tool)
     tool_reach = max(_TOUCH_TOL, _max_tolerance(tool))
@@ -909,27 +911,38 @@ def _max_tolerance(shape: Any) -> float:
 
 
 def _touches(tool: Any, shape: Any, reach: float) -> bool:
+    distance = _whole_distance(tool, shape)
+    if distance is None:
+        measured = kernel_interference.min_distance(tool, shape)
+        distance = measured["distance"] if measured["ok"] else None
+    if distance is not None and distance <= reach:
+        return True
+    return _vertex_inside(tool, shape) or _vertex_inside(shape, tool)
+
+
+def _whole_distance(tool: Any, shape: Any) -> Optional[float]:
     try:
         measure = BRepExtrema_DistShapeShape()
         measure.LoadS1(tool)
         measure.LoadS2(shape)
         measure.Perform()
         if measure.IsDone() and measure.NbSolution() > 0:
-            return measure.Value() <= reach
+            return float(measure.Value())
     except Exception:  # noqa: BLE001  OCP の例外は共通の基底を持たない(`kernel_interference._distance` と同じ)
         pass
-    measured = kernel_interference.min_distance(tool, shape)
-    if measured["ok"] and measured["distance"] <= reach:
-        return True
-    return _vertex_inside(tool, shape) or _vertex_inside(shape, tool)
+    return None
 
 
 def _vertex_inside(inner: Any, outer: Any) -> bool:
+    """`inner` の頂点1つが `outer` のどれかのソリッドの内側にあるか(表面が離れているときに呼ぶ: 埋まっていれば全部の点が内側)。"""
     vertices = _brep_topology.subshapes(inner, TopAbs_VERTEX)
     if not vertices:
         return False
-    classifier = BRepClass3d_SolidClassifier(outer, BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertices[0])), _TOUCH_TOL)
-    return classifier.State() == TopAbs_IN
+    point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertices[0]))
+    return any(
+        BRepClass3d_SolidClassifier(solid, point, _TOUCH_TOL).State() == TopAbs_IN
+        for solid in _brep_topology.subshapes(outer, TopAbs_SOLID)
+    )
 
 
 def copy_shape(shape: Any) -> Any:

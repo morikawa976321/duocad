@@ -972,13 +972,14 @@
   function handlePreview(payload: PreviewPayload): void {
     viewport?.showPreview(
       payload.bodies.map((body) => ({ bodyId: body.body_id, geometry: body.geometry })),
+      payload.removed_bodies,
     )
     const ghost = payload.sketch_ghost
     if (ghost !== null) {
       // 分裂は確定時にトーストで拒まれる形。入力中はトーストを出さず色だけで知らせる。
       viewport?.showSketchGhosts(ghost.sketch_id, ghost.entities, ghost.pieces === 1 ? 'normal' : 'warn')
     }
-    previewing = payload.bodies.length > 0 || (ghost?.entities.length ?? 0) > 0
+    previewing = payload.bodies.length > 0 || payload.removed_bodies.length > 0 || (ghost?.entities.length ?? 0) > 0
     const current = previewAsked?.id === payload.preview_id && previewAsked.commands === commandRequests
     if (payload.suggestion !== null && faceChainCommand && current) widenToSuggestion(payload.suggestion)
   }

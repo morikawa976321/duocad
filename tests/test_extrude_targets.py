@@ -132,6 +132,39 @@ def test_join_that_only_touches_a_face_still_joins():
     assert math.isclose(_volume(document, a), BOX_VOLUME + 125.0, rel_tol=TOL)
 
 
+def test_cut_buried_inside_a_compound_body_still_finds_it():
+    """落ちたら、ブーリアンの結果(1つのソリッドを COMPOUND で包んだ形)の内側に埋まった切り取りが、表面どうしの距離だけで
+    「どのボディにも食い込まない」と断られる。"""
+    document, a, _b = _two_boxes()
+    boss = _rectangle(document, (5.0, 5.0), 3.0, 3.0)
+    extrude(document, [region_ref(boss, 1)], 25.0, mode="join")
+    assert document.get_body(a).shape.ShapeType().name == "TopAbs_COMPOUND"
+    volume = _volume(document, a)
+    sketch_id = sketch_create(document, {"kind": "offset", "base": {"kind": "base", "name": "XY"}, "distance": 5.0})
+    add_rectangle(document, sketch_id, (12.0, 12.0), 2.0, 2.0)
+
+    operation = extrude(document, [region_ref(sketch_id, 1)], 2.0, mode="cut")
+
+    assert operation.args["body_id"] == a
+    assert math.isclose(_volume(document, a), volume - 8.0, rel_tol=TOL)
+
+
+def test_join_merges_a_body_even_when_the_first_does_not_grow():
+    """落ちたら、A の中に埋まった別ボディ B と A の両方の内側だけに足す結合が、A の体積が増えないことを理由に断られる
+    (B を A へ融合して消すので文書は変わる)。"""
+    document, a, b = _two_boxes()
+    inner = _rectangle(document, (5.0, 5.0), 5.0, 5.0)
+    nested = extrude(document, [region_ref(inner, 1)], 5.0, mode="new").args["body_id"]
+    sketch_id = sketch_create(document, {"kind": "offset", "base": {"kind": "base", "name": "XY"}, "distance": 1.0})
+    add_rectangle(document, sketch_id, (6.0, 6.0), 2.0, 2.0)
+
+    operation = extrude(document, [region_ref(sketch_id, 1)], 2.0, mode="join")
+
+    assert operation.args["body_id"] == a and operation.args["other_bodies"] == [nested]
+    assert [body.id for body in document.bodies] == [a, b]
+    assert math.isclose(_volume(document, a), BOX_VOLUME, rel_tol=TOL)
+
+
 def test_a_hidden_body_is_left_alone():
     """落ちたら、隠したボディが見えないところで削られる(見えないものは変えない)。"""
     document, a, b = _two_boxes()
@@ -210,8 +243,8 @@ def test_revolve_cuts_every_body_it_reaches():
 
 
 def test_the_session_reports_and_previews_every_body():
-    """落ちたら、画面のプレビューが削れる2つのボディの片方しか見せない、または応答の changed_bodies /
-    removed_bodies が実際に変わった・消えたボディと食い違う。"""
+    """落ちたら、画面のプレビューが削れる2つのボディの片方しか見せない・融合で消えるボディを知らせない(本物が幽霊に
+    重なって残る)、または応答の changed_bodies / removed_bodies が実際に変わった・消えたボディと食い違う。"""
     session = Session(0.2)
     document = session.document
     a, b = _box_at(document, 0.0), _box_at(document, 30.0)
@@ -225,5 +258,8 @@ def test_the_session_reports_and_previews_every_body():
 
     joined = _rectangle(document, (15.0, 12.0), 20.0, 5.0)
     select(session, [{"sketch": joined, "index": 1}])
+    preview = session.preview_job("extrude", {"distance": 10.0, "mode": "join"}).run()
+    assert [body["body_id"] for body in preview["bodies"]] == [a] and preview["removed_bodies"] == [b]
+    assert session.preview("extrude", {"distance": 10.0, "mode": "join"})["removed_bodies"] == [b]
     result = session.apply("extrude", {"distance": 10.0, "mode": "join"})
     assert result["changed_bodies"] == [a] and result["removed_bodies"] == [b]

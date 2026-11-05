@@ -146,7 +146,7 @@ def _region_build(faces: Sequence[Any], distance: float, mode: str, normal: Sequ
     def build(target_shape: Any, merged: Sequence[Any]) -> dict:
         def compute() -> dict:
             return kernel_extrude.extrude_regions(
-                faces, distance, mode, normal, target_shape=target_shape, taper=taper, merged=merged
+                faces, distance, mode, normal, target_shape=target_shape, taper=taper, merged_bodies=merged
             )
 
         if target_shape is None:
@@ -162,7 +162,7 @@ def _face_build(source_shape: Any, indices: Sequence[int], distance: float, mode
     def build(target_shape: Any, merged: Sequence[Any]) -> dict:
         def compute() -> dict:
             return kernel_extrude.extrude_faces(
-                source_shape, indices, distance, mode, target_shape=target_shape, taper=taper, merged=merged
+                source_shape, indices, distance, mode, target_shape=target_shape, taper=taper, merged_bodies=merged
             )
 
         if target_shape is None:

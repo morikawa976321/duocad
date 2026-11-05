@@ -55,7 +55,7 @@ export interface GhostLayerDeps {
 }
 
 export interface GhostLayer {
-  showPreview(entries: BodyGeometryUpdate[]): void
+  showPreview(entries: BodyGeometryUpdate[], removed?: readonly string[]): void
   showBodyGhosts(entries: BodyGhost[]): void
   /** 投機実行の幽霊とローカル幽霊を消して本物を戻す。 */
   clearPreview(): void
@@ -255,13 +255,17 @@ export function createGhostLayer(deps: GhostLayerDeps): GhostLayer {
   /** body_id -> 投機実行の幽霊。三角形の無い形(null)でもキーは残す: `clearPreview` が隠した本物を戻す一覧を兼ねる。 */
   const previewMeshes = new Map<string, GhostBody | null>()
 
-  function showPreview(entries: BodyGeometryUpdate[]): void {
+  function showPreview(entries: BodyGeometryUpdate[], removed: readonly string[] = []): void {
     pickChanged() // 本物のBodyを隠すので、同じ画素が別のもの(または何も)を指す
     clearPreview()
     for (const entry of entries) {
       if (!entry.geometry) continue
       setBodyVisible(entry.bodyId, false)
       previewMeshes.set(entry.bodyId, buildGhost(entry.geometry, null))
+    }
+    for (const bodyId of removed) {
+      setBodyVisible(bodyId, false)
+      previewMeshes.set(bodyId, null)
     }
   }
 

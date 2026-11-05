@@ -547,8 +547,9 @@ export interface Viewport {
   /**
    * 確定前の形(プレビュー)を重ねる。本物のBodyは隠し、幽霊を代わりに描く。
    * 幽霊はピックの対象にしない。本物の状態が届いたら(`update`)プレビューは無効になり自動的に消える。
+   * `removed` は確定すると消えるBody(隠すだけで幽霊は描かない)。
    */
-  showPreview(bodies: BodyGeometryUpdate[]): void
+  showPreview(bodies: BodyGeometryUpdate[], removed?: readonly string[]): void
   /**
    * プレビューを消して本物のBodyを出し直す。ボディ側の幽霊(`showPreview` と `showBodyGhosts`)も消える。
    * 本物の到着(`update`)だけは、消した後にローカル幽霊を組み直す。

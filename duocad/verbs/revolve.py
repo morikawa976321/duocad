@@ -150,7 +150,7 @@ def _revolve_shape(
     point = [origin[i] + pu * u[i] + pv * v[i] for i in range(3)]
     direction = [du * u[i] + dv * v[i] for i in range(3)]
     return kernel_extrude.revolve_regions(
-        faces, point, direction, normal, angle, mode, target_shape=target_shape, symmetric=symmetric, merged=merged
+        faces, point, direction, normal, angle, mode, target_shape=target_shape, symmetric=symmetric, merged_bodies=merged
     )
 
 

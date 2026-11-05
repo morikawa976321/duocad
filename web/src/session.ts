@@ -345,6 +345,8 @@ export interface PreviewPayload {
     volume: number
     geometry: GeometryPayload
   }>
+  /** 確定すると文書から消えるBody(join で融合される相手)。本物を隠す。 */
+  removed_bodies: string[]
   /**
    * スケッチに足される線の確定前の姿(`catalog.Command.preview_session` の verb だけが載せる)。
    * `pieces` は結果の領域の数(1 以外は確定すると拒まれる)。
@@ -1214,6 +1216,7 @@ export function createSession(hooks: SessionHooks): Session {
       preview_id?: number | null
       verb?: string
       bodies?: PreviewPayload['bodies']
+      removed_bodies?: string[]
       sketch_ghost?: PreviewPayload['sketch_ghost']
       suggestion?: PreviewPayload['suggestion']
       origins?: number[]
@@ -1308,6 +1311,7 @@ export function createSession(hooks: SessionHooks): Session {
         preview_id: message.preview_id ?? null,
         verb: message.verb ?? '',
         bodies: message.bodies ?? [],
+        removed_bodies: message.removed_bodies ?? [],
         sketch_ghost: message.sketch_ghost ?? null,
         suggestion: message.suggestion ?? null,
       })
