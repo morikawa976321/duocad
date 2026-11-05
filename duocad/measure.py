@@ -358,7 +358,8 @@ def measure_selection(session: Any) -> dict:
     """いまの選択を測る。
 
     戻り値は `{"count", "items", "total_area", "total_length"}`。**ちょうど2項目のときだけ**
-    `between`(`between()`)と `between_error`(測れない理由。測れたなら None)が加わる。
+    `between`(`between()`)と `between_error`(測れない理由。測れたなら None)と `between_error_items`
+    (測れない項目の `items` での添字。測れたなら空)が加わる。
     """
     current = selection.get_selection(session.document)
     items: list[dict] = []
@@ -381,10 +382,11 @@ def measure_selection(session: Any) -> dict:
         "total_length": total_length,
     }
     if len(items) == 2:
-        reasons = [reason for reason in measurables if isinstance(reason, str)]
-        if reasons:
+        refused = [at for at, reason in enumerate(measurables) if isinstance(reason, str)]
+        result["between_error_items"] = refused
+        if refused:
             result["between"] = None
-            result["between_error"] = reasons[0]
+            result["between_error"] = measurables[refused[0]]
         else:
             first, second = measurables
             assert not isinstance(first, str) and not isinstance(second, str)

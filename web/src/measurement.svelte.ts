@@ -64,6 +64,8 @@ export function createMeasurement(deps: {
       }
       if (payload.between === undefined || payload.between === null) {
         current = null
+        // 測る対象の引数は2つで揃うが、コアの選択に引数の種類の外のもの(ボディ参照)が残っていると数が合わない
+        deps.fail(`測れるのは選択がちょうど2つのとき(いまは${payload.count}つ)`)
         return
       }
       current = payload

@@ -241,6 +241,15 @@ export type PickMode = 'replace' | 'toggle'
 export type PickKind = 'face' | 'edge' | 'vertex' | 'region' | 'sketchPoint' | 'sketchLine'
 
 /**
+ * 指せる面・辺の形(`Viewport.setPickShapes`)。`null` は形を問わない。面はサーバの `faces[i].kind`、辺は `edges[i].kind` で引く。
+ * 外した形の面も遮るものとしては残る(奥の領域は取れない)。
+ */
+export interface PickShapes {
+  faces: readonly string[] | null
+  edges: readonly string[] | null
+}
+
+/**
  * 1つのクリックで取れるもの。通常モードの優先は細かさが先(点 → 線 → 面)、同じ細かさならソリッドが先
  * (重なって見えるとき。`PICK_OVERLAP_PIXELS`)。見えないもの(非表示・立体の裏)は取れない(`occlusion.ts`)。
  * 当たった1つだけが非null(スケッチモードの `sketchEntity`・`region`・`point` は一緒に返り、優先は `App.svelte` が決める)。
@@ -434,6 +443,8 @@ export interface Viewport {
   // ------------------------------------------------------------------ 何を指せるか
   /** スケッチモードの外で指せる種類(`PickKind`)。既定は全部。 */
   setPickKinds(kinds: readonly PickKind[]): void
+  /** `setPickKinds` で指せる面・辺を、さらに形で絞る(測定の平らな面・直線の辺)。既定は絞らない。 */
+  setPickShapes(shapes: PickShapes): void
   /**
    * スケッチモード中に、編集中のスケッチの中身の代わりにソリッドの面・辺・頂点を `setPickKinds` の種類で指す(投影の起動中)。
    * スケッチモードの外では効かない。

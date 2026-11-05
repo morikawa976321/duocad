@@ -513,6 +513,8 @@ export interface MeasurePayload {
   /** ちょうど2項目のときだけ付く(`duocad/measure.py` の `measure_selection`)。 */
   between?: MeasureBetween | null
   between_error?: string | null
+  /** 測れない項目の `items` での添字(2項目のときだけ。`duocad/measure.py`)。 */
+  between_error_items?: number[]
 }
 
 /**
@@ -1278,6 +1280,7 @@ export function createSession(hooks: SessionHooks): Session {
       items?: unknown[]
       between?: MeasureBetween | null
       between_error?: string | null
+      between_error_items?: number[]
       // ---------------------------------------------------------------- 選択情報
       request_id?: number | null
       item?: MeasureItem | null
@@ -1342,6 +1345,7 @@ export function createSession(hooks: SessionHooks): Session {
         items: message.items ?? [],
         between: message.between,
         between_error: message.between_error,
+        between_error_items: message.between_error_items,
       })
     } else if (message.type === 'interference') {
       hooks.onInterference({ ...message, client_op: message.client_op ?? null } as InterferencePayload)

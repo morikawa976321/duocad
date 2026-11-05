@@ -159,6 +159,13 @@ export interface SelectionArgSpec extends ArgSpecCommon {
    */
   pickVertices?: true
   /**
+   * 起動中に指せる面・辺の形(`faces` は面の `kind`、`edges` は辺の `kind`。省略は形を問わない)。コアが受けない形を
+   * 光らせない(`App.svelte` の `pickShapes` → `Viewport.setPickShapes`)。
+   */
+  shapes?: { faces?: readonly string[]; edges?: readonly string[] }
+  /** 待ちの1行に添える、受け付けるものの説明(`promptFor`)。 */
+  hint?: string
+  /**
    * スケッチの点を指しても、その図形ごとに効く引数(`delete`・`mirror_sketch_entities`。コアが点を図形へ畳む)。
    * 起動中は点のクリックを図形の参照へ畳んで選ぶ(`grain.ts`)。`move_sketch_entities` は点だけを動かすので付けない。
    */
@@ -596,7 +603,8 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   if (spec.kind === 'selection') {
     const have = ((values[spec.name] ?? []) as SelectionRef[]).length
     const need = spec.min - have
-    return `${spec.label}を${need}${counterFor(spec)}選ぶ(クリック / Shift・Ctrl+クリックでトグル / 左ドラッグで囲む)`
+    const hint = spec.hint === undefined ? '' : `: ${spec.hint}`
+    return `${spec.label}を${need}${counterFor(spec)}選ぶ${hint}(クリック / Shift・Ctrl+クリックでトグル / 左ドラッグで囲む)`
   }
   if (spec.kind === 'point') {
     return `${spec.label}をクリック(スケッチ平面の上)`

@@ -120,7 +120,7 @@
     type SketchEntityHit,
     type Viewport,
   } from './viewport'
-  import type { PickKind, ViewSnapshot } from './viewportTypes'
+  import type { PickKind, PickShapes, ViewSnapshot } from './viewportTypes'
   import type { CommandRequest } from './generated/protocol'
 
   /**
@@ -301,6 +301,8 @@
    * `wantedPick === 'vertex'` と同じ扱いで、対象ボディの頂点を候補に出し、辺より先に取る。
    */
   let wantedVertices = $state(false)
+  /** 起動中のコマンドが受ける面・辺の形(`SelectionArgSpec.shapes`。測定の平らな面・直線の辺)。 */
+  let wantedShapes = $state<PickShapes>({ faces: null, edges: null })
   /** 起動中のコマンドが持ち主(ボディ・図形)ごとに効くか(`CommandHost` が知らせる)。クリックとホバーをその粒度へ畳む。 */
   let wantedGrain = $state<SelectionGrain>(NO_GRAIN)
   /** 取り寄せた辺(body_id -> その版の折れ線)。カーソルの近くのボディから頼む(`requestPickData`)。 */
@@ -1045,9 +1047,16 @@
     fail,
   })
 
+  /** 断られた測定で外す項目(`onCommandEnd` が読んで捨てる)。測れた側は残し、次の1つを指せば測り直せる。 */
+  let measureRefused: SelectionRef[] | null = null
+
   function handleMeasure(payload: MeasurePayload): void {
     // 結果を先に入れる(`commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で選択を残すかを決める)。
     measure.onResult(payload)
+    // 添字はコアの選択の並び(`duocad/measure.py` は選択の項目順に `items` を作る)。
+    const items = currentItems()
+    const refused = payload.between_error_items ?? []
+    measureRefused = items.length === 2 && refused.length > 0 ? refused.map((at) => items[at]).filter((ref) => ref !== undefined) : null
     if (releasePending(payload.client_op)) {
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
@@ -1306,6 +1315,11 @@
   $effect(() => {
     const kinds = pickKinds
     viewport?.setPickKinds(kinds)
+  })
+
+  $effect(() => {
+    const shapes = wantedShapes
+    viewport?.setPickShapes(shapes)
   })
 
   /**
@@ -1658,6 +1672,7 @@
    * コマンドが終わった(`CommandHost.onEnd`: Esc・中断ボタン・確定成功)。選択を全解除する。
    * 形を変えるverbの確定ではコアが先に空にしているので効くのは中断と、形を変えない確定(集合代入・測定の失敗等)。
    * 測定の成功だけは残す(読み札と3Dの線は測った選択が変わるまで残る。`measurement.svelte.ts`)。
+   * 測定が断られたら、測れない項目だけを外す(`measureRefused`)。
    * `activeVerb === null` は、`onModeChanged` が先に起動を畳んだ後に遅れて届いた通知で、選択に触らない。
    */
   function onCommandEnd(verb: string): void {
@@ -1666,7 +1681,15 @@
     widenedDeletion = null
     wideningOp = null
     faceChains.forgetPicks()
-    if (verb === MEASURE.id && measure.current !== null) return
+    if (verb === MEASURE.id) {
+      const refused = measureRefused
+      measureRefused = null
+      if (measure.current !== null) return
+      if (refused !== null) {
+        modifySelection([], refused)
+        return
+      }
+    }
     // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
     if (verb === INTERFERENCE.id) return
     clearSelectionIfAny()
@@ -1866,6 +1889,11 @@
         host.setPick(sketchEntityRef(sketchHit.sketchId, sketchHit.entityId, null))
         return
       }
+    }
+    // メッシュボディは測れない(面も辺も頂点も持たず、ボディ参照へ畳むとコアの選択に数の外の項目が入る)。
+    if (activeVerb === MEASURE.id && event.hit !== null && meshBodyIds.has(event.hit.bodyId)) {
+      fail('メッシュボディは測れない(頂点・辺・面を持たない)')
+      return
     }
     // 素クリックのトグル(`toggleOnlyMode`)はどの種類にも効かせる(測定は辺・頂点でも測る)。
     // 来るのは今指せる種類(`pickKinds`)だけ: コマンドの起動中はそのコマンドが受け付けるものに絞られている。
@@ -2610,6 +2638,7 @@
           onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
           onWantsPick={(target) => (wantedPick = target)}
           onWantsVertices={(wants) => (wantedVertices = wants)}
+          onWantsShapes={(shapes) => (wantedShapes = shapes)}
           onWantsGrain={(grain) => (wantedGrain = grain)}
         />
       {/key}

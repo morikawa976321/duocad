@@ -17,6 +17,8 @@ import type { FaceGeometry, GeometryPayload } from './viewportTypes'
 /** 1面ぶんの範囲。`index` はコアの面の添字(1始まり)。 */
 export interface FaceSpan {
   index: number
+  /** 面の形(サーバの `faces[i].kind`。`plane` / `cylinder` … / メッシュボディは `mesh`)。 */
+  kind: string
   vertexStart: number
   vertexCount: number
   triangleStart: number
@@ -115,7 +117,7 @@ export function buildBodyMesh(
     const triangleCount = face.indices.length / 3
     triangleFaces.fill(face.index, triangleStart, triangleStart + triangleCount)
     const sphere = faceSphere(face)
-    const span: FaceSpan = { index: face.index, vertexStart: vertexAt, vertexCount, triangleStart, triangleCount, sphere }
+    const span: FaceSpan = { index: face.index, kind: face.kind, vertexStart: vertexAt, vertexCount, triangleStart, triangleCount, sphere }
     spans.push(span)
     byIndex.set(face.index, span)
     vertexAt += vertexCount

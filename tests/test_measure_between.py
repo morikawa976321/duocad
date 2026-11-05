@@ -217,12 +217,17 @@ def test_a_curved_edge_or_face_is_refused_without_losing_the_item_values(session
     assert result["between"] is None
     assert "直線ではない" in result["between_error"]
     assert result["items"][0]["edge_kind"] == "circle" and result["items"][0]["length"] > 0
+    assert result["between_error_items"] == [0]
 
     side = next(face["index"] for face in query.describe_faces(cyl) if face["kind"] != "plane")
     select(session, [ref("face", side, "cyl"), ref("face", face_with_normal(_shape(session, "box"), (0, 0, 1)))])
     result = session.measure()
     assert result["between"] is None
     assert "平面ではない" in result["between_error"]
+    assert result["between_error_items"] == [0]
+
+    select(session, [ref("face", face_with_normal(_shape(session, "box"), (0, 0, 1))), ref("face", side, "cyl")])
+    assert session.measure()["between_error_items"] == [1]
 
 
 def test_a_body_reference_is_refused(session: Session):

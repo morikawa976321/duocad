@@ -50,7 +50,7 @@ import { createSolidFeatures, type BodyEdges, type BodyVertices } from './solidF
 import type { BasePlaneName } from './session'
 import {
   type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef,
-  type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type SectionState,
+  type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type PickShapes, type SectionState,
   type SketchDraw, type SketchEntityHit, type VertexRef, type ViewSnapshot, type Viewport,
 } from './viewportTypes'
 import {
@@ -1148,6 +1148,26 @@ export function createViewport(container: HTMLElement): Viewport {
     pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
   }
 
+  let pickShapes: PickShapes = { faces: null, edges: null }
+
+  function setPickShapes(shapes: PickShapes): void {
+    const same = (a: readonly string[] | null, b: readonly string[] | null) =>
+      a === b || (a !== null && b !== null && a.length === b.length && a.every((kind) => b.includes(kind)))
+    if (same(shapes.faces, pickShapes.faces) && same(shapes.edges, pickShapes.edges)) return
+    pickShapes = shapes
+    pickChanged()
+  }
+
+  function faceShapePickable(bodyId: string, faceIndex: number): boolean {
+    if (pickShapes.faces === null) return true
+    const kind = bodies.get(bodyId)?.body.faceOf(faceIndex)?.kind
+    return kind !== undefined && pickShapes.faces.includes(kind)
+  }
+
+  function edgeShapePickable(kind: string): boolean {
+    return pickShapes.edges === null || pickShapes.edges.includes(kind)
+  }
+
   /** スケッチモード中に、編集中のスケッチの中身の代わりにソリッドの面・辺・頂点を指すか(`setSolidPickInSketch`)。 */
   let solidPickInSketch = false
 
@@ -1803,6 +1823,7 @@ export function createViewport(container: HTMLElement): Viewport {
         if (!mesh.visible) continue
         mesh.updateWorldMatrix(true, false)
         for (const face of entry.body.faces) {
+          if (!faceShapePickable(bodyId, face.index)) continue
           const positions = entry.body.facePositions(face.index)
           if (positions === null || !band.positionsInside(positions, mesh.matrixWorld, rect, width, height, keep)) continue
           if (!faceSeen(entry.body.mesh, face, seenOnSolid)) continue
@@ -1811,7 +1832,8 @@ export function createViewport(container: HTMLElement): Viewport {
       }
       // 辺・頂点(届いたボディの分)
       if (pickKinds.has('edge')) {
-        features.forEachEdge((ref, points, deviation) => {
+        features.forEachEdge((ref, points, deviation, kind) => {
+          if (!edgeShapePickable(kind)) return
           if (!band.positionsInside(points, identity, rect, width, height, keep)) return
           const visible = polylineSeen(
             Math.floor(points.length / 3),
@@ -2054,6 +2076,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const lines: Array<RankedCandidate<PickCandidate>> = [...sketchCandidates.lines]
     if (pickKinds.has('edge')) {
       for (const candidate of features.edgeCandidates(offsetX, offsetY, EDGE_PICK_PIXELS, project, section.signedDistance())) {
+        if (!edgeShapePickable(candidate.kind)) continue
         lines.push({
           item: {
             hit: { edge: candidate.ref },
@@ -2073,7 +2096,9 @@ export function createViewport(container: HTMLElement): Viewport {
     // 厳密に同一平面で重なる)。面を指せない間(領域だけを受け付けるコマンドの起動中)も、面は遮るものとして残る。
     // 断面の切り口(`ref: null`)も遮る。
     const surface = faceHitAt(offsetX, offsetY)
-    if (surface !== null && surface.ref !== null && pickKinds.has('face')) return { ...nothing, hit: surface.ref }
+    if (surface !== null && surface.ref !== null && pickKinds.has('face') && faceShapePickable(surface.ref.bodyId, surface.ref.faceIndex)) {
+      return { ...nothing, hit: surface.ref }
+    }
     if (solidOnly) return nothing
     for (const candidate of regionHitsAt(offsetX, offsetY)) {
       if (surface !== null && candidate.distance > surface.distance + occlusion.slack(candidate.point, project.height)) break
@@ -2384,6 +2409,7 @@ export function createViewport(container: HTMLElement): Viewport {
     setOptimizeState,
     setOptimizeDebug: optimizeDebug.setState,
     setPickKinds,
+    setPickShapes,
     setSolidPickInSketch,
     setBodyEdges(bodyId, edges) {
       if (features.setEdges(bodyId, edges as BodyEdges | null)) pickChanged()
