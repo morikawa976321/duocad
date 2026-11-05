@@ -43,8 +43,8 @@ try {
   assert.equal(typeof waits.at(-1), 'number')
   session.sendCommand('list_documents', {}, 18)
   assert.deepEqual(last(), { cmd: 'list_documents', client_op: 18 })
-  session.undo()
-  assert.deepEqual(last(), { cmd: 'undo', ack_id: 2 })
+  session.undo(21)
+  assert.deepEqual(last(), { cmd: 'undo', client_op: 21, ack_id: 2 })
   socket.onmessage({ data: JSON.stringify({ type: 'done', ack_id: 2 }) })
   assert.equal(waits.at(-1), null, 'done はそれ以前の待機も解除する')
 

@@ -1041,8 +1041,9 @@ export interface Session {
    * @param sizeHint いま見えているものの外接対角[mm](上下限の丸めにだけ使う)
    */
   setViewResolution(worldPerPixel: number, sizeHint: number, focus?: Record<string, number[] | null> | null): void
-  undo(): void
-  redo(): void
+  /** `clientOp` は応答の `applied.client_op` に戻る(自分の取り消しを「外からの変更」と読まないため)。 */
+  undo(clientOp: number): void
+  redo(clientOp: number): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   /** 今の設定(応答は `onAiStatus`)。 */
   aiGetStatus(): void
@@ -1574,11 +1575,11 @@ export function createSession(hooks: SessionHooks): Session {
         })
       }
     },
-    undo() {
-      send({ cmd: 'undo' }, true)
+    undo(clientOp) {
+      send({ cmd: 'undo', client_op: clientOp }, true)
     },
-    redo() {
-      send({ cmd: 'redo' }, true)
+    redo(clientOp) {
+      send({ cmd: 'redo', client_op: clientOp }, true)
     },
     aiGetStatus() {
       send({ cmd: 'ai_get_status' })
