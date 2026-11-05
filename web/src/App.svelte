@@ -382,6 +382,11 @@
    * 数だけを渡すのは、コマンド層に「誰が変えたか」の判断を持ち込まないため。
    */
   let selfSelections = $state(0)
+  /**
+   * 送った `select_face_boundaries` の op(返るまで送り直さない)。人のクリックではないので `selfSelections` に数えない
+   * (数えると、繋ぎ直した後の空振りの応答が別の画面で起動された即適用の verb を確定させる)。
+   */
+  let faceBoundaryOp: number | null = null
 
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   const ai = createAiChat({ send: (text) => session.aiSend(text), fail })
@@ -899,7 +904,7 @@
     // 選択の変更イベントはverbの適用ではない(`change: "selection"`。session.ts の `Applied`)。
     if (applied && applied.change === 'selection') {
       // この画面が出した選択変更だけを数える(`selfSelections`)。AIが書き換えた選択は即適用の引き金にならない。
-      if (applied.client_op !== null && myClientOps.has(applied.client_op)) {
+      if (applied.client_op !== null && myClientOps.has(applied.client_op) && applied.client_op !== faceBoundaryOp) {
         selfSelections += 1
       }
       if (applied.client_op !== null && applied.client_op === clearingOp) clearingOp = null
@@ -1713,8 +1718,6 @@
     if (kinds.length === 0) pendingOptimizePreset = null
   }
 
-  /** 送った `select_face_boundaries` の op(返るまで送り直さない)。 */
-  let faceBoundaryOp: number | null = null
   /**
    * 辺だけを食うコマンドの起動中に選択に面があれば、外してその外周の辺を連なりで入れる(辺は残す。面は指せなくなるので
    * 外す手が無い)。コアが1回の選択の変更で行う(`Session.select_face_boundaries`)。起動の瞬間ではなく状態で決めるのは、
