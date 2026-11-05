@@ -142,7 +142,12 @@ def extrude_faces(
 
 def _region_build(faces: Sequence[Any], distance: float, mode: str, normal: Sequence[float], taper: float) -> Build:
     """領域の押し出しの計算。相手のボディがあるときは結果を覚え、プレビュー・確定・redo で使い回す(`kernel.remembered`。
-    相手の無い `new` は軽いので覚えない)。"""
+    相手の無い `new` は軽いので覚えない)。
+
+    面の指紋は最初の1回だけ取る: 相手ごとのブーリアンが共有の面に補助データを足し、取り直すと2つ目以降の相手で
+    プレビューと確定の鍵がずれ、確定で計算し直す。"""
+    digest: List[str] = []
+
     def build(target_shape: Any, merged: Sequence[Any]) -> dict:
         def compute() -> dict:
             return kernel_extrude.extrude_regions(
@@ -151,7 +156,9 @@ def _region_build(faces: Sequence[Any], distance: float, mode: str, normal: Sequ
 
         if target_shape is None:
             return compute()
-        arguments = (kernel.shapes_digest(faces), distance, mode, tuple(float(v) for v in normal), taper)
+        if not digest:
+            digest.append(kernel.shapes_digest(faces))
+        arguments = (digest[0], distance, mode, tuple(float(v) for v in normal), taper)
         return kernel.remembered("extrude_regions", (target_shape, *merged), arguments, compute)
 
     return build

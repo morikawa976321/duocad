@@ -282,3 +282,30 @@ def test_the_session_reports_and_previews_every_body():
     assert session.preview("extrude", {"distance": 10.0, "mode": "join"})["removed_bodies"] == [b]
     result = session.apply("extrude", {"distance": 10.0, "mode": "join"})
     assert result["changed_bodies"] == [a] and result["removed_bodies"] == [b]
+
+
+def test_confirming_a_previewed_cut_reuses_every_body_result(monkeypatch):
+    """落ちたら、2つの箱を削るプレビューの後の確定が、2つ目の箱の切り取りをもう一度計算する(大きなボディで確定が遅れる)。"""
+    from duocad import kernel_extrude
+
+    session = Session(0.2)
+    document = session.document
+    _box_at(document, 0.0), _box_at(document, 30.0)
+    sketch_id = _rectangle(document, (10.0, 5.0), 30.0, 5.0)
+    select(session, [{"sketch": sketch_id, "index": 1}])
+    calls = []
+    original = kernel_extrude.extrude_regions
+
+    def counted(*args, **kwargs):
+        if kwargs.get("target_shape") is not None:
+            calls.append(args[2])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(kernel_extrude, "extrude_regions", counted)
+    job = session.preview_job("extrude", {"distance": 30.0, "mode": "cut"})
+    job.run()
+    job.adopt()
+    assert len(calls) == 2
+    session.apply("extrude", {"distance": 30.0, "mode": "cut"})
+    assert len(calls) == 2
+
