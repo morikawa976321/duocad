@@ -1053,11 +1053,14 @@
   function handleMeasure(payload: MeasurePayload): void {
     // 結果を先に入れる(`commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で選択を残すかを決める)。
     measure.onResult(payload)
-    // 添字はコアの選択の並び(`duocad/measure.py` は選択の項目順に `items` を作る)。
-    const items = currentItems()
-    const refused = payload.between_error_items ?? []
-    measureRefused = items.length === 2 && refused.length > 0 ? refused.map((at) => items[at]).filter((ref) => ref !== undefined) : null
     if (releasePending(payload.client_op)) {
+      // 添字はコアの選択の並び(`duocad/measure.py` は選択の項目順に `items` を作る)。
+      const items = currentItems()
+      const refused = payload.between_error_items ?? []
+      measureRefused =
+        payload.count === 2 && items.length === 2 && refused.length > 0
+          ? refused.map((at) => items[at]).filter((ref) => ref !== undefined)
+          : null
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }
