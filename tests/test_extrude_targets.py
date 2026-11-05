@@ -254,6 +254,28 @@ def test_a_body_without_a_solid_is_not_a_target():
     assert document.get_body("sheet").shape is sheet
 
 
+def test_joining_a_face_of_a_sheet_makes_a_new_body():
+    """落ちたら、面だけの部品(相手にならない)の面を結合で押し出すと、新しいボディにならず「join requires a target shape」で断られる。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.gp import gp_Pln, gp_Pnt, gp_Dir
+
+    from duocad.document import Body
+
+    document = Document()
+    sheet = BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)), 0.0, 20.0, 0.0, 20.0).Face()
+    document.add_body(Body(id="sheet", name="sheet", kind="solid", shape=sheet))
+
+    operation = extrude_faces(document, [shape_ref(document, "sheet", "face", 1)], 5.0, mode="join")
+
+    created = operation.args["body_id"]
+    assert created != "sheet" and document.get_body("sheet").shape is sheet
+    assert math.isclose(_volume(document, created), 2000.0, rel_tol=TOL)
+    document.log.undo(document)
+    assert [body.id for body in document.bodies] == ["sheet"]
+    document.log.redo(document)
+    assert math.isclose(_volume(document, created), 2000.0, rel_tol=TOL)
+
+
 def test_a_coarse_vertex_far_away_does_not_make_a_body_touch():
     """落ちたら、0.005 mm 離れた箱が、接していない側の頂点1つの許容差(0.01 mm)だけで「触れている」とされ、
     結合で融合されて文書から消える(融合しても2つの塊のまま)。"""

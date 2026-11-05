@@ -165,11 +165,19 @@ def _region_build(faces: Sequence[Any], distance: float, mode: str, normal: Sequ
 
 
 def _face_build(source_shape: Any, indices: Sequence[int], distance: float, mode: str, taper: float) -> Build:
-    """面の押し出しの計算(`_region_build` と同じく、相手があるときだけ覚える)。"""
+    """面の押し出しの計算(`_region_build` と同じく、相手があるときだけ覚える)。相手の無い join は柱だけを新しいボディにする
+    (`extrude_faces` は相手の無い join を断るので new として計算する。触れるボディが面の持ち主だけで、それがソリッドを
+    持たないときに起きる)。"""
     def build(target_shape: Any, merged: Sequence[Any]) -> dict:
         def compute() -> dict:
             return kernel_extrude.extrude_faces(
-                source_shape, indices, distance, mode, target_shape=target_shape, taper=taper, merged_bodies=merged
+                source_shape,
+                indices,
+                distance,
+                mode if target_shape is not None else "new",
+                target_shape=target_shape,
+                taper=taper,
+                merged_bodies=merged,
             )
 
         if target_shape is None:
