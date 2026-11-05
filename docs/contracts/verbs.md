@@ -50,7 +50,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **長方形をまるごと回すと、長方形のまま回る**(基準の角を回し、`angle` に角度を足す。`pattern_circular` の複製も同じ)。`angle` を持たない旧い長方形を回すと `_write_params` が `angle` を新しい名前つきの値として足し、その undo は足した `angle` と名前を外す(`previous` に `angle` が無いことから分かる)。長方形の1点(左下)だけを回すこともできる。
 - **`Session` の戻り値(= `Applied`)はモードによらずキーが同じで、使わない側が `null`。** `move_body`: `mode/dx/dy/dz/angle/axis_point/axis_dir/copy/created/changed_bodies`、`move_sketch_entities`: `mode/dx/dy/angle/center/copy/created/sketch_ids`。
 - **回転の引数は WebSocket の表(`ws="table"`)に `required=False` で開いている**(`mode` で要る引数が入れ替わるので、どれも任意にして足りないものはコアが ValueError で断る。省略された引数は None のまま verb へ渡す)。画面は `mode` の選択(`commands/moveMode.ts`)を持ち、回転軸を辺クリック・中心を頂点クリックで指す(`PickArgSpec`、共有選択集合には入れない)。詳細は `duocad/catalog.py` の `move_body`/`move_sketch_entities` の note。
-- kernel の面: `kernel.rotate_shape`/`kernel.edge_axis(shape, edge_index)`/`kernel.centroid`(体積重心)、`sketch.rotate_point`。
+- 幾何の面: `kernel.rotate_shape`/`brep_geometry.edge_axis(shape, edge_index)`/`brep_geometry.centroid`(体積重心)、`sketch.rotate_point`。
 
 ### 依存してはいけないもの
 
@@ -79,7 +79,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **長方形は軸が斜めでも長方形のまま鏡映される**(`sketch._mirror_rectangle` が向きを `2φ - angle`、基準の角を元の「height 側の隣の角」の鏡像にして1つの長方形を返す)。
 - **円弧の鏡映は始点・終点を入れ替えてから角度を映す**(`new_start = 2*axis_angle - end`、`new_end = 2*axis_angle - start`)。鏡映は向きを反転するので別々に映すと掃引方向が壊れる。掃引量(`end-start`)は保たれる。
 - `EntityKindOps.mirror`(7種別とも実装。`mirror(params, ax, ay, ux, uy) -> Dict[str, float]`、rotate と同じく**同じ種別の `params` を1つ返す**)、`kernel.mirror_shape(shape, point, normal)`(`gp_Trsf.SetMirror`。常に独立した複製を返す)。
-- **鏡映基準の指し方は既存の `PickArgSpec`(対象とは別チャンネルで図形を1つ直接ピック)に種別を足して実現。** `PickTarget = 'edge'|'vertex'|'face'|'sketchPoint'|'sketchEntity'`。`face` は `PickEvent.hit`、`sketchEntity` は `PickEvent.sketchEntity`(点は落とす)から拾う。種別は `PickEvent` が既に持つものから選ぶ(新しい当たり判定を作らない)。
+- **鏡映基準の指し方は既存の `PickArgSpec`(対象とは別チャンネルで図形を1つ直接ピック)に種別を足して実現。** `PickTarget = 'edge'|'vertex'|'face'|'body'|'sketchPoint'|'sketchEntity'`。`face` は `PickEvent.hit`、`sketchEntity` は `PickEvent.sketchEntity`(点は落とす)から拾う。種別は `PickEvent` が既に持つものから選ぶ(新しい当たり判定を作らない)。
 - **`MIRROR_SKETCH_ENTITIES`**(`commands/sketch.ts`): 対象は選択、`axis` は `sketchEntity` ピック(必須・自動で構える)。`build` は `{axis}` だけを送り、`runsWithoutSketchId` は true。`catalog.py` は `ws="table"`(必須の引数1つなので表の規約に合う。`special` は `_dispatch` に手書き分岐を増やす)。
 - **`MIRROR_BODY`**(`commands/features.ts`): `base_plane` の choice は XY/XZ/YZ + 4つめ `'face'`(「面を選ぶ」)。`'face'` はサーバへ行かず、`build` が `plane_face` へ読み替える印(コアの `base_plane` は XY/XZ/YZ のみ)。面ピックは `when: base_plane==='face'` で開く(外すと起動した瞬間に面ピックが開いて対象を選び直せない)。`mirror_body` は `ws="special"` で `plane_face` も WS に開いている(`_dispatch` が `plane_face=message.get("plane_face")` を渡す)。
 - **ピックの分岐は `onPick`/`onSketchPick` で選択の編集より前に置く**(`tests/test_ui_command_wiring.py` が `wantsPick` の分岐を固定する)。
@@ -104,7 +104,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - 呼ぶ面は `split_body(base_plane | plane_face | sketch_id, keep="both")`。対象は確定選択のボディ、または面/辺/頂点が属するボディ(`mirror_body` と同じ。複数ボディなら全部を同じ平面で割る)。verb は `duocad/verbs/split_body.py`、幾何は `duocad/kernel_split.py`(`kernel.py` には足していない)。
 - **切る平面は3つが排他**(0個・2個以上は ValueError): 基準平面 / 平らな面(法線はその面の外向き。`kernel_sketch.face_frame`)/ スケッチの平面(`sketch_plane_frame`。オフセット平面・面に貼ったスケッチを含む)。**`sketch_id` は図形の参照 `{"sketch", "entity"}` も受ける**(画面は図形を1つ指す。`revolve.axis_line` と同じ別チャンネルのピック。後述の理由)。ログには解決済みの `{plane_point, plane_normal}` だけを載せる(`mirror_body` と同じ)。
 - **`keep`**: `both`(既定)/ `positive`(法線の向く側だけ)/ `negative`。画面は `keep` を必ず送る(選択肢に既定を持たせない作法。両側を押す1手が増える)。MCP は省略=both。
-- **番号・名前・ID の引き継ぎ(本人ではなく親セッションの決定。2026-10-21)**: 元のボディの ID・番号・名前は、**残す塊のうち体積が最大のもの**が引き継ぐ。法線の向きで引き継ぎ先が変わらない(蓋と本体に割ると大きい本体が元の名前を保つ)。体積が相対 1e-9 以内で同じなら正側、それでも決まらなければ重心の (x, y, z) の小さい方(`kernel_split` が塊をこの順に並べて返し、verb は先頭を取る)。ほかの塊は新しいボディで、**名前は `naming` の通し番号(`ボディN`)**(複製・鏡映と同じ流儀。元の名前から派生させる流儀はコードベースに無い)・表示の属性は `dataclasses.replace` で元から写す。片側が離れた複数の塊になるときは `kernel.split_solids` で塊ごとに別のボディ(U字を横に切る)。
+- **番号・名前・ID の引き継ぎ(本人ではなく親セッションの決定。2026-10-21)**: 元のボディの ID・番号・名前は、**残す塊のうち体積が最大のもの**が引き継ぐ。法線の向きで引き継ぎ先が変わらない(蓋と本体に割ると大きい本体が元の名前を保つ)。体積が相対 1e-9 以内で同じなら正側、それでも決まらなければ重心の (x, y, z) の小さい方(`kernel_split` が塊をこの順に並べて返し、verb は先頭を取る)。ほかの塊は新しいボディで、**名前は `naming` の通し番号(`ボディN`)**(複製・鏡映と同じ流儀。元の名前から派生させる流儀はコードベースに無い)・表示の属性は `dataclasses.replace` で元から写す。片側が離れた複数の塊になるときは `brep_topology.split_solids` で塊ごとに別のボディ(U字を横に切る)。
 - **全ボディの切断と検査が終わるまで文書にも採番にも触れない**(`_plan` が先、`_apply` が後)。**どれか1つでも平面と交わらなければ全体を断る**(一部だけ成功させない)。面に接しているだけ(片側が空)も「交わらない」。メッシュのボディは `editable_body` が断る。
 - **ログの形**: `args = {bodies, plane_point, plane_normal, keep, created: [[新ID…]…](ボディごと), numbers: [[通し番号…]…]}`。再生は同じ計算をして、塊を決定的な順で ID・番号へ当てる(塊の数が記録と違えば `copy_ids` が落ちる)。**由来(`provenance`)は** `{"verb", "bodies": [{"body", "pieces": [{"body", "side", "face_map", "deleted", "new_faces"}]}]}` で、`face_map` の鍵は元の面、値は**その塊の**面の添字、`new_faces` が切り口。
 - **undo**: 元のボディの形を `_common.SNAPSHOTS` へ退避し(`fillet` と同じ。`(body_id, seq)` 鍵)、作ったボディは `remove_created_bodies`(足した順の逆)。
@@ -117,7 +117,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **ターゲットと同じ BodyId がツールに混ざっていたら ValueError**(黙って畳まない)。
 - **交差は `target ∩ (tool1 ∪ tool2 ∪ …)`**(`target ∩ tool1 ∩ tool2…` ではない)。ツールは常に先に `BRepAlgoAPI_Fuse` で1つへ融合してからターゲットと演算する(`kernel.boolean_bodies` を素通しで使えばこの意味になる)。
 - **1回の undo/redo で「ターゲットの形状」と「消えたツール Body 群」の両方が戻る。** `_common.SNAPSHOTS` に `(target_body_id, seq)` と `("boolean_body:removed", seq)` の2鍵で退避。この2鍵構成を崩すと片方だけ戻る。
-- **ソリッド限定チェックは `kernel.is_solid()`(SOLID 0 個なら False)を通す。** `selection.py` と verb 層は `OCP` を直接 import しない(`tests/test_boundaries.py` が強制)。
+- **ソリッド限定チェックは `brep_checks.is_solid()`(SOLID 0 個なら False)を通す。** `selection.py` と verb 層は `OCP` を直接 import しない(`tests/test_boundaries.py` が強制)。
 - **プレビュー再計算は既存の汎用機構が覆う**: `CommandHost.svelte` の `selectionPrint`(`kind:'selection'` の arg を持つコマンドは確定選択の中身をプレビュー再送キーに含める)。選択の増減でプレビューが動く verb を足すときも、まずこれで足りるか確認する。
 - Web の `BOOLEAN_BODY` の `args` 順は `[pick target_ref(body), selection tools(ボディ単位, min=1), choice mode]`(`firstMissingArg` の質問順。粒度は [UI.md](../UI.md)「持ち主ごとに効くコマンド」)。`SOLID_FEATURE_COMMANDS` にのみ追加。
 - **union だけ同一平面の面を統合する**(`_unify_same_domain`。隣り合うボディの継ぎ目を消し、またぐ辺にフィレットをかけられるようにする)。cut / intersect は統合しない。`provenance` は押し出しと同じ形(`face_map` の鍵はターゲットの面、ツール由来の面は `new_faces`)。
@@ -153,7 +153,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
   期限切れ・子の異常終了は子を殺して ValueError、次の呼び出しで立て直す。
 - **由来**: 削除は `deleted` = 選んだ面、`new_faces` は空。オフセットは旧面と新面が1対1。丸めが付いてくるときは旧丸めが `deleted`、
   丸め直した面が `new_faces`(旧丸めと新丸めを対応させる根拠を持たない)。
-- 画面の口はまだ無い(カード a・b・d・e が本人判断待ち)。MCP とセッションのメソッドだけ。
+- 画面の口は `OFFSET_FACES` / `DELETE_FACES`(`commands/features.ts`)。面の削除は丸めの面を1クリックでつながった丸め全体へ広げて選ぶ(`App.svelte` の `faceChainCommand`)。
 
 ## envelope_regions(スケッチの包絡)
 
@@ -174,8 +174,8 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 ## 押し出し(extrude)の kernel 分離・web 統合・extrude_face 廃止
 
 - **押し出しの幾何は `duocad/kernel_extrude.py`**(`extrude_regions(faces, distance, mode, normal, target_shape=None)` と `extrude_faces`。mode は join/cut/new)。`verbs/extrude.py` が直接呼ぶ。`kernel.py` に再エクスポートは無く、`kernel.extrude_regions`/`kernel.extrude_face_on_shape` は存在しない(AttributeError)。`mcp_server.py` から `kernel_extrude.*` を直接呼ばない(`tests/test_mcp_verbs.py` が検査)。
-- **依存は `kernel_extrude` → `kernel` の一方向。** `kernel.py` から `kernel_extrude` を import しない(循環)。`kernel_extrude` は kernel の private 補助(`_face_map`・`_face_at`・`_face_normal`・`_face_props`・`_checked_volume`・`_require_valid`・`_unify_same_domain`・`_fuse_all`・`_target_successors`・`_face_map_projection`)を import している。これらの名前・シグネチャを `kernel.py` 側で変えるなら `kernel_extrude` も直す。`face_of`/`_face_at` は `query.py`・`kernel_sketch.py`・テストが使うので `kernel` に残す。
-- **OCP を import してよいカーネル層は `kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py` と `topopt/voxelize.py`**(`tests/test_boundaries.py` の `OCP_ALLOWED` が正。押し出しを切り出した当時は 6 本だった)。
+- **`kernel_extrude` は `kernel` を import しない。** 共通層 `brep_checks`・`brep_geometry`・`brep_history`・`brep_operations`・`brep_planar`・`brep_topology` だけに依存する(`kernel_extrude.py` 冒頭の import)。`kernel.py` も `kernel_extrude` を import しない。`brep_*` の名前・シグネチャを変えるなら `kernel_extrude` も直す。`brep_topology.face_of` は `query.py`・`kernel_sketch.py`・テストも使う。
+- **OCP を import してよいのは `kernel.py`・`kernel_*.py`・`brep_*.py`・`mesh_geometry.py`・`topopt/voxelize.py`**(`tests/test_boundaries.py` の `OCP_ALLOWED` が正)。
 - **UI から `extrude_face` を呼ぶ経路は無い。** ツールバーの「押し出す」は 1 つ(`#extrude`)。`features.ts` の `makeExtrude('region'|'face')` が同じ id `extrude` の 2 定義を作り、`EXTRUDE_REGIONS`(`SKETCH_FEATURE_COMMANDS`、選択引数名 `regions`)と `EXTRUDE_FACES`(通常モードの `SOLID_FEATURE_COMMANDS`、`faces`)として出す(どちらも min 1・max null)。距離 `#distance`、テーパー角 `#extrude-taper`、種別 `#extrude-mode-join/cut/new`。サーバへ送るのは両方 `{distance, mode}` と、0 でないときの `taper` だけ(対象はコアの確定選択)。旧 UI id `extrude_face`、`#extrude-regions`、`#regions-distance` は廃止。
 - 同じ id `extrude` が 2 つの一覧に居ても、`CATEGORY_OF`(`App.svelte`)は id→category で両方 `feature` なので壊れない。`findCommand(id, list)` の `list`、`CommandHost` の `commands` プロップは必須(既定なし)。
 - 通常モードの押し出しは面か1つのスケッチの領域を受け付ける(2026-10-18 本人決定。`EXTRUDE_FACES` の選択引数は `kinds: ['face', 'region']`)。面と領域の混在・別スケッチの領域は画面が先に断る(`makeExtrude` の `build`。コアの `require_extrude_targets` と同じ断り方)。
@@ -201,7 +201,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
   直線と円弧だけなら柱の側面を `BRepOffsetAPI_DraftAngle` で傾け(面は平面・円錐のまま)、楕円・ベジエ・B スプラインを含むなら
   `BRepOffsetAPI_MakeDraft` で側面を作って底とふたで閉じる(1本の辺で閉じた輪郭は先に4本に分ける)。`MakeDraft` は 0.1 mm の面取り辺を
   持つ多角形と、継ぎ目が曲率のきつい点にある楕円で失敗する(sol レビュー)。傾けた B スプラインの面の体積は既定の積分では合わないので、
-  `kernel.volume` / `centroid` は面ごとに積分を選ぶ(docs/CAD_LIBRARY_PITFALLS.md)。
+  `brep_geometry.volume` / `centroid` は面ごとに積分を選ぶ(docs/CAD_LIBRARY_PITFALLS.md)。
   `LocOpe_DPrism` / `BRepOffsetAPI_DraftAngle` を使わない理由と、潰れを OCCT が見逃す実測は docs/CAD_LIBRARY_PITFALLS.md「テーパー付き押し出しの2経路」。
 - **潰れ(壁どうしの衝突・穴が閉じる・辺が消える・円錐が頂点を越える)は ValueError**(文言に `collapses`)。検出は4段:
   曲線の辺の曲率半径とずらす量(`_require_curvature_room`。円の頂点越えは `BRepCheck` も自己交差の検査も通すのでこれが唯一の関門。
@@ -230,7 +230,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 
 ## 回転体(revolve)
 
-- **幾何は `kernel_extrude.revolve_regions`**(OCP を触るカーネル層を7本目に増やさないため同居)。領域の立体を束ねて相手へ join / cut する後半は `extrude_regions` と共有(`_combine_region_solids`。統合・由来の射影も押し出しと同じ規則)。verb 側は `verbs/extrude.py` の `_resolve_faces_and_normal` / `_resolve_target` / `_editable_target` を `what="revolve"` で使う。
+- **幾何は `kernel_extrude.revolve_regions`**(OCP を触るカーネル層を7本目に増やさないため同居)。領域の立体を束ねて相手へ join / cut する後半は `extrude_regions` と共有(`_combine_region_solids`。統合・由来の射影も押し出しと同じ規則)。verb 側(`verbs/revolve.py`)は `verbs/extrude.py` の `MODES`・`Build`・`_place`・`_resolve_faces_and_normal`・`changed_bodies`・`replay_placement`・`undo_placement` を使い、`_resolve_faces_and_normal` には `what="revolve"` を渡す。
 - **軸は `"x"` / `"y"`(スケッチの原点を通る軸)か、領域と同じスケッチの線分 `{"sketch", "entity"}`。** ソリッドの辺・基準軸はまだ受けない。**公開面(catalog・MCP・WS)では `axis`(x / y)と `axis_line`(線分)の2引数に分けて排他で受け**、入口(`_enter_revolve`)が verb の1つの `axis` へ畳む。1引数(文字列か参照の和)にすると画面の欄(軸の3択・線分のピック)と作業空間の引数が名前で往復できず、再読み込みや AI の `set_command_args` で指した線分が消えた(sol レビューで発覚。`mirror_body` の `base_plane` / `plane_face` と同じ形にした)。ログには**参照のまま**載せ、再生で引き直す(線分の寸法を後から変えると追従する)。鏡映が数値へ解決して載せるのは、軸自身が複製の対象に混ざりうるからで、回転体にはその事情が無い。
 - **角度は度で `0 < |angle| <= 360`、負は逆向き**(押し出しの距離の符号と同じ扱い)。正は軸の向き(線分の始点→終点)まわりの右ねじ。`symmetric` は両側へ半分ずつ。360° は角度なしの `BRepPrimAPI_MakeRevol` で作る。
 - **軸が領域を横切るのは ValueError**(`_require_one_side_of_axis`)。軸の両側に半平面を置いて共通部分の面積で決める(辺が軸上にあるのは面積0なので通る)。境界を折れ線で拾う判定は、軸をわずかにまたぐ円弧を取りこぼす。
