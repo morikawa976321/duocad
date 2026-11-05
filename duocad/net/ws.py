@@ -511,6 +511,9 @@ class Server:
             elif command == "clear_selection":
                 applied = self._apply(self.session.clear_selection, message.get("client_op"))
                 await self._push(connection, applied=applied)
+            elif command == "select_face_boundaries":
+                applied = self._apply(self.session.select_face_boundaries, message.get("client_op"))
+                await self._push(connection, applied=applied)
             # -------------------------------------------------- B2: 作業空間(起動中のコマンド・モード。issue #153)。選択と同じ `change` 系
             elif command == "begin_command":
                 verb = message.get("verb")

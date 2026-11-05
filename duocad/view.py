@@ -1054,6 +1054,29 @@ class DocumentView:
             "chains": [kernel_face_edit.blend_chain(body.shape, index) for index in origins],
         }
 
+    def face_edges(self, body_id: str, face_indices: list) -> dict:
+        """頼まれた面の外周の辺(`query.edges_of_face`。穴の縁は入れない)を、それぞれの連なり(`edge_chains`)まで広げ、
+        全部の面の分まとめて昇順で返す。
+
+        戻り値: `{"body_id", "revision", "shape_revision", "faces": [頼まれた面(重複を畳む)], "boundary_edges": [辺の添字(昇順)]}`
+
+        `Session.select_face_boundaries` が選択の面をこの辺へ読み替える。連なりまで広げるのは、フィレット・面取りが
+        辺1本から連なり全体へかかるため(画面の辺の選び方と同じ単位。docs/contracts/ui-selection-viewport.md)。
+        """
+        body = self._visible_brep(body_id, "面")
+        faces = list(dict.fromkeys(int(index) for index in face_indices))
+        boundary = sorted({edge for face in faces for edge in query.edges_of_face(body.shape, face)})
+        finder = _memo(self._chain_cache, body_id, body.shape, None, lambda: kernel.edge_chain_finder(body.shape))
+        groups = finder.of(boundary)
+        edges = sorted({member for index in boundary for member in groups[index]})
+        return {
+            "body_id": body_id,
+            "revision": self.body_revision(body_id),
+            "shape_revision": self.shape_revision(body_id),
+            "faces": faces,
+            "boundary_edges": edges,
+        }
+
     def vertices(self, body_id: str) -> dict:
         """1Bodyの頂点を1始まりの添字つきの3D座標で返す(キャッシュ付き)。
 

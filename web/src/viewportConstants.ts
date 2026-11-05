@@ -328,6 +328,12 @@ export function isSelectableFov(value: number): boolean {
 export const SKETCH_FIT_MARGIN = 1.243
 
 /**
+ * 図形もボディも無い文書でスケッチに入ったときに寄る半幅[mm]。家の視点の距離のままだと 1mm が約 1.3px で、
+ * 1mm の吸着でも狙った点に置けなかった(issue #282)。
+ */
+export const EMPTY_SKETCH_HALF_WIDTH = 50
+
+/**
  * 既定の視点の向き(front-top-right)。距離に掛けて注視点へ足すベクトルで、長さは1ではなく
  * 1.5362(= `hypot(1, 1, 0.6)`)。初期視点と `frameToContent` が使う。
  * `frameToContent` は `fitDistance` の 1.5362倍の位置にカメラを置くので、収まるぎりぎりより

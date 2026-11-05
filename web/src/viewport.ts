@@ -32,7 +32,7 @@ import { DATUM_AXIS_DIRECTIONS } from './commands/command'
 import { createGhostLayer } from './ghostLayer'
 import { createSectionView } from './sectionView'
 import { createSelectionBand, type BandRect } from './selectionBand'
-import { createGridPlanes } from './gridPlanes'
+import { createGridPlanes, uvBoxOfPositions } from './gridPlanes'
 import { frameVector, planePoint } from './planeMath'
 import { distSq, perspectiveParam, pickNearestWithinRadius, rankByOverlap, type RankedCandidate, type ScreenPickCandidate } from './screenPick'
 import { createSketchGuideLayer } from './sketchGuides'
@@ -63,7 +63,7 @@ import {
   BOX_SEEN_STEP_PX, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
   HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, ORIGIN_GIZMO_AXIS_GAP_MM, ORIGIN_GIZMO_AXIS_LENGTH_MM,
   ORIGIN_GIZMO_PLANE_GAP_MM, ORIGIN_GIZMO_PLANE_REACH_MM, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS,
-  SKETCH_FIT_MARGIN,
+  EMPTY_SKETCH_HALF_WIDTH, SKETCH_FIT_MARGIN,
   SKETCH_HANDLE_PIXELS, VERTEX_PIXELS, WORLD_UP, isSelectableFov, lighten, type BodyMeshes,
 } from './viewportConstants'
 
@@ -1696,18 +1696,28 @@ export function createViewport(container: HTMLElement): Viewport {
     return near
   }
 
-  function lookAtSketch(sketchId: string): void {
+  function lookAtSketch(sketchId: string, options: { emptyDocument?: boolean } = {}): void {
     const target = sketchLayer.get(sketchId)
     if (!target) return
     const frame = target.frame
     const normal = frameVector(frame.normal).normalize()
-    // 中心は描いてあるものの真ん中(何も無ければ平面の原点)
+    // 図形がまだ無ければ貼った面の大きさへ、面でもなく文書が空なら原点まわりの決め打ちの幅へ寄る。
     let center = toWorld(frame, 0, 0)
     let radius = 0
-    const box = uvBoxOfPoints(target.points)
-    if (box !== null) {
-      center = toWorld(frame, (box.uMin + box.uMax) / 2, (box.vMin + box.vMax) / 2)
-      radius = Math.max(box.uMax - box.uMin, box.vMax - box.vMin) / 2
+    const drawn = uvBoxOfPoints(target.points)
+    const face =
+      drawn === null && target.plane.kind === 'face'
+        ? uvBoxOfPositions(bodies.get(target.plane.bodyId)?.body.facePositions(target.plane.faceIndex) ?? null, frame)
+        : null
+    if (drawn !== null) {
+      center = toWorld(frame, (drawn.uMin + drawn.uMax) / 2, (drawn.vMin + drawn.vMax) / 2)
+      radius = Math.max(drawn.uMax - drawn.uMin, drawn.vMax - drawn.vMin) / 2
+    } else if (face !== null) {
+      center = toWorld(frame, (face.uMin + face.uMax) / 2, (face.vMin + face.vMax) / 2)
+      // 面の u/v は画面の上下と揃わない(上方向は `upForDirection` が世界の軸から決める)ので、外接円で収める。
+      radius = Math.hypot(face.uMax - face.uMin, face.vMax - face.vMin) / 2
+    } else if (options.emptyDocument === true) {
+      radius = EMPTY_SKETCH_HALF_WIDTH
     }
     const previous = camera.position.distanceTo(controls.target)
     const distance = radius > 0 ? Math.max(fitDistance(radius * SKETCH_FIT_MARGIN), 1) : Math.max(previous, 1)
@@ -1718,7 +1728,7 @@ export function createViewport(container: HTMLElement): Viewport {
     camera.up.set(...upForDirection([normal.x, normal.y, normal.z]))
     camera.position.copy(center).add(normal.multiplyScalar(distance))
     controls.target.copy(center)
-    // 正投影は距離では寄れない(`frameToContent` と同じ理由)。描いてあるものが無いときは今の見かけの大きさのまま。
+    // 正投影は距離では寄れない(`frameToContent` と同じ理由)。寄る先が無いときは今の見かけの大きさのまま。
     if (camera === orthographic && radius > 0) setViewHalfHeight(fitHalfHeight(radius * SKETCH_FIT_MARGIN))
     camera.updateProjectionMatrix()
     controls.update()

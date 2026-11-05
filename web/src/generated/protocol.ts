@@ -12,6 +12,7 @@ export const COMMAND_CATEGORY = {
   modify_selection: 'selection',
   toggle_selection: 'selection',
   clear_selection: 'selection',
+  select_face_boundaries: 'selection',
   sketch_create: 'sketch',
   sketch_create_offset: 'sketch',
   add_point: 'sketch',
@@ -111,6 +112,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   modify_selection: ['add', 'remove'],
   toggle_selection: ['refs'],
   clear_selection: [],
+  select_face_boundaries: [],
   sketch_create: ['base_plane'],
   sketch_create_offset: ['base_plane', 'distance'],
   add_point: ['sketch_id', 'point'],
@@ -208,6 +210,7 @@ export interface CommandArguments {
   modify_selection: { add?: unknown[]; remove?: unknown[] }
   toggle_selection: { refs: unknown[] }
   clear_selection: Record<string, never>
+  select_face_boundaries: Record<string, never>
   sketch_create: { base_plane?: string }
   sketch_create_offset: { base_plane?: string; distance: number }
   add_point: { sketch_id: string; point: unknown[] }

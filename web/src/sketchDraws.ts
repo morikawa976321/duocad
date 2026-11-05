@@ -1,5 +1,5 @@
 import { refsOfKind } from './commands/command'
-import type { SelectionState, SketchState } from './session'
+import type { SelectionState, SketchEntityRef, SketchState } from './session'
 import type { SketchDraw } from './viewportTypes'
 
 /** `editingId` は今編集しているスケッチ(モード外は null)。 */
@@ -7,9 +7,11 @@ export function buildSketchDraws(
   sketches: readonly SketchState[],
   selection: SelectionState | null,
   editingId: string | null,
+  /** 起動中のコマンドが直接ピックで指した点・線(選択には入らないが、選択と同じく光らせる)。 */
+  picked: readonly SketchEntityRef[] = [],
 ): SketchDraw[] {
   const selectedRegions = refsOfKind(selection?.items ?? [], 'region')
-  const selectedHandles = refsOfKind(selection?.items ?? [], 'sketch_entity')
+  const selectedHandles = [...refsOfKind(selection?.items ?? [], 'sketch_entity'), ...picked]
   return sketches
     // 隠したスケッチは描かない。編集中のスケッチだけは可視性に関わらず描く
     // (`enterSketch` の表示復帰の往復を待たずに `lookAtSketch` が枠を要る)。

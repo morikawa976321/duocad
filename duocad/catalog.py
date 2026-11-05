@@ -611,6 +611,18 @@ COMMANDS: tuple[Command, ...] = (
         ws="special",
     ),
     Command(
+        name="select_face_boundaries",
+        category="selection",
+        description="",
+        session="select_face_boundaries",
+        ws="special",
+        mcp=False,
+        note=(
+            "選択の面を外し、その外周の辺(穴の縁は入れない)を連なりまで広げて足す。画面が、面を選んだまま"
+            "フィレット・面取りを起動したときに送る。AI は述語 `on_boundary_of_face` で同じ辺を選べる"
+        ),
+    ),
+    Command(
         name="sketch_create",
         returns=(Result("sketch_id", "string"), _SKETCH_FRAME),
         resets_selection=False,

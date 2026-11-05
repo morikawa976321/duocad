@@ -23,7 +23,6 @@
     measureItemRef,
     pickedRefOf,
     refKey,
-    refKind,
     refsOfKind,
     regionRef,
     sameRef,
@@ -43,7 +42,7 @@
     SOLID_FEATURE_COMMANDS,
     needsSketchId,
   } from './commands/features'
-  import { ghostCopies, snapSketchPoint } from './entityKinds'
+  import { entityPointKeys, ghostCopies, snapSketchPoint } from './entityKinds'
   import { IMPORT_STEP } from './commands/files'
   import { isImeKey } from './keys'
   import { INTERFERENCE } from './commands/interference'
@@ -401,6 +400,11 @@
    * 数だけを渡すのは、コマンド層に「誰が変えたか」の判断を持ち込まないため。
    */
   let selfSelections = $state(0)
+  /**
+   * 送った `select_face_boundaries` の op(返るまで送り直さない)。人のクリックではないので `selfSelections` に数えない
+   * (数えると、繋ぎ直した後の空振りの応答が別の画面で起動された即適用の verb を確定させる)。
+   */
+  let faceBoundaryOp: number | null = null
 
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   const ai = createAiChat({ send: (text) => session.aiSend(text), fail, inform, hidden: () => !sidebarOpen })
@@ -929,7 +933,7 @@
     // 選択の変更イベントはverbの適用ではない(`change: "selection"`。session.ts の `Applied`)。
     if (applied && applied.change === 'selection') {
       // この画面が出した選択変更だけを数える(`selfSelections`)。AIが書き換えた選択は即適用の引き金にならない。
-      if (applied.client_op !== null && myClientOps.has(applied.client_op)) {
+      if (applied.client_op !== null && myClientOps.has(applied.client_op) && applied.client_op !== faceBoundaryOp) {
         selfSelections += 1
       }
       if (applied.client_op !== null && applied.client_op === clearingOp) clearingOp = null
@@ -1230,21 +1234,55 @@
     send()
   }
 
-  /** 起動中のコマンドが直接ピックで指したボディ(ブーリアンのターゲット)。選択には入らないので、配信された引数から引いて光らせる。 */
-  function pickedBodies(): string[] {
-    return Object.values(model?.command?.args ?? {}).flatMap((value) => {
+  /**
+   * 起動中のコマンドが直接ピック(`PickArgSpec`)で指したもの(ブーリアンのターゲット・鏡映面・回転軸の辺・スケッチの軸線など)。
+   * 選択には入らないので、配信された引数から引いて選択と一緒に光らせる。
+   */
+  const pickedRefs = $derived.by(() => {
+    const verb = model?.command?.verb
+    const specs = verb === undefined ? [] : (commandDefinition(verb)?.args ?? [])
+    return Object.entries(model?.command?.args ?? {}).flatMap(([name, value]) => {
       const ref = pickedRefOf(value)
-      return ref !== null && refKind(ref) === 'body' ? [(ref as BodyRef).body] : []
+      const spec = specs.find((item) => item.name === name)
+      const shown = ref === null ? null : completePickedRef(ref, spec?.kind === 'pick' ? spec.target : null)
+      return shown === null ? [] : [shown]
     })
+  })
+
+  /**
+   * 配信されたピックの参照を、強調が読む完全な形にする。コアは AI が省いて置いた形(`kind` の無い `{body, index}`、
+   * `point` の無い `{sketch, entity}`)をそのまま配るので、種類は引数の `target` から補う。点を待つ引数で点を省いたら、
+   * コアは種別の最初の点を使う(`duocad/verbs/move_sketch.py` の `_point_of`)ので、その点を光らせる。
+   */
+  function completePickedRef(ref: SelectionRef, target: PickTarget | null): SelectionRef | null {
+    if ('datum' in ref) return ref
+    if ('sketch' in ref) {
+      if (!('entity' in ref)) return ref
+      // 線分を待つ引数は、点が付いていてもコアは図形全体を使う(鏡映の軸・回転体の軸)。
+      if (target === 'sketchEntity') return { ...ref, point: null }
+      if (target !== 'sketchPoint') return { ...ref, point: ref.point ?? null }
+      if (ref.point !== undefined && ref.point !== null) return ref
+      const kind = sketches.find((item) => item.sketch_id === ref.sketch)?.entities.find((item) => item.entity_id === ref.entity)?.kind
+      const first = kind === undefined ? undefined : entityPointKeys()[kind]?.[0]?.[0]
+      return first === undefined ? null : { ...ref, point: first }
+    }
+    // `kind: null` もコアは省いたのと同じに読む。
+    const kind = (ref as { kind?: string | null }).kind
+    if (kind !== undefined && kind !== null) return ref
+    if (target === 'face' || target === 'edge' || target === 'vertex') return { ...(ref as ShapeRef), kind: target }
+    return target === 'body' ? bodyRef((ref as ShapeRef).body) : null
   }
 
   function drawHighlight(): void {
-    viewport?.highlight(selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
+    const faces = [...selectedFaces, ...refsOfKind(pickedRefs, 'face')]
+    const edgeRefs = [...selectedEdges, ...refsOfKind(pickedRefs, 'edge')]
+    const vertexRefs = [...selectedVertices, ...refsOfKind(pickedRefs, 'vertex')]
+    viewport?.highlight(faces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
     // 選択が勝つ: ボディが選ばれているあいだは保持/除外の役割色より優先(`viewport.applyFaceMaterials` が実体)。
-    viewport?.highlightBodies([...selectedBodies.map((item) => item.body), ...pickedBodies()])
-    viewport?.highlightEdges(selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
-    viewport?.highlightVertices(selectedVertices.map((item) => ({ bodyId: item.body, vertexIndex: item.index })))
-    viewport?.highlightDatums(selectedDatums.map((item) => item.datum))
+    viewport?.highlightBodies([...selectedBodies, ...refsOfKind(pickedRefs, 'body')].map((item) => item.body))
+    viewport?.highlightEdges(edgeRefs.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
+    viewport?.highlightVertices(vertexRefs.map((item) => ({ bodyId: item.body, vertexIndex: item.index })))
+    viewport?.highlightDatums([...selectedDatums, ...refsOfKind(pickedRefs, 'datum')].map((item) => item.datum))
   }
 
   // ---------------------------------------------------------------- D: 辺・頂点を取りに行く
@@ -1271,9 +1309,10 @@
     }
   }
 
-  /** 選択に入った辺・頂点のボディの分も頼む(強調して描くのに座標が要る。AI が選んだものはカーソルが近くにない)。 */
+  /** 選択とピックの引数に入った辺・頂点のボディの分も頼む(強調して描くのに座標が要る。AI が選んだものはカーソルが近くにない)。 */
   $effect(() => {
-    requestPickData([...new Set([...selectedEdges, ...selectedVertices].map((item) => item.body))])
+    const picked = [...refsOfKind(pickedRefs, 'edge'), ...refsOfKind(pickedRefs, 'vertex')]
+    requestPickData([...new Set([...selectedEdges, ...selectedVertices, ...picked].map((item) => item.body))])
   })
 
   /**
@@ -1700,19 +1739,20 @@
     session.endCommand(nextOp())
   }
 
-  /** 全モードのコマンド定義から表示名を引く(無ければ verb 名のまま)。 */
-  function commandLabel(verb: string): string {
-    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
+  /** 全モードのコマンド定義から verb の定義を引く。 */
+  function commandDefinition(verb: string) {
+    return [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
       (command) => command.id === verb,
     )
-    return found?.label ?? verb
+  }
+
+  /** 全モードのコマンド定義から表示名を引く(無ければ verb 名のまま)。 */
+  function commandLabel(verb: string): string {
+    return commandDefinition(verb)?.label ?? verb
   }
 
   function argLabel(verb: string, name: string): string {
-    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
-      (command) => command.id === verb,
-    )
-    return found?.args.find((spec) => spec.name === name)?.label ?? name
+    return commandDefinition(verb)?.args.find((spec) => spec.name === name)?.label ?? name
   }
 
   /** 外(AI か別の画面)が作業空間を変えたら1行で知らせる。自分の操作の応答では呼ばない(`handleState`)。 */
@@ -1799,12 +1839,23 @@
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
     if (kinds.length === 0) pendingOptimizePreset = null
-    // 辺だけを食うコマンドが起動したら、選択に残っている面を外す(辺は残す。面は指せなくなるので外す手が無い)。
-    // `untrack`: ここは `CommandHost` の `$effect` の中から呼ばれ、選択を読むとその effect が選択の変化ごとに走り直す。
-    if (kinds.length > 0 && kinds.every((kind) => kind === 'edge')) {
-      untrack(() => modifySelection([], refsOfKind(currentItems(), 'face')))
-    }
   }
+
+  /**
+   * 辺だけを食うコマンドの起動中に選択に面があれば、外してその外周の辺を連なりで入れる(辺は残す。面は指せなくなるので
+   * 外す手が無い)。コアが1回の選択の変更で行う(`Session.select_face_boundaries`)。起動の瞬間ではなく状態で決めるのは、
+   * 送った要求が切断で失われても繋ぎ直した時点でもう一度送るため(残った面は確定で黙って無視され、外周が丸まらない)。
+   * 失敗したら選択も接続も変わらないので送り直さない(断りはトーストに出る)。
+   */
+  $effect(() => {
+    if (!edgeOnlyCommand || status !== 'open' || selectedFaces.length === 0) return
+    untrack(() => {
+      if (faceBoundaryOp !== null && selectionOpsInFlight.has(faceBoundaryOp)) return
+      faceBoundaryOp = nextOp()
+      selectionOpsInFlight.add(faceBoundaryOp)
+      session.selectFaceBoundaries(faceBoundaryOp)
+    })
+  })
 
   /** 辺の参照を、連なり(`viewport.edgeChain`)の全部の参照へ広げる。連なりがまだ届いていなければ null。 */
   function edgeChainRefs(bodyId: string, edgeIndex: number): SelectionRef[] | null {
@@ -2107,8 +2158,13 @@
     sketches.find((item) => item.sketch_id === sketchId) ?? null,
   )
 
+  /** 文書にボディも図形も無いか(隠したものも数える。`viewport.lookAtSketch` の寄せ先)。 */
+  function documentEmpty(): boolean {
+    return (model?.bodies.length ?? 0) === 0 && sketches.every((item) => item.entities.length === 0)
+  }
+
   function drawSketches(): void {
-    viewport?.showSketches(buildSketchDraws(sketches, selection, sketchId))
+    viewport?.showSketches(buildSketchDraws(sketches, selection, sketchId, refsOfKind(pickedRefs, 'sketch_entity')))
   }
 
   /**
@@ -2141,7 +2197,7 @@
     // どの遷移でも同期に描き直す(入る側は直後の `lookAtSketch` が平面の枠を要る。`handleState` と同じ)。
     // 抜ける側にも要る: 抜けたスケッチの点マーカーが次の状態配信まで残り、手前に浮いてクリックを奪いうる。
     drawSketches()
-    if (next.kind === 'sketch') viewport?.lookAtSketch(next.id)
+    if (next.kind === 'sketch') viewport?.lookAtSketch(next.id, { emptyDocument: documentEmpty() })
     // スケッチの戻り先: 最適化モードから入ったら、抜けたときに最適化モードへ入り直す。文書をまたいだ遷移では前の文書の
     // モードを「前」として読まない(`handleState` が戻り先を捨てた直後に、ここで書き直さない)。
     if (crossedDocument) return
@@ -2737,7 +2793,7 @@
             編集中 {planeLabel(activeSketch.plane, '面に貼ったスケッチ')}
             ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
           </span>
-          <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId)}>
+          <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId, { emptyDocument: documentEmpty() })}>
             正面から見る
           </button>
           <button id="sketch-exit" onclick={exitSketch}>抜ける</button>

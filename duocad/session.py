@@ -66,6 +66,10 @@ class NoDocument(ValueError):
 _STEP_SUFFIXES = (".step", ".stp")
 _STL_SUFFIXES = (".stl",)
 
+#: 辺だけを食い、起動中は面を指せない verb(`select_face_boundaries` が選択の面を読み替えてよいのはこの起動中だけ)。
+#: 画面の `App.svelte` の `edgeOnlyCommand`(選択の引数の種類が辺だけ)と同じ顔ぶれに揃える。
+_EDGE_ONLY_VERBS = frozenset({"fillet", "chamfer"})
+
 def _edits_document(method: Any) -> Any:
     """文書を変える `Session` のメソッドに付ける。形状最適化を走らせている文書なら `DocumentBusy` で断る。
     ブラウザ・MCP・アプリ内AIのどの経路も `Session` のメソッドを通るので、ここ1箇所で全部が止まる。
@@ -428,6 +432,32 @@ class Session:
             add=() if add is None else add,
             remove=() if remove is None else remove,
         )
+        return self._emit(self._selection_event(client_op))
+
+    def select_face_boundaries(self, client_op: Optional[int] = None) -> dict:
+        """選択の面を外し、その外周の辺を連なりまで広げて足す(`DocumentView.face_edges`)。変更イベントを返す。
+
+        画面が、面を選んだままフィレット・面取り(辺だけを食い、起動中は面を指せない)を起動したときに送る。
+        外すのと足すのを1回の選択の変更で行う: 画面で応答を待って足すと、待つ間の確定・中断・切断・別の画面の形の変更が
+        それぞれ古い添字や漏れを生んだ。辺を持たないボディ(メッシュ・隠したもの・形の無いもの)の面は外すだけ。
+        起動中の verb が辺だけを食うもの(`_EDGE_ONLY_VERBS`)でなければ何も変えない: 繋ぎ直した画面は新しい状態が届く前に
+        古い起動を根拠に送りうるので、別の画面が起動した面を食う verb の選択を読み替えてはいけない。
+        """
+        current = self.workspace.command
+        if current is None or current.verb not in _EDGE_ONLY_VERBS:
+            return self._emit(self._selection_event(client_op))
+        faces = selection.selected_items(self.document, kind="face")
+        add: list = []
+        for body_id in dict.fromkeys(item["body"] for item in faces):
+            body = self.document.get_body(body_id)
+            if body.mesh is not None or body.shape is None or not body.visible:
+                continue
+            indices = [int(item["index"]) for item in faces if item["body"] == body_id]
+            add.extend(
+                {"body": body_id, "kind": "edge", "index": index}
+                for index in self.view.face_edges(body_id, indices)["boundary_edges"]
+            )
+        selection.modify_selection(self.document, add=add, remove=faces)
         return self._emit(self._selection_event(client_op))
 
     def toggle_selection(self, refs: list, client_op: Optional[int] = None) -> dict:

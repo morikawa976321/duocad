@@ -1024,6 +1024,8 @@ export interface Session {
   /** 参照ごとに、あれば外し無ければ足す(素のクリック。AI の `toggle_selection` と同じ操作)。 */
   toggleSelection(refs: SelectionRef[], clientOp: number): void
   clearSelection(clientOp: number): void
+  /** 選択の面を外し、その外周の辺を連なりまで広げて足す(`Session.select_face_boundaries`)。フィレット・面取りの起動で送る。 */
+  selectFaceBoundaries(clientOp: number): void
   // ---------------------------------------------------------------- B2: 作業空間(起動中のコマンド・モード。issue #153)
   /**
    * verb を起動して引数を集め始める(ツールバーのクリック)。応答は状態配信の `command`。AI の `begin_command` と同じ操作で、
@@ -1582,6 +1584,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     clearSelection(clientOp) {
       send({ cmd: 'clear_selection', client_op: clientOp }, true)
+    },
+    selectFaceBoundaries(clientOp) {
+      send({ cmd: 'select_face_boundaries', client_op: clientOp }, true)
     },
     beginCommand(verb, args, clientOp) {
       send({ cmd: 'begin_command', verb, args, client_op: clientOp })
