@@ -1081,9 +1081,20 @@
     modeKind: () => mode.kind,
     viewport: () => viewport,
     bodyName: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? null,
-    selectBodies: (bodyIds) => presetSelection(bodyIds.map((bodyId) => bodyRef(bodyId))),
+    selectBodies: selectInterferingBodies,
     fail,
   })
+
+  /** 干渉の行の2つを選ぶ。隠したボディはコアが選択に入れない(1つでも混ぜると選択の変更ごと断られる)ので外して知らせる。 */
+  function selectInterferingBodies(bodyIds: string[]): void {
+    const hidden = bodyIds.filter((bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.visible !== true)
+    if (hidden.length > 0) {
+      const names = hidden.map((bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? bodyId)
+      fail(`隠したボディは選べない: ${names.join('・')}`)
+    }
+    const shown = bodyIds.filter((bodyId) => !hidden.includes(bodyId))
+    if (shown.length > 0) presetSelection(shown.map((bodyId) => bodyRef(bodyId)))
+  }
 
   // ---------------------------------------------------------------- 選択情報(issue #140。verbではない)
   const selectionInfo = createSelectionInfo({
