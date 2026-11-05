@@ -106,7 +106,11 @@
   }
 
   const draftProblem = $derived(nameProblem(draftName))
-  const draftUnchanged = $derived(currentName !== null && withSuffix(draftName, '.json') === currentName)
+  // 両辺を同じ形に揃えて比べる: `part.json.json` の先埋め `part.json` は `withSuffix` で `part.json` になり、
+  // 欄を離れると `SuffixField` が `part` へ落とす。どちらも「打っていない」なので送らせない。
+  const draftUnchanged = $derived(
+    currentName !== null && withSuffix(draftName, '.json') === withSuffix(currentStem(), '.json'),
+  )
 
   function submitDraft(): void {
     if (draftProblem !== null || draftUnchanged) return
