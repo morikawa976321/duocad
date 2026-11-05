@@ -100,6 +100,7 @@
 - `FOV_DEFAULT` は 30。`FOV_MIN`(30)/`FOV_MAX`(90)/`FOV_ORTHO`(0)/`isSelectableFov`/`setFov` は**内部 API として 0 または 30〜90 の連続値を受け付ける**。画面の口は `#settings-ortho` チェックボックス1つだけ(`#settings-fov` スライダー／`#settings-fov-value` は無い)。`onchange` は `onFov(checked ? FOV_ORTHO : FOV_DEFAULT)`。**正投影を外すと常に `FOV_DEFAULT` へ戻る**。ラベルは「正投影」の1語で角度を出さない。
 - **`isSelectableFov` の受理範囲を `{0,30}` のような離散集合へ絞ってはならない**(基準平面と面の共平面ピック回帰検査(FOV 45〜55° スイープ)が連続値に依存)。
 - **起動直後のカメラ距離は `fitDistance(diagonal / 2)` を通す**(`createViewport` 冒頭、`camera.position.copy(HOME_VIEW_OFFSET).multiplyScalar(distance)` の直前)。`diagonal * 1.2` のような決め打ち定数を再導入しない。`SKETCH_FIT_MARGIN`(1.243)は `fitDistance` と組み合わさって FOV 非依存。FOV 関連の定数を変える前に `grep -rn "diagonal \* [0-9]" web/src/viewport.ts` で決め打ちが無いか確認する。
+- **図形がまだ無いスケッチへ入るとき**(`lookAtSketch`)は、面に貼ったなら面の大きさ(`gridPlanes.uvBoxOfPositions`。グリッドの範囲と同じ寸法)、図形もボディも無い文書なら原点まわり ±`EMPTY_SKETCH_HALF_WIDTH`(50mm)に寄る。それ以外(ボディのある文書の基準平面)は前の距離のまま向き直る。
 - **罠**: FOV を 45→30 に変えただけだと、決め打ち `diagonal * 1.2` が起動時カメラ位置とスケッチ未内容時の `lookAtSketch`(半径0で「前の距離のまま」に倒す経路)に残り、カメラが1.55倍近くに寄ったまま固まった。症状は原因を名指ししない「線分(辺)をクリックで選べない(タイムアウト)」。**赤が出ても自分の変更のせいと決めつけず pristine との往復比較で切り分ける**(一過性の flake は pristine/変更後とも連続で緑、本物の回帰は pristine 緑・変更後連続赤)。
 
 ## 最適化デバッグビューと撮影台

@@ -31,7 +31,7 @@ import { createOriginGizmo } from './originGizmo'
 import { createGhostLayer } from './ghostLayer'
 import { createSectionView } from './sectionView'
 import { createSelectionBand, type BandRect } from './selectionBand'
-import { createGridPlanes } from './gridPlanes'
+import { createGridPlanes, uvBoxOfPositions } from './gridPlanes'
 import { frameVector, planePoint } from './planeMath'
 import { distSq, perspectiveParam, pickNearestWithinRadius, rankByOverlap, type RankedCandidate, type ScreenPickCandidate } from './screenPick'
 import { createSketchLayer, type SketchScene } from './sketchLayer'
@@ -57,7 +57,7 @@ import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
   BOX_SEEN_STEP_PX, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
   HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS,
-  SKETCH_FIT_MARGIN,
+  EMPTY_SKETCH_HALF_WIDTH, SKETCH_FIT_MARGIN,
   SKETCH_HANDLE_PIXELS, VERTEX_PIXELS, WORLD_UP, isSelectableFov, lighten, type BodyMeshes,
 } from './viewportConstants'
 
@@ -1527,13 +1527,19 @@ export function createViewport(container: HTMLElement): Viewport {
     if (!target) return
     const frame = target.frame
     const normal = frameVector(frame.normal).normalize()
-    // 中心は描いてあるものの真ん中(何も無ければ平面の原点)
+    // 図形がまだ無ければ貼った面の大きさへ、面でもなく文書が空なら原点まわりの決め打ちの幅へ寄る。
     let center = toWorld(frame, 0, 0)
     let radius = 0
-    const box = uvBoxOfPoints(target.points)
+    const box =
+      uvBoxOfPoints(target.points) ??
+      (target.plane.kind === 'face'
+        ? uvBoxOfPositions(bodies.get(target.plane.bodyId)?.body.facePositions(target.plane.faceIndex) ?? null, frame)
+        : null)
     if (box !== null) {
       center = toWorld(frame, (box.uMin + box.uMax) / 2, (box.vMin + box.vMax) / 2)
       radius = Math.max(box.uMax - box.uMin, box.vMax - box.vMin) / 2
+    } else if (bodies.size === 0 && [...sketchLayer.entries()].every(([, scene]) => scene.points.length === 0)) {
+      radius = EMPTY_SKETCH_HALF_WIDTH
     }
     const previous = camera.position.distanceTo(controls.target)
     const distance = radius > 0 ? Math.max(fitDistance(radius * SKETCH_FIT_MARGIN), 1) : Math.max(previous, 1)
@@ -1544,7 +1550,7 @@ export function createViewport(container: HTMLElement): Viewport {
     camera.up.set(...upForDirection([normal.x, normal.y, normal.z]))
     camera.position.copy(center).add(normal.multiplyScalar(distance))
     controls.target.copy(center)
-    // 正投影は距離では寄れない(`frameToContent` と同じ理由)。描いてあるものが無いときは今の見かけの大きさのまま。
+    // 正投影は距離では寄れない(`frameToContent` と同じ理由)。寄る先が無いときは今の見かけの大きさのまま。
     if (camera === orthographic && radius > 0) setViewHalfHeight(fitHalfHeight(radius * SKETCH_FIT_MARGIN))
     camera.updateProjectionMatrix()
     controls.update()
