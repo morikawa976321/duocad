@@ -599,6 +599,18 @@ COMMANDS: tuple[Command, ...] = (
         ws="special",
     ),
     Command(
+        name="select_face_boundaries",
+        category="selection",
+        description="",
+        session="select_face_boundaries",
+        ws="special",
+        mcp=False,
+        note=(
+            "選択の面を外し、その外周の辺(穴の縁は入れない)を連なりまで広げて足す。画面が、面を選んだまま"
+            "フィレット・面取りを起動したときに送る。AI は述語 `on_boundary_of_face` で同じ辺を選べる"
+        ),
+    ),
+    Command(
         name="sketch_create",
         returns=(Result("sketch_id", "string"), _SKETCH_FRAME),
         resets_selection=False,
@@ -2395,24 +2407,6 @@ COMMANDS: tuple[Command, ...] = (
         note=(
             "**配信しない**(`get_edge_chains` と同じ)。「面の削除」で丸めの面1枚のクリックをつながった丸め全体へ広げるため、"
             "画面がクリックした面の分だけ返す"
-        ),
-    ),
-    Command(
-        name="get_face_edges",
-        category="protocol",
-        description="",
-        params=(
-            Param("body_id", "string", "外周の辺が要る面のボディ"),
-            # `faces` と綴らない理由は get_edge_chains と同じ(外周を調べる読み取りで、verb の対象ではない)。
-            Param("boundary_of", "array", "外周の辺が要る面の添字(1始まり)の配列"),
-        ),
-        session="face_edges",
-        ws="special",
-        mcp=False,
-        changes_document=False,
-        note=(
-            "**配信しない**(`get_edge_chains` と同じ)。面を選んだままフィレット・面取りを起動したとき、"
-            "画面がその面を外周の辺(穴の縁は入れない。連なりまで広げる)へ読み替えるために頼む"
         ),
     ),
     # アプリ内AI(protocol)。**verbではなく、実体は `net/ws.py` の `Server`**(`session=None`)。

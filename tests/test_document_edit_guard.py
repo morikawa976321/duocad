@@ -6,7 +6,7 @@ from duocad.server import Session
 
 #: 文書を変えるが、実行中も通してよいもの(操作ログに載らず、最適化が読む条件にも形にも触れない)。
 _ALLOWED_WHILE_RUNNING = {"set_visible", "set_sketch_visible", "modify_selection", "toggle_selection",
-                          "clear_selection",
+                          "clear_selection", "select_face_boundaries",
                           "set_selection",
                           # 作業空間(起動中のコマンド・モード)は選択と同じで文書に触れない。`apply_command` だけは中で
                           # `apply` を呼ぶので、そちらの断りが効く(`tests/topopt/test_optimize_document_lock.py` の

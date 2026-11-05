@@ -409,15 +409,6 @@ export interface FaceChainsPayload extends EdgeChainsPayload {
   origins: number[]
 }
 
-/** 面の外周の辺の応答(`get_face_edges`)。頼んだ面 `faces` の外周の辺を連なりまで広げ、添字をまとめて昇順で(穴の縁は入れない)。 */
-export interface FaceEdgesPayload {
-  body_id: string
-  /** 頼んだ時点の形の版(`EdgesPayload.shape_revision` と同じ見方)。 */
-  shape_revision: number
-  faces: number[]
-  boundary_edges: number[]
-}
-
 /**
  * 1つの頂点の3D座標(`kernel.vertex_positions` の1件そのまま)。
  *
@@ -925,8 +916,6 @@ export interface SessionHooks {
   onEdgeChains(payload: EdgeChainsPayload): void
   /** 頼んだ面の連なりが返ってきた(状態は変わっていない)。 */
   onFaceChains(payload: FaceChainsPayload): void
-  /** 頼んだ面の外周の辺が返ってきた(状態は変わっていない)。 */
-  onFaceEdges(payload: FaceEdgesPayload): void
   /** 頼んだ頂点が返ってきた(状態は変わっていない)。 */
   onVertices(payload: VerticesPayload): void
   /** 測った(状態は変わっていない)。要求した接続にだけ届く。 */
@@ -991,6 +980,8 @@ export interface Session {
   /** 参照ごとに、あれば外し無ければ足す(素のクリック。AI の `toggle_selection` と同じ操作)。 */
   toggleSelection(refs: SelectionRef[], clientOp: number): void
   clearSelection(clientOp: number): void
+  /** 選択の面を外し、その外周の辺を連なりまで広げて足す(`Session.select_face_boundaries`)。フィレット・面取りの起動で送る。 */
+  selectFaceBoundaries(clientOp: number): void
   // ---------------------------------------------------------------- B2: 作業空間(起動中のコマンド・モード。issue #153)
   /**
    * verb を起動して引数を集め始める(ツールバーのクリック)。応答は状態配信の `command`。AI の `begin_command` と同じ操作で、
@@ -1024,8 +1015,6 @@ export interface Session {
   getEdgeChains(bodyId: string, edges: number[]): void
   /** 丸めの面の連なりを取りに行く(応答は `onFaceChains`)。「面の削除」でクリックした面の分だけ頼む。 */
   getFaceChains(bodyId: string, faces: number[]): void
-  /** 面の外周の辺を取りに行く(応答は `onFaceEdges`)。面を選んだままフィレット・面取りを起動したときだけ頼む。 */
-  getFaceEdges(bodyId: string, faces: number[]): void
   /**
    * 1Bodyの頂点の座標を取りに行く(応答は `onVertices`)。状態配信ではない。
    * 呼ぶのは選択に頂点が入っているときだけ(`duocad/server.py` の `Session.vertices`)。
@@ -1230,8 +1219,6 @@ export function createSession(hooks: SessionHooks): Session {
       sketch_ghost?: PreviewPayload['sketch_ghost']
       suggestion?: PreviewPayload['suggestion']
       origins?: number[]
-      faces?: number[]
-      boundary_edges?: number[]
       body_id?: string
       revision?: number
       shape_revision?: number
@@ -1343,13 +1330,6 @@ export function createSession(hooks: SessionHooks): Session {
       }
       if (message.type === 'edge_chains') hooks.onEdgeChains(payload)
       else hooks.onFaceChains({ ...payload, origins: message.origins ?? [] })
-    } else if (message.type === 'face_edges') {
-      hooks.onFaceEdges({
-        body_id: message.body_id ?? '',
-        shape_revision: message.shape_revision ?? -1,
-        faces: message.faces ?? [],
-        boundary_edges: message.boundary_edges ?? [],
-      })
     } else if (message.type === 'vertices') {
       hooks.onVertices({
         body_id: message.body_id ?? '',
@@ -1536,6 +1516,9 @@ export function createSession(hooks: SessionHooks): Session {
     clearSelection(clientOp) {
       send({ cmd: 'clear_selection', client_op: clientOp }, true)
     },
+    selectFaceBoundaries(clientOp) {
+      send({ cmd: 'select_face_boundaries', client_op: clientOp }, true)
+    },
     beginCommand(verb, args, clientOp) {
       send({ cmd: 'begin_command', verb, args, client_op: clientOp })
     },
@@ -1568,9 +1551,6 @@ export function createSession(hooks: SessionHooks): Session {
     },
     getFaceChains(bodyId, faces) {
       send({ cmd: 'get_face_chains', body_id: bodyId, chain_of: faces })
-    },
-    getFaceEdges(bodyId, faces) {
-      send({ cmd: 'get_face_edges', body_id: bodyId, boundary_of: faces })
     },
     getVertices(bodyId) {
       send({ cmd: 'get_vertices', body_id: bodyId }, true)

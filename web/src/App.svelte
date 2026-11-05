@@ -80,7 +80,6 @@
     type EdgeChainsPayload,
     type EdgesPayload,
     type FaceChainsPayload,
-    type FaceEdgesPayload,
     type FemStatus,
     type OptimizeConditionsReport,
     type OptimizeDebugPayload,
@@ -311,17 +310,6 @@
   let edgeChains: Record<string, { shape_revision: number; chains: number[][] }> = {}
   /** 連なりを頼んだ辺(`${body_id}:${shape_revision}:${辺の添字}`)。 */
   let edgeChainsAsked = new Set<string>()
-  /** 外周の辺を頼んだ面(`${body_id}:${shape_revision}:${面の添字}`)。コマンドを降りたら忘れる(`onCommandEnd` / `onWantsKinds`)。 */
-  const faceEdgesAsked = new Set<string>()
-  /**
-   * 外周の辺を頼んだ時点の `commandRequests` と形の版(body_id ごと)。応答はどちらも今と同じときだけ使う: 中断を送ってから
-   * 配信が届くまでは `edgeOnlyCommand` がまだ真で、遅れた応答が全解除の後に辺を足してしまう。頼んだ後に別の画面が形を
-   * 変えると、サーバは古い面の添字を新しい形で読んで答える。待っている間は確定させない(`busy`。外した面の辺が
-   * 漏れたまま丸まる)。それでも確定を送ったら捨てる(`runCommand`)。
-   */
-  const faceEdgesFor = new Map<string, { commands: number; shape: number }>()
-  /** `faceEdgesFor` が空でないか(`busy` に効かせるための写し。Map は追跡されない)。 */
-  let faceEdgesWaiting = $state(false)
   /** 丸めの面の連なり(「面の削除」でクリックを広げる)。 */
   const faceChains = createFaceChains({
     shapeRevisionOf: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.shape_revision,
@@ -443,11 +431,6 @@
         faceChains.forgetAsked()
         pendingChainPick = null
       }
-      if (where === 'get_face_edges' || where === 'send') {
-        faceEdgesAsked.clear()
-        faceEdgesFor.clear()
-        faceEdgesWaiting = false
-      }
       if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
       // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
       // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
@@ -487,9 +470,6 @@
         edgesAsked.clear()
         edgeChainsAsked.clear()
         faceChains.forgetAsked()
-        faceEdgesAsked.clear()
-        faceEdgesFor.clear()
-        faceEdgesWaiting = false
         pendingChainPick = null
         verticesAsked.clear()
         files.dropThumbnailRequests()
@@ -501,7 +481,6 @@
     onEdges: handleEdges,
     onEdgeChains: handleEdgeChains,
     onFaceChains: handleFaceChains,
-    onFaceEdges: handleFaceEdges,
     onVertices: handleVertices,
     onMeasure: handleMeasure,
     onSelectionInfo: (payload) => selectionInfo.onResult(payload),
@@ -1041,35 +1020,6 @@
   function handleFaceChains(payload: FaceChainsPayload): void {
     faceChains.remember(payload)
     if (pendingChainPick?.()) pendingChainPick = null
-  }
-
-  /**
-   * 外した面の外周の辺(連なりまで広げてコアが返す)を選択へ入れる(`onWantsKinds`)。届く前に降りた・起動し直した・
-   * 形が変わったなら捨てる。
-   */
-  function handleFaceEdges(payload: FaceEdgesPayload): void {
-    const asked = faceEdgesFor.get(payload.body_id)
-    faceEdgesFor.delete(payload.body_id)
-    faceEdgesWaiting = faceEdgesFor.size > 0
-    if (asked === undefined || asked.commands !== commandRequests || asked.shape !== payload.shape_revision) return
-    if (!edgeOnlyCommand || !sameShape(payload.body_id, payload)) return
-    modifySelection(payload.boundary_edges.map((index) => edgeRef(payload.body_id, index)), [])
-  }
-
-  /** 面の外周の辺を頼む(同じ起動で同じ形の同じ面は2度頼まない)。隠したボディ・メッシュボディは辺を持たないので頼まない。 */
-  function requestFaceEdges(faces: readonly ShapeRef[]): void {
-    for (const bodyId of new Set(faces.map((face) => face.body))) {
-      const body = model?.bodies.find((item) => item.body_id === bodyId)
-      if (!body || !body.visible || body.kind === 'mesh') continue
-      const missing = faces
-        .filter((face) => face.body === bodyId && !faceEdgesAsked.has(`${bodyId}:${body.shape_revision}:${face.index}`))
-        .map((face) => face.index)
-      if (missing.length === 0) continue
-      for (const index of missing) faceEdgesAsked.add(`${bodyId}:${body.shape_revision}:${index}`)
-      faceEdgesFor.set(bodyId, { commands: commandRequests, shape: body.shape_revision })
-      faceEdgesWaiting = true
-      session.getFaceEdges(bodyId, missing)
-    }
   }
 
   /** 辺の連なりを頼む(同じ形の同じ辺は2度頼まない。連なりは形にだけ依存する)。形の版の分からないボディは頼まない。 */
@@ -1746,7 +1696,6 @@
     widenedDeletion = null
     wideningOp = null
     faceChains.forgetPicks()
-    faceEdgesAsked.clear()
     if (verb === MEASURE.id && measure.current !== null) return
     // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
     if (verb === INTERFERENCE.id) return
@@ -1759,18 +1708,16 @@
    */
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
-    if (kinds.length === 0) {
-      pendingOptimizePreset = null
-      faceEdgesAsked.clear()
-    }
+    if (kinds.length === 0) pendingOptimizePreset = null
     // 辺だけを食うコマンドが起動したら、選択に残っている面を外す(辺は残す。面は指せなくなるので外す手が無い)。
-    // 外した面は、その外周の辺の連なりで入れ直す(`handleFaceEdges`)。
+    // 外した面の代わりに、その外周の辺を連なりで入れる(コアが1回の選択の変更で行う。`Session.select_face_boundaries`)。
     // `untrack`: ここは `CommandHost` の `$effect` の中から呼ばれ、選択を読むとその effect が選択の変化ごとに走り直す。
     if (kinds.length > 0 && kinds.every((kind) => kind === 'edge')) {
       untrack(() => {
-        const faces = refsOfKind(currentItems(), 'face')
-        modifySelection([], faces)
-        requestFaceEdges(faces)
+        if (refsOfKind(currentItems(), 'face').length === 0) return
+        const op = nextOp()
+        selectionOpsInFlight.add(op)
+        session.selectFaceBoundaries(op)
       })
     }
   }
@@ -2183,9 +2130,6 @@
   /** 揃った引数をサーバへ送る。経路はコマンドの分類(`categoryOf`)だけで決まり、知らない名前はここで断る。 */
   function runCommand(...request: BuiltCommandRequest): void {
     const [verb] = request
-    // 確定より後に届く外周の辺の応答は確定前の形の添字なので、変わった形の選択へ入れない。
-    faceEdgesFor.clear()
-    faceEdgesWaiting = false
     const category = CATEGORY_OF.get(verb)
     if (category === undefined || category === 'ui') {
       // `ui`(スケッチの「選ぶ」)は何も送らない道具なので、通常ここへは来ない。
@@ -2680,7 +2624,7 @@
         <CommandHost
           bind:this={host}
           {selection}
-          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null || faceEdgesWaiting}
+          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null}
           {selfSelections}
           commands={mode.kind === 'sketch'
             ? SKETCH_MODE_COMMANDS

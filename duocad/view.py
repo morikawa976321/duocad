@@ -1059,9 +1059,8 @@ class DocumentView:
 
         戻り値: `{"body_id", "revision", "shape_revision", "faces": [頼まれた面(重複を畳む)], "boundary_edges": [辺の添字(昇順)]}`
 
-        画面は、面を選んだままフィレット・面取りを起動したとき、その面をこの辺へ読み替える(辺だけを食うコマンドの
-        起動中は面を指せない)。連なりまでここで広げるのは、画面が辺の連なりの応答を待つ口(1件しか待てない)を使わずに
-        済ませるため(複数のボディの面を選んでいると、後の応答が先の待ちを上書きする)。
+        `Session.select_face_boundaries` が選択の面をこの辺へ読み替える。連なりまで広げるのは、フィレット・面取りが
+        辺1本から連なり全体へかかるため(画面の辺の選び方と同じ単位。docs/contracts/ui-selection-viewport.md)。
         """
         body = self._visible_brep(body_id, "面")
         faces = list(dict.fromkeys(int(index) for index in face_indices))

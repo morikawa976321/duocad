@@ -11,6 +11,7 @@ export const COMMAND_CATEGORY = {
   modify_selection: 'selection',
   toggle_selection: 'selection',
   clear_selection: 'selection',
+  select_face_boundaries: 'selection',
   sketch_create: 'sketch',
   sketch_create_offset: 'sketch',
   add_point: 'sketch',
@@ -78,7 +79,6 @@ export const COMMAND_CATEGORY = {
   get_edges: 'protocol',
   get_edge_chains: 'protocol',
   get_face_chains: 'protocol',
-  get_face_edges: 'protocol',
   ai_get_status: 'protocol',
   ai_configure: 'protocol',
   ai_set_thinking: 'protocol',
@@ -109,6 +109,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   modify_selection: ['add', 'remove'],
   toggle_selection: ['refs'],
   clear_selection: [],
+  select_face_boundaries: [],
   sketch_create: ['base_plane'],
   sketch_create_offset: ['base_plane', 'distance'],
   add_point: ['sketch_id', 'point'],
@@ -176,7 +177,6 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   get_edges: ['body_id'],
   get_edge_chains: ['body_id', 'chain_of'],
   get_face_chains: ['body_id', 'chain_of'],
-  get_face_edges: ['body_id', 'boundary_of'],
   ai_get_status: [],
   ai_configure: ['provider', 'model', 'base_url'],
   ai_set_thinking: ['thinking'],
@@ -205,6 +205,7 @@ export interface CommandArguments {
   modify_selection: { add?: unknown[]; remove?: unknown[] }
   toggle_selection: { refs: unknown[] }
   clear_selection: Record<string, never>
+  select_face_boundaries: Record<string, never>
   sketch_create: { base_plane?: string }
   sketch_create_offset: { base_plane?: string; distance: number }
   add_point: { sketch_id: string; point: unknown[] }
@@ -272,7 +273,6 @@ export interface CommandArguments {
   get_edges: { body_id: string }
   get_edge_chains: { body_id: string; chain_of: unknown[] }
   get_face_chains: { body_id: string; chain_of: unknown[] }
-  get_face_edges: { body_id: string; boundary_of: unknown[] }
   ai_get_status: Record<string, never>
   ai_configure: { provider: string; model?: string; base_url?: string }
   ai_set_thinking: { thinking: string }

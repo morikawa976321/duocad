@@ -314,10 +314,6 @@ class Session:
         """1Bodyの丸めの連なり(`DocumentView.face_chains`)。"""
         return self.view.face_chains(body_id, face_indices)
 
-    def face_edges(self, body_id: str, face_indices: list) -> dict:
-        """1Bodyの面の外周の辺(`DocumentView.face_edges`)。"""
-        return self.view.face_edges(body_id, face_indices)
-
     def vertices(self, body_id: str) -> dict:
         """1Bodyの頂点の座標(`DocumentView.vertices`)。"""
         return self.view.vertices(body_id)
@@ -428,6 +424,27 @@ class Session:
             add=() if add is None else add,
             remove=() if remove is None else remove,
         )
+        return self._emit(self._selection_event(client_op))
+
+    def select_face_boundaries(self, client_op: Optional[int] = None) -> dict:
+        """選択の面を外し、その外周の辺を連なりまで広げて足す(`DocumentView.face_edges`)。変更イベントを返す。
+
+        画面が、面を選んだままフィレット・面取り(辺だけを食い、起動中は面を指せない)を起動したときに送る。
+        外すのと足すのを1回の選択の変更で行う: 画面で応答を待って足すと、待つ間の確定・中断・切断・別の画面の形の変更が
+        それぞれ古い添字や漏れを生んだ。辺を持たないボディ(メッシュ・隠したもの・形の無いもの)の面は外すだけ。
+        """
+        faces = selection.selected_items(self.document, kind="face")
+        add: list = []
+        for body_id in dict.fromkeys(item["body"] for item in faces):
+            body = self.document.get_body(body_id)
+            if body.mesh is not None or body.shape is None or not body.visible:
+                continue
+            indices = [int(item["index"]) for item in faces if item["body"] == body_id]
+            add.extend(
+                {"body": body_id, "kind": "edge", "index": index}
+                for index in self.view.face_edges(body_id, indices)["boundary_edges"]
+            )
+        selection.modify_selection(self.document, add=add, remove=faces)
         return self._emit(self._selection_event(client_op))
 
     def toggle_selection(self, refs: list, client_op: Optional[int] = None) -> dict:
