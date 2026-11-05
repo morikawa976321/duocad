@@ -24,7 +24,8 @@ def thread(
     face: int,
     profile: str,
     clearance: Optional[float] = None,
-    body_id: Optional[BodyId] = None,
+    *,
+    body_id: BodyId,
 ) -> Operation:
     kernel_thread.require_selectable(profile)
     body = editable_body(doc, body_id, what="thread")

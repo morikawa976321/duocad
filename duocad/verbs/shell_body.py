@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Any, Sequence
 
 from .. import kernel, kernel_worker, selection
 from ..document import BodyId, Document
@@ -25,7 +25,7 @@ def shell_body(
     doc: Document,
     faces: Sequence[int],
     thickness: float,
-    body_id: Optional[BodyId] = None,
+    body_id: BodyId,
 ) -> Operation:
     face_list = [int(index) for index in faces]
     value = float(thickness)

@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from duocad import kernel, query
+from duocad import kernel, query, selection
 from duocad.mcp_server import DocumentTools
 from duocad.server import Session
 from session_support import SIDE, box as _box, browser as _browser, select as _select
@@ -185,6 +185,76 @@ def test_edge_chains_are_sent_only_to_the_connection_that_asked(session: Session
     assert arc in answer["chains"][0] and len(answer["chains"][0]) == 3, "直線→円弧→直線が1つの連なり"
     assert "chain" not in session.edges(body.id)["edges"][0]
     assert clients[1].payloads == [], "連なりは全接続へ配らない(要求した接続だけ)"
+
+
+def _face_refs(body, indices) -> list:
+    return [{"body": body.id, "kind": "face", "index": index} for index in indices]
+
+
+def _selected(session: Session) -> list:
+    return [(item["kind"], item["index"]) for item in selection.selected_items(session.document)]
+
+
+def test_select_face_boundaries_swaps_the_faces_for_their_outer_edges(session: Session) -> None:
+    """落ちたら、面を選んだままフィレット・面取りを起動したとき面が外れるだけで、周りの辺が選択に入らない。"""
+    body, _ = _box(session)
+    faces = query.describe_faces(body.shape)
+    top = next(face["index"] for face in faces if face["normal"][2] > 0.9)
+    side = next(face["index"] for face in faces if face["normal"][0] > 0.9)
+    kept = next(index for index in range(1, 13) if index not in query.edges_of_face(body.shape, top)
+                and index not in query.edges_of_face(body.shape, side))
+    _select(session, _face_refs(body, [top]) + _edges(body, [kept]) + _face_refs(body, [side]))
+    session.begin_command("fillet")
+
+    async def script(send):
+        return await send({"cmd": "select_face_boundaries", "client_op": 7})
+
+    (answer, clients) = _browser(session, script)
+
+    boundary = sorted(set(query.edges_of_face(body.shape, top)) | set(query.edges_of_face(body.shape, side)))
+    assert len(boundary) == 7, "上面と側面の外周(共有の1本は1回。テストの前提)"
+    assert _selected(session) == [("edge", kept)] + [("edge", index) for index in boundary], "面は外れ、元の辺は前に残る"
+    assert answer["applied"]["client_op"] == 7
+    assert clients[1].payloads, "選択の変更は全接続へ配る"
+
+
+def test_select_face_boundaries_widens_the_outer_edges_to_their_chains(session: Session) -> None:
+    """落ちたら、面から読み替えた辺が連なりの一部だけになる(フィレットは連なり全体へかかるので、光った所より広く丸まる)。"""
+    body, _ = _box(session)
+    _select(session, _edges(body, [1]))
+    session.fillet(RADIUS_THAT_WORKS)
+    widened = 0
+    for face in query.describe_faces(body.shape):
+        boundary = query.edges_of_face(body.shape, face["index"])
+        chains = session.edge_chains(body.id, boundary)["chains"]
+        _select(session, _face_refs(body, [face["index"]]))
+        session.begin_command("chamfer")
+        session.select_face_boundaries()
+        answer = [index for kind, index in _selected(session)]
+        assert answer == sorted({member for chain in chains for member in chain})
+        widened += len(answer) > len(boundary)
+    assert widened > 0, "丸めの隣の面は、外周の外まで続く連なりを持つ(テストの前提)"
+
+
+def test_select_face_boundaries_only_drops_the_faces_of_a_hidden_body(session: Session) -> None:
+    """落ちたら、隠したボディの面が選択にあるだけで読み替えが丸ごと断られる(隠したボディの辺は配れない)。"""
+    body, _ = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_visible(body.id, False)
+    session.begin_command("fillet")
+    session.select_face_boundaries()
+    assert _selected(session) == []
+
+
+@pytest.mark.parametrize("verb", [None, "offset_faces"])
+def test_select_face_boundaries_leaves_the_selection_outside_an_edge_only_command(session: Session, verb) -> None:
+    """落ちたら、繋ぎ直した画面の古い要求が、別の画面で起動した面を食う verb の面を辺へ置き換える。"""
+    body, _ = _box(session)
+    if verb is not None:
+        session.begin_command(verb)
+    _select(session, _face_refs(body, [1]))
+    session.select_face_boundaries(client_op=3)
+    assert _selected(session) == [("face", 1)]
 
 
 def test_edge_chains_survive_a_zoom(session: Session, monkeypatch) -> None:

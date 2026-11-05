@@ -4,14 +4,9 @@
  */
 import * as THREE from 'three'
 
-import { makeTextSprite } from './textSprite'
-import { LAYER, MEASURE_COLOR, MEASURE_TEXT_COLOR } from './viewportConstants'
+import { makeScreenTextSprite } from './textSprite'
+import { LABEL_HEIGHT_PX, LAYER, MEASURE_COLOR, MEASURE_TEXT_COLOR } from './viewportConstants'
 import type { MeasurementVisual } from './viewportTypes'
-
-export interface MeasureAnnotationDeps {
-  /** 内容の外接直方体の対角[mm]。 */
-  contentDiagonal(): number
-}
 
 export interface MeasureAnnotation {
   /** `scene` へ足すのは呼び出し側。 */
@@ -20,7 +15,7 @@ export interface MeasureAnnotation {
   dispose(): void
 }
 
-export function createMeasureAnnotation(deps: MeasureAnnotationDeps): MeasureAnnotation {
+export function createMeasureAnnotation(): MeasureAnnotation {
   const root = new THREE.Group()
   const lineMaterial = new THREE.LineBasicMaterial({
     color: MEASURE_COLOR,
@@ -61,8 +56,7 @@ export function createMeasureAnnotation(deps: MeasureAnnotationDeps): MeasureAnn
     root.add(ends)
     disposables.push(endGeometry)
 
-    const height = Math.max(deps.contentDiagonal(), 1e-6) * 0.04
-    const { sprite, disposables: spriteDisposables } = makeTextSprite(visual.label, height, MEASURE_TEXT_COLOR)
+    const { sprite, disposables: spriteDisposables } = makeScreenTextSprite(visual.label, LABEL_HEIGHT_PX, MEASURE_TEXT_COLOR)
     sprite.position.copy(from).add(to).multiplyScalar(0.5)
     sprite.renderOrder = LAYER.measure
     root.add(sprite)

@@ -53,11 +53,11 @@ def _square(document: Document, plane, side: float = 20.0, corner=None):
 
 
 def _volume(document: Document) -> float:
-    return query.volume(document.active_body().shape)
+    return query.volume(document.bodies[-1].shape)
 
 
 def _valid(document: Document) -> bool:
-    return BRepCheck_Analyzer(document.active_body().shape).IsValid()
+    return BRepCheck_Analyzer(document.bodies[-1].shape).IsValid()
 
 
 def test_identical_squares_make_a_prism():
@@ -122,7 +122,7 @@ def test_a_box_top_to_each_side_gives_the_same_volume():
         base = sketch_create(document, "XY")
         add_rectangle(document, base, (-10.0, -10.0), 20.0, 20.0)
         extrude(document, [region_ref(base, regions(document, base)[0].index)], 20.0)
-        body = document.active_body()
+        body = document.bodies[-1]
         faces = {}
         for index in range(1, _brep_topology.face_count(body.shape) + 1):
             _, normal = _brep_geometry.face_plane(body.shape, index)

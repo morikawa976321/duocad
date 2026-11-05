@@ -83,9 +83,11 @@ export function createSketchLayer(sketchRoot = new THREE.Group()): SketchLayer {
   const sketchMaterial = createSketchLineMaterial(SKETCH_COLOR, sketchLineResolution)
   const sketchGhostMaterial = createSketchLineMaterial(SKETCH_GHOST_COLOR, sketchLineResolution)
   const sketchGhostWarnMaterial = createSketchLineMaterial(SKETCH_GHOST_WARN_COLOR, sketchLineResolution)
+  /** 点の印(取っ手・点の図形・点の幽霊)の材質。線と同じく透明の側で描く(理由は `createSketchLineMaterial`)。 */
+  const sketchPointMaterial = (parameters: THREE.PointsMaterialParameters): THREE.PointsMaterial =>
+    new THREE.PointsMaterial({ size: SKETCH_HANDLE_PIXELS * 2, sizeAttenuation: false, transparent: true, ...parameters })
   // 点の図形の幽霊(折れ線を持たないので取っ手と同じ大きさの印で描く)
-  const ghostPointMaterialOf = (color: number) =>
-    new THREE.PointsMaterial({ color, size: SKETCH_HANDLE_PIXELS * 2, sizeAttenuation: false, depthTest: false })
+  const ghostPointMaterialOf = (color: number) => sketchPointMaterial({ color, depthTest: false })
   const sketchGhostPointMaterial = ghostPointMaterialOf(SKETCH_GHOST_COLOR)
   const sketchGhostWarnPointMaterial = ghostPointMaterialOf(SKETCH_GHOST_WARN_COLOR)
 
@@ -116,24 +118,14 @@ export function createSketchLayer(sketchRoot = new THREE.Group()): SketchLayer {
   // 深度を書かない(頂点マーカーと同じ。線の上に必ず出す)。
   const sketchHandleMaterials = variantCache(sketchStateKey, (state, hovered) => {
     const base = state === 'selected' ? SKETCH_SELECTED_COLOR : SKETCH_HANDLE_COLOR
-    return new THREE.PointsMaterial({
-      color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
-      size: SKETCH_HANDLE_PIXELS * 2,
-      sizeAttenuation: false,
-      depthTest: false,
-    })
+    return sketchPointMaterial({ color: hovered ? lighten(base, HOVER_LIGHTEN) : base, depthTest: false })
   })
   function sketchHandleMaterialFor(state: SketchMaterialState, hovered: boolean): THREE.PointsMaterial {
     return sketchHandleMaterials.get(state, hovered)
   }
   // 編集していないスケッチの点の図形: 取っ手と同じ見た目で、立体の裏に回ると隠れる(線と同じ深度バイアス)
   const sketchPointEntityMaterial = withDepthBias(
-    new THREE.PointsMaterial({
-      color: SKETCH_HANDLE_COLOR,
-      size: SKETCH_HANDLE_PIXELS * 2,
-      sizeAttenuation: false,
-      depthWrite: false,
-    }),
+    sketchPointMaterial({ color: SKETCH_HANDLE_COLOR, depthWrite: false }),
     DEPTH_BIAS_LAYER.sketch,
   )
   /**
@@ -501,17 +493,19 @@ export function createSketchLayer(sketchRoot = new THREE.Group()): SketchLayer {
 
   function showSketchGhosts(
     sketchId: string,
-    entities: Array<{ kind: string; params: Record<string, number> }>,
+    entities: Array<{ kind: string; params: Record<string, number>; sketch_id?: string }>,
     resolution: ViewResolution,
     tone: 'normal' | 'warn' = 'normal',
   ): void {
     clearGhost()
-    const target = sketches.get(sketchId)
-    if (entities.length === 0 || !target) return
+    if (entities.length === 0) return
     const batch = createBatch(sketchRoot)
     const material = tone === 'warn' ? sketchGhostWarnMaterial : sketchGhostMaterial
     const pointPositions: number[] = []
     for (const entity of entities) {
+      // 図形が自分のスケッチを持つときはその平面へ描く(鏡映の対象は法線方向にずれた平行なスケッチにもまたがる)。
+      const target = sketches.get(entity.sketch_id ?? sketchId)
+      if (!target) continue
       if (entity.kind === 'point') {
         const world = toWorld(target.frame, entity.params.cx, entity.params.cy)
         pointPositions.push(world.x, world.y, world.z)

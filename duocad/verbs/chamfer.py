@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence, Union
+from typing import Sequence, Union
 
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
@@ -22,7 +22,7 @@ def chamfer(
     doc: Document,
     edges: Sequence[int],
     distance: Union[float, Sequence[float]],
-    body_id: Optional[BodyId] = None,
+    body_id: BodyId,
 ) -> Operation:
     edge_list = [int(index) for index in edges]
     if not edge_list:

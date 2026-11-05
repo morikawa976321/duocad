@@ -50,12 +50,11 @@ def _bridge_cut(document: Document, **options):
     return extrude(document, [region_ref(sketch_id, 1)], 30.0, mode="cut", **options)
 
 
-def test_cut_still_finds_the_visible_body_after_the_active_body_was_deleted():
-    """落ちたら、最後に作ったボディを消した後(アクティブが空)の切り取りが、見えている箱を前にして
+def test_cut_still_finds_the_visible_body_after_the_last_made_body_was_deleted():
+    """落ちたら、最後に作ったボディを消した後の切り取りが、見えている箱を前にして
     「cut requires a target body」で断られる(STEP の部品を消した後に実物で起きた)。"""
     document, a, b = _two_boxes()
     delete(document, bodies=[b])
-    assert document.active_body() is None
     sketch_id = _rectangle(document, (5.0, 5.0), 5.0, 5.0)
 
     operation = extrude(document, [region_ref(sketch_id, 1)], 30.0, mode="cut")
@@ -87,29 +86,26 @@ def test_cut_carves_every_body_it_reaches_and_records_them():
 
 def test_join_merges_every_body_it_touches_into_the_first():
     """落ちたら、2つの箱をつなぐ板が片方にしか足されない(もう片方と重なったまま別ボディで残る)、
-    または undo で消えたボディが元の並び・アクティブに戻らない。"""
+    または undo で消えたボディが元の並びに戻らない。"""
     document, a, b = _two_boxes()
-    assert document.active_body().id == b
     sketch_id = _rectangle(document, (15.0, 5.0), 20.0, 5.0)
 
     operation = extrude(document, [region_ref(sketch_id, 1)], 10.0, mode="join")
 
     assert operation.args["body_id"] == a and operation.args["other_bodies"] == [b]
     assert [body.id for body in document.bodies] == [a]
-    assert document.active_body().id == a
     # 板 20×5×10 のうち各箱と重なる 5×5×10 を引く
     assert math.isclose(_volume(document, a), 2 * BOX_VOLUME + 1000.0 - 2 * 250.0, rel_tol=TOL)
     assert [body.id for body in replay_through_json(document).bodies] == [a]
 
     document.log.undo(document)
     assert [body.id for body in document.bodies] == [a, b]
-    assert document.active_body().id == b
     assert math.isclose(_volume(document, a), BOX_VOLUME, rel_tol=TOL)
     assert_matches_replay(document)
 
 
-def test_join_that_touches_nothing_makes_a_new_body_even_with_an_active_body():
-    """落ちたら、離れた場所の結合がアクティブなボディへ飛び地として足される(1つのボディが2つの塊になる)。"""
+def test_join_that_touches_nothing_makes_a_new_body():
+    """落ちたら、離れた場所の結合が既存のボディへ飛び地として足される(1つのボディが2つの塊になる)。"""
     document, a, b = _two_boxes()
     sketch_id = _rectangle(document, (100.0, 0.0), 5.0, 5.0)
 

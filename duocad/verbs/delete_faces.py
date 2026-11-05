@@ -21,7 +21,7 @@ from ._common import editable_body, reapply_shape, remember, replayed_body, undo
 VERB_DELETE_FACES = "delete_faces"
 
 
-def delete_faces(doc: Document, faces: Sequence[int], body_id: Optional[BodyId] = None) -> Operation:
+def delete_faces(doc: Document, faces: Sequence[int], body_id: BodyId) -> Operation:
     face_list = [int(index) for index in faces]
     body = editable_body(doc, body_id, what="delete faces")
     result = kernel_face_edit.delete_faces(body.shape, face_list)

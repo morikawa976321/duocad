@@ -11,7 +11,10 @@ import numpy as np
 import pytest
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
+from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon,
+                                BRepBuilderAPI_MakeVertex, BRepBuilderAPI_MakeWire)
+from OCP.Geom import Geom_BezierCurve
+from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCone, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeSphere
 from OCP.BRepTools import BRepTools
@@ -180,6 +183,110 @@ def test_a_truly_self_intersecting_boundary_fails_bounded_with_diagnostics():
     assert payload['boundary']['termination'] == 'no_change'
     assert payload['boundary']['unresolved'][0]['face'] == 1
     assert len(payload['faces']) == 7 and all(f['indices'] for f in payload['faces'][1:])
+
+
+def _set_edge_tolerance(shape, edge_ids, tolerance):
+    edge_map = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, edge_map)
+    for edge_id in edge_ids:
+        BRep_Builder().UpdateEdge(TopoDS.Edge_s(edge_map.FindKey(edge_id)), tolerance)
+
+
+def test_edges_already_finer_than_their_tolerance_are_not_refined():
+    """落ちたら、許容値より細かい辺を再分割し続け、点数が増えるほど隣の B-spline 面の分割が遅くなる
+    (umbrella-down.stp の面43: 12巡で8分を超えてもサーバが固まったまま)暴走が戻っている。"""
+    shape = load('gap_minimal_solid.brep')
+    _set_edge_tolerance(shape, kernel_meshing.mesh_shape(shape, 0.2, 0.35)['amplified_edge_ids'], 0.4)
+    diagnostics = kernel_meshing.mesh_shape(shape, 0.2, 0.35)
+    assert diagnostics['termination'] == 'tolerance'
+    assert diagnostics['rounds'] == 0 and diagnostics['amplified_edges'] == 0
+    assert [entry['face'] for entry in diagnostics['unresolved']] == [1]
+
+
+def test_refinement_stops_at_the_edge_tolerance_but_still_repairs_above_it():
+    """許容値が偏差の半分なら1/3まで下げられないが、下限までの再分割で直る。落ちたら下限が修復を妨げている。"""
+    shape = load('gap_minimal_solid.brep')
+    _set_edge_tolerance(shape, kernel_meshing.mesh_shape(shape, 0.2, 0.35)['amplified_edge_ids'], 0.1)
+    diagnostics = kernel_meshing.mesh_shape(shape, 0.2, 0.35)
+    assert diagnostics['termination'] == 'resolved' and diagnostics['unresolved'] == []
+    assert diagnostics['amplified_edges'] >= 2
+
+
+def test_edges_of_an_unrepaired_face_go_back_to_their_first_discretization():
+    """直せなかった面に接する再分割した辺は元の点列へ戻り、隣の面は再分割しなかったときと同じ三角形になる。
+    落ちたら、直せなかった再分割の点列が隣の面の分割へ渡っている。"""
+    reference_shape = load('gap_minimal_solid.brep')
+    kernel_meshing.mesh_shape(reference_shape, 0.05, 0.35, max_rounds=0)
+    shape = load('gap_minimal_solid.brep')
+    diagnostics = kernel_meshing.mesh_shape(shape, 0.05, 0.35, max_rounds=1)
+    assert diagnostics['termination'] == 'max_rounds'
+    assert [entry['face'] for entry in diagnostics['unresolved']] == [1]
+    assert diagnostics['amplified_edge_ids'] and diagnostics['restored_edge_ids'] == diagnostics['amplified_edge_ids']
+    assert diagnostics['count_mismatch'] == []
+    assert per_face_triangles(shape) == per_face_triangles(reference_shape)
+    assert all(indices for _positions, indices in per_face_triangles(shape)[1:])
+
+
+def _bezier(points):
+    poles = TColgp_Array1OfPnt(1, len(points))
+    for i, point in enumerate(points, 1):
+        poles.SetValue(i, gp_Pnt(*point, 0.0))
+    return Geom_BezierCurve(poles)
+
+
+def _wedge_face(start, dip, vertex_tolerance):
+    """直線 (-10,0)→V と、start から dip を制御点にして V=(0,0) に入る2次曲線が、V の手前で交わる平面の面。"""
+    vertex = BRepBuilderAPI_MakeVertex(gp_Pnt(0.0, 0.0, 0.0)).Vertex()
+    line_start = BRepBuilderAPI_MakeVertex(gp_Pnt(-10.0, 0.0, 0.0)).Vertex()
+    curve_start = BRepBuilderAPI_MakeVertex(gp_Pnt(*start, 0.0)).Vertex()
+    line = BRepBuilderAPI_MakeEdge(line_start, vertex).Edge()
+    curve = BRepBuilderAPI_MakeEdge(_bezier([start, dip, (0.0, 0.0)]), curve_start, vertex).Edge()
+    closing = BRepBuilderAPI_MakeEdge(curve_start, line_start).Edge()
+    wire = BRepBuilderAPI_MakeWire(line, TopoDS.Edge_s(curve.Reversed()), closing).Wire()
+    face = BRepBuilderAPI_MakeFace(wire, True).Face()
+    BRep_Builder().UpdateVertex(vertex, vertex_tolerance)
+    return face
+
+
+_CROSSING_0_07_FROM_THE_VERTEX = ((-0.2, 0.05), (-0.02, -0.03))
+_CROSSING_0_28_FROM_THE_VERTEX = ((-0.8, 0.2), (-0.08, -0.12))
+
+
+def test_a_crossing_inside_the_shared_vertex_tolerance_is_not_refined_and_keeps_the_face():
+    """落ちたら、CAD が1点とみなす頂点の許容値の内側の交差で面を落とすか、消えない交差を再分割し続けている
+    (umbrella-down.stp の面43が画面にも STL にも出なかった)。"""
+    diagnostics = kernel_meshing.mesh_shape(_wedge_face(*_CROSSING_0_07_FROM_THE_VERTEX, 0.1), 0.01, 0.35)
+    assert diagnostics['termination'] == 'resolved' and diagnostics['unresolved'] == []
+    assert diagnostics['rounds'] == 0 and diagnostics['amplified_edges'] == 0
+    [entry] = diagnostics['near_vertex']
+    assert entry['face'] == 1 and entry['tolerance'] == pytest.approx(0.1)
+    assert 0.05 < entry['distance'] < 0.1
+
+
+def test_a_crossing_outside_the_vertex_tolerance_still_fails_the_face():
+    """落ちたら、頂点の許容値の外の交差まで通している。"""
+    diagnostics = kernel_meshing.mesh_shape(_wedge_face(*_CROSSING_0_07_FROM_THE_VERTEX, 1e-7), 0.01, 0.35)
+    assert [entry['face'] for entry in diagnostics['unresolved']] == [1]
+    assert diagnostics['near_vertex'] == []
+
+
+def test_the_vertex_tolerance_is_capped(monkeypatch):
+    """落ちたら、許容値が極端に大きい頂点で、上限より遠い交差まで通している。"""
+    diagnostics = kernel_meshing.mesh_shape(_wedge_face(*_CROSSING_0_28_FROM_THE_VERTEX, 0.5), 0.01, 0.35)
+    assert [entry['face'] for entry in diagnostics['unresolved']] == [1] and diagnostics['near_vertex'] == []
+    monkeypatch.setattr(kernel_meshing, 'NEAR_VERTEX_TOLERANCE_CAP', 1.0)
+    diagnostics = kernel_meshing.mesh_shape(_wedge_face(*_CROSSING_0_28_FROM_THE_VERTEX, 0.5), 0.01, 0.35)
+    assert diagnostics['unresolved'] == [] and len(diagnostics['near_vertex']) == 1
+
+
+def test_a_passed_face_that_occt_cannot_mesh_is_still_reported_untriangulated():
+    """この題材は OCCT 標準でも三角形にならない。通した面が三角形にならなければ、未分割の面として報告される
+    (STL はそれで断る)。落ちたら、欠けた面が黙って通っている。"""
+    compound = kernel.make_compound([_wedge_face(*_CROSSING_0_07_FROM_THE_VERTEX, 0.1),
+                                     BRepPrimAPI_MakeBox(5.0, 5.0, 5.0).Shape()])
+    payload = kernel.tessellate(compound, 0.01)
+    assert payload['untriangulated'] == [1]
+    assert payload['boundary']['unresolved'] == [] and [e['face'] for e in payload['boundary']['near_vertex']] == [1]
 
 
 def test_round_limit_is_respected():

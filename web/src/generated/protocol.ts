@@ -8,9 +8,11 @@ export const COMMAND_CATEGORY = {
   set_sketch_visible: 'selection',
   measure: 'query',
   check_interference: 'query',
+  cancel_interference: 'protocol',
   modify_selection: 'selection',
   toggle_selection: 'selection',
   clear_selection: 'selection',
+  select_face_boundaries: 'selection',
   sketch_create: 'sketch',
   sketch_create_offset: 'sketch',
   add_point: 'sketch',
@@ -67,6 +69,7 @@ export const COMMAND_CATEGORY = {
   preview: 'protocol',
   inspect_selection: 'protocol',
   get_vertices: 'protocol',
+  get_sketch_guides: 'protocol',
   set_view_resolution: 'protocol',
   optimize_conditions: 'protocol',
   optimize_resolution: 'protocol',
@@ -105,9 +108,11 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   set_sketch_visible: ['sketch_id', 'visible'],
   measure: [],
   check_interference: ['clearance'],
+  cancel_interference: [],
   modify_selection: ['add', 'remove'],
   toggle_selection: ['refs'],
   clear_selection: [],
+  select_face_boundaries: [],
   sketch_create: ['base_plane'],
   sketch_create_offset: ['base_plane', 'distance'],
   add_point: ['sketch_id', 'point'],
@@ -164,6 +169,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   preview: ['verb', 'args', 'preview_id'],
   inspect_selection: ['request_id'],
   get_vertices: ['body_id'],
+  get_sketch_guides: ['sketch_id', 'request_id'],
   set_view_resolution: ['world_per_pixel', 'size_hint', 'focus'],
   optimize_conditions: [],
   optimize_resolution: ['element_size_mm'],
@@ -200,9 +206,11 @@ export interface CommandArguments {
   set_sketch_visible: { sketch_id: string; visible: boolean }
   measure: Record<string, never>
   check_interference: { clearance?: number }
+  cancel_interference: Record<string, never>
   modify_selection: { add?: unknown[]; remove?: unknown[] }
   toggle_selection: { refs: unknown[] }
   clear_selection: Record<string, never>
+  select_face_boundaries: Record<string, never>
   sketch_create: { base_plane?: string }
   sketch_create_offset: { base_plane?: string; distance: number }
   add_point: { sketch_id: string; point: unknown[] }
@@ -259,6 +267,7 @@ export interface CommandArguments {
   preview: { verb: string; args: object; preview_id?: number }
   inspect_selection: { request_id: number }
   get_vertices: { body_id: string }
+  get_sketch_guides: { sketch_id: string; request_id: number }
   set_view_resolution: { world_per_pixel: number; size_hint?: number; focus?: object | null }
   optimize_conditions: Record<string, never>
   optimize_resolution: { element_size_mm?: number }
@@ -394,7 +403,6 @@ export type ServerStateKey =
   | 'redo_count'
   | 'can_undo'
   | 'can_redo'
-  | 'active_body_id'
   | 'units'
   | 'current_name'
   | 'saved'

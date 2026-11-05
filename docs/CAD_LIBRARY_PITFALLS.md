@@ -56,6 +56,8 @@
 | `BRepClass3d_SolidClassifier` は材料内部の孤立点を OUT と誤判定することがある(神託として使うときの作法) | [TOPOPT.md](TOPOPT.md) |
 | `BRepAlgoAPI_Defeaturing` / `BOPAlgo_RemoveFeatures` は閉じられない面を例外にも `IsDone()=false` にもせず、警告だけ出して元の形(か消せた分だけ消した形)を返す。OCP の Defeaturing は警告の口を出していない | [FACE_EDIT.md](FACE_EDIT.md)「OCCT の罠」 |
 | `BOPAlgo_RemoveFeatures.Perform` は計算中ずっと GIL を握る(3 秒の計算で主スレッドが 3 秒止まる)。実物の部品で丸め1枚に 61 秒かかる例がある | [FACE_EDIT.md](FACE_EDIT.md)「OCCT の罠」 |
+| Creo の STEP は頂点・辺の許容値が 0.1 mm 程度あり、ほぼ接して頂点に入る2辺が許容値の内側で一度交わる(B-rep としては正しい)。OCCT 標準の分割は通すが、境界交差を厳密に見ると面が落ちる | [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md)「頂点の許容値の内側の交差」 |
+| `BRepMesh` の `DiscretizeFaces` は B-spline 面の境界の点数に対して急に重くなり(共有辺を再分割で 1.7 倍ずつ増やすと1巡ごとに約4倍、10巡で40秒超)、その間ずっと GIL を握る。許容値が偏差より大きい辺は細かくしても交差が消えない | [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md)「許容値の大きい辺で再分割が暴走した」 |
 | `BRepOffset_MakeOffset` は接線でつながる面を1組として同じ距離ずらす・SOLID でなく SHELL を返す・面積0の面を残した形を `BRepCheck` 合格で返す・由来は `Modified` でなく `Generated` に入る | [FACE_EDIT.md](FACE_EDIT.md)「OCCT の罠」 |
 | BinTools(バイナリ BRep)の往復は厳密、テキスト BRep は 1e-14 ずれる(面の並びは保つ) | [FACE_EDIT.md](FACE_EDIT.md)「由来と再生の決定性」 |
 | 面の添字は形状変更(フィレット)で散発的にずれる / STEP往復の体積は bit-exact でない | [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)(面の添字)、[DEVELOPMENT.md](DEVELOPMENT.md)「実測で判明している技術的な地雷」(STEP往復) |

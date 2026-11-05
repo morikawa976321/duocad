@@ -89,16 +89,11 @@ def _validate_participants(
 
 def _apply(doc: Document, target_body, tools: Sequence, mode: str) -> tuple:
     """演算(kernel)→ ターゲットの形を差し替え → ツールを退避して消す。戻りは `(前の形, 退避, 由来)`。
-    幾何の失敗は差し替えより先に上がるので、落ちたときは文書に何も残らない。
-
-    active だったツールを消すと active が無くなるので、ターゲットを active にする(無いと、直後の押し出し(join)が
-    ターゲットに足されず別のボディを作り、cut は対象なしで断られる)。undo は退避した active を戻す。"""
+    幾何の失敗は差し替えより先に上がるので、落ちたときは文書に何も残らない。"""
     result = kernel.boolean_bodies(target_body.shape, [tool.shape for tool in tools], mode)
     previous_shape = target_body.shape
     target_body.shape = result["shape"]
     detached = detach_bodies(doc, [tool.id for tool in tools])
-    if detached["active"] in {tool.id for tool in tools}:
-        doc.set_active_body(target_body.id)
     return previous_shape, detached, result["provenance"]
 
 
@@ -143,7 +138,7 @@ def _do_boolean_body(document: Document, operation: Operation) -> None:
 
 
 def _undo_boolean_body(document: Document, operation: Operation) -> None:
-    """undo: ターゲットの形を戻し、消えたツールボディを元の添字と active ごと復元する(1回の undo で両方)。"""
+    """undo: ターゲットの形を戻し、消えたツールボディを元の添字へ復元する(1回の undo で両方)。"""
     target_body_id = operation.args["target_body_id"]
     document.get_body(target_body_id).shape = recall(document, target_body_id, operation.seq)
     reattach_bodies(document, recall(document, _SNAPSHOT_KEY, operation.seq))

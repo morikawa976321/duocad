@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict'
 
 import './ts_resolve_hook.mjs'
-const { entityHandles, snapSketchPoint } = await import(new URL('../web/src/entityKinds.ts', import.meta.url).href)
+const { entityHandles, snapSketchPoint, snapToDatumAxis } = await import(new URL('../web/src/entityKinds.ts', import.meta.url).href)
 const { viewResolution } = await import(new URL('../web/src/adaptiveResolution.ts', import.meta.url).href)
 
 const ENTITIES = {
@@ -146,6 +146,20 @@ assert.deepEqual(
     const got = Math.hypot(su - u, sv - v)
     assert.ok(got <= best + 1e-9, `回した細い楕円で最近点に落ちない: 長軸上 ${along} → 距離 ${got} / 最近 ${best}`)
   }
+}
+
+// ============================================================== 原点の軸(本人判断 2026-11-05: 軸の上も 1mm へ丸める)
+// 軸は基準平面のスケッチでは格子線と重なる。丸めないと軸の上の格子点 (20, 0) がマウスで置けなかった(19.99998 になった)
+assert.deepEqual(snapToDatumAxis([0, 0], [1, 0], 19.99998, 0.3), [20, 0], 'XY の X 軸: 軸の上の格子点へ')
+assert.deepEqual(snapToDatumAxis([0, 0], [0, 1], 0.2, 20.000005), [0, 20], 'XY の Y 軸: 軸の上の格子点へ')
+assert.deepEqual(snapToDatumAxis([0, 0], [-1, 0], -7.4, 0), [-7, 0], '軸の向きが負でも同じ点')
+assert.deepEqual(snapToDatumAxis([3, -2], [0, 0], 10, 10), [3, -2], '平面に垂直な軸は原点へ')
+{
+  // 面に貼ったスケッチで斜めに写る軸: 原点から平面上で整数 mm の位置(格子点とは限らない)
+  const origin = [1.25, -0.5]
+  const [du, dv] = [0.6, 0.8]
+  const [su, sv] = snapToDatumAxis(origin, [du * 0.5, dv * 0.5], 1.25 + 6.8 * du + 0.1 * dv, -0.5 + 6.8 * dv - 0.1 * du)
+  assert.ok(Math.abs(su - (1.25 + 7 * du)) < 1e-12 && Math.abs(sv - (-0.5 + 7 * dv)) < 1e-12, `斜めの軸の丸め: (${su}, ${sv})`)
 }
 
 console.log('ok')

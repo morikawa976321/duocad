@@ -315,7 +315,6 @@ class DocumentTools:
                 sketch_entry["region_count"] = len(region.regions(document, sk.id))
             sketches_out.append(sketch_entry)
 
-        active = document.active_body()
         return {
             # AI は文書を開けない(`open_document` / `new_document` は `mcp=False`)ので、
             # False なら空の文書を相手に操作せず、人に開いてもらうよう伝える。
@@ -325,7 +324,6 @@ class DocumentTools:
             "current_name": self.session.current_name,
             "generation": self.session.generation,
             "units": document.units,
-            "active_body_id": active.id if active is not None else None,
             "body_count": len(bodies),
             "visible_count": sum(1 for body in bodies if body["visible"]),
             "bodies": bodies,

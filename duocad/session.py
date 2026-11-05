@@ -40,6 +40,7 @@ from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import fork, speculative
 from .verbs.envelope_regions import boundary_entities as envelope_boundary_entities, envelope_pieces, selected_regions
 from .verbs.project_to_sketch import outline_entities, projected_entities, selected_bodies, selected_targets
+from .verbs.mirror_sketch import mirrored_entities
 from .view import DocumentView
 
 from . import (
@@ -65,6 +66,10 @@ class NoDocument(ValueError):
 #: 書き出し先に認める拡張子(小文字。`DocumentStore.resolve_export_path`)。
 _STEP_SUFFIXES = (".step", ".stp")
 _STL_SUFFIXES = (".stl",)
+
+#: 辺だけを食い、起動中は面を指せない verb(`select_face_boundaries` が選択の面を読み替えてよいのはこの起動中だけ)。
+#: 画面の `App.svelte` の `edgeOnlyCommand`(選択の引数の種類が辺だけ)と同じ顔ぶれに揃える。
+_EDGE_ONLY_VERBS = frozenset({"fillet", "chamfer"})
 
 def _edits_document(method: Any) -> Any:
     """文書を変える `Session` のメソッドに付ける。形状最適化を走らせている文書なら `DocumentBusy` で断る。
@@ -318,6 +323,10 @@ class Session:
         """1Bodyの頂点の座標(`DocumentView.vertices`)。"""
         return self.view.vertices(body_id)
 
+    def sketch_guides(self, sketch_id: str) -> dict:
+        """スケッチの平面とボディの交わり(`DocumentView.sketch_guides`)。"""
+        return self.view.sketch_guides(sketch_id)
+
     def set_view_resolution(
         self,
         world_per_pixel: float,
@@ -424,6 +433,32 @@ class Session:
             add=() if add is None else add,
             remove=() if remove is None else remove,
         )
+        return self._emit(self._selection_event(client_op))
+
+    def select_face_boundaries(self, client_op: Optional[int] = None) -> dict:
+        """選択の面を外し、その外周の辺を連なりまで広げて足す(`DocumentView.face_edges`)。変更イベントを返す。
+
+        画面が、面を選んだままフィレット・面取り(辺だけを食い、起動中は面を指せない)を起動したときに送る。
+        外すのと足すのを1回の選択の変更で行う: 画面で応答を待って足すと、待つ間の確定・中断・切断・別の画面の形の変更が
+        それぞれ古い添字や漏れを生んだ。辺を持たないボディ(メッシュ・隠したもの・形の無いもの)の面は外すだけ。
+        起動中の verb が辺だけを食うもの(`_EDGE_ONLY_VERBS`)でなければ何も変えない: 繋ぎ直した画面は新しい状態が届く前に
+        古い起動を根拠に送りうるので、別の画面が起動した面を食う verb の選択を読み替えてはいけない。
+        """
+        current = self.workspace.command
+        if current is None or current.verb not in _EDGE_ONLY_VERBS:
+            return self._emit(self._selection_event(client_op))
+        faces = selection.selected_items(self.document, kind="face")
+        add: list = []
+        for body_id in dict.fromkeys(item["body"] for item in faces):
+            body = self.document.get_body(body_id)
+            if body.mesh is not None or body.shape is None or not body.visible:
+                continue
+            indices = [int(item["index"]) for item in faces if item["body"] == body_id]
+            add.extend(
+                {"body": body_id, "kind": "edge", "index": index}
+                for index in self.view.face_edges(body_id, indices)["boundary_edges"]
+            )
+        selection.modify_selection(self.document, add=add, remove=faces)
         return self._emit(self._selection_event(client_op))
 
     def toggle_selection(self, refs: list, client_op: Optional[int] = None) -> dict:
@@ -838,6 +873,18 @@ class Session:
         """`project_outline` の確定前の姿(写る影の境界)。文書を変えない。"""
         entities = outline_entities(self.document, sketch_id, selected_bodies(self.document))
         return _projection_ghost(sketch_id, entities)
+
+    def preview_mirror_sketch_entities(self, axis: Any) -> dict:
+        """`mirror_sketch_entities` の確定前の姿(足される複製)。文書を変えない。
+
+        対象は法線方向にずれた平行なスケッチにもまたがるので、複製ごとに足される先の `sketch_id` を添える
+        (画面はその平面へ描く。`web/src/sketchLayer.ts` の `showSketchGhosts`)。
+        """
+        planned = mirrored_entities(self.document, selection.require_sketch_entities(self.document), axis)
+        entities = [
+            {"kind": kind, "params": dict(values), "sketch_id": sketch_id} for sketch_id, kind, values in planned
+        ]
+        return {"sketch_ghost": {"sketch_id": planned[0][0], "entities": entities, "pieces": 1}}
     # ---------------------------------------------------------------- 形状最適化を走らせる(`duocad/optimize_run.py` への委譲)
     def optimize_conditions(self) -> dict:
         """4条件がそろって走らせられるか(`optimize_run.conditions_report`)。"""
@@ -1085,7 +1132,9 @@ class Session:
 
         契約は2つに割れている:
 
-        - `save_document()`(引数なし) … いま編集しているファイルへ上書きする。編集中のファイルが無ければ拒否する。
+        - `save_document()`(引数なし) … いま編集しているファイルへ上書きする。編集中のファイルが無ければ、無題の最初の
+          自動保存が書けなかった(`saved` が False)ときだけ自動保存と同じ `untitled-<n>.json` へ書き、それ以外は拒否する
+          (Ctrl+S は「未保存」の札が勧める書き直しの口)。
         - `save_document(name)` … 新しい名前でのみ保存する。既に在る名前は拒否する(いま編集しているファイルの名前でも)。
 
         `name == self._current_name` なら通す、という例外条項を置かない(本人決定)。例外を残すと、後から別のUIを足したときに
@@ -1103,6 +1152,8 @@ class Session:
         self.autosaver.drain()
         self.autosaver.supersede()
         if name is None:
+            if self._current_name is None and not self.saved:
+                return self.save_document(self.store.unused_untitled_name(), autosave_untitled=True)
             if self._current_name is None:
                 raise ValueError(
                     "編集中のファイルが無い"
@@ -1137,6 +1188,7 @@ class Session:
             self._current_name = target.name
             self._created = created
             self.autosaver.mark_saved()
+            self.optimization.named(self.document, target.name)
         return {
             "action": "save",
             "path": str(target),
@@ -1221,7 +1273,7 @@ class Session:
         差し替えの後始末は `_replace_document`(`new_document` と共通)。
         """
         source = self.store.resolve_document_name(name)
-        self.autosaver.drain()  # 同じ名前を開き直すとき、書きかけの最後の変更を読み落とさない
+        self._save_before_leaving()  # 同じ名前を開き直すとき、書きかけの最後の変更を読み落とさないためにも要る
         kept = self.optimization_results.take_document(source.name)
         if kept is not None:
             return self._open_undelivered(source.name, kept)
@@ -1260,10 +1312,12 @@ class Session:
         """空の文書へ差し替える(「新規」)。verbではない(ログに載らない)。
 
         今の文書は捨てられ、undoでは戻らない(`open_document` と同じ)。確認は挟まない(一覧からのクリック1つで別の文書へ移れるのに、
-        空の文書へ移るときだけ確認すると挙動が割れる。`web/src/FilesPanel.svelte`)。捨てる前の保存もしない(1操作ごとに自動保存済み)。
+        空の文書へ移るときだけ確認すると挙動が割れる。`web/src/FilesPanel.svelte`)。自動保存が書けていなかったときだけ、
+        捨てる前に書き直す(`_save_before_leaving`)。
         編集中のファイルも無くなる(`current_name=None`)。次に文書を変えた瞬間に自動保存が `untitled-<n>.json` を作る
         (それまで引数なしの `save_document()` は拒否される)。
         """
+        self._save_before_leaving()
         self._replace_document(Document(), current_name=None, created=None)
         return self._emit({
             "change": "document",
@@ -1274,10 +1328,14 @@ class Session:
         })
 
     def close_document(self) -> dict:
-        """文書を閉じてトップ画面(何も開いていない状態)へ戻す。verbではない。保存はしない(自動保存済み)。
+        """文書を閉じてトップ画面(何も開いていない状態)へ戻す。verbではない。自動保存が書けていなかったときだけ書き直す。
         空の `Document` に差し替えてundoの山ごと捨てる: 中身を残したまま閉じた扱いにすると、開き直さずに編集できる経路が
         1つでも残った瞬間に、前の文書の続きが `untitled-<n>.json` として書かれる。
         """
+        self._save_before_leaving()
+        return self._close_without_saving()
+
+    def _close_without_saving(self) -> dict:
         self._replace_document(Document(), current_name=None, created=None)
         self._open = False
         return self._emit({
@@ -1286,6 +1344,23 @@ class Session:
             "path": None,
             "name": None,
         })
+
+    def _save_before_leaving(self) -> None:
+        """自動保存が書けていない文書を手放す前に、もう一度書く。それも書けなければ ValueError で切り替えを止める
+        (本人判断 2026-11-05、issue #279。確認ダイアログは挟まず、書けた文書は今どおり黙って切り替える)。
+        """
+        self.autosaver.drain()
+        if not self._open or self.saved:
+            return
+        # `autosave()` は画面の操作では書き手スレッドへ回すので、書けたかをここで知れない。同期で書く。
+        try:
+            self.save_document()
+        except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ切り替えを止めて画面へ出す
+            self.autosaver.failed(error)
+            raise ValueError(
+                f"今の文書の未保存の変更をファイルへ書けないので、切り替えなかった({type(error).__name__}: {error})。"
+                "ファイルを掴んでいるプログラムを閉じてから、もう一度押す"
+            ) from error
 
     def _replace_document(
         self, document: Document, *, current_name: Optional[str], created: Optional[float]
@@ -1340,7 +1415,8 @@ class Session:
         self.store.drop_thumbnail(target)
         deleted = {"action": "delete", "path": str(target), "name": target.name}
         if target.name == self._current_name:
-            self.close_document()
+            # 書き直さずに閉じる(`_save_before_leaving` を通すと、消したファイルを未保存の中身で作り直す)。
+            self._close_without_saving()
             deleted["closed"] = True
         return deleted
 

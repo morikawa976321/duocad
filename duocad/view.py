@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional
 from . import (
     kernel,
     kernel_face_edit,
+    kernel_project,
     meshbody,
     optimize,
     parameters,
@@ -329,13 +330,14 @@ class DocumentView:
         #: 番号は文書をまたいで単調に増やす(`reset()` で数え直すと、別の文書の同じ id・同じ番号のスケッチを描き直さない)。
         self._sketch_revisions: dict = {}
         self._sketch_revision_seq = 0
-        # 5つとも body_id -> (source, key, result)(`_memo`)。source は shape か mesh、key は
-        # geometry が `body_recipe`、edges が (偏差, 角度偏差)、他は None
+        # 6つとも body_id -> (source, key, result)(`_memo`)。source は shape か mesh、key は
+        # geometry が `body_recipe`、edges が (偏差, 角度偏差)、guides が平面、他は None
         self._geometry_cache: dict = {}    # tessellate結果
         self._edge_cache: dict = {}        # tessellate_edges結果(D)
         self._chain_cache: dict = {}       # 辺の連なりの器(`kernel.edge_chain_finder`)。粗さに依らない
         self._vertex_cache: dict = {}      # vertex_positions結果
         self._volume_cache: dict = {}      # query.volume結果
+        self._guide_cache: dict = {}       # 平面との交わり(`sketch_guides`)。直近の1平面だけ覚える
         #: body_id -> OrderedDict[id(形) -> (形, `_FaceTessellations`)]。形ごとに `FACE_STORES_PER_BODY` 世代まで覚える
         #: (undo で元の形へ戻ったとき・プレビューで測った新しい形を確定したときに測り直さない)。
         self._face_cache: dict = {}
@@ -524,6 +526,7 @@ class DocumentView:
         self._chain_cache.clear()
         self._vertex_cache.clear()
         self._volume_cache.clear()
+        self._guide_cache.clear()
         self._face_count_cache.clear()
         self._sketch_cache.clear()
         self._sketch_revisions.clear()
@@ -550,10 +553,8 @@ class DocumentView:
     def state_meta(self, *, can_undo: bool, applied_count: int, previewing: bool) -> dict:
         """`state()` の軽量版。**bodiesの各要素にgeometryを含まない**(テセレーションを呼ばない)。27部品でも数KB(state()は6MB超)。"""
         self._prune_body_caches(previewing)
-        active = self.document.active_body()
         return {
             "units": self.document.units,
-            "active_body_id": active.id if active is not None else None,
             "bodies": [self.body_meta(body) for body in self.document.bodies],
             "log": [
                 {
@@ -1053,6 +1054,29 @@ class DocumentView:
             "chains": [kernel_face_edit.blend_chain(body.shape, index) for index in origins],
         }
 
+    def face_edges(self, body_id: str, face_indices: list) -> dict:
+        """頼まれた面の外周の辺(`query.edges_of_face`。穴の縁は入れない)を、それぞれの連なり(`edge_chains`)まで広げ、
+        全部の面の分まとめて昇順で返す。
+
+        戻り値: `{"body_id", "revision", "shape_revision", "faces": [頼まれた面(重複を畳む)], "boundary_edges": [辺の添字(昇順)]}`
+
+        `Session.select_face_boundaries` が選択の面をこの辺へ読み替える。連なりまで広げるのは、フィレット・面取りが
+        辺1本から連なり全体へかかるため(画面の辺の選び方と同じ単位。docs/contracts/ui-selection-viewport.md)。
+        """
+        body = self._visible_brep(body_id, "面")
+        faces = list(dict.fromkeys(int(index) for index in face_indices))
+        boundary = sorted({edge for face in faces for edge in query.edges_of_face(body.shape, face)})
+        finder = _memo(self._chain_cache, body_id, body.shape, None, lambda: kernel.edge_chain_finder(body.shape))
+        groups = finder.of(boundary)
+        edges = sorted({member for index in boundary for member in groups[index]})
+        return {
+            "body_id": body_id,
+            "revision": self.body_revision(body_id),
+            "shape_revision": self.shape_revision(body_id),
+            "faces": faces,
+            "boundary_edges": edges,
+        }
+
     def vertices(self, body_id: str) -> dict:
         """1Bodyの頂点を1始まりの添字つきの3D座標で返す(キャッシュ付き)。
 
@@ -1072,6 +1096,33 @@ class DocumentView:
             "shape_revision": self.shape_revision(body_id),
             "vertices": described,
         }
+
+    def sketch_guides(self, sketch_id: str) -> dict:
+        """スケッチ `sketch_id` の平面と、見えている B-rep のボディの交わり(`kernel_project.section_guides`)をまとめて返す。
+
+        戻り値: `{"sketch_id", "entities": [{"kind", "params"}], "points": [[u, v]], "errors": [str]}`
+
+        `edges()` と同じく配信しない。画面はスケッチモードに入ったときと、見えているボディの形が変わったときに頼む。
+        メッシュのボディと隠したボディは見ない。1体の失敗で全体を断らず、そのボディを抜いて `errors` に書く
+        (画面は裏で頼んでいるので札を出さない)。
+        """
+        plane = sketch.get_sketch(self.document, sketch_id).plane
+        key = json.dumps(plane, sort_keys=True, default=str)
+        entities: list = []
+        points: list = []
+        errors: list = []
+        for body in self.document.bodies:
+            if not body.visible or body.shape is None:
+                continue
+            shape = body.shape
+            try:
+                found = _memo(self._guide_cache, body.id, shape, key, lambda: kernel_project.section_guides(plane, shape))
+            except Exception as error:
+                errors.append(f"{body.id}: {type(error).__name__}: {error}")
+                continue
+            entities.extend(found["entities"])
+            points.extend(found["points"])
+        return {"sketch_id": sketch_id, "entities": entities, "points": points, "errors": errors}
 
     def _visible_brep(self, body_id: str, what: str):
         """辺・頂点(`what`)を配ってよい Body。存在 → B-rep → 形あり → 可視の順で断る。
@@ -1105,7 +1156,7 @@ class DocumentView:
             self._retired_faces.popitem(last=False)
         for cache in (
             self._geometry_cache, self._edge_cache, self._chain_cache, self._vertex_cache, self._volume_cache,
-            self._face_count_cache, self._face_cache, self._focus_remapped,
+            self._guide_cache, self._face_count_cache, self._face_cache, self._focus_remapped,
         ):
             for body_id in [key for key in cache if key not in alive]:
                 cache.pop(body_id, None)

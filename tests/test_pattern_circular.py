@@ -114,7 +114,7 @@ def test_extruding_a_circular_pattern_opens_count_holes():
 
     drill_all(document, sketch_id)
 
-    body = document.active_body()
+    body = document.bodies[-1]
     assert len(hole_axes(body.shape)) == COUNT
     expected = PLATE_SIZE**2 * PLATE_THICKNESS - COUNT * math.pi * HOLE_RADIUS**2 * PLATE_THICKNESS
     assert math.isclose(query.volume(body.shape), expected, rel_tol=1e-9)
@@ -129,7 +129,7 @@ def test_a_full_circle_divides_360_by_count():
     sketch_id, _, _ = hole_ring(document)
     drill_all(document, sketch_id)
 
-    angles = angles_from_center(hole_axes(document.active_body().shape))
+    angles = angles_from_center(hole_axes(document.bodies[-1].shape))
 
     assert len(angles) == COUNT
     step = 360.0 / COUNT
@@ -146,7 +146,7 @@ def test_a_partial_angle_includes_both_ends():
     sketch_id, _, _ = hole_ring(document, count=3, total_angle=180.0)
     drill_all(document, sketch_id)
 
-    angles = angles_from_center(hole_axes(document.active_body().shape))
+    angles = angles_from_center(hole_axes(document.bodies[-1].shape))
 
     assert len(angles) == 3
     for index, angle in enumerate(angles):
@@ -224,12 +224,12 @@ def test_pattern_survives_save_load_and_replay():
     plate(document)
     sketch_id, _, _ = hole_ring(document)
     drill_all(document, sketch_id)
-    expected_axes = hole_axes(document.active_body().shape)
+    expected_axes = hole_axes(document.bodies[-1].shape)
 
     restored = replay_through_json(document)
 
     assert len(expected_axes) == COUNT
-    assert hole_axes(restored.active_body().shape) == expected_axes
+    assert hole_axes(restored.bodies[-1].shape) == expected_axes
 
 
 # 失敗を黙って通さない

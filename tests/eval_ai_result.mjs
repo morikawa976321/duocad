@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 
 import './ts_resolve_hook.mjs'
 
-const { inputBlockedReason, resultDetail, resultLine } = await import('../web/src/aiResult.ts')
+const { hiddenResultNotice, inputBlockedReason, resultDetail, resultLine, toolFailureReason } = await import('../web/src/aiResult.ts')
 
 // 接続の失敗: 固定文に理由(接続できなかったURLとOSのエラー)を添える。
 const providerError = { status: 'provider_error', text: '', detail: 'HTTP 401: invalid x-api-key' }
@@ -40,6 +40,22 @@ assert.ok(long.length <= 241 && long.endsWith('…'), `折りたたまれてい�
 
 // 知らない状態は状態名をそのまま出す(空行にしない)。
 assert.equal(resultLine({ status: 'brand_new', text: '', detail: '' }), 'brand_new')
+
+// ✗ の行の理由: 封筒の message を出す。封筒でない失敗も空にしない。
+assert.equal(
+  toolFailureReason({ error: { code: 'invalid_argument', message: '半径が大きすぎる', tool: 'fillet', exception: 'ValueError' } }),
+  '半径が大きすぎる',
+)
+assert.equal(toolFailureReason({ error: 'ツールが無い' }), 'ツールが無い')
+assert.equal(toolFailureReason({ unexpected: 1 }), '{"unexpected":1}')
+assert.equal(toolFailureReason(undefined), '')
+assert.ok(toolFailureReason({ error: { message: 'x'.repeat(1000) } }).endsWith('…'), '長い理由が折りたたまれていない')
+
+// 閉じている間の札: 何が起きたかを AI の頭で言い、長い本文は短く切る。
+assert.equal(hiddenResultNotice({ status: 'timeout', text: '' }), 'AI: 時間切れで止めた(ここまでの操作は残っている)')
+assert.equal(hiddenResultNotice({ status: 'completed', text: 'できた' }), 'AI: できた')
+const longNotice = hiddenResultNotice({ status: 'completed', text: `一行目\n${'あ'.repeat(500)}` })
+assert.ok(longNotice.length <= 'AI: '.length + 81 && longNotice.endsWith('…'), `札が長すぎる: ${longNotice.length}`)
 
 // 入力を止める理由: 切断中は(ai_status が残っていても)送らせない。送れなかった発話が会話欄に残り、入力欄だけ空になる。
 assert.equal(inputBlockedReason('open', true), null)

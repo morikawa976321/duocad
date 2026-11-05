@@ -65,7 +65,7 @@ def test_extruding_two_adjacent_regions_as_new_gives_one_box():
 
     operation = extrude(document, [region_ref(sketch_id, region.index) for region in found], HEIGHT, mode="new")
 
-    body = document.active_body()
+    body = document.bodies[-1]
     assert body is not None
     assert _counts(body.shape) == (6, 12)
     assert math.isclose(query.volume(body.shape), MERGED_VOLUME, rel_tol=1e-9)
@@ -107,7 +107,7 @@ def test_a_single_prism_as_new_is_not_merged():
 
     operation = extrude(document, [region_ref(sketch_id, found[0].index)], HEIGHT, mode="new")
 
-    assert _brep_topology.face_count(document.active_body().shape) == 7
+    assert _brep_topology.face_count(document.bodies[-1].shape) == 7
     assert operation.provenance["unified"] is False
 
 

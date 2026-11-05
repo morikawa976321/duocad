@@ -22,7 +22,7 @@ undo の仕組みが対象によって別物になる
 巻き戻す」。
 
 - **ボディ** … `TopoDS_Shape` はJSONにできないので、`_common.SNAPSHOTS` へ **`Body` オブジェクトそのもの**
-  を退避する(`fillet` と同じ表・同じ規律)。並び順と active も一緒に控える。
+  を退避する(`fillet` と同じ表・同じ規律)。並び順も一緒に控える。
 - **スケッチ(入れ物ごと)** … 平面(焼き付けた姿勢ごと)・図形・反復・名前つきの値・名前を args に全部
   控え、undo は args だけで作り直す。**平面は `resolve_plane` で解き直さない**(貼った面がその後の
   面取り・フィレットで添字を変えていると、別の面へ貼り直す/失敗する)。名前つきの値は名前ごと直に
@@ -69,7 +69,7 @@ VERB_DELETE = "delete"
 VERB_DELETE_ITEMS = "delete_items"
 
 #: `_common.SNAPSHOTS` は `(body_id, seq)` を鍵にするが、この verb が控えるのは
-#: 「この操作で消したボディ全部 + 並び順 + active」という操作1回ぶんの1つの塊。
+#: 「この操作で消したボディ全部 + 並び順」という操作1回ぶんの1つの塊。
 #: BodyId は必ず `body-<hex>` なので、この綴りと衝突しない。
 _SNAPSHOT_KEY = "delete:removed"
 
@@ -275,7 +275,7 @@ def _undo_delete(document: Document, operation: Operation) -> None:
     # 1. 図形を作り直す(`sketch._do_add_entity` の写し)。元の添字の昇順に差し込むと並びが再現する。
     for spec in entity_specs:
         _restore_entity(document, spec)
-    # 2. ボディを戻す(元の添字と active も戻す)。
+    # 2. ボディを戻す(元の添字へ)。
     if detached is not None:
         reattach_bodies(document, detached)
 

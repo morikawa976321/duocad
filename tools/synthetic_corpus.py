@@ -188,7 +188,7 @@ class _BodyPrints:
         return held[1]
 
 
-_STATE_KEYS = ("bodies", "order", "active", "sketches", "parameters", "optimize")
+_STATE_KEYS = ("bodies", "order", "sketches", "parameters", "optimize")
 
 
 def state_digest(step: dict) -> str:
@@ -199,7 +199,6 @@ def state_print(document: Document, prints: _BodyPrints) -> dict:
     return {
         "bodies": {body.id: prints.of(body) for body in document.bodies},
         "order": [body.id for body in document.bodies],
-        "active": document._active_body_id,
         "sketches": {item.id: sketch_print(document, item) for item in document.sketches},
         "parameters": _digest(sorted((k, _r(v, 6)) for k, v in document.parameters.items())),
         "optimize": optimize_print(document),
@@ -349,7 +348,7 @@ def _first_row_difference(old: dict, new: dict) -> Optional[str]:
 def step_difference(old: dict, new: dict) -> tuple:
     """(形・添字の違いの説明の並び, 三角形の違いの説明の並び)。"""
     shape: list = []
-    for key in ("order", "active", "parameters", "optimize"):
+    for key in ("order", "parameters", "optimize"):
         if old.get(key) != new.get(key):
             shape.append(f"{key} {old.get(key)} -> {new.get(key)}")
     for body_id in sorted(set(old["bodies"]) | set(new["bodies"])):

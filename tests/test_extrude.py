@@ -90,7 +90,7 @@ def test_extruding_one_half_of_a_split_circle_gives_area_times_distance():
 
     extrude(document, [region_ref(sketch_id, target.index)], 10.0, mode="join")
 
-    body = document.active_body()
+    body = document.bodies[-1]
     assert body is not None, "join は対象が無ければ新しいソリッドを作る"
     assert document.is_editable(body.id) is True, "作ったボディは kind='solid'"
     assert math.isclose(query.volume(body.shape), target.area * 10.0, rel_tol=AREA_REL_TOL)
@@ -112,7 +112,7 @@ def test_a_tilted_rectangle_gives_a_region_and_extrudes():
 
     extrude(document, [region_ref(sketch_id, found[0].index)], PLATE_THICKNESS, mode="join")
 
-    body = document.active_body()
+    body = document.bodies[-1]
     assert body is not None
     assert math.isclose(query.volume(body.shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL)
     assert BRepCheck_Analyzer(body.shape).IsValid() is True
@@ -121,7 +121,7 @@ def test_a_tilted_rectangle_gives_a_region_and_extrudes():
 def test_join_fuses_into_the_existing_body():
     """対象ボディがあるときの `join` は、そこへ肉を足す(2つ目のソリッドを作らない)。"""
     document = plate_document()
-    body = document.active_body()
+    body = document.bodies[-1]
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
     boss = regions(document, sketch_id)
@@ -129,9 +129,9 @@ def test_join_fuses_into_the_existing_body():
     extrude(document, [region_ref(sketch_id, boss[0].index)], 15.0, mode="join")
 
     assert len(document.bodies) == 1, "join で2つ目のボディが増えている"
-    assert document.active_body().id == body.id
+    assert document.bodies[-1].id == body.id
     assert math.isclose(
-        query.volume(document.active_body().shape),
+        query.volume(document.bodies[-1].shape),
         PLATE_VOLUME + 10.0 * 10.0 * 5.0,
         rel_tol=VOLUME_REL_TOL,
     )
@@ -140,7 +140,7 @@ def test_join_fuses_into_the_existing_body():
 def test_new_makes_a_second_body_instead_of_fusing():
     """`mode="new"` は対象ボディがあっても融合せず、**独立したソリッドを1つ足す**。"""
     document = plate_document()
-    plate = document.active_body()
+    plate = document.bodies[-1]
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
     boss = regions(document, sketch_id)
@@ -151,7 +151,7 @@ def test_new_makes_a_second_body_instead_of_fusing():
     assert math.isclose(query.volume(plate.shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL), (
         "new が元の板の形を変えている"
     )
-    created = document.active_body()
+    created = document.bodies[-1]
     assert created is not None and created.id != plate.id, "作ったボディがactiveになっていない"
     assert document.is_editable(created.id) is True, "作ったボディは kind='solid'"
     assert math.isclose(
@@ -162,7 +162,7 @@ def test_new_makes_a_second_body_instead_of_fusing():
 def test_new_refuses_a_body_id():
     """`new` に行き先を渡したら ValueError。文書にもログにも何も残さない。"""
     document = plate_document()
-    plate = document.active_body()
+    plate = document.bodies[-1]
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
     boss = regions(document, sketch_id)
@@ -185,7 +185,7 @@ def test_new_refuses_a_body_id():
 def test_new_is_undoable_and_replays():
     """`new` で作ったボディは undo で消え、保存したログの再生でも同じ2ボディに戻る。"""
     document = plate_document()
-    plate_id = document.active_body().id
+    plate_id = document.bodies[-1].id
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
     boss = regions(document, sketch_id)
@@ -225,7 +225,7 @@ def test_extrude_is_logged_and_undoable():
 
     operation = extrude(document, [reference], 10.0, mode="join")
 
-    body = document.active_body()
+    body = document.bodies[-1]
     assert operation.verb == "extrude"
     assert operation.args == {
         "regions": [reference.to_dict()],
@@ -243,7 +243,7 @@ def test_extrude_is_logged_and_undoable():
 
     document.log.redo(document)
     assert math.isclose(
-        query.volume(document.active_body().shape), target.area * 10.0, rel_tol=AREA_REL_TOL
+        query.volume(document.bodies[-1].shape), target.area * 10.0, rel_tol=AREA_REL_TOL
     )
 
 
@@ -252,18 +252,18 @@ def test_undo_restores_the_shape_for_fuse_and_cut():
     消す」経路とは別に「形状を戻す」経路があり、こちらはその検証)。
     """
     document = plate_document()
-    body_id = document.active_body().id
+    body_id = document.bodies[-1].id
 
     drill(document)
-    assert query.describe_shape(document.active_body().shape)["faces_by_type"]["cylinder_full"] == 1
+    assert query.describe_shape(document.bodies[-1].shape)["faces_by_type"]["cylinder_full"] == 1
 
     document.log.undo(document)  # cut を取り消す
 
-    assert len(document.bodies) == 1 and document.active_body().id == body_id
+    assert len(document.bodies) == 1 and document.bodies[-1].id == body_id
     assert math.isclose(
-        query.volume(document.active_body().shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL
+        query.volume(document.bodies[-1].shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL
     )
-    assert query.describe_shape(document.active_body().shape)["faces_by_type"]["cylinder_full"] == 0
+    assert query.describe_shape(document.bodies[-1].shape)["faces_by_type"]["cylinder_full"] == 0
 
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
@@ -274,7 +274,7 @@ def test_undo_restores_the_shape_for_fuse_and_cut():
 
     assert len(document.bodies) == 1
     assert math.isclose(
-        query.volume(document.active_body().shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL
+        query.volume(document.bodies[-1].shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL
     )
 
 
@@ -283,7 +283,7 @@ def test_extrude_without_an_existing_region_fails_and_changes_nothing():
     document = plate_document()
     sketch_id = sketch_create(document, "XY")
     add_circle(document, sketch_id, HOLE_CENTER, 2 * HOLE_RADIUS)
-    before_volume = query.volume(document.active_body().shape)
+    before_volume = query.volume(document.bodies[-1].shape)
     entries_before = len(document.log.entries)
     bodies_before = len(document.bodies)
 
@@ -293,7 +293,7 @@ def test_extrude_without_an_existing_region_fails_and_changes_nothing():
         with pytest.raises(ValueError):
             extrude(document, target, 5.0, mode="cut")
 
-    assert query.volume(document.active_body().shape) == before_volume
+    assert query.volume(document.bodies[-1].shape) == before_volume
     assert len(document.log.entries) == entries_before
     assert len(document.bodies) == bodies_before
 
@@ -337,12 +337,12 @@ def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
     """
     document = plate_document()
     assert math.isclose(
-        query.volume(document.active_body().shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL
+        query.volume(document.bodies[-1].shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL
     )
 
     drill(document)
 
-    shape = document.active_body().shape
+    shape = document.bodies[-1].shape
     assert math.isclose(
         query.volume(shape), PLATE_VOLUME - HOLE_VOLUME, rel_tol=VOLUME_REL_TOL
     )
@@ -371,7 +371,7 @@ def test_replay_reproduces_the_split_circle_extrusion():
 
     replayed = replay_through_json(document)
 
-    body = replayed.active_body()
+    body = replayed.bodies[-1]
     assert body is not None
     assert math.isclose(query.volume(body.shape), target.area * 10.0, rel_tol=AREA_REL_TOL)
     assert len(replayed.sketches) == 1
@@ -382,12 +382,12 @@ def test_replay_reproduces_the_plate_with_the_hole():
     """保存したログを再生すると同じ板と穴になる(形状はログからの導出物)。"""
     document = plate_document()
     drill(document)
-    expected_volume = query.volume(document.active_body().shape)
-    expected_faces = query.describe_shape(document.active_body().shape)
+    expected_volume = query.volume(document.bodies[-1].shape)
+    expected_faces = query.describe_shape(document.bodies[-1].shape)
 
     replayed = replay_through_json(document)
 
-    body = replayed.active_body()
+    body = replayed.bodies[-1]
     assert body is not None
     assert math.isclose(query.volume(body.shape), expected_volume, rel_tol=VOLUME_REL_TOL)
     assert query.describe_shape(body.shape) == expected_faces
@@ -406,7 +406,7 @@ def test_extrude_faces_adopt_face_merging_when_it_helps():
     document.add_body(
         Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(20.0, 20.0, 20.0).Shape())
     )
-    body = document.active_body()
+    body = document.bodies[-1]
     assert body is not None
     top = next(
         face

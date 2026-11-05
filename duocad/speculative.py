@@ -1,7 +1,7 @@
 """投機的実行 — verbを試しに実行して**文書を元へ戻す**(プレビューの土台)。
 
     with speculative(doc):
-        fillet(doc, [3], 1.0)
+        fillet(doc, [3], 1.0, body_id=body.id)
         payload = kernel.tessellate(body.shape, 0.2)
     # 抜けた時点で文書は with に入る前と完全に同じ
 
@@ -47,8 +47,6 @@ def _snapshot(doc: Document) -> dict:
             (body, body.shape, body.visible, body.name, body.kind, body.mesh)
             for body in doc.bodies
         ],
-        # `active_body()` はBodyを返すのでIDに落として控える(Bodyごと消えていても戻せる)
-        "active_body_id": doc._active_body_id,
         "sketches": copy.deepcopy(doc.sketches),
         "parameters": copy.deepcopy(doc.parameters),
         "log": doc.log._snapshot(),
@@ -67,8 +65,6 @@ def _restore(doc: Document, snapshot: dict) -> None:
         body.name = name
         body.kind = kind
         body.mesh = mesh
-    # `set_active_body` は None を受け付けない(存在しないIDとして KeyError)ので直接戻す。
-    doc._active_body_id = snapshot["active_body_id"]
     doc.sketches[:] = snapshot["sketches"]
     doc.parameters.clear()
     doc.parameters.update(snapshot["parameters"])
@@ -82,7 +78,7 @@ def fork(doc: Document, copy_shape: Callable[[Any], Any]) -> Tuple[Document, Lis
     `speculative` が文書そのものを書き換えて戻すのに対し、こちらは元の文書に一切触らない(イベントループは写しの計算中も
     元の文書で要求を捌き続ける。issue #168)。ボディの形は `copy_shape` で深く写す: 同じ `TShape` を2つのスレッドが
     使うと、三角形分割の書き換え(`kernel.tessellate`)が競合する。巻き戻しの対象と同じもの(`_snapshot`)を写す
-    (スケッチ・パラメータ・選択・操作ログ・アクティブなボディ)。形状最適化の条件は写すだけ(投機的に変える verb は無い)。
+    (スケッチ・パラメータ・選択・操作ログ)。形状最適化の条件は写すだけ(投機的に変える verb は無い)。
     """
     twin = Document()
     pairs: List[Tuple[Any, Any]] = []
@@ -92,7 +88,6 @@ def fork(doc: Document, copy_shape: Callable[[Any], Any]) -> Tuple[Document, Lis
             shape = copy_shape(body.shape)
             pairs.append((body.shape, shape))
         twin.bodies.append(dataclasses.replace(body, shape=shape))
-    twin._active_body_id = doc._active_body_id
     twin.sketches[:] = copy.deepcopy(doc.sketches)
     twin.parameters.update(copy.deepcopy(doc.parameters))
     twin.log._restore(doc.log._snapshot())

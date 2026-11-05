@@ -10,7 +10,7 @@
  * `command.ts` の import は `import type` だけなので、実行時の依存は無い。
  */
 import assert from 'node:assert/strict'
-import { refKey, refKind, sameRef } from '../web/src/commands/command.ts'
+import { measureItemRef, refKey, refKind, sameRef } from '../web/src/commands/command.ts'
 
 const face3 = { body: 'box', kind: 'face', index: 3 }
 const edge3 = { body: 'box', kind: 'edge', index: 3 }
@@ -59,3 +59,16 @@ const distinct = [face3, edge3, vertex3, bodyNull, otherBody, region1, region2, 
 assert.equal(new Set(distinct.map(refKey)).size, distinct.length, '別の実体の鍵が衝突している')
 
 console.log('OK: refKey / sameRef')
+
+// ============================================================== 測定の項目から参照へ(断られた項目を選択から外す)
+for (const [item, ref] of [
+  [{ kind: 'face', body: 'box', index: 3, surface_kind: 'plane', area: 1 }, face3],
+  [{ kind: 'edge', body: 'box', index: 3, edge_kind: 'circle', length: 1 }, edge3],
+  [{ kind: 'vertex', body: 'box', index: 3, point: [0, 0, 0] }, vertex3],
+  [{ kind: 'body', body: 'box', name: 'B', volume: 1 }, bodyNull],
+  [{ kind: 'region', sketch: 's', index: 1, area: 1 }, region1],
+  [{ kind: 'sketch_entity', sketch: 's', entity: 'e', entity_kind: 'circle', point: null }, whole],
+  [{ kind: 'sketch_entity', sketch: 's', entity: 'e', entity_kind: 'line', point: 'x0' }, pointX0],
+]) {
+  assert.equal(refKey(measureItemRef(item)), refKey(ref), `測定の項目 ${item.kind} から作った参照が選択の参照と食い違う`)
+}

@@ -319,17 +319,12 @@ def _place_on(doc: Document, results: Sequence[tuple]) -> _Placement:
 
 
 def _place_merged(doc: Document, target: Body, merged: Sequence[Body], result: dict) -> _Placement:
-    """join: `target` に `merged` ごと融合した結果を置き、`merged` を文書から消す。
-
-    消したボディが active だったら `target` を active にする(`boolean_body` と同じ。undo は退避した active を戻す)。"""
+    """join: `target` に `merged` ごと融合した結果を置き、`merged` を文書から消す。"""
     previous = {target.id: target.shape}
     target.shape = result["shape"]
     detached = None
     if merged:
-        merged_ids = [body.id for body in merged]
-        detached = detach_bodies(doc, merged_ids)
-        if detached["active"] in merged_ids:
-            doc.set_active_body(target.id)
+        detached = detach_bodies(doc, [body.id for body in merged])
     return _Placement(
         target.id, result["provenance"], others=[body.id for body in merged], previous=previous, detached=detached
     )
@@ -362,13 +357,13 @@ def replay_placement(document: Document, operation: Operation, build: Build, wha
 
 
 def undo_placement(document: Document, operation: Operation) -> None:
-    """undo: 相手の形を戻し(新しく作ったボディなら取り除き)、join で消えたボディを元の添字と active ごと戻す。"""
+    """undo: 相手の形を戻し(新しく作ったボディなら取り除き)、join で消えたボディを元の添字へ戻す。"""
     args = operation.args
     body_id = args["body_id"]
     others = [str(other) for other in args.get("other_bodies") or []]
     previous = recall(document, body_id, operation.seq)
     if previous is None:
-        document.remove_added_body(body_id)
+        document.remove_body(body_id)
         return
     document.get_body(body_id).shape = previous
     if args["mode"] == "join":

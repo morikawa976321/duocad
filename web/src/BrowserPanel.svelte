@@ -247,15 +247,14 @@
                   onblur={() => commitRename(body.body_id, body.name)}
                 />
               {:else}
-                <label class="parts-name">
-                  <input
-                    type="checkbox"
-                    checked={body.visible}
-                    onchange={(event) =>
-                      onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
-                  />
-                  {body.name}
-                </label>
+                <input
+                  type="checkbox"
+                  checked={body.visible}
+                  onchange={(event) =>
+                    onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
+                  title={body.visible ? 'このボディを隠す' : 'このボディを表示'}
+                />
+                <span class="parts-name">{body.name}</span>
                 <span class="dim parts-count">{body.face_count}面</span>
                 <button
                   class="row-action"
@@ -488,14 +487,11 @@
   }
 
   .parts-name {
-    display: flex;
-    align-items: center;
-    gap: 6px;
     flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    cursor: pointer;
   }
 
   .parts-count,

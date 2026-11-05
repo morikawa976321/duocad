@@ -251,6 +251,15 @@ export type PickKind =
   | 'datumPlane'
 
 /**
+ * 指せる面・辺の形(`Viewport.setPickShapes`)。`null` は形を問わない。面はサーバの `faces[i].kind`、辺は `edges[i].kind` で引く。
+ * 外した形の面も遮るものとしては残る(奥の領域は取れない)。
+ */
+export interface PickShapes {
+  faces: readonly string[] | null
+  edges: readonly string[] | null
+}
+
+/**
  * 1つのクリックで取れるもの。通常モードの優先は細かさが先(点 → 線 → 面)、同じ細かさならソリッドが先
  * (重なって見えるとき。`PICK_OVERLAP_PIXELS`)。見えないもの(非表示・立体の裏)は取れない(`occlusion.ts`)。
  * 当たった1つだけが非null(スケッチモードの `sketchEntity`・`region`・`point` は一緒に返り、優先は `App.svelte` が決める)。
@@ -270,6 +279,11 @@ export interface PickEvent {
    * 点は辺より先に見る(点は必ず辺の上に乗っていて、後だと端点を掴めない)。
    */
   sketchEntity: SketchEntityHit | null
+  /**
+   * 当たったボディ由来の吸着先(スケッチモードで点を待っている間だけ)。`sketchEntity` とは同時に立たない
+   * (同じ段で近い方が勝つ。`viewport.ts` の `sketchSnapAt`)。図形と同じく、原点パーツへの吸い付き(`datumAt`)より上。
+   */
+  sketchGuide: SketchGuideHit | null
   /** スケッチモード中の、クリックした点のスケッチ平面上の座標。平面がカメラの裏なら null。 */
   point: { sketchId: string; u: number; v: number } | null
   /**
@@ -312,6 +326,31 @@ export interface SketchEntityHit {
   midpoint?: boolean
   /** `midpoint` が真のときだけ意味を持つ、その線分の向き(単位ベクトル・(u,v)空間)。 */
   snapDirection?: readonly [number, number]
+}
+
+/**
+ * スケッチの平面と交わる・接するボディの吸着先(コアの `get_sketch_guides` の返事)。座標はそのスケッチの (u,v)。
+ * `entities` は平面に乗る辺と面の交線、`points` は交わりの頂点(平面を貫く辺の通る点・平面に触れるだけの頂点を含む)。
+ */
+export interface SketchGuides {
+  sketchId: string
+  entities: ReadonlyArray<{ kind: string; params: Record<string, number> }>
+  points: ReadonlyArray<readonly [number, number]>
+}
+
+/**
+ * ボディ由来の吸着先への当たり(`sketchGuides.ts`)。図形ではないので参照を持たず、選択や軸・中心の指定には使わない。
+ * `snapAt` がそのまま置く座標(線に当たったときはカーソルをその線へ落とした点)。
+ */
+export interface SketchGuideHit {
+  sketchId: string
+  snapAt: readonly [number, number]
+  /** 点(頂点・中心・交点)/ 直線の中点 / 線の上。カーソル強調の形を決める。 */
+  kind: 'point' | 'midpoint' | 'line'
+  /** `kind === 'midpoint'` のときの線分の向き(単位ベクトル・(u,v)空間)。 */
+  snapDirection?: readonly [number, number]
+  /** 強調して描く線(`SketchGuides.entities` の添字)。線を持たない頂点は null。 */
+  entity: number | null
 }
 
 /**
@@ -423,17 +462,21 @@ export interface Viewport {
   onPick(listener: (event: PickEvent) => void): void
   /**
    * スケッチモード中、ポインタがスケッチ平面のどこを指しているか。モード外・平面の裏では null。
-   * 第2引数は同じ画素の `sketchEntityAt` の結果(クリック側の `addPoint` も同じスナップ関数を通る)。
+   * 第2・第4引数は同じ画素の `sketchSnapAt`、第3引数は `sketchDatumAt` の結果(図形とボディ由来の吸着先が当たっていれば null)。
+   * クリック側の `addPoint` も同じスナップ関数を通る。
    */
   onPlaneMove(
     listener: (
       point: { u: number; v: number } | null,
       sketchEntity: SketchEntityHit | null,
       datumAt: readonly [number, number] | null,
+      sketchGuide: SketchGuideHit | null,
     ) => void,
   ): void
-  /** スケッチの点入力待ちのカーソル強調を出すか(`CommandHost` の `onWantsPoint` から)。 */
+  /** スケッチの点入力待ちのカーソル強調を出すか(`CommandHost` の `onWantsPoint` から)。ボディ由来の吸着先もこの間だけ当たる。 */
   setSketchCursorWanted(wanted: boolean): void
+  /** ボディ由来の吸着先(null で捨てる)。編集中のスケッチのものだけが当たる。 */
+  setSketchGuides(guides: SketchGuides | null): void
   /**
    * 選択中の面を強調する(空配列で解除)。選択の色は人が選んでもAIが選んでも1つ(橙)。
    * 領域は3Dでは色分けしない(スケッチ側で強調する)。
@@ -458,6 +501,8 @@ export interface Viewport {
   // ------------------------------------------------------------------ 何を指せるか
   /** スケッチモードの外で指せる種類(`PickKind`)。既定は全部。 */
   setPickKinds(kinds: readonly PickKind[]): void
+  /** `setPickKinds` で指せる面・辺を、さらに形で絞る(測定の平らな面・直線の辺)。既定は絞らない。 */
+  setPickShapes(shapes: PickShapes): void
   /**
    * スケッチモード中に、編集中のスケッチの中身の代わりにソリッドの面・辺・頂点を `setPickKinds` の種類で指す(投影の起動中)。
    * スケッチモードの外では効かない。
@@ -563,20 +608,10 @@ export interface Viewport {
     color: number | null
   }
   /**
-   * 頂点の画面座標(無理なら null)。実機検査が本物のクリックで頂点を選ぶための穴で、返す前にクリックと同じ判定
-   * (`resolveHit`)でその頂点が取れることを確かめる。そのボディの頂点が届いていなければ null。
-   */
-  projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null
-  /**
    * 辺の上の点の画面座標(無理なら null)。実機検査が本物のクリックで辺を選ぶための穴で、返す前にクリックと同じ判定
    * (`resolveHit`)でこの辺が取れることを確かめる。そのボディの辺が届いていなければ null。
    */
   projectEdge(bodyId: string, edgeIndex: number): { x: number; y: number } | null
-  /**
-   * 原点パーツを狙う画面座標(無理なら null)。実機検査が本物のクリックで原点パーツを選ぶための穴で、返す前にクリックと
-   * 同じ判定(`resolveHit`)でそれが取れることを確かめる。
-   */
-  projectDatum(name: DatumName): { x: number; y: number } | null
   /**
    * 確定前の形(プレビュー)を重ねる。本物のBodyは隠し、幽霊を代わりに描く。
    * 幽霊はピックの対象にしない。本物の状態が届いたら(`update`)プレビューは無効になり自動的に消える。
@@ -620,7 +655,7 @@ export interface Viewport {
    */
   showSketchGhosts(
     sketchId: string,
-    entities: Array<{ kind: string; params: Record<string, number> }>,
+    entities: Array<{ kind: string; params: Record<string, number>; sketch_id?: string }>,
     tone?: 'normal' | 'warn',
   ): void
   /**
@@ -630,13 +665,18 @@ export interface Viewport {
    * クリックが選択の置き換えになるため。
    */
   setActiveSketch(sketchId: string | null): void
-  /** スケッチ平面を正面から見る視点へ移す。 */
-  lookAtSketch(sketchId: string): void
+  /**
+   * スケッチ平面を正面から見る視点へ移す。`emptyDocument` は文書にボディも図形も無いこと(隠したボディも数える。
+   * 画面に描いていないボディをビューポートは知らないので、文書を持つ側が答える)。図形の無いスケッチの寄せ先に効く。
+   */
+  lookAtSketch(sketchId: string, options?: { emptyDocument?: boolean }): void
   /**
    * 今あるもの全体が入る視点へ戻す。抜けたときの復帰は `setActiveSketch(null)` が
    * 「入る前の視点」へ戻す。実機検査が図形を画面内へ収めるために呼ぶ。
    */
   frameAll(): void
+  /** 見えているボディ `bodyIds` が収まる所へ、今の向きのまま寄る(干渉チェックの行から)。 */
+  frameBodies(bodyIds: readonly string[]): void
   /** 新規文書にしたときに呼ぶ。カメラは動かさず、基準グリッドの縮小だけを許可する。 */
   resetGrid(): void
   /** 左ドラッグのウィンドウ選択が終わったときに呼ばれる。ドラッグの向きは見ない(本人明言)。 */
@@ -686,12 +726,6 @@ export interface Viewport {
     near: number
     far: number
   }
-  /**
-   * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
-   * カメラの前後のクリップ範囲の外なら null。
-   * `project*` と違い遮蔽は見ず、投影そのものを問う(「+Zが画面で上か」は遮蔽と無関係に決まる)。
-   */
-  projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null
   /** スケッチ平面上の (u,v) の画面座標。実機検査用。 */
   projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
   /**
@@ -700,11 +734,6 @@ export interface Viewport {
    * `showBasePlanes(true)` の間しか返らない。
    */
   projectBasePlane(name: BasePlaneName): { x: number; y: number } | null
-  /**
-   * 領域の画面座標(実機検査用)。今その領域が指せる状態でなければ null
-   * (返す前にクリックと同じ判定 `resolveHit` でその領域が取れることを確かめる)。
-   */
-  projectRegion(sketchId: string, index: number): { x: number; y: number } | null
   /**
    * 見えている立体だけを撮ったファイル一覧のサムネイル(PNGのbase64。`thumbnail.ts`)。
    * 見えている立体が無ければ空文字。

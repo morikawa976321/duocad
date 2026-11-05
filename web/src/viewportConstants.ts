@@ -64,6 +64,8 @@ export const OPTIMIZE_LOAD_COLOR = 0xffc857
 /** 測定(issue #10)の線・端点・札。 */
 export const MEASURE_COLOR = 0xff6ad5
 export const MEASURE_TEXT_COLOR = '#ff8ae0'
+/** 測定・干渉の距離の札の縦[CSS 画素](画面の上で一定。`makeScreenTextSprite`)。 */
+export const LABEL_HEIGHT_PX = 26
 /** 干渉チェック(`interferenceLayer.ts`)。重なりの立体は赤、接触(共有面・辺・点)は橙。 */
 export const INTERFERENCE_OVERLAP_COLOR = 0xff3b30
 export const INTERFERENCE_CONTACT_COLOR = 0xffa21f
@@ -217,6 +219,8 @@ export const SECTION_HANDLE = {
  * 描く順序の層番号。生の数値をコード中に書かない。
  * 負の値は装飾(B群。深度検査あり・深度書き込み無し)、0以上はA群
  * (ピック対象は `depthTest: false` なので、順序がそのまま前後関係になる)。
+ * **順序が効くのは同じ側(不透明/透明)の中だけ**: three.js は不透明の側を全部描いてから透明の側を描く
+ * (グリッドより後に出したいスケッチの線・点が透明の側にいる理由。docs/VIEWPORT.md「深度の規約」)。
  */
 export const LAYER = {
   planeGrid: -3,
@@ -322,6 +326,12 @@ export function isSelectableFov(value: number): boolean {
 
 /** `lookAtSketch` が図形の外接半径に掛ける余白(45度で従来の `radius * 3` と一致: `1.243/tan(22.5°) ≈ 3.00`)。 */
 export const SKETCH_FIT_MARGIN = 1.243
+
+/**
+ * 図形もボディも無い文書でスケッチに入ったときに寄る半幅[mm]。家の視点の距離のままだと 1mm が約 1.3px で、
+ * 1mm の吸着でも狙った点に置けなかった(issue #282)。
+ */
+export const EMPTY_SKETCH_HALF_WIDTH = 50
 
 /**
  * 既定の視点の向き(front-top-right)。距離に掛けて注視点へ足すベクトルで、長さは1ではなく

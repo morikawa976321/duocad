@@ -237,7 +237,6 @@ export interface OptimizeStaleItem {
 
 export interface ServerState {
   units: string
-  active_body_id: string | null
   /** 全Body。geometryを含まない(27部品でも数KB)。 */
   bodies: BodyMeta[]
   log: Array<{ seq: number; verb: string; args: Record<string, unknown> }>
@@ -362,7 +361,8 @@ export interface PreviewPayload {
    */
   sketch_ghost: {
     sketch_id: string
-    entities: Array<{ kind: string; params: Record<string, number> }>
+    /** `sketch_id` を持つ図形はそのスケッチの平面に描く(無ければ外側の `sketch_id`)。 */
+    entities: Array<{ kind: string; params: Record<string, number>; sketch_id?: string }>
     pieces: number
   } | null
   /**
@@ -526,6 +526,19 @@ export interface SelectionInfoPayload {
   error: string | null
 }
 
+/**
+ * `get_sketch_guides` の返事(要求した接続にだけ届く)。スケッチの平面と見えているボディが交わる・接する所を、その
+ * スケッチの (u,v) の図形と点で持つ。`errors` は抜かしたボディ、`error` は返事全体の失敗(どちらも札は出さない)。
+ */
+export interface SketchGuidesPayload {
+  request_id: number | null
+  sketch_id: string
+  entities: Array<{ kind: string; params: Record<string, number> }>
+  points: Array<[number, number]>
+  errors: string[]
+  error: string | null
+}
+
 /** `measure` の返事(要求した接続にだけ届く。状態は変わっていない)。 */
 export interface MeasurePayload {
   client_op: number | null
@@ -534,6 +547,8 @@ export interface MeasurePayload {
   /** ちょうど2項目のときだけ付く(`duocad/measure.py` の `measure_selection`)。 */
   between?: MeasureBetween | null
   between_error?: string | null
+  /** 測れない項目の `items` での添字(2項目のときだけ。`duocad/measure.py`)。 */
+  between_error_items?: number[]
 }
 
 /**
@@ -562,6 +577,8 @@ export interface AiStatus {
   /** llama-server へ送る思考の設定(Claude には送らない)。 */
   thinking: AiThinking
   thinkingChoices: AiThinking[]
+  /** サーバがこの変更で会話を捨てた(設定の適用・キーの保存と削除。`Server._reset_ai_conversation`)。 */
+  conversationReset: boolean
   /** `ai_configure` / `ai_set_thinking` を拒否したときだけ入る(例: 実行中/未知のプロバイダ)。 */
   error?: string
 }
@@ -632,6 +649,8 @@ export type AiTranscriptEntry =
   | { kind: 'tool'; call: AiToolCall }
   | { kind: 'result'; result: AiRunResult }
   | { kind: 'error'; message: string }
+  /** ここから先はサーバの新しい会話(前の行はAIの記憶に無い)。 */
+  | { kind: 'reset' }
 
 // --------------------------------------------------------------------------------------
 // H: 形状最適化を走らせる — verbではない(`duocad/catalog.py` の `category="protocol"`)
@@ -920,8 +939,11 @@ export interface SessionHooks {
    * `geometry: null`)。それ以外のBodyは前回のまま描き直さない(差分更新)。
    */
   onState(state: ServerState, changed: BodyGeometry[], applied: Applied | null): void
-  /** `clientOp` は失敗した要求に付いていた番号(サーバの `error` だけが持つ。送れなかった・切れたときは無い)。 */
-  onError(message: string, where: string, clientOp?: number | null): void
+  /**
+   * `clientOp` は失敗した要求に付いていた番号(サーバの `error` だけが持つ。送れなかった・切れたときは無い)。
+   * `previewId` はプレビューの断り(`where === 'preview'`)だけが持つ、断られた要求の `preview_id`。
+   */
+  onError(message: string, where: string, clientOp?: number | null, previewId?: number | null): void
   onWarning(message: string): void
   onStatus(status: ConnectionStatus): void
   /**
@@ -943,6 +965,8 @@ export interface SessionHooks {
   onMeasure(payload: MeasurePayload): void
   /** 選択情報の表示の返事(状態は変わっていない)。要求した接続にだけ届く。 */
   onSelectionInfo(payload: SelectionInfoPayload): void
+  /** スケッチの吸着先の返事(状態は変わっていない)。要求した接続にだけ届く。 */
+  onSketchGuides(payload: SketchGuidesPayload): void
   /** 干渉チェックの結果(状態は変わっていない)。要求した接続にだけ届く。古い返事かどうかは受け手が `client_op` と版で決める。 */
   onInterference(payload: InterferencePayload): void
   /** ファイルを書いた(状態は変わっていない)。 */
@@ -1001,6 +1025,8 @@ export interface Session {
   /** 参照ごとに、あれば外し無ければ足す(素のクリック。AI の `toggle_selection` と同じ操作)。 */
   toggleSelection(refs: SelectionRef[], clientOp: number): void
   clearSelection(clientOp: number): void
+  /** 選択の面を外し、その外周の辺を連なりまで広げて足す(`Session.select_face_boundaries`)。フィレット・面取りの起動で送る。 */
+  selectFaceBoundaries(clientOp: number): void
   // ---------------------------------------------------------------- B2: 作業空間(起動中のコマンド・モード。issue #153)
   /**
    * verb を起動して引数を集め始める(ツールバーのクリック)。応答は状態配信の `command`。AI の `begin_command` と同じ操作で、
@@ -1041,11 +1067,15 @@ export interface Session {
   getVertices(bodyId: string): void
   /** 選択がちょうど1項目ならその寸法を取りに行く(応答は `onSelectionInfo`)。状態配信ではない。 */
   inspectSelection(requestId: number): void
+  /** スケッチの平面とボディの交わり(点を待つ間の吸着先)を取りに行く(応答は `onSketchGuides`)。状態配信ではない。 */
+  getSketchGuides(sketchId: string, requestId: number): void
   /**
    * 干渉チェックを頼む(応答は `onInterference`。数秒〜2分かかりうる。待ちバーは出さない)。対象はコアの選択と可視性から決まる。
    * `clearance` は隙間の要求[mm](0 なら隙間検査なし)。
    */
   checkInterference(clearance: number, clientOp: number): void
+  /** この接続の干渉チェックを取り消す(サーバが子を止める。結果は来ない)。走っていなければ何もしない。 */
+  cancelInterference(): void
   /**
    * 画面の見え方をサーバへ知らせ、ズームに合わせた粗さでソリッド・辺・領域を測り直させる(可変解像度)。
    * 応答は通常の状態配信で、変わらなければ何も来ない。
@@ -1058,8 +1088,9 @@ export interface Session {
    * @param sizeHint いま見えているものの外接対角[mm](上下限の丸めにだけ使う)
    */
   setViewResolution(worldPerPixel: number, sizeHint: number, focus?: Record<string, number[] | null> | null): void
-  undo(): void
-  redo(): void
+  /** `clientOp` は応答の `applied.client_op` に戻る(自分の取り消しを「外からの変更」と読まないため)。 */
+  undo(clientOp: number): void
+  redo(clientOp: number): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   /** 今の設定(応答は `onAiStatus`)。 */
   aiGetStatus(): void
@@ -1267,6 +1298,7 @@ export function createSession(hooks: SessionHooks): Session {
       providers?: AiProviderKind[]
       thinking?: AiThinking
       thinking_choices?: AiThinking[]
+      conversation_reset?: boolean
       error?: string
       name?: string
       arguments?: Record<string, unknown>
@@ -1300,9 +1332,15 @@ export function createSession(hooks: SessionHooks): Session {
       items?: unknown[]
       between?: MeasureBetween | null
       between_error?: string | null
+      between_error_items?: number[]
       // ---------------------------------------------------------------- 選択情報
       request_id?: number | null
       item?: MeasureItem | null
+      // ---------------------------------------------------------------- スケッチの吸着先
+      sketch_id?: string
+      entities?: SketchGuidesPayload['entities']
+      points?: SketchGuidesPayload['points']
+      errors?: string[]
       // ---------------------------------------------------------------- 待ちバー
       ack_id?: number
     }
@@ -1365,6 +1403,7 @@ export function createSession(hooks: SessionHooks): Session {
         items: message.items ?? [],
         between: message.between,
         between_error: message.between_error,
+        between_error_items: message.between_error_items,
       })
     } else if (message.type === 'interference') {
       hooks.onInterference({ ...message, client_op: message.client_op ?? null } as InterferencePayload)
@@ -1372,6 +1411,15 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onSelectionInfo({
         request_id: message.request_id ?? null,
         item: message.item ?? null,
+        error: message.error ?? null,
+      })
+    } else if (message.type === 'sketch_guides') {
+      hooks.onSketchGuides({
+        request_id: message.request_id ?? null,
+        sketch_id: message.sketch_id ?? '',
+        entities: message.entities ?? [],
+        points: message.points ?? [],
+        errors: message.errors ?? [],
         error: message.error ?? null,
       })
     } else if (message.type === 'file') {
@@ -1395,7 +1443,7 @@ export function createSession(hooks: SessionHooks): Session {
       for (const ackId of waits.keys()) if (ackId <= done) waits.delete(ackId)
       reportWaits()
     } else if (message.type === 'error') {
-      hooks.onError(message.message ?? '(理由なし)', message.where ?? '?', message.client_op ?? null)
+      hooks.onError(message.message ?? '(理由なし)', message.where ?? '?', message.client_op ?? null, message.preview_id ?? null)
     } else if (message.type === 'warning') {
       hooks.onWarning(message.message ?? '')
     } else if (message.type === 'ai_status') {
@@ -1410,6 +1458,7 @@ export function createSession(hooks: SessionHooks): Session {
         providers: message.providers ?? ['openai_compat'],
         thinking: message.thinking ?? 'server',
         thinkingChoices: message.thinking_choices ?? [],
+        conversationReset: message.conversation_reset ?? false,
         error: message.error,
       })
     } else if (message.type === 'fem_status') {
@@ -1537,6 +1586,9 @@ export function createSession(hooks: SessionHooks): Session {
     clearSelection(clientOp) {
       send({ cmd: 'clear_selection', client_op: clientOp }, true)
     },
+    selectFaceBoundaries(clientOp) {
+      send({ cmd: 'select_face_boundaries', client_op: clientOp }, true)
+    },
     beginCommand(verb, args, clientOp) {
       send({ cmd: 'begin_command', verb, args, client_op: clientOp })
     },
@@ -1576,8 +1628,14 @@ export function createSession(hooks: SessionHooks): Session {
     inspectSelection(requestId) {
       send({ cmd: 'inspect_selection', request_id: requestId })
     },
+    getSketchGuides(sketchId, requestId) {
+      send({ cmd: 'get_sketch_guides', sketch_id: sketchId, request_id: requestId })
+    },
     checkInterference(clearance, clientOp) {
       send({ cmd: 'check_interference', clearance, client_op: clientOp })
+    },
+    cancelInterference() {
+      send({ cmd: 'cancel_interference' })
     },
     setViewResolution(worldPerPixel, sizeHint, focus) {
       if (focus == null) {
@@ -1591,11 +1649,11 @@ export function createSession(hooks: SessionHooks): Session {
         })
       }
     },
-    undo() {
-      send({ cmd: 'undo' }, true)
+    undo(clientOp) {
+      send({ cmd: 'undo', client_op: clientOp }, true)
     },
-    redo() {
-      send({ cmd: 'redo' }, true)
+    redo(clientOp) {
+      send({ cmd: 'redo', client_op: clientOp }, true)
     },
     aiGetStatus() {
       send({ cmd: 'ai_get_status' })

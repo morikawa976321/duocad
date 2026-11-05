@@ -10,6 +10,7 @@ import type {
   BodyRef,
   DatumName,
   DatumRef,
+  MeasureItem,
   Point2,
   RegionRef,
   SelectionRef,
@@ -82,6 +83,18 @@ export function refKey(ref: SelectionRef): string {
   const item = ref as ShapeRef
   if (kind === 'body') return `body:${item.body}`
   return `${item.kind}:${item.body}:${item.index}`
+}
+
+/**
+ * 測定の1項目(`duocad/measure.py` の `_measure_item`)が指す選択の参照。項目は参照の識別子
+ * (`body` / `index` / `sketch` / `entity` / `point`)をそのまま写して返す。
+ */
+export function measureItemRef(item: MeasureItem): SelectionRef {
+  if (item.kind === 'datum') return { datum: item.datum }
+  if (item.kind === 'sketch_entity') return { sketch: item.sketch, entity: item.entity, point: item.point }
+  if (item.kind === 'region') return { sketch: item.sketch, index: item.index }
+  if (item.kind === 'body') return { body: item.body, kind: 'body', index: null }
+  return { body: item.body, kind: item.kind, index: item.index }
 }
 
 /** 2つの参照が同じ実体を指すか(コアの `ref_key` の一致と同じ)。 */
@@ -187,10 +200,23 @@ export interface SelectionArgSpec extends ArgSpecCommon {
    */
   kinds?: SelectableKind[]
   /**
+   * 食える面の種類(コアの `brep_geometry.classify_face` の綴りで、`FaceGeometry.kind` に載って届く。`thread` は `'cylinder_full'`
+   * で、`kernel_thread.describe_target` と同じ判定)。ほかの種類の面は数えず、起動中はクリックでも選ばせない(`CommandHost` の
+   * `refusesFace`)。種類の分からない面は通す(断るのはコア)。
+   */
+  surfaceKinds?: string[]
+  /**
    * 頂点そのものを対象にする引数(測定)。起動中は頂点を指せる種類に入れる(`App.svelte` の `wantedVertices` → `pickKinds`)。
    * `kinds` に `'vertex'` があれば同じく指せる(`move_body` / `mirror_body` の頂点はボディを名指しする手の1つ)。
    */
   pickVertices?: true
+  /**
+   * 起動中に指せる面・辺の形(`faces` は面の `kind`、`edges` は辺の `kind`。省略は形を問わない)。コアが受けない形を
+   * 光らせない(`App.svelte` の `pickShapes` → `Viewport.setPickShapes`)。
+   */
+  shapes?: { faces?: readonly string[]; edges?: readonly string[] }
+  /** 待ちの1行に添える、受け付けるものの説明(`promptFor`)。 */
+  hint?: string
   /**
    * スケッチの点を指しても、その図形ごとに効く引数(`delete`・`mirror_sketch_entities`。コアが点を図形へ畳む)。
    * 起動中は点のクリックを図形の参照へ畳んで選ぶ(`grain.ts`)。`move_sketch_entities` は点だけを動かすので付けない。
@@ -229,15 +255,21 @@ export interface NumberArgSpec extends ArgSpecCommon {
    * 既定がほかの引数やサーバだけが知る事情で変わるとき(`thread` の隙間は山形と、面が軸か穴かで変わる)に使う。
    */
   optional?: true
+  /** 欄と見出しに重ねて出す補足(`title`)。見出しに書くと引数の行が折れて縦に伸びる。 */
+  hint?: string
 }
 
 /** スケッチ平面をクリックして集める点。選択引数と別物: 点はその場の1クリックで集合に残らない(始点が選択集合に溜まると次のコマンドが拾う)。 */
 export interface PointArgSpec extends ArgSpecCommon {
   kind: 'point'
+  /** 寸法を打てばこの点が要らなくなるとき、その打ち方(待ちの1行に添える)。点を省く条件そのものは `when` が持つ。 */
+  typedInstead?: string
 }
 
 /**
- * 2つ以上から1つ選ぶ引数。既定値を持たない(`join` 既定だと「切り取るつもりで足した」が黙って通る。サーバ側も `mode` を必須にしてある)。
+ * 2つ以上から1つ選ぶ引数。既定値は、選び違えても形が壊れない選択肢にだけ置く(`default`。本人判断 2026-11-05、issue #272)。
+ * 押し出しの結合/切り取りのように、選び違えると黙って別の形になるものには置かない(`join` 既定だと「切り取るつもりで足した」が
+ * 黙って通る。サーバ側も `mode` を必須にしてある)。
  * `sends` は共有の作業空間(`state.command.args`)へ出すサーバ側の値(省略なら `value` そのまま。`build` と同じ読み替えをここにも
  * 書く: `copy` の 'copy' → true、荷重の 'down' → [0,0,-1])。サーバの値にならない選択肢(鏡映面の「面を選ぶ」)は `null`。
  * 配信された値を欄へ戻すときも同じ対応で引く(`sharedArgsController.ts` の `transitionSharedArgs`)。
@@ -247,6 +279,8 @@ export interface PointArgSpec extends ArgSpecCommon {
 export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
   options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string }>
+  /** 何も押していない間に選ばれている扱いにする `value`(上の docstring の条件を満たすものだけ)。 */
+  default?: string
 }
 
 /** 選択肢がサーバへ出す値(`sends` が無ければ `value`)。`null` は「出さない」。 */
@@ -381,6 +415,11 @@ export interface PickArgSpec extends ArgSpecCommon {
    * 省略できる引数は `firstMissingArg` が指さないので、人が指したいときは `CommandHost` の「指す」ボタン(`armedPick`)を使う。
    */
   optional?: boolean
+  /**
+   * 指したボディを、この名前の選択引数から外す(`target: 'body'` だけが持つ)。ブーリアンのターゲットは同時にツールになれず
+   * コアの `boolean_body` が断るので、先に2つ選んでから起動してターゲットを指したときは、そのボディをツールの選択から外す。
+   */
+  excludesFrom?: string
 }
 
 export type ArgSpec =
@@ -495,15 +534,35 @@ export function positive(label: string): (value: number) => string | null {
   return (value) => (value > 0 ? null : `${label}は0より大きい値`)
 }
 
-/** 空のパスだけ弾く。それ以上の判定はサーバに任せる(パス解釈をサーバの1箇所に置く)。 */
-export function pathLike(label: string): (value: string) => string | null {
-  return (value) => (value.trim() === '' ? `${label}を打つ` : null)
+/** 前後の空白と、両端を囲む同じ引用符1組を落とす(エクスプローラーの「パスとしてコピー」は `"…"` で囲む)。 */
+export function unquotePath(text: string): string {
+  const trimmed = text.trim()
+  const quote = trimmed[0]
+  if (trimmed.length >= 2 && (quote === '"' || quote === "'") && trimmed.endsWith(quote)) {
+    return trimmed.slice(1, -1).trim()
+  }
+  return trimmed
 }
 
-export function buildPathArgs(values: ArgValues): BuildResult<{ path: string }> {
-  const path = values.path
-  if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
-  return { ok: true, args: { path: path.trim() } }
+/** 空のパスだけ弾く。それ以上の判定はサーバに任せる(パス解釈をサーバの1箇所に置く)。 */
+export function pathLike(label: string): (value: string) => string | null {
+  return (value) => (unquotePath(value) === '' ? `${label}を打つ` : null)
+}
+
+/** ファイル名に拡張子が無ければ `suffix` を足す(書き出しの欄と同じく、拡張子を打たなくてよい)。拡張子があれば触らない。 */
+function withDefaultSuffix(path: string, suffix: string): string {
+  const fileName = path.split(/[\\/]/).pop() ?? ''
+  return fileName === '' || fileName.slice(1).includes('.') ? path : path + suffix
+}
+
+/** パス1つを取る読み込みの build。`suffix` はファイル名に拡張子が無いときに補う。 */
+export function buildPathArgs(suffix: string): (values: ArgValues) => BuildResult<{ path: string }> {
+  return (values) => {
+    const raw = values.path
+    const path = typeof raw === 'string' ? unquotePath(raw) : ''
+    if (path === '') return { ok: false, reason: 'パスが空' }
+    return { ok: true, args: { path: withDefaultSuffix(path, suffix) } }
+  }
 }
 
 // コマンドの定義
@@ -524,26 +583,50 @@ function counterFor(spec: SelectionArgSpec): string {
   return argKinds(spec).length > 1 ? 'つ' : KIND_COUNTERS[spec.shapeKind]
 }
 
-export function itemsForArg(spec: SelectionArgSpec, selection: SelectionState | null): SelectionRef[] {
+/** 面の種類を引く(分からなければ null)。`SelectionArgSpec.surfaceKinds` の絞り込みに使う。 */
+export type FaceKindOf = (body: string, index: number) => string | null
+
+/** その面を `surfaceKinds` が食えるか(種類が分からない面・絞らない引数は食える)。 */
+export function acceptsSurface(spec: SelectionArgSpec, item: SelectionRef, faceKindOf: FaceKindOf): boolean {
+  if (spec.surfaceKinds === undefined || refKind(item) !== 'face') return true
+  const face = item as ShapeRef
+  const kind = faceKindOf(face.body, face.index)
+  return kind === null || spec.surfaceKinds.includes(kind)
+}
+
+export function itemsForArg(
+  spec: SelectionArgSpec,
+  selection: SelectionState | null,
+  faceKindOf: FaceKindOf = () => null,
+): SelectionRef[] {
   const kinds = argKinds(spec)
-  const items = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item)))
+  const items = (selection?.items ?? []).filter(
+    (item) => kinds.includes(refKind(item)) && acceptsSurface(spec, item, faceKindOf),
+  )
   return spec.max === null ? items : items.slice(0, spec.max)
 }
 
-/** `max` を超えて選ばれている引数があれば理由を返す(無ければ空文字)。黙って先頭だけ使わず、送りもしない(コア側の `require_selected(exactly_one=True)` は2枚以上を拒否する)。`CommandHost` は空でない間 Enter を受け付けない。 */
+/**
+ * `max` を超えて選ばれている引数か、`surfaceKinds` の食えない面が選択に残っている引数があれば理由を返す(無ければ空文字)。黙って先頭だけ使わず、
+ * 送りもしない(コア側の `require_selected(exactly_one=True)` は2枚以上を拒否し、食えない面も数える)。`CommandHost` は空でない間 Enter を受け付けない。
+ */
 export function overflowNote(
   command: CommandDef,
   selection: SelectionState | null,
   values: ArgValues,
+  faceKindOf: FaceKindOf = () => null,
 ): string {
   for (const spec of command.args) {
-    if (spec.kind !== 'selection' || spec.max === null) continue
-    if (!argApplies(spec, values)) continue
+    if (spec.kind !== 'selection' || !argApplies(spec, values)) continue
     const kinds = argKinds(spec)
-    const total = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item))).length
+    const eaten = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item)))
+    const refused = eaten.filter((item) => !acceptsSurface(spec, item, faceKindOf)).length
+    if (refused > 0) return `${spec.label}ではない面が選ばれている(${refused}${counterFor(spec)}。クリックで外す)`
+    if (spec.max === null) continue
+    const total = eaten.length
     if (total > spec.max) {
       const counter = counterFor(spec)
-      return `${spec.label}は${spec.max}${counter}まで(いま${total}${counter}。Ctrl+クリックで外す)`
+      return `${spec.label}は${spec.max}${counter}まで(いま${total}${counter}。クリックで外す)`
     }
   }
   return ''
@@ -635,13 +718,15 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   if (spec.kind === 'selection') {
     const have = ((values[spec.name] ?? []) as SelectionRef[]).length
     const need = spec.min - have
-    return `${spec.label}を${need}${counterFor(spec)}選ぶ(クリック / Shift・Ctrl+クリックでトグル / 左ドラッグで囲む)`
+    const hint = spec.hint === undefined ? '' : `: ${spec.hint}`
+    return `${spec.label}を${need}${counterFor(spec)}選ぶ${hint}(クリックで足す・外す / 左ドラッグで囲む)`
   }
   if (spec.kind === 'point') {
-    return `${spec.label}をクリック(スケッチ平面の上)`
+    const instead = spec.typedInstead === undefined ? '' : ` / ${spec.typedInstead}を打てばクリックは要らない`
+    return `${spec.label}をクリック(スケッチ平面の上${instead})`
   }
   if (spec.kind === 'pick') {
-    return `${spec.label}をクリック(${PICK_TARGET_HINTS[spec.target]} / Shift・Ctrl+クリックは対象の選び直し)`
+    return `${spec.label}をクリック(${PICK_TARGET_HINTS[spec.target]} / Shift・Ctrl+クリックは選択の足し外し)`
   }
   if (spec.kind === 'choice') {
     return `${spec.label}を選ぶ(${spec.options.map((option) => option.label).join(' / ')})`

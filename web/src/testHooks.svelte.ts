@@ -4,7 +4,7 @@
  * **`installTestHooks` は App の `<script>` 最上位(コンポーネント初期化中)で呼ぶ。** `onMount` の中だと `$effect` の持ち主が変わる。
  */
 import type { PickTarget, Point2 } from './commands/command'
-import type { Applied, BasePlaneName, ConnectionStatus, DatumName, EdgesPayload, ServerState, SketchState } from './session'
+import type { BasePlaneName, ConnectionStatus, EdgesPayload, ServerState, SketchState } from './session'
 import type { Interference } from './interference.svelte'
 import type { Viewport } from './viewport'
 import type { PickKind } from './viewportTypes'
@@ -15,7 +15,6 @@ export interface TestHookContext {
   model: () => ServerState | null
   partBodies: () => ServerState['bodies']
   previewing: () => boolean
-  lastApplied: () => Applied | null
   messages: () => string[]
   errorLog: () => string[]
   stateEpoch: () => number
@@ -50,7 +49,6 @@ export function installTestHooks(ctx: TestHookContext): void {
       command: model?.command ?? null,
       serverMode: model?.mode ?? null,
       previewing: ctx.previewing(),
-      lastApplied: ctx.lastApplied(),
       messages: ctx.messages(),
       // エラーはトーストで消えるので控えを渡す。画面に出ている札の文言は `#toasts` の DOM が正。
       errors: ctx.errorLog(),
@@ -66,7 +64,6 @@ export function installTestHooks(ctx: TestHookContext): void {
       // face単位の高精度化(視錐台+バックフェイスカリング)を切る/入れる。`smoke-face-culling.mjs` が導入前後を同じ走行で比べる。
       setFaceCulling: (enabled: boolean) => viewport()?.setFaceCulling(enabled),
       sketchPolylineCounts: () => viewport()?.sketchPolylineCounts() ?? null,
-      projectPoint: (point: [number, number, number]) => viewport()?.projectPoint(point) ?? null,
       // 今のモード(`'idle' | 'sketch-pending' | 'sketch' | 'optimize'`)。`optimizeMode` と `activeSketch`
       // だけでは貼る先待ちが通常モードと同じ見え方になる。
       mode: ctx.modeKind(),
@@ -84,11 +81,6 @@ export function installTestHooks(ctx: TestHookContext): void {
       // 指せる状態(スケッチのコマンド起動中)でしか座標を返さない。
       wantsBasePlanes: ctx.wantsBasePlanes(),
       projectBasePlane: (name: BasePlaneName) => viewport()?.projectBasePlane(name) ?? null,
-      // 第2引数を渡せば通常モードでも射影できる(スケッチモード外には「今のスケッチ」が無い)。指せる状態でなければ null。
-      projectRegion: (index: number, targetSketchId?: string) => {
-        const target = targetSketchId ?? ctx.sketchId()
-        return target === null ? null : (viewport()?.projectRegion(target, index) ?? null)
-      },
       // スケッチモードの外で今指せる種類(`viewportTypes.PickKind`)。
       pickKinds: [...ctx.pickKinds()],
       // 取り寄せた辺(ボディの ID → 折れ線。カーソルの近くのボディから届く)。
@@ -106,10 +98,6 @@ export function installTestHooks(ctx: TestHookContext): void {
       renderCount: () => viewport()?.renderCount() ?? null,
       // ホバー強調で今明るくしているもの。
       hoveredRef: () => viewport()?.hoveredRef() ?? null,
-      projectVertex: (bodyId: string, vertexIndex: number) =>
-        viewport()?.projectVertex(bodyId, vertexIndex) ?? null,
-      // 実際にその画素でその原点パーツが取れるときだけ座標を返す。
-      projectDatum: (name: DatumName) => viewport()?.projectDatum(name) ?? null,
       // 干渉チェック(issue #186)。`smoke-interference.mjs` が結果と層の赤い立体の数を読む。結果は `$state.raw` なので素で渡る。
       // 読むたびに今の値(層への反映は別の `$effect` なので、値で渡すと反映前の数が見える)。
       interference: {

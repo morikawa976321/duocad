@@ -121,12 +121,8 @@ def _create_mirrors(
     return add_entities(doc, [(sketch, new_id, kind, values) for (sketch, kind, values), new_id in zip(plan, new_ids)])
 
 
-def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) -> Operation:
-    """選択のスケッチ図形を、既存の線分 `axis`(またはスケッチ平面の上にある原点の軸)を軸に鏡映複製する(常に複製)。
-
-    軸自身が対象に混ざっていてもよく、軸に使った図形は対象から黙って外す。失敗したときは
-    文書にもログにも何も残さない。
-    """
+def _prepared(doc: Document, targets: Sequence[dict], axis: Any) -> tuple:
+    """対象と軸を検査し、`(normalized, ax, ay, ux, uy)` を返す(確定とプレビューが同じ検査を通る)。"""
     normalized = _normalize_targets(doc, targets)
     if datum.is_ref(axis):
         # 原点の軸は対象のスケッチ平面の上にあるものだけ(平面へ落とすと鏡映の線が別物になる)。
@@ -149,6 +145,23 @@ def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) ->
     for sketch_id, _ in normalized:
         editable_sketch(doc, sketch_id)
         require_same_uv_plane(doc, axis_sketch, sketch_id, what="鏡映軸")
+    return normalized, ax, ay, ux, uy
+
+
+def mirrored_entities(doc: Document, targets: Sequence[dict], axis: Any) -> List[tuple]:
+    """確定したら足される複製 `[(sketch_id, kind, values), ...]`。文書を変えない(プレビュー用)。"""
+    normalized, ax, ay, ux, uy = _prepared(doc, targets, axis)
+    plan = _mirrored_plan(doc, normalized, ax, ay, ux, uy, fresh=True)
+    return [(sketch_id, kind, values) for (sketch_id, _), (_, kind, values) in zip(normalized, plan)]
+
+
+def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) -> Operation:
+    """選択のスケッチ図形を、既存の線分 `axis`(またはスケッチ平面の上にある原点の軸)を軸に鏡映複製する(常に複製)。
+
+    軸自身が対象に混ざっていてもよく、軸に使った図形は対象から黙って外す。失敗したときは
+    文書にもログにも何も残さない。
+    """
+    normalized, ax, ay, ux, uy = _prepared(doc, targets, axis)
     new_ids = [new_entity_id() for _ in normalized]
     created = _create_mirrors(doc, normalized, ax, ay, ux, uy, new_ids, fresh=True)
 

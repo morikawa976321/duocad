@@ -10,7 +10,9 @@
   import { onMount, untrack } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import { sharedArgsChangeNote } from './sharedArgsController'
-  import { createPreviewController } from './previewController'
+  import { appendedEntries } from './logTail'
+  import { createPreviewController, type PreviewInput } from './previewController'
+  import { createFaceKinds } from './faceKinds'
   import {
     bodyRef,
     commandRequest,
@@ -18,9 +20,9 @@
     datumRef,
     edgeRef,
     faceRef,
+    measureItemRef,
     pickedRefOf,
     refKey,
-    refKind,
     refsOfKind,
     regionRef,
     sameRef,
@@ -40,12 +42,12 @@
     SOLID_FEATURE_COMMANDS,
     needsSketchId,
   } from './commands/features'
-  import { ghostCopies, snapSketchPoint } from './entityKinds'
+  import { entityPointKeys, ghostCopies, snapSketchPoint } from './entityKinds'
   import { IMPORT_STEP } from './commands/files'
-  import { isImeKey } from './keys'
+  import { isImeKey, ownsEscapeKey } from './keys'
   import { INTERFERENCE } from './commands/interference'
   import { MEASURE } from './commands/measure'
-  import type { MeasurePayload } from './session'
+  import type { MeasureItem, MeasurePayload } from './session'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
     OPTIMIZE_MODE_COMMANDS,
@@ -72,7 +74,7 @@
   import FilesPanel from './FilesPanel.svelte'
   import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
-  import Toast, { fail, errorLog } from './Toast.svelte'
+  import Toast, { fail, errorLog, inform } from './Toast.svelte'
   import {
     createSession,
     type Applied,
@@ -115,6 +117,7 @@
   import { createMeasurement } from './measurement.svelte'
   import { createSelectionInfo } from './selectionInfo.svelte'
   import { createServerWait } from './serverWait.svelte'
+  import { createSketchGuideRequests } from './sketchGuideRequests.svelte'
   import WaitBar from './WaitBar.svelte'
   import {
     createViewport,
@@ -123,7 +126,7 @@
     type SketchEntityHit,
     type Viewport,
   } from './viewport'
-  import type { PickKind, ViewSnapshot } from './viewportTypes'
+  import type { PickKind, PickShapes, SketchGuideHit, ViewSnapshot } from './viewportTypes'
   import type { CommandRequest } from './generated/protocol'
 
   /**
@@ -171,7 +174,6 @@
   let status = $state<ConnectionStatus>('connecting')
   let model = $state<ServerState | null>(null)
   let messages = $state<string[]>([])
-  let lastApplied = $state<Applied | null>(null)
 
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
   let pendingOp = $state<number | null>(null)
@@ -255,7 +257,12 @@
     commitFailed(): void
     reconnected(): void
     commandSucceeded(): void
+    previewFailed(message: string, input: PreviewInput): boolean
+    previewSucceeded(): void
+    refusesFace(bodyId: string, faceIndex: number): string | null
   } | null>(null)
+
+  const faceKinds = createFaceKinds()
 
   /**
    * この版で形状最適化を使えるか(安定版は使えない。サーバが接続のたびに送る `optimize_status` の `available`)。`null` はまだ聞いていない ——
@@ -307,6 +314,8 @@
    * `wantedPick === 'vertex'` と同じ扱いで、対象ボディの頂点を候補に出し、辺より先に取る。
    */
   let wantedVertices = $state(false)
+  /** 起動中のコマンドが受ける面・辺の形(`SelectionArgSpec.shapes`。測定の平らな面・直線の辺)。 */
+  let wantedShapes = $state<PickShapes>({ faces: null, edges: null })
   /** 起動中のコマンドが持ち主(ボディ・図形)ごとに効くか(`CommandHost` が知らせる)。クリックとホバーをその粒度へ畳む。 */
   let wantedGrain = $state<SelectionGrain>(NO_GRAIN)
   /** 取り寄せた辺(body_id -> その版の折れ線)。カーソルの近くのボディから頼む(`requestPickData`)。 */
@@ -340,6 +349,7 @@
     hold: (op) => (pendingOp = op),
     release: releasePending,
     note,
+    inform,
     // トップ画面も一覧を見せているので、そちらが出ている間も取り直す。
     panelOpen: () => dataPanelOpen || showStart,
     captureThumbnail: () => viewport?.captureThumbnail() ?? null,
@@ -389,16 +399,30 @@
    * 数だけを渡すのは、コマンド層に「誰が変えたか」の判断を持ち込まないため。
    */
   let selfSelections = $state(0)
+  /**
+   * 送った `select_face_boundaries` の op(返るまで送り直さない)。人のクリックではないので `selfSelections` に数えない
+   * (数えると、繋ぎ直した後の空振りの応答が別の画面で起動された即適用の verb を確定させる)。
+   */
+  let faceBoundaryOp: number | null = null
 
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
-  const ai = createAiChat({ send: (text) => session.aiSend(text), fail })
+  const ai = createAiChat({ send: (text) => session.aiSend(text), fail, inform, hidden: () => !sidebarOpen })
 
   const serverWait = createServerWait()
 
   const session = createSession({
     onState: handleState,
     onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
-    onError: (message, where, clientOp) => {
+    onError: (message, where, clientOp, previewId) => {
+      // プレビューの断りは待ちの1行に出す(トーストにすると打ち替えるたびに積もる)。後から送った要求があれば古い断りで、
+      // 捨てる(消すと、その後の要求の応答まで捨てる)。
+      if (where === 'preview') {
+        const failed = preview.failed(previewId ?? null)
+        if (failed === null) return
+        preview.clear()
+        if (host?.previewFailed(message, failed) !== true) fail(`エラー[preview] ${message}`)
+        return
+      }
       // 干渉チェックの要求の失敗(対象が足りない等)。待ちバーも `pendingOp` も使っていないので、実行中の表示を解くだけ。
       if (where === 'check_interference') {
         interference.onError(clientOp)
@@ -491,6 +515,7 @@
     onVertices: handleVertices,
     onMeasure: handleMeasure,
     onSelectionInfo: (payload) => selectionInfo.onResult(payload),
+    onSketchGuides: (payload) => sketchGuides.onResult(payload),
     onInterference: (payload) => interference.onResult(payload),
     onFile: files.onFile,
     onAiStatus: ai.onStatus,
@@ -874,6 +899,7 @@
     // 差分更新: 版が変わったBodyだけを渡す(§2)。カメラ由来の配信(形の版 `shape_revision` が同じで粗さだけ変わった)では
     // サーバ投機実行の幽霊を残す: 投機実行の結果は粗さに依らず、投げ直すと大きな部品では1回1秒かかる(issue #169)。
     const shapesMoved = shapesChanged(previous, next)
+    faceKinds.update(changed, next.bodies.map((body) => body.body_id))
     viewport?.update(
       changed.map((body) => ({ bodyId: body.body_id, geometry: body.geometry })),
       { keepPreview: !shapesMoved },
@@ -906,7 +932,7 @@
     // 選択の変更イベントはverbの適用ではない(`change: "selection"`。session.ts の `Applied`)。
     if (applied && applied.change === 'selection') {
       // この画面が出した選択変更だけを数える(`selfSelections`)。AIが書き換えた選択は即適用の引き金にならない。
-      if (applied.client_op !== null && myClientOps.has(applied.client_op)) {
+      if (applied.client_op !== null && myClientOps.has(applied.client_op) && applied.client_op !== faceBoundaryOp) {
         selfSelections += 1
       }
       if (applied.client_op !== null && applied.client_op === clearingOp) clearingOp = null
@@ -915,8 +941,7 @@
       return
     }
     if (applied && applied.change === 'visibility') {
-      // 可視性もverbではない(操作ログに載らない)ので `lastApplied` を動かさない。表示切り替えは
-      // `pendingOp` を立てないので、自分の操作かは `myClientOps` が持つ。
+      // 表示切り替えは `pendingOp` を立てないので、自分の操作かは `myClientOps` が持つ。
       releasePending(applied.client_op)
       // 集合 verb の起動時に表示へ戻したボディが全部戻ったら、既存の割り当てを並べる(`onCommandStart`)。
       const preset = pendingOptimizePreset
@@ -945,11 +970,13 @@
         note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
       }
       releasePending(applied.client_op)
-      lastApplied = applied
       files.refresh()
       return
     }
     if (applied) {
+      // 共有の undo は AI の操作も戻すので、何が戻ったかを言う。MCP からの undo は `applied` が届かない(`Server._on_core_change`)。
+      if (applied.verb === 'undo') inform(`取り消した: ${commandLabel(applied.undone)}`)
+      if (applied.verb === 'redo') inform(`やり直した: ${commandLabel(applied.redone)}`)
       // 作ったスケッチへはサーバが誰の操作でも入れる(`Session._settle_workspace`)。ここでは入らない。
       if (applied.verb === 'import_step') {
         // 読み込んだモデル全体が入る視点へ合わせ直す。文書のスケールが不連続に変わるのはインポートだけ
@@ -971,7 +998,6 @@
         // 残すと次の確定が前の面の大きさ・向きまで書き換える。起動時に空にするだけでは同じverbの連続使用が漏れる。
         if (OPTIMIZE_EMPTY_START_VERBS.has(applied.verb)) presetSelection([])
       }
-      lastApplied = applied
     }
   }
 
@@ -986,6 +1012,7 @@
       viewport?.showSketchGhosts(ghost.sketch_id, ghost.entities, ghost.pieces === 1 ? 'normal' : 'warn')
     }
     previewing = payload.bodies.length > 0 || payload.removed_bodies.length > 0 || (ghost?.entities.length ?? 0) > 0
+    host?.previewSucceeded()
     const current = previewAsked?.id === payload.preview_id && previewAsked.commands === commandRequests
     if (payload.suggestion !== null && faceChainCommand && current) widenToSuggestion(payload.suggestion)
   }
@@ -1052,10 +1079,22 @@
     fail,
   })
 
+  const MESH_UNMEASURABLE = 'メッシュボディは測れない(頂点・辺・面を持たない)'
+
+  /** 断られた測定で外す項目(`onCommandEnd` が読んで捨てる)。測れた側は残し、次の1つを指せば測り直せる。 */
+  let measureRefused: SelectionRef[] | null = null
+
   function handleMeasure(payload: MeasurePayload): void {
     // 結果を先に入れる(`commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で選択を残すかを決める)。
     measure.onResult(payload)
     if (releasePending(payload.client_op)) {
+      // 添字は応答の `items`(コアが測った選択)の並び。画面の選択はまだ古い配信のことがあるので、項目から参照を作って外す
+      // (選択に無い参照の除外はコアが空振りにする)。
+      const refused = (payload.between_error_items ?? []).flatMap((at) => {
+        const item = payload.items[at] as MeasureItem | undefined
+        return item === undefined ? [] : [measureItemRef(item)]
+      })
+      measureRefused = refused.length > 0 ? refused : null
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }
@@ -1064,6 +1103,7 @@
   // ---------------------------------------------------------------- 干渉チェック(issue #186。verbではない)
   const interference = createInterference({
     send: (clearance, clientOp) => session.checkInterference(clearance, clientOp),
+    cancel: () => session.cancelInterference(),
     nextOp,
     // サーバの `Session.interference_job` の `revision` と同じ作り。
     revision: () => (model === null ? null : `${model.generation}.${model.applied_count}.${model.log.length}`),
@@ -1071,8 +1111,21 @@
     connected: () => status === 'open',
     modeKind: () => mode.kind,
     viewport: () => viewport,
+    bodyName: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? null,
+    selectBodies: selectInterferingBodies,
     fail,
   })
+
+  /** 干渉の行の2つを選ぶ。隠したボディはコアが選択に入れない(1つでも混ぜると選択の変更ごと断られる)ので外して知らせる。 */
+  function selectInterferingBodies(bodyIds: string[]): void {
+    const hidden = bodyIds.filter((bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.visible !== true)
+    if (hidden.length > 0) {
+      const names = hidden.map((bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? bodyId)
+      fail(`隠したボディは選べない: ${names.join('・')}`)
+    }
+    const shown = bodyIds.filter((bodyId) => !hidden.includes(bodyId))
+    if (shown.length > 0) presetSelection(shown.map((bodyId) => bodyRef(bodyId)))
+  }
 
   // ---------------------------------------------------------------- 選択情報(issue #140。verbではない)
   const selectionInfo = createSelectionInfo({
@@ -1081,6 +1134,18 @@
     documentVersion: () => `${model?.applied_count ?? 0}/${model?.redo_count ?? 0}`,
     connected: () => status === 'open',
     request: (requestId) => session.inspectSelection(requestId),
+  })
+  // ---------------------------------------------------------------- スケッチの吸着先(ボディ由来。verbではない)
+  const sketchGuides = createSketchGuideRequests({
+    sketchId: () => sketchId,
+    frame: (id) => sketches.find((item) => item.sketch_id === id)?.frame,
+    shapes: () =>
+      (model?.bodies ?? [])
+        .filter((body) => body.visible && body.kind !== 'mesh')
+        .map((body) => `${body.body_id}:${body.shape_revision}`),
+    connected: () => status === 'open',
+    request: (id, requestId) => session.getSketchGuides(id, requestId),
+    show: (guides) => viewport?.setSketchGuides(guides),
   })
   const selectionInfoNames = {
     body: (bodyId: string) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? bodyId,
@@ -1165,21 +1230,55 @@
     send()
   }
 
-  /** 起動中のコマンドが直接ピックで指したボディ(ブーリアンのターゲット)。選択には入らないので、配信された引数から引いて光らせる。 */
-  function pickedBodies(): string[] {
-    return Object.values(model?.command?.args ?? {}).flatMap((value) => {
+  /**
+   * 起動中のコマンドが直接ピック(`PickArgSpec`)で指したもの(ブーリアンのターゲット・鏡映面・回転軸の辺・スケッチの軸線など)。
+   * 選択には入らないので、配信された引数から引いて選択と一緒に光らせる。
+   */
+  const pickedRefs = $derived.by(() => {
+    const verb = model?.command?.verb
+    const specs = verb === undefined ? [] : (commandDefinition(verb)?.args ?? [])
+    return Object.entries(model?.command?.args ?? {}).flatMap(([name, value]) => {
       const ref = pickedRefOf(value)
-      return ref !== null && refKind(ref) === 'body' ? [(ref as BodyRef).body] : []
+      const spec = specs.find((item) => item.name === name)
+      const shown = ref === null ? null : completePickedRef(ref, spec?.kind === 'pick' ? spec.target : null)
+      return shown === null ? [] : [shown]
     })
+  })
+
+  /**
+   * 配信されたピックの参照を、強調が読む完全な形にする。コアは AI が省いて置いた形(`kind` の無い `{body, index}`、
+   * `point` の無い `{sketch, entity}`)をそのまま配るので、種類は引数の `target` から補う。点を待つ引数で点を省いたら、
+   * コアは種別の最初の点を使う(`duocad/verbs/move_sketch.py` の `_point_of`)ので、その点を光らせる。
+   */
+  function completePickedRef(ref: SelectionRef, target: PickTarget | null): SelectionRef | null {
+    if ('datum' in ref) return ref
+    if ('sketch' in ref) {
+      if (!('entity' in ref)) return ref
+      // 線分を待つ引数は、点が付いていてもコアは図形全体を使う(鏡映の軸・回転体の軸)。
+      if (target === 'sketchEntity') return { ...ref, point: null }
+      if (target !== 'sketchPoint') return { ...ref, point: ref.point ?? null }
+      if (ref.point !== undefined && ref.point !== null) return ref
+      const kind = sketches.find((item) => item.sketch_id === ref.sketch)?.entities.find((item) => item.entity_id === ref.entity)?.kind
+      const first = kind === undefined ? undefined : entityPointKeys()[kind]?.[0]?.[0]
+      return first === undefined ? null : { ...ref, point: first }
+    }
+    // `kind: null` もコアは省いたのと同じに読む。
+    const kind = (ref as { kind?: string | null }).kind
+    if (kind !== undefined && kind !== null) return ref
+    if (target === 'face' || target === 'edge' || target === 'vertex') return { ...(ref as ShapeRef), kind: target }
+    return target === 'body' ? bodyRef((ref as ShapeRef).body) : null
   }
 
   function drawHighlight(): void {
-    viewport?.highlight(selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
+    const faces = [...selectedFaces, ...refsOfKind(pickedRefs, 'face')]
+    const edgeRefs = [...selectedEdges, ...refsOfKind(pickedRefs, 'edge')]
+    const vertexRefs = [...selectedVertices, ...refsOfKind(pickedRefs, 'vertex')]
+    viewport?.highlight(faces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
     // 選択が勝つ: ボディが選ばれているあいだは保持/除外の役割色より優先(`viewport.applyFaceMaterials` が実体)。
-    viewport?.highlightBodies([...selectedBodies.map((item) => item.body), ...pickedBodies()])
-    viewport?.highlightEdges(selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
-    viewport?.highlightVertices(selectedVertices.map((item) => ({ bodyId: item.body, vertexIndex: item.index })))
-    viewport?.highlightDatums(selectedDatums.map((item) => item.datum))
+    viewport?.highlightBodies([...selectedBodies, ...refsOfKind(pickedRefs, 'body')].map((item) => item.body))
+    viewport?.highlightEdges(edgeRefs.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
+    viewport?.highlightVertices(vertexRefs.map((item) => ({ bodyId: item.body, vertexIndex: item.index })))
+    viewport?.highlightDatums([...selectedDatums, ...refsOfKind(pickedRefs, 'datum')].map((item) => item.datum))
   }
 
   // ---------------------------------------------------------------- D: 辺・頂点を取りに行く
@@ -1206,9 +1305,10 @@
     }
   }
 
-  /** 選択に入った辺・頂点のボディの分も頼む(強調して描くのに座標が要る。AI が選んだものはカーソルが近くにない)。 */
+  /** 選択とピックの引数に入った辺・頂点のボディの分も頼む(強調して描くのに座標が要る。AI が選んだものはカーソルが近くにない)。 */
   $effect(() => {
-    requestPickData([...new Set([...selectedEdges, ...selectedVertices].map((item) => item.body))])
+    const picked = [...refsOfKind(pickedRefs, 'edge'), ...refsOfKind(pickedRefs, 'vertex')]
+    requestPickData([...new Set([...selectedEdges, ...selectedVertices, ...picked].map((item) => item.body))])
   })
 
   /**
@@ -1341,6 +1441,11 @@
   $effect(() => {
     const kinds = pickKinds
     viewport?.setPickKinds(kinds)
+  })
+
+  $effect(() => {
+    const shapes = wantedShapes
+    viewport?.setPickShapes(shapes)
   })
 
   /**
@@ -1481,6 +1586,11 @@
       return
     }
     pendingBox = null
+    if (activeVerb === MEASURE.id && event.faces.some((item) => meshBodyIds.has(item.bodyId))) {
+      fail(MESH_UNMEASURABLE)
+      onBoxSelect({ ...event, faces: event.faces.filter((item) => !meshBodyIds.has(item.bodyId)) })
+      return
+    }
     const mode = toggleOnlyMode(event.mode)
     // 辺は連なりごとのまとまり(連なりの辺を2本囲んでも1つ)。トグルはまとまり単位(`toggleUnits`)。
     // 連なりの分からない辺があれば、届くまで選択ごと待たせる(1本だけ入れると連なりが割れる)。
@@ -1625,19 +1735,20 @@
     session.endCommand(nextOp())
   }
 
-  /** 全モードのコマンド定義から表示名を引く(無ければ verb 名のまま)。 */
-  function commandLabel(verb: string): string {
-    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
+  /** 全モードのコマンド定義から verb の定義を引く。 */
+  function commandDefinition(verb: string) {
+    return [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
       (command) => command.id === verb,
     )
-    return found?.label ?? verb
+  }
+
+  /** 全モードのコマンド定義から表示名を引く(無ければ verb 名のまま)。 */
+  function commandLabel(verb: string): string {
+    return commandDefinition(verb)?.label ?? verb
   }
 
   function argLabel(verb: string, name: string): string {
-    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
-      (command) => command.id === verb,
-    )
-    return found?.args.find((spec) => spec.name === name)?.label ?? name
+    return commandDefinition(verb)?.args.find((spec) => spec.name === name)?.label ?? name
   }
 
   /** 外(AI か別の画面)が作業空間を変えたら1行で知らせる。自分の操作の応答では呼ばない(`handleState`)。 */
@@ -1647,8 +1758,9 @@
     if (was === null && now !== null) {
       note(`外から「${commandLabel(now.verb)}」が起動された(AI か別の画面)`)
     } else if (was !== null && now === null) {
+      // 別の verb の適用(スケッチを作る等)でも畳まれる。外からの変更は `applied` が届かないので、増えたログで見る。
       note(
-        after.applied_count > before.applied_count
+        appendedEntries(before.log, after.log).some((entry) => entry.verb === was.verb)
           ? `外から「${commandLabel(was.verb)}」が確定された(AI か別の画面)`
           : `外から「${commandLabel(was.verb)}」が畳まれた(AI か別の画面)`,
       )
@@ -1693,6 +1805,7 @@
    * コマンドが終わった(`CommandHost.onEnd`: Esc・中断ボタン・確定成功)。選択を全解除する。
    * 形を変えるverbの確定ではコアが先に空にしているので効くのは中断と、形を変えない確定(集合代入・測定の失敗等)。
    * 測定の成功だけは残す(読み札と3Dの線は測った選択が変わるまで残る。`measurement.svelte.ts`)。
+   * 測定が断られたら、測れない項目だけを外す(`measureRefused`)。
    * `activeVerb === null` は、`onModeChanged` が先に起動を畳んだ後に遅れて届いた通知で、選択に触らない。
    */
   function onCommandEnd(verb: string): void {
@@ -1701,7 +1814,15 @@
     widenedDeletion = null
     wideningOp = null
     faceChains.forgetPicks()
-    if (verb === MEASURE.id && measure.current !== null) return
+    if (verb === MEASURE.id) {
+      const refused = measureRefused
+      measureRefused = null
+      if (measure.current !== null) return
+      if (refused !== null) {
+        modifySelection([], refused)
+        return
+      }
+    }
     // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
     if (verb === INTERFERENCE.id) return
     clearSelectionIfAny()
@@ -1714,12 +1835,23 @@
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
     if (kinds.length === 0) pendingOptimizePreset = null
-    // 辺だけを食うコマンドが起動したら、選択に残っている面を外す(辺は残す。面は指せなくなるので外す手が無い)。
-    // `untrack`: ここは `CommandHost` の `$effect` の中から呼ばれ、選択を読むとその effect が選択の変化ごとに走り直す。
-    if (kinds.length > 0 && kinds.every((kind) => kind === 'edge')) {
-      untrack(() => modifySelection([], refsOfKind(currentItems(), 'face')))
-    }
   }
+
+  /**
+   * 辺だけを食うコマンドの起動中に選択に面があれば、外してその外周の辺を連なりで入れる(辺は残す。面は指せなくなるので
+   * 外す手が無い)。コアが1回の選択の変更で行う(`Session.select_face_boundaries`)。起動の瞬間ではなく状態で決めるのは、
+   * 送った要求が切断で失われても繋ぎ直した時点でもう一度送るため(残った面は確定で黙って無視され、外周が丸まらない)。
+   * 失敗したら選択も接続も変わらないので送り直さない(断りはトーストに出る)。
+   */
+  $effect(() => {
+    if (!edgeOnlyCommand || status !== 'open' || selectedFaces.length === 0) return
+    untrack(() => {
+      if (faceBoundaryOp !== null && selectionOpsInFlight.has(faceBoundaryOp)) return
+      faceBoundaryOp = nextOp()
+      selectionOpsInFlight.add(faceBoundaryOp)
+      session.selectFaceBoundaries(faceBoundaryOp)
+    })
+  })
 
   /** 辺の参照を、連なり(`viewport.edgeChain`)の全部の参照へ広げる。連なりがまだ届いていなければ null。 */
   function edgeChainRefs(bodyId: string, edgeIndex: number): SelectionRef[] | null {
@@ -1910,6 +2042,11 @@
         return
       }
     }
+    // メッシュボディは測れない(面も辺も頂点も持たず、ボディ参照へ畳むとコアの選択に数の外の項目が入る)。矩形選択も同じ(`onBoxSelect`)。
+    if (activeVerb === MEASURE.id && event.hit !== null && meshBodyIds.has(event.hit.bodyId)) {
+      fail(MESH_UNMEASURABLE)
+      return
+    }
     // 素クリックのトグル(`toggleOnlyMode`)はどの種類にも効かせる(測定は辺・頂点でも測る)。
     // 来るのは今指せる種類(`pickKinds`)だけ: コマンドの起動中はそのコマンドが受け付けるものに絞られている。
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
@@ -1947,6 +2084,11 @@
       }
       if (faceChainRefs(face.bodyId, face.faceIndex) === null) deferUntilFaceChains([face], pick)
       else pick()
+      return
+    }
+    const refused = host?.refusesFace(event.hit.bodyId, event.hit.faceIndex) ?? null
+    if (refused !== null) {
+      note(refused)
       return
     }
     editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
@@ -2012,8 +2154,13 @@
     sketches.find((item) => item.sketch_id === sketchId) ?? null,
   )
 
+  /** 文書にボディも図形も無いか(隠したものも数える。`viewport.lookAtSketch` の寄せ先)。 */
+  function documentEmpty(): boolean {
+    return (model?.bodies.length ?? 0) === 0 && sketches.every((item) => item.entities.length === 0)
+  }
+
   function drawSketches(): void {
-    viewport?.showSketches(buildSketchDraws(sketches, selection, sketchId))
+    viewport?.showSketches(buildSketchDraws(sketches, selection, sketchId, refsOfKind(pickedRefs, 'sketch_entity')))
   }
 
   /**
@@ -2046,7 +2193,7 @@
     // どの遷移でも同期に描き直す(入る側は直後の `lookAtSketch` が平面の枠を要る。`handleState` と同じ)。
     // 抜ける側にも要る: 抜けたスケッチの点マーカーが次の状態配信まで残り、手前に浮いてクリックを奪いうる。
     drawSketches()
-    if (next.kind === 'sketch') viewport?.lookAtSketch(next.id)
+    if (next.kind === 'sketch') viewport?.lookAtSketch(next.id, { emptyDocument: documentEmpty() })
     // スケッチの戻り先: 最適化モードから入ったら、抜けたときに最適化モードへ入り直す。文書をまたいだ遷移では前の文書の
     // モードを「前」として読まない(`handleState` が戻り先を捨てた直後に、ここで書き直さない)。
     if (crossedDocument) return
@@ -2116,7 +2263,7 @@
     }
     if (event.point && host?.wantsPoint()) {
       // 当たっている図形へ落としてから渡す。幽霊(`hoverPoint`)も同じ関数を通るので、吸い付いて見える位置と確定結果はずれない。
-      const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity, event.datumAt)
+      const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity, event.sketchGuide, event.datumAt)
       if (host.addPoint(u, v)) return
     }
     // 図形の当たりが無いときだけ原点パーツ(図形はスケッチの中身なので先に取る)。
@@ -2234,22 +2381,24 @@
   }
 
   /**
-   * カーソルの生の (u,v) を、当たっているスケッチの図形か1mmグリッドへ落とす(スナップ)。
+   * カーソルの生の (u,v) を、当たっているスケッチの図形・ボディ由来の吸着先・原点パーツか1mmグリッドへ落とす(スナップ)。
    * クリック(`onSketchPick` の `addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を通すこと。段の規則は
    * `entityKinds.snapSketchPoint` の1か所(viewport のカーソル強調も通る)。1mm への丸めは点を待っているときだけ。
+   * `hit` と `guide` は同時に立たない(`viewport.ts` の `sketchSnapAt`)。
    */
   function snappedPlanePoint(
     u: number,
     v: number,
     hit: SketchEntityHit | null,
+    guide: SketchGuideHit | null,
     datumAt: readonly [number, number] | null = null,
   ): Point2 {
-    // 原点パーツへの吸い付きは図形より下(図形が当たっていれば図形が勝つ。`viewport.sketchDatumAt` が計算済み)。
-    if (hit === null && datumAt !== null) return [datumAt[0], datumAt[1]]
+    // 原点パーツへの吸い付きは図形・ボディ由来の吸着先より下(どちらかが当たっていればそちらが勝つ。`viewport.sketchDatumAt` が計算済み)。
+    if (hit === null && guide === null && datumAt !== null) return [datumAt[0], datumAt[1]]
     return snapSketchPoint(
       u,
       v,
-      hit,
+      guide ?? hit,
       (entityId) =>
         sketches
           .find((item) => item.sketch_id === hit?.sketchId)
@@ -2299,9 +2448,13 @@
   }
 
   function onWindowKeydown(event: KeyboardEvent): void {
-    // Esc は測定の札を消す(コマンドの中断は `CommandHost` が同じキーで別に見る)。
+    // Esc は測定の札と選択を消す(本人判断 2026-11-05、issue #271)。コマンドの中断は `CommandHost` が同じキーで別に見る
+    // (中断でも選択は全解除なので、起動中に両方が走っても結果は同じ)。入力欄・ダイアログの Esc はその欄のもの。
     if (event.key === 'Escape') {
-      if (!isImeKey(event)) measure.clear()
+      if (isImeKey(event)) return
+      measure.clear()
+      const focused = event.target instanceof HTMLElement ? event.target : null
+      if (!ownsEscapeKey(focused)) clearSelectionIfAny()
       return
     }
     if (!(event.ctrlKey || event.metaKey)) return
@@ -2334,10 +2487,10 @@
     }
     if (key === 'z' && !event.shiftKey) {
       event.preventDefault()
-      session.undo()
+      session.undo(nextOp())
     } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
       event.preventDefault()
-      session.redo()
+      session.redo(nextOp())
     }
   }
 
@@ -2405,8 +2558,8 @@
     viewport.onBoxSelect(onBoxSelect)
     viewport.onEdgeChainWanted((ref) => requestEdgeChains(ref.bodyId, [ref.edgeIndex]))
     viewport.onPickDataWanted(requestPickData)
-    viewport.onPlaneMove((point, hit, datumAt) => {
-      hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit, datumAt)
+    viewport.onPlaneMove((point, hit, datumAt, guide) => {
+      hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit, guide, datumAt)
     })
     // 可変解像度: ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域をその粗さで測り直させる。
     // スケッチの折れ線はビューポート側が自分で折り直す。連打の抑制も向こうが持っている。
@@ -2519,7 +2672,6 @@
     model: () => model,
     partBodies: () => partBodies,
     previewing: () => previewing,
-    lastApplied: () => lastApplied,
     messages: () => messages,
     errorLog,
     stateEpoch: () => stateEpoch,
@@ -2640,7 +2792,7 @@
             編集中 {planeLabel(activeSketch.plane, '面に貼ったスケッチ')}
             ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
           </span>
-          <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId)}>
+          <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId, { emptyDocument: documentEmpty() })}>
             正面から見る
           </button>
           <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
@@ -2694,7 +2846,10 @@
             wantedPickDatum = datum
           }}
           onWantsVertices={(wants) => (wantedVertices = wants)}
+          onWantsShapes={(shapes) => (wantedShapes = shapes)}
           onWantsGrain={(grain) => (wantedGrain = grain)}
+          onDeselect={(refs) => modifySelection([], refs)}
+          faceKindOf={faceKinds.kindOf}
         />
       {/key}
     </section>
@@ -2719,6 +2874,7 @@
           onExportStl={files.exportStl}
           thumbnailUrl={files.thumbnailUrl}
           onNeedThumbnail={files.wantThumbnail}
+          lastCopied={files.lastCopied}
         />
       </aside>
     {/if}
@@ -2755,7 +2911,6 @@
           item={selectionInfo.item}
           error={selectionInfo.error}
           names={selectionInfoNames}
-          besideOptimizePanel={optimizeMode}
         />
         <BrowserPanel
           bodies={partBodies}
@@ -2831,6 +2986,7 @@
           status={ai.status}
           connection={status}
           transcript={ai.transcript}
+          bind:draft={ai.draft}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}
           onConfigure={(providerKind, baseUrl) => {

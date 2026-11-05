@@ -83,6 +83,26 @@ export interface GridPlanes {
   dispose(): void
 }
 
+/**
+ * 頂点位置(xyz の並び)をスケッチのframe(u,v)へ写した実測の min/max。広がりが無い・頂点が無いときは `null`。
+ * 面に貼ったスケッチのグリッド(`faceUvBoxOnly`)と、図形がまだ無いスケッチへ寄る `lookAtSketch` が同じ寸法を使う。
+ */
+export function uvBoxOfPositions(position: ArrayLike<number> | null, frame: PlaneFrame): UvBox | null {
+  if (position === null || position.length < 3) return null
+  const origin = frameVector(frame.origin)
+  const axisU = frameVector(frame.u).normalize()
+  const axisV = frameVector(frame.v).normalize()
+  const rel = new THREE.Vector3()
+  let uv: UvBox | null = null
+  for (let i = 0; i + 2 < position.length; i += 3) {
+    rel.set(position[i], position[i + 1], position[i + 2]).sub(origin)
+    uv = extendUvBoxToPoint(uv, { u: rel.dot(axisU), v: rel.dot(axisV) })
+  }
+  if (uv === null) return null
+  if (!(uv.uMax - uv.uMin > 0) && !(uv.vMax - uv.vMin > 0)) return null
+  return uv
+}
+
 export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
   const { contentBox, facePositions, worldPerPixel, camera, onExtentChange } = deps
 
@@ -225,20 +245,7 @@ export function createGridPlanes(deps: GridPlanesDeps): GridPlanes {
    * 見つからなければ `null`(範囲で切らずに描く)。面の実際の輪郭では切らない(ステンシルが要り費用に見合わない)。
    */
   function faceUvBoxOnly(face: SketchFace, frame: PlaneFrame): UvBox | null {
-    const position = facePositions(face.bodyId, face.faceIndex)
-    if (position === null || position.length < 3) return null
-    const origin = frameVector(frame.origin)
-    const axisU = frameVector(frame.u).normalize()
-    const axisV = frameVector(frame.v).normalize()
-    const rel = new THREE.Vector3()
-    let uv: UvBox | null = null
-    for (let i = 0; i + 2 < position.length; i += 3) {
-      rel.set(position[i], position[i + 1], position[i + 2]).sub(origin)
-      uv = extendUvBoxToPoint(uv, { u: rel.dot(axisU), v: rel.dot(axisV) })
-    }
-    if (uv === null) return null
-    if (!(uv.uMax - uv.uMin > 0) && !(uv.vMax - uv.vMin > 0)) return null
-    return uv
+    return uvBoxOfPositions(facePositions(face.bodyId, face.faceIndex), frame)
   }
 
   interface GridPlaneSpec {

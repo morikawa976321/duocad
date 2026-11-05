@@ -794,8 +794,7 @@ claude.ai の Artifact「フィレットはなぜ消えないのか」。
 - **段5で入れたもの**: 通常モードのコマンド「オフセット」(`OFFSET_FACES`)と「面の削除」(`DELETE_FACES`)を `web/src/commands/features.ts` に。
   面の削除の起動中は、丸めの面のクリックをつながった丸め全体へ広げる(`kernel_face_edit.blend_chain` → 問い合わせ `get_face_chains` →
   `web/src/faceChains.ts` → `App.svelte` の `faceChainCommand`。丸めどうしは接線でなくてよく、箱の上面4辺の丸めは角で折れて会う)。
-  起動の前に選んでいた面も、起動したときに広げる。実機は `web/scripts/smoke-face-edit.mjs`(1クリックで4枚 → プレビュー → 確定で直方体 →
-  Ctrl+Z、上面のオフセット → Ctrl+Z)。
+  起動の前に選んでいた面も、起動したときに広げる。
 - **段5でまだ入れていないもの**: 「中止」と再生の進捗、矩形選択での連なりへの広げ(矩形は面1枚ずつ)、穴を作る面をまとめて選ぶ補助。
   プレビューが届くと結果の形(緑)が選択の強調(橙)を覆うので、どこまで消えるかが橙で見えるのはプレビューが届くまでの間。
 - 計画と変えたこと: 選んだ面そのものが丸めのときと、選んだ面が平面・円筒・球・トーラス・押し出し・回転・オフセットの面でないときは、
@@ -869,7 +868,7 @@ SNAPSHOTS が変わらず次の操作が通るか、BinTools の往復・プレ�
 ## 検査と試作の参照
 
 現行の面編集は `tests/test_delete_faces_acceptance.py`、`tests/test_offset_faces_acceptance.py`、
-`tests/test_face_edit_kernel.py`、`tests/test_face_edit_worker.py` と、画面の `web/scripts/smoke-face-edit.mjs` で検査する。
+`tests/test_face_edit_kernel.py`、`tests/test_face_edit_worker.py` で検査する。
 
 方式比較の試作・計測・模型生成コード(`tools/face_edit_probe/`。模型のデータは `viz.py`)は Git `3c3fb655` に残っている(`git show 3c3fb655:tools/face_edit_probe/run.py`。再現コマンドは同じコミットの本書末尾「再現」)。本書の実測値はその時点の記録。
 触れる模型(claude.ai の Artifact「面編集の模型」)のページ本体はリポジトリに置かない。

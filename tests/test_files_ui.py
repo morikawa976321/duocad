@@ -44,7 +44,7 @@ def test_saving_writes_the_operation_log_and_is_not_a_verb(session: Session, tmp
     assert "bytes" not in answer and "operations" not in answer, "ファイルのサイズ・操作数は返さない"
     assert len(session.document.log.entries) == log_before
     assert len(json.loads(target.read_text(encoding="utf-8"))["operations"]) == log_before, "ログ全体を書いていない"
-    # # 状態の配り直しに `applied` は載らない(画面の `lastApplied` を動かさないため)。
+    # # 状態の配り直しに `applied` は載らない(画面が verb の確定として扱わないため)。
     state = clients[0].last("state")
     assert "applied" not in state, "保存がverbの確定として配信されている"
     assert state["state"]["current_name"] == "model.json"
@@ -108,6 +108,110 @@ def test_saving_without_a_name_writes_the_current_file_only(session: Session) ->
     assert json.loads(target.read_text(encoding="utf-8"))["operations"] == written, (
         "新規の直後の保存が、直前まで編集していたファイルを空の文書で潰した"
     )
+
+
+def test_saving_without_a_name_retries_the_failed_first_autosave(session: Session, monkeypatch) -> None:
+    """無題の最初の自動保存が書けなかった後の Ctrl+S が、自動保存と同じ `untitled-<n>.json` へ書けること(issue #289)。"""
+    real_write = session.store.write_document_file
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    _box(session)
+    assert session.current_name is None and session.saved is False
+
+    monkeypatch.setattr(session.store, "write_document_file", real_write)
+    answer = session.save_document()
+
+    assert answer["name"] == "untitled-1.json" and session.current_name == "untitled-1.json"
+    assert session.saved is True
+    written = json.loads((session.models_dir / "untitled-1.json").read_text(encoding="utf-8"))["operations"]
+    assert len(written) == len(session.document.log.entries)
+
+
+@pytest.mark.parametrize("leave", ["new", "close", "open"])
+def test_leaving_an_unsaved_document_writes_it_first(session: Session, monkeypatch, leave: str) -> None:
+    """落ちたら: 自動保存が書けなかった文書を、開く・新規・閉じるが書き直さずに捨てる(issue #279)。"""
+    session.save_document("other.json")
+    real_write = session.store.write_document_file
+    _box(session)
+    session.save_document("mine.json")
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    session.sketch_create("XY")
+    assert session.saved is False
+    entries = len(session.document.log.entries)
+    monkeypatch.setattr(session.store, "write_document_file", real_write)
+
+    {"new": session.new_document, "close": session.close_document, "open": lambda: session.open_document("other.json")}[leave]()
+
+    written = json.loads((session.models_dir / "mine.json").read_text(encoding="utf-8"))["operations"]
+    assert len(written) == entries
+
+
+def test_leaving_is_refused_while_the_unsaved_document_still_cannot_be_written(session: Session, monkeypatch) -> None:
+    """落ちたら: 書き直しにも失敗した文書を、新規が黙って捨てる(issue #279)。"""
+    _box(session)
+    session.save_document("mine.json")
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    session.sketch_create("XY")
+    entries = len(session.document.log.entries)
+
+    with pytest.raises(ValueError, match="切り替えなかった"):
+        session.new_document()
+
+    assert session.current_name == "mine.json"
+    assert len(session.document.log.entries) == entries
+    assert session.saved is False
+
+
+def test_deleting_the_unsaved_open_file_does_not_write_it_back(session: Session, monkeypatch) -> None:
+    """落ちたら: 未保存のまま開いているファイルを削除すると、閉じる前の書き直しが消したファイルを作り直す(issue #279 の書き直し)。"""
+    real_write = session.store.write_document_file
+    _box(session)
+    session.save_document("mine.json")
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    session.sketch_create("XY")
+    assert session.saved is False
+    monkeypatch.setattr(session.store, "write_document_file", real_write)
+
+    answer = session.delete_document("mine.json")
+
+    assert answer["closed"] is True
+    assert not (session.models_dir / "mine.json").exists()
+
+
+def test_naming_an_untitled_document_while_optimizing_moves_the_run_to_that_file(session: Session, monkeypatch) -> None:
+    """落ちたら: 最適化中の無題の文書に最初の保存で名前が付いても、実行がその名前を知らず、開き直した写しを編集できる。"""
+    real_write = session.store.write_document_file
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    session.sketch_create("XY")
+    assert session.current_name is None and session.saved is False
+    session.begin_optimization()
+    monkeypatch.setattr(session.store, "write_document_file", real_write)
+
+    session.close_document()
+    session.open_document("untitled-1.json")
+
+    assert session.optimizing_name == "untitled-1.json"
+    assert session.optimization_visible is True
+    session.end_optimization()
 
 
 def test_every_document_change_is_autosaved_and_undo_redo_follow(session: Session) -> None:

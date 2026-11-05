@@ -117,7 +117,7 @@ def test_a_point_entity_is_the_apex_of_a_loft():
 
     loft(document, [region_ref(base, regions(document, base)[0].index)], end_point=_point_ref(top, apex))
 
-    assert query.volume(document.active_body().shape) == pytest.approx(4000.0, rel=1.0e-9)
+    assert query.volume(document.bodies[-1].shape) == pytest.approx(4000.0, rel=1.0e-9)
 
 
 def test_selecting_a_point_entity_always_means_its_point(session: Session):

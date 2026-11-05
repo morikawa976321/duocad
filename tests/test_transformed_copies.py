@@ -29,7 +29,6 @@ def test_a_colliding_id_adds_no_copy_and_wastes_no_number(new_ids):
 
     assert [body.id for body in document.bodies] == ["body-a", "body-b"]
     assert document.log._numbering == numbering
-    assert document.active_body().id == "body-b"
 
 
 def test_copies_get_the_ids_and_numbers_they_were_given():

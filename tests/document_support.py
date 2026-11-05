@@ -72,10 +72,8 @@ def assert_finite_json(text: str) -> None:
 
 def document_state(doc: Document) -> dict:
     """undo 直後の文書と、同じログを再生した文書を `==` で比べるための写し。
-    active ボディ・ボディの並び・名前つきの値の表・図形と反復の `params`(名前つきの値への参照のまま)。"""
-    active = doc.active_body()
+    ボディの並び・名前つきの値の表・図形と反復の `params`(名前つきの値への参照のまま)。"""
     return {
-        "active": None if active is None else active.id,
         "bodies": [(body.id, body.name) for body in doc.bodies],
         "parameters": dict(doc.parameters),
         "sketches": [

@@ -7,12 +7,19 @@ import { DEPTH_BIAS_UNIT, SKETCH_LINE_WIDTH_PX } from './viewportConstants'
 
 export type SketchFatLine = Line2
 
+/**
+ * スケッチの太線の材質。**透明の側で描く**(不透明度は1のまま): スケッチの格子(`planeGrid.ts`)は透明の側で、手前へ寄せた
+ * 深度で検査して不透明な線の上から塗るので、不透明の側に置くと 1mm の格子線に乗った線は格子の色になり、格子線と交わる所で
+ * 途切れて見える(実測)。透明の側なら groupOrder の順(格子 -1、スケッチ 0)で格子の後に描かれる。取っ手・点の印も同じ
+ * (`sketchLayer.ts` の `sketchPointMaterial`)。
+ */
 export function createSketchLineMaterial(color: number, resolution: THREE.Vector2): LineMaterial {
   return new LineMaterial({
     color,
     linewidth: SKETCH_LINE_WIDTH_PX,
     resolution,
     depthTest: false,
+    transparent: true,
   })
 }
 

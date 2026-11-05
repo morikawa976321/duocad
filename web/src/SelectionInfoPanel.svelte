@@ -2,6 +2,8 @@
   /**
    * 選択1項目の情報(issue #140)。ビューポートの左下に浮かび、選択がちょうど1項目のときだけ出る
    * (2項目以上・空のときは何も出さない。本人判断)。中身の文は `selectionInfoText.ts`。
+   * 置き場はブラウザの列の右: ブラウザ(z-index 5)は下端まで伸びるので、同じ列の下に置くと隠れる。
+   * 札の高さを `--browser-bottom-reserve` に渡す手は、選ぶたびにブラウザの高さが変わるので取らない。
    */
   import { selectionInfoRows, selectionInfoTitle, type InfoNames } from './selectionInfoText'
   import type { MeasureItem } from './session'
@@ -10,18 +12,15 @@
     item,
     error,
     names,
-    besideOptimizePanel,
   }: {
     item: MeasureItem | null
     error: string | null
     names: InfoNames
-    /** 形状最適化パネルが同じ左下にいるあいだは、その右へずらす。 */
-    besideOptimizePanel: boolean
   } = $props()
 </script>
 
 {#if item !== null || error !== null}
-  <div id="selection-info" class="floating-panel" class:beside={besideOptimizePanel}>
+  <div id="selection-info" class="floating-panel">
     {#if item !== null}
       <div class="title">{selectionInfoTitle(item, names)}</div>
       <dl>
@@ -41,16 +40,12 @@
      pointer-events を切っておけば札の下のボディの面も指せる(docs/UI.md「常設パネルを足すときは…」)。 */
   #selection-info {
     position: absolute;
-    left: 10px;
+    left: calc(20px + var(--browser-panel-w));
     bottom: 10px;
     z-index: 4;
-    max-width: calc(100% - 20px);
+    max-width: calc(100% - 30px - var(--browser-panel-w));
     pointer-events: none;
     font-variant-numeric: tabular-nums;
-  }
-
-  #selection-info.beside {
-    left: calc(20px + var(--browser-panel-w));
   }
 
   .title {

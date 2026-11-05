@@ -55,8 +55,30 @@
   function saveKey(): void {
     const key = keyDraft.trim()
     if (!key) return
+    // 確認中に別のキーを保存したら、確認していた削除の相手はもう無い。
+    confirmingHint = null
     onSetApiKey(key)
     keyDraft = ''
+  }
+
+  /**
+   * 削除は2段階(ファイルパネルの削除と同じく、行の中で確かめる)。保存したキーは画面に戻らないので消すと取り返せない。
+   * 確かめている相手は「削除」を押した時点のキーで、末尾(`apiKeyHint`)で覚える。別のタブで差し替わったら確認を解く。
+   */
+  let confirmingHint = $state<string | null>(null)
+  const confirmingKeyDelete = $derived(confirmingHint !== null)
+  $effect(() => {
+    if (confirmingHint === null) return
+    if (!open || aiStatus?.apiKeySource !== 'file' || (aiStatus.apiKeyHint ?? '') !== confirmingHint) confirmingHint = null
+  })
+
+  function startKeyDelete(): void {
+    confirmingHint = aiStatus?.apiKeyHint ?? ''
+  }
+
+  function deleteKey(): void {
+    confirmingHint = null
+    onSetApiKey(null)
   }
 
   /** GPU の部品を画面から入れられるか(安定版だけ。開発版は手で `uv sync --extra gpu`)。 */
@@ -96,8 +118,8 @@
 
   /**
    * Esc で閉じる。非モーダルの `<dialog>` は Esc を拾わない(close request は `showModal()` にしか来ない)ので window で拾う。
-   * `preventDefault()` も `stopPropagation()` もしない: 同じ Esc を `CommandHost` が構え中コマンドの中断に使っている
-   * (`CommandHost.svelte` の `onKeydown`)。
+   * `preventDefault()` も `stopPropagation()` もしない: フォーカスがダイアログの外にある Esc は、`CommandHost` が構え中コマンドの
+   * 中断にも使う(ダイアログの中の Esc は `keys.ts` の `ownsEscapeKey` で中断しない)。
    */
   function onWindowKeydown(event: KeyboardEvent): void {
     if (!open || event.key !== 'Escape' || isImeKey(event)) return
@@ -147,14 +169,25 @@
     />
   </label>
   <div class="key-actions">
-    <button id="settings-api-key-save" onclick={saveKey} disabled={!aiStatus || keyFromEnv || !keyDraft.trim()}>
-      保存
-    </button>
+    {#if !confirmingKeyDelete}
+      <button id="settings-api-key-save" onclick={saveKey} disabled={!aiStatus || keyFromEnv || !keyDraft.trim()}>
+        保存
+      </button>
+    {/if}
     {#if aiStatus?.apiKeySource === 'file'}
-      <button id="settings-api-key-delete" onclick={() => onSetApiKey(null)}>削除</button>
+      {#if confirmingKeyDelete}
+        <span class="confirm-text">消すと戻せない</span>
+        <button id="settings-api-key-delete-confirm" class="danger" onclick={deleteKey} title="保存したキーを消す(戻せない)">
+          本当に削除
+        </button>
+        <button id="settings-api-key-delete-cancel" onclick={() => (confirmingHint = null)}>やめる</button>
+      {:else}
+        <button id="settings-api-key-delete" onclick={startKeyDelete}>削除</button>
+      {/if}
     {/if}
   </div>
   <p class="hint dim">{keyLine}</p>
+  <p class="hint dim">保存すると AI は Claude の API へ切り替わり、使った分だけ課金される。</p>
 
   {#if showGpu}
     <!-- **答えは変わらない**(GPU の解は CPU とビット一致する。docs/TOPOPT_GPU.md)ので、確認なしでその場で切り替える。 -->
@@ -233,7 +266,23 @@
   .key-actions {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
     gap: 6px;
     margin-top: 6px;
+  }
+
+  .key-actions > * {
+    white-space: nowrap;
+  }
+
+  .confirm-text {
+    margin-right: auto;
+    font-size: var(--fs-meta);
+    color: var(--dim);
+  }
+
+  .danger {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 </style>

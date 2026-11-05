@@ -120,6 +120,31 @@ def test_ai_configure_is_rejected_while_running(box_session: Session):
     assert server._ai_base_url is None, "実行中なのにエンドポイントが変わっている"
 
 
+def test_only_a_change_that_drops_the_conversation_says_so(box_session: Session):
+    """落ちたら、AIが会話を捨てたのに画面の会話欄が区切られない(または捨てていないのに区切られる)。"""
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        for message in (
+            {"cmd": "ai_get_status"},
+            {"cmd": "ai_configure", "provider": "azure"},
+            {"cmd": "ai_set_thinking", "thinking": "off"},
+            {"cmd": "ai_cancel"},
+            {"cmd": "ai_configure", "provider": "openai_compat"},
+            {"cmd": "ai_set_api_key", "key": FAKE_KEY},
+            {"cmd": "ai_set_api_key", "key": None},
+        ):
+            await server._dispatch(connection, json.dumps(message))
+        return connection.of_type("ai_status")
+
+    statuses = asyncio.run(scenario())
+    assert [status.get("conversation_reset", False) for status in statuses] == [
+        False, False, False, False, True, True, True,
+    ]
+
+
 def test_ai_send_returns_before_the_run_finishes(monkeypatch, box_session: Session):
     """`ai_send` の `_dispatch` 自体は**モデルの応答を待たずに**返る(スロー・プロバイダで確認)。"""
     monkeypatch.setattr(

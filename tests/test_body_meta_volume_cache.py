@@ -15,7 +15,7 @@ BOX_X, BOX_Y, BOX_Z = 20.0, 20.0, 20.0
 def test_state_meta_volume_updates_when_the_shape_changes():
     """形状が変われば体積が更新される(面を押し出した後の state_meta が新しい値を返す)。"""
     session = session_with_box(BOX_X, BOX_Y, BOX_Z)
-    body = session.document.active_body()
+    body = session.document.bodies[-1]
     assert body is not None
 
     before = session.state_meta()["bodies"][0]

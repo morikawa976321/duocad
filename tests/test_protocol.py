@@ -537,6 +537,14 @@ def _run_clear_selection(session: Session, tmp_path: Path) -> dict:
     return session.clear_selection()
 
 
+@_runner("select_face_boundaries")
+def _run_select_face_boundaries(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    session.modify_selection([{"body": body.id, "kind": "face", "index": 1}], [])
+    session.begin_command("fillet")
+    return session.select_face_boundaries()
+
+
 @_runner("begin_command")
 def _run_begin_command(session: Session, tmp_path: Path) -> dict:
     _box(session)

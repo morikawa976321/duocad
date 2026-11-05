@@ -523,6 +523,17 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="cancel_interference",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "その接続が走らせている干渉チェックを取り消す(子を止める。`InterferenceRuns.cancel`)。結果は返らない。"
+            "走っていなければ何もしない。画面はパネルを閉じたとき・モードを切り替えたときに送る"
+        ),
+    ),
+    Command(
         name="get_selection",
         category="selection",
         description=(
@@ -598,6 +609,18 @@ COMMANDS: tuple[Command, ...] = (
         description="選択を空にしたいときに呼ぶ。",
         session="clear_selection",
         ws="special",
+    ),
+    Command(
+        name="select_face_boundaries",
+        category="selection",
+        description="",
+        session="select_face_boundaries",
+        ws="special",
+        mcp=False,
+        note=(
+            "選択の面を外し、その外周の辺(穴の縁は入れない)を連なりまで広げて足す。画面が、面を選んだまま"
+            "フィレット・面取りを起動したときに送る。AI は述語 `on_boundary_of_face` で同じ辺を選べる"
+        ),
     ),
     Command(
         name="sketch_create",
@@ -1336,8 +1359,12 @@ COMMANDS: tuple[Command, ...] = (
             ),
         ),
         session="mirror_sketch_entities",
+        previewable=True,
+        preview_session="preview_mirror_sketch_entities",
         resets_selection=True,
         note=(
+            "プレビューは投機実行でなく `preview_mirror_sketch_entities`(足される複製を `sketch_ghost` で返す。"
+            "確定と同じ検査を通るので、断られる入力は幽霊の段で断られる)。"
             "**WSにも開いている**(2026-09-06。`axis` は必須の引数1つなので表に載る)。"
             "画面は軸の線分を**スケッチ平面で直接クリック**して `axis` の参照で送る ——"
             "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
@@ -1473,6 +1500,7 @@ COMMANDS: tuple[Command, ...] = (
             ),
         ),
         session="mirror_body",
+        previewable=True,
         resets_selection=True,
         note=(
             "**どちらの鏡映面もWSに開いている**(2つは排他で、どちらも省略できる)。"
@@ -1481,7 +1509,7 @@ COMMANDS: tuple[Command, ...] = (
             "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
             "`PickArgSpec`)である。載せてしまうと `require_bodies` が鏡映面に使った面の"
             "ボディまで対象に数え、基準にした部品まで一緒に複製される。"
-            "プレビュー(幽霊)は無い —— `previewable=False`。"
+            "プレビューは投機実行(増えた複製が幽霊になる)。"
         ),
     ),
     Command(
@@ -2193,6 +2221,25 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="get_sketch_guides",
+        category="protocol",
+        description="",
+        params=(
+            Param("sketch_id", "string", "吸着先が要るスケッチ"),
+            Param("request_id", "integer", "画面が古い返事を捨てるための通し番号(そのまま返す)"),
+        ),
+        session="sketch_guides",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**配信しない**(`get_edges` と同じ)。スケッチの平面と、見えている B-rep のボディが交わる・接する所"
+            "(平面に乗る辺・平面を横切る面の交線・その頂点)を、平面の (u,v) の図形と点で返す。画面はスケッチで点を待つ間の"
+            "吸着先にだけ使う(選べない・文書に足さない)。返事は `{type:'sketch_guides', request_id, sketch_id, entities, points,"
+            " errors, error}`。失敗は `error` に入れて返し、`{type:'error'}` にしない(`inspect_selection` と同じ)"
+        ),
+    ),
+    Command(
         name="set_view_resolution",
         category="protocol",
         description="",
@@ -2636,7 +2683,6 @@ STATE_KEYS: tuple[str, ...] = (
     "redo_count",
     "can_undo",
     "can_redo",
-    "active_body_id",
     "units",
     "current_name",
     "saved",

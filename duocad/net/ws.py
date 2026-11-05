@@ -21,7 +21,7 @@
         {"type": "edge_chains", "body_id": str, "revision": int, "shape_revision": int, "chains": [[int, ...], ...]}
         {"type": "face_chains", "body_id": str, "revision": int, "shape_revision": int, "origins": [int, ...], "chains": [[int, ...], ...]}
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
-        {"type": "error", "message": str, "where": str, "client_op": int|None}
+        {"type": "error", "message": str, "where": str, "client_op": int|None, "preview_id"?: int|None}  (`preview_id` は where が preview のときだけ)
         {"type": "done", "ack_id": int}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "api_key_source",
@@ -52,7 +52,7 @@ verbの入口(`duocad/entry.py`)がコアの選択から取る(`selection.requir
 状態変更は接続している全クライアントへ配信する。操作を出したクライアントにだけ `applied` を付け、それ以外には同じ `state` だけを送る。
 
     state() -> {
-      "units", "active_body_id",
+      "units",
       "bodies": [{"body_id","name","kind","visible","revision",
                   "face_count","volume","geometry": <tessellate結果|None>}, ...],
       "log", "can_undo", "can_redo", "applied_count",
@@ -511,6 +511,9 @@ class Server:
             elif command == "clear_selection":
                 applied = self._apply(self.session.clear_selection, message.get("client_op"))
                 await self._push(connection, applied=applied)
+            elif command == "select_face_boundaries":
+                applied = self._apply(self.session.select_face_boundaries, message.get("client_op"))
+                await self._push(connection, applied=applied)
             # -------------------------------------------------- B2: 作業空間(起動中のコマンド・モード。issue #153)。選択と同じ `change` 系
             elif command == "begin_command":
                 verb = message.get("verb")
@@ -564,6 +567,14 @@ class Server:
             elif command == "get_vertices":
                 result = self.session.vertices(message["body_id"])
                 await _send(connection, {"type": "vertices", **result})
+            # スケッチの吸着先(`get_edges` と同じく要求した接続にだけ返す)。失敗は `error` に入れて返す(`inspect_selection` と同じ)
+            elif command == "get_sketch_guides":
+                guides: dict = {"request_id": message.get("request_id"), "sketch_id": message.get("sketch_id"), "error": None}
+                try:
+                    guides.update(self.session.sketch_guides(message["sketch_id"]))
+                except Exception as error:
+                    guides["error"] = f"{type(error).__name__}: {error}"
+                await _send(connection, {"type": "sketch_guides", **guides})
             # -------------------------------------------------- 測定(verbではない。配信しない)。`client_op` は画面が「確定が返ってきた」の突き合わせに使う
             elif command == "measure":
                 result = self.session.measure()
@@ -575,6 +586,8 @@ class Server:
             elif command == "check_interference":
                 job = self.session.interference_job(message.get("clearance"), request_id=message.get("client_op"))
                 self._spawn(self._interference.start(connection, message, job), "干渉チェックの応答に失敗")
+            elif command == "cancel_interference":
+                self._interference.cancel(connection)
             elif command == "inspect_selection":
                 payload: dict = {"request_id": message.get("request_id"), "item": None, "error": None}
                 try:
@@ -752,6 +765,8 @@ class Server:
                     "message": f"{type(error).__name__}: {error}",
                     # 画面は自分が待っている操作の失敗かをこれで見分ける(別の要求の失敗で確定の待ちを解かない)。
                     "client_op": message.get("client_op"),
+                    # プレビューの断りは、どの要求のものかを画面が見分ける(古い断りを今の入力に付けない)。
+                    **({"preview_id": message.get("preview_id")} if command == "preview" else {}),
                 },
             )
         finally:
@@ -824,6 +839,7 @@ class Server:
                             "where": "preview",
                             "message": f"{type(error).__name__}: {error}",
                             "client_op": message.get("client_op"),
+                            "preview_id": message.get("preview_id"),
                         })
                     return
                 job.adopt()  # 古くても覚え直す(確定が同じ形・同じ引数なら使い回す)
@@ -940,12 +956,18 @@ class Server:
             self._ai_provider_kind = provider
         self._ai_model = model or None
         self._ai_base_url = base_url or None
+        return self._reset_ai_conversation()
+
+    def _reset_ai_conversation(self) -> dict:
+        """会話を捨て、次に使うときに今の設定で作り直す(古いプロバイダ・古い会話の履歴を持ち越さない)。
+
+        返す `ai_status` の `conversation_reset` は画面との契約: 画面は会話欄に区切りを入れる(`aiChat.svelte.ts`)。
+        """
         # 古い設定で走っているウォームアップの接続を閉じる(捨てる会話のために相手を占有しない)。
         self._ai_cancellation.cancel()
-        # 次に使うときに作り直す(古いプロバイダ・古い会話の履歴を持ち越さない)。
         self._ai_loop = None
         self._ai_cancellation = Cancellation()
-        return self._ai_status()
+        return {**self._ai_status(), "conversation_reset": True}
 
     def _ai_set_api_key(self, key: Any) -> dict:
         """設定ダイアログから届いたClaudeのAPIキーを書く(`None` なら消す)。値は返さない。
@@ -971,10 +993,7 @@ class Server:
         except (ValueError, OSError) as error:
             reason = str(error) if isinstance(error, ValueError) else f"APIキーの保存に失敗: {error}"
             return {**self._ai_status(), "error": reason}
-        self._ai_cancellation.cancel()
-        self._ai_loop = None
-        self._ai_cancellation = Cancellation()
-        return self._ai_status()
+        return self._reset_ai_conversation()
 
     def _ensure_ai_loop(self) -> AgentLoop:
         """今の設定で `AgentLoop` を作る(無ければ)。失敗理由は `ProviderError`(画面に出せる文)。"""

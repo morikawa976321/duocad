@@ -509,7 +509,7 @@ def test_tapered_sides_take_fillets_and_chamfers(finish):
     shape = document.bodies[0].shape
     edges = list(range(1, _brep_topology.edge_count(shape) + 1))
 
-    (fillet if finish == "fillet" else chamfer)(document, edges, 1.0)
+    (fillet if finish == "fillet" else chamfer)(document, edges, 1.0, body_id=document.bodies[0].id)
 
     finished = document.bodies[0].shape
     assert BRepCheck_Analyzer(finished).IsValid()
