@@ -1182,6 +1182,8 @@
   function completePickedRef(ref: SelectionRef, target: PickTarget | null): SelectionRef | null {
     if ('sketch' in ref) {
       if (!('entity' in ref)) return ref
+      // 線分を待つ引数は、点が付いていてもコアは図形全体を使う(鏡映の軸・回転体の軸)。
+      if (target === 'sketchEntity') return { ...ref, point: null }
       if (target !== 'sketchPoint') return { ...ref, point: ref.point ?? null }
       if (ref.point !== undefined && ref.point !== null) return ref
       const kind = sketches.find((item) => item.sketch_id === ref.sketch)?.entities.find((item) => item.entity_id === ref.entity)?.kind
