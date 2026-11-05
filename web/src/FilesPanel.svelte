@@ -109,8 +109,10 @@
   }
 
   const draftProblem = $derived(nameProblem(draftName))
-  // 先埋めとの文字列の一致で見る: `part.json.json` の先埋め `part.json` は `withSuffix` すると別名になる。
-  const draftUnchanged = $derived(currentName !== null && draftName === currentStem())
+  // 先埋めとの文字列の一致も見る: `part.json.json` の先埋め `part.json` は `withSuffix` すると別名になる。
+  const draftUnchanged = $derived(
+    currentName !== null && (draftName === currentStem() || withSuffix(draftName, '.json') === currentName),
+  )
 
   function submitDraft(): void {
     if (draftProblem !== null || draftUnchanged) return
