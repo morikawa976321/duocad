@@ -314,10 +314,11 @@
   /** 外周の辺を頼んだ面(`${body_id}:${shape_revision}:${面の添字}`)。コマンドを降りたら忘れる(`onCommandEnd` / `onWantsKinds`)。 */
   const faceEdgesAsked = new Set<string>()
   /**
-   * 外周の辺を頼んだ時点の `commandRequests`(body_id ごと)。応答はこれと今の値が同じときだけ使う: 中断を送ってから
-   * 配信が届くまでは `edgeOnlyCommand` がまだ真で、遅れた応答が全解除の後に辺を足してしまう。
+   * 外周の辺を頼んだ時点の `commandRequests` と形の版(body_id ごと)。応答はどちらも今と同じときだけ使う: 中断を送ってから
+   * 配信が届くまでは `edgeOnlyCommand` がまだ真で、遅れた応答が全解除の後に辺を足してしまう。頼んだ後に別の画面が形を
+   * 変えると、サーバは古い面の添字を新しい形で読んで答える。確定を送ったら捨てる(`runCommand`)。
    */
-  const faceEdgesFor = new Map<string, number>()
+  const faceEdgesFor = new Map<string, { commands: number; shape: number }>()
   /** 丸めの面の連なり(「面の削除」でクリックを広げる)。 */
   const faceChains = createFaceChains({
     shapeRevisionOf: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.shape_revision,
@@ -1042,9 +1043,10 @@
    * 形が変わったなら捨てる。
    */
   function handleFaceEdges(payload: FaceEdgesPayload): void {
-    const askedAt = faceEdgesFor.get(payload.body_id)
+    const asked = faceEdgesFor.get(payload.body_id)
     faceEdgesFor.delete(payload.body_id)
-    if (askedAt !== commandRequests || !edgeOnlyCommand || !sameShape(payload.body_id, payload)) return
+    if (asked === undefined || asked.commands !== commandRequests || asked.shape !== payload.shape_revision) return
+    if (!edgeOnlyCommand || !sameShape(payload.body_id, payload)) return
     modifySelection(payload.boundary_edges.map((index) => edgeRef(payload.body_id, index)), [])
   }
 
@@ -1058,7 +1060,7 @@
         .map((face) => face.index)
       if (missing.length === 0) continue
       for (const index of missing) faceEdgesAsked.add(`${bodyId}:${body.shape_revision}:${index}`)
-      faceEdgesFor.set(bodyId, commandRequests)
+      faceEdgesFor.set(bodyId, { commands: commandRequests, shape: body.shape_revision })
       session.getFaceEdges(bodyId, missing)
     }
   }
@@ -1199,12 +1201,27 @@
    * 起動中のコマンドが直接ピック(`PickArgSpec`)で指したもの(ブーリアンのターゲット・鏡映面・回転軸の辺・スケッチの軸線など)。
    * 選択には入らないので、配信された引数から引いて選択と一緒に光らせる。
    */
-  const pickedRefs = $derived(
-    Object.values(model?.command?.args ?? {}).flatMap((value) => {
+  const pickedRefs = $derived.by(() => {
+    const verb = model?.command?.verb
+    const specs = verb === undefined ? [] : (commandDefinition(verb)?.args ?? [])
+    return Object.entries(model?.command?.args ?? {}).flatMap(([name, value]) => {
       const ref = pickedRefOf(value)
-      return ref === null ? [] : [ref]
-    }),
-  )
+      const spec = specs.find((item) => item.name === name)
+      const shown = ref === null ? null : completePickedRef(ref, spec?.kind === 'pick' ? spec.target : null)
+      return shown === null ? [] : [shown]
+    })
+  })
+
+  /**
+   * 配信されたピックの参照を、強調が読む完全な形にする。コアは AI が省いて置いた形(`kind` の無い `{body, index}`、
+   * `point` の無い `{sketch, entity}`)をそのまま配るので、種類は引数の `target` から補う。
+   */
+  function completePickedRef(ref: SelectionRef, target: PickTarget | null): SelectionRef | null {
+    if ('sketch' in ref) return 'entity' in ref ? { ...ref, point: ref.point ?? null } : ref
+    if ('kind' in ref && ref.kind !== undefined) return ref
+    if (target === 'face' || target === 'edge' || target === 'vertex') return { ...(ref as ShapeRef), kind: target }
+    return target === 'body' ? bodyRef((ref as ShapeRef).body) : null
+  }
 
   function drawHighlight(): void {
     const faces = [...selectedFaces, ...refsOfKind(pickedRefs, 'face')]
@@ -1637,19 +1654,20 @@
     session.endCommand(nextOp())
   }
 
-  /** 全モードのコマンド定義から表示名を引く(無ければ verb 名のまま)。 */
-  function commandLabel(verb: string): string {
-    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
+  /** 全モードのコマンド定義から verb の定義を引く。 */
+  function commandDefinition(verb: string) {
+    return [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
       (command) => command.id === verb,
     )
-    return found?.label ?? verb
+  }
+
+  /** 全モードのコマンド定義から表示名を引く(無ければ verb 名のまま)。 */
+  function commandLabel(verb: string): string {
+    return commandDefinition(verb)?.label ?? verb
   }
 
   function argLabel(verb: string, name: string): string {
-    const found = [...SOLID_COMMANDS, ...SKETCH_PENDING_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].find(
-      (command) => command.id === verb,
-    )
-    return found?.args.find((spec) => spec.name === name)?.label ?? name
+    return commandDefinition(verb)?.args.find((spec) => spec.name === name)?.label ?? name
   }
 
   /** 外(AI か別の画面)が作業空間を変えたら1行で知らせる。自分の操作の応答では呼ばない(`handleState`)。 */
@@ -2150,6 +2168,8 @@
   /** 揃った引数をサーバへ送る。経路はコマンドの分類(`categoryOf`)だけで決まり、知らない名前はここで断る。 */
   function runCommand(...request: BuiltCommandRequest): void {
     const [verb] = request
+    // 確定より後に届く外周の辺の応答は確定前の形の添字なので、変わった形の選択へ入れない。
+    faceEdgesFor.clear()
     const category = CATEGORY_OF.get(verb)
     if (category === undefined || category === 'ui') {
       // `ui`(スケッチの「選ぶ」)は何も送らない道具なので、通常ここへは来ない。
