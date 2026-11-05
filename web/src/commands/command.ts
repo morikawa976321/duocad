@@ -243,18 +243,10 @@ export interface PointArgSpec extends ArgSpecCommon {
  * 配信された値を欄へ戻すときも同じ対応で引く(`sharedArgsController.ts` の `transitionSharedArgs`)。
  * `impliedBy` は `sends: null` の選択肢だけが持つ、配信からその選択肢を戻す手がかり: 配信にこの名前の引数があれば、
  * 自分の引数が配信に無くてもこの選択肢を選び直す(再読み込みで回転体の「線分を選ぶ」が戻らず `axis_line` が隠れたままになるのを防ぐ)。
- * `impliedValue` があれば、その引数の値が一致するときだけ戻す(同じ引数を手がかりにする選択肢が複数あるとき。前にある方が先に見られる)。
  */
 export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
-  options: Array<{
-    value: string
-    label: string
-    buttonId: string
-    sends?: unknown
-    impliedBy?: string
-    impliedValue?: unknown
-  }>
+  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string }>
 }
 
 /** 選択肢がサーバへ出す値(`sends` が無ければ `value`)。`null` は「出さない」。 */
@@ -288,22 +280,12 @@ export function syncedChoice(
     (candidate) =>
       candidate.impliedBy !== undefined &&
       remote[candidate.impliedBy] !== undefined &&
-      (candidate.impliedValue === undefined ||
-        JSON.stringify(remote[candidate.impliedBy]) === JSON.stringify(candidate.impliedValue)) &&
       (changed(candidate.impliedBy) || changed(spec.name)),
   )
   if (implied !== undefined) return { value: implied.value }
-  // サーバの値にならない選択肢(`sends: null`)は、サーバに無いことが「選んでいない」を意味しない。ただし値を選択肢そのものが
-  // 決めている(`impliedValue`)のに、その引数が配信から消えたら残さない: 残すと相手が外した値(動かすの原点の軸)を送り直す。
-  // 「線分を選ぶ」のような値を持たない選択肢は残す(ピックの欄が空になるだけで、古い値は送らない)。
+  // サーバの値にならない選択肢(`sends: null`)は、サーバに無いことが「選んでいない」を意味しない。
   const option = spec.options.find((candidate) => candidate.value === current)
-  if (option === undefined || choiceSends(option) !== null) return { value: undefined }
-  const removed =
-    option.impliedBy !== undefined &&
-    option.impliedValue !== undefined &&
-    previous[option.impliedBy] !== undefined &&
-    remote[option.impliedBy] === undefined
-  return removed ? { value: undefined } : { value: current }
+  return option !== undefined && choiceSends(option) === null ? { value: current } : { value: undefined }
 }
 
 /** スケッチの図形を選ぶ引数(反復のverb)。値は共有選択集合のうち編集中スケッチの図形のID(`App.svelte` の `selectedEntities`)で、`CommandHost` へは `entities` プロパティで渡る。 */

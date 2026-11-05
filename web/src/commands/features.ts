@@ -8,7 +8,6 @@
  * 反復にはサーバのプレビューを出さない(変わるのはスケッチの図形でソリッドではない)。幽霊はブラウザだけで描き、規則はコアの写し(docs/contracts/verbs.md)。
  */
 import {
-  datumRef,
   pickedRefOf,
   positive,
   refKind,
@@ -594,18 +593,13 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
   },
 }
 
-/** 原点を通る3軸。`sends` の向きは配信から欄へ戻すときの逆引きにも使う(`syncedChoice`)。 */
-const ORIGIN_AXES = [
-  { value: 'x', label: 'X軸', datum: 'X' },
-  { value: 'y', label: 'Y軸', datum: 'Y' },
-  { value: 'z', label: 'Z軸', datum: 'Z' },
-] as const
-
 /**
  * ボディの平行移動 / 回転 / 複製。対象はボディ単位で選ぶ(`BODY_SELECTION`)。
  * 複製するか・並進か回転かは既定を置かず人に選ばせる(押し出しの `mode` と同じ理由)。
  *
  * 回転軸は共有選択集合に入れず別チャンネル(`kind: 'pick'`)で指す: 入れると `require_bodies` が軸にした辺のボディまで動かす対象に数える。
+ * 軸はまっすぐな辺か原点の軸をクリックで指す。画面だけの選択肢(X/Y/Z のボタン)は置かない: 共有引数に無い状態を画面が持つと、
+ * AI が数値の軸(`axis_dir` + `axis_point`)を置いたときに画面の選択が残り、原点の軸で送り直して位置を上書きする。
  * 中心は省略可で、既定はコアが決める(対象の合成重心)。軸のピックは角度より前に置く(`args` の並びが `firstMissingArg` の順序)。
  */
 export const MOVE_BODY: CommandDef<'move_body'> = {
@@ -629,32 +623,13 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
     { kind: 'number', ...offsetArg('dy', 'move-body', finite('Y')) },
     { kind: 'number', ...offsetArg('dz', 'move-body', finite('Z')) },
     {
-      // 画面だけの選択肢(サーバの引数名ではない)。X/Y/Z は原点の軸の参照を `axis_edge` で送る。数値の軸(`axis_dir`)へ
-      // 写すと、AI が別の点を通して置いた `axis_dir` + `axis_point` から X/Y/Z を復元したとき、点を原点で上書きして送り直す。
-      kind: 'choice',
-      name: 'axis_kind',
-      label: '回転軸',
-      options: [
-        ...ORIGIN_AXES.map(({ value, label, datum }) => ({
-          value,
-          label,
-          buttonId: `move-body-axis-${value}`,
-          sends: null,
-          impliedBy: 'axis_edge',
-          impliedValue: { datum },
-        })),
-        { value: 'edge', label: '辺を選ぶ', buttonId: 'move-body-axis-edge', sends: null, impliedBy: 'axis_edge' },
-      ],
-      when: isRotateMode,
-    },
-    {
       kind: 'pick',
       name: 'axis_edge',
-      label: '回転軸にする辺',
+      label: '回転軸にする辺か原点の軸',
       target: 'edge',
       datum: true,
       buttonId: 'move-body-axis',
-      when: (values) => isRotateMode(values) && values.axis_kind === 'edge',
+      when: isRotateMode,
     },
     {
       kind: 'pick',
@@ -675,13 +650,11 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
       axes: ['dx', 'dy', 'dz'],
       zeroReason: '移動量が全部0',
       rotateArgs: (angle, given) => {
-        const center = pickedRefOf(given.center_vertex)
-        const origin = ORIGIN_AXES.find((item) => item.value === given.axis_kind)
         // 軸は参照のまま送る: 辺が乗る直線を厳密に出せるのはコアだけ(ブラウザの持つのは折れ線)。原点の軸もコアが解く。
-        const axis = origin !== undefined ? datumRef(origin.datum) : given.axis_kind === 'edge' ? pickedRefOf(given.axis_edge) : null
-        if (given.axis_kind === undefined) return { ok: false, reason: '回転軸が選ばれていない' }
-        if (axis === null) return { ok: false, reason: '回転軸にする辺が指されていない' }
-        // 指していない中心は引数ごと送らない(既定の合成重心はコアが決める。原点の軸では軸の上の点なので原点を通る)。
+        const axis = pickedRefOf(given.axis_edge)
+        if (axis === null) return { ok: false, reason: '回転軸にする辺か原点の軸が指されていない' }
+        const center = pickedRefOf(given.center_vertex)
+        // 指していない中心は引数ごと送らない(既定の合成重心はコアが決める)。
         return {
           ok: true,
           args: { mode: 'rotate', angle, axis_edge: axis, ...(center === null ? {} : { center_vertex: center }) },
