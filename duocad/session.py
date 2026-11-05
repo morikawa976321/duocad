@@ -1188,6 +1188,7 @@ class Session:
             self._current_name = target.name
             self._created = created
             self.autosaver.mark_saved()
+            self.optimization.named(self.document, target.name)
         return {
             "action": "save",
             "path": str(target),

@@ -193,6 +193,27 @@ def test_deleting_the_unsaved_open_file_does_not_write_it_back(session: Session,
     assert not (session.models_dir / "mine.json").exists()
 
 
+def test_naming_an_untitled_document_while_optimizing_moves_the_run_to_that_file(session: Session, monkeypatch) -> None:
+    """落ちたら: 最適化中の無題の文書に最初の保存で名前が付いても、実行がその名前を知らず、開き直した写しを編集できる。"""
+    real_write = session.store.write_document_file
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    session.sketch_create("XY")
+    assert session.current_name is None and session.saved is False
+    session.begin_optimization()
+    monkeypatch.setattr(session.store, "write_document_file", real_write)
+
+    session.close_document()
+    session.open_document("untitled-1.json")
+
+    assert session.optimizing_name == "untitled-1.json"
+    assert session.optimization_visible is True
+    session.end_optimization()
+
+
 def test_every_document_change_is_autosaved_and_undo_redo_follow(session: Session) -> None:
     """落ちたら: verb・undo・redo のどれかがディスクに写らない(ファイルが今の文書の鏡でない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]

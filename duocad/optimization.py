@@ -131,6 +131,17 @@ class Optimization:
             raise ValueError("最適化が既に走っている(中断してから)")
         self._active = OptimizationRun(document, name, created)
 
+    def named(self, document: Document, name: str) -> None:
+        """無題で走らせた文書に最初のファイル名が付いたら、実行の届け先・編集の拒否・記録にも写す
+        (写さないと、その名前で開き直した写しを編集でき、結果は別の `untitled-<n>.json` へ届く)。
+        """
+        run = self._active
+        if run is None or run.document is not document or run.name is not None:
+            return
+        run.name = name
+        if run.record is not None and run.record.name is None:
+            run.record.name = name
+
     def prepare_search(self) -> OptimizationRun:
         run = self._active
         if run.record is None:
