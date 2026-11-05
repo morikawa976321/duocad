@@ -5,13 +5,14 @@
    * - 鍵はここでは打たない(`SettingsDialog.svelte`)。ここが見るのは置いてあるかの真偽(`apiKeyConfigured`)だけ。
    * - プロバイダの選択は `status.providers` で駆動する(2つ以上のときだけ選択UIを出す)。
    * - 会話の時系列(`transcript`)の正は `aiChat.svelte.ts`。サーバ側の会話(`duocad/agent/loop.py`)が残らないための代わりにブラウザ側が持つ
-   *   (`session.ts` の `AiTranscriptEntry` 参照)。ここが持つのは見た目だけの状態(`draft`・設定フォームの開閉と打ちかけ・`open`)で、再読込で消える。
+   *   (`session.ts` の `AiTranscriptEntry` 参照)。打ちかけの依頼文(`draft`)も親が持つ(右サイドバーを閉じるとこのパネルごと消える)。
+   *   ここが持つのは見た目だけの状態(設定フォームの開閉と打ちかけ・`open`)で、閉じると消える。
    * - ツール呼び出しの表示は verb 名をそのまま出す(操作ログ・MCPツール名と同じ綴り)。
    *
    * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
    * 既定は開いている(再読込をまたいで保持しない)。「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
-  import { inputBlockedReason, resultDetail, resultLine } from './aiResult'
+  import { inputBlockedReason, resultDetail, resultLine, toolFailureReason } from './aiResult'
   import { isImeKey } from './keys'
   import type { AiProviderKind, AiStatus, AiThinking, AiTranscriptEntry, ConnectionStatus } from './session'
 
@@ -19,6 +20,7 @@
     status,
     connection,
     transcript,
+    draft = $bindable(),
     onSend,
     onCancel,
     onConfigure,
@@ -28,13 +30,13 @@
     /** サーバとのWebSocketの状態。`status`(`ai_status`)は切断後も残るので、繋がっているかはこちらで見る。 */
     connection: ConnectionStatus
     transcript: AiTranscriptEntry[]
+    draft: string
     onSend: (message: string) => void
     onCancel: () => void
     onConfigure: (provider: AiProviderKind, baseUrl?: string) => void
     onSetThinking: (thinking: AiThinking) => void
   } = $props()
 
-  let draft = $state('')
   let settingsOpen = $state(false)
   /** パネル本体(会話・入力・設定)を出しているか。畳んでもヘッダ行(プロバイダ名・中断・設定)は「何が繋がっているか」「応答中か」を言う役目なので見せたままにする。 */
   let open = $state(true)
@@ -89,12 +91,35 @@
     settingsOpen = false
   }
 
+  let messageInput: HTMLInputElement | undefined = $state()
+  let transcriptBox: HTMLDivElement | undefined = $state()
+
   function send(): void {
     const text = draft.trim()
     if (!text || running || blockedReason) return
     onSend(text)
     draft = ''
+    // 送信ボタンで送ると、応答中に無効になったボタンがフォーカスを持ったままになる。
+    messageInput?.focus()
   }
+
+  // 応答が終わったら次の依頼を打てるように戻す。ほかの欄を打っている最中なら奪わない。
+  let wasRunning = false
+  $effect(() => {
+    const now = running
+    if (wasRunning && !now && messageInput) {
+      const active = document.activeElement
+      if (active === null || active === document.body || messageInput.closest('.ai-panel')?.contains(active)) {
+        messageInput.focus()
+      }
+    }
+    wasRunning = now
+  })
+
+  $effect(() => {
+    void transcript.length
+    if (transcriptBox) transcriptBox.scrollTop = transcriptBox.scrollHeight
+  })
 
   /** 引数・結果はJSONで畳んでおく(§長い応答対策)。 */
   function toolLine(call: AiTranscriptEntry & { kind: 'tool' }): string {
@@ -211,7 +236,7 @@
       </p>
     {/if}
 
-    <div class="ai-transcript" id="ai-transcript">
+    <div class="ai-transcript" id="ai-transcript" bind:this={transcriptBox}>
       {#each transcript as entry, index (index)}
         {#if entry.kind === 'user'}
           <p class="line user">{entry.text}</p>
@@ -219,6 +244,9 @@
           <p class="line tool" class:tool-fail={!entry.call.ok}>
             {entry.call.ok ? '✓' : '✗'} {toolLine(entry)}
           </p>
+          {#if !entry.call.ok && toolFailureReason(entry.call.result)}
+            <p class="tool-reason" data-ai-tool-reason>{toolFailureReason(entry.call.result)}</p>
+          {/if}
         {:else if entry.kind === 'result'}
           <p class="line result">
             {resultLine(entry.result)}
@@ -229,6 +257,8 @@
           {#if usageLine(entry.result.usage)}
             <p class="hint dim">{usageLine(entry.result.usage)}</p>
           {/if}
+        {:else if entry.kind === 'reset'}
+          <p class="line reset dim" data-ai-reset>── ここから新しい会話(AIは上の会話を覚えていない) ──</p>
         {:else}
           <p class="line error">{entry.message}</p>
         {/if}
@@ -242,8 +272,9 @@
       <input
         id="ai-message"
         type="text"
-        placeholder={blockedReason ?? '話しかける…'}
-        disabled={running || !!blockedReason}
+        placeholder={blockedReason ?? (running ? '次の依頼を書いておける(送れるのは応答の後)' : '話しかける…')}
+        disabled={!!blockedReason}
+        bind:this={messageInput}
         bind:value={draft}
         onkeydown={(event) => {
           if (event.key !== 'Enter' || isImeKey(event)) return
@@ -263,18 +294,16 @@
     border-top: 1px solid var(--line);
     background: var(--panel);
     padding: 6px 10px;
-    /* 高さを固定する: 内容任せだと会話が伸びるたびにビューポートがリサイズされ、カメラのアスペクトと射影が動く
-       (直前に射影した画素を押すと別のものが取れる)。 */
-    height: 220px;
-    flex: 0 0 auto;
+    /* 右サイドバーの残りを全部使う。高さは `.main` が決めるので、会話が伸びてもビューポートの寸法は動かない
+       (`styles.css` の不変条件)。 */
+    flex: 1 1 auto;
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
 
-  /* 畳んだら220px固定を効かせずヘッダ行だけの高さにする(`flex: 0 0 auto` は維持: 縮んでよいのはビューポートだけ)。 */
   .ai-panel.collapsed {
-    height: auto;
+    flex: 0 0 auto;
   }
 
   .ai-head {
@@ -351,6 +380,19 @@
 
   .line.error {
     color: var(--bad);
+  }
+
+  .tool-reason {
+    margin: 0 0 2px 1.5em;
+    color: var(--bad);
+    font-size: var(--fs-meta);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .line.reset {
+    margin: 6px 0;
+    text-align: center;
   }
 
   .ai-input {

@@ -10,6 +10,7 @@
   import { onMount, untrack } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import { sharedArgsChangeNote } from './sharedArgsController'
+  import { appendedEntries } from './logTail'
   import { createPreviewController } from './previewController'
   import {
     bodyRef,
@@ -393,7 +394,7 @@
   let selfSelections = $state(0)
 
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
-  const ai = createAiChat({ send: (text) => session.aiSend(text), fail })
+  const ai = createAiChat({ send: (text) => session.aiSend(text), fail, inform, hidden: () => !sidebarOpen })
 
   const serverWait = createServerWait()
 
@@ -953,6 +954,9 @@
       return
     }
     if (applied) {
+      // 共有の undo は AI の操作も戻すので、何が戻ったかを言う。MCP からの undo は `applied` が届かない(`Server._on_core_change`)。
+      if (applied.verb === 'undo') inform(`取り消した: ${commandLabel(applied.undone)}`)
+      if (applied.verb === 'redo') inform(`やり直した: ${commandLabel(applied.redone)}`)
       // 作ったスケッチへはサーバが誰の操作でも入れる(`Session._settle_workspace`)。ここでは入らない。
       if (applied.verb === 'import_step') {
         // 読み込んだモデル全体が入る視点へ合わせ直す。文書のスケールが不連続に変わるのはインポートだけ
@@ -1662,8 +1666,9 @@
     if (was === null && now !== null) {
       note(`外から「${commandLabel(now.verb)}」が起動された(AI か別の画面)`)
     } else if (was !== null && now === null) {
+      // 別の verb の適用(スケッチを作る等)でも畳まれる。外からの変更は `applied` が届かないので、増えたログで見る。
       note(
-        after.applied_count > before.applied_count
+        appendedEntries(before.log, after.log).some((entry) => entry.verb === was.verb)
           ? `外から「${commandLabel(was.verb)}」が確定された(AI か別の画面)`
           : `外から「${commandLabel(was.verb)}」が畳まれた(AI か別の画面)`,
       )
@@ -2351,10 +2356,10 @@
     }
     if (key === 'z' && !event.shiftKey) {
       event.preventDefault()
-      session.undo()
+      session.undo(nextOp())
     } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
       event.preventDefault()
-      session.redo()
+      session.redo(nextOp())
     }
   }
 
@@ -2849,6 +2854,7 @@
           status={ai.status}
           connection={status}
           transcript={ai.transcript}
+          bind:draft={ai.draft}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}
           onConfigure={(providerKind, baseUrl) => {

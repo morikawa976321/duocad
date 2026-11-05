@@ -948,12 +948,18 @@ class Server:
             self._ai_provider_kind = provider
         self._ai_model = model or None
         self._ai_base_url = base_url or None
+        return self._reset_ai_conversation()
+
+    def _reset_ai_conversation(self) -> dict:
+        """会話を捨て、次に使うときに今の設定で作り直す(古いプロバイダ・古い会話の履歴を持ち越さない)。
+
+        返す `ai_status` の `conversation_reset` は画面との契約: 画面は会話欄に区切りを入れる(`aiChat.svelte.ts`)。
+        """
         # 古い設定で走っているウォームアップの接続を閉じる(捨てる会話のために相手を占有しない)。
         self._ai_cancellation.cancel()
-        # 次に使うときに作り直す(古いプロバイダ・古い会話の履歴を持ち越さない)。
         self._ai_loop = None
         self._ai_cancellation = Cancellation()
-        return self._ai_status()
+        return {**self._ai_status(), "conversation_reset": True}
 
     def _ai_set_api_key(self, key: Any) -> dict:
         """設定ダイアログから届いたClaudeのAPIキーを書く(`None` なら消す)。値は返さない。
@@ -979,10 +985,7 @@ class Server:
         except (ValueError, OSError) as error:
             reason = str(error) if isinstance(error, ValueError) else f"APIキーの保存に失敗: {error}"
             return {**self._ai_status(), "error": reason}
-        self._ai_cancellation.cancel()
-        self._ai_loop = None
-        self._ai_cancellation = Cancellation()
-        return self._ai_status()
+        return self._reset_ai_conversation()
 
     def _ensure_ai_loop(self) -> AgentLoop:
         """今の設定で `AgentLoop` を作る(無ければ)。失敗理由は `ProviderError`(画面に出せる文)。"""

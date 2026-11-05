@@ -26,6 +26,7 @@ EVALUATORS = [
     "eval_headlight.mjs",
     "eval_interference.mjs",
     "eval_keys.mjs",
+    "eval_log_tail.mjs",
     "eval_min_width.mjs",
     "eval_pixel_ratio.mjs",
     "eval_preview_controller.mjs",
