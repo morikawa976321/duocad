@@ -409,7 +409,7 @@ export interface FaceChainsPayload extends EdgeChainsPayload {
   origins: number[]
 }
 
-/** 面の外周の辺の応答(`get_face_edges`)。頼んだ面 `faces` の外周の辺の添字をまとめて昇順で(穴の縁は入れない)。 */
+/** 面の外周の辺の応答(`get_face_edges`)。頼んだ面 `faces` の外周の辺を連なりまで広げ、添字をまとめて昇順で(穴の縁は入れない)。 */
 export interface FaceEdgesPayload {
   body_id: string
   /** 頼んだ時点の形の版(`EdgesPayload.shape_revision` と同じ見方)。 */

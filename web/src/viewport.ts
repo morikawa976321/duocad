@@ -1522,7 +1522,7 @@ export function createViewport(container: HTMLElement): Viewport {
     return near
   }
 
-  function lookAtSketch(sketchId: string): void {
+  function lookAtSketch(sketchId: string, options: { emptyDocument?: boolean } = {}): void {
     const target = sketchLayer.get(sketchId)
     if (!target) return
     const frame = target.frame
@@ -1538,7 +1538,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (box !== null) {
       center = toWorld(frame, (box.uMin + box.uMax) / 2, (box.vMin + box.vMax) / 2)
       radius = Math.max(box.uMax - box.uMin, box.vMax - box.vMin) / 2
-    } else if (bodies.size === 0 && [...sketchLayer.entries()].every(([, scene]) => scene.points.length === 0)) {
+    } else if (options.emptyDocument === true) {
       radius = EMPTY_SKETCH_HALF_WIDTH
     }
     const previous = camera.position.distanceTo(controls.target)

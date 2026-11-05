@@ -313,6 +313,11 @@
   let edgeChainsAsked = new Set<string>()
   /** 外周の辺を頼んだ面(`${body_id}:${shape_revision}:${面の添字}`)。コマンドを降りたら忘れる(`onCommandEnd` / `onWantsKinds`)。 */
   const faceEdgesAsked = new Set<string>()
+  /**
+   * 外周の辺を頼んだ時点の `commandRequests`(body_id ごと)。応答はこれと今の値が同じときだけ使う: 中断を送ってから
+   * 配信が届くまでは `edgeOnlyCommand` がまだ真で、遅れた応答が全解除の後に辺を足してしまう。
+   */
+  const faceEdgesFor = new Map<string, number>()
   /** 丸めの面の連なり(「面の削除」でクリックを広げる)。 */
   const faceChains = createFaceChains({
     shapeRevisionOf: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.shape_revision,
@@ -434,7 +439,10 @@
         faceChains.forgetAsked()
         pendingChainPick = null
       }
-      if (where === 'get_face_edges' || where === 'send') faceEdgesAsked.clear()
+      if (where === 'get_face_edges' || where === 'send') {
+        faceEdgesAsked.clear()
+        faceEdgesFor.clear()
+      }
       if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
       // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
       // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
@@ -475,6 +483,7 @@
         edgeChainsAsked.clear()
         faceChains.forgetAsked()
         faceEdgesAsked.clear()
+        faceEdgesFor.clear()
         pendingChainPick = null
         verticesAsked.clear()
         files.dropThumbnailRequests()
@@ -1028,15 +1037,15 @@
     if (pendingChainPick?.()) pendingChainPick = null
   }
 
-  /** 外した面の外周の辺を、辺の連なりで選択へ入れる(`onWantsKinds`)。届く前に降りた・形が変わったなら捨てる。 */
+  /**
+   * 外した面の外周の辺(連なりまで広げてコアが返す)を選択へ入れる(`onWantsKinds`)。届く前に降りた・起動し直した・
+   * 形が変わったなら捨てる。
+   */
   function handleFaceEdges(payload: FaceEdgesPayload): void {
-    if (!edgeOnlyCommand || !sameShape(payload.body_id, payload)) return
-    const items = payload.boundary_edges.map((edgeIndex) => ({ bodyId: payload.body_id, edgeIndex }))
-    const add = () => {
-      modifySelection(items.flatMap((item) => edgeChainRefs(item.bodyId, item.edgeIndex) ?? []), [])
-    }
-    if (items.some((item) => edgeChainRefs(item.bodyId, item.edgeIndex) === null)) deferUntilChains(items, add)
-    else add()
+    const askedAt = faceEdgesFor.get(payload.body_id)
+    faceEdgesFor.delete(payload.body_id)
+    if (askedAt !== commandRequests || !edgeOnlyCommand || !sameShape(payload.body_id, payload)) return
+    modifySelection(payload.boundary_edges.map((index) => edgeRef(payload.body_id, index)), [])
   }
 
   /** 面の外周の辺を頼む(同じ起動で同じ形の同じ面は2度頼まない)。隠したボディ・メッシュボディは辺を持たないので頼まない。 */
@@ -1049,6 +1058,7 @@
         .map((face) => face.index)
       if (missing.length === 0) continue
       for (const index of missing) faceEdgesAsked.add(`${bodyId}:${body.shape_revision}:${index}`)
+      faceEdgesFor.set(bodyId, commandRequests)
       session.getFaceEdges(bodyId, missing)
     }
   }
@@ -1995,6 +2005,11 @@
     sketches.find((item) => item.sketch_id === sketchId) ?? null,
   )
 
+  /** 文書にボディも図形も無いか(隠したものも数える。`viewport.lookAtSketch` の寄せ先)。 */
+  function documentEmpty(): boolean {
+    return (model?.bodies.length ?? 0) === 0 && sketches.every((item) => item.entities.length === 0)
+  }
+
   function drawSketches(): void {
     viewport?.showSketches(buildSketchDraws(sketches, selection, sketchId, refsOfKind(pickedRefs, 'sketch_entity')))
   }
@@ -2029,7 +2044,7 @@
     // どの遷移でも同期に描き直す(入る側は直後の `lookAtSketch` が平面の枠を要る。`handleState` と同じ)。
     // 抜ける側にも要る: 抜けたスケッチの点マーカーが次の状態配信まで残り、手前に浮いてクリックを奪いうる。
     drawSketches()
-    if (next.kind === 'sketch') viewport?.lookAtSketch(next.id)
+    if (next.kind === 'sketch') viewport?.lookAtSketch(next.id, { emptyDocument: documentEmpty() })
     // スケッチの戻り先: 最適化モードから入ったら、抜けたときに最適化モードへ入り直す。文書をまたいだ遷移では前の文書の
     // モードを「前」として読まない(`handleState` が戻り先を捨てた直後に、ここで書き直さない)。
     if (crossedDocument) return
@@ -2605,7 +2620,7 @@
             編集中 {planeLabel(activeSketch.plane, '面に貼ったスケッチ')}
             ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
           </span>
-          <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId)}>
+          <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId, { emptyDocument: documentEmpty() })}>
             正面から見る
           </button>
           <button id="sketch-exit" onclick={exitSketch}>抜ける</button>

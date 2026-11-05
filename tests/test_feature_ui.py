@@ -207,6 +207,21 @@ def test_face_edges_answer_the_outer_edges_of_the_asked_faces(session: Session) 
     assert clients[1].payloads == [], "外周の辺は全接続へ配らない(要求した接続だけ)"
 
 
+def test_face_edges_widen_the_outer_edges_to_their_chains(session: Session) -> None:
+    """落ちたら、面から読み替えた辺が連なりの一部だけになる(フィレットは連なり全体へかかるので、光った所より広く丸まる)。"""
+    body, _ = _box(session)
+    _select(session, _edges(body, [1]))
+    session.fillet(RADIUS_THAT_WORKS)
+    widened = 0
+    for face in query.describe_faces(body.shape):
+        boundary = query.edges_of_face(body.shape, face["index"])
+        chains = session.edge_chains(body.id, boundary)["chains"]
+        answer = session.face_edges(body.id, [face["index"]])["boundary_edges"]
+        assert answer == sorted({member for chain in chains for member in chain})
+        widened += len(answer) > len(boundary)
+    assert widened > 0, "丸めの隣の面は、外周の外まで続く連なりを持つ(テストの前提)"
+
+
 def test_edge_chains_survive_a_zoom(session: Session, monkeypatch) -> None:
     """落ちたら、ズームで粗さが変わるたびに連なりを求め直す(連なりは形にだけ依存する。大きな部品で辺1本 10ms)。"""
     body, _ = _box(session)

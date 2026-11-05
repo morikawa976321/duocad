@@ -2412,7 +2412,7 @@ COMMANDS: tuple[Command, ...] = (
         changes_document=False,
         note=(
             "**配信しない**(`get_edge_chains` と同じ)。面を選んだままフィレット・面取りを起動したとき、"
-            "画面がその面を外周の辺(穴の縁は入れない)へ読み替えるために頼む"
+            "画面がその面を外周の辺(穴の縁は入れない。連なりまで広げる)へ読み替えるために頼む"
         ),
     ),
     # アプリ内AI(protocol)。**verbではなく、実体は `net/ws.py` の `Server`**(`session=None`)。

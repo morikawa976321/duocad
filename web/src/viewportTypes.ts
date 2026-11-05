@@ -596,8 +596,11 @@ export interface Viewport {
    * クリックが選択の置き換えになるため。
    */
   setActiveSketch(sketchId: string | null): void
-  /** スケッチ平面を正面から見る視点へ移す。 */
-  lookAtSketch(sketchId: string): void
+  /**
+   * スケッチ平面を正面から見る視点へ移す。`emptyDocument` は文書にボディも図形も無いこと(隠したボディも数える。
+   * 画面に描いていないボディをビューポートは知らないので、文書を持つ側が答える)。図形の無いスケッチの寄せ先に効く。
+   */
+  lookAtSketch(sketchId: string, options?: { emptyDocument?: boolean }): void
   /**
    * 今あるもの全体が入る視点へ戻す。抜けたときの復帰は `setActiveSketch(null)` が
    * 「入る前の視点」へ戻す。実機検査が図形を画面内へ収めるために呼ぶ。

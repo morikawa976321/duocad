@@ -1054,16 +1054,21 @@ class DocumentView:
         }
 
     def face_edges(self, body_id: str, face_indices: list) -> dict:
-        """頼まれた面の外周の辺(`query.edges_of_face`。穴の縁は入れない)を、全部の面の分まとめて昇順で返す。
+        """頼まれた面の外周の辺(`query.edges_of_face`。穴の縁は入れない)を、それぞれの連なり(`edge_chains`)まで広げ、
+        全部の面の分まとめて昇順で返す。
 
         戻り値: `{"body_id", "revision", "shape_revision", "faces": [頼まれた面(重複を畳む)], "boundary_edges": [辺の添字(昇順)]}`
 
-        画面は、面を選んだままフィレット・面取りを起動したとき、その面を外周の辺へ読み替える(辺だけを食うコマンドの
-        起動中は面を指せない)。辺の連なりは入れない(`edge_chains` で別に頼む)。
+        画面は、面を選んだままフィレット・面取りを起動したとき、その面をこの辺へ読み替える(辺だけを食うコマンドの
+        起動中は面を指せない)。連なりまでここで広げるのは、画面が辺の連なりの応答を待つ口(1件しか待てない)を使わずに
+        済ませるため(複数のボディの面を選んでいると、後の応答が先の待ちを上書きする)。
         """
         body = self._visible_brep(body_id, "面")
         faces = list(dict.fromkeys(int(index) for index in face_indices))
-        edges = sorted({edge for face in faces for edge in query.edges_of_face(body.shape, face)})
+        boundary = sorted({edge for face in faces for edge in query.edges_of_face(body.shape, face)})
+        finder = _memo(self._chain_cache, body_id, body.shape, None, lambda: kernel.edge_chain_finder(body.shape))
+        groups = finder.of(boundary)
+        edges = sorted({member for index in boundary for member in groups[index]})
         return {
             "body_id": body_id,
             "revision": self.body_revision(body_id),
