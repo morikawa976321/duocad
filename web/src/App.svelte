@@ -250,6 +250,7 @@
     setBasePlane(name: BasePlaneName): boolean
     useSelectedFaceAsPlane(): boolean
     wantsPick(): PickTarget | null
+    wantsPickDatum(): boolean
     setPick(ref: SelectionRef): boolean
     commitFailed(): void
     reconnected(): void
@@ -299,6 +300,8 @@
   let wantedPlane = $state(false)
   /** 起動中のコマンドが図形の直接ピックを待っている種別(`CommandHost` が知らせる)。待っている間だけ指せる。 */
   let wantedPick = $state<PickTarget | null>(null)
+  /** 待っているピック引数が原点パーツも受けるか(`PickArgSpec.datum`)。 */
+  let wantedPickDatum = $state(false)
   /**
    * 起動中のコマンドが頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`。測定)。
    * `wantedPick === 'vertex'` と同じ扱いで、対象ボディの頂点を候補に出し、辺より先に取る。
@@ -1267,14 +1270,25 @@
     body: ['face'],
     datum: ['datumPoint', 'datumAxis', 'datumPlane'],
   }
-  /** 直接ピックが受ける原点パーツ: 頂点・スケッチの点には原点、辺・スケッチの線分には軸、面には平面(コアの `datum.point_of` / `line_of` / `plane_name_of`)。 */
   const PICK_TARGET_KINDS: Record<PickTarget, PickKind[]> = {
-    face: ['face', 'datumPlane'],
+    face: ['face'],
     body: ['face'],
-    edge: ['edge', 'datumAxis'],
-    vertex: ['vertex', 'datumPoint'],
-    sketchPoint: ['sketchPoint', 'datumPoint'],
-    sketchEntity: ['sketchLine', 'sketchPoint', 'datumAxis'],
+    edge: ['edge'],
+    vertex: ['vertex'],
+    sketchPoint: ['sketchPoint'],
+    sketchEntity: ['sketchLine', 'sketchPoint'],
+  }
+  /**
+   * 原点パーツも受けるピック引数(`PickArgSpec.datum`)が足す的: 頂点・スケッチの点には原点、辺・スケッチの線分には軸、
+   * 面には平面(コアの `datum.point_of` / `line_of` / `plane_name_of`)。
+   */
+  const PICK_TARGET_DATUM_KINDS: Record<PickTarget, PickKind[]> = {
+    face: ['datumPlane'],
+    body: [],
+    edge: ['datumAxis'],
+    vertex: ['datumPoint'],
+    sketchPoint: ['datumPoint'],
+    sketchEntity: ['datumAxis'],
   }
   const EVERY_PICK_KIND: PickKind[] = [
     'face',
@@ -1316,6 +1330,7 @@
       for (const pick of PICK_KINDS_OF[kind]) kinds.add(pick)
     }
     if (wantedPick !== null) for (const pick of PICK_TARGET_KINDS[wantedPick]) kinds.add(pick)
+    if (wantedPick !== null && wantedPickDatum) for (const pick of PICK_TARGET_DATUM_KINDS[wantedPick]) kinds.add(pick)
     if (wantedVertices) kinds.add('vertex')
     // 直接ピックを待っている間は、待っているものより細かい的を外す: 細かい方が先に取られ(`resolveHit`)、鏡映面を
     // 狙った素のクリックが辺に、回転軸を狙ったクリックが辺の端の頂点に取られて対象の選択を置き換える
@@ -1937,8 +1952,9 @@
     editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
 
-  /** 直接ピックの待ちが、この原点パーツを受けるか(`PICK_TARGET_KINDS` と同じ対応)。 */
+  /** 直接ピックの待ちが、この原点パーツを受けるか(`PICK_TARGET_DATUM_KINDS` と同じ対応)。 */
   function pickTakesDatum(wants: PickTarget | null, name: DatumName): boolean {
+    if (host === null || !host.wantsPickDatum()) return false
     const kind = datumKind(name)
     if (wants === 'vertex' || wants === 'sketchPoint') return kind === 'point'
     if (wants === 'edge' || wants === 'sketchEntity') return kind === 'line'
@@ -2673,7 +2689,10 @@
           onWants={onWantsKinds}
           onWantsPlane={(wants) => (wantedPlane = wants)}
           onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
-          onWantsPick={(target) => (wantedPick = target)}
+          onWantsPick={(target, datum) => {
+            wantedPick = target
+            wantedPickDatum = datum
+          }}
           onWantsVertices={(wants) => (wantedVertices = wants)}
           onWantsGrain={(grain) => (wantedGrain = grain)}
         />

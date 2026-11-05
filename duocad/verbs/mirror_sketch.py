@@ -134,6 +134,9 @@ def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) ->
             raise ValueError("mirror_sketch_entities: 鏡映する図形が無い")
         axis_sketch, axis_entity = normalized[0][0], None
         (ax, ay), (ux, uy) = datum.line_in_sketch(region.plane_frame(doc, axis_sketch), axis, what="axis")
+        # 対象のスケッチごとに見る: 後の `require_same_uv_plane` は法線方向にずれた平行な平面を通す。
+        for sketch_id in {item[0] for item in normalized}:
+            datum.line_in_sketch(region.plane_frame(doc, sketch_id), axis, what="axis")
     else:
         axis_sketch, axis_entity, ax, ay, ux, uy = _axis_line(doc, axis)
     editable_sketch(doc, axis_sketch)

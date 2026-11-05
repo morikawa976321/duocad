@@ -196,6 +196,23 @@ def test_an_origin_axis_off_the_sketch_plane_is_refused_as_a_mirror_axis() -> No
         mirror_sketch_entities(document, [{"sketch": sketch_id, "entity": entity, "point": None}], {"datum": "Y"})
 
 
+@pytest.mark.parametrize("order", ["on_plane_first", "offset_first"])
+def test_an_origin_axis_is_checked_against_every_target_sketch(order: str) -> None:
+    """落ちたら、平面の上にある軸で鏡映するとき、軸の無いオフセット平面の図形まで選んだ順によっては黙って鏡映される。"""
+    document = Document()
+    on_plane = sketch_create(document, "XY")
+    offset = sketch_create(document, sketch.offset_plane(sketch.base_plane("XY"), 5.0))
+    targets = [
+        {"sketch": sketch_id, "entity": add_point(document, sketch_id, (3.0, 4.0)), "point": None}
+        for sketch_id in (on_plane, offset)
+    ]
+    if order == "offset_first":
+        targets.reverse()
+    with pytest.raises(ValueError, match="平面の上に無い"):
+        mirror_sketch_entities(document, targets, {"datum": "Y"})
+    assert len(document.log.entries) == 4
+
+
 def test_a_region_revolves_around_an_origin_axis_and_replays_the_same() -> None:
     """落ちたら、原点の軸で回転体が作れないか、保存して開き直すと別の形になる。"""
     document = Document()

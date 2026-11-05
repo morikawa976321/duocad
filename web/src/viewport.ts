@@ -2142,6 +2142,7 @@ export function createViewport(container: HTMLElement): Viewport {
           item: { hit: { datum: origin.name }, point: origin.hit.point, slack: occlusion.slack(origin.hit.point, project.height) },
           distSq: origin.hit.distSq,
           solid: false,
+          behind: 1,
           key: `d|${origin.name}`,
         })
       }
@@ -2170,6 +2171,7 @@ export function createViewport(container: HTMLElement): Viewport {
           item: { hit: { datum: axis.name }, point: axis.hit.point, slack: occlusion.slack(axis.hit.point, project.height) },
           distSq: axis.hit.distSq,
           solid: false,
+          behind: 1,
           key: `d|${axis.name}`,
         })
       }

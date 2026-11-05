@@ -237,6 +237,7 @@ export interface OptimizeStaleItem {
 
 export interface ServerState {
   units: string
+  active_body_id: string | null
   /** 全Body。geometryを含まない(27部品でも数KB)。 */
   bodies: BodyMeta[]
   log: Array<{ seq: number; verb: string; args: Record<string, unknown> }>

@@ -360,8 +360,8 @@ export type PickTarget = 'edge' | 'vertex' | 'face' | 'body' | 'sketchPoint' | '
  * | `sketchPoint` | `{sketch, entity, point}` | `PickEvent.sketchEntity`(スケッチ平面) |
  * | `sketchEntity` | `{sketch, entity, point: null}` | `PickEvent.sketchEntity`(スケッチ平面) |
  *
- * `body` 以外は、意味の合う原点パーツ(`{datum}`。`PickEvent.datum`)も値になる: `vertex` / `sketchPoint` には原点、
- * `edge` / `sketchEntity` には軸、`face` には平面(コアの各 verb が同じ対応で受ける)。
+ * `datum` を立てた引数だけは、意味の合う原点パーツ(`{datum}`。`PickEvent.datum`)も値になる: `vertex` / `sketchPoint` には原点、
+ * `edge` / `sketchEntity` には軸、`face` には平面(コアのその verb が同じ対応で受ける)。
  *
  * 修飾キー(Shift / Ctrl)付きのクリックはここへ来ない(待っている間も対象を選び直せるよう、`App.svelte` が共有選択の編集へ通す)。
  *
@@ -371,6 +371,8 @@ export type PickTarget = 'edge' | 'vertex' | 'face' | 'body' | 'sketchPoint' | '
 export interface PickArgSpec extends ArgSpecCommon {
   kind: 'pick'
   target: PickTarget
+  /** 原点パーツも受ける(コアのその引数が `{"datum": ...}` を解く。立てない引数へ送るとコアが参照の形で断る)。 */
+  datum?: true
   /** 「指す」ボタンの `id`(実機検査がここを叩く)。指した中身は `<id>-value` に出る。 */
   buttonId: string
   /**

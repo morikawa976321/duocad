@@ -146,7 +146,7 @@
     /** スケッチ平面上の点を待っているか。 */
     onWantsPoint?: (wants: boolean) => void
     /** 起動中のコマンドが図形の直接ピックを待っているか(待っていなければ `null`)。頂点マーカーは選択に入ったものしか出ないので、中心に使う頂点を指せるようにするにはこの知らせが要る。 */
-    onWantsPick?: (target: PickTarget | null) => void
+    onWantsPick?: (target: PickTarget | null, datum: boolean) => void
     /** 起動中のコマンドが頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`。測定)。アプリ層が対象ボディの頂点を候補として出し、辺より先に取る。 */
     onWantsVertices?: (wants: boolean) => void
     /** 起動中のコマンドが指した部分ではなく持ち主(ボディ・図形)ごとに効くか(`grain.ts`)。無起動では `NO_GRAIN`。 */
@@ -334,7 +334,7 @@
 
   /** 直接ピックを待っているか(待っている種別を知らせる)。無起動では常に null。 */
   $effect(() => {
-    onWantsPick(pendingPick?.target ?? null)
+    onWantsPick(pendingPick?.target ?? null, pendingPick?.datum === true)
   })
 
   /** 頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`)。無起動では常に false。 */
@@ -692,6 +692,11 @@
   /** 直接ピックを待っている種別(待っていなければ null)。`App.svelte` がクリックの行き先を決める。 */
   export function wantsPick(): PickTarget | null {
     return pendingPick?.target ?? null
+  }
+
+  /** 待っているピック引数が原点パーツも受けるか(`PickArgSpec.datum`)。 */
+  export function wantsPickDatum(): boolean {
+    return pendingPick?.datum === true
   }
 
   /**
