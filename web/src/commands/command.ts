@@ -8,6 +8,8 @@
  */
 import type {
   BodyRef,
+  DatumName,
+  DatumRef,
   Point2,
   RegionRef,
   SelectionRef,
@@ -19,7 +21,7 @@ import type {
 import type { COMMAND_CATEGORY, CommandArguments, CommandName, CommandRequest } from '../generated/protocol'
 
 /** 選択の種別。コアの `SELECTABLE_KINDS` と同じ顔ぶれ(`tests/test_selection.py` が照合)。 */
-export type SelectableKind = ShapeKind | 'body' | 'region' | 'sketch_entity'
+export type SelectableKind = ShapeKind | 'body' | 'region' | 'sketch_entity' | 'datum'
 
 /** 種別ごとの数え方(「辺 4本」「面 2面」)。 */
 const KIND_COUNTERS: Record<SelectableKind, string> = {
@@ -29,6 +31,7 @@ const KIND_COUNTERS: Record<SelectableKind, string> = {
   body: '個',
   region: '個',
   sketch_entity: '個',
+  datum: '個',
 }
 
 /** 直接ピック(`PickArgSpec`)で人に出す「どこを触るか」の1行。 */
@@ -44,6 +47,7 @@ const PICK_TARGET_HINTS: Record<PickTarget, string> = {
 // 参照(ShapeRef / RegionRef)の道具 — コアの `duocad/selection.py` と同じ判定を持つ
 /** 参照の種別。RegionRef は `kind` キーを持たないので `sketch` の有無で見分ける(コアの `selection.ref_kind` と同じ規則)。 */
 export function refKind(ref: SelectionRef): SelectableKind {
+  if ('datum' in ref) return 'datum'
   if (!('sketch' in ref)) return (ref as ShapeRef).kind
   // どちらも `sketch` を持つので `entity` の有無で見分ける(コアの `ref_kind` と同じ)。
   return 'entity' in ref ? 'sketch_entity' : 'region'
@@ -65,6 +69,7 @@ export function refKind(ref: SelectionRef): SelectableKind {
  */
 export function refKey(ref: SelectionRef): string {
   const kind = refKind(ref)
+  if (kind === 'datum') return `datum:${(ref as DatumRef).datum}`
   if (kind === 'sketch_entity') {
     const item = ref as SketchEntityRef
     const point = item.point ?? null
@@ -82,6 +87,33 @@ export function refKey(ref: SelectionRef): string {
 /** 2つの参照が同じ実体を指すか(コアの `ref_key` の一致と同じ)。 */
 export function sameRef(left: SelectionRef, right: SelectionRef): boolean {
   return refKey(left) === refKey(right)
+}
+
+/** 原点の7パーツの名前の全部(コアの `datum.NAMES`)。 */
+export const DATUM_NAMES: readonly DatumName[] = ['origin', 'X', 'Y', 'Z', 'XY', 'XZ', 'YZ']
+
+/** 軸の向き(コアの `datum.AXES`。どれも原点を通る)。 */
+export const DATUM_AXIS_DIRECTIONS: Readonly<Record<'X' | 'Y' | 'Z', readonly [number, number, number]>> = {
+  X: [1, 0, 0],
+  Y: [0, 1, 0],
+  Z: [0, 0, 1],
+}
+
+/** 原点の7パーツの参照。 */
+export function datumRef(name: DatumName): DatumRef {
+  return { datum: name }
+}
+
+/** 原点パーツが点・直線・平面のどれか(コアの `datum.kind_of`)。 */
+export function datumKind(name: DatumName): 'point' | 'line' | 'plane' {
+  if (name === 'origin') return 'point'
+  return name === 'X' || name === 'Y' || name === 'Z' ? 'line' : 'plane'
+}
+
+/** 人に見せる名前(「原点」「X軸」「XY平面」)。 */
+export function datumLabel(name: DatumName): string {
+  const kind = datumKind(name)
+  return kind === 'point' ? '原点' : kind === 'line' ? `${name}軸` : `${name}平面`
 }
 
 /** 面の参照を作る。添字は1始まり。 */
@@ -123,6 +155,7 @@ export function refsOfKind(items: readonly SelectionRef[], kind: ShapeKind): Sha
 export function refsOfKind(items: readonly SelectionRef[], kind: 'body'): BodyRef[]
 export function refsOfKind(items: readonly SelectionRef[], kind: 'region'): RegionRef[]
 export function refsOfKind(items: readonly SelectionRef[], kind: 'sketch_entity'): SketchEntityRef[]
+export function refsOfKind(items: readonly SelectionRef[], kind: 'datum'): DatumRef[]
 export function refsOfKind(items: readonly SelectionRef[], kind: SelectableKind): SelectionRef[] {
   return items.filter((item) => refKind(item) === kind)
 }
@@ -327,6 +360,9 @@ export type PickTarget = 'edge' | 'vertex' | 'face' | 'body' | 'sketchPoint' | '
  * | `sketchPoint` | `{sketch, entity, point}` | `PickEvent.sketchEntity`(スケッチ平面) |
  * | `sketchEntity` | `{sketch, entity, point: null}` | `PickEvent.sketchEntity`(スケッチ平面) |
  *
+ * `datum` を立てた引数だけは、意味の合う原点パーツ(`{datum}`。`PickEvent.datum`)も値になる: `vertex` / `sketchPoint` には原点、
+ * `edge` / `sketchEntity` には軸、`face` には平面(コアのその verb が同じ対応で受ける)。
+ *
  * 修飾キー(Shift / Ctrl)付きのクリックはここへ来ない(待っている間も対象を選び直せるよう、`App.svelte` が共有選択の編集へ通す)。
  *
  * 値は参照のまま送る(座標へ潰さない): 解決をコアの1箇所にとどめ、まっすぐでない辺のような拒否もコアの規則に任せる。
@@ -335,6 +371,8 @@ export type PickTarget = 'edge' | 'vertex' | 'face' | 'body' | 'sketchPoint' | '
 export interface PickArgSpec extends ArgSpecCommon {
   kind: 'pick'
   target: PickTarget
+  /** 原点パーツも受ける(コアのその引数が `{"datum": ...}` を解く。立てない引数へ送るとコアが参照の形で断る)。 */
+  datum?: true
   /** 「指す」ボタンの `id`(実機検査がここを叩く)。指した中身は `<id>-value` に出る。 */
   buttonId: string
   /**
@@ -366,6 +404,7 @@ export type ArgValues = Record<
 export function pickedRefOf(value: unknown): SelectionRef | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const ref = value as Record<string, unknown>
+  if (typeof ref.datum === 'string') return DATUM_NAMES.includes(ref.datum as DatumName) ? (value as SelectionRef) : null
   if (typeof ref.sketch === 'string') return typeof ref.entity === 'string' ? (value as SelectionRef) : null
   if (typeof ref.body !== 'string') return null
   // コアの `target_ref` は添字の無いボディ参照も受ける(AI が `index` を省いて共有引数に置く)。
@@ -630,6 +669,7 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
 export function pickedLabel(value: unknown, target?: PickTarget): string {
   const ref = pickedRefOf(value)
   if (ref === null) return ''
+  if (refKind(ref) === 'datum') return datumLabel((ref as DatumRef).datum)
   if (refKind(ref) === 'sketch_entity') {
     if (target === 'sketchEntity') return '図形1つ'
     const item = ref as SketchEntityRef

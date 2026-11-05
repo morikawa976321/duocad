@@ -18,7 +18,7 @@ export const MEASURE: CommandDef<'measure'> = {
       name: 'targets',
       label: '測る対象',
       shapeKind: 'vertex',
-      kinds: ['vertex', 'edge', 'face', 'sketch_entity', 'region'],
+      kinds: ['vertex', 'edge', 'face', 'sketch_entity', 'region', 'datum'],
       min: 2,
       max: 2,
       pickVertices: true,

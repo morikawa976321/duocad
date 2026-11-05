@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from typing import Any, List, Sequence
 
-from .. import parameters
+from .. import datum, parameters, region
 from ..document import Document
 from ..oplog import Operation, register_verb
 from .. import selection
@@ -122,13 +122,23 @@ def _create_mirrors(
 
 
 def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) -> Operation:
-    """選択のスケッチ図形を、既存の線分 `axis` を軸に鏡映複製する(常に複製)。
+    """選択のスケッチ図形を、既存の線分 `axis`(またはスケッチ平面の上にある原点の軸)を軸に鏡映複製する(常に複製)。
 
     軸自身が対象に混ざっていてもよく、軸に使った図形は対象から黙って外す。失敗したときは
     文書にもログにも何も残さない。
     """
     normalized = _normalize_targets(doc, targets)
-    axis_sketch, axis_entity, ax, ay, ux, uy = _axis_line(doc, axis)
+    if datum.is_ref(axis):
+        # 原点の軸は対象のスケッチ平面の上にあるものだけ(平面へ落とすと鏡映の線が別物になる)。
+        if not normalized:
+            raise ValueError("mirror_sketch_entities: 鏡映する図形が無い")
+        axis_sketch, axis_entity = normalized[0][0], None
+        (ax, ay), (ux, uy) = datum.line_in_sketch(region.plane_frame(doc, axis_sketch), axis, what="axis")
+        # 対象のスケッチごとに見る: 後の `require_same_uv_plane` は法線方向にずれた平行な平面を通す。
+        for sketch_id in {item[0] for item in normalized}:
+            datum.line_in_sketch(region.plane_frame(doc, sketch_id), axis, what="axis")
+    else:
+        axis_sketch, axis_entity, ax, ay, ux, uy = _axis_line(doc, axis)
     editable_sketch(doc, axis_sketch)
     normalized = [item for item in normalized if item != (axis_sketch, axis_entity)]
     if not normalized:

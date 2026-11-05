@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
-from . import kernel_sketch
+from . import datum, kernel_sketch
 from . import naming
 from . import parameters
 from .document import BodyId, Document, unknown_id_message
@@ -899,11 +899,23 @@ del _verb
 
 # 入口(`duocad/entry.py`)
 def plane_from_selection(document: Document, base_plane: Any) -> Any:
-    """貼る先の平面。`base_plane`(XY/XZ/YZ)があればそれ、無ければ**選択の面**(ちょうど1枚。2枚なら `SelectionAmbiguous`)。
-    平面も選択も無ければエラー(既定で XY に貼ると図形が静かに別の場所に出る)。
+    """貼る先の平面。`base_plane`(XY/XZ/YZ)があればそれ、無ければ**選択の面**か**選択の原点の平面**(合わせてちょうど1つ。
+    2つ以上なら `SelectionAmbiguous`)。平面も選択も無ければエラー(既定で XY に貼ると図形が静かに別の場所に出る)。
     """
     if base_plane is not None:
         return str(base_plane)
+    planes = [
+        item["datum"]
+        for item in selection.selected_items(document, kind=selection.DATUM_KIND)
+        if datum.kind_of(item["datum"]) == datum.PLANE
+    ]
+    faces = selection.selected_items(document, kind="face")
+    if planes and len(planes) + len(faces) > 1:
+        raise selection.SelectionAmbiguous(
+            f"exactly one face or datum plane required, got {len(faces)} face(s) and {len(planes)} datum plane(s)", "face"
+        )
+    if planes:
+        return planes[0]
     face = selection.require_selected(document, "face", exactly_one=True)[0]
     return face_plane(face["body"], face["index"])
 

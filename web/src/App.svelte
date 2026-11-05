@@ -14,6 +14,8 @@
   import {
     bodyRef,
     commandRequest,
+    datumKind,
+    datumRef,
     edgeRef,
     faceRef,
     pickedRefOf,
@@ -76,6 +78,7 @@
     type Applied,
     type BasePlaneName,
     type BodyGeometry,
+    type DatumName,
     type BodyRef,
     type ConnectionStatus,
     type EdgeChainsPayload,
@@ -247,6 +250,7 @@
     setBasePlane(name: BasePlaneName): boolean
     useSelectedFaceAsPlane(): boolean
     wantsPick(): PickTarget | null
+    wantsPickDatum(): boolean
     setPick(ref: SelectionRef): boolean
     commitFailed(): void
     reconnected(): void
@@ -296,6 +300,8 @@
   let wantedPlane = $state(false)
   /** 起動中のコマンドが図形の直接ピックを待っている種別(`CommandHost` が知らせる)。待っている間だけ指せる。 */
   let wantedPick = $state<PickTarget | null>(null)
+  /** 待っているピック引数が原点パーツも受けるか(`PickArgSpec.datum`)。 */
+  let wantedPickDatum = $state(false)
   /**
    * 起動中のコマンドが頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`。測定)。
    * `wantedPick === 'vertex'` と同じ扱いで、対象ボディの頂点を候補に出し、辺より先に取る。
@@ -1124,6 +1130,9 @@
   /** 選択中の頂点(3Dにマーカーで出る)。 */
   const selectedVertices = $derived(refsOfKind(selection?.items ?? [], 'vertex'))
 
+  /** 選択中の原点パーツ(原点ギズモを選択の色で描く)。 */
+  const selectedDatums = $derived(refsOfKind(selection?.items ?? [], 'datum'))
+
   /**
    * 届いた辺・頂点が今の形のものか(サーバが応答に載せた形の版 `shape_revision` で見る)。版 `revision` は粗さ(カメラ)でも
    * 上がるので、版が違っても形が同じなら添字はそのまま使える。形が違う添字は別の辺・頂点を指す(§7)。
@@ -1170,6 +1179,7 @@
     viewport?.highlightBodies([...selectedBodies.map((item) => item.body), ...pickedBodies()])
     viewport?.highlightEdges(selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
     viewport?.highlightVertices(selectedVertices.map((item) => ({ bodyId: item.body, vertexIndex: item.index })))
+    viewport?.highlightDatums(selectedDatums.map((item) => item.datum))
   }
 
   // ---------------------------------------------------------------- D: 辺・頂点を取りに行く
@@ -1258,6 +1268,7 @@
     region: ['region'],
     sketch_entity: ['sketchPoint', 'sketchLine'],
     body: ['face'],
+    datum: ['datumPoint', 'datumAxis', 'datumPlane'],
   }
   const PICK_TARGET_KINDS: Record<PickTarget, PickKind[]> = {
     face: ['face'],
@@ -1267,15 +1278,37 @@
     sketchPoint: ['sketchPoint'],
     sketchEntity: ['sketchLine', 'sketchPoint'],
   }
-  const EVERY_PICK_KIND: PickKind[] = ['face', 'edge', 'vertex', 'region', 'sketchPoint', 'sketchLine']
+  /**
+   * 原点パーツも受けるピック引数(`PickArgSpec.datum`)が足す的: 頂点・スケッチの点には原点、辺・スケッチの線分には軸、
+   * 面には平面(コアの `datum.point_of` / `line_of` / `plane_name_of`)。
+   */
+  const PICK_TARGET_DATUM_KINDS: Record<PickTarget, PickKind[]> = {
+    face: ['datumPlane'],
+    body: [],
+    edge: ['datumAxis'],
+    vertex: ['datumPoint'],
+    sketchPoint: ['datumPoint'],
+    sketchEntity: ['datumAxis'],
+  }
+  const EVERY_PICK_KIND: PickKind[] = [
+    'face',
+    'edge',
+    'vertex',
+    'region',
+    'sketchPoint',
+    'sketchLine',
+    'datumPoint',
+    'datumAxis',
+    'datumPlane',
+  ]
   /** 直接ピックで待っているものより細かい的(`pickKinds` が待っている間だけ外す)。 */
   const FINER_THAN: Record<PickTarget, PickKind[]> = {
-    face: ['edge', 'vertex', 'sketchPoint', 'sketchLine'],
-    body: ['edge', 'vertex', 'sketchPoint', 'sketchLine'],
-    edge: ['vertex', 'sketchPoint'],
+    face: ['edge', 'vertex', 'sketchPoint', 'sketchLine', 'datumPoint', 'datumAxis'],
+    body: ['edge', 'vertex', 'sketchPoint', 'sketchLine', 'datumPoint', 'datumAxis'],
+    edge: ['vertex', 'sketchPoint', 'datumPoint'],
     vertex: [],
     sketchPoint: [],
-    sketchEntity: ['sketchPoint', 'vertex'],
+    sketchEntity: ['sketchPoint', 'vertex', 'datumPoint'],
   }
 
   /**
@@ -1285,7 +1318,7 @@
    * スケッチモード中は見ない(編集中のスケッチの中身だけを指す。`viewport.setActiveSketch`)。
    */
   const pickKinds = $derived.by((): PickKind[] => {
-    if (wantedPlane) return ['face']
+    if (wantedPlane) return ['face', 'datumPlane']
     // ローカルのコマンド(測定)は `model.command` に現れないが、受け付ける種類は `wantedKinds` で届く
     const commandActive =
       (model?.command ?? null) !== null || wantedKinds.length > 0 || wantedPick !== null || wantedVertices
@@ -1297,6 +1330,7 @@
       for (const pick of PICK_KINDS_OF[kind]) kinds.add(pick)
     }
     if (wantedPick !== null) for (const pick of PICK_TARGET_KINDS[wantedPick]) kinds.add(pick)
+    if (wantedPick !== null && wantedPickDatum) for (const pick of PICK_TARGET_DATUM_KINDS[wantedPick]) kinds.add(pick)
     if (wantedVertices) kinds.add('vertex')
     // 直接ピックを待っている間は、待っているものより細かい的を外す: 細かい方が先に取られ(`resolveHit`)、鏡映面を
     // 狙った素のクリックが辺に、回転軸を狙ったクリックが辺の端の頂点に取られて対象の選択を置き換える
@@ -1821,6 +1855,10 @@
         host.setBasePlane(event.plane)
         return
       }
+      if (event.datum !== null && datumKind(event.datum) === 'plane') {
+        host.setBasePlane(event.datum as BasePlaneName)
+        return
+      }
       if (event.hit !== null) {
         // メッシュボディには貼れない(平面が取れない。`sketch.resolve_plane` が断る)。
         // ボディ参照へ畳んでも `sketch_create` は面を要求するので、畳まずに理由を出す。
@@ -1856,6 +1894,10 @@
         host.setPick(bodyRef(event.hit.bodyId))
         return
       }
+      if (event.datum !== null && pickTakesDatum(wants, event.datum)) {
+        host.setPick(datumRef(event.datum))
+        return
+      }
       // スケッチの点・図形を待つ通常モードのコマンド(ロフトの収束点)。読み方はスケッチモードの `onSketchPick` と同じ:
       // 点は当たった点をそのまま、図形は点を落として図形1つに畳む。
       const sketchHit = event.sketchEntity
@@ -1872,6 +1914,10 @@
     // 来るのは今指せる種類(`pickKinds`)だけ: コマンドの起動中はそのコマンドが受け付けるものに絞られている。
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
     if (editSolidEdgeOrVertex(event, pickMode)) return
+    if (event.datum !== null) {
+      editSelection(datumRef(event.datum), pickMode)
+      return
+    }
     // スケッチの図形(点・線)。通常モードでは見えている全スケッチの図形が来る(スケッチモードは `onSketchPick`)。
     if (event.sketchEntity !== null) {
       const hit = event.sketchEntity
@@ -1904,6 +1950,22 @@
       return
     }
     editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
+  }
+
+  /** 直接ピックの待ちが、この原点パーツを受けるか(`PICK_TARGET_DATUM_KINDS` と同じ対応)。 */
+  function pickTakesDatum(wants: PickTarget | null, name: DatumName): boolean {
+    if (host === null || !host.wantsPickDatum()) return false
+    const kind = datumKind(name)
+    if (wants === 'vertex' || wants === 'sketchPoint') return kind === 'point'
+    if (wants === 'edge' || wants === 'sketchEntity') return kind === 'line'
+    if (wants === 'face') return kind === 'plane'
+    return false
+  }
+
+  /** スケッチモードの素のクリックで原点パーツを選択へ入れるか: 何も起動していないか、起動中のコマンドが原点パーツを受けるとき。 */
+  function sketchDatumSelectable(): boolean {
+    if (wantedKinds.length > 0) return wantedKinds.includes('datum')
+    return (model?.command ?? null) === null && wantedPick === null
   }
 
   /** ソリッドの辺・頂点のピックを選択の編集へ(当たっていれば true)。通常モードと、スケッチモードの投影の起動中が使う。 */
@@ -2054,8 +2116,15 @@
     }
     if (event.point && host?.wantsPoint()) {
       // 当たっている図形へ落としてから渡す。幽霊(`hoverPoint`)も同じ関数を通るので、吸い付いて見える位置と確定結果はずれない。
-      const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity)
+      const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity, event.datumAt)
       if (host.addPoint(u, v)) return
+    }
+    // 図形の当たりが無いときだけ原点パーツ(図形はスケッチの中身なので先に取る)。
+    if (event.sketchEntity === null && event.datum !== null && host !== null && event.mode === 'replace') {
+      if (pickTakesDatum(host.wantsPick(), event.datum)) {
+        host.setPick(datumRef(event.datum))
+        return
+      }
     }
     // コマンドがスケッチの点・図形を直接待っているとき(回転中心・鏡映軸)。3Dの辺・頂点と同じ規律で
     // 共有選択への翻訳より前に置く(中心や軸に使うものが選択へ入ると、それ自体が動かす/鏡映する対象になる)。
@@ -2075,6 +2144,10 @@
     if (event.sketchEntity) {
       const hit = event.sketchEntity
       editSelection(sketchClickRef(hit.sketchId, hit.entityId, hit.point), pickMode)
+      return
+    }
+    if (event.datum !== null && sketchDatumSelectable()) {
+      editSelection(datumRef(event.datum), pickMode)
       return
     }
     if (event.region) {
@@ -2165,7 +2238,14 @@
    * クリック(`onSketchPick` の `addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を通すこと。段の規則は
    * `entityKinds.snapSketchPoint` の1か所(viewport のカーソル強調も通る)。1mm への丸めは点を待っているときだけ。
    */
-  function snappedPlanePoint(u: number, v: number, hit: SketchEntityHit | null): Point2 {
+  function snappedPlanePoint(
+    u: number,
+    v: number,
+    hit: SketchEntityHit | null,
+    datumAt: readonly [number, number] | null = null,
+  ): Point2 {
+    // 原点パーツへの吸い付きは図形より下(図形が当たっていれば図形が勝つ。`viewport.sketchDatumAt` が計算済み)。
+    if (hit === null && datumAt !== null) return [datumAt[0], datumAt[1]]
     return snapSketchPoint(
       u,
       v,
@@ -2325,8 +2405,8 @@
     viewport.onBoxSelect(onBoxSelect)
     viewport.onEdgeChainWanted((ref) => requestEdgeChains(ref.bodyId, [ref.edgeIndex]))
     viewport.onPickDataWanted(requestPickData)
-    viewport.onPlaneMove((point, hit) => {
-      hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit)
+    viewport.onPlaneMove((point, hit, datumAt) => {
+      hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit, datumAt)
     })
     // 可変解像度: ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域をその粗さで測り直させる。
     // スケッチの折れ線はビューポート側が自分で折り直す。連打の抑制も向こうが持っている。
@@ -2609,7 +2689,10 @@
           onWants={onWantsKinds}
           onWantsPlane={(wants) => (wantedPlane = wants)}
           onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
-          onWantsPick={(target) => (wantedPick = target)}
+          onWantsPick={(target, datum) => {
+            wantedPick = target
+            wantedPickDatum = datum
+          }}
           onWantsVertices={(wants) => (wantedVertices = wants)}
           onWantsGrain={(grain) => (wantedGrain = grain)}
         />

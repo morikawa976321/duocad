@@ -64,6 +64,15 @@ export interface SketchEntityRef {
   provenance?: unknown
 }
 
+/** 原点の7パーツの名前(コアの `duocad/datum.py` の `NAMES`)。 */
+export type DatumName = 'origin' | 'X' | 'Y' | 'Z' | 'XY' | 'XZ' | 'YZ'
+
+/** 原点の7パーツを指す参照(`datum` を持つことがほかの参照との見分け方。コアの `selection.ref_kind` と同じ規則)。 */
+export interface DatumRef {
+  datum: DatumName
+  provenance?: unknown
+}
+
 /**
  * 選択集合に入りうる参照の全部(コアの `duocad/selection.py` の `SELECTABLE_KINDS` と対)。
  *
@@ -71,7 +80,7 @@ export interface SketchEntityRef {
  * 契約なので、ここに無いと保持/除外ソリッドのプリセレクトが型の上で書けない
  * (`tests/topopt/test_optimize_setup.py` が宣言を静的に見ている)。
  */
-export type SelectionRef = ShapeRef | BodyRef | RegionRef | SketchEntityRef
+export type SelectionRef = ShapeRef | BodyRef | RegionRef | SketchEntityRef | DatumRef
 
 /** 共有される選択集合(`duocad/selection.py` の `Selection.to_dict()`)。人が選んだものもAIが選んだものも同じ集合で、出所を持たない。 */
 export interface SelectionState {
@@ -498,6 +507,16 @@ export type MeasureItem =
       /** 線分の図形全体を指したときだけ(端点の世界座標)。 */
       start?: number[]
       end?: number[]
+    }
+  | {
+      kind: 'datum'
+      datum: DatumName
+      datum_kind: 'point' | 'line' | 'plane'
+      point: number[]
+      /** 軸だけ。 */
+      direction?: number[]
+      /** 平面だけ。 */
+      normal?: number[]
     }
 
 /** `inspect_selection` の返事(要求した接続にだけ届く)。`item` は選択がちょうど1項目のときだけ。 */

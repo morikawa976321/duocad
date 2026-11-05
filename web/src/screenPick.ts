@@ -52,6 +52,11 @@ export function perspectiveParam(s: number, wa: number, wb: number): number {
 export interface RankedCandidate<T> extends ScreenPickCandidate<T> {
   /** ソリッドの的か(スケッチの的より優先する。docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」)。 */
   solid: boolean
+  /**
+   * スケッチの的よりさらに `overlapPx` の何倍ぶん遠いものとして扱うか(省略 = 0)。原点の点・軸は 1: 原点を通る線を
+   * 描いたスケッチの線や、原点に置いた点と重なって見えるときは、文書の中身(スケッチ)が先。
+   */
+  behind?: number
   /** 同着を決める安定した鍵(届いた順で勝敗が揺れないように)。 */
   key: string
 }
@@ -70,7 +75,8 @@ export function rankByOverlap<T>(
   const kept: Array<{ candidate: RankedCandidate<T>; score: number }> = []
   for (const candidate of candidates) {
     if (!(candidate.distSq <= limit)) continue
-    kept.push({ candidate, score: Math.sqrt(candidate.distSq) + (candidate.solid ? 0 : overlapPx) })
+    const lag = (candidate.solid ? 0 : overlapPx) + (candidate.behind ?? 0) * overlapPx
+    kept.push({ candidate, score: Math.sqrt(candidate.distSq) + lag })
   }
   kept.sort((a, b) => a.score - b.score || (a.candidate.key < b.candidate.key ? -1 : a.candidate.key > b.candidate.key ? 1 : 0))
   return kept.map((entry) => entry.candidate)

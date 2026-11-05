@@ -2,6 +2,7 @@
  * 選択1項目の寸法(`MeasureItem`)を、選択情報の表示(issue #140)の見出しと行にする。
  * 値は `measure` が返したものを書式化するだけで、ここで幾何を計算しない(AI が読む値と同じものを出す)。
  */
+import { datumLabel } from './commands/command'
 import { fixed3 } from './measureText'
 import type { EntityKind } from './entityKinds'
 import type { MeasureItem } from './session'
@@ -79,6 +80,8 @@ export function selectionInfoTitle(item: MeasureItem, names: InfoNames): string 
       if (item.point === null || item.entity_kind === 'point') return `${shape} · ${names.sketch(item.sketch)}`
       return `点 · ${names.sketch(item.sketch)} / ${shape}の${POINT_NAMES[item.point] ?? item.point}`
     }
+    case 'datum':
+      return `原点 · ${datumLabel(item.datum)}`
   }
 }
 
@@ -121,6 +124,12 @@ export function selectionInfoRows(item: MeasureItem): InfoRow[] {
           ...(item.world !== undefined ? [{ label: '世界座標', value: xyz(item.world) }] : []),
         ]
       return entityRows(item.entity_kind, item.params ?? {}, item.length)
+    case 'datum':
+      return [
+        { label: '座標', value: xyz(item.point) },
+        ...(item.direction !== undefined ? [{ label: '向き', value: xyz(item.direction) }] : []),
+        ...(item.normal !== undefined ? [{ label: '法線', value: xyz(item.normal) }] : []),
+      ]
   }
 }
 

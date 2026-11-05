@@ -150,6 +150,7 @@ export const REVOLVE: CommandDef<'revolve'> = {
       name: 'axis_line',
       label: '回転軸の線分',
       target: 'sketchEntity',
+      datum: true,
       buttonId: 'revolve-axis-line-pick',
       when: (values) => values.axis === 'line',
     },
@@ -224,8 +225,8 @@ export const LOFT: CommandDef<'loft'> = {
         { value: 'new', label: '新規ボディ', buttonId: 'loft-mode-new' },
       ],
     },
-    { kind: 'pick', name: 'start_point', label: '始端を収束させる点', target: 'sketchPoint', buttonId: 'loft-start-point', optional: true },
-    { kind: 'pick', name: 'end_point', label: '終端を収束させる点', target: 'sketchPoint', buttonId: 'loft-end-point', optional: true },
+    { kind: 'pick', name: 'start_point', label: '始端を収束させる点', target: 'sketchPoint', datum: true, buttonId: 'loft-start-point', optional: true },
+    { kind: 'pick', name: 'end_point', label: '終端を収束させる点', target: 'sketchPoint', datum: true, buttonId: 'loft-end-point', optional: true },
     {
       kind: 'text',
       name: 'shifts',
@@ -597,6 +598,8 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
  * 複製するか・並進か回転かは既定を置かず人に選ばせる(押し出しの `mode` と同じ理由)。
  *
  * 回転軸は共有選択集合に入れず別チャンネル(`kind: 'pick'`)で指す: 入れると `require_bodies` が軸にした辺のボディまで動かす対象に数える。
+ * 軸はまっすぐな辺か原点の軸をクリックで指す。画面だけの選択肢(X/Y/Z のボタン)は置かない: 共有引数に無い状態を画面が持つと、
+ * AI が数値の軸(`axis_dir` + `axis_point`)を置いたときに画面の選択が残り、原点の軸で送り直して位置を上書きする。
  * 中心は省略可で、既定はコアが決める(対象の合成重心)。軸のピックは角度より前に置く(`args` の並びが `firstMissingArg` の順序)。
  */
 export const MOVE_BODY: CommandDef<'move_body'> = {
@@ -622,8 +625,9 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
     {
       kind: 'pick',
       name: 'axis_edge',
-      label: '回転軸にする辺',
+      label: '回転軸にする辺か原点の軸',
       target: 'edge',
+      datum: true,
       buttonId: 'move-body-axis',
       when: isRotateMode,
     },
@@ -632,6 +636,7 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
       name: 'center_vertex',
       label: '回転中心の頂点',
       target: 'vertex',
+      datum: true,
       buttonId: 'move-body-center',
       // 省略時の中心はコアが決める(`axis_edge` だけなら辺が乗る直線そのもの)。
       optional: true,
@@ -645,9 +650,9 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
       axes: ['dx', 'dy', 'dz'],
       zeroReason: '移動量が全部0',
       rotateArgs: (angle, given) => {
-        // 軸は参照のまま送る: 辺が乗る直線を厳密に出せるのはコアだけ(ブラウザの持つのは折れ線)。
+        // 軸は参照のまま送る: 辺が乗る直線を厳密に出せるのはコアだけ(ブラウザの持つのは折れ線)。原点の軸もコアが解く。
         const axis = pickedRefOf(given.axis_edge)
-        if (axis === null) return { ok: false, reason: '回転軸にする辺が指されていない' }
+        if (axis === null) return { ok: false, reason: '回転軸にする辺か原点の軸が指されていない' }
         const center = pickedRefOf(given.center_vertex)
         // 指していない中心は引数ごと送らない(既定の合成重心はコアが決める)。
         return {
@@ -696,6 +701,7 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
       name: 'plane_face',
       label: '鏡映面にする面',
       target: 'face',
+      datum: true,
       buttonId: 'mirror-body-plane-face',
       when: (values) => values.base_plane === 'face',
     },
@@ -752,6 +758,7 @@ export const SPLIT_BODY: CommandDef<'split_body'> = {
       name: 'plane_face',
       label: '切る平面にする面',
       target: 'face',
+      datum: true,
       buttonId: 'split-body-plane-face',
       when: (values) => values.base_plane === 'face',
     },

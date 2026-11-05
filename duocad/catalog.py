@@ -549,7 +549,8 @@ COMMANDS: tuple[Command, ...] = (
                 'ボディ丸ごとは {"body": body_id, "kind": "body"}、'
                 'スケッチの領域は {"sketch": sketch_id, "index": 番号}(番号は1始まり)、'
                 'スケッチの図形は {"sketch": sketch_id, "entity": entity_id, "point": null}'
-                "(point に x0 などの点の名前を入れるとその点だけ)。"
+                "(point に x0 などの点の名前を入れるとその点だけ)、"
+                '原点の7パーツは {"datum": "origin"|"X"|"Y"|"Z"|"XY"|"XZ"|"YZ"}(測定・スケッチを貼る平面に使える)。'
                 "predicate とは同時に渡せない",
                 required=False,
                 ws=False,
@@ -835,7 +836,8 @@ COMMANDS: tuple[Command, ...] = (
                 "axis_line",
                 "object",
                 "回転軸にする、領域と同じスケッチの線分への参照 "
-                '{"sketch": sketch_id, "entity": entity_id}(線分を延ばした直線が軸)。axis と排他',
+                '{"sketch": sketch_id, "entity": entity_id}(線分を延ばした直線が軸)か、スケッチ平面の上にある原点の軸 '
+                '{"datum": "X"|"Y"|"Z"}。axis と排他',
                 required=False,
             ),
             Param(
@@ -908,7 +910,8 @@ COMMANDS: tuple[Command, ...] = (
                 "start_point",
                 "object",
                 "最初の断面の前を収束させる点(尖らせる)。スケッチの図形の点 "
-                '{"sketch": sketch_id, "entity": entity_id, "point": "x0"}(点の図形 cx、線分の端点 x0 / x1、円・楕円・円弧の中心 cx など)',
+                '{"sketch": sketch_id, "entity": entity_id, "point": "x0"}(点の図形 cx、線分の端点 x0 / x1、円・楕円・円弧の中心 cx など)'
+                '、または原点 {"datum": "origin"}',
                 required=False,
             ),
             Param(
@@ -1162,6 +1165,7 @@ COMMANDS: tuple[Command, ...] = (
                 "回転中心を既存の点で指す "
                 '{"sketch": sketch_id, "entity": entity_id, "point": "x0"}。'
                 "point を省くとその図形の最初の点(線は始点・円/弧は中心・長方形は基準の角)。"
+                '原点 {"datum": "origin"} も指せる(スケッチ平面へ垂直に落とした点が中心)。'
                 "center とは同時に渡せない",
                 required=False,
             ),
@@ -1254,7 +1258,7 @@ COMMANDS: tuple[Command, ...] = (
                 "axis_edge",
                 "object",
                 "回転軸にする**まっすぐな辺**への参照 "
-                '{"body": body_id, "index": 辺の1始まりの添字}。'
+                '{"body": body_id, "index": 辺の1始まりの添字}か、原点の軸 {"datum": "X"|"Y"|"Z"}。'
                 "get_selection が返す辺の参照をそのまま渡せる。"
                 "axis_point / axis_dir とは同時に渡せない",
                 required=False,
@@ -1275,7 +1279,7 @@ COMMANDS: tuple[Command, ...] = (
                 "center_vertex",
                 "object",
                 "回転中心にする頂点への参照 "
-                '{"body": body_id, "index": 頂点の1始まりの添字}。'
+                '{"body": body_id, "index": 頂点の1始まりの添字}か、原点 {"datum": "origin"}。'
                 "軸の向きはそのままに、軸がこの点を通るようにする。"
                 "axis_point とは同時に渡せない(どちらも軸の位置を決めるため)",
                 required=False,
@@ -1327,7 +1331,8 @@ COMMANDS: tuple[Command, ...] = (
                 "axis",
                 "object",
                 "鏡映軸にする既存の線分への参照 "
-                '{"sketch": sketch_id, "entity": entity_id}(kindはlineであること)',
+                '{"sketch": sketch_id, "entity": entity_id}(kindはlineであること)か、'
+                '対象のスケッチ平面の上にある原点の軸 {"datum": "X"|"Y"|"Z"}',
             ),
         ),
         session="mirror_sketch_entities",
@@ -1461,7 +1466,8 @@ COMMANDS: tuple[Command, ...] = (
                 "plane_face",
                 "object",
                 "鏡映面を既存ソリッドの平面な面で指す "
-                '{"body": body_id, "index": 面の1始まりの添字}。base_plane とは同時に渡せない。'
+                '{"body": body_id, "index": 面の1始まりの添字}か、原点の平面 {"datum": "XY"|"XZ"|"YZ"}'
+                "(base_plane の同じ名前と同じ)。base_plane とは同時に渡せない。"
                 "この面自身が対象ボディに属していてもよい",
                 required=False,
             ),
@@ -1509,7 +1515,8 @@ COMMANDS: tuple[Command, ...] = (
                 "plane_face",
                 "object",
                 "切る平面を既存ソリッドの平らな面で指す "
-                '{"body": body_id, "index": 面の1始まりの添字}。base_plane・sketch_id とは同時に渡せない。'
+                '{"body": body_id, "index": 面の1始まりの添字}か、原点の平面 {"datum": "XY"|"XZ"|"YZ"}'
+                "(base_plane の同じ名前と同じ)。base_plane・sketch_id とは同時に渡せない。"
                 "この面自身が対象ボディに属していてもよい(ただし面に接しているだけでは割れない)",
                 required=False,
             ),

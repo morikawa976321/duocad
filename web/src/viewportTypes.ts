@@ -3,7 +3,7 @@ import * as THREE from 'three'
 
 import { type ViewResolution } from './adaptiveResolution'
 import type { InterferenceVisual } from './interferenceTypes'
-import type { BasePlaneName, EdgeGeometry, OptimizeDebugGrid } from './session'
+import type { BasePlaneName, DatumName, EdgeGeometry, OptimizeDebugGrid } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
 export interface FaceGeometry {
@@ -238,7 +238,17 @@ export type PickMode = 'replace' | 'toggle'
  * そのコマンドが受け付けるものだけ(docs/DESIGN_DECISIONS.md「見えるものはすべてさわれる」)。
  * スケッチモード中は見ない(編集中のスケッチの中身だけを指す)。基準平面は `showBasePlanes` が決める。
  */
-export type PickKind = 'face' | 'edge' | 'vertex' | 'region' | 'sketchPoint' | 'sketchLine'
+/** `datumPoint` / `datumAxis` / `datumPlane` は原点の点・X/Y/Z軸・XY/XZ/YZ平面(`originGizmo.ts`)。 */
+export type PickKind =
+  | 'face'
+  | 'edge'
+  | 'vertex'
+  | 'region'
+  | 'sketchPoint'
+  | 'sketchLine'
+  | 'datumPoint'
+  | 'datumAxis'
+  | 'datumPlane'
 
 /**
  * 1つのクリックで取れるもの。通常モードの優先は細かさが先(点 → 線 → 面)、同じ細かさならソリッドが先
@@ -272,6 +282,16 @@ export interface PickEvent {
    * 平面は面の無い画素でだけ返る(手前か奥かは比べない)ので、非nullなら `hit` は null。
    */
   plane: BasePlaneName | null
+  /**
+   * 当たった原点の7パーツ(原点ギズモが見えている間だけ)。通常モードではほかの当たりと同じ段(点・線・面)で競い、
+   * 非nullならほかは null。スケッチモードでは原点と軸だけで、`sketchEntity` / `point` と一緒に返る(優先は `App.svelte`)。
+   */
+  datum: DatumName | null
+  /**
+   * スケッチモードで `datum` に当たったときの、吸い付く先のスケッチ座標(原点はスケッチ平面へ垂直に落とした点、軸は
+   * 平面へ落とした直線へのカーソルの射影)。通常モードでは常に null。
+   */
+  datumAt: readonly [number, number] | null
 }
 
 /** スケッチの図形(点または辺)への当たり。`point` が null なら図形全体。 */
@@ -406,7 +426,11 @@ export interface Viewport {
    * 第2引数は同じ画素の `sketchEntityAt` の結果(クリック側の `addPoint` も同じスナップ関数を通る)。
    */
   onPlaneMove(
-    listener: (point: { u: number; v: number } | null, sketchEntity: SketchEntityHit | null) => void,
+    listener: (
+      point: { u: number; v: number } | null,
+      sketchEntity: SketchEntityHit | null,
+      datumAt: readonly [number, number] | null,
+    ) => void,
   ): void
   /** スケッチの点入力待ちのカーソル強調を出すか(`CommandHost` の `onWantsPoint` から)。 */
   setSketchCursorWanted(wanted: boolean): void
@@ -503,6 +527,8 @@ export interface Viewport {
   highlightEdges(refs: EdgeRef[]): void
   /** 選択中の頂点を点(画面上で一定の大きさ)で出す。色は面・辺と同じ橙。裏に回っても透かして描く。 */
   highlightVertices(refs: VertexRef[]): void
+  /** 選択に入っている原点の7パーツ(原点ギズモを選択の色で描く)。 */
+  highlightDatums(names: readonly DatumName[]): void
   /** 矩形を今のカメラで集め直す(`BoxSelectEvent.pendingBodies` の辺・頂点が届いた後)。 */
   collectInBox(rect: BoxRect): Omit<BoxSelectEvent, 'mode'>
   // ------------------------------------------------------------------ 測定(issue #10)
@@ -531,6 +557,8 @@ export interface Viewport {
     plane: BasePlaneName | null
     /** 当たったスケッチの図形(点または辺)。 */
     sketchEntity: SketchEntityHit | null
+    /** 当たった原点の7パーツ。 */
+    datum: DatumName | null
     /** そのものに今実際に当たっている色(16進)。何も指していなければ null。 */
     color: number | null
   }
@@ -544,6 +572,11 @@ export interface Viewport {
    * (`resolveHit`)でこの辺が取れることを確かめる。そのボディの辺が届いていなければ null。
    */
   projectEdge(bodyId: string, edgeIndex: number): { x: number; y: number } | null
+  /**
+   * 原点パーツを狙う画面座標(無理なら null)。実機検査が本物のクリックで原点パーツを選ぶための穴で、返す前にクリックと
+   * 同じ判定(`resolveHit`)でそれが取れることを確かめる。
+   */
+  projectDatum(name: DatumName): { x: number; y: number } | null
   /**
    * 確定前の形(プレビュー)を重ねる。本物のBodyは隠し、幽霊を代わりに描く。
    * 幽霊はピックの対象にしない。本物の状態が届いたら(`update`)プレビューは無効になり自動的に消える。
