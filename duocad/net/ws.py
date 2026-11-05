@@ -16,7 +16,7 @@
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
-        {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...], "suggestion"?: {...}}
+        {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...], "removed_bodies": [...], "suggestion"?: {...}}
         {"type": "edges", "body_id": str, "revision": int, "shape_revision": int, "deviation": float, "edges": [...]}
         {"type": "edge_chains", "body_id": str, "revision": int, "shape_revision": int, "chains": [[int, ...], ...]}
         {"type": "face_chains", "body_id": str, "revision": int, "shape_revision": int, "origins": [int, ...], "chains": [[int, ...], ...]}

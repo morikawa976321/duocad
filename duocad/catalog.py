@@ -210,7 +210,7 @@ class Command:
         """`preview` が受け取ってよい引数名。
 
         **WSの表より広いことがある** —— `extrude` の `body_id` はWSのコマンドでは受けない
-        (アクティブなBodyへ足す)が、プレビューは行き先を指定した結果を見せられる。
+        (触れる見えるボディ全部が相手)が、プレビューは行き先を指定した結果を見せられる。
         """
         return tuple(p.name for p in self.params)
 
@@ -757,6 +757,7 @@ COMMANDS: tuple[Command, ...] = (
             Result("distance", "number"),
             Result("mode", "string"),
             Result("changed_bodies", "string[]"),
+            Result("removed_bodies", "string[]"),
         ),
         category="feature",
         description=(
@@ -791,8 +792,7 @@ COMMANDS: tuple[Command, ...] = (
             Param(
                 "body_id",
                 "string",
-                "対象ボディ。省略時は、領域ならアクティブ(無ければ新規作成)、面ならその面を持つボディ(面の選択は同一ボディだが、別のボディを指定すればそこへ足す/引く)。"
-                "mode='new' では指定できない(行き先を持たない)",
+                "対象ボディ。省略時は、押し出す立体に触れる・重なる、見えている編集できるソリッドの全部(join は全部を1つに融合して文書の並びで先頭のボディに残し、他は消す。cut は削れるもの全部を削る。join で触れるものが無ければ新規作成、cut で削れるものが無ければ失敗)。指定するとそのボディだけが相手。mode='new' では指定できない(行き先を持たない)",
                 required=False,
                 ws=False,
             ),
@@ -803,7 +803,7 @@ COMMANDS: tuple[Command, ...] = (
         note=(
             "**`mode` はWSでだけ必須**(既定の join に落ちると「切るつもりで足した」が"
             "黙って通る。UIは人に選ばせてから送る)。**`body_id` はWSのコマンドには無い** —— "
-            "行き先を指せるのは MCP と `preview` だけで、WSは領域ならアクティブなBody、面ならその面を持つBodyへ足す"
+            "行き先を指せるのは MCP と `preview` だけで、WSは押し出す立体に触れる見えるボディ全部へ足す/から引く"
         ),
     ),
     Command(
@@ -813,6 +813,7 @@ COMMANDS: tuple[Command, ...] = (
             Result("angle", "number"),
             Result("mode", "string"),
             Result("changed_bodies", "string[]"),
+            Result("removed_bodies", "string[]"),
         ),
         category="feature",
         description=(
@@ -861,7 +862,7 @@ COMMANDS: tuple[Command, ...] = (
             Param(
                 "body_id",
                 "string",
-                "対象ボディ。省略時はアクティブ(無ければ新規作成)。mode='new' では指定できない(行き先を持たない)",
+                "対象ボディ。省略時は、押し出す立体に触れる・重なる、見えている編集できるソリッドの全部(join は全部を1つに融合して文書の並びで先頭のボディに残し、他は消す。cut は削れるもの全部を削る。join で触れるものが無ければ新規作成、cut で削れるものが無ければ失敗)。指定するとそのボディだけが相手。mode='new' では指定できない(行き先を持たない)",
                 required=False,
                 ws=False,
             ),
@@ -884,6 +885,7 @@ COMMANDS: tuple[Command, ...] = (
             Result("sections", "number"),
             Result("mode", "string"),
             Result("changed_bodies", "string[]"),
+            Result("removed_bodies", "string[]"),
         ),
         category="feature",
         description=(
@@ -925,7 +927,7 @@ COMMANDS: tuple[Command, ...] = (
             Param(
                 "body_id",
                 "string",
-                "対象ボディ。省略時はアクティブ(無ければ新規作成)。mode='new' では指定できない(行き先を持たない)",
+                "対象ボディ。省略時は、押し出す立体に触れる・重なる、見えている編集できるソリッドの全部(join は全部を1つに融合して文書の並びで先頭のボディに残し、他は消す。cut は削れるもの全部を削る。join で触れるものが無ければ新規作成、cut で削れるものが無ければ失敗)。指定するとそのボディだけが相手。mode='new' では指定できない(行き先を持たない)",
                 required=False,
                 ws=False,
             ),

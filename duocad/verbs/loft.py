@@ -19,20 +19,20 @@ from __future__ import annotations
 from typing import Any, List, Optional, Sequence
 
 from .. import kernel_extrude, kernel_sketch, parameters, selection
-from ..document import BodyId, Document, new_body_id
+from ..document import BodyId, Document
 from ..entry import entry
 from ..oplog import Operation, register_verb
 from ..region import RegionRef
 from ..sketch import entity_point_pair, get_entity, get_sketch
-from ._common import editable_sketch, recall, remember
+from ._common import editable_sketch
 from .extrude import (
     MODES,
-    _add_new_body,
-    _add_numbered_body,
-    _recorded_name,
-    _replayed_target,
+    Build,
+    _place,
     _resolve_faces_and_normal,
-    _resolve_target,
+    changed_bodies,
+    replay_placement,
+    undo_placement,
 )
 
 VERB_LOFT = "loft"
@@ -59,22 +59,14 @@ def loft(
     for ref in refs:
         editable_sketch(doc, ref.sketch)
 
-    target_body, resolved_body_id = _resolve_target(doc, mode, body_id, what=VERB_LOFT)
-    result = _loft_shape(
-        doc, refs, start, end, recorded_shifts, mode, None if target_body is None else target_body.shape
+    placement = _place(
+        doc,
+        mode,
+        body_id,
+        VERB_LOFT,
+        _loft_build(doc, refs, start, end, recorded_shifts, mode),
+        lambda: _loft_shape(doc, refs, start, end, recorded_shifts, "new", None)["shape"],
     )
-
-    created_new = False
-    previous_shape: Any = None
-    numbered: dict = {}
-    if target_body is None:
-        resolved_body_id = new_body_id()
-        numbered = _add_numbered_body(doc, resolved_body_id, result["shape"])
-        created_new = True
-    else:
-        previous_shape = target_body.shape
-        target_body.shape = result["shape"]
-
     operation = doc.log.append(
         VERB_LOFT,
         {
@@ -83,13 +75,17 @@ def loft(
             "end_point": end,
             "shifts": recorded_shifts,
             "mode": mode,
-            "body_id": resolved_body_id,
-            **numbered,
+            **placement.args(),
         },
     )
-    operation.provenance = result["provenance"]
-    remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
+    placement.record(doc, operation)
     return operation
+
+
+def _loft_build(
+    doc: Document, refs: Sequence[RegionRef], start: Optional[dict], end: Optional[dict], shifts: Sequence[int], mode: str
+) -> Build:
+    return lambda target_shape, merged: _loft_shape(doc, refs, start, end, shifts, mode, target_shape, merged)
 
 
 def _normalized_point(point: Any, label: str) -> Optional[dict]:
@@ -137,6 +133,7 @@ def _loft_shape(
     shifts: Sequence[int],
     mode: str,
     target_shape: Any,
+    merged: Sequence[Any] = (),
 ) -> dict:
     """断面と点を解決してロフトを作り、相手へ join / cut する(文書には触らない)。"""
     sections = []
@@ -150,6 +147,7 @@ def _loft_shape(
         start_point=None if start is None else _point_in_space(doc, start),
         end_point=None if end is None else _point_in_space(doc, end),
         shifts=shifts,
+        merged_bodies=merged,
     )
 
 
@@ -159,41 +157,13 @@ def _loft_shape(
 def _do_loft(document: Document, operation: Operation) -> None:
     """redo / replay 時の再適用。**ログには触らない**(触ると二重記録になる)。"""
     args = operation.args
-    body_id = args["body_id"]
-    mode = args["mode"]
     refs = [RegionRef.from_dict(item) for item in args["sections"]]
-    shape_args = (refs, args.get("start_point"), args.get("end_point"), list(args.get("shifts") or [0] * len(refs)), mode)
-
-    existing = next((candidate for candidate in document.bodies if candidate.id == body_id), None)
-    if mode == "new" and existing is not None:
-        raise ValueError(f"cannot replay new: body {body_id!r} already exists")
-    if existing is None and mode == "cut":
-        raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
-    if mode == "new" or existing is None:
-        result = _loft_shape(document, *shape_args, None)
-        _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
-        remember(document, body_id, operation.seq, None)
-    else:
-        target = _replayed_target(document, body_id, what=VERB_LOFT)
-        previous_shape = target.shape
-        result = _loft_shape(document, *shape_args, previous_shape)
-        target.shape = result["shape"]
-        remember(document, body_id, operation.seq, previous_shape)
-    if operation.provenance is None:
-        operation.provenance = result["provenance"]
+    shifts = list(args.get("shifts") or [0] * len(refs))
+    build = _loft_build(document, refs, args.get("start_point"), args.get("end_point"), shifts, args["mode"])
+    replay_placement(document, operation, build, VERB_LOFT)
 
 
-def _undo_loft(document: Document, operation: Operation) -> None:
-    """undo: ロフトの前の形状に戻す(新しく作ったボディなら取り除く)。"""
-    body_id = operation.args["body_id"]
-    previous = recall(document, body_id, operation.seq)
-    if previous is None:
-        document.remove_added_body(body_id)
-        return
-    document.get_body(body_id).shape = previous
-
-
-register_verb(VERB_LOFT, do=_do_loft, undo=_undo_loft)
+register_verb(VERB_LOFT, do=_do_loft, undo=undo_placement)
 
 
 # --------------------------------------------------------------------------------------
@@ -219,10 +189,9 @@ def _enter_loft(
         end_point=end_point,
         shifts=shifts,
     )
-    changed = operation.args["body_id"]
     return {
-        "body_id": changed,
+        "body_id": operation.args["body_id"],
         "sections": len(refs),
         "mode": str(mode),
-        "changed_bodies": [changed],
+        **changed_bodies(operation),
     }

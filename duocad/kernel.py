@@ -29,6 +29,8 @@ from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_TangentialDeflection
@@ -38,7 +40,15 @@ from OCP.STEPControl import (
     STEPControl_StepModelType,
     STEPControl_Writer,
 )
-from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
+from OCP.TopAbs import (
+    TopAbs_EDGE,
+    TopAbs_FACE,
+    TopAbs_IN,
+    TopAbs_Orientation,
+    TopAbs_ShapeEnum,
+    TopAbs_SOLID,
+    TopAbs_VERTEX,
+)
 from OCP.TopExp import TopExp
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
@@ -48,7 +58,7 @@ from OCP.TopTools import (
 )
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
-from . import kernel_chains, kernel_meshing, kernel_overflow, kernel_tight, meshbody
+from . import kernel_chains, kernel_interference, kernel_meshing, kernel_overflow, kernel_tight, meshbody
 
 from . import (
     brep_checks as _brep_checks,
@@ -866,6 +876,100 @@ def remembered(name: str, shapes: tuple, arguments: Any, compute: Callable[[], d
         while len(_RESULTS) > _RESULTS_LIMIT:
             _RESULTS.popitem(last=False)
     return dict(result)
+
+
+#: 「触れている」と見なす距離[mm]。最短距離の位置にある頂点・辺・面の許容差はこれに足す(`_touches`)。
+_TOUCH_TOL = 1e-6
+
+
+def touching_shapes(tool: Any, shapes: Sequence[Any]) -> List[int]:
+    """`tool` に触れる・重なる・含む/含まれる `shapes` の位置(押し出しの相手探し)。ソリッドを含まない形(面・シェルだけの
+    STEP の部品)は相手にしない(立体とのブーリアンが体積0で失敗する)。
+
+    緩い箱で絞ってから最短距離を測る。形全体で測れないときは面の対ごとに測る(`kernel_interference.min_distance`)。
+    離れていれば、片方がもう片方の内側に埋まっていないかを点の分類で見る。最短距離の `InnerSolution` には頼れない:
+    ボディの形は1つのソリッドでも COMPOUND で包まれていることが多く(ブーリアンの結果)、そのときは内側でも表面どうしの
+    正の距離を返す。
+    """
+    tool_box = _loose_box(tool)
+    found = []
+    for position, shape in enumerate(shapes):
+        if not _brep_topology.subshapes(shape, TopAbs_SOLID):
+            continue
+        if not _boxes_meet(tool_box, _loose_box(shape), _TOUCH_TOL):
+            continue
+        if _touches(tool, shape):
+            found.append(position)
+    return found
+
+
+def _loose_box(shape: Any) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+    """形状許容差の分だけ広がった箱(`BRepBndLib.Add`)。"""
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box, False)
+    x0, y0, z0, x1, y1, z1 = box.Get()
+    return (x0, y0, z0), (x1, y1, z1)
+
+
+def _boxes_meet(first: tuple, second: tuple, reach: float) -> bool:
+    return all(first[0][axis] <= second[1][axis] + reach and second[0][axis] <= first[1][axis] + reach for axis in range(3))
+
+
+def _touches(tool: Any, shape: Any) -> bool:
+    """最短距離が、その位置の要素の許容差の内なら触れている。形全体の最大の許容差は使わない: 離れた所の頂点1つが
+    粗いだけで、触れていないボディを融合の相手にしてしまう。"""
+    whole = _whole_distance(tool, shape)
+    if whole is not None:
+        distance, reach = whole
+    else:
+        measured = kernel_interference.min_distance(tool, shape)
+        distance, reach = (measured["distance"] if measured["ok"] else None), _TOUCH_TOL
+    if distance is not None and distance <= reach:
+        return True
+    return _vertex_inside(tool, shape) or _vertex_inside(shape, tool)
+
+
+def _whole_distance(tool: Any, shape: Any) -> Optional[Tuple[float, float]]:
+    """`(最短距離, 触れていると見なす距離)`。後者は最短の組の要素の許容差の和の最大に `_TOUCH_TOL` を足したもの。"""
+    try:
+        measure = BRepExtrema_DistShapeShape()
+        measure.LoadS1(tool)
+        measure.LoadS2(shape)
+        measure.Perform()
+        if not measure.IsDone() or measure.NbSolution() == 0:
+            return None
+        local = max(
+            _element_tolerance(measure.SupportOnShape1(index)) + _element_tolerance(measure.SupportOnShape2(index))
+            for index in range(1, measure.NbSolution() + 1)
+        )
+        return float(measure.Value()), _TOUCH_TOL + local
+    except Exception:  # noqa: BLE001  OCP の例外は共通の基底を持たない(`kernel_interference._distance` と同じ)
+        return None
+
+
+def _element_tolerance(element: Any) -> float:
+    kind = element.ShapeType()
+    if kind == TopAbs_VERTEX:
+        return float(BRep_Tool.Tolerance_s(TopoDS.Vertex_s(element)))
+    if kind == TopAbs_EDGE:
+        return float(BRep_Tool.Tolerance_s(TopoDS.Edge_s(element)))
+    if kind == TopAbs_FACE:
+        return float(BRep_Tool.Tolerance_s(TopoDS.Face_s(element)))
+    return 0.0
+
+
+def _vertex_inside(inner: Any, outer: Any) -> bool:
+    """`inner` のどれかのソリッドが `outer` のどれかのソリッドの内側に埋まっているか。表面が離れているときに呼ぶので、
+    埋まっているソリッドは全部の点が内側にあり、ソリッドごとに頂点1つを調べれば足りる(離れた柱と埋まった柱を一度に押す)。"""
+    outer_solids = _brep_topology.subshapes(outer, TopAbs_SOLID)
+    for piece in _brep_topology.subshapes(inner, TopAbs_SOLID):
+        vertices = _brep_topology.subshapes(piece, TopAbs_VERTEX)
+        if not vertices:
+            continue
+        point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertices[0]))
+        if any(BRepClass3d_SolidClassifier(solid, point, _TOUCH_TOL).State() == TopAbs_IN for solid in outer_solids):
+            return True
+    return False
 
 
 def copy_shape(shape: Any) -> Any:

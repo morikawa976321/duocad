@@ -614,9 +614,11 @@ class Session:
 
         戻り値:
             {"verb": str,
-             "bodies": [{"body_id","name","face_count","volume","geometry"}, ...]}
+             "bodies": [{"body_id","name","face_count","volume","geometry"}, ...],
+             "removed_bodies": [body_id, ...]}
 
-        `bodies` は形が変わった可視のBodyだけ。`geometry` は `state`/`delta` の同名フィールドと同じ形。
+        `bodies` は形が変わった可視のBodyだけ。`removed_bodies` は確定すると文書から消えるBody(join で融合される相手。
+        画面は本物を隠す)。`geometry` は `state`/`delta` の同名フィールドと同じ形。
         プレビューできるverbは `PREVIEWABLE_VERBS` のものだけ(ソケットの文字列で任意のメソッドを呼べる作りにしない)。
         `_applied_count` は自分で退避する(`speculative` が戻すのは文書だけ)。テセレーションは `view` を通さず
         `kernel.tessellate` を直に呼ぶ(`view` のキャッシュを投機的な形で汚さないため)。剪定は `_view_inputs()` の `previewing` が止める。
@@ -624,9 +626,11 @@ class Session:
         method_name, values = self._preview_arguments(verb, args)
         if catalog.BY_NAME[verb].preview_session is not None:
             # 文書を変えずに結果だけ計算するメソッドなので投機実行で包まない。
-            return {"verb": verb, "bodies": [], **getattr(self, method_name)(**values)}
+            return {"verb": verb, "bodies": [], "removed_bodies": [], **getattr(self, method_name)(**values)}
 
         before = {id(body): body.shape for body in self.document.bodies}
+        before_ids = [body.id for body in self.document.bodies]
+        removed: list[str] = []
         applied_count = self._applied_count
         bodies_out: list[dict] = []
         self._suppress_events += 1
@@ -650,10 +654,11 @@ class Session:
                             self.view.view_angular_deflection,
                         ),
                     })
+                removed = _removed_ids(before_ids, self.document.bodies)
         finally:
             self._suppress_events -= 1
             self._applied_count = applied_count
-        return {"verb": verb, "bodies": bodies_out}
+        return {"verb": verb, "bodies": bodies_out, "removed_bodies": removed}
 
     @staticmethod
     def _preview_arguments(verb: str, args: Optional[dict]) -> tuple:
@@ -694,6 +699,7 @@ class Session:
         # 写しの面は元の形と同じ添字(`fork`)なので、結果に残った面は元の形で測った三角形を借りられる。いまここで写しを取る
         # (計算はワーカーで走り、その間もループが元の形を測る)。下限に張り付いたズームでは借りない(1回で測る規則。`view`)
         inputs = dict(zip((body.id for body in self.document.bodies if body.shape is not None), pairs))
+        before_ids = [body.id for body in self.document.bodies]
         for original, copy in pairs:  # 写しは幾何がそのままなので体積も同じ(verb の検査が積分し直さない)
             known = _brep_geometry.known_volume(original)
             if known is not None:
@@ -742,9 +748,10 @@ class Session:
                     "volume": query.volume(body.shape),
                     "geometry": geometry,
                 })
+            removed = _removed_ids(before_ids, twin.bodies)
             if suggestion is not None:
-                return {"verb": verb, "bodies": bodies_out, "suggestion": suggestion}
-            return {"verb": verb, "bodies": bodies_out}
+                return {"verb": verb, "bodies": bodies_out, "removed_bodies": removed, "suggestion": suggestion}
+            return {"verb": verb, "bodies": bodies_out, "removed_bodies": removed}
 
         def adopt() -> None:
             kernel.adopt_results(pairs)
@@ -1391,3 +1398,9 @@ for _verb, _function in entries().items():
     if hasattr(Session, _verb):
         raise RuntimeError(f"`Session.{_verb}` が verb の入口と同じ名前で既に定義されている")
     setattr(Session, _verb, _verb_method(_verb, _function))
+
+
+def _removed_ids(before: list, bodies: list) -> list:
+    """投機実行の前にいて、後にいないBodyのID(前の並び順)。"""
+    after = {body.id for body in bodies}
+    return [body_id for body_id in before if body_id not in after]

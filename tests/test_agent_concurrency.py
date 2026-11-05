@@ -42,22 +42,24 @@ def test_fillet_refuses_a_body_hidden_after_the_selection_was_confirmed(box_sess
         box_session.fillet(1.0)
 
 
-def test_extrude_refuses_the_active_body_when_it_was_hidden_meanwhile(
+def test_extrude_leaves_a_body_alone_when_it_was_hidden_meanwhile(
     box_session: Session,
 ):
-    """`extrude`(領域)は対象ボディを**選択ではなく**引数/アクティブから取る
-    (`duocad/catalog.py` の `body_id` は「名前であって対象集合ではない」)ので、
-    `resets_selection` の全リセットが働いても対象ボディの可視性だけは別に守る必要がある。
-    """
-    box_session.document.set_active_body("box")
+    """落ちたら、領域を選んだ後に人が隠したボディへ、AI の押し出しが黙って足す/から削る。`extrude`(領域)の相手は
+    選択ではなく触れるボディから決まるので、`resets_selection` の全リセットとは別に可視性を守る必要がある。"""
     sketch_id = box_session.sketch_create("XY")["sketch_id"]
     box_session.add_rectangle(sketch_id, [0, 0], 5, 5)
+    shape = box_session.document.get_body("box").shape
+    box_session.set_visible("box", False)  # 人が箱を隠す
+
     selection.set_selection(box_session.document, refs=[{"sketch": sketch_id, "index": 1}])
+    with pytest.raises(ValueError, match="cut reaches no visible body"):
+        box_session.extrude(1.0, mode="cut")
+    selection.set_selection(box_session.document, refs=[{"sketch": sketch_id, "index": 1}])
+    created = box_session.extrude(1.0, mode="join")["body_id"]
 
-    box_session.set_visible("box", False)  # 人が対象ボディを隠す
-
-    with pytest.raises(ValueError, match="hidden"):
-        box_session.extrude(1.0, mode="join")
+    assert created != "box"
+    assert box_session.document.get_body("box").shape is shape
 
 
 def test_a_kind_mismatch_names_what_is_actually_confirmed(box_session: Session):

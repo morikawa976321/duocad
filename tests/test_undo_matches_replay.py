@@ -374,19 +374,6 @@ def test_undoing_an_operation_that_adds_several_bodies_restores_the_active_body(
     assert_matches_replay(document)
 
 
-def test_a_join_after_undoing_a_new_body_goes_to_the_body_that_was_active():
-    document = Document()
-    base = new_box(document, 20.0)
-    second_body(document)
-    document.log.undo(document)
-    sketch_id = sketch_create(document, "XY")
-    add_rectangle(document, sketch_id, (40.0, 0.0), 5.0, 5.0)
-
-    extrude(document, [region_ref(sketch_id, 1)], 8.0, mode="join")
-
-    assert [body.id for body in document.bodies] == [base]
-
-
 def test_undoing_a_deletion_then_the_creation_behind_it_keeps_the_active_body():
     """消したボディを戻してから、そのボディを作った操作を undo しても、足す前の active が正しく戻る
     (復元の `add_body` が足す前の active の控えを上書きしない)。"""

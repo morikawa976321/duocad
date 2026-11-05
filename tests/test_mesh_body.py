@@ -13,7 +13,7 @@ from duocad.oplog import OpLog
 from duocad.server import Session
 from duocad.speculative import speculative
 from duocad.verbs import add_mesh_body, chamfer, delete, extrude_faces, fillet, move_body, shell_body
-from duocad.verbs.extrude import _resolve_target
+from duocad.verbs.extrude import _place
 from document_support import replay_through_json, shape_ref
 from session_support import edit_parameter, session_with_box
 
@@ -245,8 +245,8 @@ def test_a_mesh_body_can_be_deleted_and_the_delete_can_be_undone():
         # 領域の押し出しは `_common.editable_body` を通らない専用の解決関数を持つので、
         # そこを直に叩く(領域を1つ作るには別のスケッチが要り、断りの検査には要らない)。
         pytest.param(
-            lambda doc, body_id: _resolve_target(doc, "join", body_id),
-            id="extrude(_resolve_target)",
+            lambda doc, body_id: _place(doc, "join", body_id, "extrude", lambda *_: {}, lambda: None),
+            id="extrude(_place)",
         ),
     ],
 )
