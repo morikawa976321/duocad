@@ -159,7 +159,7 @@ npm run check --prefix web                               # tsc と svelte-check�
   切る。`commands/command.ts` の `SelectableKind` / `KIND_COUNTERS` はコアの `SELECTABLE_KINDS` の写しで、足し忘れると件数表示が
   `undefined` になる（`ref as ShapeRef` のキャストで書かれているため `tsc` では出ない）。
 - **`ws="none"`（MCP 専用）の verb は画面の `Applied` に載らない。** ブラウザに開けていないのに操作ログに載る verb
-  （`add_mesh_body` / `mirror_sketch_entities`）は全ブラウザへ状態配信されるが、型が無くても検査は緑。足すとき `Applied` を省略
+  （MCP 専用の `add_mesh_body`、コード専用の `add_solid_body`）は全ブラウザへ状態配信されるが、型が無くても検査は緑。足すとき `Applied` を省略
   してよいかは都度判断し、省略するなら理由を宣言に書く。
 - **文書の置き場は「誰が直せるか」で決める。** AI の作業ディレクトリの外にある文書は実装が進むたびに古くなる。コードと同じ
   リポジトリなら同じコミットで直せる。日付入りのファイル名は継続改訂する文書に向かない。
