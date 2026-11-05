@@ -24,14 +24,20 @@
     suffix,
     value = $bindable(''),
     placeholder = '',
+    selectOnFocus = false,
     onkeydown,
   }: {
     id: string
     suffix: string
     value?: string
     placeholder?: string
+    /** 欄に入ったら中身を全部選ぶ(先埋めした名前を打ち直すだけで置き換えられるように)。 */
+    selectOnFocus?: boolean
     onkeydown?: (event: KeyboardEvent) => void
   } = $props()
+
+  /** クリックで入ったときは、続く mouseup がカーソルを置いて選択を解く(Chrome)。その1回だけ既定動作を止める。 */
+  let selectedByFocus = false
 
   function dropTypedSuffix(): void {
     value = withoutSuffix(value, suffix)
@@ -47,6 +53,16 @@
     {placeholder}
     bind:value
     {onkeydown}
+    onmousedown={(event) => {
+      selectedByFocus = selectOnFocus && document.activeElement !== event.currentTarget
+    }}
+    onfocus={(event) => {
+      if (selectOnFocus) (event.currentTarget as HTMLInputElement).select()
+    }}
+    onmouseup={(event) => {
+      if (selectedByFocus) event.preventDefault()
+      selectedByFocus = false
+    }}
     oninput={(event) => {
       if (event instanceof InputEvent && event.inputType === 'insertFromPaste') dropTypedSuffix()
     }}
