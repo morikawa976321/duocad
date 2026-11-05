@@ -1709,18 +1709,25 @@
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
     if (kinds.length === 0) pendingOptimizePreset = null
-    // 辺だけを食うコマンドが起動したら、選択に残っている面を外す(辺は残す。面は指せなくなるので外す手が無い)。
-    // 外した面の代わりに、その外周の辺を連なりで入れる(コアが1回の選択の変更で行う。`Session.select_face_boundaries`)。
-    // `untrack`: ここは `CommandHost` の `$effect` の中から呼ばれ、選択を読むとその effect が選択の変化ごとに走り直す。
-    if (kinds.length > 0 && kinds.every((kind) => kind === 'edge')) {
-      untrack(() => {
-        if (refsOfKind(currentItems(), 'face').length === 0) return
-        const op = nextOp()
-        selectionOpsInFlight.add(op)
-        session.selectFaceBoundaries(op)
-      })
-    }
   }
+
+  /** 送った `select_face_boundaries` の op(返るまで送り直さない)。 */
+  let faceBoundaryOp: number | null = null
+  /**
+   * 辺だけを食うコマンドの起動中に選択に面があれば、外してその外周の辺を連なりで入れる(辺は残す。面は指せなくなるので
+   * 外す手が無い)。コアが1回の選択の変更で行う(`Session.select_face_boundaries`)。起動の瞬間ではなく状態で決めるのは、
+   * 送った要求が切断で失われても繋ぎ直した時点でもう一度送るため(残った面は確定で黙って無視され、外周が丸まらない)。
+   * 失敗したら選択も接続も変わらないので送り直さない(断りはトーストに出る)。
+   */
+  $effect(() => {
+    if (!edgeOnlyCommand || status !== 'open' || selectedFaces.length === 0) return
+    untrack(() => {
+      if (faceBoundaryOp !== null && selectionOpsInFlight.has(faceBoundaryOp)) return
+      faceBoundaryOp = nextOp()
+      selectionOpsInFlight.add(faceBoundaryOp)
+      session.selectFaceBoundaries(faceBoundaryOp)
+    })
+  })
 
   /** 辺の参照を、連なり(`viewport.edgeChain`)の全部の参照へ広げる。連なりがまだ届いていなければ null。 */
   function edgeChainRefs(bodyId: string, edgeIndex: number): SelectionRef[] | null {
