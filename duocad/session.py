@@ -877,11 +877,14 @@ class Session:
     def preview_mirror_sketch_entities(self, axis: Any) -> dict:
         """`mirror_sketch_entities` の確定前の姿(足される複製)。文書を変えない。
 
-        対象が同じ uv 平面の複数のスケッチにまたがっても、幽霊は最初の対象のスケッチへまとめて描く。
+        対象は法線方向にずれた平行なスケッチにもまたがるので、複製ごとに足される先の `sketch_id` を添える
+        (画面はその平面へ描く。`web/src/sketchLayer.ts` の `showSketchGhosts`)。
         """
         planned = mirrored_entities(self.document, selection.require_sketch_entities(self.document), axis)
-        entities = [{"kind": kind, "params": values} for _, kind, values in planned]
-        return _projection_ghost(planned[0][0], entities)
+        entities = [
+            {"kind": kind, "params": dict(values), "sketch_id": sketch_id} for sketch_id, kind, values in planned
+        ]
+        return {"sketch_ghost": {"sketch_id": planned[0][0], "entities": entities, "pieces": 1}}
     # ---------------------------------------------------------------- 形状最適化を走らせる(`duocad/optimize_run.py` への委譲)
     def optimize_conditions(self) -> dict:
         """4条件がそろって走らせられるか(`optimize_run.conditions_report`)。"""

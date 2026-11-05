@@ -361,7 +361,8 @@ export interface PreviewPayload {
    */
   sketch_ghost: {
     sketch_id: string
-    entities: Array<{ kind: string; params: Record<string, number> }>
+    /** `sketch_id` を持つ図形はそのスケッチの平面に描く(無ければ外側の `sketch_id`)。 */
+    entities: Array<{ kind: string; params: Record<string, number>; sketch_id?: string }>
     pieces: number
   } | null
   /**

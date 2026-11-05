@@ -655,7 +655,7 @@ export interface Viewport {
    */
   showSketchGhosts(
     sketchId: string,
-    entities: Array<{ kind: string; params: Record<string, number> }>,
+    entities: Array<{ kind: string; params: Record<string, number>; sketch_id?: string }>,
     tone?: 'normal' | 'warn',
   ): void
   /**

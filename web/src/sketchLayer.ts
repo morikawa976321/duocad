@@ -493,17 +493,19 @@ export function createSketchLayer(sketchRoot = new THREE.Group()): SketchLayer {
 
   function showSketchGhosts(
     sketchId: string,
-    entities: Array<{ kind: string; params: Record<string, number> }>,
+    entities: Array<{ kind: string; params: Record<string, number>; sketch_id?: string }>,
     resolution: ViewResolution,
     tone: 'normal' | 'warn' = 'normal',
   ): void {
     clearGhost()
-    const target = sketches.get(sketchId)
-    if (entities.length === 0 || !target) return
+    if (entities.length === 0) return
     const batch = createBatch(sketchRoot)
     const material = tone === 'warn' ? sketchGhostWarnMaterial : sketchGhostMaterial
     const pointPositions: number[] = []
     for (const entity of entities) {
+      // 図形が自分のスケッチを持つときはその平面へ描く(鏡映の対象は法線方向にずれた平行なスケッチにもまたがる)。
+      const target = sketches.get(entity.sketch_id ?? sketchId)
+      if (!target) continue
       if (entity.kind === 'point') {
         const world = toWorld(target.frame, entity.params.cx, entity.params.cy)
         pointPositions.push(world.x, world.y, world.z)
