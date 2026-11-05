@@ -16,7 +16,7 @@
     commandRequest,
     edgeRef,
     faceRef,
-    measureItemKey,
+    measureItemRef,
     pickedRefOf,
     refKey,
     refKind,
@@ -1057,14 +1057,13 @@
     // 結果を先に入れる(`commandSucceeded()` が呼ぶ `onCommandEnd` が結果の有無で選択を残すかを決める)。
     measure.onResult(payload)
     if (releasePending(payload.client_op)) {
-      // 添字は応答の `items` の並び。画面の選択はまだ古い配信のことがあるので、項目の参照で引き当てる。
-      const refusedKeys = new Set(
-        (payload.between_error_items ?? []).flatMap((at) => {
-          const item = payload.items[at] as MeasureItem | undefined
-          return item === undefined ? [] : [measureItemKey(item)]
-        }),
-      )
-      measureRefused = refusedKeys.size > 0 ? currentItems().filter((ref) => refusedKeys.has(refKey(ref))) : null
+      // 添字は応答の `items`(コアが測った選択)の並び。画面の選択はまだ古い配信のことがあるので、項目から参照を作って外す
+      // (選択に無い参照の除外はコアが空振りにする)。
+      const refused = (payload.between_error_items ?? []).flatMap((at) => {
+        const item = payload.items[at] as MeasureItem | undefined
+        return item === undefined ? [] : [measureItemRef(item)]
+      })
+      measureRefused = refused.length > 0 ? refused : null
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }

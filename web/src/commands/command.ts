@@ -81,14 +81,14 @@ export function refKey(ref: SelectionRef): string {
 }
 
 /**
- * 測定の1項目(`duocad/measure.py` の `_measure_item`)が指す参照の `refKey`。項目は参照の識別子
+ * 測定の1項目(`duocad/measure.py` の `_measure_item`)が指す選択の参照。項目は参照の識別子
  * (`body` / `index` / `sketch` / `entity` / `point`)をそのまま写して返す。
  */
-export function measureItemKey(item: MeasureItem): string {
-  if (item.kind === 'sketch_entity') return refKey({ sketch: item.sketch, entity: item.entity, point: item.point })
-  if (item.kind === 'region') return refKey({ sketch: item.sketch, index: item.index })
-  if (item.kind === 'body') return refKey({ body: item.body, kind: 'body', index: null })
-  return refKey({ body: item.body, kind: item.kind, index: item.index })
+export function measureItemRef(item: MeasureItem): SelectionRef {
+  if (item.kind === 'sketch_entity') return { sketch: item.sketch, entity: item.entity, point: item.point }
+  if (item.kind === 'region') return { sketch: item.sketch, index: item.index }
+  if (item.kind === 'body') return { body: item.body, kind: 'body', index: null }
+  return { body: item.body, kind: item.kind, index: item.index }
 }
 
 /** 2つの参照が同じ実体を指すか(コアの `ref_key` の一致と同じ)。 */
