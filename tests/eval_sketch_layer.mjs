@@ -140,6 +140,8 @@ try {
   update([{ ...draw(), livePatterns: true }])
   layer.showGhosts('a', handles, DEFAULT_RESOLUTION)
   observe()
+  // 線・点・領域・幽霊・印のどれも透明の側。不透明の側に置くと、透明の側で後から描く格子(`planeGrid.ts`)の線に塗られる
+  for (const material of materials) assert.equal(material.transparent, true, `不透明の側の材質(${material.type})がある`)
   layer.dispose()
   empty()
   assert.equal(parent.children.length, 0)
