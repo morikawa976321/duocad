@@ -2636,6 +2636,7 @@
           onExportStl={files.exportStl}
           thumbnailUrl={files.thumbnailUrl}
           onNeedThumbnail={files.wantThumbnail}
+          lastCopied={files.lastCopied}
         />
       </aside>
     {/if}

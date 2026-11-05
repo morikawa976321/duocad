@@ -33,6 +33,8 @@ export interface DocumentFiles {
   readonly list: DocumentInfo[]
   /** いま編集しているファイル名(無題なら null)。 */
   readonly currentName: string | null
+  /** この接続が最後に成功させた複製の行き先。成功のたびに別のオブジェクトになる(同じ名前への2度目も見分けられる)。 */
+  readonly lastCopied: { name: string } | null
   onFile(payload: FilePayload): void
   onState(next: ServerState): void
   refresh(): void
@@ -90,6 +92,7 @@ function exportedMessage(payload: FilePayload): string | null {
 export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
   let list = $state<DocumentInfo[]>([])
   let currentName = $state<string | null>(null)
+  let lastCopied = $state<{ name: string } | null>(null)
   let saved = true
   let lastOp: number | null = null
   // list_documents は全ファイルのログを読むので、配信のたびには呼ばず少し待ってまとめ、
@@ -216,6 +219,9 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     get currentName() {
       return currentName
     },
+    get lastCopied() {
+      return lastCopied
+    },
     onFile(payload) {
       // **`list_documents` の応答は通知を出さずここで抜ける**(保存/開くのたびに裏で走る)。
       if (payload.action === 'list') {
@@ -234,6 +240,7 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
       if (exported !== null) deps.inform(exported)
       else deps.note(`${payload.action}: ${payload.path}`)
       followFileChange(payload)
+      if (payload.action === 'copy' && payload.name !== undefined) lastCopied = { name: payload.name }
       if (['save', 'rename', 'copy', 'delete'].includes(payload.action)) refresh()
     },
     onState(next) {

@@ -26,7 +26,7 @@
    * 名前とパスの欄は拡張子を打たせない(`SuffixField.svelte`。`.json` / `.step` / `.stl` は欄の右に固定で、送るときに付ける。本人指示 2026-10-07)。
    * 送信後もパス欄は消さない(STEP/STLのパスは同じ値へ書き出し直す・読み直すことが多い)。
    * 改名欄と複製欄は今の名前(複製は `<元の名前>-copy`)を先埋めして選んだ状態で出し、Esc で取り消す。送っても欄は消さず、
-   * 断られたら打った名前が残る(改名は `currentName` が変わったら、複製は一覧に新しい名前が現れたら閉じる/埋め直す)。
+   * 断られたら打った名前が残る(改名は `currentName` が変わったら、複製は成功の応答 `lastCopied` が来たら閉じる/埋め直す)。
    */
   import { tick } from 'svelte'
   import { pathLike, unquotePath } from './commands/command'
@@ -48,6 +48,7 @@
     onExportStl,
     thumbnailUrl,
     onNeedThumbnail,
+    lastCopied,
   }: {
     documents: DocumentInfo[]
     /** サーバの `state.current_name` の写し(無ければ `null`)。名前は文字で出さず(ヘッダの `#current-file` と二重になる)、一覧の当該行を光らせる(`BrowserPanel.svelte` の `.sketch-row.active` と同じ形)。 */
@@ -68,6 +69,8 @@
     /** 無ければ null(仮の絵を出す)。 */
     thumbnailUrl: (name: string) => string | null
     onNeedThumbnail: (name: string, version: number | null) => void
+    /** 最後に成功した複製(`documentFiles.lastCopied`)。成功のたびに別のオブジェクトになる。 */
+    lastCopied: { name: string } | null
   } = $props()
 
   function currentStem(): string {
@@ -167,11 +170,11 @@
   let copyingFrom = $state<string | null>(null)
   let copyName = $state('')
   let deletingName = $state<string | null>(null)
-  /** 送って応答を待っている複製先。送った時点で一覧に無かった名前が一覧に現れたら、成功として欄を閉じる。 */
-  let copySent = $state<string | null>(null)
+  /** 送って応答を待っている複製先と、送った時点の `lastCopied`。それより後に同じ名前の成功が来たら欄を閉じる。 */
+  let copySent = $state<{ dest: string; before: { name: string } | null } | null>(null)
 
   $effect(() => {
-    if (copySent !== null && documents.some((file) => file.name === copySent)) cancelRowActions()
+    if (copySent !== null && lastCopied !== copySent.before && lastCopied?.name === copySent.dest) cancelRowActions()
   })
 
   /** 複製先の先埋め: `<元の名前>-copy`(既にあれば `-copy2` …)。手元の一覧で見るだけで、存在の正はサーバ。 */
@@ -201,8 +204,7 @@
   function submitCopy(): void {
     if (copyingFrom === null || copyProblem !== null) return
     const dest = withSuffix(copyName, '.json')
-    // 既にある名前はサーバが断るので、待ちに入れない(一覧に元からあるだけで閉じてしまう)。
-    copySent = documents.some((file) => file.name === dest) ? null : dest
+    copySent = { dest, before: lastCopied }
     onCopy(copyingFrom, dest)
   }
 
