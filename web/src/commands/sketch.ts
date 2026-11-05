@@ -376,7 +376,7 @@ export function runsOutsideSketch(verb: string): boolean {
 /**
  * スケッチの点・辺の平行移動 / 回転 / 複製。対象はコアの選択から取る。
  * どのスケッチかは選んだ参照が持つので `sketch_id` を取らない(`runsWithoutSketchId`)。
- * 複製するか・並進か回転かは既定を置かず人に選ばせる(`move_body` と同じ理由)。回転軸は無い(2Dなので常に平面の法線。`duocad/verbs/move_sketch.py`)。中心は省略可で、既定はコアが決める(対象の代表点の平均)。
+ * 複製するか・並進か回転かの既定は `move_body` と同じ。回転軸は無い(2Dなので常に平面の法線。`duocad/verbs/move_sketch.py`)。中心は省略可で、既定はコアが決める(対象の代表点の平均)。
  */
 export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
   id: 'move_sketch_entities',
@@ -393,8 +393,8 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
       min: 1,
       max: null,
     },
-    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('sketch-move') },
-    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('sketch-move') },
+    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('sketch-move'), default: 'move' },
+    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('sketch-move'), default: 'translate' },
     { kind: 'number', ...offsetArg('dx', 'sketch-move', () => null) },
     { kind: 'number', ...offsetArg('dy', 'sketch-move', () => null) },
     {

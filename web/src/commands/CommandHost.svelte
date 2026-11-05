@@ -198,7 +198,7 @@
   /** クリックで集めた点(引数名 -> [u,v])。選択集合には入れない(線の始点が溜まると次のコマンドが拾う)。 */
   let points = $state<Record<string, Point2>>({})
 
-  /** 選んだ選択肢(引数名 -> 値)。既定は入れない(`ChoiceArgSpec` のdocstring)。 */
+  /** 押した選択肢(引数名 -> 値)。既定(`ChoiceArgSpec.default`)はここに入れず、`values` が補う。 */
   let choices = $state<Record<string, string>>({})
 
   /** 指したスケッチ平面(引数名 -> `'XY' | 'XZ' | 'YZ' | 'face'`)。点と同じく選択集合には入れない(基準平面は選択の種別でなく、面は参照が入るだけで「面に貼る」意思ではない)。 */
@@ -223,7 +223,7 @@
         const point = points[spec.name]
         if (point) collected[spec.name] = point
       } else if (spec.kind === 'choice') {
-        const chosen = choices[spec.name]
+        const chosen = choices[spec.name] ?? spec.default
         if (chosen) collected[spec.name] = chosen
       } else if (spec.kind === 'entities') {
         collected[spec.name] = entities
@@ -1011,7 +1011,7 @@
         {#each spec.options as option (option.value)}
           <button
             id={option.buttonId}
-            class:on={choices[spec.name] === option.value}
+            class:on={(choices[spec.name] ?? spec.default) === option.value}
             onclick={(event) => {
               choices = { ...choices, [spec.name]: option.value }
               // **押した直後にフォーカスを外す**。ボタンにフォーカスが残ったままだと、

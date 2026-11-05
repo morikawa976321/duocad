@@ -603,7 +603,7 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
 
 /**
  * ボディの平行移動 / 回転 / 複製。対象はボディ単位で選ぶ(`BODY_SELECTION`)。
- * 複製するか・並進か回転かは既定を置かず人に選ばせる(押し出しの `mode` と同じ理由)。
+ * 複製するかは「動かす」、種別は「並進」が既定(選び違えても undo 1回で戻り、形は壊れない。`ChoiceArgSpec.default`)。
  *
  * 回転軸は共有選択集合に入れず別チャンネル(`kind: 'pick'`)で指す: 入れると `require_bodies` が軸にした辺のボディまで動かす対象に数える。
  * 軸はまっすぐな辺か原点の軸をクリックで指す。画面だけの選択肢(X/Y/Z のボタン)は置かない: 共有引数に無い状態を画面が持つと、
@@ -625,8 +625,8 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
       min: 1,
       max: null,
     },
-    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('move-body') },
-    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('move-body') },
+    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('move-body'), default: 'move' },
+    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('move-body'), default: 'translate' },
     { kind: 'number', ...offsetArg('dx', 'move-body', finite('X')) },
     { kind: 'number', ...offsetArg('dy', 'move-body', finite('Y')) },
     { kind: 'number', ...offsetArg('dz', 'move-body', finite('Z')) },

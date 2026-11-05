@@ -267,7 +267,9 @@ export interface PointArgSpec extends ArgSpecCommon {
 }
 
 /**
- * 2つ以上から1つ選ぶ引数。既定値を持たない(`join` 既定だと「切り取るつもりで足した」が黙って通る。サーバ側も `mode` を必須にしてある)。
+ * 2つ以上から1つ選ぶ引数。既定値は、選び違えても形が壊れない選択肢にだけ置く(`default`。本人判断 2026-11-05、issue #272)。
+ * 押し出しの結合/切り取りのように、選び違えると黙って別の形になるものには置かない(`join` 既定だと「切り取るつもりで足した」が
+ * 黙って通る。サーバ側も `mode` を必須にしてある)。
  * `sends` は共有の作業空間(`state.command.args`)へ出すサーバ側の値(省略なら `value` そのまま。`build` と同じ読み替えをここにも
  * 書く: `copy` の 'copy' → true、荷重の 'down' → [0,0,-1])。サーバの値にならない選択肢(鏡映面の「面を選ぶ」)は `null`。
  * 配信された値を欄へ戻すときも同じ対応で引く(`sharedArgsController.ts` の `transitionSharedArgs`)。
@@ -277,6 +279,8 @@ export interface PointArgSpec extends ArgSpecCommon {
 export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
   options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string }>
+  /** 何も押していない間に選ばれている扱いにする `value`(上の docstring の条件を満たすものだけ)。 */
+  default?: string
 }
 
 /** 選択肢がサーバへ出す値(`sends` が無ければ `value`)。`null` は「出さない」。 */
