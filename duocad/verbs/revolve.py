@@ -22,20 +22,20 @@ import math
 from typing import Any, Optional, Sequence
 
 from .. import kernel_extrude, kernel_sketch, parameters, selection
-from ..document import BodyId, Document, new_body_id
+from ..document import BodyId, Document
 from ..entry import entry
 from ..oplog import Operation, register_verb
 from ..region import RegionRef
 from ..sketch import get_entity, get_sketch
-from ._common import editable_sketch, recall, remember
+from ._common import editable_sketch
 from .extrude import (
     MODES,
-    _add_new_body,
-    _add_numbered_body,
-    _recorded_name,
-    _replayed_target,
+    Build,
+    _place,
     _resolve_faces_and_normal,
-    _resolve_target,
+    changed_bodies,
+    replay_placement,
+    undo_placement,
 )
 
 VERB_REVOLVE = "revolve"
@@ -64,22 +64,14 @@ def revolve(
     for ref in refs:
         editable_sketch(doc, ref.sketch)
 
-    target_body, resolved_body_id = _resolve_target(doc, mode, body_id, what=VERB_REVOLVE)
-    result = _revolve_shape(
-        doc, refs, axis, angle, mode, bool(symmetric), None if target_body is None else target_body.shape
+    placement = _place(
+        doc,
+        mode,
+        body_id,
+        VERB_REVOLVE,
+        _revolve_build(doc, refs, axis, angle, mode, bool(symmetric)),
+        lambda: _revolve_shape(doc, refs, axis, angle, "new", bool(symmetric), None)["shape"],
     )
-
-    created_new = False
-    previous_shape: Any = None
-    numbered: dict = {}
-    if target_body is None:
-        resolved_body_id = new_body_id()
-        numbered = _add_numbered_body(doc, resolved_body_id, result["shape"])
-        created_new = True
-    else:
-        previous_shape = target_body.shape
-        target_body.shape = result["shape"]
-
     operation = doc.log.append(
         VERB_REVOLVE,
         {
@@ -88,13 +80,15 @@ def revolve(
             "angle": angle,
             "symmetric": bool(symmetric),
             "mode": mode,
-            "body_id": resolved_body_id,
-            **numbered,
+            **placement.args(),
         },
     )
-    operation.provenance = result["provenance"]
-    remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
+    placement.record(doc, operation)
     return operation
+
+
+def _revolve_build(doc: Document, refs: Sequence[RegionRef], axis: Any, angle: float, mode: str, symmetric: bool) -> Build:
+    return lambda target_shape, merged: _revolve_shape(doc, refs, axis, angle, mode, symmetric, target_shape, merged)
 
 
 def _checked_angle(angle: Any) -> float:
@@ -144,6 +138,7 @@ def _revolve_shape(
     mode: str,
     symmetric: bool,
     target_shape: Any,
+    merged: Sequence[Any] = (),
 ) -> dict:
     """領域と軸を解決して回転体を作り、相手へ join / cut する(文書には触らない)。"""
     faces, normal = _resolve_faces_and_normal(doc, refs, what=VERB_REVOLVE)
@@ -155,7 +150,7 @@ def _revolve_shape(
     point = [origin[i] + pu * u[i] + pv * v[i] for i in range(3)]
     direction = [du * u[i] + dv * v[i] for i in range(3)]
     return kernel_extrude.revolve_regions(
-        faces, point, direction, normal, angle, mode, target_shape=target_shape, symmetric=symmetric
+        faces, point, direction, normal, angle, mode, target_shape=target_shape, symmetric=symmetric, merged=merged
     )
 
 
@@ -165,41 +160,14 @@ def _revolve_shape(
 def _do_revolve(document: Document, operation: Operation) -> None:
     """redo / replay 時の再適用。**ログには触らない**(触ると二重記録になる)。"""
     args = operation.args
-    body_id = args["body_id"]
-    mode = args["mode"]
     refs = [RegionRef.from_dict(item) for item in args["regions"]]
-    shape_args = (refs, args["axis"], float(args["angle"]), mode, bool(args.get("symmetric", False)))
-
-    existing = next((candidate for candidate in document.bodies if candidate.id == body_id), None)
-    if mode == "new" and existing is not None:
-        raise ValueError(f"cannot replay new: body {body_id!r} already exists")
-    if existing is None and mode == "cut":
-        raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
-    if mode == "new" or existing is None:
-        result = _revolve_shape(document, *shape_args, None)
-        _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
-        remember(document, body_id, operation.seq, None)
-    else:
-        target = _replayed_target(document, body_id, what=VERB_REVOLVE)
-        previous_shape = target.shape
-        result = _revolve_shape(document, *shape_args, previous_shape)
-        target.shape = result["shape"]
-        remember(document, body_id, operation.seq, previous_shape)
-    if operation.provenance is None:
-        operation.provenance = result["provenance"]
+    build = _revolve_build(
+        document, refs, args["axis"], float(args["angle"]), args["mode"], bool(args.get("symmetric", False))
+    )
+    replay_placement(document, operation, build, VERB_REVOLVE)
 
 
-def _undo_revolve(document: Document, operation: Operation) -> None:
-    """undo: 回す前の形状に戻す(新しく作ったボディなら取り除く)。"""
-    body_id = operation.args["body_id"]
-    previous = recall(document, body_id, operation.seq)
-    if previous is None:
-        document.remove_added_body(body_id)
-        return
-    document.get_body(body_id).shape = previous
-
-
-register_verb(VERB_REVOLVE, do=_do_revolve, undo=_undo_revolve)
+register_verb(VERB_REVOLVE, do=_do_revolve, undo=undo_placement)
 
 
 # --------------------------------------------------------------------------------------
@@ -234,10 +202,9 @@ def _enter_revolve(
         body_id=body_id,
         symmetric=bool(symmetric),
     )
-    changed = operation.args["body_id"]
     return {
-        "body_id": changed,
+        "body_id": operation.args["body_id"],
         "angle": operation.args["angle"],
         "mode": str(mode),
-        "changed_bodies": [changed],
+        **changed_bodies(operation),
     }

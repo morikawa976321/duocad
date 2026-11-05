@@ -18,6 +18,10 @@ from .brep_topology import _face_edit_edge_faces, _face_map, indexed_map, subsha
 _NO_CHANGE_RTOL = 1e-9
 
 
+class Unchanged(ValueError):
+    """ブーリアンが通ったのに形が変わらなかった(`_checked_volume`)。押し出しの相手探しは、これを「その相手には届いていない」と読む。"""
+
+
 def _analyzer_valid(shape: "TopoDS_Shape") -> bool:
     """`BRepCheck_Analyzer` の合否。**直列で**検査する。
 
@@ -45,7 +49,7 @@ def _checked_volume(
     if volume_before is not None and abs(volume_after - volume_before) <= _NO_CHANGE_RTOL * max(
         1.0, abs(volume_before)
     ):
-        raise ValueError(
+        raise Unchanged(
             f"{label} did not change the shape (volume {volume_before} -> {volume_after}{suffix})"
         )
     return volume_after

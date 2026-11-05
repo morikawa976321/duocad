@@ -48,7 +48,7 @@ def new_box_with_hole(doc: Document, size: float = 20.0, radius: float = 4.0) ->
 
 def second_body(document: Document) -> str:
     """10×10×5 を `mode="new"` でもう1つ作り body_id を返す(undo すると `document.remove_body` で
-    完全に消える経路。`duocad/verbs/extrude.py` の `_undo_extrude`)。"""
+    完全に消える経路。`duocad/verbs/extrude.py` の `undo_placement`)。"""
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (0.0, 0.0), 10.0, 10.0)
     boss = regions(document, sketch_id)

@@ -3,12 +3,17 @@
 領域は `extrude(doc, regions, ...)`、面は `extrude_faces(doc, faces, ...)`。どちらも同じ verb `extrude`
 として記録し、ログの args が `regions` か `faces` かで再生を分ける。
 
-- `"join"` … 対象ボディへ足す。対象が無ければ新しいソリッドを作る(最初の板)。作った場合も
+- `"join"` … 相手のボディへ足す。相手が無ければ新しいソリッドを作る(最初の板)。作った場合も
   `args["body_id"]` にそのIDを記録する(再生で同じIDが再現できないと選択が壊れる)。
-- `"cut"` … 対象ボディから引く。対象が無ければ ValueError。面のとき、行き先の既定はその面を持つ
-  ボディ。距離の正は面の外向き法線側なので、面から削るには負の距離で `cut`。
-- `"new"` … 対象が何であっても常に新しいソリッドを作る(これが無いと既存部品がいる文書で2つ目の板が
+- `"cut"` … 相手のボディから引く。相手が無ければ ValueError。距離の正は面の外向き法線側なので、
+  面から削るには負の距離で `cut`。
+- `"new"` … 何に触れていても常に新しいソリッドを作る(これが無いと既存部品がいる文書で2つ目の板が
   作れない)。`body_id` は受け付けない。
+
+相手(`body_id` を省略したとき)は、押し出す立体に**触れる・重なる、見えている編集できるソリッドの全部**
+(`_place`)。join は全部を1つに融合して先頭(文書の並び順)のボディに残し、他は文書から消す。cut は全部を
+削る(触れても削れなかったボディは相手にしない)。決まった相手はログに残し(`body_id` と `other_bodies`)、
+redo / 再生は探し直さない(前の操作の形が変わると相手が入れ替わる)。`body_id` を渡せばそのボディだけが相手。
 
 `taper`(度)は側面の傾き。正で押し出すにつれて太り、負で細る(Autodesk Fusion と同じ符号。穴は外周と逆に動く)。
 領域を複数選ぶと、隣り合う領域は1つの輪郭にまとめて傾ける(領域の境目には傾いた壁を作らない)。
@@ -19,14 +24,24 @@
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from .. import kernel, kernel_extrude, kernel_sketch, naming
+from .. import brep_checks, kernel, kernel_extrude, kernel_sketch, naming
 from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from .. import selection
 from ..entry import entry
-from ._common import editable_body, editable_sketch, recall, remember, replayed_body, resolve_shape_ref
+from ._common import (
+    detach_bodies,
+    editable_body,
+    editable_sketch,
+    reattach_bodies,
+    recall,
+    remember,
+    replayed_body,
+    resolve_shape_ref,
+)
 from ..region import RegionRef, _regions_detailed
 from ..sketch import get_sketch
 
@@ -34,6 +49,12 @@ VERB_EXTRUDE = "extrude"
 
 #: 押し出しの種別(join | cut ＋ new)
 MODES = ("join", "cut", "new")
+
+#: join で相手へ融合して文書から消えたボディの undo 用の退避(`detach_bodies` の戻り)を覚える鍵
+_MERGED_KEY = "extrude:merged"
+
+#: `(相手の形 | None, 相手と一緒に融合する形)` から kernel の結果(`shape` と `provenance`)を返す
+Build = Callable[[Any, Sequence[Any]], dict]
 
 
 def extrude(
@@ -56,22 +77,14 @@ def extrude(
     for ref in refs:
         editable_sketch(doc, ref.sketch)
     faces, normal = _resolve_faces_and_normal(doc, refs)
-    target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
-    target_shape = None if target_body is None else target_body.shape
-
-    result = _extruded_regions(faces, distance, mode, normal, target_shape, taper)
-
-    created_new = False
-    previous_shape: Any = None
-    numbered: dict = {}
-    if target_body is None:
-        resolved_body_id = new_body_id()
-        numbered = _add_numbered_body(doc, resolved_body_id, result["shape"])
-        created_new = True
-    else:
-        previous_shape = target_body.shape
-        target_body.shape = result["shape"]
-
+    placement = _place(
+        doc,
+        mode,
+        body_id,
+        VERB_EXTRUDE,
+        _region_build(faces, distance, mode, normal, taper),
+        lambda: kernel_extrude.extrude_regions(faces, distance, "new", normal, taper=taper)["shape"],
+    )
     operation = doc.log.append(
         VERB_EXTRUDE,
         {
@@ -79,12 +92,10 @@ def extrude(
             "distance": distance,
             **_taper_arg(taper),
             "mode": mode,
-            "body_id": resolved_body_id,
-            **numbered,
+            **placement.args(),
         },
     )
-    operation.provenance = result["provenance"]
-    remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
+    placement.record(doc, operation)
     return operation
 
 
@@ -106,22 +117,15 @@ def extrude_faces(
         raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
 
     source, indices = _resolve_face_source(doc, faces, require_visible=True)
-    if mode != "new" and body_id is None:
-        body_id = source.id
-    target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
-    target_shape = None if target_body is None else target_body.shape
-
-    result = _extruded_faces(source.shape, indices, distance, mode, target_shape, taper)
-
-    previous_shape: Any = None
-    numbered: dict = {}
-    if target_body is None:
-        resolved_body_id = new_body_id()
-        numbered = _add_numbered_body(doc, resolved_body_id, result["shape"])
-    else:
-        previous_shape = target_body.shape
-        target_body.shape = result["shape"]
-
+    placement = _place(
+        doc,
+        mode,
+        body_id,
+        VERB_EXTRUDE,
+        _face_build(source.shape, indices, distance, mode, taper),
+        lambda: kernel_extrude.extrude_faces(source.shape, indices, distance, "new", taper=taper)["shape"],
+        unreached_hint=kernel_extrude.OUTWARD_CUT_HINT if distance > 0 else "",
+    )
     operation = doc.log.append(
         VERB_EXTRUDE,
         {
@@ -129,35 +133,45 @@ def extrude_faces(
             "distance": distance,
             **_taper_arg(taper),
             "mode": mode,
-            "body_id": resolved_body_id,
-            **numbered,
+            **placement.args(),
         },
     )
-    operation.provenance = result["provenance"]
-    remember(doc, resolved_body_id, operation.seq, previous_shape)
+    placement.record(doc, operation)
     return operation
 
 
-def _extruded_regions(faces: Sequence[Any], distance: float, mode: str, normal: Sequence[float], target_shape: Any, taper: float) -> dict:
+def _region_build(faces: Sequence[Any], distance: float, mode: str, normal: Sequence[float], taper: float) -> Build:
     """領域の押し出しの計算。相手のボディがあるときは結果を覚え、プレビュー・確定・redo で使い回す(`kernel.remembered`。
     相手の無い `new` は軽いので覚えない)。"""
-    def compute() -> dict:
-        return kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=target_shape, taper=taper)
+    def build(target_shape: Any, merged: Sequence[Any]) -> dict:
+        def compute() -> dict:
+            return kernel_extrude.extrude_regions(
+                faces, distance, mode, normal, target_shape=target_shape, taper=taper, merged=merged
+            )
 
-    if target_shape is None:
-        return compute()
-    arguments = (kernel.shapes_digest(faces), distance, mode, tuple(float(v) for v in normal), taper)
-    return kernel.remembered("extrude_regions", (target_shape,), arguments, compute)
+        if target_shape is None:
+            return compute()
+        arguments = (kernel.shapes_digest(faces), distance, mode, tuple(float(v) for v in normal), taper)
+        return kernel.remembered("extrude_regions", (target_shape, *merged), arguments, compute)
+
+    return build
 
 
-def _extruded_faces(source_shape: Any, indices: Sequence[int], distance: float, mode: str, target_shape: Any, taper: float) -> dict:
-    """面の押し出しの計算(`_extruded_regions` と同じく、相手があるときだけ覚える)。"""
-    def compute() -> dict:
-        return kernel_extrude.extrude_faces(source_shape, indices, distance, mode, target_shape=target_shape, taper=taper)
+def _face_build(source_shape: Any, indices: Sequence[int], distance: float, mode: str, taper: float) -> Build:
+    """面の押し出しの計算(`_region_build` と同じく、相手があるときだけ覚える)。"""
+    def build(target_shape: Any, merged: Sequence[Any]) -> dict:
+        def compute() -> dict:
+            return kernel_extrude.extrude_faces(
+                source_shape, indices, distance, mode, target_shape=target_shape, taper=taper, merged=merged
+            )
 
-    if target_shape is None:
-        return compute()
-    return kernel.remembered("extrude_faces", (source_shape, target_shape), (tuple(indices), distance, mode, taper), compute)
+        if target_shape is None:
+            return compute()
+        return kernel.remembered(
+            "extrude_faces", (source_shape, target_shape, *merged), (tuple(indices), distance, mode, taper), compute
+        )
+
+    return build
 
 
 def _taper_arg(taper: float) -> dict:
@@ -196,17 +210,45 @@ def _resolve_face_source(
     return source, indices
 
 
-def _resolve_target(
-    doc: Document, mode: str, body_id: Optional[BodyId], what: str = VERB_EXTRUDE
-) -> tuple[Optional[Body], Optional[BodyId]]:
-    """対象ボディを決める。cut で対象が無い・reference は ValueError。
+@dataclass
+class _Placement:
+    """押し出し・回転体・ロフトの結果を文書へ置いたもの(ログの args と undo の記録に使う)。"""
 
-    `new` は対象を決めない(常に新規作成)。`body_id` を渡されたら ValueError。
+    body_id: BodyId
+    provenance: dict
+    #: 先頭の相手と一緒に変わったボディ(join は融合して消えた、cut は一緒に削った)
+    others: List[BodyId] = field(default_factory=list)
+    numbered: dict = field(default_factory=dict)
+    #: body_id -> 前の形(新しく作ったボディは None)
+    previous: Dict[BodyId, Any] = field(default_factory=dict)
+    detached: Optional[dict] = None
 
-    `body_id` を省略したときのアクティブボディが編集できない(参照ボディ)なら「対象が無い」として扱い、
-    join でも最初の板を作れるようにする。この分岐へ落ちる経路は現在は無い(`import_step` は参照ボディの
-    後に編集用ボディを足す)が、アクティブが参照ボディになる verb が増えても join が最初の板を作れなく
-    ならないよう残してある。明示的に参照ボディを指定された場合は ValueError。
+    def args(self) -> dict:
+        return {"body_id": self.body_id, **({"other_bodies": list(self.others)} if self.others else {}), **self.numbered}
+
+    def record(self, doc: Document, operation: Operation) -> None:
+        if operation.provenance is None:
+            operation.provenance = self.provenance
+        for body_id, shape in self.previous.items():
+            remember(doc, body_id, operation.seq, shape)
+        if self.detached is not None:
+            remember(doc, _MERGED_KEY, operation.seq, self.detached)
+
+
+def _place(
+    doc: Document,
+    mode: str,
+    body_id: Optional[BodyId],
+    what: str,
+    build: Build,
+    tool: Callable[[], Any],
+    *,
+    unreached_hint: str = "",
+) -> _Placement:
+    """相手を決めて計算し、文書へ置く。計算が全部通ってから文書を変える(失敗したら何も残さない)。
+
+    `body_id` を省略した join / cut の相手は、`tool()`(相手の無い立体)に触れる・重なる、見えている編集できる
+    ソリッドの全部(隠したボディを黙って変えない。`editable_body` と同じ理由)。
     """
     if mode == "new":
         if body_id is not None:
@@ -214,21 +256,121 @@ def _resolve_target(
                 f"new does not take a body_id (got {body_id!r}): "
                 "新規ボディに行き先は無い。足すなら mode='join' を使うこと"
             )
-        return None, None
+        return _place_new(doc, build)
+    if body_id is not None:
+        target = _editable_target(doc, body_id, what)
+        return _place_on(doc, [(target, build(target.shape, ()))])
 
-    if body_id is None:
-        active = doc.active_body()
-        if active is not None and doc.is_editable(active.id):
-            body_id = active.id
+    candidates = [body for body in doc.bodies if body.visible and doc.is_editable(body.id) and body.shape is not None]
+    hits = [candidates[position] for position in kernel.touching_shapes(tool(), [body.shape for body in candidates])]
+    if mode == "join":
+        if not hits:
+            return _place_new(doc, build)
+        return _place_merged(doc, hits[0], hits[1:], build(hits[0].shape, [body.shape for body in hits[1:]]))
 
-    if body_id is None:
-        if mode == "cut":
-            raise ValueError("cut requires a target body")
-        return None, None
+    reached = []
+    for body in hits:
+        try:
+            reached.append((body, build(body.shape, ())))
+        except brep_checks.Unchanged:
+            continue  # 触れているだけで削れない(面で接する)ボディは相手にしない
+    if not reached:
+        raise ValueError(
+            "cut reaches no visible body: 切り取る立体が、見えているどのボディにも食い込まない(隠したボディは切らない)"
+            + (f"。{unreached_hint}" if unreached_hint else "")
+        )
+    return _place_on(doc, reached)
 
-    # 対象ボディ(既定はアクティブ)は選択の外から来る。人が隠した後にAIが押し出すと見えないボディが
-    # 黙って変わる(`editable_body` と同じ穴)ので、`editable_body` が見えないボディを断る。
-    return _editable_target(doc, body_id, what), body_id
+
+def _place_new(doc: Document, build: Build) -> _Placement:
+    result = build(None, ())
+    created = new_body_id()
+    numbered = _add_numbered_body(doc, created, result["shape"])
+    return _Placement(created, result["provenance"], numbered=numbered, previous={created: None})
+
+
+def _place_on(doc: Document, results: Sequence[tuple]) -> _Placement:
+    """相手ごとに計算した結果(`(ボディ, 結果)` の並び)を置く。2つ以上は cut だけ(join は `_place_merged`)。"""
+    previous = {}
+    for body, result in results:
+        previous[body.id] = body.shape
+        body.shape = result["shape"]
+    first = results[0][1]["provenance"]
+    provenance = first if len(results) == 1 else {
+        **first,
+        "other_bodies": {body.id: result["provenance"] for body, result in results[1:]},
+    }
+    return _Placement(results[0][0].id, provenance, others=[body.id for body, _ in results[1:]], previous=previous)
+
+
+def _place_merged(doc: Document, target: Body, merged: Sequence[Body], result: dict) -> _Placement:
+    """join: `target` に `merged` ごと融合した結果を置き、`merged` を文書から消す。
+
+    消したボディが active だったら `target` を active にする(`boolean_body` と同じ。undo は退避した active を戻す)。"""
+    previous = {target.id: target.shape}
+    target.shape = result["shape"]
+    detached = None
+    if merged:
+        merged_ids = [body.id for body in merged]
+        detached = detach_bodies(doc, merged_ids)
+        if detached["active"] in merged_ids:
+            doc.set_active_body(target.id)
+    return _Placement(
+        target.id, result["provenance"], others=[body.id for body in merged], previous=previous, detached=detached
+    )
+
+
+def replay_placement(document: Document, operation: Operation, build: Build, what: str) -> None:
+    """redo / 再生: 記録した相手(`body_id` と `other_bodies`)へ掛け直す(探し直さない)。ログには触らない。"""
+    args = operation.args
+    body_id = args["body_id"]
+    mode = args["mode"]
+    others = [str(other) for other in args.get("other_bodies") or []]
+    # 存在検査(無いことは join の「新しく作る」への分岐条件で、失敗ではない)。`get_body` は KeyError なので使わない。
+    existing = next((candidate for candidate in document.bodies if candidate.id == body_id), None)
+    if mode == "new" and existing is not None:
+        raise ValueError(f"cannot replay new: body {body_id!r} already exists")
+    if existing is None and (mode == "cut" or others):
+        raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
+    if mode == "new" or existing is None:
+        result = build(None, ())
+        _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
+        placement = _Placement(body_id, result["provenance"], previous={body_id: None})
+    elif mode == "join":
+        target = _replayed_target(document, body_id, what)
+        merged = [_replayed_target(document, other, what) for other in others]
+        placement = _place_merged(document, target, merged, build(target.shape, [body.shape for body in merged]))
+    else:
+        bodies = [_replayed_target(document, target_id, what) for target_id in [body_id, *others]]
+        placement = _place_on(document, [(body, build(body.shape, ())) for body in bodies])
+    placement.record(document, operation)
+
+
+def undo_placement(document: Document, operation: Operation) -> None:
+    """undo: 相手の形を戻し(新しく作ったボディなら取り除き)、join で消えたボディを元の添字と active ごと戻す。"""
+    args = operation.args
+    body_id = args["body_id"]
+    others = [str(other) for other in args.get("other_bodies") or []]
+    previous = recall(document, body_id, operation.seq)
+    if previous is None:
+        document.remove_added_body(body_id)
+        return
+    document.get_body(body_id).shape = previous
+    if args["mode"] == "join":
+        if others:
+            reattach_bodies(document, recall(document, _MERGED_KEY, operation.seq))
+        return
+    for other in others:
+        document.get_body(other).shape = recall(document, other, operation.seq)
+
+
+def changed_bodies(operation: Operation) -> dict:
+    """入口の応答に載せる、形の変わったボディと消えたボディ。"""
+    args = operation.args
+    others = list(args.get("other_bodies") or [])
+    if args["mode"] == "join":
+        return {"changed_bodies": [args["body_id"]], "removed_bodies": others}
+    return {"changed_bodies": [args["body_id"], *others], "removed_bodies": []}
 
 
 def _editable_target(doc: Document, body_id: BodyId, what: str = VERB_EXTRUDE) -> Body:
@@ -305,81 +447,21 @@ def _resolve_faces_and_normal(
 def _do_extrude(document: Document, operation: Operation) -> None:
     """redo / replay 時の再適用。**ログには触らない**(触ると二重記録になる)。"""
     args = operation.args
-    body_id = args["body_id"]
     mode = args["mode"]
     distance = float(args["distance"])
     taper = float(args.get("taper", 0.0))
     if "faces" in args:
-        _redo_faces(document, operation, args["faces"], distance, mode, body_id, taper)
-        return
-    refs = [RegionRef.from_dict(item) for item in args["regions"]]
-    faces, normal = _resolve_faces_and_normal(document, refs)
-
-    # 存在検査(無いことは「新しく作る」への分岐条件で、失敗ではない)。`get_body` は KeyError なので使わない。
-    existing = next(
-        (candidate for candidate in document.bodies if candidate.id == body_id), None
-    )
-
-    # `new` で同じIDが既にいるなら再生の前提が壊れているので、上書き・融合させず落とす。
-    if mode == "new" and existing is not None:
-        raise ValueError(f"cannot replay new: body {body_id!r} already exists")
-    if existing is None and mode == "cut":
-        raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
-    if mode == "new" or existing is None:
-        result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=None, taper=taper)
-        _add_new_body(document, body_id, result["shape"], _recorded_name(document, args))
-        remember(document, body_id, operation.seq, None)
+        # 記録した添字で面を引き直す(形が決定的なので同じ面を指す)。
+        source, indices = _resolve_face_source(document, args["faces"], require_visible=False)
+        build = _face_build(source.shape, indices, distance, mode, taper)
     else:
-        target = _replayed_target(document, body_id)
-        previous_shape = target.shape
-        result = _extruded_regions(faces, distance, mode, normal, target.shape, taper)
-        target.shape = result["shape"]
-        remember(document, body_id, operation.seq, previous_shape)
-    if operation.provenance is None:
-        operation.provenance = result["provenance"]
+        refs = [RegionRef.from_dict(item) for item in args["regions"]]
+        faces, normal = _resolve_faces_and_normal(document, refs)
+        build = _region_build(faces, distance, mode, normal, taper)
+    replay_placement(document, operation, build, VERB_EXTRUDE)
 
 
-def _redo_faces(
-    document: Document,
-    operation: Operation,
-    faces: Sequence[Any],
-    distance: float,
-    mode: str,
-    body_id: BodyId,
-    taper: float,
-) -> None:
-    """面のログの再適用。記録した添字で面を引き直す(形が決定的なので同じ面を指す)。"""
-    source, indices = _resolve_face_source(document, faces, require_visible=False)
-    existing = next((body for body in document.bodies if body.id == body_id), None)
-    if mode == "new":
-        if existing is not None:
-            raise ValueError(f"cannot replay new: body {body_id!r} already exists")
-        result = kernel_extrude.extrude_faces(source.shape, indices, distance, mode, taper=taper)
-        _add_new_body(document, body_id, result["shape"], _recorded_name(document, operation.args))
-        remember(document, body_id, operation.seq, None)
-    else:
-        if existing is None:
-            raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
-        target = _replayed_target(document, body_id)
-        previous_shape = target.shape
-        result = _extruded_faces(source.shape, indices, distance, mode, previous_shape, taper)
-        target.shape = result["shape"]
-        remember(document, body_id, operation.seq, previous_shape)
-    if operation.provenance is None:
-        operation.provenance = result["provenance"]
-
-
-def _undo_extrude(document: Document, operation: Operation) -> None:
-    """undo: 押し出す前の形状に戻す(新しく作ったボディなら取り除く)。"""
-    body_id = operation.args["body_id"]
-    previous = recall(document, body_id, operation.seq)
-    if previous is None:
-        document.remove_added_body(body_id)
-        return
-    document.get_body(body_id).shape = previous
-
-
-register_verb(VERB_EXTRUDE, do=_do_extrude, undo=_undo_extrude)
+register_verb(VERB_EXTRUDE, do=_do_extrude, undo=undo_placement)
 
 
 # --------------------------------------------------------------------------------------
@@ -405,10 +487,9 @@ def _enter_extrude(
     else:
         refs = [RegionRef.from_dict(item) for item in items]
         operation = extrude(document, refs, float(distance), mode=str(mode), body_id=body_id, taper=float(taper))
-    changed = operation.args["body_id"]
     return {
-        "body_id": changed,
+        "body_id": operation.args["body_id"],
         "distance": float(distance),
         "mode": str(mode),
-        "changed_bodies": [changed],
+        **changed_bodies(operation),
     }
