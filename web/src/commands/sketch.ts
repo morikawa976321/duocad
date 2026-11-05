@@ -427,13 +427,13 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
  * スケッチ図形の鏡映複製。軸は既存の線分を1本クリックして指す。
  * 軸は共有選択集合を経由しない別チャンネル(`PickArgSpec`)で受ける: 載せると `require_sketch_entities` が軸の線分まで対象に数え、画面の件数と結果が食い違う。
  * 軸の既定は無いので、対象が揃うと軸のピックが開く。対象を選び直せるのは修飾キー付きクリックがピックへ行かないから(`App.svelte` の `onSketchPick`)。
- * 幽霊は出さない。対象は何個でも選べるので確定はEnter(`needsEnter`)。
+ * 幽霊はサーバが文書を変えずに計算する(`preview_mirror_sketch_entities`)。対象は何個でも選べるので確定はEnter(`needsEnter`)。
  */
 export const MIRROR_SKETCH_ENTITIES: CommandDef<'mirror_sketch_entities'> = {
   id: 'mirror_sketch_entities',
   label: '鏡映複製',
   buttonId: 'sketch-mirror',
-  preview: 'none',
+  preview: 'server',
   args: [
     {
       kind: 'selection',

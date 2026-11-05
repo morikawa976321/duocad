@@ -681,8 +681,7 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
   id: 'mirror_body',
   label: '鏡映複製',
   buttonId: 'mirror-body',
-  // 幽霊は出さない。確定してからCtrl+Zで戻す運用。
-  preview: 'none',
+  preview: 'server',
   args: [
     {
       kind: 'selection',

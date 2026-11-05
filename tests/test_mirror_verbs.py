@@ -472,3 +472,46 @@ def test_a_duplicate_copy_id_leaves_no_entity_and_no_parameter_behind(session: S
 
     assert len(doc.sketches[0].entities) == entities_before
     assert len(doc.parameters) == parameters_before
+
+
+def test_the_body_mirror_preview_shows_the_copy_and_leaves_the_document_alone(session: Session) -> None:
+    """落ちたら: ボディの鏡映の幽霊が複製を返さない、または文書・ログを変える。"""
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    entries, bodies = len(session.document.log.entries), len(session.document.bodies)
+
+    preview = session.preview("mirror_body", {"base_plane": "YZ"})
+
+    assert len(preview["bodies"]) == 1
+    assert preview["bodies"][0]["body_id"] != body.id
+    assert round(preview["bodies"][0]["volume"]) == round(query.volume(body.shape))
+    assert len(session.document.log.entries) == entries
+    assert len(session.document.bodies) == bodies
+
+
+def test_the_sketch_mirror_preview_matches_the_commit_and_leaves_the_sketch_alone(session: Session) -> None:
+    """落ちたら: スケッチの鏡映の幽霊が確定の結果とずれる、または幽霊を出すだけで図形が増える。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    axis_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
+    entity_id = session.add_line(sketch_id, [1.0, 2.0], [3.0, 4.0])["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    axis = {"sketch": sketch_id, "entity": axis_id}
+    count = len(sketch.get_sketch(session.document, sketch_id).entities)
+
+    preview = session.preview("mirror_sketch_entities", {"axis": axis})
+
+    assert len(sketch.get_sketch(session.document, sketch_id).entities) == count
+    ghost = preview["sketch_ghost"]
+    assert ghost["sketch_id"] == sketch_id
+    applied = session.mirror_sketch_entities(axis)
+    assert ghost["entities"] == [{"kind": "line", "params": _params(session, sketch_id, applied["created"][0])}]
+
+
+def test_the_sketch_mirror_preview_refuses_what_the_commit_refuses(session: Session) -> None:
+    """落ちたら: 確定では断られる入力(対象が軸だけ)に、幽霊が出てしまう。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    axis_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": axis_id, "point": None}])
+
+    with pytest.raises(ValueError, match="鏡映軸自身"):
+        session.preview("mirror_sketch_entities", {"axis": {"sketch": sketch_id, "entity": axis_id}})

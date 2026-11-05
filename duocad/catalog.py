@@ -1359,8 +1359,12 @@ COMMANDS: tuple[Command, ...] = (
             ),
         ),
         session="mirror_sketch_entities",
+        previewable=True,
+        preview_session="preview_mirror_sketch_entities",
         resets_selection=True,
         note=(
+            "プレビューは投機実行でなく `preview_mirror_sketch_entities`(足される複製を `sketch_ghost` で返す。"
+            "確定と同じ検査を通るので、断られる入力は幽霊の段で断られる)。"
             "**WSにも開いている**(2026-09-06。`axis` は必須の引数1つなので表に載る)。"
             "画面は軸の線分を**スケッチ平面で直接クリック**して `axis` の参照で送る ——"
             "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
@@ -1496,6 +1500,7 @@ COMMANDS: tuple[Command, ...] = (
             ),
         ),
         session="mirror_body",
+        previewable=True,
         resets_selection=True,
         note=(
             "**どちらの鏡映面もWSに開いている**(2つは排他で、どちらも省略できる)。"
@@ -1504,7 +1509,7 @@ COMMANDS: tuple[Command, ...] = (
             "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
             "`PickArgSpec`)である。載せてしまうと `require_bodies` が鏡映面に使った面の"
             "ボディまで対象に数え、基準にした部品まで一緒に複製される。"
-            "プレビュー(幽霊)は無い —— `previewable=False`。"
+            "プレビューは投機実行(増えた複製が幽霊になる)。"
         ),
     ),
     Command(

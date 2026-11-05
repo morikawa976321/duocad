@@ -109,7 +109,7 @@
   `move_sketch_entities` は点のまま。ブーリアンのターゲットはボディを直接ピックし（`PickTarget` の `body`）、指したボディを
   全面強調する。照合は `tests/test_ui_command_wiring.py`（コアの入口を静的に読む）。**起動中に AI が選んだ面は畳まない**
   （AI の選択を画面が書き換え続けると取り合いになる）。
-- **ボディ分割(`split_body`)は鏡映(`mirror_body`)の起動に揃えた**: 対象はボディ(上の粒度)、切る平面は「XY / XZ / YZ / 面を選ぶ / スケッチを選ぶ」の choice で、後ろの2つは別チャンネルのピック(共有選択に入れない)。**「スケッチを選ぶ」はスケッチの線を1本指す**(平面そのものを指す的が無いため。`sketchEntity` のピックは点を待たないので、線・円などの無いスケッチ(点だけ)は指せない)。「残す側」(両側 / 法線の側 / 反対側)は既定を持たない choice(作法どおり。両側なら1手増える)。鏡映と違って**幽霊を出す**(`preview: 'server'`。切った後の形で本物を隠す)。決定の細目は [contracts/verbs.md](contracts/verbs.md)「split_body」。
+- **ボディ分割(`split_body`)は鏡映(`mirror_body`)の起動に揃えた**: 対象はボディ(上の粒度)、切る平面は「XY / XZ / YZ / 面を選ぶ / スケッチを選ぶ」の choice で、後ろの2つは別チャンネルのピック(共有選択に入れない)。**「スケッチを選ぶ」はスケッチの線を1本指す**(平面そのものを指す的が無いため。`sketchEntity` のピックは点を待たないので、線・円などの無いスケッチ(点だけ)は指せない)。「残す側」(両側 / 法線の側 / 反対側)は既定を持たない choice(作法どおり。両側なら1手増える)。鏡映と同じく**幽霊を出す**(`preview: 'server'`。切った後の形で本物を隠す)。決定の細目は [contracts/verbs.md](contracts/verbs.md)「split_body」。
 - **モードは verb の上位次元**（[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)）。`App.svelte` のモードはタグ付き
   ユニオン1変数（`idle` / `sketch-pending` / `sketch` / `optimize`）だが**サーバの作業空間 `state.mode` からの派生**で、画面は
   持たない（issue #153）。入る・出るは `enter_sketch` / `leave_sketch` / `enter_optimize` / `leave_optimize` をサーバへ頼み、

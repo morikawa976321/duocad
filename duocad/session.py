@@ -40,6 +40,7 @@ from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import fork, speculative
 from .verbs.envelope_regions import boundary_entities as envelope_boundary_entities, envelope_pieces, selected_regions
 from .verbs.project_to_sketch import outline_entities, projected_entities, selected_bodies, selected_targets
+from .verbs.mirror_sketch import mirrored_entities
 from .view import DocumentView
 
 from . import (
@@ -872,6 +873,15 @@ class Session:
         """`project_outline` の確定前の姿(写る影の境界)。文書を変えない。"""
         entities = outline_entities(self.document, sketch_id, selected_bodies(self.document))
         return _projection_ghost(sketch_id, entities)
+
+    def preview_mirror_sketch_entities(self, axis: Any) -> dict:
+        """`mirror_sketch_entities` の確定前の姿(足される複製)。文書を変えない。
+
+        対象が同じ uv 平面の複数のスケッチにまたがっても、幽霊は最初の対象のスケッチへまとめて描く。
+        """
+        planned = mirrored_entities(self.document, selection.require_sketch_entities(self.document), axis)
+        entities = [{"kind": kind, "params": values} for _, kind, values in planned]
+        return _projection_ghost(planned[0][0], entities)
     # ---------------------------------------------------------------- 形状最適化を走らせる(`duocad/optimize_run.py` への委譲)
     def optimize_conditions(self) -> dict:
         """4条件がそろって走らせられるか(`optimize_run.conditions_report`)。"""
