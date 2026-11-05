@@ -59,6 +59,17 @@
     keyDraft = ''
   }
 
+  /** 削除は2段階(ファイルパネルの削除と同じく、行の中で確かめる)。保存したキーは画面に戻らないので消すと取り返せない。 */
+  let confirmingKeyDelete = $state(false)
+  $effect(() => {
+    if (!open || aiStatus?.apiKeySource !== 'file') confirmingKeyDelete = false
+  })
+
+  function deleteKey(): void {
+    confirmingKeyDelete = false
+    onSetApiKey(null)
+  }
+
   /** GPU の部品を画面から入れられるか(安定版だけ。開発版は手で `uv sync --extra gpu`)。 */
   let canInstallGpu = $state(false)
   onMount(() => {
@@ -147,11 +158,21 @@
     />
   </label>
   <div class="key-actions">
-    <button id="settings-api-key-save" onclick={saveKey} disabled={!aiStatus || keyFromEnv || !keyDraft.trim()}>
-      保存
-    </button>
+    {#if !confirmingKeyDelete}
+      <button id="settings-api-key-save" onclick={saveKey} disabled={!aiStatus || keyFromEnv || !keyDraft.trim()}>
+        保存
+      </button>
+    {/if}
     {#if aiStatus?.apiKeySource === 'file'}
-      <button id="settings-api-key-delete" onclick={() => onSetApiKey(null)}>削除</button>
+      {#if confirmingKeyDelete}
+        <span class="confirm-text">消すと戻せない</span>
+        <button id="settings-api-key-delete-confirm" class="danger" onclick={deleteKey} title="保存したキーを消す(戻せない)">
+          本当に削除
+        </button>
+        <button id="settings-api-key-delete-cancel" onclick={() => (confirmingKeyDelete = false)}>やめる</button>
+      {:else}
+        <button id="settings-api-key-delete" onclick={() => (confirmingKeyDelete = true)}>削除</button>
+      {/if}
     {/if}
   </div>
   <p class="hint dim">{keyLine}</p>
@@ -233,7 +254,23 @@
   .key-actions {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
     gap: 6px;
     margin-top: 6px;
+  }
+
+  .key-actions > * {
+    white-space: nowrap;
+  }
+
+  .confirm-text {
+    margin-right: auto;
+    font-size: var(--fs-meta);
+    color: var(--dim);
+  }
+
+  .danger {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 </style>
