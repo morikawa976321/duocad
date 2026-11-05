@@ -1047,6 +1047,8 @@
     fail,
   })
 
+  const MESH_UNMEASURABLE = 'メッシュボディは測れない(頂点・辺・面を持たない)'
+
   /** 断られた測定で外す項目(`onCommandEnd` が読んで捨てる)。測れた側は残し、次の1つを指せば測り直せる。 */
   let measureRefused: SelectionRef[] | null = null
 
@@ -1466,6 +1468,11 @@
       return
     }
     pendingBox = null
+    if (activeVerb === MEASURE.id && event.faces.some((item) => meshBodyIds.has(item.bodyId))) {
+      fail(MESH_UNMEASURABLE)
+      onBoxSelect({ ...event, faces: event.faces.filter((item) => !meshBodyIds.has(item.bodyId)) })
+      return
+    }
     const mode = toggleOnlyMode(event.mode)
     // 辺は連なりごとのまとまり(連なりの辺を2本囲んでも1つ)。トグルはまとまり単位(`toggleUnits`)。
     // 連なりの分からない辺があれば、届くまで選択ごと待たせる(1本だけ入れると連なりが割れる)。
@@ -1896,9 +1903,9 @@
         return
       }
     }
-    // メッシュボディは測れない(面も辺も頂点も持たず、ボディ参照へ畳むとコアの選択に数の外の項目が入る)。
+    // メッシュボディは測れない(面も辺も頂点も持たず、ボディ参照へ畳むとコアの選択に数の外の項目が入る)。矩形選択も同じ(`onBoxSelect`)。
     if (activeVerb === MEASURE.id && event.hit !== null && meshBodyIds.has(event.hit.bodyId)) {
-      fail('メッシュボディは測れない(頂点・辺・面を持たない)')
+      fail(MESH_UNMEASURABLE)
       return
     }
     // 素クリックのトグル(`toggleOnlyMode`)はどの種類にも効かせる(測定は辺・頂点でも測る)。

@@ -97,6 +97,7 @@ for (const zoom of [1, 40]) {
   orthographic.updateProjectionMatrix()
   assert.ok(Math.abs(projectedHeightPx(screenSprite, orthographic) - 26) < 1e-6, `正投影・ズーム ${zoom}`)
 }
+assert.equal(screenSprite.frustumCulled, false, '直す前の大きさで視錐台から外され、画面の端の札が描かれない')
 assert.ok(Math.abs(screenSprite.scale.x / screenSprite.scale.y - created.canvas.width / created.canvas.height) < 1e-12, '縦横比は保つ')
 
 console.log('textSprite.ts: 全ての想定を満たした')

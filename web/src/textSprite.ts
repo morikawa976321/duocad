@@ -70,6 +70,8 @@ export function makeScreenTextSprite(
   const aspect = sprite.scale.x
   const size = new THREE.Vector2()
   const at = new THREE.Vector3()
+  // 視錐台の判定は `onBeforeRender` より前に、直す前の大きさで走る(画面の端の札が消えたまま直らない)ので切る
+  sprite.frustumCulled = false
   // 行列は `onBeforeRender` の後に組まれる(three の `renderObject`)ので、ここで直した大きさがその回の描画に効く
   sprite.onBeforeRender = (renderer, _scene, camera) => {
     renderer.getSize(size)
