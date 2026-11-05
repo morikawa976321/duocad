@@ -8,6 +8,7 @@ export const COMMAND_CATEGORY = {
   set_sketch_visible: 'selection',
   measure: 'query',
   check_interference: 'query',
+  cancel_interference: 'protocol',
   modify_selection: 'selection',
   toggle_selection: 'selection',
   clear_selection: 'selection',
@@ -105,6 +106,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   set_sketch_visible: ['sketch_id', 'visible'],
   measure: [],
   check_interference: ['clearance'],
+  cancel_interference: [],
   modify_selection: ['add', 'remove'],
   toggle_selection: ['refs'],
   clear_selection: [],
@@ -200,6 +202,7 @@ export interface CommandArguments {
   set_sketch_visible: { sketch_id: string; visible: boolean }
   measure: Record<string, never>
   check_interference: { clearance?: number }
+  cancel_interference: Record<string, never>
   modify_selection: { add?: unknown[]; remove?: unknown[] }
   toggle_selection: { refs: unknown[] }
   clear_selection: Record<string, never>

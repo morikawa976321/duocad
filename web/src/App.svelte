@@ -1066,6 +1066,7 @@
   // ---------------------------------------------------------------- 干渉チェック(issue #186。verbではない)
   const interference = createInterference({
     send: (clearance, clientOp) => session.checkInterference(clearance, clientOp),
+    cancel: () => session.cancelInterference(),
     nextOp,
     // サーバの `Session.interference_job` の `revision` と同じ作り。
     revision: () => (model === null ? null : `${model.generation}.${model.applied_count}.${model.log.length}`),

@@ -523,6 +523,17 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="cancel_interference",
+        category="protocol",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "その接続が走らせている干渉チェックを取り消す(子を止める。`InterferenceRuns.cancel`)。結果は返らない。"
+            "走っていなければ何もしない。画面はパネルを閉じたとき・モードを切り替えたときに送る"
+        ),
+    ),
+    Command(
         name="get_selection",
         category="selection",
         description=(

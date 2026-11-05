@@ -179,6 +179,28 @@ def test_a_newer_request_from_the_same_connection_cancels_the_older_one(monkeypa
     assert made[0]._process is None
 
 
+def test_a_cancel_request_stops_the_run_and_nothing_is_sent(monkeypatch):
+    """落ちたら、画面が干渉パネルを閉じても検査がサーバで走り続ける(ワーカー1本を最大2分ふさぐ)。"""
+    made = []
+
+    def factory(load, cancel):
+        worker = WorkerProcess(load, command=[sys.executable, "-c", "import time; time.sleep(600)"], cancel=cancel)
+        made.append(worker)
+        return worker
+
+    monkeypatch.setattr(interference, "default_worker", factory)
+
+    async def script(server, clients, send, until):
+        await send({"cmd": "check_interference", "client_op": 1})
+        await until(lambda: made)
+        await send({"cmd": "cancel_interference"})
+        await send({"cmd": "cancel_interference"})  # 走っていなければ何もしない
+        await asyncio.sleep(0.5)
+
+    clients = run_ws(make_session(), script)
+    assert not interference_payloads(clients[0]) and made[0]._process is None
+
+
 def test_a_disconnect_cancels_the_run_and_nothing_is_sent(monkeypatch):
     made = []
 

@@ -7,6 +7,7 @@
  *   **選択と可視性が変わっても結果は消さない**(対象は開始時にサーバが確定している)。
  * - 行を選ぶとその組の重なりの立体・接触面・最短距離の線と札を出す。何も選んでいなければ重なりの立体だけを全部出す(カード1)。
  */
+import { untrack } from 'svelte'
 import { parseClearance } from './commands/interference'
 import { acceptResult, groupPairs, visualFor, type Group } from './interferenceGroups'
 import type { InterferencePayload } from './interferenceTypes'
@@ -32,6 +33,8 @@ export interface Interference {
 
 export function createInterference(deps: {
   send: (clearance: number, clientOp: number) => void
+  /** 走っている検査をサーバで止める(パネルを閉じた・モードを切り替えた)。 */
+  cancel: () => void
   nextOp: () => number
   /** 世代.適用回数.ログ本数(サーバの `document_revision` と同じ作り)。文書が無ければ null。 */
   revision: () => string | null
@@ -57,14 +60,20 @@ export function createInterference(deps: {
     selectedKey = null
   }
 
+  /** 待っている返事を捨てる。検査が走っていればサーバでも止める(ワーカーは1本で、他の接続の検査を待たせる)。 */
+  function abandon(): void {
+    if (running && deps.connected()) deps.cancel()
+    running = false
+    currentOp = null
+  }
+
   // 文書を切り替えたら、隙間の欄は 0 に戻し、パネルも結果も畳む。
   $effect(() => {
     const generation = deps.generation()
     if (seenGeneration !== undefined && generation !== seenGeneration) {
       clearanceText = '0'
       open = false
-      running = false
-      currentOp = null
+      untrack(abandon)
       notice = ''
       drop()
     }
@@ -98,8 +107,7 @@ export function createInterference(deps: {
     const mode = deps.modeKind()
     if (seenMode !== undefined && mode !== seenMode) {
       open = false
-      running = false
-      currentOp = null
+      untrack(abandon)
       notice = ''
       drop()
     }
@@ -184,8 +192,7 @@ export function createInterference(deps: {
     },
     close() {
       open = false
-      running = false
-      currentOp = null
+      abandon()
       notice = ''
       drop()
     },
