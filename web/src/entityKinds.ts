@@ -999,6 +999,25 @@ export function snapSketchPoint(
 }
 
 /**
+ * 原点の軸をスケッチ平面へ落とした直線 `origin + t·direction` へ (u,v) を落とし、原点からの平面上の距離を 1mm へ丸めた点
+ * (方向が潰れていれば原点)。軸は基準平面のスケッチでは格子線と重なるので、丸めないと軸の上の格子点がマウスで置けない
+ * (2026-11-05 本人判断)。刻みは `snapSketchPoint` の格子の丸めと同じ。
+ */
+export function snapToDatumAxis(
+  origin: readonly [number, number],
+  direction: readonly [number, number],
+  u: number,
+  v: number,
+): [number, number] {
+  const length = Math.hypot(direction[0], direction[1])
+  if (length < 1e-9) return [origin[0], origin[1]]
+  const du = direction[0] / length
+  const dv = direction[1] / length
+  const distance = Math.round((u - origin[0]) * du + (v - origin[1]) * dv)
+  return [origin[0] + distance * du, origin[1] + distance * dv]
+}
+
+/**
  * 確定前の姿(幽霊)を、コアの `Entity` と同じ `{kind, params}` へ翻訳する。
  *
  * `verb` がどの図形種別の追加でもなければ null(スケッチ以外のverbは幽霊を描かない —

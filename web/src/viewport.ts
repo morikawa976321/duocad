@@ -18,7 +18,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
 import {
   entityMidpoints, entityVisualCorners,
-  snapSketchPoint,
+  snapSketchPoint, snapToDatumAxis,
 } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { sampleFaces, type BodySamples } from './faceCulling'
@@ -1348,7 +1348,8 @@ export function createViewport(container: HTMLElement): Viewport {
   /**
    * スケッチモードで当たった原点パーツ(原点と軸だけ。平面は線を引く邪魔になる)と、吸い付く先のスケッチ座標。
    * 原点ギズモを隠していれば当たらない。点を先に見る(軸は原点の近くまで延びている)。原点はスケッチ平面へ垂直に落とし、
-   * 軸は平面へ落とした直線へカーソルを射影する(平面に垂直な軸は落とすと点なので原点へ吸い付く)。
+   * 軸は平面へ落とした直線へカーソルを射影し、原点からの距離を 1mm へ丸める(`snapToDatumAxis`。平面に垂直な軸は落とすと
+   * 点なので原点へ吸い付く)。
    */
   function sketchDatumAt(
     offsetX: number,
@@ -1370,12 +1371,8 @@ export function createViewport(container: HTMLElement): Viewport {
       .sort((a, b) => a.hit.distSq - b.hit.distSq)[0]
     if (axis === undefined) return null
     const direction = new THREE.Vector3(...DATUM_AXIS_DIRECTIONS[axis.name as 'X' | 'Y' | 'Z'])
-    const du = direction.dot(u)
-    const dv = direction.dot(v)
-    const lengthSq = du * du + dv * dv
-    if (lengthSq < 1e-18 || planePoint === null) return { name: axis.name, at: originUv }
-    const along = ((planePoint.u - originUv[0]) * du + (planePoint.v - originUv[1]) * dv) / lengthSq
-    return { name: axis.name, at: [originUv[0] + along * du, originUv[1] + along * dv] }
+    if (planePoint === null) return { name: axis.name, at: originUv }
+    return { name: axis.name, at: snapToDatumAxis(originUv, [direction.dot(u), direction.dot(v)], planePoint.u, planePoint.v) }
   }
 
   /**
