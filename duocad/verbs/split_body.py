@@ -22,7 +22,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, List, Optional, Sequence
 
-from .. import kernel_sketch, kernel_split, naming, selection, sketch
+from .. import datum, kernel_sketch, kernel_split, naming, selection, sketch
 from ..document import Body, BodyId, Document, new_body_id
 from ..entry import entry
 from ..oplog import Operation, register_verb
@@ -49,6 +49,8 @@ def _cut_plane(doc: Document, base_plane: Any, plane_face: Any, sketch_id: Any) 
         raise ValueError(f"{' と '.join(given)} は同時に渡せない(どれで切るかを暗黙にしない)")
     if base_plane is not None:
         frame = kernel_sketch.sketch_plane_frame(sketch.base_plane(str(base_plane)))
+    elif plane_face is not None and datum.is_ref(plane_face):
+        frame = datum.plane_frame(datum.plane_name_of(plane_face, what="plane_face"))
     elif plane_face is not None:
         body, index = resolve_shape_ref(doc, plane_face, kind="face", what="plane_face", mesh_hint=_MESH_HINT)
         frame = kernel_sketch.face_frame(body.shape, index)

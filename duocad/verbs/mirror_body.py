@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from .. import kernel, kernel_sketch
+from .. import datum, kernel, kernel_sketch
 from .. import sketch
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
@@ -51,6 +51,8 @@ def _mirror_plane(doc: Document, base_plane: Any, plane_face: Any) -> dict:
     if base_plane is not None:
         plane_ref = sketch.base_plane(str(base_plane))
         frame = kernel_sketch.sketch_plane_frame(plane_ref)
+    elif plane_face is not None and datum.is_ref(plane_face):
+        frame = datum.plane_frame(datum.plane_name_of(plane_face, what="plane_face"))
     elif plane_face is not None:
         body, index = resolve_shape_ref(doc, plane_face, kind="face", what="plane_face", mesh_hint=_MESH_HINT)
         frame = kernel_sketch.face_frame(body.shape, index)

@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, List, Optional, Sequence
 
-from .. import kernel
+from .. import datum, kernel
 from ..document import Body, BodyId, Document
 from ..oplog import Operation, register_verb
 from .. import selection
@@ -58,7 +58,9 @@ _MESH_HINT = "(メッシュボディには軸に使える辺も頂点も無い)"
 # 回すが、そのとき軸に使った辺は既に回った後にいる(軸が対象のボディに属していれば必ず)ので、
 # 参照を引き直すと別の軸になり形が戻らない。入口で数値へ潰し、`_do_*` / `_undo_*` は数値しか見ない。
 def _vertex_point(doc: Document, ref: Any) -> List[float]:
-    """頂点への参照を [x, y, z] にする。範囲外の添字は ValueError。"""
+    """頂点への参照(原点の参照も可)を [x, y, z] にする。範囲外の添字は ValueError。"""
+    if datum.is_ref(ref):
+        return list(datum.point_of(ref, what="center_vertex"))
     body, index = resolve_shape_ref(doc, ref, kind="vertex", what="center_vertex", mesh_hint=_MESH_HINT)
     positions = kernel.vertex_positions(body.shape)
     if not 1 <= index <= len(positions):
@@ -122,7 +124,10 @@ def _rotation_args(
             "axis_point と center_vertex は同時に渡せない "
             "(どちらも軸の位置を決めるので、片方が黙って無視される形にしない)"
         )
-    if axis_edge is not None:
+    if axis_edge is not None and datum.is_ref(axis_edge):
+        origin, unit = datum.line_of(axis_edge, what="axis_edge")
+        point, direction = list(origin), list(unit)
+    elif axis_edge is not None:
         axis_body, index = resolve_shape_ref(doc, axis_edge, kind="edge", what="axis_edge", mesh_hint=_MESH_HINT)
         point, direction = _brep_geometry.edge_axis(axis_body.shape, index)
     else:

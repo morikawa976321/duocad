@@ -4,7 +4,7 @@
  * **`installTestHooks` は App の `<script>` 最上位(コンポーネント初期化中)で呼ぶ。** `onMount` の中だと `$effect` の持ち主が変わる。
  */
 import type { PickTarget, Point2 } from './commands/command'
-import type { Applied, BasePlaneName, ConnectionStatus, EdgesPayload, ServerState, SketchState } from './session'
+import type { Applied, BasePlaneName, ConnectionStatus, DatumName, EdgesPayload, ServerState, SketchState } from './session'
 import type { Interference } from './interference.svelte'
 import type { Viewport } from './viewport'
 import type { PickKind } from './viewportTypes'
@@ -89,7 +89,7 @@ export function installTestHooks(ctx: TestHookContext): void {
         const target = targetSketchId ?? ctx.sketchId()
         return target === null ? null : (viewport()?.projectRegion(target, index) ?? null)
       },
-      // スケッチモードの外で今指せる種類(`'face' | 'edge' | 'vertex' | 'region' | 'sketchPoint' | 'sketchLine'`)。
+      // スケッチモードの外で今指せる種類(`viewportTypes.PickKind`)。
       pickKinds: [...ctx.pickKinds()],
       // 取り寄せた辺(ボディの ID → 折れ線。カーソルの近くのボディから届く)。
       edges,
@@ -108,6 +108,8 @@ export function installTestHooks(ctx: TestHookContext): void {
       hoveredRef: () => viewport()?.hoveredRef() ?? null,
       projectVertex: (bodyId: string, vertexIndex: number) =>
         viewport()?.projectVertex(bodyId, vertexIndex) ?? null,
+      // 実際にその画素でその原点パーツが取れるときだけ座標を返す。
+      projectDatum: (name: DatumName) => viewport()?.projectDatum(name) ?? null,
       // 干渉チェック(issue #186)。`smoke-interference.mjs` が結果と層の赤い立体の数を読む。結果は `$state.raw` なので素で渡る。
       // 読むたびに今の値(層への反映は別の `$effect` なので、値で渡すと反映前の数が見える)。
       interference: {

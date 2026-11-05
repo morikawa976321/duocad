@@ -5,6 +5,7 @@
 
 - `sections` … 断面の領域の並び(順番どおりにつなぐ)。断面ごとに別の平面に置く。穴のある領域は拒む
 - `start_point` / `end_point` … 省略可。スケッチの図形の点(`{"sketch", "entity", "point"}`。線分の端点・円の中心など)
+  か原点(`{"datum": "origin"}`)
   を指すと、最初の断面の前・最後の断面の後をその点へ収束させる。断面1つと点1つでもよい
 - `shifts` … 省略可。断面ごとの整数。自動で揃えた始点を頂点 k 個ぶん進める(負は戻す。頂点の無い円・楕円は
   90° 単位)。自動の対応が意図と違う(ねじれた・潰れた)ときの逃げ道
@@ -18,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
 
-from .. import kernel_extrude, kernel_sketch, parameters, selection
+from .. import datum, kernel_extrude, kernel_sketch, parameters, selection
 from ..document import BodyId, Document
 from ..entry import entry
 from ..oplog import Operation, register_verb
@@ -89,9 +90,12 @@ def _loft_build(
 
 
 def _normalized_point(point: Any, label: str) -> Optional[dict]:
-    """点の指定をログに載せる形へ(`None` か `{"sketch", "entity", "point"}`)。形が違えば ValueError。"""
+    """点の指定をログに載せる形へ(`None` か `{"sketch", "entity", "point"}` か `{"datum": "origin"}`)。形が違えば ValueError。"""
     if point is None:
         return None
+    if datum.is_ref(point):
+        datum.point_of(point, what=label)
+        return {"datum": point["datum"]}
     if isinstance(point, dict) and point.get("sketch") and point.get("entity") and point.get("point"):
         return {"sketch": str(point["sketch"]), "entity": str(point["entity"]), "point": str(point["point"])}
     raise ValueError(
@@ -115,7 +119,9 @@ def _normalized_shifts(shifts: Optional[Sequence[int]], count: int) -> List[int]
 
 
 def _point_in_space(doc: Document, point: dict) -> List[float]:
-    """スケッチの図形の点を3D座標へ解決する。"""
+    """スケッチの図形の点(または原点)を3D座標へ解決する。"""
+    if datum.is_ref(point):
+        return list(datum.point_of(point, what="loft point"))
     sketch = get_sketch(doc, point["sketch"])
     entity = get_entity(sketch, point["entity"])
     x_key, y_key = entity_point_pair(entity.kind, point["point"])

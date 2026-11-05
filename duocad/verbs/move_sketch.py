@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from .. import parameters
+from .. import datum, parameters, region
 from ..document import Document
 from ..oplog import Operation, register_verb
 from .. import selection
@@ -162,14 +162,20 @@ def _rotation_args(
 ) -> dict:
     """回転の引数を検査して、ログに載せる数値 `{angle, center}` にする。
 
-    中心は `center_entity`(既存の点を指す) -> `center`([u, v] の数値) -> 対象の代表点の平均
+    中心は `center_entity`(既存の点か原点を指す) -> `center`([u, v] の数値) -> 対象の代表点の平均
     (`_center_of_targets`)の順で決まる。前2つの同時指定は ValueError。
     """
     degrees = rotation_degrees(angle, verb="move_sketch_entities", noun="図形")
 
     if center is not None and center_entity is not None:
         raise ValueError("center と center_entity は同時に渡せない")
-    if center_entity is not None:
+    if center_entity is not None and datum.is_ref(center_entity):
+        # 原点は対象のスケッチ平面へ垂直に落とす(法線方向の直線まわりの回転なので、落とした点まわりと同じ)。
+        first_sketch = str(targets[0]["sketch"])
+        resolved = datum.point_in_sketch(region.plane_frame(doc, first_sketch), center_entity, what="center_entity")
+        for target_sketch in {item["sketch"] for item in targets}:
+            require_same_uv_plane(doc, first_sketch, target_sketch, what="回転中心")
+    elif center_entity is not None:
         if not isinstance(center_entity, dict):
             raise ValueError(
                 "center_entity must be a reference like "

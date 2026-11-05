@@ -6,6 +6,7 @@
 軸(`axis`)は次のどれか。どれもスケッチ平面の上にある:
 - `{"sketch": sketch_id, "entity": entity_id}` … 領域と**同じスケッチ**の線分(無限に延ばした直線を軸にする)
 - `"x"` / `"y"` … スケッチの原点を通る x / y 軸
+- `{"datum": "X"|"Y"|"Z"}` … 原点の軸のうち、スケッチ平面の上にあるもの(`duocad/datum.py`)
 
 ログには軸を参照のまま載せ、再生のたびに引き直す(領域の参照と同じく、線分の寸法を後から変えると
 回転体も追従する)。
@@ -21,7 +22,7 @@ from __future__ import annotations
 import math
 from typing import Any, Optional, Sequence
 
-from .. import kernel_extrude, kernel_sketch, parameters, selection
+from .. import datum, kernel_extrude, kernel_sketch, parameters, region, selection
 from ..document import BodyId, Document
 from ..entry import entry
 from ..oplog import Operation, register_verb
@@ -99,9 +100,12 @@ def _checked_angle(angle: Any) -> float:
 
 
 def _normalized_axis(axis: Any) -> Any:
-    """軸の指定をログに載せる形へ(`"x"` / `"y"` か `{"sketch", "entity"}`)。形が違えば ValueError。"""
+    """軸の指定をログに載せる形へ(`"x"` / `"y"` か `{"sketch", "entity"}` か `{"datum"}`)。形が違えば ValueError。"""
     if isinstance(axis, str) and axis in SKETCH_AXES:
         return axis
+    if datum.is_ref(axis):
+        datum.line_of(axis, what="axis")
+        return {"datum": axis["datum"]}
     if isinstance(axis, dict) and "sketch" in axis and "entity" in axis:
         return {"sketch": str(axis["sketch"]), "entity": str(axis["entity"])}
     raise ValueError(
@@ -114,6 +118,8 @@ def _axis_in_sketch(doc: Document, sketch_id: str, axis: Any) -> tuple:
     """軸をスケッチ座標の `(点, 単位方向)` へ解決する。別スケッチの線分・線分以外は ValueError。"""
     if isinstance(axis, str):
         return (0.0, 0.0), SKETCH_AXES[axis]
+    if datum.is_ref(axis):
+        return datum.line_in_sketch(region.plane_frame(doc, sketch_id), axis, what="revolve axis")
     if axis["sketch"] != sketch_id:
         raise ValueError(
             f"revolve axis must be a line of the regions' sketch {sketch_id!r}, got sketch {axis['sketch']!r}"

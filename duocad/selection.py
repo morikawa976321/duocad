@@ -24,6 +24,7 @@ Ctrl+Z / Ctrl+Y では戻らず保存もされない(開き直すと全ボディ
     ShapeRef  : {"body": BodyId, "kind": "face"|"edge"|"vertex", "index": int, "provenance": None}
     BodyRef   : {"body": BodyId, "kind": "body", "index": None, "provenance": None}
     RegionRef : {"sketch": SketchId, "index": int, "provenance": None}
+    DatumRef  : {"datum": "origin"|"X"|"Y"|"Z"|"XY"|"XZ"|"YZ", "provenance": None}  (原点の7パーツ。`duocad/datum.py`)
 
 **添字は現時点のものであって、形が変われば別の実体を指す**(添字の付け替えは契約にしていない)。
 
@@ -37,7 +38,7 @@ import numbers
 from dataclasses import dataclass, field
 from typing import Iterable, List, NoReturn, Optional, Sequence
 
-from . import meshbody
+from . import datum, meshbody
 from .document import BodyId, Document
 
 from . import (
@@ -98,7 +99,11 @@ REGION_KIND = "region"
 #: ShapeRef とは別構造: 図形は `entity_id` で名指しでき、足しても平行移動しても指す先が変わらない。
 SKETCH_ENTITY_KIND = "sketch_entity"
 
-SELECTABLE_KINDS = BODY_BEARING_KINDS + (REGION_KIND, SKETCH_ENTITY_KIND)
+#: 原点の7パーツ(`duocad/datum.py`)。どのボディにもスケッチにも属さないので、ボディを逆引きする口(`require_bodies`・
+#: `require_deletable`)は拾わない。
+DATUM_KIND = "datum"
+
+SELECTABLE_KINDS = BODY_BEARING_KINDS + (REGION_KIND, SKETCH_ENTITY_KIND, DATUM_KIND)
 
 @dataclass
 class Selection:
@@ -301,7 +306,7 @@ def selected_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
 
 
 def ref_kind(ref: dict) -> str:
-    """参照の種別を返す(`"face"|"edge"|"vertex"|"body"|"region"|"sketch_entity"`)。
+    """参照の種別を返す(`"face"|"edge"|"vertex"|"body"|"region"|"sketch_entity"|"datum"`)。
 
     RegionRef も SketchEntityRef も `kind` キーを持たない: `"sketch"` キーがあればスケッチ側で、`"entity"` を持てば
     `SKETCH_ENTITY_KIND`、持たなければ `REGION_KIND`。種別判定はここ1箇所(`selected_items` と `ref_key` が別規則を持たないため)。
@@ -309,6 +314,8 @@ def ref_kind(ref: dict) -> str:
     """
     if not isinstance(ref, dict):
         raise ValueError(f"ref must be a dict, got {type(ref).__name__}")
+    if "datum" in ref:
+        return DATUM_KIND
     if "sketch" in ref:
         return SKETCH_ENTITY_KIND if "entity" in ref else REGION_KIND
     if "kind" in ref:
@@ -703,6 +710,7 @@ def ref_key(ref: dict) -> tuple:
     | sketch_entity | `("sketch_entity", sketch, entity, point)` |
     | body | `("body", body)` —— **添字を見ない** |
     | face / edge / vertex | `(kind, body, 整数の index)` |
+    | datum | `("datum", 名前)` |
 
     - **`provenance` は鍵に入れない**。**index は整数に正規化する**(`"3"` と `3` は同じ実体。整数にできない値は `_as_index` が ValueError)。
     - **`point` は `.get("point")`**(キーの欠落と `None` を畳む。点と辺は別物)。
@@ -711,6 +719,8 @@ def ref_key(ref: dict) -> tuple:
     形が参照でなければ `ref_kind` と同じ ValueError。
     """
     kind = ref_kind(ref)
+    if kind == DATUM_KIND:
+        return (DATUM_KIND, ref["datum"])
     if kind == REGION_KIND:
         return (REGION_KIND, ref["sketch"], _as_index(ref["index"]))
     if kind == SKETCH_ENTITY_KIND:
@@ -749,6 +759,10 @@ def _check_form(ref: dict) -> None:
     if not isinstance(ref, dict):
         raise ValueError(f"ref must be a dict, got {type(ref).__name__}")
 
+    if "datum" in ref:
+        datum.name_of(ref, what="ref")
+        return
+
     if "sketch" in ref:
         _require_str(ref, "sketch")
         if "entity" in ref:
@@ -779,6 +793,9 @@ def _require_str(ref: dict, name: str) -> None:
 def _coerce_ref(doc: Document, ref: dict, *, allow_hidden: bool = False) -> dict:
     """手書きの参照を検査し、`select_*` と同じ形へ正規化する。失敗時は選択を変えない前提。"""
     _check_form(ref)
+
+    if "datum" in ref:
+        return datum.make_ref(ref["datum"])
 
     if "sketch" in ref:
         if "entity" in ref:

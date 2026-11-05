@@ -5,7 +5,7 @@ verb ではない(文書もログも触らない)。MCP の `measure` と WebSoc
 
 ## 2項目のあいだ(`between`)
 
-ソリッドの頂点・直線の辺・平らな面と、スケッチの点(点の図形・端点・中心・制御点)・線分・領域を、点・直線・平面の
+ソリッドの頂点・直線の辺・平らな面と、スケッチの点(点の図形・端点・中心・制御点)・線分・領域、原点の7パーツを、点・直線・平面の
 3種に還元して測る(スケッチは `region.plane_frame` で世界座標へ。issue #201)。**直線と平面は無限に延ばす**(有限の辺・面
 どうしの最短距離ではない。平行な面どうしは重なっていなくても「面の間隔」が答え。issue #10)。スケッチの線分も辺と同じく
 無限直線で、領域はそのスケッチの平面。
@@ -29,7 +29,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Union
 
-from . import kernel_sketch, meshbody, query, region, selection, sketch
+from . import datum, kernel_sketch, meshbody, query, region, selection, sketch
 
 from . import (
     brep_geometry as _brep_geometry,
@@ -337,6 +337,16 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
         end = _to_world(frame, (resolved["x1"], resolved["y1"]))
         item["start"], item["end"] = list(start), list(end)
         return item, Line(point=_scale(_add(start, end), 0.5), direction=_unit(_sub(end, start)))
+
+    if kind == selection.DATUM_KIND:
+        # 原点の7パーツ。直線・平面の起点は原点(描く線の始まり)。
+        name = datum.name_of(ref)
+        item = datum.describe(name)
+        if item["datum_kind"] == datum.POINT:
+            return item, Point(point=(0.0, 0.0, 0.0))
+        if item["datum_kind"] == datum.LINE:
+            return item, Line(point=(0.0, 0.0, 0.0), direction=_as_vec(item["direction"]))
+        return item, Plane(point=(0.0, 0.0, 0.0), normal=_unit(_as_vec(item["normal"])))
 
     raise ValueError(f"unmeasurable selection kind: {kind!r}")
 

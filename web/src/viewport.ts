@@ -28,6 +28,7 @@ import { cappedPixelRatio, nextPixelRatio } from './pixelRatio'
 import { createResolutionTracker } from './resolutionTracker'
 import { BASE_EXTENT, mmPerPixel, uvBoxOfPoints, type CameraProjection } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
+import { DATUM_AXIS_DIRECTIONS } from './commands/command'
 import { createGhostLayer } from './ghostLayer'
 import { createSectionView } from './sectionView'
 import { createSelectionBand, type BandRect } from './selectionBand'
@@ -47,7 +48,7 @@ import { buildBodyMesh } from './bodyMesh'
 import { OCCLUDER_LAYER, createOcclusion } from './occlusion'
 import { closestOnPolyline, createProjector, screenHitOfPoint, type PickPolyline, type ScreenProjector } from './polylinePick'
 import { createSolidFeatures, type BodyEdges, type BodyVertices } from './solidFeatures'
-import type { BasePlaneName } from './session'
+import type { BasePlaneName, DatumName } from './session'
 import {
   type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef,
   type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type SectionState,
@@ -56,7 +57,8 @@ import {
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
   BOX_SEEN_STEP_PX, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
-  HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS,
+  HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, ORIGIN_GIZMO_AXIS_GAP_MM, ORIGIN_GIZMO_AXIS_LENGTH_MM,
+  ORIGIN_GIZMO_PLANE_GAP_MM, ORIGIN_GIZMO_PLANE_REACH_MM, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS,
   SKETCH_FIT_MARGIN,
   SKETCH_HANDLE_PIXELS, VERTEX_PIXELS, WORLD_UP, isSelectableFov, lighten, type BodyMeshes,
 } from './viewportConstants'
@@ -332,7 +334,11 @@ export function createViewport(container: HTMLElement): Viewport {
   let sectionDragListener: ((position: number) => void) | null = null
   let pickDataWantedListener: ((bodyIds: string[]) => void) | null = null
   let planeMoveListener:
-    | ((point: { u: number; v: number } | null, sketchEntity: SketchEntityHit | null) => void)
+    | ((
+        point: { u: number; v: number } | null,
+        sketchEntity: SketchEntityHit | null,
+        datumAt: readonly [number, number] | null,
+      ) => void)
     | null = null
 
   // ---------------------------------------------------------------- ホバー強調
@@ -348,6 +354,7 @@ export function createViewport(container: HTMLElement): Viewport {
   let hoverEdge: EdgeRef | null = null
   let hoverVertex: VertexRef | null = null
   let hoverPlane: BasePlaneName | null = null
+  let hoverDatum: DatumName | null = null
   let hoverRegion: { sketchId: string; index: number } | null = null
   let hoverSketchEntity: SketchEntityHit | null = null
   // 「変わったときだけ材質を書き換える」ための印(毎フレーム全メッシュを走査しない)。
@@ -1119,6 +1126,33 @@ export function createViewport(container: HTMLElement): Viewport {
     return null
   }
 
+  /** 原点パーツを狙う画面座標(実際にその画素でそれが取れるときだけ)。軸は中ほど、平面は板の中ほどから順に試す(手前の別の板に重なる所は取れない)。 */
+  function projectDatum(name: DatumName): { x: number; y: number } | null {
+    const points: THREE.Vector3[] = []
+    if (name === 'origin') points.push(new THREE.Vector3())
+    else if (name === 'X' || name === 'Y' || name === 'Z') {
+      const direction = new THREE.Vector3(...DATUM_AXIS_DIRECTIONS[name])
+      for (const fraction of [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9, 0.03]) {
+        const reach = ORIGIN_GIZMO_AXIS_GAP_MM + fraction * (ORIGIN_GIZMO_AXIS_LENGTH_MM - ORIGIN_GIZMO_AXIS_GAP_MM)
+        points.push(direction.clone().multiplyScalar(reach))
+      }
+    } else {
+      const spec = BASE_PLANES.find((item) => item.name === name)!
+      const near = ORIGIN_GIZMO_PLANE_GAP_MM
+      const span = ORIGIN_GIZMO_PLANE_REACH_MM - near
+      const steps = [0.5, 0.3, 0.7, 0.1, 0.9]
+      for (const [su, sv] of steps.flatMap((a) => steps.map((b) => [a, b]))) {
+        const onPlane = new THREE.Vector3(...spec.u).multiplyScalar(near + su * span)
+        points.push(onPlane.addScaledVector(new THREE.Vector3(...spec.v), near + sv * span))
+      }
+    }
+    for (const point of points) {
+      const screen = toScreen(point)
+      if (screen !== null && resolveHit(screen.x, screen.y).datum === name) return screen
+    }
+    return null
+  }
+
   /** 頂点の画面座標(実際にその画素でその頂点が取れるときだけ)。 */
   function projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null {
     const point = features.vertexPoint({ bodyId, vertexIndex })
@@ -1139,7 +1173,17 @@ export function createViewport(container: HTMLElement): Viewport {
   let activeSketchId: string | null = null
 
   /** スケッチモードの外で指せる種類(`setPickKinds`)。既定は全部。 */
-  let pickKinds = new Set<PickKind>(['face', 'edge', 'vertex', 'region', 'sketchPoint', 'sketchLine'])
+  let pickKinds = new Set<PickKind>([
+    'face',
+    'edge',
+    'vertex',
+    'region',
+    'sketchPoint',
+    'sketchLine',
+    'datumPoint',
+    'datumAxis',
+    'datumPlane',
+  ])
 
   function setPickKinds(kinds: readonly PickKind[]): void {
     const next = new Set(kinds)
@@ -1294,6 +1338,39 @@ export function createViewport(container: HTMLElement): Viewport {
     const delta = hit.sub(origin)
     // `frame.u` / `frame.v` は正規化しない(`toWorld` と同じ扱い)。
     return { u: delta.dot(frameVector(frame.u)), v: delta.dot(frameVector(frame.v)) }
+  }
+
+  /**
+   * スケッチモードで当たった原点パーツ(原点と軸だけ。平面は線を引く邪魔になる)と、吸い付く先のスケッチ座標。
+   * 原点ギズモを隠していれば当たらない。点を先に見る(軸は原点の近くまで延びている)。原点はスケッチ平面へ垂直に落とし、
+   * 軸は平面へ落とした直線へカーソルを射影する(平面に垂直な軸は落とすと点なので原点へ吸い付く)。
+   */
+  function sketchDatumAt(
+    offsetX: number,
+    offsetY: number,
+    planePoint: { u: number; v: number } | null,
+  ): { name: DatumName; at: readonly [number, number] } | null {
+    if (activeSketchId === null) return null
+    const target = sketchLayer.get(activeSketchId)
+    if (!target) return null
+    const project = projector()
+    const frame = target.frame
+    const origin = frameVector(frame.origin)
+    const u = frameVector(frame.u)
+    const v = frameVector(frame.v)
+    const originUv: [number, number] = [-origin.dot(u), -origin.dot(v)]
+    if (originGizmo.pointAt(offsetX, offsetY, SKETCH_HANDLE_PIXELS, project) !== null) return { name: 'origin', at: originUv }
+    const axis = originGizmo
+      .axesAt(offsetX, offsetY, EDGE_PICK_PIXELS, project)
+      .sort((a, b) => a.hit.distSq - b.hit.distSq)[0]
+    if (axis === undefined) return null
+    const direction = new THREE.Vector3(...DATUM_AXIS_DIRECTIONS[axis.name as 'X' | 'Y' | 'Z'])
+    const du = direction.dot(u)
+    const dv = direction.dot(v)
+    const lengthSq = du * du + dv * dv
+    if (lengthSq < 1e-18 || planePoint === null) return { name: axis.name, at: originUv }
+    const along = ((planePoint.u - originUv[0]) * du + (planePoint.v - originUv[1]) * dv) / lengthSq
+    return { name: axis.name, at: [originUv[0] + along * du, originUv[1] + along * dv] }
   }
 
   /**
@@ -1611,6 +1688,7 @@ export function createViewport(container: HTMLElement): Viewport {
     offsetY: number,
     planePoint: { u: number; v: number } | null,
     hit: SketchEntityHit | null,
+    datumAt: readonly [number, number] | null = null,
   ): void {
     if (!sketchCursorWanted || activeSketchId === null || orbiting || planePoint === null) {
       sketchCursor.update(null, 'free', null)
@@ -1623,6 +1701,10 @@ export function createViewport(container: HTMLElement): Viewport {
     const sketch = sketchLayer.get(activeSketchId)
     if (!sketch) {
       sketchCursor.update(null, 'free', null)
+      return
+    }
+    if (hit === null && datumAt !== null) {
+      sketchCursor.update({ x: offsetX, y: offsetY }, 'point', projectSketchPoint(activeSketchId, datumAt[0], datumAt[1]))
       return
     }
     const [su, sv] = snappedSketchUv(planePoint.u, planePoint.v, hit, sketch)
@@ -2014,6 +2096,8 @@ export function createViewport(container: HTMLElement): Viewport {
       region: null,
       plane: null,
       sketchEntity: null,
+      datum: null,
+      datumAt: null,
     }
     // スケッチモード中は面を拾わない(線を引くつもりのクリックが選択の置き換えになる)。領域が手前・平面の点がその次。
     // ソリッドだけを受けるコマンド(投影)の起動中だけは、スケッチの中身の代わりにソリッドを指す(下の通常モードの分岐から
@@ -2024,11 +2108,14 @@ export function createViewport(container: HTMLElement): Viewport {
       const plane = planePointAt(offsetX, offsetY)
       // 図形は領域より手前(点・辺は領域の縁に乗っており、領域が勝つと端点を掴めない)。`point` は常に一緒に返し、
       // 描くコマンドが起動している間はそちらが優先(判断は `App.svelte`)。
+      const datum = sketchDatumAt(offsetX, offsetY, plane)
       return {
         ...nothing,
         region,
         sketchEntity: sketchEntityAt(offsetX, offsetY),
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
+        datum: datum?.name ?? null,
+        datumAt: datum?.at ?? null,
       }
     }
     // 通常モード: 細かいものから(点 → 線 → 面・領域)。同じ細かさで重なって見えるときはソリッドが先
@@ -2045,6 +2132,17 @@ export function createViewport(container: HTMLElement): Viewport {
           distSq: candidate.distSq,
           solid: true,
           key: `v|${candidate.ref.bodyId}|${candidate.ref.vertexIndex}`,
+        })
+      }
+    }
+    if (pickKinds.has('datumPoint')) {
+      const origin = originGizmo.pointAt(offsetX, offsetY, SKETCH_HANDLE_PIXELS, project)
+      if (origin !== null) {
+        points.push({
+          item: { hit: { datum: origin.name }, point: origin.hit.point, slack: occlusion.slack(origin.hit.point, project.height) },
+          distSq: origin.hit.distSq,
+          solid: false,
+          key: `d|${origin.name}`,
         })
       }
     }
@@ -2066,6 +2164,16 @@ export function createViewport(container: HTMLElement): Viewport {
         })
       }
     }
+    if (pickKinds.has('datumAxis')) {
+      for (const axis of originGizmo.axesAt(offsetX, offsetY, EDGE_PICK_PIXELS, project)) {
+        lines.push({
+          item: { hit: { datum: axis.name }, point: axis.hit.point, slack: occlusion.slack(axis.hit.point, project.height) },
+          distSq: axis.hit.distSq,
+          solid: false,
+          key: `d|${axis.name}`,
+        })
+      }
+    }
     const lineHit = firstVisible(rankByOverlap(EDGE_PICK_PIXELS, PICK_OVERLAP_PIXELS, lines))
     if (lineHit !== null) return { ...nothing, ...lineHit.hit }
 
@@ -2073,12 +2181,19 @@ export function createViewport(container: HTMLElement): Viewport {
     // 厳密に同一平面で重なる)。面を指せない間(領域だけを受け付けるコマンドの起動中)も、面は遮るものとして残る。
     // 断面の切り口(`ref: null`)も遮る。
     const surface = faceHitAt(offsetX, offsetY)
-    if (surface !== null && surface.ref !== null && pickKinds.has('face')) return { ...nothing, hit: surface.ref }
+    // 原点の平面は、面より手前に見えている所だけで取れる(同一平面の面・領域とは面・領域が勝つ)。
+    const datumPlane = !solidOnly && pickKinds.has('datumPlane') ? originGizmo.planeAlong(rayAt(offsetX, offsetY)) : null
+    const datumSlack = datumPlane === null ? 0 : occlusion.slack(datumPlane.point, project.height)
+    const datumInFront =
+      datumPlane !== null && (surface === null || datumPlane.distance < surface.distance - datumSlack)
+    if (surface !== null && surface.ref !== null && pickKinds.has('face') && !datumInFront) return { ...nothing, hit: surface.ref }
     if (solidOnly) return nothing
     for (const candidate of regionHitsAt(offsetX, offsetY)) {
       if (surface !== null && candidate.distance > surface.distance + occlusion.slack(candidate.point, project.height)) break
+      if (datumInFront && candidate.distance > datumPlane.distance + datumSlack) break
       return { ...nothing, region: candidate.region }
     }
+    if (datumInFront) return { ...nothing, datum: datumPlane.name }
     // 基準平面は面の無い画素でだけ取れる(レイ距離では競わせない。わざと: 部品のシルエットに重なる部分の基準平面は
     // 指せない。#109、本人判断 2026-10-07、docs/VIEWPORT.md「ピック」)。`showBasePlanes(true)` の間しか当たらない。
     if (surface !== null) return nothing
@@ -2125,18 +2240,20 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     let planePoint: { u: number; v: number } | null = null
     let sketchHit: SketchEntityHit | null = null
+    let datumAt: readonly [number, number] | null = null
     if (planeMoveListener !== null) {
       if (activeSketchId === null) {
-        planeMoveListener(null, null)
+        planeMoveListener(null, null, null)
       } else {
-        // `sketchEntityAt` は `resolveHit` と同じ関数: 幽霊のスナップ先とクリック確定時のスナップ先が同じ入力を通る(App.svelte の不変条件)。
+        // `sketchEntityAt` / `sketchDatumAt` は `resolveHit` と同じ関数: 幽霊のスナップ先とクリック確定時のスナップ先が同じ入力を通る(App.svelte の不変条件)。
         planePoint = planePointAt(event.offsetX, event.offsetY)
         sketchHit = sketchEntityAt(event.offsetX, event.offsetY)
-        planeMoveListener(planePoint, sketchHit)
+        datumAt = sketchHit === null ? (sketchDatumAt(event.offsetX, event.offsetY, planePoint)?.at ?? null) : null
+        planeMoveListener(planePoint, sketchHit, datumAt)
         grid.followCursor(planePoint)
       }
     }
-    updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit)
+    updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit, datumAt)
   }
 
   /** ポインタがcanvasから出た。強調を残さない(戻ってくるまで指せるものは無い)。 */
@@ -2253,6 +2370,13 @@ export function createViewport(container: HTMLElement): Viewport {
     if (plane !== hoverPlane) {
       hoverPlane = plane
       applyBasePlaneHover()
+      invalidate()
+    }
+    // スケッチモードでは図形が取れるときは原点パーツを光らせない(クリックは図形が取る)。
+    const datum = sketchEntity === null ? (next?.datum ?? null) : null
+    if (datum !== hoverDatum) {
+      hoverDatum = datum
+      originGizmo.setHover(datum)
       invalidate()
     }
   }
@@ -2415,6 +2539,10 @@ export function createViewport(container: HTMLElement): Viewport {
     onEdgeChainWanted: features.onChainWanted,
     highlightEdges: features.highlightEdges,
     highlightVertices: features.highlightVertices,
+    highlightDatums(names) {
+      originGizmo.setSelected(names)
+      invalidate()
+    },
     collectInBox,
     projectEdge,
     showMeasurement: measureAnnotation.show,
@@ -2431,10 +2559,12 @@ export function createViewport(container: HTMLElement): Viewport {
         region: hoverRegion,
         plane: hoverPlane,
         sketchEntity: hoverSketchEntity,
+        datum: hoverDatum,
         color: hoverColorNow(),
       }
     },
     projectVertex,
+    projectDatum,
     showPreview: ghostLayer.showPreview,
     clearPreview: ghostLayer.clearPreview,
     showBodyGhosts: ghostLayer.showBodyGhosts,

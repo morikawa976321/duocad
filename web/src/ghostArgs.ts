@@ -7,11 +7,11 @@
  * (辺の折れ線・頂点の座標・図形の `params`)だけを読み、読めなければその引数を落とす(落ちた分だけ幽霊が出なくなる)。
  * サーバへ送るのは参照のまま。解決の正はコア。
  */
-import { refsOfKind } from './commands/command'
+import { DATUM_AXIS_DIRECTIONS, datumKind, pickedRefOf, refsOfKind } from './commands/command'
 import { MOVE_BODY } from './commands/features'
 import { MOVE_SKETCH_ENTITIES } from './commands/sketch'
 import { entityHandles, type GhostSource } from './entityKinds'
-import type { EdgesPayload, Point2, SelectionState, SketchEntity, SketchState, VerticesPayload } from './session'
+import type { DatumName, EdgesPayload, Point2, SelectionState, SketchEntity, SketchState, VerticesPayload } from './session'
 import type { BodyGhostRotation } from './viewportTypes'
 
 export interface GhostContext {
@@ -52,6 +52,12 @@ export function ghostSources(ctx: GhostContext, verb: string, args: Record<strin
     .map((id) => byId.get(id))
     .filter((entity): entity is SketchEntity => entity !== undefined)
     .map((entity) => ({ kind: entity.kind, params: entity.params }))
+}
+
+/** 原点パーツの参照なら名前(そうでなければ null)。 */
+function datumOf(value: unknown): DatumName | null {
+  const ref = pickedRefOf(value)
+  return ref !== null && 'datum' in ref ? ref.datum : null
 }
 
 /** `[x, y, z]` の有限な数値3つとして読めるなら返す(読めなければ null)。 */
@@ -114,6 +120,11 @@ function pickedEdgeAxis(
   ctx: GhostContext,
   value: unknown,
 ): { point: [number, number, number]; dir: [number, number, number] } | null {
+  const datum = datumOf(value)
+  if (datum !== null) {
+    if (datumKind(datum) !== 'line') return null
+    return { point: [0, 0, 0], dir: [...DATUM_AXIS_DIRECTIONS[datum as 'X' | 'Y' | 'Z']] }
+  }
   const ref = value as { body?: unknown; index?: unknown } | undefined
   if (!ref || typeof ref.body !== 'string' || typeof ref.index !== 'number') return null
   const known = ctx.edgesOf(ref.body)
@@ -131,6 +142,8 @@ function pickedEdgeAxis(
 }
 
 function pickedVertexPoint(ctx: GhostContext, value: unknown): [number, number, number] | null {
+  const datum = datumOf(value)
+  if (datum !== null) return datum === 'origin' ? [0, 0, 0] : null
   const ref = value as { body?: unknown; index?: unknown } | undefined
   if (!ref || typeof ref.body !== 'string' || typeof ref.index !== 'number') return null
   const known = ctx.verticesOf(ref.body)
@@ -145,6 +158,14 @@ function pickedVertexPoint(ctx: GhostContext, value: unknown): [number, number, 
  * 並びの正は `entityKinds.ts` の表。
  */
 function pickedSketchPoint(ctx: GhostContext, value: unknown): Point2 | null {
+  const datum = datumOf(value)
+  if (datum !== null) {
+    // 原点は編集中のスケッチ平面へ垂直に落とす(コアの `datum.point_in_sketch`)。
+    const frame = ctx.sketches.find((item) => item.sketch_id === ctx.editingId)?.frame ?? null
+    if (datum !== 'origin' || frame === null) return null
+    const dot = (a: number[]) => -(frame.origin[0] * a[0] + frame.origin[1] * a[1] + frame.origin[2] * a[2])
+    return [dot(frame.u), dot(frame.v)]
+  }
   const ref = value as { sketch?: unknown; entity?: unknown; point?: unknown } | undefined
   if (!ref || typeof ref.sketch !== 'string' || typeof ref.entity !== 'string') return null
   const sketch = ctx.sketches.find((item) => item.sketch_id === ref.sketch)
