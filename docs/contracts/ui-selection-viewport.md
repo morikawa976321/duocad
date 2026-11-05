@@ -71,6 +71,7 @@
 ## 直接ピックの待ち(回転軸・回転中心・鏡映面)
 
 - 待っている種類は起動中に指せる種類へ足す(`pickKinds` = 選択の引数の種類 ∪ 待っている種類)。待ち受けは素のクリックだけを食い、修飾キー付きのクリックは対象の選択を足し外しする(`onPick`)。
+- ピックで指したもの(配信された `command.args` の参照。ボディ・面・辺・頂点・スケッチの点と線)は選択と同じ強調で光らせる(`App.svelte` の `pickedRefs`。スケッチの点・線は `buildSketchDraws` の `picked`)。選択には入れない。
 - メッシュボディのピックは `App.svelte` の `pickedRef` でボディ参照へ畳む(畳まないと `modify_selection` が断り、ドラッグの一括選択が丸ごと落ちる)。`dedupeRefs` を外さない(重複 `{kind:"body"}` が `modify_selection` へ並ぶ)。**スケッチを貼る先だけは畳まず断る**。詳細は ui-optimize-integration.md。
 
 ## 分割モジュール(`viewport.ts` と兄弟)

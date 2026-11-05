@@ -18,7 +18,6 @@
     faceRef,
     pickedRefOf,
     refKey,
-    refKind,
     refsOfKind,
     regionRef,
     sameRef,
@@ -1155,20 +1154,26 @@
     send()
   }
 
-  /** 起動中のコマンドが直接ピックで指したボディ(ブーリアンのターゲット)。選択には入らないので、配信された引数から引いて光らせる。 */
-  function pickedBodies(): string[] {
-    return Object.values(model?.command?.args ?? {}).flatMap((value) => {
+  /**
+   * 起動中のコマンドが直接ピック(`PickArgSpec`)で指したもの(ブーリアンのターゲット・鏡映面・回転軸の辺・スケッチの軸線など)。
+   * 選択には入らないので、配信された引数から引いて選択と一緒に光らせる。
+   */
+  const pickedRefs = $derived(
+    Object.values(model?.command?.args ?? {}).flatMap((value) => {
       const ref = pickedRefOf(value)
-      return ref !== null && refKind(ref) === 'body' ? [(ref as BodyRef).body] : []
-    })
-  }
+      return ref === null ? [] : [ref]
+    }),
+  )
 
   function drawHighlight(): void {
-    viewport?.highlight(selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
+    const faces = [...selectedFaces, ...refsOfKind(pickedRefs, 'face')]
+    const edgeRefs = [...selectedEdges, ...refsOfKind(pickedRefs, 'edge')]
+    const vertexRefs = [...selectedVertices, ...refsOfKind(pickedRefs, 'vertex')]
+    viewport?.highlight(faces.map((item) => ({ bodyId: item.body, faceIndex: item.index })))
     // 選択が勝つ: ボディが選ばれているあいだは保持/除外の役割色より優先(`viewport.applyFaceMaterials` が実体)。
-    viewport?.highlightBodies([...selectedBodies.map((item) => item.body), ...pickedBodies()])
-    viewport?.highlightEdges(selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
-    viewport?.highlightVertices(selectedVertices.map((item) => ({ bodyId: item.body, vertexIndex: item.index })))
+    viewport?.highlightBodies([...selectedBodies, ...refsOfKind(pickedRefs, 'body')].map((item) => item.body))
+    viewport?.highlightEdges(edgeRefs.map((item) => ({ bodyId: item.body, edgeIndex: item.index })))
+    viewport?.highlightVertices(vertexRefs.map((item) => ({ bodyId: item.body, vertexIndex: item.index })))
   }
 
   // ---------------------------------------------------------------- D: 辺・頂点を取りに行く
@@ -1195,9 +1200,10 @@
     }
   }
 
-  /** 選択に入った辺・頂点のボディの分も頼む(強調して描くのに座標が要る。AI が選んだものはカーソルが近くにない)。 */
+  /** 選択とピックの引数に入った辺・頂点のボディの分も頼む(強調して描くのに座標が要る。AI が選んだものはカーソルが近くにない)。 */
   $effect(() => {
-    requestPickData([...new Set([...selectedEdges, ...selectedVertices].map((item) => item.body))])
+    const picked = [...refsOfKind(pickedRefs, 'edge'), ...refsOfKind(pickedRefs, 'vertex')]
+    requestPickData([...new Set([...selectedEdges, ...selectedVertices, ...picked].map((item) => item.body))])
   })
 
   /**
@@ -1950,7 +1956,7 @@
   )
 
   function drawSketches(): void {
-    viewport?.showSketches(buildSketchDraws(sketches, selection, sketchId))
+    viewport?.showSketches(buildSketchDraws(sketches, selection, sketchId, refsOfKind(pickedRefs, 'sketch_entity')))
   }
 
   /**
