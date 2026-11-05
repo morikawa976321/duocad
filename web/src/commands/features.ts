@@ -8,6 +8,7 @@
  * 反復にはサーバのプレビューを出さない(変わるのはスケッチの図形でソリッドではない)。幽霊はブラウザだけで描き、規則はコアの写し(docs/contracts/verbs.md)。
  */
 import {
+  datumRef,
   pickedRefOf,
   positive,
   refKind,
@@ -595,9 +596,9 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
 
 /** 原点を通る3軸。`sends` の向きは配信から欄へ戻すときの逆引きにも使う(`syncedChoice`)。 */
 const ORIGIN_AXES = [
-  { value: 'x', label: 'X軸', dir: [1, 0, 0] },
-  { value: 'y', label: 'Y軸', dir: [0, 1, 0] },
-  { value: 'z', label: 'Z軸', dir: [0, 0, 1] },
+  { value: 'x', label: 'X軸', datum: 'X' },
+  { value: 'y', label: 'Y軸', datum: 'Y' },
+  { value: 'z', label: 'Z軸', datum: 'Z' },
 ] as const
 
 /**
@@ -628,12 +629,20 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
     { kind: 'number', ...offsetArg('dy', 'move-body', finite('Y')) },
     { kind: 'number', ...offsetArg('dz', 'move-body', finite('Z')) },
     {
+      // 画面だけの選択肢(サーバの引数名ではない)。X/Y/Z は原点の軸の参照を `axis_edge` で送る。数値の軸(`axis_dir`)へ
+      // 写すと、AI が別の点を通して置いた `axis_dir` + `axis_point` から X/Y/Z を復元したとき、点を原点で上書きして送り直す。
       kind: 'choice',
-      name: 'axis_dir',
+      name: 'axis_kind',
       label: '回転軸',
       options: [
-        ...ORIGIN_AXES.map(({ value, label, dir }) => ({ value, label, buttonId: `move-body-axis-${value}`, sends: dir })),
-        // この値はサーバへ行かない(軸は `axis_edge` で送る)。配信に `axis_edge` があれば欄へ戻る。
+        ...ORIGIN_AXES.map(({ value, label, datum }) => ({
+          value,
+          label,
+          buttonId: `move-body-axis-${value}`,
+          sends: null,
+          impliedBy: 'axis_edge',
+          impliedValue: { datum },
+        })),
         { value: 'edge', label: '辺を選ぶ', buttonId: 'move-body-axis-edge', sends: null, impliedBy: 'axis_edge' },
       ],
       when: isRotateMode,
@@ -645,7 +654,7 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
       target: 'edge',
       datum: true,
       buttonId: 'move-body-axis',
-      when: (values) => isRotateMode(values) && values.axis_dir === 'edge',
+      when: (values) => isRotateMode(values) && values.axis_kind === 'edge',
     },
     {
       kind: 'pick',
@@ -667,27 +676,15 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
       zeroReason: '移動量が全部0',
       rotateArgs: (angle, given) => {
         const center = pickedRefOf(given.center_vertex)
-        if (given.axis_dir === 'edge') {
-          // 軸は参照のまま送る: 辺が乗る直線を厳密に出せるのはコアだけ(ブラウザの持つのは折れ線)。
-          const axis = pickedRefOf(given.axis_edge)
-          if (axis === null) return { ok: false, reason: '回転軸にする辺が指されていない' }
-          // 指していない中心は引数ごと送らない(既定の合成重心はコアが決める)。
-          return {
-            ok: true,
-            args: { mode: 'rotate', angle, axis_edge: axis, ...(center === null ? {} : { center_vertex: center }) },
-          }
-        }
-        const origin = ORIGIN_AXES.find((item) => item.value === given.axis_dir)
-        if (origin === undefined) return { ok: false, reason: '回転軸が選ばれていない' }
-        // 頂点を指したら軸はその頂点を通る向きだけの線になる。コアは axis_point と center_vertex の同時指定を断る。
+        const origin = ORIGIN_AXES.find((item) => item.value === given.axis_kind)
+        // 軸は参照のまま送る: 辺が乗る直線を厳密に出せるのはコアだけ(ブラウザの持つのは折れ線)。原点の軸もコアが解く。
+        const axis = origin !== undefined ? datumRef(origin.datum) : given.axis_kind === 'edge' ? pickedRefOf(given.axis_edge) : null
+        if (given.axis_kind === undefined) return { ok: false, reason: '回転軸が選ばれていない' }
+        if (axis === null) return { ok: false, reason: '回転軸にする辺が指されていない' }
+        // 指していない中心は引数ごと送らない(既定の合成重心はコアが決める。原点の軸では軸の上の点なので原点を通る)。
         return {
           ok: true,
-          args: {
-            mode: 'rotate',
-            angle,
-            axis_dir: [...origin.dir],
-            ...(center === null ? { axis_point: [0, 0, 0] } : { center_vertex: center }),
-          },
+          args: { mode: 'rotate', angle, axis_edge: axis, ...(center === null ? {} : { center_vertex: center }) },
         }
       },
     })

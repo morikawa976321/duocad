@@ -243,10 +243,18 @@ export interface PointArgSpec extends ArgSpecCommon {
  * 配信された値を欄へ戻すときも同じ対応で引く(`sharedArgsController.ts` の `transitionSharedArgs`)。
  * `impliedBy` は `sends: null` の選択肢だけが持つ、配信からその選択肢を戻す手がかり: 配信にこの名前の引数があれば、
  * 自分の引数が配信に無くてもこの選択肢を選び直す(再読み込みで回転体の「線分を選ぶ」が戻らず `axis_line` が隠れたままになるのを防ぐ)。
+ * `impliedValue` があれば、その引数の値が一致するときだけ戻す(同じ引数を手がかりにする選択肢が複数あるとき。前にある方が先に見られる)。
  */
 export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
-  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string }>
+  options: Array<{
+    value: string
+    label: string
+    buttonId: string
+    sends?: unknown
+    impliedBy?: string
+    impliedValue?: unknown
+  }>
 }
 
 /** 選択肢がサーバへ出す値(`sends` が無ければ `value`)。`null` は「出さない」。 */
@@ -280,6 +288,8 @@ export function syncedChoice(
     (candidate) =>
       candidate.impliedBy !== undefined &&
       remote[candidate.impliedBy] !== undefined &&
+      (candidate.impliedValue === undefined ||
+        JSON.stringify(remote[candidate.impliedBy]) === JSON.stringify(candidate.impliedValue)) &&
       (changed(candidate.impliedBy) || changed(spec.name)),
   )
   if (implied !== undefined) return { value: implied.value }

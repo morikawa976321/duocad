@@ -42,3 +42,20 @@ assert.deepEqual(syncedChoice(AXIS, { axis: 'z' }, {}, 'x'), { unmapped: true })
 
 // 「線分を選ぶ」をまだ指していない(axis_line が無い)ときは、配信に無いことを「選んでいない」と読まない。
 assert.deepEqual(syncedChoice(AXIS, { angle: 90 }, {}, 'line'), { value: 'line' })
+
+// 同じ引数を手がかりにする選択肢が複数あるとき(動かすの回転軸: X/Y/Z は原点の軸、「辺を選ぶ」はそれ以外)は値で振り分ける。
+// 落ちたら、原点の Z 軸で置かれた回転が「辺を選ぶ」に戻るか、辺で置かれた回転が X 軸に化ける。
+const ROTATION_AXIS = {
+  kind: 'choice',
+  name: 'axis_kind',
+  label: '回転軸',
+  options: [
+    { value: 'x', label: 'X軸', buttonId: 'x', sends: null, impliedBy: 'axis_edge', impliedValue: { datum: 'X' } },
+    { value: 'z', label: 'Z軸', buttonId: 'z', sends: null, impliedBy: 'axis_edge', impliedValue: { datum: 'Z' } },
+    { value: 'edge', label: '辺を選ぶ', buttonId: 'edge', sends: null, impliedBy: 'axis_edge' },
+  ],
+}
+assert.deepEqual(syncedChoice(ROTATION_AXIS, { axis_edge: { datum: 'Z' } }, {}, undefined), { value: 'z' })
+assert.deepEqual(syncedChoice(ROTATION_AXIS, { axis_edge: { body: 'b', kind: 'edge', index: 3 } }, {}, undefined), { value: 'edge' })
+// 数値の軸(axis_dir)だけの配信からはどのボタンも選ばない(選ぶと画面が原点の軸で送り直して軸の位置を上書きする)。
+assert.deepEqual(syncedChoice(ROTATION_AXIS, { axis_dir: [0, 0, 1], axis_point: [10, 0, 0] }, {}, undefined), { value: undefined })
