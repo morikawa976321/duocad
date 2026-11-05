@@ -110,6 +110,26 @@ def test_saving_without_a_name_writes_the_current_file_only(session: Session) ->
     )
 
 
+def test_saving_without_a_name_retries_the_failed_first_autosave(session: Session, monkeypatch) -> None:
+    """無題の最初の自動保存が書けなかった後の Ctrl+S が、自動保存と同じ `untitled-<n>.json` へ書けること(issue #289)。"""
+    real_write = session.store.write_document_file
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    _box(session)
+    assert session.current_name is None and session.saved is False
+
+    monkeypatch.setattr(session.store, "write_document_file", real_write)
+    answer = session.save_document()
+
+    assert answer["name"] == "untitled-1.json" and session.current_name == "untitled-1.json"
+    assert session.saved is True
+    written = json.loads((session.models_dir / "untitled-1.json").read_text(encoding="utf-8"))["operations"]
+    assert len(written) == len(session.document.log.entries)
+
+
 def test_every_document_change_is_autosaved_and_undo_redo_follow(session: Session) -> None:
     """落ちたら: verb・undo・redo のどれかがディスクに写らない(ファイルが今の文書の鏡でない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]

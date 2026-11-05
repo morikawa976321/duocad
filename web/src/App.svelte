@@ -70,7 +70,7 @@
   import FilesPanel from './FilesPanel.svelte'
   import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
-  import Toast, { fail, errorLog } from './Toast.svelte'
+  import Toast, { fail, errorLog, inform } from './Toast.svelte'
   import {
     createSession,
     type Applied,
@@ -334,6 +334,7 @@
     hold: (op) => (pendingOp = op),
     release: releasePending,
     note,
+    inform,
     // トップ画面も一覧を見せているので、そちらが出ている間も取り直す。
     panelOpen: () => dataPanelOpen || showStart,
     captureThumbnail: () => viewport?.captureThumbnail() ?? null,

@@ -1078,7 +1078,9 @@ class Session:
 
         契約は2つに割れている:
 
-        - `save_document()`(引数なし) … いま編集しているファイルへ上書きする。編集中のファイルが無ければ拒否する。
+        - `save_document()`(引数なし) … いま編集しているファイルへ上書きする。編集中のファイルが無ければ、無題の最初の
+          自動保存が書けなかった(`saved` が False)ときだけ自動保存と同じ `untitled-<n>.json` へ書き、それ以外は拒否する
+          (Ctrl+S は「未保存」の札が勧める書き直しの口)。
         - `save_document(name)` … 新しい名前でのみ保存する。既に在る名前は拒否する(いま編集しているファイルの名前でも)。
 
         `name == self._current_name` なら通す、という例外条項を置かない(本人決定)。例外を残すと、後から別のUIを足したときに
@@ -1096,6 +1098,8 @@ class Session:
         self.autosaver.drain()
         self.autosaver.supersede()
         if name is None:
+            if self._current_name is None and not self.saved:
+                return self.save_document(self.store.unused_untitled_name(), autosave_untitled=True)
             if self._current_name is None:
                 raise ValueError(
                     "編集中のファイルが無い"
