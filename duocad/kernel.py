@@ -934,15 +934,17 @@ def _whole_distance(tool: Any, shape: Any) -> Optional[float]:
 
 
 def _vertex_inside(inner: Any, outer: Any) -> bool:
-    """`inner` の頂点1つが `outer` のどれかのソリッドの内側にあるか(表面が離れているときに呼ぶ: 埋まっていれば全部の点が内側)。"""
-    vertices = _brep_topology.subshapes(inner, TopAbs_VERTEX)
-    if not vertices:
-        return False
-    point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertices[0]))
-    return any(
-        BRepClass3d_SolidClassifier(solid, point, _TOUCH_TOL).State() == TopAbs_IN
-        for solid in _brep_topology.subshapes(outer, TopAbs_SOLID)
-    )
+    """`inner` のどれかのソリッドが `outer` のどれかのソリッドの内側に埋まっているか。表面が離れているときに呼ぶので、
+    埋まっているソリッドは全部の点が内側にあり、ソリッドごとに頂点1つを調べれば足りる(離れた柱と埋まった柱を一度に押す)。"""
+    outer_solids = _brep_topology.subshapes(outer, TopAbs_SOLID)
+    for piece in _brep_topology.subshapes(inner, TopAbs_SOLID):
+        vertices = _brep_topology.subshapes(piece, TopAbs_VERTEX)
+        if not vertices:
+            continue
+        point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertices[0]))
+        if any(BRepClass3d_SolidClassifier(solid, point, _TOUCH_TOL).State() == TopAbs_IN for solid in outer_solids):
+            return True
+    return False
 
 
 def copy_shape(shape: Any) -> Any:

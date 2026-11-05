@@ -149,6 +149,25 @@ def test_cut_buried_inside_a_compound_body_still_finds_it():
     assert math.isclose(_volume(document, a), volume - 8.0, rel_tol=TOL)
 
 
+@pytest.mark.parametrize("reverse", [False, True], ids=["inner_first", "outer_first"])
+def test_cut_with_one_column_buried_and_one_outside_finds_the_body(reverse):
+    """落ちたら、箱の内側に埋まった柱と箱の外の柱を一度に切ると、選んだ順によって箱が相手から落ちて断られる
+    (内外を形全体の先頭の頂点1つだけで見ている)。"""
+    document, a, _b = _two_boxes()
+    boss = _rectangle(document, (5.0, 5.0), 3.0, 3.0)
+    extrude(document, [region_ref(boss, 1)], 25.0, mode="join")
+    volume = _volume(document, a)
+    sketch_id = sketch_create(document, {"kind": "offset", "base": {"kind": "base", "name": "XY"}, "distance": 5.0})
+    add_rectangle(document, sketch_id, (12.0, 12.0), 2.0, 2.0)
+    add_rectangle(document, sketch_id, (100.0, 5.0), 2.0, 2.0)
+    refs = [region_ref(sketch_id, 1), region_ref(sketch_id, 2)]
+
+    operation = extrude(document, refs[::-1] if reverse else refs, 2.0, mode="cut")
+
+    assert operation.args["body_id"] == a
+    assert math.isclose(_volume(document, a), volume - 8.0, rel_tol=TOL)
+
+
 def test_join_merges_a_body_even_when_the_first_does_not_grow():
     """落ちたら、A の中に埋まった別ボディ B と A の両方の内側だけに足す結合が、A の体積が増えないことを理由に断られる
     (B を A へ融合して消すので文書は変わる)。"""
