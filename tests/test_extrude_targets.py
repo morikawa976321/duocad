@@ -235,6 +235,57 @@ def test_a_face_extrusion_joins_the_other_body_it_runs_into():
     assert math.isclose(_volume(document, a), 50.0 * BOX * BOX, rel_tol=TOL)
 
 
+def test_a_body_without_a_solid_is_not_a_target():
+    """落ちたら、面だけの部品(STEP の平面などが kind='solid' で入る)が箱の中を通る切り取りの相手に入り、
+    「cut left nothing solid」で切り取り全体が止まる。"""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.gp import gp_Pln, gp_Pnt, gp_Dir
+
+    from duocad.document import Body
+
+    document, a, _b = _two_boxes()
+    sheet = BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(0.0, 0.0, 10.0), gp_Dir(0.0, 0.0, 1.0)), 0.0, 20.0, 0.0, 20.0).Face()
+    document.add_body(Body(id="sheet", name="sheet", kind="solid", shape=sheet))
+    sketch_id = _rectangle(document, (5.0, 5.0), 5.0, 5.0)
+
+    operation = extrude(document, [region_ref(sketch_id, 1)], 30.0, mode="cut")
+
+    assert operation.args["body_id"] == a and "other_bodies" not in operation.args
+    assert document.get_body("sheet").shape is sheet
+
+
+def test_a_coarse_vertex_far_away_does_not_make_a_body_touch():
+    """落ちたら、0.005 mm 離れた箱が、接していない側の頂点1つの許容差(0.01 mm)だけで「触れている」とされ、
+    結合で融合されて文書から消える(融合しても2つの塊のまま)。"""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.TopAbs import TopAbs_VERTEX
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+    from OCP.gp import gp_Pnt
+    from OCP.BRep import BRep_Tool
+
+    from duocad.document import Body
+
+    document = Document()
+    near = BRepPrimAPI_MakeBox(gp_Pnt(10.005, 0.0, 0.0), 10.0, 10.0, 10.0).Shape()
+    explorer = TopExp_Explorer(near, TopAbs_VERTEX)
+    while explorer.More():
+        vertex = TopoDS.Vertex_s(explorer.Current())
+        if BRep_Tool.Pnt_s(vertex).X() > 15.0:
+            BRep_Builder().UpdateVertex(vertex, 0.01)
+            break
+        explorer.Next()
+    document.add_body(Body(id="a", name="a", kind="solid", shape=BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()))
+    document.add_body(Body(id="near", name="near", kind="solid", shape=near))
+    sketch_id = _rectangle(document, (9.0, 2.0), 1.0, 5.0)
+
+    operation = extrude(document, [region_ref(sketch_id, 1)], 15.0, mode="join")  # A(高さ10)の上へ突き出す
+
+    assert operation.args["body_id"] == "a" and "other_bodies" not in operation.args
+    assert [body.id for body in document.bodies] == ["a", "near"]
+
+
 def test_a_mesh_body_is_not_a_target():
     """落ちたら、重なっているメッシュボディを相手にしようとして断られ、ソリッドへの切り取りまで止まる。"""
     document, a, b = _two_boxes()
