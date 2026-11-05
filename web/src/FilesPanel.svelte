@@ -314,10 +314,12 @@
         class:row-active={file.name === currentName}
         use:whenVisible={{ name: file.name, thumb: file.thumb }}
       >
+        <!-- 開いている行は押せない(本人判断 2026-11-05、issue #275)。押すと開き直しになり、選択と起動中のコマンドが飛ぶ。 -->
         <button
           class="files-open"
+          disabled={file.name === currentName}
           onclick={() => onOpen(file.name)}
-          title={`${file.name} を開く`}
+          title={file.name === currentName ? `${file.name} を編集中` : `${file.name} を開く`}
         >
           <span class="files-thumb">
             {#if url !== null}
@@ -510,6 +512,13 @@
 
   button.files-open:not(:disabled):hover {
     background: var(--control-bg);
+  }
+
+  /* 押せない理由は「今開いている」ことで、行の印(`row-active`)が既に言っている。薄めると開いている文書が沈んで見える。 */
+  button.files-open:disabled {
+    color: inherit;
+    background: none;
+    cursor: default;
   }
 
   .files-thumb {
