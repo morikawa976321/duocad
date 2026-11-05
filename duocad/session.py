@@ -1269,7 +1269,7 @@ class Session:
         差し替えの後始末は `_replace_document`(`new_document` と共通)。
         """
         source = self.store.resolve_document_name(name)
-        self.autosaver.drain()  # 同じ名前を開き直すとき、書きかけの最後の変更を読み落とさない
+        self._save_before_leaving()  # 同じ名前を開き直すとき、書きかけの最後の変更を読み落とさないためにも要る
         kept = self.optimization_results.take_document(source.name)
         if kept is not None:
             return self._open_undelivered(source.name, kept)
@@ -1308,10 +1308,12 @@ class Session:
         """空の文書へ差し替える(「新規」)。verbではない(ログに載らない)。
 
         今の文書は捨てられ、undoでは戻らない(`open_document` と同じ)。確認は挟まない(一覧からのクリック1つで別の文書へ移れるのに、
-        空の文書へ移るときだけ確認すると挙動が割れる。`web/src/FilesPanel.svelte`)。捨てる前の保存もしない(1操作ごとに自動保存済み)。
+        空の文書へ移るときだけ確認すると挙動が割れる。`web/src/FilesPanel.svelte`)。自動保存が書けていなかったときだけ、
+        捨てる前に書き直す(`_save_before_leaving`)。
         編集中のファイルも無くなる(`current_name=None`)。次に文書を変えた瞬間に自動保存が `untitled-<n>.json` を作る
         (それまで引数なしの `save_document()` は拒否される)。
         """
+        self._save_before_leaving()
         self._replace_document(Document(), current_name=None, created=None)
         return self._emit({
             "change": "document",
@@ -1322,10 +1324,11 @@ class Session:
         })
 
     def close_document(self) -> dict:
-        """文書を閉じてトップ画面(何も開いていない状態)へ戻す。verbではない。保存はしない(自動保存済み)。
+        """文書を閉じてトップ画面(何も開いていない状態)へ戻す。verbではない。自動保存が書けていなかったときだけ書き直す。
         空の `Document` に差し替えてundoの山ごと捨てる: 中身を残したまま閉じた扱いにすると、開き直さずに編集できる経路が
         1つでも残った瞬間に、前の文書の続きが `untitled-<n>.json` として書かれる。
         """
+        self._save_before_leaving()
         self._replace_document(Document(), current_name=None, created=None)
         self._open = False
         return self._emit({
@@ -1334,6 +1337,23 @@ class Session:
             "path": None,
             "name": None,
         })
+
+    def _save_before_leaving(self) -> None:
+        """自動保存が書けていない文書を手放す前に、もう一度書く。それも書けなければ ValueError で切り替えを止める
+        (本人判断 2026-11-05、issue #279。確認ダイアログは挟まず、書けた文書は今どおり黙って切り替える)。
+        """
+        self.autosaver.drain()
+        if not self._open or self.saved:
+            return
+        # `autosave()` は画面の操作では書き手スレッドへ回すので、書けたかをここで知れない。同期で書く。
+        try:
+            self.save_document()
+        except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ切り替えを止めて画面へ出す
+            self.autosaver.failed(error)
+            raise ValueError(
+                f"今の文書の未保存の変更をファイルへ書けないので、切り替えなかった({type(error).__name__}: {error})。"
+                "ファイルを掴んでいるプログラムを閉じてから、もう一度押す"
+            ) from error
 
     def _replace_document(
         self, document: Document, *, current_name: Optional[str], created: Optional[float]

@@ -130,6 +130,49 @@ def test_saving_without_a_name_retries_the_failed_first_autosave(session: Sessio
     assert len(written) == len(session.document.log.entries)
 
 
+@pytest.mark.parametrize("leave", ["new", "close", "open"])
+def test_leaving_an_unsaved_document_writes_it_first(session: Session, monkeypatch, leave: str) -> None:
+    """落ちたら: 自動保存が書けなかった文書を、開く・新規・閉じるが書き直さずに捨てる(issue #279)。"""
+    session.save_document("other.json")
+    real_write = session.store.write_document_file
+    _box(session)
+    session.save_document("mine.json")
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    session.sketch_create("XY")
+    assert session.saved is False
+    entries = len(session.document.log.entries)
+    monkeypatch.setattr(session.store, "write_document_file", real_write)
+
+    {"new": session.new_document, "close": session.close_document, "open": lambda: session.open_document("other.json")}[leave]()
+
+    written = json.loads((session.models_dir / "mine.json").read_text(encoding="utf-8"))["operations"]
+    assert len(written) == entries
+
+
+def test_leaving_is_refused_while_the_unsaved_document_still_cannot_be_written(session: Session, monkeypatch) -> None:
+    """落ちたら: 書き直しにも失敗した文書を、新規が黙って捨てる(issue #279)。"""
+    _box(session)
+    session.save_document("mine.json")
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    session.sketch_create("XY")
+    entries = len(session.document.log.entries)
+
+    with pytest.raises(ValueError, match="切り替えなかった"):
+        session.new_document()
+
+    assert session.current_name == "mine.json"
+    assert len(session.document.log.entries) == entries
+    assert session.saved is False
+
+
 def test_every_document_change_is_autosaved_and_undo_redo_follow(session: Session) -> None:
     """落ちたら: verb・undo・redo のどれかがディスクに写らない(ファイルが今の文書の鏡でない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]

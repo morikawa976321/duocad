@@ -271,12 +271,12 @@
     <button
       id="file-new"
       onclick={onNew}
-      title="空の無題の文書から始める(今の文書はファイルに残る。「未保存」の札が出ているときは、書けていない編集が消える)"
+      title="空の無題の文書から始める(今の文書はファイルに残る。「未保存」の札が出ているときは先に書き直し、書けなければ切り替えない)"
     >
       新規
     </button>
     {#if documentOpen}
-      <button id="file-close" onclick={onClose} title="文書を閉じてトップ画面へ戻る(ファイルに残る。「未保存」の札が出ているときは、書けていない編集が消える)">
+      <button id="file-close" onclick={onClose} title="文書を閉じてトップ画面へ戻る(ファイルに残る。「未保存」の札が出ているときは先に書き直し、書けなければ閉じない)">
         閉じる
       </button>
     {/if}
