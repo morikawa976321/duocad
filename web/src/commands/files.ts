@@ -17,11 +17,11 @@ export const IMPORT_STEP: CommandDef<'import_step'> = {
       name: 'path',
       label: 'STEP',
       inputId: 'file-import-path',
-      placeholder: 'part.step',
+      placeholder: 'part',
       reject: pathLike('STEPのパス'),
     },
   ],
-  build: buildPathArgs,
+  build: buildPathArgs('.step'),
 }
 
 /**

@@ -14,6 +14,8 @@ export interface DocumentFilesDeps {
   hold(op: number): void
   release(op: number | null): boolean
   note(message: string): void
+  /** 人に見せる知らせ(トーストの `inform`)。 */
+  inform(message: string): void
   panelOpen(): boolean
   /** PNGのbase64。見えている立体が無ければ空文字、ビューポートがまだ無ければ null(撮らない)。 */
   captureThumbnail(): string | null
@@ -31,6 +33,8 @@ export interface DocumentFiles {
   readonly list: DocumentInfo[]
   /** いま編集しているファイル名(無題なら null)。 */
   readonly currentName: string | null
+  /** この接続が最後に成功させた複製の行き先。成功のたびに別のオブジェクトになる(同じ名前への2度目も見分けられる)。 */
+  readonly lastCopied: { name: string } | null
   onFile(payload: FilePayload): void
   onState(next: ServerState): void
   refresh(): void
@@ -38,7 +42,8 @@ export interface DocumentFiles {
   run(...request: CommandRequest): void
   /**
    * 今の文書を手で書き直す(Ctrl+S)。自動保存が書けなかった(`#save-state`)ときに人が押し直すためにある。
-   * 引数は送らない(書き込み先はサーバの `Session._current_name`)。無題で未変更なら何も送らない。
+   * 引数は送らない(書き込み先はサーバの `Session._current_name`。無題で書けていなければサーバが `untitled-<n>.json` を選ぶ)。
+   * 無題で未変更なら何も送らない。
    */
   save(): void
   /**
@@ -72,9 +77,23 @@ const CAPTURE_DELAY_MS = 500
 
 const PNG_DATA_URL = 'data:image/png;base64,'
 
+const EXPORT_LABELS: Record<string, string> = { export_step: 'STEP', export_stl: 'STL' }
+
+/** 書き出しの応答なら人に見せる1文、それ以外は null。 */
+function exportedMessage(payload: FilePayload): string | null {
+  const label = EXPORT_LABELS[payload.action]
+  if (label === undefined) return null
+  const count = payload.body_ids?.length ?? 0
+  const skipped = payload.skipped_hidden?.length ?? 0
+  const written = `${label}を書き出した(${count}個): ${payload.path}`
+  return skipped > 0 ? `⚠ 非表示の${skipped}個は含めていない — ${written}` : written
+}
+
 export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
   let list = $state<DocumentInfo[]>([])
   let currentName = $state<string | null>(null)
+  let lastCopied = $state<{ name: string } | null>(null)
+  let saved = true
   let lastOp: number | null = null
   // list_documents は全ファイルのログを読むので、配信のたびには呼ばず少し待ってまとめ、
   // パネルを出しているときだけ取りに行く(畳んでいる間は「古い」印だけ立てる)。
@@ -200,6 +219,9 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     get currentName() {
       return currentName
     },
+    get lastCopied() {
+      return lastCopied
+    },
     onFile(payload) {
       // **`list_documents` の応答は通知を出さずここで抜ける**(保存/開くのたびに裏で走る)。
       if (payload.action === 'list') {
@@ -214,17 +236,16 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
       // **応答が `file` で返ったなら、その操作の待ちはここで解く。** 「文書を変えるか」の判定はブラウザと
       // サーバで別々に持つので、片方だけ直すと状態配信を待ち続けて確定が永久に拒否される。番号が一致するときだけ解く。
       deps.release(lastOp)
-      // `body_ids` が載るのは export_step / export_stl だけ。非表示で除外した個数は0件なら言わない。
-      const exported = payload.body_ids !== undefined ? `${payload.body_ids.length}個` : ''
-      const skippedCount = payload.skipped_hidden?.length ?? 0
-      const skipped = skippedCount > 0 ? `※非表示の${skippedCount}個は除外` : ''
-      const detail = [exported, skipped].filter((part) => part !== '').join(' ')
-      deps.note(`${payload.action}: ${payload.path}${detail !== '' ? `(${detail})` : ''}`)
+      const exported = exportedMessage(payload)
+      if (exported !== null) deps.inform(exported)
+      else deps.note(`${payload.action}: ${payload.path}`)
       followFileChange(payload)
+      if (payload.action === 'copy' && payload.name !== undefined) lastCopied = { name: payload.name }
       if (['save', 'rename', 'copy', 'delete'].includes(payload.action)) refresh()
     },
     onState(next) {
       currentName = next.current_name
+      saved = next.saved
       // **文書が変わったら一覧を取り直す**(issue #5)。verb と開く/新規は `applied_count` を、undo/redo は
       // `log.length` を動かす。**`applied_count` は undo/redo で動かない**ので両方を見る。サムネイルも同じ時機に撮る
       // (画面を開いた直後の1通目も撮る: 撮ったことの無い既存文書に、開いただけで絵が付く)。
@@ -245,7 +266,7 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     refresh,
     run,
     save() {
-      if (currentName === null) return
+      if (currentName === null && saved) return
       run('save_document', {})
     },
     rename(name) {

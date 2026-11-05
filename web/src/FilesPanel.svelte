@@ -24,10 +24,12 @@
    * STEP/SVG 読み込みは文書を変えるverbなのでここには無い(`commands/files.ts` の `IMPORT_STEP`、`commands/sketch.ts` の `IMPORT_SVG`)。
    *
    * 名前とパスの欄は拡張子を打たせない(`SuffixField.svelte`。`.json` / `.step` / `.stl` は欄の右に固定で、送るときに付ける。本人指示 2026-10-07)。
-   * 送信後もパス欄は消さない(STEP/STLのパスは同じ値へ書き出し直す・読み直すことが多い。ファイル名欄 `draftName` は1回きりの新しい名前なので消す)。
+   * 送信後もパス欄は消さない(STEP/STLのパスは同じ値へ書き出し直す・読み直すことが多い)。
+   * 改名欄と複製欄は今の名前(複製は `<元の名前>-copy`)を先埋めして選んだ状態で出し、Esc で取り消す。送っても欄は消さず、
+   * 断られたら打った名前が残る(改名は `currentName` が変わったら、複製は成功の応答 `lastCopied` が来たら閉じる/埋め直す)。
    */
   import { tick } from 'svelte'
-  import { pathLike } from './commands/command'
+  import { pathLike, unquotePath } from './commands/command'
   import { isImeKey } from './keys'
   import type { DocumentInfo } from './session'
   import SuffixField, { withSuffix, withoutSuffix } from './SuffixField.svelte'
@@ -46,6 +48,7 @@
     onExportStl,
     thumbnailUrl,
     onNeedThumbnail,
+    lastCopied,
   }: {
     documents: DocumentInfo[]
     /** サーバの `state.current_name` の写し(無ければ `null`)。名前は文字で出さず(ヘッダの `#current-file` と二重になる)、一覧の当該行を光らせる(`BrowserPanel.svelte` の `.sketch-row.active` と同じ形)。 */
@@ -66,9 +69,18 @@
     /** 無ければ null(仮の絵を出す)。 */
     thumbnailUrl: (name: string) => string | null
     onNeedThumbnail: (name: string, version: number | null) => void
+    /** 最後に成功した複製(`documentFiles.lastCopied`)。成功のたびに別のオブジェクトになる。 */
+    lastCopied: { name: string } | null
   } = $props()
 
+  function currentStem(): string {
+    return currentName === null ? '' : withoutSuffix(currentName, '.json')
+  }
+
   let draftName = $state('')
+  $effect.pre(() => {
+    draftName = currentStem()
+  })
 
   /** `duocad/document_name.py` の `MAX_NAME_UNITS`(ファイル名の上限255から、書き込みが足す `.png.writing` の12を引いた値)の写し。 */
   const MAX_NAME_UNITS = 243
@@ -97,11 +109,25 @@
   }
 
   const draftProblem = $derived(nameProblem(draftName))
+  // 先埋めとの文字列の一致も見る: `part.json.json` の先埋め `part.json` は `withSuffix` すると別名になる。
+  const draftUnchanged = $derived(
+    currentName !== null && (draftName === currentStem() || withSuffix(draftName, '.json') === currentName),
+  )
 
   function submitDraft(): void {
-    if (draftProblem !== null) return
+    if (draftProblem !== null || draftUnchanged) return
     onRename(withSuffix(draftName, '.json'))
-    draftName = ''
+  }
+
+  function onDraftKey(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && !isImeKey(event)) {
+      event.preventDefault()
+      const field = event.currentTarget as HTMLInputElement
+      draftName = currentStem()
+      void tick().then(() => field.select())
+      return
+    }
+    onRowEnter(event, submitDraft)
   }
 
   function formatStamp(epochSeconds: number | null): string {
@@ -146,6 +172,12 @@
   let copyingFrom = $state<string | null>(null)
   let copyName = $state('')
   let deletingName = $state<string | null>(null)
+  /** 送って応答を待っている複製先と、送った時点の `lastCopied`。それより後に同じ名前の成功が来たら欄を閉じる。 */
+  let copySent = $state<{ dest: string; before: { name: string } | null } | null>(null)
+
+  $effect(() => {
+    if (copySent !== null && lastCopied !== copySent.before && lastCopied?.name === copySent.dest) cancelRowActions()
+  })
 
   /** 複製先の先埋め: `<元の名前>-copy`(既にあれば `-copy2` …)。手元の一覧で見るだけで、存在の正はサーバ。 */
   function suggestCopyName(source: string): string {
@@ -158,6 +190,7 @@
 
   function startCopy(source: string): void {
     deletingName = null
+    copySent = null
     copyingFrom = source
     copyName = suggestCopyName(source)
     // 欄はこの後のDOM更新で現れる(Svelteの更新は非同期)。
@@ -172,20 +205,22 @@
 
   function submitCopy(): void {
     if (copyingFrom === null || copyProblem !== null) return
-    onCopy(copyingFrom, withSuffix(copyName, '.json'))
-    copyingFrom = null
-    copyName = ''
+    const dest = withSuffix(copyName, '.json')
+    copySent = { dest, before: lastCopied }
+    onCopy(copyingFrom, dest)
   }
 
   function cancelRowActions(): void {
     copyingFrom = null
     copyName = ''
+    copySent = null
     deletingName = null
   }
 
   function startDelete(name: string): void {
     copyingFrom = null
     copyName = ''
+    copySent = null
     deletingName = name
   }
 
@@ -204,7 +239,7 @@
   function exportPathProblem(text: string, suffix: string): string | null {
     const empty = pathProblem(text)
     if (empty !== null) return empty
-    const fileName = withoutSuffix(text.trim(), suffix).split(/[\\/]/).pop() ?? ''
+    const fileName = withoutSuffix(unquotePath(text), suffix).split(/[\\/]/).pop() ?? ''
     return fileName === '' ? 'ファイル名まで打つ' : null
   }
 
@@ -213,7 +248,7 @@
 
   function submitExportStep(): void {
     if (exportStepProblem !== null) return
-    onExportStep(withSuffix(exportStepPath, '.step'))
+    onExportStep(withSuffix(unquotePath(exportStepPath), '.step'))
   }
 
   let exportStlPath = $state('')
@@ -221,7 +256,7 @@
 
   function submitExportStl(): void {
     if (exportStlProblem !== null) return
-    onExportStl(withSuffix(exportStlPath, '.stl'))
+    onExportStl(withSuffix(unquotePath(exportStlPath), '.stl'))
   }
 
   function onRowEnter(event: KeyboardEvent, submit: () => void): void {
@@ -236,12 +271,12 @@
     <button
       id="file-new"
       onclick={onNew}
-      title="今の文書を捨てて空から始める(保存していない編集は消える)"
+      title="空の無題の文書から始める(今の文書はファイルに残る。「未保存」の札が出ているときは、書けていない編集が消える)"
     >
       新規
     </button>
     {#if documentOpen}
-      <button id="file-close" onclick={onClose} title="文書を閉じてトップ画面へ戻る(保存は済んでいる)">
+      <button id="file-close" onclick={onClose} title="文書を閉じてトップ画面へ戻る(ファイルに残る。「未保存」の札が出ているときは、書けていない編集が消える)">
         閉じる
       </button>
     {/if}
@@ -254,9 +289,10 @@
         suffix=".json"
         placeholder={currentName === null ? 'model' : withoutSuffix(currentName, '.json')}
         bind:value={draftName}
-        onkeydown={(event) => onRowEnter(event, submitDraft)}
+        selectOnFocus
+        onkeydown={onDraftKey}
       />
-      <button id="file-rename" onclick={submitDraft} disabled={draftProblem !== null}>
+      <button id="file-rename" onclick={submitDraft} disabled={draftProblem !== null || draftUnchanged}>
         {currentName === null ? '名前を付ける' : '名前を変える'}
       </button>
     </div>
@@ -352,6 +388,7 @@
             id="file-copy-name"
             suffix=".json"
             bind:value={copyName}
+            selectOnFocus
             onkeydown={(event) => {
               if (event.key === 'Escape' && !isImeKey(event)) {
                 event.preventDefault()
