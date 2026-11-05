@@ -155,6 +155,7 @@
     {/if}
   </div>
   <p class="hint dim">{keyLine}</p>
+  <p class="hint dim">保存すると AI は Claude の API へ切り替わり、使った分だけ課金される。</p>
 
   {#if showGpu}
     <!-- **答えは変わらない**(GPU の解は CPU とビット一致する。docs/TOPOPT_GPU.md)ので、確認なしでその場で切り替える。 -->

@@ -70,7 +70,7 @@
   import FilesPanel from './FilesPanel.svelte'
   import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
-  import Toast, { fail, errorLog } from './Toast.svelte'
+  import Toast, { fail, inform, errorLog } from './Toast.svelte'
   import {
     createSession,
     type Applied,
@@ -385,7 +385,7 @@
   let selfSelections = $state(0)
 
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
-  const ai = createAiChat({ send: (text) => session.aiSend(text), fail })
+  const ai = createAiChat({ send: (text) => session.aiSend(text), fail, inform, hidden: () => !sidebarOpen })
 
   const serverWait = createServerWait()
 
@@ -2747,6 +2747,7 @@
           status={ai.status}
           connection={status}
           transcript={ai.transcript}
+          bind:draft={ai.draft}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}
           onConfigure={(providerKind, baseUrl) => {

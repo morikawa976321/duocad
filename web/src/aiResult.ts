@@ -29,11 +29,38 @@ export function resultLine(result: Pick<AiRunResult, 'status' | 'text'>): string
   return result.text || STATUS_LABEL[result.status] || result.status
 }
 
+function fold(text: string, limit: number): string {
+  const folded = text.replace(/\s+/g, ' ').trim()
+  return folded.length > limit ? `${folded.slice(0, limit)}…` : folded
+}
+
 /** 固定文に添える失敗の理由(`ai_result.detail`)。出すものが無ければ空文字。 */
 export function resultDetail(result: Pick<AiRunResult, 'status' | 'detail'>): string {
   if (!STATUSES_WITH_DETAIL.has(result.status)) return ''
-  const folded = (result.detail ?? '').replace(/\s+/g, ' ').trim()
-  return folded.length > DETAIL_LIMIT ? `${folded.slice(0, DETAIL_LIMIT)}…` : folded
+  return fold(result.detail ?? '', DETAIL_LIMIT)
+}
+
+/**
+ * 失敗したツール呼び出し(✗ の行)に添える理由。`ai_tool_call.result` は失敗なら `{"error": {...}}` の封筒
+ * (`duocad/agent/loop.py` の `_failure` / `DocumentTools.error_envelope`)か `{"error": "文"}`。
+ */
+export function toolFailureReason(result: unknown): string {
+  const error = typeof result === 'object' && result !== null ? (result as { error?: unknown }).error : undefined
+  if (typeof error === 'string') return fold(error, DETAIL_LIMIT)
+  if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.trim()) return fold(message, DETAIL_LIMIT)
+  }
+  if (result === undefined || result === null) return ''
+  return fold(typeof result === 'string' ? result : JSON.stringify(result), DETAIL_LIMIT)
+}
+
+/** 札は数枚が重なる(`Toast.svelte`)ので、会話欄より短く切る[文字]。 */
+const NOTICE_LIMIT = 80
+
+/** 右サイドバーを閉じている間に依頼が終わった・止まったときの札(`aiChat.svelte.ts`)。 */
+export function hiddenResultNotice(result: Pick<AiRunResult, 'status' | 'text'>): string {
+  return `AI: ${fold(resultLine(result), NOTICE_LIMIT)}`
 }
 
 /**

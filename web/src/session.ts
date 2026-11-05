@@ -541,6 +541,8 @@ export interface AiStatus {
   /** llama-server へ送る思考の設定(Claude には送らない)。 */
   thinking: AiThinking
   thinkingChoices: AiThinking[]
+  /** サーバがこの変更で会話を捨てた(設定の適用・キーの保存と削除。`Server._reset_ai_conversation`)。 */
+  conversationReset: boolean
   /** `ai_configure` / `ai_set_thinking` を拒否したときだけ入る(例: 実行中/未知のプロバイダ)。 */
   error?: string
 }
@@ -611,6 +613,8 @@ export type AiTranscriptEntry =
   | { kind: 'tool'; call: AiToolCall }
   | { kind: 'result'; result: AiRunResult }
   | { kind: 'error'; message: string }
+  /** ここから先はサーバの新しい会話(前の行はAIの記憶に無い)。 */
+  | { kind: 'reset' }
 
 // --------------------------------------------------------------------------------------
 // H: 形状最適化を走らせる — verbではない(`duocad/catalog.py` の `category="protocol"`)
@@ -1245,6 +1249,7 @@ export function createSession(hooks: SessionHooks): Session {
       providers?: AiProviderKind[]
       thinking?: AiThinking
       thinking_choices?: AiThinking[]
+      conversation_reset?: boolean
       error?: string
       name?: string
       arguments?: Record<string, unknown>
@@ -1387,6 +1392,7 @@ export function createSession(hooks: SessionHooks): Session {
         providers: message.providers ?? ['openai_compat'],
         thinking: message.thinking ?? 'server',
         thinkingChoices: message.thinking_choices ?? [],
+        conversationReset: message.conversation_reset ?? false,
         error: message.error,
       })
     } else if (message.type === 'fem_status') {
