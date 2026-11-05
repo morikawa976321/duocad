@@ -44,7 +44,7 @@
   } from './commands/features'
   import { entityPointKeys, ghostCopies, snapSketchPoint } from './entityKinds'
   import { IMPORT_STEP } from './commands/files'
-  import { isImeKey } from './keys'
+  import { isImeKey, ownsEscapeKey } from './keys'
   import { INTERFERENCE } from './commands/interference'
   import { MEASURE } from './commands/measure'
   import type { MeasureItem, MeasurePayload } from './session'
@@ -2448,9 +2448,13 @@
   }
 
   function onWindowKeydown(event: KeyboardEvent): void {
-    // Esc は測定の札を消す(コマンドの中断は `CommandHost` が同じキーで別に見る)。
+    // Esc は測定の札と選択を消す(本人判断 2026-11-05、issue #271)。コマンドの中断は `CommandHost` が同じキーで別に見る
+    // (中断でも選択は全解除なので、起動中に両方が走っても結果は同じ)。入力欄・ダイアログの Esc はその欄のもの。
     if (event.key === 'Escape') {
-      if (!isImeKey(event)) measure.clear()
+      if (isImeKey(event)) return
+      measure.clear()
+      const focused = event.target instanceof HTMLElement ? event.target : null
+      if (!ownsEscapeKey(focused)) clearSelectionIfAny()
       return
     }
     if (!(event.ctrlKey || event.metaKey)) return
