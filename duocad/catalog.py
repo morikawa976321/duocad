@@ -2193,6 +2193,25 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="get_sketch_guides",
+        category="protocol",
+        description="",
+        params=(
+            Param("sketch_id", "string", "吸着先が要るスケッチ"),
+            Param("request_id", "integer", "画面が古い返事を捨てるための通し番号(そのまま返す)"),
+        ),
+        session="sketch_guides",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**配信しない**(`get_edges` と同じ)。スケッチの平面と、見えている B-rep のボディが交わる・接する所"
+            "(平面に乗る辺・平面を横切る面の交線・その頂点)を、平面の (u,v) の図形と点で返す。画面はスケッチで点を待つ間の"
+            "吸着先にだけ使う(選べない・文書に足さない)。返事は `{type:'sketch_guides', request_id, sketch_id, entities, points,"
+            " errors, error}`。失敗は `error` に入れて返し、`{type:'error'}` にしない(`inspect_selection` と同じ)"
+        ),
+    ),
+    Command(
         name="set_view_resolution",
         category="protocol",
         description="",

@@ -35,6 +35,8 @@ import { createSelectionBand, type BandRect } from './selectionBand'
 import { createGridPlanes } from './gridPlanes'
 import { frameVector, planePoint } from './planeMath'
 import { distSq, perspectiveParam, pickNearestWithinRadius, rankByOverlap, type RankedCandidate, type ScreenPickCandidate } from './screenPick'
+import { createSketchGuideLayer } from './sketchGuides'
+import { nearerSide } from './sketchGuideTargets'
 import { createSketchLayer, type SketchScene } from './sketchLayer'
 import type { SketchFatLine } from './sketchLine'
 import { POLE_Z, upForDirection } from './viewCube'
@@ -46,13 +48,15 @@ import { createMeasureAnnotation } from './measureAnnotation'
 import { createThumbnailer } from './thumbnail'
 import { buildBodyMesh } from './bodyMesh'
 import { OCCLUDER_LAYER, createOcclusion } from './occlusion'
-import { closestOnPolyline, createProjector, screenHitOfPoint, type PickPolyline, type ScreenProjector } from './polylinePick'
+import {
+  closestOnPolyline, createProjector, screenHitOfPoint, type PickPolyline, type ProjectedPoint, type ScreenProjector,
+} from './polylinePick'
 import { createSolidFeatures, type BodyEdges, type BodyVertices } from './solidFeatures'
 import type { BasePlaneName, DatumName } from './session'
 import {
   type BodyGeometryUpdate, type BoxSelectEvent, type EdgeRef,
   type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickKind, type PickMode, type SectionState,
-  type SketchDraw, type SketchEntityHit, type VertexRef, type ViewSnapshot, type Viewport,
+  type SketchDraw, type SketchEntityHit, type SketchGuideHit, type SketchGuides, type VertexRef, type ViewSnapshot, type Viewport,
 } from './viewportTypes'
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
@@ -338,6 +342,7 @@ export function createViewport(container: HTMLElement): Viewport {
         point: { u: number; v: number } | null,
         sketchEntity: SketchEntityHit | null,
         datumAt: readonly [number, number] | null,
+        sketchGuide: SketchGuideHit | null,
       ) => void)
     | null = null
 
@@ -357,6 +362,7 @@ export function createViewport(container: HTMLElement): Viewport {
   let hoverDatum: DatumName | null = null
   let hoverRegion: { sketchId: string; index: number } | null = null
   let hoverSketchEntity: SketchEntityHit | null = null
+  let hoverSketchGuide: SketchGuideHit | null = null
   // 「変わったときだけ材質を書き換える」ための印(毎フレーム全メッシュを走査しない)。
   let hoverFaceKey = ''
   let hoverRegionKey = ''
@@ -435,6 +441,7 @@ export function createViewport(container: HTMLElement): Viewport {
     orthographic.left = -orthographic.top * aspect
     orthographic.updateProjectionMatrix()
     sketchLayer.setLineResolution(width, height)
+    guideLayer.setLineResolution(width, height)
     ghostLayer.setLineResolution(width, height)
   }
 
@@ -1170,6 +1177,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // 不透明な描画は材質の生成順でも並ぶため、材質を作る位置をボディの後に保つ。
   const sketchLayer = createSketchLayer(sketchRoot)
+  // ボディ由来の吸着先の強調。`sketchRoot` には入れない(グリッドの範囲 `contentBoxForGrid` が強調の線で広がる)。
+  const guideLayer = createSketchGuideLayer()
+  scene.add(guideLayer.object)
   let activeSketchId: string | null = null
 
   /** スケッチモードの外で指せる種類(`setPickKinds`)。既定は全部。 */
@@ -1449,7 +1459,15 @@ export function createViewport(container: HTMLElement): Viewport {
     if (activeSketchId === null) return null
     const target = sketchLayer.get(activeSketchId)
     if (!target) return null
-    const sketchId = activeSketchId
+    return (
+      sketchPointAt(offsetX, offsetY, activeSketchId, target) ??
+      sketchMidpointAt(offsetX, offsetY, target) ??
+      sketchLineAt(offsetX, offsetY, activeSketchId, target)
+    )
+  }
+
+  /** `sketchEntityAt` の点の段(点マーカーが先、角・交点が次)。 */
+  function sketchPointAt(offsetX: number, offsetY: number, sketchId: string, target: SketchScene): SketchEntityHit | null {
     const handle = pickPointsAt(
       offsetX,
       offsetY,
@@ -1461,11 +1479,11 @@ export function createViewport(container: HTMLElement): Viewport {
         return { sketchId, entityId, point }
       },
     )
-    if (handle !== null) return handle
-    const corner = sketchCornerAt(offsetX, offsetY, target)
-    if (corner !== null) return corner
-    const midpoint = sketchMidpointAt(offsetX, offsetY, target)
-    if (midpoint !== null) return midpoint
+    return handle ?? sketchCornerAt(offsetX, offsetY, target)
+  }
+
+  /** `sketchEntityAt` の線の段。 */
+  function sketchLineAt(offsetX: number, offsetY: number, sketchId: string, target: SketchScene): SketchEntityHit | null {
     return pickLinesAt(
       offsetX,
       offsetY,
@@ -1478,6 +1496,47 @@ export function createViewport(container: HTMLElement): Viewport {
       },
       sketchPolyline,
     )
+  }
+
+  const snapScreen: ProjectedPoint = { x: 0, y: 0, w: 1 }
+
+  /**
+   * スケッチモードの吸着の当たり: 編集中のスケッチの図形(`sketchEntityAt`)と、点を待っている間だけボディ由来の吸着先
+   * (`sketchGuides.ts`)。段(点 → 中点 → 線)は図形と同じで、同じ段の中は画面の距離で近い方(同着は図形。`nearerSide`)。
+   * 図形の距離は、その当たりで置く点(`snappedSketchUv`)までの画面の距離で測る。返す2つは同時に立たない。
+   */
+  function sketchSnapAt(offsetX: number, offsetY: number): { entity: SketchEntityHit | null; guide: SketchGuideHit | null } {
+    const sketchId = activeSketchId
+    const target = sketchId === null ? undefined : sketchLayer.get(sketchId)
+    const raw = sketchId === null ? null : planePointAt(offsetX, offsetY)
+    if (sketchId === null || !target || raw === null || !sketchCursorWanted || !guideLayer.has(sketchId)) {
+      return { entity: sketchEntityAt(offsetX, offsetY), guide: null }
+    }
+    const project = projector()
+    const screenDistSq = (hit: SketchEntityHit): number => {
+      const [u, v] = snappedSketchUv(raw.u, raw.v, hit, target)
+      if (!project.project(toWorld(target.frame, u, v), snapScreen)) return Infinity
+      return distSq(offsetX, offsetY, snapScreen.x, snapScreen.y)
+    }
+    const tiers: Array<[() => SketchEntityHit | null, () => { hit: SketchGuideHit; distSq: number } | null]> = [
+      [
+        () => sketchPointAt(offsetX, offsetY, sketchId, target),
+        () => guideLayer.pointAt(offsetX, offsetY, target.frame, target.handles, project),
+      ],
+      [() => sketchMidpointAt(offsetX, offsetY, target), () => guideLayer.midpointAt(offsetX, offsetY, target.frame, project)],
+      [
+        () => sketchLineAt(offsetX, offsetY, sketchId, target),
+        () => guideLayer.lineAt(offsetX, offsetY, target.frame, raw, resolution.applied(), project),
+      ],
+    ]
+    for (const [entityAt, guideAt] of tiers) {
+      const entity = entityAt()
+      const guide = guideAt()
+      const side = nearerSide(entity === null ? null : screenDistSq(entity), guide?.distSq ?? null)
+      if (side === 'entity') return { entity, guide: null }
+      if (side === 'guide') return { entity: null, guide: guide?.hit ?? null }
+    }
+    return { entity: null, guide: null }
   }
 
   /**
@@ -1670,7 +1729,7 @@ export function createViewport(container: HTMLElement): Viewport {
   function snappedSketchUv(
     rawU: number,
     rawV: number,
-    hit: SketchEntityHit | null,
+    hit: SketchEntityHit | SketchGuideHit | null,
     sketch: SketchScene,
   ): [number, number] {
     return snapSketchPoint(
@@ -1689,6 +1748,7 @@ export function createViewport(container: HTMLElement): Viewport {
     planePoint: { u: number; v: number } | null,
     hit: SketchEntityHit | null,
     datumAt: readonly [number, number] | null = null,
+    guide: SketchGuideHit | null = null,
   ): void {
     if (!sketchCursorWanted || activeSketchId === null || orbiting || planePoint === null) {
       sketchCursor.update(null, 'free', null)
@@ -1703,20 +1763,20 @@ export function createViewport(container: HTMLElement): Viewport {
       sketchCursor.update(null, 'free', null)
       return
     }
-    if (hit === null && datumAt !== null) {
+    if (hit === null && guide === null && datumAt !== null) {
       sketchCursor.update({ x: offsetX, y: offsetY }, 'point', projectSketchPoint(activeSketchId, datumAt[0], datumAt[1]))
       return
     }
-    const [su, sv] = snappedSketchUv(planePoint.u, planePoint.v, hit, sketch)
+    const [su, sv] = snappedSketchUv(planePoint.u, planePoint.v, guide ?? hit, sketch)
     // 角・交点かどうかは `hit.snapAt` の有無(中点を除く)で決める(交点は2つの図形にまたがり、
     // 確定後の座標と自分自身への射影の比較では検出できない。`SketchEntityHit.snapAt` 参照)。
-    const isCorner = hit !== null && hit.snapAt !== undefined && !hit.midpoint
-    const isMidpoint = hit !== null && hit.midpoint === true
-    const snap = classifySketchSnap(hit, planePoint.u, planePoint.v, isCorner, isMidpoint)
+    const isCorner = guide !== null ? guide.kind === 'point' : hit !== null && hit.snapAt !== undefined && !hit.midpoint
+    const isMidpoint = guide !== null ? guide.kind === 'midpoint' : hit !== null && hit.midpoint === true
+    const snap = classifySketchSnap(guide !== null ? { point: null } : hit, planePoint.u, planePoint.v, isCorner, isMidpoint)
     const snapScreenAt =
       snap === 'free' ? null : projectSketchPoint(activeSketchId, su, sv)
-    const tickAngleDeg =
-      isMidpoint && hit?.snapDirection ? tickAngleForDirection(sketch, su, sv, hit.snapDirection) : undefined
+    const direction = guide !== null ? guide.snapDirection : hit?.snapDirection
+    const tickAngleDeg = isMidpoint && direction ? tickAngleForDirection(sketch, su, sv, direction) : undefined
     sketchCursor.update({ x: offsetX, y: offsetY }, snap, snapScreenAt, tickAngleDeg)
   }
 
@@ -2098,6 +2158,7 @@ export function createViewport(container: HTMLElement): Viewport {
       sketchEntity: null,
       datum: null,
       datumAt: null,
+      sketchGuide: null,
     }
     // スケッチモード中は面を拾わない(線を引くつもりのクリックが選択の置き換えになる)。領域が手前・平面の点がその次。
     // ソリッドだけを受けるコマンド(投影)の起動中だけは、スケッチの中身の代わりにソリッドを指す(下の通常モードの分岐から
@@ -2109,10 +2170,12 @@ export function createViewport(container: HTMLElement): Viewport {
       // 図形は領域より手前(点・辺は領域の縁に乗っており、領域が勝つと端点を掴めない)。`point` は常に一緒に返し、
       // 描くコマンドが起動している間はそちらが優先(判断は `App.svelte`)。
       const datum = sketchDatumAt(offsetX, offsetY, plane)
+      const snap = sketchSnapAt(offsetX, offsetY)
       return {
         ...nothing,
         region,
-        sketchEntity: sketchEntityAt(offsetX, offsetY),
+        sketchEntity: snap.entity,
+        sketchGuide: snap.guide,
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
         datum: datum?.name ?? null,
         datumAt: datum?.at ?? null,
@@ -2243,19 +2306,25 @@ export function createViewport(container: HTMLElement): Viewport {
     let planePoint: { u: number; v: number } | null = null
     let sketchHit: SketchEntityHit | null = null
     let datumAt: readonly [number, number] | null = null
+    let guideHit: SketchGuideHit | null = null
     if (planeMoveListener !== null) {
       if (activeSketchId === null) {
-        planeMoveListener(null, null, null)
+        planeMoveListener(null, null, null, null)
       } else {
-        // `sketchEntityAt` / `sketchDatumAt` は `resolveHit` と同じ関数: 幽霊のスナップ先とクリック確定時のスナップ先が同じ入力を通る(App.svelte の不変条件)。
+        // `sketchSnapAt` / `sketchDatumAt` は `resolveHit` と同じ関数: 幽霊のスナップ先とクリック確定時のスナップ先が同じ入力を通る(App.svelte の不変条件)。
         planePoint = planePointAt(event.offsetX, event.offsetY)
-        sketchHit = sketchEntityAt(event.offsetX, event.offsetY)
-        datumAt = sketchHit === null ? (sketchDatumAt(event.offsetX, event.offsetY, planePoint)?.at ?? null) : null
-        planeMoveListener(planePoint, sketchHit, datumAt)
+        const snap = sketchSnapAt(event.offsetX, event.offsetY)
+        sketchHit = snap.entity
+        guideHit = snap.guide
+        datumAt =
+          sketchHit === null && guideHit === null
+            ? (sketchDatumAt(event.offsetX, event.offsetY, planePoint)?.at ?? null)
+            : null
+        planeMoveListener(planePoint, sketchHit, datumAt, guideHit)
         grid.followCursor(planePoint)
       }
     }
-    updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit, datumAt)
+    updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit, datumAt, guideHit)
   }
 
   /** ポインタがcanvasから出た。強調を残さない(戻ってくるまで指せるものは無い)。 */
@@ -2340,7 +2409,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const face = next?.hit ?? null
     const edge = next?.edge ?? null
     const vertex = next?.vertex ?? null
-    const region = next?.sketchEntity ? null : (next?.region ?? null)
+    const region = next?.sketchEntity || next?.sketchGuide ? null : (next?.region ?? null)
     const plane = next?.plane ?? null
 
     const nextFaceKey = face === null ? '' : refKey(face.bodyId, face.faceIndex)
@@ -2369,6 +2438,9 @@ export function createViewport(container: HTMLElement): Viewport {
       applySketchHoverMaterials()
       invalidate()
     }
+    hoverSketchGuide = next?.sketchGuide ?? null
+    const guideFrame = activeSketchId === null ? null : (sketchLayer.get(activeSketchId)?.frame ?? null)
+    if (guideLayer.setHover(hoverSketchGuide, guideFrame, resolution.applied())) invalidate()
     if (plane !== hoverPlane) {
       hoverPlane = plane
       applyBasePlaneHover()
@@ -2494,6 +2566,12 @@ export function createViewport(container: HTMLElement): Viewport {
       sketchCursorWanted = wanted
       sketchCursor.setActive(wanted)
       if (!wanted) sketchCursor.update(null, 'free', null)
+      pickChanged() // ボディ由来の吸着先は点を待っている間だけ当たる
+    },
+    setSketchGuides(guides: SketchGuides | null) {
+      guideLayer.set(guides)
+      pickChanged()
+      invalidate()
     },
     viewResolution() {
       return { ...resolution.applied() }
@@ -2562,6 +2640,7 @@ export function createViewport(container: HTMLElement): Viewport {
         plane: hoverPlane,
         sketchEntity: hoverSketchEntity,
         datum: hoverDatum,
+        sketchGuide: hoverSketchGuide,
         color: hoverColorNow(),
       }
     },
@@ -2613,6 +2692,7 @@ export function createViewport(container: HTMLElement): Viewport {
       features.dispose()
       occlusion.dispose()
       sketchLayer.dispose()
+      guideLayer.dispose()
       band.dispose()
       for (const bodyId of [...bodies.keys()]) clearBody(bodyId)
       grid.dispose()

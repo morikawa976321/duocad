@@ -318,6 +318,10 @@ class Session:
         """1Bodyの頂点の座標(`DocumentView.vertices`)。"""
         return self.view.vertices(body_id)
 
+    def sketch_guides(self, sketch_id: str) -> dict:
+        """スケッチの平面とボディの交わり(`DocumentView.sketch_guides`)。"""
+        return self.view.sketch_guides(sketch_id)
+
     def set_view_resolution(
         self,
         world_per_pixel: float,

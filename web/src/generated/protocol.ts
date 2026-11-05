@@ -67,6 +67,7 @@ export const COMMAND_CATEGORY = {
   preview: 'protocol',
   inspect_selection: 'protocol',
   get_vertices: 'protocol',
+  get_sketch_guides: 'protocol',
   set_view_resolution: 'protocol',
   optimize_conditions: 'protocol',
   optimize_resolution: 'protocol',
@@ -164,6 +165,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   preview: ['verb', 'args', 'preview_id'],
   inspect_selection: ['request_id'],
   get_vertices: ['body_id'],
+  get_sketch_guides: ['sketch_id', 'request_id'],
   set_view_resolution: ['world_per_pixel', 'size_hint', 'focus'],
   optimize_conditions: [],
   optimize_resolution: ['element_size_mm'],
@@ -259,6 +261,7 @@ export interface CommandArguments {
   preview: { verb: string; args: object; preview_id?: number }
   inspect_selection: { request_id: number }
   get_vertices: { body_id: string }
+  get_sketch_guides: { sketch_id: string; request_id: number }
   set_view_resolution: { world_per_pixel: number; size_hint?: number; focus?: object | null }
   optimize_conditions: Record<string, never>
   optimize_resolution: { element_size_mm?: number }

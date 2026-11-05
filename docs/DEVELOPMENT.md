@@ -311,7 +311,7 @@ TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致�
 | `duocad/kernel_worker.py` | 面の削除・オフセットを常駐の子プロセスで計算する口（形は BinTools の base64 で渡す） | **○** | ✗ |
 | `duocad/worker_process.py` | 重い計算を子プロセスで走らせる共通の部品（起動・1行1 JSON の線・時間の上限・取り消し・作り直し。干渉チェックと面の編集が使う） | ✗ | ✗ |
 | `duocad/kernel_split.py` | ボディを平面で割る幾何（`split_by_plane`）。kernel を読むだけの一方向 | **○** | ✗ |
-| `duocad/kernel_project.py` | ソリッドの辺・面・外形をスケッチ平面へ写す幾何（`edge_entities` / `face_edges` / `outline_entities`）。kernel を読むだけの一方向 | **○** | ✗ |
+| `duocad/kernel_project.py` | ソリッドの辺・面・外形をスケッチ平面へ写す幾何（`edge_entities` / `face_edges` / `outline_entities`）と、平面との交わり（スケッチの吸着先。`section_guides`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_interference.py` | 干渉チェックの幾何（2体 General Fuse の像の共有・最短距離・描画用の三角形）。単独で OCP を触る | **○** | ✗ |
 | `duocad/interference.py` | 干渉チェックの組み立て（対象の決め方・区分と隙間の判定・時間の上限と部分結果。verb ではない） | ✗ | ✗ |
 | `duocad/interference_mesh.py` | 干渉チェックのメッシュ経路（manifold3d。B-rep を 0.01 mm で三角形分割した近似） | ✗ | ✗ |

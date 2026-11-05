@@ -270,6 +270,11 @@ export interface PickEvent {
    * 点は辺より先に見る(点は必ず辺の上に乗っていて、後だと端点を掴めない)。
    */
   sketchEntity: SketchEntityHit | null
+  /**
+   * 当たったボディ由来の吸着先(スケッチモードで点を待っている間だけ)。`sketchEntity` とは同時に立たない
+   * (同じ段で近い方が勝つ。`viewport.ts` の `sketchSnapAt`)。図形と同じく、原点パーツへの吸い付き(`datumAt`)より上。
+   */
+  sketchGuide: SketchGuideHit | null
   /** スケッチモード中の、クリックした点のスケッチ平面上の座標。平面がカメラの裏なら null。 */
   point: { sketchId: string; u: number; v: number } | null
   /**
@@ -312,6 +317,31 @@ export interface SketchEntityHit {
   midpoint?: boolean
   /** `midpoint` が真のときだけ意味を持つ、その線分の向き(単位ベクトル・(u,v)空間)。 */
   snapDirection?: readonly [number, number]
+}
+
+/**
+ * スケッチの平面と交わる・接するボディの吸着先(コアの `get_sketch_guides` の返事)。座標はそのスケッチの (u,v)。
+ * `entities` は平面に乗る辺と面の交線、`points` は交わりの頂点(平面を貫く辺の通る点・平面に触れるだけの頂点を含む)。
+ */
+export interface SketchGuides {
+  sketchId: string
+  entities: ReadonlyArray<{ kind: string; params: Record<string, number> }>
+  points: ReadonlyArray<readonly [number, number]>
+}
+
+/**
+ * ボディ由来の吸着先への当たり(`sketchGuides.ts`)。図形ではないので参照を持たず、選択や軸・中心の指定には使わない。
+ * `snapAt` がそのまま置く座標(線に当たったときはカーソルをその線へ落とした点)。
+ */
+export interface SketchGuideHit {
+  sketchId: string
+  snapAt: readonly [number, number]
+  /** 点(頂点・中心・交点)/ 直線の中点 / 線の上。カーソル強調の形を決める。 */
+  kind: 'point' | 'midpoint' | 'line'
+  /** `kind === 'midpoint'` のときの線分の向き(単位ベクトル・(u,v)空間)。 */
+  snapDirection?: readonly [number, number]
+  /** 強調して描く線(`SketchGuides.entities` の添字)。線を持たない頂点は null。 */
+  entity: number | null
 }
 
 /**
@@ -423,17 +453,21 @@ export interface Viewport {
   onPick(listener: (event: PickEvent) => void): void
   /**
    * スケッチモード中、ポインタがスケッチ平面のどこを指しているか。モード外・平面の裏では null。
-   * 第2引数は同じ画素の `sketchEntityAt` の結果(クリック側の `addPoint` も同じスナップ関数を通る)。
+   * 第2・第4引数は同じ画素の `sketchSnapAt`、第3引数は `sketchDatumAt` の結果(図形とボディ由来の吸着先が当たっていれば null)。
+   * クリック側の `addPoint` も同じスナップ関数を通る。
    */
   onPlaneMove(
     listener: (
       point: { u: number; v: number } | null,
       sketchEntity: SketchEntityHit | null,
       datumAt: readonly [number, number] | null,
+      sketchGuide: SketchGuideHit | null,
     ) => void,
   ): void
-  /** スケッチの点入力待ちのカーソル強調を出すか(`CommandHost` の `onWantsPoint` から)。 */
+  /** スケッチの点入力待ちのカーソル強調を出すか(`CommandHost` の `onWantsPoint` から)。ボディ由来の吸着先もこの間だけ当たる。 */
   setSketchCursorWanted(wanted: boolean): void
+  /** ボディ由来の吸着先(null で捨てる)。編集中のスケッチのものだけが当たる。 */
+  setSketchGuides(guides: SketchGuides | null): void
   /**
    * 選択中の面を強調する(空配列で解除)。選択の色は人が選んでもAIが選んでも1つ(橙)。
    * 領域は3Dでは色分けしない(スケッチ側で強調する)。
@@ -559,6 +593,8 @@ export interface Viewport {
     sketchEntity: SketchEntityHit | null
     /** 当たった原点の7パーツ。 */
     datum: DatumName | null
+    /** 当たったボディ由来の吸着先。 */
+    sketchGuide: SketchGuideHit | null
     /** そのものに今実際に当たっている色(16進)。何も指していなければ null。 */
     color: number | null
   }

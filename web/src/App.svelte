@@ -115,6 +115,7 @@
   import { createMeasurement } from './measurement.svelte'
   import { createSelectionInfo } from './selectionInfo.svelte'
   import { createServerWait } from './serverWait.svelte'
+  import { createSketchGuideRequests } from './sketchGuideRequests.svelte'
   import WaitBar from './WaitBar.svelte'
   import {
     createViewport,
@@ -123,7 +124,7 @@
     type SketchEntityHit,
     type Viewport,
   } from './viewport'
-  import type { PickKind, ViewSnapshot } from './viewportTypes'
+  import type { PickKind, SketchGuideHit, ViewSnapshot } from './viewportTypes'
   import type { CommandRequest } from './generated/protocol'
 
   /**
@@ -491,6 +492,7 @@
     onVertices: handleVertices,
     onMeasure: handleMeasure,
     onSelectionInfo: (payload) => selectionInfo.onResult(payload),
+    onSketchGuides: (payload) => sketchGuides.onResult(payload),
     onInterference: (payload) => interference.onResult(payload),
     onFile: files.onFile,
     onAiStatus: ai.onStatus,
@@ -1081,6 +1083,18 @@
     documentVersion: () => `${model?.applied_count ?? 0}/${model?.redo_count ?? 0}`,
     connected: () => status === 'open',
     request: (requestId) => session.inspectSelection(requestId),
+  })
+  // ---------------------------------------------------------------- スケッチの吸着先(ボディ由来。verbではない)
+  const sketchGuides = createSketchGuideRequests({
+    sketchId: () => sketchId,
+    frame: (id) => sketches.find((item) => item.sketch_id === id)?.frame,
+    shapes: () =>
+      (model?.bodies ?? [])
+        .filter((body) => body.visible && body.kind !== 'mesh')
+        .map((body) => `${body.body_id}:${body.shape_revision}`),
+    connected: () => status === 'open',
+    request: (id, requestId) => session.getSketchGuides(id, requestId),
+    show: (guides) => viewport?.setSketchGuides(guides),
   })
   const selectionInfoNames = {
     body: (bodyId: string) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? bodyId,
@@ -2116,7 +2130,7 @@
     }
     if (event.point && host?.wantsPoint()) {
       // 当たっている図形へ落としてから渡す。幽霊(`hoverPoint`)も同じ関数を通るので、吸い付いて見える位置と確定結果はずれない。
-      const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity, event.datumAt)
+      const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity, event.sketchGuide, event.datumAt)
       if (host.addPoint(u, v)) return
     }
     // 図形の当たりが無いときだけ原点パーツ(図形はスケッチの中身なので先に取る)。
@@ -2234,22 +2248,24 @@
   }
 
   /**
-   * カーソルの生の (u,v) を、当たっているスケッチの図形か1mmグリッドへ落とす(スナップ)。
+   * カーソルの生の (u,v) を、当たっているスケッチの図形・ボディ由来の吸着先・原点パーツか1mmグリッドへ落とす(スナップ)。
    * クリック(`onSketchPick` の `addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を通すこと。段の規則は
    * `entityKinds.snapSketchPoint` の1か所(viewport のカーソル強調も通る)。1mm への丸めは点を待っているときだけ。
+   * `hit` と `guide` は同時に立たない(`viewport.ts` の `sketchSnapAt`)。
    */
   function snappedPlanePoint(
     u: number,
     v: number,
     hit: SketchEntityHit | null,
+    guide: SketchGuideHit | null,
     datumAt: readonly [number, number] | null = null,
   ): Point2 {
-    // 原点パーツへの吸い付きは図形より下(図形が当たっていれば図形が勝つ。`viewport.sketchDatumAt` が計算済み)。
-    if (hit === null && datumAt !== null) return [datumAt[0], datumAt[1]]
+    // 原点パーツへの吸い付きは図形・ボディ由来の吸着先より下(どちらかが当たっていればそちらが勝つ。`viewport.sketchDatumAt` が計算済み)。
+    if (hit === null && guide === null && datumAt !== null) return [datumAt[0], datumAt[1]]
     return snapSketchPoint(
       u,
       v,
-      hit,
+      guide ?? hit,
       (entityId) =>
         sketches
           .find((item) => item.sketch_id === hit?.sketchId)
@@ -2405,8 +2421,8 @@
     viewport.onBoxSelect(onBoxSelect)
     viewport.onEdgeChainWanted((ref) => requestEdgeChains(ref.bodyId, [ref.edgeIndex]))
     viewport.onPickDataWanted(requestPickData)
-    viewport.onPlaneMove((point, hit, datumAt) => {
-      hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit, datumAt)
+    viewport.onPlaneMove((point, hit, datumAt, guide) => {
+      hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit, guide, datumAt)
     })
     // 可変解像度: ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域をその粗さで測り直させる。
     // スケッチの折れ線はビューポート側が自分で折り直す。連打の抑制も向こうが持っている。

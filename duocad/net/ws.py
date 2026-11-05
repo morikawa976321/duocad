@@ -564,6 +564,14 @@ class Server:
             elif command == "get_vertices":
                 result = self.session.vertices(message["body_id"])
                 await _send(connection, {"type": "vertices", **result})
+            # スケッチの吸着先(`get_edges` と同じく要求した接続にだけ返す)。失敗は `error` に入れて返す(`inspect_selection` と同じ)
+            elif command == "get_sketch_guides":
+                guides: dict = {"request_id": message.get("request_id"), "sketch_id": message.get("sketch_id"), "error": None}
+                try:
+                    guides.update(self.session.sketch_guides(message["sketch_id"]))
+                except Exception as error:
+                    guides["error"] = f"{type(error).__name__}: {error}"
+                await _send(connection, {"type": "sketch_guides", **guides})
             # -------------------------------------------------- 測定(verbではない。配信しない)。`client_op` は画面が「確定が返ってきた」の突き合わせに使う
             elif command == "measure":
                 result = self.session.measure()

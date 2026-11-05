@@ -835,6 +835,35 @@ export function sketchIntersections(
   return points
 }
 
+/**
+ * 群 `a` の図形と群 `b` の図形の交点(群の中どうしは見ない)。`index` は `a` の中の添字。スケッチの平面と交わるボディの
+ * 吸着先(`sketchGuides.ts`)とスケッチの図形の交点に使う。求める組と解き方は `sketchIntersections` と同じ。
+ */
+export function intersectionsBetween(
+  a: ReadonlyArray<{ kind: string; params: Record<string, number> }>,
+  b: ReadonlyArray<{ kind: string; params: Record<string, number> }>,
+): Array<{ u: number; v: number; index: number }> {
+  const points: Array<{ u: number; v: number; index: number }> = []
+  const prepare = (item: { kind: string; params: Record<string, number> }) => {
+    const curves = entityIntersectables(item.kind, item.params)
+    return { curves, box: curvesBox(curves) }
+  }
+  const others = b.map(prepare).filter((item) => item.curves.length > 0)
+  a.forEach((item, index) => {
+    const { curves: curvesA, box: boxA } = prepare(item)
+    if (curvesA.length === 0) return
+    for (const { curves: curvesB, box: boxB } of others) {
+      if (!boxesTouch(boxA, boxB)) continue
+      for (const curveA of curvesA) {
+        for (const curveB of curvesB) {
+          for (const hit of curveIntersections(curveA, curveB)) points.push({ u: hit[0], v: hit[1], index })
+        }
+      }
+    }
+  })
+  return points
+}
+
 /** 区間の外接矩形 `[minU, minV, maxU, maxV]`(円・円弧は円全体、楕円は楕円全体)。 */
 function curvesBox(curves: readonly IntersectableCurve[]): [number, number, number, number] {
   let minU = Infinity
@@ -936,8 +965,8 @@ export function snapToSketchEntity(
  * 幽霊(`hoverPoint`)、カーソル強調(`viewport.ts` の `snappedSketchUv`)が**必ずこの1本を通る** ——
  * 別々に書くと、吸い付いて見える位置とクリックで確定する位置が別になる(いちばん困る形の不具合)。
  *
- * 1. `hit.snapAt` があれば**そのまま**(点マーカー・角・交点)。`hit.entityId` の図形へ射影すると、
- *    交点は連続的な最近傍点になるだけでめったに交点そのものへ戻らない(`SketchEntityHit.snapAt`)。
+ * 1. `hit.snapAt` があれば**そのまま**(点マーカー・角・交点と、ボディ由来の吸着先 `SketchGuideHit` の全部)。`hit.entityId` の
+ *    図形へ射影すると、交点は連続的な最近傍点になるだけでめったに交点そのものへ戻らない(`SketchEntityHit.snapAt`)。
  * 2. 当たった図形へ `snapToSketchEntity`(点マーカー上ならその点、線上なら射影)。
  * 3. 何にも当たっていなければ、`roundGrid` のときだけ (u,v) をそれぞれ 1mm へ丸める。
  *
@@ -952,7 +981,10 @@ export function snapToSketchEntity(
 export function snapSketchPoint(
   u: number,
   v: number,
-  hit: { entityId: string; point: string | null; snapAt?: readonly [number, number] } | null,
+  hit:
+    | { entityId: string; point: string | null; snapAt?: readonly [number, number] }
+    | { snapAt: readonly [number, number] }
+    | null,
   entityOf: (entityId: string) => { kind: string; params: Record<string, number> } | undefined,
   resolution: ViewResolution | undefined,
   roundGrid: boolean,
@@ -960,6 +992,7 @@ export function snapSketchPoint(
   const fallback = (): [number, number] => (roundGrid ? [Math.round(u), Math.round(v)] : [u, v])
   if (hit === null) return fallback()
   if (hit.snapAt) return [hit.snapAt[0], hit.snapAt[1]]
+  if (!('entityId' in hit)) return fallback()
   const entity = entityOf(hit.entityId)
   if (!entity) return fallback()
   return snapToSketchEntity(entity, hit.point, u, v, resolution)

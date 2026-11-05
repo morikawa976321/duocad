@@ -7,6 +7,8 @@
 - ボディ: 平面の法線方向から見た**影の境界**(外周と、向こうが透けて見える穴)。隠線処理(`HLRBRep_Algo`)で見える線・隠れた線・
   輪郭線を平面へ写し、平面をその線で割った面のうち、法線方向の直線がボディに当たるものを集めて和を取り、その境界を図形にする。
   止まり穴の底や段の線のように影の内側にある線は出さない。
+- 交わり(`section_guides`): 写すのではなく、平面とボディが実際に交わる・接する所(平面に乗る辺、平面を横切る面の交線、
+  その頂点)。スケッチで点を待つ間の吸着先で、図形としては足さない。
 
 返す図形は1回の呼び出しの中で重複を除く(箱の上面と下面を写すと同じ長方形になる)。
 """
@@ -17,7 +19,7 @@ from typing import Any, Iterable, List, Sequence, Tuple
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Section, BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_Transform
 from OCP.BRepLib import BRepLib
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
@@ -91,6 +93,35 @@ def outline_entities(plane: dict, shapes: Sequence[Any]) -> List[dict]:
     for face in _brep_planar._shape_faces(_brep_planar._unified(_brep_topology.compound(_brep_planar._union_faces(shadow)))):
         entities.extend(kernel_sketch.face_boundary_entities(plane, face))
     return _welded(_deduplicated(entities))
+
+
+def section_guides(plane: dict, shape: Any) -> dict:
+    """形 `shape` と平面 `plane` の交わりを、平面の (u, v) の図形と点にする(文書は変えない)。
+
+    図形は平面に乗る辺(平面に乗る面の縁を含む)と、平面を横切る面の交線。点は交わりの頂点で、平面を貫く辺の通る点と、
+    平面に触れるだけの頂点を含む。戻り値は `{"entities": [{"kind", "params"}, ...], "points": [[u, v], ...]}`(どちらも重複なし)。
+    端点を揃える `_welded` は通さない: 吸着先なので、OCCT が出した座標をそのまま使う。
+    """
+    ax3 = _brep_planar._ax3_from_plane(plane)
+    section = BRepAlgoAPI_Section(shape, gp_Pln(ax3), False)
+    section.Build()
+    if not section.IsDone():
+        raise ValueError("平面との交わりを求められない(BRepAlgoAPI_Section が失敗した)")
+    result = section.Shape()
+    edges = _brep_topology.indexed_map(result, TopAbs_ShapeEnum.TopAbs_EDGE)
+    entities: List[dict] = []
+    for index in range(1, edges.Extent() + 1):
+        entities.extend(kernel_sketch.edge_entities(ax3, TopoDS.Edge_s(edges.FindKey(index))))
+    vertices = _brep_topology.indexed_map(result, TopAbs_ShapeEnum.TopAbs_VERTEX)
+    points: dict = {}
+    for index in range(1, vertices.Extent() + 1):
+        point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertices.FindKey(index)))
+        u, v = _brep_planar._to_uv(ax3, point.X(), point.Y(), point.Z())
+        points.setdefault((round(u, _DEDUP_DIGITS) + 0.0, round(v, _DEDUP_DIGITS) + 0.0), [u, v])
+    return {
+        "entities": [{"kind": entity["kind"], "params": dict(entity["params"])} for entity in _deduplicated(entities)],
+        "points": list(points.values()),
+    }
 
 
 # --------------------------------------------------------------------------------------

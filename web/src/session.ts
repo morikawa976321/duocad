@@ -525,6 +525,19 @@ export interface SelectionInfoPayload {
   error: string | null
 }
 
+/**
+ * `get_sketch_guides` の返事(要求した接続にだけ届く)。スケッチの平面と見えているボディが交わる・接する所を、その
+ * スケッチの (u,v) の図形と点で持つ。`errors` は抜かしたボディ、`error` は返事全体の失敗(どちらも札は出さない)。
+ */
+export interface SketchGuidesPayload {
+  request_id: number | null
+  sketch_id: string
+  entities: Array<{ kind: string; params: Record<string, number> }>
+  points: Array<[number, number]>
+  errors: string[]
+  error: string | null
+}
+
 /** `measure` の返事(要求した接続にだけ届く。状態は変わっていない)。 */
 export interface MeasurePayload {
   client_op: number | null
@@ -942,6 +955,8 @@ export interface SessionHooks {
   onMeasure(payload: MeasurePayload): void
   /** 選択情報の表示の返事(状態は変わっていない)。要求した接続にだけ届く。 */
   onSelectionInfo(payload: SelectionInfoPayload): void
+  /** スケッチの吸着先の返事(状態は変わっていない)。要求した接続にだけ届く。 */
+  onSketchGuides(payload: SketchGuidesPayload): void
   /** 干渉チェックの結果(状態は変わっていない)。要求した接続にだけ届く。古い返事かどうかは受け手が `client_op` と版で決める。 */
   onInterference(payload: InterferencePayload): void
   /** ファイルを書いた(状態は変わっていない)。 */
@@ -1040,6 +1055,8 @@ export interface Session {
   getVertices(bodyId: string): void
   /** 選択がちょうど1項目ならその寸法を取りに行く(応答は `onSelectionInfo`)。状態配信ではない。 */
   inspectSelection(requestId: number): void
+  /** スケッチの平面とボディの交わり(点を待つ間の吸着先)を取りに行く(応答は `onSketchGuides`)。状態配信ではない。 */
+  getSketchGuides(sketchId: string, requestId: number): void
   /**
    * 干渉チェックを頼む(応答は `onInterference`。数秒〜2分かかりうる。待ちバーは出さない)。対象はコアの選択と可視性から決まる。
    * `clearance` は隙間の要求[mm](0 なら隙間検査なし)。
@@ -1302,6 +1319,11 @@ export function createSession(hooks: SessionHooks): Session {
       // ---------------------------------------------------------------- 選択情報
       request_id?: number | null
       item?: MeasureItem | null
+      // ---------------------------------------------------------------- スケッチの吸着先
+      sketch_id?: string
+      entities?: SketchGuidesPayload['entities']
+      points?: SketchGuidesPayload['points']
+      errors?: string[]
       // ---------------------------------------------------------------- 待ちバー
       ack_id?: number
     }
@@ -1371,6 +1393,15 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onSelectionInfo({
         request_id: message.request_id ?? null,
         item: message.item ?? null,
+        error: message.error ?? null,
+      })
+    } else if (message.type === 'sketch_guides') {
+      hooks.onSketchGuides({
+        request_id: message.request_id ?? null,
+        sketch_id: message.sketch_id ?? '',
+        entities: message.entities ?? [],
+        points: message.points ?? [],
+        errors: message.errors ?? [],
         error: message.error ?? null,
       })
     } else if (message.type === 'file') {
@@ -1574,6 +1605,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     inspectSelection(requestId) {
       send({ cmd: 'inspect_selection', request_id: requestId })
+    },
+    getSketchGuides(sketchId, requestId) {
+      send({ cmd: 'get_sketch_guides', sketch_id: sketchId, request_id: requestId })
     },
     checkInterference(clearance, clientOp) {
       send({ cmd: 'check_interference', clearance, client_op: clientOp })

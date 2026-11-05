@@ -39,6 +39,7 @@ EVALUATORS = [
     "eval_session_sender.mjs",
     "eval_shared_args_controller.mjs",
     "eval_sketch_geometry.mjs",
+    "eval_sketch_guides.mjs",
     "eval_sketch_intersections.mjs",
     "eval_sketch_layer.mjs",
     "eval_sketch_snap.mjs",
