@@ -2,7 +2,7 @@
 
 選択の同一性・3D ビューポート(射影・ビューキューブ・FOV・分割モジュール)・画面ピック・最適化デバッグビューの、ソースから読めない不変条件・依存禁止・罠。
 **いまの挙動の正はコードとテスト**。設計判断の本体は [../VIEWPORT.md](../VIEWPORT.md) / [../UI.md](../UI.md)。
-実機 smoke のうち現在 `web/scripts/` に残るのは `smoke.mjs` `smoke-sketch.mjs` `smoke-resolution.mjs` `smoke-mirror.mjs` `smoke-face-culling.mjs` `smoke-fillet-pick.mjs` と `tests/eval_*.mjs`。
+実機 smoke として残っている本と、何を smoke に書くかは [../SMOKE_TESTING.md](../SMOKE_TESTING.md)。TS の純関数は `tests/eval_*.mjs`。
 
 ---
 

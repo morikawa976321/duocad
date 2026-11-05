@@ -222,7 +222,6 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **taper 0 は今までの `MakePrism` の経路を通る**(形も面の数も変わらない)。ログの args には 0 でないときだけ `taper` を記録し、
   再生は `args.get("taper", 0.0)`(テーパーの無い古いログはそのまま再生される。形式の版は上げていない)。
   画面(`#extrude-taper`、既定 0)も 0 のときは送らない。
-- 実機検査は `web/scripts/smoke-taper.mjs`(欄の既定 0 と、打った角度で角錐台の体積になること)。
 - 面の押し出しの `after_face_indices` は、テーパーではふたの重心が底の重心の平行移動にならない(L字など)ので、作った柱のふたの重心で探す。
 
 ### 踏んだ罠
@@ -236,7 +235,7 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **角度は度で `0 < |angle| <= 360`、負は逆向き**(押し出しの距離の符号と同じ扱い)。正は軸の向き(線分の始点→終点)まわりの右ねじ。`symmetric` は両側へ半分ずつ。360° は角度なしの `BRepPrimAPI_MakeRevol` で作る。
 - **軸が領域を横切るのは ValueError**(`_require_one_side_of_axis`)。軸の両側に半平面を置いて共通部分の面積で決める(辺が軸上にあるのは面積0なので通る)。境界を折れ線で拾う判定は、軸をわずかにまたぐ円弧を取りこぼす。
 - **360° の回転体のシーム(継ぎ目の辺)をフィレットに渡すと、OCCT が「適した辺が無い」で断り、verb は例外で何も変えない**(`tests/test_revolve.py` が固定)。ピックからは外していない。
-- **画面(`REVOLVE`、スケッチモード)は 軸の3択(x軸 / y軸 / 線分を選ぶ)+ 線分のピック(`axis_line`。共有選択に入れない)+ 角度(既定 360)+ 種別。** 「線分を選ぶ」は `sends: null` でサーバへ行かず、`build` が `axis_line` を送る(`MIRROR_BODY` の「面を選ぶ」と同じ形)。**`sends: null` の選択肢は `impliedBy` に配信から自分を戻す引数名を持つ**(「線分を選ぶ」は `axis_line`、「面を選ぶ」は `plane_face`。`sharedArgsController.transitionSharedArgs` が使い、`tests/test_ui_command_wiring.py` が全選択肢に課す)。無いと再読み込みで選択肢が戻らず、ピックの欄が隠れたまま確定できない。**両側(`symmetric`)は画面から送らない**(選択肢は既定値を持てず、毎回1クリック増えるため)。プレビューは押し出しと同じサーバの投機実行。実機検査は `web/scripts/smoke-revolve.mjs`。
+- **画面(`REVOLVE`、スケッチモード)は 軸の3択(x軸 / y軸 / 線分を選ぶ)+ 線分のピック(`axis_line`。共有選択に入れない)+ 角度(既定 360)+ 種別。** 「線分を選ぶ」は `sends: null` でサーバへ行かず、`build` が `axis_line` を送る(`MIRROR_BODY` の「面を選ぶ」と同じ形)。**`sends: null` の選択肢は `impliedBy` に配信から自分を戻す引数名を持つ**(「線分を選ぶ」は `axis_line`、「面を選ぶ」は `plane_face`。`sharedArgsController.transitionSharedArgs` が使い、`tests/test_ui_command_wiring.py` が全選択肢に課す)。無いと再読み込みで選択肢が戻らず、ピックの欄が隠れたまま確定できない。**両側(`symmetric`)は画面から送らない**(選択肢は既定値を持てず、毎回1クリック増えるため)。プレビューは押し出しと同じサーバの投機実行。
 
 ## ロフト(loft)
 
@@ -248,6 +247,6 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **断面は選択の領域を選んだ順**(`selection.require_selected` は追加順を保つ)。1断面1領域、隣り合う断面は別の平面。**穴のある領域は拒む**(外周を join、内側の領域を cut で2回ロフトする。本人判断 2026-10-17)。断面の平面が同じ・点が隣の断面の平面上は ValueError。
 - **点への収束は `start_point` / `end_point`(スケッチの図形の点 `{"sketch","entity","point"}`)。** ログには参照のまま載せ、再生で引き直す。断面1つ+点1つでもよい。**画面では回転体の軸と同じく、共有選択に入れない直接ピック**(`PickArgSpec`、target `sketchPoint`、任意。「指す」を押している間だけスケッチの点も当たる)。指せるのは表示中のスケッチの図形の点すべて(点の図形・線分の端・円や円弧の中心・長方形の基準の角)で、画面側では絞らない(断面と同じ平面の点はコアが断る。規則を2か所に持たない)。指した点に印は出さず、プレビューの尖った形と欄の表示で見せる(本人判断 2026-10-19、5件とも AI の推奨どおり)。
 - **通常モードのクリックは、コマンドがスケッチの点・図形を直接待っていればそれを欄へ渡す**(`App.svelte` の `onPick`。ロフト専用にしない: 通常モードのコマンドに `sketchPoint` / `sketchEntity` の pick を書いても満たせない空白を閉じる。読み方はスケッチモードの `onSketchPick` と同じで、点は当たった点、図形は点を落として図形1つ)。
-- **画面(`LOFT`)は通常モード(`SOLID_FEATURE_COMMANDS`)に置く。** 起動中は全スケッチの領域だけを指せ、収束点の「指す」を押している間だけスケッチの点も当たる(`pickKinds`。スケッチ編集中は開いているスケッチの領域しか当たらないので、そちらには置かない)。選択は断面1つ以上(`build` が「断面2つか、断面1つと収束点」を見る)・種別・収束点2つ(`#loft-start-point` / `#loft-end-point`)・始点のずらし(文字欄 `#loft-shifts`、カンマ区切り、空欄で省略。`TextArgSpec.optional`。断面と対の値なので**次の起動へ持ち越さない** `remember: false` —— 持ち越すと断面の数と合わず確定できない)。**作業空間へは整数の配列で出す**(`TextArgSpec.toShared`。打った文字列のまま出すと、サーバの型(array)違いで `set_command_args` が拒む。sol レビューで発覚)。実機検査は `web/scripts/smoke-loft.mjs`。
+- **画面(`LOFT`)は通常モード(`SOLID_FEATURE_COMMANDS`)に置く。** 起動中は全スケッチの領域だけを指せ、収束点の「指す」を押している間だけスケッチの点も当たる(`pickKinds`。スケッチ編集中は開いているスケッチの領域しか当たらないので、そちらには置かない)。選択は断面1つ以上(`build` が「断面2つか、断面1つと収束点」を見る)・種別・収束点2つ(`#loft-start-point` / `#loft-end-point`)・始点のずらし(文字欄 `#loft-shifts`、カンマ区切り、空欄で省略。`TextArgSpec.optional`。断面と対の値なので**次の起動へ持ち越さない** `remember: false` —— 持ち越すと断面の数と合わず確定できない)。**作業空間へは整数の配列で出す**(`TextArgSpec.toShared`。打った文字列のまま出すと、サーバの型(array)違いで `set_command_args` が拒む。sol レビューで発覚)。
 - 2断面の間は直線的につながる(`ruled=True` と同体積)。傾いた平面でも曲がった継手にはならない —— 曲げたいなら間に断面を足す。端の接線・案内線(レール)は持たない(`ThruSections` に無い機能)。
 

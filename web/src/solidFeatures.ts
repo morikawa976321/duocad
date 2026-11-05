@@ -89,7 +89,6 @@ export interface SolidFeatures {
   forEachVertex(visit: (ref: VertexRef, point: THREE.Vector3) => void): void
   /** 辺の折れ線の道のりの `fraction` の位置(0=始点 1=終点)。無ければ null。 */
   edgePoint(ref: EdgeRef, fraction: number): THREE.Vector3 | null
-  vertexPoint(ref: VertexRef): THREE.Vector3 | null
   /** その辺・頂点を今描いている色(16進。描いていなければ null)。実機検査フック専用。 */
   drawnColor(ref: EdgeRef | VertexRef): number | null
   dispose(): void
@@ -456,9 +455,6 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
       const a = new THREE.Vector3(edge.points[first * 3], edge.points[first * 3 + 1], edge.points[first * 3 + 2])
       const b = new THREE.Vector3(edge.points[first * 3 + 3], edge.points[first * 3 + 4], edge.points[first * 3 + 5])
       return a.lerp(b, t)
-    },
-    vertexPoint(ref) {
-      return vertexPoint(ref)?.clone() ?? null
     },
     drawnColor(ref) {
       const drawn =

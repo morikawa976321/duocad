@@ -95,5 +95,5 @@
 - 追従が動くのは `sketchGridFrame !== null`(`activeSketchId !== null`)のときだけ。`basePlanesOn`(3平面選択中)・スケッチ外通常表示は触らない。`planeGrids[0]` を直接書き換えているのは、アクティブスケッチ中 `desiredGridPlanes()` が常に単一平面を返す前提の上で、その前提は `App.svelte` の `wantsBasePlanes = sketchId === null && wantedPlane` が保証する(変えるなら「常に index 0」の仮定も見直す)。
 - **`sketchContentUvBox === null` のときは、基準平面スケッチか面スケッチかを問わず `followCursor` は何もしない。** 基準平面の空スケッチは原点中心 ±100mm(`BASE_EXTENT`)固定、面の空スケッチは `faceUvBoxOnly` の null 契約(無制限描画 `setBounds(null)`)。空のスケッチ中にカーソルを動かしても描画範囲が変わらない。
 - 依存禁止: 面スケッチの `sketchContentUvBox` キャッシュは、**ボディ形状だけが `show()`/`update()` 経由で変わったケースでは再計算されない**(既存の非対称。直すなら `refreshGridSketchFrame`(`viewport.ts`)を `gridPlanes.ts` の `rescale` の後からも呼ぶ形)。追従は**描画範囲(`boundingSquare`)側だけ**で、ピック範囲(`gridScale.ts` の `extentFor`/`BASE_EXTENT`=当たり判定・near/far クリップ用の別の値)には触れない。
-- 罠: `viewport.ts` の `projectPoint` は z クリップしかしない(x/y が画面外でも値を返す)。smoke で「その世界座標が画面に映るまでズーム」を書くときは `.viewport` の rect と自前で突き合わせる。`web/dist` はビルド成果物(`npm run build` を挟み忘れると偽陰性。`duocad.mcp_server` が配信するのは `vite dev` でなく `web/dist`)。
+- 罠: `web/dist` はビルド成果物(`npm run build` を挟み忘れると偽陰性。`duocad.mcp_server` が配信するのは `vite dev` でなく `web/dist`)。
 

@@ -14,8 +14,7 @@ import { waitFrames, withoutBrowserPanel } from './browser.mjs'
 
 /**
  * `window.__duocad[kind](...args)` の画面座標(ページ絶対)。射影できなければ null。
- * `kind` は `projectSketchPoint` / `projectFace` / `projectEdge` / `projectRegion` /
- * `projectBasePlane` / `projectPoint`。
+ * `kind` は `projectSketchPoint` / `projectFace` / `projectEdge` / `projectBasePlane`。
  */
 export async function screenOf(page, kind, ...args) {
   return page.evaluate(

@@ -61,8 +61,7 @@ import {
 import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
   BOX_SEEN_STEP_PX, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
-  HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, ORIGIN_GIZMO_AXIS_GAP_MM, ORIGIN_GIZMO_AXIS_LENGTH_MM,
-  ORIGIN_GIZMO_PLANE_GAP_MM, ORIGIN_GIZMO_PLANE_REACH_MM, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS,
+  HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS,
   EMPTY_SKETCH_HALF_WIDTH, SKETCH_FIT_MARGIN,
   SKETCH_HANDLE_PIXELS, VERTEX_PIXELS, WORLD_UP, isSelectableFov, lighten, type BodyMeshes,
 } from './viewportConstants'
@@ -753,11 +752,6 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
-  function projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null {
-    const { width, height } = size()
-    return projectRaw(frameVector(point), width, height)
-  }
-
   /** 「持ち主+添字」の1本の鍵(面・辺・領域で共通)。 */
   function refKey(owner: string, index: number): string {
     return `${owner}\u0000${index}`
@@ -1149,43 +1143,6 @@ export function createViewport(container: HTMLElement): Viewport {
       if (hit && hit.bodyId === bodyId && hit.edgeIndex === edgeIndex) return screen
     }
     return null
-  }
-
-  /** 原点パーツを狙う画面座標(実際にその画素でそれが取れるときだけ)。軸は中ほど、平面は板の中ほどから順に試す(手前の別の板に重なる所は取れない)。 */
-  function projectDatum(name: DatumName): { x: number; y: number } | null {
-    const points: THREE.Vector3[] = []
-    if (name === 'origin') points.push(new THREE.Vector3())
-    else if (name === 'X' || name === 'Y' || name === 'Z') {
-      const direction = new THREE.Vector3(...DATUM_AXIS_DIRECTIONS[name])
-      for (const fraction of [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9, 0.03]) {
-        const reach = ORIGIN_GIZMO_AXIS_GAP_MM + fraction * (ORIGIN_GIZMO_AXIS_LENGTH_MM - ORIGIN_GIZMO_AXIS_GAP_MM)
-        points.push(direction.clone().multiplyScalar(reach))
-      }
-    } else {
-      const spec = BASE_PLANES.find((item) => item.name === name)!
-      const near = ORIGIN_GIZMO_PLANE_GAP_MM
-      const span = ORIGIN_GIZMO_PLANE_REACH_MM - near
-      const steps = [0.5, 0.3, 0.7, 0.1, 0.9]
-      for (const [su, sv] of steps.flatMap((a) => steps.map((b) => [a, b]))) {
-        const onPlane = new THREE.Vector3(...spec.u).multiplyScalar(near + su * span)
-        points.push(onPlane.addScaledVector(new THREE.Vector3(...spec.v), near + sv * span))
-      }
-    }
-    for (const point of points) {
-      const screen = toScreen(point)
-      if (screen !== null && resolveHit(screen.x, screen.y).datum === name) return screen
-    }
-    return null
-  }
-
-  /** 頂点の画面座標(実際にその画素でその頂点が取れるときだけ)。 */
-  function projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null {
-    const point = features.vertexPoint({ bodyId, vertexIndex })
-    if (point === null) return null
-    const screen = toScreen(point)
-    if (screen === null) return null
-    const hit = resolveHit(screen.x, screen.y).vertex
-    return hit && hit.bodyId === bodyId && hit.vertexIndex === vertexIndex ? screen : null
   }
 
   // ------------------------------------------------------------------ C: スケッチ
@@ -1844,48 +1801,6 @@ export function createViewport(container: HTMLElement): Viewport {
     const p2 = projectRaw(toWorld(sketch.frame, u + direction[0], v + direction[1]), width, height)
     if (p1 === null || p2 === null) return undefined
     return (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI
-  }
-
-  function projectRegion(sketchId: string, index: number): { x: number; y: number } | null {
-    const target = sketchLayer.get(sketchId)
-    const mesh = target?.regionMeshes.find((candidate) => candidate.userData.regionIndex === index)
-    if (!target || !mesh) return null
-    const position = mesh.geometry.getAttribute('position')
-    const triangles = mesh.geometry.getIndex()
-    if (!position || !triangles) return null
-    // 面の `project` と同じ流儀: 三角形の内側の点を狙い、実際にその領域へ当たる点を返す。
-    // 1つの三角形につき4点試す(重心 + 各頂点へ寄せた3点): 重心1点だと、スケッチモードで点・辺が手前で
-    // 拾われる画素に当たったとき候補が尽きる(ベジエの制御点は領域の内側にも立ち、細長い三角形の
-    // 重心がその近くに来る)。
-    const weights: ReadonlyArray<readonly [number, number, number]> = [
-      [1 / 3, 1 / 3, 1 / 3],
-      [0.5, 0.25, 0.25],
-      [0.25, 0.5, 0.25],
-      [0.25, 0.25, 0.5],
-    ]
-    const point = new THREE.Vector3()
-    const corner = new THREE.Vector3()
-    for (let sample = 0; sample < triangles.count / 3 * weights.length; sample += 1) {
-      const triangle = Math.floor(sample / weights.length)
-      const weight = weights[sample % weights.length]
-      point.set(0, 0, 0)
-      for (let vertex = 0; vertex < 3; vertex += 1) {
-        const at = triangles.getX(triangle * 3 + vertex)
-        corner.set(position.getX(at), position.getY(at), position.getZ(at))
-        point.addScaledVector(corner, weight[vertex])
-      }
-      const screen = toScreen(point.clone())
-      if (screen === null) continue
-      // 判定はクリックと同じ `resolveHit`。スケッチも一致を見る(通常モードは全スケッチの領域が対象で、添字だけだと
-      // 別スケッチの同じ添字を当たりと読む)
-      const resolved = resolveHit(screen.x, screen.y)
-      const hit = resolved.region
-      if (!hit || hit.sketchId !== sketchId || hit.index !== index) continue
-      // スケッチの図形が勝つ画素は返さない(スケッチモードでは点・辺が領域より手前で拾われ、`project*` の約束が破れる)
-      if (resolved.sketchEntity !== null) continue
-      return screen
-    }
-    return null
   }
 
   // ------------------------------------------------------------------ ウィンドウ選択(左ドラッグ)
@@ -2697,12 +2612,9 @@ export function createViewport(container: HTMLElement): Viewport {
         plane: hoverPlane,
         sketchEntity: hoverSketchEntity,
         datum: hoverDatum,
-        sketchGuide: hoverSketchGuide,
         color: hoverColorNow(),
       }
     },
-    projectVertex,
-    projectDatum,
     showPreview: ghostLayer.showPreview,
     clearPreview: ghostLayer.clearPreview,
     showBodyGhosts: ghostLayer.showBodyGhosts,
@@ -2724,10 +2636,8 @@ export function createViewport(container: HTMLElement): Viewport {
     viewSnapshot,
     fitsView,
     collectInBoxAs,
-    projectPoint,
     projectSketchPoint,
     projectBasePlane,
-    projectRegion,
     captureThumbnail() {
       // `object.visible` は見ない: 文書で非表示の立体は `bodies` にキーごと無く、`visible=false` はプレビュー中の
       // 一時的な非表示(`setBodyVisible`)。見るとプレビュー中に撮った絵から立体が欠ける。

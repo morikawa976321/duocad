@@ -604,26 +604,14 @@ export interface Viewport {
     sketchEntity: SketchEntityHit | null
     /** 当たった原点の7パーツ。 */
     datum: DatumName | null
-    /** 当たったボディ由来の吸着先。 */
-    sketchGuide: SketchGuideHit | null
     /** そのものに今実際に当たっている色(16進)。何も指していなければ null。 */
     color: number | null
   }
-  /**
-   * 頂点の画面座標(無理なら null)。実機検査が本物のクリックで頂点を選ぶための穴で、返す前にクリックと同じ判定
-   * (`resolveHit`)でその頂点が取れることを確かめる。そのボディの頂点が届いていなければ null。
-   */
-  projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null
   /**
    * 辺の上の点の画面座標(無理なら null)。実機検査が本物のクリックで辺を選ぶための穴で、返す前にクリックと同じ判定
    * (`resolveHit`)でこの辺が取れることを確かめる。そのボディの辺が届いていなければ null。
    */
   projectEdge(bodyId: string, edgeIndex: number): { x: number; y: number } | null
-  /**
-   * 原点パーツを狙う画面座標(無理なら null)。実機検査が本物のクリックで原点パーツを選ぶための穴で、返す前にクリックと
-   * 同じ判定(`resolveHit`)でそれが取れることを確かめる。
-   */
-  projectDatum(name: DatumName): { x: number; y: number } | null
   /**
    * 確定前の形(プレビュー)を重ねる。本物のBodyは隠し、幽霊を代わりに描く。
    * 幽霊はピックの対象にしない。本物の状態が届いたら(`update`)プレビューは無効になり自動的に消える。
@@ -738,12 +726,6 @@ export interface Viewport {
     near: number
     far: number
   }
-  /**
-   * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
-   * カメラの前後のクリップ範囲の外なら null。
-   * `project*` と違い遮蔽は見ず、投影そのものを問う(「+Zが画面で上か」は遮蔽と無関係に決まる)。
-   */
-  projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null
   /** スケッチ平面上の (u,v) の画面座標。実機検査用。 */
   projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
   /**
@@ -752,11 +734,6 @@ export interface Viewport {
    * `showBasePlanes(true)` の間しか返らない。
    */
   projectBasePlane(name: BasePlaneName): { x: number; y: number } | null
-  /**
-   * 領域の画面座標(実機検査用)。今その領域が指せる状態でなければ null
-   * (返す前にクリックと同じ判定 `resolveHit` でその領域が取れることを確かめる)。
-   */
-  projectRegion(sketchId: string, index: number): { x: number; y: number } | null
   /**
    * 見えている立体だけを撮ったファイル一覧のサムネイル(PNGのbase64。`thumbnail.ts`)。
    * 見えている立体が無ければ空文字。

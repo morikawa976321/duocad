@@ -174,7 +174,6 @@
   let status = $state<ConnectionStatus>('connecting')
   let model = $state<ServerState | null>(null)
   let messages = $state<string[]>([])
-  let lastApplied = $state<Applied | null>(null)
 
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
   let pendingOp = $state<number | null>(null)
@@ -942,8 +941,7 @@
       return
     }
     if (applied && applied.change === 'visibility') {
-      // 可視性もverbではない(操作ログに載らない)ので `lastApplied` を動かさない。表示切り替えは
-      // `pendingOp` を立てないので、自分の操作かは `myClientOps` が持つ。
+      // 表示切り替えは `pendingOp` を立てないので、自分の操作かは `myClientOps` が持つ。
       releasePending(applied.client_op)
       // 集合 verb の起動時に表示へ戻したボディが全部戻ったら、既存の割り当てを並べる(`onCommandStart`)。
       const preset = pendingOptimizePreset
@@ -972,7 +970,6 @@
         note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
       }
       releasePending(applied.client_op)
-      lastApplied = applied
       files.refresh()
       return
     }
@@ -1001,7 +998,6 @@
         // 残すと次の確定が前の面の大きさ・向きまで書き換える。起動時に空にするだけでは同じverbの連続使用が漏れる。
         if (OPTIMIZE_EMPTY_START_VERBS.has(applied.verb)) presetSelection([])
       }
-      lastApplied = applied
     }
   }
 
@@ -2672,7 +2668,6 @@
     model: () => model,
     partBodies: () => partBodies,
     previewing: () => previewing,
-    lastApplied: () => lastApplied,
     messages: () => messages,
     errorLog,
     stateEpoch: () => stateEpoch,
