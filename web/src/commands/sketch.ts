@@ -35,7 +35,10 @@ function typed(values: ArgValues, name: string): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-/** 線分。寸法は長さ・角度(度・反時計回り・スケッチ平面のX軸から。`add_arc` と同じ規約)。サーバへ送るのは `p0`/`p1` だけ。 */
+/**
+ * 線分。寸法は長さ・角度(度・反時計回り・スケッチ平面のX軸から。`add_arc` と同じ規約)。サーバへ送るのは `p0`/`p1` だけ。
+ * 長さと角度を両方打てば終点は待たない(楕円と同じ。始点のクリックで確定する)。
+ */
 export const ADD_LINE: CommandDef<'add_line'> = {
   id: 'add_line',
   label: '線分',
@@ -43,7 +46,13 @@ export const ADD_LINE: CommandDef<'add_line'> = {
   preview: 'local',
   args: [
     { kind: 'point', name: 'p0', label: '始点' },
-    { kind: 'point', name: 'p1', label: '終点' },
+    {
+      kind: 'point',
+      name: 'p1',
+      label: '終点',
+      typedInstead: '長さと角度',
+      when: (values) => typed(values, 'length') === undefined || typed(values, 'angle_deg') === undefined,
+    },
     {
       kind: 'number',
       name: 'length',
@@ -63,7 +72,7 @@ export const ADD_LINE: CommandDef<'add_line'> = {
       kind: 'number',
       name: 'angle_deg',
       label: '角度',
-      unit: '度',
+      unit: '°',
       inputId: 'sketch-line-angle',
       reject: () => null,
       fromPoints: true,
@@ -77,8 +86,11 @@ export const ADD_LINE: CommandDef<'add_line'> = {
   build(values) {
     const p0 = values.p0 as Point2 | undefined
     const p1 = values.p1 as Point2 | undefined
-    if (!p0 || !p1) return { ok: false, reason: '2点が要る' }
-    const line = lineFromPoints(p0, p1, typed(values, 'length'), typed(values, 'angle_deg'))
+    const length = typed(values, 'length')
+    const angle = typed(values, 'angle_deg')
+    if (!p0 || (!p1 && (length === undefined || angle === undefined))) return { ok: false, reason: '2点が要る' }
+    // 長さと角度が両方あれば終点の位置は使われない。
+    const line = lineFromPoints(p0, p1 ?? p0, length, angle)
     if (line === null) return { ok: false, reason: '長さは0より大きい値' }
     return { ok: true, args: { p0: line.p0, p1: line.p1 } }
   },
@@ -98,6 +110,7 @@ export const ADD_POINT: CommandDef<'add_point'> = {
   },
 }
 
+/** 円。直径を打てば円周の点は待たない(中心のクリックで確定する)。 */
 export const ADD_CIRCLE: CommandDef<'add_circle'> = {
   id: 'add_circle',
   label: '円',
@@ -105,7 +118,13 @@ export const ADD_CIRCLE: CommandDef<'add_circle'> = {
   preview: 'local',
   args: [
     { kind: 'point', name: 'center', label: '中心' },
-    { kind: 'point', name: 'rim', label: '円周の1点' },
+    {
+      kind: 'point',
+      name: 'rim',
+      label: '円周の1点',
+      typedInstead: '直径',
+      when: (values) => typed(values, 'diameter') === undefined,
+    },
     {
       kind: 'number',
       name: 'diameter',
@@ -119,8 +138,10 @@ export const ADD_CIRCLE: CommandDef<'add_circle'> = {
   build(values) {
     const center = values.center as Point2 | undefined
     const rim = values.rim as Point2 | undefined
-    if (!center || !rim) return { ok: false, reason: '中心と円周の点が要る' }
-    const circle = circleFromPoints(center, rim, typed(values, 'diameter'))
+    const diameter = typed(values, 'diameter')
+    if (!center || (!rim && diameter === undefined)) return { ok: false, reason: '中心と円周の点が要る' }
+    // 直径があれば円周の点は使われない。
+    const circle = circleFromPoints(center, rim ?? center, diameter)
     if (circle === null) return { ok: false, reason: '直径は0より大きい値' }
     return { ok: true, args: { center: circle.center, diameter: circle.diameter } }
   },
@@ -141,12 +162,14 @@ export const ADD_ELLIPSE: CommandDef<'add_ellipse'> = {
       kind: 'point',
       name: 'axis_end',
       label: '1本目の軸の端',
+      typedInstead: '横の直径と角度',
       when: (values) => typed(values, 'width') === undefined || typed(values, 'angle') === undefined,
     },
     {
       kind: 'point',
       name: 'via',
       label: '2本目の軸の長さ',
+      typedInstead: '縦の直径',
       when: (values) => typed(values, 'height') === undefined,
     },
     {
@@ -171,7 +194,7 @@ export const ADD_ELLIPSE: CommandDef<'add_ellipse'> = {
       kind: 'number',
       name: 'angle',
       label: '角度',
-      unit: '度',
+      unit: '°',
       inputId: 'sketch-ellipse-angle',
       reject: () => null,
       fromPoints: true,
@@ -390,7 +413,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
     return buildMove(values, {
       missingTarget: (given) => (((given.target ?? []) as unknown[]).length === 0 ? '点も辺も選ばれていない' : null),
       axes: ['dx', 'dy'],
-      zeroReason: '移動量が両方0',
+      zeroReason: 'X・Yのどちらかに移動量を打つ',
       rotateArgs: (angle, given) => {
         // 中心は参照のまま送る: 点の座標を出す規則(`point` 省略なら最初の点)はコアの `_point_of` が正で、数値に潰すと規則が2つになる。
         const center = pickedRefOf(given.center_entity)

@@ -21,7 +21,7 @@
         {"type": "edge_chains", "body_id": str, "revision": int, "shape_revision": int, "chains": [[int, ...], ...]}
         {"type": "face_chains", "body_id": str, "revision": int, "shape_revision": int, "origins": [int, ...], "chains": [[int, ...], ...]}
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
-        {"type": "error", "message": str, "where": str, "client_op": int|None}
+        {"type": "error", "message": str, "where": str, "client_op": int|None, "preview_id"?: int|None}  (`preview_id` は where が preview のときだけ)
         {"type": "done", "ack_id": int}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "api_key_source",
@@ -760,6 +760,8 @@ class Server:
                     "message": f"{type(error).__name__}: {error}",
                     # 画面は自分が待っている操作の失敗かをこれで見分ける(別の要求の失敗で確定の待ちを解かない)。
                     "client_op": message.get("client_op"),
+                    # プレビューの断りは、どの要求のものかを画面が見分ける(古い断りを今の入力に付けない)。
+                    **({"preview_id": message.get("preview_id")} if command == "preview" else {}),
                 },
             )
         finally:
@@ -832,6 +834,7 @@ class Server:
                             "where": "preview",
                             "message": f"{type(error).__name__}: {error}",
                             "client_op": message.get("client_op"),
+                            "preview_id": message.get("preview_id"),
                         })
                     return
                 job.adopt()  # 古くても覚え直す(確定が同じ形・同じ引数なら使い回す)

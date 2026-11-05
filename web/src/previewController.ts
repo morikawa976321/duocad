@@ -45,6 +45,16 @@ export type PreviewEffect =
   | { type: 'arm'; kind: TimerKind; timer: PreviewTimer; delay: number }
   | { type: 'stop'; kind: TimerKind }
 
+/** 入力の印。同じ印の入力は送り直さない。プレビューの断りが今の入力のものかもこれで見る(`CommandHost`)。 */
+export function previewInputKey(input: PreviewInput): string {
+  return JSON.stringify([input.verb, input.args, input.selection])
+}
+
+/** 断られた要求(`preview_id`)が最後に送った要求なら、その入力(後から送った・消した要求があれば null)。 */
+export function failedPreviewInput(state: PreviewState, previewId: number | null): PreviewInput | null {
+  return previewId !== null && previewId === state.requestId ? state.server : null
+}
+
 const PREVIEW_DEBOUNCE_MS = 250
 const PREVIEW_MAX_WAIT_MS = 750
 const PREVIEW_REFIRE_MS = 250
@@ -89,15 +99,14 @@ export function transitionPreview(
     stop('refire')
     state.server = input
     state.requestId += 1
-    state.responseId = JSON.stringify([input.verb, input.args, input.selection]) === state.key
-      ? state.requestId : null
+    state.responseId = previewInputKey(input) === state.key ? state.requestId : null
     effects.push({ type: 'send', input, id: state.requestId })
   }
 
   switch (event.type) {
     case 'input': {
       const input = event.input
-      const key = input === null ? null : JSON.stringify([input.verb, input.args, input.selection])
+      const key = input === null ? null : previewInputKey(input)
       if (key === state.key) break
       stop('debounce')
       state.key = key
@@ -156,6 +165,8 @@ export interface PreviewController {
   shapesChanged(): void
   disconnect(): void
   receive(payload: PreviewPayload): void
+  /** サーバが断った要求の入力(古い要求の断りなら null。`failedPreviewInput`)。 */
+  failed(previewId: number | null): PreviewInput | null
   detach(): void
   dispose(): void
 }
@@ -213,6 +224,7 @@ export function createPreviewController(deps: PreviewDeps): PreviewController {
     shapesChanged: () => dispatch({ type: 'shapes', now: deps.now() }),
     disconnect: () => dispatch({ type: 'disconnect' }),
     receive: (payload) => dispatch({ type: 'response', payload }),
+    failed: (previewId) => failedPreviewInput(state, previewId),
     detach: () => dispatch({ type: 'detach' }),
     dispose: () => dispatch({ type: 'dispose' }),
   }

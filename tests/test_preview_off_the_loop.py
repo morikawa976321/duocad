@@ -145,7 +145,7 @@ def test_a_superseded_preview_result_is_not_sent(session: Session, monkeypatch) 
 
 
 def test_a_failed_preview_still_reports_and_acknowledges(session: Session) -> None:
-    """落ちたら、ワーカーで失敗したプレビューの理由が画面へ届かない・待ちの印(`done`)が残り続ける。"""
+    """落ちたら、ワーカーで失敗したプレビューの理由が画面へ届かない・どの要求の断りか分からない・待ちの印(`done`)が残り続ける。"""
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
 
@@ -155,7 +155,21 @@ def test_a_failed_preview_still_reports_and_acknowledges(session: Session) -> No
     (_none, client) = _run(session, script)
     errors = client.of_type("error")
     assert errors and errors[0]["where"] == "preview" and errors[0]["client_op"] == 8
+    assert errors[0]["preview_id"] == 1  # 画面はこれで古い断りを捨てる
     assert client.of_type("preview") == [] and [item["ack_id"] for item in client.of_type("done")] == [4]
+
+
+def test_a_preview_refused_before_the_worker_names_its_request(session: Session) -> None:
+    """落ちたら、引数の検査で断られたプレビューの断りに `preview_id` が無く、画面が今の入力の断りか見分けられない。"""
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
+
+    async def script(server, client):
+        await server._dispatch(client, json.dumps({"cmd": "preview", "verb": "fillet", "args": {"radius": "x"}, "preview_id": 7}))
+
+    (_none, client) = _run(session, script)
+    errors = client.of_type("error")
+    assert errors and errors[0]["where"] == "preview" and errors[0]["preview_id"] == 7
 
 
 def test_an_inline_preview_supersedes_a_running_worker_preview(session: Session, monkeypatch) -> None:

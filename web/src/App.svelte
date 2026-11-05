@@ -11,7 +11,8 @@
   import CommandHost from './commands/CommandHost.svelte'
   import { sharedArgsChangeNote } from './sharedArgsController'
   import { appendedEntries } from './logTail'
-  import { createPreviewController } from './previewController'
+  import { createPreviewController, type PreviewInput } from './previewController'
+  import { createFaceKinds } from './faceKinds'
   import {
     bodyRef,
     commandRequest,
@@ -257,7 +258,12 @@
     commitFailed(): void
     reconnected(): void
     commandSucceeded(): void
+    previewFailed(message: string, input: PreviewInput): boolean
+    previewSucceeded(): void
+    refusesFace(bodyId: string, faceIndex: number): string | null
   } | null>(null)
+
+  const faceKinds = createFaceKinds()
 
   /**
    * この版で形状最適化を使えるか(安定版は使えない。サーバが接続のたびに送る `optimize_status` の `available`)。`null` はまだ聞いていない ——
@@ -401,7 +407,16 @@
   const session = createSession({
     onState: handleState,
     onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
-    onError: (message, where, clientOp) => {
+    onError: (message, where, clientOp, previewId) => {
+      // プレビューの断りは待ちの1行に出す(トーストにすると打ち替えるたびに積もる)。後から送った要求があれば古い断りで、
+      // 捨てる(消すと、その後の要求の応答まで捨てる)。
+      if (where === 'preview') {
+        const failed = preview.failed(previewId ?? null)
+        if (failed === null) return
+        preview.clear()
+        if (host?.previewFailed(message, failed) !== true) fail(`エラー[preview] ${message}`)
+        return
+      }
       // 干渉チェックの要求の失敗(対象が足りない等)。待ちバーも `pendingOp` も使っていないので、実行中の表示を解くだけ。
       if (where === 'check_interference') {
         interference.onError(clientOp)
@@ -878,6 +893,7 @@
     // 差分更新: 版が変わったBodyだけを渡す(§2)。カメラ由来の配信(形の版 `shape_revision` が同じで粗さだけ変わった)では
     // サーバ投機実行の幽霊を残す: 投機実行の結果は粗さに依らず、投げ直すと大きな部品では1回1秒かかる(issue #169)。
     const shapesMoved = shapesChanged(previous, next)
+    faceKinds.update(changed, next.bodies.map((body) => body.body_id))
     viewport?.update(
       changed.map((body) => ({ bodyId: body.body_id, geometry: body.geometry })),
       { keepPreview: !shapesMoved },
@@ -993,6 +1009,7 @@
       viewport?.showSketchGhosts(ghost.sketch_id, ghost.entities, ghost.pieces === 1 ? 'normal' : 'warn')
     }
     previewing = payload.bodies.length > 0 || payload.removed_bodies.length > 0 || (ghost?.entities.length ?? 0) > 0
+    host?.previewSucceeded()
     const current = previewAsked?.id === payload.preview_id && previewAsked.commands === commandRequests
     if (payload.suggestion !== null && faceChainCommand && current) widenToSuggestion(payload.suggestion)
   }
@@ -1969,6 +1986,11 @@
       else pick()
       return
     }
+    const refused = host?.refusesFace(event.hit.bodyId, event.hit.faceIndex) ?? null
+    if (refused !== null) {
+      note(refused)
+      return
+    }
     editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
 
@@ -2717,6 +2739,8 @@
           }}
           onWantsVertices={(wants) => (wantedVertices = wants)}
           onWantsGrain={(grain) => (wantedGrain = grain)}
+          onDeselect={(refs) => modifySelection([], refs)}
+          faceKindOf={faceKinds.kindOf}
         />
       {/key}
     </section>

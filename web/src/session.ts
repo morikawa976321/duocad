@@ -936,8 +936,11 @@ export interface SessionHooks {
    * `geometry: null`)。それ以外のBodyは前回のまま描き直さない(差分更新)。
    */
   onState(state: ServerState, changed: BodyGeometry[], applied: Applied | null): void
-  /** `clientOp` は失敗した要求に付いていた番号(サーバの `error` だけが持つ。送れなかった・切れたときは無い)。 */
-  onError(message: string, where: string, clientOp?: number | null): void
+  /**
+   * `clientOp` は失敗した要求に付いていた番号(サーバの `error` だけが持つ。送れなかった・切れたときは無い)。
+   * `previewId` はプレビューの断り(`where === 'preview'`)だけが持つ、断られた要求の `preview_id`。
+   */
+  onError(message: string, where: string, clientOp?: number | null, previewId?: number | null): void
   onWarning(message: string): void
   onStatus(status: ConnectionStatus): void
   /**
@@ -1431,7 +1434,7 @@ export function createSession(hooks: SessionHooks): Session {
       for (const ackId of waits.keys()) if (ackId <= done) waits.delete(ackId)
       reportWaits()
     } else if (message.type === 'error') {
-      hooks.onError(message.message ?? '(理由なし)', message.where ?? '?', message.client_op ?? null)
+      hooks.onError(message.message ?? '(理由なし)', message.where ?? '?', message.client_op ?? null, message.preview_id ?? null)
     } else if (message.type === 'warning') {
       hooks.onWarning(message.message ?? '')
     } else if (message.type === 'ai_status') {

@@ -5,10 +5,11 @@
  * 落ちたら、次のどちらか。
  * - IME の変換中の Enter(候補の確定)・Esc(変換の取り消し)を、画面のコマンドの確定・中断として拾う。
  * - フォーカスが選択肢(<select>)などにある Enter を、窓のハンドラが奪ってコマンドを確定する。
+ * - 入力欄・開いているダイアログの Esc でコマンドを中断する、入力欄の Delete・Backspace で選んだものを消す。
  */
 import assert from 'node:assert/strict'
 
-import { isImeKey, ownsEnterKey } from '../web/src/keys.ts'
+import { isImeKey, isTextEntry, ownsEnterKey, ownsEscapeKey } from '../web/src/keys.ts'
 
 // IME の変換中: isComposing が真、または keyCode 229(Safari は確定の Enter で isComposing が偽になる)。
 assert.equal(isImeKey({ isComposing: true, keyCode: 13 }), true)
@@ -29,5 +30,37 @@ assert.equal(ownsEnterKey({ tagName: 'BODY' }), false)
 assert.equal(ownsEnterKey({ tagName: 'DIV', isContentEditable: false }), false)
 assert.equal(ownsEnterKey({ tagName: 'CANVAS' }), false)
 assert.equal(ownsEnterKey(null), false)
+
+// 文字を打つ欄。`type` を持たない INPUT は text。
+for (const target of [
+  { tagName: 'INPUT' },
+  { tagName: 'INPUT', type: 'text' },
+  { tagName: 'INPUT', type: 'number' },
+  { tagName: 'INPUT', type: 'search' },
+  { tagName: 'TEXTAREA' },
+  { tagName: 'SELECT' },
+  { tagName: 'DIV', isContentEditable: true },
+]) {
+  assert.equal(isTextEntry(target), true, `${JSON.stringify(target)} は文字を打つ欄`)
+  assert.equal(ownsEscapeKey(target), true, `${JSON.stringify(target)} の Esc はその欄のもの`)
+}
+// フォーカスが乗っているだけの相手。Esc・Delete は窓のもの。
+const outside = { closest: () => null }
+for (const target of [
+  { tagName: 'INPUT', type: 'checkbox', ...outside },
+  { tagName: 'INPUT', type: 'radio', ...outside },
+  { tagName: 'BUTTON', ...outside },
+  { tagName: 'BODY', ...outside },
+  { tagName: 'CANVAS', ...outside },
+]) {
+  assert.equal(isTextEntry(target), false, `${JSON.stringify(target)} は文字を打たない`)
+  assert.equal(ownsEscapeKey(target), false, `${JSON.stringify(target)} の Esc はコマンドの中断`)
+}
+assert.equal(isTextEntry(null), false)
+assert.equal(ownsEscapeKey(null), false)
+// 開いているダイアログ(設定)の中のボタン。Esc はダイアログを閉じるもので、コマンドは中断しない。
+const inDialog = { tagName: 'BUTTON', closest: (selector) => (selector === 'dialog[open]' ? {} : null) }
+assert.equal(ownsEscapeKey(inDialog), true)
+assert.equal(isTextEntry(inDialog), false, 'ダイアログのボタンの Delete は窓のもの')
 
 console.log('keys.ts: 全ての想定を満たした')

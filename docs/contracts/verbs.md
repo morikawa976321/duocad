@@ -64,9 +64,9 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 
 ## 数値引数の既定値(`NumberArgSpec.default`)と空欄軸
 
-- **`NumberArgSpec.default?: number`**(`web/src/commands/command.ts`)。消費者は `CommandHost.svelte` の `values` 導出(`raw === '' ? (spec.default ?? NaN) : …`)だけで、`default` を持つ数値引数は空欄でもその値が `collected[spec.name]` に入り `argSatisfied`/`firstMissingArg` を素通りする。付いているのは移動量(`dx/dy/dz`、`dx/dy`。`commands/moveMode.ts`)の `default: 0` と `envelope_regions` の R・d(`commands/sketch.ts`)。型は `number` のみ。
+- **`NumberArgSpec.default?: number`**(`web/src/commands/command.ts`)。消費者は `CommandHost.svelte` の `values` 導出(`raw === '' ? (spec.default ?? NaN) : …`)だけで、`default` を持つ数値引数は空欄でもその値が `collected[spec.name]` に入り `argSatisfied`/`firstMissingArg` を素通りする。付いているのは移動量(`dx/dy/dz`、`dx/dy`。`commands/moveMode.ts`)の `default: 0`、`envelope_regions` の R・d(`commands/sketch.ts`)、矩形反復の間隔 `dx/dy` の `default: 0` と個数 `nx/ny` の `default: 1`、円形反復の全角度 `total_angle` の `default: 360`(回転体の角度と同じ。`commands/features.ts`)。型は `number` のみ。
 - **opt-in**: 付けなければ空欄は NaN で `argSatisfied` が false。**半径・距離・個数のように 0 が無効値・未確定を意味する引数に `default: 0` を付けない**(黙って 0 が埋まって壊れる)。
-- **全軸空欄の拒否は `default` の責務ではなく各 verb の `build()` が個別に持つ**(移動量が全部 0 → 「移動量が全部0」、コア側 translate モードにも同じ ValueError)。`default` を付ける新 verb は、全部既定値落ちを拒否するチェックを自分で書く。
+- **全軸空欄の拒否は `default` の責務ではなく各 verb の `build()` が個別に持つ**(移動量が全部 0 → 「X・Y・Zのどれかに移動量を打つ」、コア側 translate モードにも同じ ValueError。矩形反復の 1×1 → 「X個数かY個数を2以上にする」。何も打つ前にも出る文なので、断りではなく次に打つものを言う)。`default` を付ける新 verb は、全部既定値落ちを拒否するチェックを自分で書く。
 - **ローカルプレビューに追加のフックは要らない。** `ghostBuilt`/`built` は共通の `values`(`default` 込み)から `command.build()` を呼ぶので、`default` を付ければプレビューも自動で追従する。
 - **実機検査の罠**: (1) `copy` の選択(`#move-body-move`/`#sketch-move-move` 等)を押すまで dx/dy/dz の入力欄が `ready` にならない。 (2) `page.evaluate` で `getBoundingClientRect()` を単体で返すと DOMRect のプロパティが own enumerable でなく座標が NaN になり `page.mouse.click` が `Invalid parameters` で落ちる。rect 取得と `project*` 呼び出しを同じ `evaluate` 内で行い、`{x: pos.x + rect.left, …}` まで計算して返す。
 

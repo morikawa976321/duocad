@@ -187,6 +187,12 @@ export interface SelectionArgSpec extends ArgSpecCommon {
    */
   kinds?: SelectableKind[]
   /**
+   * 食える面の種類(コアの `brep_geometry.classify_face` の綴りで、`FaceGeometry.kind` に載って届く。`thread` は `'cylinder_full'`
+   * で、`kernel_thread.describe_target` と同じ判定)。ほかの種類の面は数えず、起動中はクリックでも選ばせない(`CommandHost` の
+   * `refusesFace`)。種類の分からない面は通す(断るのはコア)。
+   */
+  surfaceKinds?: string[]
+  /**
    * 頂点そのものを対象にする引数(測定)。起動中は頂点を指せる種類に入れる(`App.svelte` の `wantedVertices` → `pickKinds`)。
    * `kinds` に `'vertex'` があれば同じく指せる(`move_body` / `mirror_body` の頂点はボディを名指しする手の1つ)。
    */
@@ -229,11 +235,15 @@ export interface NumberArgSpec extends ArgSpecCommon {
    * 既定がほかの引数やサーバだけが知る事情で変わるとき(`thread` の隙間は山形と、面が軸か穴かで変わる)に使う。
    */
   optional?: true
+  /** 欄と見出しに重ねて出す補足(`title`)。見出しに書くと引数の行が折れて縦に伸びる。 */
+  hint?: string
 }
 
 /** スケッチ平面をクリックして集める点。選択引数と別物: 点はその場の1クリックで集合に残らない(始点が選択集合に溜まると次のコマンドが拾う)。 */
 export interface PointArgSpec extends ArgSpecCommon {
   kind: 'point'
+  /** 寸法を打てばこの点が要らなくなるとき、その打ち方(待ちの1行に添える)。点を省く条件そのものは `when` が持つ。 */
+  typedInstead?: string
 }
 
 /**
@@ -381,6 +391,11 @@ export interface PickArgSpec extends ArgSpecCommon {
    * 省略できる引数は `firstMissingArg` が指さないので、人が指したいときは `CommandHost` の「指す」ボタン(`armedPick`)を使う。
    */
   optional?: boolean
+  /**
+   * 指したボディを、この名前の選択引数から外す(`target: 'body'` だけが持つ)。ブーリアンのターゲットは同時にツールになれず
+   * コアの `boolean_body` が断るので、先に2つ選んでから起動してターゲットを指したときは、そのボディをツールの選択から外す。
+   */
+  excludesFrom?: string
 }
 
 export type ArgSpec =
@@ -544,26 +559,50 @@ function counterFor(spec: SelectionArgSpec): string {
   return argKinds(spec).length > 1 ? 'つ' : KIND_COUNTERS[spec.shapeKind]
 }
 
-export function itemsForArg(spec: SelectionArgSpec, selection: SelectionState | null): SelectionRef[] {
+/** 面の種類を引く(分からなければ null)。`SelectionArgSpec.surfaceKinds` の絞り込みに使う。 */
+export type FaceKindOf = (body: string, index: number) => string | null
+
+/** その面を `surfaceKinds` が食えるか(種類が分からない面・絞らない引数は食える)。 */
+export function acceptsSurface(spec: SelectionArgSpec, item: SelectionRef, faceKindOf: FaceKindOf): boolean {
+  if (spec.surfaceKinds === undefined || refKind(item) !== 'face') return true
+  const face = item as ShapeRef
+  const kind = faceKindOf(face.body, face.index)
+  return kind === null || spec.surfaceKinds.includes(kind)
+}
+
+export function itemsForArg(
+  spec: SelectionArgSpec,
+  selection: SelectionState | null,
+  faceKindOf: FaceKindOf = () => null,
+): SelectionRef[] {
   const kinds = argKinds(spec)
-  const items = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item)))
+  const items = (selection?.items ?? []).filter(
+    (item) => kinds.includes(refKind(item)) && acceptsSurface(spec, item, faceKindOf),
+  )
   return spec.max === null ? items : items.slice(0, spec.max)
 }
 
-/** `max` を超えて選ばれている引数があれば理由を返す(無ければ空文字)。黙って先頭だけ使わず、送りもしない(コア側の `require_selected(exactly_one=True)` は2枚以上を拒否する)。`CommandHost` は空でない間 Enter を受け付けない。 */
+/**
+ * `max` を超えて選ばれている引数か、`surfaceKinds` の食えない面が選択に残っている引数があれば理由を返す(無ければ空文字)。黙って先頭だけ使わず、
+ * 送りもしない(コア側の `require_selected(exactly_one=True)` は2枚以上を拒否し、食えない面も数える)。`CommandHost` は空でない間 Enter を受け付けない。
+ */
 export function overflowNote(
   command: CommandDef,
   selection: SelectionState | null,
   values: ArgValues,
+  faceKindOf: FaceKindOf = () => null,
 ): string {
   for (const spec of command.args) {
-    if (spec.kind !== 'selection' || spec.max === null) continue
-    if (!argApplies(spec, values)) continue
+    if (spec.kind !== 'selection' || !argApplies(spec, values)) continue
     const kinds = argKinds(spec)
-    const total = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item))).length
+    const eaten = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item)))
+    const refused = eaten.filter((item) => !acceptsSurface(spec, item, faceKindOf)).length
+    if (refused > 0) return `${spec.label}ではない面が選ばれている(${refused}${counterFor(spec)}。クリックで外す)`
+    if (spec.max === null) continue
+    const total = eaten.length
     if (total > spec.max) {
       const counter = counterFor(spec)
-      return `${spec.label}は${spec.max}${counter}まで(いま${total}${counter}。Ctrl+クリックで外す)`
+      return `${spec.label}は${spec.max}${counter}まで(いま${total}${counter}。クリックで外す)`
     }
   }
   return ''
@@ -655,13 +694,14 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   if (spec.kind === 'selection') {
     const have = ((values[spec.name] ?? []) as SelectionRef[]).length
     const need = spec.min - have
-    return `${spec.label}を${need}${counterFor(spec)}選ぶ(クリック / Shift・Ctrl+クリックでトグル / 左ドラッグで囲む)`
+    return `${spec.label}を${need}${counterFor(spec)}選ぶ(クリックで足す・外す / 左ドラッグで囲む)`
   }
   if (spec.kind === 'point') {
-    return `${spec.label}をクリック(スケッチ平面の上)`
+    const instead = spec.typedInstead === undefined ? '' : ` / ${spec.typedInstead}を打てばクリックは要らない`
+    return `${spec.label}をクリック(スケッチ平面の上${instead})`
   }
   if (spec.kind === 'pick') {
-    return `${spec.label}をクリック(${PICK_TARGET_HINTS[spec.target]} / Shift・Ctrl+クリックは対象の選び直し)`
+    return `${spec.label}をクリック(${PICK_TARGET_HINTS[spec.target]} / Shift・Ctrl+クリックは選択の足し外し)`
   }
   if (spec.kind === 'choice') {
     return `${spec.label}を選ぶ(${spec.options.map((option) => option.label).join(' / ')})`

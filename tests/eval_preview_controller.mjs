@@ -1,7 +1,7 @@
-/** プレビューの競合で、古い幽霊の採用・余分な送信・終了後の発火が起きたら落ちる。 */
+/** プレビューの競合で、古い幽霊の採用・余分な送信・終了後の発火・古い断りの取り違えが起きたら落ちる。 */
 import assert from 'node:assert/strict'
 import './ts_resolve_hook.mjs'
-import { createPreviewController, initialPreviewState, transitionPreview } from '../web/src/previewController.ts'
+import { createPreviewController, failedPreviewInput, initialPreviewState, transitionPreview } from '../web/src/previewController.ts'
 
 const input = (radius = 2, selection = 'edge:a:1', mode = 'server', verb = 'fillet') => ({
   verb, args: { radius }, selection, mode,
@@ -318,6 +318,25 @@ check('副作用の実行器も取消後のコールバックと破棄後の応�
   controller.cancel()
   assert.equal(calls.length, afterDispose)
   assert.equal(pending.size, 0)
+})
+
+check('断りは最後に送った要求のものだけを、その入力に紐付ける', () => {
+  const m = machine()
+  m.update(input(5), 0)
+  m.fire('debounce')
+  const [[, , first]] = m.sent()
+  assert.deepEqual(failedPreviewInput(m.state, first)?.args, { radius: 5 })
+  m.update(input(0), 300)
+  // 打ち替えた入力をまだ送っていない間の断りは、送った入力(半径5)のもの。
+  assert.deepEqual(failedPreviewInput(m.state, first)?.args, { radius: 5 })
+  m.fire('debounce')
+  const second = m.sent().at(-1)[2]
+  // 後から送った要求があれば、前の要求の断りは古い。
+  assert.equal(failedPreviewInput(m.state, first), null)
+  assert.deepEqual(failedPreviewInput(m.state, second)?.args, { radius: 0 })
+  assert.equal(failedPreviewInput(m.state, null), null)
+  m.event({ type: 'clear', resetKey: false })
+  assert.equal(failedPreviewInput(m.state, second), null)
 })
 
 console.log(`previewController: ${cases}件通過`)
