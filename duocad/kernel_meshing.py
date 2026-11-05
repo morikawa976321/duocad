@@ -35,6 +35,7 @@ from OCP.BRepMesh import (
     BRepMesh_ModelPostProcessor,
     BRepMesh_ModelPreProcessor,
 )
+from OCP.BRep import BRep_Tool
 from OCP.BRepTools import BRepTools
 from OCP.IMeshData import IMeshData_Status
 from OCP.IMeshTools import IMeshTools_Context, IMeshTools_Parameters
@@ -43,6 +44,7 @@ from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS
+from OCP.gp import gp_Pnt, gp_Pnt2d
 
 from . import boundary_check
 
@@ -227,16 +229,52 @@ def _pcurve_points(pcurve) -> np.ndarray:
     return np.asarray([get(i).Coord() for i in range(pcurve.ParametersNb())], dtype=np.float64).reshape(-1, 2)
 
 
+def _deflection_floor(de) -> float:
+    """再分割で辺の偏差を下げる下限。辺の許容値より細かくしても、許容値ぶんずれた pcurve どうしの交差は消えず、
+    増えた点で共有先の B-spline 面の `DiscretizeFaces` が GIL を握ったまま終わらなくなる
+    (実測は docs/TOPOPT_GAP_CAUSALITY.md「許容値の大きい辺で再分割が暴走した」)。"""
+    return max(BRep_Tool.Tolerance_s(de.GetEdge()), Precision.Confusion_s())
+
+
+def _refinable(model: _Model, edge_id: int) -> bool:
+    de = model.edges[model.edge_model_index[edge_id]]
+    return de.GetDeflection() > _deflection_floor(de)
+
+
+def _snapshot_edge(de) -> tuple:
+    """辺の偏差と、3D・全 pcurve の点列を座標の値で写す(ハンドルや参照はモデルの寿命に縛られるので持たない)。"""
+    curve = de.GetCurve()
+    pcurves = [de.GetPCurve(j) for j in range(de.PCurvesNb())]
+    return (
+        de.GetDeflection(),
+        [(curve.GetPoint(i).Coord(), curve.GetParameter(i)) for i in range(curve.ParametersNb())],
+        [[(pc.GetPoint(i).Coord(), pc.GetParameter(i)) for i in range(pc.ParametersNb())] for pc in pcurves],
+    )
+
+
+def _restore_edge(de, snapshot: tuple) -> None:
+    deflection, curve_points, pcurve_points = snapshot
+    de.Clear(False)
+    de.SetDeflection(deflection)
+    curve = de.GetCurve()
+    for xyz, parameter in curve_points:
+        curve.AddPoint(gp_Pnt(*xyz), parameter)
+    for j, points in enumerate(pcurve_points):
+        pcurve = de.GetPCurve(j)
+        for uv, parameter in points:
+            pcurve.AddPoint(gp_Pnt2d(*uv), parameter)
+
+
 def _amplify(model: _Model, edge_id: int, parameters: IMeshTools_Parameters) -> dict:
     """OCCT の EdgeAmplifier と同じ手順で 1 辺を再分割する。
 
-    `Clear(True)` で端点を残し、偏差を 1/3(下限 Precision::Confusion)にして、点数が減らないよう
+    `Clear(True)` で端点を残し、偏差を 1/3(下限 `_deflection_floor`)にして、点数が減らないよう
     現在の点数を最小点数に渡す。3D 点列を作り直してから `Tessellate2d` が全 pcurve を更新する。
     """
     de = model.edges[model.edge_model_index[edge_id]]
     before = de.GetCurve().ParametersNb()
     de.Clear(True)
-    deflection = max(de.GetDeflection() / 3.0, Precision.Confusion_s())
+    deflection = max(de.GetDeflection() / 3.0, _deflection_floor(de))
     de.SetDeflection(deflection)
     points_nb = before
     for j in range(de.PCurvesNb()):
@@ -263,11 +301,13 @@ def mesh_shape(shape, deviation: float, angular_deflection: float, *, max_rounds
         faces, edges: 内部モデルの面数・辺数
         points_initial, points_final: 全 pcurve の離散点数
         rounds: 再分割を行った回数
-        termination: 'resolved' | 'max_rounds' | 'no_change' | 'cycle' | 'budget' | 'unfixable'
+        termination: 'resolved' | 'max_rounds' | 'no_change' | 'cycle' | 'budget' | 'unfixable' | 'tolerance'
+            ('tolerance' は直すべき辺がどれも偏差の下限 `_deflection_floor` に達していた)
         unresolved: [{'face': CAD 1始まり, 'issues': [...]}]  面分割へ渡さず(Failure)三角形なしにした面
         endpoint: {'mismatches': n, 'gap_max': mm}  同じ CAD 頂点に着くのに座標が一致しない終端の組(boundary_check)
         reinstated: [CAD 面番号]  OCCT の healer が SelfIntersectingWire|Failure にしたが独自検査で解消していたので分割対象に戻した面
         amplified_edges: 再分割した辺の数(重複なし), amplifications: 再分割の延べ回数
+        restored_edge_ids: 再分割したが、直せなかった面に接するので再分割する前の点列へ戻した CAD 辺
         rounds_log: 各回の {round, faces_checked, issues, edges, points}
         count_mismatch: 面分割後に点数が検査時と食い違った use(空が正常)
         seconds: 段階ごとの秒
@@ -321,6 +361,7 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
     unresolved: Dict[int, List[dict]] = {}
     seen_states = set()
     amplified: Dict[int, int] = {}
+    originals: Dict[int, tuple] = {}  # 再分割した辺の、最初に再分割する前の状態(`_snapshot_edge`)
     termination = 'resolved'
     dirty: Optional[List[int]] = None
     rounds = 0
@@ -347,6 +388,10 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         if not edges:
             termination = 'unfixable'
             break
+        edges = {edge_id for edge_id in edges if _refinable(model, edge_id)}
+        if not edges:
+            termination = 'tolerance'
+            break
         if rounds >= max_rounds:
             termination = 'max_rounds'
             break
@@ -358,6 +403,8 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         started = clock()
         changed = False
         for edge_id in sorted(edges):
+            if edge_id not in originals:
+                originals[edge_id] = _snapshot_edge(model.edges[model.edge_model_index[edge_id]])
             _amplify(model, edge_id, amplify_parameters)
             amplified[edge_id] = amplified.get(edge_id, 0) + 1
             changed = model.refresh_edge(edge_id) or changed
@@ -377,14 +424,34 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
             break
         dirty = model.faces_of_edges(edges)
 
+    # 直せなかった面に接する辺は再分割する前へ戻す(細かくした点列は隣の面の分割だけを重くする)。
+    failing = set(unresolved)
+    kept_amplified = {}  # 戻した辺の再分割後の状態(戻したせいで隣の面が壊れたら、これへ戻し直す)
+    for edge_id, original in originals.items():
+        if any(model.face_ids[model.use_face_position[use]] in failing for use in model.edge_uses[edge_id]):
+            de = model.edges[model.edge_model_index[edge_id]]
+            kept_amplified[edge_id] = _snapshot_edge(de)
+            _restore_edge(de, original)
+            model.refresh_edge(edge_id)
+
     # 面分割前の保証点: 再分割した後は全面を見直す(何も変えていなければ最初の全面検査がそのまま保証)。
     if amplified:
-        started = clock()
-        result = boundary_check.check(model.pack(None))
-        seconds['final_check'] = clock() - started
-        unresolved = {}
-        for issue in result['issues']:
-            unresolved.setdefault(issue['face'], []).append(issue)
+        seconds['final_check'] = 0.0
+        while True:
+            started = clock()
+            result = boundary_check.check(model.pack(None))
+            seconds['final_check'] += clock() - started
+            unresolved = {}
+            for issue in result['issues']:
+                unresolved.setdefault(issue['face'], []).append(issue)
+            broken = set(unresolved) - failing
+            back = [edge_id for edge_id in kept_amplified
+                    if any(model.face_ids[model.use_face_position[use]] in broken for use in model.edge_uses[edge_id])]
+            if not back:
+                break
+            for edge_id in back:
+                _restore_edge(model.edges[model.edge_model_index[edge_id]], kept_amplified.pop(edge_id))
+                model.refresh_edge(edge_id)
         endpoint = dict(mismatches=result['endpoint_mismatches'], gap_max=result['endpoint_gap_max'])
         if unresolved and termination == 'resolved':
             termination = 'reappeared'
@@ -422,6 +489,7 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         reinstated=sorted(reinstated),
         amplified_edges=len(amplified), amplifications=int(sum(amplified.values())),
         amplified_edge_ids=sorted(amplified),
+        restored_edge_ids=sorted(kept_amplified),
         rounds_log=rounds_log, count_mismatch=count_mismatch,
         # CAD 頂点を共有するのに pcurve の座標が一致しない終端の組(件数と最大のずれ)
         endpoint=endpoint,

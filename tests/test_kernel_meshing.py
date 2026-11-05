@@ -182,6 +182,48 @@ def test_a_truly_self_intersecting_boundary_fails_bounded_with_diagnostics():
     assert len(payload['faces']) == 7 and all(f['indices'] for f in payload['faces'][1:])
 
 
+def _set_edge_tolerance(shape, edge_ids, tolerance):
+    edge_map = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, edge_map)
+    for edge_id in edge_ids:
+        BRep_Builder().UpdateEdge(TopoDS.Edge_s(edge_map.FindKey(edge_id)), tolerance)
+
+
+def test_edges_already_finer_than_their_tolerance_are_not_refined():
+    """落ちたら、許容値より細かい辺を再分割し続け、点数が増えるほど隣の B-spline 面の分割が遅くなる
+    (umbrella-down.stp の面43: 12巡で8分を超えてもサーバが固まったまま)暴走が戻っている。"""
+    shape = load('gap_minimal_solid.brep')
+    _set_edge_tolerance(shape, kernel_meshing.mesh_shape(shape, 0.2, 0.35)['amplified_edge_ids'], 0.4)
+    diagnostics = kernel_meshing.mesh_shape(shape, 0.2, 0.35)
+    assert diagnostics['termination'] == 'tolerance'
+    assert diagnostics['rounds'] == 0 and diagnostics['amplified_edges'] == 0
+    assert [entry['face'] for entry in diagnostics['unresolved']] == [1]
+
+
+def test_refinement_stops_at_the_edge_tolerance_but_still_repairs_above_it():
+    """許容値が偏差の半分なら1/3まで下げられないが、下限までの再分割で直る。落ちたら下限が修復を妨げている。"""
+    shape = load('gap_minimal_solid.brep')
+    _set_edge_tolerance(shape, kernel_meshing.mesh_shape(shape, 0.2, 0.35)['amplified_edge_ids'], 0.1)
+    diagnostics = kernel_meshing.mesh_shape(shape, 0.2, 0.35)
+    assert diagnostics['termination'] == 'resolved' and diagnostics['unresolved'] == []
+    assert diagnostics['amplified_edges'] >= 2
+
+
+def test_edges_of_an_unrepaired_face_go_back_to_their_first_discretization():
+    """直せなかった面に接する再分割した辺は元の点列へ戻り、隣の面は再分割しなかったときと同じ三角形になる。
+    落ちたら、直せなかった再分割の点列が隣の面の分割へ渡っている。"""
+    reference_shape = load('gap_minimal_solid.brep')
+    kernel_meshing.mesh_shape(reference_shape, 0.05, 0.35, max_rounds=0)
+    shape = load('gap_minimal_solid.brep')
+    diagnostics = kernel_meshing.mesh_shape(shape, 0.05, 0.35, max_rounds=1)
+    assert diagnostics['termination'] == 'max_rounds'
+    assert [entry['face'] for entry in diagnostics['unresolved']] == [1]
+    assert diagnostics['amplified_edge_ids'] and diagnostics['restored_edge_ids'] == diagnostics['amplified_edge_ids']
+    assert diagnostics['count_mismatch'] == []
+    assert per_face_triangles(shape) == per_face_triangles(reference_shape)
+    assert all(indices for _positions, indices in per_face_triangles(shape)[1:])
+
+
 def test_round_limit_is_respected():
     shape = load('gap_minimal_solid.brep')
     diagnostics = kernel_meshing.mesh_shape(shape, 0.2, 0.35, max_rounds=0)
