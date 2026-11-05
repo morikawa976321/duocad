@@ -56,19 +56,28 @@
     const key = keyDraft.trim()
     if (!key) return
     // 確認中に別のキーを保存したら、確認していた削除の相手はもう無い。
-    confirmingKeyDelete = false
+    confirmingHint = null
     onSetApiKey(key)
     keyDraft = ''
   }
 
-  /** 削除は2段階(ファイルパネルの削除と同じく、行の中で確かめる)。保存したキーは画面に戻らないので消すと取り返せない。 */
-  let confirmingKeyDelete = $state(false)
+  /**
+   * 削除は2段階(ファイルパネルの削除と同じく、行の中で確かめる)。保存したキーは画面に戻らないので消すと取り返せない。
+   * 確かめている相手は「削除」を押した時点のキーで、末尾(`apiKeyHint`)で覚える。別のタブで差し替わったら確認を解く。
+   */
+  let confirmingHint = $state<string | null>(null)
+  const confirmingKeyDelete = $derived(confirmingHint !== null)
   $effect(() => {
-    if (!open || aiStatus?.apiKeySource !== 'file') confirmingKeyDelete = false
+    if (confirmingHint === null) return
+    if (!open || aiStatus?.apiKeySource !== 'file' || (aiStatus.apiKeyHint ?? '') !== confirmingHint) confirmingHint = null
   })
 
+  function startKeyDelete(): void {
+    confirmingHint = aiStatus?.apiKeyHint ?? ''
+  }
+
   function deleteKey(): void {
-    confirmingKeyDelete = false
+    confirmingHint = null
     onSetApiKey(null)
   }
 
@@ -171,9 +180,9 @@
         <button id="settings-api-key-delete-confirm" class="danger" onclick={deleteKey} title="保存したキーを消す(戻せない)">
           本当に削除
         </button>
-        <button id="settings-api-key-delete-cancel" onclick={() => (confirmingKeyDelete = false)}>やめる</button>
+        <button id="settings-api-key-delete-cancel" onclick={() => (confirmingHint = null)}>やめる</button>
       {:else}
-        <button id="settings-api-key-delete" onclick={() => (confirmingKeyDelete = true)}>削除</button>
+        <button id="settings-api-key-delete" onclick={startKeyDelete}>削除</button>
       {/if}
     {/if}
   </div>
