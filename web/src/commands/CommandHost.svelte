@@ -36,9 +36,10 @@
    * Enterはプレビューを待たない(プレビューは確認用で、確定の前提ではない)。
    */
   import { onDestroy, onMount, untrack } from 'svelte'
-  import type { PreviewController } from '../previewController'
+  import type { PreviewController, PreviewInput } from '../previewController'
   import { createSharedArgsController, publishedArgs } from '../sharedArgsController'
   import {
+    acceptsSurface,
     argApplies,
     argKinds,
     argSatisfied,
@@ -52,11 +53,13 @@
     pickedLabel,
     promptFor,
     refKey,
+    refKind,
     type ArgSpec,
     type ArgValues,
     type ChoiceArgSpec,
     type CommandDef,
     type BuiltCommandRequest,
+    type FaceKindOf,
     type NumberArgSpec,
     type PickArgSpec,
     type PickTarget,
@@ -68,7 +71,7 @@
   import { categoryOf } from './category'
   import { grainOf, type SelectionGrain } from './grain'
   import { evaluateExpression, firstUnreadableExpression, isPlainNumber } from '../expression'
-  import { isImeKey, ownsEnterKey } from '../keys'
+  import { isImeKey, isTextEntry, ownsEnterKey, ownsEscapeKey } from '../keys'
   import type { CommandState, SelectionRef, SelectionState } from '../session'
   import { COMMAND_CATEGORY } from '../generated/protocol'
 
@@ -96,6 +99,8 @@
     onWantsPick = () => {},
     onWantsVertices = () => {},
     onWantsGrain = () => {},
+    onDeselect = () => {},
+    faceKindOf = () => null,
   }: {
     /** コアの選択集合(state.selection)。 */
     selection: SelectionState | null
@@ -151,7 +156,14 @@
     onWantsVertices?: (wants: boolean) => void
     /** 起動中のコマンドが指した部分ではなく持ち主(ボディ・図形)ごとに効くか(`grain.ts`)。無起動では `NO_GRAIN`。 */
     onWantsGrain?: (grain: SelectionGrain) => void
+    /** 共有選択からこれらの参照を外す(`PickArgSpec.excludesFrom`)。 */
+    onDeselect?: (refs: SelectionRef[]) => void
+    /** 面の種類を引く(`SelectionArgSpec.surfaceKinds`)。 */
+    faceKindOf?: FaceKindOf
   } = $props()
+
+  /** Delete・Backspace が走らせる verb(`DELETE_SELECTION`)。 */
+  const DELETE_VERB = 'delete'
 
   /** 構える対象(サーバの作業空間に載る verb)か。スケッチとフィーチャの verb(`duocad/workspace.py` の `stageable` と同じ線)。 */
   function isStageable(verb: string): boolean {
@@ -202,7 +214,7 @@
     const collected: ArgValues = {}
     for (const spec of command?.args ?? []) {
       if (spec.kind === 'selection') {
-        collected[spec.name] = itemsForArg(spec, selection)
+        collected[spec.name] = itemsForArg(spec, selection, faceKindOf)
       } else if (spec.kind === 'point') {
         const point = points[spec.name]
         if (point) collected[spec.name] = point
@@ -237,7 +249,7 @@
   const missing = $derived(command === null ? null : firstMissingArg(command, values))
 
   /** 選ばれすぎ(`max` 超え)の理由。空でない間は確定させない。 */
-  const overflow = $derived(command === null ? '' : overflowNote(command, selection, values))
+  const overflow = $derived(command === null ? '' : overflowNote(command, selection, values, faceKindOf))
 
   /** 無起動では確定できない(`command === null` を明示的に含める)。 */
   const ready = $derived(command !== null && missing === null && overflow === '')
@@ -300,6 +312,8 @@
     if (missing !== null) return promptFor(missing, values)
     if (overflow !== '') return overflow
     if (built && !built.ok) return built.reason
+    // 断られている間は「Enterで確定」と言わない(押しても同じ理由で断られる)。
+    if (previewFailure !== null && previewFailure.key === previewKey) return `プレビューできない: ${previewFailure.message}`
     return expressionEcho === '' ? 'Enterで確定 / Escで中断' : `${expressionEcho} ・ Enterで確定`
   })
 
@@ -356,18 +370,44 @@
       : '',
   )
 
-  $effect(() => {
+  const previewInput = $derived.by<PreviewInput | null>(() => {
     // `cmd` へ一度だけ束ねる(`$derived` の読み直しは同じ値でも別の式として扱われ、TSのnarrowingが効かない)。
     const cmd = command
     // 確定を送った後は出さない(打った値は残すので、消した幽霊を同じ引数で出し直してしまう)。
     const source = cmd === null || cmd.preview === 'none' || committed ? null : ghostBuilt
-    preview.update(source === null || cmd === null ? null : {
+    return source === null || cmd === null ? null : {
       verb: cmd.id,
       args: source.args,
       mode: cmd.preview as 'server' | 'local',
       selection: selectionPrint,
-    })
+    }
   })
+
+  $effect(() => {
+    preview.update(previewInput)
+  })
+
+  /** サーバへ出すプレビューの入力の印(サーバへ出さないなら null)。断られた理由がいまの入力のものかを見分ける。 */
+  const previewKey = $derived(
+    previewInput === null || previewInput.mode !== 'server'
+      ? null
+      : JSON.stringify([previewInput.verb, previewInput.args, previewInput.selection]),
+  )
+
+  /** サーバのプレビューが断った理由と、そのときの入力の印。入力が変われば印が合わなくなり、出さなくなる。 */
+  let previewFailure = $state<{ key: string; message: string } | null>(null)
+
+  /** プレビューが断られたときに `App.svelte` が呼ぶ。待ちの1行に出せたら `true`(出せないときはトーストへ回す)。 */
+  export function previewFailed(message: string): boolean {
+    if (previewKey === null) return false
+    previewFailure = { key: previewKey, message }
+    return true
+  }
+
+  /** プレビューの形が届いたときに `App.svelte` が呼ぶ(同じ入力で出し直して通ったら、断りを消す)。 */
+  export function previewSucceeded(): void {
+    previewFailure = null
+  }
 
   // ---------------------------------------------------------------- 即適用(Enterが要らないもの)
   /**
@@ -465,6 +505,7 @@
 
   /** 中断。プレビューは投機的実行でサーバ側に何も残らないので、消すのは画面の幽霊と打ちかけの数値だけ。選択は消さない(構えた verb はサーバが、ローカルのものは `onEnd` でアプリ層が全解除する)。 */
   function abort(): void {
+    commitOnEntry = null
     const wasArmed =
       Object.values(numberText).some((text) => text !== '') ||
       Object.keys(points).length > 0 ||
@@ -492,6 +533,7 @@
     planes = {}
     picks = {}
     armedPick = null
+    previewFailure = null
     committed = false
     // 即適用の待ち受けも降ろす。構え直すのは `entered()` / `restart()` だけ。
     armedSelections = null
@@ -517,10 +559,16 @@
   })
 
   function entered(verb: string): void {
+    const commitNow = commitOnEntry === verb
+    commitOnEntry = null
     restart()
     onStart(verb)
     syncFromShared()
     focusFirstNumber()
+    if (commitNow) {
+      commit()
+      return
+    }
     // 読み取り専用(`query`)だけは、起動時に揃っていればその場で走らせる(`needsEnter` のdocstring末尾の例外)。測るだけなら取り返しのつかないものが無い。
     if (command !== null && categoryOf(command) === 'query' && !needsEnter(command) && missing === null) {
       commit()
@@ -541,6 +589,7 @@
   /** 起動中のコマンドのボタンをもう一度押したとき。揃っていれば確定、揃っていなければ構え直す(即適用は1起動につき1回なので、続けてやるための1手がここに要る)。 */
   function pressActive(): void {
     if (command === null) return
+    commitOnEntry = null
     if (canCommit) {
       commit()
       return
@@ -552,8 +601,31 @@
     focusFirstNumber()
   }
 
+  /** Delete・Backspace で起動した verb。構える対象の起動は配信を待つので、入った(`entered()`)ところで確定する。 */
+  let commitOnEntry: string | null = null
+
+  /**
+   * Delete・Backspace = 「削除する」を押して Enter。消せるものが選ばれていれば無起動から起動して確定し、「削除する」の起動中なら確定する。
+   * 別のコマンドの最中は何もしない(打ちかけの引数を捨てて別の verb を走らせない)。キーを使ったときだけ `true`。
+   */
+  function pressDelete(): boolean {
+    const def = commands.find((candidate) => candidate.id === DELETE_VERB)
+    if (def === undefined) return false
+    if (commandActive) {
+      if (command?.id !== DELETE_VERB) return false
+      commit()
+      return true
+    }
+    const target = def.args.find((spec): spec is SelectionArgSpec => spec.kind === 'selection')
+    if (target === undefined || itemsForArg(target, selection).length < target.min) return false
+    start(DELETE_VERB)
+    commitOnEntry = DELETE_VERB
+    return true
+  }
+
   // 外から呼ばれない(ツールバーのボタンがこの中から呼ぶだけ)。
   function start(nextId: string): void {
+    commitOnEntry = null
     if (isStageable(nextId)) {
       // 構える対象はサーバへ頼むだけ。配信された `shared` で `entered()` が走る(起動の瞬間に自分で状態を持たない)。
       localCommandId = idleCommandId
@@ -703,12 +775,42 @@
     if (command === null || spec === null) return false
     picks = { ...picks, [spec.name]: ref }
     armedPick = null
+    dropPickedBody(command, spec, ref)
     if (!needsEnter(command) && firstMissingArg(command, values) === null) {
       commit()
       return true
     }
     focusFirstNumber()
     return true
+  }
+
+  /**
+   * 起動中のコマンドがこの面を選ばせないなら理由(選ばせるなら null)。面を食う選択引数がどれも `surfaceKinds` で断るときだけ断る。
+   * 選んである面を外すクリックは通す(起動前に選んであった平面を外せなくなる)。
+   */
+  export function refusesFace(bodyId: string, faceIndex: number): string | null {
+    if (!commandActive || command === null) return null
+    const ref: SelectionRef = { body: bodyId, kind: 'face', index: faceIndex }
+    if ((selection?.items ?? []).some((item) => refKey(item) === refKey(ref))) return null
+    const eaters = command.args.filter(
+      (spec): spec is SelectionArgSpec => spec.kind === 'selection' && argKinds(spec).includes('face') && argApplies(spec, values),
+    )
+    const refusing = eaters.filter((spec) => !acceptsSurface(spec, ref, faceKindOf))
+    if (eaters.length === 0 || refusing.length < eaters.length) return null
+    return `${refusing[0].label}ではない面は選べない`
+  }
+
+  /** 指したボディを `excludesFrom` の選択引数から外す(ブーリアンのターゲットにしたボディをツールの選択から抜く)。 */
+  function dropPickedBody(cmd: CommandDef, spec: PickArgSpec, ref: SelectionRef): void {
+    if (spec.excludesFrom === undefined || !('body' in ref)) return
+    const from = cmd.args.find(
+      (candidate): candidate is SelectionArgSpec => candidate.kind === 'selection' && candidate.name === spec.excludesFrom,
+    )
+    if (from === undefined) return
+    const clash = (selection?.items ?? []).filter(
+      (item) => 'body' in item && item.body === ref.body && argKinds(from).includes(refKind(item)),
+    )
+    if (clash.length > 0) onDeselect(clash)
   }
 
   /**
@@ -796,10 +898,18 @@
   function onKeydown(event: KeyboardEvent): void {
     // IME の変換中の Esc(変換の取り消し)・Enter(候補の確定)はコマンドの中断・確定ではない。
     if (isImeKey(event)) return
+    const focused = event.target instanceof HTMLElement ? event.target : null
     if (event.key === 'Escape') {
       if (!commandActive) return
+      // 外の入力欄・ダイアログの Esc はその欄のもの。このコマンドの引数の欄の Esc は中断。
+      if (ownsEscapeKey(focused) && !(focused !== null && overlayEl?.contains(focused))) return
       event.preventDefault()
       abort()
+      return
+    }
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || isTextEntry(focused)) return
+      if (pressDelete()) event.preventDefault()
       return
     }
     // 点だけで引数が揃うコマンド(線分など)はEnterの受け皿が無いので、数値欄にフォーカスが無いときのEnterをここで拾う(欄にあるときは `onNumberKeydown` が拾う)。
@@ -856,7 +966,9 @@
           {candidate.label}{command !== null && candidate.id === command.id && needsEnter(candidate) ? ' (Enter)' : ''}
         </button>
       {/each}
-      <span id="command-prompt" class:dim={!ready}>{prompt}</span>
+      {#if !commandActive}
+        <span id="command-prompt" class:dim={!ready}>{prompt}</span>
+      {/if}
     </div>
   </div>
 </section>
@@ -939,12 +1051,13 @@
     <!-- 無起動・スケッチの「選ぶ」では出さない。`#command-abort` はDOMに無いことが完了条件なので、`{#if}` でDOMから外す。 -->
     <div class="row">
       {#each numberArgs as spec (spec.name)}
-        <label class="label" for={spec.inputId}>{spec.label} {spec.unit}</label>
+        <label class="label" for={spec.inputId} title={spec.hint}>{spec.label} {spec.unit}</label>
         <input
           id={spec.inputId}
           type="text"
           inputmode="decimal"
           autocomplete="off"
+          title={spec.hint}
           placeholder={placeholderFor(spec)}
           value={numberText[spec.name] ?? ''}
           oninput={(event) => {
@@ -955,6 +1068,8 @@
         />
       {/each}
       <button id="command-abort" onclick={abort}>中断 (Esc)</button>
+      <!-- 起動中は引数の行に置いて折り返す(コマンド行は in-flow で、伸びるとビューポートの実寸が変わる)。 -->
+      <span id="command-prompt" class:dim={!ready}>{prompt}</span>
     </div>
   {/if}
   </div>

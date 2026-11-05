@@ -58,7 +58,7 @@ export function offsetArg(
 
 /** 角度の数値引数。既定値を置かない(0度はコアが断る値で、「空欄=回さない」が成立しない)。符号は u->v の反時計回りが正。 */
 export function angleArg(prefix: string): Omit<NumberArgSpec, 'kind'> {
-  return { name: 'angle', label: '角度', unit: '度', inputId: `${prefix}-angle`, reject: rejectAngle, when: isRotateMode }
+  return { name: 'angle', label: '角度', unit: '°', inputId: `${prefix}-angle`, reject: rejectAngle, when: isRotateMode }
 }
 
 /**

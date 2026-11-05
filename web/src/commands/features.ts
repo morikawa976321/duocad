@@ -403,7 +403,7 @@ export const THREAD: CommandDef<'thread'> = {
   buttonId: 'thread',
   preview: 'server',
   args: [
-    { kind: 'selection', name: 'faces', label: '円筒面(1つ)', shapeKind: 'face', min: 1, max: 1 },
+    { kind: 'selection', name: 'faces', label: '全周の円筒面', shapeKind: 'face', surfaceKinds: ['cylinder_full'], min: 1, max: 1 },
     {
       kind: 'choice',
       name: 'profile',
@@ -416,15 +416,16 @@ export const THREAD: CommandDef<'thread'> = {
     {
       kind: 'number',
       name: 'clearance',
-      label: '隙間(空欄=既定。軸の既定は 0)',
+      label: '隙間',
       unit: 'mm',
       inputId: 'thread-clearance',
       optional: true,
+      hint: '空欄なら既定(山形と、軸か穴かで決まる。軸は 0)',
       reject: (value) => (value >= 0 ? null : '隙間は0以上'),
     },
   ],
   build(values) {
-    const empty = missingSelection(values, 'faces', '円筒面')
+    const empty = missingSelection(values, 'faces', '全周の円筒面')
     const profile = values.profile
     const clearance = values.clearance
     if (empty !== null) return { ok: false, reason: empty }
@@ -437,6 +438,7 @@ export const THREAD: CommandDef<'thread'> = {
 /**
  * ソリッドブーリアン。ターゲットはボディ1つを直接ピック(`PickArgSpec`)、ツールは選択(複数)。
  * ターゲットのピックをツール選択より前に置く(`args` の並びが `firstMissingArg` の順序)。ターゲットを選択に入れると `require_bodies` でツールとロールが混ざる。
+ * 先に選んであったボディをターゲットに指したら、そのボディはツールの選択から外れる(`PickArgSpec.excludesFrom`)。
  */
 export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
   id: 'boolean_body',
@@ -450,6 +452,7 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
       label: 'ターゲットボディ',
       target: 'body',
       buttonId: 'boolean-body-target',
+      excludesFrom: 'tools',
     },
     {
       kind: 'selection',
@@ -497,6 +500,7 @@ export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
       unit: 'mm',
       inputId: 'pattern-dx',
       reject: () => null, // 0 は「その方向には並べない」で正当
+      default: 0,
     },
     {
       kind: 'number',
@@ -505,6 +509,7 @@ export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
       unit: 'mm',
       inputId: 'pattern-dy',
       reject: () => null,
+      default: 0,
     },
     {
       kind: 'number',
@@ -513,6 +518,7 @@ export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
       unit: '個',
       inputId: 'pattern-nx',
       reject: count('X個数', 1),
+      default: 1,
     },
     {
       kind: 'number',
@@ -521,6 +527,7 @@ export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
       unit: '個',
       inputId: 'pattern-ny',
       reject: count('Y個数', 1),
+      default: 1,
     },
   ],
   build(values) {
@@ -541,7 +548,7 @@ export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
     if (dx === 0 && dy === 0 && nx * ny > 1) {
       return { ok: false, reason: '間隔が両方0(複製が元と重なる)' }
     }
-    if (nx === 1 && ny === 1) return { ok: false, reason: '個数が1×1(反復にならない)' }
+    if (nx === 1 && ny === 1) return { ok: false, reason: 'X個数かY個数を2以上にする(1×1は反復にならない)' }
     return { ok: true, args: { entities, dx, dy, nx, ny } }
   },
 }
@@ -572,8 +579,9 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
       kind: 'number',
       name: 'total_angle',
       label: '全角度',
-      unit: '度',
+      unit: '°',
       inputId: 'pattern-angle',
+      default: 360,
       reject: (value) =>
         value > 0 && value <= 360 ? null : '全角度は 0より大きく360以下',
     },
@@ -643,7 +651,7 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
     return buildMove(values, {
       missingTarget: (given) => missingSelection(given, 'target', '動かすボディ'),
       axes: ['dx', 'dy', 'dz'],
-      zeroReason: '移動量が全部0',
+      zeroReason: 'X・Y・Zのどれかに移動量を打つ',
       rotateArgs: (angle, given) => {
         // 軸は参照のまま送る: 辺が乗る直線を厳密に出せるのはコアだけ(ブラウザの持つのは折れ線)。
         const axis = pickedRefOf(given.axis_edge)

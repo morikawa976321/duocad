@@ -96,8 +96,8 @@
 
   /**
    * Esc で閉じる。非モーダルの `<dialog>` は Esc を拾わない(close request は `showModal()` にしか来ない)ので window で拾う。
-   * `preventDefault()` も `stopPropagation()` もしない: 同じ Esc を `CommandHost` が構え中コマンドの中断に使っている
-   * (`CommandHost.svelte` の `onKeydown`)。
+   * `preventDefault()` も `stopPropagation()` もしない: フォーカスがダイアログの外にある Esc は、`CommandHost` が構え中コマンドの
+   * 中断にも使う(ダイアログの中の Esc は `keys.ts` の `ownsEscapeKey` で中断しない)。
    */
   function onWindowKeydown(event: KeyboardEvent): void {
     if (!open || event.key !== 'Escape' || isImeKey(event)) return
