@@ -523,7 +523,10 @@ export function itemsForArg(
   return spec.max === null ? items : items.slice(0, spec.max)
 }
 
-/** `max` を超えて選ばれている引数があれば理由を返す(無ければ空文字)。黙って先頭だけ使わず、送りもしない(コア側の `require_selected(exactly_one=True)` は2枚以上を拒否する)。`CommandHost` は空でない間 Enter を受け付けない。 */
+/**
+ * `max` を超えて選ばれている引数か、`surfaceKinds` の食えない面が選択に残っている引数があれば理由を返す(無ければ空文字)。黙って先頭だけ使わず、
+ * 送りもしない(コア側の `require_selected(exactly_one=True)` は2枚以上を拒否し、食えない面も数える)。`CommandHost` は空でない間 Enter を受け付けない。
+ */
 export function overflowNote(
   command: CommandDef,
   selection: SelectionState | null,
@@ -531,12 +534,13 @@ export function overflowNote(
   faceKindOf: FaceKindOf = () => null,
 ): string {
   for (const spec of command.args) {
-    if (spec.kind !== 'selection' || spec.max === null) continue
-    if (!argApplies(spec, values)) continue
+    if (spec.kind !== 'selection' || !argApplies(spec, values)) continue
     const kinds = argKinds(spec)
-    const total = (selection?.items ?? []).filter(
-      (item) => kinds.includes(refKind(item)) && acceptsSurface(spec, item, faceKindOf),
-    ).length
+    const eaten = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item)))
+    const refused = eaten.filter((item) => !acceptsSurface(spec, item, faceKindOf)).length
+    if (refused > 0) return `${spec.label}ではない面が選ばれている(${refused}${counterFor(spec)}。クリックで外す)`
+    if (spec.max === null) continue
+    const total = eaten.length
     if (total > spec.max) {
       const counter = counterFor(spec)
       return `${spec.label}は${spec.max}${counter}まで(いま${total}${counter}。クリックで外す)`

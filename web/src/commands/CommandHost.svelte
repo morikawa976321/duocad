@@ -36,7 +36,7 @@
    * Enterはプレビューを待たない(プレビューは確認用で、確定の前提ではない)。
    */
   import { onDestroy, onMount, untrack } from 'svelte'
-  import type { PreviewController, PreviewInput } from '../previewController'
+  import { previewInputKey, type PreviewController, type PreviewInput } from '../previewController'
   import { createSharedArgsController, publishedArgs } from '../sharedArgsController'
   import {
     acceptsSurface,
@@ -309,8 +309,9 @@
   const prompt = $derived.by(() => {
     if (command === null) return ''
     if (expressionError !== null) return expressionError
-    if (missing !== null) return promptFor(missing, values)
+    // 選び間違い(選ばれすぎ・食えない面)は、ほかの引数を打つより先に直してもらう。
     if (overflow !== '') return overflow
+    if (missing !== null) return promptFor(missing, values)
     if (built && !built.ok) return built.reason
     // 断られている間は「Enterで確定」と言わない(押しても同じ理由で断られる)。
     if (previewFailure !== null && previewFailure.key === previewKey) return `プレビューできない: ${previewFailure.message}`
@@ -389,18 +390,19 @@
 
   /** サーバへ出すプレビューの入力の印(サーバへ出さないなら null)。断られた理由がいまの入力のものかを見分ける。 */
   const previewKey = $derived(
-    previewInput === null || previewInput.mode !== 'server'
-      ? null
-      : JSON.stringify([previewInput.verb, previewInput.args, previewInput.selection]),
+    previewInput === null || previewInput.mode !== 'server' ? null : previewInputKey(previewInput),
   )
 
   /** サーバのプレビューが断った理由と、そのときの入力の印。入力が変われば印が合わなくなり、出さなくなる。 */
   let previewFailure = $state<{ key: string; message: string } | null>(null)
 
-  /** プレビューが断られたときに `App.svelte` が呼ぶ。待ちの1行に出せたら `true`(出せないときはトーストへ回す)。 */
-  export function previewFailed(message: string): boolean {
-    if (previewKey === null) return false
-    previewFailure = { key: previewKey, message }
+  /**
+   * プレビューが断られたときに `App.svelte` が呼ぶ(`input` は断られた要求の入力)。入力が既に変わっていれば何も出さない。
+   * 待ちの1行の持ち主として受け取ったら `true`(無起動ならトーストへ回す)。
+   */
+  export function previewFailed(message: string, input: PreviewInput): boolean {
+    if (command === null) return false
+    previewFailure = { key: previewInputKey(input), message }
     return true
   }
 
@@ -485,12 +487,14 @@
   /** 確定した verb がサーバで失敗した・送れなかったときに `App.svelte` が呼ぶ。打った値は残っているので、打ち直せるようにするだけ。 */
   export function commitFailed(): void {
     committed = false
+    commitOnEntry = null
     focusFirstNumber()
   }
 
   /** 繋ぎ直したときに `App.svelte` が呼ぶ。送った確定の返事は来ないので、待っている印を降ろす(構えはサーバの配信が正)。 */
   export function reconnected(): void {
     committed = false
+    commitOnEntry = null
   }
 
   /**
@@ -559,7 +563,7 @@
   })
 
   function entered(verb: string): void {
-    const commitNow = commitOnEntry === verb
+    const commitNow = commitOnEntry !== null && commitOnEntry.verb === verb && commitOnEntry.selection === selectionKey()
     commitOnEntry = null
     restart()
     onStart(verb)
@@ -601,8 +605,15 @@
     focusFirstNumber()
   }
 
-  /** Delete・Backspace で起動した verb。構える対象の起動は配信を待つので、入った(`entered()`)ところで確定する。 */
-  let commitOnEntry: string | null = null
+  /**
+   * Delete・Backspace で起動した verb と、押したときの選択の印。構える対象の起動は配信を待つので、入った(`entered()`)ところで確定する。
+   * 選択が変わっていたら確定しない(起動が届かず残った予約で、後から AI が起動した `delete` に別の対象を消させない)。
+   */
+  let commitOnEntry: { verb: string; selection: string } | null = null
+
+  function selectionKey(): string {
+    return (selection?.items ?? []).map(refKey).join('|')
+  }
 
   /**
    * Delete・Backspace = 「削除する」を押して Enter。消せるものが選ばれていれば無起動から起動して確定し、「削除する」の起動中なら確定する。
@@ -619,7 +630,7 @@
     const target = def.args.find((spec): spec is SelectionArgSpec => spec.kind === 'selection')
     if (target === undefined || itemsForArg(target, selection).length < target.min) return false
     start(DELETE_VERB)
-    commitOnEntry = DELETE_VERB
+    commitOnEntry = { verb: DELETE_VERB, selection: selectionKey() }
     return true
   }
 

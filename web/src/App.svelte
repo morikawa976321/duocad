@@ -10,7 +10,7 @@
   import { onMount, untrack } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import { sharedArgsChangeNote } from './sharedArgsController'
-  import { createPreviewController } from './previewController'
+  import { createPreviewController, type PreviewInput } from './previewController'
   import { createFaceKinds } from './faceKinds'
   import {
     bodyRef,
@@ -252,7 +252,7 @@
     commitFailed(): void
     reconnected(): void
     commandSucceeded(): void
-    previewFailed(message: string): boolean
+    previewFailed(message: string, input: PreviewInput): boolean
     previewSucceeded(): void
     refusesFace(bodyId: string, faceIndex: number): string | null
   } | null>(null)
@@ -398,10 +398,14 @@
   const session = createSession({
     onState: handleState,
     onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
-    onError: (message, where, clientOp) => {
-      // プレビューの断りは待ちの1行に出す(トーストにすると打ち替えるたびに積もる)。
-      if (where === 'preview' && host?.previewFailed(message) === true) {
+    onError: (message, where, clientOp, previewId) => {
+      // プレビューの断りは待ちの1行に出す(トーストにすると打ち替えるたびに積もる)。後から送った要求があれば古い断りで、
+      // 捨てる(消すと、その後の要求の応答まで捨てる)。
+      if (where === 'preview') {
+        const failed = preview.failed(previewId ?? null)
+        if (failed === null) return
         preview.clear()
+        if (host?.previewFailed(message, failed) !== true) fail(`エラー[preview] ${message}`)
         return
       }
       // 干渉チェックの要求の失敗(対象が足りない等)。待ちバーも `pendingOp` も使っていないので、実行中の表示を解くだけ。
