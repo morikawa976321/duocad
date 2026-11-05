@@ -173,6 +173,26 @@ def test_leaving_is_refused_while_the_unsaved_document_still_cannot_be_written(s
     assert session.saved is False
 
 
+def test_deleting_the_unsaved_open_file_does_not_write_it_back(session: Session, monkeypatch) -> None:
+    """落ちたら: 未保存のまま開いているファイルを削除すると、閉じる前の書き直しが消したファイルを作り直す(issue #279 の書き直し)。"""
+    real_write = session.store.write_document_file
+    _box(session)
+    session.save_document("mine.json")
+
+    def refuse(target, payload):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(session.store, "write_document_file", refuse)
+    session.sketch_create("XY")
+    assert session.saved is False
+    monkeypatch.setattr(session.store, "write_document_file", real_write)
+
+    answer = session.delete_document("mine.json")
+
+    assert answer["closed"] is True
+    assert not (session.models_dir / "mine.json").exists()
+
+
 def test_every_document_change_is_autosaved_and_undo_redo_follow(session: Session) -> None:
     """落ちたら: verb・undo・redo のどれかがディスクに写らない(ファイルが今の文書の鏡でない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]

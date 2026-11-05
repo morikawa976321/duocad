@@ -1332,6 +1332,9 @@ class Session:
         1つでも残った瞬間に、前の文書の続きが `untitled-<n>.json` として書かれる。
         """
         self._save_before_leaving()
+        return self._close_without_saving()
+
+    def _close_without_saving(self) -> dict:
         self._replace_document(Document(), current_name=None, created=None)
         self._open = False
         return self._emit({
@@ -1411,7 +1414,8 @@ class Session:
         self.store.drop_thumbnail(target)
         deleted = {"action": "delete", "path": str(target), "name": target.name}
         if target.name == self._current_name:
-            self.close_document()
+            # 書き直さずに閉じる(`_save_before_leaving` を通すと、消したファイルを未保存の中身で作り直す)。
+            self._close_without_saving()
             deleted["closed"] = True
         return deleted
 
