@@ -90,6 +90,7 @@ export function refKey(ref: SelectionRef): string {
  * (`body` / `index` / `sketch` / `entity` / `point`)をそのまま写して返す。
  */
 export function measureItemRef(item: MeasureItem): SelectionRef {
+  if (item.kind === 'datum') return { datum: item.datum }
   if (item.kind === 'sketch_entity') return { sketch: item.sketch, entity: item.entity, point: item.point }
   if (item.kind === 'region') return { sketch: item.sketch, index: item.index }
   if (item.kind === 'body') return { body: item.body, kind: 'body', index: null }
