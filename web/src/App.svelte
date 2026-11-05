@@ -2703,7 +2703,6 @@
           item={selectionInfo.item}
           error={selectionInfo.error}
           names={selectionInfoNames}
-          besideOptimizePanel={optimizeMode}
         />
         <BrowserPanel
           bodies={partBodies}
