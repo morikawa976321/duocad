@@ -55,6 +55,8 @@
   function saveKey(): void {
     const key = keyDraft.trim()
     if (!key) return
+    // 確認中に別のキーを保存したら、確認していた削除の相手はもう無い。
+    confirmingKeyDelete = false
     onSetApiKey(key)
     keyDraft = ''
   }
