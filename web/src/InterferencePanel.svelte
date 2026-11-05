@@ -1,16 +1,16 @@
 <script lang="ts">
   /**
    * 干渉チェックの結果のパネル(issue #186)。ビューポート右に浮かぶ。隙間の欄と再検査、組の一覧(見出しは干渉・隙間不足・未確定・接触の4つ。
-   * 接触だけ畳む)。行を選ぶとビューポートがその組を強調する(`interference.svelte.ts`)。持つのは開閉の見た目だけ。
+   * 接触だけ畳む)。行を選ぶとビューポートがその組を強調し、その行に「寄せる」「選ぶ」が出る(`interference.svelte.ts`)。
+   * 持つのは開閉と畳みの見た目だけ。畳んでも結果は残る(下の面を指すために退かす手。✕ は結果も捨てる)。
    */
-  import { summaryLines } from './interferenceGroups'
   import type { Interference } from './interference.svelte'
   import { isImeKey } from './keys'
 
   let { interference }: { interference: Interference } = $props()
 
   const result = $derived(interference.result)
-  const lines = $derived(result === null ? [] : summaryLines(result))
+  let folded = $state(false)
 
   function onKey(event: KeyboardEvent): void {
     if (event.key !== 'Enter' || isImeKey(event)) return
@@ -20,54 +20,73 @@
 </script>
 
 {#if interference.open}
-  <aside id="interference-panel" class="floating-panel">
+  <aside id="interference-panel" class="floating-panel" class:folded>
     <header>
-      <span class="title">干渉チェック</span>
-      <button type="button" id="interference-close" class="close" title="閉じる" onclick={() => interference.close()}>×</button>
-    </header>
-    <div class="clearance">
-      <label for="interference-clearance">隙間</label>
-      <input
-        id="interference-clearance"
-        type="text"
-        inputmode="decimal"
-        autocomplete="off"
-        spellcheck="false"
-        bind:value={interference.clearanceText}
-        onkeydown={onKey}
-      />
-      <span class="unit">mm</span>
-      <button type="button" id="interference-run" disabled={interference.running} onclick={() => interference.run()}>
-        {interference.running ? '検査中…' : '再検査'}
+      <button
+        type="button"
+        id="interference-fold"
+        class="caret"
+        title={folded ? '開く' : '畳む'}
+        aria-expanded={!folded}
+        onclick={() => (folded = !folded)}
+      >
+        {folded ? '▸' : '▾'}
       </button>
-    </div>
-    {#if interference.notice !== ''}
-      <div class="notice" id="interference-notice">{interference.notice}</div>
-    {/if}
-    {#if result !== null}
-      {#each lines as line (line)}
-        <div class="summary">{line}</div>
-      {/each}
-      <div class="groups">
-        {#each interference.groups as group (group.key)}
-          <details open={group.open} class="group {group.key}" data-group={group.key}>
-            <summary>{group.heading} <span class="count">{group.rows.length}</span></summary>
-            {#each group.rows as row (row.key)}
-              <button
-                type="button"
-                class="row"
-                class:picked={interference.selectedKey === row.key}
-                data-pair={row.key}
-                onclick={() => interference.select(row.key)}
-              >
-                <span class="names">{row.title}</span>
-                <span class="detail">{row.detail}</span>
-                {#each row.marks as mark (mark)}<span class="mark">{mark}</span>{/each}
-              </button>
-            {/each}
-          </details>
-        {/each}
+      <span class="title">干渉チェック</span>
+      {#if folded && interference.running}<span class="dim">検査中…</span>{/if}
+      <button type="button" id="interference-close" class="close" title="閉じる(結果も消える)" onclick={() => interference.close()}>×</button>
+    </header>
+    {#if !folded}
+      <div class="clearance">
+        <label for="interference-clearance">隙間</label>
+        <input
+          id="interference-clearance"
+          type="text"
+          inputmode="decimal"
+          autocomplete="off"
+          spellcheck="false"
+          bind:value={interference.clearanceText}
+          onkeydown={onKey}
+        />
+        <span class="unit">mm</span>
+        <button type="button" id="interference-run" disabled={interference.running} onclick={() => interference.run()}>
+          {interference.running ? '検査中…' : '再検査'}
+        </button>
       </div>
+      {#if interference.notice !== ''}
+        <div class="notice" id="interference-notice">{interference.notice}</div>
+      {/if}
+      {#if result !== null}
+        {#each interference.summary as line (line)}
+          <div class="summary">{line}</div>
+        {/each}
+        <div class="groups">
+          {#each interference.groups as group (group.key)}
+            <details open={group.open} class="group {group.key}" data-group={group.key}>
+              <summary>{group.heading} <span class="count">{group.rows.length}</span></summary>
+              {#each group.rows as row (row.key)}
+                <button
+                  type="button"
+                  class="row"
+                  class:picked={interference.selectedKey === row.key}
+                  data-pair={row.key}
+                  onclick={() => interference.select(row.key)}
+                >
+                  <span class="names">{row.title}</span>
+                  <span class="detail">{row.detail}</span>
+                  {#each row.marks as mark (mark)}<span class="mark">{mark}</span>{/each}
+                </button>
+                {#if interference.selectedKey === row.key}
+                  <div class="row-actions">
+                    <button type="button" class="interference-frame" onclick={() => interference.frameRow(row.key)}>寄せる</button>
+                    <button type="button" class="interference-select" onclick={() => interference.selectRow(row.key)}>この2つを選ぶ</button>
+                  </div>
+                {/if}
+              {/each}
+            </details>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </aside>
 {/if}
@@ -85,19 +104,43 @@
     font-variant-numeric: tabular-nums;
   }
 
+  #interference-panel.folded {
+    width: auto;
+  }
+
   header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    gap: 6px;
     margin-bottom: 6px;
+  }
+
+  .folded header {
+    margin-bottom: 0;
   }
 
   .title {
     color: var(--accent);
   }
 
+  .dim {
+    color: var(--dim);
+  }
+
+  .caret {
+    padding: 0 4px;
+  }
+
   .close {
+    margin-left: auto;
     padding: 0 6px;
+  }
+
+  .row-actions {
+    display: flex;
+    gap: 6px;
+    padding: 2px 6px 4px 8px;
+    border-left: 2px solid var(--accent);
   }
 
   .clearance {

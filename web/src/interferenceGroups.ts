@@ -113,17 +113,32 @@ function weight(key: GroupKey, pair: InterferencePair): number {
   return 0
 }
 
-/** 結果の要約(パネルの上段)。 */
-export function summaryLines(payload: InterferencePayload): string[] {
+/** 要約に名前を並べるボディの数。超えた分は数だけ出す。 */
+const NAMED_AT_MOST = 3
+
+/**
+ * 結果の要約(パネルの上段)。対象のボディは名前で出す: 結果の組の名前(検査を始めた時点の名前)、無ければ `nameOf`
+ * (離れていて隙間も足りている組は `pairs` に入らない)、それも無ければ ID。
+ */
+export function summaryLines(payload: InterferencePayload, nameOf: (bodyId: string) => string | null = () => null): string[] {
   const lines: string[] = []
   const target = payload.target
   if (target !== undefined) {
+    const known = new Map<string, string>()
+    for (const pair of payload.pairs ?? []) {
+      known.set(pair.a, pair.a_name)
+      known.set(pair.b, pair.b_name)
+    }
+    const name = (bodyId: string) => known.get(bodyId) ?? nameOf(bodyId) ?? bodyId
+    const shown = target.selected.slice(0, NAMED_AT_MOST).map(name).join('・')
+    const rest = target.selected.length - NAMED_AT_MOST
+    const selected = rest > 0 ? `${shown} ほか ${rest} 個` : shown
     const mode =
       target.mode === 'visible_all'
         ? '見えているボディ全部'
         : target.mode === 'one_vs_rest'
-          ? `${target.selected[0] ?? '選んだ1つ'} 対 ほかの見えているボディ`
-          : '選んだボディどうし'
+          ? `${target.selected.length > 0 ? selected : '選んだ1つ'} 対 ほかの見えているボディ`
+          : `選んだ ${selected} どうし`
     const hidden = target.excluded_hidden > 0 ? `・隠した ${target.excluded_hidden} 個は除く` : ''
     lines.push(`${mode}の ${target.pairs} 組を調べた${hidden}`)
   }

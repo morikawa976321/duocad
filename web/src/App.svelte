@@ -1074,6 +1074,8 @@
     connected: () => status === 'open',
     modeKind: () => mode.kind,
     viewport: () => viewport,
+    bodyName: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.name ?? null,
+    selectBodies: (bodyIds) => presetSelection(bodyIds.map((bodyId) => bodyRef(bodyId))),
     fail,
   })
 

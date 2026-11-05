@@ -9,7 +9,7 @@
  */
 import { untrack } from 'svelte'
 import { parseClearance } from './commands/interference'
-import { acceptResult, groupPairs, visualFor, type Group } from './interferenceGroups'
+import { acceptResult, groupPairs, pairKey, summaryLines, visualFor, type Group } from './interferenceGroups'
 import type { InterferencePayload } from './interferenceTypes'
 import type { Viewport } from './viewport'
 
@@ -19,6 +19,8 @@ export interface Interference {
   clearanceText: string
   readonly result: InterferencePayload | null
   readonly groups: Group[]
+  /** 結果の要約の行(対象のボディは名前で)。 */
+  readonly summary: string[]
   readonly selectedKey: string | null
   /** 結果を捨てたときなどの一言(パネルに出す)。 */
   readonly notice: string
@@ -28,6 +30,10 @@ export interface Interference {
   /** サーバが検査の要求を断った(対象が足りない等)。自分の起動の失敗なら実行中を解く。 */
   onError(clientOp: number | null | undefined): void
   select(key: string | null): void
+  /** その組の2つのボディが収まる所へ寄る。 */
+  frameRow(key: string): void
+  /** その組の2つのボディを選ぶ(選択を置き換える)。 */
+  selectRow(key: string): void
   close(): void
 }
 
@@ -44,6 +50,10 @@ export function createInterference(deps: {
   /** 今のモード(`'idle' | 'sketch-pending' | 'sketch' | 'optimize'`)。変わったら結果を畳む。 */
   modeKind: () => string
   viewport: () => Viewport | null
+  /** ボディの今の名前(要約で、結果の組に名前が無いボディに使う)。 */
+  bodyName: (bodyId: string) => string | null
+  /** 選択をそのボディだけにする。 */
+  selectBodies: (bodyIds: string[]) => void
   fail: (message: string) => void
 }): Interference {
   let open = $state(false)
@@ -122,6 +132,12 @@ export function createInterference(deps: {
   })
 
   const groups = $derived(result === null ? [] : groupPairs(result.pairs ?? []))
+  const summary = $derived(result === null ? [] : summaryLines(result, deps.bodyName))
+
+  function pairOf(key: string): [string, string] | null {
+    const pair = result?.pairs?.find((candidate) => pairKey(candidate) === key)
+    return pair === undefined ? null : [pair.a, pair.b]
+  }
 
   return {
     get open() {
@@ -141,6 +157,9 @@ export function createInterference(deps: {
     },
     get groups() {
       return groups
+    },
+    get summary() {
+      return summary
     },
     get selectedKey() {
       return selectedKey
@@ -189,6 +208,14 @@ export function createInterference(deps: {
     },
     select(key) {
       selectedKey = key === selectedKey ? null : key
+    },
+    frameRow(key) {
+      const bodies = pairOf(key)
+      if (bodies !== null) deps.viewport()?.frameBodies(bodies)
+    },
+    selectRow(key) {
+      const bodies = pairOf(key)
+      if (bodies !== null) deps.selectBodies(bodies)
     },
     close() {
       open = false

@@ -614,6 +614,8 @@ export interface Viewport {
    * 「入る前の視点」へ戻す。実機検査が図形を画面内へ収めるために呼ぶ。
    */
   frameAll(): void
+  /** 見えているボディ `bodyIds` が収まる所へ、今の向きのまま寄る(干渉チェックの行から)。 */
+  frameBodies(bodyIds: readonly string[]): void
   /** 新規文書にしたときに呼ぶ。カメラは動かさず、基準グリッドの縮小だけを許可する。 */
   resetGrid(): void
   /** 左ドラッグのウィンドウ選択が終わったときに呼ばれる。ドラッグの向きは見ない(本人明言)。 */

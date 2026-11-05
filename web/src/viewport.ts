@@ -637,21 +637,39 @@ export function createViewport(container: HTMLElement): Viewport {
     // 置かないと、全部消して `frameAll()` してもグリッドが縮まない)。戻り値(姿勢を合わせたか)とは独立。
     grid.rescale(contentBoxForGrid(), true)
     if (box.isEmpty()) return false
+    frameBox(box, HOME_VIEW_OFFSET)
+    return true
+  }
+
+  /** 箱が収まるよう、注視点を箱の中心へ、カメラを `offset` の向きへ引く(`offset` の長さは `HOME_VIEW_OFFSET` と同じ引き具合の係数)。 */
+  function frameBox(box: THREE.Box3, offset: THREE.Vector3): void {
     const center = new THREE.Vector3()
     box.getCenter(center)
     const diagonal = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-6)
     const distance = fitDistance(diagonal / 2)
-    camera.position.copy(center).addScaledVector(HOME_VIEW_OFFSET, distance)
+    camera.position.copy(center).addScaledVector(offset, distance)
     controls.target.copy(center)
     // 正投影は視錐台で収める。`HOME_VIEW_OFFSET` の長さが1ではなく、透視は `fitHalfHeight` の
     // 1.5362倍ぶん引いた絵になるので、同じ係数を掛けて揃える(掛けないと `frameAll` のたびに
     // 正投影だけ1.54倍に寄る。実測 93.6px → 143.7px)。
     if (camera === orthographic) {
-      setViewHalfHeight(fitHalfHeight(diagonal / 2) * HOME_VIEW_OFFSET.length())
+      setViewHalfHeight(fitHalfHeight(diagonal / 2) * offset.length())
     }
     updateClipPlanes()
     controls.update()
-    return true
+  }
+
+  /** 見えているボディ `bodyIds` が収まる所へ、今の向きのまま寄る。どれも見えていなければ動かない。 */
+  function frameBodies(bodyIds: readonly string[]): void {
+    const box = new THREE.Box3()
+    for (const bodyId of bodyIds) {
+      const mesh = bodies.get(bodyId)?.body.mesh
+      if (mesh !== undefined && mesh.visible) box.expandByObject(mesh)
+    }
+    if (box.isEmpty()) return
+    const offset = camera.position.clone().sub(controls.target)
+    if (offset.lengthSq() === 0) offset.copy(HOME_VIEW_OFFSET)
+    frameBox(box, offset.setLength(HOME_VIEW_OFFSET.length()))
   }
 
   function setFov(deg: number): void {
@@ -2473,6 +2491,7 @@ export function createViewport(container: HTMLElement): Viewport {
       camera.up.copy(WORLD_UP) // スケッチの v 軸へ倒したままだと、戻したのに傾いて見える
       frameToContent()
     },
+    frameBodies,
     resetGrid() {
       grid.rescale(contentBoxForGrid(), true)
     },
