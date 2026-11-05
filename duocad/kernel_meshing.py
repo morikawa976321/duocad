@@ -36,7 +36,10 @@ from OCP.BRepMesh import (
     BRepMesh_ModelPreProcessor,
 )
 from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Curve2d, BRepAdaptor_Surface
 from OCP.BRepTools import BRepTools
+from OCP.Geom2d import Geom2d_TrimmedCurve
+from OCP.Geom2dAPI import Geom2dAPI_InterCurveCurve
 from OCP.IMeshData import IMeshData_Status
 from OCP.IMeshTools import IMeshTools_Context, IMeshTools_Parameters
 from OCP.Message import Message_ProgressRange
@@ -57,6 +60,9 @@ from . import (
 DEFAULT_MAX_ROUNDS = 12
 #: 全辺の離散点数の予算。超えたら未解決として止める(メモリの歯止め)。
 DEFAULT_MAX_POINTS = 4_000_000
+#: 頂点の許容値の内側の交差を通すとき(`_near_vertex`)に、許容値をこれより大きく取らない[mm]。
+#: 実測した Creo の STEP の頂点は 0.0995・0.113 mm。許容値が極端に大きい頂点で、本物の交差まで通さないための上限。
+NEAR_VERTEX_TOLERANCE_CAP = 0.2
 
 _FAILURE = IMeshData_Status.IMeshData_Failure
 _SELF_INTERSECTING = IMeshData_Status.IMeshData_SelfIntersectingWire
@@ -105,12 +111,15 @@ class _Model:
         self.edges = [self.model.GetEdge(i) for i in range(self.model.EdgesNb())]
         self.edge_ids = [edge_map.FindIndex(de.GetEdge()) for de in self.edges]
         self.edge_model_index = {edge_id: i for i, edge_id in enumerate(self.edge_ids)}
+        self.face_position = {face_id: position for position, face_id in enumerate(self.face_ids)}
+        self.vertex_map = vertex_map
         # 辺の点列はパラメータ増加方向(FORWARD)に並ぶので、先頭・末尾の CAD 頂点も FORWARD で取る
         edge_vertex = {}
         for edge_id, de in zip(self.edge_ids, self.edges):
             forward_edge = TopoDS.Edge_s(de.GetEdge().Oriented(_FORWARD))
             edge_vertex[edge_id] = (vertex_map.FindIndex(TopExp.FirstVertex_s(forward_edge)),
                                     vertex_map.FindIndex(TopExp.LastVertex_s(forward_edge)))
+        self.edge_vertex = edge_vertex
         # use ごと: pcurve ハンドル・点列(numpy)・所属
         self.use_pcurve: List = []
         self.use_points: List[np.ndarray] = []
@@ -220,6 +229,7 @@ class _Model:
         self.use_pcurve = []
         self.edges = []
         self.faces = []
+        self.vertex_map = None
         self.model = None
         self.context = None
 
@@ -289,6 +299,72 @@ def _amplify(model: _Model, edge_id: int, parameters: IMeshTools_Parameters) -> 
     return dict(edge=edge_id, deflection=deflection, points_before=before, points_after=de.GetCurve().ParametersNb())
 
 
+def _near_vertex(model: _Model, issue: dict) -> Optional[dict]:
+    """折れ線の交差が、共有する CAD 頂点の許容値の内側で**元の曲線どうしが**交わっていることによるものなら、その記録を返す。
+
+    B-rep では頂点の許容値の内側は1点とみなす。ほぼ接して頂点に入る2辺が、その内側で一度交わる入力がある
+    (docs/TOPOPT_GAP_CAUSALITY.md「頂点の許容値の内側の交差」)。再分割では消えないので、面を落とさずに分割へ渡す。
+    条件: 2本の pcurve の頂点以外の交点が1つ以上あり、どれも頂点から許容値(上限 `NEAR_VERTEX_TOLERANCE_CAP`)以内。
+    折れ線の交点は頂点から上限以内(浅い角度では弦のわずかなずれで交点が辺に沿って大きく動くので、許容値では測らない。
+    umbrella-down.stp で曲線の交点 0.097 mm に対し折れ線の交点 0.118 mm、頂点の許容値 0.0995 mm)。
+    元の曲線が交わっていなければ離散化のずれなので、ここでは通さず再分割に回す。距離はすべて 3D で測る。
+    """
+    if issue['kind'] not in ('cross', 'touch') or issue.get('point') is None or len(issue['edges']) != 2:
+        return None
+    first, second = issue['edges']
+    shared = set(model.edge_vertex[first]) & set(model.edge_vertex[second])
+    if not shared:
+        return None
+    face = TopoDS.Face_s(model.faces[model.face_position[issue['face']]].GetFace())
+    surface = BRepAdaptor_Surface(face)
+    polyline_point = surface.Value(*issue['point'])
+    crossings = _pcurve_crossings(face, [model.edges[model.edge_model_index[e]].GetEdge() for e in (first, second)])
+    if crossings is None:
+        return None
+    for vertex_id in sorted(shared):
+        vertex = TopoDS.Vertex_s(model.vertex_map.FindKey(vertex_id))
+        tolerance = BRep_Tool.Tolerance_s(vertex)
+        at = BRep_Tool.Pnt_s(vertex)
+        if polyline_point.Distance(at) > NEAR_VERTEX_TOLERANCE_CAP:
+            continue
+        distances = [surface.Value(u, v).Distance(at) for u, v in crossings]
+        away = [d for d in distances if d > Precision.Confusion_s()]
+        if away and max(away) <= min(tolerance, NEAR_VERTEX_TOLERANCE_CAP):
+            return dict(face=issue['face'], edges=[first, second], vertex=vertex_id, kind=issue['kind'],
+                        distance=float(max(away)), tolerance=float(tolerance))
+    return None
+
+
+def _pcurve_crossings(face, edges) -> Optional[List[tuple]]:
+    """2本の辺の、面の上の pcurve どうしの交点(UV)。重なる区間があるか求められなければ None。"""
+    curves = []
+    for edge in edges:
+        edge = TopoDS.Edge_s(edge)
+        if BRep_Tool.IsClosed_s(edge, face):
+            return None  # seam は pcurve が2本あり、どちらの利用箇所の交差か決められない
+        adaptor = BRepAdaptor_Curve2d(edge, face)
+        curves.append(Geom2d_TrimmedCurve(BRep_Tool.CurveOnSurface_s(edge, face, 0.0, 0.0),
+                                          adaptor.FirstParameter(), adaptor.LastParameter()))
+    try:
+        intersection = Geom2dAPI_InterCurveCurve(curves[0], curves[1], Precision.Confusion_s())
+    except Exception:
+        return None
+    if intersection.NbSegments():
+        return None
+    return [intersection.Point(i).Coord() for i in range(1, intersection.NbPoints() + 1)]
+
+
+def _sort_issues(model: _Model, issues: List[dict], unresolved: Dict[int, List[dict]],
+                 near: Dict[int, List[dict]]) -> None:
+    """検査の結果を、直すべき交差(`unresolved`)と頂点の許容値の内側の交差(`near`)へ面ごとに振り分ける。"""
+    for issue in issues:
+        accepted = _near_vertex(model, issue)
+        if accepted is None:
+            unresolved.setdefault(issue['face'], []).append(issue)
+        else:
+            near.setdefault(issue['face'], []).append(accepted)
+
+
 def _issue_summary(issues: List[dict]) -> List[dict]:
     return [dict(kind=i['kind'], edges=list(i['edges']), point=i.get('point'),
                  **({'gap': i['gap']} if 'gap' in i else {})) for i in issues]
@@ -308,6 +384,8 @@ def mesh_shape(shape, deviation: float, angular_deflection: float, *, max_rounds
         reinstated: [CAD 面番号]  OCCT の healer が SelfIntersectingWire|Failure にしたが独自検査で解消していたので分割対象に戻した面
         amplified_edges: 再分割した辺の数(重複なし), amplifications: 再分割の延べ回数
         restored_edge_ids: 再分割したが、直せなかった面に接するので再分割する前の点列へ戻した CAD 辺
+        near_vertex: [{'face', 'edges', 'vertex', 'kind', 'distance', 'tolerance'}]  共有する CAD 頂点の許容値の内側の
+            交差。面を落とさずに分割へ渡した(`_near_vertex`。頂点のそばに幅 1 µm 程度の隙間が残りうる)
         rounds_log: 各回の {round, faces_checked, issues, edges, points}
         count_mismatch: 面分割後に点数が検査時と食い違った use(空が正常)
         seconds: 段階ごとの秒
@@ -359,6 +437,7 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
     points_initial = model.points_total()
     rounds_log: List[dict] = []
     unresolved: Dict[int, List[dict]] = {}
+    near: Dict[int, List[dict]] = {}  # 頂点の許容値の内側の交差(`_near_vertex`)。面を落とさない
     seen_states = set()
     amplified: Dict[int, int] = {}
     originals: Dict[int, tuple] = {}  # 再分割した辺の、最初に再分割する前の状態(`_snapshot_edge`)
@@ -374,8 +453,8 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         checked = range(len(model.faces)) if dirty is None else dirty
         for position in checked:
             unresolved.pop(model.face_ids[position], None)
-        for issue in result['issues']:
-            unresolved.setdefault(issue['face'], []).append(issue)
+            near.pop(model.face_ids[position], None)
+        _sort_issues(model, result['issues'], unresolved, near)
         rounds_log.append(dict(round=rounds, faces_checked=result['faces_checked'], issues=len(result['issues']),
                                segments=result['segments'], points=model.points_total(),
                                endpoint_mismatches=result['endpoint_mismatches'],
@@ -441,9 +520,8 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
             started = clock()
             result = boundary_check.check(model.pack(None))
             seconds['final_check'] += clock() - started
-            unresolved = {}
-            for issue in result['issues']:
-                unresolved.setdefault(issue['face'], []).append(issue)
+            unresolved, near = {}, {}
+            _sort_issues(model, result['issues'], unresolved, near)
             broken = set(unresolved) - failing
             back = [edge_id for edge_id in kept_amplified
                     if any(model.face_ids[model.use_face_position[use]] in broken for use in model.edge_uses[edge_id])]
@@ -456,9 +534,8 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         if unresolved and termination == 'resolved':
             termination = 'reappeared'
 
-    position_of = {face_id: position for position, face_id in enumerate(model.face_ids)}
     for face_id in unresolved:
-        model.faces[position_of[face_id]].SetStatus(_FAILURE)
+        model.faces[model.face_position[face_id]].SetStatus(_FAILURE)
     reinstated = []
     for position in healer_failed:
         if model.face_ids[position] not in unresolved:
@@ -486,6 +563,7 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         points_initial=points_initial, points_final=model.points_total(),
         rounds=rounds, termination=termination,
         unresolved=[dict(face=face_id, issues=_issue_summary(issues)) for face_id, issues in sorted(unresolved.items())],
+        near_vertex=[entry for _face_id, entries in sorted(near.items()) for entry in entries],
         reinstated=sorted(reinstated),
         amplified_edges=len(amplified), amplifications=int(sum(amplified.values())),
         amplified_edge_ids=sorted(amplified),
@@ -507,6 +585,7 @@ def merge_diagnostics(passes: List[dict]) -> dict:
     return dict(
         termination='resolved' if all(t == 'resolved' for t in terminations) else next(t for t in terminations if t != 'resolved'),
         unresolved=sorted(unresolved, key=lambda entry: entry['face']),
+        near_vertex=sorted((entry for diag in passes for entry in diag['near_vertex']), key=lambda entry: entry['face']),
         reinstated=sorted(face for diag in passes for face in diag['reinstated']),
         rounds=int(sum(diag['rounds'] for diag in passes)),
         amplified_edges=int(sum(diag['amplified_edges'] for diag in passes)),
