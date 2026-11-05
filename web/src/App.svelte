@@ -37,7 +37,7 @@
     SOLID_FEATURE_COMMANDS,
     needsSketchId,
   } from './commands/features'
-  import { ghostCopies, snapSketchPoint } from './entityKinds'
+  import { entityPointKeys, ghostCopies, snapSketchPoint } from './entityKinds'
   import { IMPORT_STEP } from './commands/files'
   import { isImeKey } from './keys'
   import { INTERFERENCE } from './commands/interference'
@@ -316,9 +316,12 @@
   /**
    * 外周の辺を頼んだ時点の `commandRequests` と形の版(body_id ごと)。応答はどちらも今と同じときだけ使う: 中断を送ってから
    * 配信が届くまでは `edgeOnlyCommand` がまだ真で、遅れた応答が全解除の後に辺を足してしまう。頼んだ後に別の画面が形を
-   * 変えると、サーバは古い面の添字を新しい形で読んで答える。確定を送ったら捨てる(`runCommand`)。
+   * 変えると、サーバは古い面の添字を新しい形で読んで答える。待っている間は確定させない(`busy`。外した面の辺が
+   * 漏れたまま丸まる)。それでも確定を送ったら捨てる(`runCommand`)。
    */
   const faceEdgesFor = new Map<string, { commands: number; shape: number }>()
+  /** `faceEdgesFor` が空でないか(`busy` に効かせるための写し。Map は追跡されない)。 */
+  let faceEdgesWaiting = $state(false)
   /** 丸めの面の連なり(「面の削除」でクリックを広げる)。 */
   const faceChains = createFaceChains({
     shapeRevisionOf: (bodyId) => model?.bodies.find((body) => body.body_id === bodyId)?.shape_revision,
@@ -443,6 +446,7 @@
       if (where === 'get_face_edges' || where === 'send') {
         faceEdgesAsked.clear()
         faceEdgesFor.clear()
+        faceEdgesWaiting = false
       }
       if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
       // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
@@ -485,6 +489,7 @@
         faceChains.forgetAsked()
         faceEdgesAsked.clear()
         faceEdgesFor.clear()
+        faceEdgesWaiting = false
         pendingChainPick = null
         verticesAsked.clear()
         files.dropThumbnailRequests()
@@ -1045,6 +1050,7 @@
   function handleFaceEdges(payload: FaceEdgesPayload): void {
     const asked = faceEdgesFor.get(payload.body_id)
     faceEdgesFor.delete(payload.body_id)
+    faceEdgesWaiting = faceEdgesFor.size > 0
     if (asked === undefined || asked.commands !== commandRequests || asked.shape !== payload.shape_revision) return
     if (!edgeOnlyCommand || !sameShape(payload.body_id, payload)) return
     modifySelection(payload.boundary_edges.map((index) => edgeRef(payload.body_id, index)), [])
@@ -1061,6 +1067,7 @@
       if (missing.length === 0) continue
       for (const index of missing) faceEdgesAsked.add(`${bodyId}:${body.shape_revision}:${index}`)
       faceEdgesFor.set(bodyId, { commands: commandRequests, shape: body.shape_revision })
+      faceEdgesWaiting = true
       session.getFaceEdges(bodyId, missing)
     }
   }
@@ -1214,10 +1221,18 @@
 
   /**
    * 配信されたピックの参照を、強調が読む完全な形にする。コアは AI が省いて置いた形(`kind` の無い `{body, index}`、
-   * `point` の無い `{sketch, entity}`)をそのまま配るので、種類は引数の `target` から補う。
+   * `point` の無い `{sketch, entity}`)をそのまま配るので、種類は引数の `target` から補う。点を待つ引数で点を省いたら、
+   * コアは種別の最初の点を使う(`duocad/verbs/move_sketch.py` の `_point_of`)ので、その点を光らせる。
    */
   function completePickedRef(ref: SelectionRef, target: PickTarget | null): SelectionRef | null {
-    if ('sketch' in ref) return 'entity' in ref ? { ...ref, point: ref.point ?? null } : ref
+    if ('sketch' in ref) {
+      if (!('entity' in ref)) return ref
+      if (target !== 'sketchPoint') return { ...ref, point: ref.point ?? null }
+      if (ref.point !== undefined && ref.point !== null) return ref
+      const kind = sketches.find((item) => item.sketch_id === ref.sketch)?.entities.find((item) => item.entity_id === ref.entity)?.kind
+      const first = kind === undefined ? undefined : entityPointKeys()[kind]?.[0]?.[0]
+      return first === undefined ? null : { ...ref, point: first }
+    }
     if ('kind' in ref && ref.kind !== undefined) return ref
     if (target === 'face' || target === 'edge' || target === 'vertex') return { ...(ref as ShapeRef), kind: target }
     return target === 'body' ? bodyRef((ref as ShapeRef).body) : null
@@ -2170,6 +2185,7 @@
     const [verb] = request
     // 確定より後に届く外周の辺の応答は確定前の形の添字なので、変わった形の選択へ入れない。
     faceEdgesFor.clear()
+    faceEdgesWaiting = false
     const category = CATEGORY_OF.get(verb)
     if (category === undefined || category === 'ui') {
       // `ui`(スケッチの「選ぶ」)は何も送らない道具なので、通常ここへは来ない。
@@ -2664,7 +2680,7 @@
         <CommandHost
           bind:this={host}
           {selection}
-          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null}
+          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null || faceEdgesWaiting}
           {selfSelections}
           commands={mode.kind === 'sketch'
             ? SKETCH_MODE_COMMANDS

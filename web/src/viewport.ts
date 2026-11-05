@@ -1530,14 +1530,18 @@ export function createViewport(container: HTMLElement): Viewport {
     // 図形がまだ無ければ貼った面の大きさへ、面でもなく文書が空なら原点まわりの決め打ちの幅へ寄る。
     let center = toWorld(frame, 0, 0)
     let radius = 0
-    const box =
-      uvBoxOfPoints(target.points) ??
-      (target.plane.kind === 'face'
+    const drawn = uvBoxOfPoints(target.points)
+    const face =
+      drawn === null && target.plane.kind === 'face'
         ? uvBoxOfPositions(bodies.get(target.plane.bodyId)?.body.facePositions(target.plane.faceIndex) ?? null, frame)
-        : null)
-    if (box !== null) {
-      center = toWorld(frame, (box.uMin + box.uMax) / 2, (box.vMin + box.vMax) / 2)
-      radius = Math.max(box.uMax - box.uMin, box.vMax - box.vMin) / 2
+        : null
+    if (drawn !== null) {
+      center = toWorld(frame, (drawn.uMin + drawn.uMax) / 2, (drawn.vMin + drawn.vMax) / 2)
+      radius = Math.max(drawn.uMax - drawn.uMin, drawn.vMax - drawn.vMin) / 2
+    } else if (face !== null) {
+      center = toWorld(frame, (face.uMin + face.uMax) / 2, (face.vMin + face.vMax) / 2)
+      // 面の u/v は画面の上下と揃わない(上方向は `upForDirection` が世界の軸から決める)ので、外接円で収める。
+      radius = Math.hypot(face.uMax - face.uMin, face.vMax - face.vMin) / 2
     } else if (options.emptyDocument === true) {
       radius = EMPTY_SKETCH_HALF_WIDTH
     }
