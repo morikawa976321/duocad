@@ -456,15 +456,35 @@ export function positive(label: string): (value: number) => string | null {
   return (value) => (value > 0 ? null : `${label}は0より大きい値`)
 }
 
-/** 空のパスだけ弾く。それ以上の判定はサーバに任せる(パス解釈をサーバの1箇所に置く)。 */
-export function pathLike(label: string): (value: string) => string | null {
-  return (value) => (value.trim() === '' ? `${label}を打つ` : null)
+/** 前後の空白と、両端を囲む同じ引用符1組を落とす(エクスプローラーの「パスとしてコピー」は `"…"` で囲む)。 */
+export function unquotePath(text: string): string {
+  const trimmed = text.trim()
+  const quote = trimmed[0]
+  if (trimmed.length >= 2 && (quote === '"' || quote === "'") && trimmed.endsWith(quote)) {
+    return trimmed.slice(1, -1).trim()
+  }
+  return trimmed
 }
 
-export function buildPathArgs(values: ArgValues): BuildResult<{ path: string }> {
-  const path = values.path
-  if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
-  return { ok: true, args: { path: path.trim() } }
+/** 空のパスだけ弾く。それ以上の判定はサーバに任せる(パス解釈をサーバの1箇所に置く)。 */
+export function pathLike(label: string): (value: string) => string | null {
+  return (value) => (unquotePath(value) === '' ? `${label}を打つ` : null)
+}
+
+/** ファイル名に拡張子が無ければ `suffix` を足す(書き出しの欄と同じく、拡張子を打たなくてよい)。拡張子があれば触らない。 */
+function withDefaultSuffix(path: string, suffix: string): string {
+  const fileName = path.split(/[\\/]/).pop() ?? ''
+  return fileName === '' || fileName.slice(1).includes('.') ? path : path + suffix
+}
+
+/** パス1つを取る読み込みの build。`suffix` はファイル名に拡張子が無いときに補う。 */
+export function buildPathArgs(suffix: string): (values: ArgValues) => BuildResult<{ path: string }> {
+  return (values) => {
+    const raw = values.path
+    const path = typeof raw === 'string' ? unquotePath(raw) : ''
+    if (path === '') return { ok: false, reason: 'パスが空' }
+    return { ok: true, args: { path: withDefaultSuffix(path, suffix) } }
+  }
 }
 
 // コマンドの定義

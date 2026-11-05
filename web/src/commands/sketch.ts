@@ -280,11 +280,11 @@ export const IMPORT_SVG: CommandDef<'import_svg'> = {
       name: 'path',
       label: 'SVG',
       inputId: 'sketch-svg-path',
-      placeholder: 'logo.svg',
+      placeholder: 'logo',
       reject: pathLike('SVGのパス'),
     },
   ],
-  build: buildPathArgs,
+  build: buildPathArgs('.svg'),
 }
 
 /**
