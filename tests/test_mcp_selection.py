@@ -278,10 +278,8 @@ def test_human_and_ai_have_the_same_selection_operations():
 
 @pytest.mark.parametrize("tool,arguments", [("fillet", {"radius": 2.0}), ("chamfer", {"distance": 2.0})])
 def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, arguments: dict):
-    """**選択が指しているBodyに当たること**(アクティブなBodyへ誤って当たる穴の再発防止)。"""
+    """**選択が指しているBodyに当たること**(選択と違うBody(最後に足したもの等)へ誤って当たる穴の再発防止)。"""
     session = Session(0.2)
-    # **選択する側を先に足す** —— `add_body` は足したBodyをアクティブにするので、
-    # 後から足した `other` がアクティブになる。アクティブでないほうを狙うのが試験の要点。
     session.document.add_body(
         Body(id="target", name="target", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
     )
@@ -290,7 +288,6 @@ def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, 
     )
     server = McpServer(DocumentTools(session))
     target, other = session.document.bodies
-    assert session.document.active_body().id == "other", "前提: 狙う側はアクティブではない"
     target_faces = _brep_topology.face_count(target.shape)
     other_faces = _brep_topology.face_count(other.shape)
 

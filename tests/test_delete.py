@@ -145,7 +145,7 @@ def test_deleting_a_body_and_an_entity_is_one_operation_and_one_undo(session: Se
 
 
 def test_undo_puts_the_body_back_where_it_was(session: Session) -> None:
-    """**並びと active も戻る** —— 末尾へ足し直すだけだと順序だけが黙って変わる。"""
+    """**並びも戻る** —— 末尾へ足し直すだけだと順序だけが黙って変わる。"""
     first, sketch_id = _box(session)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude(SIDE, mode="new")
@@ -153,31 +153,15 @@ def test_undo_puts_the_body_back_where_it_was(session: Session) -> None:
     second = session.document.bodies[-1]
     order = _body_ids(session)
     assert order == [first.id, second.id]
-    session.document.set_active_body(second.id)
 
     _select(session, [{"body": first.id, "kind": "body", "index": None}])
     session.delete()
     assert _body_ids(session) == [second.id]
-    # 消したのは active ではないので active は動かない
-    assert session.document.active_body().id == second.id
 
     session.undo()
     assert _body_ids(session) == order
-    assert session.document.active_body().id == second.id
     # 形も同じ実体が戻っている(作り直しではない)
     assert session.document.get_body(first.id).shape is first.shape
-
-
-def test_undo_restores_the_active_body_that_was_deleted(session: Session) -> None:
-    body, _ = _box(session)
-    session.document.set_active_body(body.id)
-    _select(session, [{"body": body.id, "kind": "body", "index": None}])
-
-    session.delete()
-    assert session.document.active_body() is None
-
-    session.undo()
-    assert session.document.active_body().id == body.id
 
 
 def test_deleting_an_entity_releases_its_parameters_and_undo_restores_the_names(

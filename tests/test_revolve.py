@@ -40,7 +40,7 @@ def _rectangle(document: Document, corner, width, height, plane="XY"):
 
 
 def _volume(document: Document) -> float:
-    return query.volume(document.active_body().shape)
+    return query.volume(document.bodies[-1].shape)
 
 
 def test_a_rectangle_around_its_edge_is_a_cylinder():
@@ -52,7 +52,7 @@ def test_a_rectangle_around_its_edge_is_a_cylinder():
     revolve(document, refs, {"sketch": sketch_id, "entity": edge})
 
     assert math.isclose(_volume(document), math.pi * 25.0 * 10.0, rel_tol=VOLUME_REL_TOL)
-    box = kernel.bounding_box(document.active_body().shape)
+    box = kernel.bounding_box(document.bodies[-1].shape)
     assert box["size"] == pytest.approx([10.0, 10.0, 10.0], abs=1e-4)
 
 
@@ -78,7 +78,7 @@ def test_a_half_disc_around_its_diameter_is_a_sphere():
     revolve(document, [region_ref(sketch_id, found[0].index)], {"sketch": sketch_id, "entity": diameter})
 
     assert math.isclose(_volume(document), 4.0 / 3.0 * math.pi * 125.0, rel_tol=1e-6)
-    assert BRepCheck_Analyzer(document.active_body().shape).IsValid() is True
+    assert BRepCheck_Analyzer(document.bodies[-1].shape).IsValid() is True
 
 
 @pytest.mark.parametrize("angle", [90.0, -90.0])
@@ -90,7 +90,7 @@ def test_a_partial_angle_gives_that_fraction_and_the_sign_picks_the_side(angle):
     revolve(document, refs, "x", angle)
 
     assert math.isclose(_volume(document), math.pi * 16.0 * 10.0 / 4.0, rel_tol=VOLUME_REL_TOL)
-    box = kernel.bounding_box(document.active_body().shape)
+    box = kernel.bounding_box(document.bodies[-1].shape)
     if angle > 0:
         assert box["max"][2] == pytest.approx(5.0, abs=1e-4) and box["min"][2] == pytest.approx(0.0, abs=1e-4)
     else:
@@ -105,7 +105,7 @@ def test_symmetric_splits_the_angle_across_the_sketch_plane():
     revolve(document, refs, "x", 90.0, symmetric=True)
 
     assert math.isclose(_volume(document), math.pi * 16.0 * 10.0 / 4.0, rel_tol=VOLUME_REL_TOL)
-    box = kernel.bounding_box(document.active_body().shape)
+    box = kernel.bounding_box(document.bodies[-1].shape)
     assert box["max"][2] == pytest.approx(-box["min"][2], abs=1e-4)
     assert box["max"][2] == pytest.approx(5.0 * math.sin(math.radians(45.0)), abs=1e-4)
 
@@ -207,19 +207,19 @@ def test_the_seam_edge_of_a_full_revolution_does_not_break_fillet():
     document = Document()
     _, _, refs = _rectangle(document, (0.0, 3.0), 10.0, 2.0)
     revolve(document, refs, "x")
-    shape = document.active_body().shape
+    shape = document.bodies[-1].shape
 
     seams = _seam_edge_indices(shape)
     assert seams, "360° の回転体にシームが無い(前提が崩れた)"
     for seam in seams:
         before = len(document.log.entries)
         try:
-            fillet(document, [seam], 0.5)
+            fillet(document, [seam], 0.5, body_id=document.bodies[0].id)
         except ValueError as error:
             assert "fillet failed while building" in str(error), "引数の検査ではなく OCCT の構築失敗で断られる題材"
             assert len(document.log.entries) == before
             continue
-        assert BRepCheck_Analyzer(document.active_body().shape).IsValid() is True
+        assert BRepCheck_Analyzer(document.bodies[-1].shape).IsValid() is True
         document.log.undo(document)
 
 

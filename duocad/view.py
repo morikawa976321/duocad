@@ -550,10 +550,8 @@ class DocumentView:
     def state_meta(self, *, can_undo: bool, applied_count: int, previewing: bool) -> dict:
         """`state()` の軽量版。**bodiesの各要素にgeometryを含まない**(テセレーションを呼ばない)。27部品でも数KB(state()は6MB超)。"""
         self._prune_body_caches(previewing)
-        active = self.document.active_body()
         return {
             "units": self.document.units,
-            "active_body_id": active.id if active is not None else None,
             "bodies": [self.body_meta(body) for body in self.document.bodies],
             "log": [
                 {

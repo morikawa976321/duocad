@@ -98,7 +98,7 @@ def test_sketch_create_rejects_an_unknown_base_plane():
 
 def test_sketch_create_on_a_planar_face_of_an_existing_solid(box):
     """既存ソリッドの**平面状の面**にスケッチを貼れる(`sketch_create` の引数。MCP.md が正)。"""
-    body = box.active_body()
+    body = box.bodies[-1]
     index = first_face_index(body.shape, "plane")
 
     sketch_id = sketch_create(box, face_plane(body.id, index))
@@ -112,7 +112,7 @@ def test_sketch_create_on_a_planar_face_of_an_existing_solid(box):
 
 def test_sketch_create_rejects_a_non_planar_face(cylinder):
     """平面でない面(円筒面)を指定したら失敗する。**黙って通さない**(§6予防6)。"""
-    body = cylinder.active_body()
+    body = cylinder.bodies[-1]
     index = first_face_index(body.shape, "cylinder_full")
 
     with pytest.raises(ValueError):

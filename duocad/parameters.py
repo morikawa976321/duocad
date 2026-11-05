@@ -164,9 +164,8 @@ def rebuild(
     そこで範囲内の `set_parameter` を先に走査して最終値の表を作り、各操作の直後に当てる。
     パラメータ名は決定的に振り直されるので、表の名前は再生後の同じスカラーを指す。
 
-    ログに載らない状態のうち、ボディとスケッチの可視性は作り直した側へ引き継ぎ、active ボディは残っていれば戻す。
-    失敗したら、再生で書き換わる最適化条件(版も含む)・追加前の active の表・
-    undo 用スナップショット・ログと由来も元へ戻す。
+    ログに載らない状態のうち、ボディとスケッチの可視性は作り直した側へ引き継ぐ。
+    失敗したら、再生で書き換わる最適化条件(版も含む)・undo 用スナップショット・ログと由来も元へ戻す。
     """
     global _REBUILDING
     from .verbs._common import SNAPSHOTS
@@ -193,8 +192,6 @@ def rebuild(
     saved_bodies = list(doc.bodies)
     saved_sketches = list(doc.sketches)
     saved_parameters = dict(doc.parameters)
-    saved_active = doc._active_body_id
-    saved_active_before_add = dict(doc._active_before_add)
     saved_optimize = copy.deepcopy(vars(doc.optimize))
     # 再生が通った操作は undo 用スナップショットを作り直す(`_common.reapply_shape`)ので、失敗したら元の表へ戻す。
     saved_snapshots = dict(SNAPSHOTS.get(doc, {}))
@@ -205,7 +202,6 @@ def rebuild(
     hidden_sketches = {sketch.id for sketch in saved_sketches if not sketch.visible}
 
     doc.bodies.clear()
-    doc._active_body_id = None
     doc.sketches.clear()
     doc.parameters.clear()
 
@@ -226,9 +222,6 @@ def rebuild(
         doc.sketches[:] = saved_sketches
         doc.parameters.clear()
         doc.parameters.update(saved_parameters)
-        doc._active_body_id = saved_active
-        doc._active_before_add.clear()
-        doc._active_before_add.update(saved_active_before_add)
         vars(doc.optimize).update(saved_optimize)
         SNAPSHOTS[doc] = saved_snapshots
         source._restore(saved_log)
@@ -242,10 +235,6 @@ def rebuild(
         body.visible = body.id not in hidden_bodies
     for sketch in doc.sketches:
         sketch.visible = sketch.id not in hidden_sketches
-
-    # アクティブボディの選択はログに載らないので、ここで戻さないと最後に add_body されたボディへ移る。
-    if saved_active is not None and any(body.id == saved_active for body in doc.bodies):
-        doc._active_body_id = saved_active
 
 
 # --------------------------------------------------------------------------------------

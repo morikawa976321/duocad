@@ -80,9 +80,8 @@ def _do_import_step(document: Document, operation: Operation) -> None:
 
 
 def _undo_import_step(document: Document, operation: Operation) -> None:
-    # 足した順の逆に戻す(最後に足したものから外すと active が足す前の値へ戻る。`Document.remove_added_body`)。
     for body_id in reversed(operation.args["body_ids"]):
-        document.remove_added_body(body_id)
+        document.remove_body(body_id)
 
 
 register_verb(

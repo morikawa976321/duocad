@@ -139,7 +139,6 @@ def canned(name: str, arguments: dict) -> dict:
     if name == "describe_document":
         return {
             "units": "mm",
-            "active_body_id": "body-0001",
             "bodies": [
                 {
                     "body_id": f"body-{index:04d}",
@@ -209,7 +208,7 @@ def history(indexes, state=None) -> list:
 
 def state_text(index: int) -> str:
     return (
-        f"\n\n[現在の状態] ボディ{6 + index}個 / 選択{index}件 / アクティブ body-{index:04d} / "
+        f"\n\n[現在の状態] ボディ{6 + index}個 / 選択{index}件 / "
         "表示中: body-0001, body-0002, body-0003, body-0004 / 単位 mm / 直前の操作: describe_shape"
     )
 

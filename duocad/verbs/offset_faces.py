@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Sequence
 
 from .. import kernel_face_edit, selection
 from ..document import BodyId, Document
@@ -25,7 +25,7 @@ def offset_faces(
     doc: Document,
     faces: Sequence[int],
     distance: float,
-    body_id: Optional[BodyId] = None,
+    body_id: BodyId,
 ) -> Operation:
     face_list = [int(index) for index in faces]
     value = float(distance)

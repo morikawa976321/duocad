@@ -9,7 +9,7 @@
  *      連なりの一部だけが入った状態で連なりの1本を矩形で囲むと全部入り、もう一度で全部外れる
  *   4. 面取りでも 1 と同じ
  *
- * 形は MCP で作る: 箱を2つ作り、アクティブでない方の対角の縦の辺2本を丸める。一直線上で割れた辺は押し出しの join / union が面ごと
+ * 形は MCP で作る: 箱を2つ作り、先に作った方の対角の縦の辺2本を丸める。一直線上で割れた辺は押し出しの join / union が面ごと
  * 統合して1本にするので、画面から作れる連なりの題材はこちら(一直線の連なりは `tests/test_blend_chains.py`)。
  */
 import { assertNoAppErrors, frameAll, openApp, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
@@ -24,10 +24,8 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
 
   const { page, consoleErrors } = await openApp(browser, url, { timeout })
   await frameAll(page)
-  const active = await page.evaluate(() => window.__duocad.state?.active_body_id ?? null)
-  // 検査するのはアクティブでない方(面を外したあと辺のボディがアクティブへ戻らないことを見るため)。
-  const bodyId = active === first.bodyId ? second.bodyId : first.bodyId
-  ok(`箱を2つ作った: アクティブ ${active}、検査する方 ${bodyId}`)
+  const bodyId = first.bodyId
+  ok(`箱を2つ作った: 検査する方 ${bodyId}(もう一方 ${second.bodyId})`)
 
   const waitFor = (check, what, args = []) => waitOrFail(page, check, what, { args, timeout, polling: 50 })
   const selection = () =>
@@ -107,7 +105,7 @@ runSmoke('smoke-fillet-pick', { timeout: 60000, mcp: true }, async ({ mcp, brows
     [bodyId, before],
   )
   const filleted = await page.evaluate(revisionOf, bodyId)
-  // 検査する方はアクティブではないので、その面を選んでから起動する(面は外れ、辺はそのボディのものが出る)。
+  // 検査する方の面を選んでから起動する(面は外れ、辺はそのボディのものが出る)。
   await waitFrames(page, 5)
   await clickFace(page, bodyId, (await visibleFace()).index)
   await waitFor(() => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'face'), '面が選ばれない(丸めた後)')

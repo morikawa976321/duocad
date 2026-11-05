@@ -253,7 +253,6 @@ def test_a_mesh_body_can_be_deleted_and_the_delete_can_be_undone():
 def test_edit_verbs_refuse_a_mesh_body_and_say_what_is_possible(call):
     """**黙って落ちない・黙って壊さない。** 断り文には「次に何ができるか」が要る。"""
     doc, body_id = _tetra_doc()
-    doc.set_active_body(body_id)
     with pytest.raises(ValueError) as error:
         call(doc, body_id)
     message = str(error.value)

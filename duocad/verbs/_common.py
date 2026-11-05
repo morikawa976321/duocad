@@ -67,7 +67,7 @@ def undo_shape(doc: Document, operation: Operation) -> None:
 
 def editable_body(
     doc: Document,
-    body_id: Optional[BodyId],
+    body_id: BodyId,
     *,
     what: str,
     reject_as: Optional[str] = None,
@@ -116,17 +116,12 @@ def replayed_body(
 
 def _checked_body(
     doc: Document,
-    body_id: Optional[BodyId],
+    body_id: BodyId,
     *,
     what: str,
     reject_as: Optional[str],
     require_visible: bool,
 ) -> Body:
-    if body_id is None:
-        active = doc.active_body()
-        if active is None:
-            raise ValueError(f"no active body to {what} (document is empty)")
-        body_id = active.id
     if not doc.is_editable(body_id):  # 存在しないIDは KeyError(document側の契約)
         # 編集verbがメッシュボディを断る唯一の入口(verbごとに分岐すると断り漏れが出る)。
         body = doc.get_body(body_id)
@@ -248,27 +243,23 @@ def add_transformed_copies(
 
 
 def remove_created_bodies(doc: Document, body_ids: Sequence[BodyId]) -> None:
-    """undo: 作った複製を消す(active は複製を足す前の値へ戻る。`Document.remove_added_body`)。
-    既に消えている(別のundoが先に消した)場合は空振りでよい。足した順の逆に消す。"""
+    """undo: 作った複製を消す。既に消えている(別のundoが先に消した)場合は空振りでよい。足した順の逆に消す。"""
     for body_id in reversed(list(body_ids)):
         try:
-            doc.remove_added_body(body_id)
+            doc.remove_body(body_id)
         except KeyError:
             pass
 
 
 def detach_bodies(doc: Document, body_ids: Sequence[BodyId]) -> dict:
-    """ボディを消す前に undo 用の退避を取り、消す。戻りは `{"bodies": [(元の添字, Body), ...], "active": ...}`。
+    """ボディを消す前に undo 用の退避を取り、消す。戻りは `{"bodies": [(元の添字, Body), ...]}`。
 
     **消す前の並びの昇順**で控える(この順に元の添字へ差し戻すと並びが再現する。末尾へ足し直すと
-    パーツ一覧の順序が変わる)。`Document.remove_body` は消したのが active だったときだけ active を
-    None に落とすが、消さなかったボディが active のままの場合もあるので、消す前の値をそのまま
-    控える。`_active_body_id` に触るのはここと `reattach_bodies` だけにする。
+    パーツ一覧の順序が変わる)。
     """
     positions = {body.id: index for index, body in enumerate(doc.bodies)}
     detached = {
         "bodies": sorted(((positions[body_id], doc.get_body(body_id)) for body_id in body_ids), key=lambda item: item[0]),
-        "active": doc._active_body_id,
     }
     for _, body in detached["bodies"]:
         doc.remove_body(body.id)
@@ -276,11 +267,9 @@ def detach_bodies(doc: Document, body_ids: Sequence[BodyId]) -> dict:
 
 
 def reattach_bodies(doc: Document, detached: dict) -> None:
-    """undo: `detach_bodies` の退避を元の添字へ戻し、active も戻す。"""
+    """undo: `detach_bodies` の退避を元の添字へ戻す。"""
     for index, body in detached["bodies"]:
         doc.add_body(body, index=index)
-    # `set_active_body` は None を受け付けない(KeyError)ので直接戻す。
-    doc._active_body_id = detached["active"]
 
 
 # --------------------------------------------------------------------------------------

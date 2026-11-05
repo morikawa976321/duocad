@@ -394,7 +394,6 @@ export type ServerStateKey =
   | 'redo_count'
   | 'can_undo'
   | 'can_redo'
-  | 'active_body_id'
   | 'units'
   | 'current_name'
   | 'saved'

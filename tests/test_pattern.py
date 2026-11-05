@@ -207,7 +207,7 @@ def test_extruding_a_pattern_opens_nx_times_ny_holes():
 
     drill_all(document, sketch_id)
 
-    shape = document.active_body().shape
+    shape = document.bodies[-1].shape
     assert query.describe_shape(shape)["faces_by_type"]["cylinder_full"] == COLUMNS * ROWS
     assert math.isclose(
         query.volume(shape),
@@ -227,7 +227,7 @@ def test_editing_one_radius_moves_every_hole():
         document, parameter_of(document, sketch_id, circle, "diameter"), 2 * HOLE_RADIUS_AFTER
     )
 
-    shape = document.active_body().shape
+    shape = document.bodies[-1].shape
     assert query.describe_shape(shape)["faces_by_type"]["cylinder_full"] == COLUMNS * ROWS
     assert math.isclose(
         query.volume(shape),
@@ -248,12 +248,12 @@ def test_pattern_survives_save_load_and_replay():
     set_parameter(
         document, parameter_of(document, sketch_id, circle, "diameter"), 2 * HOLE_RADIUS_AFTER
     )
-    expected_volume = query.volume(document.active_body().shape)
-    expected_axes = hole_axes(document.active_body().shape)
+    expected_volume = query.volume(document.bodies[-1].shape)
+    expected_axes = hole_axes(document.bodies[-1].shape)
 
     replayed = replay_through_json(document)
 
-    body = replayed.active_body()
+    body = replayed.bodies[-1]
     assert body is not None
     assert math.isclose(query.volume(body.shape), expected_volume, rel_tol=1e-9)
     assert hole_axes(body.shape) == expected_axes

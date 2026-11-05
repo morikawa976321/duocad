@@ -129,7 +129,7 @@ def test_set_parameter_is_logged_and_undoable():
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, (0.0, 0.0), 2 * CIRCLE_RADIUS)
     extrude(document, [region_ref(sketch_id, regions(document, sketch_id)[0].index)], 10.0)
-    before = query.volume(document.active_body().shape)
+    before = query.volume(document.bodies[-1].shape)
     name = parameter_of(document, sketch_id, circle, "diameter")
 
     operation = set_parameter(document, name, 20.0)
@@ -137,18 +137,18 @@ def test_set_parameter_is_logged_and_undoable():
     assert operation.verb == "set_parameter"
     assert operation.args == {"name": name, "value": 20.0, "previous": 2 * CIRCLE_RADIUS}
     json.loads(document.log.to_json())
-    assert not math.isclose(query.volume(document.active_body().shape), before, rel_tol=VOLUME_REL_TOL)
+    assert not math.isclose(query.volume(document.bodies[-1].shape), before, rel_tol=VOLUME_REL_TOL)
 
     undone = document.log.undo(document)
 
     assert undone is not None and undone.verb == "set_parameter"
     assert document.parameters[name] == 2 * CIRCLE_RADIUS
-    assert math.isclose(query.volume(document.active_body().shape), before, rel_tol=1e-9)
+    assert math.isclose(query.volume(document.bodies[-1].shape), before, rel_tol=1e-9)
 
     document.log.redo(document)
     assert document.parameters[name] == 20.0
     assert math.isclose(
-        query.volume(document.active_body().shape), math.pi * 10.0**2 * 10.0, rel_tol=VOLUME_REL_TOL
+        query.volume(document.bodies[-1].shape), math.pi * 10.0**2 * 10.0, rel_tol=VOLUME_REL_TOL
     )
 
 
@@ -197,8 +197,8 @@ def _filleted_cylinder(document: Document) -> tuple:
             if edge["kind"] == "circle" and abs(edge["start"][2] - height) < 1e-6
         )
 
-    fillet(document, [circular_edge_at(10.0)], 0.5)
-    fillet(document, [circular_edge_at(0.0)], 4.0)
+    fillet(document, [circular_edge_at(10.0)], 0.5, body_id=body_id)
+    fillet(document, [circular_edge_at(0.0)], 4.0, body_id=body_id)
     return body_id, parameter_of(document, sketch_id, circle, "diameter")
 
 
@@ -272,30 +272,3 @@ def test_failed_dimension_rebuild_restores_optimize_setup(monkeypatch):
     assert document.optimize == before  # 条件の全項目と revision も戻す。
     assert document.log.to_json() == log_before
     assert document.parameters[width] == 20
-
-
-def test_failed_dimension_rebuild_restores_active_before_add_for_later_undo(monkeypatch):
-    from duocad import kernel_worker
-    from duocad.verbs import chamfer
-
-    document, sketch, width = _two_boxes_with_dimension()
-    a, _ = document.bodies
-    document.set_active_body(a.id)
-    extrude(document, [region_ref(sketch, 1)], 20, mode="new")
-    c = document.active_body()
-    chamfer(document, [1], 2, body_id=a.id)
-    before = dict(document._active_before_add)
-    log_before = document.log.to_json()
-    assert before[c.id] == a.id
-    monkeypatch.setattr(kernel_worker, "INTERACTIVE_TIMEOUT_S", 1e-6)
-
-    with pytest.raises(ValueError, match="秒以内"):
-        set_parameter(document, width, 22)
-
-    assert document._active_before_add == before
-    assert document.active_body() is c
-    assert document.log.to_json() == log_before
-    assert document.parameters[width] == 20
-    document.log.undo(document)  # 面取り
-    document.log.undo(document)  # C の追加
-    assert document.active_body() is a

@@ -1,6 +1,6 @@
 """undo した直後の文書は、同じ操作ログを頭から再生した文書と同じ状態になる。
 
-比べるのは active ボディ・名前つきの値の表(`d<n>`)・図形の `params`(`tests/document_support.document_state`)。
+比べるのはボディの並び・名前つきの値の表(`d<n>`)・図形の `params`(`tests/document_support.document_state`)。
 ログの再生が「正」で、生きている文書がそこからずれると、保存→開き直しで別の文書になる。
 """
 from __future__ import annotations
@@ -26,7 +26,6 @@ from duocad.sketch import (
 from duocad.verbs import (
     add_mesh_body,
     add_solid_body,
-    boolean_body,
     delete,
     delete_items,
     extrude,
@@ -274,13 +273,8 @@ def test_a_move_logged_without_previous_values_still_undoes_by_moving_back():
 
 
 # --------------------------------------------------------------------------------------
-# ボディを足す操作の undo は、active ボディを足す前の値へ戻す
+# ボディを足す操作の undo は、同じログを再生した文書と一致する
 # --------------------------------------------------------------------------------------
-def _active_id(document: Document) -> str | None:
-    active = document.active_body()
-    return None if active is None else active.id
-
-
 def _extrude_a_new_body(document: Document, base: str, tmp_path) -> None:
     second_body(document)
 
@@ -341,83 +335,30 @@ BODY_ADDING_OPERATIONS = [
 
 
 @pytest.mark.parametrize("operation", BODY_ADDING_OPERATIONS, ids=lambda function: function.__name__)
-def test_undoing_an_operation_that_adds_a_body_restores_the_active_body(operation, tmp_path):
-    """落ちたら: undo が active を None にするだけで、直後の extrude(join) が元のボディに足されず別のボディを作る
-    (保存して開き直すと元のボディに足されるので、同じ文書が開き直すと挙動が変わる)。"""
+def test_undoing_an_operation_that_adds_a_body_matches_replay(operation, tmp_path):
+    """落ちたら: ボディを足す操作の undo / redo の後の文書(ボディの並び)が、同じログを再生した文書と食い違う。"""
     document = Document()
     base = new_box(document, 20.0)
-    assert _active_id(document) == base
 
     operation(document, base, tmp_path)
-    assert _active_id(document) != base
     document.log.undo(document)
 
-    assert _active_id(document) == base
+    assert [body.id for body in document.bodies] == [base]
     assert_matches_replay(document)
     document.log.redo(document)
-    assert _active_id(document) != base
+    assert len(document.bodies) > 1
     assert_matches_replay(document)
 
 
-def test_undoing_an_operation_that_adds_several_bodies_restores_the_active_body(tmp_path):
-    """落ちたら: 複製を足した順に消すと、途中の複製が active に戻って最後に None が残る。"""
+def test_undoing_an_operation_that_adds_several_bodies_matches_replay():
+    """落ちたら: 複製を2つ足した操作の undo が片方を残す、または並びが再生と食い違う。"""
     document = Document()
     first = new_box(document, 20.0)
     second = second_body(document)
-    assert _active_id(document) == second
 
     mirror_body(document, [first, second], base_plane="YZ")
     assert len(document.bodies) == 4
     document.log.undo(document)
 
-    assert _active_id(document) == second
-    assert_matches_replay(document)
-
-
-def test_undoing_a_deletion_then_the_creation_behind_it_keeps_the_active_body():
-    """消したボディを戻してから、そのボディを作った操作を undo しても、足す前の active が正しく戻る
-    (復元の `add_body` が足す前の active の控えを上書きしない)。"""
-    document = Document()
-    base = new_box(document, 20.0)
-    second_body(document)
-    created = _active_id(document)
-    delete(document, bodies=[created])
-    document.log.undo(document)
-    assert _active_id(document) == created
-
-    document.log.undo(document)
-
-    assert _active_id(document) == base
-    assert_matches_replay(document)
-
-
-def test_boolean_body_hands_the_active_body_to_the_target_when_it_consumes_the_active_tool():
-    """落ちたら: active だったツールが消えて active が無くなり、直後の extrude(join) がターゲットに足されず別のボディを作る。
-    undo は退避した active(ツール)を戻し、redo は引き渡し直す。"""
-    document = Document()
-    target = new_box(document, 20.0)
-    tool = second_body(document)
-    assert _active_id(document) == tool
-
-    boolean_body(document, {"body": target, "kind": "face", "index": 1}, [tool], mode="union")
-
-    assert _active_id(document) == target
-    assert_matches_replay(document)
-    document.log.undo(document)
-    assert _active_id(document) == tool
-    assert_matches_replay(document)
-    document.log.redo(document)
-    assert _active_id(document) == target
-
-
-def test_boolean_body_leaves_the_active_body_alone_when_the_tool_was_not_active():
-    document = Document()
-    target = new_box(document, 20.0)
-    tool = second_body(document)
-    last = second_body(document)
-    assert _active_id(document) == last
-
-    boolean_body(document, {"body": target, "kind": "face", "index": 1}, [tool], mode="union")
-
-    assert _active_id(document) == last
+    assert [body.id for body in document.bodies] == [first, second]
     assert_matches_replay(document)

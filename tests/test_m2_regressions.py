@@ -46,7 +46,7 @@ def face_index_by_normal_z(shape, sign: float) -> int:
 def test_sketch_on_a_face_can_be_extruded_and_replayed(sign):
     """面に貼ったスケッチが、領域検出 → 押し出し → 再生まで通る。"""
     document = box_document()
-    index = face_index_by_normal_z(document.active_body().shape, sign)
+    index = face_index_by_normal_z(document.bodies[-1].shape, sign)
 
     sketch_id = sketch_create(document, face_plane("box", index))
     add_rectangle(document, sketch_id, (0.0, 0.0), 5.0, 5.0)
@@ -57,12 +57,12 @@ def test_sketch_on_a_face_can_be_extruded_and_replayed(sign):
 
     extrude(document, [region_ref(sketch_id, found[0].index)], 4.0, mode="join")
 
-    volume = query.volume(document.active_body().shape)
+    volume = query.volume(document.bodies[-1].shape)
     assert math.isclose(volume, BOX_VOLUME + 100.0, rel_tol=1e-9)
 
     # 再生: 立方体はログの外で作った参照物なので、同じ土台を持つ文書へ再生する
     replayed = replay_through_json(document, into=box_document())
-    assert math.isclose(query.volume(replayed.active_body().shape), volume, rel_tol=1e-9)
+    assert math.isclose(query.volume(replayed.bodies[-1].shape), volume, rel_tol=1e-9)
 
 
 def test_extrude_rejects_regions_from_two_different_sketches():
@@ -129,13 +129,10 @@ def _single_solid_step(tmp_path) -> Path:
 
 
 def test_join_right_after_importing_a_step_does_not_fail(tmp_path):
-    """STEPを読んだ直後のアクティブが編集可能で、そこへ `join` が通る。落ちたら最初の板が作れない。"""
+    """STEPを読んだ直後のボディへ `join` が通る。落ちたら最初の板が作れない。"""
     document = Document()
     body_ids = import_step(document, _single_solid_step(tmp_path))
-
-    active = document.active_body()
-    assert active is not None and active.id == body_ids[-1]
-    assert document.is_editable(active.id)
+    assert document.is_editable(body_ids[-1])
 
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (0.0, 0.0), 20.0, 10.0)

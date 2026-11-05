@@ -3,32 +3,13 @@ from __future__ import annotations
 
 import pytest
 
-from duocad.document import Body, Document, unknown_id_message
+from duocad.document import Body, unknown_id_message
 
 
 def test_an_unknown_body_kind_is_refused():
     """落ちたら、知らない kind(撤去した "reference" 等)のBodyが作れてしまう。"""
     with pytest.raises(ValueError, match="kind must be one of"):
         Body(id="b1", name="x", kind="reference")
-
-
-def test_remove_body_clears_active_body_when_it_was_active():
-    """remove_bodyでactiveだったボディを取り除くと、active_body()はNoneに戻る
-    (取り除いたボディを指したまま参照が残ることを防ぐ)。"""
-    doc = Document()
-    body = Body(id="b1", name="first", kind="solid")
-    doc.add_body(body)
-    assert doc.active_body() is body  # 前提: add_bodyで自動的にactiveになっている
-
-    doc.remove_body("b1")
-    assert doc.active_body() is None
-
-
-def test_set_active_body_unknown_id_raises_key_error():
-    """存在しないBodyIdをset_active_bodyに渡すとKeyErrorになる(黙って無視しない)。"""
-    doc = Document()
-    with pytest.raises(KeyError):
-        doc.set_active_body("does-not-exist")
 
 
 def test_unknown_id_message_lists_the_valid_ids():

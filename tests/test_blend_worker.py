@@ -219,14 +219,14 @@ def test_dimension_rebuild_of_the_slow_dome_times_out_atomically(session, monkey
     doc.log.undo(doc)
     doc.log.entries[-2].provenance = None
     before = (_state(session), dict(doc.parameters), doc.log._snapshot(),
-              list(doc.sketches), doc._active_body_id, dict(SNAPSHOTS[doc]))
+              list(doc.sketches), dict(SNAPSHOTS[doc]))
     monkeypatch.setattr(kernel_worker, "INTERACTIVE_TIMEOUT_S", 2.0)
     started = time.monotonic()
     with pytest.raises(ValueError, match="fillet: 2 秒以内に返事が無かった"):
         set_parameter(doc, parameter_of(doc, sketch, ellipse, "width"), 12)
     assert time.monotonic() - started < 8
     assert (_state(session), dict(doc.parameters), doc.log._snapshot(),
-            list(doc.sketches), doc._active_body_id, dict(SNAPSHOTS[doc])) == before
+            list(doc.sketches), dict(SNAPSHOTS[doc])) == before
     assert kernel_worker._WORKER._process is None
     assert doc.log.can_redo
     # 復元した undo 用の形を実際に使える。

@@ -52,7 +52,7 @@ verbの入口(`duocad/entry.py`)がコアの選択から取る(`selection.requir
 状態変更は接続している全クライアントへ配信する。操作を出したクライアントにだけ `applied` を付け、それ以外には同じ `state` だけを送る。
 
     state() -> {
-      "units", "active_body_id",
+      "units",
       "bodies": [{"body_id","name","kind","visible","revision",
                   "face_count","volume","geometry": <tessellate結果|None>}, ...],
       "log", "can_undo", "can_redo", "applied_count",
