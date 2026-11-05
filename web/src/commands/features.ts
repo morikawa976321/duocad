@@ -592,6 +592,13 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
   },
 }
 
+/** 原点を通る3軸。`sends` の向きは配信から欄へ戻すときの逆引きにも使う(`syncedChoice`)。 */
+const ORIGIN_AXES = [
+  { value: 'x', label: 'X軸', dir: [1, 0, 0] },
+  { value: 'y', label: 'Y軸', dir: [0, 1, 0] },
+  { value: 'z', label: 'Z軸', dir: [0, 0, 1] },
+] as const
+
 /**
  * ボディの平行移動 / 回転 / 複製。対象はボディ単位で選ぶ(`BODY_SELECTION`)。
  * 複製するか・並進か回転かは既定を置かず人に選ばせる(押し出しの `mode` と同じ理由)。
@@ -620,12 +627,23 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
     { kind: 'number', ...offsetArg('dy', 'move-body', finite('Y')) },
     { kind: 'number', ...offsetArg('dz', 'move-body', finite('Z')) },
     {
+      kind: 'choice',
+      name: 'axis_dir',
+      label: '回転軸',
+      options: [
+        ...ORIGIN_AXES.map(({ value, label, dir }) => ({ value, label, buttonId: `move-body-axis-${value}`, sends: dir })),
+        // この値はサーバへ行かない(軸は `axis_edge` で送る)。配信に `axis_edge` があれば欄へ戻る。
+        { value: 'edge', label: '辺を選ぶ', buttonId: 'move-body-axis-edge', sends: null, impliedBy: 'axis_edge' },
+      ],
+      when: isRotateMode,
+    },
+    {
       kind: 'pick',
       name: 'axis_edge',
       label: '回転軸にする辺',
       target: 'edge',
       buttonId: 'move-body-axis',
-      when: isRotateMode,
+      when: (values) => isRotateMode(values) && values.axis_dir === 'edge',
     },
     {
       kind: 'pick',
@@ -645,14 +663,28 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
       axes: ['dx', 'dy', 'dz'],
       zeroReason: '移動量が全部0',
       rotateArgs: (angle, given) => {
-        // 軸は参照のまま送る: 辺が乗る直線を厳密に出せるのはコアだけ(ブラウザの持つのは折れ線)。
-        const axis = pickedRefOf(given.axis_edge)
-        if (axis === null) return { ok: false, reason: '回転軸にする辺が指されていない' }
         const center = pickedRefOf(given.center_vertex)
-        // 指していない中心は引数ごと送らない(既定の合成重心はコアが決める)。
+        if (given.axis_dir === 'edge') {
+          // 軸は参照のまま送る: 辺が乗る直線を厳密に出せるのはコアだけ(ブラウザの持つのは折れ線)。
+          const axis = pickedRefOf(given.axis_edge)
+          if (axis === null) return { ok: false, reason: '回転軸にする辺が指されていない' }
+          // 指していない中心は引数ごと送らない(既定の合成重心はコアが決める)。
+          return {
+            ok: true,
+            args: { mode: 'rotate', angle, axis_edge: axis, ...(center === null ? {} : { center_vertex: center }) },
+          }
+        }
+        const origin = ORIGIN_AXES.find((item) => item.value === given.axis_dir)
+        if (origin === undefined) return { ok: false, reason: '回転軸が選ばれていない' }
+        // 頂点を指したら軸はその頂点を通る向きだけの線になる。コアは axis_point と center_vertex の同時指定を断る。
         return {
           ok: true,
-          args: { mode: 'rotate', angle, axis_edge: axis, ...(center === null ? {} : { center_vertex: center }) },
+          args: {
+            mode: 'rotate',
+            angle,
+            axis_dir: [...origin.dir],
+            ...(center === null ? { axis_point: [0, 0, 0] } : { center_vertex: center }),
+          },
         }
       },
     })

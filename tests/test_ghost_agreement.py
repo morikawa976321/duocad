@@ -211,6 +211,26 @@ def test_a_picked_axis_edge_is_resolved_to_the_axis_the_core_uses(session: Sessi
         assert turned == pytest.approx(moved, abs=1e-5)
 
 
+def test_a_numeric_axis_moved_to_a_picked_vertex_turns_where_the_core_does(session: Session) -> None:
+    """落ちたら、原点の軸の向きで頂点を中心に指したとき、幽霊が確定と別の位置で回る。"""
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    far = max(session.vertices(body.id)["vertices"], key=lambda item: sum(value * value for value in item["point"]))
+    args = {
+        "mode": "rotate",
+        "angle": 90.0,
+        "axis_dir": [0.0, 0.0, 1.0],
+        "center_vertex": {"body": body.id, "index": far["index"]},
+    }
+    before = _corners(session, body.id)
+    probe = _ghost(session, "move_body", args, bodies=[body.id], probe=before)["probe"]
+
+    session.move_body(**args)
+    after = _corners(session, body.id)
+    for turned, moved in zip(_sorted_points(probe), after, strict=True):
+        assert turned == pytest.approx(moved, abs=1e-5)
+
+
 @pytest.mark.parametrize(
     "args",
     [

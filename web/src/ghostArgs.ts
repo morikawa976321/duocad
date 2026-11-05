@@ -88,6 +88,12 @@ export function resolvePicksForGhost(
   if (args.mode !== 'rotate') return args
   if (verb === MOVE_BODY.id) {
     const { axis_edge: axisRef, center_vertex: centerRef, ...rest } = args
+    if (axisRef === undefined) {
+      // 向きが数値で来ている(原点の軸)。頂点を指したときだけ、軸の位置をその頂点へ寄せる。
+      if (centerRef === undefined) return rest
+      const center = pickedVertexPoint(ctx, centerRef)
+      return center === null ? rest : { ...rest, axis_point: center }
+    }
     const axis = pickedEdgeAxis(ctx, axisRef)
     if (axis === null) return rest // まっすぐな辺が読めない = 幽霊を出さない
     const center = centerRef === undefined ? null : pickedVertexPoint(ctx, centerRef)
