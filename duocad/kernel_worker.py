@@ -180,10 +180,12 @@ def _warm_up() -> None:
 
 
 def stop() -> None:
-    """子を止める(終了時。次の `run` で立て直す)。"""
+    """子を止める(終了時。次の `run` で立て直す)。
+
+    計算中でも待たずに止める。期限なしの計算(シェル・再生)を待つと終了が計算の長さだけ延びる。
+    待っていた側は `WorkerError` を受け、`run` が `restart` して `ValueError` にする。
+    """
     with _CONDITION:
-        while _ACTIVE is not None:
-            _CONDITION.wait(timeout=0.05)
         if _WORKER is not None:
             _WORKER.close()
 
