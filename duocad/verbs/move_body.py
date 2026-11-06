@@ -221,10 +221,10 @@ def move_body(
     numbered: dict = {}
     if copy:
         new_ids = copy_ids(len(bodies), None, verb="move_body")
-        numbers = add_transformed_copies(
+        names = add_transformed_copies(
             doc, bodies, lambda shape: transform(shape, True), new_ids, allocate=True
         )
-        numbered = {"numbers": numbers}
+        numbered = {"names": names}
     else:
         new_ids = []
         _do_move(bodies, transform)
@@ -271,7 +271,8 @@ def _do_move_body(document: Document, operation: Operation) -> None:
     if args.get("copy"):
         new_ids = copy_ids(len(bodies), list(args.get("created") or []), verb="move_body")
         add_transformed_copies(
-            document, bodies, lambda shape: transform(shape, True), new_ids, args.get("numbers")
+            document, bodies, lambda shape: transform(shape, True), new_ids, args.get("numbers"),
+            names=args.get("names"),
         )
     else:
         _do_move(bodies, transform)

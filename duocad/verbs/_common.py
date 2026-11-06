@@ -216,14 +216,16 @@ def add_transformed_copies(
     numbers: Optional[Sequence[int]] = None,
     *,
     allocate: bool = False,
-) -> Optional[List[int]]:
-    """変換した複製を足し(元は動かさない)、名前に使った通し番号を返す(ログの `numbers` に記録する)。
+    names: Optional[Sequence[str]] = None,
+) -> Optional[List[str]]:
+    """変換した複製を足し(元は動かさない)、付けた名前を返す(作成時はログの `names` に記録する)。
 
-    名前は、作成時(`allocate=True`)は新しく振った番号、redo / 再生では記録した `numbers`。
-    番号の記録が無い古いログ(`None`)だけ元の名前を引き継ぐ。
+    名前は、作成時(`allocate=True`)は「元の名前 + 連番」(`naming.copy_name`。足す順に、先に足した複製も避ける)、
+    redo / 再生では記録した `names`。`names` が無く `numbers` がある古いログは、当時の通し番号の名前。
+    どちらも無い古いログだけ元の名前を引き継ぐ。
 
-    **形状を作り、ID の衝突を調べてから、番号を振って足す** —— 途中で落ちても1体目だけ足された文書が残らず、
-    番号も飛ばない(`new_ids` が既存のIDや互いに重なるのは、壊れたログの再生だけ)。
+    **形状を作り、ID の衝突を調べてから、名前を決めて足す** —— 途中で落ちても1体目だけ足された文書が残らない
+    (`new_ids` が既存のIDや互いに重なるのは、壊れたログの再生だけ)。
     """
     shapes = [transform(body.shape) for body in bodies]
     taken = {existing.id for existing in doc.bodies}
@@ -232,16 +234,23 @@ def add_transformed_copies(
             raise ValueError(f"body id already exists: {new_id!r}")
         taken.add(new_id)
     if allocate:
-        numbers = [naming.allocate(doc, naming.BODY) for _ in bodies]
-    if numbers is None:
-        names = [body.name for body in bodies]
-    else:
+        used = {existing.name for existing in doc.bodies}
+        names = []
+        for body in bodies:
+            if body.name:
+                names.append(naming.copy_name(body.name, used))
+            else:  # 名前の無い元(通し番号より前の文書)には通し番号の名前を振る
+                names.append(naming.label(naming.BODY, naming.allocate(doc, naming.BODY)))
+            used.add(names[-1])
+    elif names is None and numbers is not None:
         names = [naming.recorded(doc, naming.BODY, number, None) for number in numbers]
+    elif names is None:
+        names = [body.name for body in bodies]
     if len(names) != len(bodies):
-        raise ValueError(f"{len(bodies)} bodies but {len(names)} numbers recorded")
+        raise ValueError(f"{len(bodies)} bodies but {len(names)} names recorded")
     for body, new_id, name, shape in zip(bodies, new_ids, names, shapes):
         doc.add_body(Body(id=new_id, name=name, kind=body.kind, shape=shape, visible=body.visible))
-    return None if numbers is None else list(numbers)
+    return list(names) if allocate else None
 
 
 def remove_created_bodies(doc: Document, body_ids: Sequence[BodyId]) -> None:

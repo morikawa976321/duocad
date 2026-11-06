@@ -83,7 +83,7 @@ def mirror_body(
     normal = plane_args["plane_normal"]
 
     new_ids = copy_ids(len(bodies), None, verb="mirror_body")
-    numbers = add_transformed_copies(
+    names = add_transformed_copies(
         doc,
         bodies,
         lambda shape: kernel.mirror_shape(shape, point, normal),
@@ -97,7 +97,7 @@ def mirror_body(
             "bodies": [body.id for body in bodies],
             **plane_args,
             "created": list(new_ids),
-            "numbers": numbers,
+            "names": names,
         },
     )
 
@@ -115,6 +115,7 @@ def _do_mirror_body(document: Document, operation: Operation) -> None:
         lambda shape: kernel.mirror_shape(shape, point, normal),
         new_ids,
         args.get("numbers"),
+        names=args.get("names"),
     )
 
 
