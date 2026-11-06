@@ -378,3 +378,16 @@ def test_confirming_a_previewed_cut_reuses_every_body_result(monkeypatch):
     session.apply("extrude", {"distance": 30.0, "mode": "cut"})
     assert len(calls) == 2
 
+
+def test_a_positive_cut_from_a_sketch_on_the_top_of_a_body_tells_to_flip_the_sign():
+    """落ちたら、領域の切り取りが相手に届かないとき、距離の符号を反対にするという次の一手が文に無い。"""
+    document = Document()
+    body_id = _box_at(document, 0.0)
+    sketch_id = sketch_create(document, {"kind": "offset", "base": {"kind": "base", "name": "XY"}, "distance": BOX})
+    add_rectangle(document, sketch_id, (5.0, 5.0), 5.0, 5.0)
+
+    with pytest.raises(ValueError, match="cut reaches no visible body.*負の距離"):
+        extrude(document, [region_ref(sketch_id, 1)], 5.0, mode="cut")
+    extrude(document, [region_ref(sketch_id, 1)], -5.0, mode="cut")
+
+    assert math.isclose(_volume(document, body_id), BOX_VOLUME - 5.0**3, rel_tol=TOL)

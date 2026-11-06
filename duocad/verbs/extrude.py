@@ -84,6 +84,7 @@ def extrude(
         VERB_EXTRUDE,
         _region_build(faces, distance, mode, normal, taper),
         lambda: kernel_extrude.extrude_regions(faces, distance, "new", normal, taper=taper)["shape"],
+        unreached_hint=kernel_extrude.OUTWARD_CUT_HINT if distance > 0 else "",
     )
     operation = doc.log.append(
         VERB_EXTRUDE,
