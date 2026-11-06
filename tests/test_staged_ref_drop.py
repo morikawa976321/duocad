@@ -48,8 +48,11 @@ def test_a_verb_that_reshapes_the_picked_body_drops_it():
     assert applied["dropped_args"] == ["plane_face"] and "plane_face" not in staged_args(session)
 
 
-def test_a_face_reference_without_kind_is_dropped_too():
-    session = filleted_box_with_mirror_staged({"body": "box", "index": 1})
+@pytest.mark.parametrize("ref", [{"body": "box", "index": 1}, {"body": "box", "kind": None, "index": 1}], ids=["kind なし", "kind が None"])
+def test_a_face_reference_without_kind_is_dropped_too(ref):
+    """落ちたら、解決側が面として受ける `kind` なし・`None` の参照が形の変更のあとも残り、今の形の別の面を指して確定される。"""
+    session = filleted_box_with_mirror_staged(ref)
+    assert "plane_face" in staged_args(session)
     assert session.undo()["dropped_args"] == ["plane_face"]
 
 
