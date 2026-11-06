@@ -3,7 +3,7 @@
  *
  * 同一canvasへの第2パス(`render`。`viewport.ts` の `tick` が毎フレーム呼ぶ)。別のDOM要素で
  * 浮かせない。同じcanvasに描くぶん `elementFromPoint` は常にcanvasを返すので、メインの
- * ポインタ経路(`clickable`)の側でキューブの矩形を明示的に除外する。
+ * ポインタ経路(`clickable`)の側で立方体の外形(`inside`)を明示的に除外する。
  *
  * 独立した `THREE.Scene`+専用の光を持つ。キューブ自体はワールドに固定し、カメラだけを
  * メインカメラの向きに追従させる。
@@ -13,13 +13,13 @@
 import * as THREE from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
-import { EDGE_T, cellBox, cellDirection, regionCells, upForDirection } from './viewCube'
+import { EDGE_T, cellBox, cellDirection, oppositeFaceIfFacing, regionCells, upForDirection } from './viewCube'
 import { BASE_COLOR, FOV_DEFAULT, HOME_VIEW_OFFSET, HOVER_LIGHTEN, lighten } from './viewportConstants'
 
 /**
  * ビューキューブ(常設・26領域)の一辺[画素]と右上の余白[画素]。
- * クリックを吸う矩形でもある(`viewCubeRect` / `insideCubeRect`)ので、広げるほど右上で
- * モデルを指せる領域が減る。
+ * 描画の枠(`viewCubeRect`)でもある。クリックを吸うのは枠の中の立方体の外形だけ(`insideCubeRect`)なので、
+ * 大きくするほど右上でモデルを指せる領域が減る。
  */
 export const CUBE_SIZE_PX = 144
 export const CUBE_MARGIN_PX = 12
@@ -177,10 +177,11 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
     }
   }
 
-  /** その画素がキューブの矩形の内側か。 */
+  /** その画素が描いてある立方体の外形の内側か(矩形の余白は含めない。外側のクリックは下のモデルへ通す)。 */
   function insideCubeRect(x: number, y: number): boolean {
     const rect = viewCubeRect()
-    return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h
+    if (x < rect.x || x > rect.x + rect.w || y < rect.y || y > rect.y + rect.h) return false
+    return cubeHitAt(x, y) !== null
   }
 
   const cubeRaycaster = new THREE.Raycaster()
@@ -307,7 +308,9 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
   function handleCubeClick(x: number, y: number): void {
     const hit = cubeHitAt(x, y)
     if (hit === null) return
-    const dir = cellDirection(hit.i, hit.j, hit.k)
+    const camera = deps.camera()
+    const viewDir = camera.position.clone().sub(controls.target)
+    const dir = oppositeFaceIfFacing(hit.i, hit.j, hit.k, [viewDir.x, viewDir.y, viewDir.z]) ?? cellDirection(hit.i, hit.j, hit.k)
     const up = upForDirection(dir)
     animateCameraTo(new THREE.Vector3(...dir), new THREE.Vector3(...up))
   }

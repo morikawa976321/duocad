@@ -7,7 +7,7 @@
  * Node は `.ts` をそのまま読める(型注釈の除去。Node 23.6以降は既定で有効)。
  */
 import assert from 'node:assert/strict'
-import { EDGE_T, cellBox, cellDirection, regionCells, upForDirection } from '../web/src/viewCube.ts'
+import { EDGE_T, cellBox, cellDirection, oppositeFaceIfFacing, regionCells, upForDirection } from '../web/src/viewCube.ts'
 
 // -------------------------------------------------------------- regionCells: 26個・重複無し
 const cells = regionCells()
@@ -114,4 +114,12 @@ for (const [i, j, k] of cells) {
   assert.ok(Math.abs(up[0] - 0) > 1e-6 || Math.abs(up[1] - 0) > 1e-6, `斜め方向で up が +Z のまま(射影が効いていない): up=${up}`)
 }
 
+
+// -------------------------------------------------------------- oppositeFaceIfFacing: 正対中の面は反対側へ
+assert.deepEqual(oppositeFaceIfFacing(0, -1, 0, [0, -5, 0]), [0, 1, 0], '正面を向いて前の面を押したら後ろへ回る')
+assert.deepEqual(oppositeFaceIfFacing(0, 0, 1, [0.05, 0.05, 3]), [0, 0, -1], '数度のずれは正対とみなす')
+assert.equal(oppositeFaceIfFacing(0, -1, 0, [1, -1, 1]), null, '斜めから見ているときは通常のスナップ')
+assert.equal(oppositeFaceIfFacing(1, 0, 0, [0, -1, 0]), null, '別の面を向いているときは通常のスナップ')
+assert.equal(oppositeFaceIfFacing(1, 1, 0, [1, 1, 0]), null, '辺セルは正対でも通常のスナップ')
+assert.equal(oppositeFaceIfFacing(0, 0, 1, [0, 0, 0]), null, '退化した向きでは回さない')
 console.log('view cube: all assertions passed')
