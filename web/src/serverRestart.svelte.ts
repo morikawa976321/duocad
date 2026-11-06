@@ -36,10 +36,13 @@ export async function fetchJson<T>(path: string): Promise<T | null> {
 
 let config: Promise<ServerConfig | null> | null = null
 
-/** `duocad-config.json`(1回だけ取りに行く)。 */
+/** `duocad-config.json`(取れた結果は1回だけ取りに行く。取れなかった結果は覚えず、次の呼び出しで取り直す)。 */
 export function loadConfig(): Promise<ServerConfig | null> {
-  config ??= fetchJson<ServerConfig>('duocad-config.json')
-  return config
+  const pending = (config ??= fetchJson<ServerConfig>('duocad-config.json'))
+  void pending.then((value) => {
+    if (value === null && config === pending) config = null
+  })
+  return pending
 }
 
 function sleep(ms: number): Promise<void> {
@@ -98,5 +101,10 @@ export async function restartServer(
     }
   }
   restarting = null
+  try {
+    sessionStorage.removeItem(PENDING_KEY)
+  } catch {
+    // 消せなくても次の読み込みで古い結果を報告するだけ
+  }
   fail('立て直しが終わらない。安定版のデータフォルダの logs/ を見ること')
 }
