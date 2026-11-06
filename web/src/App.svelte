@@ -992,6 +992,10 @@
       // 共有の undo は AI の操作も戻すので、何が戻ったかを言う。MCP からの undo は `applied` が届かない(`Server._on_core_change`)。
       if (applied.verb === 'undo') inform(`取り消した: ${commandLabel(applied.undone)}`)
       if (applied.verb === 'redo') inform(`やり直した: ${commandLabel(applied.redone)}`)
+      // 取り消したあとの新しい操作で、やり直せる分が消えた(自動保存でファイルからも消える)。
+      if (applied.verb !== undefined && applied.discarded_redo !== undefined) {
+        inform(`やり直し ${applied.discarded_redo} 件を捨てた`)
+      }
       // 形が変わったボディの面・辺を指していた構えの引数は、サーバが外している(欄の指定は配信で消える)。
       const droppedArgs = applied.verb === undefined ? [] : (applied.dropped_args ?? [])
       if (droppedArgs.length > 0 && next.command !== null) {

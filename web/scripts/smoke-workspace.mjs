@@ -10,6 +10,7 @@
  *   3. 人が打った値が共有の command に出る(打ち終わってから)
  *   4. 打っている最中の欄は外からの値で奪われず、欄を離れると自分の値が勝つ
  *   5. 人の Enter で確定され、共有の command が畳まれる
+ *   5a. 辺を1本選んでからフィレットを起動すると、選択が連なりへ広がる
  *   6. 人が起動したものを AI が埋めて確定すると、画面の構えも畳まれる
  *   7. 人の Esc で共有の command が畳まれ、選択が空になる
  *   8. 再読み込みしても起動中のコマンドと引数が戻る
@@ -88,6 +89,22 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   )
   if ((await hostCommand()) !== null) fail('確定の後も画面の構えが残っている')
   ok('[5] 人の Enter で確定され、共有の command が畳まれる')
+
+  // ================================================================ 5a. 辺を1本選んでから起動すると、連なりに広がる(丸めた板の上の周)
+  await mcp.callTool('set_selection', { predicate: { kind: 'edge', where: [{ op: 'kind_is', value: 'circle' }] } })
+  await waitFor(() => (window.__duocad.selection?.count ?? 0) > 1, 'AI の辺の選択が画面に届かない')
+  const arc = await page.evaluate(() => JSON.parse(JSON.stringify(window.__duocad.selection.items[0])))
+  await mcp.callTool('set_selection', { refs: [arc] })
+  await waitFor(() => window.__duocad.selection?.count === 1, '辺1本の選択が画面に届かない')
+  await page.click('#fillet')
+  await waitFor(
+    () => window.__duocad.command?.verb === 'fillet' && (window.__duocad.selection?.count ?? 0) > 1,
+    '辺を1本選んでからフィレットを起動しても、選択が連なりへ広がらない',
+  )
+  const widened = await page.evaluate(() => window.__duocad.selection.count)
+  await page.keyboard.press('Escape')
+  await waitFor(() => window.__duocad.command === null, 'Esc で畳まれない')
+  ok(`[5a] 辺を1本選んでからフィレットを起動すると、選択が連なり(${widened} 本)へ広がる`)
 
   // ================================================================ 6. 人が起動し、AI が埋めて確定する
   await mcp.callTool('set_visible', { body_id: near.bodyId, visible: false }) // 丸めた板の縁は再び丸められないので、向こうの板で
