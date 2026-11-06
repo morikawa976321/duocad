@@ -160,7 +160,104 @@ def test_typographic_units_on_shapes_follow_the_viewbox_once_like_inches(tmp_pat
     assert width_of("6pc") == pytest.approx(width_of("1in"), rel=1e-4)
 
 
-def test_a_body_without_typographic_lengths_is_returned_untouched() -> None:
+def test_a_body_with_nothing_to_wrap_is_returned_untouched() -> None:
     """落ちたら、直す箇所が無い SVG まで再直列化され、他の癖が入る。"""
-    data = b'<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm"><rect  width="5" height="5"/></svg>'
+    data = b'<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm"><rect  width="72pt" height="5"/></svg>'
     assert svg_import._prepare(data)[0] is data
+
+
+#: `pt` `pc` が入る経路ごとの本文と、図形の外接箱 (x 最小, y 最小, x 最大, y 最大)。ルートは 100mm 角で viewBox 無し。
+_TYPOGRAPHIC_ROUTES = {
+    "attribute": ('<rect width="72pt" height="6pc"/>', (0.0, 0.0, 25.4, 25.4)),
+    "upper-case": ('<rect width="72PT" height="6PC"/>', (0.0, 0.0, 25.4, 25.4)),
+    "inline-style": ('<rect style="width:72pt;height:6pc"/>', (0.0, 0.0, 25.4, 25.4)),
+    "style-rule": ("<style>rect{width:72pt;height:6pc}</style><rect/>", (0.0, 0.0, 25.4, 25.4)),
+    "style-class": ('<style>.a{width:72pt;height:6pc}</style><rect class="a"/>', (0.0, 0.0, 25.4, 25.4)),
+    "circle-style": ('<circle style="r:36pt;cx:72pt;cy:6pc"/>', (12.7, 12.7, 38.1, 38.1)),
+    "transform": ('<rect width="10" height="10" transform="translate(72pt, 6pc)"/>', (25.4, 25.4, 35.4, 35.4)),
+    "style-transform": (
+        '<rect width="10" height="10" style="transform:translate(72pt, 6pc)"/>',
+        (25.4, 25.4, 35.4, 35.4),
+    ),
+    "group-transform": (
+        '<g transform="translate(72pt)"><rect width="10" height="10"/></g>',
+        (25.4, 0.0, 35.4, 10.0),
+    ),
+    "use-offset": (
+        '<defs><rect id="r" width="10" height="10"/></defs><use href="#r" x="72pt" y="6pc"/>',
+        (25.4, 25.4, 35.4, 35.4),
+    ),
+    "percent-of-nested-pt": (
+        '<svg width="72pt" height="6pc"><rect width="50%" height="50%"/></svg>',
+        (0.0, 0.0, 12.7, 12.7),
+    ),
+}
+
+
+def _box(entities: list) -> tuple[float, float, float, float]:
+    """図形の外接箱を SVG の向き(y 下向き、原点は左上)で返す。ルートの高さは 100mm。"""
+    xs: list[float] = []
+    ys: list[float] = []
+    for entity in entities:
+        params = entity["params"]
+        if entity["kind"] == "line":
+            xs += [params["x0"], params["x1"]]
+            ys += [params["y0"], params["y1"]]
+        else:
+            xs += [params["cx"] - params["radius"], params["cx"] + params["radius"]]
+            ys += [params["cy"] - params["radius"], params["cy"] + params["radius"]]
+    return min(xs), 100.0 - max(ys), max(xs), 100.0 - min(ys)
+
+
+@pytest.mark.parametrize("route", sorted(_TYPOGRAPHIC_ROUTES))
+def test_typographic_units_become_millimetres_whichever_way_they_come_in(tmp_path: Path, route: str) -> None:
+    """落ちたら、`pt` `pc` がその経路では svgelements の決め打ち(px の 4/3・16 倍)で解かれ、約3.78倍で入る。"""
+    inner, expected = _TYPOGRAPHIC_ROUTES[route]
+    body = f'<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm">{inner}</svg>'
+    _name, entities = svg_import.read_svg_entities(_write(tmp_path, body))
+    assert _box(entities) == pytest.approx(expected, rel=1e-4, abs=1e-4)
+
+
+def test_reading_an_svg_leaves_the_parser_as_it_was(tmp_path: Path) -> None:
+    """落ちたら、`pt` `pc` のための差し替えが取り込みの後(失敗した後も)に svgelements へ残る。"""
+    from svgelements import Length
+
+    before = Length.value
+    body = '<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm"><rect style="width:72pt;height:6pc"/></svg>'
+    svg_import.read_svg_entities(_write(tmp_path, body))
+    assert Length.value is before
+    with pytest.raises(ValueError):
+        svg_import.read_svg_entities(_write(tmp_path, "<svg", "broken.svg"))
+    assert Length.value is before
+    assert Length("72pt").value(ppi=25.4) == pytest.approx(96.0)
+
+
+@pytest.mark.parametrize(
+    ("hidden", "count"),
+    [
+        ('<rect x="10" y="1" width="5" height="5" display="none"/>', 1),
+        ('<rect x="10" y="1" width="5" height="5" style="display:none"/>', 1),
+        ('<style>.off{display:none}</style><rect class="off" x="10" y="1" width="5" height="5"/>', 1),
+        ('<g style="display:none"><rect x="10" y="1" width="5" height="5"/><circle cx="20" cy="3" r="2"/></g>', 2),
+        ('<g display="none"><rect x="10" y="1" width="5" height="5" display="inline"/></g>', 1),
+        (
+            '<defs><g id="pair"><rect width="2" height="2"/><rect x="3" width="2" height="2"/></g></defs>'
+            '<use href="#pair" x="10" display="none"/>',
+            2,
+        ),
+        ('<rect x="10" y="1" width="5" height="5" display="none"/><rect x="20" y="1" width="5" height="5" visibility="hidden"/>', 2),
+    ],
+)
+def test_shapes_under_display_none_are_counted_as_hidden(tmp_path: Path, hidden: str, count: int) -> None:
+    """落ちたら、`display:none` で入らなかった図形の数が応答に出ない(隠したレイヤの形が黙って消える)。"""
+    body = _svg("100mm", "50mm", "0 0 100 50", '<rect x="1" y="1" width="5" height="5"/>' + hidden)
+    _name, entities, skipped = svg_import.read_svg_report(_write(tmp_path, body))
+    assert len(entities) == 4
+    assert skipped == {"hidden": count}
+
+
+def test_an_svg_of_only_display_none_shapes_says_why(tmp_path: Path) -> None:
+    """落ちたら、全部が `display:none` のSVGの断りが、落とした数を言わない。"""
+    body = _svg("10mm", "10mm", "0 0 10 10", '<g style="display:none"><rect width="5" height="5"/></g>')
+    with pytest.raises(ValueError, match="非表示の図形 1 個"):
+        svg_import.read_svg_entities(_write(tmp_path, body))

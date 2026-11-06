@@ -7,7 +7,7 @@ dictのリストで、`duocad.sketch` の `Entity` と同じ語彙・同じキ�
 
 **単位は `ppi=25.4` で解決する。** svgelementsは既定(96ppi)だと全長をpxへ正規化し、
 `width="100mm"` が377.95になる。25.4を渡すと物理単位のSVGは**寸法がそのままmm**、
-`viewBox` だけのSVGは**1ユーザー単位 = 1mm** になる。
+`viewBox` だけのSVGは**1ユーザー単位 = 1mm** になる。`pt` `pc` も同じ `ppi` で解く(`_typographic_units_by_ppi`)。
 
 **物理単位のSVGには 0.54ppm の系統的なずれがある**(実測)。svgelementsがmm→pxにCSSの丸めた
 定数(3.7795296。厳密には 96/25.4)を使うため `width="100mm"` は100.000054になる。
@@ -41,12 +41,14 @@ dictのリストで、`duocad.sketch` の `Entity` と同じ語彙・同じキ�
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import math
 import re
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 PathLike = Union[str, Path]
 
@@ -74,8 +76,8 @@ _SIZE_SAMPLES = 64
 #: 1インチあたりの `pt` `pc` の数(CSS)。
 _TYPOGRAPHIC_PER_INCH = {"pt": 72.0, "pc": 6.0}
 
-#: `pt` `pc` を mm に書き換える長さの属性(図形の寸法・座標。font-size などは触らない)。
-_LENGTH_ATTRIBUTES = ("x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "x1", "y1", "x2", "y2")
+#: `_typographic_units_by_ppi` の差し替えを1本ずつにする(差し替えるのは svgelements のクラスで、プロセスに1つ)。
+_LENGTH_PATCH_LOCK = threading.RLock()
 
 #: `<use>` などから呼ばれる定義。`<defs>` の外に書かれていても、そこでは描かれない。
 _UNDRAWN_DEFINITIONS = frozenset({"symbol", "mask", "marker"})
@@ -109,9 +111,11 @@ def read_svg_report(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dict]
 
     data = Path(path).read_bytes()  # 無ければ FileNotFoundError
     source_name = Path(path).name
-    data, width_hint, height_hint = _prepare(data)
-    svg = _parse(data, source_name, width_hint, height_hint)
-    shapes, skipped = _shapes(svg)
+    with _typographic_units_by_ppi():
+        data, width_hint, height_hint = _prepare(data)
+        svg = _parse(data, source_name, width_hint, height_hint)
+    drawn = list(svg.elements())
+    shapes = _visible_shapes(drawn)
     height = _flip_height(svg, shapes)
 
     entities: List[dict] = []
@@ -128,6 +132,7 @@ def read_svg_report(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dict]
                     "画像をトレースしたSVGはこの経路では扱えない"
                     " — SVG側で単純化してから読ませること"
                 )
+    skipped = _skipped(data, drawn, len(shapes))
     if not entities:
         raise ValueError(
             f"{source_name}: 取り込める図形が無い"
@@ -241,7 +246,6 @@ def _prepare(data: bytes) -> Tuple[bytes, Optional[float], Optional[float]]:
         return data, None, None
     if _local_name(root.tag) != "svg":
         return data, None, None
-    typographic = _rewrite_typographic_lengths(root)
     undrawn = _undrawn_children(root)
     for parent, child in undrawn:
         namespace = child.tag[: child.tag.index("}") + 1] if child.tag.startswith("{") else ""
@@ -249,37 +253,38 @@ def _prepare(data: bytes) -> Tuple[bytes, Optional[float], Optional[float]]:
         wrapper.tail, child.tail = child.tail, None
         wrapper.append(child)
         parent[list(parent).index(child)] = wrapper
-    if undrawn or typographic:
+    if undrawn:
         data = ET.tostring(root, encoding="utf-8")
     width, height = _viewport_defaults(root)
     return data, width, height
 
 
-def _rewrite_typographic_lengths(root: Any) -> bool:
-    """ルートを含む全要素の長さの属性(`_LENGTH_ATTRIBUTES`)が `pt` `pc` なら mm に書き換える。書き換えたかを返す。
+@contextlib.contextmanager
+def _typographic_units_by_ppi() -> Iterator[None]:
+    """この中にいる間、svgelements の `Length.value` が `pt` `pc` を `in` と同じく `ppi` で解く。
 
     svgelements は `pt` `pc` を px の 4/3・16 倍に決め打ちし、`ppi` を見ない。`ppi=25.4` の下では
-    `72pt`(1インチ)が 96 になり、約 3.78 倍で入る。書き換えた `mm` は `in` と同じく svgelements が
-    `ppi` で解く(viewBox があれば、その倍率を `in` `mm` と同じに1回だけ受ける)。
+    `72pt`(1インチ)が 96 になり、約 3.78 倍で入る。長さは属性・`style` 属性・`<style>` の規則・`transform` の
+    どこからでも入り、どれも `Length.value` で数になる(実測: この4経路と `<use>` の x/y、百分率の基準)ので、
+    本文を書き換えずにここを差し替える。`ppi` が既定の 96 のときは元の決め打ちと同じ値になる。
     """
     from svgelements import Length
 
-    changed = False
-    for element in root.iter():
-        for name in _LENGTH_ATTRIBUTES:
-            text = element.get(name)
-            if text is None:
-                continue
-            try:
-                length = Length(text)
-            except Exception:
-                continue
-            per_inch = _TYPOGRAPHIC_PER_INCH.get(str(length.units).lower())
-            if per_inch is None or not isinstance(length.amount, (int, float)) or not math.isfinite(length.amount):
-                continue
-            element.set(name, f"{length.amount * MM_PER_INCH / per_inch!r}mm")
-            changed = True
-    return changed
+    with _LENGTH_PATCH_LOCK:
+        original = Length.value
+
+        def value(self: Any, ppi: Optional[float] = None, *args: Any, **kwargs: Any) -> Any:
+            per_inch = _TYPOGRAPHIC_PER_INCH.get(str(self.units).lower())
+            if per_inch is None or self.amount is None:
+                return original(self, ppi, *args, **kwargs)
+            # ppi がまだ渡らない呼び出しでは `in` `mm` と同じく解かずに返す(後で ppi つきで解かれる)。
+            return self if ppi is None else self.amount * ppi / per_inch
+
+        Length.value = value
+        try:
+            yield
+        finally:
+            Length.value = original
 
 
 def _undrawn_children(root: Any) -> List[Tuple[Any, Any]]:
@@ -365,26 +370,39 @@ def _flip_height(svg: Any, shapes: List[Any]) -> float:
     return height
 
 
-def _shapes(svg: Any) -> Tuple[List[Any], Dict[str, int]]:
-    """取り込む図形と、落とした要素の数 `{"text", "image", "hidden"}` を返す。
+def _visible_shapes(drawn: List[Any]) -> List[Any]:
+    """描かれる要素のうち、取り込む図形。
 
     `visibility` は子へ継承され、子の `visible` で上書きできる。svgelements が継承後の値を `values` に持つ。
     """
-    from svgelements import Image, Shape, Text
+    from svgelements import Shape
 
-    shapes: List[Any] = []
-    skipped = {"text": 0, "image": 0, "hidden": 0}
-    for element in svg.elements():
-        if isinstance(element, Shape):
-            if str(element.values.get("visibility", "")).strip().lower() in _HIDDEN_VISIBILITY:
-                skipped["hidden"] += 1
-            else:
-                shapes.append(element)
-        elif isinstance(element, Text):
-            skipped["text"] += 1
-        elif isinstance(element, Image):
-            skipped["image"] += 1
-    return shapes, {key: count for key, count in skipped.items() if count}
+    return [
+        element
+        for element in drawn
+        if isinstance(element, Shape)
+        and str(element.values.get("visibility", "")).strip().lower() not in _HIDDEN_VISIBILITY
+    ]
+
+
+def _skipped(data: bytes, drawn: List[Any], imported: int) -> Dict[str, int]:
+    """落とした要素の数 `{"text", "image", "hidden"}`(0の種別は含めない)。非表示の図形は「本文にある図形 − 取り込む図形」。
+
+    `display:none` の図形は svgelements が読んだ時点で捨てていて `drawn` に無いので、捨てない読み方でもう一度読んで
+    数える。非表示の中身が読めないときは、描かれる分だけで数える(取り込みは止めない)。
+    """
+    from svgelements import SVG, Image, Shape, Text
+
+    try:
+        everything = list(SVG.parse(io.BytesIO(data), ppi=MM_PER_INCH, parse_display_none=True).elements())
+    except Exception:
+        everything = drawn
+    skipped = {
+        "text": sum(isinstance(element, Text) for element in drawn),
+        "image": sum(isinstance(element, Image) for element in drawn),
+        "hidden": sum(isinstance(element, Shape) for element in everything) - imported,
+    }
+    return {key: count for key, count in skipped.items() if count}
 
 
 def _segments(element: Any) -> List[Any]:
