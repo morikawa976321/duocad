@@ -87,6 +87,19 @@ def test_the_dimension_guard_still_hears_what_an_earlier_request_said():
     assert "dimension_not_given" not in codes
 
 
+def test_the_dimension_guard_does_not_hear_a_quantity_from_two_requests_ago():
+    """落ちたら、一度「5mm」と言えば以後の依頼すべてで寸法の捏造がガードを素通りする。"""
+    provider = RecordedProvider(
+        [spoke("丸めた"), spoke("はい"), tool_use("fillet", {"radius": 3}), spoke("聞き返す")]
+    )
+    loop = AgentLoop(tools(), provider)
+    loop.run("上面をR5で丸めて")
+    loop.run("ありがとう")
+    run = loop.run("この角もいい感じに丸めて")
+
+    assert run.tool_calls[0].result["error"]["code"] == "dimension_not_given"
+
+
 def test_the_loop_looks_at_the_document_before_the_model_has_to():
     """落ちたら、依頼のたびに `describe_document` の1往復を払う状態に戻っている。"""
     seen: list = []
@@ -223,7 +236,7 @@ def test_llama_server_keeps_an_earlier_dimension_on_a_16k_context():
     provider = SizedProvider([spoke("了解"), spoke("了解"), fillet, spoke("終わり")], n_ctx=16384)
     loop = AgentLoop(tools(), provider, limits=AI_LIMITS["openai_compat"])
     loop.run("丸める半径は3mmにして")
-    loop.run("覚えておいて")
+    loop.run("半径は3mmのまま覚えておいて")
     run = loop.run("この辺をその半径で丸めて")
 
     assert said(provider.requests[-1])[0] == "丸める半径は3mmにして"

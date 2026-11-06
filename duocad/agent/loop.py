@@ -535,7 +535,7 @@ class AgentLoop:
     def _dimensions_nobody_asked_for(self, call: ToolCall) -> tuple[str, ...]:
         """人が量を言っていないのにモデルが埋めた寸法引数の名前(空なら問題なし)。
 
-        会話に出た全てのユーザー発話を見る(「上面をR3で丸めて」のあとの「反対側も同じように」があるので、直近の1発話に絞ると正しい依頼を止める)。
+        見るのは今回の発話と直前の1発話だけ(「上面をR3で丸めて」のあとの「反対側も同じように」を通すため直前は要る。全発話だと、一度量を言えば以後ずっと素通りする)。
         印が無いverb(`catalog.dimension_params` が空)は素通しする。`set_visible` の `visible` や `extrude` の `mode` のような
         言葉で指定される how は見ない(理由は `Param.dimension`)。
         """
@@ -554,7 +554,7 @@ class AgentLoop:
         if not filled:
             return ()
         said = " ".join(
-            turn.text for turn in self.turns if isinstance(turn, UserTurn)
+            [turn.text for turn in self.turns if isinstance(turn, UserTurn)][-_GUARD_UTTERANCES:]
         )
         if not _mentions_a_quantity(said):
             return filled
@@ -722,6 +722,9 @@ def _failure(tool: str, code: str, message: str, exception: str) -> dict:
     """
     return {"error": {"code": code, "message": message, "tool": tool, "exception": exception}}
 
+
+#: 寸法のガードが量を探すユーザー発話の数(今回 + 直前)。置いた値で、実測ではない。
+_GUARD_UTTERANCES = 2
 
 #: 識別子らしいかたまり(`body_1` / `sketch-1c72a3c7` / `entity-75aa`): 英字で始まる語と、`-` か `_` で続く英数字の並び。
 #: 区切りを含むものだけを取る(`[A-Za-z]\w*` で広く取ると `R3` や `M8` まで消えて、「上面をR3で丸めて」が「数量を言っていない」と読まれる)。
