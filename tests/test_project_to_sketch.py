@@ -566,3 +566,17 @@ def test_arcs_of_different_circles_that_both_miss_meet_at_the_crossing() -> None
     assert [entity["kind"] for entity in welded] == ["arc", "arc"]
     lens_area = 200.0 * math.pi / 3.0 - 5.0 * math.sqrt(300.0)
     assert _region_areas({"kind": "base", "name": "XY"}, welded) == pytest.approx([lens_area], abs=1e-3)
+
+
+def test_an_outline_that_cannot_be_found_is_not_reported_as_collapsed() -> None:
+    """継ぎ目が平面にあるトーラスの外形が空になるとき、「点に潰れた」ではなく外形を求められないと断る。落ちたら誤った理由が出る。"""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeTorus
+
+    session = Session(0.2)
+    ring = BRepPrimAPI_MakeTorus(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 15.0, 3.0).Shape()
+    session.document.add_body(Body(id="ring", name="ring", kind="solid", shape=ring))
+    sketch_id = session.sketch_create("XZ")["sketch_id"]
+    select(session, [{"body": "ring", "kind": "body", "index": None}])
+    with pytest.raises(ValueError, match="外形を求められない"):
+        session.project_outline(sketch_id)
+    assert sketch.get_sketch(session.document, sketch_id).entities == []
