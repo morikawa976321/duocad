@@ -19,11 +19,13 @@
  *  10. 人の「抜ける」でサーバのモードも通常へ戻る
  *  11. AI がスケッチの verb を構えると、画面がそのスケッチに入ってその verb が起動する
  *  12. 人の「スケッチ」は貼る先待ち(= `sketch_create` を構える)で、「抜ける」で畳まれる
+ *  13. 上限1の選択(ねじ)は、応答を待たずに続けて押しても最後の1枚だけが残る
  */
 import { fail, ok } from './args.mjs'
-import { assertNoAppErrors, frameAll, openApp, sleep, typeInto, waitOrFail } from './browser.mjs'
+import { assertNoAppErrors, frameAll, openApp, sleep, typeInto, waitOrFail, withoutBrowserPanel } from './browser.mjs'
 import { runSmoke } from './harness.mjs'
-import { addExtrudedRect } from './mcp-client.mjs'
+import { addExtrudedCircle, addExtrudedRect } from './mcp-client.mjs'
+import { clickFace } from './pick.mjs'
 
 const VERTICAL_EDGES = { kind: 'edge', where: [{ op: 'parallel_to', axis: 'Z' }] }
 
@@ -220,6 +222,81 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     '貼る先待ちの「抜ける」で sketch_create が畳まれない',
   )
   ok('[12] 人の「スケッチ」は貼る先待ち(= sketch_create を構える)で、「抜ける」で畳まれる')
+
+  // ================================================================ 13. 上限1の選択(ねじ)は、応答を待たずに続けて押しても上限を超えない
+  await mcp.callTool('set_visible', { body_id: near.bodyId, visible: false })
+  await mcp.callTool('set_visible', { body_id: far.bodyId, visible: false })
+  const cylinders = []
+  for (const x of [20, 50, 80]) {
+    cylinders.push((await addExtrudedCircle(mcp, { center: [x, 0], radius: 8, distance: 20 })).bodyId)
+  }
+  await waitFor(
+    (n) => (window.__duocad.parts ?? []).filter((part) => part.visible !== false).length >= n,
+    '円柱3本が画面に届かない',
+    [cylinders.length],
+  )
+  await frameAll(page)
+  await mcp.callTool('begin_command', { verb: 'thread' })
+  await waitFor(() => document.querySelector('.command-host')?.dataset.command === 'thread', 'AI の begin_command(thread) が画面に起動しない')
+  const sideFaces = []
+  for (const bodyId of cylinders) {
+    await waitFor((id) => window.__duocad.getGeometry(id) !== null, `円柱 ${bodyId} の形が届かない`, [bodyId])
+    const index = await page.evaluate(
+      (id) => window.__duocad.getGeometry(id).faces.find((face) => face.kind.startsWith('cylinder'))?.index ?? null,
+      bodyId,
+    )
+    if (index === null) fail(`円柱 ${bodyId} に曲面が無い`)
+    sideFaces.push(index)
+  }
+  await clickFace(page, cylinders[0], sideFaces[0], { hidePanel: true })
+  await waitFor(
+    (id) => (window.__duocad.selection?.items ?? []).some((item) => item.body === id),
+    '1本目の円柱の面が選ばれない',
+    [cylinders[0]],
+  )
+  // 返事を待たずに2回押す: 実マウスでは往復の間に応答が戻りうるので、同じ JS のタスクの中で2つの押下を送る。
+  const epoch = await page.evaluate(() => window.__duocad.stateEpoch)
+  await withoutBrowserPanel(page, () =>
+    page.evaluate(
+      (targets) => {
+        const canvas = document.querySelector('.viewport canvas')
+        const rect = canvas.getBoundingClientRect()
+        for (const [bodyId, faceIndex] of targets) {
+          const at = window.__duocad.projectFace(bodyId, faceIndex)
+          const init = {
+            clientX: at.x + rect.left,
+            clientY: at.y + rect.top,
+            button: 0,
+            buttons: 1,
+            pointerId: 1,
+            pointerType: 'mouse',
+            isPrimary: true,
+            bubbles: true,
+          }
+          canvas.dispatchEvent(new PointerEvent('pointermove', { ...init, buttons: 0 }))
+          canvas.dispatchEvent(new PointerEvent('pointerdown', init))
+          canvas.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }))
+        }
+      },
+      [
+        [cylinders[1], sideFaces[1]],
+        [cylinders[2], sideFaces[2]],
+      ],
+    ),
+  )
+  await waitFor(
+    (n) => window.__duocad.stateEpoch >= n + 2,
+    '続けて押した2つの選択の応答が届かない',
+    [epoch],
+  )
+  await sleep(500)
+  const thread = await page.evaluate(() => window.__duocad.selection?.items.map((item) => item.body) ?? [])
+  if (thread.length !== 1 || thread[0] !== cylinders[2]) {
+    fail(`ねじ(面1枚まで)で応答を待たずに続けて押すと、最後の1枚だけにならない: ${JSON.stringify(thread)}`)
+  }
+  await page.keyboard.press('Escape')
+  await waitFor(() => window.__duocad.command === null, 'Esc でねじが畳まれない')
+  ok('[13] 上限1の選択(ねじ)は、応答を待たずに続けて押しても最後の1枚だけが残る')
 
   await assertNoAppErrors(page, consoleErrors)
 })

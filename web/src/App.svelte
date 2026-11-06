@@ -265,6 +265,7 @@
     refusesFace(bodyId: string, faceIndex: number): string | null
     undoLastPoint(): boolean
     evictionsFor(ref: SelectionRef, items: SelectionRef[]): SelectionRef[]
+    limitsRef(ref: SelectionRef): boolean
     isEmptyArgField(target: EventTarget | null): boolean
   } | null>(null)
 
@@ -398,6 +399,12 @@
   let widenedDeletion: string | null = null
   /** この画面が送って、配信がまだ返ってこない選択の変更(`client_op`)。 */
   const selectionOpsInFlight = new Set<number>()
+  /**
+   * 個数の上限つきの引数(ねじ・測定)を食う参照のクリックで、選択の要求が返るのを待っているもの。
+   * 置き換えの差分は配信済みの選択に対して組むので、返る前に次のクリックを処理すると同じ最古を外す要求が重なって上限を超える。
+   */
+  let queuedSelectionClicks: { ref: SelectionRef; mode: PickEvent['mode']; verb: string | null }[] = []
+  const runningVerb = (): string | null => activeVerb ?? model?.command?.verb ?? null
   /** 代案で選択を広げた変更の `client_op`。返ってくるまで確定させない(広げた範囲が画面に出る前の Enter で確定しない)。 */
   let wideningOp = $state<number | null>(null)
   /**
@@ -458,6 +465,7 @@
         // `clearingOp` が残って以後の選択の差分が空の選択に対して組まれ続ける(`onStatus` の切断時だけでは捨てられない)。
         clearingOp = null
         selectionOpsInFlight.clear()
+        queuedSelectionClicks = []
         wideningOp = null
       } else {
         settleSelectionOp(clientOp ?? null)
@@ -509,6 +517,7 @@
       if (next !== 'open') {
         clearingOp = null
         selectionOpsInFlight.clear()
+        queuedSelectionClicks = []
         wideningOp = null
         preview.disconnect()
       }
@@ -1057,6 +1066,16 @@
     if (clientOp === null) return
     selectionOpsInFlight.delete(clientOp)
     if (clientOp === wideningOp) wideningOp = null
+    drainQueuedSelectionClicks()
+  }
+
+  /** 返っていない選択の要求が無くなったら、待たせたクリックを1つずつ処理し直す(送ったらその応答まで残りを待たせる)。 */
+  function drainQueuedSelectionClicks(): void {
+    while (selectionOpsInFlight.size === 0 && queuedSelectionClicks.length > 0) {
+      const [next, ...rest] = queuedSelectionClicks
+      queuedSelectionClicks = rest
+      if (next.verb === runningVerb()) editSelection(next.ref, next.mode)
+    }
   }
 
   /**
@@ -1540,6 +1559,10 @@
    * 置き換えのとき自分自身は remove に入れない: コアは remove を後に適用するので足したそばから外れる(`duocad/selection.py` の契約)。
    */
   function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
+    if (mode === 'toggle' &&selectionOpsInFlight.size > 0 && host?.limitsRef(ref)) {
+      queuedSelectionClicks = [...queuedSelectionClicks, { ref, mode, verb: runningVerb() }]
+      return
+    }
     const current = currentItems()
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'toggle') {
