@@ -170,3 +170,17 @@ def test_session_outputs_use_temporary_directories_even_with_default_paths(tmp_p
         exported = getattr(session, f"export_{suffix}_file")(f"a.{suffix}")
         assert Path(exported["path"]) == exports / f"a.{suffix}"
         assert Path(exported["path"]).stat().st_size > 0
+
+
+@pytest.mark.parametrize("content,message", [
+    (b'{"version": 3, "operations": [{"seq": 1, "verb": "ad', "1行.*列で読めなくなった.*途中で切れた"),
+    (b"", "空のファイル"),
+    (b"\x89PNG\r\n\x1a\n\xff\xfe", "文字として読めないバイト"),
+])
+def test_an_unreadable_document_file_is_reported_with_its_name(store, content, message):
+    store.ensure_models_dir()
+    broken = store.models_dir / "broken.json"
+    broken.write_bytes(content)
+
+    with pytest.raises(ValueError, match=f"broken.json.*{message}"):
+        store.read_document_file(broken)

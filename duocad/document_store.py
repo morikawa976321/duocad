@@ -48,7 +48,19 @@ class DocumentStore:
     def read_document_file(self, source: Path) -> dict:
         if not source.exists():
             raise FileNotFoundError(f"開けるファイルが無い: {source}")
-        return json.loads(source.read_text(encoding="utf-8"))
+        try:
+            return json.loads(source.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            where = "空のファイル" if not source.stat().st_size else f"{error.lineno}行{error.colno}列で読めなくなった"
+            raise ValueError(
+                f"{source.name} は文書として読めない({where})。保存の途中で切れたか、壊れている可能性がある。"
+                "別のファイルを開く"
+            ) from error
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"{source.name} は文書として読めない(文字として読めないバイトがある)。文書のファイルではないか、壊れている。"
+                "別のファイルを開く"
+            ) from error
 
     def rename_document_file(self, source: Path, target: Path, log: OpLog, created: float | None) -> None:
         """検査済みのパス間で改名する。元ファイルが外で消されていればログから作り直す。"""
