@@ -1569,7 +1569,7 @@
    * 置き換えのとき自分自身は remove に入れない: コアは remove を後に適用するので足したそばから外れる(`duocad/selection.py` の契約)。
    */
   function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
-    if (mode === 'toggle' &&selectionOpsInFlight.size > 0 && host?.limitsRef(ref)) {
+    if (mode === 'toggle' && selectionOpsInFlight.size > 0 && host?.limitsRef(ref)) {
       queuedSelectionClicks = [...queuedSelectionClicks, { ref, mode, verb: runningVerb() }]
       return
     }
