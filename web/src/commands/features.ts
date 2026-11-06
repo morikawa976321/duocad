@@ -814,7 +814,12 @@ export const SPLIT_BODY: CommandDef<'split_body'> = {
       label: '残す側',
       options: [
         { value: 'both', label: '両側', buttonId: 'split-body-keep-both' },
-        { value: 'positive', label: '法線の側', buttonId: 'split-body-keep-positive' },
+        {
+          value: 'positive',
+          label: '法線の側',
+          title: '法線 = 切る平面に垂直な向き。その向きの側を残す',
+          buttonId: 'split-body-keep-positive',
+        },
         { value: 'negative', label: '反対側', buttonId: 'split-body-keep-negative' },
       ],
     },

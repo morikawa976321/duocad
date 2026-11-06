@@ -513,16 +513,18 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
     {
       kind: 'number',
       name: 'radius',
-      label: '追従半径 R',
+      label: '埋める半径',
+      hint: '幅が半径の2倍より狭い隙間とへこみを埋める',
       unit: 'mm',
       inputId: 'sketch-envelope-radius',
-      reject: (value) => (value < 0 ? '追従半径 R は 0 以上' : null),
+      reject: (value) => (value < 0 ? '埋める半径は 0 以上' : null),
       default: 0,
     },
     {
       kind: 'number',
       name: 'offset',
-      label: 'オフセット d',
+      label: '広げる量',
+      hint: '正で外へ・負で内へ動かす',
       unit: 'mm',
       inputId: 'sketch-envelope-offset',
       reject: () => null,
@@ -534,8 +536,8 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
     const radius = values.radius
     const offset = values.offset
     if (regions.length === 0) return { ok: false, reason: '領域が選ばれていない' }
-    if (typeof radius !== 'number') return { ok: false, reason: 'R が数値でない' }
-    if (typeof offset !== 'number') return { ok: false, reason: 'd が数値でない' }
+    if (typeof radius !== 'number') return { ok: false, reason: '埋める半径が数値でない' }
+    if (typeof offset !== 'number') return { ok: false, reason: '広げる量が数値でない' }
     return { ok: true, args: { radius, offset } }
   },
 }

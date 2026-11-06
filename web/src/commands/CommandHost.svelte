@@ -1131,6 +1131,7 @@
         {#each spec.options as option (option.value)}
           <button
             id={option.buttonId}
+            title={option.title}
             class:on={(choices[spec.name] ?? spec.default) === option.value}
             onclick={(event) => {
               choices = { ...choices, [spec.name]: option.value }

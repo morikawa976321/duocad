@@ -5,6 +5,7 @@
    * 持つのは開閉と畳みの見た目だけ。畳んでも結果は残る(下の面を指すために退かす手。✕ は結果も捨てる)。
    */
   import type { Interference } from './interference.svelte'
+  import { MARK_HINTS } from './interferenceGroups'
   import { isImeKey } from './keys'
 
   let { interference }: { interference: Interference } = $props()
@@ -74,7 +75,7 @@
                 >
                   <span class="names" title={row.title}>{row.title}</span>
                   <span class="detail">{row.detail}</span>
-                  {#each row.marks as mark (mark)}<span class="mark">{mark}</span>{/each}
+                  {#each row.marks as mark (mark)}<span class="mark" title={MARK_HINTS[mark]}>{mark}</span>{/each}
                 </button>
                 {#if interference.selectedKey === row.key}
                   <div class="row-actions">

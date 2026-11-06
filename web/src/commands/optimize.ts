@@ -18,7 +18,13 @@ function directionArg(value: string): 'normal' | '-normal' | [number, number, nu
 }
 
 const LOAD_DIRECTION_OPTIONS = [
-  { value: 'normal', label: '面の外向き法線', buttonId: 'load-direction-normal', sends: directionArg('normal') },
+  {
+    value: 'normal',
+    label: '面の外向き法線',
+    title: '法線 = 面に垂直な向き。外向きはボディの外へ向かう側',
+    buttonId: 'load-direction-normal',
+    sends: directionArg('normal'),
+  },
   { value: '-normal', label: '面を押し込む向き', buttonId: 'load-direction-negnormal', sends: directionArg('-normal') },
   { value: 'down', label: '下向き(-Z)', buttonId: 'load-direction-down', sends: directionArg('down') },
 ] as const

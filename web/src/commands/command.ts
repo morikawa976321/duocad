@@ -278,7 +278,7 @@ export interface PointArgSpec extends ArgSpecCommon {
  */
 export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
-  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string }>
+  options: Array<{ value: string; label: string; buttonId: string; sends?: unknown; impliedBy?: string; title?: string }>
   /** 何も押していない間に選ばれている扱いにする `value`(上の docstring の条件を満たすものだけ)。 */
   default?: string
 }
