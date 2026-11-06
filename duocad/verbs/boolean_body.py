@@ -89,7 +89,13 @@ def _validate_participants(
 
 def _reject_untouched_cut(target_body, result: dict) -> None:
     """cut が何も削らなかった(ツールがターゲットに触れていない)ことを断る。新しい操作の入口だけに掛け、
-    再生・やり直しには掛けない(何も削らなかった cut を含む保存済みの文書が開けなくなるため)。"""
+    再生・やり直しには掛けない(何も削らなかった cut を含む保存済みの文書が開けなくなるため)。
+
+    体積の差だけでは決めない: 許容差はターゲットの体積に比例するので、大きなボディの小さな切り取り(一辺 1000 の箱の角を
+    0.5 削ると差は 0.125、許容差は 1)が無変化に見える。削った所には必ずツールの面が残る(実測: 離れている・面や辺や点で
+    接するだけの道具では `new_faces` も `deleted` も空)。"""
+    if result["provenance"]["new_faces"] or result["provenance"]["deleted"]:
+        return
     before, after = result["volume_before"], result["volume_after"]
     if abs(after - before) <= _brep_checks._NO_CHANGE_RTOL * max(1.0, abs(before)):
         raise ValueError(

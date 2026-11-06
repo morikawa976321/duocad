@@ -54,6 +54,33 @@ def test_cut_that_overlaps_still_succeeds(session: Session) -> None:
     assert math.isclose(query.volume(session.document.get_body(target_id).shape), 20.0**3 - 7.0**3, rel_tol=1e-6)
 
 
+@pytest.mark.parametrize(
+    "tool_origin, removed",
+    [((999.5, 999.5, 999.5), 0.5**3), ((400.0, 400.0, 999.99), 0.5 * 0.5 * 0.01), ((400.0, 400.0, 400.0), 0.5**3)],
+    ids=["角を削る", "面を浅く削る", "内側をくり抜く"],
+)
+def test_a_small_cut_into_a_large_body_is_not_mistaken_for_an_untouched_tool(
+    session: Session, tool_origin: tuple, removed: float
+) -> None:
+    """落ちたら、体積の差がターゲットの体積に比例する許容差(一辺 1000 の箱で 1 mm³)に埋もれる切り取りが、触れていないと断られる。"""
+    target_id = _add(session.document, "target", _box(1000.0))
+    tool_id = _add(session.document, "tool", _box(0.5, *tool_origin))
+    _select(session, [{"body": tool_id, "kind": "face", "index": 1}])
+    session.boolean_body({"body": target_id, "kind": "face", "index": 1}, "cut")
+    assert [body.id for body in session.document.bodies] == [target_id]
+    assert query.volume(session.document.get_body(target_id).shape) == pytest.approx(1000.0**3 - removed, abs=1e-3)
+
+
+@pytest.mark.parametrize("tool_origin", [(400.0, 400.0, 1000.0), (1400.0, 400.0, 400.0)], ids=["面が接するだけ", "離れている"])
+def test_a_small_tool_that_does_not_overlap_a_large_body_is_still_refused(session: Session, tool_origin: tuple) -> None:
+    target_id = _add(session.document, "target", _box(1000.0))
+    tool_id = _add(session.document, "tool", _box(0.5, *tool_origin))
+    _select(session, [{"body": tool_id, "kind": "face", "index": 1}])
+    with pytest.raises(ValueError, match="触れていない"):
+        session.boolean_body({"body": target_id, "kind": "face", "index": 1}, "cut")
+    assert {body.id for body in session.document.bodies} == {target_id, tool_id}
+
+
 def test_union_with_a_separate_tool_is_not_refused(session: Session) -> None:
     """離れた道具の union は断らない(離れた2体を1ボディにする使い方は本人判断)。"""
     target_id, tool_id = _setup(session, 40.0)
