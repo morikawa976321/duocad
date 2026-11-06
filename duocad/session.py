@@ -64,10 +64,11 @@ class NoDocument(ValueError):
 
 
 def _history_edge(message: str) -> ValueError:
-    """履歴の端での取り消し・やり直し。`kind` は `net/ws.py` が `error` の封筒に載せる(画面は文言でなく印で灰色の知らせにする)。
+    """履歴の端での取り消し・やり直し。`envelope_kind` は `net/ws.py` が `error` の封筒に載せる(画面は文言でなく印で灰色の知らせにする)。
+    属性名を `kind` にしない(選択の例外が「要る図形の種別」の意味で持っているので、封筒の `kind` に流れ込む)。
     例外名は `ValueError` のまま(MCP の応答が例外名を載せるので、新しい型にすると名前が変わる)。"""
     error = ValueError(message)
-    error.kind = "history_edge"  # type: ignore[attr-defined]
+    error.envelope_kind = "history_edge"  # type: ignore[attr-defined]
     return error
 
 

@@ -167,9 +167,8 @@ def _error_kind(error: Exception) -> str:
     """`error` の封筒の `kind`。画面が札の出し方を替える印で、`message`(`例外名: 本文`)の形は変えない。
     `history_edge` は履歴の端での取り消し・やり直し、`refusal` は入力の誤り・断り(`ValueError` とその派生)、それ以外は `error`。
     """
-    kind = getattr(error, "kind", None)
-    if isinstance(kind, str):
-        return kind
+    if getattr(error, "envelope_kind", None) == "history_edge":
+        return "history_edge"
     return "refusal" if isinstance(error, ValueError) else "error"
 
 
