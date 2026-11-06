@@ -1446,7 +1446,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /**
    * その画素で当たるスケッチの図形(アクティブなスケッチだけ)。点が先・角/交点が次・中点がその次・辺が最後:
    * 点・角・交点は必ずどれかの辺の上に乗っているので、辺を先に見ると掴めない。当たり半径は画面上の画素
-   * (`edgeAt` / `vertexAt` と同じ `pickPointsAt` / `pickLinesAt`)。
+   * (`pickPointsAt` / `pickLinesAt`)。
    */
   function sketchEntityAt(offsetX: number, offsetY: number): SketchEntityHit | null {
     if (activeSketchId === null) return null
