@@ -380,5 +380,24 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   await waitFor(() => document.querySelector('#command-abort') === null, 'コマンドを中断できない')
   ok('[10] プレビュー中の全体表示は、隠してある元のボディではなく見えている結果に寄る')
 
+  // ================================================================ 11. ビューキューブの回転の途中の全体表示
+  // 立方体を押すと 300ms かけて視点が回る。その間に F を押しても、回り終えた向きで全体表示の距離になる
+  // (全体表示の距離は外接球で決めるので、向きに依らない)。
+  const settled = await fitDistance()
+  await farOut()
+  const startPose = await poseOf()
+  if (!(distanceOf(startPose) > settled * 1.2)) fail('この検査の前提が崩れた: ホイールで引いても距離が増えない')
+  await page.mouse.click(box.x + 72, box.y + 72)
+  await page.keyboard.press('KeyF')
+  await sleep(600)
+  const midTurn = await poseOf()
+  if (directionOf(startPose).reduce((sum, value, axis) => sum + value * directionOf(midTurn)[axis], 0) > 0.9999) {
+    fail('立方体を押した向きへ回っていない(この検査の前提が崩れたか、全体表示が回転を途中で止めた)')
+  }
+  if (Math.abs(distanceOf(midTurn) - settled) > settled * 0.01) {
+    fail(`視点の回転の途中の全体表示が、合わせた距離を保っていない: ${JSON.stringify({ settled, got: distanceOf(midTurn) })}`)
+  }
+  ok('[11] ビューキューブの回転の途中に F を押しても、回り終えた向きで全体表示になる')
+
   await assertNoAppErrors(page, consoleErrors, { allow: failedSaves })
 })
