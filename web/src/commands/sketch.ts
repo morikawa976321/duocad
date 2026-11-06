@@ -35,6 +35,11 @@ function typed(values: ArgValues, name: string): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+/** 0 だけを断る寸法(負は逆向き)。もう一方の寸法を打っていない負は、2つの値を見る `build` が断る。 */
+function signedDimension(label: string): (value: number) => string | null {
+  return (value) => (value === 0 ? `${label}は0以外の値(負は逆向き)` : null)
+}
+
 /**
  * 線分。寸法は長さ・角度(度・反時計回り・スケッチ平面のX軸から。`add_arc` と同じ規約)。サーバへ送るのは `p0`/`p1` だけ。
  * 長さと角度を両方打てば終点は待たない(楕円と同じ。始点のクリックで確定する)。
@@ -228,8 +233,9 @@ export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
       label: '幅',
       unit: 'mm',
       inputId: 'sketch-width',
-      reject: positive('幅'),
+      reject: signedDimension('幅'),
       fromPoints: true,
+      hint: '幅と高さを両方打つと、負の値で逆向きに伸ばせる',
     },
     {
       kind: 'number',
@@ -237,8 +243,9 @@ export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
       label: '高さ',
       unit: 'mm',
       inputId: 'sketch-height',
-      reject: positive('高さ'),
+      reject: signedDimension('高さ'),
       fromPoints: true,
+      hint: '幅と高さを両方打つと、負の値で逆向きに伸ばせる',
     },
   ],
   build(values) {
@@ -246,7 +253,15 @@ export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
     const opposite = values.opposite as Point2 | undefined
     if (!corner || !opposite) return { ok: false, reason: '角と対角の2点が要る' }
     const rect = rectFromPoints(corner, opposite, typed(values, 'width'), typed(values, 'height'))
-    if (rect === null) return { ok: false, reason: '幅と高さは0より大きい値' }
+    if (rect === null) {
+      const w = typed(values, 'width')
+      const h = typed(values, 'height')
+      const negativeAlone = (w === undefined || h === undefined) && ((w ?? 0) < 0 || (h ?? 0) < 0)
+      return {
+        ok: false,
+        reason: negativeAlone ? '負の値で逆向きにできるのは幅と高さを両方打ったとき' : '幅と高さは0より大きい値(両方打てば負は逆向き)',
+      }
+    }
     return { ok: true, args: { corner: rect.corner, width: rect.width, height: rect.height } }
   },
 }
