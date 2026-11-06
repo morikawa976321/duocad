@@ -500,6 +500,25 @@
     if (sendOnly && !committed) return
     committed = false
     commitOnEntry = null
+    refocusEdited()
+  }
+
+  /** 最後に打った引数欄の `id`(確定が断られたとき、直す欄へ戻る先)。 */
+  let lastEditedId: string | null = null
+
+  /** 断られた確定の直し先: 最後に打った欄を全選択する。外の入力欄で打っている最中・その欄が無いときは `focusFirstNumber` に任せる。 */
+  function refocusEdited(): void {
+    const input = lastEditedId === null ? null : document.getElementById(lastEditedId)
+    const active = document.activeElement
+    const typingOutside =
+      active instanceof HTMLElement &&
+      (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable) &&
+      !overlayEl?.contains(active)
+    if (input instanceof HTMLInputElement && !typingOutside) {
+      input.focus()
+      input.select()
+      return
+    }
     focusFirstNumber()
   }
 
@@ -1099,6 +1118,7 @@
           value={textValues[spec.name] ?? ''}
           oninput={(event) => {
             textValues = { ...textValues, [spec.name]: (event.target as HTMLInputElement).value }
+            lastEditedId = spec.inputId
           }}
           onblur={flushNow}
           onkeydown={(event) => onNumberKeydown(event, spec)}
@@ -1122,6 +1142,7 @@
           value={numberText[spec.name] ?? ''}
           oninput={(event) => {
             numberText = { ...numberText, [spec.name]: (event.target as HTMLInputElement).value }
+            lastEditedId = spec.inputId
           }}
           onblur={flushNow}
           onkeydown={(event) => onNumberKeydown(event, spec)}
