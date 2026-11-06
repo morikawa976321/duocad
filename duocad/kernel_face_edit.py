@@ -144,10 +144,17 @@ def offset_faces(
     value = float(distance)
     if not math.isfinite(value) or value == 0.0:
         raise ValueError(f"{VERB_OFFSET}: distance must be finite and not 0, got {distance!r}")
-    return kernel.remembered(
-        VERB_OFFSET,
-        (shape,),
-        (tuple(indices), value),
+    def remembered(checked: bool, compute) -> dict:
+        return kernel.remembered(VERB_OFFSET, (shape,), (tuple(indices), value, checked), compute)
+
+    if not interactive:
+        # 交差の検査を通った結果は、検査を掛けない再生にもそのまま使える(確定 → undo → redo で計算し直さない)
+        try:
+            return remembered(True, _not_remembered)
+        except _NotRemembered:
+            pass
+    return remembered(
+        interactive,
         lambda: kernel_worker.run(
             VERB_OFFSET,
             shape,
@@ -155,6 +162,14 @@ def offset_faces(
             timeout=kernel_worker.time_limit(interactive),
         ),
     )
+
+
+class _NotRemembered(Exception):
+    """`kernel.remembered` に覚えが無いことを、計算せずに知るための印(失敗は覚えない)。"""
+
+
+def _not_remembered() -> dict:
+    raise _NotRemembered
 
 
 def wider_deletion(shape: Any, face_indices: Sequence[int]) -> Optional[List[int]]:

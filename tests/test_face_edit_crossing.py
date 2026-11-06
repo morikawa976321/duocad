@@ -66,3 +66,46 @@ def test_distance_too_large_for_a_box_says_to_shrink_the_distance():
     top = _plane_facing(body, (0.0, 0.0, 1.0))
     with pytest.raises(ValueError, match="距離の大きさを小さくするか、別の面を動かす"):
         kernel_face_edit.offset_faces(body, [top], -12.5)
+
+
+def _count_worker_runs(monkeypatch) -> list:
+    from duocad import kernel_worker
+
+    calls = []
+    original = kernel_worker.run
+
+    def counting(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(kernel_worker, "run", counting)
+    return calls
+
+
+def test_a_replayed_result_is_not_reused_for_an_interactive_edit(monkeypatch):
+    """検査を掛けない再生が覚えた結果を、検査を掛ける画面の操作に返さない。"""
+    body, floor = _pocket_plate()
+    kernel_face_edit.offset_faces(body, [floor], -5.5, interactive=False)
+    with pytest.raises(ValueError, match="cross without sharing an edge"):
+        kernel_face_edit.offset_faces(body, [floor], -5.5, interactive=True)
+
+
+def test_the_same_kind_of_call_reuses_the_remembered_result(monkeypatch):
+    body, floor = _pocket_plate()
+    calls = _count_worker_runs(monkeypatch)
+    kernel_face_edit.offset_faces(body, [floor], -2.0, interactive=True)
+    kernel_face_edit.offset_faces(body, [floor], -2.0, interactive=True)
+    assert len(calls) == 1
+    kernel_face_edit.offset_faces(body, [floor], -3.0, interactive=False)
+    kernel_face_edit.offset_faces(body, [floor], -3.0, interactive=False)
+    assert len(calls) == 2
+
+
+def test_redo_reuses_the_result_the_confirmed_edit_computed(monkeypatch):
+    """確定(検査あり)のあとの redo(再生)は計算し直さない。"""
+    body, floor = _pocket_plate()
+    calls = _count_worker_runs(monkeypatch)
+    confirmed = kernel_face_edit.offset_faces(body, [floor], -2.0, interactive=True)
+    redone = kernel_face_edit.offset_faces(body, [floor], -2.0, interactive=False)
+    assert len(calls) == 1
+    assert redone["shape"] is confirmed["shape"]
