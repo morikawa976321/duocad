@@ -2362,6 +2362,8 @@ export function createViewport(container: HTMLElement): Viewport {
   const observer = new ResizeObserver(() => {
     invalidate()
     applySize()
+    // 描画バッファの作り直しは中身を消す。次の rAF まで待つと、消えた絵がそのフレームに表示される。
+    renderIfNeeded()
   })
   observer.observe(container)
   applySize()
@@ -2525,6 +2527,10 @@ export function createViewport(container: HTMLElement): Viewport {
     // グリッドは毎フレームここだけを更新する(段の不透明度とカメラ行列。ジオメトリは無い)。
     grid.updateUniforms()
     section.update()
+    renderIfNeeded()
+  }
+
+  function renderIfNeeded(): void {
     if (needsRender || cameraMovedSinceRender()) {
       needsRender = false
       headlightRig.follow(controls.target)
