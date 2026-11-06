@@ -2610,13 +2610,12 @@
       inform('確定の応答待ちなので、取り消し・やり直しは終わってから')
       return
     }
-    if (key === 'z' && !event.shiftKey) {
-      event.preventDefault()
-      session.undo(nextOp())
-    } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
-      event.preventDefault()
-      session.redo(nextOp())
-    }
+    event.preventDefault()
+    // 取り消し・やり直しはサーバで選択を空にする。待たせたクリックを残すと、その後に届いて選択を足す。
+    queuedSelectionClicks = []
+    // ここへ来るキーは z か y だけ。Shift+Z はやり直し。
+    if (key === 'z' && !event.shiftKey) session.undo(nextOp())
+    else session.redo(nextOp())
   }
 
   // ---------------------------------------------------------------- 可視性(パーツ一覧から)

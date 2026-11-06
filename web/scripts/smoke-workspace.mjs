@@ -280,8 +280,11 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
             canvas.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }))
           }
           if (key !== null) {
-            const target = document.activeElement ?? document.body
-            target.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, bubbles: true, cancelable: true }))
+            // 修飾キーつき(`{ key, ctrlKey }`)は body へ送る: 文字の入った欄に送ると、欄の文字の取り消しに回って文書へ届かない。
+            const plain = typeof key === 'string'
+            const target = plain ? (document.activeElement ?? document.body) : document.body
+            const init = plain ? { key, code: key } : key
+            target.dispatchEvent(new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true }))
           }
         },
         { targets, key },
@@ -317,6 +320,30 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   const leftover = await page.evaluate(() => window.__duocad.selection?.items.map((item) => item.body) ?? [])
   if (leftover.length !== 0) fail(`続けて押した直後に Esc で中断したのに、選択が残る: ${JSON.stringify(leftover)}`)
   ok('[13b] 続けて押した直後の Esc で中断すると、待たせたクリックは捨てられて選択が残らない')
+
+  // 押した直後に Ctrl+Z: 取り消しはサーバで選択を空にする。待たせたクリックが、取り消しより後に届いて選択を足さない。
+  // 取り消す操作は名前の変更にする(ボディが全部残るので、遅れて届いたクリックがあれば選択に入る)。
+  await mcp.callTool('rename', { target: cylinders[0], name: 'undo-me' })
+  await waitFor(
+    (id) => (window.__duocad.parts ?? []).find((part) => part.body_id === id)?.name === 'undo-me',
+    '名前の変更が画面に届かない',
+    [cylinders[0]],
+  )
+  await mcp.callTool('begin_command', { verb: 'thread' })
+  await waitFor(() => document.querySelector('.command-host')?.dataset.command === 'thread', '3回目の begin_command(thread) が画面に起動しない')
+  await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '3回目のねじの起動時に選択が空でない')
+  await pressInOneTask(laterTwo, { key: 'z', code: 'KeyZ', ctrlKey: true })
+  await waitFor(
+    (id) => (window.__duocad.parts ?? []).find((part) => part.body_id === id)?.name !== 'undo-me',
+    '押した直後の Ctrl+Z で名前の変更が取り消されない',
+    [cylinders[0]],
+  )
+  await sleep(500)
+  const afterUndo = await page.evaluate(() => window.__duocad.selection?.items.map((item) => item.body) ?? [])
+  if (afterUndo.length !== 0) fail(`続けて押した直後に Ctrl+Z で取り消したのに、選択が残る: ${JSON.stringify(afterUndo)}`)
+  await page.keyboard.press('Escape')
+  await waitFor(() => window.__duocad.command === null, 'Ctrl+Z の後の Esc でねじが畳まれない')
+  ok('[13c] 続けて押した直後の Ctrl+Z で取り消すと、待たせたクリックは捨てられて選択が残らない')
 
   // ================================================================ 14. AI パネルを畳んでいる間の AI の失敗は、札で知らせる
   // 会話欄が見えていれば会話欄に出るので札は重ねない。畳んでいる間は会話欄が見えず、札も出さないと失敗に気づけない。
