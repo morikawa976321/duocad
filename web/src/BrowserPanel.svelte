@@ -25,6 +25,7 @@
   import type { SectionState } from './viewport'
 
   let {
+    generation,
     bodies,
     hoverEnabled,
     onHoverBody,
@@ -48,6 +49,7 @@
     onSectionPosition,
     onSectionInvert,
   }: {
+    generation: number | null
     bodies: BodyMeta[]
     hoverEnabled: boolean
     onHoverBody: (bodyId: string | null) => void
@@ -109,6 +111,14 @@
    *  欄を閉じた瞬間に消えかけの欄の束縛が null を読んで TypeError を投げる(実機で確認)。 */
   let renamingId = $state<string | null>(null)
   let draft = $state('')
+  let renameGeneration: number | null = null
+
+  $effect.pre(() => {
+    if (renameGeneration === generation) return
+    renameGeneration = generation
+    renamingId = null
+    draft = ''
+  })
 
   function startRename(id: string, current: string): void {
     draft = current
@@ -118,7 +128,7 @@
   /** 空・今と同じなら送らずに閉じる(前後の空白は落として送る。`renameTarget`)。`id` で自分の行かを確かめる: Enter で閉じた欄の blur は DOM から外れるときに遅れて届き、
    *  その間に別の行の ✎ が押されていると、相手の行の下書きを自分の名前で確定してしまう。 */
   function commitRename(id: string, current: string): void {
-    if (renamingId !== id) return
+    if (renamingId !== id || renameGeneration !== generation) return
     renamingId = null
     const next = renameTarget(draft, current)
     if (next !== null) onRename(id, next)

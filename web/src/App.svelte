@@ -3061,6 +3061,7 @@
           names={selectionInfoNames}
         />
         <BrowserPanel
+          generation={model?.generation ?? null}
           bodies={partBodies}
           hoverEnabled={mode.kind === 'idle' && model?.command == null && wantedKinds.length === 0 && wantedPick === null && !wantedVertices && pendingOp === null && !previewing}
           onHoverBody={(bodyId) => viewport?.setBrowserHover(bodyId)}

@@ -164,21 +164,42 @@ runSmoke('smoke-files-panel', { timeout: 60000, mcp: true }, async ({ mcp, brows
   await waitFor((name) => window.__duocad.state?.document_open === true && window.__duocad.state?.current_name === name, '先頭のカードを Enter で開ける', [firstName])
   ok(`トップ画面の先頭のカード(${firstName})にフォーカスがあり、Enter 1回で開く`)
 
-  const bodyBeforeRename = await page.evaluate(() => ({ ...window.__duocad.state.bodies[0] }))
   const otherName = firstName === 'bracket.json' ? 'bracket-copy.json' : 'bracket.json'
-  await page.click('.parts-row .row-action')
-  await typeInto(page, '.parts-row .rename-input', 'uncommitted-body-name')
-  await openFromOtherClient(otherName)
-  await waitFrames(page, 2)
-  const switchedDocument = await mcp.callTool('describe_document')
-  const switchedBody = switchedDocument.bodies.find((body) => body.body_id === bodyBeforeRename.body_id)
-  if (!switchedBody) fail('複製先に同じ ID のボディがない')
-  if (switchedBody.name !== bodyBeforeRename.name) {
-    regressionFailures.push(`文書の切り替えで改名の下書きが送られた: ${switchedBody.name}`)
-  } else {
-    ok('改名の下書きがあっても、別接続から開いた同じボディ ID の文書の名前は変わらない')
+  for (const { row, collection, idKey, label, destination } of [
+    { row: '.parts-row', collection: 'bodies', idKey: 'body_id', label: 'ボディ', destination: otherName },
+    { row: '.sketch-row', collection: 'sketches', idKey: 'sketch_id', label: 'スケッチ', destination: firstName },
+  ]) {
+    const before = await page.evaluate((collection) => ({ ...window.__duocad.state[collection][0] }), collection)
+    const draft = `uncommitted-${collection}-name`
+    await page.click(`${row} .row-action`)
+    await typeInto(page, `${row} .rename-input`, draft)
+    const version = await page.evaluate(() => ({ generation: window.__duocad.state.generation, revision: window.__duocad.state.bodies[0].revision }))
+    await mcp.callTool('set_visible', { body_id: hoveredBody, visible: false })
+    await waitFor((revision) => window.__duocad.state.bodies[0].revision > revision, '同じ文書の更新が届かない', [version.revision])
+    const kept = await page.evaluate((selector) => ({ generation: window.__duocad.state.generation, draft: document.querySelector(selector)?.value }), `${row} .rename-input`)
+    if (kept.generation !== version.generation || kept.draft !== draft) fail(`同じ文書の配信で${label}の改名の下書きが消えた`)
+    await mcp.callTool('set_visible', { body_id: hoveredBody, visible: true })
+    await waitFor(() => window.__duocad.state.bodies[0].visible, 'ボディが再表示されない')
+    ok(`同じ文書の配信では${label}の改名欄と下書きが残る`)
+
+    await openFromOtherClient(destination)
+    await waitFrames(page, 2)
+    if (await page.$(`${row} .rename-input`)) regressionFailures.push(`文書を切り替えても${label}の改名欄が残った`)
+    const switchedDocument = await mcp.callTool('describe_document')
+    const switched = switchedDocument[collection].find((item) => item[idKey] === before[idKey])
+    if (!switched) fail(`切り替え先に同じ ID の${label}がない`)
+    if (switched.name !== before.name) regressionFailures.push(`文書の切り替えで${label}の改名の下書きが送られた: ${switched.name}`)
+    await page.click('#file-name-input')
+    await waitFrames(page, 2)
+    const afterClick = await mcp.callTool('describe_document')
+    const renamed = afterClick[collection].find((item) => item[idKey] === before[idKey])
+    if (renamed?.name !== before.name) {
+      regressionFailures.push(`文書の切り替え後のクリックで${label}の改名の下書きが送られた: ${renamed?.name}`)
+    } else {
+      ok(`文書の切り替え後に別の入力欄をクリックしても${label}の名前は変わらない`)
+    }
   }
-  if (await page.$('.parts-row .rename-input')) await page.keyboard.press('Escape')
+  await openFromOtherClient(otherName)
   await page.hover('.parts-row .parts-name')
   await openFromOtherClient(firstName)
   await waitFor((id, color) => window.__duocad.hoveredRef()?.body === id && window.__duocad.hoveredRef()?.color === color, '同じ ID の行の上で文書を切り替えたら強調が消えた', [hoveredBody, hoverColor])
