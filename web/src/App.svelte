@@ -45,7 +45,7 @@
   } from './commands/features'
   import { entityPointKeys, ghostCopies, snapSketchPoint } from './entityKinds'
   import { IMPORT_STEP } from './commands/files'
-  import { isImeKey, ownsEscapeKey } from './keys'
+  import { isImeKey, isTextEntry, ownsEscapeKey } from './keys'
   import { INTERFERENCE } from './commands/interference'
   import { MEASURE } from './commands/measure'
   import type { MeasureItem, MeasurePayload } from './session'
@@ -1015,6 +1015,7 @@
         void tick().then(() => {
           if (model?.generation !== generation) return
           const field = document.querySelector<HTMLInputElement>('#file-name-input')
+          if (document.activeElement !== field && isTextEntry(document.activeElement)) return
           field?.focus()
           field?.select()
         })
