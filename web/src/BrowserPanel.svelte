@@ -4,7 +4,7 @@
   /** スケッチの平面の表示名。面に貼ったものの文言だけ場所で違う(ブラウザは「面」、ツールバーは「面に貼ったスケッチ」)。 */
   export function planeLabel(plane: SketchState['plane'], faceLabel = '面'): string {
     if (plane.kind === 'base') return plane.name
-    if (plane.kind === 'offset') return `オフセット ${plane.distance}mm`
+    if (plane.kind === 'offset') return `オフセット ${plane.distance} mm`
     return faceLabel
   }
 </script>
@@ -161,26 +161,30 @@
       <div class="group">
         <div class="group-head">
           <span class="group-name">原点</span>
-          <input
-            id="origin-visible-toggle"
-            type="checkbox"
-            checked={originVisible}
-            onchange={(event) => onToggleOrigin((event.target as HTMLInputElement).checked)}
-            title={originVisible ? '原点・軸・平面を隠す' : '原点・軸・平面を表示'}
-          />
+          <label class="check-hit">
+            <input
+              id="origin-visible-toggle"
+              type="checkbox"
+              checked={originVisible}
+              onchange={(event) => onToggleOrigin((event.target as HTMLInputElement).checked)}
+              title={originVisible ? '原点・軸・平面を隠す' : '原点・軸・平面を表示'}
+            />
+          </label>
         </div>
       </div>
 
       <div class="group">
         <div class="group-head">
           <span class="group-name">断面</span>
-          <input
-            id="section-toggle"
-            type="checkbox"
-            checked={section.on}
-            onchange={(event) => onSectionToggle((event.target as HTMLInputElement).checked)}
-            title={section.on ? '断面をやめる' : '断面で切る'}
-          />
+          <label class="check-hit">
+            <input
+              id="section-toggle"
+              type="checkbox"
+              checked={section.on}
+              onchange={(event) => onSectionToggle((event.target as HTMLInputElement).checked)}
+              title={section.on ? '断面をやめる' : '断面で切る'}
+            />
+          </label>
         </div>
         {#if section.on}
           <div class="section-controls">
@@ -205,7 +209,7 @@
                 value={formatPosition(section.position)}
                 onchange={commitPosition}
                 onkeydown={blurOnEnter}
-                title="平面の位置[mm]。数式も打てる"
+                title="平面の位置(単位は mm)。数式も打てる"
               />
               <span class="dim">mm</span>
             </label>
@@ -247,13 +251,15 @@
                   onblur={() => commitRename(body.body_id, body.name)}
                 />
               {:else}
-                <input
-                  type="checkbox"
-                  checked={body.visible}
-                  onchange={(event) =>
-                    onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
-                  title={body.visible ? 'このボディを隠す' : 'このボディを表示'}
-                />
+                <label class="check-hit">
+                  <input
+                    type="checkbox"
+                    checked={body.visible}
+                    onchange={(event) =>
+                      onToggle(body.body_id, (event.target as HTMLInputElement).checked)}
+                    title={body.visible ? 'このボディを隠す' : 'このボディを表示'}
+                  />
+                </label>
                 <span class="parts-name">{body.name}</span>
                 <span class="dim parts-count">{body.face_count}面</span>
                 <button
@@ -294,18 +300,20 @@
               data-sketch-id={sketch.sketch_id}
             >
               <!-- 編集中のスケッチは隠せない(トグルを無効にする): 描いている最中に自分の図形が消えると、次のクリックが何を指すか分からなくなる。 -->
-              <input
-                type="checkbox"
-                checked={sketch.visible}
-                disabled={sketch.sketch_id === activeSketchId}
-                onchange={(event) =>
-                  onToggleSketch(sketch.sketch_id, (event.target as HTMLInputElement).checked)}
-                title={sketch.sketch_id === activeSketchId
-                  ? '編集中のスケッチは隠せない'
-                  : sketch.visible
-                    ? 'このスケッチを隠す'
-                    : 'このスケッチを表示'}
-              />
+              <label class="check-hit">
+                <input
+                  type="checkbox"
+                  checked={sketch.visible}
+                  disabled={sketch.sketch_id === activeSketchId}
+                  onchange={(event) =>
+                    onToggleSketch(sketch.sketch_id, (event.target as HTMLInputElement).checked)}
+                  title={sketch.sketch_id === activeSketchId
+                    ? '編集中のスケッチは隠せない'
+                    : sketch.visible
+                      ? 'このスケッチを隠す'
+                      : 'このスケッチを表示'}
+                />
+              </label>
               {#if renamingId === sketch.sketch_id}
                 <input
                   class="rename-input"
@@ -381,6 +389,17 @@
     padding: 5px 8px;
     border-bottom: 1px solid var(--line);
     flex: 0 0 auto;
+  }
+
+  /* 畳むボタンの押せる範囲を見出し行の高さいっぱいまで広げる(見た目の寸法は変えない)。 */
+  #browser-collapse {
+    position: relative;
+  }
+
+  #browser-collapse::after {
+    content: '';
+    position: absolute;
+    inset: -5px -4px -5px -8px;
   }
 
   .browser-panel.collapsed .browser-header {
@@ -510,6 +529,15 @@
   .sketch-row:hover .row-action,
   .row-action:focus-visible {
     visibility: visible;
+  }
+
+  /* チェックの周りを押せる面にする。padding と負の margin が相殺するので、行の寸法と並びは変わらない。
+     名前の文字までは広げない: 名前を押して誤って隠す事故を避けるため。 */
+  .check-hit {
+    display: flex;
+    flex: 0 0 auto;
+    padding: 3px 5px;
+    margin: -3px -5px;
   }
 
   .rename-input {
