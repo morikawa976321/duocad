@@ -175,11 +175,15 @@
   let copyingFrom = $state<string | null>(null)
   let copyName = $state('')
   let deletingName = $state<string | null>(null)
-  /** 送って応答を待っている複製先と、送った時点の `lastCopied`。それより後に同じ名前の成功が来たら欄を閉じる。 */
-  let copySent = $state<{ dest: string; before: { name: string } | null } | null>(null)
+  /** 送って応答を待っている複製先と、送った時点の `lastCopied`。それより後に同じ名前の成功が来たら欄を閉じる(`thenOpen` なら複製先を開く)。 */
+  let copySent = $state<{ dest: string; before: { name: string } | null; thenOpen: boolean } | null>(null)
 
   $effect(() => {
-    if (copySent !== null && lastCopied !== copySent.before && lastCopied?.name === copySent.dest) cancelRowActions()
+    if (copySent !== null && lastCopied !== copySent.before && lastCopied?.name === copySent.dest) {
+      const { dest, thenOpen } = copySent
+      cancelRowActions()
+      if (thenOpen) untrack(() => onOpen(dest))
+    }
   })
 
   /** 複製先の先埋め: `<元の名前>-copy`(既にあれば `-copy2` …)。手元の一覧で見るだけで、存在の正はサーバ。 */
@@ -206,10 +210,10 @@
 
   const copyProblem = $derived(nameProblem(copyName))
 
-  function submitCopy(): void {
+  function submitCopy(thenOpen = false): void {
     if (copyingFrom === null || copyProblem !== null) return
     const dest = withSuffix(copyName, '.json')
-    copySent = { dest, before: lastCopied }
+    copySent = { dest, before: lastCopied, thenOpen }
     onCopy(copyingFrom, dest)
   }
 
@@ -443,10 +447,13 @@
                 cancelRowActions()
                 return
               }
-              onRowEnter(event, submitCopy)
+              onRowEnter(event, () => submitCopy())
             }}
           />
-          <button id="file-copy-confirm" onclick={submitCopy} disabled={copyProblem !== null}>複製</button>
+          <button id="file-copy-confirm" onclick={() => submitCopy()} disabled={copyProblem !== null}>複製</button>
+          <button id="file-copy-open" onclick={() => submitCopy(true)} disabled={copyProblem !== null}>
+            複製して開く
+          </button>
           <button class="files-row-cancel" onclick={cancelRowActions}>やめる</button>
         </div>
         {#if copyName !== '' && copyProblem !== null}
