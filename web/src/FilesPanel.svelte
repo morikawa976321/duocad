@@ -224,6 +224,16 @@
     copyName = ''
     copySent = null
     deletingName = name
+    // 既定は「やめる」: 押し間違えの Enter で消えない。
+    void tick().then(() => document.querySelector<HTMLButtonElement>('.confirm-row .files-row-cancel')?.focus())
+  }
+
+  /** 確認行のボタンで押した Esc は確認を閉じるだけにする(窓の Esc は選択と起動中のコマンドまで畳む)。 */
+  function onConfirmKey(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || isImeKey(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    cancelRowActions()
   }
 
   function confirmDelete(): void {
@@ -400,10 +410,15 @@
           <span class="confirm-text" title={file.name === currentName ? '開いている文書。消すと閉じて戻せない' : undefined}>
             {file.name === currentName ? '閉じて消す' : '消すと戻せない'}
           </span>
-          <button class="files-delete-confirm" onclick={confirmDelete} title="ディスクから消す(戻せない)">
+          <button
+            class="files-delete-confirm"
+            onclick={confirmDelete}
+            onkeydown={onConfirmKey}
+            title="ディスクから消す(戻せない)"
+          >
             本当に削除
           </button>
-          <button class="files-row-cancel" onclick={cancelRowActions}>やめる</button>
+          <button class="files-row-cancel" onclick={cancelRowActions} onkeydown={onConfirmKey}>やめる</button>
         </div>
       {/if}
       {#if copyingFrom === file.name}
