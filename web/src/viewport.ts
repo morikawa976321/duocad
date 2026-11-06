@@ -2269,6 +2269,15 @@ export function createViewport(container: HTMLElement): Viewport {
     if (downValid && (event.buttons & 1) !== 0 && dragged > BOX_SELECT_MIN_PX) {
       band.show(downX, downY, event.offsetX, event.offsetY)
     }
+    updateSketchPointer(event.offsetX, event.offsetY)
+  }
+
+  /**
+   * カーソル位置の幽霊・スナップ・十字を引き直す。ポインタが動いたときと、動かないままカメラ(ホイール・減衰)や
+   * 取り寄せた当たりが変わったとき(`updateHover`)に呼ぶ。
+   */
+  function updateSketchPointer(offsetX: number, offsetY: number): void {
+    sketchPointerProbe = hoverProbeKey({ x: offsetX, y: offsetY })
     let planePoint: { u: number; v: number } | null = null
     let sketchHit: SketchEntityHit | null = null
     let datumAt: readonly [number, number] | null = null
@@ -2278,19 +2287,19 @@ export function createViewport(container: HTMLElement): Viewport {
         planeMoveListener(null, null, null, null)
       } else {
         // `sketchSnapAt` / `sketchDatumAt` は `resolveHit` と同じ関数: 幽霊のスナップ先とクリック確定時のスナップ先が同じ入力を通る(App.svelte の不変条件)。
-        planePoint = planePointAt(event.offsetX, event.offsetY)
-        const snap = sketchSnapAt(event.offsetX, event.offsetY)
+        planePoint = planePointAt(offsetX, offsetY)
+        const snap = sketchSnapAt(offsetX, offsetY)
         sketchHit = snap.entity
         guideHit = snap.guide
         datumAt =
           sketchHit === null && guideHit === null
-            ? (sketchDatumAt(event.offsetX, event.offsetY, planePoint)?.at ?? null)
+            ? (sketchDatumAt(offsetX, offsetY, planePoint)?.at ?? null)
             : null
         planeMoveListener(planePoint, sketchHit, datumAt, guideHit)
         grid.followCursor(planePoint)
       }
     }
-    updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit, datumAt, guideHit)
+    updateSketchCursor(offsetX, offsetY, planePoint, sketchHit, datumAt, guideHit)
   }
 
   // 帯を引いている間の Esc はドラッグの取り消し(離しても矩形選択にならない)。選択の全解除など、ほかの Esc の働きは起こさない。
@@ -2362,21 +2371,29 @@ export function createViewport(container: HTMLElement): Viewport {
     if (near.length > 0) pickDataWantedListener(near)
   }
 
-  function updateHover(): void {
-    const point = orbiting ? null : hoverAt
+  // 最後に `updateSketchPointer` を呼んだときの `hoverProbeKey`。
+  let sketchPointerProbe = ''
+
+  function hoverProbeKey(point: { x: number; y: number } | null): string {
     // カメラの値は丸めて鍵にする: 真上から見る極の近く(スケッチ中)では `OrbitControls` が毎フレーム位置と姿勢を
     // 1e-8 ほど揺らし続け、そのままだと止まっていても毎フレーム当たりを解き直す(`cameraMovedSinceRender` と同じ揺れ)。
     // 0 の近くで揺れる成分は `toFixed` だと `-0.000000` と `0.000000` に分かれるので、丸めた整数(-0 は 0 に)で鍵にする。
     const fixed = (values: number[]) => values.map((value) => Math.round(value * 1e6) + 0).join(',')
-    const probe =
-      point === null
-        ? ''
-        : `${pickGeneration},${point.x},${point.y},` +
+    return point === null
+      ? ''
+      : `${pickGeneration},${point.x},${point.y},` +
           `${fixed(camera.position.toArray())},${fixed(camera.quaternion.toArray())},` +
           // `zoom` も入れる: 正投影のドリーは `zoom` だけを動かすので、無いとホイールで寄っても当たるものが変わらない。
           `${camera.zoom}`
+  }
+
+  function updateHover(): void {
+    const point = orbiting ? null : hoverAt
+    const probe = hoverProbeKey(point)
     if (probe === hoverProbe) return
     hoverProbe = probe
+    // ポインタが動かないままカメラが動いた(ホイール)ときの幽霊・吸着マーカー。ポインタが動いたときは `onPointerMove` が引き直し済み。
+    if (point !== null && activeSketchId !== null && probe !== sketchPointerProbe) updateSketchPointer(point.x, point.y)
     if (point !== null && (activeSketchId === null || solidPickInSketch)) requestPickData(point.x, point.y)
     const next = point === null ? null : resolveHit(point.x, point.y)
     // スケッチモードでは図形と領域が一緒に返る: 図形が取れるときは領域を光らせない
