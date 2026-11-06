@@ -72,7 +72,7 @@
                   data-pair={row.key}
                   onclick={() => interference.select(row.key)}
                 >
-                  <span class="names">{row.title}</span>
+                  <span class="names" title={row.title}>{row.title}</span>
                   <span class="detail">{row.detail}</span>
                   {#each row.marks as mark (mark)}<span class="mark">{mark}</span>{/each}
                 </button>
@@ -134,6 +134,19 @@
   .close {
     margin-left: auto;
     padding: 0 6px;
+  }
+
+  /* 見た目の寸法は変えず、押せる範囲だけを上下左右に広げる。 */
+  .caret,
+  .close {
+    position: relative;
+  }
+
+  .caret::after,
+  .close::after {
+    content: '';
+    position: absolute;
+    inset: -5px -4px;
   }
 
   .row-actions {
