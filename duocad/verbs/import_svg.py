@@ -20,6 +20,9 @@
 寸法ではなく、`register_value` に通すとロゴ1枚で数千個の `d1` が生まれる。`parameters.resolve` は
 素の数値をそのまま返すので通る(`sketch.Entity` のdocstring)。
 
+**応答には取り込んだ大きさ(`size_mm`)・領域数・取り込まなかった要素の数を載せる**。単位や倍率が合わないSVGは
+エラーにならず、大きさを返さないと違いに気づけない。
+
 失敗: パス無し=FileNotFoundError / 壊れている・図形が無い・多すぎる・領域が計算できない=ValueError /
 貼る先のスケッチが実在しない=KeyError。いずれも `doc.sketches` にもログにも何も残さない。
 **領域が計算できるかまで見る**: 座標が大きすぎる(`scale` が極端など)と有限の数値でも `regions()` が毎回失敗する。
@@ -28,7 +31,7 @@
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .. import region
 from ..document import Document
@@ -36,7 +39,7 @@ from ..oplog import Operation, register_verb
 from ..entry import entry
 from ..paths import resolve_user_path
 from ..sketch import Entity, EntityId, SketchId, get_sketch, new_entity_id, remove_entities, require_valid_params
-from ..svg_import import PathLike, read_svg_entities
+from ..svg_import import PathLike, describe_skipped, entities_size, read_svg_report
 
 VERB_IMPORT_SVG = "import_svg"
 
@@ -53,8 +56,15 @@ def import_svg(
     平面かどうかの検査はもう要らない —— 既にスケッチとして存在するものへ足すだけである。
     `scale` は解決後のmmへさらに掛ける倍率(既定1.0。単位の合わないSVG用)。
     """
+    return _import_svg_reporting(doc, sketch_id, path, scale)[0]
+
+
+def _import_svg_reporting(
+    doc: Document, sketch_id: SketchId, path: PathLike, scale: float
+) -> Tuple[List[EntityId], Dict[str, int]]:
+    """`import_svg` の本体。取り込まなかった要素の数(`svg_import.read_svg_report`)も返す。"""
     get_sketch(doc, sketch_id)  # 実在しなければここで KeyError。doc/logはまだ無傷
-    source_name, shapes = read_svg_entities(path, scale=scale)
+    source_name, shapes, skipped = read_svg_report(path, scale=scale)
 
     # 先に全部検査する。半分入れてから弾くと、以後 `regions()` が毎回失敗するスケッチが残る。
     for shape in shapes:
@@ -85,7 +95,7 @@ def import_svg(
             "entities": entities,
         },
     )
-    return [entity["entity_id"] for entity in entities]
+    return [entity["entity_id"] for entity in entities], skipped
 
 
 def _apply_to(doc: Document, sketch_id: SketchId, entities: List[dict]) -> None:
@@ -131,12 +141,16 @@ register_verb(VERB_IMPORT_SVG, do=_do_import_svg, undo=_undo_import_svg)
 def _enter_import_svg(
     document: Document, sketch_id: str, path: PathLike, scale: Optional[float] = None
 ) -> dict:
-    """`scale` は解決後の mm へさらに掛ける倍率(省略時 1.0)。"""
-    entity_ids = import_svg(
+    """`scale` は解決後の mm へさらに掛ける倍率(省略時 1.0)。
+
+    応答の `size_mm` は取り込んだ図形の外接箱 `[幅, 高さ]`、`region_count` は取り込み後のスケッチの領域数、
+    `skipped` は取り込まなかった要素の数の文(無ければ空文字)。
+    """
+    entity_ids, skipped = _import_svg_reporting(
         document,
         str(sketch_id),
         str(resolve_user_path(path)),
-        scale=1.0 if scale is None else float(scale),
+        1.0 if scale is None else float(scale),
     )
     args = document.log.entries[-1].args
     return {
@@ -144,4 +158,7 @@ def _enter_import_svg(
         "entity_ids": list(entity_ids),
         "source_name": args["source_name"],
         "entity_count": len(args["entities"]),
+        "size_mm": entities_size(args["entities"]),
+        "region_count": len(region.regions(document, str(sketch_id))),
+        "skipped": describe_skipped(skipped),
     }

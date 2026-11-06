@@ -1,0 +1,111 @@
+"""SVG取り込みの単位換算・非表示図形の扱い・取り込み結果の応答。"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from duocad import svg_import
+from duocad.server import Session
+
+
+def _svg(width: str, height: str, view_box: str, body: str) -> str:
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="{view_box}">{body}</svg>'
+    )
+
+
+def _write(directory: Path, body: str, name: str = "t.svg") -> Path:
+    path = directory / name
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def _rect_width(entities: list) -> float:
+    xs = [value for entity in entities if entity["kind"] == "line" for value in (entity["params"]["x0"], entity["params"]["x1"])]
+    return max(xs) - min(xs)
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "view_box", "expected_mm"),
+    [
+        ("72pt", "72pt", "0 0 72 72", 25.4),
+        ("6pc", "6pc", "0 0 6 6", 25.4),
+        ("1in", "1in", "0 0 1 1", 25.4),
+        ("100mm", "100mm", "0 0 1 1", 100.0),
+    ],
+)
+def test_physical_units_of_the_root_become_millimetres(
+    tmp_path: Path, width: str, height: str, view_box: str, expected_mm: float
+) -> None:
+    """落ちたら、ルートの width/height の `pt` `pc` が svgelements の決め打ち(px の 4/3・16 倍)で解かれ、約3.78倍で入る。"""
+    box = float(view_box.split()[2])
+    body = _svg(width, height, view_box, f'<rect x="0" y="0" width="{box}" height="{box}"/>')
+    _name, entities = svg_import.read_svg_entities(_write(tmp_path, body))
+    assert _rect_width(entities) == pytest.approx(expected_mm, rel=1e-4)
+
+
+def test_typographic_units_with_one_side_missing_follow_the_aspect_ratio(tmp_path: Path) -> None:
+    """落ちたら、片方だけが `pt` のときの縦横比からの補完が、換算前の値で行われている。"""
+    body = '<svg xmlns="http://www.w3.org/2000/svg" width="144pt" viewBox="0 0 100 50"><rect x="0" y="0" width="100" height="50"/></svg>'
+    _name, entities = svg_import.read_svg_entities(_write(tmp_path, body))
+    ys = [value for entity in entities for value in (entity["params"]["y0"], entity["params"]["y1"])]
+    assert _rect_width(entities) == pytest.approx(50.8, rel=1e-4)
+    assert max(ys) - min(ys) == pytest.approx(25.4, rel=1e-4)
+
+
+def test_hidden_shapes_are_dropped_and_counted(tmp_path: Path) -> None:
+    """落ちたら、`visibility` が hidden / collapse の図形が取り込まれる、または継承と `visible` の上書きが効かない。"""
+    body = _svg(
+        "100mm",
+        "50mm",
+        "0 0 100 50",
+        '<rect x="1" y="1" width="5" height="5"/>'
+        '<rect x="10" y="1" width="5" height="5" visibility="hidden"/>'
+        '<rect x="20" y="1" width="5" height="5" style="visibility:collapse"/>'
+        '<g visibility="hidden"><rect x="30" y="1" width="5" height="5"/>'
+        '<rect x="40" y="1" width="5" height="5" visibility="visible"/></g>'
+        '<rect x="50" y="1" width="5" height="5" opacity="0"/>'
+        '<text x="1" y="30">hi</text><image href="a.png" width="3" height="3"/>',
+    )
+    _name, entities, skipped = svg_import.read_svg_report(_write(tmp_path, body))
+    xs = {round(entity["params"][key]) for entity in entities if entity["kind"] == "line" for key in ("x0", "x1")}
+    assert {1, 6, 40, 45, 50, 55} == xs
+    assert skipped == {"text": 1, "image": 1, "hidden": 3}
+    assert svg_import.describe_skipped(skipped) == "文字 1 個・画像 1 個・非表示の図形 3 個"
+
+
+def test_an_svg_of_only_hidden_shapes_says_why(tmp_path: Path) -> None:
+    """落ちたら、全部が非表示のSVGの断りが、落とした数を言わない。"""
+    body = _svg("10mm", "10mm", "0 0 10 10", '<rect width="5" height="5" visibility="hidden"/>')
+    with pytest.raises(ValueError, match="非表示の図形 1 個"):
+        svg_import.read_svg_entities(_write(tmp_path, body))
+
+
+def test_import_svg_reports_size_regions_and_skipped(tmp_path: Path) -> None:
+    """落ちたら、取り込みの応答が大きさ・領域数・落とした要素を載せていない(単位違いに気づけない)。"""
+    session = Session(0.2, models_dir=tmp_path)
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    body = _svg(
+        "72pt", "36pt", "0 0 72 36", '<rect x="0" y="0" width="72" height="36"/><text x="1" y="1">a</text>'
+    )
+    applied = session.import_svg(sketch_id, str(_write(tmp_path, body)))
+    assert applied["size_mm"] == pytest.approx([25.4, 12.7], rel=1e-4)
+    assert applied["region_count"] == 1
+    assert applied["skipped"] == "文字 1 個"
+
+
+def test_import_svg_of_an_open_line_has_no_region(tmp_path: Path) -> None:
+    session = Session(0.2, models_dir=tmp_path)
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    body = _svg("10mm", "10mm", "0 0 10 10", '<path d="M 1 1 L 9 9" fill="none"/>')
+    applied = session.import_svg(sketch_id, str(_write(tmp_path, body)))
+    assert applied["region_count"] == 0
+    assert applied["skipped"] == ""
+
+
+def test_entities_size_covers_curves() -> None:
+    circle_arc = {"kind": "arc", "params": {"cx": 0.0, "cy": 0.0, "radius": 5.0, "start_deg": 0.0, "end_deg": 180.0}}
+    assert svg_import.entities_size([circle_arc]) == pytest.approx([10.0, 5.0], rel=1e-3)
+    assert svg_import.entities_size([]) == [0.0, 0.0]

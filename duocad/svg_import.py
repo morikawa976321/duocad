@@ -26,8 +26,10 @@ dictのリストで、`duocad.sketch` の `Entity` と同じ語彙・同じキ�
 (`kernel_sketch._edges_bezier` のdocstring)。半径0の弧・潰れた弧は端点を結ぶ線分(SVG 1.1 付録 F.6.2)。
 長さ0の線分・ベジエ・弧は黙って捨てる(領域を割らない。`sketch._validate_bezier` が弾く値)。
 
-**見た目は捨てる。** fill / stroke / 色 / text / image / clip-path はスケッチに意味が無い。
-`<text>` はSVG側でアウトライン化してから読ませること。
+**見た目は捨てる。** fill / stroke / 色 / opacity / text / image / clip-path はスケッチに意味が無い。
+`<text>` はSVG側でアウトライン化してから読ませること。`opacity:0` の図形も取り込む。
+`display:none` と、継承後の `visibility` が `hidden` / `collapse` の図形は描かれないので取り込まない。
+落とした `<text>` `<image>` と非表示の図形の数は `read_svg_report` が返す(取り込みの応答でそのまま知らせる)。
 
 **描画されない定義は取り込まない。** `<symbol>` `<mask>` `<marker>` は `<use>` などで参照されて初めて意味を持つ。
 `<switch>` は描かれる枝が1つだけ(条件属性 `requiredFeatures` / `requiredExtensions` / `systemLanguage` を
@@ -44,7 +46,7 @@ import math
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 PathLike = Union[str, Path]
 
@@ -62,6 +64,15 @@ _CIRCULAR_TOLERANCE = 1.0e-9
 _ZERO_LENGTH = 1.0e-9
 
 _SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+
+#: 描かれない `visibility` の値(`collapse` は SVG では `hidden` と同じ)。
+_HIDDEN_VISIBILITY = frozenset({"hidden", "collapse"})
+
+#: 外接箱を求めるときの曲線の標本数(分割数)。表示用の大きさで、図形の座標には使わない。
+_SIZE_SAMPLES = 64
+
+#: 1インチあたりの `pt` `pc` の数(CSS)。
+_TYPOGRAPHIC_PER_INCH = {"pt": 72.0, "pc": 6.0}
 
 #: `<use>` などから呼ばれる定義。`<defs>` の外に書かれていても、そこでは描かれない。
 _UNDRAWN_DEFINITIONS = frozenset({"symbol", "mask", "marker"})
@@ -83,6 +94,12 @@ def read_svg_entities(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dic
 
     `entities` は `[{"kind":.., "params":{..}}, ...]`。`scale` は解決後のmmへさらに掛ける倍率。
     """
+    source_name, entities, _skipped = read_svg_report(path, scale)
+    return source_name, entities
+
+
+def read_svg_report(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dict], Dict[str, int]]:
+    """`read_svg_entities` に、取り込まなかった要素の数 `{"text":.., "image":.., "hidden":..}` を添える(0の種別は含めない)。"""
     scale = float(scale)
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError(f"scale must be a positive finite number, got {scale!r}")
@@ -91,7 +108,7 @@ def read_svg_entities(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dic
     source_name = Path(path).name
     data, width_hint, height_hint = _prepare(data)
     svg = _parse(data, source_name, width_hint, height_hint)
-    shapes = _shapes(svg)
+    shapes, skipped = _shapes(svg)
     height = _flip_height(svg, shapes)
 
     entities: List[dict] = []
@@ -111,9 +128,70 @@ def read_svg_entities(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dic
     if not entities:
         raise ValueError(
             f"{source_name}: 取り込める図形が無い"
-            "(text / image / 描かれない定義はスケッチに取り込めない。文字はアウトライン化してから読ませること)"
+            "(text / image / 描かれない定義 / 非表示の図形はスケッチに取り込めない。"
+            f"文字はアウトライン化してから読ませること{_skipped_clause(skipped)})"
         )
-    return source_name, entities
+    return source_name, entities, skipped
+
+
+_SKIPPED_LABELS = (("text", "文字"), ("image", "画像"), ("hidden", "非表示の図形"))
+
+
+def describe_skipped(skipped: Dict[str, int]) -> str:
+    """取り込まなかった要素の数を一文の部品にする(無ければ空文字)。例: `文字 2 個・画像 1 個`。"""
+    return "・".join(f"{label} {skipped[key]} 個" for key, label in _SKIPPED_LABELS if skipped.get(key))
+
+
+def _skipped_clause(skipped: Dict[str, int]) -> str:
+    text = describe_skipped(skipped)
+    return f"。このファイルで落とした要素: {text}" if text else ""
+
+
+def entities_size(entities: List[dict]) -> List[float]:
+    """図形全体の外接箱の `[幅, 高さ]`(mm)。円弧・ベジエは曲線上を標本して求める。図形が無ければ `[0, 0]`。"""
+    points: List[Tuple[float, float]] = []
+    for entity in entities:
+        points.extend(_outline_points(entity["kind"], entity["params"]))
+    if not points:
+        return [0.0, 0.0]
+    xs, ys = [x for x, _ in points], [y for _, y in points]
+    return [max(xs) - min(xs), max(ys) - min(ys)]
+
+
+def _outline_points(kind: str, params: dict) -> List[Tuple[float, float]]:
+    steps = [index / _SIZE_SAMPLES for index in range(_SIZE_SAMPLES + 1)]
+    if kind == "line":
+        return [(params["x0"], params["y0"]), (params["x1"], params["y1"])]
+    if kind == "bezier":
+        return [
+            tuple(
+                (1 - t) ** 3 * params[a] + 3 * (1 - t) ** 2 * t * params[b]
+                + 3 * (1 - t) * t**2 * params[c] + t**3 * params[d]
+                for a, b, c, d in (("x0", "cx1", "cx2", "x1"), ("y0", "cy1", "cy2", "y1"))
+            )
+            for t in steps
+        ]
+    if kind == "arc":
+        start, end = params["start_deg"], params["end_deg"]
+        sweep = (end - start) % 360.0 or 360.0
+        return [
+            (
+                params["cx"] + params["radius"] * math.cos(math.radians(start + sweep * t)),
+                params["cy"] + params["radius"] * math.sin(math.radians(start + sweep * t)),
+            )
+            for t in steps
+        ]
+    if kind == "ellipse":
+        angle = math.radians(params["angle"])
+        half_x, half_y = params["width"] / 2.0, params["height"] / 2.0
+        return [
+            (
+                params["cx"] + half_x * math.cos(t) * math.cos(angle) - half_y * math.sin(t) * math.sin(angle),
+                params["cy"] + half_x * math.cos(t) * math.sin(angle) + half_y * math.sin(t) * math.cos(angle),
+            )
+            for t in (math.tau * step for step in steps)
+        ]
+    return []
 
 
 # --------------------------------------------------------------------------------------
@@ -160,6 +238,7 @@ def _prepare(data: bytes) -> Tuple[bytes, Optional[float], Optional[float]]:
         return data, None, None
     if _local_name(root.tag) != "svg":
         return data, None, None
+    typographic = _rewrite_typographic_lengths(root)
     undrawn = _undrawn_children(root)
     for parent, child in undrawn:
         namespace = child.tag[: child.tag.index("}") + 1] if child.tag.startswith("{") else ""
@@ -167,10 +246,35 @@ def _prepare(data: bytes) -> Tuple[bytes, Optional[float], Optional[float]]:
         wrapper.tail, child.tail = child.tail, None
         wrapper.append(child)
         parent[list(parent).index(child)] = wrapper
-    if undrawn:
+    if undrawn or typographic:
         data = ET.tostring(root, encoding="utf-8")
     width, height = _viewport_defaults(root)
     return data, width, height
+
+
+def _rewrite_typographic_lengths(root: Any) -> bool:
+    """`<svg>` の width / height が `pt` `pc` なら mm に書き換える。書き換えたかを返す。
+
+    svgelements は `pt` `pc` を px の 4/3・16 倍に決め打ちし、`ppi` を見ない。`ppi=25.4` の下では
+    `72pt`(1インチ)が 96 になり、約 3.78 倍で入る。
+    """
+    from svgelements import Length
+
+    changed = False
+    for name in ("width", "height"):
+        text = root.get(name)
+        if text is None:
+            continue
+        try:
+            length = Length(text)
+        except Exception:
+            continue
+        per_inch = _TYPOGRAPHIC_PER_INCH.get(str(length.units).lower())
+        if per_inch is None or not isinstance(length.amount, (int, float)) or not math.isfinite(length.amount):
+            continue
+        root.set(name, f"{length.amount * MM_PER_INCH / per_inch!r}mm")
+        changed = True
+    return changed
 
 
 def _undrawn_children(root: Any) -> List[Tuple[Any, Any]]:
@@ -256,11 +360,26 @@ def _flip_height(svg: Any, shapes: List[Any]) -> float:
     return height
 
 
-def _shapes(svg: Any) -> List[Any]:
-    """幾何を持つ要素だけを拾う。text / image はここで落ちる。"""
-    from svgelements import Shape
+def _shapes(svg: Any) -> Tuple[List[Any], Dict[str, int]]:
+    """取り込む図形と、落とした要素の数 `{"text", "image", "hidden"}` を返す。
 
-    return [element for element in svg.elements() if isinstance(element, Shape)]
+    `visibility` は子へ継承され、子の `visible` で上書きできる。svgelements が継承後の値を `values` に持つ。
+    """
+    from svgelements import Image, Shape, Text
+
+    shapes: List[Any] = []
+    skipped = {"text": 0, "image": 0, "hidden": 0}
+    for element in svg.elements():
+        if isinstance(element, Shape):
+            if str(element.values.get("visibility", "")).strip().lower() in _HIDDEN_VISIBILITY:
+                skipped["hidden"] += 1
+            else:
+                shapes.append(element)
+        elif isinstance(element, Text):
+            skipped["text"] += 1
+        elif isinstance(element, Image):
+            skipped["image"] += 1
+    return shapes, {key: count for key, count in skipped.items() if count}
 
 
 def _segments(element: Any) -> List[Any]:

@@ -381,7 +381,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'clear_loads'; face_count: number })
   | (AppliedVerbBase & { verb: 'pattern_rectangular'; created: string[] })
   | (AppliedVerbBase & { verb: 'pattern_circular'; created: string[] })
-  | (AppliedVerbBase & { verb: 'import_svg'; sketch_id: string; entity_ids: string[]; source_name: string; entity_count: number })
+  | (AppliedVerbBase & { verb: 'import_svg'; sketch_id: string; entity_ids: string[]; source_name: string; entity_count: number; size_mm: number[]; region_count: number; skipped: string })
   | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[] })
   | (AppliedVerbBase & { verb: 'undo'; undone: string })
   | (AppliedVerbBase & { verb: 'redo'; redone: string })
