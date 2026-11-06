@@ -887,6 +887,7 @@
     if (previous !== null && previous.generation !== next.generation) {
       resumeMemory = 'idle'
       modeCrossedDocument = true
+      viewport?.reapplyResolution() // サーバは文書の切り替えで見え方を捨てる
     }
     files.onState(next)
     // 待たせたクリックの状況(コマンド・ボディの版)が変わっていれば捨てる(古い版の連なりは届いても使わないので、
@@ -2466,7 +2467,7 @@
     const target = event.target as HTMLElement | null
     const isTextEditingField =
       target?.tagName === 'TEXTAREA' ||
-      (target?.tagName === 'INPUT' && !['checkbox', 'radio'].includes((target as HTMLInputElement).type))
+      (target?.tagName === 'INPUT' && !['checkbox', 'radio', 'range'].includes((target as HTMLInputElement).type))
     // Ctrl+S は今の文書を手で書き直す(`files.save`)。保存は自動で済んでいる(issue #5)ので普段は何も変わらないが、
     // 自動保存が書けなかったときの押し直しと、ブラウザの「ページを保存」を止めるために残す。
     // `preventDefault()` はフォーカスがどこにあっても必ず通す(止めないとページ保存ダイアログが開き、保存が起きたか見えなくなる)。
