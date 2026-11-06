@@ -15,7 +15,8 @@
 #
 # 1段でも落ちたら終了コード 1(引数の誤りは 2)。落ちた段は、表のあとに出力の末尾を出す。PR 本文にはこの表と末尾を貼る。
 # smoke は各スクリプトが使い捨ての --models-dir と OS が選ぶ空きポートで立てる。8765・8766・8775・8776 には触らない。
-# 環境変数 GATE_WEB_DIST か -WebDist で組み立て先を変えられる(既定は $env:TEMP\duocad-gate-dist。web\dist は拒む)。
+# 環境変数 GATE_WEB_DIST か -WebDist で組み立て先を変えられる(既定は $env:TEMP\duocad-gate-dist)。
+# リポジトリの中(web\dist を含む)・リポジトリを含む場所・前回の組み立てでも空でもない既存の場所は拒む。
 
 [CmdletBinding()]
 param(
@@ -34,6 +35,8 @@ $env:PYTHONUTF8 = '1'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $web = Join-Path $repo 'web'
 $python = Join-Path $repo '.venv\Scripts\python.exe'
+# 相対の -WebDist は呼んだ場所から読む(build と smoke の段は web\ で走るので、相対のまま渡すと別の場所を指す)。
+$WebDist = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WebDist).TrimEnd('\')
 
 # -File 経由だと `-Only a,b` は1本の文字列 'a,b' で届くので、コンマでも分ける。
 function Split-Names([string[]]$Values) {
@@ -88,10 +91,22 @@ if ($selected.Count -eq 0) {
     exit 2
 }
 
-if ($needsBuild) {
-    $resolvedDist = [IO.Path]::GetFullPath($WebDist).TrimEnd('\')
-    if ($resolvedDist -ieq [IO.Path]::GetFullPath((Join-Path $web 'dist')).TrimEnd('\')) {
-        Write-Error 'web\dist には組み立てません(本人のサーバが配っている)。別の -WebDist を渡してください。' -ErrorAction Continue
+$usesDist = [bool]($selected | Where-Object { $_.Name -eq 'build' -or $_.Name -like 'smoke*' })
+if ($usesDist) {
+    # build は --emptyOutDir で組み立て先の中身を消す。リポジトリの中(web\dist は本人のサーバが配っている)、
+    # リポジトリを含む場所、前回の組み立てでも空でもない既存の場所には出さない。
+    $ordinal = [StringComparison]::OrdinalIgnoreCase
+    $repoPrefix = $repo.TrimEnd('\') + '\'
+    $distPrefix = $WebDist + '\'
+    if ($distPrefix.StartsWith($repoPrefix, $ordinal) -or $repoPrefix.StartsWith($distPrefix, $ordinal)) {
+        Write-Error "組み立て先 '$WebDist' はリポジトリの中か、リポジトリを含む場所です(web\dist は本人のサーバが配っている)。リポジトリの外の -WebDist を渡してください。" -ErrorAction Continue
+        exit 2
+    }
+    $holdsOtherThings = (Test-Path -LiteralPath $WebDist) -and
+        -not (Test-Path -LiteralPath (Join-Path $WebDist 'index.html')) -and
+        [bool](Get-ChildItem -LiteralPath $WebDist -Force | Select-Object -First 1)
+    if ($holdsOtherThings) {
+        Write-Error "組み立て先 '$WebDist' には、前回の組み立てではない中身があります(build は中身を消す)。空のフォルダか、新しい場所を渡してください。" -ErrorAction Continue
         exit 2
     }
 }

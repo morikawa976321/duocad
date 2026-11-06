@@ -227,7 +227,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 - 段の名前は `-List` が出す: `pytest`・`check`・`build`・`smoke*`（`web/scripts/smoke*.mjs` のファイル名から `.mjs` を除いたもの）。`-Only` / `-Skip` は
   `smoke*` のようなワイルドカードとコンマ区切りを受ける。`-PytestArgs` で pytest の段を絞れる（例: `-Only pytest -PytestArgs tests/test_resolution.py`）。
 - smoke の段を選ぶと `build` が先頭に自動で入る（`npm run build -- --outDir $env:TEMP\duocad-gate-dist --emptyOutDir`。出力先は `-WebDist` か環境変数
-  `GATE_WEB_DIST` で変えられ、`web\dist` を指すと断る）。smoke には `--web-dist` でその出力先を渡す。`build` が落ちたら smoke は SKIP。
+  `GATE_WEB_DIST` で変えられる。相対パスは呼んだ場所から読む）。smoke には `--web-dist` でその出力先を渡す。`build` が落ちたら smoke は SKIP。
+- `build` は出力先の中身を消すので、`build` か smoke を選んだとき、リポジトリの中（`web\dist` を含む）・リポジトリを含む場所・
+  前回の組み立て（`index.html` がある）でも空でもない既存の場所を出力先に指すと断る。
 - 8765・8766・8775・8776 には触らない（smoke は各スクリプトが使い捨ての `--models-dir` と OS が選ぶ空きポートで立てる）。
 
 ---
