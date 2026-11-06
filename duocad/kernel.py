@@ -192,7 +192,7 @@ def read_step_text_checked(text: str) -> Tuple["TopoDS_Shape", List[str]]:
         if loose > 0:
             problems.append(
                 f"ソリッド {solids.Extent()} 個の外に面が {loose} 枚ある(全体 {faces.Extent()} 面のうちソリッドに入るのは "
-                f"{faces.Extent() - loose} 面)。取り込むとそれらは黙って落ちる"
+                f"{faces.Extent() - loose} 面)。取り込むとそれらは黙って落ちる。元の CAD でソリッドだけにして書き出し直すこと"
             )
     return shape, problems
 
