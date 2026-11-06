@@ -98,6 +98,9 @@ assert.equal(value('10−4'), 6, 'U+2212 のマイナス記号')
 assert.equal(value('ｓｑｒｔ（４）'), 2, '全角の英字も畳む')
 assert.equal(value('10 +　5'), 15, 'NBSP・全角空白は空白として読む')
 assert.equal(value('10‑4'), 6, 'U+2011(改行しないハイフン)はマイナス記号として読む')
+assert.equal(value('ー5'), -5, 'IME の長音記号はマイナス')
+assert.equal(value('1。5'), 1.5, 'IME の句点は小数点')
+assert.equal(value('atan2(10、10)'), 45, 'IME の読点は引数の区切り')
 
 // 互換文字(NFKC が別の字へ畳むもの)を黙って数字にしない: べき乗のつもりの `10²` が 102 になる。
 for (const text of ['10²', '9⁹', '①', '⑩', '5₂', '𝟏', '½', '⁻3']) {
@@ -113,7 +116,7 @@ assert.ok(reason('50mm').includes('余分'), 'parseFloat と違い、末尾の�
 assert.ok(reason('3 4').includes('余分'), 'parseFloat は 3 を返すが、ここは拒む')
 assert.ok(reason('2(3)').includes('余分'), '暗黙の乗算は認めない(曖昧なので)')
 assert.equal(reason('(1+2'), '括弧が閉じていない')
-assert.equal(reason('1+'), '式が途中で終わっている')
+assert.equal(reason('1+'), '式が途中で終わっている(最後の演算子か開き括弧のあとに値が要る)')
 assert.equal(reason('*3'), 'ここに数値が要る')
 assert.equal(reason('.'), '数値として読めない: .')
 assert.ok(reason('1..2').includes('余分'))
@@ -124,6 +127,9 @@ assert.ok(reason('sqrt(1,2)').includes('引数は1個'))
 assert.ok(reason('sqrt()').includes('引数は1個'))
 assert.ok(reason('atan2(1)').includes('引数は2個'))
 assert.ok(reason('1@2').includes('使えない文字'))
+assert.ok(reason('2pi').includes('pi') && reason('2pi').includes('*'), '余った名前と書き方を出す')
+assert.ok(reason('5mm').includes('mm') && reason('5mm').includes('単位は付けない'))
+assert.ok(reason('1e400').includes('大きすぎる値'), '桁あふれは0除算とは別の文言')
 
 // **値が数にならないものは通さない**(`Number.isFinite` を呼び出し側に任せない)。
 assert.ok(reason('1/0').includes('値が数にならない'))

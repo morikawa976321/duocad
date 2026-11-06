@@ -67,7 +67,7 @@ const CONSTANTS = new Map<string, number>([['pi', Math.PI]])
 // ============================================================================ 字句
 
 type Token =
-  | { kind: 'number'; value: number }
+  | { kind: 'number'; value: number; text: string }
   | { kind: 'name'; text: string }
   | { kind: 'op'; text: '+' | '-' | '*' | '/' | '^' }
   | { kind: 'lparen' }
@@ -100,6 +100,9 @@ function normalize(text: string): string {
     .replace(/[−‐-―]/g, '-')
     .replace(/×/g, '*')
     .replace(/÷/g, '/')
+    .replace(/ー/g, '-')
+    .replace(/。/g, '.')
+    .replace(/、/g, ',')
     .trim()
 }
 
@@ -115,7 +118,9 @@ function tokenize(source: string): Token[] {
     if (NUMBER_HEAD.test(char)) {
       const matched = NUMBER.exec(source.slice(index))
       if (matched === null) throw new ExpressionError(`数値として読めない: ${source.slice(index)}`)
-      tokens.push({ kind: 'number', value: Number.parseFloat(matched[0]) })
+      const value = Number.parseFloat(matched[0])
+      if (!Number.isFinite(value)) throw new ExpressionError(`大きすぎる値: ${matched[0]}`)
+      tokens.push({ kind: 'number', value, text: matched[0] })
       index += matched[0].length
       continue
     }
@@ -194,7 +199,7 @@ function parsePower(cursor: Cursor): number {
 
 function parseAtom(cursor: Cursor): number {
   const token = peek(cursor)
-  if (token === null) throw new ExpressionError('式が途中で終わっている')
+  if (token === null) throw new ExpressionError('式が途中で終わっている(最後の演算子か開き括弧のあとに値が要る)')
   if (token.kind === 'number') {
     cursor.index += 1
     return token.value
@@ -257,6 +262,23 @@ export function isPlainNumber(text: string): boolean {
   }
 }
 
+function leftoverReason(token: Token): string {
+  switch (token.kind) {
+    case 'name':
+      return `余分な文字がある: ${token.text}(前に演算子が要る。掛け算は * で書き、単位は付けない)`
+    case 'number':
+      return `余分な文字がある: ${token.text}(前に演算子が要る)`
+    case 'lparen':
+      return '余分な開き括弧がある(前に演算子が要る。掛け算は * で書く)'
+    case 'rparen':
+      return '余分な閉じ括弧がある(対応する開き括弧が無い)'
+    case 'comma':
+      return '余分なカンマがある(カンマは関数の引数の間にだけ置ける)'
+    case 'op':
+      return `余分な文字がある: ${token.text}`
+  }
+}
+
 /** 打った文字列を数にする。末尾のゴミは捨てず理由を返して拒む(`parseFloat('50mm')` は 50 を返す)。 */
 export function evaluateExpression(text: string): ExpressionResult {
   try {
@@ -264,8 +286,10 @@ export function evaluateExpression(text: string): ExpressionResult {
     if (source === '') return { ok: false, reason: '式が空' }
     const cursor: Cursor = { tokens: tokenize(source), index: 0 }
     const value = parseSum(cursor)
-    if (cursor.index !== cursor.tokens.length) throw new ExpressionError('余分な文字がある')
-    if (!Number.isFinite(value)) throw new ExpressionError('値が数にならない(0除算・定義域外)')
+    const leftover = peek(cursor)
+    if (leftover !== null) throw new ExpressionError(leftoverReason(leftover))
+    if (Number.isNaN(value)) throw new ExpressionError('値が数にならない(定義域外)')
+    if (!Number.isFinite(value)) throw new ExpressionError('値が数にならない(0除算か、大きすぎる値)')
     return { ok: true, value }
   } catch (error) {
     if (error instanceof ExpressionError) return { ok: false, reason: error.message }
