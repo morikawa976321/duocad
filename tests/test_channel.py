@@ -265,7 +265,8 @@ def test_update_is_refused_while_the_server_cannot_stop_cleanly(tmp_path):
     def broken():
         raise TimeoutError
 
-    assert make(broken).start()[0] == 503
+    status, body = make(broken).start()
+    assert status == 503 and "もう一度" in body["error"] and "TimeoutError" not in body["error"]
     assert not started
 
 
