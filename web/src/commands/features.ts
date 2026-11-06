@@ -412,8 +412,8 @@ export const THREAD: CommandDef<'thread'> = {
       name: 'profile',
       label: '山形',
       options: [
-        { value: 'trapezoid30', label: '30°台形(穴の推奨 0.18〜0.20)', buttonId: 'thread-profile-trapezoid30' },
-        { value: 'trapezoid45', label: '45°台形(穴の推奨 0.11〜0.13)', buttonId: 'thread-profile-trapezoid45' },
+        { value: 'trapezoid30', label: '30°台形(穴の推奨 0.18〜0.20 mm)', buttonId: 'thread-profile-trapezoid30' },
+        { value: 'trapezoid45', label: '45°台形(穴の推奨 0.11〜0.13 mm)', buttonId: 'thread-profile-trapezoid45' },
       ],
     },
     {
