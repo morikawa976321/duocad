@@ -11,18 +11,33 @@
  */
 import { join } from 'node:path'
 import { fail, ok } from './args.mjs'
-import { assertNoAppErrors, frameAll, openApp, typeInto, waitOrFail, withoutBrowserPanel } from './browser.mjs'
+import { assertNoAppErrors, frameAll, openApp, typeInto, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
 import { runSmoke } from './harness.mjs'
 import { addExtrudedRect } from './mcp-client.mjs'
 import { faceAt, planarFace } from './pick.mjs'
 
-runSmoke('smoke-files-panel', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout, workdir }) => {
+runSmoke('smoke-files-panel', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout, workdir, wsPort }) => {
   await addExtrudedRect(mcp, { corner: [0, 0], width: 20, height: 10, distance: 5 })
   const { page, consoleErrors } = await openApp(browser, url, {
     timeout,
     until: () => (window.__duocad?.parts ?? []).length >= 1,
   })
   const waitFor = (check, what, args = []) => waitOrFail(page, check, what, { args, timeout })
+  const regressionFailures = []
+  // open_document は MCP に公開されていないため、別接続の操作は WebSocket で送る。
+  const openFromOtherClient = async (name) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${wsPort}`)
+    try {
+      await new Promise((resolve, reject) => {
+        socket.addEventListener('open', resolve, { once: true })
+        socket.addEventListener('error', reject, { once: true })
+      })
+      socket.send(JSON.stringify({ cmd: 'open_document', name, client_op: 1 }))
+      await waitFor((name) => window.__duocad.state.current_name === name, '別接続から文書を開けない', [name])
+    } finally {
+      socket.close()
+    }
+  }
 
   // ファイル一覧を開く(開閉は前回の状態を覚えているので、閉じているときだけ押す)。
   if ((await page.$('.files-panel')) === null) await page.click('#data-panel-toggle')
@@ -149,6 +164,30 @@ runSmoke('smoke-files-panel', { timeout: 60000, mcp: true }, async ({ mcp, brows
   await waitFor((name) => window.__duocad.state?.document_open === true && window.__duocad.state?.current_name === name, '先頭のカードを Enter で開ける', [firstName])
   ok(`トップ画面の先頭のカード(${firstName})にフォーカスがあり、Enter 1回で開く`)
 
+  const bodyBeforeRename = await page.evaluate(() => ({ ...window.__duocad.state.bodies[0] }))
+  const otherName = firstName === 'bracket.json' ? 'bracket-copy.json' : 'bracket.json'
+  await page.click('.parts-row .row-action')
+  await typeInto(page, '.parts-row .rename-input', 'uncommitted-body-name')
+  await openFromOtherClient(otherName)
+  await waitFrames(page, 2)
+  const switchedDocument = await mcp.callTool('describe_document')
+  const switchedBody = switchedDocument.bodies.find((body) => body.body_id === bodyBeforeRename.body_id)
+  if (!switchedBody) fail('複製先に同じ ID のボディがない')
+  if (switchedBody.name !== bodyBeforeRename.name) {
+    regressionFailures.push(`文書の切り替えで改名の下書きが送られた: ${switchedBody.name}`)
+  } else {
+    ok('改名の下書きがあっても、別接続から開いた同じボディ ID の文書の名前は変わらない')
+  }
+  if (await page.$('.parts-row .rename-input')) await page.keyboard.press('Escape')
+  await page.hover('.parts-row .parts-name')
+  await openFromOtherClient(firstName)
+  await waitFor((id, color) => window.__duocad.hoveredRef()?.body === id && window.__duocad.hoveredRef()?.color === color, '同じ ID の行の上で文書を切り替えたら強調が消えた', [hoveredBody, hoverColor])
+  await page.hover('.browser-header')
+  await openFromOtherClient(otherName)
+  await waitFrames(page, 2)
+  if (await page.evaluate(() => window.__duocad.hoveredRef()?.body != null)) fail('行から離れて文書を切り替えても強調が残る')
+  ok('文書を切り替えても、同じ ID の行の上だけ強調し、行から離れていれば強調しない')
+
   const checkNewFocus = async (button) => {
     const generation = await page.evaluate(() => window.__duocad.state.generation)
     await page.click(button)
@@ -156,6 +195,21 @@ runSmoke('smoke-files-panel', { timeout: 60000, mcp: true }, async ({ mcp, brows
     await waitFor(() => document.activeElement?.id === 'file-name-input', '新規のあと名前の欄へフォーカスが移らない')
     const field = await page.$eval('#file-name-input', (el) => ({ value: el.value, start: el.selectionStart, end: el.selectionEnd }))
     if (field.start !== 0 || field.end !== field.value.length) fail(`新規の名前欄が全選択になっていない: ${JSON.stringify(field)}`)
+  }
+  if ((await page.$('#ai-message')) === null) await page.click('#sidebar-toggle')
+  await page.waitForFunction(() => !document.querySelector('#ai-message')?.disabled, { timeout })
+  const generationBeforeTyping = await page.evaluate(() => {
+    const generation = window.__duocad.state.generation
+    document.querySelector('#file-new').click()
+    document.querySelector('#ai-message').focus()
+    return generation
+  })
+  await waitFor((before) => window.__duocad.state.generation > before && window.__duocad.state.document_open, '入力中の新規の文書にならない', [generationBeforeTyping])
+  await waitFrames(page, 2)
+  if (await page.evaluate(() => document.activeElement?.id !== 'ai-message')) {
+    regressionFailures.push('新規の応答が別の入力欄からフォーカスを奪った')
+  } else {
+    ok('新規の応答を待つ間に移った AI の入力欄からフォーカスを奪わない')
   }
   await checkNewFocus('#file-new')
   await page.keyboard.type('new-part')
@@ -175,4 +229,5 @@ runSmoke('smoke-files-panel', { timeout: 60000, mcp: true }, async ({ mcp, brows
   ok('パネルとトップ画面の新規後は見えている名前欄へフォーカスし、Enter・Esc が働く。閉じたパネルは開かない')
 
   await assertNoAppErrors(page, consoleErrors)
+  if (regressionFailures.length) fail(regressionFailures.join('\n'))
 })
