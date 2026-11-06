@@ -200,7 +200,20 @@ export const REVOLVE: CommandDef<'revolve'> = {
 
 /** 始点のずらし(`shifts`)の欄の文字列を整数の並びへ。空白かカンマ区切り。読めなければ null。 */
 export function parseShifts(text: string): number[] | null {
-  const parts = text.split(/[\s,，、]+/).filter((part) => part !== '')
+  const parts: string[] = []
+  let depth = 0
+  let part = ''
+  for (const char of text) {
+    if (char === '(' || char === '（') depth += 1
+    else if (char === ')' || char === '）') depth -= 1
+    if (depth < 0) return null
+    if (depth === 0 && /[\s,，、]/.test(char)) {
+      if (part !== '') parts.push(part)
+      part = ''
+    } else part += char
+  }
+  if (depth !== 0) return null
+  if (part !== '') parts.push(part)
   const values = parts.map((part) => {
     const result = evaluateExpression(part)
     return result.ok ? result.value : NaN
