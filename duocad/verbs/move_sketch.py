@@ -264,26 +264,35 @@ def _moved_params(
     return result
 
 
-def _apply(doc: Document, targets: Sequence[dict], transform: Callable) -> None:
+def _apply(
+    doc: Document, targets: Sequence[dict], transform: Callable, *, unchanged_error: Optional[str] = None
+) -> None:
     """`copy=False` の本体。同じ図形の対象を1つの `params` に積み上げ(`_moved_params`)、
-    全部検査してから書く(書きながら検査すると、途中で長さ0の線分が分かったとき一部だけ動いた文書が残る)。"""
-    merged: dict = {}   # (sketch_id, entity_id) -> [entity, 積み上げ中の params]
+    全部検査してから書く(書きながら検査すると、途中で長さ0の線分が分かったとき一部だけ動いた文書が残る)。
+
+    `unchanged_error` を渡すと、全部の図形の値が動かす前と同じなら、それを ValueError にして何も書かない
+    (新しい操作の入口だけが渡す。redo・再生・undo は保存済みのログを通すので渡さない)。
+    """
+    merged: dict = {}   # (sketch_id, entity_id) -> [entity, 積み上げ中の params, 動かす前の params]
     order: List[tuple] = []
     for item in targets:
         key = (item["sketch"], item["entity"])
         if key not in merged:
             sketch = get_sketch(doc, item["sketch"])
             entity = get_entity(sketch, item["entity"])
-            merged[key] = [entity, parameters.resolve_all(doc, entity.params)]
+            current = parameters.resolve_all(doc, entity.params)
+            merged[key] = [entity, current, current]
             order.append(key)
         entry = merged[key]
         entry[1] = transform(entry[0].kind, entry[1], item["point"])
 
     planned: List[tuple] = []
     for key in order:
-        entity, values = merged[key]
+        entity, values, _before = merged[key]
         require_valid_params(entity.kind, values)
         planned.append((entity, values))
+    if unchanged_error is not None and all(merged[key][1] == merged[key][2] for key in order):
+        raise ValueError(unchanged_error)
     for entity, values in planned:
         _write_params(doc, entity, values)
 
@@ -350,6 +359,17 @@ def _translation_args(dx: Any, dy: Any) -> dict:
     return {"dx": delta_x, "dy": delta_y}
 
 
+def _unchanged_message(mode: str, center: Any, center_entity: Any) -> str:
+    if mode != MODE_ROTATE:
+        return "move_sketch_entities: 動かしても何も変わらない"
+    if center is None and center_entity is None:
+        return (
+            "move_sketch_entities: 回転しても何も変わらない"
+            "(中心を省くと、円・点は自分の中心のまわりに回るだけで動かない。回転中心を指定する)"
+        )
+    return "move_sketch_entities: 回転しても何も変わらない(回転中心が図形の中心と一致している)"
+
+
 def move_sketch_entities(
     doc: Document,
     targets: Sequence[dict],
@@ -399,7 +419,7 @@ def move_sketch_entities(
     else:
         created = []
         previous = _previous_params(doc, normalized)
-        _apply(doc, normalized, transform)
+        _apply(doc, normalized, transform, unchanged_error=_unchanged_message(mode, center, center_entity))
         logged["previous"] = previous
 
     # 複製したIDはログが持つ(再生で同じIDになる)。
