@@ -37,6 +37,8 @@ export interface ScreenProjector {
   readonly near: number
   /** 世界座標 → 画素。カメラの裏・視錐台の奥行きの外は false。`out.w` はクリップ空間の w。 */
   project(point: THREE.Vector3, out: ProjectedPoint): boolean
+  /** 線分 a-b を視錐台の奥行きの範囲(近平面・遠平面)で切り詰めて outA・outB へ入れる。範囲に掛からなければ false。 */
+  clipDepth(a: THREE.Vector3, b: THREE.Vector3, outA: THREE.Vector3, outB: THREE.Vector3): boolean
 }
 
 export interface ProjectedPoint {
@@ -45,8 +47,14 @@ export interface ProjectedPoint {
   w: number
 }
 
+/** 奥行きの切り口を NDC の z=±1 からこの割合だけ内側に取る(切り口の点が `project` の境目で丸め誤差に落ちない)。 */
+const DEPTH_CLIP_MARGIN = 1e-6
+
 export function createProjector(camera: THREE.Camera, width: number, height: number): ScreenProjector {
   const scratch = new THREE.Vector4()
+  const clipA = new THREE.Vector4()
+  const clipB = new THREE.Vector4()
+  const kept = new THREE.Vector3()
   const viewProjection = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
   const orthographic = camera instanceof THREE.OrthographicCamera
   let focalPx = 0
@@ -74,6 +82,26 @@ export function createProjector(camera: THREE.Camera, width: number, height: num
       out.w = scratch.w
       return true
     },
+    clipDepth(a, b, outA, outB) {
+      clipA.set(a.x, a.y, a.z, 1).applyMatrix4(viewProjection)
+      clipB.set(b.x, b.y, b.z, 1).applyMatrix4(viewProjection)
+      let t0 = 0
+      let t1 = 1
+      // 視錐台の奥行きの内側は -w <= z <= w。クリップ空間は世界座標の線形変換なので、線分の割合 t はそのまま使える。
+      for (const sign of [1, -1]) {
+        const da = clipA.w * (1 - DEPTH_CLIP_MARGIN) + sign * clipA.z
+        const db = clipB.w * (1 - DEPTH_CLIP_MARGIN) + sign * clipB.z
+        if (da < 0 && db < 0) return false
+        if (da < 0) t0 = Math.max(t0, da / (da - db))
+        else if (db < 0) t1 = Math.min(t1, da / (da - db))
+      }
+      if (t0 > t1) return false
+      // outA・outB が a・b と同じベクトルでもよいように、a を退避してから書く。
+      kept.copy(a)
+      outA.lerpVectors(kept, b, t0)
+      outB.lerpVectors(kept, b, t1)
+      return true
+    },
   }
 }
 
@@ -85,7 +113,7 @@ const screenA: ProjectedPoint = { x: 0, y: 0, w: 1 }
 const screenB: ProjectedPoint = { x: 0, y: 0, w: 1 }
 
 /**
- * 折れ線の上でカーソルに画面上いちばん近い点。射影できた隣り合う2点だけを線分と見る。見えなければ null。
+ * 折れ線の上でカーソルに画面上いちばん近い点。隣り合う2点を、視錐台の奥行きの範囲(近平面・遠平面)で切り詰めた線分と見る。見えなければ null。
  * `clip`(断面で残る側が正の符号付き距離)があれば、切られた線分は落とし、平面をまたぐ線分は交点で切り詰めてから測る
  * (端点を落とすだけだと切り口手前の見えている部分が指せない)。
  */
@@ -110,7 +138,7 @@ export function closestOnPolyline(
         if (previousDistance < 0) clippedA.lerpVectors(pointA, pointB, crossing)
         else if (distance < 0) clippedB.lerpVectors(pointA, pointB, crossing)
       }
-      if (projector.project(clippedA, screenA) && projector.project(clippedB, screenB)) {
+      if (projector.clipDepth(clippedA, clippedB, clippedA, clippedB) && projector.project(clippedA, screenA) && projector.project(clippedB, screenB)) {
         const s = segmentParam(x, y, screenA.x, screenA.y, screenB.x, screenB.y)
         const d = distSq(x, y, screenA.x + s * (screenB.x - screenA.x), screenA.y + s * (screenB.y - screenA.y))
         if (d < bestDistSq) {

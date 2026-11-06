@@ -29,6 +29,7 @@ EVALUATORS = [
     "eval_log_tail.mjs",
     "eval_min_width.mjs",
     "eval_pixel_ratio.mjs",
+    "eval_polyline_pick.mjs",
     "eval_preview_controller.mjs",
     "eval_rename_draft.mjs",
     "eval_resolution_tracker.mjs",
