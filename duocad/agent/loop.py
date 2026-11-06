@@ -556,7 +556,24 @@ class AgentLoop:
         said = " ".join(
             turn.text for turn in self.turns if isinstance(turn, UserTurn)
         )
-        return () if _mentions_a_quantity(said) else filled
+        if not _mentions_a_quantity(said):
+            return filled
+        # 数字が見つかったときだけ文書の名前(「ボディ2」「治具2」)を除いて数え直す。名前の数字は量ではない。
+        return () if _mentions_a_quantity(said, self._document_names()) else filled
+
+    def _document_names(self) -> tuple[str, ...]:
+        """文書のボディ・スケッチの名前(読めなければ空)。`describe_document` を読むだけ(文書を変えない)。"""
+        try:
+            described = self.tools.call("describe_document", {})
+        except Exception:  # noqa: BLE001 —— 読めなければ名前は除かない(従来どおり数字を量と読む)
+            return ()
+        names = [
+            entry.get("name")
+            for key in ("bodies", "sketches")
+            for entry in (described.get(key) or [])
+            if isinstance(entry, dict)
+        ]
+        return tuple(name for name in names if isinstance(name, str) and not name.isdigit())
 
     def _staged_verb(self) -> Optional[str]:
         """構えている verb の名前(無ければ None)。`get_command` を読むだけ(文書を変えない)。"""
@@ -749,16 +766,23 @@ def _says_a_kanji_quantity(text: str) -> bool:
     return False
 
 
-def _mentions_a_quantity(text: str) -> bool:
+#: 数字を伴わない比率の言い方(「半径を倍にして」「半分の大きさに」)。人が量を与えた依頼なので、モデルの導いた寸法を通す。
+_RATIO_WORDS = ("倍", "半分")
+
+
+def _mentions_a_quantity(text: str, names: Sequence[str] = ()) -> bool:
     """人が数量を口にしたか。識別子の中の数字は数えない(`body_1` を「寸法を言った」と読むとガードが素通りする)。全角は NFKC で寄せてから見る。
     `Z-5mm` や `M8-30` のような寸法の書き方は識別子に数えず、漢数字に単位の付いた量(「三ミリ」)は数字がなくても量と読む。
+    `names`(文書のボディ・スケッチの名前)は先に除く: 「ボディ2」の 2 は量ではない。「倍」「半分」は量と読む。
 
     厳密な照合(渡した値がそのまま本文にあるか)にはしない: 「半径4mmの円」に `diameter: 8` は正しい導出で、弾くと普通の依頼が通らない。
     見るのは人が量を与えたかどうかだけ(与えていないなら、モデルが埋めた寸法は必ず捏造)。
     """
     normalized = unicodedata.normalize("NFKC", text)
+    for name in sorted({unicodedata.normalize("NFKC", n) for n in names}, key=len, reverse=True):
+        normalized = normalized.replace(name, " ")
     plain = _IDENTIFIER.sub(_identifier_or_notation, normalized)
-    return bool(_DIGIT.search(plain)) or _says_a_kanji_quantity(plain)
+    return bool(_DIGIT.search(plain)) or _says_a_kanji_quantity(plain) or any(word in plain for word in _RATIO_WORDS)
 
 
 def _merge_usage(total: dict, latest: dict) -> dict:
