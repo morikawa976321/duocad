@@ -255,7 +255,7 @@ export interface NumberArgSpec extends ArgSpecCommon {
    * 既定がほかの引数やサーバだけが知る事情で変わるとき(`thread` の隙間は山形と、面が軸か穴かで変わる)に使う。
    */
   optional?: true
-  /** 欄と見出しに重ねて出す補足(`title`)。見出しに書くと引数の行が折れて縦に伸びる。 */
+  /** 欄と見出しに重ねて出す補足(`title`)。長い説明はここへ(見出しは最小幅 5.5em で伸びるので、「距離(正=…)」程度の添え書きは見出しに書いてよい)。 */
   hint?: string
 }
 
