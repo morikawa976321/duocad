@@ -66,8 +66,14 @@ export function hiddenResultNotice(result: Pick<AiRunResult, 'status' | 'text'>)
 /**
  * 入力を止める理由(送れるなら null)。繋がっていないときに送らせない: 送れなかった発話が会話欄に残り、
  * 打った文だけが入力欄から消える。`aiStatusKnown` はサーバから `ai_status` が届いたか(届くまで何に繋ぐか分からない)。
+ * `keyMissing` は Claude を選んでいて鍵が無い(送っても断られるだけで、打った文が入力欄から消える)。
  */
-export function inputBlockedReason(connection: ConnectionStatus, aiStatusKnown: boolean): string | null {
+export function inputBlockedReason(
+  connection: ConnectionStatus,
+  aiStatusKnown: boolean,
+  keyMissing = false,
+): string | null {
   if (connection !== 'open') return 'サーバに繋がっていない(繋ぎ直している)'
-  return aiStatusKnown ? null : '接続を待っている'
+  if (!aiStatusKnown) return '接続を待っている'
+  return keyMissing ? 'APIキーが未設定(ヘッダーの「設定」から置ける)' : null
 }

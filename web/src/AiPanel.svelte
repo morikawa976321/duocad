@@ -44,7 +44,8 @@
   let baseUrlDraft = $state('')
 
   const running = $derived(status?.running ?? false)
-  const blockedReason = $derived(inputBlockedReason(connection, status !== null))
+  const keyMissing = $derived(status?.provider === 'anthropic' && !status.apiKeyConfigured)
+  const blockedReason = $derived(inputBlockedReason(connection, status !== null, keyMissing))
   const canPickProvider = $derived((status?.providers?.length ?? 0) > 1)
 
   const PROVIDER_LABEL: Record<string, string> = {
@@ -66,7 +67,6 @@
   const canPickEndpoint = $derived(providerDraft !== 'anthropic')
   /** Claudeしか選べない版(安定版。`Server.ai_providers`)では設定フォームに出すものが無いので、開く口ごと出さない。 */
   const hasSettings = $derived(canPickProvider || status?.provider !== 'anthropic')
-  const keyMissing = $derived(status?.provider === 'anthropic' && !status.apiKeyConfigured)
 
   function openSettings(): void {
     providerDraft = status?.provider ?? 'openai_compat'
@@ -229,11 +229,6 @@
 
     {#if blockedReason}
       <p class="hint dim">{blockedReason}</p>
-    {/if}
-    {#if keyMissing}
-      <p class="hint dim">
-        APIキーが未設定(ヘッダーの「設定」から置ける)
-      </p>
     {/if}
 
     <div class="ai-transcript" id="ai-transcript" bind:this={transcriptBox}>

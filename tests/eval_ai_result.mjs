@@ -65,4 +65,9 @@ for (const connection of ['connecting', 'closed']) {
   assert.ok(inputBlockedReason(connection, false) !== null)
 }
 
+// 鍵の無い Claude には送らせない(接続が先に効く)。
+assert.ok(inputBlockedReason('open', true, true)?.includes('APIキーが未設定'), '鍵が無いのに送れてしまう')
+assert.equal(inputBlockedReason('open', true, false), null)
+assert.equal(inputBlockedReason('closed', true, true), 'サーバに繋がっていない(繋ぎ直している)')
+
 console.log('aiResult.ts: 全ての想定を満たした')
