@@ -121,10 +121,14 @@
   <span class="tag" title={status.reason ?? ''}>更新できない</span>
 {/if}
 
-{#if restart.current}
+{#if restart.current && !restart.closed}
   <div class="update-overlay" role="status" aria-live="polite">
     <p>{restart.current.title}</p>
     <p class="dim">{restart.current.detail}</p>
+    {#if restart.slow}
+      <p class="dim">3分たっても戻らない。立て直しは続けている。戻らないときは logs/ を見るか、画面を読み直すこと</p>
+      <button id="update-overlay-close" onclick={() => restart.close()}>閉じる</button>
+    {/if}
   </div>
 {/if}
 
@@ -153,5 +157,9 @@
 
   .update-overlay p {
     margin: 0;
+  }
+
+  .update-overlay button {
+    margin-top: 12px;
   }
 </style>

@@ -71,6 +71,7 @@
     runsWithoutSketchId,
   } from './commands/sketch'
   import ChannelBadge from './ChannelBadge.svelte'
+  import { reloadIfServerReplaced } from './serverRestart.svelte'
   import FilesPanel from './FilesPanel.svelte'
   import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
@@ -476,7 +477,7 @@
       if (category === 'feature' || category === 'sketch' || where === 'send') host?.commitFailed(where === 'send')
     },
     onWarning: (message) => fail(`警告 ${message}`),
-    onReconnected: () => {},
+    onReconnected: () => void reloadIfServerReplaced(),
     onConnectionRestored: (failureNotice) => {
       if (failureNotice !== null) withdraw(failureNotice)
       inform('再接続した')
@@ -1004,6 +1005,7 @@
         const regions = applied.region_count === 0 ? '閉じた領域が無い' : `領域 ${applied.region_count} 個`
         const skipped = applied.skipped === '' ? '' : `。取り込めなかった: ${applied.skipped}`
         inform(`SVGを読み込んだ: ${width.toFixed(1)} × ${height.toFixed(1)} mm、図形 ${applied.entity_count} 個、${regions}${skipped}`)
+        viewport?.frameSketchEntities(applied.sketch_id, applied.entity_ids)
       }
       if (releasePending(applied.client_op)) {
         // CommandHostが出した確定が成功したと確認できたので、ここで初めて無起動へ戻す(`commit()` の時点では
@@ -1907,7 +1909,7 @@
    * 揃う)。広げるのは起動の1回だけ: `edgeOnlyCommand` 以外を追跡しないので、起動後のクリックや外した辺は広げ直さない。
    */
   $effect(() => {
-    if (!edgeOnlyCommand || true) return
+    if (!edgeOnlyCommand) return
     untrack(() => {
       const edges = refsOfKind(currentItems(), 'edge').map((ref) => ({ bodyId: ref.body, edgeIndex: ref.index }))
       if (edges.length === 0) return

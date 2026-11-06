@@ -16,12 +16,27 @@ export const PENDING_KEY = 'duocad-update-pending'
 const RESTART_POLL_MS = 2000
 /** `uv sync`(GPU の部品は約 2GB)と `npm ci` の両方が走っても収まる上限。 */
 const RESTART_TIMEOUT_MS = 15 * 60 * 1000
+/** 全面表示に案内と [閉じる] を足すまで。置いた値(実測ではない)。 */
+const RESTART_SLOW_MS = 3 * 60 * 1000
 
 let restarting = $state<{ title: string; detail: string } | null>(null)
+let slow = $state(false)
+let closed = $state(false)
 
 export const restart = {
   get current() {
     return restarting
+  },
+  /** 立て直しが `RESTART_SLOW_MS` を超えた(全面表示に案内と [閉じる] を出す)。 */
+  get slow() {
+    return slow
+  },
+  /** 全面表示を閉じた。立て直しそのものは続いている(`current` は残る)。 */
+  get closed() {
+    return closed
+  },
+  close(): void {
+    closed = true
   },
 }
 
@@ -45,6 +60,30 @@ export function loadConfig(): Promise<ServerConfig | null> {
   return pending
 }
 
+/** 版の違いで読み直した先の版(同じ版へ続けて読み直さないための印)。 */
+const RELOADED_FOR_KEY = 'duocad-reloaded-for-version'
+
+/**
+ * 繋ぎ直したとき、サーバが画面を読み込んだ時と別の版に入れ替わっていたら、この窓を読み直す(画面側の未送信の下書きは消える)。
+ * 安定版のときだけ働く: 開発版の版(`version.commit`)は作業ツリーの HEAD で、コミットのたびに変わるので、
+ * 開発サーバを立て直すたびに開いている窓が読み直されてしまう。比べるのは起動の印(`boot`)でなく版 —— `boot` は
+ * 同じ版の再起動でも変わる。
+ */
+export async function reloadIfServerReplaced(): Promise<void> {
+  const loaded = await loadConfig()
+  if (loaded?.channel !== 'stable' || !loaded.version?.commit || restarting !== null) return
+  const now = await fetchJson<ServerConfig>('duocad-config.json')
+  const commit = now?.version?.commit
+  if (!commit || commit === loaded.version.commit) return
+  try {
+    if (sessionStorage.getItem(RELOADED_FOR_KEY) === commit) return
+    sessionStorage.setItem(RELOADED_FOR_KEY, commit)
+  } catch {
+    return // 印を残せないと歯止めが効かない
+  }
+  location.reload()
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -57,6 +96,8 @@ export async function restartServer(
 ): Promise<void> {
   if (restarting) return
   restarting = { title: shown.title, detail: shown.detail }
+  slow = false
+  closed = false
   // 比べる元は押した時点の印。取れなければ始めない(落ちる前の応答を「立ち直った」と読みうる)。
   const now = await fetchJson<ServerConfig>('duocad-config.json')
   if (now === null) {
@@ -86,10 +127,12 @@ export async function restartServer(
   }
   // 起動の印(`boot`)が変わったら立ち直った。落ちている間を見なくても判定できる。
   // 印を持たない古いサーバからの更新だけは、落ちたのを見てから立ち直りを待つ。
-  const deadline = Date.now() + RESTART_TIMEOUT_MS
+  const startedAt = Date.now()
+  const deadline = startedAt + RESTART_TIMEOUT_MS
   let wentDown = false
   while (Date.now() < deadline) {
     await sleep(RESTART_POLL_MS)
+    if (Date.now() - startedAt > RESTART_SLOW_MS) slow = true
     const next = await fetchJson<ServerConfig>('duocad-config.json')
     if (next === null) {
       wentDown = true
@@ -101,6 +144,8 @@ export async function restartServer(
     }
   }
   restarting = null
+  slow = false
+  closed = false
   try {
     sessionStorage.removeItem(PENDING_KEY)
   } catch {

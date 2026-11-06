@@ -38,6 +38,7 @@ EVALUATORS = [
     "eval_selection_grain.mjs",
     "eval_selection_info_text.mjs",
     "eval_selection_ref_key.mjs",
+    "eval_server_restart.mjs",
     "eval_session_dispose.mjs",
     "eval_session_reconnect.mjs",
     "eval_session_sender.mjs",
