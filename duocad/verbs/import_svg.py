@@ -40,6 +40,7 @@ from ..entry import entry
 from ..paths import resolve_user_path
 from ..sketch import Entity, EntityId, SketchId, get_sketch, new_entity_id, remove_entities, require_valid_params
 from ..svg_import import PathLike, describe_skipped, entities_size, read_svg_report
+from ._common import editable_sketch
 
 VERB_IMPORT_SVG = "import_svg"
 
@@ -63,7 +64,7 @@ def _import_svg_reporting(
     doc: Document, sketch_id: SketchId, path: PathLike, scale: float
 ) -> Tuple[List[EntityId], Dict[str, int]]:
     """`import_svg` の本体。取り込まなかった要素の数(`svg_import.read_svg_report`)も返す。"""
-    get_sketch(doc, sketch_id)  # 実在しなければここで KeyError。doc/logはまだ無傷
+    editable_sketch(doc, sketch_id)  # 実在しなければここで KeyError、隠したスケッチは ValueError。doc/logはまだ無傷
     source_name, shapes, skipped = read_svg_report(path, scale=scale)
 
     # 先に全部検査する。半分入れてから弾くと、以後 `regions()` が毎回失敗するスケッチが残る。

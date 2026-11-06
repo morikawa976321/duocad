@@ -968,37 +968,45 @@ def _enter_sketch_create_offset(
     return _created(document, sketch_create(document, plane, verb=VERB_SKETCH_CREATE_OFFSET))
 
 
+def _drawable(document: Document, sketch_id: str) -> str:
+    """図形を足す新しい操作の入口が通す門(隠したスケッチへは足せない。`verbs._common.editable_sketch`。redo / 再生は通らない)。"""
+    from .verbs._common import editable_sketch
+
+    editable_sketch(document, sketch_id)
+    return sketch_id
+
+
 @entry(VERB_ADD_POINT)
 def _enter_add_point(document: Document, sketch_id: str, point: Any) -> dict:
-    return {"entity_id": add_point(document, sketch_id, point)}
+    return {"entity_id": add_point(document, _drawable(document, sketch_id), point)}
 
 
 @entry(VERB_ADD_LINE)
 def _enter_add_line(document: Document, sketch_id: str, p0: Any, p1: Any) -> dict:
-    return {"entity_id": add_line(document, sketch_id, p0, p1)}
+    return {"entity_id": add_line(document, _drawable(document, sketch_id), p0, p1)}
 
 
 @entry(VERB_ADD_CIRCLE)
 def _enter_add_circle(document: Document, sketch_id: str, center: Any, diameter: float) -> dict:
-    return {"entity_id": add_circle(document, sketch_id, center, diameter)}
+    return {"entity_id": add_circle(document, _drawable(document, sketch_id), center, diameter)}
 
 
 @entry(VERB_ADD_ELLIPSE)
 def _enter_add_ellipse(
     document: Document, sketch_id: str, center: Any, width: float, height: float, angle: float = 0.0
 ) -> dict:
-    return {"entity_id": add_ellipse(document, sketch_id, center, width, height, angle)}
+    return {"entity_id": add_ellipse(document, _drawable(document, sketch_id), center, width, height, angle)}
 
 
 @entry(VERB_ADD_RECTANGLE)
 def _enter_add_rectangle(
     document: Document, sketch_id: str, corner: Any, width: float, height: float, angle: float = 0.0
 ) -> dict:
-    return {"entity_id": add_rectangle(document, sketch_id, corner, width, height, angle)}
+    return {"entity_id": add_rectangle(document, _drawable(document, sketch_id), corner, width, height, angle)}
 
 
 @entry(VERB_ADD_ARC)
 def _enter_add_arc(
     document: Document, sketch_id: str, center: Any, radius: float, start_deg: float, end_deg: float
 ) -> dict:
-    return {"entity_id": add_arc(document, sketch_id, center, radius, start_deg, end_deg)}
+    return {"entity_id": add_arc(document, _drawable(document, sketch_id), center, radius, start_deg, end_deg)}

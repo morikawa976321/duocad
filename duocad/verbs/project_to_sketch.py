@@ -21,6 +21,7 @@ from ..document import Document
 from ..entry import entry
 from ..oplog import Operation, register_verb
 from ..sketch import add_entities, get_sketch, new_entity_id, remove_entities, require_valid_params
+from ._common import editable_sketch
 
 from duocad import (
     brep_topology as _brep_topology,
@@ -90,6 +91,7 @@ def _add_projected(
 
 def project_to_sketch(doc: Document, sketch_id: str, targets: Sequence[dict]) -> Operation:
     """辺・面 `targets` をスケッチ `sketch_id` へ写した図形を足す。失敗したときは文書にもログにも何も残さない。"""
+    editable_sketch(doc, sketch_id)
     refs = [dict(ref) for ref in targets]
     if not refs:
         raise ValueError("project_to_sketch requires at least one edge or face")
@@ -98,6 +100,7 @@ def project_to_sketch(doc: Document, sketch_id: str, targets: Sequence[dict]) ->
 
 def project_outline(doc: Document, sketch_id: str, body_ids: Sequence[str]) -> Operation:
     """ボディ `body_ids` の影の境界をスケッチ `sketch_id` へ足す。失敗したときは文書にもログにも何も残さない。"""
+    editable_sketch(doc, sketch_id)
     bodies = [str(body_id) for body_id in body_ids]
     if not bodies:
         raise ValueError("project_outline requires at least one body")
