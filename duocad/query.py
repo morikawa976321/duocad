@@ -80,6 +80,7 @@ def _describe_edge(edge: Any, index: int) -> dict:
     return {
         "index": index,
         "kind": _brep_geometry.classify_edge(edge),
+        "degenerate": _brep_geometry.edge_degenerate(edge),
         "length": _brep_geometry.edge_length(edge),
         "start": [float(start.X), float(start.Y), float(start.Z)],
         "end": [float(end.X), float(end.Y), float(end.Z)],

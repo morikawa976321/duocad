@@ -122,6 +122,7 @@ export function createViewport(container: HTMLElement): Viewport {
   controls.enableDamping = true
   controls.dampingFactor = 0.15
   controls.zoomToCursor = true
+  controls.zoomSpeed = 2
   // 左=ウィンドウ選択(自前実装)/ 中=パン / 右=回転。左を `null` にするのは左ドラッグを
   // 丸ごとこちらへ渡すため(割り当てたままだと矩形を引く間にカメラが動く)。
   controls.mouseButtons = {
@@ -806,6 +807,13 @@ export function createViewport(container: HTMLElement): Viewport {
   let selectedBodyIds = new Set<string>()
   /** ホバーを持ち主の単位で光らせるか(`setHoverGrain`)。 */
   let hoverGrain = { body: false, entity: false }
+  let browserHover: string | null = null
+
+  function setBrowserHover(bodyId: string | null): void {
+    if (browserHover === bodyId) return
+    browserHover = bodyId
+    applyFaceMaterials()
+  }
 
   /** 形状最適化(第3のモード)の役割。モードを抜けたら空にする(`setOptimizeState(null)`)。 */
   let bodyRoles = new Map<string, 'preserve' | 'exclude'>()
@@ -825,7 +833,8 @@ export function createViewport(container: HTMLElement): Viewport {
         const state: FaceMaterialState = hitAsBody || selectedFaceKeys.has(key) ? 'user' : 'plain'
         const role: OptimizeFaceRole = fixtureFaceKeys.has(key) ? 'fixture' : bodyRole
         const isHovered =
-          hoverFace !== null && hoverFace.bodyId === bodyId && (hoverGrain.body || hoverFace.faceIndex === face.index)
+          browserHover === bodyId ||
+          (hoverFace !== null && hoverFace.bodyId === bodyId && (hoverGrain.body || hoverFace.faceIndex === face.index))
         if (entry.body.setFaceColor(face.index, faceColorFor(role, state, isHovered))) invalidate()
       }
     }
@@ -2697,6 +2706,7 @@ export function createViewport(container: HTMLElement): Viewport {
       features.groupChains(on)
     },
     setHoverGrain,
+    setBrowserHover,
     edgeChain: features.chainOf,
     setEdgeChains: features.setChains,
     onEdgeChainWanted: features.onChainWanted,
@@ -2715,7 +2725,9 @@ export function createViewport(container: HTMLElement): Viewport {
     drawCalls: () => lastDrawCalls,
     renderCount: () => renderCount,
     hoveredRef() {
+      const faceIndex = browserHover === null ? undefined : bodies.get(browserHover)?.body.faces[0]?.index
       return {
+        body: browserHover !== null && bodies.has(browserHover) ? browserHover : null,
         face: hoverFace,
         edge: hoverEdge,
         vertex: hoverVertex,
@@ -2723,7 +2735,9 @@ export function createViewport(container: HTMLElement): Viewport {
         plane: hoverPlane,
         sketchEntity: hoverSketchEntity,
         datum: hoverDatum,
-        color: hoverColorNow(),
+        color: browserHover !== null && faceIndex !== undefined
+          ? paintedFaceColor({ bodyId: browserHover, faceIndex })
+          : hoverColorNow(),
       }
     },
     showPreview: ghostLayer.showPreview,

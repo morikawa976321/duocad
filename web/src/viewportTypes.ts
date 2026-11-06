@@ -561,6 +561,7 @@ export interface Viewport {
    * (`commands/grain.ts`。クリックで選ばれるものとホバーで光るものを揃える)。
    */
   setHoverGrain(grain: { body: boolean; entity: boolean }): void
+  setBrowserHover(bodyId: string | null): void
   /**
    * その辺と同じ連なりの辺の添字(`groupEdgeChains(false)` の間はその辺だけ)。
    * 連なりの単位で扱っているのに、その辺の連なりがまだ届いていなければ `null`。
@@ -597,6 +598,7 @@ export interface Viewport {
   renderCount(): number
   /** 今ホバーで明るくしているもの(実機検査フック専用)。ホバーは色を足さず明度だけを上げる。 */
   hoveredRef(): {
+    body: string | null
     face: FaceRef | null
     edge: EdgeRef | null
     vertex: VertexRef | null

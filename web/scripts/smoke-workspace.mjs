@@ -38,6 +38,14 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     timeout,
     until: () => (window.__duocad?.parts ?? []).length >= 2,
   })
+  if (await page.$('#ai-message')) await page.click('#sidebar-toggle')
+  await page.click('#sidebar-toggle')
+  await waitOrFail(page, () => document.activeElement?.id === 'ai-message', 'AI を開いても入力欄にフォーカスが入らない', { timeout: 3000 })
+  await page.reload({ waitUntil: 'networkidle0' })
+  await page.waitForSelector('#ai-message')
+  if (await page.evaluate(() => document.activeElement?.id === 'ai-message')) fail('再読み込みで AI 入力欄がフォーカスを奪った')
+  await page.click('#sidebar-toggle')
+  ok('AI を開くと入力欄へフォーカスし、再読み込みでの復元では奪わない')
   await frameAll(page)
   const waitFor = (check, what, args = []) => waitOrFail(page, check, what, { args, timeout })
   const hostCommand = () => page.evaluate(() => document.querySelector('.command-host')?.dataset.command ?? null)
@@ -250,6 +258,25 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     if (index === null) fail(`円柱 ${bodyId} に曲面が無い`)
     sideFaces.push(index)
   }
+  const cap = await page.evaluate((id) => window.__duocad.getGeometry(id).faces.find((face) => face.kind === 'plane' && face.normal[2] > 0.9).index, cylinders[0])
+  await withoutBrowserPanel(page, async () => {
+    // ResizeObserver がカメラへ寸法を反映する前の射影は、クリック時には別の画素を指す。
+    await waitFor(() => {
+      const viewport = document.querySelector('.viewport')
+      const canvas = viewport.querySelector('canvas')
+      return canvas.width > 0 && canvas.width * viewport.clientHeight === canvas.height * viewport.clientWidth
+    }, '円柱の面を射影する前に描画寸法が画面へ追いつかない')
+    await clickFace(page, cylinders[0], cap)
+    await waitFor(() => [...document.querySelectorAll('#toasts .toast.info')].some(
+      (toast) => toast.textContent.includes('全周') && toast.querySelector('.toast-count') === null), '選べない面の1回目のクリックで知らせが出ない')
+    await clickFace(page, cylinders[0], cap)
+    await waitFor(() => [...document.querySelectorAll('#toasts .toast.info')].some(
+      (toast) => toast.textContent.includes('全周') && toast.querySelector('.toast-count')?.textContent === '2回'), '選べない面の2回目のクリックが同じ知らせの2回に反映されない')
+  })
+  const refusals = await page.$$eval('#toasts .toast-info-text', (texts) => texts.filter((text) => text.textContent.includes('全周')).length)
+  if (refusals !== 1) fail(`選べない面の札が積み上がった: ${refusals} 枚`)
+  if ((await mcp.callTool('get_selection')).selection.count !== 0) fail('断った面が選択に入った')
+  ok('選べない面を続けて押しても選ばず、知らせの札は1枚にまとまる')
   await clickFace(page, cylinders[0], sideFaces[0], { hidePanel: true })
   await waitFor(
     (id) => (window.__duocad.selection?.items ?? []).some((item) => item.body === id),
@@ -398,6 +425,7 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await page.click('#sidebar-toggle')
   await page.waitForSelector('#ai-settings-toggle')
   await page.click('#ai-settings-toggle')
+  await page.select('#ai-provider', 'openai_compat')
   await typeInto(page, '#ai-base-url', 'http://127.0.0.1:9/v1')
   await page.click('#ai-settings-apply')
   await waitFor(() => document.querySelector('#ai-message') !== null && !document.querySelector('#ai-message').disabled, 'AI の入力欄が使えない')

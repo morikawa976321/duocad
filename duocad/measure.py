@@ -252,8 +252,9 @@ def _measure_item(session: Any, ref: dict, kind: str) -> tuple[dict, Union[Measu
             "start": described["start"],
             "end": described["end"],
             "edge_kind": described["kind"],
+            "degenerate": described["degenerate"],
         }
-        if described["kind"] == "circle":
+        if described["kind"] == "circle" and not described["degenerate"]:
             item["center"], item["radius"] = _brep_geometry.edge_circle(body.shape, int(ref["index"]))
         if described["kind"] != "line":
             return item, (

@@ -29,7 +29,25 @@ runSmoke('smoke-interference', { timeout: 120000, mcp: true }, async ({ browser,
   await waitFor(() => window.__duocad.interference.result !== null, '干渉チェックの結果が届く')
   await waitFor(() => window.__duocad.interference.solids === 2, 'ビューポートの層に赤い立体が2つ載る')
 
-  await page.click('#interference-run')
+  const requests = await page.evaluate(() => {
+    const original = WebSocket.prototype.send
+    let sent = 0
+    WebSocket.prototype.send = function (data) {
+      if (JSON.parse(data).cmd === 'check_interference') sent += 1
+      return original.call(this, data)
+    }
+    try {
+      document.querySelector('#interference-run').click()
+      const input = document.querySelector('#interference-clearance')
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    } finally {
+      WebSocket.prototype.send = original
+    }
+    return sent
+  })
+  if (requests !== 1) fail(`検査中の Enter で再実行された: ${requests} 回`)
+  ok('検査中の Enter では再実行しない')
   // モードを変えない変更で文書の版を進める(箱を足すと画面がスケッチへ入り、モードの切り替えで先に畳まれる)
   const renamed = (await mcp.callTool('describe_document', {})).bodies[0].body_id
   await mcp.callTool('rename', { target: renamed, name: 'renamed-during-check' })
