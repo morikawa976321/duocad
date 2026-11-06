@@ -74,6 +74,9 @@ _SIZE_SAMPLES = 64
 #: 1インチあたりの `pt` `pc` の数(CSS)。
 _TYPOGRAPHIC_PER_INCH = {"pt": 72.0, "pc": 6.0}
 
+#: `pt` `pc` を mm に書き換える長さの属性(図形の寸法・座標。font-size などは触らない)。
+_LENGTH_ATTRIBUTES = ("x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "x1", "y1", "x2", "y2")
+
 #: `<use>` などから呼ばれる定義。`<defs>` の外に書かれていても、そこでは描かれない。
 _UNDRAWN_DEFINITIONS = frozenset({"symbol", "mask", "marker"})
 
@@ -253,27 +256,29 @@ def _prepare(data: bytes) -> Tuple[bytes, Optional[float], Optional[float]]:
 
 
 def _rewrite_typographic_lengths(root: Any) -> bool:
-    """`<svg>` の width / height が `pt` `pc` なら mm に書き換える。書き換えたかを返す。
+    """ルートを含む全要素の長さの属性(`_LENGTH_ATTRIBUTES`)が `pt` `pc` なら mm に書き換える。書き換えたかを返す。
 
     svgelements は `pt` `pc` を px の 4/3・16 倍に決め打ちし、`ppi` を見ない。`ppi=25.4` の下では
-    `72pt`(1インチ)が 96 になり、約 3.78 倍で入る。
+    `72pt`(1インチ)が 96 になり、約 3.78 倍で入る。書き換えた `mm` は `in` と同じく svgelements が
+    `ppi` で解く(viewBox があれば、その倍率を `in` `mm` と同じに1回だけ受ける)。
     """
     from svgelements import Length
 
     changed = False
-    for name in ("width", "height"):
-        text = root.get(name)
-        if text is None:
-            continue
-        try:
-            length = Length(text)
-        except Exception:
-            continue
-        per_inch = _TYPOGRAPHIC_PER_INCH.get(str(length.units).lower())
-        if per_inch is None or not isinstance(length.amount, (int, float)) or not math.isfinite(length.amount):
-            continue
-        root.set(name, f"{length.amount * MM_PER_INCH / per_inch!r}mm")
-        changed = True
+    for element in root.iter():
+        for name in _LENGTH_ATTRIBUTES:
+            text = element.get(name)
+            if text is None:
+                continue
+            try:
+                length = Length(text)
+            except Exception:
+                continue
+            per_inch = _TYPOGRAPHIC_PER_INCH.get(str(length.units).lower())
+            if per_inch is None or not isinstance(length.amount, (int, float)) or not math.isfinite(length.amount):
+                continue
+            element.set(name, f"{length.amount * MM_PER_INCH / per_inch!r}mm")
+            changed = True
     return changed
 
 

@@ -109,3 +109,58 @@ def test_entities_size_covers_curves() -> None:
     circle_arc = {"kind": "arc", "params": {"cx": 0.0, "cy": 0.0, "radius": 5.0, "start_deg": 0.0, "end_deg": 180.0}}
     assert svg_import.entities_size([circle_arc]) == pytest.approx([10.0, 5.0], rel=1e-3)
     assert svg_import.entities_size([]) == [0.0, 0.0]
+
+
+def _extent(entities: list) -> tuple[float, float]:
+    xs = [params[key] for entity in entities for params in [entity["params"]] for key in ("x0", "x1", "cx") if key in params]
+    ys = [params[key] for entity in entities for params in [entity["params"]] for key in ("y0", "y1", "cy") if key in params]
+    return max(xs) - min(xs), max(ys) - min(ys)
+
+
+def test_typographic_units_on_shape_attributes_become_millimetres(tmp_path: Path) -> None:
+    """落ちたら、図形の長さの属性の `pt` `pc` が svgelements の決め打ち(px の 4/3・16 倍)で解かれ、ルートが mm でも約3.78倍で入る。"""
+    body = '<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm"><rect width="72pt" height="6pc"/></svg>'
+    _name, entities = svg_import.read_svg_entities(_write(tmp_path, body))
+    assert _extent(entities) == pytest.approx((25.4, 25.4), rel=1e-4)
+
+
+def test_a_circle_radius_in_pt_and_a_line_end_in_pc_become_millimetres(tmp_path: Path) -> None:
+    """落ちたら、円の `r` や線の `x2` のような寸法以外の長さの属性が `pt` `pc` のまま解かれる。"""
+    circle = '<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm"><circle cx="50" cy="50" r="36pt"/></svg>'
+    line = '<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm"><line x1="0" y1="5" x2="6pc" y2="5"/></svg>'
+    _name, circle_entities = svg_import.read_svg_entities(_write(tmp_path, circle, "c.svg"))
+    _name, line_entities = svg_import.read_svg_entities(_write(tmp_path, line, "l.svg"))
+    radius = next(entity["params"]["radius"] for entity in circle_entities if entity["kind"] == "arc")
+    assert radius == pytest.approx(12.7, rel=1e-4)
+    assert _extent(line_entities)[0] == pytest.approx(25.4, rel=1e-4)
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected"),
+    [("96px", 96.0), ("96", 96.0), ("1in", 25.4), ("25.4mm", 25.4), ("2.54cm", 25.4)],
+)
+def test_other_units_on_shape_attributes_are_left_to_svgelements(tmp_path: Path, unit: str, expected: float) -> None:
+    """落ちたら、`pt` `pc` の書き換えが px・単位なし・in・mm・cm の解釈を変えている。"""
+    body = f'<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm"><rect width="{unit}" height="{unit}"/></svg>'
+    _name, entities = svg_import.read_svg_entities(_write(tmp_path, body))
+    assert _extent(entities)[0] == pytest.approx(expected, rel=1e-4)
+
+
+def test_typographic_units_on_shapes_follow_the_viewbox_once_like_inches(tmp_path: Path) -> None:
+    """落ちたら、viewBox の倍率が `pt` に二重に掛かる、または `in` と違う大きさで入る(同じ長さなら同じ値になる)。"""
+    def width_of(unit: str) -> float:
+        body = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 200 200">'
+            f'<rect width="{unit}" height="{unit}"/></svg>'
+        )
+        _name, entities = svg_import.read_svg_entities(_write(tmp_path, body, f"{unit}.svg"))
+        return _rect_width(entities)
+
+    assert width_of("72pt") == pytest.approx(width_of("1in"), rel=1e-4)
+    assert width_of("6pc") == pytest.approx(width_of("1in"), rel=1e-4)
+
+
+def test_a_body_without_typographic_lengths_is_returned_untouched() -> None:
+    """落ちたら、直す箇所が無い SVG まで再直列化され、他の癖が入る。"""
+    data = b'<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm"><rect  width="5" height="5"/></svg>'
+    assert svg_import._prepare(data)[0] is data
