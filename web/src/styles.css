@@ -206,12 +206,11 @@ header {
 }
 
 /* verb の引数行。`.toolbar` と同じ全幅・padding・背景 —— in-flow 高さは増やさない。
-   上端 padding は `.toolbar` の下端 padding(8px)と揃える —— コマンド行と直接くっつくと
-   ボタン・入力欄の余白が視覚的に消える(`.toolbar` 側は overlay を開いている間
-   `padding-bottom:0` になるので、ここが唯一の隙間の出どころ)。 */
+   `--toolbar-overlay-h` は overlay が `.main`(ビューポート側)へ重なる分(`CommandHost.svelte` の `syncOverlayHeight`)。 */
 .toolbar-overlay {
   position: absolute;
-  top: 100%;
+  /* `.toolbar` の下端 padding(8px)の分だけ食い込ませる: 開閉で in-flow の高さを動かさず、下端の横線(border)は overlay の背景が隠す。 */
+  top: calc(100% - 8px);
   left: 0;
   right: 0;
   display: flex;
@@ -221,13 +220,6 @@ header {
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   box-sizing: border-box;
-}
-
-/* overlay 中は in-flow 下端の padding/border を外す —— コマンド行と overlay の間に
-   隙間と横線(`.toolbar` の border-bottom)が出るのを防ぐ。区切りは overlay 下端だけ。 */
-.app.toolbar-overlay-open .toolbar {
-  border-bottom: none;
-  padding-bottom: 0;
 }
 
 /* overlay 分だけ左右サイドバーを下げる。`.stage` / `.viewport` の寸法は触らない。 */

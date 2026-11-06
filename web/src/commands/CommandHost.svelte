@@ -717,7 +717,9 @@
   function syncOverlayHeight(el: HTMLDivElement | null): void {
     const root = document.querySelector('.app')
     if (!(root instanceof HTMLElement)) return
-    const h = el?.getBoundingClientRect().height ?? 0
+    // ビューポート側(`.main`)へ重なる分だけ。overlay の上端は `.toolbar` の下端 padding に食い込んでいるので、自身の高さより小さい。
+    const mainTop = root.querySelector('.main')?.getBoundingClientRect().top ?? 0
+    const h = el === null ? 0 : Math.max(0, el.getBoundingClientRect().bottom - mainTop)
     root.style.setProperty('--toolbar-overlay-h', h > 0 ? `${Math.ceil(h)}px` : '0px')
     root.classList.toggle('toolbar-overlay-open', h > 0)
   }
