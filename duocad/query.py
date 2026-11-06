@@ -63,7 +63,8 @@ def describe_edges(shape: Any) -> list:
     `start` / `end` は辺の端点(閉じた辺=円などでは同じ点になる)。
     """
     raw = _unwrap(shape)
-    return [_describe_edge(_brep_topology.edge_of(raw, index), index) for index in range(1, _brep_topology.edge_count(raw) + 1)]
+    edge_map = _brep_topology._edge_map(raw)
+    return [_describe_edge(_brep_topology._edge_at(edge_map, index), index) for index in range(1, edge_map.Extent() + 1)]
 
 
 def describe_edge(shape: Any, edge_index: int) -> dict:
@@ -138,7 +139,8 @@ def describe_faces(shape: Any) -> list:
     曲面の `normal` / `center` は面の中央(UV範囲の中点)での値でしかない。
     """
     raw = _unwrap(shape)
-    return [_describe_face(_brep_topology.face_of(raw, index), index) for index in range(1, _brep_topology.face_count(raw) + 1)]
+    face_map = _brep_topology._face_map(raw)
+    return [_describe_face(_brep_topology._face_at(face_map, index), index) for index in range(1, face_map.Extent() + 1)]
 
 
 def describe_face(shape: Any, face_index: int) -> dict:
