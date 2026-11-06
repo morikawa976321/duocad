@@ -97,10 +97,14 @@ def arc_sweep_is_degenerate(start_deg: float, end_deg: float) -> bool:
     """掃引が 0 ではないのに `ARC_MIN_SWEEP_DEG` 未満(カーネルが全周の円にしてしまう)。360 の倍数ちょうどは含めない。
 
     引き算の丸め誤差(360 の倍数のつもりが 1e-13 度ほど残る)は全周の指定として通すため、`ulp` 数個ぶんより下も含めない。
+    これを通すのは角度の差が 0 でない 360 の倍数のそばのときだけで、差そのものが誤差ほど(0 → 1e-14)なら断る。
     """
-    sweep = (end_deg - start_deg) % 360.0
+    difference = end_deg - start_deg
+    sweep = difference % 360.0
+    if not 0.0 < sweep < ARC_MIN_SWEEP_DEG:
+        return False
     noise = 4.0 * math.ulp(max(360.0, abs(start_deg), abs(end_deg)))
-    return noise < sweep < ARC_MIN_SWEEP_DEG
+    return abs(difference) < 180.0 or sweep > noise
 
 
 def _validate_arc(params: Dict[str, float]) -> None:

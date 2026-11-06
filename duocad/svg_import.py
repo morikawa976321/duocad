@@ -116,6 +116,7 @@ def read_svg_report(path: PathLike, scale: float = 1.0) -> Tuple[str, List[dict]
         svg = _parse(data, source_name, width_hint, height_hint)
     drawn = list(svg.elements())
     shapes = _visible_shapes(drawn)
+    _limit_corner_radii(shapes)
     height = _flip_height(svg, shapes)
 
     entities: List[dict] = []
@@ -384,6 +385,28 @@ def _visible_shapes(drawn: List[Any]) -> List[Any]:
         if isinstance(element, Shape)
         and str(element.values.get("visibility", "")).strip().lower() not in _HIDDEN_VISIBILITY
     ]
+
+
+def _limit_corner_radii(shapes: List[Any]) -> None:
+    """長方形の角丸の半径を、幅・高さの半分までに抑える(SVG の規則)。
+
+    svgelements は要素を作る時点(単位を解く前)で抑えるので、半径と幅・高さの単位が違うと比べられず、抑えないまま残す
+    (実測: `width="10mm" rx="100"` が半径 100 の弧になる。`rx="100pt"`、`width="10" rx="100mm"` も同じ)。
+    大きさで比べ、符号は残す: svgelements は `transform="scale(-1,-1)"` を長方形へ畳み、幅・高さ・半径をそろって負にする
+    (実測。そのまま輪郭にすると鏡写しの正しい形になる)。
+    """
+    from svgelements import Rect
+
+    for shape in shapes:
+        if not isinstance(shape, Rect):
+            continue
+        if not all(isinstance(value, (int, float)) for value in (shape.width, shape.height, shape.rx, shape.ry)):
+            continue
+        half_width, half_height = abs(shape.width) / 2.0, abs(shape.height) / 2.0
+        if half_width > 0 and abs(shape.rx) > half_width:
+            shape.rx = math.copysign(half_width, shape.rx)
+        if half_height > 0 and abs(shape.ry) > half_height:
+            shape.ry = math.copysign(half_height, shape.ry)
 
 
 def _skipped(data: bytes, drawn: List[Any], imported: int) -> Dict[str, int]:

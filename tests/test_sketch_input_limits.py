@@ -31,7 +31,7 @@ def test_replaying_an_offset_beyond_the_limit_is_not_refused() -> None:
     assert get_sketch(restored, sketch_id).plane["distance"] == 5e6
 
 
-@pytest.mark.parametrize("end_deg", [1e-8, 5e-7])
+@pytest.mark.parametrize("end_deg", [1e-8, 5e-7, 1e-14, 5e-324])
 def test_an_arc_whose_sweep_is_only_rounding_error_is_refused(session, end_deg) -> None:
     sketch_id = session.sketch_create("XY")["sketch_id"]
     with pytest.raises(ValueError, match="sweep"):
@@ -54,6 +54,16 @@ def test_a_full_circle_arc_survives_a_move_that_shifts_both_angles_by_rounding(o
     from duocad.sketch import arc_sweep_is_degenerate
 
     assert not arc_sweep_is_degenerate(offset, offset + 360.0)
+
+
+@pytest.mark.parametrize(("start_deg", "end_deg"), [(0.0, 1e-14), (30.0, 30.0 + 1e-14), (-45.0, -45.0 + 1e-14), (720.0, 720.0 + 2e-13)])
+def test_a_sweep_below_the_rounding_noise_is_refused_unless_it_is_a_full_turn(start_deg, end_deg) -> None:
+    """落ちたら、角度の差そのものが誤差ほどの円弧が全周の指定として入口を通り、全周の円になる。"""
+    from duocad.sketch import arc_sweep_is_degenerate
+
+    assert end_deg != start_deg
+    assert arc_sweep_is_degenerate(start_deg, end_deg)
+    assert not arc_sweep_is_degenerate(start_deg, end_deg + 360.0)
 
 
 def test_svg_import_drops_an_arc_whose_sweep_is_only_rounding_error(tmp_path) -> None:
