@@ -24,7 +24,7 @@
    * STEP/SVG 読み込みは文書を変えるverbなのでここには無い(`commands/files.ts` の `IMPORT_STEP`、`commands/sketch.ts` の `IMPORT_SVG`)。
    *
    * 名前とパスの欄は拡張子を打たせない(`SuffixField.svelte`。`.json` / `.step` / `.stl` は欄の右に固定で、送るときに付ける。本人指示 2026-10-07)。
-   * 送信後もパス欄は消さない(STEP/STLのパスは同じ値へ書き出し直す・読み直すことが多い)。
+   * 送信後もパス欄は消さないが、文書が替わったら(`generation` が進んだら)空に戻す(前の文書の名前が残ると、別の文書の書き出しが前のファイルを上書きする)。
    * 改名欄と複製欄は今の名前(複製は `<元の名前>-copy`)を先埋めして選んだ状態で出し、Esc で取り消す。送っても欄は消さず、
    * 断られたら打った名前が残る(改名は `currentName` が変わったら、複製は成功の応答 `lastCopied` が来たら閉じる/埋め直す)。
    */
@@ -49,6 +49,7 @@
     thumbnailUrl,
     onNeedThumbnail,
     lastCopied,
+    generation,
   }: {
     documents: DocumentInfo[]
     /** サーバの `state.current_name` の写し(無ければ `null`)。名前は文字で出さず(ヘッダの `#current-file` と二重になる)、一覧の当該行を光らせる(`BrowserPanel.svelte` の `.sketch-row.active` と同じ形)。 */
@@ -71,6 +72,8 @@
     onNeedThumbnail: (name: string, version: number | null) => void
     /** 最後に成功した複製(`documentFiles.lastCopied`)。成功のたびに別のオブジェクトになる。 */
     lastCopied: { name: string } | null
+    /** 文書の世代(`documentFiles.generation`)。改名では進まない。 */
+    generation: number
   } = $props()
 
   function currentStem(): string {
@@ -247,20 +250,29 @@
   const exportStepProblem = $derived(exportPathProblem(exportStepPath, '.step'))
 
   function submitExportStep(): void {
-    if (exportStepProblem !== null) return
+    if (exportStepProblem !== null) {
+      exportStepAsked = true
+      return
+    }
     onExportStep(withSuffix(unquotePath(exportStepPath), '.step'))
   }
 
   let exportStlPath = $state('')
   const exportStlProblem = $derived(exportPathProblem(exportStlPath, '.stl'))
+  /** 使えない値のまま Enter を押した。欄が空でも理由を出す。 */
+  let exportStepAsked = $state(false)
 
   function submitExportStl(): void {
-    if (exportStlProblem !== null) return
+    if (exportStlProblem !== null) {
+      exportStlAsked = true
+      return
+    }
     onExportStl(withSuffix(unquotePath(exportStlPath), '.stl'))
   }
 
   function onRowEnter(event: KeyboardEvent, submit: () => void): void {
     if (event.key !== 'Enter' || isImeKey(event)) return
+  let exportStlAsked = $state(false)
     event.preventDefault()
     submit()
   }
@@ -268,6 +280,17 @@
 
 <section class="files-panel">
   <div class="row">
+  let seenGeneration: number | null = null
+  $effect.pre(() => {
+    if (seenGeneration !== null && generation !== seenGeneration) {
+      exportStepPath = ''
+      exportStlPath = ''
+      exportStepAsked = false
+      exportStlAsked = false
+    }
+    seenGeneration = generation
+  })
+
     <button
       id="file-new"
       onclick={onNew}
@@ -420,11 +443,16 @@
           bind:value={exportStepPath}
           onkeydown={(event) => onRowEnter(event, submitExportStep)}
         />
-        <button id="file-export-step" onclick={submitExportStep} disabled={exportStepProblem !== null}>
+        <button
+          id="file-export-step"
+          onclick={submitExportStep}
+          disabled={exportStepProblem !== null}
+          title={exportStepProblem ?? undefined}
+        >
           STEP書き出し
         </button>
       </div>
-      {#if exportStepPath !== '' && exportStepProblem !== null}
+      {#if (exportStepPath !== '' || exportStepAsked) && exportStepProblem !== null}
         <span class="hint">{exportStepProblem}</span>
       {/if}
 
@@ -436,11 +464,16 @@
           bind:value={exportStlPath}
           onkeydown={(event) => onRowEnter(event, submitExportStl)}
         />
-        <button id="file-export-stl" onclick={submitExportStl} disabled={exportStlProblem !== null}>
+        <button
+          id="file-export-stl"
+          onclick={submitExportStl}
+          disabled={exportStlProblem !== null}
+          title={exportStlProblem ?? undefined}
+        >
           STL書き出し
         </button>
       </div>
-      {#if exportStlPath !== '' && exportStlProblem !== null}
+      {#if (exportStlPath !== '' || exportStlAsked) && exportStlProblem !== null}
         <span class="hint">{exportStlProblem}</span>
       {/if}
     </div>

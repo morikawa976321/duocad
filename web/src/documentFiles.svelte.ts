@@ -35,6 +35,8 @@ export interface DocumentFiles {
   readonly currentName: string | null
   /** この接続が最後に成功させた複製の行き先。成功のたびに別のオブジェクトになる(同じ名前への2度目も見分けられる)。 */
   readonly lastCopied: { name: string } | null
+  /** 文書の世代(`state.generation`)。開く・新規・閉じるで進み、改名では進まない。 */
+  readonly generation: number
   onFile(payload: FilePayload): void
   onState(next: ServerState): void
   refresh(): void
@@ -93,6 +95,7 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
   let list = $state<DocumentInfo[]>([])
   let currentName = $state<string | null>(null)
   let lastCopied = $state<{ name: string } | null>(null)
+  let generation = $state(0)
   let saved = true
   let lastOp: number | null = null
   // list_documents は全ファイルのログを読むので、配信のたびには呼ばず少し待ってまとめ、
@@ -222,6 +225,9 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     get lastCopied() {
       return lastCopied
     },
+    get generation() {
+      return generation
+    },
     onFile(payload) {
       // **`list_documents` の応答は通知を出さずここで抜ける**(保存/開くのたびに裏で走る)。
       if (payload.action === 'list') {
@@ -245,6 +251,7 @@ export function createDocumentFiles(deps: DocumentFilesDeps): DocumentFiles {
     },
     onState(next) {
       currentName = next.current_name
+      generation = next.generation
       saved = next.saved
       // **文書が変わったら一覧を取り直す**(issue #5)。verb と開く/新規は `applied_count` を、undo/redo は
       // `log.length` を動かす。**`applied_count` は undo/redo で動かない**ので両方を見る。サムネイルも同じ時機に撮る
