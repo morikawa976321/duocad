@@ -1021,7 +1021,7 @@
         inform(`SVGを読み込んだ: ${width.toFixed(1)} × ${height.toFixed(1)} mm、図形 ${applied.entity_count} 個、${regions}${skipped}`)
         viewport?.frameSketchEntities(applied.sketch_id, applied.entity_ids)
       }
-      if (applied.verb === 'thread') inform(`ねじを刻んだ: M${applied.diameter} P${applied.pitch}`)
+      if (applied.verb === 'thread') inform(`ねじを刻んだ: D${applied.diameter} P${applied.pitch}`)
       if (releasePending(applied.client_op)) {
         // CommandHostが出した確定が成功したと確認できたので、ここで初めて無起動へ戻す(`commit()` の時点では
         // 成否が分からず、先に戻すとOCCTのフィレット失敗時の打ち直しが壊れる)。`CATEGORY_OF` に無い verb
