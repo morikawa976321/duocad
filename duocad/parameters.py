@@ -102,7 +102,7 @@ def _require_usable_value(doc: Document, name: str, value: float) -> None:
     弾く。素通りすると、半径0は以後 `regions()` が毎回失敗し、NaNは**同じスケッチの正常な
     領域まで黙って消し**、`to_json()` が裸のNaNを吐いてJSONが壊れる(復旧はundoだけ)。
     """
-    from .sketch import require_valid_params
+    from .sketch import require_new_arc_sweep, require_valid_params
 
     if not math.isfinite(value):
         raise ValueError(f"parameter {name!r} must be a finite number, got {value!r}")
@@ -115,6 +115,8 @@ def _require_usable_value(doc: Document, name: str, value: float) -> None:
                     for key, ref in entity.params.items()
                 }
                 require_valid_params(entity.kind, candidate)
+                if entity.kind == "arc" and name in (entity.params["start_deg"], entity.params["end_deg"]):
+                    require_new_arc_sweep(candidate["start_deg"], candidate["end_deg"])
         for pattern in sketch.patterns:
             for key, ref in pattern.params.items():
                 if ref == name and key in ("nx", "ny", "count") and not is_positive_int(value):

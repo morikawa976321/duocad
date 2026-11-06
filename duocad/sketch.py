@@ -108,10 +108,16 @@ def _validate_arc(params: Dict[str, float]) -> None:
         raise ValueError(f"arc radius must be positive, got {params['radius']!r}")
     if params["start_deg"] == params["end_deg"]:
         raise ValueError("arc start_deg and end_deg must differ (角度0の円弧は辺にならない)")
-    if arc_sweep_is_degenerate(params["start_deg"], params["end_deg"]):
+
+
+def require_new_arc_sweep(start_deg: float, end_deg: float) -> None:
+    """誤差ほどの掃引を断る。**新しい操作の入口(円弧を足す・角度を書き換える)だけが呼ぶ**。
+    `_validate_arc` に入れると、この断りより前に作った文書の再生・取り消し・やり直しが失敗する。
+    """
+    if arc_sweep_is_degenerate(start_deg, end_deg):
         raise ValueError(
             f"arc sweep must be at least {ARC_MIN_SWEEP_DEG:g} degrees "
-            f"(掃引が誤差ほどの円弧は全周の円になる。start_deg={params['start_deg']!r}, end_deg={params['end_deg']!r})"
+            f"(掃引が誤差ほどの円弧は全周の円になる。start_deg={start_deg!r}, end_deg={end_deg!r})"
         )
 
 
@@ -1009,4 +1015,5 @@ def _enter_add_rectangle(
 def _enter_add_arc(
     document: Document, sketch_id: str, center: Any, radius: float, start_deg: float, end_deg: float
 ) -> dict:
+    require_new_arc_sweep(float(start_deg), float(end_deg))
     return {"entity_id": add_arc(document, _drawable(document, sketch_id), center, radius, start_deg, end_deg)}
