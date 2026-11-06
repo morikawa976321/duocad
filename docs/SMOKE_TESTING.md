@@ -27,6 +27,10 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
   引数の集め方・新しい描画）を持つときだけ。
 - **同じ結線を2本で通さない。** 足す前に `web/scripts/smoke*.mjs` を語で検索する。
 - `smoke-interference.mjs` は、干渉チェックの最中に文書が変わったら届いた結果を描かない競合だけを見る（issue #186。Linux の Chromium では `DUOCAD_BROWSER` に `--no-sandbox` 付きの起動スクリプトを渡し、`.venv/Scripts/python.exe` を `.venv/bin/python` への symlink にして走らせた）。
+- `node web/scripts/smoke-files-panel.mjs` はファイル画面・トップ画面・ブラウザ一覧の操作を実ブラウザで通す: 書き出し名の既定が今の文書のファイル名になり、
+  上書きが知らせに出る／複製の欄から複製先を続けて開く／トップ画面は先頭のカードにフォーカスがあり Enter 1回で開く／ブラウザの見出しで一覧が畳まれ、
+  行の ✕ が ✎ から離れている。別の出力先に組み立てた画面を `--web-dist` で渡す
+  （`web/dist` は作り直さない）。
 - `node web/scripts/smoke-section-stencil.mjs` は断面の WebGL 画素を検査する（issue #225）。9〜25体でのステンシルの再利用、3平面・反転・透視／正投影、非表示・差し替え・断面の再開と遮蔽を通す。バックエンドは使わず、OS が選ぶ空きポートの Vite でソースを配る。
 
 **2026-11-05 にもう一度この基準で削った（19本 約3,200行 → 8本）。** 10-04 の後、機能を足すたびに1本ずつ足されて
@@ -38,6 +42,8 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
 `smoke-mirror.mjs` と同じ結線。読み手が無くなった `window.__duocad` のキーと、それだけのための Viewport の口も消した
 （docs/DEV_NOTES.md の線引き）。
 同じ日の実測: 原点パーツの1コミットが3本を赤にしたまま develop に入っていた（CI が無く、全本を回す人がいない）。
+develop → main の前は `tools/gate.ps1` が pytest 全件・`npm run check`・smoke 全本を順に回し、段ごとの合否と所要時間の表を出す
+（使い方は [DEVELOPMENT.md](DEVELOPMENT.md) §3「develop から main の前に回す検査」）。
 3本とも本物の退行を捕まえていたが、基準に合うのは `smoke-mirror.mjs` の「軸の上の格子点が 19.99998 に置かれる」
 （見た目では分からない座標のずれ。軸の上を 1mm へ丸めて直した）だけで、残り2本の「原点の板が面のクリックを奪う」は
 使えばすぐ気づく（こちらは本人判断で今の振る舞いのまま。docs/VIEWPORT.md「ピック」）。

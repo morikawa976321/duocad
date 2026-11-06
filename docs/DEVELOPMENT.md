@@ -215,6 +215,21 @@ STEPを読む smoke（`smoke-face-culling.mjs`）は `web/scripts/models.mjs` �
 **verb ごとの画面の検査は持たない。** AI側とコアの契約は pytest（`tests/test_mcp_verbs.py` ほか）、
 TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致は `tests/test_ghost_agreement.py` が持つ。
 
+### develop から main の前に回す検査（`tools/gate.ps1`）
+
+CI が無いので、develop → main の PR を出す前に、pytest 全件・`npm run check`・smoke 全本を順に回す。段ごとの合否と所要時間を表で出し、
+落ちた段は表のあとに出力の末尾 30 行を出す。1 段でも落ちれば終了コード 1（引数の誤りは 2）。**PR 本文に表と、落ちた段の末尾を貼る。**
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-Skip 段,...] [-List] [-PytestArgs 引数,...] [-WebDist <出力先>] [-TailLines 30]
+```
+
+- 段の名前は `-List` が出す: `pytest`・`check`・`build`・`smoke*`（`web/scripts/smoke*.mjs` のファイル名から `.mjs` を除いたもの）。`-Only` / `-Skip` は
+  `smoke*` のようなワイルドカードとコンマ区切りを受ける。`-PytestArgs` で pytest の段を絞れる（例: `-Only pytest -PytestArgs tests/test_resolution.py`）。
+- smoke の段を選ぶと `build` が先頭に自動で入る（`npm run build -- --outDir $env:TEMP\duocad-gate-dist --emptyOutDir`。出力先は `-WebDist` か環境変数
+  `GATE_WEB_DIST` で変えられ、`web\dist` を指すと断る）。smoke には `--web-dist` でその出力先を渡す。`build` が落ちたら smoke は SKIP。
+- 8765・8766・8775・8776 には触らない（smoke は各スクリプトが使い捨ての `--models-dir` と OS が選ぶ空きポートで立てる）。
+
 ---
 
 ## 4. アーキテクチャ
