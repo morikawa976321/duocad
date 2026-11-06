@@ -392,6 +392,8 @@ def _limit_corner_radii(shapes: List[Any]) -> None:
 
     svgelements は要素を作る時点(単位を解く前)で抑えるので、半径と幅・高さの単位が違うと比べられず、抑えないまま残す
     (実測: `width="10mm" rx="100"` が半径 100 の弧になる。`rx="100pt"`、`width="10" rx="100mm"` も同じ)。
+    大きさで比べ、符号は残す: svgelements は `transform="scale(-1,-1)"` を長方形へ畳み、幅・高さ・半径をそろって負にする
+    (実測。そのまま輪郭にすると鏡写しの正しい形になる)。
     """
     from svgelements import Rect
 
@@ -400,10 +402,11 @@ def _limit_corner_radii(shapes: List[Any]) -> None:
             continue
         if not all(isinstance(value, (int, float)) for value in (shape.width, shape.height, shape.rx, shape.ry)):
             continue
-        if shape.width > 0 and shape.rx > shape.width / 2.0:
-            shape.rx = shape.width / 2.0
-        if shape.height > 0 and shape.ry > shape.height / 2.0:
-            shape.ry = shape.height / 2.0
+        half_width, half_height = abs(shape.width) / 2.0, abs(shape.height) / 2.0
+        if half_width > 0 and abs(shape.rx) > half_width:
+            shape.rx = math.copysign(half_width, shape.rx)
+        if half_height > 0 and abs(shape.ry) > half_height:
+            shape.ry = math.copysign(half_height, shape.ry)
 
 
 def _skipped(data: bytes, drawn: List[Any], imported: int) -> Dict[str, int]:

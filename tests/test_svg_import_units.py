@@ -248,6 +248,10 @@ def test_a_corner_radius_in_typographic_units_stays_a_corner(tmp_path: Path, cor
         ('<rect width="10" height="10" rx="100mm"/>', [10.0, 10.0]),
         ('<rect width="10mm" height="20mm" rx="100" ry="3"/>', [10.0, 20.0]),
         ('<rect width="20mm" height="10mm" rx="3" ry="100pt"/>', [20.0, 10.0]),
+        ('<rect width="10mm" height="10mm" rx="100pt" transform="scale(-1,-1)"/>', [10.0, 10.0]),
+        ('<rect width="10mm" height="20mm" rx="100" ry="3" transform="scale(-1,-1)"/>', [10.0, 20.0]),
+        ('<rect width="10mm" height="10mm" rx="100pt" transform="scale(-1,1)"/>', [10.0, 10.0]),
+        ('<rect width="10mm" height="10mm" rx="100pt" transform="rotate(180)"/>', [10.0, 10.0]),
     ],
 )
 def test_a_corner_radius_is_limited_to_half_the_side_whatever_the_units(tmp_path: Path, rect: str, size: list) -> None:
