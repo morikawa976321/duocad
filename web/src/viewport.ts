@@ -119,6 +119,7 @@ export function createViewport(container: HTMLElement): Viewport {
     new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.15
+  controls.zoomToCursor = true
   // 左=ウィンドウ選択(自前実装)/ 中=パン / 右=回転。左を `null` にするのは左ドラッグを
   // 丸ごとこちらへ渡すため(割り当てたままだと矩形を引く間にカメラが動く)。
   controls.mouseButtons = {
