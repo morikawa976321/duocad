@@ -2813,7 +2813,7 @@
 
 <div class="app">
   <header>
-    <!-- 開発版の札 / 安定版の更新ボタン(`ChannelBadge.svelte`)。窓を取り違えたら最初に目に入る左端に置く。 -->
+    <!-- 開発版の札(窓を取り違えたら最初に目に入る左端) / 安定版の更新ボタン(右端の「AI」の隣へ寄せる。`styles.css` の `#update-button`)(`ChannelBadge.svelte`)。 -->
     <ChannelBadge />
     <!-- 左サイドバー(ファイル一覧)の開閉。畳むとパネルが画面から消えるので、外に手を出す場所が要る。 -->
     <button
