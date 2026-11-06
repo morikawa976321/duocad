@@ -20,6 +20,7 @@
  *  11. AI がスケッチの verb を構えると、画面がそのスケッチに入ってその verb が起動する
  *  12. 人の「スケッチ」は貼る先待ち(= `sketch_create` を構える)で、「抜ける」で畳まれる
  *  13. 上限1の選択(ねじ)は、応答を待たずに続けて押しても最後の1枚だけが残る
+ *  14. AI パネルを畳んでいる間の AI の失敗は、札で知らせる
  */
 import { fail, ok } from './args.mjs'
 import { assertNoAppErrors, frameAll, openApp, sleep, typeInto, waitOrFail, withoutBrowserPanel } from './browser.mjs'
@@ -297,6 +298,27 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await page.keyboard.press('Escape')
   await waitFor(() => window.__duocad.command === null, 'Esc でねじが畳まれない')
   ok('[13] 上限1の選択(ねじ)は、応答を待たずに続けて押しても最後の1枚だけが残る')
+
+  // ================================================================ 14. AI パネルを畳んでいる間の AI の失敗は、札で知らせる
+  // 会話欄が見えていれば会話欄に出るので札は重ねない。畳んでいる間は会話欄が見えず、札も出さないと失敗に気づけない。
+  // 繋がらない先(閉じたポート)へ向けておき、送った直後に同じタスクの中で畳む(応答が先に届いて会話欄に出る競合を作らない)。
+  // 接続の失敗は `ai_result` で届き、畳んでいる間は結果の知らせ(info の札)になる。
+  await page.click('#sidebar-toggle')
+  await page.waitForSelector('#ai-settings-toggle')
+  await page.click('#ai-settings-toggle')
+  await typeInto(page, '#ai-base-url', 'http://127.0.0.1:9/v1')
+  await page.click('#ai-settings-apply')
+  await waitFor(() => document.querySelector('#ai-message') !== null && !document.querySelector('#ai-message').disabled, 'AI の入力欄が使えない')
+  await page.type('#ai-message', 'x')
+  await page.evaluate(() => {
+    document.querySelector('#ai-send').click()
+    document.querySelector('#ai-collapse').click()
+  })
+  await waitFor(
+    () => [...document.querySelectorAll('#toasts .toast-info-text')].some((el) => el.textContent.startsWith('AI')),
+    'AI パネルを畳んでいる間の AI の失敗が札で出ない',
+  )
+  ok('[14] AI パネルを畳んでいる間の AI の失敗は、札で知らせる')
 
   await assertNoAppErrors(page, consoleErrors)
 })

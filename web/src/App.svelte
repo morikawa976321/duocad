@@ -421,7 +421,17 @@
   let faceBoundaryOp: number | null = null
 
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
-  const ai = createAiChat({ send: (text) => session.aiSend(text), fail, inform, hidden: () => !sidebarOpen })
+  /** AI パネルの本体(会話欄)を出しているか。サイドバーを閉じるとパネルごと消えるので、開き直したら開いた状態に戻す。 */
+  let aiPanelOpen = $state(true)
+  $effect(() => {
+    if (!sidebarOpen) aiPanelOpen = true
+  })
+  const ai = createAiChat({
+    send: (text) => session.aiSend(text),
+    fail,
+    inform,
+    hidden: () => !sidebarOpen || !aiPanelOpen,
+  })
 
   const serverWait = createServerWait()
 
@@ -3104,6 +3114,7 @@
           transcript={ai.transcript}
           commandOf={commandDefinition}
           bind:draft={ai.draft}
+          bind:open={aiPanelOpen}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}
           onConfigure={(providerKind, baseUrl) => {

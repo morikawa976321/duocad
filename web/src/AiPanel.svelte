@@ -6,7 +6,8 @@
    * - プロバイダの選択は `status.providers` で駆動する(2つ以上のときだけ選択UIを出す)。
    * - 会話の時系列(`transcript`)の正は `aiChat.svelte.ts`。サーバ側の会話(`duocad/agent/loop.py`)が残らないための代わりにブラウザ側が持つ
    *   (`session.ts` の `AiTranscriptEntry` 参照)。打ちかけの依頼文(`draft`)も親が持つ(右サイドバーを閉じるとこのパネルごと消える)。
-   *   ここが持つのは見た目だけの状態(設定フォームの開閉と打ちかけ・`open`)で、閉じると消える。
+   *   ここが持つのは見た目だけの状態(設定フォームの開閉と打ちかけ)で、閉じると消える。パネル本体を出しているか(`open`)は親が持つ
+   *   (畳んでいる間は会話欄が見えないので、AI の失敗を札で出すかの判断に要る。`aiChat.svelte.ts` の `hidden`)。
    * - ツール呼び出しの表示は画面のコマンドのラベルと主な引数(`aiToolLine.ts`)。対応するコマンドの無い verb は verb 名のまま。元の verb 名と引数の JSON はツールチップ。
    *
    * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
@@ -24,6 +25,7 @@
     transcript,
     commandOf,
     draft = $bindable(),
+    open = $bindable(),
     onSend,
     onCancel,
     onConfigure,
@@ -36,6 +38,8 @@
     /** verb 名から画面のコマンド定義を引く(ツール行をコマンドのラベルと引数の見出しで書くため)。 */
     commandOf: (verb: string) => CommandDef | undefined
     draft: string
+    /** パネル本体(会話・入力・設定)を出しているか。畳んでもヘッダ行(プロバイダ名・中断・設定)は「何が繋がっているか」「応答中か」を言う役目なので見せたままにする。 */
+    open: boolean
     onSend: (message: string) => void
     onCancel: () => void
     onConfigure: (provider: AiProviderKind, baseUrl?: string) => void
@@ -43,8 +47,6 @@
   } = $props()
 
   let settingsOpen = $state(false)
-  /** パネル本体(会話・入力・設定)を出しているか。畳んでもヘッダ行(プロバイダ名・中断・設定)は「何が繋がっているか」「応答中か」を言う役目なので見せたままにする。 */
-  let open = $state(true)
   let providerDraft = $state<AiProviderKind>('openai_compat')
   let baseUrlDraft = $state('')
 
