@@ -99,6 +99,11 @@ class Param:
     #: 使い道は `duocad/agent/loop.py` のガード1つだけ。
     dimension: bool = False
 
+    def __post_init__(self) -> None:
+        # tuple は `check_arguments` の型検査(str か list だけを見る)を素通りするので、宣言の時点で落とす
+        if not isinstance(self.type, (str, list)):
+            raise TypeError(f"Param {self.name!r}: type must be a str or a list, got {self.type!r}")
+
 
 @dataclass(frozen=True)
 class Result:
@@ -1240,21 +1245,21 @@ COMMANDS: tuple[Command, ...] = (
             Param(
                 "dx",
                 "number",
-                "X方向の移動量(mm)。mode='translate' で必須",
+                "X方向の移動量(mm)。mode='translate' で省くと 0(3つとも省くと断る)",
                 required=False,
                 dimension=True,
             ),
             Param(
                 "dy",
                 "number",
-                "Y方向の移動量(mm)。mode='translate' で必須",
+                "Y方向の移動量(mm)。mode='translate' で省くと 0(3つとも省くと断る)",
                 required=False,
                 dimension=True,
             ),
             Param(
                 "dz",
                 "number",
-                "Z方向の移動量(mm)。mode='translate' で必須",
+                "Z方向の移動量(mm)。mode='translate' で省くと 0(3つとも省くと断る)",
                 required=False,
                 dimension=True,
             ),
@@ -2261,7 +2266,7 @@ COMMANDS: tuple[Command, ...] = (
                 "いま見えているものの外接対角[mm](上下限の丸めにだけ使う)",
                 required=False,
             ),
-            Param("focus", ("object", "null"), "細かくする面の添字をボディごとに並べたもの", required=False),
+            Param("focus", ["object", "null"], "細かくする面の添字をボディごとに並べたもの", required=False),
         ),
         session="set_view_resolution",
         ws="special",
