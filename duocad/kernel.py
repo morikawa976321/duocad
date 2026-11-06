@@ -707,7 +707,7 @@ def _boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) ->
     if not tool_shapes:
         raise ValueError("boolean_bodies requires at least one tool shape")
     if mode not in ("union", "cut", "intersect"):
-        raise ValueError(f"unknown boolean mode: {mode!r}")
+        raise ValueError(f"unknown boolean mode: {mode!r} (one of ['union', 'cut', 'intersect'])")
 
     combined = _brep_operations.fuse_all(tool_shapes, "tool shapes")
 

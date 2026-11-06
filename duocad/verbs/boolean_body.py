@@ -87,10 +87,23 @@ def _validate_participants(
     return target_body, tools
 
 
-def _apply(doc: Document, target_body, tools: Sequence, mode: str) -> tuple:
+def _reject_untouched_cut(target_body, result: dict) -> None:
+    """cut が何も削らなかった(ツールがターゲットに触れていない)ことを断る。新しい操作の入口だけに掛け、
+    再生・やり直しには掛けない(何も削らなかった cut を含む保存済みの文書が開けなくなるため)。"""
+    before, after = result["volume_before"], result["volume_after"]
+    if abs(after - before) <= _brep_checks._NO_CHANGE_RTOL * max(1.0, abs(before)):
+        raise ValueError(
+            f"boolean_body: cut did not change body {target_body.id!r} (volume {before} -> {after}); "
+            "ツールがターゲットに触れていない。ツールを重なる位置へ動かしてから差を取ること"
+        )
+
+
+def _apply(doc: Document, target_body, tools: Sequence, mode: str, *, reject_untouched_cut: bool = False) -> tuple:
     """演算(kernel)→ ターゲットの形を差し替え → ツールを退避して消す。戻りは `(前の形, 退避, 由来)`。
-    幾何の失敗は差し替えより先に上がるので、落ちたときは文書に何も残らない。"""
+    幾何の失敗と無変化の断りは差し替えより先に上がるので、落ちたときは文書に何も残らない。"""
     result = kernel.boolean_bodies(target_body.shape, [tool.shape for tool in tools], mode)
+    if reject_untouched_cut and mode == "cut":
+        _reject_untouched_cut(target_body, result)
     previous_shape = target_body.shape
     target_body.shape = result["shape"]
     detached = detach_bodies(doc, [tool.id for tool in tools])
@@ -111,7 +124,9 @@ def boolean_body(
     """ターゲットにツール群を作用させる。`target_ref` は面1枚への参照、ツールは BodyId の並び。"""
     target_body_id = _validate_target_ref(doc, target_ref)
     target_body, tools = _validate_participants(doc, target_body_id, tool_body_ids, replay=False)
-    previous_shape, detached, provenance = _apply(doc, target_body, tools, str(mode))
+    previous_shape, detached, provenance = _apply(
+        doc, target_body, tools, str(mode), reject_untouched_cut=True
+    )
     operation = doc.log.append(
         VERB_BOOLEAN_BODY,
         {
