@@ -38,3 +38,10 @@ def test_mcp_import_accepts_quoted_paths_from_the_working_directory(tmp_path, mo
 def test_unmatched_or_internal_quotes_are_preserved(tmp_path, monkeypatch, path):
     monkeypatch.chdir(tmp_path)
     assert resolve_user_path(path) == tmp_path / path
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+@pytest.mark.parametrize("name", [" part.svg", "part .svg", " part.svg "])
+def test_spaces_inside_quotes_are_preserved(tmp_path, monkeypatch, quote, name):
+    monkeypatch.chdir(tmp_path)
+    assert resolve_user_path(f"  {quote}{name}{quote}  ") == tmp_path / name
