@@ -2293,6 +2293,14 @@ export function createViewport(container: HTMLElement): Viewport {
     updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit, datumAt, guideHit)
   }
 
+  // 帯を引いている間の Esc はドラッグの取り消し(離しても矩形選択にならない)。選択の全解除など、ほかの Esc の働きは起こさない。
+  function onBandEscape(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || event.isComposing || !downValid || !band.active()) return
+    downValid = false
+    band.hide()
+    event.stopImmediatePropagation()
+  }
+
   /** ポインタがcanvasから出た。強調を残さない(戻ってくるまで指せるものは無い)。 */
   function onPointerLeave(event: PointerEvent): void {
     hoverAt = null
@@ -2320,6 +2328,7 @@ export function createViewport(container: HTMLElement): Viewport {
   renderer.domElement.addEventListener('pointerleave', onPointerLeave)
   // ドラッグがOSに横取りされた場合(`pointerup` が来ない)。`pointerleave` と同じ後始末でよい。
   renderer.domElement.addEventListener('pointercancel', onPointerLeave)
+  window.addEventListener('keydown', onBandEscape, true)
 
   // ポインタ・ホイールは公開口を通らずに見た目(ホバー・ビューキューブ・断面のつまみ・グリッド)を変える
   for (const type of ['pointerdown', 'pointerup', 'pointermove', 'pointerleave', 'pointercancel', 'wheel'] as const) {
@@ -2648,6 +2657,7 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
       renderer.domElement.removeEventListener('pointercancel', onPointerLeave)
+      window.removeEventListener('keydown', onBandEscape, true)
       document.removeEventListener('visibilitychange', invalidate)
       overlayWatcher.disconnect()
       cube.dispose()
