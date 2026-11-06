@@ -51,3 +51,29 @@ export function saveOriginVisible(visible: boolean): void {
     // 書けないままでよい。
   }
 }
+
+/** 左サイドバー(ファイル一覧)と右サイドバー(AI)の開閉。 */
+const DATA_PANEL_OPEN_KEY = 'duocad.view.dataPanelOpen'
+const SIDEBAR_OPEN_KEY = 'duocad.view.sidebarOpen'
+
+function loadFlag(key: string, fallback: boolean): boolean {
+  try {
+    const raw = window.localStorage.getItem(key)
+    return raw === 'true' ? true : raw === 'false' ? false : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function saveFlag(key: string, value: boolean): void {
+  try {
+    window.localStorage.setItem(key, String(value))
+  } catch {
+    // 書けないままでよい。
+  }
+}
+
+export const loadDataPanelOpen = (): boolean => loadFlag(DATA_PANEL_OPEN_KEY, true)
+export const saveDataPanelOpen = (open: boolean): void => saveFlag(DATA_PANEL_OPEN_KEY, open)
+export const loadSidebarOpen = (): boolean => loadFlag(SIDEBAR_OPEN_KEY, false)
+export const saveSidebarOpen = (open: boolean): void => saveFlag(SIDEBAR_OPEN_KEY, open)

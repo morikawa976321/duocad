@@ -75,6 +75,7 @@
   import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
   import Toast, { fail, errorLog, inform } from './Toast.svelte'
+  import { loadDataPanelOpen, loadSidebarOpen, saveDataPanelOpen, saveSidebarOpen } from './viewSettings'
   import {
     createSession,
     type Applied,
@@ -371,9 +372,11 @@
    * 開閉のたびに `.viewport` の寸法が変わり射影が変わる(`viewport.ts` の `applySize`)ので、
    * 画面座標を使い回す側(実機検査)は開閉を挟んだら取り直すこと。
    */
-  let dataPanelOpen = $state(true)
+  let dataPanelOpen = $state(loadDataPanelOpen())
   /** 右サイドバー(`AiPanel` だけ)を開いているか。`{#if}` で `<aside>` ごと出し分け。`.viewport` のサイズ指定は動かさず、flex の配分だけが変わる(左と同じ)。 */
-  let sidebarOpen = $state(false)
+  let sidebarOpen = $state(loadSidebarOpen())
+  $effect(() => saveDataPanelOpen(dataPanelOpen))
+  $effect(() => saveSidebarOpen(sidebarOpen))
   /** 設定ダイアログ(`SettingsDialog.svelte`)を出しているか。見た目だけの状態。 */
   let settingsOpen = $state(false)
   /** 形状最適化の CG を解く装置の設定(サーバの `fem_status`)。 */
