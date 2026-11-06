@@ -218,6 +218,28 @@ def test_typographic_units_become_millimetres_whichever_way_they_come_in(tmp_pat
     assert _box(entities) == pytest.approx(expected, rel=1e-4, abs=1e-4)
 
 
+@pytest.mark.parametrize(
+    ("corner", "radius"),
+    [
+        ('rx="1pt"', 25.4 / 72),
+        ('ry="1pt"', 25.4 / 72),
+        ('rx="1PT"', 25.4 / 72),
+        ('rx="0.5pc"', 25.4 / 12),
+        ('style="rx:1pt"', 25.4 / 72),
+    ],
+)
+def test_a_corner_radius_in_typographic_units_stays_a_corner(tmp_path: Path, corner: str, radius: float) -> None:
+    """落ちたら、`pt` `pc` の角丸の半径が幅の半分より大きいと取り違えられ、角丸の長方形が円になる。"""
+    body = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm">'
+        f'<rect width="10" height="10" {corner}/></svg>'
+    )
+    _name, entities = svg_import.read_svg_entities(_write(tmp_path, body))
+    assert sorted(entity["kind"] for entity in entities) == ["arc"] * 4 + ["line"] * 4
+    radii = [entity["params"]["radius"] for entity in entities if entity["kind"] == "arc"]
+    assert radii == pytest.approx([radius] * 4, rel=1e-4)
+
+
 def test_reading_an_svg_leaves_the_parser_as_it_was(tmp_path: Path) -> None:
     """落ちたら、`pt` `pc` のための差し替えが取り込みの後(失敗した後も)に svgelements へ残る。"""
     from svgelements import Length
@@ -254,6 +276,20 @@ def test_shapes_under_display_none_are_counted_as_hidden(tmp_path: Path, hidden:
     _name, entities, skipped = svg_import.read_svg_report(_write(tmp_path, body))
     assert len(entities) == 4
     assert skipped == {"hidden": count}
+
+
+def test_the_hidden_count_holds_when_the_second_reading_stops_early(tmp_path: Path) -> None:
+    """落ちたら、`display:none` の入れ子の `<svg>` の幅が 0 のとき(読み直しが途中で終わる)に、非表示の図形の数が負で出る。"""
+    body = _svg(
+        "100mm",
+        "100mm",
+        "0 0 100 100",
+        '<svg display="none" width="0" height="0" viewBox="0 0 10 10"><rect width="4" height="4"/></svg>'
+        '<rect x="10" width="2" height="2"/><rect x="20" width="2" height="2" visibility="hidden"/>',
+    )
+    _name, entities, skipped = svg_import.read_svg_report(_write(tmp_path, body))
+    assert len(entities) == 4
+    assert skipped == {"hidden": 1}
 
 
 def test_an_svg_of_only_display_none_shapes_says_why(tmp_path: Path) -> None:

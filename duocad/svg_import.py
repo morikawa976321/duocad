@@ -266,7 +266,7 @@ def _typographic_units_by_ppi() -> Iterator[None]:
     svgelements は `pt` `pc` を px の 4/3・16 倍に決め打ちし、`ppi` を見ない。`ppi=25.4` の下では
     `72pt`(1インチ)が 96 になり、約 3.78 倍で入る。長さは属性・`style` 属性・`<style>` の規則・`transform` の
     どこからでも入り、どれも `Length.value` で数になる(実測: この4経路と `<use>` の x/y、百分率の基準)ので、
-    本文を書き換えずにここを差し替える。`ppi` が既定の 96 のときは元の決め打ちと同じ値になる。
+    本文を書き換えずにここを差し替える。`ppi` を渡さない呼び出し(要素を作るとき)は、この読み込みの `MM_PER_INCH` で解く。
     """
     from svgelements import Length
 
@@ -277,8 +277,9 @@ def _typographic_units_by_ppi() -> Iterator[None]:
             per_inch = _TYPOGRAPHIC_PER_INCH.get(str(self.units).lower())
             if per_inch is None or self.amount is None:
                 return original(self, ppi, *args, **kwargs)
-            # ppi がまだ渡らない呼び出しでは `in` `mm` と同じく解かずに返す(後で ppi つきで解かれる)。
-            return self if ppi is None else self.amount * ppi / per_inch
+            # 必ず数で返す(元の実装と同じ)。Length のまま残すと、svgelements の Length 同士の演算・比較が pt・pc を
+            # px の決め打ちで換算する(実測: `rx="1pt"` が幅の半分より大きいと判定され、角丸の長方形が円になる)。
+            return self.amount * (MM_PER_INCH if ppi is None else ppi) / per_inch
 
         Length.value = value
         try:
@@ -389,7 +390,8 @@ def _skipped(data: bytes, drawn: List[Any], imported: int) -> Dict[str, int]:
     """落とした要素の数 `{"text", "image", "hidden"}`(0の種別は含めない)。非表示の図形は「本文にある図形 − 取り込む図形」。
 
     `display:none` の図形は svgelements が読んだ時点で捨てていて `drawn` に無いので、捨てない読み方でもう一度読んで
-    数える。非表示の中身が読めないときは、描かれる分だけで数える(取り込みは止めない)。
+    数える。非表示の中身が読めないときは、描かれる分だけで数える(取り込みは止めない)。読めないのは、例外のほか、
+    読み直しが途中で終わって描かれる分より少なく返るとき(実測: `display:none` の入れ子の `<svg>` の幅が 0)。
     """
     from svgelements import SVG, Image, Shape, Text
 
@@ -397,10 +399,11 @@ def _skipped(data: bytes, drawn: List[Any], imported: int) -> Dict[str, int]:
         everything = list(SVG.parse(io.BytesIO(data), ppi=MM_PER_INCH, parse_display_none=True).elements())
     except Exception:
         everything = drawn
+    shapes_drawn = sum(isinstance(element, Shape) for element in drawn)
     skipped = {
         "text": sum(isinstance(element, Text) for element in drawn),
         "image": sum(isinstance(element, Image) for element in drawn),
-        "hidden": sum(isinstance(element, Shape) for element in everything) - imported,
+        "hidden": max(sum(isinstance(element, Shape) for element in everything), shapes_drawn) - imported,
     }
     return {key: count for key, count in skipped.items() if count}
 
