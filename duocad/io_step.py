@@ -45,16 +45,23 @@ def read_step_source(path: PathLike) -> tuple[str, str, Any]:
     """STEPファイルを読み、`(source_name, text, 形)` を返す。`source_name` は**ファイル名だけ**、形は `text` を読んだもの。
 
     ヘッダや説明文字列にASCII外のバイトが入った実ファイルがあるため、バイト列で読み、UTF-8で読めなければ latin-1 へ落とす。
+    先頭のBOM(EF BB BF)は捨てる(残すと OCCT が STEP と認めない)。
 
     **黙って欠ける STEP は ValueError で断る**(転送に失敗した要素・ソリッドの外の面。`kernel.step_import_problems`)。
     断るのは取り込み(この関数を呼ぶ `import_step`)だけで、ログの再生は検査しない: 検査を足す前に取り込んだ文書を開けなくしない。
     """
-    data = Path(path).read_bytes()  # 無ければ FileNotFoundError
+    data = Path(path).read_bytes().removeprefix(b"\xef\xbb\xbf")  # 無ければ FileNotFoundError
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         text = data.decode("latin-1")
-    shape, problems = kernel.read_step_text_checked(text)
+    name = Path(path).name
+    try:
+        shape, problems = kernel.read_step_text_checked(text)
+    except ValueError as error:
+        # kernel の文は「埋め込まれた本文」と一時パスを言うが、ここで読んだのは画面で選んだ実ファイル
+        reason = "ファイルが空" if text.strip() == "" else "STEPの形式ではないか、壊れている"
+        raise ValueError(f"cannot import {name}: STEPとして読めない({reason})") from error
     if problems:
         raise ValueError(f"cannot import {Path(path).name}: " + " / ".join(problems))
     return Path(path).name, text, shape
