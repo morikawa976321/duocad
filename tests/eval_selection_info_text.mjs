@@ -6,6 +6,7 @@
  * - 面・辺の種類が `other` のまま画面に出る。
  * - 取得失敗の文に例外クラス名が残る。
  * - 座標・Δ に単位 mm が付かない。
+ * - 法線・向き(単位ベクトル)に長さの単位 mm が付く。
  */
 import assert from 'node:assert/strict'
 
@@ -25,6 +26,13 @@ assert.equal(selectionInfoErrorText('面が見つからない'), '面が見つ�
 assert.equal(selectionInfoErrorText('KeyError: x: y'), 'x: y', '先頭の例外名だけを落とす')
 
 assert.equal(selectionInfoRows({ kind: 'vertex', point: [1, 2, 3] })[0].value, '(1.000, 2.000, 3.000) mm')
+const valueOf = (item, label) => selectionInfoRows(item).find((row) => row.label === label).value
+const axis = { kind: 'datum', datum: 'X', point: [0, 0, 0], direction: [1, 0, 0] }
+assert.equal(valueOf(axis, '向き'), '(1.000, 0.000, 0.000)')
+assert.equal(valueOf(axis, '座標'), '(0.000, 0.000, 0.000) mm')
+assert.equal(valueOf({ kind: 'datum', datum: 'XY', point: [0, 0, 0], normal: [0, 0, 1] }, '法線'), '(0.000, 0.000, 1.000)')
+assert.equal(valueOf({ ...face, surface_kind: 'plane' }, '法線'), '(0.000, 0.000, 1.000)')
+assert.equal(valueOf({ ...face, surface_kind: 'plane' }, '面積重心'), '(1.000, 2.000, 3.000) mm')
 assert.match(
   measureReadout({ kind: 'point-point', distance: 5, angle_deg: null, delta: [3, 4, 0] }),
   /Δx 3\.000 mm {2}Δy 4\.000 mm {2}Δz 0\.000 mm/,

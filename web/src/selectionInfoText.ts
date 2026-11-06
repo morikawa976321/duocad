@@ -55,6 +55,11 @@ function xyz(values: number[]): string {
   return `(${values.map(fixed3).join(', ')}) mm`
 }
 
+/** 法線・向き(単位ベクトル)。長さではないので単位を付けない。 */
+function unitVector(values: number[]): string {
+  return `(${values.map(fixed3).join(', ')})`
+}
+
 function uv(u: number, v: number): string {
   return `(u ${fixed3(u)}, v ${fixed3(v)}) mm`
 }
@@ -98,7 +103,7 @@ export function selectionInfoRows(item: MeasureItem): InfoRow[] {
         { label: '種類', value: SURFACE_NAMES[item.surface_kind] ?? item.surface_kind },
         { label: '面積', value: mm(item.area, 'mm²') },
         // 曲面の `normal` は面の中央の1点での向きでしかない(`query.describe_faces`)ので、平面だけ出す。
-        ...(item.surface_kind === 'plane' ? [{ label: '法線', value: xyz(item.normal) }] : []),
+        ...(item.surface_kind === 'plane' ? [{ label: '法線', value: unitVector(item.normal) }] : []),
         { label: '面積重心', value: xyz(item.center) },
       ]
     case 'edge':
@@ -133,8 +138,8 @@ export function selectionInfoRows(item: MeasureItem): InfoRow[] {
     case 'datum':
       return [
         { label: '座標', value: xyz(item.point) },
-        ...(item.direction !== undefined ? [{ label: '向き', value: xyz(item.direction) }] : []),
-        ...(item.normal !== undefined ? [{ label: '法線', value: xyz(item.normal) }] : []),
+        ...(item.direction !== undefined ? [{ label: '向き', value: unitVector(item.direction) }] : []),
+        ...(item.normal !== undefined ? [{ label: '法線', value: unitVector(item.normal) }] : []),
       ]
   }
 }
