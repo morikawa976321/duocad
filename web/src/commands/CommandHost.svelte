@@ -312,6 +312,7 @@
   /** 画面に出す1行(何を待っているか)。無起動では空文字。 */
   const prompt = $derived.by(() => {
     if (command === null) return ''
+    if (waitSeconds !== null) return `計算中 ${waitSeconds} 秒`
     if (expressionError !== null) return expressionError
     // 選び間違い(選ばれすぎ・食えない面)は、ほかの引数を打つより先に直してもらう。
     if (overflow !== '') return overflow
@@ -480,6 +481,7 @@
       // 成功なら配信で `command` が null になり `ended()` が消す。降ろすのは幽霊と即適用の待ち受け、出しかけの引数だけ。
       // 印は `onRun` より先に立てる: 繋がっていなくて送れなかったときは `onRun` の中で同期に `commitFailed()` が呼ばれて降りる。
       committed = true
+      startWaitDisplay()
       armedSelections = null
       sharedArgs.cancel()
       preview.cancel()
@@ -494,11 +496,33 @@
   /** 確定を送ったが成否が未確定の間。Enter の二度打ちと幽霊の出し直しを止める。失敗(`commitFailed()`)か終わり(`ended()`)で降りる。 */
   let committed = false
 
+  /** 確定の応答待ちがこれを超えたら、待ちの1行に経過秒を出す。置いた値(実測でない。重いフィレットは最長 20 秒で断られる)。 */
+  const LONG_WAIT_MS = 3000
+  /** 長い応答待ちの経過秒(出さない間は `null`)。 */
+  let waitSeconds = $state<number | null>(null)
+  let waitTimer: ReturnType<typeof setInterval> | null = null
+
+  function startWaitDisplay(): void {
+    stopWaitDisplay()
+    const startedAt = Date.now()
+    waitTimer = setInterval(() => {
+      const elapsed = Date.now() - startedAt
+      waitSeconds = elapsed >= LONG_WAIT_MS ? Math.floor(elapsed / 1000) : null
+    }, 250)
+  }
+
+  function stopWaitDisplay(): void {
+    if (waitTimer !== null) clearInterval(waitTimer)
+    waitTimer = null
+    waitSeconds = null
+  }
+
   /** 確定した verb がサーバで失敗した・送れなかったときに `App.svelte` が呼ぶ。打った値は残っているので、打ち直せるようにするだけ。 */
   export function commitFailed(sendOnly = false): void {
     // `sendOnly`: 繋がっていなくて送れなかっただけの失敗。確定を送っていなければ(切断中のプレビューなど)入力欄を動かさない。
     if (sendOnly && !committed) return
     committed = false
+    stopWaitDisplay()
     commitOnEntry = null
     refocusEdited()
   }
@@ -525,6 +549,7 @@
   /** 繋ぎ直したときに `App.svelte` が呼ぶ。送った確定の返事は来ないので、待っている印を降ろす(構えはサーバの配信が正)。 */
   export function reconnected(): void {
     committed = false
+    stopWaitDisplay()
     commitOnEntry = null
   }
 
@@ -570,6 +595,7 @@
     armedPick = null
     previewFailure = null
     committed = false
+    stopWaitDisplay()
     // 即適用の待ち受けも降ろす。構え直すのは `entered()` / `restart()` だけ。
     armedSelections = null
     sharedArgs.reset()
@@ -762,6 +788,7 @@
   onDestroy(() => {
     overlayObserver?.disconnect()
     syncOverlayHeight(null)
+    stopWaitDisplay()
     sharedArgs.dispose()
     preview.detach()
   })
