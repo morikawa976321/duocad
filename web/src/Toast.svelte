@@ -32,8 +32,10 @@
     /** この札が出ている間に同じ文言が来た回数。2以上のときだけ画面に出す。 */
     count: number
     copied: boolean
-    /** カーソルまたはフォーカスがボタンの上にある間は消さない。 */
-    held: boolean
+    /** カーソルがボタンの上にある。 */
+    hovered: boolean
+    /** キーボードのフォーカスがボタンにある(`:focus-visible`)。マウスで押した後のフォーカスは数えない(数えると、コピーを押した札が消えなくなる)。 */
+    focused: boolean
     timer: ReturnType<typeof setTimeout> | null
   }
 
@@ -63,16 +65,25 @@
     item.timer = null
   }
 
-  /** 消える予約を掛け直す。押さえられている間・タブが裏にある間は掛けない(戻ったときに `hold` / `onVisibility` が掛け直す)。 */
+  /** 消える予約を掛け直す。カーソルが載っている間・キーボードのフォーカスがある間・タブが裏にある間は掛けない(戻ったときに `setHovered` / `setFocused` / `onVisibility` が掛け直す)。 */
   function restart(item: ToastItem): void {
     stop(item)
-    if (item.held || document.hidden) return
+    if (item.hovered || item.focused || document.hidden) return
     item.timer = setTimeout(() => dismiss(item.id), LIFETIME_MS)
   }
 
-  function hold(item: ToastItem, held: boolean): void {
-    item.held = held
+  function setHovered(item: ToastItem, hovered: boolean): void {
+    item.hovered = hovered
     restart(item)
+  }
+
+  function setFocused(item: ToastItem, focused: boolean): void {
+    item.focused = focused
+    restart(item)
+  }
+
+  function onFocusIn(item: ToastItem, event: FocusEvent): void {
+    setFocused(item, event.target instanceof Element && event.target.matches(':focus-visible'))
   }
 
   function onVisibility(): void {
@@ -111,7 +122,8 @@
       message: text,
       count: 1,
       copied: false,
-      held: false,
+      hovered: false,
+      focused: false,
       timer: null,
     }
     const next = [created, ...items]
@@ -161,10 +173,10 @@
       <div
         class="toast-actions"
         role="group"
-        onmouseenter={() => hold(item, true)}
-        onmouseleave={() => hold(item, false)}
-        onfocusin={() => hold(item, true)}
-        onfocusout={() => hold(item, false)}
+        onmouseenter={() => setHovered(item, true)}
+        onmouseleave={() => setHovered(item, false)}
+        onfocusin={(event) => onFocusIn(item, event)}
+        onfocusout={() => setFocused(item, false)}
       >
         <button
           type="button"

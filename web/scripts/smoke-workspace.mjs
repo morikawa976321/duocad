@@ -21,6 +21,7 @@
  *  12. 人の「スケッチ」は貼る先待ち(= `sketch_create` を構える)で、「抜ける」で畳まれる
  *  13. 上限1の選択(ねじ)は、応答を待たずに続けて押しても最後の1枚だけが残る
  *  14. AI パネルを畳んでいる間の AI の失敗は、札で知らせる
+ *  15. 札はカーソルかキーボードのフォーカスのどちらかが載っている間は消えない
  */
 import { fail, ok } from './args.mjs'
 import { assertNoAppErrors, frameAll, openApp, sleep, typeInto, waitOrFail, withoutBrowserPanel } from './browser.mjs'
@@ -303,6 +304,10 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   // 会話欄が見えていれば会話欄に出るので札は重ねない。畳んでいる間は会話欄が見えず、札も出さないと失敗に気づけない。
   // 繋がらない先(閉じたポート)へ向けておき、送った直後に同じタスクの中で畳む(応答が先に届いて会話欄に出る競合を作らない)。
   // 接続の失敗は `ai_result` で届き、畳んでいる間は結果の知らせ(info の札)になる。
+  await page.evaluate(() => {
+    const real = window.setTimeout.bind(window)
+    window.setTimeout = (fn, ms, ...args) => real(fn, ms === 15000 ? 4000 : ms, ...args)
+  })
   await page.click('#sidebar-toggle')
   await page.waitForSelector('#ai-settings-toggle')
   await page.click('#ai-settings-toggle')
@@ -319,6 +324,27 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     'AI パネルを畳んでいる間の AI の失敗が札で出ない',
   )
   ok('[14] AI パネルを畳んでいる間の AI の失敗は、札で知らせる')
+
+  // ================================================================ 15. 札はカーソルかキーボードのフォーカスが載っている間は消えない
+  // 片方を外してももう片方が残っていれば消さない。マウスで押したあとのフォーカスは数えない(消えない札になる)。
+  // 札の寿命(`Toast.svelte` の 15 秒)は待てないので、札を出す前に 4 秒へ縮めておく(検査のためだけの差し替え)。
+  {
+    const toasts = () => page.evaluate(() => [...document.querySelectorAll('#toasts .toast-info-text')].filter((el) => el.textContent.startsWith('AI')).length)
+    await page.keyboard.press('Tab') // 入力の手段をキーボードにして、スクリプトの focus() も `:focus-visible` になるようにする
+    await page.focus('#toasts .toast-copy')
+    if (!(await page.evaluate(() => document.activeElement.matches(':focus-visible')))) fail('検査の前提: キーボードで入ったフォーカスが :focus-visible にならない')
+    const away = { x: 8, y: 8 }
+    const copy = await (await page.$('#toasts .toast-copy')).boundingBox()
+    await page.mouse.move(copy.x + copy.width / 2, copy.y + copy.height / 2)
+    await page.mouse.move(away.x, away.y)
+    await sleep(5500)
+    if ((await toasts()) !== 1) fail('カーソルが札の外へ出たら、キーボードのフォーカスが残っていても札が消えた')
+    await page.evaluate(() => document.activeElement.blur())
+    await page.click('#toasts .toast-copy') // マウスで押した直後のフォーカスは札を止めない
+    await page.mouse.move(away.x, away.y)
+    await waitFor(() => ![...document.querySelectorAll('#toasts .toast-info-text')].some((el) => el.textContent.startsWith('AI')), 'マウスで押したあとのフォーカスが札を消えなくしている')
+    ok('[15] 札はカーソルかキーボードのフォーカスのどちらかが載っている間は消えず、マウスで押したあとのフォーカスは数えない')
+  }
 
   await assertNoAppErrors(page, consoleErrors)
 })
