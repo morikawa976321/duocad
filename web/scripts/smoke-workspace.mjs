@@ -256,36 +256,43 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     '1本目の円柱の面が選ばれない',
     [cylinders[0]],
   )
-  // 返事を待たずに2回押す: 実マウスでは往復の間に応答が戻りうるので、同じ JS のタスクの中で2つの押下を送る。
-  const epoch = await page.evaluate(() => window.__duocad.stateEpoch)
-  await withoutBrowserPanel(page, () =>
-    page.evaluate(
-      (targets) => {
-        const canvas = document.querySelector('.viewport canvas')
-        const rect = canvas.getBoundingClientRect()
-        for (const [bodyId, faceIndex] of targets) {
-          const at = window.__duocad.projectFace(bodyId, faceIndex)
-          const init = {
-            clientX: at.x + rect.left,
-            clientY: at.y + rect.top,
-            button: 0,
-            buttons: 1,
-            pointerId: 1,
-            pointerType: 'mouse',
-            isPrimary: true,
-            bubbles: true,
+  // 返事を待たずに押す: 実マウスでは往復の間に応答が戻りうるので、同じ JS のタスクの中で押下(と、続けてキー)を送る。
+  const pressInOneTask = (targets, key = null) =>
+    withoutBrowserPanel(page, () =>
+      page.evaluate(
+        ({ targets, key }) => {
+          const canvas = document.querySelector('.viewport canvas')
+          const rect = canvas.getBoundingClientRect()
+          for (const [bodyId, faceIndex] of targets) {
+            const at = window.__duocad.projectFace(bodyId, faceIndex)
+            const init = {
+              clientX: at.x + rect.left,
+              clientY: at.y + rect.top,
+              button: 0,
+              buttons: 1,
+              pointerId: 1,
+              pointerType: 'mouse',
+              isPrimary: true,
+              bubbles: true,
+            }
+            canvas.dispatchEvent(new PointerEvent('pointermove', { ...init, buttons: 0 }))
+            canvas.dispatchEvent(new PointerEvent('pointerdown', init))
+            canvas.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }))
           }
-          canvas.dispatchEvent(new PointerEvent('pointermove', { ...init, buttons: 0 }))
-          canvas.dispatchEvent(new PointerEvent('pointerdown', init))
-          canvas.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }))
-        }
-      },
-      [
-        [cylinders[1], sideFaces[1]],
-        [cylinders[2], sideFaces[2]],
-      ],
-    ),
-  )
+          if (key !== null) {
+            const target = document.activeElement ?? document.body
+            target.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, bubbles: true, cancelable: true }))
+          }
+        },
+        { targets, key },
+      ),
+    )
+  const laterTwo = [
+    [cylinders[1], sideFaces[1]],
+    [cylinders[2], sideFaces[2]],
+  ]
+  const epoch = await page.evaluate(() => window.__duocad.stateEpoch)
+  await pressInOneTask(laterTwo)
   await waitFor(
     (n) => window.__duocad.stateEpoch >= n + 2,
     '続けて押した2つの選択の応答が届かない',
@@ -299,6 +306,17 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await page.keyboard.press('Escape')
   await waitFor(() => window.__duocad.command === null, 'Esc でねじが畳まれない')
   ok('[13] 上限1の選択(ねじ)は、応答を待たずに続けて押しても最後の1枚だけが残る')
+
+  // 押した直後に Esc: 待たせたクリックが、中断より後に届いて選択を戻さない。
+  await mcp.callTool('begin_command', { verb: 'thread' })
+  await waitFor(() => document.querySelector('.command-host')?.dataset.command === 'thread', '2回目の begin_command(thread) が画面に起動しない')
+  await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'ねじを畳んだ後の選択が空にならない')
+  await pressInOneTask(laterTwo, 'Escape')
+  await waitFor(() => window.__duocad.command === null, '押した直後の Esc でねじが畳まれない')
+  await sleep(500)
+  const leftover = await page.evaluate(() => window.__duocad.selection?.items.map((item) => item.body) ?? [])
+  if (leftover.length !== 0) fail(`続けて押した直後に Esc で中断したのに、選択が残る: ${JSON.stringify(leftover)}`)
+  ok('[13b] 続けて押した直後の Esc で中断すると、待たせたクリックは捨てられて選択が残らない')
 
   // ================================================================ 14. AI パネルを畳んでいる間の AI の失敗は、札で知らせる
   // 会話欄が見えていれば会話欄に出るので札は重ねない。畳んでいる間は会話欄が見えず、札も出さないと失敗に気づけない。

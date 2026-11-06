@@ -402,8 +402,10 @@
   /**
    * 個数の上限つきの引数(ねじ・測定)を食う参照のクリックで、選択の要求が返るのを待っているもの。
    * 置き換えの差分は配信済みの選択に対して組むので、返る前に次のクリックを処理すると同じ最古を外す要求が重なって上限を超える。
+   * 残っている間は確定させない(`CommandHost` の `busy`): 確定が待たせたクリックより先にサーバへ届き、最後に指したものと違う対象へ掛かる。
+   * 起動・中断・全解除を送るときは捨てる(その要求より後に届くと、畳んだ後・外した後に選択が戻る)。
    */
-  let queuedSelectionClicks: { ref: SelectionRef; mode: PickEvent['mode']; verb: string | null }[] = []
+  let queuedSelectionClicks = $state.raw<{ ref: SelectionRef; mode: PickEvent['mode']; verb: string | null }[]>([])
   const runningVerb = (): string | null => activeVerb ?? model?.command?.verb ?? null
   /** 代案で選択を広げた変更の `client_op`。返ってくるまで確定させない(広げた範囲が画面に出る前の Enter で確定しない)。 */
   let wideningOp = $state<number | null>(null)
@@ -1794,6 +1796,7 @@
   function beginCommand(verb: string, args: Record<string, unknown>): void {
     pendingChainPick = null // 前のコマンドで待たせたクリックを次のコマンドへ持ち越さない
     pendingBox = null
+    queuedSelectionClicks = []
     commandRequests += 1
     session.beginCommand(verb, args, nextOp())
   }
@@ -1806,6 +1809,7 @@
     // 中断を送った時点で捨てる(連なりの応答は中断の配信より先に届くので、届いてからでは起動中に見える)。
     pendingChainPick = null
     pendingBox = null
+    queuedSelectionClicks = []
     commandRequests += 1
     session.endCommand(nextOp())
   }
@@ -1861,6 +1865,7 @@
 
   /** 選択を全解除する。配信が届くまでの判定は `currentItems()` が空として扱う。 */
   function clearSelection(): void {
+    queuedSelectionClicks = []
     clearingOp = nextOp()
     selectionOpsInFlight.add(clearingOp)
     session.clearSelection(clearingOp)
@@ -2940,7 +2945,11 @@
         <CommandHost
           bind:this={host}
           {selection}
-          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null}
+          busy={pendingOp !== null ||
+            optimizeBusy ||
+            pendingChainPick !== null ||
+            wideningOp !== null ||
+            queuedSelectionClicks.length > 0}
           {selfSelections}
           commands={mode.kind === 'sketch'
             ? SKETCH_MODE_COMMANDS
