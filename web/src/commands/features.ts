@@ -18,6 +18,7 @@ import {
 } from './command'
 import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg } from './moveMode'
 import type { SelectionRef } from '../session'
+import { evaluateExpression } from '../expression'
 
 /** 1以上の整数だけを通す(個数。コアの `parameters.is_positive_int` と同じ判定)。 */
 function count(label: string, least: number): (value: number) => string | null {
@@ -199,8 +200,11 @@ export const REVOLVE: CommandDef<'revolve'> = {
 
 /** 始点のずらし(`shifts`)の欄の文字列を整数の並びへ。空白かカンマ区切り。読めなければ null。 */
 export function parseShifts(text: string): number[] | null {
-  const parts = text.split(/[\s,]+/).filter((part) => part !== '')
-  const values = parts.map(Number)
+  const parts = text.split(/[\s,，、]+/).filter((part) => part !== '')
+  const values = parts.map((part) => {
+    const result = evaluateExpression(part)
+    return result.ok ? result.value : NaN
+  })
   return values.every(Number.isInteger) ? values : null
 }
 

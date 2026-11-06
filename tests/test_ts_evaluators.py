@@ -29,6 +29,7 @@ EVALUATORS = [
     "eval_interference.mjs",
     "eval_keys.mjs",
     "eval_log_tail.mjs",
+    "eval_loft_shifts.mjs",
     "eval_min_width.mjs",
     "eval_pixel_ratio.mjs",
     "eval_plane_sight.mjs",
