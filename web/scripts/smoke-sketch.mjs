@@ -11,6 +11,7 @@
  *   3. 線分の始点と同じ場所をもう一度押しても点にならず、続けて終点を打てば線分ができる
  *   4. スケッチ A で選んだ図形は、B へ直接移った時点で選択から外れる(外れないと、B で動かした
  *      つもりで A の図形が動く)
+ *   5. 長方形の幅と高さを両方、負の値で打つと、マウスが反対側にあっても負の側へ伸びる
  *
  * 落ちる先の規則そのもの(円の半径ちょうど・傾いた辺の上)は `tests/eval_sketch_snap.mjs` が持つ。
  * ここが見るのは、本物のクリックと幽霊がその規則を通っていること。
@@ -136,6 +137,33 @@ runSmoke('smoke-sketch', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
     'A の図形の選択が B へ持ち越されている',
   )
   ok('[4] スケッチ A で選んだ図形は、B へ直接移った時点で選択から外れる')
+
+  // ================================================================ 5. 幅と高さを両方打つと符号が向きを決める
+  // マウスは右上へ置いたまま「-10」「-6」を打つ。向きがマウス側のままなら右上へ伸びる。
+  await enter(sketchA)
+  {
+    const before = (await entities()).length
+    await page.click('#sketch-rectangle')
+    await withoutBrowserPanel(page, async () => {
+      const corner = await sketchPointAt(page, 45, 40, { settle: true })
+      if (!corner) fail('長方形の角が画面上で指せない')
+      await page.mouse.click(corner.x, corner.y)
+      const away = await sketchPointAt(page, 52, 46, { settle: true })
+      if (!away) fail('マウスを置く場所が画面上で指せない')
+      await page.mouse.move(away.x, away.y)
+      await waitFrames(page, 4)
+    })
+    await page.keyboard.type('-10')
+    await page.keyboard.press('Tab')
+    await page.keyboard.type('-6')
+    await page.keyboard.press('Enter')
+    await waitFor((count) => window.__duocad.sketch?.entities.length === count, '負の寸法の長方形が置けない', [before + 1])
+    const rect = (await entities()).filter((item) => item.kind === 'rectangle').at(-1).params
+    if (rect.x !== 35 || rect.y !== 34 || rect.width !== 10 || rect.height !== 6) {
+      fail(`負の幅と高さが逆向きに伸びていない: ${JSON.stringify(rect)}`)
+    }
+    ok('[5] 幅と高さを両方負で打つと、マウスが反対側にあっても負の側へ伸びる')
+  }
 
   await assertNoAppErrors(page, consoleErrors)
 })
