@@ -229,7 +229,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 - smoke の段を選ぶと `build` が先頭に自動で入る（`npm run build -- --outDir $env:TEMP\duocad-gate-dist --emptyOutDir`。出力先は `-WebDist` か環境変数
   `GATE_WEB_DIST` で変えられる。相対パスは呼んだ場所から読む）。smoke には `--web-dist` でその出力先を渡す。`build` が落ちたら smoke は SKIP。
 - `build` は出力先の中身を消すので、`build` か smoke を選んだとき、リポジトリの中（`web\dist` を含む）・リポジトリを含む場所・
-  前回の組み立て（`index.html` がある）でも空でもない既存の場所を出力先に指すと断る。
+  前回の組み立て（`index.html` がある）でも空でもない既存の場所を出力先に指すと断る。リポジトリの中かどうかは、ジャンクション・
+  シンボリックリンク・短い名前を辿った先の実体のパスで比べる（`.venv` の python の `os.path.realpath`）。
 - 8765・8766・8775・8776 には触らない（smoke は各スクリプトが使い捨ての `--models-dir` と OS が選ぶ空きポートで立てる）。
 
 ---

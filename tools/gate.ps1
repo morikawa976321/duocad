@@ -16,7 +16,8 @@
 # 1段でも落ちたら終了コード 1(引数の誤りは 2)。落ちた段は、表のあとに出力の末尾を出す。PR 本文にはこの表と末尾を貼る。
 # smoke は各スクリプトが使い捨ての --models-dir と OS が選ぶ空きポートで立てる。8765・8766・8775・8776 には触らない。
 # 環境変数 GATE_WEB_DIST か -WebDist で組み立て先を変えられる(既定は $env:TEMP\duocad-gate-dist)。
-# リポジトリの中(web\dist を含む)・リポジトリを含む場所・前回の組み立てでも空でもない既存の場所は拒む。
+# リポジトリの中(web\dist を含む)・リポジトリを含む場所・前回の組み立てでも空でもない既存の場所は拒む
+# (ジャンクション・シンボリックリンク・短い名前は、辿った先の実体のパスで比べる)。
 
 [CmdletBinding()]
 param(
@@ -95,11 +96,18 @@ $usesDist = [bool]($selected | Where-Object { $_.Name -eq 'build' -or $_.Name -l
 if ($usesDist) {
     # build は --emptyOutDir で組み立て先の中身を消す。リポジトリの中(web\dist は本人のサーバが配っている)、
     # リポジトリを含む場所、前回の組み立てでも空でもない既存の場所には出さない。
+    # 文字列の上でリポジトリの外でも、ジャンクション・シンボリックリンク・短い名前の先が中のことがあるので、実体のパスで比べる。
+    # python の realpath は、まだ無い末尾をそのまま足して返す。
+    $realPaths = @(& $python -c 'import os, sys; [print(os.path.realpath(p)) for p in sys.argv[1:]]' $repo $WebDist)
+    if ($LASTEXITCODE -ne 0 -or $realPaths.Count -ne 2) {
+        Write-Error "組み立て先 '$WebDist' の実体のパスを確かめられません($python が動かない)。確かめられない場所へは組み立てません。" -ErrorAction Continue
+        exit 2
+    }
     $ordinal = [StringComparison]::OrdinalIgnoreCase
-    $repoPrefix = $repo.TrimEnd('\') + '\'
-    $distPrefix = $WebDist + '\'
+    $repoPrefix = $realPaths[0].TrimEnd('\') + '\'
+    $distPrefix = $realPaths[1].TrimEnd('\') + '\'
     if ($distPrefix.StartsWith($repoPrefix, $ordinal) -or $repoPrefix.StartsWith($distPrefix, $ordinal)) {
-        Write-Error "組み立て先 '$WebDist' はリポジトリの中か、リポジトリを含む場所です(web\dist は本人のサーバが配っている)。リポジトリの外の -WebDist を渡してください。" -ErrorAction Continue
+        Write-Error "組み立て先 '$WebDist'(実体は '$($realPaths[1])')はリポジトリの中か、リポジトリを含む場所です(web\dist は本人のサーバが配っている)。リポジトリの外の -WebDist を渡してください。" -ErrorAction Continue
         exit 2
     }
     $holdsOtherThings = (Test-Path -LiteralPath $WebDist) -and
