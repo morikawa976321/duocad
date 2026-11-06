@@ -145,6 +145,7 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
       ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 4)
     }
     const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
     const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true })
     // 面セルの一辺に対する比で持つ(EDGE_T を変えても面と文字の比が崩れない)。
     const labelSize = 2 * (1 - 2 * EDGE_T) * 0.7

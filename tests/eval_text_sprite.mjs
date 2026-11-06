@@ -69,6 +69,9 @@ for (const text of ['5.000 mm', '12.345 mm', '100.000 mm', '1234.567 mm', '12345
   assert.equal(sprite.scale.y, 10)
 }
 
+// 札の色は canvas に描いた sRGB のまま出る(色空間が既定だと、レンダラの sRGB 出力で二重に変換されて明るくなる)。
+assert.equal(makeTextSprite('1 mm', 10, '#ffffff').sprite.material.map.colorSpace, THREE.SRGBColorSpace)
+
 // 画素で一定の札: 描く直前に、縦が `heightPx` 画素に映る大きさへ直る。
 const viewport = { width: 1000, height: 600 }
 const renderer = { getSize: (out) => out.set(viewport.width, viewport.height) }
