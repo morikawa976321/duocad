@@ -116,6 +116,7 @@
   import { createFaceChains, suggestedAdditions } from './faceChains'
   import { createInterference } from './interference.svelte'
   import InterferencePanel from './InterferencePanel.svelte'
+  import FrameAllButton from './FrameAllButton.svelte'
   import { createMeasurement } from './measurement.svelte'
   import { createSelectionInfo } from './selectionInfo.svelte'
   import { createServerWait } from './serverWait.svelte'
@@ -991,6 +992,12 @@
       // 共有の undo は AI の操作も戻すので、何が戻ったかを言う。MCP からの undo は `applied` が届かない(`Server._on_core_change`)。
       if (applied.verb === 'undo') inform(`取り消した: ${commandLabel(applied.undone)}`)
       if (applied.verb === 'redo') inform(`やり直した: ${commandLabel(applied.redone)}`)
+      // 形が変わったボディの面・辺を指していた構えの引数は、サーバが外している(欄の指定は配信で消える)。
+      const droppedArgs = applied.verb === undefined ? [] : (applied.dropped_args ?? [])
+      if (droppedArgs.length > 0 && next.command !== null) {
+        const verb = next.command.verb
+        inform(`形が変わったので「${droppedArgs.map((name) => argLabel(verb, name)).join('」「')}」の指定を外した`)
+      }
       // 作ったスケッチへはサーバが誰の操作でも入れる(`Session._settle_workspace`)。ここでは入らない。
       if (applied.verb === 'import_step') {
         // 読み込んだモデル全体が入る視点へ合わせ直す。文書のスケールが不連続に変わるのはインポートだけ
@@ -2497,6 +2504,11 @@
       if (!ownsEscapeKey(focused)) clearSelectionIfAny()
       return
     }
+    // F は全体表示(ビューキューブ下のボタンと同じ)。修飾キーつき・押しっぱなし・入力欄の中では効かせない。
+    if (event.key.toLowerCase() === 'f' && !(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.repeat)) {
+      if (documentOpen && !isImeKey(event) && !ownsEscapeKey(event.target as HTMLElement | null)) viewport?.frameVisible()
+      return
+    }
     if (!(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
     if (key !== 'z' && key !== 'y' && key !== 's') return
@@ -2953,6 +2965,7 @@
       {/if}
 
       {#if documentOpen}
+        <FrameAllButton onclick={() => viewport?.frameVisible()} />
         <InterferencePanel {interference} />
         <SelectionInfoPanel
           item={selectionInfo.item}

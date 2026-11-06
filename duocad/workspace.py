@@ -37,6 +37,31 @@ def stageable_verb_names() -> tuple[str, ...]:
     return tuple(command.name for command in catalog.COMMANDS if stageable(command))
 
 
+#: ボディの形の添字(面・辺・頂点の番号)で指す参照の種別。ボディの形が変わると添字が別の部分を指す。
+SHAPE_REF_KINDS = ("face", "edge", "vertex")
+
+
+def shape_ref_bodies(args: dict) -> dict[str, list[str]]:
+    """引数名 -> その値が形の添字で指しているボディの id。参照1つ(`{"body", "kind", "index"}`)かその配列を見る。
+    `kind` の無い参照(`plane_face` は `{"body", "index"}` でも渡せる)は面。原点パーツ(`{"datum"}`)・ボディそのもの
+    (`kind: "body"`)・スケッチの参照は形の添字を持たないので入らない。
+    """
+    found: dict[str, list[str]] = {}
+    for name, value in args.items():
+        refs = value if isinstance(value, list) else [value]
+        bodies = [
+            ref["body"]
+            for ref in refs
+            if isinstance(ref, dict)
+            and isinstance(ref.get("body"), str)
+            and ref.get("kind", "face") in SHAPE_REF_KINDS
+            and isinstance(ref.get("index"), int)
+        ]
+        if bodies:
+            found[name] = bodies
+    return found
+
+
 def merge_args(command: catalog.Command, current: dict, update: dict) -> dict:
     """`current` に `update` を併合して検査した新しい辞書を返す。値が `None` のキーは外す(「まだ決めていない」へ戻す)。
 

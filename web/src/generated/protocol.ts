@@ -334,6 +334,10 @@ interface AppliedVerbBase {
   seq: number
   client_op: number | null
   change?: undefined
+  /** 新しい操作で捨てたやり直しの件数(捨てたときだけ)。 */
+  discarded_redo?: number
+  /** 形が変わったので外した、構えたコマンドの引数名(外したときだけ)。 */
+  dropped_args?: string[]
 }
 
 /** 変更イベント(verb ではない。操作ログに載らない)に共通するフィールド。 */

@@ -33,7 +33,7 @@ DEVIATION = 0.2
 RADIUS_THAT_WORKS = 3.0
 
 #: どの応答にも付くので `Command.returns` には書かないキー。`client_op` は `net/ws.py` が後から載せる。
-COMMON_KEYS = frozenset({"verb", "seq", "change", "client_op"})
+COMMON_KEYS = frozenset({"verb", "seq", "change", "client_op", "discarded_redo", "dropped_args"})
 
 
 def _verbs() -> list[str]:
