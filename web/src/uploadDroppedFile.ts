@@ -3,13 +3,13 @@ type UploadOptions = {
   pageUrl?: string
 }
 
-const pageRequired = 'ファイルの送信は duocad が配信する画面で使えます。Vite の開発画面では使えないため、Python サーバの画面を開いてください。'
-const connectionFailed = 'ファイルを送信できませんでした。サーバへの接続を確認して、もう一度送信してください。'
+const pageRequired = 'ファイルの送信は duocad が配信する画面でしか使えない(Vite の開発画面では使えない。Python サーバの画面を開く)'
+const connectionFailed = 'ファイルを送信できなかった(サーバへの接続を確かめて、もう一度落とす)'
 
 /** 返った一時パスは既存の import_step / import_svg の path に渡す。失敗は表示用の Error.message。 */
 export async function uploadDroppedFile(file: File, options: UploadOptions = {}): Promise<string> {
   if (!/\.(step|stp|svg)$/i.test(file.name)) {
-    throw new Error('取り込めるのは STEP（.step・.stp）と SVG（.svg）だけです。')
+    throw new Error('取り込めるのは STEP(.step・.stp)と SVG(.svg)だけ')
   }
 
   const request = options.fetch ?? fetch
@@ -31,7 +31,7 @@ export async function uploadDroppedFile(file: File, options: UploadOptions = {})
     throw new Error(pageRequired)
   }
   if (file.size > maxBytes) {
-    throw new Error(`ファイルが大きすぎます（上限 ${maxBytes / (1024 * 1024)} MiB）。`)
+    throw new Error(`ファイルが大きすぎる(上限 ${maxBytes / (1024 * 1024)} MiB)`)
   }
 
   const url = new URL('/api/upload', pageUrl)
@@ -51,15 +51,15 @@ export async function uploadDroppedFile(file: File, options: UploadOptions = {})
   try {
     payload = await response.json()
   } catch {
-    throw new Error(`ファイルの送信結果を確認できませんでした（HTTP ${response.status}）。`)
+    throw new Error(`ファイルの送信結果を読めなかった(HTTP ${response.status})`)
   }
   if (!response.ok) {
     throw new Error(typeof payload?.message === 'string'
       ? payload.message
-      : `ファイルを送信できませんでした（HTTP ${response.status}）。`)
+      : `ファイルを送信できなかった(HTTP ${response.status})`)
   }
   if (typeof payload?.path !== 'string' || !payload.path) {
-    throw new Error('ファイルの送信結果に取り込み用のパスがありません。もう一度送信してください。')
+    throw new Error('ファイルの送信結果に取り込み用のパスが無い(もう一度落とす)')
   }
   return payload.path
 }

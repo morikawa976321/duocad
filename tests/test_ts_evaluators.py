@@ -19,6 +19,7 @@ EVALUATORS = [
     "eval_choice_sync.mjs",
     "eval_edge_segments.mjs",
     "eval_expression.mjs",
+    "eval_file_drop.mjs",
     "eval_face_chains.mjs",
     "eval_frame_loop.mjs",
     "eval_ghost_layer.mjs",

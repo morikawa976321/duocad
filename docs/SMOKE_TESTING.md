@@ -27,6 +27,9 @@ DOM / WebGL のピックを経てサーバへ届き、描画へ戻るまでの�
   引数の集め方・新しい描画）を持つときだけ。
 - **同じ結線を2本で通さない。** 足す前に `web/scripts/smoke*.mjs` を語で検索する。
 - `smoke-interference.mjs` は、干渉チェックの最中に文書が変わったら届いた結果を描かない競合だけを見る（issue #186。Linux の Chromium では `DUOCAD_BROWSER` に `--no-sandbox` 付きの起動スクリプトを渡し、`.venv/Scripts/python.exe` を `.venv/bin/python` への symlink にして走らせた）。
+- `smoke-drop-import.mjs` はページ内の `DataTransfer`・`File` と合成イベントで、ウィンドウのドロップから本文送信・
+  STEP/SVG 取り込み・拒否通知・待ち表示・取り消しまで通す。STEP は使い捨てのサーバで箱を書き出し、8 MiB 超の題材は
+  末尾へ空白を足す。アップロードを保留して二重ドロップも確かめる。OS でファイルを掴む操作自体は検査しない。
 - `node web/scripts/smoke-files-panel.mjs` はファイル画面・トップ画面・ブラウザ一覧の操作を実ブラウザで通す: 書き出し名の既定が今の文書のファイル名になり、
   上書きが知らせに出る／複製の欄から複製先を続けて開く／トップ画面は先頭のカードにフォーカスがあり Enter 1回で開く／ブラウザの見出しで一覧が畳まれ、
   行の ✕ が ✎ から離れている。別の出力先に組み立てた画面を `--web-dist` で渡す

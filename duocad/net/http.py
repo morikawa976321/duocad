@@ -49,6 +49,7 @@ class WebHandler(SimpleHTTPRequestHandler):
     mcp_lock = threading.Lock()
 
     def do_POST(self) -> None:  # noqa: N802  (BaseHTTPRequestHandlerの命名に従う)
+        """ファイル本文のアップロード・更新・MCP の3つの POST を振り分ける。"""
         if self.path.split("?", 1)[0] == UPLOAD_HTTP_PATH:
             post_upload(self)
             return

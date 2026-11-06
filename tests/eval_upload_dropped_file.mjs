@@ -47,8 +47,8 @@ for (const status of [400, 403, 408, 413, 415, 500, 503]) {
     /^Error: 送信を断りました$/)
 }
 await assert.rejects(uploadDroppedFile(file, withPost(() => new Response('HTML', { status: 500 }))), /HTTP 500/)
-await assert.rejects(uploadDroppedFile(file, withPost(() => Response.json({}))), /パスがありません/)
-await assert.rejects(uploadDroppedFile(file, withPost(() => Response.json(null))), /パスがありません/)
+await assert.rejects(uploadDroppedFile(file, withPost(() => Response.json({}))), /パスが無い/)
+await assert.rejects(uploadDroppedFile(file, withPost(() => Response.json(null))), /パスが無い/)
 for (const reply of [new Response('<html>Vite</html>'), Response.json({ ws_url: 'ws://localhost:19877' })]) {
   let requests = 0
   await assert.rejects(uploadDroppedFile(file, {

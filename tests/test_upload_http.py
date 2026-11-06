@@ -55,7 +55,10 @@ def http_upload(tmp_path_factory):
         server.server_close()
 
 
-@pytest.mark.parametrize("name", ["part.step", "part.StEp", "part.STP", "drawing.SVG", "日本語の部品.step"])
+@pytest.mark.parametrize("name", [
+    "part.step", "part.StEp", "part.STP", "drawing.SVG", "日本語の部品.step",
+    "a..b.step", "..step", "bracket_v1..2.step",
+])
 def test_upload_preserves_bytes_and_original_filename(http_upload, name):
     status, payload, headers = http_upload.upload(name, b"\x00\xffunchanged bytes")
     assert status == 200, payload
@@ -95,11 +98,11 @@ def test_other_extensions_are_refused(http_upload, name):
 
 
 @pytest.mark.parametrize("name", [
-    "../part.step", "folder/part.step", "folder\\part.step", "a..b.step", "..step",
+    "../part.step", "folder/part.step", "folder\\part.step",
     "C:part.step", "NUL.step", "con.svg", "COM1.STP", "Lpt9.step", "COM¹.step", "CON .step",
     "CONOUT$.step", "bad\x00.step", "bad\n.svg", "bad\x7f.step", "bad\u0085.step",
     "bad?.step", "bad*.svg", "bad|.step", "bad<.svg", 'bad".step',
-    "part.step ", "part.step.", "a" * 121 + ".step", "",
+    "part.step ", "part.step.", "a" * 121 + ".step", "", ".", "..",
 ])
 def test_unsafe_filenames_never_create_a_directory(http_upload, name):
     before = set(http_upload.server.upload_store.root.iterdir())
@@ -136,12 +139,13 @@ def test_body_larger_than_the_old_eight_mib_limit_is_saved(http_upload):
         assert all(chunk == b"x" * len(chunk) for chunk in iter(lambda: stream.read(64 * 1024), b""))
 
 
-def test_limit_is_published_and_oversized_body_gets_json_after_sending(http_upload):
+@pytest.mark.parametrize("headers", [{}, {"Origin": "http://evil.example"}])
+def test_limit_is_published_and_oversized_body_is_not_read(http_upload, headers):
     _, config, _ = http_upload.request("GET", "/duocad-config.json")
     assert config["upload_max_bytes"] == UPLOAD_MAX_BYTES
     before = set(http_upload.server.upload_store.root.iterdir())
     size = UPLOAD_MAX_BYTES + 1
-    status, payload, _ = http_upload.upload(body=_chunks(size), headers={"Content-Length": str(size)})
+    status, payload, _ = http_upload.upload(body=b"", headers={"Content-Length": str(size), **headers})
     assert status == 413
     assert payload["error"] == "too_large"
     assert "128 MiB" in payload["message"]
@@ -153,7 +157,7 @@ def test_exact_limit_is_accepted(http_upload, monkeypatch):
     status, payload, _ = http_upload.upload(body=b"x" * 1024)
     assert status == 200
     assert Path(payload["path"]).stat().st_size == 1024
-    assert http_upload.upload(body=b"x" * 1025)[0] == 413
+    assert http_upload.upload(body=b"", headers={"Content-Length": "1025"})[0] == 413
 
 
 def test_original_routes_keep_the_eight_mib_limit(http_upload):
@@ -201,6 +205,30 @@ def test_next_upload_removes_expired_files_but_keeps_recent_files(http_upload, m
     assert http_upload.upload("next.step")[0] == 200
     assert not old_path.parent.exists()
     assert recent_path.exists()
+
+
+def test_failed_expiry_cleanup_keeps_the_upload_available_and_retries(http_upload, monkeypatch):
+    clock = [uploads.time.monotonic()]
+    monkeypatch.setattr(uploads, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    _, old, _ = http_upload.upload("locked.step")
+    old_path = Path(old["path"])
+    clock[0] += UPLOAD_TTL_SECONDS + 1
+    rmtree = uploads.shutil.rmtree
+    attempts = []
+
+    def locked_once(directory, *args, **kwargs):
+        if directory == old_path.parent:
+            attempts.append(directory)
+            if len(attempts) == 1:
+                raise PermissionError("file is open")
+        return rmtree(directory, *args, **kwargs)
+
+    monkeypatch.setattr(uploads.shutil, "rmtree", locked_once)
+    assert http_upload.upload("new.step")[0] == 200
+    assert old_path.exists()
+    assert http_upload.upload("retry.step")[0] == 200
+    assert len(attempts) == 2
+    assert not old_path.parent.exists()
 
 
 def test_parallel_uploads_of_the_same_name_do_not_overwrite_each_other(http_upload):
@@ -308,3 +336,16 @@ def test_each_server_owns_its_store_and_shutdown_removes_it(tmp_path, http_uploa
         second.shutdown()
         second.server_close()
     assert not root.exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="開いたままのファイルを消せないのは Windows だけ")
+def test_closing_the_store_survives_a_file_that_is_still_open():
+    """落ちたら、送られたファイルを誰かが開いたままのとき、サーバの終了処理が例外で止まる。"""
+    store = uploads.UploadStore()
+    path = store.begin("open.step")
+    path.write_bytes(b"content")
+    store.finish(path, keep=True)
+    with path.open("rb"):
+        store.close()
+    store.close()
+    assert not store.root.exists()
