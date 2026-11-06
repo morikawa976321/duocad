@@ -16,12 +16,13 @@ from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.ChFi3d import ChFi3d
 from OCP.GeomAbs import GeomAbs_C0, GeomAbs_G1, GeomAbs_SurfaceType
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_EXTERNAL, TopAbs_FACE, TopAbs_INTERNAL, TopAbs_REVERSED, TopAbs_VERTEX
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_EXTERNAL, TopAbs_FACE, TopAbs_INTERNAL, TopAbs_VERTEX
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Shape, TopoDS_Vertex
 from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
 
 from . import (
+    brep_geometry as _brep_geometry,
     brep_topology as _brep_topology,
 )
 
@@ -164,9 +165,7 @@ def _outward_plane_normal(face: TopoDS_Shape) -> Optional[Tuple[float, float, fl
     surface = BRepAdaptor_Surface(TopoDS.Face_s(face))
     if surface.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
         return None
-    direction = surface.Plane().Axis().Direction()
-    sign = -1.0 if face.Orientation() == TopAbs_REVERSED else 1.0
-    return sign * direction.X(), sign * direction.Y(), sign * direction.Z()
+    return _brep_geometry._face_normal(face)
 
 
 def _fillet_reach(radius: float, faces: list) -> float:
