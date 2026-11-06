@@ -359,7 +359,7 @@
                   {#if sketch.sketch_id === activeSketchId}
                     <span class="tag on">編集中</span>
                   {:else}
-                    <span class="dim sketch-count">図形{sketch.entities.length}</span>
+                    <span class="dim sketch-count">{sketch.entities.length}図形</span>
                   {/if}
                   <button
                     class="row-action"
