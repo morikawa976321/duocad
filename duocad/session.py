@@ -540,7 +540,7 @@ class Session:
         merged = merge_args(command, current.args, args or {})
         if (
             "sketch_id" not in merged
-            and any(p.name == "sketch_id" for p in command.params)
+            and any(p.name == "sketch_id" and p.required for p in command.params)
             and self.workspace.editing_sketch() is not None
         ):
             merged["sketch_id"] = self.workspace.editing_sketch()
