@@ -16,8 +16,9 @@
 # 1段でも落ちたら終了コード 1(引数の誤りは 2)。落ちた段は、表のあとに出力の末尾を出す。PR 本文にはこの表と末尾を貼る。
 # smoke は各スクリプトが使い捨ての --models-dir と OS が選ぶ空きポートで立てる。8765・8766・8775・8776 には触らない。
 # 環境変数 GATE_WEB_DIST か -WebDist で組み立て先を変えられる(既定は $env:TEMP\duocad-gate-dist)。
-# リポジトリの中(web\dist を含む)・リポジトリを含む場所・前回の組み立てでも空でもない既存の場所は拒む
-# (ジャンクション・シンボリックリンク・短い名前は、辿った先の実体のパスで比べる)。
+# リポジトリの中(web\dist を含む)とリポジトリを含む場所は拒む(綴りではなく、フォルダそのものが同じかで見る)。
+# build は組み立て先の中身を消すので、既定の場所・まだ無い場所・空の場所・前に gate が作った場所(隣に <場所>.gate-owned を置く)
+# 以外へは組み立てない。
 
 [CmdletBinding()]
 param(
@@ -94,27 +95,50 @@ if ($selected.Count -eq 0) {
 
 $usesDist = [bool]($selected | Where-Object { $_.Name -eq 'build' -or $_.Name -like 'smoke*' })
 if ($usesDist) {
-    # build は --emptyOutDir で組み立て先の中身を消す。リポジトリの中(web\dist は本人のサーバが配っている)、
-    # リポジトリを含む場所、前回の組み立てでも空でもない既存の場所には出さない。
-    # 文字列の上でリポジトリの外でも、ジャンクション・シンボリックリンク・短い名前の先が中のことがあるので、実体のパスで比べる。
-    # python の realpath は、まだ無い末尾をそのまま足して返す。
-    $realPaths = @(& $python -c 'import os, sys; [print(os.path.realpath(p)) for p in sys.argv[1:]]' $repo $WebDist)
-    if ($LASTEXITCODE -ne 0 -or $realPaths.Count -ne 2) {
-        Write-Error "組み立て先 '$WebDist' の実体のパスを確かめられません($python が動かない)。確かめられない場所へは組み立てません。" -ErrorAction Continue
+    # リポジトリの中(web\dist は本人のサーバが配っている)とリポジトリを含む場所は、組み立て先にしない。
+    # 綴りでは比べない(ジャンクション・シンボリックリンク・短い名前・\\?\ つきの綴りが、同じ場所を別の文字列で指す)。
+    # 実体のパス(realpath。まだ無い末尾はそのまま足される)を根まで遡り、フォルダそのものが同じか(samefile)で見る。
+    $place = & $python -c @'
+import os, sys
+
+def lineage(path):
+    path = os.path.realpath(path)
+    while True:
+        if os.path.exists(path):
+            yield path
+        parent = os.path.dirname(path)
+        if parent == path:
+            return
+        path = parent
+
+repo, dist = sys.argv[1], sys.argv[2]
+if any(os.path.samefile(step, repo) for step in lineage(dist)):
+    print('inside')
+elif os.path.exists(dist) and any(os.path.samefile(step, dist) for step in lineage(repo)):
+    print('contains')
+else:
+    print('outside')
+'@ $repo $WebDist
+    if ($LASTEXITCODE -ne 0 -or $place -notin @('inside', 'contains', 'outside')) {
+        Write-Error "組み立て先 '$WebDist' がリポジトリの外かどうかを確かめられません($python が動かない)。確かめられない場所は使いません。" -ErrorAction Continue
         exit 2
     }
-    $ordinal = [StringComparison]::OrdinalIgnoreCase
-    $repoPrefix = $realPaths[0].TrimEnd('\') + '\'
-    $distPrefix = $realPaths[1].TrimEnd('\') + '\'
-    if ($distPrefix.StartsWith($repoPrefix, $ordinal) -or $repoPrefix.StartsWith($distPrefix, $ordinal)) {
-        Write-Error "組み立て先 '$WebDist'(実体は '$($realPaths[1])')はリポジトリの中か、リポジトリを含む場所です(web\dist は本人のサーバが配っている)。リポジトリの外の -WebDist を渡してください。" -ErrorAction Continue
+    if ($place -ne 'outside') {
+        Write-Error "組み立て先 '$WebDist' はリポジトリの中か、リポジトリを含む場所です(web\dist は本人のサーバが配っている)。リポジトリの外の -WebDist を渡してください。" -ErrorAction Continue
         exit 2
     }
-    $holdsOtherThings = (Test-Path -LiteralPath $WebDist) -and
-        -not (Test-Path -LiteralPath (Join-Path $WebDist 'index.html')) -and
-        [bool](Get-ChildItem -LiteralPath $WebDist -Force | Select-Object -First 1)
-    if ($holdsOtherThings) {
-        Write-Error "組み立て先 '$WebDist' には、前回の組み立てではない中身があります(build は中身を消す)。空のフォルダか、新しい場所を渡してください。" -ErrorAction Continue
+}
+if ($selected | Where-Object { $_.Name -eq 'build' }) {
+    # build は --emptyOutDir で組み立て先の中身を消す。消してよいのは、gate のものと分かる場所だけ:
+    # 既定の場所、まだ無い場所、空の場所、前に gate が作って隣に目印を置いた場所。中身から前回の組み立てかどうかは推し量らない。
+    $ownedMarker = "$WebDist.gate-owned"
+    $defaultDist = (Join-Path $env:TEMP 'duocad-gate-dist').TrimEnd('\')
+    $isDefaultDist = [string]::Equals($WebDist, $defaultDist, [StringComparison]::OrdinalIgnoreCase)
+    $hasContent = (Test-Path -LiteralPath $WebDist) -and [bool](Get-ChildItem -LiteralPath $WebDist -Force | Select-Object -First 1)
+    if (-not $hasContent) {
+        New-Item -ItemType File -Path $ownedMarker -Force | Out-Null
+    } elseif (-not $isDefaultDist -and -not (Test-Path -LiteralPath $ownedMarker -PathType Leaf)) {
+        Write-Error "組み立て先 '$WebDist' には中身があり、gate が作った場所の目印('$ownedMarker')がありません(build は中身を消す)。まだ無い場所か空のフォルダを渡してください。前の組み立てを使い回すだけなら -Skip build を付けます。" -ErrorAction Continue
         exit 2
     }
 }
