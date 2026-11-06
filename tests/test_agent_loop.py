@@ -563,6 +563,31 @@ def test_a_quantity_beside_a_body_name_with_a_digit_still_passes(box_session: Se
     assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
 
 
+@pytest.mark.parametrize("name", ["R3", "t3", "3mm", "3.0", "Ｒ３"])
+def test_a_quantity_spelled_like_the_name_of_another_shape_still_passes(box_session: Session, name: str):
+    """落ちたら、寸法の書き方と同じ綴りの名前(`R3`)の図形が文書にあるだけで、「R3で丸めて」が量なしと読まれて止まる。"""
+    from duocad.sketch import get_sketch
+
+    sketch_id = box_session.sketch_create("XY")["sketch_id"]
+    get_sketch(box_session.document, sketch_id).name = name
+    provider = RecordedProvider([tool_use("fillet", {"radius": 3}, "c0"), spoke("done")])
+
+    run = AgentLoop(DocumentTools(box_session), provider).run(f"箱の辺を{name}で丸めて")
+
+    assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
+
+
+@pytest.mark.parametrize("name", ["R3", "A1", "10mm"])
+def test_a_name_spelled_like_a_quantity_does_not_pass_a_value_nobody_gave(box_session: Session, name: str):
+    """落ちたら、`R3` `A1` のような名前の図形を指しただけで、モデルが埋めた別の値の寸法がガードを素通りする。"""
+    box_session.document.get_body("box").name = name
+    provider = RecordedProvider([tool_use("fillet", {"radius": 2}, "c0"), spoke("やめた")])
+
+    run = AgentLoop(DocumentTools(box_session), provider).run(f"{name}の角をいい感じに丸めて")
+
+    assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
+
+
 @pytest.mark.parametrize("prompt", ["半径を倍にして", "穴を半分の大きさにして"])
 def test_a_ratio_is_a_quantity_the_person_gave(prompt: str):
     """落ちたら、比率で頼んだ依頼(「倍に」「半分に」)が量なしと読まれ、聞き返しで1往復無駄になる。"""
