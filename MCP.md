@@ -47,7 +47,7 @@
 4. `import_step(path)` は**読んだ時点で編集できるボディ**（ソリッドごとに1つ、`kind="solid"`）を返す（`body_ids`。追加の1手は要らない）。
    **読み込みのツールはこれ1つだけ**
 5. `import_svg(sketch_id, path)` はSVGの図形を**いま開いているスケッチへ**足す（新しいスケッチは作らない —— 無ければ先に
-   `sketch_create`）。戻り値は足した `entity_ids` と `region_count`。**領域は1枚のSVGに複数あるのが普通**（文字の内側の穴・離れた
+   `sketch_create`）。戻り値は足した `entity_ids`・`region_count`・`size_mm`（幅・高さ mm）・`skipped`（落とした文字・画像・非表示の図形の数の文。無ければ空）。単位は mm（in・pt・pc は換算、物理単位が無ければ 1px=1mm）。**領域は1枚のSVGに複数あるのが普通**（文字の内側の穴・離れた
    図形）なので、押し出す前に `describe_document(include_regions=True)` で面積を見て選ぶ
 6. 取り消すのは `undo`（UIと同じ履歴）。**戻せるのは形を変えた操作だけ**で、可視性の切り替え・選択の変更・起動中のコマンドは履歴に載っていない
 7. 人と一緒に1つの verb を進めるなら `begin_command(verb)` → `set_selection` で止める（半径と確定は人に残す）。人が起動した verb は
