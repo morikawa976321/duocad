@@ -551,6 +551,9 @@ export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
     if (dx === 0 && dy === 0 && nx * ny > 1) {
       return { ok: false, reason: '間隔が両方0(複製が元と重なる)' }
     }
+    // 片方向だけ間隔0で個数が2以上だと、その方向の1つ目の複製が元と重なる(コアが断る)。
+    if (dx === 0 && nx > 1) return { ok: false, reason: 'X間隔が0でX個数が2以上(複製が元と重なる。X間隔を0以外にするかX個数を1にする)' }
+    if (dy === 0 && ny > 1) return { ok: false, reason: 'Y間隔が0でY個数が2以上(複製が元と重なる。Y間隔を0以外にするかY個数を1にする)' }
     if (nx === 1 && ny === 1) return { ok: false, reason: 'X個数かY個数を2以上にする(1×1は反復にならない)' }
     return { ok: true, args: { entities, dx, dy, nx, ny } }
   },
