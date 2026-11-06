@@ -291,6 +291,7 @@ MCP（AI）へ（重い三角形は入れない）:
   "request_id": "...", "document_revision": 123, "units": "mm",
   "target": {"mode": "visible_all", "selected": [], "bodies": ["<body_id>", ...], "excluded_hidden": 0, "pairs": 351},
   "clearance": 0.2, "method": "gf2+distance", "seconds": 8.7, "complete": true, "not_started": 0,
+  "child_restarts": 0, "timeouts": [],
   "thresholds": {"thickness_mm": 0.001, "gap_band_mm": 1e-6},
   "counts": {"overlap": 2, "tiny_overlap": 20, "contact": 31, "separated": 298, "unknown": 0,
              "short": 58, "at": 14, "ok": 279, "clearance_null": 0},
@@ -306,6 +307,7 @@ MCP（AI）へ（重い三角形は入れない）:
 ```
 
 - `counts` は対象の全組（境界箱の段で離れていると分かった組を含む）を母数にする。
+- `child_restarts` は子を立て直した回数、`timeouts` は期限切れになった組と段（`phase` は `relation` か `distance`）。
 - 測れなかった値は `null` と理由。0 で埋めない。`separated` で `clearance` が ok（または問われていない）組は `pairs` に入れない（件数だけ）。
   接触・微小重なり・unknown は省かない。
 - 画面へは同じ内容に、描画用の三角形（画面の分割の細かさ）を足して、要求した接続にだけ返す: overlap と tiny_overlap の重なりの立体、
@@ -399,9 +401,9 @@ astra の意見（要旨）と AI の採否:
 
 ## 実装計画
 
-1. **カーネル**: `duocad/kernel_interference.py` を足す（OCP を import してよい一覧 `tests/test_boundaries.py` に加える。`kernel.py` は
-   1,682 行で、足さない）。`pair_relation(a, b) -> dict`（2体 GF・非破壊・像の共有・重なりの体積と厚さと有向箱・接触の種類と面積・警告の
-   名前）、`min_distance(a, b) -> dict`（`SetMultiThread(True)`。形全体で落ちたら面の対ごと、対で落ちたら縁の点から。どの段で測ったかを返す）、`loose_bbox(shape)`、`overlap_triangles(pieces, deviation)`。
+1. **カーネル**: `duocad/kernel_interference.py` を足す（OCP を import してよい一覧 `tests/test_boundaries.py` に加える。`kernel.py` には
+   足さない）。`pair_relation(a, b) -> dict`（2体 GF・非破壊・像の共有・重なりの体積と厚さと有向箱・接触の種類と面積・警告の
+   名前）、`min_distance(a, b) -> dict`（`SetMultiThread(True)`。形全体で落ちたら面の対ごと、対で落ちたら縁の点から。どの段で測ったかを返す）、`overlap_measures(pieces)`、`triangles(shape, deviation)`、`box_gap`。ゆるい境界箱は `brep_geometry._interference_loose_bbox`。
    `BOPAlgo_BOP.PDS()` / `PPaveFiller().DS()` に触らないことをコメントに書く。
 2. **メッシュ**: `duocad/interference_mesh.py`（manifold3d。OCP なし）。B-rep の0.01 mm分割は `topopt.finalize.tessellate_body` を使う。
 3. **組み立て**: `duocad/interference.py`（OCP なし）。開始時に「文書の版・対象のボディ ID・可視性・選択・形の写し」を1つのスナップショットに
@@ -479,7 +481,7 @@ OCP・manifold3d 一般の罠（BOP の破壊モード・`PDS()` で落ちる・
 
 | 段 | モジュール | 中身 |
 |---|---|---|
-| カーネル | `duocad/kernel_interference.py`（OCP） | `pair_relation`（2体 GF・非破壊・像の共有・領域ごとの 2V/A と有向箱・重心と箱・描画用の三角形/折れ線/点）、`min_distance`（形全体 → 面の対ごと → 縁の点）、`loose_bbox` |
+| カーネル | `duocad/kernel_interference.py`（OCP） | `pair_relation`（2体 GF・非破壊・像の共有・領域ごとの 2V/A と有向箱・重心と箱・描画用の三角形/折れ線/点）、`min_distance`（形全体 → 面の対ごと → 縁の点）、`overlap_measures`・`triangles(shape, deviation)`・`box_gap`（境界箱の間の距離。箱そのものは `brep_geometry._interference_loose_bbox`） |
 | メッシュ | `duocad/interference_mesh.py`（manifold3d） | `mesh_pair`: 交差の体積が正（小さい方の体積の 1e-9 倍超）なら重なり、連成分ごとに 2V/A と頂点の主成分箱の最小辺を測り、最も厚い成分を返す。体積 0 なら `min_gap`（探索幅 `max(1, 2·(clearance+ε))`）が ε 以下で接触、より大きければ離れている（探索幅で頭打ちなら `distance_lower_bound`） |
 | 組み立て | `duocad/interference.py`（OCP なし） | 引数の検査・対象の決め方（`resolve_targets`）・スナップショット・分類（`classify_relation` / `classify_clearance`）・実行（`run`）・結果 |
 | 子プロセス | `duocad/interference_worker.py` | 親側の `WorkerProcess`（共通の `duocad/worker_process.py` に `load` を載せたもの。JSON 行の線・上限つきの待ち・取り消しは共通の側）と子の本体（`python -m duocad.interference_worker`）。同じ口の `InProcessWorker`（軽い形の試験用） |

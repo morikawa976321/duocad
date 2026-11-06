@@ -8,14 +8,14 @@
 
 ## 選択参照の同一性(`duocad/selection.py` / `web/src/commands/command.ts`)
 
-- **参照の同一性の鍵は `selection.ref_key(ref) -> tuple` の1箇所だけ**。形は region `("region", sketch, int(index))` / sketch_entity `("sketch_entity", sketch, entity, point)` / body `("body", body)`(添字を見ない)/ face・edge・vertex `(kind, body, int(index))`。参照の形でなければ `ref_kind` と同じ `ValueError`。等価判定は `ref_key(l) == ref_key(r)`。TS 側は `refKey(ref): string` で、`sameRef` はその一致で定義。
+- **参照の同一性の鍵は `selection.ref_key(ref) -> tuple` の1箇所だけ**。形は region `("region", sketch, int(index))` / sketch_entity `("sketch_entity", sketch, entity, point)` / body `("body", body)`(添字を見ない)/ datum `("datum", 名前)` / face・edge・vertex `(kind, body, int(index))`。参照の形でなければ `ref_kind` と同じ `ValueError`。等価判定は `ref_key(l) == ref_key(r)`。TS 側は `refKey(ref): string` で、`sameRef` はその一致で定義。
   - 等価判定を種別ごとの分岐として書き直さない(集合引きの重複除去と別の規則になり、**どちらも例外を出さないまま**重複が残る／別物が同一視される)。TS 側は `tests/eval_selection_ref_key.mjs` が押さえる。
   - 種別は鍵の第1要素だけが持つ。face/edge/vertex の鍵に `ref["kind"]` を重ねない(重ねると「種別を鍵から抜く」変異がもう一方に吸収され検査で示せない。意図的に3要素)。
   - `provenance` は鍵に入れない／`index` は `int()` に正規化／`point` は `.get()` で欠落と `None` を畳む。TS 側の `point` は `p` を付けて書く(`null` と空文字の点名を畳まないため)。
 - **`modify_selection` の並び順は不変**: 追加は末尾に足すだけ、除去は残りの相対順序を保つ。既存参照の再 add で位置が動くと `fillet` の辺リストと半径リストの対応がずれる。
 - **依存禁止**: `ref_key` の戻り値をシリアライズして保存しない／鍵の順序に意味を持たせない(並び順の正は `Selection.items` のリスト順)／TS `refKey` の文字列書式に外から依存しない(いま使うのは `CommandHost.svelte` の `selectionPrint`=再送判定の指紋だけ)。
 - **罠**: `_coerce_ref` を通った body 参照は必ず `index: None` を持つので、「body の鍵に `index` を足す」変異は `modify_selection` 経由の検査では1件も落ちない。`ref_key` を直接叩いて `{"kind":"body","index":7}` を渡す検査が要る。
-- **性能の測り方**: `modify_selection` の重複判定を鍵引きにして約810ms→0.8ms、残りは全部 `kernel.face_count`(M=2835 で 51.1ms)。fresh 起動5回の中央値で 1037ms→47.3ms。測るときは**プロセス1回につき1計測の fresh 起動5回の中央値**で見る(in-process の繰り返しは暖まりで 5〜15ms にばらつく)。
+- **性能の測り方**: `modify_selection` の重複判定を鍵引きにして約810ms→0.8ms、残りは全部 `brep_topology.face_count`(M=2835 で 51.1ms)。fresh 起動5回の中央値で 1037ms→47.3ms。測るときは**プロセス1回につき1計測の fresh 起動5回の中央値**で見る(in-process の繰り返しは暖まりで 5〜15ms にばらつく)。
 
 ## プレビュー要求の寿命(`web/src/previewController.ts`)
 
@@ -37,9 +37,9 @@
 
 ## 面数・辺数のカウントのキャッシュ(`selection._coerce_refs`)
 
-- `_coerce_refs(doc, refs, *, bodies=None, counts=None, allow_hidden=False)` は face/edge/vertex 参照を `(body_id, kind)` ごとに `kernel.face_count` / `edge_count` / `count_subshapes` を1回だけ呼んで使い回す。戻り値・例外の型とメッセージは `_coerce_ref` を1件ずつ呼んだときと同じ。モジュール内部関数(外から直接呼ぶ経路を増やさない)。戻りは入力 `refs` と1対1・同順。
+- `_coerce_refs(doc, refs, *, bodies=None, counts=None, allow_hidden=False)` は face/edge/vertex 参照を `(body_id, kind)` ごとに `brep_topology.face_count` / `edge_count` / `count_subshapes` を1回だけ呼んで使い回す。戻り値・例外の型とメッセージは `_coerce_ref` を1件ずつ呼んだときと同じ。モジュール内部関数(外から直接呼ぶ経路を増やさない)。戻りは入力 `refs` と1対1・同順。
 - **`modify_selection` は `add` 用・`remove` 用の2回の `_coerce_refs` 呼び出しへ同じ `bodies`/`counts` 辞書を渡す**(引数の副作用で共有)。新しい辞書だと同じボディの面が混ざったとき最大2回数える(実物27ボディで `_face_map` 42回→27回)。`set_selection` は単発なので既定でよい。
-- **可視性の門番は参照ごとに必ず通す**(`bodies` に入っているボディでも `visible` を見る。辞書は `allow_hidden` の違う呼び出しの間で共有されうる)。キャッシュしてよいのは数え上げであって門番ではない(不可視ボディへの参照が通ると AI が人の隠したものを黙って選ぶ)。門を外すのは外す側(`modify_selection` の `remove`・`toggle_selection` で選択に入っている参照)だけ: 隠したボディの項目は選択に残るので、外せないと「いまの選択を外して新しく選ぶ」が丸ごと拒否される。`tests/test_face_count_once_per_body.py` の `test_hidden_body_face_ref_is_refused_through_{modify,propose}_selection` が押さえる。
+- **可視性の門番は参照ごとに必ず通す**(`bodies` に入っているボディでも `visible` を見る。辞書は `allow_hidden` の違う呼び出しの間で共有されうる)。キャッシュしてよいのは数え上げであって門番ではない(不可視ボディへの参照が通ると AI が人の隠したものを黙って選ぶ)。門を外すのは外す側(`modify_selection` の `remove`・`toggle_selection` で選択に入っている参照)だけ: 隠したボディの項目は選択に残るので、外せないと「いまの選択を外して新しく選ぶ」が丸ごと拒否される。`tests/test_face_count_once_per_body.py` の `test_hidden_body_face_ref_is_refused_through_modify_selection` が押さえる。
 - **キャッシュ鍵は `(body_id, kind)` の両方**。`kind` を落とすと面数と辺数が入れ替わる(既存 pytest が捕まえる)。`body_id` を落とすと違うボディの面数が使い回される(**`two_shapes` fixture(箱+円柱)でしか捕まらない**)。
 - **キャッシュの寿命は「1回の呼び出し」のローカル変数**。`kernel.py`・モジュールレベル・`Document`/`Body` レベルへ持ち出さない。
 - **検査設計の罠**: 既存 pytest は全 fixture が同一寸法の箱(面6/辺12/頂点8)で、違うボディの面数の取り違えを検出できなかった。fixture を増やすなら**形状の種類まで変える**(寸法違いの箱では検出力は上がらない)。「1回の呼び出しで」という条件があるときは、内部で同じ処理を複数回行う経路(`add`/`remove` の2回)を洗い出して検証する。
@@ -56,7 +56,7 @@
 
 - `screenPick.ts` は three.js 非依存の純関数。`distSqPointSegment`(t を [0,1] に clamp、長さ0でも0除算しない)・`pickNearestWithinRadius`(**半径は inclusive**、**同着は先に来た候補が勝つ**、`NaN` の `distSq` は最短を横取りしない)・`perspectiveParam`(画面上の位置を3Dの位置へ戻す透視補正)・`rankByOverlap`(同じ細かさの候補を並べる。スケッチの的に重なりの幅を足し、同着は鍵の順)。`polylinePick.ts` が world → screen の射影と折れ線の歩き方を持ち、距離と一緒に狙われた3Dの点を返す(`closestOnPolyline`。遮蔽の判定がその点へ視線を引く)。`polylineOf` は `{count, at(index,out)}` を返し world 座標配列を作らせない。
 - **当たり半径は画面上の CSS px**。`EDGE_PICK_PIXELS`=6 / `VERTEX_PIXELS`=4 / `SKETCH_HANDLE_PIXELS`=7、重なりの幅 `PICK_OVERLAP_PIXELS`=2。world 空間の threshold を Raycaster へ渡す形へ戻さない(`tests/eval_screen_pick.mjs` 等が視点を動かしても 2px hit / 12px miss が変わらないことを固定)。
-- **ホバー・クリック・`project*`・矩形選択は同じ種類(`pickKinds`)と同じ遮蔽で判定する**。`project*` は `resolveHit` で「その画素で本当にそれが取れるか」を確かめてから返す(面の `project` も。辺・頂点・スケッチの線が近くて取られる画素は返さない)。矩形選択だけは遮蔽を奥行きの読み出し(`occlusion.snapshot`)で引く。
+- **ホバー・クリック・`project*`・矩形選択は同じ種類(`pickKinds`)と同じ遮蔽で判定する**。`project`・`projectEdge`・`projectBasePlane` は `resolveHit` で「その画素で本当にそれが取れるか」を確かめてから返す(面の `project` も。辺・頂点・スケッチの線が近くて取られる画素は返さない)。`projectSketchPoint` は射影だけで確かめない。矩形選択だけは遮蔽を奥行きの読み出し(`occlusion.snapshot`)で引く。
 - **依存禁止**: `Line2`(スケッチの図形)の `geometry.getAttribute('position')` を折れ線だと思わない(太線描画用の箱テンプレート8頂点)。world 座標の点列は `sketchLayer.ts` の `buildEntityLine` が入れる `userData.polylineWorld: THREE.Vector3[]`(矩形選択も同じものを読む)。`worldPerPixel()` は当たり判定の正ではない(遮蔽の許しは `occlusion.pixelAt` = その点の奥行きでの1画素)。`resolveHit` はホバーから毎フレーム走る(ポインタ・カメラ・世代が変わったときだけ)。
 - **辺・頂点のデータはボディごと**(`viewport.setBodyEdges` / `setBodyVertices`)。渡すのは今の形のものだけ(`App.svelte` の `sameShape`: 版 `revision` は粗さでも上がるので、頼んだ時点の形の版 `shape_revision` で照らす)。メッシュボディは空で渡す(辺・頂点を持たない。待ち続けないため)。
 - **未確認の手動受入**: 斜め視点で bezier に沿ったホバー、27部品モデルで狙った辺が取れること。
@@ -72,12 +72,12 @@
 
 - 待っている種類は起動中に指せる種類へ足す(`pickKinds` = 選択の引数の種類 ∪ 待っている種類)。待ち受けは素のクリックだけを食い、修飾キー付きのクリックは対象の選択を足し外しする(`onPick`)。
 - ピックで指したもの(配信された `command.args` の参照。ボディ・面・辺・頂点・スケッチの点と線)は選択と同じ強調で光らせる(`App.svelte` の `pickedRefs`。スケッチの点・線は `buildSketchDraws` の `picked`)。選択には入れない。
-- メッシュボディのピックは `App.svelte` の `pickedRef` でボディ参照へ畳む(畳まないと `modify_selection` が断り、ドラッグの一括選択が丸ごと落ちる)。`dedupeRefs` を外さない(重複 `{kind:"body"}` が `modify_selection` へ並ぶ)。**スケッチを貼る先だけは畳まず断る**。詳細は ui-optimize-integration.md。
+- メッシュボディのピックは `App.svelte` の `pickedRef` でボディ参照へ畳む(畳まないと `modify_selection` が断り、ドラッグの一括選択が丸ごと落ちる)。`commands/grain.ts` の `foldRefs`(App の `foldUnits` 経由)の重複除去を外さない(重複 `{kind:"body"}` が `modify_selection` へ並ぶ)。**スケッチを貼る先だけは畳まず断る**。詳細は ui-optimize-integration.md。
 
 ## 分割モジュール(`viewport.ts` と兄弟)
 
 - 分割の形は `planeGrid.ts` と同じ: `create*(deps)` がハンドルを返し、three.js オブジェクトは `object` として渡すだけ。親シーンへの `scene.add` は `viewport.ts` 側が行い、スケッチ内の線・点の `renderOrder` は `sketchLayer.ts` が揃える。分割先から `viewport.ts` を import しない(逆向き依存ゼロ)。`viewCubeOverlay.ts` だけは同一 canvas に第2パスを描くので `renderer` を直接受け取る。
-  - 兄弟: `viewportTypes.ts`(App に見せる型と `Viewport` IF)/ `viewportConstants.ts`(色・`LAYER`・深度バイアス・`FOV_*`・当たり判定画素・基準平面表)/ `viewCubeOverlay.ts` / `optimizeAnnotations.ts` / `optimizeDebug.ts` / `solidFeatures.ts`(ボディの辺・頂点の当たりと描画)/ `occlusion.ts`(遮蔽)/ `polylinePick.ts` / `selectionBand.ts` / `ghostLayer.ts` / `sketchLayer.ts` / `gridPlanes.ts` / `sketchCursorOverlay.ts`。`viewport.ts` は約2,500行。足す前に切れ目を探す(CLAUDE.md「ファイルの大きさ」)。
+  - 兄弟: `viewportTypes.ts`(App に見せる型と `Viewport` IF)/ `viewportConstants.ts`(色・`LAYER`・深度バイアス・`FOV_*`・当たり判定画素・基準平面表)/ `viewCubeOverlay.ts` / `optimizeAnnotations.ts` / `optimizeDebug.ts` / `solidFeatures.ts`(ボディの辺・頂点の当たりと描画)/ `occlusion.ts`(遮蔽)/ `polylinePick.ts` / `selectionBand.ts` / `ghostLayer.ts` / `sketchLayer.ts` / `gridPlanes.ts` / `sketchCursorOverlay.ts`。`viewport.ts` は約2,700行。足す前に切れ目を探す(CLAUDE.md「ファイルの大きさ」)。
 - `sketchLayer.ts` は描画指示・構築鍵・線/点/領域・材質・印・幽霊の唯一の所有者。viewport は `get`/`entries`/`values` から参照を借り、破棄や材質の差し替えを直接行わない。版が同じなら `update` は false、構築・除去があれば true を返し、viewport がホバー・内容・視錐台・グリッドを更新する。ピック統合とゲートは viewport に残す。
 - **公開面を増やさない**: `viewport.ts` の `export` は `createViewport` + `Viewport` + 型 + `FOV_DEFAULT/FOV_ORTHO` + `isSelectableFov`。新モジュールの `create*`/`*Deps` を再エクスポートしない。`viewportConstants.ts` を `App.svelte` から import しない。three.js の型を Svelte 層へ出さない不変条件は「`viewport.ts` とその兄弟群の外へ出さない」。
 - **`camera` は `let` で、投影切替(`activateCamera`)のたびに差し替わる**。`viewCubeOverlay` と `occlusion` は値ではなく `camera()` ゲッターで受け、各関数の先頭で `const camera = deps.camera()` を取る。値で渡すと正投影へ切り替えた後も古いカメラを使い続け、**型検査も実機 smoke も通ったまま**「見えている角をクリックしたのに隣が取れる」になる。

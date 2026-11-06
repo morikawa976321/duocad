@@ -6,7 +6,7 @@
 両者が同じ選択集合を交互に触れるようにしたモデリングツール。**
 差別化はUIでも機能数でもなく **交互操作**（AIが集合を選ぶ → 人が過不足を直す → AIが操作を適用）にある。
 
-このREADMEは開発を再開するときの入口である。単位は mm 固定。
+この文書は開発を再開するときの入口である。単位は mm 固定。
 
 **制作に使うときは [docs/MANUAL.md](MANUAL.md)**（制作用の安定版と開発用の使い分け）。
 
@@ -37,8 +37,8 @@ UIとAI操作の両方に共通する設計原則。verbを足す・直すとき
    (2) howの入力がある（点から導ける寸法欄 `NumberArgSpec.fromPoints` は how ではない）のどちらかだけで、
    どちらでもなければ最後のクリックで即適用。正は `web/src/commands/command.ts` の `needsEnter`、
    顔ぶれは `tests/test_ui_command_wiring.py` が固定する。
-4. **エラーはすべてトーストで見せる**（`web/src/Toast.svelte`）。情報（読み込んだ部品数等）は画面に出さず
-   `window.__duocad.messages` で読めるだけ。
+4. **エラーはすべてトーストで見せる**（`web/src/Toast.svelte` の `fail`）。見落とされると困る知らせ（取り消した・更新した等）は `inform` の札で出し、
+   それ以外の情報（読み込んだ部品数等）は画面に出さず `window.__duocad.messages` で読めるだけ。
 5. **コメントは、コードに現れない制約だけを書く。** [CLAUDE.md](../CLAUDE.md) §コメント。
 
 AI側の対応する規則は [MCP.md](../MCP.md)「AIはどこまで自分でやるか」が正。画面側の判断は [docs/UI.md](UI.md)。
@@ -189,7 +189,7 @@ cd web; npm run dev                                 # 画面(5173)
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
 
-**各スクリプトが自分で `duocad.mcp_server` を立てて、終わったら止める**ので、コマンドを1本ずつ叩くだけでよい。
+**各スクリプトが自分で `duocad.mcp_server` を立てて、終わったら止める**（`smoke-section-stencil.mjs` だけはバックエンドを使わず Vite で配る）ので、コマンドを1本ずつ叩くだけでよい。
 **毎回まっさらな文書で始まる**。ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すれば最優先）。
 何を smoke に書くか・書かないかは [docs/SMOKE_TESTING.md](SMOKE_TESTING.md)。
 
@@ -210,7 +210,7 @@ Get-ChildItem scripts/smoke*.mjs | ForEach-Object {
 
 STEPを読む smoke（`smoke-face-culling.mjs`）は `web/scripts/models.mjs` の `PC_CASE_STEP` が指すパスを使う。
 骨格は `web/scripts/harness.mjs` の `runSmoke`（使い捨ての `--models-dir`、OSが選ぶ空きポートなので並列可。
-`--port` / `--http-port` / `--timeout` は全本が読む）。
+`runSmoke` を使う本は `--port` / `--http-port` / `--timeout` を読む）。
 
 **verb ごとの画面の検査は持たない。** AI側とコアの契約は pytest（`tests/test_mcp_verbs.py` ほか）、
 TS の純関数は `tests/eval_*.mjs`、幽霊とコアの確定結果の一致は `tests/test_ghost_agreement.py` が持つ。
@@ -265,7 +265,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 | `"mesh"` | `Body.mesh`（`Mesh` = 頂点＋三角形。不変） | **表示 / STL書き出し / 削除 / 表示の切り替え / 名前の変更だけ** |
 
 **メッシュボディに編集verbを効かせない**（理由は `duocad/meshbody.py` のモジュールdocstring）。断りの文言は
-`meshbody.reject` の1箇所、門は `verbs/_common.editable_body` と `verbs/extrude._resolve_target` の2つ。
+`meshbody.reject` の1箇所。編集 verb の門は `verbs/_common.editable_body`（押し出し・回転体・ロフトは `verbs/extrude._editable_target` 経由）で、
+選択・述語・スケッチを貼る面・形状最適化の保持/除外の入口も `meshbody.reject` を呼ぶ。
 
 - **扱いは「名指ししたら断る / 導出した集合からは黙って外す」。** 根拠は「呼び出し側が何を主張したか」——
   面・辺・頂点を指す選択・`predicates` の `body` 明示・保持/除外ソリッドへの割り当ては名指しなので断り、
@@ -281,7 +282,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 
 ### 形状最適化を走らせる
 
-条件を置く4 verb（`set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads`）の続きが
+条件を置く5 verb（`set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads`）の続きが
 `duocad/optimize_run.py` で、結果は `add_mesh_body` で文書へ入る。詳細は [docs/TOPOPT.md](TOPOPT.md)「設計と画面」。
 
 - **MCPには同期の `run_optimization` を開けていない**（進捗・中断を運べない）。画面は WebSocket の protocol 口
@@ -295,7 +296,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py` から切り出した `kernel_*.py` と `mesh_geometry.py`。一覧は下の表）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層（`kernel.py`・そこから切り出した `kernel_*.py`・共通層 `brep_*.py` と `mesh_geometry.py`。免除の一覧の正は `tests/test_boundaries.py` の `OCP_ALLOWED`）と `topopt/voxelize.py` だけ、`build123d` は `query.py` だけ。**
 `tests/test_boundaries.py` がソースを静的走査して検査する（動的importも検出）。
 `topopt/`・`optimize_steps.py`・`optimize_voxels.py` は実行器 `optimize_run` と文書アダプター `optimize_acceptance` を import しない。
 
@@ -315,6 +316,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 | `duocad/svg_import.py` | SVG → スケッチの図形（svgelements は build123d の推移依存で既に入っている） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
 | `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
+| `duocad/brep_{topology,geometry,checks,history,operations,planar}.py` | カーネルの共通層（位相・幾何量・形状検査・由来・ブーリアン・平面。`kernel` と `kernel_*` が使う） | **○** | ✗ |
 | `duocad/kernel_brep.py` | BRep保存・`inspect_solid`・箱/格子との共通体積 | **○** | ✗ |
 | `duocad/kernel_chains.py` | 辺の連なり（フィレット・面取りで1本として振る舞う辺の組）と、フィレットの事前検査 | **○** | ✗ |
 | `duocad/kernel_overflow.py` | はみ出し・貫通を吸収するフィレット（丸めの肉を別に作って足し引きする。[docs/FILLET_OVERFLOW.md](FILLET_OVERFLOW.md)）。kernel から呼ばれるだけの一方向 | **○** | ✗ |
@@ -325,7 +327,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tools\gate.ps1 [-Only 段,...] [-S
 | `duocad/kernel_shell.py` | シェル（中空化）の幾何（`shell_solid`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_thread.py` | ねじ山の幾何（山形・隙間の上下限と既定・`thread_face`。[docs/THREAD.md](THREAD.md)）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_face_edit.py` | 面の削除・面のオフセットの幾何と関門（[docs/FACE_EDIT.md](FACE_EDIT.md)）。kernel を読むだけの一方向 | **○** | ✗ |
-| `duocad/kernel_worker.py` | 面の削除・オフセットを常駐の子プロセスで計算する口（形は BinTools の base64 で渡す） | **○** | ✗ |
+| `duocad/kernel_worker.py` | 面の編集（削除・オフセット）・フィレット・面取り・シェルを常駐の子プロセスで計算する口（形は BinTools の base64 で渡す） | **○** | ✗ |
 | `duocad/worker_process.py` | 重い計算を子プロセスで走らせる共通の部品（起動・1行1 JSON の線・時間の上限・取り消し・作り直し。干渉チェックと面の編集が使う） | ✗ | ✗ |
 | `duocad/kernel_split.py` | ボディを平面で割る幾何（`split_by_plane`）。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_project.py` | ソリッドの辺・面・外形をスケッチ平面へ写す幾何（`edge_entities` / `face_edges` / `outline_entities`）と、平面との交わり（スケッチの吸着先。`section_guides`）。kernel を読むだけの一方向 | **○** | ✗ |
@@ -381,7 +383,7 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](WEB_PITFALLS.md)。
 | `web/src/commands/CommandHost.svelte` | コマンド層の骨格（起動→引数収集→プレビュー→Enter/Esc・即適用）。verbごとに作り直さない |
 | `web/src/commands/{command,sketch,features,files,moveMode}.ts` | 各コマンドの引数の集め方の定義だけ（Enter要否はここから導出） |
 | `web/src/{Browser,Files,Optimize,SelectionInfo}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ） |
-| `web/src/Toast.svelte` | エラーの札。`fail(message)` の1本だけ |
+| `web/src/Toast.svelte` | エラー（`fail`）と知らせ（`inform`）の札 |
 | `web/src/AiPanel.svelte` | AIパネル。文書は描かない |
 | `web/src/SettingsDialog.svelte` | 設定ダイアログ。native `<dialog>`（非モーダル）。一度決めたら触らない設定だけ |
 | `web/src/viewSettings.ts` | 画面設定のlocalStorage。クライアント側だけの設定で、文書の状態は入れない |
@@ -437,9 +439,9 @@ three.js / Svelte / DOM の罠は [docs/WEB_PITFALLS.md](WEB_PITFALLS.md)。
 ```
 duocad/
   .mcp.json              Claude Code向けのMCP登録（projectスコープ）
-  README.md              ← このファイル（入口）
+  README.md              外から読む人向けの案内
   MCP.md                 MCPサーバの仕様と登録手順
-  docs/                  設計判断・形状最適化ほか。索引は docs/README.md
+  docs/                  開発ガイド DEVELOPMENT.md（入口）・設計判断・形状最適化ほか。索引は docs/README.md
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール。net/ はアプリ層との接点、
                          agent/ はアプリ内AIエージェント。役割は §4 の表
   tests/                 pytest

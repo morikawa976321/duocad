@@ -223,7 +223,7 @@ geometry 71個・material 8個は各1回破棄、シーンのスケッチ子オ�
   文字列で繋ぐと全体が1文字2〜4バイトへ広がって写し直されること、バイト列でも 14 MB の確保と写しが連結1回ごとに 5 ms
   かかること、書き込みの改行変換だった。
 - 画面の操作(`Session.background_autosave()`)では中身を確定した後、書き込みだけを1本の書き手スレッドへ回し、応答・
-  配信の後に待つ。ファイルに触る口は先に待つ(`_drain_writes`)。保存の状態が変わったら(失敗・回復)配り直す。
+  配信の後に待つ。ファイルに触る口は先に待つ(`duocad/autosave.py` の `Autosaver.drain`)。保存の状態が変わったら(失敗・回復)配り直す。
 
 | 物差し | 前 | 後 |
 |---|---|---|
@@ -270,10 +270,10 @@ geometry 71個・material 8個は各1回破棄、シーンのスケッチ子オ�
 | 半径を続けて打ち直したときの投機実行の回数 | 打った回数 | 最後の1回(+走り始めていた1回) |
 
 残り: 往復の大半は、ワーカーが GIL を握ったまま走る OCP の呼び出しを待つ時間。50 ms 未満にするには
-プロセスを分ける必要があり、面の削除・オフセットだけ子プロセスで計算している(`duocad/kernel_worker.py`。子の管理は干渉チェックと共通の
-`duocad/worker_process.py`。形は BinTools で渡す。
-[FACE_EDIT.md](FACE_EDIT.md)「子プロセス」)。ほかの verb は移していない。カメラ由来の測り直し(テセレーション)と verb の確定は
-ループ上のまま(#166 で減らす)。
+プロセスを分ける必要があり、子プロセスで計算するのは面の編集(削除・オフセット)・フィレット・面取り・シェル
+(`duocad/kernel_worker.py` の op `face_edit` / `blend_edges` / `shell`。子の管理は干渉チェックと共通の `duocad/worker_process.py`。
+形は BinTools で渡す。[FACE_EDIT.md](FACE_EDIT.md)「子プロセス」)。カメラ由来の測り直しは `net/refinement.py` の
+`BackgroundRefinement`(6章)でループの外。押し出し・ブーリアン・面の分割(テセレーション)はこのプロセスの中で走る。
 
 ### #171 1ボディ1メッシュにし、必要なときだけ描く
 
@@ -428,9 +428,9 @@ QR1 の最大ボディ:
 ### 変えたところ(どこに何があるか)
 
 - 形状リストの取り出し `brep_topology.listed`、ブーリアンは1回だけ `brep_operations.build_boolean`、由来は面ごとに直接
-  `brep_history.maker_successors`、体積は形の同一性で `brep_geometry._volume_props` / `note_volume`、BRepCheck は並列
-  `brep_checks._analyzer_valid`、面の統合は安い判定から `brep_operations.unify_same_domain`
-- 押し出しの結果を覚える `verbs/extrude.py` の `_extruded_regions` / `_extruded_faces`(領域の面の鍵は `kernel.shapes_digest`)
+  `brep_history.maker_successors`、体積は形の同一性で `brep_geometry._volume_props` / `note_volume`、BRepCheck は直列
+  `brep_checks._analyzer_valid`(並列は同じ形を時々不正と答える。7章)、面の統合は安い判定から `brep_operations.unify_same_domain`
+- 押し出しの結果を覚える `verbs/extrude.py` の `_region_build` / `_face_build`(`kernel.remembered` で覚える。領域の面の鍵は `kernel.shapes_digest`)
 - 面の性質を面の同一性で `kernel._face_traits`、三角形を借りる `view.DocumentView._borrow_faces`(同一性・子の対 `kernel.note_kept_faces`・
   写しの添字・位置の差 `kernel.moved_face` / `transformed_face`)、配信の省略は serial で `net/wire.py` と `web/src/wire.ts`
 - プレビューは元の形で測った面を借りる `kernel.tessellate_reusing`、子へ入力の体積を渡す `kernel_worker`
@@ -528,7 +528,8 @@ Node で 23.8 万三角形が 610 → 47 ms。
 - **並列の BRepCheck が同じ形を時々「不正」と答える**(6章で並列にした): ねじを刻んだ円錐の面取りの結果を、並列 60 回中 1 回「不正」
   (Windows)、Linux で 200 回中 8〜11 回。直列に戻した(733 面で 77 → 153 ms。QR1 の押し出し・フィレットの確定が 35〜80 ms 遅くなる)。
 - **表示用の三角形分割が載ったボディへの和で、ボディが消える**: MCP の確定で、22 面・1,726.3 mm³ の join が 6 面・8.41 mm³ になった
-  (開き直すと正しい)。6章より前からある。ブーリアンの入力から三角形分割を外して直した。
+  (開き直すと正しい)。6章より前からある。ブーリアンの入力から三角形分割を外して直した(`brep_operations.build_boolean`)。
+  画面へ配る三角形分割も、取り出した後に `BRepTools.Clean_s` で文書の形から外す(`kernel.tessellate`)。
 
 ### 本人の部品(QR1)
 
@@ -542,4 +543,3 @@ QR1 は穴の多い平面を持たないので、今回の改善の多くは効�
 - 穴の多い平面の分割そのもの(1 面 1〜2 秒)。Delabella の案(上)は入れられないと分かった。配信の角度は偏差 0.0372 で 0.15 rad で、
   小さい穴の点の数を角度が決めている(`resolution.angular_for_deviation`)。
 - GIL: 重い面の分割の間は、ワーカーの外でも画面と MCP が待つ。面の分割を子プロセスへ出すのが根本の手。
-- 表示用の三角形分割を文書の形に残さない(今回はブーリアンの入口で外しただけ。フィレット・面の編集・分割の子へ渡す形にも乗る)。

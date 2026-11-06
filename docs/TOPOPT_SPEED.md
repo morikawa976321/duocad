@@ -64,7 +64,7 @@
 ## 前の形の変位をCGの初期値にすると効くか(2026-09-19)
 
 段階4は合格形状から少しずつ削るので、前の形の変位が次の候補の初期値(warm start)になりうるかを測った。**2026-09-21に本人判断で削除した**
-(配線・測定スクリプト一式。`1d9bcea`)。`Model.solve(u0=)` の口自体は残るが、探索からは渡さない。
+(配線・測定スクリプト一式。`1d9bcea`)。`u0`(初期値)を受ける口も無い(`fem.py` の `Model.solve` / `solve_many` / `PreparedSystem.solve` は取らない)。
 
 - 探索を経ていない写しただけの形では、1セル削るときwarm startがcoldの反復数を1/50程度まで減らしたが、これは「エネルギーほぼ0のセルの在庫」を
   最初の数手で使い切っているだけで、実際の探索(エネルギーの低いセルから順に削る)では比は0.8〜0.9(ほぼ効果なし)。
@@ -271,4 +271,4 @@ m=5 の一口(起点 1 セル + 巻き添え 44〜115 セル)が部材を落と�
 | `duocad/topopt/acceptance.py` | `RegionOverlaps`(保持・除外の前計算)・`region_check(overlaps=)` |
 | `duocad/kernel_brep.py` | `grid_cell_common_volumes`(平面で切ってセルごとの共通体積)・`box_common_volume` |
 
-この文書の実測に使った測定スクリプト(`topopt_checks/measure_*.py`・`_hanger_setup.py`)は一度きりの調査用で削除済み。再現する場合は同等のスクリプトを新たに書く。
+この文書の実測に使った測定スクリプト(`_hanger_setup.py` と、`measure_direct_vs_cg.py` ・`measure_region_overlaps.py` などの `measure_*.py`)は一度きりの調査用で削除済み。再現する場合は同等のスクリプトを新たに書く。`topopt_checks/` に残る `measure_*.py` は別の文書の調査用で、この文書の実測のものではない。

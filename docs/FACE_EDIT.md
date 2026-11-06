@@ -1,6 +1,6 @@
 # 面の削除(#190)と面のオフセット(#183)— 方式の決定
 
-**状態: 実装計画の段1〜4(子プロセス・kernel・verb・MCP)を実装。画面(段5)は未実装**(2026-10-23。下「実装計画」の「実装の状態」)。
+**状態: 実装計画の段1〜5(子プロセス・kernel・verb・MCP・画面)を実装。画面の「中止」ボタンと再生の進捗、矩形選択での連なりへの広げ、穴を作る面をまとめて選ぶ補助は未実装**(下「実装計画」の「実装の状態」)。
 面編集の結果を疑うとき、OCCT の Defeaturing・MakeOffset の挙動を疑うとき、画面に載せるときに読む。現行の検査と試作の参照先は末尾「検査と試作の参照」。
 
 本人の依頼(Issue #190、2026-10-17): より強力な削除機能。フィレットや面取りを削除できるようにする。
@@ -611,14 +611,14 @@ claude.ai の Artifact「フィレットはなぜ消えないのか」。
 
 ### kernel(`duocad/kernel_face_edit.py`。試作は Git `3c3fb655` の `tools/face_edit_probe/strict.py`)
 
-`kernel.py` は 1,681 行で規律の 1,500 行を越えているので、新しいファイルに切る(依存は kernel_face_edit → kernel の一方向。`kernel_shell.py` と同じ形)。
+`kernel.py` には足さず、新しいファイルに置く(依存は kernel_face_edit → kernel の一方向。`kernel_shell.py` と同じ形)。
 
-- `delete_faces(shape, face_indices) -> {"shape", "provenance"}`
+- `delete_faces(shape, face_indices, *, interactive=True) -> {"shape", "provenance", "volume_after"}`(`interactive` が False の再生は期限なし)
   1. 選んだ面の隣に延ばせない曲面(押し出し・回転・オフセット。罠の11)があれば、その面だけ同じ形の B-spline の面に張り替える(上「押し出し面に接する丸めの削除」)。
   2. `BOPAlgo_RemoveFeatures`(`SetToFillHistory(True)`、`SetRunParallel(True)`)。エラーも**警告も**失敗。
   3. 張り替えた面の像を元の曲面へ張り直す。
   4. 関門(下)。由来は `History()` を `_blend_provenance` と同じ形で射影する(`face_map` / `deleted`(=選んだ面) / `new_faces`(=空))。
-- `offset_faces(shape, face_indices, distance) -> {...}`
+- `offset_faces(shape, face_indices, distance, *, interactive=True) -> {...}`(戻り値は `delete_faces` と同じ形)
   1. 選んだ面から接線でたどり、**構造で認識できる丸め**(下「D」)を集める。丸めでない接線の隣があれば断る。
   2. 丸めが無ければ B0、あれば D。どちらも関門を通す。
 - 失敗はすべて `ValueError`。断り文は原因(閉じない/接線でつながる面が丸めでない/面が消える/期限切れ…)を名指しする(`shell_body` と同じ方針)。
@@ -714,7 +714,7 @@ claude.ai の Artifact「フィレットはなぜ消えないのか」。
 - b → 推奨(明示のボタン)ではなく「他の選択肢」側の、**1クリックで連なりへ広げる**: 丸めの面をクリックしたら、つながった
   丸めまで選択を広げる。Enter で確定する前に、どこまで削除されるかが見える。
   広げるのは画面の選択で、verb は選ばれた面だけを消す(MCP からは1枚だけも消せる)。連なりの1枚だけを消す操作は画面からはできなくなる
-  (製品の kernel で `d_fillet_top4_one` は通る: 箱の上面4辺の丸めの前の1枚を消すと 9 面の有効な形。`d_fillet_all12_vertical4` は断る)。
+  (試作 Git `3c3fb655` のケース: `d_fillet_top4_one` は通り、箱の上面4辺の丸めの前の1枚を消すと 9 面の有効な形。`d_fillet_all12_vertical4` は断る)。
 - c は触れていない(オフセットは距離だけ、の推奨のまま)。
 
 ### a. 面を選んで「削除する」を押したときの意味(#190 の未決)
@@ -737,8 +737,8 @@ claude.ai の Artifact「フィレットはなぜ消えないのか」。
 - **推奨**: 付ける。ただし**1クリックで黙って広げない**: 丸めの面を選んだときに「連なりを選択」(ボタンかショートカット)を出し、対象の全部を強調表示してから選択に入れる。
   1枚だけの編集もそのままできる。**verb は選ばれた面だけを消す**(自動で広げない。AI からの呼び出しで選んだものと結果が食い違わないように)。
   (AI の最初の案は「クリックで連なり全体、修飾キーで1枚」だったが、astra の指摘で明示の操作に改めた)
-- **理由**: 連なりの1枚だけ消すと、残りの丸めが新しい角まで延びた有効な形になる(`d_fillet_top4_one`)。意図と異なる場合がある(頻度は測っていない)。
-  全辺丸めの縦の丸めだけを消すと角の球が閉じず断られる(`d_fillet_all12_vertical4`)。
+- **理由**: 連なりの1枚だけ消すと、残りの丸めが新しい角まで延びた有効な形になる(試作のケース `d_fillet_top4_one`)。意図と異なる場合がある(頻度は測っていない)。
+  全辺丸めの縦の丸めだけを消すと角の球が閉じず断られる(試作のケース `d_fillet_all12_vertical4`)。
   穴も同じで、壁だけを選ぶと止まり穴の底や座ぐりの段が閉じず断られる(実物で断った穴 85 件の大半。穴を作る面を全部選ぶと 71 件が通る)。
   同じ補助で「穴を選択」(壁・底・段・縁の丸め)も出すのがよい(AI の案。2026-10-22 の内訳から)。
 - **弱点**: 面の連なりの計算が新しく要る(今あるのは辺の連なり `kernel_chains.BlendChains`。D の丸めの認識と同じ道具で作れる)。連なりで消すたびに1手増える。
@@ -771,7 +771,7 @@ claude.ai の Artifact「フィレットはなぜ消えないのか」。
   (再生に期限を掛けると、保存できた文書が負荷しだいで開けなくなる。astra の指摘)。新しいプレビューでは、同じ接続の未開始のプレビューだけを差し替える。
   実行中の古いプレビューは止めず、終了または期限を待って結果を送らない。別の接続のプレビューは取り消さない。
   実行中のプレビューの子を止めるのは、確定・再生・寸法変更が子を要求したとき、その接続の切断、または期限切れ。
-- **理由**: **20 秒は置いた値**で、実測の根拠は「合成形状の正当な計算の最長が 18 秒(穴100個を一度に消す)」と「角ばった実物の1件の計算は最長約 1 秒」の2つだけ
+- **理由**: **20 秒は置いた値**で、実測の根拠は「合成形状の正当な計算の最長が 18 秒(穴100個を一度に消す)」と「角ばった実物の1件の計算は最長約 2.3 秒」の2つだけ
   (有機形状の 61 秒の例は対象外なので根拠にしない)。期限には子の起動(1.6 秒)を含めた(干渉チェックと同じ数え方)。
 - **他の選択肢**: 打ち切らず「中止」だけ。60 秒(待つ時間が長い)。10 秒(穴100個の一括削除が通らない)。
 - **この結果で変わること**: `kernel_worker` の既定値1つと、画面の「中止」と再生の進捗。
@@ -823,7 +823,7 @@ claude.ai の Artifact「フィレットはなぜ消えないのか」。
    `tests/test_boundaries.py` の `OCP_ALLOWED` と docs/DEVELOPMENT.md の表に足す。
 2. **`duocad/kernel_face_edit.py`**(新規。試作 `tools/face_edit_probe/strict.py` を製品の形に): `delete_faces` / `offset_faces`(D を含む)/ 関門 / 曲面の定義の比較 /
    由来の射影。子プロセスの中で動く。テスト: 関門に誤った形を渡して断るか(受入条件「実装のときに足すテスト」)、D の認識が意匠の曲面・円錐・可変半径・丸めの上の丸め・
-   支えの面の分割を、**理由を区別して**断るか、半径の違う丸めを取り違えないか(`m_fillet_two_radii_top_up2`)。
+   支えの面の分割を、**理由を区別して**断るか、半径の違う丸めを取り違えないか(試作 Git `3c3fb655` のケース `m_fillet_two_radii_top_up2`。今は `tests/test_face_edit_kernel.py` の `test_blends_of_different_radii_follow_with_their_own_radius`)。
    ここで本書の合成形状の判定表と同じ数値を再現できることを確かめる。
 3. **verb** `duocad/verbs/delete_faces.py` / `offset_faces.py`(`shell_body.py` と同じ形: 純関数・`_do_*`・`register_verb(do=, undo=undo_shape)`・`@entry`)、
    `duocad/verbs/__init__.py` の import と `__all__`。**受入テストの `pytestmark` を消す**(32件が本物の検査になる)。
@@ -833,13 +833,13 @@ claude.ai の Artifact「フィレットはなぜ消えないのか」。
    引っかかる契約テスト: `test_mcp_verbs`(登録と catalog の一致・引数と入口の一致)、`test_doc_code_agreement`、`test_protocol`、`test_ui_command_wiring`、`test_boundaries`。
 5. **画面**: カード a(「削除する」の呼び分け)・d(押し出しへの統合か別コマンド)・e(「中止」)・b(連なりの選択の補助)。`web/src/commands/features.ts` の
    CommandDef、smoke(docs/SMOKE_TESTING.md の空きポートと使い捨ての `--models-dir`)で、面を選んで消す・ずらす・Ctrl+Z を実機で確かめる。
-6. 既存の verb(フィレットなど)を子プロセスへ移すかは別 Issue(このときの実測: 子の往復の費用、プレビューの体感)。
+6. フィレット・面取り・シェルは同じ常駐の子で動く(`kernel_worker` の op `blend_edges` / `shell`、`verbs/_common.py`、`verbs/shell_body.py`)。
 7. **用途試験**(astra の指摘): 本人が実際に直したい編集(本人の部品のどの面をどう消す・ずらすか)を先に決め、その成功と待ち時間で出荷を判断する。実物 20 件の通過率は
    列挙した候補への通過率で、本人の編集の成功率ではない。
 
 ## 受入条件(テスト)
 
-`tests/test_delete_faces_acceptance.py`(16件)と `tests/test_offset_faces_acceptance.py`(18件)。Issue の受入条件(案)に、要件から足した検査を加えた。
+`tests/test_delete_faces_acceptance.py`(16件)と `tests/test_offset_faces_acceptance.py`(28件)。Issue の受入条件(案)に、要件から足した検査を加えた。
 
 - 実装の前は xfail(strict)の印で全体のテストを落とさなかった。実装で印を外し、32 件とも通る(2026-10-23)。
 - **検算**(実装の前、試作を verb の作法で包んだ仮の verb で): 32 件とも通った。守りを外した仮の verb では該当のテストが落ちる: 削除の警告の検査と残存の検査を両方外す → 2件(閉じない面・一部だけ消せる組)、

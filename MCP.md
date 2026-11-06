@@ -33,7 +33,7 @@
 1. `describe_document` で `body_id` / スケッチ / パラメータ名を知る。手前の部品を隠すなら `set_visible(body_id, false)`
    （人間の画面からも消える。**可視性は操作ログに載らないので `undo` では戻らない** —— 戻すのは `set_visible(body_id, true)`）
 2. `set_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認
-   - `measure` は**測るだけ**（verb ではない）。頂点・直線の辺・平らな面・スケッチの点・スケッチの線分・領域を2つ置くと `between.distance`
+   - `measure` は**測るだけ**（verb ではない）。頂点・直線の辺・平らな面・スケッチの点・スケッチの線分・領域・原点の7パーツ（点・軸・平面）を2つ置くと `between.distance`
      （直線・平面は無限に延ばす。スケッチの線分は直線、領域はそのスケッチの平面）、平行でない線・面どうしは
      `between.angle_deg` が返る。測れない組（円い辺・曲面・ボディそのもの・線分以外のスケッチの図形まるごと）は
      `between_error` に理由が、`between_error_items` に測れない項目の添字が入り、各項目の寸法はそのまま読める
@@ -84,9 +84,15 @@ duocadのサーバを2つ同時に立てない（後から立った方がWebSock
 | `--deviation` | 0.2 | **画面の**テセレーションの線形偏差（mm・絶対。空の文書で、ズーム連動値が来るまでの土台。ボディのある文書は、来るまでの粗さを文書の外接対角から決める（`resolution.document_resolution`。[docs/VIEWPORT.md](docs/VIEWPORT.md)「可変解像度と面カリング」）。STL書き出しは見ない＝`io_step.STL_DEVIATION` 固定） |
 | `--web-dist PATH` | `web/dist` | 静的配信するディレクトリ |
 | `--open` | — | 起動時にブラウザを開く（既定は開かない） |
+| `--models-dir PATH` | リポジトリ直下の `models/` | 保存/開く/一覧の置き場。実ブラウザ検査が使い捨てのフォルダへ差し替える |
+| `--exports-dir PATH` | `export/` | 書き出しの置き場 |
+| `--data-dir PATH` | — | `models/`・`export/` をこの下に取る（安定版が使う） |
+| `--channel` | `dev` | `dev` / `stable` |
+| `--no-stdio` | — | stdio の MCP を話さない（安定版の起動台本が付ける） |
 
 `web/dist` が無い場合は**静的配信を諦めてstdioのMCPだけで動く**ので `/mcp` も一緒に立たない。先に `cd web && npm install && npm run build`。
-**起動時に読むSTEPを決める引数は無い** —— サーバは常に空の文書で立ち、STEPは `import_step` で読む。
+**起動時に読むSTEPを決める引数は無い** —— サーバは文書を開いていない状態（トップ画面）で立ち、人が画面で文書を開くまで
+文書を変えるツールは断られる（`describe_document` の `document_open`）。STEPは文書を開いた後に `import_step` で読む。
 
 ## トランスポートは2本
 
