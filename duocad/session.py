@@ -63,6 +63,14 @@ class NoDocument(ValueError):
     """
 
 
+def _history_edge(message: str) -> ValueError:
+    """履歴の端での取り消し・やり直し。`kind` は `net/ws.py` が `error` の封筒に載せる(画面は文言でなく印で灰色の知らせにする)。
+    例外名は `ValueError` のまま(MCP の応答が例外名を載せるので、新しい型にすると名前が変わる)。"""
+    error = ValueError(message)
+    error.kind = "history_edge"  # type: ignore[attr-defined]
+    return error
+
+
 #: 書き出し先に認める拡張子(小文字。`DocumentStore.resolve_export_path`)。
 _STEP_SUFFIXES = (".step", ".stp")
 _STL_SUFFIXES = (".stl",)
@@ -802,10 +810,10 @@ class Session:
     def undo(self) -> dict:
         """直前の操作を取り消す。"""
         if not self.document.log.entries:
-            raise ValueError("取り消せる操作が無い")
+            raise _history_edge("取り消せる操作が無い")
         operation = self.document.log.undo(self.document)
         if operation is None:
-            raise ValueError("取り消せる操作が無い")
+            raise _history_edge("取り消せる操作が無い")
         self._reset_selection_if_needed("undo")
         self._settle_workspace(None, None)
         return self._emit({"verb": "undo", "seq": operation.seq, "undone": operation.verb})
@@ -814,7 +822,7 @@ class Session:
     def redo(self) -> dict:
         operation = self.document.log.redo(self.document)
         if operation is None:
-            raise ValueError("やり直せる操作が無い")
+            raise _history_edge("やり直せる操作が無い")
         self._reset_selection_if_needed("redo")
         self._settle_workspace(None, None)
         return self._emit({"verb": "redo", "seq": operation.seq, "redone": operation.verb})
@@ -1444,6 +1452,7 @@ class Session:
             "deviation": io_step.STL_DEVIATION,
             "body_ids": exported["body_ids"],
             "skipped_hidden": exported["skipped_hidden"],
+            "overwrote": exported["overwrote"],
         }
 
     def take_warnings(self) -> list[str]:

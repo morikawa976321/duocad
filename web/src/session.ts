@@ -942,10 +942,18 @@ export interface SessionHooks {
   /**
    * `clientOp` は失敗した要求に付いていた番号(サーバの `error` だけが持つ。送れなかった・切れたときは無い)。
    * `previewId` はプレビューの断り(`where === 'preview'`)だけが持つ、断られた要求の `preview_id`。
+   * `kind` はサーバの `error` の種別(`history_edge` / `refusal` / `error`。送れなかった・切れたときは無い)。
    */
-  onError(message: string, where: string, clientOp?: number | null, previewId?: number | null): void
+  onError(message: string, where: string, clientOp?: number | null, previewId?: number | null, kind?: string | null): void
   onWarning(message: string): void
   onStatus(status: ConnectionStatus): void
+  /** 一度繋がったあとの接続が、また開いた(初回の接続では呼ばない)。 */
+  onReconnected(): void
+  /**
+   * 切断について知らせを出したあとで、接続が開いた。`failureNotice` は「繋がらない」の知らせの文言
+   * (応答待ちの最中に切れた知らせだけを出したときは null)。
+   */
+  onConnectionRestored(failureNotice: string | null): void
   /**
    * ビューポートの変化を待たせている下りの、いちばん古い送信時刻(`performance.now()`)。無くなれば null。
    * 待たせるかどうかは送る口ごとに決めてある(`send` の `wait`)。
@@ -1216,6 +1224,10 @@ export function createSession(hooks: SessionHooks): Session {
   let failures = 0
   /** このタブで一度でも `open` したか(初回接続待ちと再接続失敗でトーストの出し方を分ける)。 */
   let everOpened = false
+  /** 切断について知らせを出したか。開いたら `onConnectionRestored` で言って戻す。 */
+  let noticeShown = false
+  /** 出した「繋がらない」の知らせの文言(`onConnectionRestored` が札を外す手がかり)。 */
+  let failureNotice: string | null = null
   /** ビューポートの変化を待たせている下り(`ack_id` -> 送った時刻)。挿入順が番号順・時刻順。 */
   const waits = new Map<number, number>()
   let lastAckId = 0
@@ -1263,6 +1275,7 @@ export function createSession(hooks: SessionHooks): Session {
       applied?: Applied
       message?: string
       where?: string
+      kind?: string
       preview_id?: number | null
       verb?: string
       bodies?: PreviewPayload['bodies']
@@ -1443,7 +1456,7 @@ export function createSession(hooks: SessionHooks): Session {
       for (const ackId of waits.keys()) if (ackId <= done) waits.delete(ackId)
       reportWaits()
     } else if (message.type === 'error') {
-      hooks.onError(message.message ?? '(理由なし)', message.where ?? '?', message.client_op ?? null, message.preview_id ?? null)
+      hooks.onError(message.message ?? '(理由なし)', message.where ?? '?', message.client_op ?? null, message.preview_id ?? null, message.kind ?? null)
     } else if (message.type === 'warning') {
       hooks.onWarning(message.message ?? '')
     } else if (message.type === 'ai_status') {
@@ -1532,9 +1545,17 @@ export function createSession(hooks: SessionHooks): Session {
     let opened = false
     next.onopen = () => {
       opened = true
+      const reconnect = everOpened
       everOpened = true
       failures = 0
       hooks.onStatus('open')
+      if (noticeShown) {
+        const notice = failureNotice
+        noticeShown = false
+        failureNotice = null
+        hooks.onConnectionRestored(notice)
+      }
+      if (reconnect) hooks.onReconnected()
     }
     next.onmessage = (event) => handle(event.data instanceof ArrayBuffer ? event.data : String(event.data))
     // **`onerror` にトーストを繋がない。** 繋ぐと再接続の試行1回につき1枚出ることになり、
@@ -1547,7 +1568,10 @@ export function createSession(hooks: SessionHooks): Session {
       if (waits.size > 0) {
         waits.clear()
         reportWaits()
-        if (!disposed) hooks.onError('応答を待っている間にサーバとの接続が切れた(自動で繋ぎ直しを試みている)。直前の操作が反映されたかは分からない。繋ぎ直した後の画面を確かめてから、やり直すこと', 'socket')
+        if (!disposed) {
+          noticeShown = true
+          hooks.onError('応答を待っている間にサーバとの接続が切れた(自動で繋ぎ直しを試みている)。直前の操作が反映されたかは分からない。繋ぎ直した後の画面を確かめてから、やり直すこと', 'socket')
+        }
       }
       if (disposed) return
       if (!opened) {
@@ -1557,12 +1581,31 @@ export function createSession(hooks: SessionHooks): Session {
           const message = everOpened
             ? 'サーバへ再接続できない。自動で繋ぎ直しを続ける'
             : `サーバへ繋がらない (${url})。自動で繋ぎ直しを続ける`
+          noticeShown = true
+          failureNotice = message
           hooks.onError(message, 'socket')
         }
       }
-      retry = setTimeout(() => void connect(), RECONNECT_DELAY_MS)
+      retry = setTimeout(() => {
+        retry = null
+        void connect()
+      }, RECONNECT_DELAY_MS)
     }
   }
+
+  /** 次の再試行を待たず、いま繋ぎ直す。再試行の待ちの最中でなければ(繋がっている・繋いでいる途中・開始前)何もしない。 */
+  function reconnectNow(): void {
+    if (retry === null || disposed) return
+    clearTimeout(retry)
+    retry = null
+    void connect()
+  }
+  const onVisible = (): void => {
+    if (document.visibilityState === 'visible') reconnectNow()
+  }
+  // 窓が前面に戻った・回線が戻った合図。`document` / `window` は Node の検査(`tests/eval_session_*.mjs`)には無い。
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
+  if (typeof window !== 'undefined') window.addEventListener('online', reconnectNow)
 
   return {
     start() {
@@ -1722,6 +1765,8 @@ export function createSession(hooks: SessionHooks): Session {
     dispose() {
       disposed = true
       if (retry) clearTimeout(retry)
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
+      if (typeof window !== 'undefined') window.removeEventListener('online', reconnectNow)
       socket?.close()
       socket = null
     },

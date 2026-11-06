@@ -74,7 +74,7 @@
   import FilesPanel from './FilesPanel.svelte'
   import StartScreen from './StartScreen.svelte'
   import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
-  import Toast, { fail, errorLog, inform } from './Toast.svelte'
+  import Toast, { fail, errorLog, inform, withdraw } from './Toast.svelte'
   import { loadDataPanelOpen, loadSidebarOpen, saveDataPanelOpen, saveSidebarOpen } from './viewSettings'
   import {
     createSession,
@@ -416,7 +416,7 @@
   const session = createSession({
     onState: handleState,
     onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
-    onError: (message, where, clientOp, previewId) => {
+    onError: (message, where, clientOp, previewId, kind) => {
       // プレビューの断りは待ちの1行に出す(トーストにすると打ち替えるたびに積もる)。後から送った要求があれば古い断りで、
       // 捨てる(消すと、その後の要求の応答まで捨てる)。
       if (where === 'preview') {
@@ -440,7 +440,9 @@
       }
       // `send` はverbではなく「繋がっていないので送れなかった」で、繋がっていないことに気づく唯一の札。
       // 内部の語を頭に付けない。
-      fail(where === 'send' ? message : `エラー[${where}] ${message}`)
+      // 履歴の端での取り消し・やり直しは壊れたのではないので赤い札にしない(判定はサーバ。印は `kind`)。
+      if (kind === 'history_edge') inform(message)
+      else fail(where === 'send' ? message : `エラー[${where}] ${message}`)
       // 待ちを解くのは、待っている操作そのものが失敗したときと、送れなかったときだけ。確定の直前に送った
       // プレビューなどの失敗で解くと、確定がまだサーバで走っている間に次の Enter が通る。
       if (where === 'send') {
@@ -472,6 +474,11 @@
       if (category === 'feature' || category === 'sketch' || where === 'send') host?.commitFailed(where === 'send')
     },
     onWarning: (message) => fail(`警告 ${message}`),
+    onReconnected: () => {},
+    onConnectionRestored: (failureNotice) => {
+      if (failureNotice !== null) withdraw(failureNotice)
+      inform('再接続した')
+    },
     onStatus: (next) => {
       // 切断・再接続の試行は黙る(`session.ts` が「開けなかった試行」だけトーストへ回す)。
       status = next
@@ -1892,6 +1899,25 @@
       requestEdgeChains(bodyId, items.filter((item) => item.bodyId === bodyId).map((item) => item.edgeIndex))
     }
   }
+
+  /**
+   * 起動した瞬間に選ばれていた辺を連なりへ広げる(辺を1本選んでからフィレット・面取りを押す順でも、光った所と実際にかかる範囲が
+   * 揃う)。広げるのは起動の1回だけ: `edgeOnlyCommand` 以外を追跡しないので、起動後のクリックや外した辺は広げ直さない。
+   */
+  $effect(() => {
+    if (!edgeOnlyCommand) return
+    untrack(() => {
+      const edges = refsOfKind(currentItems(), 'edge').map((ref) => ({ bodyId: ref.body, edgeIndex: ref.index }))
+      if (edges.length === 0) return
+      const widen = () => {
+        const current = new Set(currentItems().map(refKey))
+        const add = edges.flatMap((edge) => edgeChainRefs(edge.bodyId, edge.edgeIndex) ?? []).filter((ref) => !current.has(refKey(ref)))
+        modifySelection(add, [])
+      }
+      if (edges.every((edge) => edgeChainRefs(edge.bodyId, edge.edgeIndex) !== null)) widen()
+      else deferUntilChains(edges, widen)
+    })
+  })
 
   /**
    * 「面の削除」の起動中か。丸めの面は、つながった丸め全体を1つの単位として選ぶ(`faceChains`)。確定の前に、どこまで消えるかが

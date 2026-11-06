@@ -21,7 +21,7 @@
         {"type": "edge_chains", "body_id": str, "revision": int, "shape_revision": int, "chains": [[int, ...], ...]}
         {"type": "face_chains", "body_id": str, "revision": int, "shape_revision": int, "origins": [int, ...], "chains": [[int, ...], ...]}
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path"}
-        {"type": "error", "message": str, "where": str, "client_op": int|None, "preview_id"?: int|None}  (`preview_id` は where が preview のときだけ)
+        {"type": "error", "message": str, "where": str, "kind": "history_edge"|"refusal"|"error", "client_op": int|None, "preview_id"?: int|None}  (`preview_id` は where が preview のときだけ)
         {"type": "done", "ack_id": int}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "api_key_source",
@@ -161,6 +161,16 @@ def _args_object(message: dict, *, required: bool) -> dict:
     if not isinstance(args, dict):
         raise ValueError(f"args はオブジェクトで渡す(受け取った型: {type(args).__name__})")
     return args
+
+
+def _error_kind(error: Exception) -> str:
+    """`error` の封筒の `kind`。画面が札の出し方を替える印で、`message`(`例外名: 本文`)の形は変えない。
+    `history_edge` は履歴の端での取り消し・やり直し、`refusal` は入力の誤り・断り(`ValueError` とその派生)、それ以外は `error`。
+    """
+    kind = getattr(error, "kind", None)
+    if isinstance(kind, str):
+        return kind
+    return "refusal" if isinstance(error, ValueError) else "error"
 
 
 def _visible_flag(value: Any) -> bool:
@@ -768,6 +778,7 @@ class Server:
                     "type": "error",
                     "where": str(command),
                     "message": f"{type(error).__name__}: {error}",
+                    "kind": _error_kind(error),
                     # 画面は自分が待っている操作の失敗かをこれで見分ける(別の要求の失敗で確定の待ちを解かない)。
                     "client_op": message.get("client_op"),
                     # プレビューの断りは、どの要求のものかを画面が見分ける(古い断りを今の入力に付けない)。
@@ -843,6 +854,7 @@ class Server:
                             "type": "error",
                             "where": "preview",
                             "message": f"{type(error).__name__}: {error}",
+                            "kind": _error_kind(error),
                             "client_op": message.get("client_op"),
                             "preview_id": message.get("preview_id"),
                         })
