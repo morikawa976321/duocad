@@ -350,7 +350,7 @@ export function createSolidFeatures(deps: SolidFeaturesDeps): SolidFeatures {
     if ((known?.source ?? null) === data) return false
     if (data === null) edgeData.delete(bodyId)
     else {
-      const edges = data.edges.map((edge) => {
+      const edges = data.edges.filter((edge) => !edge.degenerate).map((edge) => {
         const points = edge.points instanceof Float32Array ? edge.points : new Float32Array(edge.points)
         return { index: edge.index, kind: edge.kind, points, sphere: sphereOf(points) }
       })

@@ -15,6 +15,17 @@ export function keptDirectionOffset(
   return offset.setLength(home.length())
 }
 
+/**
+ * `objects` のうち見えているもの(`visible`)の外接箱。どれも見えていなければ空の箱。
+ * `Box3.setFromObject` は `visible=false` の物も数えるので、プレビューが隠している元のボディ(`viewport.ts` の
+ * `setBodyVisible`)を入れると、見えている結果より大きい箱になる。
+ */
+export function boxOfVisible(objects: Iterable<THREE.Object3D>): THREE.Box3 {
+  const box = new THREE.Box3()
+  for (const object of objects) if (object.visible) box.expandByObject(object)
+  return box
+}
+
 /** スケッチの折れ線(世界座標)のうち `entityIds` の図形だけの外接箱。該当が無ければ空の箱。 */
 export function boxOfSketchEntities(
   lines: Iterable<{ entityId: unknown; polylineWorld: readonly THREE.Vector3[] | undefined }>,

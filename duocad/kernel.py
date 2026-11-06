@@ -835,7 +835,7 @@ def tessellate_edges(
 
     戻り値(素の値だけ):
         [{"index": int, "kind": "line"|"circle"|"other", "length": float,
-          "closed": bool, "points": [x,y,z, x,y,z, ...]}, ...]
+          "closed": bool, "degenerate": bool, "points": [x,y,z, x,y,z, ...]}, ...]
 
     `index` は `edge_count` / `edge_of` / `fillet(edges=[...])` と**同じ数え方**(`_edge_map` の1始まり)。
     ずれると「指した辺と違う辺が丸まる」静かな事故になるので、添字は必ず `_edge_map` から取る。
@@ -881,6 +881,7 @@ def tessellate_edges(
                 "kind": _brep_geometry.classify_edge(edge),
                 "length": _brep_geometry.edge_length(edge),
                 "closed": bool(edge.Closed()),
+                "degenerate": _brep_geometry.edge_degenerate(edge),
                 "points": points,
             }
         )

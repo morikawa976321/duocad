@@ -491,7 +491,8 @@ def _enter_extrude(
     `body_id` だけは引数のまま(どの Body へ足す/から引くかであって、対象集合ではない)。
     """
     kind, items = selection.require_extrude_targets(document)
-    lumps_before = _lump_counts(document) if str(mode) == "cut" else {}
+    cutting = str(mode) == "cut"
+    lumps_before = _lump_counts(document) if cutting else {}
     if kind == "face":
         operation = extrude_faces(
             document, items, float(distance), mode=str(mode), body_id=body_id, taper=float(taper)
@@ -505,7 +506,7 @@ def _enter_extrude(
         "mode": str(mode),
         **changed_bodies(operation),
     }
-    split = _split_by_cut(document, out["changed_bodies"], lumps_before)
+    split = _split_by_cut(document, out["changed_bodies"], lumps_before) if cutting else []
     if split:
         # 切り取りで割れても断らず、気づけるようにする(`Session._after_logged_verb` が確定のときだけ警告のトーストへ積む)。
         # 再生・やり直しは入口を通らないので出ない。

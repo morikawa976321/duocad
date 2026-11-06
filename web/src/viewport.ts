@@ -43,7 +43,7 @@ import { POLE_Z, upForDirection } from './viewCube'
 import { createOptimizeAnnotations } from './optimizeAnnotations'
 import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
-import { boxOfSketchEntities, keptDirectionOffset } from './viewFraming'
+import { boxOfSketchEntities, boxOfVisible, keptDirectionOffset } from './viewFraming'
 import { sightTooShallow } from './planeSight'
 import { createInterferenceLayer } from './interferenceLayer'
 import { createMeasureAnnotation } from './measureAnnotation'
@@ -122,6 +122,7 @@ export function createViewport(container: HTMLElement): Viewport {
   controls.enableDamping = true
   controls.dampingFactor = 0.15
   controls.zoomToCursor = true
+  controls.zoomSpeed = 2
   // 左=ウィンドウ選択(自前実装)/ 中=パン / 右=回転。左を `null` にするのは左ドラッグを
   // 丸ごとこちらへ渡すため(割り当てたままだと矩形を引く間にカメラが動く)。
   controls.mouseButtons = {
@@ -659,6 +660,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 箱が収まるよう、注視点を箱の中心へ、カメラを `offset` の向きへ引く(`offset` の長さは `HOME_VIEW_OFFSET` と同じ引き具合の係数)。 */
   function frameBox(box: THREE.Box3, offset: THREE.Vector3): void {
+    // キューブの回転は毎フレーム、始めたときの距離と行き先の向きでカメラを置き直す(`viewCubeOverlay.ts` の `stepCubeSnap`)。
+    // 止めないと、ここで合わせた視点が次の描画で戻る。
+    cube.cancelSnap()
     const center = new THREE.Vector3()
     box.getCenter(center)
     const diagonal = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-6)
@@ -675,6 +679,15 @@ export function createViewport(container: HTMLElement): Viewport {
     controls.update()
   }
 
+  /**
+   * 「今の向きのまま」寄るときの `frameBox` の `offset`。キューブの回転の途中なら、回転を行き先まで進めてから読む
+   * (途中の向きで止めると、キューブを押して選んだ向きが捨てられる)。
+   */
+  function keptOffset(): THREE.Vector3 {
+    cube.finishSnap()
+    return keptDirectionOffset(camera.position, controls.target, HOME_VIEW_OFFSET)
+  }
+
   /** 見えているボディ `bodyIds` が収まる所へ、今の向きのまま寄る。どれも見えていなければ動かない。 */
   function frameBodies(bodyIds: readonly string[]): void {
     const box = new THREE.Box3()
@@ -683,16 +696,18 @@ export function createViewport(container: HTMLElement): Viewport {
       if (mesh !== undefined && mesh.visible) box.expandByObject(mesh)
     }
     if (box.isEmpty()) return
-    const offset = camera.position.clone().sub(controls.target)
-    if (offset.lengthSq() === 0) offset.copy(HOME_VIEW_OFFSET)
-    frameBox(box, offset.setLength(HOME_VIEW_OFFSET.length()))
+    frameBox(box, keptOffset())
   }
 
-  /** 見えているボディとスケッチが収まる所へ、今の向きのまま寄る(`frameAll` と違い向きも上方向も変えない)。何も無ければ既定の視点。 */
+  /**
+   * 見えているボディとスケッチが収まる所へ、今の向きのまま寄る(`frameAll` と違い向きも上方向も変えない)。何も無ければ既定の視点。
+   * 隠してある本物(`setBodyVisible`)は数えず、その代わりに出ている表示を数える: プレビューの幽霊(`root` の中)と、
+   * `?voxel=1` のボクセル(`optimizeDebug.object`。`root` の外)。
+   */
   function frameVisible(): void {
-    const box = contentBoxForGrid()
+    const box = boxOfVisible([...root.children, sketchRoot, optimizeDebug.object])
     if (!box.isEmpty()) {
-      frameBox(box, keptDirectionOffset(camera.position, controls.target, HOME_VIEW_OFFSET))
+      frameBox(box, keptOffset())
     } else if (activeSketchId !== null) {
       lookAtSketch(activeSketchId, { emptyDocument: true })
     } else {
@@ -711,7 +726,7 @@ export function createViewport(container: HTMLElement): Viewport {
     }))
     const box = boxOfSketchEntities(lines, new Set(entityIds))
     if (box.isEmpty()) return
-    frameBox(box, keptDirectionOffset(camera.position, controls.target, HOME_VIEW_OFFSET))
+    frameBox(box, keptOffset())
   }
 
   function setFov(deg: number): void {
@@ -792,6 +807,13 @@ export function createViewport(container: HTMLElement): Viewport {
   let selectedBodyIds = new Set<string>()
   /** ホバーを持ち主の単位で光らせるか(`setHoverGrain`)。 */
   let hoverGrain = { body: false, entity: false }
+  let browserHover: string | null = null
+
+  function setBrowserHover(bodyId: string | null): void {
+    if (browserHover === bodyId) return
+    browserHover = bodyId
+    applyFaceMaterials()
+  }
 
   /** 形状最適化(第3のモード)の役割。モードを抜けたら空にする(`setOptimizeState(null)`)。 */
   let bodyRoles = new Map<string, 'preserve' | 'exclude'>()
@@ -811,7 +833,8 @@ export function createViewport(container: HTMLElement): Viewport {
         const state: FaceMaterialState = hitAsBody || selectedFaceKeys.has(key) ? 'user' : 'plain'
         const role: OptimizeFaceRole = fixtureFaceKeys.has(key) ? 'fixture' : bodyRole
         const isHovered =
-          hoverFace !== null && hoverFace.bodyId === bodyId && (hoverGrain.body || hoverFace.faceIndex === face.index)
+          browserHover === bodyId ||
+          (hoverFace !== null && hoverFace.bodyId === bodyId && (hoverGrain.body || hoverFace.faceIndex === face.index))
         if (entry.body.setFaceColor(face.index, faceColorFor(role, state, isHovered))) invalidate()
       }
     }
@@ -1348,6 +1371,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const previous = cameraBeforeSketch
     cameraBeforeSketch = null
     if (previous !== null && previous.framedAtEntry) {
+      cube.cancelSnap() // `frameBox` と同じ理由
       camera.position.copy(previous.position)
       camera.up.copy(previous.up)
       controls.target.copy(previous.target)
@@ -1737,6 +1761,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // Z軸を回転の極として使い続ける(`WORLD_UP` 参照)ので、camera.up をそこから逸らすとキューブの見た目
     // (`cubeActive.up` が camera.up を写す)と実際の回転軸がずれる。`frame.v` を直接使うと任意面や XY 平面で
     // ずれる。真上・真下に近い面(cube側の上面図/底面図と同じ閾値)だけ ±Y へ差し替わる。
+    cube.cancelSnap() // `frameBox` と同じ理由(回転の途中だと、ここで置いた視点が次の描画で戻る)
     camera.up.set(...upForDirection([normal.x, normal.y, normal.z]))
     camera.position.copy(center).add(normal.multiplyScalar(distance))
     controls.target.copy(center)
@@ -2681,6 +2706,7 @@ export function createViewport(container: HTMLElement): Viewport {
       features.groupChains(on)
     },
     setHoverGrain,
+    setBrowserHover,
     edgeChain: features.chainOf,
     setEdgeChains: features.setChains,
     onEdgeChainWanted: features.onChainWanted,
@@ -2699,7 +2725,9 @@ export function createViewport(container: HTMLElement): Viewport {
     drawCalls: () => lastDrawCalls,
     renderCount: () => renderCount,
     hoveredRef() {
+      const faceIndex = browserHover === null ? undefined : bodies.get(browserHover)?.body.faces[0]?.index
       return {
+        body: browserHover !== null && bodies.has(browserHover) ? browserHover : null,
         face: hoverFace,
         edge: hoverEdge,
         vertex: hoverVertex,
@@ -2707,7 +2735,9 @@ export function createViewport(container: HTMLElement): Viewport {
         plane: hoverPlane,
         sketchEntity: hoverSketchEntity,
         datum: hoverDatum,
-        color: hoverColorNow(),
+        color: browserHover !== null && faceIndex !== undefined
+          ? paintedFaceColor({ bodyId: browserHover, faceIndex })
+          : hoverColorNow(),
       }
     },
     showPreview: ghostLayer.showPreview,

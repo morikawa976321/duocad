@@ -13,7 +13,7 @@
  * 画面に実際に届いた形だけを見る(プロトコルの契約は `tests/test_adaptive_resolution.py`)。
  * サーバは空の文書で起動し、円柱はMCP経由で作る。
  */
-import { assertNoAppErrors, frameAll, openApp, sleep, viewportCenter } from './browser.mjs'
+import { assertNoAppErrors, frameAll, openApp, sleep, viewportCenter, waitFrames } from './browser.mjs'
 import { fail, ok } from './args.mjs'
 import { runSmoke } from './harness.mjs'
 import { addExtrudedCircle } from './mcp-client.mjs'
@@ -110,8 +110,37 @@ runSmoke('smoke-resolution', { timeout: 60000, mcp: true }, async ({ mcp, browse
     const base = await measure('既定の視点(frameAll 直後)')
     if (base.edgeCount < 2) fail(`円柱の円い辺が2本届いていない: ${base.edgeCount}`)
 
+    const poseOf = () => page.evaluate(() => window.__duocad.cameraPose())
+    const distanceOf = (pose) => Math.hypot(...pose.position.map((value, axis) => value - pose.target[axis]))
+    const wheelBefore = await poseOf()
+    await page.mouse.wheel({ deltaY: -100 })
+    await waitFrames(page, 10)
+    const wheelRatio = distanceOf(await poseOf()) / distanceOf(wheelBefore)
+    if (Math.abs(wheelRatio - 0.95 ** 2) > 0.0001) fail(`ホイール1目盛りの倍率が違う: ${wheelRatio}`)
+    await page.mouse.wheel({ deltaY: 100 })
+    await waitFrames(page, 10)
+    if (Math.abs(distanceOf(await poseOf()) / distanceOf(wheelBefore) - 1) > 0.0001) fail('逆向きのホイールで倍率が戻らない')
+    ok('ホイール1目盛りの倍率は 0.95 の2乗で、逆向きで戻る')
+
+    const sketchId = await page.evaluate(() => window.__duocad.sketches[0].sketch_id)
+    const anchorOf = () => page.evaluate((id) => {
+      const at = window.__duocad.projectSketchPoint(0, 0, id)
+      const rect = document.querySelector('.viewport').getBoundingClientRect()
+      return { x: at.x + rect.left, y: at.y + rect.top }
+    }, sketchId)
+    const anchor = await anchorOf()
+    if (Math.hypot(anchor.x - center.x, anchor.y - center.y) < 5) fail('カーソルへ寄せる検査の点が画面中央に近すぎる')
+    await page.mouse.move(anchor.x, anchor.y)
+    await page.mouse.wheel({ deltaY: -100 })
+    await waitFrames(page, 10)
+    const anchored = await anchorOf()
+    if (Math.hypot(anchored.x - anchor.x, anchored.y - anchor.y) > 1) fail('ホイール拡大でカーソル下の点がずれた')
+    await frameAll(page)
+    await page.mouse.move(center.x, center.y)
+    ok('ホイールはカーソル下の点を保って寄り、全体表示へ戻せる')
+
     // ---------------------------------------------------------------- 寄る
-    await wheel(-240, 12)
+    await wheel(-240, 6)
     const near = await measure('寄った状態')
 
     if (!(near.deviation < base.deviation)) {
@@ -140,7 +169,7 @@ runSmoke('smoke-resolution', { timeout: 60000, mcp: true }, async ({ mcp, browse
     ok(`寄っても弦と弧の乖離は ${nearPixelError.toFixed(3)}画素(1画素以下 = 角として見えない)`)
 
     // ---------------------------------------------------------------- 引く
-    await wheel(360, 20)
+    await wheel(360, 10)
     const far = await measure('引いた状態')
 
     if (!(far.deviation > base.deviation)) {

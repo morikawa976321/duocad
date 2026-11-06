@@ -73,6 +73,8 @@ export interface ViewCubeOverlay {
   snapping(): boolean
   /** 視点アニメーションを打ち切る。 */
   cancelSnap(): void
+  /** 視点アニメーションを、行き先の姿勢まで一気に進めて終える(動いていなければ何もしない)。 */
+  finishSnap(): void
   /** 押下・ドラッグを打ち切る(`pointercancel`: `pointerup` が来ない)。何もしていなければ何もしない。 */
   cancel(): void
   /** キューブが引き取ったら `true`(メインのピック・矩形選択へ流さない)。 */
@@ -447,6 +449,9 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
     },
     cancelSnap() {
       cubeSnap = null
+    },
+    finishSnap() {
+      stepCubeSnap(Infinity)
     },
     cancel() {
       if (!(cubePointerActive || cubeDragging)) return

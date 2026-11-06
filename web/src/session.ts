@@ -385,6 +385,7 @@ export interface EdgeGeometry {
   kind: string
   length: number
   closed: boolean
+  degenerate: boolean
   points: number[]
 }
 
@@ -485,6 +486,7 @@ export type MeasureItem =
       start: number[]
       end: number[]
       edge_kind: string
+      degenerate?: boolean
       /** 円(円弧)の辺だけ。 */
       radius?: number
       center?: number[]

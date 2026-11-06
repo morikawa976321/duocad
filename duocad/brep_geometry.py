@@ -307,6 +307,10 @@ def edge_axis(shape: "TopoDS_Shape", edge_index: int) -> tuple:
     )
 
 
+def edge_degenerate(edge: Any) -> bool:
+    return bool(BRep_Tool.Degenerated_s(edge))
+
+
 def edge_circle(shape: "TopoDS_Shape", edge_index: int) -> tuple:
     """**円(円弧を含む)の辺**の `([cx, cy, cz], radius)`(ワールド座標[mm])。
 

@@ -99,6 +99,9 @@
   }
 
   let messageInput: HTMLInputElement | undefined = $state()
+  export function focusInput(): void {
+    if (messageInput && !messageInput.disabled) messageInput.focus()
+  }
   let transcriptBox: HTMLDivElement | undefined = $state()
 
   function send(): void {
