@@ -96,7 +96,6 @@
   function nameProblem(text: string): string | null {
     const trimmed = text.trim()
     if (trimmed === '') return 'ファイル名を打つ(例: model)'
-    if (trimmed !== text) return '前後の空白は使えない'
     if (trimmed.includes('/') || trimmed.includes('\\')) return '区切り文字は使えない(ファイル名だけ)'
     if (trimmed.includes(':')) return "':' は使えない(ドライブ指定・代替ストリームの入口になる)"
     const forbidden = [...trimmed].find((char) => '<>"|?*'.includes(char) || char.charCodeAt(0) < 0x20)
