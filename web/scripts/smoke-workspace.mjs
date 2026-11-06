@@ -366,13 +366,14 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await waitFor(measuring, '測定が起動しない')
   await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '測定の起動時に選択が空でない')
   await pressInOneTask(flatFaces, 'Escape', '#measure')
-  await waitFor(measuring, '中断の直後に測定が起動し直さない')
   await sleep(500)
   const restarted = await page.evaluate(() => ({
+    command: document.querySelector('.command-host')?.dataset.command ?? null,
     items: window.__duocad.selection?.items.map((item) => item.body) ?? [],
     readout: document.querySelector('#measure-result')?.textContent ?? null,
   }))
-  if (restarted.items.length !== 0 || restarted.readout !== null) {
+  // 前の起動で押した分が効くと、測定が走って畳まれる(command が measure でなくなり、読み札が出る)か、選択に残る。
+  if (restarted.command !== 'measure' || restarted.items.length !== 0 || restarted.readout !== null) {
     fail(`測定を中断して起動し直したら、前の起動で押した分が効いた: ${JSON.stringify(restarted)}`)
   }
   // 起動し直した測定は、押した2つをそのまま測れる(中断の全解除が、後のクリックを巻き込まない)。
