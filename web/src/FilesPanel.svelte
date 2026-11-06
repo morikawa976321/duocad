@@ -543,6 +543,15 @@
     flex: 0 0 auto;
   }
 
+  /* 名前の欄を1行ぶん使い、ボタン3つ(複製・複製して開く・やめる)は次の行に並べる(同じ行だと欄が50px ほどに潰れる)。 */
+  .copy-row {
+    flex-wrap: wrap;
+  }
+
+  .copy-row :global(.suffix-field) {
+    flex: 1 1 100%;
+  }
+
   .hint {
     color: var(--accent);
   }
