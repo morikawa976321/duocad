@@ -92,7 +92,11 @@ def test_the_sketch_revision_moves_only_with_what_is_drawn() -> None:
     second = _revision(session, sketch_id)
     assert second > first
     session.set_view_resolution(0.001, 100.0)
-    assert _revision(session, sketch_id) > second, "粗さが変われば領域の三角形が変わる"
+    assert _revision(session, sketch_id) == second, "直線だけのスケッチの塗りは粗さで変わらない(版を上げない)"
+    session.add_circle(sketch_id, [60.0, 60.0], 20.0)
+    third = _revision(session, sketch_id)
+    session.set_view_resolution(1000.0, 100.0)
+    assert _revision(session, sketch_id) > third, "粗さが変われば円の領域の三角形が変わる"
 
 
 def test_sketch_revisions_never_repeat_across_documents(tmp_path) -> None:
