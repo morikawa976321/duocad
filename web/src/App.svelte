@@ -1995,7 +1995,7 @@
         // メッシュボディには貼れない(平面が取れない。`sketch.resolve_plane` が断る)。
         // ボディ参照へ畳んでも `sketch_create` は面を要求するので、畳まずに理由を出す。
         if (meshBodyIds.has(event.hit.bodyId)) {
-          note('メッシュボディにはスケッチを貼れない(平面が取れない)')
+          fail('メッシュボディにはスケッチを貼れない(平面が取れない)。基準平面かほかのソリッドの面を指す')
           return
         }
         host.useSelectedFaceAsPlane()
@@ -2088,7 +2088,7 @@
     }
     const refused = host?.refusesFace(event.hit.bodyId, event.hit.faceIndex) ?? null
     if (refused !== null) {
-      note(refused)
+      inform(refused)
       return
     }
     editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
@@ -2483,6 +2483,12 @@
     if (optimizeBusy) {
       event.preventDefault()
       fail('形状最適化の実行中は取り消し・やり直しできない(終わるか中断してから)')
+      return
+    }
+    // サーバは1接続の要求を順に処理するので、確定の後ろに並んだ取り消しは、確定が断られると1つ前の成功した操作を戻す。
+    if (pendingOp !== null) {
+      event.preventDefault()
+      inform('確定の応答待ちなので、取り消し・やり直しは終わってから')
       return
     }
     if (key === 'z' && !event.shiftKey) {
