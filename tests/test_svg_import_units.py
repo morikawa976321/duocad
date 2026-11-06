@@ -240,6 +240,23 @@ def test_a_corner_radius_in_typographic_units_stays_a_corner(tmp_path: Path, cor
     assert radii == pytest.approx([radius] * 4, rel=1e-4)
 
 
+@pytest.mark.parametrize(
+    ("rect", "size"),
+    [
+        ('<rect width="10mm" height="10mm" rx="100pt"/>', [10.0, 10.0]),
+        ('<rect width="10mm" height="10mm" rx="100"/>', [10.0, 10.0]),
+        ('<rect width="10" height="10" rx="100mm"/>', [10.0, 10.0]),
+        ('<rect width="10mm" height="20mm" rx="100" ry="3"/>', [10.0, 20.0]),
+        ('<rect width="20mm" height="10mm" rx="3" ry="100pt"/>', [20.0, 10.0]),
+    ],
+)
+def test_a_corner_radius_is_limited_to_half_the_side_whatever_the_units(tmp_path: Path, rect: str, size: list) -> None:
+    """落ちたら、角丸の半径と幅・高さの単位が違うとき、半径が辺の半分に抑えられず、長方形より大きい輪郭が入る。"""
+    body = f'<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm">{rect}</svg>'
+    _name, entities = svg_import.read_svg_entities(_write(tmp_path, body))
+    assert svg_import.entities_size(entities) == pytest.approx(size, rel=1e-4)
+
+
 def test_reading_an_svg_leaves_the_parser_as_it_was(tmp_path: Path) -> None:
     """落ちたら、`pt` `pc` のための差し替えが取り込みの後(失敗した後も)に svgelements へ残る。"""
     from svgelements import Length
