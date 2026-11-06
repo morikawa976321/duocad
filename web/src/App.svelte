@@ -2882,13 +2882,13 @@
           thumbnailUrl={files.thumbnailUrl}
           onNeedThumbnail={files.wantThumbnail}
           lastCopied={files.lastCopied}
+          generation={files.generation}
         />
       </aside>
     {/if}
 
     <!-- ビューポートと、その上に浮かぶブラウザの入れ物。`.stage` が浮かせる側の位置の基準で、大きさを決めるのは
          `.viewport` だけ(ブラウザは position:absolute でフローの外なので、開閉してもカメラのアスペクトに触らない)。 -->
-          generation={files.generation}
     <div class="stage">
       <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
       <div class="viewport" bind:this={container}></div>

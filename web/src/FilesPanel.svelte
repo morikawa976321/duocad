@@ -256,6 +256,8 @@
   }
 
   let exportStepPath = $state('')
+  /** 使えない値のまま Enter を押した。欄が空でも理由を出す。 */
+  let exportStepAsked = $state(false)
   const exportStepProblem = $derived(exportPathProblem(exportStepPath, '.step'))
 
   function submitExportStep(): void {
@@ -267,9 +269,8 @@
   }
 
   let exportStlPath = $state('')
+  let exportStlAsked = $state(false)
   const exportStlProblem = $derived(exportPathProblem(exportStlPath, '.stl'))
-  /** 使えない値のまま Enter を押した。欄が空でも理由を出す。 */
-  let exportStepAsked = $state(false)
 
   function submitExportStl(): void {
     if (exportStlProblem !== null) {
@@ -279,16 +280,6 @@
     onExportStl(withSuffix(unquotePath(exportStlPath), '.stl'))
   }
 
-  function onRowEnter(event: KeyboardEvent, submit: () => void): void {
-    if (event.key !== 'Enter' || isImeKey(event)) return
-  let exportStlAsked = $state(false)
-    event.preventDefault()
-    submit()
-  }
-</script>
-
-<section class="files-panel">
-  <div class="row">
   let seenGeneration: number | null = null
   $effect.pre(() => {
     if (seenGeneration !== null && generation !== seenGeneration) {
@@ -300,6 +291,15 @@
     seenGeneration = generation
   })
 
+  function onRowEnter(event: KeyboardEvent, submit: () => void): void {
+    if (event.key !== 'Enter' || isImeKey(event)) return
+    event.preventDefault()
+    submit()
+  }
+</script>
+
+<section class="files-panel">
+  <div class="row">
     <button
       id="file-new"
       onclick={onNew}
