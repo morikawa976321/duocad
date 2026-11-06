@@ -31,7 +31,7 @@ const LOAD_DIRECTION_OPTIONS = [
 
 export const SET_PRESERVE_BODIES: CommandDef<'set_preserve_bodies'> = {
   id: 'set_preserve_bodies',
-  label: '保持ボディを決める',
+  label: '保持ソリッドを決める',
   buttonId: 'set-preserve-bodies',
   title: '最適化で必ず残すボディを決める',
   preview: 'none',
@@ -39,7 +39,7 @@ export const SET_PRESERVE_BODIES: CommandDef<'set_preserve_bodies'> = {
     {
       kind: 'selection',
       name: 'bodies',
-      label: '保持するボディ',
+      label: '保持するソリッド',
       shapeKind: 'body',
       min: 0,
       max: null,
@@ -50,7 +50,7 @@ export const SET_PRESERVE_BODIES: CommandDef<'set_preserve_bodies'> = {
 
 export const SET_EXCLUDE_BODIES: CommandDef<'set_exclude_bodies'> = {
   id: 'set_exclude_bodies',
-  label: '除外ボディを決める',
+  label: '除外ソリッドを決める',
   buttonId: 'set-exclude-bodies',
   title: '最適化で材料を置かないボディを決める',
   preview: 'none',
@@ -58,7 +58,7 @@ export const SET_EXCLUDE_BODIES: CommandDef<'set_exclude_bodies'> = {
     {
       kind: 'selection',
       name: 'bodies',
-      label: '除外するボディ',
+      label: '除外するソリッド',
       shapeKind: 'body',
       min: 0,
       max: null,

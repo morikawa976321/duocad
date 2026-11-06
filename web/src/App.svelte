@@ -2056,7 +2056,7 @@
         // メッシュボディには貼れない(平面が取れない。`sketch.resolve_plane` が断る)。
         // ボディ参照へ畳んでも `sketch_create` は面を要求するので、畳まずに理由を出す。
         if (meshBodyIds.has(event.hit.bodyId)) {
-          fail('メッシュボディにはスケッチを貼れない(平面が取れない)。基準平面かほかのボディの面を指す')
+          fail('メッシュボディにはスケッチを貼れない(平面が取れない)。基準平面かほかのソリッドの面を指す')
           return
         }
         host.useSelectedFaceAsPlane()
@@ -2856,7 +2856,7 @@
               id="optimize-enter"
               class="tag"
               onclick={enterOptimizeMode}
-              title="形状最適化モードに入る(保持/除外ボディ・拘束面・荷重面を決める)"
+              title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
             >
               形状最適化
             </button>
