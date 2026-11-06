@@ -163,6 +163,8 @@ def editable_bodies(doc: Document, body_ids: Sequence[BodyId], *, verb: str, wha
     (隠したものを断る理由は `editable_body`)。"""
     if not body_ids:
         raise ValueError(f"{verb} requires at least one body")
+    if len(set(body_ids)) != len(body_ids):
+        raise ValueError(f"{verb} got duplicate body ids: {list(body_ids)!r}")
     return [editable_body(doc, body_id, what=what) for body_id in body_ids]
 
 
