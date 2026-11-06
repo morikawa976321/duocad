@@ -26,6 +26,9 @@
 
   let {
     bodies,
+    generation,
+    hoverEnabled,
+    onHoverBody,
     sketches,
     activeSketchId,
     originVisible,
@@ -47,6 +50,9 @@
     onSectionInvert,
   }: {
     bodies: BodyMeta[]
+    generation: number
+    hoverEnabled: boolean
+    onHoverBody: (bodyId: string | null) => void
     sketches: SketchState[]
     /** 編集中のスケッチ(無ければ null)。 */
     activeSketchId: string | null
@@ -142,6 +148,31 @@
 
   const visibleCount = $derived(bodies.filter((body) => body.visible).length)
   const visibleSketchCount = $derived(sketches.filter((sketch) => sketch.visible).length)
+
+  function hoverBody(node: HTMLElement, bodyId: string | null) {
+    let hovered = false
+    const enter = () => {
+      hovered = true
+      onHoverBody(bodyId)
+    }
+    const leave = () => {
+      hovered = false
+      onHoverBody(null)
+    }
+    node.addEventListener('pointerenter', enter)
+    node.addEventListener('pointerleave', leave)
+    return {
+      update(next: string | null) {
+        bodyId = next
+        if (hovered) onHoverBody(bodyId)
+      },
+      destroy() {
+        node.removeEventListener('pointerenter', enter)
+        node.removeEventListener('pointerleave', leave)
+        if (hovered) onHoverBody(null)
+      },
+    }
+  }
 
 </script>
 
@@ -251,8 +282,8 @@
             {#if bodies.length === 0}
               <li class="empty dim">ボディが無い</li>
             {/if}
-            {#each bodies as body (body.body_id)}
-              <li class="parts-row" class:hidden-row={!body.visible}>
+            {#each bodies as body (`${generation}:${body.body_id}`)}
+              <li class="parts-row" class:hidden-row={!body.visible} use:hoverBody={body.visible && hoverEnabled ? body.body_id : null}>
                 {#if renamingId === body.body_id}
                   <input
                     class="rename-input"
