@@ -13,6 +13,7 @@
  *      つもりで A の図形が動く)
  *   5. 長方形の幅と高さを両方、負の値で打つと、マウスが反対側にあっても負の側へ伸びる
  *   6. 打ちかけの点は、空の数値欄にフォーカスがあっても Backspace と Ctrl+Z で1点ずつ戻り、文書は変わらない
+ *   7. 引数の行が開いても、ツールバーとビューポートの高さは変わらない
  *
  * 落ちる先の規則そのもの(円の半径ちょうど・傾いた辺の上)は `tests/eval_sketch_snap.mjs` が持つ。
  * ここが見るのは、本物のクリックと幽霊がその規則を通っていること。
@@ -198,6 +199,29 @@ runSmoke('smoke-sketch', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
     }
     await page.keyboard.press('Escape')
     ok('[6] 打ちかけの点は、空の数値欄にフォーカスがあっても Backspace と Ctrl+Z で1点戻り、文書は変わらない')
+  }
+
+  // ================================================================ 7. 引数の行が開いても、ツールバーとビューポートの寸法は動かない
+  // 待ちの1行(#command-prompt)は起動中だけ引数の行(overlay)へ移る。その分の場所を空けておかないと、コマンドを押すたびに
+  // ツールバーが縮んでビューポートが伸び、画面の中身が動く。
+  {
+    const sizes = () =>
+      page.evaluate(() => ({
+        host: document.querySelector('.command-host').getBoundingClientRect().height,
+        viewport: document.querySelector('.viewport').getBoundingClientRect().height,
+      }))
+    await page.keyboard.press('Escape')
+    await waitFrames(page, 4)
+    const idle = await sizes()
+    await page.click('#sketch-line')
+    await waitFor(() => document.querySelector('#command-abort') !== null, 'コマンドが起動しない')
+    await waitFrames(page, 4)
+    const active = await sizes()
+    if (Math.abs(active.host - idle.host) > 0.5 || Math.abs(active.viewport - idle.viewport) > 0.5) {
+      fail(`引数の行が開いて寸法が動いた: ${JSON.stringify({ idle, active })}`)
+    }
+    await page.keyboard.press('Escape')
+    ok('[7] 引数の行が開いても、ツールバーとビューポートの高さは変わらない')
   }
 
   await assertNoAppErrors(page, consoleErrors)

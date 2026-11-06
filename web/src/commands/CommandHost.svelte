@@ -323,6 +323,12 @@
     return expressionEcho === '' ? 'Enterで確定 / Escで中断' : `${expressionEcho} ・ Enterで確定`
   })
 
+  /** 無起動のときの待ちの1行。起動中にツールバーの高さを保つ場所取りが同じ文字を持つ(折り返しが無起動のときと同じになる)。 */
+  let idlePrompt = $state('')
+  $effect(() => {
+    if (!commandActive) idlePrompt = prompt
+  })
+
   /** いま直接ピックを待っている引数(なければ null)。必須は収集の順(`missing`)、省略可は「指す」ボタンで構えたときだけ(`armedPick`)。構えたほうが勝つ。 */
   const pendingPick = $derived.by<PickArgSpec | null>(() => {
     if (command === null) return null
@@ -1102,6 +1108,9 @@
       {/each}
       {#if !commandActive}
         <span id="command-prompt" class:dim={!ready}>{prompt}</span>
+      {:else}
+        <!-- 起動中は待ちの1行が引数の行(overlay)へ移る。ここに空けておかないと、ツールバーが縮んでビューポートが伸びる。 -->
+        <span class="prompt-space" aria-hidden="true">{idlePrompt}</span>
       {/if}
     </div>
   </div>

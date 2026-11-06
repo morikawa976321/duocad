@@ -179,7 +179,8 @@ header {
   min-width: 0;
 }
 
-.toolbar .command-body > #command-prompt {
+.toolbar .command-body > #command-prompt,
+.toolbar .command-body > .prompt-space {
   flex: 0 0 auto;
   margin-left: auto;
   min-width: 0;
@@ -187,6 +188,10 @@ header {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.toolbar .command-body > .prompt-space {
+  visibility: hidden;
 }
 
 /* 起動中の待ちの1行。overlay の中なので折り返して伸びてもビューポートの実寸は動かない(`.toolbar-overlay`)。 */
