@@ -10,7 +10,7 @@
  *   4. 基準平面を指せる間も、原点をはさんでカメラの反対側にある面が取れる(#109)
  *   5. 自動保存が書けなかったら「未保存」の札が出て、Ctrl+S で書き直すと消える
  *   6. 入力欄にフォーカスがある間の Ctrl+Z は、文書を undo しない(欄が空なら undo / redo になる)
- *   7. 押し出しの種別を、距離欄から Tab で進んで Space で選べる
+ *   7. 押し出しの結果を、距離欄から Tab で進んで Space で選べる
  *   8. F とビューキューブ下のボタンで、向きを変えずに全体表示になる(入力欄の中の F は効かない)
  *   9. ビューキューブの外側の余白を引いても視点は回らない(立方体の上を引くと回る)
  */
@@ -265,15 +265,15 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   await waitFor((log) => window.__duocad.state.log.length === log, 'Ctrl+Y で戻らない', [before.log])
   ok('[6] 入力欄にフォーカスがある間の Ctrl+Z は文書を変えず、外では undo される(押しっぱなしは 1 回だけ)')
 
-  // ================================================================ 7. 押し出しの種別をキーボードだけで選べる
+  // ================================================================ 7. 押し出しの結果をキーボードだけで選べる
   // 選択肢のボタンは DOM で数値欄より前にあり、素の Tab では欄から届かない。
   const activeId = () => page.evaluate(() => document.activeElement?.id ?? '')
   await page.focus('#distance')
   await page.keyboard.press('Tab')
-  if ((await activeId()) !== 'extrude-mode-join') fail(`距離欄から Tab で種別のボタンへ進めない: ${await activeId()}`)
+  if ((await activeId()) !== 'extrude-mode-join') fail(`距離欄から Tab で結果のボタンへ進めない: ${await activeId()}`)
   await page.keyboard.press('Space')
-  await waitFor(() => document.querySelector('#extrude-mode-join')?.classList.contains('on') === true, 'Space で種別が選ばれない')
-  ok('[7] 距離欄から Tab で種別のボタンへ進み、Space で選べる')
+  await waitFor(() => document.querySelector('#extrude-mode-join')?.classList.contains('on') === true, 'Space で結果が選ばれない')
+  ok('[7] 距離欄から Tab で結果のボタンへ進み、Space で選べる')
 
   // ================================================================ 8. 全体表示(F キーとビューキューブ下のボタン)
   // 向きを変えずに寄る。入力欄にフォーカスがあるときは効かない(F はその欄に打つ文字)。

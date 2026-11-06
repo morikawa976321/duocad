@@ -50,7 +50,7 @@ const BODY_SELECTION: Pick<SelectionArgSpec, 'shapeKind' | 'kinds'> = {
 /**
  * 押し出し(verb `extrude`)。スケッチ編集中は閉領域、通常モードはソリッドの面か領域を選ぶ2つの定義を作る
  * (サーバは選択の種別で分岐し、混在は断る。通常モードの領域は 2026-10-18 本人決定。docs/DESIGN_DECISIONS.md)。
- * 種別(join/cut/new)は人に選ばせる: 既定の join に落ちると「切り取るつもりで足した」が黙って通る。
+ * 結果(join/cut/new)は人に選ばせる: 既定の join に落ちると「切り取るつもりで足した」が黙って通る。
  * 面の距離は外向きが正(削るには負)。領域の距離は0だけが無効。
  * テーパー角は正で太る・負で細る(Fusion と同じ符号)。0 のときは送らない(テーパーの無い押し出しと同じ args になる)。
  */
@@ -89,7 +89,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
       {
         kind: 'choice',
         name: 'mode',
-        label: '種別',
+        label: '結果',
         options: [
           { value: 'join', label: '結合', buttonId: 'extrude-mode-join' },
           { value: 'cut', label: '切り取り', buttonId: 'extrude-mode-cut' },
@@ -112,7 +112,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
       }
       if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
       if (typeof taper !== 'number') return { ok: false, reason: 'テーパー角が数値でない' }
-      if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+      if (typeof mode !== 'string') return { ok: false, reason: '結果が選ばれていない' }
       return { ok: true, args: taper === 0 ? { distance, mode } : { distance, taper, mode } }
     },
   }
@@ -168,7 +168,7 @@ export const REVOLVE: CommandDef<'revolve'> = {
     {
       kind: 'choice',
       name: 'mode',
-      label: '種別',
+      label: '結果',
       options: [
         { value: 'join', label: '結合', buttonId: 'revolve-mode-join' },
         { value: 'cut', label: '切り取り', buttonId: 'revolve-mode-cut' },
@@ -184,7 +184,7 @@ export const REVOLVE: CommandDef<'revolve'> = {
     const angle = values.angle
     const mode = values.mode
     if (typeof angle !== 'number') return { ok: false, reason: '角度が数値でない' }
-    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    if (typeof mode !== 'string') return { ok: false, reason: '結果が選ばれていない' }
     if (axisKind === 'line') {
       // 参照のまま送る(鏡映の軸と同じ)。線分であることの検査はコアに任せる。
       const line = pickedRefOf(values.axis_line)
@@ -220,7 +220,7 @@ export const LOFT: CommandDef<'loft'> = {
     {
       kind: 'choice',
       name: 'mode',
-      label: '種別',
+      label: '結果',
       options: [
         { value: 'join', label: '結合', buttonId: 'loft-mode-join' },
         { value: 'cut', label: '切り取り', buttonId: 'loft-mode-cut' },
@@ -253,7 +253,7 @@ export const LOFT: CommandDef<'loft'> = {
       return { ok: false, reason: '断面をもう1つ選ぶか、収束点を指す(断面1つなら点が要る)' }
     }
     const mode = values.mode
-    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    if (typeof mode !== 'string') return { ok: false, reason: '結果が選ばれていない' }
     // 指していない点は引数ごと送らない(省略は「収束させない」)。
     const points = { ...(start === null ? {} : { start_point: start }), ...(end === null ? {} : { end_point: end }) }
     const text = typeof values.shifts === 'string' ? values.shifts.trim() : ''
@@ -468,7 +468,7 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
     {
       kind: 'choice',
       name: 'mode',
-      label: '種別',
+      label: '演算',
       options: [
         { value: 'union', label: '結合', buttonId: 'boolean-body-union' },
         { value: 'cut', label: '切り取り', buttonId: 'boolean-body-cut' },
@@ -492,7 +492,7 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
     const empty = missingSelection(values, 'tools', 'ツールボディ')
     const mode = values.mode
     if (empty !== null) return { ok: false, reason: empty }
-    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    if (typeof mode !== 'string') return { ok: false, reason: '演算が選ばれていない' }
     // 消す(既定)は送らない: 引数の無い今までの呼び出しと同じ形にする。
     return { ok: true, args: values.keep_tool === 'keep' ? { target_ref: target, mode, keep_tool: true } : { target_ref: target, mode } }
   },
@@ -619,7 +619,7 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
 
 /**
  * ボディの平行移動 / 回転 / 複製。対象はボディ単位で選ぶ(`BODY_SELECTION`)。
- * 複製するかは「動かす」、種別は「並進」が既定(選び違えても undo 1回で戻り、形は壊れない。`ChoiceArgSpec.default`)。
+ * 元のボディは「移す」、動かし方は「並進」が既定(選び違えても undo 1回で戻り、形は壊れない。`ChoiceArgSpec.default`)。
  *
  * 回転軸は共有選択集合に入れず別チャンネル(`kind: 'pick'`)で指す: 入れると `require_bodies` が軸にした辺のボディまで動かす対象に数える。
  * 軸はまっすぐな辺か原点の軸をクリックで指す。画面だけの選択肢(X/Y/Z のボタン)は置かない: 共有引数に無い状態を画面が持つと、
@@ -641,8 +641,8 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
       min: 1,
       max: null,
     },
-    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('move-body'), default: 'move' },
-    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('move-body'), default: 'translate' },
+    { kind: 'choice', name: 'copy', label: '元のボディ', options: copyOptions('move-body'), default: 'move' },
+    { kind: 'choice', name: 'mode', label: '動かし方', options: modeOptions('move-body'), default: 'translate' },
     { kind: 'number', ...offsetArg('dx', 'move-body', finite('X')) },
     { kind: 'number', ...offsetArg('dy', 'move-body', finite('Y')) },
     { kind: 'number', ...offsetArg('dz', 'move-body', finite('Z')) },

@@ -408,8 +408,8 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
       min: 1,
       max: null,
     },
-    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('sketch-move'), default: 'move' },
-    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('sketch-move'), default: 'translate' },
+    { kind: 'choice', name: 'copy', label: '元の図形', options: copyOptions('sketch-move'), default: 'move' },
+    { kind: 'choice', name: 'mode', label: '動かし方', options: modeOptions('sketch-move'), default: 'translate' },
     { kind: 'number', ...offsetArg('dx', 'sketch-move', () => null) },
     { kind: 'number', ...offsetArg('dy', 'sketch-move', () => null) },
     {
