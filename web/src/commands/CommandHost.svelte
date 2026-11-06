@@ -883,7 +883,17 @@
         (candidate) =>
           (missing === null || candidate.fromPoints === true) && (numberText[candidate.name] ?? '') === '',
       )
-      if (spec !== undefined) document.getElementById(spec.inputId)?.focus()
+      if (spec !== undefined) {
+        document.getElementById(spec.inputId)?.focus()
+        return
+      }
+      // 数値欄が無く、前回の文字(ファイルのパス)が残って揃っているときは、その欄を全選択して打ち直せるようにする(Enter だけで前と同じファイルを読み込ませない)。
+      const kept = missing === null ? textArgs.find((candidate) => (textValues[candidate.name] ?? '') !== '') : undefined
+      const input = kept === undefined ? null : document.getElementById(kept.inputId)
+      if (input instanceof HTMLInputElement) {
+        input.focus()
+        input.select()
+      }
     })
   }
 
