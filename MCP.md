@@ -18,7 +18,7 @@
 | 選択 | `get_selection` / `set_selection` / `modify_selection` / `toggle_selection` / `clear_selection` —— 人（ブラウザ）が使う選択操作と同じ集合に、AIだけが述語を書ける `set_selection` を足したもの |
 | スケッチ | `sketch_create` / `sketch_create_offset` / `add_point` / `add_line` / `add_circle` / `add_ellipse` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` / `project_to_sketch` / `project_outline` —— `project_to_sketch` は選択のソリッドの辺・面（外周と穴）を、`project_outline` は選択が属するボディを法線方向から見た外形（影の境界。外周と貫通穴）を、`sketch_id` のスケッチの平面へ写した普通の図形として足す（元の形に追従しない。点に潰れる辺は図形にせず、全部潰れると失敗）。`envelope_regions` は選択の複数の領域を、へこみに沿って包む**単一の領域線**（線分・円弧・円・楕円・3次ベジエ。正確な図形に直せない辺は誤差 0.001 mm 以下のベジエで近似）を同じスケッチへ足す。`radius`（追従半径 R）と `offset`（d・負で内へ）は省略で 0。1つの領域にならないと失敗して何も変わらない |
 | フィーチャ | `extrude` / `revolve` / `loft` / `fillet` / `chamfer` / `shell_body` / `thread` / `delete_faces` / `offset_faces` / `boolean_body` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `split_body` / `delete` / `delete_items` / `rename` |
-| 可視性 | `set_visible` / `set_sketch_visible` —— ボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない。**名前つき寸法の打ち直し（`set_parameter`）は公開していない**（人間側に口が無いため。口ができたら人とAIの両方へ同時に出す。`describe_document` はパラメータ名と値を返す） |
+| 可視性 | `set_visible` / `set_sketch_visible` —— ボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない。ボディを隠すと、そのボディのボディ・面・辺・頂点の選択項目は選択から外れ、戻しても選択は戻らない。**名前つき寸法の打ち直し（`set_parameter`）は公開していない**（人間側に口が無いため。口ができたら人とAIの両方へ同時に出す。`describe_document` はパラメータ名と値を返す） |
 | 作業空間 | `get_command` / `begin_command` / `set_command_args` / `end_command` / `apply_command` / `enter_sketch` / `leave_sketch` —— **起動中の verb と途中の引数・モードを人の画面と共有する**(issue #153)。`begin_command(verb)` で起動すると人の画面にその verb が起動し、対象の候補(辺など)が見える。人が画面で起動した verb と打ちかけの引数は `describe_document` / `get_command` の `command` に見え、`set_command_args` で引数を足し、`apply_command` で確定する(人の Enter と同じ)。`end_command` は人の Esc。起動・引数・畳む・モードの操作は操作ログに載らず undo では戻らない（`apply_command` が確定した形の変更はログに載り、undo で戻る）。スケッチを作ると誰が作ってもそのスケッチへ入り、`enter_sketch` / `leave_sketch` で出入りする |
 | 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` / `enter_optimize` / `leave_optimize` —— 保持/除外ソリッド・拘束面・荷重面の条件を置く（ボディと拘束は集合代入。荷重は大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`）。**安定版には出さない**（凍結中。docs/STABLE.md「安定版で出さない機能」） |
 | 入出力 | `import_step` / `export_step` / `export_stl` / `add_mesh_body` —— `export_*` の書き出し先は拡張子が形式（`.step`/`.stp`・`.stl`）と一致するものに限り、保存済みの文書（`models` の `*.json`）は上書きしない。最後の1つは**計算で作った三角形メッシュ**をボディとして足す（表示とSTL書き出しだけ。編集verbは断られる） |
@@ -38,7 +38,14 @@
      `between.angle_deg` が返る。測れない組（円い辺・曲面・ボディそのもの・線分以外のスケッチの図形まるごと）は
      `between_error` に理由が、`between_error_items` に測れない項目の添字が入り、各項目の寸法はそのまま読める
    - `sketch_create_offset(distance, base_plane=?)` は `sketch_create` の兄弟。`base_plane` 省略時は選択の面（ちょうど1枚）を基準に
-     し、その法線方向へ `distance`（mm・正の向きが法線）離れた平面にスケッチを貼る。基準の基準（offsetのoffset）は作れない
+     し、その法線方向へ `distance`（mm・正の向きが法線）離れた平面にスケッチを貼る。基準の基準（offsetのoffset）は作れない。
+     `distance` は絶対値 1e6 mm 以下（置いた値。実測では 1e6 は通り、1e12 で図形の追加が失敗し、1e100 は通るので境目は一定でない。
+     超えると距離と上限を示して断る。再生は断らない）
+   - 図形の追加で断られるもの: 隠したスケッチへの `add_point` / `add_line` / `add_circle` / `add_ellipse` / `add_rectangle` / `add_arc`・`import_svg`・
+     `project_to_sketch`・`project_outline`（先に `set_sketch_visible(sketch_id, true)`。redo・再生は通る）、掃引が 0 より大きく 1e-6 度未満の円弧
+     （置いた値。実測では 1e-8 度の掃引が全周の円になる。0→360 は全周。SVG の同じ弧は取り込まずに捨てる）
+   - `mirror_sketch_entities` は、軸の上に乗って鏡映できない図形を外して残りを鏡映し、外した数を応答の `warning` で返す（全部が軸上なら断る。
+     ログの `targets` には残した図形だけが載る）
    - どちらも戻り値に**スケッチの枠 `frame`**（`origin` / `u` / `v` / `normal`）を返し、図形の座標 (u, v) はこの枠で測る
      （3D位置 = `origin + u*frame.u + v*frame.v`）。基準平面なら世界座標のままだが、**面を基準にすると原点も軸の向きも面ごとに違う**
      （面の中心とは限らない。世界の点 P は `u = (P - origin)·frame.u`、`v = (P - origin)·frame.v`）。世界座標のつもりで描くと、
@@ -74,7 +81,7 @@ duocadのサーバを2つ同時に立てない（後から立った方がWebSock
 |---|---|---|
 | `--port` | 8765 | WebSocket |
 | `--http-port` | 8766 | 静的配信（ブラウザで開く）＋ `/mcp`（MCPのHTTPトランスポート） |
-| `--deviation` | 0.2 | **画面の**テセレーションの線形偏差（mm・絶対。ズーム連動値が来るまでの土台で、STL書き出しは見ない＝`io_step.STL_DEVIATION` 固定） |
+| `--deviation` | 0.2 | **画面の**テセレーションの線形偏差（mm・絶対。空の文書で、ズーム連動値が来るまでの土台。ボディのある文書は、来るまでの粗さを文書の外接対角から決める（`resolution.document_resolution`。[docs/VIEWPORT.md](docs/VIEWPORT.md)「可変解像度と面カリング」）。STL書き出しは見ない＝`io_step.STL_DEVIATION` 固定） |
 | `--web-dist PATH` | `web/dist` | 静的配信するディレクトリ |
 | `--open` | — | 起動時にブラウザを開く（既定は開かない） |
 
@@ -146,6 +153,20 @@ Claude Desktopはstdioで繋ぐので、**あちらがduocadのプロセスを�
   `_claim_stdout`）。
 - **AIへ渡す手順の文（`initialize` の `instructions`）は `catalog.agent_instructions()` の1本**で、アプリ内AIエージェント
   （`duocad/agent/`・docs/DEVELOPMENT.md §4）と共有する。ツール数も宣言から数えるので、verbを足しても古くならない。
+- **verb の成功封筒**は `verb`・`seq`・`changed_bodies`・`bodies`・`can_undo`・`can_redo` に、入口が返したもの（作ったものの ID・解決後の数値など）を足す。
+  `changed_bodies` は形の版の前後差で導く（粗さだけが変わったボディは含めない）。次のキーは該当するときだけ付く:
+  - `warning` —— 断らずに確定した注意（離れたツールの結合で離れた塊が入った・切り取りで1ボディに離れた塊が入った・鏡映で図形を外した・
+    推奨の外のねじの隙間）。画面では警告のトーストになる。再生・やり直し・プレビューでは出ない。
+  - `discarded_redo` —— 取り消したあとの新しい操作で捨てたやり直しの件数（適用の前後のやり直せる件数の差）。
+  - `dropped_args` —— 作業空間で構えたコマンドの引数のうち、形が変わったボディの面・辺・頂点を指していたため外した引数名。`undo` / `redo` の封筒には載らない。
+
+  引数・戻り値の追加: `boolean_body` に `keep_tool`（既定 false。true でツールのボディを文書に残し、応答の `removed_bodies` は空。画面の選択と同じ。
+  ログには真のときだけ積み、引数の無い保存済みの文書の再生はツールを消す）。`thread` の応答に `diameter`（面の呼び径＝半径の2倍を小数3桁に丸めた値）と `pitch`。
+  `export_step` / `export_stl` の戻り値に `overwrote`（書く前に同名のファイルがあったか）。`fillet` の半径と `chamfer` の距離は 1e-6 mm 以上
+  （新しい操作の入口だけ。再生は断らない）。
+- **辺の述語 `parallel_to` の許容は、単位方向の内積が 1 から 1e-6 以内（傾きで約0.08度）。** 根拠の実測（回転した箱を STEP に書き、`CARTESIAN_POINT` と
+  `DIRECTION` を小数2〜8桁に丸めて読み直した、平行な辺の 1−内積 の最大）: 小数2桁 1.4e-5、3桁 2.1e-7、4桁 6e-10。傾きが 1度の辺は 1.5e-4、0.1度は 1.5e-6。
+  3桁の最大の約5倍に置いた（置いた値）。丸めの粗い STEP の平行な辺は外れうる。
 - ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
   （`not_found` / `invalid_argument` / `selection_empty` /
   `selection_kind_mismatch` / `invalid_predicate` / `busy` / `document_changed` / `no_command` / `internal` / `dimension_not_given`）。

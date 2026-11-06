@@ -45,6 +45,10 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **軸の位置の解決順は `center_vertex` → `axis_point` → 辺の位置 → 対象の合成重心。** `axis_point` と `center_vertex`、`axis_edge` と `axis_point`/`axis_dir` は同時に渡せない。`axis_edge` + `center_vertex` は許す(辺が向き・頂点が位置)。
 - **`angle` は度。** スケッチは u→v 反時計が正(`pattern_circular` の `total_angle` と同じ)、ソリッドは軸に対し右ねじが正。**360の倍数は ValueError**(UI 側は `commands/moveMode.ts` の `rejectAngle`)。
 - **操作ログに載るのは解決済みの数値だけ。** undo は「逆向きに同じ角度」で戻すが、軸に使った辺は対象ボディに属していれば既に回った後にいるので、参照を引き直すと別の軸で戻る。`_rotation_args` が入口で数値へ潰し、`_do_*`/`_undo_*` は数値しか見ない。ただし `move_sketch_entities` の undo は逆向きに動かさず、args の `previous`(動かす前の `params`)を書き戻す。逆向きだと `x + dx - dx != x` で1ulpずれ、同面積の領域の並びが再生した文書と食い違う。`previous` は旧ログに無く、その undo だけ逆向きに動かす。
+- **複製(`copy`)したボディの名前は「元の名前 + 半角空白 + 連番」**(`naming.copy_name`。番号は 2 から、文書の既存の名前と重ならない最小。
+  複製の複製(`ブラケット 2`)は、番号を外した名前(`ブラケット`)が文書にあるときだけ外して数え直し、無ければ外さない(`M8 30` の複製は `M8 30 2`)。
+  名前が空の元だけ通し番号の名前)。付けた名前はログの `args.names`(文字列の並び)に記録し、redo・再生はそれを使う。`numbers`(通し番号)だけを持つ
+  古いログは、当時の通し番号の名前のまま再生する。`mirror_body` の複製も同じ。
 - **`mode` キーの無いログは並進として読む**(`args.get("mode", MODE_TRANSLATE)`)。2026-09-05 より前の保存文書には `mode` が無く、この既定を消すと開けなくなる。
 - **添字は回転でも変わらない**(`copy=False` は `TopoDS_Shape.Moved` で位置だけ差し替え、下層の形状を共有)。`resets_selection` は他の形状変更 verb と同じ既定で、回転が壊すからではない。
 - **長方形をまるごと回すと、長方形のまま回る**(基準の角を回し、`angle` に角度を足す。`pattern_circular` の複製も同じ)。`angle` を持たない旧い長方形を回すと `_write_params` が `angle` を新しい名前つきの値として足し、その undo は足した `angle` と名前を外す(`previous` に `angle` が無いことから分かる)。長方形の1点(左下)だけを回すこともできる。
@@ -75,6 +79,9 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **どちらも常に複製を作る**(in-place 反転も `copy` 引数も無い)。
 - **軸・鏡映面は数値へ解決してからログに載せる**(`axis_p0`/`axis_dir`、`plane_point`/`plane_normal`)。対象に軸の図形/面自身が混ざる場合、複製後に参照を引き直すと別物を指すため(`move_body.axis_edge` と同じ)。
 - **軸に使った線分自身が対象に混ざっていたら、対象から黙って外す**(`mirror_sketch.py`。直線は自分自身へ映り元と重なる複製にしかならない)。対象が軸だけになったら ValueError。
+- **軸の上に乗って鏡映できない図形(`mirror_sketch_entities`)は、新しい操作の入口だけが外して続ける**(`mirror_sketch.py` の `_without_unmirrorable`)。
+  外した数は入口の `warning`(「鏡映軸の上に乗っている図形 N 個は、鏡映できないので外した」)で返し、警告のトーストは確定のときだけ。全部が外れるときは断る。
+  ログの `targets` には残した図形だけを載せ、redo・再生は記録された対象をそのまま掛ける。プレビューの幽霊も外した図形を出さない。原点の軸でも同じ。
 - **軸(`mirror_sketch_entities`)・回転中心(`move_sketch_entities` の `center_entity`)に別のスケッチの図形を指すときは、対象と (u, v) が同じ平面上の同じ点を指すこと**(`_common.require_same_uv_plane`)。数値の (u, v) を対象の座標へそのまま当てるので、平面が違うと黙って別の場所に映る・回る。向きが同じで原点が法線方向にずれただけのオフセットしたスケッチは通す。
 - **長方形は軸が斜めでも長方形のまま鏡映される**(`sketch._mirror_rectangle` が向きを `2φ - angle`、基準の角を元の「height 側の隣の角」の鏡像にして1つの長方形を返す)。
 - **円弧の鏡映は始点・終点を入れ替えてから角度を映す**(`new_start = 2*axis_angle - end`、`new_end = 2*axis_angle - start`)。鏡映は向きを反転するので別々に映すと掃引方向が壊れる。掃引量(`end-start`)は保たれる。
@@ -122,7 +129,17 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - Web の `BOOLEAN_BODY` の `args` 順は `[pick target_ref(body), selection tools(ボディ単位, min=1), choice mode]`(`firstMissingArg` の質問順。粒度は [UI.md](../UI.md)「持ち主ごとに効くコマンド」)。`SOLID_FEATURE_COMMANDS` にのみ追加。
 - **union だけ同一平面の面を統合する**(`_unify_same_domain`。隣り合うボディの継ぎ目を消し、またぐ辺にフィレットをかけられるようにする)。cut / intersect は統合しない。`provenance` は押し出しと同じ形(`face_map` の鍵はターゲットの面、ツール由来の面は `new_faces`)。
 - 1つの Body 内に複数 SOLID(compound ソリッド)を持つ場合の個別演算は未保証(`boolean_bodies` は「SOLID が 1 個以上あるか」しか見ない)。
+- **`keep_tool`(既定 false)で、ツールのボディを文書に残せる。** ログには真のときだけ `keep_tool: true` を積むので、引数の無い保存済みの文書の再生は
+  ツールを消す。入口の応答の `removed_bodies` は `keep_tool` のとき空。退避が空なので、undo / redo はターゲットの形だけを戻す・掛け直す(残したツールは増減しない)。画面の選択と catalog の説明も同じ引数。
+- **union で離れた塊が増えたら、入口が `warning`(「離れた塊が N 個入った1ボディになった(結合したツールがターゲットに触れていない)」)を返す。** 結合は断らずに成功させる。
+  入口(`_enter_boolean_body`)で前後の塊の数を比べる。redo・再生は入口を通らず出ず、プレビューは入口を通るが警告のトーストは確定のときだけ。
 - 新しい verb の追加は `MCP.md` のツール表(`test_doc_code_agreement.py`)と画面の `Applied` 型(`web/src/generated/protocol.ts` の生成物。`npm run check`)の追随が不可避。
+
+## fillet・chamfer の下限
+
+- **フィレットの半径・面取りの距離は 1e-6 mm 以上**(`verbs/_common.py` の `require_blend_minimum`。押し出しの距離の下限 `kernel_extrude.MIN_DISTANCE` と同じ値)。
+  下回ると「radius / distance must be at least 1e-06 mm, got …」で断り、ログは変わらない。**新しい操作の入口だけ**で呼ぶ: 再生・やり直しに掛けると、
+  下限未満で確定済みの保存済みの文書が開けなくなる。
 
 ## shell_body(シェル・中空化)
 
@@ -138,6 +155,8 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
 - **仕様(2026-10-23・10-24 本人判断)**: 山形は `trapezoid30` / `trapezoid45` から選ぶ。`semicircle` は新しく刻めない(`kernel_thread.require_selectable` が断る)が、既に半円で刻んだ文書の再生(`_do_thread`)は通す。隙間は入力でき、下限 0・上限(山の深さに比例するピッチの式)で断り、推奨の範囲の外は確定して警告する。既定は穴が 30°台形 0.20(推奨の上端。TP5 で D3〜D10 とも回った)・45°台形 0.12、軸が 0。ピッチは径から自動で入力欄は無い(AI の判断)。
 - **ログには解決後の隙間とピッチを残す**(`{face, profile, clearance, pitch, body_id}`)。再生は記録された値で刻み直すので、既定の表やピッチの式を直しても古い文書の形は変わらない。
 - **警告は入口の返り値の `warning` で運ぶ**。`Session._after_logged_verb` が `_suppress_events == 0`(確定)のときだけ `Session.warnings` へ積む。プレビューは同じ入口を通るので、ここで抑えないと幽霊を描くたびにトーストが出る。
+- **入口の応答に `diameter`(面の呼び径=半径の2倍を小数3桁に丸めた値。刻む前の面から読む)と `pitch` が載る。** 画面は確定の知らせに「ねじを刻んだ: D6 P1.5」と出す
+  (刻めるのは台形で ISO のメートルねじではないので `M` は付けない)。入力欄は足していない。
 - 合否は `IsDone`・`BRepCheck` だけで決めない: ソリッドの数が変わらない・体積の増減が「単独で組んだねじ部の体積 − 埋めた・切った円柱」とねじ部の体積の 1% 以内で合うことまで見る(`BRepCheck` が真のまま芯が消える壊れ方。docs/THREAD.md「形の作り方」)。
 - Web は `THREAD`(`commands/features.ts`、`SOLID_FEATURE_COMMANDS`、`#thread`、山形 `#thread-profile-*`、隙間 `#thread-clearance`)。隙間は `NumberArgSpec.optional` で、空欄のまま Enter できる(`build` は空欄なら `clearance` を送らない)。プレビューはサーバの投機実行。
 
@@ -223,6 +242,13 @@ pattern/move/mirror/boolean/envelope/extrude/revolve 系の verb と、そのプ
   再生は `args.get("taper", 0.0)`(テーパーの無い古いログはそのまま再生される。形式の版は上げていない)。
   画面(`#extrude-taper`、既定 0)も 0 のときは送らない。
 - 面の押し出しの `after_face_indices` は、テーパーではふたの重心が底の重心の平行移動にならない(L字など)ので、作った柱のふたの重心で探す。
+
+### 切り取りで割れたボディ
+
+- **cut の押し出し(領域・面とも)でボディに離れた塊が増えても、断らず分けない**(保存の形を変えない)。入口が前後の塊の数を比べ、増えたボディごとに
+  `warning`(「切り取りで「ボディ1」に離れた塊が2個入った(1つのボディのまま。面のオフセット・面の削除は掛けられない)」。複数のボディが同時に割れたら文を「。」でつなぐ)を返す。
+  警告のトーストは確定のときだけで、redo・再生では出ない。割れたあとのボディへの面のオフセットは `MakeOffset` が失敗して断られる(確かめたのは棒を全幅の溝で割った形。面の削除は未確認。
+  割れる前は掛かる。`tests/test_cut_splits_body_warning.py` が固定)。
 
 ### 踏んだ罠
 
