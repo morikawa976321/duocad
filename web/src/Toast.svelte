@@ -1,7 +1,7 @@
 <script module lang="ts">
   /**
    * トースト — エラー(`fail`、琥珀の札)と、見落とされると困る知らせ(`inform`、無彩色の札)。
-   * 公開APIは `fail` / `inform` / `errorLog` だけ。種別は関数名で分け、引数は文字列1つ(`fail(msg, 'warn')` のような口を
+   * 公開APIは `fail` / `inform` / `errorLog` と、解けた失敗の札を外す `withdraw` だけ。種別は関数名で分け、引数は文字列1つ(`fail(msg, 'warn')` のような口を
    * 開けると呼ぶ側が分類を判断することになり、エラー経路を1本にした意味が消える)。
    *
    * ```ts
@@ -129,6 +129,16 @@
     show('error', text)
   }
 
+  /**
+   * 出ているエラーの札のうち、`text` で終わる文言のものを外す(`fail` へ渡した文言は呼ぶ側が `エラー[verb] ` を前置きすることがある)。
+   * 失敗の原因が解けたとき(再接続など)に、古い札が「いまも繋がらない」と言い続けないために使う。控え(`errorLog`)は消さない。
+   */
+  export function withdraw(text: string): void {
+    for (const item of items.filter((candidate) => candidate.kind === 'error' && candidate.message.endsWith(text))) {
+      dismiss(item.id)
+    }
+  }
+
   /** 失敗ではない知らせを札に出す。控え(`errorLog`)には積まない(控えはエラーの記録)。 */
   export function inform(message: string): void {
     const text = message.trim()
@@ -248,11 +258,24 @@
 
   .toast-copy,
   .toast-close {
+    position: relative;
     padding: 0 6px;
     line-height: 1.2;
     border-color: transparent;
     background: transparent;
     color: var(--dim);
+  }
+
+  /* 見た目の大きさは変えず、当たりだけを縦横 24px 以上に広げる(小さいボタンを狙わせない)。 */
+  .toast-copy::before,
+  .toast-close::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 24px);
+    height: max(100%, 24px);
+    transform: translate(-50%, -50%);
   }
 
   .toast-copy.copied {

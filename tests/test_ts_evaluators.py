@@ -39,6 +39,7 @@ EVALUATORS = [
     "eval_selection_info_text.mjs",
     "eval_selection_ref_key.mjs",
     "eval_session_dispose.mjs",
+    "eval_session_reconnect.mjs",
     "eval_session_sender.mjs",
     "eval_shared_args_controller.mjs",
     "eval_sketch_geometry.mjs",
