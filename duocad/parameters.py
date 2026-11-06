@@ -202,6 +202,10 @@ def rebuild(
     doc.bodies.clear()
     doc.sketches.clear()
     doc.parameters.clear()
+    # 最適化の verb はすべて代入なので、空から再生し直しても結果は変わらない。空にしないと、除外から保持へ移したボディが
+    # 再生の途中で反対の役割と衝突する。版は戻さず進める(画面が古い割り当てを描き続けない)。
+    vars(doc.optimize).update({key: value for key, value in vars(type(doc.optimize)()).items() if key != "revision"})
+    doc.optimize.touch()
 
     _REBUILDING = True
     try:
