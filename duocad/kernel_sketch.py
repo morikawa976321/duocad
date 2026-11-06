@@ -14,7 +14,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Sequence, Tuple
 
-from OCP.BRep import BRep_Tool
+from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import (
@@ -31,7 +31,7 @@ from OCP.BRepTools import BRepTools_WireExplorer
 from OCP.Geom import Geom_BezierCurve, Geom_TrimmedCurve
 from OCP.GeomAbs import GeomAbs_Arc, GeomAbs_CurveType, GeomAbs_Shape, GeomAbs_SurfaceType
 from OCP.GeomConvert import GeomConvert_ApproxCurve, GeomConvert_BSplineCurveToBezierCurve
-from OCP.TopAbs import TopAbs_ShapeEnum, TopAbs_State
+from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
@@ -113,6 +113,29 @@ def copy_face(face: Any) -> Any:
     return TopoDS.Face_s(BRepBuilderAPI_Copy(face, True, False).Shape())
 
 
+def _is_dangling_wire(wire: Any) -> bool:
+    edges = _brep_topology.subshapes(wire, TopAbs_ShapeEnum.TopAbs_EDGE)
+    return bool(edges) and all(edge.Orientation() == TopAbs_Orientation.TopAbs_INTERNAL for edge in edges)
+
+
+def _without_dangling_wires(face: Any) -> Any:
+    """面の中に残る、辺がすべて `INTERNAL` の wire(領域の内側・縁から生える行き止まりの線)を外した面。無ければ `face` 自身。
+
+    `BRepAlgoAPI_Splitter` は領域に触れる行き止まりの線を、その領域の面に1辺だけの wire として残す。
+    面そのものは `BRepCheck` を通るが、その面を押し出した(`BRepPrimAPI_MakePrism`)ソリッドが不正になる。
+    線は図形としても他の領域の境界としても残るので、領域の面積・重心・個数は変わらない。
+    """
+    wires = _brep_topology.subshapes(face, TopAbs_ShapeEnum.TopAbs_WIRE)
+    if not any(_is_dangling_wire(wire) for wire in wires):
+        return face
+    cleaned = copy_face(face)
+    builder = BRep_Builder()
+    for wire in _brep_topology.subshapes(cleaned, TopAbs_ShapeEnum.TopAbs_WIRE):
+        if _is_dangling_wire(wire):
+            builder.Remove(cleaned, wire)
+    return cleaned
+
+
 def sketch_regions(plane: dict, entities: list) -> List[dict]:
     """スケッチの閉領域を返す。
 
@@ -166,6 +189,7 @@ def sketch_regions(plane: dict, entities: list) -> List[dict]:
             region_face, ax3, u_min, u_max, v_min, v_max, tol
         ):
             continue
+        region_face = _without_dangling_wires(region_face)
         area, centroid = _brep_geometry._face_props(region_face)
         if area <= 0:
             continue
