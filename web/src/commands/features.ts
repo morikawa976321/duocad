@@ -363,7 +363,7 @@ export const OFFSET_FACES: CommandDef<'offset_faces'> = {
     {
       kind: 'number',
       name: 'distance',
-      label: '距離',
+      label: '距離(正=肉が増える/穴は細くなる)',
       unit: 'mm',
       inputId: 'offset-faces-distance',
       reject: (value) => (value === 0 ? '距離が0では面が動かない' : null),
