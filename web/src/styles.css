@@ -259,6 +259,18 @@ header .tag.end {
   margin-left: auto;
 }
 
+/* 安定版の「更新」ボタン(ChannelBadge)。作業中に現れても既存のボタンを動かさないよう、右端の AI ボタンの手前の空きへ置く
+   (余白の押し出しは更新ボタンが引き継ぎ、AI ボタンは隣に付くだけ)。 */
+header #update-button {
+  order: 1;
+  margin-left: auto;
+}
+
+header:has(#update-button) .tag.end {
+  order: 2;
+  margin-left: 0;
+}
+
 .main {
   display: flex;
   flex: 1 1 auto;
