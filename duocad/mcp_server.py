@@ -525,6 +525,10 @@ class DocumentTools:
                 **base,
                 "code": "invalid_argument",
                 "required_kind": error.kind,
+                "hint": (
+                    f"exactly one {error.kind} is needed: narrow the selection with "
+                    "set_selection(refs=[one ref]) or modify_selection(remove=[...]); get_selection shows the current one"
+                ),
                 "selection": self._selection_summary(),
             }
         # 起動中のコマンドが無い(`ValueError` の派生なので先に見る)。引数を直しても通らない —— 先に `begin_command`。
