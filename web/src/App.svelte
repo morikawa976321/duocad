@@ -990,6 +990,12 @@
         const count = applied.body_ids?.length ?? 0
         note(`STEPを読み込んだ(${count}部品)。そのまま面をクリックして押し出せる`)
       }
+      if (applied.verb === 'import_svg') {
+        const [width, height] = applied.size_mm
+        const regions = applied.region_count === 0 ? '閉じた領域が無い' : `領域 ${applied.region_count} 個`
+        const skipped = applied.skipped === '' ? '' : `。取り込めなかった: ${applied.skipped}`
+        inform(`SVGを読み込んだ: ${width.toFixed(1)} × ${height.toFixed(1)} mm、図形 ${applied.entity_count} 個、${regions}${skipped}`)
+      }
       if (releasePending(applied.client_op)) {
         // CommandHostが出した確定が成功したと確認できたので、ここで初めて無起動へ戻す(`commit()` の時点では
         // 成否が分からず、先に戻すとOCCTのフィレット失敗時の打ち直しが壊れる)。`CATEGORY_OF` に無い verb
