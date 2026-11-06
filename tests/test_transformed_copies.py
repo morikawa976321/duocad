@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from duocad import naming
 from duocad.document import Body, Document
 from duocad.verbs._common import add_transformed_copies
 from document_support import box_shape
@@ -31,10 +30,12 @@ def test_a_colliding_id_adds_no_copy_and_wastes_no_number(new_ids):
     assert document.log._numbering == numbering
 
 
-def test_copies_get_the_ids_and_numbers_they_were_given():
+def test_copies_get_the_ids_they_were_given_and_names_after_their_sources():
+    """落ちたら: 複製が元の名前を引き継いでいない(通し番号の名前に戻った)か、返した名前と付けた名前がずれている。"""
     document, bodies = _two_bodies()
 
-    numbers = add_transformed_copies(document, bodies, lambda shape: shape, ["body-c", "body-d"], allocate=True)
+    names = add_transformed_copies(document, bodies, lambda shape: shape, ["body-c", "body-d"], allocate=True)
 
     assert [body.id for body in document.bodies] == ["body-a", "body-b", "body-c", "body-d"]
-    assert [body.name for body in document.bodies[2:]] == [naming.label(naming.BODY, number) for number in numbers]
+    assert names == ["a 2", "b 2"]
+    assert [body.name for body in document.bodies[2:]] == names
