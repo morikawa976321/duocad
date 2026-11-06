@@ -91,7 +91,7 @@ def is_positive_int(value: Any) -> bool:
     if isinstance(value, int):
         return value >= 1
     if isinstance(value, float):
-        return value >= 1 and value == int(value)
+        return math.isfinite(value) and value >= 1 and value == int(value)
     return False
 
 

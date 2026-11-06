@@ -73,3 +73,12 @@ def test_numbering_thousands_of_values_is_not_quadratic() -> None:
     for value in range(20000):
         parameters.register_value(doc, float(value))
     assert time.perf_counter() - started < 5.0
+
+
+def test_a_non_finite_count_is_not_a_positive_integer() -> None:
+    """落ちたら、反復の個数に Infinity が来ると ValueError でなく OverflowError になり、MCP が invalid_argument でなく internal を返す。"""
+    assert not parameters.is_positive_int(float("inf"))
+    assert not parameters.is_positive_int(float("-inf"))
+    assert not parameters.is_positive_int(float("nan"))
+    assert parameters.is_positive_int(3.0)
+    assert not parameters.is_positive_int(2.5)
