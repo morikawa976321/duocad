@@ -632,7 +632,9 @@ class DocumentView:
         # (`duocad.region.plane_frame`)ので、後からのフィレット等で枠も領域も変わらない。
         # `rebuild()` で姿勢が解き直されると `plane` が変わるので署名が拾う。
         content = json.dumps([item.plane, drawn], sort_keys=True, default=str)
-        signature = (content, self.view_deviation)
+        # 直線だけなら塗りが粗さに依らない(`_SketchFills.straight`)ので、ズームの段で署名も版も動かさない。
+        straight = all(entity["kind"] in _STRAIGHT_KINDS for entity in drawn)
+        signature = (content, None if straight else self.view_deviation)
         cached = self._sketch_cache.get(item.id)
         if cached is not None and cached[0] == signature:
             payload = dict(cached[1])

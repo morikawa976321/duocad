@@ -59,3 +59,27 @@ def test_the_state_log_does_not_carry_the_brep_text() -> None:
     projected = view._log_args_for_state({"body_id": "b1", "name": "x", "brep": "A" * 1000})
     assert "A" * 10 not in str(projected)
     assert projected["body_id"] == "b1"
+
+
+def _sketch_revision(session: Session, sketch_id: str) -> int:
+    return next(item for item in session.state_meta()["sketches"] if item["sketch_id"] == sketch_id)["revision"]
+
+
+def test_zooming_does_not_bump_the_revision_of_a_straight_only_sketch() -> None:
+    """落ちたら、直線だけのスケッチがズームの段が変わるたびに版が上がり、画面が作り直す。"""
+    session = Session(DEVIATION)
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_line(sketch_id, [0.0, 0.0], [SIDE, 0.0])
+    before = _sketch_revision(session, sketch_id)
+    session.set_view_resolution(0.002, SIDE)
+    assert _sketch_revision(session, sketch_id) == before
+
+
+def test_zooming_still_bumps_the_revision_of_a_curved_sketch() -> None:
+    """落ちたら、円のスケッチが粗さの変化を画面へ伝えない(円の塗りは粗さで変わる)。"""
+    session = Session(DEVIATION)
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_circle(sketch_id, [0.0, 0.0], SIDE)
+    before = _sketch_revision(session, sketch_id)
+    session.set_view_resolution(0.002, SIDE)
+    assert _sketch_revision(session, sketch_id) > before
