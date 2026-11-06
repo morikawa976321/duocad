@@ -93,10 +93,12 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
     preview = _PREVIEW.get()
     cancel = preview if preview is not None else threading.Event()
 
-    def check():
+    def check(queued=False):
         if cancel.is_set():
             raise ValueError(f"{verb}: プレビューを取り消した")
         if time.monotonic() >= deadline:
+            if queued:
+                raise TimedOut(f"{verb}: 別の計算が実行中のため、{timeout:.0f} 秒以内に始められなかった")
             raise TimedOut(f"{verb}: {timeout:.0f} 秒以内に返事が無かった")
 
     with _CONDITION:
@@ -107,7 +109,7 @@ def run(verb: str, shape: Any, arguments: dict, *, timeout: Optional[float], op:
                 _ACTIVE.set()
         try:
             while True:
-                check()
+                check(queued=_ACTIVE is not None)
                 if _ACTIVE is None and (preview is None or _WAITING_FOREGROUND == 0):
                     _ACTIVE, _ACTIVE_PREVIEW = cancel, preview is not None
                     break
