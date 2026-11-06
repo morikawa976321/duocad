@@ -192,8 +192,8 @@ def classify_clearance(relation: str, distance: Optional[float], clearance: floa
     """隙間の要求(`clearance > 0`)に対する判定。触れている組は short。離れている組・GF が答えなかった組は最短距離で決める
     (`distance` が無ければ None)。`short`: d < clearance − ε / `at`: |d − clearance| ≤ ε / `ok`: d > clearance + ε。
 
-    `upper_bound`(縁の点から測った値で、真の最小はこれ以下)の距離は、足りないとは言えても足りているとは言えない:
-    `ok` になるはずの組は None(測れなかった)にして一覧に残す。
+    `upper_bound`(真の最小がこれを下回りうる値)の距離は、足りないとは言えても、ちょうど・足りているとは言えない:
+    `at`・`ok` になるはずの組は None(測れなかった)にして一覧に残す。
     """
     if relation in _TOUCHING:
         return "short"
@@ -203,9 +203,9 @@ def classify_clearance(relation: str, distance: Optional[float], clearance: floa
         return "short"
     if distance < clearance - GAP_BAND_MM:
         return "short"
-    if distance <= clearance + GAP_BAND_MM:
-        return "at"
-    return None if upper_bound else "ok"
+    if upper_bound:
+        return None
+    return "at" if distance <= clearance + GAP_BAND_MM else "ok"
 
 
 # ------------------------------------------------------------------------------------------------
@@ -462,7 +462,7 @@ def _record(snapshot: Snapshot, plan: _Plan, clearance: float, with_render: bool
         judged = classify_clearance(classified["relation"], distance, clearance, upper)
         record["clearance"] = judged
         if judged is None:
-            fallback = "最短距離が上界(縁の点から測った値)だけで、隙間が足りているとは言えない" if distance is not None else "最短距離が測れなかった"
+            fallback = "最短距離が上界(縁の点から測った値)だけで、隙間が足りているとも要求どおりとも言えない" if distance is not None else "最短距離が測れなかった"
             record["clearance_reason"] = plan.distance_reason or plan.no_distance_reason or fallback
     if with_render and isinstance(relation.get("render"), dict):
         record["render"] = relation["render"]

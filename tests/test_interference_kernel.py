@@ -134,12 +134,50 @@ def test_distance_of_a_pin_in_a_hole_is_the_radial_gap_not_the_diameter_differen
     assert result["distance"] == pytest.approx(0.2, abs=1e-6)
 
 
-def test_the_concentric_rounded_core_is_measured_facewise_and_flagged_as_an_upper_bound():
-    shell, core = nested_boxes(0.2)
+@pytest.mark.parametrize("radius", [3.0, 2.0])
+def test_the_concentric_rounded_core_is_measured_facewise_and_proven_not_to_be_an_upper_bound(radius):
+    """落ちたら、同心の丸めで距離が落ちる面の対(丸め 3: 最小より遠い 8 対 / 丸め 2: 最小と同じ 0.2 の 8 対を含む 16 対)を
+    動かして測り直せず、要求どおりに設計した組が上界の印つきになる。"""
+    shell, core = nested_boxes(0.2, radius)
     result = ki.min_distance(shell, core)
-    assert result["ok"]
+    assert result["ok"] and result["stage"] == "faces"
     assert result["distance"] == pytest.approx(0.2, abs=1e-6)
-    assert result["upper_bound"] and result["stage"] == "faces"
+    assert not result["upper_bound"]
+
+
+def test_a_fallen_face_pair_that_cannot_be_remeasured_keeps_the_upper_bound_flag(monkeypatch):
+    """落ちたら、面どうしの距離が測れず縁の点だけで測った値が、真の最小として通る。"""
+    real = ki._distance
+
+    def faces_fail(first, second):
+        return None if first.ShapeType() == second.ShapeType() else real(first, second)
+
+    monkeypatch.setattr(ki, "_distance", faces_fail)
+    result = ki.min_distance(A, box(10.1, 0, 0, 10, 10, 10))
+    assert result["ok"] and result["stage"] == "faces" and result["upper_bound"]
+
+
+def test_a_fallen_face_pair_that_undercuts_the_minimum_keeps_the_upper_bound_flag(monkeypatch):
+    """落ちたら、縁の点が見逃した内側の近い所(球の向かい合う 2 点。縁は継ぎ目と極だけ)が、動かして測った値で拾われない。"""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.gp import gp_Pnt
+
+    real = ki._distance
+    seen = []
+
+    def first_face_pair_fails(first, second):
+        if first.ShapeType() == second.ShapeType() == TopAbs_FACE and not seen:
+            seen.append(True)
+            return None
+        return real(first, second)
+
+    monkeypatch.setattr(ki, "_distance", first_face_pair_fails)
+    first = BRepPrimAPI_MakeSphere(gp_Pnt(0, 0, 0), 1.0).Shape()
+    second = BRepPrimAPI_MakeSphere(gp_Pnt(0, 2.1, 0), 1.0).Shape()
+    result = ki._facewise_distance(first, second)
+    assert result["ok"] and result["distance"] > 0.1 + 1e-3
+    assert result["upper_bound"]
 
 
 def test_the_concentric_core_with_a_gap_that_measures_whole_is_not_flagged():

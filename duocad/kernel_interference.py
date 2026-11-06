@@ -12,6 +12,7 @@ contact / separated / unknown)としきい値は `duocad/interference.py` が持
 from __future__ import annotations
 
 import io
+import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from OCP.BOPAlgo import BOPAlgo_Builder
@@ -28,6 +29,7 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Shape
+from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 from . import (
     brep_geometry as _brep_geometry,
@@ -37,6 +39,10 @@ from . import (
 
 #: 面の対ごとの距離が測れないとき、片方の面の縁の辺 1 本を何等分した点から測るか(`kernel_shell._EDGE_SAMPLES` と同じ考え)。
 _EDGE_SAMPLES = 16
+
+#: 面の対の距離が落ちたとき、相手の面を動かす量(mm)。同心・同軸の面は最短の組が無数にあって落ちるが、わずかに動かすと測れる。
+#: 実測: 丸めた箱の入れ子(丸め 3 と 2)で落ちる 24 対は 1e-6〜1e-9 のどれでも測れ、縁の点からの値との差は動かした量以内。
+_NUDGE_MM = 1e-7
 
 _KINDS = (TopAbs_SOLID, TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX)
 
@@ -259,7 +265,8 @@ def min_distance(first: TopoDS_Shape, second: TopoDS_Shape) -> Dict[str, Any]:
             {"ok": False, "reason"}
     角を丸めた箱に丸めを同心にした中子を入れる形では、形全体の最短距離が例外で落ちる(丸めの面が同心に向かい合い、最短の組が
     無数にある)ので面の対ごとに測る。それでも落ちた対だけ片方の面の縁の点から相手の面へ測る。縁の点からの値は真の最小以上
-    (同心の面なら一致)なので、縁の点に頼った組は `upper_bound` を真にする。
+    (同心の面なら一致)。落ちた対のどれかが `distance` を下回りうるとき(`_cannot_undercut` が言い切れないとき)だけ
+    `upper_bound` を真にする。偽なら、真の最小は `distance − 2 × _NUDGE_MM` 以上。
     """
     whole = _distance(first, second)
     if whole is not None:
@@ -289,13 +296,13 @@ def _facewise_distance(first: TopoDS_Shape, second: TopoDS_Shape) -> Dict[str, A
         (box_gap(boxes_a[i], boxes_b[j]), i, j) for i in range(len(faces_a)) for j in range(len(faces_b))
     )
     best: Optional[Tuple[float, List[float], List[float]]] = None
-    sampled = False
+    fallen: List[Tuple[int, int]] = []
     for gap, i, j in order:
         if best is not None and gap > best[0]:
             break  # 以降の対は箱の距離がすでに今の最小より遠い
         found = _distance(faces_a[i], faces_b[j])
         if found is None:
-            sampled = True
+            fallen.append((i, j))
             candidates = [
                 c for c in (
                     [_distance(p, faces_b[j]) for p in _boundary_points(faces_a[i])]
@@ -307,7 +314,34 @@ def _facewise_distance(first: TopoDS_Shape, second: TopoDS_Shape) -> Dict[str, A
             best = found
     if best is None:
         return {"ok": False, "reason": "最短距離が測れなかった(面の対ごとにも縁の点からも)"}
-    return {"ok": True, "distance": best[0], "points": [best[1], best[2]], "stage": "faces", "upper_bound": sampled}
+    upper_bound = not all(_cannot_undercut(faces_a[i], faces_b[j], boxes_b[j], best[0]) for i, j in fallen)
+    return {"ok": True, "distance": best[0], "points": [best[1], best[2]], "stage": "faces", "upper_bound": upper_bound}
+
+
+def _cannot_undercut(face: TopoDS_Shape, other: TopoDS_Shape, other_box: Tuple[Vec, Vec], best: float) -> bool:
+    """距離が落ちた面の対が、`best` を `2 × _NUDGE_MM` を超えて下回らないと言えるか。
+
+    相手の面を `_NUDGE_MM` 以内で動かして測った値は、元の距離と動かした量までしか違わない。動かしても測れなければ言えない。
+    """
+    found = _distance(face, _nudged(other, other_box))
+    return found is not None and found[0] >= best - _NUDGE_MM
+
+
+def _nudged(face: TopoDS_Shape, box: Tuple[Vec, Vec]) -> TopoDS_Shape:
+    """面を、境界箱の中心まわりの回転と平行移動で動かした写し。面のどの点も `_NUDGE_MM` を超えて動かない(回転と移動で半分ずつ)。
+
+    平行移動だけでは同軸の円柱が平行な円柱になり、最短の組が無数にあるままになる。軸と向きは形の軸に揃わない半端な値。
+    """
+    low, high = box
+    reach = math.dist(low, high) / 2
+    turn = gp_Trsf()
+    turn.SetRotation(
+        gp_Ax1(gp_Pnt(*[(a + b) / 2 for a, b in zip(low, high)]), gp_Dir(0.2673, -0.5345, 0.8018)),
+        (_NUDGE_MM / 2) / max(reach, 1.0),
+    )
+    shift = gp_Trsf()
+    shift.SetTranslation(gp_Vec(0.5377, 0.6841, 0.4925).Normalized().Multiplied(_NUDGE_MM / 2))
+    return face.Moved(TopLoc_Location(shift.Multiplied(turn)))
 
 
 def box_gap(first: Tuple[Vec, Vec], second: Tuple[Vec, Vec]) -> float:
