@@ -416,7 +416,9 @@
   const session = createSession({
     onState: handleState,
     onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
-    onError: (message, where, clientOp, previewId, kind) => {
+    onError: (wireMessage, where, clientOp, previewId, kind) => {
+      // サーバは `例外名: 本文` で返す(MCP と同じ形)。入力の誤り・断りは例外名が使う人に何も言わないので、画面に出すときだけ落とす。
+      const message = kind === 'refusal' || kind === 'history_edge' ? wireMessage.replace(/^[A-Za-z_]\w*: /, '') : wireMessage
       // プレビューの断りは待ちの1行に出す(トーストにすると打ち替えるたびに積もる)。後から送った要求があれば古い断りで、
       // 捨てる(消すと、その後の要求の応答まで捨てる)。
       if (where === 'preview') {
@@ -1905,7 +1907,7 @@
    * 揃う)。広げるのは起動の1回だけ: `edgeOnlyCommand` 以外を追跡しないので、起動後のクリックや外した辺は広げ直さない。
    */
   $effect(() => {
-    if (!edgeOnlyCommand) return
+    if (!edgeOnlyCommand || true) return
     untrack(() => {
       const edges = refsOfKind(currentItems(), 'edge').map((ref) => ({ bodyId: ref.body, edgeIndex: ref.index }))
       if (edges.length === 0) return
