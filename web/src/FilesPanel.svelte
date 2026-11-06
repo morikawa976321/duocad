@@ -24,11 +24,12 @@
    * STEP/SVG 読み込みは文書を変えるverbなのでここには無い(`commands/files.ts` の `IMPORT_STEP`、`commands/sketch.ts` の `IMPORT_SVG`)。
    *
    * 名前とパスの欄は拡張子を打たせない(`SuffixField.svelte`。`.json` / `.step` / `.stl` は欄の右に固定で、送るときに付ける。本人指示 2026-10-07)。
-   * 送信後もパス欄は消さないが、文書が替わったら(`generation` が進んだら)空に戻す(前の文書の名前が残ると、別の文書の書き出しが前のファイルを上書きする)。
+   * 書き出しのパス欄は送信後も消さず、既定は今の文書のファイル名。文書が替わったら(`generation` が進んだら)その文書の名前に入れ直す
+   * (前の文書の名前が残ると、別の文書の書き出しが前のファイルを上書きする)。
    * 改名欄と複製欄は今の名前(複製は `<元の名前>-copy`)を先埋めして選んだ状態で出し、Esc で取り消す。送っても欄は消さず、
    * 断られたら打った名前が残る(改名は `currentName` が変わったら、複製は成功の応答 `lastCopied` が来たら閉じる/埋め直す)。
    */
-  import { tick } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import { pathLike, unquotePath } from './commands/command'
   import { isImeKey } from './keys'
   import type { DocumentInfo } from './session'
@@ -281,14 +282,22 @@
   }
 
   let seenGeneration: number | null = null
+  let defaultStem = ''
+  // 欄の既定は今の文書のファイル名。文書が替わったら入れ直し、同じ文書の中では名前が付く・変わるときも、
+  // 既定のまま触っていない欄だけ追わせる(打った名前は残す)。
   $effect.pre(() => {
-    if (seenGeneration !== null && generation !== seenGeneration) {
-      exportStepPath = ''
-      exportStlPath = ''
-      exportStepAsked = false
-      exportStlAsked = false
-    }
+    const stem = currentStem()
+    const changed = seenGeneration === null || generation !== seenGeneration
+    untrack(() => {
+      if (changed || exportStepPath === defaultStem) exportStepPath = stem
+      if (changed || exportStlPath === defaultStem) exportStlPath = stem
+      if (changed) {
+        exportStepAsked = false
+        exportStlAsked = false
+      }
+    })
     seenGeneration = generation
+    defaultStem = stem
   })
 
   function onRowEnter(event: KeyboardEvent, submit: () => void): void {

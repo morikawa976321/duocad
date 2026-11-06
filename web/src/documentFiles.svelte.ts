@@ -87,7 +87,7 @@ function exportedMessage(payload: FilePayload): string | null {
   if (label === undefined) return null
   const count = payload.body_ids?.length ?? 0
   const skipped = payload.skipped_hidden?.length ?? 0
-  const written = `${label}を書き出した(${count}個): ${payload.path}`
+  const written = `${label}を書き出した(${count}個${payload.overwrote ? '・上書きした' : ''}): ${payload.path}`
   return skipped > 0 ? `⚠ 非表示の${skipped}個は含めていない — ${written}` : written
 }
 

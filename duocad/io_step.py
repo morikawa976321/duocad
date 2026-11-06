@@ -136,19 +136,21 @@ EXPORTERS = {"step": export_step, "stl": export_stl}
 
 
 def export(doc: Document, path: Path, fmt: str) -> dict:
-    """`fmt`("step" | "stl")で `path` へ書き、`{"path", "body_ids", "skipped_hidden"}` を返す
-    (Session と MCP が共有する。パスの解決・親ディレクトリの検査は呼び出し側)。
+    """`fmt`("step" | "stl")で `path` へ書き、`{"path", "body_ids", "skipped_hidden", "overwrote"}` を返す
+    (Session と MCP が共有する。パスの解決・親ディレクトリの検査は呼び出し側)。`overwrote` は書く前に同名のファイルがあったか。
 
     対象の ID を先に取る: 「書き出すものが無い」「全部非表示」の ValueError はファイルを作る前に出す。
     """
     write = EXPORTERS[fmt]
     body_ids = export_body_ids(doc)
     skipped = export_skipped_hidden(doc)
+    overwrote = Path(path).exists()
     write(doc, path)
     return {
         "path": str(path),
         "body_ids": list(body_ids),
         "skipped_hidden": list(skipped),
+        "overwrote": overwrote,
     }
 
 

@@ -296,6 +296,8 @@ export interface FilePayload {
   body_ids?: string[]
   /** 書き出し候補のうち非表示(visible=false)で除外されたBodyのID(export_step/export_stlのみ)。 */
   skipped_hidden?: string[]
+  /** 書く前に同名のファイルがあった(export_step/export_stlのみ)。 */
+  overwrote?: boolean
   files?: DocumentInfo[]
   /** 改名前のファイル名(`rename_document` のみ。無題からの改名は null)。 */
   previous?: string | null
@@ -1295,6 +1297,7 @@ export function createSession(hooks: SessionHooks): Session {
       deviation?: number
       body_ids?: string[]
       skipped_hidden?: string[]
+      overwrote?: boolean
       files?: DocumentInfo[]
       previous?: string | null
       png?: string | null
@@ -1444,6 +1447,7 @@ export function createSession(hooks: SessionHooks): Session {
         deviation: message.deviation,
         body_ids: message.body_ids,
         skipped_hidden: message.skipped_hidden,
+        overwrote: message.overwrote,
         files: message.files,
         previous: message.previous,
         png: message.png,
