@@ -256,11 +256,12 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     '1本目の円柱の面が選ばれない',
     [cylinders[0]],
   )
-  // 返事を待たずに押す: 実マウスでは往復の間に応答が戻りうるので、同じ JS のタスクの中で押下(と、続けてキー)を送る。
-  const pressInOneTask = (targets, key = null) =>
+  // 返事を待たずに押す: 実マウスでは往復の間に応答が戻りうるので、同じ JS のタスクの中で押下(と、続けてキー、ボタン)を送る。
+  // ボタンはキーの後始末(コマンドの終わりの通知。マイクロタスクで走る)を待ってから押す。応答はタスクで届くので、その前に割り込まない。
+  const pressInOneTask = (targets, key = null, button = null) =>
     withoutBrowserPanel(page, () =>
       page.evaluate(
-        ({ targets, key }) => {
+        async ({ targets, key, button }) => {
           const canvas = document.querySelector('.viewport canvas')
           const rect = canvas.getBoundingClientRect()
           for (const [bodyId, faceIndex] of targets) {
@@ -286,8 +287,12 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
             const init = plain ? { key, code: key } : key
             target.dispatchEvent(new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true }))
           }
+          if (button !== null) {
+            for (let hop = 0; hop < 8; hop += 1) await Promise.resolve()
+            document.querySelector(button).click()
+          }
         },
-        { targets, key },
+        { targets, key, button },
       ),
     )
   const laterTwo = [
@@ -310,7 +315,7 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await waitFor(() => window.__duocad.command === null, 'Esc でねじが畳まれない')
   ok('[13] 上限1の選択(ねじ)は、応答を待たずに続けて押しても最後の1枚だけが残る')
 
-  // 押した直後に Esc: 待たせたクリックが、中断より後に届いて選択を戻さない。
+  // 押した直後に Esc: 押した分の選択が、中断の後に残らない。
   await mcp.callTool('begin_command', { verb: 'thread' })
   await waitFor(() => document.querySelector('.command-host')?.dataset.command === 'thread', '2回目の begin_command(thread) が画面に起動しない')
   await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'ねじを畳んだ後の選択が空にならない')
@@ -319,9 +324,9 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await sleep(500)
   const leftover = await page.evaluate(() => window.__duocad.selection?.items.map((item) => item.body) ?? [])
   if (leftover.length !== 0) fail(`続けて押した直後に Esc で中断したのに、選択が残る: ${JSON.stringify(leftover)}`)
-  ok('[13b] 続けて押した直後の Esc で中断すると、待たせたクリックは捨てられて選択が残らない')
+  ok('[13b] 続けて押した直後の Esc で中断すると、押した分の選択が残らない')
 
-  // 押した直後に Ctrl+Z: 取り消しはサーバで選択を空にする。待たせたクリックが、取り消しより後に届いて選択を足さない。
+  // 押した直後に Ctrl+Z: 取り消しはサーバで選択を空にする。押した分が、取り消しより後に届いて選択を足さない。
   // 取り消す操作は名前の変更にする(ボディが全部残るので、遅れて届いたクリックがあれば選択に入る)。
   await mcp.callTool('rename', { target: cylinders[0], name: 'undo-me' })
   await waitFor(
@@ -343,7 +348,42 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   if (afterUndo.length !== 0) fail(`続けて押した直後に Ctrl+Z で取り消したのに、選択が残る: ${JSON.stringify(afterUndo)}`)
   await page.keyboard.press('Escape')
   await waitFor(() => window.__duocad.command === null, 'Ctrl+Z の後の Esc でねじが畳まれない')
-  ok('[13c] 続けて押した直後の Ctrl+Z で取り消すと、待たせたクリックは捨てられて選択が残らない')
+  ok('[13c] 続けて押した直後の Ctrl+Z で取り消すと、押した分の選択が残らない')
+
+  // 測定は verb ではない(起動も中断もサーバへ要求を送らない)。2つ押した直後に Esc で中断し、応答が返る前に起動し直しても、
+  // 前の起動で押した分が選択に残らず、押していないのに測定が走らない。
+  const flatFaces = []
+  for (const bodyId of cylinders.slice(1)) {
+    const index = await page.evaluate((id) => {
+      const flat = window.__duocad.getGeometry(id).faces.filter((face) => face.kind === 'plane')
+      return flat.find((face) => window.__duocad.projectFace(id, face.index) !== null)?.index ?? null
+    }, bodyId)
+    if (index === null) fail(`円柱 ${bodyId} に見えている平らな面が無い`)
+    flatFaces.push([bodyId, index])
+  }
+  const measuring = () => document.querySelector('.command-host')?.dataset.command === 'measure'
+  await page.evaluate(() => document.getElementById('measure').click())
+  await waitFor(measuring, '測定が起動しない')
+  await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '測定の起動時に選択が空でない')
+  await pressInOneTask(flatFaces, 'Escape', '#measure')
+  await waitFor(measuring, '中断の直後に測定が起動し直さない')
+  await sleep(500)
+  const restarted = await page.evaluate(() => ({
+    items: window.__duocad.selection?.items.map((item) => item.body) ?? [],
+    readout: document.querySelector('#measure-result')?.textContent ?? null,
+  }))
+  if (restarted.items.length !== 0 || restarted.readout !== null) {
+    fail(`測定を中断して起動し直したら、前の起動で押した分が効いた: ${JSON.stringify(restarted)}`)
+  }
+  // 起動し直した測定は、押した2つをそのまま測れる(中断の全解除が、後のクリックを巻き込まない)。
+  await pressInOneTask(flatFaces)
+  await waitFor(() => document.querySelector('#measure-result') !== null, '起動し直した測定で、続けて押した2つが測られない')
+  await page.keyboard.press('Escape')
+  await waitFor(() => document.querySelector('.command-host')?.dataset.command !== 'measure', 'Esc で測定が畳まれない')
+  // 測定の成功は選択と読み札を残す。後の検査へ持ち越さない。
+  await page.keyboard.press('Escape')
+  await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '測定の後の Esc で選択が空にならない')
+  ok('[13d] 測定を押した直後に中断して起動し直しても、前の起動で押した分は効かない')
 
   // ================================================================ 14. AI パネルを畳んでいる間の AI の失敗は、札で知らせる
   // 会話欄が見えていれば会話欄に出るので札は重ねない。畳んでいる間は会話欄が見えず、札も出さないと失敗に気づけない。

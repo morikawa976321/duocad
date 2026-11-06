@@ -656,27 +656,6 @@ export function evictionsForClick(
   return []
 }
 
-/**
- * `ref` を食う、個数の上限(`max`)つきの選択引数があるか。個数は見ない(`evictionsForClick` と同じ絞り方)。
- * 上限つきの引数へのクリックは、置き換えの差分を最新の選択に対して組むため、前の選択の応答を待たせる。
- */
-export function takenByLimitedArg(
-  command: CommandDef,
-  values: ArgValues,
-  ref: SelectionRef,
-  faceKindOf: FaceKindOf = () => null,
-): boolean {
-  const kind = refKind(ref)
-  return command.args.some(
-    (spec) =>
-      spec.kind === 'selection' &&
-      spec.max !== null &&
-      argApplies(spec, values) &&
-      argKinds(spec).includes(kind) &&
-      acceptsSurface(spec, ref, faceKindOf),
-  )
-}
-
 /** その引数は、いま集まっている値の下で要るか(`when` が無ければ常に要る)。判定をここ1箇所に置く(各所が `spec.when?.(values)` を書くと、`when` を持たない種別を足したときに1つだけ `undefined` を偽と読む食い違いが入る)。 */
 export function argApplies(spec: ArgSpec, values: ArgValues): boolean {
   return spec.when === undefined || spec.when(values)

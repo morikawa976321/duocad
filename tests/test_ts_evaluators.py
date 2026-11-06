@@ -37,6 +37,7 @@ EVALUATORS = [
     "eval_resolution_tracker.mjs",
     "eval_screen_pick.mjs",
     "eval_section_view.mjs",
+    "eval_selection_edits.mjs",
     "eval_selection_grain.mjs",
     "eval_selection_info_text.mjs",
     "eval_selection_max.mjs",

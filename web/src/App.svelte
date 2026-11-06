@@ -12,6 +12,7 @@
   import { sharedArgsChangeNote } from './sharedArgsController'
   import { appendedEntries } from './logTail'
   import { createPreviewController, type PreviewInput } from './previewController'
+  import { clearEdit, expectedItems, modifyEdit, toggleEdit, type SelectionEdit } from './selectionEdits'
   import { createFaceKinds } from './faceKinds'
   import {
     bodyRef,
@@ -181,8 +182,6 @@
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
   let pendingOp = $state<number | null>(null)
   let opCounter = 0
-  /** 送って配信待ちの `clear_selection` の `client_op`。描画に使わない。 */
-  let clearingOp: number | null = null
 
   /** 画面にサーバ計算の幽霊が出ているか(テスト用フックが見る)。 */
   let previewing = $state(false)
@@ -265,7 +264,6 @@
     refusesFace(bodyId: string, faceIndex: number): string | null
     undoLastPoint(): boolean
     evictionsFor(ref: SelectionRef, items: SelectionRef[]): SelectionRef[]
-    limitsRef(ref: SelectionRef): boolean
     isEmptyArgField(target: EventTarget | null): boolean
   } | null>(null)
 
@@ -397,16 +395,12 @@
   const myClientOps = new Set<number>()
   /** 直前に「面の削除」の代案で広げた選択の鍵(`suggestedAdditions`)。 */
   let widenedDeletion: string | null = null
-  /** この画面が送って、配信がまだ返ってこない選択の変更(`client_op`)。 */
-  const selectionOpsInFlight = new Set<number>()
   /**
-   * 個数の上限つきの引数(ねじ・測定)を食う参照のクリックで、選択の要求が返るのを待っているもの。
-   * 置き換えの差分は配信済みの選択に対して組むので、返る前に次のクリックを処理すると同じ最古を外す要求が重なって上限を超える。
-   * 残っている間は確定させない(`CommandHost` の `busy`): 確定が待たせたクリックより先にサーバへ届き、最後に指したものと違う対象へ掛かる。
-   * 起動・中断・全解除を送るときは捨てる(その要求より後に届くと、畳んだ後・外した後に選択が戻る)。
+   * この画面が送って、配信がまだ返ってこない選択の変更(`client_op` -> 選択への効き方。`null` はサーバが決める変更)。
+   * 並びは送った順で、サーバが処理する順でもある。差分は `currentItems()` がこれを重ねた選択に対して組む。
+   * クリックは手元に溜めずすぐ送る: 溜めた分は、後から送る要求(確定・中断・取り消し)より遅れて届いて効いてしまう。
    */
-  let queuedSelectionClicks = $state.raw<{ ref: SelectionRef; mode: PickEvent['mode']; verb: string | null }[]>([])
-  const runningVerb = (): string | null => activeVerb ?? model?.command?.verb ?? null
+  const selectionOpsInFlight = new Map<number, SelectionEdit | null>()
   /** 代案で選択を広げた変更の `client_op`。返ってくるまで確定させない(広げた範囲が画面に出る前の Enter で確定しない)。 */
   let wideningOp = $state<number | null>(null)
   /**
@@ -416,6 +410,11 @@
    * 数だけを渡すのは、コマンド層に「誰が変えたか」の判断を持ち込まないため。
    */
   let selfSelections = $state(0)
+  /**
+   * いまのコマンドを起動した時点で、送り終えていた最後の `client_op`。その応答は起動より前の操作のものなので `selfSelections` に数えない
+   * (数えると、中断の直前に押した分の応答が、起動し直した後に届いて即適用を引く)。
+   */
+  let opsBeforeCommand = 0
   /**
    * 送った `select_face_boundaries` の op(返るまで送り直さない)。人のクリックではないので `selfSelections` に数えない
    * (数えると、繋ぎ直した後の空振りの応答が別の画面で起動された即適用の verb を確定させる)。
@@ -473,11 +472,9 @@
       // プレビューなどの失敗で解くと、確定がまだサーバで走っている間に次の Enter が通る。
       if (where === 'send') {
         pendingOp = null
-        // 送れなかった全解除の配信は来ない。残すと、繋ぎ直しの試行中に送って失敗しその試行が成功したとき、
-        // `clearingOp` が残って以後の選択の差分が空の選択に対して組まれ続ける(`onStatus` の切断時だけでは捨てられない)。
-        clearingOp = null
+        // 送れなかった選択の変更の配信は来ない。残すと、繋ぎ直しの試行中に送って失敗しその試行が成功したとき、
+        // 以後の選択の差分が、届かなかった変更を重ねた選択に対して組まれ続ける(`onStatus` の切断時だけでは捨てられない)。
         selectionOpsInFlight.clear()
-        queuedSelectionClicks = []
         wideningOp = null
       } else {
         settleSelectionOp(clientOp ?? null)
@@ -525,11 +522,9 @@
         pendingOp = null
         preview.clear()
       }
-      // 全解除の配信も同じく返ってこない(残すと以後の差分が空の選択に対して組まれ続ける)。
+      // 選択の変更の配信も同じく返ってこない(残すと以後の差分が、届かなかった変更を重ねた選択に対して組まれ続ける)。
       if (next !== 'open') {
-        clearingOp = null
         selectionOpsInFlight.clear()
-        queuedSelectionClicks = []
         wideningOp = null
         preview.disconnect()
       }
@@ -971,10 +966,14 @@
     // 選択の変更イベントはverbの適用ではない(`change: "selection"`。session.ts の `Applied`)。
     if (applied && applied.change === 'selection') {
       // この画面が出した選択変更だけを数える(`selfSelections`)。AIが書き換えた選択は即適用の引き金にならない。
-      if (applied.client_op !== null && myClientOps.has(applied.client_op) && applied.client_op !== faceBoundaryOp) {
+      if (
+        applied.client_op !== null &&
+        myClientOps.has(applied.client_op) &&
+        applied.client_op !== faceBoundaryOp &&
+        applied.client_op > opsBeforeCommand
+      ) {
         selfSelections += 1
       }
-      if (applied.client_op !== null && applied.client_op === clearingOp) clearingOp = null
       settleSelectionOp(applied.client_op)
       releasePending(applied.client_op)
       return
@@ -1078,16 +1077,6 @@
     if (clientOp === null) return
     selectionOpsInFlight.delete(clientOp)
     if (clientOp === wideningOp) wideningOp = null
-    drainQueuedSelectionClicks()
-  }
-
-  /** 返っていない選択の要求が無くなったら、待たせたクリックを1つずつ処理し直す(送ったらその応答まで残りを待たせる)。 */
-  function drainQueuedSelectionClicks(): void {
-    while (selectionOpsInFlight.size === 0 && queuedSelectionClicks.length > 0) {
-      const [next, ...rest] = queuedSelectionClicks
-      queuedSelectionClicks = rest
-      if (next.verb === runningVerb()) editSelection(next.ref, next.mode)
-    }
   }
 
   /**
@@ -1560,7 +1549,7 @@
   function modifySelection(add: SelectionRef[], remove: SelectionRef[]): number | null {
     if (add.length === 0 && remove.length === 0) return null
     const op = nextOp()
-    selectionOpsInFlight.add(op)
+    selectionOpsInFlight.set(op, modifyEdit(add, remove))
     session.modifySelection(add, remove, op)
     return op
   }
@@ -1571,10 +1560,6 @@
    * 置き換えのとき自分自身は remove に入れない: コアは remove を後に適用するので足したそばから外れる(`duocad/selection.py` の契約)。
    */
   function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
-    if (mode === 'toggle' && selectionOpsInFlight.size > 0 && host?.limitsRef(ref)) {
-      queuedSelectionClicks = [...queuedSelectionClicks, { ref, mode, verb: runningVerb() }]
-      return
-    }
     const current = currentItems()
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'toggle') {
@@ -1585,7 +1570,7 @@
         return
       }
       const op = nextOp()
-      selectionOpsInFlight.add(op)
+      selectionOpsInFlight.set(op, toggleEdit(ref))
       session.toggleSelection([ref], op)
     } else if (already && current.length === 1) modifySelection([], [ref])
     else selectOnly(ref)
@@ -1746,6 +1731,7 @@
    * それ以外は、起動前に選んであったもの(AI が選んだ面も)をそのコマンドの粒度へ畳む(`foldSelection`)。
    */
   function onCommandStart(verb: string): void {
+    opsBeforeCommand = opCounter
     measure.clear() // 次の操作に入ったら、前の測定の札は用済み
     pendingOptimizePreset = null
     // 別のverbへ直接移ったら前のverbの終わりとして選択を空にする(`onCommandEnd`)。同じverbの押し直しは終わりではない。
@@ -1786,8 +1772,10 @@
     note(`非表示だった${OPTIMIZE_ROLE_LABEL[role]}のボディ ${hidden.length} 個を表示した(割り当てを選択に並べるため)`)
   }
 
+  /** 選択が空だと言い切れないときだけ全解除を送る(サーバが決める変更が返っていない間は、空に見えても送る)。 */
   function clearSelectionIfAny(): void {
-    if (currentItems().length > 0) clearSelection()
+    const unknown = [...selectionOpsInFlight.values()].includes(null)
+    if (unknown || currentItems().length > 0) clearSelection()
   }
 
   // ---------------------------------------------------------------- 作業空間(起動中のコマンド・モード。issue #153)
@@ -1796,7 +1784,6 @@
   function beginCommand(verb: string, args: Record<string, unknown>): void {
     pendingChainPick = null // 前のコマンドで待たせたクリックを次のコマンドへ持ち越さない
     pendingBox = null
-    queuedSelectionClicks = []
     commandRequests += 1
     session.beginCommand(verb, args, nextOp())
   }
@@ -1809,7 +1796,6 @@
     // 中断を送った時点で捨てる(連なりの応答は中断の配信より先に届くので、届いてからでは起動中に見える)。
     pendingChainPick = null
     pendingBox = null
-    queuedSelectionClicks = []
     commandRequests += 1
     session.endCommand(nextOp())
   }
@@ -1863,22 +1849,23 @@
     }
   }
 
-  /** 選択を全解除する。配信が届くまでの判定は `currentItems()` が空として扱う。 */
   function clearSelection(): void {
-    queuedSelectionClicks = []
-    clearingOp = nextOp()
-    selectionOpsInFlight.add(clearingOp)
-    session.clearSelection(clearingOp)
+    const op = nextOp()
+    selectionOpsInFlight.set(op, clearEdit)
+    session.clearSelection(op)
   }
 
   /**
-   * 選択集合の差分を組むときに読む今の選択。送った `clear_selection` の配信がまだ届いていない間は空を返す。
-   * 配信前の `selection` を読むと、Esc直後に唯一選ばれていた要素をクリックしたとき `editSelection` が解除と判定し、
-   * コアでは「全解除 → その要素を外す」と順に効いて選んだはずの要素が選ばれない(サーバは1接続の要求を順に処理する)。
+   * 選択集合の差分を組むときに読む今の選択: 配信済みの選択に、送って返っていない変更を送った順に重ねたもの(`expectedItems`)。
+   * サーバは1接続の要求を順に処理するので、いま送る要求が届く時点の選択はこれになる。
+   * 配信済みの `selection` だけを読むと、返る前の次の操作が古い選択に対して差分を組む: Esc直後に唯一選ばれていた要素を
+   * クリックすると解除と判定されて選ばれず、上限つきの引数(ねじ・測定)への連続クリックは同じ最古を外す要求が重なって上限を超える。
+   * 見込みが外れるのは、ほかの画面・AI が同時に選択を変えたとき、送った変更が断られたとき、サーバが決める変更
+   * (確定・取り消しでの全解除、`selectFaceBoundaries`)が返っていないとき。外れても上限の超過は `overflowNote` が確定を止める。
    * 表示(ハイライト・件数)は配信どおりの `selection` を使う。
    */
   function currentItems(): SelectionRef[] {
-    return clearingOp !== null ? [] : (selection?.items ?? [])
+    return expectedItems(selection?.items ?? [], selectionOpsInFlight.values())
   }
 
   /**
@@ -1928,7 +1915,7 @@
     untrack(() => {
       if (faceBoundaryOp !== null && selectionOpsInFlight.has(faceBoundaryOp)) return
       faceBoundaryOp = nextOp()
-      selectionOpsInFlight.add(faceBoundaryOp)
+      selectionOpsInFlight.set(faceBoundaryOp, null)
       session.selectFaceBoundaries(faceBoundaryOp)
     })
   })
@@ -2611,8 +2598,6 @@
       return
     }
     event.preventDefault()
-    // 取り消し・やり直しはサーバで選択を空にする。待たせたクリックを残すと、その後に届いて選択を足す。
-    queuedSelectionClicks = []
     // ここへ来るキーは z か y だけ。Shift+Z はやり直し。
     if (key === 'z' && !event.shiftKey) session.undo(nextOp())
     else session.redo(nextOp())
@@ -2944,11 +2929,7 @@
         <CommandHost
           bind:this={host}
           {selection}
-          busy={pendingOp !== null ||
-            optimizeBusy ||
-            pendingChainPick !== null ||
-            wideningOp !== null ||
-            queuedSelectionClicks.length > 0}
+          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null}
           {selfSelections}
           commands={mode.kind === 'sketch'
             ? SKETCH_MODE_COMMANDS

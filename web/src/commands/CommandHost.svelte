@@ -51,7 +51,6 @@
     itemsForArg,
     needsEnter,
     overflowNote,
-    takenByLimitedArg,
     pickedLabel,
     promptFor,
     refKey,
@@ -841,11 +840,6 @@
   /** 個数の上限がある選択引数に、クリックで1つ足すと上限を超えるとき、置き換えで外す最古の選択(`evictionsForClick`)。 */
   export function evictionsFor(ref: SelectionRef, items: SelectionRef[]): SelectionRef[] {
     return command === null ? [] : evictionsForClick(command, values, ref, items, faceKindOf)
-  }
-
-  /** `ref` を食う個数の上限つきの選択引数があるか(`takenByLimitedArg`)。 */
-  export function limitsRef(ref: SelectionRef): boolean {
-    return command !== null && takenByLimitedArg(command, values, ref, faceKindOf)
   }
 
   /** このコマンドの引数の欄で、文字が入っていないもの。Ctrl+Z・Backspace を欄でなくアプリへ回してよい(奪っても失う文字が無い)。 */
