@@ -145,6 +145,17 @@ def view_resolution(world_per_pixel: float, size_hint: float = 0.0) -> tuple:
 COARSE_REFERENCE_PIXELS = 512.0
 
 
+def document_resolution(size_hint: float) -> tuple:
+    """画面の見え方が届く前に使う `(deviation[mm], angular[rad])`。文書の外接対角[mm]から決める。
+
+    文書全体が `COARSE_REFERENCE_PIXELS` 画素に収まる視点の粗さ(全体表示に近い)。
+    `size_hint` が無い/非正(空の文書)なら既定値の組。
+    """
+    if not math.isfinite(size_hint) or size_hint <= 0.0:
+        return (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)
+    return view_resolution(float(size_hint) / COARSE_REFERENCE_PIXELS, size_hint)
+
+
 def coarse_view_resolution(world_per_pixel: float, size_hint: float = 0.0) -> tuple:
     """**視錐台の外・カメラに背を向けた面**に使う `(deviation[mm], angular[rad])`。
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 from array import array
 from collections import OrderedDict
 from typing import Any, Callable, Optional
@@ -297,9 +298,11 @@ class DocumentView:
         #: STL書き出しは見ない(`io_step.STL_DEVIATION` 固定)。
         self.deviation = float(deviation)
         #: **ズーム連動の目標精度**(`set_view_resolution`)。`(線形偏差[mm], 角度偏差[rad])`。
-        #: `None` は未着で、`self.deviation` + `kernel.DEFAULT_ANGULAR_DEFLECTION` を使う。
+        #: `None` は未着で、文書の外接対角から決めた値を使う(`resolution.document_resolution`。空の文書は `self.deviation`)。
         #: 画面の設定であって文書の状態ではない(操作ログにもundoにも載らない)。
         self._view_resolution: Optional[tuple] = None
+        #: 未着の間の粗さの覚え `(表示中のボディの形の id の組, 粗さ)`。形が変わらない限り外接箱を測り直さない。
+        self._document_resolution_memo: Optional[tuple] = None
         #: **画面外・背を向けた面に使う粗さ**(`(線形偏差[mm], 角度偏差[rad])`)。
         #: `resolution.coarse_view_resolution` が決める、ズームに依存しない値。`None` は分けない。
         self._view_coarse_resolution: Optional[tuple] = None
@@ -353,15 +356,41 @@ class DocumentView:
     # ---------------------------------------------------------------- 可変解像度(ズーム連動)
     @property
     def view_deviation(self) -> float:
-        """いま測るのに使う線形偏差[mm]。ズーム連動値が来ていればそちら、無ければ土台。"""
-        return self.deviation if self._view_resolution is None else self._view_resolution[0]
+        """いま測るのに使う線形偏差[mm]。ズーム連動値が来ていればそちら、無ければ文書の外接対角から決めた値。"""
+        return self._effective_resolution()[0]
 
     @property
     def view_angular_deflection(self) -> float:
         """いま測るのに使う角度偏差[**ラジアン**]。度ではない(`duocad/resolution.py`)。"""
-        if self._view_resolution is None:
-            return kernel.DEFAULT_ANGULAR_DEFLECTION
-        return self._view_resolution[1]
+        return self._effective_resolution()[1]
+
+    def _effective_resolution(self) -> tuple:
+        """`_view_resolution` があればそれ、未着なら表示中のボディの外接対角から決めた値(形が変わるまで覚える)。"""
+        if self._view_resolution is not None:
+            return self._view_resolution
+        shapes = tuple(
+            id(body.shape) for body in self.document.bodies
+            if body.visible and body.mesh is None and body.shape is not None
+        )
+        memo = self._document_resolution_memo
+        if memo is not None and memo[0] == shapes:
+            return memo[1]
+        lows: list = []
+        highs: list = []
+        for body in self.document.bodies:
+            if body.visible and body.mesh is None and body.shape is not None:
+                box = kernel.bounding_box(body.shape, cache=self.document.bbox_cache)
+                lows.append(box["min"])
+                highs.append(box["max"])
+        if not lows:
+            return (self.deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)  # 空の文書は覚えない
+        diagonal = math.dist(
+            [min(low[axis] for low in lows) for axis in range(3)],
+            [max(high[axis] for high in highs) for axis in range(3)],
+        )
+        found = resolution.document_resolution(diagonal)
+        self._document_resolution_memo = (shapes, found)
+        return found
 
     def _body_focus(self, body_id: str) -> Optional[frozenset]:
         """そのBodyで**細かく測る面**の集合。`None` は全面(指定が無い/そのBodyの指定が無い)。
@@ -393,12 +422,12 @@ class DocumentView:
         """
         fine = self._body_focus(body_id)
         if fine is None:
-            return ("all", self._view_resolution, self._view_floored)
+            return ("all", self._effective_resolution(), self._view_floored)
         if not fine:
-            return ("coarse", self._view_coarse_resolution or self._view_resolution)
+            return ("coarse", self._view_coarse_resolution or self._effective_resolution())
         return (
             "mixed",
-            self._view_resolution,
+            self._effective_resolution(),
             self._view_coarse_resolution,
             tuple(sorted(fine)),
             self._view_floored,

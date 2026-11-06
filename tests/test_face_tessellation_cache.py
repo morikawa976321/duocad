@@ -300,6 +300,7 @@ def test_moving_copying_or_mirroring_a_body_measures_nothing(boxed, counted, ver
     import numpy as np
 
     session, body = boxed
+    session.set_view_resolution(0.05, 400.0)  # 見え方が届く前の粗さは外接箱で動く(動かすと外接箱が変わる)ので、固定してから動かす
     before = session.geometry(body)
     session.modify_selection([{"body": body, "kind": "body", "index": None}], [])
     counted.clear()
