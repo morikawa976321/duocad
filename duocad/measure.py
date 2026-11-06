@@ -18,8 +18,8 @@ verb ではない(文書もログも触らない)。MCP の `measure` と WebSoc
 
 `from` / `to` は画面が線で描くための2点で、直線側は辺(線分)の中点・平面側は面(領域)の面積重心を起点にする。
 
-平行の判定は `PARALLEL_SIN_TOLERANCE`(sin θ)。述語の `PARALLEL_TOLERANCE`(1e-3 ≈ 2.6度)は
-粗すぎ、測定に使うと 2度傾いた面どうしの「距離」が出てしまう。
+平行の判定は `PARALLEL_SIN_TOLERANCE`(sin θ)。述語の `PARALLEL_TOLERANCE`(内積で 1e-6 ≈ 0.08度)は
+粗く、測定に使うと 0.05度傾いた面どうしの「距離」が出てしまう。
 
 OCP / build123d を import しない(幾何は `kernel` / `query` から数値で受け取る)。
 """

@@ -58,9 +58,10 @@ EDGE_OPS = ("parallel_to", "length_gt", "length_lt", "kind_is", "on_boundary_of_
 #: `axis` に書ける名前(3要素のベクトルを直接書いてもよい)
 AXES = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0), "Z": (0.0, 0.0, 1.0)}
 
-#: `parallel_to` / `normal_dot_gt` の許容(単位ベクトルの内積の絶対値)。
-#: STEPから来た面・辺は厳密に軸平行ではないので、素の等値比較にはしない。
-PARALLEL_TOLERANCE = 1e-3
+#: `parallel_to` の許容(辺の単位方向と軸の内積の絶対値が 1 からずれてよい量。角度では約0.08度)。
+#: 実測(2026-11-06): 回転した箱を STEP に書き、点と方向を小数3桁に丸めて読み直した平行な辺のずれは最大 2.1e-7
+#: (小数2桁でも 1.4e-5)。その約5倍を置いた。傾き 1度の辺は 1.5e-4 なので外れる。
+PARALLEL_TOLERANCE = 1e-6
 
 _OPS_BY_KIND = {"face": FACE_OPS, "edge": EDGE_OPS}
 
