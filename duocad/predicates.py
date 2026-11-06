@@ -130,7 +130,7 @@ def describe_ops() -> dict:
             {
                 "op": "normal_dot_gt",
                 "args": {"axis": "X|Y|Z|[x,y,z]", "value": "number"},
-                "doc": "面の外向き法線と軸の内積が value より大きい",
+                "doc": "面の外向き法線と軸の内積が value より大きい(曲面は面の中央での法線。平面だけにしたいときは kind_is plane と併用)",
             },
             {
                 "op": "area_gt",

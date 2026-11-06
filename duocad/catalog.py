@@ -366,7 +366,7 @@ PREDICATE_HELP = (
     "(1つのボディだけに掛けたいときは必ず付ける。fillet / chamfer は1つのボディの辺しか受けない)。"
     'where は全条件のAND。省略はできず、条件なし(その種別の全部)は "where": [] と書く。ORは無い。'
     '面の条件: {"op": "normal_dot_gt", "axis": "X"|"Y"|"Z"|[x,y,z], "value": 数}'
-    "(外向き法線と軸の内積が value より大きい。上面なら axis Z・value 0.9) / "
+    "(外向き法線と軸の内積が value より大きい。上面なら axis Z・value 0.9。曲面は面の中央での法線なので、平面だけにしたいときは kind_is plane と併用) / "
     '{"op": "area_gt", "value": 数} / '
     '{"op": "kind_is", "value": "plane"|"cylinder_full"|"cylinder_partial"|"torus"|"cone"|"bspline"|"other"}。'
     '辺の条件: {"op": "parallel_to", "axis": 軸}(直線の辺だけ。円弧などは選ばない) / {"op": "length_gt", "value": 数} / '
@@ -1586,9 +1586,10 @@ COMMANDS: tuple[Command, ...] = (
             "間違えて作った / 要らなくなったものを消すときに呼ぶ。選択の**ボディ**"
             "(面/辺/頂点/ボディのどれで指してもよい)と**スケッチの図形**を、混ざっていても"
             "1回でまとめて削除する(1回のundoで全部戻る)。対象は選択から取る"
-            "(引数では受けない)。**領域(region)は削除できない** —— 領域は図形の配置から"
-            "計算されるものなので、選択に混ざっているとエラーになる(その領域を作っている"
-            "図形を選び直すこと)。スケッチを丸ごと消すのは delete_items。"
+            "(引数では受けない)。**領域(region)は消せない** —— 領域は図形の配置から"
+            "計算されるものなので、選択に混ざっていても無視され(その領域を作っている図形を"
+            "消せば領域も消える)、領域だけを選んでいるときはエラーになる。"
+            "スケッチを丸ごと消すのは delete_items。"
         ),
         session="delete",
         resets_selection=True,
@@ -1782,10 +1783,10 @@ COMMANDS: tuple[Command, ...] = (
                 " sketches[].entities[].entity_id をそのまま渡す。"
                 "**IDを推測して組み立てない**(存在しないIDはエラーになる)",
             ),
-            Param("dx", "number", "X方向の間隔(mm)", dimension=True),
-            Param("dy", "number", "Y方向の間隔(mm)", dimension=True),
-            Param("nx", "integer", "X方向の個数(元を含む)", dimension=True),
-            Param("ny", "integer", "Y方向の個数(元を含む)", dimension=True),
+            Param("dx", "number", "u方向(スケッチ平面の横軸)の間隔(mm)", dimension=True),
+            Param("dy", "number", "v方向(スケッチ平面の縦軸)の間隔(mm)", dimension=True),
+            Param("nx", "integer", "u方向の個数(元を含む)", dimension=True),
+            Param("ny", "integer", "v方向の個数(元を含む)", dimension=True),
         ),
         session="pattern_rectangular",
         resets_selection=True,
@@ -1854,14 +1855,19 @@ COMMANDS: tuple[Command, ...] = (
             Result("entity_ids", "string[]"),
             Result("source_name", "string"),
             Result("entity_count", "number"),
+            Result("size_mm", "number[]"),
+            Result("region_count", "number"),
+            Result("skipped", "string"),
         ),
         category="sketch",
         description=(
             "いま開いているスケッチへSVGの図形を足すときに呼ぶ。"
             "外で描いた輪郭(ロゴ・図面・アウトライン化した文字)を持ち込んで押し出したいとき用。"
             "図形は取り込んだ時点で領域として使えるので、続けて extrude を打てる。"
-            "曲線はベジエのまま入る(折れ線に落ちない)。単位はmm、"
-            "SVGが物理単位を持たなければ1ユーザー単位=1mm。"
+            "曲線はベジエのまま入る(折れ線に落ちない)。単位はmm(in・pt・pcは換算)、"
+            "SVGが物理単位を持たなければ1ユーザー単位=1mm(pxも1px=1mm)。"
+            "取り込んだ大きさは応答の size_mm、落とした文字・画像・非表示の図形の数は skipped で分かる"
+            "(大きさが違えば scale で直す)。"
         ),
         params=(
             _SKETCH_ID,
