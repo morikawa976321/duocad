@@ -2,6 +2,8 @@
 今の形の別の面を指して確定される。"""
 from __future__ import annotations
 
+import pytest
+
 from duocad.server import Session
 from session_support import pad, session_with_box
 
@@ -62,3 +64,12 @@ def test_changes_to_other_bodies_and_datum_references_leave_it_alone():
     session.set_command_args({"plane_face": {"datum": "XY"}})
     session.undo()
     assert staged_args(session)["plane_face"] == {"datum": "XY"}
+
+
+@pytest.mark.parametrize("index", [1, 1.0, "1"])
+def test_a_face_reference_is_dropped_whichever_form_its_index_takes(index):
+    """落ちたら、解決側が受ける形(`1.0`・`"1"`)の参照が形の変更のあとも残り、今の形の別の面を指して確定される。"""
+    session = filleted_box_with_mirror_staged({"body": "box", "kind": "face", "index": index})
+    assert "plane_face" in staged_args(session)
+    assert session.undo()["dropped_args"] == ["plane_face"]
+    assert "plane_face" not in staged_args(session)

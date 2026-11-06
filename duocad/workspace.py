@@ -45,6 +45,7 @@ def shape_ref_bodies(args: dict) -> dict[str, list[str]]:
     """引数名 -> その値が形の添字で指しているボディの id。参照1つ(`{"body", "kind", "index"}`)かその配列を見る。
     `kind` の無い参照(`plane_face` は `{"body", "index"}` でも渡せる)は面。原点パーツ(`{"datum"}`)・ボディそのもの
     (`kind: "body"`)・スケッチの参照は形の添字を持たないので入らない。
+    `index` は型を見ずあれば数える(解決側 `selection._as_index` が `1.0`・`"1"` も受けるので、`int` に絞ると外れ損なう)。
     """
     found: dict[str, list[str]] = {}
     for name, value in args.items():
@@ -55,7 +56,7 @@ def shape_ref_bodies(args: dict) -> dict[str, list[str]]:
             if isinstance(ref, dict)
             and isinstance(ref.get("body"), str)
             and ref.get("kind", "face") in SHAPE_REF_KINDS
-            and isinstance(ref.get("index"), int)
+            and "index" in ref
         ]
         if bodies:
             found[name] = bodies
