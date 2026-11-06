@@ -26,9 +26,10 @@ const SURFACE_NAMES: Record<string, string> = {
   torus: 'トーラス',
   cone: '円錐',
   bspline: '自由曲面',
+  other: '曲面(その他)',
 }
 
-const EDGE_NAMES: Record<string, string> = { line: '直線', circle: '円・円弧' }
+const EDGE_NAMES: Record<string, string> = { line: '直線', circle: '円・円弧', other: '曲線' }
 
 const ENTITY_NAMES: Record<EntityKind, string> = {
   point: '点',
@@ -51,15 +52,20 @@ const POINT_NAMES: Record<string, string> = {
 }
 
 function xyz(values: number[]): string {
-  return `(${values.map(fixed3).join(', ')})`
+  return `(${values.map(fixed3).join(', ')}) mm`
 }
 
 function uv(u: number, v: number): string {
-  return `(u ${fixed3(u)}, v ${fixed3(v)})`
+  return `(u ${fixed3(u)}, v ${fixed3(v)}) mm`
 }
 
 function mm(value: number, unit = 'mm'): string {
   return `${fixed3(value)} ${unit}`
+}
+
+/** サーバは取得失敗を `例外クラス名: 本文` で返す(`ws.py` の `inspect_selection`)。画面には本文だけを出す。 */
+export function selectionInfoErrorText(error: string): string {
+  return error.replace(/^[A-Za-z_][\w.]*(?:Error|Exception): /, '')
 }
 
 export function selectionInfoTitle(item: MeasureItem, names: InfoNames): string {

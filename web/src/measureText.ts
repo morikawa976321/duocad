@@ -25,7 +25,7 @@ export function measureReadout(between: MeasureBetween): string {
   if (between.distance !== null) {
     const delta =
       between.delta !== null && between.delta.length === 3
-        ? `  Δx ${fixed3(between.delta[0])}  Δy ${fixed3(between.delta[1])}  Δz ${fixed3(between.delta[2])}`
+        ? `  Δx ${fixed3(between.delta[0])} mm  Δy ${fixed3(between.delta[1])} mm  Δz ${fixed3(between.delta[2])} mm`
         : ''
     return `${pair}: 距離 ${fixed3(between.distance)} mm${delta}`
   }
