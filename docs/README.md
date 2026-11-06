@@ -1,12 +1,13 @@
 # docs/ の索引
 
-入口は [../README.md](../README.md)（文書の地図・設計原則・起動手順）。ここは `docs/` 配下の一覧。
+入口は [DEVELOPMENT.md](DEVELOPMENT.md)（文書の地図・設計原則・起動手順）。外から読む人向けの案内はリポジトリ直下の [../README.md](../README.md)。ここは `docs/` 配下の一覧。
 **いまの挙動の正はコードとテスト**で、文書は「なぜそうしたか」と実測を持つ。同じことを2箇所に書かず、
 正を1つ決めて他は参照にする（正を宣言してもコピーは追随しない —— 見つけたらコピーを消す）。
 文書はコードと同じリポジトリに置く（誰が直せるかで置き場を決める）。
 
 | 文書 | 何が書いてあるか |
 |---|---|
+| [DEVELOPMENT.md](DEVELOPMENT.md) | 開発ガイド(入口): 文書の地図・設計原則・起動・自動検査の走らせ方・アーキテクチャとモジュール境界・既知の落とし穴 |
 | [MANUAL.md](MANUAL.md) | 使い方（制作用の安定版と開発用の使い分け） |
 | [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) | コア・全体の設計判断と実測（層の分け方・外してはいけない3つ・技術選定の根拠・verb 粒度・図形の表現・保存・性能・テスト方針・方向） |
 | [KERNEL_COMMON.md](KERNEL_COMMON.md) | 共通幾何機構の責務・依存方向、層をまたぐ契約、統合しない実装の理由、OCCT の罠、前後一致の実測 |
@@ -38,11 +39,12 @@
 | [TOPOPT_STOPPING.md](TOPOPT_STOPPING.md) | 段階4の終了条件の見直し（V=1セルでの帯・忍耐・枯渇・材料の減り方の当てはめ、納品の材料、歩幅の実験、3者の相談） |
 | [TOPOPT_CONVERGENCE.md](TOPOPT_CONVERGENCE.md) | 段階4を予算の内で尽きさせる傷の毒（実測・終端の確かめ直し・3者の相談）と、hanger の新条件の警告・低応力の部材・くびれの穴の調査 |
 | [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) | 最適化の途中記録（毎回自動で作る診断記録の中身） |
-| [THREAD.md](THREAD.md) | ねじ verb の設計（3Dプリント前提・未実装）: 範囲・3Dプリント前提の4つの決め・引数・形の作り方の実測（螺旋の歯の和が壊れる・面から直接組む）・門と検査。試作は `tools/thread_prototype.py` |
-| [FACE_EDIT.md](FACE_EDIT.md) | 面の削除(#190)と面のオフセット(#183)の方式と実装(画面は未実装): Defeaturing・面ごとの MakeOffset・自前の組み直し・丸め追従の比較と実測(合成・実物 STEP・規模・GIL・BinTools)、関門、相談役の意見、本人判断カード、実装計画。方式比較の試作は Git `3c3fb655` の `tools/face_edit_probe/` |
+| [THREAD.md](THREAD.md) | ねじ verb の設計（3Dプリント前提、実装済み）: 範囲・3Dプリント前提の4つの決め・引数・形の作り方の実測（螺旋の歯の和が壊れる・面から直接組む）・門と検査。試作は `tools/thread_prototype.py` |
+| [THREAD_SIM.md](THREAD_SIM.md) | 3Dプリントねじの山形を計算機の中で評価する方法: 印刷・嵌合・強さの模擬と、試し刷り TP1〜TP5 との突き合わせ |
+| [FACE_EDIT.md](FACE_EDIT.md) | 面の削除(#190)と面のオフセット(#183)の方式と実装(画面も実装済み): Defeaturing・面ごとの MakeOffset・自前の組み直し・丸め追従の比較と実測(合成・実物 STEP・規模・GIL・BinTools)、関門、相談役の意見、本人判断カード、実装計画。方式比較の試作は Git `3c3fb655` の `tools/face_edit_probe/` |
 | [INTERFERENCE.md](INTERFERENCE.md) | 干渉チェック（Issue #186、実装済み）の方式と実装の記録: 定義と許容差（重なり・微小重なり・接触・隙間）・方式の比較（General Fuse の像の共有を2体ずつ）・実測（PC ケース・ねじ山・メッシュ混在・ボディ数）・相談役の意見・本人判断カード・実装計画。方式比較の試作は Git `3c3fb655` の `tools/interference_probe/` |
 | [ELLIPSE.md](ELLIPSE.md) | 楕円 verb（`add_ellipse`）と円の直径化: 本人の決定・`gp_Elips` の長短の罠・保存形式 version 3 と移行・吸着と交点の作り |
-| [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md) | フィレットのはみ出しと貫通の吸収(Fusion 360 相当): 肉を別に作って足し引きする作り方・OCCT の結果から切り替える条件・実測・捨てた案・曲率半径を超える半径(#207)の作り方 |
+| [FILLET_OVERFLOW.md](FILLET_OVERFLOW.md) | フィレットのはみ出しと貫通の吸収(Fusion 360 相当): 肉を別に作って足し引きする作り方・OCCT の結果から切り替える条件・実測・捨てた案・曲率半径を超える半径(#207・#211・#212)の作り方 |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
 | [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md) | 穴口の微細隙間とメッシュ欠損の因果調査（境界交差・最小再現・OCCT内部検査）と、案A（境界交差の検出・共有辺再分割）の設計・実装・実測 |
 

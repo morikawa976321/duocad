@@ -81,8 +81,9 @@ clone・`uv sync --frozen`・`npm ci`・ビルド・データフォルダ作成�
 コードは main にも入ったままで、起動の `--channel stable` で隠す(`channel.HIDDEN_IN_STABLE`):
 
 - AIの道具(MCP とアプリ内AI)から、条件を置く5つ(`set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` /
-  `clear_loads`)を外す。説明文の道具の数も外した後の数になる。
-- WebSocket の形状最適化の口(上の5つと、条件の点検・実行・中断・仕上げ・ステップの7つ)を断る。どれが隠れるかは `catalog.Command.feature`。
+  `clear_loads`)と、最適化の画面に入る・出る `enter_optimize` / `leave_optimize` を外す。説明文の道具の数も外した後の数になる。
+- WebSocket の形状最適化の口(条件を置く5つのほか、条件の点検・解像度・実行・中断・仕上げ・ステップ・GPU の切り替えなど)を断る。
+  どれが隠れるかの正は `catalog.Command.feature`(`shape_optimization`)。
 - 画面は、接続のたびにサーバが送る `optimize_status` の `available` を読み、「形状最適化」ボタンと設定の GPU の欄を出さず、
   ステップの取り直しも頼まない。口を断るのと同じサーバが答えるので、`/duocad-config.json` の取得に失敗しても食い違わない。
 - 最適化の条件や結果のボディが入った文書も、そのまま開いて使える(条件は文書に残り、見えないだけ)。

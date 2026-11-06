@@ -238,10 +238,10 @@ M60×4 は STL の三角形分割で2面が取れず13秒かかった。だか�
 
 ### 体積の既定積分はねじ山で狂う
 
-`kernel.volume`（`VolumeProperties_s` の既定積分。Eps 無し）は、何周も巻いた B-spline の面で誤差が出る:
+`VolumeProperties_s` の既定積分（Eps 無し）は、何周も巻いた B-spline の面で誤差が出る（2026-10-16 の実測）:
 採らない方式の歯だけで −1.9e-01（M5×0.8）、採る方式の軸だけで最大 1.5e-03、ボルト・ナットの形で最大 3.5e-04。
-`describe_document` が AI に見せる体積はこの値なので、AI の指示文の「体積差 0.1% 以内を指示どおりとみなす」（issue #134）に
-軸だけのときは掛かりうる。帯を1周ごとの面に割ると直るかは未測定（割ると面の数が周回数倍になり、画面で選ぶ単位も増える）。
+だから体積 `brep_geometry.volume`（`describe_document` が AI に見せる値）は、B スプライン・ベジエの面だけ Eps=1e-9 の
+適応積分で足す（`brep_geometry._needs_adaptive`）。合否の門の体積はこれとは別に Eps 1e-7 の積分で測る（`_thread_volume_eps`）。
 
 ## 合否の門と検査
 

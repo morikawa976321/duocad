@@ -25,7 +25,7 @@
 - **`_resolve_min_width(spacing, requested, max_cells=None)`**: `max_cells`(格子の最短辺のセル数。`run()` は `_grid_shape(limits bbox, spacing)` から渡す)を渡すと、上限(上の `MIN_WIDTH_CEILING_RATIO` 倍)を超える値を `OptimizeInputError`(文面に「上限」)で断り、m を上限で頭打ちにする。
 - 下限は `MIN_WIDTH_FLOOR_MM`(2.0 mm)以上でいちばん細い m(2 セル未満にはしない)。これ未満の明示値は `OptimizeInputError`。上限は格子の最短辺のセル数の `MIN_WIDTH_CEILING_RATIO`(0.25)倍(切り捨て)で、これを超える値も同じ例外。`resolution_limits()["steps"][i]` には `min_width_ceiling_mm`(= 上限の m × その段の要素サイズ)と `min_width_steps_mm`(下限〜上限の m の値の一覧)が載る。
 - **`min_width_steps_mm(spacing, max_cells)`**: 各値を `_resolve_min_width` に渡すとちょうどその m になる。`m*s/s` が丸めで m を超えるとき（0.1×3/0.1 → 4）は1ulpずつ下げてある。段の値をそのまま `m * spacing` にすると、画面が示した段を入力しても m が1つ飛ぶ。
-- `optimize_run._search_failure_warning(search_result, min_width=None, ...)`: 最小幅が有効（`cells>1`）のとき、入口で止まった（`input_contradiction` / `boundary_mapping_failed`）なら「絞ったセル数を除いた後の空間に対する検査」、予算などで止まったなら「予算より先に最小幅を疑う」を末尾に添える。
+- `optimize_run._search_failure_warning(search_result, min_width=None, ...)`: 探索が `feasible` 以外で終わったとき、`optimize_run._min_width_failure_note` が末尾に添える。添えるのは、設計空間が最小幅で絞られた（`trimmed_cells>0`。`resolution_insufficient` は除く）ときの「立方が入らない N/M セルを除いた後の空間に対して行った」旨と「最小幅を下げると通ることがある」だけで、予算に触れる文言は無い。
 - `topopt_checks/measure_min_width_floor.py --cells 1` は測れない（m=1 は既定からも到達不能で `out["error"]` を返すだけ）。係数 `SEARCH_TARGET_FACTOR = 2.4` と規則 R(m)・S(m) は既定変更では変えていない。
 
 ## 画面（web/src/minWidth.ts・OptimizePanel）

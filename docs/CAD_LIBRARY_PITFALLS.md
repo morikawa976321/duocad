@@ -11,16 +11,16 @@
 | `TopoDS_Shape` は `hash` が一致しても `__eq__` が False(dict / `lru_cache` が1回も当たらない)。`IsSame` は Orientation を見ない | `duocad/kernel.py` `_ShapeKey` / `BoundingBoxCache` |
 | OCP の `TopTools_ListOfShape` を `for` / `list()` で走査すると、中身の数によらず1回 0.35〜0.45 ms(空でも) | `duocad/brep_topology.py` `listed` |
 | `BRepAlgoAPI_Fuse(a, b)` など2引数のコンストラクタはその場で演算し、続く `Build()` でもう一度走る | `duocad/brep_operations.py` `build_boolean` |
-| `BRepBndLib::Add` は面のトリムを見ない・`AddOptimal` は繰り返しても速くならない・`useTriangulation=True` は前回の三角形分割を見る・`SetGap(0.0)` の効き方は `Add` の前後で変わる | `duocad/kernel.py` `_bounding_box_extents` / `duocad/topopt/voxelize.py` `_shape_bbox` / [TOPOPT.md](TOPOPT.md)「OCCT の bbox はトリムを見ない」 |
+| `BRepBndLib::Add` は面のトリムを見ない・`AddOptimal` は繰り返しても速くならない・`useTriangulation=True` は前回の三角形分割を見る・`SetGap(0.0)` の効き方は `Add` の前後で変わる | `duocad/brep_geometry.py` `_bounding_box_extents` / `duocad/topopt/voxelize.py` `_shape_bbox` / [TOPOPT.md](TOPOPT.md)「OCCT の bbox はトリムを見ない」 |
 | 面・辺に載った三角形分割を、ブーリアン・GF・`BRepBndLib::Add` の既定が読む(画面へ配った分割を形に残すと、配ったかどうかで演算の結果が変わる) | `duocad/kernel.py` `tessellate` / `duocad/brep_operations.py` `build_boolean` / `duocad/kernel_interference.py` `triangles` |
 | STEP 読み込みは `ReadFile()` の戻り値を見ずに `TransferRoots()` へ進むとプロセスごと落ちる(0xC0000005)。書き出しは `Transfer()` の戻り値も見る | `duocad/kernel.py` `read_step` / `write_step`、`duocad/io_step.py` |
 | STEP 書き出しは C++ から stdout へ統計を吐く(`redirect_stdout` では止まらない。fd 1 を fd 2 へ振り替える) | `duocad/mcp_server.py` `_claim_stdout` |
 | STL の偏差は `isRelative=False` で渡す(相対だと偏差を1/20にしても1バイトも変わらない) | `duocad/kernel.py` `tessellate` |
 | 角度偏差の単位はラジアン(`DEFAULT_ANGULAR_DEFLECTION = 0.35` ≈ 20°) | `duocad/kernel.py` `DEFAULT_ANGULAR_DEFLECTION` |
-| `gp_Ax3.ZReverse()` は X/Y を据え置く(左手系)。枠を3ベクトルで保存すると反転面で v 軸だけ鏡像になる | `duocad/kernel_sketch.py` `_ax3_from_frame` |
+| `gp_Ax3.ZReverse()` は X/Y を据え置く(左手系)。枠を3ベクトルで保存すると反転面で v 軸だけ鏡像になる | `duocad/brep_planar.py` `_ax3_from_frame` |
 | 面の `Orientation()==REVERSED` は平面の外向きを決めない。奇数回鏡映したボディの面は平面の `Position` が左手系で、REVERSED のとき `Direction` がすでに外向き(外向きは `BRepGProp_Face` の法線で決める) | `duocad/kernel_sketch.py` `_ax3_from_face` |
 | 曲面から `MakePrism` すると `IsDone()` は真でも `BRepCheck_Analyzer` が偽(または体積が激減) | `duocad/kernel_extrude.py` `_check_coplanar_planes` |
-| `ShapeUpgrade_UnifySameDomain` は入力そのものを壊す(コピーで試してから本番) | `duocad/kernel.py` `_unify_same_domain` |
+| `ShapeUpgrade_UnifySameDomain` は入力そのものを壊す(コピーで試してから本番) | `duocad/brep_operations.py` `unify_same_domain` |
 | `ShapeUpgrade_UnifySameDomain` に壊れた形を渡すと仮想メモリを際限なく使う(フィレットの吸収の総当たりで 84GB、PC が落ちた)。重い総当たりは `tools/capped_run.py` で | `duocad/kernel.py` `_absorbed_fillet` / `duocad/kernel_overflow.py` `_require_plausible` |
 | フィレット/面取りは例外を投げず失敗し、半径に対して単調でない | `duocad/kernel.py` `fillet_edges` / `chamfer_edges` |
 | 薄肉(シェル後)の箱で、フィレットの半径が縁の面の幅とちょうど一致すると `MakeFillet.Build()` が access violation でプロセスごと落ちる(`BRepPrimAPI_MakeBox` の箱で実測。押し出しの箱は `IsDone()=False`)。窓は 2e-9 mm 未満 | `duocad/kernel_chains.py` `fillet_consumes_face`(当たれば元の形の `MakeFillet` を呼ばずにはみ出しの吸収へ回る) |
@@ -37,7 +37,7 @@
 | 円錐面の延長を頂点の手前で止めると先に穴が残り、箱を内と外に割り切れない(頂点ちょうどまで延ばす) | `duocad/kernel_overflow.py` `_extended_face` |
 | 由来(provenance)の取り出し方は操作ごとに違う(`History()` / `Modified()`、`IsRemoved` / `IsDeleted`) | `duocad/brep_history.py` `maker_successors` |
 | `Face.center()` の既定は `CenterOf.GEOMETRY` で面積重心ではない(曲面では面パッチの上にすら乗らない) | `duocad/query.py` `face_centroid` / `face_fingerprint` |
-| 生の `TopoDS_Shape` を build123d で包む入口は `Compound.cast`(基底の `Shape.cast` は None を返す)。`faces()` / `edges()` は重複除去済み。ただし `edges()` は縮退辺(球の極・円錐の頂点・フィレットの角。長さ0)を除くので、辺の数は kernel の `edge_count` から取る(球で 1 と 3、全辺 R3 のフィレット立方体で 48 と 56) | `duocad/query.py` 冒頭・`describe_shape` |
+| 生の `TopoDS_Shape` を build123d で包む入口は `Compound.cast`(基底の `Shape.cast` は None を返す)。`faces()` / `edges()` は重複除去済み。ただし `edges()` は縮退辺(球の極・円錐の頂点・フィレットの角。長さ0)を除くので、辺の数は `brep_topology.edge_count` から取る(球で 1 と 3、全辺 R3 のフィレット立方体で 48 と 56) | `duocad/query.py` 冒頭・`describe_shape` |
 | 左手系のスケッチ枠で `gp_Ax2(中心, ax3.Direction(), X)` を作ると Y が逆になり、円弧は時計回り・楕円は角度が逆に出る(立方体6面のうち5面) | `duocad/kernel_sketch.py` `_curve_axis` |
 | `gp_Elips` は長半径 >= 短半径でないと `Standard_ConstructionError`(縦長の楕円は軸を 90° 回して入れ替える) | `duocad/kernel_sketch.py` `_ellipse_gp` |
 | 離心率0の `gp_Elips`(長半径と短半径の差 5e-8 以下)の辺を `BRepOffsetAPI_MakeOffset` に渡すと access violation でプロセスごと落ちる(縦横が等しい楕円は辺を `gp_Circ` にする) | `duocad/kernel_sketch.py` `_ellipse_gp` |
@@ -49,7 +49,7 @@
 | 円・直線を B-スプラインに直した辺(ブーリアン・オフセットの途中で出る)をさらにオフセットすると、元の型に戻らず `GeomAbs_OffsetCurve` のまま返る(曲線そのものは円・直線で、標本点の残差は 1e-10 以下)。標本点を当てはめて直す | `duocad/kernel_sketch.py` `_entities_of_offset_curve` |
 | 楕円を広げて縮めた面(辺が楕円のずらし曲線のずらし曲線)を `BRepOffsetAPI_MakeOffset` でさらに広げると、例外も `IsDone()=False` も出さずに壊れたワイヤを返す(20×10 の楕円を R=1, d=1.5 で包むと面積 43.3 と −16.8 の2枚。正しくは 236.81 の1枚)。同じ面でも距離によっては `IsDone()=False` で失敗する(角度 30 度で R=1, d=2)。`BRepBuilderAPI_NurbsConvert` で有理 B-スプラインにしてから渡すと access violation。広げるのに失敗するか、結果が「1枚で面積が減らない」でなければ、その辺を有理でない多項式の B-スプラインに近似し直してやり直す | `duocad/kernel_sketch.py` `_dilate_faces`・`_offset_ready` |
 | `GeomConvert_ApproxCurve` に連続性 C2・次数上限 3 を頼むと、断らずに5次の B-スプラインを返す(C2 には5次が要る)。3次で頼めるのは C1 まで | `duocad/kernel_sketch.py` `_approximated_beziers` |
-| 辺の長さは `GCPnts_AbscissaPoint.Length_s` の既定の許容差も build123d の `Edge.length` も楕円・B-spline で粗い(楕円 40×2 で +1.74%)。許容差を渡す | `duocad/kernel.py` `edge_length` |
+| 辺の長さは `GCPnts_AbscissaPoint.Length_s` の既定の許容差も build123d の `Edge.length` も楕円・B-spline で粗い(楕円 40×2 で +1.74%)。許容差を渡す | `duocad/brep_geometry.py` `edge_length` |
 | 螺旋の歯を芯の円柱へ `Fuse` すると、`BRepCheck` が真のまま芯が消える寸法がある(M5×0.8 で体積 −84%) | [THREAD.md](THREAD.md)「形の作り方」 |
 | `VolumeProperties_s` の既定積分(Eps 無し)は何周も巻いた B-spline の面で狂う(歯だけで −19%、ねじの軸で 1.5e-03) | [THREAD.md](THREAD.md)「体積の既定積分はねじ山で狂う」 |
 | `BRepBuilderAPI_Sewing` に蓋と帯を辺を共有させたまま渡すと、端の辺を縮退扱いにして殻にならない | [THREAD.md](THREAD.md)「採る: 面から直接組む」 |
@@ -125,7 +125,7 @@
   (問い合わせ・プレビュー)では非破壊にするか写し(`kernel.copy_shape`)に掛ける(Issue #186 の試作 `astra_checks.py`)。
 - **`BOPAlgo_BOP.PDS()` や `PPaveFiller().DS()` が返す DS に Python から触るとプロセスが落ちる**(終了コード 127。小さな形では
   インタプリタの終了時に落ちる)。ラッパがポインタの持ち主のつもりで解放する。DS を読むなら `BOPAlgo_PaveFiller` を自分で作り
-  `DS()`(参照)を読む(`kernel_brep.inspect_solid` の `BOPAlgo_CheckerSI.DS()` も参照なので安全)。
+  `DS()`(参照)を読む(`brep_checks.inspect_solid` の `BOPAlgo_CheckerSI.DS()` も参照なので安全)。
 - **BOP の DS の FF 干渉は「面が触れている」ではない**: 隙間 0.2 で離れた2部品でも面の組が 114 件記録される(境界箱が重なる面の
   組の記録)。接触は GF の像の共有(両方の像に同じ面・辺・頂点があるか)で読む([INTERFERENCE.md](INTERFERENCE.md))。
 - **OCP からは OCCT の計算を途中で止められない**: `BOPAlgo_Builder.Perform(theRange)` は進捗の範囲を受け取るが、止める側の
@@ -197,7 +197,7 @@
     基準点は**閉じた殻ごとにその殻の境界箱の中心**にする(原点だと、Z=100 の 12×6 の楕円を 0.001 mm 押した形で体積が 1.3% ずれ
     重心が立体の外へ出た。形全体の境界箱の中心でも、離れた2つの薄い殻を持つボディで重心が 0.24 mm ずれた)。
     形全体を既定の積分で測る経路(原点が基準)は、箱・円柱を Z=10000 に置いても相対 2e-10 で問題ない。
-  `kernel._volume_props` は、曲面か境界の辺が B スプライン・ベジエ・平行曲線の面だけ適応積分にし、無ければ形全体を既定の積分で測る。
+  `brep_geometry._volume_props` は、曲面か境界の辺が B スプライン・ベジエ・平行曲線の面だけ適応積分にし、無ければ形全体を既定の積分で測る。
 - **`MakeDraft` で楕円を傾けた側面は近似で、底・ふたとの継ぎ目に約 1e-5 mm のすき間が残る**(12×6 の楕円を 0.001 mm・5° で押すと、
   縫い合わせは 1e-6 で閉じず 1e-5 で閉じ、辺の許容差は 8.8e-6。2026-10-19 実測)。体積・重心はこのすき間 × 基準点からの距離(重心は2乗)
   だけずれる: その板を 100 mm 離して2枚置き Φ0.2 の軸でつないだ1つの殻では、重心が 0.0085 mm ずれる。既定の積分・形全体の適応積分・
@@ -215,7 +215,7 @@
   使うと、`1 - cos` は倍精度で 1e-16 未満を区別できないので内積では判定にならない。同一平面の判定は
   先頭の面の重心からの法線方向の距離を `Precision::Confusion`(1e-7 mm) と比べる。STEP 由来で
   法線に微小なずれがある面は弾かれうる(エラー文に何番目の面がどの条件に反したかが出る)。
-- 柱を `_fuse_all` で束ねてから1回だけ join / cut し、同一平面の統合(`_unify_same_domain`)は
+- 柱を `brep_operations.fuse_all` で束ねてから1回だけ join / cut し、同一平面の統合(`brep_operations.unify_same_domain`)は
   コピーで試して採否を決める。**統合を掛けるのは束ねたときだけ**(柱が複数・相手ボディへの join / cut、
   それと `boolean_bodies` の union)。柱1本の new は統合しない — 輪郭の分割で割れた側面までまとまり、
   保存済みログの後続の操作が指す面・辺の番号がずれる(領域の押し出し `extrude_regions` も同じ規則)。1面の結果は、廃止した verb `extrude_face` の保存済みログの再生結果と
@@ -255,9 +255,9 @@
 
 ## 平面でのボディの分割（`BRepAlgoAPI_Splitter`、`kernel_split`、#193 2026-10-21）
 
-- **平面を道具にした `BRepAlgoAPI_Splitter` で一度に割る**。平面は境界箱の対角より大きい `BRepBuilderAPI_MakeFace(gp_Pln, -h, h, -h, h)` の面にする。結果は Solid の compound なので `kernel.split_solids` で塊に分け、**各塊の体積重心が平面のどちら側にあるかで正側・負側へ振る**(塊は必ず片側に収まる)。半空間 `BRepPrimAPI_MakeHalfSpace` との `Common` / `Cut` を2回やる案より、演算が1回で切り口の面が両側で共有される。箱・円柱(軸を通る/横切る/斜め)・球・トーラス・全辺を丸めた箱で、体積の合計は相対 1e-6 以内、各塊は `BRepCheck` を通った。1回 5〜50 ms(丸めた箱 47 ms)。
+- **平面を道具にした `BRepAlgoAPI_Splitter` で一度に割る**。平面は境界箱の対角より大きい `BRepBuilderAPI_MakeFace(gp_Pln, -h, h, -h, h)` の面にする。結果は Solid の compound なので `brep_topology.split_solids` で塊に分け、**各塊の体積重心が平面のどちら側にあるかで正側・負側へ振る**(塊は必ず片側に収まる)。半空間 `BRepPrimAPI_MakeHalfSpace` との `Common` / `Cut` を2回やる案より、演算が1回で切り口の面が両側で共有される。箱・円柱(軸を通る/横切る/斜め)・球・トーラス・全辺を丸めた箱で、体積の合計は相対 1e-6 以内、各塊は `BRepCheck` を通った。1回 5〜50 ms(丸めた箱 47 ms)。
 - **平面が面に接しているだけ・ボディの外にあるときも `IsDone()` は真で、元の形そのままの Solid が1つ返る**(エラーにならない)。「交わらない」は自分で見る: 境界箱の中心から平面までの距離が、法線方向の箱の半幅を超えれば外・等しければ接している(1e-6 mm の余白)、それ以外でも**片側に塊が無ければ**(曲面が箱の角だけを掠める)断る。体積比 1e-9 以下の塊も断る(1e-7 mm 手前の平面は接触と同じ扱い、1e-4 mm 手前は体積 0.01 mm³ の薄板が通る)。
-- **由来は Splitter 自身の `Modified` / `IsDeleted` で取れる**(`kernel._target_successors` を元のボディ・Splitter で呼ぶ)。切り口の面は `new_faces`(どの元の面の後継でもない面)に入る。塊ごとに面の添字が別なので、`face_map` の値は塊ごとに作る。
+- **由来は Splitter 自身の `Modified` / `IsDeleted` で取れる**(`brep_history.target_successors` を元のボディ・Splitter で呼ぶ)。切り口の面は `new_faces`(どの元の面の後継でもない面)に入る。塊ごとに面の添字が別なので、`face_map` の値は塊ごとに作る。
 - **塊の並びは `TopExp.MapShapes_s` の走査順に頼らず、(側, 重心の x, y, z を小数6桁に丸めた値)で並べ直す**。引き継ぎ先(同体積のときは正側)と新しいボディへの ID・番号の割り当てがログの再生で同じになる条件。
 
 ## STEP ファイル
