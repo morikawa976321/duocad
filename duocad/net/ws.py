@@ -13,6 +13,9 @@
 `client_op` はどのクライアントの操作かを返すための添え物で、verbの引数ではない。
 `ack_id` も添え物で、付いていれば処理を終えた後(応答・配信を送り終えた後、失敗でも)に `done` を返す。
 画面はこれで「ビューポートの変化を待たせている」間を数える(`web/src/serverWait.svelte.ts`)。
+`expected_generation` も添え物で、付いていて文書の世代(`state.generation`)と違えば、実行せずに `error`(`refusal`)で断る。
+画面が切り替えの状態配信を受け取る前に送った要求を、切り替わった後の文書へ入れないため(本文の送信で時間の空くドロップの
+取り込みが付ける。`DocumentTools.call` の `expected_generation` と同じ照合)。
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
@@ -483,6 +486,9 @@ class Server:
                 raise ValueError(f"unknown command: {command!r}")
             if command in self._hidden_commands:
                 raise ValueError(f"{command!r} はこの版では使えない(安定版では形状最適化を出さない。docs/STABLE.md)")
+            expected = message.get("expected_generation")
+            if expected is not None and expected != self.session.generation:
+                raise ValueError("操作を送ったあとに文書が切り替わったので実行しなかった")
             if command == "get_state":
                 await self._push(connection, applied=None, only=connection)
             elif command in ("undo", "redo"):

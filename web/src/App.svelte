@@ -123,6 +123,7 @@
   import { createServerWait } from './serverWait.svelte'
   import { createSketchGuideRequests } from './sketchGuideRequests.svelte'
   import WaitBar from './WaitBar.svelte'
+  import FileDrop from './FileDrop.svelte'
   import {
     createViewport,
     type BoxSelectEvent,
@@ -176,11 +177,14 @@
   let viewport: Viewport | null = null
 
   let status = $state<ConnectionStatus>('connecting')
+  let connectionEpoch = 0
   let model = $state<ServerState | null>(null)
   let messages = $state<string[]>([])
 
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
   let pendingOp = $state<number | null>(null)
+  let dropUploading = $state(false)
+  let dropSince = $state<number | null>(null)
   let opCounter = 0
 
   /** 画面にサーバ計算の幽霊が出ているか(テスト用フックが見る)。 */
@@ -436,10 +440,21 @@
   })
 
   const serverWait = createServerWait()
+  let serverSince = $state<number | null>(null)
+  $effect(() => {
+    const times = [serverSince, dropSince].filter((time): time is number => time !== null)
+    serverWait.update(times.length === 0 ? null : Math.min(...times))
+  })
+  // `FileDrop` は取り込みへ渡したあと `since` を残す。その応答か失敗で `pendingOp` が解けたら、ここで消す。
+  $effect(() => {
+    if (!dropUploading && pendingOp === null) dropSince = null
+  })
 
   const session = createSession({
     onState: handleState,
-    onWaiting: (oldestSentAt) => serverWait.update(oldestSentAt),
+    onWaiting: (oldestSentAt) => {
+      serverSince = oldestSentAt
+    },
     onError: (wireMessage, where, clientOp, previewId, kind) => {
       // サーバは `例外名: 本文` で返す(MCP と同じ形)。入力の誤り・断りは例外名が使う人に何も言わないので、画面に出すときだけ落とす。
       const message = kind === 'refusal' || kind === 'history_edge' ? wireMessage.replace(/^[A-Za-z_]\w*: /, '') : wireMessage
@@ -506,6 +521,7 @@
     },
     onStatus: (next) => {
       // 切断・再接続の試行は黙る(`session.ts` が「開けなかった試行」だけトーストへ回す)。
+      if (next !== status) connectionEpoch += 1
       status = next
       // (再)接続したら今のAI設定を取り直す(切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
@@ -895,6 +911,13 @@
     const op = nextOp()
     pendingOp = op
     session.sendCommand(...[...request, op])
+  }
+
+  /** `sendTracked` と同じだが、文書の世代が `generation` のままのときだけサーバに実行させる。 */
+  function sendTrackedFor(generation: number, ...request: CommandRequest): void {
+    const op = nextOp()
+    pendingOp = op
+    session.sendCommandFor(generation, ...[...request, op])
   }
 
   /** 自分が出して待っている操作の応答なら待ちを解く(解いたら true)。 */
@@ -2826,6 +2849,23 @@
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
+<FileDrop
+  context={() => ({
+    connected: status === 'open', documentOpen, mode: commandRowKey,
+    waiting: serverSince !== null || pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null,
+    commandActive: commandClickToggles(),
+    key: JSON.stringify([connectionEpoch, model?.generation, mode]), sketchId,
+  })}
+  onImport={(verb, path, id) => {
+    // `key` の照合は、まだ届いていない切り替え(別の画面・MCP が文書を替えた直後)を見られない。照合を通った今の世代を
+    // 付けて送り、サーバにも照合させる。`model` が無ければ -1(どの世代とも合わないので、サーバが断る)。
+    const generation = model?.generation ?? -1
+    if (verb === 'import_svg' && id !== null) sendTrackedFor(generation, 'import_svg', { path, sketch_id: id })
+    else if (verb === 'import_step') sendTrackedFor(generation, 'import_step', { path })
+  }}
+  bind:busy={dropUploading}
+  bind:since={dropSince}
+/>
 
 <div class="app">
   <header>
@@ -2962,7 +3002,7 @@
         <CommandHost
           bind:this={host}
           {selection}
-          busy={pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null}
+          busy={dropUploading || pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null}
           {selfSelections}
           commands={mode.kind === 'sketch'
             ? SKETCH_MODE_COMMANDS

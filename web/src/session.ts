@@ -1030,6 +1030,11 @@ export interface Session {
    * コアの宣言(`duocad/catalog.py` の `COMMANDS`)から生成した型で、コマンド名と引数の対応を検査する。
    */
   sendCommand: SendCommand
+  /**
+   * `sendCommand` と同じだが、文書の世代が `generation` のままのときだけ実行させる(違えばサーバが断る。`ws.py` の
+   * `expected_generation`)。切り替えの状態配信が届く前に送る要求は、画面の側では古い文書宛てだと見分けられない。
+   */
+  sendCommandFor(generation: number, ...request: CommandCall): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
   setSketchVisible(sketchId: string, visible: boolean, clientOp: number): void
   /** 差分編集(足す・外す)。 */
@@ -1253,9 +1258,14 @@ export function createSession(hooks: SessionHooks): Session {
    * 「同じ文言は積まずに数える」)であって、送る側が黙る話ではない —— ここで最初の1回だけ
    * にすると、**2回目の操作が黙って消える**(押した本人には成功と区別がつかない)。
    */
-  function send(request: ClientMessage | CommandCall, wait = false): void {
+  function send(request: ClientMessage | CommandCall, wait = false, expectedGeneration?: number): void {
     const payload = Array.isArray(request)
-      ? { cmd: request[0], ...request[1], client_op: request[2] }
+      ? {
+          cmd: request[0],
+          ...request[1],
+          client_op: request[2],
+          ...(expectedGeneration === undefined ? {} : { expected_generation: expectedGeneration }),
+        }
       : request
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       hooks.onError('サーバに繋がっていないので操作を送れなかった(自動で繋ぎ直しを試みている)', 'send')
@@ -1619,6 +1629,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     sendCommand(...request) {
       send(request, !NOT_SHOWN_IN_VIEWPORT.has(request[0]))
+    },
+    sendCommandFor(generation, ...request) {
+      send(request, !NOT_SHOWN_IN_VIEWPORT.has(request[0]), generation)
     },
     setVisible(bodyId, visible, clientOp) {
       send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp }, true)
