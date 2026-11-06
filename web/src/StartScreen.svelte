@@ -4,6 +4,7 @@
    * 作業面は丸ごと見せず、空の無題の文書(「新規」直後)と見た瞬間に区別できるようにする。
    * できるのは開くことだけ。複製・削除・改名は `FilesPanel.svelte`。一覧はサーバの `list_documents` の写し。
    */
+  import { tick } from 'svelte'
   import type { DocumentInfo } from './session'
 
   let {
@@ -33,6 +34,18 @@
 
   $effect(() => {
     for (const file of recent) onNeedThumbnail(file.name, file.thumb)
+  })
+
+  // 先頭(いちばん新しい)のカードにフォーカスを置き、Enter 1回で前回の文書を開けるようにする。
+  // 一覧が届くのは最初の状態より後のことがあるので、カードが出た最初の1回だけ置く(別の欄に打っている最中は奪わない)。
+  let focusedFirstCard = false
+  $effect(() => {
+    if (waiting || recent.length === 0 || focusedFirstCard) return
+    focusedFirstCard = true
+    void tick().then(() => {
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
+      document.querySelector<HTMLButtonElement>('#start-recent .start-card')?.focus()
+    })
   })
 
   function stamp(epochSeconds: number): string {
