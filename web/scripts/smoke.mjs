@@ -8,8 +8,11 @@
  *   2. 全解除の配信が届く前のクリックを、配信前の選択で判定しない(タイミングでしか出ない)
  *   3. AI が選択を書き換えても、人が起動した即適用のコマンドは走らない(人が指したときだけ走る)
  *   4. 基準平面を指せる間も、原点をはさんでカメラの反対側にある面が取れる(#109)
- *   5. 入力欄にフォーカスがある間の Ctrl+Z は、文書を undo しない
+ *   5. 自動保存が書けなかったら「未保存」の札が出て、Ctrl+S で書き直すと消える
+ *   6. 入力欄にフォーカスがある間の Ctrl+Z は、文書を undo しない
  */
+import { existsSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fail, ok } from './args.mjs'
 import {
   assertNoAppErrors,
@@ -25,7 +28,7 @@ import { runSmoke } from './harness.mjs'
 import { addExtrudedRect } from './mcp-client.mjs'
 import { clickFace, faceAt, planarFace } from './pick.mjs'
 
-runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout, workdir }) => {
   // 原点の角から描くので、手前の壁(法線 −Y)は XZ 基準平面と、底面は XY 基準平面とぴったり重なる。
   const { bodyId } = await addExtrudedRect(mcp, { corner: [0, 0], width: 60, height: 20, distance: 5 })
   // 原点の向こう側(x<0)の板。ホームビューのカメラは x>0 にあるので、上面へのレイは YZ 基準平面を先に通る。
@@ -178,16 +181,47 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   }
   ok('[4] 基準平面を指せる間も、原点の向こう側の面と、基準平面と重なる面が面として取れる')
 
-  // ================================================================ 5. 入力欄の Ctrl+Z
-  // フォーカスが入力欄にあるとき、Ctrl+Z はブラウザ標準のテキスト取り消しに任せ、文書の undo を
-  // 発火しない(`App.svelte` の `onWindowKeydown`)。
-  const history = () =>
-    page.evaluate(() => ({ log: window.__duocad.state.log.length, redo: window.__duocad.state.redo_count }))
   const pressWithControl = async (key) => {
     await page.keyboard.down('Control')
     await page.keyboard.press(key)
     await page.keyboard.up('Control')
   }
+
+  // ================================================================ 5. 「未保存」の札と Ctrl+S
+  // 書けていないのに札が出ないと、保存済みと思って作業を続けてしまう(黙って失われる)。models-dir を同名の
+  // 空ファイルに差し替えて次の自動保存を失敗させ(OS を問わず `mkdir` と書き込みが落ちる)、戻して Ctrl+S で書き直す。
+  const saveTag = () => page.evaluate(() => document.querySelector('#save-state') !== null)
+  const fileName = () => page.evaluate(() => document.querySelector('#current-file')?.textContent ?? '')
+  if (await saveTag()) fail('書けているのに「未保存」の札が出ている(この検査が空振りになる)')
+  const aside = `${workdir}.aside`
+  renameSync(workdir, aside)
+  writeFileSync(workdir, '')
+  try {
+    await addExtrudedRect(mcp, { corner: [60, 40], width: 10, height: 10, distance: 5 })
+    await waitFor(() => document.querySelector('#save-state') !== null, '自動保存が書けなかったのに「未保存」の札が出ない')
+  } finally {
+    rmSync(workdir, { force: true })
+    renameSync(aside, workdir)
+  }
+  await page.evaluate(() => document.activeElement?.blur?.())
+  await pressWithControl('KeyS')
+  await waitFor(() => document.querySelector('#save-state') === null, 'Ctrl+S で書き直したのに「未保存」の札が消えない')
+  const saved = await fileName()
+  if (saved === '' || !existsSync(join(workdir, saved))) fail(`Ctrl+S で書いたはずのファイルが無い: ${JSON.stringify(saved)}`)
+  // わざと出させた失敗は警告として控えに残る(最後の「エラーなし」の検査から除く)。
+  const failedSaves = await page.evaluate(() =>
+    [...new Set(JSON.parse(JSON.stringify(window.__duocad.errors)))].filter((message) =>
+      message.startsWith('警告 自動保存できなかった'),
+    ),
+  )
+  if (failedSaves.length === 0) fail('自動保存の失敗が警告として控えに残っていない')
+  ok('[5] 自動保存が書けなかったら「未保存」の札が出て、Ctrl+S で書き直すと消える')
+
+  // ================================================================ 6. 入力欄の Ctrl+Z
+  // フォーカスが入力欄にあるとき、Ctrl+Z はブラウザ標準のテキスト取り消しに任せ、文書の undo を
+  // 発火しない(`App.svelte` の `onWindowKeydown`)。
+  const history = () =>
+    page.evaluate(() => ({ log: window.__duocad.state.log.length, redo: window.__duocad.state.redo_count }))
   await page.click('#extrude')
   await page.waitForSelector('#distance', { timeout })
   await page.click('#distance')
@@ -208,7 +242,7 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   await waitFor((log) => window.__duocad.state.log.length === log - 1, '入力欄の外の Ctrl+Z で文書が undo されない', [before.log])
   await pressWithControl('KeyY')
   await waitFor((log) => window.__duocad.state.log.length === log, 'Ctrl+Y で戻らない', [before.log])
-  ok('[5] 入力欄にフォーカスがある間の Ctrl+Z は文書を変えず、外では undo される')
+  ok('[6] 入力欄にフォーカスがある間の Ctrl+Z は文書を変えず、外では undo される')
 
-  await assertNoAppErrors(page, consoleErrors)
+  await assertNoAppErrors(page, consoleErrors, { allow: failedSaves })
 })
