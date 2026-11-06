@@ -95,7 +95,7 @@ def test_a_too_large_chamfer_is_refused_without_changing_the_document():
     volume_before = query.volume(doc.get_body(body_id).shape)
     log_before = len(doc.log.entries)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="IsDone is false.*隣の形に届く距離"):
         chamfer(doc, straight[:1], 25.0, body_id=body_id)
 
     assert len(doc.log.entries) == log_before
