@@ -43,7 +43,7 @@ import { POLE_Z, upForDirection } from './viewCube'
 import { createOptimizeAnnotations } from './optimizeAnnotations'
 import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
-import { boxOfSketchEntities, keptDirectionOffset } from './viewFraming'
+import { boxOfSketchEntities, boxOfVisible, keptDirectionOffset } from './viewFraming'
 import { sightTooShallow } from './planeSight'
 import { createInterferenceLayer } from './interferenceLayer'
 import { createMeasureAnnotation } from './measureAnnotation'
@@ -690,7 +690,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** 見えているボディとスケッチが収まる所へ、今の向きのまま寄る(`frameAll` と違い向きも上方向も変えない)。何も無ければ既定の視点。 */
   function frameVisible(): void {
-    const box = contentBoxForGrid()
+    const box = boxOfVisible([...root.children, sketchRoot])
     if (!box.isEmpty()) {
       frameBox(box, keptDirectionOffset(camera.position, controls.target, HOME_VIEW_OFFSET))
     } else if (activeSketchId !== null) {
