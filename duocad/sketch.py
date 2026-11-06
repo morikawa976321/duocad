@@ -88,11 +88,31 @@ def _validate_rectangle(params: Dict[str, float]) -> None:
         )
 
 
+#: 円弧の掃引角の下限[度]。実測した限界ではなく置いた値(実測では 1e-8 度の掃引が全周の円になる)。
+#: 0→360 のようにちょうど 360 の倍数の掃引は誤差ではなく全周の指定として通す。
+ARC_MIN_SWEEP_DEG = 1e-6
+
+
+def arc_sweep_is_degenerate(start_deg: float, end_deg: float) -> bool:
+    """掃引が 0 ではないのに `ARC_MIN_SWEEP_DEG` 未満(カーネルが全周の円にしてしまう)。360 の倍数ちょうどは含めない。
+
+    引き算の丸め誤差(360 の倍数のつもりが 1e-13 度ほど残る)は全周の指定として通すため、`ulp` 数個ぶんより下も含めない。
+    """
+    sweep = (end_deg - start_deg) % 360.0
+    noise = 4.0 * math.ulp(max(360.0, abs(start_deg), abs(end_deg)))
+    return noise < sweep < ARC_MIN_SWEEP_DEG
+
+
 def _validate_arc(params: Dict[str, float]) -> None:
     if not params["radius"] > 0:
         raise ValueError(f"arc radius must be positive, got {params['radius']!r}")
     if params["start_deg"] == params["end_deg"]:
         raise ValueError("arc start_deg and end_deg must differ (角度0の円弧は辺にならない)")
+    if arc_sweep_is_degenerate(params["start_deg"], params["end_deg"]):
+        raise ValueError(
+            f"arc sweep must be at least {ARC_MIN_SWEEP_DEG:g} degrees "
+            f"(掃引が誤差ほどの円弧は全周の円になる。start_deg={params['start_deg']!r}, end_deg={params['end_deg']!r})"
+        )
 
 
 def _validate_bezier(params: Dict[str, float]) -> None:

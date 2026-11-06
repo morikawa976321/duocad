@@ -605,8 +605,10 @@ def _circular_arc_entity(
     start_deg, end_deg, middle_deg = angle_of(start), angle_of(end), angle_of(middle)
     if not (middle_deg - start_deg) % 360.0 < (end_deg - start_deg) % 360.0:
         start_deg, end_deg = end_deg, start_deg
-    if start_deg == end_deg:
-        return []  # `sketch._validate_arc` が弾く値(角度0の弧は辺にならない)
+    from .sketch import arc_sweep_is_degenerate
+
+    if start_deg == end_deg or arc_sweep_is_degenerate(start_deg, end_deg):
+        return []  # `sketch._validate_arc` が弾く値(角度0・誤差ほどの弧は辺にならない)
     return [
         {
             "kind": "arc",

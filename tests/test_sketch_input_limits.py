@@ -28,3 +28,42 @@ def test_replaying_an_offset_beyond_the_limit_is_not_refused() -> None:
     sketch_id = sketch_create(document, offset_plane("XY", 5e6))
     restored = replay_through_json(document)
     assert get_sketch(restored, sketch_id).plane["distance"] == 5e6
+
+
+@pytest.mark.parametrize("end_deg", [1e-8, 5e-7])
+def test_an_arc_whose_sweep_is_only_rounding_error_is_refused(session, end_deg) -> None:
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    with pytest.raises(ValueError, match="sweep"):
+        session.add_arc(sketch_id, [0.0, 0.0], 10.0, 0.0, end_deg)
+    with pytest.raises(ValueError, match="sweep"):
+        session.add_arc(sketch_id, [0.0, 0.0], 10.0, 359.99999999, 360.0)
+    assert get_sketch(session.document, sketch_id).entities == []
+
+
+def test_zero_to_360_stays_a_full_circle_and_the_smallest_accepted_sweep_is_an_arc(session) -> None:
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    full = session.add_arc(sketch_id, [0.0, 0.0], 10.0, 0.0, 360.0)["entity_id"]
+    tiny = session.add_arc(sketch_id, [20.0, 0.0], 10.0, 0.0, 1e-6)["entity_id"]
+    assert {full, tiny} <= {entity.id for entity in get_sketch(session.document, sketch_id).entities}
+
+
+@pytest.mark.parametrize("offset", [0.1, 10.1, 33.3, 123.456])
+def test_a_full_circle_arc_survives_a_move_that_shifts_both_angles_by_rounding(offset) -> None:
+    """360 の倍数ちょうどのつもりの掃引が、引き算の丸めで 1e-13 度ほど残っても全周として通る。"""
+    from duocad.sketch import arc_sweep_is_degenerate
+
+    assert not arc_sweep_is_degenerate(offset, offset + 360.0)
+
+
+def test_svg_import_drops_an_arc_whose_sweep_is_only_rounding_error(tmp_path) -> None:
+    """SVG の弧も入口と同じ基準で捨てる(通すと取り込みが全体の失敗か全周の円になる)。"""
+    from duocad.svg_import import read_svg_report
+
+    path = tmp_path / "tiny.svg"
+    path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">'
+        '<path d="M 50 50 A 10 10 0 0 1 50.0000001 50.0"/><path d="M 20 20 L 40 20"/></svg>',
+        encoding="utf-8",
+    )
+    _, shapes, _ = read_svg_report(path)
+    assert [shape["kind"] for shape in shapes] == ["line"]
