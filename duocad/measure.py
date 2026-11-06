@@ -367,7 +367,7 @@ def inspect_selection(session: Any) -> Union[dict, None]:
 def measure_selection(session: Any) -> dict:
     """いまの選択を測る。
 
-    戻り値は `{"count", "items", "total_area", "total_length"}`。**ちょうど2項目のときだけ**
+    戻り値は `{"count", "items", "total_area", "total_length"}`(`total_length` は辺とスケッチの線分・楕円の長さの合計)。**ちょうど2項目のときだけ**
     `between`(`between()`)と `between_error`(測れない理由。測れたなら None)と `between_error_items`
     (測れない項目の `items` での添字。測れたなら空)が加わる。
     """
@@ -383,7 +383,7 @@ def measure_selection(session: Any) -> dict:
         measurables.append(measurable)
         if kind in ("face", selection.REGION_KIND):
             total_area += item["area"]
-        elif kind == "edge":
+        elif kind == "edge" or (kind == selection.SKETCH_ENTITY_KIND and "length" in item):
             total_length += item["length"]
     result: dict = {
         "count": len(items),
