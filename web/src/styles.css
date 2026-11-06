@@ -139,7 +139,8 @@ header {
 /* ツールバー行の見出し列。**header 横並びの `.label`(5.5em)と同じ** ——
    モード行・コマンド行・overlay 行で縦に揃える。 */
 .toolbar .label {
-  width: 5.5em;
+  width: auto;
+  min-width: 5.5em;
   flex: 0 0 auto;
   color: var(--dim);
 }

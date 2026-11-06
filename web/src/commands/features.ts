@@ -70,7 +70,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
       {
         kind: 'number',
         name: 'distance',
-        label: '距離',
+        label: isFace ? '距離' : '距離(正=スケッチの表側)',
         unit: 'mm',
         inputId: 'distance',
         hint: isFace ? '面は正=外向き / 負=削る' : undefined,
