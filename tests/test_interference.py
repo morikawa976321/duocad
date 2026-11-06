@@ -204,6 +204,12 @@ def test_clearance_rules(relation, distance, clearance, expected):
     assert interference.classify_clearance(relation, distance, clearance) == expected
 
 
+@pytest.mark.parametrize("distance, expected", [(0.1, "short"), (0.2, "at"), (0.5, None)])
+def test_an_upper_bound_distance_can_prove_short_but_never_ok(distance, expected):
+    """落ちたら、縁の点から測った上界の距離で隙間が足りていると判定され、一覧から消える。"""
+    assert interference.classify_clearance("separated", distance, 0.2, upper_bound=True) == expected
+
+
 class FakeWorker:
     """子の代わりに決まった答えを返す。`relations[(a, b)]` / `distances[(a, b)]` が例外なら投げる。"""
 
@@ -263,7 +269,8 @@ def test_a_relation_the_fuse_could_not_answer_stays_unknown_but_keeps_a_measured
     assert first["relation"] == "unknown" and "GF が落ちた" in first["reason"]
     assert first["distance"] == 0.0 and first["clearance"] == "short"
     second = pair_of(result, "a", "c")
-    assert second["relation"] == "unknown" and "mystery" in second["reason"] and second["clearance"] == "ok"
+    assert second["relation"] == "unknown" and "mystery" in second["reason"] and second["clearance"] is None
+    assert "上界" in second["clearance_reason"]
     assert second["distance_upper_bound"] is True
 
 
