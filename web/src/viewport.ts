@@ -2049,10 +2049,15 @@ export function createViewport(container: HTMLElement): Viewport {
   let downX = 0
   let downY = 0
   let downValid = false
+  // どのボタンでも最後に押した位置。右・中ボタンの視点操作が始まったかの判定はここから測る(`downX/downY` は左だけ)。
+  let pressX = 0
+  let pressY = 0
 
   function onPointerDown(event: PointerEvent): void {
     // 新しいポインタ操作が来たら、進行中のキューブ視点アニメーションは中断してよい(タスク仕様)。
     cube.cancelSnap()
+    pressX = event.offsetX
+    pressY = event.offsetY
     if (event.button !== 0) return
     // キューブの内側で始まった左ボタン押下はキューブが引き取る(ピック・矩形選択の開始へ漏らさない)
     if (cube.pointerDown(event)) return
@@ -2263,8 +2268,8 @@ export function createViewport(container: HTMLElement): Viewport {
     hoverAt = { x: event.offsetX, y: event.offsetY }
     // 視点回転中は取れるものの予告を出さない。境目は `onPointerUp` の moved 判定と揃える。`downValid` ではなく
     // `buttons` で見る(canvasの外でボタンを離されると `pointerup` が来ず、`downValid` が立ったままになる)。
+    orbiting = event.buttons !== 0 && Math.hypot(event.offsetX - pressX, event.offsetY - pressY) > CLICK_MOVE_LIMIT_PX
     const dragged = Math.hypot(event.offsetX - downX, event.offsetY - downY)
-    orbiting = event.buttons !== 0 && dragged > CLICK_MOVE_LIMIT_PX
     // 左ボタンを押したまま一定距離を越えたらウィンドウ選択。`buttons` も見るのは、canvasの外で離されたとき帯が出たままになるのを防ぐため。
     // タッチの1本指ドラッグは OrbitControls が視点回転に使う(`mouseButtons` はマウスにしか効かない)ので、帯は出さない。
     if (downValid && event.pointerType !== 'touch' && (event.buttons & 1) !== 0 && dragged > BOX_SELECT_MIN_PX) {
