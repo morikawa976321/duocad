@@ -32,8 +32,16 @@ export function lineFromPoints(
   const length = dimension(typedLength, Math.hypot(du, dv))
   const angle = dimension(typedAngleDeg, Math.atan2(dv, du) * DEG)
   if (!(length > 0)) return null
-  const rad = angle / DEG
-  return { p0, p1: [p0[0] + length * Math.cos(rad), p0[1] + length * Math.sin(rad)] }
+  const [cos, sin] = unitAtDeg(angle)
+  return { p0, p1: [p0[0] + length * cos, p0[1] + length * sin] }
+}
+
+/** 90度の倍数は厳密な (cos, sin) を返す(`Math.cos(Math.PI/2)` は 6e-17 で、90度の線の終点の座標に 1e-15 台のずれが入る)。 */
+function unitAtDeg(deg: number): [number, number] {
+  const turn = ((deg % 360) + 360) % 360
+  if (turn % 90 === 0) return [[1, 0], [0, 1], [-1, 0], [0, -1]][turn / 90] as [number, number]
+  const rad = deg / DEG
+  return [Math.cos(rad), Math.sin(rad)]
 }
 
 /**

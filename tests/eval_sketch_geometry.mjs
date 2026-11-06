@@ -48,6 +48,12 @@ function close(actual, expected, what) {
   close(lengthOnly.p1[0], 0, '長さだけ打った終点u')
   close(lengthOnly.p1[1], 10, '長さだけ打った終点v')
 
+  // 90度の倍数は丸め誤差の無い座標になる
+  assert.deepEqual(lineFromPoints([10, 5], [0, 0], 50, 90).p1, [10, 55], '90度')
+  assert.deepEqual(lineFromPoints([10, 5], [0, 0], 50, 180).p1, [-40, 5], '180度')
+  assert.deepEqual(lineFromPoints([10, 5], [0, 0], 50, 270).p1, [10, -45], '270度')
+  assert.deepEqual(lineFromPoints([10, 5], [0, 0], 50, -90).p1, [10, -45], '-90度')
+
   assert.equal(lineFromPoints([5, 5], [5, 5], undefined, undefined), null, '長さ0の線分は作れない')
   assert.equal(lineFromPoints([0, 0], [1, 0], 0, undefined), null, '長さ0を打っても作れない')
   assert.equal(lineFromPoints([0, 0], [1, 0], -3, undefined), null, '負の長さは作れない')
