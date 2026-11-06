@@ -16,6 +16,7 @@
   function onKey(event: KeyboardEvent): void {
     if (event.key !== 'Enter' || isImeKey(event)) return
     event.preventDefault()
+    if (interference.running) return
     interference.run()
   }
 </script>
