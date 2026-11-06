@@ -688,9 +688,13 @@ export function createViewport(container: HTMLElement): Viewport {
     frameBox(box, offset.setLength(HOME_VIEW_OFFSET.length()))
   }
 
-  /** 見えているボディとスケッチが収まる所へ、今の向きのまま寄る(`frameAll` と違い向きも上方向も変えない)。何も無ければ既定の視点。 */
+  /**
+   * 見えているボディとスケッチが収まる所へ、今の向きのまま寄る(`frameAll` と違い向きも上方向も変えない)。何も無ければ既定の視点。
+   * 隠してある本物(`setBodyVisible`)は数えず、その代わりに出ている表示を数える: プレビューの幽霊(`root` の中)と、
+   * `?voxel=1` のボクセル(`optimizeDebug.object`。`root` の外)。
+   */
   function frameVisible(): void {
-    const box = boxOfVisible([...root.children, sketchRoot])
+    const box = boxOfVisible([...root.children, sketchRoot, optimizeDebug.object])
     if (!box.isEmpty()) {
       frameBox(box, keptDirectionOffset(camera.position, controls.target, HOME_VIEW_OFFSET))
     } else if (activeSketchId !== null) {

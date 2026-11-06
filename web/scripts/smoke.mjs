@@ -13,6 +13,7 @@
  *   7. 押し出しの結果を、距離欄から Tab で進んで Space で選べる
  *   8. F とビューキューブ下のボタンで、向きを変えずに全体表示になる(入力欄の中の F は効かない)
  *   9. ビューキューブの外側の余白を引いても視点は回らない(立方体の上を引くと回る)
+ *  10. プレビュー中の全体表示は、隠してある元のボディではなく見えている結果に寄る
  */
 import { existsSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -341,6 +342,43 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   // 慣性の残りは回転量の1%に届かない(実測: 回転 296 に対し余白では 0.002)
   if ((await dragFrom(box.x + 4, box.y + 4)) > turned * 0.01) fail('立方体の外の余白を引いたのに視点が回った')
   ok('[9] ビューキューブの外側の余白は下のモデルへ通り、立方体の上だけが視点を回す')
+
+  // ================================================================ 10. プレビュー中の全体表示
+  // 見えている結果へ寄る。プレビューの間、元のボディは隠してあるだけでシーンに残っている。離れた所に長さ 2000 mm の棒を
+  // 足し、+X の端の面を 1999 mm 削るプレビューにすると、見えているのは幅 1 mm の残りと元からの形だけになる。
+  // 棒の元になったスケッチ(同じ長さの長方形)は隠す。見えていれば、それが収まる所へ寄るのが正しい。
+  const bar = await addExtrudedRect(mcp, { corner: [200, 0], width: 2000, height: 20, distance: 5 })
+  await mcp.callTool('set_sketch_visible', { sketch_id: bar.sketchId, visible: false })
+  await waitFor(
+    (count, sketchId) =>
+      (window.__duocad?.parts ?? []).length >= count &&
+      (window.__duocad.sketches ?? []).find((item) => item.sketch_id === sketchId)?.visible !== true,
+    '足した棒が画面に届かない、またはそのスケッチが隠れない',
+    [3, bar.sketchId],
+  )
+  const fitDistance = async () => {
+    await farOut()
+    await page.keyboard.press('KeyF')
+    await waitFrames(page, 10)
+    return distanceOf(await poseOf())
+  }
+  const whole = await fitDistance()
+  const endFace = await planarFace(page, bar.bodyId, [1, 0, 0])
+  await mcp.callTool('set_selection', { refs: [{ body: bar.bodyId, kind: 'face', index: endFace }] })
+  await selectionIs([endFace], '棒の端の面を選べない')
+  await page.click('#extrude')
+  await page.waitForSelector('#distance', { timeout })
+  await page.click('#extrude-mode-cut')
+  await page.click('#distance', { clickCount: 3 })
+  await page.type('#distance', '-1999', { delay: 20 })
+  await waitFor(() => window.__duocad.previewing === true, '端の面を削るプレビューが出ない')
+  const shown = await fitDistance()
+  if (!(shown < whole * 0.5)) {
+    fail(`プレビュー中の全体表示が、隠してある元のボディの大きさで引いている: ${JSON.stringify({ whole, shown })}`)
+  }
+  await page.click('#command-abort')
+  await waitFor(() => document.querySelector('#command-abort') === null, 'コマンドを中断できない')
+  ok('[10] プレビュー中の全体表示は、隠してある元のボディではなく見えている結果に寄る')
 
   await assertNoAppErrors(page, consoleErrors, { allow: failedSaves })
 })
