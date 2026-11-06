@@ -98,6 +98,57 @@ cd web; npm run dev                                 # 画面(5173)
 このときだけは `web/dist` の作り直しが要らない。
 型検査は `npm run check`（`tsc --noEmit` ＋ `svelte-check`。`.svelte` の中も見る）。
 
+### 1.4 ブラウザのファイル本文を渡す HTTP
+
+`POST /api/upload?filename=<UTF-8 を URL エンコードした元ファイル名>` は、開発版・安定版の両方で使える。
+本文はファイルそのもの（multipart ではない。画面は `Content-Type: application/octet-stream` で送る）。
+`Content-Length` が必須で、chunked は受けない。成功は 200 と `{"path":"サーバ上の絶対パス"}`。
+このパスを既存の `import_step` / `import_svg` の `path` として渡す。SVG は既存どおり `sketch_id` も必要。
+ここでは内容の STEP / SVG としての妥当性や取り込みは検査せず、既存 verb に任せる。MCP の道具は増やさない。
+
+守り方は `/api/update` の POST と同じで、Python が配るページの `Origin` だけ許し、無し・`null`・別オリジンは 403。
+`Host` も実際の HTTP ポートの `127.0.0.1` / `localhost` に限定する。CORS ヘッダは返さない。
+`/api/update` が無い開発版でもアップロードは有効。
+
+上限の正は `duocad/net/uploads.py` の `UPLOAD_MAX_BYTES`（128 MiB）。数十 MB の部品 STEP に余裕を取りつつ、
+1 ファイルが占めるディスク量を制限するための設計値で、実測から導いた値ではない。
+`/duocad-config.json` に同じ値を `upload_max_bytes` として載せ、画面の事前検査もこれを使う。
+既存の `/mcp`・`/api/update`・WebSocket の 8 MiB 制限は変えない。
+本文は 64 KiB ずつファイルへ流し、拒否時は保存せず同じ単位で読み捨ててから JSON を返す。
+送信中のクライアントへ早期に接続を閉じると拒否が通信エラーに化けるため、大きすぎる本文も読み捨てる。
+受信の無通信が 30 秒続くと打ち切る。
+
+失敗の封筒は `{"error":"識別子","message":"表示用の日本語"}`。種類は次のとおり。
+
+| HTTP | error | 条件 |
+|---|---|---|
+| 400 | `invalid_filename` | 名前が無い・複数・不正な UTF-8・危険な名前・長すぎる名前 |
+| 400 | `invalid_length` / `incomplete_body` | 不正な長さ / 本文が途中で終わった |
+| 403 | `forbidden` | Origin または Host が許可外 |
+| 408 | `receive_failed` | 受信タイムアウト・接続の中断 |
+| 411 | `length_required` | Content-Length が無い・複数、または Transfer-Encoding がある |
+| 413 | `too_large` | 上限超過 |
+| 415 | `unsupported_extension` | `.step`・`.stp`・`.svg` 以外（大文字小文字は問わない） |
+| 500 | `storage_error` | 保存・整理に失敗 |
+| 503 | `shutting_down` | サーバ終了中 |
+
+名前は書き換えず、不正なものを断る。区切り・`..`・制御文字・Windows の禁止文字と予約名・末尾の空白やドットを禁止し、
+UTF-16 で 120 単位かつ UTF-8 で 240 バイト以内に限る。Windows では一時パス全体も 240 UTF-16 単位以内に限る。
+日本語名はそのまま保存され、取り込みログの `source_name` も元の名前になる。
+
+置き場は OS の一時フォルダの `duocad-upload-<一意な値>/<アップロードごとの一意なフォルダ>/<元ファイル名>`。
+サーバごとに所有し、受信完了から 1 時間経ったものを次の正常なアップロード開始時に削除する。
+取り込み済みか未使用かは区別せず、受信途中のものは掃除から外す。失敗した受信は直ちに削除する。
+HTTP サーバの shutdown / close と通常のプロセス終了（atexit）でも所有する一時フォルダ全体を消す。
+強制終了・電源断では終了処理を実行できない。返ったパスは 1 時間以内に取り込みへ渡すこと。
+ログに本文・図形を埋める既存 verb のため、取り込み後の再生はこの一時ファイルに依存しない。
+
+画面側の口は `web/src/uploadDroppedFile.ts` の `uploadDroppedFile(file: File, options?: {fetch?: typeof fetch; pageUrl?: string}): Promise<string>`。
+成功時は一時パス、失敗時は日本語の `Error.message` を返す（Promise の reject）。省略時はブラウザの fetch と現在のページ URL を使う。
+先に同一オリジンの `/duocad-config.json` で上限と対応を確認し、ファイルを POST する。
+Vite の開発サーバは設定 JSON も HTTP プロキシも持たず、別オリジンの Python へ直接送ることも許可しないため使えない。
+この場合は Python が配る画面を開く案内を返す。パスを渡す既存の取り込みはそのまま使える。
+
 ---
 
 ## 2. UIチートシート
