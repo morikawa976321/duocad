@@ -116,23 +116,88 @@ runSmoke('smoke-drop-import', { timeout: 60000, mcp: true }, async ({ browser, u
   await wait(() => window.__duocad.parts.length === 1, '大きい STEP の取り込みが戻らない')
   await waitFrames(page, 4)
 
-  holdUpload = true
-  await send([{ name: 'changed.step', step: true }])
-  await wait(() => Boolean(document.querySelector('.wait-bar')), '状態変更の検査で送信が始まらない')
-  assert.ok(held)
+  // 送信中に別のモードへ移っても、送り終えたときに落としたときのモードへ戻っていれば取り込む。
+  const holdDrop = async (file) => {
+    await wait(() => !document.querySelector('.wait-bar'), '前の待ち表示が消えない')
+    holdUpload = true
+    await send([file])
+    await wait(() => Boolean(document.querySelector('.wait-bar')), '状態変更の検査で送信が始まらない')
+    assert.ok(held)
+    await closeToasts()
+  }
+  const release = async () => {
+    holdUpload = false
+    await held.continue()
+    held = null
+  }
+  await holdDrop({ name: 'returned.step', step: true })
   await page.click('#sketch-create')
-  await wait(() => window.__duocad.mode === 'sketch-pending', '送信中に作業状態が変わらない')
+  await wait(() => window.__duocad.mode === 'sketch-pending', '送信中にモードが変わらない')
   await page.click('#sketch-exit')
-  await wait(() => window.__duocad.mode === 'idle', '送信中の作業状態が戻らない')
-  await closeToasts()
-  holdUpload = false
-  await held.continue()
-  held = null
-  await toast('送信中に接続・文書・作業状態が変わった')
-  assert.equal(await page.evaluate(() => window.__duocad.parts.length), 1)
+  await wait(() => window.__duocad.mode === 'idle', '送信中のモードが戻らない')
+  await release()
+  await wait(() => window.__duocad.parts.length === 2, '元のモードへ戻っていたのに取り込まない')
+  await waitFrames(page, 4)
+  await pressUndo(page)
+  await wait(() => window.__duocad.parts.length === 1, '戻ったあとの取り込みが取り消せない')
+  await waitFrames(page, 4)
 
-  const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-  await wait((id) => window.__duocad.activeSketch === id, 'スケッチが開かない', [sketch.sketch_id])
+  // 送り終えたときに別のモードにいたら取り込まない。
+  await holdDrop({ name: 'moved.step', step: true })
+  await page.click('#sketch-create')
+  await wait(() => window.__duocad.mode === 'sketch-pending', '送信中にモードが変わらない')
+  await release()
+  await toast('STEP はスケッチの中では')
+  assert.equal(await page.evaluate(() => window.__duocad.parts.length), 1)
+  await page.click('#sketch-exit')
+  await wait(() => window.__duocad.mode === 'idle', 'モードが戻らない')
+
+  // 送信と取り込みがどちらも 0.5 秒未満でも、送信の開始から 0.5 秒で待ちバーが出る(取り込みの送信から測り直さない)。
+  await wait(() => !document.querySelector('.wait-bar'), '前の待ち表示が消えない')
+  await page.evaluate(() => {
+    const seen = { shownAt: null, importSentAt: null }
+    window.__dropWait = seen
+    const observer = new MutationObserver(() => {
+      if (seen.shownAt === null && document.querySelector('.wait-bar')) seen.shownAt = performance.now()
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    const original = WebSocket.prototype.send
+    WebSocket.prototype.send = function (data) {
+      if (typeof data !== 'string' || !data.includes('import_step')) { original.call(this, data); return }
+      WebSocket.prototype.send = original
+      setTimeout(() => {
+        seen.importSentAt = performance.now()
+        original.call(this, data)
+      }, 400)
+    }
+  })
+  holdUpload = true
+  await send([{ name: 'slow.step', step: true }])
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.ok(held)
+  await release()
+  await wait(() => window.__duocad.parts.length === 2, '遅らせた取り込みでボディが増えない')
+  const waited = await page.evaluate(() => window.__dropWait)
+  assert.ok(waited.importSentAt !== null, '取り込みの送信を遅らせられていない')
+  assert.ok(waited.shownAt !== null && waited.shownAt < waited.importSentAt,
+    `待ちバーが送信の開始から数えていない: ${JSON.stringify(waited)}`)
+  await waitFrames(page, 4)
+  await pressUndo(page)
+  await wait(() => window.__duocad.parts.length === 1, '遅らせた取り込みが取り消せない')
+  await waitFrames(page, 4)
+
+  const first = await mcp.callTool('sketch_create', { base_plane: 'XY' })
+  await wait((id) => window.__duocad.activeSketch === id, 'スケッチが開かない', [first.sketch_id])
+  await waitFrames(page, 4)
+  // 送り終えたときに別のスケッチを開いていたら、落としたときのスケッチへは取り込まない。
+  await holdDrop({ name: 'elsewhere.svg', content: svg })
+  const sketch = await mcp.callTool('sketch_create', { base_plane: 'XZ' })
+  await wait((id) => window.__duocad.activeSketch === id, '送信中に別のスケッチが開かない', [sketch.sketch_id])
+  await release()
+  await toast('送信中に接続・文書・開いているスケッチが変わった')
+  assert.deepEqual(await page.evaluate((ids) => ids.map((id) => window.__duocad.sketches
+    .find((each) => each.sketch_id === id).entities.length), [first.sketch_id, sketch.sketch_id]), [0, 0],
+  '別のスケッチを開いていたのに取り込んだ')
   await waitFrames(page, 4)
   await rejected([{ name: 'part.step', step: true }], 'STEP はスケッチの中では')
   const pose = await page.evaluate(() => window.__duocad.cameraPose().target)

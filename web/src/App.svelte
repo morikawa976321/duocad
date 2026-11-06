@@ -444,6 +444,10 @@
     const times = [serverSince, dropSince].filter((time): time is number => time !== null)
     serverWait.update(times.length === 0 ? null : Math.min(...times))
   })
+  // `FileDrop` は取り込みへ渡したあと `since` を残す。その応答か失敗で `pendingOp` が解けたら、ここで消す。
+  $effect(() => {
+    if (!dropUploading && pendingOp === null) dropSince = null
+  })
 
   const session = createSession({
     onState: handleState,
@@ -2832,7 +2836,7 @@
     connected: status === 'open', documentOpen, mode: commandRowKey,
     waiting: serverSince !== null || pendingOp !== null || optimizeBusy || pendingChainPick !== null || wideningOp !== null,
     commandActive: commandClickToggles(),
-    key: JSON.stringify([connectionEpoch, model?.generation, mode, commandRequests]), sketchId,
+    key: JSON.stringify([connectionEpoch, model?.generation, mode]), sketchId,
   })}
   onImport={(verb, path, id) => {
     if (verb === 'import_svg' && id !== null) sendTracked('import_svg', { path, sketch_id: id })

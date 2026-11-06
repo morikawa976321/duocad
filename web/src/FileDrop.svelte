@@ -21,18 +21,23 @@
     }
     busy = true
     since = performance.now()
+    let handedOver = false
     try {
       const path = await uploadDroppedFile(files[0])
       const after = context()
       const check = decideDroppedFiles(descriptions, after)
       if ('message' in check) inform(check.message)
-      else if (before.key !== after.key) inform('送信中に接続・文書・作業状態が変わったので取り込まなかった(もう一度落とす)')
-      else onImport(decision.verb, path, before.sketchId)
+      else if (before.key !== after.key) inform('送信中に接続・文書・開いているスケッチが変わったので取り込まなかった(もう一度落とす)')
+      else {
+        onImport(decision.verb, path, before.sketchId)
+        handedOver = true
+      }
     } catch (error) {
       fail(error instanceof Error ? error.message : 'ファイルを送信できなかった')
     } finally {
       busy = false
-      since = null
+      // 取り込みへ渡したあとは親が応答まで持つ(ここで消すと、待ちバーの 0.5 秒が取り込みの送信から測り直しになる)。
+      if (!handedOver) since = null
     }
   }
 
