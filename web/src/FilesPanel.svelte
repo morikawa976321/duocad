@@ -31,6 +31,7 @@
    */
   import { tick, untrack } from 'svelte'
   import { pathLike, unquotePath } from './commands/command'
+  import { formatStamp } from './formatStamp'
   import { isImeKey } from './keys'
   import type { DocumentInfo } from './session'
   import SuffixField, { withSuffix, withoutSuffix } from './SuffixField.svelte'
@@ -131,16 +132,6 @@
       return
     }
     onRowEnter(event, submitDraft)
-  }
-
-  function formatStamp(epochSeconds: number | null): string {
-    if (epochSeconds === null) return '—'
-    const date = new Date(epochSeconds * 1000)
-    const pad = (value: number) => String(value).padStart(2, '0')
-    return (
-      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-      `${pad(date.getHours())}:${pad(date.getMinutes())}`
-    )
   }
 
   const sorted = $derived([...documents].sort((a, b) => b.mtime - a.mtime))
@@ -383,8 +374,8 @@
           </span>
           <span class="files-text">
             <span class="files-name">{file.name}</span>
-            <span class="files-date">作成 {formatStamp(file.created)}</span>
-            <span class="files-date">更新 {formatStamp(file.mtime)}</span>
+            <span class="files-date">作成日時 {formatStamp(file.created)}</span>
+            <span class="files-date">更新日時 {formatStamp(file.mtime)}</span>
           </span>
         </button>
         <span class="files-actions">

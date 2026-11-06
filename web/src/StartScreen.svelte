@@ -5,6 +5,7 @@
    * できるのは開くことだけ。複製・削除・改名は `FilesPanel.svelte`。一覧はサーバの `list_documents` の写し。
    */
   import { tick } from 'svelte'
+  import { formatStamp } from './formatStamp'
   import type { DocumentInfo } from './session'
 
   let {
@@ -47,12 +48,6 @@
       document.querySelector<HTMLButtonElement>('#start-recent .start-card')?.focus()
     })
   })
-
-  function stamp(epochSeconds: number): string {
-    const date = new Date(epochSeconds * 1000)
-    const pad = (value: number) => String(value).padStart(2, '0')
-    return `${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`
-  }
 </script>
 
 <div class="start-screen" id="start-screen">
@@ -85,7 +80,7 @@
                 {/if}
               </span>
               <span class="start-name">{file.name}</span>
-              <span class="start-date dim">{stamp(file.mtime)}</span>
+              <span class="start-date dim">{formatStamp(file.mtime)}</span>
             </button>
           {/each}
         </div>
