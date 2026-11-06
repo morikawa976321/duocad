@@ -7,7 +7,7 @@
    * 描き直すだけで、選択の値を覚えない。責務は、ピック→コアの選択への翻訳(修飾キーで
    * 追加・除去・置き換え)と、previewController が指示する送信・幽霊の描画。
    */
-  import { onMount, untrack } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import { sharedArgsChangeNote } from './sharedArgsController'
   import { appendedEntries } from './logTail'
@@ -379,6 +379,7 @@
   let dataPanelOpen = $state(loadDataPanelOpen())
   /** 右サイドバー(`AiPanel` だけ)を開いているか。`{#if}` で `<aside>` ごと出し分け。`.viewport` のサイズ指定は動かさず、flex の配分だけが変わる(左と同じ)。 */
   let sidebarOpen = $state(loadSidebarOpen())
+  let aiPanel: { focusInput(): void } | undefined = $state()
   $effect(() => saveDataPanelOpen(dataPanelOpen))
   $effect(() => saveSidebarOpen(sidebarOpen))
   /** 設定ダイアログ(`SettingsDialog.svelte`)を出しているか。見た目だけの状態。 */
@@ -2845,7 +2846,13 @@
       id="sidebar-toggle"
       class="tag end"
       class:on={sidebarOpen}
-      onclick={() => (sidebarOpen = !sidebarOpen)}
+      onclick={async () => {
+        sidebarOpen = !sidebarOpen
+        if (sidebarOpen) {
+          await tick()
+          aiPanel?.focusInput()
+        }
+      }}
       title="AIパネルの表示/非表示"
       aria-pressed={sidebarOpen}
     >
@@ -3098,6 +3105,7 @@
     {#if sidebarOpen}
       <aside class="sidebar">
         <AiPanel
+          bind:this={aiPanel}
           status={ai.status}
           connection={status}
           transcript={ai.transcript}
