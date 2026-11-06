@@ -931,11 +931,20 @@ def _enter_sketch_create(document: Document, base_plane: Optional[str] = None) -
     return _created(document, sketch_create(document, plane_from_selection(document, base_plane)))
 
 
+#: オフセット平面の距離の絶対値の上限[mm]。実測した限界ではなく置いた値(実測では 1e6 は通り、1e12 で図形の追加が失敗し、
+#: 1e100 は通る: 境目が一定でない)。1 km は実用の寸法をはるかに超える。
+MAX_OFFSET_DISTANCE = 1e6
+
+
 @entry(VERB_SKETCH_CREATE_OFFSET)
 def _enter_sketch_create_offset(
     document: Document, distance: float, base_plane: Optional[str] = None
 ) -> dict:
-    plane = offset_plane(plane_from_selection(document, base_plane), distance)
+    if abs(distance) > MAX_OFFSET_DISTANCE:
+        raise ValueError(
+            f"sketch_create_offset: 距離の絶対値は {MAX_OFFSET_DISTANCE:g} mm 以下(distance={distance!r})"
+        )
+    plane =offset_plane(plane_from_selection(document, base_plane), distance)
     return _created(document, sketch_create(document, plane, verb=VERB_SKETCH_CREATE_OFFSET))
 
 
