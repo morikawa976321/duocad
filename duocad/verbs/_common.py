@@ -12,6 +12,7 @@ from weakref import WeakKeyDictionary
 
 from .. import kernel, kernel_sketch, kernel_worker, meshbody, naming, selection
 from ..document import MESH_KIND, Body, BodyId, Document, new_body_id
+from ..kernel_extrude import MIN_DISTANCE
 from ..oplog import Operation
 from ..sketch import Sketch, get_sketch
 from ._sketch_geometry import geometries_overlap
@@ -420,6 +421,14 @@ def normalize_values(
         if not math.isfinite(item) or item <= 0.0:
             raise ValueError(f"{label} must be finite and > 0, got {item!r}")
     return values, stored
+
+
+def require_blend_minimum(values: Sequence[float], *, label: str) -> None:
+    """フィレットの半径・面取りの距離の下限(押し出しの距離と同じ値)。**新しい操作の入口だけ**で呼ぶ ——
+    再生・やり直しに掛けると、下限未満で確定済みの保存済みの文書が開けなくなる。"""
+    for item in values:
+        if item < MIN_DISTANCE:
+            raise ValueError(f"{label} must be at least {MIN_DISTANCE:g} mm, got {item!r}")
 
 
 def blend_edges(shape: Any, values: dict, *, verb: str, interactive: bool = True) -> dict:
