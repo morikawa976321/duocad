@@ -18,6 +18,7 @@ import time
 from typing import Any, Iterator, List, Optional, Sequence, Tuple
 
 from OCP.BOPAlgo import BOPAlgo_RemoveFeatures
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_MakeSolid
@@ -99,7 +100,7 @@ _WIDER_BUDGET_S = 10.0
 _HINT_DELETE = "周りの面を延ばしても閉じない。穴や丸めは、それを作る面(底・段・縁の丸め、つながった丸め)をまとめて選ぶ"
 _HINT_COLLAPSE = "消すと残す面が削られる(形がつぶれる)"
 _HINT_TOO_FAR = "距離が大きすぎて面が消えるか、形のつながりが変わる"
-_HINT_CANNOT_OFFSET = "この形では OCCT が面を動かせない(動かす面によらず、同じボディでは同じように断ることが多い)"
+_HINT_CANNOT_OFFSET = "OCCT がこの距離で面を動かせない。距離の大きさを小さくするか、別の面を動かす(小さくしても、この形では動かす面によらず断ることがある)"
 _HINT_TANGENT = "接線でつながる隣の面が一定半径の丸めでないので、付いてこさせられない"
 _HINT_CUSP = "内側へずらす距離が面の曲がりの半径に近いか超えていて、面が折り返す"
 
@@ -148,7 +149,10 @@ def offset_faces(
         (shape,),
         (tuple(indices), value),
         lambda: kernel_worker.run(
-            VERB_OFFSET, shape, {"faces": indices, "distance": value}, timeout=kernel_worker.time_limit(interactive)
+            VERB_OFFSET,
+            shape,
+            {"faces": indices, "distance": value, "check_crossing": interactive},
+            timeout=kernel_worker.time_limit(interactive),
         ),
     )
 
@@ -210,7 +214,10 @@ def compute(verb: str, shape: Any, arguments: dict) -> dict:
             provenance = {"verb": VERB_DELETE, "faces": indices}
         elif verb == VERB_OFFSET:
             distance = float(arguments["distance"])
-            final, table, _ = _offset_following_blends(shape, faces, distance)
+            final, table, regenerated = _offset_following_blends(shape, faces, distance)
+            if arguments.get("check_crossing"):
+                moved = sorted({position for index in indices for position in table[index]} | set(regenerated))
+                _require_no_crossing(final, moved)
             provenance = {"verb": VERB_OFFSET, "faces": indices, "distance": distance}
         else:
             raise ValueError(f"unknown face edit {verb!r}")
@@ -957,7 +964,7 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
     try:
         sharp, removal_table, _ = _delete(shape, blends)
     except FaceEditError as error:
-        raise FaceEditError(error.cause, _HINT_TANGENT) from error
+        raise FaceEditError(error.cause, _removal_hint(shape, supports)) from error
     original_map, removed_map = _brep_topology._face_map(shape), _brep_topology._face_map(sharp)
     # 外した丸めの境目の頂点が支えの辺に残る。同じ半径で丸め直すとその頂点をわずかに跨ぎ、無効な形になる(楕円柱の上縁 r2 を外すと
     # 壁の継ぎ目が z=28 で2本に分かれ、丸め直しの半径 2.00001 で壁の輪郭が UV で閉じなかった。2.0・1.99999 は有効。実測)。辺をつなぐ
@@ -1043,6 +1050,20 @@ def _offset_with_blends(shape: Any, faces: List[Any], distance: float, blends: L
     return final, table, regenerated
 
 
+def _removal_hint(shape: Any, supports: List[tuple]) -> str:
+    """動かす面に付いてくる丸めを外せなかった理由の言い換え。支えの面が平行な平面の組(長穴の側面と、その間の半円)は、外しても周りの面が
+    交わらず閉じない(docs/FACE_EDIT.md「Fusion の STEP の丸めが消えない」の未対応)。"""
+    face_map = _brep_topology._face_map(shape)
+    for _, first, second in supports:
+        a, b = _describe(first), _describe(second)
+        if a is not None and b is not None and a[0] == b[0] == "plane" and _parallel(a[2], b[2]):
+            return (
+                f"丸めの両側の面 {face_map.FindIndex(first)} と {face_map.FindIndex(second)} が平行で、丸めを外しても閉じないので、付いてこさせられない。"
+                "押し出し元のスケッチがあれば、その寸法で変える"
+            )
+    return "丸めを外しても周りの面が閉じないので、付いてこさせられない"
+
+
 def _check_reblended(maker: Any, final: Any, final_map: Any, rebuilt: list) -> List[int]:
     """丸め直した面が、その辺の半径の丸めの曲面(`_blend_radius`)で、長手の辺で支えの面の像の**両方**に G1 で接すること。
     角は辺でなく頂点から生まれる(全辺丸めの上面で実測)ので、頂点から生まれた面は同じ半径の球であること。"""
@@ -1108,6 +1129,46 @@ def _structural_gate(result: Any, *, hint: str = _HINT_DELETE) -> None:
     tiny = [face for face in _brep_topology._face_edit_faces(result) if _brep_geometry._face_edit_face_area(face) < MIN_FACE_AREA]
     if tiny:
         raise FaceEditError(f"{len(tiny)} face(s) vanished but stayed in the shape (area < {MIN_FACE_AREA:g})", hint)
+
+
+def _require_no_crossing(result: Any, moved: List[int]) -> None:
+    """動かした面(結果の位置 `moved`)とその隣の面が、辺を共有しない別の面を突き抜けていないこと。止まり穴の底を反対側の面より先へ
+    動かすと、壁が向こうの面を貫いた形が BRepCheck も体積・対応の関門も通る(`BRepAlgoAPI_Check` だけが落とす)。形全体の自己干渉
+    検査は大きいボディで期限(20 秒)を超えるので、動いた面の側だけを箱で絞って面の対ごとに交線を求める。
+    """
+    faces_map = _brep_topology._face_map(result)
+    faces = [TopoDS.Face_s(faces_map.FindKey(i)) for i in range(1, faces_map.Extent() + 1)]
+    edge_faces = _brep_topology._face_edit_edge_faces(result)
+
+    def sharing_an_edge(position: int) -> set:
+        found = set()
+        for edge in _brep_topology._face_edit_edges(faces[position - 1]):
+            index = edge_faces.FindIndex(edge)
+            if index:
+                found.update(faces_map.FindIndex(other) for other in _brep_topology.listed(edge_faces.FindFromIndex(index)))
+        return found
+
+    near = set(moved).union(*(sharing_an_edge(position) for position in moved))
+    boxes = {}
+
+    def box_of(position: int) -> Bnd_Box:
+        if position not in boxes:
+            boxes[position] = Bnd_Box()
+            BRepBndLib.Add_s(faces[position - 1], boxes[position])
+        return boxes[position]
+
+    for a in sorted(near):
+        joined = sharing_an_edge(a)
+        for b in range(1, len(faces) + 1):
+            if b in joined or (b in near and b <= a) or box_of(a).IsOut(box_of(b)):
+                continue
+            section = BRepAlgoAPI_Section(faces[a - 1], faces[b - 1], False)
+            section.Build()
+            if section.IsDone() and _brep_topology.subshapes(section.Shape(), TopAbs_ShapeEnum.TopAbs_EDGE):
+                raise FaceEditError(
+                    f"faces {a} and {b} cross without sharing an edge (the moved faces pass through a face)",
+                    f"動かすと面 {a} と面 {b} が辺でつながらないまま交わり、形が壊れる。距離の大きさを小さくして、反対側の面に届かない範囲にする",
+                )
 
 
 # --------------------------------------------------------------------------------------
