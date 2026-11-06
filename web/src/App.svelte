@@ -2787,7 +2787,7 @@
       {#if mode.kind === 'sketch-pending'}
         <div class="mode-row">
           <span class="label">スケッチ</span>
-          <span id="sketch-mode" class="tag on">貼る先をクリック(基準平面 XY/XZ/YZ か、ソリッドの面)</span>
+          <span id="sketch-mode" class="tag on">貼る先を選んでいる</span>
           <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
         </div>
       {/if}
