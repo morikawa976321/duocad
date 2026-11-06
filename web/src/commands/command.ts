@@ -741,7 +741,7 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
     return `${spec.label}を打つ(${spec.placeholder})`
   }
   if (spec.kind === 'plane') {
-    return `${spec.label}をクリック(基準平面のグリッド XY/XZ/YZ か、ソリッドの面)`
+    return `${spec.label}をクリック(基準平面のグリッド XY/XZ/YZ か、ソリッドの面。選んである面もクリックし直す)`
   }
   const value = values[spec.name]
   if (typeof value === 'number' && Number.isFinite(value)) {
