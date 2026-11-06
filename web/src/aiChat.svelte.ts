@@ -60,7 +60,8 @@ export function createAiChat(deps: {
     },
     onError(message) {
       push({ kind: 'error', message })
-      deps.fail(`AI ${message}`)
+      // 会話欄に出ているときは二重に出さない。
+      if (deps.hidden()) deps.fail(`AI ${message}`)
     },
     send(text) {
       push({ kind: 'user', text })
