@@ -10,7 +10,7 @@
    * - ツール呼び出しの表示は verb 名をそのまま出す(操作ログ・MCPツール名と同じ綴り)。
    *
    * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
-   * 既定は開いている(再読込をまたいで保持しない)。「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
+   * 既定は開いている(再読込をまたいで保持しない)。「接続先」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
   import { inputBlockedReason, resultDetail, resultLine, toolFailureReason, usageLine } from './aiResult'
   import { isImeKey } from './keys'
@@ -172,7 +172,7 @@
     {/if}
     {#if hasSettings}
       <button id="ai-settings-toggle" onclick={() => (settingsOpen ? (settingsOpen = false) : openSettings())}>
-        設定
+        接続先
       </button>
     {/if}
   </div>
