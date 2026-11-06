@@ -38,6 +38,8 @@
   }
 
   const STATUS_POLL_MS = 30 * 60 * 1000
+  /** 窓が前面に戻ったときの確認を、直前の確認からこれだけ空いていなければ省く。置いた値(実測ではない)。 */
+  const FOCUS_REFRESH_MIN_MS = 60 * 1000
 
   let config = $state<ServerConfig | null>(null)
   /** 取りに行く前に札を出すと、安定版でも一瞬「開発版」が出る。 */
@@ -49,7 +51,10 @@
     config?.version?.commit ? `${config.version.commit} (${config.version.date?.slice(0, 10) ?? ''})` : '',
   )
 
+  let lastCheckedAt = 0
+
   async function refreshStatus(force = false): Promise<void> {
+    lastCheckedAt = Date.now()
     const next = await fetchJson<UpdateStatus>(`api/update${force ? '?force=1' : ''}`)
     if (next) status = next
   }
@@ -80,6 +85,9 @@
 
   onMount(() => {
     let timer: ReturnType<typeof setInterval> | null = null
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible' && Date.now() - lastCheckedAt >= FOCUS_REFRESH_MIN_MS) void refreshStatus()
+    }
     void (async () => {
       config = await loadConfig()
       loaded = true
@@ -98,9 +106,11 @@
       await refreshStatus(pending)
       if (pending) reportFinishedUpdate(status?.last_result)
       timer = setInterval(() => void refreshStatus(), STATUS_POLL_MS)
+      document.addEventListener('visibilitychange', onVisible)
     })()
     return () => {
       if (timer !== null) clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   })
 </script>
