@@ -3079,6 +3079,7 @@
           status={ai.status}
           connection={status}
           transcript={ai.transcript}
+          commandOf={commandDefinition}
           bind:draft={ai.draft}
           onSend={ai.send}
           onCancel={() => session.aiCancel()}

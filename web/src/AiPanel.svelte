@@ -7,12 +7,14 @@
    * - 会話の時系列(`transcript`)の正は `aiChat.svelte.ts`。サーバ側の会話(`duocad/agent/loop.py`)が残らないための代わりにブラウザ側が持つ
    *   (`session.ts` の `AiTranscriptEntry` 参照)。打ちかけの依頼文(`draft`)も親が持つ(右サイドバーを閉じるとこのパネルごと消える)。
    *   ここが持つのは見た目だけの状態(設定フォームの開閉と打ちかけ・`open`)で、閉じると消える。
-   * - ツール呼び出しの表示は verb 名をそのまま出す(操作ログ・MCPツール名と同じ綴り)。
+   * - ツール呼び出しの表示は画面のコマンドのラベルと主な引数(`aiToolLine.ts`)。対応するコマンドの無い verb は verb 名のまま。元の verb 名と引数の JSON はツールチップ。
    *
    * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
    * 既定は開いている(再読込をまたいで保持しない)。「接続先」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
   import { inputBlockedReason, resultDetail, resultLine, toolFailureReason, usageLine } from './aiResult'
+  import { toolLine, toolRawLine } from './aiToolLine'
+  import type { CommandDef } from './commands/command'
   import { isImeKey } from './keys'
   import type { AiProviderKind, AiStatus, AiThinking, AiTranscriptEntry, ConnectionStatus } from './session'
 
@@ -20,6 +22,7 @@
     status,
     connection,
     transcript,
+    commandOf,
     draft = $bindable(),
     onSend,
     onCancel,
@@ -30,6 +33,8 @@
     /** サーバとのWebSocketの状態。`status`(`ai_status`)は切断後も残るので、繋がっているかはこちらで見る。 */
     connection: ConnectionStatus
     transcript: AiTranscriptEntry[]
+    /** verb 名から画面のコマンド定義を引く(ツール行をコマンドのラベルと引数の見出しで書くため)。 */
+    commandOf: (verb: string) => CommandDef | undefined
     draft: string
     onSend: (message: string) => void
     onCancel: () => void
@@ -120,12 +125,6 @@
     void transcript.length
     if (transcriptBox) transcriptBox.scrollTop = transcriptBox.scrollHeight
   })
-
-  /** 引数・結果はJSONで畳んでおく(§長い応答対策)。 */
-  function toolLine(call: AiTranscriptEntry & { kind: 'tool' }): string {
-    const args = Object.keys(call.call.arguments).length ? JSON.stringify(call.call.arguments) : ''
-    return `${call.call.name}${args ? ` ${args}` : ''}`
-  }
 
 </script>
 
@@ -221,8 +220,8 @@
         {#if entry.kind === 'user'}
           <p class="line user">{entry.text}</p>
         {:else if entry.kind === 'tool'}
-          <p class="line tool" class:tool-fail={!entry.call.ok}>
-            {entry.call.ok ? '✓' : '✗'} {toolLine(entry)}
+          <p class="line tool" class:tool-fail={!entry.call.ok} title={toolRawLine(entry.call)}>
+            {entry.call.ok ? '✓' : '✗'} {toolLine(entry.call, commandOf)}
           </p>
           {#if !entry.call.ok && toolFailureReason(entry.call.result)}
             <p class="tool-reason" data-ai-tool-reason>{toolFailureReason(entry.call.result)}</p>
