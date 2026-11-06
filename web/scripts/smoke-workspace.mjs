@@ -11,6 +11,7 @@
  *   4. 打っている最中の欄は外からの値で奪われず、欄を離れると自分の値が勝つ
  *   5. 人の Enter で確定され、共有の command が畳まれる
  *   5a. 辺を1本選んでからフィレットを起動すると、選択が連なりへ広がる
+ *   5b. ブーリアンの「ツールを残す」が共有の command に出る
  *   6. 人が起動したものを AI が埋めて確定すると、画面の構えも畳まれる
  *   7. 人の Esc で共有の command が畳まれ、選択が空になる
  *   8. 再読み込みしても起動中のコマンドと引数が戻る
@@ -105,6 +106,17 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await page.keyboard.press('Escape')
   await waitFor(() => window.__duocad.command === null, 'Esc で畳まれない')
   ok(`[5a] 辺を1本選んでからフィレットを起動すると、選択が連なり(${widened} 本)へ広がる`)
+
+  // ================================================================ 5b. ブーリアンの「ツールを残す」が共有の command に出る
+  await page.click('#boolean-body')
+  await waitFor(() => window.__duocad.command?.verb === 'boolean_body', '人の起動が共有の command に出ない')
+  await page.click('#boolean-body-tool-keep')
+  await waitFor(() => window.__duocad.command?.args?.keep_tool === true, '「ツールを残す」が共有の command に出ない')
+  await page.click('#boolean-body-tool-remove')
+  await waitFor(() => window.__duocad.command?.args?.keep_tool !== true, '「消す」へ戻しても keep_tool が残る')
+  await page.keyboard.press('Escape')
+  await waitFor(() => window.__duocad.command === null, 'Esc で畳まれない')
+  ok('[5b] ブーリアンの「ツール 残す」が共有の command に出て、「消す」で戻る')
 
   // ================================================================ 6. 人が起動し、AI が埋めて確定する
   await mcp.callTool('set_visible', { body_id: near.bodyId, visible: false }) // 丸めた板の縁は再び丸められないので、向こうの板で

@@ -130,7 +130,7 @@ export const COMMAND_PARAMS: Record<CommandName, readonly string[]> = {
   thread: ['profile', 'clearance'],
   delete_faces: [],
   offset_faces: ['distance'],
-  boolean_body: ['target_ref', 'mode'],
+  boolean_body: ['target_ref', 'mode', 'keep_tool'],
   move_sketch_entities: ['dx', 'dy', 'copy', 'mode', 'angle', 'center', 'center_entity'],
   move_body: ['dx', 'dy', 'dz', 'copy', 'mode', 'angle', 'axis_edge', 'axis_point', 'axis_dir', 'center_vertex'],
   mirror_sketch_entities: ['axis'],
@@ -228,7 +228,7 @@ export interface CommandArguments {
   thread: { profile: string; clearance?: number }
   delete_faces: Record<string, never>
   offset_faces: { distance: number }
-  boolean_body: { target_ref: object; mode: string }
+  boolean_body: { target_ref: object; mode: string; keep_tool?: boolean }
   move_sketch_entities: { dx?: number; dy?: number; copy?: boolean; mode?: string; angle?: number; center?: unknown[]; center_entity?: object }
   move_body: { dx?: number; dy?: number; dz?: number; copy?: boolean; mode?: string; angle?: number; axis_edge?: object; axis_point?: unknown[]; axis_dir?: unknown[]; center_vertex?: object }
   mirror_sketch_entities: { axis: object }

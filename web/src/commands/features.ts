@@ -475,6 +475,16 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
         { value: 'intersect', label: '交差', buttonId: 'boolean-body-intersect' },
       ],
     },
+    {
+      kind: 'choice',
+      name: 'keep_tool',
+      label: 'ツール',
+      options: [
+        { value: 'remove', label: '消す', buttonId: 'boolean-body-tool-remove', sends: false },
+        { value: 'keep', label: '残す', buttonId: 'boolean-body-tool-keep', sends: true },
+      ],
+      default: 'remove',
+    },
   ],
   build(values) {
     const target = pickedRefOf(values.target_ref)
@@ -483,7 +493,8 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
     const mode = values.mode
     if (empty !== null) return { ok: false, reason: empty }
     if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
-    return { ok: true, args: { target_ref: target, mode } }
+    // 消す(既定)は送らない: 引数の無い今までの呼び出しと同じ形にする。
+    return { ok: true, args: values.keep_tool === 'keep' ? { target_ref: target, mode, keep_tool: true } : { target_ref: target, mode } }
   },
 }
 

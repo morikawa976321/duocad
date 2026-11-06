@@ -1,8 +1,8 @@
 """verb `boolean_body` — ターゲットボディにツールボディ群で union/cut/intersect する。
 
 ターゲットは in-place で形だけ置き換え(ID・名前は維持)。ツールボディは消費されて
-文書から消える。undo では fillet と delete の両方の巻き戻し(形状スナップショット +
-Body スナップショット)が1回で戻る。
+文書から消える(`keep_tool` のときは残る)。undo では fillet と delete の両方の巻き戻し
+(形状スナップショット + Body スナップショット)が1回で戻る。
 """
 from __future__ import annotations
 
@@ -98,15 +98,17 @@ def _reject_untouched_cut(target_body, result: dict) -> None:
         )
 
 
-def _apply(doc: Document, target_body, tools: Sequence, mode: str, *, reject_untouched_cut: bool = False) -> tuple:
-    """演算(kernel)→ ターゲットの形を差し替え → ツールを退避して消す。戻りは `(前の形, 退避, 由来)`。
+def _apply(
+    doc: Document, target_body, tools: Sequence, mode: str, *, reject_untouched_cut: bool = False, keep_tool: bool = False
+) -> tuple:
+    """演算(kernel)→ ターゲットの形を差し替え → ツールを退避して消す(`keep_tool` なら消さない)。戻りは `(前の形, 退避, 由来)`。
     幾何の失敗と無変化の断りは差し替えより先に上がるので、落ちたときは文書に何も残らない。"""
     result = kernel.boolean_bodies(target_body.shape, [tool.shape for tool in tools], mode)
     if reject_untouched_cut and mode == "cut":
         _reject_untouched_cut(target_body, result)
     previous_shape = target_body.shape
     target_body.shape = result["shape"]
-    detached = detach_bodies(doc, [tool.id for tool in tools])
+    detached = {"bodies": []} if keep_tool else detach_bodies(doc, [tool.id for tool in tools])
     return previous_shape, detached, result["provenance"]
 
 
@@ -120,12 +122,14 @@ def boolean_body(
     target_ref: Any,
     tool_body_ids: Sequence[BodyId],
     mode: str = "union",
+    keep_tool: bool = False,
 ) -> Operation:
-    """ターゲットにツール群を作用させる。`target_ref` は面1枚への参照、ツールは BodyId の並び。"""
+    """ターゲットにツール群を作用させる。`target_ref` は面1枚への参照、ツールは BodyId の並び。
+    `keep_tool` ならツールボディを文書に残す(ログには真のときだけ `keep_tool` を積む: 引数の無い保存済みの文書は消す扱いのまま)。"""
     target_body_id = _validate_target_ref(doc, target_ref)
     target_body, tools = _validate_participants(doc, target_body_id, tool_body_ids, replay=False)
     previous_shape, detached, provenance = _apply(
-        doc, target_body, tools, str(mode), reject_untouched_cut=True
+        doc, target_body, tools, str(mode), reject_untouched_cut=True, keep_tool=bool(keep_tool)
     )
     operation = doc.log.append(
         VERB_BOOLEAN_BODY,
@@ -133,6 +137,7 @@ def boolean_body(
             "target_body_id": target_body.id,
             "tool_bodies": [tool.id for tool in tools],
             "mode": str(mode),
+            **({"keep_tool": True} if keep_tool else {}),
         },
     )
     operation.provenance = provenance
@@ -146,7 +151,9 @@ def _do_boolean_body(document: Document, operation: Operation) -> None:
     target_body, tools = _validate_participants(
         document, args["target_body_id"], [str(body_id) for body_id in args["tool_bodies"]], replay=True
     )
-    previous_shape, detached, provenance = _apply(document, target_body, tools, str(args["mode"]))
+    previous_shape, detached, provenance = _apply(
+        document, target_body, tools, str(args["mode"]), keep_tool=bool(args.get("keep_tool", False))
+    )
     if operation.provenance is None:
         operation.provenance = provenance
     _remember_undo(document, target_body.id, operation.seq, previous_shape, detached)
@@ -166,19 +173,19 @@ register_verb(VERB_BOOLEAN_BODY, do=_do_boolean_body, undo=_undo_boolean_body)
 # 入口(`duocad/entry.py`) —— 対象を選択から取り、上の verb を掛け、応答に載せるものを返す
 # --------------------------------------------------------------------------------------
 @entry(VERB_BOOLEAN_BODY)
-def _enter_boolean_body(document: Document, target_ref: Any, mode: str) -> dict:
+def _enter_boolean_body(document: Document, target_ref: Any, mode: str, keep_tool: bool = False) -> dict:
     """ターゲット(面参照・1つ)に、選択のツールボディ群を作用させる。
 
     `target_ref` は選択には入れない(入れると、ターゲットまでツールに数えられる)。
     """
     tool_body_ids = selection.require_bodies(document)
     lumps_before = len(_brep_topology.split_solids(document.get_body(_validate_target_ref(document, target_ref)).shape))
-    operation = boolean_body(document, target_ref, tool_body_ids, mode=str(mode))
+    operation = boolean_body(document, target_ref, tool_body_ids, mode=str(mode), keep_tool=bool(keep_tool))
     changed = operation.args["target_body_id"]
     out = {
         "target_body_id": changed,
         "mode": operation.args["mode"],
-        "removed_bodies": list(operation.args["tool_bodies"]),
+        "removed_bodies": [] if keep_tool else list(operation.args["tool_bodies"]),
         "changed_bodies": [changed],
     }
     lumps = len(_brep_topology.split_solids(document.get_body(changed).shape))
