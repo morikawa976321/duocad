@@ -176,6 +176,13 @@ class WebHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def end_headers(self) -> None:
+        # ビルドの出力(assets/)は名前に内容のハッシュが入る。入口の index.html だけが同じ名前のまま
+        # 中身が変わるので、毎回サーバへ確かめさせる(古い index.html が消えた assets を指すと白い画面になる)。
+        if self.command in ("GET", "HEAD") and self.path.split("?")[0] in ("/", "/index.html"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     def log_message(self, *args: Any) -> None:
         """アクセスログを出さない(計測中のコンソールを静かに保つ)。"""
 
