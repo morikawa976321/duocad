@@ -1105,7 +1105,7 @@
           class:on={command !== null && candidate.id === command.id}
           onclick={() => (command !== null && candidate.id === command.id ? pressActive() : start(candidate.id))}
           disabled={command !== null && candidate.id === command.id && (busy || (!ready && needsEnter(command)))}
-          title={command !== null && candidate.id === command.id && needsEnter(candidate) ? 'もう一度押すか Enter で確定' : undefined}
+          title={command !== null && candidate.id === command.id && needsEnter(candidate) ? 'もう一度押すか Enter で確定' : candidate.title}
         >
           <!-- 押している間も文言を変えない: 幅が伸びるとツールバーの行が組み替わり、1280px 幅で後ろのボタンが2行目へ落ちた。
                Enter で確定することは `#command-prompt` が出す。 -->

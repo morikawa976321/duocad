@@ -48,6 +48,7 @@ export const ADD_LINE: CommandDef<'add_line'> = {
   id: 'add_line',
   label: '線分',
   buttonId: 'sketch-line',
+  title: '始点と終点を指して線分を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'p0', label: '始点' },
@@ -106,6 +107,7 @@ export const ADD_POINT: CommandDef<'add_point'> = {
   id: 'add_point',
   label: '点',
   buttonId: 'sketch-point',
+  title: '点を置く',
   preview: 'none',
   args: [{ kind: 'point', name: 'point', label: '位置' }],
   build(values) {
@@ -120,6 +122,7 @@ export const ADD_CIRCLE: CommandDef<'add_circle'> = {
   id: 'add_circle',
   label: '円',
   buttonId: 'sketch-circle',
+  title: '中心と半径で円を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'center', label: '中心' },
@@ -160,6 +163,7 @@ export const ADD_ELLIPSE: CommandDef<'add_ellipse'> = {
   id: 'add_ellipse',
   label: '楕円',
   buttonId: 'sketch-ellipse',
+  title: '中心と大きさを決めて楕円を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'center', label: '中心' },
@@ -223,6 +227,7 @@ export const ADD_RECTANGLE: CommandDef<'add_rectangle'> = {
   id: 'add_rectangle',
   label: '長方形',
   buttonId: 'sketch-rectangle',
+  title: '角と対角を指して長方形を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'corner', label: '1つ目の角' },
@@ -271,6 +276,7 @@ export const ADD_ARC: CommandDef<'add_arc'> = {
   id: 'add_arc',
   label: '円弧',
   buttonId: 'sketch-arc',
+  title: '始点・終点・半径で円弧を描く',
   preview: 'local',
   args: [
     { kind: 'point', name: 'p0', label: '始点' },
@@ -311,6 +317,7 @@ export const IMPORT_SVG: CommandDef<'import_svg'> = {
   id: 'import_svg',
   label: 'SVG読み込み',
   buttonId: 'sketch-import-svg',
+  title: 'SVGの図形をスケッチへ取り込む',
   preview: 'none',
   args: [
     {
@@ -337,6 +344,7 @@ export const SKETCH_CREATE: CommandDef<'sketch_create'> = {
   id: 'sketch_create',
   label: 'スケッチ',
   buttonId: 'sketch-create',
+  title: '平面か面を指してスケッチを始める',
   preview: 'none',
   // 引数名 `target` はWSに載る名前(`base_plane`)とわざと変えてある: 値は「基準平面名」か「面は選択にある」で、`base_plane` だと後者が嘘になる。
   args: [{ kind: 'plane', name: 'target', label: 'スケッチを貼る先' }],
@@ -355,6 +363,7 @@ export const SKETCH_CREATE_OFFSET: CommandDef<'sketch_create_offset'> = {
   id: 'sketch_create_offset',
   label: 'スケッチ(オフセット平面)',
   buttonId: 'sketch-create-offset',
+  title: '基準平面から離した平面にスケッチを始める',
   preview: 'none',
   args: [
     // 引数名 `target` は `SKETCH_CREATE` と同じ理由。
@@ -397,6 +406,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef<'move_sketch_entities'> = {
   id: 'move_sketch_entities',
   label: '動かす',
   buttonId: 'sketch-move',
+  title: '点・辺を並進・回転で動かす',
   // 幽霊の対象は引数に無いので、`App.svelte` が同じ選択集合から導く(`ghostSources`)。
   preview: 'local',
   args: [
@@ -448,6 +458,7 @@ export const MIRROR_SKETCH_ENTITIES: CommandDef<'mirror_sketch_entities'> = {
   id: 'mirror_sketch_entities',
   label: '鏡映複製',
   buttonId: 'sketch-mirror',
+  title: '図形を線分を軸に鏡映して複製する',
   preview: 'server',
   args: [
     {
@@ -488,6 +499,7 @@ export const ENVELOPE_REGIONS: CommandDef<'envelope_regions'> = {
   id: 'envelope_regions',
   label: '包む',
   buttonId: 'sketch-envelope',
+  title: '選んだ領域を包む1つの領域線を足す',
   preview: 'server',
   args: [
     {
@@ -537,6 +549,7 @@ export const PROJECT_TO_SKETCH: CommandDef<'project_to_sketch'> = {
   id: 'project_to_sketch',
   label: '投影',
   buttonId: 'sketch-project',
+  title: 'ボディの辺・面をスケッチ平面に投影する',
   preview: 'server',
   args: [
     {
@@ -564,6 +577,7 @@ export const PROJECT_OUTLINE: CommandDef<'project_outline'> = {
   id: 'project_outline',
   label: '外形を投影',
   buttonId: 'sketch-project-outline',
+  title: 'ボディの外形をスケッチ平面に投影する',
   preview: 'server',
   args: [
     {
@@ -595,6 +609,7 @@ export const SELECT_IN_SKETCH: CommandDef = {
   id: 'select_in_sketch',
   label: '選ぶ',
   buttonId: 'sketch-select',
+  title: '領域や図形をクリックして選ぶ',
   // 領域を直接クリックして選べるのでボタンは出さない。Escや確定後はここへ戻る。
   hidden: true,
   preview: 'none',

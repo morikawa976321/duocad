@@ -15,6 +15,7 @@ export const MEASURE: CommandDef<'measure'> = {
   id: 'measure',
   label: '測定',
   buttonId: 'measure',
+  title: '選んだ2つの距離・角度を測る',
   preview: 'none',
   args: [
     {

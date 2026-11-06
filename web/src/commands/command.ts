@@ -481,6 +481,8 @@ type UiCommandId = 'select_in_sketch'
 
 interface CommandDefBase {
   label: string
+  /** ボタンにマウスを載せたときの1行の説明(30字程度まで)。キーがあるコマンドは末尾に「(Delete)」のように書く。 */
+  title: string
   /** ツールバーのボタンの `id`(実機検査がここを叩く)。 */
   buttonId: string
   /**

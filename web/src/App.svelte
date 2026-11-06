@@ -2868,7 +2868,7 @@
         <div class="mode-row">
           <span class="label">スケッチ</span>
           <span id="sketch-mode" class="tag on">貼る先を選んでいる</span>
-          <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
+          <button id="sketch-exit" title="スケッチモードを抜ける" onclick={exitSketch}>抜ける</button>
         </div>
       {/if}
       <!-- スケッチモードの札とモード操作。idは実機検査が叩く口。 -->
@@ -2879,10 +2879,14 @@
             編集中 {planeLabel(activeSketch.plane, '面に貼ったスケッチ')}
             ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
           </span>
-          <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId, { emptyDocument: documentEmpty() })}>
+          <button
+            id="sketch-look"
+            title="スケッチの平面を正面から見る"
+            onclick={() => sketchId && viewport?.lookAtSketch(sketchId, { emptyDocument: documentEmpty() })}
+          >
             正面から見る
           </button>
-          <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
+          <button id="sketch-exit" title="スケッチモードを抜ける" onclick={exitSketch}>抜ける</button>
         </div>
       {/if}
       {#if optimizeMode}
@@ -2893,7 +2897,7 @@
             ・拘束 {optimize?.fixtures.length ?? 0} ・荷重 {optimize?.loads.length ?? 0}
           </span>
           <!-- 走っている間は抜けさせない(抜けるとパネルごと中断ボタンが消え、止める手段がゼロになる)。 -->
-          <button id="optimize-exit" disabled={optimizeBusy} onclick={exitOptimizeMode}>
+          <button id="optimize-exit" title="形状最適化モードを抜ける" disabled={optimizeBusy} onclick={exitOptimizeMode}>
             抜ける
           </button>
         </div>

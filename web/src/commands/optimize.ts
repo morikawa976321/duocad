@@ -27,6 +27,7 @@ export const SET_PRESERVE_BODIES: CommandDef<'set_preserve_bodies'> = {
   id: 'set_preserve_bodies',
   label: '保持ボディを決める',
   buttonId: 'set-preserve-bodies',
+  title: '最適化で必ず残すボディを決める',
   preview: 'none',
   args: [
     {
@@ -45,6 +46,7 @@ export const SET_EXCLUDE_BODIES: CommandDef<'set_exclude_bodies'> = {
   id: 'set_exclude_bodies',
   label: '除外ボディを決める',
   buttonId: 'set-exclude-bodies',
+  title: '最適化で材料を置かないボディを決める',
   preview: 'none',
   args: [
     {
@@ -63,6 +65,7 @@ export const SET_FIXTURES: CommandDef<'set_fixtures'> = {
   id: 'set_fixtures',
   label: '拘束面を決める',
   buttonId: 'set-fixtures',
+  title: '動かない面を決める',
   preview: 'none',
   args: [
     {
@@ -87,6 +90,7 @@ export const SET_LOADS: CommandDef<'set_loads'> = {
   id: 'set_loads',
   label: '荷重を置く',
   buttonId: 'set-loads',
+  title: '選んだ面に荷重を置く',
   preview: 'none',
   args: [
     {
@@ -128,6 +132,7 @@ export const CLEAR_LOADS: CommandDef<'clear_loads'> = {
   id: 'clear_loads',
   label: '荷重を外す',
   buttonId: 'clear-loads',
+  title: '置いた荷重を外す',
   preview: 'none',
   args: [
     {

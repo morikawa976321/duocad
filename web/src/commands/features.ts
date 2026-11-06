@@ -62,6 +62,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
     id: 'extrude',
     label: '押し出す',
     buttonId: 'extrude',
+    title: '選んだ領域・面を距離だけ押し出す',
     preview: 'server',
     args: [
       isFace
@@ -133,6 +134,7 @@ export const REVOLVE: CommandDef<'revolve'> = {
   id: 'revolve',
   label: '回転体',
   buttonId: 'revolve',
+  title: '領域を軸のまわりに回して立体にする',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'regions', label: '回す領域', shapeKind: 'region', min: 1, max: null },
@@ -214,6 +216,7 @@ export const LOFT: CommandDef<'loft'> = {
   id: 'loft',
   label: 'ロフト',
   buttonId: 'loft',
+  title: '複数の断面をつないで立体にする',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'regions', label: 'つなぐ断面(順に)', shapeKind: 'region', min: 1, max: null },
@@ -276,6 +279,7 @@ export const FILLET: CommandDef<'fillet'> = {
   id: 'fillet',
   label: 'フィレット',
   buttonId: 'fillet',
+  title: '選んだ辺を丸める',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'edges', label: 'フィレットする辺', shapeKind: 'edge', min: 1, max: null },
@@ -302,6 +306,7 @@ export const CHAMFER: CommandDef<'chamfer'> = {
   id: 'chamfer',
   label: '面取り',
   buttonId: 'chamfer',
+  title: '選んだ辺を斜めに落とす',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'edges', label: '面取りする辺', shapeKind: 'edge', min: 1, max: null },
@@ -328,6 +333,7 @@ export const SHELL_BODY: CommandDef<'shell_body'> = {
   id: 'shell_body',
   label: 'シェル',
   buttonId: 'shell-body',
+  title: '選んだ面を抜いて中を空洞にする',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'faces', label: '抜く面', shapeKind: 'face', min: 1, max: null },
@@ -357,6 +363,7 @@ export const OFFSET_FACES: CommandDef<'offset_faces'> = {
   id: 'offset_faces',
   label: 'オフセット',
   buttonId: 'offset-faces',
+  title: '選んだ面を距離だけ動かす',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'faces', label: '動かす面', shapeKind: 'face', min: 1, max: null },
@@ -387,6 +394,7 @@ export const DELETE_FACES: CommandDef<'delete_faces'> = {
   id: 'delete_faces',
   label: '面の削除',
   buttonId: 'delete-faces',
+  title: '選んだ面を削除して周りの面で閉じる',
   preview: 'server',
   args: [{ kind: 'selection', name: 'faces', label: '削除する面', shapeKind: 'face', min: 1, max: null }],
   build(values) {
@@ -404,6 +412,7 @@ export const THREAD: CommandDef<'thread'> = {
   id: 'thread',
   label: 'ねじ',
   buttonId: 'thread',
+  title: '円筒面にねじ山を刻む',
   preview: 'server',
   args: [
     { kind: 'selection', name: 'faces', label: '全周の円筒面', shapeKind: 'face', surfaceKinds: ['cylinder_full'], min: 1, max: 1 },
@@ -447,6 +456,7 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
   id: 'boolean_body',
   label: 'ブーリアン',
   buttonId: 'boolean-body',
+  title: 'ボディどうしを結合・切り取り・交差する',
   preview: 'server',
   args: [
     {
@@ -503,6 +513,7 @@ export const PATTERN_RECTANGULAR: CommandDef<'pattern_rectangular'> = {
   id: 'pattern_rectangular',
   label: '矩形反復',
   buttonId: 'pattern-rectangular',
+  title: '図形を縦横に並べて複製する',
   // 変わるのはスケッチの図形でソリッドではないので、サーバの投機実行は形が変わったBodyを返さない(`duocad/catalog.py` の note)。複製の座標は `entityKinds.ts` の表が出す。
   preview: 'local',
   args: [
@@ -579,6 +590,7 @@ export const PATTERN_CIRCULAR: CommandDef<'pattern_circular'> = {
   id: 'pattern_circular',
   label: '円形反復',
   buttonId: 'pattern-circular',
+  title: '図形を中心のまわりに並べて複製する',
   // 回転中心を置くクリックの前から幽霊が出る(`CommandHost` が待っている点をポインタ位置で仮に埋める)。
   preview: 'local',
   args: [
@@ -630,6 +642,7 @@ export const MOVE_BODY: CommandDef<'move_body'> = {
   id: 'move_body',
   label: '動かす',
   buttonId: 'move-body',
+  title: 'ボディを並進・回転で動かす',
   // 形は変わらず位置だけが変わるので、届いているメッシュを dx/dy/dz だけずらして半透明で重ねる。元の実体は隠さない(移動前後を並べて見せる)。
   preview: 'local',
   args: [
@@ -697,6 +710,7 @@ export const MIRROR_BODY: CommandDef<'mirror_body'> = {
   id: 'mirror_body',
   label: '鏡映複製',
   buttonId: 'mirror-body',
+  title: 'ボディを面に対して鏡映して複製する',
   preview: 'server',
   args: [
     {
@@ -753,6 +767,7 @@ export const SPLIT_BODY: CommandDef<'split_body'> = {
   id: 'split_body',
   label: 'ボディ分割',
   buttonId: 'split-body',
+  title: 'ボディを平面で切って分ける',
   preview: 'server',
   args: [
     {
@@ -839,6 +854,7 @@ export const DELETE_SELECTION: CommandDef<'delete'> = {
   id: 'delete',
   label: '削除する',
   buttonId: 'delete',
+  title: '選んだものを削除する(Delete)',
   preview: 'none',
   args: [
     {

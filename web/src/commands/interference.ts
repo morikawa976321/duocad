@@ -12,6 +12,7 @@ export const INTERFERENCE: CommandDef<'check_interference'> = {
   id: 'check_interference',
   label: '干渉チェック',
   buttonId: 'interference',
+  title: 'ボディどうしの干渉と隙間を調べる',
   preview: 'none',
   args: [],
   build() {

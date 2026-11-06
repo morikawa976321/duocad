@@ -9,6 +9,7 @@ export const IMPORT_STEP: CommandDef<'import_step'> = {
   id: 'import_step',
   label: 'STEP読み込み',
   buttonId: 'file-import-step',
+  title: 'STEPファイルを読み込んでボディにする',
   // プレビューなし(サーバの `PREVIEWABLE_VERBS` にも無い)。
   preview: 'none',
   args: [
