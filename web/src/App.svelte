@@ -1010,6 +1010,15 @@
       }
       releasePending(applied.client_op)
       files.refresh()
+      if (own && applied.action === 'new') {
+        const generation = next.generation
+        void tick().then(() => {
+          if (model?.generation !== generation) return
+          const field = document.querySelector<HTMLInputElement>('#file-name-input')
+          field?.focus()
+          field?.select()
+        })
+      }
       return
     }
     if (applied) {
