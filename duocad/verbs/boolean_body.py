@@ -172,11 +172,17 @@ def _enter_boolean_body(document: Document, target_ref: Any, mode: str) -> dict:
     `target_ref` は選択には入れない(入れると、ターゲットまでツールに数えられる)。
     """
     tool_body_ids = selection.require_bodies(document)
+    lumps_before = len(_brep_topology.split_solids(document.get_body(_validate_target_ref(document, target_ref)).shape))
     operation = boolean_body(document, target_ref, tool_body_ids, mode=str(mode))
     changed = operation.args["target_body_id"]
-    return {
+    out = {
         "target_body_id": changed,
         "mode": operation.args["mode"],
         "removed_bodies": list(operation.args["tool_bodies"]),
         "changed_bodies": [changed],
     }
+    lumps = len(_brep_topology.split_solids(document.get_body(changed).shape))
+    if operation.args["mode"] == "union" and lumps > max(lumps_before, 1):
+        # 離れたツールの結合は断らず、気づけるようにする(`Session._after_logged_verb` が確定のときだけ警告のトーストへ積む)
+        out["warning"] = f"離れた塊が{lumps}個入った1ボディになった(結合したツールがターゲットに触れていない)"
+    return out
