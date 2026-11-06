@@ -253,7 +253,17 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   await waitFor((log) => window.__duocad.state.log.length === log - 1, '入力欄の外の Ctrl+Z で文書が undo されない', [before.log])
   await pressWithControl('KeyY')
   await waitFor((log) => window.__duocad.state.log.length === log, 'Ctrl+Y で戻らない', [before.log])
-  ok('[6] 入力欄にフォーカスがある間の Ctrl+Z は文書を変えず、外では undo される')
+  // 押しっぱなし(キーの自動反復)では 1 回しか戻らない
+  await page.keyboard.down('Control')
+  for (let press = 0; press < 3; press += 1) await page.keyboard.down('KeyZ')
+  await page.keyboard.up('KeyZ')
+  await page.keyboard.up('Control')
+  await waitFor((log) => window.__duocad.state.log.length === log - 1, '押しっぱなしの Ctrl+Z で 1 回も戻らない', [before.log])
+  await sleep(1500)
+  if ((await history()).log !== before.log - 1) fail('Ctrl+Z の押しっぱなしで 2 回以上戻った')
+  await pressWithControl('KeyY')
+  await waitFor((log) => window.__duocad.state.log.length === log, 'Ctrl+Y で戻らない', [before.log])
+  ok('[6] 入力欄にフォーカスがある間の Ctrl+Z は文書を変えず、外では undo される(押しっぱなしは 1 回だけ)')
 
   // ================================================================ 7. 押し出しの種別をキーボードだけで選べる
   // 選択肢のボタンは DOM で数値欄より前にあり、素の Tab では欄から届かない。
