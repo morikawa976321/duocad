@@ -18,6 +18,7 @@ import math
 
 import numpy as np
 import os
+import re
 import tempfile
 import threading
 from collections import OrderedDict
@@ -35,11 +36,15 @@ from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFille
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_TangentialDeflection
 from OCP.IFSelect import IFSelect_ReturnStatus
+from OCP.STEPCAFControl import STEPCAFControl_Writer
 from OCP.STEPControl import (
     STEPControl_Reader,
     STEPControl_StepModelType,
     STEPControl_Writer,
 )
+from OCP.TCollection import TCollection_ExtendedString
+from OCP.TDataStd import TDataStd_Name
+from OCP.TDocStd import TDocStd_Document
 from OCP.TopAbs import (
     TopAbs_EDGE,
     TopAbs_FACE,
@@ -56,6 +61,8 @@ from OCP.TopTools import (
     TopTools_IndexedDataMapOfShapeListOfShape,
     TopTools_IndexedMapOfShape,
 )
+from OCP.XCAFApp import XCAFApp_Application
+from OCP.XCAFDoc import XCAFDoc_DocumentTool
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 from . import kernel_chains, kernel_interference, kernel_meshing, kernel_overflow, kernel_tight, meshbody
@@ -206,6 +213,63 @@ def write_step(shape: "TopoDS_Shape", path: str) -> None:
     if status != IFSelect_ReturnStatus.IFSelect_RetDone:
         _unlink_quietly(filename)
         raise ValueError(f"failed to write STEP: {filename} (Write -> {status})")
+
+
+def write_step_named(named_shapes: Sequence[Tuple[str, "TopoDS_Shape"]], path: str) -> None:
+    """`(名前, 形)` の並びを、名前を製品名に載せたSTEPとして書き出す(XDE。書き出しに失敗したらファイルを残さない)。
+
+    `STEPControl_Writer` は名前を持てない(製品名が `Open CASCADE STEP translator …` になる)ので、形ごとに
+    `TDataStd_Name` を付けて `STEPCAFControl_Writer` で書く。**OCCT は非ASCII文字を、ISO 10303-21 が
+    許さない生のバイトで書く**ので、書いた後に `X2` / `X4` エスケープへ置き換える(`_escape_step_non_ascii`)。
+    """
+    if not named_shapes or any(shape is None or _brep_topology.is_null(shape) for _, shape in named_shapes):
+        raise ValueError("cannot write an empty shape to STEP")
+
+    filename = os.fspath(path)
+    application = XCAFApp_Application.GetApplication_s()
+    document = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
+    application.InitDocument(document)
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(document.Main())
+    for name, shape in named_shapes:
+        label = shape_tool.AddShape(shape, False)
+        if name:
+            TDataStd_Name.Set_s(label, TCollection_ExtendedString(name))
+
+    writer = STEPCAFControl_Writer()
+    writer.SetNameMode(True)
+    if not writer.Transfer(document, STEPControl_StepModelType.STEPControl_AsIs):
+        raise ValueError(f"failed to transfer shape to STEP: {filename}")
+    status = writer.Write(filename)
+    if status != IFSelect_ReturnStatus.IFSelect_RetDone:
+        _unlink_quietly(filename)
+        raise ValueError(f"failed to write STEP: {filename} (Write -> {status})")
+    try:
+        with open(filename, "rb") as handle:
+            text = handle.read().decode("utf-8")
+        if not text.isascii():
+            with open(filename, "wb") as handle:
+                handle.write(_escape_step_non_ascii(text).encode("ascii"))
+    except (OSError, UnicodeDecodeError):
+        _unlink_quietly(filename)
+        raise
+
+
+def _escape_step_non_ascii(text: str) -> str:
+    """OCCT が書いた本文の非ASCII文字の連なりを ISO 10303-21 の `X2` / `X4` エスケープへ置き換える。
+
+    OCCT は名前のUTF-8の1バイトごとを1文字とみなしてUTF-8で書き直す(「日」が `E6 97 A5` の3文字になる)ので、
+    連なりを latin-1 でバイトに戻し、UTF-8 として読み直してからエスケープする。
+    """
+    backslash = chr(92)
+
+    def escape(match: "re.Match[str]") -> str:
+        return "".join(
+            f"{backslash}X2{backslash}{ord(ch):04X}{backslash}X0{backslash}" if ord(ch) < 0x10000
+            else f"{backslash}X4{backslash}{ord(ch):08X}{backslash}X0{backslash}"
+            for ch in match.group().encode("latin-1").decode("utf-8")
+        )
+
+    return re.sub(r"[^\x00-\x7f]+", escape, text)
 
 
 def _unlink_quietly(filename: str) -> None:
@@ -1169,6 +1233,7 @@ def _built_blend(
         # OCCTは例外を投げずに失敗する。半径/距離の範囲検査では代用できない
         raise ValueError(
             f"{verb} failed (IsDone is false) for edges {edge_indices} with {values}"
+            + ("。距離が面の幅以上か、隣の形に届く距離。距離を小さくするか、辺を分けて面取りする" if verb == "chamfer" else "")
         )
 
     final = maker.Shape()

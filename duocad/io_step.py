@@ -67,19 +67,19 @@ def solid_names(source_name: str, count: int) -> list[str]:
 
 
 def export_step(doc: Document, path: PathLike) -> None:
-    """対象は `_bodies_to_export`(表示中のBodyのみ)。複数Bodyならcompoundへまとめる。
+    """対象は `_bodies_to_export`(表示中のBodyのみ)。Bodyごとに名前を製品名に載せる(`kernel.write_step_named`)。
 
     メッシュボディが対象に入っていたら断る(ファイルを作らない。STEPに三角形を書く先は無く、黙って落とすと形が足りない)。
     """
-    meshes = [b for b in _bodies_to_export(doc) if b.mesh is not None]
+    bodies = _bodies_to_export(doc)
+    meshes = [b for b in bodies if b.mesh is not None]
     if meshes:
         raise ValueError(
             "cannot export a mesh body to STEP: "
             f"{[b.id for b in meshes]} は三角形メッシュで、STEPには書けない。"
             "STLで書き出すか、set_visible(visible=false) で隠してから呼ぶこと"
         )
-    shape = _shape_to_export(doc)
-    kernel.write_step(shape, str(path))
+    kernel.write_step_named([(b.name, b.shape) for b in bodies], str(path))
 
 
 def export_stl(doc: Document, path: PathLike) -> None:
@@ -162,11 +162,3 @@ def _bodies_to_export(doc: Document) -> list[Body]:
             "見えないものは書き出せない。set_visible(visible=true) で戻してから呼ぶこと"
         )
     return bodies
-
-
-def _shape_to_export(doc: Document):
-    bodies = _bodies_to_export(doc)
-    shapes = [b.shape for b in bodies]
-    if len(shapes) == 1:
-        return shapes[0]
-    return kernel.make_compound(shapes)
