@@ -188,14 +188,14 @@ def test_faces_seeded_by_the_preview_still_warn_once_when_delivered() -> None:
     session.view.seed_faces("odd", shape, session.view.view_deviation, session.view.view_angular_deflection, measured)
     session.take_warnings()
     session.geometry("odd")
-    assert any("三角形分割が取れなかった面" in line for line in session.take_warnings())
+    assert any("表示できない面があります" in line for line in session.take_warnings())
     session.view._geometry_cache.clear()
     session.geometry("odd")
-    assert not any("三角形分割が取れなかった面" in line for line in session.take_warnings()), "警告は1回だけ"
+    assert not any("表示できない面があります" in line for line in session.take_warnings()), "警告は1回だけ"
 
 
 def test_boundary_diagnostics_name_the_faces_of_the_body() -> None:
-    """落ちたら、一部の面だけを測ったときの「境界の交差を解消できなかった面」の警告が、測った面を集めた compound の中の
+    """落ちたら、一部の面だけを測ったときの境界の交差の警告が、測った面を集めた compound の中の
     番号(別の面)を出す。"""
     shape = _bowtie_beside_a_box(bowtie_first=False)
     recipe = (DEVIATION, kernel.DEFAULT_ANGULAR_DEFLECTION)

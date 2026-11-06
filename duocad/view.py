@@ -49,7 +49,7 @@ def _face_count(body) -> int:
 #: 387 B → 2.29 MB)は素通しにできない。履歴パネルが要るのは件数だけ。伏せるのは配信用の射影だけで、
 #: `document.log` と保存(`to_json`)は無傷。**`previous` が数値の操作(`set_parameter`)は素通りする**。
 _REDACTED_LOG_ARGS = (
-    "step", "entities", "faces", "previous", "previous_faces", "positions", "indices",
+    "step", "entities", "faces", "previous", "previous_faces", "positions", "indices", "brep",
 )
 
 
@@ -326,6 +326,8 @@ class DocumentView:
         self._sketch_cache: dict = {}
         #: sketch_id -> `_SketchFills`。粗さが変わっても残す(`_sketch_cache` は `set_view_resolution` が捨てる)。
         self._sketch_fills: dict = {}
+        #: (sketch_id, 失敗の種類) -> 最後に知らせた文。同じ失敗を配信のたびに積み直さない(直れば消す)。
+        self._sketch_failures: dict = {}
         #: sketch_id -> (描くものの指紋, 版)。版は画面がスケッチを作り直すかの印(`_sketch_state` の `revision`)。
         #: 番号は文書をまたいで単調に増やす(`reset()` で数え直すと、別の文書の同じ id・同じ番号のスケッチを描き直さない)。
         self._sketch_revisions: dict = {}
@@ -530,6 +532,7 @@ class DocumentView:
         self._face_count_cache.clear()
         self._sketch_cache.clear()
         self._sketch_revisions.clear()
+        self._sketch_failures.clear()
         self._optimize_cache.clear()
         self._revision_state.clear()
         self._shape_state.clear()
@@ -612,13 +615,18 @@ class DocumentView:
             self._sketch_revisions.pop(sketch_id, None)
         for sketch_id in [key for key in self._sketch_fills if key not in alive]:
             self._sketch_fills.pop(sketch_id, None)
+        for key in [key for key in self._sketch_failures if key[0] not in alive]:
+            self._sketch_failures.pop(key, None)
         return [self._sketch_state(item) for item in self.document.sketches]
 
     def _sketch_state(self, item) -> dict:
         try:
             drawn = region.expanded_entities(self.document, item.id)
+            self._sketch_failures.pop((item.id, "expand"), None)
         except Exception as error:  # 壊れたスケッチで画面全体を落とさない
-            self.warnings.append(f"スケッチ {item.id} を描けない: {type(error).__name__}: {error}")
+            self._warn_sketch_once(
+                item.id, "expand", f"スケッチ {item.id} を描けない: {type(error).__name__}: {error}"
+            )
             drawn = []
         # **貼った先のボディの形状は署名に入れない**。面に貼ったスケッチの姿勢は `item.plane["frame"]` が持つ
         # (`duocad.region.plane_frame`)ので、後からのフィレット等で枠も領域も変わらない。
@@ -657,9 +665,10 @@ class DocumentView:
                 }
                 for entity in item.entities
             ]
+            self._sketch_failures.pop((item.id, "entities"), None)
         except Exception as error:
-            self.warnings.append(
-                f"スケッチ {item.id} の図形を読めない: {type(error).__name__}: {error}"
+            self._warn_sketch_once(
+                item.id, "entities", f"スケッチ {item.id} の図形を読めない: {type(error).__name__}: {error}"
             )
             payload["entities"] = []
         # 版: 画面が描くもの(枠・展開した図形・領域 = 署名、点と辺の取っ手 = `entities`)が変わったときだけ上がる。
@@ -672,6 +681,13 @@ class DocumentView:
             self._sketch_revisions[item.id] = known
         payload["revision"] = known[1]
         return payload
+
+    def _warn_sketch_once(self, sketch_id: str, kind: str, message: str) -> None:
+        """同じ失敗(同じ文)は、直るまで1回だけ警告に積む。"""
+        if self._sketch_failures.get((sketch_id, kind)) == message:
+            return
+        self._sketch_failures[(sketch_id, kind)] = message
+        self.warnings.append(message)
 
     def _sketch_drawing(self, item, drawn: list, content: str) -> "_SketchFills":
         """描くもの(`content`)が同じ間に使い回す枠と領域の検出。失敗は描くものが変わるまで1回だけ知らせる。"""
@@ -927,7 +943,7 @@ class DocumentView:
         store.unwarned_failed -= set(untriangulated)
         if newly_failed:
             self.warnings.append(
-                f"三角形分割が取れなかった面({body.name}): {newly_failed}(画面に出ません)"
+                f"表示できない面があります({body.name} の面 {newly_failed}): 表示用の三角形分割が取れず、画面に出ません(表示だけが欠けます)"
             )
         unresolved = ((result.get("boundary") or {}).get("unresolved") or []) + store.unwarned_boundary
         store.unwarned_boundary = []
@@ -935,7 +951,7 @@ class DocumentView:
             # 境界折れ線の交差を再分割で解消できなかった面は分割していない(kernel_meshing)。
             described = [f"{entry['face']}:{','.join(sorted({i['kind'] for i in entry['issues']}))}" for entry in unresolved]
             self.warnings.append(
-                f"境界の交差を解消できなかった面({body.name}): {described}(画面に出ません)"
+                f"表示できない面があります({body.name} の面 {described}): 境界線の交差を解消できず、画面に出ません(表示だけが欠けます)"
             )
         return result
 

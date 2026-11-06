@@ -34,3 +34,28 @@ def test_replacing_the_document_forgets_the_zoom_of_the_previous_one() -> None:
     assert session.view._view_floored is False
     # 同じ値を送り直せば、捨てた後なので「変わった」として受け取る(画面の送り直しが届く)。
     assert session.set_view_resolution(0.002, SIDE) is True
+
+
+def test_a_broken_sketch_is_warned_about_once_not_on_every_delivery() -> None:
+    """落ちたら、読めないスケッチの警告が配信のたびに積み増される。"""
+    session = Session(DEVIATION)
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_circle(sketch_id, [0.0, 0.0], SIDE)
+    for name in list(session.document.parameters):
+        del session.document.parameters[name]  # 使用中の名前を消した壊れた文書
+
+    session.state_meta()
+    first = list(session.warnings)
+    assert first, "壊れたスケッチの警告が1件も出ない"
+    session.state_meta()
+    session.state_meta()
+    assert session.warnings == first
+
+
+def test_the_state_log_does_not_carry_the_brep_text() -> None:
+    """落ちたら、add_solid_body の B-rep 全文が状態配信のログに載って配られる。"""
+    from duocad import view
+
+    projected = view._log_args_for_state({"body_id": "b1", "name": "x", "brep": "A" * 1000})
+    assert "A" * 10 not in str(projected)
+    assert projected["body_id"] == "b1"
