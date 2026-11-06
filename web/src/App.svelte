@@ -912,6 +912,13 @@
     session.sendCommand(...[...request, op])
   }
 
+  /** `sendTracked` と同じだが、文書の世代が `generation` のままのときだけサーバに実行させる。 */
+  function sendTrackedFor(generation: number, ...request: CommandRequest): void {
+    const op = nextOp()
+    pendingOp = op
+    session.sendCommandFor(generation, ...[...request, op])
+  }
+
   /** 自分が出して待っている操作の応答なら待ちを解く(解いたら true)。 */
   function releasePending(clientOp: number | null): boolean {
     if (clientOp === null || clientOp !== pendingOp) return false
@@ -2839,8 +2846,11 @@
     key: JSON.stringify([connectionEpoch, model?.generation, mode]), sketchId,
   })}
   onImport={(verb, path, id) => {
-    if (verb === 'import_svg' && id !== null) sendTracked('import_svg', { path, sketch_id: id })
-    else if (verb === 'import_step') sendTracked('import_step', { path })
+    // `key` の照合は、まだ届いていない切り替え(別の画面・MCP が文書を替えた直後)を見られない。照合を通った今の世代を
+    // 付けて送り、サーバにも照合させる。`model` が無ければ -1(どの世代とも合わないので、サーバが断る)。
+    const generation = model?.generation ?? -1
+    if (verb === 'import_svg' && id !== null) sendTrackedFor(generation, 'import_svg', { path, sketch_id: id })
+    else if (verb === 'import_step') sendTrackedFor(generation, 'import_step', { path })
   }}
   bind:busy={dropUploading}
   bind:since={dropSince}

@@ -165,6 +165,7 @@ runSmoke('smoke-drop-import', { timeout: 60000, mcp: true }, async ({ browser, u
     WebSocket.prototype.send = function (data) {
       if (typeof data !== 'string' || !data.includes('import_step')) { original.call(this, data); return }
       WebSocket.prototype.send = original
+      seen.expectedGeneration = JSON.parse(data).expected_generation ?? null
       setTimeout(() => {
         seen.importSentAt = performance.now()
         original.call(this, data)
@@ -181,10 +182,28 @@ runSmoke('smoke-drop-import', { timeout: 60000, mcp: true }, async ({ browser, u
   assert.ok(waited.importSentAt !== null, '取り込みの送信を遅らせられていない')
   assert.ok(waited.shownAt !== null && waited.shownAt < waited.importSentAt,
     `待ちバーが送信の開始から数えていない: ${JSON.stringify(waited)}`)
+  assert.equal(waited.expectedGeneration, await page.evaluate(() => window.__duocad.state.generation),
+    '取り込みに、落とした文書の世代を付けて送っていない')
   await waitFrames(page, 4)
   await pressUndo(page)
   await wait(() => window.__duocad.parts.length === 1, '遅らせた取り込みが取り消せない')
   await waitFrames(page, 4)
+
+  // 文書の切り替えの配信が届く前に送った取り込みは、画面の照合では見えない。サーバが世代の違いで断り、画面は知らせて待ちを解く。
+  await closeToasts()
+  await page.evaluate(() => {
+    const original = WebSocket.prototype.send
+    WebSocket.prototype.send = function (data) {
+      if (typeof data !== 'string' || !data.includes('import_step')) { original.call(this, data); return }
+      WebSocket.prototype.send = original
+      const message = JSON.parse(data)
+      original.call(this, JSON.stringify({ ...message, expected_generation: message.expected_generation + 1 }))
+    }
+  })
+  await send([{ name: 'stale.step', step: true }])
+  await toast('文書が切り替わったので実行しなかった')
+  await wait(() => !document.querySelector('.wait-bar'), '断られた取り込みの待ち表示が消えない')
+  assert.equal(await page.evaluate(() => window.__duocad.parts.length), 1, '世代の違う取り込みが入った')
 
   const first = await mcp.callTool('sketch_create', { base_plane: 'XY' })
   await wait((id) => window.__duocad.activeSketch === id, 'スケッチが開かない', [first.sketch_id])
@@ -207,5 +226,7 @@ runSmoke('smoke-drop-import', { timeout: 60000, mcp: true }, async ({ browser, u
   await toast('取り込めなかった:')
   await wait((before) => window.__duocad.cameraPose().target.some((value, index) => Math.abs(value - before[index]) > 100),
     '取り込んだ図形へ視点が寄らない', [pose])
-  await assertNoAppErrors(page, consoleErrors)
+  await assertNoAppErrors(page, consoleErrors, {
+    allow: ['エラー[import_step] 操作を送ったあとに文書が切り替わったので実行しなかった'],
+  })
 })

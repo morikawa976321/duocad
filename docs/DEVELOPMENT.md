@@ -104,6 +104,10 @@ cd web; npm run dev                                 # 画面(5173)
 本文はファイルそのもの（multipart ではない。画面は `Content-Type: application/octet-stream` で送る）。
 `Content-Length` が必須で、chunked は受けない。成功は 200 と `{"path":"サーバ上の絶対パス"}`。
 このパスを既存の `import_step` / `import_svg` の `path` として渡す。SVG は既存どおり `sketch_id` も必要。
+画面は、この取り込みの WebSocket メッセージに `expected_generation`（落とした文書の世代。`state.generation`）を添える。
+サーバは実行の直前に今の世代と比べ、違えば実行せずに断る（契約は `duocad/net/ws.py` の冒頭）。本文の送信は
+WebSocket と別のスレッドで進むので、別の画面や MCP が文書を切り替えた直後は、画面が切り替えの状態配信を
+受け取る前に取り込みを送りうる。画面の側の照合だけでは、切り替わった後の文書へ入る。
 ここでは内容の STEP / SVG としての妥当性や取り込みは検査せず、既存 verb に任せる。MCP の道具は増やさない。
 
 守り方は `/api/update` の POST と同じで、Python が配るページの `Origin` だけ許し、無し・`null`・別オリジンは 403。
