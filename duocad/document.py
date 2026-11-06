@@ -143,7 +143,9 @@ class Document:
         # 型は duocad.sketch.Sketch(sketch.py が document.py を import する一方向を保つため注釈なし)。
         self.sketches: list = []
         # 名前つきの寸法値。書き換えは `duocad.parameters.set_parameter` を通す(直接代入は操作ログに載らない)。
-        self.parameters: dict = {}
+        from .parameter_table import ParameterTable
+
+        self.parameters: dict = ParameterTable()
         # 遅延import: 循環importを避ける(oplog / selection / optimize は document.py を読む側)。
         from .oplog import OpLog
 

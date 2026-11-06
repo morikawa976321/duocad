@@ -27,9 +27,7 @@ from typing import Any, Dict, Mapping, Optional
 from . import kernel_worker
 from .document import Document, unknown_id_message
 from .oplog import Operation, register_verb, verb_handler
-
-#: パラメータ名の接頭辞(Fusion360の d1/d2 と同じ流儀。改名機能は未実装)
-PARAMETER_PREFIX = "d"
+from .parameter_table import ParameterTable
 
 VERB_SET_PARAMETER = "set_parameter"
 
@@ -39,11 +37,11 @@ _REBUILDING = False
 
 def register_value(doc: Document, value: float) -> str:
     """数値を名前つきの値として登録し、その名前(`d1` `d2` …)を返す。"""
-    number = 1
-    while f"{PARAMETER_PREFIX}{number}" in doc.parameters:
-        number += 1
-    name = f"{PARAMETER_PREFIX}{number}"
-    doc.parameters[name] = float(value)
+    table = doc.parameters
+    if not isinstance(table, ParameterTable):
+        table = doc.parameters = ParameterTable(table)
+    name = table.first_free_name()
+    table[name] = float(value)
     return name
 
 
