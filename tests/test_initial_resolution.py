@@ -6,6 +6,7 @@ import math
 import pytest
 
 from duocad import resolution
+from duocad.mcp_server import DocumentTools
 from duocad.server import Session
 
 RADIUS = 300.0
@@ -42,6 +43,19 @@ def test_the_first_view_matching_the_document_roughness_does_not_remeasure(big_c
     session.set_view_resolution(DIAGONAL / resolution.COARSE_REFERENCE_PIXELS, DIAGONAL)
     assert session.view.body_recipe(body_id) == recipe
     assert session.view.body_revision(body_id) == revision
+
+
+def test_adding_a_far_body_before_the_view_arrives_reports_only_that_body_as_changed(big_cylinder) -> None:
+    """落ちたら、MCP の `changed_bodies` が粗さの変化まで拾っている(外接箱が広がると、触っていないボディも「変わった」と返る)。"""
+    session, first = big_cylinder
+    tools = DocumentTools(session)
+    before = session.view.body_recipe(first)
+    sketch_id = tools.call("sketch_create", {"base_plane": "XY"})["sketch_id"]
+    tools.call("add_circle", {"sketch_id": sketch_id, "center": [20000.0, 0.0], "diameter": 10.0})
+    tools.call("set_selection", {"refs": [{"sketch": sketch_id, "index": 1}]})
+    payload = tools.call("extrude", {"distance": 5.0, "mode": "new"})
+    assert session.view.body_recipe(first) != before, "外接箱が広がっても粗さが変わらない材料になっている"
+    assert payload["changed_bodies"] == [session.document.bodies[-1].id]
 
 
 def test_an_empty_document_keeps_the_base_roughness() -> None:

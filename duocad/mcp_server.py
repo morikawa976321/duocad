@@ -412,8 +412,10 @@ class DocumentTools:
         }
 
     def _revision_snapshot(self) -> dict[str, int]:
+        # 形の版(`shape_revision`)で比べる。`body_revision` は測る粗さも鍵に持ち、画面の見え方が届く前の粗さは
+        # 文書の外接対角で決まるので、離れた所へボディを足すだけで全ボディの版が上がる。
         return {
-            body.id: self.session.body_revision(body.id)
+            body.id: self.session.view.shape_revision(body.id)
             for body in self.session.document.bodies
         }
 
@@ -427,7 +429,7 @@ class DocumentTools:
         return meta
 
     def _verb_envelope(self, verb: str, seq: int, before: dict[str, int]) -> dict:
-        """ログに1行積むツールの成功封筒。`changed_bodies` は `Session.body_revision` の前後差。"""
+        """ログに1行積むツールの成功封筒。`changed_bodies` は形の版(`DocumentView.shape_revision`)の前後差。"""
         changed_bodies = self._changed_bodies(before)
         by_id = {body.id: body for body in self.session.document.bodies}
         return {
@@ -440,9 +442,9 @@ class DocumentTools:
         }
 
     def _changed_bodies(self, before: dict) -> list[str]:
-        """`Session.body_revision` の**前後差**で「変わったBody」を出す(消えたBodyは出さない)。
+        """形の版(`DocumentView.shape_revision`)の**前後差**で「変わったBody」を出す(消えたBodyは出さない)。
 
-        verbごとに数え上げると、verbが増えたときに静かに漏れる(契約2)。`body_revision` は
+        verbごとに数え上げると、verbが増えたときに静かに漏れる(契約2)。`shape_revision` は
         形状の同一性と可視性から版を導くので、押し出しでも `set_visible` でもこの1本で拾える。
         """
         after = self._revision_snapshot()
