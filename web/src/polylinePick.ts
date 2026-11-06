@@ -47,8 +47,13 @@ export interface ProjectedPoint {
   w: number
 }
 
-/** 奥行きの切り口を NDC の z=±1 からこの割合だけ内側に取る(切り口の点が `project` の境目で丸め誤差に落ちない)。 */
-const DEPTH_CLIP_MARGIN = 1e-6
+/**
+ * 奥行きの切り口を NDC の z=±1 からこの割合だけ内側に取る(切り口の点が `project` の境目で丸め誤差に落ちない)。
+ * 遠平面の側は小さく取る: 透視では NDC の z が遠平面の手前に詰まるので、近平面と同じ 1e-6 だと見えている奥の線分まで落とす
+ * (near 0.01・far 600000 で、奥行き 30000 の点の z は 1 − 6.3e-7)。1e-12 で落とすのは、far/near が 6e7 のとき奥行きの終わりの 0.003%。
+ */
+const NEAR_CLIP_MARGIN = 1e-6
+const FAR_CLIP_MARGIN = 1e-12
 
 export function createProjector(camera: THREE.Camera, width: number, height: number): ScreenProjector {
   const scratch = new THREE.Vector4()
@@ -88,9 +93,12 @@ export function createProjector(camera: THREE.Camera, width: number, height: num
       let t0 = 0
       let t1 = 1
       // 視錐台の奥行きの内側は -w <= z <= w。クリップ空間は世界座標の線形変換なので、線分の割合 t はそのまま使える。
-      for (const sign of [1, -1]) {
-        const da = clipA.w * (1 - DEPTH_CLIP_MARGIN) + sign * clipA.z
-        const db = clipB.w * (1 - DEPTH_CLIP_MARGIN) + sign * clipB.z
+      for (const [sign, margin] of [
+        [1, NEAR_CLIP_MARGIN],
+        [-1, FAR_CLIP_MARGIN],
+      ]) {
+        const da = clipA.w * (1 - margin) + sign * clipA.z
+        const db = clipB.w * (1 - margin) + sign * clipB.z
         if (da < 0 && db < 0) return false
         if (da < 0) t0 = Math.max(t0, da / (da - db))
         else if (db < 0) t1 = Math.min(t1, da / (da - db))

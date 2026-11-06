@@ -45,6 +45,17 @@ assert.equal(closestOnPolyline(100, 100, polyline([new THREE.Vector3(0, 0, -150)
 const farCrossing = closestOnPolyline(100, 100, polyline([new THREE.Vector3(0, 0, -50), new THREE.Vector3(0, 0, -500)]), projector)
 assert.ok(farCrossing !== null && farCrossing.point.z >= -100 - 1e-3, '遠平面をまたぐ線分の手前が指せない')
 
+// near と far の比が大きい視点(大きい文書で手前へ深く寄ったとき)の、見えている奥の線分: 遠平面の手前に詰まった z で落とさない。
+const deep = new THREE.PerspectiveCamera(30, 1, 0.01, 600000)
+deep.position.set(0, 0, 0)
+deep.lookAt(0, 0, -1)
+deep.updateMatrixWorld()
+const deepProjector = createProjector(deep, 800, 800)
+const deepHit = closestOnPolyline(400, 400, polyline([new THREE.Vector3(-1000, 0, -30000), new THREE.Vector3(1000, 0, -30000)]), deepProjector)
+assert.ok(deepHit !== null && deepHit.distSq < 1e-6, 'near と far の比が大きい視点で、見えている奥の線分が当たらない')
+const deepCrossing = closestOnPolyline(400, 400, polyline([new THREE.Vector3(0, 0, -300000), new THREE.Vector3(0, 0, -900000)]), deepProjector)
+assert.ok(deepCrossing !== null && deepCrossing.point.z >= -600000 - 1, 'near と far の比が大きい視点で、遠平面をまたぐ線分の手前が指せない')
+
 // 正投影でも同じ(near 手前の端)。
 const ortho = new THREE.OrthographicCamera(-100, 100, 100, -100, 1, 100)
 ortho.position.set(0, 0, 0)
