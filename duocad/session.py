@@ -1230,7 +1230,9 @@ class Session:
         人が名前を付ける口(ファイルパネルの名前欄。issue #5)。`name` が既に在れば拒否(上書きの口は持たない。`copy_document` と同じ)。
         無題で何も変えていない文書(ファイルがまだ無い)は、その名前で空の文書を書く。
         """
+        # `resolve()` は既にあるファイルの綴りに直すので、打った綴りで組み直す(大文字小文字だけの改名を残すため)。
         target = self.store.resolve_writable_name(name)
+        target = target.with_name(str(name))
         # 閉じている間に通すと、空の文書がその名前で書かれる(トップ画面のまま新規ファイルが増える)。
         self._require_open()
         if self._document_locked():
@@ -1238,7 +1240,7 @@ class Session:
             raise ValueError(
                 f"形状最適化の実行中は名前を変えられない({self.optimizing_name or '無題の文書'} の実行が終わるか中断してから)"
             )
-        if target.exists():
+        if target.exists() and not self.store.is_respelling(self._current_name, target):
             raise ValueError(f"{target.name} は既にある(別の名前にする)")
         if self._current_name is None:
             return dict(self.save_document(target.name), action="rename", previous=None)

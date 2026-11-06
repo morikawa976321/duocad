@@ -64,12 +64,24 @@ class DocumentStore:
 
     def rename_document_file(self, source: Path, target: Path, log: OpLog, created: float | None) -> None:
         """検査済みのパス間で改名する。元ファイルが外で消されていればログから作り直す。"""
+        respelling = self.is_respelling(source.name, target)
         if source.exists():
             os.replace(source, target)
         else:
             target.write_text(log.to_json(created=created), encoding="utf-8")
-        self.drop_thumbnail(target)
+        if not respelling:  # 綴りだけの改名では、移す前のサムネイルが target と同じファイル
+            self.drop_thumbnail(target)
         self.carry_thumbnail(source, target, move=True)
+
+    def is_respelling(self, current_name: Optional[str], target: Path) -> bool:
+        """`target` が編集中のファイル自身の別の綴り(大文字小文字だけの違い。大文字小文字を区別しないファイルシステムで同じファイルになる)か。"""
+        if current_name is None or current_name == target.name:
+            return False
+        source = self.models_dir / current_name
+        try:
+            return os.path.samefile(source, target)
+        except OSError:
+            return False
 
     def delete_document_file(self, target: Path) -> None:
         """検査済みの文書ファイルを消す。付随ファイルの後始末は呼び手が調整する。"""
