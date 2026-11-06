@@ -1893,7 +1893,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         params=(
             _SKETCH_ID,
-            Param("path", "string", "読み込むSVGファイルのパス"),
+            Param("path", "string", "読み込むSVGファイルのパス(相対ならサーバの起動フォルダ基準)"),
             # **UIには出さない**(`ws=False`)。倍率は単位の合わないSVGを直すための逃げ道で、
             # 普段は要らない —— 常に出すと「毎回1.0と打つ欄」が1つ増える。
             Param(
@@ -1965,7 +1965,7 @@ COMMANDS: tuple[Command, ...] = (
             "ソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる。"
             "何部品あっても1操作(ログ1行・undo1回)。"
         ),
-        params=(Param("path", "string", "読み込むSTEPファイルのパス"),),
+        params=(Param("path", "string", "読み込むSTEPファイルのパス(相対ならサーバの起動フォルダ基準)"),),
         session="import_step",
         note="**STEPの読み込みはこの1 verbだけ。** 読んだ形はその場で編集できる形で入る",
     ),
