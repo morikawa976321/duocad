@@ -783,7 +783,12 @@ def _numbers_in(value: Any) -> list[float]:
     """引数の値に入っている数(入れ子のリストも開く。真偽値は数に数えない)。"""
     if isinstance(value, (list, tuple)):
         return [number for item in value for number in _numbers_in(item)]
-    return [float(value)] if isinstance(value, (int, float)) and not isinstance(value, bool) else []
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return []
+    try:
+        return [float(value)]
+    except OverflowError:  # JSON の整数は float に収まらないことがある。断るのは verb の引数検査に任せる
+        return []
 
 
 def _names_a_filled_value(name: str, values: Sequence[float]) -> bool:

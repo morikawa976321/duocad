@@ -588,6 +588,24 @@ def test_a_name_spelled_like_a_quantity_does_not_pass_a_value_nobody_gave(box_se
     assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        ("fillet", {"radius": 10**400}),
+        ("begin_command", {"verb": "fillet", "args": {"radius": 10**400}}),
+        ("fillet", {"radius": [3, 10**400]}),
+    ],
+    ids=["verb", "staged", "nested"],
+)
+def test_a_value_too_large_for_a_float_is_answered_not_raised(box_session: Session, call: tuple[str, dict]):
+    """落ちたら、モデルが float に収まらない整数を寸法に入れたとき、ガードが例外を漏らして AI の応答が途中で終わる。"""
+    provider = RecordedProvider([tool_use(*call, "c0"), spoke("やめた")])
+
+    run = AgentLoop(DocumentTools(box_session), provider).run("箱の辺をR3で丸めて")
+
+    assert envelope_code(run.tool_calls[0].result) == "invalid_argument"
+
+
 @pytest.mark.parametrize("prompt", ["半径を倍にして", "穴を半分の大きさにして"])
 def test_a_ratio_is_a_quantity_the_person_gave(prompt: str):
     """落ちたら、比率で頼んだ依頼(「倍に」「半分に」)が量なしと読まれ、聞き返しで1往復無駄になる。"""
