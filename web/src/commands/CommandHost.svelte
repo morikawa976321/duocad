@@ -790,6 +790,24 @@
     return true
   }
 
+  /**
+   * 打ちかけの点があれば、最後に打った1点を戻す(Backspace と、`App.svelte` の Ctrl+Z)。戻したときだけ `true`。
+   * 点は宣言の順に埋まる(`addPoint`)ので、最後の点は宣言でいちばん後ろの打ってある点。コマンドは開いたまま。
+   */
+  export function undoLastPoint(): boolean {
+    if (command === null || !commandActive || committed) return false
+    const last = [...command.args].reverse().find((spec) => spec.kind === 'point' && points[spec.name] !== undefined)
+    if (last === undefined) return false
+    const { [last.name]: _removed, ...rest } = points
+    points = rest
+    return true
+  }
+
+  /** このコマンドの引数の欄で、文字が入っていないもの。Ctrl+Z・Backspace を欄でなくアプリへ回してよい(奪っても失う文字が無い)。 */
+  export function isEmptyArgField(target: EventTarget | null): boolean {
+    return target instanceof HTMLInputElement && target.value === '' && overlayEl?.contains(target) === true
+  }
+
   /** スケッチモードで待っている点があるか(App.svelte がクリックの行き先を決める)。 */
   export function wantsPoint(): boolean {
     return missing?.kind === 'point'
@@ -976,6 +994,16 @@
       return
     }
     if (event.key === 'Delete' || event.key === 'Backspace') {
+      // 打ちかけの点があるとき、Backspace は最後の1点を戻す。欄にフォーカスがあるときは、その欄が空のときだけ(文字があれば欄の1文字削除)。
+      if (
+        event.key === 'Backspace' &&
+        !(event.repeat || event.ctrlKey || event.metaKey || event.altKey) &&
+        (!isTextEntry(focused) || isEmptyArgField(focused)) &&
+        undoLastPoint()
+      ) {
+        event.preventDefault()
+        return
+      }
       if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || isTextEntry(focused)) return
       if (pressDelete()) event.preventDefault()
       return

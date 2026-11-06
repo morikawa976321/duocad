@@ -12,12 +12,13 @@
  *   4. スケッチ A で選んだ図形は、B へ直接移った時点で選択から外れる(外れないと、B で動かした
  *      つもりで A の図形が動く)
  *   5. 長方形の幅と高さを両方、負の値で打つと、マウスが反対側にあっても負の側へ伸びる
+ *   6. 打ちかけの点は、空の数値欄にフォーカスがあっても Backspace と Ctrl+Z で1点ずつ戻り、文書は変わらない
  *
  * 落ちる先の規則そのもの(円の半径ちょうど・傾いた辺の上)は `tests/eval_sketch_snap.mjs` が持つ。
  * ここが見るのは、本物のクリックと幽霊がその規則を通っていること。
  */
 import { fail, ok } from './args.mjs'
-import { assertNoAppErrors, openApp, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
+import { assertNoAppErrors, openApp, sleep, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
 import { runSmoke } from './harness.mjs'
 import { clickEntityHandle, sketchPointAt } from './pick.mjs'
 
@@ -163,6 +164,40 @@ runSmoke('smoke-sketch', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
       fail(`負の幅と高さが逆向きに伸びていない: ${JSON.stringify(rect)}`)
     }
     ok('[5] 幅と高さを両方負で打つと、マウスが反対側にあっても負の側へ伸びる')
+  }
+
+  // ================================================================ 6. 打ちかけの点は Backspace と Ctrl+Z で1点ずつ戻る
+  // 打ち間違えた点を直す手が Esc で全部捨てる以外に無いと、やり直しの手数が大きい。数値欄にフォーカスがあっても、欄が空なら
+  // キーは欄でなく画面のものになる(コマンドは開いたまま。Ctrl+Z は文書を戻さない)。
+  {
+    const sharedArgCount = () => page.evaluate(() => Object.keys(window.__duocad.state.command?.args ?? {}).length)
+    const log = () => page.evaluate(() => window.__duocad.state.log.length)
+    const before = { entities: (await entities()).length, log: await log() }
+    await page.click('#sketch-rectangle')
+    for (const key of ['Backspace', 'Control+KeyZ']) {
+      await withoutBrowserPanel(page, async () => {
+        const corner = await sketchPointAt(page, 45, 40, { settle: true })
+        if (!corner) fail('長方形の角が画面上で指せない')
+        await page.mouse.click(corner.x, corner.y)
+      })
+      await waitFor(() => Object.keys(window.__duocad.state.command?.args ?? {}).length > 0, '角を打っても共有の引数に載らない')
+      if (key === 'Backspace') await page.keyboard.press('Backspace')
+      else {
+        await page.keyboard.down('Control')
+        await page.keyboard.press('KeyZ')
+        await page.keyboard.up('Control')
+      }
+      await waitFor(
+        () => Object.keys(window.__duocad.state.command?.args ?? {}).length === 0 && window.__duocad.state.command?.verb === 'add_rectangle',
+        `${key} で打った点が戻らない(長方形のコマンドが開いたままのはず)`,
+      )
+    }
+    await sleep(1500) // 文書の取り消しが誤って送られていれば、往復のあとで log が減る
+    if ((await log()) !== before.log || (await entities()).length !== before.entities || (await sharedArgCount()) !== 0) {
+      fail('点を戻すキーが文書を変えた')
+    }
+    await page.keyboard.press('Escape')
+    ok('[6] 打ちかけの点は、空の数値欄にフォーカスがあっても Backspace と Ctrl+Z で1点戻り、文書は変わらない')
   }
 
   await assertNoAppErrors(page, consoleErrors)
