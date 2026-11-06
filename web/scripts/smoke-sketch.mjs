@@ -14,6 +14,7 @@
  *   5. 長方形の幅と高さを両方、負の値で打つと、マウスが反対側にあっても負の側へ伸びる
  *   6. 打ちかけの点は、空の数値欄にフォーカスがあっても Backspace と Ctrl+Z で1点ずつ戻り、文書は変わらない
  *   7. 引数の行が開いても、ツールバーとビューポートの高さは変わらない
+ *   8. 平面を真横から見ていても、既存の点は始点・終点になり、何も無い所と線の途中は断られる
  *
  * 落ちる先の規則そのもの(円の半径ちょうど・傾いた辺の上)は `tests/eval_sketch_snap.mjs` が持つ。
  * ここが見るのは、本物のクリックと幽霊がその規則を通っていること。
@@ -22,6 +23,46 @@ import { fail, ok } from './args.mjs'
 import { assertNoAppErrors, openApp, sleep, waitFrames, waitOrFail, withoutBrowserPanel } from './browser.mjs'
 import { runSmoke } from './harness.mjs'
 import { clickEntityHandle, sketchPointAt } from './pick.mjs'
+
+/**
+ * 視点を、XY 平面を真横から見る向き(視線と平面の角が `MIN_PLANE_SIGHT_DEG` 未満)へ、右ドラッグの回転で倒す。
+ * 回転量は画面の高さに比例する(OrbitControls)。減衰で止まるまで待ってから姿勢を読み、残りを打ち直す。
+ */
+async function lookAlongPlane(page) {
+  const pose = () => page.evaluate(() => window.__duocad.cameraPose())
+  const elevationDeg = async () => {
+    const { position, target } = await pose()
+    const d = position.map((value, i) => value - target[i])
+    return (Math.asin(Math.abs(d[2]) / Math.hypot(...d)) * 180) / Math.PI
+  }
+  const rect = await page.evaluate(() => {
+    const r = document.querySelector('.viewport').getBoundingClientRect()
+    return { x: r.left, y: r.top, w: r.width, h: r.height }
+  })
+  let sign = -1
+  for (let i = 0; i < 8; i += 1) {
+    const before = await elevationDeg()
+    if (before < 0.5) return
+    const dy = Math.round(((before * Math.PI) / 180 / (2 * Math.PI)) * rect.h) * sign
+    if (dy !== 0) {
+      const x = rect.x + rect.w / 2
+      const y = rect.y + rect.h / 2
+      await page.mouse.move(x, y)
+      await page.mouse.down({ button: 'right' })
+      await page.mouse.move(x, y + dy, { steps: 6 })
+      await page.mouse.up({ button: 'right' })
+    }
+    let last = -1
+    for (let wait = 0; wait < 40; wait += 1) {
+      await sleep(100)
+      const now = await elevationDeg()
+      if (Math.abs(now - last) < 1e-4) break
+      last = now
+    }
+    if ((await elevationDeg()) > before) sign = -sign
+  }
+  fail(`視点を平面の真横へ倒せない(平面からの高さ角 ${await elevationDeg()} 度)`)
+}
 
 runSmoke('smoke-sketch', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
   // 長方形(x: 0-40)・円(x: 50-70)・傾いた長方形(x: 79-105)。点を置く空き地は円と傾いた長方形の
@@ -222,6 +263,58 @@ runSmoke('smoke-sketch', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
     }
     await page.keyboard.press('Escape')
     ok('[7] 引数の行が開いても、ツールバーとビューポートの高さは変わらない')
+  }
+
+  // ================================================================ 8. 平面を真横から見ていても、既存の点は点として置ける
+  // 視線が平面に 2 度未満の浅い角度だと点を置くクリックは断られる(`planeSight.ts`)が、座標が視線に依らず決まる当たり
+  // (図形の端点・円の中心)まで断ると、線を既存の端点から引けず、代わりにその図形が選択される。
+  {
+    const sketchC = (await mcp.callTool('sketch_create', { base_plane: 'XY' })).sketch_id
+    await mcp.callTool('add_circle', { sketch_id: sketchC, center: [10.5, 7.3], diameter: 6 })
+    await mcp.callTool('add_line', { sketch_id: sketchC, p0: [-40, -10], p1: [-10, -10] })
+    await waitFor((id) => window.__duocad.activeSketch === id && window.__duocad.sketch?.entities.length === 2, '作ったスケッチへ入れない', [sketchC])
+    await waitFrames(page, 4)
+    await lookAlongPlane(page)
+    const args = () => page.evaluate(() => Object.keys(window.__duocad.state.command?.args ?? {}).length)
+    const selected = () => page.evaluate(() => window.__duocad.selection?.count ?? 0)
+    const refusals = () =>
+      page.evaluate(() => [...document.querySelectorAll('#toasts .toast-info-text')].filter((el) => el.textContent.includes('浅い角度')).length)
+    const press = (u, v, what) =>
+      withoutBrowserPanel(page, async () => {
+        const at = await sketchPointAt(page, u, v, { settle: true })
+        if (!at) fail(`${what}が画面上で指せない`)
+        await page.mouse.click(at.x, at.y)
+        await waitFrames(page, 4)
+      })
+    await page.click('#sketch-line')
+    await withoutBrowserPanel(page, async () => {
+      const at = await sketchPointAt(page, 10.5, 7.3, { settle: true })
+      if (!at) fail('円の中心が画面上で指せない')
+      await page.mouse.move(at.x, at.y)
+      await waitFrames(page, 4)
+    })
+    const ghost = await page.evaluate(() => (window.__duocad.hoverPoint ? [...window.__duocad.hoverPoint] : null))
+    if (!ghost || ghost[0] !== 10.5 || ghost[1] !== 7.3) fail(`浅い角度でも既存の点の上の幽霊は出るはず: ${JSON.stringify(ghost)}`)
+    await press(10.5, 7.3, '円の中心')
+    await waitFor(() => Object.keys(window.__duocad.state.command?.args ?? {}).length > 0, '浅い角度で既存の点を押しても始点にならない')
+    if ((await selected()) !== 0 || (await refusals()) !== 0) fail('既存の点を押したのに、点にならず選択に流れた(または断られた)')
+    // 何も無い所と、線の途中は断る(視線で決まる座標なので)。選択にも流さない。
+    await press(30, 0, '何も無い所')
+    await waitFor(
+      () => [...document.querySelectorAll('#toasts .toast-info-text')].some((el) => el.textContent.includes('浅い角度')),
+      '何も無い所を押しても知らせが出ない',
+    )
+    await press(-35, -10, '線の途中')
+    if ((await args()) !== 1 || (await selected()) !== 0) fail('断られるはずの所で点が入った、または選択に流れた')
+    const before = (await entities()).length
+    await press(-40, -10, '線の端点')
+    await waitFor((count) => window.__duocad.sketch?.entities.length === count, '既存の端点を終点にして線分が置けない', [before + 1])
+    const made = await lastLine()
+    const corner = (await entities()).find((item) => item.kind === 'line' && item.params.x0 === -40).params
+    // 終点はサーバが 3D を経由して書き戻すので、浮動小数の端数(実測: 4e-15)は許す。
+    const near = (a, b) => Math.abs(a - b) < 1e-9
+    if (made.x0 !== 10.5 || made.y0 !== 7.3 || !near(made.x1, corner.x0) || !near(made.y1, corner.y0)) fail(`端点に一致した線分になっていない: ${JSON.stringify(made)}`)
+    ok('[8] 平面を真横から見ていても、既存の点は始点・終点になり、何も無い所と線の途中は断られる')
   }
 
   await assertNoAppErrors(page, consoleErrors)

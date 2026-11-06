@@ -17,7 +17,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
 import {
-  entityMidpoints, entityVisualCorners,
+  entityHandles, entityMidpoints, entityVisualCorners,
   snapSketchPoint, snapToDatumAxis,
 } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
@@ -1382,6 +1382,28 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
+   * 視線が平面に浅すぎて生の (u,v) が決まらない(`planeHitAt` が 'shallow')ときに、それでも点として渡せる当たりの座標。
+   * 座標が視線に依らず決まるもの = 図形の名前つきの点・角・交点・中点(`snapAt`)と原点。線の途中と軸は視線で決まるので null。
+   * クリック(`resolveHit`)とホバー(`updateSketchPointer`)が同じ答えを使う。
+   */
+  function sightFreePoint(
+    entity: SketchEntityHit | null,
+    datum: { name: DatumName; at: readonly [number, number] } | null,
+  ): { u: number; v: number } | null {
+    const target = activeSketchId === null ? undefined : sketchLayer.get(activeSketchId)
+    if (!target) return null
+    if (entity === null) return datum?.name === 'origin' ? { u: datum.at[0], v: datum.at[1] } : null
+    if (entity.snapAt === undefined) {
+      // 名前つきの点の座標は図形から引く。図形が見つからないと `snappedSketchUv` は格子に丸めた (0, 0) を返してしまう。
+      const handle = target.handles.find((item) => item.entityId === entity.entityId)
+      if (entity.point === null || handle === undefined) return null
+      if (!entityHandles(handle.kind, handle.params).some((item) => item.key === entity.point)) return null
+    }
+    const [u, v] = snappedSketchUv(0, 0, entity, target)
+    return { u, v }
+  }
+
+  /**
    * スケッチモードで当たった原点パーツ(原点と軸だけ。平面は線を引く邪魔になる)と、吸い付く先のスケッチ座標。
    * 原点ギズモを隠していれば当たらない。点を先に見る(軸は原点の近くまで延びている)。原点はスケッチ平面へ垂直に落とし、
    * 軸は平面へ落とした直線へカーソルを射影し、原点からの距離を 1mm へ丸める(`snapToDatumAxis`。平面に垂直な軸は落とすと
@@ -2172,13 +2194,15 @@ export function createViewport(container: HTMLElement): Viewport {
       // 描くコマンドが起動している間はそちらが優先(判断は `App.svelte`)。
       const datum = sketchDatumAt(offsetX, offsetY, plane)
       const snap = sketchSnapAt(offsetX, offsetY)
+      const fixed = planeHit === 'shallow' ? sightFreePoint(snap.entity, datum) : null
+      const point = plane ?? fixed
       return {
         ...nothing,
         region,
         sketchEntity: snap.entity,
         sketchGuide: snap.guide,
-        point: plane === null ? null : { sketchId: activeSketchId, ...plane },
-        pointRefused: planeHit === 'shallow' ? 'shallow' : null,
+        point: point === null ? null : { sketchId: activeSketchId, ...point },
+        pointRefused: planeHit === 'shallow' && fixed === null ? 'shallow' : null,
         datum: datum?.name ?? null,
         datumAt: datum?.at ?? null,
       }
@@ -2334,10 +2358,9 @@ export function createViewport(container: HTMLElement): Viewport {
         const snap = sketchSnapAt(offsetX, offsetY)
         sketchHit = snap.entity
         guideHit = snap.guide
-        datumAt =
-          sketchHit === null && guideHit === null
-            ? (sketchDatumAt(offsetX, offsetY, planePoint)?.at ?? null)
-            : null
+        const datum = sketchHit === null && guideHit === null ? sketchDatumAt(offsetX, offsetY, planePoint) : null
+        datumAt = datum?.at ?? null
+        if (planePoint === null && planeHitAt(offsetX, offsetY) === 'shallow') planePoint = sightFreePoint(sketchHit, datum)
         planeMoveListener(planePoint, sketchHit, datumAt, guideHit)
         grid.followCursor(planePoint)
       }

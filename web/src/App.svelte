@@ -2345,7 +2345,7 @@
       if (event.hit !== null) editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
       return
     }
-    if (event.pointRefused === 'shallow' && event.sketchEntity === null && host?.wantsPoint()) {
+    if (event.pointRefused === 'shallow' && host?.wantsPoint()) {
       inform('平面を浅い角度で見ているので点を置けない。視点を平面に向けてから置く')
       return
     }
