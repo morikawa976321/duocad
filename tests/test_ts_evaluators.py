@@ -17,6 +17,7 @@ EVALUATORS = [
     "eval_ai_tool_line.mjs",
     "eval_arc_sweep.mjs",
     "eval_choice_sync.mjs",
+    "eval_degenerate_edge_pick.mjs",
     "eval_edge_segments.mjs",
     "eval_expression.mjs",
     "eval_face_chains.mjs",
