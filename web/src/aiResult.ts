@@ -77,3 +77,22 @@ export function inputBlockedReason(
   if (!aiStatusKnown) return '接続を待っている'
   return keyMissing ? 'APIキーが未設定(ヘッダーの「設定」から置ける)' : null
 }
+
+/**
+ * 往復の使用量(`ai_result.usage`)を1行にする。Claude は課金の単位のトークン数で、`input_tokens` はキャッシュの読み・書きを含まない別枠なので
+ * 足し算で書く。llama-server は `timings` を往復ぶん足した値(時間)。どちらも返さないサーバでは空文字(行ごと出さない)。
+ */
+export function usageLine(usage: Record<string, number> | undefined): string {
+  if (usage?.input_tokens !== undefined && usage.output_tokens !== undefined) {
+    return (
+      `入力(新規) ${usage.input_tokens} + キャッシュ読み ${usage.cache_read_input_tokens ?? 0}` +
+      ` + キャッシュ書き ${usage.cache_creation_input_tokens ?? 0} ／ 出力 ${usage.output_tokens} トークン`
+    )
+  }
+  if (usage?.prompt_n === undefined || usage.predicted_n === undefined) return ''
+  const seconds = (ms: number | undefined): string => ((ms ?? 0) / 1000).toFixed(1)
+  return (
+    `読み ${usage.prompt_n}(再利用 ${usage.cache_n ?? 0})トークン ${seconds(usage.prompt_ms)}秒` +
+    ` ／ 書き ${usage.predicted_n} トークン ${seconds(usage.predicted_ms)}秒`
+  )
+}

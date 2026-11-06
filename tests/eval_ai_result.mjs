@@ -9,7 +9,9 @@ import assert from 'node:assert/strict'
 
 import './ts_resolve_hook.mjs'
 
-const { hiddenResultNotice, inputBlockedReason, resultDetail, resultLine, toolFailureReason } = await import('../web/src/aiResult.ts')
+const { hiddenResultNotice, inputBlockedReason, resultDetail, resultLine, toolFailureReason, usageLine } = await import(
+  '../web/src/aiResult.ts'
+)
 
 // 接続の失敗: 固定文に理由(接続できなかったURLとOSのエラー)を添える。
 const providerError = { status: 'provider_error', text: '', detail: 'HTTP 401: invalid x-api-key' }
@@ -69,5 +71,15 @@ for (const connection of ['connecting', 'closed']) {
 assert.ok(inputBlockedReason('open', true, true)?.includes('APIキーが未設定'), '鍵が無いのに送れてしまう')
 assert.equal(inputBlockedReason('open', true, false), null)
 assert.equal(inputBlockedReason('closed', true, true), 'サーバに繋がっていない(繋ぎ直している)')
+
+// 使用量: Claude の input_tokens はキャッシュと別枠なので、足し算と読める形で出す。
+assert.equal(
+  usageLine({ input_tokens: 12, cache_read_input_tokens: 3400, cache_creation_input_tokens: 56, output_tokens: 78 }),
+  '入力(新規) 12 + キャッシュ読み 3400 + キャッシュ書き 56 ／ 出力 78 トークン',
+)
+assert.equal(usageLine({ input_tokens: 1, output_tokens: 2 }), '入力(新規) 1 + キャッシュ読み 0 + キャッシュ書き 0 ／ 出力 2 トークン')
+assert.equal(usageLine({ prompt_n: 10, cache_n: 4, prompt_ms: 1500, predicted_n: 5, predicted_ms: 500 }), '読み 10(再利用 4)トークン 1.5秒 ／ 書き 5 トークン 0.5秒')
+assert.equal(usageLine({}), '')
+assert.equal(usageLine(undefined), '')
 
 console.log('aiResult.ts: 全ての想定を満たした')

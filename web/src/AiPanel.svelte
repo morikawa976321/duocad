@@ -12,7 +12,7 @@
    * `BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ。畳んでも `transcript` の正は親にあるので会話は壊れない。
    * 既定は開いている(再読込をまたいで保持しない)。「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
-  import { inputBlockedReason, resultDetail, resultLine, toolFailureReason } from './aiResult'
+  import { inputBlockedReason, resultDetail, resultLine, toolFailureReason, usageLine } from './aiResult'
   import { isImeKey } from './keys'
   import type { AiProviderKind, AiStatus, AiThinking, AiTranscriptEntry, ConnectionStatus } from './session'
 
@@ -127,21 +127,6 @@
     return `${call.call.name}${args ? ` ${args}` : ''}`
   }
 
-  /** llama-server の `timings` を往復ぶん足した値。Claudeは時間ではなくトークン数(課金の単位)を出す。どちらも返さないサーバでは空文字(行ごと出さない)。 */
-  function usageLine(usage: Record<string, number> | undefined): string {
-    if (usage?.input_tokens !== undefined && usage.output_tokens !== undefined) {
-      return (
-        `入力 ${usage.input_tokens}(キャッシュ読み ${usage.cache_read_input_tokens ?? 0}` +
-        `・書き ${usage.cache_creation_input_tokens ?? 0})／ 出力 ${usage.output_tokens} トークン`
-      )
-    }
-    if (usage?.prompt_n === undefined || usage.predicted_n === undefined) return ''
-    const seconds = (ms: number | undefined): string => ((ms ?? 0) / 1000).toFixed(1)
-    return (
-      `読み ${usage.prompt_n}(再利用 ${usage.cache_n ?? 0})トークン ${seconds(usage.prompt_ms)}秒` +
-      ` ／ 書き ${usage.predicted_n} トークン ${seconds(usage.predicted_ms)}秒`
-    )
-  }
 </script>
 
 <section class="ai-panel" class:collapsed={!open}>
