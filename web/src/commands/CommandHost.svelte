@@ -495,7 +495,9 @@
   let committed = false
 
   /** 確定した verb がサーバで失敗した・送れなかったときに `App.svelte` が呼ぶ。打った値は残っているので、打ち直せるようにするだけ。 */
-  export function commitFailed(): void {
+  export function commitFailed(sendOnly = false): void {
+    // `sendOnly`: 繋がっていなくて送れなかっただけの失敗。確定を送っていなければ(切断中のプレビューなど)入力欄を動かさない。
+    if (sendOnly && !committed) return
     committed = false
     commitOnEntry = null
     focusFirstNumber()
