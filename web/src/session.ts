@@ -1547,7 +1547,7 @@ export function createSession(hooks: SessionHooks): Session {
       if (waits.size > 0) {
         waits.clear()
         reportWaits()
-        if (!disposed) hooks.onError('応答を待っている間にサーバとの接続が切れた(自動で繋ぎ直しを試みている)', 'socket')
+        if (!disposed) hooks.onError('応答を待っている間にサーバとの接続が切れた(自動で繋ぎ直しを試みている)。直前の操作が反映されたかは分からない。繋ぎ直した後の画面を確かめてから、やり直すこと', 'socket')
       }
       if (disposed) return
       if (!opened) {
