@@ -150,13 +150,10 @@ def _rotation_args(
 
 
 def _translation_args(dx: Any, dy: Any, dz: Any) -> dict:
-    """並進の引数を検査して、ログに載せる数値 `{dx, dy, dz}` にする。"""
-    if dx is None or dy is None or dz is None:
-        raise ValueError(
-            f"move_body(mode='translate') needs dx, dy, dz "
-            f"(got dx={dx!r}, dy={dy!r}, dz={dz!r})"
-        )
-    delta = (float(dx), float(dy), float(dz))
+    """並進の引数を検査して、ログに載せる数値 `{dx, dy, dz}` にする。省いた軸は 0。"""
+    if dx is None and dy is None and dz is None:
+        raise ValueError("move_body(mode='translate') needs at least one of dx, dy, dz (省いた軸は 0 として動かす)")
+    delta = tuple(0.0 if value is None else float(value) for value in (dx, dy, dz))
     if not all(math.isfinite(value) for value in delta):
         raise ValueError(f"dx/dy/dz must be finite numbers, got {delta!r}")
     if delta == (0.0, 0.0, 0.0):
@@ -184,7 +181,7 @@ def move_body(
 ) -> Operation:
     """ボディを動かす(`copy=True` なら複製する)。
 
-    - `mode="translate"`(既定) … (dx, dy, dz)[mm] だけ平行移動する。3つとも0・非有限値は ValueError。
+    - `mode="translate"`(既定) … (dx, dy, dz)[mm] だけ平行移動する。省いた軸は 0。3つとも省く・3つとも0・非有限値は ValueError。
     - `mode="rotate"` … 軸まわりに `angle` 度だけ回す(軸と中心の決め方は `_rotation_args`)。
       360の倍数は ValueError。
 
