@@ -21,7 +21,9 @@ export function measureLabel(between: MeasureBetween): string {
 }
 
 export function measureReadout(between: MeasureBetween): string {
-  const pair = PAIR_NAMES[between.kind] ?? between.kind
+  // 直線・平面は有限の辺・面ではなく、無限に延ばして測る(`duocad/measure.py`)。
+  const extended = between.kind.includes('line') || between.kind.includes('plane')
+  const pair = (PAIR_NAMES[between.kind] ?? between.kind) + (extended ? '(無限に延長)' : '')
   if (between.distance !== null) {
     const delta =
       between.delta !== null && between.delta.length === 3

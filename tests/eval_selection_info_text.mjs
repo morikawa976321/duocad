@@ -29,3 +29,9 @@ assert.match(
   measureReadout({ kind: 'point-point', distance: 5, angle_deg: null, delta: [3, 4, 0] }),
   /Δx 3\.000 mm {2}Δy 4\.000 mm {2}Δz 0\.000 mm/,
 )
+
+assert.doesNotMatch(measureReadout({ kind: 'point-point', distance: 5, angle_deg: null, delta: [3, 4, 0] }), /無限/)
+for (const kind of ['point-line', 'point-plane', 'line-line', 'line-plane', 'plane-plane']) {
+  assert.match(measureReadout({ kind, distance: 1, angle_deg: null, delta: null }), /\(無限に延長\): 距離/, kind)
+}
+assert.match(measureReadout({ kind: 'line-line', distance: null, angle_deg: 30, delta: null }), /^直線と直線\(無限に延長\): 角度 30\.000°/)
