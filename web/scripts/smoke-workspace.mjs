@@ -256,12 +256,13 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     '1本目の円柱の面が選ばれない',
     [cylinders[0]],
   )
-  // 返事を待たずに押す: 実マウスでは往復の間に応答が戻りうるので、同じ JS のタスクの中で押下(と、続けてキー、ボタン)を送る。
-  // ボタンはキーの後始末(コマンドの終わりの通知。マイクロタスクで走る)を待ってから押す。応答はタスクで届くので、その前に割り込まない。
-  const pressInOneTask = (targets, key = null, button = null) =>
+  // 返事を待たずに押す: 実マウスでは往復の間に応答が戻りうるので、同じ JS のタスクの中で押下を送る。
+  // `key` は押下に続けて送るキー、`then` はキーの後に押すボタン。`then` はキーの後始末(コマンドの終わりの通知。
+  // マイクロタスクで走る)を待ってから押す。応答はタスクで届くので、その前に割り込まない。
+  const pressInOneTask = (targets, { key = null, then = null } = {}) =>
     withoutBrowserPanel(page, () =>
       page.evaluate(
-        async ({ targets, key, button }) => {
+        async ({ targets, key, then }) => {
           const canvas = document.querySelector('.viewport canvas')
           const rect = canvas.getBoundingClientRect()
           for (const [bodyId, faceIndex] of targets) {
@@ -287,12 +288,12 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
             const init = plain ? { key, code: key } : key
             target.dispatchEvent(new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true }))
           }
-          if (button !== null) {
+          if (then !== null) {
             for (let hop = 0; hop < 8; hop += 1) await Promise.resolve()
-            document.querySelector(button).click()
+            document.querySelector(then).click()
           }
         },
-        { targets, key, button },
+        { targets, key, then },
       ),
     )
   const laterTwo = [
@@ -319,7 +320,7 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await mcp.callTool('begin_command', { verb: 'thread' })
   await waitFor(() => document.querySelector('.command-host')?.dataset.command === 'thread', '2回目の begin_command(thread) が画面に起動しない')
   await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, 'ねじを畳んだ後の選択が空にならない')
-  await pressInOneTask(laterTwo, 'Escape')
+  await pressInOneTask(laterTwo, { key: 'Escape' })
   await waitFor(() => window.__duocad.command === null, '押した直後の Esc でねじが畳まれない')
   await sleep(500)
   const leftover = await page.evaluate(() => window.__duocad.selection?.items.map((item) => item.body) ?? [])
@@ -337,7 +338,7 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await mcp.callTool('begin_command', { verb: 'thread' })
   await waitFor(() => document.querySelector('.command-host')?.dataset.command === 'thread', '3回目の begin_command(thread) が画面に起動しない')
   await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '3回目のねじの起動時に選択が空でない')
-  await pressInOneTask(laterTwo, { key: 'z', code: 'KeyZ', ctrlKey: true })
+  await pressInOneTask(laterTwo, { key: { key: 'z', code: 'KeyZ', ctrlKey: true } })
   await waitFor(
     (id) => (window.__duocad.parts ?? []).find((part) => part.body_id === id)?.name !== 'undo-me',
     '押した直後の Ctrl+Z で名前の変更が取り消されない',
@@ -365,7 +366,7 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
   await page.evaluate(() => document.getElementById('measure').click())
   await waitFor(measuring, '測定が起動しない')
   await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '測定の起動時に選択が空でない')
-  await pressInOneTask(flatFaces, 'Escape', '#measure')
+  await pressInOneTask(flatFaces, { key: 'Escape', then: '#measure' })
   await sleep(500)
   const restarted = await page.evaluate(() => ({
     command: document.querySelector('.command-host')?.dataset.command ?? null,

@@ -42,3 +42,16 @@ export function expectedItems(delivered: SelectionRef[], inFlight: Iterable<Sele
   for (const edit of inFlight) if (edit !== null) items = edit(items)
   return items
 }
+
+/** `from` を `to` にする差分(`modify_selection` へ渡す形)。 */
+export function selectionDiff(
+  from: readonly SelectionRef[],
+  to: readonly SelectionRef[],
+): { add: SelectionRef[]; remove: SelectionRef[] } {
+  const fromKeys = new Set(from.map(refKey))
+  const toKeys = new Set(to.map(refKey))
+  return {
+    add: to.filter((ref) => !fromKeys.has(refKey(ref))),
+    remove: from.filter((ref) => !toKeys.has(refKey(ref))),
+  }
+}
