@@ -43,6 +43,8 @@ import { POLE_Z, upForDirection } from './viewCube'
 import { createOptimizeAnnotations } from './optimizeAnnotations'
 import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
+import { boxOfSketchEntities, keptDirectionOffset } from './viewFraming'
+import { sightTooShallow } from './planeSight'
 import { createInterferenceLayer } from './interferenceLayer'
 import { createMeasureAnnotation } from './measureAnnotation'
 import { createThumbnailer } from './thumbnail'
@@ -684,6 +686,32 @@ export function createViewport(container: HTMLElement): Viewport {
     const offset = camera.position.clone().sub(controls.target)
     if (offset.lengthSq() === 0) offset.copy(HOME_VIEW_OFFSET)
     frameBox(box, offset.setLength(HOME_VIEW_OFFSET.length()))
+  }
+
+  /** 見えているボディとスケッチが収まる所へ、今の向きのまま寄る(`frameAll` と違い向きも上方向も変えない)。何も無ければ既定の視点。 */
+  function frameVisible(): void {
+    const box = contentBoxForGrid()
+    if (!box.isEmpty()) {
+      frameBox(box, keptDirectionOffset(camera.position, controls.target, HOME_VIEW_OFFSET))
+    } else if (activeSketchId !== null) {
+      lookAtSketch(activeSketchId, { emptyDocument: true })
+    } else {
+      camera.up.copy(WORLD_UP)
+      frameBox(new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3().setScalar(BASE_EXTENT * 2)), HOME_VIEW_OFFSET)
+    }
+  }
+
+  /** スケッチ `sketchId` の図形 `entityIds` が収まる所へ、今の向きのまま寄る(取り込んだ図形を見せる)。 */
+  function frameSketchEntities(sketchId: string, entityIds: readonly string[]): void {
+    const scene = sketchLayer.get(sketchId)
+    if (!scene) return
+    const lines = scene.handleLines.map((line) => ({
+      entityId: line.userData.entityId,
+      polylineWorld: line.userData.polylineWorld as readonly THREE.Vector3[] | undefined,
+    }))
+    const box = boxOfSketchEntities(lines, new Set(entityIds))
+    if (box.isEmpty()) return
+    frameBox(box, keptDirectionOffset(camera.position, controls.target, HOME_VIEW_OFFSET))
   }
 
   function setFov(deg: number): void {
@@ -1330,8 +1358,8 @@ export function createViewport(container: HTMLElement): Viewport {
     controls.update()
   }
 
-  /** スケッチ平面と視線の交点を (u,v) で返す(平面がカメラの裏なら null)。 */
-  function planePointAt(offsetX: number, offsetY: number): { u: number; v: number } | null {
+  /** スケッチ平面と視線の交点を (u,v) で返す(平面がカメラの裏なら null。視線が平面に浅すぎれば 'shallow')。 */
+  function planeHitAt(offsetX: number, offsetY: number): { u: number; v: number } | 'shallow' | null {
     if (activeSketchId === null) return null
     const target = sketchLayer.get(activeSketchId)
     if (!target) return null
@@ -1339,12 +1367,18 @@ export function createViewport(container: HTMLElement): Viewport {
     const frame = target.frame
     const origin = frameVector(frame.origin)
     const normal = frameVector(frame.normal).normalize()
+    if (sightTooShallow(ray.direction, normal)) return 'shallow'
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin)
     const hit = ray.intersectPlane(plane, new THREE.Vector3())
     if (hit === null) return null
     const delta = hit.sub(origin)
     // `frame.u` / `frame.v` は正規化しない(`toWorld` と同じ扱い)。
     return { u: delta.dot(frameVector(frame.u)), v: delta.dot(frameVector(frame.v)) }
+  }
+
+  function planePointAt(offsetX: number, offsetY: number): { u: number; v: number } | null {
+    const hit = planeHitAt(offsetX, offsetY)
+    return hit === 'shallow' ? null : hit
   }
 
   /**
@@ -2132,7 +2166,8 @@ export function createViewport(container: HTMLElement): Viewport {
     const solidOnly = activeSketchId !== null && solidPickInSketch
     if (activeSketchId !== null && !solidOnly) {
       const region = regionAt(offsetX, offsetY)
-      const plane = planePointAt(offsetX, offsetY)
+      const planeHit = planeHitAt(offsetX, offsetY)
+      const plane = planeHit === 'shallow' ? null : planeHit
       // 図形は領域より手前(点・辺は領域の縁に乗っており、領域が勝つと端点を掴めない)。`point` は常に一緒に返し、
       // 描くコマンドが起動している間はそちらが優先(判断は `App.svelte`)。
       const datum = sketchDatumAt(offsetX, offsetY, plane)
@@ -2143,6 +2178,7 @@ export function createViewport(container: HTMLElement): Viewport {
         sketchEntity: snap.entity,
         sketchGuide: snap.guide,
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
+        pointRefused: planeHit === 'shallow' ? 'shallow' : null,
         datum: datum?.name ?? null,
         datumAt: datum?.at ?? null,
       }
@@ -2664,6 +2700,8 @@ export function createViewport(container: HTMLElement): Viewport {
       frameToContent()
     },
     frameBodies,
+    frameVisible,
+    frameSketchEntities,
     resetGrid() {
       grid.rescale(contentBoxForGrid(), true)
     },

@@ -95,11 +95,11 @@
   /* `.stage` が位置の基準。ビューキューブの下に置く(右上)。ビューポートの寸法には触れない(styles.css の不変条件)。 */
   #interference-panel {
     position: absolute;
-    top: calc(150px + var(--toolbar-overlay-h, 0px));
+    top: calc(190px + var(--toolbar-overlay-h, 0px));
     right: 10px;
     z-index: 5;
     width: 300px;
-    max-height: calc(100% - 170px - var(--toolbar-overlay-h, 0px));
+    max-height: calc(100% - 210px - var(--toolbar-overlay-h, 0px));
     overflow: auto;
     font-variant-numeric: tabular-nums;
   }

@@ -9,8 +9,10 @@
  *   3. AI が選択を書き換えても、人が起動した即適用のコマンドは走らない(人が指したときだけ走る)
  *   4. 基準平面を指せる間も、原点をはさんでカメラの反対側にある面が取れる(#109)
  *   5. 自動保存が書けなかったら「未保存」の札が出て、Ctrl+S で書き直すと消える
- *   6. 入力欄にフォーカスがある間の Ctrl+Z は、文書を undo しない
+ *   6. 入力欄にフォーカスがある間の Ctrl+Z は、文書を undo しない(欄が空なら undo / redo になる)
  *   7. 押し出しの種別を、距離欄から Tab で進んで Space で選べる
+ *   8. F とビューキューブ下のボタンで、向きを変えずに全体表示になる(入力欄の中の F は効かない)
+ *   9. ビューキューブの外側の余白を引いても視点は回らない(立方体の上を引くと回る)
  */
 import { existsSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,6 +23,7 @@ import {
   openApp,
   pressUndo,
   sleep,
+  viewportCenter,
   waitFrames,
   waitOrFail,
   withoutBrowserPanel,
@@ -237,6 +240,13 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   if (after.log !== before.log || after.redo !== before.redo) {
     fail(`入力欄にフォーカスがあるのに Ctrl+Z で文書の undo が発火した: ${JSON.stringify({ before, after })}`)
   }
+  // 欄が空なら(奪っても失う文字が無い)Ctrl+Z / Ctrl+Y は欄でなく文書のものになる
+  await page.click('#distance', { clickCount: 3 })
+  await page.keyboard.press('Backspace')
+  await pressWithControl('KeyZ')
+  await waitFor((log) => window.__duocad.state.log.length === log - 1, '空の距離欄の Ctrl+Z で文書が undo されない', [before.log])
+  await pressWithControl('KeyY')
+  await waitFor((log) => window.__duocad.state.log.length === log, '空の距離欄の Ctrl+Y で文書がやり直されない', [before.log])
   // 入力欄の外では文書が undo される(上の検査が「そもそも効かない Ctrl+Z」で緑になっていない裏取り)
   await page.evaluate(() => document.activeElement?.blur?.())
   await pressWithControl('KeyZ')
@@ -254,6 +264,73 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   await page.keyboard.press('Space')
   await waitFor(() => document.querySelector('#extrude-mode-join')?.classList.contains('on') === true, 'Space で種別が選ばれない')
   ok('[7] 距離欄から Tab で種別のボタンへ進み、Space で選べる')
+
+  // ================================================================ 8. 全体表示(F キーとビューキューブ下のボタン)
+  // 向きを変えずに寄る。入力欄にフォーカスがあるときは効かない(F はその欄に打つ文字)。
+  const poseOf = () => page.evaluate(() => window.__duocad.cameraPose())
+  const distanceOf = (pose) => Math.hypot(...pose.position.map((value, axis) => value - pose.target[axis]))
+  const directionOf = (pose) => {
+    const length = distanceOf(pose)
+    return pose.position.map((value, axis) => (value - pose.target[axis]) / length)
+  }
+  const farOut = async () => {
+    await page.evaluate(() => document.activeElement?.blur?.())
+    const center = await viewportCenter(page)
+    await page.mouse.move(center.x, center.y)
+    for (let step = 0; step < 6; step += 1) await page.mouse.wheel({ deltaY: 400 })
+    await waitFrames(page, 10)
+  }
+  const fitted = distanceOf(await poseOf())
+  await farOut()
+  const away = distanceOf(await poseOf())
+  if (!(away > fitted * 1.2)) fail(`この検査の前提が崩れた: ホイールで引いても距離が増えない(${fitted} -> ${away})`)
+  const directionBefore = directionOf(await poseOf())
+  await page.keyboard.press('KeyF')
+  await waitFor((limit) => {
+    const pose = window.__duocad.cameraPose()
+    return Math.hypot(...pose.position.map((value, axis) => value - pose.target[axis])) < limit
+  }, 'F を押しても全体表示にならない', [away * 0.8])
+  const directionAfter = directionOf(await poseOf())
+  if (directionBefore.reduce((sum, value, axis) => sum + value * directionAfter[axis], 0) < 0.999) {
+    fail(`全体表示で視点の向きが変わった: ${JSON.stringify({ directionBefore, directionAfter })}`)
+  }
+  await farOut()
+  await page.click('#frame-all')
+  await waitFor((limit) => {
+    const pose = window.__duocad.cameraPose()
+    return Math.hypot(...pose.position.map((value, axis) => value - pose.target[axis])) < limit
+  }, '全体表示のボタンを押しても寄らない', [away * 0.8])
+  await farOut()
+  await page.click('#distance')
+  await page.keyboard.press('KeyF')
+  await sleep(500)
+  if (!(distanceOf(await poseOf()) > away * 0.9)) fail('入力欄にフォーカスがあるのに F で全体表示になった')
+  ok('[8] F とビューキューブ下のボタンで向きを変えずに全体表示になり、入力欄の中の F は効かない')
+
+  // ================================================================ 9. ビューキューブの外側の余白は下へ通す
+  // 当たりは描いた立方体の外形だけ。四角の隅を引いても視点は回らず、立方体の上を引くと回る。
+  await page.click('#command-abort')
+  await waitFor(() => document.querySelector('#command-abort') === null, 'コマンドを中断できない')
+  const box = await page.evaluate(() => {
+    const rect = document.querySelector('.viewport').getBoundingClientRect()
+    return { x: rect.right - 12 - 144, y: rect.top + 12 }
+  })
+  const dragFrom = async (x, y) => {
+    await waitFrames(page, 60) // 直前の回転の慣性が止まってから測る
+    const before = await poseOf()
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x - 40, y + 10, { steps: 6 })
+    await page.mouse.up()
+    await waitFrames(page, 6)
+    const after = await poseOf()
+    return Math.hypot(...after.position.map((value, axis) => value - before.position[axis]))
+  }
+  const turned = await dragFrom(box.x + 72, box.y + 72)
+  if (!(turned > 1)) fail('この検査の前提が崩れた: 立方体の上を引いても視点が回らない')
+  // 慣性の残りは回転量の1%に届かない(実測: 回転 296 に対し余白では 0.002)
+  if ((await dragFrom(box.x + 4, box.y + 4)) > turned * 0.01) fail('立方体の外の余白を引いたのに視点が回った')
+  ok('[9] ビューキューブの外側の余白は下のモデルへ通り、立方体の上だけが視点を回す')
 
   await assertNoAppErrors(page, consoleErrors, { allow: failedSaves })
 })

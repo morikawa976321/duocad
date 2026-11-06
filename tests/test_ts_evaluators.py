@@ -29,6 +29,7 @@ EVALUATORS = [
     "eval_log_tail.mjs",
     "eval_min_width.mjs",
     "eval_pixel_ratio.mjs",
+    "eval_plane_sight.mjs",
     "eval_polyline_pick.mjs",
     "eval_preview_controller.mjs",
     "eval_rename_draft.mjs",
@@ -52,6 +53,7 @@ EVALUATORS = [
     "eval_text_sprite.mjs",
     "eval_view_cube.mjs",
     "eval_view_cube_overlay.mjs",
+    "eval_view_framing.mjs",
     "eval_view_settings.mjs",
 ]
 

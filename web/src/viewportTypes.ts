@@ -286,6 +286,8 @@ export interface PickEvent {
   sketchGuide: SketchGuideHit | null
   /** スケッチモード中の、クリックした点のスケッチ平面上の座標。平面がカメラの裏なら null。 */
   point: { sketchId: string; u: number; v: number } | null
+  /** `point` が null なのは視線が平面に浅すぎるから(`'shallow'`。点として受けない理由を知らせるため)。 */
+  pointRefused?: 'shallow' | null
   /**
    * 当たった領域(スケッチ+添字)。スケッチモード中はそのスケッチの領域、通常モードでは見えている全スケッチの領域。
    * 通常モードで領域と面が重なる画素は面が勝つ(同じ細かさならソリッドが先)。
@@ -677,6 +679,10 @@ export interface Viewport {
   frameAll(): void
   /** 見えているボディ `bodyIds` が収まる所へ、今の向きのまま寄る(干渉チェックの行から)。 */
   frameBodies(bodyIds: readonly string[]): void
+  /** 見えているボディとスケッチが収まる所へ、今の向きのまま寄る(全体表示)。何も無ければ既定の視点。 */
+  frameVisible(): void
+  /** スケッチ `sketchId` の図形 `entityIds` が収まる所へ、今の向きのまま寄る(SVG 取り込みの後)。 */
+  frameSketchEntities(sketchId: string, entityIds: readonly string[]): void
   /** 新規文書にしたときに呼ぶ。カメラは動かさず、基準グリッドの縮小だけを許可する。 */
   resetGrid(): void
   /** 左ドラッグのウィンドウ選択が終わったときに呼ばれる。ドラッグの向きは見ない(本人明言)。 */
