@@ -32,6 +32,8 @@
     /** この札が出ている間に同じ文言が来た回数。2以上のときだけ画面に出す。 */
     count: number
     copied: boolean
+    /** カーソルまたはフォーカスがボタンの上にある間は消さない。 */
+    held: boolean
     timer: ReturnType<typeof setTimeout> | null
   }
 
@@ -61,9 +63,20 @@
     item.timer = null
   }
 
+  /** 消える予約を掛け直す。押さえられている間・タブが裏にある間は掛けない(戻ったときに `hold` / `onVisibility` が掛け直す)。 */
   function restart(item: ToastItem): void {
     stop(item)
+    if (item.held || document.hidden) return
     item.timer = setTimeout(() => dismiss(item.id), LIFETIME_MS)
+  }
+
+  function hold(item: ToastItem, held: boolean): void {
+    item.held = held
+    restart(item)
+  }
+
+  function onVisibility(): void {
+    for (const item of items) restart(item)
   }
 
   function dismiss(id: number): void {
@@ -98,6 +111,7 @@
       message: text,
       count: 1,
       copied: false,
+      held: false,
       timer: null,
     }
     const next = [created, ...items]
@@ -126,6 +140,7 @@
 <!-- `id="toasts"` は実機検査が文言を読む穴(`.toast-text` がエラー1枚の本文)。中身が空でも枠は出す。
      知らせの本文は `.toast-info-text` に分ける: smoke 群は `#toasts .toast-text` を「エラーが出た」と読むので、
      同じクラスにすると知らせの札で検査が赤くなる。 -->
+<svelte:document onvisibilitychange={onVisibility} />
 <div id="toasts" class="toasts" role="log" aria-live="assertive" aria-relevant="additions">
   {#each items as item (item.id)}
     <div class="toast" class:info={item.kind === 'info'}>
@@ -133,7 +148,14 @@
       {#if item.count > 1}
         <span class="toast-count">{item.count}回</span>
       {/if}
-      <div class="toast-actions">
+      <div
+        class="toast-actions"
+        role="group"
+        onmouseenter={() => hold(item, true)}
+        onmouseleave={() => hold(item, false)}
+        onfocusin={() => hold(item, true)}
+        onfocusout={() => hold(item, false)}
+      >
         <button
           type="button"
           class="toast-copy"
