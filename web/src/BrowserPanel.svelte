@@ -26,7 +26,6 @@
 
   let {
     bodies,
-    generation,
     hoverEnabled,
     onHoverBody,
     sketches,
@@ -50,7 +49,6 @@
     onSectionInvert,
   }: {
     bodies: BodyMeta[]
-    generation: number
     hoverEnabled: boolean
     onHoverBody: (bodyId: string | null) => void
     sketches: SketchState[]
@@ -282,7 +280,7 @@
             {#if bodies.length === 0}
               <li class="empty dim">ボディが無い</li>
             {/if}
-            {#each bodies as body (`${generation}:${body.body_id}`)}
+            {#each bodies as body (body.body_id)}
               <li class="parts-row" class:hidden-row={!body.visible} use:hoverBody={body.visible && hoverEnabled ? body.body_id : null}>
                 {#if renamingId === body.body_id}
                   <input
