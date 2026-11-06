@@ -259,9 +259,20 @@ runSmoke('smoke-workspace', { timeout: 60000, mcp: true }, async ({ mcp, browser
     sideFaces.push(index)
   }
   const cap = await page.evaluate((id) => window.__duocad.getGeometry(id).faces.find((face) => face.kind === 'plane' && face.normal[2] > 0.9).index, cylinders[0])
-  await clickFace(page, cylinders[0], cap, { hidePanel: true })
-  await clickFace(page, cylinders[0], cap, { hidePanel: true })
-  await waitFor(() => [...document.querySelectorAll('#toasts .toast.info')].some((toast) => toast.textContent.includes('全周') && toast.querySelector('.toast-count')?.textContent === '2回'), '選べない面の連続クリックが1枚の知らせにまとまらない')
+  await withoutBrowserPanel(page, async () => {
+    // ResizeObserver がカメラへ寸法を反映する前の射影は、クリック時には別の画素を指す。
+    await waitFor(() => {
+      const viewport = document.querySelector('.viewport')
+      const canvas = viewport.querySelector('canvas')
+      return canvas.width > 0 && canvas.width * viewport.clientHeight === canvas.height * viewport.clientWidth
+    }, '円柱の面を射影する前に描画寸法が画面へ追いつかない')
+    await clickFace(page, cylinders[0], cap)
+    await waitFor(() => [...document.querySelectorAll('#toasts .toast.info')].some(
+      (toast) => toast.textContent.includes('全周') && toast.querySelector('.toast-count') === null), '選べない面の1回目のクリックで知らせが出ない')
+    await clickFace(page, cylinders[0], cap)
+    await waitFor(() => [...document.querySelectorAll('#toasts .toast.info')].some(
+      (toast) => toast.textContent.includes('全周') && toast.querySelector('.toast-count')?.textContent === '2回'), '選べない面の2回目のクリックが同じ知らせの2回に反映されない')
+  })
   const refusals = await page.$$eval('#toasts .toast-info-text', (texts) => texts.filter((text) => text.textContent.includes('全周')).length)
   if (refusals !== 1) fail(`選べない面の札が積み上がった: ${refusals} 枚`)
   if ((await mcp.callTool('get_selection')).selection.count !== 0) fail('断った面が選択に入った')
