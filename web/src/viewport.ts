@@ -2407,7 +2407,8 @@ export function createViewport(container: HTMLElement): Viewport {
     const face = next?.hit ?? null
     const edge = next?.edge ?? null
     const vertex = next?.vertex ?? null
-    const region = next?.sketchEntity || next?.sketchGuide ? null : (next?.region ?? null)
+    // 点を待つ間は、領域の上を押しても点になる(領域は選ばれない)ので光らせない。
+    const region = sketchCursorWanted || next?.sketchEntity || next?.sketchGuide ? null : (next?.region ?? null)
     const plane = next?.plane ?? null
 
     const nextFaceKey = face === null ? '' : refKey(face.bodyId, face.faceIndex)
