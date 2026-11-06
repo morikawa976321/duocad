@@ -558,11 +558,17 @@ def set_visible(doc: Document, body_id: BodyId, visible: bool) -> dict:
     「手前を隠して戻す」操作が履歴を埋める。しかも `OpLog.append` は redo可能な末尾を捨てるので、undo直後に
     隠すとredoが黙って消えていた。保存もされない(開き直すと全ボディが可視)。
 
+    隠すとそのボディの選択項目(ボディ・面・辺・頂点)を選択から外す。戻しても選択は戻らない
+    (隠れた項目が残ると、移動・ブーリアン・削除が隠れていることを理由に全体ごと断られる)。
+
     存在しない body_id は KeyError(文書は何も変わらない)。
     """
     body = doc.get_body(body_id)
     previous = body.visible
     body.visible = bool(visible)
+    if not body.visible:
+        selection = get_selection(doc)
+        selection.items = [item for item in selection.items if item.get("body") != body_id]
     return {
         "body_id": body_id,
         "visible": body.visible,
