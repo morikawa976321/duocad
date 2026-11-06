@@ -18,10 +18,19 @@ const RESTART_POLL_MS = 2000
 const RESTART_TIMEOUT_MS = 15 * 60 * 1000
 /** 全面表示に案内と [閉じる] を足すまで。置いた値(実測ではない)。 */
 const RESTART_SLOW_MS = 3 * 60 * 1000
+/** 立て直しの最中の取得 1 回の待ち上限。置いた値(実測ではない)。応答しないサーバで取得が止まり続け、待ちの判定が進まなくならないように。 */
+const RESTART_FETCH_TIMEOUT_MS = 10 * 1000
 
 let restarting = $state<{ title: string; detail: string } | null>(null)
 let slow = $state(false)
 let closed = $state(false)
+/** `RESTART_SLOW_MS` 後に `slow` を立てる。通信の待ちとは独立に掛ける(応答が止まっても案内と [閉じる] が出るように)。 */
+let slowTimer: ReturnType<typeof setTimeout> | null = null
+
+function stopSlowTimer(): void {
+  if (slowTimer !== null) clearTimeout(slowTimer)
+  slowTimer = null
+}
 
 export const restart = {
   get current() {
@@ -40,9 +49,11 @@ export const restart = {
   },
 }
 
-export async function fetchJson<T>(path: string): Promise<T | null> {
+/** `timeoutMs` を渡すと、その時間で諦めて null を返す(応答しない相手を待ち続けない)。 */
+export async function fetchJson<T>(path: string, timeoutMs?: number): Promise<T | null> {
   try {
-    const response = await fetch(new URL(path, location.href), { cache: 'no-store' })
+    const signal = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)
+    const response = await fetch(new URL(path, location.href), { cache: 'no-store', signal })
     return response.ok ? ((await response.json()) as T) : null
   } catch {
     return null
@@ -98,9 +109,14 @@ export async function restartServer(
   restarting = { title: shown.title, detail: shown.detail }
   slow = false
   closed = false
+  stopSlowTimer()
+  slowTimer = setTimeout(() => {
+    if (restarting !== null) slow = true
+  }, RESTART_SLOW_MS)
   // 比べる元は押した時点の印。取れなければ始めない(落ちる前の応答を「立ち直った」と読みうる)。
-  const now = await fetchJson<ServerConfig>('duocad-config.json')
+  const now = await fetchJson<ServerConfig>('duocad-config.json', RESTART_FETCH_TIMEOUT_MS)
   if (now === null) {
+    stopSlowTimer()
     restarting = null
     fail(`${shown.failPrefix}: サーバの状態を取れなかった`)
     return
@@ -110,11 +126,13 @@ export async function restartServer(
   try {
     response = await fetch(new URL(path, location.href), { method: 'POST' })
   } catch (error) {
+    stopSlowTimer()
     restarting = null
     fail(`${shown.failPrefix}: ${error}`)
     return
   }
   if (response.status !== 202) {
+    stopSlowTimer()
     restarting = null
     const body = (await response.json().catch(() => null)) as { error?: string } | null
     fail(`${shown.failPrefix}: ${body?.error ?? response.status}`)
@@ -127,13 +145,11 @@ export async function restartServer(
   }
   // 起動の印(`boot`)が変わったら立ち直った。落ちている間を見なくても判定できる。
   // 印を持たない古いサーバからの更新だけは、落ちたのを見てから立ち直りを待つ。
-  const startedAt = Date.now()
-  const deadline = startedAt + RESTART_TIMEOUT_MS
+  const deadline = Date.now() + RESTART_TIMEOUT_MS
   let wentDown = false
   while (Date.now() < deadline) {
     await sleep(RESTART_POLL_MS)
-    if (Date.now() - startedAt > RESTART_SLOW_MS) slow = true
-    const next = await fetchJson<ServerConfig>('duocad-config.json')
+    const next = await fetchJson<ServerConfig>('duocad-config.json', RESTART_FETCH_TIMEOUT_MS)
     if (next === null) {
       wentDown = true
       continue
@@ -143,6 +159,7 @@ export async function restartServer(
       return
     }
   }
+  stopSlowTimer()
   restarting = null
   slow = false
   closed = false
