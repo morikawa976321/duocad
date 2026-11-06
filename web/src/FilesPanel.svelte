@@ -420,14 +420,14 @@
       {#if deletingName === file.name}
         <div class="new-row confirm-row">
           <!-- 幅240pxの行に収まる長さにする(長いと末尾が切れて「戻せない」が読めない)。 -->
-          <span class="confirm-text" title={file.name === currentName ? '開いている文書。消すと閉じて戻せない' : undefined}>
-            {file.name === currentName ? '閉じて消す' : '消すと戻せない'}
+          <span class="confirm-text" title={file.name === currentName ? '開いている文書。削除すると閉じて戻せない' : undefined}>
+            {file.name === currentName ? '閉じて削除' : '削除は戻せない'}
           </span>
           <button
             class="files-delete-confirm"
             onclick={confirmDelete}
             onkeydown={onConfirmKey}
-            title="ディスクから消す(戻せない)"
+            title="ディスクから削除(戻せない)"
           >
             本当に削除
           </button>

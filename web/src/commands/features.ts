@@ -388,7 +388,7 @@ export const DELETE_FACES: CommandDef<'delete_faces'> = {
   label: '面の削除',
   buttonId: 'delete-faces',
   preview: 'server',
-  args: [{ kind: 'selection', name: 'faces', label: '消す面', shapeKind: 'face', min: 1, max: null }],
+  args: [{ kind: 'selection', name: 'faces', label: '削除する面', shapeKind: 'face', min: 1, max: null }],
   build(values) {
     const empty = missingSelection(values, 'faces', '面')
     if (empty !== null) return { ok: false, reason: empty }
@@ -480,7 +480,7 @@ export const BOOLEAN_BODY: CommandDef<'boolean_body'> = {
       name: 'keep_tool',
       label: 'ツール',
       options: [
-        { value: 'remove', label: '消す', buttonId: 'boolean-body-tool-remove', sends: false },
+        { value: 'remove', label: '削除', buttonId: 'boolean-body-tool-remove', sends: false },
         { value: 'keep', label: '残す', buttonId: 'boolean-body-tool-keep', sends: true },
       ],
       default: 'remove',

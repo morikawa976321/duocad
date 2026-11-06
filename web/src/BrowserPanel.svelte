@@ -282,7 +282,7 @@
                   <button
                     class="row-action row-delete"
                     onclick={() => onDeleteBody(body.body_id)}
-                    title="このボディを消す(Ctrl+Zで戻る)">✕</button
+                    title="このボディを削除(Ctrl+Zで戻る)">✕</button
                   >
                 {/if}
               </li>
@@ -369,7 +369,7 @@
                   <button
                     class="row-action row-delete"
                     onclick={() => onDeleteSketch(sketch.sketch_id)}
-                    title="このスケッチを図形ごと消す(押し出したボディは残る。Ctrl+Zで戻る)">✕</button
+                    title="このスケッチを図形ごと削除(押し出したボディは残る。Ctrl+Zで戻る)">✕</button
                   >
                 {/if}
               </li>
