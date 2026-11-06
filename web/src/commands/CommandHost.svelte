@@ -137,7 +137,8 @@
     /** 起動(`start()`)の瞬間に呼ばれる。形状最適化の4つのverbが、既存の割り当てをプリセレクトして見せるために使う(`App.svelte`)。 */
     onStart?: (verb: string) => void
     /** 起動中のコマンドが終わった(Esc・中断ボタン・確定成功)ときに呼ばれる。無起動・既定「選ぶ」のEscでは呼ばない。アプリ層が選択を全解除するための知らせ。 */
-    onEnd?: (verb: string) => void
+    /** `staged` は、終わったのが構えた verb(サーバの作業空間に載り、終わりが配信で届く)か。ローカルのコマンド(測定など)は偽。 */
+    onEnd?: (verb: string, staged: boolean) => void
     /** 構える対象の verb を起動する(サーバの `begin_command`)。 */
     onBegin?: (verb: string, args: Record<string, unknown>) => void
     /** 起動中の verb の引数を併合する(サーバの `set_command_args`。`null` の値はそのキーを外す)。 */
@@ -645,7 +646,7 @@
 
   function ended(verb: string): void {
     resetInputs()
-    onEnd(verb)
+    onEnd(verb, isStageable(verb))
   }
 
   /** 引数を空にして即適用の待ち受けを構える。ここで控えた数より後のクリックだけが即適用の引き金になる(起動前から揃っていた選択では発火せず、Enterかボタンの押し直しが適用の1手)。 */

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 
 import './ts_resolve_hook.mjs'
 
-const { clearEdit, expectedItems, modifyEdit, toggleEdit } = await import('../web/src/selectionEdits.ts')
+const { clearEdit, expectedItems, modifyEdit, selectionDiff, toggleEdit } = await import('../web/src/selectionEdits.ts')
 const { evictionsForClick } = await import('../web/src/commands/command.ts')
 const features = await import('../web/src/commands/features.ts')
 const measure = await import('../web/src/commands/measure.ts')
@@ -55,5 +55,26 @@ assert.deepEqual(expectedItems([face(1), face(2)], [clearEdit, toggleEdit(face(1
     inFlight.push(evicted.length > 0 ? modifyEdit([face(index)], evicted) : toggleEdit(face(index)))
   }
   assert.deepEqual(expectedItems([], inFlight), [face(3), face(4)])
+}
+// 構えたコマンドの終わりが届いたときの全解除: 終わった時点の選択を外し、終わりより後に送った変更は残す。
+// 差分は「いまの見込み」から「空の選択に、返っていない変更だけが効いたもの」へ。
+{
+  // Esc(全解除を送る)の直後に、唯一選ばれていた面を押した。終わりが届いた時点で返っていないのは、全解除とその後のトグル
+  const afterEnd = [clearEdit, toggleEdit(face(1))]
+  const kept = expectedItems([], afterEnd)
+  assert.deepEqual(kept, [face(1)])
+  assert.deepEqual(selectionDiff(expectedItems([face(1)], afterEnd), kept), { add: [], remove: [] }, '押した面を外さない')
+  // 確定のあとに別の面を押した(全解除は送っていない): 終わった時点の選択だけを外す
+  const clicked = [toggleEdit(face(3))]
+  assert.deepEqual(selectionDiff(expectedItems([face(1), face(2)], clicked), expectedItems([], clicked)), {
+    add: [],
+    remove: [face(1), face(2)],
+  })
+  // 確定のあとに、選ばれていた面を押した(トグルは外す向きで送られている): 押した面が選ばれた状態にする
+  const reclicked = [toggleEdit(face(1))]
+  assert.deepEqual(selectionDiff(expectedItems([face(1), face(2)], reclicked), expectedItems([], reclicked)), {
+    add: [face(1)],
+    remove: [face(2)],
+  })
 }
 console.log('eval_selection_edits: ok')

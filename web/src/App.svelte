@@ -12,7 +12,7 @@
   import { sharedArgsChangeNote } from './sharedArgsController'
   import { appendedEntries } from './logTail'
   import { createPreviewController, type PreviewInput } from './previewController'
-  import { clearEdit, expectedItems, modifyEdit, toggleEdit, type SelectionEdit } from './selectionEdits'
+  import { clearEdit, expectedItems, modifyEdit, selectionDiff, toggleEdit, type SelectionEdit } from './selectionEdits'
   import { createFaceKinds } from './faceKinds'
   import {
     bodyRef,
@@ -412,8 +412,8 @@
    */
   let selfSelections = $state(0)
   /**
-   * いまのコマンドを起動した時点で、送り終えていた最後の `client_op`。その応答は起動より前の操作のものなので `selfSelections` に数えない
-   * (数えると、中断の直前に押した分の応答が、起動し直した後に届いて即適用を引く)。
+   * いまのコマンドが画面で起動した時点で、送り終えていた最後の `client_op`。その応答は起動より前の操作のものなので
+   * `selfSelections` に数えない(数えると、中断の直前に押した分の応答が、起動し直した後に届いて即適用を引く)。
    */
   let opsBeforeCommand = 0
   /**
@@ -1885,7 +1885,7 @@
    * 測定が断られたら、測れない項目だけを外す(`measureRefused`)。
    * `activeVerb === null` は、`onModeChanged` が先に起動を畳んだ後に遅れて届いた通知で、選択に触らない。
    */
-  function onCommandEnd(verb: string): void {
+  function onCommandEnd(verb: string, staged: boolean): void {
     if (activeVerb === null) return
     activeVerb = null
     widenedDeletion = null
@@ -1902,7 +1902,23 @@
     }
     // 干渉チェックは選択が対象を決める。走らせた後も選択を残す(続けて隙間を変えて再検査できる)。
     if (verb === INTERFERENCE.id) return
-    clearSelectionIfAny()
+    if (staged) clearSelectionAsOfCommandEnd()
+    else clearSelectionIfAny()
+  }
+
+  /**
+   * 構えた verb の終わりが配信で届いたときの全解除: 終わった時点の選択(いま配信済みの選択)を外し、その後に送った変更は残す。
+   * 返っていない変更は、どれも終わりより後にサーバで効く(応答は送った順に届くので、終わりより前の分は届き終えている)。
+   * `clear_selection` をいま送ると、終わりの要求の後に押した分(Esc の直後のクリック)まで外れる。
+   */
+  function clearSelectionAsOfCommandEnd(): void {
+    const kept = expectedItems([], selectionOpsInFlight.values())
+    if (kept.length === 0) {
+      clearSelectionIfAny()
+      return
+    }
+    const { add, remove } = selectionDiff(currentItems(), kept)
+    modifySelection(add, remove)
   }
 
   /**
