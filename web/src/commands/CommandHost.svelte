@@ -748,6 +748,15 @@
     if (command === null) return false
     const spec = firstMissingArg(command, values)
     if (spec === null || spec.kind !== 'point') return false
+    // この1クリックで確定まで走るのに形にならない点(始点と同じ場所など)は入れない: 入れると点が残り、待っている点が無くなって次のクリックが選択に流れる。
+    const next: ArgValues = { ...values, [spec.name]: [u, v] }
+    if (!needsEnter(command) && firstMissingArg(command, next) === null) {
+      const result = buildArgs(command, next)
+      if (!result.ok) {
+        onNote(`${result.reason}。別の点をクリックする`)
+        return true
+      }
+    }
     points = { ...points, [spec.name]: [u, v] }
     // この1クリックで引数が揃い Enter が要らないなら、そのまま適用する(線分の2点目)。確定成功で無起動へ戻る(`commandSucceeded()`)ので、続けるにはツールボタンを押し直す。
     if (!needsEnter(command) && firstMissingArg(command, values) === null) {

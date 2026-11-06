@@ -8,7 +8,8 @@
  *      (丸めが効かなくても見た目は変わらず、座標だけが 73.4 のような値になる)
  *   2. 既存の点(格子から外れた円の中心)の上へ数画素ずらして置いた点は、その点と**完全に一致する**
  *      (一致しなくても見た目は吸い付いて見える)
- *   3. スケッチ A で選んだ図形は、B へ直接移った時点で選択から外れる(外れないと、B で動かした
+ *   3. 線分の始点と同じ場所をもう一度押しても点にならず、続けて終点を打てば線分ができる
+ *   4. スケッチ A で選んだ図形は、B へ直接移った時点で選択から外れる(外れないと、B で動かした
  *      つもりで A の図形が動く)
  *
  * 落ちる先の規則そのもの(円の半径ちょうど・傾いた辺の上)は `tests/eval_sketch_snap.mjs` が持つ。
@@ -93,7 +94,31 @@ runSmoke('smoke-sketch', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
   }
   ok('[2] 既存の点の上へ2画素ずらして置いた始点が、その点と完全に一致した')
 
-  // ================================================================ 3. スケッチを直接切り替えると選択が残らない
+  // ================================================================ 3. 始点と同じ場所の2クリック目は点にならない
+  // 点を入れてしまうと、待っている点が無くなって次のクリックが選択に流れ、図形も作れない。
+  {
+    const before = (await entities()).length
+    await page.click('#sketch-line')
+    await withoutBrowserPanel(page, async () => {
+      const start = await sketchPointAt(page, 45, 15, { settle: true })
+      if (!start) fail('線分の始点が画面上で指せない')
+      await page.mouse.click(start.x, start.y)
+      const again = await sketchPointAt(page, 45, 15, { settle: true })
+      await page.mouse.click(again.x, again.y)
+      await waitFrames(page, 4)
+      const end = await sketchPointAt(page, 45, 22, { settle: true })
+      if (!end) fail('線分の終点が画面上で指せない')
+      await page.mouse.click(end.x, end.y)
+    })
+    await waitFor((count) => window.__duocad.sketch?.entities.length === count, '同じ点を2回押した後、線分が置けない', [before + 1])
+    const redone = await lastLine()
+    if (JSON.stringify(redone) !== JSON.stringify({ x0: 45, y0: 15, x1: 45, y1: 22 })) {
+      fail(`同じ点を2回押した後の線分が始点から引かれていない: ${JSON.stringify(redone)}`)
+    }
+    ok('[3] 始点と同じ場所の2クリック目は点にならず、続けて終点を打てば線分ができる')
+  }
+
+  // ================================================================ 4. スケッチを直接切り替えると選択が残らない
   // `exitSketch` を通らずに A から B へ移る道(ブラウザのスケッチ名クリック)。外さないと、反復の
   // verb には A の図形 ID が B の文脈で渡る(サーバは entity_id を素直に解決するので黙って通る)。
   await page.keyboard.press('Escape')
@@ -110,7 +135,7 @@ runSmoke('smoke-sketch', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
       (window.__duocad.selectedEntities ?? []).length === 0,
     'A の図形の選択が B へ持ち越されている',
   )
-  ok('[3] スケッチ A で選んだ図形は、B へ直接移った時点で選択から外れる')
+  ok('[4] スケッチ A で選んだ図形は、B へ直接移った時点で選択から外れる')
 
   await assertNoAppErrors(page, consoleErrors)
 })
