@@ -982,6 +982,7 @@ export function createViewport(container: HTMLElement): Viewport {
     clipPlanes: section.clipPlanes,
     sphereNear: (sphere, x, y, radiusPx, project) => occlusion.sphereNear(sphere, x, y, radiusPx, project),
     invalidate,
+    hiddenByPreview: (bodyId) => ghostLayer.removedByPreview(bodyId),
   })
   scene.add(features.object)
 

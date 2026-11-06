@@ -56,6 +56,8 @@ export interface GhostLayerDeps {
 
 export interface GhostLayer {
   showPreview(entries: BodyGeometryUpdate[], removed?: readonly string[]): void
+  /** 出している投機実行のプレビューが、確定すると消す相手のボディか。 */
+  removedByPreview(bodyId: string): boolean
   showBodyGhosts(entries: BodyGhost[]): void
   /** 投機実行の幽霊とローカル幽霊を消して本物を戻す。 */
   clearPreview(): void
@@ -254,6 +256,7 @@ export function createGhostLayer(deps: GhostLayerDeps): GhostLayer {
 
   /** body_id -> 投機実行の幽霊。三角形の無い形(null)でもキーは残す: `clearPreview` が隠した本物を戻す一覧を兼ねる。 */
   const previewMeshes = new Map<string, GhostBody | null>()
+  const removedIds = new Set<string>()
 
   function showPreview(entries: BodyGeometryUpdate[], removed: readonly string[] = []): void {
     pickChanged() // 本物のBodyを隠すので、同じ画素が別のもの(または何も)を指す
@@ -266,6 +269,7 @@ export function createGhostLayer(deps: GhostLayerDeps): GhostLayer {
     for (const bodyId of removed) {
       setBodyVisible(bodyId, false)
       previewMeshes.set(bodyId, null)
+      removedIds.add(bodyId)
     }
   }
 
@@ -316,6 +320,7 @@ export function createGhostLayer(deps: GhostLayerDeps): GhostLayer {
   function clearPreview(): void {
     // ローカル幽霊も一緒に消す(`update`/`prune`/`App.svelte` の中断が何も足さずに正しく消える)。
     clearBodyGhosts()
+    removedIds.clear()
     pickChanged() // 隠していた本物が戻る(`showPreview` の対)
     if (previewMeshes.size === 0) return
     for (const [bodyId, ghost] of previewMeshes) {
@@ -346,6 +351,7 @@ export function createGhostLayer(deps: GhostLayerDeps): GhostLayer {
 
   return {
     showPreview,
+    removedByPreview: (bodyId) => removedIds.has(bodyId),
     showBodyGhosts,
     clearPreview,
     rebuildAround,
