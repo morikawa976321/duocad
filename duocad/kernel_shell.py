@@ -80,6 +80,13 @@ def _shell_solid(shape: "TopoDS_Shape", face_indices: Sequence[int], thickness: 
     if not math.isfinite(value) or value <= 0.0:
         raise ValueError(f"thickness must be finite and > 0, got {thickness!r}")
 
+    input_solids = _brep_topology.indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID).Extent()
+    if input_solids > 1:
+        raise ValueError(
+            f"shell: the body has {input_solids} separate solids; "
+            "離れた塊が複数あるボディはシェルにできない。1つの塊だけのボディに分けてから使うこと"
+        )
+
     face_map = _brep_topology._face_map(shape)
     closing = TopTools_ListOfShape()
     for index in indices:

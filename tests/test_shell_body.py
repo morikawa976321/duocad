@@ -270,3 +270,17 @@ def test_measurement_noise_on_a_nurbs_wall_is_not_a_thin_wall():
     shape = BRepBuilderAPI_NurbsConvert(BRepPrimAPI_MakeCylinder(10.0, 20.0, math.pi / 2).Shape(), True).Shape()
     for face in [4, 5]:  # 扇形の柱の両側の平らな側面(片方だけが測定誤差で割った)
         kernel_shell.shell_solid(shape, [face], 1.0)
+
+
+def test_a_body_with_two_separate_solids_is_refused_with_the_reason():
+    """離れた塊が2つあるボディは、丸めや壁の衝突ではなく塊が複数あることを理由に断る。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+
+    fused = BRepAlgoAPI_Fuse(
+        BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape(),
+        BRepPrimAPI_MakeBox(gp_Pnt(30.0, 0.0, 0.0), 10.0, 10.0, 10.0).Shape(),
+    ).Shape()
+    with pytest.raises(ValueError, match="2 separate solids"):
+        kernel_shell._shell_solid(fused, [1], 1.0)
