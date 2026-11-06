@@ -282,14 +282,16 @@
   (`shelf_attachment_GD.step` の事例は [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)「全周円筒のしきい値」)。
   ソリッド数 → 1部品かアセンブリか、体積を既知の式と突き合わせる、の順が安い。他人の配布データが混在するフォルダで
   面の統計から「本人の設計」を推定するのは危うい。
-- **duocad 自身の STEP 書き出し(`io_step.py export_step` → `kernel.write_step`、`STEPControl_Writer` を AsIs で使用)は
-  `Interface_Static` を触っていないので OCCT 既定の AP214・mm で出る。部品名は載らない。** 実測(2026-10-06、
+- **duocad 自身の STEP 書き出し(`io_step.py export_step` → `kernel.write_step_named`、XDE の `STEPCAFControl_Writer` を AsIs で使用)は
+  ボディ名を製品名(`PRODUCT`)に載せ、`Interface_Static` を触らないので OCCT 既定の AP214・mm で出る。** 実測(2026-10-06、
   穴あき直方体 50×30×10・φ6 と 20×20×10 ×2): OCP/build123d で再読込して体積 14717.26 / 8000、面 7、
   `BRepCheck_Analyzer` と `is_valid` とも True。ヘッダは `FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'))`、
-  `SI_UNIT(.MILLI.,.METRE.)`、`PRODUCT('Open CASCADE STEP translator 7.9 1',…)`。Body 名は出力に反映されず
-  (XDE 未使用)、複数ボディは `NEXT_ASSEMBLY_USAGE_OCCURRENCE` でアセンブリ構造になる。非表示ボディは黙って除外
-  (応答の `skipped_hidden` に載る)、メッシュボディは例外で拒否(`io_step.py` L78-84)。Fusion/FreeCAD/SolidWorks での
-  実読は未検証。部品名を付けるなら XDE(`STEPCAFControl_Writer`)への切替か、build123d で label を付けて再書き出し(未試験)。
+  `SI_UNIT(.MILLI.,.METRE.)`。複数ボディは `NEXT_ASSEMBLY_USAGE_OCCURRENCE` でアセンブリ構造になる。位置を持つ形は
+  「COMPOUND」という名の製品で包まれ、参照先の製品と使用箇所(`NEXT_ASSEMBLY_USAGE_OCCURRENCE`)の両方にボディ名が付く。
+  **OCCT は非ASCIIの名前を生バイトで書く**ので、書いた後に `kernel._escape_step_non_ascii` が `\X2\` / `\X4\` のエスケープへ直す
+  (直さないと ISO 10303-21 のファイルが ASCII でなくなる)。非表示ボディは黙って除外
+  (応答の `skipped_hidden` に載る)、メッシュボディは例外で拒否(`io_step.py` の `export_step`)。Fusion/FreeCAD/SolidWorks での
+  実読は未検証。
 
 ## Python 実行環境(`.venv` / pytest)
 
