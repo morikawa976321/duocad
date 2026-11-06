@@ -139,6 +139,7 @@
           class="toast-copy"
           class:copied={item.copied}
           aria-label={item.copied ? 'コピーしました' : item.kind === 'info' ? '文をコピー' : 'エラー文をコピー'}
+          title={item.copied ? 'コピーしました' : item.kind === 'info' ? '文をコピー' : 'エラー文をコピー'}
           onclick={() => copyMessage(item)}
         >
           {#if item.copied}
@@ -159,7 +160,7 @@
             </svg>
           {/if}
         </button>
-        <button type="button" class="toast-close" aria-label="この通知を閉じる" onclick={() => dismiss(item.id)}>
+        <button type="button" class="toast-close" aria-label="この通知を閉じる" title="この通知を閉じる" onclick={() => dismiss(item.id)}>
           ×
         </button>
       </div>
