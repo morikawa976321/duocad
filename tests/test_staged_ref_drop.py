@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from duocad.document import Body
 from duocad.server import Session
+from document_support import BOX_X, BOX_Y, BOX_Z, box_shape
 from session_support import pad, session_with_box
 
 VERTICAL_EDGES = {"kind": "edge", "where": [{"op": "parallel_to", "axis": "Z"}]}
@@ -67,6 +69,17 @@ def test_changes_to_other_bodies_and_datum_references_leave_it_alone():
     session.set_command_args({"plane_face": {"datum": "XY"}})
     session.undo()
     assert staged_args(session)["plane_face"] == {"datum": "XY"}
+
+
+def test_a_body_given_as_a_number_is_tracked_the_way_the_resolver_reads_it():
+    """落ちたら、解決側が文字列に直して引く数値の `body` の参照が形の変更のあとも残り、今の形の別の面を指して確定される。"""
+    session = Session(0.2)
+    session.document.add_body(Body(id="1", name="one", kind="solid", shape=box_shape(BOX_X, BOX_Y, BOX_Z)))
+    session.set_selection(predicate=VERTICAL_EDGES)
+    session.fillet(2.0)
+    session.begin_command("mirror_body", {"plane_face": {"body": 1, "index": 1}})
+    assert session.undo()["dropped_args"] == ["plane_face"]
+    assert "plane_face" not in staged_args(session)
 
 
 @pytest.mark.parametrize("index", [1, 1.0, "1"])

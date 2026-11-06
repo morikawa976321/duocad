@@ -45,19 +45,20 @@ def shape_ref_bodies(args: dict) -> dict[str, list[str]]:
     """引数名 -> その値が形の添字で指しているボディの id。参照1つ(`{"body", "kind", "index"}`)かその配列を見る。
     `kind` が無いか `None` の参照(`plane_face` は `{"body", "index"}` でも渡せる)も数える。原点パーツ(`{"datum"}`)・ボディそのもの
     (`kind: "body"`)・スケッチの参照は形の添字を持たないので入らない。
-    `index` は型を見ずあれば数える(解決側 `selection._as_index` が `1.0`・`"1"` も受けるので、`int` に絞ると外れ損なう)。
+    `body` も `index` も型を見ずあれば数える(解決側 `verbs._common.resolve_shape_ref` と揃える: `body` は `str()` で引き、
+    `index` は `selection._as_index` が `1.0`・`"1"` も受ける。型で絞ると、解決側が受ける参照が外れ損なう)。
     """
     found: dict[str, list[str]] = {}
     for name, value in args.items():
         refs = value if isinstance(value, list) else [value]
         bodies = [
-            ref["body"]
+            str(ref["body"])
             for ref in refs
             if isinstance(ref, dict)
-            and isinstance(ref.get("body"), str)
-            # 解決側 `verbs._common.resolve_shape_ref` は `kind` が無い参照も `None` の参照も受ける。
-            and (ref.get("kind") is None or ref["kind"] in SHAPE_REF_KINDS)
+            and "body" in ref
             and "index" in ref
+            # 解決側は `kind` が無い参照も `None` の参照も受ける。
+            and (ref.get("kind") is None or ref["kind"] in SHAPE_REF_KINDS)
         ]
         if bodies:
             found[name] = bodies
