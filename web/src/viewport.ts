@@ -2266,7 +2266,8 @@ export function createViewport(container: HTMLElement): Viewport {
     const dragged = Math.hypot(event.offsetX - downX, event.offsetY - downY)
     orbiting = event.buttons !== 0 && dragged > CLICK_MOVE_LIMIT_PX
     // 左ボタンを押したまま一定距離を越えたらウィンドウ選択。`buttons` も見るのは、canvasの外で離されたとき帯が出たままになるのを防ぐため。
-    if (downValid && (event.buttons & 1) !== 0 && dragged > BOX_SELECT_MIN_PX) {
+    // タッチの1本指ドラッグは OrbitControls が視点回転に使う(`mouseButtons` はマウスにしか効かない)ので、帯は出さない。
+    if (downValid && event.pointerType !== 'touch' && (event.buttons & 1) !== 0 && dragged > BOX_SELECT_MIN_PX) {
       band.show(downX, downY, event.offsetX, event.offsetY)
     }
     updateSketchPointer(event.offsetX, event.offsetY)
