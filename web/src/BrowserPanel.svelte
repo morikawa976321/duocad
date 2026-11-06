@@ -236,9 +236,9 @@
             class="group-toggle"
             onclick={() => (bodiesOpen = !bodiesOpen)}
             aria-expanded={bodiesOpen}
-            title={bodiesOpen ? 'モデルの一覧を畳む' : 'モデルの一覧を開く'}
+            title={bodiesOpen ? 'ボディの一覧を畳む' : 'ボディの一覧を開く'}
           >
-            {bodiesOpen ? '▾' : '▸'} モデル
+            {bodiesOpen ? '▾' : '▸'} ボディ
           </button>
           <span class="meta dim">{visibleCount}/{bodies.length} 表示</span>
         </div>

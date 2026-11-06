@@ -7,7 +7,7 @@
  *   2. 同名のファイルへ書き出すと、知らせに「上書きした」が出る
  *   3. 複製の欄の「複製して開く」で、複製先が開く
  *   4. トップ画面を開くと先頭のカードにフォーカスがあり、Enter 1回で開く
- *   5. ブラウザの「モデル」の見出しで一覧が畳まれ、行の ✕ は ✎ から離れている
+ *   5. ブラウザの「ボディ」の見出しで一覧が畳まれ、行の ✕ は ✎ から離れている
  */
 import { join } from 'node:path'
 import { fail, ok } from './args.mjs'
@@ -86,10 +86,10 @@ runSmoke('smoke-files-panel', { timeout: 60000, mcp: true }, async ({ mcp, brows
   })
   if (gap < 12 - 0.5) fail(`✕ と ✎ の間が狭い: ${gap}px`)
   await page.click('#parts-group-toggle')
-  await waitFor(() => document.querySelector('.parts-list') === null && document.querySelector('#parts-group-toggle').getAttribute('aria-expanded') === 'false', '「モデル」の見出しで一覧が畳まれる')
+  await waitFor(() => document.querySelector('.parts-list') === null && document.querySelector('#parts-group-toggle').getAttribute('aria-expanded') === 'false', '「ボディ」の見出しで一覧が畳まれる')
   await page.click('#parts-group-toggle')
   await waitFor(() => document.querySelector('.parts-list') !== null, 'もう一度押すと一覧が開く')
-  ok(`ブラウザの「モデル」を畳める・開ける。✕ と ✎ の間は ${gap}px`)
+  ok(`ブラウザの「ボディ」を畳める・開ける。✕ と ✎ の間は ${gap}px`)
 
   // トップ画面: 先頭のカードにフォーカス → Enter で開く
   await page.click('#file-close')
