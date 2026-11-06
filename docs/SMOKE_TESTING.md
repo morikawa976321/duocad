@@ -192,6 +192,9 @@ develop → main の前は `tools/gate.ps1` が pytest 全件・`npm run check`�
   (手で立てるサーバも同じ引数)を渡せば `web/dist` に触れない。
   `models/` の差分に「自分が入れた覚えのない操作」が混ざっていたら並行して誰かが触っている印 ——
   `git checkout` を向けない。
+- **使い捨てのスクリプトで `Session(...)` を直に作るときも `models_dir` と `exports_dir` に使い捨てを渡す。**
+  渡さないと、操作のたびに実 `models/` へ `untitled-N.json` が自動保存される(計測用のスクリプト 1 本で 22 個できた)。
+  pytest は `tests/conftest.py` が既定の置き場を temp へ差し替えているので起きない。
 - **headless Chrome は実 GPU を掴む。** `--use-angle=swiftshader` が CPU ラスタライズを強制していただけで、
   `--enable-unsafe-swiftshader` は「掴めなかったときソフト GL へ落ちてよい」の許可（残置）。合成負荷では
   SwiftShader が 0.7fps、D3D11 が 36fps だが、**検査の所要時間はほぼ変わらない**（smoke.mjs 163→150秒。律速は
