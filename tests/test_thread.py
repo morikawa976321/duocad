@@ -310,7 +310,7 @@ def test_the_entry_takes_exactly_one_face_from_the_selection():
     body_id, face = _hole(doc)
     selection.set_selection(doc, refs=[shape_ref(doc, body_id, "face", face)])
     result = entry_for("thread")(doc, profile="trapezoid45")
-    assert result == {"body_id": body_id, "changed_bodies": [body_id]}
+    assert result == {"body_id": body_id, "changed_bodies": [body_id], "diameter": 6.0, "pitch": 1.5}
 
 
 def test_the_entry_refuses_two_faces():

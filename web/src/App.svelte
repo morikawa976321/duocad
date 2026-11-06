@@ -263,6 +263,8 @@
     previewFailed(message: string, input: PreviewInput): boolean
     previewSucceeded(): void
     refusesFace(bodyId: string, faceIndex: number): string | null
+    undoLastPoint(): boolean
+    isEmptyArgField(target: EventTarget | null): boolean
   } | null>(null)
 
   const faceKinds = createFaceKinds()
@@ -1018,6 +1020,7 @@
         inform(`SVGを読み込んだ: ${width.toFixed(1)} × ${height.toFixed(1)} mm、図形 ${applied.entity_count} 個、${regions}${skipped}`)
         viewport?.frameSketchEntities(applied.sketch_id, applied.entity_ids)
       }
+      if (applied.verb === 'thread') inform(`ねじを刻んだ: M${applied.diameter} P${applied.pitch}`)
       if (releasePending(applied.client_op)) {
         // CommandHostが出した確定が成功したと確認できたので、ここで初めて無起動へ戻す(`commit()` の時点では
         // 成否が分からず、先に戻すとOCCTのフィレット失敗時の打ち直しが壊れる)。`CATEGORY_OF` に無い verb
@@ -2312,6 +2315,10 @@
       if (event.hit !== null) editSelection(solidClickRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
       return
     }
+    if (event.pointRefused === 'shallow' && event.sketchEntity === null && host?.wantsPoint()) {
+      inform('平面を浅い角度で見ているので点を置けない。視点を平面に向けてから置く')
+      return
+    }
     if (event.point && host?.wantsPoint()) {
       // 当たっている図形へ落としてから渡す。幽霊(`hoverPoint`)も同じ関数を通るので、吸い付いて見える位置と確定結果はずれない。
       const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity, event.sketchGuide, event.datumAt)
@@ -2534,7 +2541,18 @@
       return
     }
     if (!documentOpen) return
-    if (isTextEditingField) return
+    // 文字が入っている欄ではブラウザ標準の取り消しに任せる。コマンドの引数の欄が空なら、奪っても失う文字が無いのでアプリへ回す。
+    if (isTextEditingField && host?.isEmptyArgField(target) !== true) return
+    // キーの押しっぱなし(自動反復)では働かせない。1 回の押下で 1 回だけ戻す・やり直す。
+    if (event.repeat) {
+      event.preventDefault()
+      return
+    }
+    // 打ちかけの点があるときの Ctrl+Z は、文書でなく最後の1点を戻す(コマンドは開いたまま)。
+    if (key === 'z' && !event.shiftKey && host?.undoLastPoint() === true) {
+      event.preventDefault()
+      return
+    }
     // 実行中は送らない(サーバも `DocumentBusy` で断る。Undo した条件のまま結果が足される)。
     if (optimizeBusy) {
       event.preventDefault()

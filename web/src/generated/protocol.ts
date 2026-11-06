@@ -363,7 +363,7 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'shell_body'; body_id: string; changed_bodies: string[] })
-  | (AppliedVerbBase & { verb: 'thread'; body_id: string; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'thread'; body_id: string; changed_bodies: string[]; diameter: number; pitch: number })
   | (AppliedVerbBase & { verb: 'delete_faces'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'offset_faces'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'boolean_body'; target_body_id: string; mode: string; removed_bodies: string[]; changed_bodies: string[] })

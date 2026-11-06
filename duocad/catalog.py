@@ -1032,7 +1032,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="thread",
-        returns=(Result("body_id", "string"), Result("changed_bodies", "string[]")),
+        returns=(
+            Result("body_id", "string"),
+            Result("changed_bodies", "string[]"),
+            Result("diameter", "number"),
+            Result("pitch", "number"),
+        ),
         category="feature",
         description=(
             "3Dプリントで組むボルト・ナット・ねじ穴のねじ山を作るときに呼ぶ。"
