@@ -268,7 +268,7 @@
                   title="名前を変える">✎</button
                 >
                 <button
-                  class="row-action"
+                  class="row-action row-delete"
                   onclick={() => onDeleteBody(body.body_id)}
                   title="このボディを消す(Ctrl+Zで戻る)">✕</button
                 >
@@ -345,7 +345,7 @@
                   title="名前を変える">✎</button
                 >
                 <button
-                  class="row-action"
+                  class="row-action row-delete"
                   onclick={() => onDeleteSketch(sketch.sketch_id)}
                   title="このスケッチを図形ごと消す(押し出したボディは残る。Ctrl+Zで戻る)">✕</button
                 >
@@ -523,6 +523,11 @@
     flex: 0 0 auto;
     padding: 0 4px;
     visibility: hidden;
+  }
+
+  /* 確認なしで消える ✕ は、改名の ✎ から離して行の右端に置く(隣り合わせの押し間違いを避ける)。 */
+  .row-delete {
+    margin-left: 12px;
   }
 
   .parts-row:hover .row-action,
