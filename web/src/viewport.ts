@@ -59,7 +59,7 @@ import {
   type SketchDraw, type SketchEntityHit, type SketchGuideHit, type SketchGuides, type VertexRef, type ViewSnapshot, type Viewport,
 } from './viewportTypes'
 import {
-  BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
+  BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX,
   BOX_SEEN_STEP_PX, EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
   HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_OVERLAP_PIXELS,
   EMPTY_SKETCH_HALF_WIDTH, SKETCH_FIT_MARGIN,
@@ -2046,7 +2046,6 @@ export function createViewport(container: HTMLElement): Viewport {
   }
   // クリック(押した位置からほとんど動いていない)だけを選択として扱う。
   // 動いた場合は OrbitControls の視点回転であって選択ではない。
-  let downAt = 0
   let downX = 0
   let downY = 0
   let downValid = false
@@ -2063,7 +2062,6 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.style.cursor = 'grabbing'
       return
     }
-    downAt = performance.now()
     downX = event.offsetX
     downY = event.offsetY
     downValid = true
@@ -2088,7 +2086,6 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     downValid = false
     const moved = Math.hypot(event.offsetX - downX, event.offsetY - downY)
-    const elapsed = performance.now() - downAt
     // 矩形を引いていたならウィンドウ選択(クリックにはしない)。引いた向きは見ない。
     if (band.active()) {
       const rect = band.rect(downX, downY, event.offsetX, event.offsetY)
@@ -2096,7 +2093,7 @@ export function createViewport(container: HTMLElement): Viewport {
       boxSelectListener?.({ ...collectInBox(rect), mode: modeOf(event) })
       return
     }
-    if (moved > CLICK_MOVE_LIMIT_PX || elapsed > CLICK_TIME_LIMIT_MS) return
+    if (moved > CLICK_MOVE_LIMIT_PX) return
     pickListener?.({ ...resolveHit(event.offsetX, event.offsetY), mode: modeOf(event) })
   }
 
@@ -2545,6 +2542,7 @@ export function createViewport(container: HTMLElement): Viewport {
     viewResolution() {
       return { ...resolution.applied() }
     },
+    reapplyResolution: resolution.reapply,
     setFaceCulling: resolution.setFaceCulling,
     sketchPolylineCounts() {
       const counts: Record<string, number[]> = {}

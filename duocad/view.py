@@ -534,6 +534,11 @@ class DocumentView:
         self._revision_state.clear()
         self._shape_state.clear()
         # **どの面を細かく測るかも捨てる**。面の添字は文書が変われば別のものを指す。
+        # 目標の粗さも捨てる(前の文書に寄っていた細かさのまま、新しい文書の全面を最初の配信で測らない)。
+        # 画面は文書の切り替えで見え方を送り直す(`resolutionTracker.reapply`)。
+        self._view_resolution = None
+        self._view_coarse_resolution = None
+        self._view_floored = False
         self._view_focus = None
         self._focus_basis = {}
         self._focus_remapped.clear()

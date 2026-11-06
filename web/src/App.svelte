@@ -254,7 +254,7 @@
     wantsPick(): PickTarget | null
     wantsPickDatum(): boolean
     setPick(ref: SelectionRef): boolean
-    commitFailed(): void
+    commitFailed(sendOnly?: boolean): void
     reconnected(): void
     commandSucceeded(): void
     previewFailed(message: string, input: PreviewInput): boolean
@@ -466,7 +466,7 @@
       // 失敗してもやり直せる状態で返る: 選択も起動中のコマンドと打った値もコア側(`state.command`)にあり、
       // 失敗では消えない(OCCTのフィレットは半径に対して単調でなく、近い値で打ち直すのが実際の使い方)。
       const category = CATEGORY_OF.get(where)
-      if (category === 'feature' || category === 'sketch' || where === 'send') host?.commitFailed()
+      if (category === 'feature' || category === 'sketch' || where === 'send') host?.commitFailed(where === 'send')
     },
     onWarning: (message) => fail(`警告 ${message}`),
     onStatus: (next) => {

@@ -692,6 +692,8 @@ export interface Viewport {
   // ------------------------------------------------------------------ 可変解像度(ズーム連動)
   /** 今の画面が要求している解像度。 */
   viewResolution(): ViewportResolution
+  /** 次に落ち着いたとき、見え方が同じでも `onResolutionChange` をもう一度呼ぶ(文書の切り替え)。 */
+  reapplyResolution(): void
   /**
    * face単位の高精度化(視錐台+バックフェイスカリング)を切る/入れる(既定は入り)。
    * 実機検査のための穴(`web/scripts/smoke-face-culling.mjs`)。切ると `focus` を送らなくなり、
