@@ -10,6 +10,7 @@
  *   4. 基準平面を指せる間も、原点をはさんでカメラの反対側にある面が取れる(#109)
  *   5. 自動保存が書けなかったら「未保存」の札が出て、Ctrl+S で書き直すと消える
  *   6. 入力欄にフォーカスがある間の Ctrl+Z は、文書を undo しない
+ *   7. 押し出しの種別を、距離欄から Tab で進んで Space で選べる
  */
 import { existsSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -243,6 +244,16 @@ runSmoke('smoke', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, tim
   await pressWithControl('KeyY')
   await waitFor((log) => window.__duocad.state.log.length === log, 'Ctrl+Y で戻らない', [before.log])
   ok('[6] 入力欄にフォーカスがある間の Ctrl+Z は文書を変えず、外では undo される')
+
+  // ================================================================ 7. 押し出しの種別をキーボードだけで選べる
+  // 選択肢のボタンは DOM で数値欄より前にあり、素の Tab では欄から届かない。
+  const activeId = () => page.evaluate(() => document.activeElement?.id ?? '')
+  await page.focus('#distance')
+  await page.keyboard.press('Tab')
+  if ((await activeId()) !== 'extrude-mode-join') fail(`距離欄から Tab で種別のボタンへ進めない: ${await activeId()}`)
+  await page.keyboard.press('Space')
+  await waitFor(() => document.querySelector('#extrude-mode-join')?.classList.contains('on') === true, 'Space で種別が選ばれない')
+  ok('[7] 距離欄から Tab で種別のボタンへ進み、Space で選べる')
 
   await assertNoAppErrors(page, consoleErrors, { allow: failedSaves })
 })

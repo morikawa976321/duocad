@@ -989,7 +989,15 @@
           (candidate.kind === 'number' || candidate.kind === 'text') &&
           !argSatisfied(candidate, values),
       )
-    if (!remaining || (remaining.kind !== 'number' && remaining.kind !== 'text')) return
+    if (!remaining || (remaining.kind !== 'number' && remaining.kind !== 'text')) {
+      // 打つ欄がもう無く選択肢が未決なら、その先頭のボタンへ進む(選択肢の行は DOM で欄より前にあり、素の Tab では届かない)。
+      const open = choiceArgs.find((candidate) => !argSatisfied(candidate, values))
+      const first = open?.options[0]
+      if (first === undefined) return
+      event.preventDefault()
+      document.getElementById(first.buttonId)?.focus()
+      return
+    }
     event.preventDefault()
     document.getElementById(remaining.inputId)?.focus()
   }
