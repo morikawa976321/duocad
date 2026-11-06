@@ -46,6 +46,7 @@
     buildArgs,
     commitsGhost,
     findCommand,
+    evictionsForClick,
     firstMissingArg,
     itemsForArg,
     needsEnter,
@@ -834,6 +835,11 @@
     const { [last.name]: _removed, ...rest } = points
     points = rest
     return true
+  }
+
+  /** 個数の上限がある選択引数に、クリックで1つ足すと上限を超えるとき、置き換えで外す最古の選択(`evictionsForClick`)。 */
+  export function evictionsFor(ref: SelectionRef, items: SelectionRef[]): SelectionRef[] {
+    return command === null ? [] : evictionsForClick(command, values, ref, items, faceKindOf)
   }
 
   /** このコマンドの引数の欄で、文字が入っていないもの。Ctrl+Z・Backspace を欄でなくアプリへ回してよい(奪っても失う文字が無い)。 */

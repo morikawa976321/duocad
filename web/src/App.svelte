@@ -264,6 +264,7 @@
     previewSucceeded(): void
     refusesFace(bodyId: string, faceIndex: number): string | null
     undoLastPoint(): boolean
+    evictionsFor(ref: SelectionRef, items: SelectionRef[]): SelectionRef[]
     isEmptyArgField(target: EventTarget | null): boolean
   } | null>(null)
 
@@ -1542,6 +1543,12 @@
     const current = currentItems()
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'toggle') {
+      // 個数の上限がある引数(ねじ・測定)は、上限を超えるクリックを追加でなく置き換え(最古を外す)にする。
+      const evicted = already ? [] : (host?.evictionsFor(ref, current) ?? [])
+      if (evicted.length > 0) {
+        modifySelection([ref], evicted)
+        return
+      }
       const op = nextOp()
       selectionOpsInFlight.add(op)
       session.toggleSelection([ref], op)

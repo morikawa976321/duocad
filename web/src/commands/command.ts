@@ -632,6 +632,28 @@ export function overflowNote(
   return ''
 }
 
+/**
+ * 個数の上限(`max`)がある選択引数に、クリックで `ref` を1つ足すと上限を超えるとき、置き換えで外す選択(最古から。`items` は追加順)。
+ * 超えないときや、どの引数も食わない参照は空。
+ */
+export function evictionsForClick(
+  command: CommandDef,
+  values: ArgValues,
+  ref: SelectionRef,
+  items: readonly SelectionRef[],
+  faceKindOf: FaceKindOf = () => null,
+): SelectionRef[] {
+  const kind = refKind(ref)
+  for (const spec of command.args) {
+    if (spec.kind !== 'selection' || spec.max === null || !argApplies(spec, values)) continue
+    if (!argKinds(spec).includes(kind) || !acceptsSurface(spec, ref, faceKindOf)) continue
+    const eaten = items.filter((item) => argKinds(spec).includes(refKind(item)) && acceptsSurface(spec, item, faceKindOf))
+    const over = eaten.length + 1 - spec.max
+    if (over > 0) return eaten.slice(0, over)
+  }
+  return []
+}
+
 /** その引数は、いま集まっている値の下で要るか(`when` が無ければ常に要る)。判定をここ1箇所に置く(各所が `spec.when?.(values)` を書くと、`when` を持たない種別を足したときに1つだけ `undefined` を偽と読む食い違いが入る)。 */
 export function argApplies(spec: ArgSpec, values: ArgValues): boolean {
   return spec.when === undefined || spec.when(values)
